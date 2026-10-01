@@ -35,32 +35,33 @@ A program in the root runs on the build host through the root's own loader, whic
     R=build/vendor/gnu/root
     $R/lib/ld-linux.so.2 --library-path $R/lib:$R/usr/lib $R/usr/bin/git --version
 
-The table gives each port's version, the time it took under `make -j32 gnu-ports` on the testing host, and the size of what it installs after stripping. The whole run took 475 seconds and made a root of 304 MB.
+The table gives each port's version, the time it took under `make -j32 gnu-ports` on the testing host, and the size of what it installs after stripping. The whole run took 467 seconds and made a root of 315 MB.
 
 | Port      | Version    | Time  | Size    |
 | --------- | ---------- | ----- | ------- |
-| runtime   | glibc 2.44 | 1 s   | 65.0 MB |
+| runtime   | glibc 2.44 | 2 s   | 65.0 MB |
 | zlib      | 1.3.2      | 1 s   | 0.4 MB  |
 | OpenSSL   | 4.0.2      | 32 s  | 31.5 MB |
-| OpenSSH   | 10.5p1     | 31 s  | 10.2 MB |
-| ncurses   | 6.6        | 46 s  | 11.1 MB |
+| OpenSSH   | 10.5p1     | 29 s  | 10.1 MB |
+| ncurses   | 6.6        | 43 s  | 11.1 MB |
 | less      | 710        | 4 s   | 0.5 MB  |
-| Vim       | 9.2.1132   | 18 s  | 38.0 MB |
-| Perl      | 5.44.0     | 71 s  | 79.9 MB |
+| Vim       | 9.2.1132   | 17 s  | 38.0 MB |
+| Perl      | 5.44.0     | 71 s  | 80.3 MB |
 | curl      | 8.22.0     | 21 s  | 5.9 MB  |
 | Git       | 2.55.0     | 11 s  | 32.3 MB |
-| coreutils | 9.12       | 46 s  | 12.4 MB |
-| bash      | 5.3        | 24 s  | 5.8 MB  |
+| coreutils | 9.12       | 43 s  | 12.4 MB |
+| bash      | 5.3        | 23 s  | 5.8 MB  |
 | make      | 4.4.1      | 7 s   | 0.9 MB  |
-| grep      | 3.12       | 20 s  | 0.5 MB  |
-| sed       | 4.10       | 20 s  | 0.5 MB  |
+| grep      | 3.12       | 19 s  | 0.5 MB  |
+| sed       | 4.10       | 19 s  | 0.5 MB  |
 | gawk      | 5.4.1      | 15 s  | 4.1 MB  |
-| findutils | 4.11.0     | 30 s  | 1.3 MB  |
-| diffutils | 3.12       | 21 s  | 0.7 MB  |
+| findutils | 4.11.0     | 28 s  | 1.3 MB  |
+| diffutils | 3.12       | 20 s  | 0.7 MB  |
 | patch     | 2.8        | 13 s  | 0.3 MB  |
-| tar       | 1.35       | 22 s  | 1.4 MB  |
+| tar       | 1.35       | 21 s  | 1.4 MB  |
 | gzip      | 1.15       | 10 s  | 0.3 MB  |
-| xz        | 5.8.4      | 10 s  | 1.4 MB  |
+| xz        | 5.8.4      | 11 s  | 1.4 MB  |
+| file      | 5.48       | 6 s   | 10.7 MB |
 
 These notes say what some ports provide and what they leave to the system they are installed on.
 
@@ -74,7 +75,7 @@ These notes say what some ports provide and what they leave to the system they a
 
 ## The root image
 
-`make os-real-gnu-ext2` builds `build/images/os-real-gnu.ext2`, a 4 GiB ext2 volume, sparse on the host, that the kernel boots with `rach2.root=ext2`: the os-real system, staged from `krffs/manifests/os-real-gnu.manifest`, with this layer installed over it by `install_root.sh`. `tools/image/mkext2.sh --overlay` runs the script over the staged tree before it formats the volume, and the volume passes mkext2.sh's checks: what the overlay added is root's, with the fixed staged instant as its times, `e2fsck -fn` finds the volume clean, and the set-id guard reads it with its own reader and admits no set-id file but BusyBox's `su`, `passwd` and `login`. The system takes 1.2 GiB of the volume and 25,037 of its inodes; the rest is room for what the machine builds and fetches.
+`make os-real-gnu-ext2` builds `build/images/os-real-gnu.ext2`, a 4 GiB ext2 volume, sparse on the host, that the kernel boots with `rach2.root=ext2`: the os-real system, staged from `krffs/manifests/os-real-gnu.manifest`, with this layer installed over it by `install_root.sh`. `tools/image/mkext2.sh --overlay` runs the script over the staged tree before it formats the volume, and the volume passes mkext2.sh's checks: what the overlay added is root's, with the fixed staged instant as its times, `e2fsck -fn` finds the volume clean, and the set-id guard reads it with its own reader and admits no set-id file but BusyBox's `su`, `passwd` and `login`. The system takes 1.2 GiB of the volume and 26,588 of its inodes; the rest is room for what the machine builds and fetches.
 
 The image is built where the layer is, on a Linux host, and is not part of `make`. `sh tools/dev/testing.sh run make os-real-gnu-ext2` builds it in the testing host's copy, first building what of the layer is missing, and `sh tools/dev/testing.sh get build/images/os-real-gnu.ext2` brings it to the same path on the Mac, compressed on the wire, in 40 seconds; there it takes nearly all of its 4 GiB, since APFS keeps few of the volume's holes. With the layer built, the image took 10 to 14 seconds on the testing host; the layer from nothing took 447 seconds for the toolchain and then 639 seconds under `make -j32` for the ports, the native compiler, GDB, the shell and the browser at once.
 
@@ -82,7 +83,7 @@ The image is built where the layer is, on a Linux host, and is not part of `make
 
 * The trees of the ports, the native compiler, GDB and the shell: glibc with its loader as `/lib/ld-linux.so.2` and its libraries in `/lib`, and the rest under `/usr`. The native compiler's `libstdc++.so.6` replaces the runtime's copy of the same library, and any other file the tree already has is refused, so what the manifest staged is what the image has. The two C libraries share `/lib`, where TinyCC finds musl's `libc.a` and start files beside glibc's shared libraries; GCC takes glibc's start files and libraries from `/usr/lib`, which it searches before `/lib`.
 * From the packages `chromium/fetch_chromium.sh` unpacked, the browser in `/usr/lib/chromium`, its libraries in `/usr/lib/i386-linux-gnu`, and D-Bus's daemon and tools in `/usr/bin` with the bus's configuration in `/usr/share/dbus-1`: every package of the closure except those whose libraries the root has its own builds of, `libc6`, `libgcc-s1`, `libstdc++6`, `libatomic1`, `zlib1g` and `liblzma5`, with `gcc-14-base`, which only documents GCC's, and except the programs that `chromium-common`'s dependencies bring and a headless shell does not run, in `debconf`, `lsb-base`, `sysvinit-utils`, `x11-utils` and `xdg-utils`.
-* `/etc/ld.so.cache`, which the root's own `ldconfig` writes from the manifest's `/etc/ld.so.conf`, which lists `/usr/lib/i386-linux-gnu`. glibc links `ldconfig` statically, so the build host runs it without the loader, with `-r` for the tree. The cache has 176 entries, and the loader searches `/lib` and `/usr/lib` for a library the cache does not have.
+* `/etc/ld.so.cache`, which the root's own `ldconfig` writes from the manifest's `/etc/ld.so.conf`, which lists `/usr/lib/i386-linux-gnu`. glibc links `ldconfig` statically, so the build host runs it without the loader, with `-r` for the tree. The cache has 182 entries, and the loader searches `/lib` and `/usr/lib` for a library the cache does not have.
 * `/bin/bash`, a link to `/usr/bin/bash`, `/usr/bin/cc`, a link to `gcc`, and `/usr/bin/vi`, a link to `vim`. `/bin/sh` stays BusyBox's ash, which the system's scripts and the test harness use.
 * A link to `/bin/busybox` for each BusyBox applet that no file in `/usr/bin`, `/bin`, `/usr/sbin` or `/sbin` answers for, 203 of the 318, where BusyBox's own install would put it. The build host runs the BusyBox the manifest stages, which is static, from the build for the list, since the stager writes the tree's files without the modes the volume gets.
 * The ports' manual pages rendered to plain text under `/usr/share/man/gnu/catN`, by `render_man.sh` with the build host's mandoc.
