@@ -321,6 +321,7 @@ rt_sigprocmask 2 sigaction
 rt_sigreturn 2 sigaction
 rt_sigsuspend 2 sigaction
 rt_sigtimedwait 2 sigaction
+rt_tgsigqueueinfo 2 rt_sigqueueinfo
 rtcwake 1 busybox-util-linux
 run-parts 1 busybox-debianutils
 runlevel 1 busybox-miscutils

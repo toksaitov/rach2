@@ -29,7 +29,7 @@ given up its capabilities with
 Linux asks for a capability in each such place, and this kernel keeps
 every capability or none.
 .Ss System call numbers
-The kernel registers the following 272 calls.
+The kernel registers the following 274 calls.
 .Bl -column "Number" "System call" -compact
 .It Sy Number Ta Sy System call
 .It 1 Ta Xr exit 2
@@ -156,6 +156,7 @@ The kernel registers the following 272 calls.
 .It 175 Ta Xr rt_sigprocmask 2
 .It 176 Ta Xr rt_sigpending 2
 .It 177 Ta Xr rt_sigtimedwait 2
+.It 178 Ta Xr rt_sigqueueinfo 2
 .It 179 Ta Xr rt_sigsuspend 2
 .It 180 Ta Xr pread64 2
 .It 181 Ta Xr pwrite64 2
@@ -268,6 +269,7 @@ The kernel registers the following 272 calls.
 .It 330 Ta Xr dup3 2
 .It 331 Ta Xr pipe2 2
 .It 332 Ta Xr inotify_init1 2
+.It 335 Ta Xr rt_tgsigqueueinfo 2
 .It 337 Ta Xr recvmmsg 2
 .It 340 Ta Xr prlimit64 2
 .It 343 Ta Xr clock_adjtime 2

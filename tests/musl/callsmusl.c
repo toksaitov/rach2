@@ -19,7 +19,8 @@
  * ten times in a row, since errors over the loopback are not rate-limited.
  * A POSIX timer's signal comes with SI_TIMER and its value, a periodic
  * timer's signal blocked through several periods comes once with the others
- * as its overrun, and a deleted timer's id is EINVAL.
+ * as its overrun, and a deleted timer's id is EINVAL. sigqueue gives its
+ * value and SI_QUEUE to the signal it sends.
  * A setgid directory gives a file made in it its group, and a directory
  * its group and the bit. A process of another user is refused the maps and
  * the descriptors of a root process under /proc, and reads its own.
@@ -191,6 +192,28 @@ static int timers(void)
         return fail("timer_delete, then again");
     }
     while (sigtimedwait(&set, &si, &zero) == SIGUSR2) {
+    }
+    return 0;
+}
+
+/* sigqueue to the caller's own process, taken by sigtimedwait. */
+static int queues(void)
+{
+    struct timespec wait = {2, 0};
+    union sigval v;
+    sigset_t set;
+    siginfo_t si;
+
+    sigemptyset(&set);
+    sigaddset(&set, SIGUSR2);
+    sigprocmask(SIG_BLOCK, &set, NULL);
+    v.sival_int = 4242;
+    if (sigqueue(getpid(), SIGUSR2, v) != 0) {
+        return fail("sigqueue to the caller's own process");
+    }
+    if (sigtimedwait(&set, &si, &wait) != SIGUSR2 || si.si_code != SI_QUEUE ||
+        si.si_value.sival_int != 4242 || si.si_pid != getpid()) {
+        return fail("sigqueue's signal did not come with SI_QUEUE, its value and its sender");
     }
     return 0;
 }
@@ -612,7 +635,7 @@ int main(void)
 {
     if (signals() || memory() || identity() || messages() || clocks() || ranges() || copies() ||
         reserves() || adjusts() || advises() || terminals() || peaks() || refusals() || setgids() ||
-        privacies() || timers()) {
+        privacies() || timers() || queues()) {
         return 1;
     }
     printf("CALLSMUSL OK\n");

@@ -1,0 +1,70 @@
+.Dd October 2, 2026
+.Dt RT_SIGQUEUEINFO 2
+.Os
+.Sh NAME
+.Nm rt_sigqueueinfo ,
+.Nm rt_tgsigqueueinfo
+.Nd send a signal with its siginfo
+.Sh SYNOPSIS
+.Ft int
+.Fn rt_sigqueueinfo "pid_t pid" "int sig" "siginfo_t *info"
+.Ft int
+.Fn rt_tgsigqueueinfo "pid_t tgid" "pid_t tid" "int sig" "siginfo_t *info"
+.Sh DESCRIPTION
+.Fn rt_sigqueueinfo ,
+number 178, which the C libraries'
+.Fn sigqueue
+calls, sends
+.Fa sig
+to the process
+.Fa pid
+with the code of
+.Fa info
+and the three words after it, the sender's pid and uid and the value,
+which a handler and
+.Xr sigtimedwait 2
+are given.
+.Fn rt_tgsigqueueinfo ,
+number 335, sends it to the thread
+.Fa tid
+of the process
+.Fa tgid
+alone, as
+.Xr tgkill 2
+does.
+The permission is that of
+.Xr kill 2 .
+A code of zero or above, or
+.Dv SI_TKILL ,
+is the kernel's, and a caller may give it only to its own process, as on
+Linux.
+A signal of 0 checks the target and sends nothing.
+.Pp
+The kernel keeps one pending instance of each signal, so a real-time
+signal sent again while it is pending is merged with it, where Linux
+queues each.
+.Sh RETURN VALUES
+0, or -1 with
+.Va errno
+set.
+.Sh ERRORS
+.Bl -tag -width EINVAL
+.It Er EFAULT
+.Fa info
+is not in the caller's memory.
+.It Er EINVAL
+.Fa sig
+is outside 0 to 64, or for
+.Fn rt_tgsigqueueinfo
+an id is not positive.
+.It Er EPERM
+The caller may not signal the target, or gave a kernel's code to another
+process.
+.It Er ESRCH
+No process or thread has the id, or the thread is not one of
+.Fa tgid Ns 's .
+.El
+.Sh SEE ALSO
+.Xr kill 2 ,
+.Xr sigaction 2 ,
+.Xr tgkill 2

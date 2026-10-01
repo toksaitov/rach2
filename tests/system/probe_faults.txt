@@ -5221,3 +5221,13 @@ old
 new
                 held->uid;
 end
+
+fault sigqueue-value-dropped
+probe callsmusl
+file rach2/sys/syscall_proc.c
+expect CALLSMUSL FAIL (sigqueue's signal did not come with SI_QUEUE, its value and its sender
+old
+    info->status = w[5];
+new
+    info->status = 0;
+end

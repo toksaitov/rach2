@@ -3553,6 +3553,89 @@ int32_t sys_tgkill(isr_params_t *params)
     return do_tkill((int)params->ebx, (int)params->ecx, (int)params->edx);
 }
 
+/*
+ * The siginfo a caller of rt_sigqueueinfo or rt_tgsigqueueinfo gives at
+ * `u`: its code and the three words after it, the pid, uid and value that
+ * sigqueue fills in. A code of zero or above, or SI_TKILL, is the kernel's
+ * to send, and a caller may give one only to its own process (`own`), as
+ * on Linux; -EPERM otherwise.
+ */
+static int32_t queued_info(uint32_t u, int own, struct k_siginfo *info)
+{
+    int32_t w[6]; /* signo, errno, code, pid, uid, value */
+
+    if (copy_from_user(w, (const void __user *)u, sizeof(w)) != 0) {
+        return -EFAULT;
+    }
+    if ((w[2] >= 0 || w[2] == SI_TKILL) && !own) {
+        return -EPERM;
+    }
+    k_memset(info, 0, sizeof(*info));
+    info->code = w[2];
+    info->pid = (uint32_t)w[3];
+    info->uid = (uint32_t)w[4];
+    info->status = w[5];
+    return 0;
+}
+
+/**
+ * rt_sigqueueinfo (178), which sigqueue calls: EBX=pid, ECX=signal, EDX=the
+ * siginfo, posted to the process with that siginfo, under kill's
+ * permission. The kernel keeps one pending instance of each signal, so a
+ * real-time signal sent again while pending is merged, where Linux queues
+ * it.
+ */
+int32_t sys_rt_sigqueueinfo(isr_params_t *params)
+{
+    int pid = (int)params->ebx;
+    int signo = (int)params->ecx;
+    process_t *target = pid > 0 ? get_process((uint32_t)pid) : NULL;
+    struct k_siginfo info;
+    int32_t rc;
+
+    if (signo < 0 || signo > KSIG_MAX) {
+        return -EINVAL;
+    }
+    if (!target || target->state == PROC_UNUSED) {
+        return -ESRCH;
+    }
+    rc = queued_info(params->edx, target->tg == current_proc->tg, &info);
+    if (rc == 0 && !cred_may_signal(target, signo)) {
+        rc = -EPERM;
+    }
+    if (rc == 0 && signo != 0 && target->tg->live != 0) {
+        signal_post_info(target, signo, &info);
+    }
+    return rc;
+}
+
+/** rt_tgsigqueueinfo (335): EBX=tgid, ECX=tid, EDX=signal, ESI=the siginfo,
+ * posted to the thread alone, as tgkill posts. */
+int32_t sys_rt_tgsigqueueinfo(isr_params_t *params)
+{
+    int tgid = (int)params->ebx;
+    int tid = (int)params->ecx;
+    int signo = (int)params->edx;
+    process_t *t = tid > 0 ? get_process((uint32_t)tid) : NULL;
+    struct k_siginfo info;
+    int32_t rc;
+
+    if (tgid <= 0 || tid <= 0 || signo < 0 || signo > KSIG_MAX) {
+        return -EINVAL;
+    }
+    if (!t || t->state == PROC_UNUSED || t->state == PROC_ZOMBIE || t->tgid != (uint32_t)tgid) {
+        return -ESRCH;
+    }
+    rc = queued_info(params->esi, t->tg == current_proc->tg, &info);
+    if (rc == 0 && !cred_may_signal(t, signo)) {
+        rc = -EPERM;
+    }
+    if (rc == 0 && signo != 0) {
+        signal_post_thread(t, signo, &info);
+    }
+    return rc;
+}
+
 /* Block until a deliverable signal is pending. Lost-wakeup-safe: the pending
  * check and the BLOCKED transition are one interrupts-off critical section, so
  * a signal posted from an IRQ either is seen here or finds us BLOCKED and wakes
