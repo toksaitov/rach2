@@ -40,6 +40,7 @@
 #include "fs/ext2.h"
 #include "fs/krffs.h"
 #include "fs/devfs.h"
+#include "io/timerfd.h"
 #include "fs/synthfs.h"
 #include "fs/vfs.h"
 #include "block/usbdisk.h"
@@ -1656,7 +1657,8 @@ static void exec_files(struct exec_state *s)
  * lets an image shed acquired authority and take it back; resets what
  * pointed into the old image: caught signals' handlers (SIG_IGN, the
  * blocked mask and the pending signals are kept, as POSIX says), the
- * alternate signal stack, the TLS base and the floating-point state. Then
+ * alternate signal stack, the TLS base and the floating-point state, and
+ * deletes the POSIX timers, as POSIX says. Then
  * it switches to the new address space and puts the old one, which the
  * parent of a vfork child keeps, lets that parent go, and points the return
  * frame at the entry with the stack pointer at argc. A fresh image has no
@@ -1678,6 +1680,7 @@ static void exec_commit(isr_params_t *params, struct exec_state *s)
     if (current_proc != current_proc->tg->leader) {
         exec_take_leader();
     }
+    ptimer_delete_all(current_proc->tg);
     exec_files(s);
     close_cloexec_fds();
     current_proc->euid = s->euid;

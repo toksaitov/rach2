@@ -1,5 +1,6 @@
 /*
- * timerfd.c: timers read through descriptors, as timerfd.h describes them.
+ * timerfd.c: timers read through descriptors, and POSIX timers, which share
+ * their timer, as timerfd.h describes them.
  */
 
 #include "timerfd.h"
@@ -9,6 +10,8 @@
 #include "../fs/fd.h"
 #include "../fs/file.h"
 #include "../proc/process.h"
+#include "../proc/tgroup.h"
+#include "../lib/ksignal.h"
 #include "../proc/wait_queue.h"
 #include "../mm/kheap.h"
 #include "../mm/usercopy.h"
@@ -29,6 +32,12 @@
 
 #define POLLIN 0x001
 
+#define TIMER_ABSTIME   1
+#define SIGEV_SIGNAL    0
+#define SIGEV_NONE      1
+#define SIGEV_THREAD_ID 4
+#define SI_TIMER        (-2)
+
 /* Format: the kernel's ticks in a second, and nanoseconds in a tick. The
  * kernel has no 64-bit division, so a time is kept as whole seconds and
  * ticks below a second, and never as one count of ticks or nanoseconds. */
@@ -47,17 +56,27 @@
 
 extern volatile uint32_t kernel_ticks;
 
-struct timerfd {
+/* A timer: a timerfd's, read through its descriptor (`anon` and `wq`), or a
+ * POSIX timer's, which `tg` names and whose expirations post a signal. */
+struct ktimer {
     struct anon_obj anon;
-    struct timerfd *next; /* the list of armed timers the tick walks */
+    struct ktimer *next; /* the list of armed timers the tick walks */
     int clock;
     int armed;
     uint32_t due;   /* the tick the wait in progress ends */
     uint32_t spans; /* whole spans to wait after it, before the expiration */
     uint32_t isec;  /* the interval, 0 and 0 for none: whole seconds, */
     uint32_t isub;  /* and ticks below a second */
-    uint64_t count; /* expirations not yet read */
+    uint64_t count; /* expirations not yet read, or not yet signalled */
     wait_queue_t wq;
+    struct tgroup *tg;       /* a POSIX timer's process, or NULL */
+    struct ktimer *in_group; /* the process's next timer */
+    int id;
+    int notify; /* SIGEV_SIGNAL, SIGEV_NONE or SIGEV_THREAD_ID */
+    int signo;
+    int32_t value;
+    uint32_t tid;     /* the thread SIGEV_THREAD_ID names */
+    uint32_t overrun; /* the overrun of the last signal posted */
 };
 
 /* A setting as the call gives and takes it, whichever width of time: the
@@ -69,11 +88,11 @@ struct setting {
     int32_t vnsec;
 };
 
-static struct timerfd *armed;
+static struct ktimer *armed;
 
-static void disarm(struct timerfd *t)
+static void disarm(struct ktimer *t)
 {
-    struct timerfd **link = &armed;
+    struct ktimer **link = &armed;
 
     while (*link && *link != t) {
         link = &(*link)->next;
@@ -86,16 +105,18 @@ static void disarm(struct timerfd *t)
 
 /* Set `t` to expire `sec` seconds and `sub` ticks after the tick `from`:
  * the part below a whole span first, then the spans. */
-static void wait_from(struct timerfd *t, uint32_t from, uint32_t sec, uint32_t sub)
+static void wait_from(struct ktimer *t, uint32_t from, uint32_t sec, uint32_t sub)
 {
     t->spans = sec / SPAN_SEC;
     t->due = from + (sec % SPAN_SEC) * TICKS_PER_SEC + sub;
 }
 
+static void ptimer_fire(struct ktimer *t);
+
 /* An expiration of `t`, due by the tick `now`: counted, with those of an
  * interval missed since, and the timer armed again by its interval or
- * disarmed. */
-static void expire(struct timerfd *t, uint32_t now)
+ * disarmed; then its readers woken, or its signal posted. */
+static void expire(struct ktimer *t, uint32_t now)
 {
     if (t->isec >= SPAN_SEC) {
         t->count++;
@@ -110,15 +131,19 @@ static void expire(struct timerfd *t, uint32_t now)
         t->count++;
         disarm(t);
     }
-    wq_wake_all(&t->wq);
+    if (t->tg) {
+        ptimer_fire(t);
+    } else {
+        wq_wake_all(&t->wq);
+    }
 }
 
 void timerfd_tick(uint32_t now)
 {
-    struct timerfd *t = armed;
+    struct ktimer *t = armed;
 
     while (t) {
-        struct timerfd *next = t->next;
+        struct ktimer *next = t->next;
 
         while (t->armed && (int32_t)(now - t->due) >= 0) {
             if (t->spans != 0) {
@@ -159,7 +184,7 @@ static void to_wait(int64_t sec, int32_t nsec, uint32_t *s, uint32_t *sub)
 
 static int readable(void *arg)
 {
-    return ((struct timerfd *)arg)->count != 0;
+    return ((struct ktimer *)arg)->count != 0;
 }
 
 /**
@@ -173,7 +198,7 @@ static int readable(void *arg)
  */
 static int32_t timerfd_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
-    struct timerfd *t = (struct timerfd *)e->priv;
+    struct ktimer *t = (struct ktimer *)e->priv;
     uint64_t n;
 
     if (count < sizeof(n)) {
@@ -203,7 +228,7 @@ static int32_t timerfd_read(fd_entry_t *e, char __user *buf, uint32_t count)
 
 static short timerfd_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {
-    struct timerfd *t = (struct timerfd *)e->priv;
+    struct ktimer *t = (struct ktimer *)e->priv;
 
     if (wq) {
         *wq = &t->wq;
@@ -213,7 +238,7 @@ static short timerfd_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 
 static void timerfd_close(fd_entry_t *e)
 {
-    struct timerfd *t = (struct timerfd *)e->priv;
+    struct ktimer *t = (struct ktimer *)e->priv;
     uint32_t flags = kirq_save();
 
     if (t->armed) {
@@ -226,18 +251,18 @@ static void timerfd_close(fd_entry_t *e)
 
 static const struct file_ops timerfd_ops = {timerfd_read, NULL, timerfd_poll, NULL, timerfd_close};
 
-static struct timerfd *timer_of(int fd)
+static struct ktimer *timer_of(int fd)
 {
     fd_entry_t *e = fd_get(current_proc->fds, fd);
 
-    return (e && e->ops == &timerfd_ops) ? (struct timerfd *)e->priv : NULL;
+    return (e && e->ops == &timerfd_ops) ? (struct ktimer *)e->priv : NULL;
 }
 
 int32_t sys_timerfd_create(struct isr_params *params)
 {
     int clock = (int)params->ebx;
     uint32_t flags = params->ecx;
-    struct timerfd *t;
+    struct ktimer *t;
     fd_entry_t *e;
     int fd;
 
@@ -274,7 +299,7 @@ int32_t sys_timerfd_create(struct isr_params *params)
 /* The timer's setting now: the time to its next expiration and its
  * interval, both zero when it is disarmed. It is read with interrupts off,
  * since the tick moves the timer. */
-static void current_setting(const struct timerfd *t, struct setting *s)
+static void current_setting(const struct ktimer *t, struct setting *s)
 {
     uint32_t irq = kirq_save();
 
@@ -296,7 +321,7 @@ static void current_setting(const struct timerfd *t, struct setting *s)
 }
 
 /* Arm or disarm `t` from the setting `s`, which `flags` makes absolute. */
-static int32_t arm(struct timerfd *t, int flags, const struct setting *s)
+static int32_t arm(struct ktimer *t, int flags, const struct setting *s)
 {
     int on = s->vsec != 0 || s->vnsec != 0;
     uint32_t sec, sub, isec, isub;
@@ -395,12 +420,29 @@ static int32_t put_setting(uint32_t u, int wide, const struct setting *s)
     }
 }
 
+/* Arm `t` from the setting at `want`, which `flags` may make absolute, and
+ * give the setting it had at `old` when that is not 0. */
+static int32_t set_and_report(struct ktimer *t, int flags, uint32_t want_u, uint32_t old_u,
+                              int wide)
+{
+    struct setting now, want;
+    int32_t rc = get_setting(want_u, wide, &want);
+
+    if (rc != 0) {
+        return rc;
+    }
+    current_setting(t, &now);
+    rc = arm(t, flags, &want);
+    if (rc == 0 && old_u) {
+        rc = put_setting(old_u, wide, &now);
+    }
+    return rc;
+}
+
 static int32_t settime(struct isr_params *params, int wide)
 {
-    struct timerfd *t = timer_of((int)params->ebx);
+    struct ktimer *t = timer_of((int)params->ebx);
     int flags = (int)params->ecx;
-    struct setting now, want;
-    int32_t rc;
 
     if (!fd_get(current_proc->fds, (int)params->ebx)) {
         return -EBADF;
@@ -408,21 +450,12 @@ static int32_t settime(struct isr_params *params, int wide)
     if (!t || (flags & ~(TFD_TIMER_ABSTIME | TFD_TIMER_CANCEL_ON_SET))) {
         return -EINVAL;
     }
-    rc = get_setting(params->edx, wide, &want);
-    if (rc != 0) {
-        return rc;
-    }
-    current_setting(t, &now);
-    rc = arm(t, flags, &want);
-    if (rc == 0 && params->esi) {
-        rc = put_setting(params->esi, wide, &now);
-    }
-    return rc;
+    return set_and_report(t, flags, params->edx, params->esi, wide);
 }
 
 static int32_t gettime(struct isr_params *params, int wide)
 {
-    struct timerfd *t = timer_of((int)params->ebx);
+    struct ktimer *t = timer_of((int)params->ebx);
     struct setting now;
 
     if (!fd_get(current_proc->fds, (int)params->ebx)) {
@@ -453,4 +486,206 @@ int32_t sys_timerfd_gettime(struct isr_params *params)
 int32_t sys_timerfd_gettime64(struct isr_params *params)
 {
     return gettime(params, 1);
+}
+
+/* The thread `tid` of the process `tg`, or NULL when it has none. */
+static process_t *thread_of(struct tgroup *tg, uint32_t tid)
+{
+    process_t *p = get_process(tid);
+
+    return p && p->tg == tg && p->state != PROC_ZOMBIE ? p : NULL;
+}
+
+/*
+ * The signal of the POSIX timer `t`, whose expirations since its last
+ * signal are its `count`: posted, with all but one as its overrun; or, while
+ * its signal is still pending, added to that signal's overrun, which is what
+ * a handler is given, as Linux reports the overrun at delivery. While a
+ * signal of the same number from elsewhere is pending, the expirations wait
+ * for the next. SIGEV_NONE posts nothing; a signal for a thread
+ * SIGEV_THREAD_ID named that has ended goes to the process.
+ */
+static void ptimer_fire(struct ktimer *t)
+{
+    process_t *thread = t->notify == SIGEV_THREAD_ID ? thread_of(t->tg, t->tid) : NULL;
+    uint64_t pending = thread ? thread->sig_pending : t->tg->pending;
+    struct k_siginfo info;
+
+    if (t->notify == SIGEV_NONE) {
+        t->count = 0;
+        return;
+    }
+    if (pending & KSIG_BIT(t->signo)) {
+        struct k_siginfo *held = thread ? &thread->sig_info[t->signo] : &t->tg->info[t->signo];
+
+        if (held->code == SI_TIMER && held->pid == (uint32_t)t->id) {
+            held->uid =
+                held->uid + t->count > 0x7FFFFFFFu ? 0x7FFFFFFFu : held->uid + (uint32_t)t->count;
+            t->overrun = held->uid;
+            t->count = 0;
+        }
+        return;
+    }
+    t->overrun = t->count - 1u > 0x7FFFFFFFu ? 0x7FFFFFFFu : (uint32_t)(t->count - 1u);
+    t->count = 0;
+    k_memset(&info, 0, sizeof(info));
+    info.code = SI_TIMER;
+    info.pid = (uint32_t)t->id; /* si_timerid, where a child's pid is */
+    info.uid = t->overrun;      /* si_overrun */
+    info.status = t->value;     /* si_value */
+    if (thread) {
+        signal_post_thread(thread, t->signo, &info);
+    } else {
+        signal_post_info(t->tg->leader, t->signo, &info);
+    }
+}
+
+/* The calling process's POSIX timer `id`, or NULL. */
+static struct ktimer *ptimer_of(int id)
+{
+    struct ktimer *t = current_proc->tg->timers;
+
+    while (t && t->id != id) {
+        t = t->in_group;
+    }
+    return t;
+}
+
+/**
+ * timer_create(2): a POSIX timer on the clock in EBX, notified as the
+ * `struct sigevent` at ECX says, or by SIGALRM with its id as the value when
+ * ECX is 0, whose id is stored at EDX: the lowest the process does not
+ * have. A thread SIGEV_THREAD_ID names must be one of the caller's process.
+ * EINVAL for another clock, notification or signal, EAGAIN past PTIMER_MAX.
+ */
+int32_t sys_timer_create(struct isr_params *params)
+{
+    int clock = (int)params->ebx;
+    struct tgroup *tg = current_proc->tg;
+    struct ktimer *t, **link = &tg->timers;
+    int32_t ev[4] = {0, SIGALRM, SIGEV_SIGNAL, 0}; /* value, signo, notify, tid */
+    uint32_t irq;
+    int id = 0;
+
+    if (clock != CLOCK_REALTIME && clock != CLOCK_MONOTONIC && clock != CLOCK_BOOTTIME) {
+        return -EINVAL;
+    }
+    if (params->ecx && copy_from_user(ev, (const void __user *)params->ecx, sizeof(ev)) != 0) {
+        return -EFAULT;
+    }
+    if ((ev[2] != SIGEV_SIGNAL && ev[2] != SIGEV_NONE && ev[2] != SIGEV_THREAD_ID) ||
+        (ev[2] != SIGEV_NONE && (ev[1] < 1 || ev[1] > KSIG_MAX)) ||
+        (ev[2] == SIGEV_THREAD_ID && !thread_of(tg, (uint32_t)ev[3]))) {
+        return -EINVAL;
+    }
+    t = kzalloc(sizeof(*t));
+    if (!t) {
+        return -EAGAIN;
+    }
+    irq = kirq_save();
+    while (*link && (*link)->id == id) {
+        link = &(*link)->in_group;
+        id++;
+    }
+    if (id >= PTIMER_MAX || copy_to_user((void __user *)params->edx, &id, sizeof(id)) != 0) {
+        kirq_restore(irq);
+        kfree(t);
+        return id >= PTIMER_MAX ? -EAGAIN : -EFAULT;
+    }
+    t->clock = clock;
+    t->tg = tg;
+    t->id = id;
+    t->notify = ev[2];
+    t->signo = ev[1];
+    t->value = params->ecx ? ev[0] : id;
+    t->tid = (uint32_t)ev[3];
+    t->in_group = *link;
+    *link = t;
+    kirq_restore(irq);
+    return 0;
+}
+
+static int32_t ptimer_settime(struct isr_params *params, int wide)
+{
+    struct ktimer *t = ptimer_of((int)params->ebx);
+
+    if (!t || ((int)params->ecx & ~TIMER_ABSTIME) || params->edx == 0) {
+        return -EINVAL;
+    }
+    return set_and_report(t, (int)params->ecx, params->edx, params->esi, wide);
+}
+
+static int32_t ptimer_gettime(struct isr_params *params, int wide)
+{
+    struct ktimer *t = ptimer_of((int)params->ebx);
+    struct setting now;
+
+    if (!t) {
+        return -EINVAL;
+    }
+    current_setting(t, &now);
+    return put_setting(params->ecx, wide, &now);
+}
+
+int32_t sys_timer_settime(struct isr_params *params)
+{
+    return ptimer_settime(params, 0);
+}
+
+int32_t sys_timer_settime64(struct isr_params *params)
+{
+    return ptimer_settime(params, 1);
+}
+
+int32_t sys_timer_gettime(struct isr_params *params)
+{
+    return ptimer_gettime(params, 0);
+}
+
+int32_t sys_timer_gettime64(struct isr_params *params)
+{
+    return ptimer_gettime(params, 1);
+}
+
+int32_t sys_timer_getoverrun(struct isr_params *params)
+{
+    struct ktimer *t = ptimer_of((int)params->ebx);
+
+    return t ? (int32_t)t->overrun : -EINVAL;
+}
+
+/* Take the timer `link` names out of its process's list, disarmed, and
+ * free it. */
+static void ptimer_free(struct ktimer **link)
+{
+    struct ktimer *t = *link;
+    uint32_t irq = kirq_save();
+
+    if (t->armed) {
+        disarm(t);
+    }
+    *link = t->in_group;
+    kirq_restore(irq);
+    kfree(t);
+}
+
+int32_t sys_timer_delete(struct isr_params *params)
+{
+    struct ktimer **link = &current_proc->tg->timers;
+
+    while (*link && (*link)->id != (int)params->ebx) {
+        link = &(*link)->in_group;
+    }
+    if (!*link) {
+        return -EINVAL;
+    }
+    ptimer_free(link);
+    return 0;
+}
+
+void ptimer_delete_all(struct tgroup *tg)
+{
+    while (tg->timers) {
+        ptimer_free(&tg->timers);
+    }
 }

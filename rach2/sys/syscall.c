@@ -2857,6 +2857,13 @@ void init_syscall(void)
     _syscall_table[SYS_TIMERFD_GETTIME] = sys_timerfd_gettime;
     _syscall_table[SYS_TIMERFD_SETTIME64] = sys_timerfd_settime64;
     _syscall_table[SYS_TIMERFD_GETTIME64] = sys_timerfd_gettime64;
+    _syscall_table[SYS_TIMER_CREATE] = sys_timer_create;
+    _syscall_table[SYS_TIMER_SETTIME] = sys_timer_settime;
+    _syscall_table[SYS_TIMER_GETTIME] = sys_timer_gettime;
+    _syscall_table[SYS_TIMER_GETOVERRUN] = sys_timer_getoverrun;
+    _syscall_table[SYS_TIMER_DELETE] = sys_timer_delete;
+    _syscall_table[SYS_TIMER_SETTIME64] = sys_timer_settime64;
+    _syscall_table[SYS_TIMER_GETTIME64] = sys_timer_gettime64;
 
     _trace_enosys = kcmdline_has("rach2.trace=enosys");
 

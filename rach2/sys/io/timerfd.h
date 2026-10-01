@@ -20,8 +20,32 @@ int32_t sys_timerfd_gettime(struct isr_params *params);
 int32_t sys_timerfd_settime64(struct isr_params *params);
 int32_t sys_timerfd_gettime64(struct isr_params *params);
 
-/** Count the expirations due by the tick `now` and wake the readers; called
- * from the timer interrupt. */
+/*
+ * POSIX timers, timer_create's, which share the timer of a timerfd: each
+ * belongs to its process, by an id from 0, and its expiration posts a
+ * signal with SI_TIMER, its id, its value and the overrun, the expirations
+ * it went on to count while the signal was pending, to the process or, for
+ * SIGEV_THREAD_ID, one of its threads, or nothing for SIGEV_NONE. A process
+ * keeps at most PTIMER_MAX; exec and the end of the process delete them.
+ */
+#define PTIMER_MAX 64
+
+struct tgroup;
+
+int32_t sys_timer_create(struct isr_params *params);
+int32_t sys_timer_settime(struct isr_params *params);
+int32_t sys_timer_gettime(struct isr_params *params);
+int32_t sys_timer_settime64(struct isr_params *params);
+int32_t sys_timer_gettime64(struct isr_params *params);
+int32_t sys_timer_getoverrun(struct isr_params *params);
+int32_t sys_timer_delete(struct isr_params *params);
+
+/** Delete the POSIX timers of `tg`, at an exec and when its last thread
+ * ends. */
+void ptimer_delete_all(struct tgroup *tg);
+
+/** Count the expirations due by the tick `now`, and wake the readers or post
+ * the signals; called from the timer interrupt. */
 void timerfd_tick(uint32_t now);
 
 /*

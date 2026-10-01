@@ -4,6 +4,7 @@
 #include "../fs/vfs.h"
 #include "../mm/mm.h"
 #include "../mm/paging.h"
+#include "../io/timerfd.h"
 
 /**
  * End the current thread: release what it holds, and when it is the last
@@ -59,6 +60,7 @@ int proc_exit_cleanup(int32_t status)
     self->exit_code = status;
     tg->live--;
     if (tg->live == 0) {
+        ptimer_delete_all(tg);
         ptrace_tracer_gone(self->tgid);
         reparent_children(self->tgid);
         if (tg->exiting) {

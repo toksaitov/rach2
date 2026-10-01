@@ -5211,3 +5211,13 @@ old
 new
         !icmp_error_allowed()) {
 end
+
+fault timer-overrun-dropped
+probe callsmusl
+file rach2/sys/io/timerfd.c
+expect CALLSMUSL FAIL (a blocked periodic timer's signal did not carry its overrun
+old
+                held->uid + t->count > 0x7FFFFFFFu ? 0x7FFFFFFFu : held->uid + (uint32_t)t->count;
+new
+                held->uid;
+end

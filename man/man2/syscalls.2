@@ -1,4 +1,4 @@
-.Dd October 1, 2026
+.Dd October 2, 2026
 .Dt SYSCALLS 2
 .Os
 .Sh NAME
@@ -29,7 +29,7 @@ given up its capabilities with
 Linux asks for a capability in each such place, and this kernel keeps
 every capability or none.
 .Ss System call numbers
-The kernel registers the following 265 calls.
+The kernel registers the following 272 calls.
 .Bl -column "Number" "System call" -compact
 .It Sy Number Ta Sy System call
 .It 1 Ta Xr exit 2
@@ -220,6 +220,11 @@ The kernel registers the following 265 calls.
 .It 255 Ta Xr epoll_ctl 2
 .It 256 Ta Xr epoll_wait 2
 .It 258 Ta Xr set_tid_address 2
+.It 259 Ta Xr timer_create 2
+.It 260 Ta Xr timer_settime 2
+.It 261 Ta Xr timer_gettime 2
+.It 262 Ta Xr timer_getoverrun 2
+.It 263 Ta Xr timer_delete 2
 .It 264 Ta Xr clock_settime 2
 .It 265 Ta Xr clock_gettime 2
 .It 266 Ta Xr clock_getres 2
@@ -298,6 +303,8 @@ The following operation numbers select calls through system call 102,
 .It 404 Ta Xr clock_settime64 2
 .It 405 Ta Xr clock_adjtime64 2
 .It 406 Ta Xr clock_getres_time64 2
+.It 408 Ta Xr timer_gettime64 2
+.It 409 Ta Xr timer_settime64 2
 .It 410 Ta Xr timerfd_gettime64 2
 .It 411 Ta Xr timerfd_settime64 2
 .It 436 Ta Xr close_range 2

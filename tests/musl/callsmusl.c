@@ -17,6 +17,9 @@
  * local port no socket has polls POLLERR once the port unreachable comes
  * back, and its next receive is ECONNREFUSED, as glibc's resolver expects,
  * ten times in a row, since errors over the loopback are not rate-limited.
+ * A POSIX timer's signal comes with SI_TIMER and its value, a periodic
+ * timer's signal blocked through several periods comes once with the others
+ * as its overrun, and a deleted timer's id is EINVAL.
  * A setgid directory gives a file made in it its group, and a directory
  * its group and the bit. A process of another user is refused the maps and
  * the descriptors of a root process under /proc, and reads its own.
@@ -147,6 +150,48 @@ static int refusals(void)
         }
     }
     close(fd);
+    return 0;
+}
+
+/* POSIX timers on SIGUSR2, which stays blocked and is taken by sigtimedwait. */
+static int timers(void)
+{
+    struct sigevent se;
+    struct itimerspec its;
+    struct timespec wait = {2, 0}, zero = {0, 0};
+    sigset_t set;
+    siginfo_t si;
+    timer_t t;
+
+    sigemptyset(&set);
+    sigaddset(&set, SIGUSR2);
+    sigprocmask(SIG_BLOCK, &set, NULL);
+    memset(&se, 0, sizeof se);
+    se.sigev_notify = SIGEV_SIGNAL;
+    se.sigev_signo = SIGUSR2;
+    se.sigev_value.sival_int = 99;
+    memset(&its, 0, sizeof its);
+    its.it_value.tv_nsec = 20000000;
+    if (timer_create(CLOCK_MONOTONIC, &se, &t) != 0 || timer_settime(t, 0, &its, NULL) != 0) {
+        return fail("timer_create and timer_settime of a 20 ms timer");
+    }
+    if (sigtimedwait(&set, &si, &wait) != SIGUSR2 || si.si_code != SI_TIMER ||
+        si.si_value.sival_int != 99) {
+        return fail("the timer's signal did not come with SI_TIMER and its value");
+    }
+    its.it_interval.tv_nsec = 20000000;
+    if (timer_settime(t, 0, &its, NULL) != 0) {
+        return fail("timer_settime of a periodic timer");
+    }
+    usleep(210000);
+    if (sigtimedwait(&set, &si, &wait) != SIGUSR2 || si.si_overrun < 3 || timer_getoverrun(t) < 3) {
+        return fail("a blocked periodic timer's signal did not carry its overrun");
+    }
+    if (timer_delete(t) != 0 || syscall(SYS_timer_delete, (long)t) != -1 || errno != EINVAL) {
+        return fail("timer_delete, then again");
+    }
+    while (sigtimedwait(&set, &si, &zero) == SIGUSR2) {
+    }
     return 0;
 }
 
@@ -567,7 +612,7 @@ int main(void)
 {
     if (signals() || memory() || identity() || messages() || clocks() || ranges() || copies() ||
         reserves() || adjusts() || advises() || terminals() || peaks() || refusals() || setgids() ||
-        privacies()) {
+        privacies() || timers()) {
         return 1;
     }
     printf("CALLSMUSL OK\n");

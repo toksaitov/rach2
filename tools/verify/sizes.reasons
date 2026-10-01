@@ -201,7 +201,7 @@ rach2/sys/proc/elf.c:elf_load_image_at nesting 5 one program loaded and entered,
 rach2/sys/rtc.c:rtc_decode complexity 31 a parser over an external format, one check per field in the format's order
 rach2/sys/rtc.c:rtc_decode lines 105 a parser over an external format, one check per field in the format's order
 
-rach2/sys/syscall.c:init_syscall lines 265 a table, one entry per system call number
+rach2/sys/syscall.c:init_syscall lines 272 a table, one entry per system call number
 rach2/sys/syscall.c:ktimex_adjust complexity 27 one arm per mode of adjtimex, in the order Linux applies them
 rach2/sys/syscall.c:sys_ioctl complexity 34 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall.c:sys_ioctl lines 150 a dispatcher, one arm per command, read as a table

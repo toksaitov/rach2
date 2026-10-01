@@ -19,12 +19,15 @@
  * once, when the last thread is gone; the other threads' records are freed
  * as they end. `refs` counts the records that point at the group.
  */
+struct ktimer;
+
 struct tgroup {
     uint32_t refs;
     uint32_t live;          /* threads that have not ended */
     struct process *leader; /* its id is the process id */
     struct k_sigaction action[KSIG_MAX + 1];
-    uint64_t pending; /* signals sent to the process, which any thread takes */
+    uint64_t pending;      /* signals sent to the process, which any thread takes */
+    struct ktimer *timers; /* timer_create's, in the order of their ids */
     struct k_siginfo info[KSIG_MAX + 1];
     uint32_t stop;             /* the signal of a stop in effect, 0 for none */
     uint32_t exiting;          /* exit_group or a fatal signal ends every thread */

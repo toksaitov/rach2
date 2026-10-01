@@ -116,6 +116,11 @@ void ptrace_exit_notify(process_t *p)
     CHECK(0, "an untraced thread tells no tracer");
 }
 
+void ptimer_delete_all(struct tgroup *tg)
+{
+    CHECK(tg == child.tg, "the process's POSIX timers are deleted at its end");
+}
+
 void ptrace_tracer_gone(uint32_t tgid)
 {
     CHECK(tgid == child.tgid, "the process's own tracees are let go at its end");

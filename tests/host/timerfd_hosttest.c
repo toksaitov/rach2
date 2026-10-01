@@ -23,7 +23,7 @@
 extern int printf(const char *format, ...);
 
 volatile uint32_t kernel_ticks;
-static struct timerfd timer;
+static struct ktimer timer;
 static fd_entry_t entry;
 static struct open_file description;
 static process_t reader;
@@ -41,6 +41,29 @@ static uint64_t inner_value;
             failures++;                                       \
         }                                                     \
     } while (0)
+
+/* The POSIX timers' part, which these rows do not reach. */
+process_t *get_process(uint32_t pid)
+{
+    (void)pid;
+    return 0;
+}
+
+void signal_post_info(process_t *target, int signo, const struct k_siginfo *info)
+{
+    (void)target;
+    (void)signo;
+    (void)info;
+    CHECK(0, "a timerfd posted a signal");
+}
+
+void signal_post_thread(process_t *t, int signo, const struct k_siginfo *info)
+{
+    (void)t;
+    (void)signo;
+    (void)info;
+    CHECK(0, "a timerfd posted a signal");
+}
 
 uint32_t kirq_save(void)
 {

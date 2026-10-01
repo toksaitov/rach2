@@ -283,6 +283,15 @@
 #define SYS_TIMERFD_SETTIME64 411
 #define SYS_EPOLL_PWAIT2      441
 
+/* POSIX timers (io/timerfd.c, which has the timers both kinds share). */
+#define SYS_TIMER_CREATE     259
+#define SYS_TIMER_SETTIME    260
+#define SYS_TIMER_GETTIME    261
+#define SYS_TIMER_GETOVERRUN 262
+#define SYS_TIMER_DELETE     263
+#define SYS_TIMER_GETTIME64  408
+#define SYS_TIMER_SETTIME64  409
+
 /* inotify (io/inotify.c; the add is in syscall_fs.c, which resolves paths). */
 #define SYS_INOTIFY_INIT      291
 #define SYS_INOTIFY_ADD_WATCH 292

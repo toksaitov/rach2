@@ -1,0 +1,123 @@
+.Dd October 2, 2026
+.Dt TIMER_CREATE 2
+.Os
+.Sh NAME
+.Nm timer_create ,
+.Nm timer_settime ,
+.Nm timer_gettime ,
+.Nm timer_getoverrun ,
+.Nm timer_delete
+.Nd POSIX timers of a process
+.Sh SYNOPSIS
+.In signal.h
+.In time.h
+.Ft int
+.Fn timer_create "clockid_t clockid" "struct sigevent *sev" "timer_t *timerid"
+.Ft int
+.Fn timer_settime "timer_t timerid" "int flags" "const struct itimerspec *new" "struct itimerspec *old"
+.Ft int
+.Fn timer_gettime "timer_t timerid" "struct itimerspec *cur"
+.Ft int
+.Fn timer_getoverrun "timer_t timerid"
+.Ft int
+.Fn timer_delete "timer_t timerid"
+.Sh DESCRIPTION
+.Fn timer_create ,
+number 259, makes a timer on the clock
+.Dv CLOCK_REALTIME ,
+.Dv CLOCK_MONOTONIC
+or
+.Dv CLOCK_BOOTTIME ,
+disarmed, and stores its id, the lowest the process does not have, at
+.Fa timerid .
+.Fa sev
+says how it is notified:
+.Dv SIGEV_SIGNAL
+posts the signal
+.Fa sigev_signo
+to the process,
+.Dv SIGEV_THREAD_ID
+to the thread
+.Fa sigev_notify_thread_id
+of the process, and
+.Dv SIGEV_NONE
+nothing; a NULL
+.Fa sev
+is
+.Dv SIGALRM
+with the id as its value.
+The C libraries make
+.Dv SIGEV_THREAD
+of
+.Dv SIGEV_THREAD_ID
+and a thread of their own.
+A process has at most 64 timers.
+.Pp
+.Fn timer_settime ,
+number 260, arms and disarms the timer as
+.Xr timerfd_settime 2
+arms a timerfd, with
+.Dv TIMER_ABSTIME
+for an absolute time, and
+.Fn timer_gettime ,
+number 261, reports its setting as
+.Xr timerfd_gettime 2
+does; the 64-bit time forms are numbers 409 and 408.
+Times are kept in the same 10 ms ticks, rounded up, so a timer never
+expires early.
+.Pp
+An expiration posts the signal with
+.Va si_code
+.Dv SI_TIMER ,
+the timer's id in
+.Va si_timerid ,
+the value
+.Fa sigev_value
+in
+.Va si_value ,
+and in
+.Va si_overrun
+the expirations after the first that came while the signal was pending,
+which go on adding to the pending signal until it is taken, as Linux
+counts them.
+While a signal of the same number that is not the timer's is pending, the
+expirations wait and count toward the next signal.
+.Fn timer_getoverrun ,
+number 262, gives the overrun of the timer's last signal.
+.Pp
+.Fn timer_delete ,
+number 263, disarms and deletes the timer.
+.Xr execve 2
+and the end of the process delete its timers; a child of
+.Xr fork 2
+has none.
+.Sh RETURN VALUES
+.Fn timer_getoverrun
+returns the overrun, and the others 0; each returns -1 with
+.Va errno
+set on failure.
+musl's
+.Fn timer_delete
+returns the negative error number itself.
+.Sh ERRORS
+.Bl -tag -width EINVAL
+.It Er EAGAIN
+The process has 64 timers, or the kernel had no memory for another.
+.It Er EFAULT
+A structure is not in the caller's memory.
+.It Er EINVAL
+The clock, the notification or its signal is not one of those above, a
+thread
+.Dv SIGEV_THREAD_ID
+names is not one of the process's,
+.Fa timerid
+is not a timer of the process, a flag is not
+.Dv TIMER_ABSTIME ,
+.Fa new
+is NULL, or a time is negative or its nanoseconds are outside 0 to
+999999999.
+.El
+.Sh SEE ALSO
+.Xr setitimer 2 ,
+.Xr sigaction 2 ,
+.Xr timerfd 2

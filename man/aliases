@@ -526,6 +526,12 @@ eventfd2 2 eventfd
 inotify_init1 2 inotify_init
 inotify_add_watch 2 inotify_init
 inotify_rm_watch 2 inotify_init
+timer_delete 2 timer_create
+timer_getoverrun 2 timer_create
+timer_gettime 2 timer_create
+timer_gettime64 2 timer_create
+timer_settime 2 timer_create
+timer_settime64 2 timer_create
 timerfd_create 2 timerfd
 timerfd_settime 2 timerfd
 timerfd_gettime 2 timerfd
