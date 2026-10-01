@@ -14,10 +14,11 @@
  * card whose link is not up yet, as a real one is for the seconds its PHY
  * takes to negotiate, could not send them, so they wait in the ring until
  * the link is up and the next line starts a drain, even a line the full ring
- * has no room for. A frame refused because the link went down in the middle
- * of a drain stays in the ring too; the characters leave the ring only once
- * their frame is sent, which also keeps a character that arrives during the
- * send from taking their slot.
+ * has no room for. A frame the card refuses, because the link went down in
+ * the middle of a drain or its transmit ring is full, stays in the ring too,
+ * and the drain stops until the next line: the characters leave the ring
+ * only once their frame is sent, which also keeps a character that arrives
+ * during the send from taking their slot.
  *
  * Two different things can interleave here and each has its own guard.
  *
@@ -41,8 +42,9 @@
  * delivery. `nc_sending` is what stops that: while a frame is being sent, a
  * character only joins the ring. That alone is not enough, because the
  * characters it adds would extend the drain that is running; so a drain also
- * fixes its end at the ring's head when it starts, and a chip that fails every
- * transmit costs one bounded pass, not an endless one.
+ * fixes its end at the ring's head when it starts. A chip that fails every
+ * transmit costs one refused frame a line, not an endless pass, and the ring
+ * fills and drops the newest characters, as it does with no link.
  */
 
 #include "../klog.h"
@@ -154,8 +156,7 @@ void netconsole_flush(void)
         write16be(nc_payload + 14, ip_checksum(nc_payload, (uint16_t)(NETCONSOLE_HDR_LEN + n)));
 
         if (ethernet_tx(netdev_first(), nc_broadcast, NETCONSOLE_ETHERTYPE, nc_payload,
-                        (uint16_t)(NETCONSOLE_HDR_LEN + n)) != NETDEV_TX_OK &&
-            !netdev_running(netdev_first())) {
+                        (uint16_t)(NETCONSOLE_HDR_LEN + n)) != NETDEV_TX_OK) {
             nc_sending = 0;
             net_unlock(flags);
             return;
