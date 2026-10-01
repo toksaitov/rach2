@@ -9,6 +9,7 @@
 .Sh SYNOPSIS
 .Nm
 .Op Fl w
+.Op Fl P Ar pager
 .Op Ar SECTION
 .Ar NAME ...
 .Nm
@@ -60,6 +61,8 @@ page otherwise.
 .Pp
 When standard output is a terminal, the page goes through the pager named
 by
+.Fl P ,
+then
 .Ev MANPAGER ,
 then
 .Ev PAGER ,
@@ -68,12 +71,24 @@ then BusyBox
 whose display width
 .Ev COLUMNS
 sets; the pages are not reformatted to it.
+The shell runs the pager, so it may have options, as
+.Ql less -S
+does.
 Otherwise the page goes to standard output as it is, so
 .Ql man NAME > FILE
 copies the page byte for byte.
 .Pp
 The options are:
 .Bl -tag -width Ds
+.It Fl P Ar pager
+Show the pages through
+.Ar pager ,
+as
+.Ql man -P cat ls
+does, in place of
+.Ev MANPAGER
+and
+.Ev PAGER .
 .It Fl w
 Print the path of each page that would be shown instead of the page.
 .It Fl k

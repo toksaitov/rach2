@@ -15,8 +15,8 @@
 # describe the upstream programs; the ports' page comes first when the
 # command the path finds by the name is a port's and not BusyBox's, as GNU's
 # ls is on that system. The text goes through the pager on a terminal and
-# straight to standard output otherwise; -w prints each page's path
-# instead. -k, which `apropos` is, prints the NAME line of every page whose
+# straight to standard output otherwise; -P names the pager, in place of
+# MANPAGER and PAGER, and -w prints each page's path instead. -k, which `apropos` is, prints the NAME line of every page whose
 # names or summary hold one of the words, in any case, and -f, which
 # `whatis` is, that of every page one of the names names. The lines are
 # read from the pages themselves, so there is no index to go stale.
@@ -24,19 +24,30 @@
 # file per alias would put four hundred nodes on every root, which the RAM
 # root and a KRFFS disk walk on every lookup.
 mandir=/usr/share/man
-usage="usage: man [-w] [SECTION] NAME... | man -k WORD... | man -f NAME..."
+usage="usage: man [-w] [-P PAGER] [SECTION] NAME... | man -k WORD... | man -f NAME..."
 mode=show
+pager=${MANPAGER:-${PAGER:-less}}
 case ${0##*/} in
     apropos) mode=apropos ;;
     whatis) mode=whatis ;;
 esac
-case $1 in
-    -w) mode=where; shift ;;
-    -k) mode=apropos; shift ;;
-    -f) mode=whatis; shift ;;
-    -h|--help) echo "$usage"; exit 0 ;;
-    -*) echo "$usage" >&2; exit 2 ;;
-esac
+while :; do
+    case $1 in
+        -w) mode=where; shift ;;
+        -k) mode=apropos; shift ;;
+        -f) mode=whatis; shift ;;
+        -P)
+            [ $# -gt 1 ] || { echo "$usage" >&2; exit 2; }
+            pager=$2
+            shift 2
+            ;;
+        -P?*) pager=${1#-P}; shift ;;
+        -h|--help) echo "$usage"; exit 0 ;;
+        --) shift; break ;;
+        -*) echo "$usage" >&2; exit 2 ;;
+        *) break ;;
+    esac
+done
 if [ $# -eq 0 ]; then
     echo "$usage" >&2
     exit 2
@@ -147,7 +158,7 @@ for name; do
     elif [ "$mode" = where ]; then
         echo "$found"
     elif [ -t 1 ]; then
-        gunzip -c "$found" | "${MANPAGER:-${PAGER:-less}}" || status=1
+        gunzip -c "$found" | sh -c "$pager" || status=1
     else
         gunzip -c "$found" || status=1
     fi

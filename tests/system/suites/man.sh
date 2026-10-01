@@ -56,10 +56,12 @@ if "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" --qemu-arg=-cpu --qemu-arg=ma
     "expect=# " "send=n=0; M=/usr/share/man" "expect=# " "send=$READPAGES" "expect=# " "send=$READALIASES" \
     "expect=# " "send=echo MAN\"\"ALL \$n" \
     "expect=MANALL ${expected}[^0-9]" "send=man rach2" "expect=$first" "sendraw=G" "expect=$last" \
-    "sendraw=q" "expect=# " "send=echo MAN\"\"DONE" "expect=MANDONE" > /dev/null 2>&1; then
+    "sendraw=q" "expect=# " "send=man -P 'tail -1' rach2" "expect=$last" \
+    "expect=# " "send=echo MAN\"\"DONE" "expect=MANDONE" > /dev/null 2>&1; then
     count=$(grep -a "MANALL [0-9]" "$LOG" | tail -1 | tr -d '\r' | sed 's/.*MANALL //')
     echo "man-test: every staged page, $count of them, is what man gives through a pipe, byte for byte: OK"
     echo "man-test: and rach2(7) on the console under the pager shows its first line and its last: OK"
+    echo "man-test: and -P runs the pager it names, with its options: OK"
 else
     grep -a "MAN\|man:\|RACH2\|less" "$LOG" | tr -d '\r' | tail -8 >&2 || true
     fail "the manual on the machine"
