@@ -137,7 +137,7 @@ The policy is the two disk drivers' allowlist and covers the disk they drive. A 
 
 `RACH2_RECOVERY` controls the write handler for every `/dev/diskN` and `/dev/diskNpM` node, including USB disks, and requests automatic whole-disk publication. The ordinary kernel has the `EPERM` body. The recovery kernel has the root-only write body. USB whole-disk windows are also published by their table scans, independently of this switch. The switch does not bypass `RACH2_DISK_READONLY`; the Makefile builds the recovery kernel with recovery authority and the normal read-write driver policy. `tools/inspect/check_recovery.sh` checks the authority banner.
 
-The command and flush counters cover attempts issued since boot. `/proc/disk` reports them beside the raw-device batch size and call count.
+The command and flush counters cover attempts issued since boot. `/proc/disk` reports them beside the raw-device batch size and call count. Each device also counts its own transfers for `/proc/diskstats` (`struct block_stats` in `block.h`): `block_request_flags` counts a transfer that ended well, its sectors and its milliseconds, on the device asked and on the disk `block_physical` reaches under it, and the requests in progress on both.
 
 ## Disk information
 

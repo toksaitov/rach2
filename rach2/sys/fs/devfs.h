@@ -206,4 +206,24 @@ int devfs_lseek_zero(struct fd_entry *e);
  */
 int devfs_dirent(int n, const char **name, uint32_t *ino);
 
+struct block_device;
+
+/**
+ * Disk node `i` of the table, for /proc/diskstats: 1 with its name, its
+ * device numbers, the device whose counts are its own, the disk's for a
+ * whole disk and the partition view's for a partition, and the alias whose
+ * counts are added to them, or NULL; 0 for a partition not published now,
+ * or a disk that is gone; -1 past the table. A whole disk has its line
+ * whether or not its node is published.
+ */
+int devfs_disk_node_at(int i, const char **name, uint32_t *major, uint32_t *minor,
+                       const struct block_device **dev, const struct block_device **alias);
+
+/**
+ * Count the transfers of `alias`, a device over the same sectors as the
+ * partition view `view`, as the view's node's in /proc/diskstats: the
+ * kernel mounts its boot root through a view of its own.
+ */
+void devfs_window_alias(const struct block_device *view, const struct block_device *alias);
+
 #endif /* _DEVFS_H_ */

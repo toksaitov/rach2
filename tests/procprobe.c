@@ -1186,6 +1186,12 @@ void probe_main(unsigned int *sp)
                   uint_after(buf, n, "HeapPages:") * 4 - uint_after(buf, n, "Buffers:"),
           "and its Slab is the heap's pages but the buffer cache's, which the heap holds");
 
+    n = slurp("/proc/diskstats", buf, (int)sizeof(buf));
+    check(n >= 0 && (n == 0 || buf[n - 1] == '\n'),
+          "/proc/diskstats reads, each line ended, as iostat reads it");
+    check(n == 0 || fields_in(buf, n) == 20 * lines_in(buf, n),
+          "and each of its lines has Linux's twenty fields");
+
     n = slurp("/proc/mounts", buf, (int)sizeof(buf));
     check(n > 0 && buf[n - 1] == '\n', "/proc/mounts ends with its newline");
     check(lines_in(buf, n) == 5, "/proc/mounts names the root, /dev, /proc, /dev/shm and /sys");

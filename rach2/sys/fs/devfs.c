@@ -475,6 +475,10 @@ struct disk_node {
     char name[16];
     struct disk *disk;
     int part; /* 0 for the whole disk, else the 1-based partition */
+    /* Another device over the node's sectors whose transfers /proc/diskstats
+     * counts as the node's: the kernel's own view of a boot root it mounted
+     * (`devfs_window_alias`), or NULL. */
+    const struct block_device *alias;
 };
 
 static struct disk_node disk_nodes[DISK_MAX * DISK_NODE_WINDOWS];
@@ -1134,6 +1138,37 @@ static int disk_node_present(int j)
 {
     return j >= 0 && j < disk_node_count && disk_nodes[j].disk->present &&
            disk_node_window(&disk_nodes[j])->present;
+}
+
+int devfs_disk_node_at(int i, const char **name, uint32_t *major, uint32_t *minor,
+                       const struct block_device **dev, const struct block_device **alias)
+{
+    const struct disk_node *node;
+
+    if (i < 0 || i >= disk_node_count) {
+        return -1;
+    }
+    node = &disk_nodes[i];
+    if (node->part == 0 ? !node->disk->present : !disk_node_present(i)) {
+        return 0;
+    }
+    *name = node->name;
+    *major = node->entry.major;
+    *minor = node->entry.minor;
+    *dev = node->part == 0 ? node->disk->dev : &node->disk->views[node->part - 1].part.device;
+    *alias = node->alias;
+    return 1;
+}
+
+void devfs_window_alias(const struct block_device *view, const struct block_device *alias)
+{
+    int i;
+
+    for (i = 0; i < disk_node_count; i++) {
+        if (disk_node_present(i) && &disk_node_window(&disk_nodes[i])->part.device == view) {
+            disk_nodes[i].alias = alias;
+        }
+    }
 }
 
 /* The index `stat` and the listing agree on: the table's entries first,

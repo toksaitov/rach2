@@ -86,6 +86,7 @@
 #define PROCFS_INO_NETTCP      0x10Bu
 #define PROCFS_INO_CPUINFO     0x112u
 #define PROCFS_INO_LOADAVG     0x113u
+#define PROCFS_INO_DISKSTATS   0x114u
 #define PROCFS_INO_NET         0x120u /* and the other files of /proc/net after it */
 
 /* Inode namespace for /sys: the fixed directories by their node; a PCI
@@ -154,6 +155,9 @@ static const char *procfs_kind_name(const struct vpath *vp)
     }
     if (vp->kind == VNODE_PROC_LOADAVG) {
         return "/proc/loadavg";
+    }
+    if (vp->kind == VNODE_PROC_DISKSTATS) {
+        return "/proc/diskstats";
     }
     if (vp->kind == VNODE_PROC_SYS_FILE) {
         return "/proc/sys";
@@ -307,6 +311,20 @@ static void ap_u32(struct procfs_text *t, uint32_t v)
     while (n > 0) {
         ap_ch(t, tmp[--n]);
     }
+}
+
+/** Append `v` as `ap_u32` does, right-aligned in `width` places. */
+static void ap_u32_width(struct procfs_text *t, uint32_t v, int width)
+{
+    uint32_t w = 1, rest;
+
+    for (rest = v; rest >= 10u; rest /= 10u) {
+        w++;
+    }
+    while ((int)w++ < width) {
+        ap_ch(t, ' ');
+    }
+    ap_u32(t, v);
 }
 
 /* Append a signed decimal. INT_MIN is handled by negating in unsigned space. */
@@ -1452,6 +1470,11 @@ uint32_t procfs_ino_cpuinfo(void)
     return PROCFS_INO_CPUINFO;
 }
 
+uint32_t procfs_ino_diskstats(void)
+{
+    return PROCFS_INO_DISKSTATS;
+}
+
 uint32_t procfs_ino_loadavg(void)
 {
     return PROCFS_INO_LOADAVG;
@@ -1575,6 +1598,9 @@ uint32_t procfs_fd_ino(struct fd_entry *e)
     if (pf->origin_file == SYNTH_PROC_LOADAVG) {
         return PROCFS_INO_LOADAVG;
     }
+    if (pf->origin_file == SYNTH_PROC_DISKSTATS) {
+        return PROCFS_INO_DISKSTATS;
+    }
     if (pf->origin_file == SYNTH_PROC_SYSCTL) {
         return PROCFS_INO_SYS + (uint32_t)pf->origin_pid;
     }
@@ -1605,6 +1631,69 @@ uint32_t procfs_fd_ino(struct fd_entry *e)
 uint32_t procfs_ino_pid(int pid)
 {
     return PROCFS_INO_PID_BASE + (uint32_t)(pid & 0xffff);
+}
+
+/**
+ * Render /proc/diskstats: a line for each disk node, the whole disk and each
+ * partition, in Linux's twenty fields: the device numbers and name, then the
+ * reads that ended well, none merged, their sectors and milliseconds, the
+ * same of the writes, the requests in progress, the milliseconds the device
+ * was busy and the sum of the transfers' milliseconds, and zero for the
+ * discards and the flushes, which are not counted per device. A whole disk's
+ * counts are of every transfer to it, through any of its nodes, as Linux's
+ * are (`block_request_flags`); a partition's are its view's and those of the
+ * kernel's own view of a boot root on it (`devfs_window_alias`).
+ */
+static int procfs_gen_diskstats(struct procfs_text *t)
+{
+    const block_device_t *dev, *alias;
+    const char *name;
+    uint32_t major, minor;
+    int i, got;
+
+    for (i = 0; (got = devfs_disk_node_at(i, &name, &major, &minor, &dev, &alias)) >= 0; i++) {
+        struct block_stats sum;
+        const struct block_stats *s = &sum;
+
+        if (got == 0) {
+            continue;
+        }
+        sum = dev->stats;
+        if (alias) {
+            sum.reads += alias->stats.reads;
+            sum.read_sectors += alias->stats.read_sectors;
+            sum.read_ms += alias->stats.read_ms;
+            sum.writes += alias->stats.writes;
+            sum.write_sectors += alias->stats.write_sectors;
+            sum.write_ms += alias->stats.write_ms;
+            sum.in_flight += alias->stats.in_flight;
+            sum.busy_ms += alias->stats.busy_ms;
+        }
+        ap_u32_width(t, major, 4);
+        ap_u32_width(t, minor, 8);
+        ap_ch(t, ' ');
+        ap_str(t, name);
+        ap_ch(t, ' ');
+        ap_u32(t, s->reads);
+        ap_str(t, " 0 ");
+        ap_u32(t, s->read_sectors);
+        ap_ch(t, ' ');
+        ap_u32(t, s->read_ms);
+        ap_ch(t, ' ');
+        ap_u32(t, s->writes);
+        ap_str(t, " 0 ");
+        ap_u32(t, s->write_sectors);
+        ap_ch(t, ' ');
+        ap_u32(t, s->write_ms);
+        ap_ch(t, ' ');
+        ap_u32(t, s->in_flight);
+        ap_ch(t, ' ');
+        ap_u32(t, s->busy_ms);
+        ap_ch(t, ' ');
+        ap_u32(t, s->read_ms + s->write_ms);
+        ap_str(t, " 0 0 0 0 0 0\n");
+    }
+    return t->nomem ? -1 : t->len;
 }
 
 /**
@@ -3224,8 +3313,9 @@ static int procfs_needs_pid(int kind)
     return kind != VNODE_PROC_CMDLINE && kind != VNODE_PROC_DISK && kind != VNODE_PROC_NET_DEV &&
            kind != VNODE_PROC_UPTIME && kind != VNODE_PROC_STAT_SYS && kind != VNODE_PROC_MEMINFO &&
            kind != VNODE_PROC_CPUINFO && kind != VNODE_PROC_LOADAVG &&
-           kind != VNODE_PROC_SYS_FILE && kind != VNODE_PROC_MOUNTS && kind != VNODE_PROC_USB &&
-           kind != VNODE_PROC_AUDIO && kind != VNODE_PROC_FILESYSTEMS && kind != VNODE_PROC_LOOP &&
+           kind != VNODE_PROC_DISKSTATS && kind != VNODE_PROC_SYS_FILE &&
+           kind != VNODE_PROC_MOUNTS && kind != VNODE_PROC_USB && kind != VNODE_PROC_AUDIO &&
+           kind != VNODE_PROC_FILESYSTEMS && kind != VNODE_PROC_LOOP &&
            kind != VNODE_PROC_INTERRUPTS && kind != VNODE_PROC_CONSOLE &&
            kind != VNODE_PROC_NET_ROUTE && kind != VNODE_PROC_NET_ARP &&
            kind != VNODE_PROC_NET_TCP && kind != VNODE_PROC_NET_FILE && kind != VNODE_SYS_FILE;
@@ -3316,6 +3406,8 @@ int procfs_open(const struct vpath *vp, int flags)
         len = procfs_gen_meminfo(&text);
     } else if (vp->kind == VNODE_PROC_LOADAVG) {
         len = procfs_gen_loadavg(&text);
+    } else if (vp->kind == VNODE_PROC_DISKSTATS) {
+        len = procfs_gen_diskstats(&text);
     } else if (vp->kind == VNODE_PROC_CPUINFO) {
         len = procfs_text_room(&text, CPUINFO_TEXT_MAX) == 0
                   ? (int)cpuinfo_text(text.buf, CPUINFO_TEXT_MAX)
@@ -3408,6 +3500,8 @@ int procfs_open(const struct vpath *vp, int flags)
         f->origin_file = SYNTH_PROC_CPUINFO;
     } else if (vp->kind == VNODE_PROC_LOADAVG) {
         f->origin_file = SYNTH_PROC_LOADAVG;
+    } else if (vp->kind == VNODE_PROC_DISKSTATS) {
+        f->origin_file = SYNTH_PROC_DISKSTATS;
     } else if (vp->kind == VNODE_PROC_SYS_FILE) {
         f->origin_file = SYNTH_PROC_SYSCTL;
     } else if (vp->kind == VNODE_PROC_MOUNTS) {

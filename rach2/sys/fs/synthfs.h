@@ -58,6 +58,7 @@ enum vnode_kind {
     VNODE_SYS_FILE,         /* a device's uevent, by `sysent` and `syskey` */
     VNODE_PROC_CWD,         /* /proc/<pid>/cwd: a link to the working directory */
     VNODE_PROC_ROOT,        /* /proc/<pid>/root: a link to the root directory */
+    VNODE_PROC_DISKSTATS,   /* /proc/diskstats: the transfers of each disk node */
     VNODE_ENOENT,           /* under a synthetic mount, but no such entry */
     VNODE_ENOTDIR           /* under a synthetic mount, a non-dir used as a directory */
 };
@@ -103,6 +104,7 @@ enum vnode_kind {
 /* A device's uevent under /sys, as the origin of its snapshot. */
 #define SYNTH_SYS_UEVENT       36
 #define SYNTH_PROC_SMAPS       37
+#define SYNTH_PROC_DISKSTATS   38
 
 /* PID sentinel meaning "the calling process" (/proc/self), resolved by the
  * glue. */

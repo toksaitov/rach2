@@ -91,6 +91,15 @@ struct block_device {
     /* A `BLOCK_WRITE_THROUGH` disk answered a write without its flush, and
      * no flush has reached the disk since. Set and cleared by its driver. */
     volatile int unflushed;
+    /* What /proc/diskstats reports of the device: the transfers that ended
+     * well, their sectors and their milliseconds, each way, and the requests
+     * in progress. Counted by `block_request_flags`, on the device asked
+     * and on the disk `block_physical` reaches under it. */
+    struct block_stats {
+        uint32_t reads, read_sectors, read_ms;
+        uint32_t writes, write_sectors, write_ms;
+        uint32_t in_flight, busy_ms;
+    } stats;
 };
 
 /* How long a chain of backing devices may be: a loop device stands on a real

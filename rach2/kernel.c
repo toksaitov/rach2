@@ -2010,8 +2010,8 @@ static int ext2_root_mount(block_device_t *disk, uint64_t start, uint64_t count,
         klog(KLOG_ERR, "ext2", "root: %s is claimed", path);
         return -1;
     }
-    (void)view;
     block_partition_init(&_ext2_root_part, disk, start, count);
+    devfs_window_alias(view, &_ext2_root_part.device);
     rc = vfs_init_root(&vfs_ext2_type, &_ext2_root_part.device, path, claim);
     if (rc != 0) {
         devfs_release_claim(claim);

@@ -483,8 +483,60 @@ int block_request(block_device_t *device, int write, uint64_t lba, uint32_t coun
     return block_request_flags(device, write, lba, count, buffer, 0);
 }
 
+static int transfer(block_device_t *device, int write, uint64_t lba, uint32_t count, void *buffer,
+                    uint32_t req_flags);
+
+/* Count a transfer of `count` sectors that took `us` microseconds in the
+ * statistics of `s`, as Linux counts one in /proc/diskstats. */
+static void count_transfer(struct block_stats *s, int write, uint32_t count, uint32_t us)
+{
+    uint32_t ms = us / 1000u;
+
+    if (write) {
+        s->writes++;
+        s->write_sectors += count;
+        s->write_ms += ms;
+    } else {
+        s->reads++;
+        s->read_sectors += count;
+        s->read_ms += ms;
+    }
+    s->busy_ms += ms;
+}
+
 int block_request_flags(block_device_t *device, int write, uint64_t lba, uint32_t count,
                         void *buffer, uint32_t req_flags)
+{
+    block_device_t *disk = device ? block_physical(device) : 0;
+    uint32_t start = pit_now_us();
+    int rc;
+
+    if (!device) {
+        return -EIO;
+    }
+    device->stats.in_flight++;
+    if (disk && disk != device) {
+        disk->stats.in_flight++;
+    }
+    rc = transfer(device, write, lba, count, buffer, req_flags);
+    device->stats.in_flight--;
+    if (disk && disk != device) {
+        disk->stats.in_flight--;
+    }
+    if (rc == 0) {
+        uint32_t us = pit_now_us() - start;
+
+        count_transfer(&device->stats, write, count, us);
+        if (disk && disk != device) {
+            count_transfer(&disk->stats, write, count, us);
+        }
+    }
+    return rc;
+}
+
+/* `block_request_flags` without the counting. */
+static int transfer(block_device_t *device, int write, uint64_t lba, uint32_t count, void *buffer,
+                    uint32_t req_flags)
 {
     uint8_t *bytes = buffer;
     uint32_t eflags, most;

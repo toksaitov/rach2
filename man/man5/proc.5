@@ -127,6 +127,19 @@ raw input, and read.
 .It Li queue-max , line-max
 Maximum input queue and line occupancy.
 .El
+.It Pa /proc/diskstats
+A line for each disk and each partition node, in Linux's twenty fields:
+the device's major and minor numbers and its name, then the reads that
+ended well, 0 merged, their sectors and their milliseconds, the same four
+of the writes, the requests in progress, the milliseconds the device was
+busy and the sum of the transfers' milliseconds, and six zeros, for the
+discards and the flushes, which are not counted per device.
+A disk's line counts every transfer to it, through any of its nodes, and
+has its line whether or not its node is published; a partition's counts
+its node's transfers and those of the boot root mounted on it.
+BusyBox's
+.Xr iostat 1
+reads it.
 .It Pa /proc/disk
 Disk records and counters, described in
 .Xr disk 7 .
