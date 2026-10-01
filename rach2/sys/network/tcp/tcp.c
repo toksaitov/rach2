@@ -58,10 +58,12 @@ static uint8_t tcp_cksum_buf[12 + TCP_HDR_SIZE + 4 + TCP_MSS];
 #define TCP_SEG_MAX (TCP_HDR_SIZE + 4 + TCP_MSS)
 
 /* The option kinds a SYN's options are read for (RFC 9293). */
-#define TCP_OPT_END 0
-#define TCP_OPT_NOP 1
-#define TCP_OPT_MSS 2
-#define TCP_OPT_WS  3
+#define TCP_OPT_END     0
+#define TCP_OPT_NOP     1
+#define TCP_OPT_MSS     2
+#define TCP_OPT_WS      3
+#define TCP_OPT_SACK_OK 4
+#define TCP_OPT_SACK    5
 
 /* Ephemeral source port for active opens. */
 static uint16_t next_ephemeral = 49152;
@@ -252,6 +254,7 @@ static void tcb_init(struct tcb *tcb)
     tcb->cwnd = TCP_INIT_CWND;
     tcb->snd_mss = TCP_MSS_DEFAULT;
     tcb->rto = TCP_RTO_INIT;
+    tcb->sack_offer = 1;
 }
 
 /**
@@ -271,12 +274,17 @@ static void tcb_init(struct tcb *tcb)
  * this side's, which its SYN offered, to the fields it sends. When either
  * SYN lacks the option neither side scales, and this side offers at most
  * 65535 bytes whatever its ring holds.
+ *
+ * Selective acknowledgements are sent when both SYNs permit them; this
+ * side's SYN offers them always, and its answer to a SYN only when that
+ * SYN did.
  */
 static void tcp_take_options(struct tcb *tcb, const uint8_t *data, uint16_t hdr_len)
 {
     uint16_t i = TCP_HDR_SIZE;
     uint16_t mss = TCP_MSS_DEFAULT;
     int scaled = 0;
+    int sack = 0;
     uint8_t shift = 0;
 
     while (i < hdr_len && data[i] != TCP_OPT_END) {
@@ -295,9 +303,13 @@ static void tcp_take_options(struct tcb *tcb, const uint8_t *data, uint16_t hdr_
         } else if (data[i] == TCP_OPT_WS && data[i + 1] == 3) {
             scaled = 1;
             shift = data[i + 2] > 14 ? 14 : data[i + 2];
+        } else if (data[i] == TCP_OPT_SACK_OK && data[i + 1] == 2) {
+            sack = 1;
         }
         i = (uint16_t)(i + data[i + 1]);
     }
+    tcb->sack_ok = (uint8_t)(sack && tcb->sack_offer);
+    tcb->sack_offer = tcb->sack_ok;
     tcb->snd_mss = mss;
     tcb->cwnd = (uint32_t)TCP_INIT_SEGS * mss;
     if (scaled && tcb->ws_offer) {
@@ -370,9 +382,59 @@ static uint16_t tcp_checksum(uint32_t src_ip, uint32_t dst_ip, const uint8_t *se
     return ip_checksum(tcp_cksum_buf, (uint16_t)(12 + seg_len));
 }
 
+/* The index of the held range that has sequence number `seq`, or -1. */
+static int tcp_ooo_range_of(const struct tcb *tcb, uint32_t seq)
+{
+    int i;
+
+    for (i = 0; i < tcb->ooo_count; i++) {
+        if ((int32_t)(seq - tcb->ooo_start[i]) >= 0 && (int32_t)(seq - tcb->ooo_end[i]) < 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+/**
+ * Write at `opt` the SACK option of an acknowledgement from `tcb`, which
+ * holds data past a hole: the ranges of the last segments kept, the newest
+ * first, as RFC 2018 asks, and then the other ranges in order, at most
+ * TCP_SACK_BLOCKS of them. Returns the bytes written, two NOPs with the
+ * option, a multiple of four.
+ */
+static uint8_t tcp_sack_option(const struct tcb *tcb, uint8_t *opt)
+{
+    uint8_t n = 0, i, used = 0;
+    int r;
+
+    for (i = 0; i < tcb->sack_recent_count && n < TCP_SACK_BLOCKS; i++) {
+        r = tcp_ooo_range_of(tcb, tcb->sack_recent[i]);
+        if (r >= 0 && !(used & (1u << r))) {
+            used |= (uint8_t)(1u << r);
+            write32be(opt + 4 + 8 * n, tcb->ooo_start[r]);
+            write32be(opt + 8 + 8 * n, tcb->ooo_end[r]);
+            n++;
+        }
+    }
+    for (i = 0; i < tcb->ooo_count && n < TCP_SACK_BLOCKS; i++) {
+        if (!(used & (1u << i))) {
+            write32be(opt + 4 + 8 * n, tcb->ooo_start[i]);
+            write32be(opt + 8 + 8 * n, tcb->ooo_end[i]);
+            n++;
+        }
+    }
+    opt[0] = TCP_OPT_NOP;
+    opt[1] = TCP_OPT_NOP;
+    opt[2] = TCP_OPT_SACK;
+    opt[3] = (uint8_t)(2 + 8 * n);
+    return (uint8_t)(4 + 8 * n);
+}
+
 /**
  * Build and send a segment with the given control flags at the given
  * sequence, without any retransmission bookkeeping or sequence advance.
+ * A SYN has the options this side offers, and an acknowledgement sent
+ * while data past a hole is held names that data in a SACK option.
  */
 static int tcp_emit_flags(struct tcb *tcb, uint8_t flags, uint32_t seq)
 {
@@ -382,7 +444,9 @@ static int tcp_emit_flags(struct tcb *tcb, uint8_t flags, uint32_t seq)
 
     hdr_len = 20;
     if (flags & TCP_SYN) {
-        hdr_len = tcb->ws_offer ? 28 : 24;
+        hdr_len = (uint8_t)(24 + (tcb->ws_offer ? 4 : 0) + (tcb->sack_offer ? 4 : 0));
+    } else if ((flags & TCP_ACK) && !(flags & TCP_RST) && tcb->sack_ok && tcb->ooo_count > 0) {
+        hdr_len = (uint8_t)(20 + tcp_sack_option(tcb, tcp_tx_buf + 20));
     }
 
     write16be(tcp_tx_buf + 0, tcb->local_port);
@@ -405,6 +469,14 @@ static int tcp_emit_flags(struct tcb *tcb, uint8_t flags, uint32_t seq)
         tcp_tx_buf[25] = TCP_OPT_WS;
         tcp_tx_buf[26] = 3;
         tcp_tx_buf[27] = tcb->rcv_wscale;
+    }
+    if ((flags & TCP_SYN) && tcb->sack_offer) {
+        uint8_t at = tcb->ws_offer ? 28 : 24;
+
+        tcp_tx_buf[at] = TCP_OPT_NOP;
+        tcp_tx_buf[at + 1] = TCP_OPT_NOP;
+        tcp_tx_buf[at + 2] = TCP_OPT_SACK_OK;
+        tcp_tx_buf[at + 3] = 2;
     }
 
     seg_len = hdr_len;
@@ -1777,7 +1849,7 @@ static uint16_t tcp_accept_data(struct tcb *tcb, const uint8_t *payload, uint16_
  * with the ranges they overlap or touch. A range that would be a ninth is
  * not recorded, and its bytes are sent again by the peer.
  */
-static void tcp_ooo_add(struct tcb *tcb, uint32_t start, uint32_t end)
+static int tcp_ooo_add(struct tcb *tcb, uint32_t start, uint32_t end)
 {
     int i, j;
 
@@ -1800,11 +1872,11 @@ static void tcp_ooo_add(struct tcb *tcb, uint32_t start, uint32_t end)
                 }
                 tcb->ooo_count--;
             }
-            return;
+            return 1;
         }
     }
     if (tcb->ooo_count == TCP_OOO_RANGES) {
-        return;
+        return 0;
     }
     for (j = tcb->ooo_count; j > i; j--) {
         tcb->ooo_start[j] = tcb->ooo_start[j - 1];
@@ -1813,6 +1885,7 @@ static void tcp_ooo_add(struct tcb *tcb, uint32_t start, uint32_t end)
     tcb->ooo_start[i] = start;
     tcb->ooo_end[i] = end;
     tcb->ooo_count++;
+    return 1;
 }
 
 /** Forget the first kept range, which rcv_nxt has reached. */
@@ -1825,6 +1898,21 @@ static void tcp_ooo_drop_first(struct tcb *tcb)
         tcb->ooo_end[j] = tcb->ooo_end[j + 1];
     }
     tcb->ooo_count--;
+}
+
+/* Note `seq`, the start of a segment just kept past a hole, as the newest
+ * of the segments whose ranges an acknowledgement names first. */
+static void tcp_sack_note(struct tcb *tcb, uint32_t seq)
+{
+    int i;
+
+    if (tcb->sack_recent_count < TCP_SACK_BLOCKS) {
+        tcb->sack_recent_count++;
+    }
+    for (i = tcb->sack_recent_count - 1; i > 0; i--) {
+        tcb->sack_recent[i] = tcb->sack_recent[i - 1];
+    }
+    tcb->sack_recent[0] = seq;
 }
 
 /**
@@ -1852,8 +1940,8 @@ static void tcp_take_data(struct tcb *tcb, uint32_t seq, const uint8_t *payload,
     if (seq != tcb->rcv_nxt) {
         if (tcb->sock) {
             took = socket_tcp_hold(tcb->sock, seq - tcb->rcv_nxt, payload, len);
-            if (took > 0) {
-                tcp_ooo_add(tcb, seq, seq + took);
+            if (took > 0 && tcp_ooo_add(tcb, seq, seq + took)) {
+                tcp_sack_note(tcb, seq);
             }
         }
         return;

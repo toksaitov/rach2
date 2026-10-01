@@ -56,6 +56,9 @@
  * ranges of sequence numbers, which covers the losses of one window of a
  * path that loses a few segments of it. */
 #define TCP_OOO_RANGES          8
+/* The SACK blocks an acknowledgement names at most: four, 36 bytes of
+ * options, when a segment has no timestamps (RFC 2018). */
+#define TCP_SACK_BLOCKS 4
 
 /* Reliability constants (100 Hz clock). */
 #define TCP_RTO_INIT        100  /* initial RTO  = 1 s (RFC 6298) */
@@ -123,6 +126,14 @@ struct tcb {
     uint8_t snd_wscale;
     uint8_t rcv_wscale;
     uint8_t ws_offer;
+    /* Selective acknowledgement (RFC 2018), on the receiving side only:
+     * whether this side's SYN offers it, whether both SYNs had it, and the
+     * starts of the last segments kept past a hole, the newest first, whose
+     * ranges an acknowledgement names first, in that order. */
+    uint8_t sack_offer;
+    uint8_t sack_ok;
+    uint8_t sack_recent_count;
+    uint32_t sack_recent[TCP_SACK_BLOCKS];
 
     /* Receive sequence space. */
     uint32_t irs;

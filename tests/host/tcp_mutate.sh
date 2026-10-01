@@ -88,4 +88,42 @@ PY
 run_phase mutated 3 'send rejects a reset before masking'
 cleanup
 run_phase restored 0 'tcp_hosttest: PASS'
+python3 - "$source" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+source = path.read_text()
+old = "        hdr_len = (uint8_t)(20 + tcp_sack_option(tcb, tcp_tx_buf + 20));\n"
+if source.count(old) != 1:
+    raise SystemExit("tcp-mutation: SACK pattern is not unique")
+path.write_text(source.replace(old, "        (void)tcp_sack_option;\n", 1))
+PY
+run_phase sackless 5 'a segment past a hole is named in the acknowledgement'
+cleanup
+run_phase restored-sack 0 'tcp_hosttest: PASS'
+mutate()
+{
+    python3 - "$source" "$1" "$2" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+source = path.read_text()
+if source.count(sys.argv[2]) != 1:
+    raise SystemExit("tcp-mutation: pattern is not unique: " + sys.argv[2])
+path.write_text(source.replace(sys.argv[2], sys.argv[3], 1))
+PY
+}
+mutate '                tcp_sack_note(tcb, seq);
+' ''
+run_phase sack-unordered 3 'the newest first'
+cleanup
+run_phase restored-order 0 'tcp_hosttest: PASS'
+mutate '    if (tcb->ooo_count == TCP_OOO_RANGES) {
+        return 0;' '    if (tcb->ooo_count == TCP_OOO_RANGES) {
+        return 1;'
+run_phase sack-full 1 'a segment past a full table is not named'
+cleanup
+run_phase restored-full 0 'tcp_hosttest: PASS'
 cmp "$work/tcp.saved" "$source"

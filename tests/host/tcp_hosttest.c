@@ -28,8 +28,10 @@ extern void *malloc(unsigned long n);
 
 /* The kernel headers define the fixed-width types themselves. */
 #include "../../rach2/sys/lib/kerrno.h"
+#include "../../rach2/sys/lib/kstring.h"
 #include "../../rach2/sys/network/tcp/tcp.h"
 #include "../../rach2/sys/network/driver/netdev.h"
+#include "../../rach2/sys/network/socket/socket.h"
 
 /* ---- the clock, and the layers above and below ---- */
 
@@ -162,10 +164,23 @@ int socket_port_bound(uint16_t port)
     return bound_elsewhere != 0 && port == bound_elsewhere;
 }
 
+/* A passive open's socket, from a pool of four, which the listener rows
+   need no more of. */
+static struct socket sock_pool[4];
+static unsigned sock_pooled;
+
 struct socket *socket_alloc(int type)
 {
-    (void)type;
-    return (struct socket *)0;
+    struct socket *s;
+
+    if (sock_pooled >= sizeof(sock_pool) / sizeof(sock_pool[0])) {
+        return (struct socket *)0;
+    }
+    s = &sock_pool[sock_pooled++];
+    k_memset(s, 0, sizeof(*s));
+    s->type = type;
+    s->refcount = 1;
+    return s;
 }
 
 uint32_t net_ip_addr = 0x0A00020Fu; /* 10.0.2.15 */
@@ -316,6 +331,8 @@ static uint16_t peer_mss = TCP_MSS;
 /* The window scale option a peer's SYN has, or -1 for none, as the rows
    before window scaling have it. */
 static int peer_wscale = -1;
+/* Whether a peer's SYN permits selective acknowledgements. */
+static int peer_sack = 0;
 
 static void rx(uint16_t sport, uint16_t dport, uint32_t seq, uint32_t ack, uint8_t flags,
                uint16_t window, const char *payload, uint16_t plen)
@@ -347,6 +364,14 @@ static void rx(uint16_t sport, uint16_t dport, uint32_t seq, uint32_t ack, uint8
         seg[26] = 3;
         seg[27] = (uint8_t)peer_wscale;
         hdr = 28;
+    }
+    if ((flags & F_SYN) && peer_sack) {
+        seg[hdr] = 1;
+        seg[hdr + 1] = 1;
+        seg[hdr + 2] = 4;
+        seg[hdr + 3] = 2;
+        hdr = (uint16_t)(hdr + 4);
+        seg[12] = (uint8_t)((hdr / 4) << 4);
     }
     for (i = 0; i < plen; i++) {
         seg[hdr + i] = (uint8_t)payload[i];
@@ -600,7 +625,7 @@ static void window_scale_rows(void)
         CHECK("a connection that scales its window can be opened",
               tcp_connect(&sock, PEER, 88) == 0);
         CHECK("and its SYN offers the scale its 512 KiB ring needs",
-              segs[0].len == 28 && segs[0].data[25] == 3 && segs[0].data[27] == 4 &&
+              segs[0].len == 32 && segs[0].data[25] == 3 && segs[0].data[27] == 4 &&
                   read16be(segs[0].data + 14) == 65535);
         iss = read32be(segs[0].data + 4);
         lport = read16be(segs[0].data + 0);
@@ -623,6 +648,142 @@ static void window_scale_rows(void)
               n_segs >= 1 && read16be(segs[n_segs - 1].data + 14) ==
                                  (scale > 0 ? TCP_RECV_RING_LARGE >> 4 : 65535u));
     }
+}
+
+/* The option of kind `kind` in the segment this stack sent, `seg` of `len`
+   bytes, or NULL when it has none. */
+static const uint8_t *sent_option(const uint8_t *seg, uint16_t len, uint8_t kind)
+{
+    uint16_t hdr = (uint16_t)((seg[12] >> 4) * 4), i = 20;
+
+    while (i < hdr && i < len && seg[i] != 0) {
+        if (seg[i] == 1) {
+            i++;
+            continue;
+        }
+        if (seg[i] == kind) {
+            return seg + i;
+        }
+        if (i + 1u >= hdr || seg[i + 1] < 2) {
+            break;
+        }
+        i = (uint16_t)(i + seg[i + 1]);
+    }
+    return 0;
+}
+
+/* Whether the acknowledgement sent last names the blocks `want`, `n` pairs
+   of start and end, in that order, and nothing else. */
+static int sacks_are(const uint32_t *want, unsigned n)
+{
+    const uint8_t *o;
+    unsigned k;
+
+    if (n_segs == 0) {
+        return 0;
+    }
+    o = sent_option(segs[n_segs - 1].data, segs[n_segs - 1].len, 5);
+    if (n == 0) {
+        return o == 0;
+    }
+    if (!o || o[1] != 2 + 8 * n) {
+        return 0;
+    }
+    for (k = 0; k < 2 * n; k++) {
+        if (read32be(o + 2 + 4 * k) != want[k]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* The control block of a socket a row opened. */
+static struct tcb *conn_of(struct socket *sock)
+{
+    return sock->tcb;
+}
+
+/* Selective acknowledgements: this side's SYN permits them, and with a peer
+   whose SYN did too, an acknowledgement sent while data past a hole is held
+   names that data, the blocks of the segments that came last first, newest
+   first, until the holes are filled; a segment past a table already full is
+   not named; a peer that did not permit them gets none, and a listener's
+   answer permits them only to a SYN that did. */
+static void sack_rows(void)
+{
+    struct socket sock, lsock;
+    uint32_t iss, p = 4000, want[8];
+    uint16_t lport;
+    int sacking, k;
+
+    for (sacking = 1; sacking >= 0; sacking--) {
+        reset_all();
+        k_memset(&sock, 0, sizeof(sock));
+        CHECK("a connection to try selective acknowledgements can be opened",
+              tcp_connect(&sock, PEER, 89) == 0);
+        CHECK("and its SYN permits them", sent_option(segs[0].data, segs[0].len, 4) != 0);
+        iss = read32be(segs[0].data + 4);
+        lport = read16be(segs[0].data + 0);
+        peer_sack = sacking;
+        rx((uint16_t)89, lport, p, iss + 1, (uint8_t)(F_SYN | F_ACK), 65535, (const char *)0, 0);
+        peer_sack = 0;
+        n_segs = 0;
+        rx((uint16_t)89, lport, p + 11, iss + 1, F_ACK, 65535, "late1", 5);
+        want[0] = p + 11;
+        want[1] = p + 16;
+        CHECK(sacking ? "a segment past a hole is named in the acknowledgement"
+                      : "a peer that did not permit them is sent none",
+              sacks_are(want, sacking ? 1 : 0));
+        if (!sacking) {
+            break;
+        }
+        rx((uint16_t)89, lport, p + 31, iss + 1, F_ACK, 65535, "late2", 5);
+        want[0] = p + 31;
+        want[1] = p + 36;
+        want[2] = p + 11;
+        want[3] = p + 16;
+        CHECK("the block of the segment that came last is named first", sacks_are(want, 2));
+        rx((uint16_t)89, lport, p + 1, iss + 1, F_ACK, 65535, "0123456789", 10);
+        want[0] = p + 31;
+        want[1] = p + 36;
+        CHECK("a filled hole is no longer named",
+              read32be(segs[n_segs - 1].data + 8) == p + 16 && sacks_are(want, 1));
+        rx((uint16_t)89, lport, p + 16, iss + 1, F_ACK, 65535, "abcdefghijklmno", 15);
+        CHECK("and with every hole filled the acknowledgement names nothing",
+              read32be(segs[n_segs - 1].data + 8) == p + 36 && sacks_are(want, 0));
+        for (k = 0; k < 5; k++) {
+            rx((uint16_t)89, lport, p + 46 + 10 * k, iss + 1, F_ACK, 65535, "abcde", 5);
+        }
+        for (k = 0; k < 4; k++) {
+            want[2 * k] = p + 86 - 10 * k;
+            want[2 * k + 1] = p + 91 - 10 * k;
+        }
+        CHECK("the blocks of the last four segments kept are named, the newest first",
+              sacks_are(want, 4));
+        for (k = 5; k < 9; k++) {
+            rx((uint16_t)89, lport, p + 46 + 10 * k, iss + 1, F_ACK, 65535, "abcde", 5);
+        }
+        for (k = 0; k < 4; k++) {
+            want[2 * k] = p + 116 - 10 * k;
+            want[2 * k + 1] = p + 121 - 10 * k;
+        }
+        CHECK("a segment past a full table is not named, the last one kept is",
+              conn_of(&sock)->ooo_count == TCP_OOO_RANGES && sacks_are(want, 4));
+    }
+
+    for (sacking = 1; sacking >= 0; sacking--) {
+        reset_all();
+        k_memset(&lsock, 0, sizeof(lsock));
+        CHECK("a listener for selective acknowledgements", tcp_listen(&lsock, 90) == 0);
+        peer_sack = sacking;
+        rx(5555, 90, 7000, 0, F_SYN, 65535, (const char *)0, 0);
+        peer_sack = 0;
+        CHECK(sacking ? "a listener's answer permits them to a SYN that did"
+                      : "and not to a SYN that did not",
+              n_segs == 1 && (last_flags() & F_SYN) != 0 &&
+                  (sent_option(segs[0].data, segs[0].len, 4) != 0) == sacking);
+    }
+    reset_all();
 }
 
 /* An ephemeral port passes over one another socket has bound, as a port
@@ -890,6 +1051,7 @@ int main(void)
 
     peer_mss_row();
     window_scale_rows();
+    sack_rows();
     ephemeral_rows();
     path_mtu_row();
 
