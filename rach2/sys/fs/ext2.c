@@ -615,14 +615,61 @@ struct ext2_scan {
     char name[EXT2_NAME_MAX + 1];
 };
 
+/* A copy of one block of a directory, for a scan that reads all of a block's
+ * entries: the block is read once and not twice for each entry. `data` is
+ * NULL for a scan without one, and `index` is the copy's block of the
+ * directory, or -1 before the first read. */
+struct ext2_window {
+    uint8_t *data;
+    int64_t index;
+};
+
+/** A window for a scan of `em`'s directories; one with no copy, which
+ * reads each entry from the cache, when the heap has no room. */
+static void window_open(struct ext2_mount *em, struct ext2_window *w)
+{
+    w->data = kmalloc(em->block_size);
+    w->index = -1;
+}
+
+static void window_close(struct ext2_window *w)
+{
+    kfree(w->data);
+    w->data = 0;
+}
+
+/* `len` bytes at byte `at` of directory `d`, through window `w` when it has
+ * a copy; `len` does not cross a block, since no entry does. */
+static int dir_bytes(struct ext2_mount *em, const struct ext2_node *d, struct ext2_window *w,
+                     uint32_t at, void *dst, uint32_t len)
+{
+    int64_t index = (int64_t)(at >> em->block_shift);
+    int rc;
+
+    if (!w || !w->data) {
+        return read_data(em, d, at, dst, len);
+    }
+    if (w->index != index) {
+        w->index = -1;
+        rc = read_data(em, d, (uint64_t)index << em->block_shift, w->data, em->block_size);
+        if (rc != 0) {
+            return rc;
+        }
+        w->index = index;
+    }
+    k_memcpy(dst, w->data + (at & (em->block_size - 1)), len);
+    return 0;
+}
+
 /**
  * The entry at `*cursor` in directory `d`, the cursor moved past it: 1 with
  * `sc` filled, 0 at the directory's end, or a negative errno for an entry
  * that does not fit its block. An entry with inode 0 is returned with that
- * inode, and the caller skips it.
+ * inode, and the caller skips it. With window `w` the entry is read from a
+ * copy of its block, which the caller must not write while it scans.
  */
-static int dir_scan(struct ext2_mount *em, const struct ext2_node *d, uint32_t *cursor,
-                    struct ext2_scan *sc)
+static int dir_scan_in(struct ext2_mount *em, const struct ext2_node *d, struct ext2_window *w,
+                       uint32_t *cursor, struct ext2_scan *sc)
 {
     uint8_t head[8];
     uint32_t at = *cursor;
@@ -633,7 +680,7 @@ static int dir_scan(struct ext2_mount *em, const struct ext2_node *d, uint32_t *
         return 0;
     }
     in = at % em->block_size;
-    rc = read_data(em, d, at, head, 8);
+    rc = dir_bytes(em, d, w, at, head, 8);
     if (rc != 0) {
         return rc;
     }
@@ -649,7 +696,7 @@ static int dir_scan(struct ext2_mount *em, const struct ext2_node *d, uint32_t *
         return -EIO;
     }
     if (sc->ino != 0) {
-        rc = read_data(em, d, at + 8, sc->name, sc->name_len);
+        rc = dir_bytes(em, d, w, at + 8, sc->name, sc->name_len);
         if (rc != 0) {
             return rc;
         }
@@ -659,6 +706,12 @@ static int dir_scan(struct ext2_mount *em, const struct ext2_node *d, uint32_t *
     sc->name[sc->name_len] = '\0';
     *cursor = at + sc->rec_len;
     return 1;
+}
+
+static int dir_scan(struct ext2_mount *em, const struct ext2_node *d, uint32_t *cursor,
+                    struct ext2_scan *sc)
+{
+    return dir_scan_in(em, d, 0, cursor, sc);
 }
 
 static int names_equal(const char *a, const char *b)
@@ -699,6 +752,7 @@ static int ext2_lookup(struct vfs_mount *mnt, void *dir, const char *name, void 
     struct ext2_mount *em = em_of(mnt);
     struct ext2_node *d = dir ? dir : mnt->root;
     uint32_t start = 0, cursor, limit, at;
+    struct ext2_window w;
     int pass, slot;
 
     if ((d->mode & S_IFMT_) != S_IFDIR_) {
@@ -713,6 +767,7 @@ static int ext2_lookup(struct vfs_mount *mnt, void *dir, const char *name, void 
     if (slot >= 0 && ((uint64_t)em->lookup_hint[slot].block << em->block_shift) < d->size) {
         start = em->lookup_hint[slot].block << em->block_shift;
     }
+    window_open(em, &w);
     for (pass = 0; pass < 2; pass++) {
         cursor = pass == 0 ? start : 0;
         limit = pass == 0 ? (uint32_t)d->size : start;
@@ -721,8 +776,9 @@ static int ext2_lookup(struct vfs_mount *mnt, void *dir, const char *name, void 
             int got;
 
             at = cursor;
-            got = dir_scan(em, d, &cursor, &sc);
+            got = dir_scan_in(em, d, &w, &cursor, &sc);
             if (got < 0) {
+                window_close(&w);
                 return got;
             }
             if (got == 0) {
@@ -738,6 +794,7 @@ static int ext2_lookup(struct vfs_mount *mnt, void *dir, const char *name, void 
                     em->lookup_hint[slot].dir = d->ino;
                 }
                 em->lookup_hint[slot].block = at >> em->block_shift;
+                window_close(&w);
                 if (sc.ino == d->ino) {
                     d->refs++;
                     *node = d;
@@ -752,6 +809,7 @@ static int ext2_lookup(struct vfs_mount *mnt, void *dir, const char *name, void 
             }
         }
     }
+    window_close(&w);
     return -ENOENT;
 }
 
@@ -2527,13 +2585,16 @@ static int dir_find(struct ext2_mount *em, const struct ext2_node *d, const char
                     uint32_t *at, uint32_t *prev_at, struct ext2_scan *sc)
 {
     uint32_t cursor = 0, prev = 0;
+    struct ext2_window w;
+    int got;
 
+    window_open(em, &w);
     for (;;) {
         uint32_t here = cursor;
-        int got = dir_scan(em, d, &cursor, sc);
 
+        got = dir_scan_in(em, d, &w, &cursor, sc);
         if (got <= 0) {
-            return got;
+            break;
         }
         if (here % em->block_size == 0) {
             prev = here;
@@ -2541,10 +2602,12 @@ static int dir_find(struct ext2_mount *em, const struct ext2_node *d, const char
         if (sc->ino != 0 && names_equal(sc->name, name)) {
             *at = here;
             *prev_at = prev;
-            return 1;
+            break;
         }
         prev = here;
     }
+    window_close(&w);
+    return got;
 }
 
 /* The block of directory `d` holding byte `at`, through its map. */
@@ -2636,19 +2699,22 @@ static int dir_add(struct ext2_mount *em, struct ext2_node *d, const char *name,
     uint32_t need = dirent_len(name_len);
     uint32_t cursor = 0;
     struct ext2_scan sc;
+    struct ext2_window w;
     uint8_t entry[8 + EXT2_NAME_MAX + 4];
     int rc, fresh;
 
     if (name_len == 0 || name_len > EXT2_NAME_MAX) {
         return -ENAMETOOLONG;
     }
+    window_open(em, &w);
     for (;;) {
         uint32_t here = cursor;
         uint32_t used, room;
         uint64_t off;
-        int got = dir_scan(em, d, &cursor, &sc);
+        int got = dir_scan_in(em, d, &w, &cursor, &sc);
 
         if (got < 0) {
+            window_close(&w);
             return got;
         }
         if (got == 0) {
@@ -2659,6 +2725,7 @@ static int dir_add(struct ext2_mount *em, struct ext2_node *d, const char *name,
         if (room < need) {
             continue;
         }
+        window_close(&w); /* the scan ends here, before the write */
         rc = dir_block_at(em, d, here, &off);
         if (rc != 0) {
             return rc;
@@ -2670,6 +2737,7 @@ static int dir_add(struct ext2_mount *em, struct ext2_node *d, const char *name,
                              (em->incompat & EXT2_INCOMPAT_FILETYPE) ? ftype : 0);
         return dirent_split(em, off, &sc, entry, used);
     }
+    window_close(&w);
     /* A new block. */
     {
         uint32_t index = (uint32_t)(d->size >> em->block_shift);
