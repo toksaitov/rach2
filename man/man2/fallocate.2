@@ -13,11 +13,10 @@ On Linux
 .Fn fallocate
 reserves the blocks of a range of a file ahead of the writes to it.
 No file system of this kernel reserves blocks ahead of a write, as Linux's
-ext2 does not, so a call on a regular file open for writing fails with
+ext2 does not, so a call on a regular file or a block device open for
+writing fails with
 .Er EOPNOTSUPP ,
-Linux's answer for a file system without the operation, whatever
-.Fa mode
-is.
+Linux's answer for a file without the operation.
 glibc's
 .Fn posix_fallocate
 then writes the range itself, as it does on Linux's ext2; it does not
@@ -59,6 +58,11 @@ is not open, or was opened with
 is negative or
 .Fa len
 is not positive.
+.It Bq Er EOPNOTSUPP
+.Fa mode
+is not one Linux takes: more than one of its modes, a hole punched without
+.Dv FALLOC_FL_KEEP_SIZE ,
+or a range collapsed, inserted or zeroed by writes with it.
 .It Bq Er EBADF
 .Fa fd
 is not open for writing.
@@ -70,10 +74,12 @@ is a pipe.
 is a directory.
 .It Bq Er ENODEV
 .Fa fd
-is neither a regular file nor one of the above.
+is not a regular file or a block device.
+.It Bq Er EFBIG
+The range passes the largest offset.
 .It Bq Er EOPNOTSUPP
 .Fa fd
-is a regular file open for writing.
+is a regular file or a block device open for writing.
 .El
 .Sh SEE ALSO
 .Xr ftruncate 2 ,

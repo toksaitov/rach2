@@ -16,9 +16,11 @@
  * and refuses a flag it does not take and a backward range. splice from a
  * pipe to /dev/null, tee and sendfile answer EINVAL, which GNU grep takes
  * for a descriptor it must read instead, and EBADF for a closed one.
- * posix_fallocate answers EOPNOTSUPP for a file open for writing, after
- * which glibc's writes the range itself, EBADF for one open only for
- * reading, EINVAL for a length of 0 and ESPIPE for a pipe.
+ * posix_fallocate answers EOPNOTSUPP for a file open for writing, a /proc
+ * file among them, after which glibc's writes the range itself, EBADF for
+ * one open only for reading, EINVAL for a length of 0, ESPIPE for a pipe,
+ * and EOPNOTSUPP for a mode Linux does not take before any other check of
+ * the descriptor.
  *
  * Prints "CALLSMUSL OK" on success and "CALLSMUSL FAIL (detail)" otherwise.
  */
@@ -267,6 +269,14 @@ static int reserves(void)
     }
     if (posix_fallocate(p[1], 0, 4096) != ESPIPE) {
         return fail("posix_fallocate of a pipe was not ESPIPE");
+    }
+    if (fallocate(ro, 0x100, 0, 4096) != -1 || errno != EOPNOTSUPP) {
+        return fail("fallocate with a mode Linux does not take was not EOPNOTSUPP first");
+    }
+    close(p[1]);
+    p[1] = open("/proc/self/oom_score_adj", O_WRONLY);
+    if (p[1] < 0 || posix_fallocate(p[1], 0, 4096) != EOPNOTSUPP) {
+        return fail("posix_fallocate of a /proc file open for writing was not EOPNOTSUPP");
     }
     unlink("/tmp/callsmusl.fallocate");
     close(fd);

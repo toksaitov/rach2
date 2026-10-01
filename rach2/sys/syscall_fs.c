@@ -8367,25 +8367,64 @@ int32_t sys_sendfile(isr_params_t *params)
     return no_copy((int)params->ebx, (int)params->ecx);
 }
 
+/* fallocate's modes, of which one at most is given, and its one flag. */
+#define FALLOC_FL_KEEP_SIZE      0x01u
+#define FALLOC_FL_PUNCH_HOLE     0x02u
+#define FALLOC_FL_COLLAPSE_RANGE 0x08u
+#define FALLOC_FL_ZERO_RANGE     0x10u
+#define FALLOC_FL_INSERT_RANGE   0x20u
+#define FALLOC_FL_UNSHARE_RANGE  0x40u
+#define FALLOC_FL_WRITE_ZEROES   0x80u
+#define FALLOC_FL_MODE_MASK                                                   \
+    (FALLOC_FL_PUNCH_HOLE | FALLOC_FL_COLLAPSE_RANGE | FALLOC_FL_ZERO_RANGE | \
+     FALLOC_FL_INSERT_RANGE | FALLOC_FL_UNSHARE_RANGE | FALLOC_FL_WRITE_ZEROES)
+
+/** Whether Linux takes fallocate mode `mode` (vfs_fallocate): one mode at
+ * most, a hole punched with the size kept, and a range collapsed, inserted
+ * or zeroed by writes without it. A mode it does not take is -EOPNOTSUPP. */
+static int32_t fallocate_mode_ok(uint32_t mode)
+{
+    uint32_t kind = mode & FALLOC_FL_MODE_MASK;
+
+    if (mode & ~(FALLOC_FL_MODE_MASK | FALLOC_FL_KEEP_SIZE)) {
+        return 0;
+    }
+    if (kind == 0 || kind == FALLOC_FL_UNSHARE_RANGE || kind == FALLOC_FL_ZERO_RANGE) {
+        return 1;
+    }
+    if (kind == FALLOC_FL_PUNCH_HOLE) {
+        return (mode & FALLOC_FL_KEEP_SIZE) != 0;
+    }
+    if (kind == FALLOC_FL_COLLAPSE_RANGE || kind == FALLOC_FL_INSERT_RANGE ||
+        kind == FALLOC_FL_WRITE_ZEROES) {
+        return (mode & FALLOC_FL_KEEP_SIZE) == 0;
+    }
+    return 0;
+}
+
 /**
  * fallocate (324): EBX = fd, ECX = mode, EDX:ESI = the offset and EDI:EBP the
  * length, each low word first.
  *
  * No file system here reserves a file's blocks ahead of its writes, as
- * Linux's ext2 does not, so a call on a regular file open for writing is
- * -EOPNOTSUPP, Linux's answer for a file system without the operation. glibc's
- * posix_fallocate then writes the range itself, as it does on Linux's ext2;
- * it does not after -ENOSYS. The checks before it are Linux's, in its order:
- * -EBADF for a descriptor that is not open, -EINVAL for a negative offset or
- * a length that is not positive, -EBADF for one not open for writing, then
- * -ESPIPE for a pipe, -EISDIR for a directory and -ENODEV for anything else
- * that is not a regular file.
+ * Linux's ext2 does not, so a call on a regular file or a block device open
+ * for writing is -EOPNOTSUPP, Linux's answer for a file without the
+ * operation. glibc's posix_fallocate then writes the range itself, as it
+ * does on Linux's ext2; it does not after -ENOSYS. The checks before it are
+ * Linux's, in its order (ksys_fallocate, vfs_fallocate): -EBADF for a
+ * descriptor that is not open, -EINVAL for a negative offset or a length
+ * that is not positive, -EOPNOTSUPP for a mode it does not take, -EBADF for
+ * a descriptor not open for writing, then by the file's type -ESPIPE for a
+ * pipe, -EISDIR for a directory and -ENODEV for anything but a regular file
+ * or a block device, and -EFBIG for a range past the largest offset.
  */
 int32_t sys_fallocate(isr_params_t *params)
 {
     uint64_t offset = (uint64_t)params->edx | ((uint64_t)params->esi << 32);
     uint64_t len = (uint64_t)params->edi | ((uint64_t)params->ebp << 32);
+    struct linux_stat64 kst;
     fd_entry_t *entry;
+    uint32_t type;
 
     if (!current_proc) {
         return -ESRCH;
@@ -8397,17 +8436,27 @@ int32_t sys_fallocate(isr_params_t *params)
     if ((offset >> 63) != 0 || len == 0 || (len >> 63) != 0) {
         return -EINVAL;
     }
+    if (!fallocate_mode_ok(params->ecx)) {
+        return -EOPNOTSUPP;
+    }
     if (!(entry->flags & FD_FLAG_WRITE)) {
         return -EBADF;
     }
-    if (entry->type == FD_TYPE_PIPE) {
+    if (fstat_fill(entry, &kst) != 0) {
+        return -ENODEV;
+    }
+    type = kst.st_mode & S_IFMT;
+    if (type == S_IFIFO) {
         return -ESPIPE;
     }
-    if (entry->type == FD_TYPE_DIR) {
+    if (type == S_IFDIR) {
         return -EISDIR;
     }
-    if (entry->type != FD_TYPE_FILE) {
+    if (type != S_IFREG && type != S_IFBLK) {
         return -ENODEV;
+    }
+    if (((offset + len) >> 63) != 0) {
+        return -EFBIG;
     }
     return -EOPNOTSUPP;
 }
