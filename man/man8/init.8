@@ -90,7 +90,9 @@ set to 0, so the console's prompt waits without a limit; see
 Every build clears two levels of
 .Pa /var/run
 at boot, so that a directory such as the bus's goes with what is in it,
-and reads
+makes an empty
+.Pa /var/run/utmp ,
+where glibc's programs keep the records of who is logged in, and reads
 .Pa /etc/rach2/limits .
 It sets these resource limits on itself before starting any child;
 see
@@ -185,6 +187,11 @@ then removed; a directory deeper than that is reported if it is not empty.
 .It Pa /var/run/dbus
 The bus's directory, with its socket,
 .Pa system_bus_socket .
+.It Pa /var/run/utmp
+The login records: OpenSSH's server on the GNU system's root adds a
+session's record, which
+.Xr who 1
+reads; the musl programs keep none.
 .El
 .Sh DIAGNOSTICS
 The recovery file system check reports its status as:

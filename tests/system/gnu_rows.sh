@@ -95,7 +95,8 @@ row_openssl() {
         "$WORK/root.pem: OK"
 }
 
-# The clients against the machine's own server, with a key made here.
+# The clients against the machine's own server, with a key made here; a
+# session on a terminal of the server's is in the login records `who` reads.
 row_openssh() {
     local opts=(-i "$WORK/id" -o BatchMode=yes -o StrictHostKeyChecking=no -o LogLevel=ERROR
                 -o "UserKnownHostsFile=$WORK/known" -o ConnectTimeout=120)
@@ -104,6 +105,7 @@ row_openssh() {
     runs "ssh-keygen" ssh-keygen -q -t ed25519 -N '' -f "$WORK/id"
     cat "$WORK/id.pub" >> /root/.ssh/authorized_keys
     same "ssh" "$(ssh "${opts[@]}" root@127.0.0.1 echo ssh row 2>&1)" "ssh row"
+    has "who in a session with a terminal" "$(ssh -tt "${opts[@]}" root@127.0.0.1 who 2>&1)" "root     pts/"
     printf 'scp row\n' > "$WORK/scp.in"
     runs "scp" scp "${opts[@]}" "$WORK/scp.in" "root@127.0.0.1:$WORK/scp.out"
     same "the file scp wrote" "$(cat "$WORK/scp.out" 2>&1)" "scp row"

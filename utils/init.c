@@ -1464,6 +1464,23 @@ static void clear_var_run(void)
 }
 
 /**
+ * Make /var/run/utmp, empty, where glibc's programs keep the records of who
+ * is logged in: OpenSSH's server on the GNU system's root adds a session's
+ * record there, and `who`, `users` and `w` read them. glibc writes a record
+ * only into a file that exists, which Linux makes at boot as this does. The
+ * musl programs keep no records, so on the other images the file stays
+ * empty.
+ */
+static void make_utmp(void)
+{
+    int fd = open("/var/run/utmp", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+
+    if (fd >= 0) {
+        close(fd);
+    }
+}
+
+/**
  * Start the periodic sync (`/bin/update`), which sleeps thirty seconds and
  * calls sync(2) for ever, so written data reaches the disk without anyone
  * asking. Returns its pid, or -1 when the fork failed.
@@ -1570,13 +1587,13 @@ static void apply_limits(void)
  * Set the machine up, then reap, respawn and supervise for as long as it runs.
  *
  * The three shutdown handlers go in before the first child, so a request that
- * arrives early is answered and does not meet a terminating default, which
- * for pid 1 is a panic. Then `/var/run` is emptied, the limits set and the
- * service log opened. The recovery build takes the key the installer put on
- * the recovery partition it booted from, and says on the console whether a
- * key was built into its image and whether the partition's turned SSH on,
- * since the two kinds of image look identical from outside. A metal boot
- * whose line has `rach2.fsck` then checks its ext2 partitions.
+ * arrives early is answered and does not meet a terminating default, which for
+ * pid 1 is a panic. Then `/var/run` is emptied and given an empty `utmp`, the
+ * limits set and the service log opened. The recovery build takes the key the
+ * installer put on the recovery partition it booted from, and says on the
+ * console whether a key was built into its image and whether the partition's
+ * turned SSH on, since the two kinds of image look identical from outside. A
+ * metal boot whose line has `rach2.fsck` then checks its ext2 partitions.
  *
  * Each turn respawns what is missing: the console session, whose failed fork
  * (a full process table) is retried after a second so the loop does not spin;
@@ -1620,6 +1637,7 @@ int main(void)
     signal(SIGTERM, shutdown_handler);
 
     clear_var_run();
+    make_utmp();
     apply_limits();
     open_service_log();
 #ifdef INIT_RECOVERY
