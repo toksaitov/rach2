@@ -3240,6 +3240,28 @@ int32_t sys_sync(isr_params_t *params)
 }
 
 /**
+ * Flush the file system a descriptor is on (syncfs(2), syscall 344).
+ *
+ * EBX = fd. The kernel keeps no list of a mount's own dirty buffers, so
+ * this writes back everything, as sync(2) does, and like it returns 0;
+ * GNU `sync -f` and BusyBox's `sync -f` call it. -EBADF for a descriptor
+ * that is not open or was opened with O_PATH, as on Linux.
+ */
+int32_t sys_syncfs(isr_params_t *params)
+{
+    fd_entry_t *e;
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    e = fd_get(current_proc->fds, (int)params->ebx);
+    if (!e || (e->flags & FD_FLAG_PATH)) {
+        return -EBADF;
+    }
+    return sys_sync(params);
+}
+
+/**
  * Add a seek displacement to a file offset without overflowing.
  *
  * The sum of an offset and a displacement leaves the range of the type

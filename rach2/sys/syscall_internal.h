@@ -98,6 +98,8 @@ int32_t sys_fsync(isr_params_t *params);
 
 int32_t sys_sync(isr_params_t *params);
 
+int32_t sys_syncfs(isr_params_t *params);
+
 int32_t raw_seek_resolve(uint64_t cur, uint64_t size, long long delta, int whence, uint64_t *out);
 
 int32_t sys_lseek(isr_params_t *params);

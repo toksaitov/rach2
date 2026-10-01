@@ -185,6 +185,7 @@
 #define SYS_SYNC      36
 #define SYS_FSYNC     118
 #define SYS_FDATASYNC 148
+#define SYS_SYNCFS    344
 
 /* Stop the machine, after the same flush sync(2) does. Root only. */
 #define SYS_REBOOT      88

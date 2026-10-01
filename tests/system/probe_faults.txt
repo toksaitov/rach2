@@ -4725,6 +4725,18 @@ new
         return entry->type == FD_TYPE_PIPE ? -EINVAL : -EBADF;
 end
 
+# syncfs.
+
+fault syncfs-missing
+probe vfsprobe
+file rach2/sys/syscall.c
+expect syncfs flushes through an open descriptor and refuses a closed one
+old
+    _syscall_table[SYS_SYNCFS] = sys_syncfs;
+new
+    (void)sys_syncfs;
+end
+
 # splice, tee and sendfile, which answer EINVAL.
 
 fault splice-missing

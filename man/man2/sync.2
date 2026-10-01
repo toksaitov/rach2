@@ -3,6 +3,7 @@
 .Os
 .Sh NAME
 .Nm sync ,
+.Nm syncfs ,
 .Nm fsync ,
 .Nm fdatasync
 .Nd flush buffered file system writes
@@ -10,6 +11,8 @@
 .In unistd.h
 .Ft void
 .Fn sync "void"
+.Ft int
+.Fn syncfs "int fd"
 .Ft int
 .Fn fsync "int fd"
 .Ft int
@@ -28,6 +31,16 @@ ignores write-back errors.
 Buffers whose writes fail remain dirty for a later attempt.
 A failed buffer write makes mounts on that device read-only for the
 rest of their lifetime.
+.Pp
+.Fn syncfs
+flushes everything
+.Fn sync
+does, and ignores write-back errors the same way, where Linux flushes
+only the file system
+.Fa fd
+is on and reports a write-back error.
+It accepts any open descriptor but one opened with
+.Dv O_PATH .
 .Pp
 .Fn fsync
 accepts any open descriptor
@@ -67,6 +80,8 @@ and has the same behavior.
 .Pp
 The i386 system call numbers are 36 for
 .Fn sync ,
+344 for
+.Fn syncfs ,
 118 for
 .Fn fsync ,
 and 148 for
@@ -75,6 +90,10 @@ The descriptor is passed in EBX.
 .Sh RETURN VALUES
 .Fn sync
 has no return value; its kernel call always returns 0.
+.Fn syncfs
+returns 0, or -1 with
+.Va errno
+set when the descriptor is not one it accepts.
 .Fn fsync
 and
 .Fn fdatasync
@@ -89,6 +108,7 @@ opens a file read-only, calls
 .Fn fsync
 on its descriptor, and requires success.
 .Sh ERRORS
+.Fn syncfs ,
 .Fn fsync
 and
 .Fn fdatasync
@@ -99,8 +119,12 @@ can fail with:
 is not an open descriptor, or was opened with
 .Dv O_PATH .
 .It Bq Er EIO
-A write-back or device flush failed, or the mounted device was removed.
-A KRFFS boot-root page write was already in flight.
+For
+.Fn fsync
+and
+.Fn fdatasync ,
+a write-back or device flush failed, or the mounted device was removed,
+or a KRFFS boot-root page write was already in flight.
 .It Bq Er ESRCH
 There is no current process.
 .El

@@ -377,6 +377,7 @@ swapoff 1 busybox-util-linux
 swapon 1 busybox-util-linux
 symlinkat 2 symlink
 sync 1 busybox-coreutils
+syncfs 2 sync
 sysctl 1 busybox-procps
 sysinfo 2 uname
 syslogd 8 busybox-sysklogd

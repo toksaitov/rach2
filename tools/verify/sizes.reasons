@@ -197,7 +197,7 @@ rach2/sys/proc/elf.c:elf_load_image_at nesting 5 one program loaded and entered,
 rach2/sys/rtc.c:rtc_decode complexity 31 a parser over an external format, one check per field in the format's order
 rach2/sys/rtc.c:rtc_decode lines 105 a parser over an external format, one check per field in the format's order
 
-rach2/sys/syscall.c:init_syscall lines 241 a table, one entry per system call number
+rach2/sys/syscall.c:init_syscall lines 242 a table, one entry per system call number
 rach2/sys/syscall.c:sys_ioctl complexity 33 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall.c:sys_ioctl lines 142 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall.c:sys_ioctl nesting 5 a dispatcher, one arm per command, read as a table
@@ -707,8 +707,8 @@ tests/usbdiskprobe.c:part_hold lines 120 a probe, one sequence of steps in the o
 tests/usbprobe.c:probe_main complexity 31 a probe, one sequence of steps in the order the log records them
 tests/usbprobe.c:probe_main lines 113 a probe, one sequence of steps in the order the log records them
 
-tests/vfsprobe.c:_start complexity 101 a probe, one sequence of steps in the order the log records them
-tests/vfsprobe.c:_start lines 289 a probe, one sequence of steps in the order the log records them
+tests/vfsprobe.c:_start complexity 103 a probe, one sequence of steps in the order the log records them
+tests/vfsprobe.c:_start lines 292 a probe, one sequence of steps in the order the log records them
 
 tools/image/fatchains.c:print_chain complexity 29 an inspector's check, one walk over the format it reads
 

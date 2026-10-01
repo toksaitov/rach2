@@ -41,6 +41,7 @@ typedef unsigned int size_t;
 #define SYS_RMDIR      40
 #define SYS_FTRUNCATE  93
 #define SYS_FSYNC      118
+#define SYS_SYNCFS     344
 #define SYS_GETCWD     183
 #define SYS_STAT64     195
 #define SYS_GETDENTS64 220
@@ -60,6 +61,7 @@ typedef unsigned int size_t;
 
 #define EPERM     1
 #define ENOENT    2
+#define EBADF     9
 #define EEXIST    17
 #define ENOTDIR   20
 #define EISDIR    21
@@ -426,6 +428,9 @@ void _start(void)
     }
     if (sys1(SYS_FSYNC, fd) != 0) {
         fail("fsync");
+    }
+    if (sys1(SYS_SYNCFS, fd) != 0 || sys1(SYS_SYNCFS, 999) != -EBADF) {
+        fail("syncfs flushes through an open descriptor and refuses a closed one");
     }
     sys1(SYS_CLOSE, fd);
     fd = sys3(SYS_OPEN, (int)"/vp/d/f", O_RDWR, 0);

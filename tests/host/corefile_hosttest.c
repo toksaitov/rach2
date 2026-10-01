@@ -60,6 +60,7 @@ static int32_t sys_openat(isr_params_t *params);
 static int32_t sys_close(isr_params_t *params);
 static int32_t sys_fsync(isr_params_t *params);
 static int32_t sys_sync(isr_params_t *params);
+static int32_t sys_syncfs(isr_params_t *params);
 static int32_t sys_lseek(isr_params_t *params);
 static int sock_is_query(const struct socket *sock);
 static int32_t sys_read(isr_params_t *params);
