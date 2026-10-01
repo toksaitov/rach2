@@ -139,6 +139,10 @@ Other terminals belonging to this session are detached.
 Reclaiming the same terminal is permitted.
 .Fa arg
 is ignored and cannot force a takeover.
+A session leader without a controlling terminal also acquires a
+pseudo-terminal slave no session has by opening it without
+.Dv O_NOCTTY ,
+as on Linux.
 .It Dv TIOCNOTTY
 Detach the terminal if it belongs to the caller's session.
 Otherwise succeed without action.

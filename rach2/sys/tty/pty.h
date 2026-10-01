@@ -76,7 +76,10 @@ int pty_open_master(int flags);
  * unallocated, -EIO if the pair is still locked, -EMFILE if the fd table is
  * full, -ENOMEM if the heap has no room for the descriptor). The descriptor
  * has only the access the open mode asks for, also when /dev/tty resolves
- * to the slave.
+ * to the slave. As on Linux, a session leader without a controlling
+ * terminal that opens a slave no session has, without O_NOCTTY, makes it
+ * its controlling terminal, with its own group in the foreground; BusyBox's
+ * telnetd relies on this, where an ssh server uses TIOCSCTTY.
  */
 int pty_open_slave(int index, int flags);
 

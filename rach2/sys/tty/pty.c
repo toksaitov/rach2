@@ -29,6 +29,7 @@
 /* O_* flags honored on open (mirror syscall.c / fd.h). */
 #define O_CLOEXEC_FLAG  02000000
 #define O_NONBLOCK_FLAG 04000
+#define O_NOCTTY_FLAG   0400
 
 /* The live ptys, each allocated from the heap at its master's open and
  * freed when both ends are gone. The index is the lowest one no live pty
@@ -607,6 +608,12 @@ int pty_open_master(int flags)
     return fd;
 }
 
+/* Whether session `sid` has a controlling terminal: the console or a slave. */
+static int session_has_ctty(int sid)
+{
+    return console_tty.sid == sid || pty_session_slave(sid) >= 0;
+}
+
 int pty_open_slave(int index, int flags)
 {
     struct pty *p;
@@ -647,6 +654,10 @@ int pty_open_slave(int index, int flags)
         e->ofd->status_flags |= OFD_NONBLOCK;
     }
     p->slave_opens++;
+    if (!(flags & O_NOCTTY_FLAG) && p->slave.sid == 0 &&
+        current_proc->sid == current_proc->tgid && !session_has_ctty((int)current_proc->sid)) {
+        tty_make_sole_ctty(&p->slave, (int)current_proc->sid, (int)current_proc->pgid);
+    }
     return fd;
 }
 
