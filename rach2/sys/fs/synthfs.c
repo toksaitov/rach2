@@ -354,6 +354,40 @@ static int synth_classify_sys(const struct comp *c, int n, struct vpath *vp)
     return vp->kind;
 }
 
+/**
+ * /dev/fd, /dev/fd/N, /dev/stdin, /dev/stdout and /dev/stderr, which Linux
+ * makes links to /proc/self/fd and its first three entries: here they are
+ * those nodes of the caller, classified as /proc/self/fd and its links are.
+ * Returns 1 with `vp` filled for one of them, 0 for any other /dev path.
+ */
+static int synth_classify_dev_fd(const struct comp *c, int n, struct vpath *vp)
+{
+    static const char *const std[] = {"stdin", "stdout", "stderr"};
+    int i;
+
+    vp->pid = SYNTH_PID_SELF;
+    if (comp_eq(c[1], "fd")) {
+        if (n == 2) {
+            vp->kind = VNODE_PROC_FD_DIR;
+        } else if (n == 3 && comp_uint(c[2]) >= 0) {
+            vp->kind = VNODE_PROC_FD_LINK;
+            vp->procfd = comp_uint(c[2]);
+        } else {
+            vp->kind = n == 3 ? VNODE_ENOENT : VNODE_ENOTDIR;
+        }
+        return 1;
+    }
+    for (i = 0; i < 3; i++) {
+        if (comp_eq(c[1], std[i])) {
+            vp->kind = n == 2 ? VNODE_PROC_FD_LINK : VNODE_ENOTDIR;
+            vp->procfd = i;
+            return 1;
+        }
+    }
+    vp->pid = 0;
+    return 0;
+}
+
 /** Classify system-wide proc files by their literal leaf names. */
 static int synth_global_file(struct comp name)
 {
@@ -431,6 +465,9 @@ int synth_classify(const char *path, struct vpath *vp)
             } else {
                 vp->kind = VNODE_ENOENT; /* /dev/pts/N/<more> */
             }
+            return vp->kind;
+        }
+        if (synth_classify_dev_fd(c, n, vp)) {
             return vp->kind;
         }
         if (n == 2) {

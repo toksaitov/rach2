@@ -521,6 +521,26 @@ as
 .Ql /memfd: Ns Ar NAME Ns Ql " (deleted)" ,
 as Linux names each.
 A followed link reports the descriptor's attributes.
+An open of the link follows it: a file or a directory is opened again,
+with the checks of an open by name and a description of its own, even
+when it has lost its name; a pipe, a socket, a terminal or a device gets
+the descriptor's own description, shared as
+.Xr dup 2
+shares it, when the descriptor has the access asked for, and the open is
+.Er EACCES
+otherwise, where Linux opens a pipe's other end anew.
+Another process's descriptor needs a privileged caller or one with the
+process's effective user ID.
+.Pa /dev/fd/N ,
+.Pa /dev/stdin ,
+.Pa /dev/stdout
+and
+.Pa /dev/stderr
+are the caller's links N, 0, 1 and 2, and
+.Pa /dev/fd
+is the caller's
+.Pa fd
+directory.
 A descriptor that is closed has no link, also while its release waits
 for a call of another thread that is using it.
 .It Pa /proc/PID/exe

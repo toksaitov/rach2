@@ -19,6 +19,11 @@
  * that has no times to set. Two UTIME_OMIT return 0 before anything else is
  * looked at.
  *
+ * /dev/fd/N and /proc/self/fd/N open what descriptor N is open on: a pipe's
+ * read end opened by its link reads what the pipe's writer wrote, as bash's
+ * process substitution reads it, and a file opened by its link starts a
+ * description of its own at offset 0; /dev/stdin is descriptor 0's file.
+ *
  * Prints "FDCALLMUSL OK" on success and "FDCALLMUSL FAIL (detail)" otherwise.
  */
 
@@ -289,11 +294,50 @@ static int utimens_rows(int fd)
     return 0;
 }
 
+/* Opens of descriptors by their links. */
+static int fd_link_rows(void)
+{
+    char path[32], buf[8];
+    struct stat a, b;
+    int p[2], r, f, g;
+
+    if (pipe(p) != 0 || write(p[1], "sub", 3) != 3) {
+        return fail("a pipe for /dev/fd");
+    }
+    snprintf(path, sizeof(path), "/dev/fd/%d", p[0]);
+    r = open(path, O_RDONLY);
+    if (r < 0 || read(r, buf, 3) != 3 || memcmp(buf, "sub", 3) != 0) {
+        return fail("a pipe opened by /dev/fd/N did not read the pipe");
+    }
+    close(r);
+    close(p[0]);
+    close(p[1]);
+    f = open(FILE_PATH, O_RDWR | O_CREAT | O_TRUNC, 0644);
+    if (f < 0 || write(f, "abc", 3) != 3) {
+        return fail("a file for /proc/self/fd");
+    }
+    snprintf(path, sizeof(path), "/proc/self/fd/%d", f);
+    g = open(path, O_RDONLY);
+    if (g < 0 || read(g, buf, 3) != 3 || memcmp(buf, "abc", 3) != 0 || lseek(f, 0, SEEK_CUR) != 3) {
+        return fail("a file opened by /proc/self/fd/N was not a description of its own");
+    }
+    close(g);
+    close(f);
+    if (stat("/dev/stdin", &a) != 0 || fstat(0, &b) != 0 || a.st_ino != b.st_ino ||
+        a.st_rdev != b.st_rdev || stat("/dev/fd", &a) != 0 || !S_ISDIR(a.st_mode)) {
+        return fail("/dev/stdin is not descriptor 0's file, or /dev/fd no directory");
+    }
+    return 0;
+}
+
 int main(void)
 {
     int rc = stat_rows();
     int fd;
 
+    if (rc == 0) {
+        rc = fd_link_rows();
+    }
     unlink(FILE_PATH);
     rmdir(DIR_PATH);
     if (rc == 0) {

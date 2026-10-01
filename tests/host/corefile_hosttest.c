@@ -848,6 +848,33 @@ int filemap_disk_mapped(const struct vfs_mount *mnt, uint64_t ino)
     return 0;
 }
 
+/* The truncation of an open with O_TRUNC, which no row asks for. */
+int vfs_truncate(struct vfs_mount *mnt, void *at, uint64_t size)
+{
+    (void)mnt;
+    (void)at;
+    (void)size;
+    return -EROFS;
+}
+
+/* A FIFO or a device file opened again through its descriptor's link,
+ * which no row opens. */
+int32_t fifo_attach(struct fd_entry *e, const void *mnt, uint64_t ino, int flags)
+{
+    (void)e;
+    (void)mnt;
+    (void)ino;
+    (void)flags;
+    return -ENXIO;
+}
+
+const char *devfs_name_of(int block, uint32_t rdev)
+{
+    (void)block;
+    (void)rdev;
+    return NULL;
+}
+
 uint32_t procfs_ino_mounts(void)
 {
     return 0;

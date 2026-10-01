@@ -1693,6 +1693,142 @@ static int32_t cred_sticky_ok(const krffs_node_t *dir, const krffs_node_t *victi
     return -EPERM;
 }
 
+static int open_special(struct vfs_ref *ref, int fd, int flags, int32_t *result);
+static int open_mounted_node(struct vfs_ref *ref, int flags);
+static int open_root_node(struct vfs_ref *ref, int flags);
+static int32_t open_install(struct vfs_ref *ref, int fd, const char *name, int flags);
+
+/**
+ * Open again the file or directory of a mounted type, or of the KRFFS root,
+ * that the description `src` is open on, as an open(2) of it by name with
+ * `flags` would, and with the same checks, but found by its node, so that a
+ * file that has lost its name opens too. The caller holds `src`. As open(2)
+ * does, the descriptor is reserved first, so that no truncation is done for
+ * an open that then finds no slot; the node is read from `src` under the
+ * mount's namespace lock, where a relocation of the KRFFS root moves it; and
+ * a FIFO, a socket or a device file is opened as `open_special` opens one,
+ * for a description made by O_PATH. The description is a new one.
+ */
+static int32_t proc_fd_reopen(const struct open_file *src, int flags)
+{
+    struct vfs_mount *mnt = src->vmnt;
+    struct vfs_ref ref;
+    int32_t rc;
+    int fd = fd_alloc(current_proc->fds);
+
+    if (fd < 0) {
+        return fd;
+    }
+    if (vfs_enter(mnt) != 0) {
+        fd_free(current_proc->fds, fd);
+        return -ENOENT;
+    }
+    if (mnt->type->ns_serialised) {
+        vfs_ns_lock(mnt);
+    }
+    ref.mnt = mnt;
+    ref.node = src->vnode;
+    vfs_ref_hold(&ref);
+    if (open_special(&ref, fd, flags, &rc)) {
+        return rc;
+    }
+    rc = mnt_is_root(mnt) ? open_root_node(&ref, flags) : open_mounted_node(&ref, flags);
+    if (rc != 0) {
+        vfs_walk_unlock(mnt);
+        fd_free(current_proc->fds, fd);
+        return rc;
+    }
+    rc = open_install(&ref, fd, src->dirpath[0] == '/' ? src->dirpath + 1 : "", flags);
+    vfs_walk_unlock(mnt);
+    return rc;
+}
+
+/**
+ * A new descriptor that shares the description of descriptor `procfd` of
+ * the table `fds`, as dup(2) shares it, close-on-exec where `flags` has
+ * O_CLOEXEC. The source is looked up again once the slot is had, since the
+ * caller's table may have grown; nothing between the caller's checks and the
+ * copy sleeps, the slot's memory coming from the heap, which does not wait.
+ * Returns the descriptor or a negative errno.
+ */
+static int32_t proc_fd_share(fd_table_t *fds, int procfd, int flags)
+{
+    fd_entry_t *src;
+    fd_entry_t *dst;
+    int fd = fd_alloc_from(current_proc->fds, 0);
+
+    if (fd < 0) {
+        return fd;
+    }
+    src = &fds->entries[procfd];
+    dst = &current_proc->fds->entries[fd];
+    fd_ofd_unref(dst->ofd);
+    dst->type = src->type;
+    dst->node = src->node;
+    dst->sock = src->sock;
+    dst->ops = src->ops;
+    dst->priv = src->priv;
+    dst->dev = src->dev;
+    dst->ofd = src->ofd;
+    fd_ofd_ref(dst->ofd);
+    dst->flags =
+        (src->flags & ~(uint32_t)FD_FLAG_CLOEXEC) | ((flags & O_CLOEXEC) ? FD_FLAG_CLOEXEC : 0u);
+    if (src->type == FD_TYPE_SOCKET && src->sock) {
+        socket_ref(src->sock);
+    }
+    return fd;
+}
+
+/**
+ * open(2) of /proc/PID/fd/N, which /dev/fd/N, /dev/stdin, /dev/stdout and
+ * /dev/stderr are for the caller, following the link to what the descriptor
+ * is open on, as Linux does. A file or directory is opened again
+ * (`proc_fd_reopen`), with its description held across the sleeps of that
+ * open, since another thread may close the descriptor meanwhile. Anything
+ * else, a pipe, a socket, a terminal or a device, has the descriptor's own
+ * description shared with the new one (`proc_fd_share`), when the
+ * descriptor has the access asked for and is no O_DIRECTORY open of what is
+ * not a directory; Linux opens a pipe's other end for the other access, and
+ * this answers EACCES. Another process's descriptor needs a privileged
+ * caller or one with the process's effective user ID.
+ */
+static int32_t proc_fd_open(const struct vpath *vp, int flags)
+{
+    int pid = procfs_resolve_id(vp);
+    process_t *p = pid < 0 ? NULL : get_process((uint32_t)pid);
+    unsigned acc = (unsigned)flags & 3u;
+    struct open_file *held;
+    fd_entry_t *src;
+    int32_t rc;
+
+    if (!p || p->state == PROC_UNUSED || !p->fds || vp->procfd < 0 ||
+        vp->procfd >= fd_table_cap(p->fds)) {
+        return -ENOENT;
+    }
+    if (p->fds != current_proc->fds && !cred_privileged() && p->euid != current_proc->euid) {
+        return -EACCES;
+    }
+    src = &p->fds->entries[vp->procfd];
+    if (src->type == FD_TYPE_NONE || (src->flags & FD_FLAG_CLOSING)) {
+        return -ENOENT;
+    }
+    if (src->ofd && src->ofd->vmnt && (src->type == FD_TYPE_FILE || src->type == FD_TYPE_DIR)) {
+        held = src->ofd;
+        fd_ofd_ref(held);
+        rc = proc_fd_reopen(held, flags);
+        fd_ofd_unref(held);
+        return rc;
+    }
+    if ((src->flags & FD_FLAG_PATH) || (acc != 1 && !(src->flags & FD_FLAG_READ)) ||
+        (acc != 0 && !(src->flags & FD_FLAG_WRITE))) {
+        return -EACCES;
+    }
+    if ((flags & O_DIRECTORY) && src->type != FD_TYPE_SYNTH_DIR) {
+        return -ENOTDIR;
+    }
+    return proc_fd_share(p->fds, vp->procfd, flags);
+}
+
 /**
  * Open a path that classified as synthetic (/dev or /proc).
  *
@@ -1795,8 +1931,10 @@ static int32_t synth_open(const struct vpath *vp, int flags)
         return synth_open_dir(vp, flags);
     case VNODE_ENOTDIR:
         return -ENOTDIR;
+    case VNODE_PROC_FD_LINK:
+        return proc_fd_open(vp, flags);
     default:
-        return -ENOENT; /* including VNODE_PROC_FD_LINK: read via readlink */
+        return -ENOENT;
     }
 }
 
@@ -9920,6 +10058,26 @@ static int synth_dirent_at(const struct synth_dir *sd, int n, char *name, uint64
             return 1;
         }
         n -= named;
+        /* The caller's descriptors, /dev/fd and the three standard ones
+         * (`synth_classify`), with what lstat reports of them. */
+        if (n < 4) {
+            static const char *const fdnames[] = {"fd", "stdin", "stdout", "stderr"};
+            struct linux_stat64 fst;
+            struct vpath fvp;
+
+            k_memset(&fvp, 0, sizeof(fvp));
+            fvp.pid = SYNTH_PID_SELF;
+            fvp.kind = n == 0 ? VNODE_PROC_FD_DIR : VNODE_PROC_FD_LINK;
+            fvp.procfd = n - 1;
+            for (i = 0; fdnames[n][i]; i++) {
+                name[i] = fdnames[n][i];
+            }
+            name[i] = '\0';
+            *ino = synth_stat(&fvp, &fst, 0) == 0 ? fst.st_ino : 1u;
+            *dtype = n == 0 ? DT_DIR : DT_LNK;
+            return 1;
+        }
+        n -= 4;
         /* Through devfs_dirent, which skips absent entries and reports the
          * registry inode: two devices are dynamically present now, so a walk
          * that stopped at the first absent one would hide the second. */

@@ -4583,3 +4583,27 @@ old
 new
     if (shared && !(e->flags & FD_FLAG_WRITE)) {
 end
+
+# The caller's descriptors by their links.
+
+fault fd-link-not-opened
+probe fdcallmusl
+file rach2/sys/syscall_fs.c
+expect FDCALLMUSL FAIL (a pipe opened by /dev/fd/N did not read the pipe
+old
+    case VNODE_PROC_FD_LINK:
+        return proc_fd_open(vp, flags);
+new
+    case VNODE_PROC_FD_LINK:
+        return vp->procfd >= 0 ? -ENXIO : proc_fd_open(vp, flags);
+end
+
+fault fd-link-file-shared
+probe fdcallmusl
+file rach2/sys/syscall_fs.c
+expect FDCALLMUSL FAIL (a file opened by /proc/self/fd/N was not a description of its own
+old
+    if (src->ofd && src->ofd->vmnt && (src->type == FD_TYPE_FILE || src->type == FD_TYPE_DIR)) {
+new
+    if (0) {
+end
