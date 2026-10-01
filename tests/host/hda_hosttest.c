@@ -48,6 +48,15 @@ static int sysfs_device_exists(int node, int key);
 /* The counters /proc/net/snmp reports, which net_core.c defines. */
 struct net_mib net_mib;
 
+/* The running process and the table procfs_may_read asks about; none here. */
+process_t *current_proc;
+
+process_t *get_process(uint32_t pid)
+{
+    (void)pid;
+    return 0;
+}
+
 #include "fs/synthfs.c"
 
 extern int printf(const char *format, ...);

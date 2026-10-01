@@ -5181,3 +5181,13 @@ old
 new
         node->gid = node->gid;
 end
+
+fault proc-fd-dir-open-to-all
+probe callsmusl
+file rach2/sys/syscall_fs.c
+expect CALLSMUSL FAIL (another user opened a root process's maps or fd directory
+old
+    if (vp->kind == VNODE_PROC_FD_DIR && !procfs_may_read(pid)) {
+new
+    if (vp->kind == VNODE_PROC_FD_DIR && !procfs_may_read(pid) && pid < 0) {
+end

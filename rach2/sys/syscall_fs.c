@@ -2007,7 +2007,9 @@ static int32_t synth_open(const struct vpath *vp, int flags)
  * a thread's under /proc/<pid>/task). The descriptor keeps a record of its
  * own, taken from the heap and freed at the last close, with the process's
  * pid and, for a thread's directory, the thread's id, so its listing, its
- * /proc/PID/fd link and the names relative to it stay the thread's. */
+ * /proc/PID/fd link and the names relative to it stay the thread's. Another
+ * user's /proc/PID/fd is EACCES, as Linux keeps a process's descriptors to
+ * those who may trace it (`procfs_may_read`). */
 static int32_t synth_open_dir(const struct vpath *vp, int flags)
 {
     fd_entry_t *e;
@@ -2022,6 +2024,9 @@ static int32_t synth_open_dir(const struct vpath *vp, int flags)
             return -ENOENT;
         }
         pid = procfs_resolve_pid(vp->pid);
+    }
+    if (vp->kind == VNODE_PROC_FD_DIR && !procfs_may_read(pid)) {
+        return -EACCES;
     }
     /* The directory exists, so honour flags that contradict that. An exclusive
      * create of an existing object is -EEXIST regardless of access mode (the

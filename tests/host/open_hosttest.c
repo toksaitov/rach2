@@ -1246,6 +1246,13 @@ int procfs_resolve_pid(int pid)
     return 0;
 }
 
+int procfs_may_read(int pid)
+{
+    (void)pid;
+    check(0, "unexpected /proc lookup");
+    return 0;
+}
+
 void synth_dir_path(int kind, int pid, int tid, char *out, int cap)
 {
     (void)kind;

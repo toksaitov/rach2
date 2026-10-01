@@ -705,6 +705,12 @@ int procfs_resolve_pid(int pid)
     return -1;
 }
 
+int procfs_may_read(int pid)
+{
+    (void)pid;
+    return 0;
+}
+
 int procfs_resolve_id(const struct vpath *vp)
 {
     (void)vp;

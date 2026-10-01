@@ -652,6 +652,10 @@ At most the first 128 KiB of them are read, so a longer list ends inside
 a string, without that string's NUL, and a page the address space cannot
 read ends it early.
 .It Pa /proc/PID/fd/N
+The directory is
+.Er EACCES
+to a caller that may not read
+.Pa environ .
 A symbolic link for each open descriptor N, whose target names what the
 descriptor is open on: a file of the KRFFS root by its path now, a file
 of another type by the path it was opened by, a device by its
@@ -822,6 +826,13 @@ for a shared one, and from column 73 the file the region maps,
 or the program for the segments of its image.
 The device and inode are not kept and read 0.
 A region with no path ends at the space after the inode, as on Linux.
+It and
+.Pa smaps
+need what
+.Pa environ
+needs, and are
+.Er EACCES
+to another caller.
 .It Pa /proc/PID/smaps
 Each region's
 .Pa maps

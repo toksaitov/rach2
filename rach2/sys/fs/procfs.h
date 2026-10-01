@@ -22,6 +22,11 @@ struct vfs_ref;
 /** Resolve a vpath pid (SYNTH_PID_SELF is the caller) to a live pid, or -1. */
 int procfs_resolve_pid(int pid);
 
+/** Whether the caller may see process `pid`'s memory map and descriptors,
+ * as Linux's ptrace read check asks: its own process, a privileged caller,
+ * or one with its real user ID when it is not privileged. */
+int procfs_may_read(int pid);
+
 /** The id of the process, or of the thread for a path under
  * /proc/<pid>/task/<tid>, whose files the path `vp` shows; -1 when the
  * process is gone or the thread is not one of its threads. */

@@ -17,7 +17,8 @@
  * local port no socket has polls POLLERR once the port unreachable comes
  * back, and its next receive is ECONNREFUSED, as glibc's resolver expects.
  * A setgid directory gives a file made in it its group, and a directory
- * its group and the bit.
+ * its group and the bit. A process of another user is refused the maps and
+ * the descriptors of a root process under /proc, and reads its own.
  * mlock, munlock, mlockall and munlockall accept a mapped range and refuse a
  * gap with ENOMEM; mincore reports a touched page resident.
  * getcpu reports CPU 0, and personality keeps and returns its value.
@@ -47,6 +48,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
+#include <dirent.h>
 #include <poll.h>
 #include <stdlib.h>
 #include <signal.h>
@@ -164,6 +166,46 @@ static int setgids(void)
     unlink("/tmp/callsmusl.sg/f");
     rmdir("/tmp/callsmusl.sg/d");
     rmdir(dir);
+    return 0;
+}
+
+/* A child that becomes user 4243 opens its root parent's maps and fd
+   directory, which are EACCES, and its own maps; its exit status is the
+   number of the first that went wrong. */
+static int privacies(void)
+{
+    char path[64];
+    int status, fd;
+    pid_t pid, parent = getpid();
+
+    pid = fork();
+    if (pid == 0) {
+        DIR *d;
+
+        if (setuid(4243) != 0) {
+            _exit(1);
+        }
+        snprintf(path, sizeof path, "/proc/%d/maps", (int)parent);
+        if (open(path, O_RDONLY) != -1 || errno != EACCES) {
+            _exit(2);
+        }
+        snprintf(path, sizeof path, "/proc/%d/fd", (int)parent);
+        d = opendir(path);
+        if (d || errno != EACCES) {
+            _exit(3);
+        }
+        fd = open("/proc/self/maps", O_RDONLY);
+        _exit(fd < 0 ? 4 : 0);
+    }
+    if (pid < 0 || waitpid(pid, &status, 0) != pid || !WIFEXITED(status)) {
+        return fail("a child of user 4243");
+    }
+    if (WEXITSTATUS(status) == 2 || WEXITSTATUS(status) == 3) {
+        return fail("another user opened a root process's maps or fd directory");
+    }
+    if (WEXITSTATUS(status) != 0) {
+        return fail("a child of user 4243 could not become it or read its own maps");
+    }
     return 0;
 }
 
@@ -516,7 +558,8 @@ static int reserves(void)
 int main(void)
 {
     if (signals() || memory() || identity() || messages() || clocks() || ranges() || copies() ||
-        reserves() || adjusts() || advises() || terminals() || peaks() || refusals() || setgids()) {
+        reserves() || adjusts() || advises() || terminals() || peaks() || refusals() || setgids() ||
+        privacies()) {
         return 1;
     }
     printf("CALLSMUSL OK\n");

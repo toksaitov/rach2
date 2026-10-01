@@ -545,6 +545,13 @@ static int procfs_may_read_mem(const process_t *p)
                             (current_proc->ruid == p->ruid && !proc_privileged(p)));
 }
 
+int procfs_may_read(int pid)
+{
+    process_t *p = procfs_proc(pid);
+
+    return p && procfs_may_read_mem(p);
+}
+
 int procfs_exe_file(int pid, struct vfs_ref *out)
 {
     process_t *p = procfs_proc(pid);
@@ -853,7 +860,8 @@ static void ap_maps_line(struct procfs_text *t, const struct mm *mm, const vma_t
  * and inode of 0, which the kernel does not keep, a space, and the path from
  * column 73. A region with no path ends at that space, as on Linux, where
  * BusyBox's pmap counts on it to find the end of the fields. GNU libc's
- * pthread_getattr_np finds the stack by its [stack] line.
+ * pthread_getattr_np finds the stack by its [stack] line. -EACCES for a
+ * caller `procfs_may_read_mem` refuses, as Linux refuses another user.
  */
 static int procfs_gen_maps(struct procfs_text *t, int pid)
 {
@@ -863,6 +871,9 @@ static int procfs_gen_maps(struct procfs_text *t, int pid)
 
     if (!p) {
         return -ENOENT;
+    }
+    if (!procfs_may_read_mem(p)) {
+        return -EACCES;
     }
     mm = p->mm;
     for (i = 0; mm && i < mm->vm.count; i++) {
@@ -902,6 +913,7 @@ static void ap_smaps_kb(struct procfs_text *t, const char *name, uint32_t pages)
  * processes that map a page, so Pss is Rss, a page another process also maps
  * being counted whole to each; there is no swap, no huge page and no locking,
  * so those fields are 0.
+ * -EACCES for a caller `procfs_may_read_mem` refuses, as for maps.
  */
 static int procfs_gen_smaps(struct procfs_text *t, int pid)
 {
@@ -911,6 +923,9 @@ static int procfs_gen_smaps(struct procfs_text *t, int pid)
 
     if (!p) {
         return -ENOENT;
+    }
+    if (!procfs_may_read_mem(p)) {
+        return -EACCES;
     }
     mm = p->mm;
     for (i = 0; mm && i < mm->vm.count; i++) {
