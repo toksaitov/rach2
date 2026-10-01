@@ -13,6 +13,7 @@ static int procfs_open(const struct vpath *vp, int flags);
 static int procfs_readlink_fd(int pid, int fd, char *buf, int cap);
 static int procfs_readlink_exe(int pid, char *buf, int cap);
 static int procfs_exe_name(int pid, char *buf, int cap);
+static int procfs_readlink_dir(int pid, int root, char *buf, int cap);
 static int procfs_exe_file(int pid, struct vfs_ref *out);
 static int procfs_nth_pid(int n);
 static uint32_t procfs_ino_dir(void);
