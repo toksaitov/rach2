@@ -160,6 +160,7 @@ static uint8_t r8168_rx_buf[R8168_RING_SIZE][R8168_RX_BUF_SIZE + 1] __attribute_
 static uint8_t r8168_tx_buf[R8168_RING_SIZE][R8168_FRAME_MAX] __attribute__((aligned(8)));
 /* The block the chip writes its tally counters into on request. */
 static struct r8168_counters r8168_counters __attribute__((aligned(64)));
+static int r8168_counters_command(uint32_t command);
 
 static uint32_t r8168_tx_head; /* next descriptor to fill */
 static uint32_t r8168_tx_tail; /* oldest descriptor not yet reclaimed */
@@ -1055,6 +1056,8 @@ static int rtl8168_init(struct netdev *nd, int nth)
     }
 
     r8168_up = 1;
+    /* The tally outlives a warm restart (rtl8169_init_counter_offsets). */
+    (void)r8168_counters_command(R8168_COUNTER_RESET);
     r8168_interrupts_enable();
     {
         int b;
@@ -1477,20 +1480,21 @@ static int rtl8168_link(void *dev, struct netdev_link *out)
 }
 
 /**
- * Request the chip's tally counters (rtl8169_do_counters with CounterDump):
- * the block's address goes into the two counter registers with the dump bit
- * set, and the chip clears the bit once it has written the block.
- * Return zero if completion is not observed within the polling limit.
- * Read the DMA block only after completion is observed. The chip is asked
- * only while it is up: the reference notes that some of these chips cannot
- * dump with the receiver stopped.
+ * Give the chip a tally command (rtl8169_do_counters): `R8168_COUNTER_DUMP`
+ * to write the counts into the block, or `R8168_COUNTER_RESET` to zero them.
+ * The block's address goes into the two counter registers with the command
+ * bit set, and the chip clears the bit once it has done the command.
+ * Return zero if completion is not observed within the polling limit; read
+ * the DMA block only after completion is observed. The chip is asked only
+ * while it is up: the reference notes that some of these chips cannot dump
+ * with the receiver stopped.
  *
  * The writes are in the reference's order: the high word, read back so the
  * write has landed, the low word as the address alone, then the address with
  * the command. In the reference's experience a chip given the command with
  * the address in the same write has dumped to the old address.
  */
-static int r8168_counters_dump(void)
+static int r8168_counters_command(uint32_t command)
 {
     uint32_t i;
 
@@ -1500,9 +1504,9 @@ static int r8168_counters_dump(void)
     io->w32(R8168_COUNTERADDRHIGH, 0);
     (void)io->r32(R8168_COUNTERADDRHIGH);
     io->w32(R8168_COUNTERADDRLOW, (uint32_t)(uintptr_t)&r8168_counters);
-    io->w32(R8168_COUNTERADDRLOW, (uint32_t)(uintptr_t)&r8168_counters | R8168_COUNTER_DUMP);
+    io->w32(R8168_COUNTERADDRLOW, (uint32_t)(uintptr_t)&r8168_counters | command);
     for (i = 0; i < R8168_COUNTERS_WAIT_STEPS; i++) {
-        if (!(io->r32(R8168_COUNTERADDRLOW) & R8168_COUNTER_DUMP)) {
+        if (!(io->r32(R8168_COUNTERADDRLOW) & command)) {
             /* The block is read only after the chip says it wrote it. */
             __asm__ __volatile__("" : : : "memory");
             return 1;
@@ -1523,7 +1527,7 @@ static int rtl8168_counters(void *dev, struct netdev_counters *out)
 {
     (void)dev; /* this driver has one card */
 
-    if (!r8168_counters_dump()) {
+    if (!r8168_counters_command(R8168_COUNTER_DUMP)) {
         return 0;
     }
     out->rx_missed = r8168_counters.rx_missed;

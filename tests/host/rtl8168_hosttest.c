@@ -428,9 +428,10 @@ static int model_half_fifo;
 static int model_swallow_doorbell; /* the doorbell does nothing */
 /* The tally counter dump: the chip writes the block and clears the bit at
  * the first read after the request, or never when the test sticks it. The
- * values it writes are the model's own tallies. */
+ * values it writes are the model's own tallies, which a reset command zeroes
+ * and a reset of the chip does not. */
 static int model_stuck_counters;
-static int model_counter_pending;
+static int model_counter_pending;   /* the command bit given, or zero */
 static int model_counter_addressed; /* the low word was written as the address alone */
 static unsigned model_counter_addr;
 static unsigned model_counter_high_read; /* readbacks of the high word */
@@ -511,9 +512,13 @@ static unsigned m_r32(unsigned off)
         model_counter_high_read++;
     }
     if (off == R8168_COUNTERADDRLOW && model_counter_pending && !model_stuck_counters) {
-        model_counters_complete();
+        if (model_counter_pending == R8168_COUNTER_DUMP) {
+            model_counters_complete();
+        } else {
+            memset(model_tally, 0, sizeof model_tally);
+        }
+        model_w32_raw(off, model_r32_raw(off) & ~(unsigned)model_counter_pending);
         model_counter_pending = 0;
-        model_w32_raw(off, model_r32_raw(off) & ~R8168_COUNTER_DUMP);
     }
     if (off == R8168_TXCONFIG) {
         unsigned v = model_r32_raw(off) & 0x000fffffu;
@@ -603,12 +608,12 @@ static void m_w32(unsigned off, unsigned v)
            reference's order; a command with the address in the same write,
            or one that never read the high word, dumps to the old address in
            the reference's experience, and here to nowhere. */
-        if (!(v & R8168_COUNTER_DUMP)) {
+        if (!(v & (R8168_COUNTER_DUMP | R8168_COUNTER_RESET))) {
             model_counter_addr = v;
             model_counter_addressed = 1;
         } else if (model_counter_addressed && model_counter_high_read &&
                    (v & ~0x3fu) == (model_counter_addr & ~0x3fu)) {
-            model_counter_pending = 1;
+            model_counter_pending = (int)(v & (R8168_COUNTER_DUMP | R8168_COUNTER_RESET));
         }
     }
 
@@ -1645,7 +1650,11 @@ int main(void)
     /* The chip is asked for its tally block at the block's address, and
        answers with its counts in the columns the interface cannot keep. */
     model_reset();
+    model_tally[0] = 34; /* errors of a boot before, which a warm restart keeps */
     CHECK(rtl8168_init(&model_iface, 0) == NETDEV_UP, "the bring-up completes for the counters");
+    CHECK(model_tally[0] == 0 && find_write_value(0, 32, R8168_COUNTERADDRLOW,
+                                                  model_counter_addr | R8168_COUNTER_RESET) >= 0,
+          "the bring-up zeroes the tally a warm restart kept");
     {
         struct netdev_counters out;
         unsigned before = model_log_len;
