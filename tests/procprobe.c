@@ -56,6 +56,8 @@ typedef unsigned int size_t;
 #define SYS_FSTAT64       197
 #define SYS_READLINK      85
 #define SYS_STAT64        195
+#define SYS_IOCTL         54
+#define CLOCK_REALTIME    0
 
 #define SC_SOCKET       1
 #define SC_BIND         2
@@ -793,6 +795,31 @@ static void sys_rows(void)
     check(contains(buf, n, "\nsysfs /sys sysfs ro,"), "/proc/mounts lists /sys, read-only");
 }
 
+/* /dev/rtc0: the CMOS clock as hwclock reads it, the hour and minute of
+   RTC_RD_TIME those of the real time, give or take the minute's turn between
+   the two readings. */
+static void rtc_rows(void)
+{
+    int tm[9];
+    struct timespec_probe now;
+    int fd = syscall3(SYS_OPEN, (int)(size_t)"/dev/rtc0", O_RDONLY, 0);
+    int i, rc, clock_minute, time_minute;
+
+    for (i = 0; i < 9; i++) {
+        tm[i] = -1;
+    }
+    check(fd >= 0, "/dev/rtc0 opens");
+    rc = syscall3(SYS_IOCTL, fd, (int)0x80247009u, (int)(size_t)tm);
+    syscall3(SYS_CLOCK_GETTIME, CLOCK_REALTIME, (int)(size_t)&now, 0);
+    check(rc == 0, "and RTC_RD_TIME reads the clock");
+    clock_minute = tm[2] * 60 + tm[1];
+    time_minute = (int)((now.tv_sec / 60) % 1440);
+    check(time_minute == clock_minute || time_minute == (clock_minute + 1) % 1440,
+          "and its hour and minute are the time's");
+    check(tm[4] >= 0 && tm[4] <= 11 && tm[5] >= 100, "and its month is from 0, its year from 1900");
+    syscall1(SYS_CLOSE, fd);
+}
+
 /* The counts `ss -s` reads, by the names Linux gives them, with a listener
    open. */
 static void count_rows(void)
@@ -1253,6 +1280,7 @@ void probe_main(unsigned int *sp)
 
     dgram_and_local_rows();
     sys_rows();
+    rtc_rows();
 
     /* Capacity. The pool is filled to its last block, half in a child and half
      * here, because one process cannot hold that many descriptors, and the file

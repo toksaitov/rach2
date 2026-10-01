@@ -290,8 +290,14 @@ An alias for
 .It Nm hexdump
 Display files, or standard input, in a specified format.
 .It Nm hwclock
-Request a read or update of the hardware real-time clock (RTC).
-Rach2 publishes no RTC device node, so the applet fails.
+Read the hardware real-time clock, set the system's time from it, or set it
+from the system's, through
+.Pa /dev/rtc0 ;
+see
+.Xr rtc 4 .
+The clock keeps UTC, so
+.Fl u
+reads it as it is.
 .It Nm ipcrm
 Remove System V shared memory segments, message queues, or semaphores.
 Rach2 has no System V IPC, so the applet fails.

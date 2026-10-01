@@ -230,6 +230,28 @@ void klog_set_screen_level(int level)
     unexpected();
 }
 
+int rtc_read_clock(rtc_time_t *out)
+{
+    (void)out;
+    unexpected();
+    return -1;
+}
+
+int rtc_write_clock(const rtc_time_t *t)
+{
+    (void)t;
+    unexpected();
+    return -1;
+}
+
+void rtc_week_and_year_day(const rtc_time_t *t, int32_t *weekday, int32_t *yearday)
+{
+    (void)t;
+    *weekday = 0;
+    *yearday = 0;
+    unexpected();
+}
+
 void krandom_bytes(void *buf, uint32_t count)
 {
     (void)buf;

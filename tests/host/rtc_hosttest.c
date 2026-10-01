@@ -41,17 +41,33 @@ static int port_byte;
 static int pending;
 static int wrap_on_pending;
 static int irq_disabled;
+/* The CMOS: its registers and the index the address port last chose. */
+static uint8_t cmos[128];
+static uint8_t cmos_index;
 
-/** Model one atomic status/count latch, not two unrelated hardware reads. */
+/** Model one atomic status/count latch, not two unrelated hardware reads, and
+ * the CMOS's index and data ports, which are used with interrupts off. */
 void outb(uint16_t port, uint8_t value)
 {
     CHECK(irq_disabled);
+    if (port == 0x70) {
+        cmos_index = (uint8_t)(value & 0x7F);
+        return;
+    }
+    if (port == 0x71) {
+        cmos[cmos_index] = value;
+        return;
+    }
     CHECK(port == 0x43 && value == 0xC2);
     port_byte = 0;
 }
 
 uint8_t inb(uint16_t port)
 {
+    if (port == 0x71) {
+        CHECK(irq_disabled);
+        return cmos[cmos_index];
+    }
     CHECK(irq_disabled && port == 0x40);
     if (port_byte++ == 0) {
         return status;
@@ -244,6 +260,32 @@ static unsigned char bcd(int value)
 }
 
 /** Fill a BCD, 24-hour sample. */
+/**
+ * The CMOS clock written and read back: in BCD with a 12-hour clock, as some
+ * firmware keeps it, 23:05:09 on 29 February 2028 is held as 11 PM, a
+ * Tuesday, with updates let go after the write; read back, it is the same
+ * time; and a year the two digits cannot hold is refused untouched.
+ */
+static void clock_write_rows(void)
+{
+    rtc_time_t t = {2028, 2, 29, 23, 5, 9}, back = {0, 0, 0, 0, 0, 0};
+    rtc_time_t late = {2100, 1, 1, 0, 0, 0};
+    int32_t weekday, yearday;
+
+    cmos[0x0A] = RTC_STATUS_A_DIVIDER_NORMAL;
+    cmos[0x0B] = 0;
+    cmos[0x0D] = RTC_STATUS_D_VALID;
+    CHECK(rtc_write_clock(&t) == 0);
+    CHECK(cmos[0x04] == (0x11 | RTC_HOUR_PM) && cmos[0x00] == 0x09 && cmos[0x02] == 0x05);
+    CHECK(cmos[0x07] == 0x29 && cmos[0x08] == 0x02 && cmos[0x09] == 0x28 && cmos[0x06] == 3);
+    CHECK(cmos[0x0B] == 0);
+    CHECK(rtc_read_clock(&back) == 0 && back.year == 2028 && back.month == 2 && back.day == 29 &&
+          back.hour == 23 && back.minute == 5 && back.second == 9);
+    rtc_week_and_year_day(&t, &weekday, &yearday);
+    CHECK(weekday == 2 && yearday == 59);
+    CHECK(rtc_write_clock(&late) == -1 && cmos[0x09] == 0x28);
+}
+
 static void bcd_sample(rtc_snapshot_t *raw, int year, int month, int day, int hour, int minute,
                        int second)
 {
@@ -501,5 +543,6 @@ int main(void)
     subtick_rows();
     set_rows();
     monotonic_rows();
+    clock_write_rows();
     return fails > 100 ? 100 : fails;
 }

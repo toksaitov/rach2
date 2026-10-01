@@ -4994,3 +4994,15 @@ old
 new
     ap_str(t, "\nPCI_SLOT=");
 end
+
+# /dev/rtc0, which hwclock reads.
+
+fault rtc-hour-for-minute
+probe procprobe
+file rach2/sys/fs/devfs.c
+expect FAIL: and its hour and minute are the time's
+old
+        tm[1] = t.minute;
+new
+        tm[1] = t.hour;
+end

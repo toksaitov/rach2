@@ -31,6 +31,7 @@
 #include "../block/recovery.h"
 #include "../block/disk.h"
 #include "../serial.h"
+#include "../rtc.h"
 
 /* Linux O_* bits devfs_open honours (the rest are irrelevant to a char
  * device). */
@@ -907,6 +908,78 @@ static int32_t dev_screenlog_write(fd_entry_t *e, const char __user *buf, uint32
 static const struct file_ops screenlog_ops = {dev_screenlog_read, dev_screenlog_write, dev_poll,
                                               dev_ioctl, NULL};
 
+/*
+ * /dev/rtc0: the CMOS clock, which `hwclock` reads and sets through Linux's
+ * two ioctls, RTC_RD_TIME and RTC_SET_TIME, with a `struct rtc_time` of nine
+ * ints: second, minute, hour, day of the month, month from 0, years since
+ * 1900, day of the week, day of the year and the daylight flag. The clock
+ * keeps UTC, as the boot reads it. Setting it is root's, -EACCES for anyone
+ * else as Linux answers; a time outside 2000 to 2099, which the clock's two
+ * year digits cannot hold, is -EINVAL. The clock's interrupts are not given,
+ * so a read or write of the device is -EINVAL.
+ */
+#define RTC_RD_TIME  0x80247009u
+#define RTC_SET_TIME 0x4024700Au
+
+static int32_t dev_rtc_read(fd_entry_t *e, char __user *buf, uint32_t count)
+{
+    (void)e;
+    (void)buf;
+    (void)count;
+    return -EINVAL;
+}
+
+static int32_t dev_rtc_write(fd_entry_t *e, const char __user *buf, uint32_t count)
+{
+    (void)e;
+    (void)buf;
+    (void)count;
+    return -EINVAL;
+}
+
+static int32_t dev_rtc_ioctl(fd_entry_t *e, uint32_t request, uint32_t arg)
+{
+    int32_t tm[9];
+    rtc_time_t t;
+
+    (void)e;
+    if (request == RTC_RD_TIME) {
+        if (rtc_read_clock(&t) != 0) {
+            return -EIO;
+        }
+        tm[0] = t.second;
+        tm[1] = t.minute;
+        tm[2] = t.hour;
+        tm[3] = t.day;
+        tm[4] = t.month - 1;
+        tm[5] = t.year - 1900;
+        rtc_week_and_year_day(&t, &tm[6], &tm[7]);
+        tm[8] = 0;
+        return copy_to_user((void __user *)arg, tm, sizeof(tm)) != 0 ? -EFAULT : 0;
+    }
+    if (request == RTC_SET_TIME) {
+        if (!proc_privileged(current_proc)) {
+            return -EACCES;
+        }
+        if (copy_from_user(tm, (const void __user *)arg, sizeof(tm)) != 0) {
+            return -EFAULT;
+        }
+        if (tm[4] < 0 || tm[4] > 11 || tm[5] < 100 || tm[5] > 199) {
+            return -EINVAL;
+        }
+        t.second = tm[0];
+        t.minute = tm[1];
+        t.hour = tm[2];
+        t.day = tm[3];
+        t.month = tm[4] + 1;
+        t.year = tm[5] + 1900;
+        return rtc_write_clock(&t) != 0 ? -EINVAL : 0;
+    }
+    return -ENOTTY;
+}
+
+static const struct file_ops rtc_ops = {dev_rtc_read, dev_rtc_write, dev_poll, dev_rtc_ioctl, NULL};
+
 static const struct file_ops grubcore_ops = {dev_grubcore_read, dev_grubcore_write, dev_poll,
                                              dev_ioctl, dev_grubcore_close};
 static const struct file_ops bootpart_ops = {dev_bootpart_read, dev_bootpart_write, dev_poll,
@@ -996,7 +1069,8 @@ static const struct devfs_entry dev_table[] = {{"null", 1, 3, 1, 0666, &null_ops
                                                {"loop3", 240, 35, 0, 0400, &loop_ops},
                                                {"loop-control", 240, 36, 0, 0600, &loopctl_ops},
                                                {"framefail", 240, 37, 0, 0600, &framefail_ops},
-                                               {"screenlog", 240, 38, 0, 0600, &screenlog_ops}};
+                                               {"screenlog", 240, 38, 0, 0600, &screenlog_ops},
+                                               {"rtc0", 254, 0, 0, 0600, &rtc_ops}};
 
 #define DEVFS_NDEV ((int)(sizeof(dev_table) / sizeof(dev_table[0])))
 

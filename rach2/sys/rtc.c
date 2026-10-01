@@ -310,6 +310,7 @@ extern volatile uint32_t kernel_second_ticks;
 #define RTC_REG_SECOND   0x00
 #define RTC_REG_MINUTE   0x02
 #define RTC_REG_HOUR     0x04
+#define RTC_REG_WEEKDAY  0x06
 #define RTC_REG_DAY      0x07
 #define RTC_REG_MONTH    0x08
 #define RTC_REG_YEAR     0x09
@@ -469,6 +470,96 @@ void rtc_init(void)
     }
 
     klog(KLOG_WARN, "rtc", "no clock: times run from the epoch");
+}
+
+int rtc_read_clock(rtc_time_t *out)
+{
+    rtc_snapshot_t first;
+    rtc_snapshot_t second;
+    int64_t seconds;
+    uint32_t flags;
+    int sampled, try;
+
+    for (try = 0; try < RTC_SAMPLE_TRIES; try++) {
+        flags = kirq_save();
+        sampled = rtc_sample(&first) == 0 && rtc_sample(&second) == 0;
+        kirq_restore(flags);
+        if (!sampled) {
+            return -1;
+        }
+        switch (rtc_pair_disposition(&first, &second)) {
+        case RTC_PAIR_ACCEPT:
+            return rtc_decode(&first, &seconds, out);
+        case RTC_PAIR_RETRY:
+            break;
+        default:
+            return -1;
+        }
+    }
+    return -1;
+}
+
+/** Write `value` into the CMOS register `reg`. */
+static void rtc_write_register(uint8_t reg, uint8_t value)
+{
+    outb(RTC_ADDRESS_PORT, reg);
+    outb(RTC_DATA_PORT, value);
+}
+
+/** `value`, 0 to 99, as status B says the clock keeps it: binary or BCD. */
+static uint8_t rtc_to_register(int32_t value, int binary)
+{
+    return (uint8_t)(binary ? value : (value / 10) << 4 | value % 10);
+}
+
+void rtc_week_and_year_day(const rtc_time_t *t, int32_t *weekday, int32_t *yearday)
+{
+    int32_t days = 0, each;
+
+    for (each = RTC_EPOCH_YEAR; each < t->year; each++) {
+        days += rtc_is_leap(each) ? 366 : 365;
+    }
+    *yearday = t->day - 1;
+    for (each = 1; each < t->month; each++) {
+        *yearday += rtc_days_in_month(t->year, each);
+    }
+    *weekday = (days + *yearday + 4) % 7; /* 1970-01-01 was a Thursday */
+}
+
+int rtc_write_clock(const rtc_time_t *t)
+{
+    int32_t weekday, yearday, hour12;
+    uint8_t b, hour;
+    uint32_t flags;
+    int binary;
+
+    if (t->year < RTC_CENTURY_BASE || t->year > RTC_CENTURY_BASE + 99 || t->month < 1 ||
+        t->month > 12 || t->day < 1 || t->day > rtc_days_in_month(t->year, t->month) ||
+        t->hour < 0 || t->hour > 23 || t->minute < 0 || t->minute > 59 || t->second < 0 ||
+        t->second > 59) {
+        return -1;
+    }
+    rtc_week_and_year_day(t, &weekday, &yearday);
+    flags = kirq_save();
+    b = rtc_register(RTC_REG_STATUS_B);
+    binary = (b & RTC_STATUS_B_BINARY) != 0;
+    if (b & RTC_STATUS_B_24_HOUR) {
+        hour = rtc_to_register(t->hour, binary);
+    } else {
+        hour12 = t->hour % 12 == 0 ? 12 : t->hour % 12;
+        hour = (uint8_t)(rtc_to_register(hour12, binary) | (t->hour >= 12 ? RTC_HOUR_PM : 0));
+    }
+    rtc_write_register(RTC_REG_STATUS_B, (uint8_t)(b | RTC_STATUS_B_SET));
+    rtc_write_register(RTC_REG_SECOND, rtc_to_register(t->second, binary));
+    rtc_write_register(RTC_REG_MINUTE, rtc_to_register(t->minute, binary));
+    rtc_write_register(RTC_REG_HOUR, hour);
+    rtc_write_register(RTC_REG_WEEKDAY, rtc_to_register(weekday + 1, binary));
+    rtc_write_register(RTC_REG_DAY, rtc_to_register(t->day, binary));
+    rtc_write_register(RTC_REG_MONTH, rtc_to_register(t->month, binary));
+    rtc_write_register(RTC_REG_YEAR, rtc_to_register(t->year - RTC_CENTURY_BASE, binary));
+    rtc_write_register(RTC_REG_STATUS_B, (uint8_t)(b & ~RTC_STATUS_B_SET));
+    kirq_restore(flags);
+    return 0;
 }
 
 /** Whether the clock was read at boot. */

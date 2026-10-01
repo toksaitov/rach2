@@ -454,7 +454,7 @@ tests/host/pwauth_hosttest.c:main lines 240 a test's rows, each a case, read as 
 tests/host/readfile_hosttest.c:put_node params 8 a test's rows, each a case, read as one table
 
 tests/host/rtc_hosttest.c:bcd_sample params 7 a test's rows, each a case, read as one table
-tests/host/rtc_hosttest.c:main lines 242 a test's rows, each a case, read as one table
+tests/host/rtc_hosttest.c:main lines 243 a test's rows, each a case, read as one table
 
 tests/host/rtl8168_hosttest.c:main complexity 97 a test's rows, each a case, read as one table
 tests/host/rtl8168_hosttest.c:main lines 777 a test's rows, each a case, read as one table
@@ -654,7 +654,7 @@ tests/pipeprobe.c:_start nesting 5 a probe, one sequence of steps in the order t
 tests/pollprobe.c:_start lines 129 a probe, one sequence of steps in the order the log records them
 
 tests/procprobe.c:probe_main complexity 68 a probe, one sequence of steps in the order the log records them
-tests/procprobe.c:probe_main lines 503 a probe, one sequence of steps in the order the log records them
+tests/procprobe.c:probe_main lines 504 a probe, one sequence of steps in the order the log records them
 
 tests/ptyprobe.c:_start complexity 38 a probe, one sequence of steps in the order the log records them
 tests/ptyprobe.c:_start lines 168 a probe, one sequence of steps in the order the log records them

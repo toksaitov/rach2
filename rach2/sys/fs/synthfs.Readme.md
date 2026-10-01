@@ -36,6 +36,7 @@ The namespace is fixed. Creation, removal, rename, and timestamp operations on t
 | `/dev/loop0` to `/dev/loop3` | 240:32 to 240:35 | 0400 | A block device over a regular file, and the source `mount(2)` takes for a file system in a file. |
 | `/dev/loop-control` | 240:36 | 0600 | Attaches a file to a loop device and detaches one, a command per write. |
 | `/dev/screenlog` | 240:38 | 0600 | The lowest-priority record the screen shows: one digit, read or written. |
+| `/dev/rtc0` | 254:0 | 0600 | The CMOS clock, read and set through `RTC_RD_TIME` and `RTC_SET_TIME`, as `rtc(4)` gives. |
 
 `null`, `zero`, and `full` seek to offset zero. Random devices, terminals, and pty endpoints are streams and return `ESPIPE`. `/dev/bootlog` uses an ordinary offset and supports seeks relative to the current ring length. All synthetic nodes use stable timestamps from the RTC reading taken during startup, or zero when no RTC reading was accepted.
 

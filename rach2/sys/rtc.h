@@ -75,4 +75,23 @@ void rtc_coarse_realtime(int64_t *seconds, int64_t *nanoseconds);
 void rtc_monotonic(int64_t *seconds, int64_t *nanoseconds);
 void rtc_set_realtime(int64_t seconds, int32_t nanoseconds);
 
+/**
+ * Read the CMOS clock now, as the boot reads it: two samples that agree,
+ * decoded, with interrupts off while each pair is read. 0 with `*out`
+ * filled, or -1 when the clock cannot be read or holds no time.
+ */
+int rtc_read_clock(rtc_time_t *out);
+
+/** The day of the week of `*t`, 0 for Sunday, and of the year, from 0. */
+void rtc_week_and_year_day(const rtc_time_t *t, int32_t *weekday, int32_t *yearday);
+
+/**
+ * Set the CMOS clock to `*t`, a time from 2000 to 2099 in UTC, in the
+ * encoding and hour format status register B gives, with updates held while
+ * the registers are written and the day of the week, 1 for Sunday, written
+ * too. 0, or -1 for a time out of range. The time the kernel keeps is not
+ * changed.
+ */
+int rtc_write_clock(const rtc_time_t *t);
+
 #endif
