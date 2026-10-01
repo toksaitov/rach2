@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd October 1, 2026
 .Dt UNAME 2
 .Os
 .Sh NAME
@@ -74,7 +74,11 @@ Total managed and free physical RAM, from the frame counts, in bytes.
 .It Va mem_unit
 1.
 .It Va loads
-Three zeros; load averages are not tracked.
+The load averages over one, five and fifteen minutes, with 16 bits of
+fraction, as
+.Pa /proc/loadavg
+reports them; see
+.Xr proc 5 .
 .It Va sharedram , bufferram , totalswap , freeswap , totalhigh , freehigh
 Zero.
 .El

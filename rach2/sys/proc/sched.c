@@ -260,6 +260,73 @@ void sched_account_tick(int user)
     }
 }
 
+/* The load averages, Linux's: in fixed point, sampled every LOAD_FREQ
+ * ticks, five seconds and one, and decayed by e^(-5/60), e^(-5/300) and
+ * e^(-5/900) at each sample. */
+#define LOAD_ONE  (1u << SCHED_LOAD_SHIFT)
+#define LOAD_FREQ (5u * 100u + 1u)
+static const uint32_t load_decay[3] = {1884u, 2014u, 2037u};
+static uint32_t load_avg[3];
+static uint32_t load_wait = LOAD_FREQ;
+
+void sched_task_counts(uint32_t *active, uint32_t *total)
+{
+    const process_t *p;
+
+    *active = 0;
+    *total = 0;
+    for (p = proc_list; p; p = p->next) {
+        if (p == proc_idle || p->state == PROC_UNUSED) {
+            continue;
+        }
+        ++*total;
+        if (p->state == PROC_RUNNING || p->state == PROC_READY) {
+            ++*active;
+        }
+    }
+}
+
+/**
+ * Fold the processes running or ready to run into the three averages, once
+ * every LOAD_FREQ ticks, as Linux's `calc_load` does: the new average is the
+ * old one decayed, plus the count times what the decay took off, rounded up
+ * while the count is above it. Linux counts the uninterruptible sleepers
+ * as well, which this kernel does not tell apart from the others. The
+ * products are taken in 64 bits, since 4096 processes in fixed point times
+ * a decay pass 32.
+ */
+void sched_load_tick(void)
+{
+    uint32_t active, total;
+    int i;
+
+    if (--load_wait != 0) {
+        return;
+    }
+    load_wait = LOAD_FREQ;
+    sched_task_counts(&active, &total);
+    active *= LOAD_ONE;
+    for (i = 0; i < 3; i++) {
+        uint64_t next =
+            (uint64_t)load_avg[i] * load_decay[i] + (uint64_t)active * (LOAD_ONE - load_decay[i]);
+
+        if (active >= load_avg[i]) {
+            next += LOAD_ONE - 1u;
+        }
+        load_avg[i] = (uint32_t)(next >> SCHED_LOAD_SHIFT);
+    }
+}
+
+void sched_loadavg(uint32_t avg[3])
+{
+    uint32_t flags = kirq_save();
+
+    avg[0] = load_avg[0];
+    avg[1] = load_avg[1];
+    avg[2] = load_avg[2];
+    kirq_restore(flags);
+}
+
 /**
  * Park the processor until an interrupt, and return with interrupts disabled.
  *

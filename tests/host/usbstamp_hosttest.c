@@ -19,6 +19,7 @@ extern char *strstr(const char *text, const char *part);
 
 process_t *proc_list;
 process_t *current_proc;
+process_t *proc_idle;
 static process_t processes[2];
 static uint32_t clock_us, irq_flags;
 static unsigned records;

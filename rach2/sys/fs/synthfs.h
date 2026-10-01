@@ -51,6 +51,7 @@ enum vnode_kind {
     VNODE_PROC_CPUINFO,     /* /proc/cpuinfo: what cpuid says of the processor */
     VNODE_PROC_SYS_DIR,     /* /proc/sys and a directory of its tree */
     VNODE_PROC_SYS_FILE,    /* a file of /proc/sys: a limit or a name */
+    VNODE_PROC_LOADAVG,     /* /proc/loadavg: the load averages and task counts */
     VNODE_ENOENT,           /* under a synthetic mount, but no such entry */
     VNODE_ENOTDIR           /* under a synthetic mount, a non-dir used as a directory */
 };
@@ -85,6 +86,7 @@ enum vnode_kind {
 #define SYNTH_PROC_CPUINFO     27
 #define SYNTH_PROC_SYSCTL      28
 #define SYNTH_PROC_PIDMOUNTS   29
+#define SYNTH_PROC_LOADAVG     30
 
 /* PID sentinel meaning "the calling process" (/proc/self), resolved by the
  * glue. */

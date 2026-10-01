@@ -10,7 +10,9 @@
  * DT_UNKNOWN, and never DT_REG for anything but a regular file; /dev/null,
  * /proc/self, /proc/meminfo, /proc/cpuinfo, /proc/net and /proc/sys have
  * their own types by name. /proc/cpuinfo is a record of processor 0 with its
- * flags, /proc/self/mounts reads as /proc/mounts,
+ * flags, /proc/self/mounts reads as /proc/mounts, /proc/loadavg has three
+ * loads with two decimals, the running and all tasks, the probe among them,
+ * and a last process ID no lower than its own, /proc has no process 0,
  * /proc/sys/fs/inotify/max_user_watches reads 8192, and a working
  * directory of /proc/sys/kernel is named so by getcwd. Each listing must end
  * without an error from readdir and check at least one entry, and lstat may
@@ -1025,8 +1027,31 @@ static int slurp(const char *path, char *buf, int cap)
     return n;
 }
 
-/* /proc/cpuinfo's record, /proc/self/mounts, a /proc/sys file, and a working
- * directory in /proc/sys. */
+/* Whether `s` begins with three loads of two decimals each, as
+   /proc/loadavg writes them, each followed by a space; the text after them
+   in `*rest`. */
+static int three_loads(const char *s, const char **rest)
+{
+    int i;
+
+    for (i = 0; i < 3; i++) {
+        if (*s < '0' || *s > '9') {
+            return 0;
+        }
+        while (*s >= '0' && *s <= '9') {
+            s++;
+        }
+        if (s[0] != '.' || s[1] < '0' || s[1] > '9' || s[2] < '0' || s[2] > '9' || s[3] != ' ') {
+            return 0;
+        }
+        s += 4;
+    }
+    *rest = s;
+    return 1;
+}
+
+/* /proc/cpuinfo's record, /proc/self/mounts, /proc/loadavg and no process
+ * 0, a /proc/sys file, and a working directory in /proc/sys. */
 static int proc_texts(void)
 {
     char buf[4096];
@@ -1042,6 +1067,22 @@ static int proc_texts(void)
         if (slurp("/proc/mounts", mounts, sizeof(mounts)) <= 0 ||
             slurp("/proc/self/mounts", buf, sizeof(buf)) <= 0 || strcmp(buf, mounts) != 0) {
             return fail("/proc/self/mounts is not /proc/mounts");
+        }
+    }
+    {
+        unsigned running = 0, total = 0, last = 0;
+        const char *rest = buf;
+        char end = 0;
+        struct stat st;
+
+        if (slurp("/proc/loadavg", buf, sizeof(buf)) <= 0 || !three_loads(buf, &rest) ||
+            sscanf(rest, "%u/%u %u%c", &running, &total, &last, &end) != 4 || end != '\n' ||
+            running < 1 || total < running || last < (unsigned)getpid()) {
+            return fail("/proc/loadavg is not three loads, the running and all tasks, and the "
+                        "last process ID");
+        }
+        if (stat("/proc/0", &st) == 0 || errno != ENOENT || type_of("/proc", "0") != -1) {
+            return fail("/proc has a process 0");
         }
     }
     if (slurp("/proc/sys/fs/inotify/max_user_watches", buf, sizeof(buf)) < 0 ||

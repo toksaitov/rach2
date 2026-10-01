@@ -340,6 +340,9 @@ extern process_t *proc_list;
 /* Process 0, the kernel's idle process, which the debug shell returns to. */
 extern process_t *proc_idle;
 
+/** The last process ID given out, 0 before the first. */
+uint32_t proc_last_pid(void);
+
 /* Currently running process. */
 extern process_t *current_proc;
 

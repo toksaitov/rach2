@@ -57,6 +57,12 @@ int proc_in_syscall(void)
 extern volatile uint32_t init_pid;
 
 static uint32_t next_pid = 0;
+static uint32_t last_pid;
+
+uint32_t proc_last_pid(void)
+{
+    return last_pid;
+}
 
 /**
  * Reset the process table to its boot state and check the record's layout.
@@ -154,6 +160,7 @@ process_t *alloc_process(void)
         }
         candidate = next_pid++;
     } while (get_process(candidate) != NULL);
+    last_pid = candidate;
     p->pid = candidate;
     p->tgid = candidate;
     p->state = PROC_READY;

@@ -403,6 +403,7 @@ static int synth_global_file(struct comp name)
                  {"stat", VNODE_PROC_STAT_SYS},
                  {"meminfo", VNODE_PROC_MEMINFO},
                  {"cpuinfo", VNODE_PROC_CPUINFO},
+                 {"loadavg", VNODE_PROC_LOADAVG},
                  {"interrupts", VNODE_PROC_INTERRUPTS},
                  {"console", VNODE_PROC_CONSOLE},
                  {"mounts", VNODE_PROC_MOUNTS},
@@ -532,8 +533,8 @@ int synth_classify(const char *path, struct vpath *vp)
             pid = SYNTH_PID_SELF;
         } else {
             pid = comp_uint(c[1]);
-            if (pid < 0) {
-                vp->kind = VNODE_ENOENT; /* /proc/<not-a-pid> */
+            if (pid <= 0) {
+                vp->kind = VNODE_ENOENT; /* /proc/<not-a-pid>, and the idle process's 0 */
                 return vp->kind;
             }
         }

@@ -4669,3 +4669,46 @@ new
     st.f_files = 1;
     st.f_ffree = 0;
 end
+
+# /proc/loadavg, and no process 0 in /proc.
+
+fault loadavg-missing
+probe direntmusl
+file rach2/sys/fs/synthfs.c
+expect DIRENTMUSL FAIL (/proc/loadavg is not three loads
+old
+                 {"loadavg", VNODE_PROC_LOADAVG},
+new
+end
+
+fault loadavg-no-running
+probe direntmusl
+file rach2/sys/fs/procfs.c
+expect DIRENTMUSL FAIL (/proc/loadavg is not three loads
+old
+    ap_u32(t, active);
+    ap_ch(t, '/');
+new
+    ap_u32(t, active - active);
+    ap_ch(t, '/');
+end
+
+fault proc-zero-opens
+probe direntmusl
+file rach2/sys/fs/synthfs.c
+expect DIRENTMUSL FAIL (/proc has a process 0
+old
+            if (pid <= 0) {
+new
+            if (pid < 0) {
+end
+
+fault proc-zero-listed
+probe direntmusl
+file rach2/sys/fs/procfs.c
+expect DIRENTMUSL FAIL (/proc has a process 0
+old
+        if (p->pid != p->tgid || p == proc_idle) {
+new
+        if (p->pid != p->tgid) {
+end

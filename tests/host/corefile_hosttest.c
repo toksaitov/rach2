@@ -827,6 +827,11 @@ uint32_t procfs_ino_cpuinfo(void)
     return 0;
 }
 
+uint32_t procfs_ino_loadavg(void)
+{
+    return 0;
+}
+
 uint32_t procfs_ino_sys(int entry)
 {
     (void)entry;

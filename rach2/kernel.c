@@ -265,6 +265,7 @@ static void timer_handler(isr_params_t *params)
     }
 
     sched_account_tick((params->cs & 3u) == 3u);
+    sched_load_tick();
 
     /* Runs regardless of in_syscall, so a sleeper parked inside its syscall
      * still becomes runnable on time. */

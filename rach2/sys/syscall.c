@@ -1796,10 +1796,12 @@ static int32_t sys_times(isr_params_t *params)
 /**
  * System statistics (sysinfo(2)).
  *
- * Fills the 64-byte i386 struct sysinfo: uptime in seconds, the count of
- * process records including unreaped children, total and free RAM from the
- * frame counts, mem_unit = 1; CPU load, shared, buffer and swap figures are
- * reported as zero (not tracked). EBX = struct sysinfo *.
+ * Fills the 64-byte i386 struct sysinfo: uptime in seconds, the load
+ * averages the scheduler keeps (`sched_loadavg`), with 16 bits of fraction
+ * as Linux gives them, the count of process records including unreaped
+ * children, total and free RAM from the frame counts, mem_unit = 1; shared,
+ * buffer and swap figures are reported as zero (not tracked). EBX = struct
+ * sysinfo *.
  */
 static int32_t sys_sysinfo(isr_params_t *params)
 {
@@ -1820,6 +1822,7 @@ static int32_t sys_sysinfo(isr_params_t *params)
         char _f[8];
     } si;
     uint32_t i;
+    uint32_t avg[3];
     int n = 0;
 
     if (!params->ebx) {
@@ -1832,13 +1835,14 @@ static int32_t sys_sysinfo(isr_params_t *params)
             n++;
         }
     }
-    /* Fill every field of the ABI struct explicitly: uptime, the process count,
-     * mem_unit, and physical RAM (from the frame bitmap) are real; load average
-     * and swap are not tracked, so they are reported as zero. */
+    /* Fill every field of the ABI struct explicitly: uptime, the loads, the
+     * process count, mem_unit, and physical RAM (from the frame bitmap) are
+     * real; swap is not tracked, so it is reported as zero. */
     si.uptime = (int32_t)(kernel_ticks / 100);
-    si.loads[0] = 0;
-    si.loads[1] = 0;
-    si.loads[2] = 0;
+    sched_loadavg(avg);
+    si.loads[0] = avg[0] << (16 - SCHED_LOAD_SHIFT);
+    si.loads[1] = avg[1] << (16 - SCHED_LOAD_SHIFT);
+    si.loads[2] = avg[2] << (16 - SCHED_LOAD_SHIFT);
     si.totalram = frame_total_count() * PAGE_SIZE;
     si.freeram = frame_free_count() * PAGE_SIZE;
     si.sharedram = 0;

@@ -81,6 +81,7 @@
 #define PROCFS_INO_NETARP      0x10Au
 #define PROCFS_INO_NETTCP      0x10Bu
 #define PROCFS_INO_CPUINFO     0x112u
+#define PROCFS_INO_LOADAVG     0x113u
 #define PROCFS_INO_SYS         0x140u /* and the entries of /proc/sys after it */
 #define PROCFS_INO_PID_BASE    0x200u
 
@@ -129,6 +130,9 @@ static const char *procfs_kind_name(const struct vpath *vp)
     }
     if (vp->kind == VNODE_PROC_CPUINFO) {
         return "/proc/cpuinfo";
+    }
+    if (vp->kind == VNODE_PROC_LOADAVG) {
+        return "/proc/loadavg";
     }
     if (vp->kind == VNODE_PROC_SYS_FILE) {
         return "/proc/sys";
@@ -1233,7 +1237,7 @@ int procfs_nth_pid(int n)
         return -1;
     }
     for (p = proc_list; p; p = p->next) {
-        if (p->pid != p->tgid) {
+        if (p->pid != p->tgid || p == proc_idle) {
             continue;
         }
         if (seen == n) {
@@ -1287,6 +1291,11 @@ uint32_t procfs_ino_meminfo(void)
 uint32_t procfs_ino_cpuinfo(void)
 {
     return PROCFS_INO_CPUINFO;
+}
+
+uint32_t procfs_ino_loadavg(void)
+{
+    return PROCFS_INO_LOADAVG;
 }
 
 uint32_t procfs_ino_sys(int entry)
@@ -1392,6 +1401,9 @@ uint32_t procfs_fd_ino(struct fd_entry *e)
     }
     if (pf->origin_file == SYNTH_PROC_CPUINFO) {
         return PROCFS_INO_CPUINFO;
+    }
+    if (pf->origin_file == SYNTH_PROC_LOADAVG) {
+        return PROCFS_INO_LOADAVG;
     }
     if (pf->origin_file == SYNTH_PROC_SYSCTL) {
         return PROCFS_INO_SYS + (uint32_t)pf->origin_pid;
@@ -1536,6 +1548,37 @@ static int procfs_gen_uptime(struct procfs_text *t)
     ap_ticks_as_seconds(t, idle + busy);
     ap_ch(t, ' ');
     ap_ticks_as_seconds(t, idle);
+    ap_ch(t, '\n');
+    return t->len;
+}
+
+/**
+ * Render /proc/loadavg as Linux does: the load averages over one, five and
+ * fifteen minutes with two decimals (`sched_loadavg`), the processes running
+ * or ready to run and all the processes, threads counted, with a slash, and
+ * the last process ID given out.
+ */
+static int procfs_gen_loadavg(struct procfs_text *t)
+{
+    uint32_t avg[3], active, total;
+    int i;
+
+    sched_loadavg(avg);
+    sched_task_counts(&active, &total);
+    for (i = 0; i < 3; i++) {
+        uint32_t frac = ((avg[i] & ((1u << SCHED_LOAD_SHIFT) - 1u)) * 100u) >> SCHED_LOAD_SHIFT;
+
+        ap_u32(t, avg[i] >> SCHED_LOAD_SHIFT);
+        ap_ch(t, '.');
+        ap_ch(t, (char)('0' + frac / 10u));
+        ap_ch(t, (char)('0' + frac % 10u));
+        ap_ch(t, ' ');
+    }
+    ap_u32(t, active);
+    ap_ch(t, '/');
+    ap_u32(t, total);
+    ap_ch(t, ' ');
+    ap_u32(t, proc_last_pid());
     ap_ch(t, '\n');
     return t->len;
 }
@@ -2623,9 +2666,10 @@ static int procfs_needs_pid(int kind)
 {
     return kind != VNODE_PROC_CMDLINE && kind != VNODE_PROC_DISK && kind != VNODE_PROC_NET_DEV &&
            kind != VNODE_PROC_UPTIME && kind != VNODE_PROC_STAT_SYS && kind != VNODE_PROC_MEMINFO &&
-           kind != VNODE_PROC_CPUINFO && kind != VNODE_PROC_SYS_FILE && kind != VNODE_PROC_MOUNTS &&
-           kind != VNODE_PROC_USB && kind != VNODE_PROC_AUDIO && kind != VNODE_PROC_FILESYSTEMS &&
-           kind != VNODE_PROC_LOOP && kind != VNODE_PROC_INTERRUPTS && kind != VNODE_PROC_CONSOLE &&
+           kind != VNODE_PROC_CPUINFO && kind != VNODE_PROC_LOADAVG &&
+           kind != VNODE_PROC_SYS_FILE && kind != VNODE_PROC_MOUNTS && kind != VNODE_PROC_USB &&
+           kind != VNODE_PROC_AUDIO && kind != VNODE_PROC_FILESYSTEMS && kind != VNODE_PROC_LOOP &&
+           kind != VNODE_PROC_INTERRUPTS && kind != VNODE_PROC_CONSOLE &&
            kind != VNODE_PROC_NET_ROUTE && kind != VNODE_PROC_NET_ARP && kind != VNODE_PROC_NET_TCP;
 }
 
@@ -2712,6 +2756,8 @@ int procfs_open(const struct vpath *vp, int flags)
         len = procfs_gen_statsys(&text);
     } else if (vp->kind == VNODE_PROC_MEMINFO) {
         len = procfs_gen_meminfo(&text);
+    } else if (vp->kind == VNODE_PROC_LOADAVG) {
+        len = procfs_gen_loadavg(&text);
     } else if (vp->kind == VNODE_PROC_CPUINFO) {
         len = procfs_text_room(&text, CPUINFO_TEXT_MAX) == 0
                   ? (int)cpuinfo_text(text.buf, CPUINFO_TEXT_MAX)
@@ -2790,6 +2836,8 @@ int procfs_open(const struct vpath *vp, int flags)
         f->origin_file = SYNTH_PROC_MEMINFO;
     } else if (vp->kind == VNODE_PROC_CPUINFO) {
         f->origin_file = SYNTH_PROC_CPUINFO;
+    } else if (vp->kind == VNODE_PROC_LOADAVG) {
+        f->origin_file = SYNTH_PROC_LOADAVG;
     } else if (vp->kind == VNODE_PROC_SYS_FILE) {
         f->origin_file = SYNTH_PROC_SYSCTL;
     } else if (vp->kind == VNODE_PROC_MOUNTS) {

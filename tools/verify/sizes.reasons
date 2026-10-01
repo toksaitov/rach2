@@ -144,8 +144,8 @@ rach2/sys/fs/krffs.c:krffs_resize_at complexity 27 one file system operation ove
 rach2/sys/fs/krffs.c:krffs_resize_at lines 123 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/krffs.c:krffs_walk_err complexity 27 one file system operation over the on-disk format, each step a rule of the format
 
-rach2/sys/fs/procfs.c:procfs_open complexity 66 a dispatcher, one arm per command, read as a table
-rach2/sys/fs/procfs.c:procfs_open lines 182 a dispatcher, one arm per command, read as a table
+rach2/sys/fs/procfs.c:procfs_open complexity 68 a dispatcher, one arm per command, read as a table
+rach2/sys/fs/procfs.c:procfs_open lines 186 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/procfs.c:procfs_readlink_fd lines 138 a dispatcher, one arm per command, read as a table
 
 rach2/sys/fs/synthfs.c:synth_classify complexity 55 a dispatcher, one arm per command, read as a table
@@ -211,7 +211,7 @@ rach2/sys/syscall_fs.c:read_fd complexity 39 one system call's contract, its che
 rach2/sys/syscall_fs.c:read_fd lines 180 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:synth_dirent_at complexity 47 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_fs.c:synth_dirent_at lines 200 a dispatcher, one arm per command, read as a table
-rach2/sys/syscall_fs.c:synth_stat lines 213 a dispatcher, one arm per command, read as a table
+rach2/sys/syscall_fs.c:synth_stat lines 215 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_fs.c:sys__llseek complexity 35 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:sys__llseek lines 145 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:sys_fcntl64 lines 132 a dispatcher, one arm per command, read as a table

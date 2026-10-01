@@ -66,4 +66,17 @@ uint32_t sched_busy_ticks(void);
  * is not. Called by the timer alone. */
 void sched_account_tick(int user);
 
+/** Fold the active processes into the load averages every five seconds and
+ * a tick (`sched_loadavg`). Called by the timer alone. */
+void sched_load_tick(void);
+
+/** The load averages over one, five and fifteen minutes into `avg`, in
+ * fixed point with SCHED_LOAD_SHIFT bits of fraction, as Linux keeps them. */
+#define SCHED_LOAD_SHIFT 11
+void sched_loadavg(uint32_t avg[3]);
+
+/** The processes running or ready to run, the idle process aside, and all
+ * the processes, threads counted, into `*active` and `*total`. */
+void sched_task_counts(uint32_t *active, uint32_t *total);
+
 #endif

@@ -921,6 +921,7 @@ NO_PROC_INO(procfs_ino_interrupts)
 NO_PROC_INO(procfs_ino_loop)
 NO_PROC_INO(procfs_ino_meminfo)
 NO_PROC_INO(procfs_ino_cpuinfo)
+NO_PROC_INO(procfs_ino_loadavg)
 
 uint32_t procfs_ino_sys(int entry)
 {

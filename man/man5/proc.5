@@ -207,6 +207,16 @@ for APIC spurious interrupts and USB timer drains that found work without
 an observed pending USB interrupt after any USB interrupt source was enabled.
 The USB pump checks each configured controller's MSI vector or PCI IRQ.
 A message still in transit can also increase the fallback count.
+.It Pa /proc/loadavg
+One line, as Linux writes it: the load averages over one, five and fifteen
+minutes with two decimals, the processes running or ready to run and all
+the processes, threads counted, separated by a slash, and the last
+process ID given out.
+The averages are Linux's: every five seconds and a tick the processes
+running or ready to run are counted, and each average decays toward the
+count by the share of its minute span that five seconds is.
+Linux counts the processes in an uninterruptible wait as well, which this
+kernel does not tell apart from the other sleepers.
 .It Pa /proc/loop
 One line per occupied loop device:
 .Dl loopN BYTES rw|ro writes WRITES syncs SYNCS PATH
