@@ -82,7 +82,10 @@
 struct vfs_mount;
 
 /* What getattr reports and setattr changes. Times are seconds and
- * nanoseconds; `mode` includes the S_IF type bits. */
+ * nanoseconds; `mode` includes the S_IF type bits. `blocks` is the 512-byte
+ * units the node takes on its medium, which stat reports as st_blocks, when
+ * `blocks_known` is set; a type that does not count them leaves it clear,
+ * and stat rounds the size up instead. */
 struct vfs_stat {
     uint32_t mode;
     uint32_t uid;
@@ -97,6 +100,8 @@ struct vfs_stat {
     int64_t mtime_nsec;
     int64_t ctime_sec;
     int64_t ctime_nsec;
+    uint64_t blocks;
+    uint32_t blocks_known;
 };
 
 /* Which fields a setattr call is changing. */

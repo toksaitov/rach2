@@ -181,10 +181,14 @@ identifies a device node's device.
 .Pp
 The kernel reports an I/O block size of 4096 in
 .Va st_blksize .
-For stored files,
+On ext2,
 .Va st_blocks
-is the byte size rounded up to 512-byte units, including on ext2.
-It does not measure the blocks actually allocated to a sparse file.
+is the inode's count of 512-byte units the file holds on the volume,
+its indirect blocks included and nothing for a hole, as on Linux, so
+.Xr du 1
+and a copy that keeps holes see a sparse file.
+On the other file systems it is the byte size rounded up to 512-byte
+units.
 .Bl -tag -width "Mounted KRFFS"
 .It KRFFS root
 Nodes other than the root directory report stored owner, group, size,

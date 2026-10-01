@@ -220,6 +220,29 @@ static int dirents_contain(const unsigned char *b, int n, const char *name)
 static unsigned char iobuf[512];
 
 /**
+ * A file grown by ftruncate has a hole for its new bytes. Ext2 reports the
+ * blocks it holds as st_blocks, none for the hole, so that du and cp see
+ * it; KRFFS rounds the size up. st_blocks is the stat64 field at 56.
+ */
+static void check_blocks(unsigned magic)
+{
+    int fd = sys3(SYS_OPEN, (int)"/vp/d/s", O_RDWR | O_CREAT, 0644);
+
+    if (fd < 0 || sys2(SYS_FTRUNCATE, fd, 65536) != 0 || xstat("/vp/d/s") != 0) {
+        fail("ftruncate a new file to 64 KiB");
+    }
+    if (st_field(56) != (magic == STATFS_MAGIC_EXT2 ? 0u : 128u)) {
+        fail("st_blocks of a file that is one hole");
+    }
+    if (sys3(SYS_WRITE, fd, (int)"x", 1) != 1 || xstat("/vp/d/s") != 0 || st_field(56) == 0 ||
+        (magic == STATFS_MAGIC_EXT2 && st_field(56) >= 128)) {
+        fail("st_blocks after a write into the hole");
+    }
+    sys1(SYS_CLOSE, fd);
+    sys1(SYS_UNLINK, (int)"/vp/d/s");
+}
+
+/**
  * Check the root's hard-link contract and remove the extra name.
  *
  * Ext2 must preserve the inode and data through both names, then decrement
@@ -535,6 +558,7 @@ void _start(void)
     }
 
     check_link(magic);
+    check_blocks(magic);
 
     /* ---- statfs identities ---- */
     if (sys3(SYS_STATFS64, (int)"/proc", 84, (int)iobuf) != 0 ||

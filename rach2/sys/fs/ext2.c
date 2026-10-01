@@ -781,6 +781,8 @@ static int ext2_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
     st->atime_sec = n->atime;
     st->mtime_sec = n->mtime;
     st->ctime_sec = n->ctime;
+    st->blocks = n->blocks;
+    st->blocks_known = 1;
     vfs_ns_unlock(mnt);
     return 0;
 }

@@ -804,6 +804,8 @@ static void refusal_rows(void)
 
         check(OPS->getattr(&mnt, n, &st) == 0 && st.size == 5000000000ull,
               "a file past 4 GiB reports its size to stat");
+        check(st.blocks_known && st.blocks >= 200000 / 512 && st.blocks < 1024,
+              "and the sectors its 200000 bytes hold, which the new size did not add");
         check(OPS->open(&mnt, n, 0, &h) == 0, "and opens");
         if (h) {
             OPS->release(&mnt, h);

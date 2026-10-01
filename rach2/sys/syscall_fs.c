@@ -4822,9 +4822,11 @@ static void stat64_root_times(struct linux_stat64 *kst)
 static int32_t vfs_fill_stat64(struct linux_stat64 *kst, const struct vfs_ref *r)
 {
     struct vfs_stat st;
-    int rc = vfs_getattr(r->mnt, r->node, &st);
+    int rc;
     int i;
 
+    k_memset(&st, 0, sizeof(st));
+    rc = vfs_getattr(r->mnt, r->node, &st);
     if (rc != 0) {
         return rc;
     }
@@ -4841,7 +4843,7 @@ static int32_t vfs_fill_stat64(struct linux_stat64 *kst, const struct vfs_ref *r
     kst->st_rdev = st.rdev;
     kst->st_size = (long long)st.size;
     kst->st_blksize = 4096;
-    kst->st_blocks = (long long)((st.size + 511) / 512);
+    kst->st_blocks = (long long)(st.blocks_known ? st.blocks : (st.size + 511) / 512);
     kst->st_ino = st.ino;
     kst->__st_ino = (unsigned long)st.ino;
     kst->st_atime = (long)st.atime_sec;
