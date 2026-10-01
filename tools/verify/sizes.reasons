@@ -303,7 +303,7 @@ tests/host/ahci_hosttest.c:main lines 176 a test's rows, each a case, read as on
 tests/host/ata_hosttest.c:main lines 155 a test's rows, each a case, read as one table
 
 tests/host/bcache_hosttest.c:main complexity 115 a test's rows, each a case, read as one table
-tests/host/bcache_hosttest.c:main lines 677 a test's rows, each a case, read as one table
+tests/host/bcache_hosttest.c:main lines 679 a test's rows, each a case, read as one table
 
 tests/host/board_hosttest.c:main lines 104 a test's rows, each a case, read as one table
 

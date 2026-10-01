@@ -351,6 +351,46 @@ static void dirty_it(void *arg)
     bcache_dirty(arg);
 }
 
+/* On a write-through disk a sync writes without the disk's flush and
+   flushes once at its end, but a `first` is written with the flush:
+   here one dirtied during the first batch's writes, below an `after`,
+   which the next batch reaches in block order and must not leave in
+   the disk's cache when the `after` is written. A failure of the end's
+   flush is recorded against the device as a failed write is. */
+static void write_through_rows(void)
+{
+    struct bbuf *b;
+    int i;
+
+    bcache_set_limit(300);
+    wide.flags |= BLOCK_WRITE_THROUGH;
+    for (i = 0; i < 129; i++) {
+        b = bcache_get_blank(&wide, (uint64_t)(i < 128 ? i + 1 : 140));
+        b->data[0] = 0xB0;
+        bcache_dirty_ordered(b, i < 128 ? 0 : BCACHE_ORDER_AFTER);
+        bcache_release(b);
+    }
+    first_during_sync = 135;
+    watch_blk = 135;
+    watch_flags = BLOCK_REQ_NOFLUSH;
+    blockmax_flushes = 0;
+    check(bcache_sync(&wide) == 0 && first_during_sync == 0 && blockmax_flushes == 1,
+          "a sync on a write-through disk flushes once, at its end");
+    check(watch_flags == 0, "and a first it reaches in block order is written with the flush");
+    b = bcache_get(&wide, 7);
+    b->data[0] = 0xB1;
+    bcache_dirty(b);
+    bcache_release(b);
+    blockmax_flush_rc = -5;
+    failed_dev = 0;
+    check(bcache_sync(&wide) == -5 && failed_dev == &wide && (wide.flags & BLOCK_WRITE_FAILED),
+          "a failed flush at a sync's end is recorded against the device");
+    blockmax_flush_rc = 0;
+    watch_blk = 0;
+    wide.flags &= ~(BLOCK_WRITE_THROUGH | BLOCK_WRITE_FAILED);
+    bcache_invalidate(&wide);
+}
+
 int main(void)
 {
     struct bbuf *b, *c, *d;
@@ -919,39 +959,7 @@ int main(void)
           "and the late first goes to the device before the next after");
     bcache_invalidate(&wide);
 
-    /* On a write-through disk a sync writes without the disk's flush and
-       flushes once at its end, but a `first` is written with the flush:
-       here one dirtied during the first batch's writes, below an `after`,
-       which the next batch reaches in block order and must not leave in
-       the disk's cache when the `after` is written. A failure of the end's
-       flush is recorded against the device as a failed write is. */
-    bcache_set_limit(300);
-    wide.flags |= BLOCK_WRITE_THROUGH;
-    for (i = 0; i < 129; i++) {
-        b = bcache_get_blank(&wide, (uint64_t)(i < 128 ? i + 1 : 140));
-        b->data[0] = 0xB0;
-        bcache_dirty_ordered(b, i < 128 ? 0 : BCACHE_ORDER_AFTER);
-        bcache_release(b);
-    }
-    first_during_sync = 135;
-    watch_blk = 135;
-    watch_flags = BLOCK_REQ_NOFLUSH;
-    blockmax_flushes = 0;
-    check(bcache_sync(&wide) == 0 && first_during_sync == 0 && blockmax_flushes == 1,
-          "a sync on a write-through disk flushes once, at its end");
-    check(watch_flags == 0, "and a first it reaches in block order is written with the flush");
-    b = bcache_get(&wide, 7);
-    b->data[0] = 0xB1;
-    bcache_dirty(b);
-    bcache_release(b);
-    blockmax_flush_rc = -5;
-    failed_dev = 0;
-    check(bcache_sync(&wide) == -5 && failed_dev == &wide && (wide.flags & BLOCK_WRITE_FAILED),
-          "a failed flush at a sync's end is recorded against the device");
-    blockmax_flush_rc = 0;
-    watch_blk = 0;
-    wide.flags &= ~(BLOCK_WRITE_THROUGH | BLOCK_WRITE_FAILED);
-    bcache_invalidate(&wide);
+    write_through_rows();
     bcache_set_limit(BCACHE_BUFFERS);
 
     check(waited_on_host == 0, "no row reached the sleeping wait");
