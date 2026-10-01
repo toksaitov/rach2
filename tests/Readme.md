@@ -143,6 +143,8 @@ An installed root needs the probes' fixtures as well as their executables. Run t
 
 `sh tests/system/probe_roots_mutate.sh` requires all ten probes to pass on both roots. It separately rebuilds kernels that refuse ext2 hard links or report KRFFS's magic for ext2; `vfsprobe` must fail the corresponding assertion with exit status 1. After each mutation the script restores and touches the source, rebuilds, requires the original kernel bytes and reruns both roots. Its exit trap stops the test processes before restoring source. Logs, staged-byte comparisons, checksums and kernels remain under the printed `build/probe-roots-proof.*` directory.
 
+The ext2 suite runs `musl/mapmusl` on an ext2 root too, where a shared mapping of a file is written back to it; the default boot's KRFFS root refuses a writable one. `sh tests/system/ext2_map_mutate.sh` rebuilds kernels that release a mapping without writing its pages back, read a file without writing its mapped pages back first, or write a file without copying the bytes into its mapped pages; `mapmusl` must fail the corresponding row on the ext2 root, and the restored kernel must match the original and pass.
+
 On an installed machine, `sh tests/system/manual_probes.sh KEY ADDRESS probes DIR` supplies these prerequisites over SSH and runs nine of the ten. It leaves `orphanprobe` at `/orphanprobe` and prints the console steps for it, since only a rescue boot gives it the init role.
 
 ## Adding a guest test

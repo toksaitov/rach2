@@ -34,8 +34,9 @@ case "$root" in
     krffs)
         cp build/images/test.krffs "$prefix.krffs"
         for probe in "$@"; do
-            build/krffs/readfile.krffs "$prefix.krffs" "/$probe" "$prefix.$probe.staged"
-            cmp "build/tests/$probe" "$prefix.$probe.staged"
+            tag=$(echo "$probe" | tr / -)
+            build/krffs/readfile.krffs "$prefix.krffs" "/$probe" "$prefix.$tag.staged"
+            cmp "build/tests/$probe" "$prefix.$tag.staged"
         done
         ;;
     ext2)
@@ -43,9 +44,10 @@ case "$root" in
         . "$repo/tools/setup/e2fsprogs_path.sh"
         sh tools/image/mkext2.sh krffs/manifests/test.manifest "$prefix.vol" 16
         for probe in "$@"; do
-            debugfs -R "dump /$probe $prefix.$probe.staged" "$prefix.vol" \
-                >"$prefix.$probe.extract.log" 2>&1
-            cmp "build/tests/$probe" "$prefix.$probe.staged"
+            tag=$(echo "$probe" | tr / -)
+            debugfs -R "dump /$probe $prefix.$tag.staged" "$prefix.vol" \
+                >"$prefix.$tag.extract.log" 2>&1
+            cmp "build/tests/$probe" "$prefix.$tag.staged"
         done
         dd if=/dev/zero of="$prefix.disk" bs=1048576 count=1 2>/dev/null
         cat "$prefix.vol" >>"$prefix.disk"
@@ -56,6 +58,9 @@ esac
 cksum "$kernel" "$prefix".* >"$prefix.artifacts"
 
 for probe in "$@"; do
+    # A probe under build/tests/musl is named by its path there, and its
+    # files here by that path with dashes for the slashes.
+    tag=$(echo "$probe" | tr / -)
     case "$root" in
         krffs) set -- --initrd "$prefix.krffs" --append rach2.rescue ;;
         ext2) set -- --drive "file=$prefix.disk,format=raw,if=ide,index=0,media=disk" \
@@ -65,19 +70,19 @@ for probe in "$@"; do
         --kernel "$kernel" "$@" --qemu-arg=-cpu --qemu-arg=max \
         --net hubport,id=net0,hubid=0 --timeout 90 --steptmo 60 \
         --ok 'exited with status 0, returning to kernel shell' \
-        --log "$prefix.$probe.serial.log" \
+        --log "$prefix.$tag.serial.log" \
         "expect=Type 'help'" "send=exec /$probe" \
-        'expect=returning to kernel shell' >"$prefix.$probe.log" 2>&1 &
+        'expect=returning to kernel shell' >"$prefix.$tag.log" 2>&1 &
     child=$!
     status=0
     wait "$child" || status=$?
     stop_child
-    cat "$prefix.$probe.log" "$prefix.$probe.serial.log"
+    cat "$prefix.$tag.log" "$prefix.$tag.serial.log"
     [ "$status" -eq 0 ] || {
         echo "probe-roots: failed: $root $probe status $status" >&2; exit 1;
     }
     grep -Eq '(^|] )sys_exit: init process [0-9]+ exited with status 0, returning to kernel shell' \
-        "$prefix.$probe.serial.log" || {
+        "$prefix.$tag.serial.log" || {
         echo "probe-roots: missing init exit: $root $probe" >&2; exit 1;
     }
     echo "probe-roots: result: $root $probe pass"

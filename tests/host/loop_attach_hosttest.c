@@ -22,7 +22,7 @@ const struct vfs_type vfs_krffs_type = {0};
 static krffs_node_t *original, *relocated;
 static void (*waiting)(void);
 static int failures, depth, opened, refs, active, busy, resolves;
-static int open_error, sync_error, switch_mount, missing;
+static int open_error, sync_error, switch_mount, missing, mapped, map_in_sync;
 static char payload[4096], replacement[512], output[512];
 
 /** Record failed assertions. */
@@ -182,12 +182,24 @@ int32_t vfs_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t
     return rc;
 }
 
-/** Supply successful or failed backing syncs. */
+/** Supply successful or failed backing syncs, during which another process
+ * may map the file shared. */
 int vfs_fsync(struct vfs_mount *mnt, void *handle)
 {
     (void)mnt;
     (void)handle;
+    if (map_in_sync) {
+        mapped = 1;
+    }
     return sync_error;
+}
+
+/** Report whether a shared mapping has the file's pages in memory. */
+int filemap_disk_mapped(const struct vfs_mount *mnt, uint64_t ino)
+{
+    (void)mnt;
+    (void)ino;
+    return mapped;
 }
 
 /** Report the modeled writer's descriptor state. */
@@ -260,7 +272,7 @@ static void reset(void)
     mount.type = &vfs_krffs_type;
     mount.dev = &disk;
     depth = opened = refs = active = busy = resolves = 0;
-    open_error = sync_error = switch_mount = missing = 0;
+    open_error = sync_error = switch_mount = missing = mapped = map_in_sync = 0;
     waiting = NULL;
 }
 
@@ -323,12 +335,15 @@ static void remove_path(void)
     vfs_ns_unlock(&mount);
 }
 
-/** Check cleanup after each failing step under the namespace lock. */
+/** Check cleanup after each failing step under the namespace lock: a path
+ * that moved or went, an open or a sync that failed, a writer in flight, and
+ * a shared mapping of the file made before the attach or while its sync
+ * slept. */
 static void error_rows(void)
 {
     int row;
 
-    for (row = 0; row < 5; row++) {
+    for (row = 0; row < 7; row++) {
         int expected = -EBUSY;
 
         reset();
@@ -340,8 +355,12 @@ static void error_rows(void)
             open_error = expected = -EACCES;
         } else if (row == 3) {
             sync_error = expected = -EIO;
-        } else {
+        } else if (row == 4) {
             busy = 1;
+        } else if (row == 5) {
+            mapped = 1;
+        } else {
+            map_in_sync = 1;
         }
         check(loop_attach(0, "/image", 1) == expected,
               "attachment returns the failing step's error");

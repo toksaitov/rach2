@@ -23,6 +23,7 @@
  */
 
 #include "loop.h"
+#include "../mm/filemap.h"
 
 #include "../fs/bcache.h"
 #include "../fs/fd.h"
@@ -395,7 +396,10 @@ static int loop_resolve(const char *path, struct vfs_ref *ref)
 /**
  * Drain backing writes and recheck attachment under the mount lock.
  * Resolution and open run under the same lock. Keep it through publication
- * on success so no writer can relocate the node between these steps.
+ * on success so no writer can relocate the node between these steps. A
+ * shared mapping made while the fsync slept is found here too, since mmap
+ * does not take the lock: nothing between this check and the publication
+ * sleeps.
  */
 static int loop_prepare(struct vfs_ref *ref, void *handle, struct vfs_stat *st)
 {
@@ -407,7 +411,8 @@ static int loop_prepare(struct vfs_ref *ref, void *handle, struct vfs_stat *st)
     if (rc == 0 && (st->size == 0 || st->size % BLOCK_SECTOR_SIZE != 0)) {
         rc = -EINVAL;
     }
-    if (rc == 0 && (fd_node_busy(ref->mnt, ref->node) || loop_backs(ref->mnt, ref->node))) {
+    if (rc == 0 && (fd_node_busy(ref->mnt, ref->node) || loop_backs(ref->mnt, ref->node) ||
+                    filemap_disk_mapped(ref->mnt, st->ino))) {
         rc = -EBUSY;
     }
     return rc;
@@ -483,7 +488,7 @@ int loop_attach(int index, const char *path, int writable)
         loop_unclaim(loop);
         return -EINVAL; /* whole sectors, or the last one is a lie */
     }
-    if (loop_backs(ref.mnt, ref.node)) {
+    if (loop_backs(ref.mnt, ref.node) || filemap_disk_mapped(ref.mnt, st.ino)) {
         vfs_ns_unlock(ref.mnt);
         vfs_ref_release(&ref);
         loop_unclaim(loop);

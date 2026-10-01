@@ -61,8 +61,9 @@ int filemap_sync_file(const struct vfs_mount *mnt, uint64_t ino);
 void filemap_sync_all(void);
 
 /** msync of the mapping `f` of a region: its file's pages written back
- * when it maps a disk file's; 0 or the first failed write's error. */
-int filemap_msync(struct vm_file *f);
+ * when it maps a disk file's, and with `flush`, for MS_SYNC, the file
+ * system's fsync of the file after them; 0 or the first failure. */
+int filemap_msync(struct vm_file *f, int flush);
 
 /**
  * Shared anonymous memory, for MAP_SHARED|MAP_ANONYMOUS: pages of its own

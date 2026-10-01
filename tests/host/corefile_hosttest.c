@@ -841,6 +841,13 @@ void filemap_file_written(fd_entry_t *e, uint64_t off, uint32_t len)
     (void)len;
 }
 
+int filemap_disk_mapped(const struct vfs_mount *mnt, uint64_t ino)
+{
+    (void)mnt;
+    (void)ino;
+    return 0;
+}
+
 uint32_t procfs_ino_mounts(void)
 {
     return 0;

@@ -157,10 +157,9 @@ mapping of the file and by
 .Xr read 2 .
 A truncation takes the pages past the new end out of every mapping, and
 a later access maps the page the file has then.
-On a disk file system, the mapping maps the file's pages in memory,
-which every shared mapping of the file maps: a page is read from the file
-on first access, a store is seen by every such mapping, and the pages go
-back to the file at
+On ext2, the mapping maps the file's pages in memory, which every shared
+mapping of the file maps: a page is read from the file on first access, a
+store is seen by every such mapping, and the pages go back to the file at
 .Fn msync ,
 at
 .Xr fsync 2
@@ -169,15 +168,29 @@ and
 when a mapping through a descriptor open for writing is unmapped or its
 process ends, and before a
 .Xr read 2
-of the bytes they hold, and a
+of the bytes they hold, and the bytes a
 .Xr write 2
-to the file is copied into them.
+puts in the file are copied into them.
 A page goes back whole, up to the file's size, since the kernel does not
 ask the page tables which pages were stored to, and never past the size:
 a store past the end of the file is lost, where Linux sends
 .Dv SIGBUS
 for an access to a page wholly past it.
 A truncation takes the pages past the new end out of every mapping.
+A page that cannot go back when its last mapping goes is lost, and the
+kernel's log says so.
+A shared mapping through a descriptor open for writing of a file a loop
+device stands on is refused with
+.Er EBUSY ,
+as
+.Xr write 2
+refuses it, and a file whose pages shared mappings hold is not attached to
+a loop device.
+On another disk file system, whose inode numbers follow names, a shared
+mapping that may be written is refused with
+.Er ENODEV ,
+and a read-only one is served as a private one that may never be made
+writable.
 A read-only shared mapping through a descriptor not open for writing is
 served as a private one, which reads the same bytes, unless another
 shared mapping has the file's pages in memory, which it then maps too.
@@ -190,8 +203,8 @@ stick, is refused with
 a fault reads the file with interrupts off, where only a disk the kernel
 polls can answer, and such a device would stop the machine.
 .Pp
-Shared memory, anonymous or a file on tmpfs, has pages up to 1 GiB, the
-most a file in memory holds.
+Shared memory, anonymous, a file on tmpfs or the pages in memory of a file
+on ext2, has pages up to 1 GiB, the most a file in memory holds.
 A page at or past that, which a mapping reaches from a large offset or
 past 1 GiB of its own length, is never backed, and an access to it
 ends in
@@ -265,9 +278,9 @@ A region that is shared stays shared through
 .Fn mprotect :
 write permission is granted on its pages in place, never as copy on
 write.
-A shared mapping of a file whose descriptor was not open for writing,
-and a shared mapping of a file on a disk file system, which is served as
-a private one, may never be made writable:
+A shared mapping of a file whose descriptor was not open for writing, and
+a shared mapping of a file on a disk file system other than ext2, which is
+served as a private one, may never be made writable:
 .Fn mprotect
 refuses write over a range that reaches one with
 .Er EACCES ,
@@ -307,11 +320,14 @@ and
 which are refused.
 .Pp
 .Fn msync ,
-kernel call 144, writes back the pages of each shared mapping of a disk
-file the range reaches, the whole file's, with
+kernel call 144, writes back the pages of each shared mapping of a file on
+ext2 the range reaches, the whole file's, at once with
 .Dv MS_ASYNC
-as with
-.Dv MS_SYNC ;
+too, and with
+.Dv MS_SYNC
+the file system's
+.Xr fsync 2
+of the file after them;
 a shared mapping of a file in memory maps the file's pages themselves,
 and a private mapping has nothing to write.
 It checks its arguments and the range first.
@@ -469,6 +485,9 @@ A mapping of a file whose descriptor is not open for reading, or a
 writable shared one whose descriptor is not open for writing;
 .Fn mprotect
 asking write of a shared mapping of a file that may never be written.
+.It Er EBUSY
+A shared mapping, through a descriptor open for writing, of a file a loop
+device stands on.
 .It Er EBADF
 .Fa fd
 is not open, for a mapping without
@@ -479,10 +498,13 @@ The range
 is given is not within one VMA.
 .It Er EIO
 .Fn msync
-could not write a page of a shared mapping back to its file.
+could not write a page of a shared mapping back to its file, or the
+file system's fsync of it failed.
 .It Er ENODEV
 .Fa fd
-is not a file, or the file is on a loop device or a USB stick.
+is not a file, the file is on a loop device or a USB stick, or a
+writable shared mapping names a file on a disk file system other than
+ext2.
 .It Er ENOMEM
 A mapping has no suitable address range, would exceed
 .Dv RLIMIT_AS ,

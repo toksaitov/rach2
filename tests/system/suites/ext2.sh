@@ -21,6 +21,10 @@ fail() { echo "ext2-test: FAIL: $1" >&2; exit 1; }
 
 sh "$REPO/tests/system/probe_roots.sh" "$KERNEL" "$DISK.probes" ext2 \
     || fail "the probes on an ext2 root"
+# The mappings, whose shared mapping of a file is written back on ext2 and
+# refused on the KRFFS root the default suite boots.
+sh "$REPO/tests/system/probe_roots.sh" "$KERNEL" "$DISK.maps" ext2 musl/mapmusl \
+    || fail "the mappings on an ext2 root"
 
 sh "$REPO/tests/system/mkext2fixture.sh" "$DISK" "$MKMBR" > /dev/null || fail "the fixture disk"
 

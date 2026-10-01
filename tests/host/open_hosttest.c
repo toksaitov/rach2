@@ -838,6 +838,22 @@ void lock_close(const struct lock_key *key)
     lock_closer = current_proc;
 }
 
+/** The fsync of a file whose shared mapping is synced, which no row makes. */
+int vfs_fsync(struct vfs_mount *mnt, void *handle)
+{
+    (void)mnt;
+    (void)handle;
+    return 0;
+}
+
+/** The kernel log, which a failed write-back of a mapping writes to. */
+void klog(int level, const char *subsystem, const char *format, ...)
+{
+    (void)level;
+    (void)subsystem;
+    (void)format;
+}
+
 /** Initialize an unused wait queue. */
 void wait_queue_init(wait_queue_t *wq)
 {

@@ -37,6 +37,7 @@
 #include "tty/pty.h"
 #include "rtc.h"
 #include "block/loop.h"
+#include "fs/ext2.h"
 #include "fs/krffs.h"
 #include "fs/devfs.h"
 #include "fs/synthfs.h"
@@ -5057,18 +5058,46 @@ static int mmap_fault_readable(const struct vfs_mount *mnt)
     return (flags & BLOCK_FAULT_SAFE) || ((flags & BLOCK_POLLABLE) && !(flags & BLOCK_CALLER_SYNC));
 }
 
+/** 0 when the descriptor `e` may be mapped, shared or not, with the
+ * protection `prot`: ENODEV for what is not a file or is on a device a page
+ * fault cannot read (`mmap_fault_readable`), since the first touch of the
+ * mapping would read it there, and EACCES for a descriptor not open for
+ * reading, or for a writable shared mapping, not open for writing. */
+static int32_t mmap_file_check(const fd_entry_t *e, int shared, uint32_t prot)
+{
+    if (e->type != FD_TYPE_FILE || !e->ofd || !e->ofd->vmnt || !mmap_fault_readable(e->ofd->vmnt)) {
+        return -ENODEV;
+    }
+    if (!(e->flags & FD_FLAG_READ) ||
+        (shared && (prot & VM_PROT_WRITE) && !(e->flags & FD_FLAG_WRITE))) {
+        return -EACCES;
+    }
+    return 0;
+}
+
+/** Whether a shared mapping through `e` maps its file's pages in memory
+ * (`filemap_disk_shared`): those of a file on ext2 opened for writing, or of
+ * one such a mapping maps already. */
+static int mmap_disk_shares(const fd_entry_t *e)
+{
+    return e->ofd->vmnt->type == &vfs_ext2_type &&
+           ((e->flags & FD_FLAG_WRITE) || filemap_disk_mapped(e->ofd->vmnt, e->ofd->ino));
+}
+
 /**
- * The file half of `mmap_backing`: the file the descriptor `e`, number
- * `fd`, is open on, mapped shared or not. A private mapping of it is
- * VM_FILE, and a shared mapping of a file in memory is VM_SHARED, the
- * file's own pages. A file on a device a page fault cannot read
- * (`mmap_fault_readable`) is refused with ENODEV, since the first touch of
- * the mapping would read it there. A shared mapping of a file on a disk is
- * VM_SHARED too, the file's pages in memory, which its stores are written
- * back from (`filemap_disk_shared`), when the descriptor is open for
- * writing or another shared mapping has the pages in memory already; a
- * read-only one otherwise is served as a private one, which reads the same
- * bytes. A shared mapping through a descriptor not open for writing is given
+ * The file half of `mmap_backing`: the file the descriptor `e`, number `fd`, is
+ * open on, mapped shared or not. A private mapping of it is VM_FILE, and a
+ * shared mapping of a file in memory is VM_SHARED, the file's own pages; what
+ * `mmap_file_check` refuses is not mapped. A shared mapping of a file on ext2
+ * is VM_SHARED too, the file's pages in memory, which its stores are written
+ * back from (`filemap_disk_shared`), when the descriptor is open for writing or
+ * another shared mapping has the pages in memory already: ext2's inode number
+ * names one file for as long as anything holds it, which is what the pages are
+ * found by. A file a loop device stands on is refused with EBUSY, as write(2)
+ * refuses it. A shared mapping of a file of another disk file system, whose
+ * inode numbers follow names, is served as a private one when it is read-only,
+ * which reads the same bytes, and refused with ENODEV when it may be written. A
+ * shared mapping through a descriptor not open for writing is given
  * VM_PROT_NOWRITE, so that mprotect cannot make it writable later. It may
  * sleep, finding the file's path.
  */
@@ -5076,18 +5105,20 @@ static int32_t mmap_file(fd_entry_t *e, int fd, int shared, struct map_source *s
 {
     struct shmem *sh;
     int disk;
+    int32_t rc = mmap_file_check(e, shared, src->prot);
 
-    if (e->type != FD_TYPE_FILE || !e->ofd || !e->ofd->vmnt || !mmap_fault_readable(e->ofd->vmnt)) {
-        return -ENODEV;
-    }
-    if (!(e->flags & FD_FLAG_READ) ||
-        (shared && (src->prot & VM_PROT_WRITE) && !(e->flags & FD_FLAG_WRITE))) {
-        return -EACCES;
+    if (rc != 0) {
+        return rc;
     }
     sh = (shared && e->ofd->vmnt->type == &vfs_tmpfs_type) ? tmpfs_shmem(e->ofd->vnode) : NULL;
-    disk = shared && !sh &&
-           ((e->flags & FD_FLAG_WRITE) || filemap_disk_mapped(e->ofd->vmnt, e->ofd->ino));
-    if (shared && !(e->flags & FD_FLAG_WRITE)) {
+    disk = shared && mmap_disk_shares(e);
+    if (shared && !sh && !disk && (src->prot & VM_PROT_WRITE)) {
+        return -ENODEV;
+    }
+    if (disk && (e->flags & FD_FLAG_WRITE) && loop_backs(e->ofd->vmnt, e->ofd->vnode)) {
+        return -EBUSY;
+    }
+    if (shared && (!(e->flags & FD_FLAG_WRITE) || (!sh && !disk))) {
         src->prot |= VM_PROT_NOWRITE;
     }
     src->file = sh ? filemap_shared(e, sh) : disk ? filemap_disk_shared(e) : filemap_new(e);
@@ -5555,11 +5586,11 @@ int32_t sys_madvise(isr_params_t *params)
 /**
  * Write back the shared mappings of disk files among the regions of
  * [addr, end), which the caller found covered: each region's file whole
- * (`filemap_msync`). The writes sleep, so each region is found again by
- * address and its file held across its write. 0, or -EIO when a write
- * failed.
+ * (`filemap_msync`), and with `flush` the file system's fsync of it after.
+ * The writes sleep, so each region is found again by address and its file
+ * held across its write. 0, or -EIO when a write failed.
  */
-static int32_t msync_range(uint32_t addr, uint32_t end)
+static int32_t msync_range(uint32_t addr, uint32_t end, int flush)
 {
     int32_t rc = 0;
 
@@ -5574,7 +5605,7 @@ static int32_t msync_range(uint32_t addr, uint32_t end)
         f = r->type == VM_SHARED ? r->file : NULL;
         if (f) {
             vm_file_get(f);
-            if (filemap_msync(f) != 0) {
+            if (filemap_msync(f, flush) != 0) {
                 rc = -EIO;
             }
             vm_file_put(f);
@@ -5587,11 +5618,12 @@ static int32_t msync_range(uint32_t addr, uint32_t end)
 /*
  * sys_msync - write a mapping back. Args: EBX=address, ECX=length,
  * EDX=flags. A shared mapping of a disk file has its file's pages written
- * back (`msync_range`), with MS_ASYNC as with MS_SYNC; a shared mapping of a
- * file in memory maps the file's pages themselves, and a private one has
- * nothing to write. Returns 0, EIO for a failed write, ENOMEM for a range
- * with a page in no region, or EINVAL, which a range that runs past user
- * space is too, judged by the length as given, as `sys_madvise` judges it.
+ * back (`msync_range`), at once with MS_ASYNC too, and with MS_SYNC the
+ * file system's fsync after; a shared mapping of a file in memory maps the
+ * file's pages themselves, and a private one has nothing to write. Returns
+ * 0, EIO for a failed write, ENOMEM for a range with a page in no region, or
+ * EINVAL, which a range that runs past user space is too, judged by the
+ * length as given, as `sys_madvise` judges it.
  */
 int32_t sys_msync(isr_params_t *params)
 {
@@ -5610,7 +5642,7 @@ int32_t sys_msync(isr_params_t *params)
     if (vm_covered(&current_proc->mm->vm, addr, addr + len) != len) {
         return -ENOMEM;
     }
-    return msync_range(addr, addr + len);
+    return msync_range(addr, addr + len, (flags & 4u) != 0); /* MS_SYNC */
 }
 
 /* The three kinds of target setpriority(2) and getpriority(2) take. */

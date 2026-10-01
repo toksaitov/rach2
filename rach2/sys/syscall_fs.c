@@ -553,7 +553,10 @@ static int32_t write_ops(fd_entry_t *entry, const char __user *buf, uint32_t cou
  * the set-id bits, through the node as the write left it (a grow relocates a
  * KRFFS file and repoints every holder), and a privileged writer is exempt:
  * that is the CAP_FSETID analogue, without which any root process disarms
- * /bin/su by rewriting it.
+ * /bin/su by rewriting it. A file whose pages shared mappings hold in memory
+ * has the bytes written copied into them under the mount's namespace lock,
+ * held from before the write, so that no write-back of the pages comes
+ * between the two (`filemap_file_written`).
  */
 static int32_t file_write(fd_entry_t *entry, const char __user *buf, uint32_t count,
                           const uint64_t *at)
@@ -561,6 +564,7 @@ static int32_t file_write(fd_entry_t *entry, const char __user *buf, uint32_t co
     struct open_file *ofd = entry->ofd;
     uint64_t pos;
     int32_t written;
+    int mapped;
 
     if (!(entry->flags & FD_FLAG_WRITE)) {
         return -EBADF;
@@ -587,7 +591,17 @@ static int32_t file_write(fd_entry_t *entry, const char __user *buf, uint32_t co
             pos = vst.size;
         }
     }
+    mapped = filemap_disk_mapped(ofd->vmnt, ofd->ino);
+    if (mapped) {
+        vfs_ns_lock(ofd->vmnt);
+    }
     written = vfs_write(ofd->vmnt, ofd->fhandle, (const char __force *)buf, count, pos);
+    if (written > 0 && mapped) {
+        filemap_file_written(entry, pos, (uint32_t)written);
+    }
+    if (mapped) {
+        vfs_ns_unlock(ofd->vmnt);
+    }
     if (written > 0) {
         if (!cred_privileged()) {
             if (entry->node) {
@@ -601,11 +615,8 @@ static int32_t file_write(fd_entry_t *entry, const char __user *buf, uint32_t co
         }
     }
     fd_ofd_unlock(ofd);
-    if (written > 0) {
-        filemap_file_written(entry, pos, (uint32_t)written);
-        if (inotify_watches) {
-            inotify_desc(ofd, IN_MODIFY);
-        }
+    if (written > 0 && inotify_watches) {
+        inotify_desc(ofd, IN_MODIFY);
     }
     return written;
 }

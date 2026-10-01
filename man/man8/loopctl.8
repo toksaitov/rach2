@@ -1,4 +1,4 @@
-.Dd September 21, 2026
+.Dd October 1, 2026
 .Dt LOOPCTL 8
 .Os
 .Sh NAME
@@ -118,6 +118,8 @@ Errors include:
 The caller is not root.
 .It Er EBUSY
 The file is already attached, even through another hard link;
+shared mappings of it hold its pages in memory, which a write through the
+device would not reach;
 a description remains busy when attachment checks it;
 the path resolves on another volume after the lock wait;
 the device has a mount or a held buffer;

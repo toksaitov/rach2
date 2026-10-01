@@ -272,10 +272,13 @@ probe mapmusl
 file rach2/sys/syscall_proc.c
 expect MAPMUSL FAIL (mprotect made a read-only file's shared mapping writable
 old
-    if (shared && !(e->flags & FD_FLAG_WRITE)) {
+    if (shared && (!(e->flags & FD_FLAG_WRITE) || (!sh && !disk))) {
         src->prot |= VM_PROT_NOWRITE;
     }
 new
+    if (shared && !sh && !disk) {
+        src->prot |= VM_PROT_NOWRITE;
+    }
 end
 
 fault mprotect-private-readonly-refused
@@ -283,9 +286,9 @@ probe mapmusl
 file rach2/sys/syscall_proc.c
 expect MAPMUSL FAIL (mprotect of a read-only file's private mapping
 old
-    if (shared && !(e->flags & FD_FLAG_WRITE)) {
+    if (shared && (!(e->flags & FD_FLAG_WRITE) || (!sh && !disk))) {
 new
-    if (!(e->flags & FD_FLAG_WRITE)) {
+    if (!(e->flags & FD_FLAG_WRITE) || (!sh && !disk)) {
 end
 
 fault mmap2-offset-past-32-bits
@@ -4556,37 +4559,27 @@ new
     put(&t, "wp\t\t: yes\nflag\t\t:");
 end
 
-# Shared mappings of a file on a disk file system.
+# Shared mappings of a file on a disk file system: on the KRFFS root of the
+# default boot, one that may be written is refused; tests/system/ext2_map_mutate.sh
+# has the faults of the ext2 rows.
 
-fault disk-share-no-release-write-back
+fault disk-share-krffs-writable
 probe mapmusl
-file rach2/sys/mm/filemap.c
-expect MAPMUSL FAIL (the stores of a shared mapping of a file on the root did not reach it
+file rach2/sys/syscall_proc.c
+expect MAPMUSL FAIL (a writable shared mapping of a KRFFS file was not ENODEV
 old
-    if (m->ds && (m->entry.flags & FD_FLAG_WRITE)) {
-        (void)dshare_write_back(m->ds, m, 0, m->ds->sh.npages);
-    }
-    locked = m->entry.ofd ? fd_release_lock(&m->entry) : NULL;
-new
-    locked = m->entry.ofd ? fd_release_lock(&m->entry) : NULL;
-end
-
-fault disk-share-read-before-write-back
-probe mapmusl
-file rach2/sys/syscall_fs.c
-expect MAPMUSL FAIL (a store in a shared mapping of a file on the root did not reach read
-old
-    if (filemap_file_reading(ofd->vmnt, ofd->ino, at ? *at : ofd->offset, count) != 0) {
-        return -EIO;
+    if (shared && !sh && !disk && (src->prot & VM_PROT_WRITE)) {
+        return -ENODEV;
     }
 new
 end
 
-fault disk-share-write-not-seen
+fault disk-share-krffs-fallback-writable
 probe mapmusl
-file rach2/sys/syscall_fs.c
-expect MAPMUSL FAIL (a write to a file on the root was not seen through its shared mapping
+file rach2/sys/syscall_proc.c
+expect MAPMUSL FAIL (a read-only shared mapping of a KRFFS file was made writable
 old
-        filemap_file_written(entry, pos, (uint32_t)written);
+    if (shared && (!(e->flags & FD_FLAG_WRITE) || (!sh && !disk))) {
 new
+    if (shared && !(e->flags & FD_FLAG_WRITE)) {
 end
