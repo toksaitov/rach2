@@ -1,7 +1,9 @@
 #!/bin/sh
 # man: read a page of this system's manual.
 #
-# Usage: man [-w] [SECTION] NAME
+# Usage: man [-w] [SECTION] NAME...
+#        man -k WORD...
+#        man -f NAME...
 #
 # The pages are the preformatted, gzipped texts under /usr/share/man/catN,
 # and /usr/share/man/aliases lists the names a page answers for besides
@@ -12,55 +14,142 @@
 # vendor/gnu/render_man.sh renders from their upstream sources and which
 # describe the upstream programs; the ports' page comes first when the
 # command the path finds by the name is a port's and not BusyBox's, as GNU's
-# ls is on that system. The text goes through the pager on a
-# terminal and straight to standard output otherwise; -w prints the page's
-# path instead. BusyBox's man applet
-# is not built: it finds a page only as a file, and a file per alias would
-# put four hundred nodes on every root, which the RAM root and a KRFFS disk
-# walk on every lookup.
+# ls is on that system. The text goes through the pager on a terminal and
+# straight to standard output otherwise; -w prints each page's path
+# instead. -k, which `apropos` is, prints the NAME line of every page whose
+# names or summary hold one of the words, in any case, and -f, which
+# `whatis` is, that of every page one of the names names. The lines are
+# read from the pages themselves, so there is no index to go stale.
+# BusyBox's man applet is not built: it finds a page only as a file, and a
+# file per alias would put four hundred nodes on every root, which the RAM
+# root and a KRFFS disk walk on every lookup.
 mandir=/usr/share/man
-where=
-if [ "$1" = -w ]; then
-    where=1
-    shift
-fi
-if [ $# -eq 2 ]; then
-    sections=$1; name=$2
-elif [ $# -eq 1 ]; then
-    sections="1 8 2 4 5 7"; name=$1
-else
-    echo "usage: man [-w] [SECTION] NAME" >&2
+usage="usage: man [-w] [SECTION] NAME... | man -k WORD... | man -f NAME..."
+mode=show
+case ${0##*/} in
+    apropos) mode=apropos ;;
+    whatis) mode=whatis ;;
+esac
+case $1 in
+    -w) mode=where; shift ;;
+    -k) mode=apropos; shift ;;
+    -f) mode=whatis; shift ;;
+    -h|--help) echo "$usage"; exit 0 ;;
+    -*) echo "$usage" >&2; exit 2 ;;
+esac
+if [ $# -eq 0 ]; then
+    echo "$usage" >&2
     exit 2
 fi
-show() {
-    if [ -n "$where" ]; then
-        echo "$1"
-    elif [ -t 1 ]; then
-        gunzip -c "$1" | "${MANPAGER:-${PAGER:-less}}"
-    else
-        gunzip -c "$1"
-    fi
-    exit $?
+
+# summaries: print `NAMES (SECTION) - SUMMARY` for every page, from the
+# header line and the NAME section each page begins with.
+summaries() {
+    for dir in "$mandir"/cat[1-8] "$mandir"/gnu/cat[1-8]; do
+        set -- "$dir"/*
+        [ -f "$1" ] && gunzip -c "$@" 2>/dev/null
+    done | awk '
+        !inname && /^[^ ].*\([0-9][^)]*\) *$/ {
+            section = $0
+            sub(/ *$/, "", section)
+            sub(/^.*\(/, "", section)
+            sub(/\)$/, "", section)
+            next
+        }
+        $0 == "NAME" { inname = 1; text = ""; next }
+        inname && /^ *$/ {
+            if (text != "") {
+                inname = 0
+                i = index(text, " - ")
+                if (i > 0)
+                    print substr(text, 1, i - 1) " (" section ") - " substr(text, i + 3)
+            }
+            next
+        }
+        inname { sub(/^ +/, ""); text = text == "" ? $0 : text " " $0 }'
 }
+
+if [ "$mode" = apropos ] || [ "$mode" = whatis ]; then
+    summaries | awk -v mode="$mode" -v words="$*" '
+        BEGIN { n = split(words, w, " ") }
+        {
+            i = index($0, " (")
+            k = split(substr($0, 1, i - 1), names, ", ")
+            rest = substr($0, i + 1)
+            for (j = 1; j <= n; j++) {
+                for (m = 1; m <= k; m++) {
+                    if (mode == "whatis" ? names[m] == w[j] : index(tolower(names[m]), tolower(w[j]))) {
+                        print names[m] " " rest
+                        hit[j] = 1
+                    }
+                }
+                if (mode == "apropos" && !hit[j] && index(tolower(rest), tolower(w[j]))) {
+                    print names[1] " " rest
+                    hit[j] = 1
+                }
+            }
+        }
+        END {
+            status = 0
+            for (j = 1; j <= n; j++)
+                if (!hit[j]) { print w[j] ": nothing appropriate" > "/dev/stderr"; status = 1 }
+            exit status
+        }'
+    exit $?
+fi
+
+sections="1 8 2 4 5 7"
+case $1 in
+    [0-9]*) if [ $# -gt 1 ]; then sections=$1; shift; fi ;;
+esac
+
+# ports NAME: set `found` to the ports' page of NAME, if there is one.
 ports() {
     for section in $sections; do
-        page="$mandir/gnu/cat$section/$name.$section"
-        [ -f "$page" ] && show "$page"
+        page="$mandir/gnu/cat$section/$1.$section"
+        if [ -f "$page" ]; then
+            found=$page
+            return 0
+        fi
     done
+    return 1
 }
-# The path is searched here, since this shell would answer for an applet
-# by its name.
-for dir in $(echo "$PATH" | tr ':' ' '); do
-    if [ -x "$dir/$name" ] && [ ! -d "$dir/$name" ]; then
-        [ "$(readlink -f "$dir/$name")" = /bin/busybox ] || ports
-        break
+
+# lookup NAME: set `found` to the page NAME shows, or fail.
+lookup() {
+    found=
+    # The path is searched here, since BusyBox's shell would answer for an
+    # applet by its name.
+    for dir in $(echo "$PATH" | tr ':' ' '); do
+        if [ -x "$dir/$1" ] && [ ! -d "$dir/$1" ]; then
+            if [ "$(readlink -f "$dir/$1")" != /bin/busybox ] && ports "$1"; then
+                return 0
+            fi
+            break
+        fi
+    done
+    for section in $sections; do
+        target=$(awk -v n="$1" -v s="$section" '$1 == n && $2 == s { print $3; exit }' "$mandir/aliases" 2>/dev/null)
+        page="$mandir/cat$section/${target:-$1}.$section"
+        if [ -f "$page" ]; then
+            found=$page
+            return 0
+        fi
+    done
+    ports "$1"
+}
+
+status=0
+for name; do
+    if ! lookup "$name"; then
+        echo "man: no page for $name" >&2
+        status=1
+    elif [ "$mode" = where ]; then
+        echo "$found"
+    elif [ -t 1 ]; then
+        gunzip -c "$found" | "${MANPAGER:-${PAGER:-less}}" || status=1
+    else
+        gunzip -c "$found" || status=1
     fi
 done
-for section in $sections; do
-    target=$(awk -v n="$name" -v s="$section" '$1 == n && $2 == s { print $3; exit }' "$mandir/aliases" 2>/dev/null)
-    page="$mandir/cat$section/${target:-$name}.$section"
-    [ -f "$page" ] && show "$page"
-done
-ports
-echo "man: no page for $name" >&2
-exit 1
+exit $status

@@ -7,6 +7,7 @@ add-shell 8 busybox-loginutils
 addgroup 8 busybox-loginutils
 adjtimex 1 busybox-miscutils
 alarm 2 setitimer
+apropos 1 man
 arch 1 busybox-coreutils
 arp 1 busybox-networking
 arping 1 busybox-networking
@@ -446,6 +447,7 @@ waitpid 2 wait
 watch 1 busybox-procps
 wc 1 busybox-coreutils
 wget 1 busybox-networking
+whatis 1 man
 which 1 busybox-debianutils
 who 1 busybox-coreutils
 whoami 1 busybox-coreutils

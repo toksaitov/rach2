@@ -19,17 +19,17 @@
 #             it needs in /usr/lib/i386-linux-gnu, as Debian's packages have
 #             them, from the packages fetch_chromium.sh unpacked
 #
-# Then it links /bin/bash, /bin/sh, /usr/bin/cc, /usr/bin/vi, /etc/mtab and
-# /run, writes autoconf's site file, links each BusyBox applet no file of the
-# path answers for, gives each program of /bin and /usr/bin its name in the
-# other, and of /sbin and /usr/sbin, puts the CA bundle in /etc/ssl, compiles
-# the console's terminfo entry, rach2.ti, renders the ports' manual pages with
-# render_man.sh, takes the set-id bit off OpenSSH's ssh-keysign, and has the
-# root's own ldconfig write /etc/ld.so.cache from the /etc/ld.so.conf the
-# manifest staged. A file the tree already has is refused rather than
-# replaced, so that what the manifest staged is what the image has; the one
-# file replaced is named where it is, and /bin/sh, which the manifest does not
-# stage, is a name of bash's file.
+# Then it links /bin/bash, /bin/sh, /bin/apropos, /bin/whatis, /usr/bin/cc,
+# /usr/bin/vi, /etc/mtab and /run, writes autoconf's site file, links each
+# BusyBox applet no file of the path answers for, gives each program of /bin
+# and /usr/bin its name in the other, and of /sbin and /usr/sbin, puts the
+# CA bundle in /etc/ssl, compiles the console's terminfo entry, rach2.ti,
+# renders the ports' manual pages with render_man.sh, takes the set-id bit
+# off OpenSSH's ssh-keysign, and has the root's own ldconfig write
+# /etc/ld.so.cache from the /etc/ld.so.conf the manifest staged. A file the
+# tree already has is refused rather than replaced, so that what the manifest
+# staged is what the image has; the one file replaced is named where it is,
+# and /bin/sh, which the manifest does not stage, is a name of bash's file.
 #
 
 set -e
@@ -142,6 +142,10 @@ echo "gnu: install: chromium: $(wc -l < "$WORK/new" | tr -d ' ') files"
 # suite would get BusyBox's sed where they name GNU's.
 ln -s ../usr/bin/bash "$TREE/bin/bash"
 ln "$TREE/usr/bin/bash" "$TREE/bin/sh"
+
+# The system's man answers to apropos and whatis, as man-db's does.
+ln -s man "$TREE/bin/apropos"
+ln -s man "$TREE/bin/whatis"
 ln -s gcc "$TREE/usr/bin/cc"
 ln -s vim "$TREE/usr/bin/vi"
 

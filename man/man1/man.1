@@ -2,18 +2,30 @@
 .Dt MAN 1
 .Os
 .Sh NAME
-.Nm man
-.Nd read a manual page
+.Nm man ,
+.Nm apropos ,
+.Nm whatis
+.Nd read a manual page, or find pages by name or subject
 .Sh SYNOPSIS
 .Nm
 .Op Fl w
 .Op Ar SECTION
-.Ar NAME
+.Ar NAME ...
+.Nm
+.Fl k
+.Ar WORD ...
+.Nm
+.Fl f
+.Ar NAME ...
+.Nm apropos
+.Ar WORD ...
+.Nm whatis
+.Ar NAME ...
 .Sh DESCRIPTION
 .Nm
-prints the manual page
-.Ar NAME ,
-from section
+prints the manual page of each
+.Ar NAME
+in turn, from section
 .Ar SECTION
 when one is given and otherwise from the first of sections 1, 8, 2, 4, 5
 and 7 that has it.
@@ -60,11 +72,42 @@ Otherwise the page goes to standard output as it is, so
 .Ql man NAME > FILE
 copies the page byte for byte.
 .Pp
-The option is:
+The options are:
 .Bl -tag -width Ds
 .It Fl w
-Print the path of the page that would be shown instead of the page.
+Print the path of each page that would be shown instead of the page.
+.It Fl k
+Print the line of every page whose names or summary hold one of the
+.Ar WORD Ns s ,
+in any case:
+.Ql NAME (SECTION) - SUMMARY ,
+for each name of the page that holds the word, or for its first name when
+only the summary does.
+This is
+.Nm apropos .
+.It Fl f
+Print the line of every page that has one of the
+.Ar NAME Ns s
+among its names.
+This is
+.Nm whatis .
 .El
+.Pp
+The lines are read from the NAME section each page begins with, on every
+call, so there is no index to keep current; a word or a name no page has
+prints
+.Ql WORD: nothing appropriate
+on standard error.
+On the GNU system
+.Nm apropos
+and
+.Nm whatis
+are links to
+.Nm ;
+elsewhere they are
+.Fl k
+and
+.Fl f .
 .Pp
 .Nm
 is a shell script of this project.
@@ -97,14 +140,19 @@ The names a page answers for.
 The pages of the GNU system's ports.
 .El
 .Sh EXIT STATUS
-The exit status is the pager's or 0, 1 when no page has the name, and 2
-for a wrong argument count, which prints
-.Ql usage: man [-w] [SECTION] NAME .
+The exit status is 0, or 1 when a pager failed or a name, or for
+.Fl k
+and
+.Fl f
+a word, found no page, and 2 for no name or an option it does not know,
+which prints the usage.
 .Sh EXAMPLES
 .Dl man rach2
 .Dl man 2 open
 .Dl man ls
 .Dl man -w 2 open
+.Dl man -k socket
+.Dl whatis sync
 .Sh SEE ALSO
 .Xr less 1 ,
 .Xr rach2 7
