@@ -989,18 +989,98 @@ static void pid_dir_rows(void)
     }
 }
 
+/* The value under `name` in the /proc/net/snmp group whose two lines begin
+   with `group`, or -1. */
+static int mib_value(const char *b, int n, const char *group, const char *name)
+{
+    int at, s, i, field = -1;
+    int glen = 0;
+
+    while (group[glen]) {
+        glen++;
+    }
+    for (at = 0; at + glen <= n; at++) {
+        for (i = 0; i < glen && b[at + i] == group[i]; i++) {
+        }
+        if (i == glen && (at == 0 || b[at - 1] == '\n')) {
+            break;
+        }
+    }
+    if (at + glen > n) {
+        return -1;
+    }
+    at += glen;
+    for (i = 0; field < 0 && at < n && b[at] != '\n'; i++) {
+        while (at < n && b[at] == ' ') {
+            at++;
+        }
+        for (s = 0; name[s] && at + s < n && b[at + s] == name[s]; s++) {
+        }
+        if (!name[s] && (at + s == n || b[at + s] == ' ' || b[at + s] == '\n')) {
+            field = i;
+        }
+        while (at < n && b[at] != ' ' && b[at] != '\n') {
+            at++;
+        }
+    }
+    while (at < n && b[at] != '\n') {
+        at++;
+    }
+    at += 1 + glen;
+    for (i = 0; field >= 0 && at < n && b[at] != '\n'; i++) {
+        while (at < n && b[at] == ' ') {
+            at++;
+        }
+        if (i == field) {
+            return first_uint(b + at, n - at);
+        }
+        while (at < n && b[at] != ' ' && b[at] != '\n') {
+            at++;
+        }
+    }
+    return -1;
+}
+
 /* The counts `ss -s` reads, by the names Linux gives them, with a listener
-   open. */
+   open on port 8080, and the MIB counters `nstat` reads, after a connection
+   to it over the loopback. */
 static void count_rows(void)
 {
+    unsigned char sa[16];
+    unsigned int args[3];
     int n = slurp("/proc/net/sockstat", buf, (int)sizeof(buf));
+    int fd, i;
 
     check(uint_after(buf, n, "sockets: used ") >= 1, "/proc/net/sockstat counts the sockets");
     check(uint_after(buf, n, "TCP: inuse ") >= 1, "and the listener among the connections in use");
     n = slurp("/proc/net/snmp", buf, (int)sizeof(buf));
     check(has_line_starting(buf, n, "Tcp: RtoAlgorithm") &&
-              contains(buf, n, " MaxConn CurrEstab\nTcp: 1 1000 60000 -1 "),
+              contains(buf, n, "\nTcp: 1 1000 60000 -1 "),
           "/proc/net/snmp has the Tcp names and under them their values");
+
+    fd = new_socket(args);
+    for (i = 0; i < 16; i++) {
+        sa[i] = 0;
+    }
+    sa[0] = AF_INET;
+    sa[2] = 0x1F; /* port 8080, big-endian */
+    sa[3] = 0x90;
+    sa[4] = 127;
+    sa[7] = 1;
+    args[0] = (unsigned int)fd;
+    args[1] = (unsigned int)(size_t)sa;
+    args[2] = 16;
+    check(fd >= 0 && syscall3(SYS_SOCKETCALL, SC_CONNECT, (int)(size_t)args, 0) == 0,
+          "a connection to the listener over the loopback");
+    n = slurp("/proc/net/snmp", buf, (int)sizeof(buf));
+    check(mib_value(buf, n, "Tcp:", "ActiveOpens") >= 1 &&
+              mib_value(buf, n, "Tcp:", "PassiveOpens") >= 1,
+          "/proc/net/snmp counts the connection as an active and a passive open");
+    check(mib_value(buf, n, "Tcp:", "OutSegs") >= 3 && mib_value(buf, n, "Ip:", "OutRequests") >= 3,
+          "and the handshake's three segments as sent by TCP and IP");
+    check(mib_value(buf, n, "Tcp:", "InSegs") >= 2 && mib_value(buf, n, "Ip:", "InReceives") >= 2,
+          "and the two the connect waited for as received");
+    syscall1(SYS_CLOSE, fd);
 }
 
 /* A datagram socket and a local one, each in its file: the UDP socket by

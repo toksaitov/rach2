@@ -180,6 +180,7 @@ void udp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len)
     uint16_t dst_port, udp_len, payload_len;
 
     if (len < UDP_HDR_SIZE) {
+        net_mib.udp_in_errors++;
         return;
     }
 
@@ -187,6 +188,7 @@ void udp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len)
     udp_len = read16be(data + 4);
 
     if (udp_len < UDP_HDR_SIZE || udp_len > len) {
+        net_mib.udp_in_errors++;
         return;
     }
     payload_len = (uint16_t)(udp_len - UDP_HDR_SIZE);
@@ -204,6 +206,7 @@ void udp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len)
             }
             if (cand->connected) {
                 if (cand->remote_ip == src_ip && cand->remote_port == src_port) {
+                    net_mib.udp_in_datagrams++;
                     socket_udp_deliver(cand, src_ip, src_port, data + UDP_HDR_SIZE, payload_len);
                     return;
                 }
@@ -214,7 +217,10 @@ void udp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len)
             }
         }
         if (listener) {
+            net_mib.udp_in_datagrams++;
             socket_udp_deliver(listener, src_ip, src_port, data + UDP_HDR_SIZE, payload_len);
+        } else {
+            net_mib.udp_no_ports++;
         }
     }
 }
@@ -253,6 +259,9 @@ int udp_tx(uint16_t src_port, uint32_t dst_ip, uint16_t dst_port, const uint8_t 
     k_memcpy(udp_tx_buf + UDP_HDR_SIZE, payload, plen);
 
     r = ip_tx(dst_ip, IP_PROTO_UDP, udp_tx_buf, udp_len, ttl);
+    if (r == 0) {
+        net_mib.udp_out_datagrams++;
+    }
 
     net_unlock(flags);
     return r;

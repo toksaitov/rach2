@@ -46,6 +46,48 @@
    and ARP layers read it. */
 extern uint8_t net_mac[6];
 
+/*
+ * The MIB counters /proc/net/snmp reports, named as RFC 1213 and Linux name
+ * them: the datagrams and segments each layer took in and sent out, and the
+ * ones it dropped, by reason. They count from boot and wrap at 2^32, as
+ * Linux's do on i386. Every path that changes one runs with interrupts off,
+ * under the discipline above, so they need no lock of their own.
+ */
+struct net_mib {
+    uint32_t ip_in_receives;       /* every datagram a card or the loopback gave IP */
+    uint32_t ip_in_hdr_errors;     /* a bad version, length or header checksum */
+    uint32_t ip_in_addr_errors;    /* for another host, not a group, or a spoofed source */
+    uint32_t ip_in_unknown_protos; /* a protocol other than ICMP, UDP and TCP */
+    uint32_t ip_in_discards;       /* a fragment, or a broadcast that is not UDP */
+    uint32_t ip_in_delivers;       /* handed to ICMP, UDP or TCP */
+    uint32_t ip_out_requests;      /* every datagram the protocols gave IP to send */
+    uint32_t ip_out_discards;      /* refused by a full card or loopback ring */
+    uint32_t ip_out_no_routes;     /* no interface reaches the destination */
+    uint32_t icmp_in_msgs;
+    uint32_t icmp_in_errors; /* shorter than an ICMP header */
+    uint32_t icmp_in_dest_unreachs;
+    uint32_t icmp_in_echos;
+    uint32_t icmp_in_echo_reps;
+    uint32_t icmp_out_msgs;
+    uint32_t icmp_out_echos;
+    uint32_t icmp_out_echo_reps;
+    uint32_t tcp_active_opens;  /* a connect's SYN */
+    uint32_t tcp_passive_opens; /* a listener's SYN-ACK */
+    uint32_t tcp_attempt_fails; /* a handshake ended by a reset or a timeout */
+    uint32_t tcp_estab_resets;  /* an open connection ended by a reset or a timeout */
+    uint32_t tcp_in_segs;
+    uint32_t tcp_out_segs;
+    uint32_t tcp_retrans_segs;
+    uint32_t tcp_in_errs; /* a bad length, header length or checksum */
+    uint32_t tcp_out_rsts;
+    uint32_t udp_in_datagrams;
+    uint32_t udp_no_ports; /* no socket has the port */
+    uint32_t udp_in_errors;
+    uint32_t udp_out_datagrams;
+};
+
+extern struct net_mib net_mib;
+
 /** Bring the network stack up once at boot, after PCI enumeration and
  * interrupts are ready so the NIC can be probed; 1 if the NIC is up, 0
  * otherwise. */

@@ -5124,3 +5124,12 @@ new
             p->tg->maxrss_kb = 0;
         }
 end
+
+fault tcp-opens-uncounted
+probe procprobe
+file rach2/sys/network/tcp/tcp.c
+expect FAIL: /proc/net/snmp counts the connection as an active and a passive open
+old
+    net_mib.tcp_active_opens++;
+new
+end

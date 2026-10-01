@@ -87,6 +87,10 @@ uint16_t ip_checksum(const uint8_t *buf, uint16_t len)
  * loopback ring or emitted carrying a loopback source. A genuine loopback
  * datagram has our own source by design, so the check depends on the delivery
  * path, not on the value.
+ *
+ * Each datagram counts in `net_mib` as received, and a dropped one by its
+ * reason. A multicast datagram, for a group no socket here can join, counts
+ * only as received, as Linux counts one for a group it has not joined.
  */
 void ip_rx(const uint8_t *data, uint16_t len, int from_loopback)
 {
@@ -95,12 +99,15 @@ void ip_rx(const uint8_t *data, uint16_t len, int from_loopback)
     uint32_t src_ip, dst_ip;
     int to_broadcast;
 
+    net_mib.ip_in_receives++;
     if (len < IP_HDR_SIZE) {
+        net_mib.ip_in_hdr_errors++;
         return;
     }
 
     /* Version must be 4. */
     if ((data[0] >> 4) != 4) {
+        net_mib.ip_in_hdr_errors++;
         return;
     }
 
@@ -108,40 +115,49 @@ void ip_rx(const uint8_t *data, uint16_t len, int from_loopback)
     ihl = data[0] & 0x0F;
     hdr_len = (uint16_t)(ihl * 4);
     if (hdr_len < IP_HDR_SIZE || hdr_len > len) {
+        net_mib.ip_in_hdr_errors++;
         return;
     }
 
     total_len = read16be(data + 2);
     if (total_len > len || total_len < hdr_len) {
+        net_mib.ip_in_hdr_errors++;
         return;
     }
 
     /* Drop fragments: MF set (0x2000) or a nonzero offset ([12:0]). */
     frag = read16be(data + 6);
     if (frag & 0x3FFF) {
+        net_mib.ip_in_discards++;
         return;
     }
 
     /* Verify the header checksum (a valid header sums to zero). */
     if (ip_checksum(data, hdr_len) != 0) {
+        net_mib.ip_in_hdr_errors++;
         return;
     }
 
     dst_ip = read32be(data + 16);
     to_broadcast = netdev_is_broadcast(dst_ip);
     if (!netdev_owns(dst_ip) && !to_broadcast) {
+        if ((dst_ip & 0xF0000000u) != 0xE0000000u) {
+            net_mib.ip_in_addr_errors++;
+        }
         return; /* not addressed to us */
     }
 
     src_ip = read32be(data + 12);
 
     if (!from_loopback && (netdev_owns(src_ip) || (src_ip & 0xFF000000u) == 0x7F000000u)) {
+        net_mib.ip_in_addr_errors++;
         return;
     }
 
     proto = data[9];
 
     if (to_broadcast && proto != IP_PROTO_UDP) {
+        net_mib.ip_in_discards++;
         return;
     }
 
@@ -149,15 +165,19 @@ void ip_rx(const uint8_t *data, uint16_t len, int from_loopback)
 
     switch (proto) {
     case IP_PROTO_ICMP:
+        net_mib.ip_in_delivers++;
         icmp_rx(src_ip, data + hdr_len, (uint16_t)(total_len - hdr_len));
         break;
     case IP_PROTO_UDP:
+        net_mib.ip_in_delivers++;
         udp_rx(src_ip, data + hdr_len, (uint16_t)(total_len - hdr_len));
         break;
     case IP_PROTO_TCP:
+        net_mib.ip_in_delivers++;
         tcp_rx(src_ip, dst_ip, data + hdr_len, (uint16_t)(total_len - hdr_len));
         break;
     default:
+        net_mib.ip_in_unknown_protos++;
         break;
     }
 }
@@ -343,6 +363,7 @@ int ip_tx(uint32_t dst_ip, uint8_t proto, const uint8_t *payload, uint16_t plen,
     }
 
     total_len = (uint16_t)(IP_HDR_SIZE + plen);
+    net_mib.ip_out_requests++;
 
     if (netdev_is_broadcast(dst_ip)) {
         out = ip_broadcast_iface(dst_ip);
@@ -350,6 +371,7 @@ int ip_tx(uint32_t dst_ip, uint8_t proto, const uint8_t *payload, uint16_t plen,
     } else {
         out = netdev_route(dst_ip, &route_ip);
         if (!out) {
+            net_mib.ip_out_no_routes++;
             klog(KLOG_WARN, "ip", "tx: no route: refused a datagram no interface reaches");
             return -ENETUNREACH;
         }
@@ -373,6 +395,7 @@ int ip_tx(uint32_t dst_ip, uint8_t proto, const uint8_t *payload, uint16_t plen,
         uint32_t slot;
 
         if (loop_head - loop_tail == LOOP_RING_SLOTS) {
+            net_mib.ip_out_discards++;
             loop_dropped++;
             if (!loop_drop_logged) {
                 loop_drop_logged = 1;
@@ -399,6 +422,7 @@ int ip_tx(uint32_t dst_ip, uint8_t proto, const uint8_t *payload, uint16_t plen,
             return -EOPNOTSUPP;
         }
         if (ethernet_tx(out, all_ones, ETH_TYPE_IP, ip_tx_buf, total_len) != NETDEV_TX_OK) {
+            net_mib.ip_out_discards++;
             return -ENOBUFS;
         }
         return 0;
@@ -417,6 +441,7 @@ int ip_tx(uint32_t dst_ip, uint8_t proto, const uint8_t *payload, uint16_t plen,
             return -EMSGSIZE; /* the frame's own limit, which no retry passes */
         }
         if (sent != NETDEV_TX_OK) {
+            net_mib.ip_out_discards++;
             return -ENOBUFS;
         }
     }

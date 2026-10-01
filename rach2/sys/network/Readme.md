@@ -127,6 +127,10 @@ Netconsole is the last destination of the kernel log (see [the kernel Readme](..
 
 Each broadcast Ethernet frame uses EtherType `0x88b5`. Its payload starts with a 16-byte big-endian header containing `RCH2`, a nonzero per-boot id, a sequence number, the payload length, and a one's-complement checksum. Frames have no acknowledgement or retry. Fixed buffers, the network interrupt lock, and a recursion guard permit calls from interrupt and error paths.
 
+## Counters
+
+`net_mib` in `net.h` keeps the MIB counters of RFC 1213 that Linux reports in `/proc/net/snmp` and `nstat` reads, for the layers this stack has: IP's datagrams in and out and the reasons it dropped some, ICMP's messages and echoes each way, TCP's opens, failed handshakes, reset connections, segments in, out and retransmitted, malformed segments and resets sent, and UDP's datagrams each way, those for a port no socket has and the malformed ones. Each is a 32-bit count from boot that wraps, as Linux's do on i386. The layers update them on paths the concurrency rule below already serializes, so they need no lock. TCP counts a segment sent only when IP took it, in `tcp_ip_tx`, and a connection ended by a reset or a timeout in `tcp_count_end`, as a failed attempt from a SYN state and as a reset from ESTABLISHED or CLOSE_WAIT; a connection a close aborts is not counted.
+
 ## Concurrency
 
 Protocol transmit buffers, driver descriptors, ARP state, and the socket and TCP lists are shared. IRQ handlers already run with interrupts disabled. Syscall paths use `net_lock` to save the interrupt flag and disable interrupts across shared-state operations. All three transmit paths also protect their descriptor handoff. The timer runs `netdev_poll`, `tcp_tick`, and `ip_loop_drain` in that order at 100 Hz.

@@ -2537,10 +2537,17 @@ static int procfs_gen_netsockstat(struct procfs_text *t)
     return t->len;
 }
 
+/** Append a space and `v`, one value of a /proc/net/snmp line. */
+static void ap_mib(struct procfs_text *t, uint32_t v)
+{
+    ap_ch(t, ' ');
+    ap_u32(t, v);
+}
+
 /**
  * Render /proc/net/snmp: of the MIB counters Linux keeps, the ones this
- * stack has, a line of names and a line of values for each group, which
- * `ss -s` and `nstat` read by name.
+ * stack has (`net_mib`), a line of names and a line of values for each
+ * group, in Linux's order, which `nstat` reads by name.
  *
  * Forwarding 2 is "not a router". The retransmission bounds are Linux's
  * milliseconds; MaxConn is -1, since the number of connections has no fixed
@@ -2548,17 +2555,52 @@ static int procfs_gen_netsockstat(struct procfs_text *t)
  */
 static int procfs_gen_netsnmp(struct procfs_text *t)
 {
+    const struct net_mib *m = &net_mib;
     struct tcp_counts tc;
 
     tcp_count(&tc);
-    ap_str(t, "Ip: Forwarding DefaultTTL\nIp: 2 ");
-    ap_int(t, IP_TTL_DEFAULT);
-    ap_str(t, "\nTcp: RtoAlgorithm RtoMin RtoMax MaxConn CurrEstab\nTcp: 1 ");
-    ap_int(t, TCP_RTO_MIN * 10); /* ticks of 10 ms */
-    ap_ch(t, ' ');
-    ap_int(t, TCP_RTO_MAX * 10);
-    ap_str(t, " -1 ");
-    ap_int(t, tc.estab);
+    ap_str(t, "Ip: Forwarding DefaultTTL InReceives InHdrErrors InAddrErrors InUnknownProtos"
+              " InDiscards InDelivers OutRequests OutDiscards OutNoRoutes\nIp: 2");
+    ap_mib(t, IP_TTL_DEFAULT);
+    ap_mib(t, m->ip_in_receives);
+    ap_mib(t, m->ip_in_hdr_errors);
+    ap_mib(t, m->ip_in_addr_errors);
+    ap_mib(t, m->ip_in_unknown_protos);
+    ap_mib(t, m->ip_in_discards);
+    ap_mib(t, m->ip_in_delivers);
+    ap_mib(t, m->ip_out_requests);
+    ap_mib(t, m->ip_out_discards);
+    ap_mib(t, m->ip_out_no_routes);
+    ap_str(t, "\nIcmp: InMsgs InErrors InDestUnreachs InEchos InEchoReps OutMsgs OutEchos"
+              " OutEchoReps\nIcmp:");
+    ap_mib(t, m->icmp_in_msgs);
+    ap_mib(t, m->icmp_in_errors);
+    ap_mib(t, m->icmp_in_dest_unreachs);
+    ap_mib(t, m->icmp_in_echos);
+    ap_mib(t, m->icmp_in_echo_reps);
+    ap_mib(t, m->icmp_out_msgs);
+    ap_mib(t, m->icmp_out_echos);
+    ap_mib(t, m->icmp_out_echo_reps);
+    ap_str(t, "\nTcp: RtoAlgorithm RtoMin RtoMax MaxConn ActiveOpens PassiveOpens AttemptFails"
+              " EstabResets CurrEstab InSegs OutSegs RetransSegs InErrs OutRsts\nTcp: 1");
+    ap_mib(t, TCP_RTO_MIN * 10); /* ticks of 10 ms */
+    ap_mib(t, TCP_RTO_MAX * 10);
+    ap_str(t, " -1");
+    ap_mib(t, m->tcp_active_opens);
+    ap_mib(t, m->tcp_passive_opens);
+    ap_mib(t, m->tcp_attempt_fails);
+    ap_mib(t, m->tcp_estab_resets);
+    ap_mib(t, (uint32_t)tc.estab);
+    ap_mib(t, m->tcp_in_segs);
+    ap_mib(t, m->tcp_out_segs);
+    ap_mib(t, m->tcp_retrans_segs);
+    ap_mib(t, m->tcp_in_errs);
+    ap_mib(t, m->tcp_out_rsts);
+    ap_str(t, "\nUdp: InDatagrams NoPorts InErrors OutDatagrams\nUdp:");
+    ap_mib(t, m->udp_in_datagrams);
+    ap_mib(t, m->udp_no_ports);
+    ap_mib(t, m->udp_in_errors);
+    ap_mib(t, m->udp_out_datagrams);
     ap_ch(t, '\n');
     return t->len;
 }

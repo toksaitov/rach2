@@ -45,6 +45,9 @@ static int sysfs_device_key(int node, int n);
 static int sysfs_device_exists(int node, int key);
 #include "fs/procfs.c"
 
+/* The counters /proc/net/snmp reports, which net_core.c defines. */
+struct net_mib net_mib;
+
 #include "fs/synthfs.c"
 
 extern int printf(const char *format, ...);

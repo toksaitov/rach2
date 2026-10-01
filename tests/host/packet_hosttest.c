@@ -323,6 +323,9 @@ void klog(int level, const char *subsystem, const char *format, ...)
 #include "../../rach2/sys/network/ethernet/ethernet.c"
 #include "../../rach2/sys/network/ip/ip.c"
 
+/* The counters /proc/net/snmp reports, which net_core.c defines. */
+struct net_mib net_mib;
+
 /* ---- the frames ---- */
 
 static int fails;

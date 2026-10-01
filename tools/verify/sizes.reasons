@@ -185,7 +185,7 @@ rach2/sys/network/netif.c:ifreq_ioctl lines 122 a dispatcher, one arm per comman
 rach2/sys/network/socket/netlink.c:answer complexity 26 a dispatcher, one arm per command, read as a table
 
 rach2/sys/network/tcp/tcp.c:tcp_rx complexity 90 a state machine, one arm per state, read as a table
-rach2/sys/network/tcp/tcp.c:tcp_rx lines 342 a state machine, one arm per state, read as a table
+rach2/sys/network/tcp/tcp.c:tcp_rx lines 331 a state machine, one arm per state, read as a table
 rach2/sys/network/tcp/tcp.c:tcp_rx nesting 6 a state machine, one arm per state, read as a table
 rach2/sys/network/tcp/tcp.c:tcp_send_rst_unmatched params 8 the parameters are the fields of one packet or descriptor; a struct for them would be filled and unpacked once
 

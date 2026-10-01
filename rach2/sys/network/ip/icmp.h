@@ -24,6 +24,10 @@
 /** Handle one received ICMP datagram (IP header already stripped). */
 void icmp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len);
 
+/** Count an ICMP message of type `type` sent, here or by a raw socket, in
+ * `net_mib`. */
+void icmp_count_out(uint8_t type);
+
 /* The most data an echo request carries: an unfragmented datagram of the
  * 1500-byte MTU less the IP and ICMP headers. */
 #define ICMP_PING_DATA_MAX 1472u

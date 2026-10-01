@@ -295,6 +295,9 @@ uint32_t krandom_u32(void)
 
 #include "../../rach2/sys/network/tcp/tcp.c"
 
+/* The counters /proc/net/snmp reports, which net_core.c defines. */
+struct net_mib net_mib;
+
 /* ---- the cases ---- */
 
 static int fails;

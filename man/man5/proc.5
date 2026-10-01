@@ -1,4 +1,4 @@
-.Dd October 1, 2026
+.Dd October 2, 2026
 .Dt PROC 5
 .Os
 .Sh NAME
@@ -414,12 +414,30 @@ and
 which is always zero, since a fragment is dropped on arrival.
 .It Pa /proc/net/snmp
 Of the MIB groups Linux has, a line of names and a line of values for the
-fields this kernel keeps:
-.Ql Ip: Forwarding DefaultTTL ,
-2, not a router, and 64; and
-.Ql Tcp: RtoAlgorithm RtoMin RtoMax MaxConn CurrEstab ,
-1, the retransmission bounds in milliseconds, -1 for no fixed limit, and the
-connections ESTABLISHED or in CLOSE_WAIT.
+fields this kernel keeps, in Linux's order, which
+.Xr nstat 8
+reads by name.
+.Ql Ip:
+has Forwarding, 2, not a router, DefaultTTL, 64, and the datagrams
+received, dropped for a bad header, for another host's address, for an
+unknown protocol and as fragments or broadcasts other than UDP, delivered,
+sent, refused by a full card and sent to no route.
+.Ql Icmp:
+counts the messages received and the short ones, the destination
+unreachables, the echo requests and replies each way, and the messages
+sent.
+.Ql Tcp:
+has RtoAlgorithm 1, the retransmission bounds in milliseconds, MaxConn -1
+for no fixed limit, the connects and accepted handshakes, the handshakes and
+open connections a reset or a timeout ended, CurrEstab, the connections
+ESTABLISHED or in CLOSE_WAIT, and the segments received, sent, retransmitted
+and dropped as malformed, and the resets sent.
+.Ql Udp:
+counts the datagrams delivered, those for a port no socket has, the
+malformed ones and those sent.
+A broadcast for a port no socket has counts as NoPorts, where Linux counts
+it in a field of its own, IgnoredMulti.
+The counters start at zero at boot and wrap at 2^32.
 .It Pa /proc/sys
 A few of Linux's sysctl files, each a value and a newline, read-only but
 for the two the end of this entry describes:

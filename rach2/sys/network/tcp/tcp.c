@@ -432,6 +432,37 @@ static uint8_t tcp_sack_option(const struct tcb *tcb, uint8_t *opt)
 }
 
 /**
+ * Send the segment of `seg_len` bytes in `tcp_tx_buf` to `remote_ip`,
+ * counting it in `net_mib` when IP takes it, and a reset among the resets.
+ * The return value is `ip_tx`'s.
+ */
+static int tcp_ip_tx(uint32_t remote_ip, uint16_t seg_len)
+{
+    int rc = ip_tx(remote_ip, IP_PROTO_TCP, tcp_tx_buf, seg_len, IP_TTL_DEFAULT);
+
+    if (rc == 0) {
+        net_mib.tcp_out_segs++;
+        if (tcp_tx_buf[13] & TCP_RST) {
+            net_mib.tcp_out_rsts++;
+        }
+    }
+    return rc;
+}
+
+/**
+ * Count a connection a reset or a timeout ends in `state`, as Linux counts
+ * one: a handshake as a failed attempt, an open connection as a reset.
+ */
+static void tcp_count_end(int state)
+{
+    if (state == TCP_SYN_SENT || state == TCP_SYN_RCVD) {
+        net_mib.tcp_attempt_fails++;
+    } else if (state == TCP_ESTABLISHED || state == TCP_CLOSE_WAIT) {
+        net_mib.tcp_estab_resets++;
+    }
+}
+
+/**
  * Build and send a segment with the given control flags at the given
  * sequence, without any retransmission bookkeeping or sequence advance.
  * A SYN has the options this side offers, and an acknowledgement sent
@@ -482,7 +513,7 @@ static int tcp_emit_flags(struct tcb *tcb, uint8_t flags, uint32_t seq)
 
     seg_len = hdr_len;
     write16be(tcp_tx_buf + 16, tcp_checksum(tcb->local_ip, tcb->remote_ip, tcp_tx_buf, seg_len));
-    rc = ip_tx(tcb->remote_ip, IP_PROTO_TCP, tcp_tx_buf, seg_len, IP_TTL_DEFAULT);
+    rc = tcp_ip_tx(tcb->remote_ip, seg_len);
     if (rc == 0 && (flags & TCP_ACK)) {
         tcb->ack_owed = 0; /* this segment carried the acknowledgement owed */
     }
@@ -634,7 +665,7 @@ static int tcp_output(struct tcb *tcb)
         seg_len = (uint16_t)(TCP_HDR_SIZE + send_len);
         write16be(tcp_tx_buf + 16,
                   tcp_checksum(tcb->local_ip, tcb->remote_ip, tcp_tx_buf, seg_len));
-        if (ip_tx(tcb->remote_ip, IP_PROTO_TCP, tcp_tx_buf, seg_len, IP_TTL_DEFAULT) == -ENOBUFS) {
+        if (tcp_ip_tx(tcb->remote_ip, seg_len) == -ENOBUFS) {
             tcb->tx_refused++;
             if (tcb->refused_since == 0) {
                 tcb->refused_since = kernel_ticks + 1;
@@ -703,7 +734,7 @@ static int tcp_resend(struct tcb *tcb, uint32_t seq, uint32_t most)
 
     seg_len = (uint16_t)(TCP_HDR_SIZE + send_len);
     write16be(tcp_tx_buf + 16, tcp_checksum(tcb->local_ip, tcb->remote_ip, tcp_tx_buf, seg_len));
-    if (ip_tx(tcb->remote_ip, IP_PROTO_TCP, tcp_tx_buf, seg_len, IP_TTL_DEFAULT) == -ENOBUFS) {
+    if (tcp_ip_tx(tcb->remote_ip, seg_len) == -ENOBUFS) {
         tcb->tx_refused++;
         if (tcb->refused_since == 0) {
             tcb->refused_since = kernel_ticks + 1;
@@ -713,6 +744,7 @@ static int tcp_resend(struct tcb *tcb, uint32_t seq, uint32_t most)
     tcb->refused_since = 0;
     tcb->ack_owed = 0; /* the segment carried the acknowledgement owed */
     tcb->retransmits++;
+    net_mib.tcp_retrans_segs++;
     return (int)send_len;
 }
 
@@ -1027,7 +1059,7 @@ static void tcp_send_rst_unmatched(uint32_t local_ip, uint32_t remote_ip, uint16
     write16be(tcp_tx_buf + 16, 0);
     write16be(tcp_tx_buf + 18, 0);
     write16be(tcp_tx_buf + 16, tcp_checksum(local_ip, remote_ip, tcp_tx_buf, TCP_HDR_SIZE));
-    ip_tx(remote_ip, IP_PROTO_TCP, tcp_tx_buf, TCP_HDR_SIZE, IP_TTL_DEFAULT);
+    tcp_ip_tx(remote_ip, TCP_HDR_SIZE);
 }
 
 /**
@@ -1094,7 +1126,7 @@ static void tcp_send_zwp(struct tcb *tcb)
     seg_len = TCP_HDR_SIZE + 1;
 
     write16be(tcp_tx_buf + 16, tcp_checksum(tcb->local_ip, tcb->remote_ip, tcp_tx_buf, seg_len));
-    ip_tx(tcb->remote_ip, IP_PROTO_TCP, tcp_tx_buf, seg_len, IP_TTL_DEFAULT);
+    tcp_ip_tx(tcb->remote_ip, seg_len);
 }
 
 /**
@@ -1163,6 +1195,7 @@ void tcp_local_addr_changed(uint32_t new_ip)
  */
 static void tcp_giveup(struct tcb *tcb)
 {
+    tcp_count_end(tcb->state);
     if (tcb->passive && tcb->state == TCP_SYN_RCVD && tcb->sock) {
         struct socket *sock = tcb->sock;
 
@@ -1358,7 +1391,8 @@ void tcp_tick(void)
                 if (tcb->send_head != tcb->send_ack) {
                     tcp_enter_rto_recovery(tcb);
                 } else if (tcb->retx_flags) {
-                    tcp_emit_flags(tcb, tcb->retx_flags, tcb->retx_seq);
+                    net_mib.tcp_retrans_segs +=
+                        tcp_emit_flags(tcb, tcb->retx_flags, tcb->retx_seq) == 0;
                     tcb->retransmits++;
                     tcb->rto_timer = tcb->rto;
                 }
@@ -1536,6 +1570,7 @@ int tcp_connect(struct socket *sock, uint32_t dst_ip, uint16_t dst_port)
 
     tcp_send_flags(tcb, TCP_SYN);
     tcb->state = TCP_SYN_SENT;
+    net_mib.tcp_active_opens++;
 
     net_unlock(flags);
     return 0;
@@ -2090,6 +2125,7 @@ static void tcp_rx_reset(struct tcb *tcb, uint32_t seq, uint32_t ack_num, uint8_
     if (verdict != TCP_RST_ACCEPT) {
         return;
     }
+    tcp_count_end(tcb->state);
     if (tcb->state == TCP_SYN_RCVD && tcb->passive) {
         tcp_free_half_open(tcb);
         return;
@@ -2109,6 +2145,33 @@ static void tcp_rx_reset(struct tcb *tcb, uint32_t seq, uint32_t ack_num, uint8_
     } else {
         tcb_free(tcb);
     }
+}
+
+/**
+ * Check an inbound segment's length, checksum and header length, and count
+ * it in `net_mib`, a malformed one among the errors: its header length, or 0
+ * for a segment to drop.
+ */
+static uint16_t tcp_seg_check(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len)
+{
+    uint16_t hdr_len;
+
+    net_mib.tcp_in_segs++;
+    if (len < TCP_HDR_SIZE || len > TCP_SEG_MAX) {
+        net_mib.tcp_in_errs++;
+        return 0;
+    }
+    if (tcp_checksum(src_ip, dst_ip, data, len) != 0) {
+        net_mib.tcp_in_errs++;
+        klog(KLOG_WARN, "tcp", "rx: bad checksum, dropped");
+        return 0;
+    }
+    hdr_len = (uint16_t)(((data[12] >> 4) & 0xF) * 4);
+    if (hdr_len < TCP_HDR_SIZE || hdr_len > len) {
+        net_mib.tcp_in_errs++;
+        return 0;
+    }
+    return hdr_len;
 }
 
 /**
@@ -2194,7 +2257,7 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len)
 {
     uint16_t src_port, dst_port;
     uint32_t seq, ack_num;
-    uint8_t data_off, flags;
+    uint8_t flags;
     uint16_t field, hdr_len;
     uint32_t window;
     struct tcb *tcb;
@@ -2202,12 +2265,8 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len)
     struct socket *conn_sock;
     struct socket *listen_sock;
 
-    if (len < TCP_HDR_SIZE || len > TCP_SEG_MAX) {
-        return;
-    }
-
-    if (tcp_checksum(src_ip, dst_ip, data, len) != 0) {
-        klog(KLOG_WARN, "tcp", "rx: bad checksum, dropped");
+    hdr_len = tcp_seg_check(src_ip, dst_ip, data, len);
+    if (hdr_len == 0) {
         return;
     }
 
@@ -2215,14 +2274,8 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len)
     dst_port = read16be(data + 2);
     seq = read32be(data + 4);
     ack_num = read32be(data + 8);
-    data_off = (data[12] >> 4) & 0xF;
     flags = data[13];
     field = read16be(data + 14);
-
-    hdr_len = (uint16_t)(data_off * 4);
-    if (hdr_len < TCP_HDR_SIZE || hdr_len > len) {
-        return;
-    }
 
     tcb = tcp_find(dst_port, src_ip, src_port);
     if (!tcb) {
@@ -2311,6 +2364,7 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len)
 
         tcp_send_flags(conn_tcb, TCP_SYN | TCP_ACK);
         conn_tcb->state = TCP_SYN_RCVD;
+        net_mib.tcp_passive_opens++;
         break;
 
     case TCP_SYN_RCVD:

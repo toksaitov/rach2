@@ -96,6 +96,16 @@ static void icmp_too_big(const uint8_t *data, uint16_t len)
                  read16be(data + 6));
 }
 
+void icmp_count_out(uint8_t type)
+{
+    net_mib.icmp_out_msgs++;
+    if (type == ICMP_ECHO_REQUEST) {
+        net_mib.icmp_out_echos++;
+    } else if (type == ICMP_ECHO_REPLY) {
+        net_mib.icmp_out_echo_reps++;
+    }
+}
+
 /**
  * Handle one received ICMP datagram: answer echo requests, match echo replies.
  *
@@ -111,11 +121,17 @@ static void icmp_too_big(const uint8_t *data, uint16_t len)
  */
 void icmp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len)
 {
+    net_mib.icmp_in_msgs++;
     if (len < 8) {
+        net_mib.icmp_in_errors++;
         return;
     }
 
+    if (data[0] == ICMP_UNREACHABLE) {
+        net_mib.icmp_in_dest_unreachs++;
+    }
     if (data[0] == ICMP_ECHO_REQUEST) {
+        net_mib.icmp_in_echos++;
         if (len > 1500) {
             len = 1500;
         }
@@ -124,12 +140,16 @@ void icmp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len)
         icmp_reply_buf[1] = 0;
         write16be(icmp_reply_buf + 2, 0x0000);
         write16be(icmp_reply_buf + 2, ip_checksum(icmp_reply_buf, len));
-        ip_tx(src_ip, IP_PROTO_ICMP, icmp_reply_buf, len, IP_TTL_DEFAULT);
+        if (ip_tx(src_ip, IP_PROTO_ICMP, icmp_reply_buf, len, IP_TTL_DEFAULT) == 0) {
+            icmp_count_out(ICMP_ECHO_REPLY);
+        }
     } else if (data[0] == ICMP_UNREACHABLE && data[1] == ICMP_FRAG_NEEDED && len >= 36) {
         icmp_too_big(data, len);
     } else if (data[0] == ICMP_ECHO_REPLY) {
         uint16_t id = read16be(data + 4);
         uint16_t seq = read16be(data + 6);
+
+        net_mib.icmp_in_echo_reps++;
         if (ping_active && src_ip == ping_peer_ip && id == ICMP_PING_ID && seq == ping_seq_wait) {
             ping_reply_len = len;
             ping_replied = 1;
@@ -251,7 +271,9 @@ int icmp_ping_data(uint32_t dst_ip, uint32_t size, uint8_t ttl, uint16_t *got)
             ping_deadline = 1;
         }
 
-        ip_tx(dst_ip, IP_PROTO_ICMP, icmp_echo_buf, (uint16_t)(8 + size), ttl);
+        if (ip_tx(dst_ip, IP_PROTO_ICMP, icmp_echo_buf, (uint16_t)(8 + size), ttl) == 0) {
+            icmp_count_out(ICMP_ECHO_REQUEST);
+        }
 
         net_unlock(flags);
 

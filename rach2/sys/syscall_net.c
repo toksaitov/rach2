@@ -791,6 +791,9 @@ static int32_t do_sendto(int fd, uint32_t buf_ptr, int len, int flags, uint32_t 
             uint32_t netflags = net_lock();
             r = ip_tx(raw_dst, (uint8_t)entry->sock->protocol, raw_send_buf, (uint16_t)len,
                       entry->sock->ip_ttl);
+            if (r == 0 && entry->sock->protocol == IP_PROTO_ICMP && len > 0) {
+                icmp_count_out(raw_send_buf[0]);
+            }
             net_unlock(netflags);
         }
         if (r < 0) {

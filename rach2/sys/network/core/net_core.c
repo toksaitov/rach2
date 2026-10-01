@@ -21,6 +21,8 @@
 /* The first interface's hardware address; netdev_probe copies it in. */
 uint8_t net_mac[6] = {0, 0, 0, 0, 0, 0};
 
+struct net_mib net_mib;
+
 uint16_t read16be(const uint8_t *p)
 {
     return (uint16_t)(((uint16_t)p[0] << 8) | (uint16_t)p[1]);
