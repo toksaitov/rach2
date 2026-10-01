@@ -24,6 +24,7 @@
 #define T_IFDIR  0040000u
 #define T_IFCHR  0020000u
 #define T_IFIFO  0010000u
+#define T_ISGID  0002000u
 
 #define TMPFS_MAGIC 0x01021994u
 
@@ -101,7 +102,12 @@ static int is_dir(const struct tmpfs_node *n)
     return (n->mode & T_IFMT) == T_IFDIR;
 }
 
-static struct tmpfs_node *new_node(struct vfs_mount *mnt, uint32_t mode)
+/* A new node in the directory `dir`, or of no directory for the root and a
+ * memfd; owned as Linux's `inode_init_owner` owns one: by the caller's
+ * effective ids, but with the group of a setgid directory, which passes the
+ * bit on to a new directory. */
+static struct tmpfs_node *new_node(struct vfs_mount *mnt, const struct tmpfs_node *dir,
+                                   uint32_t mode)
 {
     struct tmpfs_mount *tm = (struct tmpfs_mount *)mnt->priv;
     struct tmpfs_node *n = kzalloc(sizeof(*n));
@@ -109,9 +115,15 @@ static struct tmpfs_node *new_node(struct vfs_mount *mnt, uint32_t mode)
     if (!n) {
         return NULL;
     }
-    n->mode = mode;
     n->uid = current_proc ? current_proc->euid : 0u;
     n->gid = current_proc ? current_proc->egid : 0u;
+    if (dir && (dir->mode & T_ISGID)) {
+        n->gid = dir->gid;
+        if ((mode & T_IFMT) == T_IFDIR) {
+            mode |= T_ISGID;
+        }
+    }
+    n->mode = mode;
     n->seals = TMPFS_SEAL_SEAL;
     n->ino = ++tm->next_ino;
     stamp(n, STAMP_A | STAMP_M | STAMP_C);
@@ -542,7 +554,7 @@ static int make_node(struct vfs_mount *mnt, void *dir, const char *name, uint32_
     if (type == T_IFDIR || type == T_IFLNK) {
         return -EINVAL;
     }
-    n = new_node(mnt, type | (mode & 07777u));
+    n = new_node(mnt, d, type | (mode & 07777u));
     if (!n) {
         return -ENOSPC;
     }
@@ -595,7 +607,7 @@ static int tmpfs_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint3
     if (find(d, name)) {
         return -EEXIST;
     }
-    n = new_node(mnt, T_IFDIR | (mode & 07777u));
+    n = new_node(mnt, d, T_IFDIR | (mode & 07777u));
     if (!n) {
         return -ENOSPC;
     }
@@ -898,7 +910,7 @@ static int tmpfs_symlink(struct vfs_mount *mnt, void *dir, const char *name, con
     if (find(d, name)) {
         return -EEXIST;
     }
-    n = new_node(mnt, T_IFLNK | 0777u);
+    n = new_node(mnt, d, T_IFLNK | 0777u);
     if (!n) {
         return -ENOSPC;
     }
@@ -953,7 +965,7 @@ static int tmpfs_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flag
         return -ENOMEM;
     }
     mnt->priv = tm;
-    root = new_node(mnt, T_IFDIR | root_mode(options));
+    root = new_node(mnt, NULL, T_IFDIR | root_mode(options));
     if (!root) {
         kfree(tm);
         mnt->priv = NULL;
@@ -977,7 +989,7 @@ struct shmem *tmpfs_shmem(void *node)
 int tmpfs_memfd(struct vfs_mount *mnt, const char *name, uint32_t mode, uint32_t seals, void **node)
 {
     uint32_t len = (uint32_t)k_strlen(name);
-    struct tmpfs_node *n = new_node(mnt, T_IFREG | (mode & 07777u));
+    struct tmpfs_node *n = new_node(mnt, NULL, T_IFREG | (mode & 07777u));
 
     if (!n) {
         return -ENOMEM;

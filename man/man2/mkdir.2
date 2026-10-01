@@ -1,4 +1,4 @@
-.Dd September 28, 2026
+.Dd October 2, 2026
 .Dt MKDIR 2
 .Os
 .Sh NAME
@@ -47,9 +47,11 @@ once the directory before it is walked, which returns
 .Er ENOENT
 when it is missing, as on Linux; nothing is made.
 .Pp
-On KRFFS and ext2, the new directory receives the caller's effective
-user and group IDs and the permission bits
-.Li "mode & 07777 & ~umask" .
+On KRFFS, ext2 and tmpfs, the new directory receives the caller's
+effective user and group IDs and the permission bits
+.Li "mode & 07777 & ~umask" ,
+except that in a set-group-ID directory it receives the parent's group
+and the set-group-ID bit, as on Linux.
 FAT32 and exFAT ignore the requested mode and use the mount's user ID,
 group ID, and mask.
 Their reported permissions are 0777 with the mount mask removed;

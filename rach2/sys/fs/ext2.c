@@ -62,6 +62,7 @@
 #define S_IFBLK_  0060000u
 #define S_IFIFO_  0010000u
 #define S_IFSOCK_ 0140000u
+#define S_ISGID_  0002000u
 
 #define EXT2_FT_DIR 2u
 #define EXT2_FT_MAX 7u
@@ -3067,11 +3068,15 @@ static int release_inode(struct ext2_mount *em, struct ext2_node *n)
     return inode_bit_free(em, n->ino, was_dir);
 }
 
-/* A new inode, allocated, written initialised and held in the pool; the
- * caller names it. */
-static int inode_new(struct ext2_mount *em, uint32_t parent_ino, uint32_t mode, int store,
+/* A new inode in the directory `dir`, allocated, written initialised and
+ * held in the pool; the caller names it. Its owner is the caller's
+ * effective uid, and its group the caller's effective gid, or the
+ * directory's when the directory is setgid, which then passes the bit on to
+ * a new directory, as Linux's `inode_init_owner` does. */
+static int inode_new(struct ext2_mount *em, const struct ext2_node *dir, uint32_t mode, int store,
                      struct ext2_node **out)
 {
+    uint32_t parent_ino = dir->ino;
     uint32_t ino;
     struct ext2_node *n;
     int rc;
@@ -3088,9 +3093,15 @@ static int inode_new(struct ext2_mount *em, uint32_t parent_ino, uint32_t mode, 
     }
     n->refs = 1;
     n->ino = ino;
-    n->mode = mode;
     n->uid = current_proc ? current_proc->euid : 0;
     n->gid = current_proc ? current_proc->egid : 0;
+    if (dir->mode & S_ISGID_) {
+        n->gid = dir->gid;
+        if ((mode & S_IFMT_) == S_IFDIR_) {
+            mode |= S_ISGID_;
+        }
+    }
+    n->mode = mode;
     n->nlink = (mode & S_IFMT_) == S_IFDIR_ ? 2 : 1;
     n->atime = n->mtime = n->ctime = now_seconds();
     /* The image over zeros: a freed inode's slot keeps what it had, and
@@ -3470,7 +3481,7 @@ static int ext2_create(struct vfs_mount *mnt, void *dir, const char *name, uint3
     if (rc == 1) {
         return -EEXIST;
     }
-    rc = inode_new(em, d->ino, S_IFREG_ | (mode & 07777u), 1, &n);
+    rc = inode_new(em, d, S_IFREG_ | (mode & 07777u), 1, &n);
     if (rc != 0) {
         return rc;
     }
@@ -3526,7 +3537,7 @@ static int ext2_mknod(struct vfs_mount *mnt, void *dir, const char *name, uint32
     if (rc == 1) {
         return -EEXIST;
     }
-    rc = inode_new(em, d->ino, type | (mode & 07777u), 0, &n);
+    rc = inode_new(em, d, type | (mode & 07777u), 0, &n);
     if (rc != 0) {
         return rc;
     }
@@ -3645,7 +3656,7 @@ static int ext2_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32
     if (d->nlink >= 65000) {
         return -EMLINK;
     }
-    rc = inode_new(em, d->ino, S_IFDIR_ | (mode & 07777u), 0, &n);
+    rc = inode_new(em, d, S_IFDIR_ | (mode & 07777u), 0, &n);
     if (rc != 0) {
         return rc;
     }
@@ -3833,7 +3844,7 @@ static int ext2_symlink(struct vfs_mount *mnt, void *dir, const char *name, cons
     if (rc == 1) {
         return -EEXIST;
     }
-    rc = inode_new(em, d->ino, S_IFLNK_ | 0777u, 0, &n);
+    rc = inode_new(em, d, S_IFLNK_ | 0777u, 0, &n);
     if (rc != 0) {
         return rc;
     }

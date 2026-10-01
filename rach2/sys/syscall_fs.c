@@ -2067,16 +2067,26 @@ static int32_t synth_open_dir(const struct vpath *vp, int flags)
 }
 
 /**
- * Stamps a newly created KRFFS node with the creating process's identity:
- * owner and group from the effective ids, permission bits from `mode` with
- * the file-creation mask applied, the type bits kept. The V7 creation rule:
- * who you effectively are is whose the file is.
+ * Stamps a newly created KRFFS node in `parent` with the creating process's
+ * identity: owner and group from the effective ids, permission bits from
+ * `mode` with the file-creation mask applied, the type bits kept. The V7
+ * creation rule: who you effectively are is whose the file is. A setgid
+ * parent gives its group instead, and its setgid bit to a new directory, as
+ * Linux's `inode_init_owner` does.
  */
-static void krffs_stamp_new_node(krffs_node_t *node, uint32_t mode)
+static void krffs_stamp_new_node(krffs_node_t *node, const krffs_node_t *parent, uint32_t mode)
 {
+    uint32_t perm = mode & 07777u & ~current_proc->fs->umask;
+
     node->uid = current_proc->euid;
     node->gid = current_proc->egid;
-    node->mode = (uint16_t)((node->mode & ~07777u) | (mode & 07777u & ~current_proc->fs->umask));
+    if (parent->mode & 02000u) {
+        node->gid = parent->gid;
+        if ((node->mode & 0170000u) == 0040000u) {
+            perm |= 02000u;
+        }
+    }
+    node->mode = (uint16_t)((node->mode & ~07777u) | perm);
 }
 
 static int synth_is_link(const struct vpath *vp);
@@ -2280,7 +2290,7 @@ static int node_make(const struct vfs_ref *parent, const char *leaf, uint32_t mo
         rc = vfs_mknod(parent->mnt, parent->node, leaf, type | perm, rdev, made);
     }
     if (rc == 0 && mnt_is_root(parent->mnt)) {
-        krffs_stamp_new_node((krffs_node_t *)*made, mode);
+        krffs_stamp_new_node((krffs_node_t *)*made, (krffs_node_t *)parent->node, mode);
     }
     return rc;
 }
@@ -9587,7 +9597,7 @@ static int32_t mkdir_in(const struct vfs_ref *parent, const char *leaf, uint32_t
     rc = vfs_mkdir(parent->mnt, parent->node, leaf, mode);
     vfs_ns_unlock(parent->mnt);
     if (rc == 0 && parent->mnt->type->ops->lookup(parent->mnt, parent->node, leaf, &found) == 0) {
-        krffs_stamp_new_node(found, mode);
+        krffs_stamp_new_node(found, (krffs_node_t *)parent->node, mode);
     }
     return rc;
 }

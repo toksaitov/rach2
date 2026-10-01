@@ -16,6 +16,8 @@
  * that touched more, as GNU time reads them. A UDP socket connected to a
  * local port no socket has polls POLLERR once the port unreachable comes
  * back, and its next receive is ECONNREFUSED, as glibc's resolver expects.
+ * A setgid directory gives a file made in it its group, and a directory
+ * its group and the bit.
  * mlock, munlock, mlockall and munlockall accept a mapped range and refuse a
  * gap with ENOMEM; mincore reports a touched page resident.
  * getcpu reports CPU 0, and personality keeps and returns its value.
@@ -56,6 +58,7 @@
 #include <sys/timex.h>
 #include <sys/xattr.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -134,6 +137,33 @@ static int refusals(void)
         return fail("the receive after a port unreachable was not ECONNREFUSED");
     }
     close(fd);
+    return 0;
+}
+
+/* Files made in a setgid directory of group 4242. */
+static int setgids(void)
+{
+    const char *dir = "/tmp/callsmusl.sg";
+    struct stat st;
+    int fd;
+
+    unlink("/tmp/callsmusl.sg/f");
+    rmdir("/tmp/callsmusl.sg/d");
+    rmdir(dir);
+    if (mkdir(dir, 0775) != 0 || chown(dir, (uid_t)-1, 4242) != 0 || chmod(dir, 02775) != 0) {
+        return fail("a setgid directory of group 4242 in /tmp");
+    }
+    fd = open("/tmp/callsmusl.sg/f", O_CREAT | O_WRONLY, 0644);
+    if (fd < 0 || close(fd) != 0 || stat("/tmp/callsmusl.sg/f", &st) != 0 || st.st_gid != 4242) {
+        return fail("a file made in a setgid directory did not take its group");
+    }
+    if (mkdir("/tmp/callsmusl.sg/d", 0755) != 0 || stat("/tmp/callsmusl.sg/d", &st) != 0 ||
+        st.st_gid != 4242 || !(st.st_mode & S_ISGID)) {
+        return fail("a directory made in a setgid directory did not take its group and the bit");
+    }
+    unlink("/tmp/callsmusl.sg/f");
+    rmdir("/tmp/callsmusl.sg/d");
+    rmdir(dir);
     return 0;
 }
 
@@ -486,7 +516,7 @@ static int reserves(void)
 int main(void)
 {
     if (signals() || memory() || identity() || messages() || clocks() || ranges() || copies() ||
-        reserves() || adjusts() || advises() || terminals() || peaks() || refusals()) {
+        reserves() || adjusts() || advises() || terminals() || peaks() || refusals() || setgids()) {
         return 1;
     }
     printf("CALLSMUSL OK\n");

@@ -5171,3 +5171,13 @@ old
 new
         return 0;
 end
+
+fault setgid-dir-group-ignored
+probe callsmusl
+file rach2/sys/syscall_fs.c
+expect CALLSMUSL FAIL (a file made in a setgid directory did not take its group
+old
+        node->gid = parent->gid;
+new
+        node->gid = node->gid;
+end

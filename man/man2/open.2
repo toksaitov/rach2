@@ -1,4 +1,4 @@
-.Dd September 28, 2026
+.Dd October 2, 2026
 .Dt OPEN 2
 .Os
 .Sh NAME
@@ -62,9 +62,11 @@ The additional argument is
 .Vt mode_t
 .Fa mode .
 The parent must exist and permit writing.
-On KRFFS and ext2, the new file receives the caller's effective user
-and group IDs and permission bits
-.Li "mode & 07777 & ~umask" .
+On KRFFS, ext2 and tmpfs, the new file receives the caller's effective
+user and group IDs and permission bits
+.Li "mode & 07777 & ~umask" ,
+or the parent's group when the parent is a set-group-ID directory, as on
+Linux.
 FAT32 and exFAT ignore the requested mode and report the mount's user
 ID, group ID, and permissions 0777 with the mount mask removed.
 Their read-only attribute removes write permission.
