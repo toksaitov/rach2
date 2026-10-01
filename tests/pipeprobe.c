@@ -5,7 +5,8 @@
  *   (a) round-trip + EOF: bytes written at one end read back in order at the
  *       other, and once the write end closes the drained read end returns 0;
  *   (b) O_NONBLOCK: a read of an empty pipe and a write to a full one return
- *       -EAGAIN instead of blocking, and the FIFO has a full page;
+ *       -EAGAIN instead of blocking, and the FIFO has a full page, which
+ *       F_GETPIPE_SZ reports at both ends;
  *   (c) SIGPIPE / -EPIPE: a write with the read end closed raises SIGPIPE and
  *       (with the signal caught) returns -EPIPE;
  *   (d) blocking across a fork: a writer of more than one buffer blocks until
@@ -33,6 +34,8 @@ typedef unsigned int size_t;
 #define MAP_PRIVATE      0x02
 #define MAP_ANONYMOUS    0x20
 #define SYS_FSTAT64      197
+#define SYS_FCNTL64      221
+#define F_GETPIPE_SZ     1032
 
 /* i386 struct stat64: st_ino is the 64-bit field at offset 88. */
 #define ST_INO64 88
@@ -269,6 +272,9 @@ void _start(void)
     /* (b) O_NONBLOCK: empty read -> EAGAIN; the FIFO has a full page; a write
      * past full -> EAGAIN. */
     check(do_pipe2(p, O_NONBLOCK) == 0, "pipe2(O_NONBLOCK)");
+    check(syscall3(SYS_FCNTL64, p[0], F_GETPIPE_SZ, 0) == PIPE_BUF_SIZE &&
+              syscall3(SYS_FCNTL64, p[1], F_GETPIPE_SZ, 0) == PIPE_BUF_SIZE,
+          "F_GETPIPE_SZ reports a page at both ends");
     check(rd(p[0], buf, 8) == -EAGAIN, "nonblocking read of empty pipe -> -EAGAIN");
     check(wr(p[1], big, PIPE_BUF_SIZE) == PIPE_BUF_SIZE, "write fills a full page");
     check(wr(p[1], "x", 1) == -EAGAIN, "nonblocking write of a full pipe -> -EAGAIN");

@@ -4712,3 +4712,15 @@ old
 new
         if (p->pid != p->tgid) {
 end
+
+# A pipe's capacity through fcntl.
+
+fault pipe-size-refused
+probe pipeprobe
+file rach2/sys/syscall_fs.c
+expect FAIL: F_GETPIPE_SZ reports a page at both ends
+old
+        return entry->type == FD_TYPE_PIPE ? PIPE_BUF_SIZE : -EBADF;
+new
+        return entry->type == FD_TYPE_PIPE ? -EINVAL : -EBADF;
+end

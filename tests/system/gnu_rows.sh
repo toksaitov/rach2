@@ -186,6 +186,11 @@ row_bash() {
     same "an associative array" "$(bash -c 'declare -A m=([k]=v); echo "${m[k]}"')" "v"
     # shellcheck disable=SC2016 # the dollars are the inner bash's
     same "the version" "$(/bin/bash -c 'echo "${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}"')" "5.3"
+    # shellcheck disable=SC2016 # the dollars are the inner bash's
+    same "a here-document longer than a pipe holds" "$(timeout 20 bash -c 'doc=$(head -c 5000 /dev/zero | tr "\0" a)
+cat << EOF | wc -c
+$doc
+EOF')" "5001"
 }
 
 row_grep() {

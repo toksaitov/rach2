@@ -22,7 +22,7 @@ Pipe waits are signal-interruptible. A wait interrupted before any transfer ends
 
 Transfers resolve one user page before selecting a ring span. Resolution can sleep during memory reclaim and allow another process to change the ring or close the peer end. The operation rechecks readiness and closure after such a wait. The subsequent checked copy uses a present page, allocates nothing, and advances the ring counter before any context switch. An unresolved page returns `EFAULT` if no byte has been transferred, or the partial count otherwise.
 
-The 4096-byte `PIPE_BUF_SIZE` is the ring capacity, not an atomic-write limit. A blocking write uses whatever space is free before it waits. Concurrent writers can therefore interleave even when each request is no larger than 4096 bytes. There is no POSIX `PIPE_BUF` atomicity guarantee.
+The 4096-byte `PIPE_BUF_SIZE` is the ring capacity, which `fcntl(F_GETPIPE_SZ)` reports; Linux's default is 65536 bytes, and bash, which writes a here-document into a pipe it reads itself when the document fits, asks the capacity first. It is not an atomic-write limit. A blocking write uses whatever space is free before it waits. Concurrent writers can therefore interleave even when each request is no larger than 4096 bytes. There is no POSIX `PIPE_BUF` atomicity guarantee.
 
 ## Descriptor operations
 

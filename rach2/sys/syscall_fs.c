@@ -8307,9 +8307,10 @@ int32_t sys_flock(isr_params_t *params)
  * round-trips libc needs: F_DUPFD(_CLOEXEC), F_GETFD/F_SETFD (the
  * close-on-exec bit), and F_GETFL/F_SETFL (access + O_NONBLOCK/O_APPEND on
  * the shared open-file description, which the write and socket paths read).
- * An O_PATH descriptor takes the commands Linux lets it take, the two
- * duplications, F_GETFD, F_SETFD and F_GETFL, which reports O_PATH, and is
- * -EBADF to the rest.
+ * F_GETPIPE_SZ gives a pipe's capacity, which bash asks before it writes a
+ * here-document into a pipe it reads itself. An O_PATH descriptor takes the
+ * commands Linux lets it take, the two duplications, F_GETFD, F_SETFD and
+ * F_GETFL, which reports O_PATH, and is -EBADF to the rest.
  */
 int32_t sys_fcntl64(isr_params_t *params)
 {
@@ -8324,7 +8325,8 @@ int32_t sys_fcntl64(isr_params_t *params)
         F_SETFD = 2,
         F_GETFL = 3,
         F_SETFL = 4,
-        F_DUPFD_CLOEXEC = 1030
+        F_DUPFD_CLOEXEC = 1030,
+        F_GETPIPE_SZ = 1032
     };
 
     if (!current_proc) {
@@ -8433,6 +8435,8 @@ int32_t sys_fcntl64(isr_params_t *params)
     case F_ADD_SEALS:
     case F_GET_SEALS:
         return fcntl_seals(entry, cmd, arg);
+    case F_GETPIPE_SZ:
+        return entry->type == FD_TYPE_PIPE ? PIPE_BUF_SIZE : -EBADF;
     default:
         return -EINVAL;
     }

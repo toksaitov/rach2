@@ -128,6 +128,15 @@ describes.
 Return the seals of the tmpfs file
 .Fa fd
 is open on.
+.It Dv F_GETPIPE_SZ
+Return the capacity of the pipe or FIFO
+.Fa fd
+is an end of, which is 4096 bytes.
+Linux's is 65536 bytes unless
+.Dv F_SETPIPE_SZ
+changes it; here
+.Dv F_SETPIPE_SZ
+is unsupported and the capacity is fixed.
 .El
 .Pp
 Every other command is refused with
@@ -281,7 +290,11 @@ The duplication commands return a new descriptor.
 .Dv F_GETFD
 and
 .Dv F_GETFL
-return the requested flags.
+return the requested flags,
+.Dv F_GET_SEALS
+the seals and
+.Dv F_GETPIPE_SZ
+the capacity.
 The other supported commands return 0.
 When a set lock command fails, no lock has changed, but for one whose
 descriptor another thread closed during the call: that close drops the
@@ -334,9 +347,11 @@ A set lock command met a conflicting lock.
 .Fa fd
 is not an open descriptor, was opened with
 .Dv O_PATH
-and the command is not one it takes, or a read lock was asked for on a
-descriptor not open for reading or a write lock on one not open for
-writing.
+and the command is not one it takes,
+.Dv F_GETPIPE_SZ
+was given a descriptor that is no end of a pipe, or a read lock was
+asked for on a descriptor not open for reading or a write lock on one
+not open for writing.
 A POSIX set lock command also fails with it when another thread closed
 the descriptor while the call waited, after letting go of the lock it
 gained, as on Linux.

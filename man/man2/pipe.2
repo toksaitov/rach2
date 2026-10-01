@@ -17,7 +17,11 @@ creates a pipe and stores its read descriptor in
 .Fa pipefd Ns [0]
 and its write descriptor in
 .Fa pipefd Ns [1] .
-The pipe has a 4096-byte buffer.
+The pipe has a 4096-byte buffer, which
+.Dv F_GETPIPE_SZ
+of
+.Xr fcntl 2
+reports.
 Bytes are read in the order written.
 .Pp
 .Fn pipe2
