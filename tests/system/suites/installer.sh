@@ -1314,7 +1314,7 @@ mcopy -s -i "$DIR/one.img@@$((REC_START * 512))" "$DIR/saved-archive/"* ::rach2-
 mcopy -n -i "$DIR/one.img@@$((REC_START * 512))" ::rach2-config/etc/passwd "$DIR/archived-passwd" ||
     bad "the archived passwd could not be read off the recovery partition"
 echo "extra:x:1001:1001::/home/extra:/bin/sh" >> "$DIR/archived-passwd"
-mmd -i "$DIR/one.img@@$((REC_START * 512))" ::rach2-config/keys 2>/dev/null || true
+mmd -D s -i "$DIR/one.img@@$((REC_START * 512))" ::rach2-config/keys 2>/dev/null || true
 mmd -i "$DIR/one.img@@$((REC_START * 512))" ::rach2-config/keys/2999 ||
     { bad "the unowned archived key directory could not be made"; exit 1; }
 printf '%s\n' "$PUBKEY" "# orphan-uid-2999" > "$DIR/orphan-key"
