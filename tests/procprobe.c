@@ -203,6 +203,31 @@ static int fields_in(const char *b, int n)
     return fields;
 }
 
+/**
+ * Field `k` of a stat line as a number, counted from 1 as proc(5) counts
+ * them, or 0 when the line ends first. The fields after the name, which
+ * may hold blanks, are counted from its closing parenthesis.
+ */
+static unsigned stat_field(const char *b, int n, int k)
+{
+    int i = n - 1, field = 2;
+    unsigned v = 0;
+
+    while (i >= 0 && b[i] != ')') {
+        i--;
+    }
+    for (i++; i < n && field < k; i++) {
+        if (b[i] == ' ') {
+            field++;
+        }
+    }
+    while (i < n && b[i] >= '0' && b[i] <= '9') {
+        v = v * 10 + (unsigned)(b[i] - '0');
+        i++;
+    }
+    return v;
+}
+
 /** How many times `c` occurs. */
 static int count_of(const char *b, int n, char c)
 {
@@ -856,6 +881,8 @@ void probe_main(unsigned int *sp)
     check(n > 0 && buf[n - 1] == '\n', "/proc/self/stat ends with its newline");
     check(count_of(buf, n, ')') == 1, "/proc/self/stat closes the comm field");
     check(fields_in(buf, n) >= 24, "/proc/self/stat carries every field through to the last");
+    check(stat_field(buf, n, 22) > 0 && stat_field(buf, n, 23) > 0 && stat_field(buf, n, 24) > 0,
+          "/proc/self/stat gives a start time, a size and resident pages");
 
     n = slurp("/proc/self/cmdline", buf, (int)sizeof(buf));
     check(n > 0 && buf[n - 1] == '\0', "/proc/self/cmdline ends with its NUL");

@@ -118,6 +118,21 @@ process_t *get_process(uint32_t pid)
 }
 
 /** The whole process's time, its two threads' together. */
+/* The address space's size and pages, which a stat line gives and no check
+ * here reads. */
+uint32_t vm_total(const vm_space_t *vm)
+{
+    (void)vm;
+    return 0;
+}
+
+uintptr_t paging_user_phys(page_dir_t *dir, uint32_t va)
+{
+    (void)dir;
+    (void)va;
+    return 0;
+}
+
 void proc_cpu_time(const process_t *p, uint32_t *user, uint32_t *sys)
 {
     (void)p;

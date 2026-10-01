@@ -8,6 +8,8 @@
 #include "sched.h"
 #include "tgroup.h"
 
+extern volatile uint32_t kernel_ticks;
+
 /* The offsets switch.s reads from the process record, as `.set` values
  * there and as numbers here; a field added before one of them stops the
  * GNU build. TinyCC cannot fold an offset into an array size, so a kernel it
@@ -148,6 +150,7 @@ process_t *alloc_process(void)
         return NULL;
     }
     k_memset(p, 0, sizeof(*p));
+    p->start_ticks = kernel_ticks;
     p->tg = tgroup_new(p);
     if (!p->tg) {
         kfree(p);

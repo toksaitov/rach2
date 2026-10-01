@@ -375,6 +375,8 @@ static char proc_state_char(const process_t *p)
     return p->state == PROC_BLOCKED ? 'S' : 'R';
 }
 
+static uint32_t mm_resident(const struct mm *mm);
+
 /**
  * Format /proc/<pid>/stat into `t`, returning its length or -ENOENT.
  *
@@ -384,13 +386,17 @@ static char proc_state_char(const process_t *p)
  * the 100 Hz clock ticks the fields count: the whole process's, every
  * thread's, for a process's file (`whole`), and the thread's own for a
  * thread's under /proc/<pid>/task, as Linux keeps them apart; the children's
- * are the process's in both. The nice value is the one setpriority keeps;
- * the accounting fields the kernel does not keep (faults, sizes) are zero,
- * but every field is present and in order.
+ * are the process's in both. The nice value is the one setpriority keeps.
+ * The start time is the tick the process or thread was made at, which ps
+ * subtracts from the uptime for its elapsed time, and the virtual size in
+ * bytes and the resident pages are the address space's, as statm has them.
+ * The accounting fields the kernel does not keep (faults) are zero, but
+ * every field is present and in order.
  */
 static int procfs_gen_stat(struct procfs_text *t, int pid, int whole)
 {
     process_t *p;
+    const struct mm *mm;
     uint32_t user;
     uint32_t sys;
     int i;
@@ -443,8 +449,13 @@ static int procfs_gen_stat(struct procfs_text *t, int pid, int whole)
     ap_int(t, (int)p->nice);
     ap_ch(t, ' ');
     ap_u32(t, p->tg->live); /* 20 num_threads */
-    ap_str(t, " 0 0");      /* 21 itrealvalue, 22 starttime */
-    ap_str(t, " 0 0");      /* 23 vsize, 24 rss */
+    ap_str(t, " 0 ");       /* 21 itrealvalue */
+    ap_u32(t, p->start_ticks);
+    ap_ch(t, ' ');
+    mm = p->mm;
+    ap_u32(t, mm ? vm_total(&mm->vm) : 0);
+    ap_ch(t, ' ');
+    ap_u32(t, mm ? mm_resident(mm) : 0);
     ap_ch(t, '\n');
     if (!t->nomem) {
         t->buf[t->len] = '\0';

@@ -267,6 +267,9 @@ struct process {
      * group's (`tgroup.h`). */
     uint32_t utime;
     uint32_t stime;
+    /* The tick this thread was made at, which its /proc stat file gives as
+     * its start time; an exec keeps it. */
+    uint32_t start_ticks;
     /* The nice value `setpriority` keeps, -20 to 19; fork passes it on and
      * exec keeps it. The scheduler does not read it. */
     int32_t nice;

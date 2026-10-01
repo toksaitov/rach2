@@ -504,8 +504,14 @@ keeps, and field 18 the priority Linux reports for it, 20 more than the
 nice value.
 The terminal number is 0, terminal process group is -1, and field 20 is
 the number of threads.
-Fields 9 through 13, interval timer, start time, virtual size, and
-resident size are zero.
+Field 22 is the tick, at 100 a second, the process or thread was made
+at, counted from boot, which
+.Xr ps 1
+subtracts from the uptime for the elapsed time; field 23 is the address
+space's size in bytes and field 24 its pages in memory, as
+.Pa /proc/PID/statm
+gives them.
+Fields 9 through 13 and the interval timer are zero.
 .It Pa /proc/PID/cmdline
 The arguments as the program's initial stack has them, each ended by a
 NUL; a process with no address space, as one that has ended has none,

@@ -47,6 +47,8 @@ static void tgroup_put(struct tgroup *tg);
 static void proc_cpu_time(const struct process *p, uint32_t *user, uint32_t *sys);
 #include "proc/process.c"
 
+volatile uint32_t kernel_ticks;
+
 extern int printf(const char *format, ...);
 extern int dprintf(int fd, const char *format, ...);
 

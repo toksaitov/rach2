@@ -4725,6 +4725,28 @@ new
         return entry->type == FD_TYPE_PIPE ? -EINVAL : -EBADF;
 end
 
+# The start time and sizes of /proc/PID/stat, which ps reads.
+
+fault stat-start-zero
+probe procprobe
+file rach2/sys/fs/procfs.c
+expect FAIL: /proc/self/stat gives a start time, a size and resident pages
+old
+    ap_u32(t, p->start_ticks);
+new
+    ap_u32(t, p->start_ticks * 0);
+end
+
+fault stat-rss-zero
+probe procprobe
+file rach2/sys/fs/procfs.c
+expect FAIL: /proc/self/stat gives a start time, a size and resident pages
+old
+    ap_u32(t, mm ? mm_resident(mm) : 0);
+new
+    ap_u32(t, mm ? mm_resident(mm) * 0 : 0);
+end
+
 # syncfs.
 
 fault syncfs-missing
