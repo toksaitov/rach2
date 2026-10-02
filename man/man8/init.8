@@ -215,7 +215,8 @@ OpenSSH's configuration and host keys, on the GNU system's root.
 OpenSSH's server, which the metal build runs in place of Dropbear
 when the image has it.
 .It Pa /var/log/services
-Service output and diagnostics.
+Service output and diagnostics, with the SSH server's record of each
+login, readable only by root.
 .It Pa /etc/machine-id
 The machine's identity, made at the first boot of the GNU system's root.
 .It Pa /usr/bin/dbus-daemon

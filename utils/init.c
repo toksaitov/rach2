@@ -92,8 +92,9 @@ static const char *const Shell_Arg0[] = {"-sh", "-ish", 0};
  * `/etc/rach2/sshd.conf` permits it (`root_password_login`).
  *
  * OpenSSH's `sshd` takes `-D` for the same foreground and `-e` to write its
- * log to standard error, which is the service log, since the system has no
- * syslog daemon. Its argv[0] is its absolute path, without which it refuses
+ * log to standard error, which is the service log, readable only by root, as
+ * Linux keeps its authentication log from users; the system log is readable
+ * by all. Its argv[0] is its absolute path, without which it refuses
  * to start, since a SIGHUP makes it execute itself again by that name to
  * read its configuration anew. It makes no host keys: `ssh-keygen -A` runs
  * before each start and makes those missing from `/etc/ssh`, every one on a
