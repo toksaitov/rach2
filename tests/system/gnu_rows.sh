@@ -540,7 +540,8 @@ row_tmux() {
 
 # cron runs a user's crontab: crontab, set-id to its group, installs the
 # test account's into the spool, and the daemon init started runs its job
-# at the next minute.
+# at the next minute and logs no error, as it does at each change of a
+# crontab when /etc/crontab or /etc/cron.d is missing.
 row_cron() {
     local i=0
     same "the daemon" "$(pgrep -x crond | wc -l)" "1"
@@ -553,6 +554,7 @@ row_cron() {
         i=$((i + 1))
     done
     same "the job's output" "$(cat /tmp/cron-row.out 2>&1)" "cron row"
+    same "the daemon's errors" "$(grep -c 'cron.err crond' /var/log/messages)" "0"
     su test -c 'crontab -r'
 }
 
