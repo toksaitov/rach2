@@ -578,6 +578,24 @@ row_htop() {
     has "the screen" "$OUT" "Load average"
 }
 
+# Chawan draws a page as text: a table's cells on one line, the boxes of a
+# flex container side by side, and a paragraph that a script changes only
+# when scripting is turned on.
+row_chawan() {
+    has "the version" "$(cha -v)" "Chawan"
+    printf '%s' '<table><tr><td>left cell</td><td>right cell</td></tr></table>' \
+        '<div style="display:flex"><div>first box</div><div>second box</div></div>' \
+        '<p id="p">static text</p>' \
+        '<script>document.getElementById("p").textContent = "script " + 6 * 7</script>' \
+        >"$WORK/c.html"
+    output "a page" cha -d "$WORK/c.html"
+    has "the table's row" "$(printf '%s\n' "$OUT" | grep 'left cell')" "right cell"
+    has "the flex row" "$(printf '%s\n' "$OUT" | grep 'first box')" "second box"
+    has "the page without scripts" "$OUT" "static text"
+    output "a page with scripts" cha -d -o buffer.scripting=true "$WORK/c.html"
+    has "the script's text" "$OUT" "script 42"
+}
+
 # dosfstools makes a FAT volume in a file, checks it, and names it again.
 row_dosfstools() {
     runs "a file" dd if=/dev/zero of="$WORK/v.img" bs=1M count=16 status=none

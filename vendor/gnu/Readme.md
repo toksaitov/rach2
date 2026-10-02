@@ -97,9 +97,12 @@ The ports milestone 55 added were built one at a time, so the table of them give
 | NTBTLS       | 0.3.2         | 0.2 MB   |
 | pinentry     | 1.3.3         | 0.2 MB   |
 | GnuPG        | 2.5.24        | 9.4 MB   |
-| htop         | 3.5.3         |          |
-| dosfstools   | 4.2           |          |
-| shadow       | 4.20.2        |          |
+| htop         | 3.5.3         | 0.5 MB   |
+| dosfstools   | 4.2           | 0.5 MB   |
+| shadow       | 4.20.2        | 1.3 MB   |
+| brotli       | 1.2.0         | 1.0 MB   |
+| libssh2      | 1.11.1        | 1.2 MB   |
+| Chawan       | 0.5~dev1      | 6.3 MB   |
 
 These notes say what some ports provide and what they leave to the system they are installed on.
 
@@ -118,6 +121,7 @@ These notes say what some ports provide and what they leave to the system they a
 * Python has the modules of its standard library that link the root's libraries, and neither `tkinter`, `dbm.gnu`, pip nor the test suite. Its ssl module is built against OpenSSL 4, which has no SSLv3 and no methods of one protocol version. Its byte code records a hash of each source, since the image gives every file the same time.
 * htop has ncurses' wide characters and CPU affinity, and no sensors, capabilities, delay accounting, hwloc or libunwind. dosfstools installs `mkfs.fat` and `fsck.fat` with Debian's other names for them, which the path finds before BusyBox's `mkdosfs`.
 * shadow installs the account tools BusyBox has not, `useradd`, `usermod`, `userdel`, the group tools, `gpasswd`, `chsh`, `chfn`, `chage`, `vipw` and the checkers, with `/etc/login.defs`; `passwd`, `su`, `login`, `chpasswd` and `nologin` stay BusyBox's and `newgrp` util-linux's. `chsh`, `chfn` and `gpasswd` are set-id root, as on Debian; `chage` is not, where Debian's is set-group-ID `shadow`, so only root runs it. There is no PAM, no subordinate ids and no `lastlog`.
+* Chawan, `cha`, is the terminal's web browser: its own HTML and CSS engine with flow, table and flex layout, JavaScript in QuickJS when its configuration turns scripting on, HTTP and HTTPS with brotli, SFTP through libssh2, Gopher and Gemini, and images in a terminal that shows sixels or the kitty protocol. Each page loads in a process of its own under a seccomp filter. Its recipe builds Nim 2.2.12 for the build host and compiles Chawan with it, and `chac`, which compiles its startup script to QuickJS byte code, runs on the build host. brotli's libraries and its `brotli` program are compiled by the recipe itself, since upstream builds with CMake.
 * GnuPG has its agent, `dirmngr` with NTBTLS for hkps, `keyboxd` with SQLite and `pinentry`'s curses and tty programs, and no LDAP and no TPM2 daemon.
 
 ## The root image

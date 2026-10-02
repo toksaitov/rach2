@@ -85,6 +85,12 @@
 #   release tarballs are the ones Debian has, and Debian's htop is the git
 #   archive of the tag, with which htop's release has every file in common
 #   the same, and adds the files autoconf and automake generate.
+# * Nim, libssh2, brotli and Chawan, checked the same way against Debian's
+#   source index for unstable of 2026-10-02: Nim's and libssh2's release
+#   tarballs are the ones Debian has, and brotli's and Chawan's files are
+#   Debian's, from its snapshot archive, since Debian's brotli is a git
+#   archive of the tag and its Chawan a repacked snapshot of the development
+#   after 0.4.4, from 2026-09-16, which no release has.
 binutils 2.47 https://ftp.gnu.org/gnu/binutils/binutils-2.47.tar.xz 154ab23b60070e8f27013c22977f1129425d67d1e8acd6e13010e617811e4cff
 gcc 16.2.0 https://ftp.gnu.org/gnu/gcc/gcc-16.2.0/gcc-16.2.0.tar.xz e6738e29597f733270731aa90600f37ffdc045079dfc27ec7e8192cc81085c3e
 gmp 6.3.0 https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz a3c2b80201b89e68616f4ad30bc66aee4927c3ce50e33929ca819d5c43538898
@@ -179,3 +185,7 @@ gnupg 2.5.24 https://www.gnupg.org/ftp/gcrypt/gnupg/gnupg-2.5.24.tar.bz2 bf149d0
 htop 3.5.3 https://github.com/htop-dev/htop/releases/download/3.5.3/htop-3.5.3.tar.xz a8b164386494cb85bb255a415a3f5f80afe7a0c4491da5d113b3a0f951087e65
 shadow 4.20.2 https://github.com/shadow-maint/shadow/releases/download/4.20.2/shadow-4.20.2.tar.xz b89f432b75ae55a2d852b446d0365484795fdf533ab97d550e325fa15594a224
 dosfstools 4.2 https://github.com/dosfstools/dosfstools/releases/download/v4.2/dosfstools-4.2.tar.gz 64926eebf90092dca21b14259a5301b7b98e7b1943e8a201c7d726084809b527
+nim 2.2.12 https://github.com/nim-lang/nightlies/releases/download/2026-09-08-version-2-2-8e8fbf60693418dc95bb0d762fd660231d08a583/nim-2.2.12.tar.xz 2639a06a5ea7a7fcf57df1e7e1ef4d1b2bee58c7ac9bd00dbd2aa5bea1e5a56a
+libssh2 1.11.1 https://libssh2.org/download/libssh2-1.11.1.tar.gz d9ec76cbe34db98eec3539fe2c899d26b0c837cb3eb466a56b0f109cabf658f7
+brotli 1.2.0 https://snapshot.debian.org/archive/debian/20261002T000000Z/pool/main/b/brotli/brotli_1.2.0.orig.tar.gz eb5f7dadf215d0670665fd81566e1fe2dfdc154d983f09142de7299df4c182e6
+chawan 0.5~dev1 https://snapshot.debian.org/archive/debian/20261002T000000Z/pool/main/c/chawan/chawan_0.5~dev1+ds.orig.tar.xz 2e6ce739a797bf5e9fefa0d566408dc0505f84dd492683625fdf1bde2e76ea1a
