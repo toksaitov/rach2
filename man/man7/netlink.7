@@ -216,6 +216,24 @@ a
 .Ql noqueue
 discipline at the root of each interface, since a frame goes to the card
 when it is sent, with no queue before it.
+.It Dv RTM_GETNETCONF
+With
+.Dv NLM_F_DUMP
+and the family
+.Dv AF_INET
+or none, the IPv4 configuration of each interface, then of all, index -1,
+and of the default, index -2, as
+.Ql ip netconf
+prints it: forwarding, the reverse-path filter, multicast forwarding,
+proxy ARP and the routes through a link that is down, all off, since the
+stack does none of them; another family has none.
+Without it, the configuration its
+.Dv NETCONFA_IFINDEX
+attribute names, or
+.Er EINVAL
+with none and
+.Er ENODEV
+for an index no interface has.
 .It Dv RTM_GETNEIGH
 With
 .Dv NLM_F_DUMP ,

@@ -49,6 +49,10 @@
 #define RTM_NEWQDISC  36
 #define RTM_GETQDISC  38
 
+/* The configuration of an interface, which `ip netconf` asks for. */
+#define RTM_NEWNETCONF 80
+#define RTM_GETNETCONF 82
+
 /* Attributes of a link, an address and a route. */
 #define IFLA_ADDRESS   1
 #define IFLA_BROADCAST 2
@@ -71,6 +75,14 @@
 #define NDA_LLADDR     2
 #define NDA_IFINDEX    8
 #define NTF_PROXY      0x08u
+
+/* Attributes of an interface's configuration, and the indexes Linux gives
+ * the configuration of all interfaces and the default for new ones. */
+#define NETCONFA_IFINDEX                     1
+#define NETCONFA_FORWARDING                  2
+#define NETCONFA_IGNORE_ROUTES_WITH_LINKDOWN 6
+#define NETCONFA_IFINDEX_ALL                 0xFFFFFFFFu
+#define NETCONFA_IFINDEX_DEFAULT             0xFFFFFFFEu
 
 #define ARPHRD_ETHER      1
 #define IFF_LOWER_UP      0x10000u
@@ -1016,6 +1028,66 @@ static void change_answer(struct nl_build *b, const uint8_t *req, uint16_t type,
     }
 }
 
+/*
+ * The IPv4 configuration of the interface of index `index`, or of all and of
+ * the default with Linux's -1 and -2, as `ip netconf` reads it: forwarding,
+ * the reverse-path filter, multicast forwarding, proxy ARP and the routes
+ * through a link that is down, each 0, since this stack does none of them.
+ */
+static void netconf_msg(struct nl_build *b, uint32_t index, uint16_t flags)
+{
+    uint8_t msg[NL_MSG_MAX];
+    uint8_t *ncm = msg_start(b, msg, RTM_NEWNETCONF, flags, 4);
+    uint16_t a;
+
+    ncm[0] = AF_INET;
+    msg_attr32(msg, NETCONFA_IFINDEX, index);
+    for (a = NETCONFA_FORWARDING; a <= NETCONFA_IGNORE_ROUTES_WITH_LINKDOWN; a++) {
+        msg_attr32(msg, a, 0);
+    }
+    nl_append(b, msg);
+}
+
+/* RTM_GETNETCONF: with NLM_F_DUMP, a message for each interface, then all
+ * and the default, for IPv4 or any family; otherwise the one its
+ * NETCONFA_IFINDEX names, EINVAL with none and ENODEV for an index no
+ * interface has. */
+static void netconf_answer(struct nl_build *b, const uint8_t *req, uint16_t flags, uint32_t body)
+{
+    uint16_t len;
+    const uint8_t *at;
+    uint32_t index;
+    int i;
+
+    if ((flags & NLM_F_DUMP) == NLM_F_DUMP) {
+        if (body < 1 || req[NLMSG_HDRLEN] == AF_INET || req[NLMSG_HDRLEN] == 0) {
+            for (i = 0; i < netdev_seen_count(); i++) {
+                const struct netdev *nd = netdev_at(i);
+
+                if (nd) {
+                    netconf_msg(b, (uint32_t)nd->index, NLM_F_MULTI);
+                }
+            }
+            netconf_msg(b, NETCONFA_IFINDEX_ALL, NLM_F_MULTI);
+            netconf_msg(b, NETCONFA_IFINDEX_DEFAULT, NLM_F_MULTI);
+        }
+        end_msg(b, 0, 0);
+        return;
+    }
+    at = req_attr(req, body, 4, NETCONFA_IFINDEX, &len);
+    if (!at || len != 4) {
+        end_msg(b, req, -EINVAL);
+        return;
+    }
+    index = get32(at);
+    if (index != NETCONFA_IFINDEX_ALL && index != NETCONFA_IFINDEX_DEFAULT &&
+        !dev_of_index(index)) {
+        end_msg(b, req, -ENODEV);
+        return;
+    }
+    netconf_msg(b, index, 0);
+}
+
 /* Answer the request of `type` and `flags`, whose header is `req` and whose
  * body of `body` bytes follows it. */
 static void answer(struct nl_build *b, const uint8_t *req, uint16_t type, uint16_t flags,
@@ -1053,6 +1125,10 @@ static void answer(struct nl_build *b, const uint8_t *req, uint16_t type, uint16
         if (rc != 0) {
             end_msg(b, req, rc);
         }
+        return;
+    }
+    if (type == RTM_GETNETCONF) {
+        netconf_answer(b, req, flags, body);
         return;
     }
     if ((flags & NLM_F_DUMP) == NLM_F_DUMP && (type == RTM_GETRULE || type == RTM_GETQDISC)) {

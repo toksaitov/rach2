@@ -295,6 +295,7 @@ row_iproute2() {
     has "ip route get" "$(ip route get 10.0.2.2 2>&1)" "10.0.2.2 dev eth0 src 10.0.2.15"
     has "ip rule" "$(ip rule 2>&1)" "32766:	from all lookup main"
     has "tc qdisc" "$(tc qdisc 2>&1)" "qdisc noqueue 0: dev eth0 root"
+    has "ip netconf" "$(ip netconf 2>&1)" "ipv4 all forwarding off rp_filter off"
     perl -MIO::Socket::INET -e 'my $s = IO::Socket::INET->new(LocalPort => 5999, Listen => 1) or die; sleep 90' &
     local pid=$! i=0
     until grep -q ':176F ' /proc/net/tcp || [ $i -ge 600 ]; do
