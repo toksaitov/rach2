@@ -264,6 +264,34 @@ static int32_t ifreq_ioctl(uint32_t request, uint32_t arg)
 }
 
 /**
+ * The interface a route is for: the one the name at the caller's address
+ * `dev` names, or, when `dev` is null, the one whose subnet has the gateway
+ * `gw`, or the first. 0 with it in `*out`, or ENODEV when there is no such
+ * interface and EFAULT when the name cannot be read.
+ */
+static int32_t route_device(uint32_t dev, uint32_t gw, struct netdev **out)
+{
+    uint8_t name[IFREQ_NAMESIZE];
+    int i, got;
+
+    *out = netdev_first();
+    for (i = 0; dev == 0 && gw != 0 && i < netdev_seen_count(); i++) {
+        if (netdev_on_link(netdev_at(i), gw)) {
+            *out = netdev_at(i);
+            break;
+        }
+    }
+    if (dev != 0) {
+        got = strncpy_from_user((char *)name, (const char __user *)dev, (uint32_t)IFREQ_NAMESIZE);
+        if (got < 0) {
+            return got == -EFAULT ? -EFAULT : -ENODEV;
+        }
+        *out = named(name);
+    }
+    return *out ? 0 : -ENODEV;
+}
+
+/**
  * Add or remove a route; root only.
  *
  * The route is for the interface the request's `rt_dev` names; when that
@@ -287,10 +315,10 @@ static int32_t ifreq_ioctl(uint32_t request, uint32_t arg)
 static int32_t route_ioctl(uint32_t request, uint32_t arg)
 {
     uint8_t rt[RTENTRY_LEN];
-    uint8_t name[IFREQ_NAMESIZE];
     uint32_t dst, gw, mask, dev, metric, flags;
     struct netdev *nd;
     int32_t rc;
+    int gateway_route; /* a default route of no metric, which is the gateway */
 
     if (!current_proc || !proc_privileged(current_proc)) {
         return -EPERM;
@@ -306,39 +334,21 @@ static int32_t route_ioctl(uint32_t request, uint32_t arg)
 
     dev = (uint32_t)rt[RTENTRY_DEV] | ((uint32_t)rt[RTENTRY_DEV + 1] << 8) |
           ((uint32_t)rt[RTENTRY_DEV + 2] << 16) | ((uint32_t)rt[RTENTRY_DEV + 3] << 24);
-    nd = netdev_first();
-    if (dev == 0 && gw != 0) {
-        int i;
-
-        for (i = 0; i < netdev_seen_count(); i++) {
-            if (netdev_on_link(netdev_at(i), gw)) {
-                nd = netdev_at(i);
-                break;
-            }
-        }
+    rc = route_device(dev, gw, &nd);
+    if (rc != 0) {
+        return rc;
     }
-    if (dev != 0) {
-        int got =
-            strncpy_from_user((char *)name, (const char __user *)dev, (uint32_t)IFREQ_NAMESIZE);
-
-        if (got < 0) {
-            return got == -EFAULT ? -EFAULT : -ENODEV;
-        }
-        nd = named(name);
-    }
-    if (!nd) {
-        return -ENODEV;
-    }
+    gateway_route = dst == 0 && mask == 0 && metric == 0;
     if (request == SIOCADDRT && gw != 0 && !netdev_on_link(nd, gw)) {
         return -ENETUNREACH;
     }
-    if (request == SIOCADDRT && dst == 0 && mask == 0 && metric == 0 && gw == 0) {
+    if (request == SIOCADDRT && gateway_route && gw == 0) {
         return -EINVAL;
     }
     if (nd->mask != 0 && dst == (nd->ip & nd->mask) && mask == nd->mask && gw == 0) {
         return request == SIOCADDRT ? 0 : -EOPNOTSUPP;
     }
-    if (dst == 0 && mask == 0 && metric == 0 &&
+    if (gateway_route &&
         (request == SIOCADDRT ? nd->gateway == 0 || nd->gateway == gw : nd->gateway != 0)) {
         if (request == SIOCADDRT) {
             return netconf_set_gateway(nd, gw);

@@ -225,7 +225,7 @@ rach2/sys/syscall_fs.c:readv_dgram params 7 the parameters are the parts of one 
 rach2/sys/syscall_fs.c:synth_dirent_at complexity 47 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_fs.c:synth_dirent_at lines 208 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_fs.c:synth_open lines 119 a dispatcher, one arm per command, read as a table
-rach2/sys/syscall_fs.c:synth_stat lines 291 a dispatcher, one arm per command, read as a table
+rach2/sys/syscall_fs.c:synth_stat lines 295 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_fs.c:sys__llseek complexity 35 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:sys__llseek lines 145 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:sys_fcntl64 lines 132 a dispatcher, one arm per command, read as a table
@@ -649,8 +649,8 @@ tests/musl/waitidmusl.c:selections complexity 29 a test's rows, each a case, rea
 
 tests/mvtest.c:_start lines 197 a probe, one sequence of steps in the order the log records them
 
-tests/netifprobe.c:netif_main complexity 131 a probe, one sequence of steps in the order the log records them
-tests/netifprobe.c:netif_main lines 609 a probe, one sequence of steps in the order the log records them
+tests/netifprobe.c:netif_main complexity 132 a probe, one sequence of steps in the order the log records them
+tests/netifprobe.c:netif_main lines 614 a probe, one sequence of steps in the order the log records them
 tests/netifprobe.c:packet_on_second lines 160 a probe, one sequence of steps in the order the log records them
 
 tests/ownprobe.c:child_main complexity 41 a probe, one sequence of steps in the order the log records them
@@ -672,11 +672,11 @@ tests/pipeprobe.c:_start nesting 5 a probe, one sequence of steps in the order t
 
 tests/pollprobe.c:_start lines 129 a probe, one sequence of steps in the order the log records them
 
-tests/procprobe.c:probe_main complexity 78 a probe, one sequence of steps in the order the log records them
+tests/procprobe.c:probe_main complexity 80 a probe, one sequence of steps in the order the log records them
 tests/procprobe.c:probe_main lines 547 a probe, one sequence of steps in the order the log records them
 
-tests/ptyprobe.c:_start complexity 38 a probe, one sequence of steps in the order the log records them
-tests/ptyprobe.c:_start lines 168 a probe, one sequence of steps in the order the log records them
+tests/ptyprobe.c:_start complexity 39 a probe, one sequence of steps in the order the log records them
+tests/ptyprobe.c:_start lines 171 a probe, one sequence of steps in the order the log records them
 
 tests/rawprobe.c:_start complexity 44 a probe, one sequence of steps in the order the log records them
 tests/rawprobe.c:_start lines 443 a probe, one sequence of steps in the order the log records them
