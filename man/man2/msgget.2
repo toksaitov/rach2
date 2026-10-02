@@ -1,0 +1,133 @@
+.Dd October 2, 2026
+.Dt MSGGET 2
+.Os
+.Sh NAME
+.Nm msgget ,
+.Nm msgsnd ,
+.Nm msgrcv ,
+.Nm msgctl
+.Nd System V message queues
+.Sh SYNOPSIS
+.In sys/msg.h
+.Ft int
+.Fn msgget "key_t key" "int msgflg"
+.Ft int
+.Fn msgsnd "int msqid" "const void *msgp" "size_t msgsz" "int msgflg"
+.Ft ssize_t
+.Fn msgrcv "int msqid" "void *msgp" "size_t msgsz" "long msgtyp" "int msgflg"
+.Ft int
+.Fn msgctl "int msqid" "int cmd" "struct msqid_ds *buf"
+.Sh DESCRIPTION
+A queue holds messages, each a type of at least 1 and up to 8192 bytes of
+text, at most 16384 bytes of text in all and as many messages.
+.Fn msgget
+finds or makes one as
+.Xr shmget 2
+does a segment, from a table of 64.
+.Pp
+.Fn msgsnd
+appends the message at
+.Fa msgp ,
+a long type and
+.Fa msgsz
+bytes of text, waiting while the queue's bytes or its count would pass its
+limit, unless
+.Dv IPC_NOWAIT .
+.Pp
+.Fn msgrcv
+takes a message into
+.Fa msgp :
+the first for a
+.Fa msgtyp
+of 0, the first of that type for a positive one, or with
+.Dv MSG_EXCEPT
+the first of another, and the first of the lowest type up to its
+magnitude for a negative one.
+It waits while there is none, unless
+.Dv IPC_NOWAIT .
+A message longer than
+.Fa msgsz
+stays and is
+.Er E2BIG ,
+unless
+.Dv MSG_NOERROR
+cuts it.
+.Dv MSG_COPY
+is
+.Er ENOSYS ,
+as from a Linux built without checkpoint and restore.
+.Pp
+.Fn msgctl
+takes
+.Dv IPC_STAT ,
+.Dv MSG_STAT ,
+.Dv MSG_STAT_ANY ,
+.Dv IPC_SET ,
+which may raise the queue's byte limit past 16384 only for a privileged
+caller,
+.Dv IPC_RMID ,
+which wakes the waiters with
+.Er EIDRM ,
+.Dv IPC_INFO
+and
+.Dv MSG_INFO ,
+as
+.Xr shmctl 2
+takes its own.
+.Ss System call interface
+The direct calls are numbers 399
+.Pq Fn msgget ,
+400
+.Pq Fn msgsnd ,
+401
+.Pq Fn msgrcv
+and 402
+.Pq Fn msgctl ;
+musl reaches the same through
+.Xr ipc 2 .
+.Sh RETURN VALUES
+.Fn msgrcv
+returns the bytes of text taken, and the others 0, an id, or what
+.Xr shmctl 2
+returns for the same commands; on failure -1 with
+.Va errno
+set.
+.Sh ERRORS
+.Bl -tag -width Er
+.It Bq Er E2BIG
+A message longer than
+.Fa msgsz
+without
+.Dv MSG_NOERROR .
+.It Bq Er EACCES
+A send to a queue the caller may not write, or a receive from one it may
+not read.
+.It Bq Er EAGAIN
+A full queue with
+.Dv IPC_NOWAIT .
+.It Bq Er EIDRM
+The queue was removed while the caller waited.
+.It Bq Er EINTR
+A signal ended the wait.
+.It Bq Er EINVAL
+A size past 8192, a type below 1, a negative
+.Fa msgsz ,
+or an id with no queue.
+.It Bq Er ENOMSG
+No message to take, with
+.Dv IPC_NOWAIT .
+.It Bq Er ENOSYS
+.Dv MSG_COPY .
+.It Bq Er EPERM
+.Dv IPC_SET
+or
+.Dv IPC_RMID
+from a caller that neither owns nor made the queue, or a byte limit past
+16384 from an unprivileged one.
+.El
+.Sh SEE ALSO
+.Xr ipc 2 ,
+.Xr mq_open 2 ,
+.Xr semget 2 ,
+.Xr shmget 2 ,
+.Xr proc 5

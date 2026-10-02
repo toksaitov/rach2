@@ -95,6 +95,8 @@ C_SRC = kernel.c \
         sys/ipc/pipe.c \
         sys/ipc/pipe_ring.c \
         sys/ipc/unix.c \
+        sys/ipc/sysv.c \
+        sys/ipc/mqueue.c \
         sys/io/poll.c \
         sys/io/poll_select.c \
         sys/io/eventfd.c \

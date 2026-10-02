@@ -5546,6 +5546,44 @@ static int32_t mmap_place(vm_space_t *vm, uint32_t addr, uint32_t len, uint32_t 
     return *base == 0 || vm_total(vm) + len > limit ? -ENOMEM : 0;
 }
 
+/**
+ * Put the region `src` describes, `len` bytes, where `mmap_place` finds for
+ * `addr` and `flags`, replacing what a MAP_FIXED range held, and map a
+ * /dev/mem region's frames at once. The region takes its own reference to
+ * the file, and the caller's is put here. Returns the address, or -errno.
+ */
+static int32_t mmap_install(uint32_t addr, uint32_t len, uint32_t flags, struct map_source *src)
+{
+    vm_space_t *vm = &current_proc->mm->vm;
+    uint32_t base = 0;
+    int32_t rc = mmap_place(vm, addr, len, flags, &base);
+
+    if (rc == 0 && (flags & MAP_FIXED)) {
+        /* A split in the removal and the new region take two entries, found
+           before the old mapping goes. */
+        if (vm_reserve(vm, 2) == 0) {
+            vm_remove(vm, base, base + len);
+            unmap_user_range(_curr_dir, base, base + len);
+        } else {
+            rc = -ENOMEM;
+            vma_exhausted("mmap");
+        }
+    }
+    if (rc == 0 &&
+        vm_insert_file(vm, base, base + len, src->prot, src->type, src->file, src->pgoff) != 0) {
+        rc = -ENOMEM;
+        vma_exhausted("mmap");
+    } else if (rc == 0 && (src->prot & VM_PROT_IO) &&
+               mmap_devmem_fill(base, len, src->pgoff, src->prot) != 0) {
+        vm_remove(vm, base, base + len);
+        unmap_user_range(_curr_dir, base, base + len);
+        rc = -ENOMEM;
+    }
+    vm_file_put(src->file);
+    vm_file_reap();
+    return rc == 0 ? (int32_t)base : rc;
+}
+
 /*
  * sys_mmap2 - map memory. Args: EBX=addr, ECX=length, EDX=prot, ESI=flags,
  * EDI=fd, EBP=pgoffset, the offset in the file in pages, which anonymous
@@ -5567,8 +5605,7 @@ int32_t sys_mmap2(isr_params_t *params)
     uint32_t prot = params->edx;
     uint32_t flags = params->esi;
     struct map_source src;
-    vm_space_t *vm;
-    uint32_t len, base = 0;
+    uint32_t len;
     int32_t rc;
 
     if (!current_proc || !current_proc->mm) {
@@ -5598,32 +5635,76 @@ int32_t sys_mmap2(isr_params_t *params)
     if (rc != 0) {
         return rc;
     }
-    vm = &current_proc->mm->vm;
-    rc = mmap_place(vm, addr, len, flags, &base);
-    if (rc == 0 && (flags & MAP_FIXED)) {
-        /* A split in the removal and the new region take two entries, found
-           before the old mapping goes. */
-        if (vm_reserve(vm, 2) == 0) {
-            vm_remove(vm, base, base + len);
-            unmap_user_range(_curr_dir, base, base + len);
-        } else {
-            rc = -ENOMEM;
-            vma_exhausted("mmap");
+    return mmap_install(addr, len, flags, &src);
+}
+
+int32_t mmap_shm(struct open_file *ofd, uint32_t addr, uint32_t len, uint32_t access, int place,
+                 char *path)
+{
+    static const uint32_t places[] = {0, MAP_FIXED_NOREPLACE, MAP_FIXED};
+    uint32_t prot = PROT_READ | ((access & SHM_MAP_WRITE) ? PROT_WRITE : 0u) |
+                    ((access & SHM_MAP_EXEC) ? PROT_EXEC : 0u);
+    struct map_source src;
+    fd_entry_t e;
+
+    if (!current_proc || !current_proc->mm) {
+        kfree(path);
+        return -ESRCH;
+    }
+    k_memset(&e, 0, sizeof(e));
+    e.type = FD_TYPE_FILE;
+    e.ofd = ofd;
+    e.flags = FD_FLAG_READ | FD_FLAG_WRITE;
+    src.prot = vm_prot_of(prot) | ((prot & PROT_WRITE) ? 0u : VM_PROT_NOWRITE);
+    src.pgoff = 0;
+    src.type = VM_SHARED;
+    src.file = filemap_shared(&e, tmpfs_shmem(ofd->vnode));
+    if (!src.file) {
+        kfree(path);
+        return -ENOMEM;
+    }
+    src.file->path = path;
+    mem_balance();
+    return mmap_install(addr, PAGE_UP(len), places[place], &src);
+}
+
+int32_t munmap_shm(uint32_t addr, const struct shmem *sh, uint32_t size)
+{
+    vm_space_t *vm = &current_proc->mm->vm;
+    vma_t *r = vm_find(vm, addr);
+    uint32_t end = addr;
+
+    if (!r || r->start != addr || r->pgoff != 0 || filemap_shmem(r->file) != sh) {
+        return -EINVAL;
+    }
+    while (r && r->start == end && filemap_shmem(r->file) == sh && end - addr < PAGE_UP(size)) {
+        end = r->end;
+        r = vm_find(vm, end);
+    }
+    if (vm_remove(vm, addr, end) != 0) {
+        vma_exhausted("shmdt");
+        return -ENOMEM;
+    }
+    unmap_user_range(_curr_dir, addr, end);
+    vm_file_reap();
+    return 0;
+}
+
+uint32_t shm_attaches(const struct shmem *sh)
+{
+    const process_t *p, *q;
+    uint32_t i, n = 0;
+
+    for (p = proc_list; p; p = p->next) {
+        for (q = proc_list; p->mm && q != p && q->mm != p->mm; q = q->next) {
+        }
+        for (i = 0; p->mm && q == p && i < p->mm->vm.count; i++) {
+            const vma_t *r = &p->mm->vm.vmas[i];
+
+            n += r->pgoff == 0 && filemap_shmem(r->file) == sh;
         }
     }
-    if (rc == 0 &&
-        vm_insert_file(vm, base, base + len, src.prot, src.type, src.file, src.pgoff) != 0) {
-        rc = -ENOMEM;
-        vma_exhausted("mmap");
-    } else if (rc == 0 && (src.prot & VM_PROT_IO) &&
-               mmap_devmem_fill(base, len, src.pgoff, src.prot) != 0) {
-        vm_remove(vm, base, base + len);
-        unmap_user_range(_curr_dir, base, base + len);
-        rc = -ENOMEM;
-    }
-    vm_file_put(src.file);
-    vm_file_reap();
-    return rc == 0 ? (int32_t)base : rc;
+    return n;
 }
 
 /*

@@ -325,11 +325,14 @@ The clock keeps UTC, so
 .Fl u
 reads it as it is.
 .It Nm ipcrm
-Remove System V shared memory segments, message queues, or semaphores.
-Rach2 has no System V IPC, so the applet fails.
+Remove System V shared memory segments, message queues, or semaphores; see
+.Xr shmget 2 ,
+.Xr semget 2
+and
+.Xr msgget 2 .
 .It Nm ipcs
-Display System V shared memory, message queue, or semaphore information.
-Rach2 has no System V IPC, so the applet fails.
+Display System V shared memory, message queue, or semaphore information,
+through the info and STAT commands of the control calls.
 .It Nm last
 List the last users who logged in.
 .It Nm linux32 , Nm linux64

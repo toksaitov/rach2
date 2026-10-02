@@ -449,6 +449,18 @@ malformed ones and those sent.
 A broadcast for a port no socket has counts as NoPorts, where Linux counts
 it in a field of its own, IgnoredMulti.
 The counters start at zero at boot and wrap at 2^32.
+.It Pa /proc/sysvipc/shm , /proc/sysvipc/sem , /proc/sysvipc/msg
+A heading and a line for each System V segment, set or queue, in Linux's
+columns: the key and the id, the permission bits in octal, a segment's
+size, creator, last operator and attachments, a set's semaphores, or a
+queue's bytes, messages, last sender and last receiver, the four ids of
+the owner and the maker, and the times in seconds since the epoch, 0 for
+never; a segment's resident bytes are its size and its swapped bytes 0.
+See
+.Xr shmget 2 ,
+.Xr semget 2
+and
+.Xr msgget 2 .
 .It Pa /proc/sys
 A few of Linux's sysctl files, each a value and a newline, read-only but
 for the two the end of this entry describes:
@@ -459,6 +471,36 @@ for the two the end of this entry describes:
 .Pa fs/inotify/max_user_watches ,
 8192, the limits of
 .Xr inotify_init 2 ;
+.Pa fs/mqueue/msg_default
+and
+.Pa msg_max ,
+10, and
+.Pa msgsize_default
+and
+.Pa msgsize_max ,
+8192, the queue
+.Xr mq_open 2
+makes without attributes and an unprivileged caller's largest, and
+.Pa queues_max ,
+256, the queues such a caller may make;
+.Pa kernel/msgmax ,
+8192,
+.Pa kernel/msgmnb ,
+16384,
+.Pa kernel/msgmni ,
+64,
+.Pa kernel/sem ,
+the most semaphores of a set, of every set, of one operation call and
+the most sets,
+.Ql 32000 2048000 500 64 ,
+.Pa kernel/shmall
+and
+.Pa kernel/shmmax ,
+4278190079, and
+.Pa kernel/shmmni ,
+64, the limits of System V IPC, which util-linux's
+.Ic ipcs
+reads;
 .Pa kernel/ostype ,
 .Ql Rach2 ;
 .Pa kernel/osrelease ,

@@ -1,0 +1,301 @@
+/**
+ * System V IPC and POSIX message queues, through musl, which reaches the
+ * System V objects through ipc(2), and through the direct calls GNU libc
+ * makes.
+ *
+ * A private segment of 8192 bytes is attached, written, and read by a child
+ * that attaches it by its id; IPC_STAT counts both attachments, and
+ * /proc/self/maps and /proc/sysvipc/shm name it. A segment removed while
+ * attached keeps its memory and the key IPC_PRIVATE until its last detach,
+ * after which its id is EINVAL. A read-only attachment cannot be made
+ * writable with mprotect. The direct shmget, shmat and shmdt do the same as
+ * ipc's.
+ *
+ * A set of two semaphores takes SETVAL and GETALL; a decrement past 0 with
+ * IPC_NOWAIT is EAGAIN, one with a timeout EAGAIN after it, and one that
+ * waits is let through by the parent's increment; a child's SEM_UNDO
+ * decrement is undone at its exit; removing the set wakes a waiter with
+ * EIDRM.
+ *
+ * A queue takes messages of types 2, 1 and 1: a negative type receives the
+ * lowest, type 0 the first; a longer message is E2BIG unless MSG_NOERROR
+ * cuts it, an empty queue with IPC_NOWAIT ENOMSG.
+ *
+ * A POSIX queue of four messages of 64 bytes gives the higher priority
+ * first; a full queue with O_NONBLOCK is EAGAIN; an empty one with a
+ * timeout ETIMEDOUT; mq_notify's signal comes with SI_MESGQ and its value
+ * when a message reaches the queue empty; poll reports a message; the
+ * name goes with mq_unlink.
+ *
+ * Prints "IPCMUSL OK" on success and "IPCMUSL FAIL (detail)" otherwise.
+ */
+
+#define _GNU_SOURCE
+#include <errno.h>
+#include <fcntl.h>
+#include <mqueue.h>
+#include <poll.h>
+#include <signal.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/ipc.h>
+#include <sys/mman.h>
+#include <sys/msg.h>
+#include <sys/sem.h>
+#include <sys/shm.h>
+#include <sys/syscall.h>
+#include <sys/wait.h>
+#include <time.h>
+#include <unistd.h>
+
+/** Report one failed check and return 1, the probe's failure status. */
+static int fail(const char *what)
+{
+    printf("IPCMUSL FAIL (%s: errno %d)\n", what, errno);
+    return 1;
+}
+
+/** Whether the file `path` has the text `needle`. */
+static int file_has(const char *path, const char *needle)
+{
+    static char buf[8192];
+    int fd = open(path, O_RDONLY);
+    ssize_t n, got = 0;
+
+    if (fd < 0) {
+        return 0;
+    }
+    while (got < (ssize_t)sizeof(buf) - 1 &&
+           (n = read(fd, buf + got, sizeof(buf) - 1 - (size_t)got)) > 0) {
+        got += n;
+    }
+    close(fd);
+    buf[got] = '\0';
+    return strstr(buf, needle) != NULL;
+}
+
+/** The status of the child `pid` when it exits, or -1. */
+static int child_status(pid_t pid)
+{
+    int status;
+
+    if (pid < 0 || waitpid(pid, &status, 0) != pid || !WIFEXITED(status)) {
+        return -1;
+    }
+    return WEXITSTATUS(status);
+}
+
+/** A segment shared with a child, counted, named, removed while attached
+ * and refused after; a read-only attachment; the direct calls. */
+static int shm_rows(void)
+{
+    struct shmid_ds ds;
+    char *p, *q, *ro;
+    int id = shmget(IPC_PRIVATE, 8192, IPC_CREAT | 0600);
+    char key[32];
+    pid_t child;
+
+    if (id < 0 || (p = shmat(id, NULL, 0)) == (void *)-1) {
+        return fail("shmget and shmat");
+    }
+    strcpy(p, "from the parent");
+    child = fork();
+    if (child == 0) {
+        q = shmat(id, NULL, 0);
+        _exit(q != (void *)-1 && strcmp(q, "from the parent") == 0 &&
+                      shmctl(id, IPC_STAT, &ds) == 0 && ds.shm_nattch == 3 && shmdt(q) == 0
+                  ? 0
+                  : 1);
+    }
+    if (child_status(child) != 0) {
+        return fail("a child attaches the segment, reads it and counts three attachments");
+    }
+    snprintf(key, sizeof(key), " %10d  ", id);
+    if (!file_has("/proc/self/maps", "/SYSV00000000 (deleted)") ||
+        !file_has("/proc/sysvipc/shm", key)) {
+        return fail("/proc/self/maps and /proc/sysvipc/shm name the segment");
+    }
+    if (shmctl(id, IPC_RMID, NULL) != 0 || shmctl(id, IPC_STAT, &ds) != 0 ||
+        !(ds.shm_perm.mode & 01000) || ds.shm_nattch != 1 || strcmp(p, "from the parent") != 0) {
+        return fail("a segment removed while attached is kept, marked SHM_DEST");
+    }
+    if (shmdt(p) != 0 || shmctl(id, IPC_STAT, &ds) != -1 || errno != EINVAL) {
+        return fail("its last detach frees it");
+    }
+    id = (int)syscall(SYS_shmget, IPC_PRIVATE, 4096, IPC_CREAT | 0600);
+    ro = id < 0 ? (void *)-1 : (char *)syscall(SYS_shmat, id, 0, SHM_RDONLY);
+    if (ro == (void *)-1 || mprotect(ro, 4096, PROT_READ | PROT_WRITE) != -1 || errno != EACCES ||
+        syscall(SYS_shmdt, ro) != 0 || shmctl(id, IPC_RMID, NULL) != 0) {
+        return fail("the direct calls, and a read-only attachment mprotect cannot make writable");
+    }
+    return 0;
+}
+
+/** A child's view: a wait for the semaphore, which the parent lets through,
+ * then a SEM_UNDO decrement undone at its exit. */
+static int sem_child(int id)
+{
+    struct sembuf take = {0, -1, 0}, undo = {1, -1, SEM_UNDO};
+
+    return semop(id, &take, 1) == 0 && semop(id, &undo, 1) == 0 ? 0 : 1;
+}
+
+/** A set of two: values, refusals, a timeout, a waiter let through, an
+ * undo, and a waiter woken by the set's removal. */
+static int sem_rows(void)
+{
+    struct sembuf take = {0, -1, IPC_NOWAIT}, give = {0, 1, 0}, wait0 = {0, -1, 0};
+    struct timespec ts = {0, 100000000};
+    unsigned short all[2];
+    int id = semget(IPC_PRIVATE, 2, IPC_CREAT | 0600);
+    pid_t child;
+
+    if (id < 0 || semctl(id, 1, SETVAL, 1) != 0 || semctl(id, 0, GETALL, all) != 0 || all[0] != 0 ||
+        all[1] != 1) {
+        return fail("semget, SETVAL and GETALL");
+    }
+    if (semop(id, &take, 1) != -1 || errno != EAGAIN) {
+        return fail("a decrement past 0 with IPC_NOWAIT is EAGAIN");
+    }
+    take.sem_flg = 0;
+    if (semtimedop(id, &take, 1, &ts) != -1 || errno != EAGAIN) {
+        return fail("one with a timeout is EAGAIN after it");
+    }
+    child = fork();
+    if (child == 0) {
+        _exit(sem_child(id));
+    }
+    while (semctl(id, 0, GETNCNT) != 1) {
+        usleep(10000);
+    }
+    if (semop(id, &give, 1) != 0 || child_status(child) != 0 || semctl(id, 1, GETVAL) != 1) {
+        return fail("a waiter let through, and a child's SEM_UNDO undone at its exit");
+    }
+    child = fork();
+    if (child == 0) {
+        _exit(semop(id, &wait0, 1) == -1 && errno == EIDRM ? 0 : 1);
+    }
+    while (semctl(id, 0, GETNCNT) != 1) {
+        usleep(10000);
+    }
+    if (semctl(id, 0, IPC_RMID) != 0 || child_status(child) != 0) {
+        return fail("removing the set wakes its waiter with EIDRM");
+    }
+    return 0;
+}
+
+/** A queue's order by type, a cut message, and an empty queue. */
+static int msg_rows(void)
+{
+    struct {
+        long type;
+        char text[16];
+    } m;
+    int id = msgget(IPC_PRIVATE, IPC_CREAT | 0600);
+
+    m.type = 2;
+    strcpy(m.text, "second type");
+    if (id < 0 || msgsnd(id, &m, 12, 0) != 0) {
+        return fail("msgget and msgsnd");
+    }
+    m.type = 1;
+    strcpy(m.text, "first type");
+    if (msgsnd(id, &m, 11, 0) != 0 || msgsnd(id, &m, 11, 0) != 0) {
+        return fail("two more messages");
+    }
+    if (msgrcv(id, &m, sizeof(m.text), -2, 0) != 11 || m.type != 1 ||
+        msgrcv(id, &m, sizeof(m.text), 0, 0) != 12 || m.type != 2) {
+        return fail("a negative type takes the lowest, type 0 the first");
+    }
+    if (msgrcv(id, &m, 4, 1, 0) != -1 || errno != E2BIG || msgrcv(id, &m, 4, 1, MSG_NOERROR) != 4 ||
+        memcmp(m.text, "firs", 4) != 0) {
+        return fail("a longer message is E2BIG unless MSG_NOERROR cuts it");
+    }
+    if (msgrcv(id, &m, sizeof(m.text), 0, IPC_NOWAIT) != -1 || errno != ENOMSG ||
+        msgctl(id, IPC_RMID, NULL) != 0) {
+        return fail("an empty queue with IPC_NOWAIT is ENOMSG");
+    }
+    return 0;
+}
+
+static volatile int mq_signo, mq_code, mq_value;
+
+static void on_mq(int sig, siginfo_t *si, void *ctx)
+{
+    (void)ctx;
+    mq_signo = sig;
+    mq_code = si->si_code;
+    mq_value = si->si_value.sival_int;
+}
+
+/** A POSIX queue: priorities, a full queue, a timeout, a notification, poll
+ * and the name's removal. */
+static int mq_rows(void)
+{
+    struct mq_attr attr = {0, 4, 64, 0};
+    struct sigevent ev;
+    struct sigaction sa;
+    struct timespec ts;
+    struct pollfd pfd;
+    char buf[64];
+    unsigned prio;
+    int i;
+    mqd_t q = mq_open("/ipcmusl", O_CREAT | O_EXCL | O_RDWR | O_NONBLOCK, 0600, &attr);
+
+    if (q == (mqd_t)-1 || mq_send(q, "low", 3, 1) != 0 || mq_send(q, "high", 4, 5) != 0) {
+        return fail("mq_open and mq_send");
+    }
+    if (mq_receive(q, buf, sizeof(buf), &prio) != 4 || prio != 5 || memcmp(buf, "high", 4) != 0) {
+        return fail("the higher priority first");
+    }
+    for (i = 0; i < 3; i++) {
+        mq_send(q, "x", 1, 0);
+    }
+    if (mq_send(q, "x", 1, 0) != -1 || errno != EAGAIN) {
+        return fail("a full queue with O_NONBLOCK is EAGAIN");
+    }
+    while (mq_receive(q, buf, sizeof(buf), NULL) > 0) {
+    }
+    attr.mq_flags = 0;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    ts.tv_nsec += 100000000;
+    if (ts.tv_nsec >= 1000000000) {
+        ts.tv_sec++;
+        ts.tv_nsec -= 1000000000;
+    }
+    if (mq_setattr(q, &attr, NULL) != 0 || mq_timedreceive(q, buf, sizeof(buf), NULL, &ts) != -1 ||
+        errno != ETIMEDOUT) {
+        return fail("an empty queue with a timeout is ETIMEDOUT");
+    }
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_sigaction = on_mq;
+    sa.sa_flags = SA_SIGINFO;
+    sigaction(SIGUSR1, &sa, NULL);
+    memset(&ev, 0, sizeof(ev));
+    ev.sigev_notify = SIGEV_SIGNAL;
+    ev.sigev_signo = SIGUSR1;
+    ev.sigev_value.sival_int = 42;
+    if (mq_notify(q, &ev) != 0 || mq_send(q, "note", 4, 0) != 0 || mq_signo != SIGUSR1 ||
+        mq_code != SI_MESGQ || mq_value != 42) {
+        return fail("mq_notify's signal with SI_MESGQ and its value");
+    }
+    pfd.fd = q;
+    pfd.events = POLLIN;
+    if (poll(&pfd, 1, 0) != 1 || !(pfd.revents & POLLIN)) {
+        return fail("poll reports a message");
+    }
+    if (mq_close(q) != 0 || mq_unlink("/ipcmusl") != 0 ||
+        mq_open("/ipcmusl", O_RDWR) != (mqd_t)-1 || errno != ENOENT) {
+        return fail("the name goes with mq_unlink");
+    }
+    return 0;
+}
+
+int main(void)
+{
+    if (shm_rows() || sem_rows() || msg_rows() || mq_rows()) {
+        return 1;
+    }
+    printf("IPCMUSL OK\n");
+    return 0;
+}

@@ -1,0 +1,73 @@
+.Dd October 2, 2026
+.Dt IPC 2
+.Os
+.Sh NAME
+.Nm ipc
+.Nd the one call of System V IPC
+.Sh SYNOPSIS
+.Ft int
+.Fn syscall SYS_ipc "unsigned int call" "int first" "unsigned long second" "unsigned long third" "void *ptr" "long fifth"
+.Sh DESCRIPTION
+.Fn ipc ,
+number 117, reaches every System V object through one call, as i386 Linux
+has it, and musl makes it for all of them.
+The low 16 bits of
+.Fa call
+name the operation, and the high 16 its version:
+.Bl -tag -width "SEMTIMEDOP 4"
+.It Dv SEMOP No 1
+.Fn semop first ptr second .
+.It Dv SEMGET No 2
+.Fn semget first second third .
+.It Dv SEMCTL No 3
+.Fn semctl first second third ,
+the fourth argument the word
+.Fa ptr
+points at.
+.It Dv SEMTIMEDOP No 4
+.Fn semtimedop first ptr second fifth ,
+the timeout a 32-bit timespec.
+.It Dv MSGSND No 11
+.Fn msgsnd first ptr second third .
+.It Dv MSGRCV No 12
+.Fn msgrcv :
+in version 0 the buffer and the type in a pair of words at
+.Fa ptr ,
+in version 1 the buffer at
+.Fa ptr
+and the type in
+.Fa fifth ;
+the size is
+.Fa second
+and the flags
+.Fa third .
+.It Dv MSGGET No 13
+.Fn msgget first second .
+.It Dv MSGCTL No 14
+.Fn msgctl first second ptr .
+.It Dv SHMAT No 21
+.Fn shmat first ptr second ,
+the address stored in the word at
+.Fa third
+and 0 returned; version 1 is
+.Er EINVAL .
+.It Dv SHMDT No 22
+.Fn shmdt ptr .
+.It Dv SHMGET No 23
+.Fn shmget first second third .
+.It Dv SHMCTL No 24
+.Fn shmctl first second ptr .
+.El
+.Sh RETURN VALUES
+What the operation returns.
+.Sh ERRORS
+.Bl -tag -width Er
+.It Bq Er ENOSYS
+Another operation.
+.El
+.Pp
+The operations fail as their pages say.
+.Sh SEE ALSO
+.Xr msgget 2 ,
+.Xr semget 2 ,
+.Xr shmget 2

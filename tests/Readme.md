@@ -58,7 +58,7 @@ rebootprobe searchprobe
 stickyprobe
 ```
 
-The 53 musl programs in the default suite are:
+The 54 musl programs in the default suite are:
 
 ```text
 authmusl permmusl suidmusl pwauthmusl passwdmusl addusermusl loginmusl
@@ -66,7 +66,7 @@ readvmusl timemusl clockmusl statmusl stampmusl execargmusl spawnmusl sigmusl
 clonemusl sigframemusl vmamusl pathmaxmusl fdcallmusl atcallmusl preadmusl
 truncmusl opathmusl lchownmusl direntmusl cputimemusl clockidmusl schedmusl
 waitidmusl prctlmusl stackmusl sockflagmusl capmusl epollmusl timerfdmusl
-netlinkmusl inotifymusl unixmusl mapmusl fifomusl statxmusl lockmusl tmpfsmusl
+netlinkmusl inotifymusl unixmusl mapmusl ipcmusl fifomusl statxmusl lockmusl tmpfsmusl
 mknodmusl memfdmusl chrootmusl vforkmusl ptracemusl callsmusl coremusl
 threadmusl ishmusl
 ```

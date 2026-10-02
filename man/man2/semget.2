@@ -1,0 +1,147 @@
+.Dd October 2, 2026
+.Dt SEMGET 2
+.Os
+.Sh NAME
+.Nm semget ,
+.Nm semop ,
+.Nm semtimedop ,
+.Nm semctl
+.Nd System V semaphores
+.Sh SYNOPSIS
+.In sys/sem.h
+.Ft int
+.Fn semget "key_t key" "int nsems" "int semflg"
+.Ft int
+.Fn semop "int semid" "struct sembuf *sops" "size_t nsops"
+.Ft int
+.Fn semtimedop "int semid" "struct sembuf *sops" "size_t nsops" "const struct timespec *timeout"
+.Ft int
+.Fn semctl "int semid" "int semnum" "int cmd" "..."
+.Sh DESCRIPTION
+A set is
+.Fa nsems
+semaphores, each a value from 0 to 32767, 0 when the set is made.
+.Fn semget
+finds or makes one as
+.Xr shmget 2
+does a segment, from a table of 64; a count past 32000 is refused, and a
+new set must have one at least.
+.Pp
+.Fn semop
+applies the
+.Fa nsops
+operations at
+.Fa sops ,
+at most 500, at once: each an increment, a decrement that leaves no
+value below 0, or, for 0, a wait until the value is 0.
+While one cannot be applied, none is, and the caller waits, counted in
+that semaphore's
+.Dv GETNCNT
+or
+.Dv GETZCNT ,
+unless the operation has
+.Dv IPC_NOWAIT .
+.Fn semtimedop
+waits at most the relative
+.Fa timeout .
+.Dv SEM_UNDO
+records the operation's opposite for the process, applied when its last
+thread ends, the value kept within 0 and 32767; a child of
+.Xr fork 2
+has no adjustments.
+.Pp
+.Fn semctl
+takes
+.Dv GETVAL ,
+.Dv GETPID ,
+.Dv GETNCNT
+and
+.Dv GETZCNT
+of semaphore
+.Fa semnum ,
+.Dv SETVAL ,
+.Dv GETALL
+and
+.Dv SETALL ,
+whose array the fourth argument points at, and
+.Dv IPC_STAT ,
+.Dv SEM_STAT ,
+.Dv SEM_STAT_ANY ,
+.Dv IPC_SET ,
+.Dv IPC_RMID ,
+.Dv IPC_INFO
+and
+.Dv SEM_INFO
+as
+.Xr shmctl 2
+takes its own.
+.Dv SETVAL
+and
+.Dv SETALL
+clear every process's adjustment of what they change and wake the
+waiters;
+.Dv IPC_RMID
+wakes them with
+.Er EIDRM .
+.Ss System call interface
+The direct calls are numbers 393
+.Pq Fn semget ,
+394
+.Pq Fn semctl
+and 420,
+.Fn semtimedop_time64 ,
+whose timeout has 64-bit seconds.
+i386 has no direct
+.Fn semop
+or 32-bit
+.Fn semtimedop ;
+both are
+.Xr ipc 2 Ns 's.
+.Sh RETURN VALUES
+.Fn semget
+returns an id,
+.Fn semop
+and
+.Fn semtimedop
+0, and
+.Fn semctl
+the value asked for, 0, or what
+.Xr shmctl 2
+returns for the same commands; on failure -1 with
+.Va errno
+set.
+.Sh ERRORS
+.Bl -tag -width Er
+.It Bq Er E2BIG
+More than 500 operations.
+.It Bq Er EACCES
+An alteration of a set the caller may not write, or a wait on one it may
+not read.
+.It Bq Er EAGAIN
+An operation with
+.Dv IPC_NOWAIT
+that would wait, or a timeout that ran out.
+.It Bq Er EFBIG
+A semaphore past the set's.
+.It Bq Er EIDRM
+The set was removed while the caller waited.
+.It Bq Er EINTR
+A signal ended the wait.
+.It Bq Er EINVAL
+No operations, an id with no set, a count outside what
+.Fn semget
+takes, or a semaphore number past the set's for
+.Fn semctl .
+.It Bq Er ERANGE
+A value past 32767, or an adjustment past 32767 either way.
+.El
+.Pp
+.Fn semget
+and the commands it shares with
+.Xr shmctl 2
+fail as those do.
+.Sh SEE ALSO
+.Xr ipc 2 ,
+.Xr msgget 2 ,
+.Xr shmget 2 ,
+.Xr proc 5

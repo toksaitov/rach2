@@ -1971,6 +1971,7 @@ static int32_t synth_open(const struct vpath *vp, int flags)
     case VNODE_PROC_NET_ARP:
     case VNODE_PROC_NET_TCP:
     case VNODE_PROC_NET_FILE:
+    case VNODE_PROC_SYSVIPC:
     case VNODE_SYS_FILE:
         return procfs_open(vp, flags);
     case VNODE_PROC_DISK:
@@ -1987,6 +1988,7 @@ static int32_t synth_open(const struct vpath *vp, int flags)
     case VNODE_PTS_DIR:
     case VNODE_PROC_DIR:
     case VNODE_PROC_NET_DIR:
+    case VNODE_PROC_SYSVIPC_DIR:
     case VNODE_PROC_SYS_DIR:
     case VNODE_PROC_PID:
     case VNODE_PROC_FD_DIR:
@@ -4617,7 +4619,7 @@ static int synth_kind_is_dir(int kind)
     return kind == VNODE_DEV_DIR || kind == VNODE_PTS_DIR || kind == VNODE_PROC_DIR ||
            kind == VNODE_PROC_NET_DIR || kind == VNODE_PROC_PID || kind == VNODE_PROC_FD_DIR ||
            kind == VNODE_PROC_TASK_DIR || kind == VNODE_PROC_SYS_DIR || kind == VNODE_SYS_DIR ||
-           kind == VNODE_SYS_LINK;
+           kind == VNODE_SYS_LINK || kind == VNODE_PROC_SYSVIPC_DIR;
 }
 
 /**
@@ -5406,9 +5408,11 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
         kst->st_ino = procfs_ino_cmdline();
         return 0;
     case VNODE_PROC_NET_DIR:
+    case VNODE_PROC_SYSVIPC_DIR:
         kst->st_dev = PROCFS_FSID;
         kst->st_mode = S_IFDIR | 0555;
-        kst->st_ino = procfs_ino_netdir();
+        kst->st_ino =
+            vp->kind == VNODE_PROC_NET_DIR ? procfs_ino_netdir() : procfs_ino_sysvipcdir();
         return 0;
     case VNODE_PROC_NET_DEV:
         /* /proc/net/dev: what the interface has carried, anyone's to
@@ -5492,6 +5496,8 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
         return 0;
     case VNODE_PROC_NET_FILE:
         return synth_proc_stat(kst, procfs_ino_net(vp->procfile));
+    case VNODE_PROC_SYSVIPC:
+        return synth_proc_stat(kst, procfs_ino_sysvipc(vp->procfile));
     case VNODE_SYS_DIR:
     case VNODE_SYS_LINK:
     case VNODE_SYS_FILE:
@@ -10839,6 +10845,20 @@ static int synth_sys_dirent(int node, int key, int n, char *name, uint64_t *ino,
     return 1;
 }
 
+/** Entry `n` of /proc/sysvipc: its three files. */
+static int synth_sysvipc_dirent(int n, char *name, uint64_t *ino, uint8_t *dtype)
+{
+    const char *entry = synth_sysvipc_name(SYNTH_PROC_SYSVIPC + n);
+
+    if (!entry) {
+        return 0;
+    }
+    k_strncpy(name, entry, 31);
+    *dtype = DT_REG;
+    *ino = procfs_ino_sysvipc(SYNTH_PROC_SYSVIPC + n);
+    return 1;
+}
+
 /*
  * The n-th entry of a synthetic directory (its kind, pid and tid from the
  * dir fd's record `sd`): fills name/ino/dtype and returns 1, or 0 past the
@@ -10969,6 +10989,9 @@ static int synth_dirent_at(const struct synth_dir *sd, int n, char *name, uint64
         }
         return 0;
     }
+    if (kind == VNODE_PROC_SYSVIPC_DIR) {
+        return synth_sysvipc_dirent(n, name, ino, dtype);
+    }
     /* The files of /proc/net: dev, route, arp and tcp, then the ones known by
      * their origin, from SYNTH_PROC_NETUDP. */
     if (kind == VNODE_PROC_NET_DIR) {
@@ -11017,6 +11040,7 @@ static int synth_dirent_at(const struct synth_dir *sd, int n, char *name, uint64
                        {"partitions", procfs_ino_partitions, DT_REG},
                        {"mounts", procfs_ino_mounts, DT_REG},
                        {"net", procfs_ino_netdir, DT_DIR},
+                       {"sysvipc", procfs_ino_sysvipcdir, DT_DIR},
                        {"sys", procfs_ino_sysdir, DT_DIR},
                        {"self", procfs_ino_dir, DT_LNK},
                        {"usb", procfs_ino_usb, DT_REG},

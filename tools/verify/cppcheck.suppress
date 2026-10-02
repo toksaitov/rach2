@@ -66,6 +66,12 @@ unusedStructMember:*sys/proc/sigframe.c
 unusedStructMember:*sys/syscall_fs.c
 unusedStructMember:*sys/syscall_proc.c
 
+# System V IPC's 64-bit records and POSIX queues' struct mq_attr, copied to
+# and from the user whole: the padding and the members kept for the layout
+# are not dead code.
+unusedStructMember:*sys/ipc/sysv.c
+unusedStructMember:*sys/ipc/mqueue.c
+
 # fp_access keeps the floating-point image in the 16-byte-aligned part of a
 # buffer, which it writes through the aligned pointer cppcheck does not follow.
 unassignedVariable:*sys/proc/ptrace.c

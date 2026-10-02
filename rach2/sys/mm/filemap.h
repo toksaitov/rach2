@@ -30,6 +30,10 @@ struct vm_file *filemap_new(const fd_entry_t *e);
  */
 struct vm_file *filemap_shared(const fd_entry_t *e, struct shmem *sh);
 
+/** The pages in memory `f` maps when it is a shared mapping of a tmpfs
+ * file, as `filemap_shared` made it; NULL for any other mapped file. */
+struct shmem *filemap_shmem(const struct vm_file *f);
+
 /**
  * The same for a shared mapping of a file on a disk: the mapping maps the
  * file's pages in memory, which every shared mapping of the file maps, read

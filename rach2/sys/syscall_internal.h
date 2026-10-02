@@ -489,4 +489,32 @@ int32_t sys_capget(isr_params_t *params);
 
 int32_t sys_capset(isr_params_t *params);
 
+struct open_file;
+struct shmem;
+
+/* What a System V attachment may do besides read. */
+#define SHM_MAP_WRITE 1u
+#define SHM_MAP_EXEC  2u
+
+/**
+ * Map a System V segment, the tmpfs file `ofd` describes, `len` bytes
+ * shared: where the kernel finds room for `place` 0, at `addr` refusing a
+ * range in use with EEXIST for 1, and at `addr` replacing what it held for
+ * 2. It may be read, and written and executed as `access` says; one that
+ * may not be written keeps VM_PROT_NOWRITE, so mprotect cannot make it
+ * writable. `path`, from the heap, is what /proc/PID/maps names it, and the
+ * region takes it. Returns the address, or -errno as mmap does.
+ */
+int32_t mmap_shm(struct open_file *ofd, uint32_t addr, uint32_t len, uint32_t access, int place,
+                 char *path);
+
+/** Unmap the System V attachment at `addr`: the regions from it on that map
+ * the pages `sh` from the segment's start, within `size` bytes. -EINVAL
+ * when no such region begins at `addr`. */
+int32_t munmap_shm(uint32_t addr, const struct shmem *sh, uint32_t size);
+
+/** How many attachments the pages `sh` have, each address space's regions
+ * that map them from the start counted once however many threads share it. */
+uint32_t shm_attaches(const struct shmem *sh);
+
 #endif

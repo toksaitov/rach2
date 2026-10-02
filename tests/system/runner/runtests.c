@@ -120,6 +120,9 @@ static const char *const PROBES[] = {
     "musl/unixmusl",
     /* File mappings, shared memory, mremap and madvise. */
     "musl/mapmusl",
+    /* System V shared memory, semaphores and message queues, and POSIX
+       message queues. */
+    "musl/ipcmusl",
     /* FIFO files made by mkfifo and mknodat: their opens, waits and
        bytes. */
     "musl/fifomusl",

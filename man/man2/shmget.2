@@ -1,0 +1,176 @@
+.Dd October 2, 2026
+.Dt SHMGET 2
+.Os
+.Sh NAME
+.Nm shmget ,
+.Nm shmat ,
+.Nm shmdt ,
+.Nm shmctl
+.Nd System V shared memory
+.Sh SYNOPSIS
+.In sys/shm.h
+.Ft int
+.Fn shmget "key_t key" "size_t size" "int shmflg"
+.Ft void *
+.Fn shmat "int shmid" "const void *shmaddr" "int shmflg"
+.Ft int
+.Fn shmdt "const void *shmaddr"
+.Ft int
+.Fn shmctl "int shmid" "int cmd" "struct shmid_ds *buf"
+.Sh DESCRIPTION
+A segment is memory of
+.Fa size
+bytes that each process attaching it maps shared, as on Linux.
+Its pages are those of a file on the tmpfs of
+.Xr memfd_create 2 ,
+given when first touched and zeroed.
+.Pp
+.Fn shmget
+returns the id of the segment of
+.Fa key ,
+or of a new one made with
+.Dv IPC_CREAT
+in
+.Fa shmflg ,
+whose low nine bits are its permissions, or always for
+.Dv IPC_PRIVATE .
+.Dv IPC_CREAT
+with
+.Dv IPC_EXCL
+refuses a key in use.
+An id names one segment: its place in a table of 64, plus a sequence
+number times 32768, as Linux builds it.
+.Pp
+.Fn shmat
+maps the segment and returns where: at
+.Fa shmaddr ,
+which must be page aligned unless
+.Dv SHM_RND
+rounds it down and may not cover a mapping unless
+.Dv SHM_REMAP
+replaces it, or where the kernel finds room when it is NULL.
+.Dv SHM_RDONLY
+maps it read-only, and
+.Xr mprotect 2
+then refuses to make it writable;
+.Dv SHM_EXEC
+maps it executable.
+.Pa /proc/ Ns Ar pid Ns Pa /maps
+names an attachment
+.Pa /SYSV Ns Ar key No (deleted) ,
+the key in eight hex digits.
+.Pp
+.Fn shmdt
+unmaps the attachment that begins at
+.Fa shmaddr .
+.Pp
+.Fn shmctl
+takes
+.Dv IPC_STAT ,
+which copies the segment's record to
+.Fa buf ,
+.Dv SHM_STAT
+and
+.Dv SHM_STAT_ANY ,
+the same by the place in the table, returning the id,
+.Dv IPC_SET ,
+which takes the owner, group and permission bits from
+.Fa buf ,
+.Dv IPC_RMID ,
+.Dv IPC_INFO
+and
+.Dv SHM_INFO ,
+the limits and the use, and
+.Dv SHM_LOCK
+and
+.Dv SHM_UNLOCK ,
+which do nothing, since no page is swapped.
+.Dv IPC_RMID
+removes an unattached segment at once; an attached one is marked
+.Dv SHM_DEST
+in its mode, its key becomes
+.Dv IPC_PRIVATE ,
+and it is freed when the table is next read after its last attachment
+goes, which is how this kernel, which does not watch an address space's
+end, follows Linux's free at the last detach.
+.Pp
+The attachments counted,
+.Va shm_nattch ,
+are the regions of every address space that map the segment from its
+start.
+A child of
+.Xr fork 2
+has its parent's attachments;
+.Xr execve 2
+and the end of a process take its own away.
+.Ss System call interface
+The direct calls are numbers 395
+.Pq Fn shmget ,
+396
+.Pq Fn shmctl ,
+397
+.Pq Fn shmat
+and 398
+.Pq Fn shmdt ,
+which GNU libc makes; musl reaches the same through
+.Xr ipc 2 .
+.Fn shmctl
+takes the 64-bit layout only, which both libraries ask for with
+.Dv IPC_64 .
+.Sh RETURN VALUES
+.Fn shmget
+returns an id,
+.Fn shmat
+an address, and
+.Fn shmdt
+and
+.Fn shmctl
+0, or the highest place in use for the info commands and an id for the
+STAT commands; on failure -1 with
+.Va errno
+set.
+.Sh ERRORS
+.Bl -tag -width Er
+.It Bq Er EACCES
+The caller may not read the segment, or write it without
+.Dv SHM_RDONLY ;
+or its bits do not give what
+.Fa shmflg
+asks.
+.It Bq Er EEXIST
+.Dv IPC_CREAT
+and
+.Dv IPC_EXCL
+for a key in use.
+.It Bq Er EINVAL
+A size outside 1 to 4278190079 or past an existing segment's, an id with
+no segment, an unaligned address without
+.Dv SHM_RND ,
+an address that covers a mapping without
+.Dv SHM_REMAP ,
+no attachment at
+.Fa shmaddr ,
+or another command.
+.It Bq Er ENOENT
+No segment of
+.Fa key
+and no
+.Dv IPC_CREAT .
+.It Bq Er ENOMEM
+No memory for the segment or the mapping.
+.It Bq Er ENOSPC
+All 64 places are taken.
+.It Bq Er EPERM
+.Dv IPC_SET
+or
+.Dv IPC_RMID
+from a caller that neither owns nor made the segment and is not
+privileged.
+.El
+.Sh SEE ALSO
+.Xr ipc 2 ,
+.Xr memfd_create 2 ,
+.Xr mmap 2 ,
+.Xr msgget 2 ,
+.Xr semget 2 ,
+.Xr proc 5

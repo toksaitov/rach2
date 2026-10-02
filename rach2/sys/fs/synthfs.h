@@ -62,6 +62,8 @@ enum vnode_kind {
     VNODE_PROC_VERSION,     /* /proc/version: the kernel's name and release */
     VNODE_PROC_PARTITIONS,  /* /proc/partitions: the size of each disk node */
     VNODE_DEV_LINK,         /* /dev/log: a link to the syslog daemon's socket */
+    VNODE_PROC_SYSVIPC_DIR, /* /proc/sysvipc: the System V objects' directory */
+    VNODE_PROC_SYSVIPC,     /* /proc/sysvipc/{shm,sem,msg}, by `procfile` */
     VNODE_ENOENT,           /* under a synthetic mount, but no such entry */
     VNODE_ENOTDIR           /* under a synthetic mount, a non-dir used as a directory */
 };
@@ -112,6 +114,8 @@ enum vnode_kind {
 #define SYNTH_PROC_PARTITIONS  40
 #define SYNTH_PROC_LIMITS      41
 #define SYNTH_PROC_MOUNTINFO   42
+/* /proc/sysvipc/shm, sem and msg, in that order (ipc/sysv.h's kinds). */
+#define SYNTH_PROC_SYSVIPC     43
 
 /* PID sentinel meaning "the calling process" (/proc/self), resolved by the
  * glue. */
@@ -168,7 +172,7 @@ int synth_sys_count(void);
  * which procfs reads, and not the table's. */
 #define SYNTH_SYS_HOSTNAME   11
 /* The entry of net/ipv4/ip_forward, which takes a write of 0. */
-#define SYNTH_SYS_IP_FORWARD 15
+#define SYNTH_SYS_IP_FORWARD 22
 /** Whether a privileged caller may write the file entry `entry`. */
 int synth_sys_writable(int entry);
 const char *synth_sys_name(int entry);
@@ -179,6 +183,8 @@ const char *synth_sys_text(int entry);
 /** The name in /proc/net of the file `origin`, SYNTH_PROC_NETUDP to
  * SYNTH_PROC_NETSNMP, or NULL for another. */
 const char *synth_net_name(int origin);
+/** The name of the /proc/sysvipc file of origin `origin`, or NULL. */
+const char *synth_sysvipc_name(int origin);
 
 /*
  * /sys: the PCI functions and USB devices, as Linux's sysfs has them for

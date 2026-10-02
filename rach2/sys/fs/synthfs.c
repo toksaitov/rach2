@@ -149,8 +149,9 @@ static void synth_put_proc(char *out, int cap, int *pos, int pid, int tid)
  * gives a core file (proc/coredump.h), its host name, whose text procfs
  * reads from what `sethostname` set when the file is opened, and its domain
  * name,
- * which uname gives as "(none)"; and IPv4 forwarding, which this stack does
- * not do. */
+ * which uname gives as "(none)"; the limits of System V IPC (ipc/sysv.c),
+ * which util-linux's ipcs reads; IPv4 forwarding, which this stack does not
+ * do; and the limits of POSIX message queues (ipc/mqueue.c). */
 static const struct {
     int parent;
     const char *name;
@@ -168,9 +169,22 @@ static const struct {
                {6, "core_pattern", "core\n"},
                {6, "hostname", ""},
                {6, "domainname", "(none)\n"},
+               {6, "msgmax", "8192\n"},
+               {6, "msgmnb", "16384\n"},
+               {6, "msgmni", "64\n"},
+               {6, "sem", "32000\t2048000\t500\t64\n"},
+               {6, "shmall", "4278190079\n"},
+               {6, "shmmax", "4278190079\n"},
+               {6, "shmmni", "64\n"},
                {0, "net", 0},
-               {13, "ipv4", 0},
-               {14, "ip_forward", "0\n"}};
+               {20, "ipv4", 0},
+               {21, "ip_forward", "0\n"},
+               {1, "mqueue", 0},
+               {23, "msg_default", "10\n"},
+               {23, "msg_max", "10\n"},
+               {23, "msgsize_default", "8192\n"},
+               {23, "msgsize_max", "8192\n"},
+               {23, "queues_max", "256\n"}};
 
 int synth_sys_count(void)
 {
@@ -251,6 +265,8 @@ void synth_dir_path(int kind, int pid, int tid, char *out, int cap)
         synth_put(out, cap, &pos, "/proc");
     } else if (kind == VNODE_PROC_NET_DIR) {
         synth_put(out, cap, &pos, "/proc/net");
+    } else if (kind == VNODE_PROC_SYSVIPC_DIR) {
+        synth_put(out, cap, &pos, "/proc/sysvipc");
     } else if (kind == VNODE_PROC_SYS_DIR) {
         synth_put_sys(out, cap, &pos, pid);
     } else if (kind == VNODE_PROC_PID) {
@@ -825,6 +841,34 @@ static int synth_classify_sysfs(const struct comp *c, int n, struct vpath *vp)
     return vp->kind;
 }
 
+const char *synth_sysvipc_name(int origin)
+{
+    static const char *const names[] = {"shm", "sem", "msg"};
+
+    origin -= SYNTH_PROC_SYSVIPC;
+    return origin >= 0 && origin < 3 ? names[origin] : 0;
+}
+
+/** Classify the components `c` of `n` below /proc/sysvipc: the directory
+ * and its three files. */
+static int synth_classify_sysvipc(const struct comp *c, int n, struct vpath *vp)
+{
+    int f = SYNTH_PROC_SYSVIPC;
+
+    while (n == 1 && synth_sysvipc_name(f) && !comp_eq(c[0], synth_sysvipc_name(f))) {
+        f++;
+    }
+    if (n == 0) {
+        vp->kind = VNODE_PROC_SYSVIPC_DIR;
+    } else if (n == 1 && synth_sysvipc_name(f)) {
+        vp->kind = VNODE_PROC_SYSVIPC;
+        vp->procfile = f;
+    } else {
+        vp->kind = n == 1 ? VNODE_ENOENT : VNODE_ENOTDIR;
+    }
+    return vp->kind;
+}
+
 /**
  * Classify a normalized path under `/dev` or `/proc` and fill `vp`.
  *
@@ -952,6 +996,9 @@ int synth_classify(const char *path, struct vpath *vp)
                 vp->kind = (n == 3) ? VNODE_ENOENT : VNODE_ENOTDIR;
             }
             return vp->kind;
+        }
+        if (comp_eq(c[1], "sysvipc")) {
+            return synth_classify_sysvipc(c + 2, n - 2, vp);
         }
         if (comp_eq(c[1], "self")) {
             pid = SYNTH_PID_SELF;

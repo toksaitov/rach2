@@ -1,0 +1,155 @@
+.Dd October 2, 2026
+.Dt MQ_OPEN 2
+.Os
+.Sh NAME
+.Nm mq_open ,
+.Nm mq_unlink ,
+.Nm mq_timedsend ,
+.Nm mq_timedreceive ,
+.Nm mq_notify ,
+.Nm mq_getsetattr
+.Nd POSIX message queues
+.Sh SYNOPSIS
+.In mqueue.h
+.Ft mqd_t
+.Fn mq_open "const char *name" "int oflag" "..."
+.Ft int
+.Fn mq_unlink "const char *name"
+.Ft int
+.Fn mq_timedsend "mqd_t mqdes" "const char *msg" "size_t len" "unsigned prio" "const struct timespec *abs"
+.Ft ssize_t
+.Fn mq_timedreceive "mqd_t mqdes" "char *msg" "size_t len" "unsigned *prio" "const struct timespec *abs"
+.Ft int
+.Fn mq_notify "mqd_t mqdes" "const struct sigevent *sevp"
+.Sh DESCRIPTION
+A queue has a name, which every process shares, and messages of at most
+its message size, at most its count of them, kept highest priority first
+and in the order they came within a priority.
+The C library passes the name without its leading slash, and calls the
+attribute calls through
+.Fn mq_getsetattr .
+A queue lives while its name or a descriptor has it.
+.Pp
+.Fn mq_open
+returns a descriptor open on the queue
+.Fa name
+for reading, writing or both, with
+.Dv O_NONBLOCK
+and
+.Dv O_CLOEXEC
+as
+.Fa oflag
+gives them.
+With
+.Dv O_CREAT
+it makes the queue if there is none, the caller's, with the mode its
+umask leaves, and the count and size of the
+.Vt struct mq_attr
+given, at most 10 and 8192 for an unprivileged caller, or 10 and 8192
+without one.
+An unprivileged caller may make 256 queues.
+.Pp
+.Fn mq_unlink
+takes the name away from a queue the caller owns, or any for a
+privileged caller.
+.Pp
+.Fn mq_timedsend
+puts a message of priority
+.Fa prio ,
+below 32768, waiting while the queue is full until the absolute
+real-time
+.Fa abs ,
+or not at all for a descriptor with
+.Dv O_NONBLOCK .
+.Fn mq_timedreceive
+takes the first message and its priority, waiting while the queue is
+empty.
+.Pp
+.Fn mq_notify
+registers the caller for the next message that reaches the queue empty
+while no receiver waits:
+.Dv SIGEV_SIGNAL
+posts the signal asked for, with
+.Dv SI_MESGQ ,
+the value given, and the sender's pid and uid, and
+.Dv SIGEV_NONE
+posts nothing; the registration goes either way, and with the
+registered process's last close of the queue.
+A NULL
+.Fa sevp
+takes the caller's registration away.
+.Dv SIGEV_THREAD ,
+which Linux carries through a netlink socket of a kind this kernel does
+not have, is
+.Er EINVAL .
+.Pp
+.Xr poll 2
+reports a descriptor readable while the queue has a message and writable
+while it has room, and a
+.Xr read 2
+of it gives Linux's line of the queued bytes and the registration:
+.Dl QSIZE:N NOTIFY:N SIGNO:N NOTIFY_PID:N
+There is no
+.Pa /dev/mqueue .
+.Ss System call interface
+The numbers are 277 to 282 in the order above, with the timeouts as
+32-bit timespecs, and 418
+.Pq Fn mq_timedsend_time64
+and 419
+.Pq Fn mq_timedreceive_time64
+with 64-bit seconds.
+.Fn mq_getsetattr
+copies the attributes out, the flags
+.Dv O_NONBLOCK
+or 0, then takes
+.Dv O_NONBLOCK
+alone from the new ones.
+.Sh RETURN VALUES
+.Fn mq_open
+returns a descriptor,
+.Fn mq_timedreceive
+the message's length, and the others 0; on failure -1 with
+.Va errno
+set.
+.Sh ERRORS
+.Bl -tag -width Er
+.It Bq Er EACCES
+A name with a slash, an open its mode does not give, or an unlink of
+another user's queue.
+.It Bq Er EAGAIN
+A full queue to send to or an empty one to receive from, with
+.Dv O_NONBLOCK .
+.It Bq Er EBADF
+A descriptor not open on a queue, or not open for the transfer.
+.It Bq Er EBUSY
+Another process is registered.
+.It Bq Er EEXIST
+.Dv O_CREAT
+and
+.Dv O_EXCL
+for a queue that exists.
+.It Bq Er EINTR
+A signal ended the wait.
+.It Bq Er EINVAL
+An access mode of 3, attributes outside the caller's limits, a priority
+past 32767, a malformed timeout, a notification of another kind or a
+signal outside 1 to 64, or a flag besides
+.Dv O_NONBLOCK
+to set.
+.It Bq Er EMSGSIZE
+A message past the queue's size, or a buffer smaller than it.
+.It Bq Er ENAMETOOLONG
+A name past 255 bytes.
+.It Bq Er ENFILE
+256 queues already, for an unprivileged caller.
+.It Bq Er ENOENT
+No such queue and no
+.Dv O_CREAT ,
+or an empty name.
+.It Bq Er ETIMEDOUT
+The timeout ran out.
+.El
+.Sh SEE ALSO
+.Xr msgget 2 ,
+.Xr poll 2 ,
+.Xr proc 5

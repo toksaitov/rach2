@@ -73,6 +73,8 @@
 #include "io/inotify.h"
 #include "io/epoll.h"
 #include "io/timerfd.h"
+#include "ipc/sysv.h"
+#include "ipc/mqueue.h"
 #include "syscall_internal.h"
 
 /* Only one process owns the framebuffer at a time. Text mode is restored when
@@ -2901,6 +2903,26 @@ void init_syscall(void)
     _syscall_table[SYS_SETPRIORITY] = sys_setpriority;
     _syscall_table[SYS_IOPRIO_SET] = sys_ioprio_set;
     _syscall_table[SYS_IOPRIO_GET] = sys_ioprio_get;
+    _syscall_table[SYS_IPC] = sys_ipc;
+    _syscall_table[SYS_SEMGET] = sys_semget;
+    _syscall_table[SYS_SEMCTL] = sys_semctl;
+    _syscall_table[SYS_SHMGET] = sys_shmget;
+    _syscall_table[SYS_SHMCTL] = sys_shmctl;
+    _syscall_table[SYS_SHMAT] = sys_shmat;
+    _syscall_table[SYS_SHMDT] = sys_shmdt;
+    _syscall_table[SYS_MSGGET] = sys_msgget;
+    _syscall_table[SYS_MSGSND] = sys_msgsnd;
+    _syscall_table[SYS_MSGRCV] = sys_msgrcv;
+    _syscall_table[SYS_MSGCTL] = sys_msgctl;
+    _syscall_table[SYS_SEMTIMEDOP_TIME64] = sys_semtimedop_time64;
+    _syscall_table[SYS_MQ_OPEN] = sys_mq_open;
+    _syscall_table[SYS_MQ_UNLINK] = sys_mq_unlink;
+    _syscall_table[SYS_MQ_TIMEDSEND] = sys_mq_timedsend;
+    _syscall_table[SYS_MQ_TIMEDRECEIVE] = sys_mq_timedreceive;
+    _syscall_table[SYS_MQ_NOTIFY] = sys_mq_notify;
+    _syscall_table[SYS_MQ_GETSETATTR] = sys_mq_getsetattr;
+    _syscall_table[SYS_MQ_TIMEDSEND_TIME64] = sys_mq_timedsend_time64;
+    _syscall_table[SYS_MQ_TIMEDRECEIVE_TIME64] = sys_mq_timedreceive_time64;
     _syscall_table[SYS_SCHED_SETPARAM] = sys_sched_setparam;
     _syscall_table[SYS_SCHED_GETPARAM] = sys_sched_getparam;
     _syscall_table[SYS_SCHED_SETSCHEDULER] = sys_sched_setscheduler;

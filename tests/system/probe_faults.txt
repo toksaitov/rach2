@@ -5406,3 +5406,45 @@ new
     case IOPRIO_CLASS_RT:
         if (0 && !cred_privileged()) {
 end
+
+# System V IPC and POSIX message queues, which ipcmusl checks.
+
+fault sem-undo-dropped
+probe ipcmusl
+file rach2/sys/ipc/sysv.c
+expect IPCMUSL FAIL (a waiter let through, and a child's SEM_UNDO undone at its exit
+old
+        for (i = 0; set && i < u->nsems; i++) {
+new
+        for (i = 0; 0 && set && i < u->nsems; i++) {
+end
+
+fault shm-removed-kept
+probe ipcmusl
+file rach2/sys/ipc/sysv.c
+expect IPCMUSL FAIL (its last detach frees it
+old
+        if (s && (s->perm.mode & SHM_DEST) && shm_attaches(shm_mem(s)) == 0) {
+new
+        if (0 && s && (s->perm.mode & SHM_DEST) && shm_attaches(shm_mem(s)) == 0) {
+end
+
+fault msg-negative-highest
+probe ipcmusl
+file rach2/sys/ipc/sysv.c
+expect IPCMUSL FAIL (a negative type takes the lowest, type 0 the first
+old
+        if (type < 0 && t <= -type && (!best || t < (*best)->type)) {
+new
+        if (type < 0 && t <= -type && (!best || t > (*best)->type)) {
+end
+
+fault mq-notify-late
+probe ipcmusl
+file rach2/sys/ipc/mqueue.c
+expect IPCMUSL FAIL (mq_notify's signal with SI_MESGQ and its value
+old
+    if (!q->notify_tgid || q->curmsgs != 1 || q->receivers != 0) {
+new
+    if (!q->notify_tgid || q->curmsgs != 2 || q->receivers != 0) {
+end

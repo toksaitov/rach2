@@ -352,6 +352,11 @@ struct vm_file *filemap_new(const fd_entry_t *e)
     return &m->vf;
 }
 
+struct shmem *filemap_shmem(const struct vm_file *f)
+{
+    return f && f->release == filemap_release ? ((const struct filemap *)f)->sh : NULL;
+}
+
 struct vm_file *filemap_shared(const fd_entry_t *e, struct shmem *sh)
 {
     struct vm_file *f = filemap_new(e);

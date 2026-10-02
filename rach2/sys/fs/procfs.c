@@ -41,6 +41,7 @@
 #include "vfs.h"
 #include "tmpfs.h"
 #include "cpuinfo.h"
+#include "../ipc/sysv.h"
 #include "pathbuf.h"
 #include "../syscall.h"
 #include "../network/ethernet/ethernet.h"
@@ -91,6 +92,7 @@
 #define PROCFS_INO_DISKSTATS   0x114u
 #define PROCFS_INO_VERSION     0x115u
 #define PROCFS_INO_PARTITIONS  0x116u
+#define PROCFS_INO_SYSVIPC     0x117u /* and its three files after it */
 #define PROCFS_INO_NET         0x120u /* and the other files of /proc/net after it */
 
 /* Inode namespace for /sys: the fixed directories by their node; a PCI
@@ -205,6 +207,9 @@ static const char *procfs_kind_name(const struct vpath *vp)
     }
     if (vp->kind == VNODE_PROC_NET_FILE) {
         return "/proc/net";
+    }
+    if (vp->kind == VNODE_PROC_SYSVIPC) {
+        return "/proc/sysvipc";
     }
     if (vp->kind == VNODE_SYS_FILE) {
         return "/sys";
@@ -1339,6 +1344,12 @@ static const char *procfs_global_fd_path(int origin)
         return "/proc/version";
     case SYNTH_PROC_PARTITIONS:
         return "/proc/partitions";
+    case SYNTH_PROC_SYSVIPC:
+        return "/proc/sysvipc/shm";
+    case SYNTH_PROC_SYSVIPC + 1:
+        return "/proc/sysvipc/sem";
+    case SYNTH_PROC_SYSVIPC + 2:
+        return "/proc/sysvipc/msg";
     default:
         return NULL;
     }
@@ -1692,6 +1703,16 @@ uint32_t procfs_ino_net(int origin)
     return PROCFS_INO_NET + (uint32_t)(origin - SYNTH_PROC_NETUDP);
 }
 
+uint32_t procfs_ino_sysvipcdir(void)
+{
+    return PROCFS_INO_SYSVIPC;
+}
+
+uint32_t procfs_ino_sysvipc(int origin)
+{
+    return PROCFS_INO_SYSVIPC + 1u + (uint32_t)(origin - SYNTH_PROC_SYSVIPC);
+}
+
 /**
  * The inode of an open /proc snapshot descriptor, from its origin, so fstat
  * reports the same identity as the stat of the path it was opened by.
@@ -1725,6 +1746,9 @@ uint32_t procfs_fd_ino(struct fd_entry *e)
     }
     if (synth_net_name(pf->origin_file)) {
         return procfs_ino_net(pf->origin_file);
+    }
+    if (synth_sysvipc_name(pf->origin_file)) {
+        return procfs_ino_sysvipc(pf->origin_file);
     }
     if (pf->origin_file == SYNTH_SYS_UEVENT) {
         return sysfs_ino(pf->origin_task >> 8, pf->origin_pid, 1 + (pf->origin_task & 255));
@@ -2360,6 +2384,90 @@ static int procfs_gen_mountinfo(struct procfs_text *t)
         ap_ch(t, ' ');
         ap_str(t, procfs_mount_source(i, m));
         ap_str(t, (m->flags & VFS_MS_RDONLY) ? " ro\n" : " rw\n");
+    }
+    return t->nomem ? -1 : t->len;
+}
+
+/** Append `v` right-aligned in `width` places, in decimal with its sign, or
+ * in octal with `octal`, as printf's %*d and %*o give it. */
+static void ap_num_width(struct procfs_text *t, int32_t v, int width, int octal)
+{
+    char tmp[12];
+    uint32_t base = octal ? 8u : 10u;
+    uint32_t u = !octal && v < 0 ? 0u - (uint32_t)v : (uint32_t)v;
+    int n = 0;
+
+    do {
+        tmp[n++] = (char)('0' + u % base);
+        u /= base;
+    } while (u != 0 && n < (int)sizeof(tmp) - 1);
+    if (!octal && v < 0) {
+        tmp[n++] = '-';
+    }
+    while (width-- > n) {
+        ap_ch(t, ' ');
+    }
+    while (n > 0) {
+        ap_ch(t, tmp[--n]);
+    }
+}
+
+/**
+ * Render /proc/sysvipc/shm, sem or msg, for `origin`: Linux's heading and a
+ * line for each object of that kind, in its columns, from the key, the id
+ * and the bits in octal to the times, which ipcs reads. A segment's
+ * resident and swapped bytes are its size and 0, since nothing is swapped.
+ */
+static int procfs_gen_sysvipc(struct procfs_text *t, int origin)
+{
+    static const char *const heads[] = {
+        "       key      shmid perms                  size  cpid  lpid nattch   uid   gid  cuid  "
+        "cgid      atime      dtime      ctime                   rss                  swap\n",
+        "       key      semid perms      nsems   uid   gid  cuid  cgid      otime      ctime\n",
+        "       key      msqid perms      cbytes       qnum lspid lrpid   uid   gid  cuid  cgid    "
+        "  "
+        "stime      rtime      ctime\n"};
+    int kind = origin - SYNTH_PROC_SYSVIPC;
+    struct sysv_row r;
+    int i, got;
+
+    ap_str(t, heads[kind]);
+    for (i = 0; (got = sysv_row_at(kind, i, &r)) >= 0; i++) {
+        if (got == 0) {
+            continue;
+        }
+        ap_num_width(t, r.key, 10, 0);
+        ap_ch(t, ' ');
+        ap_num_width(t, r.id, 10, 0);
+        ap_str(t, "  ");
+        ap_num_width(t, (int32_t)r.mode, 4, 1);
+        if (kind == SYSV_SHM) {
+            ap_u32_width(t, r.a, 22);
+            ap_u32_width(t, r.b, 6);
+            ap_u32_width(t, r.c, 6);
+            ap_u32_width(t, r.d, 7);
+        } else if (kind == SYSV_SEM) {
+            ap_u32_width(t, r.a, 11);
+        } else {
+            ap_u32_width(t, r.a, 12);
+            ap_u32_width(t, r.b, 11);
+            ap_u32_width(t, r.c, 6);
+            ap_u32_width(t, r.e, 6);
+        }
+        ap_u32_width(t, r.uid, 6);
+        ap_u32_width(t, r.gid, 6);
+        ap_u32_width(t, r.cuid, 6);
+        ap_u32_width(t, r.cgid, 6);
+        ap_u32_width(t, (uint32_t)r.t0, 11);
+        ap_u32_width(t, (uint32_t)r.t1, 11);
+        if (kind != SYSV_SEM) {
+            ap_u32_width(t, (uint32_t)r.t2, 11);
+        }
+        if (kind == SYSV_SHM) {
+            ap_u32_width(t, r.a, 22);
+            ap_u32_width(t, 0, 22);
+        }
+        ap_ch(t, '\n');
     }
     return t->nomem ? -1 : t->len;
 }
@@ -4159,7 +4267,8 @@ static int procfs_needs_pid(int kind)
            kind != VNODE_PROC_FILESYSTEMS && kind != VNODE_PROC_LOOP &&
            kind != VNODE_PROC_INTERRUPTS && kind != VNODE_PROC_CONSOLE &&
            kind != VNODE_PROC_NET_ROUTE && kind != VNODE_PROC_NET_ARP &&
-           kind != VNODE_PROC_NET_TCP && kind != VNODE_PROC_NET_FILE && kind != VNODE_SYS_FILE;
+           kind != VNODE_PROC_NET_TCP && kind != VNODE_PROC_NET_FILE && kind != VNODE_SYS_FILE &&
+           kind != VNODE_PROC_SYSVIPC;
 }
 
 /**
@@ -4292,6 +4401,8 @@ int procfs_open(const struct vpath *vp, int flags)
         len = procfs_gen_nettcp(&text);
     } else if (vp->kind == VNODE_PROC_NET_FILE) {
         len = procfs_gen_net(&text, vp->procfile);
+    } else if (vp->kind == VNODE_PROC_SYSVIPC) {
+        len = procfs_gen_sysvipc(&text, vp->procfile);
     } else if (vp->kind == VNODE_SYS_FILE) {
         len = procfs_gen_sysfile(&text, vp, &pid);
     } else if (vp->procfile == SYNTH_PROC_STAT) {

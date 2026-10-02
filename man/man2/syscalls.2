@@ -29,7 +29,7 @@ given up its capabilities with
 Linux asks for a capability in each such place, and this kernel keeps
 every capability or none.
 .Ss System call numbers
-The kernel registers the following 279 calls.
+The kernel registers the following 299 calls.
 .Bl -column "Number" "System call" -compact
 .It Sy Number Ta Sy System call
 .It 1 Ta Xr exit 2
@@ -118,6 +118,7 @@ The kernel registers the following 279 calls.
 .It 107 Ta Xr lstat 2
 .It 114 Ta Xr wait4 2
 .It 116 Ta Xr sysinfo 2
+.It 117 Ta Xr ipc 2
 .It 118 Ta Xr fsync 2
 .It 119 Ta Xr sigreturn 2
 .It 120 Ta Xr clone 2
@@ -235,6 +236,12 @@ The kernel registers the following 279 calls.
 .It 269 Ta Xr fstatfs64 2
 .It 270 Ta Xr tgkill 2
 .It 272 Ta Xr fadvise64_64 2
+.It 277 Ta Xr mq_open 2
+.It 278 Ta Xr mq_unlink 2
+.It 279 Ta Xr mq_timedsend 2
+.It 280 Ta Xr mq_timedreceive 2
+.It 281 Ta Xr mq_notify 2
+.It 282 Ta Xr mq_getsetattr 2
 .It 284 Ta Xr waitid 2
 .It 289 Ta Xr ioprio_set 2
 .It 290 Ta Xr ioprio_get 2
@@ -306,6 +313,16 @@ The following operation numbers select calls through system call 102,
 .It 373 Ta Xr shutdown 2
 .It 376 Ta Xr mlock2 2
 .It 383 Ta Xr statx 2
+.It 393 Ta Xr semget 2
+.It 394 Ta Xr semctl 2
+.It 395 Ta Xr shmget 2
+.It 396 Ta Xr shmctl 2
+.It 397 Ta Xr shmat 2
+.It 398 Ta Xr shmdt 2
+.It 399 Ta Xr msgget 2
+.It 400 Ta Xr msgsnd 2
+.It 401 Ta Xr msgrcv 2
+.It 402 Ta Xr msgctl 2
 .It 403 Ta Xr clock_gettime64 2
 .It 404 Ta Xr clock_settime64 2
 .It 405 Ta Xr clock_adjtime64 2
@@ -314,6 +331,9 @@ The following operation numbers select calls through system call 102,
 .It 409 Ta Xr timer_settime64 2
 .It 410 Ta Xr timerfd_gettime64 2
 .It 411 Ta Xr timerfd_settime64 2
+.It 418 Ta Xr mq_timedsend_time64 2
+.It 419 Ta Xr mq_timedreceive_time64 2
+.It 420 Ta Xr semtimedop_time64 2
 .It 436 Ta Xr close_range 2
 .It 441 Ta Xr epoll_pwait2 2
 .It 0x1000 Ta Xr ping 2
