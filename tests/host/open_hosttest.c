@@ -2827,6 +2827,36 @@ static void mapping_reclaims(void)
 }
 
 /** Exercise mounted open and loop references. */
+int vfs_device_holds(block_device_t *dev)
+{
+    (void)dev;
+    return 0;
+}
+
+int bcache_sync(block_device_t *dev)
+{
+    (void)dev;
+    return 0;
+}
+
+int bcache_invalidate(block_device_t *dev)
+{
+    (void)dev;
+    return 0;
+}
+
+int bcache_device_holds(block_device_t *dev)
+{
+    (void)dev;
+    return 0;
+}
+
+int block_depth(block_device_t *device)
+{
+    (void)device;
+    return 0;
+}
+
 int main(void)
 {
     mount.type = &mounted_type;

@@ -73,6 +73,67 @@ static void offset_devices(void)
 
 /** Check errno precedence, absent leaves, ordinary pty dispatch and the
  * devices whose transfers move the offset. */
+/* The loop devices and the descriptor table, which no row here opens. */
+block_device_t *loop_attached_at(int index)
+{
+    (void)index;
+    return 0;
+}
+
+block_device_t *loop_node_device(int index, int write, int32_t *err)
+{
+    (void)index;
+    (void)write;
+    *err = -ENXIO;
+    return 0;
+}
+
+int loop_attach_file(int index, const char *path, int writable, uint32_t flags)
+{
+    (void)index;
+    (void)path;
+    (void)writable;
+    (void)flags;
+    return -ENXIO;
+}
+
+int32_t loop_ioctl(int index, int privileged, uint32_t request, uint32_t arg)
+{
+    (void)index;
+    (void)privileged;
+    (void)request;
+    (void)arg;
+    return -ENXIO;
+}
+
+int32_t loop_control_ioctl(uint32_t request, uint32_t arg)
+{
+    (void)request;
+    (void)arg;
+    return -ENXIO;
+}
+
+void loop_node_closed(int index)
+{
+    (void)index;
+}
+
+int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
+{
+    (void)pid;
+    (void)fd;
+    (void)buf;
+    (void)cap;
+    return -ENOENT;
+}
+
+fd_entry_t *fd_get(fd_table_t *table, int fd)
+{
+    (void)table;
+    (void)fd;
+    return 0;
+}
+
 int main(void)
 {
     int acc, extra;

@@ -1221,6 +1221,13 @@ static void trailing_zero_limit(void)
     row_end();
 }
 
+void signal_post_thread(process_t *t, int signo, const struct k_siginfo *info)
+{
+    (void)t;
+    (void)signo;
+    (void)info;
+}
+
 int main(void)
 {
     self.pid = self.tgid = 3;
