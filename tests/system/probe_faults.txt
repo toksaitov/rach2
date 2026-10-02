@@ -5713,3 +5713,25 @@ old
 new
         ap_str(t, "0\n");
 end
+
+# The state of a sleep, which procprobe checks.
+
+fault sleep-all-uninterruptible
+probe procprobe
+file rach2/sys/proc/wait_queue.c
+expect FAIL: a child asleep in pause is in the state S
+old
+        current_proc->uninterruptible = !interruptible;
+new
+        current_proc->uninterruptible = 1;
+end
+
+fault stat-blocked-counts-sleepers
+probe procprobe
+file rach2/sys/fs/procfs.c
+expect FAIL: /proc/stat counts no process blocked while a child sleeps in pause
+old
+        } else if (p->state == PROC_BLOCKED && p->uninterruptible) {
+new
+        } else if (p->state == PROC_BLOCKED) {
+end

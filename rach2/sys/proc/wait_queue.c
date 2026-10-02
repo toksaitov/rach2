@@ -119,6 +119,7 @@ static int wq_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg, int interruptib
         wq_enqueue(wq, &current_proc->waiter);
         current_proc->wakeup_tick = deadline;
         current_proc->state = PROC_BLOCKED;
+        current_proc->uninterruptible = !interruptible;
         irq_restore(flags);
 
         schedule();
@@ -133,6 +134,7 @@ static int wq_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg, int interruptib
 
     wq_dequeue(wq, &current_proc->waiter);
     current_proc->woken = 0;
+    current_proc->uninterruptible = 0;
     current_proc->state = PROC_RUNNING;
     irq_restore(flags);
     return rc;

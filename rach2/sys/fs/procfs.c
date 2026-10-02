@@ -430,7 +430,8 @@ int procfs_resolve_id(const struct vpath *vp)
 
 /** The state letter of `p` in its stat file, which the State line of its
  * status file spells out: a ptrace stop is 't', a stop of its process 'T',
- * as in Linux. */
+ * and a sleep no signal ends, the disk's waits among them, 'D', as in
+ * Linux. */
 static char proc_state_char(const process_t *p)
 {
     if (p->state == PROC_ZOMBIE) {
@@ -442,7 +443,10 @@ static char proc_state_char(const process_t *p)
     if (p->state == PROC_STOPPED) {
         return 'T';
     }
-    return p->state == PROC_BLOCKED ? 'S' : 'R';
+    if (p->state == PROC_BLOCKED) {
+        return p->uninterruptible ? 'D' : 'S';
+    }
+    return 'R';
 }
 
 /**
@@ -1182,7 +1186,7 @@ static int procfs_gen_status(struct procfs_text *t, int pid)
     ap_str(t, p->state == PROC_ZOMBIE    ? "Z (zombie)"
               : p->ptrace_status != 0    ? "t (tracing stop)"
               : p->state == PROC_STOPPED ? "T (stopped)"
-              : p->state == PROC_BLOCKED ? "S (sleeping)"
+              : p->state == PROC_BLOCKED ? (p->uninterruptible ? "D (disk sleep)" : "S (sleeping)")
                                          : "R (running)");
     ap_str(t, "\nTgid:\t");
     ap_u32(t, pid_seen(p->tgid));
@@ -2193,7 +2197,9 @@ static int procfs_gen_loadavg(struct procfs_text *t)
  * `processes` is what Linux means by it, the count of processes CREATED since
  * boot and not the count alive now. `procs_running` and `procs_blocked` are
  * counted from the table rather than fixed, since a machine with two runnable
- * processes reporting one is wrong the moment anything looks.
+ * processes reporting one is wrong the moment anything looks; a process is
+ * blocked, as Linux counts it, while it sleeps in a wait no signal ends, the
+ * disk's among them, and not in a wait a signal ends.
  */
 static int procfs_gen_statsys(struct procfs_text *t)
 {
@@ -2248,7 +2254,7 @@ static int procfs_gen_statsys(struct procfs_text *t)
     for (p = proc_list; p; p = p->next) {
         if (p->state == PROC_RUNNING || p->state == PROC_READY) {
             running++;
-        } else if (p->state == PROC_BLOCKED) {
+        } else if (p->state == PROC_BLOCKED && p->uninterruptible) {
             blocked++;
         }
     }

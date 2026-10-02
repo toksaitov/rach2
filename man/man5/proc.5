@@ -630,7 +630,10 @@ Datagrams delivered by the idle wait's loopback drain.
 .It Li loopback_delivered_call
 Datagrams delivered by the loopback drain at system call exit.
 .It Li procs_running , procs_blocked
-Current runnable and blocked process counts.
+The processes runnable now, and those asleep in a wait no signal ends, in
+the state
+.Ql D ,
+as Linux counts them.
 .El
 .It Pa /proc/uptime
 Seconds since boot and seconds spent idle, separated by a space,
@@ -714,7 +717,9 @@ State is
 .Ql R
 for running or ready,
 .Ql S
-for blocked,
+for asleep in a wait a signal ends,
+.Ql D
+for asleep in one no signal ends, the disk's waits among them,
 .Ql T
 for stopped with its process by a stop signal,
 .Ql t

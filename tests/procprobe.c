@@ -1238,6 +1238,26 @@ static void dgram_and_local_rows(void)
     syscall1(SYS_CLOSE, xfd);
 }
 
+/**
+ * A child asleep in pause is in the state S, a sleep a signal ends, and
+ * /proc/stat counts no process blocked while it sleeps: Linux counts there
+ * only the sleeps no signal ends, which the disk's waits are, and the test
+ * image has no disk. `path` is the child's stat file.
+ */
+static void sleeping_child_rows(const char *path)
+{
+    int i, n;
+
+    nap(50);
+    n = slurp(path, buf, (int)sizeof(buf));
+    for (i = n - 1; i > 0 && buf[i] != ')'; i--) {
+    }
+    check(n > 0 && i + 2 < n && buf[i + 2] == 'S', "a child asleep in pause is in the state S");
+    n = slurp("/proc/stat", buf, (int)sizeof(buf));
+    check(uint_after(buf, n, "procs_blocked ") == 0,
+          "/proc/stat counts no process blocked while a child sleeps in pause");
+}
+
 void probe_main(unsigned int *sp);
 
 __asm__(".global _start\n"
@@ -1290,6 +1310,7 @@ void probe_main(unsigned int *sp)
     stat_path_of(path, pid);
     fd = syscall3(SYS_OPEN, (int)(size_t)path, O_RDONLY, 0);
     check(fd >= 0, "open /proc/<child>/stat while the child is alive");
+    sleeping_child_rows(path);
     check(syscall3(SYS_KILL, pid, SIGKILL, 0) == 0, "kill the child");
     check(syscall3(SYS_WAITPID, pid, (int)(size_t)&status, 0) == pid, "reap the child");
     /* The pid names nothing now. A generator asked here has nothing to answer

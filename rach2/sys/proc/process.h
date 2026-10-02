@@ -225,6 +225,9 @@ struct process {
     struct bbuf *bcache_held;
     /** One preference after a wait-queue wake; consumed when selected. */
     uint32_t woken;
+    /* Whether its sleep is one no signal ends (`wq_wait_event_nointr`),
+     * which /proc reports as the state D and counts as blocked. */
+    uint32_t uninterruptible;
     /* The real-time interval timer, `setitimer(ITIMER_REAL)`: the tick its
      * SIGALRM is due at, 0 when it is disarmed, and the ticks between one
      * SIGALRM and the next, 0 for a single one. A fork starts with both
