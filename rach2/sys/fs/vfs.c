@@ -29,6 +29,7 @@
 #include "procfs.h"
 #include "synthfs.h"
 #include "tmpfs.h"
+#include "../ipc/mqueue.h"
 #include "../mm/filecache.h"
 #include "../io/inotify.h"
 
@@ -2597,8 +2598,10 @@ static void install(int idx, const struct vfs_type *type, const char *path,
  * by its name, as /dev and /proc are. Then the tmpfs of memfd_create, with
  * no parent and no path, which nothing enters by name, and whose root, mode
  * 0555, stays empty, since its files have no names; chroot makes it the
- * root of a process that asks for a /proc/PID/fdinfo. Last /sys,
- * read-only, as /dev and /proc are entered.
+ * root of a process that asks for a /proc/PID/fdinfo. Then /sys,
+ * read-only, as /dev and /proc are entered, and last the mqueue file system
+ * at /dev/mqueue, which lists the first IPC namespace's POSIX queues and is
+ * entered by its name in /dev as /dev/shm is.
  */
 static void install_permanent(void)
 {
@@ -2612,6 +2615,9 @@ static void install_permanent(void)
     install(5, &vfs_sysfs_type, "/sys", mounts[0], 0);
     mounts[5]->flags = VFS_MS_RDONLY | VFS_MS_NOSUID | VFS_MS_NODEV | VFS_MS_NOEXEC;
     k_strncpy(mounts[5]->source, "sysfs", sizeof(mounts[5]->source));
+    install(6, &vfs_mqueue_type, "/dev/mqueue", mounts[1], 0);
+    mounts[6]->flags = VFS_MS_NOSUID | VFS_MS_NODEV | VFS_MS_NOEXEC;
+    k_strncpy(mounts[6]->source, "mqueue", sizeof(mounts[6]->source));
 }
 
 struct vfs_mount *vfs_memfd_mount(void)
@@ -2682,8 +2688,13 @@ int vfs_init_root(const struct vfs_type *type, struct block_device *dev, const c
 
 /* The types mount(2) accepts, by name; the root's adapter and the two
  * synthetic types are not here because nothing mounts them by name. */
-static const struct vfs_type *const mount_types[] = {
-    &vfs_vfat_type, &vfs_exfat_type, &vfs_ext2_type, &vfs_krffs_volume_type, &vfs_tmpfs_type, 0};
+static const struct vfs_type *const mount_types[] = {&vfs_vfat_type,
+                                                     &vfs_exfat_type,
+                                                     &vfs_ext2_type,
+                                                     &vfs_krffs_volume_type,
+                                                     &vfs_tmpfs_type,
+                                                     &vfs_mqueue_type,
+                                                     0};
 
 /* The table's entries, its terminator apart. Counted, not written down twice:
  * a fifth type added to the list above and not to a number here is a type

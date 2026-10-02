@@ -9,6 +9,11 @@
  * Messages are kept highest priority first, in the order they came within a
  * priority. A sender or a receiver that waits holds a reference, so the
  * queue outlives its last close while one sleeps on it.
+ *
+ * The mqueue file system lists the named queues of one IPC namespace as the
+ * files of a directory, as Linux's /dev/mqueue does: a file's attributes are
+ * its queue's, reading it gives the queue's status line, and unlinking it is
+ * mq_unlink.
  */
 
 #include "mqueue.h"
@@ -65,6 +70,8 @@ struct mqueue {
     char *name;             /* NULL once unlinked */
     const struct ipcns *ns; /* the IPC namespace whose name it is */
     uint32_t refs;
+    uint32_t ino;  /* its file's number in the mqueue file system */
+    int64_t ctime; /* when it was made, the file's times */
     uint32_t uid, gid, mode;
     int32_t maxmsg, msgsize, curmsgs;
     struct mq_msg *head;
@@ -91,6 +98,7 @@ struct mq_attr {
 
 static struct mqueue *queues;
 static int nqueues;
+static uint32_t next_ino = 2;
 
 /** Drop a reference to `q`, freeing it and its messages with the last. */
 static void mq_put(struct mqueue *q)
@@ -325,6 +333,12 @@ static int32_t mq_create(const char *name, uint32_t mode, const void __user *uat
     k_memcpy(q->name, name, k_strlen(name) + 1);
     q->ns = proc_ipcns(current_proc);
     q->refs = 1;
+    q->ino = next_ino++;
+    {
+        int64_t ns;
+
+        get_current_time(&q->ctime, &ns);
+    }
     q->uid = current_proc->euid;
     q->gid = current_proc->egid;
     q->mode = mode & 0777u & ~current_proc->fs->umask;
@@ -811,3 +825,260 @@ void mq_ns_gone(const struct ipcns *ns)
         q = next;
     }
 }
+
+/* The mqueue file system. */
+
+#define MQFS_MAGIC   0x19800202u
+#define MQFS_S_IFDIR 0040000u
+#define MQFS_S_IFREG 0100000u
+
+/* The mount's root directory, the one node that is not a queue. */
+static char mqfs_root;
+
+/** Whether the strings `a` and `b` are the same. */
+static int name_is(const char *a, const char *b)
+{
+    while (*a && *a == *b) {
+        a++;
+        b++;
+    }
+    return *a == *b;
+}
+
+/** The IPC namespace whose queues the mount lists. */
+static const struct ipcns *mqfs_ns(const struct vfs_mount *mnt)
+{
+    return (const struct ipcns *)mnt->priv;
+}
+
+/** The queue named `name` in the mount's namespace, or NULL. */
+static struct mqueue *mqfs_find(const struct vfs_mount *mnt, const char *name)
+{
+    struct mqueue *q;
+
+    for (q = queues; q; q = q->next) {
+        if (q->ns == mqfs_ns(mnt) && name_is(q->name, name)) {
+            return q;
+        }
+    }
+    return NULL;
+}
+
+static int mqfs_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **node)
+{
+    struct mqueue *q;
+
+    if (dir && dir != &mqfs_root) {
+        return -ENOTDIR;
+    }
+    if (name_is(name, ".") || name_is(name, "..")) {
+        *node = &mqfs_root;
+        return 0;
+    }
+    q = mqfs_find(mnt, name);
+    if (!q) {
+        return -ENOENT;
+    }
+    q->refs++;
+    *node = q;
+    return 0;
+}
+
+static void mqfs_hold(struct vfs_mount *mnt, void *node)
+{
+    (void)mnt;
+    if (node != &mqfs_root) {
+        ((struct mqueue *)node)->refs++;
+    }
+}
+
+static void mqfs_put(struct vfs_mount *mnt, void *node)
+{
+    (void)mnt;
+    if (node != &mqfs_root) {
+        mq_put((struct mqueue *)node);
+    }
+}
+
+/** A queue's file: its owner and mode, and as its size the bytes of its
+ * messages; the root: a directory every user may add to, sticky, 1777. */
+static int mqfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
+{
+    const struct mqueue *q = (const struct mqueue *)node;
+    const struct mq_msg *m;
+
+    (void)mnt;
+    k_memset(st, 0, sizeof(*st));
+    st->nlink = 1;
+    if (node == &mqfs_root) {
+        st->mode = MQFS_S_IFDIR | 01777u;
+        st->nlink = 2;
+        st->ino = 1;
+        return 0;
+    }
+    st->mode = MQFS_S_IFREG | q->mode;
+    st->uid = q->uid;
+    st->gid = q->gid;
+    st->ino = q->ino;
+    for (m = q->head; m; m = m->next) {
+        st->size += m->len;
+    }
+    st->atime_sec = st->mtime_sec = st->ctime_sec = q->ctime;
+    return 0;
+}
+
+static int mqfs_open(struct vfs_mount *mnt, void *node, int flags, void **handle)
+{
+    (void)flags;
+    mqfs_hold(mnt, node);
+    *handle = node;
+    return 0;
+}
+
+static void mqfs_release(struct vfs_mount *mnt, void *handle)
+{
+    mqfs_put(mnt, handle);
+}
+
+/** A queue's status line, Linux's `QSIZE:... NOTIFY:... SIGNO:...
+ * NOTIFY_PID:...`, from `offset`. */
+static int32_t mqfs_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t count,
+                         uint64_t offset)
+{
+    char text[96];
+    int n;
+
+    (void)mnt;
+    if (handle == &mqfs_root) {
+        return -EISDIR;
+    }
+    n = mq_status((const struct mqueue *)handle, text, (int)sizeof(text));
+    if (offset >= (uint64_t)n) {
+        return 0;
+    }
+    if (count > (uint32_t)n - (uint32_t)offset) {
+        count = (uint32_t)n - (uint32_t)offset;
+    }
+    k_memcpy(buf, text + offset, count);
+    return (int32_t)count;
+}
+
+/** `.` and `..`, then the namespace's queues; the cursor counts entries. */
+static int mqfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
+                        struct vfs_dirent *ent)
+{
+    struct mqueue *q;
+    uint32_t i = 2;
+
+    if (handle != &mqfs_root) {
+        return -ENOTDIR;
+    }
+    k_memset(ent, 0, sizeof(*ent));
+    if (*cursor < 2) {
+        ent->name[0] = '.';
+        ent->name[1] = *cursor == 1 ? '.' : '\0';
+        ent->ino = 1;
+        ent->is_dir = 1;
+        ent->type = VFS_DT_DIR;
+        (*cursor)++;
+        return 1;
+    }
+    for (q = queues; q; q = q->next) {
+        if (q->ns != mqfs_ns(mnt)) {
+            continue;
+        }
+        if (i++ == *cursor) {
+            k_strncpy(ent->name, q->name, VFS_NAME_MAX);
+            ent->ino = q->ino;
+            ent->type = VFS_DT_REG;
+            (*cursor)++;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/** mq_unlink by the file's name: the queue's owner, or a privileged caller,
+ * since the directory is sticky. */
+static int mqfs_unlink(struct vfs_mount *mnt, void *dir, const char *name)
+{
+    struct mqueue *q;
+
+    if (dir && dir != &mqfs_root) {
+        return -ENOTDIR;
+    }
+    q = mqfs_find(mnt, name);
+    if (!q) {
+        return -ENOENT;
+    }
+    if (current_proc->euid != q->uid && !proc_privileged(current_proc)) {
+        return -EPERM;
+    }
+    mq_unname(q);
+    return 0;
+}
+
+static int mqfs_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
+{
+    (void)mnt;
+    k_memset(st, 0, sizeof(*st));
+    st->magic = MQFS_MAGIC;
+    st->bsize = 4096;
+    st->namelen = MQ_NAME_MAX;
+    return 0;
+}
+
+/** A mount lists the queues of its mounter's IPC namespace, the first one's
+ * for the permanent mount the kernel makes at boot. */
+static int mqfs_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
+                      const char *options)
+{
+    (void)dev;
+    (void)flags;
+    (void)options;
+    mnt->priv = (void *)(current_proc ? proc_ipcns(current_proc) : &init_ipcns);
+    mnt->root = &mqfs_root;
+    return 0;
+}
+
+static void mqfs_unmount(struct vfs_mount *mnt)
+{
+    mnt->priv = 0;
+}
+
+static const struct vfs_ops mqfs_ops = {
+    mqfs_lookup,
+    0, /* lookup_rest */
+    mqfs_hold,
+    mqfs_put,
+    mqfs_getattr,
+    0, /* setattr */
+    mqfs_open,
+    mqfs_release,
+    mqfs_read,
+    0, /* write */
+    0, /* truncate */
+    0, /* fsync */
+    mqfs_readdir,
+    0, /* create */
+    mqfs_unlink,
+    0, /* mkdir */
+    0, /* rmdir */
+    0, /* rename */
+    0, /* link */
+    0, /* readlink */
+    mqfs_statfs,
+    0, /* sync */
+    0, /* prepare_unmount */
+    0, /* abort_unmount */
+    mqfs_unmount,
+    0, /* path: the one directory does not move */
+    0, /* symlink */
+    0, /* mknod */
+    0, /* pin: a hold keeps a node */
+    0, /* unpin */
+    0, /* remount */
+    0, /* fallocate */
+};
+
+const struct vfs_type vfs_mqueue_type = {"mqueue", mqfs_mount, &mqfs_ops, 0, 1};

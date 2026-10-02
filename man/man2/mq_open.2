@@ -1,4 +1,4 @@
-.Dd October 2, 2026
+.Dd October 3, 2026
 .Dt MQ_OPEN 2
 .Os
 .Sh NAME
@@ -89,8 +89,36 @@ while it has room, and a
 .Xr read 2
 of it gives Linux's line of the queued bytes and the registration:
 .Dl QSIZE:N NOTIFY:N SIGNO:N NOTIFY_PID:N
-There is no
-.Pa /dev/mqueue .
+.Pp
+The
+.Ql mqueue
+file system lists the queues of the IPC namespace that mounted it as the
+files of one directory, sticky and writable by all, mode 1777.
+The kernel mounts one at boot at
+.Pa /dev/mqueue ,
+with
+.Ql nosuid ,
+.Ql nodev
+and
+.Ql noexec ,
+for the first namespace, and
+.Xr mount 2
+mounts another with the type
+.Ql mqueue ,
+which a user namespace's owner may also do, as on Linux.
+A queue's file has the queue's owner and mode, the bytes of its messages
+as its size, and the time the queue was made as its times; reading it
+gives the line above, and
+.Xr unlink 2
+of it is
+.Fn mq_unlink ,
+by the queue's owner or a privileged caller.
+Unlike Linux's, an
+.Xr open 2
+with
+.Dv O_CREAT
+makes no queue there, and a queue's mode and owner do not change through
+its file.
 .Ss System call interface
 The numbers are 277 to 282 in the order above, with the timeouts as
 32-bit timespecs, and 418

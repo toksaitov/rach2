@@ -25,12 +25,15 @@
  * first; a full queue with O_NONBLOCK is EAGAIN; an empty one with a
  * timeout ETIMEDOUT; mq_notify's signal comes with SI_MESGQ and its value
  * when a message reaches the queue empty; poll reports a message; the
- * name goes with mq_unlink.
+ * name goes with mq_unlink. /dev/mqueue lists the queue as a file with its
+ * mode and its messages' bytes as its size, reading it gives its status
+ * line, and unlinking a queue's file takes its name.
  *
  * Prints "IPCMUSL OK" on success and "IPCMUSL FAIL (detail)" otherwise.
  */
 
 #define _GNU_SOURCE
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <mqueue.h>
@@ -43,6 +46,7 @@
 #include <sys/msg.h>
 #include <sys/sem.h>
 #include <sys/shm.h>
+#include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -220,6 +224,50 @@ static int msg_rows(void)
 
 static volatile int mq_signo, mq_code, mq_value;
 
+/**
+ * /dev/mqueue while the queue /ipcfiles holds one message of 4 bytes: its
+ * file, its status line and its entry; and a second queue whose file's
+ * unlink takes its name.
+ */
+static int mq_files(void)
+{
+    struct stat st;
+    struct dirent *d;
+    DIR *dir;
+    int listed = 0;
+    mqd_t q = mq_open("/ipcfiles", O_CREAT | O_EXCL | O_RDWR, 0600, NULL);
+    mqd_t q2;
+
+    if (q == (mqd_t)-1 || mq_send(q, "four", 4, 0) != 0) {
+        return fail("a queue for /dev/mqueue");
+    }
+    if (stat("/dev/mqueue/ipcfiles", &st) != 0 || !S_ISREG(st.st_mode) ||
+        (st.st_mode & 0777) != 0600 || st.st_size != 4) {
+        return fail("/dev/mqueue gives the queue's file its mode and size");
+    }
+    if (!file_has("/dev/mqueue/ipcfiles", "QSIZE:4 ")) {
+        return fail("the queue's file reads as its status line");
+    }
+    dir = opendir("/dev/mqueue");
+    while (dir && (d = readdir(dir)) != NULL) {
+        listed |= strcmp(d->d_name, "ipcfiles") == 0;
+    }
+    if (dir) {
+        closedir(dir);
+    }
+    if (!listed) {
+        return fail("/dev/mqueue lists the queue");
+    }
+    q2 = mq_open("/ipcfiles2", O_CREAT | O_EXCL | O_RDWR, 0600, NULL);
+    if (q2 == (mqd_t)-1 || mq_close(q2) != 0 || unlink("/dev/mqueue/ipcfiles2") != 0 ||
+        mq_open("/ipcfiles2", O_RDWR) != (mqd_t)-1 || errno != ENOENT) {
+        return fail("unlinking a queue's file takes its name");
+    }
+    mq_close(q);
+    mq_unlink("/ipcfiles");
+    return 0;
+}
+
 static void on_mq(int sig, siginfo_t *si, void *ctx)
 {
     (void)ctx;
@@ -293,7 +341,7 @@ static int mq_rows(void)
 
 int main(void)
 {
-    if (shm_rows() || sem_rows() || msg_rows() || mq_rows()) {
+    if (shm_rows() || sem_rows() || msg_rows() || mq_rows() || mq_files()) {
         return 1;
     }
     printf("IPCMUSL OK\n");

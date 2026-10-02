@@ -2992,7 +2992,7 @@ static int type_is(const char *type, const char *name)
  * Whether the caller may mount or unmount a file system of type `type`
  * (NULL for an unmount or a change of propagation): privileged, or
  * privileged over its mount namespace, where the types a user namespace
- * may mount on Linux are proc, sysfs and tmpfs.
+ * may mount on Linux are proc, sysfs, tmpfs and mqueue.
  */
 static int mount_privileged(const char *type)
 {
@@ -3004,7 +3004,8 @@ static int mount_privileged(const char *type)
     if (ns == &init_mntns || !ns_owner_privileged(current_proc, &ns->c)) {
         return 0;
     }
-    return !type || type_is(type, "proc") || type_is(type, "sysfs") || type_is(type, "tmpfs");
+    return !type || type_is(type, "proc") || type_is(type, "sysfs") || type_is(type, "tmpfs") ||
+           type_is(type, "mqueue");
 }
 
 /**

@@ -652,9 +652,10 @@ extern const struct vfs_type vfs_sysfs_type;
 
 /* The permanent mounts, entries 0 to VFS_PERMANENT - 1: the root, /dev,
  * /proc, the tmpfs /dev/shm, a nameless mount in /dev's root directory, the
- * tmpfs of memfd_create's files, which no path reaches, and /sys. umount2
- * answers EBUSY for each it can name. */
-#define VFS_PERMANENT 6
+ * tmpfs of memfd_create's files, which no path reaches, /sys, and the mqueue
+ * file system /dev/mqueue, nameless in /dev as /dev/shm is. umount2 answers
+ * EBUSY for each it can name. */
+#define VFS_PERMANENT 7
 
 /** The tmpfs memfd_create makes its files on: no path reaches it, no
  * listing shows it, and it lasts as long as the kernel. */

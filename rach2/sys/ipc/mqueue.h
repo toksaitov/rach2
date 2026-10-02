@@ -26,4 +26,8 @@ int32_t sys_mq_timedreceive_time64(struct isr_params *params);
 struct ipcns;
 void mq_ns_gone(const struct ipcns *ns);
 
+/** The mqueue file system, which lists a namespace's queues as files. */
+struct vfs_type;
+extern const struct vfs_type vfs_mqueue_type;
+
 #endif /* _MQUEUE_H_ */
