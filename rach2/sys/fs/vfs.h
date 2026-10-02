@@ -297,6 +297,10 @@ struct vfs_mount {
     int write_error;
     int claim;       /* the devfs claim on the source's sectors, or -1 */
     char source[32]; /* the source as mount(2) spelled it, for /proc/mounts */
+    /* The mount namespaces that do not see it, a bit each (proc/ns.h): a
+     * mount made in one is seen there and in the namespaces made from it
+     * afterwards, and a mount of the boot by all. */
+    uint32_t ns_hidden;
 };
 
 /* A held place: one node on one mount. The resolver returns these; whoever
@@ -374,6 +378,9 @@ int vfs_mount_slots(void);
 /** The table entry at `idx` (0..vfs_mount_slots()-1), or NULL when free; for
  * /proc/mounts and /proc/filesystems. */
 struct vfs_mount *vfs_mount_at(int idx);
+
+/** Whether the caller's mount namespace sees the mount `m`. */
+int vfs_mount_seen(const struct vfs_mount *m);
 
 /** The three permanent entries, for the syscall layer's direct needs. */
 struct vfs_mount *vfs_root_mount(void);
@@ -578,7 +585,8 @@ int vfs_leaf_root(struct vfs_mount *mnt, void *node, const char *name);
  * another type, the path of the directory the mount covers followed by the
  * directory's path inside the mount, which the type rebuilds from the
  * volume and so gives after a rename too. Returns 0, -ENAMETOOLONG, or
- * -ENOENT on a type without a `path` operation, /dev and /proc.
+ * -ENOENT on a type without a `path` operation, /dev and /proc, and on the
+ * tmpfs of memfd_create, which no path reaches.
  */
 int vfs_node_path(struct vfs_mount *mnt, void *node, char *out, uint32_t cap);
 

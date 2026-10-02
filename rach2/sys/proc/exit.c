@@ -6,6 +6,7 @@
 #include "../mm/paging.h"
 #include "../io/timerfd.h"
 #include "../ipc/sysv.h"
+#include "ns.h"
 
 /**
  * End the current thread: release what it holds, and when it is the last
@@ -64,6 +65,7 @@ int proc_exit_cleanup(int32_t status)
         ptimer_delete_all(tg);
         sysv_exit(tg);
         ptrace_tracer_gone(self->tgid);
+        ns_reaper_gone(leader);
         reparent_children(self->tgid);
         if (tg->exiting) {
             leader->exit_code = tg->exit_code;

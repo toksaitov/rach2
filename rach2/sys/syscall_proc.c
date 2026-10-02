@@ -17,6 +17,7 @@
 #include "proc/process.h"
 #include "proc/sched.h"
 #include "proc/seccomp.h"
+#include "proc/ns.h"
 #include "proc/wait_queue.h"
 #include "proc/tgroup.h"
 #include "proc/ptrace.h"
@@ -1026,7 +1027,9 @@ static int32_t exec_shebang(struct exec_state *s, uint32_t *argc,
  * it: when `p`'s effective uid or gid is no longer `old_euid` or `old_egid`,
  * its address space stops being dumpable, for every thread that shares it,
  * and it loses its parent-death signal, so the parent it had cannot signal
- * the identity it now has.
+ * the identity it now has. A new effective uid also takes away the
+ * capabilities it held in its user namespace, where its privilege is then
+ * its uid's.
  */
 static void cred_moved(process_t *p, uint32_t old_euid, uint32_t old_egid)
 {
@@ -1036,6 +1039,41 @@ static void cred_moved(process_t *p, uint32_t old_euid, uint32_t old_egid)
         }
         p->pdeath_signal = 0;
     }
+    if (p->euid != old_euid) {
+        p->ns_caps[0] = p->ns_caps[1] = 0;
+    }
+}
+
+/** Whether the caller may set any id its user namespace maps: privileged
+ * there, which in the first namespace is root's. */
+static int id_privileged(void)
+{
+    return ns_privileged(current_proc, proc_userns(current_proc));
+}
+
+/**
+ * Take the ids a setter names, `n` of them at `v`, in the caller's user
+ * namespace (`uid_named`, or `gid_named` for groups), as the kernel's,
+ * SC_ID_KEEP left as it is. 0, or -EINVAL for one the namespace does not
+ * map.
+ */
+static int32_t ids_named(uint32_t *v, int n, int gid)
+{
+    int i;
+
+    for (i = 0; i < n; i++) {
+        int64_t k;
+
+        if (v[i] == SC_ID_KEEP) {
+            continue;
+        }
+        k = gid ? gid_named(v[i]) : uid_named(v[i]);
+        if (k < 0) {
+            return -EINVAL;
+        }
+        v[i] = (uint32_t)k;
+    }
+    return 0;
 }
 
 /**
@@ -1373,10 +1411,13 @@ static int exec_fs_shared(void)
  * caller gave it.
  *
  * A process that set no_new_privs gains nothing: its bits are read and
- * ignored, as a nosuid mount's are. Neither does a caller that is not
- * privileged whose thread has a tracer that is not (`exec_traced`), or
- * whose directories and umask another process shares (`exec_fs_shared`),
- * since either could change the image once it had the ids; Linux's
+ * ignored, as a nosuid mount's are, and neither does one in a user
+ * namespace whose maps do not cover the file's owner and group, as on Linux,
+ * so a namespace's root cannot run a program as root. Neither does a caller
+ * that is not privileged whose thread has a tracer that is not
+ * (`exec_traced`), or whose directories and umask another process shares
+ * (`exec_fs_shared`), since either could change the image once it had the
+ * ids; Linux's
  * `cap_bprm_creds_from_file` ignores the bits in the same cases for a
  * caller without CAP_SETUID. No tracer that is not root can attach while
  * the exec runs (`ptrace_attach`), and an exec that applies the bits for
@@ -1393,6 +1434,10 @@ static void exec_ids(struct exec_state *s)
 {
     uint32_t mode = current_proc->no_new_privs ? 0u : s->id.mode;
     int regains = current_proc->nocaps && !current_proc->no_new_privs;
+
+    if (!ns_ids_mapped(proc_userns(current_proc), s->id.uid, s->id.gid)) {
+        mode = 0;
+    }
 
     s->nocaps = current_proc->nocaps;
     if ((mode != 0 && !proc_privileged(current_proc)) || regains) {
@@ -1693,6 +1738,7 @@ static void exec_commit(isr_params_t *params, struct exec_state *s)
     current_proc->suid = s->euid;
     current_proc->sgid = s->egid;
     current_proc->nocaps = s->nocaps;
+    ns_exec(current_proc);
     exec_privileges(s->mm, s->secure, s->unreadable, old_euid, old_egid, was_privileged);
     proc_set_comm(current_proc, s->path);
     for (sig = 1; sig <= KSIG_MAX; sig++) {
@@ -1774,6 +1820,35 @@ int32_t proc_files_unshare(void)
     }
     proc_files_put(current_proc);
     current_proc->fds = own;
+    return 0;
+}
+
+int32_t proc_fs_unshare(void)
+{
+    struct fs_struct *was = current_proc->fs, *own;
+
+    if (was->refs == 1) {
+        return 0;
+    }
+    own = kzalloc(sizeof(*own));
+    if (!own) {
+        return -ENOMEM;
+    }
+    if (was->cwd_long) {
+        own->cwd_long = kmalloc(k_strlen(was->cwd_long) + 1);
+        if (!own->cwd_long) {
+            kfree(own);
+            return -ENOMEM;
+        }
+        k_memcpy(own->cwd_long, was->cwd_long, k_strlen(was->cwd_long) + 1);
+    }
+    k_memcpy(own->cwd, was->cwd, sizeof(own->cwd));
+    own->refs = 1;
+    own->umask = was->umask;
+    current_proc->fs = own;
+    vfs_cwd_set(current_proc, was->cwd_mnt, was->cwd_node);
+    vfs_root_set(current_proc, was->root_mnt, was->root_node);
+    was->refs--;
     return 0;
 }
 
@@ -2104,7 +2179,7 @@ static int32_t fork_shares(process_t *child, process_t *parent, uint32_t flags)
  */
 static void fork_store_ids(process_t *child, const struct fork_req *req)
 {
-    uint32_t pid = child->pid;
+    uint32_t pid = pid_seen_by(child, child->pid);
     const vma_t *r;
 
     if (req->settid) {
@@ -2115,6 +2190,7 @@ static void fork_store_ids(process_t *child, const struct fork_req *req)
     }
     child->clear_child_tid = req->cleartid;
     if (req->ptid) {
+        pid = pid_seen(child->pid);
         (void)copy_to_user((void __user *)req->ptid, &pid, sizeof(pid));
     }
 }
@@ -2161,13 +2237,18 @@ static void fork_frame(process_t *child, const isr_params_t *params, const struc
  * CLONE_PARENT_SETTID word, stored before the child runs, and the child's
  * CLONE_CHILD_SETTID word and the CLONE_CHILD_CLEARTID address its thread end
  * clears. -EINTR when a SIGKILL came for the caller while the child was
- * built.
+ * built. The child has the parent's TLS base, since its frame keeps the
+ * parent's %gs selector and its address space has the same addresses,
+ * unless CLONE_SETTLS names another, and the floating-point registers as
+ * they are now, since the parent's record has only what they were at its
+ * last switch away. The parent gets the child's PID in the parent's PID
+ * namespace; the vfork wait names the child by the kernel's.
  */
 static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
 {
     process_t *parent = current_proc;
     process_t *child;
-    uint32_t pid;
+    uint32_t pid, kid;
     uintptr_t child_kstack_base;
     int32_t rc;
     int event;
@@ -2214,12 +2295,11 @@ static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
     child->parent_pid =
         (req->flags & (CLONE_THREAD | CLONE_PARENT)) ? parent->parent_pid : parent->tgid;
     fork_ids(child, parent);
-    /* The same TLS base, since the frame keeps the parent's %gs selector and
-     * the address space is at the same addresses, unless CLONE_SETTLS names
-     * another; the switch would otherwise load a base of 0. */
+    rc = ns_fork(child, parent, req->flags);
+    if (rc != 0) {
+        goto fail_built;
+    }
     child->tls_base = (req->flags & CLONE_SETTLS) ? req->tls : parent->tls_base;
-    /* The floating-point registers as they are now, since the parent's record
-     * holds only what they were at its last switch away. */
     fpu_save(child->fpu);
 
     rc = fork_shares(child, parent, req->flags);
@@ -2238,7 +2318,8 @@ static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
 
     fork_signals(child, parent, req->flags);
     fork_frame(child, params, req);
-    pid = child->pid;
+    kid = child->pid;
+    pid = pid_seen(kid);
     if (req->flags & CLONE_VFORK) {
         child->vfork_waiting = 1;
     }
@@ -2248,7 +2329,7 @@ static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
         ptrace_event(event, pid);
     }
     if (req->flags & CLONE_VFORK) {
-        proc_vfork_wait(pid);
+        proc_vfork_wait(kid);
         ptrace_event(PTRACE_EVENT_VFORK_DONE, pid);
     }
     return (int32_t)pid;
@@ -2302,9 +2383,11 @@ int32_t sys_vfork(isr_params_t *params)
  * set_thread_area would take. CLONE_PARENT makes the child a child of the
  * caller's parent. CLONE_PARENT_SETTID stores the child's id in the
  * parent's memory before the child runs, and a failed store is ignored, as
- * Linux ignores it. CLONE_SYSVSEM and CLONE_DETACHED are ignored, as there
- * are no System V semaphores and Linux ignores the second. Any other flag is
- * refused with EINVAL.
+ * Linux ignores it. CLONE_SYSVSEM and CLONE_DETACHED are ignored: a
+ * process's semaphore adjustments are its own, which threads share, and
+ * Linux ignores the second. The CLONE_NEW flags give the child new
+ * namespaces (`ns_fork`); a cgroup namespace and any other flag are refused
+ * with EINVAL.
  */
 int32_t sys_clone(isr_params_t *params)
 {
@@ -2314,7 +2397,7 @@ int32_t sys_clone(isr_params_t *params)
     if ((flags &
          ~(CSIGNAL | CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | CLONE_VFORK |
            CLONE_PARENT | CLONE_THREAD | CLONE_SYSVSEM | CLONE_SETTLS | CLONE_PARENT_SETTID |
-           CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID | CLONE_DETACHED)) != 0 ||
+           CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID | CLONE_DETACHED | CLONE_NEW_ANY)) != 0 ||
         (!(flags & CLONE_THREAD) && (flags & CSIGNAL) != SIGCHLD) ||
         ((flags & CLONE_SIGHAND) && !(flags & CLONE_VM)) ||
         ((flags & CLONE_THREAD) && !(flags & CLONE_SIGHAND)) ||
@@ -2816,13 +2899,14 @@ static int32_t wait_find(int idtype, uint32_t id, int options, struct wait_repor
  * address answers -EFAULT at once. A copy that fails after the wait, since
  * another thread unmapped or protected a buffer while the wait slept,
  * answers -EFAULT too, and leaves the child's event for a later wait
- * (`wait_done`): no zombie is lost.
+ * (`wait_done`): no zombie is lost. The pid returned is the child's in the
+ * caller's PID namespace, found before `wait_done` frees a reaped child.
  */
 static int32_t do_wait(int pid, int __user *status, int options, uint32_t rusage_ptr)
 {
     struct wait_report r;
     int idtype = P_PGID;
-    uint32_t id;
+    uint32_t id, seen;
     int32_t rc;
     int ok;
 
@@ -2837,24 +2921,25 @@ static int32_t do_wait(int pid, int __user *status, int options, uint32_t rusage
     }
     if (pid > 0) {
         idtype = P_PID;
-        id = (uint32_t)pid;
+        id = pid_named((uint32_t)pid);
     } else if (pid == -1) {
         idtype = P_ALL;
         id = 0;
     } else if (pid == 0) {
         id = current_proc->pgid;
     } else {
-        id = 0u - (uint32_t)pid;
+        id = pid_named(0u - (uint32_t)pid);
     }
     options &= (int)(WNOHANG | WUNTRACED | WCONTINUED | W_NOTHREAD | W_ALL | W_CLONE);
     rc = wait_find(idtype, id, options | WEXITED, &r);
     if (rc <= 0) {
         return rc;
     }
+    seen = pid_seen((uint32_t)rc);
     ok = (!status || copy_to_user((void __user *)status, &r.status, sizeof(r.status)) == 0) &&
          (!rusage_ptr || copy_to_user((void __user *)rusage_ptr, &r.ru, RUSAGE_BYTES) == 0);
     wait_done(&r, ok);
-    return ok ? rc : -EFAULT;
+    return ok ? (int32_t)seen : -EFAULT;
 }
 
 /*
@@ -2936,13 +3021,13 @@ int32_t sys_waitid(isr_params_t *params)
         if (upid <= 0) {
             return -EINVAL;
         }
-        id = (uint32_t)upid;
+        id = pid_named((uint32_t)upid);
         break;
     case P_PGID:
         if (upid < 0) {
             return -EINVAL;
         }
-        id = upid != 0 ? (uint32_t)upid : current_proc->pgid;
+        id = upid != 0 ? pid_named((uint32_t)upid) : current_proc->pgid;
         break;
     case P_PIDFD:
         return upid < 0 ? -EINVAL : -EBADF;
@@ -2963,8 +3048,8 @@ int32_t sys_waitid(isr_params_t *params)
     if (rc > 0) {
         info.signo = SIGCHLD;
         info.code = r.code;
-        info.pid = (int32_t)r.pid;
-        info.uid = (int32_t)r.uid;
+        info.pid = (int32_t)pid_seen(r.pid);
+        info.uid = (int32_t)uid_seen(r.uid);
         info.status = r.info_status;
     }
     ok = (rc == 0 || !rusage_ptr ||
@@ -3034,31 +3119,32 @@ int32_t sys_getrusage(isr_params_t *params)
 
 /*
  * Identity (the i386 *32 variants, 199-202): the four getters read the PCB
- * credentials, all zero (root) until a login server drops them. The setters
- * and the group list live with the rest of the id family near do_chown.
+ * credentials, all zero (root) until a login server drops them, as the
+ * caller's user namespace maps them (`uid_seen`). The setters and the group
+ * list live with the rest of the id family near do_chown.
  */
 int32_t sys_getuid(isr_params_t *params)
 {
     (void)params;
-    return (int32_t)current_proc->ruid;
+    return (int32_t)uid_seen(current_proc->ruid);
 }
 
 int32_t sys_geteuid(isr_params_t *params)
 {
     (void)params;
-    return (int32_t)current_proc->euid;
+    return (int32_t)uid_seen(current_proc->euid);
 }
 
 int32_t sys_getgid(isr_params_t *params)
 {
     (void)params;
-    return (int32_t)current_proc->rgid;
+    return (int32_t)gid_seen(current_proc->rgid);
 }
 
 int32_t sys_getegid(isr_params_t *params)
 {
     (void)params;
-    return (int32_t)current_proc->egid;
+    return (int32_t)gid_seen(current_proc->egid);
 }
 
 /* The default action for a signal whose disposition is SIG_DFL. */
@@ -3342,14 +3428,15 @@ static uint64_t sig_pending_now(void)
     return set;
 }
 
-/* The siginfo of a signal a process sends: `code` SI_USER for kill and
- * SI_TKILL for tkill and tgkill, with the sender's pid and real uid. */
-static void sender_info(struct k_siginfo *info, int32_t code)
+/* The siginfo of a signal a process sends to `target`: `code` SI_USER for
+ * kill and SI_TKILL for tkill and tgkill, with the sender's pid and real uid
+ * as the target's namespaces see them. */
+static void sender_info(struct k_siginfo *info, int32_t code, const process_t *target)
 {
     k_memset(info, 0, sizeof(*info));
     info->code = code;
-    info->pid = current_proc ? current_proc->tgid : 0;
-    info->uid = current_proc ? current_proc->ruid : 0;
+    info->pid = current_proc ? pid_seen_by(target, current_proc->tgid) : 0;
+    info->uid = current_proc ? ns_uid_from_kernel(proc_userns(target), current_proc->ruid) : 0;
 }
 
 /* Non-zero if the current process has a pending signal that is neither
@@ -3460,7 +3547,7 @@ static int32_t kill_group(int pgid, int signo)
         if (signo != 0 && p->state != PROC_ZOMBIE) {
             struct k_siginfo info;
 
-            sender_info(&info, SI_USER);
+            sender_info(&info, SI_USER, p);
             signal_post_info(p, signo, &info);
         }
     }
@@ -3491,12 +3578,13 @@ static int32_t do_kill(int pid, int signo)
         if (pid == -2147483647 - 1) {
             return -ESRCH; /* INT_MIN: -pid would overflow */
         }
-        return kill_group(-pid, signo);
+        return pid_named((uint32_t)-pid) ? kill_group((int)pid_named((uint32_t)-pid), signo)
+                                         : -ESRCH;
     }
     if (pid == -1) {
         return -ESRCH; /* broadcast-to-all is not supported */
     }
-    target = get_process((uint32_t)pid);
+    target = get_process(pid_named((uint32_t)pid));
     if (!target || target->state == PROC_UNUSED) {
         return -ESRCH;
     }
@@ -3506,7 +3594,7 @@ static int32_t do_kill(int pid, int signo)
     if (signo == 0 || target->tg->live == 0) {
         return 0;
     }
-    sender_info(&info, SI_USER);
+    sender_info(&info, SI_USER, target);
     signal_post_info(target, signo, &info);
     return 0;
 }
@@ -3525,9 +3613,9 @@ static int32_t do_tkill(int tgid, int tid, int signo)
     if (tid <= 0 || tgid < 0 || signo < 0 || signo > KSIG_MAX) {
         return -EINVAL;
     }
-    t = get_process((uint32_t)tid);
+    t = get_process(pid_named((uint32_t)tid));
     if (!t || t->state == PROC_UNUSED || t->state == PROC_ZOMBIE ||
-        (tgid != 0 && t->tgid != (uint32_t)tgid)) {
+        (tgid != 0 && t->tgid != pid_named((uint32_t)tgid))) {
         return -ESRCH;
     }
     if (!cred_may_signal(t, signo)) {
@@ -3536,7 +3624,7 @@ static int32_t do_tkill(int tgid, int tid, int signo)
     if (signo == 0) {
         return 0;
     }
-    sender_info(&info, SI_TKILL);
+    sender_info(&info, SI_TKILL, t);
     signal_post_thread(t, signo, &info);
     return 0;
 }
@@ -3597,7 +3685,7 @@ int32_t sys_rt_sigqueueinfo(isr_params_t *params)
 {
     int pid = (int)params->ebx;
     int signo = (int)params->ecx;
-    process_t *target = pid > 0 ? get_process((uint32_t)pid) : NULL;
+    process_t *target = pid > 0 ? get_process(pid_named((uint32_t)pid)) : NULL;
     struct k_siginfo info;
     int32_t rc;
 
@@ -3624,14 +3712,15 @@ int32_t sys_rt_tgsigqueueinfo(isr_params_t *params)
     int tgid = (int)params->ebx;
     int tid = (int)params->ecx;
     int signo = (int)params->edx;
-    process_t *t = tid > 0 ? get_process((uint32_t)tid) : NULL;
+    process_t *t = tid > 0 ? get_process(pid_named((uint32_t)tid)) : NULL;
     struct k_siginfo info;
     int32_t rc;
 
     if (tgid <= 0 || tid <= 0 || signo < 0 || signo > KSIG_MAX) {
         return -EINVAL;
     }
-    if (!t || t->state == PROC_UNUSED || t->state == PROC_ZOMBIE || t->tgid != (uint32_t)tgid) {
+    if (!t || t->state == PROC_UNUSED || t->state == PROC_ZOMBIE ||
+        t->tgid != pid_named((uint32_t)tgid)) {
         return -ESRCH;
     }
     rc = queued_info(params->esi, t->tg == current_proc->tg, &info);
@@ -4556,7 +4645,8 @@ int32_t sys_signalfd4(isr_params_t *params)
 
 /*
  * sys_getpid - return the calling process's PID (getpid(2)), which is its
- * thread group's id.
+ * thread group's id, in its PID namespace (`pid_seen`), as every id these
+ * calls give and take is.
  */
 int32_t sys_getpid(isr_params_t *params)
 {
@@ -4565,7 +4655,7 @@ int32_t sys_getpid(isr_params_t *params)
     if (!current_proc) {
         return -ESRCH;
     }
-    return (int32_t)current_proc->tgid;
+    return (int32_t)pid_seen(current_proc->tgid);
 }
 
 /**
@@ -4579,7 +4669,7 @@ int32_t sys_gettid(isr_params_t *params)
     if (!current_proc) {
         return -ESRCH;
     }
-    return (int32_t)current_proc->pid;
+    return (int32_t)pid_seen(current_proc->pid);
 }
 
 /** Give every thread of the process of `p` the session `sid` and the
@@ -4615,7 +4705,7 @@ int32_t sys_setsid(isr_params_t *params)
         return -EPERM; /* already a process-group leader */
     }
     group_set_ids(current_proc, current_proc->tgid, current_proc->tgid);
-    return (int32_t)current_proc->tgid;
+    return (int32_t)pid_seen(current_proc->tgid);
 }
 
 /**
@@ -4638,7 +4728,13 @@ int32_t sys_setpgid(isr_params_t *params)
     if (pgid < 0) {
         return -EINVAL;
     }
-    target = (pid == 0) ? current_proc : get_process((uint32_t)pid);
+    if (pgid != 0) {
+        pgid = (int)pid_named((uint32_t)pgid);
+        if (pgid == 0) {
+            return -EPERM; /* no group the caller can see */
+        }
+    }
+    target = (pid == 0) ? current_proc : get_process(pid_named((uint32_t)pid));
     if (!target || target->state == PROC_UNUSED || target->tg->live == 0) {
         return -ESRCH;
     }
@@ -4671,7 +4767,7 @@ static process_t *pgrp_target(int pid)
     if (pid == 0) {
         return current_proc;
     }
-    return get_process((uint32_t)pid);
+    return get_process(pid_named((uint32_t)pid));
 }
 
 /*
@@ -4689,7 +4785,7 @@ int32_t sys_getpgid(isr_params_t *params)
     if (!target) {
         return -ESRCH;
     }
-    return (int32_t)target->pgid;
+    return (int32_t)pid_seen(target->pgid);
 }
 
 /*
@@ -4702,7 +4798,7 @@ int32_t sys_getpgrp(isr_params_t *params)
     if (!current_proc) {
         return -ESRCH;
     }
-    return (int32_t)current_proc->pgid;
+    return (int32_t)pid_seen(current_proc->pgid);
 }
 
 /*
@@ -4720,7 +4816,7 @@ int32_t sys_getsid(isr_params_t *params)
     if (!target) {
         return -ESRCH;
     }
-    return (int32_t)target->sid;
+    return (int32_t)pid_seen(target->sid);
 }
 
 /*
@@ -4733,7 +4829,7 @@ int32_t sys_getppid(isr_params_t *params)
     if (!current_proc) {
         return -ESRCH;
     }
-    return (int32_t)current_proc->parent_pid;
+    return (int32_t)pid_seen(current_proc->parent_pid);
 }
 
 /*
@@ -4759,7 +4855,10 @@ int32_t sys_setuid(isr_params_t *params)
     uint32_t uid = params->ebx;
     uint32_t old_euid = p->euid;
 
-    if (cred_privileged()) {
+    if (uid == SC_ID_KEEP || ids_named(&uid, 1, 0) != 0) {
+        return -EINVAL;
+    }
+    if (id_privileged()) {
         p->ruid = uid;
         p->euid = uid;
         p->suid = uid;
@@ -4780,7 +4879,10 @@ int32_t sys_setgid(isr_params_t *params)
     uint32_t gid = params->ebx;
     uint32_t old_egid = p->egid;
 
-    if (cred_privileged()) {
+    if (gid == SC_ID_KEEP || ids_named(&gid, 1, 1) != 0) {
+        return -EINVAL;
+    }
+    if (id_privileged()) {
         p->rgid = gid;
         p->egid = gid;
         p->sgid = gid;
@@ -4798,13 +4900,20 @@ int32_t sys_setgid(isr_params_t *params)
 int32_t sys_setreuid(isr_params_t *params)
 {
     process_t *p = current_proc;
-    uint32_t r = params->ebx;
-    uint32_t e = params->ecx;
-    uint32_t new_r = (r == SC_ID_KEEP) ? p->ruid : r;
-    uint32_t new_e = (e == SC_ID_KEEP) ? p->euid : e;
+    uint32_t v[2];
+    uint32_t r, e, new_r, new_e;
     uint32_t old_euid = p->euid;
 
-    if (!cred_privileged()) {
+    v[0] = params->ebx;
+    v[1] = params->ecx;
+    if (ids_named(v, 2, 0) != 0) {
+        return -EINVAL;
+    }
+    r = v[0];
+    e = v[1];
+    new_r = (r == SC_ID_KEEP) ? p->ruid : r;
+    new_e = (e == SC_ID_KEEP) ? p->euid : e;
+    if (!id_privileged()) {
         if (r != SC_ID_KEEP && new_r != p->ruid && new_r != p->euid) {
             return -EPERM;
         }
@@ -4824,13 +4933,20 @@ int32_t sys_setreuid(isr_params_t *params)
 int32_t sys_setregid(isr_params_t *params)
 {
     process_t *p = current_proc;
-    uint32_t r = params->ebx;
-    uint32_t e = params->ecx;
-    uint32_t new_r = (r == SC_ID_KEEP) ? p->rgid : r;
-    uint32_t new_e = (e == SC_ID_KEEP) ? p->egid : e;
+    uint32_t v[2];
+    uint32_t r, e, new_r, new_e;
     uint32_t old_egid = p->egid;
 
-    if (!cred_privileged()) {
+    v[0] = params->ebx;
+    v[1] = params->ecx;
+    if (ids_named(v, 2, 1) != 0) {
+        return -EINVAL;
+    }
+    r = v[0];
+    e = v[1];
+    new_r = (r == SC_ID_KEEP) ? p->rgid : r;
+    new_e = (e == SC_ID_KEEP) ? p->egid : e;
+    if (!id_privileged()) {
         if (r != SC_ID_KEEP && new_r != p->rgid && new_r != p->egid) {
             return -EPERM;
         }
@@ -4850,17 +4966,22 @@ int32_t sys_setregid(isr_params_t *params)
 int32_t sys_setresuid(isr_params_t *params)
 {
     process_t *p = current_proc;
-    uint32_t r = params->ebx;
-    uint32_t e = params->ecx;
-    uint32_t s = params->edx;
+    uint32_t v[3];
+    uint32_t r, e, s;
     uint32_t old_euid = p->euid;
 
-    if (!cred_privileged()) {
-        uint32_t v[3];
+    v[0] = params->ebx;
+    v[1] = params->ecx;
+    v[2] = params->edx;
+    if (ids_named(v, 3, 0) != 0) {
+        return -EINVAL;
+    }
+    r = v[0];
+    e = v[1];
+    s = v[2];
+    if (!id_privileged()) {
         int i;
-        v[0] = r;
-        v[1] = e;
-        v[2] = s;
+
         for (i = 0; i < 3; i++) {
             if (v[i] != SC_ID_KEEP && v[i] != p->ruid && v[i] != p->euid && v[i] != p->suid) {
                 return -EPERM;
@@ -4883,17 +5004,22 @@ int32_t sys_setresuid(isr_params_t *params)
 int32_t sys_setresgid(isr_params_t *params)
 {
     process_t *p = current_proc;
-    uint32_t r = params->ebx;
-    uint32_t e = params->ecx;
-    uint32_t s = params->edx;
+    uint32_t v[3];
+    uint32_t r, e, s;
     uint32_t old_egid = p->egid;
 
-    if (!cred_privileged()) {
-        uint32_t v[3];
+    v[0] = params->ebx;
+    v[1] = params->ecx;
+    v[2] = params->edx;
+    if (ids_named(v, 3, 1) != 0) {
+        return -EINVAL;
+    }
+    r = v[0];
+    e = v[1];
+    s = v[2];
+    if (!id_privileged()) {
         int i;
-        v[0] = r;
-        v[1] = e;
-        v[2] = s;
+
         for (i = 0; i < 3; i++) {
             if (v[i] != SC_ID_KEEP && v[i] != p->rgid && v[i] != p->egid && v[i] != p->sgid) {
                 return -EPERM;
@@ -4918,10 +5044,11 @@ int32_t sys_setresgid(isr_params_t *params)
 int32_t sys_getresuid(isr_params_t *params)
 {
     process_t *p = current_proc;
+    uint32_t r = uid_seen(p->ruid), e = uid_seen(p->euid), s = uid_seen(p->suid);
 
-    if (copy_to_user((void __user *)params->ebx, &p->ruid, sizeof(p->ruid)) != 0 ||
-        copy_to_user((void __user *)params->ecx, &p->euid, sizeof(p->euid)) != 0 ||
-        copy_to_user((void __user *)params->edx, &p->suid, sizeof(p->suid)) != 0) {
+    if (copy_to_user((void __user *)params->ebx, &r, sizeof(r)) != 0 ||
+        copy_to_user((void __user *)params->ecx, &e, sizeof(e)) != 0 ||
+        copy_to_user((void __user *)params->edx, &s, sizeof(s)) != 0) {
         return -EFAULT;
     }
     return 0;
@@ -4930,10 +5057,11 @@ int32_t sys_getresuid(isr_params_t *params)
 int32_t sys_getresgid(isr_params_t *params)
 {
     process_t *p = current_proc;
+    uint32_t r = gid_seen(p->rgid), e = gid_seen(p->egid), s = gid_seen(p->sgid);
 
-    if (copy_to_user((void __user *)params->ebx, &p->rgid, sizeof(p->rgid)) != 0 ||
-        copy_to_user((void __user *)params->ecx, &p->egid, sizeof(p->egid)) != 0 ||
-        copy_to_user((void __user *)params->edx, &p->sgid, sizeof(p->sgid)) != 0) {
+    if (copy_to_user((void __user *)params->ebx, &r, sizeof(r)) != 0 ||
+        copy_to_user((void __user *)params->ecx, &e, sizeof(e)) != 0 ||
+        copy_to_user((void __user *)params->edx, &s, sizeof(s)) != 0) {
         return -EFAULT;
     }
     return 0;
@@ -4953,13 +5081,16 @@ int32_t sys_setgroups(isr_params_t *params)
     if (size > NGROUPS_MAX) {
         return -EINVAL; /* sized before privilege, the order Linux reports */
     }
-    if (!cred_privileged()) {
+    if (!id_privileged() || ns_setgroups_denied(p)) {
         return -EPERM;
     }
     for (i = 0; i < size; i++) {
         if (copy_from_user(&tmp[i], (const void __user *)(list_ptr + i * 4), sizeof(tmp[i])) != 0) {
             return -EFAULT;
         }
+    }
+    if (ids_named(tmp, (int)size, 1) != 0) {
+        return -EINVAL;
     }
     for (i = 0; i < size; i++) {
         p->groups[i] = tmp[i];
@@ -4985,8 +5116,9 @@ int32_t sys_getgroups(isr_params_t *params)
         return -EINVAL;
     }
     for (i = 0; i < p->ngroups; i++) {
-        if (copy_to_user((void __user *)(list_ptr + i * 4), &p->groups[i], sizeof(p->groups[i])) !=
-            0) {
+        uint32_t g = gid_seen(p->groups[i]);
+
+        if (copy_to_user((void __user *)(list_ptr + i * 4), &g, sizeof(g)) != 0) {
             return -EFAULT;
         }
     }
@@ -5081,7 +5213,11 @@ static process_t *rlimit_target(uint32_t pid)
 {
     process_t *p;
 
-    if (pid == 0 || pid == current_proc->tgid) {
+    if (pid == 0) {
+        return current_proc;
+    }
+    pid = pid_named(pid);
+    if (pid == current_proc->tgid) {
         return current_proc;
     }
     p = get_process(pid);
@@ -5159,7 +5295,7 @@ int32_t sys_prlimit64(isr_params_t *params)
     }
     p = rlimit_target(pid);
     if (!p) {
-        return get_process(pid) ? -EPERM : -ESRCH;
+        return pid != 0 && get_process(pid_named(pid)) ? -EPERM : -ESRCH;
     }
     rlimit_for(p, resource, &cur32, &max32);
     out[0] = cur32;
@@ -6127,6 +6263,26 @@ static int prio_target(const process_t *p, int which, uint32_t who)
 }
 
 /**
+ * The kernel's id of the target `who` that a priority call of kind `which`
+ * names in the caller's namespaces: 0 stays the caller's own, and an id the
+ * caller cannot see matches nothing.
+ */
+static uint32_t prio_who(int which, uint32_t who)
+{
+    int64_t uid;
+
+    if (who == 0) {
+        return 0;
+    }
+    if (which != PRIO_USER) {
+        who = pid_named(who);
+        return who != 0 ? who : 0xFFFFFFFFu;
+    }
+    uid = uid_named(who);
+    return uid >= 0 ? (uint32_t)uid : 0xFFFFFFFFu;
+}
+
+/**
  * Read a priority (getpriority(2), syscall 96).
  *
  * EBX = which, ECX = who. Returns the highest priority among the targets,
@@ -6137,6 +6293,7 @@ static int prio_target(const process_t *p, int which, uint32_t who)
 int32_t sys_getpriority(isr_params_t *params)
 {
     int which = (int)params->ebx;
+    uint32_t who = prio_who(which, params->ecx);
     process_t *p;
     int32_t best = -ESRCH;
 
@@ -6144,7 +6301,7 @@ int32_t sys_getpriority(isr_params_t *params)
         return -EINVAL;
     }
     for (p = proc_list; p; p = p->next) {
-        if (prio_target(p, which, params->ecx) && 20 - p->nice > best) {
+        if (prio_target(p, which, who) && 20 - p->nice > best) {
             best = 20 - p->nice;
         }
     }
@@ -6167,6 +6324,7 @@ int32_t sys_getpriority(isr_params_t *params)
 int32_t sys_setpriority(isr_params_t *params)
 {
     int which = (int)params->ebx;
+    uint32_t who = prio_who(which, params->ecx);
     int32_t nice = (int32_t)params->edx;
     process_t *p;
     int32_t rc = -ESRCH;
@@ -6181,7 +6339,7 @@ int32_t sys_setpriority(isr_params_t *params)
         nice = NICE_MAX;
     }
     for (p = proc_list; p; p = p->next) {
-        if (!prio_target(p, which, params->ecx)) {
+        if (!prio_target(p, which, who)) {
             continue;
         }
         if (!cred_privileged() && current_proc->euid != p->ruid && current_proc->euid != p->euid) {
@@ -6255,6 +6413,7 @@ static int32_t ioprio_check(uint32_t ioprio)
 int32_t sys_ioprio_set(isr_params_t *params)
 {
     int which = (int)params->ebx;
+    uint32_t who = prio_who(which - 1, params->ecx);
     process_t *p;
     int32_t rc;
 
@@ -6267,7 +6426,7 @@ int32_t sys_ioprio_set(isr_params_t *params)
     }
     rc = -ESRCH;
     for (p = proc_list; p; p = p->next) {
-        if (!prio_target(p, which - 1, params->ecx)) {
+        if (!prio_target(p, which - 1, who)) {
             continue;
         }
         if (!cred_privileged() && p->ruid != current_proc->euid && p->ruid != current_proc->ruid) {
@@ -6291,6 +6450,7 @@ int32_t sys_ioprio_set(isr_params_t *params)
 int32_t sys_ioprio_get(isr_params_t *params)
 {
     int which = (int)params->ebx;
+    uint32_t who = prio_who(which - 1, params->ecx);
     process_t *p;
     int32_t best = -ESRCH;
 
@@ -6300,7 +6460,7 @@ int32_t sys_ioprio_get(isr_params_t *params)
     for (p = proc_list; p; p = p->next) {
         int32_t prio, a, b;
 
-        if (!prio_target(p, which - 1, params->ecx)) {
+        if (!prio_target(p, which - 1, who)) {
             continue;
         }
         prio = p->ioprio;
@@ -6352,7 +6512,7 @@ static process_t *sched_target(int pid)
     if (pid == 0) {
         return current_proc;
     }
-    return get_process((uint32_t)pid);
+    return get_process(pid_named((uint32_t)pid));
 }
 
 /**
@@ -6900,6 +7060,29 @@ static int32_t cap_version_in(uint32_t uhdr, uint32_t *words)
     return -EINVAL;
 }
 
+/**
+ * Word `i` of the capability sets `p` holds, effective and permitted alike:
+ * in the first user namespace every capability for a privileged thread and
+ * none for another; in another namespace the sets it was given there, or
+ * every one for a thread whose effective uid is root there, and none after
+ * it gave them up.
+ */
+static uint32_t cap_held(const process_t *p, uint32_t i)
+{
+    uint32_t full = i == 0 ? 0xFFFFFFFFu : CAP_HIGH_WORD;
+
+    if (!p->userns) {
+        return proc_privileged(p) ? full : 0u;
+    }
+    if (p->nocaps) {
+        return 0u;
+    }
+    if (ns_caps_held(p)) {
+        return p->ns_caps[i] & full;
+    }
+    return ns_uid_from_kernel(p->userns, p->euid) == 0 ? full : 0u;
+}
+
 /** The pid in the header at `uhdr`, after its version, into `*pid`. */
 static int32_t cap_pid_in(uint32_t uhdr, int32_t *pid)
 {
@@ -6912,13 +7095,11 @@ static int32_t cap_pid_in(uint32_t uhdr, int32_t *pid)
 /**
  * capget (syscall 184): EBX = header, ECX = the sets' words.
  *
- * The sets of the thread the header's pid names, the caller for 0: every
- * capability, effective and permitted, for a thread that is privileged
- * (`proc_privileged`), and none for any other; the inheritable set is
- * always empty. A null ECX asks only for the version, and is 0 with an
- * unknown version written back. -ESRCH for a pid that names no thread,
- * -EINVAL for a negative one or an unknown version, -EFAULT for memory that
- * cannot be read or written.
+ * The sets of the thread the header's pid names, the caller for 0, as
+ * `cap_held` gives them; the inheritable set is always empty. A null ECX asks
+ * only for the version, and is 0 with an unknown version written back. -ESRCH
+ * for a pid that names no thread, -EINVAL for a negative one or an unknown
+ * version, -EFAULT for memory that cannot be read or written.
  */
 int32_t sys_capget(isr_params_t *params)
 {
@@ -6939,16 +7120,14 @@ int32_t sys_capget(isr_params_t *params)
         return -EINVAL;
     }
     if (pid != 0) {
-        p = get_process((uint32_t)pid);
+        p = get_process(pid_named((uint32_t)pid));
         if (!p || p->state == PROC_UNUSED) {
             return -ESRCH;
         }
     }
     k_memset(d, 0, sizeof(d));
-    if (proc_privileged(p)) {
-        d[0].effective = d[0].permitted = 0xFFFFFFFFu;
-        d[1].effective = d[1].permitted = CAP_HIGH_WORD;
-    }
+    d[0].effective = d[0].permitted = cap_held(p, 0);
+    d[1].effective = d[1].permitted = cap_held(p, 1);
     if (copy_to_user((void __user *)params->ecx, d, words * sizeof(d[0])) != 0) {
         return -EFAULT;
     }
@@ -6962,11 +7141,15 @@ int32_t sys_capget(isr_params_t *params)
  * up all its capabilities, with every set empty, after which it is not
  * privileged until an exec gives them back (`exec_ids`), and may ask for all
  * it has, which changes nothing. Chromium's zygote gives them up in each
- * process it forks. A pid other than 0 and the caller's is -EPERM, as is a
- * permitted set wider than the thread's or an effective set wider than the
- * permitted one; a set between none and all, or any inheritable capability,
- * is -EINVAL, where Linux keeps it; an unknown version is -EINVAL, and
- * memory that cannot be read -EFAULT.
+ * process it forks. In a user namespace other than the first, a thread may
+ * keep any part of what it holds there, as Chromium's zygote keeps
+ * CAP_SYS_ADMIN: capget reports the part, and the thread stays privileged
+ * there while any is left (`ns_caps_held`). A pid other than 0 and the
+ * caller's is -EPERM, as is a permitted set wider than the thread's or an
+ * effective set wider than the permitted one; in the first namespace a set
+ * between none and all, or any inheritable capability, is -EINVAL, where
+ * Linux keeps it; an unknown version is -EINVAL, and memory that cannot be
+ * read -EFAULT.
  */
 int32_t sys_capset(isr_params_t *params)
 {
@@ -6982,7 +7165,7 @@ int32_t sys_capset(isr_params_t *params)
     if (rc != 0) {
         return rc;
     }
-    if (pid != 0 && pid != (int32_t)current_proc->pid) {
+    if (pid != 0 && pid != (int32_t)pid_seen(current_proc->pid)) {
         return -EPERM;
     }
     k_memset(d, 0, sizeof(d));
@@ -6992,19 +7175,24 @@ int32_t sys_capset(isr_params_t *params)
     }
     for (i = 0; i < 2; i++) {
         uint32_t full = i == 0 ? 0xFFFFFFFFu : CAP_HIGH_WORD;
-        uint32_t have = proc_privileged(current_proc) ? full : 0u;
 
-        if ((d[i].permitted & ~have) != 0 || (d[i].effective & ~d[i].permitted) != 0) {
+        if ((d[i].permitted & ~cap_held(current_proc, i)) != 0 ||
+            (d[i].effective & ~d[i].permitted) != 0) {
             return -EPERM;
         }
         any |= d[i].effective | d[i].permitted | d[i].inheritable;
         whole &= d[i].effective == full && d[i].permitted == full && d[i].inheritable == 0;
     }
-    if (any != 0 && !whole) {
-        return -EINVAL;
-    }
     if (any == 0) {
         current_proc->nocaps = 1;
+        return 0;
+    }
+    if (!current_proc->userns && !whole) {
+        return -EINVAL;
+    }
+    if (current_proc->userns) {
+        current_proc->ns_caps[0] = d[0].permitted;
+        current_proc->ns_caps[1] = d[1].permitted;
     }
     return 0;
 }

@@ -150,6 +150,7 @@ static int filemap_holds(const void *node);
 #include "syscall_fs.c"
 #include "block/loop.c"
 #include "mm/filemap.c"
+#include "ns_first.h"
 
 extern int printf(const char *format, ...);
 extern void *calloc(unsigned long count, unsigned long size);
@@ -336,6 +337,14 @@ int vfs_mount_slots(void)
 struct vfs_mount *vfs_mount_at(int idx)
 {
     return idx == 0 ? &mount : 0;
+}
+
+/** The device a stat reports for mount `i`: its index past the fixed ids,
+ * as procfs gives a mount of no node of /dev. */
+uint32_t procfs_mount_dev(int i, const struct vfs_mount *m)
+{
+    (void)m;
+    return 0x10u + (uint32_t)i;
 }
 
 /** The clock, which no row reads. */

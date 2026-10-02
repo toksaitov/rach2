@@ -92,6 +92,7 @@ C_SRC = kernel.c \
         sys/proc/sigframe.c \
         sys/proc/ptrace.c \
         sys/proc/seccomp.c \
+        sys/proc/ns.c \
         sys/proc/coredump.c \
         sys/ipc/pipe.c \
         sys/ipc/pipe_ring.c \

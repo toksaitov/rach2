@@ -29,7 +29,7 @@ given up its capabilities with
 Linux asks for a capability in each such place, and this kernel keeps
 every capability or none.
 .Ss System call numbers
-The kernel registers the following 300 calls.
+The kernel registers the following 303 calls.
 .Bl -column "Number" "System call" -compact
 .It Sy Number Ta Sy System call
 .It 1 Ta Xr exit 2
@@ -122,6 +122,7 @@ The kernel registers the following 300 calls.
 .It 118 Ta Xr fsync 2
 .It 119 Ta Xr sigreturn 2
 .It 120 Ta Xr clone 2
+.It 121 Ta Xr setdomainname 2
 .It 122 Ta Xr uname 2
 .It 124 Ta Xr adjtimex 2
 .It 125 Ta Xr mprotect 2
@@ -262,6 +263,7 @@ The kernel registers the following 300 calls.
 .It 307 Ta Xr faccessat 2
 .It 308 Ta Xr pselect6 2
 .It 309 Ta Xr ppoll 2
+.It 310 Ta Xr unshare 2
 .It 311 Ta Xr set_robust_list 2
 .It 312 Ta Xr get_robust_list 2
 .It 313 Ta Xr splice 2
@@ -287,6 +289,7 @@ The kernel registers the following 300 calls.
 .It 343 Ta Xr clock_adjtime 2
 .It 344 Ta Xr syncfs 2
 .It 345 Ta Xr sendmmsg 2
+.It 346 Ta Xr setns 2
 .It 353 Ta Xr renameat2 2
 .It 354 Ta Xr seccomp 2
 .It 355 Ta Xr getrandom 2

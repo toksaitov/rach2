@@ -15,6 +15,7 @@
 #include "../mm/pagecache.h"
 #include "../panic.h"
 #include "../proc/process.h"
+#include "../proc/ns.h"
 #include "bcache.h"
 #include "devfs.h"
 #include "fat32.h"
@@ -302,17 +303,28 @@ static int may_search(struct vfs_mount *mnt, void *node, int use_real)
 
 /* The resolver. */
 
+/** The bit of the caller's mount namespace. */
+static uint32_t ns_bit(void)
+{
+    return 1u << proc_mntns(current_proc)->bit;
+}
+
+int vfs_mount_seen(const struct vfs_mount *m)
+{
+    return (m->ns_hidden & ns_bit()) == 0;
+}
+
 /* The mount whose root replaces `node` when the walk arrives at it: a child
- * of `mnt` covering that node. The two synthetic mounts cover no node; they
- * are entered by name from the root directory, which `mount_named`
- * matches. */
+ * of `mnt` covering that node that the caller's mount namespace sees. The
+ * two synthetic mounts cover no node; they are entered by name from the
+ * root directory, which `mount_named` matches. */
 static struct vfs_mount *mount_covering(struct vfs_mount *mnt, void *node)
 {
     int i;
 
     for (i = 1; i < mount_slots; i++) {
         if (mounts[i] && mounts[i]->state != VFS_FREE && mounts[i]->parent == mnt &&
-            mounts[i]->covered && mounts[i]->covered == node) {
+            mounts[i]->covered && mounts[i]->covered == node && vfs_mount_seen(mounts[i])) {
             return mounts[i]; /* a transitional mount answers EBUSY on entry */
         }
     }
@@ -354,7 +366,7 @@ static struct vfs_mount *mount_named_at(struct vfs_mount *mnt, const char *comp,
         const char *name;
         uint32_t n;
 
-        if (!m || m->state != VFS_ACTIVE || m->parent != mnt || m->covered) {
+        if (!m || m->state != VFS_ACTIVE || m->parent != mnt || m->covered || !vfs_mount_seen(m)) {
             continue;
         }
         name = path_last(m->covered_path);
@@ -382,7 +394,8 @@ int vfs_named_mount(const struct vfs_mount *parent, int n, const char **name, ui
         struct vfs_mount *m = mounts[i];
         struct vfs_stat st;
 
-        if (!m || m->state != VFS_ACTIVE || m->parent != parent || m->covered || n-- > 0) {
+        if (!m || m->state != VFS_ACTIVE || m->parent != parent || m->covered ||
+            !vfs_mount_seen(m) || n-- > 0) {
             continue;
         }
         *name = path_last(m->covered_path);
@@ -407,7 +420,7 @@ struct vfs_mount *vfs_leaf_mount(struct vfs_mount *mnt, void *node, const char *
     /* A mount still being made covers the node as well as an active one. */
     for (i = 1; i < mount_slots; i++) {
         if (mounts[i] && mounts[i]->state != VFS_FREE && mounts[i]->parent == mnt &&
-            mounts[i]->covered == found) {
+            mounts[i]->covered == found && vfs_mount_seen(mounts[i])) {
             m = mounts[i];
         }
     }
@@ -451,7 +464,7 @@ int vfs_node_path(struct vfs_mount *mnt, void *node, char *out, uint32_t cap)
     if (mnt == mounts[0] && mnt->type == &vfs_krffs_type) {
         return krffs_node_path((krffs_node_t *)node, out, cap) == 0 ? 0 : -ENAMETOOLONG;
     }
-    if (!mnt->type->ops->path) {
+    if (!mnt->type->ops->path || mnt == vfs_memfd_mount()) {
         return -ENOENT;
     }
     if (ml <= 1) {
@@ -728,6 +741,10 @@ static int walk_is_link(struct vfs_mount *mnt, void *node)
  * there. A thread that shares the root may chroot while the walk sleeps; at
  * its next `..` or absolute link the walk sees that (`root_current`), lets
  * go of where it is and starts over from the new root, so no walk mixes two.
+ * A path that begins with two slashes, which the system call layer makes
+ * for a name relative to a descriptor's directory outside the caller's
+ * root, starts at the root of the root mount, and keeps the caller's root
+ * for `..` and for links.
  *
  * VFS_WALK_LOCK holds one namespace lock at a time and returns with the
  * final mount locked when its type asks for the lock, so an open can
@@ -771,6 +788,10 @@ begin:
     links = 0;
     walk_root(&root);
     cur = (p[0] == '/' || !start) ? root : *start;
+    if (p[0] == '/' && p[1] == '/') {
+        cur.mnt = mounts[0];
+        cur.node = mounts[0]->root;
+    }
     if (vfs_enter(cur.mnt) != 0) {
         path_buf_put(linkpath);
         path_buf_put(target);
@@ -2154,7 +2175,8 @@ static int synth_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
                  kind == VNODE_PROC_NET_DIR || kind == VNODE_PROC_PID ||
                  kind == VNODE_PROC_FD_DIR || kind == VNODE_PROC_TASK_DIR ||
                  kind == VNODE_SYS_DIR || kind == VNODE_SYS_LINK ||
-                 kind == VNODE_PROC_SYSVIPC_DIR || kind == VNODE_PROC_NET_STAT_DIR;
+                 kind == VNODE_PROC_SYSVIPC_DIR || kind == VNODE_PROC_NET_STAT_DIR ||
+                 kind == VNODE_PROC_NS_DIR || kind == VNODE_PROC_FDINFO_DIR;
 
     k_memset(st, 0, sizeof(*st));
     if (is_dir) {
@@ -2336,7 +2358,7 @@ static int mount_permanent(const struct vfs_mount *m)
 
 /** Construct permanent mount `idx` of `type` at `path`; a failure panics. */
 static void install(int idx, const struct vfs_type *type, const char *path,
-                    struct vfs_mount *parent)
+                    struct vfs_mount *parent, const char *options)
 {
     struct vfs_mount *m = mount_record(idx);
 
@@ -2363,7 +2385,7 @@ static void install(int idx, const struct vfs_type *type, const char *path,
     m->releases = 0;
     m->claim = -1;
     m->source[0] = '\0';
-    if (type->mount(m, 0, 0, 0) != 0) {
+    if (type->mount(m, 0, 0, options) != 0) {
         k_panic("vfs: a permanent mount refused to construct");
     }
     m->state = VFS_ACTIVE;
@@ -2375,19 +2397,21 @@ static void install(int idx, const struct vfs_type *type, const char *path,
  * `nosuid` and `nodev` as Linux systems mount it and mode 1777. A synthetic
  * type cannot host a mount point, so /dev/shm is a nameless mount entered
  * by its name, as /dev and /proc are. Then the tmpfs of memfd_create, with
- * no parent and no path, which nothing enters by name, and last /sys,
+ * no parent and no path, which nothing enters by name, and whose root, mode
+ * 0555, stays empty, since its files have no names; chroot makes it the
+ * root of a process that asks for a /proc/PID/fdinfo. Last /sys,
  * read-only, as /dev and /proc are entered.
  */
 static void install_permanent(void)
 {
-    install(1, &vfs_devfs_type, "/dev", mounts[0]);
-    install(2, &vfs_procfs_type, "/proc", mounts[0]);
-    install(3, &vfs_tmpfs_type, "/dev/shm", mounts[1]);
+    install(1, &vfs_devfs_type, "/dev", mounts[0], 0);
+    install(2, &vfs_procfs_type, "/proc", mounts[0], 0);
+    install(3, &vfs_tmpfs_type, "/dev/shm", mounts[1], 0);
     mounts[3]->flags = VFS_MS_NOSUID | VFS_MS_NODEV;
     k_strncpy(mounts[3]->source, "tmpfs", sizeof(mounts[3]->source));
-    install(4, &vfs_tmpfs_type, "", 0);
+    install(4, &vfs_tmpfs_type, "", 0, "mode=0555");
     mounts[4]->flags = VFS_MS_NOSUID | VFS_MS_NODEV;
-    install(5, &vfs_sysfs_type, "/sys", mounts[0]);
+    install(5, &vfs_sysfs_type, "/sys", mounts[0], 0);
     mounts[5]->flags = VFS_MS_RDONLY | VFS_MS_NOSUID | VFS_MS_NODEV | VFS_MS_NOEXEC;
     k_strncpy(mounts[5]->source, "sysfs", sizeof(mounts[5]->source));
 }
@@ -2417,7 +2441,7 @@ void vfs_init(void)
     }
     root_installed = 1;
     mount_table_init();
-    install(0, &vfs_krffs_type, "/", 0);
+    install(0, &vfs_krffs_type, "/", 0, 0);
     install_permanent();
 }
 
@@ -2593,7 +2617,10 @@ static int mount_source(const struct vfs_type *t, const char *source, block_devi
  * type with no device, tmpfs, takes any source string (`mount_source`). A
  * device that refuses writes, a write-protected stick or a loop device
  * attached read-only, makes the mount read-only whatever the caller asked
- * for, and the type learns it from the flags. The slot is taken before the
+ * for, and the type learns it from the flags. A mount of type proc over a
+ * directory of /proc succeeds and changes nothing, since every /proc shows
+ * the processes of its reader's PID namespace, as `unshare --mount-proc`
+ * would have it; one anywhere else is ENODEV. The slot is taken before the
  * constructor runs, because the constructor may sleep on the device and
  * another process could remove or rename the target meanwhile; the covered
  * node stays held and the parent counted.
@@ -2601,7 +2628,7 @@ static int mount_source(const struct vfs_type *t, const char *source, block_devi
 int vfs_do_mount(const char *source, const char *target, const char *type, uint32_t flags,
                  const char *options)
 {
-    const struct vfs_type *t = type_named(type);
+    const struct vfs_type *t = streq(type, "proc") ? &vfs_procfs_type : type_named(type);
     struct vfs_ref tref;
     struct vfs_stat st;
     struct vfs_mount *m = 0;
@@ -2619,6 +2646,11 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
     }
     rc = vfs_resolve(0, target, 0, &tref, 0, 0);
     if (rc != 0) {
+        return rc;
+    }
+    if (t == &vfs_procfs_type) {
+        rc = tref.mnt->type == &vfs_procfs_type ? 0 : -ENODEV;
+        vfs_ref_release(&tref);
         return rc;
     }
     if (k_strlen(target) >= VFS_COVERED_PATH_MAX) {
@@ -2654,7 +2686,7 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
     vfs_ns_lock(tref.mnt);
     for (i = 0; i < mount_slots; i++) {
         if (mounts[i] && mounts[i]->state != VFS_FREE && mounts[i]->covered == tref.node &&
-            mounts[i]->parent == tref.mnt) {
+            mounts[i]->parent == tref.mnt && vfs_mount_seen(mounts[i])) {
             vfs_ns_unlock(tref.mnt);
             vfs_ref_release(&tref);
             return -EBUSY; /* covered, or reserved by a mount in progress */
@@ -2687,6 +2719,7 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
     m->ns_serving = 0;
     wait_queue_init(&m->ns_wq);
     m->claim = claim;
+    m->ns_hidden = ~ns_bit();
     k_strncpy(m->covered_path, canon, sizeof(m->covered_path));
     k_strncpy(m->source, source, sizeof(m->source));
     m->source[sizeof(m->source) - 1] = '\0';
@@ -2847,6 +2880,8 @@ static int unmount_found(struct vfs_ref *tref, int dir, struct vfs_mount **out)
     return rc;
 }
 
+static int unmount_mount(struct vfs_mount *m);
+
 /**
  * umount2(2): the mount goes to `unmounting`, which refuses new work; the
  * in-progress count drains; the reference count is checked; sync and
@@ -2866,13 +2901,14 @@ static int unmount_found(struct vfs_ref *tref, int dir, struct vfs_mount **out)
  * checked is the node unmounted, so a symbolic link replaced between two
  * walks cannot change the answer. A target found by its recorded name below
  * a removed device is a mount's root, a directory.
+ *
+ * A mount another mount namespace still sees is only hidden from the
+ * caller's, and stays mounted for the others.
  */
 int vfs_do_umount(const char *target, int dir)
 {
-    int gone;
     struct vfs_ref tref;
     struct vfs_mount *m;
-    struct vfs_ref cov;
     int rc;
 
     rc = resolve_path(0, target, 0, &tref, 0, 0, 1);
@@ -2889,6 +2925,23 @@ int vfs_do_umount(const char *target, int dir)
     if (m->state != VFS_ACTIVE) {
         return -EBUSY;
     }
+    if ((~m->ns_hidden & mntns_live_bits() & ~ns_bit()) != 0) {
+        m->ns_hidden |= ns_bit();
+        return 0;
+    }
+    return unmount_mount(m);
+}
+
+/**
+ * Unmount `m`, an active mount no other mount namespace sees, as
+ * `vfs_do_umount` describes. 0, or the error that left it mounted.
+ */
+static int unmount_mount(struct vfs_mount *m)
+{
+    int gone;
+    struct vfs_ref cov;
+    int rc;
+
     m->state = VFS_UNMOUNTING;
     while (m->inprogress > 0) {
         wq_wait_event_nointr(&m->ns_wq, drained, m);
@@ -2951,6 +3004,51 @@ int vfs_do_umount(const char *target, int dir)
     devfs_release_claim(m->claim);
     mount_release(m);
     return 0;
+}
+
+void vfs_mntns_copy(uint32_t from, uint32_t to)
+{
+    int i;
+
+    for (i = 0; i < mount_slots; i++) {
+        if (!mounts[i] || mounts[i]->state == VFS_FREE) {
+            continue;
+        }
+        if (mounts[i]->ns_hidden & (1u << from)) {
+            mounts[i]->ns_hidden |= 1u << to;
+        } else {
+            mounts[i]->ns_hidden &= ~(1u << to);
+        }
+    }
+}
+
+/**
+ * The end of the mount namespace `bit`: each active mount no other live
+ * namespace sees is unmounted, a child before its parent, and every mount
+ * is hidden from the bit, which a namespace made later takes afresh. A
+ * mount still busy stays, hidden from every namespace.
+ */
+void vfs_mntns_gone(uint32_t bit)
+{
+    uint32_t live = mntns_live_bits() & ~(1u << bit);
+    int i, progress = 1;
+
+    while (progress) {
+        progress = 0;
+        for (i = VFS_PERMANENT; i < mount_slots; i++) {
+            struct vfs_mount *m = mounts[i];
+
+            if (m && m->state == VFS_ACTIVE && !(m->ns_hidden & (1u << bit)) &&
+                (~m->ns_hidden & live) == 0 && unmount_mount(m) == 0) {
+                progress = 1;
+            }
+        }
+    }
+    for (i = 0; i < mount_slots; i++) {
+        if (mounts[i] && mounts[i]->state != VFS_FREE) {
+            mounts[i]->ns_hidden |= 1u << bit;
+        }
+    }
 }
 
 /* The working directory's and the root's holds. */

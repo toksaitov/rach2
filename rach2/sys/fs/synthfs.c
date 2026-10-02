@@ -168,7 +168,7 @@ static const struct {
                {6, "pid_max", "2000000000\n"},
                {6, "core_pattern", "core\n"},
                {6, "hostname", ""},
-               {6, "domainname", "(none)\n"},
+               {6, "domainname", ""},
                {6, "msgmax", "8192\n"},
                {6, "msgmnb", "16384\n"},
                {6, "msgmni", "64\n"},
@@ -193,7 +193,8 @@ int synth_sys_count(void)
 
 int synth_sys_writable(int entry)
 {
-    return entry == SYNTH_SYS_HOSTNAME || entry == SYNTH_SYS_IP_FORWARD;
+    return entry == SYNTH_SYS_HOSTNAME || entry == SYNTH_SYS_DOMAINNAME ||
+           entry == SYNTH_SYS_IP_FORWARD;
 }
 
 const char *synth_net_name(int origin)
@@ -279,6 +280,12 @@ void synth_dir_path(int kind, int pid, int tid, char *out, int cap)
     } else if (kind == VNODE_PROC_FD_DIR) {
         synth_put_proc(out, cap, &pos, pid, tid);
         synth_put(out, cap, &pos, "/fd");
+    } else if (kind == VNODE_PROC_NS_DIR) {
+        synth_put_proc(out, cap, &pos, pid, tid);
+        synth_put(out, cap, &pos, "/ns");
+    } else if (kind == VNODE_PROC_FDINFO_DIR) {
+        synth_put_proc(out, cap, &pos, pid, tid);
+        synth_put(out, cap, &pos, "/fdinfo");
     } else if (kind == VNODE_PROC_TASK_DIR) {
         synth_put(out, cap, &pos, "/proc/");
         synth_put_uint(out, cap, &pos, (unsigned int)pid);
@@ -295,12 +302,21 @@ static int synth_pid_file(struct comp name)
     static const struct {
         const char *name;
         int kind;
-    } files[] = {{"maps", SYNTH_PROC_MAPS},     {"smaps", SYNTH_PROC_SMAPS},
-                 {"status", SYNTH_PROC_STATUS}, {"statm", SYNTH_PROC_STATM},
-                 {"auxv", SYNTH_PROC_AUXV},     {"environ", SYNTH_PROC_ENVIRON},
-                 {"comm", SYNTH_PROC_COMM},     {"mounts", SYNTH_PROC_PIDMOUNTS},
-                 {"mem", SYNTH_PROC_MEM},       {"oom_score_adj", SYNTH_PROC_OOM_ADJ},
-                 {"limits", SYNTH_PROC_LIMITS}, {"mountinfo", SYNTH_PROC_MOUNTINFO}};
+    } files[] = {{"maps", SYNTH_PROC_MAPS},
+                 {"smaps", SYNTH_PROC_SMAPS},
+                 {"status", SYNTH_PROC_STATUS},
+                 {"statm", SYNTH_PROC_STATM},
+                 {"auxv", SYNTH_PROC_AUXV},
+                 {"environ", SYNTH_PROC_ENVIRON},
+                 {"comm", SYNTH_PROC_COMM},
+                 {"mounts", SYNTH_PROC_PIDMOUNTS},
+                 {"mem", SYNTH_PROC_MEM},
+                 {"oom_score_adj", SYNTH_PROC_OOM_ADJ},
+                 {"limits", SYNTH_PROC_LIMITS},
+                 {"mountinfo", SYNTH_PROC_MOUNTINFO},
+                 {"uid_map", SYNTH_PROC_UID_MAP},
+                 {"gid_map", SYNTH_PROC_GID_MAP},
+                 {"setgroups", SYNTH_PROC_SETGROUPS}};
     uint32_t i;
 
     for (i = 0; i < sizeof(files) / sizeof(files[0]); i++) {
@@ -309,6 +325,36 @@ static int synth_pid_file(struct comp name)
         }
     }
     return 0;
+}
+
+/* The names of /proc/<pid>/ns's links, in the order of proc/ns.h's NS_
+ * kinds. */
+static const char *const ns_names[] = {"user", "pid", "mnt", "net", "uts", "ipc"};
+
+const char *synth_ns_name(int kind)
+{
+    return kind >= 0 && kind < (int)(sizeof(ns_names) / sizeof(ns_names[0])) ? ns_names[kind] : 0;
+}
+
+/** /proc/<pid>/ns, `c[1]`, and with a third component its link of that
+ * kind. */
+static int synth_classify_ns(const struct comp *c, int n, struct vpath *vp)
+{
+    int k;
+
+    if (n == 2) {
+        vp->kind = VNODE_PROC_NS_DIR;
+        return vp->kind;
+    }
+    for (k = 0; n == 3 && synth_ns_name(k); k++) {
+        if (comp_eq(c[2], synth_ns_name(k))) {
+            vp->procfd = k;
+            vp->kind = VNODE_PROC_NS_LINK;
+            return vp->kind;
+        }
+    }
+    vp->kind = n == 3 ? VNODE_ENOENT : VNODE_ENOTDIR;
+    return vp->kind;
 }
 
 /**
@@ -369,6 +415,18 @@ static int synth_classify_pid(const struct comp *c, int n, struct vpath *vp, int
             vp->kind = VNODE_PROC_FD_LINK;
             return vp->kind;
         }
+    }
+    if (comp_eq(c[1], "fdinfo")) {
+        if (n == 2) {
+            vp->kind = VNODE_PROC_FDINFO_DIR;
+            return vp->kind;
+        }
+        vp->procfd = comp_uint(c[2]);
+        vp->kind = n != 3 ? VNODE_ENOTDIR : (vp->procfd >= 0 ? VNODE_PROC_FDINFO : VNODE_ENOENT);
+        return vp->kind;
+    }
+    if (comp_eq(c[1], "ns")) {
+        return synth_classify_ns(c, n, vp);
     }
     if (task && comp_eq(c[1], "task")) {
         int tid;

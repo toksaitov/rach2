@@ -36,6 +36,7 @@ static int32_t sys_socket(isr_params_t *params);
 static int32_t sys_socketpair(isr_params_t *params);
 #include "syscall_net.c"
 #include "network/socket/packet.c"
+#include "ns_first.h"
 
 extern int printf(const char *format, ...);
 extern int dprintf(int fd, const char *format, ...);
@@ -255,6 +256,12 @@ void net_unlock(uint32_t flags)
 int netdev_count(void)
 {
     return 2;
+}
+
+/** Every interface is in the caller's network namespace. */
+int netdev_seen_count(void)
+{
+    return netdev_count();
 }
 
 /** Match the registry's zero-based lookup. */

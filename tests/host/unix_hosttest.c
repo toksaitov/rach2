@@ -45,6 +45,7 @@
 #include "ipc/pipe.c"
 #include "ipc/pipe_ring.c"
 #include "mm/usercopy.c"
+#include "ns_first.h"
 
 extern void *malloc(unsigned long n);
 extern void free(void *p);

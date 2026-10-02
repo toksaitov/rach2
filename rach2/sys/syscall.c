@@ -25,6 +25,7 @@
 #include "proc/tgroup.h"
 #include "proc/ptrace.h"
 #include "proc/seccomp.h"
+#include "proc/ns.h"
 #include "tables/gdt.h"
 #include "lib/krandom.h"
 #include "lib/kerrno.h"
@@ -1890,7 +1891,7 @@ static int32_t tty_common_ioctl(struct tty *t, uint32_t request, uint32_t arg, i
         return 0;
 
     case TIOCGPGRP: {
-        int pgrp = t->fg_pgid;
+        int pgrp = t->fg_pgid > 0 ? (int)pid_seen((uint32_t)t->fg_pgid) : 0;
         if (!arg) {
             return -EFAULT;
         }
@@ -1915,6 +1916,10 @@ static int32_t tty_common_ioctl(struct tty *t, uint32_t request, uint32_t arg, i
         }
         if (pgrp <= 0) {
             return -EINVAL;
+        }
+        pgrp = (int)pid_named((uint32_t)pgrp);
+        if (pgrp == 0) {
+            return -ESRCH;
         }
         /* ...and the new foreground group must live in that session. */
         if (!pgrp_in_session(pgrp, t->sid)) {
@@ -2343,7 +2348,7 @@ static int32_t sys_set_tid_address(isr_params_t *params)
         return -ESRCH;
     }
     current_proc->clear_child_tid = params->ebx;
-    return (int32_t)current_proc->pid;
+    return (int32_t)pid_seen(current_proc->pid);
 }
 
 /*
@@ -2359,22 +2364,42 @@ struct kernel_utsname {
     char domainname[65];
 };
 
-/* The mutable host name (uname's nodename, what gethostname reads, sethostname
- * sets). Single global; Rach2 is one host. */
-static char k_hostname[65] = "rach2";
-
+/* The host and domain names (uname's nodename and domainname, what
+ * gethostname and getdomainname read, sethostname and setdomainname set)
+ * are the caller's UTS namespace's (proc/ns.h). */
 const char *uts_hostname(void)
 {
-    return k_hostname;
+    return proc_utsns(current_proc)->hostname;
 }
 
-void uts_set_hostname(const char *name, uint32_t len)
+const char *uts_domainname(void)
+{
+    return proc_utsns(current_proc)->domainname;
+}
+
+/** Set `field`, 65 bytes, to the `len` bytes of `name`, at most 64. */
+static void uts_set(char *field, const char *name, uint32_t len)
 {
     if (len > 64) {
         len = 64;
     }
-    k_memcpy(k_hostname, name, len);
-    k_hostname[len] = '\0';
+    k_memcpy(field, name, len);
+    field[len] = '\0';
+}
+
+void uts_set_hostname(const char *name, uint32_t len)
+{
+    uts_set(proc_utsns(current_proc)->hostname, name, len);
+}
+
+void uts_set_domainname(const char *name, uint32_t len)
+{
+    uts_set(proc_utsns(current_proc)->domainname, name, len);
+}
+
+int uts_privileged(void)
+{
+    return ns_owner_privileged(current_proc, &proc_utsns(current_proc)->c);
 }
 
 /* Copy a C string into a fixed 65-byte utsname field (always
@@ -2543,11 +2568,11 @@ static int32_t sys_uname(isr_params_t *params)
 
     k_memset(&uts, 0, sizeof(uts));
     uname_field(uts.sysname, UTS_SYSNAME);
-    uname_field(uts.nodename, k_hostname);
+    uname_field(uts.nodename, uts_hostname());
     uname_field(uts.release, UTS_RELEASE);
     uname_field(uts.version, UTS_VERSION);
     uname_field(uts.machine, "i686");
-    uname_field(uts.domainname, "(none)");
+    uname_field(uts.domainname, uts_domainname());
 
     if (copy_to_user(user_uts, &uts, sizeof(uts)) != 0) {
         return -EFAULT;
@@ -2555,16 +2580,18 @@ static int32_t sys_uname(isr_params_t *params)
     return 0;
 }
 
-/* sethostname(74): set the single mutable host name (uname's nodename, what
- * gethostname reads back); a privileged caller's alone, -EPERM for another,
- * as on Linux. */
-static int32_t sys_sethostname(isr_params_t *params)
+/* sethostname (74) and setdomainname (121): set the host name (uname's
+ * nodename, what gethostname reads back) or the domain name of the
+ * caller's UTS namespace, to the EBX string of ECX bytes, at most 64; a
+ * caller privileged over the namespace's alone, -EPERM for another, as on
+ * Linux. */
+static int32_t uts_set_call(isr_params_t *params, void (*set)(const char *, uint32_t))
 {
     const char __user *name = (const char __user *)params->ebx;
     int len = (int)params->ecx;
     char buf[65];
 
-    if (!proc_privileged(current_proc)) {
+    if (!uts_privileged()) {
         return -EPERM;
     }
     if (len < 0 || len > 64) {
@@ -2573,8 +2600,18 @@ static int32_t sys_sethostname(isr_params_t *params)
     if (len > 0 && copy_from_user(buf, name, (uint32_t)len) != 0) {
         return -EFAULT;
     }
-    uts_set_hostname(buf, (uint32_t)len);
+    set(buf, (uint32_t)len);
     return 0;
+}
+
+static int32_t sys_sethostname(isr_params_t *params)
+{
+    return uts_set_call(params, uts_set_hostname);
+}
+
+static int32_t sys_setdomainname(isr_params_t *params)
+{
+    return uts_set_call(params, uts_set_domainname);
 }
 
 /* Name each missing syscall behind `rach2.trace=enosys`, once per number for
@@ -2885,6 +2922,8 @@ void init_syscall(void)
     _syscall_table[SYS_ALARM] = sys_alarm;
     _syscall_table[SYS_GETRANDOM] = sys_getrandom;
     _syscall_table[SYS_SECCOMP] = sys_seccomp;
+    _syscall_table[SYS_UNSHARE] = sys_unshare;
+    _syscall_table[SYS_SETNS] = sys_setns;
     _syscall_table[SYS_KILL] = sys_kill;
     _syscall_table[SYS_TKILL] = sys_tkill;
     _syscall_table[SYS_TGKILL] = sys_tgkill;
@@ -2962,6 +3001,7 @@ void init_syscall(void)
     _syscall_table[SYS_UNAME] = sys_uname;
     _syscall_table[SYS_SYSLOG] = sys_syslog;
     _syscall_table[SYS_SETHOSTNAME] = sys_sethostname;
+    _syscall_table[SYS_SETDOMAINNAME] = sys_setdomainname;
     _syscall_table[SYS_SETUID32] = sys_setuid;
     _syscall_table[SYS_SETGID32] = sys_setgid;
     _syscall_table[SYS_SETGROUPS32] = sys_setgroups;

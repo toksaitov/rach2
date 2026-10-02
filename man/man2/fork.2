@@ -1,4 +1,4 @@
-.Dd September 28, 2026
+.Dd October 2, 2026
 .Dt FORK 2
 .Os
 .Sh NAME
@@ -160,8 +160,20 @@ and
 .Dv CLONE_DETACHED
 and
 .Dv CLONE_SYSVSEM ,
-which are ignored, the second as there are no System V semaphores.
+which are ignored, the second as a process's semaphore adjustments are its
+own, which its threads share.
 A failed store is ignored, as on Linux.
+.Dv CLONE_NEWUSER ,
+.Dv CLONE_NEWPID ,
+.Dv CLONE_NEWNS ,
+.Dv CLONE_NEWNET ,
+.Dv CLONE_NEWUTS
+and
+.Dv CLONE_NEWIPC
+give the child new namespaces of those kinds, as
+.Xr unshare 2
+describes; a child made in a new PID namespace is its init, pid 1 there,
+and the parent receives its number in the parent's namespace.
 A nonzero
 .Fa stack
 is the stack pointer the child returns to user mode with.
@@ -235,12 +247,25 @@ program.
 .It Bq Er ENOMEM
 The kernel could not allocate the child's process record, page tables,
 user page state, kernel stack, memory region records, or descriptor table.
+.It Bq Er ENOSPC
+.Dv CLONE_NEWNS
+was given while 32 mount namespaces exist.
+.It Bq Er EPERM
+A
+.Dv CLONE_NEW
+flag other than
+.Dv CLONE_NEWUSER
+was given by a caller not privileged in its user namespace, or in the new
+one the same call makes.
 .It Bq Er ESRCH
 There is no current process.
+.It Bq Er EUSERS
+A user or PID namespace would be nested more than 7 deep.
 .El
 .Sh SEE ALSO
 .Xr execve 2 ,
 .Xr exit 2 ,
 .Xr getpid 2 ,
 .Xr prlimit64 2 ,
+.Xr unshare 2 ,
 .Xr waitpid 2

@@ -125,6 +125,9 @@ static const char *const PROBES[] = {
     "musl/ipcmusl",
     /* seccomp's filters: errno, trap, kill, TSYNC, exec, strict mode. */
     "musl/seccompmusl",
+    /* Namespaces: user, PID, mount, network, UTS and IPC, by unshare,
+       setns and clone. */
+    "musl/nsmusl",
     /* FIFO files made by mkfifo and mknodat: their opens, waits and
        bytes. */
     "musl/fifomusl",

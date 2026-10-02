@@ -8,6 +8,7 @@
 #include "sched.h"
 #include "tgroup.h"
 #include "seccomp.h"
+#include "ns.h"
 
 extern volatile uint32_t kernel_ticks;
 
@@ -246,6 +247,7 @@ void free_process(process_t *proc)
     }
     tgroup_put(proc->tg);
     seccomp_release(proc);
+    ns_release(proc);
     kfree(proc->exec_ws);
     path_bufs_free(proc);
     kfree(proc);
@@ -344,8 +346,9 @@ process_t *get_process(uint32_t pid)
 }
 
 /**
- * Reparent every child of `dead_pid` onto init, and post each living child
- * the parent-death signal it asked prctl for.
+ * Reparent every child of `dead_pid` onto init, the init of its PID
+ * namespace for a child in a namespace below the first (`ns_reaper`), and
+ * post each living child the parent-death signal it asked prctl for.
  *
  * Called from a process's death path before its record is reclaimed: a
  * child left with a dead parent's pid would never be matched in `do_wait`,
@@ -360,18 +363,23 @@ process_t *get_process(uint32_t pid)
  */
 void reparent_children(uint32_t dead_pid)
 {
-    process_t *init = NULL;
+    process_t *system_init = NULL;
     process_t *p;
 
     if (init_pid != 0 && dead_pid != init_pid) {
-        init = get_process(init_pid);
+        system_init = get_process(init_pid);
     }
     for (p = proc_list; p; p = p->next) {
+        process_t *init = system_init;
+
         if (p->parent_pid != dead_pid) {
             continue;
         }
+        if (ns_reaper(p) != 0 && ns_reaper(p) != dead_pid) {
+            init = get_process(ns_reaper(p));
+        }
         if (init != NULL) {
-            p->parent_pid = init_pid;
+            p->parent_pid = init->pid;
             if (p->state == PROC_ZOMBIE && p->pid == p->tgid && p->tg->live == 0) {
                 struct k_siginfo info;
 
@@ -453,9 +461,11 @@ void proc_child_info(const process_t *child, struct k_siginfo *info)
 {
     uint32_t status = (uint32_t)child->exit_code;
 
+    const process_t *parent = get_process(child->parent_pid);
+
     k_memset(info, 0, sizeof(*info));
-    info->pid = child->pid;
-    info->uid = child->ruid;
+    info->pid = parent ? pid_seen_by(parent, child->pid) : child->pid;
+    info->uid = parent ? ns_uid_from_kernel(proc_userns(parent), child->ruid) : child->ruid;
     if ((status & 0x7Fu) == 0) {
         info->code = CLD_EXITED;
         info->status = (int32_t)((status >> 8) & 0xFFu);

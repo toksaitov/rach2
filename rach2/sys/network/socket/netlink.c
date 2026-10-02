@@ -474,7 +474,7 @@ static struct netdev *link_asked(const uint8_t *req, uint32_t body)
     uint32_t index = get32(req + NLMSG_HDRLEN + 4);
     const char *name = 0;
     uint32_t name_len = 0;
-    int i, n = netdev_count();
+    int i, n = netdev_seen_count();
 
     while (index == 0 && attr + 4 <= end) {
         uint16_t len = get16(attr);
@@ -515,7 +515,7 @@ static void neigh_dump(struct nl_build *b, const uint8_t *req, uint32_t body)
     const uint8_t *attr = ndm + 12;
     const uint8_t *end = ndm + body;
     uint32_t want = body >= 8 ? get32(ndm + 4) : 0;
-    int k, i, m, n = netdev_count();
+    int k, i, m, n = netdev_seen_count();
 
     if ((body >= 1 && ndm[0] != 0 && ndm[0] != AF_INET) || (body >= 11 && (ndm[10] & NTF_PROXY))) {
         return;
@@ -643,7 +643,7 @@ static int route_get_msg(struct nl_build *b, uint32_t dst)
     int i, local = 0;
 
     nd = netdev_route(dst, &via);
-    for (i = 0; i < netdev_count(); i++) {
+    for (i = 0; i < netdev_seen_count(); i++) {
         const struct netdev *own = netdev_at(i);
 
         if (own && netdev_holds(own, dst)) {
@@ -702,7 +702,7 @@ static void qdisc_dump(struct nl_build *b)
 {
     int i;
 
-    for (i = 0; i < netdev_count(); i++) {
+    for (i = 0; i < netdev_seen_count(); i++) {
         const struct netdev *nd = netdev_at(i);
         uint8_t msg[NL_MSG_MAX];
         uint8_t *tcm;
@@ -765,7 +765,7 @@ static uint32_t req_ip(const uint8_t *req, uint32_t body, uint32_t fixed, uint16
 /* The interface of index `index`, or NULL. */
 static struct netdev *dev_of_index(uint32_t index)
 {
-    int i, n = netdev_count();
+    int i, n = netdev_seen_count();
 
     for (i = 0; i < n; i++) {
         struct netdev *nd = netdev_at(i);
@@ -841,7 +841,7 @@ static struct netdev *route_dev(const uint8_t *req, uint32_t body, uint32_t gw)
     if (oif) {
         return len == 4 ? dev_of_index(get32(oif)) : 0;
     }
-    for (i = 0; i < netdev_count(); i++) {
+    for (i = 0; i < netdev_seen_count(); i++) {
         struct netdev *at = netdev_at(i);
 
         if (at && netdev_on_link(at, gw)) {
@@ -1009,8 +1009,18 @@ static void change_answer(struct nl_build *b, const uint8_t *req, uint16_t type,
 static void answer(struct nl_build *b, const uint8_t *req, uint16_t type, uint16_t flags,
                    uint32_t body)
 {
-    int i, n = netdev_count();
+    int i, n = netdev_seen_count();
 
+    if (!net_ns_seen()) {
+        /* A network namespace with no interface: a change or a question
+         * about one finds none, and a dump is empty. */
+        if (is_change(type) || (flags & NLM_F_DUMP) != NLM_F_DUMP) {
+            end_msg(b, req, type == RTM_GETROUTE ? -ENETUNREACH : -ENODEV);
+        } else {
+            end_msg(b, 0, 0);
+        }
+        return;
+    }
     if (is_change(type)) {
         change_answer(b, req, type, flags, body);
         return;
@@ -1341,6 +1351,10 @@ static void diag_answer(struct nl_build *b, const uint8_t *req, uint16_t type, u
 
     if (type != SOCK_DIAG_BY_FAMILY || body < 1) {
         end_msg(b, req, -EINVAL);
+        return;
+    }
+    if (!net_ns_seen()) {
+        end_msg(b, 0, 0); /* its sockets are in no table */
         return;
     }
     if ((flags & NLM_F_DUMP) != NLM_F_DUMP) {

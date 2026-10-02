@@ -691,6 +691,12 @@ and
 read a process's user from the directory's owner, and
 .Xr fstat 2
 of a descriptor open on one of the files reports the same owner.
+The directories of
+.Pa /proc
+are the processes the reader's PID namespace has, named by their numbers
+there, and the IDs in the files are as the reader's user and PID
+namespaces see them; see
+.Xr unshare 2 .
 .It Pa /proc/PID/stat
 One line of 24 space-separated fields:
 .Bd -literal -offset indent
@@ -994,9 +1000,11 @@ Name, Umask, State, Tgid, Pid, PPid, TracerPid, Uid and Gid (real,
 effective, saved and file-system IDs), FDSize, Groups, the memory sizes
 VmPeak to VmSwap in kilobytes, Threads, the signal sets SigPnd, ShdPnd,
 SigBlk, SigIgn and SigCgt in hexadecimal, the capability sets,
-NoNewPrivs, and Seccomp and Seccomp_filters, the thread's seccomp mode and
+NoNewPrivs, Seccomp and Seccomp_filters, the thread's seccomp mode and
 the number of its filters
-.Pq see Xr seccomp 2 .
+.Pq see Xr seccomp 2 ,
+and NStgid, NSpid, NSpgid and NSsid, the IDs in each PID namespace from
+the reader's down to the process's own, separated by tabs.
 CapPrm and CapEff are full for a thread that is privileged, one whose
 effective user ID is 0 and which kept its capabilities
 .Pq see Xr capget 2 ,
@@ -1020,6 +1028,68 @@ open files and the address space, have the process's values, and the
 others are unlimited, as
 .Xr prlimit64 2
 reports them.
+.It Pa /proc/PID/fdinfo
+A file for each open descriptor, named by its number, of two lines:
+.Ql pos: ,
+the offset, and
+.Ql flags: ,
+in octal, the access mode with
+.Dv O_APPEND ,
+.Dv O_NONBLOCK ,
+.Dv O_PATH
+and
+.Dv O_CLOEXEC .
+Linux adds the mount, the inode number and lines of each kind of file.
+Another user's is
+.Er EACCES ,
+as
+.Pa /proc/PID/fd
+is.
+.Xr chroot 2
+to it gives the caller a root that holds nothing, the empty root of a
+file system no path reaches.
+.It Pa /proc/PID/ns
+A directory of six links,
+.Pa user ,
+.Pa pid ,
+.Pa mnt ,
+.Pa net ,
+.Pa uts
+and
+.Pa ipc ,
+to the process's namespaces, each named
+.Ql KIND:[INODE] ,
+the inode number of the namespace; two processes share a namespace when
+the names are the same.
+An open of a link gives a descriptor for
+.Xr setns 2 .
+The first namespaces have Linux's inode numbers for the user, PID, UTS
+and IPC kinds.
+.It Pa /proc/PID/uid_map , /proc/PID/gid_map
+The ID maps of the process's user namespace, a line for each extent: the
+first ID in the namespace, the first ID it maps to as the reader's
+namespace sees it, or as the namespace's parent sees it for a reader in
+the namespace, and the count, each right-aligned in ten columns.
+The first namespace reads
+.Ql "0 0 4294967295" .
+A map is written once, in one write of at most five lines, by a process
+of the namespace or its parent; a writer privileged in the parent maps
+IDs the parent maps, and another writer maps one ID, its own effective
+ID, and for the groups only after
+.Pa setgroups
+was set to
+.Ql deny .
+.It Pa /proc/PID/setgroups
+.Ql allow
+or
+.Ql deny ;
+a namespace whose group map is not yet written takes
+.Ql deny ,
+after which
+.Xr setgroups 2
+fails with
+.Er EPERM
+in it and below it.
 .It Pa /proc/PID/environ
 The environment strings of the initial stack, each ended by a NUL, at
 most their first 128 KiB, cut as

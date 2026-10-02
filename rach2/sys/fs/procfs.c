@@ -34,6 +34,7 @@
 #include "../tty/pty.h"
 #include "../proc/tgroup.h"
 #include "../proc/seccomp.h"
+#include "../proc/ns.h"
 #include "../mm/mm.h"
 #include "../mm/paging.h"
 #include "../io/poll.h"
@@ -395,11 +396,11 @@ int procfs_resolve_pid(int pid)
     if (pid < 0) {
         return -1;
     }
-    p = get_process((uint32_t)pid);
+    p = get_process(pid_named((uint32_t)pid));
     if (!p || p->state == PROC_UNUSED) {
         return -1;
     }
-    return pid;
+    return (int)p->pid;
 }
 
 /**
@@ -419,12 +420,12 @@ int procfs_resolve_id(const struct vpath *vp)
         return pid;
     }
     p = get_process((uint32_t)pid);
-    t = get_process((uint32_t)vp->tid);
+    t = get_process(pid_named((uint32_t)vp->tid));
     if (!p || !t || t->state == PROC_UNUSED || t->tg != p->tg ||
         (t->state == PROC_ZOMBIE && t != t->tg->leader)) {
         return -1;
     }
-    return vp->tid;
+    return (int)t->pid;
 }
 
 /** The state letter of `p` in its stat file, which the State line of its
@@ -473,8 +474,8 @@ static int procfs_gen_stat(struct procfs_text *t, int pid, int whole)
         return -ENOENT;
     }
 
-    ap_int(t, pid);  /* 1 pid */
-    ap_str(t, " ("); /* 2 comm */
+    ap_int(t, (int)pid_seen((uint32_t)pid)); /* 1 pid */
+    ap_str(t, " (");                         /* 2 comm */
     if (p->comm[0]) {
         for (i = 0; i < (int)sizeof(p->comm) && p->comm[i]; i++) {
             char c = p->comm[i];
@@ -486,12 +487,12 @@ static int procfs_gen_stat(struct procfs_text *t, int pid, int whole)
     ap_str(t, ") ");
     ap_ch(t, proc_state_char(p)); /* 3 state */
     ap_ch(t, ' ');
-    ap_int(t, (int)p->parent_pid); /* 4 ppid */
+    ap_int(t, (int)pid_seen(p->parent_pid)); /* 4 ppid */
     ap_ch(t, ' ');
-    ap_int(t, (int)p->pgid); /* 5 pgrp */
+    ap_int(t, (int)pid_seen(p->pgid)); /* 5 pgrp */
     ap_ch(t, ' ');
-    ap_int(t, (int)p->sid); /* 6 session */
-    ap_str(t, " 0 -1");     /* 7 tty_nr, 8 tpgid (not modeled) */
+    ap_int(t, (int)pid_seen(p->sid)); /* 6 session */
+    ap_str(t, " 0 -1");               /* 7 tty_nr, 8 tpgid (not modeled) */
     /* 9..13 flags,minflt,cminflt,majflt,cmajflt;
        14..17 utime,stime,cutime,cstime */
     ap_str(t, " 0 0 0 0 0 ");
@@ -531,6 +532,12 @@ static int procfs_gen_stat(struct procfs_text *t, int pid, int whole)
 }
 
 /** The process `pid` names for one of its /proc files, or NULL. */
+/** Whether the /proc/<pid> file `file` is one of the user namespace's. */
+static int procfs_is_idmap(int file)
+{
+    return file == SYNTH_PROC_UID_MAP || file == SYNTH_PROC_GID_MAP || file == SYNTH_PROC_SETGROUPS;
+}
+
 static process_t *procfs_proc(int pid)
 {
     process_t *p = get_process((uint32_t)pid);
@@ -664,6 +671,65 @@ int procfs_readlink_exe(int pid, char *buf, int cap)
 int procfs_exe_name(int pid, char *buf, int cap)
 {
     return exe_text(pid, buf, cap, 0);
+}
+
+int procfs_readlink_ns(int pid, int kind, char *buf, int cap)
+{
+    process_t *p = procfs_proc(pid);
+    struct ns_common *c;
+    char text[24];
+    int n;
+
+    if (!p) {
+        return -ENOENT;
+    }
+    if (!procfs_may_read_mem(p)) {
+        return -EACCES;
+    }
+    c = ns_of(p, kind);
+    if (!c) {
+        return -ENOENT;
+    }
+    ns_link_name(c, text);
+    ns_put(c);
+    n = (int)k_strlen(text);
+    n = n < cap ? n : cap;
+    k_memcpy(buf, text, (uint32_t)(n > 0 ? n : 0));
+    return n;
+}
+
+uint32_t procfs_ns_ino(int pid, int kind)
+{
+    process_t *p = procfs_proc(pid);
+    struct ns_common *c = p ? ns_of(p, kind) : NULL;
+    uint32_t inum = c ? c->inum : 0;
+
+    ns_put(c);
+    return inum;
+}
+
+int procfs_open_ns(int pid, int kind, int flags)
+{
+    process_t *p = procfs_proc(pid);
+    struct ns_common *c;
+    int fd;
+
+    if (!p) {
+        return -ENOENT;
+    }
+    if (!procfs_may_read_mem(p)) {
+        return -EACCES;
+    }
+    if ((flags & 3) != 0) {
+        return -EACCES;
+    }
+    c = ns_of(p, kind);
+    if (!c) {
+        return -ENOENT;
+    }
+    fd = nsfs_open(c, (uint32_t)flags);
+    ns_put(c);
+    return fd;
 }
 
 int procfs_readlink_dir(int pid, int root, char *buf, int cap)
@@ -1055,15 +1121,48 @@ static void ap_ids(struct procfs_text *t, const char *name, uint32_t r, uint32_t
  * otherwise, as this kernel has no capabilities apart from root. VmPeak and
  * VmHWM are the present sizes, since the kernel keeps no peak.
  */
+/** `head`, then the numbers of `p` in each PID namespace from the reader's
+ * down to its own, as the NSpid line has them. */
+static void ap_ns_pids(struct procfs_text *t, const char *head, const process_t *p)
+{
+    uint32_t from = proc_pidns(current_proc)->level, to = proc_pidns(p)->level, l;
+
+    ap_str(t, head);
+    ap_u32(t, pid_seen(p->pid));
+    for (l = from + 1u; l <= to && pid_seen(p->pid) != 0; l++) {
+        ap_ch(t, '\t');
+        ap_u32(t, p->nspid[l]);
+    }
+}
+
+/** The five signal sets of `p`'s status: pending for the thread and for
+ * the process, blocked, ignored and caught. */
+static void ap_signal_sets(struct procfs_text *t, const process_t *p)
+{
+    uint64_t ignored = 0;
+    uint64_t caught = 0;
+    int sig;
+
+    for (sig = 1; sig <= KSIG_MAX; sig++) {
+        if (p->sigacts[sig].handler == KSIG_IGN) {
+            ignored |= KSIG_BIT(sig);
+        } else if (p->sigacts[sig].handler != KSIG_DFL) {
+            caught |= KSIG_BIT(sig);
+        }
+    }
+    ap_set(t, "SigPnd", p->sig_pending);
+    ap_set(t, "ShdPnd", p->tg->pending);
+    ap_set(t, "SigBlk", p->sig_blocked);
+    ap_set(t, "SigIgn", ignored);
+    ap_set(t, "SigCgt", caught);
+}
+
 static int procfs_gen_status(struct procfs_text *t, int pid)
 {
     process_t *p = procfs_proc(pid);
     const struct mm *mm;
-    uint64_t ignored = 0;
-    uint64_t caught = 0;
     uint64_t caps;
     uint32_t i;
-    int sig;
 
     if (!p) {
         return -ENOENT;
@@ -1086,31 +1185,29 @@ static int procfs_gen_status(struct procfs_text *t, int pid)
               : p->state == PROC_BLOCKED ? "S (sleeping)"
                                          : "R (running)");
     ap_str(t, "\nTgid:\t");
-    ap_u32(t, p->tgid);
+    ap_u32(t, pid_seen(p->tgid));
     ap_str(t, "\nNgid:\t0\nPid:\t");
-    ap_u32(t, p->pid);
+    ap_u32(t, pid_seen(p->pid));
     ap_str(t, "\nPPid:\t");
-    ap_u32(t, p->parent_pid);
+    ap_u32(t, pid_seen(p->parent_pid));
     ap_str(t, "\nTracerPid:\t");
-    ap_u32(t, p->ptrace ? p->tracer : 0u);
+    ap_u32(t, p->ptrace ? pid_seen(p->tracer) : 0u);
     ap_ch(t, '\n');
-    ap_ids(t, "Uid", p->ruid, p->euid, p->suid);
-    ap_ids(t, "Gid", p->rgid, p->egid, p->sgid);
+    ap_ids(t, "Uid", uid_seen(p->ruid), uid_seen(p->euid), uid_seen(p->suid));
+    ap_ids(t, "Gid", gid_seen(p->rgid), gid_seen(p->egid), gid_seen(p->sgid));
     ap_str(t, "FDSize:\t");
     ap_u32(t, (uint32_t)fd_table_cap(p->fds));
     ap_str(t, "\nGroups:\t");
     for (i = 0; i < p->ngroups; i++) {
-        ap_u32(t, p->groups[i]);
+        ap_u32(t, gid_seen(p->groups[i]));
         ap_ch(t, ' ');
     }
-    ap_str(t, "\nNStgid:\t");
-    ap_u32(t, p->tgid);
-    ap_str(t, "\nNSpid:\t");
-    ap_u32(t, p->pid);
+    ap_ns_pids(t, "\nNStgid:\t", p->tg->leader ? p->tg->leader : p);
+    ap_ns_pids(t, "\nNSpid:\t", p);
     ap_str(t, "\nNSpgid:\t");
-    ap_u32(t, p->pgid);
+    ap_u32(t, pid_seen(p->pgid));
     ap_str(t, "\nNSsid:\t");
-    ap_u32(t, p->sid);
+    ap_u32(t, pid_seen(p->sid));
     ap_ch(t, '\n');
     if (mm) {
         uint32_t size = vm_total(&mm->vm);
@@ -1133,18 +1230,7 @@ static int procfs_gen_status(struct procfs_text *t, int pid)
     ap_str(t, "\nSigQ:\t0/");
     ap_u32(t, KSIG_MAX);
     ap_ch(t, '\n');
-    for (sig = 1; sig <= KSIG_MAX; sig++) {
-        if (p->sigacts[sig].handler == KSIG_IGN) {
-            ignored |= KSIG_BIT(sig);
-        } else if (p->sigacts[sig].handler != KSIG_DFL) {
-            caught |= KSIG_BIT(sig);
-        }
-    }
-    ap_set(t, "SigPnd", p->sig_pending);
-    ap_set(t, "ShdPnd", p->tg->pending);
-    ap_set(t, "SigBlk", p->sig_blocked);
-    ap_set(t, "SigIgn", ignored);
-    ap_set(t, "SigCgt", caught);
+    ap_signal_sets(t, p);
     caps = proc_privileged(p) ? 0x000001FFFFFFFFFFULL : 0;
     ap_set(t, "CapInh", 0);
     ap_set(t, "CapPrm", caps);
@@ -1304,6 +1390,12 @@ static const char *procfs_pid_file_name(int kind)
         return "oom_score_adj";
     case SYNTH_PROC_LIMITS:
         return "limits";
+    case SYNTH_PROC_UID_MAP:
+        return "uid_map";
+    case SYNTH_PROC_GID_MAP:
+        return "gid_map";
+    case SYNTH_PROC_SETGROUPS:
+        return "setgroups";
     default:
         return "stat";
     }
@@ -1469,7 +1561,9 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
         ap_ch(t, ']');
         break;
     case FD_TYPE_ANON:
-        ap_str(t, "anon_inode:");
+        if (!nsfs_ns(e)) {
+            ap_str(t, "anon_inode:"); /* a namespace's is "KIND:[INUM]", as nsfs's */
+        }
         ap_str(t, e->priv ? ((const struct anon_obj *)e->priv)->name : "[unknown]");
         break;
     case FD_TYPE_FILE:
@@ -1574,11 +1668,11 @@ int procfs_nth_pid(int n)
         return -1;
     }
     for (p = proc_list; p; p = p->next) {
-        if (p->pid != p->tgid || p == proc_idle) {
+        if (p->pid != p->tgid || p == proc_idle || pid_seen(p->pid) == 0) {
             continue;
         }
         if (seen == n) {
-            return (int)p->pid;
+            return (int)pid_seen(p->pid);
         }
         seen++;
     }
@@ -1965,7 +2059,7 @@ static int procfs_gen_netdev(struct procfs_text *t)
               "  Transmit\n"
               " face |bytes    packets errs drop fifo frame compressed multicast|"
               "bytes    packets errs drop fifo colls carrier compressed\n");
-    for (i = 0; i < netdev_count(); i++) {
+    for (i = 0; i < netdev_seen_count(); i++) {
         const struct netdev *nd = netdev_at(i);
         struct netdev_counters card = {0, 0, 0, 0, 0, 0, 0};
 
@@ -2306,14 +2400,14 @@ static int procfs_gen_usb(struct procfs_text *t)
 
 /** Whether entry `i` of the mount table, `m`, is listed in /proc/mounts:
  * the root, /dev and /proc always, and every other mount that is active,
- * whose device is present, and that has a place in the tree, which the
- * memfd mount lacks. */
+ * whose device is present, that has a place in the tree, which the memfd
+ * mount lacks, and that the reader's mount namespace sees. */
 static int procfs_mount_listed(int i, const struct vfs_mount *m)
 {
     if (i < 3) {
         return m != NULL;
     }
-    return m && m->state == VFS_ACTIVE && !vfs_mount_gone(m) && m->parent;
+    return m && m->state == VFS_ACTIVE && !vfs_mount_gone(m) && m->parent && vfs_mount_seen(m);
 }
 
 /** The source of entry `i`, `m`, as /proc/mounts names it. */
@@ -2739,7 +2833,7 @@ static void ap_route(struct procfs_text *t, const struct netdev_rt *r)
 {
     int i;
 
-    for (i = 0; i < netdev_count(); i++) {
+    for (i = 0; i < netdev_seen_count(); i++) {
         if (netdev_at(i)->index == r->ifindex) {
             ap_str(t, netdev_at(i)->name);
         }
@@ -2766,16 +2860,16 @@ static int procfs_gen_netroute(struct procfs_text *t)
     int i, n, kind;
 
     ap_str(t, PROCFS_NETROUTE_HEADER);
-    for (i = 0; i <= netdev_count(); i++) {
+    for (i = 0; i <= netdev_seen_count(); i++) {
         for (kind = NETDEV_RT_DEFAULT; kind >= NETDEV_RT_LINK; kind--) {
-            for (n = 0; i < netdev_count() && netdev_route_at(n, &r); n++) {
+            for (n = 0; i < netdev_seen_count() && netdev_route_at(n, &r); n++) {
                 if (r.ifindex == netdev_at(i)->index && r.kind == kind) {
                     ap_route(t, &r);
                 }
             }
         }
     }
-    for (n = 0; netdev_route_at(n, &r); n++) {
+    for (n = 0; net_ns_seen() && netdev_route_at(n, &r); n++) {
         if (r.kind == NETDEV_RT_ADDED) {
             ap_route(t, &r);
         }
@@ -2797,7 +2891,7 @@ static int procfs_gen_netarp(struct procfs_text *t)
     int n, i, b;
 
     ap_str(t, PROCFS_NETARP_HEADER);
-    n = arp_snapshot(rows, ARP_CACHE_SIZE);
+    n = net_ns_seen() ? arp_snapshot(rows, ARP_CACHE_SIZE) : 0;
     for (i = 0; i < n; i++) {
         ap_ip_dotted(t, rows[i].ip);
         ap_str(t, rows[i].permanent ? "        0x1         0x6         "
@@ -2834,6 +2928,9 @@ static int procfs_gen_nettcp(struct procfs_text *t)
 
     if (n < 0) {
         return -ENOMEM;
+    }
+    if (!net_ns_seen()) {
+        n = 0; /* the caller's network namespace has no connection */
     }
     ap_str(t, PROCFS_NETTCP_HEADER);
     for (i = 0; i < n; i++) {
@@ -3103,14 +3200,14 @@ static void ap_stat(struct procfs_text *t, uint32_t v, const char *sep)
 }
 
 /**
- * Render /proc/net/stat/rt_cache and arp_cache, which iproute2's lnstat,
- * rtstat among its names, reads: Linux's heading and a line of hex counters
- * for the one processor. Of the route counters, the routes in the table,
- * the datagrams received and those for another host, and the lookups of the
- * output path; the cache of routes Linux once had has no hits, and the
- * broadcasts are not counted apart. Of the neighbour counters, the mappings held, stored and
- * dropped, the lookups and hits, the resolutions that got no answer and the datagrams dropped
- * waiting for one, and the mappings refused for a full table.
+ * Render /proc/net/stat/rt_cache and arp_cache, which iproute2's lnstat, rtstat
+ * among its names, reads: Linux's heading and a line of hex counters for the
+ * one processor. Of the route counters, the routes in the table, the datagrams
+ * received and those for another host, and the lookups of the output path; the
+ * cache of routes Linux once had has no hits, and the broadcasts are not
+ * counted apart. Of the neighbour counters, the mappings held, stored and
+ * dropped, the lookups and hits, the resolutions that got no answer and the
+ * datagrams dropped waiting for one, and the mappings refused for a full table.
  */
 static int procfs_gen_netstat(struct procfs_text *t, int origin)
 {
@@ -3275,7 +3372,7 @@ static struct netdev *sysfs_netdev(int index)
 {
     int i;
 
-    for (i = 0; i < netdev_count(); i++) {
+    for (i = 0; i < netdev_seen_count(); i++) {
         if (netdev_at(i) && netdev_at(i)->index == index) {
             return netdev_at(i);
         }
@@ -3430,7 +3527,7 @@ int sysfs_net_index(const char *name, int len)
 {
     int i, k;
 
-    for (i = 0; i < netdev_count(); i++) {
+    for (i = 0; i < netdev_seen_count(); i++) {
         const struct netdev *nd = netdev_at(i);
 
         for (k = 0; nd && k < len && k < (int)sizeof(nd->name) && nd->name[k] == name[k]; k++) {
@@ -4086,7 +4183,7 @@ int procfs_fd_owner(struct fd_entry *e, uint32_t *uid, uint32_t *gid)
         procfs_oom_owner(f->origin_pid, uid, gid) != 0) {
         return -1;
     }
-    return f->origin_file == SYNTH_PROC_OOM_ADJ;
+    return f->origin_file == SYNTH_PROC_OOM_ADJ || procfs_is_idmap(f->origin_file);
 }
 
 int procfs_fd_writable(struct fd_entry *e)
@@ -4266,6 +4363,121 @@ static int32_t procfs_oom_write(fd_entry_t *e, const char __user *buf, uint32_t 
 static const struct file_ops procfs_oom_ops = {procfs_oom_read, procfs_oom_write, procfs_poll,
                                                procfs_ioctl, procfs_close};
 
+/** Which of the user namespace's files `file` is, NS_MAP_ (proc/ns.h). */
+static int idmap_which(int file)
+{
+    return file == SYNTH_PROC_GID_MAP     ? NS_MAP_GID
+           : file == SYNTH_PROC_SETGROUPS ? NS_MAP_SETGROUPS
+                                          : NS_MAP_UID;
+}
+
+/** /proc/<pid>/uid_map, gid_map or setgroups, `file`: the maps of the
+ * process's user namespace as the reader sees them (`ns_map_text`). */
+static int procfs_gen_idmap(struct procfs_text *t, int pid, int file)
+{
+    process_t *p = procfs_proc(pid);
+    char text[NS_EXTENTS * 33 + 1];
+
+    if (!p) {
+        return -ENOENT;
+    }
+    ns_map_text(proc_userns(p), idmap_which(file), current_proc, text, (int)sizeof(text));
+    ap_str(t, text);
+    return t->len;
+}
+
+/** Read a user namespace's file opened for writing as well: its text now. */
+static int32_t procfs_idmap_read(fd_entry_t *e, char __user *buf, uint32_t count)
+{
+    struct procfs_file *f = (struct procfs_file *)e->priv;
+    uint32_t off = (uint32_t)e->ofd->offset;
+    struct procfs_text t;
+    uint32_t n = 0;
+
+    procfs_text_init(&t);
+    if (procfs_gen_idmap(&t, f->origin_pid, f->origin_file) < 0 || t.nomem) {
+        kfree(t.buf);
+        return t.nomem ? -ENOMEM : -ESRCH;
+    }
+    if (off < (uint32_t)t.len) {
+        n = (uint32_t)t.len - off < count ? (uint32_t)t.len - off : count;
+        if (copy_to_user(buf, t.buf + off, n) != 0) {
+            kfree(t.buf);
+            return -EFAULT;
+        }
+    }
+    kfree(t.buf);
+    e->ofd->offset = off + n;
+    return (int32_t)n;
+}
+
+/** Write a user namespace's map or its setgroups, as `ns_map_write` takes
+ * it, from at most 256 bytes of `buf`. */
+static int32_t procfs_idmap_write(fd_entry_t *e, const char __user *buf, uint32_t count)
+{
+    struct procfs_file *f = (struct procfs_file *)e->priv;
+    process_t *p = procfs_proc(f->origin_pid);
+    char text[256];
+    uint32_t n = count < sizeof(text) ? count : (uint32_t)sizeof(text);
+
+    if (!p) {
+        return -ESRCH;
+    }
+    if (e->ofd->offset != 0) {
+        return -EINVAL;
+    }
+    if (copy_from_user(text, buf, n) != 0) {
+        return -EFAULT;
+    }
+    return ns_map_write(proc_userns(p), idmap_which(f->origin_file), text, n, current_proc);
+}
+
+static const struct file_ops procfs_idmap_ops = {procfs_idmap_read, procfs_idmap_write, procfs_poll,
+                                                 procfs_ioctl, procfs_close};
+
+/**
+ * Open /proc/<pid>/uid_map, gid_map or setgroups, `file`, for writing, or
+ * for reading and writing; who may write it is the namespace's rule
+ * (`ns_map_write`), checked at the write, which must be at the start.
+ */
+static int procfs_open_idmap(int file, int pid, int flags)
+{
+    struct procfs_file *f;
+    fd_entry_t *e;
+    int acc = flags & 3;
+    int fd;
+
+    if (acc == 3) {
+        return -EACCES;
+    }
+    if (!procfs_proc(pid)) {
+        return -ENOENT;
+    }
+    f = kzalloc(sizeof(*f));
+    if (!f) {
+        return -ENOMEM;
+    }
+    f->origin_pid = pid;
+    f->origin_file = file;
+    fd = fd_alloc(current_proc->fds);
+    if (fd < 0) {
+        kfree(f);
+        return fd;
+    }
+    e = &current_proc->fds->entries[fd];
+    e->type = FD_TYPE_PROC;
+    e->node = NULL;
+    e->sock = NULL;
+    e->ops = &procfs_idmap_ops;
+    e->priv = f;
+    e->ofd->offset = 0;
+    e->flags = acc == 1 ? FD_FLAG_WRITE : (FD_FLAG_READ | FD_FLAG_WRITE);
+    if (flags & PROCFS_O_CLOEXEC) {
+        e->flags |= FD_FLAG_CLOEXEC;
+    }
+    return fd;
+}
+
 /**
  * Open /proc/<pid>/oom_score_adj for reading, writing or both; O_CREAT and
  * O_TRUNC are taken as they are for a file that exists, which is what a
@@ -4321,8 +4533,8 @@ static int procfs_open_oom(const struct vpath *vp, int pid, int flags)
 /** The text a read of the /proc/sys file `entry` gives, appended to `t`. */
 static void procfs_sysctl_text(struct procfs_text *t, int entry)
 {
-    if (entry == SYNTH_SYS_HOSTNAME) {
-        ap_str(t, uts_hostname());
+    if (entry == SYNTH_SYS_HOSTNAME || entry == SYNTH_SYS_DOMAINNAME) {
+        ap_str(t, entry == SYNTH_SYS_HOSTNAME ? uts_hostname() : uts_domainname());
         ap_ch(t, '\n');
     } else {
         ap_str(t, synth_sys_text(entry));
@@ -4358,8 +4570,9 @@ static int32_t procfs_sysctl_read(fd_entry_t *e, char __user *buf, uint32_t coun
 /**
  * Write a /proc/sys file, as Linux's sysctl handlers take one.
  *
- * kernel/hostname becomes the text up to its first newline, at most 64
- * bytes, as sethostname(2) would set it; the whole count is taken. A write
+ * kernel/hostname and kernel/domainname become the text up to its first
+ * newline, at most 64 bytes, as sethostname(2) and setdomainname(2) would
+ * set them; the whole count is taken. A write
  * to net/ipv4/ip_forward is an integer, and 0, which it is, is taken; any
  * other value is -EINVAL, since the stack forwards nothing between
  * interfaces, where Linux would begin to.
@@ -4377,11 +4590,15 @@ static int32_t procfs_sysctl_write(fd_entry_t *e, const char __user *buf, uint32
     if (copy_from_user(text, buf, n) != 0) {
         return -EFAULT;
     }
-    if (f->origin_pid == SYNTH_SYS_HOSTNAME) {
+    if (f->origin_pid == SYNTH_SYS_HOSTNAME || f->origin_pid == SYNTH_SYS_DOMAINNAME) {
         while (len < n && text[len] != '\n' && text[len] != '\0') {
             len++;
         }
-        uts_set_hostname(text, len);
+        if (f->origin_pid == SYNTH_SYS_HOSTNAME) {
+            uts_set_hostname(text, len);
+        } else {
+            uts_set_domainname(text, len);
+        }
         return (int32_t)count;
     }
     text[12] = '\0';
@@ -4549,11 +4766,12 @@ static int procfs_open_sysattr(int node, int attr, int flags)
 }
 
 /**
- * Open a writable /proc/sys file for writing, or for reading and writing,
- * which needs a privileged caller, as the file's mode, 0644 and owned by
- * root, says. O_CREAT and O_TRUNC are taken as they are for a file that
- * exists, which is what a shell's redirection and BusyBox's `sysctl -w` ask
- * for. Each read and write reaches the value as it is then.
+ * Open a writable /proc/sys file for writing, or for reading and writing, which
+ * needs a privileged caller, as the file's mode, 0644 and owned by root, says;
+ * the names of the UTS namespace need privilege over it. O_CREAT and O_TRUNC
+ * are taken as they are for a file that exists, which is what a shell's
+ * redirection and BusyBox's `sysctl -w` ask for. Each read and write reaches
+ * the value as it is then.
  */
 static int procfs_open_sysctl(int entry, int flags)
 {
@@ -4562,7 +4780,9 @@ static int procfs_open_sysctl(int entry, int flags)
     int acc = flags & 3;
     int fd;
 
-    if (acc == 3 || !proc_privileged(current_proc)) {
+    if (acc == 3 || !((entry == SYNTH_SYS_HOSTNAME || entry == SYNTH_SYS_DOMAINNAME)
+                          ? uts_privileged()
+                          : proc_privileged(current_proc))) {
         return -EACCES;
     }
     f = kzalloc(sizeof(*f));
@@ -4588,6 +4808,46 @@ static int procfs_open_sysctl(int entry, int flags)
         e->flags |= FD_FLAG_CLOEXEC;
     }
     return fd;
+}
+
+/**
+ * The text of /proc/PID/fdinfo/N, descriptor `fd` of process `pid`: its
+ * offset, and its flags in octal, the access mode with O_APPEND,
+ * O_NONBLOCK, O_PATH and O_CLOEXEC, the first two lines Linux gives. Its
+ * length, or -ENOENT for a descriptor that is not open.
+ */
+static int procfs_gen_fdinfo(struct procfs_text *t, int pid, int fd)
+{
+    process_t *p = get_process((uint32_t)pid);
+    const fd_entry_t *e;
+    char pos[24];
+    uint32_t rw, flags;
+
+    if (!p || p->state == PROC_UNUSED || fd < 0 || fd >= fd_table_cap(p->fds)) {
+        return -ENOENT;
+    }
+    e = &p->fds->entries[fd];
+    if (e->type == FD_TYPE_NONE || (e->flags & FD_FLAG_CLOSING)) {
+        return -ENOENT;
+    }
+    rw = e->flags & (FD_FLAG_READ | FD_FLAG_WRITE);
+    flags = rw == (FD_FLAG_READ | FD_FLAG_WRITE) ? 2u : (rw == FD_FLAG_WRITE ? 1u : 0u);
+    if (e->ofd) {
+        flags |= e->ofd->status_flags & (OFD_APPEND | OFD_NONBLOCK);
+    }
+    if (e->flags & FD_FLAG_PATH) {
+        flags |= 010000000u;
+    }
+    if (e->flags & FD_FLAG_CLOEXEC) {
+        flags |= 02000000u;
+    }
+    diskinfo_u64_dec(pos, (int)sizeof(pos), e->ofd ? e->ofd->offset : 0);
+    ap_str(t, "pos:\t");
+    ap_str(t, pos);
+    ap_str(t, "\nflags:\t0");
+    ap_num_width(t, (int32_t)flags, 0, 1);
+    ap_ch(t, '\n');
+    return t->nomem ? -1 : t->len;
 }
 
 /** Distinguish global snapshots from files whose process must still exist. */
@@ -4655,6 +4915,9 @@ int procfs_open(const struct vpath *vp, int flags)
     if (vp->kind == VNODE_PROC_FILE && vp->procfile == SYNTH_PROC_OOM_ADJ) {
         return procfs_open_oom(vp, pid, flags);
     }
+    if (vp->kind == VNODE_PROC_FILE && procfs_is_idmap(vp->procfile) && (flags & 3) != 0) {
+        return procfs_open_idmap(vp->procfile, pid, flags);
+    }
     if (vp->kind == VNODE_PROC_FILE && vp->procfile == SYNTH_PROC_MEM) {
         return procfs_open_mem(vp, pid, flags);
     }
@@ -4693,6 +4956,8 @@ int procfs_open(const struct vpath *vp, int flags)
                 return -EOVERFLOW;
             }
         }
+    } else if (vp->kind == VNODE_PROC_FDINFO) {
+        len = procfs_gen_fdinfo(&text, pid, vp->procfd);
     } else if (vp->kind == VNODE_PROC_NET_DEV) {
         len = procfs_gen_netdev(&text);
     } else if (vp->kind == VNODE_PROC_UPTIME) {
@@ -4769,6 +5034,8 @@ int procfs_open(const struct vpath *vp, int flags)
         len = procfs_gen_comm(&text, pid);
     } else if (vp->procfile == SYNTH_PROC_LIMITS) {
         len = procfs_gen_limits(&text, pid);
+    } else if (procfs_is_idmap(vp->procfile)) {
+        len = procfs_gen_idmap(&text, pid, vp->procfile);
     } else {
         len = procfs_gen_cmdline(&text, pid);
     }

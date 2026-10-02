@@ -9,6 +9,7 @@
 #include "../fs/krffs.h"
 #include "../fs/vfs.h"
 #include "../proc/process.h"
+#include "../proc/ns.h"
 #include "../proc/wait_queue.h"
 #include "../mm/kheap.h"
 #include "../mm/paging.h"
@@ -141,6 +142,9 @@ struct unix_msg {
  */
 struct unix_sock {
     struct unix_sock *next;
+    /* The network namespace it was made in, whose abstract names it alone
+     * finds (proc/ns.h). */
+    const struct netns *ns;
     uint32_t refs;
     int type;
     int state;
@@ -284,7 +288,7 @@ int unix_snapshot(struct unix_row **rows)
         return -1;
     }
     for (s = socks; s && n < room; s = s->next) {
-        if (s->closed) {
+        if (s->closed || s->ns != proc_netns(current_proc)) {
             continue;
         }
         out[n].refs = s->refs;
@@ -321,6 +325,7 @@ static struct unix_sock *unix_alloc(int type)
     }
     s->refs = 1;
     s->type = type;
+    s->ns = proc_netns(current_proc);
     s->state = US_UNCONNECTED;
     s->inode = socket_inode_next();
     s->uid = current_proc->euid;
@@ -340,6 +345,16 @@ static void own_cred(struct unix_cred *c, int effective)
     c->pid = current_proc->tgid;
     c->uid = effective ? current_proc->euid : current_proc->ruid;
     c->gid = effective ? current_proc->egid : current_proc->rgid;
+}
+
+/* Credentials of kernel ids as the current process sees them in its user
+ * and PID namespaces. */
+static struct unix_cred cred_seen(struct unix_cred c)
+{
+    c.pid = pid_seen(c.pid);
+    c.uid = uid_seen(c.uid);
+    c.gid = gid_seen(c.gid);
+    return c;
 }
 
 /* Take the references a descriptor in a table holds, for a copy of it that
@@ -962,7 +977,8 @@ static int32_t put_name(uint32_t addr, uint32_t lenp, const struct unix_name *n,
 /**
  * The live socket bound to `n`, with a reference the caller puts, or NULL
  * with the reason in `*err`. An abstract name is found among the sockets of
- * `type`, as in Linux; a path is found through its socket file, of any type.
+ * `type` of the caller's network namespace, as in Linux; a path is found
+ * through its socket file, of any type.
  */
 static struct unix_sock *lookup(const struct unix_name *n, int type, int32_t *err)
 {
@@ -982,7 +998,8 @@ static struct unix_sock *lookup(const struct unix_name *n, int type, int32_t *er
         if (!s->bound || s->closed) {
             continue;
         }
-        if (abstract(n) ? (!s->bound_fs && s->type == type && same_name(&s->name, n))
+        if (abstract(n) ? (!s->bound_fs && s->type == type && same_name(&s->name, n) &&
+                           s->ns == proc_netns(current_proc))
                         : (s->bound_fs && s->fs_ref.mnt == mnt && s->fs_ino == ino)) {
             s->refs++;
             return s;
@@ -1619,7 +1636,7 @@ int32_t unix_getsockopt(fd_entry_t *e, int level, int name, uint32_t val, uint32
         c.uid = 0xFFFFFFFFu;
         c.gid = 0xFFFFFFFFu;
         if (s->has_peercred) {
-            c = s->peercred;
+            c = cred_seen(s->peercred);
         }
         n = sizeof(c);
         break;
@@ -1709,18 +1726,26 @@ static int32_t get_rights(uint32_t data, uint32_t n, struct unix_out *out)
 
 /* The credentials of an SCM_CREDENTIALS message: the sender's own process
  * id, the thread group's and not a thread's, and ids, unless it is root, as
- * Linux checks them. */
+ * Linux checks them. They are named in the sender's namespaces and kept as
+ * the kernel's ids. */
 static int32_t get_cred(uint32_t data, struct unix_out *out)
 {
     const process_t *p = current_proc;
     struct unix_cred c;
+    int64_t uid;
+    int64_t gid;
 
     if (copy_from_user(&c, (const void __user *)data, sizeof(c)) != 0) {
         return -EFAULT;
     }
-    if (c.uid == 0xFFFFFFFFu || c.gid == 0xFFFFFFFFu) {
+    uid = uid_named(c.uid);
+    gid = gid_named(c.gid);
+    if (c.uid == 0xFFFFFFFFu || c.gid == 0xFFFFFFFFu || uid < 0 || gid < 0) {
         return -EINVAL;
     }
+    c.pid = pid_named(c.pid);
+    c.uid = (uint32_t)uid;
+    c.gid = (uint32_t)gid;
     if (!proc_privileged(p) &&
         (c.pid != p->tgid || (c.uid != p->ruid && c.uid != p->euid && c.uid != p->suid) ||
          (c.gid != p->rgid && c.gid != p->egid && c.gid != p->sgid))) {
@@ -2312,14 +2337,16 @@ static uint32_t put_control(uint32_t control, uint32_t controllen, struct unix_i
     uint32_t used = 0;
     uint32_t hdr[3];
     uint32_t given;
+    struct unix_cred seen;
 
     if (in->has_cred) {
-        hdr[0] = CMSG_HDR + sizeof(in->cred);
+        seen = cred_seen(in->cred);
+        hdr[0] = CMSG_HDR + sizeof(seen);
         hdr[1] = SOL_SOCKET;
         hdr[2] = SCM_CREDENTIALS;
         if (!control || controllen < hdr[0] ||
             copy_to_user((void __user *)control, hdr, sizeof(hdr)) != 0 ||
-            copy_to_user((void __user *)(control + CMSG_HDR), &in->cred, sizeof(in->cred)) != 0) {
+            copy_to_user((void __user *)(control + CMSG_HDR), &seen, sizeof(seen)) != 0) {
             in->flags |= MSG_CTRUNC;
         } else {
             used = CMSG_ALIGN(hdr[0]);
@@ -2607,5 +2634,17 @@ static void unix_close(fd_entry_t *e)
     if (s) {
         e->priv = NULL;
         unix_release(s, 0);
+    }
+}
+
+void unix_ns_gone(const struct netns *ns)
+{
+    static const struct netns gone;
+    struct unix_sock *s;
+
+    for (s = socks; s; s = s->next) {
+        if (s->ns == ns) {
+            s->ns = &gone;
+        }
     }
 }

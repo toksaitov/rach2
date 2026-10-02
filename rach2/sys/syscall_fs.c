@@ -18,6 +18,7 @@
 #include "proc/process.h"
 #include "proc/sched.h"
 #include "proc/tgroup.h"
+#include "proc/ns.h"
 #include "proc/elf.h"
 #include "proc/uimage.h"
 #include "proc/tls.h"
@@ -1263,6 +1264,19 @@ static int32_t path_in_root(char *path)
     return rc;
 }
 
+/** `path_in_root`, but for a place outside the process's root, when
+ * `outside` is not NULL, `path` stays as it is and `*outside` is set. */
+static int32_t path_in_root_at(char *path, int *outside)
+{
+    int32_t rc = path_in_root(path);
+
+    if (rc == -ENOENT && outside) {
+        *outside = 1;
+        rc = 0;
+    }
+    return rc;
+}
+
 /**
  * Whether the canonical path `path` is "/" and names the root of the mount
  * table, which it does for a process chroot has not given a root of its
@@ -1286,12 +1300,14 @@ static int names_tree_root(const char *path)
  * itself: KRFFS nodes are not counted, and though `rmdir` refuses a directory
  * a description has, the test does not rest on that. A path from the root of
  * the mount table becomes the one the calling process has from its own root
- * (`path_in_root`). Returns 0, -ENOTDIR for a descriptor on anything but a
- * directory, -EBADF for a boot-root directory that no longer resolves to its
- * node, -ENOENT for one outside the process's root or one tmpfs removed, or
+ * (`path_in_root`). A directory outside that root keeps its path from the
+ * root of the mount table, with `*outside` set, when `outside` is not NULL.
+ * Returns 0, -ENOTDIR for a descriptor on anything but a directory, -EBADF
+ * for a boot-root directory that no longer resolves to its node, -ENOENT for
+ * one outside the process's root without `outside` or one tmpfs removed, or
  * -ENAMETOOLONG.
  */
-static int fd_dir_path(fd_entry_t *entry, char *out, uint32_t cap)
+static int fd_dir_path(fd_entry_t *entry, char *out, uint32_t cap, int *outside)
 {
     krffs_node_t *dnode = entry->node; /* NULL for the root, and for other types */
     int r;
@@ -1303,7 +1319,7 @@ static int fd_dir_path(fd_entry_t *entry, char *out, uint32_t cap)
             return -EBADF;
         }
         synth_dir_path(sd->kind, sd->pid, sd->tid, out, (int)cap);
-        return path_in_root(out);
+        return path_in_root_at(out, outside);
     }
     if (entry->type != FD_TYPE_DIR) {
         return -ENOTDIR;
@@ -1313,7 +1329,7 @@ static int fd_dir_path(fd_entry_t *entry, char *out, uint32_t cap)
 
         if (vm->type->ops->path) {
             r = vfs_node_path(vm, entry->ofd->vnode, out, cap);
-            return r != 0 ? r : path_in_root(out);
+            return r != 0 ? r : path_in_root_at(out, outside);
         }
         if (entry->ofd->dirpath[0] == '\0' || k_strlen(entry->ofd->dirpath) + 1 > cap) {
             return -ENAMETOOLONG;
@@ -1331,11 +1347,11 @@ static int fd_dir_path(fd_entry_t *entry, char *out, uint32_t cap)
         if (krffs_resolve(out) != dnode) {
             return -EBADF;
         }
-        return path_in_root(out);
+        return path_in_root_at(out, outside);
     }
     out[0] = '/';
     out[1] = '\0';
-    return path_in_root(out);
+    return path_in_root_at(out, outside);
 }
 
 /* How a path as written names a directory by its end, which its canonical
@@ -1423,12 +1439,20 @@ static void path_drop_dot(char *path, int end)
  * longer than the buffer, and for a relative path only, since an absolute
  * one does not read `dirfd`, -EBADF for a descriptor that is not open and
  * -ENOTDIR for one that is not a directory.
+ *
+ * A relative path joined to a directory outside the process's root, which
+ * a descriptor opened before a chroot may be on, begins with three slashes,
+ * and still with two once `path_name` takes the first off: the walk starts
+ * a path that begins with two at the root of the mount table, as Linux
+ * walks from such a descriptor, and a symbolic link's absolute target and
+ * `..` at the root still go by the process's root (fs/vfs.c). A path the
+ * caller wrote never begins so, since the canonical path has one slash.
  */
 static int copy_path_at(char *pathbuf, uint32_t size, int dirfd, const char __user *upath, int *dir)
 {
     fd_entry_t *entry;
     char *dirpath;
-    int len, r = 0;
+    int len, r = 0, outside = 0;
 
     len = strncpy_from_user(pathbuf, upath, size);
     if (len < 0) {
@@ -1456,7 +1480,7 @@ static int copy_path_at(char *pathbuf, uint32_t size, int dirfd, const char __us
         if (!dirpath) {
             return -ENOMEM;
         }
-        r = fd_dir_path(entry, dirpath, VFS_PATH_MAX);
+        r = fd_dir_path(entry, dirpath, VFS_PATH_MAX, &outside);
         if (r == 0) {
             r = path_prepend(pathbuf, size, (uint32_t)len, dirpath);
         }
@@ -1466,6 +1490,14 @@ static int copy_path_at(char *pathbuf, uint32_t size, int dirfd, const char __us
         return r;
     }
     len = canonicalize_abs(pathbuf);
+    if (outside) {
+        if ((uint32_t)len + 4 > size) {
+            return -ENAMETOOLONG;
+        }
+        k_memmove(pathbuf + 2, pathbuf, (uint32_t)len + 1);
+        pathbuf[1] = '/';
+        len += 2;
+    }
     return (dir && *dir == PATH_END_DOT) ? path_put_dot(pathbuf, len) : len;
 }
 
@@ -1994,7 +2026,9 @@ static int32_t synth_open(const struct vpath *vp, int flags)
     case VNODE_PROC_SYS_DIR:
     case VNODE_PROC_PID:
     case VNODE_PROC_FD_DIR:
+    case VNODE_PROC_FDINFO_DIR:
     case VNODE_PROC_TASK_DIR:
+    case VNODE_PROC_NS_DIR:
     case VNODE_SYS_DIR:
     case VNODE_SYS_LINK:
         return synth_open_dir(vp, flags);
@@ -2002,6 +2036,14 @@ static int32_t synth_open(const struct vpath *vp, int flags)
         return -ENOTDIR;
     case VNODE_PROC_FD_LINK:
         return proc_fd_open(vp, flags);
+    case VNODE_PROC_FDINFO:
+        if (procfs_resolve_id(vp) < 0) {
+            return -ENOENT;
+        }
+        return procfs_may_read(procfs_resolve_pid(vp->pid)) ? procfs_open(vp, flags) : -EACCES;
+    case VNODE_PROC_NS_LINK:
+        return procfs_resolve_id(vp) < 0 ? -ENOENT
+                                         : procfs_open_ns(procfs_resolve_id(vp), vp->procfd, flags);
     default:
         return -ENOENT;
     }
@@ -2023,13 +2065,14 @@ static int32_t synth_open_dir(const struct vpath *vp, int flags)
     struct synth_dir *sd;
 
     if (vp->kind == VNODE_PROC_PID || vp->kind == VNODE_PROC_FD_DIR ||
-        vp->kind == VNODE_PROC_TASK_DIR) {
+        vp->kind == VNODE_PROC_FDINFO_DIR || vp->kind == VNODE_PROC_TASK_DIR) {
         if (procfs_resolve_id(vp) < 0) {
             return -ENOENT;
         }
         pid = procfs_resolve_pid(vp->pid);
     }
-    if (vp->kind == VNODE_PROC_FD_DIR && !procfs_may_read(pid)) {
+    if ((vp->kind == VNODE_PROC_FD_DIR || vp->kind == VNODE_PROC_FDINFO_DIR) &&
+        !procfs_may_read(pid)) {
         return -EACCES;
     }
     /* The directory exists, so honour flags that contradict that. An exclusive
@@ -2862,6 +2905,42 @@ out:
 
 #define MS_REMOUNT 32
 
+/* The propagation flags, which mount(2) takes alone, with MS_REC. */
+#define MS_REC        0x00004000u
+#define MS_UNBINDABLE 0x00020000u
+#define MS_PRIVATE    0x00040000u
+#define MS_SLAVE      0x00080000u
+#define MS_SHARED     0x00100000u
+
+/** Whether the file system type `type` is `name`. */
+static int type_is(const char *type, const char *name)
+{
+    while (*type && *type == *name) {
+        type++;
+        name++;
+    }
+    return *type == *name;
+}
+
+/**
+ * Whether the caller may mount or unmount a file system of type `type`
+ * (NULL for an unmount or a change of propagation): privileged, or
+ * privileged over its mount namespace, where the types a user namespace
+ * may mount on Linux are proc, sysfs and tmpfs.
+ */
+static int mount_privileged(const char *type)
+{
+    struct mntns *ns = proc_mntns(current_proc);
+
+    if (cred_privileged()) {
+        return 1;
+    }
+    if (ns == &init_mntns || !ns_owner_privileged(current_proc, &ns->c)) {
+        return 0;
+    }
+    return !type || type_is(type, "proc") || type_is(type, "sysfs") || type_is(type, "tmpfs");
+}
+
 /**
  * mount(2) with MS_REMOUNT: the mount whose root `path` names takes the
  * flags `flags` (`vfs_remount`); -EINVAL for a path that is no mount's
@@ -2904,11 +2983,15 @@ static int32_t remount_at(const char *path, uint32_t flags)
 /**
  * mount(2): EBX = source, ECX = target, EDX = type, ESI = flags, EDI = data.
  *
- * Effective uid 0 is required. The strings are copied here; the order of
- * work and every other refusal are the VFS's (vfs_do_mount). `data` may be
- * NULL, which is an empty option string. With MS_REMOUNT the source, the
- * type and the data are not read, as on Linux for the flags here
- * (`remount_at`).
+ * Effective uid 0 is required, or privilege over the caller's mount
+ * namespace for proc, sysfs and tmpfs (`mount_privileged`). The strings are
+ * copied here; the order of work and every other refusal are the VFS's
+ * (vfs_do_mount). `data` may be NULL, which is an empty option string. With
+ * MS_REMOUNT the source, the type and the data are not read, as on Linux
+ * for the flags here (`remount_at`). A change of propagation alone,
+ * MS_PRIVATE, MS_SLAVE, MS_SHARED or MS_UNBINDABLE with MS_REC or without,
+ * changes nothing: every mount is private to the namespaces that see it,
+ * as unshare(1) makes them by default.
  */
 int32_t sys_mount(isr_params_t *params)
 {
@@ -2921,7 +3004,12 @@ int32_t sys_mount(isr_params_t *params)
     if (!current_proc) {
         return -ESRCH;
     }
-    if (!cred_privileged()) {
+    if ((params->esi & (MS_PRIVATE | MS_SLAVE | MS_SHARED | MS_UNBINDABLE)) &&
+        !(params->esi &
+          ~(MS_REC | MS_PRIVATE | MS_SLAVE | MS_SHARED | MS_UNBINDABLE | VFS_MS_SILENT))) {
+        return mount_privileged(NULL) ? 0 : -EPERM;
+    }
+    if ((params->esi & MS_REMOUNT) ? !cred_privileged() : !mount_privileged(NULL)) {
         return -EPERM;
     }
     if (params->esi & MS_REMOUNT) {
@@ -2949,6 +3037,10 @@ int32_t sys_mount(isr_params_t *params)
         return n;
     }
     n = strncpy_from_user(type, (const char __user *)params->edx, sizeof(type));
+    if (n >= 0 && !mount_privileged(type)) {
+        path_buf_put(tpath);
+        return -EPERM;
+    }
     data[0] = '\0';
     if (n >= 0 && params->edi) {
         n = strncpy_from_user(data, (const char __user *)params->edi, sizeof(data));
@@ -2982,7 +3074,7 @@ int32_t sys_umount2(isr_params_t *params)
     if (!current_proc) {
         return -ESRCH;
     }
-    if (!cred_privileged()) {
+    if (!mount_privileged(NULL)) {
         return -EPERM;
     }
     if (params->ecx != 0) {
@@ -4622,7 +4714,8 @@ static int synth_kind_is_dir(int kind)
            kind == VNODE_PROC_NET_DIR || kind == VNODE_PROC_PID || kind == VNODE_PROC_FD_DIR ||
            kind == VNODE_PROC_TASK_DIR || kind == VNODE_PROC_SYS_DIR || kind == VNODE_SYS_DIR ||
            kind == VNODE_SYS_LINK || kind == VNODE_PROC_SYSVIPC_DIR ||
-           kind == VNODE_PROC_NET_STAT_DIR;
+           kind == VNODE_PROC_NET_STAT_DIR || kind == VNODE_PROC_NS_DIR ||
+           kind == VNODE_PROC_FDINFO_DIR;
 }
 
 /**
@@ -4734,7 +4827,7 @@ static int32_t do_chdir(char *path)
 
         vfs_ref_release(&ref);
         if (vp.kind == VNODE_PROC_PID || vp.kind == VNODE_PROC_FD_DIR ||
-            vp.kind == VNODE_PROC_TASK_DIR) {
+            vp.kind == VNODE_PROC_FDINFO_DIR || vp.kind == VNODE_PROC_TASK_DIR) {
             if (procfs_resolve_id(&vp) < 0) {
                 return -ENOENT;
             }
@@ -4837,7 +4930,7 @@ int32_t sys_fchdir(isr_params_t *params)
     if (!path) {
         return -ENOMEM;
     }
-    rc = fd_dir_path(entry, path, VFS_PATH_MAX);
+    rc = fd_dir_path(entry, path, VFS_PATH_MAX, NULL);
     if (rc == 0 && entry->type == FD_TYPE_SYNTH_DIR) {
         rc = cwd_enter(path, NULL, NULL);
     } else if (rc == 0 && (!entry->ofd || !entry->ofd->vmnt)) {
@@ -4861,7 +4954,10 @@ int32_t sys_fchdir(isr_params_t *params)
  * search, and a caller who is root, checked in that order, as Linux checks
  * them. A directory of /dev or /proc is EINVAL: those types take the rest
  * of a path in one call, and the resolver could not stop `..` inside it.
- * Returns 0, -ENOTDIR, -EACCES, -EPERM or -EINVAL.
+ * The exception is a /proc/PID/fdinfo the caller may read, which a
+ * browser's sandbox enters to have a root that holds nothing once that
+ * process has ended (`sys_chroot`). Returns 0, -ENOTDIR, -EACCES, -EPERM
+ * or -EINVAL.
  */
 static int32_t root_check(const struct vfs_ref *ref)
 {
@@ -4886,10 +4982,14 @@ static int32_t root_check(const struct vfs_ref *ref)
             rc = cred_access_ref(ref, CRED_X, 0);
         }
     }
-    if (rc == 0 && !cred_privileged()) {
+    if (rc == 0 && vp && vp->kind == VNODE_PROC_FDINFO_DIR &&
+        (procfs_resolve_id(vp) < 0 || !procfs_may_read(procfs_resolve_pid(vp->pid)))) {
+        rc = -EACCES;
+    }
+    if (rc == 0 && !ns_privileged(current_proc, proc_userns(current_proc))) {
         rc = -EPERM;
     }
-    return rc == 0 && vp ? -EINVAL : rc;
+    return rc == 0 && vp && vp->kind != VNODE_PROC_FDINFO_DIR ? -EINVAL : rc;
 }
 
 /**
@@ -5019,6 +5119,12 @@ static int32_t root_enter(const struct vfs_ref *ref, char *buf)
  * root; Linux leaves it where it was either way. fork passes the root on
  * and exec keeps it. While a process has it, rmdir refuses the directory
  * with EBUSY and the root holds its mount against unmount.
+ *
+ * A /proc/PID/fdinfo becomes the root of the tmpfs of memfd_create, an
+ * empty directory no name is ever made in and no path reaches. Linux's root
+ * is the directory itself, which lists that process's descriptors while it
+ * lives and nothing after; the sandbox that does this has a helper process
+ * enter it, through CLONE_FS, and end.
  */
 int32_t sys_chroot(isr_params_t *params)
 {
@@ -5037,7 +5143,13 @@ int32_t sys_chroot(isr_params_t *params)
     rc = vfs_resolve(0, path, 0, &ref, 0, 0);
     if (rc == 0) {
         rc = root_check(&ref);
-        if (rc == 0) {
+        if (rc == 0 && vfs_synth_vpath(ref.mnt, ref.node)) {
+            struct vfs_ref empty;
+
+            empty.mnt = vfs_memfd_mount();
+            empty.node = empty.mnt->root;
+            rc = root_enter(&empty, path);
+        } else if (rc == 0) {
             rc = root_enter(&ref, path);
         }
         vfs_ref_release(&ref);
@@ -5239,6 +5351,14 @@ static int synth_sys_link(const struct vpath *vp, char *out, int cap)
         out[n++] = path[i];
     }
     return n;
+}
+
+/** The owner and group of the stat `kst` as the caller's user namespace
+ * maps them (`uid_seen`), which every stat gives the caller. */
+static void stat64_seen(struct linux_stat64 *kst)
+{
+    kst->st_uid = uid_seen(kst->st_uid);
+    kst->st_gid = gid_seen(kst->st_gid);
 }
 
 /**
@@ -5537,9 +5657,34 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
         synth_pid_owner(rpid, kst);
         return 0;
     }
+    case VNODE_PROC_NS_LINK: {
+        char scratch[1];
+        int rpid = procfs_resolve_id(vp);
+        int rc = rpid < 0 ? -ENOENT : procfs_readlink_ns(rpid, vp->procfd, scratch, 0);
+
+        /* As on Linux, the link of a process the caller may not read
+         * exists, and following it is refused. */
+        if (rc == -ENOENT || (follow && rc < 0)) {
+            return rc < 0 ? rc : -ENOENT;
+        }
+        if (follow) {
+            kst->st_dev = NSFS_DEV;
+            kst->st_mode = S_IFREG | 0444;
+            kst->st_ino = procfs_ns_ino(rpid, vp->procfd);
+            kst->st_nlink = 1;
+            return 0;
+        }
+        kst->st_dev = PROCFS_FSID;
+        kst->st_mode = 0120777; /* S_IFLNK | 0777 */
+        kst->st_ino = procfs_ino_pid(rpid);
+        synth_pid_owner(rpid, kst);
+        return 0;
+    }
     case VNODE_PROC_PID:
     case VNODE_PROC_FD_DIR:
+    case VNODE_PROC_FDINFO_DIR:
     case VNODE_PROC_TASK_DIR:
+    case VNODE_PROC_NS_DIR:
         if (procfs_resolve_id(vp) < 0) {
             return -ENOENT;
         }
@@ -5568,11 +5713,26 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
         kst->st_mode = S_IFREG | 0444;
         kst->st_ino = procfs_ino_pid(procfs_resolve_id(vp));
         synth_pid_owner(procfs_resolve_id(vp), kst);
-        /* oom_score_adj is its owner's to write, as on Linux. */
-        if (vp->procfile == SYNTH_PROC_OOM_ADJ) {
+        /* oom_score_adj and the user namespace's maps are their owner's to
+         * write, as on Linux. */
+        if (vp->procfile == SYNTH_PROC_OOM_ADJ || vp->procfile == SYNTH_PROC_UID_MAP ||
+            vp->procfile == SYNTH_PROC_GID_MAP || vp->procfile == SYNTH_PROC_SETGROUPS) {
             kst->st_mode = S_IFREG | 0644;
         }
         return 0;
+    case VNODE_PROC_FDINFO: {
+        char scratch[16];
+        int rpid = procfs_resolve_id(vp);
+
+        if (rpid < 0 || procfs_readlink_fd(rpid, vp->procfd, scratch, (int)sizeof(scratch)) < 0) {
+            return -ENOENT;
+        }
+        kst->st_dev = PROCFS_FSID;
+        kst->st_mode = S_IFREG | 0400;
+        kst->st_ino = procfs_ino_pid(rpid);
+        synth_pid_owner(rpid, kst);
+        return 0;
+    }
     case VNODE_PROC_FD_LINK: {
         char scratch[16];
         int rpid = procfs_resolve_id(vp);
@@ -5989,7 +6149,7 @@ static int32_t do_readlink(const char *name, char __user *ubuf, uint32_t bufsiz,
         int tn = 0;
         pid = procfs_resolve_pid(vp.pid);
         n = 0;
-        uv = (uint32_t)pid;
+        uv = pid < 0 ? 0u : pid_seen((uint32_t)pid);
         if (pid < 0) {
             n = -ENOENT;
         } else if (uv == 0) {
@@ -6006,6 +6166,9 @@ static int32_t do_readlink(const char *name, char __user *ubuf, uint32_t bufsiz,
     } else if (kind == VNODE_PROC_FD_LINK) {
         pid = procfs_resolve_id(&vp);
         n = pid < 0 ? -ENOENT : procfs_readlink_fd(pid, vp.procfd, link, VFS_PATH_MAX);
+    } else if (kind == VNODE_PROC_NS_LINK) {
+        pid = procfs_resolve_id(&vp);
+        n = pid < 0 ? -ENOENT : procfs_readlink_ns(pid, vp.procfd, link, VFS_PATH_MAX);
     } else if (kind == VNODE_PROC_EXE) {
         pid = procfs_resolve_id(&vp);
         n = pid < 0 ? -ENOENT : procfs_readlink_exe(pid, link, VFS_PATH_MAX);
@@ -6154,6 +6317,7 @@ static int32_t do_stat64(const char __user *path, struct linux_stat64 __user *st
     if (dir && (kst.st_mode & S_IFMT) != S_IFDIR) {
         return -ENOTDIR;
     }
+    stat64_seen(&kst);
     if (copy_to_user(st, &kst, sizeof(kst)) != 0) {
         return -EFAULT;
     }
@@ -6457,6 +6621,13 @@ static int32_t fstat_fill(fd_entry_t *entry, struct linux_stat64 *kst)
         kst->st_nlink = 1;
         kst->st_blksize = 4096;
         kst->st_ino = entry->priv ? unix_inode(entry) : 0u;
+    } else if (entry->type == FD_TYPE_ANON && nsfs_ns(entry)) {
+        /* A namespace: nsfs's file of it, whose inode is the namespace's. */
+        kst->st_dev = NSFS_DEV;
+        kst->st_mode = S_IFREG | 0444;
+        kst->st_nlink = 1;
+        kst->st_blksize = 4096;
+        kst->st_ino = kst->__st_ino = nsfs_ns(entry)->inum;
     } else if (entry->type == FD_TYPE_ANON) {
         /* eventfd, epoll, timerfd: Linux's anonymous inode, mode 0600 with
          * no type bits. */
@@ -6596,6 +6767,7 @@ int32_t sys_fstat64(isr_params_t *params)
     if (rc != 0) {
         return rc;
     }
+    stat64_seen(&kst);
     if (copy_to_user(st, &kst, sizeof(kst)) != 0) {
         return -EFAULT;
     }
@@ -6738,6 +6910,7 @@ int32_t sys_fstatat64(isr_params_t *params)
         return -EINVAL;
     }
     rc = stat_at((int)params->ebx, (const char __user *)params->ecx, flags, &kst);
+    stat64_seen(&kst);
     if (rc == 0 && copy_to_user(st, &kst, sizeof(kst)) != 0) {
         rc = -EFAULT;
     }
@@ -6810,8 +6983,8 @@ static void statx_from_stat64(struct linux_statx *sx, const struct linux_stat64 
     sx->stx_mask = STATX_BASIC_STATS;
     sx->stx_blksize = (uint32_t)st->st_blksize;
     sx->stx_nlink = st->st_nlink;
-    sx->stx_uid = (uint32_t)st->st_uid;
-    sx->stx_gid = (uint32_t)st->st_gid;
+    sx->stx_uid = uid_seen((uint32_t)st->st_uid);
+    sx->stx_gid = gid_seen((uint32_t)st->st_gid);
     sx->stx_mode = (uint16_t)st->st_mode;
     sx->stx_ino = st->st_ino;
     sx->stx_size = (uint64_t)st->st_size;
@@ -7439,6 +7612,24 @@ int32_t sys_fchmod(isr_params_t *params)
 }
 
 /** The path form of chown and lchown: EBX = path, ECX = uid, EDX = gid. */
+/**
+ * The kernel's ids of the owner `*uid` and group `*gid` a chown names in the
+ * caller's user namespace (`uid_named`), -1 left as it is. 0, or -EINVAL
+ * for one the namespace does not map.
+ */
+static int32_t chown_ids_named(uint32_t *uid, uint32_t *gid)
+{
+    int64_t u = *uid == 0xFFFFFFFFu ? (int64_t)*uid : uid_named(*uid);
+    int64_t g = *gid == 0xFFFFFFFFu ? (int64_t)*gid : gid_named(*gid);
+
+    if (u < 0 || g < 0) {
+        return -EINVAL;
+    }
+    *uid = (uint32_t)u;
+    *gid = (uint32_t)g;
+    return 0;
+}
+
 static int32_t chown_path(const char __user *upath, uint32_t uid, uint32_t gid, int follow)
 {
     char *path;
@@ -7447,6 +7638,9 @@ static int32_t chown_path(const char __user *upath, uint32_t uid, uint32_t gid, 
 
     if (!current_proc || !upath) {
         return -EFAULT;
+    }
+    if (chown_ids_named(&uid, &gid) != 0) {
+        return -EINVAL;
     }
     rc = path_from_user_dir(AT_FDCWD, upath, &path, &dir);
     if (rc != 0) {
@@ -7498,7 +7692,7 @@ int32_t sys_fchownat(isr_params_t *params)
     if (!current_proc) {
         return -ESRCH;
     }
-    if (flags & ~(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH)) {
+    if (flags & ~(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH) || chown_ids_named(&uid, &gid) != 0) {
         return -EINVAL;
     }
     if (!upath) {
@@ -7538,6 +7732,7 @@ int32_t sys_fchownat(isr_params_t *params)
 int32_t sys_fchown(isr_params_t *params)
 {
     int fd = (int)params->ebx;
+    uint32_t uid, gid;
     fd_entry_t *entry;
 
     if (!current_proc) {
@@ -7547,7 +7742,12 @@ int32_t sys_fchown(isr_params_t *params)
     if (!entry || (entry->flags & FD_FLAG_PATH)) {
         return -EBADF;
     }
-    return chown_fd(entry, params->ecx, params->edx);
+    uid = params->ecx;
+    gid = params->edx;
+    if (chown_ids_named(&uid, &gid) != 0) {
+        return -EINVAL;
+    }
+    return chown_fd(entry, uid, gid);
 }
 
 /**
@@ -8615,6 +8815,7 @@ static int32_t flock_write(uint32_t arg, int wide, const struct lock_req *req)
     int64_t start = (int64_t)req->start;
     int64_t len = req->end == LOCK_EOF ? 0 : (int64_t)(req->end - req->start + 1u);
     int32_t s32 = (int32_t)start, l32 = (int32_t)len;
+    int32_t pid = req->pid > 0 ? (int32_t)pid_seen((uint32_t)req->pid) : req->pid;
     uint32_t size = wide ? 24u : 16u;
 
     k_memcpy(raw, &type, 2);
@@ -8628,11 +8829,11 @@ static int32_t flock_write(uint32_t arg, int wide, const struct lock_req *req)
     if (wide) {
         k_memcpy(raw + 4, &start, 8);
         k_memcpy(raw + 12, &len, 8);
-        k_memcpy(raw + 20, &req->pid, 4);
+        k_memcpy(raw + 20, &pid, 4);
     } else {
         k_memcpy(raw + 4, &s32, 4);
         k_memcpy(raw + 8, &l32, 4);
-        k_memcpy(raw + 12, &req->pid, 4);
+        k_memcpy(raw + 12, &pid, 4);
     }
     return copy_to_user((void __user *)arg, raw, size) != 0 ? -EFAULT : 0;
 }
@@ -9176,10 +9377,14 @@ static void stat_node_times(struct linux_stat *kst, const krffs_node_t *node)
  * else, as Linux's walk does. */
 static int32_t old_stat_put(struct linux_stat __user *st, const struct linux_stat *kst, int dir)
 {
+    struct linux_stat seen = *kst;
+
     if (dir && (kst->st_mode & S_IFMT) != S_IFDIR) {
         return -ENOTDIR;
     }
-    return copy_to_user(st, kst, sizeof(*kst)) != 0 ? -EFAULT : 0;
+    seen.st_uid = (unsigned short)uid_seen(kst->st_uid);
+    seen.st_gid = (unsigned short)gid_seen(kst->st_gid);
+    return copy_to_user(st, &seen, sizeof(seen)) != 0 ? -EFAULT : 0;
 }
 
 /** The root directory's three times, into the old stat. */
@@ -10675,8 +10880,9 @@ static int synth_proc_dirent(const struct synth_dir *sd, int n, char *name, uint
         {"stat", DT_REG},    {"cmdline", DT_REG},   {"fd", DT_DIR},     {"maps", DT_REG},
         {"smaps", DT_REG},   {"status", DT_REG},    {"statm", DT_REG},  {"auxv", DT_REG},
         {"environ", DT_REG}, {"comm", DT_REG},      {"mem", DT_REG},    {"oom_score_adj", DT_REG},
-        {"mounts", DT_REG},  {"mountinfo", DT_REG}, {"limits", DT_REG}, {"exe", DT_LNK},
-        {"cwd", DT_LNK},     {"root", DT_LNK},      {"task", DT_DIR}};
+        {"mounts", DT_REG},  {"mountinfo", DT_REG}, {"limits", DT_REG}, {"uid_map", DT_REG},
+        {"gid_map", DT_REG}, {"setgroups", DT_REG}, {"ns", DT_DIR},     {"fdinfo", DT_DIR},
+        {"exe", DT_LNK},     {"cwd", DT_LNK},       {"root", DT_LNK},   {"task", DT_DIR}};
     struct vpath vp;
     process_t *pp;
     int id, i, c = 0;
@@ -10700,6 +10906,20 @@ static int synth_proc_dirent(const struct synth_dir *sd, int n, char *name, uint
         *dtype = files[n].type;
         return 1;
     }
+    if (sd->kind == VNODE_PROC_NS_DIR) {
+        const char *kind = synth_ns_name(n);
+
+        if (!kind) {
+            return 0;
+        }
+        for (i = 0; kind[i]; i++) {
+            name[i] = kind[i];
+        }
+        name[i] = '\0';
+        *ino = procfs_ino_pid(id);
+        *dtype = DT_LNK;
+        return 1;
+    }
     if (sd->kind == VNODE_PROC_TASK_DIR) {
         /* The process's threads, the leader first, which a thread whose end
          * is still to be reaped is not among unless it is the leader. */
@@ -10711,7 +10931,7 @@ static int synth_proc_dirent(const struct synth_dir *sd, int n, char *name, uint
                 continue;
             }
             if (c++ == n) {
-                synth_u32_str(name, t->pid);
+                synth_u32_str(name, pid_seen(t->pid));
                 *ino = procfs_ino_pid((int)t->pid);
                 *dtype = DT_DIR;
                 return 1;
@@ -10724,7 +10944,7 @@ static int synth_proc_dirent(const struct synth_dir *sd, int n, char *name, uint
             !(pp->fds->entries[i].flags & FD_FLAG_CLOSING) && c++ == n) {
             synth_u32_str(name, (uint32_t)i);
             *ino = procfs_ino_pid(id);
-            *dtype = DT_LNK;
+            *dtype = sd->kind == VNODE_PROC_FDINFO_DIR ? DT_REG : DT_LNK;
             return 1;
         }
     }
@@ -10743,7 +10963,7 @@ static int synth_sys_net_dirent(int node, int key, int n, char *name, uint64_t *
     int i;
 
     if (node == SYSFS_CLASS_NET) {
-        struct netdev *nd = netdev_at(n);
+        struct netdev *nd = n < netdev_seen_count() ? netdev_at(n) : NULL;
 
         if (!nd) {
             return 0;
@@ -11205,7 +11425,8 @@ static int synth_dirent_at(const struct synth_dir *sd, int n, char *name, uint64
             return 1;
         }
     }
-    if (kind == VNODE_PROC_PID || kind == VNODE_PROC_TASK_DIR || kind == VNODE_PROC_FD_DIR) {
+    if (kind == VNODE_PROC_PID || kind == VNODE_PROC_TASK_DIR || kind == VNODE_PROC_FD_DIR ||
+        kind == VNODE_PROC_NS_DIR || kind == VNODE_PROC_FDINFO_DIR) {
         return synth_proc_dirent(sd, n, name, ino, dtype);
     }
     return 0;

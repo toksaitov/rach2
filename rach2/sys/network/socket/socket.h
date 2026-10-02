@@ -138,6 +138,10 @@ typedef struct socket {
     /* AF_NETLINK only: the socket's port id and its queue of answers
      * (netlink.c). */
     void *netlink;
+    /* The network namespace the socket was made in (proc/ns.h), NULL for
+     * the first, whose interfaces alone a socket reaches; `net_gone` once
+     * its namespace has ended. */
+    const struct netns *ns;
 } socket_t;
 
 /** Start with no sockets; called once from init_network. */
@@ -145,6 +149,11 @@ void socket_init(void);
 
 /** Allocate a socket with refcount 1; NULL if the pool is full. */
 struct socket *socket_alloc(int type);
+
+/** Whether `s` was made in a network namespace other than the first: it
+ * reaches no interface, binds to nothing a packet is delivered to, and
+ * neither connects nor sends (`do_bind` and the rest in syscall_net.c). */
+int socket_outside(const struct socket *s);
 
 /**
  * Whether a live stream socket has `port` as its local port, bound or

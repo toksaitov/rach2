@@ -105,6 +105,10 @@ struct fs_struct {
  * (fs/pathbuf.c); the deepest call takes four. */
 #define PATH_BUFS 8
 
+/* The deepest nesting of user and of PID namespaces (ns.h), the first
+ * counted as level 0. */
+#define NS_LEVELS 8
+
 /* Supplementary group slots per process (the 4.2BSD number). */
 #define NGROUPS_MAX 8
 
@@ -342,6 +346,18 @@ struct process {
      * exec keeps them. */
     struct seccomp_filter *seccomp;
     uint32_t seccomp_mode;
+    /* The namespaces (ns.h): its user namespace and its PID namespace, NULL
+     * for the first, its numbers in each PID namespace it is in below the
+     * first, by level, and the set of its other namespaces, NULL for the
+     * first set; and the capabilities it holds in its user namespace, in
+     * capget's two words, every one for its creator and a process that
+     * joined it, until an exec, a change of its effective uid or capset
+     * changes them. A fork passes them on (`ns_fork`). */
+    struct userns *userns;
+    struct pidns *pidns;
+    uint32_t nspid[NS_LEVELS];
+    struct nsset *nsset;
+    uint32_t ns_caps[2];
 };
 
 typedef struct process process_t;
@@ -384,9 +400,11 @@ process_t *get_process(uint32_t pid);
 
 /* Whether thread `p` has privilege, which Linux divides into capabilities
  * and this kernel keeps whole: an effective user ID of 0, with the
- * capabilities not given up (`nocaps`). A macro, so that the host tests that
- * compile the callers without this file's functions need no stub of it. */
-#define proc_privileged(p) ((p)->euid == 0 && !(p)->nocaps)
+ * capabilities not given up (`nocaps`), in the first user namespace; a
+ * process of another has privilege only over what its namespace owns
+ * (`ns_privileged`). A macro, so that the host tests that compile the
+ * callers without this file's functions need no stub of it. */
+#define proc_privileged(p) ((p)->euid == 0 && !(p)->nocaps && !(p)->userns)
 
 /** The CPU time in ticks of the whole process `p` is a thread of: every
  * thread's, those that have ended included, user and system. */
@@ -439,6 +457,10 @@ void proc_files_put(process_t *p);
  * -ENOMEM. */
 int32_t proc_files_unshare(void);
 
+/** Give the current process directories and a umask of its own, a copy of
+ * those it shares with others, as unshare's CLONE_FS does. 0 or -ENOMEM. */
+int32_t proc_fs_unshare(void);
+
 /** Drop `p`'s reference to its directories and umask and leave it none;
  * the last reference lets go of the working directory's and the root's
  * holds. May sleep. */
@@ -484,7 +506,8 @@ void signal_force(process_t *target, int signo, const struct k_siginfo *info);
 void signal_set_blocked(uint64_t mask);
 
 /* The siginfo of the SIGCHLD a child's end sends: CLD_EXITED with the exit
- * code, or CLD_KILLED or CLD_DUMPED with the signal, from its wait status. */
+ * code, or CLD_KILLED or CLD_DUMPED with the signal, from its wait status,
+ * and the child's pid and real uid as its parent's namespaces see them. */
 void proc_child_info(const process_t *child, struct k_siginfo *info);
 
 /**

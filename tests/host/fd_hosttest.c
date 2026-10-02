@@ -17,6 +17,7 @@
 #include "lib/kerrno.h"
 #include "mm/kheap.h"
 #include "proc/process.c"
+#include "ns_first.h"
 
 extern void *calloc(unsigned long count, unsigned long size);
 extern void free(void *ptr);

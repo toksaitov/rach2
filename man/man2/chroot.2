@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd October 2, 2026
 .Dt CHROOT 2
 .Os
 .Sh NAME
@@ -41,14 +41,16 @@ then reports its path from the new root.
 One outside the new root moves to the new root.
 On Linux it stays where it was, and relative paths then reach the tree
 outside the root.
-In the same way, a descriptor of a directory outside the root, opened
-before the call, is refused with
+A descriptor of a directory outside the root, opened before the call, is
+refused with
 .Er ENOENT
 by
-.Xr fchdir 2
-and by the
+.Xr fchdir 2 ,
+where Linux makes it the working directory; the
 .Fn *at
-calls for a relative path, where Linux walks from that directory.
+calls walk a relative path from that directory, as on Linux, with
+.Ql ..
+and absolute symbolic links still going by the caller's root.
 .Pp
 Only the root of the mount table has
 .Pa /dev
@@ -65,7 +67,13 @@ A directory of
 .Pa /dev
 or
 .Pa /proc
-cannot be a root.
+cannot be a root, but for
+.Pa /proc/ Ns Ar pid Ns Pa /fdinfo
+of a process the caller may read: the caller's root becomes the empty root
+of a file system no path reaches, which holds nothing and takes nothing, as
+a browser's sandbox asks for it.
+Linux's root is then that directory, which holds nothing once the process
+has ended.
 .Xr mount 2
 takes its source by its name under
 .Pa /dev
@@ -116,7 +124,9 @@ is outside the caller's memory.
 names a directory of
 .Pa /dev
 or
-.Pa /proc ,
+.Pa /proc
+other than a
+.Pa fdinfo ,
 whose file systems take the rest of a path in one step, so the resolver
 could not stop
 .Ql ..
@@ -139,7 +149,9 @@ The kernel had no memory for the path.
 .Fa path ,
 or a component of it, is not a directory.
 .It Bq Er EPERM
-The caller's effective user ID is not 0.
+The caller is not privileged in its user namespace: in the first, its
+effective user ID is not 0; see
+.Xr unshare 2 .
 The errors above come first, as on Linux.
 .El
 .Sh SEE ALSO

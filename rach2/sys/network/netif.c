@@ -17,6 +17,7 @@
 #include "../lib/kstring.h"
 #include "../mm/usercopy.h"
 #include "../proc/process.h"
+#include "../proc/ns.h"
 
 /* struct ifreq: name at 0 (16 bytes), then the union. Inside the union a
  * sockaddr puts its family at 0 and an IPv4 address at 4; the flags are a
@@ -87,6 +88,16 @@ static void put_be32(uint8_t *p, uint32_t v)
     p[3] = (uint8_t)v;
 }
 
+int net_ns_seen(void)
+{
+    return proc_netns(current_proc) == &init_netns;
+}
+
+int netdev_seen_count(void)
+{
+    return net_ns_seen() ? netdev_count() : 0;
+}
+
 /**
  * The interface a caller named, or NULL when this machine has no such one.
  *
@@ -105,8 +116,8 @@ static struct netdev *named(const uint8_t *name)
             break;
         }
     }
-    if (i == IFREQ_NAMESIZE - 1) {
-        return 0; /* no terminator inside the field */
+    if (i == IFREQ_NAMESIZE - 1 || !net_ns_seen()) {
+        return 0; /* no terminator inside the field, or no interface seen */
     }
     want[i] = '\0';
     return netdev_by_name(want);
@@ -160,7 +171,7 @@ static int32_t ifreq_ioctl(uint32_t request, uint32_t arg)
 
         struct netdev *at;
 
-        if (index < 1 || index > netdev_count()) {
+        if (index < 1 || index > netdev_seen_count()) {
             return -ENODEV; /* no interface has that index */
         }
         at = netdev_at(index - 1);
@@ -299,7 +310,7 @@ static int32_t route_ioctl(uint32_t request, uint32_t arg)
     if (dev == 0 && gw != 0) {
         int i;
 
-        for (i = 0; i < netdev_count(); i++) {
+        for (i = 0; i < netdev_seen_count(); i++) {
             if (netdev_on_link(netdev_at(i), gw)) {
                 nd = netdev_at(i);
                 break;
@@ -378,7 +389,7 @@ static int32_t arp_ioctl(uint32_t request, uint32_t arg)
         if (req[ARPREQ_HA_FAM] != ARPHRD_ETHER || req[ARPREQ_HA_FAM + 1] != 0) {
             return -EINVAL;
         }
-        for (i = 0; !nd && i < netdev_count(); i++) {
+        for (i = 0; !nd && i < netdev_seen_count(); i++) {
             if (netdev_on_link(netdev_at(i), ip)) {
                 nd = netdev_at(i);
             }
@@ -409,7 +420,7 @@ static int32_t ifconf_ioctl(uint32_t arg)
           ((uint32_t)ifc[3] << 24);
     buf = (uint32_t)ifc[4] | ((uint32_t)ifc[5] << 8) | ((uint32_t)ifc[6] << 16) |
           ((uint32_t)ifc[7] << 24);
-    for (i = 0; i < netdev_count(); i++) {
+    for (i = 0; i < netdev_seen_count(); i++) {
         struct netdev *nd = netdev_at(i);
 
         if (!nd || nd->ip == 0) {

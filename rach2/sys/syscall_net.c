@@ -15,6 +15,7 @@
 #include "input.h"
 #include "mouse.h"
 #include "proc/process.h"
+#include "proc/ns.h"
 #include "proc/sched.h"
 #include "proc/elf.h"
 #include "proc/uimage.h"
@@ -439,6 +440,9 @@ static int32_t do_socket(int domain, int type, int protocol)
         return -ENOMEM;
     }
     sock->family = (uint16_t)domain;
+    if (domain != AF_NETLINK && proc_netns(current_proc) != &init_netns) {
+        sock->ns = proc_netns(current_proc);
+    }
     if (domain == AF_NETLINK) {
         int opened = netlink_open(sock, protocol);
 
@@ -547,6 +551,9 @@ static int32_t do_bind(int fd, uint32_t sa_ptr, int addrlen)
 
     if (entry->sock->family == AF_NETLINK) {
         return netlink_bind_user(entry->sock, sa_ptr, addrlen);
+    }
+    if (socket_outside(entry->sock)) {
+        return 0; /* a namespace with no interface: nothing is delivered to it */
     }
 
     /* A packet socket binds to an interface, not to a port: the address is a
@@ -768,6 +775,9 @@ static int32_t do_sendto(int fd, uint32_t buf_ptr, int len, int flags, uint32_t 
      * destination it has. */
     if (entry->sock->family == AF_NETLINK) {
         return netlink_send_user(entry->sock, buf_ptr, len);
+    }
+    if (socket_outside(entry->sock)) {
+        return -ENETUNREACH; /* a network namespace with no interface */
     }
 
     /* A raw socket sends the ICMP message the caller built, checksum included:
@@ -1052,6 +1062,9 @@ static int32_t do_connect(int fd, uint32_t sa_ptr, int addrlen)
     if (entry->sock->family == AF_PACKET) {
         return -EOPNOTSUPP;
     }
+    if (socket_outside(entry->sock)) {
+        return -ENETUNREACH; /* a network namespace with no interface */
+    }
 
     k_memset(sa, 0, sizeof(sa));
     if (addrlen < 2) {
@@ -1178,6 +1191,10 @@ static int32_t do_listen(int fd, int backlog)
     if (entry->sock->tcb || entry->sock->listening) {
         return -EINVAL; /* already listening or connected: a fresh TCB would leak the old one */
     }
+    if (socket_outside(entry->sock)) {
+        entry->sock->listening = 1; /* nothing reaches it to connect */
+        return 0;
+    }
 
     {
         int rc = tcp_listen(entry->sock, entry->sock->local_port);
@@ -1287,6 +1304,9 @@ static int32_t do_send(int fd, uint32_t buf_ptr, int len, int flags)
     }
     if (entry->sock->type != SOCK_STREAM) {
         return do_sendto(fd, buf_ptr, len, flags, 0, 0);
+    }
+    if (socket_outside(entry->sock)) {
+        return -ENETUNREACH;
     }
 
     /* socket_tcp_send copies the payload itself, blocking on send-ring space
@@ -1886,6 +1906,9 @@ static int32_t do_sendmsg(int fd, uint32_t msg_ptr, int flags)
     iovlen = SC_LE32(hdr + MSGHDR_IOVLEN);
     if (iovlen > (uint32_t)IOV_MAX_LOCAL) {
         return -EMSGSIZE;
+    }
+    if (socket_outside(entry->sock)) {
+        return -ENETUNREACH;
     }
     if (entry->sock->type == SOCK_STREAM) {
         for (i = 0; i < iovlen; i++) {

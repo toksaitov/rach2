@@ -46,6 +46,7 @@ static struct tgroup *tgroup_new(struct process *leader);
 static void tgroup_put(struct tgroup *tg);
 static void proc_cpu_time(const struct process *p, uint32_t *user, uint32_t *sys);
 #include "proc/process.c"
+#include "ns_first.h"
 
 volatile uint32_t kernel_ticks;
 

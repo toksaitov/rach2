@@ -72,6 +72,7 @@ static int sysfs_block_devno(const char *name, int len);
 static void sysfs_block_name(int key, char *out, int cap);
 static int sysfs_block_whole(int key);
 #include "fs/procfs.c"
+#include "ns_first.h"
 
 /* The counters /proc/net/snmp reports, which net_core.c defines. */
 struct net_mib net_mib;
@@ -80,6 +81,12 @@ struct net_mib net_mib;
 int netdev_count(void)
 {
     return 0;
+}
+
+/** Every interface is in the caller's network namespace. */
+int netdev_seen_count(void)
+{
+    return netdev_count();
 }
 
 const char *sysfs_attr(int node, int n)
@@ -92,6 +99,19 @@ const char *sysfs_attr(int node, int n)
 struct netdev *netdev_at(int n)
 {
     (void)n;
+    return 0;
+}
+
+/** No mount here is made from a node of /dev, so a mount's device is its
+ * synthetic number (`procfs_mount_dev`), which compares the mount's type
+ * with these. */
+const struct vfs_type vfs_devfs_type, vfs_procfs_type, vfs_sysfs_type;
+
+int devfs_numbers(const char *path, uint32_t *major, uint32_t *minor)
+{
+    (void)path;
+    (void)major;
+    (void)minor;
     return 0;
 }
 
@@ -464,6 +484,9 @@ static void task_ids(void)
 {
     struct vpath vp;
 
+    process.pid = 7;
+    thread.pid = 9;
+    stranger.pid = 11;
     thread.state = PROC_READY;
     thread.tg = &group;
     stranger.state = PROC_READY;

@@ -1,0 +1,190 @@
+.Dd October 2, 2026
+.Dt UNSHARE 2
+.Os
+.Sh NAME
+.Nm unshare ,
+.Nm setns
+.Nd move the caller into new or other namespaces
+.Sh SYNOPSIS
+.In sched.h
+.Ft int
+.Fn unshare "int flags"
+.Ft int
+.Fn setns "int fd" "int nstype"
+.Sh DESCRIPTION
+A namespace is a view of one part of the system that the processes in it
+share.
+A process inherits its parent's namespaces of six kinds:
+.Bl -tag -width "CLONE_NEWUSER"
+.It Dv CLONE_NEWUSER
+A user namespace maps user and group IDs and scopes privilege.
+A process in a new one has no ID in it, and reads its IDs as 65534, until
+.Pa /proc/ Ns Ar pid Ns Pa /uid_map
+and
+.Pa gid_map
+map them; see
+.Xr proc 5 .
+The process that makes it is privileged in it and in every namespace it
+owns, until an
+.Xr execve 2
+or a change of its effective user ID, after which it is privileged there
+only as effective user ID 0 in the namespace.
+A process of the parent namespace with the effective user ID of the
+namespace's maker is privileged in it too, and a process privileged in the
+first user namespace is privileged in every other.
+.It Dv CLONE_NEWPID
+A PID namespace numbers its processes from 1.
+Its first process is its init: the processes of the namespace whose parent
+ends are given to it, and when it ends every other process of the
+namespace is sent
+.Dv SIGKILL
+and no process may be made in it.
+A process sees the processes of its namespace and of those below it, by
+their numbers there, and sees the parent of a namespace's init as 0.
+.It Dv CLONE_NEWNS
+A mount namespace begins with the mounts of its parent's;
+.Xr mount 2
+and
+.Xr umount2 2
+then change its own table.
+.It Dv CLONE_NEWNET
+A network namespace has no interface, loopback included.
+Its sockets bind and listen, and a connection or a datagram fails with
+.Er ENETUNREACH ;
+.Pa /proc/net ,
+.Pa /sys/class/net
+and the routing socket show it nothing.
+Unix sockets of the abstract namespace are its own.
+.It Dv CLONE_NEWUTS
+A UTS namespace has a copy of its parent's host and domain names; see
+.Xr uname 2 .
+.It Dv CLONE_NEWIPC
+An IPC namespace has its own System V objects and POSIX message queues,
+none at first, which end with it.
+.El
+.Pp
+.Fn unshare
+gives the caller new namespaces of the kinds in
+.Fa flags .
+A new user namespace is made first, and owns the others.
+The caller needs no privilege for a user namespace, and for the other
+kinds needs privilege in its own user namespace or a new one made by the
+same call.
+.Dv CLONE_NEWPID
+does not move the caller: its next children are made in the new
+namespace, and its first child there is that namespace's init.
+.Dv CLONE_NEWNS
+and
+.Dv CLONE_NEWUSER
+also give the caller its own root and working directories, as
+.Dv CLONE_FS
+does;
+.Dv CLONE_FS
+and
+.Dv CLONE_FILES
+copy the directories and the descriptor table, and
+.Dv CLONE_SYSVSEM ,
+.Dv CLONE_THREAD ,
+.Dv CLONE_SIGHAND
+and
+.Dv CLONE_VM
+are accepted as Linux accepts them.
+The same
+.Dv CLONE_NEW
+flags given to
+.Xr clone 2
+make the child's namespaces.
+.Pp
+.Fn setns
+moves the caller into the namespace that
+.Fa fd ,
+an open file of
+.Pa /proc/ Ns Ar pid Ns Pa /ns ,
+is open on.
+.Fa nstype
+is the kind's
+.Dv CLONE_NEW
+flag, or 0 for any kind.
+The caller must be privileged in its own user namespace and in the one
+that owns the target.
+A PID namespace becomes the one the caller's next children are made in,
+and must be the caller's own or below it.
+A mount namespace keeps the caller's root and working directories.
+.Pp
+A descriptor of
+.Pa /proc/ Ns Ar pid Ns Pa /ns
+answers
+.Xr ioctl 2 :
+.Dv NS_GET_USERNS
+gives a descriptor of the user namespace that owns the namespace, and
+.Dv NS_GET_PARENT
+one of the parent of a user or PID namespace, both refused with
+.Er EPERM
+for a namespace above the caller's;
+.Dv NS_GET_NSTYPE
+returns its
+.Dv CLONE_NEW
+flag, and
+.Dv NS_GET_OWNER_UID
+writes the user ID of a user namespace's maker.
+.Pp
+A user namespace may be nested 7 deep below the first, and so may a PID
+namespace; there are at most 32 mount namespaces at once.
+.Pp
+The i386 system call numbers are 310 for
+.Fn unshare
+and 346 for
+.Fn setns .
+.Sh RETURN VALUES
+.Rv -std unshare setns
+.Sh EXAMPLES
+The default suite's
+.Pa tests/musl/nsmusl.c
+makes a namespace of each kind and checks what it changes: a host name, a
+PID, a mount, a connection, a System V object; it makes a user, a PID and
+a network namespace in one
+.Xr clone 2
+as an ordinary user, as a browser's sandbox does, and writes the maps of a
+new user namespace.
+.Sh ERRORS
+.Bl -tag -width "[EUSERS]"
+.It Bq Er EBADF
+.Fa fd
+is not an open descriptor.
+.It Bq Er EINVAL
+.Fa flags
+has a flag not listed;
+.Dv CLONE_NEWUSER ,
+.Dv CLONE_THREAD ,
+.Dv CLONE_SIGHAND
+or
+.Dv CLONE_VM
+was given to a process of more than one thread;
+.Dv CLONE_NEWPID
+was given again before a child was made;
+.Fa fd
+is not open on a namespace, or on one of the kind
+.Fa nstype ;
+the target PID namespace is not the caller's or below it; or the caller
+shares its directories and moves to a mount or a user namespace, or is in
+the target user namespace already.
+.It Bq Er ENOMEM
+A namespace or a copy could not be allocated.
+.It Bq Er ENOSPC
+32 mount namespaces exist.
+.It Bq Er EPERM
+The caller is not privileged where it must be.
+.It Bq Er EUSERS
+A user or PID namespace would be nested past the limit.
+.El
+.Sh SEE ALSO
+.Xr fork 2 ,
+.Xr mount 2 ,
+.Xr uname 2 ,
+.Xr proc 5
+.Sh STANDARDS
+These are Linux calls.
+Linux also has cgroup and time namespaces, which this kernel has not, and
+its network namespaces have a loopback interface.
+Linux's user namespaces grant capabilities one by one; here a process has
+all of them in a namespace or none.

@@ -15,6 +15,7 @@
 #define WAIT_QUEUE_HOSTTEST
 #include "proc/wait_queue.c"
 #include "proc/exit.c"
+#include "ns_first.h"
 #include "proc/tgroup.h"
 
 extern int printf(const char *format, ...);

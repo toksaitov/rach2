@@ -57,6 +57,17 @@ int devfs_disk_row(int i, struct devfs_disk_row *row)
     return -1;
 }
 
+int devfs_numbers(const char *path, uint32_t *major, uint32_t *minor)
+{
+    (void)path;
+    (void)major;
+    (void)minor;
+    return 0;
+}
+
+/* The types a mount's device number is chosen by (`procfs_mount_dev`). */
+const struct vfs_type vfs_devfs_type, vfs_procfs_type, vfs_sysfs_type, vfs_krffs_type;
+
 /* The counters /proc/net/snmp reports, which net_core.c defines. */
 struct net_mib net_mib;
 
@@ -64,6 +75,12 @@ struct net_mib net_mib;
 int netdev_count(void)
 {
     return 0;
+}
+
+/** Every interface is in the caller's network namespace. */
+int netdev_seen_count(void)
+{
+    return netdev_count();
 }
 
 struct netdev *netdev_at(int n)
@@ -82,6 +99,7 @@ process_t *get_process(uint32_t pid)
 }
 
 #include "fs/synthfs.c"
+#include "ns_first.h"
 
 extern int printf(const char *format, ...);
 extern char *strstr(const char *text, const char *needle);

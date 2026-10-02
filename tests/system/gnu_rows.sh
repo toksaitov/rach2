@@ -356,7 +356,8 @@ row_procps() {
 
 # util-linux's programs: the disks and mounts from /sys and /proc, a lock
 # taken and waited for, the limits and the I/O class of a process, the login
-# history, and the formatting and terminal tools jq's tests and scripts use.
+# history, the formatting and terminal tools jq's tests and scripts use, and
+# the namespaces unshare makes, nsenter enters and lsns lists.
 row_utillinux() {
     local pid
     has "lsblk" "$(lsblk -dno NAME,TYPE)" "disk"
@@ -377,6 +378,13 @@ row_utillinux() {
     same "uuidgen" "$(uuidgen | grep -cE '^[0-9a-f]{8}-([0-9a-f]{4}-){3}[0-9a-f]{12}$')" "1"
     has "dmesg" "$(dmesg | head -n 1)" "]"
     same "newgrp's mode" "$(stat -c '%a %U' /usr/bin/newgrp)" "4755 root"
+    same "unshare -r as the test account" "$(su test -c 'unshare -r id -u')" "0"
+    same "unshare -pf --mount-proc" "$(unshare -pf --mount-proc sh -c 'echo $$; ps -e -o pid= | wc -l')" \
+        "$(printf '1\n3')"
+    same "unshare -u" "$(unshare -u sh -c 'hostname inner; hostname'; hostname)" \
+        "$(printf 'inner\n%s' "$(hostname)")"
+    same "nsenter -t 1 -u" "$(unshare -u sh -c 'hostname inner; nsenter -t 1 -u hostname')" "$(hostname)"
+    has "lsns" "$(lsns -n -o TYPE)" "user"
 }
 
 # zstd compresses and decompresses, in its own format and in gzip's, and
@@ -661,10 +669,12 @@ row_dbus() {
 }
 
 # The browser's libraries are found through the loader's cache, and the
-# browser prints the DOM of a local page whose script writes into it, with
-# the system bus found and the session bus of a login shell's.
+# browser, run by the test account from its login shell with its sandbox,
+# prints the DOM of a local page whose script writes into it, with the
+# system bus found and the session bus of the login shell. The browser
+# refuses to start when it has no sandbox it can use, so the DOM shows that
+# its namespaces, its chroot and its seccomp filters took.
 row_chromium() {
-    local bus
     cat > "$WORK/page.html" << 'EOF'
 <!DOCTYPE html>
 <html><body><p id="out">not run</p>
@@ -672,9 +682,10 @@ row_chromium() {
 </body></html>
 EOF
     same "the libraries not found" "$(ldd /usr/lib/chromium/chromium-headless-shell | grep -c 'not found')" "0"
-    bus=$(bash -lc 'printf %s "$DBUS_SESSION_BUS_ADDRESS"')
-    OUT=$(HOME=$WORK DBUS_SESSION_BUS_ADDRESS=$bus chromium-headless-shell --no-sandbox --headless \
-        --dump-dom --user-data-dir="$WORK/profile" "file://$WORK/page.html" 2> "$WORK/chromium.err") ||
+    mkdir "$WORK/profile"
+    chown test "$WORK/profile"
+    OUT=$(su test -c "bash -lc 'chromium-headless-shell --headless --dump-dom \
+        --user-data-dir=$WORK/profile file://$WORK/page.html'" 2> "$WORK/chromium.err") ||
         fail "chromium-headless-shell: status $?: $(tail -n 3 "$WORK/chromium.err" | tr '\n' ' ')"
     has "the dumped DOM" "$OUT" '<p id="out">script ran: 42</p>'
     same "the browser's complaints of D-Bus" "$(grep -c 'dbus/' "$WORK/chromium.err")" "0"

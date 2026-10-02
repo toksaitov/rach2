@@ -48,12 +48,20 @@ static int32_t sys_socket(isr_params_t *params);
 static int32_t sys_socketpair(isr_params_t *params);
 #include "syscall.c"
 #include "syscall_net.c"
+#include "ns_first.h"
 
 extern int printf(const char *format, ...);
 extern int dprintf(int fd, const char *format, ...);
 
 static process_t proc;
 process_t *current_proc = &proc;
+
+/** Every socket here is in the first network namespace. */
+int socket_outside(const struct socket *s)
+{
+    (void)s;
+    return 0;
+}
 volatile uint32_t kernel_ticks;
 volatile uint32_t kernel_uptime_seconds;
 volatile uint32_t kernel_second_ticks;

@@ -1,11 +1,12 @@
-.Dd October 1, 2026
+.Dd October 2, 2026
 .Dt UNAME 2
 .Os
 .Sh NAME
 .Nm uname ,
 .Nm sethostname ,
+.Nm setdomainname ,
 .Nm sysinfo
-.Nd get system identity and statistics or set the host name
+.Nd get system identity and statistics or set the host and domain names
 .Sh SYNOPSIS
 .In sys/utsname.h
 .Ft int
@@ -13,6 +14,8 @@
 .In unistd.h
 .Ft int
 .Fn sethostname "const char *name" "size_t len"
+.Ft int
+.Fn setdomainname "const char *name" "size_t len"
 .In sys/sysinfo.h
 .Ft int
 .Fn sysinfo "struct sysinfo *info"
@@ -25,7 +28,7 @@ The six fields are 65-byte arrays containing null-terminated strings:
 .It Va sysname
 .Ql Rach2 .
 .It Va nodename
-The mutable host name, initially
+The host name of the caller's UTS namespace, initially
 .Ql rach2 .
 .It Va release
 .Ql 1.0.0 .
@@ -34,6 +37,7 @@ The mutable host name, initially
 .It Va machine
 .Ql i686 .
 .It Va domainname
+The domain name of the caller's UTS namespace, initially
 .Ql (none) .
 Musl exposes this field as
 .Va domainname
@@ -49,17 +53,26 @@ copies
 .Fa len
 bytes from
 .Fa name
-and appends a null byte to set the single system host name, for a
-privileged caller alone, as on Linux.
+and appends a null byte to set the host name of the caller's UTS
+namespace, and
+.Fn setdomainname
+its domain name.
+A caller privileged in the user namespace that owns the UTS namespace may
+set them, as on Linux: in the first namespaces, a caller with effective
+user ID 0.
 The length must be from 0 through 64.
 A length of 0 sets an empty name without reading
 .Fa name .
-The name is returned in
+The host name is returned in
 .Fn uname Ns 's
 .Va nodename
 field and by musl's
 .Fn gethostname .
-The handler makes no uid check.
+A process made with
+.Dv CLONE_NEWUTS ,
+or that calls
+.Xr unshare 2
+with it, has a copy of its parent's names that it changes alone.
 .Pp
 .Fn sysinfo
 writes the 64-byte i386 system statistics structure to
@@ -93,10 +106,14 @@ The i386 system call numbers are 122 for
 .Fn uname ,
 74 for
 .Fn sethostname ,
+121 for
+.Fn setdomainname ,
 and 116 for
 .Fn sysinfo .
 The pointer is passed in EBX; for
-.Fn sethostname ,
+.Fn sethostname
+and
+.Fn setdomainname ,
 ECX contains the length.
 .Sh RETURN VALUES
 These functions return 0 on success, or -1 on failure with
@@ -122,13 +139,15 @@ or
 .Fn sysinfo
 cannot be written to user memory, or
 .Fn sethostname
+or
+.Fn setdomainname
 cannot read the specified name bytes.
 .It Bq Er EINVAL
 The length passed to
 .Fn sethostname
+or
+.Fn setdomainname
 is outside the range 0 through 64.
 .It Bq Er EPERM
-The caller of
-.Fn sethostname
-is not privileged.
+The caller is not privileged over its UTS namespace.
 .El

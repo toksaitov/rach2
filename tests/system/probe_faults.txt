@@ -1660,7 +1660,7 @@ file rach2/sys/ipc/unix.c
 expect UNIXMUSL FAIL (the child's SO_PEERCRED did not report the pair's creator
 old
         if (s->has_peercred) {
-            c = s->peercred;
+            c = cred_seen(s->peercred);
         }
 new
         if (s->has_peercred) {
@@ -1747,14 +1747,14 @@ old
         if (upid <= 0) {
             return -EINVAL;
         }
-        id = (uint32_t)upid;
+        id = pid_named((uint32_t)upid);
         break;
 new
     case P_PID:
         if (upid <= 0) {
             return -EINVAL;
         }
-        id = (uint32_t)upid;
+        id = pid_named((uint32_t)upid);
         idtype = P_ALL;
         break;
 end
@@ -1764,10 +1764,10 @@ probe waitidmusl
 file rach2/sys/syscall_proc.c
 expect WAITIDMUSL FAIL (a wait reported the exit of a child it does not select)
 old
-        id = upid != 0 ? (uint32_t)upid : current_proc->pgid;
+        id = upid != 0 ? pid_named((uint32_t)upid) : current_proc->pgid;
         break;
 new
-        id = upid != 0 ? (uint32_t)upid : current_proc->pgid;
+        id = upid != 0 ? pid_named((uint32_t)upid) : current_proc->pgid;
         if (upid != 0) {
             idtype = P_ALL;
         }
@@ -1779,10 +1779,10 @@ probe waitidmusl
 file rach2/sys/syscall_proc.c
 expect WAITIDMUSL FAIL (a wait reported the exit of a child it does not select)
 old
-        id = upid != 0 ? (uint32_t)upid : current_proc->pgid;
+        id = upid != 0 ? pid_named((uint32_t)upid) : current_proc->pgid;
         break;
 new
-        id = upid != 0 ? (uint32_t)upid : current_proc->pgid;
+        id = upid != 0 ? pid_named((uint32_t)upid) : current_proc->pgid;
         if (upid == 0) {
             idtype = P_ALL;
         }
@@ -4143,7 +4143,7 @@ int32_t sys_getppid(isr_params_t *params)
     if (!current_proc) {
         return -ESRCH;
     }
-    return (int32_t)current_proc->parent_pid;
+    return (int32_t)pid_seen(current_proc->parent_pid);
 }
 new
 int32_t sys_getppid(isr_params_t *params)
@@ -4162,7 +4162,7 @@ int32_t sys_getppid(isr_params_t *params)
     if (i == sizeof(probe)) {
         signal_post(current_proc, SIGSEGV);
     }
-    return (int32_t)current_proc->parent_pid;
+    return (int32_t)pid_seen(current_proc->parent_pid);
 }
 end
 
@@ -4259,11 +4259,15 @@ probe schedmusl
 file rach2/sys/syscall_fs.c
 expect SCHEDMUSL FAIL (oom_score_adj is not root's with mode 0644
 old
-        if (vp->procfile == SYNTH_PROC_OOM_ADJ) {
+        if (vp->procfile == SYNTH_PROC_OOM_ADJ || vp->procfile == SYNTH_PROC_UID_MAP ||
+            vp->procfile == SYNTH_PROC_GID_MAP || vp->procfile == SYNTH_PROC_SETGROUPS) {
             kst->st_mode = S_IFREG | 0644;
+        }
 new
-        if (vp->procfile == SYNTH_PROC_OOM_ADJ) {
-            kst->st_mode = S_IFREG | 0444;
+        if (vp->procfile == SYNTH_PROC_UID_MAP || vp->procfile == SYNTH_PROC_GID_MAP ||
+            vp->procfile == SYNTH_PROC_SETGROUPS) {
+            kst->st_mode = S_IFREG | 0644;
+        }
 end
 
 fault oom-creat-refused
@@ -4709,7 +4713,7 @@ probe direntmusl
 file rach2/sys/fs/procfs.c
 expect DIRENTMUSL FAIL (/proc has a process 0
 old
-        if (p->pid != p->tgid || p == proc_idle) {
+        if (p->pid != p->tgid || p == proc_idle || pid_seen(p->pid) == 0) {
 new
         if (p->pid != p->tgid) {
 end
@@ -4791,7 +4795,7 @@ probe authmusl
 file rach2/sys/syscall.c
 expect AUTHMUSL FAIL (an unprivileged caller set the host name)
 old
-    if (!proc_privileged(current_proc)) {
+    if (!uts_privileged()) {
         return -EPERM;
     }
     if (len < 0 || len > 64) {
@@ -5093,12 +5097,12 @@ probe callsmusl
 file rach2/sys/syscall_proc.c
 expect CALLSMUSL FAIL (kill of a child not yet reaped did not succeed
 old
-    target = get_process((uint32_t)pid);
+    target = get_process(pid_named((uint32_t)pid));
     if (!target || target->state == PROC_UNUSED) {
         return -ESRCH;
     }
 new
-    target = get_process((uint32_t)pid);
+    target = get_process(pid_named((uint32_t)pid));
     if (!target || target->state == PROC_UNUSED || target->tg->live == 0) {
         return -ESRCH;
     }
@@ -5189,9 +5193,11 @@ probe callsmusl
 file rach2/sys/syscall_fs.c
 expect CALLSMUSL FAIL (another user opened a root process's maps or fd directory
 old
-    if (vp->kind == VNODE_PROC_FD_DIR && !procfs_may_read(pid)) {
+    if ((vp->kind == VNODE_PROC_FD_DIR || vp->kind == VNODE_PROC_FDINFO_DIR) &&
+        !procfs_may_read(pid)) {
 new
-    if (vp->kind == VNODE_PROC_FD_DIR && !procfs_may_read(pid) && pid < 0) {
+    if ((vp->kind == VNODE_PROC_FD_DIR || vp->kind == VNODE_PROC_FDINFO_DIR) &&
+        !procfs_may_read(pid) && pid < 0) {
 end
 
 fault proc-limits-missing
@@ -5199,9 +5205,9 @@ probe procprobe
 file rach2/sys/fs/synthfs.c
 expect FAIL: /proc/self/limits has Linux's header and its sixteen limits
 old
-                 {"limits", SYNTH_PROC_LIMITS}, {"mountinfo", SYNTH_PROC_MOUNTINFO}};
+                 {"limits", SYNTH_PROC_LIMITS}, {"mountinfo", SYNTH_PROC_MOUNTINFO},
 new
-                 {"mountinfo", SYNTH_PROC_MOUNTINFO}};
+                 {"mountinfo", SYNTH_PROC_MOUNTINFO},
 end
 
 fault icmp-loopback-limited
@@ -5337,10 +5343,10 @@ file rach2/sys/syscall_fs.c
 expect FAIL: /sys/class/net lists eth0
 old
     if (node == SYSFS_CLASS_NET) {
-        struct netdev *nd = netdev_at(n);
+        struct netdev *nd = n < netdev_seen_count() ? netdev_at(n) : NULL;
 new
     if (node == SYSFS_CLASS_NET) {
-        struct netdev *nd = netdev_at(n + 1);
+        struct netdev *nd = n < netdev_seen_count() ? netdev_at(n + 1) : NULL;
 end
 
 fault devmem-maps-ram
@@ -5491,36 +5497,6 @@ new
     row->start = 0;
 end
 
-fault ptrace-seized-child-sigstop
-probe ptracemusl
-file rach2/sys/proc/ptrace.c
-expect PTRACEMUSL FAIL (the child of a seized fork did not first stop with SIGTRAP
-old
-    signo = self->tg->stop ? self->tg->stop : SIGTRAP;
-new
-    signo = (self->ptrace & PT_START) ? SIGSTOP : SIGTRAP;
-end
-
-fault proc-vmstat-unnamed
-probe procprobe
-file rach2/sys/fs/procfs.c
-expect FAIL: /proc/vmstat has the free pages and the kilobytes read from the disks
-old
-    ap_str(t, "\npgpgin ");
-new
-    ap_str(t, "\npgpg_in ");
-end
-
-fault sys-cpu-offline-listed
-probe procprobe
-file rach2/sys/fs/procfs.c
-expect FAIL: /sys/devices/system/cpu has processor 0 online and none offline
-old
-        ap_str(t, attr == 1 ? "\n" : "0\n");
-new
-        ap_str(t, "0\n");
-end
-
 fault seccomp-precedence-reversed
 probe seccompmusl
 file rach2/sys/proc/seccomp.c
@@ -5550,4 +5526,190 @@ old
         tsync_apply(self);
     }
 new
+end
+
+fault proc-vmstat-unnamed
+probe procprobe
+file rach2/sys/fs/procfs.c
+expect FAIL: /proc/vmstat has the free pages and the kilobytes read from the disks
+old
+    ap_str(t, "\npgpgin ");
+new
+    ap_str(t, "\npgpg_in ");
+end
+
+fault ptrace-seized-child-sigstop
+probe ptracemusl
+file rach2/sys/proc/ptrace.c
+expect PTRACEMUSL FAIL (the child of a seized fork did not first stop with SIGTRAP
+old
+    signo = self->tg->stop ? self->tg->stop : SIGTRAP;
+new
+    signo = (self->ptrace & PT_START) ? SIGSTOP : SIGTRAP;
+end
+
+# Namespaces, which nsmusl checks.
+
+fault ns-map-own-lower
+probe nsmusl
+file rach2/sys/proc/ns.c
+expect NSMUSL FAIL (the map reads back
+old
+    if (own == ns && ns->parent) {
+        own = ns->parent;
+    }
+new
+end
+
+fault ns-pid-kernel-numbers
+probe nsmusl
+file rach2/sys/proc/ns.c
+expect NSMUSL FAIL (the first process of a pid namespace is 1, its parent 0
+old
+uint32_t pid_seen(uint32_t kid)
+{
+    return pid_seen_by(current_proc, kid);
+}
+new
+uint32_t pid_seen(uint32_t kid)
+{
+    return kid;
+}
+end
+
+fault ns-uts-shared
+probe nsmusl
+file rach2/sys/proc/ns.c
+expect NSMUSL FAIL (setns returns to the first uts namespace
+old
+struct utsns *proc_utsns(const process_t *p)
+{
+    return proc_nsset(p)->uts;
+}
+new
+struct utsns *proc_utsns(const process_t *p)
+{
+    (void)p;
+    return &init_utsns;
+}
+end
+
+fault ns-net-reaches
+probe nsmusl
+file rach2/sys/network/socket/socket.c
+expect NSMUSL FAIL (a new network namespace reaches nothing
+old
+    return s->ns != NULL;
+new
+    return 0;
+end
+
+fault ns-mount-shared
+probe nsmusl
+file rach2/sys/fs/vfs.c
+expect NSMUSL FAIL (the mount is not seen outside its namespace
+old
+    m->ns_hidden = ~ns_bit();
+new
+    m->ns_hidden = 0;
+end
+
+fault ns-ipc-shared
+probe nsmusl
+file rach2/sys/ipc/sysv.c
+expect NSMUSL FAIL (a new ipc namespace has none of the first's objects
+old
+    return p->ns == proc_ipcns(current_proc);
+new
+    return p != NULL;
+end
+
+fault ns-setid-unmapped-owner
+probe nsmusl
+file rach2/sys/syscall_proc.c
+expect NSMUSL FAIL (an exec in a user namespace ignores a set-id bit of an owner it does not map
+old
+    if (!ns_ids_mapped(proc_userns(current_proc), s->id.uid, s->id.gid)) {
+        mode = 0;
+    }
+new
+end
+
+fault ns-chroot-first-only
+probe nsmusl
+file rach2/sys/syscall_fs.c
+expect NSMUSL FAIL (the user namespace's root may chroot
+old
+    if (rc == 0 && !ns_privileged(current_proc, proc_userns(current_proc))) {
+new
+    if (rc == 0 && !cred_privileged()) {
+end
+
+fault ns-wait-pid-after-reap
+probe nsmusl
+file rach2/sys/syscall_proc.c
+expect NSMUSL FAIL (its child is 2
+old
+    seen = pid_seen((uint32_t)rc);
+    ok = (!status || copy_to_user((void __user *)status, &r.status, sizeof(r.status)) == 0) &&
+         (!rusage_ptr || copy_to_user((void __user *)rusage_ptr, &r.ru, RUSAGE_BYTES) == 0);
+    wait_done(&r, ok);
+new
+    ok = (!status || copy_to_user((void __user *)status, &r.status, sizeof(r.status)) == 0) &&
+         (!rusage_ptr || copy_to_user((void __user *)rusage_ptr, &r.ru, RUSAGE_BYTES) == 0);
+    wait_done(&r, ok);
+    seen = pid_seen((uint32_t)rc);
+end
+
+fault ns-fdinfo-root-refused
+probe nsmusl
+file rach2/sys/syscall_fs.c
+expect NSMUSL FAIL (a helper sharing the directories chroots to /proc/self/fdinfo
+old
+    return rc == 0 && vp && vp->kind != VNODE_PROC_FDINFO_DIR ? -EINVAL : rc;
+new
+    return rc == 0 && vp ? -EINVAL : rc;
+end
+
+fault fdinfo-cloexec-unreported
+probe nsmusl
+file rach2/sys/fs/procfs.c
+expect NSMUSL FAIL (a file of fdinfo has the offset and the flags
+old
+    if (e->flags & FD_FLAG_CLOEXEC) {
+        flags |= 02000000u;
+    }
+new
+end
+
+fault walk-outside-root-lost
+probe chrootmusl
+file rach2/sys/fs/vfs.c
+expect CHROOTMUSL FAIL (a root on KRFFS: step 4)
+old
+    if (p[0] == '/' && p[1] == '/') {
+        cur.mnt = mounts[0];
+        cur.node = mounts[0]->root;
+    }
+new
+end
+
+fault memfd-root-has-a-path
+probe nsmusl
+file rach2/sys/fs/vfs.c
+expect NSMUSL FAIL (a descriptor of /proc opened before the chroot reaches self/fd
+old
+    if (!mnt->type->ops->path || mnt == vfs_memfd_mount()) {
+new
+    if (!mnt->type->ops->path) {
+end
+
+fault sys-cpu-offline-listed
+probe procprobe
+file rach2/sys/fs/procfs.c
+expect FAIL: /sys/devices/system/cpu has processor 0 online and none offline
+old
+        ap_str(t, attr == 1 ? "\n" : "0\n");
+new
+        ap_str(t, "0\n");
 end

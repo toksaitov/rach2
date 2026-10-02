@@ -5,6 +5,7 @@
 #include "ptrace.h"
 
 #include "fpu.h"
+#include "ns.h"
 #include "sched.h"
 #include "sigframe.h"
 #include "tgroup.h"
@@ -273,7 +274,7 @@ void ptrace_syscall_stop(isr_params_t *tf, uint32_t nr, int leaving)
     if (sig > 0 && sig <= KSIG_MAX) {
         k_memset(&info, 0, sizeof(info));
         info.code = SI_USER;
-        info.pid = self->tracer;
+        info.pid = pid_seen_by(self, self->tracer);
         signal_post_thread(self, sig, &info);
     }
 }
@@ -785,8 +786,8 @@ static int ptrace_attach(process_t *t, int seize, uint32_t opts)
     if (!seize) {
         k_memset(&info, 0, sizeof(info));
         info.code = SI_USER;
-        info.pid = current_proc->tgid;
-        info.uid = current_proc->ruid;
+        info.pid = pid_seen_by(t, current_proc->tgid);
+        info.uid = ns_uid_from_kernel(proc_userns(t), current_proc->ruid);
         signal_post_thread(t, SIGSTOP, &info);
     }
     ptrace_unpark(t);
@@ -1084,6 +1085,7 @@ int32_t sys_ptrace(isr_params_t *params)
     uint32_t request = params->ebx;
     uint32_t addr = params->edx;
     uint32_t data = params->esi;
+    uint32_t pid;
     process_t *t;
     struct k_siginfo info;
 
@@ -1093,7 +1095,8 @@ int32_t sys_ptrace(isr_params_t *params)
     if (request == PTRACE_TRACEME) {
         return ptrace_traceme();
     }
-    t = get_process(params->ecx);
+    pid = pid_named(params->ecx);
+    t = get_process(pid);
     if (!t || t->state == PROC_UNUSED || t->state == PROC_ZOMBIE) {
         return -ESRCH;
     }
@@ -1125,5 +1128,5 @@ int32_t sys_ptrace(isr_params_t *params)
     if (t->ptrace_status == 0) {
         return -ESRCH;
     }
-    return ptrace_stopped(t, params->ecx, request, addr, data);
+    return ptrace_stopped(t, pid, request, addr, data);
 }

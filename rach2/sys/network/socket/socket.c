@@ -25,6 +25,8 @@
 #include "../../lib/kerrno.h"
 #include "../../mm/kheap.h"
 #include "../../ipc/unix.h"
+#include "../../proc/ns.h"
+#include "../driver/netdev.h"
 
 /* The live sockets, each allocated from the heap when opened and freed
  * when its last reference goes. An incoming SYN allocates one from the
@@ -109,6 +111,28 @@ struct socket *socket_alloc(int type)
     return sock;
 }
 
+/* The namespace of the sockets whose network namespace has ended. */
+static struct netns net_gone;
+
+int socket_outside(const socket_t *s)
+{
+    return s->ns != NULL;
+}
+
+void net_ns_gone(struct netns *ns)
+{
+    socket_t *s;
+    uint32_t flags = net_lock();
+
+    for (s = sockets; s; s = s->next) {
+        if (s->ns == ns) {
+            s->ns = &net_gone;
+        }
+    }
+    net_unlock(flags);
+    unix_ns_gone(ns);
+}
+
 int socket_port_bound(uint16_t port)
 {
     const socket_t *s;
@@ -160,7 +184,8 @@ int socket_snapshot(int type, struct socket_row **rows)
     n = 0;
     flags = net_lock();
     for (s = sockets; s && n < room; s = s->next) {
-        if (!socket_counted(s, type)) {
+        if (!socket_counted(s, type) ||
+            s->ns != (net_ns_seen() ? NULL : (const struct netns *)proc_netns(current_proc))) {
             continue;
         }
         out[n].local_port = type == SOCK_RAW ? s->protocol : s->local_port;

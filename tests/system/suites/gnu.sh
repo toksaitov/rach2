@@ -23,9 +23,10 @@
 # compiling and linking a C and a C++ program that run; GDB stopping at a
 # breakpoint, stepping, printing a variable and a backtrace; the SpiderMonkey
 # shell running a script in its JIT; D-Bus's system bus and a login's session
-# bus answering a call; and chromium-headless-shell printing the DOM of a local
-# page with no complaint of D-Bus. Each row has its own bound and a failed row
-# does not stop the next, so a run reports every row the machine cannot yet do.
+# bus answering a call; and chromium-headless-shell, run by the test account
+# with its sandbox, printing the DOM of a local page with no complaint of D-Bus.
+# Each row has its own bound and a failed row does not stop the next, so a run
+# reports every row the machine cannot yet do.
 #
 # Usage: gnu.sh KERNEL IMAGE DISK PORT ROOT_PASSWORD TEST_PASSWORD
 #

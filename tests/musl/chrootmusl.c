@@ -1,24 +1,23 @@
 /**
  * chroot: a process's own root.
  *
- * The refusals come first: a file that is not a directory is ENOTDIR, a
- * missing path ENOENT, /proc and /dev EINVAL, and a caller who is not root
- * EPERM, after the path's own errors; chroot("/") changes nothing. A child
- * that chroots into a directory of mode 0700 and takes another uid is
- * refused chdir("/") with EACCES. A child
- * that chroots into a KRFFS directory under /tmp keeps its working directory
- * there, under its path from the new root; reads the root's files by
- * absolute paths and finds nothing of the tree above it; stays at the root
- * on ".."; cannot use a directory descriptor opened outside; and passes the
- * root to a child of fork and to a copy of this program it execs from
- * inside. A child whose working directory is outside the new root finds it
- * moved to the root, and a second chroot inside the first gives the working
- * directory its path from the inner root. In a tmpfs jail an absolute
- * symbolic link and one that climbs past the root by ".." both resolve
- * inside, and the working directory has its path from the root there too.
- * While a process has its root in a directory, rmdir refuses the directory
- * with EBUSY, on KRFFS and on tmpfs, and umount2 refuses the tmpfs; both
- * succeed once the process is gone.
+ * The refusals come first: a file that is not a directory is ENOTDIR, a missing
+ * path ENOENT, /proc and /dev EINVAL, and a caller who is not root EPERM, after
+ * the path's own errors; chroot("/") changes nothing. A child that chroots into
+ * a directory of mode 0700 and takes another uid is refused chdir("/") with
+ * EACCES. A child that chroots into a KRFFS directory under /tmp keeps its
+ * working directory there, under its path from the new root; reads the root's
+ * files by absolute paths and finds nothing of the tree above it; stays at the
+ * root on ".."; opens a file through a directory descriptor opened outside, as
+ * Linux does, though fchdir to it is refused; and passes the root to a child of
+ * fork and to a copy of this program it execs from inside. A child whose
+ * working directory is outside the new root finds it moved to the root, and a
+ * second chroot inside the first gives the working directory its path from the
+ * inner root. In a tmpfs jail an absolute symbolic link and one that climbs
+ * past the root by ".." both resolve inside, and the working directory has its
+ * path from the root there too. While a process has its root in a directory,
+ * rmdir refuses the directory with EBUSY, on KRFFS and on tmpfs, and umount2
+ * refuses the tmpfs; both succeed once the process is gone.
  *
  * Prints "CHROOTMUSL OK" on success and "CHROOTMUSL FAIL (detail)" otherwise.
  */
@@ -226,8 +225,9 @@ static int private_root(void)
 
 /**
  * A root on KRFFS: the child keeps a working directory inside under its new
- * path, loses a directory descriptor from outside, stays at the root on
- * "..", and passes the root to a child of fork and to what it execs.
+ * path, reaches the tree outside through a directory descriptor opened
+ * there but cannot fchdir to it, stays at the root on "..", and passes the
+ * root to a child of fork and to what it execs.
  */
 static int krffs_root(void)
 {
@@ -236,6 +236,7 @@ static int krffs_root(void)
 
     if (pid == 0) {
         int out = open("/musl", O_RDONLY | O_DIRECTORY);
+        int through;
         pid_t grandchild;
 
         if (out < 0 || chdir(JAIL "/dir") != 0 || chroot(JAIL) != 0) {
@@ -248,8 +249,8 @@ static int krffs_root(void)
         if (st != 0) {
             _exit(10 + st);
         }
-        if (!refused(fchdir(out), ENOENT) ||
-            !refused(openat(out, "chrootmusl", O_RDONLY), ENOENT)) {
+        through = openat(out, "chrootmusl", O_RDONLY);
+        if (!refused(fchdir(out), ENOENT) || through < 0 || close(through) != 0) {
             _exit(4);
         }
         if (chdir("..") != 0 || !cwd_is("/") || chdir("..") != 0 || !cwd_is("/")) {

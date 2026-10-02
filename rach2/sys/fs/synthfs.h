@@ -66,9 +66,17 @@ enum vnode_kind {
     VNODE_PROC_SYSVIPC_DIR,  /* /proc/sysvipc: the System V objects' directory */
     VNODE_PROC_SYSVIPC,      /* /proc/sysvipc/{shm,sem,msg}, by `procfile` */
     VNODE_PROC_NET_STAT_DIR, /* /proc/net/stat: the route and ARP counters' directory */
+    VNODE_PROC_NS_DIR,       /* /proc/<pid>/ns: the links to its namespaces */
+    VNODE_PROC_NS_LINK,      /* /proc/<pid>/ns/<kind>, by `procfd` (proc/ns.h's NS_) */
+    VNODE_PROC_FDINFO_DIR,   /* /proc/<pid>/fdinfo: a file for each descriptor */
+    VNODE_PROC_FDINFO,       /* /proc/<pid>/fdinfo/<n>: its offset and flags, by `procfd` */
     VNODE_ENOENT,            /* under a synthetic mount, but no such entry */
     VNODE_ENOTDIR            /* under a synthetic mount, a non-dir used as a directory */
 };
+
+/** The name of /proc/<pid>/ns's link of the namespace kind `kind`, NULL
+ * past the last. */
+const char *synth_ns_name(int kind);
 
 /* /proc/<pid>/<file> kinds, and the global boot line (a procfs_file origin). */
 #define SYNTH_PROC_STAT        1
@@ -123,6 +131,10 @@ enum vnode_kind {
 #define SYNTH_PROC_NETSTAT_RT  46
 #define SYNTH_PROC_NETSTAT_ARP 47
 #define SYNTH_PROC_VMSTAT      48
+/* /proc/<pid>/uid_map, gid_map and setgroups, of its user namespace. */
+#define SYNTH_PROC_UID_MAP     49
+#define SYNTH_PROC_GID_MAP     50
+#define SYNTH_PROC_SETGROUPS   51
 
 /* PID sentinel meaning "the calling process" (/proc/self), resolved by the
  * glue. */
@@ -136,7 +148,7 @@ struct vpath {
     int kind;
     char name[64]; /* VNODE_DEV: device leaf name */
     int pid;       /* VNODE_PROC_*: SYNTH_PID_SELF for /proc/self */
-    int procfd;    /* VNODE_PROC_FD_LINK: the linked descriptor number */
+    int procfd;    /* PROC_FD_LINK, PROC_FDINFO: the descriptor number; NS_LINK: the kind */
     int procfile;  /* VNODE_PROC_FILE: SYNTH_PROC_* */
     int pts_index; /* VNODE_PTS: the pty slave number N in /dev/pts/N */
     int tid;       /* VNODE_PROC_*: TID in /proc/<pid>/task/TID, or 0 */
@@ -169,15 +181,16 @@ void synth_dir_path(int kind, int pid, int tid, char *out, int cap);
 
 /*
  * /proc/sys: a few of Linux's sysctl files, in a table of entries, of which
- * kernel/hostname and net/ipv4/ip_forward take a write. Entry 0 is /proc/sys
- * itself; every other entry has its directory as a `parent` entry, and a
- * file has its text. Each accessor answers NULL or -1 for an index past the
- * table.
+ * kernel/hostname, kernel/domainname and net/ipv4/ip_forward take a write.
+ * Entry 0 is /proc/sys itself; every other entry has its directory as a
+ * `parent` entry, and a file has its text. Each accessor answers NULL or -1
+ * for an index past the table.
  */
 int synth_sys_count(void);
-/* The entry of kernel/hostname, whose text is the host name of the moment,
- * which procfs reads, and not the table's. */
+/* The entries of kernel/hostname and domainname, whose texts are the names
+ * of the moment, which procfs reads, and not the table's. */
 #define SYNTH_SYS_HOSTNAME   11
+#define SYNTH_SYS_DOMAINNAME 12
 /* The entry of net/ipv4/ip_forward, which takes a write of 0. */
 #define SYNTH_SYS_IP_FORWARD 22
 /** Whether a privileged caller may write the file entry `entry`. */

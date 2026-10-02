@@ -40,7 +40,7 @@ make test-image     # build both sets and stage build/images/test.krffs
 tests/run default
 ```
 
-This suite builds the test image and runs `tests/system/runner/runtests.c` with a 300-second run limit and a 60-second limit for each program. The runner boots one headless QEMU machine with `-cpu max`, waits for the debug shell, and runs the 113 entries in its `PROBES` list in order. It is in the core tier, so `make test` runs it too.
+This suite builds the test image and runs `tests/system/runner/runtests.c` with a 300-second run limit and a 60-second limit for each program. The runner boots one headless QEMU machine with `-cpu max`, waits for the debug shell, and runs the 114 entries in its `PROBES` list in order. It is in the core tier, so `make test` runs it too.
 
 The runner scores the kernel diagnostic that returns control to the debug shell. Exit status 0 passes. A nonzero status, signal, absent return diagnostic, timeout, early QEMU exit, or program skipped after an earlier hang fails. A program's own success text is not the verdict. After `musl/clockmusl`, the runner also compares the guest epoch with the host clock and permits a 30-second difference.
 
@@ -58,7 +58,7 @@ rebootprobe searchprobe
 stickyprobe
 ```
 
-The 55 musl programs in the default suite are:
+The 56 musl programs in the default suite are:
 
 ```text
 authmusl permmusl suidmusl pwauthmusl passwdmusl addusermusl loginmusl
@@ -66,8 +66,8 @@ readvmusl timemusl clockmusl statmusl stampmusl execargmusl spawnmusl sigmusl
 clonemusl sigframemusl vmamusl pathmaxmusl fdcallmusl atcallmusl preadmusl
 truncmusl opathmusl lchownmusl direntmusl cputimemusl clockidmusl schedmusl
 waitidmusl prctlmusl stackmusl sockflagmusl capmusl epollmusl timerfdmusl
-netlinkmusl inotifymusl unixmusl mapmusl ipcmusl seccompmusl fifomusl statxmusl
-lockmusl tmpfsmusl
+netlinkmusl inotifymusl unixmusl mapmusl ipcmusl seccompmusl nsmusl fifomusl
+statxmusl lockmusl tmpfsmusl
 mknodmusl memfdmusl chrootmusl vforkmusl ptracemusl callsmusl coremusl
 threadmusl ishmusl
 ```

@@ -196,6 +196,16 @@ struct netdev {
 
 /** How many interfaces the last probe brought up, and the nth of them. */
 int netdev_count(void);
+
+/** Whether the caller is in the first network namespace, whose interfaces
+ * and tables are the machine's; another has none (proc/ns.h). */
+int net_ns_seen(void);
+
+/** The interfaces the caller sees: netdev_count() in the first network
+ * namespace, 0 in another. The calls that list interfaces to a program
+ * count them by this; the stack itself, which also runs in interrupts, by
+ * netdev_count(). */
+int netdev_seen_count(void);
 struct netdev *netdev_at(int n);
 
 /** The interface of that name, or NULL. */

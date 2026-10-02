@@ -15,8 +15,21 @@
  * protocol layers are substitutes that no row calls.
  */
 #include "network/socket/socket.c"
+#include "ns_first.h"
 
 extern int printf(const char *format, ...);
+
+/** The model is one network namespace, the first, whose devices every
+ * caller sees and whose end closes nothing. */
+int net_ns_seen(void)
+{
+    return 1;
+}
+
+void unix_ns_gone(const struct netns *ns)
+{
+    (void)ns;
+}
 
 static wait_queue_t *woken;
 static uint32_t woken_kinds;

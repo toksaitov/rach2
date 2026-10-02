@@ -102,7 +102,7 @@ int packet_bind(struct socket *sock, int ifindex)
     struct packet_binding *b;
 
     /* 0 is every interface; any other index must be one of this machine's. */
-    if (ifindex != 0 && (ifindex < 1 || ifindex > netdev_count())) {
+    if (ifindex != 0 && (ifindex < 1 || ifindex > netdev_seen_count())) {
         return -ENODEV;
     }
 
@@ -377,7 +377,7 @@ int packet_send(struct socket *sock, int ifindex, const uint8_t *dst_mac, uint16
     if (ethertype != ETH_TYPE_IP && ethertype != ETH_TYPE_ARP) {
         return -EINVAL;
     }
-    if (ifindex != 0 && (ifindex < 1 || ifindex > netdev_count())) {
+    if (ifindex != 0 && (ifindex < 1 || ifindex > netdev_seen_count())) {
         return -ENODEV;
     }
     /* The Ethernet transmit buffer is shared with the receive interrupt. */

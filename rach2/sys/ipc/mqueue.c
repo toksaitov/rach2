@@ -16,6 +16,7 @@
 #include "../isr.h"
 #include "../proc/process.h"
 #include "../proc/tgroup.h"
+#include "../proc/ns.h"
 #include "../proc/wait_queue.h"
 #include "../mm/mm.h"
 #include "../fs/fd.h"
@@ -60,8 +61,9 @@ struct mq_msg {
 };
 
 struct mqueue {
-    struct mqueue *next; /* the list of named queues */
-    char *name;          /* NULL once unlinked */
+    struct mqueue *next;    /* the list of named queues */
+    char *name;             /* NULL once unlinked */
+    const struct ipcns *ns; /* the IPC namespace whose name it is */
     uint32_t refs;
     uint32_t uid, gid, mode;
     int32_t maxmsg, msgsize, curmsgs;
@@ -107,7 +109,7 @@ static void mq_put(struct mqueue *q)
     nqueues--;
 }
 
-/** The named queue `name`, or NULL. */
+/** The queue named `name` in the caller's IPC namespace, or NULL. */
 static struct mqueue *mq_find(const char *name)
 {
     struct mqueue *q;
@@ -116,7 +118,7 @@ static struct mqueue *mq_find(const char *name)
     for (q = queues; q; q = q->next) {
         for (i = 0; q->name[i] && q->name[i] == name[i]; i++) {
         }
-        if (q->name[i] == name[i]) {
+        if (q->name[i] == name[i] && q->ns == proc_ipcns(current_proc)) {
             return q;
         }
     }
@@ -321,6 +323,7 @@ static int32_t mq_create(const char *name, uint32_t mode, const void __user *uat
         return -ENOMEM;
     }
     k_memcpy(q->name, name, k_strlen(name) + 1);
+    q->ns = proc_ipcns(current_proc);
     q->refs = 1;
     q->uid = current_proc->euid;
     q->gid = current_proc->egid;
@@ -555,8 +558,8 @@ static void mq_notify_now(struct mqueue *q)
     if (p && q->notify_how == SIGEV_SIGNAL) {
         k_memset(&info, 0, sizeof(info));
         info.code = SI_MESGQ;
-        info.pid = current_proc->tgid;
-        info.uid = current_proc->ruid;
+        info.pid = pid_seen_by(p, current_proc->tgid);
+        info.uid = ns_uid_from_kernel(proc_userns(p), current_proc->ruid);
         info.status = q->notify_value;
         signal_post_info(p, q->notify_signo, &info);
     }
@@ -793,4 +796,18 @@ int32_t sys_mq_getsetattr(struct isr_params *params)
         }
     }
     return 0;
+}
+
+void mq_ns_gone(const struct ipcns *ns)
+{
+    struct mqueue *q = queues;
+
+    while (q) {
+        struct mqueue *next = q->next;
+
+        if (q->ns == ns) {
+            mq_unname(q);
+        }
+        q = next;
+    }
 }

@@ -18,8 +18,12 @@ struct vfs_ref;
 #define PROCFS_FSID 6u
 /* The device number /sys reports for its nodes. */
 #define SYSFS_FSID  7u
+/* The device number of a namespace's file, which /proc/<pid>/ns's links
+ * reach, Linux's nsfs's 0:4. */
+#define NSFS_DEV    4u
 
-/** Resolve a vpath pid (SYNTH_PID_SELF is the caller) to a live pid, or -1. */
+/** Resolve a vpath pid (SYNTH_PID_SELF is the caller), a number in the
+ * caller's PID namespace, to the kernel's id of a live process, or -1. */
 int procfs_resolve_pid(int pid);
 
 /** Whether the caller may see process `pid`'s memory map and descriptors,
@@ -71,6 +75,17 @@ int procfs_exe_name(int pid, char *buf, int cap);
 int procfs_readlink_dir(int pid, int root, char *buf, int cap);
 
 /**
+ * /proc/<pid>/ns/<kind>, `kind` proc/ns.h's NS_: its target, "KIND:[INUM]",
+ * into `buf` of `cap` bytes, and its length; the inode number of the
+ * namespace, 0 for no process; and an open of it, a descriptor on the
+ * namespace. -ENOENT for no process, -EACCES for a caller that may not read
+ * the process's memory, and for an open for writing.
+ */
+int procfs_readlink_ns(int pid, int kind, char *buf, int cap);
+uint32_t procfs_ns_ino(int pid, int kind);
+int procfs_open_ns(int pid, int kind, int flags);
+
+/**
  * The file /proc/<pid>/exe reaches, which the resolver goes on from: the
  * mount and the node of the program's file the process's address space keeps
  * (`mm_exe_open`), which stay while nothing sleeps. 0, -ENOENT for no such
@@ -78,7 +93,8 @@ int procfs_readlink_dir(int pid, int root, char *buf, int cap);
  */
 int procfs_exe_file(int pid, struct vfs_ref *out);
 
-/** PID-directory enumeration: the nth live pid (n >= 0), or -1 past the end. */
+/** PID-directory enumeration: the pid in the caller's PID namespace of the
+ * nth live process it sees (n >= 0), or -1 past the end. */
 int procfs_nth_pid(int n);
 
 /* Stable synthetic inodes for stat. */

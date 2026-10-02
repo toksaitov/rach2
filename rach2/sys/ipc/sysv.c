@@ -14,10 +14,12 @@
  */
 
 #include "sysv.h"
+#include "mqueue.h"
 
 #include "../isr.h"
 #include "../proc/process.h"
 #include "../proc/tgroup.h"
+#include "../proc/ns.h"
 #include "../proc/wait_queue.h"
 #include "../mm/mm.h"
 #include "../fs/fd.h"
@@ -56,7 +58,9 @@
 #define MSGMNB 16384u
 
 /* The permissions every object begins with. `mode` has the nine bits and,
- * for a segment, SHM_DEST once it is removed while attached. */
+ * for a segment, SHM_DEST once it is removed while attached. `ns` is the
+ * IPC namespace it was made in (proc/ns.h), which alone sees it, and
+ * `ipc_gone` for a segment its namespace's end left attached. */
 struct sysv_perm {
     int32_t key;
     uint32_t uid, gid, cuid, cgid;
@@ -65,7 +69,12 @@ struct sysv_perm {
     int place;
     uint32_t refs;
     int removed;
+    const struct ipcns *ns;
 };
+
+/* The namespace of the segments an IPC namespace's end left attached, which
+ * no process is in. */
+static struct ipcns ipc_gone;
 
 /* i386's struct ipc64_perm. */
 struct ipc64_perm {
@@ -131,6 +140,12 @@ static int sysv_owner(const struct sysv_perm *p)
            proc_privileged(current_proc);
 }
 
+/** Whether `p` is in the caller's IPC namespace. */
+static int sysv_mine(const struct sysv_perm *p)
+{
+    return p->ns == proc_ipcns(current_proc);
+}
+
 /** The id of `p`. */
 static int32_t sysv_id(const struct sysv_perm *p)
 {
@@ -146,7 +161,7 @@ static struct sysv_perm *sysv_find(int kind, int32_t id)
         return NULL;
     }
     p = tables[kind][(uint32_t)id % SYSV_SEQ < SYSV_SLOTS ? (uint32_t)id % SYSV_SEQ : 0];
-    return p && (uint32_t)id % SYSV_SEQ < SYSV_SLOTS && sysv_id(p) == id ? p : NULL;
+    return p && (uint32_t)id % SYSV_SEQ < SYSV_SLOTS && sysv_id(p) == id && sysv_mine(p) ? p : NULL;
 }
 
 /** The object of `kind` with key `key`, not removed, or NULL. */
@@ -157,7 +172,7 @@ static struct sysv_perm *sysv_find_key(int kind, int32_t key)
     for (i = 0; i < SYSV_SLOTS; i++) {
         struct sysv_perm *p = tables[kind][i];
 
-        if (p && !p->removed && p->key == key) {
+        if (p && !p->removed && p->key == key && sysv_mine(p)) {
             return p;
         }
     }
@@ -181,6 +196,7 @@ static int32_t sysv_enter(int kind, struct sysv_perm *p, int32_t key, uint32_t f
     p->mode = flag & 0777u;
     p->seq = seqs[kind]++ % (0x7FFFFFFFu / SYSV_SEQ);
     p->place = i;
+    p->ns = proc_ipcns(current_proc);
     tables[kind][i] = p;
     return sysv_id(p);
 }
@@ -219,26 +235,40 @@ static struct sysv_perm *sysv_lookup(int kind, int32_t key, uint32_t flag, int32
     return p;
 }
 
-/** Fill the 64-bit permissions `out` from `p`. */
+/** The pid `pid` of an object's record as the caller sees it, 0 kept. */
+static int32_t sysv_pid_seen(int32_t pid)
+{
+    return pid > 0 ? (int32_t)pid_seen((uint32_t)pid) : pid;
+}
+
+/** Fill the 64-bit permissions `out` from `p`, with the ids as the caller
+ * sees them. */
 static void sysv_perm_out(const struct sysv_perm *p, struct ipc64_perm *out)
 {
     k_memset(out, 0, sizeof(*out));
     out->key = p->key;
-    out->uid = p->uid;
-    out->gid = p->gid;
-    out->cuid = p->cuid;
-    out->cgid = p->cgid;
+    out->uid = uid_seen(p->uid);
+    out->gid = gid_seen(p->gid);
+    out->cuid = uid_seen(p->cuid);
+    out->cgid = gid_seen(p->cgid);
     out->mode = (uint16_t)p->mode;
     out->seq = (uint16_t)p->seq;
 }
 
 /** IPC_SET's change of `p` from `in`: the owner, the group and the nine
- * bits. */
-static void sysv_perm_set(struct sysv_perm *p, const struct ipc64_perm *in)
+ * bits. 0, or -EINVAL for an id the caller's user namespace does not map. */
+static int32_t sysv_perm_set(struct sysv_perm *p, const struct ipc64_perm *in)
 {
-    p->uid = in->uid;
-    p->gid = in->gid;
+    int64_t uid = uid_named(in->uid);
+    int64_t gid = gid_named(in->gid);
+
+    if (uid < 0 || gid < 0) {
+        return -EINVAL;
+    }
+    p->uid = (uint32_t)uid;
+    p->gid = (uint32_t)gid;
     p->mode = (p->mode & ~0777u) | (in->mode & 0777u);
+    return 0;
 }
 
 /** The highest place of `kind`'s table in use, which IPC_INFO and the
@@ -247,7 +277,7 @@ static int32_t sysv_highest(int kind)
 {
     int32_t i;
 
-    for (i = SYSV_SLOTS - 1; i > 0 && !tables[kind][i]; i--) {
+    for (i = SYSV_SLOTS - 1; i > 0 && !(tables[kind][i] && sysv_mine(tables[kind][i])); i--) {
     }
     return i;
 }
@@ -264,6 +294,7 @@ static struct sysv_perm *sysv_target(int kind, int32_t id, int by_place, int any
 
     if (by_place) {
         p = id >= 0 && id < SYSV_SLOTS ? tables[kind][id] : NULL;
+        p = p && sysv_mine(p) ? p : NULL;
     } else {
         p = sysv_find(kind, id);
     }
@@ -513,8 +544,8 @@ static void shm_stat_out(struct shm_seg *s, struct shmid64_ds *ds)
     ds->dtime_high = (uint32_t)(s->dtime >> 32);
     ds->ctime = (uint32_t)s->ctime;
     ds->ctime_high = (uint32_t)(s->ctime >> 32);
-    ds->cpid = s->cpid;
-    ds->lpid = s->lpid;
+    ds->cpid = sysv_pid_seen(s->cpid);
+    ds->lpid = sysv_pid_seen(s->lpid);
     ds->nattch = shm_attaches(shm_mem(s));
 }
 
@@ -538,7 +569,7 @@ static int32_t shm_info_out(int cmd, void __user *buf)
     for (i = 0; i < SYSV_SLOTS; i++) {
         const struct shm_seg *s = (const struct shm_seg *)tables[SYSV_SHM][i];
 
-        if (s) {
+        if (s && sysv_mine(&s->perm)) {
             used.used_ids++;
             used.shm_tot += (s->size + 4095u) / 4096u;
         }
@@ -588,7 +619,9 @@ static int32_t shm_ctl(int32_t id, int cmd, void __user *buf)
         if (!sysv_owner(&s->perm)) {
             return -EPERM;
         }
-        sysv_perm_set(&s->perm, &ds.perm);
+        if (sysv_perm_set(&s->perm, &ds.perm) != 0) {
+            return -EINVAL;
+        }
         s->ctime = sysv_now();
         return 0;
     case IPC_RMID:
@@ -997,7 +1030,7 @@ static int32_t sem_info_out(int cmd, void __user *buf)
         if (i == 0) {
             info.semusz = info.semaem = 0;
         }
-        if (set) {
+        if (set && sysv_mine(&set->perm)) {
             info.semusz++;
             info.semaem += (int32_t)set->nsems;
         }
@@ -1063,7 +1096,7 @@ static int32_t sem_ctl_one(struct sem_set *set, int num, int cmd, uint32_t arg)
     case GETVAL:
         return s->val;
     case GETPID:
-        return s->pid;
+        return sysv_pid_seen(s->pid);
     case GETNCNT:
         return s->ncnt;
     case GETZCNT:
@@ -1109,7 +1142,9 @@ static int32_t sem_ctl_owner(struct sem_set *set, int cmd, void __user *buf)
         return -EPERM;
     }
     if (cmd == IPC_SET) {
-        sysv_perm_set(&set->perm, &ds.perm);
+        if (sysv_perm_set(&set->perm, &ds.perm) != 0) {
+            return -EINVAL;
+        }
         set->ctime = sysv_now();
         return 0;
     }
@@ -1450,8 +1485,8 @@ static void msg_stat_out(const struct msg_queue *q, struct msqid64_ds *ds)
     ds->cbytes = q->cbytes;
     ds->qnum = q->qnum;
     ds->qbytes = q->qbytes;
-    ds->lspid = q->lspid;
-    ds->lrpid = q->lrpid;
+    ds->lspid = sysv_pid_seen(q->lspid);
+    ds->lrpid = sysv_pid_seen(q->lrpid);
 }
 
 /** IPC_INFO and MSG_INFO into `buf`, MSG_INFO with the queues in use as
@@ -1476,7 +1511,7 @@ static int32_t msg_info_out(int cmd, void __user *buf)
         if (i == 0) {
             info.msgpool = info.msgmap = info.msgtql = 0;
         }
-        if (q) {
+        if (q && sysv_mine(&q->perm)) {
             info.msgpool++;
             info.msgmap += (int32_t)q->qnum;
             info.msgtql += (int32_t)q->cbytes;
@@ -1501,7 +1536,9 @@ static int32_t msg_ctl_owner(struct msg_queue *q, int cmd, void __user *buf)
         return -EPERM;
     }
     if (cmd == IPC_SET) {
-        sysv_perm_set(&q->perm, &ds.perm);
+        if (sysv_perm_set(&q->perm, &ds.perm) != 0) {
+            return -EINVAL;
+        }
         q->qbytes = ds.qbytes;
         q->ctime = sysv_now();
         q->gen++;
@@ -1754,23 +1791,23 @@ int sysv_row_at(int kind, int i, struct sysv_row *row)
         shm_reap();
     }
     p = tables[kind][i];
-    if (!p) {
+    if (!p || !sysv_mine(p)) {
         return 0;
     }
     k_memset(row, 0, sizeof(*row));
     row->key = p->key;
     row->id = sysv_id(p);
     row->mode = p->mode;
-    row->uid = p->uid;
-    row->gid = p->gid;
-    row->cuid = p->cuid;
-    row->cgid = p->cgid;
+    row->uid = uid_seen(p->uid);
+    row->gid = gid_seen(p->gid);
+    row->cuid = uid_seen(p->cuid);
+    row->cgid = gid_seen(p->cgid);
     if (kind == SYSV_SHM) {
         const struct shm_seg *s = (const struct shm_seg *)p;
 
         row->a = s->size;
-        row->b = (uint32_t)s->cpid;
-        row->c = (uint32_t)s->lpid;
+        row->b = (uint32_t)sysv_pid_seen(s->cpid);
+        row->c = (uint32_t)sysv_pid_seen(s->lpid);
         row->d = shm_attaches(shm_mem(s));
         row->t0 = s->atime;
         row->t1 = s->dtime;
@@ -1786,11 +1823,40 @@ int sysv_row_at(int kind, int i, struct sysv_row *row)
 
         row->a = q->cbytes;
         row->b = q->qnum;
-        row->c = (uint32_t)q->lspid;
-        row->e = (uint32_t)q->lrpid;
+        row->c = (uint32_t)sysv_pid_seen(q->lspid);
+        row->e = (uint32_t)sysv_pid_seen(q->lrpid);
         row->t0 = q->stime;
         row->t1 = q->rtime;
         row->t2 = q->ctime;
     }
     return 1;
+}
+
+void ipc_ns_gone(struct ipcns *ns)
+{
+    int i;
+
+    for (i = 0; i < SYSV_SLOTS; i++) {
+        struct shm_seg *s = (struct shm_seg *)tables[SYSV_SHM][i];
+        struct sem_set *set = (struct sem_set *)tables[SYSV_SEM][i];
+        struct msg_queue *q = (struct msg_queue *)tables[SYSV_MSG][i];
+
+        if (s && s->perm.ns == ns) {
+            s->perm.mode |= SHM_DEST;
+            s->perm.key = IPC_PRIVATE;
+            s->perm.ns = &ipc_gone;
+        }
+        if (set && set->perm.ns == ns) {
+            sysv_leave(SYSV_SEM, &set->perm);
+            wq_wake_all(&set->wq);
+            sem_put(set);
+        }
+        if (q && q->perm.ns == ns) {
+            sysv_leave(SYSV_MSG, &q->perm);
+            wq_wake_all(&q->wq);
+            msg_put(q);
+        }
+    }
+    shm_reap();
+    mq_ns_gone(ns);
 }

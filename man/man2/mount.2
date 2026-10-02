@@ -1,4 +1,4 @@
-.Dd September 28, 2026
+.Dd October 2, 2026
 .Dt MOUNT 2
 .Os
 .Sh NAME
@@ -84,6 +84,21 @@ Other bits, including
 and
 .Dv MS_MOVE ,
 are refused.
+A change of propagation alone,
+.Dv MS_PRIVATE ,
+.Dv MS_SLAVE ,
+.Dv MS_SHARED
+or
+.Dv MS_UNBINDABLE ,
+with
+.Dv MS_REC
+or without, succeeds and changes nothing, since a mount is seen in the
+namespaces that had it when it was made and in none it is made in later.
+.Pp
+A mount is made in the caller's mount namespace alone, and an unmount
+removes it from that namespace, and from the system when no other
+namespace has it; see
+.Xr unshare 2 .
 See
 .Xr mount 8
 for the command interface.
@@ -148,6 +163,16 @@ themselves with
 a directory of the tmpfs
 .Pa /dev/shm
 below them is a target like any other.
+A mount of type
+.Ql proc
+over a directory of
+.Pa /proc
+succeeds and changes nothing, since every
+.Pa /proc
+shows the processes of its reader's PID namespace, as
+.Ql unshare --mount-proc
+would have it; one anywhere else fails with
+.Er ENODEV .
 .It
 Reject the root of an already placed mount with
 .Er EBUSY .
@@ -346,7 +371,13 @@ or
 .Pa \&..
 and reaches something else.
 .It Bq Er EPERM
-The caller's effective user ID is not 0.
+The caller's effective user ID is not 0, and it is not privileged over its
+own mount namespace, or is and mounts a type other than
+.Ql proc ,
+.Ql sysfs
+or
+.Ql tmpfs ,
+or remounts.
 .It Bq Er EROFS
 An exFAT unmount could not write its metadata after an earlier write
 failure.

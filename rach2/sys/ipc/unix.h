@@ -128,4 +128,9 @@ int32_t fs_socket_lookup(const char *path, struct vfs_mount **mnt, uint32_t *ino
 /** Let go of the file `fs_socket_bind` held. */
 void fs_socket_unbind(struct vfs_ref *ref);
 
+/** The end of the network namespace `ns`: its sockets' abstract names are
+ * found by no one. */
+struct netns;
+void unix_ns_gone(const struct netns *ns);
+
 #endif /* _UNIX_H_ */

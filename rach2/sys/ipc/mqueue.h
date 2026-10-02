@@ -21,4 +21,9 @@ int32_t sys_mq_getsetattr(struct isr_params *params);
 int32_t sys_mq_timedsend_time64(struct isr_params *params);
 int32_t sys_mq_timedreceive_time64(struct isr_params *params);
 
+/** The end of the IPC namespace `ns`: its queues lose their names, and each
+ * lives while a descriptor has it. */
+struct ipcns;
+void mq_ns_gone(const struct ipcns *ns);
+
 #endif /* _MQUEUE_H_ */

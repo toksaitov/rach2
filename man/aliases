@@ -353,11 +353,13 @@ seq 1 busybox-coreutils
 set_robust_list 2 futex
 set_tid_address 2 set_thread_area
 setarch 1 busybox-util-linux
+setdomainname 2 uname
 setfattr 1 busybox-miscutils
 setgid32 2 setuid
 setgroups32 2 setuid
 sethostname 2 uname
 setlogcons 1 busybox-console-tools
+setns 2 unshare
 setpgid 2 getpid
 setpriority 2 getpriority
 setregid32 2 setuid
