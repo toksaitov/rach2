@@ -140,10 +140,10 @@ PY
     tr -d '\r' < "$work/$row.serial.log" > "$work/$row.log"
     sed -n '/^cmdline:/p; /^\/dev\/disk/p; /^  [^ ]/p; /^accept-status:/p' "$work/$row.log"
     grep -qx "accept-status: $expected" "$work/$row.log" || fail "$row: wrong acceptance status"
-    grep -q '^  disk: /dev/disk0 is not published; no MBR read on this boot$' \
-        "$work/$row.log" || fail "$row: absent-window skip did not run"
-    if grep -q 'the MBR hashes to\|rach2.diskdiag' "$work/$row.log"; then
-        fail "$row: unexpected whole-disk read or diagnostic"
+    grep -q '^  disk: the MBR hashes to [0-9a-f]\{64\}$' "$work/$row.log" ||
+        fail "$row: the whole-disk window every boot publishes gave no MBR"
+    if grep -q 'rach2.diskdiag' "$work/$row.log"; then
+        fail "$row: unexpected diagnostic"
     fi
     case "$row" in
         candidate)

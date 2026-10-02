@@ -162,6 +162,13 @@ int diskinfo_format_disks(char *buf, int cap);
  */
 int diskinfo_probe(int mounted);
 
+/**
+ * Publish `/dev/diskN`, mode 0400, for every disk the boot registered,
+ * probing none: an everyday boot's whole-disk nodes, which its write handler
+ * refuses, as Linux publishes a disk's node to root.
+ */
+void diskinfo_publish(void);
+
 /** The record, whatever state it is in. Never NULL. */
 const struct diskinfo *diskinfo_get(void);
 

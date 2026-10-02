@@ -97,7 +97,7 @@ text = path.read_text()
 changes = {
     'partition': ('*"/dev/disk0p3 / ext2 rw,relatime"*)', '*"/dev/disk0p"[34]" / ext2 rw,relatime"*)'),
     'readonly': ('*"/dev/disk0p3 / ext2 rw,relatime"*)', '*"/dev/disk0p3 / ext2 r"[ow]",relatime"*)'),
-    'window': ('note "disk: /dev/disk0 is not published; no MBR read on this boot"', 'bad "disk: /dev/disk0 is not published; no MBR read on this boot"'),
+    'window': ('note "disk: the MBR hashes to $mbr"', 'bad "disk: the MBR hashes to $mbr"'),
     'slot': ('printf("bootctl: booted: fallback\\n");', 'printf("bootctl: booted: candidate\\n");'),
 }
 old, new = changes[fault]

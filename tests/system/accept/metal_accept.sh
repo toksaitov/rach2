@@ -390,7 +390,7 @@ else
                 # A hash of a pipe can succeed after dd fails or reads nothing.
                 # Keep the sector until its read status and length are checked.
                 # shellcheck disable=SC2016
-                sector="$(run 'f=$(mktemp /tmp/accept-mbr.XXXXXX) || exit 1; trap '"'"'rm -f "$f"'"'"' EXIT; /bin/busybox dd if=/dev/disk0 of="$f" bs=512 count=1 >/dev/null 2>&1 && [ "$(wc -c < "$f")" = 512 ] && sha256sum "$f"')" || sector=""
+                sector="$(run 'f=$(mktemp /dev/shm/accept-mbr.XXXXXX) || exit 1; trap '"'"'rm -f "$f"'"'"' EXIT; /bin/busybox dd if=/dev/disk0 of="$f" bs=512 count=1 >/dev/null 2>&1 && [ "$(wc -c < "$f")" = 512 ] && sha256sum "$f"')" || sector=""
                 mbr="$(printf '%s\n' "$sector" | awk '{print $1}')"
                 case "$mbr" in
                     ''|*[!0-9a-f]*) mbr="" ;;

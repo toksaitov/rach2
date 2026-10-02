@@ -1,4 +1,4 @@
-.Dd September 24, 2026
+.Dd October 3, 2026
 .Dt DISK 7
 .Os
 .Sh NAME
@@ -15,10 +15,11 @@ A new disk reuses the lowest released number.
 The whole disk numbered
 .Ar N .
 The node is owned by root, with mode 0400.
-Whole-disk nodes are published for every disk by a recovery kernel or with
+The node is published for every disk the boot found, as Linux gives
+root a disk's node; a recovery kernel, or
 .Ql rach2.diskdiag
-on the boot line.
-A USB stick's whole-disk node is always published.
+on the boot line, also probes for a disk the boot did not find.
+A USB stick's whole-disk node is published when it is plugged in.
 .It Pa /dev/diskNpM
 Partition
 .Ar M

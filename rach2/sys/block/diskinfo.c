@@ -299,6 +299,16 @@ int diskinfo_probe(int mounted)
         info.mbr_id = mbr_disk_id(sector);
     }
 
+    diskinfo_publish();
+    klog(KLOG_INFO, "disk", "%s: %d sectors, model %s", info.driver, (uint32_t)info.sectors,
+         info.model);
+    return 0;
+}
+
+void diskinfo_publish(void)
+{
+    int i;
+
     for (i = 0; i < disk_count(); i++) {
         struct disk *d = disk_at(i);
 
@@ -306,9 +316,6 @@ int diskinfo_probe(int mounted)
             devfs_disk_publish(d, diskinfo_window(d->dev->sector_count));
         }
     }
-    klog(KLOG_INFO, "disk", "%s: %d sectors, model %s", info.driver, (uint32_t)info.sectors,
-         info.model);
-    return 0;
 }
 
 const struct diskinfo *diskinfo_get(void)

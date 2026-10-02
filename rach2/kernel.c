@@ -2959,6 +2959,8 @@ static void process_command(const char *cmd)
             discover_boot_devices();
             if (kcmdline_has("rach2.diskdiag")) {
                 diskinfo_probe(_krffs_on_disk);
+            } else {
+                diskinfo_publish();
             }
         }
     } else if (str_equal(cmd, "ls")) {
@@ -3397,6 +3399,30 @@ void shell_loop(void)
 }
 
 /**
+ * The disk diagnostic, asked for by name. It probes a disk only if the boot's
+ * mount did not, publishes /proc/disk and /dev/disk0, and issues nothing but
+ * IDENTIFY and a sector read, so the read-only build runs it unchanged.
+ * Without the flag no disk is probed, and the disks the boot registered get
+ * their whole-disk nodes, mode 0400, which the everyday kernel's write handler
+ * refuses, as Linux gives root a disk's node; /proc/disk is a synthfs name
+ * that always resolves and reports whatever disks are registered. The
+ * recovery build needs no flag: the whole-disk window is what that build is
+ * for.
+ */
+static void publish_disks(void)
+{
+    if (kcmdline_has("rach2.diskdiag") || recovery_publishes_disk()) {
+        if (diskinfo_probe(_krffs_on_disk) == 0) {
+            klog(KLOG_INFO, "diskdiag", "ready: /proc/disk and /dev/disk0");
+        } else {
+            klog(KLOG_WARN, "diskdiag", "absent: no disk answered");
+        }
+    } else {
+        diskinfo_publish();
+    }
+}
+
+/**
  * Kernel entry point from the multiboot loader: bring up the system and run.
  *
  * Initializes every subsystem in order (serial, GDT/TSS/IDT/ISR, memory and
@@ -3825,21 +3851,7 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
      * a transfer lets the processor run someone else. */
     ahci_start();
 
-    /* The disk diagnostic, asked for by name. It probes a disk only if the
-     * mount above did not, publishes /proc/disk and /dev/disk0, and issues
-     * nothing but IDENTIFY and a sector read, so the read-only build runs it
-     * unchanged. Without the flag no disk is probed here and /dev/disk0 does
-     * not appear, so no image grows a raw whole-disk node by accident;
-     * /proc/disk is a synthfs name that always resolves and reports whatever
-     * disks are registered. The recovery build is the exception and
-     * needs no flag: the whole-disk window is what that build is for. */
-    if (kcmdline_has("rach2.diskdiag") || recovery_publishes_disk()) {
-        if (diskinfo_probe(_krffs_on_disk) == 0) {
-            klog(KLOG_INFO, "diskdiag", "ready: /proc/disk and /dev/disk0");
-        } else {
-            klog(KLOG_WARN, "diskdiag", "absent: no disk answered");
-        }
-    }
+    publish_disks();
 
     /* Empty the pipe and pty lists before a user process can pipe() or open
      * /dev/ptmx. Each pipe and each pty is allocated from the heap when it is
