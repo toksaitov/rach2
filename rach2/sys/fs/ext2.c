@@ -43,7 +43,8 @@
 #define EXT2_FAST_LINK   60u /* the bytes of `i_block` a fast link lives in */
 
 /* The bits of `i_flags` that lsattr(1) reads. */
-#define EXT2_FL_USER_VISIBLE 0x0003DFFFu
+#define EXT2_FL_USER_VISIBLE    0x0003DFFFu
+#define EXT2_FL_USER_MODIFIABLE 0x000380FFu
 
 #define EXT2_COMPAT_RESIZE_INODE 0x0010u
 #define EXT2_COMPAT_DIR_INDEX    0x0020u
@@ -86,8 +87,8 @@ struct ext2_node {
     uint32_t blocks;
     uint32_t block[EXT2_NBLOCKS];
     uint32_t atime, mtime, ctime;
-    uint32_t flags;      /* i_flags, read and kept but not acted on */
-    uint32_t generation; /* i_generation, read and kept */
+    uint32_t flags;      /* i_flags, which the VFS enforces in part */
+    uint32_t generation; /* i_generation, new for each inode made */
     uint32_t add_from;   /* a directory's block where the last entry went */
     int unlinked;        /* no name left; the inode and its blocks go at the last put */
 };
@@ -159,6 +160,9 @@ struct ext2_mount {
     uint32_t r_blocks;
     uint32_t compat, incompat, ro_compat;
     uint32_t state;
+    /* The generation the next inode made gets, counted from the mount's
+     * second, so a number reused for another file has another generation. */
+    uint32_t next_generation;
     int writable;
     uint64_t free_blocks, free_inodes;
     int valid_cleared; /* the superblock's valid bit was cleared by this mount */
@@ -1480,9 +1484,11 @@ static void inode_encode(const struct ext2_node *n, uint8_t *raw)
     LE16_PUT(raw + 24, n->gid & 0xFFFFu);
     LE16_PUT(raw + 26, n->nlink);
     LE32_PUT(raw + 28, n->blocks);
+    LE32_PUT(raw + 32, n->flags);
     for (i = 0; i < (int)EXT2_NBLOCKS; i++) {
         LE32_PUT(raw + 40 + i * 4, n->block[i]);
     }
+    LE32_PUT(raw + 100, n->generation);
     LE16_PUT(raw + 120, (n->uid >> 16) & 0xFFFFu);
     LE16_PUT(raw + 122, (n->gid >> 16) & 0xFFFFu);
     if ((n->mode & S_IFMT_) == S_IFREG_) {
@@ -3104,6 +3110,7 @@ static int inode_new(struct ext2_mount *em, const struct ext2_node *dir, uint32_
     n->mode = mode;
     n->nlink = (mode & S_IFMT_) == S_IFDIR_ ? 2 : 1;
     n->atime = n->mtime = n->ctime = now_seconds();
+    n->generation = em->next_generation++;
     /* The image over zeros: a freed inode's slot keeps what it had, and
      * the encoder writes only the fields this driver keeps. */
     rc = store ? inode_write(em, n, 1, WRITE_THROUGH)
@@ -3145,6 +3152,9 @@ static int ext2_setattr(struct vfs_mount *mnt, void *node, int what, const struc
     }
     if (what & VFS_SET_MTIME) {
         n->mtime = (uint32_t)st->mtime_sec;
+    }
+    if (what & VFS_SET_FLAGS) {
+        n->flags = (n->flags & ~EXT2_FL_USER_MODIFIABLE) | (st->flags & EXT2_FL_USER_MODIFIABLE);
     }
     n->ctime = now_seconds();
     rc = inode_store(em, n);
@@ -4816,6 +4826,7 @@ static int ext2_mount_on(struct ext2_mount *em, struct vfs_mount *mnt, block_dev
 
     em->dev = dev;
     em->mnt = mnt;
+    em->next_generation = now_seconds() << 8;
     rc = read_bytes(em, 1024, sb, sizeof(sb));
     if (rc != 0) {
         return rc;

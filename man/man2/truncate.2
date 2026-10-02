@@ -1,4 +1,4 @@
-.Dd September 28, 2026
+.Dd October 3, 2026
 .Dt TRUNCATE 2
 .Os
 .Sh NAME
@@ -209,6 +209,8 @@ or
 reaches something else.
 .It Er ENXIO
 A FAT32 or exFAT cluster chain ends before a required cluster.
+.It Er EPERM
+The file is immutable or append-only.
 .It Er EROFS
 The file system is read-only or has no truncate operation.
 .It Er ESRCH

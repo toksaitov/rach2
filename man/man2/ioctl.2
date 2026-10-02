@@ -1,4 +1,4 @@
-.Dd October 2, 2026
+.Dd October 3, 2026
 .Dt IOCTL 2
 .Os
 .Sh NAME
@@ -225,16 +225,19 @@ Request 0x80046601 writes the inode's flags, the bits of
 .Ql i_flags
 that Linux shows, as a 32-bit integer through
 .Fa arg .
-The kernel reads them and acts on none.
 .It Dv FS_IOC_SETFLAGS
-Request 0x40046602 succeeds when the integer at
-.Fa arg
-is the flags the inode has, and the caller owns the file or is
-privileged.
-A change is refused with
-.Er EOPNOTSUPP :
-a flag such as immutable or append-only, stored and not enforced, would
-protect nothing.
+Request 0x40046602 sets the flags ext2 lets a user change from the
+integer at
+.Fa arg ,
+for the file's owner or a privileged caller; only a privileged caller
+changes the immutable flag, 0x10, and the append-only flag, 0x20, as
+.Dv CAP_LINUX_IMMUTABLE
+does on Linux.
+The kernel enforces those two as Linux does: an immutable file refuses a
+write, a truncation, a removal, a rename, a link and a change of its
+attributes, to root too, and an append-only file refuses all of them but
+a write at its end, through a descriptor opened with
+.Dv O_APPEND .
 .It Dv FS_IOC_GETVERSION
 Request 0x80047601 writes the inode's generation number as a 32-bit
 integer through
@@ -497,15 +500,15 @@ raw window, or
 selected a terminal outside the caller's session.
 .It Bq Er EOPNOTSUPP
 A route change other than a default route or addition of the existing
-subnet route was requested, or
-.Dv FS_IOC_SETFLAGS
-asked to change a file's flags.
+subnet route was requested.
 .It Bq Er EPERM
 A controlling-terminal claim is forbidden, the proposed foreground group
 is outside the terminal's session, a network setter or route change
 was requested without effective user ID 0, or
 .Dv FS_IOC_SETFLAGS
-came from a caller that neither owns the file nor is privileged.
+came from a caller that neither owns the file nor is privileged, or
+asked an unprivileged caller's change of the immutable or append-only
+flag.
 An audio driver also gives this error for a refused start or write:
 Sound Blaster 16 refuses rates outside 5000 through 44100, HDA may fail
 to reset its stream, sample writes require active playback and a nonzero

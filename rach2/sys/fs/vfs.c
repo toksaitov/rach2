@@ -1248,6 +1248,8 @@ int vfs_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
     return mnt->type->ops->truncate(mount_base(mnt), handle, size);
 }
 
+static uint32_t guard_node(struct vfs_mount *mnt, void *node);
+
 int vfs_fallocate(struct vfs_mount *mnt, void *handle, uint32_t mode, uint64_t offset, uint64_t len)
 {
     if (vfs_mount_gone(mnt)) {
@@ -1261,6 +1263,11 @@ int vfs_fallocate(struct vfs_mount *mnt, void *handle, uint32_t mode, uint64_t o
     }
     if (!mnt->type->ops->fallocate) {
         return -EOPNOTSUPP;
+    }
+    /* The handle of a type with the operation is its node. */
+    if ((guard_node(mnt, handle) & VFS_FL_IMMUTABLE) ||
+        ((guard_node(mnt, handle) & VFS_FL_APPEND) && (mode & ~1u))) {
+        return -EPERM; /* vfs_fallocate's rule */
     }
     return mnt->type->ops->fallocate(mount_base(mnt), handle, mode, offset, len);
 }
@@ -1384,6 +1391,30 @@ static int watched_entry(struct vfs_mount *mnt, void *dir, const char *name, str
     return rc;
 }
 
+/** The immutable and append-only flags of `node`, 0 for a type that keeps
+ * no inode flags. */
+static uint32_t guard_node(struct vfs_mount *mnt, void *node)
+{
+    struct vfs_stat st;
+
+    if (watched_node(mnt, node, &st) != 0 || !st.flags_known) {
+        return 0;
+    }
+    return st.flags & (VFS_FL_IMMUTABLE | VFS_FL_APPEND);
+}
+
+/** The immutable and append-only flags of the entry `name` of `dir`, 0 for
+ * none or no such entry. */
+static uint32_t guard_entry(struct vfs_mount *mnt, void *dir, const char *name)
+{
+    struct vfs_stat st;
+
+    if (watched_entry(mnt, dir, name, &st) != 0 || !st.flags_known) {
+        return 0;
+    }
+    return st.flags & (VFS_FL_IMMUTABLE | VFS_FL_APPEND);
+}
+
 static uint32_t watched_isdir(const struct vfs_stat *st)
 {
     return (st->mode & 0170000u) == 0040000u ? IN_ISDIR : 0u;
@@ -1457,6 +1488,9 @@ int vfs_setattr(struct vfs_mount *mnt, void *node, int what, const struct vfs_st
     }
     if (mount_rdonly(mnt) || !mnt->type->ops->setattr) {
         return -EROFS;
+    }
+    if ((what & ~VFS_SET_FLAGS) && guard_node(mnt, node)) {
+        return -EPERM; /* notify_change's rule for an immutable or append-only file */
     }
     rc = mnt->type->ops->setattr(mount_base(mnt), node, what, st);
     if (rc == 0 && inotify_watches && watched_node(mnt, node, &now) == 0) {
@@ -1533,6 +1567,9 @@ int vfs_unlink_name(struct vfs_mount *mnt, void *dir, const char *name)
     if (mount_rdonly(mnt) || !mnt->type->ops->unlink) {
         return -EROFS;
     }
+    if (guard_node(mnt, dir) || guard_entry(mnt, dir, name)) {
+        return -EPERM; /* may_delete's rule */
+    }
     watched = inotify_watches && watched_entry(mnt, dir, name, &was) == 0 &&
               watched_node(mnt, dir, &parent) == 0;
     rc = mnt->type->ops->unlink(mount_base(mnt), dir, name);
@@ -1571,6 +1608,9 @@ int vfs_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
     if (mount_rdonly(mnt) || !mnt->type->ops->rmdir) {
         return -EROFS;
     }
+    if (guard_node(mnt, dir) || guard_entry(mnt, dir, name)) {
+        return -EPERM; /* may_delete's rule */
+    }
     watched = inotify_watches && watched_entry(mnt, dir, name, &was) == 0 &&
               watched_node(mnt, dir, &parent) == 0;
     rc = mnt->type->ops->rmdir(mount_base(mnt), dir, name);
@@ -1578,6 +1618,27 @@ int vfs_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
         watch_removed(mnt, parent.ino, name, &was);
     }
     return rc;
+}
+
+/**
+ * Whether a rename may not take `oldname` out of `olddir` into `newname` of
+ * `newdir`, Linux's may_delete and may_create: a flag on the old directory
+ * or the name moved, an immutable new directory, or, when the new name has
+ * a file, a flag on that file or an append-only new directory.
+ */
+static int rename_guarded(struct vfs_mount *mnt, void *olddir, const char *oldname, void *newdir,
+                          const char *newname)
+{
+    struct vfs_stat st;
+    uint32_t to = guard_node(mnt, newdir);
+
+    if (guard_node(mnt, olddir) || guard_entry(mnt, olddir, oldname) || (to & VFS_FL_IMMUTABLE)) {
+        return 1;
+    }
+    if (watched_entry(mnt, newdir, newname, &st) != 0) {
+        return 0;
+    }
+    return (to & VFS_FL_APPEND) || guard_entry(mnt, newdir, newname);
 }
 
 /**
@@ -1597,6 +1658,9 @@ int vfs_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *n
     }
     if (mount_rdonly(mnt) || !mnt->type->ops->rename) {
         return -EROFS;
+    }
+    if (rename_guarded(mnt, olddir, oldname, newdir, newname)) {
+        return -EPERM;
     }
     watched = inotify_watches && watched_entry(mnt, olddir, oldname, &moved) == 0 &&
               watched_node(mnt, olddir, &from) == 0 && watched_node(mnt, newdir, &to) == 0;
@@ -1637,6 +1701,9 @@ int vfs_link(struct vfs_mount *mnt, void *dir, const char *name, void *node)
     }
     if (!mnt->type->ops->link) {
         return -EPERM; /* a file system without links */
+    }
+    if (guard_node(mnt, node) || (guard_node(mnt, dir) & VFS_FL_IMMUTABLE)) {
+        return -EPERM; /* vfs_link's rule */
     }
     rc = mnt->type->ops->link(mount_base(mnt), dir, name, node);
     if (rc == 0 && inotify_watches && watched_node(mnt, node, &st) == 0) {

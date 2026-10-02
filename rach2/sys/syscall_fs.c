@@ -792,6 +792,8 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
     return -EBADF;
 }
 
+static int size_guarded(struct vfs_mount *mnt, void *node);
+
 /**
  * Truncate an open file to `length` (ftruncate(2)).
  *
@@ -822,6 +824,9 @@ static int32_t truncate_fd(int fd, uint64_t length)
     }
     if (fsize_refused(length) != 0) {
         return -EFBIG;
+    }
+    if (size_guarded(entry->ofd->vmnt, entry->ofd->vnode)) {
+        return -EPERM;
     }
     /* Before the description is locked: a return from under that lock is a
      * description nobody can use again. */
@@ -1771,7 +1776,20 @@ int32_t cred_access_ref(const struct vfs_ref *r, int want, int use_real)
     if ((want & CRED_X) && (st.mode & 0170000u) != 0040000u && !(st.mode & 0111u)) {
         return -EACCES;
     }
+    if ((want & CRED_W) && st.flags_known && (st.flags & VFS_FL_IMMUTABLE)) {
+        return -EPERM; /* inode_permission's rule, for root too */
+    }
     return cred_access_bits(st.uid, st.gid, st.mode & 0777u, want, use_real);
+}
+
+/** Whether the inode flags of `node` refuse a change of its size, immutable
+ * or append-only, as Linux's do_truncate refuses one. */
+static int size_guarded(struct vfs_mount *mnt, void *node)
+{
+    struct vfs_stat st;
+
+    return !mnt_is_root(mnt) && vfs_getattr(mnt, node, &st) == 0 && st.flags_known &&
+           (st.flags & (VFS_FL_IMMUTABLE | VFS_FL_APPEND)) != 0;
 }
 
 /**
@@ -2633,6 +2651,11 @@ static int open_mounted_node(struct vfs_ref *ref, int flags)
     if ((acc != 0 || (flags & O_TRUNC)) && (ref->mnt->flags & VFS_MS_RDONLY)) {
         vfs_ref_release(ref);
         return -EROFS;
+    }
+    if (vst.flags_known && (vst.flags & VFS_FL_APPEND) &&
+        ((acc != 0 && !(flags & O_APPEND)) || (flags & O_TRUNC))) {
+        vfs_ref_release(ref);
+        return -EPERM; /* may_open's rule for an append-only file */
     }
     if (flags & O_TRUNC) {
         want |= CRED_W;
@@ -3649,13 +3672,12 @@ int32_t sys_fadvise64_64(isr_params_t *params)
  * which set `*handled`.
  *
  * Of the types here only ext2 keeps the flags and the generation, and only
- * for a file or a directory; any other descriptor leaves
- * the request to the rest of ioctl(2), which answers -ENOTTY, as Linux does
- * for a file system without them. The flags are read from the inode and
- * acted on by nothing, so a change is -EOPNOTSUPP: an immutable or
- * append-only flag stored and not enforced would protect nothing. Setting
- * the flags a file already has succeeds for its owner, which is what
- * `chattr -i` does to an ordinary file; another caller is -EPERM, as there.
+ * for a file or a directory; any other descriptor leaves the request to the
+ * rest of ioctl(2), which answers -ENOTTY, as Linux does for a file system
+ * without them. The file's owner, or a privileged caller, sets the flags
+ * the file system keeps; the immutable and append-only flags, which the VFS
+ * enforces, only a privileged caller changes, as CAP_LINUX_IMMUTABLE does on
+ * Linux, and another caller is -EPERM.
  */
 int32_t fs_flags_ioctl(fd_entry_t *entry, uint32_t request, uint32_t arg, int *handled)
 {
@@ -3685,7 +3707,11 @@ int32_t fs_flags_ioctl(fd_entry_t *entry, uint32_t request, uint32_t arg, int *h
     if (!cred_privileged() && current_proc->euid != st.uid) {
         return -EPERM;
     }
-    return want == st.flags ? 0 : -EOPNOTSUPP;
+    if (((want ^ st.flags) & (VFS_FL_IMMUTABLE | VFS_FL_APPEND)) && !cred_privileged()) {
+        return -EPERM;
+    }
+    st.flags = want;
+    return vfs_setattr(entry->ofd->vmnt, entry->ofd->vnode, VFS_SET_FLAGS, &st);
 }
 
 #define XATTR_FOLLOW 0 /* a path, a final symbolic link followed */
@@ -7946,6 +7972,9 @@ static int32_t truncate_checks(const struct vfs_ref *ref)
         rc = vfs_getattr(ref->mnt, ref->node, &vst);
         if (rc != 0) {
             return rc;
+        }
+        if (vst.flags_known && (vst.flags & (VFS_FL_IMMUTABLE | VFS_FL_APPEND))) {
+            return -EPERM;
         }
         mode = vst.mode;
     }

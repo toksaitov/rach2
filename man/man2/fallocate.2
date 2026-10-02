@@ -111,7 +111,11 @@ The file system has no room for the range, or a tmpfs's
 .Ql size=
 none.
 .It Bq Er EPERM
-A seal of a tmpfs file forbids the change.
+A seal of a tmpfs file forbids the change, the file is immutable, or it
+is append-only and
+.Fa mode
+has a flag but
+.Dv FALLOC_FL_KEEP_SIZE .
 .It Bq Er EOPNOTSUPP
 .Fa fd
 is a block device or a file of a file system without the operation, or

@@ -1,4 +1,4 @@
-.Dd October 2, 2026
+.Dd October 3, 2026
 .Dt OPEN 2
 .Os
 .Sh NAME
@@ -668,6 +668,12 @@ and no reader.
 The generated
 .Pa /proc/disk
 snapshot exceeds its size limit.
+.It Bq Er EPERM
+The file is immutable and write access or truncation was requested, or
+it is append-only and write access was requested without
+.Dv O_APPEND
+or truncation with
+.Dv O_TRUNC .
 .It Bq Er EROFS
 Creation or truncation requires a write on a read-only mount, write
 access was requested on a read-only mount (the KRFFS boot root alone is

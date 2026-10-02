@@ -1,4 +1,4 @@
-.Dd September 28, 2026
+.Dd October 3, 2026
 .Dt CHOWN 2
 .Os
 .Sh NAME
@@ -301,8 +301,8 @@ or
 .Pa \&..
 reaches something else.
 .It Bq Er EPERM
-The caller lacks permission to make the ownership change, or the object
-has fixed ownership.
+The caller lacks permission to make the ownership change, the object
+has fixed ownership, or the file is immutable or append-only.
 .It Bq Er EROFS
 A change requires an attribute write on a read-only mount or a file
 system without an attribute-setting operation.

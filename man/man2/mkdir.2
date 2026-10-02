@@ -1,4 +1,4 @@
-.Dd October 2, 2026
+.Dd October 3, 2026
 .Dt MKDIR 2
 .Os
 .Sh NAME
@@ -264,7 +264,8 @@ is
 A mounted KRFFS volume also uses this error for a missing final entry
 or a final entry that is not a directory.
 .It Bq Er EPERM
-The sticky-directory rule forbids removal.
+The sticky-directory rule forbids removal, or the directory or the entry
+to be removed is immutable or append-only.
 .It Bq Er EROFS
 The operation requires a change to a read-only mount or synthetic
 namespace, or the file system does not implement the operation.

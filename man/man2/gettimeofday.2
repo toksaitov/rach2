@@ -1,4 +1,4 @@
-.Dd September 28, 2026
+.Dd October 3, 2026
 .Dt GETTIMEOFDAY 2
 .Os
 .Sh NAME
@@ -436,7 +436,9 @@ and reaches something else.
 .It Bq Er EPERM
 A caller that is not privileged sets the real time; or a caller that is
 neither the owner nor privileged requests a timestamp change other than
-setting both times to the current time.
+setting both times to the current time; or the file is immutable or
+append-only, where Linux lets an append-only file have its times set to
+the current time.
 .It Bq Er EROFS
 .Fn utimensat
 targets a synthetic file, or a descriptor on a pipe, a socket, a

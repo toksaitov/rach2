@@ -1,4 +1,4 @@
-.Dd September 28, 2026
+.Dd October 3, 2026
 .Dt LINK 2
 .Os
 .Sh NAME
@@ -294,8 +294,9 @@ is
 .Pa \&.. .
 .It Bq Er EPERM
 A hard link was requested to a directory, to a synthetic object, or on
-a writable file system without hard links, or the sticky-directory
-rule forbids removal.
+a writable file system without hard links, the sticky-directory rule
+forbids removal, the file is immutable or append-only, or the directory
+of the new name is immutable.
 The KRFFS boot root refuses hard links before checking read-only state.
 .It Bq Er EROFS
 The operation requires a write on a read-only mount or in a synthetic

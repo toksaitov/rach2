@@ -1,4 +1,4 @@
-.Dd September 28, 2026
+.Dd October 3, 2026
 .Dt CHMOD 2
 .Os
 .Sh NAME
@@ -203,7 +203,8 @@ Musl's
 handling encountered a symbolic link.
 .It Er EPERM
 The caller is neither owner nor root, an unprivileged caller addresses
-fixed metadata, or FAT32 or exFAT cannot represent the requested mode.
+fixed metadata, FAT32 or exFAT cannot represent the requested mode, or
+the file is immutable or append-only.
 .It Er EROFS
 The mount is read-only or the file system has no attribute-setting operation.
 .It Er ESRCH

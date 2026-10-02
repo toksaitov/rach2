@@ -1,4 +1,4 @@
-.Dd September 28, 2026
+.Dd October 3, 2026
 .Dt RENAME 2
 .Os
 .Sh NAME
@@ -273,8 +273,11 @@ slash follows either final name and the source is not a directory.
 .It Er ENOTEMPTY
 A directory destination is not empty on ext2, FAT32, or exFAT.
 .It Er EPERM
-The source is a directory on the KRFFS boot root, or a sticky-directory
-rule forbids removal or replacement.
+The source is a directory on the KRFFS boot root, a sticky-directory
+rule forbids removal or replacement, or an immutable or append-only flag
+forbids it: on the old directory, on the name moved, on a file the new
+name replaces, immutable on the new directory, or append-only on it when
+the new name replaces a file.
 .It Er EROFS
 The mount is read-only, the file system has no rename operation,
 either parent is synthetic, or an exFAT directory involved in the

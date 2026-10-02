@@ -118,6 +118,12 @@ struct vfs_stat {
 #define VFS_SET_ATIME 0x08
 #define VFS_SET_MTIME 0x10
 #define VFS_SET_SIZE  0x20
+#define VFS_SET_FLAGS 0x40 /* the inode flags of FS_IOC_SETFLAGS */
+
+/* The inode flags the VFS enforces, as Linux names them: no change to the
+ * file at all, and its data only appended to. */
+#define VFS_FL_IMMUTABLE 0x00000010u
+#define VFS_FL_APPEND    0x00000020u
 
 /*
  * An entry's file type as getdents64 reports it in `d_type`: the type bits

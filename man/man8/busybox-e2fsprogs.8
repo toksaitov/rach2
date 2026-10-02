@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd October 3, 2026
 .Dt BUSYBOX-E2FSPROGS 8
 .Os
 .Sh NAME
@@ -29,9 +29,15 @@ These are the e2fsprogs applets of BusyBox 1.36.1 as built for Rach2.
 .Bl -tag -width chattr
 .It Nm chattr
 Change ext2 file attributes.
-The kernel stores none: setting the attributes a file already has
-succeeds, and a change fails with
-.Ql Operation not supported .
+The kernel stores the ones ext2 lets a user change and enforces two, as
+Linux does:
+.Ql i ,
+immutable, which refuses a write, a truncation, a removal, a rename, a
+link and a change of the attributes, to root too, and
+.Ql a ,
+append-only, which also refuses those but an append.
+Only a privileged caller sets or clears either, and the owner the
+others.
 .Fl v
 and
 .Fl p
@@ -47,7 +53,7 @@ The recovery system's ext2 checker is the separate e2fsprogs program
 List ext2 file attributes.
 On an ext2 volume the kernel reports each inode's flags and, for
 .Fl v ,
-its generation; it acts on none of the flags.
+its generation.
 A file of another file system, and
 .Fl p ,
 fail with
