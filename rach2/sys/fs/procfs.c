@@ -3023,9 +3023,8 @@ static int procfs_gen_netarp(struct procfs_text *t)
  * match, so they are mapped rather than cast: a reader prints the name for the
  * number it is given, and an unmapped value would name the wrong state.
  * `uid` and `inode` come from the block rather than from its socket, which is
- * cleared while a connection is still closing. A listener here takes its port
- * on every address of the machine, as one bound to INADDR_ANY does on Linux,
- * so its local address is 0.0.0.0, as Linux gives that one.
+ * cleared while a connection is still closing. A listener's local address is
+ * the one it was bound to, 0.0.0.0 for one bound to INADDR_ANY.
  */
 static int procfs_gen_nettcp(struct procfs_text *t)
 {
