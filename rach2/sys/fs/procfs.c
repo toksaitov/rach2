@@ -2462,9 +2462,18 @@ static int procfs_mount_listed(int i, const struct vfs_mount *m)
     return m && m->state == VFS_ACTIVE && !vfs_mount_gone(m) && m->parent && vfs_mount_seen(m);
 }
 
-/** The source of entry `i`, `m`, as /proc/mounts names it. */
+/** The source of entry `i`, `m`, as /proc/mounts names it; a bind's is that
+ * of the mount it shows. */
 static const char *procfs_mount_source(int i, const struct vfs_mount *m)
 {
+    int j;
+
+    for (j = 0; m->bind_of && j < vfs_mount_slots(); j++) {
+        if (vfs_mount_at(j) == m->bind_of) {
+            i = j;
+            m = m->bind_of;
+        }
+    }
     if (i == 0 && m->type == &vfs_krffs_type) {
         return krffs_mount_source();
     }
