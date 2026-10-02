@@ -43,12 +43,14 @@
  * and refuses a flag it does not take and a backward range. splice from a
  * pipe to /dev/null, tee and sendfile answer EINVAL, which GNU grep takes
  * for a descriptor it must read instead, and EBADF for a closed one.
- * posix_fallocate answers EOPNOTSUPP for a file open for writing, a /proc
- * file among them, after which glibc's writes the range itself, EBADF for
- * one open only for reading, EINVAL for a length of 0, ESPIPE for a pipe,
- * and EOPNOTSUPP for a mode Linux does not take before the check that the
- * descriptor is open for writing. adjtimex reads an unsynchronized clock
- * with its 10 ms tick, and clock_adjtime of CLOCK_MONOTONIC is EOPNOTSUPP.
+ * posix_fallocate gives a file in /dev/shm its pages, the size and the blocks
+ * of the range, and answers EOPNOTSUPP for a file of KRFFS open for writing,
+ * a /proc file among them, after which glibc's writes the range itself,
+ * EBADF for one open only for reading, EINVAL for a length of 0, ESPIPE for
+ * a pipe, and EOPNOTSUPP for a mode Linux does not take before the check
+ * that the descriptor is open for writing. adjtimex reads an unsynchronized
+ * clock with its 10 ms tick, and clock_adjtime of CLOCK_MONOTONIC is
+ * EOPNOTSUPP.
  * The extended attribute calls find the file and answer as Linux does for a
  * file system without attributes: an empty list and EOPNOTSUPP to get one,
  * and ENOENT for a missing file. readahead and posix_fadvise accept a
@@ -779,6 +781,21 @@ static int advises(void)
     return 0;
 }
 
+/** posix_fallocate in /dev/shm, a tmpfs, which makes the range's pages. */
+static int reserves_shm(void)
+{
+    struct stat st;
+    int fd = open("/dev/shm/callsmusl.fallocate", O_CREAT | O_RDWR | O_TRUNC, 0600);
+
+    if (fd < 0 || posix_fallocate(fd, 0, 8192) != 0 || fstat(fd, &st) != 0 || st.st_size != 8192 ||
+        st.st_blocks != 16) {
+        return fail("posix_fallocate in /dev/shm did not make the range's pages");
+    }
+    close(fd);
+    unlink("/dev/shm/callsmusl.fallocate");
+    return 0;
+}
+
 static int reserves(void)
 {
     int p[2];
@@ -813,7 +830,7 @@ static int reserves(void)
     close(ro);
     close(p[0]);
     close(p[1]);
-    return 0;
+    return reserves_shm();
 }
 
 static volatile sig_atomic_t vtalrms, profs;

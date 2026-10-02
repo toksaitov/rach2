@@ -584,6 +584,25 @@ int vfs_open_node(struct vfs_mount *mnt, void *at, int flags, void **out)
     return 0;
 }
 
+/** fallocate, which no row asks for. */
+int vfs_fallocate(struct vfs_mount *mnt, void *handle, uint32_t mode, uint64_t offset, uint64_t len)
+{
+    (void)mnt;
+    (void)handle;
+    (void)mode;
+    (void)offset;
+    (void)len;
+    return -EOPNOTSUPP;
+}
+
+/** The signal of a write past RLIMIT_FSIZE, which no row reaches. */
+void signal_post_thread(process_t *t, int signo, const struct k_siginfo *info)
+{
+    (void)t;
+    (void)signo;
+    (void)info;
+}
+
 /** Require a live open handle before truncation. */
 int vfs_truncate(struct vfs_mount *mnt, void *at, uint64_t size)
 {

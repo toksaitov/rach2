@@ -9138,11 +9138,13 @@ static uint32_t fallocate_type(fd_entry_t *entry)
  * fallocate (324): EBX = fd, ECX = mode, EDX:ESI = the offset and EDI:EBP the
  * length, each low word first.
  *
- * No file system here reserves a file's blocks ahead of its writes, as
- * Linux's ext2 does not, so a call on a regular file or a block device open
- * for writing is -EOPNOTSUPP, Linux's answer for a file without the
- * operation. glibc's posix_fallocate then writes the range itself, as it
- * does on Linux's ext2; it does not after -ENOSYS. The checks before it are
+ * A regular file of a mounted file system goes to its type's operation
+ * (vfs_fallocate): tmpfs makes the range's pages or punches a hole, as Linux's
+ * tmpfs does, and ext2 gives the holes in the range zeroed blocks; any other
+ * type, and a block device, is -EOPNOTSUPP, Linux's answer for a file without
+ * the operation, after which glibc's posix_fallocate writes the range itself;
+ * it does not after -ENOSYS. A range that grows the file past RLIMIT_FSIZE is
+ * -EFBIG with SIGXFSZ, as a write's is. The checks before it are
  * Linux's, in its order (ksys_fallocate, vfs_fallocate): -EBADF for a
  * descriptor that is not open, -EINVAL for a negative offset or a length
  * that is not positive, -EOPNOTSUPP for a mode it does not take, -EBADF for
@@ -9156,6 +9158,7 @@ int32_t sys_fallocate(isr_params_t *params)
     uint64_t len = (uint64_t)params->edi | ((uint64_t)params->ebp << 32);
     fd_entry_t *entry;
     uint32_t type;
+    int32_t rc;
 
     if (!current_proc) {
         return -ESRCH;
@@ -9186,7 +9189,16 @@ int32_t sys_fallocate(isr_params_t *params)
     if (((offset + len) >> 63) != 0) {
         return -EFBIG;
     }
-    return -EOPNOTSUPP;
+    if (type != S_IFREG || entry->type != FD_TYPE_FILE || !entry->ofd || !entry->ofd->vmnt) {
+        return -EOPNOTSUPP;
+    }
+    if (!(params->ecx & FALLOC_FL_KEEP_SIZE) && fsize_refused(offset + len) != 0) {
+        return -EFBIG;
+    }
+    fd_ofd_lock(entry->ofd);
+    rc = vfs_fallocate(entry->ofd->vmnt, entry->ofd->fhandle, params->ecx, offset, len);
+    fd_ofd_unlock(entry->ofd);
+    return rc;
 }
 
 /* The longest memfd name: Linux's NAME_MAX less the "memfd:" of its link. */

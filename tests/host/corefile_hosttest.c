@@ -1014,6 +1014,17 @@ int vfs_truncate(struct vfs_mount *mnt, void *at, uint64_t size)
     return -EROFS;
 }
 
+/* fallocate, which no row asks for. */
+int vfs_fallocate(struct vfs_mount *mnt, void *handle, uint32_t mode, uint64_t offset, uint64_t len)
+{
+    (void)mnt;
+    (void)handle;
+    (void)mode;
+    (void)offset;
+    (void)len;
+    return -EOPNOTSUPP;
+}
+
 /* A FIFO or a device file opened again through its descriptor's link,
  * which no row opens. */
 int32_t fifo_attach(struct fd_entry *e, const void *mnt, uint64_t ino, int flags)

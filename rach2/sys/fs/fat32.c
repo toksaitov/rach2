@@ -3092,6 +3092,7 @@ static const struct vfs_ops vfat_ops = {
     0,                           /* pin: a hold keeps a node */
     0,                           /* unpin */
     0,                           /* remount */
+    0,                           /* fallocate */
 };
 
 const struct vfs_type vfs_vfat_type = {"vfat", fat_mount, &vfat_ops, 0, 0};

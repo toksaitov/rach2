@@ -3456,6 +3456,64 @@ out:
     return done ? (int32_t)done : rc;
 }
 
+/**
+ * fallocate(2) on a file: ext2 keeps no block reserved ahead of its data, so
+ * each hole in the range is given a block by a write of zeros, a block the
+ * file has is written only past its size, and without FALLOC_FL_KEEP_SIZE
+ * the size grows to the range's end; with it the range stops at the size.
+ * A punched hole and any other mode are -EOPNOTSUPP, as Linux's ext2
+ * answers for every mode.
+ */
+static int ext2_fallocate(struct vfs_mount *mnt, void *handle, uint32_t mode, uint64_t offset,
+                          uint64_t len)
+{
+    struct ext2_mount *em = em_of(mnt);
+    struct ext2_node *n = handle;
+    uint64_t at = offset, end = offset + len;
+    uint8_t *zero;
+    int rc = 0;
+
+    if (mode & ~0x01u) {
+        return -EOPNOTSUPP;
+    }
+    if ((n->mode & S_IFMT_) != S_IFREG_) {
+        return -ENODEV;
+    }
+    if (end > em->file_limit) {
+        return past_limit(em, "fallocate", offset);
+    }
+    if ((mode & 0x01u) && end > n->size) {
+        end = n->size;
+    }
+    zero = kzalloc(em->block_size);
+    if (!zero) {
+        return -ENOMEM;
+    }
+    while (at < end && rc == 0) {
+        uint32_t take = em->block_size - ((uint32_t)at & (em->block_size - 1));
+        uint64_t from = at;
+        uint32_t b = 0;
+
+        if (take > end - at) {
+            take = (uint32_t)(end - at);
+        }
+        vfs_ns_lock(mnt);
+        rc = block_at(em, n, (uint32_t)(at >> em->block_shift), &b);
+        vfs_ns_unlock(mnt);
+        if (b != 0 && from < n->size) {
+            from = n->size;
+        }
+        if (rc == 0 && from < at + take) {
+            int32_t w = ext2_write(mnt, handle, zero, (uint32_t)(at + take - from), from);
+
+            rc = w < 0 ? (int)w : 0;
+        }
+        at += take;
+    }
+    kfree(zero);
+    return rc;
+}
+
 static int ext2_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode,
                        void **node)
 {
@@ -4979,6 +5037,7 @@ static const struct vfs_ops ext2_ops = {
     0, /* pin: a hold keeps a node */
     0, /* unpin */
     ext2_remount,
+    ext2_fallocate,
 };
 
 const struct vfs_type vfs_ext2_type = {"ext2", ext2_mount, &ext2_ops, 1, 0};

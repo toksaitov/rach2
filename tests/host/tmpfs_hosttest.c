@@ -25,11 +25,12 @@
  * hold and not a frame held elsewhere, against the mount's size, half the
  * machine's frames by default; a page at or past the most a file may have,
  * 2^32 - 1, is refused without growing the table, and the last page below it
- * is given; a truncation of mapped memory takes the pages it frees out of
- * the mappings first. A memfd's node has its name and no directory, and goes
- * with its last hold; its seals refuse a shrink, a growth, a write, a change
- * of its execute bits and more seals, and a named file starts sealed against
- * sealing. Returns the failed-check count.
+ * is given; fallocate makes a range's pages and punches a hole; a truncation
+ * of mapped memory takes the pages it frees out of the mappings first. A
+ * memfd's node has its name and no directory, and goes with its last hold;
+ * its seals refuse a shrink, a growth, a write, a change of its execute bits
+ * and more seals, and a named file starts sealed against sealing. Returns the
+ * failed-check count.
  */
 
 #include "fs/tmpfs.c"
@@ -615,6 +616,38 @@ static void sizes(void)
     CHECK(tmpfs_mount(&m2, NULL, 0, "size=lots") == -EINVAL);
 }
 
+/**
+ * fallocate: the range's pages made and the size grown to its end, or kept
+ * with FALLOC_FL_KEEP_SIZE; a punched hole reads as zeros, frees the pages
+ * it covers whole and keeps the size; a growth the grow seal forbids is
+ * -EPERM, and a mode tmpfs does not take -EOPNOTSUPP.
+ */
+static void allocation(void)
+{
+    char buf[8];
+    void *f = make(NULL, "fa", 0644);
+    struct tmpfs_node *n = (struct tmpfs_node *)f;
+    int frames = frames_in_use();
+
+    CHECK(tmpfs_fallocate(&mnt, f, 0, 100, 2 * PAGE_SIZE) == 0 &&
+          n->data.size == 100 + 2 * PAGE_SIZE);
+    CHECK(frames_in_use() == frames + 3);
+    CHECK(tmpfs_fallocate(&mnt, f, 0x01, 0, 5 * PAGE_SIZE) == 0 &&
+          n->data.size == 100 + 2 * PAGE_SIZE && frames_in_use() == frames + 5);
+    CHECK(tmpfs_write(&mnt, f, "abcdefgh", 8, PAGE_SIZE - 4) == 8);
+    CHECK(tmpfs_fallocate(&mnt, f, 0x03, PAGE_SIZE - 2, PAGE_SIZE + 2) == 0);
+    CHECK(tmpfs_read(&mnt, f, buf, 8, PAGE_SIZE - 4) == 8 && buf[0] == 'a' && buf[1] == 'b' &&
+          buf[2] == 0 && buf[7] == 0);
+    CHECK(frames_in_use() == frames + 4 && n->data.size == 100 + 2 * PAGE_SIZE);
+    CHECK(tmpfs_fallocate(&mnt, f, 0x02, 0, PAGE_SIZE) == -EOPNOTSUPP);
+    n->seals |= TMPFS_SEAL_GROW;
+    CHECK(tmpfs_fallocate(&mnt, f, 0, 0, 9 * PAGE_SIZE) == -EPERM);
+    n->seals &= ~TMPFS_SEAL_GROW;
+    CHECK(tmpfs_unlink(&mnt, NULL, "fa") == 0);
+    tmpfs_put(&mnt, f);
+    CHECK(frames_in_use() == frames);
+}
+
 int main(void)
 {
     struct vfs_stat st;
@@ -637,6 +670,7 @@ int main(void)
     removed_parent();
     rename_refused();
     sizes();
+    allocation();
     tmpfs_unmount(&mnt);
     CHECK(frames_in_use() == 0);
     return fails > 100 ? 100 : fails;

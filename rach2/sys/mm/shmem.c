@@ -263,6 +263,55 @@ uintptr_t shmem_adopt(struct shmem *sh, uint32_t pgoff, uintptr_t phys)
     return *e;
 }
 
+int shmem_allocate(struct shmem *sh, uint64_t off, uint64_t len)
+{
+    uint32_t i, last;
+
+    if (off >= SHMEM_MAX_SIZE || len > SHMEM_MAX_SIZE - off) {
+        return -EFBIG;
+    }
+    last = (uint32_t)((off + len - 1u) >> 12);
+    for (i = (uint32_t)(off >> 12); i <= last; i++) {
+        if (page_at(sh, i) == 0) {
+            return -ENOSPC;
+        }
+    }
+    return 0;
+}
+
+void shmem_punch(struct shmem *sh, uint64_t off, uint64_t len)
+{
+    uint64_t end = off + len > (uint64_t)sh->npages << 12 ? (uint64_t)sh->npages << 12 : off + len;
+    uint64_t i;
+
+    for (i = off >> 12; off < end && i << 12 < end; i++) {
+        uint64_t start = i << 12;
+        uint32_t from = start < off ? (uint32_t)(off - start) : 0u;
+        uint32_t to = end - start < PAGE_SIZE ? (uint32_t)(end - start) : PAGE_SIZE;
+        uintptr_t *e = slot(sh, (uint32_t)i, 0);
+        uint8_t *page;
+
+        if (!e) {
+            i |= SHMEM_LEAF - 1u;
+            continue;
+        }
+        if (!*e) {
+            continue;
+        }
+        if (from == 0 && to == PAGE_SIZE && sh->maps == 0) {
+            free_frame(*e);
+            *e = 0;
+            give_page(sh);
+            continue;
+        }
+        page = kmap_temp(*e);
+        if (page) {
+            k_memset(page + from, 0, to - from);
+            kunmap_temp(page);
+        }
+    }
+}
+
 void shmem_free(struct shmem *sh)
 {
     shmem_truncate(sh, 0);

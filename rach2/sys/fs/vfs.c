@@ -1248,6 +1248,23 @@ int vfs_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
     return mnt->type->ops->truncate(mount_base(mnt), handle, size);
 }
 
+int vfs_fallocate(struct vfs_mount *mnt, void *handle, uint32_t mode, uint64_t offset, uint64_t len)
+{
+    if (vfs_mount_gone(mnt)) {
+        return -EIO;
+    }
+    if (loop_backs(mnt, handle)) {
+        return -EBUSY;
+    }
+    if (mount_rdonly(mnt)) {
+        return -EROFS;
+    }
+    if (!mnt->type->ops->fallocate) {
+        return -EOPNOTSUPP;
+    }
+    return mnt->type->ops->fallocate(mount_base(mnt), handle, mode, offset, len);
+}
+
 int vfs_fsync(struct vfs_mount *mnt, void *handle)
 {
     int rc;
@@ -2096,6 +2113,7 @@ static const struct vfs_ops krffs_ops = {
     kfs_mknod,   0,              /* pin: the syscall layer's holders keep a node */
     0,                           /* unpin */
     0,                           /* remount */
+    0,                           /* fallocate */
 };
 
 static int kfs_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
@@ -2364,6 +2382,7 @@ static const struct vfs_ops devfs_vops = {
     0,                                                                      /* pin */
     0,                                                                      /* unpin */
     0,                                                                      /* remount */
+    0,                                                                      /* fallocate */
 };
 
 static const struct vfs_ops procfs_vops = {
@@ -2374,6 +2393,7 @@ static const struct vfs_ops procfs_vops = {
     0,                                                                       /* pin */
     0,                                                                       /* unpin */
     0,                                                                       /* remount */
+    0,                                                                       /* fallocate */
 };
 
 static const struct vfs_ops sysfs_vops = {
@@ -2384,6 +2404,7 @@ static const struct vfs_ops sysfs_vops = {
     0,                                                                      /* pin */
     0,                                                                      /* unpin */
     0,                                                                      /* remount */
+    0,                                                                      /* fallocate */
 };
 
 static int synth_mount_root(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,

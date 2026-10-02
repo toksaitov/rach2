@@ -762,6 +762,53 @@ static int tmpfs_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
     return 0;
 }
 
+/* fallocate's flags that a tmpfs takes: the size kept, a hole punched. */
+#define FALLOC_KEEP_SIZE  0x01u
+#define FALLOC_PUNCH_HOLE 0x02u
+
+/**
+ * fallocate(2), as Linux's tmpfs takes it: the pages of the range made, the
+ * size grown to its end unless FALLOC_FL_KEEP_SIZE, and with
+ * FALLOC_FL_PUNCH_HOLE the range made to read as zeros and its whole pages
+ * freed. A growth a seal refuses, or a hole in a file sealed against
+ * writing, is -EPERM, and any other mode -EOPNOTSUPP.
+ */
+static int tmpfs_fallocate(struct vfs_mount *mnt, void *handle, uint32_t mode, uint64_t offset,
+                           uint64_t len)
+{
+    struct tmpfs_node *n = (struct tmpfs_node *)handle;
+    uint64_t end = offset + len;
+    int rc;
+
+    (void)mnt;
+    if ((n->mode & T_IFMT) != T_IFREG) {
+        return -ENODEV;
+    }
+    if (mode == (FALLOC_PUNCH_HOLE | FALLOC_KEEP_SIZE)) {
+        if (n->seals & (TMPFS_SEAL_WRITE | TMPFS_SEAL_FUTURE_WRITE)) {
+            return -EPERM;
+        }
+        shmem_punch(&n->data, offset, len);
+        stamp(n, STAMP_M | STAMP_C);
+        return 0;
+    }
+    if (mode & ~FALLOC_KEEP_SIZE) {
+        return -EOPNOTSUPP;
+    }
+    if (!(mode & FALLOC_KEEP_SIZE) && end > n->data.size && (n->seals & TMPFS_SEAL_GROW)) {
+        return -EPERM;
+    }
+    rc = shmem_allocate(&n->data, offset, len);
+    if (rc != 0) {
+        return rc;
+    }
+    if (!(mode & FALLOC_KEEP_SIZE) && end > n->data.size) {
+        n->data.size = end;
+        stamp(n, STAMP_M | STAMP_C);
+    }
+    return 0;
+}
+
 static int tmpfs_sync(struct vfs_mount *mnt)
 {
     (void)mnt;
@@ -1096,6 +1143,7 @@ static const struct vfs_ops tmpfs_ops = {
     0, /* pin: a hold keeps a node */
     0, /* unpin */
     tmpfs_remount,
+    tmpfs_fallocate,
 };
 
 const struct vfs_type vfs_tmpfs_type = {"tmpfs", tmpfs_mount, &tmpfs_ops, 1, 1};

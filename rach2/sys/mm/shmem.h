@@ -65,6 +65,17 @@ uintptr_t shmem_resident(const struct shmem *sh, uint32_t pgoff);
  * reach the page. */
 uintptr_t shmem_adopt(struct shmem *sh, uint32_t pgoff, uintptr_t phys);
 
+/** Give every page of [off, off + len) a frame, zeroed where there was none,
+ * as fallocate(2) does, and leave the size as it is; 0, or -ENOSPC when a
+ * frame or the quota's room runs out, or -EFBIG past SHMEM_MAX_SIZE. */
+int shmem_allocate(struct shmem *sh, uint64_t off, uint64_t len);
+
+/** Make [off, off + len) read as zeros, as a punched hole does: a page it
+ * covers whole is freed while no mapping maps the memory and zeroed in place
+ * while one does, and the parts of the pages at its ends are zeroed. The
+ * walk passes over a leaf the table does not have whole. */
+void shmem_punch(struct shmem *sh, uint64_t off, uint64_t len);
+
 /** Free every page; the size is 0 after. */
 void shmem_free(struct shmem *sh);
 

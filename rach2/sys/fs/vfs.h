@@ -247,6 +247,13 @@ struct vfs_ops {
      * for a type that does neither, whose remounts change only the other
      * flags. */
     int (*remount)(struct vfs_mount *mnt, uint32_t flags);
+    /* fallocate(2) on an open file, `mode` its FALLOC_FL_ bits: allocate
+     * [offset, offset + len) ahead of its writes, the size grown to its end
+     * unless FALLOC_FL_KEEP_SIZE, or punch a hole there. A mode the type does
+     * not take is -EOPNOTSUPP; NULL for a type that takes none, which the
+     * common layer answers with -EOPNOTSUPP. */
+    int (*fallocate)(struct vfs_mount *mnt, void *handle, uint32_t mode, uint64_t offset,
+                     uint64_t len);
 };
 
 /* One file-system kind: the name mount(2) and /proc/filesystems spell, the
@@ -570,6 +577,11 @@ int32_t vfs_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t count,
 int32_t vfs_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t count,
                   uint64_t offset);
 int vfs_truncate(struct vfs_mount *mnt, void *handle, uint64_t size);
+/** fallocate(2) through an open handle: the type's operation, -EOPNOTSUPP
+ * for a type without one, -EROFS on a read-only mount, and -EBUSY for a
+ * file a loop device stands on. */
+int vfs_fallocate(struct vfs_mount *mnt, void *handle, uint32_t mode, uint64_t offset,
+                  uint64_t len);
 int vfs_fsync(struct vfs_mount *mnt, void *handle);
 int vfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st);
 int vfs_setattr(struct vfs_mount *mnt, void *node, int what, const struct vfs_stat *st);

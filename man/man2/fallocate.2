@@ -1,20 +1,43 @@
-.Dd October 1, 2026
+.Dd October 3, 2026
 .Dt FALLOCATE 2
 .Os
 .Sh NAME
 .Nm fallocate
-.Nd reserve a file's space, which no file system here does
+.Nd allocate a range of a file ahead of its writes
 .Sh SYNOPSIS
 .In fcntl.h
 .Ft int
 .Fn fallocate "int fd" "int mode" "off_t offset" "off_t len"
 .Sh DESCRIPTION
-On Linux
 .Fn fallocate
-reserves the blocks of a range of a file ahead of the writes to it.
-No file system of this kernel reserves blocks ahead of a write, as Linux's
-ext2 does not, so a call on a regular file or a block device open for
-writing fails with
+gives the range of
+.Fa len
+bytes at
+.Fa offset
+of a regular file open for writing its storage ahead of the writes to it,
+and grows the file to the range's end unless
+.Fa mode
+has
+.Dv FALLOC_FL_KEEP_SIZE .
+On a tmpfs the range's pages are made, zeroed, counted against the
+mount's
+.Ql size= ,
+as on Linux, and
+.Dv FALLOC_FL_PUNCH_HOLE
+with
+.Dv FALLOC_FL_KEEP_SIZE
+makes the range read as zeros and frees the pages it covers whole; a
+growth the grow seal forbids, or a hole in a file sealed against writing,
+fails with
+.Er EPERM .
+On ext2, which keeps no block reserved ahead of its data, each hole in
+the range is given a block by a write of zeros, where Linux's ext2 answers
+.Er EOPNOTSUPP ;
+with
+.Dv FALLOC_FL_KEEP_SIZE
+the range stops at the file's size, and a punched hole is
+.Er EOPNOTSUPP .
+Another file system and a block device fail with
 .Er EOPNOTSUPP ,
 Linux's answer for a file without the operation.
 glibc's
@@ -37,9 +60,10 @@ set; the kernel returns the negative error number.
 .Sh EXAMPLES
 The default suite's
 .Pa tests/musl/callsmusl.c
-requires
+requires the range's pages and blocks of a file in
+.Pa /dev/shm ,
 .Er EOPNOTSUPP
-of a file open for writing,
+of a KRFFS file open for writing,
 .Er EBADF
 of one open only for reading,
 .Er EINVAL
@@ -77,9 +101,22 @@ is a directory.
 is not a regular file or a block device.
 .It Bq Er EFBIG
 The range passes the largest offset.
+.It Bq Er EFBIG
+The range grows the file past
+.Dv RLIMIT_FSIZE ,
+with
+.Dv SIGXFSZ .
+.It Bq Er ENOSPC
+The file system has no room for the range, or a tmpfs's
+.Ql size=
+none.
+.It Bq Er EPERM
+A seal of a tmpfs file forbids the change.
 .It Bq Er EOPNOTSUPP
 .Fa fd
-is a regular file or a block device open for writing.
+is a block device or a file of a file system without the operation, or
+.Fa mode
+is one its file system does not take.
 .El
 .Sh SEE ALSO
 .Xr ftruncate 2 ,
