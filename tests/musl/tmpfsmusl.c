@@ -269,10 +269,11 @@ static int mountinfo_has(const char *text)
     return found;
 }
 
+/** A bind of a directory of a tmpfs: the file made through it is the
+ * source's, and a lock through one path meets a lock through the other. */
 static int bound(void)
 {
     struct stat a, b;
-    char cwd[64];
     int one, two;
 
     if (mkdir(BIND_SRC, 0755) != 0 || mkdir(BIND_DST, 0755) != 0 ||
@@ -289,12 +290,21 @@ static int bound(void)
     }
     one = open(BIND_DST "/f", O_RDONLY);
     two = open(BIND_SRC "/sub/f", O_RDONLY);
-    if (one < 0 || two < 0 || flock(one, LOCK_EX) != 0 ||
-        flock(two, LOCK_EX | LOCK_NB) != -1 || errno != EWOULDBLOCK) {
+    if (one < 0 || two < 0 || flock(one, LOCK_EX) != 0 || flock(two, LOCK_EX | LOCK_NB) != -1 ||
+        errno != EWOULDBLOCK) {
         return fail("a lock through a bind meets one through its source");
     }
     close(one);
     close(two);
+    return 0;
+}
+
+/** The bind's place and flags: ".." at its root, a read-only remount of it
+ * alone, its root in mountinfo, and its source's mount busy under it. */
+static int bound_mount(void)
+{
+    char cwd[64];
+
     if (chdir(BIND_DST) != 0 || chdir("..") != 0 || !getcwd(cwd, sizeof(cwd)) ||
         strcmp(cwd, "/tmp") != 0 || chdir("/") != 0) {
         return fail("\"..\" at a bind's root climbs to the directory it covers");
@@ -310,6 +320,15 @@ static int bound(void)
         umount2(BIND_SRC, 0) != 0 || rmdir(BIND_DST) != 0 || rmdir(BIND_SRC) != 0) {
         return fail("the source's mount is busy until the bind is unmounted");
     }
+    return 0;
+}
+
+/** A recursive bind of /dev has its devices and /dev/shm, and is unmounted
+ * from the bottom. */
+static int rbound(void)
+{
+    struct stat a, b;
+
     if (mkdir(BIND_DEV, 0755) != 0 || mount("/dev", BIND_DEV, NULL, MS_BIND | MS_REC, NULL) != 0 ||
         stat(BIND_DEV "/null", &a) != 0 || !S_ISCHR(a.st_mode) || stat(BIND_DEV "/shm", &b) != 0 ||
         (b.st_mode & 07777) != 01777) {
@@ -324,7 +343,7 @@ static int bound(void)
 
 int main(void)
 {
-    if (placed() || deep() || shm() || bound()) {
+    if (placed() || deep() || shm() || bound() || bound_mount() || rbound()) {
         return 1;
     }
     printf("TMPFSMUSL OK\n");

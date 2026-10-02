@@ -23,15 +23,16 @@ int udp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len);
 void udp_refused(uint16_t local_port, uint32_t remote_ip, uint16_t remote_port);
 
 /**
- * Build and send a UDP datagram from `src_ip`, the sender's bound address or
- * 0 for the one `ip_source` chooses, with hop limit `ttl`.
+ * Build and send a UDP datagram from the socket `sock`: from its bound
+ * address, or the one `ip_source` chooses for one bound to any, and its
+ * port, with its hop limit.
  *
  * Returns what `ip_tx` returned: 0 when the datagram left (or was dropped for
  * want of an address the request for which has just gone out), and a negative
  * errno for the conditions the caller must hear about.
  */
-int udp_tx(uint32_t src_ip, uint16_t src_port, uint32_t dst_ip, uint16_t dst_port,
-           const uint8_t *payload, uint16_t plen, uint8_t ttl);
+int udp_tx(const struct socket *sock, uint32_t dst_ip, uint16_t dst_port, const uint8_t *payload,
+           uint16_t plen);
 
 /** Bind `sock` to `port` at its `local_ip`; 0 on success, -1 on conflict,
  * -ENOMEM on allocation failure. Two bindings conflict when one is to any

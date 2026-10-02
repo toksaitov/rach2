@@ -2732,14 +2732,14 @@ static int covered_already(const struct vfs_ref *tref)
 
 /**
  * A record in a free slot for a mount of `t` over the node `covered` of
- * `parent`, recorded at `canon` and from `source`, in `state` and with
- * `flags`, seen in the caller's mount namespace: the parts every mount has.
+ * `parent`, recorded at `canon` and from `source`, with `flags`, mounting
+ * and seen in the caller's mount namespace: the parts every mount has.
  * It counts on its parent and keeps the covered node's hold, which the
  * caller has taken. NULL when no slot can be had. Under the parent's lock.
  */
 static struct vfs_mount *mount_place(struct vfs_mount *parent, void *covered,
                                      const struct vfs_type *t, const char *canon,
-                                     const char *source, uint32_t flags, int state)
+                                     const char *source, uint32_t flags)
 {
     int i = mount_new_slot();
     struct vfs_mount *m = i < 0 ? NULL : mounts[i];
@@ -2750,7 +2750,7 @@ static struct vfs_mount *mount_place(struct vfs_mount *parent, void *covered,
     k_memset(m, 0, sizeof(*m));
     m->type = t;
     m->flags = flags;
-    m->state = state;
+    m->state = VFS_MOUNTING;
     m->parent = parent;
     m->covered = covered;
     m->ns_holder = -1;
@@ -2830,7 +2830,7 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
         vfs_ref_release(&tref);
         return rc;
     }
-    m = mount_place(tref.mnt, tref.node, t, canon, source, flags, VFS_MOUNTING);
+    m = mount_place(tref.mnt, tref.node, t, canon, source, flags);
     if (!m) {
         devfs_release_claim(claim);
         vfs_ns_unlock(tref.mnt);
@@ -2932,16 +2932,58 @@ static void bind_fill(struct vfs_mount *m, struct vfs_mount *from, void *root, c
 }
 
 /**
+ * A bind of the mount `c` under `parent`, a bind already, at `canon`: its
+ * covered node and root held again for the new record, which shows what `c`
+ * shows. NULL when no slot can be had. Under no lock.
+ */
+static struct vfs_mount *bind_child(struct vfs_mount *c, struct vfs_mount *parent,
+                                    const char *canon)
+{
+    struct vfs_mount *b;
+
+    vfs_ns_lock(parent);
+    b = mount_place(parent, c->covered, c->type, canon, mount_base(c)->source, c->flags);
+    if (b) {
+        if (c->covered && c->parent->type->ops->hold) {
+            c->parent->type->ops->hold(mount_base(c->parent), c->covered);
+        }
+        if (c->type->ops->hold) {
+            c->type->ops->hold(mount_base(c), c->root);
+        }
+        bind_fill(b, c, c->root, c->bind_of ? c->bind_root : "/");
+        b->state = VFS_ACTIVE;
+    }
+    vfs_ns_unlock(parent);
+    return b;
+}
+
+/* The bind `made` holds for the parent of the mount `c`, of the `n` mounts
+ * in `orig`, or `top` when that parent is `from`, the source's own mount;
+ * NULL when the parent was not shown. */
+static struct vfs_mount *bind_parent(struct vfs_mount *c, struct vfs_mount **orig,
+                                     struct vfs_mount **made, int n, struct vfs_mount *top,
+                                     const struct vfs_mount *from)
+{
+    int j;
+
+    for (j = 0; j < n; j++) {
+        if (orig[j] && orig[j] == c->parent && made[j]) {
+            return made[j];
+        }
+    }
+    return c->parent == from ? top : NULL;
+}
+
+/**
  * For MS_REC: show below the bind `top`, made of the place `full`, each
  * mount the caller sees below that place, in the order of their depth, each
- * as a bind under the bind of its parent. A mount whose new path would not
- * fit, or on KRFFS, is left out, with a record. Under no lock: each new
- * bind is placed under its parent's.
+ * as a bind under the bind of its parent (`bind_child`). A mount whose new
+ * path would not fit, or on KRFFS, is left out, with a record.
  */
 static void bind_below(struct vfs_mount *top, struct vfs_mount *from, const char *full)
 {
     uint32_t flen = (uint32_t)k_strlen(full), depth;
-    int n = mount_slots, i, j;
+    int n = mount_slots, i;
     struct vfs_mount **orig = kzalloc(sizeof(*orig) * (uint32_t)n * 2u);
     struct vfs_mount **made = orig ? orig + n : NULL;
 
@@ -2959,21 +3001,14 @@ static void bind_below(struct vfs_mount *top, struct vfs_mount *from, const char
     }
     for (depth = flen + 1; depth < VFS_COVERED_PATH_MAX; depth++) {
         for (i = 0; i < n; i++) {
-            struct vfs_mount *c = orig[i], *parent = 0, *b;
+            struct vfs_mount *c = orig[i], *parent;
             char canon[VFS_COVERED_PATH_MAX];
             const char *tail;
 
             if (!c || (uint32_t)k_strlen(c->covered_path) != depth) {
                 continue;
             }
-            for (j = 0; j < n && !parent; j++) {
-                if (orig[j] && orig[j] == c->parent) {
-                    parent = made[j];
-                }
-            }
-            if (!parent && c->parent == from) {
-                parent = top;
-            }
+            parent = bind_parent(c, orig, made, n, top, from);
             tail = c->covered_path + (flen == 1 ? 0 : flen);
             if (!parent || mount_base(c)->type == &vfs_krffs_volume_type ||
                 path_below(top) + k_strlen(tail) + 1 > VFS_COVERED_PATH_MAX) {
@@ -2983,21 +3018,7 @@ static void bind_below(struct vfs_mount *top, struct vfs_mount *from, const char
             }
             k_strncpy(canon, top->covered_path, sizeof(canon));
             k_strncpy(canon + path_below(top), tail, sizeof(canon) - path_below(top));
-            vfs_ns_lock(parent);
-            b = mount_place(parent, c->covered, c->type, canon, mount_base(c)->source, c->flags,
-                            VFS_MOUNTING);
-            if (b) {
-                if (c->covered && c->parent->type->ops->hold) {
-                    c->parent->type->ops->hold(mount_base(c->parent), c->covered);
-                }
-                if (c->type->ops->hold) {
-                    c->type->ops->hold(mount_base(c), c->root);
-                }
-                bind_fill(b, c, c->root, c->bind_of ? c->bind_root : "/");
-                b->state = VFS_ACTIVE;
-                made[i] = b;
-            }
-            vfs_ns_unlock(parent);
+            made[i] = bind_child(c, parent, canon);
         }
     }
     kfree(orig);
@@ -3026,10 +3047,9 @@ int vfs_do_bind(const char *source, const char *target, int rec)
         return rc;
     }
     vfs_ns_lock(tref.mnt);
-    m = covered_already(&tref)
-            ? NULL
-            : mount_place(tref.mnt, tref.node, sref.mnt->type, canon,
-                          vfs_mount_base(sref.mnt)->source, sref.mnt->flags, VFS_MOUNTING);
+    m = covered_already(&tref) ? NULL
+                               : mount_place(tref.mnt, tref.node, sref.mnt->type, canon,
+                                             vfs_mount_base(sref.mnt)->source, sref.mnt->flags);
     rc = m ? 0 : covered_already(&tref) ? -EBUSY : -ENOMEM;
     if (m) {
         bind_fill(m, sref.mnt, sref.node, inner);

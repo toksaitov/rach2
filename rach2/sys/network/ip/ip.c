@@ -347,9 +347,9 @@ static struct netdev *ip_broadcast_iface(uint32_t dst)
  * `ip_loop_drain_from` to deliver later. One to 127/8 needs no route and
  * leaves from 127.0.0.1 unless its sender holds another address of this
  * machine; one from 127/8 to an address no interface here has is refused
- * with `-EINVAL`, since a card would carry a loopback source onto the wire. Delivery is deferred
- * because the stack's shared transmit buffers
- * and protocol state are single-threaded by the interrupt discipline (net.h);
+ * with `-EINVAL`, since a card would carry a loopback source onto the wire.
+ * Delivery is deferred because the stack's shared transmit buffers and
+ * protocol state are single-threaded by the interrupt discipline (net.h);
  * handing the datagram straight back to ip_rx here would reenter TCP under
  * the sender's own call frame.
  *
@@ -370,6 +370,38 @@ static struct netdev *ip_broadcast_iface(uint32_t dst)
  * The return value is contracted in ip.h: the conditions a caller must hear
  * about are errnos, and the ARP miss is not one of them.
  */
+/**
+ * Put the datagram of `total_len` bytes in `ip_tx_buf` on the loopback ring,
+ * counted as `lo`'s traffic, as Linux counts it: 0, or -ENOBUFS when the
+ * ring is full, which is counted and logged once.
+ */
+static int loop_put(uint16_t total_len)
+{
+    uint32_t slot;
+
+    if (loop_head - loop_tail == LOOP_RING_SLOTS) {
+        net_mib.ip_out_discards++;
+        loop_dropped++;
+        if (!loop_drop_logged) {
+            loop_drop_logged = 1;
+            klog(KLOG_WARN, "ip", "loopback: the ring is full, dropped; further drops are counted");
+        }
+        return -ENOBUFS;
+    }
+    slot = loop_head % LOOP_RING_SLOTS;
+    k_memcpy(loop_ring[slot], ip_tx_buf, total_len);
+    loop_ring_len[slot] = total_len;
+    loop_head++;
+    if (netdev_loopback()) {
+        netdev_loopback()->tx_packets++;
+        netdev_loopback()->tx_bytes += total_len;
+    }
+    if (loop_head - loop_tail > loop_peak) {
+        loop_peak = loop_head - loop_tail;
+    }
+    return 0;
+}
+
 int ip_is_local(uint32_t ip)
 {
     return IP_IS_LOOPBACK(ip) || netdev_owns(ip);
@@ -445,30 +477,7 @@ int ip_tx_from(uint32_t src, uint32_t dst_ip, uint8_t proto, const uint8_t *payl
     k_memcpy(ip_tx_buf + IP_HDR_SIZE, payload, plen);
 
     if (IP_IS_LOOPBACK(dst_ip) || netdev_owns(dst_ip)) {
-        uint32_t slot;
-
-        if (loop_head - loop_tail == LOOP_RING_SLOTS) {
-            net_mib.ip_out_discards++;
-            loop_dropped++;
-            if (!loop_drop_logged) {
-                loop_drop_logged = 1;
-                klog(KLOG_WARN, "ip",
-                     "loopback: the ring is full, dropped; further drops are counted");
-            }
-            return -ENOBUFS;
-        }
-        slot = loop_head % LOOP_RING_SLOTS;
-        k_memcpy(loop_ring[slot], ip_tx_buf, total_len);
-        loop_ring_len[slot] = total_len;
-        loop_head++;
-        if (netdev_loopback()) {
-            netdev_loopback()->tx_packets++; /* lo's traffic, as Linux counts it */
-            netdev_loopback()->tx_bytes += total_len;
-        }
-        if (loop_head - loop_tail > loop_peak) {
-            loop_peak = loop_head - loop_tail;
-        }
-        return 0;
+        return loop_put(total_len);
     }
 
     if (netconf_is_broadcast(dst_ip)) {

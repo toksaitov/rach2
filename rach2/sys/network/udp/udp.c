@@ -270,8 +270,8 @@ void udp_refused(uint16_t local_port, uint32_t remote_ip, uint16_t remote_port)
  * IRQ-context sender must not reenter it (net.h). The return value is the
  * contract in udp.h.
  */
-int udp_tx(uint32_t src_ip, uint16_t src_port, uint32_t dst_ip, uint16_t dst_port,
-           const uint8_t *payload, uint16_t plen, uint8_t ttl)
+int udp_tx(const struct socket *sock, uint32_t dst_ip, uint16_t dst_port, const uint8_t *payload,
+           uint16_t plen)
 {
     uint16_t udp_len;
     uint32_t flags;
@@ -286,13 +286,13 @@ int udp_tx(uint32_t src_ip, uint16_t src_port, uint32_t dst_ip, uint16_t dst_por
 
     flags = net_lock();
 
-    write16be(udp_tx_buf + 0, src_port);
+    write16be(udp_tx_buf + 0, sock->local_port);
     write16be(udp_tx_buf + 2, dst_port);
     write16be(udp_tx_buf + 4, udp_len);
     write16be(udp_tx_buf + 6, 0x0000); /* checksum disabled */
     k_memcpy(udp_tx_buf + UDP_HDR_SIZE, payload, plen);
 
-    r = ip_tx_from(src_ip, dst_ip, IP_PROTO_UDP, udp_tx_buf, udp_len, ttl);
+    r = ip_tx_from(sock->local_ip, dst_ip, IP_PROTO_UDP, udp_tx_buf, udp_len, sock->ip_ttl);
     if (r == 0) {
         net_mib.udp_out_datagrams++;
     }

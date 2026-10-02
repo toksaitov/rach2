@@ -200,7 +200,7 @@ int32_t dgram_send(struct socket *sock, uint32_t dst_ip, uint16_t dst_port, cons
     /* The hop limit is the socket's, which IP_TTL sets and traceroute counts
        up. What the send layer refuses is reported here rather than counted as
        bytes sent. */
-    r = udp_tx(sock->local_ip, sock->local_port, dst_ip, dst_port, buf, len, sock->ip_ttl);
+    r = udp_tx(sock, dst_ip, dst_port, buf, len);
     if (r < 0) {
         return r;
     }
@@ -509,6 +509,65 @@ static int32_t netlink_bind_user(struct socket *sock, uint32_t sa_ptr, int addrl
     return netlink_bind(sock, SC_LE32(nl + 4), SC_LE32(nl + 8));
 }
 
+/**
+ * Bind the TCP or UDP socket `sock` to the address `ip` and port `port`, as
+ * `do_bind` describes: the address checked first, then the port's owner, a
+ * datagram socket's registration and a stream's listener.
+ */
+static int32_t bind_inet(struct socket *sock, uint32_t ip, uint16_t port)
+{
+    if (ip != 0 && !ip_is_local(ip) && !(sock->type == SOCK_DGRAM && netdev_is_broadcast(ip))) {
+        return -EADDRNOTAVAIL;
+    }
+
+    /* A port below 1024 is a service's, and a service is root's. Without this
+     * any user could take the port a DHCP client or an SSH server answers on
+     * and be the one machines on the wire talk to. */
+    if (port != 0 && port < 1024 && (!current_proc || !proc_privileged(current_proc))) {
+        return -EACCES;
+    }
+
+    if (sock->type == SOCK_DGRAM) {
+        /* A datagram send before bind auto-binds an ephemeral source port; drop
+         * that registration before claiming the requested one, or its
+         * port-table slot leaks for the socket's life. */
+        if (sock->local_port != 0) {
+            udp_unbind(sock);
+            sock->local_port = 0;
+        }
+        sock->local_ip = ip;
+        if (port == 0) {
+            /* Port 0 means "any port": let the stack pick a free ephemeral and
+             * record it, the same path a send before bind takes. */
+            if (udp_bind_ephemeral(sock) == 0) {
+                sock->local_ip = 0;
+                return -EADDRINUSE;
+            }
+            return 0;
+        }
+        if (udp_bind(port, sock) < 0) {
+            sock->local_ip = 0;
+            return -EADDRINUSE;
+        }
+    }
+    if (sock->type == SOCK_STREAM && port == 0) {
+        /* Port 0 means any port, and a stream is given one at the bind, as on
+         * Linux, so that `getsockname` reports it before `listen`. */
+        port = tcp_bind_ephemeral();
+        if (port == 0) {
+            return -EADDRINUSE;
+        }
+    } else if (sock->type == SOCK_STREAM && tcp_port_listening(ip, port)) {
+        /* Advisory, and where a server reports it: the invariant belongs to
+         * `tcp_listen`, since `bind` and `listen` are separate syscalls and any
+         * check made only here is bypassed by binding both sockets first. */
+        return -EADDRINUSE;
+    }
+    sock->local_ip = ip;
+    sock->local_port = port;
+    return 0;
+}
+
 /* bind(2): record the local address and port from the sockaddr; a datagram
  * socket also registers them with UDP (-EADDRINUSE if taken), and a netlink
  * socket takes a port id (`netlink_bind_user`). The address must be any (0),
@@ -517,8 +576,6 @@ static int32_t netlink_bind_user(struct socket *sock, uint32_t sa_ptr, int addrl
 static int32_t do_bind(int fd, uint32_t sa_ptr, int addrlen)
 {
     fd_entry_t *entry;
-    uint16_t port;
-    uint32_t ip;
     uint8_t sa[SOCKADDR_MIN];
 
     /* The caller's declared sockaddr must be at least the header we read; a
@@ -605,59 +662,7 @@ static int32_t do_bind(int fd, uint32_t sa_ptr, int addrlen)
         return 0;
     }
 
-    port = SC_BE16(sa + 2);
-    ip = SC_BE32(sa + 4);
-    if (ip != 0 && !ip_is_local(ip) &&
-        !(entry->sock->type == SOCK_DGRAM && netdev_is_broadcast(ip))) {
-        return -EADDRNOTAVAIL;
-    }
-
-    /* A port below 1024 is a service's, and a service is root's. Without this
-     * any user could take the port a DHCP client or an SSH server answers on
-     * and be the one machines on the wire talk to. */
-    if (port != 0 && port < 1024 && (!current_proc || !proc_privileged(current_proc))) {
-        return -EACCES;
-    }
-
-    if (entry->sock->type == SOCK_DGRAM) {
-        /* A datagram send before bind auto-binds an ephemeral source port; drop
-         * that registration before claiming the requested one, or its
-         * port-table slot leaks for the socket's life. */
-        if (entry->sock->local_port != 0) {
-            udp_unbind(entry->sock);
-            entry->sock->local_port = 0;
-        }
-        entry->sock->local_ip = ip;
-        if (port == 0) {
-            /* Port 0 means "any port": let the stack pick a free ephemeral and
-             * record it, the same path a send before bind takes. */
-            if (udp_bind_ephemeral(entry->sock) == 0) {
-                entry->sock->local_ip = 0;
-                return -EADDRINUSE;
-            }
-            return 0;
-        }
-        if (udp_bind(port, entry->sock) < 0) {
-            entry->sock->local_ip = 0;
-            return -EADDRINUSE;
-        }
-    }
-    if (entry->sock->type == SOCK_STREAM && port == 0) {
-        /* Port 0 means any port, and a stream is given one at the bind, as on
-         * Linux, so that `getsockname` reports it before `listen`. */
-        port = tcp_bind_ephemeral();
-        if (port == 0) {
-            return -EADDRINUSE;
-        }
-    } else if (entry->sock->type == SOCK_STREAM && tcp_port_listening(ip, port)) {
-        /* Advisory, and where a server reports it: the invariant belongs to
-         * `tcp_listen`, since `bind` and `listen` are separate syscalls and any
-         * check made only here is bypassed by binding both sockets first. */
-        return -EADDRINUSE;
-    }
-    entry->sock->local_ip = ip;
-    entry->sock->local_port = port;
-    return 0;
+    return bind_inet(entry->sock, SC_BE32(sa + 4), SC_BE16(sa + 2));
 }
 
 /**

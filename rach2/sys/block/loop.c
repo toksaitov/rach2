@@ -184,7 +184,7 @@ block_device_t *loop_node_device(int index, int write, int32_t *err)
 {
     block_device_t *dev = loop_attached_at(index);
 
-    *err = !dev                             ? -ENXIO
+    *err = !dev                              ? -ENXIO
            : write && !loops[index].writable ? -EROFS
            : write && vfs_device_holds(dev)  ? -EBUSY
                                              : 0;

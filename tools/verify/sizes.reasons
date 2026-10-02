@@ -83,6 +83,7 @@ rach2/sys/fs/bcache.c:get complexity 35 one file system operation over the on-di
 rach2/sys/fs/bcache.c:get lines 119 one file system operation over the on-disk format, each step a rule of the format
 
 rach2/sys/fs/devfs.c:devfs_open complexity 34 a dispatcher, one arm per command, read as a table
+rach2/sys/fs/devfs.c:devfs_open lines 101 a dispatcher, one arm per command, read as a table
 
 rach2/sys/fs/exfat.c:chain_at params 7 the parameters are one level's cursor in a recursive walk
 rach2/sys/fs/exfat.c:check_dir complexity 44 one file system operation over the on-disk format, each step a rule of the format
@@ -144,10 +145,10 @@ rach2/sys/fs/krffs.c:krffs_resize_at complexity 27 one file system operation ove
 rach2/sys/fs/krffs.c:krffs_resize_at lines 123 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/krffs.c:krffs_walk_err complexity 27 one file system operation over the on-disk format, each step a rule of the format
 
-rach2/sys/fs/procfs.c:procfs_fd_ino complexity 31 a dispatcher, one arm per command, read as a table
-rach2/sys/fs/procfs.c:procfs_kind_name complexity 29 a dispatcher, one arm per command, read as a table
-rach2/sys/fs/procfs.c:procfs_open complexity 96 a dispatcher, one arm per command, read as a table
-rach2/sys/fs/procfs.c:procfs_open lines 237 a dispatcher, one arm per command, read as a table
+rach2/sys/fs/procfs.c:procfs_fd_ino complexity 32 a dispatcher, one arm per command, read as a table
+rach2/sys/fs/procfs.c:procfs_kind_name complexity 30 a dispatcher, one arm per command, read as a table
+rach2/sys/fs/procfs.c:procfs_open complexity 98 a dispatcher, one arm per command, read as a table
+rach2/sys/fs/procfs.c:procfs_open lines 243 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/procfs.c:procfs_readlink_fd complexity 27 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/procfs.c:procfs_readlink_fd lines 142 a dispatcher, one arm per command, read as a table
 
@@ -156,12 +157,10 @@ rach2/sys/fs/synthfs.c:synth_classify lines 171 a dispatcher, one arm per comman
 rach2/sys/fs/synthfs.c:synth_classify_pid complexity 28 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/synthfs.c:synth_sys_path complexity 32 a dispatcher, one arm per command, read as a table
 
-rach2/sys/fs/vfs.c:resolve_path complexity 79 one file system operation over the on-disk format, each step a rule of the format
+rach2/sys/fs/vfs.c:resolve_path complexity 80 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/vfs.c:resolve_path lines 284 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/vfs.c:resolve_path nesting 5 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/vfs.c:resolve_path params 7 the parameters are one level's cursor in a recursive walk
-rach2/sys/fs/vfs.c:vfs_do_mount lines 148 one file system operation over the on-disk format, each step a rule of the format
-rach2/sys/fs/vfs.c:vfs_do_mount complexity 26 one system call's contract, its checks in the order the manual page lists the errors
 
 rach2/sys/ipc/unix.c:build params 7 the parameters are the fields of one message; a struct for them would be filled and unpacked once
 rach2/sys/ipc/unix.c:recv_msg params 7 the parameters are the fields of one message; a struct for them would be filled and unpacked once
@@ -185,10 +184,9 @@ rach2/sys/network/driver/e1000.c:e1000_init lines 162 a hardware sequence, the r
 
 rach2/sys/network/driver/rtl8168.c:rtl8168_init lines 121 a hardware sequence, the registers written in the order the datasheet requires
 
-rach2/sys/network/netif.c:ifreq_ioctl lines 122 a dispatcher, one arm per command, read as a table
 rach2/sys/network/netif.c:route_ioctl complexity 30 one system call's contract, its checks in the order the manual page lists the errors
 
-rach2/sys/network/socket/netlink.c:answer complexity 28 a dispatcher, one arm per command, read as a table
+rach2/sys/network/socket/netlink.c:answer complexity 29 a dispatcher, one arm per command, read as a table
 
 rach2/sys/network/tcp/tcp.c:tcp_rx complexity 90 a state machine, one arm per state, read as a table
 rach2/sys/network/tcp/tcp.c:tcp_rx lines 331 a state machine, one arm per state, read as a table
@@ -206,7 +204,7 @@ rach2/sys/proc/elf.c:elf_load_image_at nesting 5 one program loaded and entered,
 rach2/sys/rtc.c:rtc_decode complexity 31 a parser over an external format, one check per field in the format's order
 rach2/sys/rtc.c:rtc_decode lines 105 a parser over an external format, one check per field in the format's order
 
-rach2/sys/syscall.c:init_syscall lines 303 a table, one entry per system call number
+rach2/sys/syscall.c:init_syscall lines 304 a table, one entry per system call number
 rach2/sys/syscall.c:ktimex_adjust complexity 27 one arm per mode of adjtimex, in the order Linux applies them
 rach2/sys/syscall.c:sys_ioctl complexity 34 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall.c:sys_ioctl lines 150 a dispatcher, one arm per command, read as a table
@@ -224,8 +222,8 @@ rach2/sys/syscall_fs.c:read_fd lines 180 one system call's contract, its checks 
 rach2/sys/syscall_fs.c:readv_dgram params 7 the parameters are the parts of one receive's answer; a struct for them would be filled and unpacked once
 rach2/sys/syscall_fs.c:synth_dirent_at complexity 47 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_fs.c:synth_dirent_at lines 208 a dispatcher, one arm per command, read as a table
-rach2/sys/syscall_fs.c:synth_open lines 120 a dispatcher, one arm per command, read as a table
-rach2/sys/syscall_fs.c:synth_stat lines 295 a dispatcher, one arm per command, read as a table
+rach2/sys/syscall_fs.c:synth_open lines 121 a dispatcher, one arm per command, read as a table
+rach2/sys/syscall_fs.c:synth_stat lines 297 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_fs.c:sys__llseek complexity 35 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:sys__llseek lines 145 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:sys_fcntl64 lines 132 a dispatcher, one arm per command, read as a table
@@ -237,8 +235,6 @@ rach2/sys/syscall_fs.c:write_fd lines 180 one system call's contract, its checks
 rach2/sys/syscall_fs.c:synth_stat complexity 32 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_fs.c:synth_sys_dirent complexity 29 a dispatcher, one arm per command, read as a table
 
-rach2/sys/syscall_net.c:do_bind complexity 36 one system call's contract, its checks in the order the manual page lists the errors
-rach2/sys/syscall_net.c:do_bind lines 132 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_net.c:do_connect complexity 30 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_net.c:do_connect lines 140 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_net.c:do_getsockopt complexity 36 a dispatcher, one arm per command, read as a table
@@ -530,7 +526,7 @@ tests/loadprobe.c:probe_main complexity 33 a probe, one sequence of steps in the
 tests/loadprobe.c:probe_main nesting 5 a probe, one sequence of steps in the order the log records them
 
 tests/loopdevprobe.c:probe_main complexity 110 a probe, one sequence of steps in the order the log records them
-tests/loopdevprobe.c:probe_main lines 466 a probe, one sequence of steps in the order the log records them
+tests/loopdevprobe.c:probe_main lines 467 a probe, one sequence of steps in the order the log records them
 
 tests/loopprobe.c:tcp_loop_bulk lines 108 a probe, one sequence of steps in the order the log records them
 tests/loopprobe.c:tcp_ports complexity 27 a probe, one sequence of steps in the order the log records them
