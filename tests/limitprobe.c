@@ -292,7 +292,7 @@ static int body_fsize(void)
     static char block[8192];
     /* The kernel's sigaction: the handler, the flags, the restorer and the
        64-bit mask. */
-    static unsigned ignore[5] = {SIG_IGN, 0, 0, 0, 0};
+    static const unsigned ignore[5] = {SIG_IGN, 0, 0, 0, 0};
     int fd, wrote, again, cut;
 
     if (set_limit(RLIMIT_FSIZE, 4096, 4096) != 0 ||
