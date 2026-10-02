@@ -518,7 +518,11 @@ $update_disk was not installed from here"
         umount "$TARGET_MNT" || die "${update_disk}p${p} would not unmount"
         mounted_root=""
     done
+    # The copy of what the old root keeps, the home directories among it, goes
+    # in /dev/shm, the tmpfs of half the machine's memory, where there is one,
+    # and not in the recovery system's root, which has a few hundred kilobytes.
     keep=/tmp/rach2-update-keep
+    [ -d /dev/shm ] && keep=/dev/shm/rach2-update-keep
     rm -rf "$keep" || die "an old copy of the configuration could not be removed"
     { mkdir -p "$keep" && chmod 700 "$keep"; } || die "there is nowhere to keep the machine's configuration"
     find_recovery "$target"

@@ -184,7 +184,13 @@ can read as a boot partition and an installed root containing
 .Pa /etc/rach2 .
 .Pp
 Before replacing a readable root, the installer copies its account files,
-SSH policy, server host keys, and account keys, including root's keys.
+SSH policy, server host keys, account keys, including root's keys, and the
+home directories under
+.Pa /home ,
+which it keeps in
+.Pa /dev/shm ,
+the recovery system's tmpfs of half the machine's memory; an update whose
+homes do not fit there stops before the root is written.
 These are restored after the write, preserving passwords changed since
 installation, and the image's system accounts the restored files lack are
 appended to them, as for an install.
