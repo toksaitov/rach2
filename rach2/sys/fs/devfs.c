@@ -135,6 +135,7 @@ static short dev_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 static int32_t dev_disk_rescan(fd_entry_t *e);
 static int32_t dev_getgeo(fd_entry_t *e, uint32_t arg);
 static int32_t dev_sector_size(fd_entry_t *e, uint32_t arg);
+static int32_t dev_block_info(fd_entry_t *e, uint32_t request, uint32_t arg);
 
 /*
  * The size of a raw window, which is what a checker asks a block device
@@ -145,12 +146,20 @@ static int32_t dev_sector_size(fd_entry_t *e, uint32_t arg);
  * give the logical and the physical sector size, an int each, which BusyBox's
  * `mkfs.vfat` reads before it lays out a volume. `BLKRRPART` (0x125F)
  * rereads a whole disk's partition table, and `HDIO_GETGEO` (0x0301) gives a
- * geometry and the node's first sector (`dev_getgeo`). Everything else is not
- * a terminal.
+ * geometry and the node's first sector (`dev_getgeo`). `BLKROGET` (0x125D),
+ * `BLKRAGET` (0x1263) and `BLKBSZGET` (`_IOR(0x12, 112, size_t)`) give
+ * whether the device is read-only, its read-ahead in sectors and its block
+ * size, which util-linux's blockdev reads for every device it reports.
+ * Everything else is not a terminal.
  */
 static int32_t dev_ioctl(fd_entry_t *e, uint32_t request, uint32_t arg)
 {
     uint64_t size;
+
+    if (request == 0x125Du || request == 0x1263u || request == 0x80041270u ||
+        request == 0x80081270u) {
+        return dev_block_info(e, request, arg);
+    }
 
     if (request == 0x80041272u || request == 0x80081272u) {
         if (!devfs_fd_raw_size(e, &size)) {
@@ -2393,6 +2402,24 @@ static int32_t dev_getgeo(fd_entry_t *e, uint32_t arg)
 }
 
 /** The sector size of a raw window, 512 bytes, as an int at `arg`. */
+/* BLKROGET, BLKRAGET and BLKBSZGET of a disk or loop node: read-only only for
+ * a loop device attached so, 256 sectors of read-ahead and 4096-byte blocks,
+ * an int each. */
+static int32_t dev_block_info(fd_entry_t *e, uint32_t request, uint32_t arg)
+{
+    uint64_t size;
+    const block_device_t *loop =
+        e->dev && e->dev->ops == &loop_ops ? loop_attached_at(devfs_loop_index(e->dev)) : 0;
+    int32_t v = request == 0x125Du   ? (loop && (loop->flags & BLOCK_READ_ONLY) ? 1 : 0)
+                : request == 0x1263u ? 256
+                                     : 4096;
+
+    if (!devfs_fd_raw_size(e, &size) || e->dev->ops == &mem_ops) {
+        return -ENOTTY;
+    }
+    return copy_to_user((void __user *)arg, &v, sizeof(v)) != 0 ? -EFAULT : 0;
+}
+
 static int32_t dev_sector_size(fd_entry_t *e, uint32_t arg)
 {
     int32_t sector = 512;

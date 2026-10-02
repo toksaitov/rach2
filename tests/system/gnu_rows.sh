@@ -324,10 +324,10 @@ row_loopctl() {
     runs "loopctl detach" loopctl detach "${dev:-none}"
 }
 
-# util-linux's losetup attaches an image to the first free loop device and
-# lists it, mkfs makes a file system on the device, and mount -o loop mounts
-# the image by itself, learning its type from the device, and gives the
-# device back at the unmount.
+# util-linux's losetup attaches an image to the first free loop device and lists
+# it, mkfs makes a file system on the device, blockdev reads what the device
+# says of itself, and mount -o loop mounts the image by itself, learning its
+# type from the device, and gives the device back at the unmount.
 row_losetup() {
     local dev
     truncate -s 4M "$WORK/lo.img"
@@ -335,6 +335,8 @@ row_losetup() {
     has "losetup -f --show" "$dev" "/dev/loop"
     has "losetup -a" "$(losetup -a 2>&1)" "$WORK/lo.img"
     runs "mkfs.ext2 on the device" mkfs.ext2 -q "$dev"
+    same "blockdev" "$(blockdev --getro --getra --getbsz --getss "$dev" 2>&1 | tr '\n' ' ')" \
+        "0 256 4096 512 "
     runs "losetup -d" losetup -d "$dev"
     mkdir -p "$WORK/mnt"
     runs "mount -o loop" mount -o loop "$WORK/lo.img" "$WORK/mnt"

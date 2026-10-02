@@ -173,7 +173,7 @@ Setting it through the master sends
 to the slave's foreground group, if one is set.
 .El
 .Ss Disk requests
-Raw disk windows accept:
+Raw disk windows and loop devices with a file attached accept:
 .Bl -tag -width "BLKGETSIZE64"
 .It Dv BLKGETSIZE64
 Write the window's byte size as an eight-byte unsigned integer through
@@ -184,6 +184,15 @@ Request 0x1260 writes the count of 512-byte sectors as a 32-bit unsigned
 integer through
 .Fa arg .
 A count larger than 4294967295 is refused.
+.It Dv BLKSSZGET , BLKPBSZGET
+Requests 0x1268 and 0x127b write the logical and the physical sector
+size, 512, as an int.
+.It Dv BLKROGET , BLKRAGET , BLKBSZGET
+Requests 0x125d, 0x1263 and 0x80041270 (0x80081270 from a 64-bit header)
+write, as an int, 1 for a loop device attached read-only and 0 otherwise,
+a read-ahead of 256 sectors, and a block size of 4096, which
+.Ic blockdev
+reports.
 .It Dv BLKRRPART
 Request 0x125f rereads the partition table on a whole-disk node.
 A partition node does not accept it.
