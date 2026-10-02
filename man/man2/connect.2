@@ -126,11 +126,10 @@ A stream socket cannot be disconnected this way.
 Raw sockets and packet sockets do not support
 .Fn connect .
 .Ss Local connections
-A destination in 127/8 is this machine, as on Linux, though there is no
-separate
-.Li lo
-interface: the connection is opened from 127.0.0.1 unless the socket bound
-another of the machine's addresses.
+A destination in 127/8 is this machine, as on Linux, by way of
+.Li lo :
+the connection is opened from 127.0.0.1 unless the socket bound another of
+the machine's addresses.
 A socket bound to an address in 127/8 that connects to an address that is
 not the machine's gets
 .Er EINVAL .

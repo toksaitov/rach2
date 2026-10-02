@@ -50,9 +50,10 @@
 #define SIOCBRADDBR 0x89a0
 #define SIOCBRDELBR 0x89a1
 
-/* Interface flags, of which this machine has four to report. */
+/* Interface flags, of which this machine has five to report. */
 #define IFF_UP        0x0001
 #define IFF_BROADCAST 0x0002
+#define IFF_LOOPBACK  0x0008
 #define IFF_RUNNING   0x0040
 #define IFF_MULTICAST 0x1000
 

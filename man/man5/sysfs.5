@@ -280,8 +280,10 @@ taken, and the clocks count on.
 Linux's
 .Pa /sys/class/net
 holds a link for each interface into its device's directory; here it holds
-the interface's directory itself, and there is no loopback interface to
-list.
+the interface's directory itself.
+.Pa /sys/class/net/lo
+has Linux's loopback type, 772, flags, 0x9, and MTU, 65536, and no
+.Pa device .
 Where Linux nests a PCI function under the bridge it is behind, and a USB
 device under its controller's function, they are side by side here under
 .Pa pci0000:00

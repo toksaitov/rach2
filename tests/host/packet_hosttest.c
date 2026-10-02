@@ -251,6 +251,12 @@ struct netdev *netdev_at(int n)
 
 /* Which addresses this machine's interfaces hold, as this test presents
  * them. */
+/* No lo here: the loopback ring counts its traffic only when there is one. */
+struct netdev *netdev_loopback(void)
+{
+    return 0;
+}
+
 int netdev_owns(uint32_t ip)
 {
     int i;

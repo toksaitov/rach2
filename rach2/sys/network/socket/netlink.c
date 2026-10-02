@@ -88,6 +88,7 @@
 #define IFF_LOWER_UP      0x10000u
 #define IF_OPER_UP        6
 #define IF_OPER_DOWN      2
+#define IF_OPER_UNKNOWN   0
 #define IFA_F_PERMANENT   0x80u
 #define IFA_F_SECONDARY   0x01u
 #define RT_SCOPE_UNIVERSE 0
@@ -420,19 +421,19 @@ static void link_msg(struct nl_build *b, const struct netdev *nd, uint16_t flags
     uint8_t msg[NL_MSG_MAX];
     uint8_t *ifi = msg_start(b, msg, RTM_NEWLINK, flags, 16);
     static const uint8_t broadcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-    uint32_t up = netif_is_up() ? IFF_UP | IFF_RUNNING | IFF_LOWER_UP : 0;
-    uint8_t oper = up ? IF_OPER_UP : IF_OPER_DOWN;
+    uint32_t up = nd->loopback || netif_is_up() ? IFF_UP | IFF_RUNNING | IFF_LOWER_UP : 0;
+    uint8_t oper = nd->loopback ? IF_OPER_UNKNOWN : up ? IF_OPER_UP : IF_OPER_DOWN;
     uint8_t stats[96];
     uint8_t stats64[200];
     int i;
 
-    put16(ifi + 2, ARPHRD_ETHER);
+    put16(ifi + 2, nd->loopback ? NETDEV_LOOPBACK_TYPE : ARPHRD_ETHER);
     put32(ifi + 4, (uint32_t)nd->index);
-    put32(ifi + 8, up | IFF_BROADCAST | IFF_MULTICAST);
+    put32(ifi + 8, up | (nd->loopback ? IFF_LOOPBACK : IFF_BROADCAST | IFF_MULTICAST));
     msg_attr(msg, IFLA_IFNAME, nd->name, (uint16_t)(k_strlen(nd->name) + 1));
     msg_attr(msg, IFLA_ADDRESS, nd->mac, 6);
-    msg_attr(msg, IFLA_BROADCAST, broadcast, 6);
-    msg_attr32(msg, IFLA_MTU, 1500);
+    msg_attr(msg, IFLA_BROADCAST, nd->loopback ? nd->mac : broadcast, 6);
+    msg_attr32(msg, IFLA_MTU, nd->loopback ? NETDEV_LOOPBACK_MTU : 1500);
     msg_attr(msg, IFLA_OPERSTATE, &oper, 1);
     k_memset(stats, 0, sizeof(stats));
     put32(stats + 0, nd->rx_packets);
@@ -578,11 +579,13 @@ static void addr_msg(struct nl_build *b, const struct netdev *nd, uint32_t ip, u
     ifa[0] = AF_INET;
     ifa[1] = (uint8_t)prefix_of(mask);
     ifa[2] = IFA_F_PERMANENT | (secondary ? IFA_F_SECONDARY : 0u);
-    ifa[3] = RT_SCOPE_UNIVERSE;
+    ifa[3] = nd->loopback ? RT_SCOPE_HOST : RT_SCOPE_UNIVERSE;
     put32(ifa + 4, (uint32_t)nd->index);
     msg_attr_ip(msg, IFA_ADDRESS, ip);
     msg_attr_ip(msg, IFA_LOCAL, ip);
-    msg_attr_ip(msg, IFA_BROADCAST, ip | ~mask);
+    if (!nd->loopback) {
+        msg_attr_ip(msg, IFA_BROADCAST, ip | ~mask);
+    }
     msg_attr(msg, IFA_LABEL, nd->name, (uint16_t)(k_strlen(nd->name) + 1));
     nl_append(b, msg);
 }
@@ -656,8 +659,9 @@ static uint32_t route_asked(const uint8_t *req, uint32_t body)
 
 /* The answer to `ip route get`: the route `dst` takes, as Linux reports a
  * route it looked up (RTM_F_CLONED), through the interface and next hop
- * `netdev_route` chooses, or `dst` itself as a local route on the interface
- * that holds it; -ENETUNREACH when nothing reaches it. */
+ * `netdev_route` chooses, or for an address of this machine or of 127/8 a
+ * local route on `lo`, from 127.0.0.1 for 127/8 and from `dst` itself
+ * otherwise; -ENETUNREACH when nothing reaches it. */
 static int route_get_msg(struct nl_build *b, uint32_t dst)
 {
     uint8_t msg[NL_MSG_MAX];
@@ -675,6 +679,10 @@ static int route_get_msg(struct nl_build *b, uint32_t dst)
             local = 1;
         }
     }
+    if ((local || IP_IS_LOOPBACK(dst)) && netdev_loopback()) {
+        nd = netdev_loopback();
+        local = 1;
+    }
     if (!nd) {
         return -ENETUNREACH;
     }
@@ -688,7 +696,8 @@ static int route_get_msg(struct nl_build *b, uint32_t dst)
     msg_attr32(msg, RTA_TABLE, local ? RT_TABLE_LOCAL : RT_TABLE_MAIN);
     msg_attr_ip(msg, RTA_DST, dst);
     msg_attr32(msg, RTA_OIF, (uint32_t)nd->index);
-    msg_attr_ip(msg, RTA_PREFSRC, local ? dst : netdev_source(nd, via));
+    msg_attr_ip(msg, RTA_PREFSRC,
+                local ? (IP_IS_LOOPBACK(dst) ? IP_LOOPBACK_ADDR : dst) : netdev_source(nd, via));
     if (!local && via != dst) {
         msg_attr_ip(msg, RTA_GATEWAY, via);
     }
@@ -813,7 +822,7 @@ static int32_t link_change(const uint8_t *req, uint32_t body)
         return -ENODEV;
     }
     a = req_attr(req, body, 16, IFLA_MTU, &len);
-    if (a && (len != 4 || get32(a) != 1500)) {
+    if (a && (len != 4 || get32(a) != (nd->loopback ? NETDEV_LOOPBACK_MTU : 1500u))) {
         return -EOPNOTSUPP;
     }
     a = req_attr(req, body, 16, IFLA_IFNAME, &len);
@@ -822,6 +831,9 @@ static int32_t link_change(const uint8_t *req, uint32_t body)
         return -EOPNOTSUPP;
     }
     if (get32(req + NLMSG_HDRLEN + 12) & IFF_UP) {
+        if (nd->loopback && !(get32(req + NLMSG_HDRLEN + 8) & IFF_UP)) {
+            return -EOPNOTSUPP; /* lo is always up */
+        }
         nd->up = (get32(req + NLMSG_HDRLEN + 8) & IFF_UP) ? 1 : 0;
     }
     return 0;
@@ -841,6 +853,10 @@ static int32_t addr_change(const uint8_t *req, uint16_t type, uint16_t flags, ui
     }
     if (!nd) {
         return -ENODEV;
+    }
+    if (nd->loopback) {
+        return type == RTM_NEWADDR && netdev_holds(nd, ip) ? ((flags & NLM_F_EXCL) ? -EEXIST : 0)
+                                                           : -EOPNOTSUPP;
     }
     if (type == RTM_DELADDR) {
         return netconf_del_address(nd, ip);
@@ -930,6 +946,9 @@ static int32_t route_change(const uint8_t *req, uint16_t type, uint16_t flags, u
     if (!nd) {
         return -ENODEV;
     }
+    if (nd->loopback) {
+        return -EOPNOTSUPP;
+    }
     if (dst_len > 32) {
         return -EINVAL;
     }
@@ -958,6 +977,9 @@ static int32_t neigh_change(const uint8_t *req, uint16_t type, uint32_t body)
 
     if (ip == 0 || (index != 0 && !nd)) {
         return -EINVAL;
+    }
+    if (nd && nd->loopback) {
+        return -EOPNOTSUPP;
     }
     if (type == RTM_DELNEIGH) {
         return arp_forget(nd, ip);

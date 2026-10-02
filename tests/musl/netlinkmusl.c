@@ -18,8 +18,8 @@
  * with MSG_TRUNC in msg_flags. if_nametoindex, which asks an AF_UNIX socket,
  * finds the first link, and SIOCGIFCONF lists the interfaces with an
  * address. RTM_GETROUTE of one address, as `ip route get` asks, answers a
- * local route for the machine's own address and a unicast one on the first
- * link for a neighbour's; `ip rule`'s dump lists Linux's three rules and
+ * local route on lo for the machine's own address and a unicast one on the
+ * first link for a neighbour's; `ip rule`'s dump lists Linux's three rules and
  * `tc qdisc`'s a discipline for each interface.
  *
  * The changes `ip` asks for are acknowledged: the first link's address is
@@ -702,8 +702,9 @@ static int lookups(int fd)
     if (ioctl_addr(first_index, &own) != 0) {
         return 0; /* a machine with no address has nothing to look up */
     }
-    if (route_get(fd, 20, own, &type, &oif, &gw) != 0 || type != RTN_LOCAL || oif != first_index) {
-        return fail("ip route get of the machine's own address was not a local route");
+    if (route_get(fd, 20, own, &type, &oif, &gw) != 0 || type != RTN_LOCAL ||
+        oif != (int)if_nametoindex("lo")) {
+        return fail("ip route get of the machine's own address was not a local route on lo");
     }
     other.s_addr = own.s_addr ^ htonl(1);
     if (route_get(fd, 21, other, &type, &oif, &gw) != 0 || type != RTN_UNICAST ||

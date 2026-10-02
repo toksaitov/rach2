@@ -95,7 +95,7 @@ int net_ns_seen(void)
 
 int netdev_seen_count(void)
 {
-    return net_ns_seen() ? netdev_count() : 0;
+    return net_ns_seen() ? netdev_listed() : 0;
 }
 
 /**
@@ -146,7 +146,9 @@ static void set_sa(uint8_t *ifr, uint32_t ip)
  *
  * The setters return without copying the request back, since they only read
  * it and a failed copy would report a refusal for a change already made.
- * SIOCSIFFLAGS sets only whether the interface is up. SIOCSIFADDR always
+ * SIOCSIFFLAGS sets only whether the interface is up. `lo` takes no change
+ * but its own address and mask again and being up, EOPNOTSUPP, and reports
+ * Linux's loopback type, MTU and flags. SIOCSIFADDR always
  * passes no mask: the mask that goes with the address is the classful one
  * until SIOCSIFNETMASK arrives, never the one left from the address before,
  * and `ifconfig` issues the two in that order. A subnet's broadcast address
@@ -197,6 +199,16 @@ static int32_t ifreq_ioctl(uint32_t request, uint32_t arg)
         return -EPERM;
     }
 
+    if (setter && nd->loopback) {
+        uint32_t v = be32(ifr + IFREQ_SA_ADDR);
+        uint16_t f = (uint16_t)((uint16_t)ifr[IFREQ_UNION] | ((uint16_t)ifr[IFREQ_UNION + 1] << 8));
+
+        return (request == SIOCSIFADDR && v == nd->ip) ||
+                       (request == SIOCSIFNETMASK && v == nd->mask) ||
+                       (request == SIOCSIFFLAGS && (f & IFF_UP))
+                   ? 0
+                   : -EOPNOTSUPP;
+    }
     switch (request) {
     case SIOCGIFINDEX:
         k_memset(ifr + IFREQ_UNION, 0, IFREQ_LEN - IFREQ_UNION);
@@ -204,7 +216,8 @@ static int32_t ifreq_ioctl(uint32_t request, uint32_t arg)
         break;
     case SIOCGIFHWADDR:
         k_memset(ifr + IFREQ_UNION, 0, IFREQ_LEN - IFREQ_UNION);
-        ifr[IFREQ_UNION] = (uint8_t)ARPHRD_ETHER;
+        ifr[IFREQ_UNION] = (uint8_t)(nd->loopback ? NETDEV_LOOPBACK_TYPE & 0xff : ARPHRD_ETHER);
+        ifr[IFREQ_UNION + 1] = (uint8_t)(nd->loopback ? NETDEV_LOOPBACK_TYPE >> 8 : 0);
         k_memcpy(ifr + IFREQ_HW_ADDR, nd->mac, 6);
         break;
     case SIOCGIFADDR:
@@ -214,15 +227,19 @@ static int32_t ifreq_ioctl(uint32_t request, uint32_t arg)
         set_sa(ifr, nd->mask);
         break;
     case SIOCGIFBRDADDR:
-        set_sa(ifr, nd->ip != 0 && nd->mask != 0 ? (nd->ip | ~nd->mask) : 0);
+        set_sa(ifr, nd->ip != 0 && nd->mask != 0 && !nd->loopback ? (nd->ip | ~nd->mask) : 0);
         break;
-    case SIOCGIFMTU:
+    case SIOCGIFMTU: {
+        uint32_t mtu = nd->loopback ? NETDEV_LOOPBACK_MTU : 1500u;
+
         k_memset(ifr + IFREQ_UNION, 0, IFREQ_LEN - IFREQ_UNION);
-        ifr[IFREQ_UNION] = (uint8_t)(1500 & 0xff);
-        ifr[IFREQ_UNION + 1] = (uint8_t)((1500 >> 8) & 0xff);
+        ifr[IFREQ_UNION] = (uint8_t)(mtu & 0xff);
+        ifr[IFREQ_UNION + 1] = (uint8_t)((mtu >> 8) & 0xff);
+        ifr[IFREQ_UNION + 2] = (uint8_t)((mtu >> 16) & 0xff);
         break;
+    }
     case SIOCGIFFLAGS: {
-        uint16_t flags = (uint16_t)(IFF_BROADCAST | IFF_MULTICAST);
+        uint16_t flags = (uint16_t)(nd->loopback ? IFF_LOOPBACK : IFF_BROADCAST | IFF_MULTICAST);
 
         if (nd->up) {
             flags |= (uint16_t)IFF_UP;
@@ -338,6 +355,9 @@ static int32_t route_ioctl(uint32_t request, uint32_t arg)
     if (rc != 0) {
         return rc;
     }
+    if (nd->loopback) {
+        return -EOPNOTSUPP;
+    }
     gateway_route = dst == 0 && mask == 0 && metric == 0;
     if (request == SIOCADDRT && gw != 0 && !netdev_on_link(nd, gw)) {
         return -ENETUNREACH;
@@ -407,6 +427,9 @@ static int32_t arp_ioctl(uint32_t request, uint32_t arg)
             if (netdev_on_link(netdev_at(i), ip)) {
                 nd = netdev_at(i);
             }
+        }
+        if (nd && nd->loopback) {
+            return -EOPNOTSUPP; /* lo resolves nothing */
         }
         return nd ? arp_set(nd, ip, req + ARPREQ_HA_ADDR, (flags & ATF_PERM) != 0) : -ENETUNREACH;
     }

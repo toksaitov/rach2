@@ -461,6 +461,10 @@ int ip_tx_from(uint32_t src, uint32_t dst_ip, uint8_t proto, const uint8_t *payl
         k_memcpy(loop_ring[slot], ip_tx_buf, total_len);
         loop_ring_len[slot] = total_len;
         loop_head++;
+        if (netdev_loopback()) {
+            netdev_loopback()->tx_packets++; /* lo's traffic, as Linux counts it */
+            netdev_loopback()->tx_bytes += total_len;
+        }
         if (loop_head - loop_tail > loop_peak) {
             loop_peak = loop_head - loop_tail;
         }
@@ -560,6 +564,10 @@ void ip_loop_drain_from(int from)
     while (loop_tail != loop_head && budget--) {
         uint32_t slot = loop_tail % LOOP_RING_SLOTS;
 
+        if (netdev_loopback()) {
+            netdev_loopback()->rx_packets++;
+            netdev_loopback()->rx_bytes += loop_ring_len[slot];
+        }
         ip_rx(loop_ring[slot], loop_ring_len[slot], 1);
         loop_tail++;
         if (from >= 0 && from < 3) {

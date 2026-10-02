@@ -28,8 +28,11 @@
  * one card: a driver and that driver's own record for it, with the name and
  * index the rest of the kernel knows it by.
  */
-static struct netdev ifaces[NETDEV_MAX];
+static struct netdev ifaces[NETDEV_MAX + 1];
 static int niface;
+
+/* Whether `lo` stands after the cards, in ifaces[niface]. */
+static int lo_ready;
 
 /* Why the last probe bound nothing. A driver that found ITS card and then
  * failed to bring it up is the interesting case and the one whose reason is
@@ -49,7 +52,46 @@ int netdev_count(void)
 
 struct netdev *netdev_at(int n)
 {
-    return n >= 0 && n < niface ? &ifaces[n] : 0;
+    return n >= 0 && n < niface + lo_ready ? &ifaces[n] : 0;
+}
+
+int netdev_listed(void)
+{
+    return niface + lo_ready;
+}
+
+struct netdev *netdev_loopback(void)
+{
+    return lo_ready ? &ifaces[niface] : 0;
+}
+
+/** `lo` sends nothing itself: a frame a packet socket gives it is dropped. */
+static int loopback_tx(void *dev, const uint8_t *data, uint16_t len)
+{
+    (void)dev;
+    (void)data;
+    (void)len;
+    return NETDEV_TX_DROPPED;
+}
+
+static const struct netdev_ops loopback_ops = {"loopback", 0, loopback_tx, 0, 0, 0, 0, 0, 0};
+
+/** Put `lo` after the cards the probe brought up. */
+static void loopback_up(void)
+{
+    struct netdev *nd = &ifaces[niface];
+
+    k_memset(nd, 0, sizeof(*nd));
+    nd->ops = &loopback_ops;
+    nd->index = niface + 1;
+    nd->name[0] = 'l';
+    nd->name[1] = 'o';
+    nd->ip = 0x7F000001u;
+    nd->mask = 0xFF000000u;
+    nd->up = 1;
+    nd->pci_key = -1;
+    nd->loopback = 1;
+    lo_ready = 1;
 }
 
 struct netdev *netdev_first(void)
@@ -61,7 +103,7 @@ struct netdev *netdev_by_name(const char *name)
 {
     int i;
 
-    for (i = 0; i < niface; i++) {
+    for (i = 0; i < niface + lo_ready; i++) {
         const char *a = ifaces[i].name;
         const char *b = name;
 
@@ -258,6 +300,7 @@ int netdev_probe(void)
             niface++;
         }
     }
+    loopback_up();
     return niface > 0;
 }
 

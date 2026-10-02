@@ -192,7 +192,15 @@ struct netdev {
      * its driver sets when it finds the card, or -1; /sys/class/net links
      * the interface's `device` to it. */
     int pci_key;
+
+    /* Nonzero for `lo`, which no card stands behind (`netdev_loopback`). */
+    int loopback;
 };
+
+/* What Linux gives its loopback interface: the hardware type of its
+ * address, all zeros, and its MTU. */
+#define NETDEV_LOOPBACK_TYPE 772
+#define NETDEV_LOOPBACK_MTU  65536
 
 /** How many interfaces the last probe brought up, and the nth of them. */
 int netdev_count(void);
@@ -201,12 +209,26 @@ int netdev_count(void);
  * and tables are the machine's; another has none (proc/ns.h). */
 int net_ns_seen(void);
 
-/** The interfaces the caller sees: netdev_count() in the first network
- * namespace, 0 in another. The calls that list interfaces to a program
- * count them by this; the stack itself, which also runs in interrupts, by
- * netdev_count(). */
+/** The interfaces the caller sees: the cards and `lo` after them in the
+ * first network namespace, none in another. The calls that list interfaces
+ * to a program count them by this; the stack itself, which also runs in
+ * interrupts and routes only through cards, by netdev_count(). */
 int netdev_seen_count(void);
 struct netdev *netdev_at(int n);
+
+/** The cards and `lo`, which netdev_seen_count() gives in the first
+ * network namespace. */
+int netdev_listed(void);
+
+/**
+ * `lo`, the loopback interface, listed after the cards, or NULL before the
+ * probe. It holds 127.0.0.1/8 and is always up; the datagrams it stands for
+ * go round the IP layer's loopback ring (`ip_tx_from`), which counts them
+ * as its traffic, and never through it, so no route names it and a frame a
+ * packet socket sends on it is dropped. An address, a route or taking it
+ * down is refused, EOPNOTSUPP.
+ */
+struct netdev *netdev_loopback(void);
 
 /** The interface of that name, or NULL. */
 struct netdev *netdev_by_name(const char *name);

@@ -328,7 +328,9 @@ With no interface named it lists every interface
 .Pa /proc/net/dev
 lists and those
 .Dv SIOCGIFCONF
-reports; the machine has no loopback interface to list.
+reports, the cards and then
+.Ql lo ,
+which holds 127.0.0.1 and takes no change but being up.
 .It Nm ifdown
 Deconfigure network interfaces.
 .It Nm ifup

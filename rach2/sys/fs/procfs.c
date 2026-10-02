@@ -3792,7 +3792,8 @@ static void ap_mac(struct procfs_text *t, const uint8_t *mac)
  * when `node` is SYSFS_NET_STATS, of the interface `index`: what Linux's
  * files of the same names give. The link comes from the card where it can
  * say, and an interface down has no carrier, as on Linux; the MTU is the
- * Ethernet frame's, which the interface ioctls report too.
+ * Ethernet frame's, which the interface ioctls report too. `lo` has Linux's
+ * loopback type, flags and MTU, and a broadcast address of zeros.
  */
 static int procfs_gen_netattr(struct procfs_text *t, int node, int index, int attr)
 {
@@ -3835,7 +3836,7 @@ static int procfs_gen_netattr(struct procfs_text *t, int node, int index, int at
         ap_str(t, "6");
         break;
     case 2:
-        ap_mac(t, broadcast);
+        ap_mac(t, nd->loopback ? nd->mac : broadcast);
         break;
     case 3:
         ap_str(t, nd->up && netdev_running(nd) ? "1" : "0");
@@ -3847,14 +3848,14 @@ static int procfs_gen_netattr(struct procfs_text *t, int node, int index, int at
         ap_str(t, !known || !nd->up ? "unknown" : link.full_duplex ? "full" : "half");
         break;
     case 6:
-        ap_str(t, nd->up ? "0x1003" : "0x1002");
+        ap_str(t, nd->loopback ? "0x9" : nd->up ? "0x1003" : "0x1002");
         break;
     case 7:
     case 8:
         ap_u32(t, (uint32_t)nd->index);
         break;
     case 9:
-        ap_str(t, "1500");
+        ap_u32(t, nd->loopback ? NETDEV_LOOPBACK_MTU : 1500u);
         break;
     case 10:
         ap_str(t, !nd->up ? "down" : !known ? "unknown" : link.up ? "up" : "down");
@@ -3870,7 +3871,7 @@ static int procfs_gen_netattr(struct procfs_text *t, int node, int index, int at
         ap_str(t, "1000");
         break;
     case 13:
-        ap_str(t, "1");
+        ap_u32(t, nd->loopback ? NETDEV_LOOPBACK_TYPE : 1u);
         break;
     default:
         ap_str(t, "INTERFACE=");

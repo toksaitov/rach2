@@ -5861,3 +5861,13 @@ old
 new
         key->mnt = e->ofd->vmnt;
 end
+
+fault lo-unlisted
+probe netlinkmusl
+file rach2/sys/network/driver/netdev.c
+expect NETLINKMUSL FAIL (ip route get of the machine's own address was not a local route on lo
+old
+    lo_ready = 1;
+new
+    lo_ready = 0;
+end

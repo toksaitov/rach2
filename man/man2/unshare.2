@@ -185,6 +185,7 @@ A user or PID namespace would be nested past the limit.
 .Sh STANDARDS
 These are Linux calls.
 Linux also has cgroup and time namespaces, which this kernel has not, and
-its network namespaces have a loopback interface.
+its new network namespaces have a loopback interface, where a new one here
+has no interface at all.
 Linux's user namespaces grant capabilities one by one; here a process has
 all of them in a namespace or none.

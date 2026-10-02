@@ -1405,7 +1405,9 @@ static int32_t do_getsockname(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
         sll[SOCKADDR_LL_PROTOCOL + 1] = (uint8_t)(entry->sock->protocol & 0xff);
         SC_WLE32(sll + SOCKADDR_LL_IFINDEX, (uint32_t)ifindex);
         if (nd) {
-            sll[SOCKADDR_LL_HATYPE] = (uint8_t)ARPHRD_ETHER;
+            sll[SOCKADDR_LL_HATYPE] =
+                (uint8_t)(nd->loopback ? NETDEV_LOOPBACK_TYPE & 0xff : ARPHRD_ETHER);
+            sll[SOCKADDR_LL_HATYPE + 1] = (uint8_t)(nd->loopback ? NETDEV_LOOPBACK_TYPE >> 8 : 0);
             sll[SOCKADDR_LL_HALEN] = 6;
             k_memcpy(sll + SOCKADDR_LL_ADDR, nd->mac, 6);
         }
