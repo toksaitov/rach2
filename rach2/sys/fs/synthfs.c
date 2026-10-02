@@ -759,6 +759,25 @@ static int synth_classify_sys_fixed(const struct comp *c, int n, int node, struc
     return vp->kind;
 }
 
+/** Classify the components `c` of `n` below /sys/class: the network
+ * interfaces' class and the clock's. */
+static int synth_classify_sys_class(const struct comp *c, int n, struct vpath *vp)
+{
+    vp->kind = VNODE_SYS_DIR;
+    if (n == 0) {
+        vp->sysent = SYSFS_CLASS;
+    } else if (comp_eq(c[0], "net") && n == 1) {
+        vp->sysent = SYSFS_CLASS_NET;
+    } else if (comp_eq(c[0], "net")) {
+        return synth_classify_sys_net(c + 1, n - 1, vp);
+    } else if (comp_eq(c[0], "rtc")) {
+        return synth_classify_sys_fixed(c + 1, n - 1, SYSFS_CLASS_RTC, vp);
+    } else {
+        vp->kind = VNODE_ENOENT;
+    }
+    return vp->kind;
+}
+
 /**
  * Classify the components `c` of `n` below /sys: the fixed directories by
  * their names, below a bus's `devices` or a device directory's parent a
@@ -787,16 +806,8 @@ static int synth_classify_sysfs(const struct comp *c, int n, struct vpath *vp)
         } else {
             return synth_classify_sys_device(c + 3, n - 3, at + 2, vp);
         }
-    } else if (comp_eq(c[0], "class") && n == 1) {
-        vp->sysent = SYSFS_CLASS;
-    } else if (comp_eq(c[0], "class") && comp_eq(c[1], "net")) {
-        if (n == 2) {
-            vp->sysent = SYSFS_CLASS_NET;
-        } else {
-            return synth_classify_sys_net(c + 2, n - 2, vp);
-        }
-    } else if (comp_eq(c[0], "class") && comp_eq(c[1], "rtc")) {
-        return synth_classify_sys_fixed(c + 2, n - 2, SYSFS_CLASS_RTC, vp);
+    } else if (comp_eq(c[0], "class")) {
+        return synth_classify_sys_class(c + 1, n - 1, vp);
     } else if (comp_eq(c[0], "power")) {
         return synth_classify_sys_fixed(c + 1, n - 1, SYSFS_POWER, vp);
     } else if (comp_eq(c[0], "devices") && n == 1) {

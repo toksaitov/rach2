@@ -146,8 +146,9 @@ rach2/sys/fs/krffs.c:krffs_walk_err complexity 27 one file system operation over
 
 rach2/sys/fs/procfs.c:procfs_fd_ino complexity 28 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/procfs.c:procfs_kind_name complexity 26 a dispatcher, one arm per command, read as a table
-rach2/sys/fs/procfs.c:procfs_open complexity 82 a dispatcher, one arm per command, read as a table
+rach2/sys/fs/procfs.c:procfs_open complexity 86 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/procfs.c:procfs_open lines 220 a dispatcher, one arm per command, read as a table
+rach2/sys/fs/procfs.c:procfs_readlink_fd complexity 26 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/procfs.c:procfs_readlink_fd lines 140 a dispatcher, one arm per command, read as a table
 
 rach2/sys/fs/synthfs.c:synth_classify complexity 55 a dispatcher, one arm per command, read as a table
@@ -211,8 +212,8 @@ rach2/sys/syscall.c:tty_common_ioctl lines 122 a dispatcher, one arm per command
 rach2/sys/syscall_fs.c:chown_fd complexity 27 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:do_chdir complexity 27 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:do_old_stat lines 110 one system call's contract, its checks in the order the manual page lists the errors
-rach2/sys/syscall_fs.c:do_readlink complexity 28 a dispatcher, one arm per command, read as a table
-rach2/sys/syscall_fs.c:fstat_fill complexity 36 one system call's contract, its checks in the order the manual page lists the errors
+rach2/sys/syscall_fs.c:do_readlink complexity 29 a dispatcher, one arm per command, read as a table
+rach2/sys/syscall_fs.c:fstat_fill complexity 38 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:fstat_fill lines 153 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:read_fd complexity 39 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:read_fd lines 180 one system call's contract, its checks in the order the manual page lists the errors
@@ -553,6 +554,8 @@ tests/musl/addusermusl.c:check_refusals lines 101 a test's rows, each a case, re
 
 tests/musl/authmusl.c:main complexity 42 a test's rows, each a case, read as one table
 tests/musl/authmusl.c:main lines 112 a test's rows, each a case, read as one table
+
+tests/musl/callsmusl.c:rtcs complexity 26 a test's rows, each a case, read as one table
 
 tests/musl/catfile.c:main complexity 30 a test's rows, each a case, read as one table
 tests/musl/catfile.c:main lines 130 a test's rows, each a case, read as one table

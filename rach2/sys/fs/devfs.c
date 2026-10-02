@@ -1201,6 +1201,43 @@ static int32_t dev_rtc_write(fd_entry_t *e, const char __user *buf, uint32_t cou
     return -EINVAL;
 }
 
+/** RTC_ALM_READ, RTC_ALM_SET, RTC_AIE_ON and RTC_AIE_OFF: the alarm's time
+ * of day, read with today's date, or set, and its interrupt on or off, the
+ * last three for a privileged caller. */
+static int32_t dev_rtc_alarm(uint32_t request, uint32_t arg)
+{
+    int32_t tm[9];
+    rtc_time_t t;
+
+    if (request == RTC_ALM_READ) {
+        if (rtc_read_clock(&t) != 0) {
+            return -EIO;
+        }
+        rtc_alarm_read(&t);
+        rtc_to_tm(&t, tm);
+        return copy_to_user((void __user *)arg, tm, sizeof(tm)) != 0 ? -EFAULT : 0;
+    }
+    if (!proc_privileged(current_proc)) {
+        return -EACCES;
+    }
+    rtc_irq_setup();
+    if (request != RTC_ALM_SET) {
+        rtc_alarm_interrupts(request == RTC_AIE_ON);
+        return 0;
+    }
+    if (copy_from_user(tm, (const void __user *)arg, sizeof(tm)) != 0) {
+        return -EFAULT;
+    }
+    if (tm[0] < 0 || tm[0] > 59 || tm[1] < 0 || tm[1] > 59 || tm[2] < 0 || tm[2] > 23) {
+        return -EINVAL;
+    }
+    t.second = tm[0];
+    t.minute = tm[1];
+    t.hour = tm[2];
+    rtc_alarm_write(&t);
+    return 0;
+}
+
 static int32_t dev_rtc_ioctl(fd_entry_t *e, uint32_t request, uint32_t arg)
 {
     int32_t tm[9];
@@ -1217,34 +1254,9 @@ static int32_t dev_rtc_ioctl(fd_entry_t *e, uint32_t request, uint32_t arg)
     if (request == RTC_WKALM_SET || request == RTC_WKALM_RD) {
         return dev_rtc_wkalarm(request, arg);
     }
-    if (request == RTC_ALM_READ) {
-        if (rtc_read_clock(&t) != 0) {
-            return -EIO;
-        }
-        rtc_alarm_read(&t);
-        rtc_to_tm(&t, tm);
-        return copy_to_user((void __user *)arg, tm, sizeof(tm)) != 0 ? -EFAULT : 0;
-    }
-    if (request == RTC_ALM_SET || request == RTC_AIE_ON || request == RTC_AIE_OFF) {
-        if (!proc_privileged(current_proc)) {
-            return -EACCES;
-        }
-        rtc_irq_setup();
-        if (request != RTC_ALM_SET) {
-            rtc_alarm_interrupts(request == RTC_AIE_ON);
-            return 0;
-        }
-        if (copy_from_user(tm, (const void __user *)arg, sizeof(tm)) != 0) {
-            return -EFAULT;
-        }
-        if (tm[0] < 0 || tm[0] > 59 || tm[1] < 0 || tm[1] > 59 || tm[2] < 0 || tm[2] > 23) {
-            return -EINVAL;
-        }
-        t.second = tm[0];
-        t.minute = tm[1];
-        t.hour = tm[2];
-        rtc_alarm_write(&t);
-        return 0;
+    if (request == RTC_ALM_READ || request == RTC_ALM_SET || request == RTC_AIE_ON ||
+        request == RTC_AIE_OFF) {
+        return dev_rtc_alarm(request, arg);
     }
     if (request == RTC_SET_TIME) {
         if (!proc_privileged(current_proc)) {
