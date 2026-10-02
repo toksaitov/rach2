@@ -91,6 +91,19 @@ number 263, disarms and deletes the timer.
 and the end of the process delete its timers; a child of
 .Xr fork 2
 has none.
+.Ss Differences from Linux
+Linux also makes timers on the processor-time clocks of a process or a
+thread,
+.Dv CLOCK_PROCESS_CPUTIME_ID
+and
+.Dv CLOCK_THREAD_CPUTIME_ID ;
+this kernel refuses them with
+.Er EINVAL ,
+and a profiler that samples with one must use the
+.Dv ITIMER_PROF
+timer of
+.Xr setitimer 2 ,
+which Go's runtime, for one, falls back to.
 .Sh RETURN VALUES
 .Fn timer_getoverrun
 returns the overrun, and the others 0; each returns -1 with
