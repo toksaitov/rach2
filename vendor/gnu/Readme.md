@@ -85,6 +85,18 @@ The ports milestone 55 added were built one at a time, so the table of them give
 | zip          | 3.0           | 0.6 MB   |
 | unzip        | 6.0           | 0.4 MB   |
 | bzip2        | 1.0.8         | 0.5 MB   |
+| libffi       | 3.8.0         | 0.3 MB   |
+| Readline     | 8.3           | 1.9 MB   |
+| SQLite       | 3.53.4        | 4.8 MB   |
+| Python       | 3.14.8        | 78.5 MB  |
+| libgpg-error | 1.61          | 0.5 MB   |
+| Libgcrypt    | 1.12.4        | 1.6 MB   |
+| Libassuan    | 3.0.2         | 0.2 MB   |
+| Libksba      | 1.8.1         | 0.5 MB   |
+| nPth         | 1.8           | 0.1 MB   |
+| NTBTLS       | 0.3.2         | 0.2 MB   |
+| pinentry     | 1.3.3         | 0.2 MB   |
+| GnuPG        | 2.5.24        | 9.4 MB   |
 
 These notes say what some ports provide and what they leave to the system they are installed on.
 
@@ -100,6 +112,8 @@ These notes say what some ports provide and what they leave to the system they a
 * tmux uses libevent and takes `tmux-256color` as its terminal. nano reads `/etc/nanorc`, which includes the syntax files. Texinfo installs `makeinfo`, `info` and `install-info`.
 * lsof is built from Debian's source of it, since its upstream signs nothing, with its own Configure script. zip and unzip are Info-ZIP's last releases, since it makes no more, with Debian's patches applied from its packaging tarballs (`DEBIAN` in `build_port.sh`), unzip with bzip2.
 * cronie's `crond` runs from init, and `crontab` is set-id to the group `crontab`, which may write the crontabs in `/var/spool/cron/crontabs`. There is no anacron and no PAM.
+* Python has the modules of its standard library that link the root's libraries, and neither `tkinter`, `dbm.gnu`, pip nor the test suite. Its ssl module is built against OpenSSL 4, which has no SSLv3 and no methods of one protocol version.
+* GnuPG has its agent, `dirmngr` with NTBTLS for hkps, `keyboxd` with SQLite and `pinentry`'s curses and tty programs, and no LDAP and no TPM2 daemon.
 
 ## The root image
 
@@ -110,7 +124,7 @@ The image is built where the layer is, on a Linux host, and is not part of `make
 `install_root.sh` installs the system as a Debian i386 system has it:
 
 * The trees of the ports, the native compiler, GDB and the shell: glibc with its loader as `/lib/ld-linux.so.2` and its libraries in `/lib`, and the rest under `/usr`. The native compiler's `libstdc++.so.6` replaces the runtime's copy of the same library, and any other file the tree already has is refused, so what the manifest staged is what the image has. The two C libraries share `/lib`, where TinyCC finds musl's `libc.a` and start files beside glibc's shared libraries; GCC takes glibc's start files and libraries from `/usr/lib`, which it searches before `/lib`.
-* From the packages `chromium/fetch_chromium.sh` unpacked, the browser in `/usr/lib/chromium`, its libraries in `/usr/lib/i386-linux-gnu`, and D-Bus's daemon and tools in `/usr/bin` with the bus's configuration in `/usr/share/dbus-1`: every package of the closure except those whose libraries the root has its own builds of, of the same sonames and newer, `libc6`, `libgcc-s1`, `libstdc++6`, `libatomic1`, `zlib1g`, `liblzma5`, `libpcre2-8-0`, `libmount1`, `libblkid1`, `libuuid1`, `libbz2-1.0` and `libzstd1`, with `gcc-14-base`, which only documents GCC's, and except the programs that `chromium-common`'s dependencies bring and a headless shell does not run, in `debconf`, `lsb-base`, `sysvinit-utils`, `x11-utils` and `xdg-utils`.
+* From the packages `chromium/fetch_chromium.sh` unpacked, the browser in `/usr/lib/chromium`, its libraries in `/usr/lib/i386-linux-gnu`, and D-Bus's daemon and tools in `/usr/bin` with the bus's configuration in `/usr/share/dbus-1`: every package of the closure except those whose libraries the root has its own builds of, of the same sonames and newer, `libc6`, `libgcc-s1`, `libstdc++6`, `libatomic1`, `zlib1g`, `liblzma5`, `libpcre2-8-0`, `libmount1`, `libblkid1`, `libuuid1`, `libffi8`, `libsqlite3-0`, `libbz2-1.0` and `libzstd1`, with `gcc-14-base`, which only documents GCC's, and except the programs that `chromium-common`'s dependencies bring and a headless shell does not run, in `debconf`, `lsb-base`, `sysvinit-utils`, `x11-utils` and `xdg-utils`.
 * `/etc/ld.so.cache`, which the root's own `ldconfig` writes from the manifest's `/etc/ld.so.conf`, which lists `/usr/lib/i386-linux-gnu`. glibc links `ldconfig` statically, so the build host runs it without the loader, with `-r` for the tree. The cache has 182 entries, and the loader searches `/lib` and `/usr/lib` for a library the cache does not have.
 * `/bin/bash`, a link to `/usr/bin/bash`, `/bin/sh`, a second name of bash's file, since the set-id guard requires the shell root runs to be a file, `/usr/bin/cc`, a link to `gcc`, and `/usr/bin/vi`, a link to `vim`.
 * A link to `/bin/busybox` for each BusyBox applet that no file in `/usr/bin`, `/bin`, `/usr/sbin` or `/sbin` answers for, 203 of the 318, where BusyBox's own install would put it. The build host runs the BusyBox the manifest stages, which is static, from the build for the list, since the stager writes the tree's files without the modes the volume gets.

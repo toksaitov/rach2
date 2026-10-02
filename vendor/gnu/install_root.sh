@@ -45,15 +45,16 @@ DEBIAN="$OUT/work/chromium"
 # whose glibc 2.41 the root's 2.44 replaces; the libraries the root has its
 # own builds of, of the same sonames and newer: GCC's in libgcc-s1,
 # libstdc++6 and libatomic1, zlib1g, liblzma5, libpcre2-8-0, util-linux's
-# libmount1, libblkid1 and libuuid1, libbz2-1.0 and libzstd1, with
-# gcc-14-base, which only documents GCC's three; and the programs
-# chromium-common's dependencies bring that a headless shell does not run,
-# in debconf, lsb-base, sysvinit-utils, x11-utils and xdg-utils. A library
-# of both would be found in Debian's directory first, which /etc/ld.so.conf
-# lists, by the root's programs too, and util-linux's mount asks its
-# libmount for a version Debian's lacks.
+# libmount1, libblkid1 and libuuid1, libffi8, libsqlite3-0, libbz2-1.0 and
+# libzstd1, with gcc-14-base, which only documents GCC's three; and the
+# programs chromium-common's dependencies bring that a headless shell does
+# not run, in debconf, lsb-base, sysvinit-utils, x11-utils and xdg-utils. A
+# library of both would be found in Debian's directory first, which
+# /etc/ld.so.conf lists, by the root's programs too, and util-linux's mount
+# asks its libmount for a version Debian's lacks.
 SKIP="libc6 libgcc-s1 libstdc++6 libatomic1 zlib1g liblzma5 libpcre2-8-0 libmount1 libblkid1
-libuuid1 libbz2-1.0 libzstd1 gcc-14-base debconf lsb-base sysvinit-utils x11-utils xdg-utils"
+libuuid1 libffi8 libsqlite3-0 libbz2-1.0 libzstd1 gcc-14-base debconf lsb-base sysvinit-utils
+x11-utils xdg-utils"
 
 TREE="$1"
 if [ -z "$TREE" ] || [ ! -d "$TREE" ]; then

@@ -493,6 +493,46 @@ row_zip() {
     has "the version" "$(zip -v | head -n 2)" "Zip 3.0"
 }
 
+# Python with the modules of its standard library that link the root's
+# libraries, ctypes calling into the C library, sqlite3, a pool of worker
+# processes, which share POSIX semaphores, and a virtual environment.
+row_python() {
+    same "the version" "$(python3 -c 'import sys; print(sys.version_info[:2])')" "(3, 14)"
+    output "the modules" python3 -c 'import zlib, bz2, lzma, ssl, hashlib, ctypes, sqlite3, readline, curses, uuid, json, pyexpat, decimal; print("imported")'
+    same "the modules" "$OUT" "imported"
+    same "hashlib" "$(python3 -c 'import hashlib; print(hashlib.sha256(b"abc").hexdigest())')" "$ABC"
+    same "ctypes" "$(python3 -c 'import ctypes, os; print(ctypes.CDLL(None).getpid() == os.getpid())')" "True"
+    same "sqlite3" "$(python3 -c 'import sqlite3; c = sqlite3.connect(":memory:"); c.execute("create table t(x)"); c.executemany("insert into t values (?)", [(1,), (41,)]); print(c.execute("select sum(x) from t").fetchone()[0])')" "42"
+    same "a pool of processes" "$(python3 -c 'from multiprocessing import Pool
+if __name__ == "__main__":
+    with Pool(2) as p:
+        print(sum(p.map(abs, [-1, -2, 3])))')" "6"
+    has "ssl" "$(python3 -c 'import ssl; print(ssl.OPENSSL_VERSION)')" "OpenSSL 4.0.2"
+    runs "venv" python3 -m venv --without-pip "$WORK/venv"
+    same "the venv's python" "$("$WORK/venv/bin/python" -c 'import sys; print(sys.prefix)')" "$WORK/venv"
+}
+
+# GnuPG makes a key, signs with it and verifies the signature, and encrypts
+# and decrypts with a passphrase, with its agent started for the home it
+# is given and the passphrase given on the command line.
+row_gnupg() {
+    local g="--homedir $WORK/g --batch --pinentry-mode loopback"
+    mkdir -m 700 "$WORK/g"
+    has "the version" "$(gpg --version | head -n 1)" "gpg (GnuPG) 2.5.24"
+    # shellcheck disable=SC2086 # g is a list of options
+    runs "a key" gpg $g --passphrase '' --quick-gen-key 'Row <row@example.org>' ed25519 sign never
+    printf 'signed row\n' > "$WORK/msg"
+    # shellcheck disable=SC2086
+    runs "a signature" gpg $g --passphrase '' -o "$WORK/msg.asc" --clearsign "$WORK/msg"
+    # shellcheck disable=SC2086
+    has "its check" "$(gpg $g --verify "$WORK/msg.asc" 2>&1)" "Good signature from \"Row <row@example.org>\""
+    # shellcheck disable=SC2086
+    runs "encryption" gpg $g --passphrase row -o "$WORK/msg.gpg" -c "$WORK/msg"
+    # shellcheck disable=SC2086
+    same "decryption" "$(gpg $g --passphrase row -d "$WORK/msg.gpg" 2>/dev/null)" "signed row"
+    gpgconf --homedir "$WORK/g" --kill all
+}
+
 # An autoconf package built on the machine as a user builds one: GNU sed's
 # configure, which takes the build's name from the root's site file, since
 # config.guess knows no system called Rach2, then make, and the sed it made.
