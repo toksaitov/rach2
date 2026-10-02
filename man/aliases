@@ -78,6 +78,7 @@ dpkg-deb 1 busybox-archival
 du 1 busybox-coreutils
 dup2 2 dup
 dup3 2 dup
+e2label 8 tune2fs
 echo 1 busybox-coreutils
 ed 1 busybox-editors
 egrep 1 busybox-findutils
@@ -118,6 +119,7 @@ free 1 busybox-procps
 freeramdisk 1 busybox-util-linux
 fremovexattr 2 getxattr
 fsck 8 busybox-e2fsprogs
+fsck.ext2 8 e2fsck
 fsck.minix 1 busybox-util-linux
 fsetxattr 2 getxattr
 fstat64 2 stat

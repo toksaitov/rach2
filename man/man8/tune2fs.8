@@ -1,0 +1,174 @@
+.Dd October 2, 2026
+.Dt TUNE2FS 8
+.Os
+.Sh NAME
+.Nm tune2fs ,
+.Nm e2label
+.Nd change and list the settings of an ext2 file system
+.Sh SYNOPSIS
+.Nm
+.Op Fl fl
+.Op Fl c Ar max-mount-counts
+.Op Fl C Ar mount-count
+.Op Fl e Ar errors-behavior
+.Op Fl E Ar extended-options
+.Op Fl g Ar group
+.Op Fl i Ar interval Ns Op Cm d Ns | Ns Cm m Ns | Ns Cm w
+.Op Fl L Ar volume-label
+.Op Fl m Ar reserved-percentage
+.Op Fl M Ar last-mounted-directory
+.Op Fl o Oo ^ Oc Ns Ar mount-option Ns Op , Ns Ar ...
+.Op Fl O Oo ^ Oc Ns Ar feature Ns Op , Ns Ar ...
+.Op Fl r Ar reserved-blocks
+.Op Fl T Ar time-last-checked
+.Op Fl u Ar user
+.Op Fl U Ar UUID
+.Op Fl z Ar undo-file
+.Ar device
+.Nm e2label
+.Ar device
+.Op Ar volume-label
+.Sh DESCRIPTION
+.Nm
+changes the settings an ext2 volume keeps in its superblock, and with
+.Fl l
+lists them.
+.Ar device
+is a partition node, a loop device or a file that holds a volume.
+.Nm e2label
+is the same program by another name: it prints the volume's label, or
+sets it to
+.Ar volume-label .
+.Pp
+Rach2 uses e2fsprogs 1.47.4, linked statically against the ported musl,
+and installs it on the GNU system at
+.Pa /sbin/tune2fs ,
+with
+.Pa /sbin/e2label
+a link to it.
+The ordinary kernel takes no write to a disk node, so there
+.Nm
+lists a partition's settings and changes those of a volume in a file or on
+a loop device; a change of a partition answers
+.Er EPERM .
+.Nm
+reads
+.Pa /proc/mounts
+to find whether the volume is mounted.
+.Pp
+The kernel mounts read-only a volume with
+.Ql dir_index
+or a read-only-compatible feature it does not know, and refuses one with
+an incompatible feature other than
+.Ql filetype ;
+see
+.Xr mke2fs 8 .
+So
+.Fl O Cm dir_index
+leaves a volume the kernel mounts read-only, and
+.Fl j
+or
+.Fl O Cm extent
+one it does not mount writable.
+The kernel keeps no mount count and no time of the last check, so
+.Fl c ,
+.Fl C ,
+.Fl i
+and
+.Fl T
+set fields only
+.Xr e2fsck 8
+reads.
+.Pp
+The options are upstream's:
+.Bl -tag -width Ds
+.It Fl c Ar max-mount-counts
+The number of mounts after which
+.Ql e2fsck -p
+checks the volume; 0 or -1 for none.
+.It Fl C Ar mount-count
+The number of mounts so far.
+.It Fl e Ar errors-behavior
+What a kernel does on finding an error:
+.Cm continue ,
+.Cm remount-ro
+or
+.Cm panic ;
+this kernel does not read it.
+.It Fl E Ar extended-options
+Upstream's extended options, comma-separated, such as
+.Cm stride= Ns Ar n
+and
+.Cm mount_opts= Ns Ar string .
+.It Fl f
+Force a change upstream would otherwise refuse.
+.It Fl g Ar group
+The group that may use the reserved blocks.
+.It Fl i Ar interval
+The longest time between checks, in days, or in months or weeks with
+.Cm m
+or
+.Cm w ;
+0 for none.
+.It Fl l
+List the superblock's settings, as
+.Ql dumpe2fs -h
+does.
+.It Fl L Ar volume-label
+The label, up to 16 bytes.
+.It Fl m Ar reserved-percentage
+The share of blocks kept for the user and group of
+.Fl u
+and
+.Fl g .
+.It Fl M Ar last-mounted-directory
+The directory recorded as the last mount point.
+.It Fl o Ar mount-options
+Default mount options, each removed with a leading
+.Ql ^ ;
+the kernel reads none of them.
+.It Fl O Ar features
+Features to set, each removed with a leading
+.Ql ^ .
+.It Fl r Ar reserved-blocks
+The number of reserved blocks.
+.It Fl T Ar time-last-checked
+The time of the last check, as
+.Ar YYYYMMDD Ns Op Ar HH Ns Op Ar MM Ns Op Ar SS ,
+or
+.Cm now .
+.It Fl u Ar user
+The user that may use the reserved blocks.
+.It Fl U Ar UUID
+A new UUID:
+.Cm clear ,
+.Cm random ,
+.Cm time
+or a UUID.
+.It Fl z Ar undo-file
+Save the blocks the change overwrites in
+.Ar undo-file
+first.
+.El
+.Sh FILES
+.Bl -tag -width /sbin/tune2fs
+.It Pa /sbin/tune2fs
+The program on the GNU system.
+.It Pa /sbin/e2label
+A link to it.
+.El
+.Sh EXIT STATUS
+.Nm
+exits 0 on success and 1 on an error.
+.Sh EXAMPLES
+Label a volume in a file and read the label back:
+.Bd -literal -offset indent
+# tune2fs -L data /root/vol.ext2
+# e2label /root/vol.ext2
+data
+.Ed
+.Sh SEE ALSO
+.Xr loop 4 ,
+.Xr dumpe2fs 8 ,
+.Xr e2fsck 8 ,
+.Xr mke2fs 8

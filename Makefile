@@ -55,6 +55,8 @@ PDPMAKE_BIN  = build/vendor/pdpmake/make
 E2FSCK_BIN   = build/vendor/e2fsprogs/e2fsck
 RESIZE2FS_BIN = build/vendor/e2fsprogs/resize2fs
 MKE2FS_BIN   = build/vendor/e2fsprogs/mke2fs
+TUNE2FS_BIN  = build/vendor/e2fsprogs/tune2fs
+DUMPE2FS_BIN = build/vendor/e2fsprogs/dumpe2fs
 
 # The pinned vendored source tarballs: the exact names the build_*.sh scripts
 # verify by sha256. Used as stamp prerequisites (not a $(wildcard), which would
@@ -207,17 +209,19 @@ $(PDPMAKE_STAMP): vendor/pdpmake/build_pdpmake.sh $(PDPMAKE_PATCHES) \
 	@test -s $(PDPMAKE_BIN) || { echo "pdpmake: build produced no $(PDPMAKE_BIN)" >&2; exit 1; }
 	@touch $@
 
-# e2fsprogs, of which the images stage e2fsck, resize2fs and mke2fs. The
-# patch manifest is a prerequisite as Dropbear's is below, and mke2fs.conf is
-# one because mke2fs compiles it in as its defaults.
+# e2fsprogs, of which the images stage e2fsck, resize2fs, mke2fs, tune2fs
+# and dumpe2fs. The patch manifest is a prerequisite as Dropbear's is below,
+# and mke2fs.conf is one because mke2fs compiles it in as its defaults.
 $(E2FSPROGS_STAMP): vendor/e2fsprogs/build_e2fsprogs.sh vendor/e2fsprogs/muslgcc \
                     vendor/e2fsprogs/mke2fs.conf \
                     $(E2FSPROGS_PATCHES) $(E2FSPROGS_TARBALL) $(LIBC_STAMP)
-	@rm -f $@ $(E2FSCK_BIN) $(RESIZE2FS_BIN) $(MKE2FS_BIN)
+	@rm -f $@ $(E2FSCK_BIN) $(RESIZE2FS_BIN) $(MKE2FS_BIN) $(TUNE2FS_BIN) $(DUMPE2FS_BIN)
 	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else t0=$$(date +%s); ./vendor/e2fsprogs/build_e2fsprogs.sh && echo "e2fsprogs: result: built in $$(($$(date +%s)-t0))s"; fi
 	@test -s $(E2FSCK_BIN) || { echo "e2fsprogs: build produced no $(E2FSCK_BIN)" >&2; exit 1; }
 	@test -s $(RESIZE2FS_BIN) || { echo "e2fsprogs: build produced no $(RESIZE2FS_BIN)" >&2; exit 1; }
 	@test -s $(MKE2FS_BIN) || { echo "e2fsprogs: build produced no $(MKE2FS_BIN)" >&2; exit 1; }
+	@test -s $(TUNE2FS_BIN) || { echo "e2fsprogs: build produced no $(TUNE2FS_BIN)" >&2; exit 1; }
+	@test -s $(DUMPE2FS_BIN) || { echo "e2fsprogs: build produced no $(DUMPE2FS_BIN)" >&2; exit 1; }
 	@touch $@
 
 # The patch manifest is a prerequisite for the reason musl's is: the script
@@ -260,7 +264,7 @@ _ := $(shell [ ! -f $(BUSYBOX_STAMP) ] || \
         for f in $(BUSYBOX_OUTPUTS); do [ -e "$$f" ] || { rm -f $(BUSYBOX_STAMP); break; }; done)
 _ := $(shell [ ! -f $(DROPBEAR_STAMP) ] || [ -s $(DROPBEAR_BIN) ] || rm -f $(DROPBEAR_STAMP))
 _ := $(shell [ ! -f $(PDPMAKE_STAMP) ] || [ -s $(PDPMAKE_BIN) ] || rm -f $(PDPMAKE_STAMP))
-_ := $(shell [ ! -f $(E2FSPROGS_STAMP) ] || { [ -s $(E2FSCK_BIN) ] && [ -s $(RESIZE2FS_BIN) ] && [ -s $(MKE2FS_BIN) ]; } || rm -f $(E2FSPROGS_STAMP))
+_ := $(shell [ ! -f $(E2FSPROGS_STAMP) ] || { [ -s $(E2FSCK_BIN) ] && [ -s $(RESIZE2FS_BIN) ] && [ -s $(MKE2FS_BIN) ] && [ -s $(TUNE2FS_BIN) ] && [ -s $(DUMPE2FS_BIN) ]; } || rm -f $(E2FSPROGS_STAMP))
 
 # The tree lists above test existence only, because musl installs several
 # legitimately empty headers. The binaries that can never be empty also get a
@@ -303,7 +307,7 @@ endif
 $(BUSYBOX_OUTPUTS): $(BUSYBOX_STAMP)
 $(DROPBEAR_BIN): $(DROPBEAR_STAMP)
 $(PDPMAKE_BIN): $(PDPMAKE_STAMP)
-$(E2FSCK_BIN) $(RESIZE2FS_BIN) $(MKE2FS_BIN): $(E2FSPROGS_STAMP)
+$(E2FSCK_BIN) $(RESIZE2FS_BIN) $(MKE2FS_BIN) $(TUNE2FS_BIN) $(DUMPE2FS_BIN): $(E2FSPROGS_STAMP)
 
 # --- component files the root graph names. Each gets an explicit delegation
 #     rule to its sub-make: without one, a deleted kernel beside its surviving
@@ -935,19 +939,25 @@ check-pdpmake: $(PDPMAKE_STAMP) $(PDPMAKE_BIN) $(ELFCHECK)
 
 # The port's size limits, each set from its first build with a tenth of
 # headroom, e2fsck's in milestone 42 at 673672 bytes stripped,
-# resize2fs's in milestone 47 and mke2fs's in milestone 55 at 501608: a
-# configure that let a library or a program back in would be caught here and
-# not in an image.
+# resize2fs's in milestone 47, mke2fs's in milestone 55 at 501608 and
+# tune2fs's and dumpe2fs's in the same at 482664 and 389896: a configure
+# that let a library or a program back in would be caught here and not in an
+# image.
 E2FSCK_LIMIT = 737280
 RESIZE2FS_LIMIT = 430080
 MKE2FS_LIMIT = 552960
-check-e2fsck: $(E2FSPROGS_STAMP) $(E2FSCK_BIN) $(RESIZE2FS_BIN) $(MKE2FS_BIN) $(ELFCHECK)
-	@for f in $(E2FSCK_BIN) $(RESIZE2FS_BIN) $(MKE2FS_BIN); do test -s $$f || { \
+TUNE2FS_LIMIT = 532480
+DUMPE2FS_LIMIT = 430080
+check-e2fsck: $(E2FSPROGS_STAMP) $(E2FSCK_BIN) $(RESIZE2FS_BIN) $(MKE2FS_BIN) $(TUNE2FS_BIN) \
+              $(DUMPE2FS_BIN) $(ELFCHECK)
+	@for f in $(E2FSCK_BIN) $(RESIZE2FS_BIN) $(MKE2FS_BIN) $(TUNE2FS_BIN) $(DUMPE2FS_BIN); do test -s $$f || { \
 	    echo "e2fsprogs: $$f missing or empty; rm vendor/e2fsprogs/.stamp and rebuild (make e2fsprogs)" >&2; \
 	    exit 1; }; done
 	@$(ELFCHECK) $(E2FSCK_BIN)
 	@$(ELFCHECK) $(RESIZE2FS_BIN)
 	@$(ELFCHECK) $(MKE2FS_BIN)
+	@$(ELFCHECK) $(TUNE2FS_BIN)
+	@$(ELFCHECK) $(DUMPE2FS_BIN)
 	@size=$$(wc -c < $(E2FSCK_BIN) | tr -d ' '); test "$$size" -le $(E2FSCK_LIMIT) || { \
 	    echo "e2fsprogs: e2fsck is $$size bytes, over the $(E2FSCK_LIMIT) limit vendor/e2fsprogs/Readme.md sets" >&2; \
 	    exit 1; }
@@ -956,6 +966,12 @@ check-e2fsck: $(E2FSPROGS_STAMP) $(E2FSCK_BIN) $(RESIZE2FS_BIN) $(MKE2FS_BIN) $(
 	    exit 1; }
 	@size=$$(wc -c < $(MKE2FS_BIN) | tr -d ' '); test "$$size" -le $(MKE2FS_LIMIT) || { \
 	    echo "e2fsprogs: mke2fs is $$size bytes, over the $(MKE2FS_LIMIT) limit vendor/e2fsprogs/Readme.md sets" >&2; \
+	    exit 1; }
+	@size=$$(wc -c < $(TUNE2FS_BIN) | tr -d ' '); test "$$size" -le $(TUNE2FS_LIMIT) || { \
+	    echo "e2fsprogs: tune2fs is $$size bytes, over the $(TUNE2FS_LIMIT) limit vendor/e2fsprogs/Readme.md sets" >&2; \
+	    exit 1; }
+	@size=$$(wc -c < $(DUMPE2FS_BIN) | tr -d ' '); test "$$size" -le $(DUMPE2FS_LIMIT) || { \
+	    echo "e2fsprogs: dumpe2fs is $$size bytes, over the $(DUMPE2FS_LIMIT) limit vendor/e2fsprogs/Readme.md sets" >&2; \
 	    exit 1; }
 
 check-tcc: $(TCC_STAMP) $(TCC_OUTPUTS) $(BINFIND) $(ELFCHECK)

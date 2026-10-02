@@ -1,0 +1,63 @@
+.Dd October 2, 2026
+.Dt DUMPE2FS 8
+.Os
+.Sh NAME
+.Nm dumpe2fs
+.Nd list the superblock and block groups of an ext2 file system
+.Sh SYNOPSIS
+.Nm
+.Op Fl bfghixV
+.Op Fl o Cm superblock= Ns Ar block
+.Op Fl o Cm blocksize= Ns Ar size
+.Ar device
+.Sh DESCRIPTION
+.Nm
+prints the superblock of the ext2 volume on
+.Ar device ,
+a partition node, a loop device or a file that holds a volume, and then a
+section for each block group: where its bitmaps and inode table are, and
+its free blocks and inodes.
+It only reads.
+.Pp
+Rach2 uses e2fsprogs 1.47.4, linked statically against the ported musl,
+and installs it on the GNU system at
+.Pa /sbin/dumpe2fs .
+.Bl -tag -width Ds
+.It Fl b
+Print the blocks the volume records as bad.
+.It Fl f
+Print a volume whose features
+.Nm
+does not know.
+.It Fl g
+Print each group as one line of fields separated by colons.
+.It Fl h
+Print the superblock alone.
+.It Fl i
+Read an image
+.Ql e2image
+made; no image of the kind is made on Rach2, which does not build
+e2image.
+.It Fl o Cm superblock= Ns Ar block
+Read the superblock at
+.Ar block ,
+a backup.
+.It Fl o Cm blocksize= Ns Ar size
+The block size to read the backup with.
+.It Fl x
+Print block numbers in hexadecimal.
+.It Fl V
+Print the version and exit.
+.El
+.Sh EXIT STATUS
+.Nm
+exits 0 on success and 1 on an error.
+.Sh EXAMPLES
+The features and the block size of the root:
+.Bd -literal -offset indent
+# dumpe2fs -h /dev/disk0p3 | grep -E 'features|Block size'
+.Ed
+.Sh SEE ALSO
+.Xr e2fsck 8 ,
+.Xr mke2fs 8 ,
+.Xr tune2fs 8

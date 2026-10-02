@@ -80,6 +80,13 @@ tree 0644 /src/ish ish
 dir 0755 /sbin
 file 0755 /sbin/init build/utils/sbin/init-metal
 file 0755 /bin/mke2fs build/vendor/e2fsprogs/mke2fs
+
+# e2fsprogs' checker, resizer and tuner beside mke2fs, as Debian has them
+# in /sbin; the overlay links fsck.ext2 and e2label to them.
+file 0755 /sbin/e2fsck build/vendor/e2fsprogs/e2fsck
+file 0755 /sbin/resize2fs build/vendor/e2fsprogs/resize2fs
+file 0755 /sbin/tune2fs build/vendor/e2fsprogs/tune2fs
+file 0755 /sbin/dumpe2fs build/vendor/e2fsprogs/dumpe2fs
 file 0755 /bin/update build/utils/update
 
 file 0755 /bin/bootctl build/utils/sbin/bootctl

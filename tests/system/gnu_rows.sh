@@ -343,6 +343,21 @@ row_losetup() {
     same "the device given back" "$(losetup -a 2>&1)" ""
 }
 
+# e2fsprogs: tune2fs labels a volume in a file and e2label reads the label,
+# resize2fs grows the volume and dumpe2fs lists its new size, and fsck checks
+# it through fsck.ext2.
+row_e2fsprogs() {
+    truncate -s 8M "$WORK/v.ext2"
+    runs "mke2fs" mke2fs -q -F "$WORK/v.ext2"
+    runs "tune2fs -L" tune2fs -L rowvol "$WORK/v.ext2"
+    same "e2label" "$(e2label "$WORK/v.ext2" 2>&1)" "rowvol"
+    truncate -s 16M "$WORK/v.ext2"
+    runs "resize2fs" resize2fs "$WORK/v.ext2"
+    same "dumpe2fs -h" "$(dumpe2fs -h "$WORK/v.ext2" 2>/dev/null |
+        awk -F: '/^Block count/ { gsub(/ /, "", $2); print $2 }')" "4096"
+    runs "fsck through fsck.ext2" fsck -t ext2 -n "$WORK/v.ext2"
+}
+
 # file names a program, a text and a gzip file from the magic database, and
 # looks into the gzip file with -z.
 row_file() {

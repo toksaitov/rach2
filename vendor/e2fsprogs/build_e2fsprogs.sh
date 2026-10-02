@@ -1,15 +1,15 @@
 #!/usr/bin/env sh
 
 #
-# build_e2fsprogs.sh: build a static-musl e2fsck, resize2fs and mke2fs for
-# Rach2 from the pinned, vendored e2fsprogs tarball. Verifies the sha256,
-# extracts, applies the patches patches/series names, configures against
-# the ported musl through the muslgcc wrapper with every program and
-# library this system does not use switched off, builds the libraries and
-# the three programs, strips them, and stages them out of tree under
-# build/vendor/e2fsprogs/, from which the manifests stage them under
-# /sbin. mke2fs is built with mke2fs.conf beside this script as its
-# defaults. debugfs is not built. Run vendor/musl/build_libc.sh first.
+# build_e2fsprogs.sh: build a static-musl e2fsck, resize2fs, mke2fs, tune2fs
+# and dumpe2fs for Rach2 from the pinned, vendored e2fsprogs tarball.
+# Verifies the sha256, extracts, applies the patches patches/series names,
+# configures against the ported musl through the muslgcc wrapper with every
+# program and library this system does not use switched off, builds the
+# libraries and the five programs, strips them, and stages them out of tree
+# under build/vendor/e2fsprogs/, from which the manifests stage them. mke2fs
+# is built with mke2fs.conf beside this script as its defaults. debugfs is
+# not built. Run vendor/musl/build_libc.sh first.
 #
 # Usage: ./build_e2fsprogs.sh
 #
@@ -94,7 +94,7 @@ cd "$SRC"
 # libraries e2fsck links, the resizer, and off everything else: message
 # catalogs, thread locals, the uuid daemon, fuse2fs, the initrd helper,
 # e2image, e4defrag, debugfs, multi-mount protection, backtraces and tdb,
-# none of which the three programs need and each of which is a build of its
+# none of which the five programs need and each of which is a build of its
 # own.
 echo "e2fsprogs: configuring"
 ./configure --host=i686-linux-musl CC="$WRAP" AR=i686-elf-ar RANLIB=i686-elf-ranlib \
@@ -104,22 +104,25 @@ echo "e2fsprogs: configuring"
     --without-libiconv --enable-libuuid --enable-libblkid CFLAGS="-O2" \
     > configure.log 2>&1 || { tail -20 configure.log >&2; exit 1; }
 
-# The libraries first, then e2fsck, resize2fs and mke2fs alone. RDYNAMIC
-# is the link flag that exports every symbol for a backtrace, which is
-# disabled above and which the freestanding linker does not take.
+# The libraries first, then e2fsck, resize2fs, mke2fs, tune2fs and dumpe2fs
+# alone. RDYNAMIC is the link flag that exports every symbol for a backtrace,
+# which is disabled above and which the freestanding linker does not take.
 echo "e2fsprogs: building the libraries"
 make -j"${JOBS:-4}" libs > build-libs.log 2>&1 || { tail -20 build-libs.log >&2; exit 1; }
 echo "e2fsprogs: building e2fsck"
 make -j"${JOBS:-4}" -C e2fsck e2fsck RDYNAMIC= > build-e2fsck.log 2>&1 || { tail -20 build-e2fsck.log >&2; exit 1; }
 echo "e2fsprogs: building resize2fs"
 make -j"${JOBS:-4}" -C resize resize2fs RDYNAMIC= > build-resize2fs.log 2>&1 || { tail -20 build-resize2fs.log >&2; exit 1; }
-echo "e2fsprogs: building mke2fs"
-make -j"${JOBS:-4}" -C misc mke2fs RDYNAMIC= > build-mke2fs.log 2>&1 || { tail -20 build-mke2fs.log >&2; exit 1; }
+echo "e2fsprogs: building mke2fs, tune2fs and dumpe2fs"
+make -j"${JOBS:-4}" -C misc mke2fs tune2fs dumpe2fs RDYNAMIC= > build-mke2fs.log 2>&1 ||
+    { tail -20 build-mke2fs.log >&2; exit 1; }
 
 mkdir -p "$STAGE"
 i686-elf-strip -o "$STAGE/e2fsck" e2fsck/e2fsck
 echo "e2fsprogs: staged $STAGE/e2fsck ($(wc -c < "$STAGE/e2fsck" | tr -d ' ') bytes)"
 i686-elf-strip -o "$STAGE/resize2fs" resize/resize2fs
 echo "e2fsprogs: staged $STAGE/resize2fs ($(wc -c < "$STAGE/resize2fs" | tr -d ' ') bytes)"
-i686-elf-strip -o "$STAGE/mke2fs" misc/mke2fs
-echo "e2fsprogs: staged $STAGE/mke2fs ($(wc -c < "$STAGE/mke2fs" | tr -d ' ') bytes)"
+for p in mke2fs tune2fs dumpe2fs; do
+    i686-elf-strip -o "$STAGE/$p" misc/$p
+    echo "e2fsprogs: staged $STAGE/$p ($(wc -c < "$STAGE/$p" | tr -d ' ') bytes)"
+done

@@ -27,17 +27,28 @@ them.
 .Pp
 Rach2 uses e2fsprogs 1.47.4, linked statically against the ported musl.
 .Nm
-is installed only in the recovery image, at
-.Pa /sbin/e2fsck ;
-os-real and the installed root do not include it.
+is installed in the recovery image and on the GNU system, at
+.Pa /sbin/e2fsck ,
+where
+.Pa /sbin/fsck.ext2 ,
+the name util-linux's
+.Xr fsck 8
+runs for an ext2 volume, is a link to it; os-real does not include it.
+The GNU system's ordinary kernel takes no write to a disk node, so there
+.Nm
+checks a partition with
+.Fl n
+and repairs a volume in a file or on a loop device.
 The build includes libuuid and libblkid and disables NLS, thread-local
 storage, uuidd, fuse2fs, e2initrd-helper, e2image, e4defrag, debugfs,
 multi-mount protection, backtraces, and tdb.
 Of e2fsprogs' programs,
 .Nm ,
-.Xr resize2fs 8
+.Xr resize2fs 8 ,
+.Xr mke2fs 8 ,
+.Xr tune2fs 8
 and
-.Xr mke2fs 8
+.Xr dumpe2fs 8
 are built for the machine; debugfs is not.
 .Pp
 The partition nodes provide raw sector access.

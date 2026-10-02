@@ -18,8 +18,10 @@ grows or shrinks the ext2 file system on
 .Ar device .
 Rach2 uses e2fsprogs 1.47.4, built with the resizer enabled and linked
 statically against the ported musl.
-The program is installed only in the recovery image, at
+The program is installed in the recovery image and on the GNU system, at
 .Pa /sbin/resize2fs .
+The GNU system's ordinary kernel takes no write to a disk node, so there
+it resizes a volume in a file or on a loop device.
 .Pp
 The volume must be unmounted.
 Rach2 has no on-line resize support.
@@ -144,7 +146,7 @@ The undo file cannot recover from a power failure or system crash.
 .Sh FILES
 .Bl -tag -width /sbin/resize2fs
 .It Pa /sbin/resize2fs
-The recovery image's resizer.
+The resizer of the recovery image and of the GNU system.
 .El
 .Sh EXIT STATUS
 .Nm
