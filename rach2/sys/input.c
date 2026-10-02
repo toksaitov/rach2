@@ -31,6 +31,7 @@
  * state is shared and correct for either keyboard. */
 static int shift_held;
 static int ctrl_held;
+static int alt_held;
 static int saw_e0;
 
 /* Whether a mouse of any kind was found. */
@@ -134,6 +135,9 @@ static void session_key(uint8_t scancode, char c, int was_e0)
     } else if (c == '\b') {
         tc = 0x7F;
     }
+    if (alt_held) {
+        tty_input_char(&console_tty, 0x1B);
+    }
     tty_input_char(&console_tty, tc);
 }
 
@@ -153,7 +157,8 @@ static void session_key(uint8_t scancode, char c, int was_e0)
  * buffer when it reads.
  *
  * For the discipline, Backspace, '\b' in the keymap, becomes DEL, its erase
- * character, Ctrl with a letter becomes that letter's control byte, and the
+ * character, Ctrl with a letter becomes that letter's control byte, Alt puts
+ * ESC before a key's character, as Linux's console sends Meta, and the
  * arrows and editing keys become their escape sequences, so line editing, end
  * of file and cursor keys arrive as they would from a terminal. A key nobody
  * is parked for waits in the discipline as type-ahead.
@@ -189,6 +194,12 @@ void input_key(uint8_t scancode)
     }
     if (scancode == 0x9D) {
         ctrl_held = 0;
+        return;
+    }
+
+    /* Left and right Alt both report 0x38 pressed and 0xB8 released. */
+    if ((scancode & 0x7F) == 0x38) {
+        alt_held = !(scancode & 0x80);
         return;
     }
 

@@ -308,7 +308,10 @@ run-fault: rach2 tests krffs test-image $(HARNESS)
 # longer line, which is where a kernel that ignored the buffer size would be
 # caught. ttyprobe is driven the way a terminal drives: a line with two erases
 # in it while the console is cooked, then one byte with no newline once the
-# probe has switched the console to raw. `sendraw` is what delivers both.
+# probe has switched the console to raw. `sendraw` is what delivers both. The
+# screen answers the probe's queries with nothing typed, and the last step
+# presses Alt with x on the machine's keyboard, which the probe reads as ESC
+# and x.
 run-console: rach2 tests krffs test-image $(HARNESS)
 	$(HARNESS) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
 	    --qemu-arg=-cpu --qemu-arg=max \
@@ -328,7 +331,7 @@ run-console: rach2 tests krffs test-image $(HARNESS)
 	    'sendraw=ab\x7f\x7fcd\n' \
 	    "expect=COOKED:" "expect=TTYPROBE RAW" \
 	    'sendraw=X' \
-	    "expect=RAW:"
+	    "expect=RAW:" "expect=TTYPROBE ALT" "key=alt-x"
 # `tests/run audio`: what the machine actually played. The debug shell's
 # `audio test scale` plays five notes, and the driver's own report says what it
 # was asked to play, not what came out; QEMU's wav backend writes every sample

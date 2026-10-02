@@ -14,7 +14,9 @@
  *       and no echo. The driver sends "X", read() returns it;
  *   (g) the screen's answers: the device attributes query, `ESC [ c`, reads
  *       back `ESC [ ? 6 c`, and the cursor position query, `ESC [ 6 n`, reads
- *       back `ESC [ row ; col R`, with nothing typed.
+ *       back `ESC [ row ; col R`, with nothing typed;
+ *   (h) Alt: the driver presses Alt with x on the keyboard after
+ *       `TTYPROBE ALT`, which reads as ESC and x.
  *
  * Prints "TTYPROBE OK" or "TTYPROBE FAIL". Freestanding; direct int 0x80.
  * Driven by `tests/run console`, whose harness steps send the cooked line and
@@ -202,6 +204,19 @@ void _start(void)
     n = do_read(0, buf, (int)sizeof(buf));
     check(n >= 6 && buf[0] == 27 && buf[1] == '[' && buf[n - 1] == 'R',
           "the cursor position is read back as ESC [ row ; col R");
+
+    /* (h) Alt puts ESC before the key's character. */
+    puts("TTYPROBE ALT");
+    n = 0;
+    while (n < 2) {
+        int got = do_read(0, buf + n, 2 - n);
+
+        if (got <= 0) {
+            break;
+        }
+        n += got;
+    }
+    check(n == 2 && buf[0] == 27 && buf[1] == 'x', "Alt with x is read as ESC x");
 
     if (fails == 0) {
         puts("TTYPROBE OK");
