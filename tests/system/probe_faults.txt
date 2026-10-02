@@ -5779,3 +5779,13 @@ old
 new
     for (cls = 1; kheap_class(cls, &c) == 0; cls++) {
 end
+
+fault sys-memory-block-unnamed
+probe procprobe
+file rach2/sys/fs/synthfs.c
+expect FAIL: /sys/devices/system/memory has a block size in bytes and memory0 online
+old
+                 {SYSFS_MEMORY, "memory0", SYSFS_MEMORY0}};
+new
+                 {SYSFS_MEMORY, "memory1", SYSFS_MEMORY0}};
+end

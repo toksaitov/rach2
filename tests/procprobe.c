@@ -1259,8 +1259,9 @@ static void sleeping_child_rows(const char *path)
 }
 
 /** /proc/sys/vm has the swap's weight and the overcommit policy at Linux's
- * defaults, which sysctl and scripts read, and /proc/slabinfo the kernel
- * heap's classes, which slabtop reads. */
+ * defaults, which sysctl and scripts read; /proc/slabinfo the kernel heap's
+ * classes, which slabtop reads; and /sys/devices/system/memory a block of
+ * memory, which lsmem reads. */
 static void memory_file_rows(void)
 {
     int n = slurp("/proc/sys/vm/swappiness", buf, (int)sizeof(buf));
@@ -1272,6 +1273,11 @@ static void memory_file_rows(void)
     check(n > 0 && contains(buf, n, "slabinfo - version: 2.1\n") &&
               contains(buf, n, "\nkmalloc-16 ") && contains(buf, n, "\nkmalloc-2048 "),
           "/proc/slabinfo has Linux's version line and a line for each heap class");
+    n = slurp("/sys/devices/system/memory/block_size_bytes", buf, (int)sizeof(buf));
+    check(n > 4 && contains(buf, n, "000\n") &&
+              slurp("/sys/devices/system/memory/memory0/state", buf, (int)sizeof(buf)) == 7 &&
+              contains(buf, 7, "online\n"),
+          "/sys/devices/system/memory has a block size in bytes and memory0 online");
 }
 
 void probe_main(unsigned int *sp);

@@ -3657,16 +3657,33 @@ static void ap_two(struct procfs_text *t, int32_t v)
     ap_ch(t, (char)('0' + v % 10));
 }
 
+/** Append `v` in hexadecimal, lowercase and without leading zeros, as
+ * Linux's `%x` writes it. */
+static void ap_hex_lower(struct procfs_text *t, uint32_t v)
+{
+    static const char digits[] = "0123456789abcdef";
+    int shift = 28;
+
+    while (shift > 0 && (v >> shift) == 0) {
+        shift -= 4;
+    }
+    for (; shift >= 0; shift -= 4) {
+        ap_ch(t, digits[(v >> shift) & 15u]);
+    }
+}
+
 /**
  * Render the attribute `attr` of /sys/class/rtc/rtc0, of its device's power
- * directory, of /sys/power or of /sys/devices/system/cpu, `node`: the
- * clock's date and time in UTC and its seconds since 1970, its driver's
- * name, that it set the system's time at boot, and the wake alarm in
- * seconds since 1970, nothing when none is set, as Linux writes them; that
- * the clock may wake the machine; the one sleep state, suspend to idle, by
- * its two names; and the one processor, 0, as the highest number the kernel
- * takes and the processors that may be, are and are online, with none
- * offline.
+ * directory, of /sys/power, of /sys/devices/system/cpu or of
+ * /sys/devices/system/memory and its block, `node`: the clock's date and
+ * time in UTC and its seconds since 1970, its driver's name, that it set the
+ * system's time at boot, and the wake alarm in seconds since 1970, nothing
+ * when none is set, as Linux writes them; that the clock may wake the
+ * machine; the one sleep state, suspend to idle, by its two names; the one
+ * processor, 0, as the highest number the kernel takes and the processors
+ * that may be, are and are online, with none offline; and the one memory
+ * block, memory0, the size of all the memory the kernel manages, online and
+ * not removable, which lsmem reads.
  */
 static int procfs_gen_sysattr(struct procfs_text *t, int node, int attr)
 {
@@ -3685,6 +3702,17 @@ static int procfs_gen_sysattr(struct procfs_text *t, int node, int attr)
     }
     if (node == SYSFS_CPU) {
         ap_str(t, attr == 1 ? "\n" : "0\n");
+        return t->len;
+    }
+    if (node == SYSFS_MEMORY) {
+        ap_hex_lower(t, frame_total_count());
+        ap_str(t, "000\n"); /* a frame is 0x1000 bytes */
+        return t->len;
+    }
+    if (node == SYSFS_MEMORY0) {
+        static const char *const value[] = {"1\n", "00000000\n", "0\n", "online\n"};
+
+        ap_str(t, value[attr]);
         return t->len;
     }
     if (attr == 2 || attr == 1) {
@@ -3830,21 +3858,6 @@ static int procfs_gen_netattr(struct procfs_text *t, int node, int index, int at
     }
     ap_ch(t, '\n');
     return t->len;
-}
-
-/** Append `v` in hexadecimal, lowercase and without leading zeros, as
- * Linux's `%x` writes it. */
-static void ap_hex_lower(struct procfs_text *t, uint32_t v)
-{
-    static const char digits[] = "0123456789abcdef";
-    int shift = 28;
-
-    while (shift > 0 && (v >> shift) == 0) {
-        shift -= 4;
-    }
-    for (; shift >= 0; shift -= 4) {
-        ap_ch(t, digits[(v >> shift) & 15u]);
-    }
 }
 
 /** Append `v` in decimal with leading zeros to three digits, as `%03d`. */

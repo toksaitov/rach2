@@ -177,6 +177,29 @@ glibc's
 .Xr sysconf 3
 counts the processors that are online from
 .Pa online .
+.It Pa /sys/devices/system/memory
+The memory blocks, which
+.Xr lsmem 1
+reads:
+.Pa block_size_bytes ,
+the size of all the memory the kernel manages in hexadecimal bytes, and
+one block,
+.Pa memory0 ,
+whose
+.Pa state
+is
+.Ql online ,
+.Pa online
+.Ql 1 ,
+.Pa removable
+.Ql 0
+and
+.Pa phys_index
+.Ql 00000000 .
+Linux divides memory into blocks of 128 MiB or more and gives each its
+own directory; the one block here has the size of the memory the kernel
+manages and is given at address 0, though that memory has holes and need
+not start there.
 .It Pa /sys/block/DISK
 A directory for each disk of
 .Pa /dev ,
@@ -289,6 +312,8 @@ The real-time clock.
 The sleep states.
 .It Pa /sys/devices/system/cpu
 The processors.
+.It Pa /sys/devices/system/memory
+The memory blocks.
 .It Pa /sys/block
 The disks and their partitions.
 .It Pa /sys/dev/block

@@ -653,6 +653,8 @@ const char *sysfs_attr(int node, int n)
     static const char *const wakeup[] = {"wakeup", 0};
     static const char *const power[] = {"mem_sleep", "state", 0};
     static const char *const cpu[] = {"kernel_max", "offline", "online", "possible", "present", 0};
+    static const char *const memory[] = {"block_size_bytes", 0};
+    static const char *const block[] = {"online", "phys_index", "removable", "state", 0};
     static const char *const disk[] = {
         "alignment_offset", "capability", "dev",  "ext_range", "hidden", "range",
         "removable",        "ro",         "size", "uevent",    0};
@@ -679,6 +681,8 @@ const char *sysfs_attr(int node, int n)
                               : node == SYSFS_RTC_POWER   ? wakeup
                               : node == SYSFS_POWER       ? power
                               : node == SYSFS_CPU         ? cpu
+                              : node == SYSFS_MEMORY      ? memory
+                              : node == SYSFS_MEMORY0     ? block
                               : node == SYSFS_BLOCK_DISK  ? disk
                               : node == SYSFS_BLOCK_PART  ? part
                               : node == SYSFS_BLOCK_QUEUE ? queue
@@ -736,9 +740,11 @@ void synth_sys_path(int node, int key, char *out, int cap)
     }
     if (node >= SYSFS_SYSTEM) {
         synth_put(out, cap, &pos,
-                  node == SYSFS_SYSTEM ? "/sys/devices/system"
-                  : node == SYSFS_CPU  ? "/sys/devices/system/cpu"
-                                       : "/sys/devices/system/cpu/cpu0");
+                  node == SYSFS_SYSTEM   ? "/sys/devices/system"
+                  : node == SYSFS_CPU    ? "/sys/devices/system/cpu"
+                  : node == SYSFS_CPU0   ? "/sys/devices/system/cpu/cpu0"
+                  : node == SYSFS_MEMORY ? "/sys/devices/system/memory"
+                                         : "/sys/devices/system/memory/memory0");
         out[pos] = '\0';
         return;
     }
@@ -884,7 +890,9 @@ static int synth_classify_sys_fixed(const struct comp *c, int n, int node, struc
                  {SYSFS_RTC0, "device", SYSFS_RTC_DEVICE},
                  {SYSFS_RTC_DEVICE, "power", SYSFS_RTC_POWER},
                  {SYSFS_SYSTEM, "cpu", SYSFS_CPU},
-                 {SYSFS_CPU, "cpu0", SYSFS_CPU0}};
+                 {SYSFS_CPU, "cpu0", SYSFS_CPU0},
+                 {SYSFS_SYSTEM, "memory", SYSFS_MEMORY},
+                 {SYSFS_MEMORY, "memory0", SYSFS_MEMORY0}};
     int i, at = 0;
 
     while (at < n) {

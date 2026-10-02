@@ -11122,6 +11122,8 @@ static int synth_sys_dirent(int node, int key, int n, char *name, uint64_t *ino,
                  {SYSFS_DEVICES, "system", SYSFS_SYSTEM},
                  {SYSFS_SYSTEM, "cpu", SYSFS_CPU},
                  {SYSFS_CPU, "cpu0", SYSFS_CPU0},
+                 {SYSFS_SYSTEM, "memory", SYSFS_MEMORY},
+                 {SYSFS_MEMORY, "memory0", SYSFS_MEMORY0},
                  {SYSFS_ROOT, "class", SYSFS_CLASS},
                  {SYSFS_ROOT, "power", SYSFS_POWER},
                  {SYSFS_CLASS, "net", SYSFS_CLASS_NET},
@@ -11149,7 +11151,8 @@ static int synth_sys_dirent(int node, int key, int n, char *name, uint64_t *ino,
     if (node == SYSFS_BLOCK || node == SYSFS_DEV_BLOCK || SYSFS_IS_BLOCK(node)) {
         return synth_sys_block_dirent(node, key, n, name, ino, dtype);
     }
-    if (node == SYSFS_RTC0 || node == SYSFS_RTC_POWER || node == SYSFS_POWER || node == SYSFS_CPU) {
+    if (node == SYSFS_RTC0 || node == SYSFS_RTC_POWER || node == SYSFS_POWER || node == SYSFS_CPU ||
+        node == SYSFS_MEMORY || node == SYSFS_MEMORY0) {
         if (!sysfs_attr(node, n)) {
             return 0;
         }
