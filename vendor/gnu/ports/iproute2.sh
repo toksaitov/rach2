@@ -4,9 +4,9 @@
 # configure is its own and takes the compiler from CC; it finds none of
 # libmnl, libelf, libbpf, libcap or SELinux in the root, and the programs
 # that need them are left out. The kernel answers netlink's requests that
-# show, and refuses those that change the configuration, which ifconfig and
-# route make through the interface ioctls (netlink(7)). The programs are
-# installed in /usr/sbin, which /sbin links into.
+# show and those that change a link's state, its addresses, the routes and
+# the neighbours (netlink(7)). The programs are installed in /usr/sbin,
+# which /sbin links into.
 VERSION=7.2.0
 
 port_build()
