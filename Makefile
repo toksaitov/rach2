@@ -54,6 +54,7 @@ TCC_BIN      = build/vendor/tcc/tcc
 PDPMAKE_BIN  = build/vendor/pdpmake/make
 E2FSCK_BIN   = build/vendor/e2fsprogs/e2fsck
 RESIZE2FS_BIN = build/vendor/e2fsprogs/resize2fs
+MKE2FS_BIN   = build/vendor/e2fsprogs/mke2fs
 
 # The pinned vendored source tarballs: the exact names the build_*.sh scripts
 # verify by sha256. Used as stamp prerequisites (not a $(wildcard), which would
@@ -206,14 +207,17 @@ $(PDPMAKE_STAMP): vendor/pdpmake/build_pdpmake.sh $(PDPMAKE_PATCHES) \
 	@test -s $(PDPMAKE_BIN) || { echo "pdpmake: build produced no $(PDPMAKE_BIN)" >&2; exit 1; }
 	@touch $@
 
-# e2fsprogs, of which the recovery image stages e2fsck and resize2fs. The patch
-# manifest is a prerequisite as Dropbear's is below.
+# e2fsprogs, of which the images stage e2fsck, resize2fs and mke2fs. The
+# patch manifest is a prerequisite as Dropbear's is below, and mke2fs.conf is
+# one because mke2fs compiles it in as its defaults.
 $(E2FSPROGS_STAMP): vendor/e2fsprogs/build_e2fsprogs.sh vendor/e2fsprogs/muslgcc \
+                    vendor/e2fsprogs/mke2fs.conf \
                     $(E2FSPROGS_PATCHES) $(E2FSPROGS_TARBALL) $(LIBC_STAMP)
-	@rm -f $@ $(E2FSCK_BIN) $(RESIZE2FS_BIN)
+	@rm -f $@ $(E2FSCK_BIN) $(RESIZE2FS_BIN) $(MKE2FS_BIN)
 	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else t0=$$(date +%s); ./vendor/e2fsprogs/build_e2fsprogs.sh && echo "e2fsprogs: result: built in $$(($$(date +%s)-t0))s"; fi
 	@test -s $(E2FSCK_BIN) || { echo "e2fsprogs: build produced no $(E2FSCK_BIN)" >&2; exit 1; }
 	@test -s $(RESIZE2FS_BIN) || { echo "e2fsprogs: build produced no $(RESIZE2FS_BIN)" >&2; exit 1; }
+	@test -s $(MKE2FS_BIN) || { echo "e2fsprogs: build produced no $(MKE2FS_BIN)" >&2; exit 1; }
 	@touch $@
 
 # The patch manifest is a prerequisite for the reason musl's is: the script
@@ -256,7 +260,7 @@ _ := $(shell [ ! -f $(BUSYBOX_STAMP) ] || \
         for f in $(BUSYBOX_OUTPUTS); do [ -e "$$f" ] || { rm -f $(BUSYBOX_STAMP); break; }; done)
 _ := $(shell [ ! -f $(DROPBEAR_STAMP) ] || [ -s $(DROPBEAR_BIN) ] || rm -f $(DROPBEAR_STAMP))
 _ := $(shell [ ! -f $(PDPMAKE_STAMP) ] || [ -s $(PDPMAKE_BIN) ] || rm -f $(PDPMAKE_STAMP))
-_ := $(shell [ ! -f $(E2FSPROGS_STAMP) ] || { [ -s $(E2FSCK_BIN) ] && [ -s $(RESIZE2FS_BIN) ]; } || rm -f $(E2FSPROGS_STAMP))
+_ := $(shell [ ! -f $(E2FSPROGS_STAMP) ] || { [ -s $(E2FSCK_BIN) ] && [ -s $(RESIZE2FS_BIN) ] && [ -s $(MKE2FS_BIN) ]; } || rm -f $(E2FSPROGS_STAMP))
 
 # The tree lists above test existence only, because musl installs several
 # legitimately empty headers. The binaries that can never be empty also get a
@@ -299,7 +303,7 @@ endif
 $(BUSYBOX_OUTPUTS): $(BUSYBOX_STAMP)
 $(DROPBEAR_BIN): $(DROPBEAR_STAMP)
 $(PDPMAKE_BIN): $(PDPMAKE_STAMP)
-$(E2FSCK_BIN) $(RESIZE2FS_BIN): $(E2FSPROGS_STAMP)
+$(E2FSCK_BIN) $(RESIZE2FS_BIN) $(MKE2FS_BIN): $(E2FSPROGS_STAMP)
 
 # --- component files the root graph names. Each gets an explicit delegation
 #     rule to its sub-make: without one, a deleted kernel beside its surviving
@@ -643,7 +647,7 @@ $(OS_SIMPLE_IMAGE): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(MANIFEST_
 # suite five times slower. gen_demo_key.sh provisions the SSH login keys and
 # gen_demo_password.sh the account passwords and /etc/shadow, each when
 # absent; the check targets ensure the busybox/dropbear binaries are real.
-$(OS_REAL_IMAGE): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) $(IMAGE_TOOLS) $(MAN_ALL) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
+$(OS_REAL_IMAGE): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) $(IMAGE_TOOLS) $(MAN_ALL) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti check-e2fsck ports/doom
 	$(MKIMAGE) krffs/manifests/os-real.manifest $@ 18
 
 # The same manifest as an ext2 volume, which the root `rach2.root=ext2`
@@ -653,7 +657,7 @@ $(OS_REAL_IMAGE): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS
 # sets the owners with debugfs, and passes it through e2fsck and the set-id
 # guard's own ext2 reader before it is named. The prerequisites are the KRFFS
 # image's, so the two are built from one tree.
-$(OS_REAL_EXT2): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) tools/image/mkext2.sh $(IMAGE_TOOLS) $(MAN_ALL) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
+$(OS_REAL_EXT2): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) tools/image/mkext2.sh $(IMAGE_TOOLS) $(MAN_ALL) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti check-e2fsck ports/doom
 	sh tools/image/mkext2.sh krffs/manifests/os-real.manifest $@ 1024
 
 # The metal image: what the Lenovo G50-70 boots from a USB stick. The module
@@ -733,7 +737,7 @@ rach2-recovery-image: $(RECOVERY_IMAGE)
 # RAM-disk module. A 64 MB disk with a 48 MB KRFFS partition at LBA 2048; the
 # partition is larger than the 8 MiB resident page-cache cap on purpose, so it
 # can later prove an on-disk file system bigger than what fits in RAM at once.
-os-real-disk: krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(MAN_ALL)
+os-real-disk: krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti check-e2fsck ports/doom $(MAN_ALL)
 	$(MKDISK) krffs/manifests/os-real.manifest $(OS_REAL_DISK) 64 48
 
 # `make rach2-sealed-disk`: the disk the installer writes to a machine and the
@@ -857,7 +861,7 @@ $(SEALED_DISK): build/rach2/kernel $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $(SEALED
 # the make database instead. Its recovery partition carries the recovery
 # image, so a tree with a recovery key names it `os-real-grub-with-key.disk`.
 .PHONY: os-real-grub-disk
-os-real-grub-disk: krffs rach2 utils rach2-recovery rach2-recovery-image check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
+os-real-grub-disk: krffs rach2 utils rach2-recovery rach2-recovery-image check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti check-e2fsck ports/doom
 	@$(MAKE) --no-print-directory $(OS_REAL_GRUB_DISK)
 
 $(OS_REAL_GRUB_DISK): build/rach2/kernel $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $(OS_REAL_EXT2) \
@@ -930,22 +934,28 @@ check-pdpmake: $(PDPMAKE_STAMP) $(PDPMAKE_BIN) $(ELFCHECK)
 	@$(ELFCHECK) $(PDPMAKE_BIN)
 
 # The port's size limits, each set from its first build with a tenth of
-# headroom, e2fsck's in milestone 42 at 673672 bytes stripped and
-# resize2fs's in milestone 47: a configure that let a library or a program
-# back in would be caught here and not in the recovery image.
+# headroom, e2fsck's in milestone 42 at 673672 bytes stripped,
+# resize2fs's in milestone 47 and mke2fs's in milestone 55 at 501608: a
+# configure that let a library or a program back in would be caught here and
+# not in an image.
 E2FSCK_LIMIT = 737280
 RESIZE2FS_LIMIT = 430080
-check-e2fsck: $(E2FSPROGS_STAMP) $(E2FSCK_BIN) $(RESIZE2FS_BIN) $(ELFCHECK)
-	@for f in $(E2FSCK_BIN) $(RESIZE2FS_BIN); do test -s $$f || { \
+MKE2FS_LIMIT = 552960
+check-e2fsck: $(E2FSPROGS_STAMP) $(E2FSCK_BIN) $(RESIZE2FS_BIN) $(MKE2FS_BIN) $(ELFCHECK)
+	@for f in $(E2FSCK_BIN) $(RESIZE2FS_BIN) $(MKE2FS_BIN); do test -s $$f || { \
 	    echo "e2fsprogs: $$f missing or empty; rm vendor/e2fsprogs/.stamp and rebuild (make e2fsprogs)" >&2; \
 	    exit 1; }; done
 	@$(ELFCHECK) $(E2FSCK_BIN)
 	@$(ELFCHECK) $(RESIZE2FS_BIN)
+	@$(ELFCHECK) $(MKE2FS_BIN)
 	@size=$$(wc -c < $(E2FSCK_BIN) | tr -d ' '); test "$$size" -le $(E2FSCK_LIMIT) || { \
 	    echo "e2fsprogs: e2fsck is $$size bytes, over the $(E2FSCK_LIMIT) limit vendor/e2fsprogs/Readme.md sets" >&2; \
 	    exit 1; }
 	@size=$$(wc -c < $(RESIZE2FS_BIN) | tr -d ' '); test "$$size" -le $(RESIZE2FS_LIMIT) || { \
 	    echo "e2fsprogs: resize2fs is $$size bytes, over the $(RESIZE2FS_LIMIT) limit vendor/e2fsprogs/Readme.md sets" >&2; \
+	    exit 1; }
+	@size=$$(wc -c < $(MKE2FS_BIN) | tr -d ' '); test "$$size" -le $(MKE2FS_LIMIT) || { \
+	    echo "e2fsprogs: mke2fs is $$size bytes, over the $(MKE2FS_LIMIT) limit vendor/e2fsprogs/Readme.md sets" >&2; \
 	    exit 1; }
 
 check-tcc: $(TCC_STAMP) $(TCC_OUTPUTS) $(BINFIND) $(ELFCHECK)

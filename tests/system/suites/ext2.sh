@@ -7,8 +7,9 @@
 # probe mounts the fixture's partition and runs its rows. The root disk has
 # the os-real system on an ext2 first partition and an empty ext2 second
 # one; the ordinary kernel boots it as its root with `rach2.root=ext2`,
-# writes to it, is killed under it, and the boots that follow show the
-# check, the read-only fault, recovery's `e2fsck` and the clean boot after.
+# writes to it, makes volumes in files with `mke2fs` and `mkfs.vfat`, is
+# killed under it, and the boots that follow show the check, the read-only
+# fault, recovery's `e2fsck` and `mke2fs`, and the clean boot after.
 #
 # Usage: ext2.sh KERNEL IMAGE HARNESS DISK MKMBR RECOVERY_KERNEL RECOVERY_IMAGE
 #
@@ -201,6 +202,23 @@ grep -aq 'Operation not permitted' "$ROOT.first.log" \
     || fail "the ordinary build refuses a write to a partition node"
 echo "ext2-test: the ordinary build refuses a write to a partition node: OK"
 
+# ---- 2f: mke2fs and mkfs.vfat make a volume in a file, which a loop device
+#      mounts writable. The ordinary kernel writes no disk node, so this is
+#      how a file system is made outside recovery. The files are removed, so
+#      the blocks the later rows name are free again ----
+boot_root "$ROOT.mkfs.log" --ok "MKFSDONE" \
+    "send=mkdir -p /mnt/v && mke2fs -q -F /root/v.ext2 8M && loopctl attach 0 /root/v.ext2 && mount -t ext2 /dev/loop0 /mnt/v && grep loop0 /proc/mounts" \
+    "expect=/dev/loop0 /mnt/v ext2 rw" \
+    "send=echo made > /mnt/v/f && umount /mnt/v && mount -t ext2 /dev/loop0 /mnt/v && echo GOT=\$(cat /mnt/v/f) && umount /mnt/v && loopctl detach 0" \
+    "expect=GOT=made" \
+    "send=: > /root/v.fat && mkfs.vfat -n RACH2 /root/v.fat 16384 && loopctl attach 0 /root/v.fat && mount -t vfat /dev/loop0 /mnt/v && grep loop0 /proc/mounts" \
+    "expect=/dev/loop0 /mnt/v vfat rw" \
+    "send=echo made > /mnt/v/f && umount /mnt/v && mount -t vfat /dev/loop0 /mnt/v && echo GOT=\$(cat /mnt/v/f) && umount /mnt/v && loopctl detach 0" \
+    "expect=GOT=made" \
+    "send=rm /root/v.ext2 /root/v.fat && sync && echo MKFS\"\"DONE" "expect=MKFSDONE" \
+    || fail "mke2fs and mkfs.vfat in a file"
+echo "ext2-test: mke2fs and mkfs.vfat make volumes in files that a loop device mounts writable: OK"
+
 # ---- 3: the machine was killed: the dirty root is checked, then unmounted ----
 [ "$(p1_state)" = "0" ] || fail "the killed machine left the valid bit set"
 boot_root "$ROOT.dirty.log" --ok "Goodbye" \
@@ -263,13 +281,23 @@ echo "ext2-test: a recovery boot without rach2.fsck leaves the disk as it was: O
     "expect=recovery image" "expect=~ #" \
     "send=dd if=/dev/disk0p2 of=/tmp/s bs=512 count=1 skip=16383 && printf 'rach2 wrote this sector%%s' '' | dd of=/tmp/w bs=512 count=1 conv=sync 2>/dev/null && echo SAVED\"\"IT" "expect=SAVEDIT" \
     "send=dd if=/tmp/w of=/dev/disk0p2 bs=512 count=1 seek=16383 && dd if=/dev/disk0p2 bs=512 count=1 skip=16383 | head -c 23 && dd if=/tmp/s of=/dev/disk0p2 bs=512 count=1 seek=16383 && echo BACK\"\"OK" \
-    "expect=rach2 wrote this sector" "expect=BACKOK" "send=echo REC\"\"DONE" "expect=RECDONE" > /dev/null 2>&1 || fail "the recovery boot"
+    "expect=rach2 wrote this sector" "expect=BACKOK" \
+    "send=mke2fs -q -F -L made /dev/disk0p2 && e2fsck -fn /dev/disk0p2 > /dev/null && echo MADE\"\"P2" "expect=MADEP2" \
+    "send=echo REC\"\"DONE" "expect=RECDONE" > /dev/null 2>&1 || fail "the recovery boot"
 grep -aq 'init: e2fsck: /dev/disk0p1: status 1' "$ROOT.recovery.log" || fail "e2fsck's repair of the root"
 grep -aq 'init: e2fsck: /dev/disk0p2: status 0' "$ROOT.recovery.log" || fail "e2fsck's pass over the second partition"
 p1_out; e2fsck -fn "$VOL" > "$ROOT.fsck3.log" 2>&1 || fail "e2fsck after recovery"
 [ "$(p1_state)" = "1" ] || fail "the valid bit after recovery"
 [ "$(cksum < "$ROOT")" != "$BEFORE" ] || fail "the repair changed nothing"
 echo "ext2-test: recovery's init runs e2fsck -p on every ext2 partition under rach2.fsck, and its nodes write: OK"
+dd if="$ROOT" of="$VOL2" bs=512 skip=198656 count=16384 2>/dev/null
+e2fsck -fn "$VOL2" > "$ROOT.fsck4.log" 2>&1 || fail "the host's e2fsck on the volume mke2fs made"
+dumpe2fs -h "$VOL2" > "$ROOT.made.log" 2>/dev/null || fail "dumpe2fs on the volume mke2fs made"
+grep -q '^Filesystem features: *resize_inode filetype sparse_super large_file$' "$ROOT.made.log" \
+    || fail "the features mke2fs gave the volume"
+grep -q '^Block size: *4096$' "$ROOT.made.log" || fail "the block size mke2fs gave the volume"
+grep -q '^Filesystem volume name: *made$' "$ROOT.made.log" || fail "the label mke2fs gave the volume"
+echo "ext2-test: mke2fs makes a partition the kernel mounts writable, which e2fsck passes: OK"
 
 # ---- 7: the repaired root boots clean ----
 boot_root "$ROOT.clean.log" --ok "Goodbye" \

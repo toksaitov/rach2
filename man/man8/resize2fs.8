@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd October 2, 2026
 .Dt RESIZE2FS 8
 .Os
 .Sh NAME
@@ -23,10 +23,11 @@ The program is installed only in the recovery image, at
 .Pp
 The volume must be unmounted.
 Rach2 has no on-line resize support.
-The recovery system mounts nothing from the disk it works on.
-Its
-.Pa /etc/mtab
-is empty, so the mounted-volume check finds nothing there.
+The recovery system mounts nothing from the disk it works on, and
+.Nm
+reads
+.Pa /proc/mounts
+to refuse a mounted volume.
 .Pp
 Run
 .Ql e2fsck -f

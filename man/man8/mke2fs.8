@@ -1,0 +1,231 @@
+.Dd October 2, 2026
+.Dt MKE2FS 8
+.Os
+.Sh NAME
+.Nm mke2fs
+.Nd make an ext2 file system
+.Sh SYNOPSIS
+.Nm
+.Op Fl FnqSvV
+.Op Fl b Ar block-size
+.Op Fl d Ar root-directory
+.Op Fl E Ar extended-options
+.Op Fl g Ar blocks-per-group
+.Op Fl i Ar bytes-per-inode
+.Op Fl I Ar inode-size
+.Op Fl j
+.Op Fl L Ar volume-label
+.Op Fl m Ar reserved-percentage
+.Op Fl M Ar last-mounted-directory
+.Op Fl N Ar number-of-inodes
+.Op Fl O Oo ^ Oc Ns Ar feature Ns Op , Ns Ar ...
+.Op Fl r Ar revision
+.Op Fl t Ar fs-type
+.Op Fl T Ar usage-type
+.Op Fl U Ar UUID
+.Op Fl z Ar undo-file
+.Ar device
+.Op Ar size
+.Sh DESCRIPTION
+.Nm
+writes a new ext2 file system on
+.Ar device ,
+a partition node such as
+.Pa /dev/disk0p4
+or a regular file.
+A
+.Ar size
+of blocks, or of bytes with a suffix of
+.Ql k ,
+.Ql m ,
+.Ql g
+or
+.Ql t ,
+limits the volume; for a regular file it is required when the file is
+empty, and the file is extended to it.
+.Pp
+The ordinary kernel writes no disk node, so on the installed system and
+on os-real
+.Nm
+makes a volume in a file, which
+.Xr loopctl 8
+attaches and
+.Xr mount 8
+mounts.
+The recovery kernel's partition nodes take a volume directly.
+.Pp
+Rach2 uses e2fsprogs 1.47.4, linked statically against the ported musl,
+and installs
+.Nm
+at
+.Pa /sbin/mke2fs
+on os-real, the GNU system and the recovery image.
+Its defaults are compiled in from
+.Pa vendor/e2fsprogs/mke2fs.conf
+and are what the kernel's ext2 driver mounts writable: revision 1, 4 KiB
+blocks, 256-byte inodes, an inode for every 16 KiB, and the features
+.Ql sparse_super ,
+.Ql large_file ,
+.Ql filetype
+and
+.Ql resize_inode .
+Upstream's defaults add
+.Ql dir_index ,
+which the kernel mounts read-only, and
+.Ql ext_attr .
+The types
+.Ql small
+and
+.Ql floppy ,
+which upstream gives 1 KiB blocks, keep 4 KiB blocks here for the same
+reason.
+.Pp
+The kernel mounts read-only a volume with a block size below 4096,
+.Ql dir_index
+or a read-only-compatible feature it does not know, and refuses one with
+an incompatible feature other than
+.Ql filetype .
+So
+.Fl t Cm ext4
+makes a volume this kernel does not mount, and
+.Fl j
+or
+.Fl t Cm ext3
+one whose journal it neither replays nor writes.
+.Pp
+The kernel has no discard request and no
+.Pa /sys/fs/ext4 ,
+so nothing is discarded and every inode table is written with zeros
+when the volume is made.
+.Nm
+reads
+.Pa /proc/mounts
+to refuse a mounted device.
+.Sh OPTIONS
+.Bl -tag -width Ds
+.It Fl b Ar block-size
+The block size in bytes: 1024, 2048 or 4096.
+.It Fl d Ar root-directory
+Copy the tree under
+.Ar root-directory
+into the new volume's root.
+A tar archive in its place is refused, since libarchive is not built.
+.It Fl E Ar extended-options
+Comma-separated options, among them
+.Ql root_owner Ns Op = Ns Ar uid : Ns Ar gid ,
+.Ql stride= Ns Ar blocks ,
+.Ql stripe_width= Ns Ar blocks ,
+.Ql resize= Ns Ar max-blocks ,
+.Ql nodiscard
+and
+.Ql test_fs .
+.It Fl F
+Make the volume even on a device that seems unsuitable or mounted.
+.It Fl g Ar blocks-per-group
+The blocks in a group, a multiple of 8.
+.It Fl i Ar bytes-per-inode
+One inode for every
+.Ar bytes-per-inode
+bytes of the volume.
+.It Fl I Ar inode-size
+The inode size, 128 or 256; the kernel takes no other.
+.It Fl j
+Add a journal: an ext3 volume.
+.It Fl L Ar volume-label
+The label, at most 16 bytes.
+.It Fl m Ar reserved-percentage
+The share of blocks only root may take, 5 by default.
+.It Fl M Ar last-mounted-directory
+The directory recorded as where the volume was last mounted.
+.It Fl n
+Show what would be made, and write nothing.
+.It Fl N Ar number-of-inodes
+The number of inodes, which overrides
+.Fl i .
+.It Fl O Ar features
+Features to add, or with a leading
+.Ql ^
+to clear, after the defaults.
+.It Fl q
+Print nothing but errors.
+.It Fl r Ar revision
+0 for the original format, which has no features and 128-byte inodes, or
+1.
+.It Fl S
+Write the superblock and the group descriptors only, for a volume whose
+superblocks are lost; then run
+.Xr e2fsck 8 .
+.It Fl t Ar fs-type
+.Cm ext2 ,
+.Cm ext3
+or
+.Cm ext4 .
+.It Fl T Ar usage-type
+.Cm small ,
+.Cm floppy ,
+.Cm big ,
+.Cm huge ,
+.Cm news ,
+.Cm largefile
+or
+.Cm largefile4 ,
+which change the inode ratio.
+Without it the type follows the size: under 3 MiB
+.Cm floppy ,
+under 512 MiB
+.Cm small .
+.It Fl U Ar UUID
+The volume's UUID, or
+.Cm clear ,
+.Cm random
+or
+.Cm time .
+.It Fl v
+Print more.
+.It Fl V
+Print the version and exit.
+.It Fl z Ar undo-file
+Save each block's old contents in
+.Ar undo-file
+before it is overwritten.
+.El
+.Pp
+.Fl c
+and
+.Fl l
+need
+.Ic badblocks ,
+which is not installed.
+.Sh FILES
+.Bl -tag -width /etc/mke2fs.conf
+.It Pa /sbin/mke2fs
+The program.
+.It Pa /etc/mke2fs.conf
+The configuration, read in place of the compiled-in defaults when it
+exists; no image stages one.
+.El
+.Sh EXIT STATUS
+0 when the volume is made, 1 otherwise.
+.Sh EXAMPLES
+Make an 8 MiB volume in a file, then mount it:
+.Bd -literal -offset indent
+mke2fs -q /root/v.ext2 8M
+loopctl attach 0 /root/v.ext2
+mount -t ext2 /dev/loop0 /mnt
+.Ed
+.Pp
+On the recovery system, make a volume labelled
+.Ql data
+on the fourth partition:
+.Dl mke2fs -L data /dev/disk0p4
+.Pp
+In the source tree,
+.Ql tests/run ext2
+makes both and checks them.
+.Sh SEE ALSO
+.Xr e2fsck 8 ,
+.Xr loopctl 8 ,
+.Xr mount 8 ,
+.Xr resize2fs 8
+.Sh HISTORY
+Adapted from the e2fsprogs 1.47.4 manual page, licensed under GPL-2.0.

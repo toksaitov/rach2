@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd October 2, 2026
 .Dt E2FSCK 8
 .Os
 .Sh NAME
@@ -33,24 +33,23 @@ os-real and the installed root do not include it.
 The build includes libuuid and libblkid and disables NLS, thread-local
 storage, uuidd, fuse2fs, e2initrd-helper, e2image, e4defrag, debugfs,
 multi-mount protection, backtraces, and tdb.
-Only
-.Nm
-and
+Of e2fsprogs' programs,
+.Nm ,
 .Xr resize2fs 8
-are built as guest e2fsprogs programs.
-Neither mke2fs nor debugfs is installed.
+and
+.Xr mke2fs 8
+are built for the machine; debugfs is not.
 .Pp
 The partition nodes provide raw sector access.
 The library uses whole 512-byte sectors at sector-aligned offsets,
 with a bounce buffer for partial-sector I/O, and obtains the device
 size through
 .Ql BLKGETSIZE64 .
-The recovery image's
-.Pa /etc/mtab
-is empty, so that file does not identify mounted volumes.
-Do not run
 .Nm
-on a mounted volume.
+reads
+.Pa /proc/mounts
+to find whether the volume is mounted, and does not repair a mounted
+volume.
 .Pp
 The repair modes
 .Fl p
@@ -238,8 +237,8 @@ The undo file cannot recover from a power failure or system crash.
 .Bl -tag -width /etc/e2fsck.conf
 .It Pa /sbin/e2fsck
 The recovery image's checker.
-.It Pa /etc/mtab
-Empty mount table in the recovery image.
+.It Pa /proc/mounts
+The mount table.
 .It Pa /etc/e2fsck.conf
 Configuration file; absent from the recovery image.
 .El
@@ -281,6 +280,7 @@ An interactive run without a terminal reports:
 .Xr disk 7 ,
 .Xr recovery 7 ,
 .Xr growroot 8 ,
+.Xr mke2fs 8 ,
 .Xr rach2-recover 8 ,
 .Xr resize2fs 8
 .Sh HISTORY

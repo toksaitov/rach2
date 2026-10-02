@@ -73,6 +73,7 @@ tree 0644 /src/ish ish
 # SSH server beside it (utils/init.c), which on this image is OpenSSH's.
 dir 0755 /sbin
 file 0755 /sbin/init build/utils/sbin/init-metal
+file 0755 /sbin/mke2fs build/vendor/e2fsprogs/mke2fs
 file 0755 /bin/update build/utils/update
 
 file 0755 /bin/bootctl build/utils/sbin/bootctl
