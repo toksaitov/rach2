@@ -367,8 +367,13 @@ as
 sends it.
 A null device-name pointer selects the interface whose subnet has the
 gateway, or the first.
-Adding the interface's existing subnet route succeeds without action; it
-cannot be removed while its address is in force.
+Adding the interface's existing subnet route succeeds without action, and
+removing it is
+.Er EOPNOTSUPP
+while its address is in force.
+A default route of no metric and no gateway is
+.Er EINVAL
+and leaves the gateway as it was.
 A gateway none of the interface's subnets has is
 .Er ENETUNREACH ,
 a route already there

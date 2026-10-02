@@ -266,23 +266,23 @@ static int32_t ifreq_ioctl(uint32_t request, uint32_t arg)
 /**
  * Add or remove a route; root only.
  *
- * Each interface has one route it can keep, its default gateway, and reaches
- * everything else by being on its subnet. The route is for the interface the
- * request's `rt_dev` names, or for the first interface, the one whose
- * address is the machine's, when that pointer is null; so a route for one
- * interface cannot change another's. The name is read as a string, since a
- * fixed sixteen bytes could run off the end of the caller's page.
+ * The route is for the interface the request's `rt_dev` names; when that
+ * pointer is null, for the interface whose subnet has the gateway, or for the
+ * first interface, the one whose address is the machine's. So a route for
+ * one interface cannot change another's. The name is read as a string, since
+ * a fixed sixteen bytes could run off the end of the caller's page. A
+ * gateway off that interface's subnet is `ENETUNREACH`, as on Linux.
  *
- * A default route of no metric sets the gateway, and one with no gateway is
- * refused without touching anything, so `route add default dev eth0` cannot
- * quietly remove the gateway. Removing a default route clears the gateway,
- * and removing one that is not there is `ESRCH`: a DHCP client's script
- * removes default routes in a loop that ends when a removal fails. A route to
- * the interface's own subnet is accepted and does nothing, because it is
- * already true; it cannot be removed while the address that implies it is in
- * force. Any other route goes in the table (`netdev_route_add`), with the
- * metric the caller gives, which `route` sends one more than, as Linux takes
- * it.
+ * A default route of no metric sets the interface's gateway, and one with no
+ * gateway is refused without touching anything, so `route add default dev
+ * eth0` cannot quietly remove the gateway. Removing a default route clears
+ * the gateway, and removing one that is not there is `ESRCH`: a DHCP
+ * client's script removes default routes in a loop that ends when a removal
+ * fails. A route to the interface's own subnet is accepted and does nothing,
+ * because it is already true; removing it is `EOPNOTSUPP` while the address
+ * that implies it is in force. Any other route goes in the table
+ * (`netdev_route_add`), with the metric the caller gives, which `route` sends
+ * one more than, as Linux takes it.
  */
 static int32_t route_ioctl(uint32_t request, uint32_t arg)
 {
@@ -329,20 +329,24 @@ static int32_t route_ioctl(uint32_t request, uint32_t arg)
     if (!nd) {
         return -ENODEV;
     }
-
+    if (request == SIOCADDRT && gw != 0 && !netdev_on_link(nd, gw)) {
+        return -ENETUNREACH;
+    }
+    if (request == SIOCADDRT && dst == 0 && mask == 0 && metric == 0 && gw == 0) {
+        return -EINVAL;
+    }
+    if (nd->mask != 0 && dst == (nd->ip & nd->mask) && mask == nd->mask && gw == 0) {
+        return request == SIOCADDRT ? 0 : -EOPNOTSUPP;
+    }
     if (dst == 0 && mask == 0 && metric == 0 &&
         (request == SIOCADDRT ? nd->gateway == 0 || nd->gateway == gw : nd->gateway != 0)) {
         if (request == SIOCADDRT) {
-            return gw == 0 ? -EINVAL : netconf_set_gateway(nd, gw);
+            return netconf_set_gateway(nd, gw);
         }
         if (gw != 0 && gw != nd->gateway) {
             return -ESRCH;
         }
         return netconf_set_gateway(nd, 0);
-    }
-    if (request == SIOCADDRT && nd->mask != 0 && dst == (nd->ip & nd->mask) && mask == nd->mask &&
-        gw == 0) {
-        return 0;
     }
     flags = net_lock();
     rc = request == SIOCADDRT ? netdev_route_add(nd, dst, mask, gw, metric, 0)

@@ -103,6 +103,7 @@ typedef unsigned char uint8_t;
 #define ESRCH           3
 #define EPROTONOSUPPORT 93
 #define EOPNOTSUPP      95
+#define ENETUNREACH     101
 
 #define POLLIN  0x001
 #define POLLOUT 0x004
@@ -1343,19 +1344,24 @@ static void netif_main(void)
     }
 
     /* Routes. A default route sets the gateway; one off the subnet is not a
-     * gateway; a route this stack cannot hold is refused, not forgotten.
+     * gateway, and is ENETUNREACH as on Linux; any other route goes in the
+     * table, and comes out of it again.
      */
     set_route(0, OTHER_GW, 0);
     if (sys_ioctl(fd, SIOCADDRT, rt) != 0) {
         fail("a default route was not taken");
     }
     set_route(0, SLIRP_GW, 0);
-    if (sys_ioctl(fd, SIOCADDRT, rt) != -EINVAL) {
+    if (sys_ioctl(fd, SIOCADDRT, rt) != -ENETUNREACH) {
         fail("a gateway off the subnet was taken");
     }
     set_route(0x0A0A0A00UL, 0, 0xFFFFFF00UL);
-    if (sys_ioctl(fd, SIOCADDRT, rt) != -EOPNOTSUPP) {
-        fail("a route this stack cannot hold was not refused");
+    if (sys_ioctl(fd, SIOCADDRT, rt) != 0) {
+        fail("a route to another network was not taken");
+    }
+    set_route(0x0A0A0A00UL, 0, 0xFFFFFF00UL);
+    if (sys_ioctl(fd, SIOCDELRT, rt) != 0) {
+        fail("a route to another network was not removed");
     }
     /* A default route with no gateway is one this stack cannot hold, and it
        must not be taken as an instruction to remove the one it has: a machine
