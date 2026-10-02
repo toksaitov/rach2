@@ -1039,13 +1039,14 @@ mark "row 9"
 #          running machine root's password is changed, root's keys are removed
 #          as an install removes them, an account's home is made with a file of
 #          8 MiB in it, more than the recovery system's root has room for, and a
-#          file outside everything the update keeps is marked. The update must
-#          then leave the password, the absent keys and the home as they are,
-#          and must replace the marked file with the image's, which is what says
-#          the root was written at all. An archive in the old layout, whose
-#          group file has one line the root's lacks, is put on the recovery
-#          partition; the update must name that difference and keep the root's
-#          file.
+#          file outside everything the update keeps is marked, and all of it is
+#          synced, since ext2 writes back and the harness stops the machine
+#          without a shutdown. The update must then leave the password, the
+#          absent keys and the home as they are, and must replace the marked
+#          file with the image's, which is what says the root was written at
+#          all. An archive in the old layout, whose group file has one line the
+#          root's lacks, is put on the recovery partition; the update must name
+#          that difference and keep the root's file.
 LOG11="$DIR/changed.log"
 if "$HARNESS" --bios --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-drive --qemu-arg="file=$DIR/one.img,format=raw,if=ide,index=0,media=disk" \
@@ -1056,7 +1057,7 @@ if "$HARNESS" --bios --qemu-arg=-cpu --qemu-arg=max \
     "send=rm -rf /root/.ssh && mkdir -p /home/$USERNAME && chown 1000:1000 /home/$USERNAME" \
     "send=echo this-machines-own > /home/$USERNAME/mine && chown 1000:1000 /home/$USERNAME/mine" \
     "send=dd if=/dev/zero of=/home/$USERNAME/big bs=1048576 count=8 2>/dev/null" \
-    "send=echo a-marked-motd > /etc/motd && echo CHANGED\"\"DONE" \
+    "send=echo a-marked-motd > /etc/motd && sync && echo CHANGED\"\"DONE" \
     "expect=CHANGEDDONE" \
     "send=mkdir -p /r && mount -t vfat /dev/disk0p2 /r && mkdir -p /r/rach2-config/etc && cp /etc/passwd /etc/shadow /r/rach2-config/etc/ && { cat /etc/group; echo tampered:x:99:; } > /r/rach2-config/etc/group && umount /r && echo ARCHIVE\"\"TAMPERED" \
     "expect=ARCHIVETAMPERED" > /dev/null 2>&1; then

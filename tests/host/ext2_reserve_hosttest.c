@@ -212,6 +212,12 @@ int bcache_sync_unflushed(block_device_t *dev)
     return 0;
 }
 
+/** A cache the rows never fill with dirty buffers. */
+int bcache_dirty_heavy(void)
+{
+    return 0;
+}
+
 /** Complete device synchronization. */
 int block_flush(block_device_t *dev)
 {

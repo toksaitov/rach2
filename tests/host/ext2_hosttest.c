@@ -2448,8 +2448,10 @@ static void order_row_under(uint32_t buffers, int cross_calls, uint32_t first)
    puts a parent pointer block before the child it names. Each order is one
    a machine can produce, and the publication check must hold in both. */
 /**
- * A mount without `sync` or `dirsync`: creates, a write and a remove make no
- * flush of the disk, an fsync makes one, and the volume unmounts clean.
+ * A mount without `sync` or `dirsync` writes back as Linux's ext2 does:
+ * creates, a write and a remove stay dirty in the cache and reach the disk
+ * not at all; an fsync writes them and flushes the disk, and the volume
+ * unmounts clean.
  */
 static void default_mount_row(void)
 {
@@ -2478,10 +2480,10 @@ static void default_mount_row(void)
     if (g) {
         OPS->put(&mnt, g); /* the removed file's inode and blocks are freed here */
     }
-    check(flush_n == 0 && wlog_n > 0,
-          "reach the disk with no flush of its cache on a mount without dirsync");
+    check(flush_n == 0 && wlog_n == 0, "stay in the cache on a mount without dirsync");
     flushes = flush_n;
-    check(f && OPS->fsync(&mnt, 0) == 0 && flush_n > flushes, "and an fsync flushes it");
+    check(f && OPS->fsync(&mnt, 0) == 0 && wlog_n > 0 && flush_n > flushes,
+          "and an fsync writes them and flushes the disk");
     if (f) {
         OPS->put(&mnt, f);
     }

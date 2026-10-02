@@ -168,6 +168,12 @@ uint32_t bcache_shrink(uint32_t want, int can_write, uint32_t *written);
 /** Buffers the cache holds now. */
 uint32_t bcache_resident(void);
 
+/** Whether the dirty buffers are a quarter of the cache's limit or more,
+ * the share at which a file system that writes back writes them in runs
+ * (`bcache_sync_unflushed`) rather than leave each to an eviction, which
+ * writes its one block alone. */
+int bcache_dirty_heavy(void);
+
 /** Fix the most buffers the cache makes, for a test; 0 restores the rule. */
 void bcache_set_limit(uint32_t n);
 

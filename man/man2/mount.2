@@ -1,4 +1,4 @@
-.Dd October 2, 2026
+.Dd October 3, 2026
 .Dt MOUNT 2
 .Os
 .Sh NAME
@@ -48,11 +48,16 @@ makes an open of a device node on the mount return
 and
 .Dv MS_DIRSYNC
 make ext2 put each metadata write on the medium before the next, with a
-flush of the disk's cache; without them the writes reach the disk in order
-and its cache is flushed at
+flush of the disk's cache, in an order that a stop between two writes
+leaves repairable without losing a file's data; without them ext2 writes
+back as Linux's does: what an operation changes stays in the buffer cache
+until
 .Xr sync 2 ,
 .Xr fsync 2 ,
-unmount and the periodic sync, as on Linux.
+unmount, the periodic sync, the cache's eviction, or the dirty buffers'
+reaching a quarter of the cache, and a stop before then leaves what
+.Xr e2fsck 8
+repairs.
 .Dv MS_NOATIME ,
 .Dv MS_NODIRATIME ,
 .Dv MS_RELATIME ,

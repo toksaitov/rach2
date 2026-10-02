@@ -91,7 +91,10 @@ p1_in() { dd if="$VOL" of="$ROOT" bs=1048576 seek=1 conv=notrunc 2>/dev/null; }
 p1_state() { od -A n -t u2 -j $((1048576 + 1024 + 58)) -N 2 "$ROOT" | tr -d ' '; }
 
 # A boot of the ordinary kernel on the root disk, logged in as root, with
-# the given steps after the prompt; the log is $1.
+# the given steps after the prompt; the log is $1. A boot that changes the
+# root syncs before its last marker, since ext2 writes back and the harness
+# kills the machine at the marker: the root is then left unclean and whole,
+# which row 3 checks.
 boot_root() {
     log=$1; shift
     "$HARNESS" --kernel "$KERNEL" --qemu-arg=-cpu --qemu-arg=max \
@@ -165,8 +168,9 @@ echo "ext2-test: a 4 KiB append costs the disk no more than eleven commands ($AP
 #      here because the answers must be the file system's, not KRFFS's. The
 #      probe empties its own supplementary group list, which is what its
 #      escalation row needs.
-boot_root "$ROOT.mode.log" --ok "MODEPROBE OK" \
-    "send=/modeprobe /tmp" "expect=MODEPROBE OK" || fail "the set-id rules on the ext2 root"
+boot_root "$ROOT.mode.log" --ok "MODESYNCED" \
+    "send=/modeprobe /tmp" "expect=MODEPROBE OK" \
+    "send=sync; echo MODE\"\"SYNCED" "expect=MODESYNCED" || fail "the set-id rules on the ext2 root"
 echo "ext2-test: the chown and write set-id rules hold on an ext2 root: OK"
 
 # ---- 2d': lchown and fchownat's AT_SYMLINK_NOFOLLOW on a file system that has
@@ -174,22 +178,25 @@ echo "ext2-test: the chown and write set-id rules hold on an ext2 root: OK"
 #      root, which has none; here its link rows are required: the link changes
 #      and its target does not, chown changes the target, an O_PATH descriptor
 #      opened with O_NOFOLLOW names the link, and a dangling link changes.
-boot_root "$ROOT.lchown.log" --ok "LCHOWNMUSL OK (links)" \
-    "send=/lchownmusl /tmp" "expect=LCHOWNMUSL OK \(links\)" || fail "lchown on the ext2 root"
+boot_root "$ROOT.lchown.log" --ok "LCHOWNSYNCED" \
+    "send=/lchownmusl /tmp" "expect=LCHOWNMUSL OK \(links\)" \
+    "send=sync; echo LCHOWN\"\"SYNCED" "expect=LCHOWNSYNCED" || fail "lchown on the ext2 root"
 echo "ext2-test: lchown and AT_SYMLINK_NOFOLLOW change a link and chown its target: OK"
 
 # ---- 2d'': the entry types getdents64 reports from ext2's file-type bytes. The
 #       probe runs in the default suite too; here a symbolic link must be
 #       DT_LNK, and every entry of / and /bin of this root must have the type
 #       lstat gives it.
-boot_root "$ROOT.dirent.log" --ok "DIRENTMUSL OK (links)" \
-    "send=/direntmusl /tmp" "expect=DIRENTMUSL OK \(links\)" || fail "d_type on the ext2 root"
+boot_root "$ROOT.dirent.log" --ok "DIRENTSYNCED" \
+    "send=/direntmusl /tmp" "expect=DIRENTMUSL OK \(links\)" \
+    "send=sync; echo DIRENT\"\"SYNCED" "expect=DIRENTSYNCED" || fail "d_type on the ext2 root"
 echo "ext2-test: getdents64 reports each entry's type, a link as DT_LNK: OK"
 
 # ---- 2e: signal teardown beside a writer on an ext2 root. This stress row
 # does not force lock contention; exit_hosttest proves the cleanup ordering.
-boot_root "$ROOT.zombie.log" --ok "ZOMBIEPROBE OK" \
+boot_root "$ROOT.zombie.log" --ok "ZOMBIESYNCED" \
     "send=cd /tmp && /zombieprobe" "expect=ZOMBIEPROBE OK" \
+    "send=sync; echo ZOMBIE\"\"SYNCED" "expect=ZOMBIESYNCED" \
     || fail "a process killed while its teardown waits"
 echo "ext2-test: forty processes killed beside a writer, and the machine goes on: OK"
 ROOT_LINE=$(grep -an 'ext2: root: /dev/disk0p1' "$ROOT.first.log" | head -1 | cut -d: -f1)

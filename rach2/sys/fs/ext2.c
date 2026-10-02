@@ -93,11 +93,11 @@ struct ext2_node {
     int unlinked;        /* no name left; the inode and its blocks go at the last put */
 };
 
-/* `write_bytes`'s ways to write: through to the device, and to the medium
- * as well on a mount with `sync` or `dirsync` (`em_strict`); through to a
- * write-through disk without its flush, which a later flush covers; and
- * through to the medium on any mount, for the superblock's valid bit. 0
- * leaves the bytes dirty in the cache. */
+/* `write_bytes`'s ways to write on a mount with `sync` or `dirsync`
+ * (`em_strict`): through to the medium; through to the device without its
+ * flush, which a later flush covers; and through to the medium on any
+ * mount, for the superblock's valid bit. 0, and the first two on any other
+ * mount, leave the bytes dirty in the cache for `sync`. */
 #define WRITE_THROUGH   1
 #define WRITE_UNFLUSHED 2
 #define WRITE_DURABLE   3
@@ -1346,24 +1346,37 @@ static uint32_t now_seconds(void)
 
 /**
  * Whether the mount puts each metadata write, and each stage of a file's
- * write, on the medium before the next, as a mount with `sync` or `dirsync`
- * asks. Otherwise the writes reach the disk in the same order, which keeps
- * the order this driver relies on through a stop of the kernel, and the
- * disk's own cache is flushed at `sync`, `fsync`, unmount and the periodic
- * sync, as Linux's ext2 leaves it; a power failure between two flushes can
- * leave the volume in a state the order does not promise, which the check
- * of an unclean volume, or `e2fsck`, repairs.
+ * write, on the medium before the next, in the order this driver keeps, as
+ * a mount with `sync` or `dirsync` asks. Any other mount writes back as
+ * Linux's ext2 does: what an operation changes stays dirty in the buffer
+ * cache, and reaches the disk, in no promised order, at `sync`, `fsync`,
+ * `syncfs`, unmount, the periodic sync of `update` and the cache's eviction;
+ * a stop of the kernel or of the power before then can leave the volume in
+ * a state the order does not promise, which `e2fsck` repairs.
  */
 static int em_strict(const struct ext2_mount *em)
 {
     return em->mnt && (em->mnt->flags & (VFS_MS_SYNCHRONOUS | VFS_MS_DIRSYNC)) != 0;
 }
 
-/** `bcache_sync` of the mount's device, without the disk's flush on a
- * mount that is not strict. */
+/** A barrier of the order: `bcache_sync` of the mount's device on a strict
+ * mount, and nothing on one that writes back, whose order is `sync`'s. */
 static int em_sync(struct ext2_mount *em)
 {
-    return em_strict(em) ? bcache_sync(em->dev) : bcache_sync_unflushed(em->dev);
+    return em_strict(em) ? bcache_sync(em->dev) : 0;
+}
+
+/** On a mount that writes back, write the device's dirty buffers in runs,
+ * without the disk's flush, once the cache is heavy with them, as Linux
+ * makes a writer write back when its dirty pages pass a share of memory: a
+ * block left to an eviction goes to the disk alone. The operation that
+ * called it is done in the cache, so a failed write is not its failure; the
+ * cache records it against the device, as it records an eviction's. */
+static void em_balance(struct ext2_mount *em)
+{
+    if (!em_strict(em) && bcache_dirty_heavy()) {
+        (void)bcache_sync_unflushed(em->dev);
+    }
 }
 
 /* Copy `len` bytes at byte offset `off` of the volume from `src`, or zeros
@@ -1399,7 +1412,7 @@ static int write_bytes(struct ext2_mount *em, uint64_t off, const void *src, uin
         }
         if (sync == WRITE_DURABLE || (sync == WRITE_THROUGH && em_strict(em))) {
             rc = bcache_write(b);
-        } else if (sync) {
+        } else if (sync && em_strict(em)) {
             rc = bcache_write_unflushed(b);
         } else if (em->batch) {
             int first = meta_noted(em, blk) == (em->batch == BATCH_ALLOC);
@@ -1598,15 +1611,16 @@ static int meta_noted(const struct ext2_mount *em, uint64_t blk)
 }
 
 /**
- * The end of a batch. An allocation's noted bitmap and descriptor blocks
- * are written first, then everything else the write left dirty, data and
- * pointer blocks, so that no pointer reaches the disk before the bit of
- * the block it names. A free's sync writes its pointer blocks and inode
- * before its bitmaps and descriptors. The cache keeps each order while the
- * batch is open: an allocation's noted blocks are dirtied `first` and
- * everything else it dirties `after`, a free's the other way round, so an
- * eviction under pressure writes the blocks that must go first before the
- * one it chose, and a sync does the same.
+ * The end of a batch. On a mount with `sync` or `dirsync` an allocation's
+ * noted bitmap and descriptor blocks are written first, then everything
+ * else the write left dirty, data and pointer blocks, so that no pointer
+ * reaches the disk before the bit of the block it names, and a free's sync
+ * writes its pointer blocks and inode before its bitmaps and descriptors;
+ * on any other mount the blocks stay dirty for the sync. The cache keeps
+ * each order while the batch is open: an allocation's noted blocks are
+ * dirtied `first` and everything else it dirties `after`, a free's the other
+ * way round, so an eviction under pressure writes the blocks that must go
+ * first before the one it chose, and a sync does the same.
  */
 static int batch_end(struct ext2_mount *em)
 {
@@ -1614,19 +1628,22 @@ static int batch_end(struct ext2_mount *em)
     int i, rc = 0;
 
     em->batch = BATCH_NONE;
-    for (i = 0; kind == BATCH_ALLOC && i < em->metas && rc == 0; i++) {
+    for (i = 0; kind == BATCH_ALLOC && em_strict(em) && i < em->metas && rc == 0; i++) {
         struct bbuf *b = bcache_get(em->dev, em->meta[i]);
 
         if (!b) {
             rc = -EIO;
             break;
         }
-        rc = em_strict(em) ? bcache_write(b) : bcache_write_unflushed(b);
+        rc = bcache_write(b);
         bcache_release(b);
     }
     em->metas = 0;
     if (rc == 0) {
         rc = em_sync(em);
+    }
+    if (rc == 0) {
+        em_balance(em);
     }
     return rc;
 }
@@ -2622,6 +2639,7 @@ static int writeback_drain(struct ext2_mount *em)
         wb->nodes[i].committed_size = n->size;
         ext2_put(em->mnt, n);
     }
+    em_balance(em);
     return 0;
 fail:
     wb->draining = 0;

@@ -25,6 +25,7 @@ static struct bbuf *lru_head; /* the keyed buffers, least recently released firs
 static struct bbuf *lru_tail;
 static struct bbuf *empties;      /* the buffers keyed to nothing */
 static struct bbuf *dirties;      /* the dirty buffers, in no order */
+static uint32_t ndirty;           /* how many */
 static struct bbuf *kernel_held;  /* held with no process current */
 static block_device_t *ahead_dev; /* the device and block a sequential reader */
 static uint64_t ahead_next;       /* reaches next; a miss there fills a run */
@@ -66,6 +67,11 @@ void bcache_set_limit(uint32_t n)
 uint32_t bcache_resident(void)
 {
     return nbufs;
+}
+
+int bcache_dirty_heavy(void)
+{
+    return ndirty >= bcache_limit() / 4u;
 }
 
 uint64_t bcache_stat_hits(void)
@@ -216,6 +222,7 @@ static void set_dirty(struct bbuf *b)
         return;
     }
     b->dirty = 1;
+    ndirty++;
     b->dirty_prev = 0;
     b->dirty_next = dirties;
     if (dirties) {
@@ -231,6 +238,7 @@ static void set_clean(struct bbuf *b)
         return;
     }
     b->dirty = 0;
+    ndirty--;
     if (b->dirty_prev) {
         b->dirty_prev->dirty_next = b->dirty_next;
     } else {
