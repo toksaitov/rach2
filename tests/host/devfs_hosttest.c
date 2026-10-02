@@ -118,6 +118,13 @@ void loop_node_closed(int index)
     (void)index;
 }
 
+int loop_info_flags(const uint8_t *info, uint32_t *flags)
+{
+    (void)info;
+    *flags = 0;
+    return -EINVAL;
+}
+
 int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
 {
     (void)pid;
