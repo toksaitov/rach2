@@ -204,14 +204,15 @@ row_coreutils() {
 }
 
 # bash with the answers its configure could not find in a cross build:
-# the status of a pipeline's last command under lastpipe, printf's %a, the
-# real-time signals, and its directory as a user who may not search it.
+# the status of a pipeline's last command under lastpipe, printf's %a, which
+# formats a long double, 0x8p-3 for 1 on x86 as on Linux, the real-time
+# signals, and its directory as a user who may not search it.
 row_bash() {
     # shellcheck disable=SC2016 # the dollars are the inner bash's
     same "an associative array" "$(bash -c 'declare -A m=([k]=v); echo "${m[k]}"')" "v"
     # shellcheck disable=SC2016 # the dollars are the inner bash's
     same "lastpipe's status" "$(bash -c 'shopt -s lastpipe; true | false; echo $?')" "1"
-    same "printf %a" "$(bash -c 'printf "%a" 1')" "0x1p+0"
+    same "printf %a" "$(bash -c 'printf "%a" 1')" "0x8p-3"
     same "a real-time signal's name" "$(bash -c 'kill -l 40')" "RTMIN+6"
     mkdir -m 700 "$WORK/closed"
     same "pwd where the user may not search" "$(cd "$WORK/closed" && su test -c pwd 2>&1)" "$WORK/closed"
