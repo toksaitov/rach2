@@ -32,6 +32,12 @@
  * which is EACCES, and with no privileged write before, not below 0; it may
  * not open root's process's file for writing.
  *
+ * The I/O priority starts as class none, level 0, is kept as set and
+ * inherited; a level past 7 and class none with a level are EINVAL, and a
+ * caller of another user may take the idle class but not the real-time one,
+ * which is EPERM, nor change root's process. musl has no wrapper for these
+ * calls, so they go through `syscall`.
+ *
  * Prints "SCHEDMUSL OK" on success and "SCHEDMUSL FAIL (detail)" otherwise.
  */
 
@@ -486,9 +492,69 @@ static int oom_score(void)
     return 0;
 }
 
+/* ioprio_set and ioprio_get's which and classes, as Linux numbers them. */
+#define IOPRIO_WHO_PROCESS 1
+#define IOPRIO_CLASS_RT    1
+#define IOPRIO_CLASS_BE    2
+#define IOPRIO_CLASS_IDLE  3
+#define IOPRIO(c, l)       ((c) << 13 | (l))
+
+/** A child's view: the I/O priority it inherited, best effort 3. */
+static int io_inherited(void)
+{
+    return syscall(SYS_ioprio_get, IOPRIO_WHO_PROCESS, 0) == IOPRIO(IOPRIO_CLASS_BE, 3) ? 0 : 1;
+}
+
+/** A caller of user 1000: the idle class but not the real-time one, and
+ * not root's process. */
+static int io_unprivileged(void)
+{
+    if (setresgid(1000, 1000, 1000) != 0 || setresuid(1000, 1000, 1000) != 0) {
+        return 1;
+    }
+    if (syscall(SYS_ioprio_set, IOPRIO_WHO_PROCESS, 0, IOPRIO(IOPRIO_CLASS_IDLE, 0)) != 0) {
+        return 2;
+    }
+    if (syscall(SYS_ioprio_set, IOPRIO_WHO_PROCESS, 0, IOPRIO(IOPRIO_CLASS_RT, 0)) != -1 ||
+        errno != EPERM) {
+        return 3;
+    }
+    if (syscall(SYS_ioprio_set, IOPRIO_WHO_PROCESS, getppid(), IOPRIO(IOPRIO_CLASS_IDLE, 0)) !=
+            -1 ||
+        errno != EPERM) {
+        return 4;
+    }
+    return 0;
+}
+
+/** The I/O priority: its first value, kept, inherited, and the refusals. */
+static int io_priorities(void)
+{
+    if (syscall(SYS_ioprio_get, IOPRIO_WHO_PROCESS, 0) != 0) {
+        return fail("the first I/O priority is class none, level 0");
+    }
+    if (syscall(SYS_ioprio_set, IOPRIO_WHO_PROCESS, 0, IOPRIO(IOPRIO_CLASS_BE, 3)) != 0 ||
+        syscall(SYS_ioprio_get, IOPRIO_WHO_PROCESS, 0) != IOPRIO(IOPRIO_CLASS_BE, 3)) {
+        return fail("an I/O priority set and read back");
+    }
+    if (in_child(io_inherited) != 0) {
+        return fail("a child inherits the I/O priority");
+    }
+    if (syscall(SYS_ioprio_set, IOPRIO_WHO_PROCESS, 0, IOPRIO(IOPRIO_CLASS_BE, 8)) != -1 ||
+        errno != EINVAL || syscall(SYS_ioprio_set, IOPRIO_WHO_PROCESS, 0, 1) != -1 ||
+        errno != EINVAL) {
+        return fail("a level past 7 and class none with a level are EINVAL");
+    }
+    if (in_child(io_unprivileged) != 0) {
+        return fail("another user's caller and the real-time class or root's process");
+    }
+    return 0;
+}
+
 int main(void)
 {
-    if (thread_ids() != 0 || priorities() != 0 || scheduling() != 0 || oom_score() != 0) {
+    if (thread_ids() != 0 || priorities() != 0 || scheduling() != 0 || oom_score() != 0 ||
+        io_priorities() != 0) {
         return 1;
     }
     printf("SCHEDMUSL OK\n");

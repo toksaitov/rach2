@@ -273,6 +273,10 @@ struct process {
     /* The nice value `setpriority` keeps, -20 to 19; fork passes it on and
      * exec keeps it. The scheduler does not read it. */
     int32_t nice;
+    /* The I/O priority `ioprio_set` keeps, its class << 13 | its level, as
+     * Linux encodes it; fork passes it on and exec keeps it. No disk queue
+     * reads it. */
+    uint16_t ioprio;
     /* What prctl keeps. The signal posted to this process when its parent
      * exits, 0 for none: a fork does not pass it on, and it is cleared when
      * an exec or an identity call moves the effective ids and by an exec

@@ -1,0 +1,106 @@
+.Dd October 2, 2026
+.Dt IOPRIO_SET 2
+.Os
+.Sh NAME
+.Nm ioprio_set ,
+.Nm ioprio_get
+.Nd set or get the I/O priority of threads
+.Sh SYNOPSIS
+.In sys/syscall.h
+.In unistd.h
+.Ft int
+.Fn syscall SYS_ioprio_set "int which" "int who" "int ioprio"
+.Ft int
+.Fn syscall SYS_ioprio_get "int which" "int who"
+.Sh DESCRIPTION
+Each thread has an I/O priority, its class shifted left 13 bits and its
+level, as on Linux: class 0, none; 1, real time; 2, best effort; 3, idle.
+A thread starts with class none and level 0;
+.Xr fork 2
+and
+.Xr clone 2
+give the new thread the caller's, and
+.Xr execve 2
+keeps it.
+No disk queue reads it: every request is served in the order it came,
+whatever its thread's priority.
+util-linux's
+.Ic ionice
+sets and shows it.
+.Pp
+.Fa which
+and
+.Fa who
+select the threads as
+.Xr getpriority 2
+does, with numbers one greater:
+.Dv IOPRIO_WHO_PROCESS ,
+1, the thread whose ID is
+.Fa who ;
+.Dv IOPRIO_WHO_PGRP ,
+2, every thread of the process group
+.Fa who ;
+.Dv IOPRIO_WHO_USER ,
+3, every thread whose real user ID is
+.Fa who .
+A
+.Fa who
+of 0 selects the calling thread, its process group, or its real user ID.
+.Pp
+.Fn ioprio_set
+gives each selected thread
+.Fa ioprio .
+A level runs from 0 to 7, class none takes only level 0, and the idle
+class ignores its level.
+The real-time class needs a caller with effective user ID 0.
+A caller with effective user ID 0 may change any thread; any other only a
+thread whose real user ID is the caller's real or effective user ID.
+The threads are changed in turn until one may not be, as on Linux, and
+the call then fails with that refusal.
+.Pp
+.Fn ioprio_get
+returns the priority of the one thread selected, or the best of those
+selected: the lowest value, with a thread of class none compared as best
+effort, level 4, as Linux compares it.
+.Ss System call interface
+The i386 system call numbers are 289 for
+.Fn ioprio_set
+and 290 for
+.Fn ioprio_get .
+EBX contains
+.Fa which ,
+ECX
+.Fa who ,
+and EDX
+.Fa ioprio .
+musl and glibc have no wrapper of their own.
+.Sh RETURN VALUES
+.Fn ioprio_set
+returns 0, and
+.Fn ioprio_get
+the priority.
+On failure both return -1 and set
+.Va errno .
+.Sh EXAMPLES
+The default suite's
+.Pa tests/musl/schedmusl.c
+sets and reads the priority of the process, checks that a child inherits
+it, and that a caller of another user ID may take the idle class but not
+the real-time one, nor change root's process.
+.Sh ERRORS
+.Bl -tag -width "[EINVAL]"
+.It Bq Er EINVAL
+.Fa which
+is none of the three, or
+.Fa ioprio
+has an unknown class, a level past 7, or class none with a level.
+.It Bq Er EPERM
+The real-time class from a caller without effective user ID 0, or a
+thread whose real user ID is neither the caller's real nor its effective
+user ID.
+.It Bq Er ESRCH
+No thread was selected.
+.El
+.Sh SEE ALSO
+.Xr getpriority 2 ,
+.Xr sched_setscheduler 2

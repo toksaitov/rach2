@@ -5394,3 +5394,15 @@ old
 new
                 parent = 1;
 end
+
+fault ioprio-rt-unchecked
+probe schedmusl
+file rach2/sys/syscall_proc.c
+expect SCHEDMUSL FAIL (another user's caller and the real-time class or root's process)
+old
+    case IOPRIO_CLASS_RT:
+        if (!cred_privileged()) {
+new
+    case IOPRIO_CLASS_RT:
+        if (0 && !cred_privileged()) {
+end

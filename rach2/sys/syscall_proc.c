@@ -2020,6 +2020,7 @@ static void fork_ids(process_t *child, const process_t *parent)
     child->sid = parent->sid;
     child->pgid = parent->pgid;
     child->nice = parent->nice;
+    child->ioprio = parent->ioprio;
     child->tg->oom_score_adj = parent->tg->oom_score_adj;
     child->tg->oom_score_adj_min = parent->tg->oom_score_adj_min;
     child->persona = parent->persona;
@@ -6113,6 +6114,121 @@ int32_t sys_setpriority(isr_params_t *params)
         p->nice = nice;
     }
     return rc;
+}
+
+/* The kinds of target ioprio_set(2) and ioprio_get(2) take, one more than
+ * the priority calls' numbers for the same kinds. */
+#define IOPRIO_WHO_PROCESS 1
+
+#define IOPRIO_WHO_USER 3
+
+/* The I/O classes, in the top three bits of a priority, and the level of
+ * the best-effort class a process without a class is compared at. */
+#define IOPRIO_CLASS_NONE 0
+
+#define IOPRIO_CLASS_RT 1
+
+#define IOPRIO_CLASS_BE 2
+
+#define IOPRIO_CLASS_IDLE 3
+
+#define IOPRIO_BE_NORM (IOPRIO_CLASS_BE << 13 | 4)
+
+/** Whether `ioprio` is a priority Linux takes from this caller: 0 when it
+ * is, else the error. The real-time class needs a privileged caller. */
+static int32_t ioprio_check(uint32_t ioprio)
+{
+    uint32_t level = ioprio & 7u;
+
+    switch (ioprio >> 13) {
+    case IOPRIO_CLASS_RT:
+        if (!cred_privileged()) {
+            return -EPERM;
+        }
+        return (ioprio & 0x1fffu) > 7u ? -EINVAL : 0;
+    case IOPRIO_CLASS_BE:
+        return (ioprio & 0x1fffu) > 7u ? -EINVAL : 0;
+    case IOPRIO_CLASS_IDLE:
+        return 0;
+    case IOPRIO_CLASS_NONE:
+        return level != 0 ? -EINVAL : 0;
+    default:
+        return -EINVAL;
+    }
+}
+
+/**
+ * Set an I/O priority (ioprio_set(2), syscall 289).
+ *
+ * EBX = which, ECX = who, EDX = the priority. The targets are those of
+ * `setpriority`: a thread, a process group or a real user, `who` 0 being
+ * the caller's own. A caller may change a target whose real uid is its own
+ * real or effective uid, and a privileged one any. The targets are changed
+ * in turn until one refuses, whose error is returned, as Linux stops; 0
+ * when every target took it, -ESRCH when nothing matched. The value is kept
+ * and inherited, and no disk queue reads it.
+ */
+int32_t sys_ioprio_set(isr_params_t *params)
+{
+    int which = (int)params->ebx;
+    process_t *p;
+    int32_t rc;
+
+    if (which < IOPRIO_WHO_PROCESS || which > IOPRIO_WHO_USER) {
+        return -EINVAL;
+    }
+    rc = ioprio_check(params->edx);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = -ESRCH;
+    for (p = proc_list; p; p = p->next) {
+        if (!prio_target(p, which - 1, params->ecx)) {
+            continue;
+        }
+        if (!cred_privileged() && p->ruid != current_proc->euid && p->ruid != current_proc->ruid) {
+            return -EPERM;
+        }
+        p->ioprio = (uint16_t)params->edx;
+        rc = 0;
+    }
+    return rc;
+}
+
+/**
+ * Read an I/O priority (ioprio_get(2), syscall 290).
+ *
+ * EBX = which, ECX = who. Returns the priority of the one target, or the
+ * best of a group's or a user's: the lowest value, with a target of no class
+ * compared as the normal best-effort level, as Linux's `ioprio_best` does.
+ * A process never given one has class none, level 0. -EINVAL for an
+ * unknown `which`, -ESRCH when nothing matches.
+ */
+int32_t sys_ioprio_get(isr_params_t *params)
+{
+    int which = (int)params->ebx;
+    process_t *p;
+    int32_t best = -ESRCH;
+
+    if (which < IOPRIO_WHO_PROCESS || which > IOPRIO_WHO_USER) {
+        return -EINVAL;
+    }
+    for (p = proc_list; p; p = p->next) {
+        int32_t prio, a, b;
+
+        if (!prio_target(p, which - 1, params->ecx)) {
+            continue;
+        }
+        prio = p->ioprio;
+        if (best == -ESRCH) {
+            best = prio;
+            continue;
+        }
+        a = best >> 13 == IOPRIO_CLASS_NONE ? IOPRIO_BE_NORM : best;
+        b = prio >> 13 == IOPRIO_CLASS_NONE ? IOPRIO_BE_NORM : prio;
+        best = a < b ? a : b;
+    }
+    return best;
 }
 
 /* The scheduling policies Linux numbers. Only SCHED_OTHER is run here; the

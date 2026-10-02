@@ -2899,6 +2899,8 @@ void init_syscall(void)
     _syscall_table[SYS_GETTID] = sys_gettid;
     _syscall_table[SYS_GETPRIORITY] = sys_getpriority;
     _syscall_table[SYS_SETPRIORITY] = sys_setpriority;
+    _syscall_table[SYS_IOPRIO_SET] = sys_ioprio_set;
+    _syscall_table[SYS_IOPRIO_GET] = sys_ioprio_get;
     _syscall_table[SYS_SCHED_SETPARAM] = sys_sched_setparam;
     _syscall_table[SYS_SCHED_GETPARAM] = sys_sched_getparam;
     _syscall_table[SYS_SCHED_SETSCHEDULER] = sys_sched_setscheduler;

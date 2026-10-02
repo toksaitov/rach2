@@ -459,6 +459,10 @@ int32_t sys_getpriority(isr_params_t *params);
 
 int32_t sys_setpriority(isr_params_t *params);
 
+int32_t sys_ioprio_set(isr_params_t *params);
+
+int32_t sys_ioprio_get(isr_params_t *params);
+
 int32_t sys_sched_yield(isr_params_t *params);
 
 int32_t sys_sched_setscheduler(isr_params_t *params);

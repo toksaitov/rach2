@@ -171,6 +171,7 @@ inetd 1 busybox-networking
 insmod 8 busybox-modutils
 install 1 busybox-coreutils
 iostat 1 busybox-procps
+ioprio_get 2 ioprio_set
 ipcalc 1 busybox-networking
 ipcrm 1 busybox-util-linux
 ipcs 1 busybox-util-linux

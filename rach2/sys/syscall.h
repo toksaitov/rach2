@@ -74,6 +74,8 @@
 #define SYS_WAIT4             114
 #define SYS_GETPRIORITY       96
 #define SYS_SETPRIORITY       97
+#define SYS_IOPRIO_SET        289
+#define SYS_IOPRIO_GET        290
 #define SYS_MMAP2             192
 #define SYS_MPROTECT          125
 #define SYS_CLONE             120
