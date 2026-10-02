@@ -296,7 +296,7 @@ row_iproute2() {
     has "ip route get" "$(ip route get 10.0.2.2 2>&1)" "10.0.2.2 dev eth0 src 10.0.2.15"
     has "ip rule" "$(ip rule 2>&1)" "32766:	from all lookup main"
     has "tc qdisc" "$(tc qdisc 2>&1)" "qdisc noqueue 0: dev eth0 root"
-    has "ip netconf" "$(ip netconf 2>&1)" "ipv4 all forwarding off rp_filter off"
+    has "ip netconf" "$(ip netconf 2>&1)" "inet all forwarding off rp_filter off"
     perl -MIO::Socket::INET -e 'my $s = IO::Socket::INET->new(LocalPort => 5999, Listen => 1) or die; sleep 90' &
     local pid=$! i=0
     until grep -q ':176F ' /proc/net/tcp || [ $i -ge 600 ]; do
@@ -408,7 +408,7 @@ row_utillinux() {
     local pid
     has "lsblk" "$(lsblk -dno NAME,TYPE)" "disk"
     same "findmnt" "$(findmnt -no FSTYPE /)" "ext2"
-    has "findmnt --verify of /etc/fstab" "$(findmnt --verify 2>&1)" "0 parse errors, 0 errors"
+    has "findmnt --verify of /etc/fstab" "$(findmnt --verify 2>&1)" "Success, no errors or warnings detected"
     flock "$WORK/lock" sleep 5 &
     pid=$!
     sleep 1
