@@ -144,7 +144,6 @@ The image is built where the layer is, on a Linux host, and is not part of `make
 * `/etc/services`, `/etc/protocols` and `/etc/networks`, the files Debian's netbase gives, written from IANA's assignments in `etc/`, so that a program names a port as `https` or `ssh`; and `/etc/localtime`, a link to the zone `Etc/UTC`, with `/etc/timezone` naming it, as Debian's tzdata leaves a machine set to UTC.
 * `ssh-keysign` without its set-id bit: the system uses no host-based authentication, and the guard admits no set-id file the manifest does not declare.
 * `/run`, a link to `/var/run`, where D-Bus's programs look for the system bus's socket, `/run/dbus/system_bus_socket`.
-* `/usr/share/config.site`, linked from `/usr/local/share/config.site`, which autoconf's `configure` reads for the prefixes `/usr` and `/usr/local`: it names the build `i686-pc-linux-gnu`, since `config.guess` knows no system by the kernel's name, `Rach2`, and stops every `configure` run without `--build`.
 
 The ports install their upstream manual pages under `/usr/share/man/manN` as troff sources, which the system's `man` does not read: it reads plain text. `render_man.sh` renders the pages of sections 1, 5, 7 and 8 with the build host's mandoc, as `man/render.sh` renders this project's, into `/usr/share/man/gnu/catN`, 1213 pages, and `man` looks a name up there when this project's manual has no page for it, or first when the command the path finds by the name is a port's and not a link to BusyBox, so `man git` shows Git's page and `man ls` GNU's.
 

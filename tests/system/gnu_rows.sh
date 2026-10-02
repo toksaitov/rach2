@@ -671,9 +671,8 @@ row_gnupg() {
 }
 
 # An autoconf package built on the machine as a user builds one: GNU sed's
-# configure in a login shell, for a prefix of the user's own, which takes the
-# build's name from the root's site file that /etc/profile names, since
-# config.guess knows no system called Rach2, then make, and the sed it made.
+# configure in a login shell, for a prefix of the user's own, whose
+# config.guess names the build from uname, then make, and the sed it made.
 row_autotools() {
     runs "the tarball" tar -xJf /tmp/gnu/sed.tar.xz -C "$WORK"
     cd "$WORK"/sed-* || {
@@ -681,7 +680,7 @@ row_autotools() {
         return
     }
     output "configure" bash -lc "./configure --prefix=$WORK/inst"
-    has "the site file, for a prefix of the user's own" "$OUT" "loading site script"
+    has "the build, which config.guess names" "$OUT" "checking build system type... i686-pc-linux-gnu"
     runs "make" make -j2
     output "the sed made" ./sed/sed --version
     has "its version" "$OUT" "(GNU sed)"

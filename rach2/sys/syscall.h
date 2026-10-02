@@ -364,10 +364,14 @@ const char *uts_domainname(void);
 /** Whether the caller may set them: privileged over its UTS namespace. */
 int uts_privileged(void);
 
-/* The fixed fields of uname(2), which /proc/version repeats. */
-#define UTS_SYSNAME "Rach2"
-#define UTS_RELEASE "1.0.0"
-#define UTS_VERSION "Rach2 musl port"
+/* The fixed fields of uname(2), which /proc/version repeats. The system is
+   named Linux, whose interface the kernel follows, as config.guess, CMake and
+   scripts match the name exactly; the release is the version of the Linux
+   headers the GNU toolchain was built with, and Rach2 names itself in the
+   release's suffix and in the version. */
+#define UTS_SYSNAME "Linux"
+#define UTS_RELEASE "6.18.0-rach2"
+#define UTS_VERSION "#1 Rach2 1.0.0"
 
 /** Set the host name, or the domain name, to the `len` bytes of `name`,
  * at most 64, which need not end in a NUL; the caller has checked the

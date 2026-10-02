@@ -176,18 +176,6 @@ ln -s ../proc/self/mounts "$TREE/etc/mtab"
 # boot as Linux keeps /run in memory.
 ln -s var/run "$TREE/run"
 
-# The site file autoconf's configure reads, for the default prefix and for
-# /usr, and for any other through CONFIG_SITE, which /etc/profile sets:
-# config.guess knows no system by the kernel's name, Rach2, and stops every
-# configure that has no --build, so the build is named the GNU/Linux system
-# whose programs the kernel runs.
-mkdir -p "$TREE/usr/local/share"
-cat > "$TREE/usr/share/config.site" << 'EOF'
-# config.site: answers for autoconf configure scripts on Rach2.
-test -n "$build_alias" || build_alias=i686-pc-linux-gnu
-EOF
-ln -s ../../share/config.site "$TREE/usr/local/share/config.site"
-
 # BusyBox's applets are not files: ash runs one for its name before it
 # searches the path, and bash and every program that searches the path
 # itself, as Git does for its editor, find only files. So each applet that

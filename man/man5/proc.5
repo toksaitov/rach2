@@ -1,4 +1,4 @@
-.Dd October 2, 2026
+.Dd October 3, 2026
 .Dt PROC 5
 .Os
 .Sh NAME
@@ -600,7 +600,7 @@ and
 .Ic ipcs
 reads;
 .Pa kernel/ostype ,
-.Ql Rach2 ;
+.Ql Linux ;
 .Pa kernel/osrelease ,
 the release
 .Xr uname 2
@@ -733,11 +733,9 @@ accounting remains.
 The kernel's name, release and version as
 .Xr uname 2
 gives them, in the form
-.Ql Rach2 version 1.0.0 (Rach2 musl port) ,
-where Linux's line begins
-.Ql Linux version
-and goes on with the builder, the compiler and the build's date, which
-this kernel does not record.
+.Ql "Linux version 6.18.0-rach2 #1 Rach2 1.0.0" ,
+where Linux's line has the builder and the compiler after the release and
+the build's date after the version, which this kernel does not record.
 .It Pa /proc/PID
 A process's directory, and each file and link in it,
 belongs to the process's effective user and group IDs while the process

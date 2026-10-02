@@ -1,4 +1,4 @@
-.Dd October 2, 2026
+.Dd October 3, 2026
 .Dt UNAME 2
 .Os
 .Sh NAME
@@ -26,14 +26,20 @@ writes the system identity to
 The six fields are 65-byte arrays containing null-terminated strings:
 .Bl -tag -width "domainname"
 .It Va sysname
-.Ql Rach2 .
+.Ql Linux ,
+the system whose interface the kernel follows, since
+.Ic config.guess ,
+CMake and shell scripts match the name exactly.
 .It Va nodename
 The host name of the caller's UTS namespace, initially
 .Ql rach2 .
 .It Va release
-.Ql 1.0.0 .
+.Ql 6.18.0-rach2 ,
+the version of the Linux headers the GNU toolchain was built with, and
+the kernel's name after it.
 .It Va version
-.Ql "Rach2 musl port" .
+.Ql "#1 Rach2 1.0.0" ,
+the kernel's own name and version.
 .It Va machine
 .Ql i686 .
 .It Va domainname

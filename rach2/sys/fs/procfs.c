@@ -5209,8 +5209,8 @@ int procfs_open(const struct vpath *vp, int flags)
         ap_str(&text, "Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n");
         len = text.len;
     } else if (vp->kind == VNODE_PROC_VERSION) {
-        /* Linux's "Linux version 6.8.0 ...", with uname's version after. */
-        ap_str(&text, UTS_SYSNAME " version " UTS_RELEASE " (" UTS_VERSION ")\n");
+        /* Linux's "Linux version 6.8.0 ... #1 ...", with uname's version. */
+        ap_str(&text, UTS_SYSNAME " version " UTS_RELEASE " " UTS_VERSION "\n");
         len = text.len;
     } else if (vp->kind == VNODE_PROC_CPUINFO) {
         len = procfs_text_room(&text, CPUINFO_TEXT_MAX) == 0
