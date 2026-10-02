@@ -41,7 +41,7 @@ From the first sitting's list and the second's, in `dev-log/54-gnu/notes.md`:
 
 ### Phase 1: the kernel's small gaps
 
-`fstat`'s owner of `/proc/PID` files; `/proc/net/stat`; `/sys/class/net`; `/dev/mem`; `/dev/log` and a syslog daemon at boot; the RTC's alarm and suspend to idle; `timer_create` on the processor-time clocks; `/proc/self/mountinfo`, `/sys/block` and `ioprio_get` and `ioprio_set`, which util-linux reads; the staged `mke2fs` and `mkfs` applets.
+`fstat`'s owner of `/proc/PID` files; `/sys/class/net`; `/dev/mem`; `/dev/log` and a syslog daemon at boot; the RTC's alarm and suspend to idle; `timer_create` on the processor-time clocks; `/proc/self/mountinfo` and `ioprio_get` and `ioprio_set`, which util-linux reads; the staged `mke2fs` and `mkfs` applets.
 
 ### Phase 2: inter-process communication
 
@@ -49,11 +49,11 @@ System V shared memory, semaphores and message queues, through `ipc` and the dir
 
 ### Phase 3: the network's tables
 
-Several addresses on an interface, a routing table with `ip route add` and `del`, and permanent neighbour entries, with the route socket and the ioctls answering for them.
+Several addresses on an interface, a routing table with `ip route add` and `del`, and permanent neighbour entries, with the route socket and the ioctls answering for them; and `/proc/net/stat`, whose counters are those tables'.
 
 ### Phase 4: the system's tools
 
-procps-ng and util-linux, and with them `last`, `w` and the programs the BusyBox applets lack.
+procps-ng and util-linux, and with them `last`, `w` and the programs the BusyBox applets lack; and `/sys/block` and `/sys/dev/block`, which `lsblk` reads, made to what the ported `lsblk` asks.
 
 ### Phase 5: the small ports
 
