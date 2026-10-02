@@ -5829,3 +5829,13 @@ old
 new
     if (limit == RLIM_INFINITY32 || end <= limit || 1) {
 end
+
+fault oom-segv
+probe oomprobe
+file rach2/sys/mm/paging.c
+expect OOMPROBE FAIL: the child died of signal
+old
+    if (user_mode && have_user_proc && in_user_range && current_proc->frame_refused) {
+new
+    if (user_mode && have_user_proc && in_user_range && current_proc->frame_refused && 0) {
+end

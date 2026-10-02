@@ -3,9 +3,10 @@
  *
  * A process that touches more pages than there are frames cannot be served:
  * the fault handler has nothing to map, so it kills that process with
- * `SIGSEGV`. That is the documented behaviour and it is what a machine has to
- * do; the alternative, a kernel that panics or that hands out a frame it does
- * not have, is the failure this looks for.
+ * `SIGKILL`, as Linux's OOM killer does, and not with the SIGSEGV of a bad
+ * address, which a handler could catch and return from to fault again. The
+ * alternative, a kernel that panics or that hands out a frame it does not
+ * have, is the failure this looks for.
  *
  * The child does the touching, so the parent is still there afterwards to
  * check the other half: the frames the child held come back, and the parent's
@@ -31,7 +32,7 @@ typedef unsigned int size_t;
 #define MAP_ANONYMOUS 0x20
 
 #define PAGE    4096u
-#define SIGSEGV 11
+#define SIGKILL 9
 
 #define WIFEXITED(s)   (((s) & 0x7F) == 0)
 #define WIFSIGNALED(s) (((s) & 0x7F) != 0 && ((s) & 0x7F) != 0x7F)
@@ -169,10 +170,10 @@ void _start(void)
         puts(" (3 the mapping was refused, 4 the memory never ran out)");
         sys_exit(1);
     }
-    if (!WIFSIGNALED(status) || WTERMSIG(status) != SIGSEGV) {
+    if (!WIFSIGNALED(status) || WTERMSIG(status) != SIGKILL) {
         print("OOMPROBE FAIL: the child died of signal ");
         print_num((int)WTERMSIG(status));
-        puts(", not SIGSEGV");
+        puts(", not SIGKILL");
         sys_exit(1);
     }
 
@@ -193,6 +194,6 @@ void _start(void)
         }
     }
 
-    puts("OOMPROBE OK (the child was killed with SIGSEGV and its frames came back)");
+    puts("OOMPROBE OK (the child was killed with SIGKILL and its frames came back)");
     sys_exit(0);
 }

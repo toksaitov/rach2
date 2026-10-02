@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd October 2, 2026
 .Dt MEMORY 7
 .Os
 .Sh NAME
@@ -24,9 +24,12 @@ Mmap2 creates mappings and munmap removes them.
 .Pp
 A fault on the page just below the stack region, at or above the limit
 set when the stack was created, grows the stack.
-Any other unresolved user-mode page fault, including one for which no
-frame can be allocated, terminates the process with
-.Dv SIGSEGV .
+Any other unresolved user-mode page fault sends the thread
+.Dv SIGSEGV ,
+which a handler may catch; a legal access for which no frame can be
+allocated ends the process with
+.Dv SIGKILL ,
+as Linux's OOM killer ends one, there being no swap.
 .Dv RLIMIT_AS
 bounds the bytes covered by the regions; see
 .Xr limits 7 .

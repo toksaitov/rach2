@@ -912,6 +912,7 @@ static void _page_fault_handler(isr_params_t *params)
     in_user_range = (fault_address >= USER_ADDR_MIN && fault_address < USER_ADDR_MAX);
 
     if (have_user_proc && in_user_range) {
+        current_proc->frame_refused = 0;
         if (vm_resolve(fault_address, write)) {
             return; /* page mapped; iret retries the faulting instruction */
         }
@@ -926,6 +927,20 @@ static void _page_fault_handler(isr_params_t *params)
             return;
         }
         k_panic("pagecache: unrecoverable disk fault");
+    }
+
+    if (user_mode && have_user_proc && in_user_range && current_proc->frame_refused) {
+        struct k_siginfo info;
+
+        /* Out of memory: the access was legal and no frame could be had for
+           it. Linux's OOM killer ends a process with SIGKILL, which no
+           handler sees; a SIGSEGV handler that returned would fault again. */
+        k_memset(&info, 0, sizeof(info));
+        info.code = SI_KERNEL;
+        klog(KLOG_WARN, "vm", "fault: out of memory: killing pid %d: no frame for a %s at 0x%x",
+             current_proc->pid, write ? "write" : "read", fault_address);
+        signal_force(current_proc, SIGKILL, &info);
+        return;
     }
 
     if (user_mode && have_user_proc) {
@@ -1612,6 +1627,9 @@ uintptr_t alloc_user_frame(void)
     if (!mem_may_take(1)) {
         klog(KLOG_WARN, "vm", "user page: refused: the free frames are the reserve's, pid %d",
              current_proc ? (int)current_proc->pid : 0);
+        if (current_proc) {
+            current_proc->frame_refused = 1;
+        }
         return 0;
     }
     /* Selection and claim as one step, as in `alloc_frame`; the refusals
@@ -1646,6 +1664,9 @@ uintptr_t alloc_user_frame(void)
              "%d",
              (int)_frames_number, (int)_user_frames_start, (int)_kernel_frames_reserved,
              (int)user_used, (int)user_shared, current_proc ? current_proc->pid : 0);
+        if (current_proc) {
+            current_proc->frame_refused = 1;
+        }
         return 0; /* No free frames */
     }
     return frame * PAGE_SIZE;
