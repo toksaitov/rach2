@@ -82,6 +82,23 @@ uint32_t klog_read(char *buf, uint32_t cap, uint32_t offset);
 /** How many bytes the ring holds now. */
 uint32_t klog_len(void);
 
+/** How many bytes the ring has taken since boot, which a reader that keeps
+ * its place counts from. */
+uint32_t klog_written(void);
+
+/** The byte `at`, counted as `klog_written` counts, or the oldest the ring
+ * holds when it has dropped `at`, which begins a record. */
+uint32_t klog_clamp(uint32_t at);
+
+/**
+ * Read out of the ring from the byte `*at`, counted as `klog_written`
+ * counts, and move `*at` past what was read: at most `cap` bytes, with the
+ * ring held still. A place the ring has dropped begins at the oldest byte
+ * it holds, which begins a record. Returns the number of bytes copied, zero
+ * when `*at` is the end.
+ */
+uint32_t klog_read_from(char *buf, uint32_t cap, uint32_t *at);
+
 /**
  * Set the lowest-priority record the screen shows.
  *

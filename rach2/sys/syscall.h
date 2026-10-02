@@ -57,6 +57,7 @@
 #define SYS_VFORK             190
 #define SYS_PAUSE             29
 #define SYS_ALARM             27
+#define SYS_SYSLOG            103
 #define SYS_SETITIMER         104
 #define SYS_GETITIMER         105
 #define SYS_SETPGID           57

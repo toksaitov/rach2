@@ -173,6 +173,9 @@ static char ring[KLOG_RING_SIZE];
 static uint32_t ring_head;   /* where the next byte goes */
 static uint32_t ring_used;   /* bytes held */
 static uint32_t ring_oldest; /* where the oldest byte held sits */
+/* Bytes ever put in the ring: a reader that keeps its place counts from the
+ * first, and the oldest byte held is this less `ring_used`. */
+static uint32_t ring_written;
 
 /**
  * Drop whole records from the oldest end until `want` bytes are free.
@@ -230,6 +233,7 @@ static void ring_append(const char *text, uint32_t n)
         }
     }
     ring_used += n;
+    ring_written += n;
 }
 
 static void dest_ring(const struct klog_record *r)
@@ -243,6 +247,45 @@ static void dest_ring(const struct klog_record *r)
 uint32_t klog_len(void)
 {
     return ring_used;
+}
+
+uint32_t klog_written(void)
+{
+    return ring_written;
+}
+
+uint32_t klog_clamp(uint32_t at)
+{
+    uint32_t flags = kirq_save();
+    uint32_t first = ring_written - ring_used;
+
+    if ((int32_t)(at - first) < 0 || (int32_t)(ring_written - at) < 0) {
+        at = first;
+    }
+    kirq_restore(flags);
+    return at;
+}
+
+uint32_t klog_read_from(char *buf, uint32_t cap, uint32_t *at)
+{
+    uint32_t flags = kirq_save();
+    uint32_t first = ring_written - ring_used;
+    uint32_t n = 0;
+
+    if ((int32_t)(*at - first) < 0 || (int32_t)(ring_written - *at) < 0) {
+        *at = first;
+    }
+    while (n < cap && *at + n != ring_written) {
+        uint32_t i = ring_oldest + (*at - first) + n;
+
+        if (i >= KLOG_RING_SIZE) {
+            i -= KLOG_RING_SIZE;
+        }
+        buf[n++] = ring[i];
+    }
+    *at += n;
+    kirq_restore(flags);
+    return n;
 }
 
 uint32_t klog_read(char *buf, uint32_t cap, uint32_t offset)

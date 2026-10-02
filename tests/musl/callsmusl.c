@@ -57,7 +57,8 @@
  * the process spins, and getitimer reports the interval; so do POSIX timers
  * on the process's and the thread's clocks of processor time. /dev/mem reads
  * the first megabyte and maps the local APIC, and refuses RAM and a private
- * mapping.
+ * mapping. klogctl gives the log ring's size, its records whole, and after
+ * a clear none of those before; /dev/log leads to /var/run/log.
  *
  * Prints "CALLSMUSL OK" on success and "CALLSMUSL FAIL (detail)" otherwise.
  */
@@ -74,6 +75,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/klog.h>
 #include <sys/mman.h>
 #include <sys/prctl.h>
 #include <sys/resource.h>
@@ -942,11 +944,38 @@ static int devmems(void)
     return 0;
 }
 
+/* The kernel's log through syslog(2): the ring's size, the whole ring read
+   as records that begin with a priority, after a clear nothing of what came
+   before, and /dev/log a link to the syslog daemon's socket. */
+static int klogs(void)
+{
+    static char ring[16384];
+    char link[32];
+    int n;
+
+    if (klogctl(10, NULL, 0) != 16384) {
+        return fail("klogctl's size of the ring");
+    }
+    n = klogctl(3, ring, sizeof ring);
+    if (n <= 0 || ring[0] != '<' || ring[n - 1] != '\n') {
+        return fail("klogctl's read of the whole ring was not whole records");
+    }
+    if (klogctl(5, NULL, 0) != 0 || klogctl(3, ring, sizeof ring) != 0) {
+        return fail("klogctl's read after a clear gave records from before it");
+    }
+    n = (int)readlink("/dev/log", link, sizeof link - 1);
+    if (n != 12 || memcmp(link, "/var/run/log", 12) != 0) {
+        return fail("/dev/log is not a link to /var/run/log");
+    }
+    return 0;
+}
+
 int main(void)
 {
     if (signals() || memory() || identity() || messages() || clocks() || ranges() || copies() ||
         reserves() || adjusts() || advises() || terminals() || peaks() || refusals() || setgids() ||
-        privacies() || timers() || queues() || flows() || signalfds() || cputimers() || devmems()) {
+        privacies() || timers() || queues() || flows() || signalfds() || cputimers() || devmems() ||
+        klogs()) {
         return 1;
     }
     printf("CALLSMUSL OK\n");

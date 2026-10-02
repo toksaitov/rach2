@@ -2387,6 +2387,152 @@ static void uname_field(char *dst, const char *src)
     dst[n] = '\0';
 }
 
+/* syslog(2)'s actions, Linux's numbers. */
+#define SYSLOG_ACTION_READ          2
+#define SYSLOG_ACTION_READ_ALL      3
+#define SYSLOG_ACTION_READ_CLEAR    4
+#define SYSLOG_ACTION_CLEAR         5
+#define SYSLOG_ACTION_CONSOLE_OFF   6
+#define SYSLOG_ACTION_CONSOLE_ON    7
+#define SYSLOG_ACTION_CONSOLE_LEVEL 8
+#define SYSLOG_ACTION_SIZE_UNREAD   9
+#define SYSLOG_ACTION_SIZE_BUFFER   10
+
+/* Where syslog(2)'s reader goes on from, the one place every reader shares,
+ * as Linux's syslog_seq; where a read of the whole ring begins after a
+ * clear; and the screen's level CONSOLE_OFF put aside, -1 for none. */
+static uint32_t syslog_read_at;
+static uint32_t syslog_clear_at;
+static int syslog_saved_level = -1;
+
+/**
+ * Copy the ring from the byte `*at` to the caller's `ubuf`, at most `len`
+ * bytes, moving `*at` past what was copied, through a buffer on the stack so
+ * the ring is never held across the copy. Returns the bytes copied, or
+ * -EFAULT when none could be.
+ */
+static int32_t syslog_copy(char __user *ubuf, uint32_t len, uint32_t *at)
+{
+    char chunk[256];
+    uint32_t done = 0, n;
+
+    while (done < len &&
+           (n = klog_read_from(chunk,
+                               len - done < sizeof(chunk) ? len - done : (uint32_t)sizeof(chunk),
+                               at)) > 0) {
+        if (copy_to_user(ubuf + done, chunk, n) != 0) {
+            return done > 0 ? (int32_t)done : -EFAULT;
+        }
+        done += n;
+    }
+    return (int32_t)done;
+}
+
+/* Where a read of the last `len` bytes of the ring from `from` begins: the
+ * first record wholly within them. */
+static uint32_t syslog_tail(uint32_t from, uint32_t len)
+{
+    uint32_t end = klog_written();
+    char c;
+
+    from = klog_clamp(from);
+    if (end - from <= len) {
+        return from;
+    }
+    from = end - len;
+    while (from != end && klog_read_from(&c, 1, &from) == 1 && c != '\n') {
+    }
+    return from;
+}
+
+/**
+ * syslog(2), number 103, which glibc calls klogctl: the kernel's ring as
+ * BusyBox's klogd and util-linux's dmesg read it. EBX is the action, ECX the
+ * buffer and EDX its length. READ waits for records past the shared reader's
+ * place and takes them; READ_ALL gives the last records that fit since the
+ * last CLEAR, and READ_CLEAR clears after; SIZE_UNREAD and SIZE_BUFFER are
+ * the bytes the reader has not taken and the ring's size; CONSOLE_LEVEL sets
+ * the lowest priority the screen shows to one less than the length, as
+ * Linux's console_loglevel shows what is more urgent than it, CONSOLE_OFF
+ * turns the screen down to the critical records and CONSOLE_ON back. CLOSE
+ * and OPEN do nothing. Every action but those two needs a privileged caller,
+ * as Linux with dmesg_restrict has it, since the ring is /dev/bootlog's,
+ * which is root's. EINVAL for another action, a negative length or a level
+ * out of 1 to 8, EINTR when a signal ends READ's wait.
+ */
+static int32_t sys_syslog(isr_params_t *params)
+{
+    int32_t action = (int32_t)params->ebx;
+    char __user *ubuf = (char __user *)params->ecx;
+    int32_t len = (int32_t)params->edx;
+    uint32_t at;
+    int32_t rc;
+
+    if (action == 0 || action == 1) {
+        return 0;
+    }
+    if (action < SYSLOG_ACTION_READ || action > SYSLOG_ACTION_SIZE_BUFFER) {
+        return -EINVAL;
+    }
+    if (!proc_privileged(current_proc)) {
+        return -EPERM;
+    }
+    switch (action) {
+    case SYSLOG_ACTION_READ:
+        if (len < 0) {
+            return -EINVAL;
+        }
+        if (len == 0) {
+            return 0;
+        }
+        /* The ring wakes no one, since records come from any context, so
+         * the reader looks again every tenth of a second. */
+        while ((syslog_read_at = klog_clamp(syslog_read_at)) == klog_written()) {
+            if (sleep_until(kernel_ticks + 10u, NULL) != 0) {
+                return -EINTR;
+            }
+        }
+        return syslog_copy(ubuf, (uint32_t)len, &syslog_read_at);
+    case SYSLOG_ACTION_READ_ALL:
+    case SYSLOG_ACTION_READ_CLEAR:
+        if (len < 0) {
+            return -EINVAL;
+        }
+        at = syslog_tail(syslog_clear_at, (uint32_t)len);
+        rc = syslog_copy(ubuf, (uint32_t)len, &at);
+        if (rc >= 0 && action == SYSLOG_ACTION_READ_CLEAR) {
+            syslog_clear_at = klog_written();
+        }
+        return rc;
+    case SYSLOG_ACTION_CLEAR:
+        syslog_clear_at = klog_written();
+        return 0;
+    case SYSLOG_ACTION_CONSOLE_OFF:
+        if (syslog_saved_level < 0) {
+            syslog_saved_level = klog_screen_level();
+        }
+        klog_set_screen_level(KLOG_CRIT);
+        return 0;
+    case SYSLOG_ACTION_CONSOLE_ON:
+        if (syslog_saved_level >= 0) {
+            klog_set_screen_level(syslog_saved_level);
+            syslog_saved_level = -1;
+        }
+        return 0;
+    case SYSLOG_ACTION_CONSOLE_LEVEL:
+        if (len < 1 || len > 8) {
+            return -EINVAL;
+        }
+        klog_set_screen_level(len - 1);
+        syslog_saved_level = -1;
+        return 0;
+    case SYSLOG_ACTION_SIZE_UNREAD:
+        return (int32_t)(klog_written() - klog_clamp(syslog_read_at));
+    default:
+        return KLOG_RING_SIZE;
+    }
+}
+
 static int32_t sys_uname(isr_params_t *params)
 {
     struct kernel_utsname __user *user_uts = (struct kernel_utsname __user *)params->ebx;
@@ -2781,6 +2927,7 @@ void init_syscall(void)
     _syscall_table[SYS_READV] = sys_readv;
     _syscall_table[SYS_WRITEV] = sys_writev;
     _syscall_table[SYS_UNAME] = sys_uname;
+    _syscall_table[SYS_SYSLOG] = sys_syslog;
     _syscall_table[SYS_SETHOSTNAME] = sys_sethostname;
     _syscall_table[SYS_SETUID32] = sys_setuid;
     _syscall_table[SYS_SETGID32] = sys_setgid;

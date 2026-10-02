@@ -5352,3 +5352,15 @@ old
 new
         if (frame >= 0x100u && paging_frame_is_device((uintptr_t)frame * PAGE_SIZE)) {
 end
+
+fault syslog-clear-ignored
+probe callsmusl
+file rach2/sys/syscall.c
+expect CALLSMUSL FAIL (klogctl's read after a clear gave records from before it
+old
+    case SYSLOG_ACTION_CLEAR:
+        syslog_clear_at = klog_written();
+new
+    case SYSLOG_ACTION_CLEAR:
+        syslog_clear_at = syslog_clear_at + 0u;
+end

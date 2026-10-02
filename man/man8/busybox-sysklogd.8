@@ -29,33 +29,36 @@ see
 .Xr bootlog 4 .
 .Bl -tag -width syslogd
 .It Nm klogd
-Log kernel messages to syslog.
-It uses
-.Fn klogctl ,
-which Rach2 does not implement: its read fails and it exits.
+Log kernel messages to syslog, which it reads with
+.Xr syslog 2 .
 .It Nm logger
 Write
 .Ar MESSAGE ,
-or standard input, to syslog.
-On Rach2 the message is not delivered, since nothing listens at
-.Pa /dev/log ;
-with
-.Fl s
-it still goes to standard error.
+or standard input, to syslog, through
+.Pa /dev/log .
 .It Nm logread
-Display messages in the circular buffer of
-.Nm syslogd .
+Display messages in the circular buffer of a
+.Nm syslogd
+started with
+.Fl C ,
+which keeps its messages in System V shared memory instead of a file.
 .It Nm syslogd
 Provide system logging.
-On Rach2 it cannot start: it binds a Unix domain socket at
-.Pa /dev/log ,
-and
-.Pa /dev
-is a synthetic file system that takes no new node, so the bind fails with
-.Er EROFS ;
-and
-.Nm logread
-needs the System V IPC the kernel does not have.
+.Pa /dev/log
+is a link to
+.Pa /var/run/log ,
+where the daemon follows it and binds its Unix domain socket, as systemd's
+link leads under
+.Pa /run .
+On the metal and GNU systems
+.Xr init 8
+keeps it running as
+.Ql syslogd -n -O /var/log/messages -s 200 -b 1 :
+the messages go to
+.Pa /var/log/messages ,
+which it moves to
+.Pa /var/log/messages.0
+past 200 KiB.
 .El
 .Sh OPTIONS
 .Ss klogd
@@ -101,14 +104,20 @@ With
 the default is to log only over the network.
 .El
 .Sh FILES
-.Bl -tag -width /dev/bootlog
+.Bl -tag -width /var/log/messages
 .It Pa /dev/bootlog
 Rach2 kernel log.
+.It Pa /dev/log
+The link to the system log's socket.
+.It Pa /var/log/messages
+The system log.
 .El
 .Sh EXAMPLES
 .Dl logger "hello"
 .Sh SEE ALSO
-.Xr bootlog 4
+.Xr syslog 2 ,
+.Xr bootlog 4 ,
+.Xr init 8
 .Sh HISTORY
 The applet descriptions are adapted from BusyBox 1.36.1 usage text,
 licensed under GPL-2.0.

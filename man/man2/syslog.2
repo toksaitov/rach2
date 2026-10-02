@@ -1,0 +1,87 @@
+.Dd October 2, 2026
+.Dt SYSLOG 2
+.Os
+.Sh NAME
+.Nm syslog ,
+.Nm klogctl
+.Nd read and control the kernel's log
+.Sh SYNOPSIS
+.In sys/klog.h
+.Ft int
+.Fn klogctl "int type" "char *buf" "int len"
+.Sh DESCRIPTION
+.Fn syslog ,
+number 103, which glibc and musl call
+.Fn klogctl ,
+reads the kernel's log ring, the records
+.Pa /dev/bootlog
+gives, each a line that begins with its priority as
+.Ql < Ns Ar N Ns > ,
+as BusyBox's
+.Ic klogd
+and util-linux's
+.Ic dmesg
+read it.
+.Fa type
+is the action:
+.Bl -tag -width Ds
+.It 0, 1
+Close and open: nothing.
+.It 2
+Read: wait until the ring has records past the reader's place, which
+every reader shares, then take at most
+.Fa len
+bytes of them into
+.Fa buf
+and move the place past them.
+A place the ring has dropped begins at its oldest record.
+.It 3
+Read all: the last records that fit in
+.Fa len
+bytes since the last clear, whole records only.
+.It 4
+Read all, then clear.
+.It 5
+Clear: a later read all begins after what the ring now holds.
+.It 6
+Turn the screen down to the critical records.
+.It 7
+Turn the screen back to the level action 6 put aside.
+.It 8
+Show on the screen the records more urgent than
+.Fa len ,
+from 1 to 8.
+.It 9
+The bytes the reader has not taken.
+.It 10
+The size of the ring, 16384 bytes.
+.El
+.Pp
+Every action but 0 and 1 needs a privileged caller, as Linux with
+.Va kernel.dmesg_restrict
+set has it, since the ring is
+.Pa /dev/bootlog Ns 's ,
+which is root's.
+The ring does not wake a waiting reader, since records come from any
+context in the kernel; a reader waiting for records looks again every
+tenth of a second.
+.Sh RETURN VALUES
+Actions 2, 3 and 4 return the bytes read, 9 and 10 the sizes, and the
+others 0; each returns -1 with
+.Va errno
+set on failure.
+.Sh ERRORS
+.Bl -tag -width EINVAL
+.It Er EINVAL
+An action outside 0 to 10, a negative length, or a level outside 1 to 8.
+.It Er EPERM
+The caller is not privileged.
+.It Er EFAULT
+.Fa buf
+is not the caller's to write.
+.It Er EINTR
+A signal ended the wait of action 2.
+.El
+.Sh SEE ALSO
+.Xr bootlog 4 ,
+.Xr busybox-sysklogd 8

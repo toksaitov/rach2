@@ -177,6 +177,7 @@ ipcs 1 busybox-util-linux
 kill 1 busybox-procps
 killall 1 busybox-procps
 killall5 1 busybox-procps
+klogctl 2 syslog
 klogd 8 busybox-sysklogd
 last 1 busybox-util-linux
 lchown 2 chown
