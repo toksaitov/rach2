@@ -19,8 +19,9 @@ CONFIGURE_ARGS="--without-libpam --without-selinux --without-acl --without-attr 
 port_install()
 {
     make install DESTDIR="$DEST"
-    rm -f "$DEST/usr/bin/login" "$DEST/usr/bin/passwd" "$DEST/usr/bin/newgrp" "$DEST/usr/bin/sg" \
+    rm -f "$DEST/bin/login" "$DEST/usr/bin/passwd" "$DEST/usr/bin/newgrp" "$DEST/usr/bin/sg" \
         "$DEST/usr/sbin/chpasswd" "$DEST/usr/sbin/nologin"
+    rmdir "$DEST/bin"
     rm -f "$DEST"/usr/share/man/man1/login.1 "$DEST"/usr/share/man/man1/passwd.1 \
         "$DEST"/usr/share/man/man1/newgrp.1 "$DEST"/usr/share/man/man1/sg.1 \
         "$DEST"/usr/share/man/man8/chpasswd.8 "$DEST"/usr/share/man/man8/nologin.8
