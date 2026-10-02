@@ -44,7 +44,7 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `ssh` (core tier; needs qemu-system-i386, ssh, nc; 128 MiB): the SSH capstone with nobody at the keyboard.
 * `ssh-e1000` (full tier; needs qemu-system-i386, ssh; 128 MiB): the ssh suite on the e1000 card.
 * `exfat` (core tier; needs qemu-system-i386, python3; 128 MiB): exFAT written from a program, read back after a reboot, judged by the host's reader and the external checker where the host has one, taken through a crash and its repair, written from BusyBox, and written by two processes under the lag.
-* `ext2` (core tier; needs qemu-system-i386, mke2fs, e2fsck; 128 MiB): the ext2 driver booted over a fixture disk the host's mke2fs wrote, with the walker's link rows on the mounted volume.
+* `ext2` (core tier; needs qemu-system-i386, mke2fs, e2fsck, mtype; 128 MiB): the ext2 driver booted over a fixture disk the host's mke2fs wrote, with the walker's link rows on the mounted volume.
 * `cred-persist` (full tier; needs qemu-system-i386; 128 MiB): the credential replacement's durability across a reboot.
 * `packet-e1000` (full tier; needs qemu-system-i386; 128 MiB): the packet suite on the e1000 card.
 * `addressed` (full tier; needs qemu-system-i386; 128 MiB): the address named on the boot line, and the proof that it is the one in force.

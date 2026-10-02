@@ -30,9 +30,7 @@
 .Nm
 writes a new ext2 file system on
 .Ar device ,
-a partition node such as
-.Pa /dev/disk0p4
-or a regular file.
+a regular file or a partition node.
 A
 .Ar size
 of blocks, or of bytes with a suffix of
@@ -44,22 +42,21 @@ or
 limits the volume; for a regular file it is required when the file is
 empty, and the file is extended to it.
 .Pp
-The ordinary kernel writes no disk node, so on the installed system and
-on os-real
+The ordinary kernel writes no disk node, so
 .Nm
 makes a volume in a file, which
 .Xr loopctl 8
 attaches and
 .Xr mount 8
 mounts.
-The recovery kernel's partition nodes take a volume directly.
 .Pp
 Rach2 uses e2fsprogs 1.47.4, linked statically against the ported musl,
 and installs
 .Nm
 at
 .Pa /sbin/mke2fs
-on os-real, the GNU system and the recovery image.
+on os-real and the GNU system; the recovery image, whose kernel writes
+partitions, has no room for it in its 4 MiB.
 Its defaults are compiled in from
 .Pa vendor/e2fsprogs/mke2fs.conf
 and are what the kernel's ext2 driver mounts writable: revision 1, 4 KiB
@@ -214,14 +211,12 @@ loopctl attach 0 /root/v.ext2
 mount -t ext2 /dev/loop0 /mnt
 .Ed
 .Pp
-On the recovery system, make a volume labelled
-.Ql data
-on the fourth partition:
-.Dl mke2fs -L data /dev/disk0p4
-.Pp
 In the source tree,
 .Ql tests/run ext2
-makes both and checks them.
+makes one and checks it with the host's
+.Ic e2fsck
+and
+.Ic dumpe2fs .
 .Sh SEE ALSO
 .Xr e2fsck 8 ,
 .Xr loopctl 8 ,

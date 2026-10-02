@@ -67,7 +67,7 @@ fatwrite|qemu-system-i386,mformat,mcopy,mdir,python3|core
 ssh|qemu-system-i386,ssh,nc|core
 ssh-e1000|qemu-system-i386,ssh|full
 exfat|qemu-system-i386,python3|core
-ext2|qemu-system-i386,mke2fs,e2fsck|core
+ext2|qemu-system-i386,mke2fs,e2fsck,mtype|core
 cred-persist|qemu-system-i386|full
 packet-e1000|qemu-system-i386|full
 addressed|qemu-system-i386|full
