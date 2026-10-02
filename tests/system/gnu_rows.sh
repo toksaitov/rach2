@@ -607,11 +607,12 @@ row_dosfstools() {
     same "the label" "$(fatlabel "$WORK/v.img")" "RENAMED"
 }
 
-# shadow's tools add an account with a home, change its comment, shell and
-# group, and remove it with its home.
+# shadow's tools add an account with a home, saying nothing, change its
+# comment, shell and group, and remove it with its home.
 row_shadow() {
     runs "groupadd" groupadd -g 1777 rowgroup
-    runs "useradd" useradd -m -u 1777 -g rowgroup -s /bin/bash rowuser
+    output "useradd" useradd -m -u 1777 -g rowgroup -s /bin/bash rowuser
+    same "useradd's report" "$OUT" ""
     has "the account" "$(getent passwd rowuser)" "rowuser:x:1777:1777::/home/rowuser:/bin/bash"
     runs "usermod" usermod -c "Row User" -aG test rowuser
     has "the comment" "$(getent passwd rowuser)" ":Row User:"

@@ -114,6 +114,10 @@ file 0600 /etc/shadow krffs/shadow
 # that number.
 text 0644 /etc/group root:x:0:\ntest:x:1000:\nsshd:x:74:\nmessagebus:x:81:\ncrontab:x:63:\nnogroup:x:65534:\n
 text 0644 /etc/shells /bin/sh\n/bin/bash\n
+# shadow's useradd makes no mail spool, since the system delivers no mail
+# and has no spool directory for it.
+dir 0755 /etc/default
+text 0644 /etc/default/useradd CREATE_MAIL_SPOOL=no\n
 dir 0755 /etc/rach2
 text 0644 /etc/rach2/limits # The limits every session starts with: a name, the soft value and the\n# hard one; unlimited for none. Root may raise them.\nnproc 256 512\nnofile 1024 1024\nas unlimited unlimited\n
 # The path OpenSSH's server gives a session too, which finds what is
