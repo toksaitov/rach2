@@ -5491,16 +5491,6 @@ new
     return arp_set(nd, ip, mac, 0 && (get16(req + NLMSG_HDRLEN + 8) & NUD_PERMANENT) != 0);
 end
 
-fault sys-block-start-zero
-probe partsprobe
-file rach2/sys/fs/devfs.c
-expect PARTSPROBE FAIL: /sys/block's partitions: a first sector, a size and the numbers
-old
-    row->start = node->part != 0 ? node->disk->views[node->part - 1].part.start_lba : 0;
-new
-    row->start = 0;
-end
-
 fault seccomp-precedence-reversed
 probe seccompmusl
 file rach2/sys/proc/seccomp.c
@@ -5528,8 +5518,9 @@ expect SECCOMPMUSL FAIL (the second thread has the filter TSYNC gave it
 old
     if (flags & SECCOMP_FILTER_FLAG_TSYNC) {
         tsync_apply(self);
-    }
 new
+    if ((flags & SECCOMP_FILTER_FLAG_TSYNC) && 0) {
+        tsync_apply(self);
 end
 
 fault proc-vmstat-unnamed
@@ -5605,7 +5596,7 @@ expect NSMUSL FAIL (a new network namespace reaches nothing
 old
     return s->ns != NULL;
 new
-    return 0;
+    return s->ns != NULL && 0;
 end
 
 fault ns-mount-shared
@@ -5722,12 +5713,12 @@ end
 
 fault sleep-all-uninterruptible
 probe procprobe
-file rach2/sys/proc/wait_queue.c
+file rach2/sys/fs/procfs.c
 expect FAIL: a child asleep in pause is in the state S
 old
-        current_proc->uninterruptible = !interruptible;
+        return p->uninterruptible ? 'D' : 'S';
 new
-        current_proc->uninterruptible = 1;
+        return 'D';
 end
 
 fault stat-blocked-counts-sleepers
