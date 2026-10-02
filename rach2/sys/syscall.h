@@ -48,6 +48,7 @@
 #define SYS_SPLICE        313
 #define SYS_TEE           315
 #define SYS_CLOSE_RANGE   436
+#define SYS_CLONE3        435
 #define SYS_UNLINKAT      301
 #define SYS_GETPID        20
 #define SYS_TIMES         43

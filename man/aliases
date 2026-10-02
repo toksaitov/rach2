@@ -48,6 +48,7 @@ clock_nanosleep 2 nanosleep
 clock_settime 2 gettimeofday
 clock_settime64 2 gettimeofday
 clone 2 fork
+clone3 2 fork
 close 2 open
 close_range 2 open
 cmp 1 busybox-editors

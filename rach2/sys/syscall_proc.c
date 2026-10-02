@@ -1948,6 +1948,7 @@ int32_t sys_execve(isr_params_t *params)
 #define CLONE_FS             0x00000200u
 #define CLONE_FILES          0x00000400u
 #define CLONE_SIGHAND        0x00000800u
+#define CLONE_PIDFD          0x00001000u
 #define CLONE_VFORK          0x00004000u
 #define CLONE_PARENT         0x00008000u
 #define CLONE_THREAD         0x00010000u
@@ -2366,6 +2367,42 @@ int32_t sys_vfork(isr_params_t *params)
     return do_fork(params, &req);
 }
 
+/** The clone `sys_clone` describes, from the arguments of `clone` or of
+ * `clone3`, the registers of `params` aside. */
+static int32_t clone_with(isr_params_t *params, uint32_t flags, uint32_t newsp, uint32_t ptid,
+                          uint32_t tls, uint32_t ctid)
+{
+    struct fork_req req;
+
+    if ((flags &
+         ~(CSIGNAL | CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | CLONE_VFORK |
+           CLONE_PARENT | CLONE_THREAD | CLONE_SYSVSEM | CLONE_SETTLS | CLONE_PARENT_SETTID |
+           CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID | CLONE_DETACHED | CLONE_NEW_ANY)) != 0 ||
+        (!(flags & CLONE_THREAD) && (flags & CSIGNAL) != SIGCHLD) ||
+        ((flags & CLONE_SIGHAND) && !(flags & CLONE_VM)) ||
+        ((flags & CLONE_THREAD) && !(flags & CLONE_SIGHAND)) ||
+        ((flags & CLONE_SIGHAND) && !(flags & CLONE_THREAD))) {
+        return -EINVAL;
+    }
+    req.tls = 0;
+    if (flags & CLONE_SETTLS) {
+        user_desc_t desc;
+
+        if (copy_from_user(&desc, (const void __user *)tls, sizeof(desc)) != 0) {
+            return -EFAULT;
+        }
+        if (tls_resolve_base(&desc, &req.tls) != 0) {
+            return -EINVAL;
+        }
+    }
+    req.flags = flags;
+    req.newsp = newsp;
+    req.ptid = (flags & CLONE_PARENT_SETTID) ? ptid : 0;
+    req.settid = (flags & CLONE_CHILD_SETTID) ? ctid : 0;
+    req.cleartid = (flags & CLONE_CHILD_CLEARTID) ? ctid : 0;
+    return do_fork(params, &req);
+}
+
 /**
  * clone (120), in the forms glibc's and musl's fork, posix_spawn and
  * pthread_create use: a new process with its own copy of the address space,
@@ -2391,36 +2428,72 @@ int32_t sys_vfork(isr_params_t *params)
  */
 int32_t sys_clone(isr_params_t *params)
 {
-    uint32_t flags = params->ebx;
-    struct fork_req req;
+    return clone_with(params, params->ebx, params->ecx, params->edx, params->esi, params->edi);
+}
 
-    if ((flags &
-         ~(CSIGNAL | CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | CLONE_VFORK |
-           CLONE_PARENT | CLONE_THREAD | CLONE_SYSVSEM | CLONE_SETTLS | CLONE_PARENT_SETTID |
-           CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID | CLONE_DETACHED | CLONE_NEW_ANY)) != 0 ||
-        (!(flags & CLONE_THREAD) && (flags & CSIGNAL) != SIGCHLD) ||
-        ((flags & CLONE_SIGHAND) && !(flags & CLONE_VM)) ||
-        ((flags & CLONE_THREAD) && !(flags & CLONE_SIGHAND)) ||
-        ((flags & CLONE_SIGHAND) && !(flags & CLONE_THREAD))) {
+/* clone3's structure, Linux's struct clone_args as eight 64-bit fields of its
+ * first version, each a low and a high word: flags, pidfd, child_tid,
+ * parent_tid, exit_signal, stack, stack_size and tls. */
+#define CLONE_ARGS_WORDS 16
+
+/* How much of a larger structure Linux knows, through set_tid, set_tid_size
+ * and cgroup; past it the bytes must be zero, and at most a page is read. */
+#define CLONE_ARGS_KNOWN 88
+
+/**
+ * clone3 (435): clone with its arguments in a structure, which glibc tries
+ * before clone for pthread_create, fork and posix_spawn. The flags are
+ * clone's, with the exit signal in a field of its own, and the stack is the
+ * lowest address of the region with its size, so the child starts at their
+ * sum. A structure shorter than the 64 bytes of Linux's first version is
+ * EINVAL; a longer one is read when the fields this kernel does not take,
+ * set_tid, set_tid_size and cgroup, are zero, and its bytes past those
+ * fields are zero, else E2BIG, as Linux reads it. CLONE_PIDFD is EINVAL,
+ * since no descriptor names a process here, and so is a flag or a field
+ * with bits past 32. The caller's registers are left as they were, since a
+ * caller may keep the structure's address in one across the call.
+ */
+int32_t sys_clone3(isr_params_t *params)
+{
+    uint32_t a[CLONE_ARGS_WORDS], extra[(CLONE_ARGS_KNOWN - 64) / 4];
+    uint32_t size = params->ecx, at, byte, i;
+
+    if (size < 64u) {
         return -EINVAL;
     }
-    req.tls = 0;
-    if (flags & CLONE_SETTLS) {
-        user_desc_t desc;
+    if (size > 4096u) {
+        return -E2BIG;
+    }
+    if (copy_from_user(a, (const void __user *)params->ebx, sizeof(a)) != 0) {
+        return -EFAULT;
+    }
+    for (at = 64u; at < size; at += 4u) {
+        uint32_t n = size - at < 4u ? size - at : 4u;
 
-        if (copy_from_user(&desc, (const void __user *)params->esi, sizeof(desc)) != 0) {
+        byte = 0;
+        if (copy_from_user(&byte, (const void __user *)(params->ebx + at), n) != 0) {
             return -EFAULT;
         }
-        if (tls_resolve_base(&desc, &req.tls) != 0) {
+        if (at < CLONE_ARGS_KNOWN) {
+            extra[(at - 64u) / 4u] = byte;
+        } else if (byte != 0) {
+            return -E2BIG;
+        }
+    }
+    for (i = 0; i < (CLONE_ARGS_KNOWN - 64u) / 4u && 64u + 4u * i < size; i++) {
+        if (extra[i] != 0) {
             return -EINVAL;
         }
     }
-    req.flags = flags;
-    req.newsp = params->ecx;
-    req.ptid = (flags & CLONE_PARENT_SETTID) ? params->edx : 0;
-    req.settid = (flags & CLONE_CHILD_SETTID) ? params->edi : 0;
-    req.cleartid = (flags & CLONE_CHILD_CLEARTID) ? params->edi : 0;
-    return do_fork(params, &req);
+    for (i = 1; i < CLONE_ARGS_WORDS; i += 2) {
+        if (a[i] != 0) {
+            return -EINVAL;
+        }
+    }
+    if ((a[0] & (CSIGNAL | CLONE_PIDFD)) != 0 || a[8] > 64u || (a[10] == 0) != (a[12] == 0)) {
+        return -EINVAL;
+    }
+    return clone_with(params, a[0] | a[8], a[10] ? a[10] + a[12] : 0, a[6], a[14], a[4]);
 }
 
 /* The options of waitpid, wait4 and waitid. */

@@ -449,6 +449,8 @@ int32_t sys_msync(isr_params_t *params);
 
 int32_t sys_clone(isr_params_t *params);
 
+int32_t sys_clone3(isr_params_t *params);
+
 int32_t sys_sigaltstack(isr_params_t *params);
 
 int32_t sys_rt_sigpending(isr_params_t *params);

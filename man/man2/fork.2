@@ -4,7 +4,8 @@
 .Sh NAME
 .Nm fork ,
 .Nm vfork ,
-.Nm clone
+.Nm clone ,
+.Nm clone3
 .Nd create a child process
 .Sh SYNOPSIS
 .In unistd.h
@@ -14,6 +15,8 @@
 .Fn vfork "void"
 .Ft long
 .Fn syscall "SYS_clone" "unsigned long flags" "void *stack" "pid_t *parent_tid" "void *tls" "pid_t *child_tid"
+.Ft long
+.Fn syscall "SYS_clone3" "struct clone_args *args" "size_t size"
 .Sh DESCRIPTION
 .Fn fork
 creates a child process with its own process record, address space, and
@@ -179,12 +182,34 @@ A nonzero
 is the stack pointer the child returns to user mode with.
 Every other flag is refused.
 .Pp
+.Fn clone3
+takes the same request in Linux's
+.Vt struct clone_args ,
+which glibc tries before
+.Fn clone
+for threads and
+.Xr posix_spawn 3 :
+the flags, with the exit signal in a field of its own, the child and
+parent thread ID addresses, the lowest address of the new stack and its
+size, from whose sum the child starts, and the TLS descriptor.
+.Fa size
+is at least 64, the size of the structure's first version; the fields of
+later versions,
+.Va set_tid ,
+.Va set_tid_size
+and
+.Va cgroup ,
+must be zero.
+The caller's registers are unchanged.
+.Pp
 The i386 system call numbers are 2 for
 .Fn fork ,
 190 for
-.Fn vfork
-and 120 for
-.Fn clone .
+.Fn vfork ,
+120 for
+.Fn clone
+and 435 for
+.Fn clone3 .
 .Sh RETURN VALUES
 The parent receives the child's process ID; the child receives 0.
 On failure, the function returns -1 and sets
@@ -228,10 +253,26 @@ or
 a descriptor
 .Xr set_thread_area 2
 refuses.
+.It Bq Er EINVAL
+.Fn clone3
+was given a
+.Fa size
+below 64, a field of a later version that is not zero, a flag or field
+with bits past 32, an exit signal in the flags or above 64, a stack
+without a size or a size without a stack, or
+.Dv CLONE_PIDFD ,
+since no descriptor names a process here.
+.It Bq Er E2BIG
+.Fn clone3
+was given a
+.Fa size
+above 4096, or bytes that are not zero past the structure Linux knows.
 .It Bq Er EFAULT
 The
 .Dv CLONE_SETTLS
-descriptor cannot be read.
+descriptor or the
+.Fn clone3
+structure cannot be read.
 .It Bq Er EAGAIN
 The number of threads with the parent's real user ID has reached the
 parent's soft

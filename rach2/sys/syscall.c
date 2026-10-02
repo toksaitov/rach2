@@ -2907,6 +2907,7 @@ void init_syscall(void)
     _syscall_table[SYS_SPLICE] = sys_splice;
     _syscall_table[SYS_TEE] = sys_tee;
     _syscall_table[SYS_CLOSE_RANGE] = sys_close_range;
+    _syscall_table[SYS_CLONE3] = sys_clone3;
     _syscall_table[SYS_GETDENTS64] = sys_getdents64;
     _syscall_table[SYS_UTIMENSAT] = sys_utimensat;
     _syscall_table[SYS_CLOCK_GETTIME] = sys_clock_gettime;
