@@ -97,6 +97,9 @@ The ports milestone 55 added were built one at a time, so the table of them give
 | NTBTLS       | 0.3.2         | 0.2 MB   |
 | pinentry     | 1.3.3         | 0.2 MB   |
 | GnuPG        | 2.5.24        | 9.4 MB   |
+| htop         | 3.5.3         |          |
+| dosfstools   | 4.2           |          |
+| shadow       | 4.20.2        |          |
 
 These notes say what some ports provide and what they leave to the system they are installed on.
 
@@ -112,7 +115,9 @@ These notes say what some ports provide and what they leave to the system they a
 * tmux uses libevent and takes `tmux-256color` as its terminal. nano reads `/etc/nanorc`, which includes the syntax files. Texinfo installs `makeinfo`, `info` and `install-info`.
 * lsof is built from Debian's source of it, since its upstream signs nothing, with its own Configure script. zip and unzip are Info-ZIP's last releases, since it makes no more, with Debian's patches applied from its packaging tarballs (`DEBIAN` in `build_port.sh`), unzip with bzip2.
 * cronie's `crond` runs from init, and `crontab` is set-id to the group `crontab`, which may write the crontabs in `/var/spool/cron/crontabs`. There is no anacron and no PAM.
-* Python has the modules of its standard library that link the root's libraries, and neither `tkinter`, `dbm.gnu`, pip nor the test suite. Its ssl module is built against OpenSSL 4, which has no SSLv3 and no methods of one protocol version.
+* Python has the modules of its standard library that link the root's libraries, and neither `tkinter`, `dbm.gnu`, pip nor the test suite. Its ssl module is built against OpenSSL 4, which has no SSLv3 and no methods of one protocol version. Its byte code records a hash of each source, since the image gives every file the same time.
+* htop has ncurses' wide characters and CPU affinity, and no sensors, capabilities, delay accounting, hwloc or libunwind. dosfstools installs `mkfs.fat` and `fsck.fat` with Debian's other names for them, which the path finds before BusyBox's `mkdosfs`.
+* shadow installs the account tools BusyBox has not, `useradd`, `usermod`, `userdel`, the group tools, `gpasswd`, `chsh`, `chfn`, `chage`, `vipw` and the checkers, with `/etc/login.defs`; `passwd`, `su`, `login`, `chpasswd` and `nologin` stay BusyBox's and `newgrp` util-linux's. `chsh`, `chfn` and `gpasswd` are set-id root, as on Debian. There is no PAM, no subordinate ids and no `lastlog`.
 * GnuPG has its agent, `dirmngr` with NTBTLS for hkps, `keyboxd` with SQLite and `pinentry`'s curses and tty programs, and no LDAP and no TPM2 daemon.
 
 ## The root image

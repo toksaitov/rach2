@@ -114,6 +114,9 @@ setid /bin/passwd 04755:0:0 build/vendor/busybox/busybox-suid
 setid /bin/login 04755:0:0 build/vendor/busybox/busybox-suid
 setid /usr/bin/newgrp 04755:0:0 build/vendor/gnu/setid/newgrp
 setid /usr/bin/crontab 02755:0:63 build/vendor/gnu/setid/crontab
+setid /usr/bin/chsh 04755:0:0 build/vendor/gnu/setid/chsh
+setid /usr/bin/chfn 04755:0:0 build/vendor/gnu/setid/chfn
+setid /usr/bin/gpasswd 04755:0:0 build/vendor/gnu/setid/gpasswd
 trusted file 0755:0:0 /bin/busybox build/vendor/busybox/busybox
 trusted overlay 0755:0:0 /bin/sh build/vendor/gnu/root/usr/bin/bash
 trusted text 0644:0:0 /etc/passwd root:x:0:0:root:/root:/bin/bash\ntest:x:1000:1000:test:/home/test:/bin/bash\nsshd:x:74:74::/var/empty:/usr/bin/false\nmessagebus:x:81:81::/nonexistent:/usr/bin/false\nnobody:x:65534:65534:nobody:/nonexistent:/usr/bin/false\n

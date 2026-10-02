@@ -80,6 +80,11 @@
 #   have in common is the same, but for the two lines at the top of
 #   libffi's README.md that its release lacks, so the release's generated
 #   files are the part no signature covers.
+# * htop, shadow and dosfstools, checked the same way against Debian's
+#   source index for unstable of 2026-10-02: shadow's and dosfstools'
+#   release tarballs are the ones Debian has, and Debian's htop is the git
+#   archive of the tag, with which htop's release has every file in common
+#   the same, and adds the files autoconf and automake generate.
 binutils 2.47 https://ftp.gnu.org/gnu/binutils/binutils-2.47.tar.xz 154ab23b60070e8f27013c22977f1129425d67d1e8acd6e13010e617811e4cff
 gcc 16.2.0 https://ftp.gnu.org/gnu/gcc/gcc-16.2.0/gcc-16.2.0.tar.xz e6738e29597f733270731aa90600f37ffdc045079dfc27ec7e8192cc81085c3e
 gmp 6.3.0 https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz a3c2b80201b89e68616f4ad30bc66aee4927c3ce50e33929ca819d5c43538898
@@ -171,3 +176,6 @@ npth 1.8 https://www.gnupg.org/ftp/gcrypt/npth/npth-1.8.tar.bz2 8bd24b4f23a3065d
 ntbtls 0.3.2 https://www.gnupg.org/ftp/gcrypt/ntbtls/ntbtls-0.3.2.tar.bz2 bdfcb99024acec9c6c4b998ad63bb3921df4cfee4a772ad6c0ca324dbbf2b07c
 pinentry 1.3.3 https://www.gnupg.org/ftp/gcrypt/pinentry/pinentry-1.3.3.tar.bz2 c2970f16d6afb66ecddfca767d743936c86239bff936eed7fd7597a678414b63
 gnupg 2.5.24 https://www.gnupg.org/ftp/gcrypt/gnupg/gnupg-2.5.24.tar.bz2 bf149d01a2b9fcc0e4589b8ae8697d3d5c557ea48ed95a3fa55dd3b1187e6039
+htop 3.5.3 https://github.com/htop-dev/htop/releases/download/3.5.3/htop-3.5.3.tar.xz a8b164386494cb85bb255a415a3f5f80afe7a0c4491da5d113b3a0f951087e65
+shadow 4.20.2 https://github.com/shadow-maint/shadow/releases/download/4.20.2/shadow-4.20.2.tar.xz b89f432b75ae55a2d852b446d0365484795fdf533ab97d550e325fa15594a224
+dosfstools 4.2 https://github.com/dosfstools/dosfstools/releases/download/v4.2/dosfstools-4.2.tar.gz 64926eebf90092dca21b14259a5301b7b98e7b1943e8a201c7d726084809b527

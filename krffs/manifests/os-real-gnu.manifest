@@ -36,9 +36,9 @@
 #   address.
 # * /etc/fstab names the root by the label the image tool gives every root,
 #   which findmnt --verify, mount -a and fsck -A read.
-# * The two programs of the ports that are set-id on Debian, util-linux's
-#   newgrp and cronie's crontab, with the group `crontab` and the crontabs'
-#   directory under /var/spool/cron.
+# * The programs of the ports that are set-id on Debian: util-linux's
+#   newgrp, cronie's crontab, with the group `crontab` and the crontabs'
+#   directory under /var/spool/cron, and shadow's chsh, chfn and gpasswd.
 # * glibc's own files: /etc/nsswitch.conf, and /etc/ld.so.conf, from which
 #   install_root.sh writes /etc/ld.so.cache.
 
@@ -155,12 +155,17 @@ dir 01730:0:63 /var/spool/cron/crontabs
 
 dir 0755 /usr
 # The set-id programs of the ports. install_root.sh installs the rest of the
-# GNU system, and what it adds has no set-id bit, so these two come from
+# GNU system, and what it adds has no set-id bit, so these come from
 # build/vendor/gnu/setid, where their recipes leave them: newgrp, set-id
-# root, which changes a session's group, and crontab, set-id to `crontab`.
+# root, which changes a session's group; crontab, set-id to `crontab`; and
+# chsh, chfn and gpasswd, set-id root, which change a user's own shell and
+# name in /etc/passwd and a group's members and password.
 dir 0755 /usr/bin
 file 04755:0:0 /usr/bin/newgrp build/vendor/gnu/setid/newgrp
 file 02755:0:63 /usr/bin/crontab build/vendor/gnu/setid/crontab
+file 04755:0:0 /usr/bin/chsh build/vendor/gnu/setid/chsh
+file 04755:0:0 /usr/bin/chfn build/vendor/gnu/setid/chfn
+file 04755:0:0 /usr/bin/gpasswd build/vendor/gnu/setid/gpasswd
 dir 0755 /usr/share
 dir 0755 /usr/share/udhcpc
 file 0755 /usr/share/udhcpc/default.script krffs/udhcpc-default.script

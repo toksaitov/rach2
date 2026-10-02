@@ -559,6 +559,42 @@ row_zip() {
     has "the version" "$(zip -v | head -n 2)" "Zip 3.0"
 }
 
+# htop draws a screen of the processes on a terminal and ends after it, as
+# -n asks, with the load averages in its header.
+row_htop() {
+    has "the version" "$(htop --version)" "htop 3.5.3"
+    output "a screen" script -qec "TERM=xterm-256color htop -n 1" /dev/null < /dev/null
+    has "the screen" "$OUT" "Load average"
+}
+
+# dosfstools makes a FAT volume in a file, checks it, and names it again.
+row_dosfstools() {
+    runs "a file" dd if=/dev/zero of="$WORK/v.img" bs=1M count=16 status=none
+    runs "mkfs.vfat" mkfs.vfat -n ROWVOL "$WORK/v.img"
+    output "fsck.vfat" fsck.vfat -n "$WORK/v.img"
+    has "the check" "$OUT" "files"
+    runs "fatlabel" fatlabel "$WORK/v.img" RENAMED
+    same "the label" "$(fatlabel "$WORK/v.img")" "RENAMED"
+}
+
+# shadow's tools add an account with a home, change its comment, shell and
+# group, and remove it with its home.
+row_shadow() {
+    runs "groupadd" groupadd -g 1777 rowgroup
+    runs "useradd" useradd -m -u 1777 -g rowgroup -s /bin/bash rowuser
+    has "the account" "$(getent passwd rowuser)" "rowuser:x:1777:1777::/home/rowuser:/bin/bash"
+    runs "usermod" usermod -c "Row User" -aG test rowuser
+    has "the comment" "$(getent passwd rowuser)" ":Row User:"
+    has "the group" "$(id -nG rowuser)" "test"
+    runs "chsh" chsh -s /bin/sh rowuser
+    has "the shell" "$(getent passwd rowuser)" ":/bin/sh"
+    runs "pwck" pwck -r -q
+    runs "userdel" userdel -r rowuser
+    runs "groupdel" groupdel rowgroup
+    same "the account gone" "$(getent passwd rowuser)" ""
+    same "the home gone" "$(ls -d /home/rowuser 2>/dev/null)" ""
+}
+
 # Python with the modules of its standard library that link the root's
 # libraries, ctypes calling into the C library, sqlite3, a pool of worker
 # processes, which share POSIX semaphores, a virtual environment, and byte
