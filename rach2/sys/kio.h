@@ -37,6 +37,15 @@
 /** Write one character to the screen. */
 void k_putc(char c);
 
+/** The longest answer the screen gives to a query, a cursor position. */
+#define K_ANSWER_MAX 16
+
+/**
+ * Take the screen's answer to the queries written to it since the last call
+ * into `buf`, of `size` bytes, and return its length, 0 when there is none.
+ */
+unsigned int k_take_answer(char *buf, unsigned int size);
+
 /**
  * Write a null-terminated string to the screen, then a newline.
  *

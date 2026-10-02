@@ -1,4 +1,4 @@
-.Dd October 2, 2026
+.Dd October 3, 2026
 .Dt CONSOLE 4
 .Os
 .Sh NAME
@@ -84,6 +84,31 @@ only when
 is set.
 If the applicable signal is blocked or ignored, the operation fails with
 .Er EIO .
+.Ss Screen
+The screen is a terminal of 80 columns and 25 rows whose escape
+sequences the terminfo entry
+.Ql rach2
+lists.
+Text other than ASCII is read as UTF-8 and drawn from the adapter's
+font, code page 437, which has box drawing, blocks, Latin letters with
+accents and some Greek; a character the font lacks is drawn as one
+.Ql \&? .
+The screen answers the queries a VT102 answers, and the answer is the
+console's input, read as typed bytes:
+.Ql "ESC [ c"
+with
+.Ql "ESC [ ? 6 c" ,
+.Ql "ESC [ 5 n"
+with
+.Ql "ESC [ 0 n" ,
+and
+.Ql "ESC [ 6 n"
+with the cursor's position,
+.Ql "ESC [ row ; column R" .
+Operating system commands, device control strings and application
+strings, which a program sends to learn a terminal's features, are
+read to their end and not drawn.
+A terminal on the serial port gives its own answers too.
 .Ss Terminal requests
 The console and pseudoterminal slaves answer these
 .Xr ioctl 2

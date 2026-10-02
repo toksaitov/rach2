@@ -11,7 +11,10 @@
  *   (d) TCSETS round-trip: clearing ICANON|ECHO and reading it back through
  *       TCGETS shows the kernel actually applied the new termios;
  *   (e) raw read: in raw mode (VMIN=1) a byte is delivered with no newline
- *       and no echo. The driver sends "X", read() returns it.
+ *       and no echo. The driver sends "X", read() returns it;
+ *   (g) the screen's answers: the device attributes query, `ESC [ c`, reads
+ *       back `ESC [ ? 6 c`, and the cursor position query, `ESC [ 6 n`, reads
+ *       back `ESC [ row ; col R`, with nothing typed.
  *
  * Prints "TTYPROBE OK" or "TTYPROBE FAIL". Freestanding; direct int 0x80.
  * Driven by `tests/run console`, whose harness steps send the cooked line and
@@ -188,6 +191,17 @@ void _start(void)
         check(navail == 0, "FIONREAD 0 when the queue is drained");
         check(do_ioctl(0, TCFLSH, (void *)0) == 0, "TCFLSH (flush input) ok");
     }
+
+    /* (g) the screen answers its queries on the console's input. */
+    out("\033[c", 3);
+    n = do_read(0, buf, (int)sizeof(buf));
+    check(n == 5 && buf[0] == 27 && buf[1] == '[' && buf[2] == '?' && buf[3] == '6' &&
+              buf[4] == 'c',
+          "the device attributes are read back as ESC [ ? 6 c");
+    out("\033[6n", 4);
+    n = do_read(0, buf, (int)sizeof(buf));
+    check(n >= 6 && buf[0] == 27 && buf[1] == '[' && buf[n - 1] == 'R',
+          "the cursor position is read back as ESC [ row ; col R");
 
     if (fails == 0) {
         puts("TTYPROBE OK");

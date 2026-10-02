@@ -7,7 +7,9 @@
 # insertion, so a program redraws where a terminal would scroll. A character
 # in the last column wraps at once, so there is no xenl. The keyboard sends
 # the arrows, Home and End as xterm does, the editing keys as a VT220 does,
-# and DEL for Backspace. install_root.sh compiles the entry into the GNU root.
+# and DEL for Backspace. It answers the cursor position and the device
+# attributes as Linux's console does, which u6 to u9 describe, and draws UTF-8
+# from code page 437. install_root.sh compiles the entry into the GNU root.
 rach2|Rach2 VGA text console,
 	am, bw, msgr,
 	colors#8, cols#80, it#8, lines#25, pairs#64,
@@ -19,4 +21,5 @@ rach2|Rach2 VGA text console,
 	kcuf1=\E[C, kcuu1=\E[A, kdch1=\E[3~, kend=\E[F, khome=\E[H,
 	kich1=\E[2~, knp=\E[6~, kpp=\E[5~, op=\E[39;49m, rc=\E8,
 	rev=\E[7m, rmso=\E[27m, sc=\E7, setab=\E[4%p1%dm,
-	setaf=\E[3%p1%dm, sgr0=\E[0m, smso=\E[7m, vpa=\E[%i%p1%dd,
+	setaf=\E[3%p1%dm, sgr0=\E[0m, smso=\E[7m, u6=\E[%i%d;%dR,
+	u7=\E[6n, u8=\E[?6c, u9=\E[c, vpa=\E[%i%p1%dd,

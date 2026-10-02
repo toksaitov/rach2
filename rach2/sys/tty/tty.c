@@ -250,6 +250,28 @@ int tty_read(struct tty *t, unsigned char *kbuf, int count, int nonblock)
 
 static void console_sink(void *ctx, unsigned char c);
 
+/**
+ * Give the screen's answers to the queries just written to the console to its
+ * input, as a terminal on a wire sends them back, so the program that asked
+ * for the device attributes or the cursor's position reads them as typed
+ * bytes. They are fed here and not where the screen's parser makes them,
+ * since the parser runs inside output and the discipline's echo writes
+ * through it.
+ */
+static void console_answer(struct tty *t)
+{
+    char buf[K_ANSWER_MAX];
+    unsigned int i, n;
+    uint32_t flags;
+
+    flags = kirq_save();
+    n = k_take_answer(buf, sizeof buf);
+    for (i = 0; i < n; i++) {
+        tty_input_char(t, (unsigned char)buf[i]);
+    }
+    kirq_restore(flags);
+}
+
 int tty_write(struct tty *t, const unsigned char *kbuf, int count)
 {
     int i;
@@ -262,6 +284,7 @@ int tty_write(struct tty *t, const unsigned char *kbuf, int count)
     }
     if (t->sink == console_sink) {
         console_write_end();
+        console_answer(t);
     }
     return count;
 }

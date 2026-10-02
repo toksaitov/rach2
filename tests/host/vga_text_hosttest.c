@@ -327,6 +327,69 @@ static void row_console(void)
     CHECK(port_writes == ports + 4, "and places the cursor once for the line");
 }
 
+/** Write `s` through the console's byte path. */
+static void put_string(const char *s)
+{
+    while (*s != '\0') {
+        k_putc(*s++);
+    }
+}
+
+/** Whether the answer waiting is the `n` bytes of `want`, and take it. */
+static int answer_is(const char *want, unsigned int n)
+{
+    char buf[K_ANSWER_MAX];
+    unsigned int i;
+
+    if (k_take_answer(buf, sizeof buf) != n) {
+        return 0;
+    }
+    for (i = 0; i < n; i++) {
+        if (buf[i] != want[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/**
+ * A query is answered and not drawn: the device attributes as a VT102's, the
+ * cursor's position one-based, and the status as good. A device control
+ * string and an application string, which a browser sends to learn the
+ * terminal's features, leave no cell behind.
+ */
+static void row_answers(void)
+{
+    k_cls();
+    put_string("ab\033[c");
+    CHECK(answer_is("\033[?6c", 5), "the device attributes are a VT102's");
+    CHECK(answer_is("", 0), "an answer is taken once");
+    put_string("\033[3;7H\033[6n");
+    CHECK(answer_is("\033[3;7R", 6), "the cursor's position is one-based");
+    put_string("\033[5n");
+    CHECK(answer_is("\033[0n", 4), "the status is good");
+    stores = 0;
+    put_string("\033P+q524742\033\\\033_Gi=1,a=q\033\\\033]11;?\007");
+    CHECK(stores == 0 && x == 6 && y == 2, "the strings draw nothing");
+}
+
+/**
+ * UTF-8 is drawn from the font, code page 437, a cell for each character: the
+ * font's byte for one it has, and `CHAR_NON_PRINTABLE` for one it lacks and
+ * for a sequence an ASCII byte cuts short.
+ */
+static void row_utf8(void)
+{
+    k_cls();
+    put_string("\303\251\342\224\200\320\264\303a");
+    CHECK((vram[0] & 0xFF) == 0x82, "an e with an acute accent is the font's 0x82");
+    CHECK((vram[1] & 0xFF) == 0xC4, "a horizontal line is the font's 0xC4");
+    CHECK((vram[2] & 0xFF) == '?', "a Cyrillic letter the font lacks is one '?'");
+    CHECK((vram[3] & 0xFF) == '?' && (vram[4] & 0xFF) == 'a',
+          "a sequence cut short is a '?' before the byte that cut it");
+    CHECK(x == 5, "five characters are five cells");
+}
+
 /**
  * While the adapter is in a graphics mode a scroll leaves the start address
  * alone, since it is the picture's; the return to text redraws and sets it.
@@ -354,6 +417,8 @@ int main(void)
     row_scrolls();
     row_scrollback();
     row_console();
+    row_answers();
+    row_utf8();
     row_graphics();
     row_release_echo();
     if (failures) {

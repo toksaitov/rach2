@@ -228,6 +228,14 @@ void console_putc_raw(char c)
     (void)c;
 }
 
+/** The fixture's screen answers no query. */
+unsigned int k_take_answer(char *buf, unsigned int size)
+{
+    (void)buf;
+    (void)size;
+    return 0;
+}
+
 /** No console writes need batching in the fixture. */
 void console_write_begin(void)
 {}

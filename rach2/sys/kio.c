@@ -11,6 +11,11 @@
  * would land on screen as literal `?[...` garbage, and backspace would never
  * erase. Only this VGA path is interpreted. The serial path hands the same
  * bytes to the host terminal, which interprets them itself.
+ *
+ * Text other than ASCII arrives as UTF-8 and is drawn from the adapter's
+ * font, code page 437. A query for the device's attributes or the cursor's
+ * position is answered as a VT102 answers it; the console's tty takes the
+ * answer with `k_take_answer` and gives it to the program as input.
  */
 
 #define VT_MAX_PARAMS 8
@@ -20,7 +25,7 @@ enum vt_parse {
     VT_ESC,     /* saw ESC */
     VT_CSI,     /* saw `ESC [`, collecting numeric parameters */
     VT_ESC_ARG, /* saw `ESC (` and friends, swallow one selector byte */
-    VT_OSC      /* saw `ESC ]`, swallow until BEL */
+    VT_STRING   /* saw `ESC ]`, `ESC P`, `ESC _`, `ESC ^` or `ESC X` */
 };
 
 static enum vt_parse vt_state = VT_NORMAL;
@@ -29,9 +34,32 @@ static unsigned int vt_nparams;
 static unsigned int vt_cur;
 static bool vt_private;
 static bool vt_interm;
-static unsigned int vt_osc_len;
+static unsigned int vt_string_len;
 static unsigned int vt_saved_x;
 static unsigned int vt_saved_y;
+
+static unsigned int vt_utf_left; /* continuation bytes still to come */
+static uint32_t vt_utf_code;
+
+static char vt_answer[K_ANSWER_MAX];
+static unsigned int vt_answer_len;
+
+/*
+ * The characters of code page 437 from 0x80 to 0xFF, by their Unicode
+ * values: the adapter's font draws character 0x80 + i as vt_cp437[i].
+ */
+static const uint16_t vt_cp437[128] = {
+    0x00C7, 0x00FC, 0x00E9, 0x00E2, 0x00E4, 0x00E0, 0x00E5, 0x00E7, 0x00EA, 0x00EB, 0x00E8, 0x00EF,
+    0x00EE, 0x00EC, 0x00C4, 0x00C5, 0x00C9, 0x00E6, 0x00C6, 0x00F4, 0x00F6, 0x00F2, 0x00FB, 0x00F9,
+    0x00FF, 0x00D6, 0x00DC, 0x00A2, 0x00A3, 0x00A5, 0x20A7, 0x0192, 0x00E1, 0x00ED, 0x00F3, 0x00FA,
+    0x00F1, 0x00D1, 0x00AA, 0x00BA, 0x00BF, 0x2310, 0x00AC, 0x00BD, 0x00BC, 0x00A1, 0x00AB, 0x00BB,
+    0x2591, 0x2592, 0x2593, 0x2502, 0x2524, 0x2561, 0x2562, 0x2556, 0x2555, 0x2563, 0x2551, 0x2557,
+    0x255D, 0x255C, 0x255B, 0x2510, 0x2514, 0x2534, 0x252C, 0x251C, 0x2500, 0x253C, 0x255E, 0x255F,
+    0x255A, 0x2554, 0x2569, 0x2566, 0x2560, 0x2550, 0x256C, 0x2567, 0x2568, 0x2564, 0x2565, 0x2559,
+    0x2558, 0x2552, 0x2553, 0x256B, 0x256A, 0x2518, 0x250C, 0x2588, 0x2584, 0x258C, 0x2590, 0x2580,
+    0x03B1, 0x00DF, 0x0393, 0x03C0, 0x03A3, 0x03C3, 0x00B5, 0x03C4, 0x03A6, 0x0398, 0x03A9, 0x03B4,
+    0x221E, 0x03C6, 0x03B5, 0x2229, 0x2261, 0x00B1, 0x2265, 0x2264, 0x2320, 0x2321, 0x00F7, 0x2248,
+    0x00B0, 0x2219, 0x00B7, 0x221A, 0x207F, 0x00B2, 0x25A0, 0x00A0};
 
 static unsigned int vt_fg = DEFAULT_FORECOLOR;
 static unsigned int vt_bg = DEFAULT_BACKCOLOR;
@@ -49,13 +77,14 @@ static const uint8_t vt_ansi_color[8] = {black, red, green, brown, blue, magenta
  *
  * BS, HT, LF, and CR move the cursor; NUL and BEL draw nothing, since a
  * program sends them to a terminal as padding and as a warning; any other
- * control byte is shown as `CHAR_NON_PRINTABLE`; a printable byte is written
+ * control byte is shown as `CHAR_NON_PRINTABLE`; a printable byte, or a byte
+ * from 0x80 up, which is a character of the font's upper half, is written
  * with the current color and the cursor advances, wrapping and scrolling at
  * the screen edges.
  */
 static void vga_putc_raw(char c)
 {
-    if (c < 32 || c == 127) {
+    if ((unsigned char)c < 32 || c == 127) {
         switch (c) {
         case CHAR_NULL:
         case CHAR_BEL:
@@ -125,6 +154,28 @@ static void vt_erase_row(unsigned int row, unsigned int c0, unsigned int c1)
     }
 }
 
+/**
+ * Erase in display, `CSI n J`: 0 erases from the cursor to the end of the
+ * screen, 1 from its start to the cursor, and 2 all of it.
+ */
+static void vt_erase_display(unsigned int n)
+{
+    unsigned int r;
+
+    if (n == 0) {
+        vt_erase_row(y, x, SCREEN_NUMBER_OF_COLUMNS - 1);
+        for (r = y + 1; r < SCREEN_NUMBER_OF_ROWS; ++r)
+            vt_erase_row(r, 0, SCREEN_NUMBER_OF_COLUMNS - 1);
+    } else if (n == 1) {
+        for (r = 0; r < y; ++r)
+            vt_erase_row(r, 0, SCREEN_NUMBER_OF_COLUMNS - 1);
+        vt_erase_row(y, 0, x);
+    } else if (n == 2) {
+        for (r = 0; r < SCREEN_NUMBER_OF_ROWS; ++r)
+            vt_erase_row(r, 0, SCREEN_NUMBER_OF_COLUMNS - 1);
+    }
+}
+
 /** Numeric CSI parameter `i`, or `def` when it is absent or zero. */
 static unsigned int vt_arg(unsigned int i, unsigned int def)
 {
@@ -191,17 +242,87 @@ static void vt_do_sgr(void)
     vt_apply_color();
 }
 
+/** Add the `n` bytes of `s` to the waiting answer, or drop them if no room. */
+static void vt_answer_add(const char *s, unsigned int n)
+{
+    unsigned int i;
+
+    if (vt_answer_len + n > K_ANSWER_MAX)
+        return;
+    for (i = 0; i < n; ++i)
+        vt_answer[vt_answer_len++] = s[i];
+}
+
+/** Append the decimal digits of `n` to `buf` at `*len`. */
+static void vt_put_number(char *buf, unsigned int *len, unsigned int n)
+{
+    char digits[10];
+    unsigned int k = 0;
+
+    do {
+        digits[k++] = (char)('0' + n % 10);
+        n /= 10;
+    } while (n != 0);
+    while (k > 0)
+        buf[(*len)++] = digits[--k];
+}
+
+/**
+ * Answer a query whose final byte is `c`. The primary device attributes,
+ * `CSI c`, are a VT102's, `CSI ? 6 c`. A device status report, `CSI n`, asks
+ * with 5 for the status, which is always good, and with 6 for the cursor's
+ * position, one-based as `CSI row ; col R`.
+ */
+static void vt_answer_query(char c)
+{
+    char buf[K_ANSWER_MAX];
+    unsigned int len = 0;
+    unsigned int n = vt_arg(0, 0);
+
+    if (c == 'c') {
+        if (n == 0)
+            vt_answer_add("\033[?6c", 5);
+    } else if (n == 5) {
+        vt_answer_add("\033[0n", 4);
+    } else if (n == 6) {
+        buf[len++] = 0x1b;
+        buf[len++] = '[';
+        vt_put_number(buf, &len, y + 1);
+        buf[len++] = ';';
+        vt_put_number(buf, &len, x + 1);
+        buf[len++] = 'R';
+        vt_answer_add(buf, len);
+    }
+}
+
+unsigned int k_take_answer(char *buf, unsigned int size)
+{
+    unsigned int i, n;
+    uint32_t flags;
+
+    flags = kirq_save();
+    n = vt_answer_len <= size ? vt_answer_len : 0;
+    for (i = 0; i < n; ++i)
+        buf[i] = vt_answer[i];
+    vt_answer_len = 0;
+    kirq_restore(flags);
+    return n;
+}
+
 /**
  * Execute a completed CSI sequence whose final byte is `c`.
  *
  * Cursor motion (`A`-`H`, `f`, `d`, `G`), erase (`J`, `K`, `X`), color (`m`),
- * and cursor save/restore (`s`, `u`) are handled; a scroll-region set (`r`),
- * mode toggles (`h`, `l`), and anything else are ignored. Coordinates are
- * one-based on the wire and clamped to the screen.
+ * and cursor save/restore (`s`, `u`) are handled. The device attributes
+ * (`c`) and the status reports (`n`) are answered by `vt_answer_query`; a
+ * program such as a browser waits for those answers before it reads the
+ * keyboard. A scroll-region set (`r`), mode toggles (`h`, `l`), and anything
+ * else are ignored. Coordinates are one-based on the wire and clamped to the
+ * screen.
  */
 static void vt_dispatch_csi(char c)
 {
-    unsigned int n, row, col, r;
+    unsigned int n, row, col;
 
     switch (c) {
     case 'A':
@@ -263,19 +384,7 @@ static void vt_dispatch_csi(char c)
         break;
 
     case 'J':
-        n = vt_arg(0, 0);
-        if (n == 0) {
-            vt_erase_row(y, x, SCREEN_NUMBER_OF_COLUMNS - 1);
-            for (r = y + 1; r < SCREEN_NUMBER_OF_ROWS; ++r)
-                vt_erase_row(r, 0, SCREEN_NUMBER_OF_COLUMNS - 1);
-        } else if (n == 1) {
-            for (r = 0; r < y; ++r)
-                vt_erase_row(r, 0, SCREEN_NUMBER_OF_COLUMNS - 1);
-            vt_erase_row(y, 0, x);
-        } else if (n == 2) {
-            for (r = 0; r < SCREEN_NUMBER_OF_ROWS; ++r)
-                vt_erase_row(r, 0, SCREEN_NUMBER_OF_COLUMNS - 1);
-        }
+        vt_erase_display(vt_arg(0, 0));
         break;
     case 'K':
         n = vt_arg(0, 0);
@@ -303,24 +412,175 @@ static void vt_dispatch_csi(char c)
         y = vt_saved_y;
         break;
 
+    case 'c':
+    case 'n':
+        vt_answer_query(c);
+        break;
+
     default:
         break;
+    }
+}
+
+/** The font's character for Unicode value `code`, or `CHAR_NON_PRINTABLE`. */
+static char vt_glyph(uint32_t code)
+{
+    unsigned int i;
+
+    if (code >= 0xA0) {
+        for (i = 0; i < 128; ++i) {
+            if (vt_cp437[i] == code)
+                return (char)(0x80 + i);
+        }
+    }
+    return CHAR_NON_PRINTABLE;
+}
+
+/**
+ * Take `uc`, a byte from 0x80 up, as part of a UTF-8 sequence, and draw the
+ * character when its sequence is complete.
+ *
+ * The font is code page 437: box drawing, blocks, Latin letters with accents
+ * and some Greek. A character it lacks is drawn as `CHAR_NON_PRINTABLE`, once
+ * for the character, and so is a byte that cannot begin or continue one.
+ * `k_putc` ends a sequence cut short by a byte below 0x80 the same way.
+ */
+static void vt_utf8(unsigned char uc)
+{
+    if (uc < 0xC0) {
+        if (vt_utf_left == 0) {
+            vga_putc_raw(CHAR_NON_PRINTABLE);
+            return;
+        }
+        vt_utf_code = (vt_utf_code << 6) | (uc & 0x3Fu);
+        if (--vt_utf_left == 0)
+            vga_putc_raw(vt_glyph(vt_utf_code));
+    } else if (uc < 0xE0) {
+        vt_utf_code = uc & 0x1Fu;
+        vt_utf_left = 1;
+    } else if (uc < 0xF0) {
+        vt_utf_code = uc & 0x0Fu;
+        vt_utf_left = 2;
+    } else if (uc < 0xF8) {
+        vt_utf_code = uc & 0x07u;
+        vt_utf_left = 3;
+    } else {
+        vga_putc_raw(CHAR_NON_PRINTABLE);
+    }
+}
+
+/**
+ * Take `uc`, the byte after an `ESC`: it opens a CSI, a string or a charset
+ * selector, or it is a command of its own, save and restore the cursor or
+ * reset the terminal. Another `ESC` starts the sequence again.
+ */
+static void vt_escape(unsigned char uc)
+{
+    switch (uc) {
+    case '[':
+        vt_state = VT_CSI;
+        vt_nparams = 0;
+        vt_cur = 0;
+        vt_private = false;
+        vt_interm = false;
+        break;
+    case ']':
+    case 'P':
+    case '_':
+    case '^':
+    case 'X':
+        vt_state = VT_STRING;
+        vt_string_len = 0;
+        break;
+    case '(':
+    case ')':
+    case '*':
+    case '+':
+    case '#':
+    case ' ':
+        vt_state = VT_ESC_ARG;
+        break;
+    case '7':
+        vt_saved_x = x;
+        vt_saved_y = y;
+        vt_state = VT_NORMAL;
+        break;
+    case '8':
+        x = vt_saved_x;
+        y = vt_saved_y;
+        vt_state = VT_NORMAL;
+        break;
+    case 'c':
+        vt_fg = DEFAULT_FORECOLOR;
+        vt_bg = DEFAULT_BACKCOLOR;
+        vt_bold = false;
+        vt_reverse = false;
+        vt_apply_color();
+        k_cls();
+        vt_state = VT_NORMAL;
+        break;
+    case 0x1b:
+        break;
+    default:
+        vt_state = VT_NORMAL;
+        break;
+    }
+}
+
+/**
+ * Take byte `c` of a CSI. A digit or `;` adds to the parameters. `?` and its
+ * kin mark a private sequence, and an intermediate byte one this console
+ * lacks; a final byte from `@` to `~` ends the sequence, swallowing either
+ * kind and executing any other by `vt_dispatch_csi`. An `ESC` starts a new
+ * sequence, and any other byte ends this one and is drawn.
+ */
+static void vt_csi_byte(char c)
+{
+    unsigned char uc = (unsigned char)c;
+
+    if (uc >= '0' && uc <= '9') {
+        vt_cur = vt_cur * 10 + (uc - '0');
+        if (vt_cur > 9999)
+            vt_cur = 9999;
+    } else if (uc == ';') {
+        if (vt_nparams < VT_MAX_PARAMS)
+            vt_params[vt_nparams++] = vt_cur;
+        vt_cur = 0;
+    } else if (uc >= 0x3c && uc <= 0x3f) {
+        if (vt_nparams == 0 && vt_cur == 0)
+            vt_private = true;
+    } else if (uc >= 0x20 && uc <= 0x2f) {
+        vt_interm = true; /* intermediate byte, as in `ESC [ SP q` */
+    } else if (uc >= 0x40 && uc <= 0x7e) {
+        if (vt_nparams < VT_MAX_PARAMS)
+            vt_params[vt_nparams++] = vt_cur;
+        if (!vt_private && !vt_interm)
+            vt_dispatch_csi(c);
+        vt_state = VT_NORMAL;
+    } else if (uc == 0x1b) {
+        vt_state = VT_ESC;
+    } else {
+        vt_state = VT_NORMAL;
+        vga_putc_raw(c);
     }
 }
 
 /**
  * Write one byte to the VGA console, interpreting VT100/ANSI escapes.
  *
- * A plain byte is drawn by `vga_putc_raw`. `ESC` opens an escape sequence: a
- * CSI (`ESC [`) collects semicolon-separated numeric parameters up to its
- * final letter and is executed by `vt_dispatch_csi`; a private CSI (`ESC [ ?`,
- * as in the alternate-screen and cursor-visibility toggles) is swallowed; a
- * charset selector (`ESC (` and kin) swallows its next byte; an OSC (`ESC ]`)
- * is swallowed to its terminating BEL. The hardware cursor is placed after
- * every byte, so a cursor-only sequence still moves the on-screen caret; a
- * writer of many bytes holds it and it is placed once at the release. The
- * byte's work runs with interrupts off, since a keyboard's echo arrives
- * through this path from its interrupt.
+ * A plain byte is drawn by `vga_putc_raw`, and a byte from 0x80 up goes to
+ * `vt_utf8`. `ESC` opens an escape sequence: a CSI (`ESC [`) collects
+ * semicolon-separated numeric parameters up to its final letter and is
+ * executed by `vt_dispatch_csi`; a private CSI (`ESC [ ?`, as in the
+ * alternate-screen and cursor-visibility toggles) is swallowed; a charset
+ * selector (`ESC (` and kin) swallows its next byte; an OSC (`ESC ]`), a
+ * device control string (`ESC P`) and the application and privacy strings
+ * (`ESC _`, `ESC ^`, `ESC X`) are swallowed to their BEL or `ESC \`, so the
+ * queries a program sends to learn the terminal's features do not reach the
+ * screen. The hardware cursor is placed after every byte, so a cursor-only
+ * sequence still moves the on-screen caret; a writer of many bytes holds it
+ * and it is placed once at the release. The byte's work runs with interrupts
+ * off, since a keyboard's echo arrives through this path from its interrupt.
  */
 void k_putc(char c)
 {
@@ -333,103 +593,41 @@ void k_putc(char c)
        byte is one cell and a scroll one line; the copy at the memory's end
        is the one long piece, once in 180 lines. */
     flags = kirq_save();
+    if (vt_utf_left != 0 && (uc < 0x80 || uc >= 0xC0)) {
+        vt_utf_left = 0;
+        vga_putc_raw(CHAR_NON_PRINTABLE);
+    }
     switch (vt_state) {
     case VT_NORMAL:
         if (uc == 0x1b)
             vt_state = VT_ESC;
+        else if (uc >= 0x80)
+            vt_utf8(uc);
         else
             vga_putc_raw(c);
         break;
 
     case VT_ESC:
-        switch (uc) {
-        case '[':
-            vt_state = VT_CSI;
-            vt_nparams = 0;
-            vt_cur = 0;
-            vt_private = false;
-            vt_interm = false;
-            break;
-        case ']':
-            vt_state = VT_OSC;
-            vt_osc_len = 0;
-            break;
-        case '(':
-        case ')':
-        case '*':
-        case '+':
-        case '#':
-        case ' ':
-            vt_state = VT_ESC_ARG;
-            break;
-        case '7':
-            vt_saved_x = x;
-            vt_saved_y = y;
-            vt_state = VT_NORMAL;
-            break;
-        case '8':
-            x = vt_saved_x;
-            y = vt_saved_y;
-            vt_state = VT_NORMAL;
-            break;
-        case 'c':
-            vt_fg = DEFAULT_FORECOLOR;
-            vt_bg = DEFAULT_BACKCOLOR;
-            vt_bold = false;
-            vt_reverse = false;
-            vt_apply_color();
-            k_cls();
-            vt_state = VT_NORMAL;
-            break;
-        case 0x1b:
-            break;
-        default:
-            vt_state = VT_NORMAL;
-            break;
-        }
+        vt_escape(uc);
         break;
 
     case VT_ESC_ARG:
         vt_state = VT_NORMAL;
         break;
 
-    case VT_OSC:
+    case VT_STRING:
         if (uc == 0x07)
             vt_state = VT_NORMAL;
         else if (uc == 0x1b)
             vt_state = VT_ESC;
         else if (uc < 0x20)
             vt_state = VT_NORMAL;
-        else if (++vt_osc_len > 256)
+        else if (++vt_string_len > 256)
             vt_state = VT_NORMAL;
         break;
 
     case VT_CSI:
-        if (uc >= '0' && uc <= '9') {
-            vt_cur = vt_cur * 10 + (uc - '0');
-            if (vt_cur > 9999)
-                vt_cur = 9999;
-        } else if (uc == ';') {
-            if (vt_nparams < VT_MAX_PARAMS)
-                vt_params[vt_nparams++] = vt_cur;
-            vt_cur = 0;
-        } else if (uc >= 0x3c && uc <= 0x3f) {
-            if (vt_nparams == 0 && vt_cur == 0)
-                vt_private = true;
-        } else if (uc >= 0x20 && uc <= 0x2f) {
-            vt_interm = true; /* intermediate byte, as in `ESC [ SP q` */
-        } else if (uc >= 0x40 && uc <= 0x7e) {
-            if (vt_nparams < VT_MAX_PARAMS)
-                vt_params[vt_nparams++] = vt_cur;
-            if (!vt_private && !vt_interm)
-                vt_dispatch_csi(c);
-            vt_state = VT_NORMAL;
-        } else if (uc == 0x1b) {
-            vt_state = VT_ESC;
-        } else {
-            vt_state = VT_NORMAL;
-            vga_putc_raw(c);
-        }
+        vt_csi_byte(c);
         break;
     default:
         break;
