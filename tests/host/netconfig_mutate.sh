@@ -80,9 +80,9 @@ import sys
 fault = sys.argv[3]
 changes = {
     "refusal": ("if (!refused && drivers[i]->error)", "if (drivers[i]->error)"),
-    "tcp": ("        tcp_local_addr_changed(ip);",
+    "tcp": ("        tcp_local_addr_changed();",
             "        if (is_machine(nd)) {\n"
-            "            tcp_local_addr_changed(ip);\n        }"),
+            "            tcp_local_addr_changed();\n        }"),
     "primary": ("""        if (nd == netdev_first()) {
             net_ip_addr = ip;
             net_ip_mask = mask;

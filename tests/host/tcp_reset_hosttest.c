@@ -229,25 +229,15 @@ void klog(int level, const char *subsystem, const char *format, ...)
     (void)format;
 }
 
-/* One interface, holding this machine's address. */
-static struct netdev the_iface;
-
-struct netdev *netdev_route(uint32_t dst, uint32_t *via)
+/* This machine's addresses: one interface's, and 127/8. */
+int ip_is_local(uint32_t ip)
 {
-    *via = dst;
-    the_iface.ip = net_ip_addr;
-    return &the_iface;
+    return ip != 0 && (ip == net_ip_addr || (ip & 0xFF000000u) == 0x7F000000u);
 }
 
-int netdev_owns(uint32_t ip)
+uint32_t ip_source(uint32_t dst)
 {
-    return ip != 0 && ip == net_ip_addr;
-}
-
-uint32_t netdev_source(const struct netdev *nd, uint32_t hop)
-{
-    (void)hop;
-    return nd->ip;
+    return (dst & 0xFF000000u) == 0x7F000000u ? 0x7F000001u : net_ip_addr;
 }
 
 int ip_tx_from(uint32_t src, uint32_t dst, uint8_t proto, const uint8_t *payload, uint16_t len,

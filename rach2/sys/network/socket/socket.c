@@ -189,6 +189,7 @@ int socket_snapshot(int type, struct socket_row **rows)
             continue;
         }
         out[n].local_port = type == SOCK_RAW ? s->protocol : s->local_port;
+        out[n].local_ip = s->local_ip;
         out[n].remote_ip = s->remote_ip;
         out[n].remote_port = s->remote_port;
         out[n].connected = s->connected;

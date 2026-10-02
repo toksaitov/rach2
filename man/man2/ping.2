@@ -1,4 +1,4 @@
-.Dd October 1, 2026
+.Dd October 2, 2026
 .Dt PING 2
 .Os
 .Sh NAME
@@ -34,7 +34,7 @@ The raw i386 interface uses EAX = 102, EBX = 0x1000, and ECX pointing
 to an array of one 32-bit word.
 That word is the destination IPv4 address in host byte order.
 For example, 0x0a000202 denotes 10.0.2.2.
-Addresses in 127/8 are replaced with the machine's current local address.
+An address in 127/8 is answered by this machine through the loopback ring.
 .Pp
 Operation 0x1001 takes three words: the address, the bytes of data the
 request carries, from 0 to 1472, each byte its offset in the data, as

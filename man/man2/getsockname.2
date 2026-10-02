@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd October 2, 2026
 .Dt GETSOCKNAME 2
 .Os
 .Sh NAME
@@ -20,10 +20,12 @@ in
 For an IPv4 stream or datagram socket, the result is a 16-byte
 .Vt sockaddr_in
 containing the TCP control block's local IPv4 address when one exists,
-or the primary interface's address otherwise, and the socket's bound
-or ephemeral port.
-An accepted connection reports the address the peer connected to.
-It reports that address rather than 127.0.0.1 for a local connection.
+and otherwise the address the socket bound, 0.0.0.0 for any; a connected
+datagram socket bound to any address reports the address its datagrams
+leave from, as Linux does.
+The port is the socket's bound or ephemeral port.
+An accepted connection reports the address the peer connected to, and a
+connection to 127.0.0.1 reports 127.0.0.1.
 .Pp
 For an
 .Dv AF_PACKET

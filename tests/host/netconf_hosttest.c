@@ -34,11 +34,10 @@ extern int memcmp(const void *a, const void *b, __SIZE_TYPE__ n);
    for them and the cases below require them to have been called. */
 static int arp_flushes;
 static int tcp_told;
-static uint32_t tcp_told_of;
 static int tcp_told_locked;
 
 void arp_flush(void);
-void tcp_local_addr_changed(uint32_t new_ip);
+void tcp_local_addr_changed(void);
 
 /* The critical section the kernel takes against its receive interrupt. A host
    test has neither, so these stand in and count that the section was entered
@@ -69,10 +68,9 @@ void arp_flush(void)
     arp_flushes++;
 }
 
-void tcp_local_addr_changed(uint32_t new_ip)
+void tcp_local_addr_changed(void)
 {
     tcp_told++;
-    tcp_told_of = new_ip;
     tcp_told_locked = lock_depth > 0;
 }
 
@@ -302,7 +300,7 @@ static void secondary_address_change(void)
     tcp_told = arp_forgets = arp_flushes = 0;
     CHECK(netconf_set_address(&other_iface, IP4(10, 0, 4, 7), IP4(255, 255, 255, 0)) == 0,
           "secondary address changes");
-    CHECK(tcp_told == 1 && tcp_told_of == IP4(10, 0, 4, 7) && tcp_told_locked,
+    CHECK(tcp_told == 1 && tcp_told_locked,
           "secondary address change notifies TCP under the network lock");
     CHECK(arp_forgets == 1 && arp_forgot == &other_iface && arp_flushes == 0,
           "secondary address change invalidates only its ARP mappings");
@@ -311,7 +309,7 @@ static void secondary_address_change(void)
           "secondary address change clears its gateway and preserves primary state");
     CHECK(netconf_set_address(&other_iface, other_iface.ip, other_iface.mask) == 0 && tcp_told == 1,
           "unchanged secondary address does not notify TCP");
-    CHECK(netconf_set_address(&other_iface, 0, 0) == 0 && tcp_told == 2 && tcp_told_of == 0,
+    CHECK(netconf_set_address(&other_iface, 0, 0) == 0 && tcp_told == 2,
           "removing the secondary address notifies TCP");
 }
 
@@ -461,8 +459,7 @@ int main(void)
           "and is what the stack now has");
     CHECK(arp_flushes == 1, "the ARP cache is forgotten, since every entry was learned "
                             "by a machine at the old address");
-    CHECK(tcp_told == 1 && tcp_told_of == IP4(192, 168, 90, 20),
-          "and every connection opened from the old address is told");
+    CHECK(tcp_told == 1, "and every connection opened from the old address is told");
     CHECK(net_ip_gateway == 0, "a gateway that is no longer on this subnet is not a gateway");
 
     /* The refusals. Each leaves the machine on the address it had. */
@@ -608,7 +605,7 @@ int main(void)
           "leaving the first interface where it was");
     CHECK(net_ip_addr == IP4(192, 168, 90, 20) && net_ip_gateway == IP4(192, 168, 90, 1),
           "and the machine's own address, which is the first interface's, with it");
-    CHECK(tcp_told == 1 && tcp_told_of == other_iface.ip && arp_flushes == 0,
+    CHECK(tcp_told == 1 && arp_flushes == 0,
           "secondary configuration notifies TCP without flushing all ARP mappings");
     CHECK(arp_forgets == 1 && arp_forgot == &other_iface,
           "and only the mappings learned on that interface are forgotten");

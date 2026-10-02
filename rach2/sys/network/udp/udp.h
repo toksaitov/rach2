@@ -14,27 +14,29 @@
 
 struct socket;
 
-/** Receive and dispatch a UDP datagram to its bound socket: 0, or -1 when
- * no socket has its port, for `ip_rx` to answer. */
-int udp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len);
+/** Receive and dispatch a UDP datagram for `dst_ip` to its bound socket: 0,
+ * or -1 when no socket has its address and port, for `ip_rx` to answer. */
+int udp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len);
 
 /** Give ECONNREFUSED to the socket on `local_port` connected to
  * `remote_ip`:`remote_port`, which answered with a port unreachable. */
 void udp_refused(uint16_t local_port, uint32_t remote_ip, uint16_t remote_port);
 
 /**
- * Build and send a UDP datagram with hop limit `ttl`.
+ * Build and send a UDP datagram from `src_ip`, the sender's bound address or
+ * 0 for the one `ip_source` chooses, with hop limit `ttl`.
  *
  * Returns what `ip_tx` returned: 0 when the datagram left (or was dropped for
  * want of an address the request for which has just gone out), and a negative
  * errno for the conditions the caller must hear about.
  */
-int udp_tx(uint16_t src_port, uint32_t dst_ip, uint16_t dst_port, const uint8_t *payload,
-           uint16_t plen, uint8_t ttl);
+int udp_tx(uint32_t src_ip, uint16_t src_port, uint32_t dst_ip, uint16_t dst_port,
+           const uint8_t *payload, uint16_t plen, uint8_t ttl);
 
-/** Bind `sock` to `port`; 0 on success, -1 on conflict, -ENOMEM on allocation
- * failure. Sharing requires SO_REUSEADDR on every socket and the caller's
- * effective uid on every binding. */
+/** Bind `sock` to `port` at its `local_ip`; 0 on success, -1 on conflict,
+ * -ENOMEM on allocation failure. Two bindings conflict when one is to any
+ * address or both are to the same one; sharing requires SO_REUSEADDR on
+ * every such socket and the caller's effective uid on every such binding. */
 int udp_bind(uint16_t port, struct socket *sock);
 
 /** Bind sock to a free ephemeral port; returns the port, or 0 on failure. */

@@ -106,8 +106,8 @@ static void icmp_too_big(const uint8_t *data, uint16_t len)
     if (ihl < 20 || 8u + ihl + 8u > len || ip[9] != IP_PROTO_TCP) {
         return;
     }
-    tcp_path_mtu(read32be(ip + 16), read16be(tcp), read16be(tcp + 2), read32be(tcp + 4),
-                 read16be(data + 6));
+    tcp_path_mtu(read32be(ip + 12), read32be(ip + 16), read16be(tcp), read16be(tcp + 2),
+                 read32be(tcp + 4), read16be(data + 6));
 }
 
 void icmp_count_out(uint8_t type)
@@ -182,7 +182,7 @@ void icmp_unreachable(const uint8_t *dgram, uint16_t len, uint8_t code)
     uint16_t quote = len < ICMP_QUOTE_MAX ? len : ICMP_QUOTE_MAX;
 
     if (src == 0 || (src & 0xF0000000u) == 0xE0000000u || netdev_is_broadcast(src) ||
-        (!netdev_owns(src) && !icmp_error_allowed())) {
+        (!ip_is_local(src) && !icmp_error_allowed())) {
         return;
     }
     icmp_error_buf[0] = ICMP_UNREACHABLE;

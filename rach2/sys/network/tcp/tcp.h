@@ -221,15 +221,16 @@ struct tcb {
 void tcp_init(void);
 
 /**
- * Take a router's report that a segment sent to `remote_ip` from `local_port`
- * to `remote_port` at sequence `seq` did not fit a link of `mtu` bytes: the
+ * Take a router's report that a segment sent from `local_ip`:`local_port` to
+ * `remote_ip`:`remote_port` at sequence `seq` did not fit a link of `mtu`
+ * bytes: the
  * connection's segments shrink to fit (RFC 1191) and what is unacknowledged
  * goes again. A report whose sequence is not in flight, or which would make
  * the segments larger or smaller than TCP_MSS_DEFAULT, changes nothing.
  * Called from the receive path with interrupts off.
  */
-void tcp_path_mtu(uint32_t remote_ip, uint16_t local_port, uint16_t remote_port, uint32_t seq,
-                  uint16_t mtu);
+void tcp_path_mtu(uint32_t local_ip, uint32_t remote_ip, uint16_t local_port, uint16_t remote_port,
+                  uint32_t seq, uint16_t mtu);
 
 /** Drive the per-connection timers; called once per kernel tick. */
 void tcp_tick(void);
@@ -244,8 +245,9 @@ void tcb_free(struct tcb *tcb);
 /** Process an inbound TCP segment; called by ip_rx for IP protocol 6. */
 void tcp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len);
 
-/** Whether a live listener has `port`; for `bind`'s advisory refusal. */
-int tcp_port_listening(uint16_t port);
+/** Whether a live listener has `port` at an address that meets `ip`, the
+ * same one or any; for `bind`'s advisory refusal. */
+int tcp_port_listening(uint32_t ip, uint16_t port);
 
 /**
  * A port for a stream socket bound to port 0, which Linux gives at the bind:
@@ -254,12 +256,13 @@ int tcp_port_listening(uint16_t port);
 uint16_t tcp_bind_ephemeral(void);
 
 /**
- * Bind a socket to a port in LISTEN for passive opens, an ephemeral one when
- * `port` is 0.
+ * Bind a socket to a port in LISTEN for passive opens, at the address it
+ * bound or any, and on an ephemeral port when `port` is 0.
  *
- * 0, `-EADDRINUSE` if a listener already has the port or no ephemeral port is
- * free, or `-ENOBUFS` if control-block allocation fails. A bare -1 would reach
- * userland as `EPERM` through musl's return convention.
+ * 0, `-EADDRINUSE` if a listener already has the port at an address that
+ * meets this one or no ephemeral port is free, or `-ENOBUFS` if
+ * control-block allocation fails. A bare -1 would reach userland as `EPERM`
+ * through musl's return convention.
  */
 int tcp_listen(struct socket *sock, uint16_t port);
 
@@ -317,7 +320,7 @@ void tcp_window_update(struct socket *sock);
  * `ENETRESET` on its socket so a blocked read or write returns, rather than
  * left to time out.
  */
-void tcp_local_addr_changed(uint32_t new_ip);
+void tcp_local_addr_changed(void);
 
 /* One connection, copied out for a reader of /proc/net/tcp. */
 struct tcp_row {

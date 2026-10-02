@@ -81,8 +81,9 @@ static int tcp_recover_send(struct tcb *tcb);
 static void tcp_ack_grow(struct tcb *tcb);
 static void tcp_pump(struct tcb *tcb);
 static void tcp_giveup(struct tcb *tcb);
-static struct tcb *tcp_find(uint16_t local_port, uint32_t remote_ip, uint16_t remote_port);
-static struct socket *tcp_find_listen_sock(uint16_t local_port);
+static struct tcb *tcp_find(uint32_t local_ip, uint16_t local_port, uint32_t remote_ip,
+                            uint16_t remote_port);
+static struct socket *tcp_find_listen_sock(uint32_t local_ip, uint16_t local_port);
 static void tcp_free_half_opens(uint16_t port);
 
 /* The key the initial sequence numbers are hashed under, and whether it has
@@ -837,10 +838,10 @@ static void tcp_enter_fast_recovery(struct tcb *tcb)
     tcb->cwnd = new_ss + TCP_DUP_ACKS * tcb->snd_mss;
 }
 
-void tcp_path_mtu(uint32_t remote_ip, uint16_t local_port, uint16_t remote_port, uint32_t seq,
-                  uint16_t mtu)
+void tcp_path_mtu(uint32_t local_ip, uint32_t remote_ip, uint16_t local_port, uint16_t remote_port,
+                  uint32_t seq, uint16_t mtu)
 {
-    struct tcb *tcb = tcp_find(local_port, remote_ip, remote_port);
+    struct tcb *tcb = tcp_find(local_ip, local_port, remote_ip, remote_port);
     uint32_t mss = mtu > 40u ? mtu - 40u : 0;
 
     if (!tcb || tcb->state < TCP_ESTABLISHED || (int32_t)(seq - tcb->snd_una) < 0 ||
@@ -983,17 +984,20 @@ uint16_t tcp_bind_ephemeral(void)
 }
 
 /**
- * Return whether a LISTEN control block has `port`. Caller holds `net_lock`.
+ * Return whether a LISTEN control block has `port` at an address that meets
+ * `ip`: either is any address (0), or both are the same one. Caller holds
+ * `net_lock`.
  *
  * Connections in other states do not prevent a new listener on the same
  * local port. This check does not depend on `SO_REUSEADDR`.
  */
-static int tcp_port_has_listener(uint16_t port)
+static int tcp_port_has_listener(uint32_t ip, uint16_t port)
 {
     const struct tcb *t;
 
     for (t = tcbs; t; t = t->next) {
-        if (t->state == TCP_LISTEN && t->local_port == port) {
+        if (t->state == TCP_LISTEN && t->local_port == port &&
+            (t->local_ip == 0 || ip == 0 || t->local_ip == ip)) {
             return 1;
         }
     }
@@ -1064,40 +1068,49 @@ static void tcp_send_rst_unmatched(uint32_t local_ip, uint32_t remote_ip, uint16
 }
 
 /**
- * Find the TCB for an incoming segment: a block in any state but LISTEN with
- * the same local port, remote address and remote port, else the port's
- * LISTEN TCB.
+ * The LISTEN block for a segment to `local_ip`:`local_port`: the one bound to
+ * that address, else the one bound to any, else NULL.
  */
-static struct tcb *tcp_find(uint16_t local_port, uint32_t remote_ip, uint16_t remote_port)
+static struct tcb *tcp_find_listener(uint32_t local_ip, uint16_t local_port)
 {
     struct tcb *t;
-    struct tcb *listen_tcb = NULL;
+    struct tcb *any = NULL;
 
     for (t = tcbs; t; t = t->next) {
-        if (t->local_port != local_port)
+        if (t->state != TCP_LISTEN || t->local_port != local_port)
             continue;
+        if (t->local_ip == local_ip)
+            return t;
+        if (t->local_ip == 0)
+            any = t;
+    }
+    return any;
+}
 
-        if (t->state == TCP_LISTEN) {
-            listen_tcb = t;
-            continue;
-        }
-        if (t->remote_ip == remote_ip && t->remote_port == remote_port) {
+/**
+ * Find the TCB for an incoming segment: a block in any state but LISTEN with
+ * the same local address and port, remote address and remote port, else the
+ * listener for its local address and port.
+ */
+static struct tcb *tcp_find(uint32_t local_ip, uint16_t local_port, uint32_t remote_ip,
+                            uint16_t remote_port)
+{
+    struct tcb *t;
+
+    for (t = tcbs; t; t = t->next) {
+        if (t->state != TCP_LISTEN && t->local_port == local_port && t->local_ip == local_ip &&
+            t->remote_ip == remote_ip && t->remote_port == remote_port) {
             return t;
         }
     }
-    return listen_tcb;
+    return tcp_find_listener(local_ip, local_port);
 }
 
-static struct socket *tcp_find_listen_sock(uint16_t local_port)
+static struct socket *tcp_find_listen_sock(uint32_t local_ip, uint16_t local_port)
 {
-    const struct tcb *t;
+    const struct tcb *t = tcp_find_listener(local_ip, local_port);
 
-    for (t = tcbs; t; t = t->next) {
-        if (t->state == TCP_LISTEN && t->local_port == local_port) {
-            return t->sock;
-        }
-    }
-    return NULL;
+    return t ? t->sock : NULL;
 }
 
 /**
@@ -1134,32 +1147,27 @@ static void tcp_send_zwp(struct tcb *tcb)
  * Abort every connection opened from an address this machine no longer has.
  *
  * Called under `net_lock` when an interface's address changes. A block on an
- * address some interface still has is left alone: on a machine with two
- * cards, changing one card's address says nothing about the connections on
- * the other. A CLOSED block has nothing to abort, and setting its error again
- * would give a reader the same reset twice. A listener takes the new address,
- * since it answers whatever address the machine has, so a server started
- * before a lease arrived keeps accepting. A passive block in SYN_RCVD has a
+ * address the machine still has is left alone: on a machine with two cards,
+ * changing one card's address says nothing about the connections on the
+ * other, and 127/8 is always the machine's. A CLOSED block has nothing to
+ * abort, and setting its error again would give a reader the same reset
+ * twice. A listener keeps the address it was bound to, as on Linux; one bound
+ * to any address answers whatever address the machine has, so a server
+ * started before a lease arrived keeps accepting. A passive block in SYN_RCVD
+ * has a
  * socket that no descriptor or accept queue refers to, so waking it would
  * leave both to be reclaimed by nothing; it is freed with its socket, as a
  * reset frees it. Any other connection is closed with ENETRESET and its
  * socket woken, or is freed when it has no socket.
  */
-void tcp_local_addr_changed(uint32_t new_ip)
+void tcp_local_addr_changed(void)
 {
     struct tcb *tcb, *next;
 
     /* A block freed on the way is freed after its successor was read. */
     for (tcb = tcbs; tcb; tcb = next) {
         next = tcb->next;
-        if (netdev_owns(tcb->local_ip)) {
-            continue;
-        }
-        if (tcb->state == TCP_CLOSED) {
-            continue;
-        }
-        if (tcb->state == TCP_LISTEN) {
-            tcb->local_ip = new_ip;
+        if (ip_is_local(tcb->local_ip) || tcb->state == TCP_CLOSED || tcb->state == TCP_LISTEN) {
             continue;
         }
         klog(KLOG_INFO, "tcp", "address changed: aborting a connection opened from the old one");
@@ -1420,10 +1428,10 @@ void tcp_tick(void)
  * it. The check is advisory: `tcp_listen` is what keeps one listener to a
  * port.
  */
-int tcp_port_listening(uint16_t port)
+int tcp_port_listening(uint32_t ip, uint16_t port)
 {
     uint32_t flags = net_lock();
-    int held = tcp_port_has_listener(port);
+    int held = tcp_port_has_listener(ip, port);
 
     net_unlock(flags);
 
@@ -1462,7 +1470,7 @@ int tcp_listen(struct socket *sock, uint16_t port)
     if (port == 0) {
         port = ephemeral_port();
     }
-    if (port == 0 || tcp_port_has_listener(port)) {
+    if (port == 0 || tcp_port_has_listener(sock->local_ip, port)) {
         net_unlock(flags);
         return -EADDRINUSE;
     }
@@ -1473,7 +1481,7 @@ int tcp_listen(struct socket *sock, uint16_t port)
         return -ENOBUFS;
     }
 
-    tcb->local_ip = net_ip_addr;
+    tcb->local_ip = sock->local_ip;
     tcb->local_port = port;
     tcb->state = TCP_LISTEN;
     tcb->sock = sock;
@@ -1506,20 +1514,26 @@ int tcp_listen(struct socket *sock, uint16_t port)
  * search ends within one step more than there are live blocks, or after the
  * range's 16384 ports when every one is in use.
  *
- * The connection is opened from the address of the interface the route to the
- * peer leaves by, the only address the answer can come back to, or from
- * `net_ip_addr` when no interface has a route.
+ * The connection is opened from the address the socket bound, or else from
+ * the one `ip_source` gives: 127.0.0.1 to 127/8, and otherwise the address of
+ * the interface the route to the peer leaves by, the only address the answer
+ * can come back to.
  *
- * Return 0 when the open has started, `-EADDRINUSE` for a duplicate connection
- * key, `-EADDRNOTAVAIL` when no ephemeral port is available, or `-ENOBUFS` when
- * control-block allocation fails.
+ * Return 0 when the open has started, `-EINVAL` from an address in 127/8 to
+ * one that is not this machine's, which no card may carry, `-EADDRINUSE` for
+ * a duplicate connection key, `-EADDRNOTAVAIL` when no ephemeral port is
+ * available, or `-ENOBUFS` when control-block allocation fails.
  */
 int tcp_connect(struct socket *sock, uint32_t dst_ip, uint16_t dst_port)
 {
     struct tcb *tcb;
     uint32_t flags;
     uint16_t local;
+    uint32_t from = sock->local_ip ? sock->local_ip : ip_source(dst_ip);
 
+    if (IP_IS_LOOPBACK(from) && !ip_is_local(dst_ip)) {
+        return -EINVAL;
+    }
     flags = net_lock();
     tcp_isn_key();
 
@@ -1547,12 +1561,7 @@ int tcp_connect(struct socket *sock, uint32_t dst_ip, uint16_t dst_port)
         return -ENOBUFS;
     }
 
-    {
-        uint32_t via;
-        struct netdev *out = netdev_route(dst_ip, &via);
-
-        tcb->local_ip = out ? netdev_source(out, via) : net_ip_addr;
-    }
+    tcb->local_ip = from;
     tcb->local_port = local;
     tcb->remote_ip = dst_ip;
     tcb->remote_port = dst_port;
@@ -2278,7 +2287,7 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len)
     flags = data[13];
     field = read16be(data + 14);
 
-    tcb = tcp_find(dst_port, src_ip, src_port);
+    tcb = tcp_find(dst_ip, dst_port, src_ip, src_port);
     if (!tcb) {
         if (!(flags & TCP_RST)) {
             uint32_t occupied = (uint32_t)(len - hdr_len);
@@ -2381,7 +2390,7 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len)
         tcb->rto_timer = 0;
 
         if (tcb->passive) {
-            listen_sock = tcp_find_listen_sock(tcb->local_port);
+            listen_sock = tcp_find_listen_sock(tcb->local_ip, tcb->local_port);
             if (listen_sock) {
                 socket_tcp_accept(listen_sock, tcb->sock);
             }

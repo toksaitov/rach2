@@ -126,13 +126,16 @@ A stream socket cannot be disconnected this way.
 Raw sockets and packet sockets do not support
 .Fn connect .
 .Ss Local connections
-A destination in 127/8 is replaced with the current local IPv4 address.
-There is no separate
+A destination in 127/8 is this machine, as on Linux, though there is no
+separate
 .Li lo
-interface.
+interface: the connection is opened from 127.0.0.1 unless the socket bound
+another of the machine's addresses.
+A socket bound to an address in 127/8 that connects to an address that is
+not the machine's gets
+.Er EINVAL .
 Self-addressed packets are queued for delivery at system call exit or
 by the timer; they do not require a network peer.
-Address queries report the canonical local address, not 127.0.0.1.
 .Sh RETURN VALUES
 .Fn connect
 returns 0 on success.
@@ -180,7 +183,9 @@ A nonblocking TCP handshake has started but is not yet established.
 A signal interrupted the blocking wait.
 .It Bq Er EINVAL
 .Fa addrlen
-is less than two bytes, or less than eight for a nonzero address family.
+is less than two bytes, or less than eight for a nonzero address family;
+or the socket is bound to an address in 127/8 and the destination is not
+one of the machine's addresses.
 .It Bq Er EISCONN
 The stream socket is listening or already has a TCP control block in
 a state other than

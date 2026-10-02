@@ -1,17 +1,20 @@
 /**
  * Exercises loopback: the OS talking to itself over 127.0.0.1.
  *
- * The socket layer canonicalizes 127/8 to the stack's one address and the IP
- * layer turns a self-addressed datagram around through the loopback ring, so
- * both selves of each exchange live in this one process. A UDP datagram sent to
- * 127.0.0.1 at our own bound port comes back with the payload intact and the
- * canonical source address, and a recvfrom given an address and no length
- * pointer fails with EFAULT and leaves the datagram for the next receive; a
- * receive with MSG_PEEK leaves a datagram and a stream's bytes for the next
- * one; a TCP connection to our own listener completes its handshake through the
- * timer-driven ring, moves data both ways, and reports the canonical peer; and
- * a connect to a closed loopback port is refused promptly by the reset a
- * matching connection does not answer. Nothing here touches ARP or the wire.
+ * The IP layer turns a datagram to 127/8 around through the loopback ring,
+ * from 127.0.0.1, so both selves of each exchange live in this one process. A
+ * datagram socket connected to 127.0.0.1 reports 127.0.0.1 as its own
+ * address. A UDP datagram sent to 127.0.0.1 at our own bound port comes back
+ * with the payload intact and the source 127.0.0.1, and a recvfrom given an
+ * address and no length pointer fails with EFAULT and leaves the datagram for
+ * the next receive; a receive with MSG_PEEK leaves a datagram and a stream's
+ * bytes for the next one; a TCP connection to our own listener completes its
+ * handshake through the timer-driven ring, moves data both ways, and reports
+ * the peer 127.0.0.1; a listener bound to 127.0.0.1 is not reached at the
+ * machine's interface address, and a bind to an address the machine lacks is
+ * refused; and a connect to a closed loopback port is refused promptly by the
+ * reset a matching connection does not answer. Nothing here touches ARP or
+ * the wire.
  *
  * Prints "LOOPPROBE OK" and exits 0 on success. Freestanding; direct int 0x80.
  */
@@ -90,9 +93,10 @@ typedef unsigned char uint8_t;
 #define EINPROGRESS 115
 #define EISCONN     106
 
-#define F_SETFL      4
-#define O_NONBLOCK   04000
-#define ECONNREFUSED 111
+#define F_SETFL       4
+#define O_NONBLOCK    04000
+#define ECONNREFUSED  111
+#define EADDRNOTAVAIL 99
 
 static int sys_write(int fd, const void *buf, size_t count)
 {
@@ -218,17 +222,18 @@ static void make_sockaddr(uint8_t *sa, uint16_t port, uint8_t a, uint8_t b, uint
     sa[7] = d;
 }
 
-/* The canonical address every loopback peer must read back as. It is the
-   machine's own, which this probe asks for rather than assuming the
-   emulator's: a UDP socket connected to 127.0.0.1 reports it through
-   `getsockname`, which is the same rule the rows below judge. */
-static uint8_t canon_ip[4];
+/* The address every loopback peer reads back as, and the machine's own
+   interface address, which this probe asks for rather than assuming the
+   emulator's. */
+static const uint8_t loop_ip[4] = {127, 0, 0, 1};
+static uint8_t own_ip[4];
 
-static void learn_canon_ip(void)
+/* The address `getsockname` reports for a datagram socket connected to
+   a.b.c.d, into `me`. */
+static void source_for(uint8_t *me, uint8_t a, uint8_t b, uint8_t c, uint8_t d)
 {
     uint32_t args[6];
     uint8_t sa[16];
-    uint8_t me[16];
     int len = 16;
     int fd;
     int i;
@@ -243,7 +248,7 @@ static void learn_canon_ip(void)
     fd = socketcall(SC_SOCKET, args);
     if (fd < 0)
         fail("a socket to learn the local address");
-    make_sockaddr(sa, 9, 127, 0, 0, 1);
+    make_sockaddr(sa, 9, a, b, c, d);
     args[0] = (uint32_t)fd;
     args[1] = (uint32_t)sa;
     args[2] = 16;
@@ -255,11 +260,23 @@ static void learn_canon_ip(void)
     if (socketcall(SC_GETSOCKNAME, args) != 0)
         fail("getsockname to learn the local address");
     sys_close(fd);
-    canon_ip[0] = me[4];
-    canon_ip[1] = me[5];
-    canon_ip[2] = me[6];
-    canon_ip[3] = me[7];
-    if (canon_ip[0] == 127 || (canon_ip[0] | canon_ip[1] | canon_ip[2] | canon_ip[3]) == 0) {
+}
+
+/* A datagram socket connected to 127.0.0.1 leaves from 127.0.0.1, and one
+   connected to a documentation address, 192.0.2.1, from the machine's own. */
+static void learn_addresses(void)
+{
+    uint8_t me[16];
+
+    source_for(me, 127, 0, 0, 1);
+    if (!mem_eq(me + 4, loop_ip, 4))
+        fail("a socket connected to 127.0.0.1 does not report 127.0.0.1");
+    source_for(me, 192, 0, 2, 1);
+    own_ip[0] = me[4];
+    own_ip[1] = me[5];
+    own_ip[2] = me[6];
+    own_ip[3] = me[7];
+    if (own_ip[0] == 127 || (own_ip[0] | own_ip[1] | own_ip[2] | own_ip[3]) == 0) {
         fail("the local address read back as a loopback or a zero address");
     }
 }
@@ -395,8 +412,8 @@ static void udp_loop(void)
     if (n != (int)strlen(msg) || !mem_eq((const uint8_t *)rbuf, (const uint8_t *)msg, n)) {
         fail("udp payload");
     }
-    if (!mem_eq(src + 4, canon_ip, 4))
-        fail("udp source not canonical");
+    if (!mem_eq(src + 4, loop_ip, 4))
+        fail("udp source not 127.0.0.1");
     if (src[2] != (UDP_PORT >> 8) || src[3] != (UDP_PORT & 0xFF)) {
         fail("udp source port");
     }
@@ -425,8 +442,8 @@ static void udp_loop(void)
     n = socketcall(SC_RECVFROM, args);
     if (n != 0)
         fail("udp empty payload");
-    if (!mem_eq(src + 4, canon_ip, 4))
-        fail("udp empty source not canonical");
+    if (!mem_eq(src + 4, loop_ip, 4))
+        fail("udp empty source not 127.0.0.1");
     if (src[2] != (UDP_PORT >> 8) || src[3] != (UDP_PORT & 0xFF)) {
         fail("udp empty source port");
     }
@@ -732,8 +749,8 @@ static void tcp_loop(void)
     args[2] = (uint32_t)&salen;
     if (socketcall(SC_GETPEERNAME, args) != 0)
         fail("tcp getpeername");
-    if (!mem_eq(peer + 4, canon_ip, 4))
-        fail("tcp peer not canonical");
+    if (!mem_eq(peer + 4, loop_ip, 4))
+        fail("tcp peer not 127.0.0.1");
     if (peer[2] != (TCP_PORT >> 8) || peer[3] != (TCP_PORT & 0xFF)) {
         fail("tcp peer port");
     }
@@ -1085,6 +1102,73 @@ static void tcp_loop_pingpong(void)
     if (ms < 0 || base < 0 || idle < 2 * PINGPONG_ROUNDS / 2 || tick > idle) {
         fail("a local round trip waits for the timer");
     }
+}
+
+/* A listener bound to 127.0.0.1 is reached at that address alone: a connect
+   to the machine's interface address on its port is refused, as one from
+   the wire would be, and a connect to 127.0.0.1 is accepted. A bind to an
+   address the machine does not have is refused. */
+static void tcp_bound_loopback(void)
+{
+    uint32_t args[6];
+    uint8_t sa[16];
+    int ls, cs, as;
+
+    args[0] = AF_INET;
+    args[1] = SOCK_STREAM;
+    args[2] = 0;
+    ls = socketcall(SC_SOCKET, args);
+    if (ls < 0)
+        fail("bound listener socket");
+    make_sockaddr(sa, TCP_PORT + 7, 192, 0, 2, 1);
+    args[0] = (uint32_t)ls;
+    args[1] = (uint32_t)sa;
+    args[2] = 16;
+    if (socketcall(SC_BIND, args) != -EADDRNOTAVAIL)
+        fail("a bind to an address the machine lacks was not refused");
+    make_sockaddr(sa, TCP_PORT + 7, 127, 0, 0, 1);
+    if (socketcall(SC_BIND, args) != 0)
+        fail("bind to 127.0.0.1");
+    args[0] = (uint32_t)ls;
+    args[1] = 2;
+    if (socketcall(SC_LISTEN, args) != 0)
+        fail("listen on 127.0.0.1");
+
+    args[0] = AF_INET;
+    args[1] = SOCK_STREAM;
+    args[2] = 0;
+    cs = socketcall(SC_SOCKET, args);
+    if (cs < 0)
+        fail("bound client socket");
+    make_sockaddr(sa, TCP_PORT + 7, own_ip[0], own_ip[1], own_ip[2], own_ip[3]);
+    args[0] = (uint32_t)cs;
+    args[1] = (uint32_t)sa;
+    args[2] = 16;
+    if (socketcall(SC_CONNECT, args) != -ECONNREFUSED)
+        fail("a listener bound to 127.0.0.1 took a connection to the interface address");
+    sys_close(cs);
+
+    args[0] = AF_INET;
+    args[1] = SOCK_STREAM;
+    args[2] = 0;
+    cs = socketcall(SC_SOCKET, args);
+    if (cs < 0)
+        fail("bound client socket");
+    make_sockaddr(sa, TCP_PORT + 7, 127, 0, 0, 1);
+    args[0] = (uint32_t)cs;
+    args[1] = (uint32_t)sa;
+    args[2] = 16;
+    if (socketcall(SC_CONNECT, args) != 0)
+        fail("connect to a listener bound to 127.0.0.1");
+    args[0] = (uint32_t)ls;
+    args[1] = 0;
+    args[2] = 0;
+    as = socketcall(SC_ACCEPT, args);
+    if (as < 0)
+        fail("accept on 127.0.0.1");
+    sys_close(as);
+    sys_close(cs);
+    sys_close(ls);
 }
 
 static void tcp_refused(void)
@@ -1573,7 +1657,7 @@ static void tcp_accept_close(void)
 
 void _start(void)
 {
-    learn_canon_ip();
+    learn_addresses();
     udp_loop();
     udp_no_length();
     udp_peek();
@@ -1582,6 +1666,7 @@ void _start(void)
     tcp_accept_close();
     tcp_loop_bulk();
     tcp_loop_pingpong();
+    tcp_bound_loopback();
     tcp_refused();
     tcp_ports();
     tcp_simultaneous();

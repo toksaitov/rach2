@@ -91,9 +91,10 @@ static struct {
     uint16_t number, len;
 } udp_seen[UDP_SEEN_MAX];
 
-int udp_rx(uint32_t src, const uint8_t *data, uint16_t len)
+int udp_rx(uint32_t src, uint32_t dst, const uint8_t *data, uint16_t len)
 {
     (void)src;
+    (void)dst;
     if (to_udp < UDP_SEEN_MAX) {
         udp_seen[to_udp].number = len >= 2 ? (uint16_t)((data[0] << 8) | data[1]) : 0;
         udp_seen[to_udp].len = len;

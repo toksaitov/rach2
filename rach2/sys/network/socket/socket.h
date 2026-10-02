@@ -54,6 +54,12 @@ typedef struct socket {
     uint16_t family;
     uint16_t local_port;
 
+    /* The address `bind` gave: one of this machine's, 127/8 among them, or 0
+     * for any. A stream or datagram socket bound to one is reached at that
+     * address alone, so a server bound to 127.0.0.1 answers this machine and
+     * nobody on the wire. */
+    uint32_t local_ip;
+
     /* AF_PACKET only: the EtherType this socket sends and receives, in HOST
      * order, or 0 for none. Linux takes it in network order at `socket` and
      * again in the `sockaddr_ll` at `bind`, and the later one wins; a socket
@@ -166,6 +172,7 @@ int socket_port_bound(uint16_t port);
  * /proc/net/raw. A raw socket's `local_port` is its protocol, 0 for the
  * descriptor that only takes configuration ioctls. */
 struct socket_row {
+    uint32_t local_ip;
     uint16_t local_port;
     uint32_t remote_ip;
     uint16_t remote_port;

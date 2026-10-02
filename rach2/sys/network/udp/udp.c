@@ -2,8 +2,10 @@
  * udp.c - User Datagram Protocol.
  *
  * Header (8 bytes, big-endian): src_port, dst_port, length, checksum.
- * A heap-allocated binding list maps destination ports to sockets.
- * udp_rx looks up the port and hands the payload to socket_udp_deliver.
+ * A heap-allocated binding list maps destination ports to sockets, each
+ * bound to one address of this machine or to any (`local_ip` 0).
+ * udp_rx looks up the address and port and hands the payload to
+ * socket_udp_deliver.
  */
 
 #include "../../klog.h"
@@ -49,10 +51,13 @@ static int udp_port_in_use(uint16_t port)
 /**
  * Bind a socket to a UDP port so udp_rx can route inbound datagrams to it.
  *
- * An occupied port may be shared only when the new socket and every existing
- * binding enable `SO_REUSEADDR`, and every binding was created under the
- * caller's effective uid. The function updates the binding list under
- * `net_lock`.
+ * A binding takes the port at the socket's `local_ip`, and so meets another
+ * on the same port when either is to any address or both are to the same
+ * one, as on Linux: 127.0.0.1 and an interface's address may each have a
+ * server on port 53. A port met that way may be shared only when the new
+ * socket and every binding it meets enable `SO_REUSEADDR`, and every one was
+ * created under the caller's effective uid. The function updates the binding
+ * list under `net_lock`.
  *
  * @return 0 on success, -1 on a conflict, -ENOMEM with no memory.
  */
@@ -60,23 +65,26 @@ int udp_bind(uint16_t port, struct socket *sock)
 {
     udp_binding_t *b;
     uint32_t flags;
+    uint32_t ip = sock ? sock->local_ip : 0;
+    uint32_t uid = current_proc ? current_proc->euid : 0;
+    int met = 0, shared = sock && sock->reuseaddr;
 
     flags = net_lock();
 
-    if (udp_port_in_use(port)) {
-        uint32_t uid = current_proc ? current_proc->euid : 0;
-        int shared = sock && sock->reuseaddr;
+    for (b = bindings; b; b = b->next) {
+        uint32_t held = b->sock ? b->sock->local_ip : 0;
 
-        for (b = bindings; shared && b; b = b->next) {
-            if (b->port == port && (!b->sock || !b->sock->reuseaddr || b->owner != uid)) {
+        if (b->port == port && (held == 0 || ip == 0 || held == ip)) {
+            met = 1;
+            if (!b->sock || !b->sock->reuseaddr || b->owner != uid) {
                 shared = 0;
             }
         }
-        if (!shared) {
-            net_unlock(flags);
-            klog(KLOG_DEBUG, "udp", "bind: port %d is already bound", (int)port);
-            return -1;
-        }
+    }
+    if (met && !shared) {
+        net_unlock(flags);
+        klog(KLOG_DEBUG, "udp", "bind: port %d is already bound", (int)port);
+        return -1;
     }
 
     b = kzalloc(sizeof(*b));
@@ -167,17 +175,19 @@ void udp_unbind(struct socket *sock)
  * takes it. The checksum is not verified. The payload is handed to
  * socket_udp_deliver along with the sender's address and port.
  *
- * A port may have more than one socket on it. The one connected to the
- * sender takes the datagram, because it asked for that sender by name, and a
- * renewal's answer must not go to a socket that is merely listening; the
- * first unconnected one takes it otherwise.
+ * A socket bound to an address takes only datagrams to that address. A port
+ * may have more than one socket on it. The one connected to the sender takes
+ * the datagram, because it asked for that sender by name, and a renewal's
+ * answer must not go to a socket that is merely listening; otherwise the
+ * first unconnected one bound to the datagram's address takes it, or the
+ * first bound to any address.
  *
  * @param data the UDP header followed by its payload.
  * @param len  bytes actually received, the upper bound on the wire length.
  * @return -1 when no socket has the port, which `ip_rx` answers with a port
  *         unreachable, and 0 otherwise, a malformed datagram included.
  */
-int udp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len)
+int udp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len)
 {
     uint16_t dst_port, udp_len, payload_len;
 
@@ -203,7 +213,7 @@ int udp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len)
         for (b = bindings; b; b = b->next) {
             struct socket *cand = b->sock;
 
-            if (b->port != dst_port || !cand) {
+            if (b->port != dst_port || !cand || (cand->local_ip != 0 && cand->local_ip != dst_ip)) {
                 continue;
             }
             if (cand->connected) {
@@ -214,7 +224,7 @@ int udp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len)
                 }
                 continue;
             }
-            if (!listener) {
+            if (!listener || (listener->local_ip == 0 && cand->local_ip != 0)) {
                 listener = cand;
             }
         }
@@ -260,8 +270,8 @@ void udp_refused(uint16_t local_port, uint32_t remote_ip, uint16_t remote_port)
  * IRQ-context sender must not reenter it (net.h). The return value is the
  * contract in udp.h.
  */
-int udp_tx(uint16_t src_port, uint32_t dst_ip, uint16_t dst_port, const uint8_t *payload,
-           uint16_t plen, uint8_t ttl)
+int udp_tx(uint32_t src_ip, uint16_t src_port, uint32_t dst_ip, uint16_t dst_port,
+           const uint8_t *payload, uint16_t plen, uint8_t ttl)
 {
     uint16_t udp_len;
     uint32_t flags;
@@ -282,7 +292,7 @@ int udp_tx(uint16_t src_port, uint32_t dst_ip, uint16_t dst_port, const uint8_t 
     write16be(udp_tx_buf + 6, 0x0000); /* checksum disabled */
     k_memcpy(udp_tx_buf + UDP_HDR_SIZE, payload, plen);
 
-    r = ip_tx(dst_ip, IP_PROTO_UDP, udp_tx_buf, udp_len, ttl);
+    r = ip_tx_from(src_ip, dst_ip, IP_PROTO_UDP, udp_tx_buf, udp_len, ttl);
     if (r == 0) {
         net_mib.udp_out_datagrams++;
     }

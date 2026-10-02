@@ -17,9 +17,25 @@
 /* Fixed IPv4 header size (IHL = 5 words). */
 #define IP_HDR_SIZE 20
 
+/* The loopback network, 127/8, and the address a datagram to it leaves
+ * from. Its datagrams never reach a card: they go round the loopback ring,
+ * and one that arrives from the wire is dropped. */
+#define IP_IS_LOOPBACK(ip) (((ip) & 0xFF000000u) == 0x7F000000u)
+#define IP_LOOPBACK_ADDR   0x7F000001u
+
+/** Whether `ip` is an address of this machine: an interface's, or one of
+ * 127/8. */
+int ip_is_local(uint32_t ip);
+
+/** The address a datagram to `dst` leaves from: 127.0.0.1 for 127/8, else
+ * the address of the interface the route to `dst` leaves by, or the primary
+ * address when no route reaches it. */
+uint32_t ip_source(uint32_t dst);
+
 /** Validate one received IPv4 datagram and dispatch it by protocol.
  *  `from_loopback` is nonzero only for the loopback ring; a wire packet with a
- *  martian source (our own address or 127/8) is dropped. */
+ *  martian source (our own address or 127/8), or addressed to 127/8, is
+ *  dropped. */
 void ip_rx(const uint8_t *data, uint16_t len, int from_loopback);
 
 /* The hop limit a datagram leaves with unless the sender asked for another.
@@ -36,14 +52,15 @@ void ip_rx(const uint8_t *data, uint16_t len, int from_loopback);
  * Returns a negative errno for the conditions the caller must hear about:
  * -EMSGSIZE for a payload above 1480 bytes (1500 less the IPv4 header),
  * -ENETUNREACH for an address with no route, -ENOBUFS when the loopback ring
- * is full or the driver did not take the frame, and -EOPNOTSUPP for a
- * broadcast of anything but UDP.
+ * is full or the driver did not take the frame, -EOPNOTSUPP for a broadcast
+ * of anything but UDP, and -EINVAL for a datagram from 127/8 to an address
+ * that is not this machine's, which no card may carry.
  */
 int ip_tx(uint32_t dst_ip, uint8_t proto, const uint8_t *payload, uint16_t plen, uint8_t ttl);
 
 /** The same from the source `src`, one of this machine's addresses, which a
- * connection keeps; with 0, or an address the machine no longer holds, the
- * one `ip_tx` chooses. */
+ * connection or a bound socket keeps; with 0, or an address the machine no
+ * longer holds, the one `ip_source` chooses. */
 int ip_tx_from(uint32_t src, uint32_t dst_ip, uint8_t proto, const uint8_t *payload, uint16_t plen,
                uint8_t ttl);
 

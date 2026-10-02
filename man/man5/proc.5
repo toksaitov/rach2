@@ -427,9 +427,10 @@ Addresses have the form
 .Ql AAAAAAAA:PPPP :
 an eight-digit hexadecimal IPv4 address in reversed byte order and a
 four-digit hexadecimal port.
-A listener takes its port on every address of the machine, so its local
-address is 0.0.0.0, as Linux gives one bound to
-.Dv INADDR_ANY .
+A listener's local address is the one it bound, 0.0.0.0 for one bound
+to
+.Dv INADDR_ANY ,
+as on Linux.
 State is the two-digit hexadecimal Linux state number.
 Queue sizes are paired as
 .Ql TTTTTTTT:RRRRRRRR ;
@@ -458,9 +459,9 @@ A header followed by a row for each UDP or raw socket, in the columns of
 .Pa /proc/net/tcp
 up to the inode, which are followed by the reference count 2, a pointer of
 zeros and a drop count of 0.
-The local address is 0.0.0.0, since a socket here has no address of its own;
-a raw socket's port is its protocol, 255 for the descriptor that takes only
-configuration ioctls.
+The local address is the one the socket bound, 0.0.0.0 for any and for a
+raw socket; a raw socket's port is its protocol, 255 for the descriptor that
+takes only configuration ioctls.
 The state is 01 for a connected socket and 07 for the rest, as Linux writes
 them, and only the receive queue is counted.
 .It Pa /proc/net/unix

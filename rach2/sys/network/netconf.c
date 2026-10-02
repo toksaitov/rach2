@@ -548,7 +548,7 @@ static void addr_publish(struct netdev *nd, uint32_t ip, uint32_t mask)
         } else {
             arp_forget_dev(nd);
         }
-        tcp_local_addr_changed(ip);
+        tcp_local_addr_changed();
     }
     if (nd->gateway != 0 &&
         (nd->ip == 0 || nd->mask == 0 || !netconf_gateway_ok(nd->gateway, nd->ip, nd->mask))) {
@@ -637,7 +637,7 @@ int netconf_del_address(struct netdev *nd, uint32_t ip)
         nd->mask2[i] = nd->mask2[i + 1];
     }
     nd->naddr2--;
-    tcp_local_addr_changed(nd->ip);
+    tcp_local_addr_changed();
     netdev_route_prune(nd);
     net_unlock(flags);
     return 0;

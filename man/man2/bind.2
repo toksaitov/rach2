@@ -1,16 +1,16 @@
-.Dd October 1, 2026
+.Dd October 2, 2026
 .Dt BIND 2
 .Os
 .Sh NAME
 .Nm bind
-.Nd assign a socket's local port or interface
+.Nd assign a socket's local address, port or interface
 .Sh SYNOPSIS
 .In sys/socket.h
 .Ft int
 .Fn bind "int fd" "const struct sockaddr *addr" "socklen_t addrlen"
 .Sh DESCRIPTION
 .Fn bind
-sets the local port or interface of the socket
+sets the local address and port, or the interface, of the socket
 .Fa fd
 from the address at
 .Fa addr .
@@ -20,24 +20,33 @@ The kernel interface is
 .Xr socketcall 2
 operation 2.
 .Ss IPv4 sockets
-For TCP and UDP, the port is read in network byte order from a
+For TCP and UDP, the address and port are read in network byte order from a
 .Vt sockaddr_in .
 At least eight address bytes are required.
-The address and family fields are not checked for these socket types;
-binding does not restrict a socket to an IPv4 address.
+The family field is not checked for these socket types.
+The address must be zero, for any of the machine's addresses, one in
+.Ql 127/8 ,
+one an interface has, or for UDP a broadcast address; another gives
+.Er EADDRNOTAVAIL .
+A socket bound to an address receives only what arrives for that address,
+so a server bound to 127.0.0.1 is reached from this machine alone, as on
+Linux.
 A nonzero port below 1024 requires effective user ID 0.
 .Pp
-A UDP bind registers the port for receiving datagrams.
+A UDP bind registers the address and port for receiving datagrams.
 Port zero selects a free port from 49152 through 65535.
-Two sockets may share a port only when all sockets using it have
+Two bindings of a port meet when one is to any address or both are to the
+same one; a socket may take a port at an address that meets another's only
+when all sockets so met have
 .Dv SO_REUSEADDR
 set and the binding owners have the same effective user ID.
 Rebinding first removes the socket's previous UDP registration, even
 when the new registration fails.
 .Pp
-A TCP bind records the port.
-It rejects a nonzero port that already has a live listener, but does
-not reserve the port against another bind before
+A TCP bind records the address and port.
+It rejects a nonzero port that already has a live listener at an address
+that meets the one asked for, but does not reserve the port against
+another bind before
 .Xr listen 2 .
 Binding TCP port zero selects a free port from 49152 through 65535 that
 no TCP connection or listener uses and no other stream socket has bound, as
@@ -45,13 +54,13 @@ Linux does, and
 .Xr getsockname 2
 reports it.
 .Pp
-There is no loopback interface.
-At the socket boundary, a destination in
+There is no loopback interface, but
 .Ql 127/8
-is an alias for the current primary local address.
-Address-reporting calls return that canonical address.
+is this machine's, as on Linux: what is sent to it goes round the
+kernel's loopback ring from 127.0.0.1, and what arrives from the wire for
+it is dropped.
 .Pp
-A raw ICMP socket accepts address zero, the primary local address, or
+A raw ICMP socket accepts address zero, an interface's address, or
 an address in
 .Ql 127/8 .
 Another address gives
@@ -93,7 +102,11 @@ to
 and reads it back.
 It also checks that two TCP binds can precede a listener, but a bind
 to an existing listener's port fails with
-.Er EADDRINUSE .
+.Er EADDRINUSE ,
+that a bind to an address the machine lacks fails with
+.Er EADDRNOTAVAIL ,
+and that a listener bound to 127.0.0.1 refuses a connection to the
+machine's interface address.
 .Sh ERRORS
 .Bl -tag -width EADDRNOTAVAIL
 .It Er EACCES
@@ -101,12 +114,12 @@ A caller without effective user ID 0 requested a nonzero port below 1024.
 .It Er EADDRINUSE
 A UDP port cannot be shared, no ephemeral port is available, or memory
 for a UDP binding cannot be allocated.
-A TCP port already has a live listener, or no ephemeral port is free for
-a bind to port zero.
+A TCP port already has a live listener at an address that meets the one
+asked for, or no ephemeral port is free for a bind to port zero.
 .It Er EADDRNOTAVAIL
-A raw ICMP bind requests an address other than zero, the primary local
-address, or an address in
-.Ql 127/8 .
+The address is not zero, not in
+.Ql 127/8 ,
+not an interface's, and for UDP not a broadcast address.
 .It Er EBADF
 .Fa fd
 is not an open descriptor.

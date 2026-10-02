@@ -3030,7 +3030,7 @@ static int procfs_gen_nettcp(struct procfs_text *t)
         ap_str(t, "   ");
         ap_u32(t, (uint32_t)i);
         ap_str(t, ": ");
-        ap_ip_hex(t, row.state == TCP_LISTEN ? 0 : row.local_ip);
+        ap_ip_hex(t, row.local_ip);
         ap_ch(t, ':');
         ap_hex(t, row.local_port, 4);
         ap_ch(t, ' ');
@@ -3075,8 +3075,8 @@ static int procfs_gen_nettcp(struct procfs_text *t)
  * Render /proc/net/udp or, for `type` SOCK_RAW, /proc/net/raw: the sockets in
  * the columns of /proc/net/tcp, which netstat and ss parse the same way.
  *
- * A socket has no address of its own here, so the local address is 0.0.0.0,
- * as a socket bound to INADDR_ANY has it. The state is Linux's: 1, its
+ * The local address is the one the socket bound, 0.0.0.0 for one bound to
+ * INADDR_ANY or not bound at all. The state is Linux's: 1, its
  * TCP_ESTABLISHED, for a connected socket and 7, TCP_CLOSE, for the rest. A
  * raw socket's port is its protocol.
  */
@@ -3098,7 +3098,9 @@ static int procfs_gen_netdgram(struct procfs_text *t, int type)
         }
         ap_str(t, i < 10 ? "    " : i < 100 ? "   " : i < 1000 ? "  " : " ");
         ap_u32(t, (uint32_t)i);
-        ap_str(t, ": 00000000:");
+        ap_str(t, ": ");
+        ap_ip_hex(t, rows[i].local_ip);
+        ap_ch(t, ':');
         ap_hex(t, port, 4);
         ap_ch(t, ' ');
         ap_ip_hex(t, rows[i].connected ? rows[i].remote_ip : 0);

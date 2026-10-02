@@ -86,7 +86,9 @@ uint16_t ip_checksum(const uint8_t *buf, uint16_t len)
  * peer sends, and is dropped before any reply can be steered onto the
  * loopback ring or emitted carrying a loopback source. A genuine loopback
  * datagram has our own source by design, so the check depends on the delivery
- * path, not on the value.
+ * path, not on the value. A packet off the wire addressed to `127/8` is
+ * dropped too, as Linux drops it: a socket bound to 127.0.0.1 is reachable
+ * from this machine alone.
  *
  * Each datagram counts in `net_mib` as received, and a dropped one by its
  * reason. A multicast datagram, for a group no socket here can join, counts
@@ -140,7 +142,7 @@ void ip_rx(const uint8_t *data, uint16_t len, int from_loopback)
 
     dst_ip = read32be(data + 16);
     to_broadcast = netdev_is_broadcast(dst_ip);
-    if (!netdev_owns(dst_ip) && !to_broadcast) {
+    if (!netdev_owns(dst_ip) && !to_broadcast && !(from_loopback && IP_IS_LOOPBACK(dst_ip))) {
         if ((dst_ip & 0xF0000000u) != 0xE0000000u) {
             net_mib.ip_in_addr_errors++;
         }
@@ -170,7 +172,8 @@ void ip_rx(const uint8_t *data, uint16_t len, int from_loopback)
         break;
     case IP_PROTO_UDP:
         net_mib.ip_in_delivers++;
-        if (udp_rx(src_ip, data + hdr_len, (uint16_t)(total_len - hdr_len)) != 0 && !to_broadcast) {
+        if (udp_rx(src_ip, dst_ip, data + hdr_len, (uint16_t)(total_len - hdr_len)) != 0 &&
+            !to_broadcast) {
             icmp_unreachable(data, total_len, ICMP_PORT_UNREACH);
         }
         break;
@@ -339,10 +342,13 @@ static struct netdev *ip_broadcast_iface(uint32_t dst)
  * directly and the rest through the gateway. A destination no interface
  * reaches returns `-ENETUNREACH`.
  *
- * A datagram addressed to ourselves never touches ARP or the wire: it is
- * copied onto the loopback ring for `ip_loop_drain_from` to deliver later (the
- * socket layer canonicalizes 127/8 to our one address, so the self test is
- * exact). Delivery is deferred because the stack's shared transmit buffers
+ * A datagram addressed to ourselves, at an interface's address or in 127/8,
+ * never touches ARP or the wire: it is copied onto the loopback ring for
+ * `ip_loop_drain_from` to deliver later. One to 127/8 needs no route and
+ * leaves from 127.0.0.1 unless its sender holds another address of this
+ * machine; one from 127/8 to an address no interface here has is refused
+ * with `-EINVAL`, since a card would carry a loopback source onto the wire. Delivery is deferred
+ * because the stack's shared transmit buffers
  * and protocol state are single-threaded by the interrupt discipline (net.h);
  * handing the datagram straight back to ip_rx here would reenter TCP under
  * the sender's own call frame.
@@ -364,6 +370,23 @@ static struct netdev *ip_broadcast_iface(uint32_t dst)
  * The return value is contracted in ip.h: the conditions a caller must hear
  * about are errnos, and the ARP miss is not one of them.
  */
+int ip_is_local(uint32_t ip)
+{
+    return IP_IS_LOOPBACK(ip) || netdev_owns(ip);
+}
+
+uint32_t ip_source(uint32_t dst)
+{
+    uint32_t via;
+    struct netdev *out;
+
+    if (IP_IS_LOOPBACK(dst)) {
+        return IP_LOOPBACK_ADDR;
+    }
+    out = netdev_route(dst, &via);
+    return out ? netdev_source(out, via) : net_ip_addr;
+}
+
 int ip_tx(uint32_t dst_ip, uint8_t proto, const uint8_t *payload, uint16_t plen, uint8_t ttl)
 {
     return ip_tx_from(0, dst_ip, proto, payload, plen, ttl);
@@ -385,7 +408,12 @@ int ip_tx_from(uint32_t src, uint32_t dst_ip, uint8_t proto, const uint8_t *payl
     total_len = (uint16_t)(IP_HDR_SIZE + plen);
     net_mib.ip_out_requests++;
 
-    if (netdev_is_broadcast(dst_ip)) {
+    if (IP_IS_LOOPBACK(dst_ip)) {
+        out = 0;
+        route_ip = dst_ip;
+    } else if (IP_IS_LOOPBACK(src) && !netdev_owns(dst_ip)) {
+        return -EINVAL;
+    } else if (netdev_is_broadcast(dst_ip)) {
         out = ip_broadcast_iface(dst_ip);
         route_ip = dst_ip;
     } else {
@@ -405,8 +433,10 @@ int ip_tx_from(uint32_t src, uint32_t dst_ip, uint8_t proto, const uint8_t *payl
     ip_tx_buf[8] = ttl;               /* hop limit */
     ip_tx_buf[9] = proto;
     write16be(ip_tx_buf + 10, 0x0000); /* checksum, filled below */
-    if (src == 0 || !netdev_owns(src)) {
-        src = out ? netdev_source(out, route_ip) : net_ip_addr;
+    if (src == 0 || !ip_is_local(src)) {
+        src = IP_IS_LOOPBACK(dst_ip) ? IP_LOOPBACK_ADDR
+              : out                  ? netdev_source(out, route_ip)
+                                     : net_ip_addr;
     }
     write32be(ip_tx_buf + 12, src);
     write32be(ip_tx_buf + 16, dst_ip);
@@ -414,7 +444,7 @@ int ip_tx_from(uint32_t src, uint32_t dst_ip, uint8_t proto, const uint8_t *payl
 
     k_memcpy(ip_tx_buf + IP_HDR_SIZE, payload, plen);
 
-    if (netdev_owns(dst_ip)) {
+    if (IP_IS_LOOPBACK(dst_ip) || netdev_owns(dst_ip)) {
         uint32_t slot;
 
         if (loop_head - loop_tail == LOOP_RING_SLOTS) {

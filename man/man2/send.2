@@ -131,7 +131,11 @@ is zero, the socket must have a peer set by
 An explicit destination overrides that peer for this send.
 A supplied address must contain at least its first eight bytes.
 The port and address are in network byte order.
-Destinations in 127/8 are replaced by the kernel's local IPv4 address.
+A datagram to 127/8 goes round the kernel's loopback ring from 127.0.0.1,
+or from the socket's bound address when that is another of the machine's;
+one from a socket bound in 127/8 to an address that is not the machine's
+gets
+.Er EINVAL .
 .Pp
 An unbound socket is first assigned an ephemeral source port.
 A datagram may contain at most 1472 bytes; an empty datagram is valid.
@@ -226,7 +230,8 @@ A signal interrupted a stream send waiting for buffer space.
 .It Bq Er EINVAL
 A supplied UDP address is shorter than eight bytes, a packet address
 is shorter than 20 bytes, its hardware-address length is not six, or
-its effective protocol is neither IPv4 nor ARP.
+its effective protocol is neither IPv4 nor ARP; or a UDP socket bound to
+an address in 127/8 sends to an address that is not the machine's.
 .It Bq Er EMSGSIZE
 A UDP payload exceeds 1472 bytes, a raw ICMP message exceeds 1480 bytes,
 or a packet payload is empty or exceeds 1500 bytes.

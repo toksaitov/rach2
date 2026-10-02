@@ -253,6 +253,12 @@ void net_unlock(uint32_t flags)
 }
 
 /** The model has two independently named interfaces. */
+uint32_t ip_source(uint32_t dst)
+{
+    (void)dst;
+    return net_ip_addr;
+}
+
 int netdev_count(void)
 {
     return 2;
@@ -383,7 +389,8 @@ static void packet_wake(void)
     packet_unbind(&sock);
 }
 
-/** A TCP endpoint reports its saved local address, including passive opens. */
+/** A TCP endpoint reports its saved local address, including passive opens,
+ * and a socket without a control block the address it bound. */
 static void inet_names(void)
 {
     sock.family = AF_INET;
@@ -397,8 +404,13 @@ static void inet_names(void)
     CHECK(SC_BE16(user + 34) == 7400 && SC_LE32(user + 8) == 16, "tcp port and length");
     sock.tcb = NULL;
     SC_WLE32(user + 8, 16);
-    CHECK(do_getsockname(3, 32, 8) == 0 && SC_BE32(user + 36) == net_ip_addr,
-          "socket without control block keeps primary address");
+    CHECK(do_getsockname(3, 32, 8) == 0 && SC_BE32(user + 36) == 0,
+          "an unbound socket without a control block reports any address");
+    sock.local_ip = cards[1].ip;
+    SC_WLE32(user + 8, 16);
+    CHECK(do_getsockname(3, 32, 8) == 0 && SC_BE32(user + 36) == cards[1].ip,
+          "and a bound one the address it bound");
+    sock.local_ip = 0;
 }
 
 /** Reject invalid accept calls before either waiting or checking nonblock. */

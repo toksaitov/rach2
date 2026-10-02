@@ -61,7 +61,7 @@
 #include "network/ip/ip.h"
 #include "network/ip/icmp.h"
 #include "network/net.h"
-#include "network/netconf.h" /* net_ip_addr for getsockname */
+#include "network/netconf.h" /* netconf_is_broadcast */
 #include "cmdline.h"         /* kcmdline_has, for the ENOSYS trace flag */
 #include "ipc/unix.h"
 #include "syscall_internal.h"
@@ -170,20 +170,6 @@
 #define SC_PING_DATA 0x1001
 
 /**
- * Canonicalize a destination address at the socket boundary.
- *
- * The stack below the socket layer knows exactly one local address
- * (`net_ip_addr`): every TCB stamps it, checksums verify against it, and
- * `getsockname` reports it. 127/8 is therefore an alias for that one address,
- * rewritten here before any connection state exists, so no lower layer ever
- * sees a second local address and `getpeername` stays truthful.
- */
-static uint32_t canonical_dst_ip(uint32_t ip)
-{
-    return (ip & 0xFF000000UL) == 0x7F000000UL ? net_ip_addr : ip;
-}
-
-/**
  * Send one datagram, judging the destination first.
  *
  * A datagram to a broadcast address reaches every machine on the wire, so a
@@ -214,7 +200,7 @@ int32_t dgram_send(struct socket *sock, uint32_t dst_ip, uint16_t dst_port, cons
     /* The hop limit is the socket's, which IP_TTL sets and traceroute counts
        up. What the send layer refuses is reported here rather than counted as
        bytes sent. */
-    r = udp_tx(sock->local_port, dst_ip, dst_port, buf, len, sock->ip_ttl);
+    r = udp_tx(sock->local_ip, sock->local_port, dst_ip, dst_port, buf, len, sock->ip_ttl);
     if (r < 0) {
         return r;
     }
@@ -523,13 +509,16 @@ static int32_t netlink_bind_user(struct socket *sock, uint32_t sa_ptr, int addrl
     return netlink_bind(sock, SC_LE32(nl + 4), SC_LE32(nl + 8));
 }
 
-/* bind(2): record the local port from the sockaddr; a datagram socket also
- * registers it with UDP (-EADDRINUSE if taken), and a netlink socket takes
- * a port id (`netlink_bind_user`). */
+/* bind(2): record the local address and port from the sockaddr; a datagram
+ * socket also registers them with UDP (-EADDRINUSE if taken), and a netlink
+ * socket takes a port id (`netlink_bind_user`). The address must be any (0),
+ * one of 127/8, an interface's, or for a datagram socket a broadcast address;
+ * any other is refused with -EADDRNOTAVAIL, as Linux refuses it. */
 static int32_t do_bind(int fd, uint32_t sa_ptr, int addrlen)
 {
     fd_entry_t *entry;
     uint16_t port;
+    uint32_t ip;
     uint8_t sa[SOCKADDR_MIN];
 
     /* The caller's declared sockaddr must be at least the header we read; a
@@ -610,13 +599,18 @@ static int32_t do_bind(int fd, uint32_t sa_ptr, int addrlen)
             return -EOPNOTSUPP;
         }
         want = SC_BE32(sa + 4);
-        if (want != 0 && want != (uint32_t)net_ip_addr && (want & 0xFF000000UL) != 0x7F000000UL) {
+        if (want != 0 && !ip_is_local(want)) {
             return -EADDRNOTAVAIL;
         }
         return 0;
     }
 
     port = SC_BE16(sa + 2);
+    ip = SC_BE32(sa + 4);
+    if (ip != 0 && !ip_is_local(ip) &&
+        !(entry->sock->type == SOCK_DGRAM && netdev_is_broadcast(ip))) {
+        return -EADDRNOTAVAIL;
+    }
 
     /* A port below 1024 is a service's, and a service is root's. Without this
      * any user could take the port a DHCP client or an SSH server answers on
@@ -633,15 +627,18 @@ static int32_t do_bind(int fd, uint32_t sa_ptr, int addrlen)
             udp_unbind(entry->sock);
             entry->sock->local_port = 0;
         }
+        entry->sock->local_ip = ip;
         if (port == 0) {
             /* Port 0 means "any port": let the stack pick a free ephemeral and
              * record it, the same path a send before bind takes. */
             if (udp_bind_ephemeral(entry->sock) == 0) {
+                entry->sock->local_ip = 0;
                 return -EADDRINUSE;
             }
             return 0;
         }
         if (udp_bind(port, entry->sock) < 0) {
+            entry->sock->local_ip = 0;
             return -EADDRINUSE;
         }
     }
@@ -652,12 +649,13 @@ static int32_t do_bind(int fd, uint32_t sa_ptr, int addrlen)
         if (port == 0) {
             return -EADDRINUSE;
         }
-    } else if (entry->sock->type == SOCK_STREAM && tcp_port_listening(port)) {
+    } else if (entry->sock->type == SOCK_STREAM && tcp_port_listening(ip, port)) {
         /* Advisory, and where a server reports it: the invariant belongs to
          * `tcp_listen`, since `bind` and `listen` are separate syscalls and any
          * check made only here is bypassed by binding both sockets first. */
         return -EADDRINUSE;
     }
+    entry->sock->local_ip = ip;
     entry->sock->local_port = port;
     return 0;
 }
@@ -689,8 +687,7 @@ static int32_t udp_sendto(fd_entry_t *entry, const uint8_t *buf, int len, uint32
     if (copy_from_user(sa, (const void __user *)sa_ptr, SOCKADDR_MIN) != 0) {
         return -EFAULT;
     }
-    return dgram_send(entry->sock, canonical_dst_ip(SC_BE32(sa + 4)), SC_BE16(sa + 2), buf,
-                      (uint16_t)len);
+    return dgram_send(entry->sock, SC_BE32(sa + 4), SC_BE16(sa + 2), buf, (uint16_t)len);
 }
 
 /* The length of the sockaddr a receive on `sock` reports its sender in. */
@@ -801,7 +798,7 @@ static int32_t do_sendto(int fd, uint32_t buf_ptr, int len, int flags, uint32_t 
         if (len > (int)sizeof(raw_send_buf)) {
             return -EMSGSIZE;
         }
-        raw_dst = canonical_dst_ip(SC_BE32(raw_sa + 4));
+        raw_dst = SC_BE32(raw_sa + 4);
         /* The copy runs with interrupts on, since it may fault; the send is
            then held against a receive interrupt that would build a datagram
            through the same transmit buffers, which is the rule in net.h and
@@ -1002,7 +999,7 @@ static int32_t do_recvfrom(int fd, uint32_t buf_ptr, int len, int flags, uint32_
 
 static int32_t do_ping(uint32_t dst_ip)
 {
-    return (int32_t)icmp_ping(canonical_dst_ip(dst_ip));
+    return (int32_t)icmp_ping(dst_ip);
 }
 
 /** A peer's FIN does not undo the completed handshake. */
@@ -1120,7 +1117,7 @@ static int32_t do_connect(int fd, uint32_t sa_ptr, int addrlen)
             return -EAGAIN;
         }
         entry->sock->remote_port = SC_BE16(sa + 2);
-        entry->sock->remote_ip = canonical_dst_ip(SC_BE32(sa + 4));
+        entry->sock->remote_ip = SC_BE32(sa + 4);
         entry->sock->connected = 1;
         net_unlock(held);
         return 0;
@@ -1136,7 +1133,7 @@ static int32_t do_connect(int fd, uint32_t sa_ptr, int addrlen)
     }
 
     dst_port = SC_BE16(sa + 2);
-    dst_ip = canonical_dst_ip(SC_BE32(sa + 4));
+    dst_ip = SC_BE32(sa + 4);
 
     {
         /* Verbatim: the refusal a closed port earns comes from the handshake,
@@ -1364,9 +1361,11 @@ static int32_t do_recv(int fd, uint32_t buf_ptr, int len, int flags)
 }
 
 /**
- * Report the TCP control block's local address, or the primary IPv4 address
- * without a control block. Packet sockets report their binding's interface;
- * an unbound socket or an all-interface binding has index zero and no MAC.
+ * Report the local address: a TCP control block's, else the address the
+ * socket bound, except that a connected datagram socket bound to any address
+ * reports the one its datagrams leave from, as Linux does. Packet sockets
+ * report their binding's interface; an unbound socket or an all-interface
+ * binding has index zero and no MAC.
  */
 static int32_t do_getsockname(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
 {
@@ -1421,7 +1420,13 @@ static int32_t do_getsockname(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
         return 0;
     }
     flags = net_lock();
-    local_ip = entry->sock->tcb ? entry->sock->tcb->local_ip : net_ip_addr;
+    if (entry->sock->tcb) {
+        local_ip = entry->sock->tcb->local_ip;
+    } else if (entry->sock->local_ip == 0 && entry->sock->connected) {
+        local_ip = ip_source(entry->sock->remote_ip);
+    } else {
+        local_ip = entry->sock->local_ip;
+    }
     net_unlock(flags);
     return copy_sockaddr_to_user(sa_ptr, salen_ptr, entry->sock->local_port, local_ip);
 }
@@ -2177,7 +2182,7 @@ static int32_t socket_dispatch(int call, uint32_t *args)
         if (args[2] < 1 || args[2] > 255) {
             return -EINVAL;
         }
-        rc = icmp_ping_data(canonical_dst_ip(args[0]), args[1], (uint8_t)args[2], &got);
+        rc = icmp_ping_data(args[0], args[1], (uint8_t)args[2], &got);
         return rc < 0 ? rc : (int32_t)got;
     }
     case SC_CONNECT:

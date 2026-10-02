@@ -1222,7 +1222,7 @@ static int diag_tcp(struct nl_build *b, uint32_t wanted, uint8_t ext)
         d.retrans = (uint8_t)(rows[i].retransmits > 255 ? 255 : rows[i].retransmits);
         d.sport = rows[i].local_port;
         d.dport = rows[i].remote_port;
-        d.src = d.state == DIAG_LISTEN ? 0 : rows[i].local_ip;
+        d.src = rows[i].local_ip;
         d.dst = rows[i].remote_ip;
         d.rqueue = rows[i].rxq;
         d.wqueue = d.state == DIAG_LISTEN ? rows[i].backlog : rows[i].txq;
@@ -1266,6 +1266,7 @@ static int diag_dgram(struct nl_build *b, int type, uint32_t wanted)
         if (type == SOCK_RAW && d.sport == 0) {
             d.sport = IPPROTO_RAW; /* the ioctl descriptor is opened with it */
         }
+        d.src = rows[i].local_ip;
         d.dport = rows[i].connected ? rows[i].remote_port : 0;
         d.dst = rows[i].connected ? rows[i].remote_ip : 0;
         d.rqueue = rows[i].rxq;

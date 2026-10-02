@@ -267,27 +267,16 @@ void klog(int level, const char *subsystem, const char *format, ...)
     (void)format;
 }
 
-/* The interface layer, as this test presents it: one interface holding the
- * machine's address, which is what every case here is written against. */
-static struct netdev the_iface;
-
-struct netdev *netdev_route(uint32_t dst, uint32_t *via)
+/* The machine's addresses, as this test presents them: one interface's,
+ * which is what every case here is written against, and 127/8. */
+int ip_is_local(uint32_t ip)
 {
-    (void)dst;
-    *via = dst;
-    the_iface.ip = net_ip_addr;
-    return &the_iface;
+    return ip != 0 && (ip == net_ip_addr || (ip & 0xFF000000u) == 0x7F000000u);
 }
 
-int netdev_owns(uint32_t ip)
+uint32_t ip_source(uint32_t dst)
 {
-    return ip != 0 && ip == net_ip_addr;
-}
-
-uint32_t netdev_source(const struct netdev *nd, uint32_t hop)
-{
-    (void)hop;
-    return nd->ip;
+    return (dst & 0xFF000000u) == 0x7F000000u ? 0x7F000001u : net_ip_addr;
 }
 
 int ip_tx_from(uint32_t src, uint32_t dst, uint8_t proto, const uint8_t *payload, uint16_t len,
@@ -617,13 +606,13 @@ static void path_mtu_row(void)
     n_segs = 0;
     CHECK("it sends 4000 bytes", tcp_send(&sock, bytes, (int)sizeof(bytes)) == 4000);
     CHECK("in segments of 1460", n_segs >= 1 && segs[0].len - TCP_HDR_SIZE == TCP_MSS);
-    tcp_path_mtu(PEER, lport, 89, iss + 1 + 8000u, 1480);
+    tcp_path_mtu(net_ip_addr, PEER, lport, 89, iss + 1 + 8000u, 1480);
     CHECK("a report for a sequence number not in flight changes nothing",
           sock.tcb->snd_mss == TCP_MSS);
-    tcp_path_mtu(PEER, lport, 89, iss + 1, 1600);
+    tcp_path_mtu(net_ip_addr, PEER, lport, 89, iss + 1, 1600);
     CHECK("a report of a larger MTU changes nothing", sock.tcb->snd_mss == TCP_MSS);
     n_segs = 0;
-    tcp_path_mtu(PEER, lport, 89, iss + 1, 1480);
+    tcp_path_mtu(net_ip_addr, PEER, lport, 89, iss + 1, 1480);
     CHECK("a report for a segment in flight shrinks the segments to the link",
           sock.tcb->snd_mss == 1440);
     CHECK("and sends the oldest again at that size", n_segs >= 1 &&

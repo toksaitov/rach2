@@ -5849,3 +5849,14 @@ old
 new
     return q > PIT_LOST_MAX ? PIT_LOST_MAX : q;
 end
+
+fault listener-any-address
+probe loopprobe
+file rach2/sys/network/tcp/tcp.c
+expect LOOPPROBE FAIL (a listener bound to 127.0.0.1 took a connection to the interface address)
+old
+        if (t->local_ip == 0)
+            any = t;
+new
+        any = t;
+end
