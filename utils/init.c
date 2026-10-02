@@ -132,6 +132,14 @@ static const char *const Shell_Arg0[] = {"-sh", "-ish", 0};
  */
 #define BUSYBOX_PROGRAM "/bin/busybox"
 #define SYSLOG_FILE     "/var/log/messages"
+
+/*
+ * cronie's cron daemon, which the GNU system's root has and no other image:
+ * init runs it in the foreground where the image has `CRON_PROGRAM`. It
+ * logs to the system log, where it also sends what a job prints, since no
+ * image has a mail transfer agent.
+ */
+#define CRON_PROGRAM "/usr/sbin/crond"
 #endif
 
 #ifdef INIT_CONSOLE_LOGIN
@@ -1388,6 +1396,42 @@ static pid_t spawn_syslog(void)
 }
 
 /**
+ * Fork the cron daemon (`CRON_PROGRAM`) in the foreground and return its pid
+ * (-1 on failure), its own messages on the service log, with the shutdown
+ * signals blocked across the fork as for the SSH server (`spawn_sshd`).
+ */
+static pid_t spawn_cron(void)
+{
+    sigset_t saved;
+    pid_t pid;
+
+    if (shutdown_block(&saved) != 0) {
+        return -1;
+    }
+    pid = fork();
+    if (pid != 0) {
+        (void)sigprocmask(SIG_SETMASK, &saved, NULL);
+        return pid; /* init (the parent), or -1 if fork failed */
+    }
+    if (shutdown_defaults(&saved) != 0) {
+        _exit(126);
+    }
+    service_output();
+    {
+        static const char msg[] = "init: cannot exec " CRON_PROGRAM "\n";
+        char *argv[3];
+
+        argv[0] = (char *)CRON_PROGRAM;
+        argv[1] = (char *)"-n";
+        argv[2] = 0;
+        execve(CRON_PROGRAM, argv, environ);
+        (void)write(STDERR_FILENO, msg, sizeof(msg) - 1);
+    }
+    _exit(127);
+    return -1; /* unreachable; quiets the compiler */
+}
+
+/**
  * Whether this image runs D-Bus's system bus: when it has `DBUS_PROGRAM`
  * and the user `DBUS_USER`, whose ids go in `bus_uid` and `bus_gid`. An
  * image with the program and not the user is reported once.
@@ -1416,29 +1460,52 @@ struct service {
     time_t spawned;
 };
 
+/* The services, and whether the image has the bus and the cron daemon,
+ * which `services_found` decides at boot. */
+struct services {
+    struct service log, sshd, bus, cron;
+    int bus_wanted, cron_wanted;
+};
+
+/**
+ * Find which of the optional services this image runs: D-Bus's system bus
+ * (`bus_user`) and the cron daemon, where the image has `CRON_PROGRAM`.
+ */
+static void services_found(struct services *s)
+{
+    memset(s, 0, sizeof(*s));
+    s->log.pid = s->sshd.pid = s->bus.pid = s->cron.pid = -1;
+    s->bus_wanted = bus_user();
+    s->cron_wanted = access(CRON_PROGRAM, X_OK) == 0;
+}
+
 /**
  * Start each service that is not running: the system log, the SSH server
- * where `anyone_to_let_in` allows one, reported on the console, and D-Bus's
- * system bus where `bus_wanted`. A failed fork is left for the next turn.
+ * where `anyone_to_let_in` allows one, reported on the console, D-Bus's
+ * system bus and the cron daemon where the image has them. A failed fork is
+ * left for the next turn.
  */
-static void start_services(struct service *log, struct service *sshd, struct service *bus,
-                           int bus_wanted)
+static void start_services(struct services *s)
 {
-    if (log->pid < 0) {
-        log->pid = spawn_syslog();
-        log->spawned = time(0);
+    if (s->log.pid < 0) {
+        s->log.pid = spawn_syslog();
+        s->log.spawned = time(0);
     }
-    if (sshd->pid < 0 && anyone_to_let_in()) {
-        sshd->pid = spawn_sshd();
-        if (sshd->pid >= 0) {
-            sshd->spawned = time(0);
-            printf("init: sshd: started as pid %ld\n", (long)sshd->pid);
+    if (s->sshd.pid < 0 && anyone_to_let_in()) {
+        s->sshd.pid = spawn_sshd();
+        if (s->sshd.pid >= 0) {
+            s->sshd.spawned = time(0);
+            printf("init: sshd: started as pid %ld\n", (long)s->sshd.pid);
             fflush(stdout);
         }
     }
-    if (bus->pid < 0 && bus_wanted) {
-        bus->pid = spawn_bus();
-        bus->spawned = time(0);
+    if (s->bus.pid < 0 && s->bus_wanted) {
+        s->bus.pid = spawn_bus();
+        s->bus.spawned = time(0);
+    }
+    if (s->cron.pid < 0 && s->cron_wanted) {
+        s->cron.pid = spawn_cron();
+        s->cron.spawned = time(0);
     }
 }
 
@@ -1675,10 +1742,10 @@ static void apply_limits(void)
  * (a full process table) is retried after a second so the loop does not spin;
  * `/bin/update`; and on the metal builds the network, once, after the console
  * session and before the SSH server that needs it, then the server wherever
- * `anyone_to_let_in` allows one, and D-Bus's system bus where the image has
- * it (`bus_user`). A failed fork of a service or of `update` is left for the
- * next turn, so the loop keeps reaping the orphans that filled the process
- * table.
+ * `anyone_to_let_in` allows one, and D-Bus's system bus and the cron daemon
+ * where the image has them (`services_found`). A failed fork of a service or
+ * of `update` is left for the next turn, so the loop keeps reaping the
+ * orphans that filled the process table.
  *
  * The wait is a poll, `waitpid` with `WNOHANG` and a second's sleep when no
  * child has changed, because init must also bound the service log while its
@@ -1689,7 +1756,7 @@ static void apply_limits(void)
  * `^Z` at the console prompt stops the session, and there is no shell above it
  * to type `fg`.
  *
- * A console session, SSH server or bus that dies within two seconds of its
+ * A console session or a service that dies within two seconds of its
  * start has a permanent reason (a missing or crashing binary, no entropy for
  * the host key, no network, a port already taken), and is respawned only after
  * a pause, so the loop does not spin; an interactive session outlives that
@@ -1701,11 +1768,8 @@ int main(void)
     pid_t updater = -1;
     time_t spawned = 0;
 #ifdef INIT_METAL
-    struct service log = {-1, 0};
-    struct service sshd = {-1, 0};
-    struct service bus = {-1, 0};
+    struct services services;
     int network_done = 0;
-    int bus_wanted;
 #endif
     unsigned turns = 0;
 
@@ -1724,7 +1788,7 @@ int main(void)
     if (boot_line_has("rach2.fsck")) {
         check_ext2_partitions();
     }
-    bus_wanted = bus_user();
+    services_found(&services);
 #endif
 
     for (;;) {
@@ -1751,7 +1815,7 @@ int main(void)
             }
         }
 
-        start_services(&log, &sshd, &bus, bus_wanted);
+        start_services(&services);
 #endif
 
         if (++turns >= SERVICE_LOG_CHECK_TURNS) {
@@ -1776,8 +1840,8 @@ int main(void)
             continue;
         }
 #ifdef INIT_METAL
-        if (service_ended(&log, reaped) || service_ended(&sshd, reaped) ||
-            service_ended(&bus, reaped)) {
+        if (service_ended(&services.log, reaped) || service_ended(&services.sshd, reaped) ||
+            service_ended(&services.bus, reaped) || service_ended(&services.cron, reaped)) {
             continue;
         }
 #endif

@@ -332,6 +332,167 @@ row_file() {
     has "the program's type" "$OUT" "application/x-"
 }
 
+# pkg-config answers for the root's libraries with the flags a build needs.
+row_pkgconf() {
+    same "a library's flags" "$(pkg-config --libs zlib)" "-lz"
+    has "the version" "$(pkg-config --version)" "2.5.1"
+}
+
+# procps-ng's programs read the processes and the memory from /proc: ps and
+# pgrep take the options BusyBox's lack, and the rest print what they must.
+row_procps() {
+    same "ps -p" "$(ps -p 1 -o pid=,comm= | tr -s ' ')" " 1 init"
+    has "ps -u" "$(ps -u root -o comm=)" "sshd"
+    same "pgrep -u" "$(pgrep -u root -x sshd | wc -l)" "1"
+    has "pgrep -c" "$(pgrep -c -x sshd)" "1"
+    has "uptime -p" "$(uptime -p)" "up "
+    has "free" "$(free -k)" "Mem:"
+    same "vmstat" "$(vmstat 1 2 | wc -l)" "4"
+    has "w" "$(w)" "load average:"
+    same "kill -l" "$(kill -l 15)" "TERM"
+    same "sysctl" "$(sysctl -n kernel.hostname)" "$(cat /proc/sys/kernel/hostname)"
+    has "pmap" "$(pmap $$ | tail -n 1)" "total"
+}
+
+# util-linux's programs: the disks and mounts from /sys and /proc, a lock
+# taken and waited for, the limits and the I/O class of a process, the login
+# history, and the formatting and terminal tools jq's tests and scripts use.
+row_utillinux() {
+    local pid
+    has "lsblk" "$(lsblk -dno NAME,TYPE)" "disk"
+    same "findmnt" "$(findmnt -no FSTYPE /)" "ext2"
+    flock "$WORK/lock" sleep 5 &
+    pid=$!
+    sleep 1
+    flock -w 1 "$WORK/lock" true
+    same "flock -w on a held lock" "$?" "1"
+    wait "$pid"
+    runs "flock on a free lock" flock -w 1 "$WORK/lock" true
+    has "prlimit" "$(prlimit --pid $$ --nofile)" "NOFILE"
+    same "ionice" "$(ionice -c 2 -n 5 ionice)" "best-effort: prio 5"
+    has "last" "$(last -n 1 root)" "root"
+    same "column -t" "$(printf 'a b\nccc d\n' | column -t)" "$(printf 'a    b\nccc  d')"
+    script -q -e -c 'exit 3' /dev/null
+    same "script -e's status" "$?" "3"
+    same "uuidgen" "$(uuidgen | grep -cE '^[0-9a-f]{8}-([0-9a-f]{4}-){3}[0-9a-f]{12}$')" "1"
+    has "dmesg" "$(dmesg | head -n 1)" "]"
+    same "newgrp's mode" "$(stat -c '%a %U' /usr/bin/newgrp)" "4755 root"
+}
+
+# zstd compresses and decompresses, in its own format and in gzip's, and
+# tar calls it for --zstd.
+row_zstd() {
+    seq 1 1000 > "$WORK/in"
+    same "a round trip" "$(zstd -c "$WORK/in" | zstd -dc | cksum)" "$(cksum < "$WORK/in")"
+    same "gzip's format" "$(zstd -c --format=gzip "$WORK/in" | gzip -dc | cksum)" "$(cksum < "$WORK/in")"
+    mkdir "$WORK/dir"
+    cp "$WORK/in" "$WORK/dir/in"
+    runs "tar --zstd" tar --zstd -cf "$WORK/t.tar.zst" -C "$WORK" dir
+    same "tar --zstd -t" "$(tar --zstd -tf "$WORK/t.tar.zst" | sort | tr '\n' ' ')" "dir/ dir/in "
+    has "the version" "$(zstd --version)" "v1.5.7"
+}
+
+# rsync copies a tree, then only what changed, and deletes what the source
+# no longer has; and over SSH to the machine's own server.
+row_rsync() {
+    local rsh="ssh -i $WORK/id -o BatchMode=yes -o StrictHostKeyChecking=no -o LogLevel=ERROR -o UserKnownHostsFile=$WORK/known"
+    mkdir -p "$WORK/src/d"
+    seq 1 1000 > "$WORK/src/d/a"
+    printf 'b\n' > "$WORK/src/b"
+    runs "rsync -a" rsync -a "$WORK/src/" "$WORK/dst/"
+    runs "the copy" diff -r "$WORK/src" "$WORK/dst"
+    printf 'c\n' > "$WORK/src/c"
+    rm "$WORK/src/b"
+    output "rsync -a --delete" rsync -ai --delete "$WORK/src/" "$WORK/dst/"
+    same "what changed" "$(printf '%s\n' "$OUT" | awk '$2 != "./" { print $2 }' | sort | tr '\n' ' ')" \
+        "b c "
+    runs "ssh-keygen" ssh-keygen -q -t ed25519 -N '' -f "$WORK/id"
+    cat "$WORK/id.pub" >> /root/.ssh/authorized_keys
+    runs "rsync over ssh" rsync -a -e "$rsh" "$WORK/src/" "root@127.0.0.1:$WORK/remote/"
+    runs "the copy over ssh" diff -r "$WORK/src" "$WORK/remote"
+    has "the version" "$(rsync --version | head -n 1)" "version 3.5.1"
+}
+
+# nano edits a file on a terminal script gives it: the text typed, then
+# ^X, which with -t saves the file without asking.
+row_nano() {
+    printf 'hello nano\030' | script -q -c "nano -t $WORK/n.txt" /dev/null > /dev/null
+    same "the file nano saved" "$(cat "$WORK/n.txt" 2>&1)" "hello nano"
+    has "the syntax files /etc/nanorc includes" "$(grep -c '^include' /etc/nanorc)" "1"
+    has "the version" "$(nano --version | head -n 1)" "9.2"
+}
+
+# makeinfo turns a Texinfo file into an Info file, and info reads a node of
+# it and a node of a manual the root has.
+row_texinfo() {
+    printf '\\input texinfo\n@setfilename t.info\n@settitle T\n@node Top\n@top T\n\nTexinfo row.\n@bye\n' \
+        > "$WORK/t.texi"
+    runs "makeinfo" makeinfo -o "$WORK/t.info" "$WORK/t.texi"
+    has "info" "$(info -o - -f "$WORK/t.info" 2>&1)" "Texinfo row."
+    has "a manual of the root" "$(info -o - sed 'Invoking sed' 2>&1 | head -n 5)" "sed"
+    has "the version" "$(info --version | head -n 1)" "7.3"
+}
+
+# strace traces a program's calls, and a child's with -f.
+row_strace() {
+    output "strace" strace -f -e trace=write,execve -o "$WORK/log" \
+        bash -c 'echo strace row; /usr/bin/true; echo done'
+    has "the write" "$(tr -s ' ' < "$WORK/log")" 'write(1, "strace row\n", 11) = 11'
+    has "the child's execve" "$(cat "$WORK/log")" 'execve("/usr/bin/true"'
+    has "strace -c" "$(strace -c -o /dev/stdout true 2>&1)" "total"
+}
+
+# lsof lists a process's open file and the server's listening socket.
+row_lsof() {
+    local pid
+    : > "$WORK/held"
+    sleep 30 3< "$WORK/held" &
+    pid=$!
+    sleep 1
+    has "lsof -p" "$(lsof -p "$pid" 2>&1)" "$WORK/held"
+    has "lsof -i" "$(lsof -nP -i TCP:22 -s TCP:LISTEN 2>&1)" "sshd"
+    kill "$pid"
+}
+
+# tmux runs a command in a detached session, and the pane shows what it
+# printed.
+row_tmux() {
+    runs "tmux new-session" tmux new-session -d -s row -x 80 -y 24 'echo tmux row; sleep 30'
+    sleep 1
+    has "the pane" "$(tmux capture-pane -p -t row)" "tmux row"
+    runs "tmux kill-server" tmux kill-server
+}
+
+# cron runs a user's crontab: crontab, set-id to its group, installs the
+# test account's into the spool, and the daemon init started runs its job
+# at the next minute.
+row_cron() {
+    local i=0
+    same "the daemon" "$(pgrep -x crond | wc -l)" "1"
+    rm -f /tmp/cron-row.out
+    echo '* * * * * echo cron row > /tmp/cron-row.out' | su test -c 'crontab -'
+    same "the crontab" "$(su test -c 'crontab -l')" "* * * * * echo cron row > /tmp/cron-row.out"
+    same "its owner" "$(stat -c '%U %G' /var/spool/cron/crontabs/test)" "test crontab"
+    until [ -s /tmp/cron-row.out ] || [ $i -ge 70 ]; do
+        sleep 1
+        i=$((i + 1))
+    done
+    same "the job's output" "$(cat /tmp/cron-row.out 2>&1)" "cron row"
+    su test -c 'crontab -r'
+}
+
+# zip makes an archive of a tree, and unzip lists it and extracts it.
+row_zip() {
+    mkdir -p "$WORK/z/d"
+    seq 1 1000 > "$WORK/z/d/a"
+    (cd "$WORK" && zip -qr z.zip z) || fail "zip: status $?"
+    has "unzip -l" "$(unzip -l "$WORK/z.zip")" "z/d/a"
+    runs "unzip" unzip -q "$WORK/z.zip" -d "$WORK/unz"
+    runs "the extracted tree" diff -r "$WORK/z" "$WORK/unz/z"
+    has "zipinfo" "$(zipinfo -1 "$WORK/z.zip")" "z/d/a"
+    has "the version" "$(zip -v | head -n 2)" "Zip 3.0"
+}
+
 # An autoconf package built on the machine as a user builds one: GNU sed's
 # configure, which takes the build's name from the root's site file, since
 # config.guess knows no system called Rach2, then make, and the sed it made.

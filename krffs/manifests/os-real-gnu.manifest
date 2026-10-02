@@ -29,6 +29,9 @@
 # * /etc/hosts is a machine's, as the metal disk has it, since this root is
 #   installed on the Lenovo; QEMU's gateway and resolver are reached by
 #   address.
+# * The two programs of the ports that are set-id on Debian, util-linux's
+#   newgrp and cronie's crontab, with the group `crontab` and the crontabs'
+#   directory under /var/spool/cron.
 # * glibc's own files: /etc/nsswitch.conf, and /etc/ld.so.conf, from which
 #   install_root.sh writes /etc/ld.so.cache.
 
@@ -91,7 +94,10 @@ text 0644 /etc/os-release NAME="Rach2"\nPRETTY_NAME="Rach2 1.0.0 with the GNU sy
 # is below the 100 from which BusyBox's adduser gives out system accounts.
 text 0644 /etc/passwd root:x:0:0:root:/root:/bin/bash\ntest:x:1000:1000:test:/home/test:/bin/bash\nsshd:x:74:74::/var/empty:/usr/bin/false\nmessagebus:x:81:81::/nonexistent:/usr/bin/false\nnobody:x:65534:65534:nobody:/nonexistent:/usr/bin/false\n
 file 0600 /etc/shadow krffs/shadow
-text 0644 /etc/group root:x:0:\ntest:x:1000:\nsshd:x:74:\nmessagebus:x:81:\nnogroup:x:65534:\n
+# `crontab` is the group crontab(1) runs as, which may write the crontabs'
+# directory; 63 is below the system accounts' 100, and no Debian group has
+# that number.
+text 0644 /etc/group root:x:0:\ntest:x:1000:\nsshd:x:74:\nmessagebus:x:81:\ncrontab:x:63:\nnogroup:x:65534:\n
 text 0644 /etc/shells /bin/sh\n/bin/bash\n
 dir 0755 /etc/rach2
 text 0644 /etc/rach2/limits # The limits every session starts with: a name, the soft value and the\n# hard one; unlimited for none. Root may raise them.\nnproc 256 512\nnofile 1024 1024\nas unlimited unlimited\n
@@ -125,8 +131,21 @@ dir 0755 /var
 dir 0755 /var/empty
 dir 0755 /var/log
 dir 0755 /var/run
+# The crontabs, which crontab(1) writes as the group `crontab` and cron
+# reads as root. The sticky bit keeps a user from removing another's
+# crontab, and nobody else may list the directory, as on Debian.
+dir 0755 /var/spool
+dir 0755 /var/spool/cron
+dir 01730:0:63 /var/spool/cron/crontabs
 
 dir 0755 /usr
+# The set-id programs of the ports. install_root.sh installs the rest of the
+# GNU system, and what it adds has no set-id bit, so these two come from
+# build/vendor/gnu/setid, where their recipes leave them: newgrp, set-id
+# root, which changes a session's group, and crontab, set-id to `crontab`.
+dir 0755 /usr/bin
+file 04755:0:0 /usr/bin/newgrp build/vendor/gnu/setid/newgrp
+file 02755:0:63 /usr/bin/crontab build/vendor/gnu/setid/crontab
 dir 0755 /usr/share
 dir 0755 /usr/share/udhcpc
 file 0755 /usr/share/udhcpc/default.script krffs/udhcpc-default.script

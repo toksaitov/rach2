@@ -14,9 +14,12 @@
 # locales, zlib, OpenSSL with the CA bundle, OpenSSH's clients against the
 # machine's own server, ncurses, less, Vim, Perl, curl over TLS, Git, coreutils,
 # bash, grep, sed, gawk, findutils, diffutils, patch, tar, gzip, xz and file;
-# GNU make building a small project; GNU sed configured with autoconf's
-# configure, which reads the root's site file, and made; GCC and G++ compiling
-# and linking a C and a C++ program that run; GDB stopping at a breakpoint,
+# pkg-config; procps-ng's and util-linux's programs; zstd; rsync locally and
+# over SSH; nano editing a file on a terminal; Texinfo's makeinfo and info;
+# strace; lsof; tmux; cron running a user's crontab; zip and unzip; GNU make
+# building a small project; GNU sed configured with autoconf's configure,
+# which reads the root's site file, and made; GCC and G++ compiling and
+# linking a C and a C++ program that run; GDB stopping at a breakpoint,
 # stepping, printing a variable and a backtrace; the SpiderMonkey shell running
 # a script in its JIT; D-Bus's system bus and a login's session bus answering a
 # call; and chromium-headless-shell printing the DOM of a local page with no
@@ -215,6 +218,8 @@ ROWS="names:120 glibc:120 zlib:120 openssl:180 openssh:600 ncurses:120 less:120
 vim:120 perl:180 curl:600 git:300 coreutils:120 bash:120 grep:120 sed:120
 gawk:120 findutils:120 diffutils:120 patch:120 tar:120 gzip:120 xz:120 file:120 iproute2:120
 loopctl:120
+pkgconf:120 procps:120 utillinux:120 zstd:120 rsync:300 nano:120 texinfo:120 strace:120 lsof:120
+tmux:120 cron:180 zip:120
 make:600 autotools:900 gcc:900 gdb:600 js:600 dbus:120 chromium:1200"
 FAILED=""
 TOTAL=0

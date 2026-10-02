@@ -71,6 +71,13 @@ capabilities or none; see
 An image with the program and no such user reports
 .Ql init: dbus: no user messagebus
 at boot and runs no bus.
+Where the image has
+.Pa /usr/sbin/crond ,
+as the GNU system's root does, it supervises cronie's cron daemon, run as
+.Ql crond -n ,
+which logs to the system log and sends it what a job prints, since no
+image has a mail transfer agent; see
+.Xr cron 8 .
 On a boot with
 .Ql rach2.ip=none ,
 it runs BusyBox's
@@ -195,6 +202,8 @@ Service output and diagnostics.
 The machine's identity, made at the first boot of the GNU system's root.
 .It Pa /usr/bin/dbus-daemon
 D-Bus's system bus, which the metal build runs where the image has it.
+.It Pa /usr/sbin/crond
+The cron daemon, which the metal build runs where the image has it.
 .It Pa /var/run
 Entries cleared at boot, with the entries of its directories, which are
 then removed; a directory deeper than that is reported if it is not empty.
@@ -206,6 +215,15 @@ The login records: OpenSSH's server on the GNU system's root adds a
 session's record, which
 .Xr who 1
 reads; the musl programs keep none.
+.It Pa /var/log/wtmp , Pa /var/log/btmp
+The history of logins and of failed ones, which OpenSSH's server adds to
+and util-linux's
+.Xr last 1
+and
+.Xr lastb 1
+read on the GNU system's root.
+init makes each at boot when it is missing, the first with mode 0664 and
+the second with 0600, and keeps what they have.
 .El
 .Sh DIAGNOSTICS
 The recovery file system check reports its status as:

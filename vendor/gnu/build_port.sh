@@ -14,7 +14,14 @@
 # by autoconf in a directory of its own, compiled, and installed. A port
 # built another way defines port_build, which runs in that directory, and
 # port_install, which installs into $DEST. SOURCE is the name of the port's
-# tarball in sources.txt when it is not NAME, and empty for a port with none.
+# tarball in sources.txt when it is not NAME, and empty for a port with none;
+# SOURCE_DIR is the directory the tarball makes when that is not
+# SOURCE-VERSION. DEBIAN names a Debian packaging tarball in sources.txt,
+# whose debian/patches/series is applied after PATCHES, as Debian's quilt
+# applies it, for an upstream that makes no more releases and whose fixes
+# are Debian's. A program that must be set-id is moved by its port_install
+# out of the stage into build/vendor/gnu/setid, from which the image's
+# manifest installs it with its bit.
 #
 # The compilers run with the root, build/vendor/gnu/root, as their sysroot,
 # and pkg-config reads only the root's files, so a port finds what the ports
@@ -25,11 +32,13 @@
 # once the files the port's last list has and the new one has not are
 # removed from the root, so a build that installs less leaves nothing old. A
 # port is built for another's DEPENDS only when it has no such list, and
-# every port depends on the runtime, the toolchain's glibc. --all builds
-# every recipe into an empty root. Programs link with the shared libraries;
-# GNU_LINK=static links the ports configured by autoconf statically instead,
-# and gives make -all-static in a port with libtool, which reads -static as
-# "no uninstalled shared libraries" and links the C library shared.
+# every port depends on the runtime, the toolchain's glibc, and on pkgconf,
+# whose copy for the build host answers configure's questions about the
+# root's libraries. --all builds every recipe into an empty root. Programs
+# link with the shared libraries; GNU_LINK=static links the ports configured
+# by autoconf statically instead, and gives make -all-static in a port with
+# libtool, which reads -static as "no uninstalled shared libraries" and
+# links the C library shared.
 # Under make, the makes a port runs share the caller's jobs; run alone, the
 # script gives each as many jobs as there are processors.
 #
@@ -107,6 +116,7 @@ libtool_static()
 depends()
 {
     [ "$1" = runtime ] || echo runtime
+    [ "$1" = runtime ] || [ "$1" = pkgconf ] || echo pkgconf
     (
         DEPENDS=
         # shellcheck source=/dev/null
@@ -143,6 +153,8 @@ build()
     PATCHES=
     PATCH_STRIP=1
     SOURCE=$name
+    SOURCE_DIR=
+    DEBIAN=
     port_build()
     {
         configure_autoconf
@@ -161,7 +173,7 @@ build()
     SRC=
     if [ -n "$SOURCE" ]; then
         tarball="$("$DIR/fetch.sh" --path "$SOURCE")"
-        SRC="$OUT/src/$SOURCE-$VERSION"
+        SRC="$OUT/src/${SOURCE_DIR:-$SOURCE-$VERSION}"
         mkdir -p "$OUT/src"
         rm -rf "$SRC"
         tar -xf "$tarball" -C "$OUT/src"
@@ -169,6 +181,13 @@ build()
             patch -d "$SRC" -p"$PATCH_STRIP" -F 0 --forward --silent \
                 <"$("$DIR/fetch.sh" --path "$p")"
         done
+        if [ -n "$DEBIAN" ]; then
+            rm -rf "$SRC/debian"
+            tar -xf "$("$DIR/fetch.sh" --path "$DEBIAN")" -C "$SRC"
+            grep -v '^#' "$SRC/debian/patches/series" | while read -r p _; do
+                [ -z "$p" ] || patch -d "$SRC" -p1 -F 0 --forward --silent <"$SRC/debian/patches/$p"
+            done
+        fi
     fi
     WORK="$OUT/work/port-$name"
     DEST="$STAGE/$name"
@@ -205,7 +224,7 @@ build()
 }
 
 if [ "$1" = --all ]; then
-    rm -rf "$ROOT" "$STAGE"
+    rm -rf "$ROOT" "$STAGE" "$OUT/setid" "$OUT/host" "$WRAP/$TARGET-pkg-config"
     all=
     for f in "$DIR"/ports/*.sh; do
         all="$all $(basename "$f" .sh)"

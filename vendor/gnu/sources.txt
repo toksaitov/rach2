@@ -6,7 +6,8 @@
 #
 # * GNU projects (binutils, GCC, GMP, MPFR, MPC, glibc, coreutils, make, bash
 #   and its patches, grep, sed, gawk, findutils, diffutils, patch, tar, gzip,
-#   ncurses and GDB): the GNU keyring, ftp.gnu.org/gnu/gnu-keyring.gpg.
+#   ncurses, GDB, nano and Texinfo): the GNU keyring,
+#   ftp.gnu.org/gnu/gnu-keyring.gpg.
 # * Linux: the kernel.org release keys.
 # * Git and its manual pages: Junio C Hamano's key,
 #   96E07AF25771955980DAD10020D04E5A713660A7, which signs the uncompressed tar.
@@ -38,6 +39,34 @@
 #   Christian Brabandt's key, 4F19708816918E19AAE19DEEF3F92DA383FDDE09, and
 #   the archive decompresses to the same bytes as `git archive` makes from
 #   the verified tag. No package recipe had recorded the archive's digest.
+# * util-linux: Karel Zak's key, B0C64D14301CC6EFAEDF60E4E4B71D5EEC39C284,
+#   from kernel.org's pgpkeys repository, which signs the uncompressed tar.
+# * procps-ng: Craig Small's key, 5D2FB320B825D93904D205193938F96BDF50FEA5,
+#   his Debian developer key, through its signing subkey
+#   5D3DF0F538B327C0AA7A77A2022166C0FF3C84E3.
+# * zstd: the Zstandard release key, 4EF4AC63455FC9F4545D9B7DEF8FE99528B52FFD,
+#   which Debian's source package of libzstd pins as its upstream's.
+# * rsync: Zen Dodd's key, C0E1054505704F757D925AB26A64E8AA2EFBCF5D, through
+#   its signing subkey 8EDF88F4731A1E8B45D67FBE6909546B2C52EC2D, which
+#   Debian's source package of rsync pins.
+# * strace: Dmitry V. Levin's key, 7BECFE3AF7B280BB52FF77F104BA4521C996DDE1,
+#   through its signing subkey FB3DCD19FF874735E4F61CE64E9FE8522F160EC2,
+#   which Debian's source package of strace pins.
+# * libevent: Nick Mathewson's key, 2133BC600AB133E1D826D173FE43009C4607B1FB,
+#   through its signing subkey 7A02B3521DC75C542BA015456AFEE6D49E92B601; the
+#   digest is also the one Debian's archive gives its tarball of the release.
+# * tmux, lsof, cronie, pkgconf, zip, unzip and bzip2, whose upstreams sign
+#   nothing or whose signature was not checked: the digest is the one
+#   Debian's source index for unstable lists, whose own digest is in the
+#   release file signed with Debian's archive keys
+#   B8E5F13176D2A7A75220028078DBA3BC47EF2265 and
+#   4CB50190207B4758A3F73A796ED0E7B82643E131. The files of lsof, zip and
+#   unzip are Debian's, from its snapshot archive, whose files do not move.
+#   The release tarballs of cronie, pkgconf and bzip2 are the ones Debian
+#   has. tmux's is not: Debian's is a git archive of the tag, without the
+#   files autoconf and yacc generate, and every file the two have in common
+#   is the same, so the release's generated files are the part no signature
+#   covers.
 binutils 2.47 https://ftp.gnu.org/gnu/binutils/binutils-2.47.tar.xz 154ab23b60070e8f27013c22977f1129425d67d1e8acd6e13010e617811e4cff
 gcc 16.2.0 https://ftp.gnu.org/gnu/gcc/gcc-16.2.0/gcc-16.2.0.tar.xz e6738e29597f733270731aa90600f37ffdc045079dfc27ec7e8192cc81085c3e
 gmp 6.3.0 https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz a3c2b80201b89e68616f4ad30bc66aee4927c3ce50e33929ca819d5c43538898
@@ -94,3 +123,20 @@ pcre2 10.49 https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.49/
 tzdata 2026e https://data.iana.org/time-zones/releases/tzdata2026e.tar.gz b26882805f26aac59d5b222978e6580484b834ccdc98be89df2f05a6dc53a652
 iproute2 7.2.0 https://cdn.kernel.org/pub/linux/utils/net/iproute2/iproute2-7.2.0.tar.xz 4c2fa124c2cf0afd7ca34d1eeacba6ba048a56f6374e2aab93dafbdbd4eea9c0
 expat 2.8.5 https://github.com/libexpat/libexpat/releases/download/R_2_8_5/expat-2.8.5.tar.xz 1e727b8933ec51a77a9a9d9afcf8e688bce45d907c13e36ab7393fe36e703182
+util-linux 2.42.4 https://cdn.kernel.org/pub/linux/utils/util-linux/v2.42/util-linux-2.42.4.tar.xz fbd62a100ab7bb8746ba0661255c3c48185b1e9021507c624da01fbc696330ec
+procps-ng 4.0.7 https://downloads.sourceforge.net/project/procps-ng/Production/procps-ng-4.0.7.tar.xz 9d2021f47a4501c667862c9942a92d1953694b21d11bcd1702e83eb594e3d67d
+zstd 1.5.7 https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3
+rsync 3.5.1 https://download.samba.org/pub/rsync/src/rsync-3.5.1.tar.gz c55f9c9dc10fb8bec397b399a0fdded53cc9a2d8e30891bb0d63724d25c37bef
+nano 9.2 https://ftp.gnu.org/gnu/nano/nano-9.2.tar.xz 05ecb99247b782e8a5b3a25ed4101dd034b0236902f7449bc9795b717642f7e9
+texinfo 7.3 https://ftp.gnu.org/gnu/texinfo/texinfo-7.3.tar.xz 51f74eb0f51cfa9873b85264dfdd5d46e8957ec95b88f0fb762f63d9e164c72e
+strace 7.2 https://strace.io/files/7.2/strace-7.2.tar.xz 4bde6246926890dcee824f6e6ac42a06752f47d77e5097d86e3c0d6d4b709fe5
+libevent 2.1.13-stable https://github.com/libevent/libevent/releases/download/release-2.1.13-stable/libevent-2.1.13-stable.tar.gz f7e9383b8c0baa81b687e5b5eecc01beefaf1b19b64151d95ed61647fe7a315c
+tmux 3.7c https://github.com/tmux/tmux/releases/download/3.7c/tmux-3.7c.tar.gz 7c60cae9a0e25288e2e24750aafc9e8800fc7fd4555e447e1b29ee4201cfb3bf
+lsof 4.99.4 https://snapshot.debian.org/archive/debian/20261002T000000Z/pool/main/l/lsof/lsof_4.99.4+dfsg.orig.tar.xz dc3e7f51cf03bc7fbcdd9e62d4a52825682092031bd1ae08b15fe7f4f582aebf
+cronie 1.7.2 https://github.com/cronie-crond/cronie/releases/download/cronie-1.7.2/cronie-1.7.2.tar.gz f1da374a15ba7605cf378347f96bc8b678d3d7c0765269c8242cfe5b0789c571
+zip 3.0 https://snapshot.debian.org/archive/debian/20261002T000000Z/pool/main/z/zip/zip_3.0.orig.tar.gz f0e8bb1f9b7eb0b01285495a2699df3a4b766784c1765a8f1aeedf63c0806369
+zip-debian 3.0-16 https://snapshot.debian.org/archive/debian/20261002T000000Z/pool/main/z/zip/zip_3.0-16.debian.tar.xz fa79a0226f00f487b290489f62e1cd7f4a338df529a1e413fea4d168b8eee8f7
+unzip 6.0 https://snapshot.debian.org/archive/debian/20261002T000000Z/pool/main/u/unzip/unzip_6.0.orig.tar.gz 036d96991646d0449ed0aa952e4fbe21b476ce994abc276e49d30e686708bd37
+unzip-debian 6.0-31 https://snapshot.debian.org/archive/debian/20261002T000000Z/pool/main/u/unzip/unzip_6.0-31.debian.tar.xz d7dc23f5254c6711dc05f467e70236cfd50a7931001c6152904474b19f295c38
+pkgconf 2.5.1 https://distfiles.ariadne.space/pkgconf/pkgconf-2.5.1.tar.xz cd05c9589b9f86ecf044c10a2269822bc9eb001eced2582cfffd658b0a50c243
+bzip2 1.0.8 https://sourceware.org/pub/bzip2/bzip2-1.0.8.tar.gz ab5a03176ee106d3f0fa90e381da478ddae405918153cca248e682cd0c4a2269
