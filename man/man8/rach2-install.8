@@ -116,7 +116,11 @@ The image's system accounts, those with an ID below 1000 whose name and
 ID the new files do not have, are appended to them with their groups and
 shadow lines, so a program of the image keeps its account, as the GNU
 system's OpenSSH server keeps
-.Ql sshd .
+.Ql sshd ,
+and a system account the files have by the image's name and ID with no
+shadow line gets the image's, which
+.Xr pwck 8
+asks for.
 Create the account's home directory and install its keys.
 .It
 Write
