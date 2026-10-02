@@ -266,10 +266,11 @@ uint8_t *core_notes(int signo, uint32_t *size)
 }
 
 /** The bytes of region `r` the file has: all of a readable region, none of
- * one that is not, as Linux leaves a PROT_NONE reservation out. */
+ * one that is not, as Linux leaves a PROT_NONE reservation out, and none of
+ * device memory, which Linux leaves out too. */
 static uint32_t region_file_size(const struct core_region *r)
 {
-    return (r->prot & VM_PROT_READ) ? r->end - r->start : 0u;
+    return (r->prot & VM_PROT_READ) && !(r->prot & VM_PROT_IO) ? r->end - r->start : 0u;
 }
 
 /**

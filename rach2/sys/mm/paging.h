@@ -241,6 +241,12 @@ uintptr_t map_mmio(uintptr_t phys_addr, size_t size);
  */
 void *kmap_temp(uintptr_t phys);
 
+/** Whether the frame of the physical address `phys` is not the allocator's:
+ * past the top of memory, or one the memory map does not offer, which
+ * firmware and devices have. /dev/mem reaches these and the first
+ * megabyte, as Linux's STRICT_DEVMEM allows. */
+int paging_frame_is_device(uintptr_t phys);
+
 /** Release a mapping `kmap_temp` returned. */
 void kunmap_temp(void *va);
 

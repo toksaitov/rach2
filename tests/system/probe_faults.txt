@@ -5342,3 +5342,13 @@ new
     if (node == SYSFS_CLASS_NET) {
         struct netdev *nd = netdev_at(n + 1);
 end
+
+fault devmem-maps-ram
+probe callsmusl
+file rach2/sys/syscall_proc.c
+expect CALLSMUSL FAIL (/dev/mem gave a frame of RAM
+old
+        if (frame >= 0x100u && !paging_frame_is_device((uintptr_t)frame * PAGE_SIZE)) {
+new
+        if (frame >= 0x100u && paging_frame_is_device((uintptr_t)frame * PAGE_SIZE)) {
+end

@@ -967,6 +967,7 @@ static int procfs_gen_smaps(struct procfs_text *t, int pid)
         ap_str(t, (r->prot & VM_PROT_EXEC) ? " ex" : "");
         ap_str(t, shared ? " sh" : "");
         ap_str(t, r->type == VM_STACK ? " gd" : "");
+        ap_str(t, (r->prot & VM_PROT_IO) ? " io pf" : "");
         ap_ch(t, '\n');
     }
     return t->len;

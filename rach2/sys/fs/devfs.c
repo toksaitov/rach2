@@ -814,6 +814,78 @@ static const struct file_ops framefail_ops = {dev_eof_read, framefail_write, dev
                                               NULL};
 static const struct file_ops loopctl_ops = {dev_eof_read, loopctl_write, dev_poll, dev_ioctl, NULL};
 
+/* /dev/mem's size: the physical addresses 32 bits reach; and the first
+ * megabyte, which it reaches whoever owns it, firmware's tables among it. */
+#define DEVMEM_SIZE 0x100000000ull
+#define DEVMEM_LOW  0x100000u
+
+/*
+ * /dev/mem: the physical address space as a raw device of 4 GiB, which a
+ * privileged caller reads and writes at the description's offset, as
+ * Linux's does with STRICT_DEVMEM: firmware's frames, a device's and those
+ * past the top of memory are the caller's (`paging_frame_is_device`), and
+ * so is the first megabyte, which the kernel loaded above it leaves to
+ * firmware; another frame of RAM, which the allocator owns, is EPERM. The bytes pass through
+ * a buffer on the stack, so the temporary mapping is not held across a copy
+ * from or to the caller, which may fault.
+ */
+static int32_t dev_mem_rw(fd_entry_t *e, char __user *to, const char __user *from, uint32_t count)
+{
+    uint8_t bounce[256];
+    uint64_t off = e->ofd->raw_offset;
+    uint32_t done = 0;
+    int write = from != NULL;
+
+    if (!proc_privileged(current_proc)) {
+        return -EPERM;
+    }
+    while (done < count && off + done < DEVMEM_SIZE) {
+        uintptr_t at = (uintptr_t)(off + done);
+        uint32_t chunk = count - done;
+        uint32_t room = PAGE_SIZE - (uint32_t)(at & (PAGE_SIZE - 1u));
+        uint8_t *map;
+
+        chunk = chunk < room ? chunk : room;
+        chunk = chunk < sizeof(bounce) ? chunk : (uint32_t)sizeof(bounce);
+        if (!paging_frame_is_device(at) && at >= DEVMEM_LOW) {
+            if (done == 0) {
+                return -EPERM;
+            }
+            break;
+        }
+        if (write && copy_from_user(bounce, from + done, chunk) != 0) {
+            return done > 0 ? (int32_t)done : -EFAULT;
+        }
+        map = kmap_temp(at & ~(uintptr_t)(PAGE_SIZE - 1u));
+        if (!map) {
+            return done > 0 ? (int32_t)done : -ENOMEM;
+        }
+        if (write) {
+            k_memcpy(map + (at & (PAGE_SIZE - 1u)), bounce, chunk);
+        } else {
+            k_memcpy(bounce, map + (at & (PAGE_SIZE - 1u)), chunk);
+        }
+        kunmap_temp(map);
+        if (!write && copy_to_user(to + done, bounce, chunk) != 0) {
+            return done > 0 ? (int32_t)done : -EFAULT;
+        }
+        done += chunk;
+    }
+    e->ofd->raw_offset = off + done;
+    return (int32_t)done;
+}
+
+static int32_t dev_mem_read(fd_entry_t *e, char __user *buf, uint32_t count)
+{
+    return dev_mem_rw(e, buf, NULL, count);
+}
+
+static int32_t dev_mem_write(fd_entry_t *e, const char __user *buf, uint32_t count)
+{
+    return dev_mem_rw(e, NULL, buf, count);
+}
+
+static const struct file_ops mem_ops = {dev_mem_read, dev_mem_write, dev_poll, dev_ioctl, NULL};
 static const struct file_ops null_ops = {dev_eof_read, dev_sink_write, dev_poll, dev_ioctl, NULL};
 static const struct file_ops zero_ops = {dev_zero_read, dev_sink_write, dev_poll, dev_ioctl, NULL};
 static const struct file_ops full_ops = {dev_zero_read, dev_full_write, dev_poll, dev_ioctl, NULL};
@@ -1061,7 +1133,8 @@ static struct disk *window_disk(const struct devfs_entry *dev)
  * console and tty yield an FD_TYPE_CONSOLE descriptor (tty a pty when the
  * caller's session is on one), ptmx a new pty pair. bootpart's major is 240,
  * the local/experimental block, minor 0. */
-static const struct devfs_entry dev_table[] = {{"null", 1, 3, 1, 0666, &null_ops},
+static const struct devfs_entry dev_table[] = {{"mem", 1, 1, 0, 0640, &mem_ops},
+                                               {"null", 1, 3, 1, 0666, &null_ops},
                                                {"zero", 1, 5, 1, 0666, &zero_ops},
                                                {"full", 1, 7, 1, 0666, &full_ops},
                                                {"random", 1, 8, 0, 0666, &rand_ops},
@@ -1920,7 +1993,8 @@ int devfs_fd_is_raw(struct fd_entry *e)
         return 0;
     }
     dev = e->dev;
-    return dev->ops == &bootpart_ops || dev->ops == &grubcore_ops || dev->ops == &diskwin_ops;
+    return dev->ops == &bootpart_ops || dev->ops == &grubcore_ops || dev->ops == &diskwin_ops ||
+           dev->ops == &mem_ops;
 }
 
 int devfs_fd_raw_size(struct fd_entry *e, uint64_t *size)
@@ -1932,6 +2006,12 @@ int devfs_fd_raw_size(struct fd_entry *e, uint64_t *size)
         return 0;
     }
     dev = e->dev;
+    if (dev->ops == &mem_ops) {
+        if (size) {
+            *size = DEVMEM_SIZE;
+        }
+        return 1;
+    }
     w = raw_window_of(dev);
     if (!w || !w->present) {
         return 0;

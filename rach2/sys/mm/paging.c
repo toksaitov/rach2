@@ -579,6 +579,9 @@ static int vm_resolve_once(struct mm *mm, uint32_t addr, int write, uint32_t as_
         if (pte_present(dir, addr)) {
             return !write || pte_writable(dir, addr) ? 1 : cow_fault(dir, addr);
         }
+        if (vma->prot & VM_PROT_IO) {
+            return 0;
+        }
         if (vma->file) {
             return vma->type == VM_SHARED ? shared_fault(dir, vm, vma, addr)
                                           : file_fault(dir, vm, vma, addr);
@@ -827,7 +830,7 @@ static int access_page(struct mm *mm, uint32_t addr, uint8_t *p, uint32_t len, i
     }
     vma = vm_find(&mm->vm, addr);
     if (vma == NULL || !(vma->prot & (VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXEC)) ||
-        !pte_present(mm->dir, addr)) {
+        (vma->prot & VM_PROT_IO) || !pte_present(mm->dir, addr)) {
         return -EIO;
     }
     if (write && (vma->type == VM_SHARED
@@ -1166,6 +1169,13 @@ uintptr_t alloc_frame(void)
 void free_frame(uintptr_t phys)
 {
     frame_unref(phys);
+}
+
+int paging_frame_is_device(uintptr_t phys)
+{
+    uintptr_t frame = phys / PAGE_SIZE;
+
+    return frame >= _frames_number || _frames[frame] >= FRAME_REF_MAX;
 }
 
 uintptr_t paging_virt_to_phys(uintptr_t va)

@@ -18,6 +18,7 @@ The namespace is fixed. Creation, removal, rename, and timestamp operations on t
 
 | Path | Device | Mode | Contract |
 |------|--------|------|----------|
+| `/dev/mem` | 1:1 | 0640 | The physical address space for a privileged caller: the first megabyte and the frames that are not the allocator's (`paging_frame_is_device`), read, written and mapped shared and uncached, as a region marked `VM_PROT_IO`; RAM is `EPERM`. |
 | `/dev/null` | 1:3 | 0666 | Reads return EOF; writes are discarded. |
 | `/dev/zero` | 1:5 | 0666 | Reads return zero bytes; writes are discarded. |
 | `/dev/full` | 1:7 | 0666 | Reads return zero bytes; writes fail with `ENOSPC`. |

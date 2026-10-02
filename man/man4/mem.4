@@ -1,0 +1,73 @@
+.Dd October 2, 2026
+.Dt MEM 4
+.Os
+.Sh NAME
+.Nm mem
+.Nd physical memory
+.Sh SYNOPSIS
+.Pa /dev/mem
+.Sh DESCRIPTION
+.Pa /dev/mem
+is the physical address space, from 0 to 4 GiB, as Linux gives it with
+.Dv STRICT_DEVMEM :
+a byte at an offset of the file is the byte at that physical address.
+A privileged process reads and writes it with
+.Xr read 2 ,
+.Xr write 2 ,
+.Xr pread 2
+and
+.Xr pwrite 2 ,
+seeks it with
+.Xr lseek 2 ,
+and maps it with
+.Xr mmap 2 ,
+where BusyBox's
+.Ic devmem
+reaches a device's registers.
+.Pp
+It reaches the first megabyte, the frames the memory map does not offer
+as RAM, which firmware and devices have, and the addresses past the top
+of memory; another frame of RAM, the kernel's or a process's, is
+.Er EPERM .
+A read or a write that comes to such a frame stops before it, and fails
+with
+.Er EPERM
+when it is the first.
+.Pp
+A mapping must be shared, and its pages are mapped when it is made, with
+the processor's cache disabled for them, so a load or a store reaches the
+device.
+A child of
+.Xr fork 2
+shares them.
+The mapping does not grow with
+.Xr mremap 2 ,
+which fails with
+.Er EFAULT ,
+.Xr madvise 2
+does not let its pages go and fails with
+.Er EINVAL ,
+and a core file and
+.Pa /proc/PID/mem
+leave its bytes out, since reading a device's register can change the
+device;
+.Pa /proc/PID/smaps
+gives it the flags
+.Ql io
+and
+.Ql pf .
+.Sh FILES
+.Pa /dev/mem
+has mode 0640, owner and group root, and major 1, minor 1.
+.Sh ERRORS
+.Bl -tag -width EINVAL
+.It Er EPERM
+The caller is not privileged, or the range has a frame of RAM past the
+first megabyte.
+.It Er EINVAL
+A private mapping.
+.El
+.Sh SEE ALSO
+.Xr busybox-miscutils 1 ,
+.Xr mmap 2 ,
+.Xr null 4

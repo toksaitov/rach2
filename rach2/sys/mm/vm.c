@@ -371,7 +371,7 @@ int vm_protect(vm_space_t *vm, uint32_t start, uint32_t end, uint32_t prot)
 
             vm_insert_at(vm, i + 1, &upper);
         }
-        vm->vmas[i].prot = prot | (vm->vmas[i].prot & VM_PROT_NOWRITE);
+        vm->vmas[i].prot = prot | (vm->vmas[i].prot & (VM_PROT_NOWRITE | VM_PROT_IO));
         i++;
     }
     /* Merge from the top down so each merge leaves the lower indices where

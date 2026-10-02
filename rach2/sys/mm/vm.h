@@ -55,6 +55,11 @@
  * Linux's mprotect refuses a mapping without VM_MAYWRITE; splits, merges,
  * copies and moves carry it with the rest of the protection. */
 #define VM_PROT_NOWRITE 0x10u
+/* Kept the same way: the region maps device memory through /dev/mem, whose
+ * frames are not the allocator's. Nothing reads it on a process's behalf, a
+ * core file or /proc/PID/mem, since a read of a device register can change
+ * the device, and a page of it is never backed by a fault. */
+#define VM_PROT_IO      0x20u
 
 /* Region kind; drives both teaching clarity and fault policy. */
 typedef enum {

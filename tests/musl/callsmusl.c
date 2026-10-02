@@ -55,7 +55,9 @@
  * regular file, and posix_fadvise refuses a pipe with ESPIPE.
  * setitimer's ITIMER_VIRTUAL and ITIMER_PROF post SIGVTALRM and SIGPROF as
  * the process spins, and getitimer reports the interval; so do POSIX timers
- * on the process's and the thread's clocks of processor time.
+ * on the process's and the thread's clocks of processor time. /dev/mem reads
+ * the first megabyte and maps the local APIC, and refuses RAM and a private
+ * mapping.
  *
  * Prints "CALLSMUSL OK" on success and "CALLSMUSL FAIL (detail)" otherwise.
  */
@@ -908,11 +910,43 @@ static int cputimers(void)
     return cpu_ptimers();
 }
 
+/* /dev/mem as Linux's STRICT_DEVMEM gives it to root: the first megabyte
+   and the local APIC's registers read, by pread and through a shared
+   mapping, a frame of RAM at 32 MiB refused both ways with EPERM, and a
+   private mapping refused with EINVAL. */
+static int devmems(void)
+{
+    unsigned char low[16];
+    int fd = open("/dev/mem", O_RDWR);
+    volatile unsigned *apic;
+
+    if (fd < 0) {
+        return fail("open /dev/mem");
+    }
+    if (pread(fd, low, sizeof low, 0xF0000) != (ssize_t)sizeof low) {
+        return fail("pread of the first megabyte of /dev/mem");
+    }
+    if (pread(fd, low, sizeof low, 0x2000000) != -1 || errno != EPERM ||
+        mmap(NULL, 4096, PROT_READ, MAP_SHARED, fd, 0x2000000) != MAP_FAILED || errno != EPERM) {
+        return fail("/dev/mem gave a frame of RAM");
+    }
+    if (mmap(NULL, 4096, PROT_READ, MAP_PRIVATE, fd, 0xFEE00000) != MAP_FAILED || errno != EINVAL) {
+        return fail("a private mapping of /dev/mem was not EINVAL");
+    }
+    apic = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0xFEE00000);
+    if (apic == MAP_FAILED || (apic[0x30 / 4] & 0xFF) == 0) {
+        return fail("the local APIC's version through a mapping of /dev/mem");
+    }
+    munmap((void *)apic, 4096);
+    close(fd);
+    return 0;
+}
+
 int main(void)
 {
     if (signals() || memory() || identity() || messages() || clocks() || ranges() || copies() ||
         reserves() || adjusts() || advises() || terminals() || peaks() || refusals() || setgids() ||
-        privacies() || timers() || queues() || flows() || signalfds() || cputimers()) {
+        privacies() || timers() || queues() || flows() || signalfds() || cputimers() || devmems()) {
         return 1;
     }
     printf("CALLSMUSL OK\n");
