@@ -111,10 +111,28 @@ set to 0, so the console's prompt waits without a limit; see
 Every build clears two levels of
 .Pa /var/run
 at boot, so that a directory such as the bus's goes with what is in it,
-makes an empty
+makes
 .Pa /var/run/utmp ,
-where glibc's programs keep the records of who is logged in, and reads
+where glibc's programs keep the records of who is logged in, with only
+the record of this boot, appends that record to
+.Pa /var/log/wtmp ,
+and reads
 .Pa /etc/rach2/limits .
+The boot record is sysvinit's: its type is BOOT_TIME, its user
+.Ql reboot ,
+its host the kernel's release and its time the
+.Li btime
+of
+.Pa /proc/stat ;
+coreutils'
+.Xr who 1
+.Fl b
+and
+.Xr uptime 1
+take the boot time from it, and util-linux's
+.Xr last 1
+.Fl x
+lists it.
 It sets these resource limits on itself before starting any child;
 see
 .Xr limits 7 .
@@ -211,8 +229,8 @@ then removed; a directory deeper than that is reported if it is not empty.
 The bus's directory, with its socket,
 .Pa system_bus_socket .
 .It Pa /var/run/utmp
-The login records: OpenSSH's server on the GNU system's root adds a
-session's record, which
+The login records, the boot's first: OpenSSH's server on the GNU system's
+root adds a session's record, which
 .Xr who 1
 reads; the musl programs keep none.
 .It Pa /var/log/wtmp , Pa /var/log/btmp
@@ -223,7 +241,8 @@ and
 .Xr lastb 1
 read on the GNU system's root.
 init makes each at boot when it is missing, the first with mode 0664 and
-the second with 0600, and keeps what they have.
+the second with 0600, and keeps what they have, adding the boot's record
+to the first.
 .El
 .Sh DIAGNOSTICS
 The recovery file system check reports its status as:

@@ -190,6 +190,8 @@ row_git() {
     same "git grep -P" "$(git -C "$WORK/repo" grep -oP 'g\w+(?= row)')" "file:git"
 }
 
+# coreutils: its version, a pipeline, a digest, dates in the zones of the
+# database, and the boot time `who -b` takes from init's record in utmp.
 row_coreutils() {
     has "the version" "$(cat --version | head -n 1)" "(GNU coreutils) 9.12"
     same "seq, sort and head" "$(seq 1 10 | sort -rn | head -n 1)" "10"
@@ -197,6 +199,8 @@ row_coreutils() {
     same "date" "$(date -u -d @0 +%Y-%m-%d)" "1970-01-01"
     same "a zone of the database" "$(TZ=Europe/Berlin date -d @0 +%H:%M:%Z)" "01:00:CET"
     same "a zone's old name" "$(TZ=US/Eastern date -d @0 +%H:%Z)" "19:EST"
+    same "who -b" "$(LC_ALL=C who -b | sed 's/^ *system boot *//')" \
+        "$(LC_ALL=C date -d @"$(awk '/^btime/ {print $2}' /proc/stat)" '+%b %e %H:%M')"
 }
 
 row_bash() {
@@ -356,8 +360,9 @@ row_procps() {
 
 # util-linux's programs: the disks and mounts from /sys and /proc, a lock
 # taken and waited for, the limits and the I/O class of a process, the login
-# history, the formatting and terminal tools jq's tests and scripts use, and
-# the namespaces unshare makes, nsenter enters and lsns lists.
+# history and the record of the boot that init writes, the formatting and
+# terminal tools jq's tests and scripts use, and the namespaces unshare
+# makes, nsenter enters and lsns lists.
 row_utillinux() {
     local pid
     has "lsblk" "$(lsblk -dno NAME,TYPE)" "disk"
@@ -372,6 +377,8 @@ row_utillinux() {
     has "prlimit" "$(prlimit --pid $$ --nofile)" "NOFILE"
     same "ionice" "$(ionice -c 2 -n 5 ionice)" "best-effort: prio 5"
     has "last" "$(last -n 1 root)" "root"
+    has "the boot's record in utmp" "$(utmpdump /var/run/utmp 2>/dev/null)" "[reboot"
+    has "last -x" "$(last -x reboot)" "system boot"
     same "column -t" "$(printf 'a b\nccc d\n' | column -t)" "$(printf 'a    b\nccc  d')"
     script -q -e -c 'exit 3' /dev/null
     same "script -e's status" "$?" "3"

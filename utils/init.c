@@ -45,6 +45,7 @@
 #include <grp.h>
 #include <pwd.h>
 #include <sys/stat.h>
+#include <sys/utsname.h>
 
 extern char **environ;
 
@@ -1596,25 +1597,90 @@ static void clear_var_run(void)
     clear_dir("/var/run", 1);
 }
 
+/* glibc's struct utmp on i386: 384 bytes, its times 32 bits wide. */
+#define UTMP_SIZE 384
+#define UTMP_LINE 8   /* ut_line, 32 bytes */
+#define UTMP_ID   40  /* ut_id, 4 bytes */
+#define UTMP_USER 44  /* ut_user, 32 bytes */
+#define UTMP_HOST 76  /* ut_host, 256 bytes */
+#define UTMP_TV   340 /* ut_tv.tv_sec */
+#define UTMP_BOOT 2   /* BOOT_TIME, the ut_type */
+
+/** Put the 32-bit value `v` at `p`, least significant byte first. */
+static void put_le32(unsigned char *p, unsigned long v)
+{
+    p[0] = (unsigned char)v;
+    p[1] = (unsigned char)(v >> 8);
+    p[2] = (unsigned char)(v >> 16);
+    p[3] = (unsigned char)(v >> 24);
+}
+
+/** The second the kernel started, the btime of /proc/stat, or now when that
+ * cannot be read. */
+static unsigned long boot_second(void)
+{
+    char text[4096];
+    const char *at;
+    int fd = open("/proc/stat", O_RDONLY);
+    ssize_t n = fd >= 0 ? read(fd, text, sizeof(text) - 1) : -1;
+
+    if (fd >= 0) {
+        close(fd);
+    }
+    text[n > 0 ? n : 0] = '\0';
+    at = strstr(text, "\nbtime ");
+    return at ? strtoul(at + 7, NULL, 10) : (unsigned long)time(NULL);
+}
+
 /**
- * Make /var/run/utmp, empty, where glibc's programs keep the records of who
- * is logged in: OpenSSH's server on the GNU system's root adds a session's
- * record there, and `who`, `users` and `w` read them; and /var/log/wtmp and
- * /var/log/btmp, kept across boots, where it adds the history of logins and
- * of failed ones, which util-linux's `last` and `lastb` read. glibc writes a
- * record only into a file that exists, which a Linux system makes at boot as
- * this does. The musl programs keep no records, so on the other images the
- * files stay empty.
+ * Write the record of this boot, as sysvinit writes it, to the descriptor
+ * `fd`: its type BOOT_TIME, line "~", id "~~", user "reboot" and host the
+ * kernel's release, at the second the kernel started. coreutils' `who -b`
+ * and `uptime` take the boot time from this record in utmp, and without one
+ * from the time utmp was last changed, which is the last login; `last -x`
+ * lists the one in wtmp.
+ */
+static void write_boot_record(int fd)
+{
+    unsigned char r[UTMP_SIZE];
+    struct utsname u;
+
+    memset(r, 0, sizeof(r));
+    r[0] = UTMP_BOOT;
+    r[UTMP_LINE] = '~';
+    memcpy(r + UTMP_ID, "~~", 2);
+    memcpy(r + UTMP_USER, "reboot", 6);
+    if (uname(&u) == 0) {
+        strncpy((char *)r + UTMP_HOST, u.release, 255);
+    }
+    put_le32(r + UTMP_TV, boot_second());
+    if (write(fd, r, sizeof(r)) != (ssize_t)sizeof(r)) {
+        fprintf(stderr, "init: boot record: %s\n", strerror(errno));
+    }
+}
+
+/**
+ * Make /var/run/utmp, where glibc's programs keep the records of who is
+ * logged in, with only the record of this boot: OpenSSH's server on the GNU
+ * system's root adds a session's record there, and `who`, `users` and `w`
+ * read them. /var/log/wtmp and /var/log/btmp are kept across boots, the
+ * first given this boot's record too: OpenSSH adds the history of logins
+ * and of failed ones there, which util-linux's `last` and `lastb` read.
+ * glibc writes a record only into a file that exists, which a Linux system
+ * makes at boot as this does. The musl programs keep no records, so on the
+ * other images the files have only the boot records.
  */
 static void make_utmp(void)
 {
     int fd = open("/var/run/utmp", O_WRONLY | O_CREAT | O_TRUNC, 0644);
 
     if (fd >= 0) {
+        write_boot_record(fd);
         close(fd);
     }
-    fd = open("/var/log/wtmp", O_WRONLY | O_CREAT, 0664);
+    fd = open("/var/log/wtmp", O_WRONLY | O_CREAT | O_APPEND, 0664);
     if (fd >= 0) {
+        write_boot_record(fd);
         close(fd);
     }
     fd = open("/var/log/btmp", O_WRONLY | O_CREAT, 0600);
