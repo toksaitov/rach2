@@ -603,7 +603,8 @@ row_gnupg() {
 }
 
 # An autoconf package built on the machine as a user builds one: GNU sed's
-# configure, which takes the build's name from the root's site file, since
+# configure in a login shell, for a prefix of the user's own, which takes the
+# build's name from the root's site file that /etc/profile names, since
 # config.guess knows no system called Rach2, then make, and the sed it made.
 row_autotools() {
     runs "the tarball" tar -xJf /tmp/gnu/sed.tar.xz -C "$WORK"
@@ -611,8 +612,8 @@ row_autotools() {
         fail "no sed directory"
         return
     }
-    output "configure" ./configure
-    has "the site file" "$OUT" "loading site script"
+    output "configure" bash -lc "./configure --prefix=$WORK/inst"
+    has "the site file, for a prefix of the user's own" "$OUT" "loading site script"
     runs "make" make -j2
     output "the sed made" ./sed/sed --version
     has "its version" "$OUT" "(GNU sed)"

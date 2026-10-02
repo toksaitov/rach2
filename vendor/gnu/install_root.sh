@@ -176,9 +176,10 @@ ln -s ../proc/self/mounts "$TREE/etc/mtab"
 ln -s var/run "$TREE/run"
 
 # The site file autoconf's configure reads, for the default prefix and for
-# /usr: config.guess knows no system by the kernel's name, Rach2, and stops
-# every configure that has no --build, so the build is named the GNU/Linux
-# system whose programs the kernel runs.
+# /usr, and for any other through CONFIG_SITE, which /etc/profile sets:
+# config.guess knows no system by the kernel's name, Rach2, and stops every
+# configure that has no --build, so the build is named the GNU/Linux system
+# whose programs the kernel runs.
 mkdir -p "$TREE/usr/local/share"
 cat > "$TREE/usr/share/config.site" << 'EOF'
 # config.site: answers for autoconf configure scripts on Rach2.
