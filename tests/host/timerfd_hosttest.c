@@ -131,6 +131,21 @@ int32_t clock_now(int32_t clk, int64_t *sec, int32_t *nsec)
     return 0;
 }
 
+/** No timer here counts processor time, so none holds a process. */
+int32_t clock_cpu_target(int32_t clk, struct tgroup **tg, uint32_t *tid, int *user_only)
+{
+    (void)clk;
+    (void)tg;
+    (void)tid;
+    (void)user_only;
+    return -EINVAL;
+}
+
+void tgroup_put(struct tgroup *tg)
+{
+    (void)tg;
+}
+
 /** Making a descriptor, and finding one, are outside this test. */
 void *kzalloc(size_t n)
 {

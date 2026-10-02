@@ -25,10 +25,18 @@
 .Fn timer_create ,
 number 259, makes a timer on the clock
 .Dv CLOCK_REALTIME ,
-.Dv CLOCK_MONOTONIC
-or
+.Dv CLOCK_MONOTONIC ,
 .Dv CLOCK_BOOTTIME ,
-disarmed, and stores its id, the lowest the process does not have, at
+or a clock of processor time:
+.Dv CLOCK_PROCESS_CPUTIME_ID ,
+.Dv CLOCK_THREAD_CPUTIME_ID ,
+or the clock of a process that
+.Xr clock_getcpuclockid 3
+gives or of a thread of the caller's that
+.Xr pthread_getcpuclockid 3
+gives.
+The timer is made disarmed, and its id, the lowest the process does not
+have, is stored at
 .Fa timerid .
 .Fa sev
 says how it is notified:
@@ -91,19 +99,15 @@ number 263, disarms and deletes the timer.
 and the end of the process delete its timers; a child of
 .Xr fork 2
 has none.
-.Ss Differences from Linux
-Linux also makes timers on the processor-time clocks of a process or a
-thread,
-.Dv CLOCK_PROCESS_CPUTIME_ID
-and
-.Dv CLOCK_THREAD_CPUTIME_ID ;
-this kernel refuses them with
-.Er EINVAL ,
-and a profiler that samples with one must use the
-.Dv ITIMER_PROF
-timer of
-.Xr setitimer 2 ,
-which Go's runtime, for one, falls back to.
+.Pp
+A timer on a clock of processor time counts the ticks the timer interrupt
+charges to the process's threads, or to the one thread, as
+.Xr times 2
+counts them, user ticks alone for a clock of user time; its time left and
+its interval are in ticks, and it expires at the tick that uses up the
+last of its time, with no overrun, since each tick is counted.
+A timer on another process's clock keeps counting that process until it
+is deleted, and counts nothing once the process has ended.
 .Sh RETURN VALUES
 .Fn timer_getoverrun
 returns the overrun, and the others 0; each returns -1 with

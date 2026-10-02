@@ -1,6 +1,7 @@
 #include "sched.h"
 #include "ptrace.h"
 #include "tgroup.h"
+#include "../io/timerfd.h"
 #include "../lib/ksignal.h"
 
 #include "../lib/kirq.h"
@@ -250,8 +251,8 @@ static void cpu_timer_tick(process_t *p, int k, int counts, int signo)
 
 /**
  * Count one delivered tick as idle or busy, and charge a busy one to the
- * process it interrupted, and to its process's virtual and profiling
- * timers.
+ * process it interrupted, to its process's virtual and profiling timers,
+ * and to the POSIX timers that count its processor time.
  *
  * The process charged is `current_proc`, whose code, system call or
  * interrupt handler the tick interrupted, and `user` says whether the
@@ -276,6 +277,7 @@ void sched_account_tick(int user)
         if (current_proc->tg) {
             cpu_timer_tick(current_proc, 0, user, SIGVTALRM);
             cpu_timer_tick(current_proc, 1, 1, SIGPROF);
+            ptimer_cpu_tick(current_proc, user);
         }
     }
 }

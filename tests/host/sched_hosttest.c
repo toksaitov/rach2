@@ -52,6 +52,13 @@ void signal_post(process_t *target, int signo)
     (void)signo;
 }
 
+/** Nor a POSIX timer on a clock of processor time. */
+void ptimer_cpu_tick(const struct process *p, int user)
+{
+    (void)p;
+    (void)user;
+}
+
 /** Check the mask at the outgoing floating-point save. */
 void fpu_save(void *area)
 {

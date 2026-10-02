@@ -56,7 +56,10 @@
 extern volatile uint32_t kernel_ticks;
 
 /* A timer: a timerfd's, read through its descriptor (`anon` and `wq`), or a
- * POSIX timer's, which `tg` names and whose expirations post a signal. */
+ * POSIX timer's, which `tg` names and whose expirations post a signal. A
+ * POSIX timer on a clock of processor time counts the ticks charged to
+ * `cpu_tg`'s threads, or to its thread `cpu_tid` alone, user ticks alone for
+ * `cpu_user`: `due` is then the ticks left, and `spans` is unused. */
 struct ktimer {
     struct anon_obj anon;
     struct ktimer *next; /* the list of armed timers the tick walks */
@@ -74,8 +77,11 @@ struct ktimer {
     int notify; /* SIGEV_SIGNAL, SIGEV_NONE or SIGEV_THREAD_ID */
     int signo;
     int32_t value;
-    uint32_t tid;     /* the thread SIGEV_THREAD_ID names */
-    uint32_t overrun; /* the overrun of the last signal posted */
+    uint32_t tid;          /* the thread SIGEV_THREAD_ID names */
+    uint32_t overrun;      /* the overrun of the last signal posted */
+    struct tgroup *cpu_tg; /* held: the process whose time it counts, or NULL */
+    uint32_t cpu_tid;
+    int cpu_user;
 };
 
 /* A setting as the call gives and takes it, whichever width of time: the
@@ -88,10 +94,12 @@ struct setting {
 };
 
 static struct ktimer *armed;
+/* The armed timers of processor time, which `ptimer_cpu_tick` counts. */
+static struct ktimer *cpu_armed;
 
 static void disarm(struct ktimer *t)
 {
-    struct ktimer **link = &armed;
+    struct ktimer **link = t->cpu_tg ? &cpu_armed : &armed;
 
     while (*link && *link != t) {
         link = &(*link)->next;
@@ -134,6 +142,39 @@ static void expire(struct ktimer *t, uint32_t now)
         ptimer_fire(t);
     } else {
         wq_wake_all(&t->wq);
+    }
+}
+
+/* `sec` seconds and `sub` ticks as ticks, at most 0xFFFFFFFF and at least
+ * one, so that a timer of processor time armed for no time expires at the
+ * next tick charged. */
+static uint32_t cpu_ticks_of(uint32_t sec, uint32_t sub)
+{
+    if (sec >= 0xFFFFFFFFu / TICKS_PER_SEC) {
+        return 0xFFFFFFFFu;
+    }
+    sec = sec * TICKS_PER_SEC + sub;
+    return sec != 0 ? sec : 1u;
+}
+
+void ptimer_cpu_tick(const process_t *p, int user)
+{
+    struct ktimer *t = cpu_armed;
+
+    while (t) {
+        struct ktimer *next = t->next;
+
+        if (t->cpu_tg == p->tg && (t->cpu_tid == 0 || t->cpu_tid == p->pid) &&
+            (user || !t->cpu_user) && --t->due == 0) {
+            t->count++;
+            if (t->isec != 0 || t->isub != 0) {
+                t->due = cpu_ticks_of(t->isec, t->isub);
+            } else {
+                disarm(t);
+            }
+            ptimer_fire(t);
+        }
+        t = next;
     }
 }
 
@@ -303,7 +344,12 @@ static void current_setting(const struct ktimer *t, struct setting *s)
     uint32_t irq = kirq_save();
 
     k_memset(s, 0, sizeof(*s));
-    if (t->armed) {
+    if (t->armed && t->cpu_tg) {
+        s->vsec = t->due / TICKS_PER_SEC;
+        s->vnsec = (int32_t)(t->due % TICKS_PER_SEC) * NS_PER_TICK;
+        s->isec = t->isec;
+        s->insec = (int32_t)t->isub * NS_PER_TICK;
+    } else if (t->armed) {
         int32_t left = (int32_t)(t->due - kernel_ticks);
 
         s->vsec = (int64_t)t->spans * SPAN_SEC;
@@ -352,7 +398,14 @@ static int32_t arm(struct ktimer *t, int flags, const struct setting *s)
         disarm(t);
     }
     t->count = 0;
-    if (on) {
+    if (on && t->cpu_tg) {
+        t->due = cpu_ticks_of(sec, sub);
+        t->isec = isec;
+        t->isub = isub;
+        t->armed = 1;
+        t->next = cpu_armed;
+        cpu_armed = t;
+    } else if (on) {
         wait_from(t, kernel_ticks + 1u, sec, sub);
         t->isec = isec;
         t->isub = isub;
@@ -550,12 +603,26 @@ static struct ktimer *ptimer_of(int id)
     return t;
 }
 
+/* Take the target of the clock `clock` into `t`: none for real time and time
+ * since boot, and for a clock of processor time the process it counts,
+ * held, its thread and whether it counts user time alone. 0, or -EINVAL
+ * for a clock `clock_cpu_target` refuses. */
+static int32_t ptimer_clock(struct ktimer *t, int clock)
+{
+    if (clock == CLOCK_REALTIME || clock == CLOCK_MONOTONIC || clock == CLOCK_BOOTTIME) {
+        return 0;
+    }
+    return clock_cpu_target(clock, &t->cpu_tg, &t->cpu_tid, &t->cpu_user);
+}
+
 /**
  * timer_create(2): a POSIX timer on the clock in EBX, notified as the
  * `struct sigevent` at ECX says, or by SIGALRM with its id as the value when
  * ECX is 0, whose id is stored at EDX: the lowest the process does not
- * have. A thread SIGEV_THREAD_ID names must be one of the caller's process.
- * EINVAL for another clock, notification or signal, EAGAIN past PTIMER_MAX.
+ * have. The clock is real time, time since boot, or the processor time of
+ * a process or of a thread of the caller's. A thread SIGEV_THREAD_ID names
+ * must be one of the caller's process. EINVAL for another clock,
+ * notification or signal, EAGAIN past PTIMER_MAX.
  */
 int32_t sys_timer_create(struct isr_params *params)
 {
@@ -566,9 +633,6 @@ int32_t sys_timer_create(struct isr_params *params)
     uint32_t irq;
     int id = 0;
 
-    if (clock != CLOCK_REALTIME && clock != CLOCK_MONOTONIC && clock != CLOCK_BOOTTIME) {
-        return -EINVAL;
-    }
     if (params->ecx && copy_from_user(ev, (const void __user *)params->ecx, sizeof(ev)) != 0) {
         return -EFAULT;
     }
@@ -581,6 +645,10 @@ int32_t sys_timer_create(struct isr_params *params)
     if (!t) {
         return -EAGAIN;
     }
+    if (ptimer_clock(t, clock) != 0) {
+        kfree(t);
+        return -EINVAL;
+    }
     irq = kirq_save();
     while (*link && (*link)->id == id) {
         link = &(*link)->in_group;
@@ -588,6 +656,7 @@ int32_t sys_timer_create(struct isr_params *params)
     }
     if (id >= PTIMER_MAX || copy_to_user((void __user *)params->edx, &id, sizeof(id)) != 0) {
         kirq_restore(irq);
+        tgroup_put(t->cpu_tg);
         kfree(t);
         return id >= PTIMER_MAX ? -EAGAIN : -EFAULT;
     }
@@ -665,6 +734,7 @@ static void ptimer_free(struct ktimer **link)
     }
     *link = t->in_group;
     kirq_restore(irq);
+    tgroup_put(t->cpu_tg);
     kfree(t);
 }
 

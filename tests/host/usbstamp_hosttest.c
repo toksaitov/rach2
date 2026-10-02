@@ -75,6 +75,13 @@ void signal_post(process_t *target, int signo)
     (void)signo;
 }
 
+/** Nor a POSIX timer on a clock of processor time. */
+void ptimer_cpu_tick(const struct process *p, int user)
+{
+    (void)p;
+    (void)user;
+}
+
 /** No floating-point instruction is needed by the host switch model. */
 void fpu_save(void *area)
 {

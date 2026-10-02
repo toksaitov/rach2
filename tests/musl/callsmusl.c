@@ -54,7 +54,8 @@
  * and ENOENT for a missing file. readahead and posix_fadvise accept a
  * regular file, and posix_fadvise refuses a pipe with ESPIPE.
  * setitimer's ITIMER_VIRTUAL and ITIMER_PROF post SIGVTALRM and SIGPROF as
- * the process spins, and getitimer reports the interval.
+ * the process spins, and getitimer reports the interval; so do POSIX timers
+ * on the process's and the thread's clocks of processor time.
  *
  * Prints "CALLSMUSL OK" on success and "CALLSMUSL FAIL (detail)" otherwise.
  */
@@ -810,6 +811,71 @@ static void on_prof(int signo)
     profs++;
 }
 
+static volatile sig_atomic_t usr1s, usr2s;
+
+static void on_usr1(int signo)
+{
+    (void)signo;
+    usr1s++;
+}
+
+static void on_usr2(int signo)
+{
+    (void)signo;
+    usr2s++;
+}
+
+/* POSIX timers on the process's and the thread's clocks of processor time:
+   each posts its signal three times while the process spins for at most
+   three seconds of processor time, and timer_gettime reports no more left
+   than its interval. */
+static int cpu_ptimers(void)
+{
+    struct itimerspec every = {{0, 10000000}, {0, 10000000}}, cur;
+    struct sigevent ev;
+    struct tms t;
+    timer_t proc_timer, thread_timer;
+    clock_t used;
+    sigset_t both, mask;
+
+    sigemptyset(&both);
+    sigaddset(&both, SIGUSR1);
+    sigaddset(&both, SIGUSR2);
+    signal(SIGUSR1, on_usr1);
+    signal(SIGUSR2, on_usr2);
+    sigprocmask(SIG_UNBLOCK, &both, &mask);
+    memset(&ev, 0, sizeof ev);
+    ev.sigev_notify = SIGEV_SIGNAL;
+    ev.sigev_signo = SIGUSR1;
+    if (timer_create(CLOCK_PROCESS_CPUTIME_ID, &ev, &proc_timer) != 0) {
+        return fail("timer_create on the process's clock of processor time");
+    }
+    ev.sigev_signo = SIGUSR2;
+    if (timer_create(CLOCK_THREAD_CPUTIME_ID, &ev, &thread_timer) != 0) {
+        return fail("timer_create on the thread's clock of processor time");
+    }
+    times(&t);
+    used = t.tms_utime + t.tms_stime;
+    timer_settime(proc_timer, 0, &every, NULL);
+    timer_settime(thread_timer, 0, &every, NULL);
+    do {
+        times(&t);
+    } while ((usr1s < 3 || usr2s < 3) && t.tms_utime + t.tms_stime - used < 300);
+    if (timer_gettime(proc_timer, &cur) != 0 || cur.it_interval.tv_nsec != 10000000 ||
+        cur.it_value.tv_sec != 0 || cur.it_value.tv_nsec > 10000000) {
+        return fail("timer_gettime of a timer of processor time");
+    }
+    timer_delete(proc_timer);
+    timer_delete(thread_timer);
+    sigprocmask(SIG_SETMASK, &mask, NULL);
+    signal(SIGUSR1, SIG_DFL);
+    signal(SIGUSR2, SIG_DFL);
+    if (usr1s < 3 || usr2s < 3) {
+        return fail("the timers of processor time did not each post three signals");
+    }
+    return 0;
+}
+
 /* The timers of processor time, which gprof's sampling uses: each posts its
    signal three times while the process spins for at most three seconds of
    processor time, and a value of zero disarms it. */
@@ -839,7 +905,7 @@ static int cputimers(void)
     if (vtalrms < 3 || profs < 3) {
         return fail("ITIMER_VIRTUAL and ITIMER_PROF did not each post three signals");
     }
-    return 0;
+    return cpu_ptimers();
 }
 
 int main(void)

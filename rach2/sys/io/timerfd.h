@@ -31,6 +31,7 @@ int32_t sys_timerfd_gettime64(struct isr_params *params);
 #define PTIMER_MAX 64
 
 struct tgroup;
+struct process;
 
 int32_t sys_timer_create(struct isr_params *params);
 int32_t sys_timer_settime(struct isr_params *params);
@@ -54,5 +55,18 @@ void timerfd_tick(uint32_t now);
  * time here.
  */
 int32_t clock_now(int32_t clk, int64_t *sec, int32_t *nsec);
+
+/*
+ * The clocks' part as well: the target of the clock of processor time `clk`
+ * for timer_create, the process whose time it counts, held, which
+ * `tgroup_put` lets go of, its thread, 0 for every thread, and whether it
+ * counts user time alone. 0, or -EINVAL for a clock that is not of
+ * processor time or names no process or no thread of the caller's.
+ */
+int32_t clock_cpu_target(int32_t clk, struct tgroup **tg, uint32_t *tid, int *user_only);
+
+/** Count a tick of processor time of the thread `p`, user time when `user`,
+ * against the POSIX timers that count it; called from the timer tick. */
+void ptimer_cpu_tick(const struct process *p, int user);
 
 #endif /* _TIMERFD_H_ */

@@ -527,6 +527,20 @@ static int32_t clock_res_ns(const struct kclock *c)
     return c->kind == KCLOCK_REAL || c->kind == KCLOCK_MONO ? 1000 : 10000000;
 }
 
+int32_t clock_cpu_target(int32_t clk, struct tgroup **tg, uint32_t *tid, int *user_only)
+{
+    struct kclock c;
+
+    if (clock_resolve(clk, &c) != 0 || c.kind != KCLOCK_CPU) {
+        return -EINVAL;
+    }
+    *tg = c.proc->tg;
+    (*tg)->refs++;
+    *tid = c.thread ? c.proc->pid : 0u;
+    *user_only = c.user_only;
+    return 0;
+}
+
 int32_t clock_now(int32_t clk, int64_t *sec, int32_t *nsec)
 {
     struct kclock c;

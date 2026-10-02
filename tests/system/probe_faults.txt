@@ -5321,3 +5321,12 @@ old
         return "/proc/uptime";
 new
 end
+
+fault cpu-ptimers-silent
+probe callsmusl
+file rach2/sys/proc/sched.c
+expect CALLSMUSL FAIL (the timers of processor time did not each post three signals
+old
+            ptimer_cpu_tick(current_proc, user);
+new
+end
