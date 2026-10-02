@@ -5,11 +5,11 @@
  * one before, and setns returns to it. A PID namespace numbers its first
  * process 1, whose parent it sees as 0, and that process's child 2; its status
  * file shows it the one number, and its parent outside both; and a name
- * relative to its descriptor of /proc/self/fd reaches its own descriptor. The caller of
- * unshare keeps its own pid. In a new network namespace a connection to the
- * loopback address fails with ENETUNREACH. A mount made in a new mount
- * namespace is not seen outside it, and a new IPC namespace has none of the
- * first's System V objects.
+ * relative to its descriptor of /proc/self/fd reaches its own descriptor.
+ * The caller of unshare keeps its own pid. In a new network namespace a
+ * connection to the loopback address fails with ENETUNREACH. A mount made
+ * in a new mount namespace is not seen outside it, and a new IPC namespace
+ * has none of the first's System V objects.
  *
  * As uid 1000, one clone makes a user, a PID and a network namespace, as
  * the browser's sandbox does; in them the child is pid 1, with uid 65534
