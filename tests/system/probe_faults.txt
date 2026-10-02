@@ -5003,9 +5003,9 @@ probe procprobe
 file rach2/sys/fs/devfs.c
 expect FAIL: and its hour and minute are the time's
 old
-        tm[1] = t.minute;
+    tm[1] = t->minute;
 new
-        tm[1] = t.hour;
+    tm[1] = t->hour;
 end
 
 # fallocate, which answers EOPNOTSUPP for a regular file.
@@ -5199,9 +5199,9 @@ probe procprobe
 file rach2/sys/fs/synthfs.c
 expect FAIL: /proc/self/limits has Linux's header and its sixteen limits
 old
-                 {"limits", SYNTH_PROC_LIMITS}};
+                 {"limits", SYNTH_PROC_LIMITS}, {"mountinfo", SYNTH_PROC_MOUNTINFO}};
 new
-                 };
+                 {"mountinfo", SYNTH_PROC_MOUNTINFO}};
 end
 
 fault icmp-loopback-limited

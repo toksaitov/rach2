@@ -52,6 +52,11 @@ unusedStructMember:*tests/musl/stampmusl.c
 # after it are the layout.
 unusedStructMember:*tests/musl/ptracemusl.c
 
+# `struct wkalrm` in the calls probe is Linux's struct rtc_wkalrm, which
+# RTC_WKALM_SET and RTC_WKALM_RD copy whole; the probe reads `enabled` and the
+# time, and the members after them are the layout.
+unusedStructMember:*tests/musl/callsmusl.c
+
 # The kernel's copies of Linux's structures.
 
 # The i386 signal frame, statx, the rusage and the siginfo a wait fills are
@@ -113,6 +118,7 @@ constVariable:*tests/exitprobe.c
 constVariable:*tests/sigprobe.c
 unassignedVariable:*tests/devprobe.c
 unassignedVariable:*tests/loopprobe.c
+unassignedVariable:*tests/procprobe.c
 unassignedVariable:*tests/sigprobe.c
 
 # The interface probe reads a length the kernel writes through a pointer it
