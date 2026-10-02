@@ -10155,8 +10155,7 @@ static int root_dir_in_use(const struct vfs_mount *mnt, const krffs_node_t *dir)
         return 1;
     }
     for (pr = proc_list; pr; pr = pr->next) {
-        if (pr->fs && pr->fs->cwd_mnt && vfs_mount_base(pr->fs->cwd_mnt) == vfs_mount_base(mnt) &&
-            pr->fs->cwd_node == dir) {
+        if (pr->fs && pr->fs->cwd_mnt == mnt && pr->fs->cwd_node == dir) {
             return 1;
         }
     }

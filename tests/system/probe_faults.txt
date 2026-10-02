@@ -4771,12 +4771,12 @@ end
 
 fault tcp-listener-address
 probe procprobe
-file rach2/sys/fs/procfs.c
+file rach2/sys/network/tcp/tcp.c
 expect FAIL: the listener, which takes its port on every address, is at 0.0.0.0
 old
-        ap_ip_hex(t, row.state == TCP_LISTEN ? 0 : row.local_ip);
+    tcb->local_ip = sock->local_ip;
 new
-        ap_ip_hex(t, row.local_ip);
+    tcb->local_ip = net_ip_addr;
 end
 
 # /proc/sys/kernel/core_pattern.
@@ -4909,9 +4909,9 @@ old
     if (port == 0) {
         port = ephemeral_port();
     }
-    if (port == 0 || tcp_port_has_listener(port)) {
+    if (port == 0 || tcp_port_has_listener(sock->local_ip, port)) {
 new
-    if (port == 0 || tcp_port_has_listener(port)) {
+    if (port == 0 || tcp_port_has_listener(sock->local_ip, port)) {
 end
 
 fault bind-zero-no-port
@@ -5219,7 +5219,7 @@ probe callsmusl
 file rach2/sys/network/ip/icmp.c
 expect CALLSMUSL FAIL (poll did not report the port unreachable as POLLERR
 old
-        (!netdev_owns(src) && !icmp_error_allowed())) {
+        (!ip_is_local(src) && !icmp_error_allowed())) {
 new
         !icmp_error_allowed()) {
 end
