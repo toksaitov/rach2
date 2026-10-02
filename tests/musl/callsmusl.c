@@ -49,6 +49,8 @@
  * file system without attributes: an empty list and EOPNOTSUPP to get one,
  * and ENOENT for a missing file. readahead and posix_fadvise accept a
  * regular file, and posix_fadvise refuses a pipe with ESPIPE.
+ * setitimer's ITIMER_VIRTUAL and ITIMER_PROF post SIGVTALRM and SIGPROF as
+ * the process spins, and getitimer reports the interval.
  *
  * Prints "CALLSMUSL OK" on success and "CALLSMUSL FAIL (detail)" otherwise.
  */
@@ -74,6 +76,8 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
+#include <sys/time.h>
+#include <sys/times.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -715,11 +719,57 @@ static int reserves(void)
     return 0;
 }
 
+static volatile sig_atomic_t vtalrms, profs;
+
+static void on_vtalrm(int signo)
+{
+    (void)signo;
+    vtalrms++;
+}
+
+static void on_prof(int signo)
+{
+    (void)signo;
+    profs++;
+}
+
+/* The timers of processor time, which gprof's sampling uses: each posts its
+   signal three times while the process spins for at most three seconds of
+   processor time, and a value of zero disarms it. */
+static int cputimers(void)
+{
+    struct itimerval every = {{0, 10000}, {0, 10000}}, off = {{0, 0}, {0, 0}}, cur;
+    struct tms t;
+    clock_t used;
+
+    signal(SIGVTALRM, on_vtalrm);
+    signal(SIGPROF, on_prof);
+    times(&t);
+    used = t.tms_utime + t.tms_stime;
+    if (setitimer(ITIMER_VIRTUAL, &every, NULL) != 0 || setitimer(ITIMER_PROF, &every, NULL) != 0) {
+        return fail("setitimer of ITIMER_VIRTUAL and ITIMER_PROF");
+    }
+    if (getitimer(ITIMER_PROF, &cur) != 0 || cur.it_interval.tv_usec != 10000) {
+        return fail("getitimer of ITIMER_PROF did not report its interval");
+    }
+    do {
+        times(&t);
+    } while ((vtalrms < 3 || profs < 3) && t.tms_utime + t.tms_stime - used < 300);
+    setitimer(ITIMER_VIRTUAL, &off, NULL);
+    setitimer(ITIMER_PROF, &off, NULL);
+    signal(SIGVTALRM, SIG_DFL);
+    signal(SIGPROF, SIG_DFL);
+    if (vtalrms < 3 || profs < 3) {
+        return fail("ITIMER_VIRTUAL and ITIMER_PROF did not each post three signals");
+    }
+    return 0;
+}
+
 int main(void)
 {
     if (signals() || memory() || identity() || messages() || clocks() || ranges() || copies() ||
         reserves() || adjusts() || advises() || terminals() || peaks() || refusals() || setgids() ||
-        privacies() || timers() || queues() || flows() || signalfds()) {
+        privacies() || timers() || queues() || flows() || signalfds() || cputimers()) {
         return 1;
     }
     printf("CALLSMUSL OK\n");

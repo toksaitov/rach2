@@ -302,30 +302,30 @@ changes = {
         '               itimer_ticks(set.interval_sec, set.interval_usec));',
         '               itimer_ticks(0, set.interval_usec));'),
     'timer-interval-read-sec': ('syscall',
-        'out->interval_sec = (int32_t)(current_proc->tg->leader->alarm_interval / 100u);',
-        'out->interval_sec = 0;'),
+        'itimer_put(tg->leader->alarm_interval, &out->interval_sec, &out->interval_usec);',
+        'itimer_put(tg->leader->alarm_interval % 100u, &out->interval_sec, &out->interval_usec);'),
     'timer-usec': ('syscall',
         'set.interval_sec < 0 || set.interval_usec < 0 || set.interval_usec >= 1000000) {',
         'set.interval_sec < 0 || set.interval_usec < 0 || set.interval_usec > 1000000) {'),
     'timer-mask': ('syscall',
         '    flags = kirq_save();\n'
-        '    itimer_read(&was);',
+        '    itimer_read(which, &was);',
         '    flags = 0;\n'
-        '    itimer_read(&was);'),
+        '    itimer_read(which, &was);'),
     'getitimer-which': ('syscall',
-        '    if ((int32_t)params->ebx != ITIMER_REAL) {\n'
+        '    if (which < ITIMER_REAL || which > ITIMER_PROF) {\n'
         '        return -EINVAL;\n'
         '    }\n'
         '    flags = kirq_save();\n'
-        '    itimer_read(&cur);',
+        '    itimer_read(which, &cur);',
         '    flags = kirq_save();\n'
-        '    itimer_read(&cur);'),
+        '    itimer_read(which, &cur);'),
     'alarm-half': ('syscall',
         '    if ((seconds == 0 && usec != 0) || usec >= 500000u) {',
         '    if ((seconds == 0 && usec != 0) || usec > 500000u) {'),
     'alarm-interval': ('syscall',
-        '    itimer_set(itimer_ticks((int32_t)(params->ebx > 21474836u ? 21474836u : params->ebx), 0), 0);',
-        '    itimer_set(itimer_ticks((int32_t)(params->ebx > 21474836u ? 21474836u : params->ebx), 0),\n'
+        '               itimer_ticks((int32_t)(params->ebx > 21474836u ? 21474836u : params->ebx), 0), 0);',
+        '               itimer_ticks((int32_t)(params->ebx > 21474836u ? 21474836u : params->ebx), 0),\n'
         '               current_proc->alarm_interval);'),
     'alarm-mask': ('syscall',
         '    uint32_t flags = kirq_save();\n'
@@ -333,8 +333,8 @@ changes = {
         '    uint32_t flags = 0;\n'
         '    uint32_t left = itimer_left();'),
     'timer-interval-read': ('syscall',
-        'out->interval_usec = (int32_t)((current_proc->tg->leader->alarm_interval % 100u) * 10000u);',
-        'out->interval_usec = (int32_t)((current_proc->tg->leader->alarm_interval % 100u) * 1000u);'),
+        '*usec = (int32_t)((ticks % 100u) * 10000u);',
+        '*usec = (int32_t)((ticks % 100u) * 1000u);'),
     'alarm-round': ('syscall',
         '    if ((seconds == 0 && usec != 0) || usec >= 500000u) {\n'
         '        seconds++;\n'
@@ -453,7 +453,7 @@ PY
         timer-interval-read-sec) detail='an interval of 1.5 s reads back as 1.5 s' ;;
         timer-usec) detail='an interval of 1000000 us is refused' ;;
         timer-mask) detail='the timer is armed with interrupts masked' ;;
-        getitimer-which) detail='getitimer refuses a timer other than ITIMER_REAL' ;;
+        getitimer-which) detail='getitimer refuses a timer other than the three' ;;
         alarm-round) detail='alarm reports 4.7 s left as 5' ;;
         alarm-nearest) detail='alarm reports 4.43 s left as 4' ;;
         alarm-half) detail='alarm reports 4.5 s left as 5' ;;

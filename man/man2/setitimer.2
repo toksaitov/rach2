@@ -5,7 +5,7 @@
 .Nm setitimer ,
 .Nm getitimer ,
 .Nm alarm
-.Nd set and read the real-time interval timer
+.Nd set and read the interval timers
 .Sh SYNOPSIS
 .In sys/time.h
 .Ft int
@@ -16,31 +16,51 @@
 .Ft unsigned
 .Fn alarm "unsigned seconds"
 .Sh DESCRIPTION
-Each process has one interval timer,
-.Dv ITIMER_REAL ,
-which its threads share, which counts real time and posts
+Each process has three interval timers, which its threads share.
+.Dv ITIMER_REAL
+counts real time and posts
 .Dv SIGALRM
 to the process when it expires; any thread that does not block the signal
 may take it.
+.Dv ITIMER_VIRTUAL
+counts the processor time of the process's threads in user mode and posts
+.Dv SIGVTALRM ,
+and
+.Dv ITIMER_PROF
+counts their time in user and kernel mode and posts
+.Dv SIGPROF ;
+each posts its signal to the thread whose tick ran it out.
+Profilers sample with
+.Dv ITIMER_PROF :
+glibc's
+.Fn profil ,
+which a program built with
+.Fl pg
+for gprof calls, records where each
+.Dv SIGPROF
+found the program.
 .Pp
 .Fn setitimer
-arms it:
+arms the timer
+.Fa which :
 .Va it_value
-is the time to the first
-.Dv SIGALRM
-and
+is the time to the first signal and
 .Va it_interval
 the time between each later one, or zero for a single one.
 A zero
 .Va it_value
 disarms the timer.
-Times are rounded up to whole 10 ms ticks, and the tick in progress is
-not counted, so the first
+Times are rounded up to whole 10 ms ticks.
+.Dv ITIMER_REAL
+does not count the tick in progress, so the first
 .Dv SIGALRM
 never comes before the time asked for, up to the limit below.
-At the tick that posts a
-.Dv SIGALRM ,
-the timer is armed again for the interval.
+The timers of processor time count each tick the timer interrupt charges
+to a thread of the process, in the mode it interrupted, as
+.Xr times 2
+counts them.
+At the tick that posts a signal, the timer is armed again for the
+interval.
 Unless
 .Fa old
 is null, it receives the timer's setting before the call, as
@@ -67,10 +87,11 @@ says it is, and otherwise fails with
 the waits for a signal or a deadline are never restarted.
 .Pp
 .Fn getitimer
-reports the time left before the next
-.Dv SIGALRM ,
-zero when the timer is disarmed, and the interval.
-The time left is the whole ticks to the due tick less the tick in
+reports the time left before the next signal, zero when the timer is
+disarmed, and the interval.
+For
+.Dv ITIMER_REAL
+the time left is the whole ticks to the due tick less the tick in
 progress, and one tick at least while the timer is armed, since zero
 means disarmed.
 So a value read in the timer's last tick and passed straight back to
@@ -93,25 +114,14 @@ nearest second, and returns one when less than a second was left.
 .Pp
 A child of
 .Xr fork 2
-starts with the timer disarmed.
+starts with the timers disarmed.
 .Xr execve 2
-keeps the timer and the pending signals, so a
+keeps the timers and the pending signals, so a
 .Dv SIGALRM
 posted and not yet delivered, while blocked, comes to the new program
 when it unblocks the signal.
 .Ss Differences from Linux
-.Dv ITIMER_VIRTUAL
-and
-.Dv ITIMER_PROF
-are refused with
-.Er EINVAL :
-they are not implemented, though the tick keeps each thread's processor
-time, which
-.Xr times 2
-and the CPU clocks of
-.Xr clock_gettime 2
-read.
-The timer counts 10 ms ticks, so the signal is posted at a tick, and
+The timers count 10 ms ticks, so the signal is posted at a tick, and
 .Fn getitimer
 reports whole ticks where Linux reports microseconds.
 The raw call refuses a null
@@ -189,6 +199,12 @@ return 0 on success, or -1 on failure and set
 returns the seconds described above.
 The raw kernel calls return a negative error number on failure.
 .Sh EXAMPLES
+The callsmusl suite arms
+.Dv ITIMER_VIRTUAL
+and
+.Dv ITIMER_PROF
+every 10 ms and requires each to post its signal three times while the
+process spins.
 The default suite's
 .Pa tests/sigprobe.c
 arms a single alarm with
@@ -215,9 +231,8 @@ is null or cannot be read or written, or
 cannot be written, in which case the timer is already set.
 .It Bq Er EINVAL
 .Fa which
-is not
-.Dv ITIMER_REAL ,
-or a time is negative or has microseconds of a second or more.
+is not one of the three timers, or a time is negative or has
+microseconds of a second or more.
 .El
 .Sh SEE ALSO
 .Xr nanosleep 2 ,

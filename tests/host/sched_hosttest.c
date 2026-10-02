@@ -45,6 +45,13 @@ void kirq_restore(uint32_t flags)
     irq_flags = flags;
 }
 
+/** No process here arms a timer of processor time, which posts a signal. */
+void signal_post(process_t *target, int signo)
+{
+    (void)target;
+    (void)signo;
+}
+
 /** Check the mask at the outgoing floating-point save. */
 void fpu_save(void *area)
 {

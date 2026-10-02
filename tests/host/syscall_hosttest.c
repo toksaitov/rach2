@@ -825,8 +825,8 @@ static int32_t call_alarm(uint32_t seconds)
  * that the longest timer set at 0x80000001 still lies ahead of it, and
  * seconds past the clamp are shortened to it rather than wrapped. An interval
  * of a second and more reads back whole. An interval of a whole second in
- * microseconds is refused, and so is a getitimer of a timer other than
- * ITIMER_REAL. `alarm` rounds the seconds left to the nearest, a half second
+ * microseconds is refused, and so is a getitimer of a timer other than the
+ * three. `alarm` rounds the seconds left to the nearest, a half second
  * up, and to 1 when under a second is left, and leaves no interval.
  */
 static void timer_first_expiry(void)
@@ -874,7 +874,7 @@ static void timer_first_expiry(void)
     CHECK(cur.interval_sec == 1 && cur.interval_usec == 500000,
           "an interval of 1.5 s reads back as 1.5 s");
     CHECK(set_timer(0, 30000, 0, 1000000) == -EINVAL, "an interval of 1000000 us is refused");
-    CHECK(get_timer(1) == -EINVAL, "getitimer refuses a timer other than ITIMER_REAL");
+    CHECK(get_timer(3) == -EINVAL, "getitimer refuses a timer other than the three");
     CHECK(call_alarm(5) == 1, "alarm replaces the timer and reports its 1 s");
     cur = read_timer();
     CHECK(cur.interval_sec == 0 && cur.interval_usec == 0, "and leaves no interval");

@@ -50,6 +50,14 @@ struct tgroup {
      * kernel samples the resident pages where an address space ends. */
     uint32_t maxrss_kb;
     uint32_t cmaxrss_kb;
+    /* The interval timers of the process's processor time, setitimer's
+     * ITIMER_VIRTUAL and ITIMER_PROF, at 0 and 1: the ticks left before
+     * SIGVTALRM, counted in user mode, or SIGPROF, counted in both modes,
+     * 0 when disarmed, and the ticks to arm the timer with again, 0 for a
+     * single signal. A fork starts with both disarmed and an exec keeps
+     * them, as on Linux. */
+    uint32_t cpu_left[2];
+    uint32_t cpu_interval[2];
     /* The OOM score adjustment /proc/<pid>/oom_score_adj reads and writes,
      * -1000 to 1000, and the least value a caller without privilege may
      * write there, which a privileged caller's write sets to what it wrote,

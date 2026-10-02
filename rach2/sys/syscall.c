@@ -1377,8 +1377,11 @@ static int32_t sys_clock_nanosleep(isr_params_t *params)
     return sleep_until_time(c.kind, &req);
 }
 
-/* ITIMER_REAL, the one interval timer this kernel keeps. */
-#define ITIMER_REAL 0
+/* setitimer's timers: of real time, and of the process's processor time
+ * in user mode and in both modes. */
+#define ITIMER_REAL    0
+#define ITIMER_VIRTUAL 1
+#define ITIMER_PROF    2
 
 /*
  * The itimerval of i386 setitimer and getitimer: the interval, then the
@@ -1431,29 +1434,47 @@ static uint32_t itimer_left(void)
     return (int32_t)left > 1 ? left - 1u : 1u;
 }
 
-/* What the current process's timer is set to, as setitimer and getitimer
- * report it. Interrupts are off. */
-static void itimer_read(struct kernel_itimerval *out)
+/* `ticks` as the seconds and microseconds of an itimerval. */
+static void itimer_put(uint32_t ticks, int32_t *sec, int32_t *usec)
 {
-    uint32_t left = itimer_left();
+    *sec = (int32_t)(ticks / 100u);
+    *usec = (int32_t)((ticks % 100u) * 10000u);
+}
 
-    out->value_sec = (int32_t)(left / 100u);
-    out->value_usec = (int32_t)((left % 100u) * 10000u);
-    out->interval_sec = (int32_t)(current_proc->tg->leader->alarm_interval / 100u);
-    out->interval_usec = (int32_t)((current_proc->tg->leader->alarm_interval % 100u) * 10000u);
+/* What the current process's timer `which` is set to, as setitimer and
+ * getitimer report it. Interrupts are off. */
+static void itimer_read(int32_t which, struct kernel_itimerval *out)
+{
+    const struct tgroup *tg = current_proc->tg;
+
+    if (which == ITIMER_REAL) {
+        itimer_put(itimer_left(), &out->value_sec, &out->value_usec);
+        itimer_put(tg->leader->alarm_interval, &out->interval_sec, &out->interval_usec);
+    } else {
+        itimer_put(tg->cpu_left[which - 1], &out->value_sec, &out->value_usec);
+        itimer_put(tg->cpu_interval[which - 1], &out->interval_sec, &out->interval_usec);
+    }
 }
 
 /*
- * Arm or disarm the current process's timer: the first SIGALRM `value`
- * ticks from now and then every `interval`, or disarmed for a value of 0.
- * The tick in progress is not counted, so the first SIGALRM never comes
- * before the time asked for; the later ones are rearmed at a tick and come
- * every `interval`. Interrupts are off.
+ * Arm or disarm the current process's timer `which`: the first signal
+ * `value` ticks from now and then every `interval`, or disarmed for a value
+ * of 0. A timer of real time does not count the tick in progress, so the
+ * first SIGALRM never comes before the time asked for; the later ones are
+ * rearmed at a tick and come every `interval`. A timer of processor time
+ * counts the ticks the tick handler charges to the process's threads.
+ * Interrupts are off.
  */
-static void itimer_set(uint32_t value, uint32_t interval)
+static void itimer_set(int32_t which, uint32_t value, uint32_t interval)
 {
-    process_t *p = current_proc->tg->leader;
+    struct tgroup *tg = current_proc->tg;
+    process_t *p = tg->leader;
 
+    if (which != ITIMER_REAL) {
+        tg->cpu_left[which - 1] = value;
+        tg->cpu_interval[which - 1] = value != 0 ? interval : 0;
+        return;
+    }
     if (value == 0) {
         p->alarm_tick = 0;
         p->alarm_interval = 0;
@@ -1464,16 +1485,17 @@ static void itimer_set(uint32_t value, uint32_t interval)
 }
 
 /**
- * setitimer(2), syscall 104: the real-time timer.
+ * setitimer(2), syscall 104: the interval timers.
  *
  * EBX = which, ECX = const struct itimerval *new, EDX = struct itimerval
- * *old, which may be null. ITIMER_REAL is the only timer: the virtual and
- * profiling timers count a process's own processor time, which this kernel
- * does not keep, and are refused with EINVAL, as is a negative time or
- * microseconds past a second. A value of zero disarms the timer; otherwise
- * the first SIGALRM is due that long from now, rounded up to whole 10 ms
- * ticks, then every interval, or only once for an interval of zero. `old`
- * receives the timer's setting before the call.
+ * *old, which may be null. ITIMER_REAL counts real time and posts SIGALRM,
+ * ITIMER_VIRTUAL the process's processor time in user mode and posts
+ * SIGVTALRM, and ITIMER_PROF its time in both modes and posts SIGPROF, which
+ * glibc's profil and gprof's sampling use. Another `which` is EINVAL, as is
+ * a negative time or microseconds past a second. A value of zero disarms the
+ * timer; otherwise the first signal is due that long from now, rounded up to
+ * whole 10 ms ticks, then every interval, or only once for an interval of
+ * zero. `old` receives the timer's setting before the call.
  */
 static int32_t sys_setitimer(isr_params_t *params)
 {
@@ -1481,9 +1503,10 @@ static int32_t sys_setitimer(isr_params_t *params)
         (const struct kernel_itimerval __user *)params->ecx;
     struct kernel_itimerval __user *uold = (struct kernel_itimerval __user *)params->edx;
     struct kernel_itimerval set, was;
+    int32_t which = (int32_t)params->ebx;
     uint32_t flags;
 
-    if ((int32_t)params->ebx != ITIMER_REAL) {
+    if (which < ITIMER_REAL || which > ITIMER_PROF) {
         return -EINVAL;
     }
     if (!unew || copy_from_user(&set, unew, sizeof(set)) != 0) {
@@ -1494,8 +1517,8 @@ static int32_t sys_setitimer(isr_params_t *params)
         return -EINVAL;
     }
     flags = kirq_save();
-    itimer_read(&was);
-    itimer_set(itimer_ticks(set.value_sec, set.value_usec),
+    itimer_read(which, &was);
+    itimer_set(which, itimer_ticks(set.value_sec, set.value_usec),
                itimer_ticks(set.interval_sec, set.interval_usec));
     kirq_restore(flags);
     if (uold && copy_to_user(uold, &was, sizeof(was)) != 0) {
@@ -1505,22 +1528,23 @@ static int32_t sys_setitimer(isr_params_t *params)
 }
 
 /**
- * getitimer(2), syscall 105: what the real-time timer is set to.
+ * getitimer(2), syscall 105: what an interval timer is set to.
  *
  * EBX = which, ECX = struct itimerval *cur: the time left before the next
- * SIGALRM, zero when the timer is disarmed, and the interval.
+ * signal, zero when the timer is disarmed, and the interval.
  */
 static int32_t sys_getitimer(isr_params_t *params)
 {
     struct kernel_itimerval __user *ucur = (struct kernel_itimerval __user *)params->ecx;
     struct kernel_itimerval cur;
+    int32_t which = (int32_t)params->ebx;
     uint32_t flags;
 
-    if ((int32_t)params->ebx != ITIMER_REAL) {
+    if (which < ITIMER_REAL || which > ITIMER_PROF) {
         return -EINVAL;
     }
     flags = kirq_save();
-    itimer_read(&cur);
+    itimer_read(which, &cur);
     kirq_restore(flags);
     if (!ucur || copy_to_user(ucur, &cur, sizeof(cur)) != 0) {
         return -EFAULT;
@@ -1543,7 +1567,8 @@ static int32_t sys_alarm(isr_params_t *params)
     uint32_t seconds = left / 100u;
     uint32_t usec = (left % 100u) * 10000u;
 
-    itimer_set(itimer_ticks((int32_t)(params->ebx > 21474836u ? 21474836u : params->ebx), 0), 0);
+    itimer_set(ITIMER_REAL,
+               itimer_ticks((int32_t)(params->ebx > 21474836u ? 21474836u : params->ebx), 0), 0);
     kirq_restore(flags);
     if ((seconds == 0 && usec != 0) || usec >= 500000u) {
         seconds++;

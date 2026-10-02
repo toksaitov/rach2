@@ -5265,3 +5265,13 @@ old
 new
         ap_smaps_kb(t, "Anonymous:", r->file ? 0 : clean + dirty);
 end
+
+fault cpu-timers-silent
+probe callsmusl
+file rach2/sys/proc/sched.c
+expect CALLSMUSL FAIL (ITIMER_VIRTUAL and ITIMER_PROF did not each post three signals
+old
+    if (counts && tg->cpu_left[k] != 0 && --tg->cpu_left[k] == 0) {
+new
+    if (0 && counts && tg->cpu_left[k] != 0 && --tg->cpu_left[k] == 0) {
+end

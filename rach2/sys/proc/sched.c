@@ -1,5 +1,7 @@
 #include "sched.h"
 #include "ptrace.h"
+#include "tgroup.h"
+#include "../lib/ksignal.h"
 
 #include "../lib/kirq.h"
 #include "../usb/usb.h"
@@ -233,9 +235,23 @@ uint32_t sched_busy_ticks(void)
     return _busy_ticks;
 }
 
+/** Count a tick of `p`'s processor time against its process's timer `k`
+ * when `counts`, and post `signo` when the timer runs out, arming it again
+ * for its interval. */
+static void cpu_timer_tick(process_t *p, int k, int counts, int signo)
+{
+    struct tgroup *tg = p->tg;
+
+    if (counts && tg->cpu_left[k] != 0 && --tg->cpu_left[k] == 0) {
+        tg->cpu_left[k] = tg->cpu_interval[k];
+        signal_post(p, signo);
+    }
+}
+
 /**
  * Count one delivered tick as idle or busy, and charge a busy one to the
- * process it interrupted.
+ * process it interrupted, and to its process's virtual and profiling
+ * timers.
  *
  * The process charged is `current_proc`, whose code, system call or
  * interrupt handler the tick interrupted, and `user` says whether the
@@ -256,6 +272,10 @@ void sched_account_tick(int user)
             ++current_proc->utime;
         } else {
             ++current_proc->stime;
+        }
+        if (current_proc->tg) {
+            cpu_timer_tick(current_proc, 0, user, SIGVTALRM);
+            cpu_timer_tick(current_proc, 1, 1, SIGPROF);
         }
     }
 }

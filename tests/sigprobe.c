@@ -56,8 +56,8 @@ typedef unsigned int size_t;
 #define EINTR  4
 #define EINVAL 22
 
-#define ITIMER_REAL    0
-#define ITIMER_VIRTUAL 1
+#define ITIMER_REAL 0
+#define ITIMER_PROF 2
 
 #define SA_SIGINFO   0x00000004u
 #define SA_RESTORER  0x04000000u
@@ -326,9 +326,9 @@ static int itimer_disarmed(void)
  * timer ends three sleeps of five seconds in turn, which the kernel counts
  * as sleeps cut short. getitimer reports the interval as set and a value no
  * longer than the one set; a fork's child has no timer; alarm returns the
- * seconds left before the alarm it replaces; and the virtual timer, which
- * the kernel does not keep, is refused though its time is valid, and arms
- * nothing. Every row leaves the timer disarmed.
+ * seconds left before the alarm it replaces; and a timer other than the
+ * three is refused though its time is valid, and arms nothing. Every row
+ * leaves the timer disarmed.
  */
 static void timer_rows(void)
 {
@@ -339,9 +339,9 @@ static void timer_rows(void)
     int i, ended = 0, pid, status, before;
 
     install(SIGALRM, alarm_handler);
-    check(syscall3(SYS_SETITIMER, ITIMER_VIRTUAL, (int)(size_t)second, 0) == -EINVAL &&
+    check(syscall3(SYS_SETITIMER, ITIMER_PROF + 1, (int)(size_t)second, 0) == -EINVAL &&
               itimer_disarmed(),
-          "the virtual timer is refused and arms nothing");
+          "a timer other than the three is refused and arms nothing");
     check(syscall3(SYS_SETITIMER, ITIMER_REAL, (int)(size_t)bad, 0) == -EINVAL,
           "a million microseconds is refused");
 

@@ -68,6 +68,13 @@ void klog(int level, const char *subsystem, const char *format, ...)
     records++;
 }
 
+/** No process here arms a timer of processor time, which posts a signal. */
+void signal_post(process_t *target, int signo)
+{
+    (void)target;
+    (void)signo;
+}
+
 /** No floating-point instruction is needed by the host switch model. */
 void fpu_save(void *area)
 {

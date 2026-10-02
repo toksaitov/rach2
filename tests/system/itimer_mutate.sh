@@ -5,17 +5,18 @@
 #
 # sigprobe arms the real-time timer of setitimer(2) and requires a blocked
 # single alarm not to end a sleep and its handler to run once unblocked, an
-# interval timer to end three sleeps, and the virtual timer to be refused
-# (entries 212 and 215). The kernel is built as it is, where the probe must
-# pass; with the tick's SIGALRM taken out of proc_wake_sleepers, where the
-# single alarm's handler row must fail; with the timer left disarmed after it
-# fires, where the interval's row must fail; with setitimer's check of
-# `which` removed, where the virtual timer's row must fail; with the blocked
-# mask taken out of signal_pending, where the blocked alarm's row must fail;
-# and restored after each, where the probe must pass and the kernel must be
-# the first one byte for byte. The probe boots alone from a 2 MiB
-# image, which is checked to hold the built probe. The trap stops the probe's
-# machine before it restores the sources.
+# interval timer to end three sleeps, and a timer other than the three to be
+# refused (entries 212 and 215). The kernel is built as it is, where the
+# probe must pass; with the tick's SIGALRM taken out of proc_wake_sleepers,
+# where the single alarm's handler row must fail; with the timer left
+# disarmed after it fires, where the interval's row must fail; with
+# setitimer's check of `which` removed, where the row of a timer other than
+# the three must fail; with the blocked mask taken out of signal_pending,
+# where the blocked alarm's row must fail; and restored after each, where
+# the probe must pass and the kernel must be the first one byte for byte.
+# The probe boots alone from a 2 MiB image, which is checked to hold the
+# built probe. The trap stops the probe's machine before it restores the
+# sources.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
@@ -170,12 +171,12 @@ restore
 run_phase rearmed pass
 cmp "$work/fixed.kernel" "$work/rearmed.kernel"
 
-fault rach2/sys/syscall.c '    if ((int32_t)params->ebx != ITIMER_REAL) {
+fault rach2/sys/syscall.c '    if (which < ITIMER_REAL || which > ITIMER_PROF) {
         return -EINVAL;
     }
     if (!unew || copy_from_user(&set, unew, sizeof(set)) != 0) {' \
     '    if (!unew || copy_from_user(&set, unew, sizeof(set)) != 0) {'
-detail='the virtual timer is refused and arms nothing'
+detail='a timer other than the three is refused and arms nothing'
 run_phase unchecked fail
 if cmp -s "$work/fixed.kernel" "$work/unchecked.kernel"; then
     echo 'itimer-mutation: the third fault did not change the kernel' >&2; exit 1
