@@ -5299,3 +5299,25 @@ new
     while (0 && p->writing) {
         if (!p->master_open) {
 end
+
+fault proc-fd-owner-root
+probe callsmusl
+file rach2/sys/syscall_fs.c
+expect CALLSMUSL FAIL (the /proc directory of a dumpable process of user 4243 was not its own
+old
+        if (owned >= 0) {
+            kst->st_uid = uid;
+new
+        if (0 && owned >= 0) {
+            kst->st_uid = uid;
+end
+
+fault proc-uptime-link-unnamed
+probe procprobe
+file rach2/sys/fs/procfs.c
+expect FAIL: and the link names the file it was opened by, not another one
+old
+    case SYNTH_PROC_UPTIME:
+        return "/proc/uptime";
+new
+end
