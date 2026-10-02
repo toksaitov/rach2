@@ -583,6 +583,7 @@ row_gnupg() {
     local g="--homedir $WORK/g --batch --pinentry-mode loopback"
     mkdir -m 700 "$WORK/g"
     has "the version" "$(gpg --version | head -n 1)" "gpg (GnuPG) 2.5.24"
+    same "the system configuration directory" "$(gpgconf --list-dirs sysconfdir)" "/etc/gnupg"
     # shellcheck disable=SC2086 # g is a list of options
     runs "a key" gpg $g --passphrase '' --quick-gen-key 'Row <row@example.org>' ed25519 sign never
     printf 'signed row\n' > "$WORK/msg"

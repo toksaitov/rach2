@@ -92,14 +92,18 @@ PKG_CONFIG_PATH=
 export PATH PKG_CONFIG_LIBDIR PKG_CONFIG_SYSROOT_DIR PKG_CONFIG_PATH
 
 # configure_autoconf ARG...: run the port's configure script for the target,
-# in the current directory, with the recipe's arguments and then these.
+# in the current directory, with the recipe's arguments and then these. The
+# programs live under /usr and their configuration and state under /etc and
+# /var, as Debian configures them, so that a file such as /etc/nanorc or
+# /etc/gnupg is the one the program reads; a recipe's own --sysconfdir or
+# --localstatedir comes later and wins.
 # shellcheck disable=SC2120 # the recipes pass arguments
 configure_autoconf()
 {
     # shellcheck disable=SC2086 # CACHE and CONFIGURE_ARGS are lists of words
     env $CACHE CC="$TARGET-gcc" CXX="$TARGET-g++" LDFLAGS="$LINK" \
         "$SRC/configure" --host="$TARGET" --build="$BUILD" --prefix=/usr \
-        $CONFIGURE_ARGS "$@"
+        --sysconfdir=/etc --localstatedir=/var $CONFIGURE_ARGS "$@"
 }
 
 # libtool_static: the make argument a static link needs in a port whose
