@@ -5799,3 +5799,13 @@ old
 new
     msg_attr(msg, IFLA_STATS64, stats64, 96);
 end
+
+fault proc-swaps-header
+probe procprobe
+file rach2/sys/fs/procfs.c
+expect FAIL: /proc/swaps has Linux's header and no swap area
+old
+        ap_str(&text, "Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n");
+new
+        ap_str(&text, "File name\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n");
+end

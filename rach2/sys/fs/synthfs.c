@@ -527,6 +527,7 @@ static int synth_global_file(struct comp name)
                  {"partitions", VNODE_PROC_PARTITIONS},
                  {"vmstat", VNODE_PROC_VMSTAT},
                  {"slabinfo", VNODE_PROC_SLABINFO},
+                 {"swaps", VNODE_PROC_SWAPS},
                  {"interrupts", VNODE_PROC_INTERRUPTS},
                  {"console", VNODE_PROC_CONSOLE},
                  {"mounts", VNODE_PROC_MOUNTS},

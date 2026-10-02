@@ -159,6 +159,15 @@ pswpin and pswpout, 0, since nothing is swapped.
 procps-ng's
 .Xr vmstat 8
 reads it, and takes a counter it does not find as 0.
+.It Pa /proc/swaps
+Linux's header line and no line under it, since the kernel swaps nothing
+and has no
+.Xr swapon 2 ,
+which answers
+.Er ENOSYS ;
+util-linux's
+.Xr swapon 8
+lists the areas from it.
 .It Pa /proc/slabinfo
 Linux's version 2.1 header and one line for each size class of the kernel
 heap, kmalloc-16 to kmalloc-2048 by doubling, as procps-ng's

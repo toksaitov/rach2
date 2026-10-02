@@ -1260,8 +1260,9 @@ static void sleeping_child_rows(const char *path)
 
 /** /proc/sys/vm has the swap's weight and the overcommit policy at Linux's
  * defaults, which sysctl and scripts read; /proc/slabinfo the kernel heap's
- * classes, which slabtop reads; and /sys/devices/system/memory a block of
- * memory, which lsmem reads. */
+ * classes, which slabtop reads; /sys/devices/system/memory a block of
+ * memory, which lsmem reads; and /proc/swaps its header alone, which swapon
+ * and free read. */
 static void memory_file_rows(void)
 {
     int n = slurp("/proc/sys/vm/swappiness", buf, (int)sizeof(buf));
@@ -1278,6 +1279,9 @@ static void memory_file_rows(void)
               slurp("/sys/devices/system/memory/memory0/state", buf, (int)sizeof(buf)) == 7 &&
               contains(buf, 7, "online\n"),
           "/sys/devices/system/memory has a block size in bytes and memory0 online");
+    n = slurp("/proc/swaps", buf, (int)sizeof(buf));
+    check(n > 9 && contains(buf, n, "Filename\t") && lines_in(buf, n) == 1,
+          "/proc/swaps has Linux's header and no swap area");
 }
 
 void probe_main(unsigned int *sp);

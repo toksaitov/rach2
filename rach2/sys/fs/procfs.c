@@ -98,6 +98,7 @@
 #define PROCFS_INO_NETSTAT     0x11Bu
 #define PROCFS_INO_VMSTAT      0x11Cu
 #define PROCFS_INO_SLABINFO    0x11Du
+#define PROCFS_INO_SWAPS       0x11Eu
 #define PROCFS_INO_NET         0x120u /* and the other files of /proc/net after it */
 
 /* Inode namespace for /sys: the fixed directories by their node; a PCI
@@ -183,6 +184,9 @@ static const char *procfs_kind_name(const struct vpath *vp)
     }
     if (vp->kind == VNODE_PROC_SLABINFO) {
         return "/proc/slabinfo";
+    }
+    if (vp->kind == VNODE_PROC_SWAPS) {
+        return "/proc/swaps";
     }
     if (vp->kind == VNODE_PROC_SYS_FILE) {
         return "/proc/sys";
@@ -1477,6 +1481,8 @@ static const char *procfs_global_fd_path(int origin)
         return "/proc/vmstat";
     case SYNTH_PROC_SLABINFO:
         return "/proc/slabinfo";
+    case SYNTH_PROC_SWAPS:
+        return "/proc/swaps";
     case SYNTH_PROC_SYSVIPC:
         return "/proc/sysvipc/shm";
     case SYNTH_PROC_SYSVIPC + 1:
@@ -1777,6 +1783,11 @@ uint32_t procfs_ino_slabinfo(void)
     return PROCFS_INO_SLABINFO;
 }
 
+uint32_t procfs_ino_swaps(void)
+{
+    return PROCFS_INO_SWAPS;
+}
+
 uint32_t procfs_ino_loadavg(void)
 {
     return PROCFS_INO_LOADAVG;
@@ -1932,6 +1943,9 @@ uint32_t procfs_fd_ino(struct fd_entry *e)
     }
     if (pf->origin_file == SYNTH_PROC_SLABINFO) {
         return PROCFS_INO_SLABINFO;
+    }
+    if (pf->origin_file == SYNTH_PROC_SWAPS) {
+        return PROCFS_INO_SWAPS;
     }
     if (pf->origin_file == SYNTH_PROC_SYSCTL) {
         return PROCFS_INO_SYS + (uint32_t)pf->origin_pid;
@@ -4944,13 +4958,13 @@ static int procfs_gen_fdinfo(struct procfs_text *t, int pid, int fd)
 static int procfs_needs_pid(int kind)
 {
     static const int global[] = {
-        VNODE_PROC_CMDLINE,   VNODE_PROC_DISK,        VNODE_PROC_NET_DEV,    VNODE_PROC_UPTIME,
-        VNODE_PROC_STAT_SYS,  VNODE_PROC_MEMINFO,     VNODE_PROC_CPUINFO,    VNODE_PROC_LOADAVG,
-        VNODE_PROC_DISKSTATS, VNODE_PROC_VERSION,     VNODE_PROC_PARTITIONS, VNODE_PROC_VMSTAT,
-        VNODE_PROC_SLABINFO,  VNODE_PROC_SYS_FILE,    VNODE_PROC_MOUNTS,     VNODE_PROC_USB,
-        VNODE_PROC_AUDIO,     VNODE_PROC_FILESYSTEMS, VNODE_PROC_LOOP,       VNODE_PROC_INTERRUPTS,
-        VNODE_PROC_CONSOLE,   VNODE_PROC_NET_ROUTE,   VNODE_PROC_NET_ARP,    VNODE_PROC_NET_TCP,
-        VNODE_PROC_NET_FILE,  VNODE_SYS_FILE,         VNODE_PROC_SYSVIPC};
+        VNODE_PROC_CMDLINE,    VNODE_PROC_DISK,     VNODE_PROC_NET_DEV,     VNODE_PROC_UPTIME,
+        VNODE_PROC_STAT_SYS,   VNODE_PROC_MEMINFO,  VNODE_PROC_CPUINFO,     VNODE_PROC_LOADAVG,
+        VNODE_PROC_DISKSTATS,  VNODE_PROC_VERSION,  VNODE_PROC_PARTITIONS,  VNODE_PROC_VMSTAT,
+        VNODE_PROC_SLABINFO,   VNODE_PROC_SWAPS,    VNODE_PROC_SYS_FILE,    VNODE_PROC_MOUNTS,
+        VNODE_PROC_USB,        VNODE_PROC_AUDIO,    VNODE_PROC_FILESYSTEMS, VNODE_PROC_LOOP,
+        VNODE_PROC_INTERRUPTS, VNODE_PROC_CONSOLE,  VNODE_PROC_NET_ROUTE,   VNODE_PROC_NET_ARP,
+        VNODE_PROC_NET_TCP,    VNODE_PROC_NET_FILE, VNODE_SYS_FILE,         VNODE_PROC_SYSVIPC};
     uint32_t i;
 
     for (i = 0; i < sizeof(global) / sizeof(global[0]); i++) {
@@ -5066,6 +5080,10 @@ int procfs_open(const struct vpath *vp, int flags)
         len = procfs_gen_vmstat(&text);
     } else if (vp->kind == VNODE_PROC_SLABINFO) {
         len = procfs_gen_slabinfo(&text);
+    } else if (vp->kind == VNODE_PROC_SWAPS) {
+        /* Linux's header, and no area under it, there being no swap. */
+        ap_str(&text, "Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n");
+        len = text.len;
     } else if (vp->kind == VNODE_PROC_VERSION) {
         /* Linux's "Linux version 6.8.0 ...", with uname's version after. */
         ap_str(&text, UTS_SYSNAME " version " UTS_RELEASE " (" UTS_VERSION ")\n");
@@ -5174,6 +5192,8 @@ int procfs_open(const struct vpath *vp, int flags)
         f->origin_file = SYNTH_PROC_VMSTAT;
     } else if (vp->kind == VNODE_PROC_SLABINFO) {
         f->origin_file = SYNTH_PROC_SLABINFO;
+    } else if (vp->kind == VNODE_PROC_SWAPS) {
+        f->origin_file = SYNTH_PROC_SWAPS;
     } else if (vp->kind == VNODE_PROC_SYS_FILE) {
         f->origin_file = SYNTH_PROC_SYSCTL;
     } else if (vp->kind == VNODE_PROC_MOUNTS) {
