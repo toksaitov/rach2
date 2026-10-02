@@ -2039,8 +2039,7 @@ static int32_t synth_open_dir(const struct vpath *vp, int flags)
     if ((flags & 3) != 0 || (flags & O_CREAT)) {
         return -EISDIR;
     }
-    if ((vp->kind == VNODE_SYS_DIR || vp->kind == VNODE_SYS_LINK) &&
-        (vp->sysent == SYSFS_PCI_DEVICE || vp->sysent == SYSFS_USB_DEVICE) &&
+    if ((vp->kind == VNODE_SYS_DIR || vp->kind == VNODE_SYS_LINK) && SYSFS_KEYED(vp->sysent) &&
         !sysfs_device_exists(vp->sysent, vp->syskey)) {
         return -ENOENT;
     }
@@ -4740,8 +4739,7 @@ static int32_t do_chdir(char *path)
             return -ENOTDIR;
         }
         if (vp.kind == VNODE_SYS_DIR || vp.kind == VNODE_SYS_LINK) {
-            if ((vp.sysent == SYSFS_PCI_DEVICE || vp.sysent == SYSFS_USB_DEVICE) &&
-                !sysfs_device_exists(vp.sysent, vp.syskey)) {
+            if (SYSFS_KEYED(vp.sysent) && !sysfs_device_exists(vp.sysent, vp.syskey)) {
                 return -ENOENT;
             }
             synth_sys_path(vp.sysent, vp.syskey, path, VFS_PATH_MAX);
@@ -5192,7 +5190,7 @@ static void synth_sys_identity(const struct vpath *vp, struct linux_stat64 *kst,
     if (vp->kind == VNODE_SYS_FILE) {
         kst->st_mode = S_IFREG | 0444;
         kst->st_size = 4096;
-        kst->st_ino = sysfs_ino(vp->sysent, vp->syskey, 1);
+        kst->st_ino = sysfs_ino(vp->sysent, vp->syskey, 1 + vp->procfile);
     } else if (vp->kind == VNODE_SYS_LINK && !follow) {
         kst->st_mode = 0120777; /* S_IFLNK | 0777 */
         kst->st_ino = sysfs_ino(vp->sysent, vp->syskey, 2);
@@ -5206,8 +5204,7 @@ static void synth_sys_identity(const struct vpath *vp, struct linux_stat64 *kst,
  * -ENOENT for a device that is not there. */
 static int32_t synth_sys_stat(const struct vpath *vp, struct linux_stat64 *kst, int follow)
 {
-    if ((vp->sysent == SYSFS_PCI_DEVICE || vp->sysent == SYSFS_USB_DEVICE) &&
-        !sysfs_device_exists(vp->sysent, vp->syskey)) {
+    if (SYSFS_KEYED(vp->sysent) && !sysfs_device_exists(vp->sysent, vp->syskey)) {
         return -ENOENT;
     }
     synth_sys_identity(vp, kst, follow);
@@ -10708,11 +10705,57 @@ static int synth_proc_dirent(const struct synth_dir *sd, int n, char *name, uint
 }
 
 /**
+ * The `n`th entry of /sys/class/net or of an interface's directory under it,
+ * `node`, whose interface is `key`: an interface's directory each in the
+ * first; its attribute files, its `statistics` and its `device` link in the
+ * second; and the counters in `statistics`. 1, or 0 past the last.
+ */
+static int synth_sys_net_dirent(int node, int key, int n, char *name, uint64_t *ino, uint8_t *dtype)
+{
+    const char *attr;
+    int i;
+
+    if (node == SYSFS_CLASS_NET) {
+        struct netdev *nd = netdev_at(n);
+
+        if (!nd) {
+            return 0;
+        }
+        sysfs_net_name(nd->index, name, 32);
+        *ino = sysfs_ino(SYSFS_NET_IF, nd->index, 0);
+        *dtype = DT_DIR;
+        return 1;
+    }
+    for (i = 0; (attr = sysfs_net_attr(node, i)) != NULL; i++) {
+        if (i == n) {
+            k_strncpy(name, attr, 31);
+            name[31] = '\0';
+            *ino = sysfs_ino(node, key, 1 + i);
+            *dtype = DT_REG;
+            return 1;
+        }
+    }
+    if (node == SYSFS_NET_IF && n == i) {
+        k_strncpy(name, "statistics", 31);
+        *ino = sysfs_ino(SYSFS_NET_STATS, key, 0);
+        *dtype = DT_DIR;
+        return 1;
+    }
+    if (node == SYSFS_NET_IF && n == i + 1 && sysfs_net_pci_key(key) >= 0) {
+        k_strncpy(name, "device", 31);
+        *ino = sysfs_ino(SYSFS_PCI_DEVICE, sysfs_net_pci_key(key), 2);
+        *dtype = DT_LNK;
+        return 1;
+    }
+    return 0;
+}
+
+/**
  * The `n`th entry of the /sys directory `node`, whose device is `key`: its
  * name, inode and type, and 1, or 0 past the last. The fixed directories
  * hold the next ones down, a bus's `devices` a link for each device, the
- * directory the links lead to a directory for each, and a device's
- * directory its uevent.
+ * directory the links lead to a directory for each, a device's directory
+ * its uevent, and /sys/class/net its interfaces.
  */
 static int synth_sys_dirent(int node, int key, int n, char *name, uint64_t *ino, uint8_t *dtype)
 {
@@ -10727,7 +10770,9 @@ static int synth_sys_dirent(int node, int key, int n, char *name, uint64_t *ino,
                  {SYSFS_BUS_PCI, "devices", SYSFS_PCI_LINKS},
                  {SYSFS_BUS_USB, "devices", SYSFS_USB_LINKS},
                  {SYSFS_DEVICES, "pci0000:00", SYSFS_PCI_ROOT},
-                 {SYSFS_DEVICES, "usb", SYSFS_USB_ROOT}};
+                 {SYSFS_DEVICES, "usb", SYSFS_USB_ROOT},
+                 {SYSFS_ROOT, "class", SYSFS_CLASS},
+                 {SYSFS_CLASS, "net", SYSFS_CLASS_NET}};
     int i, dev, links;
 
     for (i = 0; i < (int)(sizeof(fixed) / sizeof(fixed[0])); i++) {
@@ -10738,6 +10783,9 @@ static int synth_sys_dirent(int node, int key, int n, char *name, uint64_t *ino,
             *dtype = DT_DIR;
             return 1;
         }
+    }
+    if (node == SYSFS_CLASS_NET || node == SYSFS_NET_IF || node == SYSFS_NET_STATS) {
+        return synth_sys_net_dirent(node, key, n, name, ino, dtype);
     }
     if (node == SYSFS_PCI_DEVICE || node == SYSFS_USB_DEVICE) {
         if (n != 0) {

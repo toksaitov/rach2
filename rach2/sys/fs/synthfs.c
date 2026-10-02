@@ -552,6 +552,23 @@ void synth_sys_device_name(int node, int key, char *out, int cap)
     out[pos] = '\0';
 }
 
+const char *sysfs_net_attr(int node, int n)
+{
+    static const char *const attrs[] = {"address",      "addr_len", "broadcast", "carrier",
+                                        "dev_id",       "duplex",   "flags",     "ifindex",
+                                        "iflink",       "mtu",      "operstate", "speed",
+                                        "tx_queue_len", "type",     "uevent",    0};
+    static const char *const stats[] = {"collisions", "multicast",  "rx_bytes", "rx_dropped",
+                                        "rx_errors",  "rx_packets", "tx_bytes", "tx_dropped",
+                                        "tx_errors",  "tx_packets", 0};
+    const char *const *list = node == SYSFS_NET_IF ? attrs : node == SYSFS_NET_STATS ? stats : 0;
+    int i;
+
+    for (i = 0; list && list[i] && i < n; i++) {
+    }
+    return list && n >= 0 ? list[i] : 0;
+}
+
 void synth_sys_path(int node, int key, char *out, int cap)
 {
     static const char *const paths[] = {"/sys",
@@ -566,6 +583,21 @@ void synth_sys_path(int node, int key, char *out, int cap)
     int pos = 0;
 
     if (cap <= 0) {
+        return;
+    }
+    if (node == SYSFS_CLASS || node == SYSFS_CLASS_NET) {
+        synth_put(out, cap, &pos, node == SYSFS_CLASS ? "/sys/class" : "/sys/class/net");
+        out[pos] = '\0';
+        return;
+    }
+    if (node == SYSFS_NET_IF || node == SYSFS_NET_STATS) {
+        synth_put(out, cap, &pos, "/sys/class/net/");
+        sysfs_net_name(key, out + pos, cap - pos);
+        while (pos < cap - 1 && out[pos] != '\0') {
+            pos++;
+        }
+        synth_put(out, cap, &pos, node == SYSFS_NET_STATS ? "/statistics" : "");
+        out[pos] = '\0';
         return;
     }
     if (node == SYSFS_PCI_DEVICE || node == SYSFS_USB_DEVICE) {
@@ -604,10 +636,68 @@ static int synth_classify_sys_device(const struct comp *c, int n, int dir, struc
     return vp->kind;
 }
 
+/** The attribute of `node` named `name`, by its place in the list, or -1. */
+static int sys_net_attr_of(int node, struct comp name)
+{
+    int i;
+
+    for (i = 0; sysfs_net_attr(node, i); i++) {
+        if (comp_eq(name, sysfs_net_attr(node, i))) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+/**
+ * The node at `c` of `n` components below /sys/class/net: an interface's
+ * directory by its name, an attribute file or its statistics directory and
+ * theirs, or its `device`, the link to its card, and that card's uevent
+ * through the link.
+ */
+static int synth_classify_sys_net(const struct comp *c, int n, struct vpath *vp)
+{
+    int index = sysfs_net_index(c[0].s, c[0].len);
+    int node = SYSFS_NET_IF, at = 1;
+
+    vp->kind = VNODE_ENOENT;
+    if (index < 0) {
+        return vp->kind;
+    }
+    vp->sysent = SYSFS_NET_IF;
+    vp->syskey = index;
+    if (n >= 2 && comp_eq(c[1], "device")) {
+        vp->sysent = SYSFS_PCI_DEVICE;
+        vp->syskey = sysfs_net_pci_key(index);
+        if (vp->syskey < 0) {
+            vp->kind = VNODE_ENOENT;
+        } else if (n == 2) {
+            vp->kind = VNODE_SYS_LINK;
+        } else if (comp_eq(c[2], "uevent")) {
+            vp->kind = n == 3 ? VNODE_SYS_FILE : VNODE_ENOTDIR;
+        }
+        return vp->kind;
+    }
+    if (n >= 2 && comp_eq(c[1], "statistics")) {
+        node = SYSFS_NET_STATS;
+        vp->sysent = node;
+        at = 2;
+    }
+    if (n == at) {
+        vp->kind = VNODE_SYS_DIR;
+    } else if (n == at + 1 && sys_net_attr_of(node, c[at]) >= 0) {
+        vp->kind = VNODE_SYS_FILE;
+        vp->procfile = sys_net_attr_of(node, c[at]);
+    } else if (n > at + 1 && sys_net_attr_of(node, c[at]) >= 0) {
+        vp->kind = VNODE_ENOTDIR;
+    }
+    return vp->kind;
+}
+
 /**
  * Classify the components `c` of `n` below /sys: the fixed directories by
- * their names, and below a bus's `devices` or a device directory's parent
- * a device by its name.
+ * their names, below a bus's `devices` or a device directory's parent a
+ * device by its name, and below /sys/class/net an interface by its name.
  */
 static int synth_classify_sysfs(const struct comp *c, int n, struct vpath *vp)
 {
@@ -630,6 +720,14 @@ static int synth_classify_sysfs(const struct comp *c, int n, struct vpath *vp)
             vp->sysent = at + 2;
         } else {
             return synth_classify_sys_device(c + 3, n - 3, at + 2, vp);
+        }
+    } else if (comp_eq(c[0], "class") && n == 1) {
+        vp->sysent = SYSFS_CLASS;
+    } else if (comp_eq(c[0], "class") && comp_eq(c[1], "net")) {
+        if (n == 2) {
+            vp->sysent = SYSFS_CLASS_NET;
+        } else {
+            return synth_classify_sys_net(c + 2, n - 2, vp);
         }
     } else if (comp_eq(c[0], "devices") && n == 1) {
         vp->sysent = SYSFS_DEVICES;

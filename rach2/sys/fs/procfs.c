@@ -99,6 +99,7 @@
 #define SYSFS_INO_FIXED     0x100u
 #define SYSFS_INO_PCI       0x01000000u
 #define SYSFS_INO_PCI_LINK  0x02000000u
+#define SYSFS_INO_NET       0x03000000u
 #define SYSFS_INO_USB       0x80000000u
 #define SYSFS_INO_FILE      0x40000000u
 #define PROCFS_INO_SYS      0x140u /* and the entries of /proc/sys after it */
@@ -1472,11 +1473,14 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
             }
             if (pf->origin_file == SYNTH_SYS_UEVENT) {
                 char where[64];
+                int node = pf->origin_task >> 8;
 
-                synth_sys_path(sysfs_node_of(pf->origin_pid), pf->origin_pid, where,
-                               (int)sizeof(where));
+                synth_sys_path(node, pf->origin_pid, where, (int)sizeof(where));
                 ap_str(t, where);
-                ap_str(t, "/uevent");
+                ap_ch(t, '/');
+                ap_str(t, SYSFS_KEYED(node) && node > SYSFS_USB_DEVICE
+                              ? sysfs_net_attr(node, pf->origin_task & 255)
+                              : "uevent");
                 break;
             }
             if (pf->origin_file == SYNTH_PROC_SYSCTL) {
@@ -1717,7 +1721,7 @@ uint32_t procfs_fd_ino(struct fd_entry *e)
         return procfs_ino_net(pf->origin_file);
     }
     if (pf->origin_file == SYNTH_SYS_UEVENT) {
-        return sysfs_ino(sysfs_node_of(pf->origin_pid), pf->origin_pid, 1);
+        return sysfs_ino(pf->origin_task >> 8, pf->origin_pid, 1 + (pf->origin_task & 255));
     }
     if (pf->origin_file == SYNTH_PROC_UPTIME) {
         return PROCFS_INO_UPTIME;
@@ -2820,13 +2824,12 @@ int procfs_fd_is_sys(struct fd_entry *e)
     return pf && pf->origin_file == SYNTH_SYS_UEVENT;
 }
 
-int sysfs_node_of(int key)
-{
-    return key < 0x10000 ? SYSFS_PCI_DEVICE : SYSFS_USB_DEVICE;
-}
-
 uint32_t sysfs_ino(int node, int key, int file)
 {
+    if (node == SYSFS_NET_IF || node == SYSFS_NET_STATS) {
+        return SYSFS_INO_NET | (node == SYSFS_NET_STATS ? 0x800000u : 0u) |
+               ((uint32_t)key & 0xFFFFu) << 8 | (uint32_t)file;
+    }
     if (node == SYSFS_PCI_DEVICE && file == 2) {
         return SYSFS_INO_PCI_LINK + (uint32_t)key;
     }
@@ -2900,11 +2903,175 @@ int sysfs_device_key(int node, int n)
     return -1;
 }
 
+/** The interface whose index is `index`, or NULL. */
+static struct netdev *sysfs_netdev(int index)
+{
+    int i;
+
+    for (i = 0; i < netdev_count(); i++) {
+        if (netdev_at(i) && netdev_at(i)->index == index) {
+            return netdev_at(i);
+        }
+    }
+    return NULL;
+}
+
+int sysfs_net_index(const char *name, int len)
+{
+    int i, k;
+
+    for (i = 0; i < netdev_count(); i++) {
+        const struct netdev *nd = netdev_at(i);
+
+        for (k = 0; nd && k < len && k < (int)sizeof(nd->name) && nd->name[k] == name[k]; k++) {
+        }
+        if (nd && k == len && (k == (int)sizeof(nd->name) || nd->name[k] == '\0')) {
+            return nd->index;
+        }
+    }
+    return -1;
+}
+
+void sysfs_net_name(int index, char *out, int cap)
+{
+    const struct netdev *nd = sysfs_netdev(index);
+    int k;
+
+    for (k = 0; nd && k < cap - 1 && k < (int)sizeof(nd->name) && nd->name[k] != '\0'; k++) {
+        out[k] = nd->name[k];
+    }
+    if (cap > 0) {
+        out[k] = '\0';
+    }
+}
+
+int sysfs_net_pci_key(int index)
+{
+    const struct netdev *nd = sysfs_netdev(index);
+
+    return nd ? nd->pci_key : -1;
+}
+
 int sysfs_device_exists(int node, int key)
 {
     struct usb_sys_row r;
 
+    if (node == SYSFS_NET_IF || node == SYSFS_NET_STATS) {
+        return sysfs_netdev(key) != NULL;
+    }
     return node == SYSFS_PCI_DEVICE ? sysfs_pci_present(key) : sysfs_usb_find(key, &r) >= 0;
+}
+
+/** Append the hardware address `mac` as Linux's sysfs writes it, in
+ * lowercase. */
+static void ap_mac(struct procfs_text *t, const uint8_t *mac)
+{
+    static const char digits[] = "0123456789abcdef";
+    int i;
+
+    for (i = 0; i < 6; i++) {
+        if (i) {
+            ap_ch(t, ':');
+        }
+        ap_ch(t, digits[mac[i] >> 4]);
+        ap_ch(t, digits[mac[i] & 15u]);
+    }
+}
+
+/**
+ * Render the attribute `attr` of /sys/class/net/IF, or of its `statistics`
+ * when `node` is SYSFS_NET_STATS, of the interface `index`: what Linux's
+ * files of the same names give. The link comes from the card where it can
+ * say, and an interface down has no carrier, as on Linux; the MTU is the
+ * Ethernet frame's, which the interface ioctls report too.
+ */
+static int procfs_gen_netattr(struct procfs_text *t, int node, int index, int attr)
+{
+    static const uint8_t broadcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+    struct netdev *nd = sysfs_netdev(index);
+    struct netdev_counters c;
+    struct netdev_link link;
+    int known;
+
+    if (!nd || !sysfs_net_attr(node, attr)) {
+        return -ENOENT;
+    }
+    k_memset(&c, 0, sizeof(c));
+    if (nd->ops && nd->ops->counters) {
+        nd->ops->counters(nd->dev, &c);
+    }
+    known = netdev_link(nd, &link);
+    if (node == SYSFS_NET_STATS) {
+        uint32_t v[10];
+
+        v[0] = c.tx_collisions;
+        v[1] = c.rx_multicast;
+        v[2] = nd->rx_bytes;
+        v[3] = nd->rx_dropped;
+        v[4] = nd->rx_errors;
+        v[5] = nd->rx_packets;
+        v[6] = nd->tx_bytes;
+        v[7] = nd->tx_dropped;
+        v[8] = c.tx_errors;
+        v[9] = nd->tx_packets;
+        ap_u32(t, v[attr]);
+        ap_ch(t, '\n');
+        return t->len;
+    }
+    switch (attr) {
+    case 0:
+        ap_mac(t, nd->mac);
+        break;
+    case 1:
+        ap_str(t, "6");
+        break;
+    case 2:
+        ap_mac(t, broadcast);
+        break;
+    case 3:
+        ap_str(t, nd->up && netdev_running(nd) ? "1" : "0");
+        break;
+    case 4:
+        ap_str(t, "0x0");
+        break;
+    case 5:
+        ap_str(t, !known || !nd->up ? "unknown" : link.full_duplex ? "full" : "half");
+        break;
+    case 6:
+        ap_str(t, nd->up ? "0x1003" : "0x1002");
+        break;
+    case 7:
+    case 8:
+        ap_u32(t, (uint32_t)nd->index);
+        break;
+    case 9:
+        ap_str(t, "1500");
+        break;
+    case 10:
+        ap_str(t, !nd->up ? "down" : !known ? "unknown" : link.up ? "up" : "down");
+        break;
+    case 11:
+        if (known && nd->up && link.up) {
+            ap_u32(t, link.mbps);
+        } else {
+            ap_str(t, "-1");
+        }
+        break;
+    case 12:
+        ap_str(t, "1000");
+        break;
+    case 13:
+        ap_str(t, "1");
+        break;
+    default:
+        ap_str(t, "INTERFACE=");
+        ap_str(t, nd->name);
+        ap_str(t, "\nIFINDEX=");
+        ap_u32(t, (uint32_t)nd->index);
+        break;
+    }
+    ap_ch(t, '\n');
+    return t->len;
 }
 
 /** Append `v` in hexadecimal, lowercase and without leading zeros, as
@@ -3802,6 +3969,10 @@ int procfs_open(const struct vpath *vp, int flags)
         len = procfs_gen_nettcp(&text);
     } else if (vp->kind == VNODE_PROC_NET_FILE) {
         len = procfs_gen_net(&text, vp->procfile);
+    } else if (vp->kind == VNODE_SYS_FILE &&
+               (vp->sysent == SYSFS_NET_IF || vp->sysent == SYSFS_NET_STATS)) {
+        len = procfs_gen_netattr(&text, vp->sysent, vp->syskey, vp->procfile);
+        pid = vp->syskey;
     } else if (vp->kind == VNODE_SYS_FILE) {
         len = procfs_gen_uevent(&text, vp->sysent, vp->syskey);
         pid = vp->syskey;
@@ -3891,6 +4062,7 @@ int procfs_open(const struct vpath *vp, int flags)
         f->origin_file = SYNTH_PROC_NETTCP;
     } else if (vp->kind == VNODE_SYS_FILE) {
         f->origin_file = SYNTH_SYS_UEVENT;
+        f->origin_task = vp->sysent << 8 | vp->procfile;
     } else {
         f->origin_file = vp->procfile;
     }

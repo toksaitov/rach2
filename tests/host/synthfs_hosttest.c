@@ -15,6 +15,30 @@
 
 static int fails;
 
+/** The one interface of the model, eth0 with index 2. */
+int sysfs_net_index(const char *name, int len)
+{
+    return len == 4 && name[0] == 'e' && name[1] == 't' && name[2] == 'h' && name[3] == '0' ? 2
+                                                                                            : -1;
+}
+
+void sysfs_net_name(int index, char *out, int cap)
+{
+    (void)index;
+    if (cap > 4) {
+        out[0] = 'e';
+        out[1] = 't';
+        out[2] = 'h';
+        out[3] = '0';
+        out[4] = '\0';
+    }
+}
+
+int sysfs_net_pci_key(int index)
+{
+    return index == 2 ? 0x18 : -1;
+}
+
 #define CHECK(cond)    \
     do {               \
         if (!(cond)) { \
@@ -36,7 +60,10 @@ static int eq(const char *a, const char *b)
  * /sys: the fixed directories, a device's link and directory and uevent by
  * its name, and the names written back from the keys as they were read; a
  * name not of a device's form, or a hub port that four bits cannot hold, is
- * ENOENT, and a path through a uevent is ENOTDIR.
+ * ENOENT, and a path through a uevent is ENOTDIR. Under /sys/class/net an
+ * interface's directory, an attribute, a counter of its statistics and its
+ * device link are found by name, and an interface or attribute it does not
+ * have is ENOENT.
  */
 static void sys_tree(void)
 {
@@ -68,7 +95,20 @@ static void sys_tree(void)
     CHECK(synth_classify("sys/bus/pci/devices/0000:00:20.0", &vp) == VNODE_ENOENT);
     CHECK(synth_classify("sys/bus/pci/devices/0000:00:1F.2", &vp) == VNODE_ENOENT);
     CHECK(synth_classify("sys/bus/pci/devices/0000:00:1f.2/vendor", &vp) == VNODE_ENOENT);
-    CHECK(synth_classify("sys/class", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("sys/class", &vp) == VNODE_SYS_DIR && vp.sysent == SYSFS_CLASS);
+    CHECK(synth_classify("sys/class/net/eth0", &vp) == VNODE_SYS_DIR && vp.sysent == SYSFS_NET_IF &&
+          vp.syskey == 2);
+    CHECK(synth_classify("sys/class/net/eth0/address", &vp) == VNODE_SYS_FILE &&
+          vp.sysent == SYSFS_NET_IF && vp.procfile == 0);
+    CHECK(synth_classify("sys/class/net/eth0/statistics/rx_bytes", &vp) == VNODE_SYS_FILE &&
+          vp.sysent == SYSFS_NET_STATS && vp.procfile == 2);
+    CHECK(synth_classify("sys/class/net/eth0/device", &vp) == VNODE_SYS_LINK &&
+          vp.sysent == SYSFS_PCI_DEVICE && vp.syskey == 0x18);
+    CHECK(synth_classify("sys/class/net/eth0/mtu/x", &vp) == VNODE_ENOTDIR);
+    CHECK(synth_classify("sys/class/net/eth0/bogus", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("sys/class/net/eth9", &vp) == VNODE_ENOENT);
+    synth_sys_path(SYSFS_NET_STATS, 2, path, (int)sizeof(path));
+    CHECK(eq(path, "/sys/class/net/eth0/statistics"));
 }
 
 /** The parser's bounds, of a number and of a path's depth. */

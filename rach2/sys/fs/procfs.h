@@ -118,10 +118,6 @@ uint32_t procfs_ino_net(int origin);
  * /sys, which fstat and fstatfs report as sysfs's. */
 int procfs_fd_is_sys(struct fd_entry *e);
 
-/** The node of a device's directory under /sys, SYSFS_PCI_DEVICE or
- * SYSFS_USB_DEVICE, from its key alone (synthfs.h). */
-int sysfs_node_of(int key);
-
 /** The inode of the /sys directory `node`, with its device `key`; with
  * `file` 1 of the device's uevent, and 2 of its link. */
 uint32_t sysfs_ino(int node, int key, int file);

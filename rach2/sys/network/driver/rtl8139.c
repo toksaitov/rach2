@@ -96,6 +96,7 @@ int rtl8139_init(struct netdev *nd, int nth)
         rtl_err = "RTL8139 not found on PCI bus";
         return NETDEV_ABSENT;
     }
+    nd->pci_key = rtl_pci.bus << 8 | rtl_pci.device << 3 | rtl_pci.function;
 
     if (rtl_pci.irq > 15) {
         rtl_err = "RTL8139 has no usable IRQ line";

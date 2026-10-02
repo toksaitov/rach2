@@ -203,6 +203,7 @@ int netdev_probe(void)
             k_memset(nd, 0, sizeof(*nd));
             nd->ops = drivers[i];
             nd->index = niface + 1;
+            nd->pci_key = -1;
             name_iface(nd, niface);
             verdict = drivers[i]->init(nd, nth);
 

@@ -967,6 +967,7 @@ static int rtl8168_init(struct netdev *nd, int nth)
         r8168_err = "no RTL8168 present";
         return NETDEV_ABSENT;
     }
+    nd->pci_key = r8168_pci.bus << 8 | r8168_pci.device << 3 | r8168_pci.function;
 
     /* The memory window, by index, as the reference takes it. */
     for (i = 0; i < 6; i++) {

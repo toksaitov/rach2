@@ -177,6 +177,11 @@ struct netdev {
     /* Whether an administrator has this interface up. One taken down carries
      * nothing and answers nothing, and the others are unaffected. */
     int up;
+
+    /* The card's PCI function as bus << 8 | device << 3 | function, which
+     * its driver sets when it finds the card, or -1; /sys/class/net links
+     * the interface's `device` to it. */
+    int pci_key;
 };
 
 /** How many interfaces the last probe brought up, and the nth of them. */

@@ -64,7 +64,6 @@ static uint32_t procfs_task_links(int pid);
 static int procfs_oom_owner(int pid, uint32_t *uid, uint32_t *gid);
 static int procfs_fd_owner(struct fd_entry *e, uint32_t *uid, uint32_t *gid);
 static int procfs_fd_writable_sysctl(struct fd_entry *e);
-static int sysfs_node_of(int key);
 static uint32_t sysfs_ino(int node, int key, int file);
 static int sysfs_device_key(int node, int n);
 static int sysfs_device_exists(int node, int key);
@@ -72,6 +71,25 @@ static int sysfs_device_exists(int node, int key);
 
 /* The counters /proc/net/snmp reports, which net_core.c defines. */
 struct net_mib net_mib;
+
+/** No interface is up here, so /sys/class/net is empty. */
+int netdev_count(void)
+{
+    return 0;
+}
+
+const char *sysfs_net_attr(int node, int n)
+{
+    (void)node;
+    (void)n;
+    return 0;
+}
+
+struct netdev *netdev_at(int n)
+{
+    (void)n;
+    return 0;
+}
 
 extern int printf(const char *format, ...);
 extern int sscanf(const char *str, const char *format, ...);

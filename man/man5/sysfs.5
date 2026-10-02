@@ -3,7 +3,7 @@
 .Os
 .Sh NAME
 .Nm sysfs
-.Nd the PCI functions and USB devices under /sys
+.Nd the PCI functions, USB devices and network interfaces under /sys
 .Sh DESCRIPTION
 The kernel mounts a synthetic, read-only file system at
 .Pa /sys ,
@@ -12,9 +12,12 @@ BusyBox's
 .Ic lspci
 and
 .Ic lsusb
-read: each PCI function and each running USB device, and what it says of
+read, each PCI function and each running USB device and what it says of
 itself in its
-.Pa uevent .
+.Pa uevent ,
+and the network interfaces under
+.Pa /sys/class/net ,
+which scripts read for an interface's address, state and counters.
 Any user may read it.
 .Bl -tag -width Ds
 .It Pa /sys/bus/pci/devices/0000:BB:DD.F
@@ -53,6 +56,67 @@ and
 .Ql DEVNUM ,
 its bus and the controller's slot for it, three decimal digits each; and
 .Ql DEVTYPE=usb_device .
+.It Pa /sys/class/net/IF
+A directory for each network interface, named as
+.Xr ip 8
+names it, with Linux's attribute files, one value and a newline each:
+.Pa address
+and
+.Pa broadcast ,
+the hardware addresses in lowercase;
+.Pa addr_len ,
+6;
+.Pa carrier ,
+1 while the interface is up and its card has a link;
+.Pa dev_id ,
+0x0;
+.Pa duplex ,
+.Ql full ,
+.Ql half
+or
+.Ql unknown ;
+.Pa flags ,
+0x1003 up and 0x1002 down;
+.Pa ifindex
+and
+.Pa iflink ,
+the interface's index;
+.Pa mtu ,
+1500;
+.Pa operstate ,
+.Ql up ,
+.Ql down
+or
+.Ql unknown ;
+.Pa speed ,
+the link's megabits a second, -1 without a link;
+.Pa tx_queue_len ,
+1000;
+.Pa type ,
+1 for Ethernet; and
+.Pa uevent ,
+.Ql INTERFACE
+and
+.Ql IFINDEX .
+.It Pa /sys/class/net/IF/statistics
+The interface's counters:
+.Pa rx_bytes ,
+.Pa rx_packets ,
+.Pa rx_errors ,
+.Pa rx_dropped ,
+.Pa tx_bytes ,
+.Pa tx_packets ,
+.Pa tx_errors ,
+.Pa tx_dropped ,
+.Pa multicast
+and
+.Pa collisions ,
+those
+.Pa /proc/net/dev
+gives.
+.It Pa /sys/class/net/IF/device
+A symbolic link to the interface's PCI function,
+.Pa ../../../devices/pci0000:00/0000:BB:DD.F .
 .El
 .Pp
 A
@@ -60,11 +124,16 @@ A
 reports a size of 4096 bytes, as Linux's attribute files do, and reads as
 long as its text.
 .Pp
-Linux's tree has much more: the device classes, the attribute files beside
-each
+Linux's tree has much more: the other device classes, the attribute files
+beside a device's
 .Pa uevent ,
 the CPUs, the power and firmware interfaces.
 Rach2 has none of them.
+Linux's
+.Pa /sys/class/net
+holds a link for each interface into its device's directory; here it holds
+the interface's directory itself, and there is no loopback interface to
+list.
 Where Linux nests a PCI function under the bridge it is behind, and a USB
 device under its controller's function, they are side by side here under
 .Pa pci0000:00
@@ -87,6 +156,8 @@ for an interface's.
 The PCI functions.
 .It Pa /sys/bus/usb/devices
 The USB devices.
+.It Pa /sys/class/net
+The network interfaces.
 .El
 .Sh EXAMPLES
 .Bd -literal -offset indent

@@ -512,6 +512,7 @@ static int e1000_init(struct netdev *nd, int nth)
         e1000_err = "no e1000 present";
         return NETDEV_ABSENT;
     }
+    nd->pci_key = e->pci.bus << 8 | e->pci.device << 3 | e->pci.function;
 
     if (e->pci.irq > 15) {
         e1000_err = "the e1000 has no usable IRQ line";

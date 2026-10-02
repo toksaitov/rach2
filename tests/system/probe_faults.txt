@@ -5330,3 +5330,15 @@ old
             ptimer_cpu_tick(current_proc, user);
 new
 end
+
+fault sys-class-net-unlisted
+probe procprobe
+file rach2/sys/syscall_fs.c
+expect FAIL: /sys/class/net lists eth0
+old
+    if (node == SYSFS_CLASS_NET) {
+        struct netdev *nd = netdev_at(n);
+new
+    if (node == SYSFS_CLASS_NET) {
+        struct netdev *nd = netdev_at(n + 1);
+end

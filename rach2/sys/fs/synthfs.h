@@ -200,6 +200,26 @@ const char *synth_net_name(int origin);
 #define SYSFS_USB_ROOT   8  /* /sys/devices/usb */
 #define SYSFS_PCI_DEVICE 9  /* /sys/devices/pci0000:00/0000:BB:DD.F */
 #define SYSFS_USB_DEVICE 10 /* /sys/devices/usb/B-P[.P...] */
+#define SYSFS_CLASS      11 /* /sys/class */
+#define SYSFS_CLASS_NET  12 /* /sys/class/net */
+#define SYSFS_NET_IF     13 /* /sys/class/net/IF, whose key is its index */
+#define SYSFS_NET_STATS  14 /* /sys/class/net/IF/statistics */
+
+/** Whether the /sys directory `node` is one of a device or an interface,
+ * which `syskey` says, and which exists only while that does. */
+#define SYSFS_KEYED(node) \
+    ((node) >= SYSFS_PCI_DEVICE && (node) != SYSFS_CLASS && (node) != SYSFS_CLASS_NET)
+
+/** The name of the `n`th attribute file of SYSFS_NET_IF or SYSFS_NET_STATS,
+ * in the order the directory lists them, or NULL past the last. */
+const char *sysfs_net_attr(int node, int n);
+
+/* The interfaces' part, in procfs.c: the index of the interface named by
+ * the `len` bytes at `name`, or -1; its name, NUL-terminated, into `out` of
+ * `cap` bytes; and its card's PCI key, or -1. */
+int sysfs_net_index(const char *name, int len);
+void sysfs_net_name(int index, char *out, int cap);
+int sysfs_net_pci_key(int index);
 
 /** Write the name of the device `key` of `node`, SYSFS_PCI_DEVICE or
  * SYSFS_USB_DEVICE, into `out` of `cap` bytes, NUL-terminated. */

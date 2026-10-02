@@ -1003,6 +1003,31 @@ static void pid_dir_rows(void)
     }
 }
 
+/* /sys/class/net: the card's interface listed, its address in Linux's
+   lowercase form with QEMU's prefix, its MTU, a counter of its statistics,
+   and its device link leading to its PCI function. */
+static void net_class_rows(void)
+{
+    static char names[256];
+    char link[64] = {0};
+    int n;
+
+    check(listing("/sys/class/net", names, (int)sizeof(names)) == 0 &&
+              contains(names, (int)sizeof(names), "eth0 "),
+          "/sys/class/net lists eth0");
+    n = slurp("/sys/class/net/eth0/address", buf, (int)sizeof(buf));
+    check(n == 18 && contains(buf, n, "52:54:00:") && buf[17] == '\n',
+          "and its address is lowercase, as Linux writes it");
+    n = slurp("/sys/class/net/eth0/mtu", buf, (int)sizeof(buf));
+    check(n == 5 && contains(buf, n, "1500\n"), "its MTU is Ethernet's");
+    n = slurp("/sys/class/net/eth0/statistics/rx_packets", buf, (int)sizeof(buf));
+    check(n > 1 && buf[0] >= '0' && buf[0] <= '9', "its statistics count packets");
+    n = syscall3(SYS_READLINK, (int)(size_t)"/sys/class/net/eth0/device", (int)(size_t)link,
+                 (int)sizeof(link) - 1);
+    check(n > 0 && contains(link, n, "../../../devices/pci0000:00/0000:00:"),
+          "and its device link leads to its PCI function");
+}
+
 /* Where the first line beginning with `head` starts, or -1. */
 static int line_starting(const char *b, int n, const char *head)
 {
@@ -1621,6 +1646,7 @@ void probe_main(unsigned int *sp)
 
     dgram_and_local_rows();
     sys_rows();
+    net_class_rows();
     sysctl_rows();
     rtc_rows();
     smaps_rows();
