@@ -46,6 +46,8 @@ static uint32_t page_bits[KHEAP_PAGES / 32]; /* set where a page is mapped */
 static uint32_t next_page;
 static uint32_t pages_held;
 static uint32_t bytes_used;
+static uint32_t class_pages[KHEAP_CLASSES]; /* pages carved into each class */
+static uint32_t class_live[KHEAP_CLASSES];  /* blocks of each class in use */
 
 /* The masking of interrupts around the map; on any other target, the host
  * tests' among them, there are none to mask. */
@@ -349,6 +351,7 @@ static int add_class_page(uint32_t cls)
         *(void **)(base + off) = free_list[cls];
         free_list[cls] = (void *)(base + off);
     }
+    class_pages[cls]++;
     return 0;
 }
 
@@ -409,6 +412,7 @@ void *kmalloc(size_t size)
     free_list[cls] = *(void **)block;
     ((struct page_hdr *)((uintptr_t)block & ~(PAGE_SIZE - 1)))->used++;
     bytes_used += class_size[cls];
+    class_live[cls]++;
     irq_restore(flags);
     return block;
 }
@@ -461,8 +465,10 @@ void kfree(void *p)
     free_list[hdr->cls] = p;
     hdr->used--;
     bytes_used -= class_size[hdr->cls];
+    class_live[hdr->cls]--;
     if (hdr->used == 0) {
         drop_class_page(hdr, hdr->cls);
+        class_pages[hdr->cls]--;
         hdr->magic = 0;
         release_run(((uintptr_t)hdr - KVA_HEAP) / PAGE_SIZE, 1);
     }
@@ -477,4 +483,20 @@ void kheap_stats(uint32_t *pages, uint32_t *bytes)
     if (bytes) {
         *bytes = bytes_used;
     }
+}
+
+int kheap_class(uint32_t cls, struct kheap_class *out)
+{
+    uint32_t flags;
+
+    if (cls >= KHEAP_CLASSES) {
+        return -1;
+    }
+    out->size = class_size[cls];
+    out->per_page = (PAGE_SIZE - KHEAP_HDR) / class_size[cls];
+    flags = irq_save();
+    out->live = class_live[cls];
+    out->pages = class_pages[cls];
+    irq_restore(flags);
+    return 0;
 }

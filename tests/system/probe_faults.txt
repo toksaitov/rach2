@@ -5769,3 +5769,13 @@ old
 new
     ap_int(t, -1);
 end
+
+fault slabinfo-class-missing
+probe procprobe
+file rach2/sys/fs/procfs.c
+expect FAIL: /proc/slabinfo has Linux's version line and a line for each heap class
+old
+    for (cls = 0; kheap_class(cls, &c) == 0; cls++) {
+new
+    for (cls = 1; kheap_class(cls, &c) == 0; cls++) {
+end

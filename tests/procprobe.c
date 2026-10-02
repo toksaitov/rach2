@@ -1259,14 +1259,19 @@ static void sleeping_child_rows(const char *path)
 }
 
 /** /proc/sys/vm has the swap's weight and the overcommit policy at Linux's
- * defaults, which sysctl and scripts read. */
-static void sysctl_vm_rows(void)
+ * defaults, which sysctl and scripts read, and /proc/slabinfo the kernel
+ * heap's classes, which slabtop reads. */
+static void memory_file_rows(void)
 {
     int n = slurp("/proc/sys/vm/swappiness", buf, (int)sizeof(buf));
 
     check(n == 3 && buf[0] == '6' && buf[1] == '0' &&
               slurp("/proc/sys/vm/overcommit_memory", buf, (int)sizeof(buf)) == 2 && buf[0] == '0',
           "/proc/sys/vm has swappiness 60 and overcommit_memory 0");
+    n = slurp("/proc/slabinfo", buf, (int)sizeof(buf));
+    check(n > 0 && contains(buf, n, "slabinfo - version: 2.1\n") &&
+              contains(buf, n, "\nkmalloc-16 ") && contains(buf, n, "\nkmalloc-2048 "),
+          "/proc/slabinfo has Linux's version line and a line for each heap class");
 }
 
 void probe_main(unsigned int *sp);
@@ -1322,7 +1327,7 @@ void probe_main(unsigned int *sp)
     fd = syscall3(SYS_OPEN, (int)(size_t)path, O_RDONLY, 0);
     check(fd >= 0, "open /proc/<child>/stat while the child is alive");
     sleeping_child_rows(path);
-    sysctl_vm_rows();
+    memory_file_rows();
     check(syscall3(SYS_KILL, pid, SIGKILL, 0) == 0, "kill the child");
     check(syscall3(SYS_WAITPID, pid, (int)(size_t)&status, 0) == pid, "reap the child");
     /* The pid names nothing now. A generator asked here has nothing to answer

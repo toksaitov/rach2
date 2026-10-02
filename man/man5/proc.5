@@ -159,6 +159,16 @@ pswpin and pswpout, 0, since nothing is swapped.
 procps-ng's
 .Xr vmstat 8
 reads it, and takes a counter it does not find as 0.
+.It Pa /proc/slabinfo
+Linux's version 2.1 header and one line for each size class of the kernel
+heap, kmalloc-16 to kmalloc-2048 by doubling, as procps-ng's
+.Xr slabtop 1
+reads it.
+A slab is one page of the class: its objects are the blocks the page holds
+after a 16-byte header, the active objects those in use, and the tunables
+and shared counts are 0.
+Objects larger than 2048 bytes take whole pages and are not listed.
+Every user may read it, where Linux's is readable by root alone.
 .It Pa /proc/disk
 Disk records and counters, described in
 .Xr disk 7 .

@@ -97,6 +97,7 @@
 #define PROCFS_INO_SYSVIPC     0x117u /* and its three files after it */
 #define PROCFS_INO_NETSTAT     0x11Bu
 #define PROCFS_INO_VMSTAT      0x11Cu
+#define PROCFS_INO_SLABINFO    0x11Du
 #define PROCFS_INO_NET         0x120u /* and the other files of /proc/net after it */
 
 /* Inode namespace for /sys: the fixed directories by their node; a PCI
@@ -179,6 +180,9 @@ static const char *procfs_kind_name(const struct vpath *vp)
     }
     if (vp->kind == VNODE_PROC_VMSTAT) {
         return "/proc/vmstat";
+    }
+    if (vp->kind == VNODE_PROC_SLABINFO) {
+        return "/proc/slabinfo";
     }
     if (vp->kind == VNODE_PROC_SYS_FILE) {
         return "/proc/sys";
@@ -1471,6 +1475,8 @@ static const char *procfs_global_fd_path(int origin)
         return "/proc/partitions";
     case SYNTH_PROC_VMSTAT:
         return "/proc/vmstat";
+    case SYNTH_PROC_SLABINFO:
+        return "/proc/slabinfo";
     case SYNTH_PROC_SYSVIPC:
         return "/proc/sysvipc/shm";
     case SYNTH_PROC_SYSVIPC + 1:
@@ -1766,6 +1772,11 @@ uint32_t procfs_ino_vmstat(void)
     return PROCFS_INO_VMSTAT;
 }
 
+uint32_t procfs_ino_slabinfo(void)
+{
+    return PROCFS_INO_SLABINFO;
+}
+
 uint32_t procfs_ino_loadavg(void)
 {
     return PROCFS_INO_LOADAVG;
@@ -1918,6 +1929,9 @@ uint32_t procfs_fd_ino(struct fd_entry *e)
     }
     if (pf->origin_file == SYNTH_PROC_VMSTAT) {
         return PROCFS_INO_VMSTAT;
+    }
+    if (pf->origin_file == SYNTH_PROC_SLABINFO) {
+        return PROCFS_INO_SLABINFO;
     }
     if (pf->origin_file == SYNTH_PROC_SYSCTL) {
         return PROCFS_INO_SYS + (uint32_t)pf->origin_pid;
@@ -2602,6 +2616,45 @@ static void ap_num_width(struct procfs_text *t, int32_t v, int width, int octal)
     while (n > 0) {
         ap_ch(t, tmp[--n]);
     }
+}
+
+/**
+ * Render /proc/slabinfo in Linux's version 2.1 format, which slabtop reads:
+ * one line for each size class of the kernel heap, named kmalloc-SIZE as
+ * Linux names its general caches. A page of the class is a slab of one
+ * page: its objects are the blocks the page holds after its header, and the
+ * active ones those in use. The tunables and the shared count are 0, since
+ * the heap has no per-CPU caches.
+ */
+static int procfs_gen_slabinfo(struct procfs_text *t)
+{
+    struct kheap_class c;
+    uint32_t cls;
+    int width;
+
+    ap_str(t, "slabinfo - version: 2.1\n# name            <active_objs> <num_objs> <objsize> "
+              "<objperslab> <pagesperslab> : tunables <limit> <batchcount> <sharedfactor> : "
+              "slabdata <active_slabs> <num_slabs> <sharedavail>\n");
+    for (cls = 0; kheap_class(cls, &c) == 0; cls++) {
+        ap_str(t, "kmalloc-");
+        ap_u32(t, c.size);
+        for (width = c.size >= 1000 ? 12 : c.size >= 100 ? 11 : 10; width < 18; width++) {
+            ap_ch(t, ' ');
+        }
+        ap_num_width(t, (int32_t)c.live, 6, 0);
+        ap_ch(t, ' ');
+        ap_num_width(t, (int32_t)(c.pages * c.per_page), 6, 0);
+        ap_ch(t, ' ');
+        ap_num_width(t, (int32_t)c.size, 6, 0);
+        ap_ch(t, ' ');
+        ap_num_width(t, (int32_t)c.per_page, 4, 0);
+        ap_str(t, "    1 : tunables    0    0    0 : slabdata ");
+        ap_num_width(t, (int32_t)c.pages, 6, 0);
+        ap_ch(t, ' ');
+        ap_num_width(t, (int32_t)c.pages, 6, 0);
+        ap_str(t, "      0\n");
+    }
+    return t->len;
 }
 
 /**
@@ -4878,13 +4931,13 @@ static int procfs_gen_fdinfo(struct procfs_text *t, int pid, int fd)
 static int procfs_needs_pid(int kind)
 {
     static const int global[] = {
-        VNODE_PROC_CMDLINE,     VNODE_PROC_DISK,    VNODE_PROC_NET_DEV,    VNODE_PROC_UPTIME,
-        VNODE_PROC_STAT_SYS,    VNODE_PROC_MEMINFO, VNODE_PROC_CPUINFO,    VNODE_PROC_LOADAVG,
-        VNODE_PROC_DISKSTATS,   VNODE_PROC_VERSION, VNODE_PROC_PARTITIONS, VNODE_PROC_VMSTAT,
-        VNODE_PROC_SYS_FILE,    VNODE_PROC_MOUNTS,  VNODE_PROC_USB,        VNODE_PROC_AUDIO,
-        VNODE_PROC_FILESYSTEMS, VNODE_PROC_LOOP,    VNODE_PROC_INTERRUPTS, VNODE_PROC_CONSOLE,
-        VNODE_PROC_NET_ROUTE,   VNODE_PROC_NET_ARP, VNODE_PROC_NET_TCP,    VNODE_PROC_NET_FILE,
-        VNODE_SYS_FILE,         VNODE_PROC_SYSVIPC};
+        VNODE_PROC_CMDLINE,   VNODE_PROC_DISK,        VNODE_PROC_NET_DEV,    VNODE_PROC_UPTIME,
+        VNODE_PROC_STAT_SYS,  VNODE_PROC_MEMINFO,     VNODE_PROC_CPUINFO,    VNODE_PROC_LOADAVG,
+        VNODE_PROC_DISKSTATS, VNODE_PROC_VERSION,     VNODE_PROC_PARTITIONS, VNODE_PROC_VMSTAT,
+        VNODE_PROC_SLABINFO,  VNODE_PROC_SYS_FILE,    VNODE_PROC_MOUNTS,     VNODE_PROC_USB,
+        VNODE_PROC_AUDIO,     VNODE_PROC_FILESYSTEMS, VNODE_PROC_LOOP,       VNODE_PROC_INTERRUPTS,
+        VNODE_PROC_CONSOLE,   VNODE_PROC_NET_ROUTE,   VNODE_PROC_NET_ARP,    VNODE_PROC_NET_TCP,
+        VNODE_PROC_NET_FILE,  VNODE_SYS_FILE,         VNODE_PROC_SYSVIPC};
     uint32_t i;
 
     for (i = 0; i < sizeof(global) / sizeof(global[0]); i++) {
@@ -4998,6 +5051,8 @@ int procfs_open(const struct vpath *vp, int flags)
         len = procfs_gen_partitions(&text);
     } else if (vp->kind == VNODE_PROC_VMSTAT) {
         len = procfs_gen_vmstat(&text);
+    } else if (vp->kind == VNODE_PROC_SLABINFO) {
+        len = procfs_gen_slabinfo(&text);
     } else if (vp->kind == VNODE_PROC_VERSION) {
         /* Linux's "Linux version 6.8.0 ...", with uname's version after. */
         ap_str(&text, UTS_SYSNAME " version " UTS_RELEASE " (" UTS_VERSION ")\n");
@@ -5104,6 +5159,8 @@ int procfs_open(const struct vpath *vp, int flags)
         f->origin_file = SYNTH_PROC_PARTITIONS;
     } else if (vp->kind == VNODE_PROC_VMSTAT) {
         f->origin_file = SYNTH_PROC_VMSTAT;
+    } else if (vp->kind == VNODE_PROC_SLABINFO) {
+        f->origin_file = SYNTH_PROC_SLABINFO;
     } else if (vp->kind == VNODE_PROC_SYS_FILE) {
         f->origin_file = SYNTH_PROC_SYSCTL;
     } else if (vp->kind == VNODE_PROC_MOUNTS) {

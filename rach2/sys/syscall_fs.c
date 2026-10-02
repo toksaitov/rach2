@@ -1992,6 +1992,7 @@ static int32_t synth_open(const struct vpath *vp, int flags)
     case VNODE_PROC_VERSION:
     case VNODE_PROC_PARTITIONS:
     case VNODE_PROC_VMSTAT:
+    case VNODE_PROC_SLABINFO:
     case VNODE_PROC_SYS_FILE:
     case VNODE_PROC_MOUNTS:
     case VNODE_PROC_LOOP:
@@ -5571,6 +5572,8 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
         return synth_proc_stat(kst, procfs_ino_partitions());
     case VNODE_PROC_VMSTAT:
         return synth_proc_stat(kst, procfs_ino_vmstat());
+    case VNODE_PROC_SLABINFO:
+        return synth_proc_stat(kst, procfs_ino_slabinfo());
     case VNODE_PROC_SYS_FILE: {
         int32_t rc = synth_proc_stat(kst, procfs_ino_sys(vp->sysent));
 
@@ -11394,6 +11397,7 @@ static int synth_dirent_at(const struct synth_dir *sd, int n, char *name, uint64
                        {"version", procfs_ino_version, DT_REG},
                        {"partitions", procfs_ino_partitions, DT_REG},
                        {"vmstat", procfs_ino_vmstat, DT_REG},
+                       {"slabinfo", procfs_ino_slabinfo, DT_REG},
                        {"mounts", procfs_ino_mounts, DT_REG},
                        {"net", procfs_ino_netdir, DT_DIR},
                        {"sysvipc", procfs_ino_sysvipcdir, DT_DIR},

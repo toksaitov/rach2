@@ -92,4 +92,16 @@ void kfree_guarded(void *p, uint32_t count);
 /** Pages the heap holds now, and bytes in use inside them. */
 void kheap_stats(uint32_t *pages, uint32_t *bytes);
 
+/** One size class of the heap, as /proc/slabinfo reports it. */
+struct kheap_class {
+    uint32_t size;     /* the bytes of a block */
+    uint32_t per_page; /* the blocks a page holds after its header */
+    uint32_t live;     /* the blocks in use */
+    uint32_t pages;    /* the pages carved into blocks of the class */
+};
+
+/** Fill `out` with the counts of class `cls`, the smallest 0; 0, or -1 when
+ * there is no such class. */
+int kheap_class(uint32_t cls, struct kheap_class *out);
+
 #endif /* _KHEAP_H_ */
