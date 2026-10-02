@@ -5,13 +5,13 @@
 # Usage: sh tests/host/krffs_root_lock_mutate.sh [--check]
 #
 # The five data operations of the root adapter in rach2/sys/fs/vfs.c, the
-# bodies they call and the namespace lock are extracted unchanged from a
-# private copy of the source and compiled with the real KRFFS core into
-# tests/host/fixtures/krffs_root_lock.c, under ASan and UBSan, with the
-# thread glue of tests/host/fixtures/krffs_open_threads.c. The fixture
-# requires each operation to hold the mount's lock wherever it reaches the
-# image, and a holder that lets the lock go and asks again to wait behind a
-# process already waiting (entry 104 of milestone 50). `--check` runs that
+# bodies they call and the namespace lock, with the bind's base it takes, are
+# extracted unchanged from a private copy of the source and compiled with the
+# real KRFFS core into tests/host/fixtures/krffs_root_lock.c, under ASan and
+# UBSan, with the thread glue of tests/host/fixtures/krffs_open_threads.c. The
+# fixture requires each operation to hold the mount's lock wherever it reaches
+# the image, and a holder that lets the lock go and asks again to wait behind
+# a process already waiting (entry 104 of milestone 50). `--check` runs that
 # once and stops; the host suite runs it so. The whole proof then takes the
 # lock out of one operation at a time, and then takes the line out of the
 # lock: each fault must fail its own row, and the restored copy, touched and
@@ -66,7 +66,7 @@ turn = re.search(r"^struct ns_turn \{.*?\n\};", text, re.M | re.S)
 if not turn:
     raise SystemExit("krffs-root-lock: struct ns_turn is missing")
 parts = [turn.group()]
-names = ("ns_my_turn vfs_ns_lock vfs_ns_unlock kfs_read_locked kfs_write_locked "
+names = ("mount_base ns_my_turn vfs_ns_lock vfs_ns_unlock kfs_read_locked kfs_write_locked "
          "kfs_truncate_locked kfs_fsync_locked kfs_readdir_locked kfs_read kfs_write "
          "kfs_truncate kfs_fsync kfs_readdir")
 tokens = r'/\*.*?\*/|//[^\n]*|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|[{}]'
