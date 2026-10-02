@@ -449,7 +449,7 @@ PY
         timer-interval-read-sec) detail='an interval of 1.5 s reads back as 1.5 s' ;;
         timer-usec) detail='an interval of 1000000 us is refused' ;;
         timer-mask) detail='the timer is armed with interrupts masked' ;;
-        getitimer-which) detail='getitimer refuses a timer other than the three' ;;
+        getitimer-which) detail="out of bounds for type 'uint32_t [2]'" ;;
         alarm-round) detail='alarm reports 4.7 s left as 5' ;;
         alarm-nearest) detail='alarm reports 4.43 s left as 4' ;;
         alarm-half) detail='alarm reports 4.5 s left as 5' ;;
