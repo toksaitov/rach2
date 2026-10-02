@@ -27,11 +27,12 @@
 # /etc/services, /etc/protocols, /etc/networks, /etc/localtime and /etc/timezone
 # in place, compiles the console's terminfo entry, rach2.ti, renders the ports'
 # manual pages with render_man.sh, takes the set-id bit off OpenSSH's
-# ssh-keysign, and has the root's own ldconfig write /etc/ld.so.cache from the
+# ssh-keysign, gives /etc/shadow a locked line for each system account of
+# /etc/passwd, and has the root's own ldconfig write /etc/ld.so.cache from the
 # /etc/ld.so.conf the manifest staged. A file the tree already has is refused
 # rather than replaced, so that what the manifest staged is what the image has;
-# the one file replaced is named where it is, and /bin/sh, which the manifest
-# does not stage, is a name of bash's file.
+# the one file replaced and the one added to are named where they are, and
+# /bin/sh, which the manifest does not stage, is a name of bash's file.
 #
 
 set -e
@@ -272,6 +273,15 @@ sh "$DIR/render_man.sh" "$TREE/usr/share/man"
 # host keys. The system uses no host-based authentication, and a set-id file
 # the manifest does not declare fails the set-id guard, so it has no bit.
 chmod u-s "$TREE/usr/libexec/ssh-keysign"
+
+# The shadow file the manifest stages, krffs/shadow, has the lines of the
+# accounts that log in, root's and test's, which every image shares. shadow's
+# pwck wants a line for every account of /etc/passwd, and the GNU root's
+# system accounts, sshd, messagebus and nobody, get one with a locked
+# password, as Debian's have.
+locked=$(awk -F: 'NR == FNR { have[$1] = 1; next } !($1 in have) { print $1 ":!:::::::" }' \
+    "$TREE/etc/shadow" "$TREE/etc/passwd")
+[ -z "$locked" ] || printf '%s\n' "$locked" >>"$TREE/etc/shadow"
 
 # ldconfig is linked statically, as glibc always links it, so the build host
 # runs the root's own without its loader: -r reads the tree's ld.so.conf and
