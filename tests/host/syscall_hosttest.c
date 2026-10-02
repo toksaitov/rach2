@@ -606,7 +606,7 @@ static void sleeps_masked(void)
  * to sleep with its deadline armed again. A remainder of 199 ticks is 1 s and
  * 990 ms. A sleep resumed for its remainder after a signal at every tick ends
  * within four calls, no earlier than the first sleep's deadline. The count is
- * clamped so that the longest sleep begun at 0x80000000
+ * clamped so that the longest sleep begun at 0x80000000, 4 ms into the tick,
  * still lies ahead of it, seconds past the clamp are shortened to it rather
  * than wrapped, and a deadline that wraps to 0, the "not sleeping" value, is
  * stored as 1. A sleep of zero does not block.
@@ -663,10 +663,12 @@ static void sleep_edges(void)
     CHECK(calls <= 4 && kernel_ticks >= 5003,
           "a sleep resumed after a signal at every tick ends within four calls");
 
+    mono_phase_ns = 4000000;
     ask_sleep(&p, 21474836, 469999999);
     model_at(0x80000000u);
     rc = sleep_call(&p);
     CHECK(rc == 0 && sleeps > 0, "the longest sleep begun at tick 0x80000000 blocks");
+    mono_phase_ns = 0;
 
     ask_sleep(&p, 42949673, 0);
     model_at(1400);

@@ -228,13 +228,9 @@ changes = {
         'current_proc->wakeup_tick = target;'),
     'sleep-clamp': ('syscall',
         '    if (ticks > 0x7FFFFFFEu) {\n'
-        '        ticks = 0x7FFFFFFEu;\n'
-        '    }\n'
-        '    return sleep_until(now + ticks, urem);',
+        '        ticks = 0x7FFFFFFEu; /* keep the signed (target-now) delta valid */',
         '    if (ticks > 0x7FFFFFFFu) {\n'
-        '        ticks = 0x7FFFFFFFu;\n'
-        '    }\n'
-        '    return sleep_until(now + ticks, urem);'),
+        '        ticks = 0x7FFFFFFFu; /* keep the signed (target-now) delta valid */'),
     'sleep-sec-clamp': ('syscall',
         '    if (sec > 21474836u) {\n'
         '        sec = 21474836u; /* keeps the intermediate sec*100 below 2^31 */\n'

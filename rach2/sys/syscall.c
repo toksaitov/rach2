@@ -1151,9 +1151,6 @@ static int32_t sleep_for(const struct kernel_timespec *req, struct kernel_timesp
     us = phase_ns / 1000u + ((uint32_t)req->tv_nsec + 999u) / 1000u;
     ticks = timespec_ticks(req) - ((uint32_t)req->tv_nsec + 9999999u) / 10000000u;
     ticks += (us + 9999u) / 10000u;
-    if (ticks > 0x7FFFFFFEu) {
-        ticks = 0x7FFFFFFEu;
-    }
     return sleep_until(now + ticks, urem);
 }
 
