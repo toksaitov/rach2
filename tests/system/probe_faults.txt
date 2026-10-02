@@ -5275,3 +5275,15 @@ old
 new
     if (0 && counts && tg->cpu_left[k] != 0 && --tg->cpu_left[k] == 0) {
 end
+
+fault proc-owner-root
+probe callsmusl
+file rach2/sys/syscall_fs.c
+expect CALLSMUSL FAIL (the /proc directory of a dumpable process of user 4243 was not its own
+old
+    if (procfs_oom_owner(pid, &uid, &gid) == 0) {
+        kst->st_uid = uid;
+new
+    if (0 && procfs_oom_owner(pid, &uid, &gid) == 0) {
+        kst->st_uid = uid;
+end

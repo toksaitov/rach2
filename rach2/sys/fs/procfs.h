@@ -135,10 +135,11 @@ int sysfs_device_exists(int node, int key);
 uint32_t procfs_fd_ino(struct fd_entry *e);
 uint32_t procfs_ino_pid(int pid);
 
-/** The owner /proc/<pid>/oom_score_adj of process `pid` has, whose effective
- * user ID may write it beside a privileged caller: the process's effective
- * user and group IDs while its address space is dumpable, and 0 otherwise.
- * 0, or -ENOENT when there is no such process. */
+/** The owner of the files and directories of process `pid` under /proc,
+ * whose effective user ID may write its oom_score_adj beside a privileged
+ * caller: the process's effective user and group IDs while its address
+ * space is dumpable, and 0 otherwise. 0, or -ENOENT when there is no such
+ * process. */
 int procfs_oom_owner(int pid, uint32_t *uid, uint32_t *gid);
 
 /** The same owner for a descriptor open on an oom_score_adj file: 0 with

@@ -28,7 +28,9 @@
  * EAGAIN.
  * A setgid directory gives a file made in it its group, and a directory
  * its group and the bit. A process of another user is refused the maps and
- * the descriptors of a root process under /proc, and reads its own.
+ * the descriptors of a root process under /proc, and reads its own. Its
+ * /proc directory is root's while a change of ids leaves it not dumpable,
+ * and its own once PR_SET_DUMPABLE makes it so, as on Linux.
  * mlock, munlock, mlockall and munlockall accept a mapped range and refuse a
  * gap with ENOMEM; mincore reports a touched page resident.
  * getcpu reports CPU 0, and personality keeps and returns its value.
@@ -68,6 +70,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/prctl.h>
 #include <sys/resource.h>
 #include <sys/signalfd.h>
 #include <sys/timex.h>
@@ -288,6 +291,7 @@ static int setgids(void)
 static int privacies(void)
 {
     char path[64];
+    struct stat st;
     int status, fd;
     pid_t pid, parent = getpid();
 
@@ -308,13 +312,24 @@ static int privacies(void)
             _exit(3);
         }
         fd = open("/proc/self/maps", O_RDONLY);
-        _exit(fd < 0 ? 4 : 0);
+        if (fd < 0) {
+            _exit(4);
+        }
+        if (stat("/proc/self/", &st) != 0 || st.st_uid != 0 ||
+            prctl(PR_SET_DUMPABLE, 1, 0, 0, 0) != 0 || stat("/proc/self/", &st) != 0 ||
+            st.st_uid != 4243 || stat("/proc/self/status", &st) != 0 || st.st_uid != 4243) {
+            _exit(5);
+        }
+        _exit(0);
     }
     if (pid < 0 || waitpid(pid, &status, 0) != pid || !WIFEXITED(status)) {
         return fail("a child of user 4243");
     }
     if (WEXITSTATUS(status) == 2 || WEXITSTATUS(status) == 3) {
         return fail("another user opened a root process's maps or fd directory");
+    }
+    if (WEXITSTATUS(status) == 5) {
+        return fail("the /proc directory of a dumpable process of user 4243 was not its own");
     }
     if (WEXITSTATUS(status) != 0) {
         return fail("a child of user 4243 could not become it or read its own maps");

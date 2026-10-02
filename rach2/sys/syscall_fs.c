@@ -5355,6 +5355,20 @@ static int32_t synth_fd_stat(int pid, int fd, struct linux_stat64 *kst)
 
 #define PTS_INO_BASE 0x1000u
 
+/** Give `kst` the owner of process `pid`'s files under /proc, as Linux's
+ * `task_dump_owner` does: the process's effective user and group IDs while
+ * it is dumpable, and root otherwise (`procfs_oom_owner`). BusyBox's `ps`
+ * and `top` read a process's user from its directory's owner. */
+static void synth_pid_owner(int pid, struct linux_stat64 *kst)
+{
+    uint32_t uid, gid;
+
+    if (procfs_oom_owner(pid, &uid, &gid) == 0) {
+        kst->st_uid = uid;
+        kst->st_gid = gid;
+    }
+}
+
 static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int follow)
 {
     uint32_t mode = 0, rdev = 0, ino = 0;
@@ -5507,6 +5521,7 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
         kst->st_dev = PROCFS_FSID;
         kst->st_mode = 0120777; /* S_IFLNK | 0777 */
         kst->st_ino = procfs_ino_pid(rpid);
+        synth_pid_owner(rpid, kst);
         return 0;
     }
     case VNODE_PROC_PID:
@@ -5527,28 +5542,24 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
         kst->st_dev = PROCFS_FSID;
         kst->st_mode = S_IFDIR | 0555;
         kst->st_ino = procfs_ino_pid(procfs_resolve_id(vp));
+        synth_pid_owner(procfs_resolve_id(vp), kst);
         if (vp->kind == VNODE_PROC_TASK_DIR) {
             kst->st_nlink = procfs_task_links(procfs_resolve_id(vp));
         }
         return 0;
-    case VNODE_PROC_FILE: {
-        uint32_t uid, gid;
-
+    case VNODE_PROC_FILE:
         if (procfs_resolve_id(vp) < 0) {
             return -ENOENT;
         }
         kst->st_dev = PROCFS_FSID;
         kst->st_mode = S_IFREG | 0444;
         kst->st_ino = procfs_ino_pid(procfs_resolve_id(vp));
+        synth_pid_owner(procfs_resolve_id(vp), kst);
         /* oom_score_adj is its owner's to write, as on Linux. */
-        if (vp->procfile == SYNTH_PROC_OOM_ADJ &&
-            procfs_oom_owner(procfs_resolve_id(vp), &uid, &gid) == 0) {
+        if (vp->procfile == SYNTH_PROC_OOM_ADJ) {
             kst->st_mode = S_IFREG | 0644;
-            kst->st_uid = uid;
-            kst->st_gid = gid;
         }
         return 0;
-    }
     case VNODE_PROC_FD_LINK: {
         char scratch[16];
         int rpid = procfs_resolve_id(vp);
@@ -5566,6 +5577,7 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
         kst->st_dev = PROCFS_FSID;
         kst->st_mode = 0120777; /* S_IFLNK | 0777 */
         kst->st_ino = procfs_ino_pid(rpid);
+        synth_pid_owner(rpid, kst);
         return 0;
     }
     case VNODE_PTS_DIR:

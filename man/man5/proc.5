@@ -593,6 +593,19 @@ where Linux's line begins
 .Ql Linux version
 and goes on with the builder, the compiler and the build's date, which
 this kernel does not record.
+.It Pa /proc/PID
+A process's directory, and each file and link in it,
+belongs to the process's effective user and group IDs while the process
+is dumpable, and to root otherwise, as on Linux;
+.Xr ps 1
+and
+.Xr top 1
+read a process's user from the directory's owner.
+.Xr fstat 2
+of a descriptor open on one of the files reports root, but for
+.Pa oom_score_adj ,
+where Linux reports the same owner as
+.Xr stat 2 .
 .It Pa /proc/PID/stat
 One line of 24 space-separated fields:
 .Bd -literal -offset indent
@@ -795,8 +808,7 @@ what it wrote, as a caller with Linux's
 .Dv CAP_SYS_RESOURCE
 does.
 Opening the file for writing needs a privileged caller or its owner, the
-process's effective user ID while the process is dumpable and root
-otherwise, as
+owner of the process's directory, and
 .Xr stat 2
 reports it with mode 0644.
 On Linux a write sets the value of every other process that shares the
