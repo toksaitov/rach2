@@ -5724,9 +5724,9 @@ probe nsmusl
 file rach2/sys/fs/vfs.c
 expect NSMUSL FAIL (a descriptor of /proc opened before the chroot reaches self/fd
 old
-    if (!mnt->type->ops->path || mnt == vfs_memfd_mount()) {
+    if ((!root_krffs && !mnt->type->ops->path) || mnt == vfs_memfd_mount()) {
 new
-    if (!mnt->type->ops->path) {
+    if (!root_krffs && !mnt->type->ops->path) {
 end
 
 fault sys-cpu-offline-listed

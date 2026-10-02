@@ -42,7 +42,7 @@ The order of work is: resolve and hold the target; check it; under the parent's 
 
 A type never sees a bind: every wrapper in `vfs.c` passes the base to the type's operation, and the namespace lock of a bind is its base's, so two mounts of one file system serialise as one. A write through a bind is refused when the bind or its base is read-only (`mount_rdonly`); `MS_REMOUNT` with `MS_BIND` changes the bind's flags alone (`vfs_remount_bind`), and without it changes the base's. What names a file by its mount and inode number names it by the base (`vfs_mount_base`): record locks, inotify watches, FIFOs, socket files, shared file mappings, the descriptions an unlink or an attachment checks, and the device `stat` reports. A walk inside a bind stays on the bind, so `..` at its root climbs to the directory it covers, `vfs_node_path` gives a path below the bind's place, and the mounts below the source are not under the bind unless `MS_REC` placed a bind of each (`bind_below`).
 
-KRFFS is refused as a source, since it moves its nodes and repoints only the references of its own mount. A synthetic type is refused but at its root, since it resolves the rest of a path by its fixed prefix: a bind of `/dev`, `/proc` or `/sys` resolves as the original, which is what a chroot needs. `/proc/PID/mountinfo` gives a bind its base's device and its root's path within the file system.
+A bind of KRFFS, which moves a node as its file grows, moves with it: `vfs_repoint` repoints the references of every mount whose base is the moving one, the bind's root among them, and a bind of the boot root rebuilds a node's path from the root's own path less the bind's. `rmdir` of the directory a bind shows is `EBUSY`, as one a process has for its root is, since the root and a mounted KRFFS volume hold no node. A synthetic type is refused but at its root, since it resolves the rest of a path by its fixed prefix: a bind of `/dev`, `/proc` or `/sys` resolves as the original, which is what a chroot needs. `/proc/PID/mountinfo` gives a bind its base's device and its root's path within the file system.
 
 ## The resolver
 
@@ -102,7 +102,7 @@ The counts here come from the heap and not from a table. The mount table starts 
 
 ## What is absent
 
-`MS_MOVE`, a bind of a directory on KRFFS or inside `/dev`, `/proc` or `/sys`, a remount between read-only and writable on KRFFS, FAT32 and exFAT, `MNT_DETACH` and `MNT_FORCE`; a mount point on a directory of `/dev` or `/proc` themselves; symbolic links on KRFFS, FAT32 and exFAT; access-time updates.
+`MS_MOVE`, a bind of a directory inside `/dev`, `/proc` or `/sys`, a change of a file's mode, owner or times through a bind of the KRFFS boot root, which the root makes only through its own paths and the bind answers with `EROFS`, a remount between read-only and writable on KRFFS, FAT32 and exFAT, `MNT_DETACH` and `MNT_FORCE`; a mount point on a directory of `/dev` or `/proc` themselves; symbolic links on KRFFS, FAT32 and exFAT; access-time updates.
 
 ## Verification
 

@@ -20,8 +20,12 @@
  * at the bind's root climbs to the parent of the directory it covers, a
  * bind remounted read-only refuses a write while its source takes one,
  * mountinfo gives the bind its root within the file system, and the
- * source's mount is busy until the bind is unmounted. A recursive bind of
- * /dev has its devices and /dev/shm, which are unmounted in turn.
+ * source's mount is busy until the bind is unmounted. A bind of a directory
+ * of the KRFFS root shows a file made through it as its source does after
+ * the file grows enough for KRFFS to move it, and so does a descriptor
+ * opened before the growth; the bind's root is busy to rmdir until the bind
+ * is unmounted. A recursive bind of /dev has its devices and /dev/shm, which
+ * are unmounted in turn.
  *
  * Prints "TMPFSMUSL OK" on success and "TMPFSMUSL FAIL (detail)" otherwise.
  */
@@ -341,9 +345,41 @@ static int rbound(void)
     return 0;
 }
 
+/** A bind of a directory of the KRFFS root, whose files move as they grow. */
+static int kbound(void)
+{
+    static char big[65536];
+    char buf[8];
+    struct stat a;
+    int fd, wfd;
+
+    if (mkdir("/tmp/kbsrc", 0755) != 0 || mkdir("/tmp/kbdst", 0755) != 0 ||
+        mount("/tmp/kbsrc", "/tmp/kbdst", NULL, MS_BIND, NULL) != 0) {
+        return fail("a bind of a directory of the KRFFS root");
+    }
+    fd = put("/tmp/kbdst/f", "small") ? open("/tmp/kbdst/f", O_RDONLY) : -1;
+    memset(big, 'x', sizeof(big));
+    wfd = open("/tmp/kbsrc/f", O_WRONLY | O_APPEND);
+    if (fd < 0 || wfd < 0 || write(wfd, big, sizeof(big)) != (ssize_t)sizeof(big) ||
+        close(wfd) != 0 || stat("/tmp/kbdst/f", &a) != 0 || a.st_size != 5 + 65536 ||
+        pread(fd, buf, 6, 0) != 6 || memcmp(buf, "smallx", 6) != 0 ||
+        pread(fd, buf, 1, 5 + 65535) != 1 || buf[0] != 'x') {
+        return fail("a KRFFS file grown through its source reads alike through the bind");
+    }
+    close(fd);
+    if (rmdir("/tmp/kbsrc") != -1 || errno != EBUSY) {
+        return fail("the root of a bind of KRFFS is busy to rmdir");
+    }
+    if (umount2("/tmp/kbdst", 0) != 0 || unlink("/tmp/kbsrc/f") != 0 || rmdir("/tmp/kbsrc") != 0 ||
+        rmdir("/tmp/kbdst") != 0) {
+        return fail("the bind of KRFFS unmounts and its directories go");
+    }
+    return 0;
+}
+
 int main(void)
 {
-    if (placed() || deep() || shm() || bound() || bound_mount() || rbound()) {
+    if (placed() || deep() || shm() || bound() || bound_mount() || rbound() || kbound()) {
         return 1;
     }
     printf("TMPFSMUSL OK\n");

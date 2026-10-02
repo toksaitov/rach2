@@ -517,21 +517,35 @@ static void node_put(struct vfs_mount *mnt, void *node)
     }
 }
 
+/** Whether a bind shows the file system of `mnt` from `node`. */
+static int bind_rooted_at(struct vfs_mount *mnt, const void *node)
+{
+    int i;
+
+    for (i = 0; i < mount_slots; i++) {
+        struct vfs_mount *m = mounts[i];
+
+        if (m && m->state != VFS_FREE && m->bind_of == mount_base(mnt) && m->root == node) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 int vfs_leaf_root(struct vfs_mount *mnt, void *node, const char *name)
 {
     void *found;
     process_t *pr;
     int is = 0;
 
-    for (pr = proc_list; pr && !(pr->fs && pr->fs->root_mnt == mnt); pr = pr->next) {
-    }
-    if (!pr || !mnt->type->ops->lookup ||
+    if (!mnt->type->ops->lookup ||
         mnt->type->ops->lookup(mount_base(mnt), node, name, &found) != 0) {
         return 0;
     }
     for (pr = proc_list; pr && !is; pr = pr->next) {
         is = pr->fs && pr->fs->root_mnt == mnt && pr->fs->root_node == found;
     }
+    is = is || bind_rooted_at(mnt, found);
     node_put(mnt, found);
     return is;
 }
@@ -539,12 +553,13 @@ int vfs_leaf_root(struct vfs_mount *mnt, void *node, const char *name)
 int vfs_node_path(struct vfs_mount *mnt, void *node, char *out, uint32_t cap)
 {
     uint32_t ml = k_strlen(mnt->covered_path);
+    int root_krffs = mount_base(mnt) == mounts[0] && mnt->type == &vfs_krffs_type;
     int r;
 
-    if (mnt == mounts[0] && mnt->type == &vfs_krffs_type) {
+    if (mnt == mounts[0] && root_krffs) {
         return krffs_node_path((krffs_node_t *)node, out, cap) == 0 ? 0 : -ENAMETOOLONG;
     }
-    if (!mnt->type->ops->path || mnt == vfs_memfd_mount()) {
+    if ((!root_krffs && !mnt->type->ops->path) || mnt == vfs_memfd_mount()) {
         return -ENOENT;
     }
     if (ml <= 1) {
@@ -554,7 +569,9 @@ int vfs_node_path(struct vfs_mount *mnt, void *node, char *out, uint32_t cap)
         return -ENAMETOOLONG;
     }
     k_memcpy(out, mnt->covered_path, ml);
-    r = mnt->type->ops->path(mount_base(mnt), node, out + ml, cap - ml);
+    r = root_krffs
+            ? (krffs_node_path((krffs_node_t *)node, out + ml, cap - ml) == 0 ? 0 : -ENAMETOOLONG)
+            : mnt->type->ops->path(mount_base(mnt), node, out + ml, cap - ml);
     if (r != 0) {
         return r;
     }
@@ -1166,22 +1183,15 @@ void vfs_desc_close(struct vfs_mount *mnt, void *node, void *handle)
 
 /* Repointing, for a KRFFS relocation. */
 
-void vfs_repoint(struct vfs_mount *mnt, const void *from, void *to)
+/** `vfs_repoint` for one mount that shows the moving file system: the
+ * working directories and roots on it, the mounts over its directories, its
+ * own root, and its descriptions, loop devices and locks. */
+static void repoint_one(struct vfs_mount *mnt, const void *from, void *to)
 {
     process_t *pr;
-    int i, j;
+    int i;
 
     for (pr = proc_list; pr; pr = pr->next) {
-        if (mnt == mounts[0]) {
-            for (j = 0; j < fd_table_cap(pr->fds); j++) {
-                fd_entry_t *e = &pr->fds->entries[j];
-
-                if ((e->type == FD_TYPE_FILE || e->type == FD_TYPE_DIR) &&
-                    (void *)e->node == from) {
-                    e->node = to;
-                }
-            }
-        }
         if (pr->fs && pr->fs->cwd_mnt == mnt && pr->fs->cwd_node == from) {
             pr->fs->cwd_node = to;
         }
@@ -1203,6 +1213,36 @@ void vfs_repoint(struct vfs_mount *mnt, const void *from, void *to)
     fd_ofd_repoint(mnt, from, to);
     loop_repoint(mnt, from, to);
     lock_repoint(mnt, (uint64_t)(uintptr_t)from, (uint64_t)(uintptr_t)to);
+}
+
+/**
+ * KRFFS moved a node from `from` to `to`: every reference to it moves, on
+ * the mount `mnt` and on each bind that shows its file system, and the
+ * descriptors of the boot root, which hold its nodes themselves.
+ */
+void vfs_repoint(struct vfs_mount *mnt, const void *from, void *to)
+{
+    process_t *pr;
+    int i, j;
+
+    for (pr = proc_list; pr; pr = pr->next) {
+        if (mnt == mounts[0]) {
+            for (j = 0; j < fd_table_cap(pr->fds); j++) {
+                fd_entry_t *e = &pr->fds->entries[j];
+
+                if ((e->type == FD_TYPE_FILE || e->type == FD_TYPE_DIR) &&
+                    (void *)e->node == from) {
+                    e->node = to;
+                }
+            }
+        }
+    }
+    for (i = 0; i < mount_slots; i++) {
+        if (mounts[i] && mounts[i]->state != VFS_FREE &&
+            (mounts[i] == mnt || mounts[i]->bind_of == mnt)) {
+            repoint_one(mounts[i], from, to);
+        }
+    }
 }
 
 /* The default-answer wrappers. */
@@ -3001,9 +3041,9 @@ static uint32_t path_below(const struct vfs_mount *m)
 /**
  * Whether the directory `sref` holds may be a bind's root, with its path
  * from the root of the mount table in `full` and its path within its file
- * system in `inner`. 0, or ENOTDIR, EINVAL for KRFFS, whose nodes move, and
- * for a place inside a type that takes the rest of a path in one call, or
- * ENAMETOOLONG.
+ * system in `inner`. 0, or ENOTDIR, EINVAL for a place inside a type that
+ * takes the rest of a path in one call, or ENAMETOOLONG. A bind of KRFFS,
+ * whose nodes move, is moved with them by `vfs_repoint`.
  */
 static int bind_source(const struct vfs_ref *sref, char *full, char *inner)
 {
@@ -3019,8 +3059,7 @@ static int bind_source(const struct vfs_ref *sref, char *full, char *inner)
     if (!VFS_IS_DIR(st.mode)) {
         return -ENOTDIR;
     }
-    if (base->type == &vfs_krffs_type || base->type == &vfs_krffs_volume_type ||
-        (base->type->ops->lookup_rest && sref->node != sref->mnt->root)) {
+    if (base->type->ops->lookup_rest && sref->node != sref->mnt->root) {
         return -EINVAL;
     }
     if (sref->node == sref->mnt->root) {

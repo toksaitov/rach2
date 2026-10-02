@@ -119,13 +119,22 @@ has
 .Pa /dev/shm .
 The source must be a directory,
 .Er ENOTDIR ,
-not on KRFFS, whose nodes move, and not inside
+and not inside
 .Pa /dev ,
 .Pa /proc
 or
 .Pa /sys ,
 whose roots may be bound,
 .Er EINVAL .
+A bind of a directory of KRFFS, whose files move as they grow, moves with
+them, and the directory a bind shows is busy to
+.Xr rmdir 2 ,
+.Er EBUSY ,
+until the bind is unmounted.
+Through a bind of the KRFFS boot root a file's mode, owner and times do
+not change,
+.Er EROFS ,
+since the root changes them only through its own paths.
 The mount the source is on cannot be unmounted while a bind of it stands,
 .Er EBUSY ;
 a bind is unmounted as any mount is, and the mounts below it first.
