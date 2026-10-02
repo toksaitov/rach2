@@ -227,7 +227,7 @@ static int link_ok(struct nlmsghdr *h, int first)
             name = RTA_DATA(a);
         }
         if (a->rta_type == IFLA_STATS64) {
-            stats64 = (int)RTA_PAYLOAD(a);
+            stats64 = (int)a->rta_len - (int)sizeof(struct rtattr);
         }
     }
     if (!name) {
