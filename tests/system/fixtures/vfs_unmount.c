@@ -27,6 +27,7 @@
 struct block_device {
     int flags, backing_flags;
 };
+typedef struct block_device block_device_t;
 struct vfs_mount;
 struct vfs_ops {
     int (*sync)(struct vfs_mount *);
@@ -224,6 +225,13 @@ static void vfs_device_failed(struct block_device *dev, unsigned long long lba, 
 static void inotify_unmount(struct vfs_mount *m)
 {
     (void)m;
+}
+
+/* The unmount lets a loop device set to clear itself go, and this fixture
+ * mounts none. */
+static void loop_unmounted(struct block_device *d)
+{
+    (void)d;
 }
 
 /* The caller's mount namespace is the only one, so an unmount is never

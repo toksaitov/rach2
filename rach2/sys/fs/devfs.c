@@ -11,6 +11,7 @@
 
 #include "../klog.h"
 #include "devfs.h"
+#include "procfs.h"
 
 #include "../block/loop.h"
 #include "fd.h"
@@ -754,27 +755,135 @@ static void dev_disk_close(fd_entry_t *e)
 /*
  * /dev/loop0 to /dev/loop3, and the node that attaches and detaches them.
  *
- * A loop device is reached through a mount and not through its node: the node
- * is what `mount(2)` names as the source, and reading or writing it directly
- * would be a second way to the same bytes, which the image under a mounted
- * file system may not have. The control node takes one line per write:
- * `attach N /path`, `attach - /path` for the first free device, `detach N`;
- * `ro` after `attach` attaches read-only.
+ * The nodes are always there, as block devices with Linux's loop major, 7,
+ * so that util-linux's losetup and mount find a free one and attach a file
+ * to it with Linux's ioctls (`loop_node_ioctl`). A node reads and writes its
+ * device in whole sectors, as a disk node does: blkid reads it to learn the
+ * file system an image has, and mkfs writes one. A write waits for no file
+ * system to be mounted on it, whose blocks the cache may hold. The control
+ * node takes one line per write: `attach N /path`, `attach - /path` for the
+ * first free device, `detach N`; `ro` after `attach` attaches read-only.
  */
+static int devfs_loop_index(const struct devfs_entry *dev);
+
+/* A read into `in`, or with `in` NULL a write from `out`, of `count` bytes. */
+static int32_t loop_node_transfer(fd_entry_t *e, char __user *in, const char __user *out,
+                                  uint32_t count)
+{
+    int write = in == 0;
+    int32_t err;
+    block_device_t *dev = loop_node_device(devfs_loop_index(e->dev), write, &err);
+    uint64_t off = e->ofd->raw_offset, lba;
+    uint32_t want, done = 0, chunk, sectors;
+    uint8_t *batch;
+    int rc = 0;
+
+    if (!dev) {
+        return err;
+    }
+    if (write && (!(e->flags & FD_FLAG_WRITE) || !proc_privileged(current_proc))) {
+        return -EPERM;
+    }
+    if (off % BLOCK_SECTOR_SIZE != 0 || count % BLOCK_SECTOR_SIZE != 0) {
+        return -EINVAL;
+    }
+    lba = off / BLOCK_SECTOR_SIZE;
+    if (lba >= dev->sector_count) {
+        return write ? -ENOSPC : 0;
+    }
+    want = count / BLOCK_SECTOR_SIZE;
+    if ((uint64_t)want > dev->sector_count - lba) {
+        want = (uint32_t)(dev->sector_count - lba);
+    }
+    batch = raw_batch_take(&sectors, want, dev);
+    while (done < want && rc == 0) {
+        chunk = want - done < sectors ? want - done : sectors;
+        if (write && copy_from_user(batch, (const void __user *)(out + done * BLOCK_SECTOR_SIZE),
+                                    chunk * BLOCK_SECTOR_SIZE) != 0) {
+            rc = -EFAULT;
+            break;
+        }
+        rc = block_request(dev, write, lba + done, chunk, batch);
+        if (rc == 0 && !write &&
+            copy_to_user((void __user *)(in + done * BLOCK_SECTOR_SIZE), batch,
+                         chunk * BLOCK_SECTOR_SIZE) != 0) {
+            rc = -EFAULT;
+        }
+        if (rc == 0) {
+            done += chunk;
+        }
+    }
+    raw_batch_put(batch, sectors);
+    if (done == 0) {
+        return rc;
+    }
+    e->ofd->raw_offset = off + (uint64_t)done * BLOCK_SECTOR_SIZE;
+    return (int32_t)(done * BLOCK_SECTOR_SIZE);
+}
+
 static int32_t loop_node_read(fd_entry_t *entry, char __user *buffer, uint32_t count)
 {
-    (void)entry;
-    (void)buffer;
-    (void)count;
-    return -EPERM;
+    return loop_node_transfer(entry, buffer, 0, count);
 }
 
 static int32_t loop_node_write(fd_entry_t *entry, const char __user *buffer, uint32_t count)
 {
-    (void)entry;
-    (void)buffer;
-    (void)count;
-    return -EPERM;
+    return loop_node_transfer(entry, 0, buffer, count);
+}
+
+/**
+ * Linux's loop ioctls on a device's node. LOOP_SET_FD and LOOP_CONFIGURE
+ * attach the file a descriptor of the caller has open, named by the path
+ * `/proc/self/fd` gives it, writable when both descriptors are open for
+ * writing; the rest are `loop_ioctl`'s, and a request that is not a loop
+ * one is the disk ioctls' of every device node.
+ */
+static int32_t loop_node_ioctl(fd_entry_t *e, uint32_t request, uint32_t arg)
+{
+    uint8_t config[LOOP_CONFIG_SIZE];
+    char path[256];
+    uint32_t fd = arg, flags = 0, block_size = 0;
+    fd_entry_t *file;
+    int32_t rc;
+    int len;
+
+    if (request != LOOP_SET_FD && request != LOOP_CONFIGURE) {
+        rc = loop_ioctl(devfs_loop_index(e->dev), proc_privileged(current_proc), request, arg);
+        return rc == -ENOTTY ? dev_ioctl(e, request, arg) : rc;
+    }
+    if (!proc_privileged(current_proc)) {
+        return -EPERM;
+    }
+    if (request == LOOP_CONFIGURE) {
+        if (copy_from_user(config, (const void __user *)arg, LOOP_CONFIG_SIZE) != 0) {
+            return -EFAULT;
+        }
+        k_memcpy(&fd, config, 4);
+        k_memcpy(&block_size, config + 4, 4);
+        if ((block_size != 0 && block_size != BLOCK_SECTOR_SIZE) ||
+            loop_info_flags(config + LOOP_CONFIG_INFO, &flags) != 0) {
+            return -EINVAL;
+        }
+    }
+    file = fd_get(current_proc->fds, (int)fd);
+    if (!file || file->type != FD_TYPE_FILE) {
+        return -EBADF;
+    }
+    len = procfs_readlink_fd((int)current_proc->pid, (int)fd, path, (int)sizeof(path));
+    if (len < 0) {
+        return len;
+    }
+    if (len >= LOOP_PATH_MAX) {
+        return -ENAMETOOLONG;
+    }
+    return loop_attach_file(devfs_loop_index(e->dev), path,
+                            (file->flags & FD_FLAG_WRITE) && (e->flags & FD_FLAG_WRITE), flags);
+}
+
+/** The last reference of a description of a loop device's node closed. */
+static void loop_node_close(fd_entry_t *e)
+{
+    loop_node_closed(devfs_loop_index(e->dev));
 }
 
 static int32_t loopctl_write(fd_entry_t *entry, const char __user *buffer, uint32_t count)
@@ -793,8 +902,8 @@ static int32_t loopctl_write(fd_entry_t *entry, const char __user *buffer, uint3
     return rc < 0 ? (int32_t)rc : (int32_t)count;
 }
 
-static const struct file_ops loop_ops = {loop_node_read, loop_node_write, dev_poll, dev_ioctl,
-                                         NULL};
+static const struct file_ops loop_ops = {loop_node_read, loop_node_write, dev_poll, loop_node_ioctl,
+                                         loop_node_close};
 
 /* `/dev/framefail`: a count written to it arms the test switch in the
  * frame allocator; EPERM unless `rach2.framefail` is on the boot line. */
@@ -824,7 +933,17 @@ static int32_t framefail_write(fd_entry_t *entry, const char __user *buffer, uin
 
 static const struct file_ops framefail_ops = {dev_eof_read, framefail_write, dev_poll, dev_ioctl,
                                               NULL};
-static const struct file_ops loopctl_ops = {dev_eof_read, loopctl_write, dev_poll, dev_ioctl, NULL};
+/* LOOP_CTL_GET_FREE, LOOP_CTL_ADD and LOOP_CTL_REMOVE, which losetup and
+ * mount make before they attach a file. */
+static int32_t loopctl_ioctl(fd_entry_t *e, uint32_t request, uint32_t arg)
+{
+    int32_t rc = loop_control_ioctl(request, arg);
+
+    return rc == -ENOTTY ? dev_ioctl(e, request, arg) : rc;
+}
+
+static const struct file_ops loopctl_ops = {dev_eof_read, loopctl_write, dev_poll, loopctl_ioctl,
+                                            NULL};
 
 /* /dev/mem's size: the physical addresses 32 bits reach; and the first
  * megabyte, which it reaches whoever owns it, firmware's tables among it. */
@@ -1366,10 +1485,10 @@ static const struct devfs_entry dev_table[] = {{"mem", 1, 1, 0, 0640, &mem_ops},
                                                {"bootpart", 240, 0, 0, 0600, &bootpart_ops},
                                                {"bootlog", 240, 2, 0, 0400, &bootlog_ops},
                                                {"grubcore", 240, 3, 0, 0600, &grubcore_ops},
-                                               {"loop0", 240, 32, 0, 0400, &loop_ops},
-                                               {"loop1", 240, 33, 0, 0400, &loop_ops},
-                                               {"loop2", 240, 34, 0, 0400, &loop_ops},
-                                               {"loop3", 240, 35, 0, 0400, &loop_ops},
+                                               {"loop0", 7, 0, 0, 0660, &loop_ops},
+                                               {"loop1", 7, 1, 0, 0660, &loop_ops},
+                                               {"loop2", 7, 2, 0, 0660, &loop_ops},
+                                               {"loop3", 7, 3, 0, 0660, &loop_ops},
                                                {"loop-control", 240, 36, 0, 0600, &loopctl_ops},
                                                {"framefail", 240, 37, 0, 0600, &framefail_ops},
                                                {"screenlog", 240, 38, 0, 0600, &screenlog_ops},
@@ -1383,16 +1502,13 @@ static int devfs_loop_index(const struct devfs_entry *dev)
     if (dev->ops != &loop_ops) {
         return -1;
     }
-    return (int)(dev->minor - 32);
+    return (int)dev->minor;
 }
 
 /** Whether table entry `i` exists right now: bootpart, grubcore and the loop
  * devices come and go. */
 static int devfs_entry_present(int i)
 {
-    if (dev_table[i].ops == &loop_ops) {
-        return loop_device_at(devfs_loop_index(&dev_table[i])) != 0;
-    }
     if (dev_table[i].ops == &bootpart_ops) {
         return bootpart.present;
     }
@@ -1413,7 +1529,8 @@ static int devfs_entry_present(int i)
  */
 static uint32_t devfs_type_bits(const struct devfs_entry *dev)
 {
-    return dev->ops == &diskwin_ops ? 0060000u : 0020000u; /* S_IFBLK, S_IFCHR */
+    return dev->ops == &diskwin_ops || dev->ops == &loop_ops ? 0060000u
+                                                             : 0020000u; /* S_IFBLK, S_IFCHR */
 }
 
 /* Stable inode namespace for /dev: the directory itself, then one per
@@ -1443,7 +1560,21 @@ int devfs_disk_node_at(int i, const char **name, uint32_t *major, uint32_t *mino
                        const struct block_device **dev, const struct block_device **alias)
 {
     const struct disk_node *node;
+    int k;
 
+    if (i >= disk_node_count && i < disk_node_count + LOOP_DEVICES) {
+        *dev = loop_attached_at(i - disk_node_count);
+        for (k = 0; k < DEVFS_NDEV && devfs_loop_index(&dev_table[k]) != i - disk_node_count; k++) {
+        }
+        if (!*dev || k == DEVFS_NDEV) {
+            return 0;
+        }
+        *name = dev_table[k].name;
+        *major = dev_table[k].major;
+        *minor = dev_table[k].minor;
+        *alias = 0;
+        return 1;
+    }
     if (i < 0 || i >= disk_node_count) {
         return -1;
     }
@@ -1486,6 +1617,17 @@ int devfs_disk_row(int i, struct devfs_disk_row *row)
 
     if (got <= 0) {
         return got;
+    }
+    if (i >= disk_node_count) {
+        /* An attached loop device: a disk of its own, with no partitions. */
+        row->whole = i;
+        row->partno = 0;
+        row->start = 0;
+        row->sectors = dev->sector_count;
+        row->removable = 0;
+        row->model = "";
+        row->serial = "";
+        return 1;
     }
     node = &disk_nodes[i];
     for (row->whole = i; row->whole > 0 && disk_nodes[row->whole].disk == node->disk &&
@@ -1752,7 +1894,7 @@ int devfs_window_of(const char *path, block_device_t **view, block_device_t **ba
         block_device_t *loop = loop_device_at(devfs_loop_index(dev));
 
         if (!loop) {
-            return -ENOENT;
+            return -ENXIO; /* the node is there, with nothing attached to it */
         }
         /* A file has no sectors on a disk to claim: the device itself is the
          * identity, and only one mount can be placed on it. */
@@ -1909,6 +2051,9 @@ int devfs_open(const char *name, int flags)
     }
     if (disk_node_of(dev)) {
         disk_node_of(dev)->disk->opens++;
+    }
+    if (dev->ops == &loop_ops) {
+        loop_node_opened(devfs_loop_index(dev));
     }
 
     return fd;
@@ -2252,8 +2397,9 @@ static int32_t dev_sector_size(fd_entry_t *e, uint32_t arg)
 {
     int32_t sector = 512;
     struct disk_window *w = e->dev ? raw_window_of(e->dev) : NULL;
+    int loop = e->dev && e->dev->ops == &loop_ops && loop_attached_at(devfs_loop_index(e->dev));
 
-    if (!w || !w->present) {
+    if (!loop && (!w || !w->present)) {
         return -ENOTTY;
     }
     return copy_to_user((void __user *)arg, &sector, sizeof(sector)) != 0 ? -EFAULT : 0;
@@ -2272,7 +2418,7 @@ int devfs_fd_is_raw(struct fd_entry *e)
     }
     dev = e->dev;
     return dev->ops == &bootpart_ops || dev->ops == &grubcore_ops || dev->ops == &diskwin_ops ||
-           dev->ops == &mem_ops;
+           dev->ops == &mem_ops || dev->ops == &loop_ops;
 }
 
 int devfs_fd_raw_size(struct fd_entry *e, uint64_t *size)
@@ -2289,6 +2435,14 @@ int devfs_fd_raw_size(struct fd_entry *e, uint64_t *size)
             *size = DEVMEM_SIZE;
         }
         return 1;
+    }
+    if (dev->ops == &loop_ops) {
+        const block_device_t *loop = loop_attached_at(devfs_loop_index(dev));
+
+        if (loop && size) {
+            *size = loop->sector_count * BLOCK_SECTOR_SIZE;
+        }
+        return loop != 0;
     }
     w = raw_window_of(dev);
     if (!w || !w->present) {

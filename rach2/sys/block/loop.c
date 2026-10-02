@@ -31,6 +31,7 @@
 #include "../klog.h"
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
+#include "../mm/usercopy.h"
 #include "../proc/process.h"
 
 struct loop_device {
@@ -51,6 +52,9 @@ struct loop_device {
     uint32_t syncs;
     int release_due;          /* the medium went during a transfer: the last one out releases */
     char path[LOOP_PATH_MAX]; /* what it was called when it was attached */
+    uint32_t ino;             /* the file's inode number, which LOOP_GET_STATUS64 reports */
+    int autoclear;            /* detach when the last description and mount have gone */
+    int opens;                /* descriptions open on the node, attached or not */
 };
 
 static struct loop_device loops[LOOP_DEVICES];
@@ -168,6 +172,25 @@ block_device_t *loop_device_at(int index)
     return &loops[index].dev;
 }
 
+block_device_t *loop_attached_at(int index)
+{
+    if (index < 0 || index >= LOOP_DEVICES || !loops[index].attached) {
+        return 0;
+    }
+    return &loops[index].dev;
+}
+
+block_device_t *loop_node_device(int index, int write, int32_t *err)
+{
+    block_device_t *dev = loop_attached_at(index);
+
+    *err = !dev                             ? -ENXIO
+           : write && !loops[index].writable ? -EROFS
+           : write && vfs_device_holds(dev)  ? -EBUSY
+                                             : 0;
+    return *err == 0 ? dev : 0;
+}
+
 /**
  * Follow a node that moved, which is what a KRFFS relocation does to one.
  *
@@ -230,6 +253,7 @@ static void loop_release(struct loop_device *loop)
     loop->attaching = 0;
     loop->used = 0;
     loop->release_due = 0;
+    loop->autoclear = 0;
     loop->mnt = 0;
     loop->node = 0;
     loop->handle = 0;
@@ -456,6 +480,7 @@ int loop_attach(int index, const char *path, int writable)
     loop->writes = 0;
     loop->syncs = 0;
     loop->release_due = 0;
+    loop->autoclear = 0;
     loop->mnt = 0;
     loop->node = 0;
     loop->handle = 0;
@@ -529,6 +554,7 @@ int loop_attach(int index, const char *path, int writable)
     loop->node = ref.node;
     loop->handle = handle;
     loop->writable = writable ? 1 : 0;
+    loop->ino = (uint32_t)st.ino;
     k_strncpy(loop->path, path, sizeof(loop->path));
     loop->path[sizeof(loop->path) - 1] = '\0';
     loop->attaching = 0;
@@ -722,4 +748,158 @@ int loop_control_write(const char *buffer, uint32_t count)
         return loop_detach(index);
     }
     return -EINVAL;
+}
+
+/* struct loop_info64: the offsets of the fields this driver reads or fills. */
+#define INFO_SIZE      232u
+#define INFO_INODE     8u
+#define INFO_OFFSET    24u
+#define INFO_SIZELIMIT 32u
+#define INFO_NUMBER    40u
+#define INFO_ENCRYPT   44u
+#define INFO_FLAGS     52u
+#define INFO_NAME      56u
+#define INFO_NAME_SIZE 64u
+
+int loop_info_flags(const uint8_t *info, uint32_t *flags)
+{
+    uint32_t encrypt, i;
+
+    k_memcpy(&encrypt, info + INFO_ENCRYPT, 4);
+    k_memcpy(flags, info + INFO_FLAGS, 4);
+    for (i = INFO_OFFSET; i < INFO_SIZELIMIT + 8; i++) {
+        if (info[i] != 0) {
+            return -EINVAL; /* an offset or a size limit */
+        }
+    }
+    return encrypt != 0 ? -EINVAL : 0;
+}
+
+int loop_attach_file(int index, const char *path, int writable, uint32_t flags)
+{
+    int rc = loop_attach(index, path, writable && !(flags & LO_FLAGS_READ_ONLY));
+
+    if (rc < 0) {
+        return rc;
+    }
+    loops[rc].autoclear = (flags & LO_FLAGS_AUTOCLEAR) != 0;
+    return 0;
+}
+
+/** Detach `loop` when it is set to clear itself and nothing holds it: no
+ * description of its node and no mount. */
+static void loop_autoclear(struct loop_device *loop)
+{
+    if (loop->autoclear && loop->attached && loop->opens == 0 && !vfs_device_holds(&loop->dev)) {
+        (void)loop_detach(loop->index);
+    }
+}
+
+/** Fill the struct loop_info64 `info` with device `loop`'s attachment. */
+static void loop_info_fill(const struct loop_device *loop, uint8_t *info)
+{
+    uint32_t number = (uint32_t)loop->index;
+    uint32_t flags =
+        (loop->writable ? 0u : LO_FLAGS_READ_ONLY) | (loop->autoclear ? LO_FLAGS_AUTOCLEAR : 0u);
+
+    k_memset(info, 0, INFO_SIZE);
+    k_memcpy(info + INFO_INODE, &loop->ino, 4);
+    k_memcpy(info + INFO_NUMBER, &number, 4);
+    k_memcpy(info + INFO_FLAGS, &flags, 4);
+    k_strncpy((char *)info + INFO_NAME, loop->path, INFO_NAME_SIZE - 1);
+}
+
+int32_t loop_ioctl(int index, int privileged, uint32_t request, uint32_t arg)
+{
+    struct loop_device *loop = &loops[index];
+    uint8_t info[INFO_SIZE];
+    uint32_t flags;
+
+    loop_settle();
+    if (request == LOOP_SET_CAPACITY || request == LOOP_SET_DIRECT_IO ||
+        request == LOOP_SET_BLOCK_SIZE) {
+        /* The file's length fixed the capacity at the attachment; the device
+         * reads through the file system's cache and has 512-byte blocks. */
+        if (!loop->attached) {
+            return -ENXIO;
+        }
+        return (request == LOOP_SET_DIRECT_IO && arg != 0) ||
+                       (request == LOOP_SET_BLOCK_SIZE && arg != BLOCK_SECTOR_SIZE)
+                   ? -EINVAL
+                   : 0;
+    }
+    if (request != LOOP_CLR_FD && request != LOOP_SET_STATUS64 && request != LOOP_GET_STATUS64) {
+        return -ENOTTY;
+    }
+    if (!loop->attached) {
+        return -ENXIO;
+    }
+    if (request == LOOP_GET_STATUS64) {
+        loop_info_fill(loop, info);
+        return copy_to_user((void __user *)arg, info, INFO_SIZE) != 0 ? -EFAULT : 0;
+    }
+    if (!privileged) {
+        return -EPERM;
+    }
+    if (request == LOOP_CLR_FD) {
+        /* A device still mounted, or open elsewhere, goes when the last of
+         * them does, as Linux makes it. */
+        if (vfs_device_holds(&loop->dev) || loop->opens > 1) {
+            loop->autoclear = 1;
+            return 0;
+        }
+        return loop_detach(index);
+    }
+    if (copy_from_user(info, (const void __user *)arg, INFO_SIZE) != 0) {
+        return -EFAULT;
+    }
+    if (loop_info_flags(info, &flags) != 0) {
+        return -EINVAL;
+    }
+    loop->autoclear = (flags & LO_FLAGS_AUTOCLEAR) != 0;
+    return 0;
+}
+
+int32_t loop_control_ioctl(uint32_t request, uint32_t arg)
+{
+    int i;
+
+    loop_settle();
+    if (request == LOOP_CTL_GET_FREE) {
+        for (i = 0; i < LOOP_DEVICES; i++) {
+            if (!loops[i].used) {
+                return i;
+            }
+        }
+        return -ENOSPC;
+    }
+    if (request == LOOP_CTL_ADD) {
+        return arg < LOOP_DEVICES ? -EEXIST : -ENOSPC; /* the four are made at boot */
+    }
+    if (request == LOOP_CTL_REMOVE) {
+        return arg < LOOP_DEVICES ? -EBUSY : -ENODEV;
+    }
+    return -ENOTTY;
+}
+
+void loop_node_opened(int index)
+{
+    loops[index].opens++;
+}
+
+void loop_node_closed(int index)
+{
+    loops[index].opens--;
+    loop_autoclear(&loops[index]);
+}
+
+void loop_unmounted(block_device_t *device)
+{
+    int i;
+
+    for (i = 0; i < LOOP_DEVICES; i++) {
+        if (device == &loops[i].dev) {
+            loop_autoclear(&loops[i]);
+        }
+    }
 }

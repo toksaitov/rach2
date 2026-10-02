@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd October 2, 2026
 .Dt LOOP 4
 .Os
 .Sh NAME
@@ -11,12 +11,14 @@ The four loop devices,
 through
 .Pa /dev/loop3 ,
 allow a file system in a regular file to be mounted.
-They are owned by root with mode 0400, major number 240,
-and minor numbers 32 through 35 respectively.
-They are reported as character devices by stat;
-only
-.Xr mount 2
-accesses their contents.
+They are block devices owned by root with mode 0660, Linux's loop major
+number 7, and minor numbers 0 through 3, and are there whether or not a
+file is attached.
+A node reads and writes its device in whole sectors at offsets of whole
+sectors, as a disk node does, and answers
+.Er ENXIO
+with nothing attached; a write needs root, a device attached for writing,
+and no file system mounted on it.
 .Pp
 The control node,
 .Pa /dev/loop-control ,
@@ -42,6 +44,67 @@ Detach device
 Device numbers range from 0 through 3.
 .Xr loopctl 8
 writes these commands.
+.Pp
+The nodes also take Linux's loop ioctls, which util-linux's
+.Xr losetup 8
+and
+.Xr mount 8
+make:
+.Bl -tag -width LOOP_SET_STATUS64
+.It Dv LOOP_CTL_GET_FREE
+On
+.Pa /dev/loop-control :
+the number of the first free device, or
+.Er ENOSPC .
+.Dv LOOP_CTL_ADD
+of a device there is
+.Er EEXIST ,
+and
+.Dv LOOP_CTL_REMOVE
+.Er EBUSY ,
+since the four are made at boot.
+.It Dv LOOP_SET_FD , Dv LOOP_CONFIGURE
+Attach the file open on the descriptor given, by the path
+.Pa /proc/self/fd
+gives it, read-only unless both that descriptor and the node's are open
+for writing.
+A
+.Vt struct loop_config
+with a block size other than 0 or 512, and a
+.Vt struct loop_info64
+with an offset, a size limit or an encryption, are
+.Er EINVAL .
+.It Dv LO_FLAGS_AUTOCLEAR
+In the flags of either: detach the device when the last description of
+its node is closed and no file system is mounted on it, which is when
+.Ql mount -o loop
+lets go of it at the unmount.
+.It Dv LOOP_GET_STATUS64
+The device number, the file's inode number, the first 63 bytes of the
+path it was attached by, and the flags
+.Dv LO_FLAGS_READ_ONLY
+and
+.Dv LO_FLAGS_AUTOCLEAR ;
+.Er ENXIO
+with nothing attached.
+.It Dv LOOP_SET_STATUS64
+Sets
+.Dv LO_FLAGS_AUTOCLEAR
+or clears it.
+.It Dv LOOP_CLR_FD
+Detaches the device, or, while a file system is mounted on it or another
+description of its node is open, sets it to clear itself.
+.It Dv LOOP_SET_DIRECT_IO , Dv LOOP_SET_BLOCK_SIZE , Dv LOOP_SET_CAPACITY
+Take 0, 512 and any value, which change nothing, and
+.Er EINVAL
+otherwise.
+.El
+.Pp
+An attached device is a disk of
+.Pa /sys/block
+and
+.Pa /proc/partitions ,
+as on Linux.
 .Pp
 An attached file must be regular and have a positive length that is a
 whole number of sectors.
@@ -75,7 +138,7 @@ for a retained device whose medium was removed.
 .Sh FILES
 .Bl -tag -width /dev/loop-control
 .It Pa /dev/loop0 No through Pa /dev/loop3
-Loop devices.
+Loop devices, block devices 7:0 through 7:3.
 .It Pa /dev/loop-control
 Attachment and detachment commands.
 .It Pa /proc/loop
@@ -90,12 +153,16 @@ The file is already attached, an operation conflicts with an attachment,
 or the device cannot yet be detached.
 .It Er EINVAL
 The file is not regular, its length is zero or not a whole number of
-sectors, or the device number is outside 0 through 3.
+sectors, the device number is outside 0 through 3, or a transfer of a
+node is not of whole sectors.
 .It Er ELOOP
 The file is on a loop-mounted volume.
+.It Er ENXIO
+Nothing is attached to the device.
 .El
 .Sh SEE ALSO
 .Xr mount 2 ,
 .Xr disk 4 ,
 .Xr loopctl 8 ,
+.Xr losetup 8 ,
 .Xr mount 8

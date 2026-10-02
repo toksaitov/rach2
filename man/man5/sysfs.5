@@ -203,7 +203,7 @@ not start there.
 .It Pa /sys/block/DISK
 A directory for each disk of
 .Pa /dev ,
-by its node's name, which
+and each loop device with a file attached, by its node's name, which
 .Ic lsblk
 reads: its
 .Pa dev ,

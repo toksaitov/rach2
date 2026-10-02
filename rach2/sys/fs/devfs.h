@@ -136,7 +136,7 @@ void devfs_disk_withdraw(void);
 
 /**
  * Whether `e` is one of the raw disk windows (`/dev/bootpart`, `/dev/grubcore`
- * or a whole-disk or partition node).
+ * or a whole-disk or partition node), `/dev/mem` or a loop device's node.
  *
  * This asks what the descriptor IS, from the operations bound to it at open,
  * and not whether its window is currently published. The two differ while a
@@ -147,8 +147,9 @@ void devfs_disk_withdraw(void);
 int devfs_fd_is_raw(struct fd_entry *e);
 
 /**
- * Whether `e` is a raw disk window whose backing is published; if so, `*size`
- * gets its byte size.
+ * Whether `e` is a raw disk window whose backing is published, `/dev/mem`, or
+ * a loop device's node with a file attached; if so, `*size` gets its byte
+ * size.
  *
  * The size needs 64 bits because a whole drive can exceed 4 GiB. These are the
  * only descriptors that seek and transfer through the open-file description's
@@ -214,7 +215,9 @@ struct block_device;
  * whole disk and the partition view's for a partition, and the alias whose
  * counts are added to them, or NULL; 0 for a partition not published now,
  * or a disk that is gone; -1 past the table. A whole disk has its line
- * whether or not its node is published.
+ * whether or not its node is published. After the disk nodes come the four
+ * loop devices, each a whole disk with no partitions while a file is
+ * attached to it, as Linux lists them.
  */
 /* A disk node as /sys/block shows it: its name and numbers, the index of its
  * disk's whole node, its partition's number, 0 for a whole disk, its first

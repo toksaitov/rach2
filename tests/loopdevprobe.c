@@ -13,6 +13,15 @@
  * unmount of the volume holding the file, a directory, and a file whose
  * length is not whole sectors.
  *
+ * Last come Linux's loop ioctls, the way util-linux's mount -o loop makes
+ * them: /dev/loop-control's LOOP_CTL_GET_FREE names a free device, whose node
+ * is a block device of major 7; LOOP_CONFIGURE attaches the image open on a
+ * descriptor, set to clear itself; LOOP_GET_STATUS64 names the file; the node
+ * reads the image's first sector; and the device, mounted while its node is
+ * still open, is detached by the unmount after the node is closed.
+ * LOOP_SET_FD of a file open for reading attaches it read-only, and
+ * LOOP_CLR_FD detaches it.
+ *
  * `loopdevprobe pull` is the stick's row: the image lives on a volume of a
  * stick, and the harness pulls the stick while the image is mounted. What the
  * machine owes then is an error from the read in flight, an unmount of the
@@ -40,6 +49,7 @@ typedef unsigned int size_t;
 #define SYS_FTRUNCATE 93
 #define SYS_FSYNC     118
 #define SYS_STAT64    195
+#define SYS_IOCTL     54
 
 #define O_RDONLY 0
 #define O_WRONLY 1
@@ -50,6 +60,7 @@ typedef unsigned int size_t;
 #define MS_RDONLY 1
 
 #define ENOENT 2
+#define ENXIO  6
 #define EBUSY  16
 #define EINVAL 22
 #define EROFS  30
@@ -148,6 +159,20 @@ static int streq(const char *a, const char *b)
     }
     return a[i] == b[i];
 }
+
+#define LOOP_SET_FD        0x4C00
+#define LOOP_CLR_FD        0x4C01
+#define LOOP_GET_STATUS64  0x4C05
+#define LOOP_CONFIGURE     0x4C0A
+#define LOOP_CTL_GET_FREE  0x4C82
+#define LO_FLAGS_READ_ONLY 1
+#define LO_FLAGS_AUTOCLEAR 4
+
+/* struct loop_info64's flags and file name, and a struct loop_config's
+ * descriptor and info. */
+#define INFO_FLAGS  52
+#define INFO_NAME   56
+#define CONFIG_INFO 8
 
 /** One command to /dev/loop-control; the errno, or 0. */
 static int control(const char *line)
@@ -297,6 +322,118 @@ __asm__(".global _start\n"
  * The pull row reads until the stick is not there any more; the hold is
  * said after the first read, so the pull lands on a process reading.
  */
+/** The struct loop_info64 of the device open on `dev`, into `info`; the
+ * errno, or 0. */
+static int loop_status(int dev, unsigned char *info)
+{
+    return sys3(SYS_IOCTL, dev, LOOP_GET_STATUS64, (int)info);
+}
+
+/** The flags of the struct loop_info64 at `info`. */
+static unsigned int info_flags(const unsigned char *info)
+{
+    return (unsigned int)info[INFO_FLAGS] | (unsigned int)info[INFO_FLAGS + 1] << 8;
+}
+
+/** The node of device `index`, /dev/loopN, opened with `flags`. */
+static int open_loop(int index, int flags)
+{
+    char node[] = "/dev/loop0";
+
+    node[9] = (char)('0' + index);
+    return sys3(SYS_OPEN, (int)node, flags, 0);
+}
+
+/**
+ * The rows after the unmount of the device LOOP_CONFIGURE attached, `index`:
+ * the device set to clear itself has gone, LOOP_SET_FD of `image` open for
+ * reading attaches it read-only, and LOOP_CLR_FD detaches it.
+ */
+static void set_fd_rows(const char *image, int index)
+{
+    unsigned char info[232];
+    int dev = open_loop(index, O_RDWR);
+    int file, rc;
+
+    if (loop_status(dev, info) != -ENXIO) {
+        fail("the device set to clear itself was still attached after the unmount");
+    }
+    file = sys3(SYS_OPEN, (int)image, O_RDONLY, 0);
+    rc = sys3(SYS_IOCTL, dev, LOOP_SET_FD, file);
+    if (rc != 0) {
+        fail_with("LOOP_SET_FD of an image open for reading", rc);
+    }
+    if (loop_status(dev, info) != 0 || info_flags(info) != LO_FLAGS_READ_ONLY) {
+        fail("LOOP_SET_FD of a file open for reading did not attach it read-only");
+    }
+    if (sys3(SYS_IOCTL, dev, LOOP_CLR_FD, 0) != 0 || loop_status(dev, info) != -ENXIO) {
+        fail("LOOP_CLR_FD did not detach the device");
+    }
+    sys1(SYS_CLOSE, dev);
+    sys1(SYS_CLOSE, file);
+}
+
+/**
+ * The rows of Linux's loop ioctls over `image`, which holds a file system of
+ * `type`, as the header says.
+ */
+static void ioctl_rows(const char *image, const char *type)
+{
+    unsigned char config[304], info[232], first[512], sector[512], st[96];
+    char node[] = "/dev/loop0";
+    int ctl, index, file, dev, rc, i;
+
+    ctl = sys3(SYS_OPEN, (int)"/dev/loop-control", O_RDWR, 0);
+    index = ctl < 0 ? ctl : sys3(SYS_IOCTL, ctl, LOOP_CTL_GET_FREE, 0);
+    if (index < 0 || index > 3) {
+        fail_with("LOOP_CTL_GET_FREE named no free device", index);
+    }
+    sys1(SYS_CLOSE, ctl);
+    node[9] = (char)('0' + index);
+    if (sys2(SYS_STAT64, (int)node, (int)st) != 0 || (st[17] & 0xF0) != 0x60 || st[33] != 7 ||
+        st[32] != index) {
+        fail("a loop device's node is not a block device of major 7");
+    }
+    file = sys3(SYS_OPEN, (int)image, O_RDWR, 0);
+    dev = open_loop(index, O_RDWR);
+    if (file < 0 || dev < 0 || sys3(SYS_READ, file, (int)first, 512) != 512) {
+        fail("opening and reading the image and opening a free loop device");
+    }
+    for (i = 0; i < (int)sizeof(config); i++) {
+        config[i] = 0;
+    }
+    config[0] = (unsigned char)file;
+    config[CONFIG_INFO + INFO_FLAGS] = LO_FLAGS_AUTOCLEAR;
+    rc = sys3(SYS_IOCTL, dev, LOOP_CONFIGURE, (int)config);
+    if (rc != 0) {
+        fail_with("LOOP_CONFIGURE of an image open on a descriptor", rc);
+    }
+    if (loop_status(dev, info) != 0 || !streq((const char *)info + INFO_NAME, image) ||
+        info_flags(info) != LO_FLAGS_AUTOCLEAR) {
+        fail("LOOP_GET_STATUS64 did not name the file and its flags");
+    }
+    if (sys3(SYS_READ, dev, (int)sector, 512) != 512) {
+        fail("reading the first sector of the device");
+    }
+    for (i = 0; i < 512 && first[i] == sector[i]; i++) {
+    }
+    if (i != 512) {
+        fail("the device's first sector is not the image's");
+    }
+    rc = sys5(SYS_MOUNT, (int)node, (int)"/l", (int)type, 0, 0);
+    if (rc != 0) {
+        fail_with("mounting a device LOOP_CONFIGURE attached", rc);
+    }
+    sys1(SYS_CLOSE, dev);
+    sys1(SYS_CLOSE, file);
+    expect_file("/l/hello.txt", "hello from inside an image");
+    rc = sys2(SYS_UMOUNT2, (int)"/l", 0);
+    if (rc != 0) {
+        fail_with("unmounting the device LOOP_CONFIGURE attached", rc);
+    }
+    set_fd_rows(image, index);
+}
+
 void probe_main(unsigned int *sp)
 {
     int argc = (int)sp[0];
@@ -755,6 +892,7 @@ void probe_main(unsigned int *sp)
     if (sys1(SYS_UNLINK, (int)"/ram.img") != 0) {
         fail("removing the copy from the root");
     }
+    ioctl_rows(image, type);
 
     rc = sys2(SYS_UMOUNT2, (int)"/m", 0);
     if (rc != 0) {

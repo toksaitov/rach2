@@ -2941,6 +2941,7 @@ static int unmount_mount(struct vfs_mount *m)
     int gone;
     struct vfs_ref cov;
     int rc;
+    block_device_t *dev = m->dev;
 
     m->state = VFS_UNMOUNTING;
     while (m->inprogress > 0) {
@@ -3003,6 +3004,7 @@ static int unmount_mount(struct vfs_mount *m)
     m->parent->refs--;
     devfs_release_claim(m->claim);
     mount_release(m);
+    loop_unmounted(dev);
     return 0;
 }
 
