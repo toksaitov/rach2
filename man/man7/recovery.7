@@ -1,4 +1,4 @@
-.Dd September 30, 2026
+.Dd October 2, 2026
 .Dt RECOVERY 7
 .Os
 .Sh NAME
@@ -133,8 +133,10 @@ the RAM root cannot store this 1 GiB file.
 This preserves the accounts, SSH policy and keys.
 The recovery archive stores account files and SSH policy under
 .Pa rach2-config-a/etc ,
-host keys under
-.Pa rach2-config-a/etc/dropbear ,
+Dropbear's host keys under
+.Pa rach2-config-a/etc/dropbear
+and OpenSSH's under
+.Pa rach2-config-a/etc/ssh ,
 and each account's home
 .Pa .ssh
 contents under

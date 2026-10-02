@@ -1188,6 +1188,7 @@ if "$HARNESS" --bios --qemu-arg=-cpu --qemu-arg=max \
     "expect=# " "send=mkdir -p /root/.ssh && echo '$PUBKEY' > /root/.ssh/authorized_keys" \
     "send=(test -s /etc/dropbear/dropbear_ed25519_host_key || dropbearmulti dropbearkey -t ed25519 -f /etc/dropbear/dropbear_ed25519_host_key) && echo HOST\"\"READY" \
     "expect=HOSTREADY" \
+    "send=mkdir -p /etc/ssh && echo 'openssh host key' > /etc/ssh/ssh_host_ed25519_key && chmod 600 /etc/ssh/ssh_host_ed25519_key" \
     "send=echo '# machine root' >> /root/.ssh/authorized_keys; echo '# machine test' >> /home/test/.ssh/authorized_keys" \
     "send=chmod 700 /root/.ssh /home/test/.ssh; chmod 600 /root/.ssh/authorized_keys /home/test/.ssh/authorized_keys" \
     "send=chown -R 0:0 /root/.ssh; chown -R 1000:1000 /home/test/.ssh" \
@@ -1198,7 +1199,7 @@ if "$HARNESS" --bios --qemu-arg=-cpu --qemu-arg=max \
     "send=echo '$LOWERKEY' > /home/alice/.ssh/authorized_keys" \
     "send=echo service:x:2004:2004::/srv/alice:/bin/sh >> /etc/passwd; echo empty:x:2005:2005::/srv/empty:/bin/sh >> /etc/passwd" \
     "send=mkdir -p /srv/alice/.ssh; echo '$WORKKEY' > /srv/alice/.ssh/authorized_keys; chown -R 2004:2004 /srv/alice; chmod 750 /srv/alice/.ssh; chmod 640 /srv/alice/.ssh/authorized_keys" \
-    "send=sha256sum /etc/dropbear/* /root/.ssh/authorized_keys /home/test/.ssh/authorized_keys | sed s/^/KEYHASH:/" \
+    "send=sha256sum /etc/dropbear/* /etc/ssh/ssh_host_* /root/.ssh/authorized_keys /home/test/.ssh/authorized_keys | sed s/^/KEYHASH:/" \
     "send=sha256sum /home/work/.ssh/authorized_keys /home/Alice/.ssh/authorized_keys /home/alice/.ssh/authorized_keys /srv/alice/.ssh/authorized_keys | sed s/^/KEYHASH:/" \
     "send=sync; echo KEYS\"\"SAVED" "expect=KEYSSAVED" > "$LOGKEYS.harness" 2>&1; then
     note "the installed machine's keys are recorded before the interrupted update: OK"
@@ -1429,9 +1430,9 @@ rm -f "$LOG17" "$KNOWN"
     "send=test ! -e /srv/empty/.ssh && ! grep -q image-key /srv/alice/.ssh/authorized_keys && echo SERVICE\"\"SAFE" "expect=SERVICESAFE" \
     "send=stat -c %u:%g:%a /etc/dropbear /root/.ssh /home/test/.ssh" \
     "expect=0:0:700" "expect=0:0:700" "expect=1000:1000:700" \
-    "send=stat -c %u:%g:%a /etc/dropbear/* /root/.ssh/authorized_keys /home/test/.ssh/authorized_keys" \
-    "expect=0:0:600" "expect=0:0:600" "expect=1000:1000:600" \
-    "send=sha256sum /etc/dropbear/* /root/.ssh/authorized_keys /home/test/.ssh/authorized_keys | sed s/^/KEYHASH:/" \
+    "send=stat -c %u:%g:%a /etc/dropbear/* /etc/ssh/ssh_host_* /root/.ssh/authorized_keys /home/test/.ssh/authorized_keys" \
+    "expect=0:0:600" "expect=0:0:600" "expect=0:0:600" "expect=1000:1000:600" \
+    "send=sha256sum /etc/dropbear/* /etc/ssh/ssh_host_* /root/.ssh/authorized_keys /home/test/.ssh/authorized_keys | sed s/^/KEYHASH:/" \
     "send=sha256sum /home/work/.ssh/authorized_keys /home/Alice/.ssh/authorized_keys /home/alice/.ssh/authorized_keys /srv/alice/.ssh/authorized_keys | sed s/^/KEYHASH:/" \
     "send=mkdir -p /r && mount -t vfat /dev/disk0p2 /r && test ! -e /r/rach2-config-a/update-in-progress && echo MARK\"\"GONE; umount /r" \
     "expect=MARKGONE" \

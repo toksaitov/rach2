@@ -283,6 +283,15 @@ recover_archive() {
     done
 }
 
+# Whether ROOTDIR has OpenSSH's host keys, the GNU root's server's, in
+# ROOTDIR/etc/ssh.
+ssh_host_keys() { # ssh_host_keys ROOTDIR
+    for k in "$1"/etc/ssh/ssh_host_*; do
+        [ -f "$k" ] && return 0
+    done
+    return 1
+}
+
 # Copies configuration files and key directories under ROOTDIR to recovery.
 # The chosen archive survives until the new slot is complete and synced.
 # A file the root does not have is left out,
@@ -314,6 +323,10 @@ write_archive() { # write_archive ROOTDIR [MARK]
     if [ -d "$1/etc/dropbear" ]; then
         cp -R "$1/etc/dropbear" "$next_archive/etc/dropbear" ||
             die "the host keys could not be archived"
+    fi
+    if ssh_host_keys "$1"; then
+        { mkdir -p "$next_archive/etc/ssh" && cp "$1"/etc/ssh/ssh_host_* "$next_archive/etc/ssh/"; } ||
+            die "OpenSSH's host keys could not be archived"
     fi
     archive_account_keys "$1" || die "the account keys could not be archived"
     if [ -n "${2:-}" ]; then
@@ -436,6 +449,12 @@ restore_archive_keys() (
     recover_archive
     if [ -d "$archive/etc/dropbear" ]; then
         restore_key_directory "$archive/etc/dropbear" "$keep/etc/dropbear" 0:0
+    fi
+    if ssh_host_keys "$archive"; then
+        { mkdir -p "$keep/etc/ssh" && cp "$archive"/etc/ssh/ssh_host_* "$keep/etc/ssh/" &&
+            chown 0:0 "$keep"/etc/ssh/ssh_host_* && chmod 600 "$keep"/etc/ssh/ssh_host_* &&
+            chmod 644 "$keep"/etc/ssh/ssh_host_*.pub; } ||
+            die "OpenSSH's host keys could not be restored with their owner and modes"
     fi
     while IFS=: read -r _name _password uid gid _gecos home _shell; do
         case "$uid" in "" | *[!0-9]*) continue ;; esac
@@ -573,6 +592,10 @@ whole configuration archived on its recovery partition; its accounts are not the
         cp -a "$TARGET_MNT/etc/dropbear" "$keep/etc/dropbear" ||
             die "the server's host keys could not be kept"
     fi
+    if [ -n "$mounted_root" ] && ssh_host_keys "$TARGET_MNT"; then
+        { mkdir -p "$keep/etc/ssh" && cp -a "$TARGET_MNT"/etc/ssh/ssh_host_* "$keep/etc/ssh/"; } ||
+            die "OpenSSH's host keys could not be kept"
+    fi
     if [ -d "$TARGET_MNT/home" ] && [ -n "$mounted_root" ]; then
         cp -a "$TARGET_MNT/home" "$keep/home" || die "the home directories could not be kept"
     fi
@@ -686,6 +709,11 @@ whole configuration archived on its recovery partition; its accounts are not the
         rm -rf "$TARGET_MNT/etc/dropbear" || die "the image's host keys could not be removed"
         cp -a "$keep/etc/dropbear" "$TARGET_MNT/etc/dropbear" ||
             die "the server's host keys could not be put back"
+    fi
+    if ssh_host_keys "$keep"; then
+        { rm -f "$TARGET_MNT"/etc/ssh/ssh_host_* && mkdir -p "$TARGET_MNT/etc/ssh" &&
+            cp -a "$keep"/etc/ssh/ssh_host_* "$TARGET_MNT/etc/ssh/"; } ||
+            die "OpenSSH's host keys could not be put back"
     fi
     # The image's home directories go, with the keys they carry, whether or
     # not the machine's were kept: an account that has the image's name must

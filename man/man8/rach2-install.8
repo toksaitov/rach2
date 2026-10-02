@@ -1,4 +1,4 @@
-.Dd September 30, 2026
+.Dd October 2, 2026
 .Dt RACH2-INSTALL 8
 .Os
 .Sh NAME
@@ -133,8 +133,10 @@ Grow the root into the free space after it, if requested.
 If the installer finds a recovery partition, it archives the three account
 files and the SSH policy under
 .Pa rach2-config-a/etc .
-Host keys go in
-.Pa rach2-config-a/etc/dropbear .
+Dropbear's host keys go in
+.Pa rach2-config-a/etc/dropbear ,
+and OpenSSH's, which a GNU root's server has, in
+.Pa rach2-config-a/etc/ssh .
 For each account in passwd, the contents of its home directory's
 .Pa .ssh
 go in
