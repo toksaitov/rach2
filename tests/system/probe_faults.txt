@@ -5261,9 +5261,9 @@ probe procprobe
 file rach2/sys/fs/procfs.c
 expect FAIL: the program's text has no anonymous memory in smaps
 old
-        ap_smaps_kb(t, "Anonymous:", !of_file ? clean + dirty : shared ? 0 : dirty);
+        int of_file = r->file || r->type == VM_CODE || r->type == VM_DATA;
 new
-        ap_smaps_kb(t, "Anonymous:", r->file ? 0 : clean + dirty);
+        int of_file = r->file != NULL;
 end
 
 fault cpu-timers-silent
