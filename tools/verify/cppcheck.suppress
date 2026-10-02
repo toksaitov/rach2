@@ -151,3 +151,8 @@ unusedStructMember:*tests/system/fixtures/vfs_unmount.c
 # to such an array to one with `const` inside, so the parameter cppcheck asks
 # for would need a cast at every call.
 constParameter:*tools/verify/prosecheck.c
+
+# `struct insn` in the seccomp probe is Linux's struct sock_filter, a BPF
+# instruction the probe writes in initializers and the kernel reads; no
+# member is read by name.
+unusedStructMember:*tests/musl/seccompmusl.c

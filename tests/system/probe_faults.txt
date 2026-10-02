@@ -5520,3 +5520,34 @@ old
 new
         ap_str(t, "0\n");
 end
+
+fault seccomp-precedence-reversed
+probe seccompmusl
+file rach2/sys/proc/seccomp.c
+expect SECCOMPMUSL FAIL (the filter fails getppid with its errno and lets getpid run
+old
+        if (precedence(cur) < precedence(ret)) {
+new
+        if (precedence(cur) > precedence(ret)) {
+end
+
+fault seccomp-trap-eax-lost
+probe seccompmusl
+file rach2/sys/proc/seccomp.c
+expect SECCOMPMUSL FAIL (a trap posts SIGSYS with the call's siginfo and its number in EAX
+old
+        *ret = (int32_t)nr;
+new
+        *ret = 0;
+end
+
+fault seccomp-tsync-ignored
+probe seccompmusl
+file rach2/sys/proc/seccomp.c
+expect SECCOMPMUSL FAIL (the second thread has the filter TSYNC gave it
+old
+    if (flags & SECCOMP_FILTER_FLAG_TSYNC) {
+        tsync_apply(self);
+    }
+new
+end

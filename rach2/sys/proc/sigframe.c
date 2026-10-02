@@ -101,6 +101,7 @@ void sigframe_fill_siginfo(uint8_t *out, int signo, const struct k_siginfo *info
 
     k_memset(out, 0, 128);
     put32(out, (uint32_t)signo);
+    put32(out + 4, (uint32_t)info->err);
     put32(out + 8, (uint32_t)info->code);
     if (fault) {
         put32(out + 12, info->addr);

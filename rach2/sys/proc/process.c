@@ -7,6 +7,7 @@
 #include "../lib/kirq.h"
 #include "sched.h"
 #include "tgroup.h"
+#include "seccomp.h"
 
 extern volatile uint32_t kernel_ticks;
 
@@ -244,6 +245,7 @@ void free_process(process_t *proc)
         kfree(proc->fs);
     }
     tgroup_put(proc->tg);
+    seccomp_release(proc);
     kfree(proc->exec_ws);
     path_bufs_free(proc);
     kfree(proc);

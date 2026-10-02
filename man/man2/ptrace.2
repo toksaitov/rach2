@@ -271,7 +271,10 @@ Accepted for a seized tracee, which stays stopped.
 .Dv PTRACE_O_TRACECLONE ,
 .Dv PTRACE_O_TRACEEXEC ,
 .Dv PTRACE_O_TRACEVFORKDONE ,
-.Dv PTRACE_O_TRACEEXIT
+.Dv PTRACE_O_TRACEEXIT ,
+.Dv PTRACE_O_TRACESECCOMP ,
+for the stop of a seccomp filter's
+.Dv SECCOMP_RET_TRACE ,
 and
 .Dv PTRACE_O_EXITKILL ,
 which sends the tracees

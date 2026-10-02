@@ -100,6 +100,12 @@ void path_bufs_free(process_t *p)
     (void)p;
 }
 
+/** Nor have they a seccomp filter. */
+void seccomp_release(process_t *p)
+{
+    (void)p;
+}
+
 /** No row reparents a child. */
 void signal_post(process_t *p, int signo)
 {

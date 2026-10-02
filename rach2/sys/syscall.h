@@ -171,6 +171,7 @@
 #define SYS_CLOCK_GETRES           266
 #define SYS_CLOCK_NANOSLEEP        267
 #define SYS_GETRANDOM              355
+#define SYS_SECCOMP                354
 #define SYS_KILL                   37
 #define SYS_SIGRETURN              119
 #define SYS_RT_SIGRETURN           173

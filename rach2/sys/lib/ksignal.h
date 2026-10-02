@@ -88,8 +88,9 @@
 /*
  * What the kernel keeps with a pending signal for the `siginfo_t` its
  * handler receives: `si_code`, the sender's pid and uid, a child's status,
- * and a fault's address. One record per signal number, like the pending bit:
- * the first instance's record stays until the signal is delivered.
+ * a fault's address, and `si_errno`, which only SIGSYS from a seccomp filter
+ * sets. One record per signal number, like the pending bit: the first
+ * instance's record stays until the signal is delivered.
  */
 struct k_siginfo {
     int32_t code;
@@ -97,6 +98,7 @@ struct k_siginfo {
     uint32_t uid;
     int32_t status;
     uint32_t addr;
+    int32_t err;
 };
 
 /*

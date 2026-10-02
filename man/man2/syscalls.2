@@ -29,7 +29,7 @@ given up its capabilities with
 Linux asks for a capability in each such place, and this kernel keeps
 every capability or none.
 .Ss System call numbers
-The kernel registers the following 299 calls.
+The kernel registers the following 300 calls.
 .Bl -column "Number" "System call" -compact
 .It Sy Number Ta Sy System call
 .It 1 Ta Xr exit 2
@@ -288,6 +288,7 @@ The kernel registers the following 299 calls.
 .It 344 Ta Xr syncfs 2
 .It 345 Ta Xr sendmmsg 2
 .It 353 Ta Xr renameat2 2
+.It 354 Ta Xr seccomp 2
 .It 355 Ta Xr getrandom 2
 .It 356 Ta Xr memfd_create 2
 .It 359 Ta Xr socket 2

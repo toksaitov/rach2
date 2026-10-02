@@ -16,6 +16,7 @@
 #include "mouse.h"
 #include "proc/process.h"
 #include "proc/sched.h"
+#include "proc/seccomp.h"
 #include "proc/wait_queue.h"
 #include "proc/tgroup.h"
 #include "proc/ptrace.h"
@@ -511,7 +512,7 @@ void proc_group_exit(int32_t code)
  * because the timer's preemption is deferred inside a call. A halt there
  * kept the machine forever.
  */
-static int32_t exit_current(int32_t code)
+int32_t exit_current(int32_t code)
 {
     int status = (code >> 8) & 0xFF;
     bool is_init;
@@ -2008,7 +2009,8 @@ static int32_t fork_nproc(const process_t *parent)
  * What a child takes of `parent` besides its memory, files and signals: the
  * session and the process group, which it keeps until it or the parent calls
  * setsid or setpgid, the nice value, the OOM score adjustment and its floor,
- * the persona, the no_new_privs flag, the limits, the credentials, and the
+ * the persona, the no_new_privs flag, the seccomp mode and filters, the
+ * limits, the credentials, and the
  * program name, which `execve` sets and a child that never execs would
  * otherwise never have: a daemon that forks itself into the background is
  * such a child, and without it shows in `ps` and in /proc/<pid>/stat with no
@@ -2026,6 +2028,7 @@ static void fork_ids(process_t *child, const process_t *parent)
     child->persona = parent->persona;
     child->no_new_privs = parent->no_new_privs;
     child->nocaps = parent->nocaps;
+    seccomp_inherit(child, parent);
     k_memcpy(child->rlim, parent->rlim, sizeof(child->rlim));
     child->ruid = parent->ruid;
     child->euid = parent->euid;
@@ -6753,6 +6756,10 @@ int32_t sys_sched_setaffinity(isr_params_t *params)
 
 #define PR_SET_NAME 15
 
+#define PR_GET_SECCOMP 21
+
+#define PR_SET_SECCOMP 22
+
 #define PR_GET_NAME 16
 
 #define PR_SET_NO_NEW_PRIVS 38
@@ -6781,6 +6788,10 @@ int32_t sys_sched_setaffinity(isr_params_t *params)
  * PR_SET_NO_NEW_PRIVS, with the second argument 1 and the rest 0, sets
  * no_new_privs for good: fork passes it on and exec then ignores set-id bits.
  * PR_GET_NO_NEW_PRIVS, with every argument 0, returns it.
+ *
+ * PR_GET_SECCOMP returns the thread's seccomp mode, and PR_SET_SECCOMP sets
+ * the strict mode, or adds the filter at the third argument, as seccomp(2)
+ * does.
  *
  * Returns 0 or the value asked for; -EINVAL for any other option, a signal
  * past 64, a dumpable value other than 0 and 1, or arguments not as above;
@@ -6833,6 +6844,10 @@ int32_t sys_prctl(isr_params_t *params)
             return -EINVAL;
         }
         return current_proc->no_new_privs ? 1 : 0;
+    case PR_GET_SECCOMP:
+        return (int32_t)current_proc->seccomp_mode;
+    case PR_SET_SECCOMP:
+        return seccomp_prctl_set(arg2, params->edx);
     default:
         return -EINVAL;
     }

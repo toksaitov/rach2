@@ -1,0 +1,168 @@
+.Dd October 2, 2026
+.Dt SECCOMP 2
+.Os
+.Sh NAME
+.Nm seccomp
+.Nd filter a thread's system calls
+.Sh SYNOPSIS
+.In linux/seccomp.h
+.In linux/filter.h
+.Ft int
+.Fn syscall SYS_seccomp "unsigned int operation" "unsigned int flags" "void *args"
+.Sh DESCRIPTION
+.Fn seccomp
+gives the calling thread a filter of its system calls.
+A filter is a classic BPF program that reads
+.Vt struct seccomp_data ,
+the call's number, the architecture, which is
+.Dv AUDIT_ARCH_I386 ,
+the address of the instruction after the call, and its six arguments
+widened to 64 bits, and returns an action in its high 16 bits and data in
+the low 16.
+A thread keeps a chain of filters, newest first; every filter judges each
+call, and the action of highest precedence is taken:
+.Bl -tag -width "SECCOMP_RET_KILL_PROCESS"
+.It Dv SECCOMP_RET_KILL_PROCESS
+The process ends as killed by
+.Dv SIGSYS ,
+with a core where it may leave one.
+.It Dv SECCOMP_RET_KILL_THREAD
+The thread ends as killed by
+.Dv SIGSYS ,
+and the process with it when it is the last.
+.It Dv SECCOMP_RET_TRAP
+The call does not run;
+.Dv SIGSYS
+is posted, with
+.Va si_code
+.Dv SYS_SECCOMP ,
+.Va si_call_addr ,
+.Va si_syscall
+and
+.Va si_arch
+of the call, and the data in
+.Va si_errno .
+EAX holds the call's number for the handler, which may store a result
+there.
+A blocked or ignored
+.Dv SIGSYS
+kills the process.
+.It Dv SECCOMP_RET_ERRNO
+The call does not run and fails with the data as its error, at most 4095.
+.It Dv SECCOMP_RET_TRACE
+The thread's tracer, which set
+.Dv PTRACE_O_TRACESECCOMP ,
+gets a
+.Dv PTRACE_EVENT_SECCOMP
+stop with the data; the call it then leaves runs unless it gave -1 as its
+number, after the filters judge it again.
+Without such a tracer the call fails with
+.Er ENOSYS .
+.It Dv SECCOMP_RET_LOG , Dv SECCOMP_RET_ALLOW
+The call runs.
+.El
+.Pp
+A program may load the words of
+.Vt struct seccomp_data
+and its length, compute in its accumulator and index register with
+sixteen scratch words, jump forward and return; a division by a zero
+register ends it with 0.
+.Pp
+The operations:
+.Bl -tag -width "SECCOMP_GET_ACTION_AVAIL"
+.It Dv SECCOMP_SET_MODE_STRICT
+With no flags and a null
+.Fa args ,
+leave the thread only
+.Xr read 2 ,
+.Xr write 2 ,
+.Xr exit 2
+and
+.Xr sigreturn 2 ;
+any other call kills the process with
+.Dv SIGKILL ,
+where Linux kills the thread alone.
+.It Dv SECCOMP_SET_MODE_FILTER
+Add the filter the
+.Vt struct sock_fprog
+at
+.Fa args
+describes, of at most 4096 instructions.
+The caller must have set no_new_privs or be privileged.
+.Dv SECCOMP_FILTER_FLAG_TSYNC
+gives every thread of the process the caller's new chain, which each must
+already share, and returns the id of a thread that does not;
+.Dv SECCOMP_FILTER_FLAG_TSYNC_ESRCH
+returns
+.Er ESRCH
+in its place.
+.Dv SECCOMP_FILTER_FLAG_LOG
+and
+.Dv SECCOMP_FILTER_FLAG_SPEC_ALLOW
+are accepted and change nothing.
+.It Dv SECCOMP_GET_ACTION_AVAIL
+Return 0 when the action at
+.Fa args
+is one of those above.
+.It Dv SECCOMP_GET_NOTIF_SIZES
+Store Linux's sizes of the structures of the notification interface.
+.El
+.Pp
+A child of
+.Xr fork 2
+or
+.Xr clone 2
+has its parent's mode and chain, and
+.Xr execve 2
+keeps them.
+.Xr prctl 2
+has the same through
+.Dv PR_SET_SECCOMP
+and
+.Dv PR_GET_SECCOMP ,
+and
+.Pa /proc/ Ns Ar pid Ns Pa /status
+reports the mode and the number of filters.
+.Ss Differences from Linux
+There is no notification interface:
+.Dv SECCOMP_FILTER_FLAG_NEW_LISTENER
+is refused, and a filter that returns
+.Dv SECCOMP_RET_USER_NOTIF
+fails the call with
+.Er ENOSYS ,
+as on Linux without a listener.
+.Ss System call interface
+The i386 system call number is 354.
+.Sh RETURN VALUES
+0 on success; for
+.Dv SECCOMP_FILTER_FLAG_TSYNC ,
+the id of a thread that cannot take the chain.
+On failure -1 with
+.Va errno
+set.
+.Sh ERRORS
+.Bl -tag -width Er
+.It Bq Er EACCES
+A filter from a caller with neither no_new_privs nor privilege.
+.It Bq Er EFAULT
+.Fa args
+or the program cannot be read.
+.It Bq Er EINVAL
+An unknown operation or flag, an empty or longer program, an instruction
+a filter may not have, a jump past the end, a last instruction that is
+not a return, or a filter added in the strict mode.
+.It Bq Er ENOMEM
+The chain would pass 32768 instructions, each filter counted with four
+more.
+.It Bq Er EOPNOTSUPP
+An action
+.Dv SECCOMP_GET_ACTION_AVAIL
+does not have.
+.It Bq Er ESRCH
+A thread that cannot take the chain, with
+.Dv SECCOMP_FILTER_FLAG_TSYNC_ESRCH .
+.El
+.Sh SEE ALSO
+.Xr prctl 2 ,
+.Xr ptrace 2 ,
+.Xr proc 5

@@ -336,6 +336,12 @@ struct process {
      * is set. */
     uint32_t fd_held[FD_TABLE_LIMIT / 32];
     int fd_holding;
+    /* The system call filters seccomp(2) installed, newest first, which the
+     * thread shares with the threads and children that inherit them, and
+     * the mode, SECCOMP_MODE_ (seccomp.h); a fork passes both on and an
+     * exec keeps them. */
+    struct seccomp_filter *seccomp;
+    uint32_t seccomp_mode;
 };
 
 typedef struct process process_t;
@@ -413,6 +419,10 @@ int proc_exit_cleanup(int32_t status);
  * and have the process end with the encoded wait status `code` whichever
  * thread ends last. A process already ending keeps its status. */
 void proc_group_exit(int32_t code);
+
+/** End the calling thread with the wait status `code`, and with the last
+ * thread the process. Does not return. Defined in syscall_proc.c. */
+int32_t exit_current(int32_t code);
 
 /** Let the parent a CLONE_VFORK clone made `p` for run again, at `p`'s
  * execve or end; nothing when no parent waits. */

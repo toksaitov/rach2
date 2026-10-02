@@ -123,6 +123,8 @@ static const char *const PROBES[] = {
     /* System V shared memory, semaphores and message queues, and POSIX
        message queues. */
     "musl/ipcmusl",
+    /* seccomp's filters: errno, trap, kill, TSYNC, exec, strict mode. */
+    "musl/seccompmusl",
     /* FIFO files made by mkfifo and mknodat: their opens, waits and
        bytes. */
     "musl/fifomusl",

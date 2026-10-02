@@ -993,8 +993,10 @@ Lines of a name, a colon, a tab and a value:
 Name, Umask, State, Tgid, Pid, PPid, TracerPid, Uid and Gid (real,
 effective, saved and file-system IDs), FDSize, Groups, the memory sizes
 VmPeak to VmSwap in kilobytes, Threads, the signal sets SigPnd, ShdPnd,
-SigBlk, SigIgn and SigCgt in hexadecimal, the capability sets, and
-NoNewPrivs.
+SigBlk, SigIgn and SigCgt in hexadecimal, the capability sets,
+NoNewPrivs, and Seccomp and Seccomp_filters, the thread's seccomp mode and
+the number of its filters
+.Pq see Xr seccomp 2 .
 CapPrm and CapEff are full for a thread that is privileged, one whose
 effective user ID is 0 and which kept its capabilities
 .Pq see Xr capget 2 ,

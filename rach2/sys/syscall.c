@@ -24,6 +24,7 @@
 #include "proc/futex.h"
 #include "proc/tgroup.h"
 #include "proc/ptrace.h"
+#include "proc/seccomp.h"
 #include "tables/gdt.h"
 #include "lib/krandom.h"
 #include "lib/kerrno.h"
@@ -2683,6 +2684,8 @@ static void syscall_missing(uint32_t syscall_num)
  * Linux's `syscall_trace_enter` lets it: the number is read again after the
  * stop, a number of no call answers -ENOSYS, and -1 runs no call, whose
  * result is then what the tracer left in EAX, -ENOSYS unless it set one.
+ * The thread's seccomp filters then judge the call the tracer left, as
+ * Linux runs them after the stop, and may answer it without running it.
  *
  * Whether `deliver_signals` restarts a call a signal interrupted, on this
  * return, is recorded in `restart_nr` before the exit stop, so a tracer
@@ -2726,6 +2729,11 @@ static void _syscall_handler(isr_params_t *params)
             ptrace_syscall_stop(params, syscall_num, 0);
             syscall_num = (uint32_t)current_proc->orig_eax;
             skip = current_proc->orig_eax == -1;
+        }
+        if (!skip && current_proc->seccomp_mode != SECCOMP_MODE_DISABLED &&
+            !seccomp_permit(params, syscall_num, &ret)) {
+            skip = 1;
+            params->eax = (uint32_t)ret;
         }
     }
     if (skip) {
@@ -2876,6 +2884,7 @@ void init_syscall(void)
     _syscall_table[SYS_GETITIMER] = sys_getitimer;
     _syscall_table[SYS_ALARM] = sys_alarm;
     _syscall_table[SYS_GETRANDOM] = sys_getrandom;
+    _syscall_table[SYS_SECCOMP] = sys_seccomp;
     _syscall_table[SYS_KILL] = sys_kill;
     _syscall_table[SYS_TKILL] = sys_tkill;
     _syscall_table[SYS_TGKILL] = sys_tgkill;

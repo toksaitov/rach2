@@ -51,7 +51,7 @@
 #define PTRACE_O_TRACESYSGOOD 0x00000001u
 #define PTRACE_O_TRACEEXEC    0x00000010u
 #define PTRACE_O_EXITKILL     0x00100000u
-#define PTRACE_O_MASK         0x0010007Fu
+#define PTRACE_O_MASK         0x001000FFu
 
 /* The i386 `struct user`: the 17 words of `user_regs_struct`, then the
  * floating-point and accounting fields, and the eight debug registers at

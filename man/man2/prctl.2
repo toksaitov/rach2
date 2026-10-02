@@ -45,6 +45,13 @@ show, to the string at the second argument, cut to 15 bytes.
 .It Dv PR_GET_NAME No (16)
 Store the program name at the second argument: 16 bytes, padded with
 null bytes.
+.It Dv PR_GET_SECCOMP No (21)
+Return the thread's seccomp mode: 0 for none, 1 strict, 2 filter.
+.It Dv PR_SET_SECCOMP No (22)
+Set the strict mode for a second argument of 1, or add the filter at the
+third argument for 2, as
+.Xr seccomp 2
+does.
 .It Dv PR_SET_NO_NEW_PRIVS No (38)
 With the second argument 1 and the rest 0, set the caller's no_new_privs
 bit.
@@ -104,7 +111,8 @@ EBX contains
 .Fa option
 and ECX through EDI the second through fifth arguments.
 .Sh RETURN VALUES
-.Dv PR_GET_DUMPABLE
+.Dv PR_GET_DUMPABLE ,
+.Dv PR_GET_SECCOMP
 and
 .Dv PR_GET_NO_NEW_PRIVS
 return the value asked for; the other options return 0.
@@ -136,6 +144,7 @@ Linux refuses an option it does not know.
 .Sh SEE ALSO
 .Xr execve 2 ,
 .Xr fork 2 ,
+.Xr seccomp 2 ,
 .Xr setuid 2 ,
 .Xr sigaction 2 ,
 .Xr core 5 ,

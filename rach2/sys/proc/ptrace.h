@@ -28,6 +28,7 @@
 #define PTRACE_EVENT_EXEC       4
 #define PTRACE_EVENT_VFORK_DONE 5
 #define PTRACE_EVENT_EXIT       6
+#define PTRACE_EVENT_SECCOMP    7
 #define PTRACE_EVENT_STOP       128
 
 /** ptrace (26): EBX=request, ECX=pid, EDX=addr, ESI=data. */

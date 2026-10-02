@@ -33,6 +33,7 @@
 #include "../block/usbdisk.h"
 #include "../tty/pty.h"
 #include "../proc/tgroup.h"
+#include "../proc/seccomp.h"
 #include "../mm/mm.h"
 #include "../mm/paging.h"
 #include "../io/poll.h"
@@ -1152,7 +1153,11 @@ static int procfs_gen_status(struct procfs_text *t, int pid)
     ap_set(t, "CapAmb", 0);
     ap_str(t, "NoNewPrivs:\t");
     ap_u32(t, p->no_new_privs);
-    ap_str(t, "\nSeccomp:\t0\nCpus_allowed:\t1\nCpus_allowed_list:\t0\n");
+    ap_str(t, "\nSeccomp:\t");
+    ap_u32(t, p->seccomp_mode);
+    ap_str(t, "\nSeccomp_filters:\t");
+    ap_u32(t, seccomp_filter_count(p));
+    ap_str(t, "\nCpus_allowed:\t1\nCpus_allowed_list:\t0\n");
     ap_str(t, "voluntary_ctxt_switches:\t0\nnonvoluntary_ctxt_switches:\t0\n");
     return t->len;
 }
