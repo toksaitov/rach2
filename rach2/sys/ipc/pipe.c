@@ -101,6 +101,7 @@ static void pipe_free(pipe_t *p)
     if (*link) {
         *link = p->next;
     }
+    kfree(p->buf);
     kfree(p);
 }
 
@@ -296,6 +297,12 @@ static int32_t pipe_write(fd_entry_t *e, const char __user *buf, uint32_t count)
         }
         if (!p->read_open) {
             continue;
+        }
+        if (!p->buf) {
+            p->buf = kmalloc(PIPE_BUF_SIZE);
+            if (!p->buf) {
+                return (done > 0) ? (int32_t)done : -ENOMEM;
+            }
         }
         {
             uint8_t *at;

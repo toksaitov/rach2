@@ -17,14 +17,17 @@
 
 extern int printf(const char *format, ...);
 
-#define USER_BASE 0x04000000u
-#define PEER_PAGE 4
+#define USER_BASE  0x04000000u
+#define PEER_PAGE  4
+/* The user pages: a peer's transfer of a whole ring starts at PEER_PAGE. */
+#define USER_PAGES (PEER_PAGE + PIPE_BUF_SIZE / PAGE_SIZE + 1)
 
 static pipe_t ring;
+static uint8_t ring_bytes[PIPE_BUF_SIZE];
 static fd_entry_t reader, writer;
 static struct open_file read_ofd, write_ofd;
-static uint8_t memory[8 * PAGE_SIZE];
-static int pages[8];
+static uint8_t memory[USER_PAGES * PAGE_SIZE];
+static int pages[USER_PAGES];
 static int failures, waits, read_wakes, write_wakes, signals, resolves;
 static uint32_t read_kinds, write_kinds;
 static void (*resolve_action)(void);
@@ -163,6 +166,14 @@ void signal_post_thread(process_t *proc, int signo, const struct k_siginfo *info
     signals++;
 }
 
+/** The test's pipe has its ring already. */
+void *kmalloc(size_t n)
+{
+    (void)n;
+    CHECK(0, "unexpected ring allocation");
+    return NULL;
+}
+
 /** Pipe creation is outside this test. */
 void *kzalloc(size_t n)
 {
@@ -206,6 +217,7 @@ static void setup(uint32_t head)
     k_memset(&read_ofd, 0, sizeof(read_ofd));
     k_memset(&write_ofd, 0, sizeof(write_ofd));
     k_memset(memory, 0x33, sizeof(memory));
+    ring.buf = ring_bytes;
     ring.head = ring.tail = head;
     ring.read_open = ring.write_open = 1;
     reader.priv = writer.priv = &ring;
@@ -214,10 +226,10 @@ static void setup(uint32_t head)
     reader.ofd = &read_ofd;
     writer.ofd = &write_ofd;
     read_ofd.status_flags = write_ofd.status_flags = OFD_NONBLOCK;
-    for (i = 0; i < 8; i++) {
+    for (i = 0; i < USER_PAGES; i++) {
         pages[i] = 2;
     }
-    k_memset(memory + PEER_PAGE * PAGE_SIZE, 0x22, PAGE_SIZE);
+    k_memset(memory + PEER_PAGE * PAGE_SIZE, 0x22, sizeof(memory) - PEER_PAGE * PAGE_SIZE);
     waits = read_wakes = write_wakes = signals = resolves = 0;
     read_kinds = write_kinds = 0;
     resolve_action = wait_action = NULL;
@@ -336,7 +348,7 @@ static void state_changes(void)
 
     setup(0);
     write_ofd.status_flags = 0;
-    pipe_ring_put(&ring, memory, PIPE_BUF_SIZE);
+    pipe_ring_put(&ring, bytes, PIPE_BUF_SIZE);
     CHECK(pipe_write(&writer, user_at(0), 1) == -EINTR, "full write interrupted");
     peer_count = PIPE_BUF_SIZE;
     wait_action = peer_read;
@@ -367,7 +379,7 @@ static void readiness_changes(void)
     wait_action = peer_read;
     CHECK(pipe_write(&writer, user_at(0), 3) == 3, "filled blocking writer retries");
     CHECK(waits == 1 && pipe_available(&ring) == 3, "filled blocking writer waits for space");
-    CHECK(read_wakes == 2, "each refill wakes reader");
+    CHECK(read_wakes == PIPE_BUF_SIZE / PAGE_SIZE + 1, "each page a write copies wakes reader");
 
     setup(0);
     pipe_ring_put(&ring, memory, 2);

@@ -25,15 +25,19 @@
  *
  * The byte FIFO is a power-of-two ring with monotonically increasing
  * head/tail counters (count = tail - head); the index math is pure and
- * host-tested.
+ * host-tested. The ring holds 64 KiB, Linux's default capacity, so a write of
+ * that much to an empty pipe does not wait, as a program that writes a
+ * child's input before it reads the child's output needs. It comes from the
+ * heap at the pipe's first write, so a pipe that carries nothing costs only
+ * its record.
  */
-#define PIPE_BUF_SIZE 4096 /* one page; must stay a power of two for the ring mask */
+#define PIPE_BUF_SIZE 65536 /* a power of two, for the ring mask */
 
 typedef struct pipe {
     struct pipe *next; /* the list of live pipes */
     int in_use;
-    uint32_t inode; /* its own; never reused within a boot */
-    uint8_t buf[PIPE_BUF_SIZE];
+    uint32_t inode;        /* its own; never reused within a boot */
+    uint8_t *buf;          /* the ring, NULL until the first write */
     uint32_t head;         /* total bytes consumed by the read end */
     uint32_t tail;         /* total bytes produced by the write end */
     int read_open;         /* descriptions open on the read end */

@@ -1,6 +1,6 @@
 # `ipc/`: pipes, AF_UNIX sockets, System V IPC and message queues
 
-Rach2 implements anonymous byte pipes through `pipe` and `pipe2`, the pipe behind a FIFO file, AF_UNIX sockets (`unix.c`), System V shared memory, semaphores and message queues (`sysv.c`), and POSIX message queues (`mqueue.c`). A pipe has a read end, a write end, and a 4096-byte ring. It preserves byte order but has no message boundaries.
+Rach2 implements anonymous byte pipes through `pipe` and `pipe2`, the pipe behind a FIFO file, AF_UNIX sockets (`unix.c`), System V shared memory, semaphores and message queues (`sysv.c`), and POSIX message queues (`mqueue.c`). A pipe has a read end, a write end, and a 65536-byte ring. It preserves byte order but has no message boundaries.
 
 ## Creation and lifetime
 
@@ -22,7 +22,7 @@ Pipe waits are signal-interruptible. A wait interrupted before any transfer ends
 
 Transfers resolve one user page before selecting a ring span. Resolution can sleep during memory reclaim and allow another process to change the ring or close the peer end. The operation rechecks readiness and closure after such a wait. The subsequent checked copy uses a present page, allocates nothing, and advances the ring counter before any context switch. An unresolved page returns `EFAULT` if no byte has been transferred, or the partial count otherwise.
 
-The 4096-byte `PIPE_BUF_SIZE` is the ring capacity, which `fcntl(F_GETPIPE_SZ)` reports; Linux's default is 65536 bytes, and bash, which writes a here-document into a pipe it reads itself when the document fits, asks the capacity first. It is not an atomic-write limit. A blocking write uses whatever space is free before it waits. Concurrent writers can therefore interleave even when each request is no larger than 4096 bytes. There is no POSIX `PIPE_BUF` atomicity guarantee.
+The 65536-byte `PIPE_BUF_SIZE` is the ring capacity, Linux's default, which `fcntl(F_GETPIPE_SZ)` reports; bash, which writes a here-document into a pipe it reads itself when the document fits, asks the capacity first, and a program that writes a child's input before it reads the child's output, or splits a write into pieces that a reader must take in turn, does not wait for less than that. The ring is taken from the heap at the pipe's first write and given back with the pipe, so a pipe that carries nothing costs only its record. The capacity is not an atomic-write limit. A blocking write uses whatever space is free before it waits. Concurrent writers can therefore interleave even when each request is no larger than 4096 bytes. There is no POSIX `PIPE_BUF` atomicity guarantee.
 
 ## Descriptor operations
 
@@ -62,7 +62,7 @@ A semaphore set and a message queue are in the heap. A `semop` applies its opera
 
 `make test` runs two pipe-specific freestanding probes:
 
-* `tests/pipeprobe.c` checks byte order, EOF, the 4096-byte capacity, non-blocking empty and full cases, `SIGPIPE` and `EPIPE`, a 5000-byte transfer that blocks across `fork`, 100 create-close cycles, and agreement between the two ends' `fstat` and `/proc` identities.
+* `tests/pipeprobe.c` checks byte order, EOF, the 65536-byte capacity, non-blocking empty and full cases, `SIGPIPE` and `EPIPE`, a transfer of more than the pipe holds that blocks across `fork`, 100 create-close cycles, and agreement between the two ends' `fstat` and `/proc` identities.
 * `tests/pollprobe.c` checks `POLLIN` readiness, timeout, `POLLHUP`, `select` translation, and a poller woken by a child writing after a delay.
 
 `tests/run host` runs `tests/host/pipe_ring_hosttest.c` under AddressSanitizer and UndefinedBehaviorSanitizer. It checks empty and full rings, bounded partial operations, byte order, and a transfer across the physical end of the array. `tests/host/pipe_copy_hosttest.c` runs the production pipe and user-copy code with a resolver that executes a competing pipe operation before returning a lazy or COW page. It checks byte order, bounded occupancy, peer closure, page faults, partial transfers, waits and wakeups, and the kind of change each wakeup names, a write into a ring that has data waking the readers too. `sh tests/host/pipe_copy_mutate.sh` removes each early prefault, changes the kind a read's, a write's or a close's wakeup names, and has a write wake the readers only into an empty ring, separately in a private source copy; each compiled mutation must fail, and each restored, touched and rebuilt source must pass. This models the scheduling order without running reclaim, disk I/O or a CPU context switch. `tests/host/wait_queue_hosttest.c` checks linked-list insertion and removal, duplicate insertion, wake-all behavior, the count of each kind of change a wake names and sixty-four simultaneous waiters; the guest probes above exercise the actual scheduling path.

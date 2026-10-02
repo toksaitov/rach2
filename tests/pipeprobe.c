@@ -5,8 +5,8 @@
  *   (a) round-trip + EOF: bytes written at one end read back in order at the
  *       other, and once the write end closes the drained read end returns 0;
  *   (b) O_NONBLOCK: a read of an empty pipe and a write to a full one return
- *       -EAGAIN instead of blocking, and the FIFO has a full page, which
- *       F_GETPIPE_SZ reports at both ends;
+ *       -EAGAIN instead of blocking, and the FIFO holds 64 KiB, Linux's
+ *       capacity, which F_GETPIPE_SZ reports at both ends;
  *   (c) SIGPIPE / -EPIPE: a write with the read end closed raises SIGPIPE and
  *       (with the signal caught) returns -EPIPE;
  *   (d) blocking across a fork: a writer of more than one buffer blocks until
@@ -48,7 +48,7 @@ typedef unsigned int size_t;
 #define SA_SIGINFO  0x00000004
 #define SA_RESTORER 0x04000000
 
-#define PIPE_BUF_SIZE 4096
+#define PIPE_BUF_SIZE 65536
 
 static int syscall1(int n, int a)
 {
@@ -245,8 +245,9 @@ static void sigpipe_handler(int sig)
     got_sigpipe = 1;
 }
 
-/* A 5 KB pattern buffer (> one pipe page) for the fill and blocking tests. */
-#define BIG 5000
+/* A pattern buffer of more than a pipe holds, for the fill and blocking
+   tests. */
+#define BIG 70000
 static char big[BIG];
 
 void _start(void)
@@ -269,14 +270,14 @@ void _start(void)
     check(rd(p[0], buf, 10) == 0, "read returns 0 (EOF) after write end closed");
     syscall1(SYS_CLOSE, p[0]);
 
-    /* (b) O_NONBLOCK: empty read -> EAGAIN; the FIFO has a full page; a write
+    /* (b) O_NONBLOCK: empty read -> EAGAIN; the FIFO holds 64 KiB; a write
      * past full -> EAGAIN. */
     check(do_pipe2(p, O_NONBLOCK) == 0, "pipe2(O_NONBLOCK)");
     check(syscall3(SYS_FCNTL64, p[0], F_GETPIPE_SZ, 0) == PIPE_BUF_SIZE &&
               syscall3(SYS_FCNTL64, p[1], F_GETPIPE_SZ, 0) == PIPE_BUF_SIZE,
-          "F_GETPIPE_SZ reports a page at both ends");
+          "F_GETPIPE_SZ reports 64 KiB at both ends");
     check(rd(p[0], buf, 8) == -EAGAIN, "nonblocking read of empty pipe -> -EAGAIN");
-    check(wr(p[1], big, PIPE_BUF_SIZE) == PIPE_BUF_SIZE, "write fills a full page");
+    check(wr(p[1], big, PIPE_BUF_SIZE) == PIPE_BUF_SIZE, "a write of 64 KiB fills the pipe");
     check(wr(p[1], "x", 1) == -EAGAIN, "nonblocking write of a full pipe -> -EAGAIN");
     check(rd(p[0], buf, 8) == 8, "drain 8 bytes from the full pipe");
     syscall1(SYS_CLOSE, p[0]);
@@ -295,9 +296,9 @@ void _start(void)
     check(got_sigpipe == 1, "SIGPIPE was raised");
     syscall1(SYS_CLOSE, p[1]);
 
-    /* (d) blocking across a fork: the parent writes 5000 bytes (> one page) so
-     * it must block until the forked reader drains, and the reader gets every
-     * byte. */
+    /* (d) blocking across a fork: the parent writes more than the pipe holds,
+     * so it must block until the forked reader drains, and the reader gets
+     * every byte. */
     check(do_pipe(p) == 0, "pipe() for blocking test");
     pid = syscall1(SYS_FORK, 0);
     check(pid >= 0, "fork");
@@ -326,7 +327,7 @@ void _start(void)
             off += w;
         }
         syscall1(SYS_CLOSE, p[1]); /* signal EOF to the reader */
-        check(off == BIG, "parent wrote all 5000 bytes (blocked through full)");
+        check(off == BIG, "parent wrote the whole buffer (blocked through full)");
         status = -1;
         check(syscall3(SYS_WAITPID, pid, (int)(size_t)&status, 0) == pid && (status & 0x7f) == 0 &&
                   ((status >> 8) & 0xff) == 0,
@@ -430,7 +431,7 @@ void _start(void)
         syscall1(SYS_CLOSE, p[1]);
     }
 
-    /* (h) one write of three pages and a byte, which fills the pipe and
+    /* (h) one write of three pipefuls and a byte, which fills the pipe and
      * waits three times while the reader drains: the reader, which sleeps
      * on the empty pipe between the refills, is woken at every refill and not
      * once per write call. The write end stays open until the reader says
@@ -449,7 +450,7 @@ void _start(void)
 
             syscall1(SYS_CLOSE, p[1]);
             syscall1(SYS_CLOSE, q[0]);
-            while (total < 3 * 4096 + 1) {
+            while (total < 3 * PIPE_BUF_SIZE + 1) {
                 got = rd(p[0], cb, sizeof(cb));
                 if (got <= 0) {
                     sys_exit(3);
@@ -459,13 +460,13 @@ void _start(void)
             wr(q[1], "ok", 2);
             sys_exit(0);
         } else {
-            static char threefull[3 * 4096 + 1];
+            static char threefull[3 * PIPE_BUF_SIZE + 1];
             char ack[2];
 
             syscall1(SYS_CLOSE, p[0]);
             syscall1(SYS_CLOSE, q[1]);
             check(wr(p[1], threefull, (int)sizeof(threefull)) == (int)sizeof(threefull),
-                  "three pages and a byte written in one call through three full waits");
+                  "three pipefuls and a byte written in one call through three full waits");
             check(rd(q[0], ack, 2) == 2, "and the reader, woken at every refill, read them all");
             syscall1(SYS_CLOSE, p[1]);
             syscall1(SYS_CLOSE, q[0]);

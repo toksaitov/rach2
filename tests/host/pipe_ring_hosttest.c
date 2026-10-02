@@ -7,7 +7,7 @@
  * fence-post logic a one-off bug hides in, so it runs natively under
  * ASan/UBSan: put never overruns free space, get never reads past occupancy, a
  * transfer that straddles the physical end of the buffer stays byte-correct,
- * and a full page round-trips. Returns the failed-check count (0 == pass).
+ * and a full ring round-trips. Returns the failed-check count (0 == pass).
  */
 
 extern int printf(const char *fmt, ...);
@@ -24,11 +24,13 @@ static int fails;
         }                                                     \
     } while (0)
 
+static unsigned char ring[PIPE_BUF_SIZE];
+static unsigned char src[2 * PIPE_BUF_SIZE];
+static unsigned char dst[2 * PIPE_BUF_SIZE];
+
 int main(void)
 {
     pipe_t p;
-    unsigned char src[8192];
-    unsigned char dst[8192];
     unsigned int i, got;
 
     for (i = 0; i < sizeof(src); i++) {
@@ -36,12 +38,13 @@ int main(void)
     }
 
     /* Empty ring. */
+    p.buf = ring;
     p.head = 0;
     p.tail = 0;
     CHECK(pipe_available(&p) == 0);
     CHECK(pipe_free_space(&p) == PIPE_BUF_SIZE);
 
-    /* A put is bounded by free space; a full page fits exactly (no lost
+    /* A put is bounded by free space; a full ring fits exactly (no lost
      * slot). */
     CHECK(pipe_ring_put(&p, src, PIPE_BUF_SIZE) == PIPE_BUF_SIZE);
     CHECK(pipe_available(&p) == PIPE_BUF_SIZE);
@@ -126,11 +129,11 @@ int main(void)
         /* The byte forms and the spans agree. */
         p.head = 0;
         p.tail = 0;
-        CHECK(pipe_ring_put(&p, src, 4000) == 4000);
-        CHECK(pipe_ring_get(&p, dst, 3000) == 3000);
+        CHECK(pipe_ring_put(&p, src, PIPE_BUF_SIZE - 96) == PIPE_BUF_SIZE - 96);
+        CHECK(pipe_ring_get(&p, dst, PIPE_BUF_SIZE - 1096) == PIPE_BUF_SIZE - 1096);
         CHECK(pipe_ring_put(&p, src, 2000) == 2000);
         n = pipe_ring_read_span(&p, &rp);
-        CHECK(n == 1096 && rp == &p.buf[3000]);
+        CHECK(n == 1096 && rp == &p.buf[PIPE_BUF_SIZE - 1096]);
         pipe_ring_consume(&p, n);
         n = pipe_ring_read_span(&p, &rp);
         CHECK(n == 1904 && rp == p.buf && rp[0] == src[96]);
