@@ -145,7 +145,7 @@ The image is built where the layer is, on a Linux host, and is not part of `make
 * `ssh-keysign` without its set-id bit: the system uses no host-based authentication, and the guard admits no set-id file the manifest does not declare.
 * `/run`, a link to `/var/run`, where D-Bus's programs look for the system bus's socket, `/run/dbus/system_bus_socket`.
 
-The ports install their upstream manual pages under `/usr/share/man/manN` as troff sources, which the system's `man` does not read: it reads plain text. `render_man.sh` renders the pages of sections 1, 5, 7 and 8 with the build host's mandoc, as `man/render.sh` renders this project's, into `/usr/share/man/gnu/catN`, 1213 pages, and `man` looks a name up there when this project's manual has no page for it, or first when the command the path finds by the name is a port's and not a link to BusyBox, so `man git` shows Git's page and `man ls` GNU's.
+The ports install their upstream manual pages under `/usr/share/man/manN` as troff sources, which the system's `man` does not read: it reads plain text. `render_man.sh` renders the pages of sections 1, 5, 7 and 8 with the build host's mandoc, as `man/render.sh` renders this project's, into `/usr/share/man/gnu/catN`, 1213 pages, and `man` looks a name up there when this project's manual has no page for it, or first when the command the path finds by the name is a port's and not a link to BusyBox, so `man git` shows Git's page and `man ls` GNU's. A page dated `$Mdocdate$` alone, which mandoc would render with the day of the build, is refused, and its recipe gives it the date its file has in the release, as tmux's does, so two builds of the root render alike.
 
 ### Which program a name finds
 

@@ -13,7 +13,9 @@
 # MANDIR/gnu/catN/NAME.N. A suffix after the section, as OpenSSL's `1ossl`,
 # is dropped, and of two pages that would have one name the first keeps it.
 # mandoc runs in MANDIR, where a page's `.so` request names the page it
-# stands for. A page mandoc renders to nothing is left out.
+# stands for. A page mandoc renders to nothing is left out. A page dated
+# `$Mdocdate$` alone is refused, since mandoc renders it with the day it
+# runs and two builds of the root would differ; its recipe gives it a date.
 #
 
 set -e
@@ -34,6 +36,11 @@ for src in "$MANDIR"/man[1578]/*; do
     name=${base%.*}
     out="$MANDIR/gnu/cat$section/$name.$section"
     [ -e "$out" ] && continue
+    # shellcheck disable=SC2016 # the dollars are the page's
+    if gzip -dcf "$src" | grep -q '^\.Dd \$Mdocdate\$$'; then
+        echo "gnu: man: $src: dated \$Mdocdate\$, which renders as the day of the build" >&2
+        exit 1
+    fi
     mkdir -p "$MANDIR/gnu/cat$section"
     (cd "$MANDIR" && mandoc -T ascii "man$section/${src##*/}" 2>/dev/null) |
         sed "s/.$bs//g" > "$out.txt" || :
