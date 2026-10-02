@@ -222,8 +222,10 @@ mim 1 busybox-miscutils
 mincore 2 brk
 mkdir 1 busybox-coreutils
 mkdirat 2 mkdir
+mkdosfs 1 busybox-util-linux
 mkfifo 1 busybox-coreutils
 mkfs.minix 1 busybox-util-linux
+mkfs.vfat 1 busybox-util-linux
 mknod 1 busybox-coreutils
 mknodat 2 mknod
 mkpasswd 8 busybox-loginutils

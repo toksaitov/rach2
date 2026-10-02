@@ -133,15 +133,19 @@ static short dev_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 
 static int32_t dev_disk_rescan(fd_entry_t *e);
 static int32_t dev_getgeo(fd_entry_t *e, uint32_t arg);
+static int32_t dev_sector_size(fd_entry_t *e, uint32_t arg);
 
 /*
  * The size of a raw window, which is what a checker asks a block device
  * before it reads it: `BLKGETSIZE64` is `_IOR(0x12, 114, size_t)`, which is
  * 0x80041272 with musl's 32-bit `size_t` and 0x80081272 from a 64-bit
  * header, and both take eight bytes; `BLKGETSIZE` (0x1260) is the sector
- * count in an unsigned long. `BLKRRPART` (0x125F) rereads a whole disk's
- * partition table, and `HDIO_GETGEO` (0x0301) gives a geometry and the
- * node's first sector (`dev_getgeo`). Everything else is not a terminal.
+ * count in an unsigned long. `BLKSSZGET` (0x1268) and `BLKPBSZGET` (0x127B)
+ * give the logical and the physical sector size, an int each, which BusyBox's
+ * `mkfs.vfat` reads before it lays out a volume. `BLKRRPART` (0x125F)
+ * rereads a whole disk's partition table, and `HDIO_GETGEO` (0x0301) gives a
+ * geometry and the node's first sector (`dev_getgeo`). Everything else is not
+ * a terminal.
  */
 static int32_t dev_ioctl(fd_entry_t *e, uint32_t request, uint32_t arg)
 {
@@ -152,6 +156,9 @@ static int32_t dev_ioctl(fd_entry_t *e, uint32_t request, uint32_t arg)
             return -ENOTTY;
         }
         return copy_to_user((void __user *)arg, &size, sizeof(size)) != 0 ? -EFAULT : 0;
+    }
+    if (request == 0x1268u || request == 0x127Bu) {
+        return dev_sector_size(e, arg);
     }
     if (request == 0x125Fu) {
         return dev_disk_rescan(e);
@@ -2181,6 +2188,18 @@ static int32_t dev_getgeo(fd_entry_t *e, uint32_t arg)
         (uint16_t)((sectors > 0xFFFFFFFFu ? 0xFFFFFFFFu : (uint32_t)sectors) / (255u * 63u));
     geo.start = (uint32_t)w->part.start_lba;
     return copy_to_user((void __user *)arg, &geo, sizeof(geo)) != 0 ? -EFAULT : 0;
+}
+
+/** The sector size of a raw window, 512 bytes, as an int at `arg`. */
+static int32_t dev_sector_size(fd_entry_t *e, uint32_t arg)
+{
+    int32_t sector = 512;
+    struct disk_window *w = e->dev ? raw_window_of(e->dev) : NULL;
+
+    if (!w || !w->present) {
+        return -ENOTTY;
+    }
+    return copy_to_user((void __user *)arg, &sector, sizeof(sector)) != 0 ? -EFAULT : 0;
 }
 
 /**

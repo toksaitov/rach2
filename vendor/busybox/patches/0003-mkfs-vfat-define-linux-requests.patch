@@ -1,0 +1,36 @@
+mkfs.vfat: define the two Linux requests it asks instead of including their headers
+
+mkfs_vfat.c includes <linux/hdreg.h> for HDIO_GETGEO and <linux/fd.h> for
+FDGETPRM, the kernel's own headers, which musl does not install and this tree
+has no copy of. The applet asks a disk for its geometry and a floppy for its
+parameters, and takes the defaults when either request fails, so the request
+numbers and the two structures are all it needs of them. They are defined here
+as the i386 kernel defines them. Rach2 answers HDIO_GETGEO on its disk nodes
+and refuses FDGETPRM, as Linux refuses it on a device that is not a floppy.
+
+--- a/util-linux/mkfs_vfat.c
++++ b/util-linux/mkfs_vfat.c
+@@ -43,8 +43,21 @@
+ 
+ #include "libbb.h"
+ 
+-#include <linux/hdreg.h> /* HDIO_GETGEO */
+-#include <linux/fd.h>    /* FDGETPRM */
++/* The two requests of <linux/hdreg.h> and <linux/fd.h> this file asks, with
++ * the structures they fill, as the i386 kernel defines them. */
++struct hd_geometry {
++	unsigned char heads;
++	unsigned char sectors;
++	unsigned short cylinders;
++	unsigned long start;
++};
++#define HDIO_GETGEO 0x0301
++struct floppy_struct {
++	unsigned int size, sect, head, track, stretch;
++	unsigned char gap, rate, spec1, fmt_gap;
++	const char *name;
++};
++#define FDGETPRM _IOR(2, 0x04, struct floppy_struct)
+ #include <sys/mount.h>   /* BLKSSZGET */
+ #if !defined(BLKSSZGET)
+ # define BLKSSZGET _IO(0x12, 104)

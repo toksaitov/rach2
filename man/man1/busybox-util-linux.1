@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd October 2, 2026
 .Dt BUSYBOX-UTIL-LINUX 1
 .Os
 .Sh NAME
@@ -28,7 +28,9 @@
 .Nm lspci ,
 .Nm lsusb ,
 .Nm mesg ,
+.Nm mkdosfs ,
 .Nm mkfs.minix ,
+.Nm mkfs.vfat ,
 .Nm mkswap ,
 .Nm more ,
 .Nm mount ,
@@ -146,10 +148,20 @@
 .Nm lsusb
 .Nm mesg
 .Op Cm y Ns | Ns Cm n
+.Nm mkdosfs
+.Op Fl v
+.Op Fl n Ar LABEL
+.Ar BLOCKDEV
+.Op Ar KBYTES
 .Nm mkfs.minix
 .Op Fl c | Fl l Ar FILE
 .Op Fl n Ns Ar XX
 .Op Fl i Ns Ar XX
+.Ar BLOCKDEV
+.Op Ar KBYTES
+.Nm mkfs.vfat
+.Op Fl v
+.Op Fl n Ar LABEL
 .Ar BLOCKDEV
 .Op Ar KBYTES
 .Nm mkswap
@@ -348,6 +360,15 @@ The argument
 allows access;
 .Cm n
 disallows it.
+.It Nm mkdosfs , Nm mkfs.vfat
+Create a FAT32 file system, which the kernel mounts as
+.Cm vfat ,
+in a partition node or a regular file.
+.Ar KBYTES
+gives the size and extends a file to it.
+The ordinary kernel writes no disk node, so outside recovery the volume is
+made in a file and mounted through a loop device; see
+.Xr loopctl 8 .
 .It Nm mkfs.minix
 Create a MINIX file system.
 .It Nm mkswap
@@ -620,6 +641,13 @@ Show a summary.
 selects parsable output;
 .Fl k
 shows the driver.
+.Ss mkdosfs, mkfs.vfat
+.Bl -tag -width "-n LABEL"
+.It Fl n Ar LABEL
+Set the volume label.
+.It Fl v
+Print the layout.
+.El
 .Ss mkfs.minix
 .Bl -tag -width "-i INODES"
 .It Fl c
