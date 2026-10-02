@@ -144,17 +144,17 @@ rach2/sys/fs/krffs.c:krffs_resize_at complexity 27 one file system operation ove
 rach2/sys/fs/krffs.c:krffs_resize_at lines 123 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/krffs.c:krffs_walk_err complexity 27 one file system operation over the on-disk format, each step a rule of the format
 
-rach2/sys/fs/procfs.c:procfs_fd_ino complexity 30 a dispatcher, one arm per command, read as a table
-rach2/sys/fs/procfs.c:procfs_kind_name complexity 28 a dispatcher, one arm per command, read as a table
-rach2/sys/fs/procfs.c:procfs_open complexity 94 a dispatcher, one arm per command, read as a table
-rach2/sys/fs/procfs.c:procfs_open lines 233 a dispatcher, one arm per command, read as a table
+rach2/sys/fs/procfs.c:procfs_fd_ino complexity 31 a dispatcher, one arm per command, read as a table
+rach2/sys/fs/procfs.c:procfs_kind_name complexity 29 a dispatcher, one arm per command, read as a table
+rach2/sys/fs/procfs.c:procfs_open complexity 96 a dispatcher, one arm per command, read as a table
+rach2/sys/fs/procfs.c:procfs_open lines 237 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/procfs.c:procfs_readlink_fd complexity 27 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/procfs.c:procfs_readlink_fd lines 142 a dispatcher, one arm per command, read as a table
 
 rach2/sys/fs/synthfs.c:synth_classify complexity 55 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/synthfs.c:synth_classify lines 171 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/synthfs.c:synth_classify_pid complexity 28 a dispatcher, one arm per command, read as a table
-rach2/sys/fs/synthfs.c:synth_sys_path complexity 30 a dispatcher, one arm per command, read as a table
+rach2/sys/fs/synthfs.c:synth_sys_path complexity 32 a dispatcher, one arm per command, read as a table
 
 rach2/sys/fs/vfs.c:resolve_path complexity 79 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/vfs.c:resolve_path lines 284 one file system operation over the on-disk format, each step a rule of the format
@@ -224,7 +224,7 @@ rach2/sys/syscall_fs.c:read_fd lines 180 one system call's contract, its checks 
 rach2/sys/syscall_fs.c:readv_dgram params 7 the parameters are the parts of one receive's answer; a struct for them would be filled and unpacked once
 rach2/sys/syscall_fs.c:synth_dirent_at complexity 47 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_fs.c:synth_dirent_at lines 208 a dispatcher, one arm per command, read as a table
-rach2/sys/syscall_fs.c:synth_open lines 119 a dispatcher, one arm per command, read as a table
+rach2/sys/syscall_fs.c:synth_open lines 120 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_fs.c:synth_stat lines 295 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_fs.c:sys__llseek complexity 35 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:sys__llseek lines 145 one system call's contract, its checks in the order the manual page lists the errors
@@ -235,7 +235,7 @@ rach2/sys/syscall_fs.c:utimes_node complexity 42 one system call's contract, its
 rach2/sys/syscall_fs.c:write_fd complexity 41 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:write_fd lines 180 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:synth_stat complexity 32 a dispatcher, one arm per command, read as a table
-rach2/sys/syscall_fs.c:synth_sys_dirent complexity 27 a dispatcher, one arm per command, read as a table
+rach2/sys/syscall_fs.c:synth_sys_dirent complexity 29 a dispatcher, one arm per command, read as a table
 
 rach2/sys/syscall_net.c:do_bind complexity 36 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_net.c:do_bind lines 132 one system call's contract, its checks in the order the manual page lists the errors
