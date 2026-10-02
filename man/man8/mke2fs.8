@@ -54,7 +54,7 @@ Rach2 uses e2fsprogs 1.47.4, linked statically against the ported musl,
 and installs
 .Nm
 at
-.Pa /sbin/mke2fs
+.Pa /bin/mke2fs
 on os-real and the GNU system; the recovery image, whose kernel writes
 partitions, has no room for it in its 4 MiB.
 Its defaults are compiled in from
@@ -195,7 +195,7 @@ need
 which is not installed.
 .Sh FILES
 .Bl -tag -width /etc/mke2fs.conf
-.It Pa /sbin/mke2fs
+.It Pa /bin/mke2fs
 The program.
 .It Pa /etc/mke2fs.conf
 The configuration, read in place of the compiled-in defaults when it
