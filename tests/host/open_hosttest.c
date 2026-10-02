@@ -1282,6 +1282,23 @@ int procfs_may_read(int pid)
     return 0;
 }
 
+int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
+{
+    (void)pid;
+    (void)fd;
+    (void)buf;
+    (void)cap;
+    check(0, "unexpected /proc lookup");
+    return -ENOENT;
+}
+
+uint32_t procfs_ino_pid(int pid)
+{
+    (void)pid;
+    check(0, "unexpected /proc lookup");
+    return 0;
+}
+
 /* The descriptor and process lookups of fstat, which no row reaches: GCC
  * keeps their callers, so a link needs them. */
 process_t *get_process(uint32_t pid)

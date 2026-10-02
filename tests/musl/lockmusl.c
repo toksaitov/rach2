@@ -876,8 +876,8 @@ static int listed(const char *text, const char *head, long pid, const struct sta
 {
     char want[128];
 
-    snprintf(want, sizeof(want), "%s%ld %02x:%02x:%lu %s\n", head, pid, major(st->st_dev),
-             minor(st->st_dev), (unsigned long)st->st_ino, range);
+    snprintf(want, sizeof(want), "%s%ld %02x:%02x:%llu %s\n", head, pid, major(st->st_dev),
+             minor(st->st_dev), (unsigned long long)st->st_ino, range);
     return strstr(text, want) != NULL;
 }
 
@@ -922,7 +922,7 @@ static int proc_locks(void)
     close(a);
     close(b);
     close(c);
-    snprintf(ino, sizeof(ino), ":%lu ", (unsigned long)st.st_ino);
+    snprintf(ino, sizeof(ino), ":%llu ", (unsigned long long)st.st_ino);
     if (read_locks(text, (int)sizeof(text)) < 0 || strstr(text, ino)) {
         return fail("/proc/locks lists a lock after its descriptors are closed");
     }
