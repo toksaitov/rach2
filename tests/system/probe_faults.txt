@@ -5223,6 +5223,16 @@ new
         rows[n].pid = (int32_t)l->pid;
 end
 
+fault proc-dir-global-pid
+probe nsmusl
+file rach2/sys/syscall_fs.c
+expect NSMUSL FAIL (a descriptor of its /proc/self/fd reaches its own descriptors
+old
+            vp->kind, vp->kind == VNODE_PROC_SYS_DIR ? vp->sysent : (int)pid_seen((uint32_t)pid),
+new
+            vp->kind, vp->kind == VNODE_PROC_SYS_DIR ? vp->sysent : pid,
+end
+
 fault proc-limits-missing
 probe procprobe
 file rach2/sys/fs/synthfs.c

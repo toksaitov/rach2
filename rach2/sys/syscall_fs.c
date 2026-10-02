@@ -2091,8 +2091,9 @@ static int32_t synth_open(const struct vpath *vp, int flags)
 /* Open a synthetic directory (/dev, /proc, /proc/<pid>, /proc/<pid>/fd, and
  * a thread's under /proc/<pid>/task). The descriptor keeps a record of its
  * own, taken from the heap and freed at the last close, with the process's
- * pid and, for a thread's directory, the thread's id, so its listing, its
- * /proc/PID/fd link and the names relative to it stay the thread's. Another
+ * pid and, for a thread's directory, the thread's id, as the caller's PID
+ * namespace numbers them, which is how its listing, its /proc/PID/fd link
+ * and the names relative to it read them, so they stay the thread's. Another
  * user's /proc/PID/fd is EACCES, as Linux keeps a process's descriptors to
  * those who may trace it (`procfs_may_read`). */
 static int32_t synth_open_dir(const struct vpath *vp, int flags)
@@ -2132,7 +2133,9 @@ static int32_t synth_open_dir(const struct vpath *vp, int flags)
     if (vp->kind == VNODE_SYS_DIR || vp->kind == VNODE_SYS_LINK) {
         sd = synth_dir_alloc(VNODE_SYS_DIR, vp->sysent, vp->syskey);
     } else {
-        sd = synth_dir_alloc(vp->kind, vp->kind == VNODE_PROC_SYS_DIR ? vp->sysent : pid, vp->tid);
+        sd = synth_dir_alloc(
+            vp->kind, vp->kind == VNODE_PROC_SYS_DIR ? vp->sysent : (int)pid_seen((uint32_t)pid),
+            vp->tid);
     }
     if (!sd) {
         return -ENFILE;
