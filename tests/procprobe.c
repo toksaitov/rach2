@@ -1424,6 +1424,12 @@ void probe_main(unsigned int *sp)
               "/proc/partitions has Linux's header and a line for each disk /proc/diskstats lists");
     }
 
+    n = slurp("/proc/vmstat", buf, (int)sizeof(buf));
+    check(n > 0 && uint_after(buf, n, "nr_free_pages ") > 0 && contains(buf, n, "\npgpgin ") &&
+              contains(buf, n, "\npswpout 0\n"),
+          "/proc/vmstat has the free pages and the kilobytes read from the disks, as vmstat reads "
+          "it");
+
     n = slurp("/proc/mounts", buf, (int)sizeof(buf));
     check(n > 0 && buf[n - 1] == '\n', "/proc/mounts ends with its newline");
     check(lines_in(buf, n) == 5, "/proc/mounts names the root, /dev, /proc, /dev/shm and /sys");

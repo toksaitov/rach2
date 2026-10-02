@@ -61,6 +61,7 @@ enum vnode_kind {
     VNODE_PROC_DISKSTATS,    /* /proc/diskstats: the transfers of each disk node */
     VNODE_PROC_VERSION,      /* /proc/version: the kernel's name and release */
     VNODE_PROC_PARTITIONS,   /* /proc/partitions: the size of each disk node */
+    VNODE_PROC_VMSTAT,       /* /proc/vmstat: the memory and paging counters */
     VNODE_DEV_LINK,          /* /dev/log: a link to the syslog daemon's socket */
     VNODE_PROC_SYSVIPC_DIR,  /* /proc/sysvipc: the System V objects' directory */
     VNODE_PROC_SYSVIPC,      /* /proc/sysvipc/{shm,sem,msg}, by `procfile` */
@@ -121,6 +122,7 @@ enum vnode_kind {
  * their origin (`synth_net_name`). */
 #define SYNTH_PROC_NETSTAT_RT  46
 #define SYNTH_PROC_NETSTAT_ARP 47
+#define SYNTH_PROC_VMSTAT      48
 
 /* PID sentinel meaning "the calling process" (/proc/self), resolved by the
  * glue. */

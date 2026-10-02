@@ -94,6 +94,7 @@
 #define PROCFS_INO_PARTITIONS  0x116u
 #define PROCFS_INO_SYSVIPC     0x117u /* and its three files after it */
 #define PROCFS_INO_NETSTAT     0x11Bu
+#define PROCFS_INO_VMSTAT      0x11Cu
 #define PROCFS_INO_NET         0x120u /* and the other files of /proc/net after it */
 
 /* Inode namespace for /sys: the fixed directories by their node; a PCI
@@ -173,6 +174,9 @@ static const char *procfs_kind_name(const struct vpath *vp)
     }
     if (vp->kind == VNODE_PROC_PARTITIONS) {
         return "/proc/partitions";
+    }
+    if (vp->kind == VNODE_PROC_VMSTAT) {
+        return "/proc/vmstat";
     }
     if (vp->kind == VNODE_PROC_SYS_FILE) {
         return "/proc/sys";
@@ -1346,6 +1350,8 @@ static const char *procfs_global_fd_path(int origin)
         return "/proc/version";
     case SYNTH_PROC_PARTITIONS:
         return "/proc/partitions";
+    case SYNTH_PROC_VMSTAT:
+        return "/proc/vmstat";
     case SYNTH_PROC_SYSVIPC:
         return "/proc/sysvipc/shm";
     case SYNTH_PROC_SYSVIPC + 1:
@@ -1634,6 +1640,11 @@ uint32_t procfs_ino_partitions(void)
     return PROCFS_INO_PARTITIONS;
 }
 
+uint32_t procfs_ino_vmstat(void)
+{
+    return PROCFS_INO_VMSTAT;
+}
+
 uint32_t procfs_ino_loadavg(void)
 {
     return PROCFS_INO_LOADAVG;
@@ -1783,6 +1794,9 @@ uint32_t procfs_fd_ino(struct fd_entry *e)
     }
     if (pf->origin_file == SYNTH_PROC_PARTITIONS) {
         return PROCFS_INO_PARTITIONS;
+    }
+    if (pf->origin_file == SYNTH_PROC_VMSTAT) {
+        return PROCFS_INO_VMSTAT;
     }
     if (pf->origin_file == SYNTH_PROC_SYSCTL) {
         return PROCFS_INO_SYS + (uint32_t)pf->origin_pid;
@@ -2199,6 +2213,45 @@ static int procfs_gen_meminfo(struct procfs_text *t)
     ap_str(t, "SwapFree:              0 kB\n");
     ap_str(t, "Slab:           ");
     ap_frames_as_kb(t, heap_pages > buffers ? heap_pages - buffers : 0);
+    return t->len;
+}
+
+/**
+ * Render /proc/vmstat: the counters of Linux's file that procps's vmstat
+ * reads, of those the kernel keeps. nr_free_pages and nr_file_pages are the
+ * free pages and those of the page and buffer caches; pgpgin and pgpgout
+ * the kilobytes read from and written to the disks since boot, counted over
+ * the whole disks, as Linux counts them; and pswpin and pswpout 0, since
+ * nothing is swapped. A counter Linux has and the kernel does not keep is
+ * not listed, and procps reads it as 0.
+ */
+static int procfs_gen_vmstat(struct procfs_text *t)
+{
+    uint32_t free_frames = frame_free_count();
+    uint32_t file_pages = bcache_resident() + pc_resident();
+    uint32_t in = 0, out = 0, major, minor;
+    const block_device_t *dev, *alias;
+    const char *name;
+    int i, got;
+
+    for (i = 0; (got = devfs_disk_node_at(i, &name, &major, &minor, &dev, &alias)) >= 0; i++) {
+        struct devfs_disk_row row;
+
+        if (got == 0 || devfs_disk_row(i, &row) <= 0 || row.partno != 0) {
+            continue;
+        }
+        in += dev->stats.read_sectors / 2u + (alias ? alias->stats.read_sectors / 2u : 0);
+        out += dev->stats.write_sectors / 2u + (alias ? alias->stats.write_sectors / 2u : 0);
+    }
+    ap_str(t, "nr_free_pages ");
+    ap_u32(t, free_frames);
+    ap_str(t, "\nnr_file_pages ");
+    ap_u32(t, file_pages);
+    ap_str(t, "\npgpgin ");
+    ap_u32(t, in);
+    ap_str(t, "\npgpgout ");
+    ap_u32(t, out);
+    ap_str(t, "\npswpin 0\npswpout 0\n");
     return t->len;
 }
 
@@ -4528,17 +4581,22 @@ static int procfs_open_sysctl(int entry, int flags)
 /** Distinguish global snapshots from files whose process must still exist. */
 static int procfs_needs_pid(int kind)
 {
-    return kind != VNODE_PROC_CMDLINE && kind != VNODE_PROC_DISK && kind != VNODE_PROC_NET_DEV &&
-           kind != VNODE_PROC_UPTIME && kind != VNODE_PROC_STAT_SYS && kind != VNODE_PROC_MEMINFO &&
-           kind != VNODE_PROC_CPUINFO && kind != VNODE_PROC_LOADAVG &&
-           kind != VNODE_PROC_DISKSTATS && kind != VNODE_PROC_VERSION &&
-           kind != VNODE_PROC_PARTITIONS && kind != VNODE_PROC_SYS_FILE &&
-           kind != VNODE_PROC_MOUNTS && kind != VNODE_PROC_USB && kind != VNODE_PROC_AUDIO &&
-           kind != VNODE_PROC_FILESYSTEMS && kind != VNODE_PROC_LOOP &&
-           kind != VNODE_PROC_INTERRUPTS && kind != VNODE_PROC_CONSOLE &&
-           kind != VNODE_PROC_NET_ROUTE && kind != VNODE_PROC_NET_ARP &&
-           kind != VNODE_PROC_NET_TCP && kind != VNODE_PROC_NET_FILE && kind != VNODE_SYS_FILE &&
-           kind != VNODE_PROC_SYSVIPC;
+    static const int global[] = {
+        VNODE_PROC_CMDLINE,     VNODE_PROC_DISK,    VNODE_PROC_NET_DEV,    VNODE_PROC_UPTIME,
+        VNODE_PROC_STAT_SYS,    VNODE_PROC_MEMINFO, VNODE_PROC_CPUINFO,    VNODE_PROC_LOADAVG,
+        VNODE_PROC_DISKSTATS,   VNODE_PROC_VERSION, VNODE_PROC_PARTITIONS, VNODE_PROC_VMSTAT,
+        VNODE_PROC_SYS_FILE,    VNODE_PROC_MOUNTS,  VNODE_PROC_USB,        VNODE_PROC_AUDIO,
+        VNODE_PROC_FILESYSTEMS, VNODE_PROC_LOOP,    VNODE_PROC_INTERRUPTS, VNODE_PROC_CONSOLE,
+        VNODE_PROC_NET_ROUTE,   VNODE_PROC_NET_ARP, VNODE_PROC_NET_TCP,    VNODE_PROC_NET_FILE,
+        VNODE_SYS_FILE,         VNODE_PROC_SYSVIPC};
+    uint32_t i;
+
+    for (i = 0; i < sizeof(global) / sizeof(global[0]); i++) {
+        if (kind == global[i]) {
+            return 0;
+        }
+    }
+    return 1;
 }
 
 /**
@@ -4637,6 +4695,8 @@ int procfs_open(const struct vpath *vp, int flags)
         len = procfs_gen_diskstats(&text);
     } else if (vp->kind == VNODE_PROC_PARTITIONS) {
         len = procfs_gen_partitions(&text);
+    } else if (vp->kind == VNODE_PROC_VMSTAT) {
+        len = procfs_gen_vmstat(&text);
     } else if (vp->kind == VNODE_PROC_VERSION) {
         /* Linux's "Linux version 6.8.0 ...", with uname's version after. */
         ap_str(&text, UTS_SYSNAME " version " UTS_RELEASE " (" UTS_VERSION ")\n");
@@ -4739,6 +4799,8 @@ int procfs_open(const struct vpath *vp, int flags)
         f->origin_file = SYNTH_PROC_VERSION;
     } else if (vp->kind == VNODE_PROC_PARTITIONS) {
         f->origin_file = SYNTH_PROC_PARTITIONS;
+    } else if (vp->kind == VNODE_PROC_VMSTAT) {
+        f->origin_file = SYNTH_PROC_VMSTAT;
     } else if (vp->kind == VNODE_PROC_SYS_FILE) {
         f->origin_file = SYNTH_PROC_SYSCTL;
     } else if (vp->kind == VNODE_PROC_MOUNTS) {

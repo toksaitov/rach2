@@ -5500,3 +5500,13 @@ old
 new
     signo = (self->ptrace & PT_START) ? SIGSTOP : SIGTRAP;
 end
+
+fault proc-vmstat-unnamed
+probe procprobe
+file rach2/sys/fs/procfs.c
+expect FAIL: /proc/vmstat has the free pages and the kilobytes read from the disks
+old
+    ap_str(t, "\npgpgin ");
+new
+    ap_str(t, "\npgpg_in ");
+end

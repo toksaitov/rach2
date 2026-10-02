@@ -151,6 +151,14 @@ BusyBox's
 reads it to find the disks
 .Fl l
 lists.
+.It Pa /proc/vmstat
+Linux's names and values of the counters the kernel keeps: nr_free_pages,
+nr_file_pages, the pages of the page and buffer caches, pgpgin and pgpgout,
+the kibibytes read from and written to the whole disks since boot, and
+pswpin and pswpout, 0, since nothing is swapped.
+procps-ng's
+.Xr vmstat 8
+reads it, and takes a counter it does not find as 0.
 .It Pa /proc/disk
 Disk records and counters, described in
 .Xr disk 7 .
