@@ -4259,10 +4259,10 @@ probe schedmusl
 file rach2/sys/syscall_fs.c
 expect SCHEDMUSL FAIL (oom_score_adj is not root's with mode 0644
 old
-            procfs_oom_owner(procfs_resolve_id(vp), &uid, &gid) == 0) {
+        if (vp->procfile == SYNTH_PROC_OOM_ADJ) {
             kst->st_mode = S_IFREG | 0644;
 new
-            procfs_oom_owner(procfs_resolve_id(vp), &uid, &gid) == 0) {
+        if (vp->procfile == SYNTH_PROC_OOM_ADJ) {
             kst->st_mode = S_IFREG | 0444;
 end
 
