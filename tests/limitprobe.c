@@ -35,26 +35,26 @@
 
 typedef unsigned int size_t;
 
-#define SYS_EXIT      1
-#define SYS_FORK      2
-#define SYS_READ      3
-#define SYS_WRITE     4
-#define SYS_OPEN      5
-#define SYS_CLOSE     6
-#define SYS_WAITPID   7
-#define SYS_DUP2      63
-#define SYS_EXECVE    11
-#define SYS_BRK       45
-#define SYS_PIPE      42
-#define SYS_NANOSLEEP 162
-#define SYS_MMAP2     192
-#define SYS_SETUID32  213
-#define SYS_PRLIMIT64 340
-#define SYS_NEWSELECT 142
-#define SYS_POLL      168
-#define SYS_SIGNAL    48
-#define SYS_FTRUNCATE 93
-#define SYS_UNLINK    10
+#define SYS_EXIT         1
+#define SYS_FORK         2
+#define SYS_READ         3
+#define SYS_WRITE        4
+#define SYS_OPEN         5
+#define SYS_CLOSE        6
+#define SYS_WAITPID      7
+#define SYS_DUP2         63
+#define SYS_EXECVE       11
+#define SYS_BRK          45
+#define SYS_PIPE         42
+#define SYS_NANOSLEEP    162
+#define SYS_MMAP2        192
+#define SYS_SETUID32     213
+#define SYS_PRLIMIT64    340
+#define SYS_NEWSELECT    142
+#define SYS_POLL         168
+#define SYS_RT_SIGACTION 174
+#define SYS_FTRUNCATE    93
+#define SYS_UNLINK       10
 
 #define RLIMIT_FSIZE  1
 #define RLIMIT_NPROC  6
@@ -290,9 +290,13 @@ static int body_sandbox(void)
 static int body_fsize(void)
 {
     static char block[8192];
+    /* The kernel's sigaction: the handler, the flags, the restorer and the
+       64-bit mask. */
+    static unsigned ignore[5] = {SIG_IGN, 0, 0, 0, 0};
     int fd, wrote, again, cut;
 
-    if (set_limit(RLIMIT_FSIZE, 4096, 4096) != 0 || syscall2(SYS_SIGNAL, SIGXFSZ, SIG_IGN) < 0) {
+    if (set_limit(RLIMIT_FSIZE, 4096, 4096) != 0 ||
+        syscall4(SYS_RT_SIGACTION, SIGXFSZ, (int)(size_t)ignore, 0, 8) != 0) {
         return 2;
     }
     fd = syscall3(SYS_OPEN, (int)(size_t)"/tmp/limitprobe.f", O_WRONLY | O_CREAT | O_TRUNC, 0644);
