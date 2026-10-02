@@ -16,8 +16,10 @@
 # nothing; an image that has `sshd` twice, and another account with its id,
 # must add it once; a machine file whose last line has no newline must keep
 # that line whole; an empty machine group file must get the image's system
-# groups, root's and `sshd`'s; and an image with no shadow line for an
-# account it adds must leave the machine's shadow file as it was. With
+# groups, root's and `sshd`'s; an image with no shadow line for an
+# account it adds must leave the machine's shadow file as it was; and an
+# image's system group that no new account comes with, as the GNU root's
+# `crontab` comes, must be added alone. With
 # --mutate each fault below is put into the copy of the functions and must
 # fail its row; the rows run again on the functions as they are at the end.
 #
@@ -142,6 +144,15 @@ rows() {
         ! grep -q '^sshd:' "$work/dest/etc/passwd"; then
         fail "an image with no shadow line for an account it adds leaves the shadow file as it was"
     fi
+
+    files "$work/image" "$image_passwd" "${image_group}crontab:x:63:\n" "$image_shadow"
+    files "$work/dest" "${machine_passwd}sshd:x:74:74::/var/empty:/usr/bin/false\n" \
+        "${machine_group}sshd:x:74:\n" "$machine_shadow"
+    if ! keep "$work/image" "$work/dest" ||
+        [ "$(cat "$work/dest/etc/group")" != "$(printf '%b' "${machine_group}sshd:x:74:\ncrontab:x:63:")" ] ||
+        [ "$(cat "$work/dest/etc/shadow")" != "$(printf '%b' "$machine_shadow")" ]; then
+        fail "an image's system group that no new account comes with is added alone"
+    fi
 }
 
 # fault NAME OLD NEW EXPECT: the functions with the first OLD replaced by NEW
@@ -177,10 +188,14 @@ if [ "$mutate" -eq 1 ]; then
     fault no-newline 'if [ -s "$1" ] && [ -n "$(tail -c 1 "$1")" ]; then' 'if false; then' \
         'a machine file whose last line has no newline keeps that line whole'
     fault empty-file 'FILENAME == ARGV[1] { name[$1] = 1; id[$3 + 0] = 1; next }
-            $3 + 0 < 1000' 'NR == FNR { name[$1] = 1; id[$3 + 0] = 1; next }
-            $3 + 0 < 1000' "an empty machine group file gets the image's system groups"
+            FILENAME == ARGV[2] { uid' 'NR == FNR { name[$1] = 1; id[$3 + 0] = 1; next }
+            FILENAME == ARGV[2] { uid' "an empty machine group file gets the image's system groups"
     fault group-left 'add_lines "$2/etc/group" "$groups" || return 1' ':' "$sshd_row"
     fault shadow-left 'add_lines "$2/etc/shadow" "$lines"' ':' "$sshd_row"
+    fault group-needs-account '!(($3 + 0) in refused) {' '!(($3 + 0) in refused) && ($1 in uid) {' \
+        "an image's system group that no new account comes with is added alone"
+    fault group-of-refused '!(($3 + 0) in refused) {' '1 {' \
+        'an image account whose id the machine has is not added'
     cp "$work/function.saved" "$work/function.sh"
 fi
 
