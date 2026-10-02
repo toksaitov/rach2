@@ -12,7 +12,7 @@ A tracee stops in `ptrace_stop`, in its own context: it sets the status, posts `
 
 * signal-delivery stops in `deliver_signals`, after a signal is taken off the pending sets and before its disposition is read (`ptrace_signal_stop`); the tracer's resume signal replaces it, and a blocked one is posted back;
 * group stops, after the stop signal's own delivery stop, once per stop for each thread (`stop_seen`), after which the tracer may run the thread while its process stays stopped; a thread already parked in its process's stop when a tracer attaches is made runnable (`ptrace_unpark`), leaves the park (`sig_park`) and makes its group stop then;
-* event stops (`ptrace_event`) in `do_fork`, `exec_run`, `exit_current` and `terminate_current_process`; a child a traced thread makes is attached when the options ask for the event, and starts with `SIGSTOP` pending, or with a `PTRACE_EVENT_STOP` still to come for a seized tracer (`PT_START`);
+* event stops (`ptrace_event`) in `do_fork`, `exec_run`, `exit_current` and `terminate_current_process`; a child a traced thread makes is attached when the options ask for the event, and starts with `SIGSTOP` pending, or with a `PTRACE_EVENT_STOP` with `SIGTRAP` still to come for a seized tracer (`PT_START`);
 * syscall stops in the dispatcher, at the entry and the exit (`ptrace_syscall_stop`);
 * the stops of a seized thread at its return to user mode (`ptrace_return_stops`): its first, and the one `PTRACE_INTERRUPT` asks for, which ends an interruptible wait as a stop signal does (`signal_pending`), so a thread blocked in a call stops, and the call is restarted as after a stop and a continue.
 

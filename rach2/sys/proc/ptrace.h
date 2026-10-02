@@ -36,7 +36,8 @@ int32_t sys_ptrace(isr_params_t *params);
 /**
  * The stops a traced thread makes as it returns to user mode, before any
  * signal: the first stop of a thread a seized tracer attached, and the stop
- * PTRACE_INTERRUPT asked for.
+ * PTRACE_INTERRUPT asked for, each PTRACE_EVENT_STOP with SIGTRAP, or with
+ * the stop signal while its process is stopped, as Linux reports them.
  */
 void ptrace_return_stops(void);
 

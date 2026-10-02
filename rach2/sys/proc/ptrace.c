@@ -190,7 +190,7 @@ void ptrace_return_stops(void)
     if (!(self->ptrace & PT_TRACED) || !(self->ptrace & (PT_START | PT_INTERRUPT))) {
         return;
     }
-    signo = (self->ptrace & PT_START) ? SIGSTOP : SIGTRAP;
+    signo = self->tg->stop ? self->tg->stop : SIGTRAP;
     self->ptrace &= ~(PT_START | PT_INTERRUPT);
     (void)ptrace_stop(((uint32_t)PTRACE_EVENT_STOP << 16) | (signo << 8) | 0x7F, NULL);
 }

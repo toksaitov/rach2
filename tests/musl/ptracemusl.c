@@ -7,37 +7,38 @@
  * that run from a page into a hole do the bytes before the hole, and whose
  * descriptor keeps none of the memory of a child that has ended: once a child
  * that touched 16 MiB has ended, and before it is reaped, a read through a
- * descriptor of its memory returns 0 and the free memory /proc/meminfo
- * reports is back; reads the
- * registers with GETREGS and the floating-point state with GETFPXREGS; steps
- * one instruction with SINGLESTEP, which moves the instruction pointer; plants
- * a breakpoint with POKETEXT on a read-only text page, continues to it, finds
- * the child stopped by SIGTRAP just past it, puts the text back, moves the
- * instruction pointer back with SETREGS and continues. PTRACE_SYSCALL stops the
- * child at the entry and the exit of getpid, with the call's number in orig_eax
- * and its result in eax at the exit, and bit 0x80 on the stop signal with
- * PTRACE_O_TRACESYSGOOD. At an entry stop the tracer changes the call through
- * orig_eax: getpid made getppid returns the parent's id, and a write made -1 is
- * not run and returns the eax the tracer set. A tracee SIGKILL reaches at the
- * entry stop of a write writes nothing. At the exit stop of a read a signal
- * interrupted, -1 in orig_eax keeps the read from being restarted after a
- * handler with SA_RESTART. PTRACE_O_TRACEEXEC stops the child after an execve
- * with the exec event, which waitid reports in si_status above the signal, and
- * a /proc/PID/mem descriptor opened before the execve reads nothing of the new
- * image. A debug register set through POKEUSER reads back through PEEKUSER, and
- * DR7 enables a breakpoint on a user address, the last of which a breakpoint
- * may end at, and not on a kernel address. PTRACE_ATTACH stops a running
- * process, which runs on after PTRACE_DETACH, and PTRACE_SEIZE stops for the
- * tracer one that a stop signal has already stopped, which stays stopped after
- * PTRACE_DETACH until SIGCONT. PTRACE_INTERRUPT stops a seized tracee blocked
- * in a read, which is restarted after. A signal sent to a process whose first
- * thread its tracer holds stopped wakes the other thread, asleep in pause,
- * which takes it. The usage a tracer's wait4 reports for the end of a traced
- * thread that is not the first has the time of the children its process reaped.
- * A process another process traces, which ends, is reported to its tracer
- * before its parent may reap it, and then to the parent; the tracer's next wait
- * finds nothing left to wait for. A tracee SIGKILL ends sends its tracer, here
- * its parent, a SIGCHLD of CLD_KILLED with the signal.
+ * descriptor of its memory returns 0 and the free memory /proc/meminfo reports
+ * is back; reads the registers with GETREGS and the floating-point state with
+ * GETFPXREGS; steps one instruction with SINGLESTEP, which moves the
+ * instruction pointer; plants a breakpoint with POKETEXT on a read-only text
+ * page, continues to it, finds the child stopped by SIGTRAP just past it, puts
+ * the text back, moves the instruction pointer back with SETREGS and continues.
+ * PTRACE_SYSCALL stops the child at the entry and the exit of getpid, with the
+ * call's number in orig_eax and its result in eax at the exit, and bit 0x80 on
+ * the stop signal with PTRACE_O_TRACESYSGOOD. At an entry stop the tracer
+ * changes the call through orig_eax: getpid made getppid returns the parent's
+ * id, and a write made -1 is not run and returns the eax the tracer set. A
+ * tracee SIGKILL reaches at the entry stop of a write writes nothing. At the
+ * exit stop of a read a signal interrupted, -1 in orig_eax keeps the read from
+ * being restarted after a handler with SA_RESTART. PTRACE_O_TRACEEXEC stops the
+ * child after an execve with the exec event, which waitid reports in si_status
+ * above the signal, and a /proc/PID/mem descriptor opened before the execve
+ * reads nothing of the new image. A debug register set through POKEUSER reads
+ * back through PEEKUSER, and DR7 enables a breakpoint on a user address, the
+ * last of which a breakpoint may end at, and not on a kernel address.
+ * PTRACE_ATTACH stops a running process, which runs on after PTRACE_DETACH, and
+ * PTRACE_SEIZE stops for the tracer one that a stop signal has already stopped,
+ * which stays stopped after PTRACE_DETACH until SIGCONT. PTRACE_INTERRUPT stops
+ * a seized tracee blocked in a read, which is restarted after. The child a
+ * seized tracee forks under PTRACE_O_TRACEFORK first stops with
+ * PTRACE_EVENT_STOP and SIGTRAP. A signal sent to a process whose first thread
+ * its tracer holds stopped wakes the other thread, asleep in pause, which takes
+ * it. The usage a tracer's wait4 reports for the end of a traced thread that is
+ * not the first has the time of the children its process reaped. A process
+ * another process traces, which ends, is reported to its tracer before its
+ * parent may reap it, and then to the parent; the tracer's next wait finds
+ * nothing left to wait for. A tracee SIGKILL ends sends its tracer, here its
+ * parent, a SIGCHLD of CLD_KILLED with the signal.
  *
  * Prints "PTRACEMUSL OK" on success and "PTRACEMUSL FAIL (detail)"
  * otherwise.
@@ -991,6 +992,61 @@ static int interrupt_read(void)
 }
 
 /*
+ * A seized tracee with PTRACE_O_TRACEFORK forks: its stop for the event
+ * names the new child, whose first stop is PTRACE_EVENT_STOP with SIGTRAP,
+ * as strace's -f waits for it, and both run on to their ends, the tracee
+ * through the stop its child's SIGCHLD makes.
+ */
+static int seized_fork(void)
+{
+    unsigned long child = 0;
+    int status;
+    pid_t pid, grand;
+
+    pid = fork();
+    if (pid == 0) {
+        raise(SIGSTOP);
+        grand = fork();
+        if (grand == 0) {
+            _exit(0);
+        }
+        _exit(waitpid(grand, &status, 0) == grand && WIFEXITED(status) ? 0 : 1);
+    }
+    if (waitpid(pid, &status, WUNTRACED) != pid || !WIFSTOPPED(status) ||
+        ptrace(PTRACE_SEIZE, pid, NULL, PTRACE_O_TRACEFORK) != 0 || kill(pid, SIGCONT) != 0) {
+        return abandon(pid, "seizing a stopped process with PTRACE_O_TRACEFORK");
+    }
+    for (;;) {
+        if (wait_within(pid, &status) != pid || !WIFSTOPPED(status)) {
+            return abandon(pid, "the seized process did not stop at its fork");
+        }
+        if (status >> 8 == (SIGTRAP | (PTRACE_EVENT_FORK << 8))) {
+            break;
+        }
+        ptrace(PTRACE_CONT, pid, NULL, NULL);
+    }
+    ptrace(PTRACE_GETEVENTMSG, pid, NULL, &child);
+    if (child == 0 || wait_within((pid_t)child, &status) != (pid_t)child || !WIFSTOPPED(status) ||
+        status >> 8 != (SIGTRAP | (PTRACE_EVENT_STOP << 8))) {
+        return abandon(pid, "the child of a seized fork did not first stop with SIGTRAP");
+    }
+    if (ptrace(PTRACE_CONT, (pid_t)child, NULL, NULL) != 0 ||
+        ptrace(PTRACE_CONT, pid, NULL, NULL) != 0) {
+        return abandon(pid, "resuming the seized process and its child");
+    }
+    if (wait_within((pid_t)child, &status) != (pid_t)child || !WIFEXITED(status)) {
+        return abandon(pid, "the child of the seized process did not run to its end");
+    }
+    while (wait_within(pid, &status) == pid && WIFSTOPPED(status)) {
+        ptrace(PTRACE_CONT, pid, NULL, (void *)(long)WSTOPSIG(status));
+    }
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        return abandon(pid, "the seized process did not reap its child and end");
+    }
+    return 0;
+}
+
+/*
  * A tracee that SIGKILL ends tells its tracer, which is its parent here,
  * with a SIGCHLD whose siginfo is CLD_KILLED and the signal, and the wait
  * reports it killed. SIGCHLD is blocked, and the one the stop sent taken,
@@ -1036,8 +1092,8 @@ int main(void)
 {
     if (memory_and_registers() || mem_after_end() || syscalls_and_exec() || syscall_changes() ||
         killed_at_entry() || restart_cancelled() || attach() || attach_stopped() ||
-        interrupt_read() || stopped_leader() || traced_thread_usage() || tracer_first() ||
-        killed_tracee()) {
+        interrupt_read() || seized_fork() || stopped_leader() || traced_thread_usage() ||
+        tracer_first() || killed_tracee()) {
         return 1;
     }
     printf("PTRACEMUSL OK\n");

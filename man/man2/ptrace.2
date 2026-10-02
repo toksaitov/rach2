@@ -86,10 +86,15 @@ or
 by the tracee, whose new child or thread is then traced too and first
 stops with
 .Dv SIGSTOP ,
-or
+or under
+.Dv PTRACE_SEIZE
+with
 .Dv PTRACE_EVENT_STOP
-under
-.Dv PTRACE_SEIZE ;
+and
+.Dv SIGTRAP ,
+as strace's
+.Fl f
+waits for it;
 .Dv PTRACE_EVENT_VFORK_DONE
 when the vfork child lets the tracee go;
 .Dv PTRACE_EVENT_EXEC

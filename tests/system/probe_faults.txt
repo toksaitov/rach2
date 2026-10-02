@@ -5490,3 +5490,13 @@ old
 new
     row->start = 0;
 end
+
+fault ptrace-seized-child-sigstop
+probe ptracemusl
+file rach2/sys/proc/ptrace.c
+expect PTRACEMUSL FAIL (the child of a seized fork did not first stop with SIGTRAP
+old
+    signo = self->tg->stop ? self->tg->stop : SIGTRAP;
+new
+    signo = (self->ptrace & PT_START) ? SIGSTOP : SIGTRAP;
+end
