@@ -1532,15 +1532,25 @@ static void clear_var_run(void)
 /**
  * Make /var/run/utmp, empty, where glibc's programs keep the records of who
  * is logged in: OpenSSH's server on the GNU system's root adds a session's
- * record there, and `who`, `users` and `w` read them. glibc writes a record
- * only into a file that exists, which Linux makes at boot as this does. The
- * musl programs keep no records, so on the other images the file stays
- * empty.
+ * record there, and `who`, `users` and `w` read them; and /var/log/wtmp and
+ * /var/log/btmp, kept across boots, where it adds the history of logins and
+ * of failed ones, which util-linux's `last` and `lastb` read. glibc writes a
+ * record only into a file that exists, which a Linux system makes at boot as
+ * this does. The musl programs keep no records, so on the other images the
+ * files stay empty.
  */
 static void make_utmp(void)
 {
     int fd = open("/var/run/utmp", O_WRONLY | O_CREAT | O_TRUNC, 0644);
 
+    if (fd >= 0) {
+        close(fd);
+    }
+    fd = open("/var/log/wtmp", O_WRONLY | O_CREAT, 0664);
+    if (fd >= 0) {
+        close(fd);
+    }
+    fd = open("/var/log/btmp", O_WRONLY | O_CREAT, 0600);
     if (fd >= 0) {
         close(fd);
     }
