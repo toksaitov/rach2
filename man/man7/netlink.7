@@ -168,7 +168,10 @@ With
 .Dv NLM_F_DUMP ,
 an
 .Dv RTM_NEWADDR
-message for each interface with an IPv4 address: its prefix length and
+message for each IPv4 address of each interface, the first ones before the
+others, which have
+.Dv IFA_F_SECONDARY :
+its prefix length and
 the attributes
 .Dv IFA_ADDRESS ,
 .Dv IFA_LOCAL ,
@@ -180,8 +183,11 @@ With
 .Dv NLM_F_DUMP ,
 an
 .Dv RTM_NEWROUTE
-message for each interface's own subnet, reached on the link, and one for
-its default route through its gateway when it has one, in the main table.
+message for each route of the main table: each interface's subnets,
+reached on the link, its default route through its gateway when it has
+one, and the routes programs added, with
+.Dv RTA_PRIORITY
+for a metric.
 Without
 .Dv NLM_F_DUMP ,
 as
@@ -220,7 +226,9 @@ and
 .Dv NDA_LLADDR ,
 in the state
 .Dv NUD_REACHABLE ,
-since the cache keeps no age; only those of one interface when the
+since the cache keeps no age, or
+.Dv NUD_PERMANENT
+for one set by hand as permanent; only those of one interface when the
 .Vt struct ndmsg
 or an
 .Dv NDA_IFINDEX
@@ -254,45 +262,70 @@ other than 1500, or an
 that would rename the interface, is
 .Er EOPNOTSUPP .
 .It Dv RTM_NEWADDR , RTM_DELADDR
-Give an interface without an address the one in
+Give an interface the address in
 .Dv IFA_LOCAL
-with the prefix's mask, or take its address away.
-Adding the address it has is
+with the prefix's mask, its first or one more of at most seven, which a
+dump reports with
+.Dv IFA_F_SECONDARY ,
+or take one away; when the first goes, the next takes its place, as
+Linux's
+.Va promote_secondaries
+has it.
+Adding an address it has is
 .Er EEXIST
 under
 .Dv NLM_F_EXCL ,
-adding a second is
-.Er EOPNOTSUPP ,
-since an interface holds one, and removing one it does not have is
+one past the seven
+.Er ENOSPC ,
+and removing one it does not have is
 .Er EADDRNOTAVAIL .
 .It Dv RTM_NEWROUTE , RTM_DELROUTE
-Set or clear the default route's gateway on the interface
+A default route with no
+.Dv RTA_PRIORITY
+sets or clears the gateway of the interface
 .Dv RTA_OIF
-names, or the one whose subnet has the gateway.
-Adding a default route where there is one is
+names, or of the one whose subnet has the gateway; adding one where there
+is one is
 .Er EEXIST
 unless
 .Dv NLM_F_REPLACE
-asks to replace it, and removing one that is not there is
-.Er ESRCH .
+asks to replace it.
 Adding the route an interface's subnet implies is
 .Er EEXIST
 under
-.Dv NLM_F_EXCL ;
-any other route is
-.Er EOPNOTSUPP .
-.It Dv RTM_DELNEIGH
-Forget the ARP mapping of
-.Dv NDA_DST ,
-or
+.Dv NLM_F_EXCL .
+Any other route goes in the table of 32, by the interface, through
+.Dv RTA_GATEWAY
+or on the link, of the metric
+.Dv RTA_PRIORITY
+gives: a gateway none of the interface's subnets has is
+.Er ENETUNREACH ,
+a route of the same prefix and metric
+.Er EEXIST
+unless
+.Dv NLM_F_REPLACE ,
+a destination with bits outside its prefix
+.Er EINVAL ,
+and a full table
+.Er ENOSPC .
+Removing a route that is not there is
+.Er ESRCH .
+A lookup takes the longest prefix, then the lowest metric.
+.It Dv RTM_NEWNEIGH , RTM_DELNEIGH
+Store the ARP mapping of
+.Dv NDA_DST
+to
+.Dv NDA_LLADDR
+on the interface the
+.Vt ndmsg
+names, permanent when its state has
+.Dv NUD_PERMANENT ,
+which no packet changes and no full cache or address change drops; or
+forget one, or
 .Er ENOENT
 when there is none;
 .Ql ip neigh flush
 sends one for each.
-.Dv RTM_NEWNEIGH
-is
-.Er EOPNOTSUPP ,
-since the cache keeps no mapping it would not replace.
 .El
 .Pp
 A caller without privilege is refused each with

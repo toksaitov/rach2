@@ -166,7 +166,7 @@ void ip_rx(const uint8_t *data, uint16_t len, int from_loopback)
     switch (proto) {
     case IP_PROTO_ICMP:
         net_mib.ip_in_delivers++;
-        icmp_rx(src_ip, data + hdr_len, (uint16_t)(total_len - hdr_len));
+        icmp_rx(src_ip, dst_ip, data + hdr_len, (uint16_t)(total_len - hdr_len));
         break;
     case IP_PROTO_UDP:
         net_mib.ip_in_delivers++;
@@ -226,6 +226,11 @@ static void ip_hold_put(struct netdev *out, uint32_t hop, uint16_t len)
         if ((int32_t)(c->since - h->since) < 0) {
             h = c;
         }
+    }
+    if (h->len != 0 && (uint32_t)(kernel_ticks - h->since) > IP_HOLD_TICKS) {
+        arp_stats.res_failed++;
+    } else if (h->len != 0) {
+        arp_stats.unres_discards++;
     }
     h->out = out;
     h->hop = hop;
@@ -309,8 +314,15 @@ static struct netdev *ip_broadcast_iface(uint32_t dst)
     for (i = 0; i < netdev_count(); i++) {
         struct netdev *nd = netdev_at(i);
 
+        int a;
+
         if (nd && nd->ip != 0 && nd->mask != 0 && dst == (nd->ip | ~nd->mask)) {
             return nd;
+        }
+        for (a = 0; nd && a < nd->naddr2; a++) {
+            if (dst == (nd->ip2[a] | ~nd->mask2[a])) {
+                return nd;
+            }
         }
     }
     return netdev_first();
@@ -354,6 +366,12 @@ static struct netdev *ip_broadcast_iface(uint32_t dst)
  */
 int ip_tx(uint32_t dst_ip, uint8_t proto, const uint8_t *payload, uint16_t plen, uint8_t ttl)
 {
+    return ip_tx_from(0, dst_ip, proto, payload, plen, ttl);
+}
+
+int ip_tx_from(uint32_t src, uint32_t dst_ip, uint8_t proto, const uint8_t *payload, uint16_t plen,
+               uint8_t ttl)
+{
     uint16_t total_len;
     uint8_t dst_mac[6];
     uint32_t route_ip;
@@ -387,7 +405,10 @@ int ip_tx(uint32_t dst_ip, uint8_t proto, const uint8_t *payload, uint16_t plen,
     ip_tx_buf[8] = ttl;               /* hop limit */
     ip_tx_buf[9] = proto;
     write16be(ip_tx_buf + 10, 0x0000); /* checksum, filled below */
-    write32be(ip_tx_buf + 12, out ? out->ip : net_ip_addr);
+    if (src == 0 || !netdev_owns(src)) {
+        src = out ? netdev_source(out, route_ip) : net_ip_addr;
+    }
+    write32be(ip_tx_buf + 12, src);
     write32be(ip_tx_buf + 16, dst_ip);
     write16be(ip_tx_buf + 10, ip_checksum(ip_tx_buf, IP_HDR_SIZE));
 

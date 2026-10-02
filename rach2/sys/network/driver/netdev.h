@@ -140,6 +140,9 @@ struct netdev_ops {
  * interface rather than the driver: an address, a route and an ARP entry all
  * belong to one of them.
  */
+/* The addresses an interface holds after its first. */
+#define NETDEV_ADDRS 7
+
 struct netdev {
     const struct netdev_ops *ops;
     void *dev;
@@ -155,6 +158,13 @@ struct netdev {
     uint32_t ip;
     uint32_t mask;
     uint32_t gateway;
+
+    /* The addresses after the first, as `ip addr add` gives them, each with
+     * its mask: an interface may be on more than one subnet, and answers for
+     * every address it holds. */
+    uint32_t ip2[NETDEV_ADDRS];
+    uint32_t mask2[NETDEV_ADDRS];
+    int naddr2;
 
     /* An address this interface has been given and cannot put in force yet,
      * and whether the mask in force was derived rather than given. Setting an
@@ -193,18 +203,67 @@ struct netdev *netdev_by_name(const char *name);
 
 /**
  * The interface a datagram for `dst` leaves by, and the address on the wire
- * it is sent to.
- *
- * An address on an interface's own subnet leaves by that interface and is
- * sent straight to it. Anything else leaves by the first interface that has a
- * way out and is sent to that interface's gateway. A machine with two cards
- * on two subnets therefore answers each subnet on the card that reaches it,
- * which is the whole of what a route means here.
+ * it is sent to: the route of the longest prefix that has `dst`, of the
+ * lowest metric among those, of an interface that is up (route.c).
  *
  * @return the interface, or NULL when nothing reaches that address; `*via` is
  *         filled only when one does.
  */
 struct netdev *netdev_route(uint32_t dst, uint32_t *via);
+
+/* A route as a reader of the table sees it: packets for `dst`/`mask` leave
+ * by the interface of index `ifindex`, to `gw`, or straight to themselves
+ * on the link when it is 0, from `src`. `kind` is NETDEV_RT_LINK for the
+ * subnet an address implies, NETDEV_RT_DEFAULT for an interface's gateway
+ * and NETDEV_RT_ADDED for one a program added. */
+#define NETDEV_RT_LINK    0
+#define NETDEV_RT_DEFAULT 1
+#define NETDEV_RT_ADDED   2
+struct netdev_rt {
+    uint32_t dst, mask, gw, metric, src;
+    int ifindex;
+    int kind;
+};
+
+/* The lookups `netdev_route` made, and those that found no route, which
+ * /proc/net/stat/rt_cache reports. */
+extern uint32_t netdev_route_lookups;
+extern uint32_t netdev_route_misses;
+
+/** Route `n` of the table, the ones addresses and gateways imply first,
+ * interface by interface, then the added ones; 0 past the last. */
+int netdev_route_at(int n, struct netdev_rt *out);
+
+/**
+ * Add a route to `dst`/`mask` by `nd`, through `gw` or on the link when it
+ * is 0, of `metric`; with `replace` a route of the same prefix and metric is
+ * changed instead of refused. EINVAL for a mask that is not contiguous or a
+ * destination with bits outside it, ENETUNREACH for a gateway none of
+ * `nd`'s subnets has, EEXIST for a route of that prefix and metric, ENOSPC
+ * with the table full. Call under net_lock.
+ */
+int netdev_route_add(struct netdev *nd, uint32_t dst, uint32_t mask, uint32_t gw, uint32_t metric,
+                     int replace);
+
+/** Remove the added route to `dst`/`mask` by `nd`, or by any interface when
+ * it is NULL, through `gw` unless it is 0; ESRCH when there is none. Call
+ * under net_lock. */
+int netdev_route_del(struct netdev *nd, uint32_t dst, uint32_t mask, uint32_t gw);
+
+/** Drop the added routes of `nd` whose gateway its subnets no longer have,
+ * as Linux drops a route whose next hop an address change made unreachable.
+ * Call under net_lock. */
+void netdev_route_prune(struct netdev *nd);
+
+/** Whether `nd` holds the address `ip`, its first or another. */
+int netdev_holds(const struct netdev *nd, uint32_t ip);
+
+/** Whether `ip` is on one of `nd`'s subnets. */
+int netdev_on_link(const struct netdev *nd, uint32_t ip);
+
+/** The address of `nd` a datagram to the next hop `hop` leaves from: the
+ * one whose subnet has `hop`, else its first. */
+uint32_t netdev_source(const struct netdev *nd, uint32_t hop);
 
 /**
  * Whether `ip` is an address one of this machine's interfaces holds.

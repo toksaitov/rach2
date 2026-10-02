@@ -38,34 +38,35 @@ enum vnode_kind {
     VNODE_PROC_MEMINFO,  /* /proc/meminfo: the physical frame pool */
     VNODE_PROC_MOUNTS,   /* /proc/mounts: what was mounted, and how */
     VNODE_PROC_AUDIO,
-    VNODE_PROC_USB,         /* /proc/usb: the USB devices this kernel enumerated */
-    VNODE_PROC_NET_ROUTE,   /* /proc/net/route: the on-link subnet and gateway */
-    VNODE_PROC_NET_ARP,     /* /proc/net/arp: the address cache */
-    VNODE_PROC_NET_TCP,     /* /proc/net/tcp: the connection pool */
-    VNODE_PROC_FILESYSTEMS, /* /proc/filesystems: what mount(2) accepts */
-    VNODE_PROC_LOOP,        /* /proc/loop: the files attached to devices */
-    VNODE_PROC_INTERRUPTS,  /* /proc/interrupts: the count on each vector */
-    VNODE_PROC_CONSOLE,     /* /proc/console: the serial receive path's counters */
-    VNODE_PROC_EXE,         /* /proc/<pid>/exe: a link to the program's file */
-    VNODE_PROC_TASK_DIR,    /* /proc/<pid>/task: the directory of the threads */
-    VNODE_PROC_CPUINFO,     /* /proc/cpuinfo: what cpuid says of the processor */
-    VNODE_PROC_SYS_DIR,     /* /proc/sys and a directory of its tree */
-    VNODE_PROC_SYS_FILE,    /* a file of /proc/sys: a limit or a name */
-    VNODE_PROC_LOADAVG,     /* /proc/loadavg: the load averages and task counts */
-    VNODE_PROC_NET_FILE,    /* /proc/net/{udp,raw,unix,sockstat,snmp}, by `procfile` */
-    VNODE_SYS_DIR,          /* /sys and a directory of its tree, by `sysent` and `syskey` */
-    VNODE_SYS_LINK,         /* /sys/bus/{pci,usb}/devices/NAME, a link to the device */
-    VNODE_SYS_FILE,         /* a device's uevent, by `sysent` and `syskey` */
-    VNODE_PROC_CWD,         /* /proc/<pid>/cwd: a link to the working directory */
-    VNODE_PROC_ROOT,        /* /proc/<pid>/root: a link to the root directory */
-    VNODE_PROC_DISKSTATS,   /* /proc/diskstats: the transfers of each disk node */
-    VNODE_PROC_VERSION,     /* /proc/version: the kernel's name and release */
-    VNODE_PROC_PARTITIONS,  /* /proc/partitions: the size of each disk node */
-    VNODE_DEV_LINK,         /* /dev/log: a link to the syslog daemon's socket */
-    VNODE_PROC_SYSVIPC_DIR, /* /proc/sysvipc: the System V objects' directory */
-    VNODE_PROC_SYSVIPC,     /* /proc/sysvipc/{shm,sem,msg}, by `procfile` */
-    VNODE_ENOENT,           /* under a synthetic mount, but no such entry */
-    VNODE_ENOTDIR           /* under a synthetic mount, a non-dir used as a directory */
+    VNODE_PROC_USB,          /* /proc/usb: the USB devices this kernel enumerated */
+    VNODE_PROC_NET_ROUTE,    /* /proc/net/route: the on-link subnet and gateway */
+    VNODE_PROC_NET_ARP,      /* /proc/net/arp: the address cache */
+    VNODE_PROC_NET_TCP,      /* /proc/net/tcp: the connection pool */
+    VNODE_PROC_FILESYSTEMS,  /* /proc/filesystems: what mount(2) accepts */
+    VNODE_PROC_LOOP,         /* /proc/loop: the files attached to devices */
+    VNODE_PROC_INTERRUPTS,   /* /proc/interrupts: the count on each vector */
+    VNODE_PROC_CONSOLE,      /* /proc/console: the serial receive path's counters */
+    VNODE_PROC_EXE,          /* /proc/<pid>/exe: a link to the program's file */
+    VNODE_PROC_TASK_DIR,     /* /proc/<pid>/task: the directory of the threads */
+    VNODE_PROC_CPUINFO,      /* /proc/cpuinfo: what cpuid says of the processor */
+    VNODE_PROC_SYS_DIR,      /* /proc/sys and a directory of its tree */
+    VNODE_PROC_SYS_FILE,     /* a file of /proc/sys: a limit or a name */
+    VNODE_PROC_LOADAVG,      /* /proc/loadavg: the load averages and task counts */
+    VNODE_PROC_NET_FILE,     /* /proc/net/{udp,raw,unix,sockstat,snmp}, by `procfile` */
+    VNODE_SYS_DIR,           /* /sys and a directory of its tree, by `sysent` and `syskey` */
+    VNODE_SYS_LINK,          /* /sys/bus/{pci,usb}/devices/NAME, a link to the device */
+    VNODE_SYS_FILE,          /* a device's uevent, by `sysent` and `syskey` */
+    VNODE_PROC_CWD,          /* /proc/<pid>/cwd: a link to the working directory */
+    VNODE_PROC_ROOT,         /* /proc/<pid>/root: a link to the root directory */
+    VNODE_PROC_DISKSTATS,    /* /proc/diskstats: the transfers of each disk node */
+    VNODE_PROC_VERSION,      /* /proc/version: the kernel's name and release */
+    VNODE_PROC_PARTITIONS,   /* /proc/partitions: the size of each disk node */
+    VNODE_DEV_LINK,          /* /dev/log: a link to the syslog daemon's socket */
+    VNODE_PROC_SYSVIPC_DIR,  /* /proc/sysvipc: the System V objects' directory */
+    VNODE_PROC_SYSVIPC,      /* /proc/sysvipc/{shm,sem,msg}, by `procfile` */
+    VNODE_PROC_NET_STAT_DIR, /* /proc/net/stat: the route and ARP counters' directory */
+    VNODE_ENOENT,            /* under a synthetic mount, but no such entry */
+    VNODE_ENOTDIR            /* under a synthetic mount, a non-dir used as a directory */
 };
 
 /* /proc/<pid>/<file> kinds, and the global boot line (a procfs_file origin). */
@@ -116,6 +117,10 @@ enum vnode_kind {
 #define SYNTH_PROC_MOUNTINFO   42
 /* /proc/sysvipc/shm, sem and msg, in that order (ipc/sysv.h's kinds). */
 #define SYNTH_PROC_SYSVIPC     43
+/* /proc/net/stat/rt_cache and arp_cache, two more files of /proc/net by
+ * their origin (`synth_net_name`). */
+#define SYNTH_PROC_NETSTAT_RT  46
+#define SYNTH_PROC_NETSTAT_ARP 47
 
 /* PID sentinel meaning "the calling process" (/proc/self), resolved by the
  * glue. */

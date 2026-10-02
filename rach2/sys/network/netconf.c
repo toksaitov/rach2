@@ -557,6 +557,90 @@ static void addr_publish(struct netdev *nd, uint32_t ip, uint32_t mask)
     if (is_machine(nd)) {
         net_ip_gateway = nd->gateway;
     }
+    netdev_route_prune(nd);
+}
+
+/** Whether `ip`/`mask` may be an address of an interface: a possible
+ * address, a contiguous mask short of all ones, and a host of its subnet;
+ * 0, or EINVAL. */
+static int addr_valid(uint32_t ip, uint32_t mask)
+{
+    if (netconf_address_is_impossible(ip) || !mask_ok(mask) || mask == 0 || mask == 0xFFFFFFFFu ||
+        ip == (ip & mask) || ip == (ip | ~mask)) {
+        return -EINVAL;
+    }
+    return 0;
+}
+
+int netconf_add_address(struct netdev *nd, uint32_t ip, uint32_t mask)
+{
+    uint32_t flags;
+    int rc = addr_valid(ip, mask);
+
+    if (rc != 0) {
+        return rc;
+    }
+    if (nd->ip == 0) {
+        return netconf_set_address(nd, ip, mask);
+    }
+    flags = net_lock();
+    if (netdev_holds(nd, ip)) {
+        rc = -EEXIST;
+    } else if (nd->naddr2 == NETDEV_ADDRS) {
+        rc = -ENOSPC;
+    } else {
+        char text[16];
+
+        nd->ip2[nd->naddr2] = ip;
+        nd->mask2[nd->naddr2] = mask;
+        nd->naddr2++;
+        netconf_format(ip, text);
+        klog(KLOG_INFO, "net", "%s: IPv4 %s/%d added", nd->name, text, netconf_prefix_of(mask));
+    }
+    net_unlock(flags);
+    return rc;
+}
+
+int netconf_del_address(struct netdev *nd, uint32_t ip)
+{
+    uint32_t flags;
+    int i;
+
+    if (ip == 0 || ip == nd->ip) {
+        uint32_t next = nd->naddr2 > 0 ? nd->ip2[0] : 0;
+        uint32_t next_mask = nd->naddr2 > 0 ? nd->mask2[0] : 0;
+
+        if (nd->ip == 0) {
+            return -EADDRNOTAVAIL;
+        }
+        flags = net_lock();
+        for (i = 1; i < nd->naddr2; i++) {
+            nd->ip2[i - 1] = nd->ip2[i];
+            nd->mask2[i - 1] = nd->mask2[i];
+        }
+        nd->naddr2 -= nd->naddr2 > 0;
+        addr_publish(nd, next, next_mask);
+        nd->mask_provisional = 0;
+        nd->pending_ip = 0;
+        net_unlock(flags);
+        return 0;
+    }
+    flags = net_lock();
+    for (i = 0; i < nd->naddr2 && nd->ip2[i] != ip; i++) {
+    }
+    if (i == nd->naddr2) {
+        net_unlock(flags);
+        return -EADDRNOTAVAIL;
+    }
+    for (; i + 1 < nd->naddr2; i++) {
+        nd->ip2[i] = nd->ip2[i + 1];
+        nd->mask2[i] = nd->mask2[i + 1];
+    }
+    nd->naddr2--;
+    tcp_local_addr_changed(nd->ip);
+    netdev_route_prune(nd);
+    net_unlock(flags);
+    return 0;
 }
 
 /**

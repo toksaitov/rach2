@@ -28,7 +28,8 @@ typedef struct arp_entry {
     struct netdev *nd;
     uint32_t ip;
     uint8_t mac[6];
-    uint8_t valid; /* 0 = free slot */
+    uint8_t valid;     /* 0 = free slot */
+    uint8_t permanent; /* set by hand: never replaced, changed or flushed */
     uint32_t used;
 } arp_entry_t;
 
@@ -88,14 +89,27 @@ static uint32_t arp_stamp(void)
  */
 static int arp_address_is_a_neighbour(struct netdev *nd, uint32_t ip)
 {
+    int i;
+
     if (netconf_address_is_impossible(ip)) {
         return 0;
     }
     if (nd != 0 && nd->mask != 0 && (ip == (nd->ip & nd->mask) || ip == (nd->ip | ~nd->mask))) {
         return 0;
     }
+    for (i = 0; nd != 0 && i < nd->naddr2; i++) {
+        if (ip == (nd->ip2[i] & nd->mask2[i]) || ip == (nd->ip2[i] | ~nd->mask2[i])) {
+            return 0;
+        }
+    }
     return 1;
 }
+
+/* What the cache has done, which /proc/net/stat/arp_cache reports: the
+ * mappings stored and dropped, the lookups and their hits, the resolutions
+ * that got no answer, and the learned mappings refused for a cache full of
+ * permanent ones. */
+struct arp_stats arp_stats;
 
 /* ARP packets are a fixed 28 bytes (Ethernet + IPv4). */
 static uint8_t arp_reply_buf[28];
@@ -112,8 +126,11 @@ void arp_flush(void)
     int i;
 
     for (i = 0; i < ARP_CACHE_SIZE; i++) {
-        arp_cache[i].valid = 0;
-        arp_cache[i].used = 0;
+        if (!arp_cache[i].permanent) {
+            arp_stats.destroys += arp_cache[i].valid;
+            arp_cache[i].valid = 0;
+            arp_cache[i].used = 0;
+        }
     }
     ip_hold_forget(0);
 }
@@ -130,7 +147,8 @@ void arp_forget_dev(struct netdev *nd)
     int i;
 
     for (i = 0; i < ARP_CACHE_SIZE; i++) {
-        if (arp_cache[i].nd == nd) {
+        if (arp_cache[i].nd == nd && !arp_cache[i].permanent) {
+            arp_stats.destroys += arp_cache[i].valid;
             arp_cache[i].valid = 0;
             arp_cache[i].used = 0;
         }
@@ -146,7 +164,9 @@ int arp_forget(struct netdev *nd, uint32_t ip)
     for (i = 0; i < ARP_CACHE_SIZE; i++) {
         if (arp_cache[i].valid && arp_cache[i].ip == ip && (!nd || arp_cache[i].nd == nd)) {
             arp_cache[i].valid = 0;
+            arp_cache[i].permanent = 0;
             arp_cache[i].used = 0;
+            arp_stats.destroys++;
             rc = 0;
         }
     }
@@ -155,55 +175,88 @@ int arp_forget(struct netdev *nd, uint32_t ip)
 }
 
 /**
- * Store or refresh an IP-to-MAC mapping.
+ * Store or refresh an IP-to-MAC mapping: learned from a packet when
+ * `permanent` is negative, which leaves a mapping set by hand as it is, and
+ * set by hand else, permanent when it is positive.
  *
  * Unsolicited packets can supply usable mappings, so a peer can poison the
- * cache.
+ * cache, though not a permanent mapping.
  *
- * Entries do not age out. A cache of eight stays usable on a real network,
+ * Entries do not age out. A cache of sixteen stays usable on a real network,
  * where this machine hears every neighbour, because addresses no neighbour
- * can have are refused and, when the cache is full, the entry gone longest
- * without being learned or looked up is replaced. Dropping the new mapping
- * instead would leave a machine whose cache filled with strangers before it
- * learned its gateway unable to reach anything off its own subnet.
+ * can have are refused and, when the cache is full, the learned entry gone
+ * longest without being learned or looked up is replaced. Dropping the new
+ * mapping instead would leave a machine whose cache filled with strangers
+ * before it learned its gateway unable to reach anything off its own subnet.
  *
  * The datagrams the stack held for the address while it was missing leave
- * once the mapping is stored (`ip_hold_resolved`).
+ * once the mapping is stored (`ip_hold_resolved`). 0, or ENOSPC for a cache
+ * of permanent mappings alone.
  */
-static void arp_cache_update(struct netdev *nd, uint32_t ip, const uint8_t *mac)
+static int arp_store(struct netdev *nd, uint32_t ip, const uint8_t *mac, int permanent)
 {
     int i;
     int free_slot = -1;
-    int oldest = 0;
-
-    if (!arp_address_is_a_neighbour(nd, ip)) {
-        return;
-    }
+    int oldest = -1;
 
     for (i = 0; i < ARP_CACHE_SIZE; i++) {
         if (arp_cache[i].valid && arp_cache[i].nd == nd && arp_cache[i].ip == ip) {
-            k_memcpy(arp_cache[i].mac, mac, 6);
-            arp_cache[i].used = arp_stamp();
-            ip_hold_resolved(nd, ip, mac);
-            return;
+            if (arp_cache[i].permanent && permanent < 0) {
+                return 0; /* a mapping set by hand stays as it was set */
+            }
+            free_slot = i;
+            break;
         }
         if (!arp_cache[i].valid && free_slot < 0) {
             free_slot = i;
         }
-        if (arp_cache[i].used < arp_cache[oldest].used) {
+        if (arp_cache[i].valid && !arp_cache[i].permanent &&
+            (oldest < 0 || arp_cache[i].used < arp_cache[oldest].used)) {
             oldest = i;
         }
     }
-
     if (free_slot < 0) {
         free_slot = oldest;
+        arp_stats.destroys += oldest >= 0;
+    }
+    if (free_slot < 0) {
+        arp_stats.table_fulls++;
+        return -ENOSPC;
+    }
+    if (!arp_cache[free_slot].valid) {
+        arp_stats.allocs++;
     }
     arp_cache[free_slot].nd = nd;
     arp_cache[free_slot].ip = ip;
     k_memcpy(arp_cache[free_slot].mac, mac, 6);
     arp_cache[free_slot].valid = 1;
+    arp_cache[free_slot].permanent = permanent > 0;
     arp_cache[free_slot].used = arp_stamp();
     ip_hold_resolved(nd, ip, mac);
+    return 0;
+}
+
+/** Learn the mapping a packet gave, unless one set by hand has the address
+ * or the cache is full of them. */
+static void arp_cache_update(struct netdev *nd, uint32_t ip, const uint8_t *mac)
+{
+    if (arp_address_is_a_neighbour(nd, ip)) {
+        (void)arp_store(nd, ip, mac, -1);
+    }
+}
+
+int arp_set(struct netdev *nd, uint32_t ip, const uint8_t *mac, int permanent)
+{
+    uint32_t flags;
+    int rc;
+
+    if (!arp_address_is_a_neighbour(nd, ip)) {
+        return -EINVAL;
+    }
+    flags = net_lock();
+    rc = arp_store(nd, ip, mac, permanent ? 1 : 0);
+    net_unlock(flags);
+    return rc;
 }
 
 /**
@@ -215,7 +268,8 @@ static void arp_cache_update(struct netdev *nd, uint32_t ip, const uint8_t *mac)
  *   8  sender_mac (ours)   14 sender_ip (ours)
  *   18 target_mac (requester)   24 target_ip (requester)
  */
-static void arp_send_reply(struct netdev *nd, const uint8_t *dst_mac, uint32_t dst_ip)
+static void arp_send_reply(struct netdev *nd, uint32_t asked, const uint8_t *dst_mac,
+                           uint32_t dst_ip)
 {
     if (!nd) {
         return;
@@ -226,7 +280,7 @@ static void arp_send_reply(struct netdev *nd, const uint8_t *dst_mac, uint32_t d
     arp_reply_buf[5] = 4;
     write16be(arp_reply_buf + 6, ARP_OP_REPLY);
     k_memcpy(arp_reply_buf + 8, nd->mac, 6);
-    write32be(arp_reply_buf + 14, nd->ip);
+    write32be(arp_reply_buf + 14, asked);
     k_memcpy(arp_reply_buf + 18, dst_mac, 6);
     write32be(arp_reply_buf + 24, dst_ip);
 
@@ -265,8 +319,8 @@ void arp_rx(struct netdev *nd, const uint8_t *data, uint16_t len)
 
     arp_cache_update(nd, sender_ip, sender_mac);
 
-    if (op == ARP_OP_REQUEST && nd != 0 && target_ip == nd->ip) {
-        arp_send_reply(nd, sender_mac, sender_ip);
+    if (op == ARP_OP_REQUEST && nd != 0 && netdev_holds(nd, target_ip)) {
+        arp_send_reply(nd, target_ip, sender_mac, sender_ip);
     }
 }
 
@@ -280,10 +334,12 @@ int arp_lookup(struct netdev *nd, uint32_t ip, uint8_t *mac_out)
 {
     int i;
 
+    arp_stats.lookups++;
     for (i = 0; i < ARP_CACHE_SIZE; i++) {
         if (arp_cache[i].valid && arp_cache[i].nd == nd && arp_cache[i].ip == ip) {
             k_memcpy(mac_out, arp_cache[i].mac, 6);
             arp_cache[i].used = arp_stamp();
+            arp_stats.hits++;
             return 1;
         }
     }
@@ -311,7 +367,7 @@ void arp_request(struct netdev *nd, uint32_t target_ip)
         return; /* no interface reaches that address */
     }
     k_memcpy(arp_req_buf + 8, nd->mac, 6);
-    write32be(arp_req_buf + 14, nd->ip);
+    write32be(arp_req_buf + 14, netdev_source(nd, target_ip));
     k_memcpy(arp_req_buf + 18, zero_mac, 6);
     write32be(arp_req_buf + 24, target_ip);
 
@@ -332,6 +388,7 @@ int arp_snapshot(struct arp_row *out, int max)
             int b;
 
             out[n].ip = arp_cache[i].ip;
+            out[n].permanent = arp_cache[i].permanent;
             out[n].iface = arp_cache[i].nd ? arp_cache[i].nd->name : "";
             for (b = 0; b < 6; b++) {
                 out[n].mac[b] = arp_cache[i].mac[b];

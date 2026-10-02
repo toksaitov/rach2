@@ -76,38 +76,54 @@ struct netdev *netdev_by_name(const char *name)
     return 0;
 }
 
-struct netdev *netdev_route(uint32_t dst, uint32_t *via)
+int netdev_holds(const struct netdev *nd, uint32_t ip)
 {
     int i;
 
-    for (i = 0; i < niface; i++) {
-        struct netdev *nd = &ifaces[i];
-
-        if (nd->up && nd->ip != 0 && nd->mask != 0 && (dst & nd->mask) == (nd->ip & nd->mask)) {
-            *via = dst;
-            return nd;
+    if (ip == 0 || !nd) {
+        return 0; /* an unconfigured interface owns no address */
+    }
+    for (i = 0; i < nd->naddr2; i++) {
+        if (nd->ip2[i] == ip) {
+            return 1;
         }
     }
-    for (i = 0; i < niface; i++) {
-        struct netdev *nd = &ifaces[i];
+    return nd->ip == ip;
+}
 
-        if (nd->up && nd->gateway != 0) {
-            *via = nd->gateway;
-            return nd;
+int netdev_on_link(const struct netdev *nd, uint32_t ip)
+{
+    int i;
+
+    for (i = 0; i < nd->naddr2; i++) {
+        if ((ip & nd->mask2[i]) == (nd->ip2[i] & nd->mask2[i])) {
+            return 1;
         }
     }
-    return 0;
+    return nd->ip != 0 && nd->mask != 0 && (ip & nd->mask) == (nd->ip & nd->mask);
+}
+
+uint32_t netdev_source(const struct netdev *nd, uint32_t hop)
+{
+    int i;
+
+    if (nd->ip != 0 && nd->mask != 0 && (hop & nd->mask) == (nd->ip & nd->mask)) {
+        return nd->ip;
+    }
+    for (i = 0; i < nd->naddr2; i++) {
+        if ((hop & nd->mask2[i]) == (nd->ip2[i] & nd->mask2[i])) {
+            return nd->ip2[i];
+        }
+    }
+    return nd->ip;
 }
 
 int netdev_owns(uint32_t ip)
 {
     int i;
 
-    if (ip == 0) {
-        return 0; /* an unconfigured interface owns no address */
-    }
     for (i = 0; i < niface; i++) {
-        if (ifaces[i].ip == ip) {
+        if (netdev_holds(&ifaces[i], ip)) {
             return 1;
         }
     }
@@ -116,7 +132,7 @@ int netdev_owns(uint32_t ip)
 
 int netdev_is_broadcast(uint32_t ip)
 {
-    int i;
+    int i, a;
 
     if (ip == 0xFFFFFFFFu) {
         return 1;
@@ -126,6 +142,11 @@ int netdev_is_broadcast(uint32_t ip)
 
         if (nd->ip != 0 && nd->mask != 0 && ip == (nd->ip | ~nd->mask)) {
             return 1;
+        }
+        for (a = 0; a < nd->naddr2; a++) {
+            if (ip == (nd->ip2[a] | ~nd->mask2[a])) {
+                return 1;
+            }
         }
     }
     return 0;

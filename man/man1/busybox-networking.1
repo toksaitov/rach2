@@ -1,4 +1,4 @@
-.Dd October 1, 2026
+.Dd October 2, 2026
 .Dt BUSYBOX-NETWORKING 1
 .Os
 .Sh NAME
@@ -367,9 +367,9 @@ Scan
 .Ar HOST
 and print its open ports.
 .It Nm route
-Display or edit the kernel routing tables.
-The kernel keeps the connected subnet and one default gateway; adding
-another route fails.
+Display or edit the kernel routing table; see
+.Xr ioctl 2
+for what it takes.
 .It Nm ssl_client
 Run the BusyBox SSL client.
 .It Nm tcpsvd

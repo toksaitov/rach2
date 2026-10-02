@@ -128,6 +128,7 @@ C_SRC = kernel.c \
         sys/usb/hub.c \
         sys/network/netconf.c \
         sys/network/netif.c \
+        sys/network/route.c \
         sys/network/netconsole.c \
         sys/network/core/net_core.c \
         sys/network/driver/netdev.c \

@@ -5169,7 +5169,7 @@ probe netlinkmusl
 file rach2/sys/network/socket/netlink.c
 expect NETLINKMUSL FAIL (RTM_DELADDR did not take the address away
 old
-        return netconf_set_address(nd, 0, 0);
+        return netconf_del_address(nd, ip);
 new
         return 0;
 end
@@ -5447,4 +5447,36 @@ old
     if (!q->notify_tgid || q->curmsgs != 1 || q->receivers != 0) {
 new
     if (!q->notify_tgid || q->curmsgs != 2 || q->receivers != 0) {
+end
+
+# The network's tables, which netlinkmusl checks.
+
+fault route-shortest-prefix
+probe netlinkmusl
+file rach2/sys/network/route.c
+expect NETLINKMUSL FAIL (a route on the link to another network, which ip route get takes
+old
+        if (!out || r.mask > best.mask || (r.mask == best.mask && r.metric < best.metric)) {
+new
+        if (!out || r.mask < best.mask || (r.mask == best.mask && r.metric < best.metric)) {
+end
+
+fault addr-second-refused
+probe netlinkmusl
+file rach2/sys/network/netconf.c
+expect NETLINKMUSL FAIL (a second address added, a local route, and taken away
+old
+    } else if (nd->naddr2 == NETDEV_ADDRS) {
+new
+    } else if (1) {
+end
+
+fault neigh-permanent-learned
+probe netlinkmusl
+file rach2/sys/network/socket/netlink.c
+expect NETLINKMUSL FAIL (a neighbour set by hand as permanent, in /proc/net/arp with 0x6
+old
+    return arp_set(nd, ip, mac, (get16(req + NLMSG_HDRLEN + 8) & NUD_PERMANENT) != 0);
+new
+    return arp_set(nd, ip, mac, 0 && (get16(req + NLMSG_HDRLEN + 8) & NUD_PERMANENT) != 0);
 end

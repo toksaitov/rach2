@@ -284,6 +284,19 @@ int netdev_owns(uint32_t ip)
     return ip != 0 && ip == net_ip_addr;
 }
 
+uint32_t netdev_source(const struct netdev *nd, uint32_t hop)
+{
+    (void)hop;
+    return nd->ip;
+}
+
+int ip_tx_from(uint32_t src, uint32_t dst, uint8_t proto, const uint8_t *payload, uint16_t len,
+               uint8_t ttl)
+{
+    (void)src;
+    return ip_tx(dst, proto, payload, len, ttl);
+}
+
 /* A stand-in for the kernel's random words, from which `tcp.c` draws the key
  * of its initial sequence numbers. Every case reads a connection's number from
  * the segment that carries it, so any key serves; tcp_reset_hosttest.c checks

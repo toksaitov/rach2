@@ -200,6 +200,9 @@ const char *synth_net_name(int origin)
 {
     static const char *const names[] = {"udp", "raw", "unix", "sockstat", "snmp"};
 
+    if (origin == SYNTH_PROC_NETSTAT_RT || origin == SYNTH_PROC_NETSTAT_ARP) {
+        return origin == SYNTH_PROC_NETSTAT_RT ? "stat/rt_cache" : "stat/arp_cache";
+    }
     origin -= SYNTH_PROC_NETUDP;
     return origin >= 0 && origin < (int)(sizeof(names) / sizeof(names[0])) ? names[origin] : 0;
 }
@@ -265,6 +268,8 @@ void synth_dir_path(int kind, int pid, int tid, char *out, int cap)
         synth_put(out, cap, &pos, "/proc");
     } else if (kind == VNODE_PROC_NET_DIR) {
         synth_put(out, cap, &pos, "/proc/net");
+    } else if (kind == VNODE_PROC_NET_STAT_DIR) {
+        synth_put(out, cap, &pos, "/proc/net/stat");
     } else if (kind == VNODE_PROC_SYSVIPC_DIR) {
         synth_put(out, cap, &pos, "/proc/sysvipc");
     } else if (kind == VNODE_PROC_SYS_DIR) {
@@ -841,6 +846,21 @@ static int synth_classify_sysfs(const struct comp *c, int n, struct vpath *vp)
     return vp->kind;
 }
 
+/** Classify the components `c` of `n` below /proc/net/stat: the directory
+ * and its two files. */
+static int synth_classify_net_stat(const struct comp *c, int n, struct vpath *vp)
+{
+    if (n == 0) {
+        vp->kind = VNODE_PROC_NET_STAT_DIR;
+    } else if (n == 1 && (comp_eq(c[0], "rt_cache") || comp_eq(c[0], "arp_cache"))) {
+        vp->kind = VNODE_PROC_NET_FILE;
+        vp->procfile = comp_eq(c[0], "rt_cache") ? SYNTH_PROC_NETSTAT_RT : SYNTH_PROC_NETSTAT_ARP;
+    } else {
+        vp->kind = n == 1 ? VNODE_ENOENT : VNODE_ENOTDIR;
+    }
+    return vp->kind;
+}
+
 const char *synth_sysvipc_name(int origin)
 {
     static const char *const names[] = {"shm", "sem", "msg"};
@@ -982,6 +1002,8 @@ int synth_classify(const char *path, struct vpath *vp)
             if (n == 3 && synth_net_name(f)) {
                 vp->kind = VNODE_PROC_NET_FILE;
                 vp->procfile = f;
+            } else if (n >= 3 && comp_eq(c[2], "stat")) {
+                return synth_classify_net_stat(c + 3, n - 3, vp);
             } else if (n == 2) {
                 vp->kind = VNODE_PROC_NET_DIR;
             } else if (n == 3 && comp_eq(c[2], "dev")) {

@@ -93,6 +93,7 @@
 #define PROCFS_INO_VERSION     0x115u
 #define PROCFS_INO_PARTITIONS  0x116u
 #define PROCFS_INO_SYSVIPC     0x117u /* and its three files after it */
+#define PROCFS_INO_NETSTAT     0x11Bu
 #define PROCFS_INO_NET         0x120u /* and the other files of /proc/net after it */
 
 /* Inode namespace for /sys: the fixed directories by their node; a PCI
@@ -1703,6 +1704,11 @@ uint32_t procfs_ino_net(int origin)
     return PROCFS_INO_NET + (uint32_t)(origin - SYNTH_PROC_NETUDP);
 }
 
+uint32_t procfs_ino_netstatdir(void)
+{
+    return PROCFS_INO_NETSTAT;
+}
+
 uint32_t procfs_ino_sysvipcdir(void)
 {
     return PROCFS_INO_SYSVIPC;
@@ -2658,29 +2664,53 @@ static void ap_ip_dotted(struct procfs_text *t, uint32_t ip)
  * rows, from its own address, mask and gateway. The flags are the ones
  * `route` prints from: 1 is up, and 2 more says the destination is a gateway.
  */
-static int procfs_gen_netroute(struct procfs_text *t)
+/** One line of /proc/net/route for `r`: the interface, the destination,
+ * the gateway, RTF_UP with RTF_GATEWAY for a route through one, the metric
+ * and the mask. */
+static void ap_route(struct procfs_text *t, const struct netdev_rt *r)
 {
     int i;
 
-    ap_str(t, PROCFS_NETROUTE_HEADER);
     for (i = 0; i < netdev_count(); i++) {
-        const struct netdev *nd = netdev_at(i);
+        if (netdev_at(i)->index == r->ifindex) {
+            ap_str(t, netdev_at(i)->name);
+        }
+    }
+    ap_ch(t, '\t');
+    ap_ip_hex(t, r->dst);
+    ap_ch(t, '\t');
+    ap_ip_hex(t, r->gw);
+    ap_str(t, r->gw ? "\t0003\t0\t0\t" : "\t0001\t0\t0\t");
+    ap_u32(t, r->metric);
+    ap_ch(t, '\t');
+    ap_ip_hex(t, r->mask);
+    ap_str(t, "\t0\t0\t0\n");
+}
 
-        if (nd->ip == 0) {
-            continue; /* an interface with no address has no route */
+/**
+ * Render /proc/net/route: each interface's default route, then the subnets
+ * its addresses imply, then the routes programs added, in the columns
+ * `route` and BusyBox's `ip` read.
+ */
+static int procfs_gen_netroute(struct procfs_text *t)
+{
+    struct netdev_rt r;
+    int i, n, kind;
+
+    ap_str(t, PROCFS_NETROUTE_HEADER);
+    for (i = 0; i <= netdev_count(); i++) {
+        for (kind = NETDEV_RT_DEFAULT; kind >= NETDEV_RT_LINK; kind--) {
+            for (n = 0; i < netdev_count() && netdev_route_at(n, &r); n++) {
+                if (r.ifindex == netdev_at(i)->index && r.kind == kind) {
+                    ap_route(t, &r);
+                }
+            }
         }
-        if (nd->gateway != 0) {
-            ap_str(t, nd->name);
-            ap_str(t, "\t00000000\t");
-            ap_ip_hex(t, nd->gateway);
-            ap_str(t, "\t0003\t0\t0\t0\t00000000\t0\t0\t0\n");
+    }
+    for (n = 0; netdev_route_at(n, &r); n++) {
+        if (r.kind == NETDEV_RT_ADDED) {
+            ap_route(t, &r);
         }
-        ap_str(t, nd->name);
-        ap_ch(t, '\t');
-        ap_ip_hex(t, nd->ip & nd->mask);
-        ap_str(t, "\t00000000\t0001\t0\t0\t0\t");
-        ap_ip_hex(t, nd->mask);
-        ap_str(t, "\t0\t0\t0\n");
     }
     return t->len;
 }
@@ -2689,8 +2719,9 @@ static int procfs_gen_netroute(struct procfs_text *t)
  * Render /proc/net/arp: what the cache holds, one line each.
  *
  * The hardware type is 1, Ethernet, and the flag is 2, which is what `arp`
- * prints as a complete entry; an entry this cache holds at all is complete,
- * since a pending one is not stored.
+ * prints as a complete entry, or 6 for one set by hand as permanent; an
+ * entry this cache holds at all is complete, since a pending one is not
+ * stored.
  */
 static int procfs_gen_netarp(struct procfs_text *t)
 {
@@ -2701,7 +2732,8 @@ static int procfs_gen_netarp(struct procfs_text *t)
     n = arp_snapshot(rows, ARP_CACHE_SIZE);
     for (i = 0; i < n; i++) {
         ap_ip_dotted(t, rows[i].ip);
-        ap_str(t, "        0x1         0x2         ");
+        ap_str(t, rows[i].permanent ? "        0x1         0x6         "
+                                    : "        0x1         0x2         ");
         for (b = 0; b < 6; b++) {
             if (b) {
                 ap_ch(t, ':');
@@ -2989,9 +3021,82 @@ static int procfs_gen_netsnmp(struct procfs_text *t)
 
 /** Render the /proc/net file `origin`, SYNTH_PROC_NETUDP to
  * SYNTH_PROC_NETSNMP. */
+/** Append `v` as eight lowercase hex digits and `sep`, as /proc/net/stat's
+ * files have each counter. */
+static void ap_stat(struct procfs_text *t, uint32_t v, const char *sep)
+{
+    static const char digits[] = "0123456789abcdef";
+    int i;
+
+    for (i = 7; i >= 0; i--) {
+        ap_ch(t, digits[(v >> (i * 4)) & 0xFu]);
+    }
+    ap_str(t, sep);
+}
+
+/**
+ * Render /proc/net/stat/rt_cache and arp_cache, which iproute2's lnstat,
+ * rtstat among its names, reads: Linux's heading and a line of hex counters
+ * for the one processor. Of the route counters, the routes in the table,
+ * the datagrams received and those for another host, and the lookups of the
+ * output path; the cache of routes Linux once had has no hits, and the
+ * broadcasts are not counted apart. Of the neighbour counters, the mappings held, stored and
+ * dropped, the lookups and hits, the resolutions that got no answer and the datagrams dropped
+ * waiting for one, and the mappings refused for a full table.
+ */
+static int procfs_gen_netstat(struct procfs_text *t, int origin)
+{
+    static struct arp_row rows[ARP_CACHE_SIZE];
+    struct netdev_rt r;
+    int n;
+
+    if (origin == SYNTH_PROC_NETSTAT_RT) {
+        for (n = 0; netdev_route_at(n, &r); n++) {
+        }
+        ap_str(t, "entries  in_hit   in_slow_tot in_slow_mc in_no_route in_brd   in_martian_dst "
+                  "in_martian_src out_hit  out_slow_tot out_slow_mc gc_total gc_ignored "
+                  "gc_goal_miss gc_dst_overflow in_hlist_search out_hlist_search\n");
+        ap_stat(t, (uint32_t)n, "  ");
+        ap_stat(t, 0, " ");
+        ap_stat(t, net_mib.ip_in_receives, " ");
+        ap_stat(t, 0, " ");
+        ap_stat(t, net_mib.ip_in_addr_errors, " ");
+        ap_stat(t, 0, " ");
+        ap_stat(t, 0, " ");
+        ap_stat(t, 0, "  ");
+        ap_stat(t, 0, " ");
+        ap_stat(t, netdev_route_lookups, " ");
+        for (n = 0; n < 6; n++) {
+            ap_stat(t, 0, " ");
+        }
+        ap_stat(t, 0, " \n");
+        return t->len;
+    }
+    ap_str(t, "entries  allocs   destroys hash_grows lookups  hits     res_failed "
+              "rcv_probes_mcast rcv_probes_ucast periodic_gc_runs forced_gc_runs "
+              "unresolved_discards table_fulls\n");
+    ap_stat(t, (uint32_t)arp_snapshot(rows, ARP_CACHE_SIZE), " ");
+    ap_stat(t, arp_stats.allocs, " ");
+    ap_stat(t, arp_stats.destroys, " ");
+    ap_stat(t, 0, "   ");
+    ap_stat(t, arp_stats.lookups, " ");
+    ap_stat(t, arp_stats.hits, " ");
+    ap_stat(t, arp_stats.res_failed, "   ");
+    ap_stat(t, 0, " ");
+    ap_stat(t, 0, "   ");
+    ap_stat(t, 0, " ");
+    ap_stat(t, 0, " ");
+    ap_stat(t, arp_stats.unres_discards, " ");
+    ap_stat(t, arp_stats.table_fulls, "\n");
+    return t->len;
+}
+
 static int procfs_gen_net(struct procfs_text *t, int origin)
 {
     switch (origin) {
+    case SYNTH_PROC_NETSTAT_RT:
+    case SYNTH_PROC_NETSTAT_ARP:
+        return procfs_gen_netstat(t, origin);
     case SYNTH_PROC_NETUDP:
         return procfs_gen_netdgram(t, SOCK_DGRAM);
     case SYNTH_PROC_NETRAW:

@@ -67,8 +67,9 @@ void packet_rx(struct netdev *nd, uint16_t etype, const uint8_t *data, uint16_t 
     to_packet++;
 }
 
-void icmp_rx(uint32_t src, const uint8_t *data, uint16_t len)
+void icmp_rx(uint32_t src, uint32_t dst, const uint8_t *data, uint16_t len)
 {
+    (void)dst;
     (void)src;
     (void)data;
     (void)len;
@@ -139,6 +140,8 @@ int arp_lookup(struct netdev *nd, uint32_t ip, uint8_t *mac)
     }
     return 1;
 }
+
+struct arp_stats arp_stats;
 
 void arp_request(struct netdev *nd, uint32_t ip)
 {
@@ -224,6 +227,12 @@ struct netdev *netdev_route(uint32_t dst, uint32_t *via)
     route_queries++;
     *via = dst;
     return route_available ? &the_iface : 0;
+}
+
+uint32_t netdev_source(const struct netdev *nd, uint32_t hop)
+{
+    (void)hop;
+    return nd->ip;
 }
 
 int netdev_count(void)

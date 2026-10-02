@@ -23,7 +23,7 @@
 #define ICMP_FRAG_NEEDED  4
 
 /** Handle one received ICMP datagram (IP header already stripped). */
-void icmp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len);
+void icmp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len);
 
 /** Count an ICMP message of type `type` sent, here or by a raw socket, in
  * `net_mib`. */

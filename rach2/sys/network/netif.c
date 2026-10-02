@@ -37,15 +37,23 @@
 #define RTENTRY_GATEWAY 20
 #define RTENTRY_GENMASK 36
 #define RTENTRY_FLAGS   52
+#define RTENTRY_METRIC  64
 #define RTENTRY_DEV     68
 #define RTENTRY_LEN     84
 
 /* struct arpreq: the protocol address, a sockaddr with its IPv4 address at
- * 4, the hardware address, the flags, a mask, and the interface's name at
- * 52, sixteen bytes, for 68 in all. */
+ * 4, the hardware address, a sockaddr with its family at 16 and its bytes at
+ * 18, the flags at 32, a mask, and the interface's name at 52, sixteen
+ * bytes, for 68 in all. */
 #define ARPREQ_PA_ADDR 4
+#define ARPREQ_HA_FAM  16
+#define ARPREQ_HA_ADDR 18
+#define ARPREQ_FLAGS   32
 #define ARPREQ_DEV     52
 #define ARPREQ_LEN     68
+
+#define ATF_PERM 0x04
+#define ATF_PUBL 0x08
 
 #define RTF_UP      0x0001
 #define RTF_GATEWAY 0x0002
@@ -254,21 +262,24 @@ static int32_t ifreq_ioctl(uint32_t request, uint32_t arg)
  * interface cannot change another's. The name is read as a string, since a
  * fixed sixteen bytes could run off the end of the caller's page.
  *
- * A default route sets the gateway, and one with no gateway is refused
- * without touching anything, so `route add default dev eth0` cannot quietly
- * remove the gateway. Removing a default route clears the gateway, and
- * removing one that is not there is `ESRCH`: a DHCP client's script removes
- * default routes in a loop that ends when a removal fails. A route to the
- * interface's own subnet is accepted and does nothing, because it is already
- * true; it cannot be removed while the address that implies it is in force.
- * Anything else is refused, not accepted and forgotten.
+ * A default route of no metric sets the gateway, and one with no gateway is
+ * refused without touching anything, so `route add default dev eth0` cannot
+ * quietly remove the gateway. Removing a default route clears the gateway,
+ * and removing one that is not there is `ESRCH`: a DHCP client's script
+ * removes default routes in a loop that ends when a removal fails. A route to
+ * the interface's own subnet is accepted and does nothing, because it is
+ * already true; it cannot be removed while the address that implies it is in
+ * force. Any other route goes in the table (`netdev_route_add`), with the
+ * metric the caller gives, which `route` sends one more than, as Linux takes
+ * it.
  */
 static int32_t route_ioctl(uint32_t request, uint32_t arg)
 {
     uint8_t rt[RTENTRY_LEN];
     uint8_t name[IFREQ_NAMESIZE];
-    uint32_t dst, gw, mask, dev;
+    uint32_t dst, gw, mask, dev, metric, flags;
     struct netdev *nd;
+    int32_t rc;
 
     if (!current_proc || !proc_privileged(current_proc)) {
         return -EPERM;
@@ -279,10 +290,22 @@ static int32_t route_ioctl(uint32_t request, uint32_t arg)
     dst = be32(rt + RTENTRY_DST + 4);
     gw = be32(rt + RTENTRY_GATEWAY + 4);
     mask = be32(rt + RTENTRY_GENMASK + 4);
+    metric = (uint32_t)rt[RTENTRY_METRIC] | ((uint32_t)rt[RTENTRY_METRIC + 1] << 8);
+    metric = metric != 0 ? metric - 1u : 0u;
 
     dev = (uint32_t)rt[RTENTRY_DEV] | ((uint32_t)rt[RTENTRY_DEV + 1] << 8) |
           ((uint32_t)rt[RTENTRY_DEV + 2] << 16) | ((uint32_t)rt[RTENTRY_DEV + 3] << 24);
     nd = netdev_first();
+    if (dev == 0 && gw != 0) {
+        int i;
+
+        for (i = 0; i < netdev_count(); i++) {
+            if (netdev_on_link(netdev_at(i), gw)) {
+                nd = netdev_at(i);
+                break;
+            }
+        }
+    }
     if (dev != 0) {
         int got =
             strncpy_from_user((char *)name, (const char __user *)dev, (uint32_t)IFREQ_NAMESIZE);
@@ -296,36 +319,36 @@ static int32_t route_ioctl(uint32_t request, uint32_t arg)
         return -ENODEV;
     }
 
-    if (dst == 0 && mask == 0) {
+    if (dst == 0 && mask == 0 && metric == 0 &&
+        (request == SIOCADDRT ? nd->gateway == 0 || nd->gateway == gw : nd->gateway != 0)) {
         if (request == SIOCADDRT) {
-            if (gw == 0) {
-                return -EINVAL;
-            }
-            return netconf_set_gateway(nd, gw);
+            return gw == 0 ? -EINVAL : netconf_set_gateway(nd, gw);
         }
-        if (request == SIOCDELRT) {
-            if (nd->gateway == 0) {
-                return -ESRCH;
-            }
-            if (gw != 0 && gw != nd->gateway) {
-                return -ESRCH;
-            }
-            return netconf_set_gateway(nd, 0);
+        if (gw != 0 && gw != nd->gateway) {
+            return -ESRCH;
         }
-        return -EINVAL;
+        return netconf_set_gateway(nd, 0);
     }
     if (request == SIOCADDRT && nd->mask != 0 && dst == (nd->ip & nd->mask) && mask == nd->mask &&
         gw == 0) {
         return 0;
     }
-    return -EOPNOTSUPP;
+    flags = net_lock();
+    rc = request == SIOCADDRT ? netdev_route_add(nd, dst, mask, gw, metric, 0)
+                              : netdev_route_del(dev != 0 ? nd : 0, dst, mask, gw);
+    net_unlock(flags);
+    return rc;
 }
 
 /**
  * SIOCDARP: forget the mapping the caller's `struct arpreq` names, learned on
  * the interface its `arp_dev` names or on any when that is empty, for
- * `arp -d`; ENXIO when there is none, as on Linux. SIOCSARP is refused,
- * since the cache keeps no mapping it would not replace. Root only.
+ * `arp -d`; ENXIO when there is none, as on Linux. SIOCSARP: store the
+ * mapping it names, permanent with ATF_PERM, which `arp -s` sets, on the
+ * interface it names or the one whose subnet has the address, ENETUNREACH
+ * when none has; a hardware address of another kind than Ethernet is
+ * EINVAL, and a published one, for proxy ARP, which this stack does not
+ * answer, EOPNOTSUPP. Root only.
  */
 static int32_t arp_ioctl(uint32_t request, uint32_t arg)
 {
@@ -335,9 +358,6 @@ static int32_t arp_ioctl(uint32_t request, uint32_t arg)
     if (!current_proc || !proc_privileged(current_proc)) {
         return -EPERM;
     }
-    if (request == SIOCSARP) {
-        return -EOPNOTSUPP;
-    }
     if (copy_from_user(req, (const void __user *)arg, ARPREQ_LEN) != 0) {
         return -EFAULT;
     }
@@ -346,6 +366,24 @@ static int32_t arp_ioctl(uint32_t request, uint32_t arg)
         if (!nd) {
             return -ENODEV;
         }
+    }
+    if (request == SIOCSARP) {
+        uint32_t ip = be32(req + ARPREQ_PA_ADDR);
+        uint32_t flags = (uint32_t)req[ARPREQ_FLAGS] | ((uint32_t)req[ARPREQ_FLAGS + 1] << 8);
+        int i;
+
+        if (flags & ATF_PUBL) {
+            return -EOPNOTSUPP;
+        }
+        if (req[ARPREQ_HA_FAM] != ARPHRD_ETHER || req[ARPREQ_HA_FAM + 1] != 0) {
+            return -EINVAL;
+        }
+        for (i = 0; !nd && i < netdev_count(); i++) {
+            if (netdev_on_link(netdev_at(i), ip)) {
+                nd = netdev_at(i);
+            }
+        }
+        return nd ? arp_set(nd, ip, req + ARPREQ_HA_ADDR, (flags & ATF_PERM) != 0) : -ENETUNREACH;
     }
     return arp_forget(nd, be32(req + ARPREQ_PA_ADDR)) == 0 ? 0 : -ENXIO;
 }

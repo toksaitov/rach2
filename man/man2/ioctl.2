@@ -358,10 +358,23 @@ and
 take an 84-byte i386
 .Vt "struct rtentry"
 and require effective user ID 0.
-They set or remove the selected interface's default gateway.
-A null device-name pointer selects the first interface.
-Adding the interface's existing subnet route succeeds without action;
-removing it or changing any other non-default route is unsupported.
+A default route of no metric sets or removes the selected interface's
+default gateway; any other route is added to or removed from the table
+of 32, with the metric one less than
+.Va rt_metric ,
+as
+.Ic route
+sends it.
+A null device-name pointer selects the interface whose subnet has the
+gateway, or the first.
+Adding the interface's existing subnet route succeeds without action; it
+cannot be removed while its address is in force.
+A gateway none of the interface's subnets has is
+.Er ENETUNREACH ,
+a route already there
+.Er EEXIST ,
+and removing one that is not there
+.Er ESRCH .
 .Pp
 .Dv SIOCDARP
 takes a 68-byte
@@ -374,9 +387,23 @@ names or on any when that is empty, or fails with
 .Er ENXIO
 when there is none.
 .Dv SIOCSARP
-is
+stores the mapping of the protocol address to the Ethernet address of
+.Va arp_ha ,
+on the interface
+.Va arp_dev
+names or the one whose subnet has the address, permanent with
+.Dv ATF_PERM ,
+which
+.Ql arp -s
+sets; a permanent mapping is never changed by a packet nor dropped by a
+full cache.
+Another kind of hardware address is
+.Er EINVAL ,
+.Dv ATF_PUBL
 .Er EOPNOTSUPP ,
-since the cache keeps no mapping it would not replace.
+since the stack does not answer for another host, and an address no
+interface reaches
+.Er ENETUNREACH .
 .Pp
 The bridge requests,
 .Dv SIOCGIFBR ,

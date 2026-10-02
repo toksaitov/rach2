@@ -3,10 +3,10 @@
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  *
- * The cache is eight entries and this machine now lives on a real network,
+ * The cache is sixteen entries and this machine now lives on a real network,
  * where it hears every neighbour rather than the three peers QEMU provides.
  * What that changes cannot be provoked from inside a guest: a test there can
- * neither invent nine neighbours nor make one of them send the ARP a DHCP
+ * neither invent seventeen neighbours nor make one of them send the ARP a DHCP
  * client sends while it is probing, which carries a sender address of 0.0.0.0.
  *
  * So `arp.c` is compiled natively and fed packets one at a time, with the
@@ -16,7 +16,7 @@
  *   * an address no neighbour can have is not cached (0.0.0.0, which was found
  *     in the cache of the machine on the desk, and the broadcast and multicast
  *     ranges, which name many machines or none);
- *   * a ninth neighbour replaces the entry gone longest without use, rather
+ *   * a seventeenth neighbour replaces the entry gone longest without use, rather
  *     than being dropped: dropping it is how a machine that filled its cache
  *     with strangers before learning its gateway loses every route off its own
  *     subnet, permanently;
@@ -24,6 +24,8 @@
  *     among the last to be replaced rather than the first;
  *   * a request for our address is answered, and the reply carries our own
  *     hardware address;
+ *   * a mapping set by hand as permanent is neither changed by a packet nor
+ *     replaced when the cache is full, nor flushed;
  *   * the ordering survives the counter wrapping, which no run of this machine
  *     will reach and which a reader cannot check by reading.
  *
@@ -72,6 +74,17 @@ static struct netdev the_iface = {0,
 struct netdev *netdev_first(void)
 {
     return &the_iface;
+}
+
+int netdev_holds(const struct netdev *nd, uint32_t ip)
+{
+    return nd && ip != 0 && ip == nd->ip;
+}
+
+uint32_t netdev_source(const struct netdev *nd, uint32_t hop)
+{
+    (void)hop;
+    return nd->ip;
 }
 
 int ethernet_tx(struct netdev *out, const uint8_t *dst, uint16_t type, const uint8_t *payload,
@@ -389,18 +402,18 @@ int main(void)
         CHECK(frame_dst[0][5] == 0x09, "the answer did not go to the asker");
     }
 
-    /* A ninth neighbour replaces the entry gone longest without use. The
-       gateway is looked up in between, which is what keeps it. */
+    /* A seventeenth neighbour replaces the entry gone longest without use.
+       The gateway is looked up in between, which is what keeps it. */
     arp_flush();
     for (i = 0; i < ARP_CACHE_SIZE; i++) {
         feed(ARP_OP_REPLY, 0xC0A80010u + (uint32_t)i, (unsigned char)(0x10 + i), net_ip_addr);
     }
     CHECK(cached() == ARP_CACHE_SIZE, "the cache did not fill");
-    CHECK(holds(0xC0A80010u), "the first neighbour is missing before the ninth arrives");
+    CHECK(holds(0xC0A80010u), "the first neighbour is missing before the last arrives");
     /* That lookup was use: the second entry is now the oldest. */
     feed(ARP_OP_REPLY, 0xC0A80099u, 0x99, net_ip_addr);
     CHECK(cached() == ARP_CACHE_SIZE, "the cache grew past its size");
-    CHECK(holds(0xC0A80099u), "the ninth neighbour was dropped instead of cached");
+    CHECK(holds(0xC0A80099u), "the last neighbour was dropped instead of cached");
     CHECK(holds(0xC0A80010u), "the entry that was just used was the one replaced");
     CHECK(!holds(0xC0A80011u), "the entry gone longest without use is still there");
 
@@ -409,6 +422,25 @@ int main(void)
     CHECK(cached() == ARP_CACHE_SIZE, "a changed mapping added an entry");
     CHECK(arp_lookup(&the_iface, 0xC0A80099u, mac) && mac[5] == 0x77,
           "a changed mapping was not followed");
+
+    /* A permanent mapping: a packet does not change it, a full cache does not
+       replace it, a flush keeps it, and forgetting it by hand drops it. */
+    arp_flush();
+    {
+        static const uint8_t set[6] = {0x02, 0, 0, 0, 0, 0x5e};
+
+        CHECK(arp_set(&the_iface, 0xC0A8005Eu, set, 1) == 0, "a permanent mapping was refused");
+        feed(ARP_OP_REPLY, 0xC0A8005Eu, 0x66, net_ip_addr);
+        CHECK(arp_lookup(&the_iface, 0xC0A8005Eu, mac) && mac[5] == 0x5e,
+              "a packet changed a permanent mapping");
+        for (i = 0; i < ARP_CACHE_SIZE + 2; i++) {
+            feed(ARP_OP_REPLY, 0xC0A80060u + (uint32_t)i, (unsigned char)(0x60 + i), net_ip_addr);
+        }
+        arp_flush();
+        CHECK(holds(0xC0A8005Eu), "a full cache or a flush dropped a permanent mapping");
+        CHECK(arp_forget(&the_iface, 0xC0A8005Eu) == 0 && !holds(0xC0A8005Eu),
+              "a permanent mapping was not forgotten by hand");
+    }
 
     /* And the ordering survives the counter wrapping, which no run reaches. */
     arp_flush();

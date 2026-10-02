@@ -1988,6 +1988,7 @@ static int32_t synth_open(const struct vpath *vp, int flags)
     case VNODE_PTS_DIR:
     case VNODE_PROC_DIR:
     case VNODE_PROC_NET_DIR:
+    case VNODE_PROC_NET_STAT_DIR:
     case VNODE_PROC_SYSVIPC_DIR:
     case VNODE_PROC_SYS_DIR:
     case VNODE_PROC_PID:
@@ -4619,7 +4620,8 @@ static int synth_kind_is_dir(int kind)
     return kind == VNODE_DEV_DIR || kind == VNODE_PTS_DIR || kind == VNODE_PROC_DIR ||
            kind == VNODE_PROC_NET_DIR || kind == VNODE_PROC_PID || kind == VNODE_PROC_FD_DIR ||
            kind == VNODE_PROC_TASK_DIR || kind == VNODE_PROC_SYS_DIR || kind == VNODE_SYS_DIR ||
-           kind == VNODE_SYS_LINK || kind == VNODE_PROC_SYSVIPC_DIR;
+           kind == VNODE_SYS_LINK || kind == VNODE_PROC_SYSVIPC_DIR ||
+           kind == VNODE_PROC_NET_STAT_DIR;
 }
 
 /**
@@ -5408,11 +5410,13 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
         kst->st_ino = procfs_ino_cmdline();
         return 0;
     case VNODE_PROC_NET_DIR:
+    case VNODE_PROC_NET_STAT_DIR:
     case VNODE_PROC_SYSVIPC_DIR:
         kst->st_dev = PROCFS_FSID;
         kst->st_mode = S_IFDIR | 0555;
-        kst->st_ino =
-            vp->kind == VNODE_PROC_NET_DIR ? procfs_ino_netdir() : procfs_ino_sysvipcdir();
+        kst->st_ino = vp->kind == VNODE_PROC_NET_DIR        ? procfs_ino_netdir()
+                      : vp->kind == VNODE_PROC_NET_STAT_DIR ? procfs_ino_netstatdir()
+                                                            : procfs_ino_sysvipcdir();
         return 0;
     case VNODE_PROC_NET_DEV:
         /* /proc/net/dev: what the interface has carried, anyone's to
@@ -10845,6 +10849,54 @@ static int synth_sys_dirent(int node, int key, int n, char *name, uint64_t *ino,
     return 1;
 }
 
+/**
+ * Entry `n` of /proc/net, or with `stat` of /proc/net/stat: the files of
+ * /proc/net, dev, route, arp and tcp, then the ones known by their origin,
+ * from SYNTH_PROC_NETUDP, then the directory `stat`; and its two files.
+ */
+static int synth_net_dirent(int stat, int n, char *name, uint64_t *ino, uint8_t *dtype)
+{
+    /* No `tcp6`: there is no IPv6 here, and a file that existed and was
+     * empty would tell netstat the family is present with nothing on it. */
+    static const char *const netfiles[] = {"dev", "route", "arp", "tcp"};
+    int count = (int)(sizeof(netfiles) / sizeof(netfiles[0]));
+    const char *entry;
+
+    if (stat) {
+        if (n > 1) {
+            return 0;
+        }
+        k_strncpy(name, n == 0 ? "rt_cache" : "arp_cache", 31);
+        *dtype = DT_REG;
+        *ino = procfs_ino_net(n == 0 ? SYNTH_PROC_NETSTAT_RT : SYNTH_PROC_NETSTAT_ARP);
+        return 1;
+    }
+    entry = n < count ? netfiles[n] : synth_net_name(SYNTH_PROC_NETUDP + n - count);
+    if (!entry && n == count + SYNTH_PROC_NETSNMP - SYNTH_PROC_NETUDP + 1) {
+        k_strncpy(name, "stat", 31);
+        *dtype = DT_DIR;
+        *ino = procfs_ino_netstatdir();
+        return 1;
+    }
+    if (!entry) {
+        return 0;
+    }
+    k_strncpy(name, entry, 31);
+    *dtype = DT_REG;
+    if (n == 0) {
+        *ino = procfs_ino_netdev();
+    } else if (n == 1) {
+        *ino = procfs_ino_netroute();
+    } else if (n == 2) {
+        *ino = procfs_ino_netarp();
+    } else if (n == 3) {
+        *ino = procfs_ino_nettcp();
+    } else {
+        *ino = procfs_ino_net(SYNTH_PROC_NETUDP + n - count);
+    }
+    return 1;
+}
+
 /** Entry `n` of /proc/sysvipc: its three files. */
 static int synth_sysvipc_dirent(int n, char *name, uint64_t *ino, uint8_t *dtype)
 {
@@ -10992,36 +11044,8 @@ static int synth_dirent_at(const struct synth_dir *sd, int n, char *name, uint64
     if (kind == VNODE_PROC_SYSVIPC_DIR) {
         return synth_sysvipc_dirent(n, name, ino, dtype);
     }
-    /* The files of /proc/net: dev, route, arp and tcp, then the ones known by
-     * their origin, from SYNTH_PROC_NETUDP. */
-    if (kind == VNODE_PROC_NET_DIR) {
-        /* No `tcp6`: there is no IPv6 here, and a file that existed and was
-         * empty would tell netstat the family is present with nothing on it. */
-        static const char *const netfiles[] = {"dev", "route", "arp", "tcp"};
-        int count = (int)(sizeof(netfiles) / sizeof(netfiles[0]));
-        const char *entry = n < count ? netfiles[n] : synth_net_name(SYNTH_PROC_NETUDP + n - count);
-        int i;
-
-        if (!entry) {
-            return 0;
-        }
-        for (i = 0; entry[i] != '\0'; i++) {
-            name[i] = entry[i];
-        }
-        name[i] = '\0';
-        *dtype = DT_REG;
-        if (n == 0) {
-            *ino = procfs_ino_netdev();
-        } else if (n == 1) {
-            *ino = procfs_ino_netroute();
-        } else if (n == 2) {
-            *ino = procfs_ino_netarp();
-        } else if (n == 3) {
-            *ino = procfs_ino_nettcp();
-        } else {
-            *ino = procfs_ino_net(SYNTH_PROC_NETUDP + n - count);
-        }
-        return 1;
+    if (kind == VNODE_PROC_NET_DIR || kind == VNODE_PROC_NET_STAT_DIR) {
+        return synth_net_dirent(kind == VNODE_PROC_NET_STAT_DIR, n, name, ino, dtype);
     }
     if (kind == VNODE_PROC_DIR) {
         static const struct {

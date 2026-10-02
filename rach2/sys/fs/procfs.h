@@ -113,6 +113,8 @@ uint32_t procfs_ino_nettcp(void);
 /** The inode of the /proc/net file `origin`, SYNTH_PROC_NETUDP to
  * SYNTH_PROC_NETSNMP. */
 uint32_t procfs_ino_net(int origin);
+/** The inode of /proc/net/stat. */
+uint32_t procfs_ino_netstatdir(void);
 /** The inodes of /proc/sysvipc and of its file of origin `origin`. */
 uint32_t procfs_ino_sysvipcdir(void);
 uint32_t procfs_ino_sysvipc(int origin);

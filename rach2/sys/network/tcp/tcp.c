@@ -432,13 +432,14 @@ static uint8_t tcp_sack_option(const struct tcb *tcb, uint8_t *opt)
 }
 
 /**
- * Send the segment of `seg_len` bytes in `tcp_tx_buf` to `remote_ip`,
+ * Send the segment of `seg_len` bytes in `tcp_tx_buf` from `local_ip` to
+ * `remote_ip`,
  * counting it in `net_mib` when IP takes it, and a reset among the resets.
  * The return value is `ip_tx`'s.
  */
-static int tcp_ip_tx(uint32_t remote_ip, uint16_t seg_len)
+static int tcp_ip_tx(uint32_t local_ip, uint32_t remote_ip, uint16_t seg_len)
 {
-    int rc = ip_tx(remote_ip, IP_PROTO_TCP, tcp_tx_buf, seg_len, IP_TTL_DEFAULT);
+    int rc = ip_tx_from(local_ip, remote_ip, IP_PROTO_TCP, tcp_tx_buf, seg_len, IP_TTL_DEFAULT);
 
     if (rc == 0) {
         net_mib.tcp_out_segs++;
@@ -513,7 +514,7 @@ static int tcp_emit_flags(struct tcb *tcb, uint8_t flags, uint32_t seq)
 
     seg_len = hdr_len;
     write16be(tcp_tx_buf + 16, tcp_checksum(tcb->local_ip, tcb->remote_ip, tcp_tx_buf, seg_len));
-    rc = tcp_ip_tx(tcb->remote_ip, seg_len);
+    rc = tcp_ip_tx(tcb->local_ip, tcb->remote_ip, seg_len);
     if (rc == 0 && (flags & TCP_ACK)) {
         tcb->ack_owed = 0; /* this segment carried the acknowledgement owed */
     }
@@ -665,7 +666,7 @@ static int tcp_output(struct tcb *tcb)
         seg_len = (uint16_t)(TCP_HDR_SIZE + send_len);
         write16be(tcp_tx_buf + 16,
                   tcp_checksum(tcb->local_ip, tcb->remote_ip, tcp_tx_buf, seg_len));
-        if (tcp_ip_tx(tcb->remote_ip, seg_len) == -ENOBUFS) {
+        if (tcp_ip_tx(tcb->local_ip, tcb->remote_ip, seg_len) == -ENOBUFS) {
             tcb->tx_refused++;
             if (tcb->refused_since == 0) {
                 tcb->refused_since = kernel_ticks + 1;
@@ -734,7 +735,7 @@ static int tcp_resend(struct tcb *tcb, uint32_t seq, uint32_t most)
 
     seg_len = (uint16_t)(TCP_HDR_SIZE + send_len);
     write16be(tcp_tx_buf + 16, tcp_checksum(tcb->local_ip, tcb->remote_ip, tcp_tx_buf, seg_len));
-    if (tcp_ip_tx(tcb->remote_ip, seg_len) == -ENOBUFS) {
+    if (tcp_ip_tx(tcb->local_ip, tcb->remote_ip, seg_len) == -ENOBUFS) {
         tcb->tx_refused++;
         if (tcb->refused_since == 0) {
             tcb->refused_since = kernel_ticks + 1;
@@ -1059,7 +1060,7 @@ static void tcp_send_rst_unmatched(uint32_t local_ip, uint32_t remote_ip, uint16
     write16be(tcp_tx_buf + 16, 0);
     write16be(tcp_tx_buf + 18, 0);
     write16be(tcp_tx_buf + 16, tcp_checksum(local_ip, remote_ip, tcp_tx_buf, TCP_HDR_SIZE));
-    tcp_ip_tx(remote_ip, TCP_HDR_SIZE);
+    tcp_ip_tx(local_ip, remote_ip, TCP_HDR_SIZE);
 }
 
 /**
@@ -1126,7 +1127,7 @@ static void tcp_send_zwp(struct tcb *tcb)
     seg_len = TCP_HDR_SIZE + 1;
 
     write16be(tcp_tx_buf + 16, tcp_checksum(tcb->local_ip, tcb->remote_ip, tcp_tx_buf, seg_len));
-    tcp_ip_tx(tcb->remote_ip, seg_len);
+    tcp_ip_tx(tcb->local_ip, tcb->remote_ip, seg_len);
 }
 
 /**
@@ -1550,7 +1551,7 @@ int tcp_connect(struct socket *sock, uint32_t dst_ip, uint16_t dst_port)
         uint32_t via;
         struct netdev *out = netdev_route(dst_ip, &via);
 
-        tcb->local_ip = out ? out->ip : net_ip_addr;
+        tcb->local_ip = out ? netdev_source(out, via) : net_ip_addr;
     }
     tcb->local_port = local;
     tcb->remote_ip = dst_ip;

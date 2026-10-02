@@ -64,6 +64,7 @@
 #define RTA_OIF        4
 #define RTA_GATEWAY    5
 #define RTA_PREFSRC    7
+#define RTA_PRIORITY   6
 #define RTA_TABLE      15
 #define NDA_DST        1
 #define NDA_LLADDR     2
@@ -75,6 +76,7 @@
 #define IF_OPER_UP        6
 #define IF_OPER_DOWN      2
 #define IFA_F_PERMANENT   0x80u
+#define IFA_F_SECONDARY   0x01u
 #define RT_SCOPE_UNIVERSE 0
 #define RT_SCOPE_LINK     253
 #define RT_TABLE_MAIN     254
@@ -92,6 +94,8 @@
 #define RTPROT_BOOT       3
 #define RTN_UNICAST       1
 #define NUD_REACHABLE     0x02u
+#define NUD_PERMANENT     0x80u
+#define RTPROT_STATIC     4
 
 /* Linux's uapi sock_diag.h, inet_diag.h and unix_diag.h: the request type,
  * the sizes of the requests and the messages, the attributes, and the
@@ -424,7 +428,8 @@ static void link_msg(struct nl_build *b, const struct netdev *nd, uint16_t flags
 }
 
 /* A neighbour, the ARP cache's mapping `row`, on the interface of index
- * `index`. The cache keeps no age, so every mapping is reachable. */
+ * `index`. The cache keeps no age, so every mapping is reachable, but for
+ * one set by hand as permanent. */
 static void neigh_msg(struct nl_build *b, const struct arp_row *row, int index)
 {
     uint8_t msg[NL_MSG_MAX];
@@ -432,7 +437,7 @@ static void neigh_msg(struct nl_build *b, const struct arp_row *row, int index)
 
     ndm[0] = AF_INET;
     put32(ndm + 4, (uint32_t)index);
-    put16(ndm + 8, NUD_REACHABLE);
+    put16(ndm + 8, row->permanent ? NUD_PERMANENT : NUD_REACHABLE);
     ndm[11] = RTN_UNICAST;
     msg_attr_ip(msg, NDA_DST, row->ip);
     msg_attr(msg, NDA_LLADDR, row->mac, 6);
@@ -539,44 +544,67 @@ static void neigh_dump(struct nl_build *b, const uint8_t *req, uint32_t body)
     }
 }
 
-static void addr_msg(struct nl_build *b, const struct netdev *nd)
+/* Address `ip`/`mask` of `nd`, its first or, with `secondary`, another. */
+static void addr_msg(struct nl_build *b, const struct netdev *nd, uint32_t ip, uint32_t mask,
+                     int secondary)
 {
     uint8_t msg[NL_MSG_MAX];
     uint8_t *ifa = msg_start(b, msg, RTM_NEWADDR, NLM_F_MULTI, 8);
 
     ifa[0] = AF_INET;
-    ifa[1] = (uint8_t)prefix_of(nd->mask);
-    ifa[2] = IFA_F_PERMANENT;
+    ifa[1] = (uint8_t)prefix_of(mask);
+    ifa[2] = IFA_F_PERMANENT | (secondary ? IFA_F_SECONDARY : 0u);
     ifa[3] = RT_SCOPE_UNIVERSE;
     put32(ifa + 4, (uint32_t)nd->index);
-    msg_attr_ip(msg, IFA_ADDRESS, nd->ip);
-    msg_attr_ip(msg, IFA_LOCAL, nd->ip);
-    msg_attr_ip(msg, IFA_BROADCAST, nd->ip | ~nd->mask);
+    msg_attr_ip(msg, IFA_ADDRESS, ip);
+    msg_attr_ip(msg, IFA_LOCAL, ip);
+    msg_attr_ip(msg, IFA_BROADCAST, ip | ~mask);
     msg_attr(msg, IFA_LABEL, nd->name, (uint16_t)(k_strlen(nd->name) + 1));
     nl_append(b, msg);
 }
 
-/* A route of `nd`: the default through its gateway when `gateway`, else its
- * own subnet, reached on the link. */
-static void route_msg(struct nl_build *b, const struct netdev *nd, int gateway)
+/* Every address of `nd`, its first then the others. */
+static void addr_msgs(struct nl_build *b, const struct netdev *nd)
+{
+    int i;
+
+    if (nd->ip) {
+        addr_msg(b, nd, nd->ip, nd->mask, 0);
+    }
+    for (i = 0; i < nd->naddr2; i++) {
+        addr_msg(b, nd, nd->ip2[i], nd->mask2[i], 1);
+    }
+}
+
+/* The route `r` of the table: a subnet an address implies, reached on the
+ * link, an interface's gateway, or a route a program added. */
+static void route_msg(struct nl_build *b, const struct netdev_rt *r)
 {
     uint8_t msg[NL_MSG_MAX];
     uint8_t *rtm = msg_start(b, msg, RTM_NEWROUTE, NLM_F_MULTI, 12);
 
     rtm[0] = AF_INET;
-    rtm[1] = gateway ? 0 : (uint8_t)prefix_of(nd->mask);
+    rtm[1] = (uint8_t)prefix_of(r->mask);
     rtm[4] = RT_TABLE_MAIN;
-    rtm[5] = gateway ? RTPROT_BOOT : RTPROT_KERNEL;
-    rtm[6] = gateway ? RT_SCOPE_UNIVERSE : RT_SCOPE_LINK;
+    rtm[5] = r->kind == NETDEV_RT_LINK      ? RTPROT_KERNEL
+             : r->kind == NETDEV_RT_DEFAULT ? RTPROT_BOOT
+                                            : RTPROT_STATIC;
+    rtm[6] = r->gw ? RT_SCOPE_UNIVERSE : RT_SCOPE_LINK;
     rtm[7] = RTN_UNICAST;
     msg_attr32(msg, RTA_TABLE, RT_TABLE_MAIN);
-    if (gateway) {
-        msg_attr_ip(msg, RTA_GATEWAY, nd->gateway);
-    } else {
-        msg_attr_ip(msg, RTA_DST, nd->ip & nd->mask);
-        msg_attr_ip(msg, RTA_PREFSRC, nd->ip);
+    if (r->mask != 0) {
+        msg_attr_ip(msg, RTA_DST, r->dst);
     }
-    msg_attr32(msg, RTA_OIF, (uint32_t)nd->index);
+    if (r->gw) {
+        msg_attr_ip(msg, RTA_GATEWAY, r->gw);
+    }
+    if (r->kind == NETDEV_RT_LINK) {
+        msg_attr_ip(msg, RTA_PREFSRC, r->src);
+    }
+    if (r->metric != 0) {
+        msg_attr32(msg, RTA_PRIORITY, r->metric);
+    }
+    msg_attr32(msg, RTA_OIF, (uint32_t)r->ifindex);
     nl_append(b, msg);
 }
 
@@ -618,7 +646,7 @@ static int route_get_msg(struct nl_build *b, uint32_t dst)
     for (i = 0; i < netdev_count(); i++) {
         const struct netdev *own = netdev_at(i);
 
-        if (own && own->ip && own->ip == dst) {
+        if (own && netdev_holds(own, dst)) {
             nd = own;
             local = 1;
         }
@@ -636,7 +664,7 @@ static int route_get_msg(struct nl_build *b, uint32_t dst)
     msg_attr32(msg, RTA_TABLE, local ? RT_TABLE_LOCAL : RT_TABLE_MAIN);
     msg_attr_ip(msg, RTA_DST, dst);
     msg_attr32(msg, RTA_OIF, (uint32_t)nd->index);
-    msg_attr_ip(msg, RTA_PREFSRC, nd->ip);
+    msg_attr_ip(msg, RTA_PREFSRC, local ? dst : netdev_source(nd, via));
     if (!local && via != dst) {
         msg_attr_ip(msg, RTA_GATEWAY, via);
     }
@@ -696,8 +724,7 @@ static void qdisc_dump(struct nl_build *b)
  * the operations the interface ioctls use (netif.c, netconf.c): each answers
  * 0 or a negative errno, which `answer` acknowledges. What an interface here
  * cannot hold is refused with EOPNOTSUPP rather than accepted and dropped:
- * a second address, an MTU other than 1500, a rename, a route other than
- * the default and the one its subnet implies, and a neighbour added by hand.
+ * an MTU other than 1500 and a rename.
  */
 
 /* The payload of attribute `type` in the request `req` of `body` bytes past
@@ -776,7 +803,8 @@ static int32_t link_change(const uint8_t *req, uint32_t body)
     return 0;
 }
 
-/* RTM_NEWADDR and RTM_DELADDR: an interface's one address and its prefix. */
+/* RTM_NEWADDR and RTM_DELADDR: an address of an interface and its prefix,
+ * its first or another. */
 static int32_t addr_change(const uint8_t *req, uint16_t type, uint16_t flags, uint32_t body)
 {
     struct netdev *nd = body >= 8 ? dev_of_index(get32(req + NLMSG_HDRLEN + 4)) : 0;
@@ -791,21 +819,15 @@ static int32_t addr_change(const uint8_t *req, uint16_t type, uint16_t flags, ui
         return -ENODEV;
     }
     if (type == RTM_DELADDR) {
-        if (nd->ip == 0 || (ip != 0 && ip != nd->ip)) {
-            return -EADDRNOTAVAIL;
-        }
-        return netconf_set_address(nd, 0, 0);
+        return netconf_del_address(nd, ip);
     }
     if (ip == 0) {
         return -EINVAL;
     }
-    if (nd->ip == ip && nd->mask == mask) {
+    if (netdev_holds(nd, ip)) {
         return (flags & NLM_F_EXCL) ? -EEXIST : 0;
     }
-    if (nd->ip != 0) {
-        return -EOPNOTSUPP;
-    }
-    return netconf_set_address(nd, ip, mask);
+    return netconf_add_address(nd, ip, mask);
 }
 
 /* The interface a route request is for: the one RTA_OIF names, or, with
@@ -822,7 +844,7 @@ static struct netdev *route_dev(const uint8_t *req, uint32_t body, uint32_t gw)
     for (i = 0; i < netdev_count(); i++) {
         struct netdev *at = netdev_at(i);
 
-        if (at && at->mask != 0 && (gw & at->mask) == (at->ip & at->mask)) {
+        if (at && netdev_on_link(at, gw)) {
             return at;
         }
     }
@@ -847,38 +869,79 @@ static int32_t default_route_change(struct netdev *nd, uint16_t type, uint16_t f
     return netconf_set_gateway(nd, gw);
 }
 
-/* RTM_NEWROUTE and RTM_DELROUTE: the default route, and the route a subnet
- * implies, which is there while its address is. */
+/* A route as a request names it. */
+struct route_req {
+    uint32_t dst, mask, gw, metric;
+};
+
+/* A route `r` a program adds to the table by `nd`, or removes from it. */
+static int32_t added_route_change(struct netdev *nd, uint16_t type, uint16_t flags,
+                                  const struct route_req *r)
+{
+    uint32_t net = net_lock();
+    int32_t rc = type == RTM_NEWROUTE ? netdev_route_add(nd, r->dst, r->mask, r->gw, r->metric,
+                                                         (flags & NLM_F_REPLACE) != 0)
+                                      : netdev_route_del(nd, r->dst, r->mask, r->gw);
+
+    net_unlock(net);
+    return rc;
+}
+
+/* RTM_NEWROUTE and RTM_DELROUTE: the default route of an interface, which is
+ * its gateway, the route a subnet implies, which is there while its address
+ * is, and any other route, which goes in the table. */
 static int32_t route_change(const uint8_t *req, uint16_t type, uint16_t flags, uint32_t body)
 {
-    uint32_t gw = req_ip(req, body, 12, RTA_GATEWAY);
-    struct netdev *nd = body >= 12 ? route_dev(req, body, gw) : 0;
+    struct route_req r;
+    struct netdev *nd;
     uint32_t dst_len = body >= 12 ? req[NLMSG_HDRLEN + 1] : 0;
+    uint16_t len;
+    const uint8_t *prio = req_attr(req, body, 12, RTA_PRIORITY, &len);
 
+    r.gw = req_ip(req, body, 12, RTA_GATEWAY);
+    r.dst = req_ip(req, body, 12, RTA_DST);
+    r.metric = prio && len == 4 ? get32(prio) : 0;
+    r.mask = dst_len == 0 || dst_len > 32 ? 0 : 0xFFFFFFFFu << (32 - dst_len);
+    nd = body >= 12 ? route_dev(req, body, r.gw) : 0;
     if (!nd) {
         return -ENODEV;
     }
-    if (dst_len == 0) {
-        return default_route_change(nd, type, flags, gw);
+    if (dst_len > 32) {
+        return -EINVAL;
     }
-    if (type == RTM_NEWROUTE && gw == 0 && nd->mask != 0 && dst_len == prefix_of(nd->mask) &&
-        req_ip(req, body, 12, RTA_DST) == (nd->ip & nd->mask)) {
+    if (dst_len == 0 && r.metric == 0 &&
+        (type == RTM_NEWROUTE ? nd->gateway == 0 || (flags & NLM_F_REPLACE) || nd->gateway == r.gw
+                              : nd->gateway != 0)) {
+        return default_route_change(nd, type, flags, r.gw);
+    }
+    if (type == RTM_NEWROUTE && r.gw == 0 && nd->mask != 0 && dst_len == prefix_of(nd->mask) &&
+        r.dst == (nd->ip & nd->mask)) {
         return (flags & NLM_F_EXCL) ? -EEXIST : 0;
     }
-    return -EOPNOTSUPP;
+    return added_route_change(nd, type, flags, &r);
 }
 
-/* RTM_DELNEIGH: forget a mapping, which `ip neigh flush` asks for each. */
-static int32_t neigh_change(const uint8_t *req, uint32_t body)
+/* RTM_DELNEIGH: forget a mapping, which `ip neigh flush` asks for each;
+ * RTM_NEWNEIGH: store one by hand, permanent when its state says so, which
+ * `ip neigh add ... nud permanent` asks. */
+static int32_t neigh_change(const uint8_t *req, uint16_t type, uint32_t body)
 {
     uint32_t ip = req_ip(req, body, 12, NDA_DST);
     uint32_t index = body >= 12 ? get32(req + NLMSG_HDRLEN + 4) : 0;
     struct netdev *nd = index != 0 ? dev_of_index(index) : 0;
+    uint16_t len;
+    const uint8_t *mac = req_attr(req, body, 12, NDA_LLADDR, &len);
 
     if (ip == 0 || (index != 0 && !nd)) {
         return -EINVAL;
     }
-    return arp_forget(nd, ip);
+    if (type == RTM_DELNEIGH) {
+        return arp_forget(nd, ip);
+    }
+    if (!nd || !mac || len != 6) {
+        return -EINVAL;
+    }
+    return arp_set(nd, ip, mac, (get16(req + NLMSG_HDRLEN + 8) & NUD_PERMANENT) != 0);
 }
 
 /* Whether `type` asks for a change rather than a reading. */
@@ -890,7 +953,7 @@ static int is_change(uint16_t type)
 }
 
 /* The answer to the change `req` asks for: EPERM for a caller without
- * privilege, else its handler's; RTM_NEWNEIGH is refused. */
+ * privilege, else its handler's. */
 static int32_t change(const uint8_t *req, uint16_t type, uint16_t flags, uint32_t body)
 {
     if (!current_proc || !proc_privileged(current_proc)) {
@@ -905,8 +968,8 @@ static int32_t change(const uint8_t *req, uint16_t type, uint16_t flags, uint32_
     if (type == RTM_NEWROUTE || type == RTM_DELROUTE) {
         return route_change(req, type, flags, body);
     }
-    if (type == RTM_DELNEIGH) {
-        return neigh_change(req, body);
+    if (type == RTM_NEWNEIGH || type == RTM_DELNEIGH) {
+        return neigh_change(req, type, body);
     }
     return -EOPNOTSUPP;
 }
@@ -989,6 +1052,15 @@ static void answer(struct nl_build *b, const uint8_t *req, uint16_t type, uint16
         end_msg(b, 0, 0);
         return;
     }
+    if (type == RTM_GETROUTE) {
+        struct netdev_rt r;
+
+        for (i = 0; netdev_route_at(i, &r); i++) {
+            route_msg(b, &r);
+        }
+        end_msg(b, 0, 0);
+        return;
+    }
     for (i = 0; i < n; i++) {
         const struct netdev *nd = netdev_at(i);
 
@@ -997,13 +1069,8 @@ static void answer(struct nl_build *b, const uint8_t *req, uint16_t type, uint16
         }
         if (type == RTM_GETLINK) {
             link_msg(b, nd, NLM_F_MULTI);
-        } else if (type == RTM_GETADDR && nd->ip) {
-            addr_msg(b, nd);
-        } else if (type == RTM_GETROUTE && nd->ip) {
-            route_msg(b, nd, 0);
-            if (nd->gateway) {
-                route_msg(b, nd, 1);
-            }
+        } else {
+            addr_msgs(b, nd);
         }
     }
     end_msg(b, 0, 0);

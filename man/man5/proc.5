@@ -318,7 +318,9 @@ Hardware type is
 .Ql 0x1 ,
 flags are
 .Ql 0x2 ,
-and the mask is
+or
+.Ql 0x6
+for a mapping set by hand as permanent, and the mask is
 .Ql * .
 The device is the interface on which the mapping was learned.
 .It Pa /proc/net/dev
@@ -336,17 +338,53 @@ The frame, multicast, transmit error, FIFO, collision, and carrier
 counts come from the card when its driver supplies them; otherwise
 they are zero.
 .It Pa /proc/net/route
-A header followed by each configured interface's subnet route and,
-when configured, default route.
+A header followed by each interface's default route, when it has one,
+and the subnets of its addresses, then the routes programs added.
 The eleven columns are
 .Ql Iface Destination Gateway Flags RefCnt Use Metric Mask MTU Window IRTT .
 Addresses and masks are eight hexadecimal digits in reversed byte order.
 Flags are hexadecimal:
 .Ql 0001
-for the subnet route and
+for a route on the link and
 .Ql 0003
-for the default gateway.
-Reference count, use, metric, MTU, window, and IRTT are zero.
+for one through a gateway.
+The metric is the route's; reference count, use, MTU, window, and IRTT are
+zero.
+.It Pa /proc/net/stat/rt_cache , /proc/net/stat/arp_cache
+Linux's heading and one line of hexadecimal counters, which
+.Ic lnstat
+reads.
+Of the route counters,
+.Ql entries
+is the routes of the table,
+.Ql in_slow_tot
+the datagrams received,
+.Ql in_no_route
+those for another host and
+.Ql out_slow_tot
+the lookups of the output path; the others are zero.
+Of the neighbour counters,
+.Ql entries
+is the mappings held,
+.Ql allocs
+and
+.Ql destroys
+those stored and dropped,
+.Ql lookups
+and
+.Ql hits
+the lookups and the ones that found a mapping,
+.Ql res_failed
+the resolutions that got no answer,
+.Ql unresolved_discards
+the datagrams dropped waiting for one, and
+.Ql table_fulls
+the mappings refused for a cache full of permanent ones.
+There is no
+.Pa nf_conntrack ,
+since the kernel tracks no connections, so
+.Ic ctstat
+finds nothing to read.
 .It Pa /proc/net/tcp
 A header followed by rows for TCP connections, including listeners
 and connections still closing.

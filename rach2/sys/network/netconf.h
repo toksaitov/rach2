@@ -156,6 +156,22 @@ int netconf_set_netmask(struct netdev *nd, uint32_t mask);
  */
 int netconf_set_gateway(struct netdev *nd, uint32_t gw);
 
+/**
+ * Give `nd` the address `ip`/`mask` beside those it holds, as `ip addr add`
+ * does; the first address of an interface with none. EINVAL for an address
+ * no interface may hold, EEXIST for one it holds, ENOSPC past NETDEV_ADDRS
+ * more.
+ */
+int netconf_add_address(struct netdev *nd, uint32_t ip, uint32_t mask);
+
+/**
+ * Take the address `ip` from `nd`, its first when `ip` is 0 or the first,
+ * whose place the next takes, as Linux's promote_secondaries has it; the
+ * connections of an address that goes are aborted and the added routes its
+ * subnet carried dropped. EADDRNOTAVAIL for an address it does not hold.
+ */
+int netconf_del_address(struct netdev *nd, uint32_t ip);
+
 /** Format `ip` as `A.B.C.D` into `out`, which needs 16 bytes. */
 void netconf_format(uint32_t ip, char *out);
 

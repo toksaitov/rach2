@@ -128,6 +128,24 @@ int netdev_owns(uint32_t ip)
     return ip != 0 && (ip == the_iface.ip || ip == other_iface.ip);
 }
 
+int netdev_holds(const struct netdev *nd, uint32_t ip)
+{
+    int i;
+
+    for (i = 0; ip != 0 && i < nd->naddr2; i++) {
+        if (nd->ip2[i] == ip) {
+            return 1;
+        }
+    }
+    return ip != 0 && ip == nd->ip;
+}
+
+/* The added routes, which these cases do not make. */
+void netdev_route_prune(struct netdev *nd)
+{
+    (void)nd;
+}
+
 static int is_bcast_of(const struct netdev *nd, uint32_t ip)
 {
     return nd->ip != 0 && nd->mask != 0 && ip == (nd->ip | ~nd->mask);

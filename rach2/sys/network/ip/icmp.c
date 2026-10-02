@@ -209,7 +209,7 @@ void icmp_unreachable(const uint8_t *dgram, uint16_t len, uint8_t code)
  * @param src_ip source address of the datagram, host byte order.
  * @param len ICMP length; datagrams shorter than the 8-byte header are dropped.
  */
-void icmp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len)
+void icmp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len)
 {
     net_mib.icmp_in_msgs++;
     if (len < 8) {
@@ -230,7 +230,7 @@ void icmp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len)
         icmp_reply_buf[1] = 0;
         write16be(icmp_reply_buf + 2, 0x0000);
         write16be(icmp_reply_buf + 2, ip_checksum(icmp_reply_buf, len));
-        if (ip_tx(src_ip, IP_PROTO_ICMP, icmp_reply_buf, len, IP_TTL_DEFAULT) == 0) {
+        if (ip_tx_from(dst_ip, src_ip, IP_PROTO_ICMP, icmp_reply_buf, len, IP_TTL_DEFAULT) == 0) {
             icmp_count_out(ICMP_ECHO_REPLY);
         }
     } else if (data[0] == ICMP_UNREACHABLE && data[1] == ICMP_FRAG_NEEDED && len >= 36) {

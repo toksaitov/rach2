@@ -41,6 +41,12 @@ void ip_rx(const uint8_t *data, uint16_t len, int from_loopback);
  */
 int ip_tx(uint32_t dst_ip, uint8_t proto, const uint8_t *payload, uint16_t plen, uint8_t ttl);
 
+/** The same from the source `src`, one of this machine's addresses, which a
+ * connection keeps; with 0, or an address the machine no longer holds, the
+ * one `ip_tx` chooses. */
+int ip_tx_from(uint32_t src, uint32_t dst_ip, uint8_t proto, const uint8_t *payload, uint16_t plen,
+               uint8_t ttl);
+
 /**
  * Send the datagrams held for the next hop `hop` on `nd`, whose hardware
  * address `mac` ARP has just learned. Call with interrupts off.

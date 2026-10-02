@@ -16,11 +16,12 @@
 #define ARP_OP_REQUEST 1
 #define ARP_OP_REPLY   2
 
-/* A cache: eight IP-to-MAC mappings, which is small for a real network, so
- * what fills them matters: addresses no neighbour can have are refused, and
- * a full cache replaces the mapping gone longest without use. Nothing is
- * refused for its being full. */
-#define ARP_CACHE_SIZE 8
+/* A cache: sixteen IP-to-MAC mappings, which is small for a real network,
+ * so what fills them matters: addresses no neighbour can have are refused,
+ * and a full cache replaces the learned mapping gone longest without use. A
+ * mapping set by hand as permanent is never replaced, and only a cache full
+ * of those refuses a new one. */
+#define ARP_CACHE_SIZE 16
 
 /* The interface a mapping was learned on, or a request goes out by. */
 struct netdev;
@@ -72,6 +73,8 @@ struct arp_row {
     /* The interface the mapping was learned on, which is the column `arp`
      * prints last. */
     const char *iface;
+    /* Whether it was set by hand as permanent. */
+    int permanent;
 };
 
 /**
@@ -82,5 +85,19 @@ struct arp_row {
  * interrupt is changing. Taken under the network lock for the same reason.
  */
 int arp_snapshot(struct arp_row *out, int max);
+
+/**
+ * Store the mapping of `ip` to `mac` on `nd` by hand, for `arp -s` and `ip
+ * neigh add`: permanent, never replaced, changed by a packet or flushed, or
+ * else as a learned one. EINVAL for an address no neighbour may have,
+ * ENOSPC for a cache full of permanent mappings.
+ */
+int arp_set(struct netdev *nd, uint32_t ip, const uint8_t *mac, int permanent);
+
+/* What the cache has done, for /proc/net/stat/arp_cache. */
+struct arp_stats {
+    uint32_t allocs, destroys, lookups, hits, res_failed, unres_discards, table_fulls;
+};
+extern struct arp_stats arp_stats;
 
 #endif /* _ARP_H_ */

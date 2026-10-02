@@ -26,8 +26,14 @@
  * EEXIST to add again, is taken away, which SIOCGIFADDR sees, and is given
  * back; its default route through SLIRP's gateway is set, EEXIST to set
  * again, removed, ESRCH to remove again, and set as it was; the link is set
- * up; and an MTU of 9000 and a route to another network are EOPNOTSUPP and
- * forgetting a neighbour the cache does not have is ENOENT.
+ * up; an MTU of 9000 is EOPNOTSUPP and forgetting a neighbour the cache does
+ * not have is ENOENT. A second address is added, a local route to `ip route
+ * get`, and taken away; a route to another network through the gateway is
+ * added, EEXIST to add again, in /proc/net/route, and removed, and one
+ * through a gateway no subnet has is ENETUNREACH; a route on the link to
+ * that network is the one `ip route get` takes, before the default route
+ * through the gateway; and a neighbour set by hand as permanent is in
+ * /proc/net/arp with the flags 0x6 until it is forgotten.
  *
  * Prints "NETLINKMUSL OK" on success and "NETLINKMUSL FAIL (detail)"
  * otherwise.
@@ -64,6 +70,7 @@
 #define RTM_NEWROUTE           24
 #define RTM_DELROUTE           25
 #define RTM_GETROUTE           26
+#define RTM_NEWNEIGH           28
 #define RTM_DELNEIGH           29
 #define RTM_NEWRULE            32
 #define RTM_GETRULE            34
@@ -74,6 +81,8 @@
 #define RTA_GATEWAY            5
 #define IFLA_MTU               4
 #define NDA_DST                1
+#define NDA_LLADDR             2
+#define NUD_PERMANENT          0x80
 #define RT_TABLE_MAIN          254
 #define RTN_UNICAST            1
 #define RTN_LOCAL              2
@@ -483,13 +492,7 @@ static int route_changes(int fd)
         ask(fd, RTM_NEWROUTE, NLM_F_CREATE | NLM_F_EXCL, 48, body, len) != 0) {
         return fail("RTM_DELROUTE of the default route, then again, and setting it back");
     }
-    body[1] = 16;
-    len = sizeof rtm;
-    attr32(body, &len, RTA_DST, &net);
-    attr32(body, &len, RTA_GATEWAY, &gw);
-    if (ask(fd, RTM_NEWROUTE, NLM_F_CREATE | NLM_F_EXCL, 49, body, len) != -EOPNOTSUPP) {
-        return fail("RTM_NEWROUTE of another network was not EOPNOTSUPP");
-    }
+    (void)net;
     memset(&ifi, 0, sizeof ifi);
     ifi.ifi_index = first_index;
     ifi.ifi_flags = IFF_UP;
@@ -515,10 +518,129 @@ static int route_changes(int fd)
     return 0;
 }
 
+static int route_get(int fd, unsigned int seq, struct in_addr dst, int *type, int *oif,
+                     unsigned int *gw);
+
+/** Whether the file `path` has the text `needle`. */
+static int file_has(const char *path, const char *needle)
+{
+    static char text[4096];
+    FILE *f = fopen(path, "r");
+    size_t n = f ? fread(text, 1, sizeof(text) - 1, f) : 0;
+
+    if (f) {
+        fclose(f);
+    }
+    text[n] = '\0';
+    return strstr(text, needle) != NULL;
+}
+
+/* A route to another network through SLIRP's gateway, added and removed;
+ * one through a gateway no subnet has refused. */
+static int table_routes(int fd)
+{
+    char body[64];
+    unsigned char rtm[12] = {AF_INET, 16, 0, 0, RT_TABLE_MAIN, 0, 0, RTN_UNICAST};
+    struct in_addr gw, net, far;
+    unsigned int oif = (unsigned int)first_index, got_gw;
+    int len = sizeof rtm, type = -1, got_oif = -1;
+
+    gw.s_addr = inet_addr("10.0.2.2");
+    net.s_addr = inet_addr("10.99.0.0");
+    far.s_addr = inet_addr("10.77.0.1");
+    memcpy(body, rtm, sizeof rtm);
+    attr32(body, &len, RTA_DST, &net);
+    attr32(body, &len, RTA_GATEWAY, &gw);
+    attr32(body, &len, RTA_OIF, &oif);
+    if (ask(fd, RTM_NEWROUTE, NLM_F_CREATE | NLM_F_EXCL, 60, body, len) != 0 ||
+        ask(fd, RTM_NEWROUTE, NLM_F_CREATE | NLM_F_EXCL, 61, body, len) != -EEXIST) {
+        return fail("RTM_NEWROUTE of another network through the gateway, then again");
+    }
+    if (!file_has("/proc/net/route", "\t0000630A\t0202000A\t0003\t0\t0\t0\t0000FFFF")) {
+        return fail("/proc/net/route did not list the route added");
+    }
+    if (ask(fd, RTM_DELROUTE, 0, 62, body, len) != 0 ||
+        ask(fd, RTM_DELROUTE, 0, 63, body, len) != -ESRCH) {
+        return fail("RTM_DELROUTE of the route added, then again");
+    }
+    len = sizeof rtm;
+    attr32(body, &len, RTA_DST, &net);
+    attr32(body, &len, RTA_GATEWAY, &far);
+    attr32(body, &len, RTA_OIF, &oif);
+    if (ask(fd, RTM_NEWROUTE, NLM_F_CREATE | NLM_F_EXCL, 64, body, len) != -ENETUNREACH) {
+        return fail("RTM_NEWROUTE through a gateway no subnet has was not ENETUNREACH");
+    }
+    len = sizeof rtm;
+    attr32(body, &len, RTA_DST, &net);
+    attr32(body, &len, RTA_OIF, &oif);
+    far.s_addr = inet_addr("10.99.1.1");
+    if (ask(fd, RTM_NEWROUTE, NLM_F_CREATE | NLM_F_EXCL, 72, body, len) != 0 ||
+        route_get(fd, 73, far, &type, &got_oif, &got_gw) != 0 || type != RTN_UNICAST ||
+        got_gw != 0 || ask(fd, RTM_DELROUTE, 0, 74, body, len) != 0) {
+        return fail("a route on the link to another network, which ip route get takes");
+    }
+    return 0;
+}
+
+/* A second address and a permanent neighbour, each made and taken away. */
+static int table_changes(int fd)
+{
+    char body[64];
+    struct ifaddrmsg ifa;
+    unsigned char ndm[12] = {AF_INET};
+    unsigned char mac[8] = {0x02, 0, 0, 0, 0, 0x99};
+    struct in_addr second, neigh;
+    int len, type = -1, oif = -1;
+    unsigned int gw;
+    unsigned short state = NUD_PERMANENT;
+
+    second.s_addr = inet_addr("10.0.2.77");
+    neigh.s_addr = inet_addr("10.0.2.99");
+    memset(&ifa, 0, sizeof ifa);
+    ifa.ifa_family = AF_INET;
+    ifa.ifa_prefixlen = 24;
+    ifa.ifa_index = (unsigned int)first_index;
+    memcpy(body, &ifa, sizeof ifa);
+    len = sizeof ifa;
+    attr32(body, &len, IFA_LOCAL, &second);
+    if (ask(fd, RTM_NEWADDR, NLM_F_CREATE | NLM_F_EXCL, 65, body, len) != 0 ||
+        route_get(fd, 66, second, &type, &oif, &gw) != 0 || type != RTN_LOCAL ||
+        ask(fd, RTM_DELADDR, 0, 67, body, len) != 0 ||
+        ask(fd, RTM_DELADDR, 0, 68, body, len) != -EADDRNOTAVAIL) {
+        return fail("a second address added, a local route, and taken away");
+    }
+    memcpy(ndm + 4, &first_index, 4);
+    memcpy(ndm + 8, &state, 2);
+    memcpy(body, ndm, sizeof ndm);
+    len = sizeof ndm;
+    attr32(body, &len, NDA_DST, &neigh);
+    {
+        struct rtattr a;
+
+        a.rta_len = 10;
+        a.rta_type = NDA_LLADDR;
+        memcpy(body + len, &a, sizeof a);
+        memcpy(body + len + 4, mac, 8);
+        len += 12;
+    }
+    if (ask(fd, RTM_NEWNEIGH, NLM_F_CREATE, 69, body, len) != 0 ||
+        !file_has("/proc/net/arp", "0x6         02:00:00:00:00:99")) {
+        return fail("a neighbour set by hand as permanent, in /proc/net/arp with 0x6");
+    }
+    len = sizeof ndm;
+    attr32(body, &len, NDA_DST, &neigh);
+    if (ask(fd, RTM_DELNEIGH, 0, 70, body, len) != 0 ||
+        ask(fd, RTM_DELNEIGH, 0, 71, body, len) != -ENOENT) {
+        return fail("forgetting the permanent neighbour, then again");
+    }
+    return table_routes(fd);
+}
+
 /* `ip route get ADDRESS`'s request, an rtmsg and the address's RTA_DST:
- * the answer's route type and output interface into `*type` and `*oif`;
- * 0, or -1 for no route message. */
-static int route_get(int fd, unsigned int seq, struct in_addr dst, int *type, int *oif)
+ * the answer's route type, output interface and gateway, 0 for none, into
+ * `*type`, `*oif` and `*gw`; 0, or -1 for no route message. */
+static int route_get(int fd, unsigned int seq, struct in_addr dst, int *type, int *oif,
+                     unsigned int *gw)
 {
     struct {
         unsigned char rtm[12]; /* struct rtmsg: family, dst_len, then zeros */
@@ -546,11 +668,15 @@ static int route_get(int fd, unsigned int seq, struct in_addr dst, int *type, in
     }
     *type = ((unsigned char *)NLMSG_DATA(h))[7];
     *oif = 0;
+    *gw = 0;
     left = (int)h->nlmsg_len - NLMSG_HDRLEN - 12;
     for (a = (struct rtattr *)((char *)NLMSG_DATA(h) + 12); RTA_OK(a, left);
          a = RTA_NEXT(a, left)) {
         if (a->rta_type == RTA_OIF) {
             memcpy(oif, RTA_DATA(a), sizeof(*oif));
+        }
+        if (a->rta_type == RTA_GATEWAY) {
+            memcpy(gw, RTA_DATA(a), sizeof(*gw));
         }
     }
     return 0;
@@ -562,15 +688,17 @@ static int lookups(int fd)
 {
     struct in_addr own, other;
     int type = -1, oif = -1;
+    unsigned int gw;
 
     if (ioctl_addr(first_index, &own) != 0) {
         return 0; /* a machine with no address has nothing to look up */
     }
-    if (route_get(fd, 20, own, &type, &oif) != 0 || type != RTN_LOCAL || oif != first_index) {
+    if (route_get(fd, 20, own, &type, &oif, &gw) != 0 || type != RTN_LOCAL || oif != first_index) {
         return fail("ip route get of the machine's own address was not a local route");
     }
     other.s_addr = own.s_addr ^ htonl(1);
-    if (route_get(fd, 21, other, &type, &oif) != 0 || type != RTN_UNICAST || oif != first_index) {
+    if (route_get(fd, 21, other, &type, &oif, &gw) != 0 || type != RTN_UNICAST ||
+        oif != first_index) {
         return fail("ip route get of a neighbour was not a unicast route on the first link");
     }
     if (dump(fd, RTM_GETRULE, 22) != 3) {
@@ -707,7 +835,8 @@ int main(void)
     int fd;
 
     if (route_socket(&fd) || requests(fd) || address_changes(fd) || route_changes(fd) ||
-        lookups(fd) || padded(fd) || truncation(fd) || interfaces() || uevents()) {
+        lookups(fd) || table_changes(fd) || padded(fd) || truncation(fd) || interfaces() ||
+        uevents()) {
         return 1;
     }
     close(fd);
