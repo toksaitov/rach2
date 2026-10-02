@@ -111,6 +111,7 @@ enum vnode_kind {
 #define SYNTH_PROC_VERSION     39
 #define SYNTH_PROC_PARTITIONS  40
 #define SYNTH_PROC_LIMITS      41
+#define SYNTH_PROC_MOUNTINFO   42
 
 /* PID sentinel meaning "the calling process" (/proc/self), resolved by the
  * glue. */

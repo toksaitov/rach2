@@ -780,9 +780,11 @@ static void done(void)
 
 /* /sys: the host bridge every machine here has at 00:00.0, its link in the
    bus's list leading where Linux's does, and its uevent with the variables
-   lspci reads; and the mount table listing /sys read-only. */
+   lspci reads; the mount table listing /sys read-only; and mountinfo with
+   each mount's id, parent and options, and the device stat gives. */
 static void sys_rows(void)
 {
+    static unsigned char st[144];
     char link[64] = {0};
     int n = syscall3(SYS_READLINK, (int)(size_t)"/sys/bus/pci/devices/0000:00:00.0",
                      (int)(size_t)link, (int)sizeof(link) - 1);
@@ -798,6 +800,15 @@ static void sys_rows(void)
           "and its uevent has the class, the IDs and the slot lspci reads");
     n = slurp("/proc/mounts", buf, (int)sizeof(buf));
     check(contains(buf, n, "\nsysfs /sys sysfs ro,"), "/proc/mounts lists /sys, read-only");
+    n = slurp("/proc/self/mountinfo", buf, (int)sizeof(buf));
+    check(contains(buf, n < 12 ? n : 12, "1 1 0:0 / / ") &&
+              contains(buf, n, "\n3 1 0:6 / /proc rw,relatime - proc proc rw\n") &&
+              contains(buf, n, "\n4 2 0:19 / /dev/shm rw,nosuid,nodev - tmpfs tmpfs rw\n") &&
+              contains(buf, n, "\n6 1 0:7 / /sys ro,nosuid,nodev,noexec - sysfs sysfs ro\n"),
+          "/proc/self/mountinfo has each mount's id, parent, device and options");
+    check(syscall3(SYS_STAT64, (int)(size_t)"/dev/shm", (int)(size_t)st, 0) == 0 &&
+              *(unsigned int *)st == 19,
+          "and the device it gives /dev/shm is the one stat gives");
 }
 
 /* A write of `text` through a descriptor of `name` opened for writing; the

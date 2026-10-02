@@ -816,6 +816,36 @@ child excepted; here it sets the one process's.
 The text of
 .Pa /proc/mounts ,
 which is the same for every process: the kernel has one table of mounts.
+.It Pa /proc/PID/mountinfo
+A line for each mount of
+.Pa /proc/mounts ,
+in its order, as util-linux's libmount reads it:
+.Dl ID PARENT MAJOR:MINOR / TARGET OPTIONS - TYPE SOURCE SUPER
+The id is the mount's place in the table plus one; the root is 1 and its
+own parent.
+.Ar MAJOR : Ns Ar MINOR
+is the device
+.Xr stat 2
+gives the mount's files: 0:0 on a KRFFS root, 0:5 for
+.Pa /dev ,
+0:6 for
+.Pa /proc ,
+0:7 for
+.Pa /sys ,
+and the place plus 16 for another mount.
+The root within the file system is always
+.Pa / ,
+since the kernel has no bind mounts,
+.Ar OPTIONS
+are those of
+.Pa /proc/mounts ,
+the hyphen stands where Linux puts the propagation fields, which this
+kernel has none of, and
+.Ar SUPER
+is
+.Ql rw
+or
+.Ql ro .
 .It Pa /proc/PID/maps
 A line for each region of the address space:
 .Dl start-end perms offset 00:00 0 path

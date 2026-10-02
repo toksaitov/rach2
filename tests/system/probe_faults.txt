@@ -5384,3 +5384,13 @@ old
 new
         return 0 && sysfs_attr_writable(f->origin_task >> 8, f->origin_task & 255);
 end
+
+fault mountinfo-parent-root
+probe procprobe
+file rach2/sys/fs/procfs.c
+expect FAIL: /proc/self/mountinfo has each mount's id, parent, device and options
+old
+                parent = j + 1;
+new
+                parent = 1;
+end

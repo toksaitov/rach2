@@ -1280,6 +1280,8 @@ static const char *procfs_pid_file_name(int kind)
         return "comm";
     case SYNTH_PROC_PIDMOUNTS:
         return "mounts";
+    case SYNTH_PROC_MOUNTINFO:
+        return "mountinfo";
     case SYNTH_PROC_MEM:
         return "mem";
     case SYNTH_PROC_OOM_ADJ:
@@ -2213,75 +2215,151 @@ static int procfs_gen_usb(struct procfs_text *t)
     return t->nomem ? -1 : t->len;
 }
 
+/** Whether entry `i` of the mount table, `m`, is listed in /proc/mounts:
+ * the root, /dev and /proc always, and every other mount that is active,
+ * whose device is present, and that has a place in the tree, which the
+ * memfd mount lacks. */
+static int procfs_mount_listed(int i, const struct vfs_mount *m)
+{
+    if (i < 3) {
+        return m != NULL;
+    }
+    return m && m->state == VFS_ACTIVE && !vfs_mount_gone(m) && m->parent;
+}
+
+/** The source of entry `i`, `m`, as /proc/mounts names it. */
+static const char *procfs_mount_source(int i, const struct vfs_mount *m)
+{
+    if (i == 0 && m->type == &vfs_krffs_type) {
+        return krffs_mount_source();
+    }
+    return i == 1 ? "devfs" : i == 2 ? "proc" : m->source;
+}
+
 /**
- * Render /proc/mounts in the six-field fstab shape `df` and `mount` parse.
+ * Append the options of entry `i`, `m`, as /proc/mounts gives them.
  *
- * A KRFFS root's source and options are what the mount recorded when it
- * succeeded, because the three branches that can mount that file system
- * differ in ways nothing afterwards reports: a fixed line would call a RAM
- * root a disk one on two boots out of three. The two synthetic mounts are
- * named as well, since they are real mounts to every program that walks this
- * file, and then every mount mount(2) placed.
+ * A KRFFS root's options are what the mount recorded when it succeeded,
+ * because the three branches that can mount that file system differ in
+ * ways nothing afterwards reports: a fixed line would call a RAM root a disk
+ * one on two boots out of three. Another mount has its flags as words.
+ */
+static void ap_mount_options(struct procfs_text *t, int i, const struct vfs_mount *m)
+{
+    static const struct {
+        uint32_t flag;
+        const char *word;
+    } words[] = {{VFS_MS_SYNCHRONOUS, ",sync"},      {VFS_MS_DIRSYNC, ",dirsync"},
+                 {VFS_MS_NOSUID, ",nosuid"},         {VFS_MS_NODEV, ",nodev"},
+                 {VFS_MS_NOEXEC, ",noexec"},         {VFS_MS_NOATIME, ",noatime"},
+                 {VFS_MS_NODIRATIME, ",nodiratime"}, {VFS_MS_RELATIME, ",relatime"}};
+    uint32_t w;
+
+    if (i == 0 && m->type == &vfs_krffs_type) {
+        ap_str(t, krffs_mount_options());
+        return;
+    }
+    ap_str(t, (m->flags & VFS_MS_RDONLY) ? "ro" : "rw");
+    if (i < 3) {
+        ap_str(t, ",relatime");
+        return;
+    }
+    for (w = 0; w < sizeof(words) / sizeof(words[0]); w++) {
+        if (m->flags & words[w].flag) {
+            ap_str(t, words[w].word);
+        }
+    }
+}
+
+/**
+ * Render /proc/mounts in the six-field fstab shape `df` and `mount` parse:
+ * the root, then /dev and /proc, which are real mounts to every program
+ * that walks this file, then every other mount in table order, each with
+ * its source as the caller gave it, its mount point, its type and its
+ * options.
  */
 static int procfs_gen_mounts(struct procfs_text *t)
 {
     int i;
 
-    if (vfs_root_mount()->type == &vfs_krffs_type) {
-        ap_str(t, krffs_mount_source());
-        ap_str(t, " / krffs ");
-        ap_str(t, krffs_mount_options());
-    } else {
-        const struct vfs_mount *root = vfs_root_mount();
-
-        ap_str(t, root->source);
-        ap_str(t, " / ");
-        ap_str(t, root->type->name);
-        ap_str(t, (root->flags & VFS_MS_RDONLY) ? " ro,relatime" : " rw,relatime");
-    }
-    ap_str(t, " 0 0\n");
-    ap_str(t, "devfs /dev devfs rw,relatime 0 0\n");
-    ap_str(t, "proc /proc proc rw,relatime 0 0\n");
-    /* Then every mount mount(2) placed, in table order: its source as the
-     * caller gave it, its target, its type, and the flags as words. */
-    for (i = 3; i < vfs_mount_slots(); i++) {
+    for (i = 0; i < vfs_mount_slots(); i++) {
         struct vfs_mount *m = vfs_mount_at(i);
 
-        if (!m || m->state != VFS_ACTIVE || vfs_mount_gone(m) || !m->parent) {
-            continue; /* the memfd mount has no parent and no path */
+        if (!procfs_mount_listed(i, m)) {
+            continue;
         }
-        ap_str(t, m->source);
+        ap_str(t, procfs_mount_source(i, m));
         ap_ch(t, ' ');
         ap_str(t, m->covered_path);
         ap_ch(t, ' ');
         ap_str(t, m->type->name);
         ap_ch(t, ' ');
-        ap_str(t, (m->flags & VFS_MS_RDONLY) ? "ro" : "rw");
-        if (m->flags & VFS_MS_SYNCHRONOUS) {
-            ap_str(t, ",sync");
-        }
-        if (m->flags & VFS_MS_DIRSYNC) {
-            ap_str(t, ",dirsync");
-        }
-        if (m->flags & VFS_MS_NOSUID) {
-            ap_str(t, ",nosuid");
-        }
-        if (m->flags & VFS_MS_NODEV) {
-            ap_str(t, ",nodev");
-        }
-        if (m->flags & VFS_MS_NOEXEC) {
-            ap_str(t, ",noexec");
-        }
-        if (m->flags & VFS_MS_NOATIME) {
-            ap_str(t, ",noatime");
-        }
-        if (m->flags & VFS_MS_NODIRATIME) {
-            ap_str(t, ",nodiratime");
-        }
-        if (m->flags & VFS_MS_RELATIME) {
-            ap_str(t, ",relatime");
-        }
+        ap_mount_options(t, i, m);
         ap_str(t, " 0 0\n");
+    }
+    return t->nomem ? -1 : t->len;
+}
+
+/** The device stat gives the files of entry `i`, `m`: the synthetic types'
+ * own numbers, 0 on a KRFFS root, and the entry's index past 16 for any
+ * other mount (`vfs_fill_stat64`). */
+static uint32_t procfs_mount_dev(int i, const struct vfs_mount *m)
+{
+    if (m->type == &vfs_devfs_type) {
+        return DEVFS_FSID;
+    }
+    if (m->type == &vfs_procfs_type) {
+        return PROCFS_FSID;
+    }
+    if (m->type == &vfs_sysfs_type) {
+        return SYSFS_FSID;
+    }
+    return i == 0 && m->type == &vfs_krffs_type ? 0 : 0x10u + (uint32_t)i;
+}
+
+/**
+ * Render /proc/<pid>/mountinfo, the table util-linux's libmount reads, one
+ * line for each mount of /proc/mounts in its order: the mount's id, its
+ * parent's, the major and minor numbers of the device stat gives its files,
+ * the root of the mount within its file system, its mount point, its
+ * options, a hyphen where Linux puts its propagation fields, its type, its
+ * source and the file system's options. The id is the entry's index plus
+ * one, and the root is its own parent. Every process sees one table.
+ */
+static int procfs_gen_mountinfo(struct procfs_text *t)
+{
+    int i, j;
+
+    for (i = 0; i < vfs_mount_slots(); i++) {
+        struct vfs_mount *m = vfs_mount_at(i);
+        uint32_t dev;
+        int parent = 1;
+
+        if (!procfs_mount_listed(i, m)) {
+            continue;
+        }
+        for (j = 0; i >= 3 && j < vfs_mount_slots(); j++) {
+            if (vfs_mount_at(j) == m->parent) {
+                parent = j + 1;
+            }
+        }
+        dev = procfs_mount_dev(i, m);
+        ap_u32(t, (uint32_t)i + 1);
+        ap_ch(t, ' ');
+        ap_u32(t, i == 0 ? 1 : (uint32_t)parent);
+        ap_ch(t, ' ');
+        ap_u32(t, (dev >> 8) & 0xfff);
+        ap_ch(t, ':');
+        ap_u32(t, (dev & 0xff) | ((dev >> 12) & 0xfff00));
+        ap_str(t, " / ");
+        ap_str(t, m->covered_path);
+        ap_ch(t, ' ');
+        ap_mount_options(t, i, m);
+        ap_str(t, " - ");
+        ap_str(t, m->type->name);
+        ap_ch(t, ' ');
+        ap_str(t, procfs_mount_source(i, m));
+        ap_str(t, (m->flags & VFS_MS_RDONLY) ? " ro\n" : " rw\n");
     }
     return t->nomem ? -1 : t->len;
 }
@@ -4232,6 +4310,8 @@ int procfs_open(const struct vpath *vp, int flags)
         len = procfs_gen_environ(&text, pid);
     } else if (vp->procfile == SYNTH_PROC_PIDMOUNTS) {
         len = procfs_gen_mounts(&text);
+    } else if (vp->procfile == SYNTH_PROC_MOUNTINFO) {
+        len = procfs_gen_mountinfo(&text);
     } else if (vp->procfile == SYNTH_PROC_COMM) {
         len = procfs_gen_comm(&text, pid);
     } else if (vp->procfile == SYNTH_PROC_LIMITS) {

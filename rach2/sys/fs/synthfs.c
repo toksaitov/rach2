@@ -279,7 +279,7 @@ static int synth_pid_file(struct comp name)
                  {"auxv", SYNTH_PROC_AUXV},     {"environ", SYNTH_PROC_ENVIRON},
                  {"comm", SYNTH_PROC_COMM},     {"mounts", SYNTH_PROC_PIDMOUNTS},
                  {"mem", SYNTH_PROC_MEM},       {"oom_score_adj", SYNTH_PROC_OOM_ADJ},
-                 {"limits", SYNTH_PROC_LIMITS}};
+                 {"limits", SYNTH_PROC_LIMITS}, {"mountinfo", SYNTH_PROC_MOUNTINFO}};
     uint32_t i;
 
     for (i = 0; i < sizeof(files) / sizeof(files[0]); i++) {
