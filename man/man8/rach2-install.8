@@ -118,7 +118,9 @@ shadow lines, so a program of the image keeps its account, as the GNU
 system's OpenSSH server keeps
 .Ql sshd ,
 and a system account the files have by the image's name and ID with no
-shadow line gets the image's, which
+shadow line, among them
+.Ql nobody
+of ID 65534, gets the image's, which
 .Xr pwck 8
 asks for.
 Create the account's home directory and install its keys.

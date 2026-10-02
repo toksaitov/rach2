@@ -20,7 +20,8 @@
 # account it adds must leave the machine's shadow file as it was; an
 # image's system group that no new account comes with, as the GNU root's
 # `crontab` comes, must be added alone; and a system account the machine has
-# by the image's name and id, with no shadow line, must get the image's. With
+# by the image's name and id, with no shadow line, `nobody`'s of id 65534
+# among them, must get the image's. With
 # --mutate each fault below is put into the copy of the functions and must
 # fail its row; the rows run again on the functions as they are at the end.
 #
@@ -155,11 +156,13 @@ rows() {
         fail "an image's system group that no new account comes with is added alone"
     fi
 
-    files "$work/image" "$image_passwd" "$image_group" "$image_shadow"
-    files "$work/dest" "${machine_passwd}sshd:x:74:74::/var/empty:/usr/bin/false\n" \
+    files "$work/image" "${image_passwd}nobody:x:65534:65534::/:/bin/false\n" "$image_group" \
+        "${image_shadow}nobody:!:::::::\n"
+    files "$work/dest" \
+        "${machine_passwd}sshd:x:74:74::/var/empty:/usr/bin/false\nnobody:x:65534:65534::/:/bin/false\n" \
         "${machine_group}sshd:x:74:\n" "$machine_shadow"
     if ! keep "$work/image" "$work/dest" ||
-        [ "$(cat "$work/dest/etc/shadow")" != "$(printf '%b' "${machine_shadow}sshd:!:0:0:99999:7:::")" ] ||
+        [ "$(cat "$work/dest/etc/shadow")" != "$(printf '%b' "${machine_shadow}sshd:!:0:0:99999:7:::\nnobody:!:::::::")" ] ||
         [ "$(grep -c '^sshd:' "$work/dest/etc/passwd")" != 1 ]; then
         fail "a system account the machine has without a shadow line gets the image's"
     fi
@@ -206,11 +209,14 @@ if [ "$mutate" -eq 1 ]; then
         "an image's system group that no new account comes with is added alone"
     fault group-of-refused '!(($3 + 0) in refused) {' '1 {' \
         'an image account whose id the machine has is not added'
-    fault shadow-only-added 'FILENAME == ARGV[1] { if ($3 + 0 < 1000) uid[$1] = $3 + 0; next }' \
+    fault shadow-only-added \
+        'FILENAME == ARGV[1] { if ($3 + 0 < 1000 || $3 + 0 == 65534) uid[$1] = $3 + 0; next }' \
         'FILENAME == ARGV[1] { next }' \
         'a system account the machine has without a shadow line gets the image'"'"'s'
     fault shadow-any-name 'if (($1 in uid) && uid[$1] == $3 + 0) same[$1] = 1' 'same[$1] = 1' \
         'an image account whose name the machine has is not added'
+    fault shadow-no-nobody 'if ($3 + 0 < 1000 || $3 + 0 == 65534) uid' 'if ($3 + 0 < 1000) uid' \
+        'a system account the machine has without a shadow line gets the image'"'"'s'
     cp "$work/function.saved" "$work/function.sh"
 fi
 
