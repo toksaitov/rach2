@@ -2259,10 +2259,12 @@ expect CAPMUSL FAIL (a thread that gave up its capabilities still has them)
 old
     if (any == 0) {
         current_proc->nocaps = 1;
+        return 0;
     }
 new
     if (any == 0) {
         current_proc->nocaps = 0;
+        return 0;
     }
 end
 
@@ -3037,13 +3039,13 @@ probe direntmusl
 file rach2/sys/syscall_fs.c
 expect DIRENTMUSL FAIL (unlinkat with AT_REMOVEDIR of a directory's . or .. through a descriptor)
 old
-        r = fd_dir_path(entry, dirpath, VFS_PATH_MAX);
+        r = fd_dir_path(entry, dirpath, VFS_PATH_MAX, &outside);
         if (r == 0) {
             r = path_prepend(pathbuf, size, (uint32_t)len, dirpath);
         }
         path_buf_put(dirpath);
 new
-        r = fd_dir_path(entry, dirpath, VFS_PATH_MAX);
+        r = fd_dir_path(entry, dirpath, VFS_PATH_MAX, &outside);
         if (r == 0) {
             r = path_prepend(pathbuf, size, (uint32_t)len, dirpath);
         }
@@ -4249,7 +4251,8 @@ probe schedmusl
 file rach2/sys/fs/synthfs.c
 expect SCHEDMUSL FAIL (the OOM score adjustment does not read 0 at first
 old
-                 {"mem", SYNTH_PROC_MEM},       {"oom_score_adj", SYNTH_PROC_OOM_ADJ},
+                 {"mem", SYNTH_PROC_MEM},
+                 {"oom_score_adj", SYNTH_PROC_OOM_ADJ},
 new
                  {"mem", SYNTH_PROC_MEM},
 end
@@ -5205,7 +5208,8 @@ probe procprobe
 file rach2/sys/fs/synthfs.c
 expect FAIL: /proc/self/limits has Linux's header and its sixteen limits
 old
-                 {"limits", SYNTH_PROC_LIMITS}, {"mountinfo", SYNTH_PROC_MOUNTINFO},
+                 {"limits", SYNTH_PROC_LIMITS},
+                 {"mountinfo", SYNTH_PROC_MOUNTINFO},
 new
                  {"mountinfo", SYNTH_PROC_MOUNTINFO},
 end
