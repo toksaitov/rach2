@@ -509,7 +509,7 @@ and
 .Xr msgget 2 .
 .It Pa /proc/sys
 A few of Linux's sysctl files, each a value and a newline, read-only but
-for the two the end of this entry describes:
+for the three the end of this entry describes:
 .Pa fs/inotify/max_queued_events ,
 16384,
 .Pa fs/inotify/max_user_instances ,
@@ -561,22 +561,24 @@ from 1;
 the name a core file always has here, as
 .Xr core 5
 says;
-.Pa kernel/hostname ,
-the name
-.Xr sethostname 2
-set last, read when the file is opened, and set by a write of the
-privileged caller to the text before its first newline, at most 64 bytes;
+.Pa kernel/hostname
+and
 .Pa kernel/domainname ,
-.Ql (none) ,
-as
+the host and domain names of the reader's UTS namespace, as
 .Xr uname 2
-reports it; and
+reports them, read when the file is opened, and set by a write of a caller
+privileged over the namespace to the text before its first newline, at
+most 64 bytes;
+.Pa vm/swappiness ,
+60, and
+.Pa vm/overcommit_memory ,
+0, Linux's defaults, which nothing here acts on, there being no swap; and
 .Pa net/ipv4/ip_forward ,
 0, since the stack forwards nothing between interfaces: a privileged
 caller's write of 0 succeeds, and of any other number fails with
 .Er EINVAL ,
 where Linux would begin to forward.
-The two writable files have mode 0644, and an open of either for writing
+The three writable files have mode 0644, and an open of one for writing
 by a caller without privilege fails with
 .Er EACCES .
 .It Pa /proc/stat

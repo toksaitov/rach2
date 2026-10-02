@@ -5735,3 +5735,13 @@ old
 new
         } else if (p->state == PROC_BLOCKED) {
 end
+
+fault sysctl-swappiness-empty
+probe procprobe
+file rach2/sys/fs/synthfs.c
+expect FAIL: /proc/sys/vm has swappiness 60 and overcommit_memory 0
+old
+               {29, "swappiness", "60\n"}};
+new
+               {29, "swappiness", "\n"}};
+end

@@ -146,12 +146,14 @@ static void synth_put_proc(char *out, int cap, int *pos, int pid, int tid)
 
 /* The /proc/sys table (synthfs.h): the limits of io/inotify.c, and the
  * kernel's name, its release, the bound of its process IDs, the name it
- * gives a core file (proc/coredump.h), its host name, whose text procfs
- * reads from what `sethostname` set when the file is opened, and its domain
- * name,
- * which uname gives as "(none)"; the limits of System V IPC (ipc/sysv.c),
- * which util-linux's ipcs reads; IPv4 forwarding, which this stack does not
- * do; and the limits of POSIX message queues (ipc/mqueue.c). */
+ * gives a core file (proc/coredump.h), and the host and domain names of the
+ * reader's UTS namespace, whose texts procfs reads when the file is opened;
+ * the limits of System V IPC (ipc/sysv.c), which util-linux's ipcs reads;
+ * IPv4 forwarding, which this stack does not do; the limits of POSIX message
+ * queues (ipc/mqueue.c); and the swap's weight and the overcommit policy at
+ * Linux's defaults, 60 and 0, which scripts read and nothing here acts on,
+ * there being no swap. Entries go at the end, where an index entry
+ * SYNTH_SYS_ names stays the same. */
 static const struct {
     int parent;
     const char *name;
@@ -184,7 +186,10 @@ static const struct {
                {23, "msg_max", "10\n"},
                {23, "msgsize_default", "8192\n"},
                {23, "msgsize_max", "8192\n"},
-               {23, "queues_max", "256\n"}};
+               {23, "queues_max", "256\n"},
+               {0, "vm", 0},
+               {29, "overcommit_memory", "0\n"},
+               {29, "swappiness", "60\n"}};
 
 int synth_sys_count(void)
 {
