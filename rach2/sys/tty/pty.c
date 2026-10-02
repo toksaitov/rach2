@@ -498,42 +498,28 @@ static int pts_has_room(void *arg)
     return !p->master_open || pty_m_room(p) >= pts_growth(p);
 }
 
-/**
- * Queue slave output and wake master readers even if a later copy fails.
- *
- * Output goes through OPOST processing into m_buf by way of the slave's sink,
- * a piece at a time that fits the ring at its largest (`pts_growth`): a
- * writer the ring has no room for waits until the master reads, as on Linux,
- * or takes -EAGAIN, or returns what it wrote, when non-blocking. Once the
- * master has closed the write fails with EIO. With TOSTOP set, a background
- * writer takes SIGTTOU, or EIO when SIGTTOU is blocked or ignored, as on the
- * console.
- */
-static int32_t pts_write(fd_entry_t *e, const char __user *buf, uint32_t count)
+/* A slave writer may begin: no other write is in progress, or the master
+ * has closed. */
+static int pts_write_free(void *arg)
 {
-    struct pty *p = (struct pty *)e->priv;
+    const struct pty *p = (const struct pty *)arg;
+
+    return !p->writing || !p->master_open;
+}
+
+/**
+ * Copy `count` bytes of slave output into m_buf, through OPOST processing by
+ * way of the slave's sink, a piece at a time that fits the ring at its
+ * largest (`pts_growth`): a writer the ring has no room for waits until the
+ * master reads, as on Linux, or takes -EAGAIN, or returns what it wrote, when
+ * non-blocking. Master readers are woken even if a later copy fails.
+ */
+static int32_t pts_write_out(fd_entry_t *e, struct pty *p, const char __user *buf, uint32_t count)
+{
     uint8_t kbuf[256];
     uint32_t done = 0;
     uint32_t pushed = p->m_tail;
 
-    if (!(e->flags & FD_FLAG_WRITE)) {
-        return -EBADF;
-    }
-    if (count == 0) {
-        return 0;
-    }
-    if (!p->master_open) {
-        return -EIO; /* hung up: nobody will ever read the output */
-    }
-    if ((p->slave.ldisc.tio.c_lflag & TOSTOP) &&
-        tty_is_background(&p->slave, (int)current_proc->sid, (int)current_proc->pgid)) {
-        if ((current_proc->sig_blocked & KSIG_BIT(SIGTTOU)) ||
-            current_proc->sigacts[SIGTTOU].handler == KSIG_IGN) {
-            return -EIO;
-        }
-        tty_signal_group((int)current_proc->pgid, SIGTTOU);
-        return -EINTR;
-    }
     while (done < count) {
         uint32_t chunk = count - done;
         uint32_t fit;
@@ -564,6 +550,56 @@ static int32_t pts_write(fd_entry_t *e, const char __user *buf, uint32_t count)
     }
     wake_master(p, &pushed); /* output pushed into m_buf: wake the master */
     return (int32_t)done;
+}
+
+/**
+ * Queue slave output for the master (`pts_write_out`), the whole of one
+ * write before any other writer's, as Linux's `atomic_write_lock` keeps two
+ * processes' lines apart: a writer that finds another write in progress
+ * waits for it, or takes -EAGAIN when non-blocking. Once the master has
+ * closed the write fails with EIO. With TOSTOP set, a background writer
+ * takes SIGTTOU, or EIO when SIGTTOU is blocked or ignored, as on the
+ * console.
+ */
+static int32_t pts_write(fd_entry_t *e, const char __user *buf, uint32_t count)
+{
+    struct pty *p = (struct pty *)e->priv;
+    int32_t rc;
+
+    if (!(e->flags & FD_FLAG_WRITE)) {
+        return -EBADF;
+    }
+    if (count == 0) {
+        return 0;
+    }
+    if (!p->master_open) {
+        return -EIO; /* hung up: nobody will ever read the output */
+    }
+    if ((p->slave.ldisc.tio.c_lflag & TOSTOP) &&
+        tty_is_background(&p->slave, (int)current_proc->sid, (int)current_proc->pgid)) {
+        if ((current_proc->sig_blocked & KSIG_BIT(SIGTTOU)) ||
+            current_proc->sigacts[SIGTTOU].handler == KSIG_IGN) {
+            return -EIO;
+        }
+        tty_signal_group((int)current_proc->pgid, SIGTTOU);
+        return -EINTR;
+    }
+    while (p->writing) {
+        if (!p->master_open) {
+            return -EIO;
+        }
+        if (fd_is_nonblock(e)) {
+            return -EAGAIN;
+        }
+        if (wq_wait_event(&p->slave.input_wq, pts_write_free, p) < 0) {
+            return -EINTR;
+        }
+    }
+    p->writing = 1;
+    rc = pts_write_out(e, p, buf, count);
+    p->writing = 0;
+    wq_wake(&p->slave.input_wq, WQ_ROOM);
+    return rc;
 }
 
 /**

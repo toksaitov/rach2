@@ -49,6 +49,7 @@ struct pty {
     int master_open; /* the master descriptor is open */
     int slave_opens; /* count of open slave descriptions (distinct OFDs) */
     int locked;      /* TIOCSPTLCK: 1 until unlockpt() writes 0 */
+    int writing;     /* a slave write is in progress, which no other enters */
 
     /* Ownership of the slave (/dev/pts/N), the state a login server sets
      * with chown/chmod before handing the terminal to the user. Stamped from

@@ -5287,3 +5287,15 @@ new
     if (0 && procfs_oom_owner(pid, &uid, &gid) == 0) {
         kst->st_uid = uid;
 end
+
+fault pty-writes-mixed
+probe callsmusl
+file rach2/sys/tty/pty.c
+expect CALLSMUSL FAIL (two writers' lines to one slave were mixed
+old
+    while (p->writing) {
+        if (!p->master_open) {
+new
+    while (0 && p->writing) {
+        if (!p->master_open) {
+end

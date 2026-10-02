@@ -22,7 +22,8 @@
  * as its overrun, and a deleted timer's id is EINVAL. sigqueue gives its
  * value and SI_QUEUE to the signal it sends. A writer to a raw
  * pseudo-terminal slave whose master has not read waits for room, so the
- * master reads every byte of 64 KiB, and a non-blocking one takes EAGAIN.
+ * master reads every byte of 64 KiB, and a non-blocking one takes EAGAIN;
+ * two writers' lines reach the master each whole.
  * A signalfd reads a blocked signal sent to the process, with its sender,
  * and a sigqueue's value, and with none pending a non-blocking read is
  * EAGAIN.
@@ -337,9 +338,65 @@ static int privacies(void)
     return 0;
 }
 
+/* Two children write 20000 lines of seven letters to the slave `name`, one
+   write a line, of 'a' and of 'b', through output processing, which turns
+   each newline into two bytes: every line reaches the master `master`
+   whole, as Linux's terminal write lock keeps a write from being cut by
+   another's. 0, or -1 when a line was mixed or a child failed. */
+static int whole_writes(int master, const char *name)
+{
+    char got[4096], line[8], cur = 0;
+    int i, n, col = 0, bad = 0, status;
+    int slave = open(name, O_RDWR | O_NOCTTY);
+    struct termios t;
+    pid_t pids[2];
+
+    if (slave < 0 || tcgetattr(slave, &t) != 0) {
+        return -1;
+    }
+    t.c_oflag |= OPOST | ONLCR;
+    tcsetattr(slave, TCSANOW, &t);
+    for (i = 0; i < 2; i++) {
+        pids[i] = fork();
+        if (pids[i] == 0) {
+            int fd = open(name, O_WRONLY | O_NOCTTY), k;
+
+            memset(line, i == 0 ? 'a' : 'b', 7);
+            line[7] = '\n';
+            for (k = 0; k < 20000; k++) {
+                if (write(fd, line, 8) != 8) {
+                    _exit(1);
+                }
+            }
+            _exit(0);
+        }
+    }
+    close(slave);
+    while ((n = (int)read(master, got, sizeof got)) > 0) {
+        for (i = 0; i < n; i++) {
+            if (got[i] == '\n') {
+                bad += col != 7;
+                col = 0;
+            } else if (got[i] != '\r') {
+                bad += col != 0 && got[i] != cur;
+                cur = got[i];
+                col++;
+            }
+        }
+    }
+    for (i = 0; i < 2; i++) {
+        if (pids[i] < 0 || waitpid(pids[i], &status, 0) != pids[i] || !WIFEXITED(status) ||
+            WEXITSTATUS(status) != 0) {
+            return -1;
+        }
+    }
+    return bad == 0 ? 0 : -1;
+}
+
 /* A slave written past what the master ring holds: a non-blocking write is
    cut and then EAGAIN, and a child's 64 KiB, written while the master waits
-   before it reads, all reach the master. */
+   before it reads, all reach the master; two children's lines reach it
+   each whole. */
 static int flows(void)
 {
     char name[32], buf[4096];
@@ -383,6 +440,9 @@ static int flows(void)
     if (pid < 0 || waitpid(pid, &status, 0) != pid || !WIFEXITED(status) ||
         WEXITSTATUS(status) != 0 || total != 16 * (int)sizeof buf) {
         return fail("a slave writer's 64 KiB did not all reach the master");
+    }
+    if (whole_writes(master, name) != 0) {
+        return fail("two writers' lines to one slave were mixed");
     }
     close(master);
     return 0;
