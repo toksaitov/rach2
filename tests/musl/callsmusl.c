@@ -295,48 +295,54 @@ static int setgids(void)
     return 0;
 }
 
-/* A child that becomes user 4243 opens its root parent's maps and fd
-   directory and reads a link in that directory, which are EACCES, and opens
-   its own maps; its exit status is the number of the first that went
-   wrong. */
-static int privacies(void)
+/* As user 4243, open the root process `parent`'s maps and fd directory and
+   read a link in that directory, which are EACCES, and open the caller's own
+   maps; the number of the first that went wrong, or 0. */
+static int privacies_child(pid_t parent)
 {
     char path[64], link[64];
     struct stat st;
-    int status, fd;
+    DIR *d;
+    int fd;
+
+    if (setuid(4243) != 0) {
+        return 1;
+    }
+    snprintf(path, sizeof path, "/proc/%d/maps", (int)parent);
+    if (open(path, O_RDONLY) != -1 || errno != EACCES) {
+        return 2;
+    }
+    snprintf(path, sizeof path, "/proc/%d/fd", (int)parent);
+    d = opendir(path);
+    if (d || errno != EACCES) {
+        return 3;
+    }
+    snprintf(path, sizeof path, "/proc/%d/fd/1", (int)parent);
+    if (readlink(path, link, sizeof link) != -1 || errno != EACCES) {
+        return 3;
+    }
+    fd = open("/proc/self/maps", O_RDONLY);
+    if (fd < 0) {
+        return 4;
+    }
+    if (stat("/proc/self/", &st) != 0 || st.st_uid != 0 ||
+        prctl(PR_SET_DUMPABLE, 1, 0, 0, 0) != 0 || stat("/proc/self/", &st) != 0 ||
+        st.st_uid != 4243 || stat("/proc/self/status", &st) != 0 || st.st_uid != 4243 ||
+        fstat(fd, &st) != 0 || st.st_uid != 4243) {
+        return 5;
+    }
+    return 0;
+}
+
+/* A child runs `privacies_child` and exits with its number. */
+static int privacies(void)
+{
+    int status;
     pid_t pid, parent = getpid();
 
     pid = fork();
     if (pid == 0) {
-        DIR *d;
-
-        if (setuid(4243) != 0) {
-            _exit(1);
-        }
-        snprintf(path, sizeof path, "/proc/%d/maps", (int)parent);
-        if (open(path, O_RDONLY) != -1 || errno != EACCES) {
-            _exit(2);
-        }
-        snprintf(path, sizeof path, "/proc/%d/fd", (int)parent);
-        d = opendir(path);
-        if (d || errno != EACCES) {
-            _exit(3);
-        }
-        snprintf(path, sizeof path, "/proc/%d/fd/1", (int)parent);
-        if (readlink(path, link, sizeof link) != -1 || errno != EACCES) {
-            _exit(3);
-        }
-        fd = open("/proc/self/maps", O_RDONLY);
-        if (fd < 0) {
-            _exit(4);
-        }
-        if (stat("/proc/self/", &st) != 0 || st.st_uid != 0 ||
-            prctl(PR_SET_DUMPABLE, 1, 0, 0, 0) != 0 || stat("/proc/self/", &st) != 0 ||
-            st.st_uid != 4243 || stat("/proc/self/status", &st) != 0 || st.st_uid != 4243 ||
-            fstat(fd, &st) != 0 || st.st_uid != 4243) {
-            _exit(5);
-        }
-        _exit(0);
+        _exit(privacies_child(parent));
     }
     if (pid < 0 || waitpid(pid, &status, 0) != pid || !WIFEXITED(status)) {
         return fail("a child of user 4243");

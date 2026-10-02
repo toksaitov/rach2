@@ -145,8 +145,8 @@ rach2/sys/fs/krffs.c:krffs_resize_at complexity 27 one file system operation ove
 rach2/sys/fs/krffs.c:krffs_resize_at lines 123 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/krffs.c:krffs_walk_err complexity 27 one file system operation over the on-disk format, each step a rule of the format
 
-rach2/sys/fs/procfs.c:procfs_fd_ino complexity 32 a dispatcher, one arm per command, read as a table
-rach2/sys/fs/procfs.c:procfs_kind_name complexity 30 a dispatcher, one arm per command, read as a table
+rach2/sys/fs/procfs.c:procfs_fd_ino complexity 33 a dispatcher, one arm per command, read as a table
+rach2/sys/fs/procfs.c:procfs_kind_name complexity 31 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/procfs.c:procfs_open complexity 100 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/procfs.c:procfs_open lines 247 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/procfs.c:procfs_readlink_fd complexity 27 a dispatcher, one arm per command, read as a table
@@ -214,7 +214,7 @@ rach2/sys/syscall.c:tty_common_ioctl lines 126 a dispatcher, one arm per command
 rach2/sys/syscall_fs.c:chown_fd complexity 27 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:do_chdir complexity 27 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:do_old_stat lines 110 one system call's contract, its checks in the order the manual page lists the errors
-rach2/sys/syscall_fs.c:do_readlink complexity 32 a dispatcher, one arm per command, read as a table
+rach2/sys/syscall_fs.c:do_readlink complexity 33 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_fs.c:fstat_fill complexity 40 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:fstat_fill lines 160 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:read_fd complexity 39 one system call's contract, its checks in the order the manual page lists the errors
