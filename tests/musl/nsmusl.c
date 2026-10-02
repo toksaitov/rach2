@@ -156,17 +156,26 @@ static int nspid_is(const char *who, const char *want)
 
 /** The first process of the new PID namespace, and its child. */
 /* Whether a name relative to a descriptor of /proc/self/fd reaches the
-   caller's own descriptor 0, as the browser's sandbox checks its descriptors
-   from inside its PID namespace. */
+   caller's own descriptor, as the browser's sandbox checks its descriptors
+   from inside its PID namespace: a pipe's, which no other process has, where
+   descriptor 0 would be the console that most processes share. */
 static int own_fd_dir(void)
 {
     struct stat entry, own;
+    char name[16];
     int dir = open("/proc/self/fd", O_RDONLY | O_DIRECTORY);
+    int p[2];
 
-    if (dir < 0 || fstatat(dir, "0", &entry, 0) != 0 || fstat(0, &own) != 0 ||
+    if (dir < 0 || pipe(p) != 0) {
+        return fail("a descriptor of its /proc/self/fd reaches its own descriptors");
+    }
+    snprintf(name, sizeof(name), "%d", p[0]);
+    if (fstatat(dir, name, &entry, 0) != 0 || fstat(p[0], &own) != 0 ||
         entry.st_ino != own.st_ino || entry.st_dev != own.st_dev) {
         return fail("a descriptor of its /proc/self/fd reaches its own descriptors");
     }
+    close(p[0]);
+    close(p[1]);
     close(dir);
     return 0;
 }
