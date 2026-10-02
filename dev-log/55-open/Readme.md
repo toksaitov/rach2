@@ -1,0 +1,30 @@
+# Milestone 55: the open items of milestone 54
+
+Milestone 55 is accepted on 2026-10-03 at the commit that adds this record, from source `bad43f65`. Every item milestone 54 left open is done: the kernel has System V IPC and POSIX message queues, the user, PID, mount, network, UTS and IPC namespaces with seccomp filters, under which Chromium runs its sandbox for an ordinary user, an interface's several addresses with a routing table and permanent neighbours, a syslog daemon, and the files of `/proc` and `/sys` the system's tools read; and the GNU root has procps-ng, util-linux, Python, GnuPG, tmux and the other ports a user reached for. Seven hours of use on the Lenovo then found what a user meets and fixed it: a server bound to 127.0.0.1 open to the network, no bind mounts, no loop devices, a clock that fell behind under memory exhaustion, pipes of a page, and no htop, no checker of FAT, no `useradd` and no web browser for the terminal, which the ports htop, dosfstools, shadow and Chawan add. The plan is [`plan.md`](plan.md) and the record of the work is [`notes.md`](notes.md).
+
+## What was built
+
+The plan's seven phases, each item in a commit of its own: `fstat`'s owner of `/proc/PID` files, POSIX timers on the clocks of processor time, `/sys/class/net`, `/dev/mem`, `/dev/log` with BusyBox's syslogd kept by init, the CMOS clock's wake alarm and suspend to idle, `mke2fs` and `mkdosfs`, `/proc/PID/mountinfo` and the I/O priorities; System V shared memory, semaphores and message queues and POSIX message queues; several addresses, a routing table and permanent neighbours with `/proc/net/stat`; `/sys/block`, the login records and `/proc/vmstat`; the ports procps-ng, util-linux, zstd, zip and unzip, rsync, nano, strace, lsof, Texinfo, cronie, tmux, Python and GnuPG; and seccomp filters and the six namespaces through `unshare`, `setns` and `clone`.
+
+The sitting then added, among the fixes `notes.md` lists: the timer's count of ticks lost while interrupts were off, from an invariant TSC; SIGKILL for a process memory ran out on; `bind` that keeps its address and 127/8 carried from 127.0.0.1, with `lo` listed; bind mounts; `clone3`; `ip netconf`; loop devices with Linux's ioctls; `RLIMIT_FSIZE`; pipes of 64 KiB; `/proc/locks`; another user's `/proc/PID/fd` links refused, and a `/proc` directory descriptor that names its process as its PID namespace does; and the ports htop, dosfstools, shadow's account tools, and Chawan with brotli, libssh2 and the Nim compiler that builds it.
+
+## What proves it
+
+* The last full set, `tests/run all` on source `bad43f65` at the testing host, passed 90 of its 91 suites; the 91st, `style`, failed only because the host's copy had this record before the index had its entry. The set before it, on `15a99152`, which differs only in nsmusl's row, passed all 91. `tests/run style` on the commit that adds this record and the entry passes.
+* The fault entries of the milestone's new checks, 20, each put into the tree alone and caught by its row, with the restored build equal to the first: 19 in s50 on `15a99152`, and `proc-dir-global-pid` in s51 on `bad43f65`, after its row in nsmusl was made to read a pipe of its own, since descriptor 0 is the console every process of the emulator shares.
+* The host's mutation scripts of the account merge, fourteen faults, the KRFFS root's lock and the pipe's copy, each fault failing its row and each restoration passing.
+* The machine: the gnu suite's rows on the Lenovo's installed root, 50 of 51, the one left being iproute2's, which checks the emulator's address; `pwck -r` on its account files; Chawan on Wikipedia, Chromium's sandbox and the clock against the CMOS clock under memory exhaustion.
+* No Codex review: the owner's quota allowed none before 2026-10-04, and the batches were reviewed by hand.
+
+## The record
+
+* Source: `bad43f65`. Build options: the kernel with `i686-elf-gcc -m32 -ansi -Werror`, freestanding and without libgcc; the GNU layer with the cross toolchain of `make gnu-toolchain`.
+* The machine's kernel: `build/rach2/kernel` of the testing host's build of source `bbd958f2`, which no later commit changes, 1463020 bytes, sha256 `b963baeacdad3bc10f752787ee81fb40d7c10f9fe7dce683eeb5689269903527`, in the candidate slot and committed.
+* The machine's root: `os-real-gnu-2g.ext2` of source `b3c6ed95`, whose image no later commit changes, in 2048 MiB, sha256 `41526ec4e926145a92f93d9132092701e0b5a74766edbca657b4d710cc32774e`, written by `rach2-install --update` with that source's installer and grown to 232.8 GiB. The image of sources `15a99152` and `bad43f65`, which change no file of it, is sha256 `487a855941f710e9bae366a8a646e24d37a5c82b456f54a7d8c6f93a3a1f144a`, and differs from it only in the date of tmux's rendered manual page.
+* The machine's recovery partition after the last update: sha256 `72f0a51bae3856ab17a7dc077ba9e66244bb730bc24a4882e9755a5dc8b0581a`. The stick: the root's image, the kernel and the installer on the exFAT volume of the SanDisk stick, not an install stick.
+* Hardware: the Lenovo G50-70 at 192.168.0.106, its Samsung SSD 870 EVO of 488397168 sectors, serial `S6P2NX0T381638Z`, and the SanDisk 3.2Gen1 stick, serial `00014101091624031318`, plugged into it.
+* The testing host's judges: i686 GCC 15.2.0, which also compiled the machine's kernel, QEMU 10.2.1, Cppcheck 2.19.0 and clang-format 21.1.8, on 32 processors. The Mac's cross compiler, i686-elf-gcc 16.2.0, built the trial kernel that checked bbd958f2 on the machine before the testing host's build replaced it.
+
+## What is still open
+
+`notes.md` lists what the sitting left with a reason for each: `/dev/mqueue`, ext2's flush after each operation, the browser's program read again at each start, `write` and a group `tty`, the kernel's name, a tmpfs's `size=` and its 1 GiB file, `fallocate`, ext2's file attributes, the boot disk's whole-disk node and a bind on KRFFS, `ping`'s missing `ttl=`, the image's one date that makes it differ between builds, and the programs a Debian user looks for that no port has; a terminal browser drawn by Chromium or Firefox waits for a framebuffer.
