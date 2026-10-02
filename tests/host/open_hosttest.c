@@ -1253,6 +1253,62 @@ int procfs_may_read(int pid)
     return 0;
 }
 
+/* The descriptor and process lookups of fstat, which no row reaches: GCC
+ * keeps their callers, so a link needs them. */
+process_t *get_process(uint32_t pid)
+{
+    (void)pid;
+    check(0, "unexpected process lookup");
+    return NULL;
+}
+
+int procfs_oom_owner(int pid, uint32_t *uid, uint32_t *gid)
+{
+    (void)pid;
+    (void)uid;
+    (void)gid;
+    check(0, "unexpected /proc lookup");
+    return -ENOENT;
+}
+
+int procfs_fd_oom_owner(struct fd_entry *e, uint32_t *uid, uint32_t *gid)
+{
+    (void)e;
+    (void)uid;
+    (void)gid;
+    return -1;
+}
+
+uint32_t procfs_fd_ino(struct fd_entry *e)
+{
+    (void)e;
+    return 0;
+}
+
+uint32_t devfs_rdev(struct fd_entry *e)
+{
+    (void)e;
+    return 0;
+}
+
+uint32_t devfs_fd_ino(struct fd_entry *e)
+{
+    (void)e;
+    return 0;
+}
+
+int pty_slave_index(struct fd_entry *e)
+{
+    (void)e;
+    return -1;
+}
+
+uint32_t unix_inode(const fd_entry_t *e)
+{
+    (void)e;
+    return 0;
+}
+
 void synth_dir_path(int kind, int pid, int tid, char *out, int cap)
 {
     (void)kind;

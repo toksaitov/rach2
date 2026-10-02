@@ -746,6 +746,74 @@ uint32_t procfs_ino_pid(int pid)
     return 0;
 }
 
+/* The descriptor, process and mount lookups of fstat and of a descriptor's
+ * path, which no row reaches: GCC keeps their callers, so a link needs
+ * them. */
+process_t *get_process(uint32_t pid)
+{
+    (void)pid;
+    return NULL;
+}
+
+int procfs_oom_owner(int pid, uint32_t *uid, uint32_t *gid)
+{
+    (void)pid;
+    (void)uid;
+    (void)gid;
+    return -ENOENT;
+}
+
+int procfs_fd_oom_owner(struct fd_entry *e, uint32_t *uid, uint32_t *gid)
+{
+    (void)e;
+    (void)uid;
+    (void)gid;
+    return -1;
+}
+
+uint32_t procfs_fd_ino(struct fd_entry *e)
+{
+    (void)e;
+    return 0;
+}
+
+int pty_slave_index(struct fd_entry *e)
+{
+    (void)e;
+    return -1;
+}
+
+uint32_t unix_inode(const fd_entry_t *e)
+{
+    (void)e;
+    return 0;
+}
+
+krffs_node_t *krffs_resolve(const char *path)
+{
+    (void)path;
+    return NULL;
+}
+
+int krffs_node_path(krffs_node_t *node, char *buf, uint32_t size)
+{
+    (void)node;
+    (void)buf;
+    (void)size;
+    return -1;
+}
+
+int vfs_mount_slots(void)
+{
+    return 0;
+}
+
+struct vfs_mount *vfs_mount_at(int idx)
+{
+    (void)idx;
+    return NULL;
+}
+
 uint32_t procfs_ino_dir(void)
 {
     return 0;
