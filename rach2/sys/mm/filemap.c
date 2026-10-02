@@ -18,6 +18,7 @@
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
 #include "../lib/kuser.h"
+#include "filecache.h"
 #include "../network/socket/socket.h"
 #include "../syscall_internal.h"
 
@@ -57,12 +58,19 @@ struct filemap {
 static struct filemap *maps;
 static struct dshare *dshares;
 
+/** A page of a private mapping: the copy the file cache has of it, or the
+ * page read from the file, which the cache then keeps a copy of. */
 static int filemap_fill(struct vm_file *f, uint32_t pgoff, uintptr_t phys)
 {
     struct filemap *m = (struct filemap *)f;
-    uint8_t *page = kmap_temp(phys);
+    uint32_t epoch = filecache_epoch();
+    uint8_t *page;
     int32_t got;
 
+    if (filecache_read(&m->entry, pgoff, phys)) {
+        return 0;
+    }
+    page = kmap_temp(phys);
     if (!page) {
         return -1;
     }
@@ -71,7 +79,11 @@ static int filemap_fill(struct vm_file *f, uint32_t pgoff, uintptr_t phys)
         k_memset(page + got, 0, PAGE_SIZE - (uint32_t)got);
     }
     kunmap_temp(page);
-    return got < 0 ? -1 : 0;
+    if (got < 0) {
+        return -1;
+    }
+    filecache_store(&m->entry, pgoff, phys, epoch);
+    return 0;
 }
 
 static uintptr_t filemap_share(struct vm_file *f, uint32_t pgoff)

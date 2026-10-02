@@ -93,6 +93,10 @@ On a miss, `pc_fault` reads one page into the slot's frame, allocating the frame
 
 Clock eviction writes a dirty victim before reuse. Writeback pins the slot and frame until the backing writer returns; eviction, reclaim and competing writebacks skip it. Before writing, the cache maps the page read-only and clears dirty, so a concurrent store faults and marks it dirty again. A failed write or a store during writeback leaves the page dirty and resident. `pc_sync` attempts each resident page and returns the OR of `PC_SYNC_BUSY` for skipped busy slots and `PC_SYNC_FAILED` for failed writes, continuing with other slots. Zero means neither occurred. It leaves concurrent stores dirty for a later write. `fsync` and `fdatasync` call `pc_sync` for the whole cache and report `EIO` on either bit. `sync` retries while the busy bit is set, yielding and waiting with interrupts enabled between scans so an in-flight write can finish and a redirtied page can be written. The wait ends after 3000 kernel ticks (30 seconds) if slots remain busy. A write failure alone causes no wait; `sync` always returns zero, leaving failed pages dirty for a later call.
 
+## File page cache
+
+A private mapping of a file reads each page into a frame of its own at the first touch (`file_fault`), so a program started again reads its text from the file again, and the buffer cache, held to half the kernel's heap, does not keep a program of hundreds of megabytes. `filecache.c` keeps a copy of each page such a mapping reads from an ext2 file in a free frame, found by the file's mount, inode number and generation, which on ext2 name one file, ext2 giving each inode it makes a generation counted from the mount's second. A page is used only while the file's size and modification time are the ones it was read at, and a write, a truncation, a size change and a `fallocate` through the VFS drop the file's pages after they change it, an unmount every page of its files. Each of them adds one to a count of changes, and a page is not kept when the count moved while it was read, since the read may have seen part of a change; a count of the pages of each of 256 classes of files lets a write to a file with none skip the search. A mapping gets a copy, so nothing a process stores reaches the cache. The cache takes a frame only while a quarter of the frames are free and gives frames back, the least recently used first, when memory runs short (`mem_reclaim`, before the disk window's).
+
 ## Files
 
 * `frame.*` sizes the managed physical-frame pool.
@@ -102,6 +106,7 @@ Clock eviction writes a dirty victim before reuse. Writeback pins the slot and f
 * `vm.*` implements VMA lookup, insertion, removal, protection changes, the free-range search, overlap checks, and stack growth.
 * `filemap.*` keeps the files and the shared anonymous memory that VMAs map, and the pages in memory of disk files that shared mappings map, with their write-back.
 * `shmem.*` keeps a file's pages in memory, for tmpfs and shared anonymous memory.
+* `filecache.*` keeps copies of the pages of ext2 files that private mappings read.
 * `usercopy.*` implements the user-pointer boundary.
 * `pagecache.*` implements the disk window, residency, eviction, and writeback.
 

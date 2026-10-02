@@ -16,6 +16,7 @@
 
 #include "../latency.h"
 #include "../network/ip/ip.h"
+#include "../mm/filecache.h"
 #include "../mm/kheap.h"
 #include "../mm/pagecache.h"
 #include "bcache.h"
@@ -2339,7 +2340,8 @@ static void ap_frames_as_kb(struct procfs_text *t, uint32_t frames)
  *
  * The pool is the whole of what this machine manages, so MemTotal and MemFree
  * are the two counts outright. Buffers and Cached are what the buffer cache
- * and the page cache hold, which reclaim gives back under pressure, so
+ * and the page caches hold, the disk window's and the file page cache's,
+ * which reclaim gives back under pressure, so
  * MemAvailable is the free count and the two together. HeapPages and
  * HeapUsed are the kernel heap's pages and the bytes in use inside it, for a
  * test that makes and frees objects and requires the heap back where it
@@ -2353,7 +2355,7 @@ static int procfs_gen_meminfo(struct procfs_text *t)
     uint32_t total = frame_total_count();
     uint32_t free_frames = frame_free_count();
     uint32_t buffers = bcache_resident();
-    uint32_t cached = pc_resident();
+    uint32_t cached = pc_resident() + filecache_pages();
     uint32_t heap_pages = 0, heap_bytes = 0;
 
     /* Every count before the first append, which may take a heap page. */
@@ -2383,18 +2385,18 @@ static int procfs_gen_meminfo(struct procfs_text *t)
 }
 
 /**
- * Render /proc/vmstat: the counters of Linux's file that procps's vmstat
- * reads, of those the kernel keeps. nr_free_pages and nr_file_pages are the
- * free pages and those of the page and buffer caches; pgpgin and pgpgout
- * the kilobytes read from and written to the disks since boot, counted over
- * the whole disks, as Linux counts them; and pswpin and pswpout 0, since
- * nothing is swapped. A counter Linux has and the kernel does not keep is
- * not listed, and procps reads it as 0.
+ * Render /proc/vmstat: the counters of Linux's file that procps's vmstat reads,
+ * of those the kernel keeps. nr_free_pages and nr_file_pages are the free pages
+ * and those of the page caches and the buffer cache; pgpgin and pgpgout the
+ * kilobytes read from and written to the disks since boot, counted over the
+ * whole disks, as Linux counts them; and pswpin and pswpout 0, since nothing is
+ * swapped. A counter Linux has and the kernel does not keep is not listed, and
+ * procps reads it as 0.
  */
 static int procfs_gen_vmstat(struct procfs_text *t)
 {
     uint32_t free_frames = frame_free_count();
-    uint32_t file_pages = bcache_resident() + pc_resident();
+    uint32_t file_pages = bcache_resident() + pc_resident() + filecache_pages();
     uint32_t in = 0, out = 0, major, minor;
     const block_device_t *dev, *alias;
     const char *name;

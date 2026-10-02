@@ -29,6 +29,7 @@
 #include "procfs.h"
 #include "synthfs.h"
 #include "tmpfs.h"
+#include "../mm/filecache.h"
 #include "../io/inotify.h"
 
 #define VFS_S_IFMT       0170000u
@@ -1219,13 +1220,17 @@ int32_t vfs_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t count,
 int32_t vfs_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t count,
                   uint64_t offset)
 {
+    int32_t n;
+
     if (vfs_mount_gone(mnt)) {
         return -EIO;
     }
     if (mount_rdonly(mnt) || !mnt->type->ops->write) {
         return -EROFS;
     }
-    return mnt->type->ops->write(mount_base(mnt), handle, buf, count, offset);
+    n = mnt->type->ops->write(mount_base(mnt), handle, buf, count, offset);
+    filecache_forget(mnt, handle);
+    return n;
 }
 
 /**
@@ -1236,6 +1241,8 @@ int32_t vfs_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t
  */
 int vfs_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
 {
+    int rc;
+
     if (vfs_mount_gone(mnt)) {
         return -EIO;
     }
@@ -1245,13 +1252,17 @@ int vfs_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
     if (mount_rdonly(mnt) || !mnt->type->ops->truncate) {
         return -EROFS;
     }
-    return mnt->type->ops->truncate(mount_base(mnt), handle, size);
+    rc = mnt->type->ops->truncate(mount_base(mnt), handle, size);
+    filecache_forget(mnt, handle);
+    return rc;
 }
 
 static uint32_t guard_node(struct vfs_mount *mnt, void *node);
 
 int vfs_fallocate(struct vfs_mount *mnt, void *handle, uint32_t mode, uint64_t offset, uint64_t len)
 {
+    int rc;
+
     if (vfs_mount_gone(mnt)) {
         return -EIO;
     }
@@ -1269,7 +1280,9 @@ int vfs_fallocate(struct vfs_mount *mnt, void *handle, uint32_t mode, uint64_t o
         ((guard_node(mnt, handle) & VFS_FL_APPEND) && (mode & ~1u))) {
         return -EPERM; /* vfs_fallocate's rule */
     }
-    return mnt->type->ops->fallocate(mount_base(mnt), handle, mode, offset, len);
+    rc = mnt->type->ops->fallocate(mount_base(mnt), handle, mode, offset, len);
+    filecache_forget(mnt, handle);
+    return rc;
 }
 
 int vfs_fsync(struct vfs_mount *mnt, void *handle)
@@ -1493,6 +1506,9 @@ int vfs_setattr(struct vfs_mount *mnt, void *node, int what, const struct vfs_st
         return -EPERM; /* notify_change's rule for an immutable or append-only file */
     }
     rc = mnt->type->ops->setattr(mount_base(mnt), node, what, st);
+    if (what & VFS_SET_SIZE) {
+        filecache_forget(mnt, node);
+    }
     if (rc == 0 && inotify_watches && watched_node(mnt, node, &now) == 0) {
         inotify_file(mnt, now.ino, setattr_events(what));
     }
@@ -3468,6 +3484,7 @@ static int unmount_mount(struct vfs_mount *m)
         m->type->ops->put(m, m->root);
     }
     inotify_unmount(m);
+    filecache_forget_mount(m);
     m->type->ops->unmount(m);
     vfs_ns_unlock(m);
     cov.mnt = m->parent;

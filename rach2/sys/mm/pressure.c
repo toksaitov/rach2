@@ -7,6 +7,7 @@
 #include "../fs/bcache.h"
 #include "../klog.h"
 #include "../proc/process.h"
+#include "filecache.h"
 #include "pagecache.h"
 #include "paging.h"
 
@@ -129,6 +130,9 @@ uint32_t mem_reclaim(void)
         uint32_t want = high_mark() - frame_free_count();
         uint32_t freed = bcache_shrink(want, can_write, &written);
 
+        if (freed < want) {
+            freed += filecache_shrink(want - freed);
+        }
         if (freed < want) {
             freed += pc_shrink(want - freed, can_write, &written);
         }

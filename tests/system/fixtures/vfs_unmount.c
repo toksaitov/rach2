@@ -228,6 +228,13 @@ static void inotify_unmount(struct vfs_mount *m)
     (void)m;
 }
 
+/* The unmount drops the file page cache's copies of the mount's files,
+ * which this fixture has none of. */
+static void filecache_forget_mount(const struct vfs_mount *m)
+{
+    (void)m;
+}
+
 /* The unmount lets a loop device set to clear itself go, and this fixture
  * mounts none. */
 static void loop_unmounted(struct block_device *d)

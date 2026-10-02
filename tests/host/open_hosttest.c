@@ -603,6 +603,30 @@ void signal_post_thread(process_t *t, int signo, const struct k_siginfo *info)
     (void)info;
 }
 
+/** The file page cache, which has no page in the rows. */
+int filecache_read(const struct fd_entry *e, uint32_t pgoff, uintptr_t phys)
+{
+    (void)e;
+    (void)pgoff;
+    (void)phys;
+    return 0;
+}
+
+/** No change counted. */
+uint32_t filecache_epoch(void)
+{
+    return 0;
+}
+
+/** Keep no page. */
+void filecache_store(const struct fd_entry *e, uint32_t pgoff, uintptr_t phys, uint32_t epoch)
+{
+    (void)e;
+    (void)pgoff;
+    (void)phys;
+    (void)epoch;
+}
+
 /** Require a live open handle before truncation. */
 int vfs_truncate(struct vfs_mount *mnt, void *at, uint64_t size)
 {

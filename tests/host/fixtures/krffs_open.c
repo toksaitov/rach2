@@ -86,6 +86,13 @@ static int walk_exe(struct vfs_ref *cur, void *found, int locked)
     return -ENOENT;
 }
 
+/** The file page cache, which keeps no page of the fixture's files. */
+static void filecache_forget(struct vfs_mount *mnt, void *node)
+{
+    (void)mnt;
+    (void)node;
+}
+
 /** inotify's report of a new entry, which no row watches. */
 static void watch_made(struct vfs_mount *mnt, void *dir, const char *name, uint32_t isdir)
 {

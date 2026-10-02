@@ -76,6 +76,7 @@ C_SRC = kernel.c \
         sys/mm/mm.c \
         sys/mm/filemap.c \
         sys/mm/shmem.c \
+        sys/mm/filecache.c \
         sys/mm/frame.c \
         sys/mm/pagecache.c \
         sys/mm/modlayout.c \
