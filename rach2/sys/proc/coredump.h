@@ -30,8 +30,8 @@ uint8_t *core_notes(int signo, uint32_t *size);
  * RLIMIT_CORE, past which the file stops short, as Linux's does. A page of
  * a file the process never touched is read from the file; the zeros of a
  * page of anonymous memory it never touched are a hole, which does not
- * count toward the limit. 0, or a negative errno: -EFBIG at the limit, -ENOMEM, or the
- * writer's.
+ * count toward the limit. 0, or a negative errno: -EFBIG at the limit,
+ * -ENOMEM, or the writer's.
  *
  * It first waits until the process's other threads, which the caller has
  * sent SIGKILL, have ended, as Linux's `coredump_wait` waits for them, so
