@@ -12,7 +12,11 @@
 # glibc's passes. OpenSSL 4 has no SSLv3 and no methods of one protocol
 # version, SSLv3_method and TLSv1_method to TLSv1_2_method, and does not say
 # so in its headers, so the build defines the macros that leave them out of
-# the ssl module.
+# the ssl module. The image gives every file the modification time 1, so
+# byte code that records its source's time would be stale on the machine,
+# and every import by a user who cannot write the cache would compile its
+# module again; with SOURCE_DATE_EPOCH set, the install records a hash of
+# each source instead, which an import checks.
 VERSION=3.14.8
 SOURCE_DIR=Python-3.14.8
 DEPENDS="zlib bzip2 xz openssl libffi sqlite readline ncurses util-linux"
@@ -31,4 +35,9 @@ port_build()
     )
     configure_autoconf --with-build-python="$WORK/host/python" CPPFLAGS="$NO_METHODS"
     make
+}
+
+port_install()
+{
+    SOURCE_DATE_EPOCH=1 make install DESTDIR="$DEST"
 }

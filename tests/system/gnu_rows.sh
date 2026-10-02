@@ -559,7 +559,9 @@ row_zip() {
 
 # Python with the modules of its standard library that link the root's
 # libraries, ctypes calling into the C library, sqlite3, a pool of worker
-# processes, which share POSIX semaphores, and a virtual environment.
+# processes, which share POSIX semaphores, a virtual environment, and byte
+# code checked against a hash of its source, which the image's file times
+# leave valid.
 row_python() {
     same "the version" "$(python3 -c 'import sys; print(sys.version_info[:2])')" "(3, 14)"
     output "the modules" python3 -c 'import zlib, bz2, lzma, ssl, hashlib, ctypes, sqlite3, readline, curses, uuid, json, pyexpat, decimal; print("imported")'
@@ -574,6 +576,7 @@ if __name__ == "__main__":
     has "ssl" "$(python3 -c 'import ssl; print(ssl.OPENSSL_VERSION)')" "OpenSSL 4.0.2"
     runs "venv" python3 -m venv --without-pip "$WORK/venv"
     same "the venv's python" "$("$WORK/venv/bin/python" -c 'import sys; print(sys.prefix)')" "$WORK/venv"
+    same "the byte code's flags" "$(python3 -c 'import importlib.util as u, traceback; print(open(u.cache_from_source(traceback.__file__), "rb").read(5)[4])')" "3"
 }
 
 # GnuPG makes a key, signs with it and verifies the signature, and encrypts
