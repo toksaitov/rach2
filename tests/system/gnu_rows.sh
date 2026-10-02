@@ -450,7 +450,9 @@ row_strace() {
     has "strace -c" "$(strace -c -o /dev/stdout true 2>&1)" "total"
 }
 
-# lsof lists a process's open file and the server's listening socket.
+# lsof lists a process's open file, the process that has a file open, in a
+# scan of every process, epoll descriptors among them, and the server's
+# listening socket.
 row_lsof() {
     local pid
     : > "$WORK/held"
@@ -458,6 +460,7 @@ row_lsof() {
     pid=$!
     sleep 1
     has "lsof -p" "$(lsof -p "$pid" 2>&1)" "$WORK/held"
+    has "lsof FILE" "$(lsof "$WORK/held" 2>&1)" "sleep"
     has "lsof -i" "$(lsof -nP -i TCP:22 -s TCP:LISTEN 2>&1)" "sshd"
     kill "$pid"
 }
