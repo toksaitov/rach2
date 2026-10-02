@@ -763,12 +763,18 @@ int procfs_oom_owner(int pid, uint32_t *uid, uint32_t *gid)
     return -ENOENT;
 }
 
-int procfs_fd_oom_owner(struct fd_entry *e, uint32_t *uid, uint32_t *gid)
+int procfs_fd_owner(struct fd_entry *e, uint32_t *uid, uint32_t *gid)
 {
     (void)e;
     (void)uid;
     (void)gid;
     return -1;
+}
+
+int procfs_fd_writable_sysctl(struct fd_entry *e)
+{
+    (void)e;
+    return 0;
 }
 
 uint32_t procfs_fd_ino(struct fd_entry *e)

@@ -1573,14 +1573,17 @@ void probe_main(unsigned int *sp)
         syscall1(SYS_CLOSE, sfd);
     }
 
-    /* A descriptor open on one of the network files names that file, and
-     * reports the identity the path it was opened by reports. The three of them
-     * were added to the open dispatcher and could have been left out of these
-     * two, where a file with no entry falls through to /proc/0/stat. */
+    /* A descriptor open on one of the global files names that file, and
+     * reports the identity the path it was opened by reports. Each was added
+     * to the open dispatcher and could have been left out of these two, where
+     * a file with no entry falls through to /proc/0/stat. */
     {
-        static const char *const netfiles[8] = {
-            "/proc/net/route", "/proc/net/arp",      "/proc/net/tcp",  "/proc/net/udp",
-            "/proc/net/raw",   "/proc/net/sockstat", "/proc/net/snmp", "/proc/net/unix"};
+        static const char *const netfiles[15] = {
+            "/proc/net/route", "/proc/net/arp",  "/proc/net/tcp",
+            "/proc/net/udp",   "/proc/net/raw",  "/proc/net/sockstat",
+            "/proc/net/snmp",  "/proc/net/unix", "/proc/uptime",
+            "/proc/meminfo",   "/proc/loadavg",  "/proc/version",
+            "/proc/cpuinfo",   "/proc/stat",     "/proc/sys/kernel/hostname"};
         char st_by_fd[128] = {0};   /* fstat64 fills it through an int-cast pointer */
         char st_by_path[128] = {0}; /* and stat64 the same */
         char pathbuf[128];
@@ -1589,7 +1592,7 @@ void probe_main(unsigned int *sp)
         unsigned int by_fd, by_path;
         int netfd, i, k;
 
-        for (i = 0; i < 8; i++) {
+        for (i = 0; i < 15; i++) {
             for (k = 0; netfiles[i][k]; k++) {
                 pathbuf[k] = netfiles[i][k];
             }

@@ -31,7 +31,8 @@
  * its group and the bit. A process of another user is refused the maps and
  * the descriptors of a root process under /proc, and reads its own. Its
  * /proc directory is root's while a change of ids leaves it not dumpable,
- * and its own once PR_SET_DUMPABLE makes it so, as on Linux.
+ * and its own once PR_SET_DUMPABLE makes it so, as on Linux, and so is a
+ * descriptor open on its maps.
  * mlock, munlock, mlockall and munlockall accept a mapped range and refuse a
  * gap with ENOMEM; mincore reports a touched page resident.
  * getcpu reports CPU 0, and personality keeps and returns its value.
@@ -318,7 +319,8 @@ static int privacies(void)
         }
         if (stat("/proc/self/", &st) != 0 || st.st_uid != 0 ||
             prctl(PR_SET_DUMPABLE, 1, 0, 0, 0) != 0 || stat("/proc/self/", &st) != 0 ||
-            st.st_uid != 4243 || stat("/proc/self/status", &st) != 0 || st.st_uid != 4243) {
+            st.st_uid != 4243 || stat("/proc/self/status", &st) != 0 || st.st_uid != 4243 ||
+            fstat(fd, &st) != 0 || st.st_uid != 4243) {
             _exit(5);
         }
         _exit(0);

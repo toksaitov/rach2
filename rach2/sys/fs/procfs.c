@@ -1306,6 +1306,32 @@ static const char *procfs_global_fd_path(int origin)
         return "/proc/console";
     case SYNTH_PROC_AUDIO:
         return "/proc/audio";
+    case SYNTH_PROC_UPTIME:
+        return "/proc/uptime";
+    case SYNTH_PROC_STATSYS:
+        return "/proc/stat";
+    case SYNTH_PROC_MEMINFO:
+        return "/proc/meminfo";
+    case SYNTH_PROC_MOUNTS:
+        return "/proc/mounts";
+    case SYNTH_PROC_USB:
+        return "/proc/usb";
+    case SYNTH_PROC_FILESYSTEMS:
+        return "/proc/filesystems";
+    case SYNTH_PROC_LOOP:
+        return "/proc/loop";
+    case SYNTH_PROC_INTERRUPTS:
+        return "/proc/interrupts";
+    case SYNTH_PROC_CPUINFO:
+        return "/proc/cpuinfo";
+    case SYNTH_PROC_LOADAVG:
+        return "/proc/loadavg";
+    case SYNTH_PROC_DISKSTATS:
+        return "/proc/diskstats";
+    case SYNTH_PROC_VERSION:
+        return "/proc/version";
+    case SYNTH_PROC_PARTITIONS:
+        return "/proc/partitions";
     default:
         return NULL;
     }
@@ -1451,6 +1477,13 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
                                (int)sizeof(where));
                 ap_str(t, where);
                 ap_str(t, "/uevent");
+                break;
+            }
+            if (pf->origin_file == SYNTH_PROC_SYSCTL) {
+                char where[96];
+
+                synth_dir_path(VNODE_PROC_SYS_DIR, pf->origin_pid, 0, where, (int)sizeof(where));
+                ap_str(t, where);
                 break;
             }
             ap_str(t, "/proc/");
@@ -3267,7 +3300,7 @@ int procfs_oom_owner(int pid, uint32_t *uid, uint32_t *gid)
     return 0;
 }
 
-int procfs_fd_oom_owner(struct fd_entry *e, uint32_t *uid, uint32_t *gid)
+int procfs_fd_owner(struct fd_entry *e, uint32_t *uid, uint32_t *gid)
 {
     const struct procfs_file *f;
 
@@ -3275,10 +3308,23 @@ int procfs_fd_oom_owner(struct fd_entry *e, uint32_t *uid, uint32_t *gid)
         return -1;
     }
     f = (const struct procfs_file *)e->priv;
-    if (f->origin_file != SYNTH_PROC_OOM_ADJ || procfs_oom_owner(f->origin_pid, uid, gid) != 0) {
+    if (procfs_global_fd_path(f->origin_file) || synth_net_name(f->origin_file) ||
+        f->origin_file == SYNTH_SYS_UEVENT || f->origin_file == SYNTH_PROC_SYSCTL ||
+        procfs_oom_owner(f->origin_pid, uid, gid) != 0) {
         return -1;
     }
-    return 0;
+    return f->origin_file == SYNTH_PROC_OOM_ADJ;
+}
+
+int procfs_fd_writable_sysctl(struct fd_entry *e)
+{
+    const struct procfs_file *f;
+
+    if (!e || e->type != FD_TYPE_PROC || !e->priv) {
+        return 0;
+    }
+    f = (const struct procfs_file *)e->priv;
+    return f->origin_file == SYNTH_PROC_SYSCTL && synth_sys_writable(f->origin_pid);
 }
 
 /** Whether `c` is a space as Linux's `isspace` has it: a space, a tab, a

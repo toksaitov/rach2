@@ -600,12 +600,9 @@ is dumpable, and to root otherwise, as on Linux;
 .Xr ps 1
 and
 .Xr top 1
-read a process's user from the directory's owner.
+read a process's user from the directory's owner, and
 .Xr fstat 2
-of a descriptor open on one of the files reports root, but for
-.Pa oom_score_adj ,
-where Linux reports the same owner as
-.Xr stat 2 .
+of a descriptor open on one of the files reports the same owner.
 .It Pa /proc/PID/stat
 One line of 24 space-separated fields:
 .Bd -literal -offset indent

@@ -6459,8 +6459,10 @@ static int32_t fstat_fill(fd_entry_t *entry, struct linux_stat64 *kst)
     } else if (entry->type == FD_TYPE_PROC) {
         /* A /proc text snapshot: a regular file whose inode is its origin's,
          * so fstat matches the stat of the path it was opened by, and whose
-         * mode and owner are too, which for oom_score_adj are its owner's. */
+         * mode and owner are too: a process's file is its owner's, as
+         * `synth_pid_owner` has it, and mode 0644 for oom_score_adj. */
         uint32_t uid, gid;
+        int owned;
 
         kst->st_mode = 0100444; /* S_IFREG | 0444 */
         kst->st_nlink = 1;
@@ -6468,10 +6470,13 @@ static int32_t fstat_fill(fd_entry_t *entry, struct linux_stat64 *kst)
         kst->st_dev = procfs_fd_is_sys(entry) ? SYSFS_FSID : PROCFS_FSID;
         kst->st_size = procfs_fd_is_sys(entry) ? 4096 : 0;
         kst->st_ino = procfs_fd_ino(entry);
-        if (procfs_fd_oom_owner(entry, &uid, &gid) == 0) {
-            kst->st_mode = 0100644; /* S_IFREG | 0644 */
+        owned = procfs_fd_owner(entry, &uid, &gid);
+        if (owned >= 0) {
             kst->st_uid = uid;
             kst->st_gid = gid;
+        }
+        if (owned == 1 || procfs_fd_writable_sysctl(entry)) {
+            kst->st_mode = 0100644; /* S_IFREG | 0644 */
         }
     } else if (entry->type == FD_TYPE_CONSOLE) {
         /* stdin/stdout/stderr and /dev/console: report the same identity as

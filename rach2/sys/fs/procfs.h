@@ -142,9 +142,13 @@ uint32_t procfs_ino_pid(int pid);
  * process. */
 int procfs_oom_owner(int pid, uint32_t *uid, uint32_t *gid);
 
-/** The same owner for a descriptor open on an oom_score_adj file: 0 with
+/** The same owner for a descriptor open on a file of /proc/<pid>: 1 for
+ * oom_score_adj, whose owner may write it, and 0 for another file, with
  * `*uid` and `*gid` set, or -1 when `e` is no such descriptor or its process
  * is gone. */
-int procfs_fd_oom_owner(struct fd_entry *e, uint32_t *uid, uint32_t *gid);
+int procfs_fd_owner(struct fd_entry *e, uint32_t *uid, uint32_t *gid);
+
+/** Whether `e` is open on a /proc/sys file a privileged caller may write. */
+int procfs_fd_writable_sysctl(struct fd_entry *e);
 
 #endif /* _PROCFS_H_ */
