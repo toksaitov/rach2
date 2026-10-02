@@ -955,7 +955,7 @@ static int listing(const char *dir, char *out, int cap)
 static void pid_dir_rows(void)
 {
     static const char files[] = "stat cmdline fd maps smaps status statm auxv environ comm "
-                                "mem oom_score_adj mounts limits exe cwd root ";
+                                "mem oom_score_adj mounts mountinfo limits exe cwd root ";
     static char got[512], want[512], names[4096];
     char dir[40] = "/proc/self/task/";
     int pid = syscall1(SYS_GETPID, 0);
