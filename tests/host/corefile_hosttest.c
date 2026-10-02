@@ -1221,6 +1221,12 @@ static void trailing_zero_limit(void)
     row_end();
 }
 
+/* A mount is its own base here: no test makes a bind mount. */
+const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m)
+{
+    return m;
+}
+
 void signal_post_thread(process_t *t, int signo, const struct k_siginfo *info)
 {
     (void)t;

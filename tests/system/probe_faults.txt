@@ -5860,3 +5860,13 @@ old
 new
         any = t;
 end
+
+fault bind-lock-by-mount
+probe tmpfsmusl
+file rach2/sys/syscall_fs.c
+expect TMPFSMUSL FAIL (a lock through a bind meets one through its source
+old
+        key->mnt = vfs_mount_base(e->ofd->vmnt);
+new
+        key->mnt = e->ofd->vmnt;
+end

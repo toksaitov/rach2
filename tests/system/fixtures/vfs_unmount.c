@@ -47,6 +47,7 @@ struct vfs_mount {
     const char *covered_path;
     int state, refs, inprogress, ns_wq, claim, opens, releases;
     uint32_t ns_hidden;
+    struct vfs_mount *bind_of;
 };
 struct vfs_ref {
     struct vfs_mount *mnt;

@@ -509,6 +509,12 @@ static void description_live(void)
 }
 
 /** Exercise a waiting independent open, a shared open, and other file types. */
+/* A mount is its own base here: no test makes a bind mount. */
+const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m)
+{
+    return m;
+}
+
 int main(void)
 {
     fd_table_t table;

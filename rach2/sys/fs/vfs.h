@@ -301,6 +301,12 @@ struct vfs_mount {
      * mount made in one is seen there and in the namespaces made from it
      * afterwards, and a mount of the boot by all. */
     uint32_t ns_hidden;
+    /* For a bind mount, the mount whose file system it shows, never itself
+     * a bind, and the path of its root within that file system; NULL and
+     * empty for every other mount. A bind has that mount's type, device,
+     * private state and lock, and its own root, flags and place. */
+    struct vfs_mount *bind_of;
+    char bind_root[VFS_COVERED_PATH_MAX];
 };
 
 /* A held place: one node on one mount. The resolver returns these; whoever
@@ -387,6 +393,11 @@ struct vfs_mount *vfs_root_mount(void);
 
 /** Whether the mount's backing device has been removed. */
 int vfs_mount_gone(const struct vfs_mount *mnt);
+
+/** The mount whose file system `m` shows: the one a bind mount was made
+ * from, or `m` itself. A file is the same file by its inode number on the
+ * base mount through every mount that shows it. */
+const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m);
 
 /** Whether a root is installed at entry zero, of any type. */
 int vfs_root_mounted(void);
@@ -483,6 +494,25 @@ void vfs_walk_unlock(struct vfs_mount *mnt);
 int vfs_do_mount(const char *source, const char *target, const char *type, uint32_t flags,
                  const char *options);
 int vfs_do_umount(const char *target, int dir);
+
+/**
+ * mount(2) with MS_BIND: the directory `source` names is shown at the
+ * directory `target` names, with the flags of the mount it is on, as
+ * `vfs_do_mount` places a mount; with `rec`, the mounts below it are shown
+ * below the new one too, as MS_REC asks. The source's mount cannot be
+ * unmounted while a bind of it stands. EINVAL for a source that is not the
+ * root of a type that takes the rest of a path in one call but is on one,
+ * or that is on the KRFFS boot root, whose nodes the syscall layer keeps by
+ * the root mount; ENOTDIR for a source or target that is not a directory.
+ */
+int vfs_do_bind(const char *source, const char *target, int rec);
+
+/**
+ * mount(2) with MS_REMOUNT and MS_BIND: the flags of the mount `m` alone
+ * become `flags`, as Linux changes a bind mount's; its file system is not
+ * remounted. A mount whose base is read-only stays read-only, EROFS.
+ */
+int vfs_remount_bind(struct vfs_mount *m, uint32_t flags);
 
 /**
  * mount(2) with MS_REMOUNT: the flags of the active mount `m` become

@@ -2568,7 +2568,9 @@ uint32_t procfs_mount_dev(int i, const struct vfs_mount *m)
  * the root of the mount within its file system, its mount point, its
  * options, a hyphen where Linux puts its propagation fields, its type, its
  * source and the file system's options. The id is the entry's index plus
- * one, and the root is its own parent. Every process sees one table.
+ * one, and the root is its own parent. A bind mount has the device of the
+ * mount it shows and the path of its root within that file system. Every
+ * process sees one table.
  */
 static int procfs_gen_mountinfo(struct procfs_text *t)
 {
@@ -2577,17 +2579,20 @@ static int procfs_gen_mountinfo(struct procfs_text *t)
     for (i = 0; i < vfs_mount_slots(); i++) {
         struct vfs_mount *m = vfs_mount_at(i);
         uint32_t dev;
-        int parent = 1;
+        int parent = 1, base = i;
 
         if (!procfs_mount_listed(i, m)) {
             continue;
         }
-        for (j = 0; i >= 3 && j < vfs_mount_slots(); j++) {
-            if (vfs_mount_at(j) == m->parent) {
+        for (j = 0; j < vfs_mount_slots(); j++) {
+            if (i >= 3 && vfs_mount_at(j) == m->parent) {
                 parent = j + 1;
             }
+            if (vfs_mount_at(j) == vfs_mount_base(m)) {
+                base = j;
+            }
         }
-        dev = procfs_mount_dev(i, m);
+        dev = procfs_mount_dev(base, vfs_mount_base(m));
         ap_u32(t, (uint32_t)i + 1);
         ap_ch(t, ' ');
         ap_u32(t, i == 0 ? 1 : (uint32_t)parent);
@@ -2595,7 +2600,9 @@ static int procfs_gen_mountinfo(struct procfs_text *t)
         ap_u32(t, (dev >> 8) & 0xfff);
         ap_ch(t, ':');
         ap_u32(t, (dev & 0xff) | ((dev >> 12) & 0xfff00));
-        ap_str(t, " / ");
+        ap_ch(t, ' ');
+        ap_str(t, m->bind_of ? m->bind_root : "/");
+        ap_ch(t, ' ');
         ap_str(t, m->covered_path);
         ap_ch(t, ' ');
         ap_mount_options(t, i, m);

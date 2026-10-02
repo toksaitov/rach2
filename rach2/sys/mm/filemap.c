@@ -93,6 +93,7 @@ static struct dshare *dshare_of(const struct vfs_mount *mnt, uint64_t ino)
 {
     struct dshare *ds;
 
+    mnt = vfs_mount_base(mnt);
     for (ds = dshares; ds && !(ds->mnt == mnt && ds->ino == ino); ds = ds->next) {
     }
     return ds;
@@ -380,7 +381,7 @@ struct vm_file *filemap_disk_shared(const fd_entry_t *e)
         if (!ds) {
             return NULL;
         }
-        ds->mnt = e->ofd->vmnt;
+        ds->mnt = vfs_mount_base(e->ofd->vmnt);
         ds->ino = e->ofd->ino;
         wait_queue_init(&ds->left);
         ds->next = dshares;

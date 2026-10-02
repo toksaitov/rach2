@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd October 2, 2026
 .Dt MOUNT 8
 .Os
 .Sh NAME
@@ -86,9 +86,16 @@ describes: ext2 and tmpfs change between
 .Ql ro
 and
 .Ql rw .
-Other flags are rejected, including those requested by
 .Ql bind
 and
+.Ql rbind
+show a directory at another place, the second with the mounts below it,
+as
+.Xr mount 2
+describes, and
+.Ql remount,bind
+changes the flags of that one mount.
+Other flags are rejected, including those requested by
 .Ql move .
 .Pa /proc/mounts
 records each mount with six fields in fstab format, its options

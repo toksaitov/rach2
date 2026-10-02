@@ -2827,6 +2827,12 @@ static void mapping_reclaims(void)
 }
 
 /** Exercise mounted open and loop references. */
+/* A mount is its own base here: no test makes a bind mount. */
+const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m)
+{
+    return m;
+}
+
 int vfs_device_holds(block_device_t *dev)
 {
     (void)dev;

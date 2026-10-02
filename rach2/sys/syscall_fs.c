@@ -324,7 +324,7 @@ static void fd_lock_key(const fd_entry_t *e, struct lock_key *key)
 {
     key->mnt = NULL;
     if (e->ofd && e->ofd->vmnt) {
-        key->mnt = e->ofd->vmnt;
+        key->mnt = vfs_mount_base(e->ofd->vmnt);
         key->ino =
             mnt_locks_by_node(e->ofd->vmnt) ? (uint64_t)(uintptr_t)e->ofd->vnode : e->ofd->ino;
     } else if (e->dev) {
@@ -2479,7 +2479,7 @@ static int32_t open_fifo(struct vfs_ref *ref, int fd, uint64_t ino, int flags)
     vfs_desc_open(mnt);
     vfs_walk_unlock(mnt);
     vfs_leave(mnt);
-    rc = fifo_attach(e, mnt, ino, flags);
+    rc = fifo_attach(e, vfs_mount_base(mnt), ino, flags);
     if (rc != 0) {
         fd_release_orphan(e);
         fd_free(current_proc->fds, fd);
@@ -2940,6 +2940,7 @@ out:
 }
 
 #define MS_REMOUNT 32
+#define MS_BIND    0x00001000u
 
 /* The propagation flags, which mount(2) takes alone, with MS_REC. */
 #define MS_REC        0x00004000u
@@ -2979,13 +2980,16 @@ static int mount_privileged(const char *type)
 
 /**
  * mount(2) with MS_REMOUNT: the mount whose root `path` names takes the
- * flags `flags` (`vfs_remount`); -EINVAL for a path that is no mount's
- * root. A mount made read-only must have no descriptor open for writing on
- * it, -EBUSY, as on Linux.
+ * flags `flags`; -EINVAL for a path that is no mount's root. With `bind`,
+ * for MS_BIND, that mount alone (`vfs_remount_bind`); without, the file
+ * system it shows, through every mount that shows it (`vfs_remount`). A
+ * mount made read-only must have no descriptor open for writing through
+ * what the change makes read-only, -EBUSY, as on Linux.
  */
-static int32_t remount_at(const char *path, uint32_t flags)
+static int32_t remount_at(const char *path, uint32_t flags, int bind)
 {
     struct vfs_ref ref;
+    struct vfs_mount *m;
     process_t *pr;
     int i, rc = vfs_resolve(0, path, 0, &ref, 0, 0);
 
@@ -2996,13 +3000,14 @@ static int32_t remount_at(const char *path, uint32_t flags)
         vfs_ref_release(&ref);
         return -EINVAL;
     }
-    if ((flags & VFS_MS_RDONLY) && !(ref.mnt->flags & VFS_MS_RDONLY)) {
+    m = bind || !ref.mnt->bind_of ? ref.mnt : ref.mnt->bind_of;
+    if ((flags & VFS_MS_RDONLY) && !(m->flags & VFS_MS_RDONLY)) {
         for (pr = proc_list; pr && rc == 0; pr = pr->next) {
             for (i = 0; pr->fds && i < fd_table_cap(pr->fds); i++) {
                 fd_entry_t *e = &pr->fds->entries[i];
 
                 if (e->type == FD_TYPE_FILE && (e->flags & FD_FLAG_WRITE) && e->ofd &&
-                    e->ofd->vmnt == ref.mnt) {
+                    (bind ? e->ofd->vmnt == m : vfs_mount_base(e->ofd->vmnt) == m)) {
                     rc = -EBUSY;
                     break;
                 }
@@ -3010,9 +3015,23 @@ static int32_t remount_at(const char *path, uint32_t flags)
         }
     }
     if (rc == 0) {
-        rc = vfs_remount(ref.mnt, flags);
+        rc = bind ? vfs_remount_bind(m, flags) : vfs_remount(m, flags);
     }
     vfs_ref_release(&ref);
+    return rc;
+}
+
+/* mount(2) with MS_BIND: the source is a path, as the target is, and MS_REC
+ * shows the mounts below it too (`vfs_do_bind`). */
+static int32_t bind_at(uint32_t source, const char *target, uint32_t flags)
+{
+    char *spath;
+    int rc = path_from_user(AT_FDCWD, (const char __user *)source, &spath);
+
+    if (rc == 0) {
+        rc = vfs_do_bind(spath, target, (flags & MS_REC) != 0);
+        path_buf_put(spath);
+    }
     return rc;
 }
 
@@ -3024,7 +3043,8 @@ static int32_t remount_at(const char *path, uint32_t flags)
  * copied here; the order of work and every other refusal are the VFS's
  * (vfs_do_mount). `data` may be NULL, which is an empty option string. With
  * MS_REMOUNT the source, the type and the data are not read, as on Linux
- * for the flags here (`remount_at`). A change of propagation alone,
+ * for the flags here (`remount_at`), and with MS_BIND alone the type and
+ * the data are not (`bind_at`). A change of propagation alone,
  * MS_PRIVATE, MS_SLAVE, MS_SHARED or MS_UNBINDABLE with MS_REC or without,
  * changes nothing: every mount is private to the namespaces that see it,
  * as unshare(1) makes them by default.
@@ -3054,7 +3074,19 @@ int32_t sys_mount(isr_params_t *params)
         }
         n = path_from_user(AT_FDCWD, (const char __user *)params->ecx, &tpath);
         if (n == 0) {
-            n = remount_at(tpath, params->esi & ~(uint32_t)MS_REMOUNT);
+            n = remount_at(tpath, params->esi & ~(uint32_t)(MS_REMOUNT | MS_BIND),
+                           (params->esi & MS_BIND) != 0);
+            path_buf_put(tpath);
+        }
+        return n;
+    }
+    if (params->esi & MS_BIND) {
+        if (!params->ebx || !params->ecx) {
+            return -EFAULT;
+        }
+        n = path_from_user(AT_FDCWD, (const char __user *)params->ecx, &tpath);
+        if (n == 0) {
+            n = bind_at(params->ebx, tpath, params->esi);
             path_buf_put(tpath);
         }
         return n;
@@ -5416,7 +5448,8 @@ static void stat64_root_times(struct linux_stat64 *kst)
 /* A stat64 for a node on a mount that is not the root, from its getattr:
  * the device is the node the mount was made from, or else one the mount's
  * index gives, so a program telling files apart by (st_dev, st_ino) sees
- * two mounts as two devices (`procfs_mount_dev`). */
+ * two mounts as two devices (`procfs_mount_dev`), and a bind mount as the
+ * device of the mount it shows. */
 static int32_t vfs_fill_stat64(struct linux_stat64 *kst, const struct vfs_ref *r)
 {
     struct vfs_stat st;
@@ -5430,8 +5463,8 @@ static int32_t vfs_fill_stat64(struct linux_stat64 *kst, const struct vfs_ref *r
     }
     k_memset(kst, 0, sizeof(*kst));
     for (i = 0; i < vfs_mount_slots(); i++) {
-        if (vfs_mount_at(i) == r->mnt) {
-            kst->st_dev = procfs_mount_dev(i, r->mnt);
+        if (vfs_mount_at(i) == vfs_mount_base(r->mnt)) {
+            kst->st_dev = procfs_mount_dev(i, vfs_mount_base(r->mnt));
         }
     }
     kst->st_mode = st.mode;
@@ -10122,7 +10155,8 @@ static int root_dir_in_use(const struct vfs_mount *mnt, const krffs_node_t *dir)
         return 1;
     }
     for (pr = proc_list; pr; pr = pr->next) {
-        if (pr->fs && pr->fs->cwd_mnt == mnt && pr->fs->cwd_node == dir) {
+        if (pr->fs && pr->fs->cwd_mnt && vfs_mount_base(pr->fs->cwd_mnt) == vfs_mount_base(mnt) &&
+            pr->fs->cwd_node == dir) {
             return 1;
         }
     }

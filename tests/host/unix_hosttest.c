@@ -1372,6 +1372,12 @@ static void flight_lock_row(void)
     end_row("flight lock");
 }
 
+/* A mount is its own base here: no test makes a bind mount. */
+const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m)
+{
+    return m;
+}
+
 int main(void)
 {
     unix_init();

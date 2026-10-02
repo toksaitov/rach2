@@ -14,6 +14,15 @@
  * one; a working directory there climbs to /dev by "..", /dev/pts/../shm
  * is the same directory, and umount2 refuses /dev/shm with EBUSY.
  *
+ * A bind of a directory of a tmpfs shows it at another directory: a file
+ * made through the bind is in the source with the same device and inode,
+ * an exclusive flock through one path refuses one through the other, ".."
+ * at the bind's root climbs to the parent of the directory it covers, a
+ * bind remounted read-only refuses a write while its source takes one,
+ * mountinfo gives the bind its root within the file system, and the
+ * source's mount is busy until the bind is unmounted. A recursive bind of
+ * /dev has its devices and /dev/shm, which are unmounted in turn.
+ *
  * Prints "TMPFSMUSL OK" on success and "TMPFSMUSL FAIL (detail)" otherwise.
  */
 
@@ -23,6 +32,7 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/file.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
 #include <sys/statfs.h>
@@ -30,6 +40,9 @@
 
 #define DIR_PATH    "/tmp/tmpfsmusl"
 #define DEEP_PATH   "/tmp/tmpfsmusl-d"
+#define BIND_SRC    "/tmp/tmpfsmusl-s"
+#define BIND_DST    "/tmp/tmpfsmusl-b"
+#define BIND_DEV    "/tmp/tmpfsmusl-dev"
 #define TMPFS_MAGIC 0x01021994
 
 /** Report one failed check and return 1, the probe's failure status. */
@@ -239,9 +252,79 @@ static int shm(void)
     return 0;
 }
 
+/** Whether a line of /proc/self/mountinfo has `text` in it. */
+static int mountinfo_has(const char *text)
+{
+    char line[256];
+    FILE *f = fopen("/proc/self/mountinfo", "r");
+    int found = 0;
+
+    if (!f) {
+        return 0;
+    }
+    while (!found && fgets(line, sizeof(line), f)) {
+        found = strstr(line, text) != NULL;
+    }
+    fclose(f);
+    return found;
+}
+
+static int bound(void)
+{
+    struct stat a, b;
+    char cwd[64];
+    int one, two;
+
+    if (mkdir(BIND_SRC, 0755) != 0 || mkdir(BIND_DST, 0755) != 0 ||
+        mount("tmpfsmusl", BIND_SRC, "tmpfs", 0, NULL) != 0 || mkdir(BIND_SRC "/sub", 0755) != 0) {
+        return fail("the source of a bind");
+    }
+    if (mount(BIND_SRC "/sub", BIND_DST, NULL, MS_BIND, NULL) != 0) {
+        return fail("a bind of a directory of a tmpfs");
+    }
+    if (!put(BIND_DST "/f", "through") || !holds(BIND_SRC "/sub/f", "through") ||
+        stat(BIND_DST "/f", &a) != 0 || stat(BIND_SRC "/sub/f", &b) != 0 || a.st_dev != b.st_dev ||
+        a.st_ino != b.st_ino) {
+        return fail("a file made through a bind is the source's file");
+    }
+    one = open(BIND_DST "/f", O_RDONLY);
+    two = open(BIND_SRC "/sub/f", O_RDONLY);
+    if (one < 0 || two < 0 || flock(one, LOCK_EX) != 0 ||
+        flock(two, LOCK_EX | LOCK_NB) != -1 || errno != EWOULDBLOCK) {
+        return fail("a lock through a bind meets one through its source");
+    }
+    close(one);
+    close(two);
+    if (chdir(BIND_DST) != 0 || chdir("..") != 0 || !getcwd(cwd, sizeof(cwd)) ||
+        strcmp(cwd, "/tmp") != 0 || chdir("/") != 0) {
+        return fail("\"..\" at a bind's root climbs to the directory it covers");
+    }
+    if (mount(NULL, BIND_DST, NULL, MS_REMOUNT | MS_BIND | MS_RDONLY, NULL) != 0 ||
+        put(BIND_DST "/g", "no") || errno != EROFS || !put(BIND_SRC "/sub/g", "yes")) {
+        return fail("a bind remounted read-only refuses a write its source takes");
+    }
+    if (!mountinfo_has(" /sub " BIND_DST " ")) {
+        return fail("mountinfo gives a bind its root within the file system");
+    }
+    if (umount2(BIND_SRC, 0) != -1 || errno != EBUSY || umount2(BIND_DST, 0) != 0 ||
+        umount2(BIND_SRC, 0) != 0 || rmdir(BIND_DST) != 0 || rmdir(BIND_SRC) != 0) {
+        return fail("the source's mount is busy until the bind is unmounted");
+    }
+    if (mkdir(BIND_DEV, 0755) != 0 || mount("/dev", BIND_DEV, NULL, MS_BIND | MS_REC, NULL) != 0 ||
+        stat(BIND_DEV "/null", &a) != 0 || !S_ISCHR(a.st_mode) || stat(BIND_DEV "/shm", &b) != 0 ||
+        (b.st_mode & 07777) != 01777) {
+        return fail("a recursive bind of /dev has its devices and /dev/shm");
+    }
+    if (umount2(BIND_DEV, 0) != -1 || errno != EBUSY || umount2(BIND_DEV "/shm", 0) != 0 ||
+        umount2(BIND_DEV, 0) != 0 || rmdir(BIND_DEV) != 0) {
+        return fail("a recursive bind is unmounted from the bottom");
+    }
+    return 0;
+}
+
 int main(void)
 {
-    if (placed() || deep() || shm()) {
+    if (placed() || deep() || shm() || bound()) {
         return 1;
     }
     printf("TMPFSMUSL OK\n");

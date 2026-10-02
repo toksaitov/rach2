@@ -653,6 +653,12 @@ void inotify_desc(struct open_file *ofd, uint32_t mask)
     (void)mask;
 }
 
+/* A mount is its own base here: no test makes a bind mount. */
+const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m)
+{
+    return m;
+}
+
 int main(void)
 {
     relocation(0);

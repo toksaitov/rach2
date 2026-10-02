@@ -9,6 +9,7 @@
 #include "../isr.h"
 #include "../fs/fd.h"
 #include "../fs/file.h"
+#include "../fs/vfs.h"
 #include "../proc/process.h"
 #include "../proc/wait_queue.h"
 #include "../mm/kheap.h"
@@ -39,7 +40,7 @@ struct inotify;
 struct watch {
     struct watch *next; /* the list of every watch of the machine */
     struct inotify *owner;
-    struct vfs_mount *mnt;
+    const struct vfs_mount *mnt; /* the base mount of the file system (vfs.h) */
     uint64_t ino;
     int32_t wd;
     uint32_t mask;
@@ -191,7 +192,7 @@ void inotify_file(struct vfs_mount *mnt, uint64_t ino, uint32_t mask)
 
     for (w = watches; w; w = next) {
         next = w->next;
-        if (w->mnt == mnt && w->ino == ino) {
+        if (w->mnt == vfs_mount_base(mnt) && w->ino == ino) {
             (void)deliver(w, mask | (w->isdir ? IN_ISDIR : 0u), 0, NULL);
         }
     }
@@ -204,7 +205,7 @@ void inotify_child(struct vfs_mount *mnt, uint64_t dir_ino, const char *name, ui
 
     for (w = watches; w; w = next) {
         next = w->next;
-        if (w->mnt == mnt && w->ino == dir_ino && w->isdir) {
+        if (w->mnt == vfs_mount_base(mnt) && w->ino == dir_ino && w->isdir) {
             (void)deliver(w, mask, cookie, name);
         }
     }
@@ -228,7 +229,7 @@ void inotify_gone(struct vfs_mount *mnt, uint64_t ino)
 
     for (w = watches; w; w = next) {
         next = w->next;
-        if (w->mnt == mnt && w->ino == ino &&
+        if (w->mnt == vfs_mount_base(mnt) && w->ino == ino &&
             !deliver(w, IN_DELETE_SELF | (w->isdir ? IN_ISDIR : 0u), 0, NULL)) {
             drop(w);
         }
@@ -427,7 +428,7 @@ int32_t inotify_watch(int fd, struct vfs_mount *mnt, uint64_t ino, int isdir, ui
     }
     in = (struct inotify *)e->priv;
     for (w = watches; w; w = w->next) {
-        if (w->owner == in && w->mnt == mnt && w->ino == ino) {
+        if (w->owner == in && w->mnt == vfs_mount_base(mnt) && w->ino == ino) {
             if (mask & IN_MASK_CREATE) {
                 return -EEXIST;
             }
@@ -443,7 +444,7 @@ int32_t inotify_watch(int fd, struct vfs_mount *mnt, uint64_t ino, int isdir, ui
         return -ENOMEM;
     }
     w->owner = in;
-    w->mnt = mnt;
+    w->mnt = vfs_mount_base(mnt);
     w->ino = ino;
     w->isdir = isdir;
     w->mask = keep;

@@ -109,7 +109,8 @@ int fd_node_busy(struct vfs_mount *mnt, void *node)
     struct ofd_rec *rec;
 
     for (rec = ofds; rec; rec = rec->next) {
-        if (rec->ofd.vmnt == mnt && rec->ofd.vnode == node && rec->ofd.busy) {
+        if (rec->ofd.vmnt && vfs_mount_base(rec->ofd.vmnt) == vfs_mount_base(mnt) &&
+            rec->ofd.vnode == node && rec->ofd.busy) {
             return 1;
         }
     }
@@ -134,8 +135,8 @@ int fd_ofd_holders(const struct vfs_mount *mnt, const void *node, const struct o
     int held = 0;
 
     for (rec = ofds; rec; rec = rec->next) {
-        if (rec->ofd.vmnt == mnt && rec->ofd.vnode == node &&
-            (&rec->ofd != going || rec->ofd.refcount > 1)) {
+        if (rec->ofd.vmnt && vfs_mount_base(rec->ofd.vmnt) == vfs_mount_base(mnt) &&
+            rec->ofd.vnode == node && (&rec->ofd != going || rec->ofd.refcount > 1)) {
             held++;
         }
     }

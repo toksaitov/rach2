@@ -79,11 +79,54 @@ writing, or on ext2 while a file removed from it is open,
 and is not made writable on a device that refuses writes or has failed
 one,
 .Er EROFS .
-Other bits, including
+With
 .Dv MS_BIND
-and
+as well, the change is to that mount alone, as Linux changes a bind
+mount's flags, and its file system is not remounted; a mount whose file
+system is read-only is not made writable this way,
+.Er EROFS .
+Without it, a change made through a bind mount is a change of the file
+system it shows, through every mount of it.
+Other bits, including
 .Dv MS_MOVE ,
 are refused.
+.Pp
+.Dv MS_BIND
+shows the directory
+.Fa source
+names, a path, at the directory
+.Fa target
+names, with the flags of the mount the source is on;
+.Fa filesystemtype
+and
+.Fa data
+are not read, and other flags are ignored, as on Linux.
+The two are one file system: a file has one inode, its locks, its shared
+mappings and its watches whichever path names it, and
+.Xr stat 2
+gives it one device.
+With
+.Dv MS_REC ,
+the mounts below the source are shown below the new mount too, each a bind
+of its own, so a bind of
+.Pa /dev
+has
+.Pa /dev/shm .
+The source must be a directory,
+.Er ENOTDIR ,
+not on KRFFS, whose nodes move, and not inside
+.Pa /dev ,
+.Pa /proc
+or
+.Pa /sys ,
+whose roots may be bound,
+.Er EINVAL .
+The mount the source is on cannot be unmounted while a bind of it stands,
+.Er EBUSY ;
+a bind is unmounted as any mount is, and the mounts below it first.
+.Pa /proc/self/mountinfo
+gives a bind the device of the mount it shows and, as its root, the path
+of its source within that file system.
 A change of propagation alone,
 .Dv MS_PRIVATE ,
 .Dv MS_SLAVE ,

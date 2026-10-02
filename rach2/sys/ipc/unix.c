@@ -1000,7 +1000,8 @@ static struct unix_sock *lookup(const struct unix_name *n, int type, int32_t *er
         }
         if (abstract(n) ? (!s->bound_fs && s->type == type && same_name(&s->name, n) &&
                            s->ns == proc_netns(current_proc))
-                        : (s->bound_fs && s->fs_ref.mnt == mnt && s->fs_ino == ino)) {
+                        : (s->bound_fs && vfs_mount_base(s->fs_ref.mnt) == vfs_mount_base(mnt) &&
+                           s->fs_ino == ino)) {
             s->refs++;
             return s;
         }
