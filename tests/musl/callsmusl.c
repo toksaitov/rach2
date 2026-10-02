@@ -832,6 +832,18 @@ static void on_usr2(int signo)
     usr2s++;
 }
 
+/* Spend a while in user mode: ITIMER_VIRTUAL counts only user time, and a
+   loop that did nothing but call times() would spend nearly all of its time
+   in the kernel, where a slow guest's ticks all land. */
+static void spin_user(void)
+{
+    volatile unsigned int n = 0;
+
+    while (n < 100000) {
+        n++;
+    }
+}
+
 /* POSIX timers on the process's and the thread's clocks of processor time:
    each posts its signal three times while the process spins for at most
    three seconds of processor time, and timer_gettime reports no more left
@@ -866,6 +878,7 @@ static int cpu_ptimers(void)
     timer_settime(proc_timer, 0, &every, NULL);
     timer_settime(thread_timer, 0, &every, NULL);
     do {
+        spin_user();
         times(&t);
     } while ((usr1s < 3 || usr2s < 3) && t.tms_utime + t.tms_stime - used < 300);
     if (timer_gettime(proc_timer, &cur) != 0 || cur.it_interval.tv_nsec != 10000000 ||
@@ -903,6 +916,7 @@ static int cputimers(void)
         return fail("getitimer of ITIMER_PROF did not report its interval");
     }
     do {
+        spin_user();
         times(&t);
     } while ((vtalrms < 3 || profs < 3) && t.tms_utime + t.tms_stime - used < 300);
     setitimer(ITIMER_VIRTUAL, &off, NULL);
