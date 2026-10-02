@@ -325,7 +325,9 @@ static int may_search(struct vfs_mount *mnt, void *node, int use_real)
 
 /**
  * Whether the component of `path` at `p`, with the part before it, is the
- * caller's working directory or one of the directories on the way to it.
+ * caller's working directory or one of the directories on the way to it,
+ * for a walk of `path` from the caller's root: a path with its leading
+ * slash, or without it and no `start`, as the open calls give one.
  *
  * The syscall layer joins a relative name to the working directory's path
  * and the walk starts at the root, where Linux starts a relative walk at the
@@ -335,12 +337,22 @@ static int may_search(struct vfs_mount *mnt, void *node, int use_real)
  * relatively, so the walk does not ask search permission for a component on
  * that way; any other component of such a directory still needs it.
  */
-static int toward_cwd(const char *path, const char *p)
+static int toward_cwd(const struct vfs_ref *start, const char *path, const char *p)
 {
     const char *cwd = current_proc ? proc_cwd(current_proc) : 0;
-    uint32_t at = (uint32_t)(p - path), len = 0, i;
+    uint32_t at, len = 0, i;
 
-    if (!cwd || path[0] != '/' || path[1] == '/' || p < path || at > k_strlen(path)) {
+    if (!cwd || cwd[0] != '/' || (start && path[0] != '/') || (path[0] == '/' && path[1] == '/')) {
+        return 0;
+    }
+    while (*path == '/') {
+        path++;
+    }
+    while (*cwd == '/') {
+        cwd++;
+    }
+    at = (uint32_t)(p - path);
+    if (p < path || at > k_strlen(path)) {
         return 0;
     }
     while (p[len] != '\0' && p[len] != '/') {
@@ -972,7 +984,7 @@ begin:
             break;
         }
 
-        rc = toward_cwd(path, p) ? 0 : may_search(cur.mnt, cur.node, use_real);
+        rc = toward_cwd(start, path, p) ? 0 : may_search(cur.mnt, cur.node, use_real);
         if (rc != 0) {
             goto out_err;
         }

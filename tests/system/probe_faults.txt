@@ -5806,9 +5806,9 @@ probe permmusl
 file rach2/sys/fs/vfs.c
 expect PERMMUSL FAIL (a file of the working directory below an unsearchable one
 old
-        rc = toward_cwd(path, p) ? 0 : may_search(cur.mnt, cur.node, use_real);
+        rc = toward_cwd(start, path, p) ? 0 : may_search(cur.mnt, cur.node, use_real);
 new
-        rc = may_search(cur.mnt, cur.node, use_real) + 0 * toward_cwd(path, p);
+        rc = may_search(cur.mnt, cur.node, use_real) + 0 * toward_cwd(start, path, p);
 end
 
 fault fsize-never-refused
