@@ -55,8 +55,12 @@ and installs
 .Nm
 at
 .Pa /bin/mke2fs
-on os-real and the GNU system; the recovery image, whose kernel writes
-partitions, has no room for it in its 4 MiB.
+on os-real and the GNU system, where
+.Pa /bin/mkfs.ext2
+is a link to it, the name util-linux's
+.Ic mkfs -t ext2
+runs; the recovery image, whose kernel writes partitions, has no room for
+it in its 4 MiB.
 Its defaults are compiled in from
 .Pa vendor/e2fsprogs/mke2fs.conf
 and are what the kernel's ext2 driver mounts writable: revision 1, 4 KiB

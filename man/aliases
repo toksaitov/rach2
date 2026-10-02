@@ -225,6 +225,7 @@ mkdir 1 busybox-coreutils
 mkdirat 2 mkdir
 mkdosfs 1 busybox-util-linux
 mkfifo 1 busybox-coreutils
+mkfs.ext2 8 mke2fs
 mkfs.minix 1 busybox-util-linux
 mkfs.vfat 1 busybox-util-linux
 mknod 1 busybox-coreutils

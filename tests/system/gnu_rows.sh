@@ -311,10 +311,13 @@ row_iproute2() {
 }
 
 # loopctl attaches a file named relative to the current directory, which it
-# resolves, since the kernel takes an absolute path, and detaches it.
+# resolves, since the kernel takes an absolute path, and detaches it; the
+# file is an ext2 volume that util-linux's mkfs made through mkfs.ext2.
 row_loopctl() {
     local dev
     truncate -s 1M "$WORK/loop.img"
+    runs "mkfs -t ext2" mkfs -t ext2 -q -F "$WORK/loop.img"
+    has "the volume mkfs made" "$(file "$WORK/loop.img")" "ext2 filesystem"
     runs "loopctl attach of a relative name" loopctl attach loop.img
     dev=$(loopctl | awk -v f="$WORK/loop.img" '$NF == f { sub(/^loop/, "", $1); print $1 }')
     has "the attachment" "$(loopctl)" " $WORK/loop.img"

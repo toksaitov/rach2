@@ -20,18 +20,17 @@
 #             them, from the packages fetch_chromium.sh unpacked
 #
 # Then it links /bin/bash, /bin/sh, /bin/apropos, /bin/whatis, /usr/bin/cc,
-# /usr/bin/vi, /etc/mtab and /run, writes autoconf's site file, links each
-# BusyBox applet no file of the path answers for, gives each program of /bin
-# and /usr/bin its name in the other, and of /sbin and /usr/sbin, puts the
-# CA bundle in /etc/ssl, puts /etc/services, /etc/protocols, /etc/networks,
+# /usr/bin/vi, /bin/mkfs.ext2, /etc/mtab and /run, writes autoconf's site file,
+# links each BusyBox applet no file of the path answers for, gives each program
+# of /bin and /usr/bin its name in the other, and of /sbin and /usr/sbin, puts
+# the CA bundle in /etc/ssl, puts /etc/services, /etc/protocols, /etc/networks,
 # /etc/localtime and /etc/timezone in place, compiles the console's terminfo
-# entry, rach2.ti,
-# renders the ports' manual pages with render_man.sh, takes the set-id bit
-# off OpenSSH's ssh-keysign, and has the root's own ldconfig write
-# /etc/ld.so.cache from the /etc/ld.so.conf the manifest staged. A file the
-# tree already has is refused rather than replaced, so that what the manifest
-# staged is what the image has; the one file replaced is named where it is,
-# and /bin/sh, which the manifest does not stage, is a name of bash's file.
+# entry, rach2.ti, renders the ports' manual pages with render_man.sh, takes the
+# set-id bit off OpenSSH's ssh-keysign, and has the root's own ldconfig write
+# /etc/ld.so.cache from the /etc/ld.so.conf the manifest staged. A file the tree
+# already has is refused rather than replaced, so that what the manifest staged
+# is what the image has; the one file replaced is named where it is, and
+# /bin/sh, which the manifest does not stage, is a name of bash's file.
 #
 
 set -e
@@ -156,6 +155,11 @@ ln -s man "$TREE/bin/apropos"
 ln -s man "$TREE/bin/whatis"
 ln -s gcc "$TREE/usr/bin/cc"
 ln -s vim "$TREE/usr/bin/vi"
+
+# The manifest's mke2fs answers to mkfs.ext2 too, the name util-linux's
+# mkfs runs for `mkfs -t ext2` and Debian's e2fsprogs links. mkfs.ext3 and
+# mkfs.ext4 are left out, since the kernel mounts neither's volumes.
+ln -s mke2fs "$TREE/bin/mkfs.ext2"
 
 # The mount table where glibc's getmntent and GNU df look for it, as a
 # Debian system links it.
