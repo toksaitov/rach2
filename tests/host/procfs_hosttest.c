@@ -78,7 +78,7 @@ int netdev_count(void)
     return 0;
 }
 
-const char *sysfs_net_attr(int node, int n)
+const char *sysfs_attr(int node, int n)
 {
     (void)node;
     (void)n;

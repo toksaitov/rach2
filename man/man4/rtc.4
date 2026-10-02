@@ -13,12 +13,13 @@ The kernel writes it only while an NTP daemon keeps the time synchronized,
 as
 .Xr adjtimex 2
 describes.
-It answers Linux's two ioctls for reading and setting the clock, with a
+It answers Linux's ioctls for reading and setting the clock and its alarm,
+with a
 .Vt struct rtc_time
 of nine ints: the second, minute, hour, day of the month, month from 0,
 years since 1900, day of the week from Sunday, day of the year from 0, and
 a daylight flag, which is 0.
-.Bl -tag -width RTC_SET_TIME
+.Bl -tag -width RTC_WKALM_SET
 .It Dv RTC_RD_TIME
 Read the clock, as the boot does: two samples that agree.
 .It Dv RTC_SET_TIME
@@ -27,7 +28,37 @@ with its updates held while the registers are written, and the day of the
 week with them.
 The time the kernel keeps is not changed; see
 .Xr clock_settime 2 .
+.It Dv RTC_ALM_SET , RTC_ALM_READ
+Set and read the alarm's time of day, the second, minute and hour of the
+struct; the clock raises its interrupt, IRQ 8, at that time each day while
+the alarm's interrupt is enabled.
+.It Dv RTC_AIE_ON , RTC_AIE_OFF
+Enable and disable the alarm's interrupt.
+.It Dv RTC_WKALM_SET , RTC_WKALM_RD
+Set and read the wake alarm, a
+.Vt struct rtc_wkalrm :
+a byte that enables it, a byte that says it has come, and its date and
+time.
+The CMOS clock has no day alarm, so the time must lie within a day ahead,
+as Linux's driver requires.
 .El
+.Pp
+A
+.Xr read 2
+of four bytes or more waits for the alarm and gives an unsigned long: the
+alarms since the last read in the bits above the low eight, with
+.Dv RTC_AF ,
+0x20, and
+.Dv RTC_IRQF ,
+0x80;
+.Xr poll 2
+reports it readable once an alarm has come.
+An alarm also ends a suspend to idle, which
+.Xr rtcwake 8
+starts through
+.Pa /sys/power/state ;
+see
+.Xr sysfs 5 .
 .Pp
 The clock keeps UTC, as the kernel reads it, and two digits of the year, for
 the years 2000 to 2099.
@@ -35,16 +66,18 @@ The device is root's to open, mode 0600, as Linux's is.
 .Sh ERRORS
 .Bl -tag -width Er
 .It Bq Er EACCES
-.Dv RTC_SET_TIME
-by a caller without privilege, as Linux answers it.
+A setting ioctl by a caller without privilege, as Linux answers it.
 .It Bq Er EINVAL
 .Dv RTC_SET_TIME
-with a time out of range or a year outside 2000 to 2099; or a
-.Xr read 2
-or
+with a time out of range or a year outside 2000 to 2099; a wake alarm more
+than a day ahead; a read of fewer than four bytes; or a
 .Xr write 2
-of the device, since its interrupts, which a read waits for on Linux, are
-not given.
+of the device.
+The clock's update and periodic interrupts are not given.
+.It Bq Er ETIME
+A wake alarm in the past.
+.It Bq Er EAGAIN
+A non-blocking read with no alarm come.
 .It Bq Er EIO
 .Dv RTC_RD_TIME
 of a clock that holds no time, such as one whose battery went.
@@ -54,4 +87,5 @@ Another ioctl.
 .Sh SEE ALSO
 .Xr busybox-util-linux 1 ,
 .Xr adjtimex 2 ,
-.Xr clock_settime 2
+.Xr clock_settime 2 ,
+.Xr sysfs 5

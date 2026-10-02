@@ -32,6 +32,11 @@
 #include "../block/disk.h"
 #include "../serial.h"
 #include "../rtc.h"
+#include "../lib/kirq.h"
+#include "../isr.h"
+#include "../pic.h"
+#include "../proc/suspend.h"
+#include "../proc/wait_queue.h"
 
 /* Linux O_* bits devfs_open honours (the rest are irrelevant to a char
  * device). */
@@ -996,18 +1001,189 @@ static const struct file_ops screenlog_ops = {dev_screenlog_read, dev_screenlog_
  * 1900, day of the week, day of the year and the daylight flag. The clock
  * keeps UTC, as the boot reads it. Setting it is root's, -EACCES for anyone
  * else as Linux answers; a time outside 2000 to 2099, which the clock's two
- * year digits cannot hold, is -EINVAL. The clock's interrupts are not given,
- * so a read or write of the device is -EINVAL.
+ * year digits cannot hold, is -EINVAL.
+ *
+ * Its alarm, which `rtcwake` sets, is a time of day the clock raises IRQ 8
+ * at: RTC_ALM_SET and RTC_ALM_READ set and read the time of day,
+ * RTC_AIE_ON and RTC_AIE_OFF enable and disable its interrupt, and
+ * RTC_WKALM_SET and RTC_WKALM_RD set and read a date and time with the
+ * interrupt's state in a `struct rtc_wkalrm`, which as on Linux without a
+ * day alarm must lie within a day ahead, and not in the past. A read waits
+ * for an alarm and gives an unsigned long, as Linux's: the alarms since the
+ * last read in the bits above the low eight, with RTC_AF and RTC_IRQF. An
+ * alarm is a wake event of a suspend to idle (`suspend_wake`). The clock's
+ * update and periodic interrupts are not given: RTC_UIE_ON is -EINVAL.
  */
-#define RTC_RD_TIME  0x80247009u
-#define RTC_SET_TIME 0x4024700Au
+#define RTC_AIE_ON    0x7001u
+#define RTC_AIE_OFF   0x7002u
+#define RTC_ALM_SET   0x40247007u
+#define RTC_ALM_READ  0x80247008u
+#define RTC_RD_TIME   0x80247009u
+#define RTC_SET_TIME  0x4024700Au
+#define RTC_WKALM_SET 0x4028700Fu
+#define RTC_WKALM_RD  0x80287010u
+#define RTC_AF        0x20u
+#define RTC_IRQF      0x80u
+
+/* The alarm's state: the interrupts since the last read, and the date and
+ * time RTC_WKALM_SET last set, -1 for none, which RTC_WKALM_RD gives back
+ * and /sys/class/rtc/rtc0/wakealarm reads. */
+static wait_queue_t rtc_wq;
+static volatile uint32_t rtc_alarms;
+static int64_t rtc_wake_at = -1;
+static int rtc_irq_ready;
+
+static void rtc_alarm_irq(isr_params_t *params)
+{
+    (void)params;
+    if (rtc_alarm_ack()) {
+        rtc_alarms++;
+        wq_wake_all(&rtc_wq);
+        suspend_wake();
+    }
+}
+
+/** Take the clock's interrupt, once: its handler, and the cascade line it
+ * reaches the processor through. */
+static void rtc_irq_setup(void)
+{
+    if (!rtc_irq_ready) {
+        wait_queue_init(&rtc_wq);
+        register_isr_handler(32 + RTC_IRQ, rtc_alarm_irq, "rtc");
+        pic_unmask_irq(2);
+        rtc_irq_ready = 1;
+    }
+}
+
+static int rtc_alarm_came(void *arg)
+{
+    (void)arg;
+    return rtc_alarms != 0;
+}
 
 static int32_t dev_rtc_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
+    uint32_t data, flags;
+
+    if (count < sizeof(data)) {
+        return -EINVAL;
+    }
+    rtc_irq_setup();
+    while (!rtc_alarms) {
+        if (e->ofd->status_flags & OFD_NONBLOCK) {
+            return -EAGAIN;
+        }
+        if (wq_wait_event(&rtc_wq, rtc_alarm_came, NULL) < 0) {
+            return -EINTR;
+        }
+    }
+    flags = kirq_save();
+    data = rtc_alarms << 8 | RTC_AF | RTC_IRQF;
+    rtc_alarms = 0;
+    kirq_restore(flags);
+    return copy_to_user(buf, &data, sizeof(data)) != 0 ? -EFAULT : (int32_t)sizeof(data);
+}
+
+static short dev_rtc_poll(fd_entry_t *e, short events, struct wait_queue **wq)
+{
     (void)e;
-    (void)buf;
-    (void)count;
-    return -EINVAL;
+    rtc_irq_setup();
+    *wq = &rtc_wq;
+    return (short)(events & (rtc_alarms ? POLLIN : 0));
+}
+
+int64_t devfs_rtc_wakealarm(void)
+{
+    return rtc_wake_at;
+}
+
+int32_t devfs_rtc_set_wakealarm(int64_t at)
+{
+    rtc_time_t now, t;
+    int64_t now_s;
+
+    rtc_irq_setup();
+    if (at < 0) {
+        rtc_alarm_interrupts(0);
+        rtc_wake_at = -1;
+        return 0;
+    }
+    if (rtc_read_clock(&now) != 0) {
+        return -EIO;
+    }
+    now_s = rtc_seconds_of(&now);
+    if (at <= now_s) {
+        return -ETIME;
+    }
+    if (at - now_s > 86400) {
+        return -EINVAL; /* a time of day: no further than a day ahead */
+    }
+    rtc_time_of_seconds((uint32_t)at, &t);
+    rtc_alarm_interrupts(0);
+    rtc_alarm_write(&t);
+    rtc_alarms = 0;
+    rtc_wake_at = at;
+    rtc_alarm_interrupts(1);
+    return 0;
+}
+
+/** The Linux `struct rtc_time` `tm` as a time of the clock's calendar. */
+static void rtc_from_tm(const int32_t *tm, rtc_time_t *t)
+{
+    t->second = tm[0];
+    t->minute = tm[1];
+    t->hour = tm[2];
+    t->day = tm[3];
+    t->month = tm[4] + 1;
+    t->year = tm[5] + 1900;
+}
+
+/** The clock's time `t` as a Linux `struct rtc_time` into `tm`. */
+static void rtc_to_tm(const rtc_time_t *t, int32_t *tm)
+{
+    tm[0] = t->second;
+    tm[1] = t->minute;
+    tm[2] = t->hour;
+    tm[3] = t->day;
+    tm[4] = t->month - 1;
+    tm[5] = t->year - 1900;
+    rtc_week_and_year_day(t, &tm[6], &tm[7]);
+    tm[8] = 0;
+}
+
+/** RTC_WKALM_SET and RTC_WKALM_RD's `struct rtc_wkalrm` at `arg`: whether
+ * the alarm is enabled, whether it has come, and its date and time. */
+static int32_t dev_rtc_wkalarm(uint32_t request, uint32_t arg)
+{
+    uint8_t w[40];
+    rtc_time_t t;
+    int32_t tm[9];
+
+    if (request == RTC_WKALM_RD) {
+        k_memset(w, 0, sizeof(w));
+        if (rtc_wake_at >= 0) {
+            rtc_time_of_seconds((uint32_t)rtc_wake_at, &t);
+        } else if (rtc_read_clock(&t) == 0) {
+            rtc_alarm_read(&t);
+        }
+        w[0] = (uint8_t)rtc_alarm_read(&t);
+        w[1] = rtc_alarms != 0;
+        rtc_to_tm(&t, tm);
+        k_memcpy(w + 4, tm, sizeof(tm));
+        return copy_to_user((void __user *)arg, w, sizeof(w)) != 0 ? -EFAULT : 0;
+    }
+    if (!proc_privileged(current_proc)) {
+        return -EACCES;
+    }
+    if (copy_from_user(w, (const void __user *)arg, sizeof(w)) != 0) {
+        return -EFAULT;
+    }
+    k_memcpy(tm, w + 4, sizeof(tm));
+    rtc_from_tm(tm, &t);
+    if (!w[0]) {
+        return devfs_rtc_set_wakealarm(-1);
+    }
+    return devfs_rtc_set_wakealarm(rtc_seconds_of(&t));
 }
 
 static int32_t dev_rtc_write(fd_entry_t *e, const char __user *buf, uint32_t count)
@@ -1028,15 +1204,40 @@ static int32_t dev_rtc_ioctl(fd_entry_t *e, uint32_t request, uint32_t arg)
         if (rtc_read_clock(&t) != 0) {
             return -EIO;
         }
-        tm[0] = t.second;
-        tm[1] = t.minute;
-        tm[2] = t.hour;
-        tm[3] = t.day;
-        tm[4] = t.month - 1;
-        tm[5] = t.year - 1900;
-        rtc_week_and_year_day(&t, &tm[6], &tm[7]);
-        tm[8] = 0;
+        rtc_to_tm(&t, tm);
         return copy_to_user((void __user *)arg, tm, sizeof(tm)) != 0 ? -EFAULT : 0;
+    }
+    if (request == RTC_WKALM_SET || request == RTC_WKALM_RD) {
+        return dev_rtc_wkalarm(request, arg);
+    }
+    if (request == RTC_ALM_READ) {
+        if (rtc_read_clock(&t) != 0) {
+            return -EIO;
+        }
+        rtc_alarm_read(&t);
+        rtc_to_tm(&t, tm);
+        return copy_to_user((void __user *)arg, tm, sizeof(tm)) != 0 ? -EFAULT : 0;
+    }
+    if (request == RTC_ALM_SET || request == RTC_AIE_ON || request == RTC_AIE_OFF) {
+        if (!proc_privileged(current_proc)) {
+            return -EACCES;
+        }
+        rtc_irq_setup();
+        if (request != RTC_ALM_SET) {
+            rtc_alarm_interrupts(request == RTC_AIE_ON);
+            return 0;
+        }
+        if (copy_from_user(tm, (const void __user *)arg, sizeof(tm)) != 0) {
+            return -EFAULT;
+        }
+        if (tm[0] < 0 || tm[0] > 59 || tm[1] < 0 || tm[1] > 59 || tm[2] < 0 || tm[2] > 23) {
+            return -EINVAL;
+        }
+        t.second = tm[0];
+        t.minute = tm[1];
+        t.hour = tm[2];
+        rtc_alarm_write(&t);
+        return 0;
     }
     if (request == RTC_SET_TIME) {
         if (!proc_privileged(current_proc)) {
@@ -1059,7 +1260,8 @@ static int32_t dev_rtc_ioctl(fd_entry_t *e, uint32_t request, uint32_t arg)
     return -ENOTTY;
 }
 
-static const struct file_ops rtc_ops = {dev_rtc_read, dev_rtc_write, dev_poll, dev_rtc_ioctl, NULL};
+static const struct file_ops rtc_ops = {dev_rtc_read, dev_rtc_write, dev_rtc_poll, dev_rtc_ioctl,
+                                        NULL};
 
 static const struct file_ops grubcore_ops = {dev_grubcore_read, dev_grubcore_write, dev_poll,
                                              dev_ioctl, dev_grubcore_close};

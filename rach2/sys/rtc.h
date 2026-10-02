@@ -93,6 +93,9 @@ void rtc_week_and_year_day(const rtc_time_t *t, int32_t *weekday, int32_t *yeard
 /** `*t` for `seconds` since 1970 in UTC, the calendar the CMOS clock keeps. */
 void rtc_time_of_seconds(uint32_t seconds, rtc_time_t *t);
 
+/** The seconds since 1970 of `*t`, a time from 1970 in UTC. */
+int64_t rtc_seconds_of(const rtc_time_t *t);
+
 /**
  * Set the CMOS clock to `*t`, a time from 2000 to 2099 in UTC, in the
  * encoding and hour format status register B gives, with updates held while
@@ -101,5 +104,23 @@ void rtc_time_of_seconds(uint32_t seconds, rtc_time_t *t);
  * changed.
  */
 int rtc_write_clock(const rtc_time_t *t);
+
+/**
+ * The clock's alarm, which the CMOS clock keeps as a time of day, a second,
+ * a minute and an hour, and raises IRQ 8 at when its interrupt is enabled:
+ * `rtc_alarm_write` sets it to `t`'s time of day in the clock's encoding;
+ * `rtc_alarm_read` gives it back in `t`'s hour, minute and second, with
+ * whether its interrupt is enabled; `rtc_alarm_interrupts` enables or
+ * disables the interrupt; and `rtc_alarm_ack`, which the interrupt's handler
+ * calls, reads status register C, which lets the clock raise the next, and
+ * returns whether the alarm was what raised it.
+ */
+void rtc_alarm_write(const rtc_time_t *t);
+int rtc_alarm_read(rtc_time_t *t);
+void rtc_alarm_interrupts(int on);
+int rtc_alarm_ack(void);
+
+/* The interrupt line of the clock. */
+#define RTC_IRQ 8
 
 #endif

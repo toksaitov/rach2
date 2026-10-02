@@ -9,6 +9,7 @@
  * reading the port, is in its interrupt handler.
  */
 
+#include "proc/suspend.h"
 #include "input.h"
 
 #include "display/vga_text.h"
@@ -162,6 +163,7 @@ void input_key(uint8_t scancode)
     char c;
     int was_e0 = saw_e0;
 
+    suspend_wake();
     kbd_push_scancode(scancode);
 
     saw_e0 = 0;

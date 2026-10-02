@@ -75,6 +75,13 @@ void signal_post(process_t *target, int signo)
     (void)signo;
 }
 
+/** No suspend to idle holds the processes here. */
+int suspend_lets_run(const struct process *p)
+{
+    (void)p;
+    return 1;
+}
+
 /** Nor a POSIX timer on a clock of processor time. */
 void ptimer_cpu_tick(const struct process *p, int user)
 {

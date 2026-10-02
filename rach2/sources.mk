@@ -86,6 +86,7 @@ C_SRC = kernel.c \
         sys/proc/exit.c \
         sys/proc/fpu.c \
         sys/proc/sched.c \
+        sys/proc/suspend.c \
         sys/proc/wait_queue.c \
         sys/proc/futex.c \
         sys/proc/sigframe.c \

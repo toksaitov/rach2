@@ -317,7 +317,14 @@ extern volatile uint32_t kernel_ticks;
 #define RTC_REG_YEAR     0x09
 #define RTC_REG_STATUS_A 0x0A
 #define RTC_REG_STATUS_B 0x0B
+#define RTC_REG_STATUS_C 0x0C
 #define RTC_REG_STATUS_D 0x0D
+
+#define RTC_REG_SECOND_ALARM 0x01
+#define RTC_REG_MINUTE_ALARM 0x03
+#define RTC_REG_HOUR_ALARM   0x05
+#define RTC_STATUS_B_AIE     0x20 /* set: the alarm raises the interrupt */
+#define RTC_STATUS_C_AF      0x20 /* set: the alarm has come since C was read */
 
 /*
  * How long to wait for an update to finish. An RTC update takes under two
@@ -527,6 +534,18 @@ void rtc_week_and_year_day(const rtc_time_t *t, int32_t *weekday, int32_t *yeard
     *weekday = (days + *yearday + 4) % 7; /* 1970-01-01 was a Thursday */
 }
 
+int64_t rtc_seconds_of(const rtc_time_t *t)
+{
+    int32_t weekday, yearday, year;
+    int64_t days = 0;
+
+    for (year = RTC_EPOCH_YEAR; year < t->year; year++) {
+        days += rtc_is_leap(year) ? 366 : 365;
+    }
+    rtc_week_and_year_day(t, &weekday, &yearday);
+    return (days + yearday) * 86400 + t->hour * 3600 + t->minute * 60 + t->second;
+}
+
 void rtc_time_of_seconds(uint32_t seconds, rtc_time_t *t)
 {
     uint32_t days = seconds / 86400u, rest = seconds % 86400u, len;
@@ -547,9 +566,11 @@ void rtc_time_of_seconds(uint32_t seconds, rtc_time_t *t)
     t->second = (int32_t)(rest % 60u);
 }
 
+static uint8_t rtc_hour_register(int32_t hour, uint8_t b);
+
 int rtc_write_clock(const rtc_time_t *t)
 {
-    int32_t weekday, yearday, hour12;
+    int32_t weekday, yearday;
     uint8_t b, hour;
     uint32_t flags;
     int binary;
@@ -564,12 +585,7 @@ int rtc_write_clock(const rtc_time_t *t)
     flags = kirq_save();
     b = rtc_register(RTC_REG_STATUS_B);
     binary = (b & RTC_STATUS_B_BINARY) != 0;
-    if (b & RTC_STATUS_B_24_HOUR) {
-        hour = rtc_to_register(t->hour, binary);
-    } else {
-        hour12 = t->hour % 12 == 0 ? 12 : t->hour % 12;
-        hour = (uint8_t)(rtc_to_register(hour12, binary) | (t->hour >= 12 ? RTC_HOUR_PM : 0));
-    }
+    hour = rtc_hour_register(t->hour, b);
     rtc_write_register(RTC_REG_STATUS_B, (uint8_t)(b | RTC_STATUS_B_SET));
     rtc_write_register(RTC_REG_SECOND, rtc_to_register(t->second, binary));
     rtc_write_register(RTC_REG_MINUTE, rtc_to_register(t->minute, binary));
@@ -581,6 +597,80 @@ int rtc_write_clock(const rtc_time_t *t)
     rtc_write_register(RTC_REG_STATUS_B, (uint8_t)(b & ~RTC_STATUS_B_SET));
     kirq_restore(flags);
     return 0;
+}
+
+/** `reg`, an alarm or time register, decoded from the clock's encoding, with
+ * the hour's PM bit turned into a 24-hour hour; -1 for a value that is not
+ * a number in the encoding. */
+static int32_t rtc_from_register(uint8_t value, uint8_t b, int hour)
+{
+    int32_t v;
+    int pm = 0;
+
+    if (hour && !(b & RTC_STATUS_B_24_HOUR)) {
+        pm = (value & RTC_HOUR_PM) != 0;
+        value = (uint8_t)(value & ~RTC_HOUR_PM);
+    }
+    v = (b & RTC_STATUS_B_BINARY) ? (int32_t)value : rtc_from_bcd(value);
+    if (v >= 0 && hour && !(b & RTC_STATUS_B_24_HOUR)) {
+        v = v % 12 + (pm ? 12 : 0);
+    }
+    return v;
+}
+
+/** The 24-hour hour `hour` as the hour register of a clock whose status B is
+ * `b` keeps it. */
+static uint8_t rtc_hour_register(int32_t hour, uint8_t b)
+{
+    int binary = (b & RTC_STATUS_B_BINARY) != 0;
+    int32_t hour12;
+
+    if (b & RTC_STATUS_B_24_HOUR) {
+        return rtc_to_register(hour, binary);
+    }
+    hour12 = hour % 12 == 0 ? 12 : hour % 12;
+    return (uint8_t)(rtc_to_register(hour12, binary) | (hour >= 12 ? RTC_HOUR_PM : 0));
+}
+
+void rtc_alarm_write(const rtc_time_t *t)
+{
+    uint32_t flags = kirq_save();
+    uint8_t b = rtc_register(RTC_REG_STATUS_B);
+    int binary = (b & RTC_STATUS_B_BINARY) != 0;
+
+    rtc_write_register(RTC_REG_SECOND_ALARM, rtc_to_register(t->second, binary));
+    rtc_write_register(RTC_REG_MINUTE_ALARM, rtc_to_register(t->minute, binary));
+    rtc_write_register(RTC_REG_HOUR_ALARM, rtc_hour_register(t->hour, b));
+    (void)rtc_register(RTC_REG_STATUS_C);
+    kirq_restore(flags);
+}
+
+int rtc_alarm_read(rtc_time_t *t)
+{
+    uint32_t flags = kirq_save();
+    uint8_t b = rtc_register(RTC_REG_STATUS_B);
+
+    t->second = rtc_from_register(rtc_register(RTC_REG_SECOND_ALARM), b, 0);
+    t->minute = rtc_from_register(rtc_register(RTC_REG_MINUTE_ALARM), b, 0);
+    t->hour = rtc_from_register(rtc_register(RTC_REG_HOUR_ALARM), b, 1);
+    kirq_restore(flags);
+    return (b & RTC_STATUS_B_AIE) != 0;
+}
+
+void rtc_alarm_interrupts(int on)
+{
+    uint32_t flags = kirq_save();
+    uint8_t b = rtc_register(RTC_REG_STATUS_B);
+
+    b = (uint8_t)(on ? b | RTC_STATUS_B_AIE : b & ~RTC_STATUS_B_AIE);
+    rtc_write_register(RTC_REG_STATUS_B, b);
+    (void)rtc_register(RTC_REG_STATUS_C);
+    kirq_restore(flags);
+}
+
+int rtc_alarm_ack(void)
+{
+    return (rtc_register(RTC_REG_STATUS_C) & RTC_STATUS_C_AF) != 0;
 }
 
 /** Whether the clock was read at boot. */

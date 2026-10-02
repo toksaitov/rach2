@@ -58,7 +58,9 @@
  * on the process's and the thread's clocks of processor time. /dev/mem reads
  * the first megabyte and maps the local APIC, and refuses RAM and a private
  * mapping. klogctl gives the log ring's size, its records whole, and after
- * a clear none of those before; /dev/log leads to /var/run/log.
+ * a clear none of those before; /dev/log leads to /var/run/log. The clock's
+ * wake alarm refuses a time past or two days ahead, ends a read at the
+ * alarm, and wakes a suspend to idle that gives no process time meanwhile.
  *
  * Prints "CALLSMUSL OK" on success and "CALLSMUSL FAIL (detail)" otherwise.
  */
@@ -75,6 +77,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <sys/klog.h>
 #include <sys/mman.h>
 #include <sys/prctl.h>
@@ -970,12 +973,140 @@ static int klogs(void)
     return 0;
 }
 
+/* Linux's RTC ioctls, which no header of this build has, with the wake
+   alarm's struct: enabled, pending and a struct rtc_time of nine ints. */
+#define RTC_RD_TIME   0x80247009u
+#define RTC_WKALM_SET 0x4028700Fu
+#define RTC_WKALM_RD  0x80287010u
+
+struct wkalrm {
+    unsigned char enabled, pending, pad[2];
+    int tm[9];
+};
+
+/* The CPU ticks /proc/PID/stat gives `pid` in user and system mode. */
+static long cpu_ticks(pid_t pid)
+{
+    char path[32], text[512];
+    long u = 0, s = 0;
+    int fd, n, field = 1, i;
+
+    snprintf(path, sizeof path, "/proc/%d/stat", (int)pid);
+    fd = open(path, O_RDONLY);
+    n = fd < 0 ? 0 : (int)read(fd, text, sizeof text - 1);
+    if (fd >= 0) {
+        close(fd);
+    }
+    for (i = 0; i < n && field < 15; i++) {
+        if (text[i] == ')') {
+            field = 2;
+        } else if (text[i] == ' ' && field >= 2) {
+            field++;
+            if (field == 14) {
+                u = strtol(text + i + 1, NULL, 10);
+            } else if (field == 15) {
+                s = strtol(text + i + 1, NULL, 10);
+            }
+        }
+    }
+    return u + s;
+}
+
+/* Set /dev/rtc0's wake alarm `ahead` seconds from the clock's time;
+   ioctl's result, with the alarm's date and time in `*w`. */
+static int wake_in(int fd, int ahead, struct wkalrm *w)
+{
+    struct tm t;
+    time_t at;
+
+    memset(w, 0, sizeof *w);
+    if (ioctl(fd, RTC_RD_TIME, w->tm) != 0) {
+        return -1;
+    }
+    memset(&t, 0, sizeof t);
+    t.tm_sec = w->tm[0];
+    t.tm_min = w->tm[1];
+    t.tm_hour = w->tm[2];
+    t.tm_mday = w->tm[3];
+    t.tm_mon = w->tm[4];
+    t.tm_year = w->tm[5];
+    at = timegm(&t) + ahead;
+    gmtime_r(&at, &t);
+    w->enabled = 1;
+    w->tm[0] = t.tm_sec;
+    w->tm[1] = t.tm_min;
+    w->tm[2] = t.tm_hour;
+    w->tm[3] = t.tm_mday;
+    w->tm[4] = t.tm_mon;
+    w->tm[5] = t.tm_year;
+    return ioctl(fd, RTC_WKALM_SET, w);
+}
+
+/* The clock's wake alarm and suspend to idle: an alarm in the past is
+   ETIME and one two days ahead EINVAL; one two seconds ahead reads back
+   enabled and ends a read of /dev/rtc0 with RTC_AF; the device may wake the
+   machine; and a write of freeze to /sys/power/state, with the alarm set
+   again, returns at the alarm with a spinning child given no processor
+   time meanwhile, which the kernel counts. */
+static int rtcs(void)
+{
+    struct wkalrm w, back;
+    unsigned long data = 0;
+    char text[16];
+    int fd = open("/dev/rtc0", O_RDONLY), state, status;
+    long before, after;
+    pid_t spinner;
+
+    if (fd < 0) {
+        return fail("open /dev/rtc0");
+    }
+    if (wake_in(fd, -10, &w) != -1 || errno != ETIME || wake_in(fd, 2 * 86400, &w) != -1 ||
+        errno != EINVAL) {
+        return fail("a wake alarm in the past or two days ahead was taken");
+    }
+    if (wake_in(fd, 2, &w) != 0 || ioctl(fd, RTC_WKALM_RD, &back) != 0 || !back.enabled ||
+        back.tm[0] != w.tm[0] || back.tm[1] != w.tm[1]) {
+        return fail("a wake alarm two seconds ahead did not read back");
+    }
+    if (read(fd, &data, sizeof data) != (ssize_t)sizeof data || !(data & 0x20) || data >> 8 < 1) {
+        return fail("a read of /dev/rtc0 did not end at the alarm with RTC_AF");
+    }
+    state = open("/sys/class/rtc/rtc0/device/power/wakeup", O_RDONLY);
+    if (state < 0 || read(state, text, sizeof text) != 8 || memcmp(text, "enabled\n", 8) != 0) {
+        return fail("the clock may not wake the machine");
+    }
+    close(state);
+    spinner = fork();
+    if (spinner == 0) {
+        for (;;) {
+        }
+    }
+    usleep(50000);
+    state = open("/sys/power/state", O_WRONLY);
+    if (spinner < 0 || state < 0 || wake_in(fd, 2, &w) != 0) {
+        return fail("a spinning child, /sys/power/state and the wake alarm");
+    }
+    before = cpu_ticks(spinner);
+    if (write(state, "freeze", 6) != 6) {
+        return fail("a write of freeze to /sys/power/state");
+    }
+    after = cpu_ticks(spinner);
+    kill(spinner, SIGKILL);
+    waitpid(spinner, &status, 0);
+    close(state);
+    close(fd);
+    if (after - before > 10) {
+        return fail("a process ran while a suspend to idle held the processes");
+    }
+    return 0;
+}
+
 int main(void)
 {
     if (signals() || memory() || identity() || messages() || clocks() || ranges() || copies() ||
         reserves() || adjusts() || advises() || terminals() || peaks() || refusals() || setgids() ||
         privacies() || timers() || queues() || flows() || signalfds() || cputimers() || devmems() ||
-        klogs()) {
+        klogs() || rtcs()) {
         return 1;
     }
     printf("CALLSMUSL OK\n");

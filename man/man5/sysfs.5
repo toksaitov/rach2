@@ -3,7 +3,7 @@
 .Os
 .Sh NAME
 .Nm sysfs
-.Nd the PCI functions, USB devices and network interfaces under /sys
+.Nd the devices, network interfaces, clock and sleep states under /sys
 .Sh DESCRIPTION
 The kernel mounts a synthetic, read-only file system at
 .Pa /sys ,
@@ -15,10 +15,14 @@ and
 read, each PCI function and each running USB device and what it says of
 itself in its
 .Pa uevent ,
-and the network interfaces under
+the network interfaces under
 .Pa /sys/class/net ,
-which scripts read for an interface's address, state and counters.
-Any user may read it.
+which scripts read for an interface's address, state and counters, the
+real-time clock under
+.Pa /sys/class/rtc ,
+and the sleep states under
+.Pa /sys/power .
+Any user may read it; root writes the two files of mode 0644.
 .Bl -tag -width Ds
 .It Pa /sys/bus/pci/devices/0000:BB:DD.F
 A symbolic link for each PCI function, named by its bus, device and
@@ -117,6 +121,43 @@ gives.
 .It Pa /sys/class/net/IF/device
 A symbolic link to the interface's PCI function,
 .Pa ../../../devices/pci0000:00/0000:BB:DD.F .
+.It Pa /sys/class/rtc/rtc0
+The CMOS clock of
+.Xr rtc 4 :
+.Pa date
+and
+.Pa time ,
+in UTC;
+.Pa since_epoch ,
+its seconds since 1970;
+.Pa name ,
+.Ql rtc_cmos ;
+.Pa hctosys ,
+1, since the boot set the system's time from it; and
+.Pa wakealarm ,
+the wake alarm in seconds since 1970, empty when none is set, which takes a
+write of seconds since 1970, of
+.Ql + Ns Ar N
+for
+.Ar N
+seconds from now, or of 0 to clear it, and a new time while one is set is
+.Er EBUSY ,
+as on Linux.
+.It Pa /sys/class/rtc/rtc0/device/power/wakeup
+.Ql enabled :
+the clock's alarm may wake the machine.
+.It Pa /sys/power/state
+The sleep states,
+.Ql freeze mem .
+A write of either suspends to idle: every process but the writer is held,
+the processor idles, and they go on at a wake event, the clock's alarm or
+a key, when the write returns.
+Another state is
+.Er EINVAL .
+.It Pa /sys/power/mem_sleep
+.Ql [s2idle] :
+.Ql mem
+is suspend to idle.
 .El
 .Pp
 A
@@ -127,8 +168,11 @@ long as its text.
 Linux's tree has much more: the other device classes, the attribute files
 beside a device's
 .Pa uevent ,
-the CPUs, the power and firmware interfaces.
+the CPUs and the firmware interfaces.
 Rach2 has none of them.
+Linux suspends to idle with the devices powered down and its clocks of
+time since boot stopped; here the devices stay up, their interrupts are
+taken, and the clocks count on.
 Linux's
 .Pa /sys/class/net
 holds a link for each interface into its device's directory; here it holds
@@ -158,6 +202,10 @@ The PCI functions.
 The USB devices.
 .It Pa /sys/class/net
 The network interfaces.
+.It Pa /sys/class/rtc/rtc0
+The real-time clock.
+.It Pa /sys/power/state
+The sleep states.
 .El
 .Sh EXAMPLES
 .Bd -literal -offset indent

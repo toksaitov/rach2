@@ -16,11 +16,11 @@ struct comp {
     int len;
 };
 
-/* The components of the deepest path under /dev or /proc,
- * /proc/PID/task/TID/fd/N. A path is split into one more than this, so a
+/* The components of the deepest path under /dev, /proc or /sys,
+ * /sys/class/rtc/rtc0/device/power/wakeup. A path is split into one more than this, so a
  * longer one is counted past every depth a rule accepts and answers ENOENT
  * or ENOTDIR, where one cut at this depth would name a shorter path. */
-#define SYNTH_MAXC 6
+#define SYNTH_MAXC 7
 
 /*
  * Split a slash path into up to max components, skipping empty ones (so
@@ -552,7 +552,7 @@ void synth_sys_device_name(int node, int key, char *out, int cap)
     out[pos] = '\0';
 }
 
-const char *sysfs_net_attr(int node, int n)
+const char *sysfs_attr(int node, int n)
 {
     static const char *const attrs[] = {"address",      "addr_len", "broadcast", "carrier",
                                         "dev_id",       "duplex",   "flags",     "ifindex",
@@ -561,12 +561,26 @@ const char *sysfs_net_attr(int node, int n)
     static const char *const stats[] = {"collisions", "multicast",  "rx_bytes", "rx_dropped",
                                         "rx_errors",  "rx_packets", "tx_bytes", "tx_dropped",
                                         "tx_errors",  "tx_packets", 0};
-    const char *const *list = node == SYSFS_NET_IF ? attrs : node == SYSFS_NET_STATS ? stats : 0;
+    static const char *const rtc[] = {"date", "hctosys",   "name", "since_epoch",
+                                      "time", "wakealarm", 0};
+    static const char *const wakeup[] = {"wakeup", 0};
+    static const char *const power[] = {"mem_sleep", "state", 0};
+    const char *const *list = node == SYSFS_NET_IF      ? attrs
+                              : node == SYSFS_NET_STATS ? stats
+                              : node == SYSFS_RTC0      ? rtc
+                              : node == SYSFS_RTC_POWER ? wakeup
+                              : node == SYSFS_POWER     ? power
+                                                        : 0;
     int i;
 
     for (i = 0; list && list[i] && i < n; i++) {
     }
     return list && n >= 0 ? list[i] : 0;
+}
+
+int sysfs_attr_writable(int node, int attr)
+{
+    return (node == SYSFS_RTC0 && attr == 5) || (node == SYSFS_POWER && attr == 1);
 }
 
 void synth_sys_path(int node, int key, char *out, int cap)
@@ -585,8 +599,18 @@ void synth_sys_path(int node, int key, char *out, int cap)
     if (cap <= 0) {
         return;
     }
-    if (node == SYSFS_CLASS || node == SYSFS_CLASS_NET) {
-        synth_put(out, cap, &pos, node == SYSFS_CLASS ? "/sys/class" : "/sys/class/net");
+    if (node >= SYSFS_CLASS && node != SYSFS_NET_IF && node != SYSFS_NET_STATS) {
+        static const char *const fixed[] = {"/sys/class",
+                                            "/sys/class/net",
+                                            0,
+                                            0,
+                                            "/sys/class/rtc",
+                                            "/sys/class/rtc/rtc0",
+                                            "/sys/class/rtc/rtc0/device",
+                                            "/sys/class/rtc/rtc0/device/power",
+                                            "/sys/power"};
+
+        synth_put(out, cap, &pos, node <= SYSFS_POWER ? fixed[node - SYSFS_CLASS] : "/sys");
         out[pos] = '\0';
         return;
     }
@@ -641,8 +665,8 @@ static int sys_net_attr_of(int node, struct comp name)
 {
     int i;
 
-    for (i = 0; sysfs_net_attr(node, i); i++) {
-        if (comp_eq(name, sysfs_net_attr(node, i))) {
+    for (i = 0; sysfs_attr(node, i); i++) {
+        if (comp_eq(name, sysfs_attr(node, i))) {
             return i;
         }
     }
@@ -695,9 +719,50 @@ static int synth_classify_sys_net(const struct comp *c, int n, struct vpath *vp)
 }
 
 /**
+ * The node at `c` of `n` components below the fixed directory `node` of
+ * the clock and the sleep states: the directories under it by their names,
+ * as `chain` gives them, and at the end an attribute file of the last.
+ */
+static int synth_classify_sys_fixed(const struct comp *c, int n, int node, struct vpath *vp)
+{
+    static const struct {
+        int parent;
+        const char *name;
+        int child;
+    } chain[] = {{SYSFS_CLASS_RTC, "rtc0", SYSFS_RTC0},
+                 {SYSFS_RTC0, "device", SYSFS_RTC_DEVICE},
+                 {SYSFS_RTC_DEVICE, "power", SYSFS_RTC_POWER}};
+    int i, at = 0;
+
+    while (at < n) {
+        for (i = 0; i < (int)(sizeof(chain) / sizeof(chain[0])); i++) {
+            if (chain[i].parent == node && comp_eq(c[at], chain[i].name)) {
+                break;
+            }
+        }
+        if (i == (int)(sizeof(chain) / sizeof(chain[0]))) {
+            break;
+        }
+        node = chain[i].child;
+        at++;
+    }
+    vp->sysent = node;
+    if (at == n) {
+        vp->kind = VNODE_SYS_DIR;
+    } else if (sys_net_attr_of(node, c[at]) >= 0) {
+        vp->kind = at + 1 == n ? VNODE_SYS_FILE : VNODE_ENOTDIR;
+        vp->procfile = sys_net_attr_of(node, c[at]);
+    } else {
+        vp->kind = VNODE_ENOENT;
+    }
+    return vp->kind;
+}
+
+/**
  * Classify the components `c` of `n` below /sys: the fixed directories by
  * their names, below a bus's `devices` or a device directory's parent a
- * device by its name, and below /sys/class/net an interface by its name.
+ * device by its name, below /sys/class/net an interface by its name, and
+ * the clock's class and the sleep states by their names.
  */
 static int synth_classify_sysfs(const struct comp *c, int n, struct vpath *vp)
 {
@@ -729,6 +794,10 @@ static int synth_classify_sysfs(const struct comp *c, int n, struct vpath *vp)
         } else {
             return synth_classify_sys_net(c + 2, n - 2, vp);
         }
+    } else if (comp_eq(c[0], "class") && comp_eq(c[1], "rtc")) {
+        return synth_classify_sys_fixed(c + 2, n - 2, SYSFS_CLASS_RTC, vp);
+    } else if (comp_eq(c[0], "power")) {
+        return synth_classify_sys_fixed(c + 1, n - 1, SYSFS_POWER, vp);
     } else if (comp_eq(c[0], "devices") && n == 1) {
         vp->sysent = SYSFS_DEVICES;
     } else if (comp_eq(c[0], "devices") && (comp_eq(c[1], "pci0000:00") || comp_eq(c[1], "usb"))) {

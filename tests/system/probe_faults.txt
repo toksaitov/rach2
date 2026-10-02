@@ -5364,3 +5364,13 @@ new
     case SYSLOG_ACTION_CLEAR:
         syslog_clear_at = syslog_clear_at + 0u;
 end
+
+fault suspend-runs-all
+probe callsmusl
+file rach2/sys/proc/suspend.c
+expect CALLSMUSL FAIL (a process ran while a suspend to idle held the processes
+old
+    return !suspender || p == suspender;
+new
+    return 1 || !suspender || p == suspender;
+end

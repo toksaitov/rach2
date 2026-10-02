@@ -205,15 +205,26 @@ const char *synth_net_name(int origin);
 #define SYSFS_CLASS_NET  12 /* /sys/class/net */
 #define SYSFS_NET_IF     13 /* /sys/class/net/IF, whose key is its index */
 #define SYSFS_NET_STATS  14 /* /sys/class/net/IF/statistics */
+#define SYSFS_CLASS_RTC  15 /* /sys/class/rtc */
+#define SYSFS_RTC0       16 /* /sys/class/rtc/rtc0, the CMOS clock */
+#define SYSFS_RTC_DEVICE 17 /* /sys/class/rtc/rtc0/device */
+#define SYSFS_RTC_POWER  18 /* /sys/class/rtc/rtc0/device/power */
+#define SYSFS_POWER      19 /* /sys/power, the sleep states */
 
 /** Whether the /sys directory `node` is one of a device or an interface,
  * which `syskey` says, and which exists only while that does. */
-#define SYSFS_KEYED(node) \
-    ((node) >= SYSFS_PCI_DEVICE && (node) != SYSFS_CLASS && (node) != SYSFS_CLASS_NET)
+#define SYSFS_KEYED(node)                                                                  \
+    ((node) == SYSFS_PCI_DEVICE || (node) == SYSFS_USB_DEVICE || (node) == SYSFS_NET_IF || \
+     (node) == SYSFS_NET_STATS)
 
-/** The name of the `n`th attribute file of SYSFS_NET_IF or SYSFS_NET_STATS,
- * in the order the directory lists them, or NULL past the last. */
-const char *sysfs_net_attr(int node, int n);
+/** The name of the `n`th attribute file of the /sys directory `node`, in the
+ * order the directory lists them, or NULL past the last, and for a node
+ * with none. */
+const char *sysfs_attr(int node, int n);
+
+/** Whether the attribute `attr` of `node` takes a privileged write:
+ * rtc0's wakealarm and /sys/power's state. */
+int sysfs_attr_writable(int node, int attr);
 
 /* The interfaces' part, in procfs.c: the index of the interface named by
  * the `len` bytes at `name`, or -1; its name, NUL-terminated, into `out` of

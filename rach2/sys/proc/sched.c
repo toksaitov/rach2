@@ -1,5 +1,6 @@
 #include "sched.h"
 #include "ptrace.h"
+#include "suspend.h"
 #include "tgroup.h"
 #include "../io/timerfd.h"
 #include "../lib/ksignal.h"
@@ -51,7 +52,8 @@ int sched_is_enabled(void)
 }
 
 /**
- * Find a READY process after the ordinary cursor, wrapping once.
+ * Find a READY process after the ordinary cursor, wrapping once, of those a
+ * suspend to idle lets run (`suspend_lets_run`).
  *
  * With `woken_only`, consider only wait-queue wakeups. Interrupts are off.
  */
@@ -66,7 +68,7 @@ static process_t *sched_find(int woken_only)
         return NULL;
     }
     do {
-        if (p->state == PROC_READY && (!woken_only || p->woken)) {
+        if (p->state == PROC_READY && (!woken_only || p->woken) && suspend_lets_run(p)) {
             return p;
         }
         p = p->next ? p->next : proc_list;

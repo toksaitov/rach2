@@ -5188,7 +5188,7 @@ static void synth_sys_identity(const struct vpath *vp, struct linux_stat64 *kst,
 {
     kst->st_dev = SYSFS_FSID;
     if (vp->kind == VNODE_SYS_FILE) {
-        kst->st_mode = S_IFREG | 0444;
+        kst->st_mode = S_IFREG | (sysfs_attr_writable(vp->sysent, vp->procfile) ? 0644 : 0444);
         kst->st_size = 4096;
         kst->st_ino = sysfs_ino(vp->sysent, vp->syskey, 1 + vp->procfile);
     } else if (vp->kind == VNODE_SYS_LINK && !follow) {
@@ -10738,7 +10738,7 @@ static int synth_sys_net_dirent(int node, int key, int n, char *name, uint64_t *
         *dtype = DT_DIR;
         return 1;
     }
-    for (i = 0; (attr = sysfs_net_attr(node, i)) != NULL; i++) {
+    for (i = 0; (attr = sysfs_attr(node, i)) != NULL; i++) {
         if (i == n) {
             k_strncpy(name, attr, 31);
             name[31] = '\0';
@@ -10784,7 +10784,12 @@ static int synth_sys_dirent(int node, int key, int n, char *name, uint64_t *ino,
                  {SYSFS_DEVICES, "pci0000:00", SYSFS_PCI_ROOT},
                  {SYSFS_DEVICES, "usb", SYSFS_USB_ROOT},
                  {SYSFS_ROOT, "class", SYSFS_CLASS},
-                 {SYSFS_CLASS, "net", SYSFS_CLASS_NET}};
+                 {SYSFS_ROOT, "power", SYSFS_POWER},
+                 {SYSFS_CLASS, "net", SYSFS_CLASS_NET},
+                 {SYSFS_CLASS, "rtc", SYSFS_CLASS_RTC},
+                 {SYSFS_CLASS_RTC, "rtc0", SYSFS_RTC0},
+                 {SYSFS_RTC0, "device", SYSFS_RTC_DEVICE},
+                 {SYSFS_RTC_DEVICE, "power", SYSFS_RTC_POWER}};
     int i, dev, links;
 
     for (i = 0; i < (int)(sizeof(fixed) / sizeof(fixed[0])); i++) {
@@ -10798,6 +10803,16 @@ static int synth_sys_dirent(int node, int key, int n, char *name, uint64_t *ino,
     }
     if (node == SYSFS_CLASS_NET || node == SYSFS_NET_IF || node == SYSFS_NET_STATS) {
         return synth_sys_net_dirent(node, key, n, name, ino, dtype);
+    }
+    if (node == SYSFS_RTC0 || node == SYSFS_RTC_POWER || node == SYSFS_POWER) {
+        if (!sysfs_attr(node, n)) {
+            return 0;
+        }
+        k_strncpy(name, sysfs_attr(node, n), 31);
+        name[31] = '\0';
+        *ino = sysfs_ino(node, 0, 1 + n);
+        *dtype = DT_REG;
+        return 1;
     }
     if (node == SYSFS_PCI_DEVICE || node == SYSFS_USB_DEVICE) {
         if (n != 0) {

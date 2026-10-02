@@ -51,6 +51,8 @@
 #include "../network/net.h"
 #include "../network/socket/socket.h"
 #include "../ipc/unix.h"
+#include "../proc/suspend.h"
+#include "../rtc.h"
 #include "../ipc/pipe.h"
 #include "../proc/process.h"
 #include "../mm/usercopy.h"
@@ -1479,8 +1481,8 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
                 synth_sys_path(node, pf->origin_pid, where, (int)sizeof(where));
                 ap_str(t, where);
                 ap_ch(t, '/');
-                ap_str(t, SYSFS_KEYED(node) && node > SYSFS_USB_DEVICE
-                              ? sysfs_net_attr(node, pf->origin_task & 255)
+                ap_str(t, sysfs_attr(node, pf->origin_task & 255)
+                              ? sysfs_attr(node, pf->origin_task & 255)
                               : "uevent");
                 break;
             }
@@ -2843,7 +2845,7 @@ uint32_t sysfs_ino(int node, int key, int file)
     if (node == SYSFS_USB_DEVICE) {
         return SYSFS_INO_USB | (file ? SYSFS_INO_FILE : 0u) | (uint32_t)key;
     }
-    return SYSFS_INO_FIXED + (uint32_t)node;
+    return SYSFS_INO_FIXED + (uint32_t)node + ((uint32_t)file << 8);
 }
 
 /** The key of USB device `r`, or -1 when a port of it does not fit one. */
@@ -2963,6 +2965,69 @@ int sysfs_device_exists(int node, int key)
     return node == SYSFS_PCI_DEVICE ? sysfs_pci_present(key) : sysfs_usb_find(key, &r) >= 0;
 }
 
+/** Append `v` as two decimal digits. */
+static void ap_two(struct procfs_text *t, int32_t v)
+{
+    ap_ch(t, (char)('0' + v / 10 % 10));
+    ap_ch(t, (char)('0' + v % 10));
+}
+
+/**
+ * Render the attribute `attr` of /sys/class/rtc/rtc0, of its device's power
+ * directory or of /sys/power, `node`: the clock's date and time in UTC and
+ * its seconds since 1970, its driver's name, that it set the system's time
+ * at boot, and the wake alarm in seconds since 1970, nothing when none is
+ * set, as Linux writes them; that the clock may wake the machine; and the
+ * one sleep state, suspend to idle, by its two names.
+ */
+static int procfs_gen_sysattr(struct procfs_text *t, int node, int attr)
+{
+    rtc_time_t now;
+
+    if (!sysfs_attr(node, attr)) {
+        return -ENOENT;
+    }
+    if (node == SYSFS_RTC_POWER) {
+        ap_str(t, "enabled\n");
+        return t->len;
+    }
+    if (node == SYSFS_POWER) {
+        ap_str(t, attr == 0 ? "[s2idle]\n" : "freeze mem\n");
+        return t->len;
+    }
+    if (attr == 2 || attr == 1) {
+        ap_str(t, attr == 2 ? "rtc_cmos\n" : "1\n");
+        return t->len;
+    }
+    if (attr == 5) {
+        if (devfs_rtc_wakealarm() >= 0) {
+            ap_u32(t, (uint32_t)devfs_rtc_wakealarm());
+            ap_ch(t, '\n');
+        }
+        return t->len;
+    }
+    if (rtc_read_clock(&now) != 0) {
+        return -EIO;
+    }
+    if (attr == 0) {
+        ap_u32(t, (uint32_t)now.year);
+        ap_ch(t, '-');
+        ap_two(t, now.month);
+        ap_ch(t, '-');
+        ap_two(t, now.day);
+    } else if (attr == 4) {
+        ap_two(t, now.hour);
+        ap_ch(t, ':');
+        ap_two(t, now.minute);
+        ap_ch(t, ':');
+        ap_two(t, now.second);
+    } else {
+        ap_u32(t, (uint32_t)rtc_seconds_of(&now));
+    }
+    ap_ch(t, '\n');
+    return t->len;
+}
+
 /** Append the hardware address `mac` as Linux's sysfs writes it, in
  * lowercase. */
 static void ap_mac(struct procfs_text *t, const uint8_t *mac)
@@ -2994,7 +3059,7 @@ static int procfs_gen_netattr(struct procfs_text *t, int node, int index, int at
     struct netdev_link link;
     int known;
 
-    if (!nd || !sysfs_net_attr(node, attr)) {
+    if (!nd || !sysfs_attr(node, attr)) {
         return -ENOENT;
     }
     k_memset(&c, 0, sizeof(c));
@@ -3787,6 +3852,159 @@ static int32_t procfs_sysctl_write(fd_entry_t *e, const char __user *buf, uint32
 static const struct file_ops procfs_sysctl_ops = {procfs_sysctl_read, procfs_sysctl_write,
                                                   procfs_poll, procfs_ioctl, procfs_close};
 
+/** Read a writable /sys attribute opened for writing as well: its value
+ * now. */
+static int32_t procfs_sysattr_read(fd_entry_t *e, char __user *buf, uint32_t count)
+{
+    struct procfs_file *f = (struct procfs_file *)e->priv;
+    uint32_t off = (uint32_t)e->ofd->offset;
+    struct procfs_text t;
+    uint32_t n = 0;
+    int len;
+
+    procfs_text_init(&t);
+    len = procfs_gen_sysattr(&t, f->origin_task >> 8, f->origin_task & 255);
+    if (len < 0 || t.nomem) {
+        kfree(t.buf);
+        return len < 0 ? len : -ENOMEM;
+    }
+    if (off < (uint32_t)t.len) {
+        n = (uint32_t)t.len - off < count ? (uint32_t)t.len - off : count;
+        if (copy_to_user(buf, t.buf + off, n) != 0) {
+            kfree(t.buf);
+            return -EFAULT;
+        }
+    }
+    kfree(t.buf);
+    e->ofd->offset = off + n;
+    return (int32_t)n;
+}
+
+/** Whether the `len` bytes at `s` are the word `word`. */
+static int sysattr_is(const char *s, uint32_t len, const char *word)
+{
+    uint32_t i;
+
+    for (i = 0; i < len && word[i] == s[i]; i++) {
+    }
+    return i == len && word[i] == '\0';
+}
+
+/** The decimal number at `s`, at most `len` bytes long, with a leading `+`
+ * noted in `*relative`; -1 for no number. */
+static int64_t sysattr_number(const char *s, uint32_t len, int *relative)
+{
+    int64_t v = 0;
+    uint32_t i = 0;
+
+    *relative = len > 0 && s[0] == '+';
+    i = (uint32_t)*relative;
+    if (i == len || s[i] < '0' || s[i] > '9') {
+        return -1;
+    }
+    for (; i < len && s[i] >= '0' && s[i] <= '9' && v < 0x7FFFFFFF; i++) {
+        v = v * 10 + (s[i] - '0');
+    }
+    return v;
+}
+
+/**
+ * Write a writable /sys attribute, as Linux's do. rtc0's wakealarm takes
+ * seconds since 1970, or `+N` for N seconds from now, and 0 to clear it; a
+ * new time while an alarm is set is -EBUSY, as on Linux, which wants the
+ * alarm cleared first. /sys/power/state takes `freeze` or `mem`, both
+ * suspend to idle, which the write waits in until a wake event; another
+ * state is -EINVAL.
+ */
+static int32_t procfs_sysattr_write(fd_entry_t *e, const char __user *buf, uint32_t count)
+{
+    struct procfs_file *f = (struct procfs_file *)e->priv;
+    char text[32];
+    uint32_t n = count < sizeof(text) - 1 ? count : (uint32_t)sizeof(text) - 1;
+    rtc_time_t now;
+    int64_t v;
+    int relative;
+    int32_t rc;
+
+    k_memset(text, 0, sizeof(text));
+    if (copy_from_user(text, buf, n) != 0) {
+        return -EFAULT;
+    }
+    while (n > 0 && (text[n - 1] == '\n' || text[n - 1] == ' ')) {
+        text[--n] = '\0';
+    }
+    if (f->origin_task >> 8 == SYSFS_POWER) {
+        if (!sysattr_is(text, n, "freeze") && !sysattr_is(text, n, "mem")) {
+            return -EINVAL;
+        }
+        rc = suspend_to_idle();
+        return rc != 0 ? rc : (int32_t)count;
+    }
+    v = sysattr_number(text, n, &relative);
+    if (v < 0) {
+        return -EINVAL;
+    }
+    if (v == 0) {
+        return devfs_rtc_set_wakealarm(-1) == 0 ? (int32_t)count : -EIO;
+    }
+    if (devfs_rtc_wakealarm() >= 0) {
+        return -EBUSY;
+    }
+    if (relative) {
+        if (rtc_read_clock(&now) != 0) {
+            return -EIO;
+        }
+        v += rtc_seconds_of(&now);
+    }
+    rc = devfs_rtc_set_wakealarm(v);
+    return rc != 0 ? rc : (int32_t)count;
+}
+
+static const struct file_ops procfs_sysattr_ops = {procfs_sysattr_read, procfs_sysattr_write,
+                                                   procfs_poll, procfs_ioctl, procfs_close};
+
+/**
+ * Open the writable attribute `attr` of the /sys directory `node` for
+ * writing, or for reading and writing, which needs a privileged caller, as
+ * its mode, 0644 and owned by root, says. Each read and write reaches the
+ * value as it is then. The descriptor is a sysfs one, with the node and the
+ * attribute in `origin_task`, as a snapshot of a /sys file has them.
+ */
+static int procfs_open_sysattr(int node, int attr, int flags)
+{
+    struct procfs_file *f;
+    fd_entry_t *e;
+    int acc = flags & 3;
+    int fd;
+
+    if (acc == 3 || !proc_privileged(current_proc)) {
+        return -EACCES;
+    }
+    f = kzalloc(sizeof(*f));
+    if (!f) {
+        return -ENOMEM;
+    }
+    f->origin_file = SYNTH_SYS_UEVENT;
+    f->origin_task = node << 8 | attr;
+    fd = fd_alloc(current_proc->fds);
+    if (fd < 0) {
+        kfree(f);
+        return fd;
+    }
+    e = &current_proc->fds->entries[fd];
+    e->type = FD_TYPE_PROC;
+    e->node = NULL;
+    e->sock = NULL;
+    e->ops = &procfs_sysattr_ops;
+    e->priv = f;
+    e->ofd->offset = 0;
+    e->flags = acc == 1 ? FD_FLAG_WRITE : (FD_FLAG_READ | FD_FLAG_WRITE);
+    if (flags & PROCFS_O_CLOEXEC) {
+        e->flags |= FD_FLAG_CLOEXEC;
+    }
+    return fd;
+}
+
 /**
  * Open a writable /proc/sys file for writing, or for reading and writing,
  * which needs a privileged caller, as the file's mode, 0644 and owned by
@@ -3894,6 +4112,10 @@ int procfs_open(const struct vpath *vp, int flags)
     if (vp->kind == VNODE_PROC_SYS_FILE && synth_sys_writable(vp->sysent) && (flags & 3) != 0) {
         return procfs_open_sysctl(vp->sysent, flags);
     }
+    if (vp->kind == VNODE_SYS_FILE && sysfs_attr_writable(vp->sysent, vp->procfile) &&
+        (flags & 3) != 0) {
+        return procfs_open_sysattr(vp->sysent, vp->procfile, flags);
+    }
     if ((flags & 3) != 0 || (flags & 0100 /* O_CREAT */)) {
         return -EACCES;
     }
@@ -3974,6 +4196,8 @@ int procfs_open(const struct vpath *vp, int flags)
                (vp->sysent == SYSFS_NET_IF || vp->sysent == SYSFS_NET_STATS)) {
         len = procfs_gen_netattr(&text, vp->sysent, vp->syskey, vp->procfile);
         pid = vp->syskey;
+    } else if (vp->kind == VNODE_SYS_FILE && sysfs_attr(vp->sysent, vp->procfile)) {
+        len = procfs_gen_sysattr(&text, vp->sysent, vp->procfile);
     } else if (vp->kind == VNODE_SYS_FILE) {
         len = procfs_gen_uevent(&text, vp->sysent, vp->syskey);
         pid = vp->syskey;
