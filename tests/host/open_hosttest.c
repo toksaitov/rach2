@@ -980,6 +980,13 @@ uint32_t sysfs_ino(int node, int key, int file)
     check(0, "unexpected stat of a /sys file");
     return 0;
 }
+int sysfs_attr_writable(int node, int attr)
+{
+    (void)node;
+    (void)attr;
+    check(0, "unexpected stat of a /sys file");
+    return 0;
+}
 int sysfs_device_exists(int node, int key)
 {
     (void)node;

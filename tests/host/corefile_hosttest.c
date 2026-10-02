@@ -1060,6 +1060,13 @@ uint32_t sysfs_ino(int node, int key, int file)
     return 0;
 }
 
+int sysfs_attr_writable(int node, int attr)
+{
+    (void)node;
+    (void)attr;
+    return 0;
+}
+
 int sysfs_device_exists(int node, int key)
 {
     (void)node;

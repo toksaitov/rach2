@@ -259,6 +259,112 @@ void krandom_bytes(void *buf, uint32_t count)
     unexpected();
 }
 
+/* The clock's alarm, its interrupt and /dev/mem, which no row reaches. */
+void rtc_time_of_seconds(uint32_t seconds, rtc_time_t *t)
+{
+    (void)seconds;
+    (void)t;
+    unexpected();
+}
+
+int64_t rtc_seconds_of(const rtc_time_t *t)
+{
+    (void)t;
+    unexpected();
+    return 0;
+}
+
+void rtc_alarm_write(const rtc_time_t *t)
+{
+    (void)t;
+    unexpected();
+}
+
+int rtc_alarm_read(rtc_time_t *t)
+{
+    (void)t;
+    unexpected();
+    return 0;
+}
+
+void rtc_alarm_interrupts(int on)
+{
+    (void)on;
+    unexpected();
+}
+
+int rtc_alarm_ack(void)
+{
+    unexpected();
+    return 0;
+}
+
+void suspend_wake(void)
+{
+    unexpected();
+}
+
+void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *name)
+{
+    (void)vector;
+    (void)handler;
+    (void)name;
+    unexpected();
+}
+
+void pic_unmask_irq(uint8_t irq)
+{
+    (void)irq;
+    unexpected();
+}
+
+void wait_queue_init(wait_queue_t *wq)
+{
+    (void)wq;
+    unexpected();
+}
+
+int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
+{
+    (void)wq;
+    (void)cond;
+    (void)arg;
+    unexpected();
+    return 0;
+}
+
+uint32_t kirq_save(void)
+{
+    unexpected();
+    return 0;
+}
+
+void kirq_restore(uint32_t flags)
+{
+    (void)flags;
+    unexpected();
+}
+
+void *kmap_temp(uintptr_t phys)
+{
+    (void)phys;
+    unexpected();
+    return 0;
+}
+
+void kunmap_temp(void *va)
+{
+    (void)va;
+    unexpected();
+}
+
+int paging_frame_is_device(uintptr_t phys)
+{
+    (void)phys;
+    unexpected();
+    return 0;
+}
+
 int krandom_is_trusted(void)
 {
     return unexpected();
