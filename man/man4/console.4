@@ -166,7 +166,18 @@ Character device, major 5, minor 0; mode 0666.
 .It Pa /dev/ptmx
 Character device, major 5, minor 2; mode 0666.
 .It Pa /dev/pts/N
-Pseudoterminal slave N.
+Pseudoterminal slave N, owned by the user who opened the master, of the
+group
+.Ql tty ,
+5, with mode 0620, as Linux's devpts gives a slave with
+.Ql gid=5,mode=620 ,
+so that
+.Xr write 1
+and
+.Xr wall 1 ,
+which run as that group, may write to it and
+.Xr mesg 1
+may refuse them.
 .El
 .Sh SEE ALSO
 .Xr login 1 ,

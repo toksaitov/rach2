@@ -108,10 +108,11 @@ text 0644 /etc/os-release NAME="Rach2"\nPRETTY_NAME="Rach2 1.0.0 with the GNU sy
 # is below the 100 from which BusyBox's adduser gives out system accounts.
 text 0644 /etc/passwd root:x:0:0:root:/root:/bin/bash\ntest:x:1000:1000:test:/home/test:/bin/bash\nsshd:x:74:74::/var/empty:/usr/bin/false\nmessagebus:x:81:81::/nonexistent:/usr/bin/false\nnobody:x:65534:65534:nobody:/nonexistent:/usr/bin/false\n
 file 0600 /etc/shadow krffs/shadow
-# `crontab` is the group crontab(1) runs as, which may write the crontabs'
-# directory; 63 is below the system accounts' 100, and no Debian group has
-# that number.
-text 0644 /etc/group root:x:0:\ntest:x:1000:\nsshd:x:74:\nmessagebus:x:81:\ncrontab:x:63:\nnogroup:x:65534:\n
+# `tty` is the group of every pseudo-terminal, 5 as on Linux, which write(1)
+# and wall(1) run as to write to another user's terminal. `crontab` is the
+# group crontab(1) runs as, which may write the crontabs' directory; 63 is
+# below the system accounts' 100, and no Debian group has that number.
+text 0644 /etc/group root:x:0:\ntty:x:5:\ntest:x:1000:\nsshd:x:74:\nmessagebus:x:81:\ncrontab:x:63:\nnogroup:x:65534:\n
 text 0644 /etc/shells /bin/sh\n/bin/bash\n
 # shadow's useradd makes no mail spool, since the system delivers no mail
 # and has no spool directory for it.
@@ -160,12 +161,15 @@ dir 0755 /usr
 # The set-id programs of the ports. install_root.sh installs the rest of the
 # GNU system, and what it adds has no set-id bit, so these come from
 # build/vendor/gnu/setid, where their recipes leave them: newgrp, set-id
-# root, which changes a session's group; crontab, set-id to `crontab`; and
-# chsh, chfn and gpasswd, set-id root, which change a user's own shell and
-# name in /etc/passwd and a group's members and password.
+# root, which changes a session's group; crontab, set-id to `crontab`;
+# write and wall, set-id to `tty`, which write to another user's terminal;
+# and chsh, chfn and gpasswd, set-id root, which change a user's own shell
+# and name in /etc/passwd and a group's members and password.
 dir 0755 /usr/bin
 file 04755:0:0 /usr/bin/newgrp build/vendor/gnu/setid/newgrp
 file 02755:0:63 /usr/bin/crontab build/vendor/gnu/setid/crontab
+file 02755:0:5 /usr/bin/write build/vendor/gnu/setid/write
+file 02755:0:5 /usr/bin/wall build/vendor/gnu/setid/wall
 file 04755:0:0 /usr/bin/chsh build/vendor/gnu/setid/chsh
 file 04755:0:0 /usr/bin/chfn build/vendor/gnu/setid/chfn
 file 04755:0:0 /usr/bin/gpasswd build/vendor/gnu/setid/gpasswd

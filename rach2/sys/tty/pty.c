@@ -149,7 +149,7 @@ static struct pty *pty_alloc(void)
     p->index = i;
     p->locked = 1; /* unlockpt() (TIOCSPTLCK 0) must run before pts open */
     p->uid = current_proc ? current_proc->euid : 0;
-    p->gid = current_proc ? current_proc->egid : 0;
+    p->gid = PTY_GID;
     p->atime = p->mtime = pty_now();
     p->mode = 0620;                         /* crw--w----, the Unix98 slave default */
     tty_init(&p->slave, pty_slave_sink, p); /* slave.pump stays NULL */

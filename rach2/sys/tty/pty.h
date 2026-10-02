@@ -35,6 +35,9 @@
 
 #define PTY_BUF_SIZE 4096 /* slave->master ring; power of two for the mask */
 
+/* The group of a new slave, `tty`, as Linux's devpts gives it with gid=5. */
+#define PTY_GID 5
+
 struct pty {
     struct pty *next; /* the list of live ptys */
     int in_use;
