@@ -32,6 +32,8 @@
 # * /etc/hosts is a machine's, as the metal disk has it, since this root is
 #   installed on the Lenovo; QEMU's gateway and resolver are reached by
 #   address.
+# * /etc/fstab names the root by the label the image tool gives every root,
+#   which findmnt --verify, mount -a and fsck -A read.
 # * The two programs of the ports that are set-id on Debian, util-linux's
 #   newgrp and cronie's crontab, with the group `crontab` and the crontabs'
 #   directory under /var/spool/cron.
@@ -97,6 +99,7 @@ text 0644 /demo/hello.txt hello, world\n
 dir 0755 /etc
 text 0644 /etc/motd Rach2\n\nThe log of this boot is in /dev/bootlog, for root.\nWhat the services print is in /var/log/services.\nType su to become root.\n\n
 text 0644 /etc/hostname rach2\n
+text 0644 /etc/fstab # The root, by the label every Rach2 root has.\nLABEL=rach2 / ext2 defaults 0 1\n
 # What the system is, which scripts that tell systems apart read.
 text 0644 /etc/os-release NAME="Rach2"\nPRETTY_NAME="Rach2 1.0.0 with the GNU system"\nID=rach2\nVERSION_ID="1.0.0"\n
 # The server's privilege separation runs as `sshd`, which has no password

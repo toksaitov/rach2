@@ -397,15 +397,16 @@ row_procps() {
     has "pmap" "$(pmap $$ | tail -n 1)" "total"
 }
 
-# util-linux's programs: the disks and mounts from /sys and /proc, a lock
-# taken and waited for, the limits and the I/O class of a process, the login
-# history and the record of the boot that init writes, the formatting and
-# terminal tools jq's tests and scripts use, and the namespaces unshare
-# makes, nsenter enters and lsns lists.
+# util-linux's programs: the disks and mounts from /sys and /proc and the root
+# /etc/fstab names, a lock taken and waited for, the limits and the I/O class of
+# a process, the login history and the record of the boot that init writes, the
+# formatting and terminal tools jq's tests and scripts use, and the namespaces
+# unshare makes, nsenter enters and lsns lists.
 row_utillinux() {
     local pid
     has "lsblk" "$(lsblk -dno NAME,TYPE)" "disk"
     same "findmnt" "$(findmnt -no FSTYPE /)" "ext2"
+    has "findmnt --verify of /etc/fstab" "$(findmnt --verify 2>&1)" "0 parse errors, 0 errors"
     flock "$WORK/lock" sleep 5 &
     pid=$!
     sleep 1
