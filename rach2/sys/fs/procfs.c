@@ -3480,11 +3480,14 @@ static void ap_two(struct procfs_text *t, int32_t v)
 
 /**
  * Render the attribute `attr` of /sys/class/rtc/rtc0, of its device's power
- * directory or of /sys/power, `node`: the clock's date and time in UTC and
- * its seconds since 1970, its driver's name, that it set the system's time
- * at boot, and the wake alarm in seconds since 1970, nothing when none is
- * set, as Linux writes them; that the clock may wake the machine; and the
- * one sleep state, suspend to idle, by its two names.
+ * directory, of /sys/power or of /sys/devices/system/cpu, `node`: the
+ * clock's date and time in UTC and its seconds since 1970, its driver's
+ * name, that it set the system's time at boot, and the wake alarm in
+ * seconds since 1970, nothing when none is set, as Linux writes them; that
+ * the clock may wake the machine; the one sleep state, suspend to idle, by
+ * its two names; and the one processor, 0, as the highest number the kernel
+ * takes and the processors that may be, are and are online, with none
+ * offline.
  */
 static int procfs_gen_sysattr(struct procfs_text *t, int node, int attr)
 {
@@ -3499,6 +3502,10 @@ static int procfs_gen_sysattr(struct procfs_text *t, int node, int attr)
     }
     if (node == SYSFS_POWER) {
         ap_str(t, attr == 0 ? "[s2idle]\n" : "freeze mem\n");
+        return t->len;
+    }
+    if (node == SYSFS_CPU) {
+        ap_str(t, attr == 1 ? "\n" : "0\n");
         return t->len;
     }
     if (attr == 2 || attr == 1) {

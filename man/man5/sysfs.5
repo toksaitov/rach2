@@ -158,6 +158,25 @@ Another state is
 .Ql [s2idle] :
 .Ql mem
 is suspend to idle.
+.It Pa /sys/devices/system/cpu
+The processors:
+.Pa online ,
+.Pa possible
+and
+.Pa present ,
+each
+.Ql 0 ,
+the one processor the kernel runs on;
+.Pa offline ,
+empty;
+.Pa kernel_max ,
+.Ql 0 ,
+the highest number a processor may have; and the directory
+.Pa cpu0 .
+glibc's
+.Xr sysconf 3
+counts the processors that are online from
+.Pa online .
 .It Pa /sys/block/DISK
 A directory for each disk of
 .Pa /dev ,
@@ -268,6 +287,8 @@ The network interfaces.
 The real-time clock.
 .It Pa /sys/power/state
 The sleep states.
+.It Pa /sys/devices/system/cpu
+The processors.
 .It Pa /sys/block
 The disks and their partitions.
 .It Pa /sys/dev/block

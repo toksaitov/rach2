@@ -588,6 +588,7 @@ const char *sysfs_attr(int node, int n)
                                       "time", "wakealarm", 0};
     static const char *const wakeup[] = {"wakeup", 0};
     static const char *const power[] = {"mem_sleep", "state", 0};
+    static const char *const cpu[] = {"kernel_max", "offline", "online", "possible", "present", 0};
     static const char *const disk[] = {
         "alignment_offset", "capability", "dev",  "ext_range", "hidden", "range",
         "removable",        "ro",         "size", "uevent",    0};
@@ -613,6 +614,7 @@ const char *sysfs_attr(int node, int n)
                               : node == SYSFS_RTC0        ? rtc
                               : node == SYSFS_RTC_POWER   ? wakeup
                               : node == SYSFS_POWER       ? power
+                              : node == SYSFS_CPU         ? cpu
                               : node == SYSFS_BLOCK_DISK  ? disk
                               : node == SYSFS_BLOCK_PART  ? part
                               : node == SYSFS_BLOCK_QUEUE ? queue
@@ -665,6 +667,14 @@ void synth_sys_path(int node, int key, char *out, int cap)
                   node == SYSFS_BLOCK_QUEUE ? "/queue"
                   : node == SYSFS_BLOCK_DEV ? "/device"
                                             : "");
+        out[pos] = '\0';
+        return;
+    }
+    if (node >= SYSFS_SYSTEM) {
+        synth_put(out, cap, &pos,
+                  node == SYSFS_SYSTEM ? "/sys/devices/system"
+                  : node == SYSFS_CPU  ? "/sys/devices/system/cpu"
+                                       : "/sys/devices/system/cpu/cpu0");
         out[pos] = '\0';
         return;
     }
@@ -808,7 +818,9 @@ static int synth_classify_sys_fixed(const struct comp *c, int n, int node, struc
         int child;
     } chain[] = {{SYSFS_CLASS_RTC, "rtc0", SYSFS_RTC0},
                  {SYSFS_RTC0, "device", SYSFS_RTC_DEVICE},
-                 {SYSFS_RTC_DEVICE, "power", SYSFS_RTC_POWER}};
+                 {SYSFS_RTC_DEVICE, "power", SYSFS_RTC_POWER},
+                 {SYSFS_SYSTEM, "cpu", SYSFS_CPU},
+                 {SYSFS_CPU, "cpu0", SYSFS_CPU0}};
     int i, at = 0;
 
     while (at < n) {
@@ -960,6 +972,8 @@ static int synth_classify_sysfs(const struct comp *c, int n, struct vpath *vp)
         return synth_classify_sys_fixed(c + 1, n - 1, SYSFS_POWER, vp);
     } else if (comp_eq(c[0], "devices") && n == 1) {
         vp->sysent = SYSFS_DEVICES;
+    } else if (comp_eq(c[0], "devices") && comp_eq(c[1], "system")) {
+        return synth_classify_sys_fixed(c + 2, n - 2, SYSFS_SYSTEM, vp);
     } else if (comp_eq(c[0], "devices") && (comp_eq(c[1], "pci0000:00") || comp_eq(c[1], "usb"))) {
         at = comp_eq(c[1], "usb") ? SYSFS_USB_ROOT : SYSFS_PCI_ROOT;
         if (n == 2) {

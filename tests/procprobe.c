@@ -1429,6 +1429,9 @@ void probe_main(unsigned int *sp)
               contains(buf, n, "\npswpout 0\n"),
           "/proc/vmstat has the free pages and the kilobytes read from the disks, as vmstat reads "
           "it");
+    n = slurp("/sys/devices/system/cpu/online", buf, (int)sizeof(buf));
+    check(n == 2 && buf[0] == '0' && slurp("/sys/devices/system/cpu/offline", buf, 8) == 1,
+          "/sys/devices/system/cpu has processor 0 online and none offline");
 
     n = slurp("/proc/mounts", buf, (int)sizeof(buf));
     check(n > 0 && buf[n - 1] == '\n', "/proc/mounts ends with its newline");

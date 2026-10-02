@@ -5510,3 +5510,13 @@ old
 new
     ap_str(t, "\npgpg_in ");
 end
+
+fault sys-cpu-offline-listed
+probe procprobe
+file rach2/sys/fs/procfs.c
+expect FAIL: /sys/devices/system/cpu has processor 0 online and none offline
+old
+        ap_str(t, attr == 1 ? "\n" : "0\n");
+new
+        ap_str(t, "0\n");
+end

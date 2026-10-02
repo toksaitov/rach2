@@ -231,6 +231,9 @@ const char *synth_sysvipc_name(int origin);
 #define SYSFS_BLOCK_DEV   24 /* /sys/block/DISK/device */
 #define SYSFS_DEV         25 /* /sys/dev */
 #define SYSFS_DEV_BLOCK   26 /* /sys/dev/block, a link for each disk node */
+#define SYSFS_SYSTEM      27 /* /sys/devices/system */
+#define SYSFS_CPU         28 /* /sys/devices/system/cpu, the processors */
+#define SYSFS_CPU0        29 /* /sys/devices/system/cpu/cpu0 */
 
 /** Whether the /sys directory `node` is one of a device or an interface,
  * which `syskey` says, and which exists only while that does. */
