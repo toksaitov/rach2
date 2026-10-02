@@ -17,9 +17,10 @@ struct comp {
 };
 
 /* The components of the deepest path under /dev, /proc or /sys,
- * /sys/class/rtc/rtc0/device/power/wakeup. A path is split into one more than this, so a
- * longer one is counted past every depth a rule accepts and answers ENOENT
- * or ENOTDIR, where one cut at this depth would name a shorter path. */
+ * /sys/class/rtc/rtc0/device/power/wakeup. A path is split into one more
+ * than this, so a longer one is counted past every depth a rule accepts and
+ * answers ENOENT or ENOTDIR, where one cut at this depth would name a
+ * shorter path. */
 #define SYNTH_MAXC 7
 
 /*

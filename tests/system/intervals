@@ -12,6 +12,7 @@ tests/system/suites/gnu.sh: a try of SSH every two seconds until the server answ
 tests/system/suites/grow.sh: the resizer is killed after its period; the row proves the repair
 tests/system/suites/make.sh: the file's time must pass the second, which make compares whole
 tests/system/suites/metal.sh: a try of SSH every two seconds until the server answers
+tests/system/suites/metal.sh: a look at the log every second until the daemon has written it
 tests/system/suites/mount.sh: a sleeper holds the file open across the umount that must fail
 tests/system/suites/procfiles.sh: the guest's table is read every second for the host's connection
 tests/system/suites/sealed.sh: a try of SSH every two seconds until the server answers

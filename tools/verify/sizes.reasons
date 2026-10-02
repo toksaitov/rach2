@@ -147,8 +147,8 @@ rach2/sys/fs/krffs.c:krffs_walk_err complexity 27 one file system operation over
 rach2/sys/fs/procfs.c:procfs_fd_ino complexity 28 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/procfs.c:procfs_kind_name complexity 26 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/procfs.c:procfs_open complexity 82 a dispatcher, one arm per command, read as a table
-rach2/sys/fs/procfs.c:procfs_open lines 214 a dispatcher, one arm per command, read as a table
-rach2/sys/fs/procfs.c:procfs_readlink_fd lines 138 a dispatcher, one arm per command, read as a table
+rach2/sys/fs/procfs.c:procfs_open lines 218 a dispatcher, one arm per command, read as a table
+rach2/sys/fs/procfs.c:procfs_readlink_fd lines 140 a dispatcher, one arm per command, read as a table
 
 rach2/sys/fs/synthfs.c:synth_classify complexity 55 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/synthfs.c:synth_classify lines 171 a dispatcher, one arm per command, read as a table
@@ -201,7 +201,7 @@ rach2/sys/proc/elf.c:elf_load_image_at nesting 5 one program loaded and entered,
 rach2/sys/rtc.c:rtc_decode complexity 31 a parser over an external format, one check per field in the format's order
 rach2/sys/rtc.c:rtc_decode lines 105 a parser over an external format, one check per field in the format's order
 
-rach2/sys/syscall.c:init_syscall lines 276 a table, one entry per system call number
+rach2/sys/syscall.c:init_syscall lines 277 a table, one entry per system call number
 rach2/sys/syscall.c:ktimex_adjust complexity 27 one arm per mode of adjtimex, in the order Linux applies them
 rach2/sys/syscall.c:sys_ioctl complexity 34 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall.c:sys_ioctl lines 150 a dispatcher, one arm per command, read as a table
@@ -213,14 +213,14 @@ rach2/sys/syscall_fs.c:do_chdir complexity 27 one system call's contract, its ch
 rach2/sys/syscall_fs.c:do_old_stat lines 110 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:do_readlink complexity 28 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_fs.c:fstat_fill complexity 36 one system call's contract, its checks in the order the manual page lists the errors
-rach2/sys/syscall_fs.c:fstat_fill lines 147 one system call's contract, its checks in the order the manual page lists the errors
+rach2/sys/syscall_fs.c:fstat_fill lines 153 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:read_fd complexity 39 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:read_fd lines 180 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:readv_dgram params 7 the parameters are the parts of one receive's answer; a struct for them would be filled and unpacked once
 rach2/sys/syscall_fs.c:synth_dirent_at complexity 47 a dispatcher, one arm per command, read as a table
-rach2/sys/syscall_fs.c:synth_dirent_at lines 200 a dispatcher, one arm per command, read as a table
+rach2/sys/syscall_fs.c:synth_dirent_at lines 204 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_fs.c:synth_open lines 105 a dispatcher, one arm per command, read as a table
-rach2/sys/syscall_fs.c:synth_stat lines 239 a dispatcher, one arm per command, read as a table
+rach2/sys/syscall_fs.c:synth_stat lines 243 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_fs.c:sys__llseek complexity 35 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:sys__llseek lines 145 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:sys_fcntl64 lines 132 a dispatcher, one arm per command, read as a table
@@ -661,7 +661,7 @@ tests/pipeprobe.c:_start nesting 5 a probe, one sequence of steps in the order t
 tests/pollprobe.c:_start lines 129 a probe, one sequence of steps in the order the log records them
 
 tests/procprobe.c:probe_main complexity 75 a probe, one sequence of steps in the order the log records them
-tests/procprobe.c:probe_main lines 532 a probe, one sequence of steps in the order the log records them
+tests/procprobe.c:probe_main lines 536 a probe, one sequence of steps in the order the log records them
 
 tests/ptyprobe.c:_start complexity 38 a probe, one sequence of steps in the order the log records them
 tests/ptyprobe.c:_start lines 168 a probe, one sequence of steps in the order the log records them

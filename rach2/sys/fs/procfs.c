@@ -3241,6 +3241,24 @@ static int procfs_gen_uevent(struct procfs_text *t, int node, int key)
     return t->len;
 }
 
+/**
+ * Render the /sys file `vp` names: an interface's attribute, a fixed node's
+ * attribute, or a device's uevent. `*key` gets the interface or the device
+ * the file is for, which its descriptor keeps.
+ */
+static int procfs_gen_sysfile(struct procfs_text *t, const struct vpath *vp, int *key)
+{
+    if (vp->sysent == SYSFS_NET_IF || vp->sysent == SYSFS_NET_STATS) {
+        *key = vp->syskey;
+        return procfs_gen_netattr(t, vp->sysent, vp->syskey, vp->procfile);
+    }
+    if (sysfs_attr(vp->sysent, vp->procfile)) {
+        return procfs_gen_sysattr(t, vp->sysent, vp->procfile);
+    }
+    *key = vp->syskey;
+    return procfs_gen_uevent(t, vp->sysent, vp->syskey);
+}
+
 /* the /proc file backing: a snapshot served through file_ops */
 
 /* A snapshot and its text are allocated from the heap at open and freed at
@@ -4196,15 +4214,8 @@ int procfs_open(const struct vpath *vp, int flags)
         len = procfs_gen_nettcp(&text);
     } else if (vp->kind == VNODE_PROC_NET_FILE) {
         len = procfs_gen_net(&text, vp->procfile);
-    } else if (vp->kind == VNODE_SYS_FILE &&
-               (vp->sysent == SYSFS_NET_IF || vp->sysent == SYSFS_NET_STATS)) {
-        len = procfs_gen_netattr(&text, vp->sysent, vp->syskey, vp->procfile);
-        pid = vp->syskey;
-    } else if (vp->kind == VNODE_SYS_FILE && sysfs_attr(vp->sysent, vp->procfile)) {
-        len = procfs_gen_sysattr(&text, vp->sysent, vp->procfile);
     } else if (vp->kind == VNODE_SYS_FILE) {
-        len = procfs_gen_uevent(&text, vp->sysent, vp->syskey);
-        pid = vp->syskey;
+        len = procfs_gen_sysfile(&text, vp, &pid);
     } else if (vp->procfile == SYNTH_PROC_STAT) {
         len = procfs_gen_stat(&text, pid, vp->tid == 0);
     } else if (vp->procfile == SYNTH_PROC_MAPS) {

@@ -174,13 +174,9 @@ int rtl8139_init(struct netdev *nd, int nth)
      * configured). */
     outb(iobase + RTL_CHIPCMD, RTL_CMD_RE | RTL_CMD_TE);
 
-    {
-        int b;
-
-        /* The card's address is its interface's; netdev_probe sets net_mac. */
-        for (b = 0; b < 6; b++) {
-            nd->mac[b] = rtl8139_mac[b];
-        }
+    /* The card's address is its interface's; netdev_probe sets net_mac. */
+    for (i = 0; i < 6; i++) {
+        nd->mac[i] = rtl8139_mac[i];
     }
     return NETDEV_UP;
 }

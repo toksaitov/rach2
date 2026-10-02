@@ -837,9 +837,9 @@ static const struct file_ops loopctl_ops = {dev_eof_read, loopctl_write, dev_pol
  * Linux's does with STRICT_DEVMEM: firmware's frames, a device's and those
  * past the top of memory are the caller's (`paging_frame_is_device`), and
  * so is the first megabyte, which the kernel loaded above it leaves to
- * firmware; another frame of RAM, which the allocator owns, is EPERM. The bytes pass through
- * a buffer on the stack, so the temporary mapping is not held across a copy
- * from or to the caller, which may fault.
+ * firmware; another frame of RAM, which the allocator owns, is EPERM. The
+ * bytes pass through a buffer on the stack, so the temporary mapping is not
+ * held across a copy from or to the caller, which may fault.
  */
 static int32_t dev_mem_rw(fd_entry_t *e, char __user *to, const char __user *from, uint32_t count)
 {
