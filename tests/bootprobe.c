@@ -453,8 +453,10 @@ static void window_batch_case(void)
 static char written[SECTOR];
 
 /**
- * Wait until the child is blocked in its raw transfer, after its pipe signal.
- * The delayed device provides the wait; no elapsed-time assertion is needed.
+ * Wait until the child is blocked in its raw transfer, after its pipe signal:
+ * in the state D, a sleep no signal ends, as Linux reports a process waiting
+ * on its disk. The delayed device provides the wait; no elapsed-time
+ * assertion is needed.
  */
 static int raw_child_sleeping(int pid)
 {
@@ -486,7 +488,7 @@ static int raw_child_sleeping(int pid)
         syscall1(SYS_CLOSE, fd);
         for (i = got - 4; i >= 0; i--) {
             if (status[i] == ')' && status[i + 1] == ' ') {
-                if (status[i + 2] == 'S') {
+                if (status[i + 2] == 'D') {
                     return 1;
                 }
                 if (status[i + 2] == 'Z') {

@@ -10,7 +10,8 @@
  * description on it lives, in this process or a forked one, through `dup`,
  * `dup2` and `F_DUPFD`, and a close-on-exec descriptor is dropped by
  * `execve`; a working directory inside it is busy too; the refused flags
- * and targets answer EINVAL, a long target ENAMETOOLONG, a rename across
+ * and targets answer EINVAL, a bind of a device ENOTDIR, a long target
+ * ENAMETOOLONG, a rename across
  * EXDEV, and the mount point refuses `rmdir`, `unlink` and `rename` with
  * EBUSY; an unprivileged caller gets EPERM; `..` climbs out of the mount
  * physically; and /proc/mounts and /proc/filesystems say what is mounted.
@@ -304,9 +305,9 @@ static void rows_placing(void)
         fail("the writable mount is taken away");
     }
     if (do_mount(SRC, MNT, MS_RDONLY | MS_REMOUNT, 0) != -EINVAL ||
-        do_mount(SRC, MNT, MS_RDONLY | MS_BIND, 0) != -EINVAL ||
+        do_mount(SRC, MNT, MS_RDONLY | MS_BIND, 0) != -ENOTDIR ||
         do_mount(SRC, MNT, MS_RDONLY | MS_MOVE, 0) != -EINVAL) {
-        fail("MS_REMOUNT, MS_BIND and MS_MOVE are EINVAL");
+        fail("MS_REMOUNT of no mount and MS_MOVE are EINVAL, and MS_BIND of a device ENOTDIR");
     }
     if (do_mount(SRC, "/proc", MS_RDONLY, 0) != -EINVAL) {
         fail("a target on /proc is EINVAL");
