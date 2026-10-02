@@ -588,7 +588,7 @@ static int table_changes(int fd)
     char body[64];
     struct ifaddrmsg ifa;
     unsigned char ndm[12] = {AF_INET};
-    unsigned char mac[8] = {0x02, 0, 0, 0, 0, 0x99};
+    const unsigned char mac[8] = {0x02, 0, 0, 0, 0, 0x99};
     struct in_addr second, neigh;
     int len, type = -1, oif = -1;
     unsigned int gw;

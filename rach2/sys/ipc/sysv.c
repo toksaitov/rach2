@@ -1394,7 +1394,7 @@ static int32_t msg_rcv(int32_t id, void __user *umsg, int32_t size, int32_t type
 {
     struct sysv_wait w;
     struct msg_queue *q;
-    struct msg **link;
+    struct msg **link = NULL;
     int32_t rc = 0;
 
     if (size < 0) {

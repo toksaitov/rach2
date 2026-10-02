@@ -509,12 +509,19 @@ static int32_t mq_deadline(const void __user *uts, int wide, struct mq_wait *w)
     if (!uts) {
         return 0;
     }
-    if (copy_from_user(wide ? (void *)ts64 : (void *)ts32, uts,
-                       wide ? sizeof(ts64) : sizeof(ts32)) != 0) {
-        return -EFAULT;
+    if (wide) {
+        if (copy_from_user(ts64, uts, sizeof(ts64)) != 0) {
+            return -EFAULT;
+        }
+        sec = ts64[0];
+        nsec = ts64[1];
+    } else {
+        if (copy_from_user(ts32, uts, sizeof(ts32)) != 0) {
+            return -EFAULT;
+        }
+        sec = ts32[0];
+        nsec = ts32[1];
     }
-    sec = wide ? ts64[0] : ts32[0];
-    nsec = wide ? ts64[1] : ts32[1];
     if (sec < 0 || nsec < 0 || nsec >= 1000000000) {
         return -EINVAL;
     }

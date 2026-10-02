@@ -183,6 +183,7 @@ rach2/sys/network/driver/e1000.c:e1000_init lines 162 a hardware sequence, the r
 rach2/sys/network/driver/rtl8168.c:rtl8168_init lines 121 a hardware sequence, the registers written in the order the datasheet requires
 
 rach2/sys/network/netif.c:ifreq_ioctl lines 122 a dispatcher, one arm per command, read as a table
+rach2/sys/network/netif.c:route_ioctl complexity 30 one system call's contract, its checks in the order the manual page lists the errors
 
 rach2/sys/network/socket/netlink.c:answer complexity 27 a dispatcher, one arm per command, read as a table
 
@@ -308,6 +309,7 @@ tests/ext2probe.c:links_rows complexity 48 a probe, one sequence of steps in the
 tests/ext2probe.c:links_rows lines 138 a probe, one sequence of steps in the order the log records them
 
 tests/host/ahci_hosttest.c:main lines 176 a test's rows, each a case, read as one table
+tests/host/arp_hosttest.c:main lines 110 a test's rows, each a case, read as one table
 
 tests/host/ata_hosttest.c:main lines 155 a test's rows, each a case, read as one table
 
@@ -578,6 +580,8 @@ tests/musl/epollmusl.c:sets complexity 49 a test's rows, each a case, read as on
 tests/musl/execargmusl.c:child complexity 26 a test's rows, each a case, read as one table
 
 tests/musl/fifomusl.c:main complexity 29 a test's rows, each a case, read as one table
+tests/musl/ipcmusl.c:mq_rows complexity 26 a probe, one sequence of steps in the order the log records them
+tests/musl/ipcmusl.c:shm_rows complexity 26 a probe, one sequence of steps in the order the log records them
 
 tests/musl/lchownmusl.c:link_rows complexity 32 a test's rows, each a case, read as one table
 

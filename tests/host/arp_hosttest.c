@@ -16,10 +16,10 @@
  *   * an address no neighbour can have is not cached (0.0.0.0, which was found
  *     in the cache of the machine on the desk, and the broadcast and multicast
  *     ranges, which name many machines or none);
- *   * a seventeenth neighbour replaces the entry gone longest without use, rather
- *     than being dropped: dropping it is how a machine that filled its cache
- *     with strangers before learning its gateway loses every route off its own
- *     subnet, permanently;
+ *   * a seventeenth neighbour replaces the entry gone longest without use,
+ *     rather than being dropped: dropping it is how a machine that filled its
+ *     cache with strangers before learning its gateway loses every route off
+ *     its own subnet, permanently;
  *   * a lookup counts as use, so a mapping the machine keeps reaching for is
  *     among the last to be replaced rather than the first;
  *   * a request for our address is answered, and the reply carries our own
