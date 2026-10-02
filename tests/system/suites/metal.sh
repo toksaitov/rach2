@@ -317,6 +317,26 @@ for want in "Rach2 Booting" "Initializing system components" "net: ready"; do
 done
 echo "metal-test: the machine handed over its own boot log, from the first line: OK"
 
+# The system log: init keeps BusyBox's syslogd running, /dev/log leads to its
+# socket, and a line logger sends there is written to its file, which the
+# daemon does after logger has returned.
+ssh_run 'logger -t metaltest "a line for the system log"' >/dev/null 2>&1 \
+    || fail "logger could not send to /dev/log"
+i=0
+while [ "$i" -lt "$(scaled 20)" ]; do
+    if ssh_run 'grep -c "metaltest: a line for the system log" /var/log/messages' 2>/dev/null |
+        tr -d '\r' | grep -qx 1; then
+        break
+    fi
+    # interval: a look at the log every second until the daemon has written it
+    sleep 1
+    i=$((i + 1))
+done
+if [ "$i" -ge "$(scaled 20)" ]; then
+    fail "a line logger sent to /dev/log never reached /var/log/messages"
+fi
+echo "metal-test: logger's line reached the system log through /dev/log: OK"
+
 # The acceptance script itself, rehearsed here so it is not being debugged on
 # the laptop. Its baseline comparisons are against a drive this machine does
 # not have, which it reports, not fails on.

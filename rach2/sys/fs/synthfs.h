@@ -61,6 +61,7 @@ enum vnode_kind {
     VNODE_PROC_DISKSTATS,   /* /proc/diskstats: the transfers of each disk node */
     VNODE_PROC_VERSION,     /* /proc/version: the kernel's name and release */
     VNODE_PROC_PARTITIONS,  /* /proc/partitions: the size of each disk node */
+    VNODE_DEV_LINK,         /* /dev/log: a link to the syslog daemon's socket */
     VNODE_ENOENT,           /* under a synthetic mount, but no such entry */
     VNODE_ENOTDIR           /* under a synthetic mount, a non-dir used as a directory */
 };
@@ -228,6 +229,12 @@ void synth_sys_device_name(int node, int key, char *out, int cap);
 /** The path of the /sys directory `node`, with its device `key`, into `out`
  * of `cap` bytes, NUL-terminated. */
 void synth_sys_path(int node, int key, char *out, int cap);
+
+/* The target of /dev/log, where a syslog daemon binds its socket: a
+ * directory every system image has writable, as systemd's /dev/log leads
+ * under /run. BusyBox's syslogd follows the link before it binds, and a
+ * client's connect and send follow it to the socket. */
+#define SYNTH_DEV_LOG_TARGET "/var/run/log"
 
 /* True if a classified kind is one of the synthetic (non-KRFFS) namespaces. */
 #define VNODE_IS_SYNTH(kind) ((kind) != VNODE_KRFFS)

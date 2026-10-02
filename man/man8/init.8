@@ -27,7 +27,21 @@ Starts only
 .Pa /bin/login .
 No shell fallback is compiled into this build.
 .It Sy init-metal
-Starts the console login and supervises the SSH server:
+Starts the console login and supervises the system log, BusyBox's
+.Ic syslogd
+run as
+.Ql syslogd -n -O /var/log/messages -s 200 -b 1 ,
+which binds its socket where
+.Pa /dev/log
+leads and writes what
+.Ic logger
+and
+.Xr syslog 3
+send to
+.Pa /var/log/messages ;
+see
+.Xr busybox-sysklogd 8 .
+It supervises the SSH server:
 OpenSSH's
 .Xr sshd 8
 where the image has

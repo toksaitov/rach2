@@ -2158,7 +2158,8 @@ static int synth_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
     k_memset(st, 0, sizeof(*st));
     if (is_dir) {
         st->mode = VFS_S_IFDIR | (mnt == mounts[1] ? 0755u : 0555u);
-    } else if (kind == VNODE_PROC_EXE || kind == VNODE_PROC_CWD || kind == VNODE_PROC_ROOT) {
+    } else if (kind == VNODE_PROC_EXE || kind == VNODE_PROC_CWD || kind == VNODE_PROC_ROOT ||
+               kind == VNODE_DEV_LINK) {
         st->mode = 0120000u | 0777u;
     } else {
         st->mode = VFS_S_IFREG | 0444u;
@@ -2167,17 +2168,26 @@ static int synth_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
     return 0;
 }
 
-/* The target of a /proc link as text: /proc/<pid>/exe's, the path of the
- * program the process runs (`procfs_readlink_exe`), and /proc/<pid>/cwd's
- * and root's, the paths of its directories (`procfs_readlink_dir`). The
- * resolver goes on from exe's program file itself (`walk_exe`), and from the
- * text of the other two, and readlink(2) reads the text through procfs. */
+/* The target of a synthetic link as text: /dev/log's, fixed; /proc/<pid>/
+ * exe's, the path of the program the process runs (`procfs_readlink_exe`);
+ * and /proc/<pid>/cwd's and root's, the paths of its directories
+ * (`procfs_readlink_dir`). The resolver goes on from exe's program file
+ * itself (`walk_exe`), and from the text of the others, and readlink(2)
+ * reads the text through procfs. */
 static int synth_readlink(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
 {
     const struct synth_node *sn = node;
-    int pid = procfs_resolve_id(&sn->vp);
+    int pid;
 
     (void)mnt;
+    if (sn->vp.kind == VNODE_DEV_LINK) {
+        uint32_t n = (uint32_t)k_strlen(SYNTH_DEV_LOG_TARGET);
+
+        n = n < cap ? n : cap;
+        k_memcpy(buf, SYNTH_DEV_LOG_TARGET, n);
+        return (int)n;
+    }
+    pid = procfs_resolve_id(&sn->vp);
     if (pid < 0 && (sn->vp.kind == VNODE_PROC_EXE || sn->vp.kind == VNODE_PROC_CWD ||
                     sn->vp.kind == VNODE_PROC_ROOT)) {
         return -ENOENT;
@@ -2230,17 +2240,13 @@ static int walk_exe(struct vfs_ref *cur, void *found, int locked)
 }
 
 static const struct vfs_ops devfs_vops = {
-    0, devfs_rest, synth_hold, synth_put, synth_getattr,
-    0, 0,          0,          0,         0,
-    0, 0,          0,          0,         0,
-    0, 0,          0,          0,         0,
-    0, 0,          0,          0,         0,
-    0, /* abort_unmount */
-    0, /* symlink */
-    0, /* mknod */
-    0, /* pin */
-    0, /* unpin */
-    0, /* remount */
+    0, devfs_rest, synth_hold, synth_put, synth_getattr,  0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0,          0,          0,         synth_readlink, 0, 0, 0, 0, 0, 0, /* abort_unmount */
+    0,                                                                      /* symlink */
+    0,                                                                      /* mknod */
+    0,                                                                      /* pin */
+    0,                                                                      /* unpin */
+    0,                                                                      /* remount */
 };
 
 static const struct vfs_ops procfs_vops = {

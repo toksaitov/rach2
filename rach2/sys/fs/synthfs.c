@@ -802,6 +802,10 @@ int synth_classify(const char *path, struct vpath *vp)
         if (synth_classify_dev_fd(c, n, vp)) {
             return vp->kind;
         }
+        if (comp_eq(c[1], "log")) {
+            vp->kind = n == 2 ? VNODE_DEV_LINK : VNODE_ENOTDIR;
+            return vp->kind;
+        }
         if (n == 2) {
             vp->kind = VNODE_DEV;
             synth_copy_name(vp, c[1]);

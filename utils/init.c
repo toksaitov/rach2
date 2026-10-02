@@ -122,6 +122,16 @@ static const char *const Shell_Arg0[] = {"-sh", "-ish", 0};
 #define DBUS_USER    "messagebus"
 #define DBUS_DIR     "/var/run/dbus"
 #define MACHINE_ID   "/etc/machine-id"
+
+/*
+ * The system log: BusyBox's syslogd in the foreground, run as its applet of
+ * `BUSYBOX_PROGRAM`, which every image has, so it needs no link. It binds
+ * its socket where /dev/log leads, /var/run/log, and writes what logger(1)
+ * and syslog(3) send to `SYSLOG_FILE`, kept under 200 KiB with one older
+ * file beside it.
+ */
+#define BUSYBOX_PROGRAM "/bin/busybox"
+#define SYSLOG_FILE     "/var/log/messages"
 #endif
 
 #ifdef INIT_CONSOLE_LOGIN
@@ -1336,6 +1346,48 @@ static pid_t spawn_bus(void)
 }
 
 /**
+ * Fork the system log (`BUSYBOX_PROGRAM`'s syslogd) and return its pid (-1
+ * on failure), its own messages on the service log, with the shutdown
+ * signals blocked across the fork as for the SSH server (`spawn_sshd`).
+ */
+static pid_t spawn_syslog(void)
+{
+    sigset_t saved;
+    pid_t pid;
+
+    if (shutdown_block(&saved) != 0) {
+        return -1;
+    }
+    pid = fork();
+    if (pid != 0) {
+        (void)sigprocmask(SIG_SETMASK, &saved, NULL);
+        return pid; /* init (the parent), or -1 if fork failed */
+    }
+    if (shutdown_defaults(&saved) != 0) {
+        _exit(126);
+    }
+    service_output();
+    {
+        static const char msg[] = "init: cannot exec " BUSYBOX_PROGRAM " syslogd\n";
+        char *argv[9];
+
+        argv[0] = (char *)"syslogd";
+        argv[1] = (char *)"-n";
+        argv[2] = (char *)"-O";
+        argv[3] = (char *)SYSLOG_FILE;
+        argv[4] = (char *)"-s";
+        argv[5] = (char *)"200";
+        argv[6] = (char *)"-b";
+        argv[7] = (char *)"1";
+        argv[8] = 0;
+        execve(BUSYBOX_PROGRAM, argv, environ);
+        (void)write(STDERR_FILENO, msg, sizeof(msg) - 1);
+    }
+    _exit(127);
+    return -1; /* unreachable; quiets the compiler */
+}
+
+/**
  * Whether this image runs D-Bus's system bus: when it has `DBUS_PROGRAM`
  * and the user `DBUS_USER`, whose ids go in `bus_uid` and `bus_gid`. An
  * image with the program and not the user is reported once.
@@ -1365,12 +1417,17 @@ struct service {
 };
 
 /**
- * Start each service that is not running: the SSH server where
- * `anyone_to_let_in` allows one, reported on the console, and D-Bus's
+ * Start each service that is not running: the system log, the SSH server
+ * where `anyone_to_let_in` allows one, reported on the console, and D-Bus's
  * system bus where `bus_wanted`. A failed fork is left for the next turn.
  */
-static void start_services(struct service *sshd, struct service *bus, int bus_wanted)
+static void start_services(struct service *log, struct service *sshd, struct service *bus,
+                           int bus_wanted)
 {
+    if (log->pid < 0) {
+        log->pid = spawn_syslog();
+        log->spawned = time(0);
+    }
     if (sshd->pid < 0 && anyone_to_let_in()) {
         sshd->pid = spawn_sshd();
         if (sshd->pid >= 0) {
@@ -1634,6 +1691,7 @@ int main(void)
     pid_t updater = -1;
     time_t spawned = 0;
 #ifdef INIT_METAL
+    struct service log = {-1, 0};
     struct service sshd = {-1, 0};
     struct service bus = {-1, 0};
     int network_done = 0;
@@ -1683,7 +1741,7 @@ int main(void)
             }
         }
 
-        start_services(&sshd, &bus, bus_wanted);
+        start_services(&log, &sshd, &bus, bus_wanted);
 #endif
 
         if (++turns >= SERVICE_LOG_CHECK_TURNS) {
@@ -1708,7 +1766,8 @@ int main(void)
             continue;
         }
 #ifdef INIT_METAL
-        if (service_ended(&sshd, reaped) || service_ended(&bus, reaped)) {
+        if (service_ended(&log, reaped) || service_ended(&sshd, reaped) ||
+            service_ended(&bus, reaped)) {
             continue;
         }
 #endif

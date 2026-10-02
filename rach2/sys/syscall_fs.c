@@ -5349,6 +5349,8 @@ static int32_t synth_fd_stat(int pid, int fd, struct linux_stat64 *kst)
 /* Stable /dev/pts inodes (distinct from devfs's): the directory, then one per
  * slave (so a slave's (st_dev, st_ino) identity is consistent for ttyname). */
 #define PTS_INO_DIR 3u
+/* /dev/log's inode, below the slaves' and above the directory's. */
+#define DEV_LOG_INO 4u
 
 #define PTS_INO_BASE 0x1000u
 
@@ -5577,6 +5579,12 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
         synth_pid_owner(rpid, kst);
         return 0;
     }
+    case VNODE_DEV_LINK:
+        kst->st_dev = DEVFS_FSID;
+        kst->st_mode = 0120777; /* S_IFLNK | 0777 */
+        kst->st_ino = DEV_LOG_INO;
+        kst->st_size = (int64_t)k_strlen(SYNTH_DEV_LOG_TARGET);
+        return 0;
     case VNODE_PTS_DIR:
         /* /dev/pts: a directory. */
         kst->st_dev = DEVFS_FSID;
@@ -5994,6 +6002,9 @@ static int32_t do_readlink(const char *name, char __user *ubuf, uint32_t bufsiz,
     } else if (kind == VNODE_SYS_LINK) {
         n = sysfs_device_exists(vp.sysent, vp.syskey) ? synth_sys_link(&vp, link, VFS_PATH_MAX)
                                                       : -ENOENT;
+    } else if (kind == VNODE_DEV_LINK) {
+        n = (int)k_strlen(SYNTH_DEV_LOG_TARGET);
+        k_memcpy(link, SYNTH_DEV_LOG_TARGET, (uint32_t)n);
     } else {
         n = -EINVAL; /* not a symlink */
     }
@@ -6262,7 +6273,8 @@ static int32_t statfs_fill_mount(struct linux_statfs64 __user *out, struct vfs_m
 /** Which of the three mounts a classified path belongs to. */
 static uint32_t statfs_magic_for_kind(int kind)
 {
-    if (kind == VNODE_DEV_DIR || kind == VNODE_DEV || kind == VNODE_PTS_DIR || kind == VNODE_PTS) {
+    if (kind == VNODE_DEV_DIR || kind == VNODE_DEV || kind == VNODE_PTS_DIR || kind == VNODE_PTS ||
+        kind == VNODE_DEV_LINK) {
         return STATFS_MAGIC_DEVFS;
     }
     if (kind == VNODE_KRFFS) {
@@ -10859,6 +10871,14 @@ static int synth_dirent_at(const struct synth_dir *sd, int n, char *name, uint64
             return 1;
         }
         n -= named;
+        /* /dev/log, the link to the syslog daemon's socket. */
+        if (n == 0) {
+            k_strncpy(name, "log", 31);
+            *ino = DEV_LOG_INO;
+            *dtype = DT_LNK;
+            return 1;
+        }
+        n--;
         /* The caller's descriptors, /dev/fd and the three standard ones
          * (`synth_classify`), with what lstat reports of them. */
         if (n < 4) {
