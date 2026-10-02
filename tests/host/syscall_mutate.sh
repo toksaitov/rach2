@@ -164,11 +164,15 @@ changes = {
         '            break;\n'
         '        }'),
     'sleep-deadline': ('syscall',
-        'target = kernel_ticks + ticks + (ticks != 0 ? 1u : 0u);',
-        'target = kernel_ticks + ticks;'),
+        '    return sleep_until(now + ticks, urem);',
+        '    return sleep_until(now + ticks + 1u, urem);'),
     'sleep-zero': ('syscall',
-        'target = kernel_ticks + ticks + (ticks != 0 ? 1u : 0u);',
-        'target = kernel_ticks + ticks + 1u;'),
+        '    if (req->tv_sec == 0 && req->tv_nsec == 0) {\n'
+        '        return 0;\n'
+        '    }',
+        '    if (req->tv_sec == 0 && req->tv_nsec == 0) {\n'
+        '        return sleep_until(now + 1u, urem);\n'
+        '    }'),
     'sleep-nsec': ('syscall',
         'uint32_t nsec_ticks = ((uint32_t)req->tv_nsec + 9999999u) / 10000000u;',
         'uint32_t nsec_ticks = (uint32_t)req->tv_nsec / 10000000u;'),
@@ -188,11 +192,11 @@ changes = {
         'return req->tv_sec >= 0 && req->tv_nsec >= 0 && req->tv_nsec < 1000000000;',
         'return req->tv_sec >= 0 && req->tv_nsec >= 0 && req->tv_nsec <= 1000000000;'),
     'sleep-remainder': ('syscall',
-        'uint32_t unslept = left - 1u;',
-        'uint32_t unslept = left;'),
+        'left = (int32_t)(target - now) > 0 ? target - now : 0u;',
+        'left = (int32_t)(target - now) > 0 ? target - now + 1u : 0u;'),
     'sleep-last-tick': ('syscall',
-        'uint32_t unslept = left - 1u;',
-        'uint32_t unslept = left > 1u ? left - 1u : 1u;'),
+        'left = (int32_t)(target - now) > 0 ? target - now : 0u;',
+        'left = (int32_t)(target - now) > 1 ? target - now - 1u : 0u;'),
     'sleep-cut-short': ('syscall',
         '    process_count_sleep_cut_short();\n'
         '    if (urem) {',
@@ -206,11 +210,11 @@ changes = {
         '        }\n'
         '        if (signal_pending()) {\n'
         '            kirq_restore(flags);\n'
-        '            return nanosleep_interrupted(urem, (uint32_t)left);\n'
+        '            return nanosleep_interrupted(urem, target);\n'
         '        }',
         '        if (signal_pending()) {\n'
         '            kirq_restore(flags);\n'
-        '            return nanosleep_interrupted(urem, (uint32_t)(left > 0 ? left : 1));\n'
+        '            return nanosleep_interrupted(urem, target);\n'
         '        }\n'
         '        if (left <= 0) {\n'
         '            kirq_restore(flags);\n'
@@ -224,9 +228,13 @@ changes = {
         'current_proc->wakeup_tick = target;'),
     'sleep-clamp': ('syscall',
         '    if (ticks > 0x7FFFFFFEu) {\n'
-        '        ticks = 0x7FFFFFFEu;',
+        '        ticks = 0x7FFFFFFEu;\n'
+        '    }\n'
+        '    return sleep_until(now + ticks, urem);',
         '    if (ticks > 0x7FFFFFFFu) {\n'
-        '        ticks = 0x7FFFFFFFu;'),
+        '        ticks = 0x7FFFFFFFu;\n'
+        '    }\n'
+        '    return sleep_until(now + ticks, urem);'),
     'sleep-sec-clamp': ('syscall',
         '    if (sec > 21474836u) {\n'
         '        sec = 21474836u; /* keeps the intermediate sec*100 below 2^31 */\n'
@@ -252,10 +260,10 @@ changes = {
         'if (copy_to_user(urem, &zero, sizeof(zero)) != 0) {',
         'if (0 && copy_to_user(urem, &zero, sizeof(zero)) != 0) {'),
     'rem-sec': ('syscall',
-        'rem.tv_sec = (int32_t)(unslept / 100u);\n'
-        '        rem.tv_nsec = (int32_t)((unslept % 100u) * 10000000u);',
+        'rem.tv_sec = (int32_t)(left / 100u);\n'
+        '        ns = (int32_t)((left % 100u) * 10000000u) - (int32_t)phase_ns;',
         'rem.tv_sec = 0;\n'
-        '        rem.tv_nsec = (int32_t)(unslept * 10000000u);'),
+        '        ns = (int32_t)(left * 10000000u) - (int32_t)phase_ns;'),
     'timer-first': ('syscall',
         'p->alarm_tick = proc_alarm_at(kernel_ticks, value + 1u);',
         'p->alarm_tick = proc_alarm_at(kernel_ticks, value);'),
@@ -410,16 +418,16 @@ PY
         sleep-left-early) detail='a deadline tick that comes as the sleep masks after a halt is seen' ;;
         sleep-switch) detail='a sleeper switched back to after a signal runs again at once' ;;
         sleep-early-return) detail='a sleep with no signal runs to its deadline' ;;
-        sleep-deadline) detail='a sleep of three ticks from tick 1000 blocks until 1004' ;;
+        sleep-deadline) detail='a sleep of three ticks from tick 1000 blocks until 1003' ;;
         sleep-remainder) detail='and the whole request is left' ;;
         sleep-zero) detail='a sleep of zero does not block' ;;
-        sleep-nsec) detail='a sleep of 15 ms from tick 1100 blocks until 1103' ;;
-        sleep-nsec-one) detail='a sleep of 1 ns from tick 1150 blocks until 1152' ;;
-        sleep-nsec-near) detail='a sleep of 1 ns from tick 1150 blocks until 1152' ;;
+        sleep-nsec) detail='a sleep of 15 ms from tick 1100 blocks until 1102' ;;
+        sleep-nsec-one) detail='a sleep of 1 ns from tick 1150 blocks until 1151' ;;
+        sleep-nsec-near) detail='a sleep of 1 ns from tick 1150 blocks until 1151' ;;
         sleep-arg-nsec-neg) detail='a sleep of -1 ns is refused' ;;
         sleep-arg-sec) detail='a sleep of a negative second is refused' ;;
         sleep-arg-nsec) detail='a sleep of 1000000000 ns is refused' ;;
-        sleep-last-tick) detail='a signal in the last tick leaves no remainder|a sleep resumed after a signal at every tick ends within four calls' ;;
+        sleep-last-tick) detail='a signal as the last tick begins leaves that tick' ;;
         sleep-cut-short) detail='and the sleep is counted as one a signal cut short' ;;
         sleep-signal-first) detail='a signal at the deadline ends nothing' ;;
         sleep-rearm) detail='blocks again with its deadline armed' ;;
