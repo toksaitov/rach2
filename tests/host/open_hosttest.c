@@ -948,6 +948,17 @@ NO_PROC_INO(procfs_ino_loadavg)
 NO_PROC_INO(procfs_ino_diskstats)
 NO_PROC_INO(procfs_ino_version)
 NO_PROC_INO(procfs_ino_partitions)
+NO_PROC_INO(procfs_ino_vmstat)
+NO_PROC_INO(procfs_ino_slabinfo)
+NO_PROC_INO(procfs_ino_netstatdir)
+NO_PROC_INO(procfs_ino_sysvipcdir)
+
+uint32_t procfs_ino_sysvipc(int origin)
+{
+    (void)origin;
+    check(0, "unexpected stat of a /proc file");
+    return 0;
+}
 
 int synth_sys_writable(int entry)
 {

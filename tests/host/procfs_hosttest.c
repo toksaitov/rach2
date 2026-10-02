@@ -343,6 +343,15 @@ int pty_slave_index(struct fd_entry *e)
     return 0;
 }
 
+/** No session of these rows has a controlling terminal. */
+int tty_controlling(int sid, uint32_t *dev, int *fg_pgid)
+{
+    (void)sid;
+    (void)dev;
+    (void)fg_pgid;
+    return 0;
+}
+
 uint32_t unix_inode(const fd_entry_t *e)
 {
     (void)e;

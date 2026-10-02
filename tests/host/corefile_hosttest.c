@@ -935,6 +935,32 @@ uint32_t procfs_ino_partitions(void)
     return 0;
 }
 
+uint32_t procfs_ino_vmstat(void)
+{
+    return 0;
+}
+
+uint32_t procfs_ino_slabinfo(void)
+{
+    return 0;
+}
+
+uint32_t procfs_ino_netstatdir(void)
+{
+    return 0;
+}
+
+uint32_t procfs_ino_sysvipcdir(void)
+{
+    return 0;
+}
+
+uint32_t procfs_ino_sysvipc(int origin)
+{
+    (void)origin;
+    return 0;
+}
+
 int synth_sys_writable(int entry)
 {
     (void)entry;

@@ -186,6 +186,13 @@ uint32_t pit_now_us(void)
     return 1;
 }
 
+/** A pty's times are outside the readiness tests. */
+void rtc_coarse_realtime(int64_t *seconds, int64_t *nanoseconds)
+{
+    *seconds = 1;
+    *nanoseconds = 0;
+}
+
 /** Latency values are outside the readiness tests. */
 void latency_span(int kind, uint32_t from, uint32_t to)
 {
