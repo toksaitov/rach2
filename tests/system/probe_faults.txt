@@ -5203,6 +5203,16 @@ new
         !procfs_may_read(pid) && pid < 0) {
 end
 
+fault proc-fd-link-open-to-all
+probe callsmusl
+file rach2/sys/syscall_fs.c
+expect CALLSMUSL FAIL (another user opened a root process's maps or fd directory
+old
+            : !procfs_may_read(pid) ? -EACCES
+new
+            : !procfs_may_read(pid) && pid < 0 ? -EACCES
+end
+
 fault proc-limits-missing
 probe procprobe
 file rach2/sys/fs/synthfs.c

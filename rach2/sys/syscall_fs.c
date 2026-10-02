@@ -5563,6 +5563,22 @@ static void synth_pid_owner(int pid, struct linux_stat64 *kst)
     }
 }
 
+/**
+ * Whether /proc/`rpid`/fd/`fd` and its fdinfo file are there for the caller:
+ * 0, -ENOENT when the descriptor is not open (the check readlink makes, so
+ * stat and readlink agree), or -EACCES for a caller that may not read the
+ * process's descriptors, to whom Linux refuses its fd directory.
+ */
+static int32_t synth_fd_visible(int rpid, int fd)
+{
+    char scratch[16];
+
+    if (rpid < 0 || procfs_readlink_fd(rpid, fd, scratch, (int)sizeof(scratch)) < 0) {
+        return -ENOENT;
+    }
+    return procfs_may_read(rpid) ? 0 : -EACCES;
+}
+
 static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int follow)
 {
     uint32_t mode = 0, rdev = 0, ino = 0;
@@ -5771,7 +5787,7 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
             return 0;
         }
         kst->st_dev = PROCFS_FSID;
-        kst->st_mode = S_IFDIR | 0555;
+        kst->st_mode = S_IFDIR | (vp->kind == VNODE_PROC_FD_DIR ? 0500 : 0555);
         kst->st_ino = procfs_ino_pid(procfs_resolve_id(vp));
         synth_pid_owner(procfs_resolve_id(vp), kst);
         if (vp->kind == VNODE_PROC_TASK_DIR) {
@@ -5794,11 +5810,11 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
         }
         return 0;
     case VNODE_PROC_FDINFO: {
-        char scratch[16];
         int rpid = procfs_resolve_id(vp);
+        int32_t rc = synth_fd_visible(rpid, vp->procfd);
 
-        if (rpid < 0 || procfs_readlink_fd(rpid, vp->procfd, scratch, (int)sizeof(scratch)) < 0) {
-            return -ENOENT;
+        if (rc != 0) {
+            return rc;
         }
         kst->st_dev = PROCFS_FSID;
         kst->st_mode = S_IFREG | 0400;
@@ -5807,15 +5823,11 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
         return 0;
     }
     case VNODE_PROC_FD_LINK: {
-        char scratch[16];
         int rpid = procfs_resolve_id(vp);
-        if (rpid < 0) {
-            return -ENOENT;
-        }
-        /* The link exists only if descriptor procfd is actually open (the
-         * same check readlink makes), so stat and readlink agree. */
-        if (procfs_readlink_fd(rpid, vp->procfd, scratch, (int)sizeof(scratch)) < 0) {
-            return -ENOENT;
+        int32_t rc = synth_fd_visible(rpid, vp->procfd);
+
+        if (rc != 0) {
+            return rc;
         }
         if (follow) {
             return synth_fd_stat(rpid, vp->procfd, kst);
@@ -6240,7 +6252,9 @@ static int32_t do_readlink(const char *name, char __user *ubuf, uint32_t bufsiz,
         }
     } else if (kind == VNODE_PROC_FD_LINK) {
         pid = procfs_resolve_id(&vp);
-        n = pid < 0 ? -ENOENT : procfs_readlink_fd(pid, vp.procfd, link, VFS_PATH_MAX);
+        n = pid < 0                 ? -ENOENT
+            : !procfs_may_read(pid) ? -EACCES
+                                    : procfs_readlink_fd(pid, vp.procfd, link, VFS_PATH_MAX);
     } else if (kind == VNODE_PROC_NS_LINK) {
         pid = procfs_resolve_id(&vp);
         n = pid < 0 ? -ENOENT : procfs_readlink_ns(pid, vp.procfd, link, VFS_PATH_MAX);

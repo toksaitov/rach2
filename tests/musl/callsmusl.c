@@ -296,11 +296,12 @@ static int setgids(void)
 }
 
 /* A child that becomes user 4243 opens its root parent's maps and fd
-   directory, which are EACCES, and its own maps; its exit status is the
-   number of the first that went wrong. */
+   directory and reads a link in that directory, which are EACCES, and opens
+   its own maps; its exit status is the number of the first that went
+   wrong. */
 static int privacies(void)
 {
-    char path[64];
+    char path[64], link[64];
     struct stat st;
     int status, fd;
     pid_t pid, parent = getpid();
@@ -321,6 +322,10 @@ static int privacies(void)
         if (d || errno != EACCES) {
             _exit(3);
         }
+        snprintf(path, sizeof path, "/proc/%d/fd/1", (int)parent);
+        if (readlink(path, link, sizeof link) != -1 || errno != EACCES) {
+            _exit(3);
+        }
         fd = open("/proc/self/maps", O_RDONLY);
         if (fd < 0) {
             _exit(4);
@@ -337,7 +342,8 @@ static int privacies(void)
         return fail("a child of user 4243");
     }
     if (WEXITSTATUS(status) == 2 || WEXITSTATUS(status) == 3) {
-        return fail("another user opened a root process's maps or fd directory");
+        return fail("another user opened a root process's maps or fd directory, or read "
+                    "one of its descriptors' links");
     }
     if (WEXITSTATUS(status) == 5) {
         return fail("the /proc directory of a dumpable process of user 4243 was not its own");

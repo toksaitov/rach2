@@ -790,7 +790,7 @@ At most the first 128 KiB of them are read, so a longer list ends inside
 a string, without that string's NUL, and a page the address space cannot
 read ends it early.
 .It Pa /proc/PID/fd/N
-The directory is
+The directory, of mode 0500, and each link in it are
 .Er EACCES
 to a caller that may not read
 .Pa environ .
