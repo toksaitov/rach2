@@ -7,16 +7,15 @@
 # sources.mk, so one file lists the kernel sources for the two builds and
 # they cannot drift apart.
 #
-# The link reads the object list from kernel.objs, a response file, because
-# naming every object on one command line would exceed the machine's
-# 63-entry execve limit. The response file is written by one builtin printf
-# (no execve) into a temporary file renamed only after every line landed, so
-# a printf that failed part way cannot leave a shorter list that a retry
-# would treat as current. OBJS keeps loader.o first: the multiboot header
-# lives in loader.o and the linker keeps input order, so the header stays
-# inside the first 8192 bytes of the kernel where the loaders search for
-# it. /lib/tcc/libtcc1.a supplies the 64-bit helper routines tcc calls
-# where gcc emits the arithmetic inline; -nostdlib keeps the C library and
+# The link reads the object list from kernel.objs, a response file, which keeps
+# the link line short however many objects there are. The response file is
+# written by one builtin printf (no execve) into a temporary file renamed only
+# after every line landed, so a printf that failed part way cannot leave a
+# shorter list that a retry would treat as current. OBJS keeps loader.o first:
+# the multiboot header lives in loader.o and the linker keeps input order, so
+# the header stays inside the first 8192 bytes of the kernel where the loaders
+# search for it. /lib/tcc/libtcc1.a supplies the 64-bit helper routines tcc
+# calls where gcc emits the arithmetic inline; -nostdlib keeps the C library and
 # its startup files out of a kernel that must not have them.
 #
 # Run from a writable copy of this tree: make -f guest.mk

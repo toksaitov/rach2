@@ -19,7 +19,7 @@
  *   3. ish/guest.mk's object list equals the host ish/Makefile's OBJECTS.
  *   4. The build fits the machine: the deepest kernel include chain leaves
  *      room in the 16-descriptor table for the compiler's own files, and no
- *      guest recipe line approaches the 3072-byte exec string budget.
+ *      guest recipe line approaches the exec string budget.
  *   5. The os-real manifest stages all three source trees at /src,
  *      root-owned and read-only, so the machine actually has what the
  *      makefiles build, and each staged tree has its guest.mk.
@@ -38,12 +38,13 @@
 #define FD_LIMIT    16
 #define FD_RESERVED 4 /* stdin, stdout, stderr, and the output file */
 
-/* The kernel's execve budget is 3072 bytes across the argv and environment
-   strings together. A recipe reaches the kernel as `sh -c <expanded text>`
-   plus the build environment, so each recipe is expanded the way pdpmake
-   will and the result held under the budget minus this allowance for the
-   environment a login shell exports. */
-#define EXEC_BUDGET   3072
+/* The kernel's execve budget for the argv and environment strings together
+   is a quarter of the soft RLIMIT_STACK, and at least UIMAGE_ARGS_MIN, 128
+   KiB (rach2/sys/proc/uimage.h), the figure held here. A recipe reaches the
+   kernel as `sh -c <expanded text>` plus the build environment, so each
+   recipe is expanded the way pdpmake will and the result held under the
+   budget minus this allowance for the environment a login shell exports. */
+#define EXEC_BUDGET   131072
 #define ENV_ALLOWANCE 500
 
 #define MAX_TEXT (1024 * 1024)
