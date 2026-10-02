@@ -57,4 +57,22 @@ void pit_tick_clock(void);
  */
 int pit_clock_check(void);
 
+/**
+ * Measure the time-stamp counter against the counter of the 8254, with
+ * interrupts off for 20 ms, when the processor says its TSC runs at one rate
+ * whatever its clock does, which `cpuid` leaf 0x80000007 says in EDX bit 8,
+ * and no hypervisor runs the machine, which leaf 1 says in ECX bit 31.
+ * Returns the TSC's counts in one tick, and 0 otherwise, when no tick the
+ * timer misses is made up.
+ */
+uint32_t pit_tsc_calibrate(void);
+
+/**
+ * The ticks the timer did not deliver since its last interrupt, by the TSC,
+ * from the timer handler and nowhere else: the whole ticks of the interval,
+ * rounded down, less the one this interrupt delivers, at most a minute's.
+ * Zero without a calibration.
+ */
+uint32_t pit_lost_ticks(void);
+
 #endif

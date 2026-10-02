@@ -254,6 +254,8 @@ static void exec_program(int argc, char *argv[]);
  */
 static void timer_handler(isr_params_t *params)
 {
+    uint32_t lost = pit_lost_ticks();
+
     ++kernel_ticks;
     /* The microsecond clock's periods are this tick's to count; see
        `pit_now_us`. */
@@ -262,6 +264,13 @@ static void timer_handler(isr_params_t *params)
     if (++kernel_second_ticks >= 100) {
         kernel_second_ticks = 0;
         ++kernel_uptime_seconds;
+    }
+    while (lost-- > 0) {
+        ++kernel_ticks;
+        if (++kernel_second_ticks >= 100) {
+            kernel_second_ticks = 0;
+            ++kernel_uptime_seconds;
+        }
     }
 
     sched_account_tick((params->cs & 3u) == 3u);
@@ -2574,7 +2583,7 @@ static void check_timing(void)
 {
     uint32_t measured_ms = 0;
     uint32_t measured_us = 0;
-    uint32_t walk_clock = 0, walk_tick = 0;
+    uint32_t walk_clock = 0, walk_tick = 0, tsc;
     const char *why = "";
     int delay_ok, walk_ok, clock_ok, tick_ok;
 
@@ -2582,6 +2591,7 @@ static void check_timing(void)
     delay_ok = test_udelay(&measured_ms);
     walk_ok = test_clock(&measured_us, &why, &walk_clock, &walk_tick);
     clock_ok = pit_clock_check();
+    tsc = pit_tsc_calibrate();
 
     klog(clock_ok ? KLOG_INFO : KLOG_ERR, "timing",
          "tick %d Hz, 200 ms delay measured %d ms, 2000 us wait measured %d us",
@@ -2598,6 +2608,11 @@ static void check_timing(void)
     }
     if (!clock_ok) {
         klog(KLOG_ERR, "timing", "the clock's arithmetic failed its check on fixed readings");
+    }
+    if (tsc) {
+        klog(KLOG_INFO, "tsc", "%d counts a tick; a tick the timer misses is counted", (int)tsc);
+    } else {
+        klog(KLOG_INFO, "tsc", "none at one rate; a tick the timer misses is lost");
     }
 }
 

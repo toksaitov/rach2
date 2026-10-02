@@ -5839,3 +5839,13 @@ old
 new
     if (user_mode && have_user_proc && in_user_range && current_proc->frame_refused && 0) {
 end
+
+fault tsc-gap-counts-its-own-tick
+probe timing
+file rach2/sys/pit.c
+expect the clock's arithmetic failed its check on fixed readings
+old
+    return q - 1u > PIT_LOST_MAX ? PIT_LOST_MAX : q - 1u;
+new
+    return q > PIT_LOST_MAX ? PIT_LOST_MAX : q;
+end

@@ -1,6 +1,8 @@
 #include "pit.h"
 
+#include "lib/kcpu.h"
 #include "lib/kirq.h"
+#include "udelay.h"
 
 /* The tick, which is this chip's own count of the interrupts it has raised. */
 extern volatile uint32_t kernel_ticks;
@@ -91,6 +93,104 @@ static void pit_clock_tick(struct pit_clock *c, uint32_t phase)
     c->last_phase = phase;
 }
 
+/*
+ * The TSC's measure of the ticks. A tick arrives only while interrupts are
+ * on, and the PIC keeps one pending, so a stretch with them off longer than
+ * a period loses periods, as a page fault that reclaims memory can take;
+ * the time-stamp counter goes on counting. With the counts of one tick, from
+ * `pit_tsc_calibrate`, the timer handler asks how many whole ticks have gone
+ * by since the last one it saw (`pit_lost_ticks`), rounding down, so the
+ * count can fall short of the time by part of a tick in a gap and never run
+ * ahead of it. Zero counts: no TSC that runs at one rate, or a hypervisor,
+ * whose emulated timer delivers the ticks it held back again, and no ticks
+ * are made up.
+ */
+static uint32_t tsc_per_tick;
+static uint32_t tsc_last_lo, tsc_last_hi;
+
+/* The most ticks one interrupt makes up: a minute. */
+#define PIT_LOST_MAX 6000u
+
+/** The time-stamp counter's halves. */
+static void tsc_read(uint32_t *lo, uint32_t *hi)
+{
+#ifndef RACH2_HOSTTEST
+    __asm__ __volatile__("rdtsc" : "=a"(*lo), "=d"(*hi));
+#else
+    *lo = *hi = 0;
+#endif
+}
+
+/**
+ * The whole ticks of `per_tick` counts in the TSC interval `hi`:`lo` less
+ * the one that ends it, at most PIT_LOST_MAX: the ticks the timer missed.
+ */
+static uint32_t pit_ticks_missed(uint32_t lo, uint32_t hi, uint32_t per_tick)
+{
+    uint32_t q;
+
+    if (per_tick == 0) {
+        return 0;
+    }
+    if (hi >= per_tick) {
+        return PIT_LOST_MAX; /* a quotient past 32 bits is past the bound too */
+    }
+#ifndef RACH2_HOSTTEST
+    __asm__("divl %2" : "=a"(q) : "0"(lo), "rm"(per_tick), "d"(hi) : "cc");
+#else
+    q = (uint32_t)((((uint64_t)hi << 32) | lo) / per_tick);
+#endif
+    if (q <= 1u) {
+        return 0;
+    }
+    return q - 1u > PIT_LOST_MAX ? PIT_LOST_MAX : q - 1u;
+}
+
+uint32_t pit_tsc_calibrate(void)
+{
+    uint32_t a, b, c, d, lo0, hi0, lo1, hi1, flags;
+
+#ifdef RACH2_HOSTTEST
+    return 0; /* a host has its own clocks */
+#endif
+    kcpu_id(1u, &a, &b, &c, &d);
+    if (c & (1u << 31)) {
+        return 0; /* a hypervisor gives the ticks it held back again itself */
+    }
+    kcpu_id(0x80000000u, &a, &b, &c, &d);
+    if (a < 0x80000007u) {
+        return 0;
+    }
+    kcpu_id(0x80000007u, &a, &b, &c, &d);
+    if (!(d & (1u << 8))) {
+        return 0; /* no invariant TSC: its rate follows the processor's */
+    }
+    flags = kirq_save();
+    tsc_read(&lo0, &hi0);
+    k_udelay(20000);
+    tsc_read(&lo1, &hi1);
+    kirq_restore(flags);
+    /* Twenty milliseconds are two ticks, and fewer than 2^32 counts below a
+     * clock of 200 GHz. */
+    tsc_per_tick = (lo1 - lo0) / 2u;
+    return tsc_per_tick;
+}
+
+uint32_t pit_lost_ticks(void)
+{
+    uint32_t lo, hi, gap_lo, gap_hi, first = tsc_last_lo == 0 && tsc_last_hi == 0;
+
+    if (tsc_per_tick == 0) {
+        return 0;
+    }
+    tsc_read(&lo, &hi);
+    gap_lo = lo - tsc_last_lo;
+    gap_hi = hi - tsc_last_hi - (lo < tsc_last_lo ? 1u : 0u);
+    tsc_last_lo = lo;
+    tsc_last_hi = hi;
+    return first ? 0 : pit_ticks_missed(gap_lo, gap_hi, tsc_per_tick);
+}
+
 /**
  * The clock's arithmetic on fixed inputs, as `pit.h` describes.
  *
@@ -101,7 +201,10 @@ static void pit_clock_tick(struct pit_clock *c, uint32_t phase)
  * two readings inside one period add no period; a tick with no reading
  * ahead of it adds one; a reading behind the last one counts the wrap and
  * the tick after it adds nothing; and the next tick, with no wrap read
- * before it, adds its period.
+ * before it, adds its period. The ticks the TSC finds missed: none in a gap
+ * of one tick or a little more, eight in one of nine and a half, none
+ * without a calibration, and the bound for a gap whose quotient is past 32
+ * bits.
  */
 int pit_clock_check(void)
 {
@@ -128,6 +231,12 @@ int pit_clock_check(void)
     ok = ok && pit_clock_read(&c, 900u, p) == 2u * p + 900u;
     pit_clock_tick(&c, 30u);
     ok = ok && pit_clock_read(&c, 40u, p) == 3u * p + 40u;
+    ok = ok && pit_ticks_missed(1000u, 0u, 1000u) == 0u;
+    ok = ok && pit_ticks_missed(1900u, 0u, 1000u) == 0u;
+    ok = ok && pit_ticks_missed(9500u, 0u, 1000u) == 8u;
+    ok = ok && pit_ticks_missed(9500u, 0u, 0u) == 0u;
+    ok = ok && pit_ticks_missed(0u, 5000u, 1000u) == PIT_LOST_MAX;
+    ok = ok && pit_ticks_missed(0u, 1u, 1000u) == PIT_LOST_MAX;
     return ok;
 }
 
@@ -188,8 +297,9 @@ void pit_tick_clock(void)
  * read-back status says which half: `OUT` is high through the first.
  *
  * A machine whose interrupts are off for longer than a period loses that
- * period unless something reads the clock inside it, exactly as the tick
- * counter does.
+ * period unless something reads the clock inside it. The tick counter makes
+ * such periods up from the TSC where `pit_tsc_calibrate` found one at one
+ * rate; this clock does not.
  *
  * It wraps after about 71 minutes, which is a diagnostic clock's bound and
  * not a wall clock's; `rtc.c` is where the time of day lives.
