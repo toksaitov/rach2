@@ -147,7 +147,7 @@ rach2/sys/fs/krffs.c:krffs_walk_err complexity 27 one file system operation over
 rach2/sys/fs/procfs.c:procfs_fd_ino complexity 28 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/procfs.c:procfs_kind_name complexity 26 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/procfs.c:procfs_open complexity 82 a dispatcher, one arm per command, read as a table
-rach2/sys/fs/procfs.c:procfs_open lines 218 a dispatcher, one arm per command, read as a table
+rach2/sys/fs/procfs.c:procfs_open lines 220 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/procfs.c:procfs_readlink_fd lines 140 a dispatcher, one arm per command, read as a table
 
 rach2/sys/fs/synthfs.c:synth_classify complexity 55 a dispatcher, one arm per command, read as a table
