@@ -771,7 +771,7 @@ int procfs_fd_owner(struct fd_entry *e, uint32_t *uid, uint32_t *gid)
     return -1;
 }
 
-int procfs_fd_writable_sysctl(struct fd_entry *e)
+int procfs_fd_writable(struct fd_entry *e)
 {
     (void)e;
     return 0;

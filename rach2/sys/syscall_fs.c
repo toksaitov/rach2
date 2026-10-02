@@ -6469,7 +6469,8 @@ static int32_t fstat_fill(fd_entry_t *entry, struct linux_stat64 *kst)
         /* A /proc text snapshot: a regular file whose inode is its origin's,
          * so fstat matches the stat of the path it was opened by, and whose
          * mode and owner are too: a process's file is its owner's, as
-         * `synth_pid_owner` has it, and mode 0644 for oom_score_adj. */
+         * `synth_pid_owner` has it, and oom_score_adj and a file a
+         * privileged caller may write have mode 0644. */
         uint32_t uid, gid;
         int owned;
 
@@ -6484,7 +6485,7 @@ static int32_t fstat_fill(fd_entry_t *entry, struct linux_stat64 *kst)
             kst->st_uid = uid;
             kst->st_gid = gid;
         }
-        if (owned == 1 || procfs_fd_writable_sysctl(entry)) {
+        if (owned == 1 || procfs_fd_writable(entry)) {
             kst->st_mode = 0100644; /* S_IFREG | 0644 */
         }
     } else if (entry->type == FD_TYPE_CONSOLE) {

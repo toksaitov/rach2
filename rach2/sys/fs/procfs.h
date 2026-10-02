@@ -144,7 +144,8 @@ int procfs_oom_owner(int pid, uint32_t *uid, uint32_t *gid);
  * is gone. */
 int procfs_fd_owner(struct fd_entry *e, uint32_t *uid, uint32_t *gid);
 
-/** Whether `e` is open on a /proc/sys file a privileged caller may write. */
-int procfs_fd_writable_sysctl(struct fd_entry *e);
+/** Whether `e` is open on a /proc/sys or /sys file a privileged caller may
+ * write. */
+int procfs_fd_writable(struct fd_entry *e);
 
 #endif /* _PROCFS_H_ */

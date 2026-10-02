@@ -221,7 +221,8 @@ struct procfs_file {
     int len;
     int origin_pid;  /* the /proc/<pid> this snapshot came from (for fd readlink) */
     int origin_file; /* SYNTH_PROC_STAT or SYNTH_PROC_CMDLINE */
-    int origin_task; /* the process whose task/<origin_pid> it came from, or 0 */
+    int origin_task; /* the process whose task/<origin_pid> it came from, or 0;
+                      * for a /sys file, its node << 8 | its attribute */
     struct mm *mm;   /* /proc/<pid>/mem: a hold on the address space it allowed */
 };
 
@@ -3549,7 +3550,7 @@ int procfs_fd_owner(struct fd_entry *e, uint32_t *uid, uint32_t *gid)
     return f->origin_file == SYNTH_PROC_OOM_ADJ;
 }
 
-int procfs_fd_writable_sysctl(struct fd_entry *e)
+int procfs_fd_writable(struct fd_entry *e)
 {
     const struct procfs_file *f;
 
@@ -3557,6 +3558,9 @@ int procfs_fd_writable_sysctl(struct fd_entry *e)
         return 0;
     }
     f = (const struct procfs_file *)e->priv;
+    if (f->origin_file == SYNTH_SYS_UEVENT) {
+        return sysfs_attr_writable(f->origin_task >> 8, f->origin_task & 255);
+    }
     return f->origin_file == SYNTH_PROC_SYSCTL && synth_sys_writable(f->origin_pid);
 }
 

@@ -5374,3 +5374,13 @@ old
 new
     return 1 || !suspender || p == suspender;
 end
+
+fault sysattr-fstat-readonly
+probe callsmusl
+file rach2/sys/fs/procfs.c
+expect CALLSMUSL FAIL (the mode fstat gives /sys/power/state's descriptor
+old
+        return sysfs_attr_writable(f->origin_task >> 8, f->origin_task & 255);
+new
+        return 0 && sysfs_attr_writable(f->origin_task >> 8, f->origin_task & 255);
+end

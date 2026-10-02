@@ -1045,12 +1045,14 @@ static int wake_in(int fd, int ahead, struct wkalrm *w)
 /* The clock's wake alarm and suspend to idle: an alarm in the past is
    ETIME and one two days ahead EINVAL; one two seconds ahead reads back
    enabled and ends a read of /dev/rtc0 with RTC_AF; the device may wake the
-   machine; and a write of freeze to /sys/power/state, with the alarm set
-   again, returns at the alarm with a spinning child given no processor
-   time meanwhile, which the kernel counts. */
+   machine; a descriptor open on /sys/power/state has mode 0644, as its
+   path does; and a write of freeze to it, with the alarm set again,
+   returns at the alarm with a spinning child given no processor time
+   meanwhile, which the kernel counts. */
 static int rtcs(void)
 {
     struct wkalrm w, back;
+    struct stat st;
     unsigned long data = 0;
     char text[16];
     int fd = open("/dev/rtc0", O_RDONLY), state, status;
@@ -1085,6 +1087,9 @@ static int rtcs(void)
     state = open("/sys/power/state", O_WRONLY);
     if (spinner < 0 || state < 0 || wake_in(fd, 2, &w) != 0) {
         return fail("a spinning child, /sys/power/state and the wake alarm");
+    }
+    if (fstat(state, &st) != 0 || (st.st_mode & 0777) != 0644) {
+        return fail("the mode fstat gives /sys/power/state's descriptor");
     }
     before = cpu_ticks(spinner);
     if (write(state, "freeze", 6) != 6) {
