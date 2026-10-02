@@ -45,6 +45,7 @@ struct vfs_mount {
     void *root, *covered;
     const char *covered_path;
     int state, refs, inprogress, ns_wq, claim, opens, releases;
+    uint32_t ns_hidden;
 };
 struct vfs_ref {
     struct vfs_mount *mnt;
@@ -224,6 +225,19 @@ static void inotify_unmount(struct vfs_mount *m)
 {
     (void)m;
 }
+
+/* The caller's mount namespace is the only one, so an unmount is never
+ * left to hide the mount from the caller alone. */
+static uint32_t ns_bit(void)
+{
+    return 1u;
+}
+static uint32_t mntns_live_bits(void)
+{
+    return 1u;
+}
+
+static int unmount_mount(struct vfs_mount *m);
 
 #include "unmount.inc"
 

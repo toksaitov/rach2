@@ -16,6 +16,7 @@ run_phase()
 {
     awk '
         /^(static int streq|int vfs_mount_gone|static int mount_permanent|static void unmount_abandoned|static int unmount_target|static struct vfs_mount \*unmount_below_gone|static int unmount_found|int vfs_do_umount)\(/ {copy = 1}
+        /^static int unmount_mount\(.*\)$/ {copy = 1}
         copy {print}
         copy && /^}/ {copy = 0}
     ' "$work/vfs.c" > "$work/unmount.inc"

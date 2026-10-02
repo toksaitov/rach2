@@ -95,6 +95,13 @@ static void watch_made(struct vfs_mount *mnt, void *dir, const char *name, uint3
     (void)isdir;
 }
 
+/** Every mount is in the fixture's one mount namespace. */
+int vfs_mount_seen(const struct vfs_mount *m)
+{
+    (void)m;
+    return 1;
+}
+
 #include "vfs_open.inc"
 
 /** All fixture files use the mounted KRFFS adapter. */
