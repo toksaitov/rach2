@@ -216,6 +216,27 @@ struct block_device;
  * or a disk that is gone; -1 past the table. A whole disk has its line
  * whether or not its node is published.
  */
+/* A disk node as /sys/block shows it: its name and numbers, the index of its
+ * disk's whole node, its partition's number, 0 for a whole disk, its first
+ * sector and its size in sectors, whether its disk is a removable stick,
+ * and that disk's model and serial number. */
+struct devfs_disk_row {
+    const char *name;
+    uint32_t major, minor;
+    int whole;
+    int partno;
+    uint64_t start, sectors;
+    int removable;
+    const char *model, *serial;
+};
+
+/** The major and minor numbers of the node at `path`, /dev and its leaf:
+ * 1, or 0 for a path that names no node of /dev. */
+int devfs_numbers(const char *path, uint32_t *major, uint32_t *minor);
+
+/** Disk node `i` as `devfs_disk_node_at` finds it, into `row`. */
+int devfs_disk_row(int i, struct devfs_disk_row *row);
+
 int devfs_disk_node_at(int i, const char **name, uint32_t *major, uint32_t *minor,
                        const struct block_device **dev, const struct block_device **alias);
 

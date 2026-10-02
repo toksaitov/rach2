@@ -67,6 +67,10 @@ static int procfs_fd_writable(struct fd_entry *e);
 static uint32_t sysfs_ino(int node, int key, int file);
 static int sysfs_device_key(int node, int n);
 static int sysfs_device_exists(int node, int key);
+static int sysfs_block_find(const char *name, int len, int disk);
+static int sysfs_block_devno(const char *name, int len);
+static void sysfs_block_name(int key, char *out, int cap);
+static int sysfs_block_whole(int key);
 #include "fs/procfs.c"
 
 /* The counters /proc/net/snmp reports, which net_core.c defines. */

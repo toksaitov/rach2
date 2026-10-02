@@ -912,7 +912,10 @@ gives the mount's files: 0:0 on a KRFFS root, 0:5 for
 .Pa /proc ,
 0:7 for
 .Pa /sys ,
-and the place plus 16 for another mount.
+the numbers of the node of
+.Pa /dev
+a mount was made from, a partition or a loop device, and the place plus
+16 for another mount.
 The root within the file system is always
 .Pa / ,
 since the kernel has no bind mounts,

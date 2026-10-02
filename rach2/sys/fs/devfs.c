@@ -1459,6 +1459,51 @@ int devfs_disk_node_at(int i, const char **name, uint32_t *major, uint32_t *mino
     return 1;
 }
 
+static const struct devfs_entry *devfs_find(const char *name);
+
+int devfs_numbers(const char *path, uint32_t *major, uint32_t *minor)
+{
+    const struct devfs_entry *dev;
+
+    if (path[0] != '/' || path[1] != 'd' || path[2] != 'e' || path[3] != 'v' || path[4] != '/') {
+        return 0;
+    }
+    dev = devfs_find(path + 5);
+    if (!dev) {
+        return 0;
+    }
+    *major = dev->major;
+    *minor = dev->minor;
+    return 1;
+}
+
+int devfs_disk_row(int i, struct devfs_disk_row *row)
+{
+    const struct block_device *dev, *alias;
+    const struct disk_node *node;
+    const char *p;
+    int got = devfs_disk_node_at(i, &row->name, &row->major, &row->minor, &dev, &alias);
+
+    if (got <= 0) {
+        return got;
+    }
+    node = &disk_nodes[i];
+    for (row->whole = i; row->whole > 0 && disk_nodes[row->whole].disk == node->disk &&
+                         disk_nodes[row->whole].part != 0;
+         row->whole--) {
+    }
+    row->partno = 0;
+    for (p = node->name; node->part != 0 && *p; p++) {
+        row->partno = *p >= '0' && *p <= '9' ? row->partno * 10 + (*p - '0') : 0;
+    }
+    row->start = node->part != 0 ? node->disk->views[node->part - 1].part.start_lba : 0;
+    row->sectors = dev ? dev->sector_count : 0;
+    row->removable = node->disk->removable;
+    row->model = node->disk->model;
+    row->serial = node->disk->serial;
+    return 1;
+}
+
 void devfs_window_alias(const struct block_device *view, const struct block_device *alias)
 {
     int i;

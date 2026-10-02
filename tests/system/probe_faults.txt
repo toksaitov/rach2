@@ -4981,9 +4981,9 @@ probe procprobe
 file rach2/sys/syscall_fs.c
 expect FAIL: /sys/bus/pci/devices has the host bridge's link, to its directory
 old
-    const char *up = "../../..";
+    const char *up = SYSFS_IS_BLOCK(vp->sysent) ? "../.." : "../../..";
 new
-    const char *up = "/sys";
+    const char *up = SYSFS_IS_BLOCK(vp->sysent) ? "../.." : "/sys";
 end
 
 fault sys-uevent-no-slot
@@ -5479,4 +5479,14 @@ old
     return arp_set(nd, ip, mac, (get16(req + NLMSG_HDRLEN + 8) & NUD_PERMANENT) != 0);
 new
     return arp_set(nd, ip, mac, 0 && (get16(req + NLMSG_HDRLEN + 8) & NUD_PERMANENT) != 0);
+end
+
+fault sys-block-start-zero
+probe partsprobe
+file rach2/sys/fs/devfs.c
+expect PARTSPROBE FAIL: /sys/block's partitions: a first sector, a size and the numbers
+old
+    row->start = node->part != 0 ? node->disk->views[node->part - 1].part.start_lba : 0;
+new
+    row->start = 0;
 end

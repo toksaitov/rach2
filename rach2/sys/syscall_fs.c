@@ -5197,7 +5197,7 @@ static void synth_sys_identity(const struct vpath *vp, struct linux_stat64 *kst,
         kst->st_ino = sysfs_ino(vp->sysent, vp->syskey, 1 + vp->procfile);
     } else if (vp->kind == VNODE_SYS_LINK && !follow) {
         kst->st_mode = 0120777; /* S_IFLNK | 0777 */
-        kst->st_ino = sysfs_ino(vp->sysent, vp->syskey, 2);
+        kst->st_ino = sysfs_ino(vp->sysent, vp->syskey, SYSFS_IS_BLOCK(vp->sysent) ? 0xFF : 2);
     } else {
         kst->st_mode = S_IFDIR | 0555;
         kst->st_ino = sysfs_ino(vp->sysent, vp->syskey, 0);
@@ -5227,7 +5227,7 @@ static int synth_is_sys(const struct vpath *vp)
 static int synth_sys_link(const struct vpath *vp, char *out, int cap)
 {
     char path[64];
-    const char *up = "../../..";
+    const char *up = SYSFS_IS_BLOCK(vp->sysent) ? "../.." : "../../..";
     int n = 0, i;
 
     synth_sys_path(vp->sysent, vp->syskey, path, (int)sizeof(path));
@@ -5257,8 +5257,9 @@ static void stat64_root_times(struct linux_stat64 *kst)
 }
 
 /* A stat64 for a node on a mount that is not the root, from its getattr:
- * the mount's index is the device, so a program telling files apart by
- * (st_dev, st_ino) sees two mounts as two devices. */
+ * the device is the node the mount was made from, or else one the mount's
+ * index gives, so a program telling files apart by (st_dev, st_ino) sees
+ * two mounts as two devices (`procfs_mount_dev`). */
 static int32_t vfs_fill_stat64(struct linux_stat64 *kst, const struct vfs_ref *r)
 {
     struct vfs_stat st;
@@ -5273,7 +5274,7 @@ static int32_t vfs_fill_stat64(struct linux_stat64 *kst, const struct vfs_ref *r
     k_memset(kst, 0, sizeof(*kst));
     for (i = 0; i < vfs_mount_slots(); i++) {
         if (vfs_mount_at(i) == r->mnt) {
-            kst->st_dev = (unsigned long long)(0x10u + (unsigned)i);
+            kst->st_dev = procfs_mount_dev(i, r->mnt);
         }
     }
     kst->st_mode = st.mode;
@@ -10773,6 +10774,102 @@ static int synth_sys_net_dirent(int node, int key, int n, char *name, uint64_t *
     return 0;
 }
 
+/** The `n`th disk node of devfs's table that /sys/block lists: a partition
+ * in the directory of the disk node `key`, a whole disk for -1, and any for
+ * -2; its index, or -1 past the last. */
+static int sysfs_block_nth(int key, int n)
+{
+    struct devfs_disk_row row;
+    int i, got;
+
+    for (i = 0; (got = devfs_disk_row(i, &row)) >= 0; i++) {
+        if (got == 1 &&
+            (key == -2 || (key < 0 ? row.partno == 0 : row.partno != 0 && row.whole == key)) &&
+            n-- == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+/** Write MAJOR:MINOR into `out`, which has room for it. */
+static void synth_put_devno(char *out, uint32_t major, uint32_t minor)
+{
+    char digits[12];
+    uint32_t v[2];
+    int pos = 0, k, d;
+
+    v[0] = major;
+    v[1] = minor;
+    for (k = 0; k < 2; k++) {
+        d = 0;
+        do {
+            digits[d++] = (char)('0' + v[k] % 10u);
+            v[k] /= 10u;
+        } while (v[k] != 0);
+        while (d > 0) {
+            out[pos++] = digits[--d];
+        }
+        if (k == 0) {
+            out[pos++] = ':';
+        }
+    }
+    out[pos] = '\0';
+}
+
+/**
+ * The `n`th entry of a directory of disks: /sys/block, a directory for each
+ * disk; /sys/dev/block, a link named MAJOR:MINOR for each disk node; a
+ * disk's own, its attributes, `queue`, `device` and its partitions'
+ * directories; and the others, their attributes.
+ */
+static int synth_sys_block_dirent(int node, int key, int n, char *name, uint64_t *ino,
+                                  uint8_t *dtype)
+{
+    struct devfs_disk_row row;
+    const char *attr = SYSFS_IS_BLOCK(node) ? sysfs_attr(node, n) : NULL;
+    int i, count = 0;
+
+    if (attr) {
+        k_strncpy(name, attr, 31);
+        name[31] = '\0';
+        *ino = sysfs_ino(node, key, 1 + n);
+        *dtype = DT_REG;
+        return 1;
+    }
+    while (SYSFS_IS_BLOCK(node) && sysfs_attr(node, count)) {
+        count++;
+    }
+    n -= count;
+    if (node == SYSFS_BLOCK_DISK && (n == 0 || n == 1)) {
+        k_strncpy(name, n == 0 ? "queue" : "device", 31);
+        *ino = sysfs_ino(n == 0 ? SYSFS_BLOCK_QUEUE : SYSFS_BLOCK_DEV, key, 0);
+        *dtype = DT_DIR;
+        return 1;
+    }
+    if (node != SYSFS_BLOCK && node != SYSFS_DEV_BLOCK && node != SYSFS_BLOCK_DISK) {
+        return 0;
+    }
+    i = sysfs_block_nth(node == SYSFS_BLOCK        ? -1
+                        : node == SYSFS_BLOCK_DISK ? key
+                                                   : -2,
+                        node == SYSFS_BLOCK_DISK ? n - 2 : n);
+    if (i < 0 || devfs_disk_row(i, &row) != 1) {
+        return 0;
+    }
+    if (node == SYSFS_DEV_BLOCK) {
+        synth_put_devno(name, row.major, row.minor);
+        *ino = sysfs_ino(row.partno ? SYSFS_BLOCK_PART : SYSFS_BLOCK_DISK, i, 0xFF);
+        *dtype = DT_LNK;
+        return 1;
+    }
+    k_strncpy(name, row.name, 31);
+    name[31] = '\0';
+    *ino = sysfs_ino(row.partno ? SYSFS_BLOCK_PART : SYSFS_BLOCK_DISK, i, 0);
+    *dtype = DT_DIR;
+    return 1;
+}
+
 /**
  * The `n`th entry of the /sys directory `node`, whose device is `key`: its
  * name, inode and type, and 1, or 0 past the last. The fixed directories
@@ -10800,7 +10897,10 @@ static int synth_sys_dirent(int node, int key, int n, char *name, uint64_t *ino,
                  {SYSFS_CLASS, "rtc", SYSFS_CLASS_RTC},
                  {SYSFS_CLASS_RTC, "rtc0", SYSFS_RTC0},
                  {SYSFS_RTC0, "device", SYSFS_RTC_DEVICE},
-                 {SYSFS_RTC_DEVICE, "power", SYSFS_RTC_POWER}};
+                 {SYSFS_RTC_DEVICE, "power", SYSFS_RTC_POWER},
+                 {SYSFS_ROOT, "block", SYSFS_BLOCK},
+                 {SYSFS_ROOT, "dev", SYSFS_DEV},
+                 {SYSFS_DEV, "block", SYSFS_DEV_BLOCK}};
     int i, dev, links;
 
     for (i = 0; i < (int)(sizeof(fixed) / sizeof(fixed[0])); i++) {
@@ -10814,6 +10914,9 @@ static int synth_sys_dirent(int node, int key, int n, char *name, uint64_t *ino,
     }
     if (node == SYSFS_CLASS_NET || node == SYSFS_NET_IF || node == SYSFS_NET_STATS) {
         return synth_sys_net_dirent(node, key, n, name, ino, dtype);
+    }
+    if (node == SYSFS_BLOCK || node == SYSFS_DEV_BLOCK || SYSFS_IS_BLOCK(node)) {
+        return synth_sys_block_dirent(node, key, n, name, ino, dtype);
     }
     if (node == SYSFS_RTC0 || node == SYSFS_RTC_POWER || node == SYSFS_POWER) {
         if (!sysfs_attr(node, n)) {

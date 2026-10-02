@@ -105,6 +105,7 @@
 #define SYSFS_INO_PCI       0x01000000u
 #define SYSFS_INO_PCI_LINK  0x02000000u
 #define SYSFS_INO_NET       0x03000000u
+#define SYSFS_INO_BLOCK     0x04000000u
 #define SYSFS_INO_USB       0x80000000u
 #define SYSFS_INO_FILE      0x40000000u
 #define PROCFS_INO_SYS      0x140u /* and the entries of /proc/sys after it */
@@ -2330,11 +2331,20 @@ static int procfs_gen_mounts(struct procfs_text *t)
     return t->nomem ? -1 : t->len;
 }
 
-/** The device stat gives the files of entry `i`, `m`: the synthetic types'
- * own numbers, 0 on a KRFFS root, and the entry's index past 16 for any
- * other mount (`vfs_fill_stat64`). */
-static uint32_t procfs_mount_dev(int i, const struct vfs_mount *m)
+/** The device stat gives the files of entry `i`, `m` (`vfs_fill_stat64`):
+ * the node of /dev it was mounted from, in Linux's encoding, as a disk's or
+ * a loop device's mount has it; else the synthetic types' own numbers, 0
+ * on a KRFFS root, and the entry's index past 16 for any other mount. */
+uint32_t procfs_mount_dev(int i, const struct vfs_mount *m)
 {
+    uint32_t major, minor;
+
+    if (i == 0 && m->type == &vfs_krffs_type) {
+        return 0;
+    }
+    if (devfs_numbers(m->source, &major, &minor)) {
+        return (minor & 0xFFu) | major << 8 | (minor & ~0xFFu) << 12;
+    }
     if (m->type == &vfs_devfs_type) {
         return DEVFS_FSID;
     }
@@ -2344,7 +2354,7 @@ static uint32_t procfs_mount_dev(int i, const struct vfs_mount *m)
     if (m->type == &vfs_sysfs_type) {
         return SYSFS_FSID;
     }
-    return i == 0 && m->type == &vfs_krffs_type ? 0 : 0x10u + (uint32_t)i;
+    return 0x10u + (uint32_t)i;
 }
 
 /**
@@ -3121,6 +3131,10 @@ int procfs_fd_is_sys(struct fd_entry *e)
 
 uint32_t sysfs_ino(int node, int key, int file)
 {
+    if (SYSFS_IS_BLOCK(node)) {
+        return SYSFS_INO_BLOCK | (uint32_t)(node - SYSFS_BLOCK) << 20 |
+               ((uint32_t)key & 0xFFFu) << 8 | (uint32_t)file;
+    }
     if (node == SYSFS_NET_IF || node == SYSFS_NET_STATS) {
         return SYSFS_INO_NET | (node == SYSFS_NET_STATS ? 0x800000u : 0u) |
                ((uint32_t)key & 0xFFFFu) << 8 | (uint32_t)file;
@@ -3211,6 +3225,149 @@ static struct netdev *sysfs_netdev(int index)
     return NULL;
 }
 
+int sysfs_block_find(const char *name, int len, int disk)
+{
+    struct devfs_disk_row row;
+    int i, k, got;
+
+    for (i = 0; (got = devfs_disk_row(i, &row)) >= 0; i++) {
+        if (got == 0 || (disk < 0 ? row.partno != 0 : row.partno == 0 || row.whole != disk)) {
+            continue;
+        }
+        for (k = 0; k < len && row.name[k] == name[k]; k++) {
+        }
+        if (k == len && row.name[k] == '\0') {
+            return i;
+        }
+    }
+    return -1;
+}
+
+int sysfs_block_devno(const char *name, int len)
+{
+    struct devfs_disk_row row;
+    uint32_t major = 0, minor = 0, *at = &major;
+    int i, got;
+
+    for (i = 0; i < len; i++) {
+        if (name[i] == ':' && at == &major && i > 0) {
+            at = &minor;
+        } else if (name[i] >= '0' && name[i] <= '9' && *at < 100000u) {
+            *at = *at * 10u + (uint32_t)(name[i] - '0');
+        } else {
+            return -1;
+        }
+    }
+    for (i = 0; at == &minor && (got = devfs_disk_row(i, &row)) >= 0; i++) {
+        if (got == 1 && row.major == major && row.minor == minor) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+void sysfs_block_name(int key, char *out, int cap)
+{
+    struct devfs_disk_row row;
+    int k;
+
+    for (k = 0; devfs_disk_row(key, &row) == 1 && row.name[k] && k < cap - 1; k++) {
+        out[k] = row.name[k];
+    }
+    if (cap > 0) {
+        out[k] = '\0';
+    }
+}
+
+int sysfs_block_whole(int key)
+{
+    struct devfs_disk_row row;
+
+    return devfs_disk_row(key, &row) == 1 ? row.whole : -1;
+}
+
+/** Whether the strings `a` and `b` are the same. */
+static int same_word(const char *a, const char *b)
+{
+    while (*a && *a == *b) {
+        a++;
+        b++;
+    }
+    return *a == *b;
+}
+
+/**
+ * Render the attribute `attr` of the /sys directory `node` of the disk node
+ * `key`, as Linux's files of the same names give it for lsblk and its
+ * kind: a disk's or a partition's numbers, size in 512-byte sectors, first
+ * sector and number, a disk's range of minor numbers and whether it is a
+ * removable stick, its uevent, its queue's sizes, a transfer at most 128
+ * KiB, no discard and no scheduler, and its model and serial number.
+ */
+static int procfs_gen_blockattr(struct procfs_text *t, int node, int key, int attr)
+{
+    const char *name = sysfs_attr(node, attr);
+    struct devfs_disk_row row;
+
+    if (!name || devfs_disk_row(key, &row) != 1) {
+        return -ENOENT;
+    }
+    if (same_word(name, "dev")) {
+        ap_u32(t, row.major);
+        ap_ch(t, ':');
+        ap_u32(t, row.minor);
+    } else if (same_word(name, "size")) {
+        ap_u32(t, row.sectors > 0xFFFFFFFFu ? 0xFFFFFFFFu : (uint32_t)row.sectors);
+    } else if (same_word(name, "start")) {
+        ap_u32(t, (uint32_t)row.start);
+    } else if (same_word(name, "partition")) {
+        ap_u32(t, (uint32_t)row.partno);
+    } else if (same_word(name, "removable")) {
+        ap_u32(t, (uint32_t)row.removable);
+    } else if (same_word(name, "uevent")) {
+        ap_str(t, "MAJOR=");
+        ap_u32(t, row.major);
+        ap_str(t, "\nMINOR=");
+        ap_u32(t, row.minor);
+        ap_str(t, "\nDEVNAME=");
+        ap_str(t, row.name);
+        ap_str(t, row.partno ? "\nDEVTYPE=partition\nPARTN=" : "\nDEVTYPE=disk");
+        if (row.partno) {
+            ap_u32(t, (uint32_t)row.partno);
+        }
+    } else if (node == SYSFS_BLOCK_DEV) {
+        ap_str(t, same_word(name, "model")    ? row.model
+                  : same_word(name, "serial") ? row.serial
+                  : same_word(name, "vendor") ? (row.removable ? "USB" : "ATA")
+                                              : "");
+    } else {
+        static const char *const fixed[][2] = {{"range", "16"},
+                                               {"ext_range", "256"},
+                                               {"capability", "50"},
+                                               {"scheduler", "[none]"},
+                                               {"zoned", "none"},
+                                               {"max_sectors_kb", "128"},
+                                               {"nr_requests", "4"},
+                                               {"read_ahead_kb", "128"},
+                                               {"rotational", "1"},
+                                               {"hw_sector_size", "512"},
+                                               {"logical_block_size", "512"},
+                                               {"physical_block_size", "512"},
+                                               {"minimum_io_size", "512"}};
+        int i;
+        const char *text = "0";
+
+        for (i = 0; i < (int)(sizeof(fixed) / sizeof(fixed[0])); i++) {
+            if (same_word(name, fixed[i][0])) {
+                text = fixed[i][1];
+            }
+        }
+        ap_str(t, text);
+    }
+    ap_ch(t, '\n');
+    return t->nomem ? -1 : t->len;
+}
+
 int sysfs_net_index(const char *name, int len)
 {
     int i, k;
@@ -3250,7 +3407,11 @@ int sysfs_net_pci_key(int index)
 int sysfs_device_exists(int node, int key)
 {
     struct usb_sys_row r;
+    struct devfs_disk_row row;
 
+    if (SYSFS_IS_BLOCK(node)) {
+        return devfs_disk_row(key, &row) == 1 && (node == SYSFS_BLOCK_PART) == (row.partno != 0);
+    }
     if (node == SYSFS_NET_IF || node == SYSFS_NET_STATS) {
         return sysfs_netdev(key) != NULL;
     }
@@ -3539,6 +3700,10 @@ static int procfs_gen_uevent(struct procfs_text *t, int node, int key)
  */
 static int procfs_gen_sysfile(struct procfs_text *t, const struct vpath *vp, int *key)
 {
+    if (SYSFS_IS_BLOCK(vp->sysent)) {
+        *key = vp->syskey;
+        return procfs_gen_blockattr(t, vp->sysent, vp->syskey, vp->procfile);
+    }
     if (vp->sysent == SYSFS_NET_IF || vp->sysent == SYSFS_NET_STATS) {
         *key = vp->syskey;
         return procfs_gen_netattr(t, vp->sysent, vp->syskey, vp->procfile);

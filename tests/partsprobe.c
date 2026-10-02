@@ -11,23 +11,26 @@
  * entry or an absent one, the backup GPT to have served for the damaged
  * disk, a logical FAT32 partition and a GPT one to mount and take a write,
  * and the whole-disk node's `BLKRRPART` to be refused while a partition is
- * mounted and to read the table again once it is not.
+ * mounted and to read the table again once it is not; and /sys/block to
+ * give a partition's first sector, size, number and device numbers, and
+ * /sys/dev/block a link to its directory.
  *
  * Prints "PARTSPROBE OK" or "PARTSPROBE FAIL: reason". Freestanding; int 0x80.
  */
 
 typedef unsigned int size_t;
 
-#define SYS_EXIT    1
-#define SYS_READ    3
-#define SYS_WRITE   4
-#define SYS_OPEN    5
-#define SYS_CLOSE   6
-#define SYS_MOUNT   21
-#define SYS_MKDIR   39
-#define SYS_IOCTL   54
-#define SYS_UMOUNT2 52
-#define SYS_STAT64  195
+#define SYS_EXIT     1
+#define SYS_READ     3
+#define SYS_WRITE    4
+#define SYS_OPEN     5
+#define SYS_CLOSE    6
+#define SYS_MOUNT    21
+#define SYS_MKDIR    39
+#define SYS_IOCTL    54
+#define SYS_UMOUNT2  52
+#define SYS_STAT64   195
+#define SYS_READLINK 85
 
 #define O_RDONLY  0
 #define O_WRONLY  1
@@ -149,6 +152,45 @@ static int slurp(const char *path, char *buf, int cap)
     sys2(SYS_CLOSE, fd, 0);
     buf[total] = 0;
     return total;
+}
+
+/* Whether the file `path` reads as `text`, all of it. */
+static int reads_as(const char *path, const char *text)
+{
+    static char got[256];
+    int n = slurp(path, got, (int)sizeof(got));
+
+    return n == (int)strlen(text) && has_line(got, text);
+}
+
+/* /sys/block: the first primary partition's first sector, size, number and
+   device numbers, a logical one's number, the disk's sector size, and the
+   link /sys/dev/block has for the partition. */
+static void sys_block_rows(void)
+{
+    static char link[64];
+    int n;
+
+    if (!reads_as("/sys/block/disk0/disk0p1/start", "2048\n") ||
+        !reads_as("/sys/block/disk0/disk0p1/size", "98304\n") ||
+        !reads_as("/sys/block/disk0/disk0p1/partition", "1\n") ||
+        !reads_as("/sys/block/disk0/disk0p6/partition", "6\n")) {
+        fail("/sys/block's partitions: a first sector, a size and the numbers");
+    }
+    if (!reads_as("/sys/block/disk0/disk0p1/dev", "240:4\n") ||
+        !reads_as("/sys/block/disk0/queue/logical_block_size", "512\n")) {
+        fail("/sys/block: a partition's numbers and the disk's sector size");
+    }
+    n = sys3(SYS_READLINK, (int)(size_t)"/sys/dev/block/240:4", (int)(size_t)link,
+             (int)sizeof(link) - 1);
+    if (n <= 0) {
+        fail("/sys/dev/block has no link for 240:4");
+    }
+    link[n] = '\0';
+    if (!has_line(link, "../../block/disk0/disk0p1") || n != 25 ||
+        !reads_as("/sys/dev/block/240:4/start", "2048\n")) {
+        fail("/sys/dev/block's link leads to the partition's directory");
+    }
 }
 
 static void write_and_read_back(const char *path, const char *text)
@@ -277,6 +319,7 @@ void probe_main(unsigned int *sp)
     if (xstat("/dev/disk2p6") != 0 || xstat("/dev/disk3") != 0 || xstat("/dev/disk3p1") == 0) {
         fail("disk 2's nodes, the blank disk's node and no partition on it");
     }
+    sys_block_rows();
 
     /* A logical partition and a GPT partition, mounted and written. */
     if (mount_vfat("/dev/disk0p6", "/mnt6") != 0) {

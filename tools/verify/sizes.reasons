@@ -651,7 +651,7 @@ tests/packetprobe.c:_start complexity 145 a probe, one sequence of steps in the 
 tests/packetprobe.c:_start lines 682 a probe, one sequence of steps in the order the log records them
 
 tests/partsprobe.c:probe_main complexity 46 a probe, one sequence of steps in the order the log records them
-tests/partsprobe.c:probe_main lines 115 a probe, one sequence of steps in the order the log records them
+tests/partsprobe.c:probe_main lines 116 a probe, one sequence of steps in the order the log records them
 
 tests/pingtest.c:_start complexity 31 a probe, one sequence of steps in the order the log records them
 tests/pingtest.c:_start lines 179 a probe, one sequence of steps in the order the log records them

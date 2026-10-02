@@ -1,4 +1,4 @@
-.Dd September 28, 2026
+.Dd October 2, 2026
 .Dt STAT 2
 .Os
 .Sh NAME
@@ -274,7 +274,13 @@ A valid stored UTC offset is applied; otherwise the time is treated as UTC.
 Reads do not advance access times.
 An ext2, FAT32, exFAT, or additional KRFFS mount reports
 .Va st_dev
-as 0x10 plus their mount-table index, including an ext2 root at index 0.
+as the device numbers of the node of
+.Pa /dev
+it was mounted from, a partition's or a loop device's, as Linux encodes
+them, which
+.Pa /proc/ Ns Ar pid Ns Pa /mountinfo
+gives too; a mount from no such node, a tmpfs among them, reports 0x10
+plus its mount-table index.
 .Ss Synthetic objects
 .Pa /dev
 uses

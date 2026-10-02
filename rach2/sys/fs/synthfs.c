@@ -587,12 +587,36 @@ const char *sysfs_attr(int node, int n)
                                       "time", "wakealarm", 0};
     static const char *const wakeup[] = {"wakeup", 0};
     static const char *const power[] = {"mem_sleep", "state", 0};
-    const char *const *list = node == SYSFS_NET_IF      ? attrs
-                              : node == SYSFS_NET_STATS ? stats
-                              : node == SYSFS_RTC0      ? rtc
-                              : node == SYSFS_RTC_POWER ? wakeup
-                              : node == SYSFS_POWER     ? power
-                                                        : 0;
+    static const char *const disk[] = {
+        "alignment_offset", "capability", "dev",  "ext_range", "hidden", "range",
+        "removable",        "ro",         "size", "uevent",    0};
+    static const char *const part[] = {
+        "alignment_offset", "dev", "partition", "ro", "size", "start", "uevent", 0};
+    static const char *const queue[] = {"discard_granularity",
+                                        "discard_max_bytes",
+                                        "hw_sector_size",
+                                        "logical_block_size",
+                                        "max_sectors_kb",
+                                        "minimum_io_size",
+                                        "nr_requests",
+                                        "optimal_io_size",
+                                        "physical_block_size",
+                                        "read_ahead_kb",
+                                        "rotational",
+                                        "scheduler",
+                                        "zoned",
+                                        0};
+    static const char *const device[] = {"model", "rev", "serial", "vendor", 0};
+    const char *const *list = node == SYSFS_NET_IF        ? attrs
+                              : node == SYSFS_NET_STATS   ? stats
+                              : node == SYSFS_RTC0        ? rtc
+                              : node == SYSFS_RTC_POWER   ? wakeup
+                              : node == SYSFS_POWER       ? power
+                              : node == SYSFS_BLOCK_DISK  ? disk
+                              : node == SYSFS_BLOCK_PART  ? part
+                              : node == SYSFS_BLOCK_QUEUE ? queue
+                              : node == SYSFS_BLOCK_DEV   ? device
+                                                          : 0;
     int i;
 
     for (i = 0; list && list[i] && i < n; i++) {
@@ -619,6 +643,36 @@ void synth_sys_path(int node, int key, char *out, int cap)
     int pos = 0;
 
     if (cap <= 0) {
+        return;
+    }
+    if (SYSFS_IS_BLOCK(node)) {
+        int whole = sysfs_block_whole(key);
+
+        synth_put(out, cap, &pos, "/sys/block/");
+        sysfs_block_name(whole, out + pos, cap - pos);
+        while (pos < cap - 1 && out[pos] != '\0') {
+            pos++;
+        }
+        if (node == SYSFS_BLOCK_PART) {
+            synth_put(out, cap, &pos, "/");
+            sysfs_block_name(key, out + pos, cap - pos);
+            while (pos < cap - 1 && out[pos] != '\0') {
+                pos++;
+            }
+        }
+        synth_put(out, cap, &pos,
+                  node == SYSFS_BLOCK_QUEUE ? "/queue"
+                  : node == SYSFS_BLOCK_DEV ? "/device"
+                                            : "");
+        out[pos] = '\0';
+        return;
+    }
+    if (node >= SYSFS_BLOCK) {
+        synth_put(out, cap, &pos,
+                  node == SYSFS_BLOCK ? "/sys/block"
+                  : node == SYSFS_DEV ? "/sys/dev"
+                                      : "/sys/dev/block");
+        out[pos] = '\0';
         return;
     }
     if (node >= SYSFS_CLASS && node != SYSFS_NET_IF && node != SYSFS_NET_STATS) {
@@ -780,6 +834,76 @@ static int synth_classify_sys_fixed(const struct comp *c, int n, int node, struc
     return vp->kind;
 }
 
+/** The directory `node` of the disk node `key`, or with one more
+ * component its attribute file of that name. */
+static int synth_classify_sys_attr(const struct comp *c, int n, int node, int key, struct vpath *vp)
+{
+    int attr = n >= 1 ? sys_net_attr_of(node, c[0]) : -1;
+
+    vp->sysent = node;
+    vp->syskey = key;
+    if (n == 0) {
+        vp->kind = VNODE_SYS_DIR;
+    } else {
+        vp->kind = attr < 0 ? VNODE_ENOENT : n == 1 ? VNODE_SYS_FILE : VNODE_ENOTDIR;
+        vp->procfile = attr;
+    }
+    return vp->kind;
+}
+
+/** Classify the components `c` of `n` in the directory of the disk node
+ * `key`: a partition's attributes, or a whole disk's, its `queue` and
+ * `device` and its partitions' directories. */
+static int synth_classify_block_dir(const struct comp *c, int n, int key, struct vpath *vp)
+{
+    int part;
+
+    if (sysfs_block_whole(key) != key) {
+        return synth_classify_sys_attr(c, n, SYSFS_BLOCK_PART, key, vp);
+    }
+    if (n >= 1 && (comp_eq(c[0], "queue") || comp_eq(c[0], "device"))) {
+        return synth_classify_sys_attr(
+            c + 1, n - 1, comp_eq(c[0], "queue") ? SYSFS_BLOCK_QUEUE : SYSFS_BLOCK_DEV, key, vp);
+    }
+    if (n >= 1 && (part = sysfs_block_find(c[0].s, c[0].len, key)) >= 0) {
+        return synth_classify_sys_attr(c + 1, n - 1, SYSFS_BLOCK_PART, part, vp);
+    }
+    return synth_classify_sys_attr(c, n, SYSFS_BLOCK_DISK, key, vp);
+}
+
+/** Classify the components `c` of `n` below /sys/block, a directory for
+ * each disk, or below /sys/dev with `dev`, whose `block` has a link named
+ * MAJOR:MINOR for each disk node, which leads to its directory. */
+static int synth_classify_sys_block(const struct comp *c, int n, int dev, struct vpath *vp)
+{
+    int key;
+
+    vp->kind = VNODE_SYS_DIR;
+    if (dev && (n == 0 || !comp_eq(c[0], "block"))) {
+        vp->sysent = SYSFS_DEV;
+        vp->kind = n == 0 ? VNODE_SYS_DIR : VNODE_ENOENT;
+        return vp->kind;
+    }
+    c += dev;
+    n -= dev;
+    if (n == 0) {
+        vp->sysent = dev ? SYSFS_DEV_BLOCK : SYSFS_BLOCK;
+        return vp->kind;
+    }
+    key = dev ? sysfs_block_devno(c[0].s, c[0].len) : sysfs_block_find(c[0].s, c[0].len, -1);
+    if (key < 0) {
+        vp->kind = VNODE_ENOENT;
+        return vp->kind;
+    }
+    if (dev && n == 1) {
+        vp->sysent = sysfs_block_whole(key) == key ? SYSFS_BLOCK_DISK : SYSFS_BLOCK_PART;
+        vp->syskey = key;
+        vp->kind = VNODE_SYS_LINK;
+        return vp->kind;
+    }
+    return synth_classify_block_dir(c + 1, n - 1, key, vp);
+}
+
 /** Classify the components `c` of `n` below /sys/class: the network
  * interfaces' class and the clock's. */
 static int synth_classify_sys_class(const struct comp *c, int n, struct vpath *vp)
@@ -827,6 +951,8 @@ static int synth_classify_sysfs(const struct comp *c, int n, struct vpath *vp)
         } else {
             return synth_classify_sys_device(c + 3, n - 3, at + 2, vp);
         }
+    } else if (comp_eq(c[0], "block") || comp_eq(c[0], "dev")) {
+        return synth_classify_sys_block(c + 1, n - 1, comp_eq(c[0], "dev"), vp);
     } else if (comp_eq(c[0], "class")) {
         return synth_classify_sys_class(c + 1, n - 1, vp);
     } else if (comp_eq(c[0], "power")) {

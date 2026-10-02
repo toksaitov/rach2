@@ -202,32 +202,43 @@ const char *synth_sysvipc_name(int origin);
  * root port in the eight below, and the ports of up to five hubs below it
  * in four bits each, as its name gives them, at least 2^20.
  */
-#define SYSFS_ROOT       0  /* /sys */
-#define SYSFS_BUS        1  /* /sys/bus */
-#define SYSFS_BUS_PCI    2  /* /sys/bus/pci */
-#define SYSFS_BUS_USB    3  /* /sys/bus/usb */
-#define SYSFS_PCI_LINKS  4  /* /sys/bus/pci/devices */
-#define SYSFS_USB_LINKS  5  /* /sys/bus/usb/devices */
-#define SYSFS_DEVICES    6  /* /sys/devices */
-#define SYSFS_PCI_ROOT   7  /* /sys/devices/pci0000:00 */
-#define SYSFS_USB_ROOT   8  /* /sys/devices/usb */
-#define SYSFS_PCI_DEVICE 9  /* /sys/devices/pci0000:00/0000:BB:DD.F */
-#define SYSFS_USB_DEVICE 10 /* /sys/devices/usb/B-P[.P...] */
-#define SYSFS_CLASS      11 /* /sys/class */
-#define SYSFS_CLASS_NET  12 /* /sys/class/net */
-#define SYSFS_NET_IF     13 /* /sys/class/net/IF, whose key is its index */
-#define SYSFS_NET_STATS  14 /* /sys/class/net/IF/statistics */
-#define SYSFS_CLASS_RTC  15 /* /sys/class/rtc */
-#define SYSFS_RTC0       16 /* /sys/class/rtc/rtc0, the CMOS clock */
-#define SYSFS_RTC_DEVICE 17 /* /sys/class/rtc/rtc0/device */
-#define SYSFS_RTC_POWER  18 /* /sys/class/rtc/rtc0/device/power */
-#define SYSFS_POWER      19 /* /sys/power, the sleep states */
+#define SYSFS_ROOT        0  /* /sys */
+#define SYSFS_BUS         1  /* /sys/bus */
+#define SYSFS_BUS_PCI     2  /* /sys/bus/pci */
+#define SYSFS_BUS_USB     3  /* /sys/bus/usb */
+#define SYSFS_PCI_LINKS   4  /* /sys/bus/pci/devices */
+#define SYSFS_USB_LINKS   5  /* /sys/bus/usb/devices */
+#define SYSFS_DEVICES     6  /* /sys/devices */
+#define SYSFS_PCI_ROOT    7  /* /sys/devices/pci0000:00 */
+#define SYSFS_USB_ROOT    8  /* /sys/devices/usb */
+#define SYSFS_PCI_DEVICE  9  /* /sys/devices/pci0000:00/0000:BB:DD.F */
+#define SYSFS_USB_DEVICE  10 /* /sys/devices/usb/B-P[.P...] */
+#define SYSFS_CLASS       11 /* /sys/class */
+#define SYSFS_CLASS_NET   12 /* /sys/class/net */
+#define SYSFS_NET_IF      13 /* /sys/class/net/IF, whose key is its index */
+#define SYSFS_NET_STATS   14 /* /sys/class/net/IF/statistics */
+#define SYSFS_CLASS_RTC   15 /* /sys/class/rtc */
+#define SYSFS_RTC0        16 /* /sys/class/rtc/rtc0, the CMOS clock */
+#define SYSFS_RTC_DEVICE  17 /* /sys/class/rtc/rtc0/device */
+#define SYSFS_RTC_POWER   18 /* /sys/class/rtc/rtc0/device/power */
+#define SYSFS_POWER       19 /* /sys/power, the sleep states */
+#define SYSFS_BLOCK       20 /* /sys/block */
+#define SYSFS_BLOCK_DISK  21 /* /sys/block/DISK, whose key is its disk node's index */
+#define SYSFS_BLOCK_PART  22 /* /sys/block/DISK/PART, the same of the partition */
+#define SYSFS_BLOCK_QUEUE 23 /* /sys/block/DISK/queue */
+#define SYSFS_BLOCK_DEV   24 /* /sys/block/DISK/device */
+#define SYSFS_DEV         25 /* /sys/dev */
+#define SYSFS_DEV_BLOCK   26 /* /sys/dev/block, a link for each disk node */
 
 /** Whether the /sys directory `node` is one of a device or an interface,
  * which `syskey` says, and which exists only while that does. */
 #define SYSFS_KEYED(node)                                                                  \
     ((node) == SYSFS_PCI_DEVICE || (node) == SYSFS_USB_DEVICE || (node) == SYSFS_NET_IF || \
-     (node) == SYSFS_NET_STATS)
+     (node) == SYSFS_NET_STATS || SYSFS_IS_BLOCK(node))
+
+/** Whether `node` is a directory of a disk node: its own, its queue's or
+ * its device's. */
+#define SYSFS_IS_BLOCK(node) ((node) >= SYSFS_BLOCK_DISK && (node) <= SYSFS_BLOCK_DEV)
 
 /** The name of the `n`th attribute file of the /sys directory `node`, in the
  * order the directory lists them, or NULL past the last, and for a node
@@ -244,6 +255,17 @@ int sysfs_attr_writable(int node, int attr);
 int sysfs_net_index(const char *name, int len);
 void sysfs_net_name(int index, char *out, int cap);
 int sysfs_net_pci_key(int index);
+
+/* The disk nodes' part, in procfs.c, each known by its index in devfs's
+ * table: the node named by the `len` bytes at `name`, a whole disk's when
+ * `disk` is -1 and else a partition of the disk whose node is `disk`, or
+ * -1; the node of the numbers MAJOR:MINOR the `len` bytes at `name` give,
+ * or -1; a node's name into `out` of `cap` bytes; and the index of the
+ * whole disk a node is on, itself for a whole disk, or -1 for none. */
+int sysfs_block_find(const char *name, int len, int disk);
+int sysfs_block_devno(const char *name, int len);
+void sysfs_block_name(int key, char *out, int cap);
+int sysfs_block_whole(int key);
 
 /** Write the name of the device `key` of `node`, SYSFS_PCI_DEVICE or
  * SYSFS_USB_DEVICE, into `out` of `cap` bytes, NUL-terminated. */

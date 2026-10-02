@@ -1,4 +1,4 @@
-.Dd October 1, 2026
+.Dd October 2, 2026
 .Dt SYSFS 5
 .Os
 .Sh NAME
@@ -158,6 +158,59 @@ Another state is
 .Ql [s2idle] :
 .Ql mem
 is suspend to idle.
+.It Pa /sys/block/DISK
+A directory for each disk of
+.Pa /dev ,
+by its node's name, which
+.Ic lsblk
+reads: its
+.Pa dev ,
+the node's numbers as
+.Ar MAJOR : Ns Ar MINOR ;
+.Pa size
+in 512-byte sectors;
+.Pa removable ,
+1 for a USB stick;
+.Pa ro ,
+.Pa range ,
+.Pa ext_range ,
+.Pa capability ,
+.Pa hidden
+and
+.Pa alignment_offset
+as Linux has them for a disk; and its
+.Pa uevent
+with the numbers, the name and
+.Ql DEVTYPE=disk .
+.It Pa /sys/block/DISK/PART
+A directory for each partition published, with
+.Pa dev ,
+.Pa size ,
+.Pa start ,
+its first sector,
+.Pa partition ,
+its number,
+.Pa ro ,
+.Pa alignment_offset
+and its
+.Pa uevent .
+.It Pa /sys/block/DISK/queue
+The disk's queue: sectors of 512 bytes, transfers of at most 128 KiB, no
+discard, a rotating disk, and no scheduler.
+.It Pa /sys/block/DISK/device
+Its
+.Pa model
+and
+.Pa serial ,
+from the drive's identity, and its
+.Pa vendor ,
+.Ql ATA ,
+or
+.Ql USB
+for a stick.
+.It Pa /sys/dev/block/MAJOR:MINOR
+A link for each disk node to its directory under
+.Pa /sys/block .
 .El
 .Pp
 A
@@ -170,6 +223,15 @@ beside a device's
 .Pa uevent ,
 the CPUs and the firmware interfaces.
 Rach2 has none of them.
+Linux's
+.Pa /sys/block
+holds a link for each disk into its device's directory, which has a
+.Pa stat ,
+.Pa holders ,
+.Pa slaves
+and more; here it holds the disk's directory itself, with the files above,
+and the loop devices are not listed, since they take none of Linux's loop
+requests.
 Linux suspends to idle with the devices powered down and its clocks of
 time since boot stopped; here the devices stay up, their interrupts are
 taken, and the clocks count on.
@@ -206,6 +268,10 @@ The network interfaces.
 The real-time clock.
 .It Pa /sys/power/state
 The sleep states.
+.It Pa /sys/block
+The disks and their partitions.
+.It Pa /sys/dev/block
+The disk nodes by their numbers.
 .El
 .Sh EXAMPLES
 .Bd -literal -offset indent

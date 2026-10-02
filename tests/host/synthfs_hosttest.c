@@ -39,6 +39,36 @@ int sysfs_net_pci_key(int index)
     return index == 2 ? 0x18 : -1;
 }
 
+/* No disks: /sys/block and /sys/dev/block are empty. */
+int sysfs_block_find(const char *name, int len, int disk)
+{
+    (void)name;
+    (void)len;
+    (void)disk;
+    return -1;
+}
+
+int sysfs_block_devno(const char *name, int len)
+{
+    (void)name;
+    (void)len;
+    return -1;
+}
+
+void sysfs_block_name(int key, char *out, int cap)
+{
+    (void)key;
+    if (cap > 0) {
+        out[0] = '\0';
+    }
+}
+
+int sysfs_block_whole(int key)
+{
+    (void)key;
+    return -1;
+}
+
 #define CHECK(cond)    \
     do {               \
         if (!(cond)) { \
