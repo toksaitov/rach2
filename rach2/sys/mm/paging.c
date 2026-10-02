@@ -9,6 +9,7 @@
 #include "../lib/ksignal.h"
 #include "../lib/kerrno.h"
 #include "../proc/process.h"
+#include "../proc/ptrace.h"
 #include "../tables/tss.h"
 #include "mm.h"
 #include "pressure.h"
@@ -948,7 +949,9 @@ static void _page_fault_handler(isr_params_t *params)
 
         /* SIGSEGV with the address, SEGV_ACCERR when a region holds it and
            SEGV_MAPERR when none does, forced as Linux forces it: a handler
-           runs, and the faulting instruction runs again after it returns. */
+           runs, and the faulting instruction runs again after it returns,
+           and a tracer takes the stop; the death is logged only when no
+           handler and no tracer will see the signal. */
         k_memset(&info, 0, sizeof(info));
         info.code = vm_find(&current_proc->mm->vm, fault_address) ? SEGV_ACCERR : SEGV_MAPERR;
         info.addr = fault_address;
@@ -956,7 +959,8 @@ static void _page_fault_handler(isr_params_t *params)
         current_proc->trap_err = params->error_code;
         current_proc->trap_addr = fault_address;
         signal_force(current_proc, SIGSEGV, &info);
-        if (current_proc->sigacts[SIGSEGV].handler == KSIG_DFL) {
+        if (current_proc->sigacts[SIGSEGV].handler == KSIG_DFL &&
+            !(current_proc->ptrace & PT_TRACED)) {
             klog(KLOG_WARN, "vm", "fault: killing pid %d: bad %s at 0x%x (err 0x%x)",
                  current_proc->pid, write ? "write" : "read", fault_address, params->error_code);
         }

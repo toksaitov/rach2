@@ -180,9 +180,9 @@ static int _exception_signal(const isr_params_t *params, struct k_siginfo *info)
  * faulting instruction, which faults again to a triple fault and a silent
  * reset. A fault taken in user mode (the saved `CS` is at RPL 3) is that
  * process's own, so it gets the signal its cause maps to, forced as Linux
- * forces one: a handler the process installed runs, and otherwise the
- * process dies and the cause is printed. A fault in kernel mode has no safe
- * recovery and panics.
+ * forces one: a handler the process installed runs, a tracer takes the stop,
+ * and otherwise the process dies and the cause is printed. A fault in kernel
+ * mode has no safe recovery and panics.
  */
 static void _exception_handler(isr_params_t *params)
 {
@@ -212,7 +212,8 @@ static void _exception_handler(isr_params_t *params)
         current_proc->trap_err = params->error_code;
         current_proc->trap_addr = 0;
         signal_force(current_proc, signo, &info);
-        if (current_proc->sigacts[signo].handler == KSIG_DFL) {
+        if (current_proc->sigacts[signo].handler == KSIG_DFL &&
+            !(current_proc->ptrace & PT_TRACED)) {
             klog(KLOG_WARN, "isr", "user exception: %s (vector %d, err 0x%x, eip 0x%x): signal %d",
                  name, params->vector, params->error_code, params->eip, signo);
         }
