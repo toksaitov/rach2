@@ -7,9 +7,12 @@
 # and newgrp util-linux's, so the port keeps its own out of the root. chsh,
 # chfn and gpasswd are set-id root, as Debian's are: the manifest installs
 # them with that bit from build/vendor/gnu/setid, since a file the overlay
-# adds has none. There is no PAM, SELinux, ACL, audit, tcb, logind, nscd,
-# sssd or libbsd, and no subordinate ids, which newuidmap and newgidmap
-# would need, or lastlog, which shadow builds only on request.
+# adds has none. make install leaves chage set-id root as well, and a set-id
+# file the manifest does not declare fails the set-id guard, so the port
+# clears every bit it leaves and chage is root's tool. There is no PAM,
+# SELinux, ACL, audit, tcb, logind, nscd, sssd or libbsd, and no subordinate
+# ids, which newuidmap and newgidmap would need, or lastlog, which shadow
+# builds only on request.
 VERSION=4.20.2
 CONFIGURE_ARGS="--without-libpam --without-selinux --without-acl --without-attr --without-audit \
 --without-tcb --without-nscd --without-sssd --without-libbsd --without-su --without-btrfs \
@@ -25,6 +28,7 @@ port_install()
     rm -f "$DEST"/usr/share/man/man1/login.1 "$DEST"/usr/share/man/man1/passwd.1 \
         "$DEST"/usr/share/man/man1/newgrp.1 "$DEST"/usr/share/man/man1/sg.1 \
         "$DEST"/usr/share/man/man8/chpasswd.8 "$DEST"/usr/share/man/man8/nologin.8
+    find "$DEST" -type f -perm /6000 -exec chmod ug-s {} +
     mkdir -p "$OUT/setid"
     for p in chsh chfn gpasswd; do
         mv "$DEST/usr/bin/$p" "$OUT/setid/$p"
