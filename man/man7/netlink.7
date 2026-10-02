@@ -148,9 +148,10 @@ and the attributes
 .Dv IFLA_BROADCAST ,
 .Dv IFLA_MTU ,
 .Dv IFLA_OPERSTATE ,
-and
 .Dv IFLA_STATS
-with the packets, bytes and drops each way and the receive errors, which
+with the packets, bytes and drops each way and the receive errors, and
+.Dv IFLA_STATS64
+with the same counters in Linux's 25 eight-byte words, the rest 0, which
 .Ql ip -s link
 prints.
 Without it, the one message of the interface whose index the

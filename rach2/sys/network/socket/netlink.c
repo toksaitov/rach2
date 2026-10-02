@@ -56,6 +56,7 @@
 #define IFLA_MTU       4
 #define IFLA_STATS     7
 #define IFLA_OPERSTATE 16
+#define IFLA_STATS64   23
 #define IFA_ADDRESS    1
 #define IFA_LOCAL      2
 #define IFA_LABEL      3
@@ -132,9 +133,9 @@
 
 /* Policy: an answer datagram is at most a page, which every reader's buffer
  * holds: Chromium reads with 4096 bytes and BusyBox with 8192. A message is
- * at most 256 bytes, a link's with its counters among them. */
+ * at most 512 bytes, a link's with its two sets of counters among them. */
 #define NL_DGRAM_MAX 4096u
-#define NL_MSG_MAX   256u
+#define NL_MSG_MAX   512u
 
 /* One queued datagram; its bytes follow the record. */
 struct nl_dgram {
@@ -397,7 +398,11 @@ static uint32_t prefix_of(uint32_t mask)
 
 /* A link, with its counters in Linux's `struct rtnl_link_stats`, 24 words
  * of which this interface keeps seven: the packets, bytes and drops each
- * way, and the receive errors. */
+ * way, and the receive errors; and the same in `struct rtnl_link_stats64`,
+ * 25 eight-byte words, which Linux sends beside it and iproute2 reads
+ * first, and without which it prints a counter of the second set that the
+ * first does not have, the drops for other hosts, from memory it never
+ * set. */
 static void link_msg(struct nl_build *b, const struct netdev *nd, uint16_t flags)
 {
     uint8_t msg[NL_MSG_MAX];
@@ -406,6 +411,8 @@ static void link_msg(struct nl_build *b, const struct netdev *nd, uint16_t flags
     uint32_t up = netif_is_up() ? IFF_UP | IFF_RUNNING | IFF_LOWER_UP : 0;
     uint8_t oper = up ? IF_OPER_UP : IF_OPER_DOWN;
     uint8_t stats[96];
+    uint8_t stats64[200];
+    int i;
 
     put16(ifi + 2, ARPHRD_ETHER);
     put32(ifi + 4, (uint32_t)nd->index);
@@ -424,6 +431,11 @@ static void link_msg(struct nl_build *b, const struct netdev *nd, uint16_t flags
     put32(stats + 24, nd->rx_dropped);
     put32(stats + 28, nd->tx_dropped);
     msg_attr(msg, IFLA_STATS, stats, sizeof(stats));
+    k_memset(stats64, 0, sizeof(stats64));
+    for (i = 0; i < 8; i++) {
+        k_memcpy(stats64 + 8 * i, stats + 4 * i, 4); /* each low word; the high ones 0 */
+    }
+    msg_attr(msg, IFLA_STATS64, stats64, sizeof(stats64));
     nl_append(b, msg);
 }
 

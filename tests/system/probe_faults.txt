@@ -5789,3 +5789,13 @@ old
 new
                  {SYSFS_MEMORY, "memory1", SYSFS_MEMORY0}};
 end
+
+fault link-stats64-short
+probe netlinkmusl
+file rach2/sys/network/socket/netlink.c
+expect NETLINKMUSL FAIL (a link without the 64-bit counters iproute2 reads
+old
+    msg_attr(msg, IFLA_STATS64, stats64, sizeof(stats64));
+new
+    msg_attr(msg, IFLA_STATS64, stats64, 96);
+end

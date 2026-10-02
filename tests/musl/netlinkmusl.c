@@ -80,6 +80,7 @@
 #define RTA_OIF                4
 #define RTA_GATEWAY            5
 #define IFLA_MTU               4
+#define IFLA_STATS64           23
 #define NDA_DST                1
 #define NDA_LLADDR             2
 #define NUD_PERMANENT          0x80
@@ -210,22 +211,30 @@ static int ioctl_addr(int index, struct in_addr *out)
     return rc;
 }
 
-/* A link of a dump: it has a name, and the first is kept for the rows
- * after the dumps. 0, or -1. */
+/* A link of a dump: it has a name and the 25 counters of Linux's struct
+ * rtnl_link_stats64, which iproute2 reads, and the first is kept for the
+ * rows after the dumps. 0, or -1. */
 static int link_ok(struct nlmsghdr *h, int first)
 {
     struct ifinfomsg *ifi = NLMSG_DATA(h);
     int l = PAYLOAD(h, struct ifinfomsg);
     struct rtattr *a;
     const char *name = NULL;
+    int stats64 = 0;
 
     for (a = FIRST_RTA(ifi); RTA_OK(a, l); a = RTA_NEXT(a, l)) {
         if (a->rta_type == IFLA_IFNAME) {
             name = RTA_DATA(a);
         }
+        if (a->rta_type == IFLA_STATS64) {
+            stats64 = (int)RTA_PAYLOAD(a);
+        }
     }
     if (!name) {
         return failed("a link without a name");
+    }
+    if (stats64 < 25 * 8) {
+        return failed("a link without the 64-bit counters iproute2 reads");
     }
     if (first) {
         first_index = ifi->ifi_index;
