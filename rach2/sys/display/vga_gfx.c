@@ -4,6 +4,7 @@
 
 #include "vga_gfx.h"
 #include "vga_text.h"
+#include "vga_font.h"
 #include "../kio.h"
 #include "../serial.h"
 #include "../lib/kstring.h"
@@ -191,19 +192,14 @@ static void vga_set_mode(uint8_t misc, const uint8_t *seq, size_t seq_count, con
 }
 
 /**
- * Save the text-mode font from plane 2 (character generator RAM) into
- * saved_font.
+ * Open the adapter's character memory, plane 2, at A0000 as linear memory.
  *
- * The font lives in plane 2 at A0000. To read it as linear memory the
- * Sequencer and Graphics Controller are switched out of the odd/even text
- * layout into sequential access to plane 2 alone. Each glyph occupies 32
- * bytes there but only the first 16 are used by the 8x16 font.
+ * The Sequencer and Graphics Controller leave the odd/even text layout for
+ * sequential access to plane 2 alone. Each glyph occupies 32 bytes there,
+ * of which an 8x16 font uses the first 16.
  */
-static void vga_save_font(void)
+static void vga_font_window_open(void)
 {
-    volatile uint8_t *font_mem = (volatile uint8_t *)VGA_GFX_FRAMEBUFFER;
-    int i, j;
-
     outb(VGA_SEQ_INDEX, 0x02); /* Map Mask */
     outb(VGA_SEQ_DATA, 0x04);  /* enable plane 2 only */
 
@@ -218,48 +214,15 @@ static void vga_save_font(void)
 
     outb(VGA_GC_INDEX, 0x06); /* Miscellaneous */
     outb(VGA_GC_DATA, 0x04);  /* map at A0000-AFFFF (64K) */
-
-    for (i = 0; i < 256; i++) {
-        for (j = 0; j < 16; j++) {
-            saved_font[i * 16 + j] = font_mem[i * 32 + j];
-        }
-    }
 }
 
 /**
- * Restore saved_font to plane 2 and return the Sequencer and Graphics
- * Controller to the text-mode odd/even configuration.
- *
- * The first block mirrors vga_save_font's plane-2 sequential access to write
- * the glyphs back; the second restores the text layout: Map Mask to planes 0
- * and 1, odd/even memory mode, plane 0 reads, and the B8000 text window.
+ * Return the Sequencer and Graphics Controller to the text-mode odd/even
+ * configuration: Map Mask to planes 0 and 1, odd/even memory mode, plane 0
+ * reads, and the B8000 text window.
  */
-static void vga_restore_font(void)
+static void vga_font_window_close(void)
 {
-    volatile uint8_t *font_mem = (volatile uint8_t *)VGA_GFX_FRAMEBUFFER;
-    int i, j;
-
-    outb(VGA_SEQ_INDEX, 0x02); /* Map Mask */
-    outb(VGA_SEQ_DATA, 0x04);  /* enable plane 2 only */
-
-    outb(VGA_SEQ_INDEX, 0x04); /* Memory Mode */
-    outb(VGA_SEQ_DATA, 0x06);  /* sequential, extended memory, odd/even off */
-
-    outb(VGA_GC_INDEX, 0x04); /* Read Map Select */
-    outb(VGA_GC_DATA, 0x02);  /* read from plane 2 */
-
-    outb(VGA_GC_INDEX, 0x05); /* Graphics Mode */
-    outb(VGA_GC_DATA, 0x00);  /* read mode 0, write mode 0 */
-
-    outb(VGA_GC_INDEX, 0x06); /* Miscellaneous */
-    outb(VGA_GC_DATA, 0x04);  /* map at A0000-AFFFF (64K) */
-
-    for (i = 0; i < 256; i++) {
-        for (j = 0; j < 16; j++) {
-            font_mem[i * 32 + j] = saved_font[i * 16 + j];
-        }
-    }
-
     outb(VGA_SEQ_INDEX, 0x02);
     outb(VGA_SEQ_DATA, 0x03); /* Map Mask: planes 0 and 1 */
 
@@ -274,6 +237,63 @@ static void vga_restore_font(void)
 
     outb(VGA_GC_INDEX, 0x06);
     outb(VGA_GC_DATA, 0x0E); /* map at B8000, text mode */
+}
+
+/** Save the text-mode font from plane 2 into saved_font. */
+static void vga_save_font(void)
+{
+    volatile uint8_t *font_mem = (volatile uint8_t *)VGA_GFX_FRAMEBUFFER;
+    int i, j;
+
+    vga_font_window_open();
+    for (i = 0; i < 256; i++) {
+        for (j = 0; j < 16; j++) {
+            saved_font[i * 16 + j] = font_mem[i * 32 + j];
+        }
+    }
+}
+
+/** Restore saved_font to plane 2 and return to the text layout. */
+static void vga_restore_font(void)
+{
+    volatile uint8_t *font_mem = (volatile uint8_t *)VGA_GFX_FRAMEBUFFER;
+    int i, j;
+
+    vga_font_window_open();
+    for (i = 0; i < 256; i++) {
+        for (j = 0; j < 16; j++) {
+            font_mem[i * 32 + j] = saved_font[i * 16 + j];
+        }
+    }
+    vga_font_window_close();
+}
+
+int vga_font_load(void)
+{
+    volatile uint8_t *font_mem = (volatile uint8_t *)VGA_GFX_FRAMEBUFFER;
+    uint32_t flags = kirq_save();
+    int i, j, same = 1;
+
+    if (vga_graphics_mode) {
+        kirq_restore(flags);
+        return 0;
+    }
+    vga_font_window_open();
+    for (i = 0; i < VGA_FONT_GLYPHS; i++) {
+        for (j = 0; j < 16; j++) {
+            font_mem[vga_font_glyphs[i].slot * 32 + j] = vga_font_glyphs[i].rows[j];
+        }
+    }
+    for (i = 0; i < VGA_FONT_GLYPHS; i++) {
+        for (j = 0; j < 16; j++) {
+            if (font_mem[vga_font_glyphs[i].slot * 32 + j] != vga_font_glyphs[i].rows[j]) {
+                same = 0;
+            }
+        }
+    }
+    vga_font_window_close();
+    kirq_restore(flags);
+    return same;
 }
 
 /**

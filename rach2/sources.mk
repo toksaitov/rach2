@@ -57,6 +57,7 @@ C_SRC = kernel.c \
         sys/block/ahci.c \
         sys/display/vga_text.c \
         sys/display/vga_gfx.c \
+        sys/display/vga_font.c \
         sys/audio/audio.c \
         sys/audio/audio_debug.c \
         sys/audio/dma.c \

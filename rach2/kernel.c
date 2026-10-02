@@ -3485,6 +3485,7 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
     }
 
     k_cls();
+    k_font_init();
 
     klog(KLOG_DEBUG, "boot", "Initializing system components");
 

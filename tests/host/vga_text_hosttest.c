@@ -60,7 +60,24 @@ void kirq_restore(uint32_t flags)
 bool vga_graphics_mode = false;
 
 #include "display/vga_text.c"
+#include "display/vga_font.c"
 #include "kio.c"
+
+static int font_reads_back;
+
+/* The adapter's character memory: whether the glyphs read back as written. */
+int vga_font_load(void)
+{
+    return font_reads_back;
+}
+
+/* The font's load is said in the kernel log, which the rows do not read. */
+void klog(int level, const char *subsystem, const char *format, ...)
+{
+    (void)level;
+    (void)subsystem;
+    (void)format;
+}
 
 static unsigned int port_writes;
 static unsigned int start_writes;
@@ -391,6 +408,32 @@ static void row_utf8(void)
 }
 
 /**
+ * The loaded font draws the Cyrillic letters, those of Kyrgyz among them,
+ * from its own characters, a box glyph that joins a single line to a double
+ * one as the glyph of its vertical line, and a Latin letter with an accent
+ * without it; an adapter that keeps its own font keeps code page 437.
+ */
+static void row_font(void)
+{
+    font_reads_back = 0;
+    k_font_init();
+    k_cls();
+    put_string("\303\251");
+    CHECK((vram[0] & 0xFF) == 0x82, "the adapter's font keeps code page 437");
+    font_reads_back = 1;
+    k_font_init();
+    k_cls();
+    put_string("\320\264\322\243\342\225\241\303\251\302\253\342\200\224");
+    CHECK((vram[0] & 0xFF) == 0xA4, "a Russian letter is the loaded font's");
+    CHECK((vram[1] & 0xFF) == 0xB6, "a Kyrgyz letter is the loaded font's");
+    CHECK((vram[2] & 0xFF) == 0xB4, "a box glyph of mixed lines is its vertical line's");
+    CHECK((vram[3] & 0xFF) == 'e', "a Latin letter is drawn without its accent");
+    CHECK((vram[4] & 0xFF) == 0xFB && (vram[5] & 0xFF) == '-',
+          "a guillemet is the font's and a dash is ASCII's");
+    vt_font = vt_cp437;
+}
+
+/**
  * While the adapter is in a graphics mode a scroll leaves the start address
  * alone, since it is the picture's; the return to text redraws and sets it.
  */
@@ -419,6 +462,7 @@ int main(void)
     row_console();
     row_answers();
     row_utf8();
+    row_font();
     row_graphics();
     row_release_echo();
     if (failures) {

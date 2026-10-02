@@ -1,4 +1,6 @@
 #include "kio.h"
+#include "display/vga_font.h"
+#include "klog.h"
 #include "lib/kirq.h"
 
 /*
@@ -13,9 +15,11 @@
  * bytes to the host terminal, which interprets them itself.
  *
  * Text other than ASCII arrives as UTF-8 and is drawn from the adapter's
- * font, code page 437. A query for the device's attributes or the cursor's
- * position is answered as a VT102 answers it; the console's tty takes the
- * answer with `k_take_answer` and gives it to the program as input.
+ * font: code page 437, or the one `k_font_init` loads, which keeps its box
+ * drawing and has the Cyrillic letters. A query for the device's attributes
+ * or the cursor's position is answered as a VT102 answers it; the console's
+ * tty takes the answer with `k_take_answer` and gives it to the program as
+ * input.
  */
 
 #define VT_MAX_PARAMS 8
@@ -46,7 +50,7 @@ static unsigned int vt_answer_len;
 
 /*
  * The characters of code page 437 from 0x80 to 0xFF, by their Unicode
- * values: the adapter's font draws character 0x80 + i as vt_cp437[i].
+ * values: the adapter's own font draws character 0x80 + i as vt_cp437[i].
  */
 static const uint16_t vt_cp437[128] = {
     0x00C7, 0x00FC, 0x00E9, 0x00E2, 0x00E4, 0x00E0, 0x00E5, 0x00E7, 0x00EA, 0x00EB, 0x00E8, 0x00EF,
@@ -60,6 +64,38 @@ static const uint16_t vt_cp437[128] = {
     0x03B1, 0x00DF, 0x0393, 0x03C0, 0x03A3, 0x03C3, 0x00B5, 0x03C4, 0x03A6, 0x0398, 0x03A9, 0x03B4,
     0x221E, 0x03C6, 0x03B5, 0x2229, 0x2261, 0x00B1, 0x2265, 0x2264, 0x2320, 0x2321, 0x00F7, 0x2248,
     0x00B0, 0x2219, 0x00B7, 0x221A, 0x207F, 0x00B2, 0x25A0, 0x00A0};
+
+/* The font the adapter draws: its own, or the one k_font_init loads. */
+static const uint16_t *vt_font = vt_cp437;
+
+/*
+ * The Latin letters with accents from U+00C0 and from U+0100, each as its
+ * letter without the accent, for a font that lacks them.
+ */
+static const char vt_latin1[] = "AAAAAAACEEEEIIIIDNOOOOOxOUUUUYTsaaaaaaaceeeeiiiidnooooo/ouuuuyty";
+static const char vt_latin_a[] = "AaAaAaCcCcCcCcDdDdEeEeEeEeEeGgGgGgGgHhHhIiIiIiIiIiIiJjKkkLlLlLlL"
+                                 "lLlNnNnNnnNnOoOoOoOoRrRrRrSsSsSsSsTtTtTtUuUuUuUuUuUuWwYyYZzZzZzs";
+
+/*
+ * Characters drawn as another when the font lacks them: punctuation as its
+ * ASCII likeness, and box glyphs that join a single line to a double one,
+ * or heavy and rounded ones, as the glyph of their vertical line's kind.
+ */
+static const struct {
+    uint16_t first, last, to;
+} vt_near_table[] = {{0x00A0, 0x00A0, ' '},    {0x00AD, 0x00AD, '-'},    {0x00B4, 0x00B4, '\''},
+                     {0x2010, 0x2015, '-'},    {0x2018, 0x201B, '\''},   {0x201C, 0x201F, '"'},
+                     {0x2026, 0x2026, '.'},    {0x2039, 0x2039, '<'},    {0x203A, 0x203A, '>'},
+                     {0x2212, 0x2212, '-'},    {0x2501, 0x2501, 0x2500}, {0x2503, 0x2503, 0x2502},
+                     {0x250F, 0x250F, 0x250C}, {0x2513, 0x2513, 0x2510}, {0x2517, 0x2517, 0x2514},
+                     {0x251B, 0x251B, 0x2518}, {0x2552, 0x2552, 0x250C}, {0x2553, 0x2553, 0x2554},
+                     {0x2555, 0x2555, 0x2510}, {0x2556, 0x2556, 0x2557}, {0x2558, 0x2558, 0x2514},
+                     {0x2559, 0x2559, 0x255A}, {0x255B, 0x255B, 0x2518}, {0x255C, 0x255C, 0x255D},
+                     {0x255E, 0x255E, 0x251C}, {0x255F, 0x255F, 0x2560}, {0x2561, 0x2561, 0x2524},
+                     {0x2562, 0x2562, 0x2563}, {0x2564, 0x2564, 0x252C}, {0x2565, 0x2565, 0x2566},
+                     {0x2567, 0x2567, 0x2534}, {0x2568, 0x2568, 0x2569}, {0x256A, 0x256A, 0x253C},
+                     {0x256B, 0x256B, 0x256C}, {0x256D, 0x256D, 0x250C}, {0x256E, 0x256E, 0x2510},
+                     {0x256F, 0x256F, 0x2518}, {0x2570, 0x2570, 0x2514}};
 
 static unsigned int vt_fg = DEFAULT_FORECOLOR;
 static unsigned int vt_bg = DEFAULT_BACKCOLOR;
@@ -422,18 +458,60 @@ static void vt_dispatch_csi(char c)
     }
 }
 
-/** The font's character for Unicode value `code`, or `CHAR_NON_PRINTABLE`. */
-static char vt_glyph(uint32_t code)
+/** The font's character for Unicode value `code`, or 0 when it has none. */
+static unsigned char vt_font_char(uint32_t code)
 {
     unsigned int i;
 
     if (code >= 0xA0) {
         for (i = 0; i < 128; ++i) {
-            if (vt_cp437[i] == code)
-                return (char)(0x80 + i);
+            if (vt_font[i] == code)
+                return (unsigned char)(0x80 + i);
         }
     }
+    return 0;
+}
+
+/**
+ * The character to draw for Unicode value `code` when the font lacks it: a
+ * letter without its accent, an ASCII likeness, or another Unicode value;
+ * `CHAR_NON_PRINTABLE` when there is none.
+ */
+static uint32_t vt_near(uint32_t code)
+{
+    unsigned int i;
+
+    if (code >= 0xC0 && code < 0x100)
+        return (unsigned char)vt_latin1[code - 0xC0];
+    if (code >= 0x100 && code < 0x180)
+        return (unsigned char)vt_latin_a[code - 0x100];
+    for (i = 0; i < sizeof(vt_near_table) / sizeof(vt_near_table[0]); ++i) {
+        if (code >= vt_near_table[i].first && code <= vt_near_table[i].last)
+            return vt_near_table[i].to;
+    }
     return CHAR_NON_PRINTABLE;
+}
+
+/** The font's character for Unicode value `code`, or a stand-in for it. */
+static char vt_glyph(uint32_t code)
+{
+    unsigned char ch = vt_font_char(code);
+
+    if (ch == 0) {
+        code = vt_near(code);
+        ch = code < 0x80 ? (unsigned char)code : vt_font_char(code);
+    }
+    return ch != 0 ? (char)ch : CHAR_NON_PRINTABLE;
+}
+
+void k_font_init(void)
+{
+    if (vga_font_load()) {
+        vt_font = vga_font_map;
+        klog(KLOG_INFO, "vga", "font: loaded: code page 437 box drawing with Cyrillic");
+    } else {
+        klog(KLOG_INFO, "vga", "font: kept: the adapter's code page 437");
+    }
 }
 
 /**

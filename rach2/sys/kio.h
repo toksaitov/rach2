@@ -37,6 +37,13 @@
 /** Write one character to the screen. */
 void k_putc(char c);
 
+/**
+ * Load the console's font with the Cyrillic letters into the adapter, and
+ * draw from it when the adapter reads it back; otherwise keep the adapter's
+ * own font, code page 437.
+ */
+void k_font_init(void);
+
 /** The longest answer the screen gives to a query, a cursor position. */
 #define K_ANSWER_MAX 16
 

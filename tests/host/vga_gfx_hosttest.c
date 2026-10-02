@@ -1,5 +1,8 @@
 /**
- * VGA mode transitions with a pending keyboard interrupt at each port access.
+ * VGA mode transitions with a pending keyboard interrupt at each port access,
+ * and the console's font loaded into the adapter's character memory: each
+ * glyph at its character's 32 bytes, read back as written, and refused in a
+ * graphics mode.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  */
@@ -10,6 +13,7 @@ static uint8_t aperture[VGA_GFX_SIZE];
 #define VGA_GFX_FRAMEBUFFER aperture
 
 #include "display/vga_gfx.c"
+#include "display/vga_font.c"
 
 extern int printf(const char *format, ...);
 static int failures;
@@ -22,6 +26,7 @@ static unsigned int echoes;
 static unsigned int clears;
 static int pending;
 static int expected_mode;
+static int font_row; /* the font's own load, which no mode change is part of */
 static unsigned int unmasked_accesses;
 
 #define INJECT_ENTRY 0xFFFFFFFFu
@@ -91,6 +96,10 @@ uint32_t kirq_save(void)
 void kirq_restore(uint32_t flags)
 {
     unsigned int i, j;
+    if (font_row) {
+        masked = flags;
+        return;
+    }
     CHECK(vga_graphics_mode == expected_mode, "mode published before restore");
     CHECK(gfx_current.mode == (expected_mode ? GFX_MODE_VGA_13H : GFX_MODE_NONE),
           "framebuffer state published before restore");
@@ -152,9 +161,27 @@ static unsigned int row_transition(unsigned int point, uint32_t initial_mask)
 }
 
 /** Try every port boundary, including font mapping and palette restoration. */
+/** The font lands at each glyph's character and reads back. */
+static void row_font(void)
+{
+    const struct vga_glyph *g = &vga_font_glyphs[VGA_FONT_GLYPHS - 1];
+
+    font_row = 1;
+    k_memset(aperture, 0, sizeof(aperture));
+    CHECK(vga_font_load() == 1, "the font reads back as written");
+    CHECK(aperture[g->slot * 32 + 7] == g->rows[7] && aperture[g->slot * 32 + 16] == 0,
+          "a glyph's rows are the first 16 of its character's 32 bytes");
+    vga_graphics_mode = true;
+    CHECK(vga_font_load() == 0, "a graphics mode refuses the font");
+    vga_graphics_mode = false;
+    font_row = 0;
+}
+
 int main(void)
 {
     unsigned int point, total;
+
+    row_font();
 
     row_transition(INJECT_ENTRY, 0);
     row_transition(INJECT_EXIT, 0);
