@@ -5809,3 +5809,13 @@ old
 new
         ap_str(&text, "File name\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n");
 end
+
+fault cwd-ancestors-searched
+probe permmusl
+file rach2/sys/fs/vfs.c
+expect PERMMUSL FAIL (a file of the working directory below an unsearchable one
+old
+        rc = toward_cwd(path, p) ? 0 : may_search(cur.mnt, cur.node, use_real);
+new
+        rc = may_search(cur.mnt, cur.node, use_real) + 0 * toward_cwd(path, p);
+end

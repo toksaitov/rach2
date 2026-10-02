@@ -95,6 +95,13 @@ static void watch_made(struct vfs_mount *mnt, void *dir, const char *name, uint3
     (void)isdir;
 }
 
+/** The fixture's processes work in the root, which every walk may search. */
+const char *proc_cwd(const struct process *p)
+{
+    (void)p;
+    return "/";
+}
+
 /** Every mount is in the fixture's one mount namespace. */
 int vfs_mount_seen(const struct vfs_mount *m)
 {

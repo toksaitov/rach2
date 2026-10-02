@@ -303,6 +303,37 @@ static int may_search(struct vfs_mount *mnt, void *node, int use_real)
 
 /* The resolver. */
 
+/**
+ * Whether the component of `path` at `p`, with the part before it, is the
+ * caller's working directory or one of the directories on the way to it.
+ *
+ * The syscall layer joins a relative name to the working directory's path
+ * and the walk starts at the root, where Linux starts a relative walk at the
+ * working directory and asks no permission of the directories above it. A
+ * process that keeps a directory it may not reach by its path, as `su` to an
+ * ordinary user from root's home leaves one, may still name files there
+ * relatively, so the walk does not ask search permission for a component on
+ * that way; any other component of such a directory still needs it.
+ */
+static int toward_cwd(const char *path, const char *p)
+{
+    const char *cwd = current_proc ? proc_cwd(current_proc) : 0;
+    uint32_t at = (uint32_t)(p - path), len = 0, i;
+
+    if (!cwd || path[0] != '/' || path[1] == '/' || p < path || at > k_strlen(path)) {
+        return 0;
+    }
+    while (p[len] != '\0' && p[len] != '/') {
+        len++;
+    }
+    for (i = 0; i < at + len; i++) {
+        if (cwd[i] != path[i]) {
+            return 0;
+        }
+    }
+    return cwd[i] == '/' || cwd[i] == '\0';
+}
+
 /** The bit of the caller's mount namespace. */
 static uint32_t ns_bit(void)
 {
@@ -893,7 +924,7 @@ begin:
             break;
         }
 
-        rc = may_search(cur.mnt, cur.node, use_real);
+        rc = toward_cwd(path, p) ? 0 : may_search(cur.mnt, cur.node, use_real);
         if (rc != 0) {
             goto out_err;
         }

@@ -25,6 +25,11 @@
  *   none: as uid 1000, with a directory of its own in /dev/shm set to 0600,
  *   stat, access and open of "dir/." are EACCES, and stat of "dir/" reports
  *   the directory.
+ * * A process left in a directory below one it may not search, as `su` from
+ *   root's home leaves one, still names files there, as Linux's walk from the
+ *   working directory lets it: as uid 1000 in "w/in", with "w" root's 0700,
+ *   stat of ".", an open of a file in it, getcwd and stat of the file by its
+ *   absolute path succeed, and stat of "w/other" is EACCES.
  *
  * Prints "PERMMUSL OK" or "PERMMUSL FAIL ...". Linked against the ported musl.
  */
@@ -36,6 +41,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 
 /* The directory the dot rows make, in /dev/shm, which anyone may write. */
 #define DOT_DIR "/dev/shm/permmusl.d"
@@ -67,6 +73,52 @@ static int dot_search_rows(void)
     rmdir(DOT_DIR);
     if (!ok) {
         printf("PERMMUSL FAIL (a last . looked up without search permission on its directory)\n");
+        return 1;
+    }
+    return 0;
+}
+
+/* The directories the working-directory rows make. */
+#define CWD_DIR "/dev/shm/permmusl.w"
+
+/**
+ * The rows of a working directory below one the caller may not search, as
+ * the header says, in a child that drops to uid 1000 in `CWD_DIR/in`; the
+ * parent, root, cleans up. 0, or 1 once the failure is reported.
+ */
+static int cwd_rows(void)
+{
+    struct stat st;
+    char cwd[64];
+    pid_t pid;
+    int status = 1, fd;
+
+    if (mkdir(CWD_DIR, 0700) != 0 || mkdir(CWD_DIR "/in", 0755) != 0 ||
+        mkdir(CWD_DIR "/other", 0755) != 0 ||
+        (fd = open(CWD_DIR "/in/f", O_CREAT | O_WRONLY, 0644)) < 0) {
+        printf("PERMMUSL FAIL (make the working-directory rows' tree: %s)\n", strerror(errno));
+        return 1;
+    }
+    close(fd);
+    pid = fork();
+    if (pid == 0) {
+        int ok = chdir(CWD_DIR "/in") == 0 && setgid(1000) == 0 && setuid(1000) == 0;
+
+        ok = ok && stat(".", &st) == 0 && (fd = open("f", O_RDONLY)) >= 0;
+        ok = ok && getcwd(cwd, sizeof(cwd)) && strcmp(cwd, CWD_DIR "/in") == 0;
+        ok = ok && stat(CWD_DIR "/in/f", &st) == 0;
+        ok = ok && stat(CWD_DIR "/other", &st) == -1 && errno == EACCES;
+        _exit(ok ? 0 : 1);
+    }
+    if (pid > 0) {
+        waitpid(pid, &status, 0);
+    }
+    unlink(CWD_DIR "/in/f");
+    rmdir(CWD_DIR "/in");
+    rmdir(CWD_DIR "/other");
+    rmdir(CWD_DIR);
+    if (pid < 0 || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        printf("PERMMUSL FAIL (a file of the working directory below an unsearchable one)\n");
         return 1;
     }
     return 0;
@@ -173,6 +225,10 @@ int main(void)
     }
     if (seteuid(1) != 0 || geteuid() != 1 || seteuid(0) != 0) {
         printf("PERMMUSL FAIL (seteuid excursion)\n");
+        return 1;
+    }
+
+    if (cwd_rows() != 0) {
         return 1;
     }
 
