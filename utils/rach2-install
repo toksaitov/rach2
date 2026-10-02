@@ -292,6 +292,14 @@ ssh_host_keys() { # ssh_host_keys ROOTDIR
     return 1
 }
 
+# Makes the public host keys in DIR readable by all, as OpenSSH writes them;
+# a directory with none has nothing to change.
+public_keys_readable() { # public_keys_readable DIR
+    for k in "$1"/ssh_host_*.pub; do
+        [ ! -f "$k" ] || chmod 644 "$k" || return 1
+    done
+}
+
 # Copies configuration files and key directories under ROOTDIR to recovery.
 # The chosen archive survives until the new slot is complete and synced.
 # A file the root does not have is left out,
@@ -453,7 +461,7 @@ restore_archive_keys() (
     if ssh_host_keys "$archive"; then
         { mkdir -p "$keep/etc/ssh" && cp "$archive"/etc/ssh/ssh_host_* "$keep/etc/ssh/" &&
             chown 0:0 "$keep"/etc/ssh/ssh_host_* && chmod 600 "$keep"/etc/ssh/ssh_host_* &&
-            chmod 644 "$keep"/etc/ssh/ssh_host_*.pub; } ||
+            public_keys_readable "$keep/etc/ssh"; } ||
             die "OpenSSH's host keys could not be restored with their owner and modes"
     fi
     while IFS=: read -r _name _password uid gid _gecos home _shell; do
