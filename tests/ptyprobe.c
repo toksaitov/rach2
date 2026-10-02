@@ -7,7 +7,10 @@
  * * The master sets the window size (TIOCSWINSZ), which is what a login server
  *   does with the size the client asked for, before the shell is started.
  * * open("/dev/pts/N") returns the slave; a forked child setsid()s and
- *   TIOCSCTTYs it as its controlling terminal.
+ *   TIOCSCTTYs it as its controlling terminal. The child's /proc/PID/stat
+ *   then gives its session as its process group and session, the slave's
+ *   device 136:N as its terminal, and its group as the terminal's foreground
+ *   group, the fields `ps` and `w` read.
  * * On the slave: TIOCGWINSZ reports the size the master set, and TCGETS and
  *   TCSETS read and write the termios. These reach the shared terminal handler
  *   rather than the slave's own ops, and `stty` over a network login is
@@ -222,6 +225,31 @@ static void numbered_path(char *path, const char *prefix, int number, const char
         *path++ = *suffix++;
     }
     *path = 0;
+}
+
+/**
+ * Whether /proc/<sid>/stat, read for the leader `sid` of a session whose
+ * controlling terminal is /dev/pts/<ptn>, gives `sid` as the process group,
+ * the session and the terminal's foreground group (fields 5, 6 and 8) and the
+ * slave's device number as the terminal (field 7).
+ */
+static int stat_has_tty(int sid, int ptn)
+{
+    char path[40], state[256], want[64];
+    int fd, n;
+
+    numbered_path(path, "/proc/", sid, "/stat");
+    fd = sys_open(path, O_RDONLY);
+    if (fd < 0) {
+        return 0;
+    }
+    n = sys_read(fd, state, sizeof(state));
+    sys_close(fd);
+    numbered_path(want, " ", sid, "");
+    numbered_path(want + strlen(want), " ", sid, "");
+    numbered_path(want + strlen(want), " ", (136 << 8) | ptn, "");
+    numbered_path(want + strlen(want), " ", sid, " ");
+    return n > 0 && contains(state, n, want);
 }
 
 /**
@@ -538,15 +566,18 @@ void _start(void)
         /* Child: a new session leader makes the slave its controlling terminal,
          * then reads the cooked line the parent sends on the master. */
         char sbuf[32];
-        int sn;
+        int sn, sid;
 
-        sys_setsid();
+        sid = sys_setsid();
         slave = sys_open(path, O_RDWR);
         if (slave < 0) {
             sys_exit(11); /* open slave failed */
         }
         if (sys_ioctl(slave, TIOCSCTTY, 0) < 0) {
             sys_exit(12); /* TIOCSCTTY failed */
+        }
+        if (!stat_has_tty(sid, ptn)) {
+            sys_exit(28); /* /proc/<pid>/stat does not give the terminal */
         }
         sn = slave_rows(slave);
         if (sn != 0) {

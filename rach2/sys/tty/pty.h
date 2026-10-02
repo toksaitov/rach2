@@ -57,6 +57,11 @@ struct pty {
     uint32_t uid;
     uint32_t gid;
     uint16_t mode; /* permission bits only; the type is S_IFCHR */
+    /* The second the slave last read input and last wrote output, which
+     * stat reports as its access and modification times: `w` takes a
+     * session's idle time from the first. */
+    uint32_t atime;
+    uint32_t mtime;
 };
 
 /* Empty the list of live ptys; called once at boot. Each pair is allocated
@@ -110,6 +115,15 @@ int pty_index_limit(void);
 /* The allocated pty behind /dev/pts/N, or NULL: the ownership fields for the
  * stat/chown/chmod paths. */
 struct pty *pty_get(int index);
+
+/**
+ * The controlling terminal of the session `sid`: 1 with its device number
+ * in `*dev`, in the encoding /proc/PID/stat's tty_nr has, and its
+ * foreground process group in `*fg_pgid`, 0 for none; 0 when the session
+ * has no terminal. The console is /dev/console, 5:1, and a pty's slave
+ * /dev/pts/N, 136:N.
+ */
+int tty_controlling(int sid, uint32_t *dev, int *fg_pgid);
 
 /** Release any pty slave controlled by dying session leader `sid` (sid ==
  * pid). */

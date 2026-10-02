@@ -5780,6 +5780,8 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
         kst->st_gid = pt->gid;
         kst->st_rdev = (136u << 8) | (uint32_t)vp->pts_index;
         kst->st_ino = PTS_INO_BASE + (uint32_t)vp->pts_index;
+        kst->st_atime = pt->atime;
+        kst->st_mtime = pt->mtime;
         return 0;
     }
     case VNODE_ENOTDIR:

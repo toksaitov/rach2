@@ -449,6 +449,24 @@ static char proc_state_char(const process_t *p)
     return 'R';
 }
 
+/** Append the device number of `p`'s controlling terminal and its
+ * foreground process group, as the caller's PID namespace sees it, or 0 and
+ * -1 for a process with no terminal, as /proc/<pid>/stat's fields 7 and 8. */
+static void ap_tty(struct procfs_text *t, const process_t *p)
+{
+    uint32_t dev;
+    int fg;
+
+    if (!tty_controlling((int)p->sid, &dev, &fg)) {
+        ap_str(t, " 0 -1");
+        return;
+    }
+    ap_ch(t, ' ');
+    ap_u32(t, dev);
+    ap_ch(t, ' ');
+    ap_int(t, fg > 0 ? (int)pid_seen((uint32_t)fg) : -1);
+}
+
 /**
  * Format /proc/<pid>/stat into `t`, returning its length or -ENOENT.
  *
@@ -496,7 +514,7 @@ static int procfs_gen_stat(struct procfs_text *t, int pid, int whole)
     ap_int(t, (int)pid_seen(p->pgid)); /* 5 pgrp */
     ap_ch(t, ' ');
     ap_int(t, (int)pid_seen(p->sid)); /* 6 session */
-    ap_str(t, " 0 -1");               /* 7 tty_nr, 8 tpgid (not modeled) */
+    ap_tty(t, p);                     /* 7 tty_nr, 8 tpgid */
     /* 9..13 flags,minflt,cminflt,majflt,cmajflt;
        14..17 utime,stime,cutime,cstime */
     ap_str(t, " 0 0 0 0 0 ");

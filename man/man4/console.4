@@ -57,6 +57,12 @@ progress fails with
 .Er EAGAIN .
 Echo that arrives while the ring is full is discarded.
 The slave has the same line discipline and job control as the console.
+.Xr stat 2
+on the slave gives the second it last returned input to a reader as its
+access time and the second it last took output as its modification
+time, from which
+.Xr w 1
+reports a session's idle time.
 The pair is freed after both ends close, and its index may be reused.
 .Ss Line discipline and job control
 Canonical mode collects input into lines; raw mode permits input without

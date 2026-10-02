@@ -18,6 +18,7 @@
 #include "../lib/kerrno.h"
 #include "../lib/ksignal.h"
 #include "../lib/kirq.h"
+#include "../rtc.h"
 
 /* Linux ioctls. The pty-number requests have the exact values musl uses. */
 #define FIONREAD   0x541B
@@ -107,6 +108,15 @@ static void pty_slave_sink(void *ctx, unsigned char c)
     kirq_restore(flags);
 }
 
+/** The wall clock's second, which a pty's times record. */
+static uint32_t pty_now(void)
+{
+    int64_t sec, nsec;
+
+    rtc_coarse_realtime(&sec, &nsec);
+    return (uint32_t)sec;
+}
+
 /**
  * Wake the master's queue after slave output or echo: a change of data when
  * the slave's sink has put bytes in m_buf since the count `*from`, which moves
@@ -140,6 +150,7 @@ static struct pty *pty_alloc(void)
     p->locked = 1; /* unlockpt() (TIOCSPTLCK 0) must run before pts open */
     p->uid = current_proc ? current_proc->euid : 0;
     p->gid = current_proc ? current_proc->egid : 0;
+    p->atime = p->mtime = pty_now();
     p->mode = 0620;                         /* crw--w----, the Unix98 slave default */
     tty_init(&p->slave, pty_slave_sink, p); /* slave.pump stays NULL */
     wait_queue_init(&p->m_read_wq);
@@ -486,6 +497,9 @@ static int32_t pts_read(fd_entry_t *e, char __user *buf, uint32_t count)
     if (copy_to_user(buf, kbuf, (uint32_t)n) != 0) {
         return -EFAULT;
     }
+    if (n > 0) {
+        p->atime = pty_now();
+    }
     return n;
 }
 
@@ -549,6 +563,7 @@ static int32_t pts_write_out(fd_entry_t *e, struct pty *p, const char __user *bu
         done += chunk;
     }
     wake_master(p, &pushed); /* output pushed into m_buf: wake the master */
+    p->mtime = pty_now();
     return (int32_t)done;
 }
 
@@ -740,6 +755,30 @@ int pty_open_slave(int index, int flags)
         tty_make_sole_ctty(&p->slave, (int)current_proc->sid, (int)current_proc->pgid);
     }
     return fd;
+}
+
+int tty_controlling(int sid, uint32_t *dev, int *fg_pgid)
+{
+    struct pty *p;
+
+    if (sid == 0) {
+        return 0;
+    }
+    if (console_tty.sid == sid) {
+        *dev = (5u << 8) | 1u;
+        *fg_pgid = console_tty.fg_pgid;
+        return 1;
+    }
+    for (p = ptys; p; p = p->next) {
+        if (p->slave.sid == sid) {
+            uint32_t n = (uint32_t)p->index;
+
+            *dev = (136u << 8) | (n & 0xFFu) | ((n & ~0xFFu) << 12);
+            *fg_pgid = p->slave.fg_pgid;
+            return 1;
+        }
+    }
+    return 0;
 }
 
 /**

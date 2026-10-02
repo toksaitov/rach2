@@ -5745,3 +5745,23 @@ old
 new
                {29, "swappiness", "\n"}};
 end
+
+fault stat-tty-unmodeled
+probe ptyprobe
+file rach2/sys/fs/procfs.c
+expect PTYPROBE FAIL (the child refused its terminal: status 28)
+old
+    if (!tty_controlling((int)p->sid, &dev, &fg)) {
+new
+    if (!tty_controlling((int)p->sid, &dev, &fg) || 1) {
+end
+
+fault stat-tpgid-unmodeled
+probe ptyprobe
+file rach2/sys/fs/procfs.c
+expect PTYPROBE FAIL (the child refused its terminal: status 28)
+old
+    ap_int(t, fg > 0 ? (int)pid_seen((uint32_t)fg) : -1);
+new
+    ap_int(t, -1);
+end
