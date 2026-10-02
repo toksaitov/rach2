@@ -156,8 +156,28 @@ or
 and is recorded as given; nothing is claimed.
 Its root has mode 1777, or the octal mode an option
 .Ql mode=
-gives; the other options Linux's tmpfs takes are accepted and change
-nothing.
+gives.
+Its files hold at most the pages the option
+.Ql size=
+allows: bytes, with
+.Ql k ,
+.Ql m
+or
+.Ql g
+after them, or a percentage of the machine's memory with
+.Ql % ,
+rounded up to whole pages; a write past it fails with
+.Er ENOSPC ,
+.Ql size=0
+is no limit, and without the option the limit is half the machine's
+memory, as on Linux.
+.Xr statfs 2
+gives the limit as the blocks.
+A value that is no number fails the mount with
+.Er EINVAL .
+The other options Linux's tmpfs takes are accepted and change nothing,
+and a remount does not change the size.
+A file in memory reaches 16 TiB less a page, as on Linux on i386.
 For every other type, the source must name a published block device
 under
 .Pa /dev :

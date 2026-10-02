@@ -2503,7 +2503,7 @@ static void install_permanent(void)
     install(3, &vfs_tmpfs_type, "/dev/shm", mounts[1], 0);
     mounts[3]->flags = VFS_MS_NOSUID | VFS_MS_NODEV;
     k_strncpy(mounts[3]->source, "tmpfs", sizeof(mounts[3]->source));
-    install(4, &vfs_tmpfs_type, "", 0, "mode=0555");
+    install(4, &vfs_tmpfs_type, "", 0, "mode=0555,size=0");
     mounts[4]->flags = VFS_MS_NOSUID | VFS_MS_NODEV;
     install(5, &vfs_sysfs_type, "/sys", mounts[0], 0);
     mounts[5]->flags = VFS_MS_RDONLY | VFS_MS_NOSUID | VFS_MS_NODEV | VFS_MS_NOEXEC;

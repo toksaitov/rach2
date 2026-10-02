@@ -22,13 +22,14 @@
  * held after its last name goes stays readable, a removed directory held after
  * its parent is removed keeps the parent for its "..", and a shared mapping's
  * page takes a reference of its own; statfs counts in use the pages the files
- * hold and not a frame held elsewhere; a page at or past the most a file may
- * have is refused without growing the table, 2^31 and 2^32 - 1 among them,
- * and the last page below it is given; a truncation of mapped memory takes
- * the pages it frees out of the mappings first. A memfd's node has its name
- * and no directory, and goes with its last hold; its seals refuse a shrink, a
- * growth, a write, a change of its execute bits and more seals, and a named
- * file starts sealed against sealing. Returns the failed-check count.
+ * hold and not a frame held elsewhere, against the mount's size, half the
+ * machine's frames by default; a page at or past the most a file may have,
+ * 2^32 - 1, is refused without growing the table, and the last page below it
+ * is given; a truncation of mapped memory takes the pages it frees out of
+ * the mappings first. A memfd's node has its name and no directory, and goes
+ * with its last hold; its seals refuse a shrink, a growth, a write, a change
+ * of its execute bits and more seals, and a named file starts sealed against
+ * sealing. Returns the failed-check count.
  */
 
 #include "fs/tmpfs.c"
@@ -233,7 +234,7 @@ static void bytes(void)
         struct vfs_statfs sf;
         uintptr_t other = alloc_user_frame();
 
-        CHECK(tmpfs_statfs(&mnt, &sf) == 0 && sf.blocks == POOL && sf.blocks - sf.bfree == 2);
+        CHECK(tmpfs_statfs(&mnt, &sf) == 0 && sf.blocks == POOL / 2 && sf.blocks - sf.bfree == 2);
         free_frame(other);
     }
     CHECK(tmpfs_read(&mnt, f, buf, 5, 0) == 5 && k_memcmp(buf, "hello", 5) == 0);
@@ -441,8 +442,8 @@ static void mapping(void)
     phys = shmem_map_page(sh, 0);
     CHECK(phys != 0 && refs[frame_index(phys)] == 2);
     npages = sh->npages;
-    CHECK(shmem_map_page(sh, 0xFFFFFFFFu) == 0 && shmem_map_page(sh, 0x80000000u) == 0 &&
-          shmem_map_page(sh, most) == 0 && sh->npages == npages);
+    CHECK(shmem_map_page(sh, 0xFFFFFFFFu) == 0 && shmem_map_page(sh, most) == 0 &&
+          sh->npages == npages);
     last = shmem_map_page(sh, most - 1u);
     CHECK(last != 0 && sh->npages == most && refs[frame_index(last)] == 2);
     CHECK(tmpfs_truncate(&mnt, f, 0) == 0 && refs[frame_index(phys)] == 1 &&
@@ -577,6 +578,43 @@ static void rename_refused(void)
     tmpfs_put(&mnt, d);
 }
 
+/**
+ * A mount's size= is the most pages its files hold: a write the limit stops
+ * is short and then ENOSPC, statfs gives the limit as the blocks, and a
+ * truncation gives the pages back. size=0 is no limit, a percentage is of
+ * the machine's frames, and a value that is no number refuses the mount. A
+ * file reaches past 1 GiB with a hole before its one page, and stops a page
+ * short of 16 TiB.
+ */
+static void sizes(void)
+{
+    static char buf[3 * PAGE_SIZE];
+    struct vfs_mount m2;
+    struct vfs_statfs sf;
+    void *f = NULL;
+
+    k_memset(&m2, 0, sizeof(m2));
+    CHECK(tmpfs_mount(&m2, NULL, 0, "size=8k") == 0);
+    CHECK(tmpfs_create(&m2, NULL, "big", 0644, &f) == 0);
+    CHECK(tmpfs_write(&m2, f, buf, sizeof(buf), 0) == 2 * PAGE_SIZE);
+    CHECK(tmpfs_write(&m2, f, buf, 1, 2 * PAGE_SIZE) == -ENOSPC);
+    CHECK(tmpfs_statfs(&m2, &sf) == 0 && sf.blocks == 2 && sf.bfree == 0);
+    CHECK(tmpfs_truncate(&m2, f, 0) == 0 && tmpfs_statfs(&m2, &sf) == 0 && sf.bfree == 2);
+    CHECK(tmpfs_write(&m2, f, "x", 1, 0x40000000ull + 5) == 1);
+    CHECK(tmpfs_read(&m2, f, buf, 6, 0x40000000ull) == 6 && buf[5] == 'x' && buf[0] == 0);
+    CHECK(tmpfs_statfs(&m2, &sf) == 0 && sf.bfree == 1);
+    CHECK(tmpfs_write(&m2, f, "x", 1, SHMEM_MAX_SIZE) == -EFBIG);
+    tmpfs_put(&m2, f);
+    tmpfs_unmount(&m2);
+    CHECK(tmpfs_mount(&m2, NULL, 0, "mode=0700,size=0") == 0 && tmpfs_statfs(&m2, &sf) == 0 &&
+          sf.blocks == POOL);
+    tmpfs_unmount(&m2);
+    CHECK(tmpfs_mount(&m2, NULL, 0, "size=50%") == 0 && tmpfs_statfs(&m2, &sf) == 0 &&
+          sf.blocks == POOL / 2);
+    tmpfs_unmount(&m2);
+    CHECK(tmpfs_mount(&m2, NULL, 0, "size=lots") == -EINVAL);
+}
+
 int main(void)
 {
     struct vfs_stat st;
@@ -598,6 +636,7 @@ int main(void)
     seals();
     removed_parent();
     rename_refused();
+    sizes();
     tmpfs_unmount(&mnt);
     CHECK(frames_in_use() == 0);
     return fails > 100 ? 100 : fails;

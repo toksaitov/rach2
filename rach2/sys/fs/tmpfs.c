@@ -72,6 +72,7 @@ struct tmpfs_node {
 struct tmpfs_mount {
     struct tmpfs_node *root;
     uint64_t next_ino;
+    struct shmem_quota quota; /* the pages its files hold, against size= */
 };
 
 #define STAMP_A 1
@@ -126,6 +127,7 @@ static struct tmpfs_node *new_node(struct vfs_mount *mnt, const struct tmpfs_nod
     n->mode = mode;
     n->seals = TMPFS_SEAL_SEAL;
     n->ino = ++tm->next_ino;
+    n->data.quota = &tm->quota;
     stamp(n, STAMP_A | STAMP_M | STAMP_C);
     return n;
 }
@@ -342,6 +344,8 @@ static int tmpfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
         st->size = k_strlen(n->target);
     } else {
         st->size = n->data.size;
+        st->blocks = (uint64_t)n->data.held * (PAGE_SIZE / 512u);
+        st->blocks_known = 1;
     }
     st->atime_sec = n->atime;
     st->atime_nsec = n->atime_ns;
@@ -740,65 +744,20 @@ static int tmpfs_readlink(struct vfs_mount *mnt, void *node, char *buf, uint32_t
     return (int)len;
 }
 
-/** The pages a file's bytes hold: its table's frames, a hole none. */
-static uint32_t held_pages(const struct shmem *sh)
-{
-    uint32_t i, n = 0;
-
-    for (i = 0; i < sh->npages; i++) {
-        if (sh->pages[i] != 0) {
-            n++;
-        }
-    }
-    return n;
-}
-
 /**
- * The pages the files under `top` hold, a file of two names counted for
- * each. The walk goes down into a directory and back up to the name after
- * it, which it finds again in the parent's list, so it needs no stack.
- */
-static uint32_t tree_pages(const struct tmpfs_node *top)
-{
-    const struct tmpfs_node *d = top;
-    const struct tmpfs_dirent *e = top->entries;
-    uint32_t pages = 0;
-
-    for (;;) {
-        if (!e) {
-            const struct tmpfs_dirent *up;
-
-            if (d == top) {
-                return pages;
-            }
-            for (up = d->parent->entries; up && up->node != d; up = up->next) {
-            }
-            e = up ? up->next : NULL;
-            d = d->parent;
-        } else if (is_dir(e->node)) {
-            d = e->node;
-            e = d->entries;
-        } else {
-            pages += held_pages(&e->node->data);
-            e = e->next;
-        }
-    }
-}
-
-/**
- * The machine's frames are the mount's blocks, since tmpfs has no quota of
- * its own, and the blocks in use are those its files hold, as Linux counts
- * a tmpfs's use, so that df shows an empty /dev/shm empty.
+ * The mount's size is its blocks and the pages its files hold the blocks in
+ * use, as Linux counts a tmpfs's use, so that df shows an empty /dev/shm
+ * empty; a mount without a size has the machine's frames as its blocks.
  */
 static int tmpfs_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
 {
-    uint32_t total = frame_total_count();
-    uint32_t used = tree_pages(((struct tmpfs_mount *)mnt->priv)->root);
+    const struct shmem_quota *q = &((struct tmpfs_mount *)mnt->priv)->quota;
+    uint32_t total = q->limit ? q->limit : frame_total_count();
 
     st->magic = TMPFS_MAGIC;
     st->bsize = PAGE_SIZE;
     st->blocks = total;
-    st->bfree = used < total ? total - used : 0;
+    st->bfree = q->used < total ? total - q->used : 0;
     st->namelen = VFS_NAME_MAX;
     return 0;
 }
@@ -928,20 +887,20 @@ static int tmpfs_symlink(struct vfs_mount *mnt, void *dir, const char *name, con
     return rc;
 }
 
-/* The options Linux's tmpfs takes that change something here: mode=, the
- * root's permission bits in octal. The rest are accepted and ignored. */
-static uint32_t root_mode(const char *options)
+/* The value of the option `name=` in `options`, or NULL; the value ends at
+ * the next comma. */
+static const char *option(const char *options, const char *name)
 {
     const char *p = options;
 
     while (p && *p) {
-        if (p[0] == 'm' && p[1] == 'o' && p[2] == 'd' && p[3] == 'e' && p[4] == '=') {
-            uint32_t mode = 0;
+        uint32_t i = 0;
 
-            for (p += 5; *p >= '0' && *p <= '7'; p++) {
-                mode = mode * 8u + (uint32_t)(*p - '0');
-            }
-            return mode & 07777u;
+        while (name[i] && p[i] == name[i]) {
+            i++;
+        }
+        if (!name[i] && p[i] == '=') {
+            return p + i + 1;
         }
         while (*p && *p != ',') {
             p++;
@@ -950,20 +909,83 @@ static uint32_t root_mode(const char *options)
             p++;
         }
     }
-    return 01777u;
+    return NULL;
+}
+
+/* The root's permission bits, in octal from mode=, or 1777. */
+static uint32_t root_mode(const char *options)
+{
+    const char *p = option(options, "mode");
+    uint32_t mode = 0;
+
+    if (!p) {
+        return 01777u;
+    }
+    for (; *p >= '0' && *p <= '7'; p++) {
+        mode = mode * 8u + (uint32_t)(*p - '0');
+    }
+    return mode & 07777u;
+}
+
+/**
+ * The pages the mount's files may hold, from size=: bytes, with k, m or g
+ * after them for KiB, MiB or GiB, or a percentage of the machine's memory
+ * with %, rounded up to whole pages; 0, for size=0, is no limit. Without
+ * size= the limit is half the machine's memory, as Linux's default is.
+ * -EINVAL for a value that is no number.
+ */
+static int64_t size_pages(const char *options)
+{
+    const char *p = option(options, "size");
+    uint64_t n = 0;
+    uint32_t total = frame_total_count();
+    int shift = 0;
+
+    if (!p) {
+        return (int64_t)(total / 2u);
+    }
+    if (*p < '0' || *p > '9') {
+        return -EINVAL;
+    }
+    for (; *p >= '0' && *p <= '9' && n < (1ull << 40); p++) {
+        n = n * 10u + (uint64_t)(*p - '0');
+    }
+    if (*p == '%') {
+        n = n > 1000u ? 1000u : n;
+        return (int64_t)(((uint32_t)n * (total / 100u)) + (uint32_t)n * (total % 100u) / 100u);
+    }
+    if (*p == 'k' || *p == 'K') {
+        shift = 10;
+    } else if (*p == 'm' || *p == 'M') {
+        shift = 20;
+    } else if (*p == 'g' || *p == 'G') {
+        shift = 30;
+    }
+    p += shift != 0;
+    if (*p != '\0' && *p != ',') {
+        return -EINVAL;
+    }
+    n = ((n << shift) + PAGE_SIZE - 1u) >> 12;
+    return (int64_t)(n > 0xFFFFFFFFull ? 0xFFFFFFFFull : n);
 }
 
 static int tmpfs_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
                        const char *options)
 {
-    struct tmpfs_mount *tm = kzalloc(sizeof(*tm));
+    struct tmpfs_mount *tm;
     struct tmpfs_node *root;
+    int64_t limit = size_pages(options);
 
     (void)dev;
     (void)flags;
+    if (limit < 0) {
+        return (int)limit;
+    }
+    tm = kzalloc(sizeof(*tm));
     if (!tm) {
         return -ENOMEM;
     }
+    tm->quota.limit = (uint32_t)limit;
     mnt->priv = tm;
     root = new_node(mnt, NULL, T_IFDIR | root_mode(options));
     if (!root) {

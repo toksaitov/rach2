@@ -13,58 +13,100 @@
 /* The most pages a file in memory has, SHMEM_MAX_SIZE of them. */
 #define SHMEM_MAX_PAGES ((uint32_t)(SHMEM_MAX_SIZE / PAGE_SIZE))
 
-/* Make the table reach page `n - 1`, where `n` is at most SHMEM_MAX_PAGES;
- * 0, or -ENOSPC. The length doubles from 16 and stops at that bound, so
- * neither it nor the table's size in bytes can wrap. */
+/* Make the directory reach leaf `n - 1`; 0, or -ENOSPC. The length doubles
+ * from 4; the largest file's directory has 4194304 entries, 16 MiB, which a
+ * write near its end asks for and the heap may refuse. */
 static int reach(struct shmem *sh, uint32_t n)
 {
-    uint32_t cap = sh->npages ? sh->npages : 16u;
-    uintptr_t *grown;
+    uint32_t cap = sh->nleaves ? sh->nleaves : 4u;
+    uintptr_t **grown;
 
-    if (n <= sh->npages) {
+    if (n <= sh->nleaves) {
         return 0;
     }
     while (cap < n) {
         cap *= 2;
     }
-    if (cap > SHMEM_MAX_PAGES) {
-        cap = SHMEM_MAX_PAGES;
-    }
-    grown = kzalloc(sizeof(uintptr_t) * cap);
+    grown = kzalloc(sizeof(uintptr_t *) * cap);
     if (!grown) {
         return -ENOSPC;
     }
-    if (sh->npages) {
-        k_memcpy(grown, sh->pages, sizeof(uintptr_t) * sh->npages);
+    if (sh->nleaves) {
+        k_memcpy(grown, sh->leaves, sizeof(uintptr_t *) * sh->nleaves);
     }
-    kfree(sh->pages);
-    sh->pages = grown;
-    sh->npages = cap;
+    kfree(sh->leaves);
+    sh->leaves = grown;
+    sh->nleaves = cap;
+    sh->npages = cap > SHMEM_MAX_PAGES / SHMEM_LEAF ? SHMEM_MAX_PAGES : cap * SHMEM_LEAF;
     return 0;
 }
 
+/* The table's entry for page `i`, or NULL when its leaf is missing; with
+ * `make`, the leaf is made, and NULL means no memory or `i` past the pages
+ * a file in memory may have. */
+static uintptr_t *slot(struct shmem *sh, uint32_t i, int make)
+{
+    uint32_t leaf = i / SHMEM_LEAF;
+
+    if (i >= SHMEM_MAX_PAGES) {
+        return NULL;
+    }
+    if (leaf >= sh->nleaves || !sh->leaves[leaf]) {
+        if (!make || reach(sh, leaf + 1u) != 0) {
+            return NULL;
+        }
+        sh->leaves[leaf] = kzalloc(sizeof(uintptr_t) * SHMEM_LEAF);
+        if (!sh->leaves[leaf]) {
+            return NULL;
+        }
+    }
+    return &sh->leaves[leaf][i % SHMEM_LEAF];
+}
+
+/* Count a frame the table takes, or 0 when the quota has no room for it. */
+static int take_page(struct shmem *sh)
+{
+    if (sh->quota) {
+        if (sh->quota->limit && sh->quota->used >= sh->quota->limit) {
+            return 0;
+        }
+        sh->quota->used++;
+    }
+    sh->held++;
+    return 1;
+}
+
+/* Count a frame the table gives back. */
+static void give_page(struct shmem *sh)
+{
+    if (sh->quota) {
+        sh->quota->used--;
+    }
+    sh->held--;
+}
+
 /* The frame of page `i`, made and zeroed when there is none; 0 when none
- * can be had, or when `i` is past the pages a file in memory may have: a
- * mapping asks for its page by an offset the caller chose. */
+ * can be had, the quota has no room, or `i` is past the pages a file in
+ * memory may have: a mapping asks for its page by an offset the caller
+ * chose. */
 static uintptr_t page_at(struct shmem *sh, uint32_t i)
 {
+    uintptr_t *e = slot(sh, i, 1);
     uintptr_t phys;
 
-    if (i >= SHMEM_MAX_PAGES || reach(sh, i + 1u) != 0) {
-        return 0;
-    }
-    if (sh->pages[i]) {
-        return sh->pages[i];
+    if (!e || *e != 0 || !take_page(sh)) {
+        return e ? *e : 0;
     }
     phys = alloc_user_frame();
-    if (phys == 0) {
-        return 0;
-    }
-    if (paging_zero_frame(phys) != 0) {
+    if (phys != 0 && paging_zero_frame(phys) != 0) {
         free_frame(phys);
+        phys = 0;
+    }
+    if (phys == 0) {
+        give_page(sh);
         return 0;
     }
-    sh->pages[i] = phys;
+    *e = phys;
     return phys;
 }
 
@@ -87,8 +129,8 @@ int32_t shmem_read(struct shmem *sh, void *buf, uint32_t count, uint64_t off)
         if (take > count - done) {
             take = count - done;
         }
-        if (i < sh->npages && sh->pages[i]) {
-            uint8_t *page = kmap_temp(sh->pages[i]);
+        if (shmem_resident(sh, i)) {
+            uint8_t *page = kmap_temp(shmem_resident(sh, i));
 
             if (!page) {
                 return done ? (int32_t)done : -EIO;
@@ -137,7 +179,8 @@ int32_t shmem_write(struct shmem *sh, const void *buf, uint32_t count, uint64_t 
 
 int shmem_truncate(struct shmem *sh, uint64_t size)
 {
-    uint32_t keep, i;
+    uint32_t keep, i, leaf;
+    uintptr_t last;
 
     if (size > SHMEM_MAX_SIZE) {
         return -EFBIG;
@@ -146,16 +189,29 @@ int shmem_truncate(struct shmem *sh, uint64_t size)
     if (sh->maps && keep < sh->npages) {
         filemap_shmem_cut(sh, keep);
     }
-    for (i = keep; i < sh->npages; i++) {
-        if (sh->pages[i]) {
-            free_frame(sh->pages[i]);
-            sh->pages[i] = 0;
+    for (leaf = keep / SHMEM_LEAF; leaf < sh->nleaves; leaf++) {
+        uintptr_t *frames = sh->leaves[leaf];
+
+        if (!frames) {
+            continue;
+        }
+        for (i = leaf == keep / SHMEM_LEAF ? keep % SHMEM_LEAF : 0; i < SHMEM_LEAF; i++) {
+            if (frames[i]) {
+                free_frame(frames[i]);
+                frames[i] = 0;
+                give_page(sh);
+            }
+        }
+        if (leaf * SHMEM_LEAF >= keep) {
+            kfree(frames);
+            sh->leaves[leaf] = NULL;
         }
     }
     /* The part of the last page past the new end reads as zeros if the
      * file grows again, as in Linux. */
-    if (size % PAGE_SIZE && keep - 1u < sh->npages && sh->pages[keep - 1u]) {
-        uint8_t *page = kmap_temp(sh->pages[keep - 1u]);
+    last = keep ? shmem_resident(sh, keep - 1u) : 0;
+    if (size % PAGE_SIZE && last) {
+        uint8_t *page = kmap_temp(last);
 
         if (page) {
             k_memset(page + size % PAGE_SIZE, 0, PAGE_SIZE - (uint32_t)(size % PAGE_SIZE));
@@ -178,28 +234,40 @@ uintptr_t shmem_map_page(struct shmem *sh, uint32_t pgoff)
 
 uintptr_t shmem_resident(const struct shmem *sh, uint32_t pgoff)
 {
-    return pgoff < sh->npages ? sh->pages[pgoff] : 0;
+    uint32_t leaf = pgoff / SHMEM_LEAF;
+
+    if (leaf >= sh->nleaves || !sh->leaves[leaf]) {
+        return 0;
+    }
+    return sh->leaves[leaf][pgoff % SHMEM_LEAF];
 }
 
 uintptr_t shmem_adopt(struct shmem *sh, uint32_t pgoff, uintptr_t phys)
 {
-    if (pgoff >= SHMEM_MAX_PAGES || reach(sh, pgoff + 1u) != 0) {
+    uintptr_t *e = slot(sh, pgoff, 1);
+
+    if (!e) {
         free_frame(phys);
         return 0;
     }
-    if (sh->pages[pgoff]) {
+    if (*e) {
         free_frame(phys);
     } else {
-        sh->pages[pgoff] = phys;
+        sh->held++;
+        if (sh->quota) {
+            sh->quota->used++;
+        }
+        *e = phys;
     }
-    frame_ref(sh->pages[pgoff]);
-    return sh->pages[pgoff];
+    frame_ref(*e);
+    return *e;
 }
 
 void shmem_free(struct shmem *sh)
 {
     shmem_truncate(sh, 0);
-    kfree(sh->pages);
-    sh->pages = NULL;
+    kfree(sh->leaves);
+    sh->leaves = NULL;
+    sh->nleaves = 0;
     sh->npages = 0;
 }
