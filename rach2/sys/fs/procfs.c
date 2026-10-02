@@ -2985,7 +2985,9 @@ static int procfs_gen_netroute(struct procfs_text *t)
 }
 
 /**
- * Render /proc/net/arp: what the cache holds, one line each.
+ * Render /proc/net/arp: what the cache holds, one line each, in Linux's
+ * columns, the address padded to 16 characters and the hardware address in
+ * lowercase.
  *
  * The hardware type is 1, Ethernet, and the flag is 2, which is what `arp`
  * prints as a complete entry, or 6 for one set by hand as permanent; an
@@ -2994,20 +2996,25 @@ static int procfs_gen_netroute(struct procfs_text *t)
  */
 static int procfs_gen_netarp(struct procfs_text *t)
 {
+    static const char digits[] = "0123456789abcdef";
     static struct arp_row rows[ARP_CACHE_SIZE];
-    int n, i, b;
+    int n, i, b, start;
 
     ap_str(t, PROCFS_NETARP_HEADER);
     n = net_ns_seen() ? arp_snapshot(rows, ARP_CACHE_SIZE) : 0;
     for (i = 0; i < n; i++) {
+        start = t->len;
         ap_ip_dotted(t, rows[i].ip);
-        ap_str(t, rows[i].permanent ? "        0x1         0x6         "
-                                    : "        0x1         0x2         ");
+        while (t->len - start < 16 && !t->nomem) {
+            ap_ch(t, ' ');
+        }
+        ap_str(t, rows[i].permanent ? " 0x1         0x6         " : " 0x1         0x2         ");
         for (b = 0; b < 6; b++) {
             if (b) {
                 ap_ch(t, ':');
             }
-            ap_hex(t, rows[i].mac[b], 2);
+            ap_ch(t, digits[rows[i].mac[b] >> 4]);
+            ap_ch(t, digits[rows[i].mac[b] & 0xF]);
         }
         ap_str(t, "     *        ");
         ap_str(t, rows[i].iface);

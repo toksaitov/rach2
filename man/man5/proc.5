@@ -339,8 +339,9 @@ flags.
 A header followed by one row per complete ARP cache entry.
 The columns are IP address, hardware type, flags, hardware address,
 mask, and device.
-IP addresses are dotted decimal; hardware addresses are six
-colon-separated hexadecimal bytes.
+IP addresses are dotted decimal, padded to 16 characters; hardware
+addresses are six colon-separated bytes in lowercase hexadecimal, as
+Linux writes them.
 Hardware type is
 .Ql 0x1 ,
 flags are

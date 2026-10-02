@@ -33,7 +33,8 @@
  * through a gateway no subnet has is ENETUNREACH; a route on the link to
  * that network is the one `ip route get` takes, before the default route
  * through the gateway; and a neighbour set by hand as permanent is in
- * /proc/net/arp with the flags 0x6 until it is forgotten.
+ * /proc/net/arp with the flags 0x6, in lowercase hexadecimal, until it is
+ * forgotten.
  *
  * Prints "NETLINKMUSL OK" on success and "NETLINKMUSL FAIL (detail)"
  * otherwise.
@@ -597,7 +598,7 @@ static int table_changes(int fd)
     char body[64];
     struct ifaddrmsg ifa;
     unsigned char ndm[12] = {AF_INET};
-    const unsigned char mac[8] = {0x02, 0, 0, 0, 0, 0x99};
+    const unsigned char mac[8] = {0x02, 0, 0, 0, 0, 0xab};
     struct in_addr second, neigh;
     int len, type = -1, oif = -1;
     unsigned int gw;
@@ -633,8 +634,9 @@ static int table_changes(int fd)
         len += 12;
     }
     if (ask(fd, RTM_NEWNEIGH, NLM_F_CREATE, 69, body, len) != 0 ||
-        !file_has("/proc/net/arp", "0x6         02:00:00:00:00:99")) {
-        return fail("a neighbour set by hand as permanent, in /proc/net/arp with 0x6");
+        !file_has("/proc/net/arp", "0x6         02:00:00:00:00:ab")) {
+        return fail("a neighbour set by hand as permanent, in /proc/net/arp with 0x6 "
+                    "in lowercase");
     }
     len = sizeof ndm;
     attr32(body, &len, NDA_DST, &neigh);
