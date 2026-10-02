@@ -5213,6 +5213,16 @@ new
             : !procfs_may_read(pid) && pid < 0 ? -EACCES
 end
 
+fault proc-locks-ofd-pid
+probe lockmusl
+file rach2/sys/fs/lock.c
+expect LOCKMUSL FAIL (/proc/locks lacks
+old
+        rows[n].pid = l->kind == LK_OFD ? -1 : (int32_t)l->pid;
+new
+        rows[n].pid = (int32_t)l->pid;
+end
+
 fault proc-limits-missing
 probe procprobe
 file rach2/sys/fs/synthfs.c

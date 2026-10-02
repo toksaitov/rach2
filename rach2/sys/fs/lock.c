@@ -56,6 +56,34 @@ int lock_any(void)
     return locks != NULL;
 }
 
+int lock_count(void)
+{
+    const struct file_lock *l;
+    int n = 0;
+
+    for (l = locks; l; l = l->next) {
+        n++;
+    }
+    return n;
+}
+
+int lock_rows(struct lock_row *rows, int max)
+{
+    static const int row_kind[] = {LOCK_ROW_POSIX, LOCK_ROW_OFD, LOCK_ROW_FLOCK};
+    const struct file_lock *l;
+    int n = 0;
+
+    for (l = locks; l && n < max; l = l->next, n++) {
+        rows[n].kind = row_kind[l->kind];
+        rows[n].type = l->type;
+        rows[n].pid = l->kind == LK_OFD ? -1 : (int32_t)l->pid;
+        rows[n].key = l->key;
+        rows[n].start = l->start;
+        rows[n].end = l->end;
+    }
+    return n;
+}
+
 /* The owner of the calling thread's POSIX record locks: its descriptor
  * table, as Linux's owner is the files_struct, so the threads of a process
  * and the processes that share a table (CLONE_FILES) are one owner. */

@@ -950,6 +950,11 @@ uint32_t procfs_ino_swaps(void)
     return 0;
 }
 
+uint32_t procfs_ino_locks(void)
+{
+    return 0;
+}
+
 uint32_t procfs_ino_netstatdir(void)
 {
     return 0;

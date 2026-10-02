@@ -41,6 +41,7 @@
 #include "../cmdline.h"
 #include "../block/diskinfo.h"
 #include "vfs.h"
+#include "lock.h"
 #include "tmpfs.h"
 #include "cpuinfo.h"
 #include "../ipc/sysv.h"
@@ -99,6 +100,7 @@
 #define PROCFS_INO_VMSTAT      0x11Cu
 #define PROCFS_INO_SLABINFO    0x11Du
 #define PROCFS_INO_SWAPS       0x11Eu
+#define PROCFS_INO_LOCKS       0x11Fu
 #define PROCFS_INO_NET         0x120u /* and the other files of /proc/net after it */
 
 /* Inode namespace for /sys: the fixed directories by their node; a PCI
@@ -187,6 +189,9 @@ static const char *procfs_kind_name(const struct vpath *vp)
     }
     if (vp->kind == VNODE_PROC_SWAPS) {
         return "/proc/swaps";
+    }
+    if (vp->kind == VNODE_PROC_LOCKS) {
+        return "/proc/locks";
     }
     if (vp->kind == VNODE_PROC_SYS_FILE) {
         return "/proc/sys";
@@ -1483,6 +1488,8 @@ static const char *procfs_global_fd_path(int origin)
         return "/proc/slabinfo";
     case SYNTH_PROC_SWAPS:
         return "/proc/swaps";
+    case SYNTH_PROC_LOCKS:
+        return "/proc/locks";
     case SYNTH_PROC_SYSVIPC:
         return "/proc/sysvipc/shm";
     case SYNTH_PROC_SYSVIPC + 1:
@@ -1788,6 +1795,11 @@ uint32_t procfs_ino_swaps(void)
     return PROCFS_INO_SWAPS;
 }
 
+uint32_t procfs_ino_locks(void)
+{
+    return PROCFS_INO_LOCKS;
+}
+
 uint32_t procfs_ino_loadavg(void)
 {
     return PROCFS_INO_LOADAVG;
@@ -1946,6 +1958,9 @@ uint32_t procfs_fd_ino(struct fd_entry *e)
     }
     if (pf->origin_file == SYNTH_PROC_SWAPS) {
         return PROCFS_INO_SWAPS;
+    }
+    if (pf->origin_file == SYNTH_PROC_LOCKS) {
+        return PROCFS_INO_LOCKS;
     }
     if (pf->origin_file == SYNTH_PROC_SYSCTL) {
         return PROCFS_INO_SYS + (uint32_t)pf->origin_pid;
@@ -2646,6 +2661,87 @@ static void ap_num_width(struct procfs_text *t, int32_t v, int width, int octal)
     while (n > 0) {
         ap_ch(t, tmp[--n]);
     }
+}
+
+/** Append `v` as Linux's `%02x` writes it: lowercase, at least two digits. */
+static void ap_hex_two(struct procfs_text *t, uint32_t v)
+{
+    static const char digits[] = "0123456789abcdef";
+    int shift = 28;
+
+    while (shift > 4 && (v >> shift) == 0) {
+        shift -= 4;
+    }
+    for (; shift >= 0; shift -= 4) {
+        ap_ch(t, digits[(v >> shift) & 15u]);
+    }
+}
+
+/** Append the file of the lock key `key` as Linux's /proc/locks gives it,
+ * the major and minor numbers of its mount's device in hexadecimal and its
+ * inode number, which stat(2) reports for the file too. */
+static void ap_lock_file(struct procfs_text *t, const struct lock_key *key)
+{
+    char ino[24];
+    uint32_t dev = 0;
+    int i;
+
+    for (i = 0; key->mnt && i < vfs_mount_slots(); i++) {
+        if (vfs_mount_at(i) == key->mnt) {
+            dev = procfs_mount_dev(i, vfs_mount_at(i));
+        }
+    }
+    ap_hex_two(t, (dev >> 8) & 0xFFFu);
+    ap_ch(t, ':');
+    ap_hex_two(t, (dev & 0xFFu) | ((dev >> 12) & 0xFFF00u));
+    ap_ch(t, ':');
+    diskinfo_u64_dec(ino, (int)sizeof(ino), key->shown);
+    ap_str(t, ino);
+}
+
+/**
+ * Render /proc/locks, which util-linux's lslocks reads: a line for each lock
+ * held, the newest first, in Linux's columns. An open file description's
+ * record lock is OFDLCK with the process -1, a flock(2) lock covers the
+ * whole file, `0 EOF`, and a lock to the end of the file ends at EOF. The
+ * waits for a lock are not listed.
+ */
+static int procfs_gen_locks(struct procfs_text *t)
+{
+    static const char *const kind[] = {"POSIX  ADVISORY  ", "OFDLCK ADVISORY  ",
+                                       "FLOCK  ADVISORY  "};
+    struct lock_row *rows;
+    char num[24];
+    int n = lock_count();
+    int i;
+
+    rows = kmalloc(sizeof(*rows) * (size_t)(n ? n : 1));
+    if (!rows) {
+        return -ENOMEM;
+    }
+    n = lock_rows(rows, n);
+    for (i = 0; i < n; i++) {
+        ap_int(t, i + 1);
+        ap_str(t, ": ");
+        ap_str(t, kind[rows[i].kind]);
+        ap_str(t, rows[i].type == F_WRLCK ? "WRITE " : "READ  ");
+        ap_int(t, rows[i].pid);
+        ap_ch(t, ' ');
+        ap_lock_file(t, &rows[i].key);
+        diskinfo_u64_dec(num, (int)sizeof(num), rows[i].kind == LOCK_ROW_FLOCK ? 0 : rows[i].start);
+        ap_ch(t, ' ');
+        ap_str(t, num);
+        ap_ch(t, ' ');
+        if (rows[i].kind == LOCK_ROW_FLOCK || rows[i].end == LOCK_EOF) {
+            ap_str(t, "EOF\n");
+        } else {
+            diskinfo_u64_dec(num, (int)sizeof(num), rows[i].end);
+            ap_str(t, num);
+            ap_ch(t, '\n');
+        }
+    }
+    kfree(rows);
+    return t->nomem ? -ENOMEM : t->len;
 }
 
 /**
@@ -4983,13 +5079,14 @@ static int procfs_gen_fdinfo(struct procfs_text *t, int pid, int fd)
 static int procfs_needs_pid(int kind)
 {
     static const int global[] = {
-        VNODE_PROC_CMDLINE,    VNODE_PROC_DISK,     VNODE_PROC_NET_DEV,     VNODE_PROC_UPTIME,
-        VNODE_PROC_STAT_SYS,   VNODE_PROC_MEMINFO,  VNODE_PROC_CPUINFO,     VNODE_PROC_LOADAVG,
-        VNODE_PROC_DISKSTATS,  VNODE_PROC_VERSION,  VNODE_PROC_PARTITIONS,  VNODE_PROC_VMSTAT,
-        VNODE_PROC_SLABINFO,   VNODE_PROC_SWAPS,    VNODE_PROC_SYS_FILE,    VNODE_PROC_MOUNTS,
-        VNODE_PROC_USB,        VNODE_PROC_AUDIO,    VNODE_PROC_FILESYSTEMS, VNODE_PROC_LOOP,
-        VNODE_PROC_INTERRUPTS, VNODE_PROC_CONSOLE,  VNODE_PROC_NET_ROUTE,   VNODE_PROC_NET_ARP,
-        VNODE_PROC_NET_TCP,    VNODE_PROC_NET_FILE, VNODE_SYS_FILE,         VNODE_PROC_SYSVIPC};
+        VNODE_PROC_CMDLINE,   VNODE_PROC_DISK,       VNODE_PROC_NET_DEV,    VNODE_PROC_UPTIME,
+        VNODE_PROC_STAT_SYS,  VNODE_PROC_MEMINFO,    VNODE_PROC_CPUINFO,    VNODE_PROC_LOADAVG,
+        VNODE_PROC_DISKSTATS, VNODE_PROC_VERSION,    VNODE_PROC_PARTITIONS, VNODE_PROC_VMSTAT,
+        VNODE_PROC_SLABINFO,  VNODE_PROC_SWAPS,      VNODE_PROC_LOCKS,      VNODE_PROC_SYS_FILE,
+        VNODE_PROC_MOUNTS,    VNODE_PROC_USB,        VNODE_PROC_AUDIO,      VNODE_PROC_FILESYSTEMS,
+        VNODE_PROC_LOOP,      VNODE_PROC_INTERRUPTS, VNODE_PROC_CONSOLE,    VNODE_PROC_NET_ROUTE,
+        VNODE_PROC_NET_ARP,   VNODE_PROC_NET_TCP,    VNODE_PROC_NET_FILE,   VNODE_SYS_FILE,
+        VNODE_PROC_SYSVIPC};
     uint32_t i;
 
     for (i = 0; i < sizeof(global) / sizeof(global[0]); i++) {
@@ -5105,6 +5202,8 @@ int procfs_open(const struct vpath *vp, int flags)
         len = procfs_gen_vmstat(&text);
     } else if (vp->kind == VNODE_PROC_SLABINFO) {
         len = procfs_gen_slabinfo(&text);
+    } else if (vp->kind == VNODE_PROC_LOCKS) {
+        len = procfs_gen_locks(&text);
     } else if (vp->kind == VNODE_PROC_SWAPS) {
         /* Linux's header, and no area under it, there being no swap. */
         ap_str(&text, "Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n");
@@ -5219,6 +5318,8 @@ int procfs_open(const struct vpath *vp, int flags)
         f->origin_file = SYNTH_PROC_SLABINFO;
     } else if (vp->kind == VNODE_PROC_SWAPS) {
         f->origin_file = SYNTH_PROC_SWAPS;
+    } else if (vp->kind == VNODE_PROC_LOCKS) {
+        f->origin_file = SYNTH_PROC_LOCKS;
     } else if (vp->kind == VNODE_PROC_SYS_FILE) {
         f->origin_file = SYNTH_PROC_SYSCTL;
     } else if (vp->kind == VNODE_PROC_MOUNTS) {

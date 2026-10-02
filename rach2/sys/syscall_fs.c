@@ -323,10 +323,12 @@ static int mnt_locks_by_node(const struct vfs_mount *mnt)
 static void fd_lock_key(const fd_entry_t *e, struct lock_key *key)
 {
     key->mnt = NULL;
+    key->shown = 0;
     if (e->ofd && e->ofd->vmnt) {
         key->mnt = vfs_mount_base(e->ofd->vmnt);
         key->ino =
             mnt_locks_by_node(e->ofd->vmnt) ? (uint64_t)(uintptr_t)e->ofd->vnode : e->ofd->ino;
+        key->shown = e->ofd->ino;
     } else if (e->dev) {
         key->ino = (uintptr_t)e->dev;
     } else if (e->priv) {
@@ -2028,6 +2030,7 @@ static int32_t synth_open(const struct vpath *vp, int flags)
     case VNODE_PROC_VMSTAT:
     case VNODE_PROC_SLABINFO:
     case VNODE_PROC_SWAPS:
+    case VNODE_PROC_LOCKS:
     case VNODE_PROC_SYS_FILE:
     case VNODE_PROC_MOUNTS:
     case VNODE_PROC_LOOP:
@@ -5660,6 +5663,8 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
         return synth_proc_stat(kst, procfs_ino_slabinfo());
     case VNODE_PROC_SWAPS:
         return synth_proc_stat(kst, procfs_ino_swaps());
+    case VNODE_PROC_LOCKS:
+        return synth_proc_stat(kst, procfs_ino_locks());
     case VNODE_PROC_SYS_FILE: {
         int32_t rc = synth_proc_stat(kst, procfs_ino_sys(vp->sysent));
 
@@ -11489,6 +11494,7 @@ static int synth_dirent_at(const struct synth_dir *sd, int n, char *name, uint64
                        {"vmstat", procfs_ino_vmstat, DT_REG},
                        {"slabinfo", procfs_ino_slabinfo, DT_REG},
                        {"swaps", procfs_ino_swaps, DT_REG},
+                       {"locks", procfs_ino_locks, DT_REG},
                        {"mounts", procfs_ino_mounts, DT_REG},
                        {"net", procfs_ino_netdir, DT_DIR},
                        {"sysvipc", procfs_ino_sysvipcdir, DT_DIR},

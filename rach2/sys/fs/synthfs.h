@@ -64,6 +64,7 @@ enum vnode_kind {
     VNODE_PROC_VMSTAT,       /* /proc/vmstat: the memory and paging counters */
     VNODE_PROC_SLABINFO,     /* /proc/slabinfo: the kernel heap's size classes */
     VNODE_PROC_SWAPS,        /* /proc/swaps: the swap areas, of which there are none */
+    VNODE_PROC_LOCKS,        /* /proc/locks: the advisory file locks held */
     VNODE_DEV_LINK,          /* /dev/log: a link to the syslog daemon's socket */
     VNODE_PROC_SYSVIPC_DIR,  /* /proc/sysvipc: the System V objects' directory */
     VNODE_PROC_SYSVIPC,      /* /proc/sysvipc/{shm,sem,msg}, by `procfile` */
@@ -139,6 +140,7 @@ const char *synth_ns_name(int kind);
 #define SYNTH_PROC_SETGROUPS   51
 #define SYNTH_PROC_SLABINFO    52
 #define SYNTH_PROC_SWAPS       53
+#define SYNTH_PROC_LOCKS       54
 
 /* PID sentinel meaning "the calling process" (/proc/self), resolved by the
  * glue. */

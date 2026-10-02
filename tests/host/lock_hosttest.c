@@ -78,10 +78,10 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     return 0;
 }
 
-static const struct lock_key file = {(const void *)0x1000, 42};
-static const struct lock_key other = {(const void *)0x1000, 43};
+static const struct lock_key file = {(const void *)0x1000, 42, 42};
+static const struct lock_key other = {(const void *)0x1000, 43, 43};
 /* Where `file` moves to in the rows of a move. */
-static const struct lock_key there = {(const void *)0x1000, 4242};
+static const struct lock_key there = {(const void *)0x1000, 4242, 4242};
 
 /** Run as process `pid`, with the table `table_of` names for it or its own. */
 static void be(uint32_t pid)

@@ -951,6 +951,7 @@ NO_PROC_INO(procfs_ino_partitions)
 NO_PROC_INO(procfs_ino_vmstat)
 NO_PROC_INO(procfs_ino_slabinfo)
 NO_PROC_INO(procfs_ino_swaps)
+NO_PROC_INO(procfs_ino_locks)
 NO_PROC_INO(procfs_ino_netstatdir)
 NO_PROC_INO(procfs_ino_sysvipcdir)
 

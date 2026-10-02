@@ -159,6 +159,37 @@ pswpin and pswpout, 0, since nothing is swapped.
 procps-ng's
 .Xr vmstat 8
 reads it, and takes a counter it does not find as 0.
+.It Pa /proc/locks
+A line for each advisory lock held, the newest first, in Linux's form:
+.Bd -literal -offset indent
+1: POSIX  ADVISORY  WRITE PID MAJ:MIN:INODE START END
+.Ed
+.Pp
+The kind is
+.Ql POSIX
+for a record lock of
+.Xr fcntl 2 ,
+.Ql OFDLCK
+for an open file description's, whose PID is \-1, and
+.Ql FLOCK
+for a lock of
+.Xr flock 2 ,
+whose range is
+.Ql 0 EOF .
+The type is
+.Ql WRITE
+or
+.Ql READ ;
+MAJ and MIN are the device numbers of the file's mount in hexadecimal and
+INODE its inode number, as
+.Xr stat 2
+gives them; END is
+.Ql EOF
+for a lock to the end of the file.
+A wait for a lock has no line.
+util-linux's
+.Xr lslocks 8
+reads it.
 .It Pa /proc/swaps
 Linux's header line and no line under it, since the kernel swaps nothing
 and has no

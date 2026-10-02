@@ -29,10 +29,13 @@
  * a KRFFS node being the file's place, which `lock_repoint` follows when a
  * write moves the file; any other file has its inode number at the open. A
  * descriptor that is not open on a file of a mounted type has the object it
- * is open on in `ino` and no mount. */
+ * is open on in `ino` and no mount. `shown` is the inode number /proc/locks
+ * gives, the one the description recorded at the open, or 0 for no file; it
+ * takes no part in matching keys. */
 struct lock_key {
     const void *mnt;
     uint64_t ino;
+    uint64_t shown;
 };
 
 /* The range sentinel of a lock that runs to the end of the file, however
@@ -85,6 +88,30 @@ int32_t lock_flock(const struct lock_key *key, struct open_file *ofd, int op);
 
 /** Whether any lock exists: a close has nothing to drop when none does. */
 int lock_any(void);
+
+/* A lock as /proc/locks shows it: its kind, LOCK_ROW_POSIX, LOCK_ROW_OFD or
+ * LOCK_ROW_FLOCK; its type, F_RDLCK or F_WRLCK; the process that took it, -1
+ * for an open file description's record lock, as Linux shows one; its file;
+ * and its range, `end` LOCK_EOF to the end of the file. */
+struct lock_row {
+    int kind;
+    int type;
+    int32_t pid;
+    struct lock_key key;
+    uint64_t start;
+    uint64_t end;
+};
+
+#define LOCK_ROW_POSIX 0
+#define LOCK_ROW_OFD   1
+#define LOCK_ROW_FLOCK 2
+
+/** The number of locks held. */
+int lock_count(void);
+
+/** Copy at most `max` of the locks held into `rows`, the newest first, as
+ * Linux lists them, and return how many were copied. */
+int lock_rows(struct lock_row *rows, int max);
 
 /** Drop the record locks the calling thread's descriptor table has on `key`:
  * a descriptor of the file in that table was closed. */

@@ -28,7 +28,10 @@
  * through the close of one of its two descriptors, as another open's
  * LOCK_EX|LOCK_NB finds, and goes at the last close. An open file
  * description lock conflicts with a second open in the same process, and
- * with that process's POSIX lock.
+ * with that process's POSIX lock. /proc/locks lists a flock lock, a POSIX
+ * read lock and an open file description's lock in Linux's columns, with
+ * the file's device and inode number as stat gives them, and none of them
+ * once the descriptors are closed.
  *
  * Prints "LOCKMUSL OK" on success and "LOCKMUSL FAIL (detail)" otherwise.
  */
@@ -44,6 +47,7 @@
 #include <string.h>
 #include <sys/file.h>
 #include <sys/stat.h>
+#include <sys/sysmacros.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -865,6 +869,66 @@ static int flocks(void)
     return 0;
 }
 
+/* Whether `text`, /proc/locks, has the line of a lock that begins with `head`,
+   was taken by `pid` on the file of `st` and covers `range`. */
+static int listed(const char *text, const char *head, long pid, const struct stat *st,
+                  const char *range)
+{
+    char want[128];
+
+    snprintf(want, sizeof(want), "%s%ld %02x:%02x:%lu %s\n", head, pid, major(st->st_dev),
+             minor(st->st_dev), (unsigned long)st->st_ino, range);
+    return strstr(text, want) != NULL;
+}
+
+static int read_locks(char *buf, int cap)
+{
+    int fd = open("/proc/locks", O_RDONLY);
+    int n = fd < 0 ? -1 : (int)read(fd, buf, (size_t)cap - 1);
+
+    if (fd >= 0) {
+        close(fd);
+    }
+    if (n >= 0) {
+        buf[n] = '\0';
+    }
+    return n;
+}
+
+static int proc_locks(void)
+{
+    static char text[8192];
+    char ino[32];
+    int a = open(LOCK_PATH, O_RDWR);
+    int b = open(LOCK_PATH, O_RDWR);
+    int c = open(LOCK_PATH, O_RDWR);
+    struct flock fl;
+    struct stat st;
+
+    memset(&fl, 0, sizeof(fl));
+    fl.l_type = F_WRLCK;
+    fl.l_whence = SEEK_SET;
+    fl.l_start = 20;
+    if (a < 0 || b < 0 || c < 0 || fstat(a, &st) != 0 || flock(a, LOCK_EX) != 0 ||
+        lk(b, F_SETLK, F_RDLCK, 5, 10) != 0 || fcntl(c, F_OFD_SETLK, &fl) != 0) {
+        return fail("the locks /proc/locks lists");
+    }
+    if (read_locks(text, (int)sizeof(text)) < 0 ||
+        !listed(text, "FLOCK  ADVISORY  WRITE ", (long)getpid(), &st, "0 EOF") ||
+        !listed(text, "POSIX  ADVISORY  READ  ", (long)getpid(), &st, "5 14") ||
+        !listed(text, "OFDLCK ADVISORY  WRITE ", -1L, &st, "20 EOF")) {
+        return fail("/proc/locks lacks a flock, a POSIX or an OFD lock in Linux's columns");
+    }
+    close(a);
+    close(b);
+    close(c);
+    snprintf(ino, sizeof(ino), ":%lu ", (unsigned long)st.st_ino);
+    if (read_locks(text, (int)sizeof(text)) < 0 || strstr(text, ino)) {
+        return fail("/proc/locks lists a lock after its descriptors are closed");
+    }
+    return 0;
+}
+
 int main(void)
 {
     char block[100];
@@ -879,7 +943,7 @@ int main(void)
         return fail("the directory of the rows about which file a lock is on");
     }
     if (records(fd) || largest(fd) || waits(fd) || closed_wait() || shared_table(fd) ||
-        which_file() || flocks()) {
+        which_file() || flocks() || proc_locks()) {
         return 1;
     }
     close(fd);
