@@ -473,11 +473,17 @@ row_lsof() {
 }
 
 # tmux runs a command in a detached session, and the pane shows what it
-# printed.
+# printed; a window's login shell starts in the directory the window names,
+# which /etc/profile leaves as it is.
 row_tmux() {
     runs "tmux new-session" tmux new-session -d -s row -x 80 -y 24 'echo tmux row; sleep 30'
     sleep 1
     has "the pane" "$(tmux capture-pane -p -t row)" "tmux row"
+    runs "tmux new-window" tmux new-window -t row -n here -c "$WORK"
+    sleep 1
+    tmux send-keys -t row:here pwd Enter
+    sleep 1
+    has "a window's directory" "$(tmux capture-pane -p -t row:here)" "$WORK"
     runs "tmux kill-server" tmux kill-server
 }
 

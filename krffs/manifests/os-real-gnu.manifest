@@ -26,6 +26,9 @@
 #   and a session on a terminal other than the console the C.UTF-8 locale;
 #   and it gives the user a D-Bus session bus, which the browser asks for,
 #   at ~/.dbus/session_bus_socket, starting one where none answers there.
+#   It leaves the directory as it is: login, su - and sshd start a session
+#   in the home directory, and a login shell started elsewhere, as tmux
+#   starts each window's, stays where it was started.
 # * /etc/hosts is a machine's, as the metal disk has it, since this root is
 #   installed on the Lenovo; QEMU's gateway and resolver are reached by
 #   address.
@@ -108,7 +111,7 @@ text 0644 /etc/rach2/limits # The limits every session starts with: a name, the 
 # exported so that a shell started from the login shell has it. The console
 # draws ASCII alone, so only a session on another terminal, over SSH, gets
 # the UTF-8 locale that glibc builds in.
-text 0644 /etc/profile export PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin\nexport HOME="${HOME:-/root}"\nexport PS1='\u@\h:\w\$ '\ncase "$TERM" in rach2|linux|dumb|'') ;; *) export LANG=C.UTF-8 ;; esac\nif [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ] && [ -x /usr/bin/dbus-daemon ]; then\n    export DBUS_SESSION_BUS_ADDRESS="unix:path=$HOME/.dbus/session_bus_socket"\n    dbus-send --session --dest=org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus.GetId 2>/dev/null ||\n        { mkdir -p "$HOME/.dbus" && chmod 700 "$HOME/.dbus" &&\n          dbus-daemon --session --address="$DBUS_SESSION_BUS_ADDRESS" --fork --nopidfile >/dev/null 2>&1; }\nfi\ncd "$HOME"\n
+text 0644 /etc/profile export PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin\nexport HOME="${HOME:-/root}"\nexport PS1='\u@\h:\w\$ '\ncase "$TERM" in rach2|linux|dumb|'') ;; *) export LANG=C.UTF-8 ;; esac\nif [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ] && [ -x /usr/bin/dbus-daemon ]; then\n    export DBUS_SESSION_BUS_ADDRESS="unix:path=$HOME/.dbus/session_bus_socket"\n    dbus-send --session --dest=org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus.GetId 2>/dev/null ||\n        { mkdir -p "$HOME/.dbus" && chmod 700 "$HOME/.dbus" &&\n          dbus-daemon --session --address="$DBUS_SESSION_BUS_ADDRESS" --fork --nopidfile >/dev/null 2>&1; }\nfi\n
 text 0644 /etc/resolv.conf nameserver 10.0.2.3\n
 text 0644 /etc/hosts 127.0.0.1   localhost\n127.0.1.1   rach2\n
 # Where glibc looks up accounts and names: the files in /etc, then DNS for
