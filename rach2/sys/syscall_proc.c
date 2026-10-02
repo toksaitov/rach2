@@ -5125,8 +5125,10 @@ int32_t sys_getgroups(isr_params_t *params)
     return (int32_t)p->ngroups;
 }
 
-/* The resources: five are kept in the record and enforced, and the rest
+/* The resources: six are kept in the record and enforced, and the rest
  * are unlimited. */
+#define RLIMIT_FSIZE_RES 1
+
 #define RLIMIT_STACK_RES 3
 
 #define RLIMIT_CORE_RES 4
@@ -5153,6 +5155,8 @@ static int rlimit_slot(uint32_t resource)
         return RLIM_STACK;
     case RLIMIT_CORE_RES:
         return RLIM_CORE;
+    case RLIMIT_FSIZE_RES:
+        return RLIM_FSIZE;
     default:
         return -1;
     }

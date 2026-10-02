@@ -54,7 +54,7 @@ If
 is non-null, it receives the values from before the attempted change.
 Either or both pointers may be null.
 .Pp
-Five resources are stored and enforced:
+Six resources are stored and enforced:
 .Bl -tag -width RLIMIT_NOFILE
 .It Dv RLIMIT_NPROC
 The number of threads with the same real user ID across the machine, as
@@ -111,6 +111,21 @@ The bytes of a core file, holes excepted; a soft limit below a page
 leaves none, as
 .Xr core 5
 describes.
+.It Dv RLIMIT_FSIZE
+The bytes a regular file may reach through
+.Xr write 2 ,
+.Xr pwrite64 2 ,
+.Xr writev 2 ,
+.Xr truncate 2
+and
+.Xr ftruncate 2 :
+a write that would pass the limit writes what fits below it, and a write
+that starts at it, or a truncation past it, fails with
+.Er EFBIG
+and sends the calling thread
+.Dv SIGXFSZ ,
+which ends the process with a core file unless it is caught or ignored,
+as on Linux.
 .El
 .Pp
 For these resources the soft limit must not exceed the hard limit.
@@ -119,14 +134,14 @@ ID 0 may raise a hard limit.
 Fork inherits both values and exec preserves them.
 The kernel's initial soft and hard limits are 4096 processes,
 1024 descriptors, and unlimited address space; the stack's are 8 MiB
-soft and unlimited hard, and the core file's 0 soft and unlimited hard,
-which are Linux's.
+soft and unlimited hard, the core file's 0 soft and unlimited hard, and a
+file's size unlimited, which are Linux's.
 Init may replace these defaults as described in
 .Xr limits 7 .
 .Pp
 Every other resource number, including an unknown number, reports
 unlimited values.
-Setting any resource other than the five stored resources succeeds
+Setting any resource other than the six stored resources succeeds
 without changing anything, even if its soft value exceeds its hard value.
 .Pp
 Linux measures each growth of the stack against the limit in force when

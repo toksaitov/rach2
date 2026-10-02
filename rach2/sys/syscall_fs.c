@@ -543,6 +543,27 @@ static int32_t write_ops(fd_entry_t *entry, const char __user *buf, uint32_t cou
 }
 
 /**
+ * Whether the caller's RLIMIT_FSIZE lets a file reach `end` bytes: 0, or
+ * -EFBIG with SIGXFSZ sent to the calling thread, as Linux answers a write
+ * that starts at the limit and a truncation past it.
+ */
+static int32_t fsize_refused(uint64_t end)
+{
+    uint32_t limit = current_proc->rlim[RLIM_FSIZE].cur;
+    struct k_siginfo info;
+
+    if (limit == RLIM_INFINITY32 || end <= limit) {
+        return 0;
+    }
+    k_memset(&info, 0, sizeof(info));
+    info.code = SI_USER;
+    info.pid = current_proc->tgid;
+    info.uid = current_proc->ruid;
+    signal_post_thread(current_proc, SIGXFSZ, &info);
+    return -EFBIG;
+}
+
+/**
  * Write `count` bytes of user buffer `buf` to the file of a mounted type or
  * of the KRFFS root that `entry` is open on: at the description's offset,
  * which moves past what was written, or at `*at` for pwrite64, which leaves
@@ -563,7 +584,9 @@ static int32_t write_ops(fd_entry_t *entry, const char __user *buf, uint32_t cou
  * /bin/su by rewriting it. A file whose pages shared mappings hold in memory
  * has the bytes written copied into them under the mount's namespace lock,
  * held from before the write, so that no write-back of the pages comes
- * between the two (`filemap_file_written`).
+ * between the two (`filemap_file_written`). Under RLIMIT_FSIZE a write that
+ * would pass the limit writes what fits, and one that starts at it fails
+ * (`fsize_refused`).
  */
 static int32_t file_write(fd_entry_t *entry, const char __user *buf, uint32_t count,
                           const uint64_t *at)
@@ -597,6 +620,14 @@ static int32_t file_write(fd_entry_t *entry, const char __user *buf, uint32_t co
         if (vfs_getattr(ofd->vmnt, ofd->vnode, &vst) == 0) {
             pos = vst.size;
         }
+    }
+    if (count > 0 && fsize_refused(pos + 1) != 0) {
+        fd_ofd_unlock(ofd);
+        return -EFBIG;
+    }
+    if (current_proc->rlim[RLIM_FSIZE].cur != RLIM_INFINITY32 &&
+        (uint64_t)count > current_proc->rlim[RLIM_FSIZE].cur - pos) {
+        count = (uint32_t)(current_proc->rlim[RLIM_FSIZE].cur - pos);
     }
     mapped = filemap_disk_mapped(ofd->vmnt, ofd->ino);
     if (mapped) {
@@ -786,6 +817,9 @@ static int32_t truncate_fd(int fd, uint64_t length)
     }
     if (!entry->ofd || !entry->ofd->vmnt) {
         return -EBADF;
+    }
+    if (fsize_refused(length) != 0) {
+        return -EFBIG;
     }
     /* Before the description is locked: a return from under that lock is a
      * description nobody can use again. */
@@ -7905,6 +7939,9 @@ static int32_t truncate_path(const char *path, long long length, int dir)
     struct open_file *desc = NULL;
     int32_t rc;
 
+    if (length >= 0 && fsize_refused((uint64_t)length) != 0) {
+        return -EFBIG;
+    }
     rc = resolve_named(path_name(path), VFS_WALK_LOCK, dir, &ref);
     if (rc != 0) {
         return rc;

@@ -20,7 +20,9 @@
  * limits OpenSSH's rlimit sandbox sets, none for the files it may grow, the
  * descriptors it may open and the processes it may fork, still selects and
  * polls a descriptor it opened before, as the test of that sandbox in
- * OpenSSH's configure requires.
+ * OpenSSH's configure requires. A child with a file limit of 4096 bytes has
+ * a write of 8192 cut to 4096, and the next write and a truncation past the
+ * limit refused with `EFBIG`.
  *
  * Needs: root privilege, readable /hello, this binary at /limitprobe, and
  * only descriptors 0, 1 and 2 open. Start with RLIMIT_NOFILE at 1024/1024,
@@ -50,6 +52,9 @@ typedef unsigned int size_t;
 #define SYS_PRLIMIT64 340
 #define SYS_NEWSELECT 142
 #define SYS_POLL      168
+#define SYS_SIGNAL    48
+#define SYS_FTRUNCATE 93
+#define SYS_UNLINK    10
 
 #define RLIMIT_FSIZE  1
 #define RLIMIT_NPROC  6
@@ -62,8 +67,15 @@ typedef unsigned int size_t;
 #define EINVAL 22
 #define EMFILE 24
 #define EBADF  9
+#define EFBIG  27
 
 #define O_RDONLY 0
+#define O_WRONLY 01
+#define O_CREAT  0100
+#define O_TRUNC  01000
+
+#define SIGXFSZ 25
+#define SIG_IGN 1
 
 struct rlimit64 {
     unsigned cur_lo, cur_hi, max_lo, max_hi;
@@ -272,6 +284,29 @@ static int body_sandbox(void)
     return 0;
 }
 
+/* A file of at most 4096 bytes: a write of 8192 writes 4096, the next one
+   and a truncation to 8192 are EFBIG, and SIGXFSZ, ignored here, would
+   otherwise have ended the child. */
+static int body_fsize(void)
+{
+    static char block[8192];
+    int fd, wrote, again, cut;
+
+    if (set_limit(RLIMIT_FSIZE, 4096, 4096) != 0 || syscall2(SYS_SIGNAL, SIGXFSZ, SIG_IGN) < 0) {
+        return 2;
+    }
+    fd = syscall3(SYS_OPEN, (int)(size_t)"/tmp/limitprobe.f", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) {
+        return 3;
+    }
+    wrote = syscall3(SYS_WRITE, fd, (int)(size_t)block, (int)sizeof(block));
+    again = syscall3(SYS_WRITE, fd, (int)(size_t)block, 1);
+    cut = syscall2(SYS_FTRUNCATE, fd, 8192);
+    syscall1(SYS_CLOSE, fd);
+    syscall1(SYS_UNLINK, (int)(size_t)"/tmp/limitprobe.f");
+    return wrote == 4096 && again == -EFBIG && cut == -EFBIG ? 0 : 4;
+}
+
 /* Eight megabytes of address space: a mapping of sixteen is refused, one of
    one is not, and the break does not move past the limit. */
 static int body_as(void)
@@ -434,6 +469,7 @@ void probe_main(unsigned int *sp)
     child_must(body_as, 0, "eight megabytes: a larger mapping is ENOMEM and the break stays");
     child_must(body_hard, 0, "the hard limit: a user lowers, root raises");
     child_must(body_sandbox, 0, "select and poll under the limits of 0 of OpenSSH's sandbox");
+    child_must(body_fsize, 0, "a file limit of 4096: a write is cut to it and the next is EFBIG");
     if (set_limit(RLIMIT_NOFILE, 200, 200) != 0) {
         fail("setting the limit a child inherits");
     }

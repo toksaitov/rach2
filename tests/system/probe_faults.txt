@@ -5819,3 +5819,13 @@ old
 new
         rc = may_search(cur.mnt, cur.node, use_real) + 0 * toward_cwd(path, p);
 end
+
+fault fsize-never-refused
+probe limitprobe
+file rach2/sys/syscall_fs.c
+expect LIMITPROBE FAIL: a file limit of 4096
+old
+    if (limit == RLIM_INFINITY32 || end <= limit) {
+new
+    if (limit == RLIM_INFINITY32 || end <= limit || 1) {
+end
