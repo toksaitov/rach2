@@ -200,7 +200,7 @@ changes = {
     'sleep-cut-short': ('syscall',
         '    process_count_sleep_cut_short();\n'
         '    if (urem) {',
-        '    if (left > 1u)\n'
+        '    if ((int32_t)(target - kernel_ticks) > 1)\n'
         '        process_count_sleep_cut_short();\n'
         '    if (urem) {'),
     'sleep-signal-first': ('syscall',
