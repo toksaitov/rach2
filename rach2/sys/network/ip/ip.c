@@ -168,7 +168,7 @@ void ip_rx(const uint8_t *data, uint16_t len, int from_loopback)
     switch (proto) {
     case IP_PROTO_ICMP:
         net_mib.ip_in_delivers++;
-        icmp_rx(src_ip, dst_ip, data + hdr_len, (uint16_t)(total_len - hdr_len));
+        icmp_rx(src_ip, dst_ip, data[8], data + hdr_len, (uint16_t)(total_len - hdr_len));
         break;
     case IP_PROTO_UDP:
         net_mib.ip_in_delivers++;

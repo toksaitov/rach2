@@ -22,8 +22,9 @@
 #define ICMP_PORT_UNREACH 3
 #define ICMP_FRAG_NEEDED  4
 
-/** Handle one received ICMP datagram (IP header already stripped). */
-void icmp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len);
+/** Handle one received ICMP datagram, whose IP header gave it `ttl` and is
+ * already stripped. */
+void icmp_rx(uint32_t src_ip, uint32_t dst_ip, uint8_t ttl, const uint8_t *data, uint16_t len);
 
 /** Count an ICMP message of type `type` sent, here or by a raw socket, in
  * `net_mib`. */
@@ -44,7 +45,8 @@ int icmp_ping(uint32_t dst_ip);
 
 /** `icmp_ping` with `size` bytes of data after the header, at most
  * `ICMP_PING_DATA_MAX`, and the hop limit `ttl`; the reply's ICMP length
- * goes to `*got` unless `got` is NULL. */
-int icmp_ping_data(uint32_t dst_ip, uint32_t size, uint8_t ttl, uint16_t *got);
+ * goes to `*got` and the hop limit it arrived with to `*got_ttl`, unless
+ * `got` is NULL. */
+int icmp_ping_data(uint32_t dst_ip, uint32_t size, uint8_t ttl, uint16_t *got, uint8_t *got_ttl);
 
 #endif /* _ICMP_H_ */

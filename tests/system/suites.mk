@@ -788,13 +788,16 @@ raw-stack: raw-card
 	    "send=/bin/ping -c 1 10.0.2.2 > /dev/null; traceroute -n -q 1 -m 2 8.8.8.8" \
 	    "expect= 1  10.0.2.2" "send=echo TRACE\"\"DONE" "expect=TRACEDONE"
 	# The in-house ping is still the one an ordinary account runs: busybox's needs
-	# a raw socket, which is root's, and is not built for that reason.
+	# a raw socket, which is root's, and is not built for that reason. Its reply
+	# line has the hop limit the reply arrived with, 255 from the emulator's
+	# gateway, which answers with the most there is.
 	$(HARNESS) $(NIC_DEV) --kernel $(BOOT_KERNEL) \
 	    --initrd $(OS_REAL_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --timeout 300 --steptmo 90 --ok "USERPINGOK" \
 	    "expect=rach2 login:" "send=test" "expect=Password:" \
 	    "send=`cat krffs/rach2_test_password`" "expect=[$$] " \
-	    "send=/bin/ping -c 1 10.0.2.2 && echo USERPING\"\"OK" "expect=USERPINGOK"
+	    "send=/bin/ping -c 1 10.0.2.2 && echo USERPING\"\"OK" "expect=icmp_seq=1 ttl=255 time=" \
+	    "expect=USERPINGOK"
 endif
 .PHONY: raw-card raw-stack
 # `tests/run netif`: the interface ioctls, which is how a program sets this

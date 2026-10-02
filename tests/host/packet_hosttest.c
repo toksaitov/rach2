@@ -67,8 +67,9 @@ void packet_rx(struct netdev *nd, uint16_t etype, const uint8_t *data, uint16_t 
     to_packet++;
 }
 
-void icmp_rx(uint32_t src, uint32_t dst, const uint8_t *data, uint16_t len)
+void icmp_rx(uint32_t src, uint32_t dst, uint8_t ttl, const uint8_t *data, uint16_t len)
 {
+    (void)ttl;
     (void)dst;
     (void)src;
     (void)data;

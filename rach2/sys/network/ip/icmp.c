@@ -78,6 +78,7 @@ static uint32_t icmp_error_last;
 static volatile int ping_active = 0;
 static volatile int ping_replied = 0;
 static volatile uint16_t ping_reply_len; /* the ICMP bytes of the reply */
+static volatile uint8_t ping_reply_ttl;  /* the hop limit it arrived with */
 static volatile uint16_t ping_seq_wait = 0;
 static volatile uint32_t ping_peer_ip = 0;
 static volatile uint32_t ping_deadline = 0;
@@ -207,9 +208,10 @@ void icmp_unreachable(const uint8_t *dgram, uint16_t len, uint8_t code)
  * `icmp_too_big`.
  *
  * @param src_ip source address of the datagram, host byte order.
+ * @param ttl the hop limit the datagram arrived with, which a ping reports.
  * @param len ICMP length; datagrams shorter than the 8-byte header are dropped.
  */
-void icmp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len)
+void icmp_rx(uint32_t src_ip, uint32_t dst_ip, uint8_t ttl, const uint8_t *data, uint16_t len)
 {
     net_mib.icmp_in_msgs++;
     if (len < 8) {
@@ -244,6 +246,7 @@ void icmp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len
         net_mib.icmp_in_echo_reps++;
         if (ping_active && src_ip == ping_peer_ip && id == ICMP_PING_ID && seq == ping_seq_wait) {
             ping_reply_len = len;
+            ping_reply_ttl = ttl;
             ping_replied = 1;
             if (ping_wq_ready) {
                 wq_wake_all(&ping_wq);
@@ -307,12 +310,13 @@ static void ping_release(void)
  * The request carries `size` bytes of data, each its own offset in the data
  * modulo 256, as iputils fills them, and leaves with the hop limit `ttl`.
  * The reply's ICMP length, which a peer may make shorter or longer than the
- * request, goes to `*got` when `got` is not NULL.
+ * request, goes to `*got`, and the hop limit it arrived with to `*got_ttl`,
+ * when `got` is not NULL.
  *
  * @return round-trip time in ticks, `-ETIMEDOUT` if every attempt expired,
  *         `-EBUSY` if another ping has the slot, or `-EINTR` on a signal.
  */
-int icmp_ping_data(uint32_t dst_ip, uint32_t size, uint8_t ttl, uint16_t *got)
+int icmp_ping_data(uint32_t dst_ip, uint32_t size, uint8_t ttl, uint16_t *got, uint8_t *got_ttl)
 {
     uint32_t start, flags, i;
     uint16_t seq;
@@ -390,6 +394,7 @@ int icmp_ping_data(uint32_t dst_ip, uint32_t size, uint8_t ttl, uint16_t *got)
             rc = (int)(kernel_ticks - start);
             if (got) {
                 *got = ping_reply_len;
+                *got_ttl = ping_reply_ttl;
             }
             ping_release();
 
@@ -405,5 +410,5 @@ int icmp_ping_data(uint32_t dst_ip, uint32_t size, uint8_t ttl, uint16_t *got)
 
 int icmp_ping(uint32_t dst_ip)
 {
-    return icmp_ping_data(dst_ip, 0, IP_TTL_DEFAULT, 0);
+    return icmp_ping_data(dst_ip, 0, IP_TTL_DEFAULT, 0, 0);
 }

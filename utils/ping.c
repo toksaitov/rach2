@@ -10,7 +10,9 @@
  * libc wrapper, so it is issued through a direct `socketcall(2)`. The kernel
  * sends an echo of `-s` bytes of data, 56 unless asked, with the hop limit of
  * `-t`, 64 unless asked, and sleeps the caller until the reply, for up to four
- * attempts of a second each; a signal ends the wait. So the round trip is
+ * attempts of a second each; a signal ends the wait. It returns the reply's
+ * ICMP length in the low 16 bits and the hop limit the reply arrived with
+ * above them. So the round trip is
  * timed here, on the monotonic clock, and the timeout of `-W` and the deadline
  * of `-w` are an interval timer whose signal ends the wait. Requests go one a
  * second, or one an interval, until the count is sent, the deadline passes or
@@ -207,10 +209,11 @@ static int parse(int argc, char **argv, struct options *o)
 /**
  * Send one request to `ip` and wait at most `wait` microseconds, or the
  * kernel's own time with `wait` 0, for its reply, whose ICMP length goes to
- * `*len`; the round trip in microseconds, or -errno: -EINTR for an interrupt
- * or the wait's end.
+ * `*len` and hop limit to `*ttl`; the round trip in microseconds, or -errno:
+ * -EINTR for an interrupt or the wait's end.
  */
-static long long ping_once(unsigned int ip, const struct options *o, long long wait, long *len)
+static long long ping_once(unsigned int ip, const struct options *o, long long wait, long *len,
+                           int *ttl)
 {
     unsigned int args[3];
     long long t0, rtt;
@@ -223,7 +226,8 @@ static long long ping_once(unsigned int ip, const struct options *o, long long w
     t0 = now_us();
     rtt = syscall(SYS_socketcall, SC_PING_DATA, args);
     if (rtt >= 0) {
-        *len = (long)rtt;
+        *len = (long)(rtt & 0xFFFF);
+        *ttl = (int)((rtt >> 16) & 0xFF);
         rtt = now_us() - t0;
     } else {
         rtt = -errno;
@@ -233,8 +237,9 @@ static long long ping_once(unsigned int ip, const struct options *o, long long w
 }
 
 /** Count the round trip `rtt` in `t`, and print its line, of a reply of
- * `size` ICMP bytes, unless `quiet`. */
-static void count_reply(struct tally *t, unsigned int ip, long long rtt, long size, int quiet)
+ * `size` ICMP bytes that arrived with the hop limit `ttl`, unless `quiet`. */
+static void count_reply(struct tally *t, unsigned int ip, long long rtt, long size, int ttl,
+                        int quiet)
 {
     t->received++;
     t->sum += rtt;
@@ -246,8 +251,8 @@ static void count_reply(struct tally *t, unsigned int ip, long long rtt, long si
         t->max = rtt;
     }
     if (!quiet) {
-        printf("%ld bytes from %u.%u.%u.%u: icmp_seq=%ld time=", size, (ip >> 24) & 0xFF,
-               (ip >> 16) & 0xFF, (ip >> 8) & 0xFF, ip & 0xFF, t->sent);
+        printf("%ld bytes from %u.%u.%u.%u: icmp_seq=%ld ttl=%d time=", size, (ip >> 24) & 0xFF,
+               (ip >> 16) & 0xFF, (ip >> 8) & 0xFF, ip & 0xFF, t->sent, ttl);
         print_ms(rtt);
         puts(" ms");
         fflush(stdout);
@@ -275,6 +280,7 @@ static int run(unsigned int ip, const struct options *o, struct tally *t, long l
 {
     long long rtt, wait, left, t0;
     long len = 0;
+    int ttl = 0;
 
     while (!interrupted && (o->count < 0 || t->sent < o->count)) {
         left = o->deadline ? o->deadline - (now_us() - start) : 0;
@@ -286,7 +292,7 @@ static int run(unsigned int ip, const struct options *o, struct tally *t, long l
             wait = left;
         }
         t0 = now_us();
-        rtt = ping_once(ip, o, wait, &len);
+        rtt = ping_once(ip, o, wait, &len, &ttl);
         if (rtt == -EBUSY) {
             fputs("ping: another ping is in flight on this machine\n", stderr);
             return 1;
@@ -296,7 +302,7 @@ static int run(unsigned int ip, const struct options *o, struct tally *t, long l
         }
         t->sent++;
         if (rtt >= 0) {
-            count_reply(t, ip, rtt, len, o->quiet);
+            count_reply(t, ip, rtt, len, ttl, o->quiet);
         }
         if (o->count >= 0 && t->sent >= o->count) {
             break;

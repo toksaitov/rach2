@@ -1,4 +1,4 @@
-.Dd October 1, 2026
+.Dd October 3, 2026
 .Dt PING 1
 .Os
 .Sh NAME
@@ -18,7 +18,10 @@
 .Nm
 sends ICMP echo requests to
 .Ar host ,
-one a second, and prints each reply's round-trip time, until
+one a second, and prints each reply's line, with its size, its sequence
+number, the hop limit it arrived with as
+.Ql ttl=
+and its round-trip time, until
 .Ar count
 requests are sent, the deadline passes, or an interrupt comes; it then
 prints the statistics, in the form Linux's iputils
