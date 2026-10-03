@@ -6,19 +6,22 @@ repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../../.." && pwd)
 cd "$repo"
 # shellcheck source=tools/setup/e2fsprogs_path.sh
 . "$repo/tools/setup/e2fsprogs_path.sh"
-kernel=${1:-build/rach2/kernel}
+# The build tree of the architecture tests/system/suites.mk names, whose
+# BusyBox and bootctl the root is made of.
+ARCH_BUILD=${ARCH_BUILD:-build}
+kernel=${1:-$ARCH_BUILD/rach2/kernel}
 harness=${2:-build/tests/system/harness}
-work=${3:-build/images/metal-installed}
-mkdir -p build/images "$work"
+work=${3:-$ARCH_BUILD/images/metal-installed}
+mkdir -p "$ARCH_BUILD/images" "$work"
 work=$(CDPATH='' cd -- "$work" && pwd)
 echo "metal-installed: logs: $work"
 tree="$work/tree"
 rm -rf "$tree"
 mkdir -p "$tree/bin" "$tree/root" "$tree/tmp"
 chmod 1777 "$tree/tmp"
-cp build/vendor/busybox/busybox "$tree/bin/busybox"
-cp build/vendor/busybox/busybox "$tree/bin/sh"
-cp build/utils/sbin/bootctl "$tree/bin/bootctl"
+cp "$ARCH_BUILD/vendor/busybox/busybox" "$tree/bin/busybox"
+cp "$ARCH_BUILD/vendor/busybox/busybox" "$tree/bin/sh"
+cp "$ARCH_BUILD/utils/sbin/bootctl" "$tree/bin/bootctl"
 
 cat > "$tree/rows.sh" <<'ROWS'
 #!/bin/sh
@@ -68,7 +71,7 @@ E2FSPROGS_FAKE_TIME=1 mke2fs -q -F -t ext2 -b 4096 -I 128 -O "$profile" \
 e2fsck -fn "$volume" > "$work/fsck.log" 2>&1
 rm -f "$work/bootctl.staged" "$work/rows.staged"
 debugfs -R "dump /bin/bootctl $work/bootctl.staged" "$volume" > "$work/staged.log" 2>&1
-cmp build/utils/sbin/bootctl "$work/bootctl.staged"
+cmp "$ARCH_BUILD/utils/sbin/bootctl" "$work/bootctl.staged"
 debugfs -R "dump /rows.sh $work/rows.staged" "$volume" >> "$work/staged.log" 2>&1
 cmp "$tree/rows.sh" "$work/rows.staged"
 cksum "$kernel" "$work/bootctl.staged" "$work/rows.staged" > "$work/artifacts"
