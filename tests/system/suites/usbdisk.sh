@@ -301,8 +301,8 @@ fi
 # The stick's size is the image's: the ISO half grows with the kernel, and
 # the machine must name the whole of what it booted from.
 STICK_SECTORS=$(($(wc -c < "$DIR/stick-boot.img") / 512))
-if grep -aq "usbdisk: disk0: mbr: $((STICK_SECTORS / 2048)) MiB, 2 partitions" "$LOG"; then
-    note "and the stick it booted from is its disk0 with two partitions: OK"
+if grep -aq "usbdisk: disk0: mbr: $((STICK_SECTORS / 2048)) MiB, 3 partitions" "$LOG"; then
+    note "and the stick it booted from is its disk0 with three partitions, the EFI boot image's among them: OK"
 else
     fail "the booted machine did not name its own stick"
 fi

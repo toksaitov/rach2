@@ -7,10 +7,13 @@
  *
  * * sector 0 carries boot code and the `0x55AA` signature;
  * * the table's entries, judged by `mbr_take`, which is the function the
- *   kernel publishes a stick's partitions with, give exactly two partitions
- *   and pass none over;
+ *   kernel publishes a stick's partitions with, give exactly three
+ *   partitions and pass none over;
  * * the second is the volume, of type `0x07`, at `VOLUME-START` for
  *   `VOLUME-SECTORS`, and the first ends before it;
+ * * the third is the ISO's EFI boot image, of type `0xEF`, between the
+ *   first's end and the volume's start, which UEFI firmware boots a USB
+ *   device from;
  * * the volume's boot sector is exFAT's, and its `PartitionOffset` and
  *   `VolumeLength` are the entry's start and length, which is what a stick
  *   formatted by any other system carries and what a reader that compares
@@ -95,19 +98,23 @@ int main(int argc, char **argv)
         return fail(
             "the kernel would pass an entry over: at sector zero, past the image, or overlapping");
     }
-    if (count != 2) {
-        return fail("the table does not give exactly two partitions");
+    if (count != 3) {
+        return fail("the table does not give exactly three partitions");
     }
-    /* `mbr_take` packs what it takes, so the two must be the first two
+    /* `mbr_take` packs what it takes, so the three must be the first three
      * entries for the type read from an entry to be the range's own. */
-    if (parts[0].type == 0 || parts[1].type == 0 || parts[2].type != 0 || parts[3].type != 0) {
-        return fail("the two partitions are not the table's first two entries");
+    if (parts[0].type == 0 || parts[1].type == 0 || parts[2].type == 0 || parts[3].type != 0) {
+        return fail("the three partitions are not the table's first three entries");
     }
     if (parts[1].type != 0x07 || taken[1].start_lba != start || taken[1].sector_count != length) {
         return fail("the second entry is not the volume at the start and length given");
     }
     if (taken[0].start_lba + taken[0].sector_count > start) {
         return fail("the first entry runs into the volume");
+    }
+    if (parts[2].type != 0xEF || taken[2].start_lba < taken[0].start_lba + taken[0].sector_count ||
+        taken[2].start_lba + taken[2].sector_count > start) {
+        return fail("the third entry is not an EFI boot image between the ISO and the volume");
     }
     if (start % 2048u != 0) {
         return fail("the volume does not start on a 1 MiB boundary");
@@ -136,7 +143,9 @@ int main(int argc, char **argv)
         return fail("the volume's VolumeLength is not the entry's length");
     }
     close(fd);
-    printf("stickcheck: %s: ok: iso at %llu for %llu, volume at %llu for %llu, %llu sectors\n",
-           argv[1], taken[0].start_lba, taken[0].sector_count, start, length, image_sectors);
+    printf("stickcheck: %s: ok: iso at %llu for %llu, efi at %llu for %llu, volume at %llu for "
+           "%llu, %llu sectors\n",
+           argv[1], taken[0].start_lba, taken[0].sector_count, taken[2].start_lba,
+           taken[2].sector_count, start, length, image_sectors);
     return 0;
 }

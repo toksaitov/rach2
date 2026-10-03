@@ -370,11 +370,12 @@ else
     bad "the manifest's hash is $MANIFEST_SUM and the image's is $HOST_SUM"
 fi
 
-# The stick the machine booted from is its own disk, whole, with two partitions.
-if grep -aq "usbdisk: disk0: mbr: $((BYTES / 1048576)) MiB, 2 partitions" "$LOG"; then
-    note "and the stick it booted from is its disk0 with two partitions: OK"
+# The stick the machine booted from is its own disk, whole, with three
+# partitions: the ISO, the volume and the ISO's EFI boot image.
+if grep -aq "usbdisk: disk0: mbr: $((BYTES / 1048576)) MiB, 3 partitions" "$LOG"; then
+    note "and the stick it booted from is its disk0 with three partitions: OK"
 else
-    bad "the stick was not published whole with two partitions"
+    bad "the stick was not published whole with three partitions"
 fi
 
 mark "row 1"

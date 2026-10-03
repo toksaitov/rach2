@@ -4,11 +4,20 @@
 # mkiso.sh: build a bootable ISO for one RAM-disk image, for real hardware.
 #
 # Stages the kernel and the image as GRUB multiboot modules and assembles
-# build/images/<image>.iso with xorriso and the pinned GRUB El Torito and
-# hybrid images under vendor/grub/, so no GRUB toolchain and no Docker is
+# build/images/<image>.iso with xorriso and the pinned GRUB El Torito, hybrid
+# and EFI images under vendor/grub/, so no GRUB toolchain and no Docker is
 # needed. The hybrid MBR keeps the ISO bootable when written to a USB
 # device. Each image gets its own ISO and its own staging dir, so
 # `make isos` can build all three in parallel without a race.
+#
+# The ISO boots by UEFI as well. Its EFI boot image, a FAT volume holding
+# GRUB's EFI image as \EFI\BOOT\BOOTX64.EFI, is appended after the ISO's file
+# system as an MBR partition of type 0xEF, which firmware boots a USB device
+# from, and is named again by a second El Torito entry, for the EFI platform,
+# which firmware boots a CD from. On a CD the image's prefix is the CD's own
+# /boot/grub; on a USB device it is the EFI boot image's, whose menu finds
+# the ISO's file system by its UUID, the volume's modification time, which
+# this build sets, and opens the ISO's menu there.
 #
 # Usage: ./mkiso.sh <test|os-simple|os-real|rach2-metal>
 #
@@ -83,7 +92,7 @@ fi
 
 rm -rf "$ISODIR"
 mkdir -p "$ISODIR/boot/grub"
-trap 'rm -rf "$ISODIR" "$ISODIR.hybrid.img" "$ISODIR.log" "$ISO_OUT.new"' EXIT
+trap 'rm -rf "$ISODIR" "$ISODIR.hybrid.img" "$ISODIR.efi.img" "$ISODIR.efi.cfg" "$ISODIR.bootx64.efi" "$ISODIR.log" "$ISO_OUT.new"' EXIT
 # cat (not cp) so the modules are dense: some GRUB builds crash on sparse files.
 cat "$KERNEL" > "$ISODIR/boot/kernel"
 cat "$KRFFS" > "$ISODIR/boot/$IMAGE.krffs"
@@ -187,20 +196,51 @@ command -v xorriso >/dev/null 2>&1 || {
 # between the check and the read.
 cp "$REPO/vendor/grub/eltorito.img" "$ISODIR/boot/grub/eltorito.img"
 cp "$REPO/vendor/grub/boot-hybrid.img" "$ISODIR.hybrid.img"
+cp "$REPO/vendor/grub/bootx64.efi" "$ISODIR.bootx64.efi"
 sh "$REPO/vendor/grub/verify_grub.sh" \
     "eltorito.img=$ISODIR/boot/grub/eltorito.img" \
-    "boot-hybrid.img=$ISODIR.hybrid.img"
+    "boot-hybrid.img=$ISODIR.hybrid.img" \
+    "bootx64.efi=$ISODIR.bootx64.efi"
+
+# The EFI boot image: a 1440 KiB FAT volume, the size and geometry El Torito
+# images have, with GRUB's EFI image and the menu it opens on a USB device.
+# The ISO's UUID is its modification time, given to xorriso below in its own
+# form and here in GRUB's.
+for t in mformat mmd mcopy; do
+    command -v "$t" >/dev/null 2>&1 || {
+        echo "mkiso: mtools is required (brew install mtools, or apt install mtools)" >&2
+        exit 1
+    }
+done
+ISO_DATE=$(date -u +%Y%m%d%H%M%S)00
+ISO_UUID=$(printf '%s' "$ISO_DATE" |
+    sed 's/^\(....\)\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)$/\1-\2-\3-\4-\5-\6-\7/')
+cat > "$ISODIR.efi.cfg" <<EFICFG
+search --no-floppy --fs-uuid --set=root $ISO_UUID
+configfile (\$root)/boot/grub/grub.cfg
+EFICFG
+export MTOOLS_SKIP_CHECK=1
+dd if=/dev/zero of="$ISODIR.efi.img" bs=1024 count=1440 2>/dev/null
+mformat -i "$ISODIR.efi.img" -f 1440 -N 1acef0e1 ::
+mmd -i "$ISODIR.efi.img" ::/EFI ::/EFI/BOOT ::/boot ::/boot/grub
+mcopy -i "$ISODIR.efi.img" "$ISODIR.bootx64.efi" ::/EFI/BOOT/BOOTX64.EFI
+mcopy -i "$ISODIR.efi.img" "$ISODIR.efi.cfg" ::/boot/grub/grub.cfg
 
 # xorriso assembles what grub-mkrescue assembled in the retired container:
 # an ISO9660 tree with the El Torito boot image, its boot-info table patched
-# in, and GRUB's hybrid MBR so the same ISO boots from a USB device. The
-# output goes to a .new sibling renamed only on success, and the exit status
-# is xorriso's own, not a log filter's, so a failure can neither pass nor
-# leave a half-written ISO where the old one was.
+# in, and GRUB's hybrid MBR so the same ISO boots from a USB device; and the
+# EFI boot image appended as the MBR's second partition, of type 0xEF, which
+# the second El Torito entry names by its sectors. The output goes to a .new
+# sibling renamed only on success, and the exit status is xorriso's own, not
+# a log filter's, so a failure can neither pass nor leave a half-written ISO
+# where the old one was.
 if xorriso -as mkisofs -graft-points -R -J \
+        --modification-date="$ISO_DATE" \
         -b boot/grub/eltorito.img -no-emul-boot -boot-load-size 4 \
         -boot-info-table --grub2-boot-info \
         --grub2-mbr "$ISODIR.hybrid.img" \
+        -append_partition 2 0xef "$ISODIR.efi.img" \
+        -eltorito-alt-boot -e --interval:appended_partition_2:all:: -no-emul-boot \
         -o "$ISO_OUT.new" "$ISODIR" > "$ISODIR.log" 2>&1; then
     grep -v '^xorriso : UPDATE' "$ISODIR.log" >&2 || true
 else

@@ -15,9 +15,16 @@
 # damaged in either direction is found rather than installed.
 #
 # The volume includes the input files and FREE-MIB for metadata and free space,
-# rounded up to a mebibyte. The MBR gets two entries: the ISO
-# from sector 1, of type 0x17, and the volume, of type 0x07. The boot code
-# around the table is GRUB's, as the ISO wrote it.
+# rounded up to a mebibyte. The MBR gets three entries: the ISO's file
+# system from sector 1, of type 0x17, the volume, of type 0x07, and the ISO's
+# EFI boot image, of type 0xEF, which UEFI firmware boots a USB device from
+# and which xorriso gave the ISO's own table as its second entry. The boot
+# code around the table is GRUB's, as the ISO wrote it.
+#
+# The volume also carries GRUB's EFI image, `bootx64.efi`, with its digest in
+# `bootx64.efi.sha256`, beside the root image: `rach2-install --update` takes
+# it from beside the image it is given to convert an MBR disk to boot by UEFI
+# as well.
 #
 # The finished image is judged whole by stickcheck with the kernel's own
 # partition rules, and its volume is walked by mkexfatfixture --check.
@@ -29,6 +36,7 @@
 # Usage: mkinstallstick.sh ISO DISK OUT MKEXFATFIXTURE MKMBR STICKCHECK
 #                         [EXTRA [FREE-MIB]]
 set -e
+REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 ISO=$1; DISK=$2; OUT=$3; MKFIX=$4; MKMBR=$5; CHECK=$6; EXTRA=${7:-}
 FREE_MIB=${8:-4}
 
@@ -50,6 +58,14 @@ SLACK_SECTORS=$((FREE_MIB * MIB_SECTORS))
 name=$(basename "$DISK")
 iso_bytes=$(wc -c < "$ISO" | tr -d ' ')
 iso_sectors=$(( (iso_bytes + 511) / 512 ))
+# The EFI boot image, the second entry of the ISO's own table, in sectors.
+efi_start=$(od -An -tu4 -j $((446 + 16 + 8)) -N 4 "$ISO" | tr -d ' ')
+efi_sectors=$(od -An -tu4 -j $((446 + 16 + 12)) -N 4 "$ISO" | tr -d ' ')
+if [ "$(od -An -tx1 -j $((446 + 16 + 4)) -N 1 "$ISO" | tr -d ' ')" != ef ] ||
+    [ "$efi_start" -le 1 ] || [ $((efi_start + efi_sectors)) -gt "$iso_sectors" ]; then
+    echo "mkinstallstick: $ISO has no EFI boot image as its second partition" >&2
+    exit 1
+fi
 disk_bytes=$(wc -c < "$DISK" | tr -d ' ')
 disk_sectors=$(( (disk_bytes + 511) / 512 ))
 extra_sectors=0
@@ -58,7 +74,9 @@ if [ -n "$EXTRA" ]; then
 fi
 # The volume starts at the first 1 MiB boundary at or after the ISO's end.
 start=$(( ((iso_sectors + MIB_SECTORS - 1) / MIB_SECTORS) * MIB_SECTORS ))
-volume=$(( disk_sectors + extra_sectors + SLACK_SECTORS ))
+# GRUB's EFI image and its digest, beside the root image.
+efi_sectors_on_volume=$(( ( $(wc -c < "$REPO/vendor/grub/bootx64.efi" | tr -d ' ') + 511) / 512 + 1 ))
+volume=$(( disk_sectors + extra_sectors + efi_sectors_on_volume + SLACK_SECTORS ))
 volume=$(( ((volume + MIB_SECTORS - 1) / MIB_SECTORS) * MIB_SECTORS ))
 
 # A failure at any step leaves neither the half-built image nor its parts.
@@ -68,8 +86,17 @@ volume=$(( ((volume + MIB_SECTORS - 1) / MIB_SECTORS) * MIB_SECTORS ))
 NEW="$OUT.$$.new"
 VOL="$OUT.$$.vol"
 MAN="$OUT.$$.manifest"
-trap 'rm -f "$NEW" "$VOL" "$MAN"' EXIT
+EFI="$OUT.$$.bootx64.efi"
+EFISUM="$OUT.$$.bootx64.efi.sha256"
+trap 'rm -f "$NEW" "$VOL" "$MAN" "$EFI" "$EFISUM"' EXIT
 rm -f "$NEW"
+
+# The pinned EFI image, copied and the copy verified, as every consumer of a
+# pinned GRUB image does.
+cp "$REPO/vendor/grub/bootx64.efi" "$EFI"
+sh "$REPO/vendor/grub/verify_grub.sh" "bootx64.efi=$EFI"
+efi_sum=$(shasum -a 256 "$EFI" | cut -d' ' -f1)
+echo "$efi_sum  bootx64.efi" > "$EFISUM"
 
 # The manifest the installer reads: the image's name, its length in bytes and
 # its SHA-256, one field a line so a shell reads it with `read`.
@@ -98,10 +125,12 @@ esac
 if [ -n "$EXTRA" ]; then
     "$MKFIX" --make "$VOL" --sectors "$volume" --offset "$start" \
         --add "$name=$DISK" --add "rach2-install.manifest=$MAN" \
-        --add "$(basename "$EXTRA")=$EXTRA" > /dev/null
+        --add "$(basename "$EXTRA")=$EXTRA" \
+        --add "bootx64.efi=$EFI" --add "bootx64.efi.sha256=$EFISUM" > /dev/null
 else
     "$MKFIX" --make "$VOL" --sectors "$volume" --offset "$start" \
-        --add "$name=$DISK" --add "rach2-install.manifest=$MAN" > /dev/null
+        --add "$name=$DISK" --add "rach2-install.manifest=$MAN" \
+        --add "bootx64.efi=$EFI" --add "bootx64.efi.sha256=$EFISUM" > /dev/null
 fi
 
 cp "$ISO" "$NEW"
@@ -110,8 +139,9 @@ dd if=/dev/zero of="$NEW" bs=512 seek="$iso_sectors" count=$((start - iso_sector
     conv=notrunc 2>/dev/null
 dd if="$VOL" of="$NEW" bs=1048576 seek=$((start / MIB_SECTORS)) conv=notrunc 2>/dev/null
 rm -f "$VOL" "$MAN"
-# The two entries. mkmbr writes the table bytes and the signature only.
-"$MKMBR" --lba "$NEW" "1:$((iso_sectors - 1)):17" "$start:$volume:07" > /dev/null
+# The three entries. mkmbr writes the table bytes and the signature only.
+"$MKMBR" --lba "$NEW" "1:$((efi_start - 1)):17" "$start:$volume:07" \
+    "$efi_start:$efi_sectors:ef" > /dev/null
 
 "$CHECK" "$NEW" "$start" "$volume"
 "$MKFIX" --check "$NEW" "$start" > /dev/null
