@@ -21,7 +21,10 @@
  * first-load rules (file offset 0, address exactly 1 MiB). An ELF64 file is
  * held to the x86-64 kernel's profile instead (`kernel_check64`): linked at
  * KVA_IMAGE plus its physical address and loaded by the header's a.out
- * kludge, which copies the file from the header on, byte for byte.
+ * kludge, which copies the file from the header on, byte for byte. TinyCC
+ * links it by the same script as GNU ld but writes no symbol table, so
+ * there `--tcc` accepts a kernel without one, whose header then gives the
+ * entry and the image end the symbols would.
  *
  * `--selftest` runs both batteries: the user checker's literal window
  * boundary cases for each architecture (the numbers rach2/sys/proc/elf.c
@@ -520,8 +523,6 @@ static int kernel_check64(const unsigned char *d, size_t n, int tcc, char *detai
     int mb_found = 0, have_start = 0, have_end = 0, have_symtab = 0;
     struct load64 loads[2], tmp;
 
-    if (tcc)
-        return kf("an x86-64 kernel has no tcc profile");
     if (n < 64 || d[5] != 1)
         return kf("not a 64-bit little-endian ELF");
     e_type = r16(d + 16);
@@ -674,22 +675,25 @@ static int kernel_check64(const unsigned char *d, size_t n, int tcc, char *detai
             }
         }
     }
-    if (!have_symtab)
+    if (!have_symtab && !tcc)
         return kf("no symbol table (the GNU-linked kernel has one)");
-    if (!have_start)
-        return kf("no _start symbol");
-    if (start_val != e_entry)
-        return kf("entry 0x%llx is not _start 0x%llx", (unsigned long long)e_entry,
-                  (unsigned long long)start_val);
-    if (!have_end)
-        return kf("no _end symbol");
-    if (end_val != image_end)
-        return kf("_end 0x%llx is not the image end 0x%llx", (unsigned long long)end_val,
-                  (unsigned long long)image_end);
+    if (have_symtab) {
+        if (!have_start)
+            return kf("no _start symbol");
+        if (start_val != e_entry)
+            return kf("entry 0x%llx is not _start 0x%llx", (unsigned long long)e_entry,
+                      (unsigned long long)start_val);
+        if (!have_end)
+            return kf("no _end symbol");
+        if (end_val != image_end)
+            return kf("_end 0x%llx is not the image end 0x%llx", (unsigned long long)end_val,
+                      (unsigned long long)image_end);
+    }
     snprintf(detail, detail_len,
-             "x86-64 profile: 2 loads, entry 0x%llx, _end 0x%llx, multiboot header at file "
+             "x86-64 %sprofile: 2 loads, entry 0x%llx, %s 0x%llx, multiboot header at file "
              "offset 0x%x",
-             (unsigned long long)e_entry, (unsigned long long)image_end, mb_off);
+             tcc ? "tcc " : "", (unsigned long long)e_entry, have_symtab ? "_end" : "image end",
+             (unsigned long long)image_end, mb_off);
     return 0;
 }
 
@@ -1161,8 +1165,23 @@ static int selftest(void)
             fprintf(stderr, "elfcheck: selftest: the x86-64 fixture was refused: %s\n", kfail);
             st_bad++;
         }
-        st_expect_kernel(k64, k64n, 1, "an x86-64 kernel under the tcc profile",
-                         "no tcc profile");
+        if (kernel_check(k64, k64n, 1, detail, sizeof(detail)) != 0) {
+            fprintf(stderr, "elfcheck: selftest: the x86-64 fixture was refused under the tcc "
+                            "profile: %s\n", kfail);
+            st_bad++;
+        }
+        /* Without section headers, as TinyCC writes it: the tcc profile
+           takes it, and the common one wants the symbol table. */
+        memcpy(m64, k64, k64n);
+        w64(m64 + 40, 0);
+        w16(m64 + 60, 0);
+        if (kernel_check(m64, k64n, 1, detail, sizeof(detail)) != 0) {
+            fprintf(stderr, "elfcheck: selftest: the x86-64 fixture without a symbol table was "
+                            "refused under the tcc profile: %s\n", kfail);
+            st_bad++;
+        }
+        st_expect_kernel(m64, k64n, 0, "an x86-64 kernel without a symbol table",
+                         "no symbol table");
         memcpy(m64, k64, k64n);
         w32(m64 + mb64 + 4, MULTIBOOT_FLAGS);
         w32(m64 + mb64 + 8, (uint32_t)(0 - (MULTIBOOT_MAGIC + MULTIBOOT_FLAGS)));
@@ -1196,7 +1215,7 @@ static int selftest(void)
         fprintf(stderr, "elfcheck: selftest: %d case(s) failed\n", st_bad);
         return 1;
     }
-    printf("elfcheck: selftest: ok: 10 i686 and 10 x86_64 window cases, 6 accepted kernels, "
+    printf("elfcheck: selftest: ok: 10 i686 and 10 x86_64 window cases, 8 accepted kernels, "
            "21 refused, each for its own rule\n");
     return 0;
 }
