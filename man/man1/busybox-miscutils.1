@@ -196,8 +196,8 @@ Run a script from a specification file with Makefile-like syntax.
 Control a magnetic tape drive.
 Rach2 has no tape devices and does not implement their requests.
 .It Nm readahead
-Preload files into RAM.
-Rach2 does not implement the readahead system call, so the applet fails.
+Preload files into the page cache, through
+.Xr readahead 2 .
 .It Nm runlevel
 Find the previous and current system runlevels.
 Print
@@ -206,9 +206,10 @@ if the utmp file does not exist or contains no runlevel record.
 .It Nm rx
 Receive a file using the XMODEM protocol.
 .It Nm setfattr
-Set or remove extended file attributes.
-Rach2 does not implement the extended-attribute system calls, so the
-applet fails.
+Set or remove extended file attributes, through
+.Xr setxattr 2
+and
+.Xr removexattr 2 .
 .It Nm setserial
 Print or set serial port parameters.
 Rach2 does not implement the serial configuration requests.

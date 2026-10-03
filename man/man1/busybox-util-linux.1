@@ -389,8 +389,9 @@ Check whether a directory is a mount point.
 .It Nm nologin
 Refuse a login.
 .It Nm nsenter
-Request entry into namespaces and run a program.
-Rach2 has no namespaces, so the request fails.
+Enter the namespaces of another process, through
+.Xr setns 2 ,
+and run a program.
 .It Nm pivot_root
 Request that the current root file system be moved to
 .Ar PUT_OLD
@@ -399,14 +400,11 @@ and
 be made the root file system.
 Rach2 does not implement the call, so the request fails.
 .It Nm rdate
-Print, or attempt to set, the time from
+Print, or set, the time from
 .Ar HOST
-using RFC 868.
-Rach2 has no
-.Fn settimeofday
-handler, so setting the clock fails;
+using RFC 868; setting it needs a privileged caller, and
 .Fl p
-prints the remote time.
+prints the remote time alone.
 .It Nm rdev
 Print the device node for the file system mounted at
 .Pa / .
@@ -415,13 +413,23 @@ Read kernel profiling counters from
 .Pa /proc/profile ,
 which Rach2 does not have.
 .It Nm renice
-Request a change to a running process's scheduling priority.
-Rach2 does not implement the priority calls, so the request fails.
+Change a running process's nice value through
+.Xr setpriority 2 ,
+which the scheduler keeps and does not read.
 .It Nm rev
 Reverse the characters in each line of a file.
 .It Nm rtcwake
-Request a system sleep state until a specified wakeup time.
-Rach2 has neither the RTC nor the suspend interfaces it uses.
+Set the clock's wake alarm and suspend the machine to idle until it rings,
+with
+.Fl m Cm mem
+or
+.Fl m Cm freeze ,
+through
+.Pa /dev/rtc0
+and
+.Pa /sys/power/state ;
+see
+.Xr rtc 4 .
 .It Nm script
 Record a terminal session in
 .Ar OUTFILE ,
@@ -435,7 +443,8 @@ Run a program with the selected uname emulation:
 for 32 bits or
 .Cm linux64
 for 64 bits.
-Rach2 does not implement the personality call, so the request fails.
+.Xr personality 2
+takes both, and neither changes what a program sees.
 .It Nm setsid
 Run a program in a new session.
 Without
@@ -457,8 +466,8 @@ and
 Unmount file systems; see
 .Xr mount 8 .
 .It Nm unshare
-Request separate namespaces for a program.
-Rach2 has no namespaces, so the request fails.
+Run a program in new namespaces, through
+.Xr unshare 2 .
 .It Nm xxd
 Display a hexadecimal dump of a file or standard input.
 .El

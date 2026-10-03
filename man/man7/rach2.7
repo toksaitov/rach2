@@ -3,9 +3,13 @@
 .Os
 .Sh NAME
 .Nm rach2
-.Nd an educational operating system for the 32-bit PC
+.Nd an educational operating system for the PC
 .Sh DESCRIPTION
-Rach2 is an educational operating system for the 32-bit x86 PC.
+Rach2 is an educational operating system for the x86 PC, built for 32-bit
+x86, i686, or for x86-64; on x86-64
+.Ql uname -m
+prints
+.Ql x86_64 .
 Its kernel is freestanding C89 and uses no libgcc.
 The userland includes the ported musl C library, BusyBox shell and tools,
 Dropbear SSH server, TinyCC compiler, pdpmake, and project programs
@@ -67,8 +71,9 @@ VGA text, a text console on the loader's framebuffer, and mode 13h
 graphics; COM1 serial; Sound Blaster 16,
 Intel HDA, and the PC speaker.
 .Pp
-Rach2 does not use UEFI's services and does not implement SMP, swap,
-IPv6, or a framebuffer device for programs.
+Rach2 runs on every processor the machine has, boots by BIOS or UEFI
+firmware and calls none of UEFI's services after it, and does not
+implement swap, IPv6, or a framebuffer device for programs.
 A process may have threads, which
 .Xr clone 2
 makes.

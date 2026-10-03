@@ -1025,10 +1025,9 @@ Print selected fields from files to standard output.
 .It Nm date
 Display the time using
 .Ar +FMT ,
-or set the time.
-Rach2 does not implement the
-.Fn clock_settime
-system call, so setting the time fails.
+or set the time through
+.Xr clock_settime 2 ,
+which needs a privileged caller.
 .It Nm dd
 Copy a file with conversion and formatting.
 .It Nm df
@@ -1104,15 +1103,13 @@ Print or check MD5 checksums.
 .It Nm mkdir
 Create directories.
 .It Nm mkfifo
-Create a named pipe.
-Rach2 does not implement the required
-.Fn mknod
-system call, so creation fails.
+Create a named pipe, through
+.Xr mknod 2 .
 .It Nm mknod
-Create a block device, character device, or named pipe.
-Rach2 does not implement the required
-.Fn mknod
-system call, so creation fails.
+Create a block device, character device, or named pipe, through
+.Xr mknod 2 :
+a device node needs a privileged caller and a file system with room for
+its number, ext2 or tmpfs, not KRFFS.
 .It Nm mktemp
 Create a temporary file using
 .Ar TEMPLATE
@@ -1136,13 +1133,9 @@ to
 or move sources to
 .Ar DIRECTORY .
 .It Nm nice
-Request a scheduling priority adjustment and run
-.Ar PROG .
-Rach2 does not implement
-.Fn getpriority
-or
-.Fn setpriority .
-The failed priority change terminates the applet before it runs
+Change the nice value through
+.Xr setpriority 2 ,
+which the scheduler keeps and does not read, and run
 .Ar PROG .
 .It Nm nl
 Print files with line numbers.

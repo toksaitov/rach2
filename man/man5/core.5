@@ -90,11 +90,13 @@ describes, and the words their
 .Dv CLONE_CHILD_CLEARTID
 named already cleared.
 .Ss Format
-The file is an ELF32 file of type
+On i686 the file is an ELF32 file of type
 .Dv ET_CORE
 for
 .Dv EM_386 ,
-laid out as Linux lays it out for i386.
+laid out as Linux lays it out for i386; on x86-64 it is an ELF64 file for
+.Dv EM_X86_64 ,
+laid out as Linux lays it out there, and the differences are given below.
 Its first program header is a
 .Dv PT_NOTE
 segment with these notes, in this order:
@@ -132,6 +134,19 @@ as
 .Dv PTRACE_GETREGSET
 gives it: GDB reads the AVX and AVX-512 registers from it.
 .El
+.Pp
+On x86-64
+.Vt elf_prstatus
+is 336 bytes, with 64-bit words and the 27 registers of the x86-64
+.Vt user_regs_struct ,
+and
+.Vt elf_prpsinfo
+136, with 32-bit IDs;
+.Dv NT_FPREGSET
+is the
+.Ic fxsave64
+image, and there is no
+.Dv NT_PRXFPREG .
 .Pp
 .Dv NT_PRSTATUS ,
 .Dv NT_FPREGSET ,
