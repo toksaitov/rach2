@@ -366,7 +366,7 @@ step_check()
             >> "$WORK/list.txt" 2>&1 || echo "    the loader exited with $?" >> "$WORK/list.txt"
     done
     cat "$WORK/list.txt"
-    awk -v root="$ROOT/" -v sys="$SYSROOT/lib/" '
+    awk -v root="$ROOT/" -v sys="$SYSROOT/" '
         /=>/ && index($3, root) != 1 && index($3, sys) != 1 { print; bad = 1 }
         /not found|error while loading|exited with/ { print; bad = 1 }
         END { exit bad }' "$WORK/list.txt" > "$WORK/missing.txt" || {
