@@ -127,6 +127,13 @@ void smp_service(void)
         }
         cpu->tlb_request = 0;
     }
+    if (cpu->space_drop) {
+        if (cpu->space == cpu->space_drop) {
+            cpu->space = _kernel_dir;
+            arch_space_load(get_page_dir_phys(_kernel_dir));
+        }
+        cpu->space_drop = NULL;
+    }
 }
 
 void smp_ipi(void)
@@ -147,6 +154,14 @@ void smp_kick(int cpu)
  * `dir` is in user mode, idle in the kernel with interrupts on, or waiting
  * for the lock and answering requests: each answers. While this one waits
  * it answers a stop itself.
+ *
+ * A processor whose thread has no address space, an idle task or a kernel
+ * thread that kept `dir` loaded, is not interrupted. It reaches `dir`'s user
+ * pages only after a switch to one of its threads, which takes the big lock
+ * this one holds, so marking `dir` stale there is enough: the switch loads
+ * the directory again, as Linux skips a processor in lazy TLB mode. This
+ * spares an idle processor a wake for each page that `fork` or `munmap`
+ * changes in a process that last ran there.
  */
 void smp_tlb_shootdown(const struct page_dir *dir, uintptr_t va)
 {
@@ -162,12 +177,38 @@ void smp_tlb_shootdown(const struct page_dir *dir, uintptr_t va)
         if (c == me || !other->online || other->space != dir) {
             continue;
         }
+        if (other->current->space_root == 0) {
+            other->space_stale = 1;
+            continue;
+        }
         other->tlb_page = va;
         other->tlb_request = 1;
         platform_cpu_ipi(c);
     }
     for (c = 0; c < NR_CPUS; c++) {
         while (cpu_table[c].tlb_request && cpu_table[c].online) {
+            smp_service();
+            arch_relax();
+        }
+    }
+}
+
+void smp_space_release(const struct page_dir *dir)
+{
+    int me = (int)arch_cpu_id();
+    int c;
+
+    if (cpus_online < 2) {
+        return;
+    }
+    for (c = 0; c < NR_CPUS; c++) {
+        if (c != me && cpu_table[c].online && cpu_table[c].space == dir) {
+            cpu_table[c].space_drop = dir;
+            platform_cpu_ipi(c);
+        }
+    }
+    for (c = 0; c < NR_CPUS; c++) {
+        while (cpu_table[c].space_drop && cpu_table[c].online) {
             smp_service();
             arch_relax();
         }

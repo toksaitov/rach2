@@ -46,19 +46,25 @@ int arch_context_check(void)
 void switch_space(const process_t *next);
 
 /**
- * Load the page directory `next` runs in, the kernel's for a record with
- * none, unless it is the one this processor has loaded; switch.s calls it.
- * The comparison is with what the processor has, never with the outgoing
- * record: a thread that gave up its address space at its end still runs in
- * it until it switches away, and the directory may be freed once it has.
+ * Load the page directory `next` runs in, unless it is the one this
+ * processor has loaded and no shootdown passed it by; switch.s calls it. A
+ * record with none, an idle task or a kernel thread, runs in whatever is
+ * loaded, whose kernel half is every directory's, so a process that blocks
+ * and wakes again on this processor finds its directory still loaded
+ * (`smp_space_release` takes it back before it is freed, and
+ * `smp_tlb_shootdown` marks it stale meanwhile). The comparison is with
+ * what the processor has, never with the outgoing record: a thread that
+ * gave up its address space at its end still runs in it until it switches
+ * away.
  */
 void switch_space(const process_t *next)
 {
-    page_dir_t *dir = next->space_root != 0 ? next->page_dir : _kernel_dir;
+    struct percpu *cpu = this_cpu();
 
-    if (dir != _curr_dir) {
-        _curr_dir = dir;
-        arch_space_load(next->space_root != 0 ? next->space_root : get_page_dir_phys(dir));
+    if (next->space_root != 0 && (next->page_dir != cpu->space || cpu->space_stale)) {
+        cpu->space = next->page_dir;
+        cpu->space_stale = 0;
+        arch_space_load(next->space_root);
     }
 }
 

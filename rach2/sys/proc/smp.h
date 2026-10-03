@@ -71,6 +71,16 @@ void smp_tlb_shootdown(const struct page_dir *dir, uintptr_t va);
  */
 void smp_kernel_mapping_changed(void);
 
+/**
+ * Have every other processor that still translates through `dir`, which no
+ * thread uses any more, load the kernel's directory, and wait until each
+ * has: `dir` is about to be freed. Only an idle task or a kernel thread can
+ * be running there, since a switch to a thread with no address space keeps
+ * the directory loaded, as Linux's lazy TLB mode does, which spares a
+ * process that blocks and wakes two loads of CR3 and the flushes they cause.
+ */
+void smp_space_release(const struct page_dir *dir);
+
 /** Stop every other processor for good: for a panic and a power off. */
 void smp_stop_others(void);
 

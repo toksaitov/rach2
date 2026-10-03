@@ -54,8 +54,13 @@ int arch_context_check(void)
  * The incoming thread's kernel stack becomes the one the next entry from
  * user mode takes; its FS base, its thread pointer, is loaded, and its GS
  * base goes where `swapgs` will find it on the way out; the page directory
- * changes when the two threads' differ, to the kernel's for a record with
- * none. Then the stacks change. The record is the truth about both bases:
+ * changes when the incoming thread has one and it is not the one loaded or
+ * a shootdown passed it by: a record with none, an idle task or a kernel
+ * thread, runs in whatever is loaded, whose kernel half is every
+ * directory's, so a process that blocks and wakes again here finds its
+ * directory still loaded (`smp_space_release` takes it back before it is
+ * freed, and `smp_tlb_shootdown` marks it stale meanwhile). Then the stacks
+ * change. The record is the truth about both bases:
  * a program changes them only through arch_prctl and clone, which write the
  * record, so nothing is read back here. The directory is compared with the
  * one this processor has loaded, never with the outgoing record's: a thread
@@ -64,16 +69,16 @@ int arch_context_check(void)
  */
 void switch_context(process_t *old, process_t *new_proc)
 {
-    page_dir_t *dir = new_proc->space_root != 0 ? new_proc->page_dir : _kernel_dir;
+    struct percpu *cpu = this_cpu();
 
     cpu_set_kernel_stack(new_proc->kernel_stack);
     msr_write(MSR_FS_BASE, new_proc->tls_base);
     msr_write(MSR_KERNEL_GS_BASE, new_proc->regs.gs_base);
 
-    if (dir != _curr_dir) {
-        _curr_dir = dir;
-        arch_space_load(new_proc->space_root != 0 ? new_proc->space_root
-                                                  : get_page_dir_phys(_kernel_dir));
+    if (new_proc->space_root != 0 && (new_proc->page_dir != cpu->space || cpu->space_stale)) {
+        cpu->space = new_proc->page_dir;
+        cpu->space_stale = 0;
+        arch_space_load(new_proc->space_root);
     }
 
     x86_64_switch(&old->regs.rsp, new_proc->regs.rsp);

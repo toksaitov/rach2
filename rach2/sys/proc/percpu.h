@@ -30,19 +30,21 @@ struct page_dir;
  * changes them, and writes only the requests (proc/smp.c).
  */
 struct percpu {
-    struct process *current;            /* the process this processor runs */
-    struct process *idle;               /* what it runs when nothing else is ready */
-    struct page_dir *space;             /* the page directory it translates through */
-    int bkl_depth;                      /* entries the big lock covers; >0: it holds it */
-    volatile int online;                /* started, and taking work */
-    volatile int idle_wait;             /* halted in an idle wait, for a tick to see */
-    volatile unsigned int tlb_request;  /* drop `tlb_page`'s translation */
-    volatile uintptr_t tlb_page;        /* a user page, or CPU_TLB_ALL */
-    volatile unsigned int stop_request; /* stop for good */
-    uint32_t kernel_gen;                /* the kernel mappings it last flushed for */
-    volatile uint32_t idle_ticks;       /* ticks that found it in an idle wait */
-    volatile uint32_t busy_ticks;       /* ticks that found it running code */
-    volatile uint32_t user_ticks;       /* of those, ticks that found it in user mode */
+    struct process *current;                    /* the process this processor runs */
+    struct process *idle;                       /* what it runs when nothing else is ready */
+    struct page_dir *space;                     /* the page directory it translates through */
+    int bkl_depth;                              /* entries the big lock covers; >0: it holds it */
+    volatile int online;                        /* started, and taking work */
+    volatile int idle_wait;                     /* halted in an idle wait, for a tick to see */
+    volatile unsigned int tlb_request;          /* drop `tlb_page`'s translation */
+    volatile uintptr_t tlb_page;                /* a user page, or CPU_TLB_ALL */
+    volatile unsigned int stop_request;         /* stop for good */
+    const struct page_dir *volatile space_drop; /* a `space` to give up for the kernel's */
+    volatile int space_stale;                   /* a shootdown passed `space` by */
+    uint32_t kernel_gen;                        /* the kernel mappings it last flushed for */
+    volatile uint32_t idle_ticks;               /* ticks that found it in an idle wait */
+    volatile uint32_t busy_ticks;               /* ticks that found it running code */
+    volatile uint32_t user_ticks;               /* of those, ticks that found it in user mode */
 };
 
 extern struct percpu cpu_table[NR_CPUS];

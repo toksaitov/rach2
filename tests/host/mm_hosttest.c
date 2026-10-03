@@ -89,6 +89,11 @@ void switch_page_directory(page_dir_t *dir)
     _curr_dir = dir;
 }
 
+void smp_space_release(const page_dir_t *dir)
+{
+    CHECK(dir != NULL, "the other processors are asked to give the directory back");
+}
+
 void free_user_pages(page_dir_t *dir)
 {
     CHECK(dir != NULL, "the pages are freed through the directory");

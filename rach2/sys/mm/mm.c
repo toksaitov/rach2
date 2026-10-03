@@ -10,6 +10,7 @@
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
 #include "../proc/process.h"
+#include "../proc/smp.h"
 #include "../proc/tgroup.h"
 
 /* The address spaces that keep a program's file, linked by `exe_next`. */
@@ -53,6 +54,7 @@ void mm_put(struct mm *mm)
     if (!mm || --mm->users != 0) {
         return;
     }
+    smp_space_release(mm->dir);
     free_user_pages(mm->dir);
     free_page_directory(mm->dir);
     mm->dir = NULL;
