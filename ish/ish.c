@@ -42,7 +42,7 @@ static const int Status_Signalled_Base = 128;
 /**
  * Wait for `pid`, retrying interruptions, and return its shell status.
  *
- * The raw i386 wrapper returns -4 for EINTR; libc returns -1 and sets errno.
+ * The raw wrappers return -4 for EINTR; libc returns -1 and sets errno.
  * A failed wait returns 126. A normal exit stores its status in bits 8-15;
  * a signal death stores the signal number in bits 0-6.
  */

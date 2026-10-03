@@ -2,9 +2,10 @@
 #define ISH_SYSCALLS_H
 
 /**
- * The system call surface ish uses, declared as thin `ish_*` wrappers. The
- * i386 Linux ABI (the `int $0x80` mechanism, the register bindings, and each
- * syscall number) lives on the definitions in `ish_syscalls.i386.c`.
+ * The system call surface ish uses, declared as thin `ish_*` wrappers. Each
+ * architecture's Linux ABI (the trap instruction, the register bindings, and
+ * each syscall number) lives on the definitions in `ish_syscalls.i386.c` and
+ * `ish_syscalls.x86_64.c`.
  *
  * Unless `ISH_USE_STDLIB` is defined, the bare libc names below are macros that
  * route to the wrappers, so the freestanding shell calls `read`, `open`, and so

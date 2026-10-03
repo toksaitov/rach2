@@ -1,6 +1,6 @@
 # ish/: freestanding command shell
 
-ISH is the small command shell used by the os-simple image and the test image. It is a static i386 program with its own startup code, string routines, and Linux i386 system-call wrappers. It links no C library.
+ISH is the small command shell used by the os-simple image and the test image. It is a static program, i386 or x86-64, with its own startup code, string routines, and Linux system-call wrappers for each architecture. It links no C library.
 
 ISH runs one command at a time. It is not a POSIX shell and has no script language.
 
@@ -59,13 +59,15 @@ The os-simple image stages the binary as `/bin/ish` and `/bin/sh`, and both of i
 
 ## System-call ABI
 
-`ish_syscalls.i386.c` issues Linux i386 `int $0x80` calls directly. The shell uses exactly these calls:
+`ish_syscalls.i386.c` issues Linux i386 `int $0x80` calls directly, and `ish_syscalls.x86_64.c` Linux x86-64 `syscall` instructions; `ish_syscalls.c` includes the one for the compiler's target and stops the build on any other. The shell uses exactly these calls:
 
 ```text
 exit fork read write open close waitpid creat execve chdir dup2 stat
 ```
 
-`crt0.c` reads `argc`, `argv`, and `envp` from the initial i386 process stack, calls `main`, and passes its return value to `exit`.
+x86-64 has no `waitpid`, so the x86-64 wrapper issues `wait4` with no resource usage. Its numbers are those of musl's `arch/x86_64/bits/syscall.h.in`.
+
+`crt0.c` reads `argc`, `argv`, and `envp` from the initial process stack, calls `main`, and passes its return value to `exit`. On i386 `_start` is a C function that reads the stack through the frame pointer; on x86-64 it is assembly, which reads the 64-bit words at RSP before a prologue could move it and aligns the stack for the call.
 
 ## Builds
 
@@ -98,7 +100,7 @@ Run it in a writable copy of `/src/ish`. Root may also build the staged tree in 
 * `ish.c` contains the input loop, builtins, path search, redirection, fork, exec, wait, and status conversion.
 * `ish_shell_utilities.[ch]` split arguments, read environment entries, and remove redirection tokens.
 * `ish_cstring_utilities.[ch]` provide the string, token, integer, and path operations.
-* `ish_syscalls.[ch]` select and declare the raw i386 wrappers.
+* `ish_syscalls.[ch]` select and declare the raw wrappers, which `ish_syscalls.i386.c` and `ish_syscalls.x86_64.c` define.
 * `crt0.c` supplies the freestanding `_start` entry.
 * `Makefile`, `Makefile.linux`, and `guest.mk` own the three build routes.
 

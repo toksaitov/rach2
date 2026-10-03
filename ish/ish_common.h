@@ -12,7 +12,7 @@
  *
  * The shell's assertion: a failed precondition is fatal, never recovered.
  * `exit` resolves to the C library under `ISH_USE_STDLIB` and to the raw
- * `int 0x80` wrapper in `ish_syscalls.h` otherwise.
+ * system call wrapper in `ish_syscalls.h` otherwise.
  */
 #define ish_check(value) \
     do {                 \
