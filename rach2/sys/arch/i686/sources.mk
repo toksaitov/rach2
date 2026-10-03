@@ -23,5 +23,6 @@ ARCH_C_SRC = sys/arch/i686/mmu.c \
     sys/arch/i686/tss.c \
     sys/arch/i686/idt.c \
     sys/arch/i686/sigframe.c \
+    sys/arch/i686/systab.c \
     sys/arch/i686/tls.c \
     $(PC_C_SRC)

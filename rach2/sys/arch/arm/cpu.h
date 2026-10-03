@@ -98,6 +98,13 @@ typedef uint32_t pte_t;
 #define ARCH_GREGS 18
 typedef unsigned short core_uid_t;
 
+/* The system call table's size, one more than Linux ARM's highest number,
+ * 462; and clone's TLS argument and child tid address, which ARM orders as
+ * i386 does, TLS first. */
+#define SYSCALL_TABLE_SIZE 463
+#define SC_CLONE_TLS       3
+#define SC_CLONE_CTID      4
+
 /* A GIC's shared peripheral interrupts are numbered from 32. */
 #define IRQ_VECTOR(line) (32 + (line))
 #define ISR_DEVICE_FIRST 32

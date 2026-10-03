@@ -6,10 +6,10 @@
  * line expanded to the executable files of its directory, and what
  * `utils/programs.mk` builds; the applets are the names the built BusyBox
  * reports in the applet table its build keeps beside the binary, since the
- * guest binary does not run on the host; the system calls are the names the
- * kernel registers in its table, read from `syscall.c` and numbered by
- * `syscall.h`, and the socket operations behind `socketcall`, read from the
- * same file. The pages are `man/manN/NAME.N`, and `man/aliases` names the
+ * guest binary does not run on the host; the system calls are the names an
+ * architecture's table registers, read from its `systab.c` and numbered by
+ * its `sysnr.h`, and the socket operations behind `socketcall`, read from
+ * `syscall_net.c`. The pages are `man/manN/NAME.N`, and `man/aliases` names the
  * pages a second name reaches, one `NAME SECTION TARGET` a line.
  *
  * A program needs a page or an alias in section 1 or 8, an applet the same,
@@ -20,7 +20,7 @@
  * recovery manifest. The programs the test images alone stage are not in the
  * inventory: only the manifests named on the command line are read.
  *
- *   mancheck MANDIR SYSCALL_H SYSCALL_C APPLETS PROGRAMS_MK RECOVERY_MANIFEST
+ *   mancheck MANDIR SYSNR_H SYSTAB_C APPLETS PROGRAMS_MK RECOVERY_MANIFEST
  *            MANIFEST...
  *
  * Exit status: 0 when every name has a page, 1 otherwise, 2 for a file that
@@ -336,9 +336,9 @@ static void read_syscalls_from(const char *header, const char *source)
         char name[NAME_MAX_LEN];
         size_t i, len;
 
-        p = strstr(line, "_syscall_table[SYS_");
+        p = strstr(line, "table[SYS_");
         if (p) {
-            p += strlen("_syscall_table[SYS_");
+            p += strlen("table[SYS_");
             q = strchr(p, ']');
         } else if (strncmp(line, "#define SC_", 11) == 0) {
             /* A socket operation is `#define SC_NAME NUMBER`; the helper
@@ -376,9 +376,9 @@ static void read_syscalls_from(const char *header, const char *source)
     fclose(f);
 }
 
-/* `sources` names the files the table and the operations are in, joined
-   by colons: syscall.c registers the calls and syscall_net.c defines the
-   socket operations. */
+/* `sources` names the files the tables and the operations are in, joined
+   by colons: an architecture's systab.c registers the calls and
+   syscall_net.c defines the socket operations. */
 static void read_syscalls(const char *header, const char *sources)
 {
     /* The name each call is recorded as coming from outlives this call: a
@@ -466,7 +466,7 @@ int main(int argc, char **argv)
 
     if (argc < 8) {
         fprintf(stderr,
-                "usage: mancheck MANDIR SYSCALL_H SYSCALL_C[:SYSCALL_C...] APPLETS PROGRAMS_MK "
+                "usage: mancheck MANDIR SYSNR_H SYSTAB_C[:SYSTAB_C...] APPLETS PROGRAMS_MK "
                 "RECOVERY_MANIFEST MANIFEST...\n");
         return 2;
     }

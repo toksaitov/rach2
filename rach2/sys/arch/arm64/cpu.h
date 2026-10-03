@@ -97,6 +97,13 @@ typedef uint64_t pte_t;
 #define ARCH_GREGS 34
 typedef unsigned int core_uid_t;
 
+/* The system call table's size, one more than the highest number of
+ * Linux's generic table, 462; and clone's TLS argument and child tid
+ * address, which AArch64 orders as x86-64 does, child tid first. */
+#define SYSCALL_TABLE_SIZE 463
+#define SC_CLONE_TLS       4
+#define SC_CLONE_CTID      3
+
 /* A GIC's shared peripheral interrupts are numbered from 32. */
 #define IRQ_VECTOR(line) (32 + (line))
 #define ISR_DEVICE_FIRST 32

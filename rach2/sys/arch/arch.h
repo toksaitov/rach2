@@ -29,6 +29,8 @@
  *   USER_ADDR_MIN, USER_ADDR_MAX  the range a program may map
  *   ELF_CLASS, ELF_MACHINE the programs the kernel loads
  *   ARCH_GREGS             the words of Linux's `user_regs_struct`
+ *   SYSCALL_TABLE_SIZE     one more than the highest system call number
+ *   SC_CLONE_TLS, SC_CLONE_CTID  clone's arguments, whose order differs
  *   AUDIT_ARCH             the architecture seccomp's filters see
  *   ARCH_NAME              what uname(2) reports as the machine
  *   pte_t, PTE_*, MMU_TABLE_ENTRIES  a page table entry, its bits, and the
@@ -129,6 +131,17 @@ void arch_fork_frame(struct process *child, const isr_params_t *params, uintptr_
 /** Nonzero when the process record's layout is not what the context switch
  * reads at fixed offsets. */
 int arch_context_check(void);
+
+/* A system call's handler: given the saved registers, from which it reads
+ * its arguments, it returns the call's result, a value or a negative errno,
+ * as wide as a register. */
+typedef long (*syscall_fn_t)(isr_params_t *params);
+
+/** Fill `table`, SYSCALL_TABLE_SIZE entries, with the handler of each system
+ * call number the architecture has, and route its system call entry to
+ * `dispatch`, which runs the handler the number in the saved registers
+ * selects. */
+void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *params));
 
 /*
  * Tracing and core files. The shared ptrace(2) answers the requests every

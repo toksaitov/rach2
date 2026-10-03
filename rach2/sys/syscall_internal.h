@@ -519,4 +519,35 @@ int32_t munmap_shm(uint32_t addr, const struct shmem *sh, uint32_t size);
  * that map them from the start counted once however many threads share it. */
 uint32_t shm_attaches(const struct shmem *sh);
 
+/* The handlers syscall.c defines for the table (arch/<arch>/systab.c): the
+ * clocks, timers and sleeps, the host names, the log, ioctl and the rest of
+ * the calls that belong to no subsystem. */
+long sys_adjtimex(isr_params_t *params);
+long sys_alarm(isr_params_t *params);
+long sys_clock_adjtime(isr_params_t *params);
+long sys_clock_adjtime64(isr_params_t *params);
+long sys_clock_getres(isr_params_t *params);
+long sys_clock_getres_time64(isr_params_t *params);
+long sys_clock_gettime(isr_params_t *params);
+long sys_clock_gettime64(isr_params_t *params);
+long sys_clock_nanosleep(isr_params_t *params);
+long sys_clock_settime(isr_params_t *params);
+long sys_clock_settime64(isr_params_t *params);
+long sys_getitimer(isr_params_t *params);
+long sys_getrandom(isr_params_t *params);
+long sys_gettimeofday(isr_params_t *params);
+long sys_ioctl(isr_params_t *params);
+long sys_nanosleep(isr_params_t *params);
+long sys_reboot(isr_params_t *params);
+long sys_set_tid_address(isr_params_t *params);
+long sys_setdomainname(isr_params_t *params);
+long sys_sethostname(isr_params_t *params);
+long sys_setitimer(isr_params_t *params);
+long sys_settimeofday(isr_params_t *params);
+long sys_stime(isr_params_t *params);
+long sys_sysinfo(isr_params_t *params);
+long sys_syslog(isr_params_t *params);
+long sys_times(isr_params_t *params);
+long sys_uname(isr_params_t *params);
+
 #endif

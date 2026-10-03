@@ -52,7 +52,8 @@ typedef struct cpu_regs cpu_regs_t;
  * EBX, ECX, EDX, ESI, EDI and EBP, the result in EAX. */
 #define SC_NR(p)     ((p)->eax)
 #define SC_RET(p)    ((p)->eax)
-#define SC_ARG(p, n) SC_ARG_##n(p)
+#define SC_ARG(p, n) SC_ARG_N(p, n)
+#define SC_ARG_N(p, n) SC_ARG_##n(p)
 #define SC_ARG_0(p)  ((unsigned long)(p)->ebx)
 #define SC_ARG_1(p)  ((unsigned long)(p)->ecx)
 #define SC_ARG_2(p)  ((unsigned long)(p)->edx)
@@ -160,6 +161,13 @@ typedef uint32_t pte_t;
  * `__kernel_uid_t`. */
 #define ARCH_GREGS 17
 typedef unsigned short core_uid_t;
+
+/* The system call table's size, one more than Linux i386's highest number,
+ * 462; and clone's TLS argument and child tid address, which i386 orders
+ * TLS first, as Linux's CLONE_BACKWARDS has them. */
+#define SYSCALL_TABLE_SIZE 463
+#define SC_CLONE_TLS       3
+#define SC_CLONE_CTID      4
 
 /* The 8259 pair's sixteen lines arrive on vectors 32 to 47, and a device's
  * messages on 48 to 63. */

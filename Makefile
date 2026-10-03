@@ -562,7 +562,7 @@ $(MANCHECK): tools/verify/mancheck.c
 # `make mancheck`: every program, applet and call has a page; see the tool.
 .PHONY: mancheck
 mancheck: $(MANCHECK) $(BUSYBOX_STAMP)
-	$(MANCHECK) man rach2/sys/syscall.h rach2/sys/syscall.c:rach2/sys/syscall_net.c $(BUSYBOX_STAGE)/applet_tables-main.h \
+	$(MANCHECK) man rach2/sys/arch/i686/sysnr.h rach2/sys/arch/i686/systab.c:rach2/sys/syscall_net.c $(BUSYBOX_STAGE)/applet_tables-main.h \
 	    utils/programs.mk krffs/manifests/rach2-recovery.manifest krffs/manifests/os-simple.manifest \
 	    krffs/manifests/os-real.manifest krffs/manifests/rach2-metal-disk.manifest
 

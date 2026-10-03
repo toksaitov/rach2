@@ -38,7 +38,8 @@ typedef struct cpu_regs cpu_regs_t;
  * in RDI, RSI, RDX, R10, R8 and R9, the result in RAX. */
 #define SC_NR(p)     ((p)->rax)
 #define SC_RET(p)    ((p)->rax)
-#define SC_ARG(p, n) SC_ARG_##n(p)
+#define SC_ARG(p, n) SC_ARG_N(p, n)
+#define SC_ARG_N(p, n) SC_ARG_##n(p)
 #define SC_ARG_0(p)  ((unsigned long)(p)->rdi)
 #define SC_ARG_1(p)  ((unsigned long)(p)->rsi)
 #define SC_ARG_2(p)  ((unsigned long)(p)->rdx)
@@ -79,6 +80,13 @@ typedef struct cpu_regs cpu_regs_t;
  * `__kernel_uid_t`. */
 #define ARCH_GREGS 27
 typedef unsigned int core_uid_t;
+
+/* The system call table's size, one more than Linux x86-64's highest
+ * number, 462; and clone's TLS argument and child tid address, which x86-64
+ * orders child tid first. */
+#define SYSCALL_TABLE_SIZE 463
+#define SC_CLONE_TLS       4
+#define SC_CLONE_CTID      3
 
 /* The 8259 pair's sixteen lines arrive on vectors 32 to 47, and a device's
  * messages on 48 to 63. */

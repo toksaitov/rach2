@@ -171,13 +171,6 @@ struct audio_write_params {
 };
 
 /*
- * A system call's handler: given the saved registers, from which it reads
- * its arguments, it returns the call's result, a value or a negative errno,
- * as wide as a register.
- */
-typedef long (*syscall_fn_t)(isr_params_t *);
-
-/*
  * Syscall dispatch table
  */
 static syscall_fn_t _syscall_table[SYSCALL_TABLE_SIZE];
@@ -224,7 +217,7 @@ static syscall_fn_t _syscall_table[SYSCALL_TABLE_SIZE];
  * for a feature that does not exist and answers `-EINVAL`, because a 0 there
  * would be the one reply a caller could not tell from a working one.
  */
-static long sys_reboot(isr_params_t *params)
+long sys_reboot(isr_params_t *params)
 {
     uint32_t magic1 = (uint32_t)SC_ARG(params, 0);
     uint32_t magic2 = (uint32_t)SC_ARG(params, 1);
@@ -327,7 +320,7 @@ struct kernel_timeval {
  * from the clock anchored at boot (sys/arch/x86/rtc.c), or time since boot
  * when there was no clock to read. Returns 0 or -errno.
  */
-static long sys_gettimeofday(isr_params_t *params)
+long sys_gettimeofday(isr_params_t *params)
 {
     struct kernel_timeval __user *tv = (struct kernel_timeval __user *)SC_ARG(params, 0);
     struct kernel_timeval ktv;
@@ -569,7 +562,7 @@ int32_t clock_now(int32_t clk, int64_t *sec, int32_t *nsec)
  * fields. An unknown clock is refused before the timespec is written, as
  * Linux refuses it.
  */
-static long sys_clock_gettime(isr_params_t *params)
+long sys_clock_gettime(isr_params_t *params)
 {
     struct kernel_timespec __user *ts = (struct kernel_timespec __user *)SC_ARG(params, 1);
     struct kernel_timespec kts;
@@ -597,7 +590,7 @@ struct kernel_timespec64 {
  * musl try first, so a clock read is one call and not a refused call and a
  * second. The seconds are the ones the 32-bit call reports.
  */
-static long sys_clock_gettime64(isr_params_t *params)
+long sys_clock_gettime64(isr_params_t *params)
 {
     struct kernel_timespec64 t;
     int64_t sec;
@@ -613,7 +606,7 @@ static long sys_clock_gettime64(isr_params_t *params)
 }
 
 /** clock_getres_time64 (406): clock_getres with the 64-bit timespec. */
-static long sys_clock_getres_time64(isr_params_t *params)
+long sys_clock_getres_time64(isr_params_t *params)
 {
     struct kernel_timespec64 t;
     struct kclock c;
@@ -653,7 +646,7 @@ static int32_t realtime_set(int64_t seconds, int64_t nanoseconds)
  * clock_settime (264): EBX = clockid, ECX = the 32-bit timespec. Only
  * CLOCK_REALTIME may be set, as on Linux; another clock is -EINVAL.
  */
-static long sys_clock_settime(isr_params_t *params)
+long sys_clock_settime(isr_params_t *params)
 {
     struct kernel_timespec ts;
 
@@ -667,7 +660,7 @@ static long sys_clock_settime(isr_params_t *params)
 }
 
 /** clock_settime64 (404): clock_settime with the 64-bit timespec. */
-static long sys_clock_settime64(isr_params_t *params)
+long sys_clock_settime64(isr_params_t *params)
 {
     struct kernel_timespec64 ts;
 
@@ -949,7 +942,7 @@ static int32_t timex_call(uint32_t uaddr, int wide)
 }
 
 /** adjtimex (124): EBX = the 128-byte struct timex. */
-static long sys_adjtimex(isr_params_t *params)
+long sys_adjtimex(isr_params_t *params)
 {
     return timex_call(SC_ARG(params, 0), 0);
 }
@@ -970,12 +963,12 @@ static int32_t clock_adjtime_common(isr_params_t *params, int wide)
     return timex_call(SC_ARG(params, 1), wide);
 }
 
-static long sys_clock_adjtime(isr_params_t *params)
+long sys_clock_adjtime(isr_params_t *params)
 {
     return clock_adjtime_common(params, 0);
 }
 
-static long sys_clock_adjtime64(isr_params_t *params)
+long sys_clock_adjtime64(isr_params_t *params)
 {
     return clock_adjtime_common(params, 1);
 }
@@ -985,7 +978,7 @@ static long sys_clock_adjtime64(isr_params_t *params)
  * kept, so a call with only one is done and changes nothing; a call with
  * neither is too, as on Linux.
  */
-static long sys_settimeofday(isr_params_t *params)
+long sys_settimeofday(isr_params_t *params)
 {
     struct kernel_timeval tv;
 
@@ -1002,7 +995,7 @@ static long sys_settimeofday(isr_params_t *params)
 }
 
 /** stime (25): EBX = the seconds, a 32-bit time_t. */
-static long sys_stime(isr_params_t *params)
+long sys_stime(isr_params_t *params)
 {
     int32_t seconds;
 
@@ -1021,7 +1014,7 @@ static long sys_stime(isr_params_t *params)
  * coarse clocks and the CPU clocks. Returns 0, -EINVAL for a clock
  * `clock_resolve` refuses, or -EFAULT.
  */
-static long sys_clock_getres(isr_params_t *params)
+long sys_clock_getres(isr_params_t *params)
 {
     struct kernel_timespec __user *ures = (struct kernel_timespec __user *)SC_ARG(params, 1);
     struct kernel_timespec res;
@@ -1181,7 +1174,7 @@ static int32_t sleep_for(const struct kernel_timespec *req, struct kernel_timesp
  * `sleep_for`, which has the rules of the deadline, the signals and the
  * remainder. rem is written as zero on normal completion.
  */
-static long sys_nanosleep(isr_params_t *params)
+long sys_nanosleep(isr_params_t *params)
 {
     const struct kernel_timespec __user *ureq = (const struct kernel_timespec __user *)SC_ARG(params, 0);
     struct kernel_timespec __user *urem = (struct kernel_timespec __user *)SC_ARG(params, 1);
@@ -1346,7 +1339,7 @@ static int32_t sleep_until_cpu(int32_t clk, uint32_t due, struct kernel_timespec
  * (-EFAULT, then -EINVAL for a negative second or nanoseconds past a
  * second), then a CPU clock by id.
  */
-static long sys_clock_nanosleep(isr_params_t *params)
+long sys_clock_nanosleep(isr_params_t *params)
 {
     int32_t clk = (int32_t)SC_ARG(params, 0);
     int absolute = (SC_ARG(params, 1) & TIMER_ABSTIME) != 0;
@@ -1513,7 +1506,7 @@ static void itimer_set(int32_t which, uint32_t value, uint32_t interval)
  * whole 10 ms ticks, then every interval, or only once for an interval of
  * zero. `old` receives the timer's setting before the call.
  */
-static long sys_setitimer(isr_params_t *params)
+long sys_setitimer(isr_params_t *params)
 {
     const struct kernel_itimerval __user *unew =
         (const struct kernel_itimerval __user *)SC_ARG(params, 1);
@@ -1549,7 +1542,7 @@ static long sys_setitimer(isr_params_t *params)
  * EBX = which, ECX = struct itimerval *cur: the time left before the next
  * signal, zero when the timer is disarmed, and the interval.
  */
-static long sys_getitimer(isr_params_t *params)
+long sys_getitimer(isr_params_t *params)
 {
     struct kernel_itimerval __user *ucur = (struct kernel_itimerval __user *)SC_ARG(params, 1);
     struct kernel_itimerval cur;
@@ -1576,7 +1569,7 @@ static long sys_getitimer(isr_params_t *params)
  * rounds them: to the nearest second, and up to one when any time was left.
  * musl's `alarm` calls setitimer; this is the call older programs make.
  */
-static long sys_alarm(isr_params_t *params)
+long sys_alarm(isr_params_t *params)
 {
     uint32_t flags = kirq_save();
     uint32_t left = itimer_left();
@@ -1611,7 +1604,7 @@ static long sys_alarm(isr_params_t *params)
  * a no-op) and have a single source (GRND_RANDOM is equivalent); unknown
  * flag bits are rejected.
  */
-static long sys_getrandom(isr_params_t *params)
+long sys_getrandom(isr_params_t *params)
 {
     void __user *buf = (void __user *)SC_ARG(params, 0);
     uint32_t len = SC_ARG(params, 1);
@@ -2003,7 +1996,7 @@ static int32_t framebuffer_ioctl(uint32_t request, uint32_t arg)
  * device-specific ones (FB_*, KIOCSOUND, AUDIO_*). Returns 0, the request
  * result, or -errno (-ENOTTY for a terminal request on a non-terminal fd).
  */
-static long sys_ioctl(isr_params_t *params)
+long sys_ioctl(isr_params_t *params)
 {
     int fd_num = (int)SC_ARG(params, 0);
     uint32_t request = SC_ARG(params, 1);
@@ -2195,7 +2188,7 @@ int user_buffer_ok(uint32_t addr, uint32_t len, int write)
  * uses. They are read with interrupts masked, since the tick adds to them.
  * The return value is the monotonic tick count.
  */
-static long sys_times(isr_params_t *params)
+long sys_times(isr_params_t *params)
 {
     struct kernel_tms {
         int32_t tms_utime;
@@ -2231,7 +2224,7 @@ static long sys_times(isr_params_t *params)
  * its buff/cache, mem_unit = 1; shared and swap figures are reported as zero
  * (not tracked). EBX = struct sysinfo *.
  */
-static long sys_sysinfo(isr_params_t *params)
+long sys_sysinfo(isr_params_t *params)
 {
     struct kernel_sysinfo {
         int32_t uptime;
@@ -2298,7 +2291,7 @@ static long sys_sysinfo(isr_params_t *params)
  * The address, EBX, becomes `clear_child_tid`; with one thread per process the
  * thread id is the process id.
  */
-static long sys_set_tid_address(isr_params_t *params)
+long sys_set_tid_address(isr_params_t *params)
 {
     if (!current_proc) {
         return -ESRCH;
@@ -2444,7 +2437,7 @@ static uint32_t syslog_tail(uint32_t from, uint32_t len)
  * which is root's. EINVAL for another action, a negative length or a level
  * out of 1 to 8, EINTR when a signal ends READ's wait.
  */
-static long sys_syslog(isr_params_t *params)
+long sys_syslog(isr_params_t *params)
 {
     int32_t action = (int32_t)SC_ARG(params, 0);
     char __user *ubuf = (char __user *)SC_ARG(params, 1);
@@ -2517,7 +2510,7 @@ static long sys_syslog(isr_params_t *params)
     }
 }
 
-static long sys_uname(isr_params_t *params)
+long sys_uname(isr_params_t *params)
 {
     struct kernel_utsname __user *user_uts = (struct kernel_utsname __user *)SC_ARG(params, 0);
     struct kernel_utsname uts;
@@ -2560,12 +2553,12 @@ static int32_t uts_set_call(isr_params_t *params, void (*set)(const char *, uint
     return 0;
 }
 
-static long sys_sethostname(isr_params_t *params)
+long sys_sethostname(isr_params_t *params)
 {
     return uts_set_call(params, uts_set_hostname);
 }
 
-static long sys_setdomainname(isr_params_t *params)
+long sys_setdomainname(isr_params_t *params)
 {
     return uts_set_call(params, uts_set_domainname);
 }
@@ -2788,301 +2781,7 @@ void init_syscall(void)
     for (i = 0; i < SYSCALL_TABLE_SIZE; i++) {
         _syscall_table[i] = NULL;
     }
-
-    _syscall_table[SYS_EXIT] = sys_exit;
-    _syscall_table[SYS_FORK] = sys_fork;
-    _syscall_table[SYS_READ] = sys_read;
-    _syscall_table[SYS_WRITE] = sys_write;
-    _syscall_table[SYS_PREAD64] = sys_pread64;
-    _syscall_table[SYS_PWRITE64] = sys_pwrite64;
-    _syscall_table[SYS_OPEN] = sys_open;
-    _syscall_table[SYS_CLOSE] = sys_close;
-    _syscall_table[SYS_WAITPID] = sys_waitpid;
-    _syscall_table[SYS_WAIT4] = sys_wait4;
-    _syscall_table[SYS_WAITID] = sys_waitid;
-    _syscall_table[SYS_GETRUSAGE] = sys_getrusage;
-    _syscall_table[SYS_CREAT] = sys_creat;
-    _syscall_table[SYS_UNLINK] = sys_unlink;
-    _syscall_table[SYS_UNLINKAT] = sys_unlinkat;
-    _syscall_table[SYS_MKDIR] = sys_mkdir;
-    _syscall_table[SYS_MKDIRAT] = sys_mkdirat;
-    _syscall_table[SYS_MKNOD] = sys_mknod;
-    _syscall_table[SYS_MKNODAT] = sys_mknodat;
-    _syscall_table[SYS_RMDIR] = sys_rmdir;
-    _syscall_table[SYS_EXECVE] = sys_execve;
-    _syscall_table[SYS_CHDIR] = sys_chdir;
-    _syscall_table[SYS_FCHDIR] = sys_fchdir;
-    _syscall_table[SYS_CHROOT] = sys_chroot;
-    _syscall_table[SYS_BRK] = sys_brk;
-    _syscall_table[SYS_MMAP2] = sys_mmap2;
-    _syscall_table[SYS_MUNMAP] = sys_munmap;
-    _syscall_table[SYS_MPROTECT] = sys_mprotect;
-    _syscall_table[SYS_CLONE] = sys_clone;
-    _syscall_table[SYS_FUTEX] = sys_futex;
-    _syscall_table[SYS_SIGALTSTACK] = sys_sigaltstack;
-    _syscall_table[SYS_RT_SIGPENDING] = sys_rt_sigpending;
-    _syscall_table[SYS_SIGPROCMASK] = sys_sigprocmask;
-    _syscall_table[SYS_LSEEK] = sys_lseek;
-    _syscall_table[SYS_RENAME] = sys_rename;
-    _syscall_table[SYS_RENAMEAT] = sys_renameat;
-    _syscall_table[SYS_RENAMEAT2] = sys_renameat2;
-    _syscall_table[SYS_IOCTL] = sys_ioctl;
-    _syscall_table[SYS_DUP] = sys_dup;
-    _syscall_table[SYS_DUP2] = sys_dup2;
-    _syscall_table[SYS_PIPE] = sys_pipe;
-    _syscall_table[SYS_PIPE2] = sys_pipe2;
-    _syscall_table[SYS_POLL] = sys_poll;
-    _syscall_table[SYS_PPOLL] = sys_ppoll;
-    _syscall_table[SYS_SELECT] = sys_select;
-    _syscall_table[SYS_NEWSELECT] = sys__newselect;
-    _syscall_table[SYS_PSELECT6] = sys_pselect6;
-    _syscall_table[SYS_GETTIMEOFDAY] = sys_gettimeofday;
-    _syscall_table[SYS_SETTIMEOFDAY] = sys_settimeofday;
-    _syscall_table[SYS_STIME] = sys_stime;
-    _syscall_table[SYS_STAT] = sys_stat;
-    _syscall_table[SYS_LSTAT] = sys_lstat;
-    _syscall_table[SYS_GETCWD] = sys_getcwd;
-    _syscall_table[SYS_STAT64] = sys_stat64;
-    _syscall_table[SYS_LSTAT64] = sys_lstat64;
-    _syscall_table[SYS_FSTAT64] = sys_fstat64;
-    _syscall_table[SYS_STATFS64] = sys_statfs64;
-    _syscall_table[SYS_FSTATFS64] = sys_fstatfs64;
-    _syscall_table[SYS_FSTATAT64] = sys_fstatat64;
-    _syscall_table[SYS_STATX] = sys_statx;
-    _syscall_table[SYS_OPENAT] = sys_openat;
-    _syscall_table[SYS_READLINK] = sys_readlink;
-    _syscall_table[SYS_READLINKAT] = sys_readlinkat;
-    _syscall_table[SYS_ACCESS] = sys_access;
-    _syscall_table[SYS_FACCESSAT] = sys_faccessat;
-    _syscall_table[SYS_LLSEEK] = sys__llseek;
-    _syscall_table[SYS_FCNTL64] = sys_fcntl64;
-    _syscall_table[SYS_FLOCK] = sys_flock;
-    _syscall_table[SYS_MEMFD_CREATE] = sys_memfd_create;
-    _syscall_table[SYS_SENDFILE] = sys_sendfile;
-    _syscall_table[SYS_SENDFILE64] = sys_sendfile;
-    _syscall_table[SYS_SPLICE] = sys_splice;
-    _syscall_table[SYS_TEE] = sys_tee;
-    _syscall_table[SYS_CLOSE_RANGE] = sys_close_range;
-    _syscall_table[SYS_CLONE3] = sys_clone3;
-    _syscall_table[SYS_GETDENTS64] = sys_getdents64;
-    _syscall_table[SYS_UTIMENSAT] = sys_utimensat;
-    _syscall_table[SYS_CLOCK_GETTIME] = sys_clock_gettime;
-    _syscall_table[SYS_CLOCK_SETTIME] = sys_clock_settime;
-    _syscall_table[SYS_ADJTIMEX] = sys_adjtimex;
-    _syscall_table[SYS_CLOCK_ADJTIME] = sys_clock_adjtime;
-    _syscall_table[SYS_CLOCK_ADJTIME64] = sys_clock_adjtime64;
-    _syscall_table[SYS_CLOCK_GETRES] = sys_clock_getres;
-    _syscall_table[SYS_CLOCK_NANOSLEEP] = sys_clock_nanosleep;
-    _syscall_table[SYS_NANOSLEEP] = sys_nanosleep;
-    _syscall_table[SYS_SETITIMER] = sys_setitimer;
-    _syscall_table[SYS_GETITIMER] = sys_getitimer;
-    _syscall_table[SYS_ALARM] = sys_alarm;
-    _syscall_table[SYS_GETRANDOM] = sys_getrandom;
-    _syscall_table[SYS_SECCOMP] = sys_seccomp;
-    _syscall_table[SYS_UNSHARE] = sys_unshare;
-    _syscall_table[SYS_SETNS] = sys_setns;
-    _syscall_table[SYS_KILL] = sys_kill;
-    _syscall_table[SYS_TKILL] = sys_tkill;
-    _syscall_table[SYS_TGKILL] = sys_tgkill;
-    _syscall_table[SYS_RT_SIGQUEUEINFO] = sys_rt_sigqueueinfo;
-    _syscall_table[SYS_RT_TGSIGQUEUEINFO] = sys_rt_tgsigqueueinfo;
-    _syscall_table[SYS_SIGNALFD] = sys_signalfd;
-    _syscall_table[SYS_SIGNALFD4] = sys_signalfd4;
-    _syscall_table[SYS_RT_SIGACTION] = sys_rt_sigaction;
-    _syscall_table[SYS_RT_SIGPROCMASK] = sys_rt_sigprocmask;
-    _syscall_table[SYS_RT_SIGRETURN] = sys_rt_sigreturn;
-    _syscall_table[SYS_SIGRETURN] = sys_sigreturn;
-    /* Identity: the four getters read the PCB credentials. */
-    _syscall_table[SYS_GETUID32] = sys_getuid;
-    _syscall_table[SYS_GETGID32] = sys_getgid;
-    _syscall_table[SYS_GETEUID32] = sys_geteuid;
-    _syscall_table[SYS_GETEGID32] = sys_getegid;
-    _syscall_table[SYS_GETRESUID32] = sys_getresuid;
-    _syscall_table[SYS_GETRESGID32] = sys_getresgid;
-    _syscall_table[SYS_GETGROUPS32] = sys_getgroups;
-    _syscall_table[SYS_SOCKETCALL] = sys_socketcall;
-    _syscall_table[SYS_SET_THREAD_AREA] = sys_set_thread_area;
-    _syscall_table[SYS_GETPID] = sys_getpid;
-    _syscall_table[SYS_GETTID] = sys_gettid;
-    _syscall_table[SYS_GETPRIORITY] = sys_getpriority;
-    _syscall_table[SYS_SETPRIORITY] = sys_setpriority;
-    _syscall_table[SYS_IOPRIO_SET] = sys_ioprio_set;
-    _syscall_table[SYS_IOPRIO_GET] = sys_ioprio_get;
-    _syscall_table[SYS_IPC] = sys_ipc;
-    _syscall_table[SYS_SEMGET] = sys_semget;
-    _syscall_table[SYS_SEMCTL] = sys_semctl;
-    _syscall_table[SYS_SHMGET] = sys_shmget;
-    _syscall_table[SYS_SHMCTL] = sys_shmctl;
-    _syscall_table[SYS_SHMAT] = sys_shmat;
-    _syscall_table[SYS_SHMDT] = sys_shmdt;
-    _syscall_table[SYS_MSGGET] = sys_msgget;
-    _syscall_table[SYS_MSGSND] = sys_msgsnd;
-    _syscall_table[SYS_MSGRCV] = sys_msgrcv;
-    _syscall_table[SYS_MSGCTL] = sys_msgctl;
-    _syscall_table[SYS_SEMTIMEDOP_TIME64] = sys_semtimedop_time64;
-    _syscall_table[SYS_MQ_OPEN] = sys_mq_open;
-    _syscall_table[SYS_MQ_UNLINK] = sys_mq_unlink;
-    _syscall_table[SYS_MQ_TIMEDSEND] = sys_mq_timedsend;
-    _syscall_table[SYS_MQ_TIMEDRECEIVE] = sys_mq_timedreceive;
-    _syscall_table[SYS_MQ_NOTIFY] = sys_mq_notify;
-    _syscall_table[SYS_MQ_GETSETATTR] = sys_mq_getsetattr;
-    _syscall_table[SYS_MQ_TIMEDSEND_TIME64] = sys_mq_timedsend_time64;
-    _syscall_table[SYS_MQ_TIMEDRECEIVE_TIME64] = sys_mq_timedreceive_time64;
-    _syscall_table[SYS_SCHED_SETPARAM] = sys_sched_setparam;
-    _syscall_table[SYS_SCHED_GETPARAM] = sys_sched_getparam;
-    _syscall_table[SYS_SCHED_SETSCHEDULER] = sys_sched_setscheduler;
-    _syscall_table[SYS_SCHED_GETSCHEDULER] = sys_sched_getscheduler;
-    _syscall_table[SYS_SCHED_YIELD] = sys_sched_yield;
-    _syscall_table[SYS_SCHED_GET_PRIORITY_MAX] = sys_sched_get_priority_max;
-    _syscall_table[SYS_SCHED_GET_PRIORITY_MIN] = sys_sched_get_priority_min;
-    _syscall_table[SYS_SCHED_RR_GET_INTERVAL] = sys_sched_rr_get_interval;
-    _syscall_table[SYS_SCHED_SETAFFINITY] = sys_sched_setaffinity;
-    _syscall_table[SYS_SCHED_GETAFFINITY] = sys_sched_getaffinity;
-    _syscall_table[SYS_PRCTL] = sys_prctl;
-    _syscall_table[SYS_CAPGET] = sys_capget;
-    _syscall_table[SYS_CAPSET] = sys_capset;
-    _syscall_table[SYS_SETSID] = sys_setsid;
-    _syscall_table[SYS_SETPGID] = sys_setpgid;
-    _syscall_table[SYS_GETPGID] = sys_getpgid;
-    _syscall_table[SYS_GETPGRP] = sys_getpgrp;
-    _syscall_table[SYS_GETSID] = sys_getsid;
-    _syscall_table[SYS_PAUSE] = sys_pause;
-    _syscall_table[SYS_RT_SIGSUSPEND] = sys_rt_sigsuspend;
-    _syscall_table[SYS_GETPPID] = sys_getppid;
-    _syscall_table[SYS_UMASK] = sys_umask;
-    _syscall_table[SYS_TIMES] = sys_times;
-    _syscall_table[SYS_SYSINFO] = sys_sysinfo;
-    _syscall_table[SYS_VFORK] = sys_vfork;
-    _syscall_table[SYS_READV] = sys_readv;
-    _syscall_table[SYS_WRITEV] = sys_writev;
-    _syscall_table[SYS_UNAME] = sys_uname;
-    _syscall_table[SYS_SYSLOG] = sys_syslog;
-    _syscall_table[SYS_SETHOSTNAME] = sys_sethostname;
-    _syscall_table[SYS_SETDOMAINNAME] = sys_setdomainname;
-    _syscall_table[SYS_SETUID32] = sys_setuid;
-    _syscall_table[SYS_SETGID32] = sys_setgid;
-    _syscall_table[SYS_SETGROUPS32] = sys_setgroups;
-    _syscall_table[SYS_GETRLIMIT] = sys_getrlimit;
-    _syscall_table[SYS_SETRLIMIT] = sys_setrlimit;
-    _syscall_table[SYS_UGETRLIMIT] = sys_getrlimit;
-    _syscall_table[SYS_PRLIMIT64] = sys_prlimit64;
-    _syscall_table[SYS_DUP3] = sys_dup3;
-    _syscall_table[SYS_SYNC] = sys_sync;
-    _syscall_table[SYS_SYNCFS] = sys_syncfs;
-    _syscall_table[SYS_FALLOCATE] = sys_fallocate;
-    _syscall_table[SYS_READAHEAD] = sys_readahead;
-    _syscall_table[SYS_FADVISE64] = sys_fadvise64;
-    _syscall_table[SYS_FADVISE64_64] = sys_fadvise64_64;
-    _syscall_table[SYS_SETXATTR] = sys_setxattr;
-    _syscall_table[SYS_LSETXATTR] = sys_lsetxattr;
-    _syscall_table[SYS_FSETXATTR] = sys_fsetxattr;
-    _syscall_table[SYS_GETXATTR] = sys_getxattr;
-    _syscall_table[SYS_LGETXATTR] = sys_lgetxattr;
-    _syscall_table[SYS_FGETXATTR] = sys_fgetxattr;
-    _syscall_table[SYS_LISTXATTR] = sys_listxattr;
-    _syscall_table[SYS_LLISTXATTR] = sys_llistxattr;
-    _syscall_table[SYS_FLISTXATTR] = sys_flistxattr;
-    _syscall_table[SYS_REMOVEXATTR] = sys_removexattr;
-    _syscall_table[SYS_LREMOVEXATTR] = sys_lremovexattr;
-    _syscall_table[SYS_FREMOVEXATTR] = sys_fremovexattr;
-    _syscall_table[SYS_REBOOT] = sys_reboot;
-    _syscall_table[SYS_FSYNC] = sys_fsync;
-    _syscall_table[SYS_TRUNCATE] = sys_truncate;
-    _syscall_table[SYS_TRUNCATE64] = sys_truncate64;
-    _syscall_table[SYS_FTRUNCATE] = sys_ftruncate;
-    _syscall_table[SYS_FTRUNCATE64] = sys_ftruncate64;
-    _syscall_table[SYS_MOUNT] = sys_mount;
-    _syscall_table[SYS_UMOUNT2] = sys_umount2;
-    _syscall_table[SYS_FDATASYNC] = sys_fsync;
-    _syscall_table[SYS_LINK] = sys_link;
-    _syscall_table[SYS_LINKAT] = sys_linkat;
-    _syscall_table[SYS_SYMLINK] = sys_symlink;
-    _syscall_table[SYS_SYMLINKAT] = sys_symlinkat;
-    /* Of the set-id family only the *32 forms are wired: musl remaps the whole
-     * legacy 16-bit family to them on i386, and the 16-bit ABI's narrower ids
-     * and 0xFFFF keep-sentinel differ, so serving those numbers with 32-bit
-     * semantics would lie to a raw caller. They fall to ENOSYS instead. The
-     * ownership calls below are wired under both numbers, since `chown` takes
-     * its ids the same way in each. */
-    _syscall_table[SYS_SETREUID32] = sys_setreuid;
-    _syscall_table[SYS_SETREGID32] = sys_setregid;
-    _syscall_table[SYS_SETRESUID32] = sys_setresuid;
-    _syscall_table[SYS_SETRESGID32] = sys_setresgid;
-    _syscall_table[SYS_CHMOD] = sys_chmod;
-    _syscall_table[SYS_FCHMODAT] = sys_fchmodat;
-    _syscall_table[SYS_FCHMOD] = sys_fchmod;
-    _syscall_table[SYS_CHOWN] = sys_chown;
-    _syscall_table[SYS_CHOWN32] = sys_chown;
-    _syscall_table[SYS_LCHOWN] = sys_lchown;
-    _syscall_table[SYS_LCHOWN32] = sys_lchown;
-    _syscall_table[SYS_FCHOWNAT] = sys_fchownat;
-    _syscall_table[SYS_FCHOWN] = sys_fchown;
-    _syscall_table[SYS_FCHOWN32] = sys_fchown;
-    _syscall_table[SYS_SET_TID_ADDRESS] = sys_set_tid_address;
-    _syscall_table[SYS_PTRACE] = sys_ptrace;
-    _syscall_table[SYS_PERSONALITY] = sys_personality;
-    _syscall_table[SYS_GETCPU] = sys_getcpu;
-    _syscall_table[SYS_RT_SIGTIMEDWAIT] = sys_rt_sigtimedwait;
-    _syscall_table[SYS_MLOCK] = sys_mlock;
-    _syscall_table[SYS_MUNLOCK] = sys_munlock;
-    _syscall_table[SYS_MLOCKALL] = sys_mlockall;
-    _syscall_table[SYS_MUNLOCKALL] = sys_munlockall;
-    _syscall_table[SYS_MLOCK2] = sys_mlock2;
-    _syscall_table[SYS_MINCORE] = sys_mincore;
-    _syscall_table[SYS_CLOCK_GETTIME64] = sys_clock_gettime64;
-    _syscall_table[SYS_CLOCK_SETTIME64] = sys_clock_settime64;
-    _syscall_table[SYS_CLOCK_GETRES_TIME64] = sys_clock_getres_time64;
-    _syscall_table[SYS_SET_ROBUST_LIST] = sys_set_robust_list;
-    _syscall_table[SYS_GET_ROBUST_LIST] = sys_get_robust_list;
-    /* musl's exit() issues exit_group(); for a single-threaded process it is
-     * exactly _exit(). */
-    _syscall_table[SYS_EXIT_GROUP] = sys_exit_group;
-    _syscall_table[SYS_SOCKET] = sys_socket;
-    _syscall_table[SYS_SOCKETPAIR] = sys_socketpair;
-    _syscall_table[SYS_BIND] = sys_bind;
-    _syscall_table[SYS_CONNECT] = sys_connect;
-    _syscall_table[SYS_LISTEN] = sys_listen;
-    _syscall_table[SYS_ACCEPT4] = sys_accept4;
-    _syscall_table[SYS_GETSOCKOPT] = sys_getsockopt;
-    _syscall_table[SYS_SETSOCKOPT] = sys_setsockopt;
-    _syscall_table[SYS_GETSOCKNAME] = sys_getsockname;
-    _syscall_table[SYS_GETPEERNAME] = sys_getpeername;
-    _syscall_table[SYS_SENDTO] = sys_sendto;
-    _syscall_table[SYS_SENDMSG] = sys_sendmsg;
-    _syscall_table[SYS_RECVFROM] = sys_recvfrom;
-    _syscall_table[SYS_RECVMSG] = sys_recvmsg;
-    _syscall_table[SYS_SHUTDOWN] = sys_shutdown;
-    _syscall_table[SYS_RECVMMSG] = sys_recvmmsg;
-    _syscall_table[SYS_SENDMMSG] = sys_sendmmsg;
-    _syscall_table[SYS_MSYNC] = sys_msync;
-    _syscall_table[SYS_MREMAP] = sys_mremap;
-    _syscall_table[SYS_MADVISE] = sys_madvise;
-    _syscall_table[SYS_EVENTFD] = sys_eventfd;
-    _syscall_table[SYS_EVENTFD2] = sys_eventfd2;
-    _syscall_table[SYS_INOTIFY_INIT] = sys_inotify_init;
-    _syscall_table[SYS_INOTIFY_INIT1] = sys_inotify_init1;
-    _syscall_table[SYS_INOTIFY_ADD_WATCH] = sys_inotify_add_watch;
-    _syscall_table[SYS_INOTIFY_RM_WATCH] = sys_inotify_rm_watch;
-    _syscall_table[SYS_EPOLL_CREATE] = sys_epoll_create;
-    _syscall_table[SYS_EPOLL_CREATE1] = sys_epoll_create1;
-    _syscall_table[SYS_EPOLL_CTL] = sys_epoll_ctl;
-    _syscall_table[SYS_EPOLL_WAIT] = sys_epoll_wait;
-    _syscall_table[SYS_EPOLL_PWAIT] = sys_epoll_pwait;
-    _syscall_table[SYS_EPOLL_PWAIT2] = sys_epoll_pwait2;
-    _syscall_table[SYS_TIMERFD_CREATE] = sys_timerfd_create;
-    _syscall_table[SYS_TIMERFD_SETTIME] = sys_timerfd_settime;
-    _syscall_table[SYS_TIMERFD_GETTIME] = sys_timerfd_gettime;
-    _syscall_table[SYS_TIMERFD_SETTIME64] = sys_timerfd_settime64;
-    _syscall_table[SYS_TIMERFD_GETTIME64] = sys_timerfd_gettime64;
-    _syscall_table[SYS_TIMER_CREATE] = sys_timer_create;
-    _syscall_table[SYS_TIMER_SETTIME] = sys_timer_settime;
-    _syscall_table[SYS_TIMER_GETTIME] = sys_timer_gettime;
-    _syscall_table[SYS_TIMER_GETOVERRUN] = sys_timer_getoverrun;
-    _syscall_table[SYS_TIMER_DELETE] = sys_timer_delete;
-    _syscall_table[SYS_TIMER_SETTIME64] = sys_timer_settime64;
-    _syscall_table[SYS_TIMER_GETTIME64] = sys_timer_gettime64;
+    arch_syscall_init(_syscall_table, _syscall_handler);
 
     _trace_enosys = kcmdline_has("rach2.trace=enosys");
-
-    register_isr_handler(SYSCALL_VECTOR, _syscall_handler, "syscall");
 }
