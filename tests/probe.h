@@ -202,7 +202,7 @@ typedef __SIZE_TYPE__ size_t;
 #define KSTAT_MTIME_NSEC 96
 #define KSTAT_CTIME_NSEC 112
 
-static inline long syscall6(long n, long a, long b, long c, long d, long e, long f)
+static __inline__ long syscall6(long n, long a, long b, long c, long d, long e, long f)
 {
     long r;
     register long r10 __asm__("r10") = d;
@@ -216,32 +216,32 @@ static inline long syscall6(long n, long a, long b, long c, long d, long e, long
     return r;
 }
 
-static inline long syscall5(long n, long a, long b, long c, long d, long e)
+static __inline__ long syscall5(long n, long a, long b, long c, long d, long e)
 {
     return syscall6(n, a, b, c, d, e, 0);
 }
 
-static inline long syscall4(long n, long a, long b, long c, long d)
+static __inline__ long syscall4(long n, long a, long b, long c, long d)
 {
     return syscall6(n, a, b, c, d, 0, 0);
 }
 
-static inline long syscall3(long n, long a, long b, long c)
+static __inline__ long syscall3(long n, long a, long b, long c)
 {
     return syscall6(n, a, b, c, 0, 0, 0);
 }
 
-static inline long syscall2(long n, long a, long b)
+static __inline__ long syscall2(long n, long a, long b)
 {
     return syscall6(n, a, b, 0, 0, 0, 0);
 }
 
-static inline long syscall1(long n, long a)
+static __inline__ long syscall1(long n, long a)
 {
     return syscall6(n, a, 0, 0, 0, 0, 0);
 }
 
-static inline long syscall0(long n)
+static __inline__ long syscall0(long n)
 {
     return syscall6(n, 0, 0, 0, 0, 0, 0);
 }
@@ -445,7 +445,7 @@ static inline long syscall0(long n)
 #define KSTAT_MTIME_NSEC    76
 #define KSTAT_CTIME_NSEC    84
 
-static inline long syscall0(long n)
+static __inline__ long syscall0(long n)
 {
     long r;
 
@@ -453,7 +453,7 @@ static inline long syscall0(long n)
     return r;
 }
 
-static inline long syscall1(long n, long a)
+static __inline__ long syscall1(long n, long a)
 {
     long r;
 
@@ -461,7 +461,7 @@ static inline long syscall1(long n, long a)
     return r;
 }
 
-static inline long syscall2(long n, long a, long b)
+static __inline__ long syscall2(long n, long a, long b)
 {
     long r;
 
@@ -469,7 +469,7 @@ static inline long syscall2(long n, long a, long b)
     return r;
 }
 
-static inline long syscall3(long n, long a, long b, long c)
+static __inline__ long syscall3(long n, long a, long b, long c)
 {
     long r;
 
@@ -477,7 +477,7 @@ static inline long syscall3(long n, long a, long b, long c)
     return r;
 }
 
-static inline long syscall4(long n, long a, long b, long c, long d)
+static __inline__ long syscall4(long n, long a, long b, long c, long d)
 {
     long r;
 
@@ -485,7 +485,7 @@ static inline long syscall4(long n, long a, long b, long c, long d)
     return r;
 }
 
-static inline long syscall5(long n, long a, long b, long c, long d, long e)
+static __inline__ long syscall5(long n, long a, long b, long c, long d, long e)
 {
     long r;
 
@@ -501,7 +501,7 @@ static inline long syscall5(long n, long a, long b, long c, long d, long e)
  * and gives no constraint: it is saved, loaded from memory, and put back
  * around the call.
  */
-static inline long syscall6(long n, long a, long b, long c, long d, long e, long f)
+static __inline__ long syscall6(long n, long a, long b, long c, long d, long e, long f)
 {
     long r;
     long args[2];
@@ -545,7 +545,7 @@ static inline long syscall6(long n, long a, long b, long c, long d, long e, long
 
 /** Whether a system call's result is a negated errno, as an address such as
  * mmap's can be anything else. */
-static inline int sys_failed(long r)
+static __inline__ int sys_failed(long r)
 {
     return (unsigned long)r > -4096UL;
 }
@@ -555,7 +555,7 @@ static inline int sys_failed(long r)
  * page: on i386 through mmap2, which takes the offset in pages, and on
  * x86-64 through mmap. The mapping's address, or a negated errno.
  */
-static inline long probe_mmap(long addr, long len, long prot, long flags, long fd, long off)
+static __inline__ long probe_mmap(long addr, long len, long prot, long flags, long fd, long off)
 {
 #if defined __x86_64__
     return syscall6(SYS_MMAP, addr, len, prot, flags, fd, off);
@@ -576,7 +576,7 @@ static inline long probe_mmap(long addr, long len, long prot, long flags, long f
 #else
 #define LLSEEK_NAME "_llseek"
 #endif
-static inline long probe_llseek(int fd, long long off, int whence, long long *result)
+static __inline__ long probe_llseek(int fd, long long off, int whence, long long *result)
 {
 #if defined __x86_64__
     long r = syscall3(SYS_LSEEK, fd, (long)off, whence);
@@ -597,7 +597,7 @@ static inline long probe_llseek(int fd, long long off, int whence, long long *re
  * takes the length in two words, the low first, and on x86-64 through
  * ftruncate. 0, or a negated errno.
  */
-static inline long probe_ftruncate64(int fd, long long len)
+static __inline__ long probe_ftruncate64(int fd, long long len)
 {
 #if defined __x86_64__
     return syscall2(SYS_FTRUNCATE, fd, (long)len);
@@ -621,7 +621,7 @@ static inline long probe_ftruncate64(int fd, long long len)
 #define KSTATFS_FILES 32
 #define KSTATFS_FFREE 40
 #endif
-static inline long probe_statfs(const char *path, void *buf)
+static __inline__ long probe_statfs(const char *path, void *buf)
 {
 #if defined __x86_64__
     return syscall2(SYS_STATFS, (long)path, (long)buf);
@@ -661,7 +661,7 @@ static inline long probe_statfs(const char *path, void *buf)
  * no flags, and the echo is Rach2's call for it. The operation's result, or a
  * negated errno.
  */
-static inline long sock_call(int call, const unsigned long *args)
+static __inline__ long sock_call(int call, const unsigned long *args)
 {
 #if defined __x86_64__
     const long *a = (const long *)args;
