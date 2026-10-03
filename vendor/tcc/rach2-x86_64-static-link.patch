@@ -1,19 +1,30 @@
-Call a function an executable defines directly on x86-64, not through a PLT.
+Link a static x86-64 executable whose calls and GOT TinyCC 0.9.27 leaves
+unfilled.
+
+Two faults, each fatal before main.
 
 GNU as since binutils 2.31 writes R_X86_64_PLT32 for every `call` to a global
-function, PIC or not, where it wrote R_X86_64_PC32 before. TinyCC 0.9.27
-gives each PLT32 relocation a PLT slot and a GOT entry, and fills them only
-for a dynamic link: in a static executable the slot's `jmp *disp(%rip)` keeps
-the GOT entry's offset as its displacement, and the GOT stays zero. musl's
-crt1.o calls __libc_start_main that way, so every program this TinyCC linked
-for x86-64 Rach2 jumped into the bytes after the PLT and faulted before main.
+function, PIC or not, where it wrote R_X86_64_PC32 before. TinyCC gives each
+PLT32 relocation a PLT slot and a GOT entry, and relocates the slots only in a
+dynamic link: in a static executable the slot's `jmp *disp(%rip)` keeps the
+GOT entry's offset as its displacement. musl's crt1.o calls
+__libc_start_main that way. The call needs no slot when the executable
+defines the function: it is a plain PC-relative call, which is what the first
+change makes of it, as TinyCC already did for a local or hidden symbol and as
+its later releases do for any symbol an executable defines. An undefined
+symbol keeps its slot, and a static link refuses it as before.
 
-The call needs no slot when the executable itself defines the function: it is
-a plain PC-relative call, which is what this change makes of it, as TinyCC
-already did for a local or hidden symbol and as its later releases do for any
-symbol an executable defines. An undefined symbol keeps its slot, and a static
-link then refuses it as before. i386 is untouched: its calls are R_386_PC32
-unless written `@PLT`, and the code is under TCC_TARGET_X86_64.
+TinyCC reaches extern data on x86-64 through the GOT (R_X86_64_GOTPCREL), as
+`stdout` in fflush(stdout), and fills a static executable's GOT in fill_got
+from the relocations of the sections that refer to it. It called fill_got
+after tidy_section_headers, which drops the unnamed relocation sections from
+the section table, so fill_got found none and every entry stayed 0. The
+second change fills the GOT before, and the call after then finds nothing
+more to fill.
+
+Both are under TCC_TARGET_X86_64, so the i386 compiler, built from the same
+source, is unchanged: its calls are R_386_PC32 unless written `@PLT`, and its
+code reaches data by absolute address.
 
 --- a/tccelf.c
 +++ b/tccelf.c
@@ -28,3 +39,18 @@ unless written `@PLT`, and the code is under TCC_TARGET_X86_64.
                  rel->r_info = ELFW(R_INFO)(sym_index, R_X86_64_PC32);
                  continue;
              }
+@@ -2212,6 +2214,14 @@
+         ret = final_sections_reloc(s1);
+         if (ret)
+             goto the_end;
++#ifdef TCC_TARGET_X86_64
++        /* A static executable's GOT is filled from the relocations of the
++           sections that refer to it, which tidy_section_headers drops from
++           the section table, so it is filled before; the call below then
++           finds nothing more to fill. */
++        if (file_type == TCC_OUTPUT_EXE && s1->static_link)
++            fill_got(s1);
++#endif
+ 	tidy_section_headers(s1, sec_order);
+ 
+         /* Perform relocation to GOT or PLT entries */

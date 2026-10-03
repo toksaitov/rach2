@@ -2,7 +2,7 @@
 
 Rach2 stages a static TinyCC that runs on the guest and produces objects and executables for it: on i686 Rach2 an i386 compiler, on x86-64 Rach2 an x86-64 one, each the machine's native compiler. TinyCC includes its own assembler and linker, so a guest build needs no GNU binutils.
 
-The tracked integration has six files: `.gitignore`, this Readme, `build_tcc.sh`, `rach2-output-policy.patch`, `rach2-x86_64-static-call.patch`, and `tcc-0.9.27.tar.bz2`. The extracted source, generated cross-tool shims, compiler, runtime archive, headers, and stamp are ignored and reproducible.
+The tracked integration has six files: `.gitignore`, this Readme, `build_tcc.sh`, `rach2-output-policy.patch`, `rach2-x86_64-static-link.patch`, and `tcc-0.9.27.tar.bz2`. The extracted source, generated cross-tool shims, compiler, runtime archive, headers, and stamp are ignored and reproducible.
 
 ## Build
 
@@ -20,7 +20,7 @@ The root `make` also builds TinyCC through the same stamp. The stamp depends on 
 The build script:
 
 1. Requires `tcc-0.9.27.tar.bz2` to have SHA-256 `de23af78fca90ce32dff2dd45b3432b2334740bb9bb7b05bf60fdbfc396ceb9c`.
-2. Replaces the extracted tree and applies `rach2-output-policy.patch` and `rach2-x86_64-static-call.patch` with `patch --batch --forward`.
+2. Replaces the extracted tree and applies `rach2-output-policy.patch` and `rach2-x86_64-static-link.patch` with `patch --batch --forward`.
 3. Creates a `rach2-` cross prefix: `rach2-gcc` invokes the project musl wrapper, while `rach2-ar` and `rach2-strip` invoke the architecture's ELF tools.
 4. Configures an i386 or x86_64 musl target with the guest search paths, then rewrites the generated target OS from the macOS build host to Linux and removes `CONFIG_OSX`.
 5. Builds the compiler without executing it on the host, and builds `libtcc1.a` with the cross GCC through TinyCC's `i386-libtcc1-usegcc=yes` or `x86_64-libtcc1-usegcc=yes` rule.
@@ -80,9 +80,14 @@ The checks run in TinyCC's `main` after command-line processing. They do not cha
 
 [`tools/inspect/elfcheck.c`](../../tools/inspect/elfcheck.c) separately rejects an artifact outside the architecture's loader contract, given by `--arch`, or one containing `PT_INTERP` or `PT_DYNAMIC`. The musl roots have no loader for a dynamic program, and exec refuses a program whose loader it cannot find, so such an artifact could not run where it is staged.
 
-## The x86-64 static call
+## The x86-64 static link
 
-GNU as since binutils 2.31 writes `R_X86_64_PLT32` for every `call` to a global function, where it wrote `R_X86_64_PC32` before, and musl's `crt1.o` calls `__libc_start_main` that way. TinyCC 0.9.27 gives each such relocation a PLT slot and fills the slots only in a dynamic link, so in a static executable the slot jumped to a displacement never relocated, and every x86-64 program faulted before `main`. `rach2-x86_64-static-call.patch` makes the call to a function the executable defines a plain PC-relative one, as later TinyCC releases do; an undefined symbol keeps its slot, and the static link refuses it as before. The i386 compiler is built from the same source and is unchanged: the code is under `TCC_TARGET_X86_64`.
+TinyCC 0.9.27 left two parts of a static x86-64 executable unfilled, and every program it linked faulted before `main`. `rach2-x86_64-static-link.patch` fills both:
+
+* GNU as since binutils 2.31 writes `R_X86_64_PLT32` for every `call` to a global function, where it wrote `R_X86_64_PC32` before, and musl's `crt1.o` calls `__libc_start_main` that way. TinyCC gave each such relocation a PLT slot and relocated the slots only in a dynamic link. The patch makes a call to a function the executable defines a plain PC-relative one; an undefined symbol keeps its slot, and the static link refuses it as before.
+* TinyCC reaches extern data on x86-64 through the GOT, as `stdout` in `fflush(stdout)`, and filled a static executable's GOT from the relocations of the sections that refer to it after it had dropped those sections from its section table, so every entry stayed 0. The patch fills the GOT first.
+
+The i386 compiler is built from the same source and is unchanged: both changes are under `TCC_TARGET_X86_64`.
 
 ## Static link closure
 
@@ -96,7 +101,7 @@ To update TinyCC:
 
 1. Replace the archive with a release tarball from the [TinyCC release directory](https://download.savannah.gnu.org/releases/tinycc/).
 2. Change `VERSION` and `TARBALL_SHA256` in `build_tcc.sh`, and change `TCC_TARBALL` in the root Makefile.
-3. Rebase both patches, or drop `rach2-x86_64-static-call.patch` where the release already calls a function an executable defines without a PLT slot, and review configure, `config.mak`, the runtime build rule, guest paths, and compiler-runtime helper references.
+3. Rebase both patches, or drop `rach2-x86_64-static-link.patch` where the release already links a static x86-64 executable whole, and review configure, `config.mak`, the runtime build rule, guest paths, and compiler-runtime helper references.
 4. Rebuild and inspect every staged artifact before running the verification below.
 
 ## Verification

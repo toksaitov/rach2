@@ -126,22 +126,23 @@ mkdir -p "$WORK"
 tar xf "$TARBALL" -C "$WORK"
 
 # The two changes this project makes to somebody else's compiler: it refuses
-# the output kinds this system cannot run, and on x86-64 it calls a function
-# the executable defines without a PLT slot, which a static link never fills.
+# the output kinds this system cannot run, and on x86-64 it links a static
+# executable whose PLT and GOT TinyCC 0.9.27 leaves unfilled.
 # Patches applied here rather than an edited tree, so the vendored source stays
 # as upstream shipped it and the diff a reader wants is a file in this
 # repository. A patch that does not apply is a build that stops: silently
 # shipping an unpatched compiler would ship one that accepts `-run` and dies
 # strangely, or one whose x86-64 programs fault before main.
-echo "tcc: applying the output policy and the x86-64 static call"
-for p in rach2-output-policy.patch rach2-x86_64-static-call.patch; do
+echo "tcc: applying the output policy and the x86-64 static link"
+for p in rach2-output-policy.patch rach2-x86_64-static-link.patch; do
     if ! (cd "$SRC" && patch -p1 --batch --forward < "$SCRIPT_DIR/$p" >/dev/null); then
         echo "tcc: $p did not apply to $SRC" >&2
         exit 1
     fi
 done
-if ! grep -q "sym->st_shndx != SHN_UNDEF))) {" "$SRC/tccelf.c"; then
-    echo "tcc: the x86-64 static call is not in the source it is about to build" >&2
+if ! grep -q "sym->st_shndx != SHN_UNDEF))) {" "$SRC/tccelf.c" ||
+   ! grep -q "so it is filled before" "$SRC/tccelf.c"; then
+    echo "tcc: the x86-64 static link is not in the source it is about to build" >&2
     exit 1
 fi
 if ! grep -q "must be linked with -static" "$SRC/tcc.c" ||

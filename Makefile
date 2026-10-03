@@ -215,7 +215,7 @@ $(BUSYBOX_STAMP): vendor/busybox/build_busybox.sh vendor/busybox/rach2.config \
 	@touch $@
 
 $(TCC_STAMP): vendor/tcc/build_tcc.sh vendor/tcc/rach2-output-policy.patch \
-              vendor/tcc/rach2-x86_64-static-call.patch \
+              vendor/tcc/rach2-x86_64-static-link.patch \
               $(VENDOR_COMMON) $(TCC_TARBALL) $(LIBC_STAMP)
 	@rm -f $@ $(TCC_BIN) $(TCC_STAGE)/libtcc1.a \
 	    $(TCC_STAGE)/include/stdarg.h
