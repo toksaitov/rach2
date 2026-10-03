@@ -6,16 +6,18 @@
 # Usage: build_js.sh [STEP...]
 #
 # Builds js, the shell of SpiderMonkey, Firefox's JavaScript engine, from
-# Firefox's source for i686-linux-gnu with its JIT, and installs it under the
-# prefix /usr into build/vendor/gnu/js, the staging root. The build follows
+# Firefox's source for the toolchain's target, i686-linux-gnu or
+# x86_64-rach2-linux-gnu as RACH2_ARCH names the architecture
+# (vendor/gnu/arch.sh), with its JIT, and installs it under the prefix /usr
+# into js/ of the layer's build tree, the staging root. The build follows
 # Mozilla's instructions for SpiderMonkey: mach with a mozconfig for the js
 # project, cross-compiled with --target, here by the compilers `make
-# gnu-toolchain` built, so that the shell links against their glibc. The
-# steps are:
+# gnu-toolchain` built, so that the shell links against their glibc. The steps
+# are:
 #
 #   rust      install Rust 1.86.0, the release Firefox 140 is built with, for
-#             this host and for i686, from the pinned components into
-#             build/vendor/gnu/rust
+#             this host, an x86-64 one, and for i686 when that is the
+#             target, from the pinned components into rust/ of the build tree
 #   cbindgen  build cbindgen 0.28.0, the release Firefox 140's automation
 #             uses, from its crate; configure requires it, though the shell
 #             does not use it
@@ -27,7 +29,7 @@
 #
 # With no STEP all five run from nothing, and naming steps runs only those
 # over what an earlier run left. Each step writes its output to a log in
-# build/vendor/gnu/log. cargo fetches cbindgen's dependencies from crates.io
+# log/ of the build tree. cargo fetches cbindgen's dependencies from crates.io
 # and checks each against the digest in the crate's Cargo.lock; Firefox's
 # own crates are in its source. mach and cargo run GNU_JOBS jobs, or one for
 # every processor when GNU_JOBS is not set, under make as well, since mach
@@ -38,8 +40,10 @@ set -e
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
 GNU="$(cd "$DIR/.." && pwd)"
+# shellcheck disable=SC2034 # arch.sh reads it
 REPO="$(cd "$GNU/../.." && pwd)"
-OUT="$REPO/build/vendor/gnu"
+. "$GNU/arch.sh"
+OUT="$GNU_OUT"
 SRC="$OUT/src/js"
 WORK="$OUT/work"
 LOG="$OUT/log"
@@ -47,7 +51,7 @@ CROSS="$OUT/cross"
 SYSROOT="$OUT/sysroot"
 RUST="$OUT/rust"
 ROOT="$OUT/js"
-TARGET=i686-linux-gnu
+TARGET="$GNU_TARGET"
 PATH="$RUST/bin:$CROSS/bin:$PATH"
 CARGO_HOME="$RUST/cargo-home"
 CARGO_BUILD_JOBS="${GNU_JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}"
@@ -80,7 +84,9 @@ extract()
 step_rust()
 {
     rm -rf "$RUST"
-    for c in rustc cargo rust-std rust-std-i686; do
+    components="rustc cargo rust-std"
+    [ "$RACH2_ARCH" = i686 ] && components="$components rust-std-i686"
+    for c in $components; do
         t="$(extract "$c" "$WORK/js-rust")"
         "$t/install.sh" --prefix="$RUST" --disable-ldconfig
     done
@@ -104,12 +110,12 @@ step_source()
     patch -d "$tree" -p1 -F 0 --forward < "$DIR/python-3.14.patch"
 }
 
-# The mozconfig is the one Mozilla's instructions give for an optimized
-# shell, with the target and the compilers given, and with
-# --disable-bootstrap, which keeps mach from downloading toolchains of its
-# own. SSE2 arithmetic is what Mozilla's automation builds 32-bit x86 with,
-# so that the interpreter and the JIT round alike. SpiderMonkey alone takes
-# zlib from the system by default, and the sysroot has none, so the copy in
+# The mozconfig is the one Mozilla's instructions give for an optimized shell,
+# with the target and the compilers given, and with --disable-bootstrap, which
+# keeps mach from downloading toolchains of its own. SSE2 arithmetic is what
+# Mozilla's automation builds 32-bit x86 with, so that the interpreter and the
+# JIT round alike; x86-64 has it by default. SpiderMonkey alone takes zlib
+# from the system by default, and the sysroot has none, so the copy in
 # Firefox's tree is built in. configure requires llvm-objdump, which only the
 # browser's packaging runs, so LLVM_OBJDUMP is the cross toolchain's objdump.
 step_build()
@@ -117,6 +123,8 @@ step_build()
     set -- "$SRC"/*
     tree="$1"
     obj="$WORK/js-obj"
+    fpflags=
+    [ "$RACH2_ARCH" = i686 ] && fpflags="-msse -msse2 -mfpmath=sse"
     rm -rf "$obj" "$WORK/js-state"
     mkdir -p "$obj" "$WORK/js-state"
     cat > "$WORK/js-mozconfig" <<EOF
@@ -137,7 +145,7 @@ EOF
         CC="$TARGET-gcc" CXX="$TARGET-g++" HOST_CC=cc HOST_CXX=c++ \
         AR="$TARGET-ar" NM="$TARGET-nm" RANLIB="$TARGET-ranlib" \
         STRIP="$TARGET-strip" LLVM_OBJDUMP="$CROSS/bin/$TARGET-objdump" \
-        CFLAGS="-msse -msse2 -mfpmath=sse" CXXFLAGS="-msse -msse2 -mfpmath=sse" \
+        CFLAGS="$fpflags" CXXFLAGS="$fpflags" \
         RUSTC="$RUST/bin/rustc" CARGO="$RUST/bin/cargo" \
         CBINDGEN="$RUST/bin/cbindgen" \
         python3 ./mach --no-interactive build "$JOBS"
@@ -169,7 +177,7 @@ print("sum(1000) = " + r[0]);
 print("baseline.enable = " + o["baseline.enable"] + ", ion.enable = " + o["ion.enable"]);
 print("inJit() = " + r[1] + ", inIon() = " + r[2]);
 EOF
-    "$SYSROOT/lib/ld-linux.so.2" \
+    "$SYSROOT$GNU_LOADER" \
         --library-path "$SYSROOT/lib:$SYSROOT/usr/lib:$CROSS/$TARGET/lib" \
         "$ROOT/usr/bin/js" --ion-offthread-compile=off "$WORK/js-check.js" > "$WORK/js-check.out"
     cat "$WORK/js-check.out"

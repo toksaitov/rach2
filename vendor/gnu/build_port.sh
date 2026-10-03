@@ -10,20 +10,25 @@
 # It sets VERSION; DEPENDS, the ports whose headers and libraries it needs;
 # CONFIGURE_ARGS; CACHE, the configure answers a cross build cannot find out
 # for itself; and PATCHES, pinned patches applied after the extract with
-# PATCH_STRIP leading directories removed. By default a port is configured
-# by autoconf in a directory of its own, compiled, and installed. A port
-# built another way defines port_build, which runs in that directory, and
+# PATCH_STRIP leading directories removed. By default a port is configured by
+# autoconf in a directory of its own, compiled, and installed. A port built
+# another way defines port_build, which runs in that directory, and
 # port_install, which installs into $DEST. SOURCE is the name of the port's
 # tarball in sources.txt when it is not NAME, and empty for a port with none;
 # SOURCE_DIR is the directory the tarball makes when that is not
 # SOURCE-VERSION. DEBIAN names a Debian packaging tarball in sources.txt,
 # whose debian/patches/series is applied after PATCHES, as Debian's quilt
-# applies it, for an upstream that makes no more releases and whose fixes
-# are Debian's. A program that must be set-id is moved by its port_install
-# out of the stage into build/vendor/gnu/setid, from which the image's
+# applies it, for an upstream that makes no more releases and whose fixes are
+# Debian's. A program that must be set-id is moved by its port_install out of
+# the stage into setid/ of the layer's build tree, from which the image's
 # manifest installs it with its bit.
 #
-# The compilers run with the root, build/vendor/gnu/root, as their sysroot,
+# The ports are built for the architecture RACH2_ARCH names, into the build
+# tree vendor/gnu/arch.sh gives it: build/vendor/gnu for i686 and
+# build/x86_64/vendor/gnu for x86-64. A recipe reads TARGET, the toolchain's
+# target, LOADER, the dynamic loader's path, and RACH2_ARCH.
+#
+# The compilers run with the root, root/ of that tree, as their sysroot,
 # and pkg-config reads only the root's files, so a port finds what the ports
 # before it installed where the target system has it. A port installs into
 # stage/NAME, where the debugging information is stripped from its ELF files,
@@ -46,15 +51,19 @@
 set -e
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck disable=SC2034 # arch.sh reads it
 REPO="$(cd "$DIR/../.." && pwd)"
-OUT="$REPO/build/vendor/gnu"
+. "$DIR/arch.sh"
+OUT="$GNU_OUT"
 CROSS="$OUT/cross"
 # shellcheck disable=SC2034 # the runtime's recipe reads it
 SYSROOT="$OUT/sysroot"
 ROOT="$OUT/root"
 STAGE="$OUT/stage"
 WRAP="$OUT/wrap"
-TARGET=i686-linux-gnu
+TARGET="$GNU_TARGET"
+# shellcheck disable=SC2034 # the recipes read it
+LOADER="$GNU_LOADER"
 
 case " $MAKEFLAGS " in
     *jobserver*) ;;
@@ -107,7 +116,7 @@ configure_autoconf()
 }
 
 # configure_cmake ARG...: run the build host's CMake, which the cmake port
-# builds into build/vendor/gnu/host, for the target in the current directory
+# builds into host/ of the build tree, for the target in the current directory
 # over the port's source, with a toolchain file that names the cross
 # compilers and finds libraries and headers in the root alone; the programs
 # under /usr and the libraries in /usr/lib, as the other ports have them,
@@ -116,7 +125,7 @@ configure_cmake()
 {
     cat >toolchain.cmake <<EOF
 set(CMAKE_SYSTEM_NAME Linux)
-set(CMAKE_SYSTEM_PROCESSOR i686)
+set(CMAKE_SYSTEM_PROCESSOR $(echo "$TARGET" | cut -d- -f1))
 set(CMAKE_C_COMPILER $WRAP/$TARGET-gcc)
 set(CMAKE_CXX_COMPILER $WRAP/$TARGET-g++)
 set(CMAKE_FIND_ROOT_PATH $ROOT)

@@ -1,27 +1,29 @@
 #!/usr/bin/env sh
 
 #
-# fetch_chromium.sh: Debian's chromium-headless-shell for i386, with the
-# libraries it needs and the D-Bus system bus it asks for, unpacked into a
-# root of its own.
+# fetch_chromium.sh: Debian's chromium-headless-shell for i386 or amd64, as
+# RACH2_ARCH names the architecture (vendor/gnu/arch.sh), with the libraries
+# it needs and the D-Bus system bus it asks for, unpacked into a root of its
+# own.
 #
 # Usage: fetch_chromium.sh [STEP...]
 #
 # Takes chromium-headless-shell, dbus-daemon and dbus-system-bus-common and
-# the closure of their dependencies from Debian 13 (trixie) for i386, as snapshot.debian.org has the archive at the
-# time SNAPSHOT below: the stable suite and its security suite, which has
-# Chromium 154. The steps are:
+# the closure of their dependencies from Debian 13 (trixie) for that
+# architecture, as snapshot.debian.org has the archive at the time SNAPSHOT
+# below: the stable suite and its security suite, which has Chromium 154. The
+# steps are:
 #
 #   index    fetch each suite's InRelease and check its digest and its
 #            signature by the Debian archive keys, then fetch the suite's
-#            i386 Packages index and check it against the digest that the
-#            signed text lists
+#            Packages index for the architecture and check it against the
+#            digest that the signed text lists
 #   resolve  follow Depends and Pre-Depends from those three packages
 #            through both indices, the security suite's entry for a package
 #            replacing the stable suite's, and list the closure
 #   fetch    fetch each package of the closure and check it against the
 #            digest its index lists
-#   unpack   unpack every package into build/vendor/gnu/chromium
+#   unpack   unpack every package into chromium/ of the layer's build tree
 #   check    list, through the sysroot's loader, the libraries the browser
 #            and its own shared objects need, glibc's from the sysroot and
 #            every other from the root; report the newest glibc symbol
@@ -30,7 +32,7 @@
 #
 # With no STEP all five run from nothing, and naming steps runs only those
 # over what an earlier run left. Each step writes its output to a log in
-# build/vendor/gnu/log. The indices and the packages are kept in
+# log/ of the build tree. The indices and the packages are kept in
 # ../downloads/debian and checked again on every use, as fetch.sh keeps its
 # tarballs.
 #
@@ -39,8 +41,10 @@ set -e
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
 GNU="$(cd "$DIR/.." && pwd)"
+# shellcheck disable=SC2034 # arch.sh reads it
 REPO="$(cd "$GNU/../.." && pwd)"
-OUT="$REPO/build/vendor/gnu"
+. "$GNU/arch.sh"
+OUT="$GNU_OUT"
 WORK="$OUT/work/chromium"
 LOG="$OUT/log"
 CROSS="$OUT/cross"
@@ -48,7 +52,7 @@ SYSROOT="$OUT/sysroot"
 ROOT="$OUT/chromium"
 DEBS="$GNU/downloads/debian"
 SHA="$REPO/build/tools/verify/sha256"
-TARGET=i686-linux-gnu
+TARGET="$GNU_TARGET"
 PACKAGE=chromium-headless-shell
 BROWSER=usr/lib/chromium/chromium-headless-shell
 
@@ -153,14 +157,15 @@ step_index()
         get "$base/InRelease" "$DEBS/$suite.InRelease" "${rest#*:}"
         gpgv --keyring "$WORK/keyring.gpg" --output "$WORK/$suite.Release" \
             "$DEBS/$suite.InRelease"
-        sha="$(awk '/^SHA256:/ { s = 1; next } /^[^ ]/ { s = 0 }
-            s && $3 == "main/binary-i386/Packages.xz" { print $1 }' "$WORK/$suite.Release")"
+        index="main/binary-$GNU_DEB_ARCH/Packages.xz"
+        sha="$(awk -v want="$index" '/^SHA256:/ { s = 1; next } /^[^ ]/ { s = 0 }
+            s && $3 == want { print $1 }' "$WORK/$suite.Release")"
         if [ -z "$sha" ]; then
-            echo "gnu: chromium: $suite: no i386 Packages index in the Release" >&2
+            echo "gnu: chromium: $suite: no $GNU_DEB_ARCH Packages index in the Release" >&2
             return 1
         fi
-        get "$base/main/binary-i386/Packages.xz" "$DEBS/$suite.Packages.xz" "$sha"
-        xz -dc "$DEBS/$suite.Packages.xz" > "$WORK/$suite.Packages"
+        get "$base/$index" "$DEBS/$suite.$GNU_DEB_ARCH.Packages.xz" "$sha"
+        xz -dc "$DEBS/$suite.$GNU_DEB_ARCH.Packages.xz" > "$WORK/$suite.Packages"
         echo "$archive $suite: $(awk '/^Date:/ { sub(/^Date: /, ""); print; exit }' "$WORK/$suite.Release")"
     done
 }
@@ -314,7 +319,7 @@ is_elf()
 # taken inside the root.
 root_libpath()
 {
-    p="$ROOT/usr/lib/i386-linux-gnu:$ROOT/usr/lib/chromium"
+    p="$ROOT/usr/lib/$GNU_MULTIARCH:$ROOT/usr/lib/chromium"
     for d in $(find "$ROOT/usr/lib" -type f -name '*.so*' | while read -r f; do
             "$CROSS/bin/$TARGET-readelf" -d "$f" 2>/dev/null | sed -n \
                 -e 's/.*(RUNPATH).*\[\(.*\)\]$/\1/p' -e 's/.*(RPATH).*\[\(.*\)\]$/\1/p'
@@ -339,7 +344,7 @@ is_so_name()
 
 step_check()
 {
-    if [ ! -x "$SYSROOT/lib/ld-linux.so.2" ]; then
+    if [ ! -x "$SYSROOT$GNU_LOADER" ]; then
         echo "gnu: chromium: no sysroot; run make gnu-toolchain first" >&2
         return 1
     fi
@@ -357,7 +362,7 @@ step_check()
             return 1
         fi
         echo "${f#"$ROOT"/}:" >> "$WORK/list.txt"
-        "$SYSROOT/lib/ld-linux.so.2" --list --library-path "$SYSROOT/lib:$rootlib" "$f" \
+        "$SYSROOT$GNU_LOADER" --list --library-path "$SYSROOT/lib:$rootlib" "$f" \
             >> "$WORK/list.txt" 2>&1 || echo "    the loader exited with $?" >> "$WORK/list.txt"
     done
     cat "$WORK/list.txt"
@@ -387,12 +392,12 @@ step_check()
 }
 
 # The browser finds its data files and starts its helper processes through
-# /proc/self/exe, a link to the loader when the loader is run by hand, so
-# the run is in a copy of the root instead: unshare(1) makes the user root of
-# new user, mount and process namespaces, the host's /dev, /proc and /sys are
+# /proc/self/exe, a link to the loader when the loader is run by hand, so the
+# run is in a copy of the root instead: unshare(1) makes the user root of new
+# user, mount and process namespaces, the host's /dev, /proc and /sys are
 # mounted in the copy, and chroot(1) starts the browser there, where the
-# kernel loads the root's own /lib/ld-linux.so.2 for it. The run reports what
-# happened and does not decide the step.
+# kernel loads the root's own loader for it. The run reports what happened and
+# does not decide the step.
 run_browser()
 {
     run="$WORK/run"

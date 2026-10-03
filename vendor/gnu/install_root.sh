@@ -7,17 +7,20 @@
 #
 # tools/image/mkext2.sh runs this over the tree it staged from
 # krffs/manifests/os-real-gnu.manifest, before it formats the volume, so that
-# the GNU system lies over the os-real system as a Debian i386 system has
-# it. From build/vendor/gnu it copies in:
+# the GNU system lies over the os-real system as a Debian system has it. From
+# the GNU layer's build tree for the architecture RACH2_ARCH names
+# (vendor/gnu/arch.sh) it copies in:
 #
-#   root      glibc's runtime, with its loader as /lib/ld-linux.so.2, and the
-#             ports under /usr, with their files in /etc
+#   root      glibc's runtime, with its loader at /lib/ld-linux.so.2 on i686
+#             and /lib64/ld-linux-x86-64.so.2 on x86-64, and the ports under
+#             /usr, with their files in /etc
 #   native    GCC and binutils
 #   gdb       GDB and gdbserver
 #   js        the SpiderMonkey shell
 #   chromium  chromium-headless-shell in /usr/lib/chromium and the libraries
-#             it needs in /usr/lib/i386-linux-gnu, as Debian's packages have
-#             them, from the packages fetch_chromium.sh unpacked
+#             it needs in /usr/lib/i386-linux-gnu or /usr/lib/x86_64-linux-gnu,
+#             as Debian's packages have them, from the packages
+#             fetch_chromium.sh unpacked
 #
 # Then it links /bin/bash, /bin/sh, /bin/apropos, /bin/whatis, /usr/bin/cc,
 # /usr/bin/vi, /bin/mkfs.ext2, /sbin/fsck.ext2, /sbin/e2label, /etc/mtab and
@@ -38,8 +41,10 @@
 set -e
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck disable=SC2034 # arch.sh reads it
 REPO="$(cd "$DIR/../.." && pwd)"
-OUT="$REPO/build/vendor/gnu"
+. "$DIR/arch.sh"
+OUT="$GNU_OUT"
 DEBIAN="$OUT/work/chromium"
 
 # The packages of the browser's closure that are not installed: libc6,
@@ -103,7 +108,7 @@ fresh()
     fi
 }
 
-# install_part PART: copy build/vendor/gnu/PART over the tree. The Info
+# install_part PART: copy PART of the build tree over the tree. The Info
 # directory index lists only the manuals of the part that wrote it, so none
 # is kept, as build_port.sh keeps none.
 install_part()
@@ -255,7 +260,7 @@ printf 'Etc/UTC\n' > "$TREE/etc/timezone"
 
 # The console's entry, for the TERM=rach2 the kernel gives its sessions. The
 # build host runs the root's tic through the root's loader.
-"$TREE/lib/ld-linux.so.2" --library-path "$TREE/lib:$TREE/usr/lib" \
+"$TREE$GNU_LOADER" --library-path "$TREE/lib:$TREE/usr/lib" \
     "$TREE/usr/bin/tic" -o "$TREE/usr/share/terminfo" "$DIR/rach2.ti"
 
 # The ports' manual pages, rendered to the plain text the system's man

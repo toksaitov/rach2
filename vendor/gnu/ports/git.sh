@@ -20,7 +20,7 @@ port_build()
 CC = $TARGET-gcc
 AR = $TARGET-ar
 prefix = /usr
-HOST_CPU = i686
+HOST_CPU = ${TARGET%%-*}
 CURL_CONFIG = $ROOT/usr/bin/curl-config
 NO_RUST = YesPlease
 NO_EXPAT = YesPlease

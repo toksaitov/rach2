@@ -6,30 +6,34 @@
 # Usage: build_native.sh [STEP...]
 #
 # Builds binutils 2.47 and GCC 16.2.0 for C and C++ on this Linux host, with
-# the cross toolchain `make gnu-toolchain` built, as programs that run on
-# i686-linux-gnu and make code for it: a native compiler for Rach2 made by a
-# cross build. They link dynamically against the toolchain's glibc and
-# install under the prefix /usr into build/vendor/gnu/native, the staging
-# root. The steps are binutils, gcc and check; with no STEP all three run
-# from nothing, and naming steps runs only those over what an earlier run
-# left. Each step writes its output to a log in build/vendor/gnu/log. Under
-# make the sub-makes share the caller's jobs; run alone, the script uses
-# GNU_JOBS processors, or every processor when GNU_JOBS is not set.
+# the cross toolchain `make gnu-toolchain` built, as programs that run on the
+# toolchain's target, i686-linux-gnu or x86_64-rach2-linux-gnu as RACH2_ARCH
+# names the architecture (vendor/gnu/arch.sh), and make code for it: a native
+# compiler for Rach2 made by a cross build. They link dynamically against the
+# toolchain's glibc and install under the prefix /usr into native/ of the
+# layer's build tree, the staging root. The steps are binutils, gcc and check;
+# with no STEP all three run from nothing, and naming steps runs only those
+# over what an earlier run left. Each step writes its output to a log in log/
+# of the build tree. Under make the sub-makes share the caller's jobs; run
+# alone, the script uses GNU_JOBS processors, or every processor when GNU_JOBS
+# is not set.
 #
 
 set -e
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
 GNU="$(cd "$DIR/.." && pwd)"
+# shellcheck disable=SC2034 # arch.sh reads it
 REPO="$(cd "$GNU/../.." && pwd)"
-OUT="$REPO/build/vendor/gnu"
+. "$GNU/arch.sh"
+OUT="$GNU_OUT"
 SRC="$OUT/src/native"
 WORK="$OUT/work"
 LOG="$OUT/log"
 CROSS="$OUT/cross"
 SYSROOT="$OUT/sysroot"
 ROOT="$OUT/native"
-TARGET=i686-linux-gnu
+TARGET="$GNU_TARGET"
 PATH="$CROSS/bin:$PATH"
 PKG_CONFIG_LIBDIR="$SYSROOT/usr/lib/pkgconfig"
 PKG_CONFIG_SYSROOT_DIR="$SYSROOT"
@@ -93,7 +97,8 @@ step_binutils()
 # sysroot given by --with-build-sysroot. The installed compiler has no
 # sysroot and looks in /usr, as a native one does. GMP, MPFR and MPC are
 # built in GCC's tree, as for the cross compiler, and the target libraries
-# are the ones it has.
+# are the ones it has. As build_toolchain.sh does for the cross compiler,
+# the x86-64 compiler is told its libraries are in lib, not lib64.
 step_gcc()
 {
     s="$(extract gcc)"
@@ -102,10 +107,16 @@ step_gcc()
         mv "$t" "$s/$lib"
     done
     rm -rf "$SRC/gmp-tree" "$SRC/mpfr-tree" "$SRC/mpc-tree"
+    sed -i '/^MULTILIB_OSDIRNAMES = m64=/s|m64=../lib64|m64=../lib|' "$s/gcc/config/i386/t-linux64"
+    # shellcheck disable=SC2016 # the pattern's $( is literal
+    if ! grep -q '^MULTILIB_OSDIRNAMES = m64=../lib[$(]' "$s/gcc/config/i386/t-linux64"; then
+        echo "gnu: native: gcc/config/i386/t-linux64 has no m64 line to point at lib" >&2
+        exit 1
+    fi
     cd "$(fresh gcc)"
     "$s/configure" --build="$BUILD" --host="$TARGET" --target="$TARGET" \
         --prefix=/usr --with-build-sysroot="$SYSROOT" \
-        --enable-languages=c,c++ --with-arch=i686 --with-tune=generic \
+        --enable-languages=c,c++ --with-arch="$GNU_GCC_ARCH" --with-tune=generic \
         --disable-multilib --disable-nls --disable-bootstrap \
         --enable-shared --enable-threads=posix --enable-__cxa_atexit \
         --disable-libstdcxx-pch --disable-libitm --disable-libquadmath \
@@ -117,7 +128,7 @@ step_gcc()
 # The check copies the sysroot and the staging root into one tree, the
 # system a GNU program on Rach2 will see, and runs the new compiler there
 # under unshare(1): a user namespace makes the user root, so the chroot needs
-# no privilege, and /lib/ld-linux.so.2 in the tree is the sysroot's loader.
+# no privilege, and the loader in the tree is the sysroot's.
 step_check()
 {
     r="$(fresh check)/root"
@@ -144,7 +155,7 @@ int main()
     return 0;
 }
 EOF
-    "$SYSROOT/lib/ld-linux.so.2" --library-path "$SYSROOT/lib:$ROOT/usr/lib" \
+    "$SYSROOT$GNU_LOADER" --library-path "$SYSROOT/lib:$ROOT/usr/lib" \
         "$ROOT/usr/bin/gcc" --version | sed -n 1p
     unshare --map-root-user --root="$r" /usr/bin/gcc -O2 -o /check/hello-c /check/hello.c
     unshare --map-root-user --root="$r" /usr/bin/g++ -O2 -o /check/hello-cxx /check/hello.cc

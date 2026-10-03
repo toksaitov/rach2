@@ -20,5 +20,5 @@ port_build()
     [ -f "$built" ] || built="$WORK/src/file"
     # shellcheck disable=SC2046 # one word or none
     make $(libtool_static) \
-        FILE_COMPILE="$ROOT/lib/ld-linux.so.2 --library-path $WORK/src/.libs:$ROOT/lib:$ROOT/usr/lib $built"
+        FILE_COMPILE="$ROOT$LOADER --library-path $WORK/src/.libs:$ROOT/lib:$ROOT/usr/lib $built"
 }

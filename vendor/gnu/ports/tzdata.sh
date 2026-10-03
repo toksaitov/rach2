@@ -18,7 +18,7 @@ port_install()
 {
     zoneinfo="$DEST/usr/share/zoneinfo"
     mkdir -p "$zoneinfo"
-    "$ROOT/lib/ld-linux.so.2" --library-path "$ROOT/lib:$ROOT/usr/lib" "$ROOT/usr/sbin/zic" \
+    "$ROOT$LOADER" --library-path "$ROOT/lib:$ROOT/usr/lib" "$ROOT/usr/sbin/zic" \
         -d "$zoneinfo" africa antarctica asia australasia europe northamerica southamerica \
         etcetera backward
     cp iso3166.tab zone.tab zone1970.tab "$zoneinfo/"

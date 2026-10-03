@@ -6,18 +6,19 @@
 # Usage: build_gdb.sh [STEP...]
 #
 # Builds GDB 18.1 and its gdbserver on this Linux host, with the cross
-# toolchain `make gnu-toolchain` built, as programs that run on
-# i686-linux-gnu and debug programs there. They link dynamically against the
-# toolchain's glibc and install under the prefix /usr into
-# build/vendor/gnu/gdb, the staging root. GDB needs GMP and MPFR, expat to
-# read its XML files, the tables of system calls by name among them, and
-# ncurses for its text user interface; they are built first as static
-# libraries that GDB links, so that the programs need nothing on Rach2
-# beyond glibc, the C++ runtime and the terminfo database. The steps are
-# gmp, mpfr, expat, ncurses, gdb and check; with no STEP all six run from
-# nothing, and naming steps runs only those over what an earlier run left.
-# Each step writes its output to a log in build/vendor/gnu/log. Under make
-# the sub-makes share the caller's jobs; run alone, the script uses GNU_JOBS
+# toolchain `make gnu-toolchain` built, as programs that run on the
+# toolchain's target, i686-linux-gnu or x86_64-rach2-linux-gnu as RACH2_ARCH
+# names the architecture (vendor/gnu/arch.sh), and debug programs there. They
+# link dynamically against the toolchain's glibc and install under the prefix
+# /usr into gdb/ of the layer's build tree, the staging root. GDB needs GMP
+# and MPFR, expat to read its XML files, the tables of system calls by name
+# among them, and ncurses for its text user interface; they are built first as
+# static libraries that GDB links, so that the programs need nothing on Rach2
+# beyond glibc, the C++ runtime and the terminfo database. The steps are gmp,
+# mpfr, expat, ncurses, gdb and check; with no STEP all six run from nothing,
+# and naming steps runs only those over what an earlier run left. Each step
+# writes its output to a log in log/ of the build tree. Under make the
+# sub-makes share the caller's jobs; run alone, the script uses GNU_JOBS
 # processors, or every processor when GNU_JOBS is not set.
 #
 
@@ -25,8 +26,10 @@ set -e
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
 GNU="$(cd "$DIR/.." && pwd)"
+# shellcheck disable=SC2034 # arch.sh reads it
 REPO="$(cd "$GNU/../.." && pwd)"
-OUT="$REPO/build/vendor/gnu"
+. "$GNU/arch.sh"
+OUT="$GNU_OUT"
 SRC="$OUT/src/gdb"
 WORK="$OUT/work"
 LOG="$OUT/log"
@@ -34,7 +37,7 @@ CROSS="$OUT/cross"
 SYSROOT="$OUT/sysroot"
 DEPS="$WORK/gdb-deps"
 ROOT="$OUT/gdb"
-TARGET=i686-linux-gnu
+TARGET="$GNU_TARGET"
 PATH="$CROSS/bin:$PATH"
 PKG_CONFIG_LIBDIR="$SYSROOT/usr/lib/pkgconfig"
 PKG_CONFIG_SYSROOT_DIR="$SYSROOT"
@@ -167,11 +170,11 @@ step_gdb()
 step_check()
 {
     lib="$SYSROOT/lib:$SYSROOT/usr/lib:$CROSS/$TARGET/lib"
-    v="$("$SYSROOT/lib/ld-linux.so.2" --library-path "$lib" "$ROOT/usr/bin/gdb" --version)"
+    v="$("$SYSROOT$GNU_LOADER" --library-path "$lib" "$ROOT/usr/bin/gdb" --version)"
     echo "$v" | sed -n 1p
-    "$SYSROOT/lib/ld-linux.so.2" --library-path "$lib" "$ROOT/usr/bin/gdb" --configuration |
+    "$SYSROOT$GNU_LOADER" --library-path "$lib" "$ROOT/usr/bin/gdb" --configuration |
         grep -e --enable-tui
-    v="$("$SYSROOT/lib/ld-linux.so.2" --library-path "$lib" "$ROOT/usr/bin/gdbserver" --version)"
+    v="$("$SYSROOT$GNU_LOADER" --library-path "$lib" "$ROOT/usr/bin/gdbserver" --version)"
     echo "$v" | sed -n 1p
     r="$(fresh check)/root"
     mkdir -p "$r/tmp" "$r/proc" "$r/check" "$r/usr/lib"

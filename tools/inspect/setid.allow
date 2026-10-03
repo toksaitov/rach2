@@ -129,7 +129,7 @@ trusted text 0644:0:0 /etc/shells /bin/sh\n/bin/bash\n
 trusted text 0440:0:0 /etc/sudoers Defaults env_reset\nDefaults use_pty\nroot ALL=(ALL:ALL) ALL\n%sudo ALL=(ALL:ALL) ALL\n@includedir /etc/sudoers.d\n
 trusted text 0644:0:0 /etc/profile export PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin\nexport HOME="${HOME:-/root}"\nexport PS1='\u@\h:\w\$ '\ncase "$TERM" in dumb|'') ;; *) export LANG=C.UTF-8 ;; esac\nif [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ] && [ -x /usr/bin/dbus-daemon ]; then\n    export DBUS_SESSION_BUS_ADDRESS="unix:path=$HOME/.dbus/session_bus_socket"\n    dbus-send --session --dest=org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus.GetId 2>/dev/null ||\n        { mkdir -p "$HOME/.dbus" && chmod 700 "$HOME/.dbus" &&\n          dbus-daemon --session --address="$DBUS_SESSION_BUS_ADDRESS" --fork --nopidfile >/dev/null 2>&1; }\nfi\n
 trusted text 0644:0:0 /etc/nsswitch.conf passwd: files\ngroup: files\nshadow: files\nhosts: files dns\nnetworks: files\nprotocols: files\nservices: files\n
-trusted text 0644:0:0 /etc/ld.so.conf /usr/lib/i386-linux-gnu\n
+trusted text 0644:0:0 /etc/ld.so.conf /usr/lib/i386-linux-gnu\n/usr/lib/x86_64-linux-gnu\n
 trusted overlay 0755:0:0 /usr/sbin/sshd build/vendor/gnu/root/usr/sbin/sshd
 trusted overlay 0755:0:0 /usr/bin/ssh-keygen build/vendor/gnu/root/usr/bin/ssh-keygen
 trusted overlay 0755:0:0 /usr/libexec/sshd-session build/vendor/gnu/root/usr/libexec/sshd-session

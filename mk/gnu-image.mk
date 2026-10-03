@@ -17,5 +17,5 @@ $(OS_REAL_GNU_EXT2): $(DEMO_CREDS) krffs/manifests/os-real-gnu.manifest $(MANIFE
                      tools/image/mkext2.sh vendor/gnu/install_root.sh vendor/gnu/fetch.sh \
                      vendor/gnu/sources-extra.txt $(GNU_IMAGE_STAMPS) $(IMAGE_TOOLS) $(MAN_ALL) \
                      | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-e2fsck ports/doom
-	sh tools/image/mkext2.sh --overlay vendor/gnu/install_root.sh \
+	RACH2_ARCH=$(ARCH) sh tools/image/mkext2.sh --overlay vendor/gnu/install_root.sh \
 	    krffs/manifests/os-real-gnu.manifest $@ 4096
