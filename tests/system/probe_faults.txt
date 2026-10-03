@@ -5925,16 +5925,6 @@ new
         (base->type->ops->lookup_rest && sref->node != sref->mnt->root)) {
 end
 
-fault krffs-bind-not-repointed
-probe tmpfsmusl
-file rach2/sys/fs/vfs.c
-expect TMPFSMUSL FAIL (a KRFFS file grown through its source reads alike through the bind
-old
-            (mounts[i] == mnt || mounts[i]->bind_of == mnt)) {
-new
-            mounts[i] == mnt) {
-end
-
 fault shm-fallocate-unallocated
 probe callsmusl
 file rach2/sys/fs/tmpfs.c

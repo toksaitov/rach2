@@ -16,18 +16,18 @@
  * two pages takes a size= at a remount that they fit in, which statfs gives,
  * and refuses a smaller one.
  *
- * A bind of a directory of a tmpfs shows it at another directory: a file
- * made through the bind is in the source with the same device and inode,
- * an exclusive flock through one path refuses one through the other, ".."
- * at the bind's root climbs to the parent of the directory it covers, a
- * bind remounted read-only refuses a write while its source takes one,
- * mountinfo gives the bind its root within the file system, and the
- * source's mount is busy until the bind is unmounted. A bind of a directory
- * of the KRFFS root shows a file made through it as its source does after
- * the file grows enough for KRFFS to move it, and so does a descriptor
- * opened before the growth; the bind's root is busy to rmdir until the bind
- * is unmounted. A recursive bind of /dev has its devices and /dev/shm, which
- * are unmounted in turn with /dev/mqueue.
+ * A bind of a directory of a tmpfs shows it at another directory: a file made
+ * through the bind is in the source with the same device and inode, an
+ * exclusive flock through one path refuses one through the other, ".." at the
+ * bind's root climbs to the parent of the directory it covers, a bind remounted
+ * read-only refuses a write while its source takes one, mountinfo gives the
+ * bind its root within the file system, and the source's mount is busy until
+ * the bind is unmounted. A bind of a directory of the KRFFS root shows a file
+ * made through it as its source does after the file grows enough for KRFFS to
+ * move it, and so does a descriptor opened before the growth, whose fstat
+ * reaches the file where it is now; and the bind's root is busy to rmdir until
+ * the bind is unmounted. A recursive bind of /dev has its devices and /dev/shm,
+ * which are unmounted in turn with /dev/mqueue.
  *
  * Prints "TMPFSMUSL OK" on success and "TMPFSMUSL FAIL (detail)" otherwise.
  */
@@ -395,6 +395,9 @@ static int kbound(void)
         pread(fd, buf, 6, 0) != 6 || memcmp(buf, "smallx", 6) != 0 ||
         pread(fd, buf, 1, 5 + 65535) != 1 || buf[0] != 'x') {
         return fail("a KRFFS file grown through its source reads alike through the bind");
+    }
+    if (fstat(fd, &a) != 0 || a.st_size != 5 + 65536) {
+        return fail("a description opened through the bind of KRFFS follows its moved file");
     }
     close(fd);
     if (rmdir("/tmp/kbsrc") != -1 || errno != EBUSY) {
