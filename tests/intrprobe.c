@@ -12,17 +12,15 @@
  *   carry, so the fallback count is zero.
  * * With `rach2.nomsi`: the message vector has no line at all, since a
  *   vector that has taken nothing is not listed; the controller's PCI line,
- *   listed as `PIC` with the controller's name, has taken at least one
- *   interrupt per key typed; and the fallback count is zero because the
- *   line brought the work.
+ *   listed as `IO-APIC`, or `PIC` on a machine without one, with the
+ *   controller's name, has taken at least one interrupt per key typed; and
+ *   the fallback count is zero because the line brought the work.
  * * With `rach2.msidrop=N`: the controller was silenced after N messages, so
  *   the vector's count is exactly N and the timer's pump has been finding
  *   the work since, which is what the fallback count is for.
  * * With no USB device on the machine: nothing sends a message, so the
  *   vector has no line and the fallback count is zero. The timer's own
- *   vector is required to have counted in every one of them, which on a
- *   machine with the APIC enabled is what says the 8259's interrupts still
- *   arrive.
+ *   vector is required to have counted in every one of them.
  *
  * Prints "INTRPROBE OK" with the two numbers and exits 0. Freestanding;
  * direct int 0x80.
@@ -346,7 +344,10 @@ void _start(void)
     }
     vector = count_for_named("MSI", "xhci", text);
     audio = count_for_named("MSI", "hda", text);
-    line = count_for_named("PIC", "xhci", text);
+    line = count_for_named("IO-APIC", "xhci", text);
+    if (line < 0) {
+        line = count_for_named("PIC", "xhci", text);
+    }
     fallback = count_for("FBK:", text);
     if (fallback < 0) {
         fail("there is no fallback line");

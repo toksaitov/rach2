@@ -279,9 +279,18 @@ for a type that stands on no device:
 and
 .Ql nodev mqueue .
 .It Pa /proc/interrupts
-One line per PIC or MSI vector, numbered 32 through 63, with a nonzero
+One line per device vector, numbered 32 through 63, with a nonzero
 interrupt count:
-.Dl VECTOR: COUNT PIC|MSI NAMES
+.Dl VECTOR: COUNT SOURCE NAMES
+The source is
+.Ql PIC
+for a line the 8259 pair delivers,
+.Ql IO-APIC
+for a line the I/O APIC delivers,
+.Ql LAPIC
+for the tick of the local APIC's timer, and
+.Ql MSI
+for a device's message vector.
 Fields are separated by tabs.
 Shared handlers have comma-separated names; an unnamed vector has
 .Ql none .

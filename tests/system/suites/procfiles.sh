@@ -472,9 +472,9 @@ if [ "$pit_count" -lt 100 ]; then
     echo "procfiles-test: machine that has been up for seconds" >&2
     exit 1
 fi
-if [ "$pit_path" != "PIC" ] || [ "$pit_name" != "pit" ]; then
+if [ "$pit_path" != "LAPIC" ] || [ "$pit_name" != "timer" ]; then
     echo "procfiles-test: FAIL: vector 32 is '$pit_path' handled by '$pit_name'," >&2
-    echo "procfiles-test: not the timer on the 8259 pair" >&2
+    echo "procfiles-test: not the local APIC's timer, which ticks where ACPI lists an APIC" >&2
     exit 1
 fi
 echo "procfiles-test: /proc/interrupts counts the timer's vector and names it: OK"

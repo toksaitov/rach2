@@ -343,19 +343,20 @@ else
     bad "a machine whose messages stop did not keep typing, or counted nothing"
 fi
 
-# ---- 15: the 8259's own interrupts, with the APIC between them and the
-#          processor. The model in the host test cannot prove this: it takes a
-#          machine with a PS/2 keyboard, whose keystroke arrives on the
-#          virtual-wire path, and a timer whose vector must be counting. ----
+# ---- 15: the keyboard's line and the timer with messages on, the I/O APIC
+#          delivering the line and the local APIC's timer ticking where ACPI
+#          lists them. The model in the host test cannot prove this: it takes
+#          a machine with a PS/2 keyboard, whose keystroke arrives on its
+#          line, and a timer whose vector must be counting. ----
 if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci,msi=on \
     --timeout 120 --steptmo 45 --ok "INTRPROBE OK" --never "INTRPROBE FAIL" \
     "expect=Type 'help'" key=h key=e key=l key=p key=ret \
     "expect=Available commands" "send=exec /intrprobe" "expect=INTRPROBE OK" \
     > /dev/null 2>&1; then
-    note "with the APIC enabled the 8259's keyboard and timer still arrive: OK"
+    note "with messages on, the keyboard's line and the timer still arrive: OK"
 else
-    bad "with the APIC enabled the 8259's interrupts did not arrive"
+    bad "with messages on, the keyboard's line or the timer did not arrive"
 fi
 
 # ---- 16: a keyboard and a mouse behind a hub are enumerated at their
