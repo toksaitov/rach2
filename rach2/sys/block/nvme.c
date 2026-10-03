@@ -204,12 +204,12 @@ static const char *nvme_why = "";
  */
 static uint32_t nvme_mmio_r32(uintptr_t base, uint32_t offset)
 {
-    return *(volatile uint32_t *)(base + offset);
+    return mmio_read32(base + offset);
 }
 
 static void nvme_mmio_w32(uintptr_t base, uint32_t offset, uint32_t value)
 {
-    *(volatile uint32_t *)(base + offset) = value;
+    mmio_write32(base + offset, value);
 }
 
 static const struct nvme_io nvme_mmio_io = {nvme_mmio_r32, nvme_mmio_w32, k_udelay};
@@ -1553,7 +1553,7 @@ static int nvme_msix(struct nvme_ctrl *c, uint8_t vector)
     if (!table) {
         return -1;
     }
-    return pci_msix_enable(&c->pci, (volatile uint32_t *)table, vector);
+    return pci_msix_enable(&c->pci, table, vector);
 }
 
 /** Move `c`'s namespaces to its messages, or log why it keeps polling. */

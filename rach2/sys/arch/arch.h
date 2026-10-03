@@ -25,6 +25,9 @@
  *                          what a device is given for a buffer of the DMA
  *                          pool (`alloc_kernel_frame`) or a driver's static
  *                          one; a heap address is `paging_virt_to_phys`'s
+ *   mmio_read8/16/32(a), mmio_write8/16/32(a, v)  a device register's read
+ *                          and write at the kernel address `a`, which
+ *                          map_mmio gave
  *   SC_NR(p)               the system call number in a saved frame
  *   SC_ARG(p, n)           the call's argument n, 0 to 5, as unsigned long
  *   SC_RET(p)              the register the call's result goes in (an lvalue)

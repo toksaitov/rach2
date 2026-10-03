@@ -65,32 +65,32 @@ static uintptr_t r8168_mmio;
 
 static uint8_t mmio_r8(uint32_t off)
 {
-    return *(volatile uint8_t *)(r8168_mmio + off);
+    return mmio_read8(r8168_mmio + off);
 }
 
 static uint16_t mmio_r16(uint32_t off)
 {
-    return *(volatile uint16_t *)(r8168_mmio + off);
+    return mmio_read16(r8168_mmio + off);
 }
 
 static uint32_t mmio_r32(uint32_t off)
 {
-    return *(volatile uint32_t *)(r8168_mmio + off);
+    return mmio_read32(r8168_mmio + off);
 }
 
 static void mmio_w8(uint32_t off, uint8_t value)
 {
-    *(volatile uint8_t *)(r8168_mmio + off) = value;
+    mmio_write8(r8168_mmio + off, value);
 }
 
 static void mmio_w16(uint32_t off, uint16_t value)
 {
-    *(volatile uint16_t *)(r8168_mmio + off) = value;
+    mmio_write16(r8168_mmio + off, value);
 }
 
 static void mmio_w32(uint32_t off, uint32_t value)
 {
-    *(volatile uint32_t *)(r8168_mmio + off) = value;
+    mmio_write32(r8168_mmio + off, value);
 }
 
 static const struct r8168_io mmio_io = {mmio_r8,  mmio_r16, mmio_r32, mmio_w8,

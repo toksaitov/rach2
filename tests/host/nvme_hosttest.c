@@ -619,7 +619,7 @@ int pci_msix_table(const pci_device_t *dev, uint8_t *bar, uint32_t *offset, uint
 
 static uintptr_t mapped_last;
 
-int pci_msix_enable(const pci_device_t *dev, volatile uint32_t *table, uint8_t vector)
+int pci_msix_enable(const pci_device_t *dev, uintptr_t table, uint8_t vector)
 {
     (void)dev;
     (void)table;

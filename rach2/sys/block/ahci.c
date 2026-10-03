@@ -294,12 +294,12 @@ static int ahci_port = -1;
  */
 static uint32_t ahci_mmio_r32(uint32_t offset)
 {
-    return *(volatile uint32_t *)(ahci_base + offset);
+    return mmio_read32(ahci_base + offset);
 }
 
 static void ahci_mmio_w32(uint32_t offset, uint32_t value)
 {
-    *(volatile uint32_t *)(ahci_base + offset) = value;
+    mmio_write32(ahci_base + offset, value);
 }
 
 static const struct ahci_io ahci_mmio_io = {ahci_mmio_r32, ahci_mmio_w32, k_udelay};

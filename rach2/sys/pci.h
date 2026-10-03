@@ -199,7 +199,7 @@ int pci_msix_table(const pci_device_t *dev, uint8_t *bar, uint32_t *offset, uint
  * disabled: 0, or -1 with the reason in the log. The local APIC must be
  * ready and the device a bus master.
  */
-int pci_msix_enable(const pci_device_t *dev, volatile uint32_t *table, uint8_t vector);
+int pci_msix_enable(const pci_device_t *dev, uintptr_t table, uint8_t vector);
 
 /**
  * Find the bridge whose secondary bus is `bus`, filling `out`; true if found.

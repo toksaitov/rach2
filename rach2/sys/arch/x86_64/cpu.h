@@ -92,8 +92,8 @@ typedef uint64_t pte_t;
 #define PTE_NX            0x8000000000000000UL
 #define PTE_NOEXEC        mmu_nx
 extern pte_t mmu_nx;
-#define PTE_FLAGS         0xFFF0000000000FFFUL
-#define PTE_ADDR(e)       ((e) & ~(pte_t)PTE_FLAGS)
+#define PTE_FLAGS   0xFFF0000000000FFFUL
+#define PTE_ADDR(e) ((e) & ~(pte_t)PTE_FLAGS)
 
 /*
  * The boot's window: the kernel image, the boot data, the page tables the
@@ -146,6 +146,17 @@ extern pte_t mmu_nx;
 #define phys_to_virt(p) ((void *)(KVA_DIRECT + (uintptr_t)(p)))
 #define virt_to_phys(v) mmu_virt_to_phys(v)
 phys_addr_t mmu_virt_to_phys(const volatile void *v);
+
+/* A device's register at the kernel address `a` (map_mmio's): a read or a
+ * write of 8, 16 or 32 bits through a volatile pointer. The page is mapped
+ * uncached, and the processor keeps uncached accesses in program order, so
+ * none needs a barrier (Intel SDM Vol. 3A, "Methods of Caching Available"). */
+#define mmio_read8(a)      (*(const volatile uint8_t *)(uintptr_t)(a))
+#define mmio_read16(a)     (*(const volatile uint16_t *)(uintptr_t)(a))
+#define mmio_read32(a)     (*(const volatile uint32_t *)(uintptr_t)(a))
+#define mmio_write8(a, v)  ((void)(*(volatile uint8_t *)(uintptr_t)(a) = (uint8_t)(v)))
+#define mmio_write16(a, v) ((void)(*(volatile uint16_t *)(uintptr_t)(a) = (uint16_t)(v)))
+#define mmio_write32(a, v) ((void)(*(volatile uint32_t *)(uintptr_t)(a) = (uint32_t)(v)))
 
 /* The page fault's vector, and what its error code says (Intel SDM Vol.
  * 3A, 4.7): a write, and an access from user mode. */

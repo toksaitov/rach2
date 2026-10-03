@@ -114,6 +114,17 @@ typedef uint32_t pte_t;
 #define phys_to_virt(p) ((void *)(uintptr_t)(p))
 #define virt_to_phys(v) ((phys_addr_t)(uintptr_t)(v))
 
+/* A device's register at the kernel address `a` (map_mmio's): a read or a
+ * write of 8, 16 or 32 bits through a volatile pointer. The page is mapped
+ * uncached, and the processor keeps uncached accesses in program order, so
+ * none needs a barrier (Intel SDM Vol. 3A, "Methods of Caching Available"). */
+#define mmio_read8(a)      (*(const volatile uint8_t *)(uintptr_t)(a))
+#define mmio_read16(a)     (*(const volatile uint16_t *)(uintptr_t)(a))
+#define mmio_read32(a)     (*(const volatile uint32_t *)(uintptr_t)(a))
+#define mmio_write8(a, v)  ((void)(*(volatile uint8_t *)(uintptr_t)(a) = (uint8_t)(v)))
+#define mmio_write16(a, v) ((void)(*(volatile uint16_t *)(uintptr_t)(a) = (uint16_t)(v)))
+#define mmio_write32(a, v) ((void)(*(volatile uint32_t *)(uintptr_t)(a) = (uint32_t)(v)))
+
 /*
  * The kernel's virtual layout above user space, in the gigabyte from
  * `USER_ADDR_MAX`. Every page table for it exists at boot and is shared by

@@ -131,12 +131,12 @@ struct e1000 {
 
 static uint32_t mmio_r32(struct e1000 *e, uint32_t off)
 {
-    return *(volatile uint32_t *)(e->mmio + off);
+    return mmio_read32(e->mmio + off);
 }
 
 static void mmio_w32(struct e1000 *e, uint32_t off, uint32_t value)
 {
-    *(volatile uint32_t *)(e->mmio + off) = value;
+    mmio_write32(e->mmio + off, value);
 }
 
 /**

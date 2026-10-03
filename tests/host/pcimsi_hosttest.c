@@ -271,7 +271,7 @@ static void msix_rows(const pci_device_t *dev)
     check(bar == 4 && offset == 0x3000 && entries == 2,
           "at the BAR, offset and size the capability gives");
     nwrites = 0;
-    check(pci_msix_enable(dev, table, 54) == 0, "a device with MSI-X is programmed");
+    check(pci_msix_enable(dev, (uintptr_t)table, 54) == 0, "a device with MSI-X is programmed");
     check(table[0] == (PCI_MSI_ADDRESS_BASE | (2u << 12)) && table[1] == 0,
           "entry 0's address is the APIC's page with the processor in it");
     check(table[2] == 54, "its data is the vector");
@@ -299,14 +299,15 @@ static void msix_rows(const pci_device_t *dev)
     space[0x62] = 0x80;
     check(pci_msix_table(dev, &bar, &offset, &entries) == -1,
           "a device without MSI-X has no table");
-    check(pci_msix_enable(dev, table, 55) == -1, "and is refused");
+    check(pci_msix_enable(dev, (uintptr_t)table, 55) == -1, "and is refused");
     check(nwrites == 0, "with nothing written");
 
     model_reset();
     model_cap(0xF8, PCI_CAP_ID_MSIX, 0x34);
     check(pci_msix_table(dev, &bar, &offset, &entries) == -1,
           "an MSI-X capability that runs past the end of its space is refused");
-    check(pci_msix_enable(dev, table, 56) == -1 && nwrites == 0, "and nothing is written");
+    check(pci_msix_enable(dev, (uintptr_t)table, 56) == -1 && nwrites == 0,
+          "and nothing is written");
 
     check(irq_depth == 0 && irq_unbalanced == 0,
           "every access left the interrupt flag as it found it");

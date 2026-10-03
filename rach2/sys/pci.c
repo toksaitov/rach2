@@ -8,6 +8,7 @@
  * PC); the rest is the bus's own, the same on every machine.
  */
 
+#include "arch/arch.h"
 #include "klog.h"
 #include "pci.h"
 #include "kio.h"
@@ -575,7 +576,7 @@ int pci_msix_table(const pci_device_t *dev, uint8_t *bar, uint32_t *offset, uint
  * written with the same address and data MSI sends, and its own mask
  * cleared; and the function mask comes off last, when the entry is whole.
  */
-int pci_msix_enable(const pci_device_t *dev, volatile uint32_t *table, uint8_t vector)
+int pci_msix_enable(const pci_device_t *dev, uintptr_t table, uint8_t vector)
 {
     uint8_t cap = pci_msix_capability(dev);
     uint16_t control;
@@ -591,10 +592,10 @@ int pci_msix_enable(const pci_device_t *dev, volatile uint32_t *table, uint8_t v
     pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2),
                        (uint16_t)(control | PCI_MSIX_ENABLE | PCI_MSIX_MASK_ALL));
     pci_msi_message(vector, &address, &data);
-    table[0] = address;
-    table[1] = 0;
-    table[2] = data;
-    table[3] = 0;
+    mmio_write32(table, address);
+    mmio_write32(table + 4, 0);
+    mmio_write32(table + 8, data);
+    mmio_write32(table + 12, 0);
     pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2),
                        (uint16_t)((control | PCI_MSIX_ENABLE) & ~PCI_MSIX_MASK_ALL));
     klog(KLOG_DEBUG, "pci", "msi-x: %x:%x.%d on vector %d", dev->bus, dev->device, dev->function,

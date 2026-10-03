@@ -606,7 +606,7 @@ static uint8_t hda_read8(uint32_t offset)
 #ifdef RACH2_HOSTTEST
     return (uint8_t)hda_test_read(offset, 8);
 #else
-    return *(volatile uint8_t *)(hda_base + offset);
+    return mmio_read8(hda_base + offset);
 #endif
 }
 
@@ -615,7 +615,7 @@ static uint16_t hda_read16(uint32_t offset)
 #ifdef RACH2_HOSTTEST
     return (uint16_t)hda_test_read(offset, 16);
 #else
-    return *(volatile uint16_t *)(hda_base + offset);
+    return mmio_read16(hda_base + offset);
 #endif
 }
 
@@ -624,7 +624,7 @@ static uint32_t hda_read32(uint32_t offset)
 #ifdef RACH2_HOSTTEST
     return (uint32_t)hda_test_read(offset, 32);
 #else
-    return *(volatile uint32_t *)(hda_base + offset);
+    return mmio_read32(hda_base + offset);
 #endif
 }
 
@@ -633,7 +633,7 @@ static void hda_write8(uint32_t offset, uint8_t value)
 #ifdef RACH2_HOSTTEST
     hda_test_write(offset, value, 8);
 #else
-    *(volatile uint8_t *)(hda_base + offset) = value;
+    mmio_write8(hda_base + offset, value);
 #endif
 }
 
@@ -642,7 +642,7 @@ static void hda_write16(uint32_t offset, uint16_t value)
 #ifdef RACH2_HOSTTEST
     hda_test_write(offset, value, 16);
 #else
-    *(volatile uint16_t *)(hda_base + offset) = value;
+    mmio_write16(hda_base + offset, value);
 #endif
 }
 
@@ -651,7 +651,7 @@ static void hda_write32(uint32_t offset, uint32_t value)
 #ifdef RACH2_HOSTTEST
     hda_test_write(offset, value, 32);
 #else
-    *(volatile uint32_t *)(hda_base + offset) = value;
+    mmio_write32(hda_base + offset, value);
 #endif
 }
 

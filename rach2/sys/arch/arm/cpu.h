@@ -71,16 +71,25 @@ typedef uint32_t pte_t;
  * it. */
 void *phys_to_virt(phys_addr_t p);
 phys_addr_t virt_to_phys(const volatile void *v);
-#define KVA_BASE          USER_ADDR_MAX
-#define KVA_HEAP          KVA_BASE
-#define KVA_HEAP_SIZE     0x10000000u
-#define KVA_PCWIN         (KVA_BASE + 0x10000000u)
-#define KVA_MMIO          (KVA_BASE + 0x30000000u)
-#define KVA_MMIO_SIZE     0x08000000u
-#define KVA_TEMP          (KVA_BASE + 0x38000000u)
-#define KVA_TEMP_SLOTS    1024u
-#define KVA_MODULES       (KVA_BASE + 0x38400000u)
-#define KVA_MODULES_SIZE  0x04000000u
+
+/* A device's register at the kernel address `a` (arch.h). A port defines
+ * them with the barriers its memory model asks of a device access. */
+uint8_t mmio_read8(uintptr_t a);
+uint16_t mmio_read16(uintptr_t a);
+uint32_t mmio_read32(uintptr_t a);
+void mmio_write8(uintptr_t a, uint8_t v);
+void mmio_write16(uintptr_t a, uint16_t v);
+void mmio_write32(uintptr_t a, uint32_t v);
+#define KVA_BASE         USER_ADDR_MAX
+#define KVA_HEAP         KVA_BASE
+#define KVA_HEAP_SIZE    0x10000000u
+#define KVA_PCWIN        (KVA_BASE + 0x10000000u)
+#define KVA_MMIO         (KVA_BASE + 0x30000000u)
+#define KVA_MMIO_SIZE    0x08000000u
+#define KVA_TEMP         (KVA_BASE + 0x38000000u)
+#define KVA_TEMP_SLOTS   1024u
+#define KVA_MODULES      (KVA_BASE + 0x38400000u)
+#define KVA_MODULES_SIZE 0x04000000u
 
 /* The page fault: the exception's number and what its syndrome says. */
 #define PAGE_FAULT_VECTOR 3
