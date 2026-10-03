@@ -237,8 +237,10 @@ uintptr_t map_mmio(uintptr_t phys_addr, size_t size);
  * Map the frame at physical `phys` at a temporary kernel address and return
  * it, or 0 when every slot is taken. The mapping lasts until `kunmap_temp`;
  * a caller may sleep while it holds one, since a slot is its own. The paths
- * that zero, copy or fill a user frame use these, because a user frame may
- * lie above the identity-mapped window.
+ * that zero, copy or fill a user frame use these, because on i686 a user
+ * frame may lie above the identity-mapped window. Where the direct map
+ * reaches every frame (`ARCH_DIRECT_MAP_ALL`, x86-64), the address is the
+ * frame's there and nothing is mapped.
  */
 void *kmap_temp(uintptr_t phys);
 

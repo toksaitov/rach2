@@ -74,9 +74,11 @@ int paging_framefail_arm(uint32_t count)
     return 0;
 }
 
+#ifndef ARCH_DIRECT_MAP_ALL
 /* The temporary mappings: one bit per slot of the region, set while a
  * caller holds it. */
 static uint32_t _temp_slots[KVA_TEMP_SLOTS / 32];
+#endif
 /* The next free page of the MMIO region; a region is mapped for good. */
 static uintptr_t _mmio_next = KVA_MMIO;
 
@@ -877,6 +879,19 @@ uintptr_t map_mmio(uintptr_t phys_addr, size_t size)
     return va + (phys_addr - start_page);
 }
 
+#ifdef ARCH_DIRECT_MAP_ALL
+/* The direct map reaches every frame: a temporary mapping is the frame's
+ * address there, which changes no entry and so no processor drops. */
+void *kmap_temp(uintptr_t phys)
+{
+    return phys_to_virt(phys);
+}
+
+void kunmap_temp(void *va)
+{
+    (void)va;
+}
+#else
 void *kmap_temp(uintptr_t phys)
 {
     uint32_t flags = kirq_save();
@@ -913,6 +928,7 @@ void kunmap_temp(void *va)
     _temp_slots[slot / 32] &= ~(1u << (slot % 32));
     kirq_restore(flags);
 }
+#endif
 
 int paging_zero_frame(uintptr_t phys)
 {

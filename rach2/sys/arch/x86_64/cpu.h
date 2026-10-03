@@ -122,7 +122,6 @@ extern pte_t mmu_nx;
  *                                part; grown a frame at a time
  *   0xFFFFC08000000000  128 MiB  MMIO, a controller's BAR mapped wherever
  *                                it is
- *   0xFFFFC10000000000    4 MiB  temporary mappings, one page each
  *   0xFFFFC18000000000   64 MiB  the boot modules
  *   0xFFFFC20000000000  512 MiB  the page-cache window (mm/pagecache.h), at
  *                                most
@@ -136,16 +135,16 @@ extern pte_t mmu_nx;
 #define KVA_HEAP_SIZE    0x0000008000000000UL
 #define KVA_MMIO         0xFFFFC08000000000UL
 #define KVA_MMIO_SIZE    0x08000000UL
-#define KVA_TEMP         0xFFFFC10000000000UL
-/* Policy: the temporary mappings held at once, as on i686. */
-#define KVA_TEMP_SLOTS   1024u
 #define KVA_MODULES      0xFFFFC18000000000UL
 #define KVA_MODULES_SIZE 0x04000000UL
 #define KVA_PCWIN        0xFFFFC20000000000UL
 #define KVA_IMAGE        0xFFFFFFFF80000000UL
 
 /* Physical memory from the kernel (arch.h): an address of the direct map,
- * and back from one of the direct map or of the image (mmu.c). */
+ * and back from one of the direct map or of the image (mmu.c). Every frame
+ * has one, so a frame is reached there and never through a temporary
+ * mapping (`kmap_temp`, mm/paging.c). */
+#define ARCH_DIRECT_MAP_ALL 1
 #define phys_to_virt(p) ((void *)(KVA_DIRECT + (uintptr_t)(p)))
 #define virt_to_phys(v) mmu_virt_to_phys(v)
 phys_addr_t mmu_virt_to_phys(const volatile void *v);

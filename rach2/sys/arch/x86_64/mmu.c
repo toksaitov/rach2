@@ -268,7 +268,6 @@ void mmu_init(void)
         _kernel_dir->entries[PML4_WINDOWS + i] = pdpt | PTE_P | PTE_W;
     }
     boot_tables(KVA_MMIO, KVA_MMIO_SIZE);
-    boot_tables(KVA_TEMP, (uintptr_t)KVA_TEMP_SLOTS * PAGE_SIZE);
     boot_tables(KVA_MODULES, KVA_MODULES_SIZE);
 }
 
