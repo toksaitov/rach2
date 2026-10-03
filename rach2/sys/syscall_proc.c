@@ -4,6 +4,7 @@
  * by syscall.c; what it shares with the other arms is in syscall_internal.h.
  */
 #include "../kernel.h"
+#include "mm/filecache.h"
 #include "mm/kheap.h"
 #include "klog.h"
 #include "syscall.h"
@@ -782,10 +783,17 @@ static int exec_held_read(const struct open_file *ofd, void *dst, uint32_t count
     return got;
 }
 
-/** An `elf_read_fn` over an `exec_file`. */
+/**
+ * An `elf_read_fn` over an `exec_file`. A whole page of a mounted file at a
+ * page's offset, which is what the loader asks for in a segment, comes from
+ * the file page cache when it has it, and is kept there when it has not, so
+ * a program started again reads no page of its text from the disk.
+ */
 static int exec_file_read(void *ctx, void *dst, uint32_t count, uint32_t off)
 {
     struct exec_file *f = ctx;
+    int page = count == PAGE_SIZE && off % PAGE_SIZE == 0;
+    uint32_t epoch = filecache_epoch();
     int32_t got;
 
     if (f->held != NULL) {
@@ -794,10 +802,16 @@ static int exec_file_read(void *ctx, void *dst, uint32_t count, uint32_t off)
     if (f->ref.mnt == NULL) {
         return krffs_read(f->path, (char *)dst, count, off);
     }
+    if (page && filecache_read_node(f->ref.mnt, f->ref.node, off / PAGE_SIZE, dst)) {
+        return (int)count;
+    }
     got = vfs_read(f->ref.mnt, f->handle, dst, count, off);
     if (got < 0) {
         f->err = got;
         return -1;
+    }
+    if (page && got == PAGE_SIZE) {
+        filecache_store_node(f->ref.mnt, f->ref.node, off / PAGE_SIZE, dst, epoch);
     }
     return (int)got;
 }

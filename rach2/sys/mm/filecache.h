@@ -1,6 +1,6 @@
 /*
- * filecache.h: the pages of ext2 files that private mappings read, kept in
- * free frames between mappings (mm/Readme.md).
+ * filecache.h: the pages of ext2 files that private mappings and exec read,
+ * kept in free frames between them (mm/Readme.md).
  */
 
 #ifndef _FILECACHE_H_
@@ -15,6 +15,10 @@ struct fd_entry;
  * the cache has it as the file is now: 1 then, and 0 when it has not. */
 int filecache_read(const struct fd_entry *e, uint32_t pgoff, uintptr_t phys);
 
+/** The same for page `pgoff` of the file `node` of `mnt`, into the kernel
+ * buffer `buf` of a page, as exec reads a program. */
+int filecache_read_node(struct vfs_mount *mnt, void *node, uint32_t pgoff, void *buf);
+
 /** The count of the changes the cache has been told of, taken before a page
  * is read for `filecache_store`. */
 uint32_t filecache_epoch(void);
@@ -24,6 +28,11 @@ uint32_t filecache_epoch(void);
  * of since `filecache_epoch` gave `epoch`, which the read might have missed
  * part of. */
 void filecache_store(const struct fd_entry *e, uint32_t pgoff, uintptr_t phys, uint32_t epoch);
+
+/** The same for page `pgoff` of the file `node` of `mnt`, from the kernel
+ * buffer `buf` of a page. */
+void filecache_store_node(struct vfs_mount *mnt, void *node, uint32_t pgoff, const void *buf,
+                          uint32_t epoch);
 
 /** Drop every page of the file `node` of `mnt`, which a write, a truncation
  * or an allocation in it has just changed. */

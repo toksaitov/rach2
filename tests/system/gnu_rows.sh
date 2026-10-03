@@ -1016,8 +1016,12 @@ row_dbus() {
 # prints the DOM of a local page whose script writes into it, with the
 # system bus found and the session bus of the login shell. The browser
 # refuses to start when it has no sandbox it can use, so the DOM shows that
-# its namespaces, its chroot and its seccomp filters took.
+# its namespaces, its chroot and its seccomp filters took. A second start
+# takes its program of 200 MB and its libraries from the file page cache,
+# where the first left them: a few disk commands, not the thousands the
+# file needs.
 row_chromium() {
+    local before after
     cat > "$WORK/page.html" << 'EOF'
 <!DOCTYPE html>
 <html><body><p id="out">not run</p>
@@ -1032,6 +1036,11 @@ EOF
         fail "chromium-headless-shell: status $?: $(tail -n 3 "$WORK/chromium.err" | tr '\n' ' ')"
     has "the dumped DOM" "$OUT" '<p id="out">script ran: 42</p>'
     same "the browser's complaints of D-Bus" "$(grep -c 'dbus/' "$WORK/chromium.err")" "0"
+    before=$(awk '$1 == "disk-commands" {print $2}' /proc/disk)
+    su test -c "bash -lc 'chromium-headless-shell --headless --dump-dom \
+        --user-data-dir=$WORK/profile file://$WORK/page.html'" > /dev/null 2>&1
+    after=$(awk '$1 == "disk-commands" {print $2}' /proc/disk)
+    [ $((after - before)) -lt 200 ] || fail "a second start read the disk $((after - before)) times"
 }
 
 if ! declare -F "row_$ROW" > /dev/null; then

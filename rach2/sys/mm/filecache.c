@@ -1,26 +1,27 @@
 /*
- * filecache.c: the pages of ext2 files that private mappings read, kept
- * between mappings, as filecache.h describes them.
+ * filecache.c: the pages of ext2 files that private mappings and exec read,
+ * kept between them, as filecache.h describes them.
  *
- * A program's text is mapped privately, and each start reads its pages from
- * the file again into frames of its own, which the buffer cache, held to
- * half the kernel's heap, does not keep for a program of hundreds of
- * megabytes. This cache keeps a copy of each page read that way in a free
- * frame, found by its file's mount, inode number and generation, and checked
- * against the size and the modification time the file has when the page is
- * asked for. A write, a truncation and an allocation through the VFS drop
- * the file's pages after they change it, and an unmount every page of its
- * files; each counts as a change, and a page read while a change ran is
- * not kept, since the read may have seen part of it. A mapping gets a copy
- * of a cached page, so nothing it does reaches the cache. The
+ * Exec reads a program's segments page by page, and the dynamic linker maps its
+ * libraries privately, so each start reads their pages from the file again,
+ * which the buffer cache, held to half the kernel's heap, does not keep for a
+ * program of hundreds of megabytes. This cache keeps a copy of each page read
+ * either way in a free frame, found by its file's mount, inode number and
+ * generation, and checked against the size and the modification time the file
+ * has when the page is asked for. A write, a truncation and an allocation
+ * through the VFS drop the file's pages after they change it, and an unmount
+ * every page of its files; each counts as a change, and a page read while a
+ * change ran is not kept, since the read may have seen part of it. A mapping
+ * gets a copy of a cached page, so nothing it does reaches the cache. The
  * frames are the machine's free memory: the cache takes one only while a
- * quarter of the frames are free, and gives them back, the least recently
- * used first, when memory runs short (`mem_reclaim`).
+ * quarter of the frames are free, and gives them back, the least recently used
+ * first, when memory runs short (`mem_reclaim`).
  */
 
 #include "filecache.h"
 
 #include "kheap.h"
+#include "../lib/kstring.h"
 #include "paging.h"
 #include "../fs/ext2.h"
 #include "../fs/fd.h"
@@ -129,21 +130,40 @@ static void fc_drop(struct fc_page **link)
     pages--;
 }
 
-int filecache_read(const struct fd_entry *e, uint32_t pgoff, uintptr_t phys)
+/** Copy a page to the frame `to`, or to `to_buf` when it is 0, from the
+ * frame `from`, or from `from_buf` when it is 0; 1 when it was copied. */
+static int fc_copy(uintptr_t to, void *to_buf, uintptr_t from, const void *from_buf)
 {
-    struct fc_file f;
-    struct fc_page *p;
-    uint32_t flags;
-    int hit = 0;
+    uint8_t *page;
 
-    if (!pages || !e->ofd || !fc_file_of(e->ofd->vmnt, e->ofd->vnode, &f)) {
+    if (to && from) {
+        return paging_copy_frame(to, from) == 0;
+    }
+    page = kmap_temp(to ? to : from);
+    if (!page) {
         return 0;
     }
-    flags = kirq_save();
-    for (p = buckets[fc_bucket(f.mnt, f.ino, pgoff)]; p; p = p->next) {
-        if (p->mnt == f.mnt && p->ino == f.ino && p->pgoff == pgoff &&
-            p->generation == f.generation && p->size == f.size && p->mtime == f.mtime) {
-            hit = paging_copy_frame(phys, p->phys) == 0;
+    if (to) {
+        k_memcpy(page, from_buf, PAGE_SIZE);
+    } else {
+        k_memcpy(to_buf, page, PAGE_SIZE);
+    }
+    kunmap_temp(page);
+    return 1;
+}
+
+/** Copy page `pgoff` of `f` into the frame `phys`, or into `buf` when it is
+ * 0, when the cache has it as the file is now; 1 then. */
+static int fc_read(const struct fc_file *f, uint32_t pgoff, uintptr_t phys, void *buf)
+{
+    struct fc_page *p;
+    uint32_t flags = kirq_save();
+    int hit = 0;
+
+    for (p = buckets[fc_bucket(f->mnt, f->ino, pgoff)]; p; p = p->next) {
+        if (p->mnt == f->mnt && p->ino == f->ino && p->pgoff == pgoff &&
+            p->generation == f->generation && p->size == f->size && p->mtime == f->mtime) {
+            hit = fc_copy(phys, buf, p->phys, NULL);
             if (hit) {
                 fc_use(p);
             }
@@ -154,6 +174,72 @@ int filecache_read(const struct fd_entry *e, uint32_t pgoff, uintptr_t phys)
     return hit;
 }
 
+/** Keep a copy of page `pgoff` of `f`, from the frame `phys` or, when it is
+ * 0, from `buf`, unless free memory is short or a change has been told of
+ * since `epoch`. */
+static void fc_store(const struct fc_file *f, uint32_t pgoff, uintptr_t phys, const void *buf,
+                     uint32_t epoch)
+{
+    struct fc_page *p, **link;
+    uint32_t flags;
+
+    if (frame_free_count() < frame_total_count() / 4u) {
+        return;
+    }
+    p = kzalloc(sizeof(*p));
+    if (!p) {
+        return;
+    }
+    p->phys = alloc_user_frame();
+    if (p->phys == 0 || !fc_copy(p->phys, NULL, phys, buf)) {
+        if (p->phys) {
+            free_frame(p->phys);
+        }
+        kfree(p);
+        return;
+    }
+    p->mnt = f->mnt;
+    p->ino = f->ino;
+    p->generation = f->generation;
+    p->pgoff = pgoff;
+    p->size = f->size;
+    p->mtime = f->mtime;
+    flags = kirq_save();
+    if (epoch != changes) {
+        kirq_restore(flags);
+        free_frame(p->phys);
+        kfree(p);
+        return;
+    }
+    for (link = &buckets[fc_bucket(f->mnt, f->ino, pgoff)]; *link; link = &(*link)->next) {
+        if ((*link)->mnt == f->mnt && (*link)->ino == f->ino && (*link)->pgoff == pgoff) {
+            fc_drop(link);
+            break;
+        }
+    }
+    p->next = buckets[fc_bucket(f->mnt, f->ino, pgoff)];
+    buckets[fc_bucket(f->mnt, f->ino, pgoff)] = p;
+    fc_use(p);
+    file_pages[fc_slot(f->mnt, f->ino)]++;
+    pages++;
+    kirq_restore(flags);
+}
+
+int filecache_read(const struct fd_entry *e, uint32_t pgoff, uintptr_t phys)
+{
+    struct fc_file f;
+
+    return pages && e->ofd && fc_file_of(e->ofd->vmnt, e->ofd->vnode, &f) &&
+           fc_read(&f, pgoff, phys, NULL);
+}
+
+int filecache_read_node(struct vfs_mount *mnt, void *node, uint32_t pgoff, void *buf)
+{
+    struct fc_file f;
+
+    return pages && fc_file_of(mnt, node, &f) && fc_read(&f, pgoff, 0, buf);
+}
+
 uint32_t filecache_epoch(void)
 {
     return changes;
@@ -162,51 +248,20 @@ uint32_t filecache_epoch(void)
 void filecache_store(const struct fd_entry *e, uint32_t pgoff, uintptr_t phys, uint32_t epoch)
 {
     struct fc_file f;
-    struct fc_page *p, **link;
-    uint32_t flags;
 
-    if (frame_free_count() < frame_total_count() / 4u || !e->ofd ||
-        !fc_file_of(e->ofd->vmnt, e->ofd->vnode, &f)) {
-        return;
+    if (e->ofd && fc_file_of(e->ofd->vmnt, e->ofd->vnode, &f)) {
+        fc_store(&f, pgoff, phys, NULL, epoch);
     }
-    p = kzalloc(sizeof(*p));
-    if (!p) {
-        return;
+}
+
+void filecache_store_node(struct vfs_mount *mnt, void *node, uint32_t pgoff, const void *buf,
+                          uint32_t epoch)
+{
+    struct fc_file f;
+
+    if (fc_file_of(mnt, node, &f)) {
+        fc_store(&f, pgoff, 0, buf, epoch);
     }
-    p->phys = alloc_user_frame();
-    if (p->phys == 0 || paging_copy_frame(p->phys, phys) != 0) {
-        if (p->phys) {
-            free_frame(p->phys);
-        }
-        kfree(p);
-        return;
-    }
-    p->mnt = f.mnt;
-    p->ino = f.ino;
-    p->generation = f.generation;
-    p->pgoff = pgoff;
-    p->size = f.size;
-    p->mtime = f.mtime;
-    flags = kirq_save();
-    if (epoch != changes) {
-        kirq_restore(flags);
-        free_frame(p->phys);
-        kfree(p);
-        return;
-    }
-    link = &buckets[fc_bucket(f.mnt, f.ino, pgoff)];
-    while (*link && !((*link)->mnt == f.mnt && (*link)->ino == f.ino && (*link)->pgoff == pgoff)) {
-        link = &(*link)->next;
-    }
-    if (*link) {
-        fc_drop(link);
-    }
-    p->next = buckets[fc_bucket(f.mnt, f.ino, pgoff)];
-    buckets[fc_bucket(f.mnt, f.ino, pgoff)] = p;
-    fc_use(p);
-    file_pages[fc_slot(f.mnt, f.ino)]++;
-    pages++;
-    kirq_restore(flags);
 }
 
 /** Drop every page that `mnt` and, unless it is 0, `ino` name. */
