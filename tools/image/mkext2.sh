@@ -14,10 +14,13 @@
 # passes, so no unchecked image ever exists under the target's name.
 #
 # Usage: ./mkext2.sh [--overlay PROGRAM] <manifest> <output.ext2> [size_mb]
-#                    [blocks_per_group]
+#                    [blocks_per_group] [bytes_per_inode]
 #
 # The default size is 1024 MiB, the size of the sealed disk's third partition;
-# the file is sparse on the host. Run from anywhere; the manifest's `build/...`
+# the file is sparse on the host. The group size and the inode ratio are
+# mke2fs's for the size unless given. A grow keeps the number of inodes in a
+# group and writes a zeroed inode table for every group it adds, so the ratio
+# sets what a grow to a large disk writes. Run from anywhere; the manifest's `build/...`
 # host paths resolve because this cd's to the repo root first, and so does
 # PROGRAM's.
 #
@@ -47,9 +50,10 @@ MANIFEST="$1"
 OUT="$2"
 SIZE="${3:-1024}"
 GROUP_BLOCKS="${4:-}"
+INODE_BYTES="${5:-}"
 
 if [ -z "$MANIFEST" ] || [ -z "$OUT" ]; then
-    echo "usage: mkext2.sh [--overlay PROGRAM] <manifest> <output.ext2> [size_mb] [blocks_per_group]" >&2
+    echo "usage: mkext2.sh [--overlay PROGRAM] <manifest> <output.ext2> [size_mb] [blocks_per_group] [bytes_per_inode]" >&2
     exit 2
 fi
 set --
@@ -65,6 +69,19 @@ if [ -n "$GROUP_BLOCKS" ]; then
         exit 2
     }
     set -- -g "$GROUP_BLOCKS"
+fi
+if [ -n "$INODE_BYTES" ]; then
+    case "$INODE_BYTES" in
+        *[!0-9]*) echo "mkext2: invalid bytes per inode: $INODE_BYTES" >&2; exit 2 ;;
+    esac
+    INODE_BYTES=$(awk -v n="$INODE_BYTES" 'BEGIN {
+        if (n < 4096 || n > 67108864 || n % 4096) exit 1
+        printf "%.0f", n
+    }') || {
+        echo "mkext2: bytes per inode must be a multiple of 4096 from 4096 to 67108864" >&2
+        exit 2
+    }
+    set -- "$@" -i "$INODE_BYTES"
 fi
 if [ ! -x "$STAGEIMAGE" ]; then
     echo "mkext2: $STAGEIMAGE is missing; run 'make -C krffs' first" >&2
@@ -150,6 +167,18 @@ sb16() { od -A n -t u2 -j "$((1024 + $1))" -N 2 "$TMP" | tr -d ' '; }
 [ "$(sb 24)" = "2" ] || { echo "mkext2: block size log $(sb 24), not 2 (4096)" >&2; exit 1; }
 if [ -n "$GROUP_BLOCKS" ] && [ "$(sb 32)" != "$GROUP_BLOCKS" ]; then
     echo "mkext2: blocks per group $(sb 32), expected $GROUP_BLOCKS" >&2
+    exit 1
+fi
+# mke2fs rounds each group's inodes up to whole blocks of the table, 32
+# inodes of 128 bytes to a 4 KiB block, so the count may pass the ratio's by
+# less than a block's worth a group.
+if [ -n "$INODE_BYTES" ] && ! awk -v inodes="$(sb 0)" -v blocks="$(sb 4)" -v bpg="$(sb 32)" \
+    -v ratio="$INODE_BYTES" 'BEGIN {
+        want = blocks * 4096 / ratio
+        groups = int((blocks + bpg - 1) / bpg)
+        exit !(inodes >= want && inodes < want + groups * 32)
+    }'; then
+    echo "mkext2: $(sb 0) inodes in $(sb 4) blocks, not one for each $INODE_BYTES bytes" >&2
     exit 1
 fi
 [ "$(sb16 88)" = "128" ] || { echo "mkext2: inode size $(sb16 88), not 128" >&2; exit 1; }
