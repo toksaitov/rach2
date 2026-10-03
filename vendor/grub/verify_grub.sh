@@ -11,10 +11,12 @@
 # manifest entry, so a consumer can verify the very bytes it is about to
 # read instead of the originals it copied them from a moment earlier.
 #
-# Every run also checks the manifest's `embed-cfg` record against the
-# current tools/image/grub-embed.cfg. The disk cores embed that file as it
-# was when they were generated; an edit to it without a regeneration would
-# otherwise produce disks whose embedded configuration nobody checked.
+# Every run also checks the manifest's `embed-cfg` and `efi-embed-cfg`
+# records against the current tools/image/grub-embed.cfg and
+# tools/image/grub-efi-embed.cfg. The BIOS disk cores and the EFI image embed
+# those files as they were when they were generated; an edit to either
+# without a regeneration would otherwise produce disks whose embedded
+# configuration nobody checked.
 #
 # Usage: ./verify_grub.sh [ARTIFACT[=PATH] ...]
 #
@@ -61,20 +63,23 @@ check_one() {
 
 status=0
 
-# The embedded configuration, checked on every run: the pinned cores carry
-# the configuration recorded here, so an edited source file means the cores
+# The embedded configurations, checked on every run: the pinned images carry
+# the configurations recorded here, so an edited source file means the images
 # no longer say what the tree says and must be regenerated.
-EMBED="$REPO/tools/image/grub-embed.cfg"
-want_embed="$(awk '/^embed-cfg /{print $2}' "$MANIFEST")"
-got_embed="$("$SHA" "$EMBED" | awk '{print $1}')"
-if [ "$got_embed" != "$want_embed" ]; then
-    echo "verify_grub: tools/image/grub-embed.cfg does not match the manifest" >&2
-    echo "  sha256 $got_embed" >&2
-    echo "  manifest $want_embed" >&2
-    echo "  the pinned cores embed the recorded configuration; run" >&2
-    echo "  vendor/grub/regen_grub.sh after changing it" >&2
-    status=1
-fi
+check_embed() { # check_embed RECORD FILE
+    want_embed="$(awk -v r="$1" '$1 == r {print $2}' "$MANIFEST")"
+    got_embed="$("$SHA" "$REPO/$2" | awk '{print $1}')"
+    if [ "$got_embed" != "$want_embed" ]; then
+        echo "verify_grub: $2 does not match the manifest" >&2
+        echo "  sha256 $got_embed" >&2
+        echo "  manifest $want_embed" >&2
+        echo "  the pinned images embed the recorded configuration; run" >&2
+        echo "  vendor/grub/regen_grub.sh after changing it" >&2
+        status=1
+    fi
+}
+check_embed embed-cfg tools/image/grub-embed.cfg
+check_embed efi-embed-cfg tools/image/grub-efi-embed.cfg
 
 if [ $# -gt 0 ]; then
     for arg in "$@"; do

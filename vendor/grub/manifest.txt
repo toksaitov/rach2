@@ -3,13 +3,19 @@
 container ubuntu@sha256:d78ab76437b1afc5f01e223d6bf0172763f404bb166441328845adbef44518cb
 snapshot https://snapshot.ubuntu.com/ubuntu/20260825T013635Z
 package grub-pc-bin 2.12-1ubuntu7.3 deb-sha256 698d80bc51c0c593fbc829758365a0e4bce96819e2c8c754ae77dfe39b0388df
+package grub-efi-amd64-bin 2.12-1ubuntu7.3 deb-sha256 92ae3a846e799aea52e980e9761ac638ab79fc800e789928e9a6d713067e108e
 package grub-common 2.12-1ubuntu7.3 deb-sha256 464e7c3a9f261b2120a6755fbf753384669c666a5cc7cd571cf836d6da88373f
 installed ca-certificates 20260601~24.04.1
 installed distro-info-data 0.72-0ubuntu0.24.04.1
 installed dmsetup 2:1.02.185-3ubuntu3.2
+installed efibootmgr 18-1build2
 installed gettext-base 0.21-14ubuntu2
 installed grub-common 2.12-1ubuntu7.3
+installed grub-efi-amd64 2.12-1ubuntu7.3
+installed grub-efi-amd64-bin 2.12-1ubuntu7.3
+installed grub-efi-amd64-signed 1.202.5+2.12-1ubuntu7.3
 installed grub-pc-bin 2.12-1ubuntu7.3
+installed grub2-common 2.12-1ubuntu7.3
 installed iso-codes 4.16.0-1
 installed libbrotli1 1.1.0-2build2
 installed libdevmapper1.02.1 2:1.02.185-3ubuntu3.2
@@ -19,16 +25,17 @@ installed libexpat1 2.6.1-2ubuntu0.4
 installed libfreetype6 2.13.2+dfsg-1ubuntu0.1
 installed libfuse3-3 3.14.0-5build1
 installed libpng16-16t64 1.6.43-5ubuntu0.6
+installed libpopt0 1.19+dfsg-1build1
 installed libpython3-stdlib 3.12.3-0ubuntu2.1
 installed libpython3.12-minimal 3.12.3-1ubuntu0.15
 installed libpython3.12-stdlib 3.12.3-1ubuntu0.15
 installed libreadline8t64 8.2-4build1
 installed libsqlite3-0 3.45.1-1ubuntu2.7
-installed libssl3t64 3.0.13-0ubuntu3.15
+installed libssl3t64 3.0.13-0ubuntu3.16
 installed lsb-release 12.0-2
 installed media-types 10.1.0
 installed netbase 6.4
-installed openssl 3.0.13-0ubuntu3.15
+installed openssl 3.0.13-0ubuntu3.16
 installed os-prober 1.81ubuntu4
 installed python-apt-common 2.7.7ubuntu5.2
 installed python3 3.12.3-0ubuntu2.1
@@ -37,14 +44,22 @@ installed python3-minimal 3.12.3-0ubuntu2.1
 installed python3.12 3.12.3-1ubuntu0.15
 installed python3.12-minimal 3.12.3-1ubuntu0.15
 installed readline-common 8.2-4build1
+installed sbsigntool 0.9.4-3.1ubuntu7
+installed secureboot-db 1.9build1
 installed tzdata 2026c-0ubuntu0.24.04.1
+installed ucf 3.0043+nmu1
 tool grub-mkimage (GRUB) 2.12-1ubuntu7.3
 disk-modules biosdisk part_msdos fat normal multiboot configfile loadenv echo test serial terminal search search_label search_fs_uuid search_fs_file
 iso-modules biosdisk iso9660 part_msdos fat normal multiboot configfile loadenv echo test serial terminal
+gpt-modules biosdisk part_gpt part_msdos fat normal multiboot multiboot2 configfile loadenv echo test serial terminal search search_label search_fs_uuid search_fs_file
+efi-modules part_gpt part_msdos fat iso9660 normal multiboot multiboot2 configfile loadenv echo test serial terminal search search_label search_fs_uuid search_fs_file efi_gop efi_uga
 embed-cfg a2a9d1eedbce83eb9489d8c6b4a93788185745c040f21d2212b4b1bda0a61ec1
+efi-embed-cfg 03df4f2a84e080d0dfae78d13a86b9d1890b75b71239e9bfbe07a1877e7be368
 artifact bios-boot.img 512 7720690bdaf25fd7e3ade7e01b8d0de91e0991653e2a6900011ab23daf6e6032
 artifact boot-hybrid.img 512 2d3027be0a695db635d0bdccaf0a5184636956a0769bb634f26429908c9cfd1d
 artifact disk-core.img 161142 899fd0fcc9cb35fd4366551a8e94288f77e692f4fb68a4f92005505bc85e9ca0
 artifact disk-core-a.img 160935 8372d3ca3c1d9ce920d29f23f01402b8d534fe7849575bd02263add2b3dd26a3
 artifact disk-core-b.img 160935 d87d92419d2763cc0e12664531065451771eb185820fb1bc2041a61f19089196
 artifact eltorito.img 163333 9b59c17b4f49bbbd2ffaf606628c5dc422168517e78603d377f799e85d60d924
+artifact gpt-core.img 168525 fe2b6ec14037472526b2c5565a0a60a61e34684629318eb9426dde2adeb0720f
+artifact bootx64.efi 802816 4fdcbbfc9e446332b7b969d6499ee31d73af087a239f4d6738809c27a7a98c3d
