@@ -518,9 +518,11 @@ void k_font_init(void)
  * Take `uc`, a byte from 0x80 up, as part of a UTF-8 sequence, and draw the
  * character when its sequence is complete.
  *
- * The font is code page 437: box drawing, blocks, Latin letters with accents
- * and some Greek. A character it lacks is drawn as `CHAR_NON_PRINTABLE`, once
- * for the character, and so is a byte that cannot begin or continue one.
+ * The font is the one `k_font_init` loaded, code page 437's box drawing and
+ * blocks with the Cyrillic letters, or the adapter's code page 437 when the
+ * load failed, and `vt_glyph` gives a character's place in it or a stand-in.
+ * A character it lacks is drawn as `CHAR_NON_PRINTABLE`, once for the
+ * character, and so is a byte that cannot begin or continue one.
  * `k_putc` ends a sequence cut short by a byte below 0x80 the same way.
  */
 static void vt_utf8(unsigned char uc)
