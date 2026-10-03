@@ -18,6 +18,7 @@
 #include "portio.h"
 #include "../../klog.h"
 #include "../../power.h"
+#include "../../proc/smp.h"
 
 #include "smbios.h"
 #include "board.h"
@@ -403,6 +404,9 @@ void power_stop(int how)
      * the hardware refuses and the person is looking at a laptop that is still
      * on with no way left to ask why. There is no log to read afterwards. */
     klog_set_screen_level(KLOG_INFO);
+    /* One processor stops the machine; the others stop first, so that none
+     * goes on writing to a disk or a device the stop leaves behind. */
+    smp_stop_others();
 
     if (how == POWER_OFF) {
         power_acpi_s5();

@@ -1,6 +1,7 @@
 #include "panic.h"
 
 #include "klog.h"
+#include "proc/smp.h"
 
 display_color_t _fail_image[] = {
     1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,
@@ -98,12 +99,16 @@ extern void k_stop(void) K_NORETURN;
  * comes after: the record reaches the ring before it is offered to the serial
  * port and the wire, so a port that never drains or a controller that never
  * came up cannot take the machine's last words with it. Both of those paths
- * are bounded, which is why a panic can afford to use them at all.
+ * are bounded, which is why a panic can afford to use them at all. The
+ * other processors are stopped first, with interrupts off here, so that
+ * nothing changes the screen or the state the record describes.
  */
 void k_panic(const char *str)
 {
     int i;
 
+    arch_irq_disable();
+    smp_stop_others();
     k_cls();
     for (i = 0; i < 2000; ++i) {
         set_back_color(_fail_image[i]);
