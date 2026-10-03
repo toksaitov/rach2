@@ -845,12 +845,12 @@ set_accel() {
     export RACH2_QEMU_ACCEL
 }
 
-# The processors every machine of the run has: RACH2_CPUS, 1 when it is unset,
+# The processors every machine of the run has: RACH2_CPUS, 2 when it is unset,
 # which the shim passes to QEMU as `-smp` before the suite's own arguments, so
 # a suite that names a count of its own, as one that boots several counts
 # does, keeps it.
 set_cpus() {
-    RACH2_CPUS=${RACH2_CPUS:-1}
+    RACH2_CPUS=${RACH2_CPUS:-2}
     case "$RACH2_CPUS" in
         ''|*[!0-9]*|0*) echo "run: result: refused: RACH2_CPUS must be a whole number from 1 to 64" >&2; return 1 ;;
     esac
