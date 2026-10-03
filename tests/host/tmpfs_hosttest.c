@@ -582,10 +582,11 @@ static void rename_refused(void)
 /**
  * A mount's size= is the most pages its files hold: a write the limit stops
  * is short and then ENOSPC, statfs gives the limit as the blocks, and a
- * truncation gives the pages back. size=0 is no limit, a percentage is of
- * the machine's frames, and a value that is no number refuses the mount. A
- * file reaches past 1 GiB with a hole before its one page, and stops a page
- * short of 16 TiB.
+ * truncation gives the pages back. A remount takes a new size= that the
+ * files' pages fit in and refuses a smaller one. size=0 is no limit, a
+ * percentage is of the machine's frames, and a value that is no number
+ * refuses the mount. A file reaches past 1 GiB with a hole before its one
+ * page, and stops a page short of 16 TiB.
  */
 static void sizes(void)
 {
@@ -600,7 +601,13 @@ static void sizes(void)
     CHECK(tmpfs_write(&m2, f, buf, sizeof(buf), 0) == 2 * PAGE_SIZE);
     CHECK(tmpfs_write(&m2, f, buf, 1, 2 * PAGE_SIZE) == -ENOSPC);
     CHECK(tmpfs_statfs(&m2, &sf) == 0 && sf.blocks == 2 && sf.bfree == 0);
-    CHECK(tmpfs_truncate(&m2, f, 0) == 0 && tmpfs_statfs(&m2, &sf) == 0 && sf.bfree == 2);
+    CHECK(tmpfs_remount(&m2, 0, "size=4k") == -EINVAL);
+    CHECK(tmpfs_remount(&m2, 0, "mode=0700,size=12k") == 0 && tmpfs_statfs(&m2, &sf) == 0 &&
+          sf.blocks == 3 && sf.bfree == 1);
+    CHECK(tmpfs_write(&m2, f, buf, 1, 2 * PAGE_SIZE) == 1);
+    CHECK(tmpfs_remount(&m2, 0, NULL) == 0 && tmpfs_remount(&m2, 0, "size=8k") == -EINVAL);
+    CHECK(tmpfs_truncate(&m2, f, 0) == 0 && tmpfs_remount(&m2, 0, "size=8k") == 0 &&
+          tmpfs_statfs(&m2, &sf) == 0 && sf.bfree == 2);
     CHECK(tmpfs_write(&m2, f, "x", 1, 0x40000000ull + 5) == 1);
     CHECK(tmpfs_read(&m2, f, buf, 6, 0x40000000ull) == 6 && buf[5] == 'x' && buf[0] == 0);
     CHECK(tmpfs_statfs(&m2, &sf) == 0 && sf.bfree == 1);

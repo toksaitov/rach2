@@ -67,11 +67,14 @@ are recorded in the mount table.
 .Dv MS_REMOUNT
 gives the mount whose root
 .Fa target
-names the other flags, and reads neither
-.Fa source ,
-.Fa filesystemtype
+names the other flags, reads neither
+.Fa source
 nor
-.Fa data .
+.Fa filesystemtype ,
+and gives
+.Fa data
+to the file system, of whose options tmpfs takes
+.Ql size= .
 On ext2 it makes the mount read-only, synced and marked clean as an
 unmount leaves it, or writable, checked as a writable mount is; tmpfs
 changes between the two at once; KRFFS, FAT32 and exFAT refuse a change
@@ -189,8 +192,12 @@ memory, as on Linux.
 gives the limit as the blocks.
 A value that is no number fails the mount with
 .Er EINVAL .
-The other options Linux's tmpfs takes are accepted and change nothing,
-and a remount does not change the size.
+The other options Linux's tmpfs takes are accepted and change nothing.
+A remount takes a new
+.Ql size= ,
+and one smaller than the pages the files hold fails with
+.Er EINVAL ,
+as on Linux.
 A file in memory reaches 16 TiB less a page, as on Linux on i386.
 For every other type, the source must name a published block device
 under

@@ -1102,12 +1102,29 @@ const char *tmpfs_label(void *node)
     return ((struct tmpfs_node *)node)->label;
 }
 
-/* A tmpfs has nothing on a device to settle, and the VFS refuses every
- * write to a read-only mount, so a remount changes nothing here. */
-static int tmpfs_remount(struct vfs_mount *mnt, uint32_t flags)
+/**
+ * A remount takes a new size=, as Linux's tmpfs does; one smaller than the
+ * pages the files hold is -EINVAL. A tmpfs has nothing on a device to
+ * settle, and the VFS refuses every write to a read-only mount, so the
+ * flags change nothing here.
+ */
+static int tmpfs_remount(struct vfs_mount *mnt, uint32_t flags, const char *options)
 {
-    (void)mnt;
+    struct tmpfs_mount *tm = (struct tmpfs_mount *)mnt->priv;
+    int64_t limit;
+
     (void)flags;
+    if (!option(options, "size")) {
+        return 0;
+    }
+    limit = size_pages(options);
+    if (limit < 0) {
+        return (int)limit;
+    }
+    if (limit != 0 && (uint32_t)limit < tm->quota.used) {
+        return -EINVAL;
+    }
+    tm->quota.limit = (uint32_t)limit;
     return 0;
 }
 

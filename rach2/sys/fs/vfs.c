@@ -2767,8 +2767,9 @@ const struct vfs_type *vfs_type_at(int idx)
     (VFS_MS_RDONLY | VFS_MS_NOSUID | VFS_MS_NODEV | VFS_MS_NOEXEC | VFS_MS_SYNCHRONOUS | \
      VFS_MS_DIRSYNC | VFS_MS_NOATIME | VFS_MS_NODIRATIME | VFS_MS_SILENT | VFS_MS_RELATIME)
 
-int vfs_remount(struct vfs_mount *m, uint32_t flags)
+int vfs_remount(struct vfs_mount *m, uint32_t flags, const char *options)
 {
+    uint32_t changed = (flags ^ m->flags) & VFS_MS_RDONLY;
     int rc;
 
     if (flags & ~VFS_MS_KNOWN) {
@@ -2780,15 +2781,15 @@ int vfs_remount(struct vfs_mount *m, uint32_t flags)
     if (vfs_mount_gone(m)) {
         return -EIO;
     }
-    if ((flags ^ m->flags) & VFS_MS_RDONLY) {
-        if (!m->type->ops->remount) {
-            return -EINVAL;
-        }
-        if (!(flags & VFS_MS_RDONLY) &&
-            ((m->dev && (m->dev->flags & BLOCK_READ_ONLY)) || m->write_error)) {
-            return -EROFS;
-        }
-        rc = m->type->ops->remount(m, flags);
+    if (changed && !m->type->ops->remount) {
+        return -EINVAL;
+    }
+    if (changed && !(flags & VFS_MS_RDONLY) &&
+        ((m->dev && (m->dev->flags & BLOCK_READ_ONLY)) || m->write_error)) {
+        return -EROFS;
+    }
+    if (m->type->ops->remount && (changed || (options && *options))) {
+        rc = m->type->ops->remount(m, flags, options);
         if (rc != 0) {
             return rc;
         }

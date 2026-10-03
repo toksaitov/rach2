@@ -5902,8 +5902,8 @@ new
     lo_ready = 0;
 end
 
-# The mqueue file system, the binds of KRFFS, fallocate on a tmpfs and the
-# system's name, of milestone 56.
+# The mqueue file system, the binds of KRFFS, fallocate on a tmpfs, the
+# system's name and a tmpfs's size= at a remount, of milestone 56.
 
 fault mqueue-dir-unlisted
 probe ipcmusl
@@ -5954,4 +5954,14 @@ old
 #define UTS_SYSNAME "Linux"
 new
 #define UTS_SYSNAME "Rach2"
+end
+
+fault remount-data-dropped
+probe tmpfsmusl
+file rach2/sys/syscall_fs.c
+expect TMPFSMUSL FAIL (a remount with size=
+old
+        rc = bind ? vfs_remount_bind(m, flags) : vfs_remount(m, flags, data);
+new
+        rc = bind ? vfs_remount_bind(m, flags) : vfs_remount(m, flags, data + k_strlen(data));
 end

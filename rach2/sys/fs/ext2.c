@@ -1149,7 +1149,8 @@ static int writeback_init(struct ext2_mount *em);
 static int ext2_check_volume(struct ext2_mount *em, const char **why);
 
 /**
- * Make the mount read-only or writable, by VFS_MS_RDONLY in `flags`.
+ * Make the mount read-only or writable, by VFS_MS_RDONLY in `flags`; a
+ * remount that changes neither, and its options, change nothing.
  *
  * Read-only, the volume is synced and its valid bit set, as an unmount
  * leaves it, which a node removed while still open would prevent, since its
@@ -1159,13 +1160,17 @@ static int ext2_check_volume(struct ext2_mount *em, const char **why);
  * among them, and its valid bit is cleared; a volume whose features or
  * check keep it read-only is -EROFS.
  */
-static int ext2_remount(struct vfs_mount *mnt, uint32_t flags)
+static int ext2_remount(struct vfs_mount *mnt, uint32_t flags, const char *options)
 {
     struct ext2_mount *em = em_of(mnt);
     struct ext2_node *n;
     const char *why = 0;
     int rc = 0;
 
+    (void)options;
+    if (((flags & VFS_MS_RDONLY) != 0) == !em->writable) {
+        return 0;
+    }
     if (flags & VFS_MS_RDONLY) {
         for (n = em->nodes; n; n = n->next) {
             if (n->unlinked) {

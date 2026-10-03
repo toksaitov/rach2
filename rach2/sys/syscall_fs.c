@@ -3012,11 +3012,12 @@ static int mount_privileged(const char *type)
  * mount(2) with MS_REMOUNT: the mount whose root `path` names takes the
  * flags `flags`; -EINVAL for a path that is no mount's root. With `bind`,
  * for MS_BIND, that mount alone (`vfs_remount_bind`); without, the file
- * system it shows, through every mount that shows it (`vfs_remount`). A
- * mount made read-only must have no descriptor open for writing through
- * what the change makes read-only, -EBUSY, as on Linux.
+ * system it shows, through every mount that shows it, with the options of
+ * `data` (`vfs_remount`). A mount made read-only must have no descriptor
+ * open for writing through what the change makes read-only, -EBUSY, as on
+ * Linux.
  */
-static int32_t remount_at(const char *path, uint32_t flags, int bind)
+static int32_t remount_at(const char *path, uint32_t flags, int bind, const char *data)
 {
     struct vfs_ref ref;
     struct vfs_mount *m;
@@ -3045,10 +3046,37 @@ static int32_t remount_at(const char *path, uint32_t flags, int bind)
         }
     }
     if (rc == 0) {
-        rc = bind ? vfs_remount_bind(m, flags) : vfs_remount(m, flags);
+        rc = bind ? vfs_remount_bind(m, flags) : vfs_remount(m, flags, data);
     }
     vfs_ref_release(&ref);
     return rc;
+}
+
+/** mount(2) with MS_REMOUNT: the target's path and, without MS_BIND, the
+ * data, copied from the caller for `remount_at`. */
+static int32_t remount_call(const isr_params_t *params)
+{
+    char data[128];
+    char *tpath;
+    int32_t n;
+
+    if (!params->ecx) {
+        return -EFAULT;
+    }
+    data[0] = '\0';
+    if (params->edi && !(params->esi & MS_BIND)) {
+        n = strncpy_from_user(data, (const char __user *)params->edi, sizeof(data));
+        if (n < 0) {
+            return n;
+        }
+    }
+    n = path_from_user(AT_FDCWD, (const char __user *)params->ecx, &tpath);
+    if (n == 0) {
+        n = remount_at(tpath, params->esi & ~(uint32_t)(MS_REMOUNT | MS_BIND),
+                       (params->esi & MS_BIND) != 0, data);
+        path_buf_put(tpath);
+    }
+    return n;
 }
 
 /* mount(2) with MS_BIND: the source is a path, as the target is, and MS_REC
@@ -3072,9 +3100,10 @@ static int32_t bind_at(uint32_t source, const char *target, uint32_t flags)
  * namespace for proc, sysfs and tmpfs (`mount_privileged`). The strings are
  * copied here; the order of work and every other refusal are the VFS's
  * (vfs_do_mount). `data` may be NULL, which is an empty option string. With
- * MS_REMOUNT the source, the type and the data are not read, as on Linux
- * for the flags here (`remount_at`), and with MS_BIND alone the type and
- * the data are not (`bind_at`). A change of propagation alone,
+ * MS_REMOUNT the source and the type are not read, as on Linux, and the
+ * data goes to the file system, which takes the options a remount may
+ * change (`remount_at`); with MS_BIND alone the type and the data are not
+ * read (`bind_at`). A change of propagation alone,
  * MS_PRIVATE, MS_SLAVE, MS_SHARED or MS_UNBINDABLE with MS_REC or without,
  * changes nothing: every mount is private to the namespaces that see it,
  * as unshare(1) makes them by default.
@@ -3099,16 +3128,7 @@ int32_t sys_mount(isr_params_t *params)
         return -EPERM;
     }
     if (params->esi & MS_REMOUNT) {
-        if (!params->ecx) {
-            return -EFAULT;
-        }
-        n = path_from_user(AT_FDCWD, (const char __user *)params->ecx, &tpath);
-        if (n == 0) {
-            n = remount_at(tpath, params->esi & ~(uint32_t)(MS_REMOUNT | MS_BIND),
-                           (params->esi & MS_BIND) != 0);
-            path_buf_put(tpath);
-        }
-        return n;
+        return remount_call(params);
     }
     if (params->esi & MS_BIND) {
         if (!params->ebx || !params->ecx) {

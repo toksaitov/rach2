@@ -977,10 +977,11 @@ int synth_sys_writable(int entry)
     return 0;
 }
 
-int vfs_remount(struct vfs_mount *m, uint32_t flags)
+int vfs_remount(struct vfs_mount *m, uint32_t flags, const char *options)
 {
     (void)m;
     (void)flags;
+    (void)options;
     return -EINVAL;
 }
 

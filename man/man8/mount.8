@@ -1,4 +1,4 @@
-.Dd October 2, 2026
+.Dd October 3, 2026
 .Dt MOUNT 8
 .Os
 .Sh NAME
@@ -85,7 +85,9 @@ changes those flags on a mount, as
 describes: ext2 and tmpfs change between
 .Ql ro
 and
-.Ql rw .
+.Ql rw ,
+and tmpfs takes a new
+.Ql size= .
 .Ql bind
 and
 .Ql rbind

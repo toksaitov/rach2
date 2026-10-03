@@ -8,11 +8,13 @@
  * mount's line and /proc/filesystems has "nodev\ttmpfs". umount2 refuses the
  * mount while a file on it is open and succeeds after the close, and a new
  * mount there is empty. A second mount takes 512 nested directories and is
- * unmounted with them. /dev/shm is a directory of mode 1777 that /dev lists
- * as one, with tmpfs's magic and its line in /proc/mounts with nosuid and
- * nodev; a file is made, written, read and removed there as shm_open makes
- * one; a working directory there climbs to /dev by "..", /dev/pts/../shm
- * is the same directory, and umount2 refuses /dev/shm with EBUSY.
+ * unmounted with them. /dev/shm is a directory of mode 1777 that /dev lists as
+ * one, with tmpfs's magic and its line in /proc/mounts with nosuid and nodev; a
+ * file is made, written, read and removed there as shm_open makes one; a
+ * working directory there climbs to /dev by "..", /dev/pts/../shm is the same
+ * directory, and umount2 refuses /dev/shm with EBUSY. A tmpfs with a file of
+ * two pages takes a size= at a remount that they fit in, which statfs gives,
+ * and refuses a smaller one.
  *
  * A bind of a directory of a tmpfs shows it at another directory: a file
  * made through the bind is in the source with the same device and inode,
@@ -345,6 +347,34 @@ static int rbound(void)
     return 0;
 }
 
+/** A tmpfs with a file of two pages: a remount takes a size= they fit in,
+ * which statfs gives, and refuses a smaller one. */
+static int resized(void)
+{
+    static char two[8192];
+    struct statfs sf;
+    int fd;
+
+    memset(two, 'p', sizeof(two));
+    mkdir(DIR_PATH, 0755);
+    if (mount("none", DIR_PATH, "tmpfs", 0, NULL) != 0) {
+        return fail("a tmpfs for the remount");
+    }
+    fd = open(DIR_PATH "/two", O_CREAT | O_WRONLY | O_TRUNC, 0644);
+    if (fd < 0 || write(fd, two, sizeof(two)) != (ssize_t)sizeof(two) || close(fd) != 0) {
+        return fail("a file of two pages");
+    }
+    if (mount(NULL, DIR_PATH, NULL, MS_REMOUNT, "size=4k") != -1 || errno != EINVAL ||
+        mount(NULL, DIR_PATH, NULL, MS_REMOUNT, "size=16k") != 0 || statfs(DIR_PATH, &sf) != 0 ||
+        sf.f_blocks != 4 || sf.f_bfree != 2) {
+        return fail("a remount with size=");
+    }
+    if (unlink(DIR_PATH "/two") != 0 || umount2(DIR_PATH, 0) != 0) {
+        return fail("the remounted tmpfs unmounts");
+    }
+    return 0;
+}
+
 /** A bind of a directory of the KRFFS root, whose files move as they grow. */
 static int kbound(void)
 {
@@ -379,7 +409,8 @@ static int kbound(void)
 
 int main(void)
 {
-    if (placed() || deep() || shm() || bound() || bound_mount() || rbound() || kbound()) {
+    if (placed() || resized() || deep() || shm() || bound() || bound_mount() || rbound() ||
+        kbound()) {
         return 1;
     }
     printf("TMPFSMUSL OK\n");
