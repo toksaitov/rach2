@@ -77,6 +77,12 @@ static void word_set(uint32_t addr, uint32_t w)
     k_memcpy(user + addr, &w, sizeof(w));
 }
 
+/** Store `w` at user address `addr` as a long, a word of the robust list. */
+static void long_set(uint32_t addr, unsigned long w)
+{
+    k_memcpy(user + addr, &w, sizeof(w));
+}
+
 /** Bring a range in; a fault for a write taken with interrupts on is a
  * sleep in which the waiter on the word at `waiters_at` sets its bit, and
  * one at `slow_at` a sleep of `slow_ticks` ticks. */
@@ -205,19 +211,21 @@ static void waiter_unfile(void)
 }
 
 /**
- * Give the caller a robust list at user address 64: its head names the
- * entry at 256 as the list's one when `listed`, and the entry at 128 as the
- * one being taken or given back when `pending`, with `pending_bits` in its
- * low bit. A futex word is 16 bytes past its entry.
+ * Give the caller a robust list at user address 64: its head, three longs,
+ * names the entry at 256 as the list's one when `listed`, and the entry at
+ * 128 as the one being taken or given back when `pending`, with
+ * `pending_bits` in its low bit. A futex word is 16 bytes past its entry.
  */
 static void robust_list_set(int listed, int pending, uint32_t pending_bits)
 {
-    word_set(64, listed ? 256u : 64u);
-    word_set(68, 16u);
-    word_set(72, pending ? 128u | pending_bits : 0u);
-    word_set(256, 64u);
+    const uint32_t w = (uint32_t)sizeof(long);
+
+    long_set(64, listed ? 256u : 64u);
+    long_set(64 + w, 16u);
+    long_set(64 + 2 * w, pending ? 128u | pending_bits : 0u);
+    long_set(256, 64u);
     self.robust_list = 64;
-    self.robust_len = 12;
+    self.robust_len = 3 * w;
 }
 
 /**
@@ -393,7 +401,7 @@ static void robust_head_read(void)
     p.edx = 520;
     CHECK(sys_get_robust_list(&p) == 0, "get_robust_list of another thread succeeds");
     CHECK(word_at(512) == 0x40, "the head reported is the one the thread had");
-    CHECK(word_at(520) == 12, "and the length is 12");
+    CHECK(word_at(520) == 3 * sizeof(long), "and the length is the head's, three longs");
     CHECK(named == NULL, "the thread ended during the copy");
     if (ends_at_copy) {
         free(ends_at_copy);
