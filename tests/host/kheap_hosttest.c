@@ -3,6 +3,7 @@
  * ones, and the guarded runs kernel stacks come from.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: tests/host/compat/spinlock_host.c
  *
  * The page allocator is driven with the frames replaced by a counter and
  * the page tables by a map of the region's pages that have a mapping.

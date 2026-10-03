@@ -13,6 +13,7 @@
 #include "../proc/process.h"
 #include "../proc/ptrace.h"
 #include "../proc/smp.h"
+#include "../lib/spinlock.h"
 #include "mm.h"
 #include "pressure.h"
 
@@ -943,6 +944,14 @@ int paging_copy_frame(uintptr_t dst, uintptr_t src)
     return rc;
 }
 
+/*
+ * The frame allocator's lock: the frame table, the free counts and the
+ * hints the scans start from, against an allocation or a release on any
+ * processor and in any interrupt. It is taken with interrupts off, after
+ * the big lock and the heap's lock, and nothing under it takes another.
+ */
+static struct spinlock frame_lock = SPINLOCK_INIT;
+
 /* Mark `frame` used with one reference, whatever it held. */
 static void frame_take(uintptr_t frame)
 {
@@ -997,16 +1006,16 @@ uintptr_t alloc_frame(void)
     if (framefail_now() || !mem_may_take(0)) {
         return 0;
     }
-    /* Selection and claim as one step: a handler's own allocation between
-     * them would take the frame this one had chosen. */
-    flags = kirq_save();
+    /* Selection and claim as one step: an allocation between them would
+     * take the frame this one had chosen. */
+    flags = spin_lock_irqsave(&frame_lock);
     frame = find_free_frame();
     if (frame >= _frames_number) {
-        kirq_restore(flags);
+        spin_unlock_irqrestore(&frame_lock, flags);
         return 0;
     }
     frame_take(frame);
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&frame_lock, flags);
     return frame * PAGE_SIZE;
 }
 
@@ -1057,29 +1066,37 @@ int paging_user_state(page_dir_t *dir, uintptr_t va)
  */
 void *alloc_kernel_frame(void)
 {
+    uint32_t flags = spin_lock_irqsave(&frame_lock);
     uintptr_t frame = _window_frames;
 
     while (frame-- > _user_frames_start) {
         if (_frames[frame] == 0) {
             frame_take(frame);
             _kernel_frames_reserved++;
+            spin_unlock_irqrestore(&frame_lock, flags);
             return phys_to_virt(frame * PAGE_SIZE);
         }
     }
-
+    spin_unlock_irqrestore(&frame_lock, flags);
     return 0;
 }
 
 void paging_mark_reserved(uintptr_t frame)
 {
+    uint32_t flags = spin_lock_irqsave(&frame_lock);
+
     if (frame < _frames_number) {
         frame_take(frame);
     }
+    spin_unlock_irqrestore(&frame_lock, flags);
 }
 
 void free_kernel_frame(void *frame)
 {
+    uint32_t flags = spin_lock_irqsave(&frame_lock);
+
     _kernel_frames_reserved--;
+    spin_unlock_irqrestore(&frame_lock, flags);
     frame_unref(virt_to_phys(frame));
 }
 
@@ -1096,8 +1113,7 @@ size_t frame_total_count(void)
  *
  * Every writer of the frame table keeps the count, so this reads one word
  * and scans nothing. A reader gets a point-in-time count, which is what
- * sysinfo, the leak probe and reclaim need, so no locking is needed under
- * the IF discipline.
+ * sysinfo, the leak probe and reclaim need, so it takes no lock.
  */
 size_t frame_free_count(void)
 {
@@ -1212,15 +1228,18 @@ void paging_flush_dir(const page_dir_t *dir, uintptr_t addr)
 void frame_ref(uintptr_t phys)
 {
     uintptr_t frame = phys / PAGE_SIZE;
+    uint32_t flags = spin_lock_irqsave(&frame_lock);
 
     /* Only a live frame can gain a sharer, and the words at and above
      * `FRAME_REF_MAX` are states, not counts. */
     if (frame < _frames_number && _frames[frame] != 0 && _frames[frame] < FRAME_REF_MAX - 1) {
         _frames[frame]++;
     }
+    spin_unlock_irqrestore(&frame_lock, flags);
 }
 
-uint32_t frame_unref(uintptr_t phys)
+/* `frame_unref` with the frame allocator's lock held. */
+static uint32_t frame_unref_locked(uintptr_t phys)
 {
     uintptr_t frame = phys / PAGE_SIZE;
 
@@ -1245,6 +1264,15 @@ uint32_t frame_unref(uintptr_t phys)
         }
     }
     return _frames[frame];
+}
+
+uint32_t frame_unref(uintptr_t phys)
+{
+    uint32_t flags = spin_lock_irqsave(&frame_lock);
+    uint32_t left = frame_unref_locked(phys);
+
+    spin_unlock_irqrestore(&frame_lock, flags);
+    return left;
 }
 
 int map_user_frame(page_dir_t *dir, uintptr_t virt, uintptr_t phys, pte_t flags)
@@ -1280,12 +1308,12 @@ uintptr_t alloc_user_frame(void)
     /* Selection and claim as one step, as in `alloc_frame`; the refusals
      * come first, so a refused selection does not move the hint past a
      * free frame. */
-    flags = kirq_save();
+    flags = spin_lock_irqsave(&frame_lock);
     frame = framefail_now() ? _frames_number : find_free_frame();
     if (frame < _frames_number) {
         frame_take(frame);
     }
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&frame_lock, flags);
 
     if (frame >= _frames_number) {
         /* Who holds the pool, so that a machine that runs out says what
