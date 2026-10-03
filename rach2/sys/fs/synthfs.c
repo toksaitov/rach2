@@ -154,6 +154,16 @@ static void synth_put_proc(char *out, int cap, int *pos, int pid, int tid)
  * Linux's defaults, 60 and 0, which scripts read and nothing here acts on,
  * there being no swap. Entries go at the end, where an index entry
  * SYNTH_SYS_ names stays the same. */
+
+/* The largest System V segment and the most pages of them, as Linux's
+ * defaults give both on each width, ULONG_MAX less 16 MiB, and as
+ * ipc/sysv.c takes them. */
+#if defined(__x86_64__)
+#define SYSCTL_SHMMAX "18446744073692774399\n"
+#else
+#define SYSCTL_SHMMAX "4278190079\n"
+#endif
+
 static const struct {
     int parent;
     const char *name;
@@ -175,8 +185,8 @@ static const struct {
                {6, "msgmnb", "16384\n"},
                {6, "msgmni", "64\n"},
                {6, "sem", "32000\t2048000\t500\t64\n"},
-               {6, "shmall", "4278190079\n"},
-               {6, "shmmax", "4278190079\n"},
+               {6, "shmall", SYSCTL_SHMMAX},
+               {6, "shmmax", SYSCTL_SHMMAX},
                {6, "shmmni", "64\n"},
                {0, "net", 0},
                {20, "ipv4", 0},
