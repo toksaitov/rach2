@@ -45,14 +45,17 @@ run_phase()
     if ! "${CC:-cc}" -std=c99 -g -O1 -ffreestanding -DRACH2_HOSTTEST \
         -fsanitize=address,undefined -fno-sanitize-recover=all \
         -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast \
-        -I "$work" -I rach2/sys -I rach2/sys/lib -I rach2/sys/proc \
+        -I "$work" -I rach2/sys -I rach2/sys/arch/x86 -I rach2/sys/arch/i686 -I rach2/sys/lib -I rach2/sys/proc \
         tests/host/syscall_hosttest.c rach2/sys/lib/kstring.c \
         rach2/sys/lib/kctypes.c -o "$binary" >"$binary.compile.log" 2>&1; then
         cat "$binary.compile.log" >&2
         exit 1
     fi
     cksum "$work/syscall.c" "$work/syscall_net.c" "$binary" >"$binary.artifacts"
-    perl -e 'alarm 10; exec @ARGV or die "syscall-mutation: exec: $!\n"' \
+    # A sanitizer's report ends the test with status 1 on every host; macOS
+    # would otherwise abort it.
+    ASAN_OPTIONS=abort_on_error=0 UBSAN_OPTIONS=abort_on_error=0 \
+        perl -e 'alarm 10; exec @ARGV or die "syscall-mutation: exec: $!\n"' \
         "$binary" >"$binary.log" 2>&1 &
     child=$!
     status=0
@@ -284,10 +287,8 @@ changes = {
         'ticks = whole * 100u + ((uint32_t)usec + 9999u) / 10000u;',
         'ticks = whole * 100u + ((uint32_t)usec + 5000u) / 10000u;'),
     'timer-sec-clamp': ('syscall',
-        '    if (whole > 21474836u) {\n'
-        '        whole = 21474836u;\n'
-        '    }\n',
-        ''),
+        'uint32_t whole = (unsigned long)sec > 21474836u ? 21474836u : (uint32_t)sec;',
+        'uint32_t whole = (uint32_t)sec;'),
     'timer-clamp': ('syscall',
         'return ticks > 0x7FFFFFFDu ? 0x7FFFFFFDu : ticks;',
         'return ticks > 0x7FFFFFFEu ? 0x7FFFFFFEu : ticks;'),
@@ -320,17 +321,18 @@ changes = {
         '    if ((seconds == 0 && usec != 0) || usec >= 500000u) {',
         '    if ((seconds == 0 && usec != 0) || usec > 500000u) {'),
     'alarm-interval': ('syscall',
-        '               itimer_ticks((int32_t)(params->ebx > 21474836u ? 21474836u : params->ebx), 0), 0);',
-        '               itimer_ticks((int32_t)(params->ebx > 21474836u ? 21474836u : params->ebx), 0),\n'
-        '               current_proc->alarm_interval);'),
+        '        itimer_ticks((int32_t)(SC_ARG(params, 0) > 21474836u ? 21474836u : SC_ARG(params, 0)), 0),\n'
+        '        0);',
+        '        itimer_ticks((int32_t)(SC_ARG(params, 0) > 21474836u ? 21474836u : SC_ARG(params, 0)), 0),\n'
+        '        current_proc->alarm_interval);'),
     'alarm-mask': ('syscall',
         '    uint32_t flags = kirq_save();\n'
         '    uint32_t left = itimer_left();',
         '    uint32_t flags = 0;\n'
         '    uint32_t left = itimer_left();'),
     'timer-interval-read': ('syscall',
-        '*usec = (int32_t)((ticks % 100u) * 10000u);',
-        '*usec = (int32_t)((ticks % 100u) * 1000u);'),
+        '*usec = (long)((ticks % 100u) * 10000u);',
+        '*usec = (long)((ticks % 100u) * 1000u);'),
     'alarm-round': ('syscall',
         '    if ((seconds == 0 && usec != 0) || usec >= 500000u) {\n'
         '        seconds++;\n'
@@ -449,7 +451,7 @@ PY
         timer-interval-read-sec) detail='an interval of 1.5 s reads back as 1.5 s' ;;
         timer-usec) detail='an interval of 1000000 us is refused' ;;
         timer-mask) detail='the timer is armed with interrupts masked' ;;
-        getitimer-which) detail="out of bounds for type 'uint32_t [2]'" ;;
+        getitimer-which) detail='index 2 out of bounds for type' ;;
         alarm-round) detail='alarm reports 4.7 s left as 5' ;;
         alarm-nearest) detail='alarm reports 4.43 s left as 4' ;;
         alarm-half) detail='alarm reports 4.5 s left as 5' ;;

@@ -38,7 +38,7 @@ static int fails;
     } while (0)
 
 static process_t process;
-struct percpu cpu_table[NR_CPUS] = {{&process}};
+struct percpu cpu_table[NR_CPUS] = {{.current = &process}};
 /* The descriptor table of each process a row names, by its pid, the owner
  * of its record locks: a table of its own, or the one `table_of` names for
  * it while a row has it share one. */

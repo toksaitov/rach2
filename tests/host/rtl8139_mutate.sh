@@ -28,9 +28,9 @@ run_phase()
 {
     phase=$1
     binary="$work/$phase"
-    if ! "${CC:-cc}" -std=c99 -g -O1 -ffreestanding \
+    if ! "${CC:-cc}" -std=c99 -DRACH2_HOSTTEST -g -O1 -ffreestanding \
         -fsanitize=address,undefined -fno-sanitize-recover=all \
-        -I "$work/sys" -I "$work/sys/lib" \
+        -I "$work/sys" -I "$work/sys/arch/x86" -I "$work/sys/arch/i686" -I "$work/sys/lib" \
         tests/host/rtl8139_hosttest.c \
         "$work/sys/lib/kstring.c" "$work/sys/lib/kctypes.c" \
         -o "$binary" >"$binary.compile.log" 2>&1; then

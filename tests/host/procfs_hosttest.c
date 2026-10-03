@@ -127,7 +127,7 @@ static process_t process, thread, stranger;
 static struct tgroup group, other_group;
 /* The directory the reader runs in, which is not the reaped process's. */
 static page_dir_t reader_dir;
-struct percpu cpu_table[NR_CPUS] = {{&process, NULL, &reader_dir}};
+struct percpu cpu_table[NR_CPUS] = {{.current = &process, .space = &reader_dir}};
 static fd_table_t table;
 static fd_entry_t entries[1];
 static int refuse, allocations, failures;

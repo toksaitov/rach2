@@ -151,7 +151,7 @@ function = {
     'abort': 'static void ext2_abort_unmount(',
     'zero': 'static int writeback_prepare_data(',
     'stage-lock': 'static int ext2_fsync(',
-    'reserve-run': 'static int writeback_init(',
+    'reserve-run': 'static int writeback_init(struct ext2_mount *em)\n{',
 }.get(fault, 'static int32_t ext2_write(')
 start = source.index(function)
 end = source.index('\n}', start) + 2

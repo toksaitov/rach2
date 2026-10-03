@@ -41,7 +41,7 @@ import sys
 
 work = Path(sys.argv[1])
 source = (work / "sys/syscall_fs.c").read_text()
-functions = re.findall(r"^int32_t sys_sync\(isr_params_t \*params\)\n\{.*?^\}",
+functions = re.findall(r"^long sys_sync\(isr_params_t \*params\)\n\{.*?^\}",
                        source, re.M | re.S)
 if len(functions) != 1:
     raise SystemExit("pagecache-mutation: sys_sync is not unique")
@@ -50,7 +50,7 @@ PYEXTRACT
     if ! "${CC:-cc}" -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 \
         -DRACH2_HOSTTEST -DPAGECACHE_SYNC_HOSTTEST -g -O1 -ffreestanding -Wno-empty-body \
         -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=all \
-        -I "$work" -I "$work/sys" -I "$work/sys/lib" -I "$work/sys/proc" \
+        -I "$work" -I "$work/sys" -I "$work/sys/arch/x86" -I "$work/sys/arch/i686" -I "$work/sys/lib" -I "$work/sys/proc" \
         -I utils -I krffs -I tests/host/compat \
         tests/host/pagecache_hosttest.c -o "$binary" >"$binary.compile.log" 2>&1; then
         cat "$binary.compile.log" >&2
@@ -110,7 +110,7 @@ source = path.read_text()
 source, count = re.subn(
     r"^long sys_sync\(isr_params_t \*params\)\n\{.*?^\}",
     "long sys_sync(isr_params_t *params)\n{\n"
-    "    (void)params;\n    vfs_sync_all();\n    pc_sync();\n    return 0;\n}",
+    "    (void)params;\n    filemap_sync_all();\n    vfs_sync_all();\n    pc_sync();\n    return 0;\n}",
     source, flags=re.M | re.S)
 if count != 1:
     raise SystemExit("pagecache-mutation: sys_sync is not unique")

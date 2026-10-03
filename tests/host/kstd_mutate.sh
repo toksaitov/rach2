@@ -11,6 +11,7 @@ cd "$repo"
 mkdir -p build/tests
 work=$(mktemp -d "$repo/build/tests/kstd-proof.XXXXXX")
 cp -R rach2/sys/lib "$work/lib"
+cp -R rach2/sys/arch "$work/arch"
 cp "$work/lib/kstd.c" "$work/kstd.saved"
 child=
 

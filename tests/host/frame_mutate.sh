@@ -196,7 +196,7 @@ p1='CHECK(at == top - table);'
 p2='CHECK(frame_map_usable(&m, at / FRAME_PAGE_SIZE - 1));'
 want=$(expected "$p1" "$p2" "$p1" "$p2" \
     'CHECK(at == 0x400000000ULL - m.top_frame * 4u);' \
-    'CHECK(frame_map_place(&m, KIB(1024) + 1, MIB(32), &at) == 0 && at == MIB(192) - MIB(1) - KIB(4));')
+    'CHECK(at == MIB(192) - MIB(1) - KIB(4));')
 fault place-low
 
 run_phase restored

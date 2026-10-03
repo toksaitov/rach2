@@ -35,7 +35,7 @@ static process_t self;
 static process_t sibling;
 static struct tgroup group;
 static struct mm space;
-struct percpu cpu_table[NR_CPUS] = {{&self}};
+struct percpu cpu_table[NR_CPUS] = {{.current = &self}};
 process_t *proc_list = &self;
 static uint8_t *file;
 static uint32_t file_len, file_cap;

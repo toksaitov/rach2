@@ -106,7 +106,7 @@ extern uint32_t kheap_host_region_pages;
 #define TARGET_3GIB   (3u * 262144u / 4u)
 
 process_t proc_a;
-struct percpu cpu_table[NR_CPUS] = {{&proc_a}};
+struct percpu cpu_table[NR_CPUS] = {{.current = &proc_a}};
 static int fails;
 static uint32_t writes_made;
 static uint64_t hit_visits, miss_visits, sync_visits, few_visits;

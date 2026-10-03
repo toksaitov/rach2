@@ -31,9 +31,9 @@ run_phase()
 {
     phase=$1
     binary="$work/$phase"
-    if ! "${CC:-cc}" -std=c99 -g -O1 -ffreestanding \
+    if ! "${CC:-cc}" -std=c99 -DRACH2_HOSTTEST -g -O1 -ffreestanding \
         -fsanitize=address,undefined -fno-sanitize-recover=all \
-        -I "$work" -I rach2/sys -I rach2/sys/lib -I rach2/sys/proc \
+        -I "$work" -I rach2/sys -I rach2/sys/arch/x86 -I rach2/sys/arch/i686 -I rach2/sys/lib -I rach2/sys/proc \
         tests/host/exit_hosttest.c -o "$binary" >"$binary.compile.log" 2>&1; then
         cat "$binary.compile.log" >&2
         exit 1

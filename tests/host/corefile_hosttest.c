@@ -154,7 +154,7 @@ static process_t self, sharer;
 static struct tgroup group, sharer_group;
 static struct fs_struct dirs;
 static fd_table_t files;
-struct percpu cpu_table[NR_CPUS] = {{&self}};
+struct percpu cpu_table[NR_CPUS] = {{.current = &self}};
 process_t *proc_list = &self;
 static int failures;
 

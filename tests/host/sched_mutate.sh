@@ -60,9 +60,9 @@ import sys
 path = pathlib.Path(sys.argv[1])
 source = path.read_text()
 changes = {
-    "preference": ("next = sched_find(1);", "next = NULL;"),
-    "bound": ("_wake_turn = 0;", "_wake_turn = 1;"),
-    "cursor": ("_wake_turn = 0;", "_last_sched = next;\n        _wake_turn = 0;"),
+    "preference": ("next = sched_find(me, 1);", "next = NULL;"),
+    "bound": ("_wake_turn[me] = 0;", "_wake_turn[me] = 1;"),
+    "cursor": ("_wake_turn[me] = 0;", "_last_sched[me] = next;\n        _wake_turn[me] = 0;"),
 }
 old, new = changes[sys.argv[2]]
 if source.count(old) != 1:

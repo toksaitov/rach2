@@ -229,6 +229,11 @@ static uint32_t sync_yields;
 static uint32_t sync_mounts;
 static uint32_t sync_release;
 
+/* No file is mapped shared here, so the mapped pages have nothing to give
+ * the cache. */
+static void filemap_sync_all(void)
+{}
+
 static void vfs_sync_all(void)
 {
     ++sync_mounts;

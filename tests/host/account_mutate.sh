@@ -92,13 +92,28 @@ changes = {
     'tty-error': ('pwauth.c', 'return errno == ENOTTY ? 0 : -1;', 'return 0;'),
     'init-block': ('init.c', 'return sigprocmask(SIG_BLOCK, &shutdown, saved);',
                    'return sigprocmask(SIG_BLOCK, NULL, saved);'),
-    'init-sshd-block': ('init.c', '    if (shutdown_block(&saved) != 0) {\n        return -1;\n    }',
+    'init-sshd-block': ('init.c',
+                        '    int openssh = access(OPENSSH_PROGRAM, X_OK) == 0;\n    sigset_t saved;\n    pid_t pid;\n\n'
+                        '    if (shutdown_block(&saved) != 0) {\n        return -1;\n    }',
+                        '    int openssh = access(OPENSSH_PROGRAM, X_OK) == 0;\n    sigset_t saved;\n    pid_t pid;\n\n'
                         '    if (sigprocmask(SIG_BLOCK, NULL, &saved) != 0) {\n        return -1;\n    }'),
     'init-sshd-defaults': ('init.c',
-                           '    if (shutdown_defaults(&saved) != 0) {\n        _exit(126);\n    }\n    service_output();\n    {',
-                           '    service_output();\n    {'),
-    'init-sshd-mask': ('init.c', '        (void)sigprocmask(SIG_SETMASK, &saved, NULL);\n        return pid;',
-                       '        return pid;'),
+                           '    if (shutdown_defaults(&saved) != 0) {\n        _exit(126);\n    }\n    service_output();\n'
+                           '    {\n        static const char msg[] = "init: cannot exec ";\n        char *argv[8];\n'
+                           '        const char *program = sshd_command(',
+                           '    service_output();\n'
+                           '    {\n        static const char msg[] = "init: cannot exec ";\n        char *argv[8];\n'
+                           '        const char *program = sshd_command('),
+    'init-sshd-mask': ('init.c',
+                       '        (void)sigprocmask(SIG_SETMASK, &saved, NULL);\n'
+                       '        return pid; /* init (the parent), or -1 if fork failed */\n    }\n'
+                       '    if (shutdown_defaults(&saved) != 0) {\n        _exit(126);\n    }\n    service_output();\n'
+                       '    {\n        static const char msg[] = "init: cannot exec ";\n        char *argv[8];\n'
+                       '        const char *program = sshd_command(',
+                       '        return pid; /* init (the parent), or -1 if fork failed */\n    }\n'
+                       '    if (shutdown_defaults(&saved) != 0) {\n        _exit(126);\n    }\n    service_output();\n'
+                       '    {\n        static const char msg[] = "init: cannot exec ";\n        char *argv[8];\n'
+                       '        const char *program = sshd_command('),
     'lock-cleanup': ('pwauth.c', 'failed = unlink(lock_path) != 0 && errno != ENOENT;',
                      '(void)unlink(lock_path);\n        failed = 0;'),
     'login-eof': ('login.c', 'if (len == 0 && !over) {\n                return -1;\n            }\n            break;',

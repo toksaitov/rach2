@@ -10,12 +10,12 @@
 # every kind for
 # wq_wake_all, the count of the kinds asked for to be read back, and a wake
 # that names none to wake its waiters still (entry 246);
-# poll_deadline_hosttest requires the poll, ppoll and select timeouts to end a
-# whole timeout after the tick in progress, seconds to count a hundred ticks
-# and any part of a tick to round up, a zero timeout to end at once, the longest
-# ppoll timeout to end 0x7FFFFFFF ticks ahead across the wrap and not be
-# reached where it began, and a deadline to be reached at its tick and not
-# before (entry 216); process_timer_hosttest requires a due timer to post
+# poll_deadline_hosttest requires the poll, ppoll and select timeouts to end
+# at the first tick at or after their end, measured from where in the tick in
+# progress they began, seconds to count a hundred ticks and any part of a tick
+# to round up, a zero timeout to end at once, the longest ppoll timeout to end
+# 0x7FFFFFFF ticks ahead across the wrap and not be reached where it began,
+# and a deadline to be reached at its tick and not before (entry 216); process_timer_hosttest requires a due timer to post
 # SIGALRM to its process, running or asleep, and be armed again for its
 # interval, an interval of one tick included, a single alarm to be left
 # disarmed, a sleeper to wake at its deadline and not before, a blocked
@@ -86,7 +86,7 @@ run_phase()
     if ! "${CC:-cc}" -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST \
         -fsanitize=address,undefined -fno-sanitize-recover=all -g -O1 -Wno-empty-body \
         -ffreestanding -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast \
-        -I "$work/sys" -I "$work/sys/lib" -I "$work/sys/proc" \
+        -I "$work/sys" -I "$work/sys/arch/x86" -I "$work/sys/arch/i686" -I "$work/sys/lib" -I "$work/sys/proc" \
         "tests/host/$test.c" $deps -o "$binary" >"$binary.compile.log" 2>&1; then
         cat "$binary.compile.log" >&2
         exit 1
@@ -182,42 +182,42 @@ prove wake-none-skipped wait_queue_hosttest proc/wait_queue.c \
         return;
     }
     flags = irq_save();
-    for (w = wq->head; w; w = next) {' \
+    wq_lock();
+    w = wq->head;
+    wq->head = NULL;' \
     '    if (!wq || !kinds) {
         return;
     }
     flags = irq_save();
-    for (w = wq->head; w; w = next) {' \
+    wq_lock();
+    w = wq->head;
+    wq->head = NULL;' \
     'b.state == PROC_READY && total_queued(&wq) == 0'
 
 prove poll-early poll_deadline_hosttest io/poll.c \
-    '    return kernel_ticks + ticks + (ticks != 0 ? 1u : 0u);' \
-    '    return kernel_ticks + ticks;' \
-    'a poll of 30 ms from tick 1000 ends at 1004|a ppoll of 30 ms from tick 1000 ends at 1004|a ppoll of 1 s and 11 ms from tick 1000 ends at 1103|a select of 1 us from tick 1000 ends at 1002|a select of 1 s and 11 ms from tick 1000 ends at 1103'
+    '    ticks += (phase_ns / 1000u + us + 9999u) / 10000u;' \
+    '    ticks += (phase_ns / 1000u + us) / 10000u;' \
+    'a poll of 1 ms from tick 1000 ends at 1001|a ppoll of 1 ns from tick 1000 ends at 1001|a select of 1 us from tick 1000 ends at 1001'
+prove poll-phase poll_deadline_hosttest io/poll.c \
+    '    ticks += (phase_ns / 1000u + us + 9999u) / 10000u;' \
+    '    ticks += (us + 9999u) / 10000u;' \
+    'and one of 7 ms at the tick after'
 prove poll-clamp poll_deadline_hosttest io/poll.c \
-    '    ticks = sec * 100u + nsec_ticks;
-    if (ticks > 0x7FFFFFFEu) {
-        ticks = 0x7FFFFFFEu;
-    }' \
-    '    ticks = sec * 100u + nsec_ticks;
-    if (ticks > 0x7FFFFFFFu) {
-        ticks = 0x7FFFFFFFu;
-    }' \
-    'the longest ppoll timeout ends 0x7FFFFFFF ticks ahead across the wrap'
+    '    return now + (ticks > 0x7FFFFFFFu ? 0x7FFFFFFFu : ticks);' \
+    '    return now + ticks;' \
+    'the longest ppoll timeout ends 0x7FFFFFFF ticks ahead across the wrap|and its deadline is not reached at the tick it began'
 prove ppoll-nsec poll_deadline_hosttest io/poll.c \
-    '    nsec_ticks = ((uint32_t)ts->tv_nsec + 9999999u) / 10000000u;' \
-    '    nsec_ticks = (uint32_t)ts->tv_nsec / 10000000u;' \
-    'a ppoll of 1 s and 11 ms from tick 1000 ends at 1103'
+    '    return tick_deadline(ticks, ((uint32_t)ts->tv_nsec % 10000000u + 999u) / 1000u);' \
+    '    return tick_deadline(ticks, (uint32_t)ts->tv_nsec % 10000000u / 1000u);' \
+    'a ppoll of 1 ns from tick 1000 ends at 1001'
 prove ppoll-sec poll_deadline_hosttest io/poll.c \
-    '    ticks = sec * 100u + nsec_ticks;
-    if (ticks > 0x7FFFFFFEu) {' \
-    '    ticks = sec * 10u + nsec_ticks;
-    if (ticks > 0x7FFFFFFEu) {' \
-    'a ppoll of 1 s and 11 ms from tick 1000 ends at 1103'
+    '    ticks = sec * 100u + (uint32_t)ts->tv_nsec / 10000000u;' \
+    '    ticks = sec * 10u + (uint32_t)ts->tv_nsec / 10000000u;' \
+    'a ppoll of 1 s and 11 ms from tick 1000 ends at 1102'
 prove select-usec poll_deadline_hosttest io/poll.c \
-    '    return tv->tv_sec * 1000 + (tv->tv_usec + 999) / 1000;' \
-    '    return tv->tv_sec * 1000 + tv->tv_usec / 1000;' \
-    'a select of 1 us from tick 1000 ends at 1002'
+    '    return (int)(tv->tv_sec * 1000 + (tv->tv_usec + 999) / 1000);' \
+    '    return (int)(tv->tv_sec * 1000 + tv->tv_usec / 1000);' \
+    'a select of 1 us from tick 1000 ends at 1001'
 prove poll-reached poll_deadline_hosttest io/poll.c \
     '    return (int32_t)(deadline - kernel_ticks) <= 0;' \
     '    return (int32_t)(deadline - kernel_ticks) <= 1;' \
@@ -230,10 +230,10 @@ prove poll-wrap poll_deadline_hosttest io/poll.c \
     '    return (int32_t)(deadline - kernel_ticks) <= 0;' \
     '    return deadline <= kernel_ticks;' \
     'and its deadline is not reached at the tick it began'
-prove ppoll-nearest poll_deadline_hosttest io/poll.c \
-    '    nsec_ticks = ((uint32_t)ts->tv_nsec + 9999999u) / 10000000u;' \
-    '    nsec_ticks = ((uint32_t)ts->tv_nsec + 5000000u) / 10000000u;' \
-    'a ppoll of 1 s and 11 ms from tick 1000 ends at 1103'
+prove tick-nearest poll_deadline_hosttest io/poll.c \
+    '    ticks += (phase_ns / 1000u + us + 9999u) / 10000u;' \
+    '    ticks += (phase_ns / 1000u + us + 5000u) / 10000u;' \
+    'a poll of 21 ms rounds up to three ticks|a ppoll of 1 s and 11 ms from tick 1000 ends at 1102'
 prove ppoll-sec-clamp poll_deadline_hosttest io/poll.c \
     '    if (sec > 21474836u) {
         sec = 21474836u;
@@ -242,22 +242,22 @@ prove ppoll-sec-clamp poll_deadline_hosttest io/poll.c \
         sec = 42949672u;
     }' \
     'the longest ppoll timeout ends 0x7FFFFFFF ticks ahead across the wrap'
-prove poll-ms-one poll_deadline_hosttest io/poll.c \
-    '    ticks = ((uint32_t)timeout_ms + 9u) / 10u;' \
-    '    ticks = ((uint32_t)timeout_ms + 8u) / 10u;' \
-    'a poll of 1 ms from tick 1000 ends at 1002'
+prove tick-round-one poll_deadline_hosttest io/poll.c \
+    '    ticks += (phase_ns / 1000u + us + 9999u) / 10000u;' \
+    '    ticks += (phase_ns / 1000u + us + 9998u) / 10000u;' \
+    'a ppoll of 1 ns from tick 1000 ends at 1001'
 prove ppoll-nsec-one poll_deadline_hosttest io/poll.c \
-    '    nsec_ticks = ((uint32_t)ts->tv_nsec + 9999999u) / 10000000u;' \
-    '    nsec_ticks = ((uint32_t)ts->tv_nsec + 9999998u) / 10000000u;' \
-    'a ppoll of 1 ns from tick 1000 ends at 1002'
+    '    return tick_deadline(ticks, ((uint32_t)ts->tv_nsec % 10000000u + 999u) / 1000u);' \
+    '    return tick_deadline(ticks, ((uint32_t)ts->tv_nsec % 10000000u + 998u) / 1000u);' \
+    'a ppoll of 1 ns from tick 1000 ends at 1001'
 prove select-zero poll_deadline_hosttest io/poll.c \
-    '    return tv->tv_sec * 1000 + (tv->tv_usec + 999) / 1000;' \
-    '    return tv->tv_sec * 1000 + (tv->tv_usec + 1000) / 1000;' \
+    '    return (int)(tv->tv_sec * 1000 + (tv->tv_usec + 999) / 1000);' \
+    '    return (int)(tv->tv_sec * 1000 + (tv->tv_usec + 1000) / 1000);' \
     'a zero select timeout ends at once'
 prove select-sec poll_deadline_hosttest io/poll.c \
-    '    return tv->tv_sec * 1000 + (tv->tv_usec + 999) / 1000;' \
-    '    return tv->tv_sec * 100 + (tv->tv_usec + 999) / 1000;' \
-    'a select of 1 s and 11 ms from tick 1000 ends at 1103'
+    '    return (int)(tv->tv_sec * 1000 + (tv->tv_usec + 999) / 1000);' \
+    '    return (int)(tv->tv_sec * 100 + (tv->tv_usec + 999) / 1000);' \
+    'a select of 1 s and 11 ms from tick 1000 ends at 1102'
 
 prove tick-running process_timer_hosttest proc/process.c \
     '        if (p->alarm_tick != 0 && (int32_t)(now - p->alarm_tick) >= 0) {' \
@@ -306,19 +306,19 @@ prove tick-sentinel process_timer_hosttest proc/process.c \
     '    return at;' \
     'an alarm that wraps to 0 is due at 1'
 prove tick-stop process_timer_hosttest proc/process.c \
-    '            p->state = PROC_READY;
+    '            sched_make_ready(p);
         }
         if (p->alarm_tick != 0 && (int32_t)(now - p->alarm_tick) >= 0) {' \
-    '            p->state = PROC_READY;
+    '            sched_make_ready(p);
             break;
         }
         if (p->alarm_tick != 0 && (int32_t)(now - p->alarm_tick) >= 0) {' \
     'a tick that wakes a sleeper still posts its alarm and a later process'
 prove tick-else process_timer_hosttest proc/process.c \
-    '            p->state = PROC_READY;
+    '            sched_make_ready(p);
         }
         if (p->alarm_tick != 0 && (int32_t)(now - p->alarm_tick) >= 0) {' \
-    '            p->state = PROC_READY;
+    '            sched_make_ready(p);
         } else if (p->alarm_tick != 0 && (int32_t)(now - p->alarm_tick) >= 0) {' \
     'a tick that wakes a sleeper still posts its alarm and a later process'
 prove tick-one process_timer_hosttest proc/process.c \

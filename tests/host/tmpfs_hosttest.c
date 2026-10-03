@@ -52,7 +52,7 @@ static int fails;
     } while (0)
 
 static process_t process;
-struct percpu cpu_table[NR_CPUS] = {{&process}};
+struct percpu cpu_table[NR_CPUS] = {{.current = &process}};
 
 /* When positive, the allocation that counts it down to zero is refused. */
 static int heap_fails_in;

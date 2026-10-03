@@ -63,11 +63,11 @@ from pathlib import Path
 import sys
 path = Path(sys.argv[1]) / 'proc' / 'elf.c'
 text = path.read_text()
-new = ('''    if (ehdr->e_phentsize != sizeof(Elf32_Phdr)) {
+new = ('''    if (ehdr->e_phentsize != sizeof(Elf_Phdr)) {
         return false;
     }
-    if ((uint32_t)ehdr->e_phoff > size ||
-        (uint32_t)ehdr->e_phnum > (size - (uint32_t)ehdr->e_phoff) / sizeof(Elf32_Phdr)) {
+    if (ehdr->e_phoff > size ||
+        (uint32_t)ehdr->e_phnum > (size - (uint32_t)ehdr->e_phoff) / sizeof(Elf_Phdr)) {
         return false;
     }
 ''')

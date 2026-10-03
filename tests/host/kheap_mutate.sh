@@ -25,6 +25,7 @@ child=
 mkdir -p "$work/rach2" "$work/tests/host"
 cp -R rach2/sys "$work/rach2/"
 cp tests/host/kheap_hosttest.c "$work/tests/host/"
+cp -R tests/host/compat "$work/tests/host/"
 source="$work/rach2/sys/mm/kheap.c"
 cp "$source" "$work/kheap.c.saved"
 
@@ -60,7 +61,8 @@ run_phase()
     # shellcheck disable=SC2086 # the dependency list is one path a word
     if ! (cd "$work" && "${CC:-cc}" -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 \
         -DRACH2_HOSTTEST -fsanitize=address,undefined -fno-sanitize-recover=all -g -O1 \
-        -Wno-empty-body -ffreestanding -I rach2/sys -I rach2/sys/lib -I rach2/sys/proc \
+        -Wno-empty-body -ffreestanding -I rach2/sys -I rach2/sys/arch/x86 -I rach2/sys/arch/i686 \
+        -I rach2/sys/lib -I rach2/sys/proc -I tests/host/compat \
         -o "$binary" "$test" $deps) >"$binary.compile.log" 2>&1; then
         cat "$binary.compile.log" >&2
         exit 1

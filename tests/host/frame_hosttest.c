@@ -543,8 +543,8 @@ static void place(void)
     n += put_entry(map, n, 0x100000000ULL, MIB(1) + 0x800, MAP_USABLE);
     CHECK(frame_map_build(&m, map, n, 0, REACH_X86_64) == 0);
     CHECK(frame_map_place(&m, KIB(1024), MIB(32), &at) == 0 && at == 0x100000000ULL);
-    CHECK(frame_map_place(&m, KIB(1024) + 1, MIB(32), &at) == 0 &&
-          at == MIB(192) - MIB(1) - KIB(4));
+    CHECK(frame_map_place(&m, KIB(1024) + 1, MIB(32), &at) == 0);
+    CHECK(at == MIB(192) - MIB(1) - KIB(4));
     CHECK(frame_map_place(&m, MIB(64), MIB(32), &at) == 0 && at == MIB(128));
     CHECK(frame_map_place(&m, MIB(32), MIB(160), &at) == 0 && at == MIB(160));
     CHECK(frame_map_place(&m, MIB(64) + 1, MIB(32), &at) == -1);

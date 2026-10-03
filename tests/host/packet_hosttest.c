@@ -28,6 +28,7 @@
  */
 
 extern int printf(const char *fmt, ...);
+extern int dprintf(int fd, const char *fmt, ...);
 extern void *malloc(unsigned long n);
 extern void free(void *p);
 extern void *memcpy(void *d, const void *s, unsigned long n);
@@ -355,12 +356,14 @@ struct net_mib net_mib;
 
 static int fails;
 
-#define CHECK(what, cond)                 \
-    do {                                  \
-        if (!(cond)) {                    \
-            printf("  FAIL: %s\n", what); \
-            fails++;                      \
-        }                                 \
+/* A failure goes to the unbuffered standard error, so that a sanitizer that
+ * stops the test at a later row still leaves it in the log. */
+#define CHECK(what, cond)                     \
+    do {                                      \
+        if (!(cond)) {                        \
+            dprintf(2, "  FAIL: %s\n", what); \
+            fails++;                          \
+        }                                     \
     } while (0)
 
 /* Hand `len` bytes to `ethernet_rx` from the end of an allocation of exactly

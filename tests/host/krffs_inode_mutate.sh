@@ -107,8 +107,10 @@ static int vfs_fill_stat64(struct user_stat *s, const struct vfs_ref *r)
 { (void)s; (void)r; return -1; }
 static void stat64_boot_times(struct user_stat *s) { (void)s; }
 static int names_tree_root(const char *p) { return p[0] == '/' && p[1] == '\\0'; }
+static uint32_t uid_seen(uint32_t kid) { return kid; }
+static uint32_t gid_seen(uint32_t kid) { return kid; }
 ''')
-for name in ['path_names_dir', 'stat64_node_times', 'stat64_root_times', 'krffs_fill_stat64',
+for name in ['path_names_dir', 'stat64_seen', 'stat64_node_times', 'stat64_root_times', 'krffs_fill_stat64',
              'stat_times_from_stat64', 'stat_node_times', 'stat_root_times',
              'do_stat64', 'old_stat_put', 'do_old_stat']:
     parts.append(function(s, name))

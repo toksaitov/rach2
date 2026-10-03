@@ -46,13 +46,18 @@ run_phase()
     expected=$3
     message=$4
     binary="$work/$phase"
+    # The test's own dependency lines, with its kernel sources taken from the
+    # private tree.
+    deps=$(grep -oE 'host-deps:[^*]*' "tests/host/${test}_hosttest.c" | sed 's/host-deps://' |
+        tr '\n' ' ' | sed "s# rach2/sys/# $work/sys/#g")
+    # shellcheck disable=SC2086 # the dependency list is one path a word
     if ! "${CC:-cc}" -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 \
         -DRACH2_HOSTTEST -g -O1 -ffreestanding -Wall -Wextra -Werror \
         -Wno-unused-function -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast \
         -fsanitize=address,undefined -fno-sanitize-recover=all \
-        -I "$work/sys" -I "$work/sys/lib" -I "$work/sys/proc" \
-        "tests/host/${test}_hosttest.c" "$work/sys/lib/kstring.c" \
-        "$work/sys/lib/kctypes.c" -o "$binary" >"$binary.compile.log" 2>&1; then
+        -I "$work/sys" -I "$work/sys/arch/x86" -I "$work/sys/arch/i686" -I "$work/sys/lib" \
+        -I "$work/sys/proc" "tests/host/${test}_hosttest.c" $deps \
+        -o "$binary" >"$binary.compile.log" 2>&1; then
         cat "$binary.compile.log" >&2
         exit 1
     fi

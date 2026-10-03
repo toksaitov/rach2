@@ -49,7 +49,10 @@ run_phase()
         exit 1
     fi
     cksum "$arp" "$ip" "$work/tests/host/${test}_hosttest.c" "$binary" >"$binary.cksum"
-    perl -e 'alarm 10; exec @ARGV or die "network-mutation: exec: $!\n"' \
+    # A sanitizer's report ends the test with status 1 on every host; macOS
+    # would otherwise abort it.
+    ASAN_OPTIONS=abort_on_error=0 UBSAN_OPTIONS=abort_on_error=0 \
+        perl -e 'alarm 10; exec @ARGV or die "network-mutation: exec: $!\n"' \
         "$binary" >"$binary.log" 2>&1 &
     child=$!
     status=0

@@ -16,7 +16,7 @@ static int failures, master_calls, descriptor_calls;
    copy an ioctl's answer out; every other row must reach none of those. */
 static int publishing, views_cut;
 static process_t process;
-struct percpu cpu_table[NR_CPUS] = {{&process}};
+struct percpu cpu_table[NR_CPUS] = {{.current = &process}};
 struct tty console_tty;
 
 /** Record a failed invariant. */

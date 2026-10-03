@@ -94,7 +94,7 @@ changes = {
         '    for (n = 0; n < interrupt_source_count; n++) {\n        int irq',
         '    for (n = 0; n < interrupt_source_count; n++) {\n'
         '        if (interrupt_sources[n].line_irq >= 0) {\n'
-        '            return pic_irq_pending((uint8_t)interrupt_sources[n].line_irq);\n'
+        '            return isr_line_pending(interrupt_sources[n].line_irq);\n'
         '        }\n    }\n'
         '    for (n = 0; n < interrupt_source_count; n++) {\n        int irq'),
     'msc-elapsed': (

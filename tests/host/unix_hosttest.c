@@ -80,7 +80,7 @@ struct sockfile {
 };
 
 static process_t self;
-struct percpu cpu_table[NR_CPUS] = {{&self}};
+struct percpu cpu_table[NR_CPUS] = {{.current = &self}};
 volatile uint32_t kernel_ticks;
 static struct fs_struct dirs;
 static fd_table_t shared;

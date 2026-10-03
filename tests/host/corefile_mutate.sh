@@ -39,7 +39,7 @@ run_phase()
     if ! "${CC:-cc}" -std=c99 -DRACH2_HOSTTEST -g -O1 -ffreestanding \
         -Wall -Wextra -Werror -Wno-unused-function -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast \
         -fsanitize=address,undefined -fno-sanitize-recover=all \
-        -I "$work/sys" -I "$work/sys/lib" -I "$work/sys/proc" \
+        -I "$work/sys" -I "$work/sys/arch/x86" -I "$work/sys/arch/i686" -I "$work/sys/lib" -I "$work/sys/proc" \
         tests/host/corefile_hosttest.c "$work/sys/fs/fd.c" \
         "$work/sys/lib/kstring.c" "$work/sys/lib/kctypes.c" -o "$binary" >"$binary.compile.log" 2>&1; then
         cat "$binary.compile.log" >&2
@@ -72,7 +72,7 @@ changes = {
                         "    if (!entry->ofd || !entry->ofd->vmnt) {",
                         "    entry = fd_get(current_proc->fds, fd);\n"
                         "    if (!entry || !entry->ofd || !entry->ofd->vmnt) {"),
-    "zero-past-limit": ("rc = cf.written < limit ? core_file_put(&cf, &zero, 1) : -EFBIG;",
+    "zero-past-limit": ("rc = cf.written < most ? core_file_put(&cf, &zero, 1) : -EFBIG;",
                         "rc = core_file_put(&cf, &zero, 1);"),
 }
 old, new = changes[sys.argv[2]]

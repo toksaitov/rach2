@@ -45,7 +45,7 @@ extern void exit(int status);
 /* ---- stubs for what the cache reaches outside itself ---- */
 
 process_t proc_a, proc_b;
-struct percpu cpu_table[NR_CPUS] = {{&proc_a}};
+struct percpu cpu_table[NR_CPUS] = {{.current = &proc_a}};
 
 /* Set before a violating call in a forked child; k_panic exits 42 when its
  * text contains this, 43 when it does not. */

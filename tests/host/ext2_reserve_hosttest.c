@@ -27,7 +27,7 @@ static struct vfs_mount mount;
 static block_device_t device;
 static uint8_t descriptors[32], payload[8192], result[8192];
 static process_t process;
-struct percpu cpu_table[NR_CPUS] = {{&process}};
+struct percpu cpu_table[NR_CPUS] = {{.current = &process}};
 static int failures, writes;
 
 /** Record failed assertions. */

@@ -4,7 +4,7 @@
 # that the boot stack, which is no heap's, is never given back.
 # `kstack_alloc`, `kstack_free` and `kstack_overrun_pid` are extracted
 # unchanged from a private copy of rach2/sys/syscall_proc.c, with
-# KERNEL_STACK_SIZE from the same file and PAGE_SIZE from
+# KERNEL_STACK_SIZE from rach2/sys/proc/process.h and PAGE_SIZE from
 # rach2/sys/arch/i686/cpu.h, and compiled under ASan and UBSan in
 # tests/host/fixtures/kstack.c, whose heap hands out pages full of code
 # bytes.
@@ -29,6 +29,7 @@ work=$(mktemp -d "$repo/build/tests/kstack-proof.XXXXXX")
 child=
 cp rach2/sys/syscall_proc.c "$work/syscall_proc.c"
 cp rach2/sys/arch/i686/cpu.h "$work/cpu.h"
+cp rach2/sys/proc/process.h "$work/process.h"
 cp "$work/syscall_proc.c" "$work/syscall_proc.saved"
 
 restore()
@@ -90,7 +91,8 @@ def function(text, name):
 
 source = (work / 'syscall_proc.c').read_text()
 cpu = (work / 'cpu.h').read_text()
-parts = [define(source, 'KERNEL_STACK_SIZE'), define(cpu, 'PAGE_SIZE'),
+process = (work / 'process.h').read_text()
+parts = [define(process, 'KERNEL_STACK_SIZE'), define(cpu, 'PAGE_SIZE'),
          function(source, 'kstack_alloc'), function(source, 'kstack_free'),
          function(source, 'kstack_overrun_pid')]
 (work / 'kstack.inc').write_text('\n\n'.join(parts) + '\n')

@@ -35,9 +35,9 @@ run_phase()
         extra="$work/sys/lib/kfmt.c $work/sys/lib/kstd.c"
     fi
     # shellcheck disable=SC2086
-    if ! "${CC:-cc}" -std=c99 -g -O1 -ffreestanding \
+    if ! "${CC:-cc}" -std=c99 -DRACH2_HOSTTEST -g -O1 -ffreestanding \
         -fsanitize=address,undefined -fno-sanitize-recover=all \
-        -I "$work/sys" -I "$work/sys/lib" \
+        -I "$work/sys" -I "$work/sys/arch/x86" -I "$work/sys/arch/i686" -I "$work/sys/lib" \
         "tests/host/${test}_hosttest.c" "$work/sys/lib/kstring.c" \
         "$work/sys/lib/kctypes.c" $extra -o "$binary" \
         >"$binary.compile.log" 2>&1; then
@@ -97,7 +97,7 @@ if fault == "frames":
 elif fault in ("gfx-enter", "gfx-exit", "cursor"):
     name = {"gfx-enter": "uint8_t *fb_enter(void)",
             "gfx-exit": "void fb_exit(void)",
-            "cursor": "void vga_text_release(void)"}[fault]
+            "cursor": "void textcon_release(void)"}[fault]
     start = s.index(name + "\n{")
     end = s.index("\n}", start) + 2
     old = s[start:end]

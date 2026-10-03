@@ -48,7 +48,10 @@ run_phase()
         exit 1
     fi
     cksum "$work/uimage.c" "$binary" >"$binary.artifacts"
-    perl -e 'alarm 20; exec @ARGV or die "uimage-mutation: exec: $!\n"' \
+    # A sanitizer's report ends the test with status 1 on every host; macOS
+    # would otherwise abort it.
+    ASAN_OPTIONS=abort_on_error=0 UBSAN_OPTIONS=abort_on_error=0 \
+        perl -e 'alarm 20; exec @ARGV or die "uimage-mutation: exec: $!\n"' \
         "$binary" >"$binary.log" 2>&1 &
     child=$!
     status=0
@@ -103,8 +106,8 @@ changes = {
                    'u->used = (uint32_t)(u->top - addr + 1u);')],
     'map-address': [('uintptr_t page = u->top - (uintptr_t)(u->given + 1u) * PAGE_SIZE;',
                      'uintptr_t page = u->top - (uintptr_t)u->given * PAGE_SIZE;')],
-    'map-flags': [('u->frames[u->given], PTE_P | PTE_W | PTE_U)',
-                   'u->frames[u->given], PTE_P | PTE_U)')],
+    'map-flags': [('u->frames[u->given], PTE_P | PTE_W | PTE_U | PTE_NOEXEC)',
+                   'u->frames[u->given], PTE_P | PTE_U | PTE_NOEXEC)')],
     'frames-cap': [('u->cap = limit / PAGE_SIZE + 4u;', 'u->cap = limit / PAGE_SIZE;')],
     'release-given': [('for (i = u->given; i < u->nframes; i++) {',
                        'for (i = 0; i < u->nframes; i++) {')],

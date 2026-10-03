@@ -65,7 +65,7 @@ extern int pclose(void *f);
 /* ---- what the driver needs of the kernel ---- */
 
 static process_t proc_a;
-struct percpu cpu_table[NR_CPUS] = {{&proc_a}};
+struct percpu cpu_table[NR_CPUS] = {{.current = &proc_a}};
 
 /* The kernel's records go to the log the runner keeps, so a refusal or a
    skipped set names its reason there. */

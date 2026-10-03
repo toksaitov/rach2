@@ -19,9 +19,11 @@
  * up, and a `poll` of 1 ms and a `ppoll` of 1 ns end at 1001; begun 4 ms into
  * the tick, a `poll` of 1 ms ends at 1001 and one of 7 ms at 1002. A zero
  * timeout ends at once, a negative or
- * null one has no deadline, the longest `ppoll` timeout ends 0x7FFFFFFF
- * ticks ahead when the count is about to wrap and is not reached at the tick
- * it began, and a deadline is reached at its tick and not the tick before.
+ * null one has no deadline, the longest `ppoll` timeout, begun 9 ms into a
+ * tick so that its rounding would carry it a tick past the limit, ends
+ * 0x7FFFFFFF ticks ahead when the count is about to wrap and is not reached
+ * at the tick it began, and a deadline is reached at its tick and not the
+ * tick before.
  */
 #include "isr.h"
 struct isr_params;
@@ -111,6 +113,7 @@ int main(void)
     ts.tv_sec = 0x7FFFFFFF;
     ts.tv_nsec = 999999999;
     kernel_ticks = 0xFFFFFFF0u;
+    phase_now_ns = 9000000;
     CHECK(ts_deadline(&ts, &has) - kernel_ticks == 0x7FFFFFFFu,
           "the longest ppoll timeout ends 0x7FFFFFFF ticks ahead across the wrap");
     CHECK(!deadline_reached(ts_deadline(&ts, &has)),
