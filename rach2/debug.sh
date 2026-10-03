@@ -9,11 +9,13 @@
 #
 # Usage: ./debug.sh [audio_device]
 #   audio_device: sb16, hda, or speaker (default: speaker)
+#
+# ARCH=x86_64 debugs the x86-64 kernel on qemu-system-x86_64.
 
 AUDIO_DEVICE="${1:-speaker}"
 . "$(dirname "$0")/qemu_devices.sh"
 
-qemu-system-i386 -s -S -kernel ../build/rach2/kernel $AUDIO_OPTS $NET_OPTS &
+"$QEMU" -s -S -kernel "$BUILD_DIR/rach2/kernel" $AUDIO_OPTS $NET_OPTS &
 QEMU_PID=$!
 
 # Ensure QEMU is killed when this script exits

@@ -4,7 +4,8 @@
 # -cdrom boots the ISO through GRUB; -serial stdio shows the console.
 #
 # Usage: ./run_from_iso.sh <image> [audio_device]
-#   image:        test | os-simple | os-real  (boots build/images/<image>.iso)
+#   image:        test | os-simple | os-real  (boots build/images/<image>.iso,
+#                 or build/x86_64/images/<image>.iso when ARCH=x86_64)
 #   audio_device: sb16, hda, or speaker (default: speaker)
 #
 # Examples:
@@ -28,10 +29,10 @@ if [ -z "$IMAGE" ]; then
     echo "usage: ./run_from_iso.sh <test|os-simple|os-real> [audio]" >&2
     exit 2
 fi
-ISO="$SCRIPT_DIR/../build/images/$IMAGE.iso"
+ISO="$BUILD_DIR/images/$IMAGE.iso"
 if [ ! -f "$ISO" ]; then
-    echo "run_from_iso: $ISO not found; build it with 'make $IMAGE-iso'" >&2
+    echo "run_from_iso: $ISO not found; build it with 'make $MAKE_ARCH$IMAGE-iso'" >&2
     exit 1
 fi
 
-qemu-system-i386 -cpu "$CPU" -cdrom "$ISO" -serial stdio $AUDIO_OPTS $NET_OPTS
+"$QEMU" -cpu "$CPU" -cdrom "$ISO" -serial stdio $AUDIO_OPTS $NET_OPTS

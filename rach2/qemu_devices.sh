@@ -3,7 +3,12 @@
 #
 # Sourced by the run/debug scripts. Set AUDIO_DEVICE (sb16, hda, or speaker;
 # default speaker) before sourcing; this sets AUDIO_OPTS and NET_OPTS for the
-# qemu-system-i386 command line.
+# QEMU command line, and QEMU, BUILD_DIR and MAKE_ARCH, the words a make of
+# that build begins with, for the architecture.
+#
+# ARCH picks the architecture as mk/arch.mk does: i686, the default, boots
+# qemu-system-i386 on what build/ holds, and x86_64 boots qemu-system-x86_64
+# on what build/x86_64/ holds.
 #
 # Networking (on QEMU's SLIRP user network) is enabled by default:
 #   NET=off                     disable networking
@@ -11,6 +16,23 @@
 #   NIC=rtl8139|e1000           choose the card (default rtl8139)
 
 AUDIO_DEVICE="${AUDIO_DEVICE:-speaker}"
+
+case "${ARCH:-i686}" in
+    i686)
+        QEMU=qemu-system-i386
+        BUILD_DIR="$(cd "$(dirname "$0")" && pwd)/../build"
+        MAKE_ARCH=
+        ;;
+    x86_64)
+        QEMU=qemu-system-x86_64
+        BUILD_DIR="$(cd "$(dirname "$0")" && pwd)/../build/x86_64"
+        MAKE_ARCH="ARCH=x86_64 "
+        ;;
+    *)
+        echo "run: ARCH is i686 or x86_64, not $ARCH" >&2
+        exit 2
+        ;;
+esac
 
 # Detect OS and set appropriate audio backend
 case "$(uname -s)" in

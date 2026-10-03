@@ -8,9 +8,11 @@
 # RDRAND gives the kernel trusted entropy: without one, getrandom and the
 # random devices fail closed and dropbear can make no host key. The rows
 # require that default and the override of each script, and the audio,
-# network, disk-bus and rescue options of run.sh. Copies of the scripts run
-# in a private tree against a stand-in qemu-system-i386 on the PATH, which
-# writes its arguments one per line, so nothing boots.
+# network, disk-bus and rescue options of run.sh, and that ARCH=x86_64 boots
+# the x86-64 build's kernel and image on qemu-system-x86_64. Copies of the
+# scripts run in a private tree against stand-ins for both emulators on the
+# PATH, which write their arguments one per line, so nothing boots; the
+# x86-64 one writes its own name first.
 #
 # With --mutate each fault below is put into the private copy of one script,
 # must fail the row named for it, and is restored and touched before every row
@@ -35,12 +37,15 @@ work=$(CDPATH='' cd -- "$work" && pwd)
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
-mkdir -p "$work/rach2" "$work/build/rach2" "$work/build/images" "$work/bin" "$work/saved"
+mkdir -p "$work/rach2" "$work/build/rach2" "$work/build/images" "$work/bin" "$work/saved" \
+    "$work/build/x86_64/rach2" "$work/build/x86_64/images"
 for f in run.sh run_from_disk.sh run_from_iso.sh qemu_devices.sh; do
     cp "$repo/rach2/$f" "$work/rach2/$f"
     cp "$repo/rach2/$f" "$work/saved/$f"
 done
 : >"$work/build/rach2/kernel"
+: >"$work/build/x86_64/rach2/kernel"
+: >"$work/build/x86_64/images/test.krffs"
 : >"$work/build/images/test.krffs"
 : >"$work/build/images/os-real-grub.disk"
 : >"$work/build/images/test.iso"
@@ -50,6 +55,11 @@ cat >"$work/bin/qemu-system-i386" <<'EOF'
 for a in "$@"; do printf '%s\n' "$a"; done >"$ARGS_OUT"
 EOF
 chmod +x "$work/bin/qemu-system-i386"
+cat >"$work/bin/qemu-system-x86_64" <<'EOF'
+#!/bin/sh
+{ echo qemu-system-x86_64; for a in "$@"; do printf '%s\n' "$a"; done; } >"$ARGS_OUT"
+EOF
+chmod +x "$work/bin/qemu-system-x86_64"
 images="$work/rach2/../build/images"
 
 pass()
@@ -81,7 +91,7 @@ run()
     rm -f "$work/$name.args"
     rc=0
     # shellcheck disable=SC2086 # one setting a word, split on purpose
-    env -u CPU -u NET -u NIC -u NET_HOSTFWD -u DISK -u DISKBUS -u DISKNOMOUNT \
+    env -u ARCH -u CPU -u NET -u NIC -u NET_HOSTFWD -u DISK -u DISKBUS -u DISKNOMOUNT \
         -u RESCUE -u AUDIO_DEVICE PATH="$work/bin:$PATH" ARGS_OUT="$work/$name.args" \
         $settings sh "$work/rach2/$ran" "$@" >"$work/$name.out" 2>&1 || rc=$?
 }
@@ -150,6 +160,13 @@ rows()
     row run-rescue -append rach2.rescue
     run run-missing -- run.sh os-simple
     refused run-missing 1 "build it with 'make os-simple-image'"
+    run run-x86_64 ARCH=x86_64 -- run.sh test
+    row run-x86_64 qemu-system-x86_64 -kernel "$work/rach2/../build/x86_64/rach2/kernel" \
+        -initrd "$work/rach2/../build/x86_64/images/test.krffs"
+    run run-x86_64-missing ARCH=x86_64 -- run.sh os-simple
+    refused run-x86_64-missing 1 "build it with 'make ARCH=x86_64 os-simple-image'"
+    run run-arch ARCH=arm -- run.sh test
+    refused run-arch 2 "ARCH is i686 or x86_64, not arm"
     run disk-default -- run_from_disk.sh
     row disk-default -cpu max \
         "file=$images/os-real-grub.disk,format=raw,if=ide,index=0,media=disk" \

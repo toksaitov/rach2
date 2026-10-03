@@ -12,6 +12,8 @@
 # (ssh -i krffs/rach2_demo_ed25519 -p 2222 root@localhost) reaches dropbear.
 #
 # Usage: ./run_from_disk.sh [audio_device]
+#
+# ARCH=x86_64 boots the x86-64 build's disk on qemu-system-x86_64.
 
 AUDIO_DEVICE="${1:-speaker}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -23,11 +25,11 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 NET_HOSTFWD="${NET_HOSTFWD:-hostfwd=tcp::2222-:22}"
 . "$SCRIPT_DIR/qemu_devices.sh"
 
-DISK="$SCRIPT_DIR/../build/images/os-real-grub.disk"
-[ -f "$DISK" ] || DISK="$SCRIPT_DIR/../build/images/os-real-grub-with-key.disk"
+DISK="$BUILD_DIR/images/os-real-grub.disk"
+[ -f "$DISK" ] || DISK="$BUILD_DIR/images/os-real-grub-with-key.disk"
 
 if [ ! -f "$DISK" ]; then
-    echo "run: no disk image os-real-grub.disk or os-real-grub-with-key.disk in build/images; build one with 'make os-real-grub-disk'" >&2
+    echo "run: no disk image os-real-grub.disk or os-real-grub-with-key.disk in $BUILD_DIR/images; build one with 'make ${MAKE_ARCH}os-real-grub-disk'" >&2
     exit 1
 fi
 
@@ -41,6 +43,6 @@ fi
 # entropy (dropbear key generation needs it).
 CPU="${CPU:-max}"
 
-qemu-system-i386 -cpu "$CPU" \
+"$QEMU" -cpu "$CPU" \
     -drive "file=$DISK,format=raw,if=ide,index=0,media=disk" \
     -serial stdio $AUDIO_OPTS $NET_OPTS

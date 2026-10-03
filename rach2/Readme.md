@@ -103,7 +103,7 @@ qemu-system-i386 -cpu max -device qemu-xhci,id=xhci \
 
 GRUB loads the metal kernel and its RAM root off the stick. With no other disk registered, the kernel names the stick `disk0`, and `mount -t exfat /dev/disk0p2 /mnt` mounts its second partition. On a machine with other disks, use the stick's number from `/proc/usb`.
 
-`run.sh` defaults to `-cpu max`, the PC speaker, an RTL8139 device, and QEMU's SLIRP network. Its second argument selects `speaker`, `sb16`, or `hda`. `CPU` overrides the CPU model, `NIC` selects `rtl8139` or `e1000`, and `NET_HOSTFWD` replaces the default `8080` to guest port `80` forwarding rule. `NET=off` omits the script's explicit network options; QEMU then supplies its default e1000 and SLIRP network, which the kernel drives.
+`run.sh` defaults to `-cpu max`, the PC speaker, an RTL8139 device, and QEMU's SLIRP network. Its second argument selects `speaker`, `sb16`, or `hda`. `CPU` overrides the CPU model, `NIC` selects `rtl8139` or `e1000`, and `NET_HOSTFWD` replaces the default `8080` to guest port `80` forwarding rule. `NET=off` omits the script's explicit network options; QEMU then supplies its default e1000 and SLIRP network, which the kernel drives. `ARCH=x86_64` boots the x86-64 build instead, `build/x86_64/rach2/kernel` and the images under `build/x86_64/images`, on `qemu-system-x86_64`; `run_from_disk.sh`, `run_from_iso.sh` and `debug.sh` take it as well.
 
 For a persistent disk root:
 

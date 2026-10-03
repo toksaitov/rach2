@@ -5,7 +5,8 @@
 #
 # Usage: ./run.sh [image] [audio_device]
 #   image:        test | os-simple | os-real  (boots build/images/<image>.krffs
-# as the RAM disk). Omit it to boot the kernel alone, into the kernel debug
+# as the RAM disk, or build/x86_64/images/<image>.krffs under the x86-64
+# kernel when ARCH=x86_64). Omit it to boot the kernel alone, into the kernel debug
 # shell. audio_device: sb16, hda, or speaker (default: speaker) Audio and
 # networking devices are attached (see qemu_devices.sh).
 #
@@ -13,6 +14,7 @@
 #   ./run.sh os-simple        # our login, the ish shell, and our Unix tools
 #   ./run.sh os-real sb16     # the busybox/dropbear environment, Sound Blaster
 #   ./run.sh test             # the automated test image (kernel debug shell)
+#   ARCH=x86_64 ./run.sh os-real  # the same system on the x86-64 kernel
 #
 # Networking (on QEMU's SLIRP user network) is enabled by default:
 #   NET=off ./run.sh os-real                              # disable it
@@ -62,12 +64,12 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # to test.
 CPU="${CPU:-max}"
 
-KERNEL="$SCRIPT_DIR/../build/rach2/kernel"
+KERNEL="$BUILD_DIR/rach2/kernel"
 
 if [ -n "$IMAGE" ]; then
-    INITRD="$SCRIPT_DIR/../build/images/$IMAGE.krffs"
+    INITRD="$BUILD_DIR/images/$IMAGE.krffs"
     if [ ! -f "$INITRD" ]; then
-        echo "run: image '$INITRD' not found; build it with 'make $IMAGE-image'" >&2
+        echo "run: image '$INITRD' not found; build it with 'make $MAKE_ARCH$IMAGE-image'" >&2
         exit 1
     fi
     set -- -initrd "$INITRD"
@@ -114,4 +116,4 @@ if [ -n "$CMDLINE" ]; then
     set -- "$@" -append "$CMDLINE"
 fi
 
-qemu-system-i386 -cpu "$CPU" -kernel "$KERNEL" "$@" -serial stdio $AUDIO_OPTS $NET_OPTS
+"$QEMU" -cpu "$CPU" -kernel "$KERNEL" "$@" -serial stdio $AUDIO_OPTS $NET_OPTS
