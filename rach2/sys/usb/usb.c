@@ -223,25 +223,11 @@ static void report_ports(void)
     }
 }
 
-/* EFLAGS as it is, for the pump's check that it did not enable interrupts;
- * the host test reads it through the kirq pair. */
-static uint32_t usb_eflags(void)
+/* Whether interrupts are on, for the pump's check that it did not enable
+ * them. */
+static int usb_irq_on(void)
 {
-#ifdef RACH2_HOSTTEST
-    uint32_t flags = kirq_save();
-
-    kirq_restore(flags);
-    return flags;
-#else
-    uint32_t flags;
-
-    __asm__ __volatile__("pushf\n\t"
-                         "pop %0"
-                         : "=r"(flags)
-                         :
-                         : "memory");
-    return flags;
-#endif
+    return kirq_enabled();
 }
 
 /**
@@ -303,7 +289,7 @@ static int usb_pump(uint32_t elapsed_ms, int from_interrupt)
     if (taken > 0 && !pump_saw_pending) {
         pump_saw_pending = interrupt_pending();
     }
-    if ((usb_eflags() & 0x200u) != 0 && !pump_enabled_interrupts) {
+    if (usb_irq_on() && !pump_enabled_interrupts) {
         pump_enabled_interrupts = 1;
         klog(KLOG_ERR, "usb", "pump: interrupts were enabled inside it");
     }

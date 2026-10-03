@@ -6,13 +6,13 @@
  * and PCM frames stream out of a cyclic BDL via the controller's DMA engine.
  */
 
+#include "../arch/arch.h"
 #include "../klog.h"
 #include "hda.h"
 #include "../kio.h"
 #include "../serial.h"
 #include "../irq.h"
 #include "../arch/x86/lapic.h"
-#include "../arch/x86/kcpu.h"
 #include "../pci.h"
 #include "../udelay.h"
 #include "../lib/kstd.h"
@@ -214,70 +214,16 @@ static volatile uint32_t hw_fill_count = 0;
 static uint32_t hda_read32(uint32_t offset);
 static void hda_write32(uint32_t offset, uint32_t value);
 
-/* Cache/DMA coherency helpers (real hardware). */
-static bool hda_have_clflush = false;
-static uint32_t hda_clflush_size = 64;
-
-/**
- * Detect CLFLUSH support and cache line size for DMA coherency.
- *
- * Records whether CLFLUSH is available and its line size so DMA buffers can be
- * flushed a line at a time on real hardware. Emulators report no CLFLUSH and
- * fall back to a heavier sync.
- */
-static void hda_cpu_detect_cache(void)
-{
-    uint32_t eax = 0, ebx = 0, ecx = 0, edx = 0;
-    uint32_t sz;
-
-    /* CPUID leaf 1: feature flags + CLFLUSH line size. */
-    kcpu_id(1, &eax, &ebx, &ecx, &edx);
-
-    hda_have_clflush = ((edx & (1u << 19)) != 0);
-    sz = ((ebx >> 8) & 0xFFu) * 8u;
-    if (sz == 0) {
-        sz = 64;
-    }
-    hda_clflush_size = sz;
-}
-
 /**
  * Push a CPU-written range out to memory so the DMA engine sees it.
  *
- * CLFLUSHes each cache line spanning [addr, addr+size) when CLFLUSH is
- * available, then issues a full barrier; otherwise falls back to WBINVD.
- * A no-op in practice on emulators, which keep DMA coherent.
+ * The architecture writes back each cache line spanning [addr, addr+size)
+ * and orders the writes (arch_dma_flush), or the whole cache where it has no
+ * per-line write-back.
  */
 static void hda_dma_sync_range(const volatile void *addr, uint32_t size)
 {
-#ifdef RACH2_HOSTTEST
-    (void)addr;
-    (void)size;
-#else
-    uintptr_t p;
-    uintptr_t end;
-    uintptr_t line;
-
-    if (!addr || size == 0) {
-        return;
-    }
-
-    if (hda_have_clflush && hda_clflush_size != 0) {
-        line = (uintptr_t)hda_clflush_size;
-        p = (uintptr_t)addr & ~(line - 1u);
-        end = (uintptr_t)addr + (uintptr_t)size;
-        while (p < end) {
-            /* clflush (%eax) as bytes 0f ae 38: tcc has no mnemonic for it. */
-            __asm__ __volatile__(".byte 0x0f, 0xae, 0x38" ::"a"(p) : "memory");
-            p += line;
-        }
-        /* Full barrier (avoid SSE mfence). */
-        __asm__ __volatile__("lock; addl $0, 0(%%esp)" ::: "memory");
-    } else {
-        /* Heavy fallback, but safe on all x86 that support HDA. */
-        __asm__ __volatile__("wbinvd" ::: "memory");
-    }
-#endif
+    arch_dma_flush(addr, size);
 }
 
 /**
@@ -1800,7 +1746,6 @@ static int hda_init(void)
     hda_base = mapped;
 
     /* Detect CLFLUSH support for DMA coherency (no-ops in emulators). */
-    hda_cpu_detect_cache();
 
     pci_enable_bus_master(&hda_pci);
     pci_enable_memory_space(&hda_pci);
@@ -2738,9 +2683,7 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
     hda_enable_eapd_all();
 
     /* Flush caches so the controller sees BDL/buffers on real hardware */
-#ifndef RACH2_HOSTTEST
-    __asm__ __volatile__("wbinvd" ::: "memory");
-#endif
+    arch_dma_flush_all();
 
     playing = true;
     lpib_tracking_valid = false;

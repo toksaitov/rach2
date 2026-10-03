@@ -2,6 +2,7 @@
  * pressure.c: the targets, the reserve and reclaim, as pressure.h says.
  */
 
+#include "../lib/kirq.h"
 #include "pressure.h"
 
 #include "../fs/bcache.h"
@@ -101,10 +102,7 @@ int mem_may_take(int user_page)
  */
 static int may_write_back(void)
 {
-    uint32_t eflags;
-
-    __asm__ __volatile__("pushfl; popl %0" : "=r"(eflags));
-    return (eflags & 0x200u) != 0 && proc_in_syscall();
+    return kirq_enabled() && proc_in_syscall();
 }
 
 /**

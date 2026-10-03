@@ -14,9 +14,9 @@ esac
 }
 mkdir -p build/clock-proof
 work=$(mktemp -d "$repo/build/clock-proof/mutation.XXXXXX")
-cp rach2/sys/arch/x86/rtc.c "$work/source.saved"
+cp rach2/sys/arch/x86/cmos.c "$work/source.saved"
 source="$work/rtc.c"
-[ "$mode" != --guest ] || source=rach2/sys/arch/x86/rtc.c
+[ "$mode" != --guest ] || source=rach2/sys/arch/x86/cmos.c
 cp "$work/source.saved" "$source"
 child=
 changed=

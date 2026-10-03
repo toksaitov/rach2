@@ -1,3 +1,4 @@
+#include "../lib/kirq.h"
 #include "wait_queue.h"
 #include "sched.h"
 #include "../lib/kerrno.h"
@@ -22,14 +23,12 @@ static void irq_restore(uint32_t flags)
 #else
 static uint32_t irq_save(void)
 {
-    uint32_t flags;
-    __asm__ __volatile__("pushfl; popl %0; cli" : "=r"(flags) : : "memory");
-    return flags;
+    return kirq_save();
 }
 
 static void irq_restore(uint32_t flags)
 {
-    __asm__ __volatile__("pushl %0; popfl" : : "r"(flags) : "memory", "cc");
+    kirq_restore(flags);
 }
 #endif
 

@@ -16,6 +16,7 @@ ASM_SRC = $(ARCH_ASM_SRC)
 C_SRC = $(C_SRC_SHARED) $(ARCH_C_SRC)
 
 C_SRC_SHARED = kernel.c \
+    sys/clock.c \
     sys/kbd.c \
     sys/mouse.c \
     sys/pci.c \

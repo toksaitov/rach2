@@ -140,10 +140,14 @@ void arch_fill_words(void *dst, unsigned long fill, size_t words);
 /** Write back the cache lines of the `len` bytes at `p` to memory, for a
  * device that reads them without snooping the cache, and order the writes
  * before what follows. */
-void arch_dma_flush(const void *p, size_t len);
+void arch_dma_flush(const volatile void *p, size_t len);
 
 /** Order the processor's earlier memory accesses before its later ones, as
  * a device reading memory sees them. */
 void arch_dma_fence(void);
+
+/** Write back the whole cache to memory, for a device about to read buffers
+ * the caller has not tracked one by one. */
+void arch_dma_flush_all(void);
 
 #endif /* _ARCH_H_ */

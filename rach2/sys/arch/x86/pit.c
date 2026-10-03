@@ -323,3 +323,9 @@ uint32_t timer_subtick_ns(void)
 {
     return clock_phase() * 1000u;
 }
+
+/** The tick's interrupt, IRQ 0, raised at the 8259 and not yet taken. */
+int timer_tick_pending(void)
+{
+    return pic_irq_pending(0);
+}

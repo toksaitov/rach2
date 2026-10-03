@@ -37,6 +37,7 @@
  * nothing but a late answer could free one.
  */
 
+#include "../lib/kirq.h"
 #include "../arch/arch.h"
 #include "block.h"
 
@@ -90,16 +91,12 @@ static uint32_t device_cap; /* the most requests one device may hold */
 
 static uint32_t irq_save(void)
 {
-    uint32_t flags;
-    __asm__ __volatile__("pushfl; popl %0; cli" : "=r"(flags)::"memory");
-    return flags;
+    return kirq_save();
 }
 
 static void irq_restore(uint32_t flags)
 {
-    if (flags & 0x200) {
-        arch_irq_enable();
-    }
+    kirq_restore(flags);
 }
 
 void block_request_init(void)
@@ -540,7 +537,7 @@ static int transfer(block_device_t *device, int write, uint64_t lba, uint32_t co
                     uint32_t req_flags)
 {
     uint8_t *bytes = buffer;
-    uint32_t eflags, most;
+    uint32_t most;
 
     if (!device || count == 0 || lba >= device->sector_count ||
         count > device->sector_count - lba) {
@@ -567,8 +564,7 @@ static int transfer(block_device_t *device, int write, uint64_t lba, uint32_t co
      * waits, and two requests for one transfer is how the limit is reached
      * with everybody waiting for everybody. */
     if (device->flags & BLOCK_CALLER_SYNC) {
-        __asm__ __volatile__("pushfl; popl %0" : "=r"(eflags));
-        if (!(eflags & 0x200) || !current_proc || !current_proc->in_syscall) {
+        if (!kirq_enabled() || !current_proc || !current_proc->in_syscall) {
             k_panic("block: a sleeping device was reached outside syscall context");
         }
         if (write) {
@@ -579,8 +575,7 @@ static int transfer(block_device_t *device, int write, uint64_t lba, uint32_t co
     if (!device->submit) {
         return -EIO;
     }
-    __asm__ __volatile__("pushfl; popl %0" : "=r"(eflags));
-    if (!(eflags & 0x200) || !current_proc || !current_proc->in_syscall) {
+    if (!kirq_enabled() || !current_proc || !current_proc->in_syscall) {
         /* A page fault reading a file, with interrupts off: a disk that can
          * be polled from here is, its queue drained first; a device that
          * cannot is the caller's mistake. */
@@ -619,7 +614,6 @@ int block_flush(block_device_t *device)
     struct block_request *r;
     uint32_t flags;
     int status;
-    uint32_t eflags;
 
     device = block_submitter(device);
     if (!device || !device->flush) {
@@ -628,8 +622,7 @@ int block_flush(block_device_t *device)
     if ((device->flags & BLOCK_WRITE_THROUGH) && !device->unflushed) {
         return 0; /* every write it answered was flushed before the answer */
     }
-    __asm__ __volatile__("pushfl; popl %0" : "=r"(eflags));
-    if (!(eflags & 0x200) || !current_proc || !current_proc->in_syscall) {
+    if (!kirq_enabled() || !current_proc || !current_proc->in_syscall) {
         /* A page fault writing through the page cache, with interrupts
          * off: a disk that can be polled flushes by polling. */
         if (block_flags(device) & BLOCK_POLLABLE) {

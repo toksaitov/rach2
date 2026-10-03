@@ -174,32 +174,25 @@ int krandom_is_trusted(void)
 
 #if defined(__i386__)
 
-/* The port I/O and the tick counter the jitter seed reads (kio.c, kernel.c). */
-extern void outb(uint16_t port, uint8_t val);
-extern uint8_t inb(uint16_t port);
-extern volatile uint32_t kernel_ticks;
-
-#include "../arch/x86/kcpu.h"
+#include "../arch/arch.h"
+#include "../rtc.h"
+#include "../timer.h"
 
 /**
- * Draw one true-hardware entropy word with RDSEED.
+ * Draw one word from the processor's conditioned seed source (RDSEED on an
+ * x86), through `arch_random`.
  *
- * RDSEED sets CF on success and may transiently fail, so it retries a bounded
- * number of times. Return 1 and store *out on success, 0 if the instruction
- * never delivers. (RDRAND, below, is a hardware CSPRNG word with the same CF
- * contract.)
+ * The source may transiently fail, so it is asked a bounded number of times.
+ * Return 1 and store *out on success, 0 if it never delivers, or the
+ * processor has none. (`rdrand32`, below, draws from the processor's
+ * generator, RDRAND on an x86, on the same terms.)
  */
 static int rdseed32(uint32_t *out)
 {
-    uint32_t v = 0;
-    uint8_t ok = 0;
     int tries;
 
     for (tries = 0; tries < 32; tries++) {
-        /* rdseed %eax as bytes 0f c7 f8: tcc has no mnemonic for it. */
-        __asm__ __volatile__(".byte 0x0f, 0xc7, 0xf8\n\tsetc %1" : "=a"(v), "=qm"(ok)::"cc");
-        if (ok) {
-            *out = v;
+        if (arch_random(out, 1)) {
             return 1;
         }
     }
@@ -208,15 +201,10 @@ static int rdseed32(uint32_t *out)
 
 static int rdrand32(uint32_t *out)
 {
-    uint32_t v = 0;
-    uint8_t ok = 0;
     int tries;
 
     for (tries = 0; tries < 32; tries++) {
-        /* rdrand %eax as bytes 0f c7 f0: tcc has no mnemonic for it. */
-        __asm__ __volatile__(".byte 0x0f, 0xc7, 0xf0\n\tsetc %1" : "=a"(v), "=qm"(ok)::"cc");
-        if (ok) {
-            *out = v;
+        if (arch_random(out, 0)) {
             return 1;
         }
     }
@@ -239,33 +227,20 @@ static int collect_key(int (*draw)(uint32_t *), uint32_t key[8])
 /**
  * Gather an eight-word key from hardware entropy.
  *
- * RDSEED (CPUID leaf 7, EBX bit 18) is preferred, then RDRAND (leaf 1, ECX bit
- * 30). Each is used only when the highest CPUID leaf covers its leaf and its
- * feature bit is set: an unsupported leaf returns another leaf's data, which
- * could falsely advertise the bit, and the instruction would then raise #UD.
- * If RDSEED is present but does not deliver, the code falls through to
- * RDRAND.
+ * The seed source is preferred, then the generator; `arch_random` reports
+ * neither on a processor without it. If the seed source is present but does
+ * not deliver, the code falls through to the generator.
  *
  * @return The KRANDOM_SRC_* of the source that filled the key, or
  *         KRANDOM_SRC_JITTER if neither delivered.
  */
 static int hw_key(uint32_t key[8])
 {
-    uint32_t a, b, c, d, max_leaf;
-
-    kcpu_id(0, &max_leaf, &b, &c, &d);
-
-    if (max_leaf >= 7) {
-        kcpu_id(7, &a, &b, &c, &d);
-        if ((b & (1u << 18)) && collect_key(rdseed32, key)) {
-            return KRANDOM_SRC_RDSEED;
-        }
+    if (collect_key(rdseed32, key)) {
+        return KRANDOM_SRC_RDSEED;
     }
-    if (max_leaf >= 1) {
-        kcpu_id(1, &a, &b, &c, &d);
-        if ((c & (1u << 30)) && collect_key(rdrand32, key)) {
-            return KRANDOM_SRC_RDRAND;
-        }
+    if (collect_key(rdrand32, key)) {
+        return KRANDOM_SRC_RDRAND;
     }
     return KRANDOM_SRC_JITTER;
 }
@@ -275,7 +250,8 @@ static int hw_key(uint32_t key[8])
  *
  * Real hardware entropy is used when the CPU offers it: a defensible seed that
  * marks the generator trusted. Otherwise the seed comes from boot-time jitter
- * (CPU timestamp counter, CMOS RTC seconds, and the PIT tick). Jitter varies
+ * (the processor's cycle counter, the clock's reading at boot, and the
+ * tick). Jitter varies
  * across boots but is not defensible entropy, so the source stays untrusted:
  * getrandom without GRND_INSECURE and /dev/[u]random fail closed, and only
  * best-effort uses draw from it, such as AT_RANDOM, from which the C library
@@ -284,8 +260,8 @@ static int hw_key(uint32_t key[8])
 void krandom_seed(void)
 {
     uint32_t key[8];
-    uint32_t lo = 0, hi = 0;
-    uint8_t sec;
+    uint64_t cycles;
+    uint32_t lo, hi, sec;
     int src;
 
     src = hw_key(key);
@@ -295,12 +271,12 @@ void krandom_seed(void)
         return;
     }
 
-    __asm__ __volatile__("rdtsc" : "=a"(lo), "=d"(hi));
-    outb(0x70, 0x00); /* CMOS index 0x00: RTC seconds, read at 0x71 */
-    sec = inb(0x71);
+    cycles = arch_cycles();
+    lo = (uint32_t)cycles;
+    hi = (uint32_t)(cycles >> 32);
+    sec = (uint32_t)rtc_boot_time();
 
-    krandom_reseed(lo ^ (uint32_t)sec, hi, kernel_ticks ^ ((uint32_t)sec << 16),
-                   lo ^ hi ^ kernel_ticks ^ (uint32_t)sec);
+    krandom_reseed(lo ^ sec, hi, kernel_ticks ^ (sec << 16), lo ^ hi ^ kernel_ticks ^ sec);
     cc_src = KRANDOM_SRC_JITTER;
 }
 

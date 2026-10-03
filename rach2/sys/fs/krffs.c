@@ -23,7 +23,7 @@
 #include "../klog.h"
 #include "krffs.h"
 
-#include "../arch/x86/rtc.h"
+#include "../rtc.h"
 #include "../serial.h"
 #include "../lib/kerrno.h"
 

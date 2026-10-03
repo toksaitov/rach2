@@ -4930,7 +4930,7 @@ end
 
 fault monotonic-tick-only
 probe clockidmusl
-file rach2/sys/arch/x86/rtc.c
+file rach2/sys/arch/x86/cmos.c
 expect CLOCKIDMUSL FAIL (time since boot does not read within the tick)
 old
     *nanoseconds = (int64_t)ticks * RTC_NANOSECONDS_PER_TICK + phase_ns;

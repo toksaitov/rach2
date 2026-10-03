@@ -18,7 +18,7 @@
 #include "../lib/kerrno.h"
 #include "../lib/ksignal.h"
 #include "../lib/kirq.h"
-#include "../arch/x86/rtc.h"
+#include "../rtc.h"
 
 /* Linux ioctls. The pty-number requests have the exact values musl uses. */
 #define FIONREAD   0x541B

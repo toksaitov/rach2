@@ -40,7 +40,7 @@
 #include "io/anon.h"
 #include "tty/tty.h"
 #include "tty/pty.h"
-#include "arch/x86/rtc.h"
+#include "rtc.h"
 #include "block/loop.h"
 #include "fs/ext2.h"
 #include "fs/krffs.h"
@@ -594,12 +594,7 @@ int32_t exit_current(int32_t code)
 
     /* Reset ESP to a fresh kernel stack and jump to shell_loop. Safe because
      * we are in kernel mode and init has been torn down. */
-    __asm__ __volatile__("movl %0, %%esp\n\t"
-                         "sti\n\t"
-                         "jmp *%1\n\t"
-                         :
-                         : "r"((uint32_t)stack + KERNEL_STACK_SIZE_LOCAL), "r"((uint32_t)shell_loop)
-                         : "memory");
+    arch_run_on_stack((uintptr_t)stack + KERNEL_STACK_SIZE_LOCAL, shell_loop);
     exit_schedule_away();
 }
 
@@ -3276,19 +3271,12 @@ static uint64_t sigact_mask(const struct k_sigaction *sa)
  * Returns the prior IF so the caller can restore it. */
 static uint32_t sig_irq_save(void)
 {
-    uint32_t flags;
-    __asm__ __volatile__("pushf\n\t"
-                         "cli\n\t"
-                         "pop %0"
-                         : "=r"(flags)::"memory");
-    return flags;
+    return kirq_save();
 }
 
 static void sig_irq_restore(uint32_t flags)
 {
-    if (flags & 0x200u) {
-        arch_irq_enable();
-    }
+    kirq_restore(flags);
 }
 
 /* The stop signals, which SIGCONT cancels and which cancel SIGCONT. */

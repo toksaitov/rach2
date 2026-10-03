@@ -11,7 +11,7 @@
 #include "../mm/paging.h"
 #include "../mm/pressure.h"
 #include "../proc/wait_queue.h"
-#include "../arch/x86/rtc.h"
+#include "../rtc.h"
 
 /* Names. */
 

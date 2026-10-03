@@ -22,6 +22,10 @@ extern volatile uint32_t kernel_ticks;
  */
 uint32_t timer_now_us(void);
 
+/** Whether the tick's interrupt has been raised and not yet taken: the
+ * counter has wrapped into a tick the handler has not counted. */
+int timer_tick_pending(void);
+
 /** Nanoseconds within this tick. The caller must disable interrupts. */
 uint32_t timer_subtick_ns(void);
 

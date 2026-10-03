@@ -21,7 +21,7 @@
 #include "../panic.h"
 #include "../proc/process.h"
 #include "../proc/wait_queue.h"
-#include "../arch/x86/rtc.h"
+#include "../rtc.h"
 #include "bcache.h"
 #include "fat32name.h"
 #include "fatcommon.h"

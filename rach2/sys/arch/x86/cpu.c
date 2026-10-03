@@ -203,7 +203,7 @@ void arch_dma_fence(void)
 #endif
 }
 
-void arch_dma_flush(const void *p, size_t len)
+void arch_dma_flush(const volatile void *p, size_t len)
 {
     uintptr_t at, end;
 
@@ -225,4 +225,9 @@ void arch_dma_flush(const void *p, size_t len)
         at += clflush_size;
     }
     arch_dma_fence();
+}
+
+void arch_dma_flush_all(void)
+{
+    __asm__ __volatile__("wbinvd" : : : "memory");
 }

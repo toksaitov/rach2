@@ -3,6 +3,7 @@
  */
 
 #define KHEAP_INSIDE
+#include "../lib/kirq.h"
 #include "../arch/arch.h"
 #include "kheap.h"
 
@@ -54,22 +55,12 @@ static uint32_t class_live[KHEAP_CLASSES];  /* blocks of each class in use */
  * tests' among them, there are none to mask. */
 static uint32_t irq_save(void)
 {
-    uint32_t flags = 0;
-#if defined(__i386__)
-    __asm__ __volatile__("pushfl; popl %0; cli" : "=r"(flags)::"memory");
-#endif
-    return flags;
+    return kirq_save();
 }
 
 static void irq_restore(uint32_t flags)
 {
-#if defined(__i386__)
-    if (flags & 0x200) {
-        arch_irq_enable();
-    }
-#else
-    (void)flags;
-#endif
+    kirq_restore(flags);
 }
 
 static int page_taken(uint32_t page)

@@ -33,7 +33,7 @@ FREESTANDING="-ffreestanding"
 # <sys/random.h>). Any -I precedes the system directories, so on a host that
 # does have them these declarations are the ones used; they are musl's, so the
 # interface is the same either way. See tests/host/compat/crypt.h.
-INC="-I rach2/sys -I rach2/sys/lib -I rach2/sys/proc -I utils -I krffs -I tests/host/compat"
+INC="-I rach2/sys -I rach2/sys/arch/x86 -I rach2/sys/arch/i686 -I rach2/sys/lib -I rach2/sys/proc -I utils -I krffs -I tests/host/compat"
 fail=0
 any=0
 

@@ -16,6 +16,7 @@
  * emits works.
  */
 
+#include "../lib/kirq.h"
 #include "poll.h"
 #include "poll_select.h"
 #include "epoll.h"
@@ -26,7 +27,7 @@
 #include "../proc/wait_queue.h"
 #include "../proc/sched.h"
 #include "../tty/tty.h"
-#include "../arch/x86/rtc.h"
+#include "../rtc.h"
 #include "../mm/usercopy.h"
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
@@ -53,14 +54,12 @@ struct poll_timeval {
 
 static uint32_t irq_save(void)
 {
-    uint32_t flags;
-    __asm__ __volatile__("pushfl; popl %0; cli" : "=r"(flags) : : "memory");
-    return flags;
+    return kirq_save();
 }
 
 static void irq_restore(uint32_t flags)
 {
-    __asm__ __volatile__("pushl %0; popfl" : : "r"(flags) : "memory", "cc");
+    kirq_restore(flags);
 }
 
 /**

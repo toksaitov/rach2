@@ -31,7 +31,7 @@
 #include "../lib/kstring.h"
 #include "../panic.h"
 #include "../proc/process.h"
-#include "../arch/x86/rtc.h"
+#include "../rtc.h"
 #include "bcache.h"
 #include "fatcommon.h"
 

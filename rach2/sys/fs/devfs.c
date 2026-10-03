@@ -32,10 +32,9 @@
 #include "../block/recovery.h"
 #include "../block/disk.h"
 #include "../serial.h"
-#include "../arch/x86/rtc.h"
+#include "../rtc.h"
 #include "../lib/kirq.h"
 #include "../irq.h"
-#include "../arch/x86/pic.h"
 #include "../proc/suspend.h"
 #include "../proc/wait_queue.h"
 
@@ -1184,8 +1183,7 @@ static void rtc_irq_setup(void)
 {
     if (!rtc_irq_ready) {
         wait_queue_init(&rtc_wq);
-        register_isr_handler(32 + RTC_IRQ, rtc_alarm_irq, "rtc");
-        pic_unmask_irq(2);
+        rtc_alarm_attach(rtc_alarm_irq);
         rtc_irq_ready = 1;
     }
 }

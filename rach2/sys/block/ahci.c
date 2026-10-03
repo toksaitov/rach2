@@ -1,5 +1,5 @@
+#include "../arch/arch.h"
 #include "../klog.h"
-#include "../arch/x86/kcpu.h"
 #include "ahci.h"
 #include "diskcmd.h"
 #include "disk.h"
@@ -330,43 +330,11 @@ static uint32_t ahci_port_off(int port, uint32_t reg)
     return AHCI_PORT_BASE + (uint32_t)port * AHCI_PORT_STRIDE + reg;
 }
 
-/* Cache/DMA coherency, a real-hardware requirement, mirroring the HDA
-   driver's helper. x86 bus-master DMA snoops the caches, so the eviction
-   below changes nothing a correct machine does; it is kept because a machine
-   that does not snoop would otherwise read a stale descriptor, and it costs
-   one pass over a small buffer. */
-static bool ahci_have_clflush = false;
-static uint32_t ahci_clflush_size = 64;
-
-/**
- * Record whether CLFLUSH is available and its line size (CPUID leaf 1).
- *
- * The two instructions this needs are x86's, so a test compiled for another
- * architecture cannot run it. There is nothing to model either: what it
- * decides is which of the two evictions the flush below uses, a line at a
- * time with CLFLUSH or the whole cache with WBINVD. Where the instructions do
- * not exist there is no controller either, and the flush does nothing.
- */
-static void ahci_detect_cache(void)
-{
-#if defined(__i386__)
-    uint32_t eax = 0, ebx = 0, ecx = 0, edx = 0;
-    uint32_t sz;
-
-    kcpu_id(1, &eax, &ebx, &ecx, &edx);
-
-    ahci_have_clflush = ((edx & (1u << 19)) != 0);
-    sz = ((ebx >> 8) & 0xFFu) * 8u;
-    if (sz == 0) {
-        sz = 64;
-    }
-    ahci_clflush_size = sz;
-#else
-    ahci_have_clflush = false;
-    ahci_clflush_size = 64;
-#endif
-}
-
+/* Cache/DMA coherency, a real-hardware requirement. x86 bus-master DMA
+   snoops the caches, so the write-back below changes nothing a correct
+   machine does; it is kept because a machine that does not snoop would
+   otherwise read a stale descriptor, and it costs one pass over a small
+   buffer. */
 /** Evict [addr, addr+size) so a DMA write the CPU is about to read, or a
    descriptor the HBA is about to read, crosses the cache a line at a time. */
 static void ahci_dma_sync(const volatile void *addr, uint32_t size)
@@ -374,27 +342,7 @@ static void ahci_dma_sync(const volatile void *addr, uint32_t size)
     if (!addr || size == 0) {
         return;
     }
-#if defined(__i386__)
-    if (ahci_have_clflush && ahci_clflush_size != 0) {
-        uintptr_t line = (uintptr_t)ahci_clflush_size;
-        uintptr_t p = (uintptr_t)addr & ~(line - 1u);
-        uintptr_t end = (uintptr_t)addr + (uintptr_t)size;
-
-        while (p < end) {
-            /* clflush (%eax) as bytes 0f ae 38: tcc has no mnemonic for it. */
-            __asm__ __volatile__(".byte 0x0f, 0xae, 0x38" ::"a"(p) : "memory");
-            p += line;
-        }
-        __asm__ __volatile__("lock; addl $0, 0(%%esp)" ::: "memory");
-    } else {
-        __asm__ __volatile__("wbinvd" ::: "memory");
-    }
-#else
-    /* The instructions above are 32-bit x86's, and where they do not run
-       there is no controller either: what runs there is a model of one. */
-    (void)addr;
-    (void)size;
-#endif
+    arch_dma_flush(addr, size);
 }
 
 /** Poll until every bit of `mask` at `offset` reads 0. Returns 0 on success, -1
@@ -1503,7 +1451,6 @@ int ahci_init(void)
     ahci_port = -1;
     ahci_ndisks = 0;
     ahci_vector = -1;
-    ahci_detect_cache();
     if (ahci_discover() != 0) {
         klog(KLOG_INFO, "ahci", "none: %s", ahci_err);
         return -1;

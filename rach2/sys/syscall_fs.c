@@ -34,7 +34,7 @@
 #include "io/poll.h"
 #include "tty/tty.h"
 #include "tty/pty.h"
-#include "arch/x86/rtc.h"
+#include "rtc.h"
 #include "block/loop.h"
 #include "fs/krffs.h"
 #include "fs/krffsmount.h"

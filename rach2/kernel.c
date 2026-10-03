@@ -35,7 +35,7 @@
 #include "sys/proc/uimage.h"
 #include "sys/lib/krandom.h"
 #include "sys/lib/ksignal.h"
-#include "sys/arch/x86/rtc.h"
+#include "sys/rtc.h"
 #include "sys/fs/krffs.h"
 #include "sys/timer.h"
 #include "sys/platform.h"
