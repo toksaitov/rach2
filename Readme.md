@@ -76,13 +76,14 @@ What the hardware showed that the emulator had not is in the milestone records a
 
 ## What a fresh disk holds
 
-`make rach2-sealed-disk` builds a disk image of three partitions, each with a file reading `hello, world`, `/hello.txt` on the two FAT partitions and `/demo/hello.txt` on the root, so that every partition has something to read after a mount. What each partition is:
+`make rach2-sealed-disk` builds a disk image with a GUID partition table and three partitions, each with a file reading `hello, world`, `/hello.txt` on the two FAT partitions and `/demo/hello.txt` on the root, so that every partition has something to read after a mount. The disk boots by BIOS and by UEFI, with Secure Boot turned off. What each partition is:
 
 | Device | What it is | Type |
 | --- | --- | --- |
-| `/dev/disk0p1` | the boot files and the two kernel slots | FAT32 |
+| `/dev/disk0p1` | the boot files, the two kernel slots and GRUB's EFI image: the EFI system partition | FAT32 |
 | `/dev/disk0p2` | the recovery system | FAT32 |
 | `/dev/disk0p3` | the root | ext2 |
+| `/dev/disk0p4` | GRUB's BIOS core: the BIOS boot partition | none |
 
 The recovery system starts a root shell on the console without a password, so physical access to a machine is control of it. It answers SSH only where root has a key: one built into its image, or one the installer placed on the recovery partition ([`recovery(7)`](man/man7/recovery.7)).
 

@@ -51,10 +51,10 @@ Opening `/fb` acquires the display for the calling process and enters VGA mode 1
 The kernel accepts one root:
 
 * With no root option, it mounts the first Multiboot module in place. Changes affect the boot-time copy and disappear when the machine stops.
-* `rach2.fsdisk` and `rach2.root=disk` scan disk 0's MBR and mount its KRFFS partition through the write-back page cache.
+* `rach2.fsdisk` and `rach2.root=disk` scan disk 0's first four entries, of an MBR or a GUID table, and mount its KRFFS partition through the write-back page cache.
 * `rach2.fswindow` mounts the Multiboot module through the page-cache window. This is a development path for the cache rather than a persistent disk.
 * `rach2.root=SPEC` selects a partition across all registered disks. SPEC may be `PARTUUID=GUID` for a GPT partition's 36-character GUID, `MBRID=XXXXXXXX,M` for an eight-digit hexadecimal MBR disk identifier and partition number, `GPTID=GUID,M` for a GUID table's 36-character disk GUID and partition number, `UUID=UUID` for an ext2 volume UUID, `LABEL=NAME` for a GPT partition name or ext2 volume label, or `/dev/diskNpM` for a node selected directly during recovery. UUID comparison ignores letter case. Exactly one partition must match; an absent or ambiguous identity is logged and leaves no root mounted. `rach2.rootfstype=krffs` or `rach2.rootfstype=ext2` selects the file system, with other values refused by name. Without it, the kernel checks for KRFFS first and then ext2. KRFFS uses the page-cache window with the disk-root limits; ext2 uses the buffer cache.
-* `rach2.root=ext2` scans disk 0's MBR for the first ext2 partition the driver can mount and mounts it as the root through the buffer cache, checked before a writable mount when it was not unmounted, as [ext2.Readme.md](sys/fs/ext2.Readme.md) describes. The KRFFS module is not tried in its place.
+* `rach2.root=ext2` scans disk 0's first four entries, of an MBR or a GUID table, for the first ext2 partition the driver can mount and mounts it as the root through the buffer cache, checked before a writable mount when it was not unmounted, as [ext2.Readme.md](sys/fs/ext2.Readme.md) describes. The KRFFS module is not tried in its place.
 
 The root is mounted before the USB stack starts, so a root is a Multiboot module or a partition of the disk the block layer found, and never a stick. An orderly stop writes an ext2 root's buffers and sets its valid bit when the mount was writable, its error bit clear and those writes succeeded; otherwise the next mount checks it.
 
@@ -112,7 +112,7 @@ make os-real-grub-disk
 (cd rach2 && ./run_from_disk.sh)
 ```
 
-The ISO path boots GRUB from a CD image. `run_from_disk.sh` boots BIOS, the disk MBR, and GRUB without QEMU's `-kernel` or `-initrd` options, on the disk `make os-real-grub-disk` builds, `build/images/os-real-grub.disk`, or `os-real-grub-with-key.disk` in a tree with a recovery key: the os-real system as an ext2 root on the third partition, with the boot and recovery partitions before it, which is the layout a machine has. To stop at the first instruction and attach GDB, build the kernel and run `./debug.sh` from `rach2/`.
+The ISO path boots GRUB from a CD image. `run_from_disk.sh` boots BIOS, the disk's boot code, and GRUB's BIOS core in its BIOS boot partition without QEMU's `-kernel` or `-initrd` options, on the disk `make os-real-grub-disk` builds, `build/images/os-real-grub.disk`, or `os-real-grub-with-key.disk` in a tree with a recovery key: the os-real system as an ext2 root on the third partition of a GUID table, with the boot and recovery partitions before it, which is the layout a machine has; UEFI firmware, OVMF under QEMU, boots the same disk through GRUB's EFI image on the boot partition. To stop at the first instruction and attach GDB, build the kernel and run `./debug.sh` from `rach2/`.
 
 ## Kernel command line
 
@@ -121,8 +121,8 @@ Options are whitespace-delimited. Flags match whole tokens, and the first `key=v
 | Option | Effect |
 |--------|--------|
 | `rach2.rescue` or `init=rescue` | Skip `/sbin/init` and enter the kernel debug shell. |
-| `rach2.fsdisk` or `rach2.root=disk` | Scan disk 0's MBR and mount its KRFFS root through the page cache. |
-| `rach2.root=ext2` | Scan disk 0's MBR and mount the first ext2 partition the driver can mount as the root. |
+| `rach2.fsdisk` or `rach2.root=disk` | Scan disk 0's first four entries, of an MBR or a GUID table, and mount its KRFFS root through the page cache. |
+| `rach2.root=ext2` | Scan disk 0's first four entries, of an MBR or a GUID table, and mount the first ext2 partition the driver can mount as the root. |
 | `rach2.fswindow` | Mount the Multiboot KRFFS module through the page-cache window. |
 | `rach2.root=ram` | Mount the first Multiboot module in place. |
 | `rach2.root=SPEC` | Resolve `PARTUUID=GUID`, `MBRID=XXXXXXXX,M`, `GPTID=GUID,M`, `UUID=UUID`, `LABEL=NAME`, or `/dev/diskNpM` across all registered disks. Mount only when exactly one partition matches. |
@@ -246,7 +246,7 @@ The log and the library are `sys/klog*` and `sys/lib/`: one record and its four 
 
 The kernel currently supports:
 
-* Multiboot1 through QEMU's direct kernel loader or GRUB BIOS boot.
+* Multiboot1 through QEMU's direct kernel loader, GRUB's BIOS boot, or GRUB's EFI image under UEFI firmware, which leaves the firmware's boot services before the kernel starts.
 * VGA text mode and Mode 13h graphics.
 * PS/2 keyboard and mouse input, and USB keyboards, mice and flash drives through xHCI, on a root port or behind a hub.
 * COM1 serial input and output.
@@ -254,7 +254,7 @@ The kernel currently supports:
 * RTL8139, Intel 82540EM (e1000), and RTL8168GU Ethernet devices.
 * Sound Blaster 16, Intel HDA, and the PC speaker.
 
-It does not implement UEFI, Multiboot2, SMP, swap, IPv6, or VESA graphics. FAT32, exFAT, ext2 and KRFFS partitions mount through `mount(2)`, read and written, with hard and symbolic links on ext2. A regular file can be a block device: `/dev/loop0` to `/dev/loop3` stand on one, so a file system in a file mounts like any other volume. USB is keyboards, mice and flash drives through xHCI, on root ports and behind hubs, with sixteen device table entries shared by every device, hubs included, and eight hubs driven at once; a SuperSpeed hub is driven with its high-speed half beside it, and a low or full-speed device behind a high-speed hub is addressed through that hub's transaction translator, proved only on the notebook. A machine boots from the stick image through its firmware and GRUB, and the root stays in RAM. The kernel maps the first 32 MiB by identity, where a virtual address is its physical one, and reaches the rest of the usable memory below 4 GiB through mappings of its own.
+It does not use UEFI's services, and does not implement Multiboot2, SMP, swap, IPv6, or VESA graphics. FAT32, exFAT, ext2 and KRFFS partitions mount through `mount(2)`, read and written, with hard and symbolic links on ext2. A regular file can be a block device: `/dev/loop0` to `/dev/loop3` stand on one, so a file system in a file mounts like any other volume. USB is keyboards, mice and flash drives through xHCI, on root ports and behind hubs, with sixteen device table entries shared by every device, hubs included, and eight hubs driven at once; a SuperSpeed hub is driven with its high-speed half beside it, and a low or full-speed device behind a high-speed hub is addressed through that hub's transaction translator, proved only on the notebook. A machine boots from the stick image through its firmware and GRUB, and the root stays in RAM. The kernel maps the first 32 MiB by identity, where a virtual address is its physical one, and reaches the rest of the usable memory below 4 GiB through mappings of its own.
 
 Process records are allocated from the kernel heap without a fixed count; a fork the heap cannot serve returns `ENOMEM`. Each process's descriptor table grows from sixteen to 1024 entries, and an open past that limit returns `EMFILE`. With three descriptors already used for stdio, `fdfull` opens 1021 files, checks that the next open returns `EMFILE`, and checks that a closed descriptor can be reused. Sockets and TCP control blocks are allocated from the heap without a fixed count. In separate stages, `tests/run pools` opens forty-eight pipes, forty ptys and forty-eight sockets, and creates forty child processes. Each stage keeps its objects alive together. It then makes and closes a thousand pipes, a thousand ptys and a thousand sockets; after each cycle, the heap's bytes in use must equal the starting value and its page count must be within two of the starting count.
 
