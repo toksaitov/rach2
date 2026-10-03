@@ -403,6 +403,14 @@ seized one blocked in a read, and reads the
 of a tracee
 .Dv SIGKILL
 ends.
+.Pa tests/xsaveprobe.c
+reads a stopped child's YMM registers through
+.Dv PTRACE_GETREGSET
+with
+.Dv NT_X86_XSTATE ,
+writes one through
+.Dv PTRACE_SETREGSET ,
+and finds it in the child.
 .Sh ERRORS
 .Bl -tag -width "[EINVAL]"
 .It Bq Er EFAULT

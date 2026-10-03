@@ -123,6 +123,7 @@ typedef __SIZE_TYPE__ size_t;
 #define SYS_GETRLIMIT       97
 #define SYS_SYSINFO         99
 #define SYS_TIMES           100
+#define SYS_PTRACE          101
 #define SYS_GETUID          102
 #define SYS_GETGID          104
 #define SYS_SETUID          105
@@ -294,6 +295,7 @@ static __inline__ long syscall0(long n)
 #define SYS_LSEEK           19
 #define SYS_GETPID          20
 #define SYS_MOUNT           21
+#define SYS_PTRACE          26
 #define SYS_ALARM           27
 #define SYS_PAUSE           29
 #define SYS_ACCESS          33

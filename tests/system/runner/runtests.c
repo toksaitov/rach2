@@ -56,6 +56,10 @@ static const char *const PROBES[] = {
     "cowprobe", "cowregrant", "usercopyfault", "forkleak", "fdstale", "dirgrow", "dirprobe",
     "unlinkdirprobe", "pathcanon", "vfsprobe", "timeprobe", "sigprobe", "credprobe", "ownprobe",
     "permprobe", "sockettest",
+    /* The YMM registers across switches, signals, an exec and ptrace, with
+       XSAVE's frame and register set; without AVX its rows say they did
+       not run. */
+    "xsaveprobe",
     /* The four limits: the process table, a process's descriptors, the
        socket pool and the frames. Each fills the thing, requires the refusal
        the kernel documents, and then requires the resource back. */

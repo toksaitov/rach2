@@ -42,4 +42,4 @@ The tracer sets DR0 to DR3 and DR7 through `PTRACE_POKEUSER`, checked by `debugr
 
 ## Tests
 
-`tests/musl/ptracemusl.c` traces a child through memory and register access, a single step, a breakpoint in read-only text, syscall stops, the exec event and a debug register, and attaches to and detaches from a running process. `tests/musl/coremusl.c` reads the notes and the memory of the core file an aborted child leaves, and checks the limit, the dumpable flag and a link at the name.
+`tests/musl/ptracemusl.c` traces a child through memory and register access, a single step, a breakpoint in read-only text, syscall stops, the exec event and a debug register, and attaches to and detaches from a running process. `tests/musl/coremusl.c` reads the notes and the memory of the core file an aborted child leaves, and checks the limit, the dumpable flag and a link at the name. `tests/xsaveprobe.c` reads and writes a stopped child's YMM registers through `NT_X86_XSTATE` and finds them in the note of a core file.
