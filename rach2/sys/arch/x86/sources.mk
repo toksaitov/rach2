@@ -29,6 +29,7 @@ PC_C_SRC = sys/arch/x86/boot.c \
     sys/arch/x86/ioapic.c \
     sys/arch/x86/refclock.c \
     sys/arch/x86/apictimer.c \
+    sys/arch/x86/smpboot.c \
     sys/arch/x86/diag.c \
     sys/arch/x86/udelay.c \
     sys/arch/x86/fpu.c \

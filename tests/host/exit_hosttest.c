@@ -72,6 +72,12 @@ void schedule(void)
     child.state = PROC_RUNNING;
 }
 
+/** A wake makes the process ready; there is one processor and no queue. */
+void sched_make_ready(process_t *p)
+{
+    p->state = PROC_READY;
+}
+
 int signal_pending(void)
 {
     CHECK(0, "cleanup must use an uninterruptible wait");

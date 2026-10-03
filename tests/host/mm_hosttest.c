@@ -29,7 +29,7 @@ extern void free(void *ptr);
 extern int printf(const char *format, ...);
 
 page_dir_t *_kernel_dir;
-page_dir_t *_curr_dir;
+struct percpu cpu_table[NR_CPUS];
 static page_dir_t kernel_dir;
 static int dirs, pages_freed, dirs_freed, regions_freed, reaps, rows, failures;
 /* The mount and the nodes of the program's file rows, the descriptions made

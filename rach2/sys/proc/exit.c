@@ -1,5 +1,6 @@
 #include "process.h"
 #include "ptrace.h"
+#include "sched.h"
 #include "tgroup.h"
 #include "../fs/vfs.h"
 #include "../mm/mm.h"
@@ -95,7 +96,7 @@ int proc_exit_cleanup(int32_t status)
         signal_post_info(parent, SIGCHLD, &info);
         wq_wake_all(&parent->tg->chld);
         if (parent->state == PROC_BLOCKED) {
-            parent->state = PROC_READY;
+            sched_make_ready(parent);
         }
     }
     return 1;

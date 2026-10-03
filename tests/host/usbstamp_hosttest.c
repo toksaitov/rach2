@@ -75,6 +75,50 @@ void klog(int level, const char *subsystem, const char *format, ...)
     records++;
 }
 
+/** One processor: the run queues' lock is the interrupt mask alone. */
+uint32_t spin_lock_irqsave(struct spinlock *lock)
+{
+    (void)lock;
+    return kirq_save();
+}
+
+void spin_unlock_irqrestore(struct spinlock *lock, uint32_t flags)
+{
+    (void)lock;
+    kirq_restore(flags);
+}
+
+void spin_lock(struct spinlock *lock)
+{
+    (void)lock;
+}
+
+void spin_unlock(struct spinlock *lock)
+{
+    (void)lock;
+}
+
+/** Nor a big lock to let go around an idle wait, or another processor to
+ * wake. */
+int bkl_drop(void)
+{
+    return 0;
+}
+
+void bkl_take(int depth)
+{
+    (void)depth;
+}
+
+void smp_kick(int cpu)
+{
+    (void)cpu;
+}
+
+/** The idle task's loop is never run here. */
+void arch_irq_disable(void)
+{}
+
 /** No process here arms a timer of processor time, which posts a signal. */
 void signal_post(process_t *target, int signo)
 {
@@ -149,6 +193,8 @@ static void begin(int msi)
     processes[1].pid = 11;
     processes[1].state = PROC_BLOCKED;
     processes[1].prev = &processes[0];
+    processes[0].affinity = processes[1].affinity = ~(uint64_t)0;
+    cpu_table[0].online = 1;
     current_proc = proc_list = processes;
     init_sched();
     sched_enable();

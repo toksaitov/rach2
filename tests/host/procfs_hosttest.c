@@ -125,7 +125,9 @@ extern void free(void *ptr);
 
 static process_t process, thread, stranger;
 static struct tgroup group, other_group;
-struct percpu cpu_table[NR_CPUS] = {{&process}};
+/* The directory the reader runs in, which is not the reaped process's. */
+static page_dir_t reader_dir;
+struct percpu cpu_table[NR_CPUS] = {{&process, NULL, &reader_dir}};
 static fd_table_t table;
 static fd_entry_t entries[1];
 static int refuse, allocations, failures;
@@ -140,10 +142,7 @@ static int mem_reads;
 static process_t *reading;
 static struct tgroup reading_group;
 static int reaps;
-/* The directory the reader runs in, which is not the reaped process's. */
-static page_dir_t reader_dir;
 page_dir_t *_kernel_dir;
-page_dir_t *_curr_dir = &reader_dir;
 
 /** Record a failed invariant. */
 static void check(int ok, const char *what)

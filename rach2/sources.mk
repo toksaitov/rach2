@@ -71,6 +71,7 @@ C_SRC_SHARED = kernel.c \
     sys/proc/process.c \
     sys/proc/exit.c \
     sys/proc/sched.c \
+    sys/proc/smp.c \
     sys/proc/suspend.c \
     sys/proc/wait_queue.c \
     sys/proc/futex.c \
@@ -134,4 +135,5 @@ C_SRC_SHARED = kernel.c \
     sys/lib/kfmt.c \
     sys/lib/kstd.c \
     sys/lib/kstring.c \
+    sys/lib/spinlock.c \
     sys/lib/krandom.c

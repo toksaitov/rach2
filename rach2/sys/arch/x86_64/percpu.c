@@ -6,6 +6,9 @@
 #include "percpu.h"
 
 #include "../x86/kcpu.h"
+#include "../x86/smpboot.h"
+
+#include "../../mm/paging.h"
 
 #include "../../lib/kstring.h"
 
@@ -137,6 +140,27 @@ void init_tss(uintptr_t kernel_stack)
     msr_write(MSR_LSTAR, (uint64_t)(uintptr_t)syscall_entry);
     msr_write(MSR_FMASK, SYSCALL_FMASK);
     msr_write(MSR_EFER, msr_read(MSR_EFER) | EFER_SCE);
+}
+
+/**
+ * The x86-64's part of a started processor's start: the kernel's page
+ * tables in place of the trampoline's, its record, GDT and TSS, GS on the
+ * record before anything reads `this_cpu()`, `syscall`, and the IDT every
+ * processor shares.
+ */
+void arch_ap_tables(int cpu, uintptr_t stack_top)
+{
+    struct desc_ptr ptr;
+
+    arch_space_load(get_page_dir_phys(_kernel_dir));
+    cpu_fill((uint32_t)cpu);
+    ptr.limit = sizeof(cpus[cpu].gdt) - 1;
+    ptr.base = (uint64_t)(uintptr_t)cpus[cpu].gdt;
+    x86_64_load_gdt(&ptr);
+    msr_write(MSR_GS_BASE, (uint64_t)(uintptr_t)&cpus[cpu]);
+    msr_write(MSR_KERNEL_GS_BASE, 0);
+    init_tss(stack_top);
+    idt_load();
 }
 
 void cpu_set_kernel_stack(uintptr_t top)

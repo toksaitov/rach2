@@ -14,9 +14,17 @@ void sched_disable(void);
 /** Return nonzero while preemptive scheduling is enabled. */
 int sched_is_enabled(void);
 
-/** Switch to a READY process, alternating wake preference and round-robin;
- * see sched.c for the contract. */
+/** Switch this processor to a READY process of its queue, alternating wake
+ * preference and round-robin, or to its idle task; see sched.c for the
+ * contract. */
 void schedule(void);
+
+/** Make a blocked or stopped process ready, on a processor's queue, and wake
+ * that processor if it is idle. */
+void sched_make_ready(process_t *p);
+
+/** The idle task's body, which does not return. */
+void sched_idle_loop(void);
 
 /** From an interrupt handler: switch now, or at the current system call's
  * exit when the process is inside one; see sched.c. */
@@ -38,12 +46,12 @@ void sched_forget(process_t *p);
 /*
  * The idle wait, and the two counters it feeds.
  *
- * There is no idle task here: `schedule()` returns with the blocked process
- * still current when nothing else is ready, and the caller parks the processor
- * with `sti; hlt` inside its own syscall. So a tick cannot be classified by
- * looking at `current_proc`, which names a process that is not running. What
- * says so is a marker set around the halt and sampled by the timer before any
- * wakeup can change state.
+ * Each processor's idle task waits here when nothing is ready, and so does a
+ * process whose wait polls in place, or that blocked before the idle tasks
+ * existed and had nothing to switch to. A tick cannot be classified by
+ * looking at `current_proc`, which in the second case names a process that is
+ * not running. What says so is a marker set around the halt and sampled by
+ * the timer before any wakeup can change state.
  *
  * Every idle wait of a user process goes through one of these two, and the
  * style check refuses a `sti; hlt` written anywhere else: a site added later
@@ -56,7 +64,8 @@ void idle_wait_irq_off(void); /* sti; hlt; cli */
 void idle_wait_irq_on(void);  /* sti; hlt */
 
 /** Ticks delivered while a processor was parked in an idle wait, and while
- * it was not, summed over the processors. Counted rather than timed:
+ * it was not, summed over the processors; each processor's own are in its
+ * record (percpu.h). Counted rather than timed:
  * interrupts are off in several paths and a tick can be lost, so these are
  * what the timer actually delivered. */
 uint32_t sched_idle_ticks(void);

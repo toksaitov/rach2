@@ -93,9 +93,6 @@ void fb_release_if_owner(uint32_t pid)
     }
 }
 
-/* Kernel stack size (16KB) */
-#define KERNEL_STACK_SIZE 0x4000
-
 /* The boot stack, from loader.s, which process 0, the first program and the
  * programs the debug shell starts run on. */
 extern char stack[];
@@ -269,8 +266,6 @@ extern void shell_reset_input(void);
 extern bool debug_shell_is_home;
 
 extern void panic_init_died(uint32_t pid);
-
-#define KERNEL_STACK_SIZE_LOCAL 0x4000
 
 /**
  * Release every descriptor a dying process still has.
@@ -592,7 +587,7 @@ int32_t exit_current(int32_t code)
 
     /* Move to a fresh kernel stack and jump to shell_loop. Safe because we
      * are in kernel mode and init has been torn down. */
-    arch_run_on_stack((uintptr_t)stack + KERNEL_STACK_SIZE_LOCAL, shell_loop);
+    arch_run_on_stack((uintptr_t)stack + KERNEL_STACK_SIZE, shell_loop);
     exit_schedule_away();
 }
 
@@ -2221,7 +2216,10 @@ static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
         child->vfork_waiting = 1;
     }
     event = ptrace_fork_attach(child, req->flags);
-    child->state = PROC_READY;
+    child->cpu = parent->cpu;
+    child->affinity = parent->affinity;
+    child->bkl_depth = 1;
+    sched_make_ready(child);
     if (event) {
         ptrace_event(event, pid);
     }
@@ -3186,7 +3184,7 @@ static void sig_wake(process_t *t)
 {
     if (t && t->state == PROC_BLOCKED) {
         t->wakeup_tick = 0;
-        t->state = PROC_READY;
+        sched_make_ready(t);
     }
 }
 
@@ -3230,7 +3228,7 @@ static void sig_job_control(process_t *target, int signo)
                 }
                 t->stop_seen = 0;
                 if (t->state == PROC_STOPPED && t->ptrace_status == 0) {
-                    t->state = PROC_READY;
+                    sched_make_ready(t);
                 }
             }
             tg->leader->jc_status = 0xffff; /* WIFCONTINUED */
@@ -3247,7 +3245,7 @@ static void sig_job_control(process_t *target, int signo)
     } else if (signo == SIGKILL) {
         for (t = proc_list; t; t = t->next) {
             if (t->tg == tg && t->state == PROC_STOPPED) {
-                t->state = PROC_READY;
+                sched_make_ready(t);
             }
         }
     } else if (KSIG_BIT(signo) & SIG_STOPS) {

@@ -11,7 +11,8 @@ ARCH_TCC_LDFLAGS = -Wl,-Ttext=0xFFFFFFFF801000B0
 
 ARCH_ASM_SRC = sys/arch/x86_64/loader.s \
     sys/arch/x86_64/isr_handler.s \
-    sys/arch/x86_64/switch.s
+    sys/arch/x86_64/switch.s \
+    sys/arch/x86_64/trampoline.s
 
 ARCH_C_SRC = sys/arch/x86_64/mmu.c \
     sys/arch/x86_64/context.c \

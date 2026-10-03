@@ -292,10 +292,11 @@ isr_common_handler:
 isr_return:
     # Before returning to user mode, deliver any pending signal: this may rewrite
     # the trapframe (run a handler) or not return at all (default-terminate). It
-    # is a no-op when returning to kernel mode (it checks the saved CS RPL). Runs
-    # with IF=0, so it cannot be preempted. esp still points at the trapframe.
+    # is a no-op when returning to kernel mode (it checks the saved CS RPL). Then
+    # give back the big lock the entry took (isr_leave, isr.c). Runs with IF=0,
+    # so it cannot be preempted. esp still points at the trapframe.
     pushl %esp
-    call deliver_signals
+    call isr_leave
     addl $4, %esp
 
     # Restore each saved segment register from its own slot (popped gs, fs, es,
@@ -548,16 +549,62 @@ msi15:
     jmp irq_common_handler
 
 
-# The APIC's spurious vector, 255. It is raised when an interrupt the APIC was
-# about to deliver went away, needs no end-of-interrupt, and has no device
-# behind it; the router counts it and returns.
+# The local vectors, which the processor's own APIC raises and which run
+# without the big lock (isr_local_router, isr.c): the interprocessor interrupt,
+# IPI_VECTOR (lapic.h), and the spurious vector, 255, raised when an interrupt
+# the APIC was about to deliver went away, which needs no end-of-interrupt and
+# has no device behind it.
+
+.globl ipi_isr
+ipi_isr:
+    cli
+    pushl $0
+    pushl $0xF0
+    jmp local_common_handler
 
 .globl spurious_isr
 spurious_isr:
     cli
     pushl $0
     pushl $255
-    jmp irq_common_handler
+    jmp local_common_handler
+
+# The local vectors' common entry: the frame of the others, the router, and
+# the return, with no signal delivered and no switch, since no lock is held.
+local_common_handler:
+    pusha
+    movw %ds, %ax
+    pushl %eax
+    movw %es, %ax
+    pushl %eax
+    movw %fs, %ax
+    pushl %eax
+    movw %gs, %ax
+    pushl %eax
+
+    movw $0x10, %ax
+    movw %ax, %ds
+    movw %ax, %es
+    movw %ax, %gs
+    movw $0x40, %ax
+    movw %ax, %fs
+
+    pushl %esp
+    call isr_local_router
+    addl $4, %esp
+
+    popl %eax
+    movw %ax, %gs
+    popl %eax
+    movw %ax, %fs
+    popl %eax
+    movw %ax, %es
+    popl %eax
+    movw %ax, %ds
+
+    popa
+    addl $8, %esp
+    iret
 
 # Common IRQ handler
 .globl irq_common_handler
@@ -589,9 +636,9 @@ irq_common_handler:
 
     # Deliver any pending signal before returning to user (no-op in kernel mode;
     # the IRQ may have switched processes, so esp/current_proc are the resumed
-    # process's). IF is still 0.
+    # process's), and give back the big lock. IF is still 0.
     pushl %esp
-    call deliver_signals
+    call isr_leave
     addl $4, %esp
 
     # Restore each saved segment register from its own slot (gs, fs, es, ds).

@@ -80,4 +80,24 @@ void platform_mouse_resync(void);
 /** The platform's devices' work at each tick, from the timer handler. */
 void platform_tick(void);
 
+/**
+ * The processors the firmware lists that this kernel may start, the boot
+ * processor first and counted, at most `limit`: on a PC, the MADT's enabled
+ * processors, when the local APIC gives each its tick; 1 otherwise.
+ */
+int platform_cpu_count(int limit);
+
+/**
+ * Start processor `cpu`, from 1 to one less than `platform_cpu_count`, on
+ * the stack ending at `stack_top`. It loads its own descriptor tables,
+ * enables its local interrupt controller and starts its tick, then calls
+ * `entry(cpu)` with interrupts off, which does not return. 0 once it has
+ * reached `entry`; -1 when it did not answer in time, and is held reset.
+ */
+int platform_cpu_start(int cpu, uintptr_t stack_top, void (*entry)(int cpu));
+
+/** Send processor `cpu` the interprocessor interrupt, whose handler is
+ * `smp_ipi` (proc/smp.h). */
+void platform_cpu_ipi(int cpu);
+
 #endif /* _PLATFORM_H_ */

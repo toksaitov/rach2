@@ -12,6 +12,7 @@
 #include "../lib/kstd.h"
 
 #include "../lib/kstring.h"
+#include "../proc/percpu.h"
 
 /*
  * A page directory, the root of an address space's page tables. Its layout
@@ -95,8 +96,13 @@ void paging_set_exec(page_dir_t *dir, uintptr_t addr, bool exec);
  * (VM_PROT_*): the bit when the region has no VM_PROT_EXEC, else 0. */
 pte_t paging_noexec(uint32_t prot);
 
-/** Flush the TLB entry for 'addr'. */
+/** Drop the translation of `addr` in the running processor's directory
+ * wherever a processor has it (`paging_flush_dir`). */
 void paging_flush_tlb(uintptr_t addr);
+
+/** Drop the translation of `addr` in `dir` on every processor that has it;
+ * see paging.c. */
+void paging_flush_dir(const page_dir_t *dir, uintptr_t addr);
 
 /*
  * Clone the kernel page directory for a new process. Copies kernel page
@@ -328,9 +334,10 @@ void unmap_kernel_frame(uintptr_t va);
 extern page_dir_t *_kernel_dir;
 
 /*
- * Current page directory
+ * The page directory the running processor translates through, in its
+ * record (proc/percpu.h).
  */
-extern page_dir_t *_curr_dir;
+#define _curr_dir (this_cpu()->space)
 
 /*
  * The frame table: one word per physical frame below the map's top, named

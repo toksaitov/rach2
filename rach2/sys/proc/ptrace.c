@@ -315,7 +315,7 @@ static void ptrace_detach(process_t *t, int sig)
         t->ptrace_signo = sig;
         t->ptrace_status = 0;
         if (t->state == PROC_STOPPED) {
-            t->state = PROC_READY;
+            sched_make_ready(t);
         }
     }
 }
@@ -365,7 +365,7 @@ static int ptrace_resume(process_t *t, unsigned long sig, int step, int syscalls
     t->ptrace_signo = (int32_t)sig;
     t->ptrace_status = 0;
     if (t->state == PROC_STOPPED) {
-        t->state = PROC_READY;
+        sched_make_ready(t);
     }
     return 0;
 }
@@ -382,7 +382,7 @@ static void ptrace_unpark(process_t *t)
     uint32_t flags = kirq_save();
 
     if (t->state == PROC_STOPPED) {
-        t->state = PROC_READY;
+        sched_make_ready(t);
     }
     kirq_restore(flags);
 }
@@ -648,7 +648,7 @@ long sys_ptrace(isr_params_t *params)
             t->ptrace |= PT_INTERRUPT;
             if (t->state == PROC_BLOCKED) {
                 t->wakeup_tick = 0;
-                t->state = PROC_READY;
+                sched_make_ready(t);
             }
         }
         return 0;

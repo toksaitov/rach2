@@ -267,6 +267,16 @@ void arch_space_load(uintptr_t root)
     (void)root;
 }
 
+/** One processor: no other has a translation to drop. */
+void smp_tlb_shootdown(const struct page_dir *dir, uintptr_t va)
+{
+    (void)dir;
+    (void)va;
+}
+
+void smp_kernel_mapping_changed(void)
+{}
+
 void arch_tlb_flush_page(uintptr_t va)
 {
     (void)va;

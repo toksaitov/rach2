@@ -11,6 +11,7 @@
 #include "hda.h"
 #include "../klog.h"
 #include "../lib/kstring.h"
+#include "../proc/sched.h"
 
 extern volatile uint32_t kernel_ticks;
 
@@ -173,7 +174,7 @@ static void audio_stop_playback(void)
 static void audio_wait_until(uint32_t target_ticks)
 {
     while (kernel_ticks < target_ticks) {
-        arch_halt();
+        idle_wait_irq_on();
     }
 }
 
@@ -347,7 +348,7 @@ static void audio_run_write_test(uint32_t duration_ms)
             uint32_t to_write;
 
             while (kernel_ticks == tick_last) {
-                arch_halt();
+                idle_wait_irq_on();
             }
             tick_last = kernel_ticks;
 
@@ -379,7 +380,7 @@ static void audio_run_write_test(uint32_t duration_ms)
                         return;
                     }
                     if (written == 0) {
-                        arch_halt();
+                        idle_wait_irq_on();
                         continue;
                     }
 
@@ -498,7 +499,7 @@ static void audio_run_hda_watch(uint32_t freq_hz, uint32_t duration_ms, uint32_t
             }
         }
 
-        arch_halt();
+        idle_wait_irq_on();
     }
 
     audio_stop_playback();

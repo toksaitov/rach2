@@ -10,6 +10,7 @@
 #include "../../lib/kstring.h"
 #include "../../proc/process.h"
 #include "../../proc/ptrace.h"
+#include "../../proc/smp.h"
 #include "debugreg.h"
 #if !defined(__x86_64__)
 #include "../i686/tss.h"
@@ -78,6 +79,14 @@ static uint16_t lines_pci;
 void _isr_router(isr_params_t *params);
 
 void _irq_router(isr_params_t *params);
+
+void isr_local_router(isr_params_t *params);
+
+void isr_leave(isr_params_t *params);
+
+#if defined(__x86_64__)
+void isr_paranoid_router(isr_params_t *params);
+#endif
 
 /*
  * The architecturally-defined exception mnemonics, indexed by vector, for the
@@ -513,11 +522,52 @@ static void _dispatch(isr_params_t *params)
  */
 void _isr_router(isr_params_t *params)
 {
+    bkl_enter();
 #ifdef DEBUG
     klog(KLOG_DEBUG, "isr", "interrupt: vector 0x%X", params->vector);
 #endif
 
     _dispatch(params);
+}
+
+#if defined(__x86_64__)
+/**
+ * Dispatch the NMI, the double fault or the machine check, which arrive on
+ * interrupt stacks of their own, at any instruction, without the big lock:
+ * their handlers report and stop, and a processor that holds the lock may be
+ * the one they interrupted, or one spinning for it.
+ */
+void isr_paranoid_router(isr_params_t *params)
+{
+    _dispatch(params);
+}
+#endif
+
+/**
+ * The return to the interrupted code, after its router: deliver a signal
+ * pending for a return to user mode, and give back the big lock the router
+ * took. Interrupts are off. A forked child's first return comes here too,
+ * with the depth its fork gave it.
+ */
+void isr_leave(isr_params_t *params)
+{
+    deliver_signals(params);
+    bkl_exit();
+}
+
+/**
+ * Take a local vector, without the big lock: the interprocessor interrupt,
+ * whose request is in this processor's record (`smp_ipi`), and the APIC's
+ * spurious vector, which needs no end-of-interrupt.
+ */
+void isr_local_router(isr_params_t *params)
+{
+    if (params->vector == IPI_VECTOR) {
+        smp_ipi();
+        lapic_eoi();
+        return;
+    }
+    lapic_spurious();
 }
 
 /*
@@ -551,6 +601,7 @@ static void irq_dispatch(isr_params_t *params)
  */
 void _irq_router(isr_params_t *params)
 {
+    bkl_enter();
     irq_count++;
     if (params->vector >= 32 && params->vector < 64) {
         vector_count[params->vector - 32]++;
@@ -571,10 +622,6 @@ void _irq_router(isr_params_t *params)
          * vectors below it the time the chain runs, which is bounded by the
          * handlers this kernel installs.
          */
-        if (params->vector == 255) {
-            lapic_spurious(); /* the APIC's own, which needs no end */
-            return;
-        }
         irq_dispatch(params);
         lapic_eoi();
         sched_preempt(); /* a woken reader runs now, or at the call's exit */

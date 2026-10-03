@@ -1,14 +1,18 @@
 #include "../lib/kirq.h"
+#include "../lib/spinlock.h"
 #include "wait_queue.h"
 #include "sched.h"
 #include "../lib/kerrno.h"
 
 /*
- * Save the interrupt flag and disable interrupts; restore puts it back. On a
- * single CPU this is all the mutual exclusion a sleeper editing the queue needs
- * against an IRQ-context waker walking it. The pair is this file's own copy of
- * `kirq_save` and `kirq_restore`: under WAIT_QUEUE_HOSTTEST, in the host tests
- * that include this file, there is no interrupt to mask and they are no-ops;
+ * Save the interrupt flag and disable interrupts; restore puts it back. With
+ * the big lock held, which keeps every other processor's kernel code out,
+ * this is all the mutual exclusion a sleeper's test and block need against
+ * an IRQ-context waker. The queues themselves, which the sleeper edits and
+ * a waker walks, are under the wait queues' spinlock as well (`wq_lock`).
+ * The pairs are this file's own: under WAIT_QUEUE_HOSTTEST, in the host
+ * tests that include this file, there is no interrupt to mask and no other
+ * processor, they are no-ops, and a wake marks the process ready itself;
  * the list logic exercised there is identical either way.
  */
 #ifdef WAIT_QUEUE_HOSTTEST
@@ -20,7 +24,17 @@ static void irq_restore(uint32_t flags)
 {
     (void)flags;
 }
+static void wq_lock(void)
+{}
+static void wq_unlock(void)
+{}
+static void wq_ready(process_t *p)
+{
+    p->state = PROC_READY;
+}
 #else
+static struct spinlock wq_spin = SPINLOCK_INIT;
+
 static uint32_t irq_save(void)
 {
     return kirq_save();
@@ -29,6 +43,22 @@ static uint32_t irq_save(void)
 static void irq_restore(uint32_t flags)
 {
     kirq_restore(flags);
+}
+
+/* Interrupts off. */
+static void wq_lock(void)
+{
+    spin_lock(&wq_spin);
+}
+
+static void wq_unlock(void)
+{
+    spin_unlock(&wq_spin);
+}
+
+static void wq_ready(process_t *p)
+{
+    sched_make_ready(p);
 }
 #endif
 
@@ -115,7 +145,9 @@ static int wq_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg, int interruptib
             break;
         }
 
+        wq_lock();
         wq_enqueue(wq, &current_proc->waiter);
+        wq_unlock();
         current_proc->wakeup_tick = deadline;
         current_proc->state = PROC_BLOCKED;
         current_proc->uninterruptible = !interruptible;
@@ -131,7 +163,9 @@ static int wq_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg, int interruptib
         }
     }
 
+    wq_lock();
     wq_dequeue(wq, &current_proc->waiter);
+    wq_unlock();
     current_proc->woken = 0;
     current_proc->uninterruptible = 0;
     current_proc->state = PROC_RUNNING;
@@ -142,14 +176,18 @@ static int wq_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg, int interruptib
 void wq_poll_add(wait_queue_t *wq, struct wq_waiter *w)
 {
     if (wq && w) {
-        wq_enqueue(wq, w); /* caller holds interrupts off (see wait_queue.h) */
+        wq_lock(); /* caller holds interrupts off (see wait_queue.h) */
+        wq_enqueue(wq, w);
+        wq_unlock();
     }
 }
 
 void wq_poll_remove(wait_queue_t *wq, struct wq_waiter *w)
 {
     if (wq && w) {
+        wq_lock();
         wq_dequeue(wq, w);
+        wq_unlock();
     }
 }
 
@@ -168,18 +206,21 @@ void wq_wake(wait_queue_t *wq, uint32_t kinds)
         return;
     }
     flags = irq_save();
-    for (w = wq->head; w; w = next) {
-        next = w->next;
-        w->next = NULL;
-        if (w->proc && w->proc->state == PROC_BLOCKED) {
-            w->proc->woken = 1;
-            w->proc->state = PROC_READY;
-        }
-    }
+    wq_lock();
+    w = wq->head;
     wq->head = NULL;
     for (k = 0; k < WQ_KINDS; k++) {
         if (kinds & (1u << k)) {
             wq->wakes[k]++;
+        }
+    }
+    wq_unlock();
+    for (; w; w = next) {
+        next = w->next;
+        w->next = NULL;
+        if (w->proc && w->proc->state == PROC_BLOCKED) {
+            w->proc->woken = 1;
+            wq_ready(w->proc);
         }
     }
     irq_restore(flags);

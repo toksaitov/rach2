@@ -6,6 +6,7 @@
 
 #include "../arch.h"
 
+#include "../../mm/paging.h"
 #include "../../proc/process.h"
 
 #include "../../lib/kstring.h"
@@ -22,27 +23,43 @@ extern void isr_return(void);
  * offsets differ, and skips the compile-time check. */
 #define PROC_OFF(field)       ((uint32_t)&((process_t *)0)->field)
 #define PROC_OFF_REGS_ESP     48u
-#define PROC_OFF_SPACE_ROOT   52u
 #define PROC_OFF_KERNEL_STACK 56u
 #define PROC_OFF_TLS_BASE     80u
-#define PROC_OFF_PAGE_DIR     720u
 #if !defined(__TINYC__) && !defined(RACH2_HOSTTEST)
-typedef char process_offsets_fit
-    [(__builtin_offsetof(struct process, regs) + __builtin_offsetof(cpu_regs_t, esp) ==
-          PROC_OFF_REGS_ESP &&
-      __builtin_offsetof(struct process, space_root) == PROC_OFF_SPACE_ROOT &&
-      __builtin_offsetof(struct process, kernel_stack) == PROC_OFF_KERNEL_STACK &&
-      __builtin_offsetof(struct process, tls_base) == PROC_OFF_TLS_BASE &&
-      __builtin_offsetof(struct process, page_dir) == PROC_OFF_PAGE_DIR)
-         ? 1
-         : -1];
+typedef char process_offsets_fit[(__builtin_offsetof(struct process, regs) +
+                                          __builtin_offsetof(cpu_regs_t, esp) ==
+                                      PROC_OFF_REGS_ESP &&
+                                  __builtin_offsetof(struct process, kernel_stack) ==
+                                      PROC_OFF_KERNEL_STACK &&
+                                  __builtin_offsetof(struct process, tls_base) == PROC_OFF_TLS_BASE)
+                                     ? 1
+                                     : -1];
 #endif
 
 int arch_context_check(void)
 {
-    return PROC_OFF(regs.esp) != PROC_OFF_REGS_ESP || PROC_OFF(space_root) != PROC_OFF_SPACE_ROOT ||
+    return PROC_OFF(regs.esp) != PROC_OFF_REGS_ESP ||
            PROC_OFF(kernel_stack) != PROC_OFF_KERNEL_STACK ||
-           PROC_OFF(tls_base) != PROC_OFF_TLS_BASE || PROC_OFF(page_dir) != PROC_OFF_PAGE_DIR;
+           PROC_OFF(tls_base) != PROC_OFF_TLS_BASE;
+}
+
+void switch_space(const process_t *next);
+
+/**
+ * Load the page directory `next` runs in, the kernel's for a record with
+ * none, unless it is the one this processor has loaded; switch.s calls it.
+ * The comparison is with what the processor has, never with the outgoing
+ * record: a thread that gave up its address space at its end still runs in
+ * it until it switches away, and the directory may be freed once it has.
+ */
+void switch_space(const process_t *next)
+{
+    page_dir_t *dir = next->space_root != 0 ? next->page_dir : _kernel_dir;
+
+    if (dir != _curr_dir) {
+        _curr_dir = dir;
+        arch_space_load(next->space_root != 0 ? next->space_root : get_page_dir_phys(dir));
+    }
 }
 
 /**

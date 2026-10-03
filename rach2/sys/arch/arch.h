@@ -88,9 +88,6 @@ void arch_irq_enable(void);
 /** Hold off interrupts on this processor. */
 void arch_irq_disable(void);
 
-/** Wait for the next interrupt, with interrupts as they stand. */
-void arch_halt(void);
-
 /** Allow interrupts and wait for one, as one step, so that an interrupt
  * that arrives between the two cannot be slept through; interrupts are on
  * when this returns. */
@@ -105,6 +102,11 @@ void arch_stop(void) K_NORETURN;
 /** Tell the processor the caller is spinning on a value another agent will
  * change. */
 void arch_relax(void);
+
+/** Store `value` at `*p` and return what was there, as one step no other
+ * processor's access comes between, and as a full barrier: no load or store
+ * of this processor's moves across it. */
+unsigned int arch_atomic_xchg(volatile unsigned int *p, unsigned int value);
 
 /**
  * Leave the current stack for the one ending at `sp`, allow interrupts, and

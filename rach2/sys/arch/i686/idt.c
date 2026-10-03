@@ -1,5 +1,7 @@
 #include "idt.h"
 #include "tss.h"
+#include "../x86/lapic.h"
+#include "../x86/smpboot.h"
 
 idt_descriptor_t idt_descriptors[256];
 idt_ptr_t idt_address;
@@ -113,9 +115,18 @@ void init_idt(void)
        descriptor it would be a general-protection fault instead. */
     _idt_set_desciptor(255, (uintptr_t)&spurious_isr, 0x08, 0x8E);
 
+    /* The interprocessor interrupt (proc/smp.c). */
+    _idt_set_desciptor(IPI_VECTOR, (uintptr_t)&ipi_isr, 0x08, 0x8E);
+
     /* 0xEE: DPL=3 gate so user mode can invoke int 0x80. */
     _idt_set_desciptor(128, (uintptr_t)&isr128, 0x08, 0xEE);
 
+    _load_idt(&idt_address);
+}
+
+/** Load the IDT `init_idt` built, on a processor the boot one started. */
+void idt_load(void)
+{
     _load_idt(&idt_address);
 }
 

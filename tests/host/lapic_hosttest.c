@@ -105,6 +105,17 @@ void kcpu_wrmsr(unsigned int msr, unsigned int lo, unsigned int hi)
     apic_base_lo = lo;
 }
 
+/** No interrupt arrives in the middle of a row's command. */
+uint32_t kirq_save(void)
+{
+    return 0;
+}
+
+void kirq_restore(uint32_t flags)
+{
+    (void)flags;
+}
+
 int kcmdline_has(const char *flag)
 {
     const char *p = "rach2.nomsi";

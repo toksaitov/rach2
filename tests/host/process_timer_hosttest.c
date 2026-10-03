@@ -65,6 +65,12 @@ static int sleeper_posts, runner_posts;
         }                                                         \
     } while (0)
 
+/** A wake makes the process ready; there is one processor and no queue. */
+void sched_make_ready(process_t *p)
+{
+    p->state = PROC_READY;
+}
+
 /** The model of `signal_post`: count each SIGALRM, for each process. */
 void signal_post(process_t *target, int signo)
 {

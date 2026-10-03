@@ -1,5 +1,6 @@
 #include "gdt.h"
 #include "tss.h"
+#include "../x86/smpboot.h"
 
 gdt_descriptor_t gdt_descriptors[NR_CPUS][GDT_ENTRY_COUNT];
 static gdt_ptr_t gdt_address[NR_CPUS];
@@ -65,6 +66,19 @@ void init_gdt_cpu(uint32_t cpu)
 void init_gdt(void)
 {
     init_gdt_cpu(0);
+}
+
+/**
+ * The i686's part of a started processor's start: its GDT, which also gives
+ * %fs its own segment, before anything reads `this_cpu()`, its TSS with the
+ * stack `stack_top`, and the IDT every processor shares. The trampoline
+ * has already given it the kernel's page directory.
+ */
+void arch_ap_tables(int cpu, uintptr_t stack_top)
+{
+    init_gdt_cpu((uint32_t)cpu);
+    init_tss_cpu((uint32_t)cpu, (uint32_t)stack_top);
+    idt_load();
 }
 
 /**

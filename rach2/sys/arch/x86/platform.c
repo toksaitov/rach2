@@ -26,6 +26,7 @@
 #include "ps2mouse.h"
 #include "pit.h"
 #include "refclock.h"
+#include "smpboot.h"
 
 #include "../arch.h"
 #if defined(__x86_64__)
@@ -57,10 +58,17 @@
  * them is reached by mechanism #1. */
 #define ECAM_MAX_BUSES 32
 
-/* Whether the local APIC's timer is the tick, and the lines PCI devices
+/* Whether the local APIC's timer is the tick, with its counts a tick,
+ * which a started processor's timer is given too, and the lines PCI devices
  * name, which the I/O APIC takes level-triggered. */
 static int tick_local;
+static uint32_t tick_counts;
 static uint16_t lines_pci;
+
+uint32_t x86_tick_counts(void)
+{
+    return tick_local ? tick_counts : 0;
+}
 
 void platform_cpu_init(uintptr_t boot_stack_top)
 {
@@ -206,6 +214,7 @@ void platform_firmware_init(const struct boot_info *boot)
     a = acpi_get();
     ecam_init(a);
     (void)refclock_init(a);
+    smpboot_init(boot);
 }
 
 static void note_line(uint8_t bus, uint8_t dev, uint8_t fn, void *arg)
@@ -318,6 +327,7 @@ void platform_timer_start(isr_handler_t tick)
         isr_lines_to_apic(lines_pci, counts ? 1u : 0u);
         if (counts) {
             tick_local = 1;
+            tick_counts = counts;
             timer_set_counter(&apic_timer_counter);
             set_isr_handler(APIC_TIMER_VECTOR, tick, "timer");
             apic_timer_start(counts, TICK_HZ);

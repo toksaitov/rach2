@@ -32,6 +32,7 @@
 
 #include "../../cmdline.h"
 #include "../../klog.h"
+#include "../../lib/kirq.h"
 #include "kcpu.h"
 #include "../../mm/paging.h"
 
@@ -64,6 +65,10 @@
 #define DIVIDE_BY_16        0x3u
 #define ICR_SELF            (1u << 18)
 #define ICR_PENDING         (1u << 12)
+#define ICR_INIT            (5u << 8)
+#define ICR_STARTUP         (6u << 8)
+#define ICR_ASSERT          (1u << 14)
+#define ICR_LEVEL           (1u << 15)
 
 /* The page the APIC's registers live on, and zero until `lapic_init` maps
  * it, which is what `lapic_ready` reports and every write here checks. */
@@ -284,6 +289,54 @@ void lapic_self_ipi(uint8_t vector)
     for (spins = 0; spins < 100000 && (apic_read(LAPIC_ICR_LO) & ICR_PENDING) != 0; spins++) {
         /* the delivery status clears once the message is sent */
     }
+}
+
+void lapic_init_ap(void)
+{
+    if (!ready) {
+        return;
+    }
+    apic_write(LAPIC_SVR, (apic_read(LAPIC_SVR) & ~0xFFu) | SVR_SOFTWARE_ENABLE | SPURIOUS_VECTOR);
+    apic_write(LAPIC_TPR, 0);
+}
+
+/**
+ * Write the interrupt command register for the processor `target`, the
+ * destination in the high word first, since the write of the low word sends
+ * the message, and wait for the APIC to have sent it. Interrupts are off
+ * across the two writes: a handler that sent its own message between them
+ * would leave this one with the other's destination.
+ */
+static void send_command(uint32_t target, uint32_t low)
+{
+    uint32_t flags;
+    int spins;
+
+    if (!ready) {
+        return;
+    }
+    flags = kirq_save();
+    apic_write(LAPIC_ICR_HI, target << 24);
+    apic_write(LAPIC_ICR_LO, low);
+    for (spins = 0; spins < 100000 && (apic_read(LAPIC_ICR_LO) & ICR_PENDING) != 0; spins++) {
+        /* the delivery status clears once the message is sent */
+    }
+    kirq_restore(flags);
+}
+
+void lapic_send_ipi(uint32_t target, uint8_t vector)
+{
+    send_command(target, vector);
+}
+
+void lapic_send_init(uint32_t target)
+{
+    send_command(target, ICR_INIT | ICR_LEVEL | ICR_ASSERT);
+}
+
+void lapic_send_startup(uint32_t target, uint32_t page)
+{
+    send_command(target, ICR_STARTUP | (page & 0xFFu));
 }
 
 /**

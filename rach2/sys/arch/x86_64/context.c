@@ -57,22 +57,23 @@ int arch_context_check(void)
  * changes when the two threads' differ, to the kernel's for a record with
  * none. Then the stacks change. The record is the truth about both bases:
  * a program changes them only through arch_prctl and clone, which write the
- * record, so nothing is read back here.
+ * record, so nothing is read back here. The directory is compared with the
+ * one this processor has loaded, never with the outgoing record's: a thread
+ * that gave up its address space at its end still runs in it until it
+ * switches away, and the directory may be freed once it has.
  */
 void switch_context(process_t *old, process_t *new_proc)
 {
+    page_dir_t *dir = new_proc->space_root != 0 ? new_proc->page_dir : _kernel_dir;
+
     cpu_set_kernel_stack(new_proc->kernel_stack);
     msr_write(MSR_FS_BASE, new_proc->tls_base);
     msr_write(MSR_KERNEL_GS_BASE, new_proc->regs.gs_base);
 
-    if (old->space_root != new_proc->space_root) {
-        if (new_proc->space_root == 0) {
-            arch_space_load(get_page_dir_phys(_kernel_dir));
-            _curr_dir = _kernel_dir;
-        } else {
-            arch_space_load(new_proc->space_root);
-            _curr_dir = new_proc->page_dir;
-        }
+    if (dir != _curr_dir) {
+        _curr_dir = dir;
+        arch_space_load(new_proc->space_root != 0 ? new_proc->space_root
+                                                  : get_page_dir_phys(_kernel_dir));
     }
 
     x86_64_switch(&old->regs.rsp, new_proc->regs.rsp);

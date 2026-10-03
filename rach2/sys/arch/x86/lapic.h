@@ -38,6 +38,26 @@ void lapic_set_io(const struct lapic_io *ops);
  * named in the log. */
 int lapic_init(void);
 
+/* The vector of the interprocessor interrupt (proc/smp.c): in the highest
+ * priority class, so that a device's interrupt in service does not hold it
+ * back. */
+#define IPI_VECTOR 0xF0
+
+/** Enable the APIC of a processor the boot one started, which `lapic_init`
+ * has mapped: the spurious vector and the software enable, and the task
+ * priority. Its `LINT0` and `LINT1` are the MADT's (`apic_lint_init`). */
+void lapic_init_ap(void);
+
+/** Send `vector` to the processor whose APIC has the identity `target`. */
+void lapic_send_ipi(uint32_t target, uint8_t vector);
+
+/** Send that processor INIT, which holds it waiting for a startup message. */
+void lapic_send_init(uint32_t target);
+
+/** Send that processor a startup message: it starts in real mode at the
+ * physical address `page` * 4096, below 1 MiB. */
+void lapic_send_startup(uint32_t target, uint32_t page);
+
 /** Whether the APIC is enabled and messages can be received. */
 int lapic_ready(void);
 

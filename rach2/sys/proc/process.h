@@ -347,6 +347,16 @@ struct process {
     uint32_t nspid[NS_LEVELS];
     struct nsset *nsset;
     uint32_t ns_caps[2];
+
+    /* The processor whose run queue the process is on, which is the one it
+     * runs on while it runs (it is that processor's `current`) and the one
+     * it last ran on after; the processors it may run on, a bit for each,
+     * as sched_setaffinity(2) sets them and a fork passes them on; and its
+     * depth in the big lock when it was switched away, which the switch
+     * gives the processor back (sched.c). */
+    int cpu;
+    uint64_t affinity;
+    int bkl_depth;
 };
 
 typedef struct process process_t;
@@ -376,6 +386,10 @@ void proc_reclaim_boot_pids(void);
 /** A process record from the heap, on the list; NULL when the heap has no
  * room. */
 process_t *alloc_process(void);
+
+/* The bytes of a kernel stack: a process's, an idle task's, and the boot
+ * stack loader.s reserves, which is as large. */
+#define KERNEL_STACK_SIZE 0x4000
 
 /** Take a record off the list and give it back to the heap with its exec
  * workspace, and with its descriptor table when this was the table's last

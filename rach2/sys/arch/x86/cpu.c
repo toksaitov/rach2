@@ -21,11 +21,6 @@ void arch_irq_disable(void)
     __asm__ __volatile__("cli" : : : "memory");
 }
 
-void arch_halt(void)
-{
-    __asm__ __volatile__("hlt" : : : "memory");
-}
-
 /* `sti` takes effect after the instruction that follows it, so an interrupt
  * pending at the `sti` is taken once `hlt` has begun waiting, and wakes it. */
 void arch_idle(void)
@@ -48,6 +43,14 @@ void arch_stop(void)
 void arch_relax(void)
 {
     __asm__ __volatile__("pause" : : : "memory");
+}
+
+/* `xchg` with a memory operand locks the bus by itself, and a locked
+ * instruction is a full barrier on x86. */
+unsigned int arch_atomic_xchg(volatile unsigned int *p, unsigned int value)
+{
+    __asm__ __volatile__("xchgl %0, %1" : "+r"(value), "+m"(*p) : : "memory");
+    return value;
 }
 
 void arch_run_on_stack(uintptr_t sp, void (*fn)(void))

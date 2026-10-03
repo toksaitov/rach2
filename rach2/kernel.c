@@ -30,6 +30,7 @@
 #include "sys/tty/pty.h"
 #include "sys/ipc/pipe.h"
 #include "sys/proc/sched.h"
+#include "sys/proc/smp.h"
 #include "sys/power.h"
 #include "sys/proc/elf.h"
 #include "sys/proc/uimage.h"
@@ -68,7 +69,6 @@
  * (sys/arch/i686/loader.s). */
 extern char stack[];
 extern char stack_guard[];
-#define KERNEL_STACK_SIZE 0x4000
 
 /* The stack the debug shell's ring-3 test runs on, reserved when it runs. */
 #define USER_STACK_SIZE 0x1000
@@ -219,27 +219,36 @@ static void test_preempt(void);
 static void exec_program(int argc, char *argv[]);
 
 /**
- * Service the 100 Hz timer IRQ and preempt the current process.
+ * Service a processor's 100 Hz tick and preempt its current process.
  *
- * Bumps the global tick, then runs the periodic kernel work that the timer
- * drives: waking expired nanosleep sleepers, the HDA audio tick (needed when
- * legacy IRQs are not delivered on MSI-only setups), the TCP timers, the
- * loopback delivery, and the interrupt-less console serial drain. Finally
- * Accounts the tick as idle or busy FIRST, before anything below can wake a
- * process: the marker names what the processor was doing when this tick
- * arrived, not what it is about to do, and a busy tick is charged to the
- * process it interrupted, as user time when the interrupted code segment is
- * ring 3's and as system time otherwise. Then reschedules through
- * `sched_preempt`: at once when the current process is not inside a system
- * call, and at the call's exit when it is, since timer IRQs stay enabled
- * during a call so HDA streaming keeps running, yet a switch in the middle of
- * one is unsafe. Kernel threads (no current_proc, or one not in_syscall)
- * are switched at once.
+ * Every processor has its own tick. The boot processor's also bumps the
+ * global tick and runs the periodic kernel work the timer drives: waking
+ * expired nanosleep sleepers, the HDA audio tick (needed when legacy IRQs
+ * are not delivered on MSI-only setups), the TCP timers, the loopback
+ * delivery, and the interrupt-less console serial drain. The others only
+ * account and preempt.
+ *
+ * The tick is accounted as idle or busy first, before anything below can
+ * wake a process: the marker names what the processor was doing when this
+ * tick arrived, not what it is about to do, and a busy tick is charged to
+ * the process it interrupted, as user time when the interrupted code
+ * segment is ring 3's and as system time otherwise. Then the handler
+ * reschedules through `sched_preempt`: at once when the current process is
+ * not inside a system call, and at the call's exit when it is, since timer
+ * IRQs stay enabled during a call so HDA streaming keeps running, yet a
+ * switch in the middle of one is unsafe. Kernel threads (no current_proc,
+ * or one not in_syscall) are switched at once.
  */
 static void timer_handler(isr_params_t *params)
 {
-    uint32_t lost = timer_lost_ticks();
+    uint32_t lost;
 
+    if (arch_cpu_id() != 0) {
+        sched_account_tick(FRAME_USER(params) != 0);
+        sched_preempt();
+        return;
+    }
+    lost = timer_lost_ticks();
     ++kernel_ticks;
     /* The microsecond clock's periods are this tick's to count; see
        `timer_now_us`. */
@@ -553,7 +562,7 @@ static bool test_timer(void)
     start_ticks = kernel_ticks;
 
     for (i = 0; i < 5; ++i) {
-        arch_halt();
+        idle_wait_irq_on();
     }
 
     return kernel_ticks > start_ticks;
@@ -739,11 +748,13 @@ static bool test_usermode(void)
     console_printf("  Usermode test: pages marked user-accessible\n");
 
     for (i = 0; i < 3; i++) {
-        arch_halt();
+        idle_wait_irq_on();
     }
 
     console_printf("  Usermode test: entering ring 3...\n");
 
+    arch_irq_disable();
+    (void)bkl_drop();
     arch_enter_user(func_addr, user_stack_addr + USER_STACK_SIZE);
 
     return false;
@@ -766,7 +777,7 @@ static void proc_b_entry(void)
     switch_context(switch_proc_b, switch_proc_a);
 
     for (;;) {
-        arch_halt();
+        idle_wait_irq_on();
     }
 }
 
@@ -844,7 +855,7 @@ static void preempt_proc_a(void)
     }
 
     for (;;) {
-        arch_halt();
+        idle_wait_irq_on();
     }
 }
 
@@ -870,7 +881,7 @@ static void preempt_proc_b(void)
     }
 
     for (;;) {
-        arch_halt();
+        idle_wait_irq_on();
     }
 }
 
@@ -916,7 +927,7 @@ static void test_preempt(void)
     sched_enable();
 
     while (!preempt_done) {
-        arch_halt();
+        idle_wait_irq_on();
     }
 
     sched_disable();
@@ -973,7 +984,7 @@ static void isolation_proc_a_entry(void)
     switch_context(isolation_proc_a, isolation_proc_main);
 
     for (;;) {
-        arch_halt();
+        idle_wait_irq_on();
     }
 }
 
@@ -990,7 +1001,7 @@ static void isolation_proc_b_entry(void)
     switch_context(isolation_proc_b, isolation_proc_a);
 
     for (;;) {
-        arch_halt();
+        idle_wait_irq_on();
     }
 }
 
@@ -1323,6 +1334,10 @@ static void exec_program(int argc, char *argv[])
      * its own. A new process has tls_base == 0. */
     arch_tls_set(user_proc->tls_base);
 
+    /* The program runs in user mode, where no processor holds the big lock
+     * for it; the boot, and the debug shell, held it until here. */
+    arch_irq_disable();
+    (void)bkl_drop();
     arch_enter_user(entry_point, user_sp);
 
     console_puts("exec: returned from user mode");
@@ -3357,7 +3372,7 @@ void shell_loop(void)
             }
         }
 
-        arch_halt();
+        idle_wait_irq_on();
     }
 }
 
@@ -3398,6 +3413,10 @@ static void publish_disks(void)
 void kernel_main(const struct boot_info *boot)
 {
     uint32_t num_modules = boot->modules;
+
+    /* The boot is kernel code, and holds the big lock as every entry does,
+     * from here until the first program enters user mode. */
+    bkl_enter();
 
     /* Push the bump allocator past the modules below the window, so it does
      * not carve page tables over their bytes; a module above the window is
@@ -3783,6 +3802,10 @@ void kernel_main(const struct boot_info *boot)
     if (kcmdline_has("rach2.diag")) {
         platform_report_hold();
     }
+
+    /* The other processors, which wait for the big lock until the first
+     * program, or the debug shell's first idle wait, lets it go. */
+    smp_start();
 
     rescue_mode = kcmdline_has("rach2.rescue") || kcmdline_has("init=rescue");
 

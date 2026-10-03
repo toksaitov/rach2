@@ -5,6 +5,8 @@
 #include "percpu.h"
 
 #include "../x86/isr.h"
+#include "../x86/lapic.h"
+#include "../x86/smpboot.h"
 #include "../x86/pic.h"
 
 #include "../../lib/kstring.h"
@@ -76,11 +78,6 @@ static void set_gate(int vector, void (*handler)(void), uint8_t flags, uint8_t i
  */
 void init_idt(void)
 {
-    struct {
-        uint16_t limit;
-        uint64_t base;
-    } __attribute__((packed)) ptr;
-
     k_memset(idt, 0, sizeof(idt));
 
     set_gate(0, isr0, GATE_KERNEL, 0);
@@ -153,6 +150,19 @@ void init_idt(void)
     set_gate(63, msi15, GATE_KERNEL, 0);
 
     set_gate(255, spurious_isr, GATE_KERNEL, 0);
+    set_gate(IPI_VECTOR, ipi_isr, GATE_KERNEL, 0);
+
+    idt_load();
+}
+
+/** Load the IDT, on the boot processor once `init_idt` has built it and on
+ * each processor it starts. */
+void idt_load(void)
+{
+    struct {
+        uint16_t limit;
+        uint64_t base;
+    } __attribute__((packed)) ptr;
 
     ptr.limit = sizeof(idt) - 1;
     ptr.base = (uint64_t)(uintptr_t)idt;

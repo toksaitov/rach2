@@ -253,7 +253,8 @@ isr31:
 
 # The common entry of the exceptions and of the interrupts: save the
 # registers, route the vector (x86_64_route, idt.c), deliver any signal
-# pending for a return to user mode, and return.
+# pending for a return to user mode and give back the big lock (isr_leave,
+# isr.c), and return.
 .globl isr_common_handler
 isr_common_handler:
     testb $3, 24(%rsp)
@@ -284,7 +285,7 @@ isr_common_handler:
 .globl isr_return
 isr_return:
     movq %rsp, %rdi
-    call deliver_signals
+    call isr_leave
 
 # Restore the frame and return with `iretq`, interrupts off until the flags
 # it loads. A return to user mode at a non-canonical address, one whose bits
@@ -359,7 +360,7 @@ paranoid_entry:
     movl $1, %ebx
 .paranoid_kernel_gs:
     movq %rsp, %rdi
-    call _isr_router
+    call isr_paranoid_router
     testl %ebx, %ebx
     jz .paranoid_restore
     swapgs
@@ -425,7 +426,7 @@ syscall_entry:
     movq %rsp, %rdi
     call _isr_router
     movq %rsp, %rdi
-    call deliver_signals
+    call isr_leave
     movq F_RCX(%rsp), %rcx
     cmpq F_RIP(%rsp), %rcx
     jne isr_exit
@@ -662,10 +663,46 @@ msi15:
     pushq $63
     jmp isr_common_handler
 
-# The APIC's spurious vector, 255.
+# The local vectors, which the processor's own APIC raises and which run
+# without the big lock (isr_local_router, isr.c): the interprocessor
+# interrupt, IPI_VECTOR (lapic.h), and the spurious vector, 255.
+
+.globl ipi_isr
+ipi_isr:
+    pushq $0
+    pushq $0xF0
+    jmp local_common_handler
 
 .globl spurious_isr
 spurious_isr:
     pushq $0
     pushq $255
-    jmp isr_common_handler
+    jmp local_common_handler
+
+# The local vectors' common entry: the frame of the others, the router, and
+# the return through isr_exit, with no signal delivered and no switch, since
+# no lock is held.
+local_common_handler:
+    testb $3, 24(%rsp)
+    jz .local_from_kernel
+    swapgs
+.local_from_kernel:
+    pushq %rax
+    pushq %rbx
+    pushq %rcx
+    pushq %rdx
+    pushq %rsi
+    pushq %rdi
+    pushq %rbp
+    pushq %r8
+    pushq %r9
+    pushq %r10
+    pushq %r11
+    pushq %r12
+    pushq %r13
+    pushq %r14
+    pushq %r15
+    cld
+    movq %rsp, %rdi
+    call isr_local_router
+    jmp isr_exit

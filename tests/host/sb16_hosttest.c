@@ -238,8 +238,9 @@ static void row_callback(void)
     CHECK(dma_buffer[0] == queued && dma_buffer[1] == 128, "ring refill remains available");
 }
 
-/** Replace the halt with one timer tick and twelve completed DMA blocks. */
-void arch_halt(void)
+/** Replace the idle wait with one timer tick and twelve completed DMA
+ * blocks. */
+void idle_wait_irq_on(void)
 {
     static const uint32_t half_periods[] = {84, 75, 66, 63, 56};
     unsigned int block, note = kernel_ticks / 40;

@@ -83,6 +83,12 @@ void fpu_init_area(void *area)
     k_memset(area, 0, 512);
 }
 
+/** A wake makes the process ready; there is one processor and no queue. */
+void sched_make_ready(process_t *p)
+{
+    p->state = PROC_READY;
+}
+
 /** These processes never enter the scheduler. */
 void sched_forget(process_t *p)
 {

@@ -84,6 +84,7 @@ extern void msi15(void);
 
 /* The vector the APIC raises for an interrupt that went away. */
 extern void spurious_isr(void);
+extern void ipi_isr(void);
 
 /* The vectors a device may be given for its messages: the sixteen above
  * the 8259's, which are the ones the IDT has entries for; a seventeenth

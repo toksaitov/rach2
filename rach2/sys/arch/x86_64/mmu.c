@@ -443,9 +443,7 @@ void free_user_pages(page_dir_t *dir)
                         frame_unref(PTE_ADDR(pte));
                     }
                     pt[i1] = 0;
-                    if (dir == _curr_dir) {
-                        paging_flush_tlb(va);
-                    }
+                    paging_flush_dir(dir, va);
                 }
             }
         }

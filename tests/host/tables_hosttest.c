@@ -140,6 +140,7 @@ STUB(msi13, 61)
 STUB(msi14, 62)
 STUB(msi15, 63)
 STUB(spurious_isr, 255)
+STUB(ipi_isr, 240)
 
 /* The exception stubs by vector; vector 8 has none. */
 static void (*const exception_stub[32])(void) = {

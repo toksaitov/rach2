@@ -465,10 +465,7 @@ void free_user_pages(page_dir_t *dir)
             /* Clear page table entry */
             table->pages[page_idx] = 0;
 
-            /* Flush TLB if this is the current directory */
-            if (dir == _curr_dir) {
-                paging_flush_tlb(virt_addr);
-            }
+            paging_flush_dir(dir, virt_addr);
         }
     }
 }

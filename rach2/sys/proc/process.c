@@ -154,6 +154,8 @@ process_t *alloc_process(void)
     p->rlim[RLIM_FSIZE].cur = p->rlim[RLIM_FSIZE].max = RLIM_INFINITY32;
     fpu_init_area(p->fpu);
     p->waiter.proc = p;
+    p->cpu = (int)arch_cpu_id();
+    p->affinity = ~(uint64_t)0;
 
     p->fs = kzalloc(sizeof(*p->fs));
     if (!p->fs) {
@@ -249,7 +251,7 @@ void proc_wake_sleepers(uint32_t now)
         if (p->state == PROC_BLOCKED && p->wakeup_tick != 0 &&
             (int32_t)(now - p->wakeup_tick) >= 0) {
             p->wakeup_tick = 0;
-            p->state = PROC_READY;
+            sched_make_ready(p);
         }
         if (p->alarm_tick != 0 && (int32_t)(now - p->alarm_tick) >= 0) {
             p->alarm_tick = p->alarm_interval != 0 ? proc_alarm_at(now, p->alarm_interval) : 0;

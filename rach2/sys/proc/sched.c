@@ -7,6 +7,8 @@
 #include "../lib/ksignal.h"
 
 #include "../lib/kirq.h"
+#include "../lib/spinlock.h"
+#include "smp.h"
 #include "../usb/usb.h"
 #include "../network/ip/ip.h"
 
@@ -14,27 +16,48 @@
  * while it is zero. */
 static volatile int _sched_enabled = 0;
 
-/** The last ordinary selection; a wake preference does not move it. */
-static process_t *_last_sched;
+/*
+ * The run queues. A ready process is on the queue of the processor its
+ * `cpu` names, and the queues are the process list read through that
+ * field, so that a process is on one queue by construction and the list
+ * stays the one order the selection rotates through. The lock covers the
+ * fields below and a process's `cpu` and READY state as a wake or a
+ * selection changes them; it is taken after the big lock.
+ */
+static struct spinlock sched_lock = SPINLOCK_INIT;
 
-/** Nonzero when the next selection may prefer a woken process; a preferred
- * selection clears it, so the one after it is ordinary. */
-static int _wake_turn;
+/** Each processor's last ordinary selection; a wake preference does not
+ * move it. */
+static process_t *_last_sched[NR_CPUS];
 
-/** Move the round-robin cursor off `p`, which is about to be unlinked, to
- * the record before it. */
+/** Nonzero when a processor's next selection may prefer a woken process; a
+ * preferred selection clears it, so the one after it is ordinary. */
+static int _wake_turn[NR_CPUS];
+
+/** Move every processor's round-robin cursor off `p`, which is about to be
+ * unlinked, to the record before it. */
 void sched_forget(process_t *p)
 {
-    if (_last_sched == p) {
-        _last_sched = p->prev;
+    uint32_t flags = spin_lock_irqsave(&sched_lock);
+    int c;
+
+    for (c = 0; c < NR_CPUS; c++) {
+        if (_last_sched[c] == p) {
+            _last_sched[c] = p->prev;
+        }
     }
+    spin_unlock_irqrestore(&sched_lock, flags);
 }
 
 void init_sched(void)
 {
+    int c;
+
     _sched_enabled = 0;
-    _last_sched = NULL;
-    _wake_turn = 1;
+    for (c = 0; c < NR_CPUS; c++) {
+        _last_sched[c] = NULL;
+        _wake_turn[c] = 1;
+    }
 }
 
 void sched_enable(void)
@@ -52,24 +75,50 @@ int sched_is_enabled(void)
     return _sched_enabled;
 }
 
+/** Whether `p` may run on processor `cpu`: its affinity has it, and it is
+ * started. */
+static int sched_allowed(const process_t *p, int cpu)
+{
+    return cpu_table[cpu].online && ((p->affinity >> cpu) & 1u) != 0;
+}
+
+/** Whether processor `cpu` runs its idle task: it has nothing else to do. */
+static int sched_cpu_idle(int cpu)
+{
+    return cpu_table[cpu].current == cpu_table[cpu].idle;
+}
+
 /**
- * Find a READY process after the ordinary cursor, wrapping once, of those a
- * suspend to idle lets run (`suspend_lets_run`).
- *
- * With `woken_only`, consider only wait-queue wakeups. Interrupts are off.
+ * Whether `p` may be selected on processor `cpu` now: ready, of those a
+ * suspend to idle lets run (`suspend_lets_run`), with `cpu` in its
+ * affinity, and not another processor's current process, whose stack and
+ * registers are still in use there until that processor switches away.
  */
-static process_t *sched_find(int woken_only)
+static int sched_may_run(const process_t *p, int cpu)
+{
+    return p->state == PROC_READY && ((p->affinity >> cpu) & 1u) != 0 && suspend_lets_run(p) &&
+           (p->cpu == cpu || cpu_table[p->cpu].current != p);
+}
+
+/**
+ * Find a process of processor `cpu`'s queue that may run there, after its
+ * ordinary cursor, wrapping once.
+ *
+ * With `woken_only`, consider only wait-queue wakeups. The run queues' lock
+ * is held.
+ */
+static process_t *sched_find(int cpu, int woken_only)
 {
     process_t *start;
     process_t *p;
 
-    start = _last_sched && _last_sched->next ? _last_sched->next : proc_list;
+    start = _last_sched[cpu] && _last_sched[cpu]->next ? _last_sched[cpu]->next : proc_list;
     p = start;
     if (!p) {
         return NULL;
     }
     do {
-        if (p->state == PROC_READY && (!woken_only || p->woken) && suspend_lets_run(p)) {
+        if (p->cpu == cpu && (!woken_only || p->woken) && sched_may_run(p, cpu)) {
             return p;
         }
         p = p->next ? p->next : proc_list;
@@ -78,39 +127,147 @@ static process_t *sched_find(int woken_only)
 }
 
 /**
- * Alternate a wake preference with an ordinary round-robin selection.
+ * For processor `cpu`, which has nothing of its own to run, the ready
+ * process of the busiest other queue that may run on it, moved to its
+ * queue; NULL when there is none. The busiest queue is the one with the
+ * most ready processes. The run queues' lock is held.
+ */
+static process_t *sched_steal(int cpu)
+{
+    int ready[NR_CPUS];
+    process_t *best = NULL;
+    process_t *p;
+    int c;
+
+    for (c = 0; c < NR_CPUS; c++) {
+        ready[c] = 0;
+    }
+    for (p = proc_list; p; p = p->next) {
+        if (p->state == PROC_READY && p->cpu >= 0 && p->cpu < NR_CPUS) {
+            ready[p->cpu]++;
+        }
+    }
+    for (p = proc_list; p; p = p->next) {
+        if (p->cpu != cpu && sched_may_run(p, cpu) && (!best || ready[p->cpu] > ready[best->cpu])) {
+            best = p;
+        }
+    }
+    if (best) {
+        best->cpu = cpu;
+    }
+    return best;
+}
+
+/**
+ * The processor whose queue a process made ready joins: the one it ran on
+ * last, unless that one is busy and another it may run on is idle, where
+ * it then goes. A process that is still a processor's current, woken
+ * before its switch away, stays where it runs. The run queues' lock is
+ * held.
+ */
+static int sched_place(const process_t *p)
+{
+    int last = p->cpu;
+    int c;
+
+    if (cpu_table[last].current == p) {
+        return last;
+    }
+    if (sched_allowed(p, last) && sched_cpu_idle(last)) {
+        return last;
+    }
+    for (c = 0; c < NR_CPUS; c++) {
+        if (sched_allowed(p, c) && sched_cpu_idle(c)) {
+            return c;
+        }
+    }
+    if (sched_allowed(p, last)) {
+        return last;
+    }
+    for (c = 0; c < NR_CPUS; c++) {
+        if (sched_allowed(p, c)) {
+            return c;
+        }
+    }
+    return last;
+}
+
+/**
+ * Make `p`, blocked or stopped, ready to run, on the queue `sched_place`
+ * chooses, and wake that processor when it is idle, or halted in place
+ * with `p` its current process, so that it looks now rather than at its
+ * tick. Every wake of a process goes through here.
+ */
+void sched_make_ready(process_t *p)
+{
+    uint32_t flags = spin_lock_irqsave(&sched_lock);
+    int target;
+    int kick;
+
+    p->state = PROC_READY;
+    target = sched_place(p);
+    p->cpu = target;
+    kick = sched_cpu_idle(target) || cpu_table[target].current == p;
+    spin_unlock_irqrestore(&sched_lock, flags);
+    if (kick) {
+        smp_kick(target);
+    }
+}
+
+/**
+ * Switch this processor to the next process of its queue, alternating a
+ * wake preference with an ordinary round-robin selection.
  *
  * A preferred selection consumes its wake mark without moving the ordinary
  * cursor. At least every second selection advances that cursor, even when
  * sleepers wake repeatedly. A missing wake candidate takes an ordinary turn.
- * Selection and publication run with interrupts disabled so a wake cannot
- * race the mark's consumption or a timer re-enter partially updated state.
- * A current process that has already resumed after an idle wait loses its
- * mark before yielding, so that wake cannot prefer it again later.
+ * A processor whose own queue has nothing to run takes a process from the
+ * busiest other queue (`sched_steal`), and with nothing there either it
+ * goes on with its current process if that one can still run, or switches
+ * to its idle task, which waits for work (`sched_idle_loop`). A process that
+ * blocks or ends therefore always leaves the processor, and a woken one may
+ * run on any processor it may use. Before the idle tasks exist, at boot, a
+ * process with nothing to switch to stays, and its caller idles in place.
  *
- * Returns without a switch when scheduling is disabled, there is no current
- * process, or no process but the current one is READY. The switch runs with
- * interrupts disabled: a timer IRQ landing between publishing current_proc
- * and the stack and CR3 swap inside switch_context would see current_proc ==
- * next with next->in_syscall == 0, pass `sched_preempt`'s test, and re-enter
- * schedule() on the old stack with the TLS descriptor already rewritten,
- * corrupting next->regs.esp. So schedule() saves the caller's IF, clears it
- * across the switch, and restores it afterward. Each process does this
- * symmetrically and resumes with its own IF; a process entered for the first
- * time skips the restore: a forked child takes its IF from iret, and a
- * kernel thread's entry enables interrupts itself.
+ * Selection and publication run with interrupts disabled and the run
+ * queues' lock held, so a wake cannot race the mark's consumption or a
+ * timer re-enter partially updated state. A current process that has
+ * already resumed after an idle wait loses its mark before yielding, so
+ * that wake cannot prefer it again later.
+ *
+ * Returns without a switch when scheduling is disabled or there is no
+ * current process. The switch runs with interrupts disabled: a timer IRQ
+ * landing between publishing current_proc and the stack and CR3 swap inside
+ * switch_context would see current_proc == next with next->in_syscall == 0,
+ * pass `sched_preempt`'s test, and re-enter schedule() on the old stack with
+ * the TLS descriptor already rewritten, corrupting next->regs.esp. So
+ * schedule() saves the caller's IF, clears it across the switch, and
+ * restores it afterward. Each process does this symmetrically and resumes
+ * with its own IF; a process entered for the first time skips the restore:
+ * a forked child takes its IF from iret, and a kernel thread's entry
+ * enables interrupts itself.
+ *
+ * The big lock stays held across the switch, so no other processor sees
+ * the outgoing process before its registers are saved; the depth this
+ * processor had in it goes with the outgoing process, and the incoming one
+ * gets its own back. The run queues' lock is let go before the switch,
+ * since the incoming process does not return here to let it go.
  *
  * The floating-point registers are the one part of the processor
  * `switch_context` does not touch. They are saved into the outgoing record
  * and loaded from the incoming one here, inside the same masked window and
  * before the stack pointer changes; the kernel computes in none of them, so
- * nothing between the load and the switch can disturb the loaded state.
+ * nothing between the load and the switch can disturb the loaded state. An
+ * idle task has none to keep, and the registers are left as they are
+ * around it.
  */
 void schedule(void)
 {
     process_t *next = NULL;
     process_t *old;
+    struct percpu *cpu;
     uint32_t saved_flags;
+    int me;
 
     if (!_sched_enabled) {
         return;
@@ -120,52 +277,84 @@ void schedule(void)
         return;
     }
 
-    saved_flags = kirq_save();
-    if (current_proc->state != PROC_READY) {
-        current_proc->woken = 0;
+    saved_flags = spin_lock_irqsave(&sched_lock);
+    me = (int)arch_cpu_id();
+    cpu = &cpu_table[me];
+    old = cpu->current;
+    if (old->state != PROC_READY) {
+        old->woken = 0;
     }
-    if (_wake_turn) {
-        next = sched_find(1);
+    if (_wake_turn[me]) {
+        next = sched_find(me, 1);
     }
     if (next) {
-        _wake_turn = 0;
+        _wake_turn[me] = 0;
     } else {
-        next = sched_find(0);
+        next = sched_find(me, 0);
         if (next) {
-            _last_sched = next;
-            _wake_turn = 1;
+            _last_sched[me] = next;
+            _wake_turn[me] = 1;
+        } else if (old == cpu->idle || old->state != PROC_RUNNING) {
+            next = sched_steal(me);
         }
     }
 
     if (!next) {
-        kirq_restore(saved_flags);
-        return;
+        if (old == cpu->idle || old->state == PROC_RUNNING || !cpu->idle) {
+            spin_unlock_irqrestore(&sched_lock, saved_flags);
+            return;
+        }
+        next = cpu->idle;
     }
 
     usb_stamp_dispatch(next->pid);
     next->woken = 0;
-    if (next == current_proc) {
+    if (next == old) {
         next->state = PROC_RUNNING;
-        kirq_restore(saved_flags);
+        spin_unlock_irqrestore(&sched_lock, saved_flags);
         return;
     }
 
-    old = current_proc;
-
-    if (old->state == PROC_RUNNING) {
+    if (old->state == PROC_RUNNING && old != cpu->idle) {
         old->state = PROC_READY;
     }
 
     next->state = PROC_RUNNING;
+    next->cpu = me;
 
-    fpu_save(old->fpu);
-    fpu_restore(next->fpu);
+    if (old != cpu->idle) {
+        fpu_save(old->fpu);
+    }
+    if (next != cpu->idle) {
+        fpu_restore(next->fpu);
+    }
     arch_debug_switch(old, next);
-    current_proc = next;
+    old->bkl_depth = cpu->bkl_depth;
+    cpu->bkl_depth = next->bkl_depth;
+    cpu->current = next;
+    spin_unlock(&sched_lock);
 
     switch_context(old, next);
 
     kirq_restore(saved_flags);
+}
+
+/**
+ * The idle task's body, on every processor: switch to whatever its queue,
+ * or the busiest other queue, has to run, and with nothing, wait for an
+ * interrupt with the big lock let go (`idle_wait_irq_off`). A wake that
+ * puts a process on this processor's queue sends it the interprocessor
+ * interrupt that ends the wait (`sched_make_ready`). Entered with the big
+ * lock held at depth 1, as a started processor takes it and as the first
+ * switch to the boot processor's idle task gives it.
+ */
+void sched_idle_loop(void)
+{
+    for (;;) {
+        arch_irq_disable();
+        schedule();
+        idle_wait_irq_off();
+    }
 }
 
 /**
@@ -285,6 +474,9 @@ void sched_account_tick(int user)
         return;
     }
     ++cpu->busy_ticks;
+    if (user) {
+        ++cpu->user_ticks;
+    }
     if (current_proc) {
         if (user) {
             ++current_proc->utime;
@@ -388,15 +580,25 @@ void sched_loadavg(uint32_t avg[3])
  * discipline the drain needs, and a caller that is about to halt holds nothing
  * and is between operations, which is the state the timer's drain relies on
  * too.
+ *
+ * The big lock is let go for the halt and taken again after it, so that the
+ * other processors run kernel code meanwhile. A wake from another processor
+ * that comes between the two is not lost either: it sends this processor an
+ * interrupt (`sched_make_ready`), which is pending until the `sti` and ends
+ * the halt.
  */
 void idle_wait_irq_off(void)
 {
+    int depth;
+
     if (ip_loop_pending()) {
         ip_loop_drain_from(IP_LOOP_FROM_IDLE);
         return;
     }
     this_cpu()->idle_wait = 1;
+    depth = bkl_drop();
     arch_idle_masked();
+    bkl_take(depth);
     this_cpu()->idle_wait = 0;
 }
 
@@ -410,10 +612,21 @@ void idle_wait_irq_off(void)
  * halt ended for its own reason. The tick the marker catches in that window
  * is counted idle, which is what the processor is about to be; the error is
  * at most one tick per wait.
+ *
+ * The big lock is let go for the halt as in `idle_wait_irq_off`, with
+ * interrupts off while it is let go and taken, since an interrupt handler
+ * in between would take it at a depth that is not yet the processor's.
  */
 void idle_wait_irq_on(void)
 {
+    uint32_t flags = kirq_save();
+    int depth;
+
     this_cpu()->idle_wait = 1;
+    depth = bkl_drop();
     arch_idle();
+    arch_irq_disable();
+    bkl_take(depth);
     this_cpu()->idle_wait = 0;
+    kirq_restore(flags);
 }

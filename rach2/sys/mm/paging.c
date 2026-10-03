@@ -12,11 +12,11 @@
 #include "../lib/kirq.h"
 #include "../proc/process.h"
 #include "../proc/ptrace.h"
+#include "../proc/smp.h"
 #include "mm.h"
 #include "pressure.h"
 
 page_dir_t *_kernel_dir;
-page_dir_t *_curr_dir;
 
 uint32_t *_frames;
 size_t _frames_number;
@@ -127,7 +127,8 @@ void init_paging(struct frame_map *map)
     }
     if (map->top_frame) {
         uintptr_t first = virt_to_phys(_frames) / PAGE_SIZE;
-        uintptr_t last = (virt_to_phys(_frames) + _frames_number * sizeof(uint32_t) - 1) / PAGE_SIZE;
+        uintptr_t last =
+            (virt_to_phys(_frames) + _frames_number * sizeof(uint32_t) - 1) / PAGE_SIZE;
 
         for (frame = first; frame <= last; frame++) {
             if (!frame_map_usable(map, (uint32_t)frame)) {
@@ -258,7 +259,7 @@ static void unmap_user_page_frame(page_dir_t *dir, uintptr_t addr)
         return;
     }
     *e = 0;
-    paging_flush_tlb(addr);
+    paging_flush_dir(dir, addr);
     frame_unref(PTE_ADDR(pte));
 }
 
@@ -547,7 +548,7 @@ static int cow_fault(page_dir_t *dir, uintptr_t addr)
     /* Sole owner: re-grant write and drop the COW mark in place, no copy. */
     if (frame >= _frames_number || _frames[frame] <= 1) {
         *e = (pte & ~(pte_t)PTE_COW) | PTE_W;
-        paging_flush_tlb(addr);
+        paging_flush_dir(dir, addr);
         return 1;
     }
 
@@ -562,7 +563,7 @@ static int cow_fault(page_dir_t *dir, uintptr_t addr)
         /* Nothing was copied: the shared page is put back as it was, the
          * fresh frame goes back, and the fault is unresolved. */
         *user_pte(dir, addr) = pte;
-        paging_flush_tlb(addr);
+        paging_flush_dir(dir, addr);
         frame_unref(new_phys);
         return 0;
     }
@@ -1118,9 +1119,7 @@ void paging_set_writable(page_dir_t *dir, uintptr_t addr, bool writable)
     } else {
         *e &= ~(pte_t)PTE_W; /* read-only for both user and kernel */
     }
-    if (dir == _curr_dir) {
-        paging_flush_tlb(addr);
-    }
+    paging_flush_dir(dir, addr);
 }
 
 void paging_set_exec(page_dir_t *dir, uintptr_t addr, bool exec)
@@ -1134,9 +1133,7 @@ void paging_set_exec(page_dir_t *dir, uintptr_t addr, bool exec)
     if (!exec) {
         *e |= PTE_NOEXEC;
     }
-    if (dir == _curr_dir) {
-        paging_flush_tlb(addr);
-    }
+    paging_flush_dir(dir, addr);
 }
 
 pte_t paging_noexec(uint32_t prot)
@@ -1151,7 +1148,31 @@ pte_t paging_noexec(uint32_t prot)
 
 void paging_flush_tlb(uintptr_t addr)
 {
-    arch_tlb_flush_page(addr);
+    paging_flush_dir(_curr_dir, addr);
+}
+
+/**
+ * Drop the translation of `addr` in `dir` wherever a processor has it.
+ *
+ * A user address is dropped on this processor when it translates through
+ * `dir`, and on every other that does (`smp_tlb_shootdown`), before this
+ * returns: the caller may free the page's frame next. A kernel address is
+ * in every directory: this processor drops it now, and every other drops
+ * all its translations before it next takes the big lock, which it holds
+ * whenever it reads kernel memory that was not mapped when it last held it
+ * (`smp_kernel_mapping_changed`).
+ */
+void paging_flush_dir(const page_dir_t *dir, uintptr_t addr)
+{
+    if (addr < USER_ADDR_MIN || addr >= USER_ADDR_MAX) {
+        arch_tlb_flush_page(addr);
+        smp_kernel_mapping_changed();
+        return;
+    }
+    if (dir == _curr_dir) {
+        arch_tlb_flush_page(addr);
+    }
+    smp_tlb_shootdown(dir, addr);
 }
 
 void frame_ref(uintptr_t phys)
@@ -1205,9 +1226,7 @@ int map_user_frame(page_dir_t *dir, uintptr_t virt, uintptr_t phys, pte_t flags)
     /* The caller owns the frame and its reference count; we only write the
      * PTE. */
     table[MMU_INDEX(virt)] = PTE_ADDR((pte_t)phys) | (flags & (pte_t)PTE_FLAGS);
-    if (dir == _curr_dir) {
-        paging_flush_tlb(virt);
-    }
+    paging_flush_dir(dir, virt);
     return 0;
 }
 
@@ -1284,9 +1303,7 @@ uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
     table[MMU_INDEX(virt_addr)] = (pte_t)phys_addr | PTE_P | PTE_W | PTE_U;
 
     /* Flush TLB for this address if we're in the current directory */
-    if (dir == _curr_dir) {
-        paging_flush_tlb(virt_addr);
-    }
+    paging_flush_dir(dir, virt_addr);
 
     return phys_addr;
 }
@@ -1316,9 +1333,7 @@ void unmap_user_range(page_dir_t *dir, uintptr_t start, uintptr_t end)
          * reference). */
         frame_unref(PTE_ADDR(pte));
         *e = 0;
-        if (dir == _curr_dir) {
-            paging_flush_tlb(addr);
-        }
+        paging_flush_dir(dir, addr);
     }
 }
 
@@ -1342,10 +1357,8 @@ int paging_move_range(page_dir_t *dir, uintptr_t from, uintptr_t to, uintptr_t l
         }
         *user_pte(dir, to + off) = *e;
         *e = 0;
-        if (dir == _curr_dir) {
-            paging_flush_tlb(from + off);
-            paging_flush_tlb(to + off);
-        }
+        paging_flush_dir(dir, from + off);
+        paging_flush_dir(dir, to + off);
     }
     return 0;
 }
@@ -1384,9 +1397,7 @@ void paging_protect_range(page_dir_t *dir, uintptr_t start, uintptr_t end, uint3
             }
         }
         *e = pte;
-        if (dir == _curr_dir) {
-            paging_flush_tlb(addr);
-        }
+        paging_flush_dir(dir, addr);
     }
 }
 

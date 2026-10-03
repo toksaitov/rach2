@@ -105,6 +105,50 @@ void switch_context(process_t *old, process_t *next)
     switches++;
 }
 
+/** One processor: the run queues' lock is the interrupt mask alone. */
+uint32_t spin_lock_irqsave(struct spinlock *lock)
+{
+    (void)lock;
+    return kirq_save();
+}
+
+void spin_unlock_irqrestore(struct spinlock *lock, uint32_t flags)
+{
+    (void)lock;
+    kirq_restore(flags);
+}
+
+void spin_lock(struct spinlock *lock)
+{
+    (void)lock;
+}
+
+void spin_unlock(struct spinlock *lock)
+{
+    (void)lock;
+}
+
+/** Nor a big lock to let go around an idle wait, or another processor to
+ * wake. */
+int bkl_drop(void)
+{
+    return 0;
+}
+
+void bkl_take(int depth)
+{
+    (void)depth;
+}
+
+void smp_kick(int cpu)
+{
+    (void)cpu;
+}
+
+/** The idle task's loop is never run here. */
+void arch_irq_disable(void)
+{}
+
 /** No signal is pending in the wait-return row. */
 int signal_pending(void)
 {
@@ -138,7 +182,9 @@ static void setup(void)
         procs[i].prev = i ? &procs[i - 1] : NULL;
         procs[i].next = i < 6 ? &procs[i + 1] : NULL;
         procs[i].waiter.proc = &procs[i];
+        procs[i].affinity = ~(uint64_t)0;
     }
+    cpu_table[0].online = 1;
     proc_list = procs;
     current_proc = procs;
     current_proc->state = PROC_RUNNING;
