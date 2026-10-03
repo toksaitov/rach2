@@ -13,101 +13,51 @@
 
 #include "../lib/kstring.h"
 
-/* Top of the identity-mapped physical window (32 MiB): the kernel image,
- * the boot data, the page tables the boot carves and the DMA buffers that a
- * device is given a physical address of live below it, where the virtual
- * address equals the physical one. Nothing above it is reached through its
- * physical address; a frame there is mapped into the kernel's layout first,
- * and the modules and the page tables made later are reached that way. */
-#define HARD_MEMORY_LIMIT 0x2000000
-
-#define PAGE_SIZE 0x1000
-
 /*
- * The kernel's virtual layout above user space, in the gigabyte from
- * `USER_ADDR_MAX`. Every page table for it exists at boot and is shared by
- * every page directory, so a mapping made in it after the first fork is
- * seen by every process. The regions:
- *
- *   0xC0000000  256 MiB  the heap (mm/kheap.c), grown a frame at a time
- *   0xD0000000  512 MiB  the page-cache window (mm/pagecache.h)
- *   0xF0000000  128 MiB  MMIO, a controller's BAR mapped wherever it is
- *   0xF8000000    4 MiB  temporary mappings, one page each, for the paths
- *                        that touch a user frame by its physical address
- *   0xF8400000   64 MiB  the boot modules, mapped wherever the loader put
- *                        them
- *   0xFC400000   ...     unused
+ * A page directory, the root of an address space's page tables. Its layout
+ * is the architecture's (arch/i686/mmu.h); the shared code holds it by
+ * pointer and reaches its entries through the leaf tables below.
  */
-#define KVA_BASE         0xC0000000u
-#define KVA_HEAP         0xC0000000u
-#define KVA_HEAP_SIZE    0x10000000u
-#define KVA_MMIO         0xF0000000u
-#define KVA_MMIO_SIZE    0x08000000u
-#define KVA_TEMP         0xF8000000u
-/* Policy: the temporary mappings held at once, one page each, the whole
- * of the region's 4 MiB; a caller that finds none free is told so. */
-#define KVA_TEMP_SLOTS   1024u
-#define KVA_MODULES      0xF8400000u
-#define KVA_MODULES_SIZE 0x04000000u
-
-/*
- * Software-available PTE bit (bit 9; the CPU ignores bits 9-11) used to mark
- * a page as copy-on-write: present + user + read-only + PTE_COW means
- * "shared, copy on the next write". The fault handler distinguishes a COW
- * write (copy/re-grant) from a genuine write to a read-only region
- * (segfault) by this bit.
- */
-#define PTE_COW 0x200u
-
-/*
- * Software-available PTE bit 10: a resident page of a PROT_NONE region. The
- * page stays present, with its frame and contents, but supervisor-only and
- * read-only, so any user access faults; fork and teardown own it as a user
- * page by this bit, and mprotect makes it a user page again.
- */
-#define PTE_NONE 0x400u
-
-struct pde {
-    uint32_t present : 1;
-    uint32_t rw : 1;
-    uint32_t us : 1;
-    uint32_t pwt : 1;
-    uint32_t pcd : 1;
-    uint32_t accessed : 1;
-    uint32_t reserved : 6;
-    uint32_t table_address : 20;
-} __attribute__((packed));
-
-typedef struct pde pde_t;
-
-struct pte {
-    uint32_t present : 1;
-    uint32_t rw : 1;
-    uint32_t us : 1;
-    uint32_t pwt : 1;
-    uint32_t pcd : 1;
-    uint32_t accessed : 1;
-    uint32_t dirty : 1;
-    uint32_t pat : 1;
-    uint32_t global : 1;
-    uint32_t reserved : 3;
-    uint32_t frame_address : 20;
-} __attribute__((packed));
-
-typedef struct pte pte_t;
-
-struct page_table {
-    uint32_t pages[1024];
-} __attribute__((packed));
-
-typedef struct page_table page_table_t;
-
-struct page_dir {
-    page_table_t *logical_page_tables[1024];
-    uint32_t phys_page_tables[1024];
-};
-
 typedef struct page_dir page_dir_t;
+
+/* The bytes of address space a leaf table covers, and an address's entry in
+ * the leaf table that covers it. */
+#define MMU_TABLE_SPAN ((uintptr_t)MMU_TABLE_ENTRIES * PAGE_SIZE)
+#define MMU_INDEX(va)  (((uintptr_t)(va) / PAGE_SIZE) % MMU_TABLE_ENTRIES)
+
+/*
+ * The leaf table of `dir` that covers the user address `va`, an array of
+ * MMU_TABLE_ENTRIES entries read and written with cpu.h's PTE_ bits, or
+ * NULL where `dir` has no table of its own there. With `create` a missing
+ * table is made, and one the kernel's directory shares is copied, so that
+ * the entries written are this address space's alone; NULL then when no
+ * memory could be had. The architecture defines it (arch/i686/mmu.c).
+ */
+pte_t *mmu_user_table(page_dir_t *dir, uintptr_t va, int create);
+
+/* The kernel directory's leaf table that covers the kernel address `va`,
+ * which every directory shares, or NULL where there is none. */
+pte_t *mmu_kernel_table(uintptr_t va);
+
+/*
+ * The steps of `init_paging` the architecture takes (arch/i686/mmu.c):
+ * `mmu_init` builds the kernel's directory with the identity window and the
+ * tables of the kernel's layout, marking the frames it carves in the frame
+ * table (`frame_take_boot`); `mmu_start` turns translation on through it;
+ * `mmu_heap_ready` says the heap exists, from which page tables then come.
+ */
+void mmu_init(void);
+void mmu_start(void);
+void mmu_heap_ready(void);
+
+/** Mark the boot's frame `frame` used, for the architecture's table carving
+ * before the heap exists. */
+void frame_take_boot(uintptr_t frame);
+
+/** Copy the user pages of `from`, the address space in use, into the
+ * directory `child`, copy-on-write: 0, or -1 with no memory for a table. */
+struct mm;
+int paging_fork_copy(struct mm *from, page_dir_t *child);
 
 /*
  * Initialize paging. `map` is the physical memory the firmware's map

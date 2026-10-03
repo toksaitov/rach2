@@ -48,6 +48,37 @@ typedef uint64_t phys_addr_t;
 #define PAGE_SHIFT 12
 #define PAGE_SIZE  0x1000
 
+/* A page table entry and the leaf table's count of them; the bits are the
+ * kernel's names for what a port's MMU code makes of them. */
+typedef uint64_t pte_t;
+#define MMU_TABLE_ENTRIES 512u
+#define PTE_P       0x001u
+#define PTE_W       0x002u
+#define PTE_U       0x004u
+#define PTE_NOCACHE 0x008u
+#define PTE_DIRTY   0x010u
+#define PTE_COW     0x020u
+#define PTE_NONE    0x040u
+#define PTE_FLAGS   0xFFFu
+#define PTE_ADDR(e) ((e) & ~(pte_t)PTE_FLAGS)
+
+/* The kernel's layout: what the port's MMU code chooses. */
+#define HARD_MEMORY_LIMIT 0x2000000
+#define KVA_BASE          USER_ADDR_MAX
+#define KVA_HEAP          KVA_BASE
+#define KVA_HEAP_SIZE     0x10000000u
+#define KVA_MMIO          (KVA_BASE + 0x30000000u)
+#define KVA_MMIO_SIZE     0x08000000u
+#define KVA_TEMP          (KVA_BASE + 0x38000000u)
+#define KVA_TEMP_SLOTS    1024u
+#define KVA_MODULES       (KVA_BASE + 0x38400000u)
+#define KVA_MODULES_SIZE  0x04000000u
+
+/* The page fault: the exception's number and what its syndrome says. */
+#define PAGE_FAULT_VECTOR 3
+#define FAULT_WRITE(p)    (((p)->error_code & 0x40u) != 0)
+#define FAULT_USER(p)     FRAME_USER(p)
+
 /* A floating-point save area: the 32 128-bit registers, FPSR and FPCR. */
 #define FPU_STATE_SIZE 528
 

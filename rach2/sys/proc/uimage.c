@@ -428,7 +428,7 @@ int uimage_map(struct uimage *u, struct page_dir *dir)
     while (u->given < u->nframes) {
         uint32_t page = u->top - (u->given + 1u) * PAGE_SIZE;
 
-        if (map_user_frame(dir, page, u->frames[u->given], 0x7u) != 0) {
+        if (map_user_frame(dir, page, u->frames[u->given], PTE_P | PTE_W | PTE_U) != 0) {
             return -1;
         }
         u->given++;

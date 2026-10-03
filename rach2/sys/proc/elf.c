@@ -376,21 +376,16 @@ int elf_load_image_at(elf_read_fn readfn, void *ctx, page_dir_t *dir, uint32_t b
             uint32_t page_base = curr_vaddr & ~(PAGE_SIZE - 1);
             uint32_t page_offset = curr_vaddr & (PAGE_SIZE - 1);
             uint32_t chunk_size = PAGE_SIZE - page_offset;
-            uint32_t pde_idx, pte_idx;
-            page_table_t *pt;
             uintptr_t phys_base;
 
             if (chunk_size > to_copy - copied) {
                 chunk_size = to_copy - copied;
             }
 
-            pde_idx = page_base / PAGE_SIZE / 1024;
-            pte_idx = (page_base / PAGE_SIZE) % 1024;
-            pt = dir->logical_page_tables[pde_idx];
-            if (!pt) {
+            phys_base = paging_user_phys(dir, page_base) & ~(uintptr_t)(PAGE_SIZE - 1);
+            if (!phys_base) {
                 return -ENOMEM;
             }
-            phys_base = pt->pages[pte_idx] & ~0xFFF;
 
             {
                 uint8_t *page = kmap_temp(phys_base);

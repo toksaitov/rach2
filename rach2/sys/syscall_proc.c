@@ -621,89 +621,6 @@ long sys_exit_group(isr_params_t *params)
 }
 
 /**
- * Duplicate the parent's user address space `from`, the one in use, into
- * the child's directory, copy-on-write.
- *
- * Iterates the parent's page directory and, for each present user page, maps
- * the SAME physical frame into the child (bumping the frame refcount) rather
- * than copying it; writable pages are write-protected and PTE_COW-marked in
- * both directories so the first write faults into cow_fault for a private
- * copy. Returns 0 on success, -1 on failure.
- */
-static int copy_user_pages(struct mm *from, page_dir_t *child_dir)
-{
-    page_dir_t *parent_dir = from->dir;
-    uint32_t dir_idx, page_idx;
-    page_table_t *parent_table;
-
-    for (dir_idx = 0; dir_idx < 1024; dir_idx++) {
-        parent_table = parent_dir->logical_page_tables[dir_idx];
-        if (!parent_table) {
-            continue;
-        }
-
-        for (page_idx = 0; page_idx < 1024; page_idx++) {
-            uint32_t pte = parent_table->pages[page_idx];
-            uint32_t virt_addr;
-            uint32_t parent_phys;
-
-            if (!(pte & 0x1) || !(pte & (0x4 | PTE_NONE))) {
-                continue; /* present (0x1), and user (0x4) or PROT_NONE */
-            }
-
-            virt_addr = (dir_idx << 22) | (page_idx << 12);
-            parent_phys = pte & ~0xFFF;
-
-            /* Skip the kernel's identity map below user space and any bogus
-             * mapping. */
-            if (virt_addr < USER_ADDR_MIN || parent_phys == 0) {
-                continue;
-            }
-
-            /* A page of a shared region is the same frame in the child, with
-             * the same rights: a store on either side is seen by both. */
-            {
-                vma_t *r = vm_find(&from->vm, virt_addr);
-
-                if (r && r->type == VM_SHARED) {
-                    if (map_user_frame(child_dir, virt_addr, parent_phys, pte & 0xFFFu) != 0) {
-                        return -1;
-                    }
-                    frame_ref(parent_phys);
-                    continue;
-                }
-            }
-
-            /*
-             * Copy-on-write: share the frame instead of copying it. The
-             * child maps the same physical frame, and the frame's reference
-             * count is bumped so it survives until both sides drop it. A
-             * WRITABLE parent page is write-protected and marked PTE_COW in
-             * BOTH directories, so the first write on either side faults
-             * into cow_fault (which makes a private copy and re-grants
-             * write). A READ-ONLY page (ELF text, PROT_READ, or an
-             * already-COW page from an earlier fork) is shared with its
-             * exact flags, no copy; a write to genuine read-only text still
-             * segfaults because it has no PTE_COW.
-             */
-            if (pte & 0x2) {
-                uint32_t cow = 0x1u | 0x4u | PTE_COW; /* present + user + COW (RO) */
-                if (map_user_frame(child_dir, virt_addr, parent_phys, cow) != 0) {
-                    return -1;
-                }
-                parent_table->pages[page_idx] = (pte & ~0x2u) | PTE_COW;
-                paging_flush_tlb(virt_addr); /* the parent is the current dir */
-            } else if (map_user_frame(child_dir, virt_addr, parent_phys, pte & 0xFFFu) != 0) {
-                return -1;
-            }
-            frame_ref(parent_phys);
-        }
-    }
-
-    return 0;
-}
-
-/**
  * Drop every descriptor marked close-on-exec.
  *
  * Called by execve once it has committed to the new image so FD_FLAG_CLOEXEC
@@ -2017,7 +1934,7 @@ static struct mm *fork_mm(struct mm *mm, uint32_t flags)
         return mm;
     }
     copy = mm_new();
-    if (copy && mm && (copy_user_pages(mm, copy->dir) != 0 || vm_copy(&copy->vm, &mm->vm) != 0)) {
+    if (copy && mm && (paging_fork_copy(mm, copy->dir) != 0 || vm_copy(&copy->vm, &mm->vm) != 0)) {
         mm_put(copy);
         return NULL;
     }
@@ -5651,7 +5568,8 @@ static int32_t mmap_devmem_fill(uint32_t base, uint32_t len, uint32_t pgoff, uin
 
     for (i = 0; i < len / PAGE_SIZE; i++) {
         /* present, writable, user, write-through and cache-disabled */
-        if (map_user_frame(_curr_dir, base + i * PAGE_SIZE, (pgoff + i) * PAGE_SIZE, 0x1Fu) != 0) {
+        if (map_user_frame(_curr_dir, base + i * PAGE_SIZE, (pgoff + i) * PAGE_SIZE,
+                           PTE_P | PTE_W | PTE_U | PTE_NOCACHE) != 0) {
             return -ENOMEM;
         }
         frame_ref((pgoff + i) * PAGE_SIZE);

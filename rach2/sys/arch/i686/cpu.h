@@ -71,6 +71,72 @@ typedef struct cpu_regs cpu_regs_t;
 #define PAGE_SHIFT 12
 #define PAGE_SIZE  0x1000
 
+/*
+ * Two-level paging without PAE: a directory of 1024 entries, each naming a
+ * table of 1024 page entries (arch/i686/mmu.c). An entry's bits are the
+ * processor's (Intel SDM Vol. 3A, 4.3) and two the processor ignores, which
+ * the kernel keeps its own marks in.
+ */
+typedef uint32_t pte_t;
+#define MMU_TABLE_ENTRIES 1024u
+#define PTE_P       0x001u /* present */
+#define PTE_W       0x002u /* writable */
+#define PTE_U       0x004u /* reachable from user mode */
+#define PTE_NOCACHE 0x018u /* write-through, cache-disabled: PWT and PCD */
+#define PTE_DIRTY   0x040u /* written since the bit was cleared */
+/* Bit 9: a page shared copy-on-write. Present, user, read-only and PTE_COW
+ * means "shared, copy on the next write"; the fault handler tells a
+ * copy-on-write write from a write to a read-only region by this bit. */
+#define PTE_COW 0x200u
+/* Bit 10: a resident page of a PROT_NONE region. The page stays present,
+ * with its frame and contents, but supervisor-only and read-only, so any
+ * user access faults; fork and teardown own it as a user page by this bit,
+ * and mprotect makes it a user page again. */
+#define PTE_NONE    0x400u
+#define PTE_FLAGS   0xFFFu
+#define PTE_ADDR(e) ((e) & ~(pte_t)PTE_FLAGS)
+
+/* Top of the identity-mapped physical window (32 MiB): the kernel image,
+ * the boot data, the page tables the boot carves and the DMA buffers that a
+ * device is given a physical address of live below it, where the virtual
+ * address equals the physical one. Nothing above it is reached through its
+ * physical address; a frame there is mapped into the kernel's layout first,
+ * and the modules and the page tables made later are reached that way. */
+#define HARD_MEMORY_LIMIT 0x2000000
+
+/*
+ * The kernel's virtual layout above user space, in the gigabyte from
+ * `USER_ADDR_MAX`. Every page table for it exists at boot and is shared by
+ * every page directory, so a mapping made in it after the first fork is
+ * seen by every process. The regions:
+ *
+ *   0xC0000000  256 MiB  the heap (mm/kheap.c), grown a frame at a time
+ *   0xD0000000  512 MiB  the page-cache window (mm/pagecache.h)
+ *   0xF0000000  128 MiB  MMIO, a controller's BAR mapped wherever it is
+ *   0xF8000000    4 MiB  temporary mappings, one page each, for the paths
+ *                        that touch a user frame by its physical address
+ *   0xF8400000   64 MiB  the boot modules, mapped wherever the loader put
+ *                        them
+ *   0xFC400000   ...     unused
+ */
+#define KVA_BASE         0xC0000000u
+#define KVA_HEAP         0xC0000000u
+#define KVA_HEAP_SIZE    0x10000000u
+#define KVA_MMIO         0xF0000000u
+#define KVA_MMIO_SIZE    0x08000000u
+#define KVA_TEMP         0xF8000000u
+/* Policy: the temporary mappings held at once, one page each, the whole
+ * of the region's 4 MiB; a caller that finds none free is told so. */
+#define KVA_TEMP_SLOTS   1024u
+#define KVA_MODULES      0xF8400000u
+#define KVA_MODULES_SIZE 0x04000000u
+
+/* The page fault's vector, and what its error code says (Intel SDM Vol.
+ * 3A, 4.7): a write, and an access from user mode. */
+#define PAGE_FAULT_VECTOR 14
+#define FAULT_WRITE(p)    (((p)->error_code & 0x2u) != 0)
+#define FAULT_USER(p)     (((p)->error_code & 0x4u) != 0)
+
 /* A floating-point save area, the 512-byte `fxsave` image; `fnsave` uses
  * 108 bytes of it. */
 #define FPU_STATE_SIZE 512

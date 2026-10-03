@@ -30,10 +30,17 @@
  *   ELF_CLASS, ELF_MACHINE the programs the kernel loads
  *   AUDIT_ARCH             the architecture seccomp's filters see
  *   ARCH_NAME              what uname(2) reports as the machine
+ *   pte_t, PTE_*, MMU_TABLE_ENTRIES  a page table entry, its bits, and the
+ *                          entries of a leaf table (mm/paging.h)
+ *   HARD_MEMORY_LIMIT, KVA_*  the kernel's own layout
+ *   PAGE_FAULT_VECTOR, FAULT_WRITE(p), FAULT_USER(p)  the page fault
  *   IRQ_VECTOR(line)       the vector a platform interrupt line arrives on
  *   ISR_DEVICE_FIRST, ISR_DEVICE_LAST  the vectors a device's interrupts take
  */
-#if defined(__x86_64__)
+#if defined(RACH2_HOSTTEST)
+/* A host test checks the i686 kernel's logic natively, whatever the host. */
+#include "i686/cpu.h"
+#elif defined(__x86_64__)
 #include "x86_64/cpu.h"
 #elif defined(__i386__)
 #include "i686/cpu.h"
