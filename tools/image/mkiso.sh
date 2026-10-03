@@ -3,7 +3,7 @@
 #
 # mkiso.sh: build a bootable ISO for one RAM-disk image, for real hardware.
 #
-# Stages the kernel and the image as GRUB multiboot modules and assembles
+# Stages the kernel and the image as GRUB's kernel and module and assembles
 # build/images/<image>.iso with xorriso and the pinned GRUB El Torito, hybrid
 # and EFI images under vendor/grub/, so no GRUB toolchain and no Docker is
 # needed. The hybrid MBR keeps the ISO bootable when written to a USB
@@ -126,26 +126,26 @@ if [ "$IMAGE" = rach2-metal ]; then
     # standing on this board than the rest. A boot that stops there should cost
     # a different menu choice, not a reinstall.
     METAL_ENTRIES="menuentry \"Start Rach2, and probe the disk controller\" {
-    multiboot /boot/kernel $METAL_NET rach2.disk=ahci rach2.diskdiag
-    module /boot/rach2-metal.krffs
+    \$rach2_load /boot/kernel $METAL_NET rach2.disk=ahci rach2.diskdiag
+    \$rach2_module /boot/rach2-metal.krffs
     boot
 }
 
 menuentry \"Start Rach2, and hold the diagnostics on screen\" {
-    multiboot /boot/kernel $METAL_NET rach2.diag
-    module /boot/rach2-metal.krffs
+    \$rach2_load /boot/kernel $METAL_NET rach2.diag
+    \$rach2_module /boot/rach2-metal.krffs
     boot
 }
 
 menuentry \"Start Rach2, and ask the network for an address\" {
-    multiboot /boot/kernel rach2.ip=none rach2.netconsole
-    module /boot/rach2-metal.krffs
+    \$rach2_load /boot/kernel rach2.ip=none rach2.netconsole
+    \$rach2_module /boot/rach2-metal.krffs
     boot
 }
 
 menuentry \"Start Rach2 with no network\" {
-    multiboot /boot/kernel
-    module /boot/rach2-metal.krffs
+    \$rach2_load /boot/kernel
+    \$rach2_module /boot/rach2-metal.krffs
     boot
 }
 "
@@ -172,13 +172,25 @@ else
     FIRST_TITLE="Start Rach2 ($IMAGE)"
 fi
 
+# The BIOS reads this menu through the El Torito image, whose GRUB has only
+# the Multiboot loader, and UEFI firmware through the EFI image, which has
+# multiboot2 as well; under UEFI the kernel takes multiboot2, which gives it
+# the firmware's framebuffer and memory map.
 cat > "$ISODIR/boot/grub/grub.cfg" <<CFG
 set timeout=3
 set default=0
+if [ "\$grub_platform" = efi ]; then
+    set rach2_load=multiboot2
+    set rach2_module=module2
+else
+    set rach2_load=multiboot
+    set rach2_module=module
+fi
+export rach2_load rach2_module
 
 menuentry "$FIRST_TITLE" {
-    multiboot /boot/kernel $METAL_DEFAULT_ARGS
-    module /boot/$IMAGE.krffs
+    \$rach2_load /boot/kernel $METAL_DEFAULT_ARGS
+    \$rach2_module /boot/$IMAGE.krffs
     boot
 }
 

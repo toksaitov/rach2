@@ -33,8 +33,13 @@
 # GRUB's boot.img goes in the MBR and its core in the post-MBR gap of an MBR
 # disk, or in the BIOS boot partition of a GPT disk (partition 1 starts at
 # 1 MiB on both), so a real machine, or QEMU with no -kernel, boots
-# BIOS -> MBR -> GRUB -> the Multiboot kernel; UEFI firmware boots
-# BOOTX64.EFI -> GRUB -> the Multiboot kernel from the same disk.
+# BIOS -> MBR -> GRUB -> the kernel; UEFI firmware boots
+# BOOTX64.EFI -> GRUB -> the kernel from the same disk.
+#
+# GRUB starts the kernel by multiboot2 on a GPT disk, whose BIOS core and
+# EFI image both have that loader, so that the kernel gets the firmware's
+# framebuffer and, under UEFI, its memory map. The core of an MBR disk has
+# only the Multiboot loader, and its menu uses that.
 #
 # The boot partition is the install surface (dev-log/23-install/plan.md):
 # /boot/kernel is the candidate, the kernel padded with zeros to a fixed
@@ -282,16 +287,24 @@ load_env
 # still boots.
 #
 #   0 candidate   1 fallback   2 recovery
+#
+# The kernel draws its console on the VGA's text mode or on a framebuffer.
+# GRUB's multiboot2 gives it a framebuffer unless `gfxpayload` says text after
+# the command that loads it: a machine booted by BIOS keeps the text mode,
+# which fills its screen, and one booted by UEFI, which has no text mode,
+# takes the firmware's framebuffer.
 
 menuentry "Start Rach2" --id candidate {
     search --no-floppy --fs-uuid --set=root RACH2_BOOT_SERIAL
-    multiboot /boot/kernel rach2.root=RACH2_CANDIDATE_ROOT rach2.boot=RACH2_BOOT_PART rach2.slot=candidate RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
+    RACH2_MULTIBOOT /boot/kernel rach2.root=RACH2_CANDIDATE_ROOT rach2.boot=RACH2_BOOT_PART rach2.slot=candidate RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
+    if [ "$grub_platform" = pc ]; then set gfxpayload=text; fi
     boot
 }
 
 menuentry "Start Rach2 with the previous kernel" --id fallback {
     search --no-floppy --fs-uuid --set=root RACH2_BOOT_SERIAL
-    multiboot /boot/fallback rach2.root=RACH2_FALLBACK_ROOT rach2.boot=RACH2_BOOT_PART rach2.slot=fallback RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
+    RACH2_MULTIBOOT /boot/fallback rach2.root=RACH2_FALLBACK_ROOT rach2.boot=RACH2_BOOT_PART rach2.slot=fallback RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
+    if [ "$grub_platform" = pc ]; then set gfxpayload=text; fi
     boot
 }
 
@@ -310,8 +323,9 @@ menuentry "Start Rach2 with the previous kernel" --id fallback {
 # running from neither kernel slot and may therefore install into either.
 menuentry "RACH2_RECOVERY_TITLE" --id recovery {
     search --no-floppy --fs-uuid --set=root RACH2_RECOVERY_SERIAL
-    multiboot /boot/recovery rach2.root=ram rach2.boot=RACH2_BOOT_PART rach2.slot=recovery RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
-    module /boot/recovery.krffs
+    RACH2_MULTIBOOT /boot/recovery rach2.root=ram rach2.boot=RACH2_BOOT_PART rach2.slot=recovery RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
+    RACH2_MODULE /boot/recovery.krffs
+    if [ "$grub_platform" = pc ]; then set gfxpayload=text; fi
     boot
 }
 
@@ -388,13 +402,12 @@ fi
 set timeout=3
 CFG
 
-# The script substitutes the per-machine tokens into the entries through
-# two placeholders, so the heredoc above stays quoted and GRUB's own ${...}
-# variables never reach the shell. The network tokens are a set of their
-# own, since the kernel refuses an address given twice and would come up
-# with no address
-# at all. The values are escaped before sed sees
-# them, because `&`, `\`, and the delimiter are replacement syntax and a
+# The script substitutes the per-machine tokens and the loader's commands
+# into the entries through placeholders, so the heredoc above stays quoted
+# and GRUB's own ${...} variables never reach the shell. The network tokens
+# are a set of their own, since the kernel refuses an address given twice and
+# would come up with no address at all. The values are escaped before sed
+# sees them, because `&`, `\`, and the delimiter are replacement syntax and a
 # token containing one would silently change; a newline would end the sed
 # expression, so it is refused outright.
 for v in "$EXTRA_APPEND" "$DHCP_APPEND"; do
@@ -406,11 +419,20 @@ done
 sedq() { printf '%s' "$1" | sed 's/[\\&|]/\\&/g'; }
 # A FAT serial as GRUB's `search --fs-uuid` names it: XXXX-XXXX, upper case.
 fat_uuid() { printf '%s' "$1" | tr 'a-f' 'A-F' | sed 's/^\(....\)\(....\)$/\1-\2/'; }
+if [ "$TABLE" = gpt ]; then
+    MULTIBOOT=multiboot2
+    MODULE=module2
+else
+    MULTIBOOT=multiboot
+    MODULE=module
+fi
 RECOVERY_TITLE="Start the Rach2 recovery system (not yet built)"
 if [ -n "$RECOVERY_KERNEL" ] && [ -n "$RECOVERY_IMAGE" ]; then
     RECOVERY_TITLE="Start the Rach2 recovery system"
 fi
 sed -e "s|RACH2_DHCP_TOKENS|$(sedq "$DHCP_APPEND")|" \
+    -e "s|RACH2_MULTIBOOT|$MULTIBOOT|" \
+    -e "s|RACH2_MODULE|$MODULE|" \
     -e "s|RACH2_CANDIDATE_ROOT|$CANDIDATE_ROOT|" \
     -e "s|RACH2_FALLBACK_ROOT|$FALLBACK_ROOT|" \
     -e "s|RACH2_BOOT_PART|$DISK_IDENTITY,1|" \
@@ -432,14 +454,17 @@ set timeout=3
 set default=0
 
 menuentry "Start the Rach2 recovery system (the boot partition does not read)" --id recovery {
-    multiboot /boot/recovery rach2.root=ram rach2.boot=RACH2_BOOT_PART rach2.slot=recovery RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
-    module /boot/recovery.krffs
+    RACH2_MULTIBOOT /boot/recovery rach2.root=ram rach2.boot=RACH2_BOOT_PART rach2.slot=recovery RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
+    RACH2_MODULE /boot/recovery.krffs
+    if [ "$grub_platform" = pc ]; then set gfxpayload=text; fi
     boot
 }
 
 RCFG
 
 sed -e "s|RACH2_DHCP_TOKENS|$(sedq "$DHCP_APPEND")|" \
+    -e "s|RACH2_MULTIBOOT|$MULTIBOOT|" \
+    -e "s|RACH2_MODULE|$MODULE|" \
     -e "s|RACH2_BOOT_PART|$DISK_IDENTITY,1|" \
     -e "s|RACH2_RECOVERY_SERIAL|$(fat_uuid $RECOVERY_SERIAL)|" \
     -e "s|RACH2_APPEND_TOKENS|$(sedq "$EXTRA_APPEND")|" \
@@ -463,7 +488,7 @@ fi
 # does, and refuses it by coming up with no address at all, so a build that
 # composed the two token sets wrongly would produce a disk whose menu offers a
 # machine nobody can reach. It stops here instead.
-if ! awk '/^[[:space:]]*multiboot /{ n = gsub(/rach2\.ip=/, "&"); if (n > 1) exit 1 }' \
+if ! awk '/^[[:space:]]*multiboot2? /{ n = gsub(/rach2\.ip=/, "&"); if (n > 1) exit 1 }' \
         "$GRUB_CFG" "$RECOVERY_CFG"; then
     echo "mkdisk_grub: a menu entry names rach2.ip more than once" >&2
     exit 1
