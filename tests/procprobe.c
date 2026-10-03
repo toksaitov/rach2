@@ -1308,6 +1308,20 @@ static void print_rootmount(const char *b, int n)
     syscall3(SYS_WRITE, STDOUT_FILENO, (int)(size_t)"\n", 1);
 }
 
+/** /proc/mounts, read into `buf` of `cap` bytes: its newline, the six
+ * permanent mounts, whole rows, and the root's line, printed. */
+static void mounts_rows(char *buf, int cap)
+{
+    int n = slurp("/proc/mounts", buf, cap);
+
+    check(n > 0 && buf[n - 1] == '\n', "/proc/mounts ends with its newline");
+    check(lines_in(buf, n) == 6 &&
+              contains(buf, n, "mqueue /dev/mqueue mqueue rw,nosuid,nodev,noexec"),
+          "/proc/mounts names the root, /dev, /proc, /dev/shm, /sys and /dev/mqueue");
+    check(ends_with(buf, n, " 0 0\n"), "/proc/mounts's last line is a whole fstab row");
+    print_rootmount(buf, n);
+}
+
 void probe_main(unsigned int *sp)
 {
     int argc = (int)sp[0];
@@ -1483,11 +1497,7 @@ void probe_main(unsigned int *sp)
     check(n == 2 && buf[0] == '0' && slurp("/sys/devices/system/cpu/offline", buf, 8) == 1,
           "/sys/devices/system/cpu has processor 0 online and none offline");
 
-    n = slurp("/proc/mounts", buf, (int)sizeof(buf));
-    check(n > 0 && buf[n - 1] == '\n', "/proc/mounts ends with its newline");
-    check(lines_in(buf, n) == 5, "/proc/mounts names the root, /dev, /proc, /dev/shm and /sys");
-    check(ends_with(buf, n, " 0 0\n"), "/proc/mounts's last line is a whole fstab row");
-    print_rootmount(buf, n);
+    mounts_rows(buf, (int)sizeof(buf));
 
     /* btime names one moment and must not move between two reads: a value
      * taken afresh from the clock each time would drift by whatever the read

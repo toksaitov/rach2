@@ -27,7 +27,7 @@
  * the file grows enough for KRFFS to move it, and so does a descriptor
  * opened before the growth; the bind's root is busy to rmdir until the bind
  * is unmounted. A recursive bind of /dev has its devices and /dev/shm, which
- * are unmounted in turn.
+ * are unmounted in turn with /dev/mqueue.
  *
  * Prints "TMPFSMUSL OK" on success and "TMPFSMUSL FAIL (detail)" otherwise.
  */
@@ -330,7 +330,7 @@ static int bound_mount(void)
 }
 
 /** A recursive bind of /dev has its devices and /dev/shm, and is unmounted
- * from the bottom. */
+ * from the bottom, /dev/shm and /dev/mqueue first. */
 static int rbound(void)
 {
     struct stat a, b;
@@ -341,7 +341,7 @@ static int rbound(void)
         return fail("a recursive bind of /dev has its devices and /dev/shm");
     }
     if (umount2(BIND_DEV, 0) != -1 || errno != EBUSY || umount2(BIND_DEV "/shm", 0) != 0 ||
-        umount2(BIND_DEV, 0) != 0 || rmdir(BIND_DEV) != 0) {
+        umount2(BIND_DEV "/mqueue", 0) != 0 || umount2(BIND_DEV, 0) != 0 || rmdir(BIND_DEV) != 0) {
         return fail("a recursive bind is unmounted from the bottom");
     }
     return 0;
