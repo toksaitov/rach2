@@ -143,7 +143,8 @@ and
 .Dv IPC_EXCL
 for a key in use.
 .It Bq Er EINVAL
-A size outside 1 to 4278190079 or past an existing segment's, an id with
+A size outside 1 to 4278190079 on i386, or to 18446744073692774399 on
+x86-64, or past an existing segment's, an id with
 no segment, an unaligned address without
 .Dv SHM_RND ,
 an address that covers a mapping without

@@ -19,7 +19,8 @@ struct tgroup;
 /* One object as /proc/sysvipc reports it. `a` to `c` are the counts and
  * pids of its kind: a segment's size, creator and last operator, a set's
  * semaphores, a queue's bytes, messages, last sender and last receiver;
- * `d` a segment's attachments and `e` a queue's last receiver. The times
+ * `d` a segment's attachments and `e` a queue's last receiver; a size past
+ * 32 bits, which a segment on x86-64 may have, is 0xFFFFFFFF. The times
  * are seconds since the epoch, 0 for never. */
 struct sysv_row {
     int32_t key;

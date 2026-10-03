@@ -5807,7 +5807,7 @@ long mmap_shm(struct open_file *ofd, uintptr_t addr, uintptr_t len, uint32_t acc
     return mmap_install(addr, PAGE_UP(len), places[place], &src);
 }
 
-int32_t munmap_shm(uintptr_t addr, const struct shmem *sh, uint32_t size)
+int32_t munmap_shm(uintptr_t addr, const struct shmem *sh, size_t size)
 {
     vm_space_t *vm = &current_proc->mm->vm;
     vma_t *r = vm_find(vm, addr);

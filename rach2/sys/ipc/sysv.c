@@ -48,8 +48,11 @@
 #define SYSV_SLOTS 64
 #define SYSV_SEQ   32768
 
-/* The limits, Linux's defaults but for the number of objects. */
-#define SHMMAX 0xFEFFFFFFu
+/* The limits, Linux's defaults but for the number of objects. SHMMAX is
+ * Linux's ULONG_MAX less 16 MiB on each width: 0xFEFFFFFF on i686, and on
+ * x86-64 more than a tmpfs file holds, so there the file's own limit,
+ * SHMEM_MAX_SIZE, refuses a larger segment with ENOMEM. */
+#define SHMMAX (~0UL - (1UL << 24))
 #define SHMMIN 1u
 #define SEMMSL 32000u
 #define SEMOPM 500u
@@ -310,7 +313,7 @@ static struct sysv_perm *sysv_target(int kind, int32_t id, int by_place, int any
 
 struct shm_seg {
     struct sysv_perm perm;
-    uint32_t size;
+    size_t size;
     struct open_file *ofd;
     int64_t atime, dtime, ctime;
     int32_t cpid, lpid;
@@ -360,7 +363,7 @@ static void shm_reap(void)
 }
 
 /** A new segment of `size` bytes in a tmpfs file; NULL with no memory. */
-static struct shm_seg *shm_new(uint32_t size)
+static struct shm_seg *shm_new(size_t size)
 {
     struct shm_seg *s = kzalloc(sizeof(*s));
     struct vfs_mount *mnt = vfs_memfd_mount();
@@ -400,7 +403,7 @@ static struct shm_seg *shm_new(uint32_t size)
  * or past an existing segment's; ENOSPC with no place free; ENOMEM with no
  * memory; and the refusals of `sysv_lookup`.
  */
-static int32_t shm_get(int32_t key, uint32_t size, uint32_t flag)
+static int32_t shm_get(int32_t key, size_t size, uint32_t flag)
 {
     struct shm_seg *s;
     int32_t rc;
@@ -1680,7 +1683,7 @@ long sys_semctl(struct isr_params *params)
 
 long sys_shmget(struct isr_params *params)
 {
-    return shm_get((int32_t)SC_ARG(params, 0), USER_LEN32(SC_ARG(params, 1)),
+    return shm_get((int32_t)SC_ARG(params, 0), (size_t)SC_ARG(params, 1),
                    (uint32_t)SC_ARG(params, 2));
 }
 
@@ -1773,7 +1776,7 @@ int sysv_row_at(int kind, int i, struct sysv_row *row)
     if (kind == SYSV_SHM) {
         const struct shm_seg *s = (const struct shm_seg *)p;
 
-        row->a = s->size;
+        row->a = (uint32_t)s->size == s->size ? (uint32_t)s->size : 0xFFFFFFFFu;
         row->b = (uint32_t)sysv_pid_seen(s->cpid);
         row->c = (uint32_t)sysv_pid_seen(s->lpid);
         row->d = shm_attaches(shm_mem(s));

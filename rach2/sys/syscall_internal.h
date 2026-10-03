@@ -566,7 +566,7 @@ long mmap_shm(struct open_file *ofd, uintptr_t addr, uintptr_t len, uint32_t acc
 /** Unmap the System V attachment at `addr`: the regions from it on that map
  * the pages `sh` from the segment's start, within `size` bytes. -EINVAL
  * when no such region begins at `addr`. */
-int32_t munmap_shm(uintptr_t addr, const struct shmem *sh, uint32_t size);
+int32_t munmap_shm(uintptr_t addr, const struct shmem *sh, size_t size);
 
 /** How many attachments the pages `sh` have, each address space's regions
  * that map them from the start counted once however many threads share it. */
