@@ -593,12 +593,14 @@ void *pc_test_page(uint32_t disk_off)
  * Walks every bus the driver discovery walks (`pci_find_device_skip` scans
  * buses 0 to 255), not bus 0 alone, so a BAR behind a bridge counts too. A
  * BAR's physical address and the window's virtual ones do not meet:
- * `map_mmio` maps a BAR into the kernel's MMIO region at 0xF0000000,
- * whatever its physical address.
+ * `map_mmio` maps a BAR into the kernel's MMIO region, whatever its physical
+ * address. The comparison is made in 64 bits, a 64-bit BAR's high dword
+ * included, so it means the same on either architecture; on x86-64 the
+ * window lies above any physical address and is always the cap.
  */
 static uint32_t pc_probe_window_size(void)
 {
-    uint32_t limit = PCWIN_BASE + PC_WINDOW_CAP;
+    uint64_t limit = (uint64_t)PCWIN_BASE + PC_WINDOW_CAP;
     uint16_t bus;
 
     for (bus = 0; bus < 256; ++bus) {
@@ -615,21 +617,19 @@ static uint32_t pc_probe_window_size(void)
                 }
                 for (bari = 0; bari < 6; ++bari) {
                     uint32_t bar = pci_read_config32((uint8_t)bus, dev, fn, 0x10 + bari * 4u);
-                    uint32_t base;
-                    int above_4g = 0;
+                    uint64_t base;
                     if (!pci_bar_is_memory(bar)) {
                         continue;
                     }
                     base = pci_bar_address(bar);
                     if (pci_bar_is_64bit(bar)) {
-                        /* The high dword is the next BAR slot; a non-zero high
-                           puts the BAR above 4 GiB, past the 32-bit window. */
-                        uint32_t high =
-                            pci_read_config32((uint8_t)bus, dev, fn, 0x10 + (bari + 1u) * 4u);
-                        above_4g = (high != 0);
+                        /* The high dword is the next BAR slot. */
+                        base |= (uint64_t)pci_read_config32((uint8_t)bus, dev, fn,
+                                                            0x10 + (bari + 1u) * 4u)
+                                << 32;
                         ++bari;
                     }
-                    if (!above_4g && base >= PCWIN_BASE && base < limit) {
+                    if (base >= PCWIN_BASE && base < limit) {
                         limit = base;
                     }
                 }
@@ -640,7 +640,7 @@ static uint32_t pc_probe_window_size(void)
     /* Floor to a page: a clamping BAR base need only be 16-byte aligned, but
        the window span must be page-aligned so a page-rounded file-system size
        never exceeds it. */
-    limit &= ~(uint32_t)(PC_PAGE_SIZE - 1u);
+    limit &= ~(uint64_t)(PC_PAGE_SIZE - 1u);
 
     return (uint32_t)(limit - PCWIN_BASE);
 }

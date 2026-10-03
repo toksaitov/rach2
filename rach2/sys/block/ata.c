@@ -324,19 +324,13 @@ static int ata_status_done(struct ata_channel *ch, int want, int *rc)
     return 1;
 }
 
-/* Whether interrupts are on: the flag register's, or a host test's, whose
-   `kirq_save` is a stand-in that reads no register. */
+/* Whether interrupts are on: the processor's answer, or a host test's,
+   whose `kirq_save` is a stand-in that reads no register. */
 #ifdef ATA_HOSTTEST
 int ata_hosttest_interrupts_on(void);
 #define ata_interrupts_on ata_hosttest_interrupts_on
 #else
-static int ata_interrupts_on(void)
-{
-    uint32_t eflags;
-
-    __asm__ __volatile__("pushfl; popl %0" : "=r"(eflags));
-    return (eflags & 0x200) != 0;
-}
+#define ata_interrupts_on kirq_enabled
 #endif
 
 /**
