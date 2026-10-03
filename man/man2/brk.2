@@ -239,7 +239,7 @@ uses
 .Dv PROT_WRITE
 and
 .Dv PROT_EXEC .
-Write permission also grants read permission on this i386 kernel.
+Write permission also grants read permission, since an x86 page table has no write-only page.
 .Dv PROT_NONE
 (zero) denies access.
 Execute permission also grants read permission and is not checked
@@ -381,6 +381,15 @@ Splitting an area for
 can require an additional entry, and
 .Fn mprotect
 up to two.
+.Pp
+On x86-64 the call is
+.Nm mmap
+(9), with the six arguments in RDI, RSI, RDX, R10, R8 and R9 and the offset
+in bytes, which must be a multiple of 4096 or the call fails with
+.Er EINVAL ;
+there is no
+.Nm mmap2 .
+The bound on the offset's last page is the same.
 .Sh RETURN VALUES
 The raw
 .Fn brk

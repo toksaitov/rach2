@@ -143,6 +143,23 @@ requires
 .Dv _GNU_SOURCE
 or
 .Dv _BSD_SOURCE .
+.Pp
+On x86-64 the calls without a suffix take 32-bit IDs, and there are no
+others:
+.Nm setuid
+(105),
+.Nm setgid
+(106),
+.Nm setreuid
+(113),
+.Nm setregid
+(114),
+.Nm setresuid
+(117),
+.Nm setresgid
+(119) and
+.Nm setgroups
+(116).
 .Sh RETURN VALUES
 These functions return zero on success.
 On failure they return -1 and set

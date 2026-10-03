@@ -94,6 +94,20 @@ The DHCP client uses this call and checks the UDP checksum itself
 when no
 .Dv PACKET_AUXDATA
 is returned.
+.Pp
+x86-64 has no
+.Nm socketcall :
+each operation is a call of its own, numbered in
+.Xr syscalls 2 ,
+with its arguments in the x86-64 registers in the order above;
+.Nm accept
+(43) is
+.Nm accept4
+without flags, and the two operations of
+.Xr ping 2
+are
+.Nm rach2_ping
+(400).
 .Sh RETURN VALUES
 The kernel returns the selected operation's result, or a negative error
 number.

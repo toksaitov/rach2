@@ -162,6 +162,17 @@ With
 and
 .Nm fstatfs64
 are macros for these functions and have no separate prototypes.
+.Pp
+On x86-64 the calls are
+.Nm statfs
+(137) and
+.Nm fstatfs
+(138), with the path or the descriptor in RDI and the result pointer in
+RSI, and no size.
+Their structure is 120 bytes: every field a 64-bit long, in the order
+above, but
+.Va f_fsid ,
+two 32-bit words, and four reserved longs at its end.
 .Sh RETURN VALUES
 These functions return 0 on success.
 On failure they return -1 and set

@@ -152,6 +152,14 @@ first try
 (413), which this kernel answers with
 .Er ENOSYS ,
 then fall back with clamped seconds.
+.Pp
+On x86-64
+.Nm select
+(23) is the call i386 has as
+.Nm _newselect ,
+and
+.Nm pselect6
+is 270; their timeval and timespec have 64-bit fields.
 .Sh RETURN VALUES
 On success, these functions return the total number of set bits in the
 returned sets, or zero on timeout.

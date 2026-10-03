@@ -42,6 +42,14 @@ which takes a 32-bit length, and 272 for
 .Fn fadvise64_64 ,
 which takes a 64-bit length and is the one musl calls for
 .Fn posix_fadvise .
+.Pp
+On x86-64
+.Nm readahead
+is call 187 and
+.Nm fadvise64
+221, with the 64-bit offset and length in RSI and RDX and the advice in
+R10; there is no
+.Nm fadvise64_64 .
 .Sh RETURN VALUES
 0, or for
 .Fn readahead

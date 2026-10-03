@@ -136,6 +136,14 @@ Musl's
 sets the flags with
 .Xr fcntl 2
 itself when the kernel refuses them.
+.Pp
+On x86-64
+.Nm accept
+is call 43, which the kernel takes as
+.Nm accept4
+without flags, and
+.Nm accept4
+288.
 .Sh RETURN VALUES
 On success,
 .Fn accept

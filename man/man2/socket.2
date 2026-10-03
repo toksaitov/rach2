@@ -121,6 +121,13 @@ as three 32-bit words, or the direct call, number 359.
 is operation 8, with
 .Fa sv
 the fourth word, or number 360.
+.Pp
+On x86-64
+.Nm socket
+is call 41 and
+.Nm socketpair
+53, with no
+.Nm socketcall .
 .Sh RETURN VALUES
 .Fn socket
 returns a nonnegative descriptor on success.

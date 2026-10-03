@@ -110,10 +110,10 @@ struct k_siginfo {
 };
 
 /*
- * The kernel-side sigaction as musl's rt_sigaction passes it on i386:
- * handler, flags, the restorer trampoline (musl's __restore_rt then
- * rt_sigreturn), and an 8-byte signal mask (signals 1..64). Byte-identical to
- * musl's `struct k_sigaction`.
+ * The kernel-side sigaction as musl's rt_sigaction passes it: handler,
+ * flags, the restorer trampoline (musl's __restore_rt then rt_sigreturn),
+ * and an 8-byte signal mask (signals 1..64), the first three as wide as the
+ * architecture's long. Byte-identical to musl's `struct k_sigaction`.
  */
 struct k_sigaction {
     uintptr_t handler;

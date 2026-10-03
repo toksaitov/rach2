@@ -142,6 +142,13 @@ For a larger timeout, musl first tries
 (414), which this kernel answers with
 .Er ENOSYS ,
 then falls back to 309 with clamped seconds.
+.Pp
+On x86-64
+.Nm poll
+is call 7 and
+.Nm ppoll
+271, whose timespec has 64-bit fields; there is no
+.Nm ppoll_time64 .
 .Sh RETURN VALUES
 On success, these functions return the number of entries with nonzero
 .Va revents ,

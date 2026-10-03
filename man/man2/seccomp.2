@@ -15,7 +15,10 @@ gives the calling thread a filter of its system calls.
 A filter is a classic BPF program that reads
 .Vt struct seccomp_data ,
 the call's number, the architecture, which is
-.Dv AUDIT_ARCH_I386 ,
+.Dv AUDIT_ARCH_I386
+on i686 and
+.Dv AUDIT_ARCH_X86_64
+on x86-64,
 the address of the instruction after the call, and its six arguments
 widened to 64 bits, and returns an action in its high 16 bits and data in
 the low 16.
@@ -133,6 +136,12 @@ fails the call with
 as on Linux without a listener.
 .Ss System call interface
 The i386 system call number is 354.
+.Pp
+On x86-64 a filter sees
+.Dv AUDIT_ARCH_X86_64 ,
+0xc000003e, and the x86-64 numbers, and
+.Nm seccomp
+is call 317.
 .Sh RETURN VALUES
 0 on success; for
 .Dv SECCOMP_FILTER_FLAG_TSYNC ,

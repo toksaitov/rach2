@@ -76,6 +76,9 @@ whole, and
 .Fn timerfd_gettime
 reports it; a longer one is taken as that many seconds, as Linux takes a
 time past its own limit of about 292 years.
+.Pp
+On x86-64 the timerfd calls take itimerspecs of 64-bit fields, and there
+are no time64 forms.
 .Sh RETURN VALUES
 .Fn timerfd_create
 returns the descriptor, and the others 0; each returns -1 with

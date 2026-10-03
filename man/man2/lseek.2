@@ -152,6 +152,12 @@ The older system call 19 takes the descriptor in EBX, a signed 32-bit
 displacement in ECX, and the origin in EDX.
 It returns the new 32-bit position directly.
 Both kernel calls return a negative error number on failure.
+.Pp
+On x86-64
+.Nm lseek
+(8) takes the descriptor, the 64-bit displacement and the origin in RDI,
+RSI and RDX and returns the new position, and there is no
+.Nm llseek .
 .Sh RETURN VALUES
 .Fn lseek
 returns the new offset from the beginning on success.

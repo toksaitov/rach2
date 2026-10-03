@@ -6,14 +6,27 @@
 .Nd system call interface and number index
 .Sh SYNOPSIS
 .Dl int 0x80
+.Dl syscall
 .Sh DESCRIPTION
-Rach2 uses the Linux i386 system call numbers and register interface.
-A program executes
+Rach2 uses Linux's system call numbers and register interface for the
+machine's architecture.
+On i686 a program executes
 .Ql int 0x80
-with the system call number in EAX.
-Arguments, in order, are in EBX, ECX, EDX, ESI, EDI, and EBP.
-The result is returned in EAX; a failure is a negative error number.
-Musl uses its Linux i386 system call layer unchanged.
+with the i386 system call number in EAX, and the arguments, in order, in
+EBX, ECX, EDX, ESI, EDI and EBP.
+On x86-64 it executes
+.Ql syscall
+with the x86-64 number in RAX, and the arguments in RDI, RSI, RDX, R10, R8
+and R9; the instruction keeps RCX and R11 for the return address and the
+flags.
+The result is returned in EAX or RAX; a failure is a negative error number.
+Musl uses its Linux system call layer of either architecture unchanged.
+.Pp
+A page's numbers and registers are the i386 interface's.
+On x86-64 a call takes its number from the second table below and its
+arguments, in the order the page gives them, in the x86-64 registers; a
+page says where x86-64 has the call under another name or with another
+structure.
 .Pp
 This section describes the calls implemented by Rach2.
 A number not registered in the kernel's dispatch table returns
@@ -29,7 +42,9 @@ given up its capabilities with
 Linux asks for a capability in each such place, and this kernel keeps
 every capability or none.
 .Ss System call numbers
-The kernel registers the following 303 calls.
+On i686 the kernel registers the following 303 calls, the operations of
+.Xr socketcall 2
+among them.
 .Bl -column "Number" "System call" -compact
 .It Sy Number Ta Sy System call
 .It 1 Ta Xr exit 2
@@ -341,6 +356,271 @@ The following operation numbers select calls through system call 102,
 .It 436 Ta Xr close_range 2
 .It 441 Ta Xr epoll_pwait2 2
 .It 0x1000 Ta Xr ping 2
+.El
+.Pp
+On x86-64 it registers the following 260 calls.
+.Bl -column "Number" "System call" -compact
+.It Sy Number Ta Sy System call
+.It 0 Ta Xr read 2
+.It 1 Ta Xr write 2
+.It 2 Ta Xr open 2
+.It 3 Ta Xr close 2
+.It 4 Ta Xr stat 2
+.It 5 Ta Xr fstat 2
+.It 6 Ta Xr lstat 2
+.It 7 Ta Xr poll 2
+.It 8 Ta Xr lseek 2
+.It 9 Ta Xr mmap 2
+.It 10 Ta Xr mprotect 2
+.It 11 Ta Xr munmap 2
+.It 12 Ta Xr brk 2
+.It 13 Ta Xr rt_sigaction 2
+.It 14 Ta Xr rt_sigprocmask 2
+.It 15 Ta Xr rt_sigreturn 2
+.It 16 Ta Xr ioctl 2
+.It 17 Ta Xr pread64 2
+.It 18 Ta Xr pwrite64 2
+.It 19 Ta Xr readv 2
+.It 20 Ta Xr writev 2
+.It 21 Ta Xr access 2
+.It 22 Ta Xr pipe 2
+.It 23 Ta Xr select 2
+.It 24 Ta Xr sched_yield 2
+.It 25 Ta Xr mremap 2
+.It 26 Ta Xr msync 2
+.It 27 Ta Xr mincore 2
+.It 28 Ta Xr madvise 2
+.It 29 Ta Xr shmget 2
+.It 30 Ta Xr shmat 2
+.It 31 Ta Xr shmctl 2
+.It 32 Ta Xr dup 2
+.It 33 Ta Xr dup2 2
+.It 34 Ta Xr pause 2
+.It 35 Ta Xr nanosleep 2
+.It 36 Ta Xr getitimer 2
+.It 37 Ta Xr alarm 2
+.It 38 Ta Xr setitimer 2
+.It 39 Ta Xr getpid 2
+.It 40 Ta Xr sendfile 2
+.It 41 Ta Xr socket 2
+.It 42 Ta Xr connect 2
+.It 43 Ta Xr accept 2
+.It 44 Ta Xr sendto 2
+.It 45 Ta Xr recvfrom 2
+.It 46 Ta Xr sendmsg 2
+.It 47 Ta Xr recvmsg 2
+.It 48 Ta Xr shutdown 2
+.It 49 Ta Xr bind 2
+.It 50 Ta Xr listen 2
+.It 51 Ta Xr getsockname 2
+.It 52 Ta Xr getpeername 2
+.It 53 Ta Xr socketpair 2
+.It 54 Ta Xr setsockopt 2
+.It 55 Ta Xr getsockopt 2
+.It 56 Ta Xr clone 2
+.It 57 Ta Xr fork 2
+.It 58 Ta Xr vfork 2
+.It 59 Ta Xr execve 2
+.It 60 Ta Xr exit 2
+.It 61 Ta Xr wait4 2
+.It 62 Ta Xr kill 2
+.It 63 Ta Xr uname 2
+.It 64 Ta Xr semget 2
+.It 65 Ta Xr semop 2
+.It 66 Ta Xr semctl 2
+.It 67 Ta Xr shmdt 2
+.It 68 Ta Xr msgget 2
+.It 69 Ta Xr msgsnd 2
+.It 70 Ta Xr msgrcv 2
+.It 71 Ta Xr msgctl 2
+.It 72 Ta Xr fcntl 2
+.It 73 Ta Xr flock 2
+.It 74 Ta Xr fsync 2
+.It 75 Ta Xr fdatasync 2
+.It 76 Ta Xr truncate 2
+.It 77 Ta Xr ftruncate 2
+.It 79 Ta Xr getcwd 2
+.It 80 Ta Xr chdir 2
+.It 81 Ta Xr fchdir 2
+.It 82 Ta Xr rename 2
+.It 83 Ta Xr mkdir 2
+.It 84 Ta Xr rmdir 2
+.It 85 Ta Xr creat 2
+.It 86 Ta Xr link 2
+.It 87 Ta Xr unlink 2
+.It 88 Ta Xr symlink 2
+.It 89 Ta Xr readlink 2
+.It 90 Ta Xr chmod 2
+.It 91 Ta Xr fchmod 2
+.It 92 Ta Xr chown 2
+.It 93 Ta Xr fchown 2
+.It 94 Ta Xr lchown 2
+.It 95 Ta Xr umask 2
+.It 96 Ta Xr gettimeofday 2
+.It 97 Ta Xr getrlimit 2
+.It 98 Ta Xr getrusage 2
+.It 99 Ta Xr sysinfo 2
+.It 100 Ta Xr times 2
+.It 101 Ta Xr ptrace 2
+.It 102 Ta Xr getuid 2
+.It 103 Ta Xr syslog 2
+.It 104 Ta Xr getgid 2
+.It 105 Ta Xr setuid 2
+.It 106 Ta Xr setgid 2
+.It 107 Ta Xr geteuid 2
+.It 108 Ta Xr getegid 2
+.It 109 Ta Xr setpgid 2
+.It 110 Ta Xr getppid 2
+.It 111 Ta Xr getpgrp 2
+.It 112 Ta Xr setsid 2
+.It 113 Ta Xr setreuid 2
+.It 114 Ta Xr setregid 2
+.It 115 Ta Xr getgroups 2
+.It 116 Ta Xr setgroups 2
+.It 117 Ta Xr setresuid 2
+.It 118 Ta Xr getresuid 2
+.It 119 Ta Xr setresgid 2
+.It 120 Ta Xr getresgid 2
+.It 121 Ta Xr getpgid 2
+.It 124 Ta Xr getsid 2
+.It 125 Ta Xr capget 2
+.It 126 Ta Xr capset 2
+.It 127 Ta Xr rt_sigpending 2
+.It 128 Ta Xr rt_sigtimedwait 2
+.It 129 Ta Xr rt_sigqueueinfo 2
+.It 130 Ta Xr rt_sigsuspend 2
+.It 131 Ta Xr sigaltstack 2
+.It 133 Ta Xr mknod 2
+.It 135 Ta Xr personality 2
+.It 137 Ta Xr statfs 2
+.It 138 Ta Xr fstatfs 2
+.It 140 Ta Xr getpriority 2
+.It 141 Ta Xr setpriority 2
+.It 142 Ta Xr sched_setparam 2
+.It 143 Ta Xr sched_getparam 2
+.It 144 Ta Xr sched_setscheduler 2
+.It 145 Ta Xr sched_getscheduler 2
+.It 146 Ta Xr sched_get_priority_max 2
+.It 147 Ta Xr sched_get_priority_min 2
+.It 148 Ta Xr sched_rr_get_interval 2
+.It 149 Ta Xr mlock 2
+.It 150 Ta Xr munlock 2
+.It 151 Ta Xr mlockall 2
+.It 152 Ta Xr munlockall 2
+.It 157 Ta Xr prctl 2
+.It 158 Ta Xr arch_prctl 2
+.It 159 Ta Xr adjtimex 2
+.It 160 Ta Xr setrlimit 2
+.It 161 Ta Xr chroot 2
+.It 162 Ta Xr sync 2
+.It 164 Ta Xr settimeofday 2
+.It 165 Ta Xr mount 2
+.It 166 Ta Xr umount2 2
+.It 169 Ta Xr reboot 2
+.It 170 Ta Xr sethostname 2
+.It 171 Ta Xr setdomainname 2
+.It 186 Ta Xr gettid 2
+.It 187 Ta Xr readahead 2
+.It 188 Ta Xr setxattr 2
+.It 189 Ta Xr lsetxattr 2
+.It 190 Ta Xr fsetxattr 2
+.It 191 Ta Xr getxattr 2
+.It 192 Ta Xr lgetxattr 2
+.It 193 Ta Xr fgetxattr 2
+.It 194 Ta Xr listxattr 2
+.It 195 Ta Xr llistxattr 2
+.It 196 Ta Xr flistxattr 2
+.It 197 Ta Xr removexattr 2
+.It 198 Ta Xr lremovexattr 2
+.It 199 Ta Xr fremovexattr 2
+.It 200 Ta Xr tkill 2
+.It 202 Ta Xr futex 2
+.It 203 Ta Xr sched_setaffinity 2
+.It 204 Ta Xr sched_getaffinity 2
+.It 213 Ta Xr epoll_create 2
+.It 217 Ta Xr getdents64 2
+.It 218 Ta Xr set_tid_address 2
+.It 220 Ta Xr semtimedop 2
+.It 221 Ta Xr fadvise64 2
+.It 222 Ta Xr timer_create 2
+.It 223 Ta Xr timer_settime 2
+.It 224 Ta Xr timer_gettime 2
+.It 225 Ta Xr timer_getoverrun 2
+.It 226 Ta Xr timer_delete 2
+.It 227 Ta Xr clock_settime 2
+.It 228 Ta Xr clock_gettime 2
+.It 229 Ta Xr clock_getres 2
+.It 230 Ta Xr clock_nanosleep 2
+.It 231 Ta Xr exit_group 2
+.It 232 Ta Xr epoll_wait 2
+.It 233 Ta Xr epoll_ctl 2
+.It 234 Ta Xr tgkill 2
+.It 240 Ta Xr mq_open 2
+.It 241 Ta Xr mq_unlink 2
+.It 242 Ta Xr mq_timedsend 2
+.It 243 Ta Xr mq_timedreceive 2
+.It 244 Ta Xr mq_notify 2
+.It 245 Ta Xr mq_getsetattr 2
+.It 247 Ta Xr waitid 2
+.It 251 Ta Xr ioprio_set 2
+.It 252 Ta Xr ioprio_get 2
+.It 253 Ta Xr inotify_init 2
+.It 254 Ta Xr inotify_add_watch 2
+.It 255 Ta Xr inotify_rm_watch 2
+.It 257 Ta Xr openat 2
+.It 258 Ta Xr mkdirat 2
+.It 259 Ta Xr mknodat 2
+.It 260 Ta Xr fchownat 2
+.It 262 Ta Xr newfstatat 2
+.It 263 Ta Xr unlinkat 2
+.It 264 Ta Xr renameat 2
+.It 265 Ta Xr linkat 2
+.It 266 Ta Xr symlinkat 2
+.It 267 Ta Xr readlinkat 2
+.It 268 Ta Xr fchmodat 2
+.It 269 Ta Xr faccessat 2
+.It 270 Ta Xr pselect6 2
+.It 271 Ta Xr ppoll 2
+.It 272 Ta Xr unshare 2
+.It 273 Ta Xr set_robust_list 2
+.It 274 Ta Xr get_robust_list 2
+.It 275 Ta Xr splice 2
+.It 276 Ta Xr tee 2
+.It 280 Ta Xr utimensat 2
+.It 281 Ta Xr epoll_pwait 2
+.It 282 Ta Xr signalfd 2
+.It 283 Ta Xr timerfd_create 2
+.It 284 Ta Xr eventfd 2
+.It 285 Ta Xr fallocate 2
+.It 286 Ta Xr timerfd_settime 2
+.It 287 Ta Xr timerfd_gettime 2
+.It 288 Ta Xr accept4 2
+.It 289 Ta Xr signalfd4 2
+.It 290 Ta Xr eventfd2 2
+.It 291 Ta Xr epoll_create1 2
+.It 292 Ta Xr dup3 2
+.It 293 Ta Xr pipe2 2
+.It 294 Ta Xr inotify_init1 2
+.It 295 Ta Xr preadv 2
+.It 296 Ta Xr pwritev 2
+.It 297 Ta Xr rt_tgsigqueueinfo 2
+.It 299 Ta Xr recvmmsg 2
+.It 302 Ta Xr prlimit64 2
+.It 305 Ta Xr clock_adjtime 2
+.It 306 Ta Xr syncfs 2
+.It 307 Ta Xr sendmmsg 2
+.It 308 Ta Xr setns 2
+.It 309 Ta Xr getcpu 2
+.It 316 Ta Xr renameat2 2
+.It 317 Ta Xr seccomp 2
+.It 318 Ta Xr getrandom 2
+.It 319 Ta Xr memfd_create 2
+.It 325 Ta Xr mlock2 2
+.It 332 Ta Xr statx 2
+.It 400 Ta Xr rach2_ping 2
+.It 435 Ta Xr clone3 2
+.It 436 Ta Xr close_range 2
+.It 441 Ta Xr epoll_pwait2 2
 .El
 .Sh ERRORS
 .Bl -tag -width "[ENOSYS]"

@@ -196,6 +196,16 @@ and
 it declares no separate functions with the
 .Li 32
 suffix.
+.Pp
+On x86-64
+.Nm chown
+(92),
+.Nm fchown
+(93),
+.Nm lchown
+(94) and
+.Nm fchownat
+(260) take 32-bit IDs, and there are no 32-suffixed calls.
 .Sh RETURN VALUES
 These functions return 0 on success.
 On failure they return -1 and set

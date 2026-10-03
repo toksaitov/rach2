@@ -210,6 +210,20 @@ The i386 system call numbers are 2 for
 .Fn clone
 and 435 for
 .Fn clone3 .
+.Pp
+On x86-64
+.Nm fork
+is call 57,
+.Nm vfork
+58,
+.Nm clone
+56 and
+.Nm clone3
+435;
+.Nm clone
+takes the child's tid address before the TLS argument, the order Linux
+x86-64 has, where i386 has the TLS argument first, and the TLS argument is
+the new thread's FS base.
 .Sh RETURN VALUES
 The parent receives the child's process ID; the child receives 0.
 On failure, the function returns -1 and sets

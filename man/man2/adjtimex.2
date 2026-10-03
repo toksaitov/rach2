@@ -78,6 +78,14 @@ of 32-bit fields, and 405 for
 which takes the 208-byte
 .Vt struct __kernel_timex
 of 64-bit fields that musl and glibc use.
+.Pp
+On x86-64
+.Nm adjtimex
+is call 159 and
+.Nm clock_adjtime
+305, and their
+.Vt struct timex
+has the x86-64 layout, its longs 64 bits; there is no time64 form.
 .Sh RETURN VALUES
 The clock's state, or -1 with
 .Va errno

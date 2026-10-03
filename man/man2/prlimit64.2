@@ -192,6 +192,16 @@ The previous values are copied out after the change is attempted, so a
 valid old-limit buffer receives them when the change is refused too; a
 failure to read the new limits, to find the target or in the permission
 check returns before the buffer is written.
+.Pp
+On x86-64
+.Nm getrlimit
+(97) and
+.Nm setrlimit
+(160) take 64-bit limits, there is no
+.Nm ugetrlimit ,
+and
+.Nm prlimit64
+is 302.
 .Sh RETURN VALUES
 These functions return 0 on success, or -1 on failure and set
 .Va errno .

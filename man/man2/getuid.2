@@ -96,6 +96,23 @@ and 205 for
 It declares the functions without the
 .Ql 32
 suffix and provides no separate prototypes for these kernel names.
+.Pp
+On x86-64 the calls without a suffix take 32-bit IDs, and there are no
+others:
+.Nm getuid
+(102),
+.Nm geteuid
+(107),
+.Nm getgid
+(104),
+.Nm getegid
+(108),
+.Nm getresuid
+(118),
+.Nm getresgid
+(120) and
+.Nm getgroups
+(115).
 .Sh RETURN VALUES
 .Fn getuid ,
 .Fn geteuid ,

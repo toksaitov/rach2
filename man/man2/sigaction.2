@@ -460,6 +460,28 @@ an XSAVE header whose other bytes are not zero.
 Linux clears the reserved MXCSR bits of an i386 state without XSAVE, and
 on x86-64 accepts a header whose bytes from 24 on are not zero; this
 kernel refuses both.
+.Pp
+On x86-64 the calls are
+.Nm rt_sigaction
+(13),
+.Nm rt_sigprocmask
+(14),
+.Nm rt_sigreturn
+(15),
+.Nm rt_sigpending
+(127),
+.Nm rt_sigtimedwait
+(128),
+.Nm rt_sigqueueinfo
+(129) and
+.Nm rt_sigsuspend
+(130), with the arguments in RDI, RSI, RDX and R10 in the order above;
+there is no
+.Nm sigreturn
+or
+.Nm sigprocmask .
+The kernel action is four 64-bit words: the handler, the flags, the
+restorer and the two mask words.
 .Sh RETURN VALUES
 .Fn sigaction
 and

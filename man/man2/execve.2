@@ -305,6 +305,12 @@ child still has it; that parent then runs again.
 The i386 system call number is 11.
 EBX contains the path pointer, ECX the argument-vector pointer, and
 EDX the environment-vector pointer.
+.Pp
+On x86-64 the loader takes little-endian ELF64 executables for x86-64 of
+the same types, and builds the System V x86-64 initial stack, whose words
+are 64 bits, and
+.Nm execve
+is call 59.
 .Sh RETURN VALUES
 .Fn execve
 does not return on success.

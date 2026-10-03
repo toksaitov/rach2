@@ -97,6 +97,12 @@ A process already in its own end, which has given up its address space,
 is sent no signal and is waited for until it has ended.
 Kernel threads and the idle process remain.
 The scheduler is disabled when control returns to the debug shell.
+.Pp
+On x86-64
+.Nm exit
+is call 60 and
+.Nm exit_group
+231, with the status in RDI.
 .Sh RETURN VALUES
 These calls do not return to the calling program.
 They report no errors.

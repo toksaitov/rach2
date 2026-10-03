@@ -108,6 +108,9 @@ its interval are in ticks, and it expires at the tick that uses up the
 last of its time, with no overrun, since each tick is counted.
 A timer on another process's clock keeps counting that process until it
 is deleted, and counts nothing once the process has ended.
+.Pp
+On x86-64 the timer calls take itimerspecs of 64-bit fields, and there
+are no time64 forms.
 .Sh RETURN VALUES
 .Fn timer_getoverrun
 returns the overrun, and the others 0; each returns -1 with

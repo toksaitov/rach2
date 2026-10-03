@@ -285,6 +285,18 @@ and
 are the 64-bit forms on i386.
 The deadlock search follows ten waits, Linux's bound, so a longer cycle
 is not found; it is made only for POSIX locks, as on Linux.
+.Pp
+On x86-64 musl calls
+.Nm fcntl
+(72), with the descriptor, the command and the argument in RDI, RSI and
+RDX, and there is no
+.Nm fcntl64 .
+There
+.Vt struct flock
+has 64-bit offsets at byte offsets 8 and 16 and
+.Va l_pid
+at 24, 32 bytes in all, and every lock command takes it, 5 to 7 as 12 to 14
+and the open file description commands.
 .Sh RETURN VALUES
 The duplication commands return a new descriptor.
 .Dv F_GETFD

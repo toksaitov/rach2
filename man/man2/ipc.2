@@ -58,6 +58,37 @@ and 0 returned; version 1 is
 .It Dv SHMCTL No 24
 .Fn shmctl first second ptr .
 .El
+.Pp
+x86-64 has no
+.Nm ipc :
+.Nm semget
+(64),
+.Nm semop
+(65), which the kernel takes as
+.Nm semtimedop
+with no time limit,
+.Nm semctl
+(66),
+.Nm semtimedop
+(220),
+.Nm msgget
+(68),
+.Nm msgsnd
+(69),
+.Nm msgrcv
+(70),
+.Nm msgctl
+(71),
+.Nm shmget
+(29),
+.Nm shmat
+(30),
+.Nm shmdt
+(67) and
+.Nm shmctl
+(31) are calls of their own, and
+.Dv IPC_STAT
+fills the x86-64 records, whose times and sizes are 64-bit longs.
 .Sh RETURN VALUES
 What the operation returns.
 .Sh ERRORS

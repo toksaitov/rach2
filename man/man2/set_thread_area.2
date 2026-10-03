@@ -85,6 +85,12 @@ starts without one unless
 .Xr clone 2
 names one with
 .Dv CLONE_CHILD_CLEARTID .
+.Pp
+x86-64 has neither call: a thread's TLS base there is the FS base, which
+.Xr arch_prctl 2
+sets and reads, and which
+.Dv CLONE_SETTLS
+gives a new thread.
 .Sh RETURN VALUES
 .Nm set_thread_area
 returns zero on success.

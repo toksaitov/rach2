@@ -52,6 +52,10 @@ TCP control blocks are allocated from the kernel heap, with no fixed
 pool size.
 Failure to allocate the listener's control block returns
 .Er ENOBUFS .
+.Pp
+On x86-64
+.Nm listen
+is call 50.
 .Sh RETURN VALUES
 .Fn listen
 returns 0 on success, or -1 on failure and sets

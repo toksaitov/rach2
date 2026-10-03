@@ -303,6 +303,22 @@ and returns 0.
 The raw
 .Fn gettimeofday
 system call requires a writable, nonnull timeval.
+.Pp
+On x86-64 the clock calls take timespecs and timevals of 64-bit fields,
+and there are no time64 forms and no
+.Nm stime :
+.Nm gettimeofday
+is 96,
+.Nm settimeofday
+164,
+.Nm clock_gettime
+228,
+.Nm clock_settime
+227,
+.Nm clock_getres
+229 and
+.Nm clock_nanosleep
+230.
 .Sh RETURN VALUES
 .Fn gettimeofday ,
 .Fn clock_gettime ,

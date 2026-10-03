@@ -59,6 +59,13 @@ A second caller receives
 without sending a request.
 The request slot is released on success, timeout, or interruption by
 a signal.
+.Pp
+On x86-64, which has no
+.Nm socketcall ,
+the two operations are call 400,
+.Nm rach2_ping ,
+a number Linux leaves unused there, with the operation in RDI and the
+argument block's pointer in RSI.
 .Sh RETURN VALUES
 Operation 0x1000 returns the elapsed tick count for the successful
 attempt.

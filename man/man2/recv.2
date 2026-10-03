@@ -215,6 +215,21 @@ with null address pointers.
 The direct kernel operation 10 accepts streams and datagrams but rejects
 all raw sockets; the musl wrapper can receive raw ICMP data through
 operation 12.
+.Pp
+x86-64 has no
+.Nm recv
+call: musl's
+.Fn recv
+calls
+.Nm recvfrom
+(45) with no address.
+.Nm recvmsg
+is 47 and
+.Nm recvmmsg
+299; their
+.Vt struct msghdr
+has the x86-64 layout, with 64-bit lengths, and control messages are
+aligned to 8 bytes.
 .Sh RETURN VALUES
 On success,
 .Fn recv ,

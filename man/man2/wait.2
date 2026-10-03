@@ -263,6 +263,18 @@ and
 with
 .Er EINVAL ,
 where this kernel ignores them.
+.Pp
+x86-64 has no
+.Nm waitpid :
+musl's
+.Fn waitpid
+calls
+.Nm wait4
+(61), and
+.Nm waitid
+is 247.
+The resource usage structure there is x86-64's, 144 bytes, its two timevals
+and fourteen counters 64-bit longs.
 .Sh RETURN VALUES
 .Fn waitpid
 and

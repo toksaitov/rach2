@@ -148,6 +148,12 @@ integer.
 These operations are subcalls 14 and 15, respectively, of i386
 .Xr socketcall 2 ,
 system call 102.
+.Pp
+On x86-64
+.Nm setsockopt
+is call 54 and
+.Nm getsockopt
+55.
 .Sh RETURN VALUES
 These functions return zero on success.
 On failure they return -1 and set

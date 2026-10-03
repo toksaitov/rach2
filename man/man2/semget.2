@@ -97,6 +97,20 @@ or 32-bit
 .Fn semtimedop ;
 both are
 .Xr ipc 2 Ns 's.
+.Pp
+On x86-64
+.Nm semget
+is call 64,
+.Nm semop
+65, which the kernel takes as
+.Nm semtimedop
+with no time limit,
+.Nm semctl
+66 and
+.Nm semtimedop
+220, whose timespec has 64-bit fields; there is no
+.Nm ipc
+and no time64 form.
 .Sh RETURN VALUES
 .Fn semget
 returns an id,

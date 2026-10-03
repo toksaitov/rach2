@@ -69,6 +69,12 @@ address are in network byte order.
 These operations are subcalls 6 and 7, respectively, of i386
 .Xr socketcall 2 ,
 system call 102.
+.Pp
+On x86-64
+.Nm getsockname
+is call 51 and
+.Nm getpeername
+52.
 .Sh RETURN VALUES
 These functions return 0 on success.
 On failure they return -1 and set

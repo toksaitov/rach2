@@ -94,6 +94,14 @@ The i386 system call numbers are 20 for
 .Fn getsid ,
 and 66 for
 .Fn setsid .
+.Pp
+On x86-64
+.Nm getpid
+is call 39,
+.Nm getppid
+110 and
+.Nm gettid
+186.
 .Sh RETURN VALUES
 The query functions return the requested ID.
 .Fn setsid

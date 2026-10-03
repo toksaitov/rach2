@@ -85,6 +85,17 @@ and 402
 .Pq Fn msgctl ;
 musl reaches the same through
 .Xr ipc 2 .
+.Pp
+On x86-64
+.Nm msgget
+is call 68,
+.Nm msgsnd
+69,
+.Nm msgrcv
+70 and
+.Nm msgctl
+71, with no
+.Nm ipc .
 .Sh RETURN VALUES
 .Fn msgrcv
 returns the bytes of text taken, and the others 0, an id, or what

@@ -135,6 +135,10 @@ not the machine's gets
 .Er EINVAL .
 Self-addressed packets are queued for delivery at system call exit or
 by the timer; they do not require a network peer.
+.Pp
+On x86-64
+.Nm connect
+is call 42.
 .Sh RETURN VALUES
 .Fn connect
 returns 0 on success.

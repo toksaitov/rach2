@@ -132,6 +132,9 @@ copies the attributes out, the flags
 or 0, then takes
 .Dv O_NONBLOCK
 alone from the new ones.
+.Pp
+On x86-64 the timed calls take timespecs of 64-bit fields, and there are
+no time64 forms.
 .Sh RETURN VALUES
 .Fn mq_open
 returns a descriptor,

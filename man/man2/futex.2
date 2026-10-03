@@ -142,6 +142,13 @@ for a thread of another process and a caller without
 it compares them with the thread's real, effective and saved user and
 group IDs and asks for a dumpable process, where this kernel compares
 the effective user ID alone and does not ask for one.
+.Pp
+On x86-64
+.Nm futex
+is call 202, with a timespec of 64-bit fields, and the robust list's head,
+which
+.Nm set_robust_list
+(273) takes, is 24 bytes.
 .Sh RETURN VALUES
 A wait returns 0 when a wake ended it and a wake the number it woke.
 The raw call returns a negative error number on failure;

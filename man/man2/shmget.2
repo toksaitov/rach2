@@ -117,6 +117,19 @@ which GNU libc makes; musl reaches the same through
 .Fn shmctl
 takes the 64-bit layout only, which both libraries ask for with
 .Dv IPC_64 .
+.Pp
+On x86-64
+.Nm shmget
+is call 29,
+.Nm shmat
+30,
+.Nm shmdt
+67 and
+.Nm shmctl
+31, with no
+.Nm ipc ;
+.Nm shmat
+returns the address itself.
 .Sh RETURN VALUES
 .Fn shmget
 returns an id,

@@ -45,6 +45,11 @@ and 187 for
 and 239 for
 .Fn sendfile64 ,
 with the output descriptor in EBX and the input in ECX.
+.Pp
+On x86-64
+.Nm sendfile
+(40) takes a 64-bit offset, and there is no
+.Nm sendfile64 .
 .Sh RETURN VALUES
 Each call returns -1 with
 .Va errno

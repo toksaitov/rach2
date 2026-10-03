@@ -137,6 +137,12 @@ therefore exceeds the file system's limit and yields
 .Er EFBIG
 when the descriptor and mount checks succeed, where Linux returns
 .Er EINVAL .
+.Pp
+On x86-64
+.Nm truncate
+(76) and
+.Nm ftruncate
+(77) take the 64-bit length in RSI, and there are no 64-suffixed calls.
 .Sh RETURN VALUES
 .Fn truncate
 and

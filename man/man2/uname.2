@@ -41,7 +41,12 @@ the kernel's name after it.
 .Ql "#1 Rach2 1.0.0" ,
 the kernel's own name and version.
 .It Va machine
-.Ql i686 .
+.Ql i686
+on the i686 kernel and
+.Ql x86_64
+on the x86-64 one, which
+.Ql uname -m
+prints.
 .It Va domainname
 The domain name of the caller's UTS namespace, initially
 .Ql (none) .
@@ -121,6 +126,12 @@ The pointer is passed in EBX; for
 and
 .Fn setdomainname ,
 ECX contains the length.
+.Pp
+On x86-64
+.Nm uname
+is call 63;
+.Nm sysinfo
+is 99, and its structure is x86-64's, 112 bytes, its counts 64-bit longs.
 .Sh RETURN VALUES
 These functions return 0 on success, or -1 on failure with
 .Va errno
