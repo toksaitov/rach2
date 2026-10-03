@@ -703,22 +703,26 @@ static bool test_clock(uint32_t *measured_us, const char **why, uint32_t *walk_c
 /**
  * Prove ring 3 works by entering user mode and running user_test_entry.
  *
- * Reserves a user stack and marks the code, message, and stack pages
- * user-accessible, then enters ring 3 at the architecture's test payload,
- * which writes "Hello from ring 3!" through a system call. The entry does not
- * return, so the trailing `return false` is unreachable.
+ * Takes a user stack from the heap, whose pages are mapped one by one on
+ * every architecture so that one can be made user-accessible alone, marks
+ * the code, message, and stack pages user-accessible, then enters ring 3 at
+ * the architecture's test payload, which writes "Hello from ring 3!" through
+ * a system call. The entry does not return, so the trailing `return false`
+ * is unreachable.
  */
 static bool test_usermode(void)
 {
     uintptr_t func_addr = (uintptr_t)arch_user_test_entry;
     uintptr_t msg_addr = (uintptr_t)arch_user_test_msg;
+    void *user_stack;
     uintptr_t user_stack_addr;
     uintptr_t page;
     uint32_t i;
 
     console_printf("  Usermode test: func=0x%X msg=0x%X\n", func_addr, msg_addr);
 
-    user_stack_addr = mem_reserve(USER_STACK_SIZE, true);
+    user_stack = kalloc_pages(USER_STACK_SIZE / PAGE_SIZE, NULL);
+    user_stack_addr = (uintptr_t)user_stack;
     console_printf("  Usermode test: stack=0x%X\n", user_stack_addr);
 
     /* The function code may span two pages. */
@@ -782,7 +786,7 @@ static void test_switch(void)
         return;
     }
 
-    stack_b = mem_reserve(KERNEL_STACK_SIZE, true);
+    stack_b = (uintptr_t)phys_to_virt(mem_reserve(KERNEL_STACK_SIZE, true));
     switch_proc_b->kernel_stack = stack_b + KERNEL_STACK_SIZE;
     switch_proc_b->space_root = 0; /* shares the kernel page directory */
     switch_proc_b->parent_pid = switch_proc_a->pid;
@@ -891,7 +895,7 @@ static void test_preempt(void)
         console_puts("Failed to allocate process A");
         return;
     }
-    stack_a = mem_reserve(KERNEL_STACK_SIZE, true);
+    stack_a = (uintptr_t)phys_to_virt(mem_reserve(KERNEL_STACK_SIZE, true));
     proc_a->kernel_stack = stack_a + KERNEL_STACK_SIZE;
     proc_a->space_root = 0;
     proc_a->parent_pid = current_proc->pid;
@@ -903,7 +907,7 @@ static void test_preempt(void)
         console_puts("Failed to allocate process B");
         return;
     }
-    stack_b = mem_reserve(KERNEL_STACK_SIZE, true);
+    stack_b = (uintptr_t)phys_to_virt(mem_reserve(KERNEL_STACK_SIZE, true));
     proc_b->kernel_stack = stack_b + KERNEL_STACK_SIZE;
     proc_b->space_root = 0;
     proc_b->parent_pid = current_proc->pid;
@@ -1019,7 +1023,7 @@ static bool test_isolation(void)
     if (!isolation_proc_a) {
         return false;
     }
-    stack_a = mem_reserve(KERNEL_STACK_SIZE, true);
+    stack_a = (uintptr_t)phys_to_virt(mem_reserve(KERNEL_STACK_SIZE, true));
     isolation_proc_a->kernel_stack = stack_a + KERNEL_STACK_SIZE;
     isolation_proc_a->space_root = get_page_dir_phys(dir_a);
     isolation_proc_a->page_dir = dir_a;
@@ -1031,7 +1035,7 @@ static bool test_isolation(void)
         free_process(isolation_proc_a);
         return false;
     }
-    stack_b = mem_reserve(KERNEL_STACK_SIZE, true);
+    stack_b = (uintptr_t)phys_to_virt(mem_reserve(KERNEL_STACK_SIZE, true));
     isolation_proc_b->kernel_stack = stack_b + KERNEL_STACK_SIZE;
     isolation_proc_b->space_root = get_page_dir_phys(dir_b);
     isolation_proc_b->page_dir = dir_b;

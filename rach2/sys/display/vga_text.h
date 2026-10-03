@@ -16,9 +16,10 @@
  */
 #define VGA_TEXT_COLS 80
 #define VGA_TEXT_ROWS 25
-/* A host test stands its own memory in for the adapter's. */
+/* The kernel's address of the adapter's memory at physical 0xB8000
+ * (arch.h); a host test stands its own memory in for it. */
 #ifndef VGA_TEXT_BUFFER
-#define VGA_TEXT_BUFFER 0xB8000
+#define VGA_TEXT_BUFFER phys_to_virt(0xB8000)
 #endif
 
 #define VGA_TEXT_DEFAULT_FG 0x07 /* Light grey */

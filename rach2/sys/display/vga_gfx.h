@@ -14,7 +14,8 @@
 #define VGA_GFX_HEIGHT      200
 #define VGA_GFX_BPP         8     /* 8 bits per pixel (palette index) */
 #define VGA_GFX_SIZE        64000 /* 320 * 200 bytes */
-#define VGA_GFX_FRAMEBUFFER 0xA0000
+/* The kernel's address of the adapter's window at physical 0xA0000. */
+#define VGA_GFX_FRAMEBUFFER phys_to_virt(0xA0000)
 
 /* Legacy macro names kept for compatibility. */
 #define VGA_MODE13H_WIDTH  VGA_GFX_WIDTH

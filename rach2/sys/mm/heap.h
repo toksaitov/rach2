@@ -22,8 +22,8 @@ void init_mm(void);
  * failure. */
 uintptr_t mem_reserve(size_t size, bool align);
 
-/** The same reservation as a pointer, for a caller that fills a structure
- * there; NULL on failure. */
+/** The same reservation as the kernel's address of it (`phys_to_virt`),
+ * for a caller that fills a structure there; NULL on failure. */
 void *mem_reserve_ptr(size_t size, bool align);
 
 #endif

@@ -70,9 +70,9 @@ static void pc_platform_unmap(uintptr_t va)
 #define PC_HASH_DELETED (-2)
 
 /* One resident page: its backing offset, its frame, and the clock/dirty state.
-   `page` is where the backing reads and writes the bytes (the frame's identity
-   address in the kernel, a static page on the host); `phys` is the frame to
-   map at the window virtual address. */
+   `page` is where the backing reads and writes the bytes (the kernel's address
+   of the frame, `phys_to_virt` of it, or a static page on the host); `phys` is
+   the frame to map at the window virtual address. */
 struct pc_entry {
     uint32_t disk_off;
     uintptr_t phys;
@@ -113,9 +113,9 @@ static uint32_t pc_resident_frames; /* slots holding a frame */
  * be had or the free frames are the reserve's.
  *
  * A slot's frame comes when the slot is first filled and goes when reclaim
- * takes it, so the cache has what it uses and no more. The frame is below
- * the identity-mapped window, since the backing reads and writes it by its
- * physical address. On the host every slot has its buffer from the start.
+ * takes it, so the cache has what it uses and no more. The frame is of the
+ * DMA pool, since a disk's backing may give its address to the device. On
+ * the host every slot has its buffer from the start.
  */
 static int pc_slot_storage(struct pc_entry *e)
 {
@@ -131,11 +131,11 @@ static int pc_slot_storage(struct pc_entry *e)
         return 0; /* the reserve's: a resident page gives way instead */
     }
     frame = alloc_kernel_frame();
-    e->phys = (uintptr_t)frame;
-    if (!e->phys) {
+    if (!frame) {
         return 0;
     }
-    e->page = (void *)e->phys;
+    e->phys = virt_to_phys(frame);
+    e->page = frame;
     ++pc_resident_frames;
     return 1;
 #endif
@@ -147,7 +147,7 @@ static void pc_slot_release(struct pc_entry *e)
     (void)e;
 #else
     if (e->phys) {
-        free_kernel_frame((void *)e->phys);
+        free_kernel_frame(e->page);
         e->phys = 0;
         e->page = 0;
         --pc_resident_frames;

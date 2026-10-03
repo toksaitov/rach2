@@ -36,6 +36,7 @@
  */
 
 #include "vga_font.h"
+#include "../arch/arch.h"
 #include "../arch/x86/portio.h"
 #include "fbcon.h"
 #include "vga_text.h"

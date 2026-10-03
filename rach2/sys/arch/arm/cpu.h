@@ -65,6 +65,11 @@ typedef uint32_t pte_t;
 
 /* The kernel's layout: what the port's MMU code chooses. */
 #define HARD_MEMORY_LIMIT 0x2000000
+
+/* Physical memory from the kernel (arch.h), as the port's MMU code maps
+ * it. */
+void *phys_to_virt(phys_addr_t p);
+phys_addr_t virt_to_phys(const volatile void *v);
 #define KVA_BASE          USER_ADDR_MAX
 #define KVA_HEAP          KVA_BASE
 #define KVA_HEAP_SIZE     0x10000000u

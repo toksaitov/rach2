@@ -7,6 +7,7 @@
  * changes as it always does, and its picture reaches no screen.
  */
 
+#include "../arch/arch.h"
 #include "../arch/x86/portio.h"
 #include "fbcon.h"
 #include "vga_gfx.h"

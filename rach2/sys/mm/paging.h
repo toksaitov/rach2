@@ -231,7 +231,8 @@ uintptr_t alloc_frame(void);
 void free_frame(uintptr_t phys);
 
 /** The physical address behind kernel virtual address `va` in the kernel
- * directory, or 0 when nothing is mapped there. */
+ * directory, or 0 when nothing is mapped there. The architecture walks its
+ * tables (arch/i686/mmu.c), large pages included where it has them. */
 uintptr_t paging_virt_to_phys(uintptr_t va);
 
 /** The physical address `dir` maps the user address `va` to, or 0 when the
@@ -267,10 +268,10 @@ int paging_access(struct mm *mm, uintptr_t addr, void *buf, uint32_t len, int wr
 int paging_framefail_arm(uint32_t count);
 
 /**
- * Reserve one free physical frame for kernel use (never user); 0 if none.
- * The frame is below the identity-mapped window, so its physical address
- * is also its virtual one, which is what a device given the address for
- * DMA needs.
+ * Reserve one free physical frame for kernel use (never user), and return
+ * the kernel's address of it; NULL if none. The frame is of the DMA pool,
+ * below the window's top, HARD_MEMORY_LIMIT, so `virt_to_phys` gives a
+ * device its address, which fits 32 bits.
  */
 void *alloc_kernel_frame(void);
 

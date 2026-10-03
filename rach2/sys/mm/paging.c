@@ -126,8 +126,8 @@ void init_paging(struct frame_map *map)
         k_panic("init_paging: no reserved memory for the frame table");
     }
     if (map->top_frame) {
-        uintptr_t first = (uintptr_t)_frames / PAGE_SIZE;
-        uintptr_t last = ((uintptr_t)_frames + _frames_number * sizeof(uint32_t) - 1) / PAGE_SIZE;
+        uintptr_t first = virt_to_phys(_frames) / PAGE_SIZE;
+        uintptr_t last = (virt_to_phys(_frames) + _frames_number * sizeof(uint32_t) - 1) / PAGE_SIZE;
 
         for (frame = first; frame <= last; frame++) {
             if (!frame_map_usable(map, (uint32_t)frame)) {
@@ -961,16 +961,6 @@ int paging_frame_is_device(uintptr_t phys)
     return frame >= _frames_number || _frames[frame] >= FRAME_REF_MAX;
 }
 
-uintptr_t paging_virt_to_phys(uintptr_t va)
-{
-    pte_t *e = kernel_pte(va);
-
-    if (!e || !(*e & PTE_P)) {
-        return 0;
-    }
-    return PTE_ADDR(*e) | (va & (PAGE_SIZE - 1));
-}
-
 uintptr_t paging_user_phys(page_dir_t *dir, uintptr_t va)
 {
     pte_t *e = user_pte(dir, va);
@@ -992,16 +982,17 @@ int paging_user_state(page_dir_t *dir, uintptr_t va)
 }
 
 /**
- * Reserve one free physical frame for kernel-internal use and return its
- * physical address, or 0 if none is free.
+ * Reserve one free physical frame for kernel-internal use and return the
+ * kernel's address of it, or NULL if none is free.
  *
  * The frame is marked used at reference count 1 and has no user mapping, so
  * `alloc_user_page` and `free_user_pages` skip it; the caller owns it until
- * `free_kernel_frame`. The scan runs down from the top of the
- * identity-mapped window, while user pages come from above the window first
- * and then from the window's bottom up, so a kernel reservation and user
- * pages rarely contend. The returned address is also the frame's virtual
- * address, since the scan stays inside the window.
+ * `free_kernel_frame`. The scan runs down from the top of the window below
+ * HARD_MEMORY_LIMIT, while user pages come from above the window first and
+ * then from the window's bottom up, so a kernel reservation and user pages
+ * rarely contend. The window's frames are the DMA pool: they lie below
+ * 4 GiB on every architecture, so a device takes the frame's physical
+ * address, `virt_to_phys` of what this returns, in a 32-bit register.
  */
 void *alloc_kernel_frame(void)
 {
@@ -1011,7 +1002,7 @@ void *alloc_kernel_frame(void)
         if (_frames[frame] == 0) {
             frame_take(frame);
             _kernel_frames_reserved++;
-            return (void *)(frame * PAGE_SIZE);
+            return phys_to_virt(frame * PAGE_SIZE);
         }
     }
 
@@ -1028,7 +1019,7 @@ void paging_mark_reserved(uintptr_t frame)
 void free_kernel_frame(void *frame)
 {
     _kernel_frames_reserved--;
-    frame_unref((uintptr_t)frame);
+    frame_unref(virt_to_phys(frame));
 }
 
 /**

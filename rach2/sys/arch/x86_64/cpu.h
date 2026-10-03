@@ -138,6 +138,12 @@ typedef uint64_t pte_t;
 #define KVA_PCWIN        0xFFFFC20000000000UL
 #define KVA_IMAGE        0xFFFFFFFF80000000UL
 
+/* Physical memory from the kernel (arch.h): an address of the direct map,
+ * and back from one of the direct map or of the image (mmu.c). */
+#define phys_to_virt(p) ((void *)(KVA_DIRECT + (uintptr_t)(p)))
+#define virt_to_phys(v) mmu_virt_to_phys(v)
+phys_addr_t mmu_virt_to_phys(const volatile void *v);
+
 /* The page fault's vector, and what its error code says (Intel SDM Vol.
  * 3A, 4.7): a write, and an access from user mode. */
 #define PAGE_FAULT_VECTOR 14

@@ -355,6 +355,41 @@ pte_t *mmu_kernel_table(uintptr_t va)
     return table_for(_kernel_dir->entries, va, 1, 0, 0);
 }
 
+/**
+ * The physical address the kernel's PML4 maps `va` to, through a 1 GiB or
+ * 2 MiB page of the direct map as through a 4 KiB one; 0 when nothing is
+ * mapped there.
+ */
+uintptr_t paging_virt_to_phys(uintptr_t va)
+{
+    pte_t *table = _kernel_dir->entries;
+    int l;
+
+    if (va < KVA_BASE) {
+        return 0;
+    }
+    for (l = 4; l >= 1; l--) {
+        pte_t e = table[LEVEL_INDEX(va, l)];
+        uintptr_t span = (uintptr_t)PAGE_SIZE << (9 * (l - 1));
+
+        if (!(e & PTE_P)) {
+            return 0;
+        }
+        if (l == 1 || (l <= 3 && (e & PTE_PS))) {
+            return (PTE_ADDR(e) & ~(span - 1)) | (va & (span - 1));
+        }
+        table = MMU_VIRT(PTE_ADDR(e));
+    }
+    return 0;
+}
+
+phys_addr_t mmu_virt_to_phys(const volatile void *v)
+{
+    uintptr_t va = (uintptr_t)v;
+
+    return va >= KVA_IMAGE ? va - KVA_IMAGE : va - KVA_DIRECT;
+}
+
 /* The table an entry names. */
 static pte_t *entry_table(pte_t e)
 {

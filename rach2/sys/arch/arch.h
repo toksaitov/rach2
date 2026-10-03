@@ -17,6 +17,14 @@
  *   isr_params_t           the registers an entry to the kernel saved, which
  *                          a handler may change before the return
  *   phys_addr_t            a physical address, as wide as the processor's
+ *   phys_to_virt(p)        the kernel's address of the physical address `p`:
+ *                          of any memory where the architecture maps it all,
+ *                          of the window below HARD_MEMORY_LIMIT on i686
+ *   virt_to_phys(v)        the physical address of `v`, an address
+ *                          phys_to_virt gave or one in the kernel's image:
+ *                          what a device is given for a buffer of the DMA
+ *                          pool (`alloc_kernel_frame`) or a driver's static
+ *                          one; a heap address is `paging_virt_to_phys`'s
  *   SC_NR(p)               the system call number in a saved frame
  *   SC_ARG(p, n)           the call's argument n, 0 to 5, as unsigned long
  *   SC_RET(p)              the register the call's result goes in (an lvalue)

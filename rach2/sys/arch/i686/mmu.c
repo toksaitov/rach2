@@ -394,6 +394,17 @@ pte_t *mmu_kernel_table(uintptr_t va)
     return table ? table->pages : NULL;
 }
 
+uintptr_t paging_virt_to_phys(uintptr_t va)
+{
+    pte_t *table = mmu_kernel_table(va);
+    pte_t *e = table ? &table[MMU_INDEX(va)] : NULL;
+
+    if (!e || !(*e & PTE_P)) {
+        return 0;
+    }
+    return PTE_ADDR(*e) | (va & (PAGE_SIZE - 1));
+}
+
 /**
  * Free all user pages in a page directory. Walks every private page table
  * and drops the frame reference of each present user page above the

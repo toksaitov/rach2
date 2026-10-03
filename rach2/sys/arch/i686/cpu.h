@@ -105,6 +105,12 @@ typedef uint32_t pte_t;
  * and the modules and the page tables made later are reached that way. */
 #define HARD_MEMORY_LIMIT 0x2000000
 
+/* The identity window both ways (arch.h): a physical address below
+ * HARD_MEMORY_LIMIT is its own kernel address, and so is the kernel image's,
+ * which lies there too. */
+#define phys_to_virt(p) ((void *)(uintptr_t)(p))
+#define virt_to_phys(v) ((phys_addr_t)(uintptr_t)(v))
+
 /*
  * The kernel's virtual layout above user space, in the gigabyte from
  * `USER_ADDR_MAX`. Every page table for it exists at boot and is shared by

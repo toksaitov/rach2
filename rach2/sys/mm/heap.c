@@ -1,3 +1,4 @@
+#include "../arch/arch.h"
 #include "../klog.h"
 #include "heap.h"
 #include "paging.h"
@@ -82,5 +83,5 @@ void *mem_reserve_ptr(size_t size, bool align)
 {
     uintptr_t at = mem_reserve(size, align);
 
-    return at ? (void *)at : NULL;
+    return at ? phys_to_virt(at) : NULL;
 }
