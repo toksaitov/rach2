@@ -394,19 +394,19 @@ int tolower(int c)
  * Simple printf implementation for debugging
  * Outputs to a buffer first, then writes in one syscall for reliability
  */
-static int format_signed(char *buf, int n, int base)
+static int format_signed(char *buf, long n, int base)
 {
     int i = 0;
     int neg = 0;
-    unsigned int un;
+    unsigned long un;
     char tmp[32];
     int ti = 0;
 
     if (n < 0 && base == 10) {
         neg = 1;
-        un = (unsigned int)(-(n + 1)) + 1;  /* Handle INT_MIN safely */
+        un = (unsigned long)(-(n + 1)) + 1;  /* Handle LONG_MIN safely */
     } else {
-        un = (unsigned int)n;
+        un = (unsigned long)n;
     }
 
     do {
@@ -420,7 +420,7 @@ static int format_signed(char *buf, int n, int base)
     return i;
 }
 
-static int format_unsigned(char *buf, unsigned int un, int base, int uppercase)
+static int format_unsigned(char *buf, unsigned long un, int base, int uppercase)
 {
     int i = 0;
     char tmp[32];
@@ -485,7 +485,7 @@ int vprintf(const char *fmt, va_list ap)
         switch (*p) {
             case 'd':
             case 'i': {
-                int val = is_long ? (int)va_arg(ap, long) : va_arg(ap, int);
+                long val = is_long ? va_arg(ap, long) : va_arg(ap, int);
                 char tmp[32];
                 int len = format_signed(tmp, val, 10);
                 for (int j = 0; j < len && outlen < (int)sizeof(outbuf) - 1; j++)
@@ -493,7 +493,7 @@ int vprintf(const char *fmt, va_list ap)
                 break;
             }
             case 'u': {
-                unsigned int val = is_long ? (unsigned int)va_arg(ap, unsigned long) : va_arg(ap, unsigned int);
+                unsigned long val = is_long ? va_arg(ap, unsigned long) : va_arg(ap, unsigned int);
                 char tmp[32];
                 int len = format_unsigned(tmp, val, 10, 0);
                 for (int j = 0; j < len && outlen < (int)sizeof(outbuf) - 1; j++)
@@ -501,7 +501,7 @@ int vprintf(const char *fmt, va_list ap)
                 break;
             }
             case 'o': {
-                unsigned int val = is_long ? (unsigned int)va_arg(ap, unsigned long) : va_arg(ap, unsigned int);
+                unsigned long val = is_long ? va_arg(ap, unsigned long) : va_arg(ap, unsigned int);
                 char tmp[32];
                 int len = format_unsigned(tmp, val, 8, 0);
                 for (int j = 0; j < len && outlen < (int)sizeof(outbuf) - 1; j++)
@@ -510,7 +510,7 @@ int vprintf(const char *fmt, va_list ap)
             }
             case 'x':
             case 'X': {
-                unsigned int val = is_long ? (unsigned int)va_arg(ap, unsigned long) : va_arg(ap, unsigned int);
+                unsigned long val = is_long ? va_arg(ap, unsigned long) : va_arg(ap, unsigned int);
                 char tmp[32];
                 int len = format_unsigned(tmp, val, 16, *p == 'X');
                 for (int j = 0; j < len && outlen < (int)sizeof(outbuf) - 1; j++)
@@ -518,7 +518,7 @@ int vprintf(const char *fmt, va_list ap)
                 break;
             }
             case 'p': {
-                unsigned int val = (unsigned int)(uintptr_t)va_arg(ap, void *);
+                uintptr_t val = (uintptr_t)va_arg(ap, void *);
                 char tmp[32];
                 int len;
                 if (outlen < (int)sizeof(outbuf) - 2) {
@@ -639,19 +639,19 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap)
         switch (*p) {
             case 'd':
             case 'i': {
-                int val = is_long ? (int)va_arg(ap, long) : va_arg(ap, int);
+                long val = is_long ? va_arg(ap, long) : va_arg(ap, int);
                 char tmp[32];
                 int i = 0;
                 int neg = 0;
-                unsigned int uval;
+                unsigned long uval;
                 int min_digits;
                 int num_len;
 
                 if (val < 0) {
                     neg = 1;
-                    uval = (unsigned int)(-(val + 1)) + 1;  /* Handle INT_MIN */
+                    uval = (unsigned long)(-(val + 1)) + 1;  /* Handle LONG_MIN */
                 } else {
-                    uval = (unsigned int)val;
+                    uval = (unsigned long)val;
                 }
 
                 do {
@@ -679,7 +679,7 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap)
                 break;
             }
             case 'u': {
-                unsigned int val = is_long ? (unsigned int)va_arg(ap, unsigned long) : va_arg(ap, unsigned int);
+                unsigned long val = is_long ? va_arg(ap, unsigned long) : va_arg(ap, unsigned int);
                 char tmp[32];
                 int i = 0;
                 int min_digits;
@@ -704,7 +704,7 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap)
                 break;
             }
             case 'o': {
-                unsigned int val = is_long ? (unsigned int)va_arg(ap, unsigned long) : va_arg(ap, unsigned int);
+                unsigned long val = is_long ? va_arg(ap, unsigned long) : va_arg(ap, unsigned int);
                 char tmp[32];
                 int i = 0;
                 int min_digits;
@@ -724,7 +724,7 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap)
             }
             case 'x':
             case 'X': {
-                unsigned int val = is_long ? (unsigned int)va_arg(ap, unsigned long) : va_arg(ap, unsigned int);
+                unsigned long val = is_long ? va_arg(ap, unsigned long) : va_arg(ap, unsigned int);
                 char tmp[32];
                 int i = 0;
                 int min_digits;
@@ -750,7 +750,7 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap)
                 break;
             }
             case 'p': {
-                unsigned int val = (unsigned int)(uintptr_t)va_arg(ap, void *);
+                uintptr_t val = (uintptr_t)va_arg(ap, void *);
                 char tmp[32];
                 int i = 0;
 
