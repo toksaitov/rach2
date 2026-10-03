@@ -1,0 +1,21 @@
+Define __builtin_offsetof, GCC's name for offsetof.
+
+C written for GCC and TinyCC both, as the Rach2 kernel is, spells
+offsetof as GCC's stddef.h does, __builtin_offsetof(type, member), and
+TinyCC 0.9.27 knew no such name, so `offsetof(struct x, m)` there was a
+call of an undeclared function and a syntax error after it. The name is
+now defined as the expression TinyCC's own stddef.h gives offsetof.
+
+--- a/libtcc.c
++++ b/libtcc.c
+@@ -779,6 +779,10 @@ LIBTCCAPI TCCState *tcc_new(void)
+     tcc_define_symbol(s, "__STDC__", NULL);
+     tcc_define_symbol(s, "__STDC_VERSION__", "199901L");
+     tcc_define_symbol(s, "__STDC_HOSTED__", NULL);
++    /* GCC's name for the offsetof of stddef.h, which C code that targets
++       both compilers spells */
++    tcc_define_symbol(s, "__builtin_offsetof(type, field)",
++                      "((__SIZE_TYPE__)&((type *)0)->field)");
+ 
+     /* target defines */
+ #if defined(TCC_TARGET_I386)
