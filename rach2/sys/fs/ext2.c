@@ -1685,17 +1685,43 @@ static int sb_store(struct ext2_mount *em)
     return write_bytes(em, 1024 + 58, raw, 2, WRITE_DURABLE);
 }
 
-/* One bit of a bitmap block, read through, and written through or left for
-   the batch when one is open. */
-static int bit_get(struct ext2_mount *em, uint32_t bitmap_block, uint32_t index, int *out)
+/**
+ * The first clear bit at or after `from` and before `count` of the bitmap
+ * in block `bitmap_block`, into `*out`, or `count` when every one is set.
+ * The bitmap is read 64 bytes at a time and a byte with every bit set is
+ * passed over whole, so an allocation in a group whose first part is full
+ * does not read each of its bits through the cache alone.
+ */
+static int bit_first_clear(struct ext2_mount *em, uint32_t bitmap_block, uint32_t from,
+                           uint32_t count, uint32_t *out)
 {
-    uint8_t byte;
-    int rc = read_bytes(em, (uint64_t)bitmap_block * em->block_size + index / 8, &byte, 1);
+    uint8_t chunk[64];
+    uint32_t i = from;
 
-    if (rc != 0) {
-        return rc;
+    while (i < count) {
+        uint32_t first = i / 8;
+        uint32_t take = (count - 1) / 8 - first + 1;
+        int rc;
+
+        if (take > sizeof(chunk)) {
+            take = sizeof(chunk);
+        }
+        rc = read_bytes(em, (uint64_t)bitmap_block * em->block_size + first, chunk, take);
+        if (rc != 0) {
+            return rc;
+        }
+        for (; i < count && i / 8 < first + take; i++) {
+            uint8_t b = chunk[i / 8 - first];
+
+            if (b == 0xFFu) {
+                i |= 7u;
+            } else if (!((b >> (i % 8)) & 1u)) {
+                *out = i;
+                return 0;
+            }
+        }
     }
-    *out = (byte >> (index % 8)) & 1;
+    *out = count;
     return 0;
 }
 
@@ -1773,6 +1799,7 @@ static int block_alloc(struct ext2_mount *em, uint32_t hint, uint32_t *out)
     for (tried = 0; tried <= em->groups; tried++) {
         uint32_t i, count, base, bitmap, from;
         uint8_t *gd;
+        int rc;
 
         g = (g0 + tried) % em->groups;
         gd = em->gd + g * 32;
@@ -1786,30 +1813,26 @@ static int block_alloc(struct ext2_mount *em, uint32_t hint, uint32_t *out)
         if (le16(gd + 12) == 0) {
             continue;
         }
-        for (i = from; i < count; i++) {
-            int used, rc;
-
-            rc = bit_get(em, bitmap, i, &used);
-            if (rc != 0) {
-                return rc;
-            }
-            if (used) {
-                continue;
-            }
-            rc = bit_put(em, bitmap, i, 1);
-            if (rc != 0) {
-                return rc;
-            }
-            LE16_PUT(gd + 12, le16(gd + 12) - 1);
-            rc = gd_store(em, g);
-            if (rc != 0) {
-                return rc;
-            }
-            em->free_blocks--;
-            em->alloc_hint = base + i + 1;
-            *out = base + i;
-            return 0;
+        rc = bit_first_clear(em, bitmap, from, count, &i);
+        if (rc != 0) {
+            return rc;
         }
+        if (i >= count) {
+            continue;
+        }
+        rc = bit_put(em, bitmap, i, 1);
+        if (rc != 0) {
+            return rc;
+        }
+        LE16_PUT(gd + 12, le16(gd + 12) - 1);
+        rc = gd_store(em, g);
+        if (rc != 0) {
+            return rc;
+        }
+        em->free_blocks--;
+        em->alloc_hint = base + i + 1;
+        *out = base + i;
+        return 0;
     }
     return -ENOSPC;
 }
@@ -1859,41 +1882,40 @@ static int inode_alloc(struct ext2_mount *em, uint32_t parent_ino, int is_dir, u
     for (tried = 0; tried < em->groups; tried++) {
         uint32_t g = (g0 + tried) % em->groups;
         uint8_t *gd = em->gd + g * 32;
-        uint32_t i;
+        uint32_t base = g * em->ipg, from = 0, limit = em->ipg, i;
+        int rc;
 
-        if (le16(gd + 14) == 0) {
+        if (le16(gd + 14) == 0 || base >= em->inodes) {
             continue;
         }
-        for (i = 0; i < em->ipg; i++) {
-            uint32_t ino = g * em->ipg + i + 1;
-            int used, rc;
-
-            if (ino < em->first_ino || ino > em->inodes) {
-                continue;
-            }
-            rc = bit_get(em, le32(gd + 4), i, &used);
-            if (rc != 0) {
-                return rc;
-            }
-            if (used) {
-                continue;
-            }
-            rc = bit_write(em, le32(gd + 4), i, 1, em->batch ? WRITE_THROUGH : WRITE_UNFLUSHED);
-            if (rc != 0) {
-                return rc;
-            }
-            LE16_PUT(gd + 14, le16(gd + 14) - 1);
-            if (is_dir) {
-                LE16_PUT(gd + 16, le16(gd + 16) + 1);
-            }
-            rc = gd_store(em, g);
-            if (rc != 0) {
-                return rc;
-            }
-            em->free_inodes--;
-            *out = ino;
-            return 0;
+        if (base + 1 < em->first_ino) {
+            from = em->first_ino - 1 - base;
         }
+        if (em->inodes - base < limit) {
+            limit = em->inodes - base;
+        }
+        rc = bit_first_clear(em, le32(gd + 4), from, limit, &i);
+        if (rc != 0) {
+            return rc;
+        }
+        if (i >= limit) {
+            continue;
+        }
+        rc = bit_write(em, le32(gd + 4), i, 1, em->batch ? WRITE_THROUGH : WRITE_UNFLUSHED);
+        if (rc != 0) {
+            return rc;
+        }
+        LE16_PUT(gd + 14, le16(gd + 14) - 1);
+        if (is_dir) {
+            LE16_PUT(gd + 16, le16(gd + 16) + 1);
+        }
+        rc = gd_store(em, g);
+        if (rc != 0) {
+            return rc;
+        }
+        em->free_inodes--;
+        *out = base + i + 1;
+        return 0;
     }
     return -ENOSPC;
 }
@@ -2291,14 +2313,12 @@ static int writeback_reserve(struct ext2_mount *em, struct ext2_reservation *lis
             end = (start - em->first_data) % em->bpg;
         }
         for (bit = from; bit < end; bit++) {
-            int used;
-
-            rc = bit_get(em, le32(gd), bit, &used);
+            rc = bit_first_clear(em, le32(gd), bit, end, &bit);
             if (rc != 0) {
                 return rc;
             }
-            if (used) {
-                continue;
+            if (bit >= end) {
+                break;
             }
             block = em->first_data + g * em->bpg + bit;
             for (i = 0; i < count && list[i].block != block; i++) {
