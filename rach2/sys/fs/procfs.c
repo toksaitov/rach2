@@ -2395,9 +2395,9 @@ static int procfs_gen_statsys(struct procfs_text *t)
 }
 
 /** Append a frame count as kibibytes, which is what /proc/meminfo prints. */
-static void ap_frames_as_kb(struct procfs_text *t, uint32_t frames)
+static void ap_frames_as_kb(struct procfs_text *t, size_t frames)
 {
-    ap_u32(t, frames * (PAGE_SIZE / 1024u));
+    ap_ulong(t, (unsigned long)frames * (PAGE_SIZE / 1024u));
     ap_str(t, " kB\n");
 }
 
@@ -2418,8 +2418,8 @@ static void ap_frames_as_kb(struct procfs_text *t, uint32_t frames)
  */
 static int procfs_gen_meminfo(struct procfs_text *t)
 {
-    uint32_t total = frame_total_count();
-    uint32_t free_frames = frame_free_count();
+    size_t total = frame_total_count();
+    size_t free_frames = frame_free_count();
     uint32_t buffers = bcache_resident();
     uint32_t cached = pc_resident() + filecache_pages();
     uint32_t heap_pages = 0, heap_bytes = 0;
@@ -2461,7 +2461,7 @@ static int procfs_gen_meminfo(struct procfs_text *t)
  */
 static int procfs_gen_vmstat(struct procfs_text *t)
 {
-    uint32_t free_frames = frame_free_count();
+    size_t free_frames = frame_free_count();
     uint32_t file_pages = bcache_resident() + pc_resident() + filecache_pages();
     uint32_t in = 0, out = 0, major, minor;
     const block_device_t *dev, *alias;
@@ -2478,7 +2478,7 @@ static int procfs_gen_vmstat(struct procfs_text *t)
         out += dev->stats.write_sectors / 2u + (alias ? alias->stats.write_sectors / 2u : 0);
     }
     ap_str(t, "nr_free_pages ");
-    ap_u32(t, free_frames);
+    ap_ulong(t, (unsigned long)free_frames);
     ap_str(t, "\nnr_file_pages ");
     ap_u32(t, file_pages);
     ap_str(t, "\npgpgin ");
@@ -3989,7 +3989,7 @@ static int procfs_gen_sysattr(struct procfs_text *t, int node, int attr)
         return t->len;
     }
     if (node == SYSFS_MEMORY) {
-        ap_hex_lower(t, frame_total_count());
+        ap_xlow(t, (unsigned long)frame_total_count(), 1);
         ap_str(t, "000\n"); /* a frame is 0x1000 bytes */
         return t->len;
     }

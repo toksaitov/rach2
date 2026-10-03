@@ -277,8 +277,8 @@ void boot_diag_report(void)
 
     klog(KLOG_INFO, "diag", "kernel ends 0x%X, reservation break 0x%X", (uint32_t)(uintptr_t)&_end,
          (uint32_t)mem_reserved_ptr);
-    klog(KLOG_INFO, "diag", "direct map ends 0x%X, %d frames free after all reservations",
-         (uint32_t)HARD_MEMORY_LIMIT, frame_free_count());
+    klog(KLOG_INFO, "diag", "direct map ends 0x%X, %ld frames free after all reservations",
+         (uint32_t)HARD_MEMORY_LIMIT, (long)frame_free_count());
 
     if (module_count == 0) {
         diag_say("  modules: none (the kernel booted alone)");
