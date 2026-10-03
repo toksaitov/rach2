@@ -1,6 +1,8 @@
 #include "kio.h"
 #include "klog.h"
+#include "arch/arch.h"
 #include "lib/kirq.h"
+#include "lib/spinlock.h"
 
 /*
  * VT100/ANSI terminal state for the VGA console.
@@ -330,17 +332,45 @@ static void vt_answer_query(char c)
     }
 }
 
+/* The console's lock (`console_lock`), the processor that holds it, -1 for
+ * none, and how many times that processor has taken it. */
+static struct spinlock console_spin = SPINLOCK_INIT;
+static volatile int console_owner = -1;
+static int console_depth;
+
+uint32_t console_lock(void)
+{
+    uint32_t flags = kirq_save();
+    int me = (int)arch_cpu_id();
+
+    if (console_owner != me) {
+        spin_lock(&console_spin);
+        console_owner = me;
+    }
+    console_depth++;
+    return flags;
+}
+
+void console_unlock(uint32_t flags)
+{
+    if (--console_depth == 0) {
+        console_owner = -1;
+        spin_unlock(&console_spin);
+    }
+    kirq_restore(flags);
+}
+
 unsigned int k_take_answer(char *buf, unsigned int size)
 {
     unsigned int i, n;
     uint32_t flags;
 
-    flags = kirq_save();
+    flags = console_lock();
     n = vt_answer_len <= size ? vt_answer_len : 0;
     for (i = 0; i < n; ++i)
         buf[i] = vt_answer[i];
     vt_answer_len = 0;
-    kirq_restore(flags);
+    console_unlock(flags);
     return n;
 }
 
@@ -663,20 +693,22 @@ static void vt_csi_byte(char c)
  * queries a program sends to learn the terminal's features do not reach the
  * screen. The hardware cursor is placed after every byte, so a cursor-only
  * sequence still moves the on-screen caret; a writer of many bytes holds it
- * and it is placed once at the release. The byte's work runs with interrupts
- * off, since a keyboard's echo arrives through this path from its interrupt.
+ * and it is placed once at the release. The byte's work runs under the
+ * console's lock, with interrupts off, since a keyboard's echo arrives
+ * through this path from its interrupt and another processor's writes
+ * through it from theirs.
  */
 void k_putc(char c)
 {
     unsigned char uc = (unsigned char)c;
     uint32_t flags;
 
-    /* With interrupts off: a keyboard's echo comes from its interrupt and
-       through this same path, and a scroll or an escape sequence cut in
+    /* Under the console's lock: a keyboard's echo comes from its interrupt
+       and through this same path, and a scroll or an escape sequence cut in
        two by it would leave the cursor and the display's start apart. A
        byte is one cell and a scroll one line; the copy at the memory's end
        is the one long piece, once in 180 lines. */
-    flags = kirq_save();
+    flags = console_lock();
     if (vt_utf_left != 0 && (uc < 0x80 || uc >= 0xC0)) {
         vt_utf_left = 0;
         vga_putc_raw(CHAR_NON_PRINTABLE);
@@ -718,7 +750,7 @@ void k_putc(char c)
     }
 
     textcon_place_cursor();
-    kirq_restore(flags);
+    console_unlock(flags);
 }
 
 void k_puts(const char *str)

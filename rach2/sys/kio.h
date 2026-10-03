@@ -38,6 +38,17 @@
 void k_putc(char c);
 
 /**
+ * The console's lock, over the screen's writer and the serial port's
+ * receive ring: interrupts off, and the lock taken unless this processor
+ * holds it already, so that a panic or a message raised inside the console
+ * still reaches it. Returns the flags `console_unlock` puts back.
+ */
+uint32_t console_lock(void);
+
+/** Give back what `console_lock` took. */
+void console_unlock(uint32_t flags);
+
+/**
  * Load the console's font with the Cyrillic letters into the adapter, and
  * draw from it when the adapter reads it back; otherwise keep the adapter's
  * own font, code page 437.

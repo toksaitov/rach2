@@ -1,7 +1,7 @@
 /**
  * Check a timerfd's read against the timer tick, and its settings.
  *
- * host-deps:
+ * host-deps: tests/host/compat/spinlock_host.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  *
  * The timerfd code is the kernel's, included whole to reach its static read

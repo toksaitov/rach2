@@ -13,6 +13,7 @@
 #include "../proc/tgroup.h"
 #include "../lib/ksignal.h"
 #include "../proc/wait_queue.h"
+#include "../lib/spinlock.h"
 #include "../mm/kheap.h"
 #include "../mm/usercopy.h"
 #include "../lib/kerrno.h"
@@ -93,8 +94,15 @@ struct setting {
     int32_t vnsec;
 };
 
+/*
+ * The armed timers, and those of processor time, which `ptimer_cpu_tick`
+ * counts. Their lock covers the two lists, each timer's count and arming,
+ * and each process's list of POSIX timers, against the ticks of every
+ * processor; it is taken with interrupts off, after the big lock, and
+ * before the locks of the wait queues and the run queues a firing takes.
+ */
+static struct spinlock timer_lock = SPINLOCK_INIT;
 static struct ktimer *armed;
-/* The armed timers of processor time, which `ptimer_cpu_tick` counts. */
 static struct ktimer *cpu_armed;
 
 static void disarm(struct ktimer *t)
@@ -119,6 +127,7 @@ static void wait_from(struct ktimer *t, uint32_t from, uint32_t sec, uint32_t su
 }
 
 static void ptimer_fire(struct ktimer *t);
+static void ptimer_free(struct ktimer **link);
 
 /* An expiration of `t`, due by the tick `now`: counted, with those of an
  * interval missed since, and the timer armed again by its interval or
@@ -159,8 +168,10 @@ static uint32_t cpu_ticks_of(uint32_t sec, uint32_t sub)
 
 void ptimer_cpu_tick(const process_t *p, int user)
 {
-    struct ktimer *t = cpu_armed;
+    struct ktimer *t;
 
+    spin_lock(&timer_lock);
+    t = cpu_armed;
     while (t) {
         struct ktimer *next = t->next;
 
@@ -176,12 +187,15 @@ void ptimer_cpu_tick(const process_t *p, int user)
         }
         t = next;
     }
+    spin_unlock(&timer_lock);
 }
 
 void timerfd_tick(uint32_t now)
 {
-    struct ktimer *t = armed;
+    struct ktimer *t;
 
+    spin_lock(&timer_lock);
+    t = armed;
     while (t) {
         struct ktimer *next = t->next;
 
@@ -195,6 +209,7 @@ void timerfd_tick(uint32_t now)
         }
         t = next;
     }
+    spin_unlock(&timer_lock);
 }
 
 /*
@@ -230,7 +245,7 @@ static int readable(void *arg)
 /**
  * read(2) of a timerfd: the expirations since the last read, which it takes.
  *
- * The count is read and cleared with interrupts off, since the timer
+ * The count is read and cleared under the timers' lock, since the timer
  * interrupt adds to it (`timerfd_tick`), and before the copy to the caller,
  * which can sleep in a page fault: an expiration that comes meanwhile is
  * kept for the next read, and a second reader finds none of the ones this
@@ -245,11 +260,11 @@ static int32_t timerfd_read(fd_entry_t *e, char __user *buf, uint32_t count)
         return -EINVAL;
     }
     for (;;) {
-        uint32_t irq = kirq_save();
+        uint32_t irq = spin_lock_irqsave(&timer_lock);
 
         n = t->count;
         t->count = 0;
-        kirq_restore(irq);
+        spin_unlock_irqrestore(&timer_lock, irq);
         if (n != 0) {
             break;
         }
@@ -279,12 +294,12 @@ static short timerfd_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 static void timerfd_close(fd_entry_t *e)
 {
     struct ktimer *t = (struct ktimer *)e->priv;
-    uint32_t flags = kirq_save();
+    uint32_t flags = spin_lock_irqsave(&timer_lock);
 
     if (t->armed) {
         disarm(t);
     }
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&timer_lock, flags);
     kfree(t);
     e->priv = NULL;
 }
@@ -337,11 +352,11 @@ long sys_timerfd_create(struct isr_params *params)
 }
 
 /* The timer's setting now: the time to its next expiration and its
- * interval, both zero when it is disarmed. It is read with interrupts off,
- * since the tick moves the timer. */
+ * interval, both zero when it is disarmed. It is read under the timers'
+ * lock, since the tick moves the timer. */
 static void current_setting(const struct ktimer *t, struct setting *s)
 {
-    uint32_t irq = kirq_save();
+    uint32_t irq = spin_lock_irqsave(&timer_lock);
 
     k_memset(s, 0, sizeof(*s));
     if (t->armed && t->cpu_tg) {
@@ -362,7 +377,7 @@ static void current_setting(const struct ktimer *t, struct setting *s)
         s->isec = t->isec;
         s->insec = (int32_t)t->isub * NS_PER_TICK;
     }
-    kirq_restore(irq);
+    spin_unlock_irqrestore(&timer_lock, irq);
 }
 
 /* Arm or disarm `t` from the setting `s`, which `flags` makes absolute. */
@@ -393,7 +408,7 @@ static int32_t arm(struct ktimer *t, int flags, const struct setting *s)
         to_wait(now, nsec, &sec, &sub);
     }
     to_wait(s->isec, s->insec, &isec, &isub);
-    irq = kirq_save();
+    irq = spin_lock_irqsave(&timer_lock);
     if (t->armed) {
         disarm(t);
     }
@@ -413,7 +428,7 @@ static int32_t arm(struct ktimer *t, int flags, const struct setting *s)
         t->next = armed;
         armed = t;
     }
-    kirq_restore(irq);
+    spin_unlock_irqrestore(&timer_lock, irq);
     return 0;
 }
 
@@ -624,7 +639,10 @@ static int32_t ptimer_clock(struct ktimer *t, int clock)
  * lowest the process does not have. The clock is real time, time since boot, or
  * the processor time of a process or of a thread of the caller's. A thread
  * SIGEV_THREAD_ID names must be one of the caller's process. EINVAL for another
- * clock, notification or signal, EAGAIN past PTIMER_MAX.
+ * clock, notification or signal, EAGAIN past PTIMER_MAX. The id is stored
+ * once the timer is on the process's list, since the store can sleep in a
+ * page fault, which the timers' lock cannot be held across; a store that
+ * fails takes the timer off again, unarmed, and is EFAULT.
  */
 long sys_timer_create(struct isr_params *params)
 {
@@ -661,16 +679,16 @@ long sys_timer_create(struct isr_params *params)
         kfree(t);
         return -EINVAL;
     }
-    irq = kirq_save();
+    irq = spin_lock_irqsave(&timer_lock);
     while (*link && (*link)->id == id) {
         link = &(*link)->in_group;
         id++;
     }
-    if (id >= PTIMER_MAX || copy_to_user((void __user *)SC_ARG(params, 2), &id, sizeof(id)) != 0) {
-        kirq_restore(irq);
+    if (id >= PTIMER_MAX) {
+        spin_unlock_irqrestore(&timer_lock, irq);
         tgroup_put(t->cpu_tg);
         kfree(t);
-        return id >= PTIMER_MAX ? -EAGAIN : -EFAULT;
+        return -EAGAIN;
     }
     t->clock = clock;
     t->tg = tg;
@@ -681,7 +699,13 @@ long sys_timer_create(struct isr_params *params)
     t->tid = (uint32_t)ev.tid;
     t->in_group = *link;
     *link = t;
-    kirq_restore(irq);
+    spin_unlock_irqrestore(&timer_lock, irq);
+    if (copy_to_user((void __user *)SC_ARG(params, 2), &id, sizeof(id)) != 0) {
+        for (link = &tg->timers; *link != t; link = &(*link)->in_group) {
+        }
+        ptimer_free(link);
+        return -EFAULT;
+    }
     return 0;
 }
 
@@ -739,13 +763,13 @@ long sys_timer_getoverrun(struct isr_params *params)
 static void ptimer_free(struct ktimer **link)
 {
     struct ktimer *t = *link;
-    uint32_t irq = kirq_save();
+    uint32_t irq = spin_lock_irqsave(&timer_lock);
 
     if (t->armed) {
         disarm(t);
     }
     *link = t->in_group;
-    kirq_restore(irq);
+    spin_unlock_irqrestore(&timer_lock, irq);
     tgroup_put(t->cpu_tg);
     kfree(t);
 }

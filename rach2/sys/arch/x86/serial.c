@@ -6,7 +6,6 @@
 #include "../../kio.h"
 #include "isr.h"
 #include "pic.h"
-#include "../../lib/kirq.h"
 
 /* Serial port register offsets from base address */
 #define SERIAL_DATA        0 /* Data register (R/W) */
@@ -166,7 +165,7 @@ int serial_rx_service(int budget)
     if (!_serial_port_exists) {
         return 0;
     }
-    flags = kirq_save();
+    flags = console_lock();
     while (moved < budget && _rx_count() < SERIAL_RX_SIZE && (_serial_lsr() & SERIAL_LSR_DR)) {
         unsigned char c = inb(SERIAL_COM1 + SERIAL_DATA);
 
@@ -191,7 +190,7 @@ int serial_rx_service(int budget)
             break;
         }
     }
-    kirq_restore(flags);
+    console_unlock(flags);
     return moved;
 }
 
@@ -245,7 +244,7 @@ int serial_rx_take(void)
     if (!_serial_port_exists) {
         return -1;
     }
-    flags = kirq_save();
+    flags = console_lock();
     if (_rx_count() > 0) {
         c = _rx_ring[_rx_head & (SERIAL_RX_SIZE - 1)];
         _rx_head++;
@@ -254,7 +253,7 @@ int serial_rx_take(void)
         outb(SERIAL_COM1 + SERIAL_INTR_ENABLE, SERIAL_IER_RDA);
         _rx_irq_masked = 0;
     }
-    kirq_restore(flags);
+    console_unlock(flags);
     return c;
 }
 
@@ -279,7 +278,7 @@ static unsigned char _rx_scan_set[3];
 
 int serial_rx_find(const unsigned char *set, int n)
 {
-    uint32_t flags = kirq_save();
+    uint32_t flags = console_lock();
     uint32_t i;
     int found = -1;
     int same = n == 3 && set[0] == _rx_scan_set[0] && set[1] == _rx_scan_set[1] &&
@@ -303,24 +302,24 @@ int serial_rx_find(const unsigned char *set, int n)
         _rx_scan_set[2] = set[2];
         _rx_scanned = found < 0 ? _rx_tail : _rx_head + (uint32_t)found;
     }
-    kirq_restore(flags);
+    console_unlock(flags);
     return found;
 }
 
 void serial_rx_discard(int count)
 {
-    uint32_t flags = kirq_save();
+    uint32_t flags = console_lock();
 
     if ((uint32_t)count > _rx_count()) {
         count = (int)_rx_count();
     }
     _rx_head += (uint32_t)count;
-    kirq_restore(flags);
+    console_unlock(flags);
 }
 
 void serial_rx_flush(void)
 {
-    uint32_t flags = kirq_save();
+    uint32_t flags = console_lock();
 
     _rx_head = _rx_tail;
     if (_serial_port_exists) {
@@ -331,13 +330,13 @@ void serial_rx_flush(void)
         outb(SERIAL_COM1 + SERIAL_INTR_ENABLE, SERIAL_IER_RDA);
         _rx_irq_masked = 0;
     }
-    kirq_restore(flags);
+    console_unlock(flags);
 }
 
 void serial_rx_counters(struct serial_rx_counters *out)
 {
-    uint32_t flags = kirq_save();
+    uint32_t flags = console_lock();
 
     *out = _rx;
-    kirq_restore(flags);
+    console_unlock(flags);
 }
