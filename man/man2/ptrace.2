@@ -320,7 +320,19 @@ fails with
 .Er EINTR ,
 where Linux restarts it.
 .It Dv PTRACE_LISTEN
-Accepted for a seized tracee, which stays stopped.
+For a seized tracee in a group stop's
+.Dv PTRACE_EVENT_STOP :
+the tracee stays stopped, as a stopped process does, until its process's
+stop ends with
+.Dv SIGCONT
+or begins again, when it makes a new
+.Dv PTRACE_EVENT_STOP ,
+with
+.Dv SIGTRAP
+after the end or the stop signal after a new stop; at once when such a
+change came before the request.
+A seized tracee not listening makes the same stop when its tracer next
+resumes it.
 .It Dv PTRACE_SETOPTIONS
 .Dv PTRACE_O_TRACESYSGOOD ,
 .Dv PTRACE_O_TRACEFORK ,
@@ -435,7 +447,10 @@ a signal past 64, a memory address no mapping allows, or
 .Dv PTRACE_INTERRUPT
 or
 .Dv PTRACE_LISTEN
-for a tracee that was not seized.
+for a tracee that was not seized, and
+.Dv PTRACE_LISTEN
+for one in any stop but a group stop's
+.Dv PTRACE_EVENT_STOP .
 .It Bq Er ENODEV
 A register set the processor lacks:
 .Dv NT_X86_XSTATE

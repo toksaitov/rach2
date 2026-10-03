@@ -156,12 +156,34 @@ int ptrace_group_stop(int signo)
         return 0;
     }
     self->stop_seen = 1;
+    self->ptrace &= ~PT_INTERRUPT;
     status = ((uint32_t)signo << 8) | 0x7F;
     if (self->ptrace & PT_SEIZED) {
         status |= (uint32_t)PTRACE_EVENT_STOP << 16;
     }
     (void)ptrace_stop(status, NULL);
+    ptrace_return_stops();
     return 1;
+}
+
+void ptrace_group_change(struct tgroup *tg)
+{
+    process_t *t;
+
+    for (t = proc_list; t; t = t->next) {
+        if (t->tg != tg || (t->ptrace & (PT_TRACED | PT_SEIZED)) != (PT_TRACED | PT_SEIZED)) {
+            continue;
+        }
+        t->ptrace |= PT_INTERRUPT;
+        if ((t->ptrace & PT_LISTEN) && t->ptrace_status != 0) {
+            t->ptrace &= ~PT_LISTEN;
+            t->ptrace_signo = 0;
+            t->ptrace_status = 0;
+            if (t->state == PROC_STOPPED) {
+                sched_make_ready(t);
+            }
+        }
+    }
 }
 
 void ptrace_event(int event, uint32_t msg)
@@ -368,11 +390,31 @@ static int ptrace_resume(process_t *t, unsigned long sig, int step, int syscalls
     } else {
         t->ptrace &= ~PT_SYSCALL;
     }
+    t->ptrace &= ~PT_LISTEN;
     t->ptrace_signo = (int32_t)sig;
     t->ptrace_status = 0;
     if (t->state == PROC_STOPPED) {
         sched_make_ready(t);
     }
+    return 0;
+}
+
+/**
+ * PTRACE_LISTEN: keep the seized thread `t`, stopped in a group stop's
+ * PTRACE_EVENT_STOP, in its stop, as a stopped process is kept, until the
+ * group stop begins again or ends (`ptrace_group_change`), when it makes a
+ * new PTRACE_EVENT_STOP; at once, when such a change came before the
+ * request. Any other stop is EIO, as on Linux.
+ */
+static long ptrace_listen(process_t *t)
+{
+    if (!(t->ptrace & PT_SEIZED) || (t->ptrace_status >> 16) != PTRACE_EVENT_STOP) {
+        return -EIO;
+    }
+    if (t->ptrace & PT_INTERRUPT) {
+        return ptrace_resume(t, 0, 0, (t->ptrace & PT_SYSCALL) != 0);
+    }
+    t->ptrace |= PT_LISTEN;
     return 0;
 }
 
@@ -648,7 +690,7 @@ static long ptrace_stopped(process_t *t, uint32_t pid, long request, uintptr_t a
         ptrace_detach(t, (int)data);
         return 0;
     case PTRACE_LISTEN:
-        return (t->ptrace & PT_SEIZED) ? 0 : -EIO;
+        return ptrace_listen(t);
     case PTRACE_SETOPTIONS:
         if (data & ~PTRACE_O_MASK) {
             return -EINVAL;

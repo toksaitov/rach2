@@ -979,6 +979,69 @@ static int attach_stopped(void)
 }
 
 /*
+ * PTRACE_LISTEN holds a seized tracee in its group stop's PTRACE_EVENT_STOP
+ * until the stop ends, and the end makes a new PTRACE_EVENT_STOP with
+ * SIGTRAP, whichever comes first. A SIGCONT before the listen is strace's
+ * start on two processors, which left the tracee stopped for good while the
+ * listen did nothing; a SIGCONT after it is the order one processor gave.
+ * The SIGCONT is then a signal-delivery stop, which PTRACE_LISTEN refuses
+ * with EIO.
+ */
+static int expect_stop(pid_t pid, int want, const char *what)
+{
+    int status;
+
+    if (wait_within(pid, &status) != pid || !WIFSTOPPED(status) || status >> 8 != want) {
+        return abandon(pid, what);
+    }
+    return 0;
+}
+
+static int listen_and_continue(void)
+{
+    pid_t pid = fork();
+    int status;
+
+    if (pid == 0) {
+        raise(SIGSTOP);
+        raise(SIGSTOP);
+        _exit(0);
+    }
+    if (waitpid(pid, &status, WUNTRACED) != pid || !WIFSTOPPED(status)) {
+        return fail("the child to be listened to did not stop");
+    }
+    if (ptrace(PTRACE_SEIZE, pid, NULL, NULL) != 0 ||
+        expect_stop(pid, SIGSTOP | (PTRACE_EVENT_STOP << 8),
+                    "the seize of the stopped process was not a group stop") ||
+        kill(pid, SIGCONT) != 0 || ptrace(PTRACE_LISTEN, pid, NULL, NULL) != 0 ||
+        expect_stop(pid, SIGTRAP | (PTRACE_EVENT_STOP << 8),
+                    "PTRACE_LISTEN after the stop ended made no new event stop") ||
+        ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 ||
+        expect_stop(pid, SIGCONT, "the SIGCONT made no signal-delivery stop")) {
+        return 1;
+    }
+    if (ptrace(PTRACE_LISTEN, pid, NULL, NULL) != -1 || errno != EIO) {
+        return abandon(pid, "PTRACE_LISTEN of a signal-delivery stop was taken");
+    }
+    if (ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 ||
+        expect_stop(pid, SIGSTOP, "the second SIGSTOP made no signal-delivery stop") ||
+        ptrace(PTRACE_CONT, pid, NULL, (void *)(long)SIGSTOP) != 0 ||
+        expect_stop(pid, SIGSTOP | (PTRACE_EVENT_STOP << 8), "the second stop was not a group stop") ||
+        ptrace(PTRACE_LISTEN, pid, NULL, NULL) != 0 || kill(pid, SIGCONT) != 0 ||
+        expect_stop(pid, SIGTRAP | (PTRACE_EVENT_STOP << 8),
+                    "the stop's end during PTRACE_LISTEN made no new event stop") ||
+        ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 ||
+        expect_stop(pid, SIGCONT, "the second SIGCONT made no signal-delivery stop") ||
+        ptrace(PTRACE_CONT, pid, NULL, NULL) != 0) {
+        return 1;
+    }
+    if (wait_within(pid, &status) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        return abandon(pid, "the listened-to process did not run on");
+    }
+    return 0;
+}
+
+/*
  * PTRACE_INTERRUPT stops a seized tracee seen asleep in a read of an empty
  * pipe, with PTRACE_EVENT_STOP and SIGTRAP, and the read, restarted when the
  * tracer resumes it, reads the byte written after.
@@ -1124,7 +1187,7 @@ int main(void)
 {
     if (memory_and_registers() || mem_after_end() || syscalls_and_exec() || syscall_changes() ||
         killed_at_entry() || restart_cancelled() || attach() || attach_stopped() ||
-        interrupt_read() || seized_fork() || stopped_leader() || traced_thread_usage() ||
+        listen_and_continue() || interrupt_read() || seized_fork() || stopped_leader() || traced_thread_usage() ||
         tracer_first() || killed_tracee()) {
         return 1;
     }

@@ -3231,6 +3231,7 @@ static void sig_job_control(process_t *target, int signo)
                     sched_make_ready(t);
                 }
             }
+            ptrace_group_change(tg);
             tg->leader->jc_status = 0xffff; /* WIFCONTINUED */
             if (parent) {
                 k_memset(&child, 0, sizeof(child));
@@ -4109,6 +4110,7 @@ static void sig_group_stop(int signo)
     }
     tg->stop = (uint32_t)signo;
     tg->leader->jc_status = (uint32_t)(((signo & 0xff) << 8) | 0x7f);
+    ptrace_group_change(tg);
     parent = get_process(tg->leader->parent_pid);
     if (parent) {
         struct k_siginfo child;

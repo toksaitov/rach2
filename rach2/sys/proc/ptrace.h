@@ -17,8 +17,9 @@
 #define PT_SEIZED    0x02u /* the tracer attached with PTRACE_SEIZE */
 #define PT_SYSCALL   0x04u /* it stops at each system call's entry and exit */
 #define PT_STEP      0x08u /* the kernel set TF for PTRACE_SINGLESTEP */
-#define PT_INTERRUPT 0x10u /* PTRACE_INTERRUPT asked for a stop */
+#define PT_INTERRUPT 0x10u /* PTRACE_INTERRUPT, or a change of its group stop, asks for a stop */
 #define PT_START     0x20u /* a seized thread's first stop is still to come */
+#define PT_LISTEN    0x40u /* PTRACE_LISTEN keeps it in its group stop until that changes */
 
 /* The events of a stop, in bits 16-23 of its wait status, and the option bit
  * that asks for each, 1 << event. */
@@ -53,10 +54,20 @@ int ptrace_signal_stop(int signo, struct k_siginfo *info);
 /**
  * The stop a traced thread makes when its process stops: it is reported as a
  * stop with the stop signal, PTRACE_EVENT_STOP when the tracer seized it, and
- * the tracer may resume the thread while the process stays stopped. Returns
- * nonzero when it stopped.
+ * the tracer may resume the thread while the process stays stopped. The
+ * report answers a stop asked for meanwhile; one asked for during the stop,
+ * by a change of the group stop or PTRACE_INTERRUPT, is made as the thread
+ * leaves it. Returns nonzero when it stopped.
  */
 int ptrace_group_stop(int signo);
+
+/**
+ * Tell the seized tracees among the threads of `tg` that its group stop has
+ * begun or ended, as Linux's JOBCTL_TRAP_NOTIFY tells them: each makes a new
+ * PTRACE_EVENT_STOP, at once when PTRACE_LISTEN holds it in its stop, else
+ * when its tracer next resumes it, or as it returns to user mode.
+ */
+void ptrace_group_change(struct tgroup *tg);
 
 /** The event stop `event` with `msg` for PTRACE_GETEVENTMSG, when the current
  * thread is traced and its options ask for the event. */
