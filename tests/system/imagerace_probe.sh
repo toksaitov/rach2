@@ -65,10 +65,11 @@ image_make()
         build/images/test.krffs
 }
 
-mkdir -p "$tree/tests/system" "$tree/krffs/manifests" "$tree/tools/inspect"
+mkdir -p "$tree/tests/system" "$tree/krffs/manifests" "$tree/tools/inspect" "$tree/utils"
 cp Makefile "$tree/"
 cp -R mk "$tree/"
-cp tests/Makefile tests/conloadprobe.c tests/registry "$tree/tests/"
+cp tests/Makefile tests/conloadprobe.c tests/probe.h tests/registry "$tree/tests/"
+cp utils/pingcall.h "$tree/utils/"
 cp tests/system/suites.mk "$tree/tests/system/"
 cp krffs/*.[ch] krffs/Makefile krffs/mkimage.sh krffs/manifest_deps.sh "$tree/krffs/"
 cp krffs/manifests/*.manifest "$tree/krffs/manifests/"

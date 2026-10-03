@@ -4,8 +4,16 @@ set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+# The architecture, from ARCH as mk/arch.sh reads it: its compiler, its text
+# address, its build tree and its emulator.
+RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
+REPO=$repo
+. "$repo/mk/arch.sh"
+RACH2_QEMU=$ARCH_QEMU
+export RACH2_QEMU
+stick=build$ARCH_SUFFIX/images/usbdisk/stick-mbr.img
 harness="$repo/build/tests/system/harness"
-for artifact in "$harness" build/images/usbdisk/stick-mbr.img \
+for artifact in "$harness" "$stick" \
     build/tools/inspect/elfcheck build/krffs/mkfs.krffs \
     build/krffs/stageimage.krffs build/krffs/readfile.krffs \
     build/tools/inspect/setidcheck; do
@@ -99,9 +107,10 @@ trap 'exit 143' TERM
 
 build_probe()
 {
-    "${CROSS_CC:-i686-elf-gcc}" -m32 -nostdlib -static -ffreestanding \
-        -ansi -Werror -Wdeclaration-after-statement \
-        -Wl,-Ttext=0x08048000 -Wl,--build-id=none \
+    # shellcheck disable=SC2086 # ARCH_LDFLAGS is empty or one flag
+    "${CROSS_CC:-${CROSS}gcc}" "$MFLAG" -nostdlib -static -ffreestanding \
+        -ansi -Werror -Wdeclaration-after-statement -I "$repo/tests" \
+        -Wl,-Ttext="$ARCH_USER_TEXT" -Wl,--build-id=none $ARCH_LDFLAGS \
         -o "$work/usbdiskprobe" "$work/usbdiskprobe.c"
     awk -v probe="$work/usbdiskprobe" '
         $1 == "file" && $3 == "/usbdiskprobe" {$4 = probe}
@@ -140,8 +149,8 @@ run_phase()
     phase=$1
     echo "usbdisk-mutation: building $phase"
     run_logged "$work/$phase.build.log" make -s -C "$work/rach2" \
-        -j4 "ELFCHECK=$repo/build/tools/inspect/elfcheck"
-    cp "$work/build/rach2/kernel" "$work/$phase.kernel"
+        -j4 "ARCH=$RACH2_ARCH" "ELFCHECK=$repo/build/tools/inspect/elfcheck"
+    cp "$work/build$ARCH_SUFFIX/rach2/kernel" "$work/$phase.kernel"
     if [ "$phase" = fixed ]; then
         (cd "$work" && shasum -a 256 fault usbdiskprobe.c usbdiskprobe \
             test.krffs vfs.saved fixed.kernel > proof.sha256)
@@ -149,7 +158,7 @@ run_phase()
     shasum -a 256 "$work/$phase.kernel"
     for mode in holdnested holdnestedexfat; do
         row="$work/$phase.$mode"
-        cp build/images/usbdisk/stick-mbr.img "$row.img"
+        cp "$stick" "$row.img"
         echo "usbdisk-mutation: running $phase $mode"
         status=0
         run_logged "$row.log" "$harness" \

@@ -33,10 +33,11 @@ extract()
 }
 
 # A conditional caller disables errexit throughout an ordinary shell function.
-# Exec a new shell so the extracted builder has the production failure rules.
+# Exec a new shell so the extracted builder has the production failure rules,
+# with the compiler and flags mk/arch.sh gives the mutation script.
 image_build()
 {
-    sh -eu -c '. "$1"; repo=$2; work=$3; build_probe' \
+    sh -eu -c 'REPO=$2; . "$2/mk/arch.sh"; . "$1"; repo=$2; work=$3; build_probe' \
         usbdisk-image "$root/functions.sh" "$repo" "$work"
 }
 
@@ -164,6 +165,9 @@ if [ "$#" -ne 0 ]; then
     rows restored-manifest
     status=0
     (
+        REPO=$repo
+        # shellcheck disable=SC1091
+        . "$repo/mk/arch.sh"
         image_build()
         {
             # shellcheck disable=SC1091

@@ -3,15 +3,25 @@
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
-for artifact in build/rach2/kernel build/tests/system/harness \
+# The architecture, from ARCH as mk/arch.sh reads it: its compiler, its text
+# address, its kernel and its emulator.
+RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
+REPO=$repo
+. "$repo/mk/arch.sh"
+RACH2_QEMU=$ARCH_QEMU
+export RACH2_QEMU
+kernel=${ARCH_BUILD#"$repo"/}/rach2/kernel
+for artifact in "$kernel" build/tests/system/harness \
     build/krffs/mkfs.krffs build/krffs/stageimage.krffs build/krffs/readfile.krffs; do
     [ -x "$artifact" ] || { echo "rng-mutation: missing $artifact" >&2; exit 1; }
 done
 mkdir -p build/review-proof
 work=$(mktemp -d "$repo/build/review-proof/rng.XXXXXX")
-mkdir -p "$work/rach2/sys/lib" "$work/tests"
-cp rach2/sys/arch/x86/kcpu.c rach2/sys/arch/x86/kcpu.h rach2/sys/lib/kint.h "$work/rach2/sys/lib/"
-cp tests/rngprobe.c "$work/tests/"
+mkdir -p "$work/rach2/sys/lib" "$work/rach2/sys/arch/x86" "$work/tests" "$work/utils"
+cp rach2/sys/arch/x86/kcpu.c rach2/sys/arch/x86/kcpu.h "$work/rach2/sys/arch/x86/"
+cp rach2/sys/lib/kint.h "$work/rach2/sys/lib/"
+cp tests/rngprobe.c tests/probe.h "$work/tests/"
+cp utils/pingcall.h "$work/utils/"
 source="$work/rach2/sys/arch/x86/kcpu.c"
 cp "$source" "$work/saved.c"
 child=
@@ -34,15 +44,16 @@ run_phase()
 {
     phase=$1
     binary="$work/$phase.probe"
-    "${CROSS_CC:-i686-elf-gcc}" -m32 -nostdlib -static -ffreestanding \
-        -Wl,-Ttext=0x08048000 -Wl,--build-id=none \
+    # shellcheck disable=SC2086 # ARCH_LDFLAGS is empty or one flag
+    "${CROSS_CC:-${CROSS}gcc}" "$MFLAG" -nostdlib -static -ffreestanding \
+        -Wl,-Ttext="$ARCH_USER_TEXT" -Wl,--build-id=none $ARCH_LDFLAGS \
         -o "$binary" "$work/tests/rngprobe.c" >"$work/$phase.compile.log" 2>&1
     printf 'file 0755 /rngprobe %s\n' "$binary" > "$work/rng-proof.manifest"
     sh krffs/mkimage.sh "$work/rng-proof.manifest" "$work/$phase.krffs" 1 \
         >"$work/$phase.image.log" 2>&1
     build/krffs/readfile.krffs "$work/$phase.krffs" /rngprobe "$work/$phase.extracted"
     cmp "$binary" "$work/$phase.extracted"
-    build/tests/system/harness --kernel build/rach2/kernel \
+    build/tests/system/harness --kernel "$kernel" \
         --initrd "$work/$phase.krffs" --append 'rach2.nonet rach2.noaudio' \
         --net hubport,id=net0,hubid=0 --qemu-arg=-cpu --qemu-arg=max \
         --log "$work/$phase.console.log" --timeout 30 \
