@@ -1,0 +1,28 @@
+# Milestone 56: the rest of milestone 55's open items
+
+Milestone 56 is accepted on 2026-10-03 at the commit that adds this record, from source `a9adb049`. Every item `dev-log/55-open/notes.md` left open is done but the terminal browsers a framebuffer would draw, and so are the three faults of the console Chawan showed that morning: the console draws Cyrillic from a font loaded at boot, Alt sends ESC, and a console session has `LANG=C.UTF-8`; `uname` names the system Linux; a pseudo-terminal belongs to the group `tty`, for `write` and `wall`; `ping` prints `ttl=`; `/dev/mqueue` lists the POSIX queues; every boot publishes its disks' whole-disk nodes, and a directory of KRFFS can be bound; tmpfs holds its files to `size=` and lets one reach 16 TiB; `fallocate` works on tmpfs and ext2; ext2 keeps the inode flags and enforces immutable and append-only; ext2 writes back as Linux's does; the pages of programs stay in free memory between runs; and the GNU root has m4, Autoconf, Automake, Bison, flex, jq, screen, sudo, CMake, and BIND's `dig` and `host`.
+
+## What was built
+
+The plan's four phases, each item in a commit of its own, as `notes.md` lists them. The checks then found, and the batch fixed: sudo's `/run/sudo` in the root, which turned the link `/run` into a directory and kept D-Bus from starting; util-linux's reading of a Linux release as a sysfs with `/sys/block/loopN/loop`, which now exists; screen's need of packet mode on a pseudo-terminal's master; automake's scripts naming the build host's autoconf; BIND's allocator, which OpenSSL 4's cleanup reached after it was freed; CMake's help pages with spaces in their names, which the image builder now takes; a shared mapping of a tmpfs file past its end, refused as on Linux now that files reach 16 TiB; a remount's `size=`; the write-back's single-block evictions, which a dirty share of a quarter of the cache now turns into runs; and ext2's allocation, which read a bitmap a bit at a time.
+
+## What proves it
+
+* The last full set, `tests/run all` on the tree of source `a9adb049` at the testing host, s67, passed all 91 suites. That tree had one more entry in `tests/system/probe_faults.txt`, removed since, as the next line says. The full sets before it, s61 to s66, found the faults `notes.md` lists.
+* The fault entries of the milestone's new checks, each put into the tree alone and caught by its row, with the restored build equal to the first: twelve kernel faults in s64, for the console's Alt, `ping`'s `ttl=`, the system's name, the group `tty`, the disk node, the immutable flag, the file page cache's drop, `fallocate` on ext2 twice, packet mode, sysfs's loop directory and ext2's write-back; the exec cache's in s66; and seven probe faults in s65, for `/dev/mqueue`, the bind of KRFFS, `fallocate` on tmpfs, `/proc/version`, a remount's `size=`, a page past a tmpfs file's end and the memfd root's path. An eighth, which took the bind's own repointing out, was caught by no row: on the KRFFS root every reference a row can reach is repointed apart from it, and only a bind of a mounted KRFFS volume, which no suite binds, reaches it; the entry was removed.
+* The host's mutation runs of the new host rows: tmpfs's remount, the pseudo-terminal's packet mode, and ext2's bitmap search, each fault failing its row and the restored source passing.
+* The machine: every item tried on the Lenovo as a user after each update, the last on the final build, with the browser's second start at 3.8 s and one disk command against 5.3 s and 1850, and 1000 creates in 421 to 480 ms against 1144 ms on milestone 55's build.
+* No Codex review: the owner's quota allowed none before 2026-10-04, and the batch was reviewed by hand, which found four faults before the commits (`notes.md`).
+
+## The record
+
+* Source: `a9adb049`. Build options: the kernel with `i686-elf-gcc -m32 -ansi -Werror`, freestanding and without libgcc; the GNU layer with the cross toolchain of `make gnu-toolchain`.
+* The machine's kernel: `build/rach2/kernel` of the testing host's build in s66, whose kernel sources are those of source `a9adb049`, as s67's identical build of that tree shows, 1465764 bytes, sha256 `9932ca5b52820e4a831e34efc8714705ac2597eea74885086f021d190d01ddd5`, in the candidate slot and committed.
+* The machine's root: `os-real-gnu-2g.ext2` of s67, from the tree of source `a9adb049` but for the removed fault entry, which is no file of it, in 2048 MiB, sha256 `4f28b6c0356246ab0e193181c58e610c7d0dc3cd7def1d3f8744c428754d08c3`, written by `rach2-install --update` and grown to 232.8 GiB. The root carries the kernel's sources in `/src`, so a change of any file under `rach2/` changes the image.
+* The machine's recovery partition after the last update: sha256 `9b6d85c9961893cd2b2e3287df1b39cef5367222a41d43c74d10166dd6e5ef77`. The stick: the root's image, the kernel and the installer on the exFAT volume of the SanDisk stick.
+* Hardware: the Lenovo G50-70 at 192.168.0.106, its Samsung SSD 870 EVO of 488397168 sectors, serial `S6P2NX0T381638Z`, and the SanDisk 3.2Gen1 stick, serial `00014101091624031318`, plugged into it.
+* The testing host's judges: i686 GCC 15.2.0, which also compiled the machine's kernel, QEMU 10.2.1, Cppcheck 2.19.0 and clang-format 21.1.8, on 32 processors.
+
+## What is still open
+
+A terminal browser drawn by Chromium or Firefox waits for a framebuffer, as milestone 55 recorded. ext2's write-back has Linux's cost: a stop of the machine before a sync, which the harness and a power cut both are, leaves what `e2fsck` repairs, where the ordered writes left only lost blocks, orphans and counts; a mount with `sync` or `dirsync` keeps the old promise.
