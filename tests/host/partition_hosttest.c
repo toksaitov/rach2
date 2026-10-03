@@ -2,13 +2,16 @@
  * partition_hosttest.c: the partition service over disks in memory.
  *
  * host-deps: rach2/sys/block/partition.c rach2/sys/block/gpt.c
+ * host-deps: rach2/sys/block/mbr.c
  *
  * A disk is an array of sectors the reader callback serves, so every table
  * the service must read is built here byte by byte: an MBR with an extended
  * partition and a chain of logical ones, a chain that loops, a GPT with
  * more entries than four, a GPT whose primary is damaged and whose backup
  * serves, one with both damaged, a blank disk, an unreadable one, and more
- * entries than the service keeps.
+ * entries than the service keeps. The installed disk's GPT layout is read
+ * again as the four records of an MBR, which is how the kernel judges its
+ * boot partition.
  */
 extern int printf(const char *fmt, ...);
 extern int strcmp(const char *a, const char *b);
@@ -140,6 +143,17 @@ static void gpt_header(uint64_t my_lba, uint64_t alternate, uint64_t array_lba)
     wr32(h + 16, gpt_crc32(h, 92));
 }
 
+/** Give entry `index` the type GUID `type`, as the table stores it. */
+static void gpt_type(unsigned index, const unsigned char *type)
+{
+    unsigned char *e = disk + 2 * SECTOR + index * ENTRY_SIZE;
+    int i;
+
+    for (i = 0; i < 16; i++) {
+        e[i] = type[i];
+    }
+}
+
 /** A whole GPT disk: protective MBR, the entries given, both headers. */
 static void gpt_disk(void)
 {
@@ -269,6 +283,50 @@ int main(void)
     disk[(DISK_SECTORS - 1) * SECTOR + 20] ^= 0xFF;
     CHECK("both damaged reads", part_scan(&t, read_disk, 0, DISK_SECTORS, work) == 0);
     CHECK("as a bad GPT", t.kind == PART_GPT_BAD && t.count == 0);
+
+    /* The installed disk: the EFI system partition, recovery, the root and
+     * the BIOS boot partition in the sectors before the first, as entries
+     * 1 to 4, and a fifth the MBR's records have no room for. */
+    {
+        static const unsigned char esp[16] = {0x28, 0x73, 0x2a, 0xc1, 0x1f, 0xf8, 0xd2, 0x11,
+                                              0xba, 0x4b, 0x00, 0xa0, 0xc9, 0x3e, 0xc9, 0x3b};
+        static const unsigned char data[16] = {0xa2, 0xa0, 0xd0, 0xeb, 0xe5, 0xb9, 0x33, 0x44,
+                                               0x87, 0xc0, 0x68, 0xb6, 0xb7, 0x26, 0x99, 0xc7};
+        static const unsigned char linux_fs[16] = {0xaf, 0x3d, 0xc6, 0x0f, 0x83, 0x84, 0x72, 0x47,
+                                                   0x8e, 0x79, 0x3d, 0x69, 0xd8, 0x47, 0x7d, 0xe4};
+        static const unsigned char bios[16] = {0x48, 0x61, 0x68, 0x21, 0x49, 0x64, 0x6f, 0x6e,
+                                               0x74, 0x4e, 0x65, 0x65, 0x64, 0x45, 0x46, 0x49};
+        struct mbr_part m[MBR_PART_COUNT];
+
+        blank();
+        gpt_entry(0, 2048, 2559, "boot");
+        gpt_type(0, esp);
+        gpt_entry(1, 2560, 3071, "recovery");
+        gpt_type(1, data);
+        gpt_entry(2, 3072, 3583, "root");
+        gpt_type(2, linux_fs);
+        gpt_entry(3, 34, 2047, "BIOS boot");
+        gpt_type(3, bios);
+        gpt_entry(4, 3584, 3839, "fifth");
+        gpt_disk();
+        CHECK("the installed layout reads",
+              part_scan(&t, read_disk, 0, DISK_SECTORS, work) == 0 && t.count == 5);
+        CHECK("as four MBR records", part_gpt_as_mbr(&t, m) == 0);
+        CHECK("entry 1, the EFI system partition, as type 0xEF",
+              m[0].type == 0xEF && m[0].start_lba == 2048 && m[0].sector_count == 512);
+        CHECK("entry 2, basic data, as 0x0C", m[1].type == 0x0C && m[1].start_lba == 2560);
+        CHECK("entry 3, a Linux file system, as 0x83",
+              m[2].type == 0x83 && m[2].sector_count == 512);
+        CHECK("entry 4, BIOS boot, as data in no file system",
+              m[3].type == 0xDA && m[3].start_lba == 34 && m[3].sector_count == 2014);
+        CHECK("which the boot partition's judgement takes", mbr_bootpart_ok(m, DISK_SECTORS) == 0);
+        t.parts[0].start_lba = 0x100000000ull;
+        CHECK("an entry past 32 bits of address", part_gpt_as_mbr(&t, m) == 0);
+        CHECK("leaves its record empty", m[0].type == 0 && m[0].sector_count == 0);
+        t.kind = PART_MBR;
+        CHECK("an MBR table is not given this way", part_gpt_as_mbr(&t, m) == -1);
+        CHECK("and its records are empty", m[1].type == 0 && m[2].sector_count == 0);
+    }
 
     /* More entries than the service keeps. */
     blank();

@@ -3,6 +3,7 @@
 
 #include "../lib/kint.h"
 #include "gpt.h"
+#include "mbr.h"
 
 /*
  * The partition service: one reader of a disk's table for every disk on
@@ -77,6 +78,19 @@ typedef int (*part_read_fn)(void *ctx, uint64_t lba, uint32_t count, void *buf);
  */
 int part_scan(struct part_table *t, part_read_fn read, void *ctx, uint64_t disk_sectors,
               uint8_t *work);
+
+/**
+ * Give the entries numbered 1 to 4 of the GUID table `t` as the four records
+ * of an MBR, for the judgements `mbr.c` makes of a boot disk's table.
+ *
+ * Entry N goes in record N - 1, with the MBR type that says what its type
+ * GUID says: 0xEF for an EFI system partition, 0x0C for basic data, 0x83 for
+ * a Linux file system, and 0xDA, data in no file system an MBR names, for
+ * any other. A number with no entry, or an entry that reaches past what 32
+ * bits of sector address hold, leaves its record empty. Returns 0, or -1
+ * with every record empty when `t` is not a GUID table.
+ */
+int part_gpt_as_mbr(const struct part_table *t, struct mbr_part parts[MBR_PART_COUNT]);
 
 /** Write `guid` as the 36-character text form into `out`, terminated. */
 void part_guid_text(const uint8_t guid[16], char out[37]);

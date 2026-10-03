@@ -76,6 +76,8 @@ int main(void)
     CHECK(mbr_bootpart_pick(parts, 1, 131072) == 0);
     parts[0].type = 0x0b; /* the other FAT32 type byte is accepted too */
     CHECK(mbr_bootpart_pick(parts, 1, 131072) == 0);
+    parts[0].type = 0xef; /* and an EFI system partition, a converted disk's */
+    CHECK(mbr_bootpart_pick(parts, 1, 131072) == 0);
 
     /* Rejections, each one flipped fact at a time from the accepted shape. */
     parts[0].type = 0x83;

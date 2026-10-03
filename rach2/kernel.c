@@ -1778,8 +1778,9 @@ static void part_node_path(char out[24], const struct disk *d, int slot);
  *
  * `rach2.boot=` names the boot partition by identity, as `rach2.root=`
  * names the root; the named partition must be the first entry of an MBR
- * disk, since the boot layout is judged from that table. Without it, the
- * root's disk when the root is named by identity, and disk 0 otherwise.
+ * or a GUID table, since the boot layout is judged from that table. Without
+ * it, the root's disk when the root is named by identity, and disk 0
+ * otherwise.
  */
 static block_device_t *choose_boot_disk(void)
 {
@@ -1791,9 +1792,11 @@ static block_device_t *choose_boot_disk(void)
             klog(KLOG_WARN, "block", "rach2.boot=%s names no one partition; no boot devices", spec);
             return 0;
         }
-        if (m.disk->table.kind != PART_MBR || m.disk->table.parts[m.slot].number != 1) {
+        if ((m.disk->table.kind != PART_MBR && m.disk->table.kind != PART_GPT) ||
+            m.disk->table.parts[m.slot].number != 1) {
             klog(KLOG_WARN, "block",
-                 "rach2.boot=%s is not the first entry of an MBR disk; no boot devices", spec);
+                 "rach2.boot=%s is not the first entry of an MBR or GUID table; no boot devices",
+                 spec);
             return 0;
         }
         return m.disk->dev;
@@ -1824,6 +1827,11 @@ static block_device_t *choose_boot_disk(void)
  * because a machine booting a RAM image has no mounted root to compare it
  * against; a partition in the gap does not make entry 0 unwritable.
  *
+ * A disk with a GUID table is judged by the same rules, from its entries 1
+ * to 4 as the partition service read them (`part_gpt_as_mbr`). Its gap holds
+ * the table itself and GRUB's core is in the BIOS boot partition, so
+ * `/dev/grubcore` is never published over it.
+ *
  * Silent when there is no disk: a machine booting a RAM image on a diskless
  * board is the ordinary case, not a failure.
  */
@@ -1831,6 +1839,7 @@ static void discover_boot_devices(void)
 {
     static uint8_t mbr[BLOCK_SECTOR_SIZE];
     block_device_t *disk;
+    struct disk *reg;
 
     if (block_ready() != 0 || !block0) {
         return;
@@ -1840,22 +1849,26 @@ static void discover_boot_devices(void)
     if (!disk) {
         return;
     }
-    if (disk->read(disk, 0, 1, mbr) != 0) {
+    reg = disk_of(disk);
+    if (reg && reg->table.kind == PART_GPT) {
+        part_gpt_as_mbr(&reg->table, disc_parts);
+        disc_table_ok = 1;
+        klog(KLOG_INFO, "block", "a GUID table holds the boot loader's gap; /dev/grubcore absent");
+    } else if (disk->read(disk, 0, 1, mbr) != 0) {
         klog(KLOG_WARN, "block", "MBR read failed; no boot devices");
         return;
-    }
-    if (mbr_parse(mbr, disc_parts) != 0) {
+    } else if (mbr_parse(mbr, disc_parts) != 0) {
         klog(KLOG_WARN, "block", "no MBR signature; no boot devices");
         return;
-    }
-    disc_table_ok = 1;
-
-    if (mbr_gap_clear(disc_parts) != 0) {
-        klog(KLOG_INFO, "block",
-             "a partition occupies the boot loader's gap; "
-             "/dev/grubcore absent\n");
     } else {
-        devfs_grubcore_publish(disk);
+        disc_table_ok = 1;
+        if (mbr_gap_clear(disc_parts) != 0) {
+            klog(KLOG_INFO, "block",
+                 "a partition occupies the boot loader's gap; "
+                 "/dev/grubcore absent\n");
+        } else {
+            devfs_grubcore_publish(disk);
+        }
     }
 
     if (mbr_bootpart_ok(disc_parts, disk->sector_count) != 0) {
@@ -2187,7 +2200,8 @@ static int krffs_root_mount(block_device_t *disk, uint32_t start_lba, uint32_t s
  *
  * `rach2.root=` may name the root by what the partition table says of it
  * rather than by its place: `PARTUUID=` a GPT entry's GUID, `MBRID=id,M`
- * an MBR's disk id and entry number, `UUID=` an ext2 volume's UUID,
+ * an MBR's disk id and entry number, `GPTID=guid,M` a GUID table's disk
+ * GUID and entry number, `UUID=` an ext2 volume's UUID,
  * `LABEL=` a GPT entry's name or an ext2 volume's label, or `/dev/diskNpM`
  * as the rescue override. Every partition of every registered disk is
  * compared, and the root is mounted only when exactly one matches: none is
@@ -2275,6 +2289,26 @@ static void ext2_uuid_text(char out[37])
 }
 
 /**
+ * The entry number after the comma of an identity, `,M`, at `p`: the number,
+ * or -1 when `p` is not a comma and decimal digits to the end of the string.
+ */
+static int spec_entry_number(const char *p)
+{
+    int number = 0;
+
+    if (*p++ != ',' || *p == '\0') {
+        return -1;
+    }
+    for (; *p >= '0' && *p <= '9'; p++) {
+        if (number > PART_MAX) {
+            return -1; /* past any entry a table can hold */
+        }
+        number = number * 10 + (*p - '0');
+    }
+    return *p == '\0' ? number : -1;
+}
+
+/**
  * Whether partition `slot` of `d` is the one `spec` names.
  *
  * `LABEL=` and `UUID=` read the partition's ext2 superblock, since a label
@@ -2295,7 +2329,6 @@ static int root_spec_matches(const char *spec, struct disk *d, int slot)
     }
     if (str_starts(spec, "MBRID=")) {
         uint32_t id = 0;
-        int number = 0;
         const char *p = spec + 6;
 
         for (i = 0; i < 8; i++) {
@@ -2309,17 +2342,19 @@ static int root_spec_matches(const char *spec, struct disk *d, int slot)
             }
             id = (id << 4) | (uint32_t)v;
         }
-        if (p[8] != ',') {
-            return 0;
+        return d->table.kind == PART_MBR && d->table.mbr_id == id &&
+               e->number == spec_entry_number(p + 8);
+    }
+    if (str_starts(spec, "GPTID=")) {
+        uint8_t guid[16];
+
+        for (i = 0; i < 36 && spec[6 + i] != '\0'; i++) {
+            text[i] = spec[6 + i];
         }
-        for (p += 9; *p >= '0' && *p <= '9'; p++) {
-            if (number > PART_MAX) {
-                return 0; /* past any entry a table can hold */
-            }
-            number = number * 10 + (*p - '0');
-        }
-        return *p == '\0' && d->table.kind == PART_MBR && d->table.mbr_id == id &&
-               e->number == number;
+        text[i] = '\0';
+        return i == 36 && d->table.kind == PART_GPT && part_guid_parse(text, guid) == 0 &&
+               part_guid_equal(guid, d->table.disk_guid) &&
+               e->number == spec_entry_number(spec + 42);
     }
     if (str_starts(spec, "/dev/disk")) {
         part_node_path(text, d, slot);

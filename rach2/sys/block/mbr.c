@@ -110,7 +110,7 @@ int mbr_bootpart_ok(const struct mbr_part parts[MBR_PART_COUNT], uint64_t disk_s
     const struct mbr_part *p = &parts[0];
     int i;
 
-    if (p->type != 0x0b && p->type != 0x0c) {
+    if (p->type != 0x0b && p->type != 0x0c && p->type != MBR_TYPE_EFI_SYSTEM) {
         return -1;
     }
     if (p->start_lba == 0 || p->sector_count == 0) {

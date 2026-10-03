@@ -323,6 +323,45 @@ int part_scan(struct part_table *t, part_read_fn read, void *ctx, uint64_t disk_
     return 0;
 }
 
+/* The type GUIDs `part_gpt_as_mbr` names, as the table stores them. */
+static const uint8_t type_efi_system[16] = {0x28, 0x73, 0x2a, 0xc1, 0x1f, 0xf8, 0xd2, 0x11,
+                                            0xba, 0x4b, 0x00, 0xa0, 0xc9, 0x3e, 0xc9, 0x3b};
+static const uint8_t type_basic_data[16] = {0xa2, 0xa0, 0xd0, 0xeb, 0xe5, 0xb9, 0x33, 0x44,
+                                            0x87, 0xc0, 0x68, 0xb6, 0xb7, 0x26, 0x99, 0xc7};
+static const uint8_t type_linux[16] = {0xaf, 0x3d, 0xc6, 0x0f, 0x83, 0x84, 0x72, 0x47,
+                                       0x8e, 0x79, 0x3d, 0x69, 0xd8, 0x47, 0x7d, 0xe4};
+
+int part_gpt_as_mbr(const struct part_table *t, struct mbr_part parts[MBR_PART_COUNT])
+{
+    int i;
+
+    for (i = 0; i < MBR_PART_COUNT; i++) {
+        parts[i].type = 0;
+        parts[i].start_lba = 0;
+        parts[i].sector_count = 0;
+    }
+    if (t->kind != PART_GPT) {
+        return -1;
+    }
+    for (i = 0; i < t->count; i++) {
+        const struct part_entry *e = &t->parts[i];
+        struct mbr_part *p;
+
+        if (e->number < 1 || e->number > MBR_PART_COUNT || e->start_lba > 0xFFFFFFFFu ||
+            e->sector_count > 0x100000000ull - e->start_lba) {
+            continue;
+        }
+        p = &parts[e->number - 1];
+        p->type = part_guid_equal(e->type_guid, type_efi_system)   ? MBR_TYPE_EFI_SYSTEM
+                  : part_guid_equal(e->type_guid, type_basic_data) ? 0x0C
+                  : part_guid_equal(e->type_guid, type_linux)      ? 0x83
+                                                                   : 0xDA;
+        p->start_lba = (uint32_t)e->start_lba;
+        p->sector_count = (uint32_t)e->sector_count;
+    }
+    return 0;
+}
+
 static const char hex_digits[] = "0123456789abcdef";
 
 void part_guid_text(const uint8_t guid[16], char out[37])

@@ -20,6 +20,11 @@
 #define MBR_GAP_FIRST_LBA 1u
 #define MBR_GAP_END_LBA   2048u
 
+/* The type of an EFI system partition, which UEFI firmware boots from on an
+ * MBR disk. It is a FAT volume like types 0x0B and 0x0C, and the boot
+ * partition of a disk converted to boot by UEFI has it. */
+#define MBR_TYPE_EFI_SYSTEM 0xEF
+
 /** One partition entry: the type byte and the half-open sector range
  *  `[start_lba, start_lba + sector_count)`. An empty slot has both zero. */
 struct mbr_part {
@@ -80,9 +85,10 @@ int mbr_bootpart_pick(const struct mbr_part parts[MBR_PART_COUNT], int krffs_ind
  * mounted its root and can name the entry holding it. A machine booting a RAM
  * image never mounts one and still has a boot partition to manage, so the
  * judgement here compares entry 0 against the whole table instead: it must be
- * FAT-typed, non-empty, contained in the disk, start at or after the end of the
- * post-MBR gap so it cannot overlap the embedded boot loader, and share no
- * sector with any other non-empty entry.
+ * FAT-typed (0x0B, 0x0C or the EFI system partition's 0xEF), non-empty,
+ * contained in the disk, start at or after the end of the post-MBR gap so it
+ * cannot overlap the embedded boot loader, and share no sector with any other
+ * non-empty entry.
  *
  * @return 0 when entry 0 qualifies, -1 otherwise.
  */
