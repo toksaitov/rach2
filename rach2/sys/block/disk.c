@@ -26,6 +26,7 @@ struct disk *disk_register(block_device_t *dev, const char *transport, int locat
                            const volatile uint16_t *identify)
 {
     struct disk *d = 0;
+    char count[24];
     int i, again = 0;
 
     if (!dev) {
@@ -84,12 +85,13 @@ struct disk *disk_register(block_device_t *dev, const char *transport, int locat
     }
     /* A USB stick often gives no model string, and "model " with nothing after
        it reads as a truncated line rather than as a drive that did not say. */
+    (void)diskinfo_u64_dec(count, (int)sizeof(count), dev->sector_count);
     if (d->model[0] != '\0') {
-        klog(KLOG_INFO, "disk", "disk%d: %s %d: %d sectors, model %s", d->number, transport,
-             location, (uint32_t)dev->sector_count, d->model);
+        klog(KLOG_INFO, "disk", "disk%d: %s %d: %s sectors, model %s", d->number, transport,
+             location, count, d->model);
     } else {
-        klog(KLOG_INFO, "disk", "disk%d: %s %d: %d sectors, and it gives no model", d->number,
-             transport, location, (uint32_t)dev->sector_count);
+        klog(KLOG_INFO, "disk", "disk%d: %s %d: %s sectors, and it gives no model", d->number,
+             transport, location, count);
     }
     return d;
 }

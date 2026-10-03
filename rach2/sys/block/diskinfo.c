@@ -248,6 +248,7 @@ static uint32_t mbr_disk_id(const uint8_t *sector)
 int diskinfo_probe(int mounted)
 {
     static uint8_t sector[BLOCK_SECTOR_SIZE];
+    char count[24];
     int i;
 
     info.mounted = mounted;
@@ -289,8 +290,8 @@ int diskinfo_probe(int mounted)
     }
 
     diskinfo_publish();
-    klog(KLOG_INFO, "disk", "%s: %d sectors, model %s", info.driver, (uint32_t)info.sectors,
-         info.model);
+    (void)diskinfo_u64_dec(count, (int)sizeof(count), info.sectors);
+    klog(KLOG_INFO, "disk", "%s: %s sectors, model %s", info.driver, count, info.model);
     return 0;
 }
 
