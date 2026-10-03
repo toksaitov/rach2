@@ -36,7 +36,6 @@
  *   SYSCALL_INSN_LEN       the bytes of the instruction a system call is
  *                          made by, which a restart rewinds over
  *   PAGE_SIZE, PAGE_SHIFT  the page the kernel maps
- *   FPU_STATE_SIZE         the bytes of a floating-point save area
  *   USER_ADDR_MIN, USER_ADDR_MAX  the range a program may map
  *   ELF_CLASS, ELF_MACHINE the programs the kernel loads
  *   ARCH_GREGS             the words of Linux's `user_regs_struct`

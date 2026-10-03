@@ -2,7 +2,8 @@
  * ptrace.c: the x86-64 part of ptrace(2) and of core files: the registers
  * in Linux x86-64's `user_regs_struct`, the words of its `struct user`, the
  * floating-point state as `user_i387_struct`, the 512-byte `fxsave64`
- * image, and the FS and GS bases through PTRACE_ARCH_PRCTL.
+ * image, and as the XSAVE image, and the FS and GS bases through
+ * PTRACE_ARCH_PRCTL.
  */
 
 #include "../arch.h"
@@ -67,7 +68,6 @@ enum {
 #define FLAG_MASK   0x00054DD5u
 #define RFLAGS_TF   0x00000100u
 #define WORD        8u
-#define NT_FPREGSET 2u
 
 typedef char user_regs_fit[(R_COUNT == ARCH_GREGS) ? 1 : -1];
 
@@ -271,25 +271,20 @@ static int user_poke(process_t *t, unsigned long off, unsigned long v)
  * during the copy. */
 static int fp_access(uint32_t pid, process_t *t, uintptr_t data, int set)
 {
-    uint8_t buf[FPU_LINUX_SIZE];
-    uint8_t area[FPU_STATE_SIZE];
+    uint8_t buf[FX_SIZE];
 
     if (!set) {
-        fpu_to_linux(t->fpu, buf);
+        fpu_fx_get(t->fpu, buf);
         return copy_to_user((void __user *)data, buf, sizeof(buf)) == 0 ? 0 : -EFAULT;
     }
     if (copy_from_user(buf, (const void __user *)data, sizeof(buf)) != 0) {
         return -EFAULT;
     }
-    if (fpu_from_linux(buf, area) != 0) {
-        return -EINVAL;
-    }
     t = ptrace_tracee(pid);
     if (!t) {
         return -ESRCH;
     }
-    k_memcpy(t->fpu, area, FPU_STATE_SIZE);
-    return 0;
+    return fpu_fx_set(t->fpu, buf) == 0 ? 0 : -EINVAL;
 }
 
 /**
@@ -369,15 +364,29 @@ long arch_ptrace(process_t *t, uint32_t pid, long request, unsigned long addr, u
 
 uint32_t arch_core_fp_size(void)
 {
-    return core_note_bytes(FPU_LINUX_SIZE);
+    uint32_t xstate = fpu_xstate_size();
+
+    return core_note_bytes(FX_SIZE) + (xstate != 0 ? core_note_bytes(xstate) : 0u);
 }
 
-/** The core file's floating-point note, NT_PRFPREG: the `fxsave64` image,
- * as Linux writes it for an x86-64 thread without XSAVE. */
+/**
+ * The core file's floating-point notes, as Linux writes them for an x86-64
+ * thread: NT_PRFPREG, the `fxsave64` image, and with XSAVE NT_X86_XSTATE,
+ * the XSAVE image with XCR0 in its software bytes (`fpu_xstate_view`), made
+ * from the area's copy in the note itself. The note's description follows
+ * its header and name, the bytes `core_note_bytes(0)` counts.
+ */
 void arch_core_fp_notes(uint8_t **p, const process_t *t)
 {
-    uint8_t fp[FPU_LINUX_SIZE];
+    uint8_t fx[FX_SIZE];
+    uint32_t xstate = fpu_xstate_size();
+    uint8_t *desc;
 
-    fpu_to_linux(t->fpu, fp);
-    core_note_put(p, "CORE", NT_FPREGSET, fp, FPU_LINUX_SIZE);
+    fpu_fx_get(t->fpu, fx);
+    core_note_put(p, "CORE", NT_PRFPREG, fx, FX_SIZE);
+    if (xstate != 0) {
+        desc = *p + core_note_bytes(0);
+        core_note_put(p, "LINUX", NT_X86_XSTATE, t->fpu, xstate);
+        fpu_xstate_view(desc);
+    }
 }

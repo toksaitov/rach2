@@ -160,8 +160,6 @@ int sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *sa,
         struct lx_rt_sigframe rt;
         struct lx_sigframe plain;
     } frame;
-    uint8_t area[FPU_STATE_SIZE];
-    uint8_t fpstate[FPU_LINUX_SIZE];
     int rt = (sa->flags & SA_SIGINFO) != 0;
     int on_alt = sigframe_on_altstack(tf->user_esp);
     uint32_t sp = tf->user_esp;
@@ -171,9 +169,8 @@ int sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *sa,
         sp = current_proc->altstack_sp + current_proc->altstack_size;
         on_alt = 1;
     }
-    sp -= FPU_LINUX_SIZE;
-    sp &= ~63u;
-    fp_addr = sp;
+    fp_addr = (uint32_t)fpu_frame_place(sp);
+    sp = fp_addr;
     size = rt ? sizeof(frame.rt) : sizeof(frame.plain);
     sp -= size;
     sp = ((sp + 4u) & ~(FRAME_ALIGN - 1u)) - 4u;
@@ -182,9 +179,8 @@ int sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *sa,
         return -1;
     }
 
-    fpu_save(area);
-    fpu_to_linux(area, fpstate);
-    if (copy_to_user((void __user *)fp_addr, fpstate, sizeof(fpstate)) != 0) {
+    fpu_save(current_proc->fpu);
+    if (fpu_frame_put(fp_addr, current_proc->fpu) != 0) {
         return -1;
     }
 
@@ -237,8 +233,6 @@ int sigframe_restore(isr_params_t *tf, int rt, uint64_t *mask)
         struct lx_rt_sigframe rt;
         struct lx_sigframe plain;
     } frame;
-    uint8_t area[FPU_STATE_SIZE];
-    uint8_t fpstate[FPU_LINUX_SIZE];
     const struct lx_sigcontext *sc;
     uint32_t frame_addr;
 
@@ -260,11 +254,9 @@ int sigframe_restore(isr_params_t *tf, int rt, uint64_t *mask)
     }
 
     if (sc->fpstate != 0) {
-        if (copy_from_user(fpstate, (const void __user *)sc->fpstate, sizeof(fpstate)) != 0 ||
-            fpu_from_linux(fpstate, area) != 0) {
+        if (fpu_frame_load(sc->fpstate) != 0) {
             return -1;
         }
-        fpu_restore(area);
     } else {
         fpu_reset();
     }

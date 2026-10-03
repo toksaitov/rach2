@@ -166,9 +166,6 @@ phys_addr_t mmu_virt_to_phys(const volatile void *v);
 /* An instruction fetch, which the error code reports where NX is on. */
 #define FAULT_EXEC(p)     (((p)->error_code & 0x10u) != 0)
 
-/* A floating-point save area, the 512-byte `fxsave64` image. */
-#define FPU_STATE_SIZE 512
-
 /* `rep movsq` and `rep stosq` move the words of k_memcpy and k_memset. */
 #define ARCH_STRING_WORDS 1
 

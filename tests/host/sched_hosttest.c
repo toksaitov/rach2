@@ -18,6 +18,8 @@ process_t *proc_list;
 struct percpu cpu_table[NR_CPUS];
 process_t *proc_idle;
 static process_t procs[7];
+/* Each process's floating-point area, which the stand-ins tell apart. */
+static uint8_t areas[7][16];
 static uint32_t irq_flags;
 static unsigned switches;
 static int failures;
@@ -183,6 +185,7 @@ static void setup(void)
         procs[i].next = i < 6 ? &procs[i + 1] : NULL;
         procs[i].waiter.proc = &procs[i];
         procs[i].affinity = ~(uint64_t)0;
+        procs[i].fpu = areas[i];
     }
     cpu_table[0].online = 1;
     proc_list = procs;

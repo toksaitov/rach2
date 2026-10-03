@@ -77,10 +77,17 @@ void *kmalloc(size_t size)
     return kzalloc(size);
 }
 
-/** Supply the process allocator's initial floating-point image. */
-void fpu_init_area(void *area)
+/** Supply the process allocator's floating-point area from the same
+ * counted allocations. */
+void *fpu_area_alloc(void)
 {
-    k_memset(area, 0, 512);
+    return kzalloc(512);
+}
+
+/** Release the area `fpu_area_alloc` gave. */
+void fpu_area_free(void *area)
+{
+    kfree(area);
 }
 
 /** A wake makes the process ready; there is one processor and no queue. */
@@ -315,7 +322,7 @@ static void process_allocations(void)
     uint32_t forks = process_forks_since_boot();
 
     check(keeper != NULL, "initial process allocation");
-    for (fail = 0; fail < 8; fail++) {
+    for (fail = 0; fail < 9; fail++) {
         process_t *p;
 
         fail_after = fail;
@@ -325,7 +332,7 @@ static void process_allocations(void)
         check(proc_list == keeper && proc_tail == keeper && !keeper->next,
               "failed process is not published");
         check(process_forks_since_boot() == forks, "failed process is not counted");
-        check(allocations == 8, "failed process releases every allocation");
+        check(allocations == 9, "failed process releases every allocation");
         if (p) {
             close_process(p);
             forks = process_forks_since_boot();

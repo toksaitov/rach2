@@ -4,9 +4,10 @@
  * x86-64 has one frame, `struct rt_sigframe`, for every handler, with or
  * without SA_SIGINFO: the address the handler returns to, the ucontext with
  * the registers in a `struct sigcontext`, and the siginfo. The
- * floating-point state, the 512-byte `fxsave` image Linux calls `struct
- * _fpstate_64`, lies above the frame at a 64-byte boundary, and the
- * sigcontext points at it. The handler returns to `sa_restorer`, which
+ * floating-point state, the XSAVE image or, without XSAVE, the 512-byte
+ * `fxsave` image Linux calls `struct _fpstate_64` (../x86/fpu.h), lies
+ * above the frame at a 64-byte boundary, and the sigcontext points at it.
+ * The handler returns to `sa_restorer`, which
  * calls rt_sigreturn: Linux requires SA_RESTORER on x86-64, and musl always
  * gives it, so the frame has no return code of its own.
  */
@@ -210,8 +211,6 @@ int sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *sa,
                    const struct k_siginfo *info, uint64_t oldmask)
 {
     struct lx_rt_sigframe frame;
-    uint8_t area[FPU_STATE_SIZE];
-    uint8_t fpstate[FPU_LINUX_SIZE];
     int on_alt;
     uintptr_t sp = tf->rsp - RED_ZONE;
     uintptr_t fp_addr, frame_addr;
@@ -224,19 +223,16 @@ int sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *sa,
         sp = (uintptr_t)current_proc->altstack_sp + (uintptr_t)current_proc->altstack_size;
         on_alt = 1;
     }
-    sp -= FPU_LINUX_SIZE;
-    sp &= ~(uintptr_t)63u;
-    fp_addr = sp;
-    sp -= sizeof(frame);
+    fp_addr = fpu_frame_place(sp);
+    sp = fp_addr - sizeof(frame);
     sp = (sp & ~(uintptr_t)15u) - 8u;
     frame_addr = sp;
     if (on_alt && !sigframe_on_altstack(frame_addr)) {
         return -1;
     }
 
-    fpu_save(area);
-    fpu_to_linux(area, fpstate);
-    if (copy_to_user((void __user *)fp_addr, fpstate, sizeof(fpstate)) != 0) {
+    fpu_save(current_proc->fpu);
+    if (fpu_frame_put(fp_addr, current_proc->fpu) != 0) {
         return -1;
     }
 
@@ -280,8 +276,6 @@ int sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *sa,
 int sigframe_restore(isr_params_t *tf, int rt, uint64_t *mask)
 {
     struct lx_rt_sigframe frame;
-    uint8_t area[FPU_STATE_SIZE];
-    uint8_t fpstate[FPU_LINUX_SIZE];
     const struct lx_sigcontext *sc = &frame.uc.mc;
     uintptr_t frame_addr = tf->rsp - 8u;
 
@@ -297,12 +291,9 @@ int sigframe_restore(isr_params_t *tf, int rt, uint64_t *mask)
     *mask = frame.uc.sigmask;
 
     if (sc->fpstate != 0) {
-        if (copy_from_user(fpstate, (const void __user *)(uintptr_t)sc->fpstate, sizeof(fpstate)) !=
-                0 ||
-            fpu_from_linux(fpstate, area) != 0) {
+        if (fpu_frame_load((uintptr_t)sc->fpstate) != 0) {
             return -1;
         }
-        fpu_restore(area);
     } else {
         fpu_reset();
     }

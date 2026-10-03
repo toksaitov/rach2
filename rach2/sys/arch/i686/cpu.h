@@ -167,10 +167,6 @@ typedef uint32_t pte_t;
 /* No fetch is told apart without PAE's NX, and no page refuses one. */
 #define FAULT_EXEC(p)     ((void)(p), 0)
 
-/* A floating-point save area, the 512-byte `fxsave` image; `fnsave` uses
- * 108 bytes of it. */
-#define FPU_STATE_SIZE 512
-
 /* `rep movs` and `rep stos` move the words of k_memcpy and k_memset. */
 #define ARCH_STRING_WORDS 1
 

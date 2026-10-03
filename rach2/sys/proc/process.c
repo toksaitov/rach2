@@ -113,8 +113,8 @@ void process_count_fork(void)
  * leader of its own session and process group; fork() overrides `sid` and
  * `pgid` to inherit the parent's.
  *
- * Return the process, or NULL if its record, descriptor table or standard
- * descriptions cannot be allocated.
+ * Return the process, or NULL if its record, floating-point area,
+ * descriptor table or standard descriptions cannot be allocated.
  */
 process_t *alloc_process(void)
 {
@@ -126,8 +126,14 @@ process_t *alloc_process(void)
     }
     k_memset(p, 0, sizeof(*p));
     p->start_ticks = kernel_ticks;
+    p->fpu = fpu_area_alloc();
+    if (!p->fpu) {
+        kfree(p);
+        return NULL;
+    }
     p->tg = tgroup_new(p);
     if (!p->tg) {
+        fpu_area_free(p->fpu);
         kfree(p);
         return NULL;
     }
@@ -152,7 +158,6 @@ process_t *alloc_process(void)
     p->rlim[RLIM_CORE].cur = 0;
     p->rlim[RLIM_CORE].max = RLIM_INFINITY32;
     p->rlim[RLIM_FSIZE].cur = p->rlim[RLIM_FSIZE].max = RLIM_INFINITY32;
-    fpu_init_area(p->fpu);
     p->waiter.proc = p;
     p->cpu = (int)arch_cpu_id();
     p->affinity = ~(uint64_t)0;
@@ -160,6 +165,7 @@ process_t *alloc_process(void)
     p->fs = kzalloc(sizeof(*p->fs));
     if (!p->fs) {
         tgroup_put(p->tg);
+        fpu_area_free(p->fpu);
         kfree(p);
         return NULL;
     }
@@ -170,6 +176,7 @@ process_t *alloc_process(void)
     if (!p->fds) {
         kfree(p->fs);
         tgroup_put(p->tg);
+        fpu_area_free(p->fpu);
         kfree(p);
         return NULL;
     }
@@ -177,6 +184,7 @@ process_t *alloc_process(void)
         fd_table_delete(p->fds);
         kfree(p->fs);
         tgroup_put(p->tg);
+        fpu_area_free(p->fpu);
         kfree(p);
         return NULL;
     }
@@ -226,6 +234,7 @@ void free_process(process_t *proc)
     ns_release(proc);
     kfree(proc->exec_ws);
     path_bufs_free(proc);
+    fpu_area_free(proc->fpu);
     kfree(proc);
 }
 

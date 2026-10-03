@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd October 3, 2026
 .Dt CORE 5
 .Os
 .Sh NAME
@@ -98,7 +98,7 @@ laid out as Linux lays it out for i386.
 Its first program header is a
 .Dv PT_NOTE
 segment with these notes, in this order:
-.Bl -tag -width NT_PRXFPREG
+.Bl -tag -width NT_X86_XSTATE
 .It Dv NT_PRSTATUS
 The 144-byte
 .Vt elf_prstatus
@@ -121,13 +121,21 @@ Named
 .Dq LINUX ,
 the thread's
 .Ic fxsave
-image.
+image, zero on a processor without FXSR.
+.It Dv NT_X86_XSTATE
+Where the kernel keeps the state with XSAVE, named
+.Dq LINUX ,
+the thread's XSAVE image, as large as leaf 0xD of
+.Ic cpuid
+gives, with XCR0 in the first eight of its 48 software bytes at byte 464:
+GDB reads the AVX and AVX-512 registers from it.
 .El
 .Pp
 .Dv NT_PRSTATUS ,
-.Dv NT_FPREGSET
-and
+.Dv NT_FPREGSET ,
 .Dv NT_PRXFPREG
+and
+.Dv NT_X86_XSTATE
 follow for each other thread.
 One
 .Dv PT_LOAD

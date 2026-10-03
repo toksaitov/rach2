@@ -1,7 +1,7 @@
 /*
  * ptrace.c: the i686 part of ptrace(2) and of core files: the registers in
  * Linux i386's `user_regs_struct`, the words of its `struct user`, the
- * floating-point state in both of its forms, and the TLS entry.
+ * floating-point state in its three forms, and the TLS entry.
  */
 
 #include "../arch.h"
@@ -63,12 +63,6 @@ enum {
  * DF, OF, NT, RF and AC. */
 #define FLAG_MASK 0x00054DD5u
 #define EFLAGS_TF 0x00000100u
-
-/* The core file's notes of the floating-point state: the 108-byte
- * `user_i387_struct` and the 512-byte `fxsave` image. */
-#define NT_FPREGSET   2u
-#define NT_PRXFPREG   0x46E62B7Fu
-#define FPREGSET_SIZE 108u
 
 void arch_regs_get(const process_t *t, unsigned long *r)
 {
@@ -233,35 +227,31 @@ static int user_poke(process_t *t, unsigned long off, unsigned long v)
  * fault on, -ESRCH for a thread that left its stop during the copy. */
 static int fp_access(uint32_t pid, process_t *t, uintptr_t data, int fx, int set)
 {
-    uint8_t buf[FPU_LINUX_SIZE];
-    uint8_t area[FPU_STATE_SIZE + 16];
-    uint8_t *aligned = (uint8_t *)(((uintptr_t)area + 15u) & ~(uintptr_t)15u);
-    uint32_t off = fx ? 112u : 0u;
-    uint32_t len = fx ? (uint32_t)FPU_STATE_SIZE : FPREGSET_SIZE;
+    uint8_t buf[FX_SIZE];
+    uint32_t len = fx ? FX_SIZE : FPU_ENV_SIZE;
 
-    fpu_to_linux(t->fpu, buf);
-    if (fx && buf[110] == 0xFF && buf[111] == 0xFF) {
+    if (fx && !fpu_has_fxsr()) {
         return -EIO;
     }
     if (!set) {
-        return copy_to_user((void __user *)data, buf + off, len) == 0 ? 0 : -EFAULT;
+        if (fx) {
+            fpu_fx_get(t->fpu, buf);
+        } else {
+            fpu_env_get(t->fpu, buf);
+        }
+        return copy_to_user((void __user *)data, buf, len) == 0 ? 0 : -EFAULT;
     }
-    if (copy_from_user(aligned, (const void __user *)data, len) != 0) {
+    if (copy_from_user(buf, (const void __user *)data, len) != 0) {
         return -EFAULT;
     }
     t = ptrace_tracee(pid);
     if (!t) {
         return -ESRCH;
     }
-    fpu_to_linux(t->fpu, buf);
-    k_memcpy(buf + off, aligned, len);
     if (fx) {
-        fpu_to_linux(aligned, buf);
+        return fpu_fx_set(t->fpu, buf) == 0 ? 0 : -EINVAL;
     }
-    if (fpu_from_linux(buf, aligned) != 0) {
-        return -EINVAL;
-    }
-    k_memcpy(t->fpu, aligned, FPU_STATE_SIZE);
+    fpu_env_set(t->fpu, buf);
     return 0;
 }
 
@@ -368,14 +358,36 @@ long arch_ptrace(process_t *t, uint32_t pid, long request, unsigned long addr, u
 
 uint32_t arch_core_fp_size(void)
 {
-    return core_note_bytes(FPREGSET_SIZE) + core_note_bytes(FPU_STATE_SIZE);
+    uint32_t xstate = fpu_xstate_size();
+
+    return core_note_bytes(FPU_ENV_SIZE) + core_note_bytes(FX_SIZE) +
+           (xstate != 0 ? core_note_bytes(xstate) : 0u);
 }
 
+/**
+ * The core file's floating-point notes, as Linux writes them for an i386
+ * thread: NT_PRFPREG, the `user_i387_struct`; NT_PRXFPREG, the `fxsave`
+ * image, zero without FXSR; and with XSAVE NT_X86_XSTATE, the XSAVE image
+ * with XCR0 in its software bytes (`fpu_xstate_view`), made from the area's
+ * copy in the note itself. The note's description follows its header and
+ * name, the bytes `core_note_bytes(0)` counts.
+ */
 void arch_core_fp_notes(uint8_t **p, const process_t *t)
 {
-    uint8_t fp[FPU_LINUX_SIZE];
+    uint8_t buf[FX_SIZE];
+    uint32_t xstate = fpu_xstate_size();
+    uint8_t *desc;
 
-    fpu_to_linux(t->fpu, fp);
-    core_note_put(p, "CORE", NT_FPREGSET, fp, FPREGSET_SIZE);
-    core_note_put(p, "LINUX", NT_PRXFPREG, fp + 112, FPU_STATE_SIZE);
+    fpu_env_get(t->fpu, buf);
+    core_note_put(p, "CORE", NT_PRFPREG, buf, FPU_ENV_SIZE);
+    k_memset(buf, 0, sizeof(buf));
+    if (fpu_has_fxsr()) {
+        fpu_fx_get(t->fpu, buf);
+    }
+    core_note_put(p, "LINUX", NT_PRXFPREG, buf, FX_SIZE);
+    if (xstate != 0) {
+        desc = *p + core_note_bytes(0);
+        core_note_put(p, "LINUX", NT_X86_XSTATE, t->fpu, xstate);
+        fpu_xstate_view(desc);
+    }
 }

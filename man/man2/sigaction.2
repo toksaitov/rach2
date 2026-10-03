@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd October 3, 2026
 .Dt SIGACTION 2
 .Os
 .Sh NAME
@@ -220,9 +220,8 @@ for what the kernel sends, such as terminal signals and
 The
 .Vt ucontext_t
 holds the interrupted registers, the address of the floating-point state
-in Linux's
-.Vt struct _fpstate_32
-form, the mask from before the handler, and the alternate stack.
+in Linux's form, described below, the mask from before the handler, and
+the alternate stack.
 A handler that changes the saved registers or floating-point state
 returns to what it wrote.
 .Pp
@@ -406,7 +405,37 @@ the
 .Vt siginfo_t
 and the
 .Vt ucontext_t .
-The floating-point state lies above the frame, 64-byte aligned.
+The floating-point state lies above the frame.
+On i386 it is
+.Vt struct _fpstate_32 :
+the x87 environment and registers in the
+.Ic fnsave
+layout, the status word, a magic word of 0, and from byte 112 the
+processor's image.
+Where the processor has XSAVE, the image is the XSAVE image, 64-byte
+aligned and as large as leaf 0xD of
+.Ic cpuid
+gives for the components the kernel enabled: x87, SSE, AVX where the
+processor has it, and AVX-512 where it has that.
+Its 48 software bytes at byte 464 hold
+.Dv FP_XSTATE_MAGIC1 ,
+the bytes of the state to the end of
+.Dv FP_XSTATE_MAGIC2 ,
+XCR0, and the image's size;
+.Dv FP_XSTATE_MAGIC2
+follows the image; and its XSTATE_BV marks the x87 and SSE state in use,
+so a handler that changes them in the legacy part changes what is
+restored.
+Without XSAVE the image is the 512-byte
+.Ic fxsave
+image with those 48 bytes zero, and the state is 64-byte aligned; under
+.Ql rach2.nofxsr
+the
+.Ic fnsave
+image is alone and the magic word is 0xFFFF.
+On x86-64 the state is the XSAVE image alone, or without XSAVE the
+.Ic fxsave64
+image, 64-byte aligned.
 The handler starts with the signal number in EAX and, with
 .Dv SA_SIGINFO ,
 the two pointers in EDX and ECX, with the direction and trap flags clear
@@ -415,10 +444,22 @@ Both return calls restore the saved general registers, instruction and
 stack pointers, the processor flags a program may change, the
 floating-point state, and the saved mask; the rt form restores the
 alternate stack as well.
+A state whose software bytes are not
+.Dv FP_XSTATE_MAGIC1
+with sizes that fit, or that
+.Dv FP_XSTATE_MAGIC2
+does not follow, gives back its x87 and SSE state and puts the rest in
+its initial state, as Linux does; a component the software bytes' XCR0
+lacks is put in its initial state too.
 Segment selectors are restricted to the ones this kernel has.
-An unreadable frame, or a floating-point state with a reserved MXCSR bit
-set, terminates the process with
-.Dv SIGSEGV .
+An unreadable frame, or a floating-point state that would fault on its
+load, terminates the process with
+.Dv SIGSEGV :
+a reserved MXCSR bit set, an XSTATE_BV naming a component XCR0 lacks, or
+an XSAVE header whose other bytes are not zero.
+Linux clears the reserved MXCSR bits of an i386 state without XSAVE, and
+on x86-64 accepts a header whose bytes from 24 on are not zero; this
+kernel refuses both.
 .Sh RETURN VALUES
 .Fn sigaction
 and

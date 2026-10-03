@@ -172,9 +172,10 @@ struct process {
      * the process and not to a remembered pid, which a later process reusing
      * that pid would silence. */
     uint32_t vma_reported;
-    /* The x87 and SSE state, saved at every switch away and loaded at every
-     * switch to; `fxsave` needs the 16-byte alignment. */
-    uint8_t fpu[FPU_STATE_SIZE] __attribute__((aligned(16)));
+    /* The floating-point state, saved at every switch away and loaded at
+     * every switch to: an area of `fpu_area_size` bytes from
+     * `fpu_area_alloc`, which the record owns. */
+    uint8_t *fpu;
     /* The page directory `cr3` names, or NULL for the kernel's: the record
      * of it, since a directory lives in the heap and its physical address
      * says nothing about where the kernel reads it. `switch.s` reads this
