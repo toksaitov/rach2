@@ -1,11 +1,12 @@
-.Dd September 28, 2026
+.Dd October 3, 2026
 .Dt WRITE 2
 .Os
 .Sh NAME
 .Nm write ,
 .Nm writev ,
 .Nm pwrite ,
-.Nm pwrite64
+.Nm pwrite64 ,
+.Nm pwritev
 .Nd write bytes to a descriptor
 .Sh SYNOPSIS
 .In unistd.h
@@ -16,6 +17,8 @@
 .In sys/uio.h
 .Ft ssize_t
 .Fn writev "int fd" "const struct iovec *iov" "int iovcnt"
+.Ft ssize_t
+.Fn pwritev "int fd" "const struct iovec *iov" "int iovcnt" "off_t offset"
 .Sh DESCRIPTION
 .Fn write
 writes up to
@@ -209,6 +212,25 @@ EDX, and the offset's low and high 32 bits in ESI and EDI.
 Musl's and GNU libc's
 .Fn pwrite
 are this call.
+.Pp
+On x86-64 the numbers are 1 for
+.Nm write ,
+20 for
+.Nm writev ,
+18 for
+.Nm pwrite64 ,
+which takes the offset whole in R10, and 296 for
+.Nm pwritev ,
+which i386 does not have here.
+.Fn pwritev
+writes the buffers of
+.Fa iov
+as
+.Fn pwrite
+writes one, each at the place the ones before it reached, from
+.Fa offset ;
+the vector is checked whole before a byte is written, and a short write
+ends the call.
 .Sh RETURN VALUES
 On success, these functions return the number of bytes written.
 .Fn writev

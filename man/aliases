@@ -571,3 +571,6 @@ mq_notify 2 mq_open
 mq_getsetattr 2 mq_open
 mq_timedsend_time64 2 mq_open
 mq_timedreceive_time64 2 mq_open
+preadv 2 read
+pwritev 2 write
+rach2_ping 2 ping

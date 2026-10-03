@@ -1,11 +1,12 @@
-.Dd September 28, 2026
+.Dd October 3, 2026
 .Dt READ 2
 .Os
 .Sh NAME
 .Nm read ,
 .Nm readv ,
 .Nm pread ,
-.Nm pread64
+.Nm pread64 ,
+.Nm preadv
 .Nd read bytes from a descriptor
 .Sh SYNOPSIS
 .In unistd.h
@@ -16,6 +17,8 @@
 .In sys/uio.h
 .Ft ssize_t
 .Fn readv "int fd" "const struct iovec *iov" "int iovcnt"
+.Ft ssize_t
+.Fn preadv "int fd" "const struct iovec *iov" "int iovcnt" "off_t offset"
 .Sh DESCRIPTION
 .Fn read
 reads up to
@@ -202,6 +205,29 @@ EDX, and the offset's low and high 32 bits in ESI and EDI.
 Musl's and GNU libc's
 .Fn pread
 are this call.
+.Pp
+On x86-64 the numbers are 0 for
+.Nm read ,
+19 for
+.Nm readv ,
+17 for
+.Nm pread64 ,
+which takes the offset whole in R10, and 295 for
+.Nm preadv ,
+which i386 does not have here.
+.Fn preadv
+reads the buffers of
+.Fa iov
+as
+.Fn pread
+reads one, each at the place the ones before it reached, from
+.Fa offset ,
+and leaves the descriptor's offset where it was; the vector is checked
+whole, as
+.Fn readv
+checks it, before a byte is read, and a short read ends the call.
+The offset's high half, the call's fifth argument, is not read, as on
+Linux, since the fourth holds the whole of it.
 .Sh RETURN VALUES
 On success, these functions return the number of bytes read.
 Zero denotes end of a file or stream, a zero-length request, an empty
