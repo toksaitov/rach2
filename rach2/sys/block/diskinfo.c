@@ -83,14 +83,6 @@ int diskinfo_u64_dec(char *out, int cap, uint64_t v)
     return n;
 }
 
-uint64_t diskinfo_window(uint64_t sectors)
-{
-    if (sectors > (uint64_t)DISKINFO_WINDOW_MAX_SECTORS) {
-        return (uint64_t)DISKINFO_WINDOW_MAX_SECTORS;
-    }
-    return sectors;
-}
-
 /** Append `s` to `buf` at `*n`, stopping at `cap - 1`. */
 static void put(char *buf, int *n, int cap, const char *s)
 {
@@ -203,8 +195,6 @@ int diskinfo_format(const struct diskinfo *d, char *buf, int cap)
     put_dec(buf, &n, cap, (uint64_t)d->sector_size);
     put(buf, &n, cap, "\nsectors ");
     put_dec(buf, &n, cap, d->sectors);
-    put(buf, &n, cap, "\nwindow-sectors ");
-    put_dec(buf, &n, cap, (uint64_t)d->window_sectors);
     put(buf, &n, cap, "\nraw-batch-sectors ");
     put_dec(buf, &n, cap, (uint64_t)DEVFS_RAW_BATCH_SECTORS);
     put(buf, &n, cap, "\nraw-driver-calls ");
@@ -282,7 +272,6 @@ int diskinfo_probe(int mounted)
         info.sectors = block0->sector_count;
     }
     info.sector_size = block0->sector_size;
-    info.window_sectors = diskinfo_window(block0->sector_count);
 
     for (i = 0; i < MBR_PART_COUNT; i++) {
         info.parts[i].type = 0;
@@ -313,7 +302,7 @@ void diskinfo_publish(void)
         struct disk *d = disk_at(i);
 
         if (d) {
-            devfs_disk_publish(d, diskinfo_window(d->dev->sector_count));
+            devfs_disk_publish(d);
         }
     }
 }

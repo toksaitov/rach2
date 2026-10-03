@@ -62,8 +62,7 @@ The kernel then reads the table again as
 .Cm reread
 does.
 The size of the disk is the kernel's, from
-.Pa /proc/disk ;
-a disk past the 2 TiB the whole-disk node reaches is refused.
+.Pa /proc/disk .
 Writing a whole-disk node requires the recovery kernel.
 .It Cm esp Ar DEVICE
 Give entry 1 of the disk's MBR the type 0xEF, which UEFI firmware boots

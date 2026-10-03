@@ -248,7 +248,7 @@ static void scan_done(int n)
         return;
     }
     disk_set_table(d, &scan.table, dev);
-    devfs_disk_publish(d, dev->sector_count);
+    devfs_disk_publish(d);
     st->state = STICK_LIVE;
     klog(KLOG_INFO, "usbdisk", "disk%d: %s: %d MiB, %d partitions, %d passed over", d->number,
          disk_table_name(d), (int)(dev->sector_count / 2048), d->table.count, d->table.refused);

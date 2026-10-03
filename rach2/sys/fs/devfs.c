@@ -2265,13 +2265,13 @@ void devfs_disk_withdraw(void)
  * node; one with a table is read through it as well, which is how a partition
  * table is inspected without mounting anything.
  */
-void devfs_disk_publish(struct disk *d, uint64_t window_sectors)
+void devfs_disk_publish(struct disk *d)
 {
-    if (!d || window_sectors == 0) {
+    if (!d || d->dev->sector_count == 0) {
         klog(KLOG_DEBUG, "devfs", "no whole-disk window to publish");
         return;
     }
-    block_partition_init(&d->whole.part, d->dev, 0, window_sectors);
+    block_partition_init(&d->whole.part, d->dev, 0, d->dev->sector_count);
     d->whole.present = 1;
 }
 

@@ -224,9 +224,8 @@ void devfs_disk_part_nodes(struct disk *d)
     parts_named++;
 }
 
-void devfs_disk_publish(struct disk *d, uint64_t window_sectors)
+void devfs_disk_publish(struct disk *d)
 {
-    (void)window_sectors;
     d->whole.present = 1;
     published++;
 }

@@ -168,14 +168,8 @@ int devfs_fd_is_raw(struct fd_entry *e);
  */
 int devfs_fd_raw_size(struct fd_entry *e, uint64_t *size);
 
-/**
- * Publish `/dev/diskN`, a read-only window over the whole of disk `d`.
- *
- * The window is `window_sectors` sectors, which is the disk's size clamped to
- * this window's chosen ceiling; `/proc/disk` prints both numbers so the clamp
- * is visible, not silent.
- */
-void devfs_disk_publish(struct disk *d, uint64_t window_sectors);
+/** Publish `/dev/diskN`, a read-only window over the whole of disk `d`. */
+void devfs_disk_publish(struct disk *d);
 
 /**
  * Whether `e` is the open boot log; if so, `*size` gets its current byte

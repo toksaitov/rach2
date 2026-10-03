@@ -15,8 +15,8 @@
  * smaller than the disk was written to it or a partition was grown.
  *
  * The disk's size is the kernel's, from its `disk` line in `/proc/disk`,
- * since the whole-disk window that a descriptor reads stops at 2^32 sectors
- * and a table's backup is at the disk's real end.
+ * the number the installer and `growroot` choose a disk by; a write checks
+ * that the descriptor it is given reaches the disk's last sector.
  */
 
 #define GPTDISK_SECTOR    512u

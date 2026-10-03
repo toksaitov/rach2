@@ -26,13 +26,12 @@ for logical partitions in chain order, and the array position counted
 from 1 for GPT entries.
 The MBR extended entry has no node.
 .Pp
-Whole-disk nodes are published for every disk by the recovery kernel
-or when
+Every boot publishes a whole-disk node for each disk it registered, and a
+USB stick's node is published when the stick is found.
+The recovery kernel, and any kernel booted with
 .Ql rach2.diskdiag
-is on the boot command line.
-A USB stick's whole-disk node is always published.
-ATA, AHCI and NVMe whole-disk windows cover at most 2^32 sectors, or 2 TiB.
-USB whole-disk windows cover the full reported sector count.
+on its command line, also probe for a disk the boot did not register.
+A whole-disk window covers the disk's full reported sector count.
 The nodes are block devices with mode 0400, accessible only to root.
 Reads accept any byte range.
 A read from a pulled stick fails with

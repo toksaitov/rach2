@@ -99,10 +99,9 @@ uint64_t devfs_raw_calls(void)
     return 0;
 }
 
-void devfs_disk_publish(struct disk *d, uint64_t window_sectors)
+void devfs_disk_publish(struct disk *d)
 {
     (void)d;
-    (void)window_sectors;
 }
 
 /*
@@ -265,21 +264,6 @@ int main(void)
     CHECK(diskinfo_u64_dec(out, 3, 4294967295u) == 0 && out[0] == '\0',
           "a buffer too short writes nothing, not half a number");
 
-    /* ---- the window clamp ---- */
-    CHECK(diskinfo_window(1000) == 1000, "a small disk is not clamped");
-    CHECK(diskinfo_window(DISKINFO_WINDOW_MAX_SECTORS) == DISKINFO_WINDOW_MAX_SECTORS,
-          "a disk exactly at the bound is not clamped");
-    CHECK(diskinfo_window((uint64_t)DISKINFO_WINDOW_MAX_SECTORS + 1) == DISKINFO_WINDOW_MAX_SECTORS,
-          "one sector past it is clamped");
-    CHECK(diskinfo_window(1953525168ull) == 1953525168ull,
-          "a 1 TB drive is reachable whole, which it was not while the offset was 32 bits");
-    CHECK(diskinfo_window(8388608ull) == 8388608ull,
-          "the old 4 GiB byte bound is gone: one sector past it is no longer clamped");
-    CHECK(diskinfo_window(0x1FFFFFFFFull) == DISKINFO_WINDOW_MAX_SECTORS,
-          "past the driver's 32-bit LBA the window stops at what an LBA can name");
-    CHECK(DISKINFO_WINDOW_MAX_SECTORS == 0x100000000ull,
-          "the cap is a sector count of 2^32, not the largest LBA, which would lose a sector");
-
     /* ---- the rendered file ---- */
     for (i = 0; i < (int)sizeof(d); i++) {
         ((char *)&d)[i] = 0;
@@ -322,7 +306,6 @@ int main(void)
     d.mounted = 0;
     d.sectors = 1953525168ull;
     d.sector_size = 512;
-    d.window_sectors = diskinfo_window(d.sectors);
     d.mbr_state = DISKINFO_MBR_OK;
     d.mbr_id = 0x4905B015u;
     d.parts[0].type = 0x07;
@@ -362,7 +345,6 @@ int main(void)
                                      "mounted 0\n",
                                      "sector-size 512\n",
                                      "sectors 1953525168\n",
-                                     "window-sectors 1953525168\n",
                                      "raw-batch-sectors 2048\n",
                                      "raw-driver-calls 0\n",
                                      "mbr-signature ok\n",

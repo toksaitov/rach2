@@ -286,6 +286,27 @@ fd_entry_t *fd_get(fd_table_t *table, int fd)
     return 0;
 }
 
+/**
+ * The whole-disk node of a disk past 2 TiB covers every sector, so that a
+ * GUID table's backup at the disk's end can be written through it.
+ */
+static void whole_disk_window(void)
+{
+    static struct disk d;
+    block_device_t disk;
+
+    publishing = 1;
+    k_memset(&disk, 0, sizeof(disk));
+    k_memset(&d, 0, sizeof(d));
+    disk.sector_count = 0x200000000ull;
+    d.dev = &disk;
+    devfs_disk_publish(&d);
+    check(d.whole.present && d.whole.part.backing == &disk && d.whole.part.start_lba == 0 &&
+              d.whole.part.device.sector_count == 0x200000000ull,
+          "a 4 TiB disk's whole-disk node covers all of its 2^33 sectors");
+    publishing = 0;
+}
+
 int main(void)
 {
     int acc, extra;
@@ -306,9 +327,10 @@ int main(void)
     check(devfs_open("ptmx", 2) == 7 && master_calls == 1, "ordinary pty open dispatches");
     offset_devices();
     grubcore_windows();
+    whole_disk_window();
     if (!failures) {
         printf("devfs-hosttest: result: pass: exclusive pty creation, offset devices, "
-               "boot loader windows\n");
+               "boot loader windows, the whole-disk window\n");
     }
     return failures != 0;
 }

@@ -142,7 +142,9 @@ decision was made on.
 .It Ql a partition reaches past where the backup table would go
 A GUID table's partition lies in the disk's last 33 sectors.
 .It Ql the whole-disk node does not reach the disk's last sector
-The disk is past the 2 TiB the whole-disk node reaches.
+The node opened is shorter than the size
+.Pa /proc/disk
+gives the disk.
 .It Ql N MiB of memory; growing a root needs 7 MiB
 The machine has insufficient memory.
 .It Ql the table write was refused; only the recovery kernel writes a whole disk
