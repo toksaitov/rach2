@@ -24,7 +24,8 @@
 # address TinyCC links a program at on that architecture, so a program built
 # on Rach2 and the same program built here are laid out alike. ARCH_LDFLAGS
 # is what a guest link adds: x86-64 links align segments to 4 KiB pages, not
-# the 2 MiB the x86-64 linker uses by default.
+# the 2 MiB the x86-64 linker uses by default. ARCH_QEMU is the emulator that
+# boots this architecture's kernel, which the suites run.
 ARCH ?= i686
 
 ifeq ($(ARCH),i686)
@@ -34,6 +35,7 @@ CROSS_PREFIX   = i686-elf-
 ARCH_CFLAGS    = -m32
 ARCH_LDFLAGS   =
 ARCH_USER_TEXT = 0x08048000
+ARCH_QEMU      = qemu-system-i386
 else ifeq ($(ARCH),x86_64)
 ARCH_SUFFIX    = /x86_64
 ARCH_VENDOR    = build/x86_64/vendor-work
@@ -41,6 +43,7 @@ CROSS_PREFIX   = x86_64-elf-
 ARCH_CFLAGS    = -m64
 ARCH_LDFLAGS   = -Wl,-z,max-page-size=0x1000
 ARCH_USER_TEXT = 0x400000
+ARCH_QEMU      = qemu-system-x86_64
 else
 $(error ARCH=$(ARCH): the architectures are i686 and x86_64)
 endif

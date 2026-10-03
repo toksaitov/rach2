@@ -14,6 +14,8 @@
 #   ARCH_SUFFIX  what this architecture's build tree adds after `build`, as
 #                mk/arch.mk says: empty for i686, `/x86_64` for x86-64
 #   ARCH_LDFLAGS what a final link adds: 4 KiB segment alignment on x86-64
+#   ARCH_QEMU    the emulator that boots this architecture's kernel
+#   ARCH_USER_TEXT the address a freestanding program's text is linked at
 #   ARCH_VENDOR  where a port's extracted tree, and musl's install, go: vendor/
 #                for i686, build/x86_64/vendor-work/ for x86-64
 #   MUSL_PREFIX  the ported musl's install directory
@@ -49,6 +51,8 @@ case "$RACH2_ARCH" in
         HOST_TRIPLE=i686-linux-musl
         ARCH_SUFFIX=
         ARCH_LDFLAGS=
+        ARCH_QEMU=qemu-system-i386
+        ARCH_USER_TEXT=0x08048000
         ;;
     x86_64)
         CROSS=x86_64-elf-
@@ -57,6 +61,8 @@ case "$RACH2_ARCH" in
         HOST_TRIPLE=x86_64-linux-musl
         ARCH_SUFFIX=/x86_64
         ARCH_LDFLAGS=-Wl,-z,max-page-size=0x1000
+        ARCH_QEMU=qemu-system-x86_64
+        ARCH_USER_TEXT=0x400000
         ;;
     *)
         echo "rach2: unknown architecture '$RACH2_ARCH'; the architectures are i686 and x86_64" >&2
