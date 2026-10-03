@@ -803,7 +803,6 @@ utils/adduser.c:main lines 261 one procedure over a file format, in the order th
 
 utils/bootslot.c:bootslot_open complexity 38 one procedure over a file format, in the order the format is read
 utils/bootslot.c:bootslot_open lines 123 one procedure over a file format, in the order the format is read
-utils/bootslot.c:bootslot_validate_kernel complexity 34 one procedure over a file format, in the order the format is read
 utils/bootslot.c:resolve_file params 7 one procedure over a file format, in the order the format is read
 utils/bootslot.c:scan_dir complexity 39 one procedure over a file format, in the order the format is read
 utils/bootslot.c:scan_dir params 7 one procedure over a file format, in the order the format is read

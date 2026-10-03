@@ -495,60 +495,39 @@ static int policy_judged(const uint8_t *image, uint32_t present, uint32_t size, 
 }
 
 /**
- * Validate the in-memory headers of an ELF32 i386 kernel.
- *
- * Load file ranges must fit `size`, and load memory ranges must fit the
- * 32-bit address space at or above 1 MiB. `present` gives the available
- * prefix; the ELF and program headers must fit that prefix. The entry point
- * must lie in a load's file-backed bytes. The exclusive memory end must
- * be representable in 32 bits. A Multiboot header must be in the first 8192
- * bytes, and its flags must be ALIGN|MEMINFO; other flags change how the
- * loader reads the image. Each load's physical address must equal its
- * virtual one, and a whole image must name the read-write disk policy
- * (`policy_judged`).
+ * The offset of the Multiboot header in the first 8192 bytes of the
+ * `present` bytes at `image`, four-byte aligned with a checksum that sums to
+ * zero, or -1 when there is none.
  */
-int bootslot_validate_kernel(const uint8_t *image, uint32_t present, uint32_t size, char *err,
-                             size_t errlen)
+static long multiboot_header(const uint8_t *image, uint32_t present)
 {
-    uint32_t limit, off;
-    uint32_t e_entry, e_phoff, e_phnum, i;
-    uint32_t nload = 0;
-    int found = 0;
-    int entry_in_load = 0;
+    uint32_t limit = present < MULTIBOOT_SEARCH ? present : MULTIBOOT_SEARCH;
+    uint32_t off;
 
-    if (present > size) {
-        present = size;
-    }
-    if (present < 52) {
-        return fail(err, errlen, "the image is smaller than an ELF header");
-    }
-    if (image[0] != 0x7F || image[1] != 'E' || image[2] != 'L' || image[3] != 'F') {
-        return fail(err, errlen, "the image is not an ELF");
-    }
-    if (image[4] != 1 || image[5] != 1) {
-        return fail(err, errlen, "the image is not 32-bit little-endian");
-    }
-    if (le16(image + 16) != 2 || le16(image + 18) != 3) {
-        return fail(err, errlen, "the image is not an i386 executable");
-    }
-    limit = present < MULTIBOOT_SEARCH ? present : MULTIBOOT_SEARCH;
     for (off = 0; off + 12 <= limit; off += 4) {
         if (le32(image + off) == MULTIBOOT_MAGIC &&
             le32(image + off) + le32(image + off + 4) + le32(image + off + 8) == 0) {
-            found = 1;
-            break;
+            return (long)off;
         }
     }
-    if (!found) {
-        return fail(err, errlen, "no multiboot header in the first 8192 bytes");
-    }
-    if (le32(image + off + 4) != 3) {
-        return fail(err, errlen, "the multiboot flags are not ALIGN|MEMINFO");
-    }
+    return -1;
+}
 
-    e_entry = le32(image + 24);
-    e_phoff = le32(image + 28);
-    e_phnum = le16(image + 44);
+/**
+ * Judge the program headers of an ELF32 i386 kernel, which a Multiboot
+ * loader follows: each load's file range must fit `size` and its memory
+ * range the 32-bit space at or above 1 MiB, its physical address must equal
+ * its virtual one, and the entry must lie in a load's file-backed bytes.
+ */
+static int elf32_loads(const uint8_t *image, uint32_t present, uint32_t size, char *err,
+                       size_t errlen)
+{
+    uint32_t e_entry = le32(image + 24);
+    uint32_t e_phoff = le32(image + 28);
+    uint32_t e_phnum = le16(image + 44);
+    uint32_t nload = 0, i;
+    int entry_in_load = 0;
+
     if (le16(image + 42) != 32 || e_phnum == 0 || e_phnum > 16) {
         return fail(err, errlen, "the program-header table is not a loader's");
     }
@@ -590,6 +569,112 @@ int bootslot_validate_kernel(const uint8_t *image, uint32_t present, uint32_t si
     }
     if (!entry_in_load) {
         return fail(err, errlen, "the entry point is outside every load");
+    }
+    return 0;
+}
+
+/**
+ * Judge the load an x86-64 kernel's Multiboot header at `off` describes
+ * with the a.out kludge, whose addresses a loader follows in place of the
+ * program headers: the file from the header's offset less the distance from
+ * `load_addr` to `header_addr` is copied to `load_addr`, up to
+ * `load_end_addr`, or to the end of the file when that is 0, the memory up
+ * to `bss_end_addr` is zeroed, and the loader jumps to `entry_addr`. The
+ * copy must start at or above 1 MiB and lie in the file's `size` bytes, the
+ * zeroed memory must not end below the copy, and the entry must lie in the
+ * copied bytes. Every address is 32 bits wide, so every end is
+ * representable.
+ */
+static int kludge_load(const uint8_t *image, uint32_t off, uint32_t size, char *err, size_t errlen)
+{
+    uint32_t header_addr = le32(image + off + 12);
+    uint32_t load_addr = le32(image + off + 16);
+    uint32_t load_end = le32(image + off + 20);
+    uint32_t bss_end = le32(image + off + 24);
+    uint32_t entry = le32(image + off + 28);
+    uint32_t file_start, copied;
+
+    if (load_addr < 0x100000u) {
+        return fail(err, errlen, "the load sits below the megabyte");
+    }
+    if (header_addr < load_addr || header_addr - load_addr > off) {
+        return fail(err, errlen, "the multiboot header lies outside its load");
+    }
+    file_start = off - (header_addr - load_addr);
+    if (load_end == 0) {
+        copied = size - file_start;
+    } else if (load_end <= load_addr || load_end - load_addr > size - file_start) {
+        return fail(err, errlen, "the load leaves the file");
+    } else {
+        copied = load_end - load_addr;
+    }
+    if (copied > 0xFFFFFFFFu - load_addr) {
+        return fail(err, errlen, "the load leaves the 32-bit address space");
+    }
+    if (bss_end != 0 && bss_end < load_addr + copied) {
+        return fail(err, errlen, "the zeroed memory ends inside the load");
+    }
+    if (entry < load_addr || entry - load_addr >= copied) {
+        return fail(err, errlen, "the entry point is outside the load");
+    }
+    return 0;
+}
+
+/**
+ * Validate the in-memory headers of a kernel a Multiboot loader can load:
+ * an ELF32 i386 kernel, whose program headers the loader follows, or an
+ * ELF64 x86-64 kernel, whose Multiboot header gives the load's addresses
+ * through the a.out kludge.
+ *
+ * `present` gives the available prefix; the ELF header, an i386 kernel's
+ * program headers and the Multiboot header must fit it, and the Multiboot
+ * header must be in the first 8192 bytes. Its flags must be ALIGN|MEMINFO
+ * for an i386 kernel and ALIGN|MEMINFO with the a.out kludge for an x86-64
+ * one; other flags change how the loader reads the image. Load file ranges
+ * must fit `size`, load memory ranges the 32-bit address space at or above
+ * 1 MiB, and the entry point a load's file-backed bytes. An i386 load's
+ * physical address must equal its virtual one. A whole image must name the
+ * read-write disk policy (`policy_judged`).
+ */
+int bootslot_validate_kernel(const uint8_t *image, uint32_t present, uint32_t size, char *err,
+                             size_t errlen)
+{
+    long off;
+    int x86_64;
+
+    if (present > size) {
+        present = size;
+    }
+    if (present < 52) {
+        return fail(err, errlen, "the image is smaller than an ELF header");
+    }
+    if (image[0] != 0x7F || image[1] != 'E' || image[2] != 'L' || image[3] != 'F') {
+        return fail(err, errlen, "the image is not an ELF");
+    }
+    x86_64 = image[4] == 2;
+    if ((image[4] != 1 && !x86_64) || image[5] != 1) {
+        return fail(err, errlen, "the image is not a little-endian ELF32 or ELF64");
+    }
+    if (x86_64 && present < 64) {
+        return fail(err, errlen, "the image is smaller than an ELF header");
+    }
+    if (le16(image + 16) != 2 || le16(image + 18) != (x86_64 ? 62u : 3u)) {
+        return fail(err, errlen,
+                    x86_64 ? "the image is not an x86-64 executable"
+                           : "the image is not an i386 executable");
+    }
+    off = multiboot_header(image, present);
+    if (off < 0 || (x86_64 && (uint32_t)off + 32 > present)) {
+        return fail(err, errlen, "no multiboot header in the first 8192 bytes");
+    }
+    if (le32(image + off + 4) != (x86_64 ? 0x10003u : 3u)) {
+        return fail(err, errlen,
+                    x86_64 ? "the multiboot flags are not ALIGN|MEMINFO|AOUT_KLUDGE"
+                           : "the multiboot flags are not ALIGN|MEMINFO");
+    }
+    if ((x86_64 ? kludge_load(image, (uint32_t)off, size, err, errlen)
+                : elf32_loads(image, present, size, err, errlen)) != 0) {
+        return -1;
     }
     return policy_judged(image, present, size, err, errlen);
 }

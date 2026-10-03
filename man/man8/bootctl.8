@@ -109,7 +109,12 @@ or
 .Ql not from a slot (no rach2.slot= on /proc/cmdline) .
 .It Cm kernel Ar FILE
 Validate the file and the fallback kernel's header prefix.
-ELF load file ranges must fit the file size.
+The file must be a kernel of the architecture
+.Nm
+was built for: an ELF32 i386 kernel on i686, whose program headers the
+Multiboot loader follows, or an ELF64 x86-64 kernel on x86-64, whose
+Multiboot header gives the load's addresses through the a.out kludge.
+Load file ranges must fit the file size.
 Load memory ranges must start at or above 1 MiB and have a representable
 32-bit exclusive end.
 The entry point must lie in a load's file-backed bytes.
@@ -212,7 +217,10 @@ A kernel file that cannot be opened or read is reported as
 or
 .Ql bootctl: reading 'FILE' failed .
 A file too large for any slot is reported as
-.Ql bootctl: 'FILE' is larger than any slot .
+.Ql bootctl: 'FILE' is larger than any slot ,
+and a kernel of the other architecture as
+.Ql bootctl: 'FILE' is not an i686 kernel, which this system's programs need ,
+or the same with x86-64.
 Without a recognized boot slot, installation reports:
 .Dl bootctl: this boot did not come from a kernel slot (no rach2.slot= on /proc/cmdline)
 A commit from another boot reports:

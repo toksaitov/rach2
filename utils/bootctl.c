@@ -55,6 +55,17 @@
 
 #define SLOT_MAX (4 * 1024 * 1024)
 
+/* The ELF class of the kernel this system can boot: that of its own
+ * programs, since the x86-64 kernel runs no i386 program and the i686 kernel
+ * no x86-64 one. bootslot.c validates either kind. */
+#if defined __x86_64__
+#define KERNEL_CLASS 2
+#define KERNEL_ARCH  "x86-64"
+#else
+#define KERNEL_CLASS 1
+#define KERNEL_ARCH  "i686"
+#endif
+
 static uint8_t image[SLOT_MAX];
 static char errbuf[128];
 
@@ -309,9 +320,10 @@ static int cmd_commit(void)
  * Stage the kernel in `path` into the candidate slot for one trial boot.
  *
  * The boot line must have `rach2.slot=candidate`, `rach2.slot=fallback` or
- * `rach2.slot=recovery`. A file larger than any slot is refused before the
- * disk is opened; `bootslot_install` validates the file and the fallback and
- * does the writes the file header lists.
+ * `rach2.slot=recovery`. A file larger than any slot, or a kernel of the other
+ * architecture, is refused before the disk is opened; `bootslot_install`
+ * validates the file and the fallback and does the writes the file header
+ * lists.
  */
 static int cmd_kernel(const char *path)
 {
@@ -341,6 +353,11 @@ static int cmd_kernel(const char *path)
         return 1;
     }
     fclose(f);
+    if (size > 4 && memcmp(image, "\177ELF", 4) == 0 && image[4] != KERNEL_CLASS) {
+        fprintf(stderr, "bootctl: '%s' is not an %s kernel, which this system's programs need\n",
+                path, KERNEL_ARCH);
+        return 1;
+    }
     if (open_slot() != 0) {
         return 1;
     }

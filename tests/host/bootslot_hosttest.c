@@ -1,5 +1,6 @@
 /**
- * Check kernel address bounds and fallback copy failures over resolved files.
+ * Check kernel address bounds, an x86-64 kernel's a.out kludge, and fallback
+ * copy failures over resolved files.
  *
  * host-deps: utils/bootslot.c
  *
@@ -102,6 +103,84 @@ static void make_kernel(void)
     /* The banner a real kernel carries: an image without it names no policy
        and the validator refuses it. */
     memcpy(kernel + 200, "rach2: disk policy: read-write", 31);
+}
+
+/**
+ * Build an x86-64 kernel as the x86-64 link lays one out: an ELF64 header
+ * and a Multiboot header at 0x1000 whose a.out kludge copies the file from
+ * the header on to 1 MiB, the bytes up to 0x3000 past it, and zeroes the
+ * memory to 0x5000 past it.
+ */
+static void make_kernel64(void)
+{
+    make_kernel();
+    memset(kernel, 0, 128);
+    memcpy(kernel, "\177ELF\2\1", 6);
+    kernel[16] = 2;
+    kernel[18] = 62;
+    put32(kernel + 0x1000, 0x1BADB002u);
+    put32(kernel + 0x1004, 0x10003u);
+    put32(kernel + 0x1008, 0u - (0x1BADB002u + 0x10003u));
+    put32(kernel + 0x100C, 0x100000u);
+    put32(kernel + 0x1010, 0x100000u);
+    put32(kernel + 0x1014, 0x103000u);
+    put32(kernel + 0x1018, 0x105000u);
+    put32(kernel + 0x101C, 0x100020u);
+}
+
+/** Check that an x86-64 kernel's load is judged by its a.out kludge. */
+static void check_kludge(void)
+{
+    uint32_t whole = sizeof(kernel);
+
+    make_kernel64();
+    check(bootslot_validate_kernel(kernel, whole, whole, err, sizeof(err)) == 0,
+          "an x86-64 kernel with the a.out kludge is taken");
+    put32(kernel + 0x1004, 3);
+    put32(kernel + 0x1008, 0u - 0x1BADB005u);
+    check(bootslot_validate_kernel(kernel, whole, whole, err, sizeof(err)) == -1 &&
+              strstr(err, "not ALIGN|MEMINFO|AOUT_KLUDGE") != NULL,
+          "an x86-64 kernel without the a.out kludge is refused");
+    make_kernel64();
+    kernel[18] = 3;
+    check(bootslot_validate_kernel(kernel, whole, whole, err, sizeof(err)) == -1 &&
+              strstr(err, "not an x86-64 executable") != NULL,
+          "an ELF64 i386 executable is refused");
+    make_kernel64();
+    put32(kernel + 0x100C, 0xFF000u);
+    put32(kernel + 0x1010, 0xFF000u);
+    check(bootslot_validate_kernel(kernel, whole, whole, err, sizeof(err)) == -1 &&
+              strstr(err, "below the megabyte") != NULL,
+          "an x86-64 load below 1 MiB is refused");
+    make_kernel64();
+    put32(kernel + 0x1010, 0xFE000u + 0x2000u);
+    put32(kernel + 0x100C, 0x100000u + 0x2000u);
+    check(bootslot_validate_kernel(kernel, whole, whole, err, sizeof(err)) == -1 &&
+              strstr(err, "outside its load") != NULL,
+          "a load that starts before the file is refused");
+    make_kernel64();
+    put32(kernel + 0x1014, 0x100000u + whole);
+    check(bootslot_validate_kernel(kernel, whole, whole, err, sizeof(err)) == -1 &&
+              strstr(err, "leaves the file") != NULL,
+          "an x86-64 load past the file is refused");
+    make_kernel64();
+    put32(kernel + 0x1018, 0x102000u);
+    check(bootslot_validate_kernel(kernel, whole, whole, err, sizeof(err)) == -1 &&
+              strstr(err, "ends inside the load") != NULL,
+          "zeroed memory ending inside the load is refused");
+    make_kernel64();
+    put32(kernel + 0x101C, 0x103000u);
+    check(bootslot_validate_kernel(kernel, whole, whole, err, sizeof(err)) == -1 &&
+              strstr(err, "outside the load") != NULL,
+          "an entry past the copied bytes is refused");
+    make_kernel64();
+    put32(kernel + 0x1014, 0);
+    check(bootslot_validate_kernel(kernel, whole, whole, err, sizeof(err)) == 0,
+          "a load to the end of the file is taken");
+    put32(kernel + 0x101C, 0x100000u + whole - 0x1000u);
+    check(bootslot_validate_kernel(kernel, whole, whole, err, sizeof(err)) == -1 &&
+              strstr(err, "outside the load") != NULL,
+          "an entry past the end of the file is refused");
 }
 
 /** Initialize two resolved slots and an environment that permits copying. */
@@ -237,6 +316,7 @@ int main(void)
     check_fallback();
     check_bounds();
     check_policy();
+    check_kludge();
     printf("bootslot-hosttest: result: %s: %d failures\n", fails ? "fail" : "pass", fails);
     return fails != 0;
 }
