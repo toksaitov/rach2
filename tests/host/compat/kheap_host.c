@@ -55,3 +55,12 @@ void kfree_pages(void *p, uint32_t count)
     (void)count;
     free(p);
 }
+
+/* The pages of the heap's region: i686's, the floor's, unless a test sets
+ * another to stand for a heap the boot sized from the memory. */
+uint32_t kheap_host_region_pages = KHEAP_FLOOR / 4096u;
+
+uint32_t kheap_region_pages(void)
+{
+    return kheap_host_region_pages;
+}

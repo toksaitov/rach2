@@ -369,7 +369,7 @@ tests/host/hub_hosttest.c:main lines 636 a test's rows, each a case, read as one
 tests/host/hub_hosttest.c:xhci_submit complexity 104 a test's rows, each a case, read as one table
 tests/host/hub_hosttest.c:xhci_submit lines 305 a test's rows, each a case, read as one table
 
-tests/host/kheap_hosttest.c:main lines 121 a test's rows, each a case, read as one table
+tests/host/kheap_hosttest.c:main lines 123 a test's rows, each a case, read as one table
 
 tests/host/klog_hosttest.c:main lines 310 a test's rows, each a case, read as one table
 

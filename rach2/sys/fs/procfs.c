@@ -2422,7 +2422,8 @@ static int procfs_gen_meminfo(struct procfs_text *t)
     size_t free_frames = frame_free_count();
     uint32_t buffers = bcache_resident();
     uint32_t cached = pc_resident() + filecache_pages();
-    uint32_t heap_pages = 0, heap_bytes = 0;
+    uint32_t heap_pages = 0;
+    size_t heap_bytes = 0;
 
     /* Every count before the first append, which may take a heap page. */
     kheap_stats(&heap_pages, &heap_bytes);
@@ -2441,7 +2442,7 @@ static int procfs_gen_meminfo(struct procfs_text *t)
     ap_u32(t, heap_pages);
     ap_str(t, "\n");
     ap_str(t, "HeapUsed:       ");
-    ap_u32(t, heap_bytes);
+    ap_ulong(t, (unsigned long)heap_bytes);
     ap_str(t, "\n");
     ap_str(t, "SwapTotal:             0 kB\n");
     ap_str(t, "SwapFree:              0 kB\n");

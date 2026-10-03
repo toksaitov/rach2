@@ -25,9 +25,10 @@
 
 pte_t mmu_nx;
 
-/* Set once the heap exists: from then on a table is a frame from the
- * allocator, given back when the table goes. Before, the boot carves one
- * below the window, and it stays for good. */
+/* Set once the frame allocator is counted: from then on a table is a frame
+ * from anywhere the map offers, reached through the direct map and given
+ * back when the table goes. Before, the boot carves one below the window,
+ * and it stays for good. */
 static int _heap_ready;
 
 /* The firmware's memory while the boot carves, which a carved page must lie
@@ -249,8 +250,10 @@ void *mmu_frame_table(struct frame_map *map, size_t bytes)
 
 /**
  * Give the kernel's windows their PML4 entries and every page table of the
- * regions cpu.h gives them, as on i686, so that the heap, map_mmio and the
- * temporary mappings write entries that exist.
+ * regions cpu.h gives them, as on i686, so that map_mmio and the temporary
+ * mappings write entries that exist. The heap's tables are made for the
+ * size the heap is given, by `kheap_init` (mm/kheap.c), since the region's
+ * PML4 entry has room for far more than one machine's heap.
  */
 void mmu_init(void)
 {
@@ -264,7 +267,6 @@ void mmu_init(void)
         }
         _kernel_dir->entries[PML4_WINDOWS + i] = pdpt | PTE_P | PTE_W;
     }
-    boot_tables(KVA_HEAP, KVA_HEAP_SIZE);
     boot_tables(KVA_MMIO, KVA_MMIO_SIZE);
     boot_tables(KVA_TEMP, (uintptr_t)KVA_TEMP_SLOTS * PAGE_SIZE);
     boot_tables(KVA_MODULES, KVA_MODULES_SIZE);

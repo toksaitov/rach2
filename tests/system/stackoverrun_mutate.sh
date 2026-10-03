@@ -129,8 +129,8 @@ path = Path(sys.argv[1])
 text = path.read_text()
 old, new = {
     'guard-mapped': (
-        '    if (guard >= KHEAP_PAGES || map_run(guard + 1, count) != 0) {\n',
-        '    if (guard >= KHEAP_PAGES || map_run(guard, count + 1) != 0) {\n'),
+        '    if (guard >= heap_pages || map_run(guard + 1, count) != 0) {\n',
+        '    if (guard >= heap_pages || map_run(guard, count + 1) != 0) {\n'),
     'boot-guard-mapped': (
         '    unmap_kernel_frame((uintptr_t)stack_guard);\n',
         ''),

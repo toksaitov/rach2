@@ -46,7 +46,8 @@ pte_t *mmu_kernel_table(uintptr_t va);
  * directory with the identity window and the tables of the kernel's layout,
  * marking the frames it carves in the frame table (`frame_take_boot`);
  * `mmu_start` turns translation on through it; `mmu_heap_ready` says the
- * heap exists, from which page tables then come.
+ * frame allocator is counted and the heap is next, and every page table
+ * made from then on comes from them, the heap's own among them.
  */
 void mmu_init(void);
 void mmu_start(void);
@@ -84,6 +85,7 @@ int paging_fork_copy(struct mm *from, page_dir_t *child);
  * establishes, with the kernel image and the modules already reserved; the
  * frame table is sized from it, one word per frame below its top, and the
  * table and the tables this carves are reserved in it before it returns.
+ * The heap is then sized from the memory the frame allocator manages.
  */
 void init_paging(struct frame_map *map);
 

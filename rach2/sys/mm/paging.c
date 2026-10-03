@@ -109,7 +109,8 @@ static void _page_fault_handler(isr_params_t *params);
  * tables carved at frames the architecture had already passed and for those
  * carved after it. The map has the same ranges reserved, and what the
  * allocator manages and has free is counted from the table and not from the
- * map's arithmetic, so the boot's report compares the two.
+ * map's arithmetic, so the boot's report compares the two. The heap is an
+ * eighth of what the allocator manages (`kheap_size_for`).
  */
 void init_paging(struct frame_map *map)
 {
@@ -203,10 +204,10 @@ void init_paging(struct frame_map *map)
 
     mmu_start();
 
-    /* From here the heap exists, and every page table and directory made
-     * later comes from it. */
-    kheap_init();
+    /* From here the frame allocator is counted, and every page table made
+     * later comes from it or from the heap, the heap's own among them. */
     mmu_heap_ready();
+    kheap_init(kheap_size_for((uint64_t)_managed_frames * PAGE_SIZE, KVA_HEAP_SIZE));
 }
 
 void frame_take_boot(uintptr_t frame)

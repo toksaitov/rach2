@@ -59,6 +59,10 @@ The TCP listener drops an incoming SYN when the free-frame count is at
 or below the reserve.
 .Ss Kernel heap
 The kernel heap supplies process records, sockets, requests and buffers.
+Its region is 256 MiB on i686.
+On x86-64 it is sized at boot to an eighth of the memory, 256 MiB at the
+least and 512 GiB at the most.
+The buffer cache holds at most half of it.
 .Pa /proc/meminfo
 reports memory totals.
 .Pp

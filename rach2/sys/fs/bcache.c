@@ -42,20 +42,17 @@ static uint64_t stat_visits;
 /* The most buffers the cache makes: half of what the caches together may
  * hold under pressure, and never fewer than the floor, since a file system
  * holds up to four at once and a write of one may take one more. Each
- * buffer is a page of the kernel heap, which is KVA_HEAP_SIZE whatever the
- * machine's memory, so the cache also stops at half the heap's pages: on a
- * machine with more than 2 GiB the memory share alone is more than the
- * whole heap, and a cache that took it all would leave fork with no page for
- * a stack. */
-#define BCACHE_HEAP_SHARE ((KVA_HEAP_SIZE / PAGE_SIZE) / 2u)
-
+ * buffer is a page of the kernel heap, whose region is an eighth of memory
+ * and never less than 256 MiB (kheap.h), so the cache also stops at half
+ * the region's pages. The memory share, an eighth of memory too, would take
+ * the whole region, and on i686 with more than 2 GiB more than it, leaving
+ * fork with no page for a stack. */
 static uint32_t bcache_limit(void)
 {
-    uint32_t n = limit_set ? limit_set : (uint32_t)(mem_cache_target() / 2u);
+    size_t share = limit_set ? limit_set : mem_cache_target() / 2u;
+    uint32_t most = kheap_region_pages() / 2u;
+    uint32_t n = share > most ? most : (uint32_t)share;
 
-    if (n > BCACHE_HEAP_SHARE) {
-        n = BCACHE_HEAP_SHARE;
-    }
     return n < BCACHE_MIN_BUFFERS ? BCACHE_MIN_BUFFERS : n;
 }
 

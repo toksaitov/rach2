@@ -3,8 +3,10 @@
 # were written for, entries 25 and 40 of milestone 50: the hold rules walking
 # every buffer of the cache on every get, the victim chosen by a walk of every
 # buffer, a sync walking the cache again for every run it writes, and the
-# cache's cap at half the kernel heap's pages taken out; and against a visit
-# counter that answers 0, which only the rows' lower bounds can see. Each
+# cache's cap at half the kernel heap's pages taken out; against the cap held
+# at half of i686's region, as it was before the boot sized the region from
+# the memory on x86-64; and against a visit counter that answers 0, which
+# only the rows' lower bounds can see. Each
 # fault is compiled into a private copy of rach2/sys/fs/bcache.c, one at a
 # time, and must fail each row its case names; the copy restored, touched and
 # rebuilt must pass.
@@ -92,7 +94,7 @@ EOF
 
 echo "bcache-proof: logs: $work"
 run_phase fixed pass 'bcache_cost_hosttest: result: pass:'
-for fault in hold-walk victim-walk sync-rescan cap uncounted; do
+for fault in hold-walk victim-walk sync-rescan cap fixed-cap uncounted; do
     python3 - "$source" "$fault" <<'PY'
 import pathlib
 import sys
@@ -126,7 +128,11 @@ faults = {
          '                    victim = b;\n                }\n')]),
     'sync-rescan': (None, [('#define SYNC_BATCH 128\n', '#define SYNC_BATCH 1\n')]),
     'cap': ('static uint32_t bcache_limit(void)\n{', [
-        ('    if (n > BCACHE_HEAP_SHARE) {\n        n = BCACHE_HEAP_SHARE;\n    }\n', '')]),
+        ('    uint32_t n = share > most ? most : (uint32_t)share;\n',
+         '    uint32_t n = (uint32_t)share;\n')]),
+    'fixed-cap': ('static uint32_t bcache_limit(void)\n{', [
+        ('    uint32_t most = kheap_region_pages() / 2u;\n',
+         '    uint32_t most = KHEAP_FLOOR / PAGE_SIZE / 2u;\n')]),
     'uncounted': ('uint64_t bcache_stat_visits(void)\n{', [
         ('    return stat_visits;', '    return 0;')]),
 }
@@ -153,7 +159,9 @@ PY
         hold-walk) message='a hit with three buffers held reads its holds and its own buffer, not the cache' ;;
         victim-walk) message='a miss on a full cache reads the head of the release order, not the cache' ;;
         sync-rescan) message='a sync reads the cache once for each 128 dirty blocks, not once for each run' ;;
-        cap) message="a machine whose memory share passes the kernel heap has a cache of half the heap's pages" ;;
+        cap) message="a machine whose memory share passes the kernel heap has a cache of half the heap's pages
+a heap of another size has a cache of half its own pages" ;;
+        fixed-cap) message='a heap of another size has a cache of half its own pages' ;;
         uncounted) message="the counter counts the buffers a hit and its release read
 the counter counts the buffers each miss and its release read
 the counter counts the sync's eleven walks of the cache" ;;

@@ -8,10 +8,10 @@
 #include "kheap.h"
 
 #include "../klog.h"
+#include "../panic.h"
 #include "../lib/kstring.h"
 #include "paging.h"
 
-#define KHEAP_PAGES   (KVA_HEAP_SIZE / PAGE_SIZE)
 #define KHEAP_MAGIC   0x4B484550u /* "KHEP" */
 #define KHEAP_CLASSES 8
 #define KHEAP_LARGE   0xFFu
@@ -38,16 +38,21 @@ static const uint32_t class_size[KHEAP_CLASSES] = {16, 32, 64, 128, 256, 512, 10
  * region cannot give, so a small allocation never uses a run, and it is
  * given back when its pages are freed, by `kfree_pages` or by `kfree` of a
  * large object, both of which go through `release_run`. */
-#define KHEAP_RUN_PAGES     256u
-#define KHEAP_RUNS          16u
-#define KHEAP_RUN_LEAST     64u
-#define KHEAP_RESERVE_FIRST (KHEAP_PAGES - KHEAP_RUNS * KHEAP_RUN_PAGES)
-static uint32_t run_bits; /* set where a reserve run is taken */
+#define KHEAP_RUN_PAGES 256u
+#define KHEAP_RUNS      16u
+#define KHEAP_RUN_LEAST 64u
+static uint32_t heap_pages;    /* the region's pages, from kheap_init */
+static uint32_t reserve_first; /* the reserve's first page */
+static uint32_t run_bits;      /* set where a reserve run is taken */
 static void *free_list[KHEAP_CLASSES];
-static uint32_t page_bits[KHEAP_PAGES / 32]; /* set where a page is mapped */
+/* The map of the region's pages, set where a page is mapped: `floor_bits`
+ * in the image for a region of KHEAP_FLOOR, the region's own first pages
+ * for a larger one. */
+static uint32_t floor_bits[KHEAP_FLOOR / PAGE_SIZE / 32];
+static uint32_t *page_bits;
 static uint32_t next_page;
 static uint32_t pages_held;
-static uint32_t bytes_used;
+static size_t bytes_used;
 static uint32_t class_pages[KHEAP_CLASSES]; /* pages carved into each class */
 static uint32_t class_live[KHEAP_CLASSES];  /* blocks of each class in use */
 
@@ -65,26 +70,37 @@ static void page_set(uint32_t page, int taken)
     }
 }
 
+/* The end of the region, one past its last byte. */
+static uintptr_t heap_end(void)
+{
+    return KVA_HEAP + (uintptr_t)heap_pages * PAGE_SIZE;
+}
+
 /* Interrupts off. `count` free pages in a row, next fit from where the
- * last run ended and round once through the region; KHEAP_PAGES when the
- * region has no such run. */
+ * last run ended and round once through the region, a word of the map at a
+ * time where all of its pages are taken; `heap_pages` when the region has
+ * no such run. */
 static uint32_t find_run(uint32_t count)
 {
     uint32_t run = 0, i, n;
 
     i = next_page;
-    for (n = 0; n < 2 * KHEAP_PAGES; n++, i++) {
-        if (i >= KHEAP_PAGES) {
+    for (n = 0; n < 2 * heap_pages; n++, i++) {
+        if (i >= heap_pages) {
             i = 0;
             run = 0;
         }
-        if (page_taken(i)) {
+        if (i % 32u == 0 && page_bits[i / 32] == 0xFFFFFFFFu) {
+            run = 0;
+            n += 31;
+            i += 31;
+        } else if (page_taken(i)) {
             run = 0;
         } else if (++run == count) {
             return i + 1 - count;
         }
     }
-    return KHEAP_PAGES;
+    return heap_pages;
 }
 
 /* Interrupts off. Map `count` fresh frames at the run starting at `page`;
@@ -98,7 +114,7 @@ static int map_run(uint32_t page, uint32_t count)
 
         if (phys == 0) {
             while (i-- > 0) {
-                uintptr_t va = KVA_HEAP + (page + i) * PAGE_SIZE;
+                uintptr_t va = KVA_HEAP + ((uintptr_t)page + i) * PAGE_SIZE;
 
                 free_frame(paging_virt_to_phys(va));
                 unmap_kernel_frame(va);
@@ -106,7 +122,7 @@ static int map_run(uint32_t page, uint32_t count)
             }
             return -1;
         }
-        map_kernel_frame(KVA_HEAP + (page + i) * PAGE_SIZE, phys, 1);
+        map_kernel_frame(KVA_HEAP + ((uintptr_t)page + i) * PAGE_SIZE, phys, 1);
         page_set(page + i, 1);
     }
     pages_held += count;
@@ -119,7 +135,7 @@ static void unmap_run(uint32_t page, uint32_t count)
     uint32_t i;
 
     for (i = 0; i < count; i++) {
-        uintptr_t va = KVA_HEAP + (page + i) * PAGE_SIZE;
+        uintptr_t va = KVA_HEAP + ((uintptr_t)page + i) * PAGE_SIZE;
 
         free_frame(paging_virt_to_phys(va));
         unmap_kernel_frame(va);
@@ -128,39 +144,78 @@ static void unmap_run(uint32_t page, uint32_t count)
     pages_held -= count;
 }
 
-void kheap_init(void)
+size_t kheap_size_for(uint64_t managed, uint64_t most)
 {
-    uint32_t i;
+    uint64_t bytes = managed / 8u / KHEAP_GRAIN * KHEAP_GRAIN;
 
-    k_memset(page_bits, 0, sizeof(page_bits));
+    if (bytes < KHEAP_FLOOR) {
+        bytes = KHEAP_FLOOR;
+    }
+    if (bytes > most) {
+        bytes = most / KHEAP_GRAIN * KHEAP_GRAIN;
+    }
+    return (size_t)bytes;
+}
+
+void kheap_init(size_t bytes)
+{
+    uint32_t i, map_pages = 0;
+
+    heap_pages = (uint32_t)(bytes / PAGE_SIZE);
+    reserve_first = heap_pages - KHEAP_RUNS * KHEAP_RUN_PAGES;
+    if (premap_kernel_window(KVA_HEAP, bytes) != 0) {
+        k_panic("kheap: no memory for the region's page tables");
+    }
+    page_bits = floor_bits;
+    if (heap_pages > KHEAP_FLOOR / PAGE_SIZE) {
+        map_pages = (heap_pages / 8u + PAGE_SIZE - 1) / PAGE_SIZE;
+        page_bits = (uint32_t *)KVA_HEAP;
+        for (i = 0; i < map_pages; i++) {
+            uintptr_t phys = alloc_frame();
+
+            if (phys == 0) {
+                k_panic("kheap: no frame for the map of the region's pages");
+            }
+            map_kernel_frame(KVA_HEAP + (uintptr_t)i * PAGE_SIZE, phys, 1);
+        }
+    }
+    k_memset(page_bits, 0, heap_pages / 8u);
     k_memset(free_list, 0, sizeof(free_list));
-    next_page = 0;
-    pages_held = 0;
+    for (i = 0; i < map_pages; i++) {
+        page_set(i, 1);
+    }
+    next_page = map_pages;
+    pages_held = map_pages;
     bytes_used = 0;
     /* The reserve's pages read as taken to the ordinary search from the
      * start; the run bits say which runs are out. */
-    for (i = KHEAP_RESERVE_FIRST; i < KHEAP_PAGES; i++) {
+    for (i = reserve_first; i < heap_pages; i++) {
         page_set(i, 1);
     }
     run_bits = 0;
 }
 
+uint32_t kheap_region_pages(void)
+{
+    return heap_pages;
+}
+
 /* Interrupts off. The first page of a free reserve run, marked taken, or
- * KHEAP_PAGES when every run is out or `count` is more than a run. */
+ * `heap_pages` when every run is out or `count` is more than a run. */
 static uint32_t reserve_take(uint32_t count)
 {
     uint32_t r;
 
     if (count > KHEAP_RUN_PAGES) {
-        return KHEAP_PAGES;
+        return heap_pages;
     }
     for (r = 0; r < KHEAP_RUNS; r++) {
         if (!(run_bits & (1u << r))) {
             run_bits |= 1u << r;
-            return KHEAP_RESERVE_FIRST + r * KHEAP_RUN_PAGES;
+            return reserve_first + r * KHEAP_RUN_PAGES;
         }
     }
-    return KHEAP_PAGES;
+    return heap_pages;
 }
 
 /* Interrupts off. A reserve run whose pages `map_run` or `unmap_run` left
@@ -174,7 +229,7 @@ static void reserve_close(uint32_t page, uint32_t count, int release)
         page_set(page + i, 1);
     }
     if (release) {
-        run_bits &= ~(1u << ((page - KHEAP_RESERVE_FIRST) / KHEAP_RUN_PAGES));
+        run_bits &= ~(1u << ((page - reserve_first) / KHEAP_RUN_PAGES));
     }
 }
 
@@ -183,26 +238,26 @@ static void reserve_close(uint32_t page, uint32_t count, int release)
 static void release_run(uint32_t page, uint32_t count)
 {
     unmap_run(page, count);
-    if (page >= KHEAP_RESERVE_FIRST) {
+    if (page >= reserve_first) {
         reserve_close(page, count, 1);
     }
 }
 
 /* Interrupts off. `count` pages from the ordinary region or, for a run of
- * KHEAP_RUN_LEAST or more, from the reserve; KHEAP_PAGES when neither has
+ * KHEAP_RUN_LEAST or more, from the reserve; `heap_pages` when neither has
  * them or the frames ran out. */
 static uint32_t take_pages(uint32_t count)
 {
     uint32_t page = find_run(count);
 
-    if (page >= KHEAP_PAGES && count >= KHEAP_RUN_LEAST) {
+    if (page >= heap_pages && count >= KHEAP_RUN_LEAST) {
         page = reserve_take(count);
-        if (page < KHEAP_PAGES && map_run(page, count) != 0) {
+        if (page < heap_pages && map_run(page, count) != 0) {
             reserve_close(page, count, 1);
-            page = KHEAP_PAGES;
+            page = heap_pages;
         }
-    } else if (page < KHEAP_PAGES && map_run(page, count) != 0) {
-        page = KHEAP_PAGES;
+    } else if (page < heap_pages && map_run(page, count) != 0) {
+        page = heap_pages;
     }
     return page;
 }
@@ -216,19 +271,19 @@ static void *pages_or_null(uint32_t count, uintptr_t *phys, int quiet)
     uint32_t page;
     void *va;
 
-    if (count == 0 || count > KHEAP_PAGES) {
+    if (count == 0 || count > heap_pages) {
         kirq_restore(flags);
         return NULL;
     }
     page = take_pages(count);
-    if (page >= KHEAP_PAGES) {
+    if (page >= heap_pages) {
         kirq_restore(flags);
         if (!quiet) {
             klog(KLOG_ERR, "kheap", "%d pages: no room or no frame", (int)count);
         }
         return NULL;
     }
-    va = (void *)(KVA_HEAP + page * PAGE_SIZE);
+    va = (void *)(KVA_HEAP + (uintptr_t)page * PAGE_SIZE);
     if (phys) {
         *phys = paging_virt_to_phys((uintptr_t)va);
     }
@@ -251,8 +306,8 @@ void kfree_pages(void *p, uint32_t count)
     uintptr_t va = (uintptr_t)p;
     uint32_t flags;
 
-    if (!p || va < KVA_HEAP || va >= KVA_HEAP + KVA_HEAP_SIZE || (va & (PAGE_SIZE - 1))) {
-        klog(KLOG_ERR, "kheap", "free of pages the heap did not give: 0x%x", (uint32_t)va);
+    if (!p || va < KVA_HEAP || va >= heap_end() || (va & (PAGE_SIZE - 1))) {
+        klog(KLOG_ERR, "kheap", "free of pages the heap did not give: %p", p);
         return;
     }
     flags = kirq_save();
@@ -267,19 +322,19 @@ void kfree_pages(void *p, uint32_t count)
 void *kalloc_guarded(uint32_t count)
 {
     uint32_t flags = kirq_save();
-    uint32_t guard = KHEAP_PAGES;
+    uint32_t guard = heap_pages;
 
     if (count > 0 && count < KHEAP_RUN_LEAST) {
         guard = find_run(count + 1);
     }
-    if (guard >= KHEAP_PAGES || map_run(guard + 1, count) != 0) {
+    if (guard >= heap_pages || map_run(guard + 1, count) != 0) {
         kirq_restore(flags);
         klog(KLOG_ERR, "kheap", "%d pages and a guard: no room or no frame", (int)count);
         return NULL;
     }
     page_set(guard, 1);
     kirq_restore(flags);
-    return (void *)(KVA_HEAP + (guard + 1) * PAGE_SIZE);
+    return (void *)(KVA_HEAP + ((uintptr_t)guard + 1) * PAGE_SIZE);
 }
 
 /* A guard is a page below the reserve that is taken and has no mapping.
@@ -291,16 +346,16 @@ void kfree_guarded(void *p, uint32_t count)
     uintptr_t va = (uintptr_t)p;
     uint32_t flags, page;
 
-    if (!p || va <= KVA_HEAP || va >= KVA_HEAP + KVA_HEAP_SIZE || (va & (PAGE_SIZE - 1))) {
-        klog(KLOG_ERR, "kheap", "free of pages the heap did not give: 0x%x", (uint32_t)va);
+    if (!p || va <= KVA_HEAP || va >= heap_end() || (va & (PAGE_SIZE - 1))) {
+        klog(KLOG_ERR, "kheap", "free of pages the heap did not give: %p", p);
         return;
     }
     page = (uint32_t)((va - KVA_HEAP) / PAGE_SIZE);
     flags = kirq_save();
-    if (count == 0 || count >= KHEAP_RESERVE_FIRST || page > KHEAP_RESERVE_FIRST - count ||
+    if (count == 0 || count >= reserve_first || page > reserve_first - count ||
         !page_taken(page - 1) || paging_virt_to_phys(va - PAGE_SIZE) != 0) {
         kirq_restore(flags);
-        klog(KLOG_ERR, "kheap", "free of pages with no guard below them: 0x%x", (uint32_t)va);
+        klog(KLOG_ERR, "kheap", "free of pages with no guard below them: %p", p);
         return;
     }
     release_run(page, count);
@@ -318,10 +373,10 @@ static int add_class_page(uint32_t cls)
     uint32_t size = class_size[cls];
     uint32_t off;
 
-    if (page >= KHEAP_PAGES || map_run(page, 1) != 0) {
+    if (page >= heap_pages || map_run(page, 1) != 0) {
         return -1;
     }
-    base = KVA_HEAP + page * PAGE_SIZE;
+    base = KVA_HEAP + (uintptr_t)page * PAGE_SIZE;
     hdr = (struct page_hdr *)base;
     hdr->magic = KHEAP_MAGIC;
     hdr->cls = cls;
@@ -359,8 +414,10 @@ void *kmalloc(size_t size)
     uint32_t flags, cls;
     void *block;
 
-    if (size == 0 || size > KVA_HEAP_SIZE - PAGE_SIZE) {
-        return NULL; /* nothing, or more than the region could hold */
+    /* Nothing, more than the region could hold, or more than a large
+     * object's header counts in its 32 bits. */
+    if (size == 0 || size > (size_t)heap_pages * PAGE_SIZE - PAGE_SIZE || size > 0xFFFFFFF0u) {
+        return NULL;
     }
     if (size > class_size[KHEAP_CLASSES - 1]) {
         uint32_t count = (uint32_t)((size + KHEAP_HDR + PAGE_SIZE - 1) / PAGE_SIZE);
@@ -376,7 +433,7 @@ void *kmalloc(size_t size)
         hdr->used = (uint32_t)size;
         hdr->pages = count;
         flags = kirq_save();
-        bytes_used += (uint32_t)size;
+        bytes_used += hdr->used;
         kirq_restore(flags);
         return (uint8_t *)base + KHEAP_HDR;
     }
@@ -416,15 +473,15 @@ void kfree(void *p)
     if (!p) {
         return;
     }
-    if (va < KVA_HEAP || va >= KVA_HEAP + KVA_HEAP_SIZE) {
-        klog(KLOG_ERR, "kheap", "free of memory the heap did not give: 0x%x", (uint32_t)va);
+    if (va < KVA_HEAP || va >= heap_end()) {
+        klog(KLOG_ERR, "kheap", "free of memory the heap did not give: %p", p);
         return;
     }
     hdr = (struct page_hdr *)(va & ~(PAGE_SIZE - 1));
     flags = kirq_save();
     if (hdr->magic != KHEAP_MAGIC) {
         kirq_restore(flags);
-        klog(KLOG_ERR, "kheap", "free of a page without the header: 0x%x", (uint32_t)va);
+        klog(KLOG_ERR, "kheap", "free of a page without the header: %p", p);
         return;
     }
     if (hdr->cls == KHEAP_LARGE) {
@@ -438,7 +495,7 @@ void kfree(void *p)
     }
     if (hdr->cls >= KHEAP_CLASSES || hdr->used == 0) {
         kirq_restore(flags);
-        klog(KLOG_ERR, "kheap", "free of a block not in use: 0x%x", (uint32_t)va);
+        klog(KLOG_ERR, "kheap", "free of a block not in use: %p", p);
         return;
     }
     *(void **)p = free_list[hdr->cls];
@@ -455,7 +512,7 @@ void kfree(void *p)
     kirq_restore(flags);
 }
 
-void kheap_stats(uint32_t *pages, uint32_t *bytes)
+void kheap_stats(uint32_t *pages, size_t *bytes)
 {
     if (pages) {
         *pages = pages_held;

@@ -205,8 +205,16 @@ int kcmdline_has(const char *flag)
     return 0;
 }
 
-void kheap_init(void)
-{}
+size_t kheap_size_for(uint64_t managed, uint64_t most)
+{
+    (void)managed;
+    return (size_t)most;
+}
+
+void kheap_init(size_t bytes)
+{
+    (void)bytes;
+}
 
 void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *name)
 {

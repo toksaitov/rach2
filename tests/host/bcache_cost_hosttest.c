@@ -43,12 +43,15 @@
  * cache of 1024 reads the eight, at most twelve times each, where a walk of
  * the cache is 1024 reads.
  *
- * The last row is entry 40's. A buffer is a page of the kernel heap, which
- * is KVA_HEAP_SIZE whatever the machine's memory, and on a machine of more
- * than 2 GiB the caches' memory share is larger than the heap. The row
- * stands for a machine of 3 GiB, writes past half the heap's pages, and
+ * The cap row is entry 40's. A buffer is a page of the kernel heap, whose
+ * region on i686 is 256 MiB whatever the machine's memory, and on a machine
+ * of more than 2 GiB the caches' memory share is larger than the heap. The
+ * row stands for a machine of 3 GiB, writes past half the heap's pages, and
  * requires the cache to stop there and make room by writing its oldest
- * buffers back.
+ * buffers back. The last row does the same with a heap whose region is a
+ * quarter of that, standing for a region the boot sized otherwise, as it
+ * sizes x86-64's from the memory: the cap is half of whatever region the
+ * heap has.
  *
  * No hosted headers, as in bcache_hosttest.c: the kernel headers define the
  * fixed-width types, and the libc calls used here are declared by hand. The
@@ -56,6 +59,7 @@
  */
 
 #include "../../rach2/sys/fs/bcache.h"
+#include "../../rach2/sys/mm/kheap.h"
 #include "../../rach2/sys/mm/paging.h"
 #include "../../rach2/sys/proc/process.h"
 
@@ -64,6 +68,8 @@ extern void _exit(int status);
 
 /* The caches' memory target, in frames, that the pressure stub reports. */
 extern uint32_t host_cache_target;
+/* The heap's region in pages, which the stand-in heap reports. */
+extern uint32_t kheap_host_region_pages;
 
 /* The cache the cost rows fill, and the most a get and its release may read. */
 #define CACHE_BUFFERS 1024u
@@ -89,7 +95,10 @@ extern uint32_t host_cache_target;
 #define RUN_SECTORS   64u
 /* The cap: half the kernel heap's pages. The cap row writes PAST_SHARE
  * blocks beyond it, and the device has room for them. */
-#define HEAP_SHARE    ((KVA_HEAP_SIZE / PAGE_SIZE) / 2u)
+#define HEAP_SHARE    ((KHEAP_FLOOR / PAGE_SIZE) / 2u)
+/* A heap of a quarter of i686's region, and its cap. */
+#define SMALL_REGION  (KHEAP_FLOOR / PAGE_SIZE / 4u)
+#define SMALL_SHARE   (SMALL_REGION / 2u)
 #define PAST_SHARE    256u
 #define DISK_BLOCKS   (HEAP_SHARE + PAST_SHARE)
 #define DISK_SECTORS  ((uint64_t)DISK_BLOCKS * 8u)
@@ -312,6 +321,27 @@ static void cap_row(void)
     host_cache_target = 128;
 }
 
+/* The same on a heap of a quarter of the region: the cap is half of what
+ * the heap has, not of i686's region. */
+static void region_row(void)
+{
+    uint32_t written = 0;
+
+    check(bcache_sync(&disk) == 0 && bcache_invalidate(&disk) == 0 &&
+              bcache_shrink(0xFFFFFFFFu, 0, &written) == HEAP_SHARE && bcache_resident() == 0,
+          "the cache is emptied and its buffers given back for a heap of another size");
+    kheap_host_region_pages = SMALL_REGION;
+    host_cache_target = TARGET_3GIB;
+    writes_made = 0;
+    key_blocks(0, SMALL_SHARE + PAST_SHARE, 1);
+    check(bcache_resident() == SMALL_SHARE,
+          "a heap of another size has a cache of half its own pages");
+    check(writes_made == PAST_SHARE,
+          "and the blocks written past that make room by writing the oldest back");
+    host_cache_target = 128;
+    kheap_host_region_pages = KHEAP_FLOOR / PAGE_SIZE;
+}
+
 int main(void)
 {
     proc_a.pid = 1;
@@ -320,6 +350,7 @@ int main(void)
     sync_row();
     few_row();
     cap_row();
+    region_row();
     printf("bcache_cost_hosttest: visits: a hit %llu, 1024 misses %llu, a sync of 1024 blocks "
            "%llu, a sync of 8 of 1024 %llu\n",
            (unsigned long long)hit_visits, (unsigned long long)miss_visits,

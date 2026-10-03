@@ -115,8 +115,11 @@ extern pte_t mmu_nx;
  *
  *   0xFFFF800000000000   64 TiB  all physical memory, the direct map, in the
  *                                largest pages the processor has
- *   0xFFFFC00000000000  256 MiB  the heap (mm/kheap.c), grown a frame at a
- *                                time; its PML4 entry has room for 512 GiB
+ *   0xFFFFC00000000000  512 GiB  the heap (mm/kheap.c), the region of its
+ *                                PML4 entry, of which the boot gives the
+ *                                heap an eighth of memory, 256 MiB at the
+ *                                least, and makes the page tables of that
+ *                                part; grown a frame at a time
  *   0xFFFFC08000000000  128 MiB  MMIO, a controller's BAR mapped wherever
  *                                it is
  *   0xFFFFC10000000000    4 MiB  temporary mappings, one page each
@@ -130,7 +133,7 @@ extern pte_t mmu_nx;
 #define KVA_DIRECT       0xFFFF800000000000UL
 #define KVA_DIRECT_SIZE  0x0000400000000000UL
 #define KVA_HEAP         0xFFFFC00000000000UL
-#define KVA_HEAP_SIZE    0x10000000UL
+#define KVA_HEAP_SIZE    0x0000008000000000UL
 #define KVA_MMIO         0xFFFFC08000000000UL
 #define KVA_MMIO_SIZE    0x08000000UL
 #define KVA_TEMP         0xFFFFC10000000000UL
