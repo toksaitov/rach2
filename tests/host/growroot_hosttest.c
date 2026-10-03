@@ -1,7 +1,7 @@
 /**
  * Check the sector growroot validates and writes through its writer.
  *
- * host-deps:
+ * host-deps: utils/gptdisk.c
  *
  * Device calls use memory; proc files use temporary host streams. The table
  * reread ioctl can stop after the write or publish the new size. Measured

@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd October 3, 2026
 .Dt GROWROOT 8
 .Os
 .Sh NAME
@@ -8,32 +8,52 @@
 .Nm
 .Ar MBRID=ID,N
 .Op Fl -measure
+.Nm
+.Ar GPTID=GUID,N
+.Op Fl -measure
 .Sh DESCRIPTION
 The
 .Nm
-command grows a primary root partition and its ext2 file system into
-the free space after it.
-The operand identifies the disk by its hexadecimal MBR signature
-.Ar ID
-and the partition by entry number
-.Ar N ,
-as in the kernel's
+command grows a root partition and its ext2 file system into the free
+space after it.
+The operand identifies the disk and the partition as the kernel's
 .Ql rach2.root=
-operand.
-The entry must be numbered 1 through 4.
-Exactly one disk must have the signature.
+operand does: an MBR disk by its hexadecimal signature
+.Ar ID ,
+or a disk with a GUID table by the table's disk GUID
+.Ar GUID
+in its 36-character text form, and the partition by entry number
+.Ar N .
+On an MBR disk the entry must be numbered 1 through 4, and its type must
+be 0x83; on a GUID table it must be numbered 1 through 15, and its type
+must be a Linux file system's, 0FC63DAF-8483-4772-8E79-3D69D8477DE4.
+Exactly one disk must have the identity, which
+.Xr diskctl 8
+prints.
 .Pp
-Growth is limited by the next partition's start, the end of the disk,
-or the MBR limit of 2^32 sectors, whichever comes first.
+On an MBR disk, growth is limited by the next partition's start, the end
+of the disk, or the MBR limit of 2^32 sectors, whichever comes first.
 A logical partition after the entry stops the growth, because its
 records lie in the space the partition would occupy after growth.
-An entry already at that size is left unchanged.
+On a GUID table, growth is limited by the next partition's start or the
+sector before the backup table, placed at the disk's last 33 sectors, and
+the backup is moved there in the same write if it is elsewhere, as
+.Ql diskctl relocate
+moves it.
+An entry already at that size, on a table whose backup is already at the
+disk's end, is left unchanged.
 Nothing is moved and no other partition is changed.
 .Pp
 The steps are:
 .Bl -enum
 .It
+Read the table again through the descriptor that writes it, and check
+that the identity, the entry and the space it grows into are what was
+decided.
 Rewrite the partition entry with the new sector count.
+On a GUID table, write the backup entry array and header at the disk's
+end and then the primary array and header, each with its CRC32, so that
+after any part of the writes one copy passes its checksums.
 Writing a whole-disk node requires the recovery kernel.
 .It
 Ask the kernel to read the table again with
@@ -90,22 +110,39 @@ around the table change and resize.
 .Nm
 exits with status 1 if it rejects the operation or an operation fails.
 For invalid syntax, it exits with status 2 and prints:
-.Dl usage: growroot MBRID=ID,N [--measure]
+.Dl usage: growroot MBRID=ID,N | GPTID=GUID,N [--measure]
 .Sh EXAMPLES
 Grow primary entry 3 on the disk with MBR signature 1acef00d:
 .Dl growroot MBRID=1acef00d,3
-The installer invokes this command when root growth is requested.
+Grow entry 3 of the GUID table an installed disk has:
+.Dl growroot GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,3
+The installer invokes this command when root growth is requested, with
+the identity
+.Ql diskctl id
+prints.
 .Sh DIAGNOSTICS
 Refusals are written to standard error as
 .Ql growroot: WHAT: DETAIL .
 Reported details include:
 .Bl -tag -width Ds
 .It Ql the entry is not a primary one; only entries 1 to 4 grow
-The entry number is outside the primary table.
+The entry number is outside the primary table of an MBR.
+.It Ql the entry is past the fifteen partitions the kernel publishes
+The entry number is past the partitions the kernel publishes.
 .It Ql not found on any of N disks
-No disk has the requested signature.
+No disk has the requested identity.
 .It Ql ambiguous: more than one disk has that signature
-The signature does not identify one disk.
+The signature does not identify one disk; for a GUID it is
+.Ql that GUID .
+.It Ql not a Linux file system's entry
+The GUID table's entry has another type.
+.It Ql the table changed while this was deciding; nothing written
+The table read through the writer's descriptor differs from the one the
+decision was made on.
+.It Ql a partition reaches past where the backup table would go
+A GUID table's partition lies in the disk's last 33 sectors.
+.It Ql the whole-disk node does not reach the disk's last sector
+The disk is past the 2 TiB the whole-disk node reaches.
 .It Ql N MiB of memory; growing a root needs 7 MiB
 The machine has insufficient memory.
 .It Ql the table write was refused; only the recovery kernel writes a whole disk
@@ -123,6 +160,7 @@ The resize failed.
 .El
 .Sh SEE ALSO
 .Xr disk 7 ,
+.Xr diskctl 8 ,
 .Xr e2fsck 8 ,
 .Xr rach2-install 8 ,
 .Xr resize2fs 8

@@ -165,7 +165,7 @@ $(BUILD)/sbin/init-metal: $(SRC_init_metal)
 	$(CC) $(CFLAGS) $(DEF_init_metal) -MF $(BUILD)/sbin/init-metal.d -o $@ \
 	    $(LINK_PRE) $(SRC_init_metal) $(LINK_POST)
 
-$(BUILD)/sbin/init-recovery: $(SRC_init_recovery)
+$(BUILD)/sbin/init-recovery: $(SRC_init_recovery) $(HDR_init_recovery)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(DEF_init_recovery) -MF $(BUILD)/sbin/init-recovery.d -o $@ \
 	    $(LINK_PRE) $(SRC_init_recovery) $(LINK_POST)
@@ -207,6 +207,16 @@ $(BUILD)/reflash: $(SRC_reflash) $(HDR_reflash)
 $(BUILD)/growboot: $(SRC_growboot) $(HDR_growboot)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MF $(BUILD)/growboot.d -o $@ $(LINK_PRE) $(SRC_growboot) $(LINK_POST)
+
+# growroot and diskctl link the GUID table library (gptdisk.c), which reads a
+# disk's identity and rewrites its table with the backup at the disk's end.
+$(BUILD)/growroot: $(SRC_growroot) $(HDR_growroot)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -MF $(BUILD)/growroot.d -o $@ $(LINK_PRE) $(SRC_growroot) $(LINK_POST)
+
+$(BUILD)/diskctl: $(SRC_diskctl) $(HDR_diskctl)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -MF $(BUILD)/diskctl.d -o $@ $(LINK_PRE) $(SRC_diskctl) $(LINK_POST)
 
 $(BUILD)/netup: $(SRC_netup) $(HDR_netup)
 	@mkdir -p $(dir $@)

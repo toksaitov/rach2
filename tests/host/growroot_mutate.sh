@@ -29,7 +29,7 @@ run_phase()
     binary="$work/$phase"
     if ! "${CC:-cc}" -std=c99 -g -O1 -Wall -Wextra -Werror \
         -fsanitize=address,undefined -fno-sanitize-recover=all \
-        -I "$work" tests/host/growroot_hosttest.c -o "$binary" \
+        -I "$work" -I utils tests/host/growroot_hosttest.c utils/gptdisk.c -o "$binary" \
         > "$binary.compile.log" 2>&1; then
         cat "$binary.compile.log" >&2
         exit 1
@@ -62,21 +62,21 @@ import sys
 
 path = pathlib.Path(sys.argv[1])
 source = path.read_text()
-before = '''        if (read(fd, sector, sizeof(sector)) != (ssize_t)sizeof(sector)) {
-            close(fd);
-            return fail(dev, "the first sector did not read; nothing written");
-        }
-        {
+before = '''    if (read(fd, sector, sizeof(sector)) != (ssize_t)sizeof(sector)) {
+        close(fd);
+        return fail(dev, "the first sector did not read; nothing written");
+    }
+    {
 '''
-after = '''        if (read(fd, sector, sizeof(sector)) == (ssize_t)sizeof(sector)) {
+after = '''    if (read(fd, sector, sizeof(sector)) == (ssize_t)sizeof(sector)) {
 '''
-write = '''        e = sector + MBR_ENTRIES + 16 * (entry - 1);
+write = '''    e = sector + MBR_ENTRIES + 16 * (entry - 1);
 '''
-reread = '''        if (lseek(fd, 0, SEEK_SET) != 0 ||
-            read(fd, sector, sizeof(sector)) != (ssize_t)sizeof(sector)) {
-            close(fd);
-            return fail(dev, "the first sector did not read");
-        }
+reread = '''    if (lseek(fd, 0, SEEK_SET) != 0 ||
+        read(fd, sector, sizeof(sector)) != (ssize_t)sizeof(sector)) {
+        close(fd);
+        return fail(dev, "the first sector did not read");
+    }
 '''
 if source.count(before) != 1 or source.count(write) != 1:
     sys.exit("growroot-mutation: the writer block no longer matches")
@@ -99,12 +99,12 @@ if sys.argv[2] == "zero":
     before = '    printf("growroot: measure:'
     after = '    us = commands = flushes = 0;\n' + before
 else:
-    before = '    rc = run("/sbin/e2fsck", "-fn", part_node);\n'
-    marker = '    if (measured("check-readonly", "after")) {\n        return 1;\n    }\n'
+    before = '    rc = run(tool, arg, part_node);\n'
+    marker = '    if (measured(phase, "after")) {\n        return -2;\n    }\n'
     if source.count(marker) != 1:
         sys.exit("growroot-mutation: measurement block no longer matches")
     before += marker
-    after = marker + '    rc = run("/sbin/e2fsck", "-fn", part_node);\n'
+    after = marker + '    rc = run(tool, arg, part_node);\n'
 if source.count(before) != 1:
     sys.exit("growroot-mutation: source no longer matches")
 path.write_text(source.replace(before, after))

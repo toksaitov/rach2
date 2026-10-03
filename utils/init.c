@@ -46,6 +46,9 @@
 #include <pwd.h>
 #include <sys/stat.h>
 #include <sys/utsname.h>
+#ifdef INIT_RECOVERY
+#include "gptdisk.h"
+#endif
 
 extern char **environ;
 
@@ -593,23 +596,35 @@ static char *boot_token(char *line, char *from)
     return NULL;
 }
 
+/* The disk identity a boot line names: `MBRID=` and an MBR's signature, or
+ * `GPTID=` and a GUID table's disk GUID. `text` is the form the boot line
+ * gave, for the messages. */
+struct disk_identity {
+    int gpt;
+    unsigned long id;
+    unsigned char guid[16];
+    char text[44];
+};
+
 /**
- * Read the disk identity the boot line's `rach2.boot=MBRID=XXXXXXXX,1`
- * names into `*id`.
+ * Read the disk identity the boot line's `rach2.boot=MBRID=XXXXXXXX,1` or
+ * `rach2.boot=GPTID=GUID,1` names into `*want`.
  *
- * Returns 1 when the first `rach2.boot=` token is exactly that, eight
- * hexadecimal digits and `,1`, the boot partition of the disk's own menu,
- * and no second token follows; 0 otherwise. The kernel boots from the first
- * token, and a key taken from a disk another token names would not be the
- * disk this recovery system came from.
+ * Returns 1 when the first `rach2.boot=` token is exactly one of those,
+ * eight hexadecimal digits or a GUID in its 36-character text form and `,1`,
+ * the boot partition of the disk's own menu, and no second token follows; 0
+ * otherwise. The kernel boots from the first token, and a key taken from a
+ * disk another token names would not be the disk this recovery system came
+ * from.
  */
-static int boot_disk_id(unsigned long *id)
+static int boot_disk_id(struct disk_identity *want)
 {
-    static const char want[] = "rach2.boot=MBRID=";
+    static const char key[] = "rach2.boot=";
     char line[512];
     int fd = open("/proc/cmdline", O_RDONLY);
     ssize_t n;
-    char *at;
+    char *at, *end;
+    size_t length;
     int i;
 
     if (fd < 0) {
@@ -622,14 +637,28 @@ static int boot_disk_id(unsigned long *id)
     }
     line[n] = '\0';
     at = boot_token(line, line);
-    if (at == NULL || strncmp(at, want, sizeof(want) - 1) != 0 ||
-        boot_token(line, at + 1) != NULL) {
+    if (at == NULL || boot_token(line, at + 1) != NULL) {
         return 0;
     }
-    at += sizeof(want) - 1;
-    *id = 0;
-    for (i = 0; i < 8; i++) {
-        int c = at[i];
+    at += sizeof(key) - 1;
+    for (end = at; *end != '\0' && *end != ' ' && *end != '\t' && *end != '\n'; end++) {
+    }
+    length = (size_t)(end - at);
+    if (length < 2 || length >= sizeof(want->text) || strncmp(end - 2, ",1", 2) != 0) {
+        return 0;
+    }
+    memcpy(want->text, at, length - 2);
+    want->text[length - 2] = '\0';
+    want->gpt = strncmp(want->text, "GPTID=", 6) == 0;
+    if (want->gpt) {
+        return gptdisk_guid_parse(want->text + 6, want->guid) == 0;
+    }
+    if (strncmp(want->text, "MBRID=", 6) != 0 || strlen(want->text) != 14) {
+        return 0;
+    }
+    want->id = 0;
+    for (i = 6; i < 14; i++) {
+        int c = want->text[i];
         int v;
 
         if (c >= '0' && c <= '9') {
@@ -641,45 +670,59 @@ static int boot_disk_id(unsigned long *id)
         } else {
             return 0;
         }
-        *id = (*id << 4) | (unsigned long)v;
+        want->id = (want->id << 4) | (unsigned long)v;
     }
-    return at[8] == ',' && at[9] == '1' &&
-           (at[10] == '\0' || at[10] == ' ' || at[10] == '\t' || at[10] == '\n');
+    return 1;
 }
 
 /**
- * Return the number of the one disk whose MBR has identity `id`, -1 when no
- * disk has it and -2 when more than one does.
- *
- * The identity is the four bytes at offset 440 of sector 0, the field the
- * kernel resolves `rach2.boot=` by. A clone of the disk beside it makes the
- * answer ambiguous, and an ambiguous disk gives no key.
+ * Whether the disk open on `fd`, number `n`, has the identity `want`: the
+ * four bytes at offset 440 of an MBR that is not a GUID table's protective
+ * one, or the disk GUID of a GUID table, as the kernel resolves
+ * `rach2.boot=` by them.
  */
-static int disk_with_id(unsigned long id)
+static int disk_has_identity(int fd, int n, const struct disk_identity *want)
+{
+    static struct gptdisk table;
+    unsigned char sector[512];
+    unsigned long on_disk;
+    uint64_t sectors;
+
+    if (read(fd, sector, sizeof(sector)) != (ssize_t)sizeof(sector) || sector[510] != 0x55 ||
+        sector[511] != 0xAA) {
+        return 0;
+    }
+    if (want->gpt) {
+        return gptdisk_sectors(n, &sectors) == 0 && gptdisk_read(fd, sectors, &table) == 1 &&
+               memcmp(table.header + 56, want->guid, 16) == 0;
+    }
+    on_disk = (unsigned long)sector[440] | (unsigned long)sector[441] << 8 |
+              (unsigned long)sector[442] << 16 | (unsigned long)sector[443] << 24;
+    return sector[446 + 4] != 0xEE && on_disk == want->id;
+}
+
+/**
+ * Return the number of the one disk with the identity `want`, -1 when no
+ * disk has it and -2 when more than one does. A clone of the disk beside it
+ * makes the answer ambiguous, and an ambiguous disk gives no key.
+ */
+static int disk_with_id(const struct disk_identity *want)
 {
     int found = -1;
     int n;
 
     for (n = 0; n < DISK_NODES; n++) {
         char node[16];
-        unsigned char sector[512];
-        int fd;
-        ssize_t got;
-        unsigned long on_disk;
+        int fd, has;
 
         snprintf(node, sizeof(node), "/dev/disk%d", n);
         fd = open(node, O_RDONLY);
         if (fd < 0) {
             continue;
         }
-        got = read(fd, sector, sizeof(sector));
+        has = disk_has_identity(fd, n, want);
         close(fd);
-        if (got != (ssize_t)sizeof(sector) || sector[510] != 0x55 || sector[511] != 0xAA) {
-            continue;
-        }
-        on_disk = (unsigned long)sector[440] | (unsigned long)sector[441] << 8 |
-                  (unsigned long)sector[442] << 16 | (unsigned long)sector[443] << 24;
-        if (on_disk != id) {
+        if (!has) {
             continue;
         }
         if (found >= 0) {
@@ -855,11 +898,11 @@ static int append_root_keys(const char *keys, long len)
  * entries of the disk's own menu say with `rach2.slot=recovery`. The stick's
  * recovery system keeps the rule that its image decides, so a stick built
  * for nobody answers nobody wherever it is booted. The disk is the one
- * `rach2.boot=` names by its MBR identity, and the partition is its second,
- * where the installed layout keeps recovery, and only when its FAT32 boot
- * sector has the recovery label and it holds `/boot/recovery`, the file the
- * installer finds the partition by; the boot partition and the root are
- * never mounted, whatever their labels say.
+ * `rach2.boot=` names by its identity, `MBRID=` or `GPTID=`, and the
+ * partition is its second, where both installed layouts keep recovery, and
+ * only when its FAT32 boot sector has the recovery label and it holds
+ * `/boot/recovery`, the file the installer finds the partition by; the boot
+ * partition and the root are never mounted, whatever their labels say.
  *
  * The partition is mounted read-only and unmounted as soon as the file is
  * read, before anything else runs, so a boot changes nothing on the disk
@@ -871,23 +914,24 @@ static int append_root_keys(const char *keys, long len)
 static int take_disk_keys(void)
 {
     static char keys[DISK_KEYS_MAX + 1];
-    unsigned long id;
+    struct disk_identity want;
     char node[24];
     const char *why;
     long len;
     int added = 0;
     int disk;
 
-    if (!boot_line_has("rach2.slot=recovery") || !boot_disk_id(&id)) {
+    if (!boot_line_has("rach2.slot=recovery") || !boot_disk_id(&want)) {
         return 0;
     }
-    disk = disk_with_id(id);
+    disk = disk_with_id(&want);
     if (disk == -2) {
-        fprintf(stderr, "init: recovery key: two disks have identity %08lx; no key taken\n", id);
+        fprintf(stderr, "init: recovery key: two disks have identity %s; no key taken\n",
+                want.text);
         return 0;
     }
     if (disk < 0) {
-        fprintf(stderr, "init: recovery key: no disk has identity %08lx\n", id);
+        fprintf(stderr, "init: recovery key: no disk has identity %s\n", want.text);
         return 0;
     }
     (void)mkdir("/mnt", 0755);

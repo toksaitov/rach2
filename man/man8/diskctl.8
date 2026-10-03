@@ -1,18 +1,22 @@
-.Dd September 19, 2026
+.Dd October 3, 2026
 .Dt DISKCTL 8
 .Os
 .Sh NAME
 .Nm diskctl
-.Nd reread a disk's partition table or print its identity
+.Nd reread a disk's partition table, print its identity or move its backup table
 .Sh SYNOPSIS
 .Nm
 .Cm reread Ar DEVICE
 .Nm
 .Cm id Ar DEVICE
+.Nm
+.Cm relocate Ar DEVICE
 .Sh DESCRIPTION
 The
 .Nm
-command rereads a disk's partition table or prints its MBR signature.
+command rereads a disk's partition table, prints the identity the boot
+command line names the disk by, or moves a GUID table's backup to the
+disk's last sectors.
 The commands are:
 .Bl -tag -width Ds
 .It Cm reread Ar DEVICE
@@ -28,24 +32,66 @@ on the disk.
 This prevents a reread from changing the partition bounds used by a
 mounted file system.
 .It Cm id Ar DEVICE
-Print the disk's MBR signature as eight lowercase hexadecimal digits.
-The signature is the four bytes at offset 440 in the first sector.
+Print the disk's identity.
+On an MBR disk it is the MBR signature, the four bytes at offset 440 in
+the first sector, as eight lowercase hexadecimal digits.
+On a disk whose first sector is a protective MBR, it is the GUID table's
+disk GUID in its 36-character text form, read from the primary header
+when the header and its entry array pass their checksums, and otherwise
+from the backup at the disk's last sector.
 .Xr growroot 8
-and the boot command line use it to identify the disk.
+and the boot command line use it, as
+.Ql MBRID=ID,N
+or
+.Ql GPTID=GUID,N .
+.It Cm relocate Ar DEVICE
+Move a GUID table's backup to the disk's last 33 sectors and rewrite both
+copies with their checksums.
+A disk image written to a larger disk leaves its backup where the image
+ended, and a reader looks for it at the disk's end.
+The last usable sector becomes the one before the backup entry array, and
+the protective MBR's entry is made to cover the disk, with the boot code
+around it kept.
+The backup array and header are written first and the primary array and
+header after them, so that after any part of the writes one copy passes
+its checksums.
+The kernel then reads the table again as
+.Cm reread
+does.
+The size of the disk is the kernel's, from
+.Pa /proc/disk ;
+a disk past the 2 TiB the whole-disk node reaches is refused.
+Writing a whole-disk node requires the recovery kernel.
 .El
 .Sh EXAMPLES
 .Dl diskctl id /dev/disk0
+.Dl diskctl relocate /dev/disk0
 .Pp
-The installer uses both commands.
+The installer uses all three commands.
 .Sh DIAGNOSTICS
 An invalid command or operand count prints:
-.Dl usage: diskctl reread DEVICE | diskctl id DEVICE
+.Dl usage: diskctl reread DEVICE | diskctl id DEVICE | diskctl relocate DEVICE
 Diagnostics identify the device.
 A reread refused with
 .Er EBUSY
 prints:
 .Dl diskctl: DEVICE is in use: unmount everything on it and close every program holding it
+A completed relocation prints:
+.Dl diskctl: result: DEVICE: the backup table was moved to sectors FIRST to LAST
+or, when the backup was already there,
+.Ql is in
+in place of
+.Ql was moved to .
+Refusals of
+.Cm relocate
+include
+.Ql its GUID table does not read or check ,
+.Ql has an MBR and no GUID table ,
+.Ql the whole-disk node does not reach the disk's last sector
+and
+.Ql a partition reaches past where the backup table would go .
 .Sh SEE ALSO
 .Xr ioctl 2 ,
 .Xr disk 7 ,
-.Xr growroot 8
+.Xr growroot 8 ,
+.Xr rach2-install 8

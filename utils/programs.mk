@@ -32,7 +32,8 @@ DEF_init_metal = -DINIT_CONSOLE_LOGIN -DINIT_METAL
 # `init-metal` supervises everything and demands a login that a system with no
 # passwords cannot answer, which would have left the rescue system impossible
 # to enter by any route.
-SRC_init_recovery = init.c
+SRC_init_recovery = init.c gptdisk.c
+HDR_init_recovery = gptdisk.h
 DEF_init_recovery = -DINIT_METAL -DINIT_RECOVERY
 SRC_login = login.c pwauth.c
 HDR_login = pwauth.h
@@ -50,3 +51,7 @@ HDR_bootctl = bootslot.h bootverb.h grubslot.h
 
 SRC_growboot = growboot.c bootslot.c
 HDR_growboot = bootslot.h
+SRC_growroot = growroot.c gptdisk.c
+HDR_growroot = gptdisk.h
+SRC_diskctl = diskctl.c gptdisk.c
+HDR_diskctl = gptdisk.h

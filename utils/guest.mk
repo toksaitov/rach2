@@ -70,8 +70,8 @@ halt: halt.c
 loopctl: loopctl.c
 	$(UCC) $(UFLAGS) -o loopctl.new loopctl.c
 	mv loopctl.new loopctl
-growroot: growroot.c
-	$(UCC) $(UFLAGS) -o growroot.new growroot.c
+growroot: $(SRC_growroot) $(HDR_growroot)
+	$(UCC) $(UFLAGS) -o growroot.new $(SRC_growroot)
 	mv growroot.new growroot
 
 growset: growset.c
@@ -82,8 +82,8 @@ growboot: $(SRC_growboot) $(HDR_growboot)
 	$(UCC) $(UFLAGS) -o growboot.new $(SRC_growboot)
 	mv growboot.new growboot
 
-diskctl: diskctl.c
-	$(UCC) $(UFLAGS) -o diskctl.new diskctl.c
+diskctl: $(SRC_diskctl) $(HDR_diskctl)
+	$(UCC) $(UFLAGS) -o diskctl.new $(SRC_diskctl)
 	mv diskctl.new diskctl
 
 update: update.c
@@ -119,7 +119,7 @@ init-login: $(SRC_init_login)
 init-metal: $(SRC_init_metal)
 	$(UCC) $(UFLAGS) $(DEF_init_metal) -o init-metal.new $(SRC_init_metal)
 	mv init-metal.new init-metal
-init-recovery: $(SRC_init_recovery)
+init-recovery: $(SRC_init_recovery) $(HDR_init_recovery)
 	$(UCC) $(UFLAGS) $(DEF_init_recovery) -o init-recovery.new $(SRC_init_recovery)
 	mv init-recovery.new init-recovery
 login: $(SRC_login) $(HDR_login)
