@@ -2,7 +2,7 @@
 
 ## The goal
 
-Rach2 becomes a machine that students share: logged in over SSH at once, compiling and running programs, on any PC or QEMU instance, with every processor it has, and with all its memory on x86-64. The kernel, its programs and its tests build for an architecture named at build time. Two are complete, i686 and x86-64: each boots by UEFI and by BIOS, runs on every processor, passes its suites and runs on the Lenovo. i686 keeps its 32-bit physical addresses, without PAE, and so the memory below 4 GiB. Two are prepared, 32-bit and 64-bit ARM: the code every architecture shares compiles for them, and a port of either adds its directory under `rach2/sys/arch/` and its platform's drivers without changing that code. The owner chose this on 2026-10-03, after the answer that an ARM port costs its platform (a boot by firmware with a device tree, the GIC, the generic timer, an SD host, USB) more than its word size, that a 64-bit port which keeps the 32-bit build keeps the shared code fit for both, and that a UEFI-only notebook does not boot and a multi-core one runs on one core.
+Rach2 becomes a machine that students share: logged in over SSH at once, compiling and running programs, on any PC or QEMU instance, with every processor it has, and with all its memory on x86-64. The kernel, its programs and its tests build for an architecture named at build time. Two are complete, i686 and x86-64: each boots by UEFI and by BIOS, runs on every processor, carries the whole system, the ports of the GNU layer included, passes its suites and runs on the Lenovo. i686 keeps its 32-bit physical addresses, without PAE, and so the memory below 4 GiB. Two are prepared, 32-bit and 64-bit ARM: the code every architecture shares compiles for them, and a port of either adds its directory under `rach2/sys/arch/` and its platform's drivers without changing that code. The owner chose this on 2026-10-03, after the answer that an ARM port costs its platform (a boot by firmware with a device tree, the GIC, the generic timer, an SD host, USB) more than its word size, that a 64-bit port which keeps the 32-bit build keeps the shared code fit for both, and that a UEFI-only notebook does not boot and a multi-core one runs on one core.
 
 ## Decisions
 
@@ -21,7 +21,8 @@ Rach2 becomes a machine that students share: logged in over SSH at once, compili
 
 * Memory: the kernel in the top 2 GiB, built with `-mcmodel=kernel`, no red zone and no SSE; all physical memory mapped from 0xFFFF800000000000, with 2 MiB and 1 GiB pages where the processor has them; user space from 64 KiB to 0x00007FFFFFFFF000; four-level paging with the NX bit; a device's DMA buffers and rings from a pool below 4 GiB. The i686 layout does not change.
 * x86-64 uses all the memory the firmware reports, on any machine or QEMU instance, up to the direct map's 64 TiB. The frame allocator takes every usable range, where it now counts memory at or above 4 GiB as unreachable. The kernel heap's region is sized at boot from the memory, an eighth of it with i686's 256 MiB as the least, where it is now fixed, and the block cache's limit, half the heap, grows with it. The page cache reaches its pages through the direct map instead of the window at 0xD0000000. Process limits, tmpfs and shared memory take 64-bit sizes.
-* Programs: musl, BusyBox, Dropbear, TinyCC, pdpmake, the programs of `utils/` and `ish/`, Doom and the test probes, in the test, os-simple and os-real images. The GNU layer stays i686 in this milestone.
+* Programs: musl, BusyBox, Dropbear, TinyCC, pdpmake, the programs of `utils/` and `ish/`, Doom and the test probes, in the test, os-simple and os-real images.
+* The GNU layer builds for both architectures. `make gnu-toolchain ARCH=x86_64` builds the `x86_64-linux-gnu` cross toolchain from the same GCC and glibc; `build_port.sh` and its CMake toolchain file take the target from `ARCH`, and so do the five other files that name i386 now (the recipes of git, Chawan, Perl and strace, and `install_root.sh`, whose multiarch directory becomes `/usr/lib/x86_64-linux-gnu`); every one of the 72 ports, the native GCC and GDB, SpiderMonkey and Chromium, from Debian's amd64 package, are built for x86-64, and the GNU root's image is made for each architecture. strace decodes the calls of the architecture it is built for.
 * On x86-64 Rach2, TinyCC builds the x86-64 kernel, `utils` and `ish`, as `selfbuild` checks on i686. Where TinyCC lacks an instruction the kernel's assembly uses, or the kernel's code model, the vendored TinyCC is patched.
 * The x86-64 code is written for many processors from its first line: the GDT, the TSS and the kernel stacks are arrays by processor, and `this_cpu()` reads the GS base, so that batch 3 adds only the start of the other processors.
 
@@ -50,9 +51,9 @@ Rach2 becomes a machine that students share: logged in over SSH at once, compili
 
 ### The tests and the machine
 
-* `tests/run` takes the architecture from `ARCH`, and the registry says which suites each runs: x86-64 runs every suite but the GNU root's. The suites boot QEMU with two processors. `tests/run all` runs both architectures.
+* `tests/run` takes the architecture from `ARCH`, and the registry says which suites each runs: both run every suite, the GNU root's included. The suites boot QEMU with two processors. `tests/run all` runs both architectures.
 * QEMU's UEFI firmware, OVMF, joins `tools/setup` and `doctor.sh`: the package `ovmf` on Debian and Ubuntu, and the `edk2-x86_64-code.fd` QEMU ships on macOS.
-* The Lenovo is installed again with the GPT layout, and the owner sets its firmware to boot by UEFI, the one step of the milestone that needs a person at the machine; the conversion of an MBR disk by `--update` is checked in QEMU. It boots the x86-64 kernel with its base system once as a trial, with its disk, USB, network, sound, display, all of its memory and all of its processors used there, and ends on the final i686 build with the GNU root, booted by UEFI.
+* The Lenovo is installed again with the GPT layout, and the owner sets its firmware to boot by UEFI, the one step of the milestone that needs a person at the machine; the conversion of an MBR disk by `--update` is checked in QEMU. It boots the final i686 build with the GNU root once as a trial, and ends on the final x86-64 build with the GNU root, booted by UEFI, with its disk, USB, network, sound, display, all of its memory and all of its processors used there.
 * Codex reviews the milestone's whole diff once, at its end, the owner's choice of 2026-10-03; batches 1 and 2 are checked without a review.
 
 ## How the work runs
@@ -75,7 +76,7 @@ The processor's code moves to `arch/i386/` and the PC's to `arch/x86/`, with `gi
 
 The types (`uintptr_t`, `size_t`, `phys_addr_t`, `long` results); `phys_to_virt`; the MMIO and PCI accessors in the drivers; the formatter; the per-processor record behind `this_cpu()`, with one processor; the system call table, its numbers and the user layouts moved into `arch/i386/`, with the handlers reading arguments through accessors; the ELF class and machine, the auxiliary vector's word and the initial stack by architecture; `make ARCH=x86_64`, with `ARCH` `i686` by default, i686 building into `build/` as it does now and another architecture into `build/ARCH/`, its vendored ports and their stamps included. The Readmes of what moved are rewritten.
 
-### Batch 2: x86-64
+### Batch 2: x86-64 and all of its programs
 
 #### Phase 3: the x86-64 kernel
 
@@ -85,32 +86,36 @@ The multiboot entry and long mode; the GDT, IDT and TSS with interrupt stacks; i
 
 The toolchain in `tools/setup` and `doctor.sh` (`x86_64-elf-gcc` and its binutils on macOS, Debian and Ubuntu); musl, BusyBox, Dropbear, TinyCC and pdpmake for x86-64; `utils`, `ish`, Doom and the probes, made free of i386 numbers and layouts; the three RAM images and the disk images.
 
-#### Phase 5: the x86-64 tests
+#### Phase 5: the GNU layer on x86-64
 
-`ARCH` in `tests/run` and the QEMU it starts; the registry's architectures; each suite's i386 expectations given per architecture; a row that boots x86-64 with 8 GiB, finds all of it in `/proc/meminfo`, and fills and checks memory above 4 GiB from a program; `selfbuild` on x86-64; `tests/run all` over both.
+The `x86_64-linux-gnu` toolchain; `ARCH` in `build_port.sh`, its CMake toolchain file and the five recipes and scripts that name i386; the 72 ports, the native GCC and GDB, SpiderMonkey and Chromium for x86-64; the GNU root's image for each architecture; the GNU manual pages unchanged, since they describe programs both architectures run.
+
+#### Phase 6: the x86-64 tests
+
+`ARCH` in `tests/run` and the QEMU it starts; the registry's architectures; each suite's i386 expectations given per architecture; a row that boots x86-64 with 8 GiB, finds all of it in `/proc/meminfo`, and fills and checks memory above 4 GiB from a program; `selfbuild` on x86-64; the gnu suites on x86-64; `tests/run all` over both.
 
 ### Batch 3: UEFI, GPT, NVMe and SMP, on both architectures
 
-#### Phase 6: ACPI and the interrupt controllers
+#### Phase 7: ACPI and the interrupt controllers
 
 ACPI's tables; the IOAPIC in place of the PIC, with the MADT's overrides; the local APIC timer calibrated against the HPET or the PM timer; power off and reset through the FADT and `\_S5`; PCI through ECAM where the MCFG gives it.
 
-#### Phase 7: SMP
+#### Phase 8: SMP
 
 The trampoline and the start of each processor; the per-processor GDT, TSS, stacks and idle task; spinlocks and the big lock on every entry; the sections of the subsystems that leave it turned into their spinlocks; TLB shootdowns, reschedules and the stop by interprocessor interrupt; the run queues per processor with their balancing and affinity; `/proc/cpuinfo`, `/proc/stat`, `/sys/devices/system/cpu/` and the affinity calls; `maxcpus=`.
 
-#### Phase 8: the boot by UEFI, GPT and NVMe
+#### Phase 9: the boot by UEFI, GPT and NVMe
 
 The EFI GRUB image and the GPT BIOS core through `regen_grub.sh`; the multiboot2 headers and the boot record; the framebuffer console; the GPT layout and `GPTID` in the installer, `growroot`, `init`, `diskctl`, the recovery system, the kernel and the image tools; the conversion of an MBR disk by `--update`; the recovery stick's image; the NVMe driver; OVMF in `tools/setup`.
 
-#### Phase 9: the tests of batch 3
+#### Phase 10: the tests of batch 3
 
 The suites at two processors; an `smp` suite that boots with one processor and with four, finds them all, sees every processor's user time grow in `/proc/stat` during a parallel build on Rach2, and checks the counts of a stress of `fork`, `exec`, pipes, futexes and `munmap` across processors, a page unmapped on one processor faulting on another; a `uefi` suite that boots both kernels under OVMF from the installed disk and from the recovery stick's image, logs in over SSH, and reads one line of the framebuffer console from QEMU's screen dump against the font; a row that installs onto a sparse 4 TiB NVMe disk under OVMF, boots it, and finds the grown root past 2 TiB; the installer suites on the GPT layout and on the conversion of an MBR disk.
 
-#### Phase 10: the documents
+#### Phase 11: the documents
 
-The top-level Readme, `rach2/Readme.md`, `tools/Readme.md` and the Readmes of what changed; the manual's pages for the calls x86-64 has and i386 lacks, `arch_prctl(2)` first, and for those it has under other names (`mmap`, `lseek`, `stat`, `fcntl`, the socket and IPC calls), with `uname -m`'s `x86_64`; `sched_setaffinity(2)`, `cpuinfo` and the CPU entries of `proc(5)` and `sysfs(5)`; the pages of the installer, `bootctl`, `growroot` and `diskctl` for UEFI and GPT, and `nvme(4)`; `mancheck` by architecture.
+The top-level Readme, `rach2/Readme.md`, `tools/Readme.md`, `vendor/gnu/Readme.md` and the Readmes of what changed; the manual's pages for the calls x86-64 has and i386 lacks, `arch_prctl(2)` first, and for those it has under other names (`mmap`, `lseek`, `stat`, `fcntl`, the socket and IPC calls), with `uname -m`'s `x86_64`; `sched_setaffinity(2)`, `cpuinfo` and the CPU entries of `proc(5)` and `sysfs(5)`; the pages of the installer, `bootctl`, `growroot` and `diskctl` for UEFI and GPT, and `nvme(4)`; `mancheck` by architecture.
 
-#### Phase 11: the machine
+#### Phase 12: the machine
 
-The Lenovo installed again with the GPT layout and its firmware set to UEFI by the owner; the x86-64 kernel and base system there as a trial boot; the final i686 build installed and committed.
+The Lenovo installed again with the GPT layout and its firmware set to UEFI by the owner; the final i686 build with the GNU root there as a trial boot; the final x86-64 build with the GNU root installed and committed.
