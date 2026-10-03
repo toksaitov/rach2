@@ -178,6 +178,29 @@ int pci_msi_enable(const pci_device_t *dev, uint8_t vector);
 /** Stop `dev` from sending messages. */
 void pci_msi_disable(const pci_device_t *dev);
 
+/* The MSI-X capability: its control word's function mask and table size,
+ * and the BAR index in the low bits of the table's offset. An entry of the
+ * table is four dwords: the address, its upper half, the data, and the
+ * vector control, whose low bit masks the entry. */
+#define PCI_MSIX_MASK_ALL  0x4000u
+#define PCI_MSIX_TABLE_LEN 0x07FFu
+#define PCI_MSIX_BIR       0x7u
+
+/**
+ * Where `dev`'s MSI-X table is: the BAR it is in, its offset into that BAR,
+ * and its number of entries. 0, or -1 when the device has no MSI-X
+ * capability or one that runs past the end of its configuration space.
+ */
+int pci_msix_table(const pci_device_t *dev, uint8_t *bar, uint32_t *offset, uint32_t *entries);
+
+/**
+ * Program entry 0 of `dev`'s MSI-X table, which the caller has mapped at
+ * `table`, to send `vector` to this processor, and enable MSI-X with MSI
+ * disabled: 0, or -1 with the reason in the log. The local APIC must be
+ * ready and the device a bus master.
+ */
+int pci_msix_enable(const pci_device_t *dev, volatile uint32_t *table, uint8_t vector);
+
 /**
  * Find the bridge whose secondary bus is `bus`, filling `out`; true if found.
  *

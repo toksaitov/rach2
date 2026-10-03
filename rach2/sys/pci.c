@@ -539,6 +539,70 @@ int pci_msi_enable(const pci_device_t *dev, uint8_t vector)
 }
 
 /**
+ * Find `dev`'s MSI-X capability: its offset, or 0 when it has none or one
+ * whose twelve bytes would run past the end of configuration space.
+ */
+static uint8_t pci_msix_capability(const pci_device_t *dev)
+{
+    uint8_t cap = pci_find_capability(dev->bus, dev->device, dev->function, PCI_CAP_ID_MSIX);
+
+    return cap > 0xF4u ? 0 : cap;
+}
+
+int pci_msix_table(const pci_device_t *dev, uint8_t *bar, uint32_t *offset, uint32_t *entries)
+{
+    uint8_t cap = pci_msix_capability(dev);
+    uint32_t where;
+    uint16_t control;
+
+    if (cap == 0) {
+        return -1;
+    }
+    where = pci_read_config32(dev->bus, dev->device, dev->function, (uint8_t)(cap + 4));
+    control = pci_read_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2));
+    *bar = (uint8_t)(where & PCI_MSIX_BIR);
+    *offset = where & ~PCI_MSIX_BIR;
+    *entries = (control & PCI_MSIX_TABLE_LEN) + 1u;
+    return 0;
+}
+
+/**
+ * Program entry 0 of `dev`'s MSI-X table and enable MSI-X.
+ *
+ * MSI goes down first, since a device with both enabled is undefined. MSI-X
+ * is then enabled with every vector masked by the function mask, because
+ * some devices answer their table only while MSI-X is enabled; the entry is
+ * written with the same address and data MSI sends, and its own mask
+ * cleared; and the function mask comes off last, when the entry is whole.
+ */
+int pci_msix_enable(const pci_device_t *dev, volatile uint32_t *table, uint8_t vector)
+{
+    uint8_t cap = pci_msix_capability(dev);
+    uint16_t control;
+    uint32_t address, data;
+
+    if (cap == 0 || !table) {
+        klog(KLOG_WARN, "pci", "msi-x: %x:%x.%d has no usable msi-x capability", dev->bus,
+             dev->device, dev->function);
+        return -1;
+    }
+    pci_msi_disable(dev);
+    control = pci_read_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2));
+    pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2),
+                       (uint16_t)(control | PCI_MSIX_ENABLE | PCI_MSIX_MASK_ALL));
+    pci_msi_message(vector, &address, &data);
+    table[0] = address;
+    table[1] = 0;
+    table[2] = data;
+    table[3] = 0;
+    pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2),
+                       (uint16_t)((control | PCI_MSIX_ENABLE) & ~PCI_MSIX_MASK_ALL));
+    klog(KLOG_DEBUG, "pci", "msi-x: %x:%x.%d on vector %d", dev->bus, dev->device, dev->function,
+         vector);
+    return 0;
+}
+
+/**
  * Stop `dev` from sending messages, leaving its address and data as they
  * are. A device with no MSI capability is left alone.
  */

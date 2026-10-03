@@ -1,7 +1,7 @@
 /*
  * pcimsi_hosttest.c: `pci_msi_enable` against a model of configuration space.
  *
- * host-deps: rach2/sys/pci.c
+ * host-deps: rach2/sys/pci.c rach2/sys/arch/x86/pciconf.c
  *
  * The order of the writes is the whole of this: a device told to send
  * messages while its address is half written sends them somewhere, and a
@@ -15,6 +15,10 @@
  */
 
 #include "../../rach2/sys/pci.h"
+
+/* Where a PC writes a message, as arch/x86/pciconf.c builds it: the local
+ * APIC's page, with the processor's identity in bits 12 to 19. */
+#define PCI_MSI_ADDRESS_BASE 0xFEE00000u
 
 extern int printf(const char *fmt, ...);
 
@@ -221,6 +225,93 @@ static int first_write_of(unsigned char off)
     return -1;
 }
 
+/* The first write to the dword at `off` whose value has `bits` set in the
+   halfword at `off`, or -1. */
+static int first_write_with(unsigned char off, unsigned int bits)
+{
+    unsigned int shift = 8u * (off & 2u);
+    int i;
+
+    for (i = 0; i < nwrites; i++) {
+        if (writes[i] == (unsigned int)(off & 0xFC) && ((written[i] >> shift) & bits) == bits) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+/*
+ * MSI-X, whose table is in the device's memory and not in its configuration
+ * space: the model's table is an array the rows read after the call. The
+ * device comes in with MSI enabled by firmware and entry 0 masked, as a
+ * device out of reset has it, with a stale address in it. These are the
+ * last rows, so they end with the check that every access of the run left
+ * the interrupt flag as it found it.
+ */
+static void msix_rows(const pci_device_t *dev)
+{
+    volatile unsigned int table[8];
+    unsigned char bar = 0xFF;
+    unsigned int offset = 0, entries = 0;
+    int i;
+
+    model_reset();
+    model_cap(0x60, PCI_CAP_ID_MSI, 0x34);
+    space[0x62] = 0x80 | (unsigned char)PCI_MSI_ENABLE;
+    model_cap(0xA0, PCI_CAP_ID_MSIX, 0x60);
+    space[0xA2] = 0x01; /* two entries */
+    space[0xA4] = 0x04; /* the table at 0x3000 of BAR 4 */
+    space[0xA5] = 0x30;
+    for (i = 0; i < 8; i++) {
+        table[i] = 0xDEADBEEFu;
+    }
+    table[3] = 1; /* entry 0 masked */
+    the_apic_id = 2;
+    check(pci_msix_table(dev, &bar, &offset, &entries) == 0, "the MSI-X table is found");
+    check(bar == 4 && offset == 0x3000 && entries == 2,
+          "at the BAR, offset and size the capability gives");
+    nwrites = 0;
+    check(pci_msix_enable(dev, table, 54) == 0, "a device with MSI-X is programmed");
+    check(table[0] == (PCI_MSI_ADDRESS_BASE | (2u << 12)) && table[1] == 0,
+          "entry 0's address is the APIC's page with the processor in it");
+    check(table[2] == 54, "its data is the vector");
+    check(table[3] == 0, "and its own mask is off");
+    check(table[4] == 0xDEADBEEFu, "the other entry is left alone");
+    check((cfg16(0x62) & PCI_MSI_ENABLE) == 0, "MSI is disabled");
+    check((cfg16(0xA2) & PCI_MSIX_ENABLE) != 0 && (cfg16(0xA2) & PCI_MSIX_MASK_ALL) == 0,
+          "MSI-X is enabled with the function mask off");
+    {
+        int msi_down = first_write_of(0x60), masked = first_write_with(0xA2, 0xC000u), last = -1;
+
+        for (i = 0; i < nwrites; i++) {
+            if (writes[i] == 0xA0) {
+                last = i;
+            }
+        }
+        check(msi_down >= 0 && masked >= 0 && msi_down < masked,
+              "MSI goes down before MSI-X is enabled");
+        check(masked >= 0 && last > masked && ((written[last] >> 16) & 0x4000u) == 0,
+              "MSI-X is enabled masked first and unmasked by the last write");
+    }
+
+    model_reset();
+    model_cap(0x60, PCI_CAP_ID_MSI, 0x34);
+    space[0x62] = 0x80;
+    check(pci_msix_table(dev, &bar, &offset, &entries) == -1,
+          "a device without MSI-X has no table");
+    check(pci_msix_enable(dev, table, 55) == -1, "and is refused");
+    check(nwrites == 0, "with nothing written");
+
+    model_reset();
+    model_cap(0xF8, PCI_CAP_ID_MSIX, 0x34);
+    check(pci_msix_table(dev, &bar, &offset, &entries) == -1,
+          "an MSI-X capability that runs past the end of its space is refused");
+    check(pci_msix_enable(dev, table, 56) == -1 && nwrites == 0, "and nothing is written");
+
+    check(irq_depth == 0 && irq_unbalanced == 0,
+          "every access left the interrupt flag as it found it");
+}
+
 int main(void)
 {
     pci_device_t dev;
@@ -400,8 +491,7 @@ int main(void)
     check(cfg16(0x04) == 0x0007u, "a halfword write reaches the register it names");
     check(cfg16(0x06) == 0x4010u, "and leaves the latched status beside it alone");
 
-    check(irq_depth == 0 && irq_unbalanced == 0,
-          "every access left the interrupt flag as it found it");
+    msix_rows(&dev);
 
     if (fails == 0) {
         printf("pcimsi_hosttest: OK\n");
