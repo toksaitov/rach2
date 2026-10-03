@@ -53,6 +53,13 @@ uintptr_t paging_user_phys(page_dir_t *dir, uintptr_t addr)
     return pt ? (uintptr_t)(pt->pages[addr / PAGE_SIZE % 1024] & ~0xFFFu) : 0;
 }
 
+void paging_set_exec(page_dir_t *dir, uintptr_t addr, bool exec)
+{
+    (void)dir;
+    (void)addr;
+    (void)exec;
+}
+
 void paging_set_writable(page_dir_t *dir, uintptr_t addr, bool writable)
 {
     (void)dir;
