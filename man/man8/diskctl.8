@@ -54,7 +54,8 @@ A disk image written to a larger disk leaves its backup where the image
 ended, and a reader looks for it at the disk's end.
 A table whose primary header or array does not check is read from the
 backup, and the primary is written again from it; GRUB's BIOS core reads
-no backup, so a disk in that state boots by BIOS only after this.
+no backup, so a disk in that state boots by BIOS only after this, or after
+UEFI firmware built on EDK2 has read it, which writes the primary itself.
 The last usable sector becomes the one before the backup entry array, and
 the protective MBR's entry is made to cover the disk, with the boot code
 around it kept.

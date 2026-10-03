@@ -67,10 +67,12 @@ file, since the image has none.
 Init then names each disk whose GUID table it reads from the backup at the
 disk's end, its primary failing its checksums:
 .Dl init: /dev/diskN: its primary GUID table does not check and was read from the backup; diskctl relocate /dev/diskN writes it again
-GRUB's BIOS core reads no backup, so such a disk boots by UEFI and not by
-BIOS until
+GRUB's BIOS core reads no backup, so such a disk does not boot by BIOS
+until
 .Xr diskctl 8
-writes the primary again; recovery leaves the table as it is unless told.
+writes the primary again; UEFI firmware built on EDK2, OVMF among it,
+writes it again itself when it reads the disk.
+Recovery leaves the table as it is unless told.
 With
 .Ql rach2.fsck
 on the boot line, init first runs
