@@ -100,6 +100,26 @@ extern void isr128(void);
 void init_isr(void);
 
 /**
+ * Hand lines 0 to 15 to the I/O APIC: route each line a handler is already
+ * registered on, and each one registered from now on. `pci` has a bit for
+ * each line a PCI device's interrupt line register gives, which is
+ * level-triggered; `local` has a bit for each line whose vector a source in
+ * the local APIC raises instead (the timer, on line 0's vector), which is
+ * not routed. Called with interrupts off, after the 8259 is retired.
+ */
+void isr_lines_to_apic(uint16_t pci, uint16_t local);
+
+/** Whether the I/O APIC has the lines. */
+int isr_lines_apic(void);
+
+/**
+ * Hold line `line` masked at the I/O APIC whatever is registered on its
+ * vector: `pic_mask_irq` once the 8259 is retired, for a line a device
+ * asserts that no handler here clears, the SCI's.
+ */
+void isr_line_hold(int line);
+
+/**
  * The double fault's task: report the fault, and the kernel stack that ran
  * out when that is its cause, and panic. The processor starts it through
  * the task gate of vector 8; nothing calls it.

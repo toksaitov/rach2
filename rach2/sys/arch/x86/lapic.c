@@ -1,17 +1,25 @@
 /*
- * lapic.c: the local APIC, for message-signalled interrupts.
+ * lapic.c: the local APIC, for message-signalled interrupts, the I/O APIC's
+ * interrupts and the tick.
  *
  * A message from a PCI device is a write to the APIC's address, so the APIC
- * must be enabled before any device is told to send one. Nothing else here
- * uses it: the timer stays the PIT, the 8259 pair still delivers the
- * keyboard, the mouse and the disks, and the IOAPIC is not programmed.
+ * must be enabled before any device is told to send one. It is enabled the
+ * same way whichever controller then takes the machine's lines: with the
+ * 8259 pair, whose interrupts reach the processor through `LINT0` as an
+ * external interrupt, the state firmware calls virtual wire; or with the I/O
+ * APIC, whose interrupts arrive as messages, after which the platform masks
+ * `LINT0` and the 8259 with it (platform.c).
  *
- * The 8259's interrupts reach the processor through `LINT0` as an external
- * interrupt, the state firmware calls virtual wire. Enabling the APIC with
- * `LINT0` masked would silence the timer and the keyboard, so this driver
- * reads that entry after the APIC is enabled and writes the unmasked
- * external-interrupt value when it finds anything else. `LINT1` is left as
- * the firmware set it.
+ * Enabling the APIC with `LINT0` masked would silence the 8259's timer and
+ * keyboard, so this driver reads that entry after the APIC is enabled and
+ * writes the unmasked external-interrupt value when it finds anything else.
+ * `LINT1` is left as the firmware set it until the platform writes the NMI
+ * entry the MADT gives.
+ *
+ * The APIC's own timer counts down from an initial count at the bus clock
+ * divided by sixteen, and in periodic mode reloads and raises its vector
+ * each time it reaches zero; it is the tick when the I/O APIC takes the
+ * lines (apictimer.c). Every register here is the running processor's own.
  *
  * A processor without an APIC, without the model-specific registers, in
  * x2APIC mode, or with its registers somewhere other than the page this
@@ -38,14 +46,24 @@
 #define LAPIC_SVR     0xF0
 #define LAPIC_ISR     0x100
 #define LAPIC_IRR     0x200
+#define LAPIC_ICR_LO  0x300
+#define LAPIC_ICR_HI  0x310
+#define LAPIC_TIMER   0x320
 #define LAPIC_LINT0   0x350
 #define LAPIC_LINT1   0x360
+#define LAPIC_INITIAL 0x380
+#define LAPIC_CURRENT 0x390
+#define LAPIC_DIVIDE  0x3E0
 
 #define LVT_MASKED          (1u << 16)
 #define LVT_DELIVERY_MASK   (7u << 8)
 #define LVT_DELIVERY_EXTINT (7u << 8)
 #define SVR_SOFTWARE_ENABLE 0x100u
 #define SPURIOUS_VECTOR     0xFFu
+#define TIMER_PERIODIC      (1u << 17)
+#define DIVIDE_BY_16        0x3u
+#define ICR_SELF            (1u << 18)
+#define ICR_PENDING         (1u << 12)
 
 /* The page the APIC's registers live on, and zero until `lapic_init` maps
  * it, which is what `lapic_ready` reports and every write here checks. */
@@ -199,6 +217,11 @@ uint32_t lapic_id(void)
     return apic_id;
 }
 
+uint32_t lapic_this_id(void)
+{
+    return ready ? apic_read(LAPIC_ID) >> 24 : 0;
+}
+
 void lapic_eoi(void)
 {
     if (ready) {
@@ -220,4 +243,81 @@ void lapic_spurious(void)
 uint32_t lapic_spurious_count(void)
 {
     return spurious_count;
+}
+
+/**
+ * Whether `vector` is in this processor's request register: raised, and
+ * not yet taken. Unlike `lapic_pending`, a vector whose handler is running
+ * is not counted, which is what the 8259's request register says of a line.
+ */
+int lapic_requested(uint8_t vector)
+{
+    uint32_t word = ((uint32_t)vector / 32u) * 0x10u;
+
+    if (!ready) {
+        return 0;
+    }
+    return (apic_read(LAPIC_IRR + word) & (1u << ((uint32_t)vector % 32u))) != 0;
+}
+
+void lapic_set_lint(int lint, uint32_t entry)
+{
+    if (ready) {
+        apic_write(lint == 0 ? LAPIC_LINT0 : LAPIC_LINT1, entry);
+    }
+}
+
+/**
+ * Raise `vector` on this processor, as a device's message would: for an
+ * edge an I/O APIC input could not see because it came while the input was
+ * masked.
+ */
+void lapic_self_ipi(uint8_t vector)
+{
+    int spins;
+
+    if (!ready) {
+        return;
+    }
+    apic_write(LAPIC_ICR_HI, 0);
+    apic_write(LAPIC_ICR_LO, ICR_SELF | vector);
+    for (spins = 0; spins < 100000 && (apic_read(LAPIC_ICR_LO) & ICR_PENDING) != 0; spins++) {
+        /* the delivery status clears once the message is sent */
+    }
+}
+
+/**
+ * Program this processor's timer: `vector`, periodic or one-shot, masked or
+ * not, counting down from `initial` at the bus clock divided by sixteen.
+ * The divide register is written before the initial count, which starts the
+ * count.
+ */
+void lapic_timer_set(uint8_t vector, int periodic, int masked, uint32_t initial)
+{
+    if (!ready) {
+        return;
+    }
+    apic_write(LAPIC_DIVIDE, DIVIDE_BY_16);
+    apic_write(LAPIC_TIMER, vector | (periodic ? TIMER_PERIODIC : 0u) | (masked ? LVT_MASKED : 0u));
+    apic_write(LAPIC_INITIAL, initial);
+}
+
+/** Stop this processor's timer and mask its entry. */
+void lapic_timer_stop(void)
+{
+    if (!ready) {
+        return;
+    }
+    apic_write(LAPIC_INITIAL, 0);
+    apic_write(LAPIC_TIMER, LVT_MASKED);
+}
+
+uint32_t lapic_timer_current(void)
+{
+    return ready ? apic_read(LAPIC_CURRENT) : 0;
+}
+
+uint32_t lapic_timer_initial(void)
+{
+    return ready ? apic_read(LAPIC_INITIAL) : 0;
 }

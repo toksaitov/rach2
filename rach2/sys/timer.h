@@ -9,9 +9,9 @@ extern volatile uint32_t kernel_ticks;
 /*
  * The clock under the tick: microseconds since the boot, the place within
  * the tick, and the ticks the timer did not deliver. The platform's timer
- * defines it (arch/x86/pit.c, the 8254's counter, with the time-stamp
- * counter where it runs at one rate); the tick itself is the kernel's
- * (kernel_ticks).
+ * defines it (arch/x86/pit.c, from the counter of the timer that ticks, the
+ * local APIC's or the 8254's, with the time-stamp counter where it runs at
+ * one rate); the tick itself is the kernel's (kernel_ticks).
  */
 
 /**

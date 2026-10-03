@@ -1,0 +1,141 @@
+.Dd October 3, 2026
+.Dt ACPI 4
+.Os
+.Sh NAME
+.Nm acpi
+.Nd the firmware's tables, the interrupt controllers and the tick
+.Sh SYNOPSIS
+.Pa /proc/interrupts
+.Pp
+Kernel command line:
+.Ql noapic ,
+.Ql rach2.nomsi ,
+.Ql rach2.resetskip=N
+.Sh DESCRIPTION
+At boot the kernel reads the machine's ACPI tables: the root system
+description pointer that the boot loader gives or that the BIOS left in
+its data area, the RSDT or the XSDT it leads to, and from that the MADT,
+the FADT, the HPET table, the MCFG and the FADT's DSDT.
+A table whose length or checksum fails is left out and logged.
+There is no AML interpreter.
+The one value read from the DSDT is the sleep type pair of the soft-off
+state,
+.Ql \e_S5 ,
+found by a search of its bytes.
+.Pp
+Where the MADT lists an I/O APIC, the I/O APIC takes the machine's
+interrupt lines 0 to 15 and the 8259 pair is masked.
+Each line goes where the MADT's interrupt source override for it says,
+with the override's polarity and trigger, or else to the input of its own
+number as an ISA line.
+A line given in a PCI device's interrupt line register is
+level-triggered.
+The tick, 100 a second, is then the local APIC's timer, measured at boot
+against the HPET, against the ACPI PM timer when there is no HPET, or
+against the 8254 when there is neither.
+A device that sends messages, MSI or MSI-X, sends them to the local APIC
+under either controller.
+.Pp
+The kernel keeps the 8259 pair and the 8254's tick where the tables list
+no I/O APIC, where the machine has no ACPI tables, where the local APIC is
+refused, and with
+.Ql noapic
+on the kernel command line.
+.Ql rach2.nomsi
+refuses the local APIC, and with it messages and the I/O APIC.
+.Pp
+.Pa /proc/interrupts
+gives the controller each vector's interrupts come through in its third
+field:
+.Ql PIC
+for the 8259 pair,
+.Ql IO-APIC
+for the I/O APIC,
+.Ql LAPIC
+for the local APIC's timer, whose handler is named
+.Ql timer ,
+and
+.Ql MSI
+for a device's message.
+Line N arrives on vector 32 + N under either controller.
+.Pp
+A power off, by
+.Xr reboot 2
+or
+.Xr halt 8 ,
+writes the sleep types of
+.Ql \e_S5
+with the sleep enable bit to the FADT's PM1a and PM1b control registers.
+Where the tables give no
+.Ql \e_S5 ,
+or the machine is still running after the write, the kernel tries the
+power controller of the chipsets it knows by name.
+A restart writes the FADT's reset value to its reset register where the
+FADT says it has one, then tries the firmware's own reset command, the
+chipset's reset register at port 0xCF9 and the keyboard controller's
+pulse, in that order.
+.Ql rach2.resetskip=N
+leaves out the first N of these before the keyboard controller's.
+.Pp
+PCI configuration space is read through the memory window the MCFG gives
+for PCI segment 0, on the buses the boot finds behind it, up to 32, and
+through ports 0xCF8 and 0xCFC elsewhere.
+.Sh FILES
+.Bl -tag -width "/proc/interrupts" -compact
+.It Pa /proc/interrupts
+the vectors that have taken interrupts, as
+.Xr proc 5
+describes
+.El
+.Sh DIAGNOSTICS
+The kernel writes these lines to its log, which
+.Xr bootlog 4
+keeps.
+.Bl -tag -width Ds
+.It Ql acpi: tables: rsdt at ADDR, revision N, OEM: SIG ...
+The root table and the tables that passed their checks.
+Lines for the MADT, the FADT,
+.Ql \e_S5 ,
+the HPET and the MCFG follow.
+.It Ql acpi: SIG at ADDR: checksum fails, ignored
+A table whose bytes do not sum to zero, left out.
+A length that is shorter than the table's fields, or than its header, or
+that reaches past the memory the kernel can map, is reported the same
+way.
+.It Ql ioapic: interrupts: lines through the ioapic, the 8259 masked
+The I/O APIC has the lines.
+.It Ql lapic: tick: N counts, measured against the hpet
+The local APIC's timer is the tick, at N counts a tick;
+.Ql the pm timer
+or
+.Ql the pit
+is another reference.
+.It Ql lapic: timer: no tick in 50 ms; the pit ticks instead
+The local APIC's timer did not interrupt, and the 8254 ticks through the
+I/O APIC.
+.It Ql pit: none: channel 0 does not count
+The machine has no 8254; short waits are measured by the HPET or the PM
+timer.
+.It Ql poweroff: acpi: sleep types A and B
+The power off writes
+.Ql \e_S5 's
+types.
+.It Ql reboot: acpi: writing 0xV to the reset register
+The restart writes the FADT's reset register.
+.El
+.Sh SEE ALSO
+.Xr reboot 2 ,
+.Xr bootlog 4 ,
+.Xr nvme 4 ,
+.Xr rtc 4 ,
+.Xr proc 5 ,
+.Xr halt 8
+.Sh CAVEATS
+Without an AML interpreter the kernel does not read a PCI device's
+interrupt routing,
+.Ql _PRT .
+A device without MSI is served on the ISA line its interrupt line
+register gives; one whose interrupt reaches only the I/O APIC's inputs
+above 15 takes no interrupts, and only its driver's polling serves it.
+.Pp
+Only the processor the kernel booted on is used.

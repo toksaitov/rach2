@@ -1,5 +1,7 @@
 /*
- * udelay.c: short waits measured against the 8254 counter.
+ * udelay.c: short waits measured against the 8254 counter, or, on a machine
+ * with none, by the HPET or the ACPI PM timer through `udelay_wait`, which
+ * the platform sets (platform.c, refclock.c).
  *
  * The device bring-up sequences in this kernel ask for waits in
  * microseconds and milliseconds, and every one of them is a hardware
@@ -50,6 +52,16 @@
  */
 #define PIT_WINDOW_USEC 1000u
 
+/*
+ * The samples in a row that may find the counter where it was before the
+ * wait gives up on it. A counting 8254 moves between any two samples, each
+ * three port accesses; a machine without one reads the same 0xFFFF every
+ * time, and a wait that went on would never end.
+ */
+#define PIT_STALL_SAMPLES 100000u
+
+void (*udelay_wait)(uint32_t usec);
+
 /**
  * Sample channel 0's current count without disturbing it.
  *
@@ -85,7 +97,7 @@ static uint16_t pit_count(void)
 static void udelay_window(uint32_t usec)
 {
     uint32_t want = (usec * PIT_COUNTS_PER_SEC + 999999u) / 1000000u;
-    uint32_t seen = 0;
+    uint32_t seen = 0, still = 0;
     uint16_t prev = pit_count();
 
     if (want == 0) {
@@ -103,11 +115,19 @@ static void udelay_window(uint32_t usec)
         }
         seen += step;
         prev = now;
+        still = step == 0 ? still + 1u : 0u;
+        if (still >= PIT_STALL_SAMPLES) {
+            return;
+        }
     }
 }
 
 void k_udelay(uint32_t usec)
 {
+    if (udelay_wait) {
+        udelay_wait(usec);
+        return;
+    }
     while (usec > PIT_WINDOW_USEC) {
         udelay_window(PIT_WINDOW_USEC);
         usec -= PIT_WINDOW_USEC;

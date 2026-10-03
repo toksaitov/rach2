@@ -1,3 +1,4 @@
+#include "ioapic.h"
 #include "lapic.h"
 #include "../../klog.h"
 #include "isr.h"
@@ -60,6 +61,19 @@ static uint8_t _vector_taken[256]; /* given to a device by isr_alloc_vector */
  * the only thing /proc/interrupts can say about a line that a number cannot:
  * two devices on one line are two names on it. */
 static const char *_isr_names[256][ISR_MAX_VECTOR_HANDLERS];
+
+/*
+ * How lines 0 to 15 reach the processor: through the 8259 pair, or through
+ * the I/O APIC once `isr_lines_to_apic` has run. With the I/O APIC a line is
+ * routed when a handler is registered on its vector, unless a local source
+ * raises that vector itself (`lines_local`, the APIC timer on line 0's) or
+ * the line is held masked (`lines_held`, the SCI). `lines_pci` are the lines
+ * a PCI device's interrupt line register gives, which are level-triggered.
+ */
+static int lines_apic;
+static uint16_t lines_local;
+static uint16_t lines_held;
+static uint16_t lines_pci;
 
 void _isr_router(isr_params_t *params);
 
@@ -356,6 +370,55 @@ void init_isr(void)
     __asm__ __volatile__("sti"); /* Enable interrupt handling. */
 }
 
+/** Route line `line` through the I/O APIC to this processor, when it is
+ * the I/O APIC's to route. */
+static void line_route(int line)
+{
+    uint16_t bit = (uint16_t)(1u << line);
+
+    if (!lines_apic || ((lines_local | lines_held) & bit) != 0) {
+        return;
+    }
+    (void)ioapic_route_line(line, (lines_pci & bit) != 0, (uint8_t)IRQ_VECTOR(line),
+                            (uint8_t)lapic_id());
+}
+
+/** A handler went on `vector`: when it is a line's, route the line. */
+static void vector_registered(uint8_t vector)
+{
+    if (vector >= IRQ_VECTOR(0) && vector < IRQ_VECTOR(16)) {
+        line_route(vector - IRQ_VECTOR(0));
+    }
+}
+
+void isr_lines_to_apic(uint16_t pci, uint16_t local)
+{
+    int line;
+
+    lines_apic = 1;
+    lines_pci = pci;
+    lines_local = local;
+    for (line = 0; line < 16; line++) {
+        if (_isr_handlers[IRQ_VECTOR(line)][0] != 0) {
+            line_route(line);
+        }
+    }
+}
+
+int isr_lines_apic(void)
+{
+    return lines_apic;
+}
+
+void isr_line_hold(int line)
+{
+    if (line < 0 || line > 15) {
+        return;
+    }
+    lines_held |= (uint16_t)(1u << line);
+    ioapic_mask_line(line);
+}
+
 /**
  * The lowest message vector not yet given to a device, marked as given;
  * -1 with a record when every one is taken.
@@ -396,6 +459,7 @@ void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *nam
         if (_isr_handlers[vector][i] == 0) {
             _isr_handlers[vector][i] = handler;
             _isr_names[vector][i] = name;
+            vector_registered(vector);
             return;
         }
     }
@@ -419,6 +483,7 @@ void set_isr_handler(uint8_t vector, isr_handler_t handler, const char *name)
         _isr_handlers[vector][i] = 0;
         _isr_names[vector][i] = 0;
     }
+    vector_registered(vector);
 }
 
 /**
@@ -468,11 +533,21 @@ static void irq_dispatch(isr_params_t *params)
 }
 
 /**
- * Dispatch a hardware IRQ and send the PIC end-of-interrupt.
+ * Dispatch a hardware IRQ and end it at the controller it came through.
  *
- * Vectors at or above 40 come from the slave PIC and need both PICs acked; the
- * master is always acked. The EOI is sent before the handler chain runs so a
- * fast device can re-raise its line without being lost.
+ * Through the 8259, vectors at or above 40 come from the slave PIC and need
+ * both PICs acked; the master is always acked. The EOI is sent before the
+ * handler chain runs so a fast device can re-raise its line without being
+ * lost.
+ *
+ * Through the I/O APIC, the local APIC's end-of-interrupt comes after the
+ * chain, as a message's does: a level-triggered line is still asserted until
+ * its handler has quieted the device, and an end sent before would have the
+ * I/O APIC send it again at once. The tick's vector is the exception. Its
+ * handler may switch to another process before it returns, and while its
+ * vector is in service the local APIC blocks every vector of its
+ * priority and below, the lines' included; it is an edge, and is ended
+ * first, as through the 8259.
  */
 void _irq_router(isr_params_t *params)
 {
@@ -503,6 +578,18 @@ void _irq_router(isr_params_t *params)
         irq_dispatch(params);
         lapic_eoi();
         sched_preempt(); /* a woken reader runs now, or at the call's exit */
+        return;
+    }
+
+    if (lines_apic) {
+        if (params->vector == IRQ_VECTOR(0)) {
+            lapic_eoi();
+            irq_dispatch(params);
+            return;
+        }
+        irq_dispatch(params);
+        lapic_eoi();
+        sched_preempt();
         return;
     }
 
@@ -556,10 +643,22 @@ uint32_t isr_interrupt_total(void)
     return irq_count;
 }
 
-/** "PIC" for the 8259's sixteen vectors, "MSI" for the messages' above. */
+/** "PIC" for the 8259's sixteen vectors, "IO-APIC" for the I/O APIC's,
+ * "LAPIC" for the tick the local APIC's timer raises, and "MSI" for the
+ * messages' above. */
 const char *isr_vector_source(int vector)
 {
-    return vector < ISR_MSI_FIRST ? "PIC" : "MSI";
+    if (vector >= ISR_MSI_FIRST) {
+        return "MSI";
+    }
+    if (!lines_apic) {
+        return "PIC";
+    }
+    if (vector >= IRQ_VECTOR(0) && vector < IRQ_VECTOR(16) &&
+        (lines_local & (1u << (vector - IRQ_VECTOR(0)))) != 0) {
+        return "LAPIC";
+    }
+    return "IO-APIC";
 }
 
 int isr_msi_ready(void)
@@ -569,6 +668,9 @@ int isr_msi_ready(void)
 
 int isr_line_pending(int line)
 {
+    if (lines_apic) {
+        return lapic_requested((uint8_t)IRQ_VECTOR(line)) || ioapic_line_pending(line);
+    }
     return pic_irq_pending((uint8_t)line);
 }
 

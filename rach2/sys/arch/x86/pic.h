@@ -6,8 +6,20 @@
 /** Remaps the 8259 PIC IRQs to vectors 0x20 (master) and 0x28 (slave). */
 void init_pic(void);
 
-/** Unmask master IRQ line `irq` (0..7) once its handler is installed. */
+/**
+ * Unmask master IRQ line `irq` (0..7) once its handler is installed.
+ *
+ * Nothing after `pic_retire`: the I/O APIC then unmasks a line when its
+ * handler is registered, and the 8259 stays masked.
+ */
 void pic_unmask_irq(uint8_t irq);
+
+/**
+ * Mask all sixteen lines for good, when the I/O APIC takes them. The pair
+ * stays initialized at vectors 32 to 47, so a line it latched while masked
+ * is still in its request register.
+ */
+void pic_retire(void);
 
 /**
  * Whether IRQ line `irq` (0..15) is raised and not yet dispatched.
@@ -25,7 +37,8 @@ int pic_irq_pending(uint8_t irq);
  * For a line this kernel has no handler for and that a device may assert
  * anyway. The SCI is the case it was written for: with ACPI enabled, a power
  * button or a thermal event raises a level-triggered interrupt that nothing
- * here clears, and an unmasked one would be taken forever.
+ * here clears, and an unmasked one would be taken forever. Once the I/O
+ * APIC has the lines, the line is held masked there instead.
  */
 void pic_mask_irq(uint8_t irq);
 

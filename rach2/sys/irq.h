@@ -62,7 +62,9 @@ uint32_t isr_spurious_count(void);
 
 /**
  * What delivers interrupts on a vector from `ISR_DEVICE_FIRST` to
- * `ISR_DEVICE_LAST`, for `/proc/interrupts`: "PIC" or "MSI" on a PC.
+ * `ISR_DEVICE_LAST`, for `/proc/interrupts`: on a PC "PIC" for the 8259
+ * pair, "IO-APIC" for the I/O APIC, "LAPIC" for the local APIC's timer, and
+ * "MSI" for a device's message.
  */
 const char *isr_vector_source(int vector);
 

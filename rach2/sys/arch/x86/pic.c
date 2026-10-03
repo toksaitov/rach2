@@ -1,5 +1,9 @@
+#include "isr.h"
 #include "portio.h"
 #include "pic.h"
+
+/* Set once the I/O APIC has the lines and the 8259 is masked for good. */
+static int retired;
 
 /**
  * Remap the two 8259A PICs and run their ICW1..ICW4 init sequence.
@@ -47,12 +51,19 @@ void pic_unmask_irq(uint8_t irq)
 {
     uint8_t mask;
 
-    if (irq > 7) {
+    if (irq > 7 || retired) {
         return;
     }
     mask = inb(0x21);
     mask = (uint8_t)(mask & ~(1u << irq));
     outb(0x21, mask);
+}
+
+void pic_retire(void)
+{
+    retired = 1;
+    outb(0x21, 0xFF);
+    outb(0xA1, 0xFF);
 }
 
 int pic_irq_pending(uint8_t irq)
@@ -72,7 +83,8 @@ int pic_irq_pending(uint8_t irq)
 }
 
 /**
- * Mask one PIC line, on whichever of the two controllers has it.
+ * Mask one PIC line, on whichever of the two controllers has it, or at the
+ * I/O APIC once it has the lines.
  *
  * Masking a slave line leaves the cascade line itself alone, since the other
  * slave lines still have to arrive.
@@ -82,6 +94,10 @@ void pic_mask_irq(uint8_t irq)
     uint8_t mask;
 
     if (irq > 15) {
+        return;
+    }
+    if (retired) {
+        isr_line_hold(irq);
         return;
     }
     if (irq < 8) {

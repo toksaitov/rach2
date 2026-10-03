@@ -64,6 +64,16 @@ struct pit_clock {
 static struct pit_clock clock;
 
 static uint32_t pit_phase_from(uint32_t count, uint8_t status);
+static int pit_pending(void);
+
+static const struct tick_counter pit_counter = {pit_phase_us, pit_phase_ns, pit_period_us,
+                                                pit_pending};
+static const struct tick_counter *counter = &pit_counter;
+
+void timer_set_counter(const struct tick_counter *c)
+{
+    counter = c ? c : &pit_counter;
+}
 
 /**
  * A reading that found the counter at `phase` microseconds into its period:
@@ -259,7 +269,7 @@ static uint32_t pit_phase_from(uint32_t count, uint8_t status)
 }
 
 /** Where the counter is inside its period now, in microseconds. */
-static uint32_t clock_phase(void)
+uint32_t pit_phase_us(void)
 {
     uint8_t status, lo, hi;
 
@@ -281,7 +291,7 @@ void timer_tick_clock(void)
 {
     uint32_t flags = kirq_save();
 
-    pit_clock_tick(&clock, clock_phase());
+    pit_clock_tick(&clock, counter->phase_us());
     kirq_restore(flags);
 }
 
@@ -289,10 +299,12 @@ void timer_tick_clock(void)
  * Microseconds since the boot, from the tick and the counter under it.
  *
  * The tick alone has 10 ms of resolution, which is coarser than the intervals
- * the USB interrupt path is measured over, so this reads where channel 0 is
- * inside its period as well. Mode 3 sweeps the counter to zero twice per
- * interrupt, so the count says where in a half-period the machine is and the
- * read-back status says which half: `OUT` is high through the first.
+ * the USB interrupt path is measured over, so this reads where the counter
+ * under the tick is inside its period as well: the local APIC timer's count
+ * when that is the tick, and channel 0's otherwise. Mode 3 sweeps channel 0's
+ * counter to zero twice per interrupt, so the count says where in a
+ * half-period the machine is and the read-back status says which half: `OUT`
+ * is high through the first.
  *
  * A machine whose interrupts are off for longer than a period loses that
  * period unless something reads the clock inside it. The tick counter makes
@@ -305,10 +317,22 @@ void timer_tick_clock(void)
 uint32_t timer_now_us(void)
 {
     uint32_t flags = kirq_save();
-    uint32_t now = pit_clock_read(&clock, clock_phase(), 2u * sweep_us());
+    uint32_t now = pit_clock_read(&clock, counter->phase_us(), counter->period_us());
 
     kirq_restore(flags);
     return now;
+}
+
+/** The period of channel 0's tick: two sweeps of its counter. */
+uint32_t pit_period_us(void)
+{
+    return 2u * sweep_us();
+}
+
+/** Nanoseconds within channel 0's period, from the latched phase. */
+uint32_t pit_phase_ns(void)
+{
+    return pit_phase_us() * 1000u;
 }
 
 /**
@@ -320,11 +344,44 @@ uint32_t timer_now_us(void)
  */
 uint32_t timer_subtick_ns(void)
 {
-    return clock_phase() * 1000u;
+    return counter->phase_ns();
 }
 
 /** The tick's interrupt, IRQ 0, raised at the 8259 and not yet taken. */
-int timer_tick_pending(void)
+static int pit_pending(void)
 {
     return pic_irq_pending(0);
+}
+
+int timer_tick_pending(void)
+{
+    return counter->pending();
+}
+
+/**
+ * Read channel 0 until its count changes, a few thousand times at most. A
+ * counting 8254 moves between two readings; an absent one reads 0xFFFF
+ * every time.
+ */
+int pit_probe(void)
+{
+    uint32_t flags = kirq_save();
+    uint16_t first = 0, now = 0;
+    int i;
+
+    for (i = 0; i < 4096; i++) {
+        uint8_t lo, hi;
+
+        outb(0x43, 0x00); /* latch channel 0 */
+        lo = inb(0x40);
+        hi = inb(0x40);
+        now = (uint16_t)((uint16_t)lo | ((uint16_t)hi << 8));
+        if (i == 0) {
+            first = now;
+        } else if (now != first) {
+            break;
+        }
+    }
+    kirq_restore(flags);
+    return now != first;
 }
