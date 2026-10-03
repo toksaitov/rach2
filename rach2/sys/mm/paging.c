@@ -1339,73 +1339,87 @@ void paging_protect_range(page_dir_t *dir, uintptr_t start, uintptr_t end, uint3
 }
 
 /**
+ * Give the child's directory `child_dir` the page of `parent_dir` whose
+ * entry is `*e`, at `va` in a region of type `type`, as `paging_fork_copy`
+ * describes: 0, or -1 with no memory for a table.
+ */
+static int fork_copy_page(page_dir_t *child_dir, pte_t *e, uintptr_t va, vm_type_t type)
+{
+    pte_t pte = *e;
+    uintptr_t parent_phys = PTE_ADDR(pte);
+
+    if (!(pte & PTE_P) || !(pte & (PTE_U | PTE_NONE)) || parent_phys == 0) {
+        return 0; /* present, and user or PROT_NONE, and a real frame */
+    }
+    if (type == VM_SHARED) {
+        if (map_user_frame(child_dir, va, parent_phys, pte & PTE_FLAGS) != 0) {
+            return -1;
+        }
+        frame_ref(parent_phys);
+        return 0;
+    }
+
+    /*
+     * Copy-on-write: share the frame instead of copying it. The child maps
+     * the same physical frame, and the frame's reference count is bumped so
+     * it survives until both sides drop it. A WRITABLE parent page is
+     * write-protected and marked PTE_COW in BOTH directories, so the first
+     * write on either side faults into cow_fault (which makes a private copy
+     * and re-grants write). A READ-ONLY page (ELF text, PROT_READ, or an
+     * already-COW page from an earlier fork) is shared with its exact flags,
+     * no copy; a write to genuine read-only text still segfaults because it
+     * has no PTE_COW.
+     */
+    if (pte & PTE_W) {
+        if (map_user_frame(child_dir, va, parent_phys, PTE_P | PTE_U | PTE_COW) != 0) {
+            return -1;
+        }
+        *e = (pte & ~(pte_t)PTE_W) | PTE_COW;
+        paging_flush_tlb(va); /* the parent is the current dir */
+    } else if (map_user_frame(child_dir, va, parent_phys, pte & PTE_FLAGS) != 0) {
+        return -1;
+    }
+    frame_ref(parent_phys);
+    return 0;
+}
+
+/**
  * Duplicate the parent's user address space `from`, the one in use, into
  * the child's directory, copy-on-write.
  *
- * Walks the parent's own tables and, for each present user page, maps the
- * SAME physical frame into the child (bumping the frame refcount) rather
- * than copying it; writable pages are write-protected and PTE_COW-marked in
- * both directories so the first write faults into cow_fault for a private
- * copy. A page of a shared region is the same frame in the child, with the
- * same rights: a store on either side is seen by both. Returns 0 on
- * success, -1 on failure.
+ * Walks the parent's regions, and in each the leaf tables the parent has
+ * there, skipping a table's span where it has none; every user page lies in
+ * a region, and a walk of the whole of user space would take 64 million
+ * steps on x86-64. For each present user page it maps the SAME physical
+ * frame into the child (bumping the frame refcount) rather than copying it;
+ * writable pages are write-protected and PTE_COW-marked in both directories
+ * so the first write faults into cow_fault for a private copy. A page of a
+ * shared region is the same frame in the child, with the same rights: a
+ * store on either side is seen by both. Returns 0 on success, -1 on
+ * failure.
  */
 int paging_fork_copy(struct mm *from, page_dir_t *child_dir)
 {
     page_dir_t *parent_dir = from->dir;
-    uintptr_t va = USER_ADDR_MIN;
+    uint32_t r;
 
-    while (va < USER_ADDR_MAX) {
-        uintptr_t base = va & ~(MMU_TABLE_SPAN - 1);
-        pte_t *table = mmu_user_table(parent_dir, va, 0);
-        uintptr_t i;
+    for (r = 0; r < from->vm.count; r++) {
+        const vma_t *region = &from->vm.vmas[r];
+        uintptr_t va = region->start;
 
-        if (!table) {
-            va = base + MMU_TABLE_SPAN;
-            if (va == 0) {
-                break; /* the walk passed the top of the address space */
+        while (va < region->end) {
+            uintptr_t next = (va & ~(MMU_TABLE_SPAN - 1)) + MMU_TABLE_SPAN;
+            pte_t *table = mmu_user_table(parent_dir, va, 0);
+
+            if (next > region->end || next < va) {
+                next = region->end;
             }
-            continue;
-        }
-        for (i = MMU_INDEX(va); i < MMU_TABLE_ENTRIES && va < USER_ADDR_MAX; i++, va += PAGE_SIZE) {
-            pte_t pte = table[i];
-            uintptr_t parent_phys = PTE_ADDR(pte);
-            vma_t *r;
-
-            if (!(pte & PTE_P) || !(pte & (PTE_U | PTE_NONE)) || parent_phys == 0) {
-                continue; /* present, and user or PROT_NONE, and a real frame */
-            }
-            r = vm_find(&from->vm, va);
-            if (r && r->type == VM_SHARED) {
-                if (map_user_frame(child_dir, va, parent_phys, pte & PTE_FLAGS) != 0) {
+            for (; table && va < next; va += PAGE_SIZE) {
+                if (fork_copy_page(child_dir, &table[MMU_INDEX(va)], va, region->type) != 0) {
                     return -1;
                 }
-                frame_ref(parent_phys);
-                continue;
             }
-
-            /*
-             * Copy-on-write: share the frame instead of copying it. The
-             * child maps the same physical frame, and the frame's reference
-             * count is bumped so it survives until both sides drop it. A
-             * WRITABLE parent page is write-protected and marked PTE_COW in
-             * BOTH directories, so the first write on either side faults
-             * into cow_fault (which makes a private copy and re-grants
-             * write). A READ-ONLY page (ELF text, PROT_READ, or an
-             * already-COW page from an earlier fork) is shared with its
-             * exact flags, no copy; a write to genuine read-only text still
-             * segfaults because it has no PTE_COW.
-             */
-            if (pte & PTE_W) {
-                if (map_user_frame(child_dir, va, parent_phys, PTE_P | PTE_U | PTE_COW) != 0) {
-                    return -1;
-                }
-                table[i] = (pte & ~(pte_t)PTE_W) | PTE_COW;
-                paging_flush_tlb(va); /* the parent is the current dir */
-            } else if (map_user_frame(child_dir, va, parent_phys, pte & PTE_FLAGS) != 0) {
-                return -1;
-            }
-            frame_ref(parent_phys);
+            va = next;
         }
     }
     return 0;
