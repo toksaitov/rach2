@@ -3,10 +3,9 @@
  *
  * A device that runs the transfer in its caller, `BLOCK_CALLER_SYNC`, is
  * called and done and takes no request. A sleeping device is handed a request
- * allocated for the transfer, with a buffer of its own from the
- * identity-mapped window, one page for a transfer of a page or less and heap
- * pages for a larger one, since the device is given a physical address: a
- * write is
+ * allocated for the transfer, with a buffer of its own, a page of the DMA
+ * pool for a transfer of a page or less and heap pages for a larger one,
+ * since the device is given a physical address: a write is
  * copied into the page before submit and a read is copied out after, so a
  * completion that arrives after the caller gave up lands in a page nothing
  * else owns. A request is held by its caller and by its device, and is freed

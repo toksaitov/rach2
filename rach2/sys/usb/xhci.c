@@ -220,7 +220,8 @@ struct xhci_slot {
  * does reaches the other.
  *
  * The command ring, event ring, segment table and input context are embedded
- * in this static record and identity-mapped. The context base array,
+ * in this static record, in the image below 4 GiB, and the controller is
+ * given `virt_to_phys` of each. The context base array,
  * scratchpads, device contexts and endpoint rings are allocated from the heap;
  * their physical addresses are recorded separately from their virtual ones.
  */
@@ -1158,11 +1159,11 @@ static uint32_t *trb_at(uint32_t *ring, uint32_t index)
 }
 
 /** A TRB's address as the controller takes it: the command and event rings
- * are in the identity-mapped window, so the virtual address is the physical
- * one. */
+ * are in the controller's record, in the kernel image's .bss, below 4 GiB,
+ * so the address is the physical one's low half and the high half is 0. */
 static uint32_t trb_addr(uint32_t *trb)
 {
-    return (uint32_t)(uintptr_t)trb;
+    return (uint32_t)virt_to_phys(trb);
 }
 
 /**
@@ -1279,7 +1280,7 @@ int xhci_command_issue(struct xhci_ctrl *hc, uint32_t type, uint64_t parameter, 
     }
 
     trb = trb_at(hc->cmd_ring, hc->cmd_enqueue);
-    hc->command_trb = (uint32_t)(uintptr_t)trb;
+    hc->command_trb = trb_addr(trb);
     trb[0] = (uint32_t)(parameter & 0xFFFFFFFFu);
     trb[1] = (uint32_t)(parameter >> 32);
     trb[2] = 0;
@@ -1291,7 +1292,7 @@ int xhci_command_issue(struct xhci_ctrl *hc, uint32_t type, uint64_t parameter, 
     if (hc->cmd_enqueue == XHCI_RING_TRBS - 1) {
         uint32_t *link = trb_at(hc->cmd_ring, hc->cmd_enqueue);
 
-        link[0] = (uint32_t)(uintptr_t)hc->cmd_ring;
+        link[0] = trb_addr(hc->cmd_ring);
         link[1] = 0;
         link[2] = 0;
         link[3] = (TRB_TYPE_LINK << TRB_TYPE_SHIFT) | TRB_TOGGLE | hc->cmd_cycle;
@@ -1332,7 +1333,7 @@ void xhci_state_record(struct xhci_ctrl *hc)
          hc->command_aborting, (int)hc->command_type, (int)hc->event_index, (int)hc->event_cycle);
     klog(
         KLOG_WARN, "usb", "state: event ring at %x, the block there %x %x %x %x, the one before %x",
-        (unsigned)(uintptr_t)hc->event_ring, trb_at(hc->event_ring, hc->event_index)[0],
+        (unsigned)trb_addr(hc->event_ring), trb_at(hc->event_ring, hc->event_index)[0],
         trb_at(hc->event_ring, hc->event_index)[1], trb_at(hc->event_ring, hc->event_index)[2],
         trb_at(hc->event_ring, hc->event_index)[3],
         trb_at(hc->event_ring, hc->event_index == 0 ? XHCI_RING_TRBS - 1 : hc->event_index - 1)[3]);
@@ -1866,17 +1867,17 @@ int xhci_start(struct xhci_ctrl *hc)
     op_w32(hc, XHCI_DCBAAP, (uint32_t)hc->dcbaa_phys);
     op_w32(hc, XHCI_DCBAAP + 4, 0);
 
-    op_w32(hc, XHCI_CRCR, (uint32_t)(uintptr_t)hc->cmd_ring | CRCR_RCS);
+    op_w32(hc, XHCI_CRCR, trb_addr(hc->cmd_ring) | CRCR_RCS);
     op_w32(hc, XHCI_CRCR + 4, 0);
 
-    hc->erst[0] = (uint32_t)(uintptr_t)hc->event_ring;
+    hc->erst[0] = trb_addr(hc->event_ring);
     hc->erst[1] = 0;
     hc->erst[2] = XHCI_RING_TRBS;
     hc->erst[3] = 0;
     w32(hc, hc->caps.rtsoff + XHCI_IR0 + IR_ERSTSZ, 1);
-    w32(hc, hc->caps.rtsoff + XHCI_IR0 + IR_ERDP, (uint32_t)(uintptr_t)hc->event_ring);
+    w32(hc, hc->caps.rtsoff + XHCI_IR0 + IR_ERDP, trb_addr(hc->event_ring));
     w32(hc, hc->caps.rtsoff + XHCI_IR0 + IR_ERDP + 4, 0);
-    w32(hc, hc->caps.rtsoff + XHCI_IR0 + IR_ERSTBA, (uint32_t)(uintptr_t)hc->erst);
+    w32(hc, hc->caps.rtsoff + XHCI_IR0 + IR_ERSTBA, (uint32_t)virt_to_phys(hc->erst));
     w32(hc, hc->caps.rtsoff + XHCI_IR0 + IR_ERSTBA + 4, 0);
 
     xhci_barrier(); /* every table is written before the controller runs */
@@ -2105,7 +2106,7 @@ int xhci_device_hub(struct xhci_ctrl *hc, int device, int ports, int multi_tt, i
     slot = context_entry(hc, hc->input_ctx, 1);
     slot_words(s, slot, 1u);
     xhci_barrier();
-    return xhci_command_issue(hc, TRB_TYPE_EVALUATE_CTX, (uint64_t)(uintptr_t)hc->input_ctx,
+    return xhci_command_issue(hc, TRB_TYPE_EVALUATE_CTX, (uint64_t)virt_to_phys(hc->input_ctx),
                               (uint32_t)device);
 }
 
@@ -2222,7 +2223,7 @@ int xhci_device_address(struct xhci_ctrl *hc, int device)
 
     hc->dcbaa[device] = (uint64_t)s->ctx_phys;
     xhci_barrier();
-    return xhci_command_issue(hc, TRB_TYPE_ADDRESS_DEVICE, (uint64_t)(uintptr_t)hc->input_ctx,
+    return xhci_command_issue(hc, TRB_TYPE_ADDRESS_DEVICE, (uint64_t)virt_to_phys(hc->input_ctx),
                               (uint32_t)device);
 }
 
@@ -2244,7 +2245,7 @@ int xhci_device_packet_size(struct xhci_ctrl *hc, int device, int max_packet)
     ep0 = context_entry(hc, hc->input_ctx, 2);
     ep0[1] = (4u << 3) | (3u << 1) | ((uint32_t)max_packet << 16);
     xhci_barrier();
-    return xhci_command_issue(hc, TRB_TYPE_EVALUATE_CTX, (uint64_t)(uintptr_t)hc->input_ctx,
+    return xhci_command_issue(hc, TRB_TYPE_EVALUATE_CTX, (uint64_t)virt_to_phys(hc->input_ctx),
                               (uint32_t)device);
 }
 
@@ -2375,7 +2376,7 @@ int xhci_endpoint_open(struct xhci_ctrl *hc, int device, const struct usb_endpoi
         }
     }
     xhci_barrier();
-    return xhci_command_issue(hc, TRB_TYPE_CONFIG_EP, (uint64_t)(uintptr_t)hc->input_ctx,
+    return xhci_command_issue(hc, TRB_TYPE_CONFIG_EP, (uint64_t)virt_to_phys(hc->input_ctx),
                               (uint32_t)device);
 }
 
@@ -2504,8 +2505,8 @@ static int td_holds(struct xhci_slot *s, uint32_t dci, uint32_t at)
 
 /**
  * The physical address of `va`, for a controller that reads memory by its
- * physical address: the identity window's addresses as they are, a heap
- * page's through the kernel directory; 0 for one that has no frame.
+ * physical address: i686's identity window's addresses as they are, any
+ * other through the kernel directory; 0 for one that has no frame.
  */
 static uintptr_t td_phys(uintptr_t va)
 {

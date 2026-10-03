@@ -139,10 +139,11 @@ static uint32_t r8168_msi_stuck; /* entries in a row: status left set, no work *
 static uint32_t r8168_tick_work; /* frames the tick handled with messages on */
 
 /*
- * The rings and their buffers, in .bss, which this kernel places below the
- * 32 MiB identity-mapped limit: the virtual address is the physical one, so
- * what goes into the descriptor is the address of the array. The rings are
- * 256-byte aligned as the reference requires.
+ * The rings and their buffers, in .bss, which this kernel's image places
+ * below the 32 MiB window's top and so below 4 GiB: what goes into the
+ * descriptor is the physical address of the array, `virt_to_phys` of it,
+ * with the high half 0. The rings are 256-byte aligned as the reference
+ * requires.
  *
  * The rings are volatile and the buffers are not, the same distinction
  * e1000.c draws: the chip writes ownership back into a descriptor while this
@@ -752,9 +753,9 @@ static int r8168_hw_start(void)
     /* Ring addresses, high half first, as the reference requires for the
      * transmit pair and does for both. */
     io->w32(R8168_TXDESC_HI, 0);
-    io->w32(R8168_TXDESC_LO, (uint32_t)(uintptr_t)r8168_tx_ring);
+    io->w32(R8168_TXDESC_LO, (uint32_t)virt_to_phys(r8168_tx_ring));
     io->w32(R8168_RXDESC_HI, 0);
-    io->w32(R8168_RXDESC_LO, (uint32_t)(uintptr_t)r8168_rx_ring);
+    io->w32(R8168_RXDESC_LO, (uint32_t)virt_to_phys(r8168_rx_ring));
 
     r8168_lock_config();
     r8168_pci_commit();
@@ -780,7 +781,7 @@ static void r8168_rx_fill(void)
     for (i = 0; i < R8168_RING_SIZE; i++) {
         uint32_t eor = (i == R8168_RING_SIZE - 1) ? R8168_DESC_EOR : 0;
 
-        r8168_rx_ring[i].addr_lo = (uint32_t)(uintptr_t)r8168_rx_buf[i];
+        r8168_rx_ring[i].addr_lo = (uint32_t)virt_to_phys(r8168_rx_buf[i]);
         r8168_rx_ring[i].addr_hi = 0;
         r8168_rx_ring[i].opts2 = 0;
         /* The address and options must be visible before ownership moves. */
@@ -1166,7 +1167,7 @@ static int rtl8168_tx(void *dev, const uint8_t *data, uint16_t len)
     }
 
     eor = (idx == R8168_RING_SIZE - 1) ? R8168_DESC_EOR : 0;
-    r8168_tx_ring[idx].addr_lo = (uint32_t)(uintptr_t)r8168_tx_buf[idx];
+    r8168_tx_ring[idx].addr_lo = (uint32_t)virt_to_phys(r8168_tx_buf[idx]);
     r8168_tx_ring[idx].addr_hi = 0;
     r8168_tx_ring[idx].opts2 = 0;
     /* Every field must be visible before ownership moves to the chip. */
@@ -1505,8 +1506,8 @@ static int r8168_counters_command(uint32_t command)
     }
     io->w32(R8168_COUNTERADDRHIGH, 0);
     (void)io->r32(R8168_COUNTERADDRHIGH);
-    io->w32(R8168_COUNTERADDRLOW, (uint32_t)(uintptr_t)&r8168_counters);
-    io->w32(R8168_COUNTERADDRLOW, (uint32_t)(uintptr_t)&r8168_counters | command);
+    io->w32(R8168_COUNTERADDRLOW, (uint32_t)virt_to_phys(&r8168_counters));
+    io->w32(R8168_COUNTERADDRLOW, (uint32_t)virt_to_phys(&r8168_counters) | command);
     for (i = 0; i < R8168_COUNTERS_WAIT_STEPS; i++) {
         if (!(io->r32(R8168_COUNTERADDRLOW) & command)) {
             /* The block is read only after the chip says it wrote it. */

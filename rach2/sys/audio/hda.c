@@ -81,7 +81,9 @@ static hda_report_t hda_report;
 static uint16_t output_stream_index = 0; /* Set during init based on GCAP */
 static uint32_t stream_tag = 1;
 
-/* CORB/RIRB buffers (must be 128-byte aligned, volatile for DMA) */
+/* CORB/RIRB buffers (must be 128-byte aligned, volatile for DMA). These and
+ * the other DMA buffers here are in the image's .bss, below 4 GiB, and the
+ * controller is given `virt_to_phys` of each with the upper half 0. */
 static volatile uint32_t corb_buffer[HDA_CORB_SIZE] __attribute__((aligned(128)));
 static volatile uint64_t rirb_buffer[HDA_RIRB_SIZE] __attribute__((aligned(128)));
 static volatile uint16_t corb_wp = 0;
@@ -248,7 +250,7 @@ static void hda_setup_dma_posbuf(void)
         dma_posbuf[i] = 0;
     }
 
-    addr = (uint32_t)(uintptr_t)dma_posbuf;
+    addr = (uint32_t)virt_to_phys(dma_posbuf);
     addr &= ~0x7Fu; /* 128-byte aligned base */
 
     /* Bit0 enables the position buffer (if implemented by the controller). */
@@ -883,7 +885,7 @@ static void hda_setup_corb(void)
     hda_write8(HDA_CORBCTL, 0);
     hda_delay(100);
 
-    addr = (uint32_t)(uintptr_t)corb_buffer;
+    addr = (uint32_t)virt_to_phys(corb_buffer);
     hda_write32(HDA_CORBLBASE, addr);
     hda_write32(HDA_CORBUBASE, 0);
 
@@ -924,7 +926,7 @@ static void hda_setup_rirb(void)
     hda_write8(HDA_RIRBCTL, 0);
     hda_delay(100);
 
-    addr = (uint32_t)(uintptr_t)rirb_buffer;
+    addr = (uint32_t)virt_to_phys(rirb_buffer);
     hda_write32(HDA_RIRBLBASE, addr);
     hda_write32(HDA_RIRBUBASE, 0);
 
@@ -2454,7 +2456,7 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
         return -1;
     }
 
-    buf_addr = (uint32_t)(uintptr_t)audio_buffer;
+    buf_addr = (uint32_t)virt_to_phys(audio_buffer);
     for (i = 0; i < HDA_NUM_BUFFERS; i++) {
         bdl[i].addr_low = buf_addr + (i * HDA_BUFFER_SIZE);
         bdl[i].addr_high = 0;
@@ -2474,7 +2476,7 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
     /* Push initial samples to RAM for DMA (matters on some laptops). */
     hda_dma_sync_range(audio_buffer, HDA_BUFFER_SIZE * HDA_NUM_BUFFERS);
 
-    hda_sd_write32(stream, HDA_SD_BDPL, (uint32_t)(uintptr_t)bdl);
+    hda_sd_write32(stream, HDA_SD_BDPL, (uint32_t)virt_to_phys(bdl));
     hda_sd_write32(stream, HDA_SD_BDPU, 0);
     hda_sd_write32(stream, HDA_SD_CBL, HDA_BUFFER_SIZE * HDA_NUM_BUFFERS);
     hda_sd_write16(stream, HDA_SD_LVI, HDA_NUM_BUFFERS - 1);

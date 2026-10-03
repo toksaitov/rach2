@@ -159,13 +159,13 @@ struct usb_device_state {
 };
 
 /*
- * One record per device, each its own frame from the identity-mapped window.
- * The record has the buffers the controller writes into, and a controller is
- * given an address to write to rather than a pointer this kernel reaches it
- * by, so the record must be memory whose two addresses are the same. A record
- * is taken when a device appears and given back when its entry closes, so
- * only the devices present take memory; USB_MAX_DEVICES bounds how many
- * there are.
+ * One record per device, each its own frame of the DMA pool
+ * (`alloc_kernel_frame`). The record has the buffers the controller writes
+ * into, and a controller is given the physical address to write to, so the
+ * record is one frame, its bytes contiguous and below 4 GiB. A record is
+ * taken when a device appears and given back when its entry closes, so only
+ * the devices present take memory; USB_MAX_DEVICES bounds how many there
+ * are.
  */
 static struct usb_device_state *devices[USB_MAX_DEVICES];
 
@@ -183,9 +183,9 @@ static struct usb_device_state *dev_at(int i)
 /**
  * Take a frame for entry `i`'s record, or say there is none.
  *
- * The frame is from the identity-mapped window, since the controller writes
- * a device's descriptors and its reports straight into this record and is
- * given the address to write to.
+ * The frame is of the DMA pool, since the controller writes a device's
+ * descriptors and its reports straight into this record and is given the
+ * physical address to write to.
  */
 static struct usb_device_state *dev_take(int i)
 {

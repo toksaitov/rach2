@@ -208,8 +208,8 @@ struct ata_channel {
     int error_seen; /* a caller without the channel found ERR or DF, which are the owner's */
     uint16_t bm;    /* the bus master's registers, or 0 for none */
     /* The descriptor, aligned to its size, and the bounce buffer, aligned
-       to its own so it lies in one 64 KiB region; both in .bss below the
-       identity map's limit, so their addresses are their physical ones. */
+       to its own so it lies in one 64 KiB region; both in the image's .bss,
+       below 4 GiB, and the controller is given `virt_to_phys` of each. */
     struct ata_prd prd __attribute__((aligned(8)));
     uint8_t bounce[ATA_BOUNCE_BYTES] __attribute__((aligned(ATA_BOUNCE_BYTES)));
 };
@@ -604,7 +604,7 @@ static int ata_dma_transfer(struct ata_drive *d, uint64_t lba, uint32_t count, c
     if (write) {
         k_memcpy(ch->bounce, src, bytes);
     }
-    ch->prd.phys = (uint32_t)(uintptr_t)ch->bounce;
+    ch->prd.phys = (uint32_t)virt_to_phys(ch->bounce);
     ch->prd.bytes = (uint16_t)bytes;
     ch->prd.flags = ATA_PRD_EOT;
     if (ata_wait_not_busy(ch) != 0) {
@@ -612,7 +612,7 @@ static int ata_dma_transfer(struct ata_drive *d, uint64_t lba, uint32_t count, c
     }
     ata_io->out8(ch->bm + ATA_BM_CMD, 0);
     ata_io->out8(ch->bm + ATA_BM_STATUS, ATA_BM_ERROR | ATA_BM_INTR);
-    ata_io->out32(ch->bm + ATA_BM_PRD, (uint32_t)(uintptr_t)&ch->prd);
+    ata_io->out32(ch->bm + ATA_BM_PRD, (uint32_t)virt_to_phys(&ch->prd));
     ata_io->out8(ch->bm + ATA_BM_CMD, write ? 0 : ATA_BM_READ);
     /* From the command to the engine's start with interrupts off: a drive
        that has the command and not the engine shows DRQ and waits, and a

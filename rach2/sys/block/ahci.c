@@ -138,9 +138,9 @@
 #define AHCI_READY_STEPS   50000u
 
 /* The DMA regions the HBA reads and writes, one set per disk. They are
-   static so they land in .bss below HARD_MEMORY_LIMIT, where the identity map
-   makes the virtual address equal the physical DMA address and the bytes are
-   contiguous and below 4 GiB. The alignments are AHCI-mandated. */
+   static so they land in the kernel image's .bss, below HARD_MEMORY_LIMIT,
+   where their bytes are physically contiguous and below 4 GiB; the HBA is
+   given `virt_to_phys` of each. The alignments are AHCI-mandated. */
 #define AHCI_CMDLIST_SIZE  1024 /* 32 command headers of 32 bytes */
 #define AHCI_RECV_FIS_SIZE 256
 /* The command table: the 128-byte FIS area and then the PRDT, one 16-byte
@@ -462,9 +462,9 @@ static int ahci_port_comreset(int port)
      * not in the start path afterwards; without this the task file
      * never updates and every port looks like a device that will not answer.
      * The command engine stays off: nothing is being issued here. */
-    ahci_write32(ahci_port_off(port, AHCI_PxCLB), (uint32_t)(uintptr_t)ahci_reset_cmdlist);
+    ahci_write32(ahci_port_off(port, AHCI_PxCLB), (uint32_t)virt_to_phys(ahci_reset_cmdlist));
     ahci_write32(ahci_port_off(port, AHCI_PxCLBU), 0);
-    ahci_write32(ahci_port_off(port, AHCI_PxFB), (uint32_t)(uintptr_t)ahci_reset_fis);
+    ahci_write32(ahci_port_off(port, AHCI_PxFB), (uint32_t)virt_to_phys(ahci_reset_fis));
     ahci_write32(ahci_port_off(port, AHCI_PxFBU), 0);
     pci_enable_bus_master(&ahci_pci);
 
@@ -772,9 +772,9 @@ static int ahci_port_start(struct ahci_disk *d)
     }
 
     /* Program the command list and received-FIS bases (32-bit; upper = 0). */
-    ahci_write32(ahci_port_off(port, AHCI_PxCLB), (uint32_t)(uintptr_t)d->cmdlist);
+    ahci_write32(ahci_port_off(port, AHCI_PxCLB), (uint32_t)virt_to_phys(d->cmdlist));
     ahci_write32(ahci_port_off(port, AHCI_PxCLBU), 0);
-    ahci_write32(ahci_port_off(port, AHCI_PxFB), (uint32_t)(uintptr_t)d->recv_fis);
+    ahci_write32(ahci_port_off(port, AHCI_PxFB), (uint32_t)virt_to_phys(d->recv_fis));
     ahci_write32(ahci_port_off(port, AHCI_PxFBU), 0);
 
     /* Clear latched errors and interrupt status (write 1 to clear). */
@@ -831,8 +831,8 @@ static int ahci_io_error(struct ahci_disk *d)
  * Build the command in `d`'s slot: the command-list header, a Register H2D
  * FIS, and the PRDT over the disk's DMA regions, synced for the HBA.
  *
- * A `buf` below HARD_MEMORY_LIMIT is identity-mapped and physically
- * contiguous, and goes in one PRDT entry; one above it is a heap buffer,
+ * A `buf` below HARD_MEMORY_LIMIT, which only i686's identity window has, is
+ * physically contiguous and goes in one PRDT entry; any other is a buffer
  * whose pages may lie anywhere, and gets an entry per page with the page's
  * physical address, up to the AHCI_PRDT_MAX entries of the table.
  *
@@ -876,7 +876,7 @@ static int ahci_build_command(struct ahci_disk *d, uint8_t command, uint64_t lba
     fis->aux = 0;
 
     if (bytes > 0 && (uintptr_t)buf < HARD_MEMORY_LIMIT) {
-        prdt->dba = (uint32_t)(uintptr_t)buf;
+        prdt->dba = (uint32_t)virt_to_phys(buf);
         prdt->dbau = 0;
         prdt->reserved = 0;
         prdt->dbc = (bytes - 1) & AHCI_DBC_MASK;
@@ -908,7 +908,7 @@ static int ahci_build_command(struct ahci_disk *d, uint8_t command, uint64_t lba
 
     hdr->dw0 = AHCI_CFL_DWORDS | (write ? AHCI_CMD_W : 0u) | prdtl;
     hdr->prdbc = 0;
-    hdr->ctba = (uint32_t)(uintptr_t)d->cmdtable;
+    hdr->ctba = (uint32_t)virt_to_phys(d->cmdtable);
     hdr->ctbau = 0;
 
     ahci_dma_sync(d->cmdtable, AHCI_CMDTABLE_SIZE);
@@ -1075,9 +1075,9 @@ static int ahci_polled_failed(struct ahci_disk *d, uint8_t command, const char *
 /*
  * The interrupt-driven path.
  *
- * A request's buffer is one PRDT entry when it is a page of the
- * identity-mapped window and an entry per page when it is heap pages, as
- * the polled path describes them. One command
+ * A request's buffer is described as the polled path describes any
+ * buffer: one PRDT entry for a page of i686's identity window, an entry per
+ * page otherwise. One command
  * is active per port; the rest wait in the port's queue. The port's
  * interrupt completes the active request and starts the next, so the
  * processor runs someone else during a transfer and two disks progress
@@ -1529,9 +1529,9 @@ void ahci_dump(void)
                                                AHCI_INTEL_PCS));
     for (port = 0; port < ahci_ndisks; ++port) {
         console_printf("ahci: port %d dma cmdlist=%X fis=%X table=%X\n", ahci_disks[port].port,
-                       (uint32_t)(uintptr_t)ahci_disks[port].cmdlist,
-                       (uint32_t)(uintptr_t)ahci_disks[port].recv_fis,
-                       (uint32_t)(uintptr_t)ahci_disks[port].cmdtable);
+                       (uint32_t)virt_to_phys(ahci_disks[port].cmdlist),
+                       (uint32_t)virt_to_phys(ahci_disks[port].recv_fis),
+                       (uint32_t)virt_to_phys(ahci_disks[port].cmdtable));
     }
 
     for (port = 0; port < 32; ++port) {

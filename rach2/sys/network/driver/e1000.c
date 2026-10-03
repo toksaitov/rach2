@@ -64,9 +64,10 @@ struct e1000_io {
 #define E1000_MAX 4
 
 /*
- * One card. The rings and buffers use frames allocated from the
- * identity-mapped kernel window. Their virtual addresses are also their DMA
- * addresses. The manual asks for 16-byte alignment on each ring.
+ * One card. The rings and buffers use frames of the DMA pool
+ * (`alloc_kernel_frame`), below 4 GiB, so the card is given their physical
+ * addresses, `virt_to_phys` of the kernel's, with the high halves 0. The
+ * manual asks for 16-byte alignment on each ring.
  *
  * The rings are volatile and the buffers are not, which is the distinction
  * between memory the card writes while this driver is reading it and memory
@@ -105,11 +106,9 @@ struct e1000 {
     uint32_t tx_packets;
     uint32_t tx_stalls;
 
-    /* The rings and their buffers, taken from the identity-mapped window when
-     * the card comes up rather than compiled in: a machine with one card
-     * takes one card's worth, and one with four takes four. The window is
-     * where the two addresses of a page are the same, which is what a card
-     * given an address for DMA needs. */
+    /* The rings and their buffers, taken from the DMA pool when the card
+     * comes up rather than compiled in: a machine with one card takes one
+     * card's worth, and one with four takes four. */
     volatile struct e1000_rx_desc *rx_ring;
     volatile struct e1000_tx_desc *tx_ring;
     uint8_t *rx_buf[E1000_RING_SIZE];
@@ -342,7 +341,7 @@ static void e1000_rx_setup(struct e1000 *e)
     uint32_t i;
 
     for (i = 0; i < E1000_RING_SIZE; i++) {
-        e->rx_ring[i].addr_lo = (uint32_t)(uintptr_t)e->rx_buf[i];
+        e->rx_ring[i].addr_lo = (uint32_t)virt_to_phys(e->rx_buf[i]);
         e->rx_ring[i].addr_hi = 0;
         e->rx_ring[i].len_csum = 0;
         e->rx_ring[i].sta_err = 0;
@@ -350,7 +349,7 @@ static void e1000_rx_setup(struct e1000 *e)
     e->rx_cur = 0;
     e->rx_discarding = 0;
 
-    io->w32(e, E1000_RDBAL, (uint32_t)(uintptr_t)e->rx_ring);
+    io->w32(e, E1000_RDBAL, (uint32_t)virt_to_phys(e->rx_ring));
     io->w32(e, E1000_RDBAH, 0);
     io->w32(e, E1000_RDLEN, E1000_RING_BYTES);
     io->w32(e, E1000_RDH, 0);
@@ -377,7 +376,7 @@ static void e1000_tx_setup(struct e1000 *e)
     e->tx_head = 0;
     e->tx_tail = 0;
 
-    io->w32(e, E1000_TDBAL, (uint32_t)(uintptr_t)e->tx_ring);
+    io->w32(e, E1000_TDBAL, (uint32_t)virt_to_phys(e->tx_ring));
     io->w32(e, E1000_TDBAH, 0);
     io->w32(e, E1000_TDLEN, E1000_RING_BYTES);
     io->w32(e, E1000_TDH, 0);
@@ -394,7 +393,7 @@ static void e1000_tx_setup(struct e1000 *e)
  * buffers; each transmit page stores two 1536-byte buffers. Allocated pages
  * are retained across initialization attempts.
  *
- * @return 0, or -1 when the window has no more frames.
+ * @return 0, or -1 when the pool has no more frames.
  */
 static int e1000_pages(struct e1000 *e)
 {
@@ -698,7 +697,7 @@ static int e1000_tx_frame(struct e1000 *e, const uint8_t *data, uint16_t len)
         total = 60;
     }
 
-    e->tx_ring[idx].addr_lo = (uint32_t)(uintptr_t)e->tx_buf[idx];
+    e->tx_ring[idx].addr_lo = (uint32_t)virt_to_phys(e->tx_buf[idx]);
     e->tx_ring[idx].addr_hi = 0;
     e->tx_ring[idx].upper = 0; /* clear DD; the card sets it when done */
     e->tx_ring[idx].lower =

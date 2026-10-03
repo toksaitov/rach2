@@ -3,6 +3,7 @@
  * double-buffered for continuous output.
  */
 
+#include "../arch/arch.h"
 #include "../arch/x86/portio.h"
 #include "../klog.h"
 #include "sb16.h"
@@ -34,7 +35,9 @@ static audio_callback_t user_callback = NULL;
 /*
  * DMA double-buffer: one contiguous region split into two halves. ISA DMA
  * requires the buffer to lie below 16MB and not cross the page its channel
- * counts in: 64KB for the 8-bit channel, 128KB for the 16-bit one.
+ * counts in: 64KB for the 8-bit channel, 128KB for the 16-bit one. The
+ * kernel image, whose .bss this is, is loaded from 1 MiB, and the controller
+ * is given the physical address, `virt_to_phys` of it.
  */
 static uint8_t dma_buffer[SB16_BUFFER_SIZE * 2] __attribute__((aligned(16)));
 static int current_buffer = 0; /* half the DMA is currently playing */
@@ -293,7 +296,7 @@ static void mixer_write(uint8_t reg, uint8_t value)
  */
 static bool sb16_start_auto_init(void)
 {
-    uint32_t addr = (uint32_t)(uintptr_t)dma_buffer;
+    uint32_t addr = (uint32_t)virt_to_phys(dma_buffer);
     uint16_t block_size;
     uint8_t mode;
     int dma_channel;

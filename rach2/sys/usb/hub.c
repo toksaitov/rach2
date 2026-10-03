@@ -231,10 +231,10 @@ struct hub {
 };
 
 /*
- * One record per hub, each its own frame from the identity-mapped window.
- * The record has the buffers the controller writes a hub's descriptor and
- * its port-change bitmap into, and a controller is given an address to write
- * to rather than a pointer this kernel reaches it by.
+ * One record per hub, each its own frame of the DMA pool
+ * (`alloc_kernel_frame`). The record has the buffers the controller writes a
+ * hub's descriptor and its port-change bitmap into, and a controller is
+ * given the physical address to write to.
  */
 static struct hub *hubs[HUB_MAX];
 
