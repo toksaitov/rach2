@@ -188,8 +188,15 @@ typedef unsigned int core_uid_t;
 #define ISR_DEVICE_FIRST 32
 #define ISR_DEVICE_LAST  63
 
-/* The most processors the kernel runs on; the per-processor tables are
- * arrays of this many (arch/x86_64/percpu.h). */
-#define NR_CPUS 64
+/* The running processor's index in the per-processor table
+ * (proc/percpu.h): the `id` of the processor's own record, which GS's base
+ * points at in the kernel, at offset 24 (percpu.h). */
+static __inline__ unsigned int arch_cpu_id(void)
+{
+    unsigned int id;
+
+    __asm__ __volatile__("movl %%gs:24, %0" : "=r"(id));
+    return id;
+}
 
 #endif /* _X86_64_CPU_H_ */

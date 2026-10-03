@@ -3,12 +3,14 @@
 
 #include "../arch.h"
 
+#include "../../proc/percpu.h"
+
 /*
  * The x86-64's per-processor state: each processor's record, with its GDT
  * and TSS in it, reached through the GS base.
  *
  * In the kernel, GS's base is the running processor's `struct cpu`, whose
- * first word points at itself, so `this_cpu` is one load from %gs:0. In
+ * first word points at itself, so `cpu_self` is one load from %gs:0. In
  * user mode the base is the program's own, the one arch_prctl's ARCH_SET_GS
  * gives it. The processor keeps the other of the two in the MSR
  * IA32_KERNEL_GS_BASE, and `swapgs` exchanges them: every entry from user
@@ -58,10 +60,10 @@ struct tss64 {
 #define IST_MACHINE_CHECK 3
 
 /*
- * One processor's record. The first three fields are read by the entry
- * code at fixed offsets (isr_handler.s), which percpu.c checks against the
- * compiler's at build time: `self` at 0, `kernel_rsp` at 8, `user_rsp` at
- * 16.
+ * One processor's record. The first four fields are read at fixed offsets,
+ * which percpu.c checks against the compiler's at build time: `self` at 0,
+ * `kernel_rsp` at 8 and `user_rsp` at 16 by the entry code (isr_handler.s),
+ * and `id` at 24 by `arch_cpu_id` (cpu.h).
  */
 struct cpu {
     struct cpu *self;    /* this record, which %gs:0 reads */
@@ -75,7 +77,7 @@ struct cpu {
 extern struct cpu cpus[NR_CPUS];
 
 /** The running processor's record. */
-static __inline__ struct cpu *this_cpu(void)
+static __inline__ struct cpu *cpu_self(void)
 {
     struct cpu *c;
 

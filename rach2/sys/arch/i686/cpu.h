@@ -189,4 +189,8 @@ typedef unsigned short core_uid_t;
 #define ISR_DEVICE_FIRST 32
 #define ISR_DEVICE_LAST  63
 
+/* The running processor's index in the per-processor table
+ * (proc/percpu.h). The i686 kernel runs on one processor. */
+#define arch_cpu_id() 0u
+
 #endif /* _I686_CPU_H_ */

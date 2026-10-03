@@ -35,7 +35,7 @@ static void (*wait_action)(void);
 static uint32_t peer_count;
 static int peer_closes;
 static process_t writing_thread;
-process_t *current_proc = &writing_thread;
+struct percpu cpu_table[NR_CPUS] = {{&writing_thread}};
 
 #define CHECK(condition, detail)                                \
     do {                                                        \

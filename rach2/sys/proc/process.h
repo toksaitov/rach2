@@ -7,6 +7,7 @@
 #include "../fs/fd.h"
 #include "../mm/vm.h"
 #include "../fpu.h"
+#include "percpu.h"
 
 /* Policy: the threads one real user may have, each thread of a process
  * counting, unless `prlimit64` or `/etc/rach2/limits` says otherwise, and
@@ -360,8 +361,8 @@ extern process_t *proc_idle;
 /** The last process ID given out, 0 before the first. */
 uint32_t proc_last_pid(void);
 
-/* Currently running process. */
-extern process_t *current_proc;
+/* The running process, `current_proc`, is the running processor's
+ * (percpu.h). */
 
 /** Whether this processor is inside a user process's system call. */
 int proc_in_syscall(void);

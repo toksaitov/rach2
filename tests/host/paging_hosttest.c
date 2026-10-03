@@ -72,7 +72,7 @@ static void check(int ok, const char *row)
 
 /* ---- what paging.c reaches outside itself ---- */
 
-process_t *current_proc;
+struct percpu cpu_table[NR_CPUS];
 uintptr_t mem_reserved_ptr;
 
 static int tables_given;   /* page tables the heap gave since a row began */

@@ -46,7 +46,7 @@ extern int fclose(void *f);
 /* ---- stubs for what the driver and the cache reach outside themselves ---- */
 
 process_t proc_a;
-process_t *current_proc = &proc_a;
+struct percpu cpu_table[NR_CPUS] = {{&proc_a}};
 
 void k_panic(const char *s)
 {

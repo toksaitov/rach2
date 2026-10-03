@@ -10,7 +10,7 @@
 extern int printf(const char *format, ...);
 static int failures, master_calls, descriptor_calls;
 static process_t process;
-process_t *current_proc = &process;
+struct percpu cpu_table[NR_CPUS] = {{&process}};
 struct tty console_tty;
 
 /** Record a failed invariant. */

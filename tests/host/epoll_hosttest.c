@@ -47,7 +47,7 @@ extern int printf(const char *format, ...);
 #define OUT_AT   256u
 #define OUT_MAX  4
 
-process_t *current_proc;
+struct percpu cpu_table[NR_CPUS];
 static process_t proc, child;
 static fd_table_t table, child_table;
 static fd_entry_t entries[SLOTS], child_entries[SLOTS];

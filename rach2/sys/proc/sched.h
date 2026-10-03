@@ -55,9 +55,10 @@ void sched_forget(process_t *p);
 void idle_wait_irq_off(void); /* sti; hlt; cli */
 void idle_wait_irq_on(void);  /* sti; hlt */
 
-/** Ticks delivered while the processor was parked in an idle wait, and while
- * it was not. Counted rather than timed: interrupts are off in several paths
- * and a tick can be lost, so these are what the timer actually delivered. */
+/** Ticks delivered while a processor was parked in an idle wait, and while
+ * it was not, summed over the processors. Counted rather than timed:
+ * interrupts are off in several paths and a tick can be lost, so these are
+ * what the timer actually delivered. */
 uint32_t sched_idle_ticks(void);
 uint32_t sched_busy_ticks(void);
 

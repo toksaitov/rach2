@@ -117,4 +117,9 @@ typedef unsigned int core_uid_t;
 #define ISR_DEVICE_FIRST 32
 #define ISR_DEVICE_LAST  1019
 
+/* The running processor's index in the per-processor table
+ * (proc/percpu.h). A port that starts other processors reads it from a
+ * register each has its own value of, as x86-64 does through GS. */
+#define arch_cpu_id() 0u
+
 #endif /* _ARM64_CPU_H_ */

@@ -33,7 +33,7 @@ static int fail_after_move, syncs_after_free, fail_flush_at;
 static void (*flush_hook)(void);
 static void *original;
 static char payload[8192];
-process_t *current_proc;
+struct percpu cpu_table[NR_CPUS];
 process_t *proc_list;
 const struct vfs_type vfs_krffs_type = {0};
 

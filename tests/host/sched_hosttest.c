@@ -15,7 +15,7 @@
 extern int dprintf(int fd, const char *format, ...);
 
 process_t *proc_list;
-process_t *current_proc;
+struct percpu cpu_table[NR_CPUS];
 process_t *proc_idle;
 static process_t procs[7];
 static uint32_t irq_flags;

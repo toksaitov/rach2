@@ -44,7 +44,7 @@ extern int memcmp(const void *a, const void *b, __SIZE_TYPE__ n);
 
 static process_t proc;
 static fd_table_t files;
-process_t *current_proc = &proc;
+struct percpu cpu_table[NR_CPUS] = {{&proc}};
 uint32_t net_ip_addr = 0x0a00020fu;
 uint8_t net_mac[6] = {0x52, 0x54, 0, 0x12, 0x34, 0x56};
 static struct netdev cards[2];

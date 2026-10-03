@@ -23,7 +23,7 @@ static struct eventfd counter;
 static fd_entry_t entry;
 static struct open_file description;
 static process_t reader;
-process_t *current_proc = &reader;
+struct percpu cpu_table[NR_CPUS] = {{&reader}};
 static uint64_t user[4];
 static int failures, wakes, inner_reads;
 static uint32_t wake_kinds;

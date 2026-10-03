@@ -58,7 +58,7 @@ static void (*namespace_ready)(void);
 static void (*flush_pause)(void);
 
 process_t proc_a;
-process_t *current_proc = &proc_a;
+struct percpu cpu_table[NR_CPUS] = {{&proc_a}};
 
 void k_panic(const char *s)
 {

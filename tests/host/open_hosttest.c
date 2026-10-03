@@ -164,7 +164,7 @@ void park(void);
 
 static process_t proc, other, third;
 static fd_table_t files;
-process_t *current_proc = &proc;
+struct percpu cpu_table[NR_CPUS] = {{&proc}};
 process_t *proc_list;
 volatile uint32_t fb_owner_pid;
 krffs_file_system_t *krffs_fs;

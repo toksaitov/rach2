@@ -220,23 +220,35 @@ void sched_service_point(void)
     kirq_restore(flags);
 }
 
-/* The idle marker and the two tick counters. `volatile` because the timer
- * handler reads the marker from an interrupt that arrives in the middle of the
- * halt it describes. The counters are 32-bit, which is one aligned store on
- * this machine, so a reader never sees half of one; at 100 Hz they wrap after
- * about 497 days, the bound `kernel_ticks` already has. */
-static volatile int _in_idle_wait = 0;
-static volatile uint32_t _idle_ticks = 0;
-static volatile uint32_t _busy_ticks = 0;
-
+/*
+ * Each processor's idle marker and two tick counters are in its record
+ * (percpu.h). They are `volatile` because the timer handler reads the marker
+ * from an interrupt that arrives in the middle of the halt it describes. The
+ * counters are 32-bit, one aligned store, so a reader never sees half of
+ * one; at 100 Hz they wrap after about 497 days, the bound `kernel_ticks`
+ * already has. The totals are summed over every record, of which those of
+ * processors never started are zero.
+ */
 uint32_t sched_idle_ticks(void)
 {
-    return _idle_ticks;
+    uint32_t sum = 0;
+    int i;
+
+    for (i = 0; i < NR_CPUS; i++) {
+        sum += cpu_table[i].idle_ticks;
+    }
+    return sum;
 }
 
 uint32_t sched_busy_ticks(void)
 {
-    return _busy_ticks;
+    uint32_t sum = 0;
+    int i;
+
+    for (i = 0; i < NR_CPUS; i++) {
+        sum += cpu_table[i].busy_ticks;
+    }
+    return sum;
 }
 
 /** Count a tick of `p`'s processor time against its process's timer `k`
@@ -266,11 +278,13 @@ static void cpu_timer_tick(process_t *p, int k, int counts, int signo)
  */
 void sched_account_tick(int user)
 {
-    if (_in_idle_wait) {
-        ++_idle_ticks;
+    struct percpu *cpu = this_cpu();
+
+    if (cpu->idle_wait) {
+        ++cpu->idle_ticks;
         return;
     }
-    ++_busy_ticks;
+    ++cpu->busy_ticks;
     if (current_proc) {
         if (user) {
             ++current_proc->utime;
@@ -381,9 +395,9 @@ void idle_wait_irq_off(void)
         ip_loop_drain_from(IP_LOOP_FROM_IDLE);
         return;
     }
-    _in_idle_wait = 1;
+    this_cpu()->idle_wait = 1;
     arch_idle_masked();
-    _in_idle_wait = 0;
+    this_cpu()->idle_wait = 0;
 }
 
 /**
@@ -399,7 +413,7 @@ void idle_wait_irq_off(void)
  */
 void idle_wait_irq_on(void)
 {
-    _in_idle_wait = 1;
+    this_cpu()->idle_wait = 1;
     arch_idle();
-    _in_idle_wait = 0;
+    this_cpu()->idle_wait = 0;
 }

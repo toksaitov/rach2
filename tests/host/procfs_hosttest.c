@@ -125,7 +125,7 @@ extern void free(void *ptr);
 
 static process_t process, thread, stranger;
 static struct tgroup group, other_group;
-process_t *current_proc = &process;
+struct percpu cpu_table[NR_CPUS] = {{&process}};
 static fd_table_t table;
 static fd_entry_t entries[1];
 static int refuse, allocations, failures;

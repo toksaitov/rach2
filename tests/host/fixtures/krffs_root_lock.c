@@ -46,7 +46,7 @@ int pc_sync(void);
 static uint8_t image[IMAGE_BYTES];
 static struct vfs_mount mount;
 static process_t writer, waiter;
-process_t *current_proc;
+struct percpu cpu_table[NR_CPUS];
 static int failures;
 static const char *under_test;
 static int reached, unlocked, repoints;

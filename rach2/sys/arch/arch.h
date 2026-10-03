@@ -37,6 +37,8 @@
  *                          entries of a leaf table (mm/paging.h)
  *   HARD_MEMORY_LIMIT, KVA_*  the kernel's own layout
  *   PAGE_FAULT_VECTOR, FAULT_WRITE(p), FAULT_USER(p)  the page fault
+ *   arch_cpu_id()          the running processor's index in the
+ *                          per-processor table (proc/percpu.h)
  *   IRQ_VECTOR(line)       the vector a platform interrupt line arrives on
  *   ISR_DEVICE_FIRST, ISR_DEVICE_LAST  the vectors a device's interrupts take
  */

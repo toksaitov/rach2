@@ -30,7 +30,7 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg);
 extern int printf(const char *format, ...);
 extern int dprintf(int fd, const char *format, ...);
 
-process_t *current_proc;
+struct percpu cpu_table[NR_CPUS];
 process_t *proc_list;
 static process_t consumer, producer, poller;
 static struct pty pair;

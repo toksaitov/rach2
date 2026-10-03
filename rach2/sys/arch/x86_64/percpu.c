@@ -11,13 +11,14 @@
 
 struct cpu cpus[NR_CPUS];
 
-/* The entry code reads these three fields at fixed offsets. TinyCC cannot
- * fold an offset into an array size, so a kernel it builds checks them at
- * boot instead (`arch_context_check`). */
+/* The entry code and `arch_cpu_id` read these four fields at fixed offsets.
+ * TinyCC cannot fold an offset into an array size, so a kernel it builds checks
+ * them at boot instead (`arch_context_check`). */
 #if !defined(__TINYC__)
 typedef char cpu_offsets_fit[(__builtin_offsetof(struct cpu, self) == 0 &&
                               __builtin_offsetof(struct cpu, kernel_rsp) == 8 &&
-                              __builtin_offsetof(struct cpu, user_rsp) == 16)
+                              __builtin_offsetof(struct cpu, user_rsp) == 16 &&
+                              __builtin_offsetof(struct cpu, id) == 24)
                                  ? 1
                                  : -1];
 #endif
@@ -140,7 +141,7 @@ void init_tss(uintptr_t kernel_stack)
 
 void cpu_set_kernel_stack(uintptr_t top)
 {
-    struct cpu *c = this_cpu();
+    struct cpu *c = cpu_self();
 
     c->tss.rsp0 = top;
     c->kernel_rsp = top;

@@ -90,7 +90,7 @@ struct netdev *netdev_at(int n)
 }
 
 /* The running process and the table procfs_may_read asks about; none here. */
-process_t *current_proc;
+struct percpu cpu_table[NR_CPUS];
 
 process_t *get_process(uint32_t pid)
 {

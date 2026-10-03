@@ -36,7 +36,7 @@ extern void free(void *ptr);
 extern int printf(const char *format, ...);
 
 static process_t self;
-process_t *current_proc = &self;
+struct percpu cpu_table[NR_CPUS] = {{&self}};
 volatile uint32_t kernel_ticks;
 volatile uint32_t kernel_uptime_seconds;
 volatile uint32_t kernel_second_ticks;

@@ -19,7 +19,7 @@
 static int fails;
 
 /* The system calls beside the decoding, which no row makes. */
-process_t *current_proc;
+struct percpu cpu_table[NR_CPUS];
 
 int copy_from_user(void *dst, const void __user *src, size_t len)
 {

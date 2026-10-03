@@ -44,7 +44,8 @@ int arch_context_check(void)
 
     return (const char *)&c->self != (const char *)c ||
            (const char *)&c->kernel_rsp - (const char *)c != 8 ||
-           (const char *)&c->user_rsp - (const char *)c != 16;
+           (const char *)&c->user_rsp - (const char *)c != 16 ||
+           (const char *)&c->id - (const char *)c != 24;
 }
 
 /**

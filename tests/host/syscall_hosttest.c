@@ -66,7 +66,7 @@ extern int printf(const char *format, ...);
 extern int dprintf(int fd, const char *format, ...);
 
 static process_t proc;
-process_t *current_proc = &proc;
+struct percpu cpu_table[NR_CPUS] = {{&proc}};
 
 /** Every socket here is in the first network namespace. */
 int socket_outside(const struct socket *s)

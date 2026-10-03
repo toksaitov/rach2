@@ -16,7 +16,7 @@ process_t *proc_list;
 process_t *proc_idle;
 static process_t *proc_tail;
 
-process_t *current_proc = NULL;
+struct percpu cpu_table[NR_CPUS];
 
 uint32_t proc_dead_threads;
 

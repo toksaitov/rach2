@@ -25,7 +25,7 @@ static process_t child;
 static process_t parent;
 static struct tgroup child_group;
 static struct tgroup parent_group;
-process_t *current_proc;
+struct percpu cpu_table[NR_CPUS];
 uint32_t proc_dead_threads;
 page_dir_t *_kernel_dir;
 static page_dir_t kernel_dir;

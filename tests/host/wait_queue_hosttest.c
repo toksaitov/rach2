@@ -32,7 +32,7 @@
 
 extern int dprintf(int fd, const char *format, ...);
 
-process_t *current_proc = 0;
+struct percpu cpu_table[NR_CPUS];
 static int blocks, conds;
 static uint32_t deadline_at_block[4];
 

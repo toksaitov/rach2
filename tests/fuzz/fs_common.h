@@ -15,7 +15,7 @@
 #include "../../rach2/sys/proc/process.h"
 
 process_t proc_a;
-process_t *current_proc = &proc_a;
+struct percpu cpu_table[NR_CPUS] = {{&proc_a}};
 
 void k_panic(const char *s)
 {
