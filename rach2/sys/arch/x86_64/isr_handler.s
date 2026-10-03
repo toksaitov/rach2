@@ -325,8 +325,7 @@ isr_exit:
     jz .exit_iret
     swapgs
 .exit_iret:
-    # iretq as bytes: TinyCC's assembler has only the 32-bit iret.
-    .byte 0x48, 0xcf
+    iretq
 
 # The paranoid entry of the NMI, the double fault and the machine check,
 # on their interrupt stacks. RBX, which the C call preserves, remembers
@@ -381,7 +380,7 @@ paranoid_entry:
     popq %rbx
     popq %rax
     addq $16, %rsp
-    .byte 0x48, 0xcf
+    iretq
 
 # The system call entry, IA32_LSTAR's. The processor has put the user's RIP
 # in RCX and RFLAGS in R11, loaded the kernel's CS and SS, and cleared the

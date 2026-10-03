@@ -50,8 +50,7 @@ x86_64_load_gdt:
     popq %rax
     pushq $GDT_KERNEL_CODE
     pushq %rax
-    # lretq as bytes: TinyCC's assembler has only the 32-bit lret.
-    .byte 0x48, 0xcb
+    lretq
 
 # void x86_64_load_idt(const void *ptr)
 .globl x86_64_load_idt
@@ -88,5 +87,4 @@ x86_64_enter_user:
     xorl %r14d, %r14d
     xorl %r15d, %r15d
     swapgs
-    # iretq as bytes: TinyCC's assembler has only the 32-bit iret.
-    .byte 0x48, 0xcf
+    iretq

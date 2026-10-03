@@ -26,9 +26,6 @@
 # KVA_DIRECT, the direct map, where the Multiboot information is read; and,
 # the first 2 GiB, at KVA_IMAGE, where the kernel runs. mmu_init replaces
 # them with the kernel's own (mmu.c).
-#
-# TinyCC's x86-64 assembler has no .code32, so on Rach2 this file needs an
-# assembler that has; the rest of the kernel's assembly stays within it.
 
 .set MULTIBOOT_MAGIC,       0x1BADB002
 .set MULTIBOOT_PAGEALIGN,   1
