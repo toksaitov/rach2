@@ -1645,7 +1645,7 @@ dd if="$DISK" of="$R/head.vol" bs=512 skip="$ROOT_START" count=$((128 * 2048)) 2
     echo "$((LENOVO - 33)) 33"
 } > "$R/ranges"
 NRANGES=$(grep -c . "$R/ranges")
-note "rehearsal: the save set is the image's $IMAGE_SECTORS sectors and $((NRANGES - 1)) ranges of the grow beyond it"
+note "rehearsal: the save set is the image's $IMAGE_SECTORS sectors, $((NRANGES - 2)) ranges of the grow beyond it and the GUID table's backup"
 mark "setup"
 # The base and the overlay; the backing name is relative to the overlay's
 # own directory, which is where both live. Each range's first sector on the
