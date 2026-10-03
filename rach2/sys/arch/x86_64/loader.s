@@ -69,6 +69,7 @@
 .set CR0_PG,    0x80000000
 .set CR4_PAE,   0x020
 .set MSR_EFER,  0xC0000080
+.set MSR_GS_BASE, 0xC0000101
 .set EFER_LME,  0x100
 .set EFER_NXE,  0x800
 
@@ -230,6 +231,15 @@ long_mode_high:
     movw %ax, %gs
     movq $(stack + KERNEL_STACK_SIZE), %rsp
     xorl %ebp, %ebp
+
+    # The boot processor's record is the GS base before any C code runs, so
+    # that this_cpu(), and current_proc through it, reads that record from
+    # the first klog on; init_gdt fills it and sets the base again.
+    movl $MSR_GS_BASE, %ecx
+    movq $cpus, %rax
+    movq %rax, %rdx
+    shrq $32, %rdx
+    wrmsr
 
     # k_main(magic, info), the information by its address in the direct map.
     movl boot_magic, %edi
