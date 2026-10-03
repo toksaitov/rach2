@@ -59,6 +59,7 @@ typedef uint64_t pte_t;
 #define PTE_DIRTY         0x010u
 #define PTE_COW           0x020u
 #define PTE_NONE          0x040u
+#define PTE_NOEXEC        0x080u
 #define PTE_FLAGS         0xFFFu
 #define PTE_ADDR(e)       ((e) & ~(pte_t)PTE_FLAGS)
 
@@ -84,6 +85,8 @@ phys_addr_t virt_to_phys(const volatile void *v);
 #define PAGE_FAULT_VECTOR 3
 #define FAULT_WRITE(p)    (((p)->error_code & 0x40u) != 0)
 #define FAULT_USER(p)     FRAME_USER(p)
+/* An instruction abort from EL0, ESR_EL1's class 0x20. */
+#define FAULT_EXEC(p)     (((p)->error_code >> 26) == 0x20u)
 
 /* A floating-point save area: the 32 128-bit registers, FPSR and FPCR. */
 #define FPU_STATE_SIZE 528

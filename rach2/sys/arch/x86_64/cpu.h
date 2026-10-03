@@ -86,9 +86,12 @@ typedef uint64_t pte_t;
 /* Bit 10: a resident page of a PROT_NONE region, as on i686. */
 #define PTE_NONE          0x400UL
 /* Bit 63: no instruction fetch from the page. Set only where the processor
- * has the bit (`mmu_nx`, arch/x86_64/mmu.h): elsewhere it is reserved, and
- * an entry with it faults. */
+ * has the bit and the loader turned EFER.NXE on: elsewhere it is reserved,
+ * and an entry with it faults. PTE_NOEXEC, which the shared code sets on a
+ * page without PROT_EXEC, is `mmu_nx`, which mmu.c makes PTE_NX or 0. */
 #define PTE_NX            0x8000000000000000UL
+#define PTE_NOEXEC        mmu_nx
+extern pte_t mmu_nx;
 #define PTE_FLAGS         0xFFF0000000000FFFUL
 #define PTE_ADDR(e)       ((e) & ~(pte_t)PTE_FLAGS)
 
@@ -149,6 +152,8 @@ phys_addr_t mmu_virt_to_phys(const volatile void *v);
 #define PAGE_FAULT_VECTOR 14
 #define FAULT_WRITE(p)    (((p)->error_code & 0x2u) != 0)
 #define FAULT_USER(p)     (((p)->error_code & 0x4u) != 0)
+/* An instruction fetch, which the error code reports where NX is on. */
+#define FAULT_EXEC(p)     (((p)->error_code & 0x10u) != 0)
 
 /* A floating-point save area, the 512-byte `fxsave64` image. */
 #define FPU_STATE_SIZE 512

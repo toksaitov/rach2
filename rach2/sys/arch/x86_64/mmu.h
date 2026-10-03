@@ -19,11 +19,6 @@ struct page_dir {
     pte_t entries[MMU_TABLE_ENTRIES];
 };
 
-/** PTE_NX where the processor has the NX bit and the loader turned it on,
- * 0 where it has not: what an entry that forbids instruction fetches
- * sets. */
-extern pte_t mmu_nx;
-
 /** The kernel's address of the physical address `p`, in the direct map. */
 #define MMU_VIRT(p) ((void *)(KVA_DIRECT + (uintptr_t)(p)))
 

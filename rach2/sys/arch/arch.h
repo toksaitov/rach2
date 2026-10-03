@@ -42,9 +42,13 @@
  *   AUDIT_ARCH             the architecture seccomp's filters see
  *   ARCH_NAME              what uname(2) reports as the machine
  *   pte_t, PTE_*, MMU_TABLE_ENTRIES  a page table entry, its bits, and the
- *                          entries of a leaf table (mm/paging.h)
+ *                          entries of a leaf table (mm/paging.h);
+ *                          PTE_NOEXEC forbids instruction fetches from a
+ *                          user page, or is 0 where the processor cannot
  *   HARD_MEMORY_LIMIT, KVA_*  the kernel's own layout
- *   PAGE_FAULT_VECTOR, FAULT_WRITE(p), FAULT_USER(p)  the page fault
+ *   PAGE_FAULT_VECTOR, FAULT_WRITE(p), FAULT_USER(p), FAULT_EXEC(p)  the
+ *                          page fault: a write, from user mode, an
+ *                          instruction fetch
  *   arch_cpu_id()          the running processor's index in the
  *                          per-processor table (proc/percpu.h)
  *   IRQ_VECTOR(line)       the vector a platform interrupt line arrives on

@@ -94,6 +94,9 @@ typedef uint32_t pte_t;
  * user access faults; fork and teardown own it as a user page by this bit,
  * and mprotect makes it a user page again. */
 #define PTE_NONE          0x400u
+/* Without PAE an entry has no bit that forbids instruction fetches: every
+ * page an i686 maps is executable. */
+#define PTE_NOEXEC        0u
 #define PTE_FLAGS         0xFFFu
 #define PTE_ADDR(e)       ((e) & ~(pte_t)PTE_FLAGS)
 
@@ -150,6 +153,8 @@ typedef uint32_t pte_t;
 #define PAGE_FAULT_VECTOR 14
 #define FAULT_WRITE(p)    (((p)->error_code & 0x2u) != 0)
 #define FAULT_USER(p)     (((p)->error_code & 0x4u) != 0)
+/* No fetch is told apart without PAE's NX, and no page refuses one. */
+#define FAULT_EXEC(p)     ((void)(p), 0)
 
 /* A floating-point save area, the 512-byte `fxsave` image; `fnsave` uses
  * 108 bytes of it. */

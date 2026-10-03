@@ -83,6 +83,18 @@ void paging_set_user(uintptr_t addr, bool user);
  */
 void paging_set_writable(page_dir_t *dir, uintptr_t addr, bool writable);
 
+/*
+ * Allow or forbid instruction fetches from an already-present page of 'dir',
+ * by PTE_NOEXEC, which is 0 where the processor has no such bit. The ELF
+ * loader and demand paging use it to keep a page of a region without
+ * PROT_EXEC from running. No-op if the page is absent.
+ */
+void paging_set_exec(page_dir_t *dir, uintptr_t addr, bool exec);
+
+/** The PTE_NOEXEC of a user page of a region with the protection `prot`
+ * (VM_PROT_*): the bit when the region has no VM_PROT_EXEC, else 0. */
+pte_t paging_noexec(uint32_t prot);
+
 /** Flush the TLB entry for 'addr'. */
 void paging_flush_tlb(uintptr_t addr);
 
@@ -133,14 +145,14 @@ uintptr_t alloc_user_frame(void);
 
 /*
  * Map an already-owned physical frame 'phys' at user virtual address 'virt'
- * in 'dir' with the given low-12-bit PTE 'flags'
- * (present/user/write/PTE_COW, etc.), creating a private page table for the
- * slot if needed. Unlike alloc_user_page it neither allocates a frame nor
+ * in 'dir' with the given PTE 'flags' (present/user/write/PTE_COW/PTE_NOEXEC,
+ * etc., any of the bits PTE_FLAGS covers), creating a private page table for
+ * the slot if needed. Unlike alloc_user_page it neither allocates a frame nor
  * changes any reference count: the caller owns the frame lifecycle. Used by
  * copy-on-write fork to share a frame read-only. Returns 0 on success, -1 on
  * failure.
  */
-int map_user_frame(page_dir_t *dir, uintptr_t virt, uintptr_t phys, uint32_t flags);
+int map_user_frame(page_dir_t *dir, uintptr_t virt, uintptr_t phys, pte_t flags);
 
 /*
  * Pre-fault [addr, addr+len) in the current process's address space before the

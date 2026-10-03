@@ -417,24 +417,24 @@ int elf_load_image_at(elf_read_fn readfn, void *ctx, page_dir_t *dir, uintptr_t 
     {
         int si, sj;
 
+        /* A page two segments share takes the rights of either: write or
+         * execute where one of them has it. */
         for (si = 0; si < out->nsegs; si++) {
             uintptr_t pg;
 
-            if (out->segs[si].flags & PF_W) {
-                continue;
-            }
             for (pg = out->segs[si].start; pg < out->segs[si].end; pg += PAGE_SIZE) {
-                int writable = 0;
+                uint32_t rights = 0;
 
                 for (sj = 0; sj < out->nsegs; sj++) {
-                    if ((out->segs[sj].flags & PF_W) && pg >= out->segs[sj].start &&
-                        pg < out->segs[sj].end) {
-                        writable = 1;
-                        break;
+                    if (pg >= out->segs[sj].start && pg < out->segs[sj].end) {
+                        rights |= out->segs[sj].flags;
                     }
                 }
-                if (!writable) {
+                if (!(rights & PF_W)) {
                     paging_set_writable(dir, pg, false);
+                }
+                if (!(rights & PF_X)) {
+                    paging_set_exec(dir, pg, false);
                 }
             }
         }

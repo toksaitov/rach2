@@ -297,7 +297,8 @@ static int file_fault(page_dir_t *dir, vm_space_t *vm, const vma_t *vma, uintptr
     }
     vm_file_put(f);
     if (rc == 1 && map_user_frame(dir, page, phys,
-                                  PTE_P | PTE_U | ((prot & VM_PROT_WRITE) ? PTE_W : 0)) == 0) {
+                                  PTE_P | PTE_U | ((prot & VM_PROT_WRITE) ? PTE_W : 0) |
+                                      paging_noexec(prot)) == 0) {
         return 1;
     }
     free_frame(phys);
@@ -336,7 +337,8 @@ static int shared_fault(page_dir_t *dir, vm_space_t *vm, const vma_t *vma, uintp
         return rc < 0 ? -1 : 0;
     }
     if (rc == 1 && map_user_frame(dir, page, phys,
-                                  PTE_P | PTE_U | ((prot & VM_PROT_WRITE) ? PTE_W : 0)) == 0) {
+                                  PTE_P | PTE_U | ((prot & VM_PROT_WRITE) ? PTE_W : 0) |
+                                      paging_noexec(prot)) == 0) {
         return 1;
     }
     free_frame(phys);
@@ -407,6 +409,10 @@ static int vm_resolve_once(struct mm *mm, uintptr_t addr, int write, uintptr_t a
 
     if (vma && !(vma->prot & VM_PROT_WRITE)) {
         paging_set_writable(dir, addr, false);
+    }
+    /* A grown stack page is the stack's, which has no VM_PROT_EXEC. */
+    if (!vma || !(vma->prot & VM_PROT_EXEC)) {
+        paging_set_exec(dir, addr, false);
     }
     return 1;
 }
@@ -549,6 +555,9 @@ static int cow_fault(page_dir_t *dir, uintptr_t addr)
     if (new_phys == 0) {
         return 0; /* out of frames -> caller segfaults the process */
     }
+    if (pte & PTE_NOEXEC) {
+        paging_set_exec(dir, addr, false);
+    }
     if (paging_copy_frame(new_phys, old_phys) != 0) {
         /* Nothing was copied: the shared page is put back as it was, the
          * fresh frame goes back, and the fault is unresolved. */
@@ -671,11 +680,28 @@ int paging_access(struct mm *mm, uintptr_t addr, void *buf, uint32_t len, int wr
     return rc;
 }
 
+/* Whether the fault `p` at the user address `addr` is an instruction fetch
+ * from a page of no region that may be executed, which no resolution makes
+ * legal: the page is present and readable, and would be fetched from again
+ * for ever. */
+static int fetch_refused(uintptr_t addr, const isr_params_t *p)
+{
+    const vma_t *vma;
+
+    if (!FAULT_EXEC(p)) {
+        return 0;
+    }
+    vma = vm_find(&current_proc->mm->vm, addr);
+    return !vma || !(vma->prot & VM_PROT_EXEC);
+}
+
 /**
  * Resolve a page fault, or end what caused it.
  *
  * Tried in order. Any fault at a user-space address of a live user process
- * goes to `vm_resolve`, keyed on the address and not on the processor's mode,
+ * goes to `vm_resolve`, but an instruction fetch from a region without
+ * execute (`fetch_refused`), keyed on the address and not on the
+ * processor's mode,
  * so a kernel touch of a lazy user page resolves too. A write to a page shared
  * by a fork reaches `cow_fault` through it, and only once the region's
  * protection allows the write: a region mprotect made read-only keeps its
@@ -707,7 +733,7 @@ static void _page_fault_handler(isr_params_t *params)
     have_user_proc = (current_proc != NULL && current_proc->mm != NULL);
     in_user_range = (fault_address >= USER_ADDR_MIN && fault_address < USER_ADDR_MAX);
 
-    if (have_user_proc && in_user_range) {
+    if (have_user_proc && in_user_range && !fetch_refused(fault_address, params)) {
         current_proc->frame_refused = 0;
         if (vm_resolve(fault_address, write)) {
             return; /* page mapped; iret retries the faulting instruction */
@@ -1097,6 +1123,32 @@ void paging_set_writable(page_dir_t *dir, uintptr_t addr, bool writable)
     }
 }
 
+void paging_set_exec(page_dir_t *dir, uintptr_t addr, bool exec)
+{
+    pte_t *e = user_pte(dir, addr);
+
+    if (!e || !(*e & PTE_P)) {
+        return; /* not present */
+    }
+    *e &= ~(pte_t)PTE_NOEXEC;
+    if (!exec) {
+        *e |= PTE_NOEXEC;
+    }
+    if (dir == _curr_dir) {
+        paging_flush_tlb(addr);
+    }
+}
+
+pte_t paging_noexec(uint32_t prot)
+{
+    pte_t bit = PTE_NOEXEC;
+
+    if (prot & VM_PROT_EXEC) {
+        bit = 0;
+    }
+    return bit;
+}
+
 void paging_flush_tlb(uintptr_t addr)
 {
     arch_tlb_flush_page(addr);
@@ -1140,7 +1192,7 @@ uint32_t frame_unref(uintptr_t phys)
     return _frames[frame];
 }
 
-int map_user_frame(page_dir_t *dir, uintptr_t virt, uintptr_t phys, uint32_t flags)
+int map_user_frame(page_dir_t *dir, uintptr_t virt, uintptr_t phys, pte_t flags)
 {
     pte_t *table;
 
@@ -1152,7 +1204,7 @@ int map_user_frame(page_dir_t *dir, uintptr_t virt, uintptr_t phys, uint32_t fla
 
     /* The caller owns the frame and its reference count; we only write the
      * PTE. */
-    table[MMU_INDEX(virt)] = PTE_ADDR((pte_t)phys) | (flags & PTE_FLAGS);
+    table[MMU_INDEX(virt)] = PTE_ADDR((pte_t)phys) | (flags & (pte_t)PTE_FLAGS);
     if (dir == _curr_dir) {
         paging_flush_tlb(virt);
     }
@@ -1317,7 +1369,7 @@ void paging_protect_range(page_dir_t *dir, uintptr_t start, uintptr_t end, uint3
         if (!(prot & (VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXEC))) {
             pte = (pte & ~(pte_t)(PTE_W | PTE_U)) | PTE_NONE;
         } else {
-            pte = (pte & ~(pte_t)PTE_NONE) | PTE_U;
+            pte = (pte & ~(pte_t)(PTE_NONE | PTE_NOEXEC)) | PTE_U | paging_noexec(prot);
             frame = PTE_ADDR(pte) / PAGE_SIZE;
             if (!(prot & VM_PROT_WRITE)) {
                 pte &= ~(pte_t)PTE_W;
@@ -1371,7 +1423,8 @@ static int fork_copy_page(page_dir_t *child_dir, pte_t *e, uintptr_t va, vm_type
      * has no PTE_COW.
      */
     if (pte & PTE_W) {
-        if (map_user_frame(child_dir, va, parent_phys, PTE_P | PTE_U | PTE_COW) != 0) {
+        if (map_user_frame(child_dir, va, parent_phys,
+                           PTE_P | PTE_U | PTE_COW | (pte & PTE_NOEXEC)) != 0) {
             return -1;
         }
         *e = (pte & ~(pte_t)PTE_W) | PTE_COW;

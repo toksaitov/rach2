@@ -60,6 +60,7 @@ typedef uint32_t pte_t;
 #define PTE_DIRTY         0x010u
 #define PTE_COW           0x020u
 #define PTE_NONE          0x040u
+#define PTE_NOEXEC        0x080u
 #define PTE_FLAGS         0xFFFu
 #define PTE_ADDR(e)       ((e) & ~(pte_t)PTE_FLAGS)
 
@@ -85,6 +86,9 @@ phys_addr_t virt_to_phys(const volatile void *v);
 #define PAGE_FAULT_VECTOR 3
 #define FAULT_WRITE(p)    (((p)->error_code & 0x40u) != 0)
 #define FAULT_USER(p)     FRAME_USER(p)
+/* A fetch is a prefetch abort, an exception of its own, which a port's
+ * entry tells apart; the data abort above is never one. */
+#define FAULT_EXEC(p)     ((void)(p), 0)
 
 /* A floating-point save area: VFPv3's 32 doubleword registers and FPSCR. */
 #define FPU_STATE_SIZE 264

@@ -424,7 +424,7 @@ int uimage_write(struct uimage *u, uint32_t argc, uint32_t envc, const elf_image
 
 /**
  * Map each frame into `dir` at its place in the stack, read and write for
- * the user. The frames mapped belong to `dir` from then on; 0, or -1 when a
+ * the user and not executable, as the stack's region is. The frames mapped belong to `dir` from then on; 0, or -1 when a
  * page table could not be had, with the frames not yet mapped still `u`'s.
  */
 int uimage_map(struct uimage *u, struct page_dir *dir)
@@ -432,7 +432,8 @@ int uimage_map(struct uimage *u, struct page_dir *dir)
     while (u->given < u->nframes) {
         uintptr_t page = u->top - (uintptr_t)(u->given + 1u) * PAGE_SIZE;
 
-        if (map_user_frame(dir, page, u->frames[u->given], PTE_P | PTE_W | PTE_U) != 0) {
+        if (map_user_frame(dir, page, u->frames[u->given], PTE_P | PTE_W | PTE_U | PTE_NOEXEC) !=
+            0) {
             return -1;
         }
         u->given++;
