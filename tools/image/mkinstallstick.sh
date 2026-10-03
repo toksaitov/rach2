@@ -138,7 +138,7 @@ cp "$ISO" "$NEW"
 dd if=/dev/zero of="$NEW" bs=512 seek="$iso_sectors" count=$((start - iso_sectors)) \
     conv=notrunc 2>/dev/null
 dd if="$VOL" of="$NEW" bs=1048576 seek=$((start / MIB_SECTORS)) conv=notrunc 2>/dev/null
-rm -f "$VOL" "$MAN"
+rm -f "$VOL" "$MAN" "$EFI" "$EFISUM"
 # The three entries. mkmbr writes the table bytes and the signature only.
 "$MKMBR" --lba "$NEW" "1:$((efi_start - 1)):17" "$start:$volume:07" \
     "$efi_start:$efi_sectors:ef" > /dev/null
