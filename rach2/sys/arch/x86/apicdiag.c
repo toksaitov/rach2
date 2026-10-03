@@ -21,7 +21,7 @@
 #include "../../klog.h"
 #include "kcpu.h"
 #include "../../mm/paging.h"
-#include "pci.h"
+#include "../../pci.h"
 
 #define IA32_APIC_BASE 0x1B
 

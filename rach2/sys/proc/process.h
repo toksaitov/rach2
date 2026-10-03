@@ -6,7 +6,7 @@
 #include "../lib/ksignal.h"
 #include "../fs/fd.h"
 #include "../mm/vm.h"
-#include "../arch/x86/fpu.h"
+#include "../fpu.h"
 
 /* Policy: the threads one real user may have, each thread of a process
  * counting, unless `prlimit64` or `/etc/rach2/limits` says otherwise, and
@@ -335,7 +335,7 @@ struct process {
     int32_t ptrace_signo;
     uint32_t ptrace_msg;
     struct k_siginfo ptrace_info;
-    int32_t orig_eax;
+    int32_t orig_nr;
     uint32_t ptrace_exit_seen;
     uint32_t debugreg[8];
     /* The execution domain and its flags personality(2) keeps; fork passes

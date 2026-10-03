@@ -13,7 +13,7 @@
 
 /** The futex system call, 240: EBX=uaddr, ECX=op, EDX=val, ESI=timeout,
  * EDI=uaddr2, EBP=val3. */
-int32_t sys_futex(isr_params_t *params);
+long sys_futex(isr_params_t *params);
 
 /** Wake up to `n` waiters on `uaddr` in the current address space, as
  * FUTEX_WAKE does; the number woken. */
@@ -30,10 +30,10 @@ int futex_wake_address(uint32_t uaddr, uint32_t n);
 int futex_restartable(const isr_params_t *params);
 
 /** set_robust_list (311): EBX=the list's head, ECX=its size, 12. */
-int32_t sys_set_robust_list(isr_params_t *params);
+long sys_set_robust_list(isr_params_t *params);
 
 /** get_robust_list (312): EBX=thread id or 0, ECX=where the head goes,
  * EDX=where its size goes. */
-int32_t sys_get_robust_list(isr_params_t *params);
+long sys_get_robust_list(isr_params_t *params);
 
 #endif /* _FUTEX_H_ */

@@ -146,7 +146,7 @@ static void prstatus_fill(uint8_t *d, const process_t *t, int signo)
     regs[8] = tf->es & 0xFFFFu;
     regs[9] = tf->fs & 0xFFFFu;
     regs[10] = tf->gs & 0xFFFFu;
-    regs[11] = (uint32_t)t->orig_eax;
+    regs[11] = (uint32_t)t->orig_nr;
     regs[12] = tf->eip;
     regs[13] = tf->cs & 0xFFFFu;
     regs[14] = tf->eflags;

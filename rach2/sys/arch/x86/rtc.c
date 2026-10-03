@@ -1,3 +1,4 @@
+#include "portio.h"
 #include "../../klog.h"
 #include "rtc.h"
 
@@ -303,7 +304,6 @@ void rtc_time_from_anchor(int64_t anchor_seconds, uint32_t anchor_uptime, uint32
 /* Kernel-side only, like krandom.c's hardware half (see kio.c / kernel.c). */
 extern volatile uint32_t kernel_uptime_seconds;
 extern volatile uint32_t kernel_second_ticks;
-extern volatile uint32_t kernel_ticks;
 
 #define RTC_ADDRESS_PORT 0x70
 #define RTC_DATA_PORT    0x71
@@ -737,10 +737,10 @@ static void rtc_since_boot(uint32_t *uptime, uint32_t *ticks, uint32_t *phase_ns
     *uptime = kernel_uptime_seconds;
     *ticks = kernel_second_ticks;
     pending = pic_irq_pending(0);
-    *phase_ns = pit_subtick_ns();
+    *phase_ns = timer_subtick_ns();
     if (pending != pic_irq_pending(0)) {
         pending = 1;
-        *phase_ns = pit_subtick_ns();
+        *phase_ns = timer_subtick_ns();
     }
     *ticks += (uint32_t)pending;
     if (*ticks >= RTC_TICKS_PER_SECOND) {
@@ -754,10 +754,10 @@ void rtc_tick_phase(uint32_t *ticks, uint32_t *phase_ns)
     uint32_t flags = kirq_save();
     int pending = pic_irq_pending(0);
 
-    *phase_ns = pit_subtick_ns();
+    *phase_ns = timer_subtick_ns();
     if (pending != pic_irq_pending(0)) {
         pending = 1;
-        *phase_ns = pit_subtick_ns();
+        *phase_ns = timer_subtick_ns();
     }
     *ticks = kernel_ticks + (uint32_t)pending;
     kirq_restore(flags);

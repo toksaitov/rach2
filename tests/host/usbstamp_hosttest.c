@@ -35,7 +35,7 @@ static int failures;
     } while (0)
 
 /** Substitute an explicit clock; the test does not wait. */
-uint32_t pit_now_us(void)
+uint32_t timer_now_us(void)
 {
     return clock_us;
 }

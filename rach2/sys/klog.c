@@ -28,8 +28,8 @@
 #include "klog.h"
 
 #include "kio.h"
-#include "arch/x86/serial.h"
-#include "display/vga_text.h"
+#include "serial.h"
+#include "display/textcon.h"
 #include "lib/kfmt.h"
 #include "lib/kirq.h"
 #include "network/netconsole.h"
@@ -368,7 +368,7 @@ static display_color_t screen_color(int level)
     if (level == KLOG_WARN) {
         return brown;
     }
-    return VGA_TEXT_DEFAULT_FG;
+    return DEFAULT_FORECOLOR;
 }
 
 /**
@@ -390,12 +390,12 @@ static void dest_screen(const struct klog_record *r)
         screen_line_open = 0;
     }
     set_fore_color(screen_color(r->level));
-    vga_text_hold();
+    textcon_hold();
     for (i = r->body; i < r->len; i++) {
         k_putc(r->text[i]);
     }
-    vga_text_release();
-    set_fore_color(VGA_TEXT_DEFAULT_FG);
+    textcon_release();
+    set_fore_color(DEFAULT_FORECOLOR);
 }
 
 /* ---- destination 3: the serial port ---- */
@@ -634,7 +634,7 @@ void console_write_begin(void)
     uint32_t flags = kirq_save();
 
     console_writing++;
-    vga_text_hold();
+    textcon_hold();
     kirq_restore(flags);
 }
 
@@ -646,7 +646,7 @@ void console_write_end(void)
 {
     uint32_t flags = kirq_save();
 
-    vga_text_release();
+    textcon_release();
     if (--console_writing > 0 || klog_delivering || pending_count == 0) {
         kirq_restore(flags);
         return;
@@ -764,12 +764,12 @@ void console_puts(const char *str)
     if (str == 0) {
         return;
     }
-    vga_text_hold();
+    textcon_hold();
     while (*str != '\0') {
         console_putc(*str++);
     }
     console_putc('\n');
-    vga_text_release();
+    textcon_release();
 }
 
 void console_printf(const char *format, ...)
@@ -777,8 +777,8 @@ void console_printf(const char *format, ...)
     va_list ap;
 
     va_start(ap, format);
-    vga_text_hold();
+    textcon_hold();
     k_vprintf(console_putc, format, ap);
-    vga_text_release();
+    textcon_release();
     va_end(ap);
 }

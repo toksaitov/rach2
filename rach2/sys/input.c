@@ -12,9 +12,9 @@
 #include "proc/suspend.h"
 #include "input.h"
 
-#include "display/vga_text.h"
-#include "arch/x86/kbd.h"
-#include "arch/x86/mouse.h"
+#include "display/textcon.h"
+#include "kbd.h"
+#include "mouse.h"
 #include "kio.h"
 #include "klog.h"
 #include "proc/wait_queue.h"

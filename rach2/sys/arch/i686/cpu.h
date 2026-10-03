@@ -45,6 +45,13 @@ typedef uint32_t phys_addr_t;
 #define PAGE_SHIFT 12
 #define PAGE_SIZE  0x1000
 
+/* A floating-point save area, the 512-byte `fxsave` image; `fnsave` uses
+ * 108 bytes of it. */
+#define FPU_STATE_SIZE 512
+
+/* `rep movs` and `rep stos` move the words of k_memcpy and k_memset. */
+#define ARCH_STRING_WORDS 1
+
 /* User space: from 32 MiB, below which the kernel's identity window lies,
  * to 3 GiB, where the kernel's own layout begins. */
 #define USER_ADDR_MIN 0x02000000UL

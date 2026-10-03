@@ -1,55 +1,17 @@
 /*
- * PCI bus enumeration via configuration mechanism #1: write the target
- * address to port 0xCF8, then read or write the data at port 0xCFC.
+ * PCI: the devices on the bus, found by walking configuration space, their
+ * base address registers and capabilities, and the messages a device sends
+ * in place of an interrupt line.
  *
- * The address port is one register that every access shares, so an access
- * taken apart in the middle by another one reads or writes whatever the
- * second selected. Until this milestone configuration space had one caller,
- * the boot, and no interrupt handler touched it; now the USB handler can
- * silence its controller from inside an interrupt. Every access below is
- * therefore taken with interrupts off, which is two instructions on a path
- * that already costs two port writes.
+ * How configuration space and the bus's I/O space are reached, and what a
+ * message is written to, are the architecture's (arch/x86/pciconf.c on a
+ * PC); the rest is the bus's own, the same on every machine.
  */
 
-#include "../../klog.h"
-#include "lapic.h"
+#include "klog.h"
 #include "pci.h"
-#include "../../kio.h"
-#include "../../lib/kirq.h"
-
-#define PCI_CONFIG_ADDRESS 0xCF8
-#define PCI_CONFIG_DATA    0xCFC
-
-/**
- * Pack a bus/device/function/offset tuple into a CONFIG_ADDRESS word.
- *
- * The mechanism #1 address layout, written to port 0xCF8:
- *   bit 31:     enable (must be 1)
- *   bits 23-16: bus number (0-255)
- *   bits 15-11: device number (0-31)
- *   bits 10-8:  function number (0-7)
- *   bits 7-0:   register offset, dword aligned (bits 1:0 read as 0)
- */
-static uint32_t pci_config_address(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset)
-{
-    return 0x80000000 | ((uint32_t)bus << 16) | ((uint32_t)(device & 0x1F) << 11) |
-           ((uint32_t)(function & 0x07) << 8) | (offset & 0xFC);
-}
-
-/**
- * Read a 32-bit dword from configuration space.
- */
-uint32_t pci_read_config32(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset)
-{
-    uint32_t addr = pci_config_address(bus, device, function, offset);
-    uint32_t flags = kirq_save();
-    uint32_t value;
-
-    outl(PCI_CONFIG_ADDRESS, addr);
-    value = inl(PCI_CONFIG_DATA);
-    kirq_restore(flags);
-    return value;
-}
+#include "kio.h"
+#include "lib/kirq.h"
 
 /**
  * Read a 16-bit word from configuration space.
@@ -73,41 +35,6 @@ uint8_t pci_read_config8(uint8_t bus, uint8_t device, uint8_t function, uint8_t 
 {
     uint32_t val = pci_read_config32(bus, device, function, offset & ~3);
     return (val >> ((offset & 3) * 8)) & 0xFF;
-}
-
-/**
- * Write a 32-bit dword to configuration space.
- */
-void pci_write_config32(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset,
-                        uint32_t value)
-{
-    uint32_t addr = pci_config_address(bus, device, function, offset);
-    uint32_t flags = kirq_save();
-
-    outl(PCI_CONFIG_ADDRESS, addr);
-    outl(PCI_CONFIG_DATA, value);
-    kirq_restore(flags);
-}
-
-/**
- * Write a 16-bit word to configuration space.
- *
- * The data port takes an access of the width the register has, at the port
- * offset the register's own address selects, so a halfword write is one
- * `outw` at `0xCFC` or `0xCFE`. It is not a read of the dword and a write of
- * it back: the other half of the dword holding the command word is the
- * status word, whose bits are cleared by writing them as one, and writing it
- * back would clear every fault the bus had latched there.
- */
-void pci_write_config16(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset,
-                        uint16_t value)
-{
-    uint32_t addr = pci_config_address(bus, device, function, offset & ~3);
-    uint32_t flags = kirq_save();
-
-    outl(PCI_CONFIG_ADDRESS, addr);
-    outw((uint16_t)(PCI_CONFIG_DATA + (offset & 2)), value);
-    kirq_restore(flags);
 }
 
 /**
@@ -527,8 +454,8 @@ bool pci_find_bridge_for_bus(uint8_t bus, pci_device_t *out)
  * capability is disabled, because a device with both enabled is undefined;
  * the address and the data are written while the mechanism is off; the
  * count of vectors the device may use is set to one; and the enable bit is
- * written last. The address is the local APIC's, with the processor's
- * identity in bits 12 to 19, and the data is the vector.
+ * written last. The address and the data are the architecture's message for
+ * the vector (`pci_msi_message`).
  *
  * A device with no MSI capability is refused by name, and so is one whose
  * capability would run past the end of its configuration space. A device
@@ -542,7 +469,7 @@ int pci_msi_enable(const pci_device_t *dev, uint8_t vector)
     uint8_t cap = pci_find_capability(dev->bus, dev->device, dev->function, PCI_CAP_ID_MSI);
     uint8_t msix = pci_find_capability(dev->bus, dev->device, dev->function, PCI_CAP_ID_MSIX);
     uint16_t control;
-    uint32_t address;
+    uint32_t address, data;
     unsigned int last;
 
     if (cap == 0) {
@@ -582,13 +509,15 @@ int pci_msi_enable(const pci_device_t *dev, uint8_t vector)
                                (uint16_t)(mxc & ~PCI_MSIX_ENABLE));
         }
     }
-    address = PCI_MSI_ADDRESS_BASE | (lapic_id() << 12);
+    pci_msi_message(vector, &address, &data);
     pci_write_config32(dev->bus, dev->device, dev->function, (uint8_t)(cap + 4), address);
     if ((control & PCI_MSI_64BIT) != 0) {
         pci_write_config32(dev->bus, dev->device, dev->function, (uint8_t)(cap + 8), 0);
-        pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 12), vector);
+        pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 12),
+                           (uint16_t)data);
     } else {
-        pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 8), vector);
+        pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 8),
+                           (uint16_t)data);
     }
     if ((control & PCI_MSI_PER_VECTOR) != 0) {
         /*

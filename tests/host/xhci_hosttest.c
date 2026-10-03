@@ -397,7 +397,7 @@ static const struct xhci_io model_io = {model_r32, model_w32, model_udelay};
 
 /* ---- what the driver reaches for outside itself ---- */
 
-#include "../../rach2/sys/arch/x86/pci.h"
+#include "../../rach2/sys/pci.h"
 
 static uint32_t model_bar0;
 static uint32_t model_bar1;

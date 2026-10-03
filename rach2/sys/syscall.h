@@ -379,4 +379,8 @@ int uts_privileged(void);
 void uts_set_hostname(const char *name, uint32_t len);
 void uts_set_domainname(const char *name, uint32_t len);
 
+/* The calls only some architectures have, each defined in the directory of
+ * one that has it: set_thread_area, i386's (arch/i686/tls.c). */
+long sys_set_thread_area(isr_params_t *params);
+
 #endif

@@ -48,10 +48,9 @@
     (SECCOMP_FILTER_FLAG_TSYNC | SECCOMP_FILTER_FLAG_LOG | SECCOMP_FILTER_FLAG_SPEC_ALLOW | \
      SECCOMP_FILTER_FLAG_TSYNC_ESRCH)
 
-/* SIGSYS's code for a call a filter trapped, and the architecture the
- * filters see: AUDIT_ARCH_I386. */
-#define SYS_SECCOMP     1
-#define AUDIT_ARCH_I386 0x40000003u
+/* SIGSYS's code for a call a filter trapped. The architecture the filters
+ * see is AUDIT_ARCH, from the architecture's cpu.h. */
+#define SYS_SECCOMP 1
 
 /* Linux's limits: instructions in one program, and in a chain, each filter
  * counted with four more. */
@@ -307,6 +306,14 @@ static int32_t precedence(uint32_t ret)
     return (int32_t)(ret & SECCOMP_RET_ACTION_FULL);
 }
 
+/** Store `v` in the two words of `d` from `at`, low word first, as a
+ * little-endian `seccomp_data` has a 64-bit field. */
+static void put_u64(struct seccomp_words *d, int at, uint64_t v)
+{
+    d->w[at] = (uint32_t)v;
+    d->w[at + 1] = (uint32_t)(v >> 32);
+}
+
 /** The action of `p`'s chain for the call in `tf`: every filter's, the one
  * of highest precedence. */
 static uint32_t chain_action(const process_t *p, const isr_params_t *tf, uint32_t nr)
@@ -317,14 +324,14 @@ static uint32_t chain_action(const process_t *p, const isr_params_t *tf, uint32_
 
     k_memset(&d, 0, sizeof(d));
     d.w[0] = nr;
-    d.w[1] = AUDIT_ARCH_I386;
-    d.w[2] = tf->eip;
-    d.w[4] = tf->ebx;
-    d.w[6] = tf->ecx;
-    d.w[8] = tf->edx;
-    d.w[10] = tf->esi;
-    d.w[12] = tf->edi;
-    d.w[14] = tf->ebp;
+    d.w[1] = AUDIT_ARCH;
+    put_u64(&d, 2, (uint64_t)FRAME_PC(tf));
+    put_u64(&d, 4, (uint64_t)SC_ARG(tf, 0));
+    put_u64(&d, 6, (uint64_t)SC_ARG(tf, 1));
+    put_u64(&d, 8, (uint64_t)SC_ARG(tf, 2));
+    put_u64(&d, 10, (uint64_t)SC_ARG(tf, 3));
+    put_u64(&d, 12, (uint64_t)SC_ARG(tf, 4));
+    put_u64(&d, 14, (uint64_t)SC_ARG(tf, 5));
     for (f = p->seccomp; f; f = f->prev) {
         uint32_t cur = run_filter(f, &d);
 
@@ -349,19 +356,20 @@ static void seccomp_kill(uint32_t action, uint32_t nr)
     terminate_current_process(SIGSYS | WCOREFLAG);
 }
 
-/** Post SIGSYS for the call `nr` a filter trapped with `data`, and put EAX
- * back at the call's number, as Linux's rollback does, for the handler. */
+/** Post SIGSYS for the call `nr` a filter trapped with `data`, and put the
+ * result register back at the call's number, as Linux's rollback does, for
+ * the handler. */
 static void seccomp_trap(isr_params_t *tf, uint32_t nr, uint32_t data)
 {
     struct k_siginfo info;
 
     k_memset(&info, 0, sizeof(info));
     info.code = SYS_SECCOMP;
-    info.pid = tf->eip;
+    info.pid = (uint32_t)FRAME_PC(tf);
     info.uid = nr;
-    info.status = (int32_t)AUDIT_ARCH_I386;
+    info.status = (int32_t)AUDIT_ARCH;
     info.err = (int32_t)data;
-    tf->eax = nr;
+    SC_RET(tf) = nr;
     signal_force(current_proc, SIGSYS, &info);
 }
 
@@ -372,7 +380,7 @@ static void seccomp_trap(isr_params_t *tf, uint32_t nr, uint32_t data)
  * run again on what the tracer left, refuse it. Without a tracer that asked,
  * the call fails with ENOSYS. Returns 1 to run the call.
  */
-static int seccomp_trace(isr_params_t *tf, uint32_t nr, uint32_t data, int32_t *ret)
+static int seccomp_trace(isr_params_t *tf, uint32_t nr, uint32_t data, long *ret)
 {
     process_t *self = current_proc;
     uint32_t again;
@@ -381,23 +389,23 @@ static int seccomp_trace(isr_params_t *tf, uint32_t nr, uint32_t data, int32_t *
         *ret = -ENOSYS;
         return 0;
     }
-    self->orig_eax = (int32_t)nr;
-    tf->eax = (uint32_t)-ENOSYS;
+    self->orig_nr = (int32_t)nr;
+    SC_RET(tf) = (unsigned long)-ENOSYS;
     ptrace_event(PTRACE_EVENT_SECCOMP, data);
-    if (self->orig_eax == -1 || ((self->sig_pending | self->tg->pending) & KSIG_BIT(SIGKILL))) {
-        *ret = (int32_t)tf->eax;
+    if (self->orig_nr == -1 || ((self->sig_pending | self->tg->pending) & KSIG_BIT(SIGKILL))) {
+        *ret = (long)SC_RET(tf);
         return 0;
     }
-    again = chain_action(self, tf, (uint32_t)self->orig_eax);
+    again = chain_action(self, tf, (uint32_t)self->orig_nr);
     if ((again & SECCOMP_RET_ACTION_FULL) == SECCOMP_RET_TRACE ||
         (again & SECCOMP_RET_ACTION_FULL) == SECCOMP_RET_ALLOW ||
         (again & SECCOMP_RET_ACTION_FULL) == SECCOMP_RET_LOG) {
         return 1;
     }
-    return seccomp_permit(tf, (uint32_t)self->orig_eax, ret);
+    return seccomp_permit(tf, (uint32_t)self->orig_nr, ret);
 }
 
-int seccomp_permit(isr_params_t *tf, uint32_t nr, int32_t *ret)
+int seccomp_permit(isr_params_t *tf, uint32_t nr, long *ret)
 {
     process_t *self = current_proc;
     uint32_t action, data;
@@ -667,7 +675,7 @@ int32_t seccomp_prctl_set(uint32_t mode, uint32_t prog)
  * is refused with -EINVAL), and a filter that returns it fails the call with
  * ENOSYS, as Linux does without a listener.
  */
-int32_t sys_seccomp(isr_params_t *params)
+long sys_seccomp(isr_params_t *params)
 {
     uint32_t op = params->ebx, flags = params->ecx, arg = params->edx;
     uint32_t action;

@@ -23,12 +23,13 @@
  * written for.
  */
 
+#include "portio.h"
 #include "../../klog.h"
 #include "diag.h"
 #include "../../kio.h"
-#include "serial.h"
+#include "../../serial.h"
 #include "../../module.h"
-#include "pci.h"
+#include "../../pci.h"
 #include "board.h"
 #include "../../block/diskcmd.h"
 #include "../../fs/krffs.h"

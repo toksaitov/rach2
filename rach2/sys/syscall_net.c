@@ -7,13 +7,13 @@
 #include "mm/kheap.h"
 #include "klog.h"
 #include "syscall.h"
-#include "arch/x86/power.h"
-#include "arch/x86/serial.h"
+#include "power.h"
+#include "serial.h"
 #include "panic.h"
 #include "kio.h"
-#include "arch/x86/kbd.h"
+#include "kbd.h"
 #include "input.h"
-#include "arch/x86/mouse.h"
+#include "mouse.h"
 #include "proc/process.h"
 #include "proc/ns.h"
 #include "proc/sched.h"
@@ -47,7 +47,7 @@
 #include "lib/kuser.h"
 #include "lib/kstring.h"
 #include "display/vga_gfx.h"
-#include "arch/x86/speaker.h"
+#include "speaker.h"
 #include "audio/audio.h"
 #include "network/socket/socket.h"
 #include "network/socket/netlink.h"
@@ -2089,10 +2089,10 @@ static int32_t mmsg(int call, const uint32_t *args)
  * dispatches to the matching do_* helper. Returns its result, or -EINVAL for an
  * unknown sub-call.
  */
-int32_t sys_socketcall(isr_params_t *params)
+long sys_socketcall(isr_params_t *params)
 {
-    int call = (int)params->ebx;
-    uint32_t argp = params->ecx;
+    int call = (int)SC_ARG(params, 0);
+    uint32_t argp = SC_ARG(params, 1);
     uint32_t args[6];
     int nargs;
 
@@ -2231,96 +2231,96 @@ static int32_t direct(int call, isr_params_t *params)
 {
     uint32_t args[6];
 
-    args[0] = params->ebx;
-    args[1] = params->ecx;
-    args[2] = params->edx;
-    args[3] = params->esi;
-    args[4] = params->edi;
-    args[5] = params->ebp;
+    args[0] = SC_ARG(params, 0);
+    args[1] = SC_ARG(params, 1);
+    args[2] = SC_ARG(params, 2);
+    args[3] = SC_ARG(params, 3);
+    args[4] = SC_ARG(params, 4);
+    args[5] = SC_ARG(params, 5);
     return socket_dispatch(call, args);
 }
 
-int32_t sys_socket(isr_params_t *params)
+long sys_socket(isr_params_t *params)
 {
     return direct(SC_SOCKET, params);
 }
 
-int32_t sys_socketpair(isr_params_t *params)
+long sys_socketpair(isr_params_t *params)
 {
     return direct(SC_SOCKETPAIR, params);
 }
 
-int32_t sys_bind(isr_params_t *params)
+long sys_bind(isr_params_t *params)
 {
     return direct(SC_BIND, params);
 }
 
-int32_t sys_connect(isr_params_t *params)
+long sys_connect(isr_params_t *params)
 {
     return direct(SC_CONNECT, params);
 }
 
-int32_t sys_listen(isr_params_t *params)
+long sys_listen(isr_params_t *params)
 {
     return direct(SC_LISTEN, params);
 }
 
-int32_t sys_accept4(isr_params_t *params)
+long sys_accept4(isr_params_t *params)
 {
     return direct(SC_ACCEPT4, params);
 }
 
-int32_t sys_getsockopt(isr_params_t *params)
+long sys_getsockopt(isr_params_t *params)
 {
     return direct(SC_GETSOCKOPT, params);
 }
 
-int32_t sys_setsockopt(isr_params_t *params)
+long sys_setsockopt(isr_params_t *params)
 {
     return direct(SC_SETSOCKOPT, params);
 }
 
-int32_t sys_getsockname(isr_params_t *params)
+long sys_getsockname(isr_params_t *params)
 {
     return direct(SC_GETSOCKNAME, params);
 }
 
-int32_t sys_getpeername(isr_params_t *params)
+long sys_getpeername(isr_params_t *params)
 {
     return direct(SC_GETPEERNAME, params);
 }
 
-int32_t sys_sendto(isr_params_t *params)
+long sys_sendto(isr_params_t *params)
 {
     return direct(SC_SENDTO, params);
 }
 
-int32_t sys_sendmsg(isr_params_t *params)
+long sys_sendmsg(isr_params_t *params)
 {
     return direct(SC_SENDMSG, params);
 }
 
-int32_t sys_recvfrom(isr_params_t *params)
+long sys_recvfrom(isr_params_t *params)
 {
     return direct(SC_RECVFROM, params);
 }
 
-int32_t sys_recvmsg(isr_params_t *params)
+long sys_recvmsg(isr_params_t *params)
 {
     return direct(SC_RECVMSG, params);
 }
 
-int32_t sys_shutdown(isr_params_t *params)
+long sys_shutdown(isr_params_t *params)
 {
     return direct(SC_SHUTDOWN, params);
 }
 
-int32_t sys_recvmmsg(isr_params_t *params)
+long sys_recvmmsg(isr_params_t *params)
 {
     return direct(SC_RECVMMSG, params);
 }
 
-int32_t sys_sendmmsg(isr_params_t *params)
+long sys_sendmmsg(isr_params_t *params)
 {
     return direct(SC_SENDMMSG, params);
 }

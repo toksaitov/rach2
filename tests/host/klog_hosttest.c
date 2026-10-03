@@ -147,12 +147,12 @@ void set_fore_color(display_color_t color)
    bytes. */
 static int holds, releases;
 
-void vga_text_hold(void)
+void textcon_hold(void)
 {
     holds++;
 }
 
-void vga_text_release(void)
+void textcon_release(void)
 {
     releases++;
 }

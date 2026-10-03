@@ -21,7 +21,7 @@
  * copied to the front of that memory once every 180 scrolls, when the
  * window would pass its end. `_hw_top` is the cell the display starts at.
  * Only a viewport that moves, a scroll back through history or a clear, is
- * blitted whole by vga_text_sync(). Placing the cursor takes four port
+ * blitted whole by textcon_sync(). Placing the cursor takes four port
  * writes, so a write of many bytes holds it and places it once at the end.
  * While the adapter is in a graphics mode the start address is left alone,
  * since it is the picture's then; leaving graphics mode clears the screen,
@@ -31,6 +31,7 @@
  * and a keyboard's echo comes through k_putc from its interrupt.
  */
 
+#include "../arch/x86/portio.h"
 #include "vga_text.h"
 #include "vga_gfx.h"
 #include "../kio.h"
@@ -237,7 +238,7 @@ static void vga_text_update_cursor(void)
  * Place the hardware cursor where the next byte will land, or note that it
  * moved when a writer holds it.
  */
-void vga_text_place_cursor(void)
+void textcon_place_cursor(void)
 {
     if (_hold > 0) {
         _cursor_stale = true;
@@ -257,13 +258,13 @@ void vga_text_place_cursor(void)
  * interrupts between the load and the store is stored as it would have been,
  * and a cursor the interrupt moved is placed by the writer it interrupted.
  */
-void vga_text_hold(void)
+void textcon_hold(void)
 {
     _hold++;
 }
 
 /** Release a hold, placing the cursor if it moved while held. */
-void vga_text_release(void)
+void textcon_release(void)
 {
     uint32_t flags = kirq_save();
 
@@ -286,7 +287,7 @@ void vga_text_release(void)
  * moved: a scroll back through history, or a clear. Live output does not
  * come here.
  */
-void vga_text_sync(void)
+void textcon_sync(void)
 {
     uint32_t line;
     unsigned int row;
@@ -309,7 +310,7 @@ void vga_text_sync(void)
     }
 
     vga_text_set_start(_hw_top);
-    vga_text_place_cursor();
+    textcon_place_cursor();
 }
 
 /**
@@ -350,7 +351,7 @@ void k_cls(void)
     y = 0;
     _hw_top = 0;
     vga_text_reset_history();
-    vga_text_sync();
+    textcon_sync();
 }
 
 /**
@@ -372,7 +373,7 @@ void k_scroll_down(void)
         _viewport_top_line = _live_top_line;
         vga_text_scroll_hardware();
     } else if (_viewport_top_line != viewport_was) {
-        vga_text_sync();
+        textcon_sync();
     }
 }
 
@@ -386,7 +387,7 @@ void k_scroll_down(void)
  * display at the front of that memory, where the firmware may not have left
  * it.
  */
-void vga_text_write_cell(unsigned int col, unsigned int row, char c, uint8_t attr)
+void textcon_write_cell(unsigned int col, unsigned int row, char c, uint8_t attr)
 {
     uint32_t line = _live_top_line + row;
     uint16_t *cells;
@@ -435,7 +436,7 @@ void k_scrollback_page_up(void)
     }
 
     _follow_live = (_viewport_top_line == _live_top_line);
-    vga_text_sync();
+    textcon_sync();
 }
 
 void k_scrollback_page_down(void)
@@ -448,21 +449,21 @@ void k_scrollback_page_down(void)
         _follow_live = true;
     }
 
-    vga_text_sync();
+    textcon_sync();
 }
 
 void k_scrollback_home(void)
 {
     _viewport_top_line = _history_start_line;
     _follow_live = (_viewport_top_line == _live_top_line);
-    vga_text_sync();
+    textcon_sync();
 }
 
 void k_scrollback_end(void)
 {
     _viewport_top_line = _live_top_line;
     _follow_live = true;
-    vga_text_sync();
+    textcon_sync();
 }
 
 bool k_scrollback_is_active(void)

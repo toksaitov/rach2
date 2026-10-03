@@ -161,7 +161,7 @@ static void vga_putc_raw(char c)
     }
 
     if (c) {
-        vga_text_write_cell(x, y, c, get_curr_color_attr());
+        textcon_write_cell(x, y, c, get_curr_color_attr());
         ++x;
     }
 
@@ -186,7 +186,7 @@ static void vt_erase_row(unsigned int row, unsigned int c0, unsigned int c1)
 
     attr = get_curr_color_attr();
     for (c = c0; c <= c1 && c < SCREEN_NUMBER_OF_COLUMNS; ++c) {
-        vga_text_write_cell(c, row, ' ', attr);
+        textcon_write_cell(c, row, ' ', attr);
     }
 }
 
@@ -713,7 +713,7 @@ void k_putc(char c)
         break;
     }
 
-    vga_text_place_cursor();
+    textcon_place_cursor();
     kirq_restore(flags);
 }
 
@@ -722,12 +722,12 @@ void k_puts(const char *str)
     if (str == NULL)
         return;
 
-    vga_text_hold();
+    textcon_hold();
     while (*str) {
         k_putc(*str++);
     }
     k_putc(CHAR_LF);
-    vga_text_release();
+    textcon_release();
 }
 
 void k_printf(const char *format, ...)
@@ -735,88 +735,8 @@ void k_printf(const char *format, ...)
     va_list ap;
 
     va_start(ap, format);
-    vga_text_hold();
+    textcon_hold();
     k_vprintf(k_putc, format, ap);
-    vga_text_release();
+    textcon_release();
     va_end(ap);
 }
-
-/* The port instructions, which a host test that includes this file stands
-   in for, since its host need not be an x86. */
-#ifndef KIO_HOSTTEST
-void outb(uint16_t port, uint8_t val)
-{
-    __asm__ __volatile__("outb %1, %0" : : "dN"(port), "a"(val));
-}
-
-#ifdef RACH2_HARNESS
-/**
- * Report a process exit status to QEMU's isa-debug-exit device (harness only).
- *
- * Writing the status to I/O port 0xF4 makes the test harness read a real exit
- * code instead of scraping the serial log: a hang or triple-fault then surfaces
- * as a wall-clock timeout, not a missing marker. Only ring 0 may write
- * this port, so a ring-3 probe cannot fake it. QEMU exits with the value
- * `((status << 1) | 1)`, so an exit code of 1 means a status of 0.
- */
-void harness_exit(uint8_t status)
-{
-    outb(0xF4, status);
-}
-#endif
-
-void outw(uint16_t port, uint16_t val)
-{
-    __asm__ __volatile__("outw %1, %0" : : "dN"(port), "a"(val));
-}
-
-void outd(uint16_t port, uint32_t val)
-{
-    __asm__ __volatile__("outl %1, %0" : : "dN"(port), "a"(val));
-}
-
-uint8_t inb(uint16_t port)
-{
-    uint8_t result;
-
-    __asm__ __volatile__("inb %1, %0" : "=a"(result) : "dN"(port));
-
-    return result;
-}
-
-uint16_t inw(uint16_t port)
-{
-    uint16_t result;
-
-    __asm__ __volatile__("inw %1, %0" : "=a"(result) : "dN"(port));
-
-    return result;
-}
-
-uint32_t ind(uint16_t port)
-{
-    uint32_t result;
-
-    __asm__ __volatile__("inl %1, %0" : "=a"(result) : "dN"(port));
-
-    return result;
-}
-
-void insw(uint16_t port, void *buffer, uint32_t count)
-{
-    __asm__ __volatile__("cld\n\t"
-                         "rep insw"
-                         : "+D"(buffer), "+c"(count)
-                         : "d"(port)
-                         : "memory", "cc");
-}
-
-void outsw(uint16_t port, const void *buffer, uint32_t count)
-{
-    __asm__ __volatile__("cld\n\t"
-                         "rep outsw"
-                         : "+S"(buffer), "+c"(count)
-                         : "d"(port)
-                         : "memory", "cc");
-}
-#endif

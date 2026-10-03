@@ -41,11 +41,11 @@ int epoll_is_set(const struct fd_entry *e);
 short epoll_poll_set(struct fd_entry *e, short events, struct wait_queue **wqs, uint32_t room,
                      uint32_t *n);
 
-int32_t sys_epoll_create(struct isr_params *params);
-int32_t sys_epoll_create1(struct isr_params *params);
-int32_t sys_epoll_ctl(struct isr_params *params);
-int32_t sys_epoll_wait(struct isr_params *params);
-int32_t sys_epoll_pwait(struct isr_params *params);
-int32_t sys_epoll_pwait2(struct isr_params *params);
+long sys_epoll_create(struct isr_params *params);
+long sys_epoll_create1(struct isr_params *params);
+long sys_epoll_ctl(struct isr_params *params);
+long sys_epoll_wait(struct isr_params *params);
+long sys_epoll_pwait(struct isr_params *params);
+long sys_epoll_pwait2(struct isr_params *params);
 
 #endif /* _EPOLL_H_ */

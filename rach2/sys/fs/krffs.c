@@ -24,7 +24,7 @@
 #include "krffs.h"
 
 #include "../arch/x86/rtc.h"
-#include "../arch/x86/serial.h"
+#include "../serial.h"
 #include "../lib/kerrno.h"
 
 krffs_file_system_t *krffs_fs = NULL;

@@ -588,14 +588,14 @@ static int32_t pipe_open(uint32_t fds_ptr, int flags)
     return 0;
 }
 
-int32_t sys_pipe2(struct isr_params *params)
+long sys_pipe2(struct isr_params *params)
 {
-    return pipe_open(params->ebx, (int)params->ecx);
+    return pipe_open(SC_ARG(params, 0), (int)SC_ARG(params, 1));
 }
 
 /* pipe() is pipe2() with no flags. The caller's ECX is no argument of it
  * and comes back as it went, as every register but EAX does. */
-int32_t sys_pipe(struct isr_params *params)
+long sys_pipe(struct isr_params *params)
 {
-    return pipe_open(params->ebx, 0);
+    return pipe_open(SC_ARG(params, 0), 0);
 }

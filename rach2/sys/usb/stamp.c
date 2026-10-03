@@ -2,7 +2,7 @@
 
 #include "../klog.h"
 #include "../lib/kirq.h"
-#include "../arch/x86/pit.h"
+#include "../timer.h"
 
 static int recording;
 static int pump_took;
@@ -85,7 +85,7 @@ void usb_stamp_wake(void)
     }
     stamp.entry = pump_entry;
     stamp.event = pump_event;
-    stamp.wake = pit_now_us();
+    stamp.wake = timer_now_us();
     stamp.msi = pump_msi;
     stamp.tracked = waiting;
     stamp.dispatched = 0;
@@ -116,7 +116,7 @@ void usb_stamp_read(void)
     }
     pending = 0;
     waiting = 0;
-    read_us = pit_now_us();
+    read_us = timer_now_us();
     result = stamp;
     kirq_restore(flags);
     klog(KLOG_INFO, "usb",

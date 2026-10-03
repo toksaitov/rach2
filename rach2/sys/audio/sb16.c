@@ -3,11 +3,12 @@
  * double-buffered for continuous output.
  */
 
+#include "../arch/x86/portio.h"
 #include "../klog.h"
 #include "sb16.h"
 #include "dma.h"
 #include "../kio.h"
-#include "../arch/x86/serial.h"
+#include "../serial.h"
 #include "../irq.h"
 
 #define SB16_BASE      0x220

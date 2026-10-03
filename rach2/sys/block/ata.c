@@ -57,6 +57,7 @@
  * emulated; the polls and the ticks waited are counted for `/proc/disk`.
  */
 
+#include "../arch/x86/portio.h"
 #include "../cmdline.h"
 #include "../klog.h"
 #include "block.h"
@@ -68,11 +69,11 @@
 #include "../irq.h"
 #include "../lib/kirq.h"
 #include "../lib/kstring.h"
-#include "../arch/x86/pci.h"
+#include "../pci.h"
 #include "../proc/process.h"
 #include "../proc/sched.h"
 #include "../proc/wait_queue.h"
-#include "../arch/x86/serial.h"
+#include "../serial.h"
 
 #include "../lib/kerrno.h"
 #include "../lib/kint.h"

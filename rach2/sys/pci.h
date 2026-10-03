@@ -8,8 +8,8 @@
 #ifndef _PCI_H_
 #define _PCI_H_
 
-#include "../../lib/kint.h"
-#include "../../lib/kdef.h"
+#include "lib/kint.h"
+#include "lib/kdef.h"
 
 /*
  * PCI configuration space offsets
@@ -70,6 +70,13 @@ typedef struct {
     uint32_t bar[6]; /* Base Address Registers */
 } pci_device_t;
 
+/*
+ * Configuration space, by bus, device, function and offset. The dword read
+ * and the dword and word writes are the architecture's, by whatever
+ * mechanism its machine has (arch/x86/pciconf.c: ports 0xCF8 and 0xCFC);
+ * the narrower reads are taken from a dword.
+ */
+
 /** Read a 32-bit dword from PCI configuration space. */
 uint32_t pci_read_config32(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset);
 
@@ -86,6 +93,17 @@ void pci_write_config32(uint8_t bus, uint8_t device, uint8_t function, uint8_t o
 /** Write a 16-bit word to PCI configuration space. */
 void pci_write_config16(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset,
                         uint16_t value);
+
+/*
+ * The bus's I/O space, where a device's I/O base address register points:
+ * the architecture's (arch/x86/pciconf.c: the processor's own ports).
+ */
+uint8_t pci_io_read8(uint16_t port);
+uint16_t pci_io_read16(uint16_t port);
+uint32_t pci_io_read32(uint16_t port);
+void pci_io_write8(uint16_t port, uint8_t value);
+void pci_io_write16(uint16_t port, uint16_t value);
+void pci_io_write32(uint16_t port, uint32_t value);
 
 /** Find the first device by class and subclass; true and fills `out` on a
  * match. */
@@ -140,18 +158,21 @@ bool pci_nth(int nth, pci_device_t *out);
  */
 uint8_t pci_find_capability(uint8_t bus, uint8_t device, uint8_t function, uint8_t cap_id);
 
-/* The MSI capability's control word, and the address a message is written
- * to: the local APIC's page, with the destination processor in bits 12 to
- * 19 and the vector in the data. */
+/* The MSI capability's control word. */
 #define PCI_MSI_ENABLE          0x0001u
 #define PCI_MSI_MULTIPLE_ENABLE 0x0070u
 #define PCI_MSI_64BIT           0x0080u
 #define PCI_MSI_PER_VECTOR      0x0100u /* the device can mask its own vectors */
 #define PCI_MSIX_ENABLE         0x8000u
-#define PCI_MSI_ADDRESS_BASE    0xFEE00000u
+
+/**
+ * The address a device writes, and the data it writes there, to raise
+ * `vector`: the architecture's (arch/x86/pciconf.c, the local APIC's page).
+ */
+void pci_msi_message(uint8_t vector, uint32_t *address, uint32_t *data);
 
 /** Program one message on `dev` and enable it: 0, or -1 with the reason in
- * the log. The local APIC must be ready. */
+ * the log. The architecture's message controller must be ready. */
 int pci_msi_enable(const pci_device_t *dev, uint8_t vector);
 
 /** Stop `dev` from sending messages. */

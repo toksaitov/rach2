@@ -1,7 +1,7 @@
 /*
  * pcimsi_hosttest.c: `pci_msi_enable` against a model of configuration space.
  *
- * host-deps: rach2/sys/arch/x86/pci.c
+ * host-deps: rach2/sys/pci.c
  *
  * The order of the writes is the whole of this: a device told to send
  * messages while its address is half written sends them somewhere, and a
@@ -14,7 +14,7 @@
  * the code under test, not a stub.
  */
 
-#include "../../rach2/sys/arch/x86/pci.h"
+#include "../../rach2/sys/pci.h"
 
 extern int printf(const char *fmt, ...);
 

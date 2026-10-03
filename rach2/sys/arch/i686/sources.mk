@@ -15,7 +15,8 @@ ARCH_ASM_SRC = sys/arch/i686/loader.s \
     sys/arch/i686/idt_handler.s \
     sys/arch/i686/switch.s
 
-ARCH_C_SRC = sys/arch/i686/gdt.c \
+ARCH_C_SRC = sys/arch/i686/usertest.c \
+    sys/arch/i686/gdt.c \
     sys/arch/i686/tss.c \
     sys/arch/i686/idt.c \
     sys/arch/i686/sigframe.c \

@@ -263,13 +263,13 @@ void ptrace_syscall_stop(isr_params_t *tf, uint32_t nr, int leaving)
     if (self->ptrace_opts & PTRACE_O_TRACESYSGOOD) {
         signo |= 0x80u;
     }
-    self->orig_eax = (int32_t)nr;
+    self->orig_nr = (int32_t)nr;
     if (!leaving) {
         tf->eax = (uint32_t)-ENOSYS;
     }
     sig = ptrace_stop((signo << 8) | 0x7F, NULL);
     if (!leaving && ((self->sig_pending | self->tg->pending) & KSIG_BIT(SIGKILL))) {
-        self->orig_eax = -1;
+        self->orig_nr = -1;
     }
     if (sig > 0 && sig <= KSIG_MAX) {
         k_memset(&info, 0, sizeof(info));
@@ -512,7 +512,7 @@ static void regs_get(const process_t *t, uint32_t r[R_COUNT])
     r[R_ES] = tf->es & 0xFFFFu;
     r[R_FS] = tf->fs & 0xFFFFu;
     r[R_GS] = tf->gs & 0xFFFFu;
-    r[R_ORIG_EAX] = (uint32_t)t->orig_eax;
+    r[R_ORIG_EAX] = (uint32_t)t->orig_nr;
     r[R_EIP] = tf->eip;
     r[R_CS] = tf->cs & 0xFFFFu;
     r[R_EFL] = tf->eflags;
@@ -573,7 +573,7 @@ static int regs_set(process_t *t, int i, uint32_t v)
         }
         break;
     case R_ORIG_EAX:
-        t->orig_eax = (int32_t)v;
+        t->orig_nr = (int32_t)v;
         if ((int32_t)v == -1) {
             t->restart_nr = 0;
         }
@@ -1080,7 +1080,7 @@ static int32_t ptrace_stopped(process_t *t, uint32_t pid, uint32_t request, uint
     }
 }
 
-int32_t sys_ptrace(isr_params_t *params)
+long sys_ptrace(isr_params_t *params)
 {
     uint32_t request = params->ebx;
     uint32_t addr = params->edx;

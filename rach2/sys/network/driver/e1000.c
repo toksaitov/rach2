@@ -30,9 +30,9 @@
 #include "../../irq.h"
 #include "../../kio.h"
 #include "../../mm/paging.h"
-#include "../../arch/x86/pci.h"
-#include "../../arch/x86/serial.h"
-#include "../../arch/x86/udelay.h"
+#include "../../pci.h"
+#include "../../serial.h"
+#include "../../udelay.h"
 #include "../../mm/paging.h"
 
 /* Register access, behind an indirection the host test can replace. */
@@ -148,8 +148,8 @@ static void mmio_w32(struct e1000 *e, uint32_t off, uint32_t value)
  */
 static void mmio_wio(struct e1000 *e, uint32_t off, uint32_t value)
 {
-    outl(e->iobase + E1000_IO_ADDR, off);
-    outl(e->iobase + E1000_IO_DATA, value);
+    pci_io_write32((uint16_t)(e->iobase + E1000_IO_ADDR), off);
+    pci_io_write32((uint16_t)(e->iobase + E1000_IO_DATA), value);
 }
 
 static const struct e1000_io mmio_io = {mmio_r32, mmio_w32, mmio_wio, k_udelay};
@@ -628,7 +628,7 @@ static void e1000_tx_reclaim(struct e1000 *e)
         }
         /* The descriptor's other fields are read only after the card has
          * given it back. */
-        __asm__ __volatile__("" : : : "memory");
+        k_barrier();
         e->tx_tail++;
     }
 }
@@ -706,7 +706,7 @@ static int e1000_tx_frame(struct e1000 *e, const uint8_t *data, uint16_t len)
 
     /* Every field of the descriptor must be visible before the tail moves,
      * because the tail is what tells the card to read it. */
-    __asm__ __volatile__("" : : : "memory");
+    k_barrier();
     e->tx_head++;
     io->w32(e, E1000_TDT, e->tx_head % E1000_RING_SIZE);
 
@@ -754,7 +754,7 @@ static void e1000_rx(struct e1000 *e)
             break;
         }
         /* The descriptor's payload is read only after done was seen. */
-        __asm__ __volatile__("" : : : "memory");
+        k_barrier();
 
         errors = E1000_RXD_ERRORS(d);
         len = E1000_RXD_LEN(d);
@@ -784,7 +784,7 @@ static void e1000_rx(struct e1000 *e)
 
         d->len_csum = 0;
         d->sta_err = 0;
-        __asm__ __volatile__("" : : : "memory");
+        k_barrier();
 
         last = e->rx_cur;
         taken++;

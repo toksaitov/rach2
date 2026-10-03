@@ -23,7 +23,8 @@
  * under one part in ten thousand and is ignored.
  */
 
-#include "udelay.h"
+#include "portio.h"
+#include "../../udelay.h"
 #include "../../kio.h"
 #include "../../lib/kirq.h"
 #include "pit.h"

@@ -37,6 +37,7 @@
  * nothing but a late answer could free one.
  */
 
+#include "../arch/arch.h"
 #include "block.h"
 
 #include "../cmdline.h"
@@ -48,7 +49,7 @@
 #include "../mm/kheap.h"
 #include "../mm/paging.h"
 #include "../panic.h"
-#include "../arch/x86/pit.h"
+#include "../timer.h"
 #include "../proc/process.h"
 #include "../proc/wait_queue.h"
 
@@ -97,7 +98,7 @@ static uint32_t irq_save(void)
 static void irq_restore(uint32_t flags)
 {
     if (flags & 0x200) {
-        __asm__ __volatile__("sti");
+        arch_irq_enable();
     }
 }
 
@@ -331,7 +332,7 @@ static struct block_request *req_take(block_device_t *device, int write, uint64_
 {
     block_device_t *owner = block_submitter(device);
     int waited = 0;
-    uint32_t wait_from = pit_now_us();
+    uint32_t wait_from = timer_now_us();
 
     if (why) {
         *why = -EIO;
@@ -375,7 +376,7 @@ static struct block_request *req_take(block_device_t *device, int write, uint64_
             r->generation = ++next_generation;
             r->deadline = req_ticks + req_period(device);
             r->overdue = 0;
-            r->taken_us = pit_now_us();
+            r->taken_us = timer_now_us();
             r->flags = 0;
             if (waited) {
                 latency_span(LAT_DISK_WAIT, wait_from, r->taken_us);
@@ -508,7 +509,7 @@ int block_request_flags(block_device_t *device, int write, uint64_t lba, uint32_
                         void *buffer, uint32_t req_flags)
 {
     block_device_t *disk = device ? block_physical(device) : 0;
-    uint32_t start = pit_now_us();
+    uint32_t start = timer_now_us();
     int rc;
 
     if (!device) {
@@ -524,7 +525,7 @@ int block_request_flags(block_device_t *device, int write, uint64_t lba, uint32_
         disk->stats.in_flight--;
     }
     if (rc == 0) {
-        uint32_t us = pit_now_us() - start;
+        uint32_t us = timer_now_us() - start;
 
         count_transfer(&device->stats, write, count, us);
         if (disk && disk != device) {
@@ -757,7 +758,7 @@ void block_request_complete(struct block_request *request, uint32_t generation, 
     }
     request->status = status;
     request->state = BLOCK_REQ_DONE;
-    latency_span(LAT_DISK, request->taken_us, pit_now_us());
+    latency_span(LAT_DISK, request->taken_us, timer_now_us());
     {
         /* A completion with another request in flight is a request the
            layer did not serialize behind it, which `disk-overlaps` counts

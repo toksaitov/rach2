@@ -123,6 +123,14 @@ $(C_OBJECTS) : $(BUILD)/%.o : %.c
 # in $(BUILD).
 -include $(C_OBJECTS:.o=.d)
 
+# The shared code held to what every architecture can build
+# (tools/verify/archcheck.sh): compiled for 32-bit and 64-bit ARM by clang's
+# front end, with no architecture's or platform's header reached and no
+# assembly. Nothing is linked, and no object is written.
+.PHONY : check-arch
+check-arch :
+	@sh ../tools/verify/archcheck.sh $(C_SRC_SHARED) -- $(ARCH_C_SRC) $(PC_C_SRC)
+
 # Emit the explicit kernel source list (expanded), for
 # tools/verify/check_sources.sh (the source-list guard that fails if a rach2 .c
 # on disk is missing from C_SRC). .PHONY so it always runs; prints nothing but

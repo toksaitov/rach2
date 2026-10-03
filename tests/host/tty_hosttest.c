@@ -183,7 +183,7 @@ int copy_to_user(void *dst, const void *src, uint32_t n)
 }
 
 /** Use a nonzero timestamp without imposing a timing assertion. */
-uint32_t pit_now_us(void)
+uint32_t timer_now_us(void)
 {
     return 1;
 }

@@ -20,7 +20,7 @@
 #include "../udp/udp.h"
 #include "../tcp/tcp.h"
 #include "../../io/poll.h"
-#include "../../arch/x86/serial.h"
+#include "../../serial.h"
 #include "../../lib/kstring.h"
 #include "../../lib/kerrno.h"
 #include "../../mm/kheap.h"

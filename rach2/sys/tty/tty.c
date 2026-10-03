@@ -12,11 +12,11 @@
 
 #include "tty.h"
 #include "../latency.h"
-#include "../arch/x86/pit.h"
+#include "../timer.h"
 
 #include "../usb/usb.h"
 #include "../io/poll.h"
-#include "../arch/x86/serial.h"
+#include "../serial.h"
 #include "../kio.h"
 #include "../klog.h"
 #include "../lib/kirq.h"
@@ -155,7 +155,7 @@ void tty_input_char(struct tty *t, unsigned char c)
     }
     if (n_tty_readable(&t->ldisc)) {
         if (t->ready_us == 0) {
-            t->ready_us = pit_now_us();
+            t->ready_us = timer_now_us();
         }
         wq_wake(&t->input_wq, WQ_DATA);
     }
@@ -237,7 +237,7 @@ int tty_read(struct tty *t, unsigned char *kbuf, int count, int nonblock)
         if (n_tty_readable(&t->ldisc)) {
             n = n_tty_read(&t->ldisc, kbuf, count);
             if (t->ready_us) {
-                latency_span(LAT_CONSOLE, t->ready_us, pit_now_us());
+                latency_span(LAT_CONSOLE, t->ready_us, timer_now_us());
                 t->ready_us = 0;
             }
             kirq_restore(flags);
@@ -489,7 +489,7 @@ static void console_pump(struct tty *t)
     }
     if (!echo && n_tty_readable(&t->ldisc)) {
         if (t->ready_us == 0) {
-            t->ready_us = pit_now_us();
+            t->ready_us = timer_now_us();
         }
         wq_wake_all(&t->input_wq);
     }

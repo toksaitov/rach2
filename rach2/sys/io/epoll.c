@@ -623,17 +623,17 @@ static int32_t make_epoll(uint32_t flags)
     return fd;
 }
 
-int32_t sys_epoll_create(struct isr_params *params)
+long sys_epoll_create(struct isr_params *params)
 {
-    if ((int32_t)params->ebx <= 0) {
+    if ((int32_t)SC_ARG(params, 0) <= 0) {
         return -EINVAL;
     }
     return make_epoll(0);
 }
 
-int32_t sys_epoll_create1(struct isr_params *params)
+long sys_epoll_create1(struct isr_params *params)
 {
-    return make_epoll(params->ebx);
+    return make_epoll(SC_ARG(params, 0));
 }
 
 /*
@@ -659,27 +659,27 @@ static int nests_badly(struct epoll *inner, struct epoll *ep)
     return below + 1 + above > EP_MAX_NESTS;
 }
 
-int32_t sys_epoll_ctl(struct isr_params *params)
+long sys_epoll_ctl(struct isr_params *params)
 {
-    struct epoll *ep = epoll_of((int)params->ebx);
-    int op = (int)params->ecx;
-    int fd = (int)params->edx;
+    struct epoll *ep = epoll_of((int)SC_ARG(params, 0));
+    int op = (int)SC_ARG(params, 1);
+    int fd = (int)SC_ARG(params, 2);
     fd_entry_t *target = fd_get(current_proc->fds, fd);
     uint32_t ev[3] = {0, 0, 0};
     struct epitem **link;
     struct epitem *it;
 
-    if (!fd_get(current_proc->fds, (int)params->ebx) || !target) {
+    if (!fd_get(current_proc->fds, (int)SC_ARG(params, 0)) || !target) {
         return -EBADF;
     }
-    if (!ep || fd == (int)params->ebx || (is_set(target) && target->priv == ep)) {
+    if (!ep || fd == (int)SC_ARG(params, 0) || (is_set(target) && target->priv == ep)) {
         return -EINVAL;
     }
     if (target->type == FD_TYPE_FILE || target->type == FD_TYPE_DIR) {
         return -EPERM;
     }
     if (op != EPOLL_CTL_DEL &&
-        copy_from_user(ev, (const void __user *)params->esi, EP_EVENT_SIZE) != 0) {
+        copy_from_user(ev, (const void __user *)SC_ARG(params, 3), EP_EVENT_SIZE) != 0) {
         return -EFAULT;
     }
     for (link = &ep->items; (it = *link) != NULL; link = &it->next) {
@@ -800,26 +800,26 @@ static int32_t epoll_wait_common(int epfd, uint32_t uevents, int max, int has_de
     return rc;
 }
 
-int32_t sys_epoll_wait(struct isr_params *params)
+long sys_epoll_wait(struct isr_params *params)
 {
     int has_deadline;
-    uint32_t deadline = poll_ms_deadline((int)params->esi, &has_deadline);
+    uint32_t deadline = poll_ms_deadline((int)SC_ARG(params, 3), &has_deadline);
 
-    return epoll_wait_common((int)params->ebx, params->ecx, (int)params->edx, has_deadline,
+    return epoll_wait_common((int)SC_ARG(params, 0), SC_ARG(params, 1), (int)SC_ARG(params, 2), has_deadline,
                              deadline);
 }
 
-int32_t sys_epoll_pwait(struct isr_params *params)
+long sys_epoll_pwait(struct isr_params *params)
 {
     int has_deadline;
-    uint32_t deadline = poll_ms_deadline((int)params->esi, &has_deadline);
-    int32_t rc = poll_mask_set(params->edi, params->ebp);
+    uint32_t deadline = poll_ms_deadline((int)SC_ARG(params, 3), &has_deadline);
+    int32_t rc = poll_mask_set(SC_ARG(params, 4), SC_ARG(params, 5));
 
     if (rc != 0) {
         return rc;
     }
     return poll_mask_done(
-        epoll_wait_common((int)params->ebx, params->ecx, (int)params->edx, has_deadline, deadline));
+        epoll_wait_common((int)SC_ARG(params, 0), SC_ARG(params, 1), (int)SC_ARG(params, 2), has_deadline, deadline));
 }
 
 /**
@@ -828,19 +828,19 @@ int32_t sys_epoll_pwait(struct isr_params *params)
  * signed 64-bit value, low word first; a negative one is EINVAL, and a
  * timeout past 2147483647 milliseconds, about 24.8 days, is shortened to it.
  */
-int32_t sys_epoll_pwait2(struct isr_params *params)
+long sys_epoll_pwait2(struct isr_params *params)
 {
     int has_deadline = 0;
     uint32_t deadline = 0;
     int32_t rc;
 
-    if (params->esi) {
+    if (SC_ARG(params, 3)) {
         /* struct __kernel_timespec: 64-bit seconds and nanoseconds. */
         uint32_t ts[4];
         int64_t sec;
         uint64_t ms;
 
-        if (copy_from_user(ts, (const void __user *)params->esi, sizeof(ts)) != 0) {
+        if (copy_from_user(ts, (const void __user *)SC_ARG(params, 3), sizeof(ts)) != 0) {
             return -EFAULT;
         }
         sec = (int64_t)(((uint64_t)ts[1] << 32) | ts[0]);
@@ -856,10 +856,10 @@ int32_t sys_epoll_pwait2(struct isr_params *params)
         }
         deadline = poll_ms_deadline((int)ms, &has_deadline);
     }
-    rc = poll_mask_set(params->edi, params->ebp);
+    rc = poll_mask_set(SC_ARG(params, 4), SC_ARG(params, 5));
     if (rc != 0) {
         return rc;
     }
     return poll_mask_done(
-        epoll_wait_common((int)params->ebx, params->ecx, (int)params->edx, has_deadline, deadline));
+        epoll_wait_common((int)SC_ARG(params, 0), SC_ARG(params, 1), (int)SC_ARG(params, 2), has_deadline, deadline));
 }

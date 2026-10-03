@@ -23,9 +23,9 @@
 #include "../klog.h"
 #include "../arch/x86/lapic.h"
 #include "../lib/kirq.h"
-#include "../arch/x86/pci.h"
-#include "../arch/x86/pit.h"
-#include "../arch/x86/udelay.h"
+#include "../pci.h"
+#include "../timer.h"
+#include "../udelay.h"
 #include "core.h"
 #include "hcd.h"
 #include "xhci.h"
@@ -295,7 +295,7 @@ static int usb_pump(uint32_t elapsed_ms, int from_interrupt)
             }
         }
     }
-    usb_stamp_pump(stamp_entry, taken > 0 ? pit_now_us() : 0, from_interrupt, taken > 0);
+    usb_stamp_pump(stamp_entry, taken > 0 ? timer_now_us() : 0, from_interrupt, taken > 0);
     if (taken > 0) {
         pump_saw_pending = interrupt_pending();
     }
@@ -353,7 +353,7 @@ static void usb_msi_handler(isr_params_t *params)
 {
     (void)params;
 
-    stamp_entry = pit_now_us();
+    stamp_entry = timer_now_us();
     usb_messages++;
     (void)usb_pump(0, 1);
     if (msi_drop_after != 0 && usb_messages >= msi_drop_after) {

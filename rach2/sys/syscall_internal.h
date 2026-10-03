@@ -32,13 +32,13 @@ void init_kstacks(void);
 
 extern volatile process_t *stdin_waiting_proc;
 
-int32_t sys_exit(isr_params_t *params);
+long sys_exit(isr_params_t *params);
 
-int32_t sys_ftruncate(isr_params_t *params);
+long sys_ftruncate(isr_params_t *params);
 
-int32_t sys_ftruncate64(isr_params_t *params);
+long sys_ftruncate64(isr_params_t *params);
 
-int32_t sys_write(isr_params_t *params);
+long sys_write(isr_params_t *params);
 
 /*
  * Gather write (writev(2)). musl's buffered stdio (printf) emits its output
@@ -53,7 +53,7 @@ struct kernel_iovec {
 /* Format: the vectors readv, writev and sendmsg accept, the Linux IOV_MAX. */
 #define IOV_MAX_LOCAL 1024
 
-int32_t sys_writev(isr_params_t *params);
+long sys_writev(isr_params_t *params);
 
 int canonicalize_abs(char *path);
 
@@ -84,198 +84,198 @@ int32_t cred_access_ref(const struct vfs_ref *r, int want, int use_real);
 
 int32_t cred_access_node(const krffs_node_t *node, int want, int use_real);
 
-int32_t sys_mount(isr_params_t *params);
+long sys_mount(isr_params_t *params);
 
-int32_t sys_umount2(isr_params_t *params);
+long sys_umount2(isr_params_t *params);
 
-int32_t sys_open(isr_params_t *params);
+long sys_open(isr_params_t *params);
 
-int32_t sys_openat(isr_params_t *params);
+long sys_openat(isr_params_t *params);
 
-int32_t sys_close(isr_params_t *params);
+long sys_close(isr_params_t *params);
 
-int32_t sys_fsync(isr_params_t *params);
+long sys_fsync(isr_params_t *params);
 
-int32_t sys_sync(isr_params_t *params);
+long sys_sync(isr_params_t *params);
 
-int32_t sys_syncfs(isr_params_t *params);
+long sys_syncfs(isr_params_t *params);
 
-int32_t sys_readahead(isr_params_t *params);
+long sys_readahead(isr_params_t *params);
 
 int32_t fs_flags_ioctl(fd_entry_t *entry, uint32_t request, uint32_t arg, int *handled);
 
-int32_t sys_fadvise64(isr_params_t *params);
+long sys_fadvise64(isr_params_t *params);
 
-int32_t sys_fadvise64_64(isr_params_t *params);
+long sys_fadvise64_64(isr_params_t *params);
 
-int32_t sys_setxattr(isr_params_t *params);
-int32_t sys_lsetxattr(isr_params_t *params);
-int32_t sys_fsetxattr(isr_params_t *params);
-int32_t sys_getxattr(isr_params_t *params);
-int32_t sys_lgetxattr(isr_params_t *params);
-int32_t sys_fgetxattr(isr_params_t *params);
-int32_t sys_listxattr(isr_params_t *params);
-int32_t sys_llistxattr(isr_params_t *params);
-int32_t sys_flistxattr(isr_params_t *params);
-int32_t sys_removexattr(isr_params_t *params);
-int32_t sys_lremovexattr(isr_params_t *params);
-int32_t sys_fremovexattr(isr_params_t *params);
+long sys_setxattr(isr_params_t *params);
+long sys_lsetxattr(isr_params_t *params);
+long sys_fsetxattr(isr_params_t *params);
+long sys_getxattr(isr_params_t *params);
+long sys_lgetxattr(isr_params_t *params);
+long sys_fgetxattr(isr_params_t *params);
+long sys_listxattr(isr_params_t *params);
+long sys_llistxattr(isr_params_t *params);
+long sys_flistxattr(isr_params_t *params);
+long sys_removexattr(isr_params_t *params);
+long sys_lremovexattr(isr_params_t *params);
+long sys_fremovexattr(isr_params_t *params);
 
 int32_t raw_seek_resolve(uint64_t cur, uint64_t size, long long delta, int whence, uint64_t *out);
 
-int32_t sys_lseek(isr_params_t *params);
+long sys_lseek(isr_params_t *params);
 
 int sock_is_query(const struct socket *sock);
 
-int32_t sys_read(isr_params_t *params);
+long sys_read(isr_params_t *params);
 
-int32_t sys_pread64(isr_params_t *params);
+long sys_pread64(isr_params_t *params);
 
-int32_t sys_pwrite64(isr_params_t *params);
+long sys_pwrite64(isr_params_t *params);
 
 int32_t readv_dgram(fd_entry_t *entry, uint32_t iov_user, int iovcnt, uint32_t *src_ip,
                     uint16_t *src_port, int peek, int32_t *whole);
 
-int32_t sys_readv(isr_params_t *params);
+long sys_readv(isr_params_t *params);
 
-int32_t sys_dup(isr_params_t *params);
+long sys_dup(isr_params_t *params);
 
-int32_t sys_dup2(isr_params_t *params);
+long sys_dup2(isr_params_t *params);
 
-int32_t sys_chdir(isr_params_t *params);
+long sys_chdir(isr_params_t *params);
 
-int32_t sys_fchdir(isr_params_t *params);
+long sys_fchdir(isr_params_t *params);
 
-int32_t sys_chroot(isr_params_t *params);
+long sys_chroot(isr_params_t *params);
 
-int32_t sys_getcwd(isr_params_t *params);
+long sys_getcwd(isr_params_t *params);
 
-int32_t sys_readlink(isr_params_t *params);
+long sys_readlink(isr_params_t *params);
 
-int32_t sys_readlinkat(isr_params_t *params);
+long sys_readlinkat(isr_params_t *params);
 
-int32_t sys_stat64(isr_params_t *params);
+long sys_stat64(isr_params_t *params);
 
-int32_t sys_lstat64(isr_params_t *params);
+long sys_lstat64(isr_params_t *params);
 
-int32_t sys_statfs64(isr_params_t *params);
+long sys_statfs64(isr_params_t *params);
 
-int32_t sys_fstatfs64(isr_params_t *params);
+long sys_fstatfs64(isr_params_t *params);
 
-int32_t sys_fstat64(isr_params_t *params);
+long sys_fstat64(isr_params_t *params);
 
-int32_t sys_fstatat64(isr_params_t *params);
+long sys_fstatat64(isr_params_t *params);
 
-int32_t sys_statx(isr_params_t *params);
+long sys_statx(isr_params_t *params);
 
-int32_t sys_access(isr_params_t *params);
+long sys_access(isr_params_t *params);
 
-int32_t sys_faccessat(isr_params_t *params);
-int32_t sys_inotify_add_watch(isr_params_t *params);
+long sys_faccessat(isr_params_t *params);
+long sys_inotify_add_watch(isr_params_t *params);
 
-int32_t sys_chmod(isr_params_t *params);
+long sys_chmod(isr_params_t *params);
 
-int32_t sys_fchmodat(isr_params_t *params);
+long sys_fchmodat(isr_params_t *params);
 
-int32_t sys_fchmod(isr_params_t *params);
+long sys_fchmod(isr_params_t *params);
 
-int32_t sys_chown(isr_params_t *params);
+long sys_chown(isr_params_t *params);
 
-int32_t sys_lchown(isr_params_t *params);
+long sys_lchown(isr_params_t *params);
 
-int32_t sys_fchownat(isr_params_t *params);
+long sys_fchownat(isr_params_t *params);
 
-int32_t sys_fchown(isr_params_t *params);
+long sys_fchown(isr_params_t *params);
 
-int32_t sys_truncate(isr_params_t *params);
+long sys_truncate(isr_params_t *params);
 
-int32_t sys_truncate64(isr_params_t *params);
+long sys_truncate64(isr_params_t *params);
 
-int32_t sys_symlink(isr_params_t *params);
+long sys_symlink(isr_params_t *params);
 
-int32_t sys_symlinkat(isr_params_t *params);
+long sys_symlinkat(isr_params_t *params);
 
-int32_t sys_link(isr_params_t *params);
+long sys_link(isr_params_t *params);
 
-int32_t sys_linkat(isr_params_t *params);
+long sys_linkat(isr_params_t *params);
 
-int32_t sys__llseek(isr_params_t *params);
+long sys__llseek(isr_params_t *params);
 
-int32_t sys_fcntl64(isr_params_t *params);
+long sys_fcntl64(isr_params_t *params);
 
-int32_t sys_flock(isr_params_t *params);
+long sys_flock(isr_params_t *params);
 
-int32_t sys_memfd_create(isr_params_t *params);
+long sys_memfd_create(isr_params_t *params);
 
-int32_t sys_splice(isr_params_t *params);
+long sys_splice(isr_params_t *params);
 
-int32_t sys_tee(isr_params_t *params);
+long sys_tee(isr_params_t *params);
 
-int32_t sys_sendfile(isr_params_t *params);
+long sys_sendfile(isr_params_t *params);
 
-int32_t sys_fallocate(isr_params_t *params);
+long sys_fallocate(isr_params_t *params);
 
-int32_t sys_close_range(isr_params_t *params);
+long sys_close_range(isr_params_t *params);
 
-int32_t sys_stat(isr_params_t *params);
+long sys_stat(isr_params_t *params);
 
-int32_t sys_lstat(isr_params_t *params);
+long sys_lstat(isr_params_t *params);
 
-int32_t sys_execve(isr_params_t *params);
+long sys_execve(isr_params_t *params);
 
-int32_t sys_fork(isr_params_t *params);
+long sys_fork(isr_params_t *params);
 
-int32_t sys_vfork(isr_params_t *params);
+long sys_vfork(isr_params_t *params);
 
-int32_t sys_exit_group(isr_params_t *params);
+long sys_exit_group(isr_params_t *params);
 
-int32_t sys_getcpu(isr_params_t *params);
+long sys_getcpu(isr_params_t *params);
 
-int32_t sys_rt_sigtimedwait(isr_params_t *params);
+long sys_rt_sigtimedwait(isr_params_t *params);
 
-int32_t sys_mlock(isr_params_t *params);
+long sys_mlock(isr_params_t *params);
 
-int32_t sys_munlock(isr_params_t *params);
+long sys_munlock(isr_params_t *params);
 
-int32_t sys_mlock2(isr_params_t *params);
+long sys_mlock2(isr_params_t *params);
 
-int32_t sys_mlockall(isr_params_t *params);
+long sys_mlockall(isr_params_t *params);
 
-int32_t sys_munlockall(isr_params_t *params);
+long sys_munlockall(isr_params_t *params);
 
-int32_t sys_mincore(isr_params_t *params);
+long sys_mincore(isr_params_t *params);
 
-int32_t sys_personality(isr_params_t *params);
+long sys_personality(isr_params_t *params);
 
-int32_t sys_waitpid(isr_params_t *params);
+long sys_waitpid(isr_params_t *params);
 
-int32_t sys_wait4(isr_params_t *params);
+long sys_wait4(isr_params_t *params);
 
-int32_t sys_waitid(isr_params_t *params);
+long sys_waitid(isr_params_t *params);
 
-int32_t sys_getrusage(isr_params_t *params);
+long sys_getrusage(isr_params_t *params);
 
-int32_t sys_creat(isr_params_t *params);
+long sys_creat(isr_params_t *params);
 
-int32_t sys_unlink(isr_params_t *params);
+long sys_unlink(isr_params_t *params);
 
-int32_t sys_unlinkat(isr_params_t *params);
+long sys_unlinkat(isr_params_t *params);
 
-int32_t sys_mkdir(isr_params_t *params);
+long sys_mkdir(isr_params_t *params);
 
-int32_t sys_mkdirat(isr_params_t *params);
+long sys_mkdirat(isr_params_t *params);
 
-int32_t sys_mknod(isr_params_t *params);
+long sys_mknod(isr_params_t *params);
 
-int32_t sys_mknodat(isr_params_t *params);
+long sys_mknodat(isr_params_t *params);
 
-int32_t sys_rmdir(isr_params_t *params);
+long sys_rmdir(isr_params_t *params);
 
-int32_t sys_rename(isr_params_t *params);
+long sys_rename(isr_params_t *params);
 
-int32_t sys_renameat(isr_params_t *params);
+long sys_renameat(isr_params_t *params);
 
-int32_t sys_renameat2(isr_params_t *params);
+long sys_renameat2(isr_params_t *params);
 
 /*
  * Timespec structure for utimensat
@@ -290,43 +290,43 @@ extern volatile uint32_t kernel_ticks;
 
 void get_current_time(int64_t *seconds, int64_t *nanoseconds);
 
-int32_t sys_utimensat(isr_params_t *params);
+long sys_utimensat(isr_params_t *params);
 
-int32_t sys_getdents64(isr_params_t *params);
+long sys_getdents64(isr_params_t *params);
 
-int32_t sys_getuid(isr_params_t *params);
+long sys_getuid(isr_params_t *params);
 
-int32_t sys_geteuid(isr_params_t *params);
+long sys_geteuid(isr_params_t *params);
 
-int32_t sys_getgid(isr_params_t *params);
+long sys_getgid(isr_params_t *params);
 
-int32_t sys_getegid(isr_params_t *params);
+long sys_getegid(isr_params_t *params);
 
-int32_t sys_kill(isr_params_t *params);
+long sys_kill(isr_params_t *params);
 
-int32_t sys_tkill(isr_params_t *params);
+long sys_tkill(isr_params_t *params);
 
-int32_t sys_tgkill(isr_params_t *params);
+long sys_tgkill(isr_params_t *params);
 
-int32_t sys_rt_sigqueueinfo(isr_params_t *params);
+long sys_rt_sigqueueinfo(isr_params_t *params);
 
-int32_t sys_rt_tgsigqueueinfo(isr_params_t *params);
+long sys_rt_tgsigqueueinfo(isr_params_t *params);
 
-int32_t sys_signalfd(isr_params_t *params);
+long sys_signalfd(isr_params_t *params);
 
-int32_t sys_signalfd4(isr_params_t *params);
+long sys_signalfd4(isr_params_t *params);
 
-int32_t sys_pause(isr_params_t *params);
+long sys_pause(isr_params_t *params);
 
-int32_t sys_rt_sigsuspend(isr_params_t *params);
+long sys_rt_sigsuspend(isr_params_t *params);
 
-int32_t sys_rt_sigaction(isr_params_t *params);
+long sys_rt_sigaction(isr_params_t *params);
 
-int32_t sys_rt_sigprocmask(isr_params_t *params);
+long sys_rt_sigprocmask(isr_params_t *params);
 
-int32_t sys_rt_sigreturn(isr_params_t *tf);
+long sys_rt_sigreturn(isr_params_t *tf);
 
-int32_t sys_sigreturn(isr_params_t *tf);
+long sys_sigreturn(isr_params_t *tf);
 
 int pgrp_in_session(int pgid, int sid);
 
@@ -342,59 +342,59 @@ int32_t dgram_send(struct socket *sock, uint32_t dst_ip, uint16_t dst_port, cons
 /* The query-only raw descriptor a DHCP client asks the interface through. */
 #define SOCK_RAW 3
 
-int32_t sys_socketcall(isr_params_t *params);
+long sys_socketcall(isr_params_t *params);
 
-int32_t sys_socket(isr_params_t *params);
+long sys_socket(isr_params_t *params);
 
-int32_t sys_socketpair(isr_params_t *params);
+long sys_socketpair(isr_params_t *params);
 
-int32_t sys_bind(isr_params_t *params);
+long sys_bind(isr_params_t *params);
 
-int32_t sys_connect(isr_params_t *params);
+long sys_connect(isr_params_t *params);
 
-int32_t sys_listen(isr_params_t *params);
+long sys_listen(isr_params_t *params);
 
-int32_t sys_accept4(isr_params_t *params);
+long sys_accept4(isr_params_t *params);
 
-int32_t sys_getsockopt(isr_params_t *params);
+long sys_getsockopt(isr_params_t *params);
 
-int32_t sys_setsockopt(isr_params_t *params);
+long sys_setsockopt(isr_params_t *params);
 
-int32_t sys_getsockname(isr_params_t *params);
+long sys_getsockname(isr_params_t *params);
 
-int32_t sys_getpeername(isr_params_t *params);
+long sys_getpeername(isr_params_t *params);
 
-int32_t sys_sendto(isr_params_t *params);
+long sys_sendto(isr_params_t *params);
 
-int32_t sys_sendmsg(isr_params_t *params);
+long sys_sendmsg(isr_params_t *params);
 
-int32_t sys_recvfrom(isr_params_t *params);
+long sys_recvfrom(isr_params_t *params);
 
-int32_t sys_recvmsg(isr_params_t *params);
+long sys_recvmsg(isr_params_t *params);
 
-int32_t sys_shutdown(isr_params_t *params);
+long sys_shutdown(isr_params_t *params);
 
-int32_t sys_recvmmsg(isr_params_t *params);
+long sys_recvmmsg(isr_params_t *params);
 
-int32_t sys_sendmmsg(isr_params_t *params);
+long sys_sendmmsg(isr_params_t *params);
 
-int32_t sys_getpid(isr_params_t *params);
+long sys_getpid(isr_params_t *params);
 
-int32_t sys_gettid(isr_params_t *params);
+long sys_gettid(isr_params_t *params);
 
-int32_t sys_setsid(isr_params_t *params);
+long sys_setsid(isr_params_t *params);
 
-int32_t sys_setpgid(isr_params_t *params);
+long sys_setpgid(isr_params_t *params);
 
-int32_t sys_getpgid(isr_params_t *params);
+long sys_getpgid(isr_params_t *params);
 
-int32_t sys_getpgrp(isr_params_t *params);
+long sys_getpgrp(isr_params_t *params);
 
-int32_t sys_getsid(isr_params_t *params);
+long sys_getsid(isr_params_t *params);
 
-int32_t sys_getppid(isr_params_t *params);
+long sys_getppid(isr_params_t *params);
 
-int32_t sys_umask(isr_params_t *params);
+long sys_umask(isr_params_t *params);
 
 /* The id setters: the V7 rule with POSIX saved IDs, over the PCB credentials.
  * Privilege is effective uid 0 for the uid and gid families alike. A privileged
@@ -405,91 +405,91 @@ int32_t sys_umask(isr_params_t *params);
  * ((id_t)-1) leaves a field unchanged. */
 #define SC_ID_KEEP 0xFFFFFFFFu
 
-int32_t sys_setuid(isr_params_t *params);
+long sys_setuid(isr_params_t *params);
 
-int32_t sys_setgid(isr_params_t *params);
+long sys_setgid(isr_params_t *params);
 
-int32_t sys_setreuid(isr_params_t *params);
+long sys_setreuid(isr_params_t *params);
 
-int32_t sys_setregid(isr_params_t *params);
+long sys_setregid(isr_params_t *params);
 
-int32_t sys_setresuid(isr_params_t *params);
+long sys_setresuid(isr_params_t *params);
 
-int32_t sys_setresgid(isr_params_t *params);
+long sys_setresgid(isr_params_t *params);
 
-int32_t sys_getresuid(isr_params_t *params);
+long sys_getresuid(isr_params_t *params);
 
-int32_t sys_getresgid(isr_params_t *params);
+long sys_getresgid(isr_params_t *params);
 
-int32_t sys_setgroups(isr_params_t *params);
+long sys_setgroups(isr_params_t *params);
 
-int32_t sys_getgroups(isr_params_t *params);
+long sys_getgroups(isr_params_t *params);
 
-int32_t sys_getrlimit(isr_params_t *params);
+long sys_getrlimit(isr_params_t *params);
 
-int32_t sys_setrlimit(isr_params_t *params);
+long sys_setrlimit(isr_params_t *params);
 
-int32_t sys_prlimit64(isr_params_t *params);
+long sys_prlimit64(isr_params_t *params);
 
-int32_t sys_dup3(isr_params_t *params);
+long sys_dup3(isr_params_t *params);
 
-int32_t sys_brk(isr_params_t *params);
+long sys_brk(isr_params_t *params);
 
-int32_t sys_mmap2(isr_params_t *params);
+long sys_mmap2(isr_params_t *params);
 
-int32_t sys_munmap(isr_params_t *params);
+long sys_munmap(isr_params_t *params);
 
-int32_t sys_mprotect(isr_params_t *params);
+long sys_mprotect(isr_params_t *params);
 
-int32_t sys_mremap(isr_params_t *params);
+long sys_mremap(isr_params_t *params);
 
-int32_t sys_madvise(isr_params_t *params);
+long sys_madvise(isr_params_t *params);
 
-int32_t sys_msync(isr_params_t *params);
+long sys_msync(isr_params_t *params);
 
-int32_t sys_clone(isr_params_t *params);
+long sys_clone(isr_params_t *params);
 
-int32_t sys_clone3(isr_params_t *params);
+long sys_clone3(isr_params_t *params);
 
-int32_t sys_sigaltstack(isr_params_t *params);
+long sys_sigaltstack(isr_params_t *params);
 
-int32_t sys_rt_sigpending(isr_params_t *params);
+long sys_rt_sigpending(isr_params_t *params);
 
-int32_t sys_sigprocmask(isr_params_t *params);
+long sys_sigprocmask(isr_params_t *params);
 
-int32_t sys_getpriority(isr_params_t *params);
+long sys_getpriority(isr_params_t *params);
 
-int32_t sys_setpriority(isr_params_t *params);
+long sys_setpriority(isr_params_t *params);
 
-int32_t sys_ioprio_set(isr_params_t *params);
+long sys_ioprio_set(isr_params_t *params);
 
-int32_t sys_ioprio_get(isr_params_t *params);
+long sys_ioprio_get(isr_params_t *params);
 
-int32_t sys_sched_yield(isr_params_t *params);
+long sys_sched_yield(isr_params_t *params);
 
-int32_t sys_sched_setscheduler(isr_params_t *params);
+long sys_sched_setscheduler(isr_params_t *params);
 
-int32_t sys_sched_setparam(isr_params_t *params);
+long sys_sched_setparam(isr_params_t *params);
 
-int32_t sys_sched_getscheduler(isr_params_t *params);
+long sys_sched_getscheduler(isr_params_t *params);
 
-int32_t sys_sched_getparam(isr_params_t *params);
+long sys_sched_getparam(isr_params_t *params);
 
-int32_t sys_sched_get_priority_max(isr_params_t *params);
+long sys_sched_get_priority_max(isr_params_t *params);
 
-int32_t sys_sched_get_priority_min(isr_params_t *params);
+long sys_sched_get_priority_min(isr_params_t *params);
 
-int32_t sys_sched_rr_get_interval(isr_params_t *params);
+long sys_sched_rr_get_interval(isr_params_t *params);
 
-int32_t sys_sched_getaffinity(isr_params_t *params);
+long sys_sched_getaffinity(isr_params_t *params);
 
-int32_t sys_sched_setaffinity(isr_params_t *params);
+long sys_sched_setaffinity(isr_params_t *params);
 
-int32_t sys_prctl(isr_params_t *params);
+long sys_prctl(isr_params_t *params);
 
-int32_t sys_capget(isr_params_t *params);
+long sys_capget(isr_params_t *params);
 
-int32_t sys_capset(isr_params_t *params);
+long sys_capset(isr_params_t *params);
 
 struct open_file;
 struct shmem;

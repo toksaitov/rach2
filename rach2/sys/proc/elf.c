@@ -7,7 +7,7 @@
 #include "../mm/vm.h"
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
-#include "../arch/x86/serial.h"
+#include "../serial.h"
 
 /* The user image window: a PT_LOAD segment must fit between USER_ADDR_MIN,
  * the bottom of user space as `user_range_ok` has it, and the user stack's

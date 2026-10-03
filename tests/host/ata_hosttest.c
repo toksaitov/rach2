@@ -148,7 +148,7 @@ void block_count_batch(uint32_t sectors)
     (void)sectors;
 }
 
-#include "../../rach2/sys/arch/x86/pci.h"
+#include "../../rach2/sys/pci.h"
 
 bool pci_find_device(uint8_t class_code, uint8_t subclass, pci_device_t *out)
 {

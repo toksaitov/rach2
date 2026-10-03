@@ -1,10 +1,13 @@
 #ifndef _SERIAL_H_
 #define _SERIAL_H_
 
-#include "../../lib/kint.h"
+#include "lib/kint.h"
 
-/* COM1 port base address */
-#define SERIAL_COM1 0x3F8
+/*
+ * The serial console: the kernel's log and the debug shell go out on it, and
+ * what it receives reaches the console's readers. A platform's UART driver
+ * defines it: arch/x86/serial.c on a PC, COM1's 16550.
+ */
 
 /** Detect and configure COM1 for debug output. */
 void serial_init(void);

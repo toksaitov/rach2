@@ -3,6 +3,7 @@
  */
 
 #define KHEAP_INSIDE
+#include "../arch/arch.h"
 #include "kheap.h"
 
 #include "../klog.h"
@@ -64,7 +65,7 @@ static void irq_restore(uint32_t flags)
 {
 #if defined(__i386__)
     if (flags & 0x200) {
-        __asm__ __volatile__("sti");
+        arch_irq_enable();
     }
 #else
     (void)flags;

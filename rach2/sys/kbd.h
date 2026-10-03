@@ -1,11 +1,11 @@
 #ifndef _KBD_H_
 #define _KBD_H_
 
-#include "isr.h"
-#include "../../kio.h"
+#include "arch/x86/isr.h"
+#include "kio.h"
 
-#include "../../lib/kint.h"
-#include "../../lib/kdef.h"
+#include "lib/kint.h"
+#include "lib/kdef.h"
 
 /* US layout, scancode to ASCII; the shift table has the shifted glyphs. */
 extern uint8_t EN_us[128];

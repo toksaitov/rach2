@@ -4,6 +4,13 @@
 /* NULL pointer */
 #define NULL ((void *)0)
 
+/*
+ * A compiler barrier: the compiler keeps no value of memory in a register
+ * across it and moves no access over it. It names no instruction, which is
+ * why it is the one assembly statement the shared code may hold.
+ */
+#define k_barrier() __asm__ __volatile__("" : : : "memory")
+
 /* Boolean data type */
 typedef int bool;
 

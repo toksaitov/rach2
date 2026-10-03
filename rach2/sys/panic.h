@@ -1,7 +1,7 @@
 #ifndef _PANIC_H_
 #define _PANIC_H_
 
-#include "display/vga_text.h"
+#include "display/textcon.h"
 #include "kio.h"
 #include "lib/kdef.h"
 

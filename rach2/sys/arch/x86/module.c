@@ -1,6 +1,6 @@
 #include "../../klog.h"
 #include "../../module.h"
-#include "serial.h"
+#include "../../serial.h"
 #include "../../lib/kstring.h"
 
 module_info_t module_table[MAX_MODULES];

@@ -34,14 +34,14 @@
 #include "../net.h"
 #include "../netconf.h"
 #include "../driver/netdev.h"
-#include "../../arch/x86/serial.h"
+#include "../../serial.h"
 #include "../../lib/kstring.h"
 #include "../../lib/kerrno.h"
 #include "../../lib/krandom.h"
 #include "../../mm/kheap.h"
 #include "../../mm/pressure.h"
 #include "../../mm/paging.h"
-#include "../../arch/x86/pit.h"
+#include "../../timer.h"
 
 /* The live control blocks, listeners included, each allocated from the heap
  * by `listen`, by an active open, or for an incoming SYN on the interrupt
@@ -69,7 +69,6 @@ static uint8_t tcp_cksum_buf[12 + TCP_HDR_SIZE + 4 + TCP_MSS];
 /* Ephemeral source port for active opens. */
 static uint16_t next_ephemeral = 49152;
 
-extern volatile uint32_t kernel_ticks;
 
 static uint16_t tcp_checksum(uint32_t src_ip, uint32_t dst_ip, const uint8_t *seg,
                              uint16_t seg_len);
@@ -685,7 +684,7 @@ static int tcp_output(struct tcb *tcb)
         }
         if (tcb->rtt_start == 0 && !tcb->recovering) {
             tcb->rtt_start = kernel_ticks + 1; /* +1 keeps 0 = no sample */
-            tcb->rtt_start_us = pit_now_us();
+            tcb->rtt_start_us = timer_now_us();
             tcb->rtt_seq = tcb->snd_nxt;
         }
     }
@@ -1849,7 +1848,7 @@ static void tcp_take_ack(struct tcb *tcb, uint32_t ack_num, uint32_t window)
             new_rto = TCP_RTO_MAX;
         tcb->rto = new_rto;
         tcb->rtt_start = 0;
-        tcp_rtt_us(tcb, pit_now_us() - tcb->rtt_start_us);
+        tcp_rtt_us(tcb, timer_now_us() - tcb->rtt_start_us);
     }
 
     tcp_ack_data(tcb, ack_num); /* ends a recovery it reaches */

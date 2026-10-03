@@ -1,4 +1,8 @@
-#include "serial.h"
+#include "portio.h"
+#include "../../serial.h"
+
+/* COM1 port base address */
+#define SERIAL_COM1 0x3F8
 #include "../../kio.h"
 #include "isr.h"
 #include "pic.h"

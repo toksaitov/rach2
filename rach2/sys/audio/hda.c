@@ -9,11 +9,12 @@
 #include "../klog.h"
 #include "hda.h"
 #include "../kio.h"
-#include "../arch/x86/serial.h"
+#include "../serial.h"
 #include "../irq.h"
 #include "../arch/x86/lapic.h"
 #include "../arch/x86/kcpu.h"
-#include "../arch/x86/pci.h"
+#include "../pci.h"
+#include "../udelay.h"
 #include "../lib/kstd.h"
 #include "../lib/kstring.h"
 #include "../mm/paging.h"
@@ -771,13 +772,10 @@ static bool hda_stream_reset(int stream)
     return true;
 }
 
-/* Busy-wait roughly `count` microseconds via reads of POST port 0x80. */
+/* Busy-wait `count` microseconds. */
 static void hda_delay(int count)
 {
-    int i;
-    for (i = 0; i < count; i++) {
-        inb(0x80);
-    }
+    k_udelay((uint32_t)count);
 }
 
 /* Consecutive non-advancing WALCLK reads after which it is judged dead. A live

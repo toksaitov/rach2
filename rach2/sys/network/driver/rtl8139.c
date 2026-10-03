@@ -18,14 +18,15 @@
  * service-loop note in rtl8139_irq for the shared-line handling.
  */
 
+#include "../../arch/x86/portio.h"
 #include "../../klog.h"
 #include "rtl8139.h"
 #include "../net.h"
 #include "../ethernet/ethernet.h"
 #include "../../kio.h"
-#include "../../arch/x86/serial.h"
+#include "../../serial.h"
 #include "../../irq.h"
-#include "../../arch/x86/pci.h"
+#include "../../pci.h"
 #include "../../lib/kstring.h"
 #include "../../mm/heap.h"
 

@@ -415,10 +415,10 @@ static int32_t mq_install(struct mqueue *q, uint32_t oflag)
  * O_CREAT. EINVAL for the access mode 3, ENFILE past MQ_QUEUES queues for an
  * unprivileged caller, and the refusals of `mq_name` and `mq_new_attr`.
  */
-int32_t sys_mq_open(struct isr_params *params)
+long sys_mq_open(struct isr_params *params)
 {
     char name[MQ_NAME_MAX + 1];
-    uint32_t oflag = params->ecx;
+    uint32_t oflag = SC_ARG(params, 1);
     struct mqueue *q;
     int created = 0;
     int32_t rc;
@@ -426,7 +426,7 @@ int32_t sys_mq_open(struct isr_params *params)
     if ((oflag & O_ACCMODE) == 3) {
         return -EINVAL;
     }
-    rc = mq_name((const char __user *)params->ebx, name);
+    rc = mq_name((const char __user *)SC_ARG(params, 0), name);
     if (rc != 0) {
         return rc;
     }
@@ -441,7 +441,7 @@ int32_t sys_mq_open(struct isr_params *params)
         return -EACCES;
     }
     if (!q) {
-        rc = mq_create(name, params->edx, (const void __user *)params->esi, &q);
+        rc = mq_create(name, SC_ARG(params, 2), (const void __user *)SC_ARG(params, 3), &q);
         if (rc != 0) {
             return rc;
         }
@@ -458,11 +458,11 @@ int32_t sys_mq_open(struct isr_params *params)
  * descriptor has it. ENOENT for no such queue, EACCES for a caller that
  * neither owns it nor is privileged, as the sticky directory of Linux's
  * mqueue mount has it. */
-int32_t sys_mq_unlink(struct isr_params *params)
+long sys_mq_unlink(struct isr_params *params)
 {
     char name[MQ_NAME_MAX + 1];
     struct mqueue *q;
-    int32_t rc = mq_name((const char __user *)params->ebx, name);
+    int32_t rc = mq_name((const char __user *)SC_ARG(params, 0), name);
 
     if (rc != 0) {
         return rc;
@@ -703,28 +703,28 @@ static int32_t mq_receive(int fd, void __user *umsg, uint32_t len, void __user *
     return rc;
 }
 
-int32_t sys_mq_timedsend(struct isr_params *params)
+long sys_mq_timedsend(struct isr_params *params)
 {
-    return mq_send((int)params->ebx, (const void __user *)params->ecx, params->edx, params->esi,
-                   (const void __user *)params->edi, 0);
+    return mq_send((int)SC_ARG(params, 0), (const void __user *)SC_ARG(params, 1), SC_ARG(params, 2), SC_ARG(params, 3),
+                   (const void __user *)SC_ARG(params, 4), 0);
 }
 
-int32_t sys_mq_timedreceive(struct isr_params *params)
+long sys_mq_timedreceive(struct isr_params *params)
 {
-    return mq_receive((int)params->ebx, (void __user *)params->ecx, params->edx,
-                      (void __user *)params->esi, (const void __user *)params->edi, 0);
+    return mq_receive((int)SC_ARG(params, 0), (void __user *)SC_ARG(params, 1), SC_ARG(params, 2),
+                      (void __user *)SC_ARG(params, 3), (const void __user *)SC_ARG(params, 4), 0);
 }
 
-int32_t sys_mq_timedsend_time64(struct isr_params *params)
+long sys_mq_timedsend_time64(struct isr_params *params)
 {
-    return mq_send((int)params->ebx, (const void __user *)params->ecx, params->edx, params->esi,
-                   (const void __user *)params->edi, 1);
+    return mq_send((int)SC_ARG(params, 0), (const void __user *)SC_ARG(params, 1), SC_ARG(params, 2), SC_ARG(params, 3),
+                   (const void __user *)SC_ARG(params, 4), 1);
 }
 
-int32_t sys_mq_timedreceive_time64(struct isr_params *params)
+long sys_mq_timedreceive_time64(struct isr_params *params)
 {
-    return mq_receive((int)params->ebx, (void __user *)params->ecx, params->edx,
-                      (void __user *)params->esi, (const void __user *)params->edi, 1);
+    return mq_receive((int)SC_ARG(params, 0), (void __user *)SC_ARG(params, 1), SC_ARG(params, 2),
+                      (void __user *)SC_ARG(params, 3), (const void __user *)SC_ARG(params, 4), 1);
 }
 
 /**
@@ -735,22 +735,22 @@ int32_t sys_mq_timedreceive_time64(struct isr_params *params)
  * through a netlink socket this kernel does not have, for another kind or
  * for a signal outside 1 to 64; EBADF for a descriptor not open on a queue.
  */
-int32_t sys_mq_notify(struct isr_params *params)
+long sys_mq_notify(struct isr_params *params)
 {
     int32_t ev[3];
     fd_entry_t *e;
-    struct mqueue *q = mq_of((int)params->ebx, &e);
+    struct mqueue *q = mq_of((int)SC_ARG(params, 0), &e);
 
     if (!q) {
         return -EBADF;
     }
-    if (!params->ecx) {
+    if (!SC_ARG(params, 1)) {
         if (q->notify_tgid == current_proc->tgid) {
             q->notify_tgid = 0;
         }
         return 0;
     }
-    if (copy_from_user(ev, (const void __user *)params->ecx, sizeof(ev)) != 0) {
+    if (copy_from_user(ev, (const void __user *)SC_ARG(params, 1), sizeof(ev)) != 0) {
         return -EFAULT;
     }
     if ((ev[2] != SIGEV_SIGNAL && ev[2] != SIGEV_NONE) ||
@@ -773,24 +773,24 @@ int32_t sys_mq_notify(struct isr_params *params)
  * flags; then the flags from the one at ECX unless NULL, of which only
  * O_NONBLOCK may be set, else EINVAL.
  */
-int32_t sys_mq_getsetattr(struct isr_params *params)
+long sys_mq_getsetattr(struct isr_params *params)
 {
     struct mq_attr a;
     fd_entry_t *e;
-    struct mqueue *q = mq_of((int)params->ebx, &e);
+    struct mqueue *q = mq_of((int)SC_ARG(params, 0), &e);
 
     if (!q) {
         return -EBADF;
     }
-    if (params->ecx) {
-        if (copy_from_user(&a, (const void __user *)params->ecx, sizeof(a)) != 0) {
+    if (SC_ARG(params, 1)) {
+        if (copy_from_user(&a, (const void __user *)SC_ARG(params, 1), sizeof(a)) != 0) {
             return -EFAULT;
         }
         if (a.flags & ~O_NONBLOCK) {
             return -EINVAL;
         }
     }
-    if (params->edx) {
+    if (SC_ARG(params, 2)) {
         struct mq_attr old;
 
         k_memset(&old, 0, sizeof(old));
@@ -798,11 +798,11 @@ int32_t sys_mq_getsetattr(struct isr_params *params)
         old.maxmsg = q->maxmsg;
         old.msgsize = q->msgsize;
         old.curmsgs = q->curmsgs;
-        if (copy_to_user((void __user *)params->edx, &old, sizeof(old)) != 0) {
+        if (copy_to_user((void __user *)SC_ARG(params, 2), &old, sizeof(old)) != 0) {
             return -EFAULT;
         }
     }
-    if (params->ecx) {
+    if (SC_ARG(params, 1)) {
         if (a.flags & O_NONBLOCK) {
             e->ofd->status_flags |= OFD_NONBLOCK;
         } else {

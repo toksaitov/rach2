@@ -1,3 +1,4 @@
+#include "../arch/arch.h"
 #include "sched.h"
 #include "ptrace.h"
 #include "suspend.h"
@@ -382,7 +383,7 @@ void idle_wait_irq_off(void)
     }
     _in_idle_wait = 1;
 #ifndef RACH2_HOSTTEST
-    __asm__ __volatile__("sti; hlt; cli");
+    arch_idle_masked();
 #endif
     _in_idle_wait = 0;
 }
@@ -402,7 +403,7 @@ void idle_wait_irq_on(void)
 {
     _in_idle_wait = 1;
 #ifndef RACH2_HOSTTEST
-    __asm__ __volatile__("sti; hlt");
+    arch_idle();
 #endif
     _in_idle_wait = 0;
 }

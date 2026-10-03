@@ -7,12 +7,13 @@
  * pure functions with a host test, not code that is only read.
  */
 
+#include "portio.h"
 #include "../../klog.h"
 #include "board.h"
-#include "pci.h"
+#include "../../pci.h"
 #include "pic.h"
 #include "../../cmdline.h"
-#include "serial.h"
+#include "../../serial.h"
 #include "../../kio.h"
 
 /*

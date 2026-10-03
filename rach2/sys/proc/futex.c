@@ -284,9 +284,9 @@ int futex_wake_address(uint32_t uaddr, uint32_t n)
 
 int futex_restartable(const isr_params_t *params)
 {
-    int cmd = (int)params->ecx & ~(FUTEX_PRIVATE_FLAG | FUTEX_CLOCK_REALTIME);
+    int cmd = (int)SC_ARG(params, 1) & ~(FUTEX_PRIVATE_FLAG | FUTEX_CLOCK_REALTIME);
 
-    return !((cmd == FUTEX_WAIT || cmd == FUTEX_WAIT_BITSET) && params->esi != 0);
+    return !((cmd == FUTEX_WAIT || cmd == FUTEX_WAIT_BITSET) && SC_ARG(params, 3) != 0);
 }
 
 /**
@@ -383,16 +383,16 @@ void proc_thread_gone(process_t *p)
     p->clear_child_tid = 0;
 }
 
-int32_t sys_set_robust_list(isr_params_t *params)
+long sys_set_robust_list(isr_params_t *params)
 {
     if (!current_proc) {
         return -ESRCH;
     }
-    if (params->ecx != sizeof(struct robust_head)) {
+    if (SC_ARG(params, 1) != sizeof(struct robust_head)) {
         return -EINVAL;
     }
-    current_proc->robust_list = params->ebx;
-    current_proc->robust_len = params->ecx;
+    current_proc->robust_list = SC_ARG(params, 0);
+    current_proc->robust_len = SC_ARG(params, 1);
     return 0;
 }
 
@@ -404,7 +404,7 @@ int32_t sys_set_robust_list(isr_params_t *params)
  * copy may sleep to bring the caller's page in, and the thread may end and
  * its record be freed meanwhile.
  */
-int32_t sys_get_robust_list(isr_params_t *params)
+long sys_get_robust_list(isr_params_t *params)
 {
     process_t *t = current_proc;
     uint32_t head;
@@ -413,8 +413,8 @@ int32_t sys_get_robust_list(isr_params_t *params)
     if (!current_proc) {
         return -ESRCH;
     }
-    if (params->ebx != 0) {
-        t = get_process(params->ebx);
+    if (SC_ARG(params, 0) != 0) {
+        t = get_process(SC_ARG(params, 0));
         if (t == NULL || t->state == PROC_ZOMBIE || t->state == PROC_UNUSED) {
             return -ESRCH;
         }
@@ -425,20 +425,20 @@ int32_t sys_get_robust_list(isr_params_t *params)
         }
     }
     head = t->robust_list;
-    if (copy_to_user((void __user *)params->ecx, &head, sizeof(head)) != 0 ||
-        copy_to_user((void __user *)params->edx, &len, sizeof(len)) != 0) {
+    if (copy_to_user((void __user *)SC_ARG(params, 1), &head, sizeof(head)) != 0 ||
+        copy_to_user((void __user *)SC_ARG(params, 2), &len, sizeof(len)) != 0) {
         return -EFAULT;
     }
     return 0;
 }
 
-int32_t sys_futex(isr_params_t *params)
+long sys_futex(isr_params_t *params)
 {
-    uint32_t uaddr = params->ebx;
-    int op = (int)params->ecx;
-    uint32_t val = params->edx;
-    const struct kernel_timespec __user *utime = (const struct kernel_timespec __user *)params->esi;
-    uint32_t val3 = params->ebp;
+    uint32_t uaddr = SC_ARG(params, 0);
+    int op = (int)SC_ARG(params, 1);
+    uint32_t val = SC_ARG(params, 2);
+    const struct kernel_timespec __user *utime = (const struct kernel_timespec __user *)SC_ARG(params, 3);
+    uint32_t val3 = SC_ARG(params, 5);
     int cmd = op & ~(FUTEX_PRIVATE_FLAG | FUTEX_CLOCK_REALTIME);
 
     if (!current_proc) {

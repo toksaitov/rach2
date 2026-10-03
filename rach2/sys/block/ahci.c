@@ -3,16 +3,16 @@
 #include "ahci.h"
 #include "diskcmd.h"
 #include "disk.h"
-#include "../arch/x86/udelay.h"
+#include "../udelay.h"
 #include "block.h"
 
-#include "../arch/x86/pci.h"
-#include "../arch/x86/serial.h"
+#include "../pci.h"
+#include "../serial.h"
 #include "../mm/paging.h"
 #include "../irq.h"
 #include "../arch/x86/lapic.h"
 #include "../lib/kirq.h"
-#include "../arch/x86/pit.h"
+#include "../timer.h"
 #include "../cmdline.h"
 #include "../latency.h"
 #include "../panic.h"
@@ -1207,7 +1207,7 @@ static void ahci_finish_active(struct ahci_disk *d)
         d->dev.unflushed = 0;
     }
     d->active = 0;
-    latency_span(LAT_DISK, r->taken_us, pit_now_us());
+    latency_span(LAT_DISK, r->taken_us, timer_now_us());
     block_request_complete(r, d->active_generation, rc);
 }
 

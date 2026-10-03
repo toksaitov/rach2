@@ -31,7 +31,7 @@
 #include "../block/usbdisk.h"
 #include "../block/recovery.h"
 #include "../block/disk.h"
-#include "../arch/x86/serial.h"
+#include "../serial.h"
 #include "../arch/x86/rtc.h"
 #include "../lib/kirq.h"
 #include "../irq.h"

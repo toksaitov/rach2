@@ -32,20 +32,20 @@ struct sysv_row {
 
 /** ipc(2), number 117: the one call that reaches every object through
  * `call`'s low 16 bits, as the C library calls it on i386. */
-int32_t sys_ipc(struct isr_params *params);
+long sys_ipc(struct isr_params *params);
 
 /** The direct calls, numbers 393 to 402 and semtimedop_time64's 420. */
-int32_t sys_semget(struct isr_params *params);
-int32_t sys_semctl(struct isr_params *params);
-int32_t sys_shmget(struct isr_params *params);
-int32_t sys_shmctl(struct isr_params *params);
-int32_t sys_shmat(struct isr_params *params);
-int32_t sys_shmdt(struct isr_params *params);
-int32_t sys_msgget(struct isr_params *params);
-int32_t sys_msgsnd(struct isr_params *params);
-int32_t sys_msgrcv(struct isr_params *params);
-int32_t sys_msgctl(struct isr_params *params);
-int32_t sys_semtimedop_time64(struct isr_params *params);
+long sys_semget(struct isr_params *params);
+long sys_semctl(struct isr_params *params);
+long sys_shmget(struct isr_params *params);
+long sys_shmctl(struct isr_params *params);
+long sys_shmat(struct isr_params *params);
+long sys_shmdt(struct isr_params *params);
+long sys_msgget(struct isr_params *params);
+long sys_msgsnd(struct isr_params *params);
+long sys_msgrcv(struct isr_params *params);
+long sys_msgctl(struct isr_params *params);
+long sys_semtimedop_time64(struct isr_params *params);
 
 /** Apply and drop the semaphore adjustments of `tg`, a process whose last
  * thread has ended, as Linux does at exit for SEM_UNDO. */

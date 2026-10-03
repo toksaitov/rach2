@@ -82,8 +82,8 @@ int32_t fifo_attach(struct fd_entry *e, const void *mnt, uint64_t ino, int flags
  * the same with flags == 0.
  */
 struct isr_params;
-int32_t sys_pipe(struct isr_params *params);
-int32_t sys_pipe2(struct isr_params *params);
+long sys_pipe(struct isr_params *params);
+long sys_pipe2(struct isr_params *params);
 
 /* Pure ring helpers; pipe_ring_put/pipe_ring_get are contracted in
  * pipe_ring.c. */

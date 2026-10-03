@@ -455,10 +455,10 @@ int32_t inotify_watch(int fd, struct vfs_mount *mnt, uint64_t ino, int isdir, ui
     return w->wd;
 }
 
-int32_t sys_inotify_rm_watch(struct isr_params *params)
+long sys_inotify_rm_watch(struct isr_params *params)
 {
-    fd_entry_t *e = fd_get(current_proc->fds, (int)params->ebx);
-    int32_t wd = (int32_t)params->ecx;
+    fd_entry_t *e = fd_get(current_proc->fds, (int)SC_ARG(params, 0));
+    int32_t wd = (int32_t)SC_ARG(params, 1);
     struct watch *w;
 
     if (!e) {
@@ -519,14 +519,14 @@ static int32_t inotify_open(uint32_t flags)
     return fd;
 }
 
-int32_t sys_inotify_init1(struct isr_params *params)
+long sys_inotify_init1(struct isr_params *params)
 {
-    return inotify_open(params->ebx);
+    return inotify_open(SC_ARG(params, 0));
 }
 
 /* inotify_init() has no arguments, and the caller's EBX, which i386 code
  * keeps its global offset table in, comes back as it went. */
-int32_t sys_inotify_init(struct isr_params *params)
+long sys_inotify_init(struct isr_params *params)
 {
     (void)params;
     return inotify_open(0);

@@ -4,7 +4,7 @@
 #include "ata.h"
 #include "ahci.h"
 #include "disk.h"
-#include "../arch/x86/serial.h"
+#include "../serial.h"
 
 #include "../cmdline.h"
 #include "../lib/kerrno.h"

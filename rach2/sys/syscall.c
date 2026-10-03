@@ -5,17 +5,18 @@
  * file system and socket calls are in syscall_proc.c, syscall_fs.c and
  * syscall_net.c; syscall_internal.h is what the four share.
  */
+#include "arch/arch.h"
 #include "../kernel.h"
 #include "mm/kheap.h"
 #include "klog.h"
 #include "syscall.h"
-#include "arch/x86/power.h"
-#include "arch/x86/serial.h"
+#include "power.h"
+#include "serial.h"
 #include "panic.h"
 #include "kio.h"
-#include "arch/x86/kbd.h"
+#include "kbd.h"
 #include "input.h"
-#include "arch/x86/mouse.h"
+#include "mouse.h"
 #include "proc/process.h"
 #include "proc/sched.h"
 #include "proc/elf.h"
@@ -56,7 +57,7 @@
 #include "lib/kuser.h"
 #include "lib/kstring.h"
 #include "display/vga_gfx.h"
-#include "arch/x86/speaker.h"
+#include "speaker.h"
 #include "audio/audio.h"
 #include "network/socket/socket.h"
 #include "network/socket/packet.h"
@@ -172,9 +173,11 @@ struct audio_write_params {
 };
 
 /*
- * Syscall function type - takes pointer to params, returns int32_t
+ * A system call's handler: given the saved registers, from which it reads
+ * its arguments, it returns the call's result, a value or a negative errno,
+ * as wide as a register.
  */
-typedef int32_t (*syscall_fn_t)(isr_params_t *);
+typedef long (*syscall_fn_t)(isr_params_t *);
 
 /*
  * Syscall dispatch table
@@ -223,11 +226,11 @@ static syscall_fn_t _syscall_table[SYSCALL_TABLE_SIZE];
  * for a feature that does not exist and answers `-EINVAL`, because a 0 there
  * would be the one reply a caller could not tell from a working one.
  */
-static int32_t sys_reboot(isr_params_t *params)
+static long sys_reboot(isr_params_t *params)
 {
-    uint32_t magic1 = (uint32_t)params->ebx;
-    uint32_t magic2 = (uint32_t)params->ecx;
-    uint32_t cmd = (uint32_t)params->edx;
+    uint32_t magic1 = (uint32_t)SC_ARG(params, 0);
+    uint32_t magic2 = (uint32_t)SC_ARG(params, 1);
+    uint32_t cmd = (uint32_t)SC_ARG(params, 2);
 
     if (!cred_privileged()) {
         return -EPERM;
@@ -326,9 +329,9 @@ struct kernel_timeval {
  * from the clock anchored at boot (sys/arch/x86/rtc.c), or time since boot
  * when there was no clock to read. Returns 0 or -errno.
  */
-static int32_t sys_gettimeofday(isr_params_t *params)
+static long sys_gettimeofday(isr_params_t *params)
 {
-    struct kernel_timeval __user *tv = (struct kernel_timeval __user *)params->ebx;
+    struct kernel_timeval __user *tv = (struct kernel_timeval __user *)SC_ARG(params, 0);
     struct kernel_timeval ktv;
 
     if (!tv) {
@@ -568,12 +571,12 @@ int32_t clock_now(int32_t clk, int64_t *sec, int32_t *nsec)
  * fields. An unknown clock is refused before the timespec is written, as
  * Linux refuses it.
  */
-static int32_t sys_clock_gettime(isr_params_t *params)
+static long sys_clock_gettime(isr_params_t *params)
 {
-    struct kernel_timespec __user *ts = (struct kernel_timespec __user *)params->ecx;
+    struct kernel_timespec __user *ts = (struct kernel_timespec __user *)SC_ARG(params, 1);
     struct kernel_timespec kts;
     struct kclock c;
-    int32_t rc = clock_resolve((int32_t)params->ebx, &c);
+    int32_t rc = clock_resolve((int32_t)SC_ARG(params, 0), &c);
 
     if (rc != 0) {
         return rc;
@@ -596,34 +599,34 @@ struct kernel_timespec64 {
  * musl try first, so a clock read is one call and not a refused call and a
  * second. The seconds are the ones the 32-bit call reports.
  */
-static int32_t sys_clock_gettime64(isr_params_t *params)
+static long sys_clock_gettime64(isr_params_t *params)
 {
     struct kernel_timespec64 t;
     int64_t sec;
     int32_t nsec;
-    int32_t rc = clock_now((int32_t)params->ebx, &sec, &nsec);
+    int32_t rc = clock_now((int32_t)SC_ARG(params, 0), &sec, &nsec);
 
     if (rc != 0) {
         return rc;
     }
     t.tv_sec = sec;
     t.tv_nsec = nsec;
-    return copy_to_user((void __user *)params->ecx, &t, sizeof(t)) == 0 ? 0 : -EFAULT;
+    return copy_to_user((void __user *)SC_ARG(params, 1), &t, sizeof(t)) == 0 ? 0 : -EFAULT;
 }
 
 /** clock_getres_time64 (406): clock_getres with the 64-bit timespec. */
-static int32_t sys_clock_getres_time64(isr_params_t *params)
+static long sys_clock_getres_time64(isr_params_t *params)
 {
     struct kernel_timespec64 t;
     struct kclock c;
-    int32_t rc = clock_resolve((int32_t)params->ebx, &c);
+    int32_t rc = clock_resolve((int32_t)SC_ARG(params, 0), &c);
 
     if (rc != 0) {
         return rc;
     }
     t.tv_sec = 0;
     t.tv_nsec = clock_res_ns(&c);
-    if (params->ecx && copy_to_user((void __user *)params->ecx, &t, sizeof(t)) != 0) {
+    if (SC_ARG(params, 1) && copy_to_user((void __user *)SC_ARG(params, 1), &t, sizeof(t)) != 0) {
         return -EFAULT;
     }
     return 0;
@@ -652,28 +655,28 @@ static int32_t realtime_set(int64_t seconds, int64_t nanoseconds)
  * clock_settime (264): EBX = clockid, ECX = the 32-bit timespec. Only
  * CLOCK_REALTIME may be set, as on Linux; another clock is -EINVAL.
  */
-static int32_t sys_clock_settime(isr_params_t *params)
+static long sys_clock_settime(isr_params_t *params)
 {
     struct kernel_timespec ts;
 
-    if ((int32_t)params->ebx != CLOCK_REALTIME) {
+    if ((int32_t)SC_ARG(params, 0) != CLOCK_REALTIME) {
         return -EINVAL;
     }
-    if (copy_from_user(&ts, (const void __user *)params->ecx, sizeof(ts)) != 0) {
+    if (copy_from_user(&ts, (const void __user *)SC_ARG(params, 1), sizeof(ts)) != 0) {
         return -EFAULT;
     }
     return realtime_set(ts.tv_sec, ts.tv_nsec);
 }
 
 /** clock_settime64 (404): clock_settime with the 64-bit timespec. */
-static int32_t sys_clock_settime64(isr_params_t *params)
+static long sys_clock_settime64(isr_params_t *params)
 {
     struct kernel_timespec64 ts;
 
-    if ((int32_t)params->ebx != CLOCK_REALTIME) {
+    if ((int32_t)SC_ARG(params, 0) != CLOCK_REALTIME) {
         return -EINVAL;
     }
-    if (copy_from_user(&ts, (const void __user *)params->ecx, sizeof(ts)) != 0) {
+    if (copy_from_user(&ts, (const void __user *)SC_ARG(params, 1), sizeof(ts)) != 0) {
         return -EFAULT;
     }
     return realtime_set(ts.tv_sec, ts.tv_nsec);
@@ -948,9 +951,9 @@ static int32_t timex_call(uint32_t uaddr, int wide)
 }
 
 /** adjtimex (124): EBX = the 128-byte struct timex. */
-static int32_t sys_adjtimex(isr_params_t *params)
+static long sys_adjtimex(isr_params_t *params)
 {
-    return timex_call(params->ebx, 0);
+    return timex_call(SC_ARG(params, 0), 0);
 }
 
 /**
@@ -961,20 +964,20 @@ static int32_t sys_adjtimex(isr_params_t *params)
  */
 static int32_t clock_adjtime_common(isr_params_t *params, int wide)
 {
-    int32_t id = (int32_t)params->ebx;
+    int32_t id = (int32_t)SC_ARG(params, 0);
 
     if (id != 0) {
         return id > 0 && id <= 11 ? -EOPNOTSUPP : -EINVAL;
     }
-    return timex_call(params->ecx, wide);
+    return timex_call(SC_ARG(params, 1), wide);
 }
 
-static int32_t sys_clock_adjtime(isr_params_t *params)
+static long sys_clock_adjtime(isr_params_t *params)
 {
     return clock_adjtime_common(params, 0);
 }
 
-static int32_t sys_clock_adjtime64(isr_params_t *params)
+static long sys_clock_adjtime64(isr_params_t *params)
 {
     return clock_adjtime_common(params, 1);
 }
@@ -984,14 +987,14 @@ static int32_t sys_clock_adjtime64(isr_params_t *params)
  * kept, so a call with only one is done and changes nothing; a call with
  * neither is too, as on Linux.
  */
-static int32_t sys_settimeofday(isr_params_t *params)
+static long sys_settimeofday(isr_params_t *params)
 {
     struct kernel_timeval tv;
 
-    if (!params->ebx) {
+    if (!SC_ARG(params, 0)) {
         return proc_privileged(current_proc) ? 0 : -EPERM;
     }
-    if (copy_from_user(&tv, (const void __user *)params->ebx, sizeof(tv)) != 0) {
+    if (copy_from_user(&tv, (const void __user *)SC_ARG(params, 0), sizeof(tv)) != 0) {
         return -EFAULT;
     }
     if (tv.tv_usec < 0 || tv.tv_usec > 999999) {
@@ -1001,11 +1004,11 @@ static int32_t sys_settimeofday(isr_params_t *params)
 }
 
 /** stime (25): EBX = the seconds, a 32-bit time_t. */
-static int32_t sys_stime(isr_params_t *params)
+static long sys_stime(isr_params_t *params)
 {
     int32_t seconds;
 
-    if (copy_from_user(&seconds, (const void __user *)params->ebx, sizeof(seconds)) != 0) {
+    if (copy_from_user(&seconds, (const void __user *)SC_ARG(params, 0), sizeof(seconds)) != 0) {
         return -EFAULT;
     }
     return realtime_set(seconds, 0);
@@ -1020,12 +1023,12 @@ static int32_t sys_stime(isr_params_t *params)
  * coarse clocks and the CPU clocks. Returns 0, -EINVAL for a clock
  * `clock_resolve` refuses, or -EFAULT.
  */
-static int32_t sys_clock_getres(isr_params_t *params)
+static long sys_clock_getres(isr_params_t *params)
 {
-    struct kernel_timespec __user *ures = (struct kernel_timespec __user *)params->ecx;
+    struct kernel_timespec __user *ures = (struct kernel_timespec __user *)SC_ARG(params, 1);
     struct kernel_timespec res;
     struct kclock c;
-    int32_t rc = clock_resolve((int32_t)params->ebx, &c);
+    int32_t rc = clock_resolve((int32_t)SC_ARG(params, 0), &c);
 
     if (rc != 0) {
         return rc;
@@ -1180,10 +1183,10 @@ static int32_t sleep_for(const struct kernel_timespec *req, struct kernel_timesp
  * `sleep_for`, which has the rules of the deadline, the signals and the
  * remainder. rem is written as zero on normal completion.
  */
-static int32_t sys_nanosleep(isr_params_t *params)
+static long sys_nanosleep(isr_params_t *params)
 {
-    const struct kernel_timespec __user *ureq = (const struct kernel_timespec __user *)params->ebx;
-    struct kernel_timespec __user *urem = (struct kernel_timespec __user *)params->ecx;
+    const struct kernel_timespec __user *ureq = (const struct kernel_timespec __user *)SC_ARG(params, 0);
+    struct kernel_timespec __user *urem = (struct kernel_timespec __user *)SC_ARG(params, 1);
     struct kernel_timespec req;
     int32_t rc;
 
@@ -1345,12 +1348,12 @@ static int32_t sleep_until_cpu(int32_t clk, uint32_t due, struct kernel_timespec
  * (-EFAULT, then -EINVAL for a negative second or nanoseconds past a
  * second), then a CPU clock by id.
  */
-static int32_t sys_clock_nanosleep(isr_params_t *params)
+static long sys_clock_nanosleep(isr_params_t *params)
 {
-    int32_t clk = (int32_t)params->ebx;
-    int absolute = (params->ecx & TIMER_ABSTIME) != 0;
-    const struct kernel_timespec __user *ureq = (const struct kernel_timespec __user *)params->edx;
-    struct kernel_timespec __user *urem = (struct kernel_timespec __user *)params->esi;
+    int32_t clk = (int32_t)SC_ARG(params, 0);
+    int absolute = (SC_ARG(params, 1) & TIMER_ABSTIME) != 0;
+    const struct kernel_timespec __user *ureq = (const struct kernel_timespec __user *)SC_ARG(params, 2);
+    struct kernel_timespec __user *urem = (struct kernel_timespec __user *)SC_ARG(params, 3);
     struct kernel_timespec req;
     struct kclock c;
     int32_t rc;
@@ -1512,13 +1515,13 @@ static void itimer_set(int32_t which, uint32_t value, uint32_t interval)
  * whole 10 ms ticks, then every interval, or only once for an interval of
  * zero. `old` receives the timer's setting before the call.
  */
-static int32_t sys_setitimer(isr_params_t *params)
+static long sys_setitimer(isr_params_t *params)
 {
     const struct kernel_itimerval __user *unew =
-        (const struct kernel_itimerval __user *)params->ecx;
-    struct kernel_itimerval __user *uold = (struct kernel_itimerval __user *)params->edx;
+        (const struct kernel_itimerval __user *)SC_ARG(params, 1);
+    struct kernel_itimerval __user *uold = (struct kernel_itimerval __user *)SC_ARG(params, 2);
     struct kernel_itimerval set, was;
-    int32_t which = (int32_t)params->ebx;
+    int32_t which = (int32_t)SC_ARG(params, 0);
     uint32_t flags;
 
     if (which < ITIMER_REAL || which > ITIMER_PROF) {
@@ -1548,11 +1551,11 @@ static int32_t sys_setitimer(isr_params_t *params)
  * EBX = which, ECX = struct itimerval *cur: the time left before the next
  * signal, zero when the timer is disarmed, and the interval.
  */
-static int32_t sys_getitimer(isr_params_t *params)
+static long sys_getitimer(isr_params_t *params)
 {
-    struct kernel_itimerval __user *ucur = (struct kernel_itimerval __user *)params->ecx;
+    struct kernel_itimerval __user *ucur = (struct kernel_itimerval __user *)SC_ARG(params, 1);
     struct kernel_itimerval cur;
-    int32_t which = (int32_t)params->ebx;
+    int32_t which = (int32_t)SC_ARG(params, 0);
     uint32_t flags;
 
     if (which < ITIMER_REAL || which > ITIMER_PROF) {
@@ -1575,7 +1578,7 @@ static int32_t sys_getitimer(isr_params_t *params)
  * rounds them: to the nearest second, and up to one when any time was left.
  * musl's `alarm` calls setitimer; this is the call older programs make.
  */
-static int32_t sys_alarm(isr_params_t *params)
+static long sys_alarm(isr_params_t *params)
 {
     uint32_t flags = kirq_save();
     uint32_t left = itimer_left();
@@ -1583,7 +1586,7 @@ static int32_t sys_alarm(isr_params_t *params)
     uint32_t usec = (left % 100u) * 10000u;
 
     itimer_set(ITIMER_REAL,
-               itimer_ticks((int32_t)(params->ebx > 21474836u ? 21474836u : params->ebx), 0), 0);
+               itimer_ticks((int32_t)(SC_ARG(params, 0) > 21474836u ? 21474836u : SC_ARG(params, 0)), 0), 0);
     kirq_restore(flags);
     if ((seconds == 0 && usec != 0) || usec >= 500000u) {
         seconds++;
@@ -1610,11 +1613,11 @@ static int32_t sys_alarm(isr_params_t *params)
  * a no-op) and have a single source (GRND_RANDOM is equivalent); unknown
  * flag bits are rejected.
  */
-static int32_t sys_getrandom(isr_params_t *params)
+static long sys_getrandom(isr_params_t *params)
 {
-    void __user *buf = (void __user *)params->ebx;
-    uint32_t len = params->ecx;
-    uint32_t flags = params->edx;
+    void __user *buf = (void __user *)SC_ARG(params, 0);
+    uint32_t len = SC_ARG(params, 1);
+    uint32_t flags = SC_ARG(params, 2);
     uint8_t kbuf[256];
     uint32_t done = 0;
 
@@ -2002,11 +2005,11 @@ static int32_t framebuffer_ioctl(uint32_t request, uint32_t arg)
  * device-specific ones (FB_*, KIOCSOUND, AUDIO_*). Returns 0, the request
  * result, or -errno (-ENOTTY for a terminal request on a non-terminal fd).
  */
-static int32_t sys_ioctl(isr_params_t *params)
+static long sys_ioctl(isr_params_t *params)
 {
-    int fd_num = (int)params->ebx;
-    uint32_t request = params->ecx;
-    uint32_t arg = params->edx;
+    int fd_num = (int)SC_ARG(params, 0);
+    uint32_t request = SC_ARG(params, 1);
+    uint32_t arg = SC_ARG(params, 2);
     fd_entry_t *entry;
 
     if (!current_proc) {
@@ -2185,51 +2188,6 @@ int user_buffer_ok(uint32_t addr, uint32_t len, int write)
 }
 
 /**
- * Set up thread-local storage (set_thread_area(2), Linux i386).
- *
- * EBX points at a struct user_desc. Validates it, programs the shared TLS
- * GDT descriptor (entry GDT_TLS_ENTRY) and this process's PCB base, then
- * writes the chosen entry number back so the C library can load
- * (entry_number << 3) | 3 into %gs. The base is reapplied to the GDT on
- * every context switch (switch.s). Returns 0 or a negative errno on a bad
- * pointer/request.
- */
-static int32_t sys_set_thread_area(isr_params_t *params)
-{
-    uint32_t uptr = params->ebx;
-    user_desc_t desc;
-    uint32_t base = 0;
-
-    if (!current_proc) {
-        return -ESRCH; /* TLS is only meaningful for a user process */
-    }
-
-    /* Read the descriptor through the fault-checked helper (it range-checks the
-     * full struct internally, so the prior explicit user_access_ok is
-     * redundant). */
-    if (copy_from_user(&desc, (const void __user *)uptr, sizeof(user_desc_t)) != 0) {
-        return -EFAULT;
-    }
-
-    if (tls_resolve_base(&desc, &base) != 0) {
-        return -EINVAL;
-    }
-
-    /* Program the descriptor now and remember the base so the context switch
-     * can reprogram entry GDT_TLS_ENTRY for this process when it is resumed. */
-    gdt_set_tls(base);
-    current_proc->tls_base = base;
-
-    /* Report the allocated slot back (musl reads user_desc.entry_number). */
-    desc.entry_number = GDT_TLS_ENTRY;
-    if (copy_to_user((void __user *)uptr, &desc.entry_number, sizeof(desc.entry_number)) != 0) {
-        return -EFAULT;
-    }
-
-    return 0;
-}
-
-/**
  * Process times (times(2)).
  *
  * EBX = struct tms *, which may be NULL when the caller wants only the
@@ -2239,7 +2197,7 @@ static int32_t sys_set_thread_area(isr_params_t *params)
  * uses. They are read with interrupts masked, since the tick adds to them.
  * The return value is the monotonic tick count.
  */
-static int32_t sys_times(isr_params_t *params)
+static long sys_times(isr_params_t *params)
 {
     struct kernel_tms {
         int32_t tms_utime;
@@ -2248,7 +2206,7 @@ static int32_t sys_times(isr_params_t *params)
         int32_t tms_cstime;
     } t;
 
-    if (params->ebx) {
+    if (SC_ARG(params, 0)) {
         uint32_t user;
         uint32_t sys;
 
@@ -2257,7 +2215,7 @@ static int32_t sys_times(isr_params_t *params)
         t.tms_stime = (int32_t)sys;
         t.tms_cutime = (int32_t)current_proc->tg->cutime;
         t.tms_cstime = (int32_t)current_proc->tg->cstime;
-        if (copy_to_user((void __user *)params->ebx, &t, sizeof(t)) != 0) {
+        if (copy_to_user((void __user *)SC_ARG(params, 0), &t, sizeof(t)) != 0) {
             return -EFAULT;
         }
     }
@@ -2275,7 +2233,7 @@ static int32_t sys_times(isr_params_t *params)
  * its buff/cache, mem_unit = 1; shared and swap figures are reported as zero
  * (not tracked). EBX = struct sysinfo *.
  */
-static int32_t sys_sysinfo(isr_params_t *params)
+static long sys_sysinfo(isr_params_t *params)
 {
     struct kernel_sysinfo {
         int32_t uptime;
@@ -2297,7 +2255,7 @@ static int32_t sys_sysinfo(isr_params_t *params)
     uint32_t avg[3];
     int n = 0;
 
-    if (!params->ebx) {
+    if (!SC_ARG(params, 0)) {
         return -EFAULT;
     }
     {
@@ -2329,7 +2287,7 @@ static int32_t sys_sysinfo(isr_params_t *params)
     for (i = 0; i < sizeof(si._f); i++) {
         si._f[i] = 0;
     }
-    if (copy_to_user((void __user *)params->ebx, &si, sizeof(si)) != 0) {
+    if (copy_to_user((void __user *)SC_ARG(params, 0), &si, sizeof(si)) != 0) {
         return -EFAULT;
     }
     return 0;
@@ -2342,12 +2300,12 @@ static int32_t sys_sysinfo(isr_params_t *params)
  * The address, EBX, becomes `clear_child_tid`; with one thread per process the
  * thread id is the process id.
  */
-static int32_t sys_set_tid_address(isr_params_t *params)
+static long sys_set_tid_address(isr_params_t *params)
 {
     if (!current_proc) {
         return -ESRCH;
     }
-    current_proc->clear_child_tid = params->ebx;
+    current_proc->clear_child_tid = SC_ARG(params, 0);
     return (int32_t)pid_seen(current_proc->pid);
 }
 
@@ -2488,11 +2446,11 @@ static uint32_t syslog_tail(uint32_t from, uint32_t len)
  * which is root's. EINVAL for another action, a negative length or a level
  * out of 1 to 8, EINTR when a signal ends READ's wait.
  */
-static int32_t sys_syslog(isr_params_t *params)
+static long sys_syslog(isr_params_t *params)
 {
-    int32_t action = (int32_t)params->ebx;
-    char __user *ubuf = (char __user *)params->ecx;
-    int32_t len = (int32_t)params->edx;
+    int32_t action = (int32_t)SC_ARG(params, 0);
+    char __user *ubuf = (char __user *)SC_ARG(params, 1);
+    int32_t len = (int32_t)SC_ARG(params, 2);
     uint32_t at;
     int32_t rc;
 
@@ -2561,9 +2519,9 @@ static int32_t sys_syslog(isr_params_t *params)
     }
 }
 
-static int32_t sys_uname(isr_params_t *params)
+static long sys_uname(isr_params_t *params)
 {
-    struct kernel_utsname __user *user_uts = (struct kernel_utsname __user *)params->ebx;
+    struct kernel_utsname __user *user_uts = (struct kernel_utsname __user *)SC_ARG(params, 0);
     struct kernel_utsname uts;
 
     k_memset(&uts, 0, sizeof(uts));
@@ -2587,8 +2545,8 @@ static int32_t sys_uname(isr_params_t *params)
  * Linux. */
 static int32_t uts_set_call(isr_params_t *params, void (*set)(const char *, uint32_t))
 {
-    const char __user *name = (const char __user *)params->ebx;
-    int len = (int)params->ecx;
+    const char __user *name = (const char __user *)SC_ARG(params, 0);
+    int len = (int)SC_ARG(params, 1);
     char buf[65];
 
     if (!uts_privileged()) {
@@ -2604,12 +2562,12 @@ static int32_t uts_set_call(isr_params_t *params, void (*set)(const char *, uint
     return 0;
 }
 
-static int32_t sys_sethostname(isr_params_t *params)
+static long sys_sethostname(isr_params_t *params)
 {
     return uts_set_call(params, uts_set_hostname);
 }
 
-static int32_t sys_setdomainname(isr_params_t *params)
+static long sys_setdomainname(isr_params_t *params)
 {
     return uts_set_call(params, uts_set_domainname);
 }
@@ -2717,7 +2675,7 @@ static void syscall_missing(uint32_t syscall_num)
  * descriptors the call held in a shared table are let go as the body
  * returns, before a tracer's exit stop (`fd_holds_release`).
  *
- * A tracer's stop at the entry may change the call through orig_eax, as
+ * A tracer's stop at the entry may change the call through orig_nr, as
  * Linux's `syscall_trace_enter` lets it: the number is read again after the
  * stop, a number of no call answers -ENOSYS, and -1 runs no call, whose
  * result is then what the tracer left in EAX, -ENOSYS unless it set one.
@@ -2726,16 +2684,16 @@ static void syscall_missing(uint32_t syscall_num)
  *
  * Whether `deliver_signals` restarts a call a signal interrupted, on this
  * return, is recorded in `restart_nr` before the exit stop, so a tracer
- * there cancels the restart with -1 in orig_eax, and with a result in EAX
+ * there cancels the restart with -1 in orig_nr, and with a result in EAX
  * other than EINTR.
  */
 static void _syscall_handler(isr_params_t *params)
 {
-    uint32_t syscall_num = params->eax;
+    uint32_t syscall_num = (uint32_t)SC_NR(params);
     /* Default to -ENOSYS so an unimplemented or out-of-range number reports the
      * real "no such syscall" errno; musl relies on -ENOSYS to fall back to an
      * alternate path instead of treating it as a generic -EPERM failure. */
-    int32_t ret = -ENOSYS;
+    long ret = -ENOSYS;
     int skip = 0;
 
     /* Mark this process non-preemptible BEFORE enabling interrupts. The ISR
@@ -2751,7 +2709,7 @@ static void _syscall_handler(isr_params_t *params)
     /* Enable interrupts for the syscall body so the PIT/HDA keep ticking during
      * long syscalls (e.g. Doom's framebuffer writes); preemption stays disabled
      * via in_syscall above. The stub no longer does sti; iret restores IF. */
-    __asm__ __volatile__("sti");
+    arch_irq_enable();
 
     /* A stick that arrived or was pulled out was learned in an interrupt,
      * where nothing may sleep; reading its partition table and reclaiming
@@ -2761,20 +2719,20 @@ static void _syscall_handler(isr_params_t *params)
     usbdisk_service();
 
     if (current_proc) {
-        current_proc->orig_eax = (int32_t)syscall_num;
+        current_proc->orig_nr = (int32_t)syscall_num;
         if (current_proc->ptrace & PT_SYSCALL) {
             ptrace_syscall_stop(params, syscall_num, 0);
-            syscall_num = (uint32_t)current_proc->orig_eax;
-            skip = current_proc->orig_eax == -1;
+            syscall_num = (uint32_t)current_proc->orig_nr;
+            skip = current_proc->orig_nr == -1;
         }
         if (!skip && current_proc->seccomp_mode != SECCOMP_MODE_DISABLED &&
             !seccomp_permit(params, syscall_num, &ret)) {
             skip = 1;
-            params->eax = (uint32_t)ret;
+            SC_RET(params) = (unsigned long)ret;
         }
     }
     if (skip) {
-        ret = (int32_t)params->eax;
+        ret = (long)SC_RET(params);
     } else if (syscall_num < SYSCALL_TABLE_SIZE && _syscall_table[syscall_num]) {
         ret = _syscall_table[syscall_num](params);
     } else {
@@ -2789,9 +2747,9 @@ static void _syscall_handler(isr_params_t *params)
         }
     }
     if (current_proc && (current_proc->ptrace & PT_SYSCALL)) {
-        params->eax = (uint32_t)ret;
+        SC_RET(params) = (unsigned long)ret;
         ptrace_syscall_stop(params, syscall_num, 1);
-        ret = (int32_t)params->eax;
+        ret = (long)SC_RET(params);
         if (ret != -EINTR) {
             current_proc->restart_nr = 0;
         }
@@ -2799,7 +2757,7 @@ static void _syscall_handler(isr_params_t *params)
 
     /* Disable interrupts again so the epilogue restores the trapframe (segments
      * and %gs) atomically; iret then restores the caller's IF. */
-    __asm__ __volatile__("cli");
+    arch_irq_disable();
 
     if (current_proc) {
         current_proc->in_syscall = 0;
@@ -2819,8 +2777,8 @@ static void _syscall_handler(isr_params_t *params)
     }
     sched_take_preempt();
 
-    /* Store return value in EAX - will be restored by popal */
-    params->eax = (uint32_t)ret;
+    /* The result, in the register the return to user mode restores it from. */
+    SC_RET(params) = (unsigned long)ret;
 }
 
 void init_syscall(void)

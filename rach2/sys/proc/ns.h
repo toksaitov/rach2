@@ -229,8 +229,8 @@ void ns_caps_fill(process_t *p);
 int ns_caps_held(const process_t *p);
 
 /** unshare (310) and setns (346). */
-int32_t sys_unshare(isr_params_t *params);
-int32_t sys_setns(isr_params_t *params);
+long sys_unshare(isr_params_t *params);
+long sys_setns(isr_params_t *params);
 
 /**
  * The init of the PID namespace of `p`, when `p` is not in the first: the

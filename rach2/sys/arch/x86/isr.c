@@ -2,7 +2,7 @@
 #include "../../klog.h"
 #include "isr.h"
 #include "../../panic.h"
-#include "serial.h"
+#include "../../serial.h"
 #include "../../mm/pressure.h"
 
 #include "../../lib/ksignal.h"

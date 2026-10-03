@@ -182,7 +182,7 @@ struct tcb {
 
     /* The round-trip samples timed to the microsecond, for `ss -i`: the
      * timer above runs on ticks, and a round trip on a LAN is under one. */
-    uint32_t rtt_start_us; /* pit_now_us() at the sample's start */
+    uint32_t rtt_start_us; /* timer_now_us() at the sample's start */
     uint32_t srtt_us;      /* smoothed RTT x 8, microseconds */
     uint32_t rttvar_us;    /* RTT variance x 4, microseconds */
 

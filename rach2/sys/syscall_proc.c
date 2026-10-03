@@ -3,18 +3,19 @@
  * signals, identities, sessions, limits and the address space. Registered
  * by syscall.c; what it shares with the other arms is in syscall_internal.h.
  */
+#include "arch/arch.h"
 #include "../kernel.h"
 #include "mm/filecache.h"
 #include "mm/kheap.h"
 #include "klog.h"
 #include "syscall.h"
-#include "arch/x86/power.h"
-#include "arch/x86/serial.h"
+#include "power.h"
+#include "serial.h"
 #include "panic.h"
 #include "kio.h"
-#include "arch/x86/kbd.h"
+#include "kbd.h"
 #include "input.h"
-#include "arch/x86/mouse.h"
+#include "mouse.h"
 #include "proc/process.h"
 #include "proc/sched.h"
 #include "proc/seccomp.h"
@@ -58,7 +59,7 @@
 #include "lib/kuser.h"
 #include "lib/kstring.h"
 #include "display/vga_gfx.h"
-#include "arch/x86/speaker.h"
+#include "speaker.h"
 #include "audio/audio.h"
 #include "network/socket/socket.h"
 #include "network/socket/packet.h"
@@ -459,7 +460,7 @@ static void exit_release_session(void)
 static void __attribute__((noreturn)) exit_schedule_away(void)
 {
     for (;;) {
-        __asm__ __volatile__("cli");
+        arch_irq_disable();
         schedule();
         idle_wait_irq_off();
     }
@@ -522,7 +523,7 @@ int32_t exit_current(int32_t code)
     uint32_t exiting_pid;
 
     if (!current_proc) {
-        __asm__ __volatile__("cli; hlt");
+        arch_stop();
         return 0;
     }
     ptrace_event(PTRACE_EVENT_EXIT, (uint32_t)code);
@@ -574,7 +575,7 @@ int32_t exit_current(int32_t code)
 
     /* Freed and replaced with interrupts off: a handler between the two
      * would count its entry in the record just freed. */
-    __asm__ __volatile__("cli");
+    arch_irq_disable();
     free_process(current_proc);
 
     init_pid = 0;
@@ -587,7 +588,7 @@ int32_t exit_current(int32_t code)
      * buffer or see a dangling stdin waiter. shell_loop resets again on
      * entry as the catch-all. */
     shell_reset_input();
-    __asm__ __volatile__("sti");
+    arch_irq_enable();
 
     sched_disable();
 
@@ -608,18 +609,18 @@ int32_t exit_current(int32_t code)
  * this call through glibc's and musl's thread code; exit(3) and _exit(2)
  * make exit_group.
  */
-int32_t sys_exit(isr_params_t *params)
+long sys_exit(isr_params_t *params)
 {
-    return exit_current((int32_t)((params->ebx & 0xFFu) << 8));
+    return exit_current((int32_t)((SC_ARG(params, 0) & 0xFFu) << 8));
 }
 
 /**
  * exit_group (252): end every thread of the process, the process with the
  * status in EBX.
  */
-int32_t sys_exit_group(isr_params_t *params)
+long sys_exit_group(isr_params_t *params)
 {
-    int32_t code = (int32_t)((params->ebx & 0xFFu) << 8);
+    int32_t code = (int32_t)((SC_ARG(params, 0) & 0xFFu) << 8);
 
     if (current_proc) {
         proc_group_exit(code);
@@ -1788,7 +1789,7 @@ static void exec_commit(isr_params_t *params, struct exec_state *s)
     params->es = 0x23;
     params->ds = 0x23;
     current_proc->tls_base = 0;
-    gdt_set_tls(0);
+    arch_tls_set(0);
     fpu_init_area(current_proc->fpu);
     fpu_restore(current_proc->fpu);
 }
@@ -1882,7 +1883,7 @@ int32_t proc_fs_unshare(void)
  */
 static int32_t exec_run(isr_params_t *params, struct exec_state *s)
 {
-    const char __user *user_path = (const char __user *)params->ebx;
+    const char __user *user_path = (const char __user *)SC_ARG(params, 0);
     int32_t rc;
 
     if (!user_path) {
@@ -1901,8 +1902,8 @@ static int32_t exec_run(isr_params_t *params, struct exec_state *s)
         rc = exec_link_name(s->path);
     }
     if (rc == 0) {
-        rc = exec_copy_args(s, user_path, (char *const __user *)params->ecx,
-                            (char *const __user *)params->edx, &s->argc, &s->envc);
+        rc = exec_copy_args(s, user_path, (char *const __user *)SC_ARG(params, 1),
+                            (char *const __user *)SC_ARG(params, 2), &s->argc, &s->envc);
     }
     if (rc == 0) {
         rc = exec_script(s);
@@ -1936,7 +1937,7 @@ static int32_t exec_run(isr_params_t *params, struct exec_state *s)
  * and gives it back when that returns, whether the exec failed or the new
  * image is about to be entered.
  */
-int32_t sys_execve(isr_params_t *params)
+long sys_execve(isr_params_t *params)
 {
     struct exec_state *s;
     int32_t rc;
@@ -1984,7 +1985,7 @@ struct fork_req {
     uint32_t ptid;
     uint32_t settid;
     uint32_t cleartid;
-    uint32_t tls;
+    uintptr_t tls;
 };
 
 /* The parents that wait in vfork until their child calls execve or ends. */
@@ -2361,7 +2362,7 @@ fail_built:
     return rc;
 }
 
-int32_t sys_fork(isr_params_t *params)
+long sys_fork(isr_params_t *params)
 {
     struct fork_req req = {SIGCHLD, 0, 0, 0, 0, 0};
 
@@ -2374,7 +2375,7 @@ int32_t sys_fork(isr_params_t *params)
  * it; the child must do nothing else before one of the two, since every
  * store it makes is the parent's.
  */
-int32_t sys_vfork(isr_params_t *params)
+long sys_vfork(isr_params_t *params)
 {
     struct fork_req req = {CLONE_VM | CLONE_VFORK | SIGCHLD, 0, 0, 0, 0, 0};
 
@@ -2400,14 +2401,13 @@ static int32_t clone_with(isr_params_t *params, uint32_t flags, uint32_t newsp, 
     }
     req.tls = 0;
     if (flags & CLONE_SETTLS) {
-        user_desc_t desc;
+        uintptr_t base = 0;
+        long err = arch_clone_tls(tls, &base);
 
-        if (copy_from_user(&desc, (const void __user *)tls, sizeof(desc)) != 0) {
-            return -EFAULT;
+        if (err != 0) {
+            return err;
         }
-        if (tls_resolve_base(&desc, &req.tls) != 0) {
-            return -EINVAL;
-        }
+        req.tls = base;
     }
     req.flags = flags;
     req.newsp = newsp;
@@ -2440,9 +2440,9 @@ static int32_t clone_with(isr_params_t *params, uint32_t flags, uint32_t newsp, 
  * namespaces (`ns_fork`); a cgroup namespace and any other flag are refused
  * with EINVAL.
  */
-int32_t sys_clone(isr_params_t *params)
+long sys_clone(isr_params_t *params)
 {
-    return clone_with(params, params->ebx, params->ecx, params->edx, params->esi, params->edi);
+    return clone_with(params, SC_ARG(params, 0), SC_ARG(params, 1), SC_ARG(params, 2), SC_ARG(params, 3), SC_ARG(params, 4));
 }
 
 /* clone3's structure, Linux's struct clone_args as eight 64-bit fields of its
@@ -2467,10 +2467,10 @@ int32_t sys_clone(isr_params_t *params)
  * with bits past 32. The caller's registers are left as they were, since a
  * caller may keep the structure's address in one across the call.
  */
-int32_t sys_clone3(isr_params_t *params)
+long sys_clone3(isr_params_t *params)
 {
     uint32_t a[CLONE_ARGS_WORDS], extra[(CLONE_ARGS_KNOWN - 64) / 4];
-    uint32_t size = params->ecx, at, byte, i;
+    uint32_t size = SC_ARG(params, 1), at, byte, i;
 
     if (size < 64u) {
         return -EINVAL;
@@ -2478,14 +2478,14 @@ int32_t sys_clone3(isr_params_t *params)
     if (size > 4096u) {
         return -E2BIG;
     }
-    if (copy_from_user(a, (const void __user *)params->ebx, sizeof(a)) != 0) {
+    if (copy_from_user(a, (const void __user *)SC_ARG(params, 0), sizeof(a)) != 0) {
         return -EFAULT;
     }
     for (at = 64u; at < size; at += 4u) {
         uint32_t n = size - at < 4u ? size - at : 4u;
 
         byte = 0;
-        if (copy_from_user(&byte, (const void __user *)(params->ebx + at), n) != 0) {
+        if (copy_from_user(&byte, (const void __user *)(SC_ARG(params, 0) + at), n) != 0) {
             return -EFAULT;
         }
         if (at < CLONE_ARGS_KNOWN) {
@@ -3035,9 +3035,9 @@ static int32_t do_wait(int pid, int __user *status, int options, uint32_t rusage
  * Returns the PID of the child reaped, or reported stopped or continued,
  * 0 (WNOHANG, none ready), or -errno.
  */
-int32_t sys_waitpid(isr_params_t *params)
+long sys_waitpid(isr_params_t *params)
 {
-    return do_wait((int)params->ebx, (int __user *)params->ecx, (int)params->edx, 0);
+    return do_wait((int)SC_ARG(params, 0), (int __user *)SC_ARG(params, 1), (int)SC_ARG(params, 2), 0);
 }
 
 /*
@@ -3045,9 +3045,9 @@ int32_t sys_waitpid(isr_params_t *params)
  * receives the child's CPU time. Args: EBX = pid, ECX = status, EDX =
  * options, ESI = rusage. musl's wait/waitpid are implemented on top of this.
  */
-int32_t sys_wait4(isr_params_t *params)
+long sys_wait4(isr_params_t *params)
 {
-    return do_wait((int)params->ebx, (int __user *)params->ecx, (int)params->edx, params->esi);
+    return do_wait((int)SC_ARG(params, 0), (int __user *)SC_ARG(params, 1), (int)SC_ARG(params, 2), SC_ARG(params, 3));
 }
 
 /* The six fields of the SIGCHLD siginfo_t that waitid writes, at the start
@@ -3081,13 +3081,13 @@ struct kernel_chld_info {
  * the wait or after it with the child's event left in place, as `do_wait`
  * finds it.
  */
-int32_t sys_waitid(isr_params_t *params)
+long sys_waitid(isr_params_t *params)
 {
-    int idtype = (int)params->ebx;
-    int32_t upid = (int32_t)params->ecx;
-    uint32_t uinfo = params->edx;
-    int options = (int)params->esi;
-    uint32_t rusage_ptr = params->edi;
+    int idtype = (int)SC_ARG(params, 0);
+    int32_t upid = (int32_t)SC_ARG(params, 1);
+    uint32_t uinfo = SC_ARG(params, 2);
+    int options = (int)SC_ARG(params, 3);
+    uint32_t rusage_ptr = SC_ARG(params, 4);
     struct kernel_chld_info info;
     struct wait_report r;
     uint32_t id = 0;
@@ -3170,9 +3170,9 @@ int32_t sys_waitid(isr_params_t *params)
  * switches, are not kept and are zero. -EINVAL for any other `who`, Linux's
  * RUSAGE_BOTH among them, -EFAULT for a structure that cannot be written.
  */
-int32_t sys_getrusage(isr_params_t *params)
+long sys_getrusage(isr_params_t *params)
 {
-    int who = (int)params->ebx;
+    int who = (int)SC_ARG(params, 0);
     struct kernel_rusage ru;
     uint32_t flags;
     uint32_t user;
@@ -3198,7 +3198,7 @@ int32_t sys_getrusage(isr_params_t *params)
         ru.maxrss =
             (int32_t)(now > current_proc->tg->maxrss_kb ? now : current_proc->tg->maxrss_kb);
     }
-    if (copy_to_user((void __user *)params->ecx, &ru, RUSAGE_BYTES) != 0) {
+    if (copy_to_user((void __user *)SC_ARG(params, 1), &ru, RUSAGE_BYTES) != 0) {
         return -EFAULT;
     }
     return 0;
@@ -3210,25 +3210,25 @@ int32_t sys_getrusage(isr_params_t *params)
  * caller's user namespace maps them (`uid_seen`). The setters and the group
  * list live with the rest of the id family near do_chown.
  */
-int32_t sys_getuid(isr_params_t *params)
+long sys_getuid(isr_params_t *params)
 {
     (void)params;
     return (int32_t)uid_seen(current_proc->ruid);
 }
 
-int32_t sys_geteuid(isr_params_t *params)
+long sys_geteuid(isr_params_t *params)
 {
     (void)params;
     return (int32_t)uid_seen(current_proc->euid);
 }
 
-int32_t sys_getgid(isr_params_t *params)
+long sys_getgid(isr_params_t *params)
 {
     (void)params;
     return (int32_t)gid_seen(current_proc->rgid);
 }
 
-int32_t sys_getegid(isr_params_t *params)
+long sys_getegid(isr_params_t *params)
 {
     (void)params;
     return (int32_t)gid_seen(current_proc->egid);
@@ -3287,7 +3287,7 @@ static uint32_t sig_irq_save(void)
 static void sig_irq_restore(uint32_t flags)
 {
     if (flags & 0x200u) {
-        __asm__ __volatile__("sti" ::: "memory");
+        arch_irq_enable();
     }
 }
 
@@ -3716,24 +3716,24 @@ static int32_t do_tkill(int tgid, int tid, int signo)
     return 0;
 }
 
-int32_t sys_kill(isr_params_t *params)
+long sys_kill(isr_params_t *params)
 {
-    return do_kill((int)params->ebx, (int)params->ecx);
+    return do_kill((int)SC_ARG(params, 0), (int)SC_ARG(params, 1));
 }
 
 /** tkill (238): EBX=tid, ECX=signal. */
-int32_t sys_tkill(isr_params_t *params)
+long sys_tkill(isr_params_t *params)
 {
-    return do_tkill(0, (int)params->ebx, (int)params->ecx);
+    return do_tkill(0, (int)SC_ARG(params, 0), (int)SC_ARG(params, 1));
 }
 
 /** tgkill (270): EBX=tgid, ECX=tid, EDX=signal; a tgid of 0 is -EINVAL. */
-int32_t sys_tgkill(isr_params_t *params)
+long sys_tgkill(isr_params_t *params)
 {
-    if ((int)params->ebx <= 0) {
+    if ((int)SC_ARG(params, 0) <= 0) {
         return -EINVAL;
     }
-    return do_tkill((int)params->ebx, (int)params->ecx, (int)params->edx);
+    return do_tkill((int)SC_ARG(params, 0), (int)SC_ARG(params, 1), (int)SC_ARG(params, 2));
 }
 
 /*
@@ -3768,10 +3768,10 @@ static int32_t queued_info(uint32_t u, int own, struct k_siginfo *info)
  * real-time signal sent again while pending is merged, where Linux queues
  * it.
  */
-int32_t sys_rt_sigqueueinfo(isr_params_t *params)
+long sys_rt_sigqueueinfo(isr_params_t *params)
 {
-    int pid = (int)params->ebx;
-    int signo = (int)params->ecx;
+    int pid = (int)SC_ARG(params, 0);
+    int signo = (int)SC_ARG(params, 1);
     process_t *target = pid > 0 ? get_process(pid_named((uint32_t)pid)) : NULL;
     struct k_siginfo info;
     int32_t rc;
@@ -3782,7 +3782,7 @@ int32_t sys_rt_sigqueueinfo(isr_params_t *params)
     if (!target || target->state == PROC_UNUSED) {
         return -ESRCH;
     }
-    rc = queued_info(params->edx, target->tg == current_proc->tg, &info);
+    rc = queued_info(SC_ARG(params, 2), target->tg == current_proc->tg, &info);
     if (rc == 0 && !cred_may_signal(target, signo)) {
         rc = -EPERM;
     }
@@ -3794,11 +3794,11 @@ int32_t sys_rt_sigqueueinfo(isr_params_t *params)
 
 /** rt_tgsigqueueinfo (335): EBX=tgid, ECX=tid, EDX=signal, ESI=the siginfo,
  * posted to the thread alone, as tgkill posts. */
-int32_t sys_rt_tgsigqueueinfo(isr_params_t *params)
+long sys_rt_tgsigqueueinfo(isr_params_t *params)
 {
-    int tgid = (int)params->ebx;
-    int tid = (int)params->ecx;
-    int signo = (int)params->edx;
+    int tgid = (int)SC_ARG(params, 0);
+    int tid = (int)SC_ARG(params, 1);
+    int signo = (int)SC_ARG(params, 2);
     process_t *t = tid > 0 ? get_process(pid_named((uint32_t)tid)) : NULL;
     struct k_siginfo info;
     int32_t rc;
@@ -3810,7 +3810,7 @@ int32_t sys_rt_tgsigqueueinfo(isr_params_t *params)
         t->tgid != pid_named((uint32_t)tgid)) {
         return -ESRCH;
     }
-    rc = queued_info(params->esi, t->tg == current_proc->tg, &info);
+    rc = queued_info(SC_ARG(params, 3), t->tg == current_proc->tg, &info);
     if (rc == 0 && !cred_may_signal(t, signo)) {
         rc = -EPERM;
     }
@@ -3847,7 +3847,7 @@ static void sig_wait(void)
  * once a deliverable signal is pending (the signal then acts on the return
  * to user).
  */
-int32_t sys_pause(isr_params_t *params)
+long sys_pause(isr_params_t *params)
 {
     (void)params;
 
@@ -3867,10 +3867,10 @@ int32_t sys_pause(isr_params_t *params)
  * mask, which its return restores; without a handler the old mask comes back
  * on the return to user mode.
  */
-int32_t sys_rt_sigsuspend(isr_params_t *params)
+long sys_rt_sigsuspend(isr_params_t *params)
 {
-    const void __user *umask = (const void __user *)params->ebx;
-    uint32_t sigsetsize = params->ecx;
+    const void __user *umask = (const void __user *)SC_ARG(params, 0);
+    uint32_t sigsetsize = SC_ARG(params, 1);
     uint64_t newmask = 0;
 
     if (!current_proc) {
@@ -3896,12 +3896,12 @@ int32_t sys_rt_sigsuspend(isr_params_t *params)
  * ESI=sigsetsize. Stores the action per-signal; SIGKILL/SIGSTOP cannot be
  * changed.
  */
-int32_t sys_rt_sigaction(isr_params_t *params)
+long sys_rt_sigaction(isr_params_t *params)
 {
-    int signo = (int)params->ebx;
-    const struct k_sigaction __user *uact = (const struct k_sigaction __user *)params->ecx;
-    struct k_sigaction __user *uold = (struct k_sigaction __user *)params->edx;
-    uint32_t setsize = params->esi;
+    int signo = (int)SC_ARG(params, 0);
+    const struct k_sigaction __user *uact = (const struct k_sigaction __user *)SC_ARG(params, 1);
+    struct k_sigaction __user *uold = (struct k_sigaction __user *)SC_ARG(params, 2);
+    uint32_t setsize = SC_ARG(params, 3);
     struct k_sigaction act;
 
     if (!current_proc) {
@@ -3943,12 +3943,12 @@ int32_t sys_rt_sigaction(isr_params_t *params)
  * process that the new mask blocks is left to another thread
  * (`signal_set_blocked`).
  */
-int32_t sys_rt_sigprocmask(isr_params_t *params)
+long sys_rt_sigprocmask(isr_params_t *params)
 {
-    int how = (int)params->ebx;
-    const void __user *uset = (const void __user *)params->ecx;
-    void __user *uold = (void __user *)params->edx;
-    uint32_t setsize = params->esi;
+    int how = (int)SC_ARG(params, 0);
+    const void __user *uset = (const void __user *)SC_ARG(params, 1);
+    void __user *uold = (void __user *)SC_ARG(params, 2);
+    uint32_t setsize = SC_ARG(params, 3);
     uint32_t words[2];
     uint64_t set;
 
@@ -4015,7 +4015,7 @@ static int32_t signal_return(isr_params_t *tf, int rt)
  * restorer that issues the call with the stack pointer 4 bytes past the
  * frame's start.
  */
-int32_t sys_rt_sigreturn(isr_params_t *tf)
+long sys_rt_sigreturn(isr_params_t *tf)
 {
     return signal_return(tf, 1);
 }
@@ -4024,7 +4024,7 @@ int32_t sys_rt_sigreturn(isr_params_t *tf)
  * sigreturn (syscall 119): the return of a plain handler, through a restorer
  * that pops the signal number first, 8 bytes past the frame's start.
  */
-int32_t sys_sigreturn(isr_params_t *tf)
+long sys_sigreturn(isr_params_t *tf)
 {
     return signal_return(tf, 0);
 }
@@ -4050,10 +4050,10 @@ struct k_stack {
  * with EPERM. SS_AUTODISARM is accepted and has no effect. A stack smaller
  * than MINSIGSTKSZ is refused with ENOMEM.
  */
-int32_t sys_sigaltstack(isr_params_t *params)
+long sys_sigaltstack(isr_params_t *params)
 {
-    const struct k_stack __user *uss = (const struct k_stack __user *)params->ebx;
-    struct k_stack __user *uoss = (struct k_stack __user *)params->ecx;
+    const struct k_stack __user *uss = (const struct k_stack __user *)SC_ARG(params, 0);
+    struct k_stack __user *uoss = (struct k_stack __user *)SC_ARG(params, 1);
     struct k_stack cur;
     struct k_stack ss;
     int on;
@@ -4100,9 +4100,9 @@ int32_t sys_sigaltstack(isr_params_t *params)
  * rt_sigpending (176): the signals pending while blocked. EBX=set, ECX=size
  * of the set in bytes, at most 8.
  */
-int32_t sys_rt_sigpending(isr_params_t *params)
+long sys_rt_sigpending(isr_params_t *params)
 {
-    uint32_t size = params->ecx;
+    uint32_t size = SC_ARG(params, 1);
     uint32_t words[2];
     uint64_t set;
     uint32_t flags;
@@ -4118,7 +4118,7 @@ int32_t sys_rt_sigpending(isr_params_t *params)
     sig_irq_restore(flags);
     words[0] = (uint32_t)set;
     words[1] = (uint32_t)(set >> 32);
-    if (copy_to_user((void __user *)params->ebx, words, size) != 0) {
+    if (copy_to_user((void __user *)SC_ARG(params, 0), words, size) != 0) {
         return -EFAULT;
     }
     return 0;
@@ -4129,11 +4129,11 @@ int32_t sys_rt_sigpending(isr_params_t *params)
  * in one word. EBX=how, ECX=new set or NULL, EDX=old set or NULL. SIG_SETMASK
  * replaces signals 1 to 32 and leaves the rest.
  */
-int32_t sys_sigprocmask(isr_params_t *params)
+long sys_sigprocmask(isr_params_t *params)
 {
-    int how = (int)params->ebx;
-    const uint32_t __user *uset = (const uint32_t __user *)params->ecx;
-    uint32_t __user *uold = (uint32_t __user *)params->edx;
+    int how = (int)SC_ARG(params, 0);
+    const uint32_t __user *uset = (const uint32_t __user *)SC_ARG(params, 1);
+    uint32_t __user *uold = (uint32_t __user *)SC_ARG(params, 2);
     uint32_t old;
     uint32_t set;
     uint64_t mask;
@@ -4375,9 +4375,9 @@ void deliver_signals(isr_params_t *tf)
         signo = sig_dequeue(deliverable, &info);
         if (current_proc->ptrace) {
             /* The tracer sees the stop's system call, and may cancel its
-             * restart through orig_eax. */
+             * restart through orig_nr. */
             current_proc->restart_nr = restart_nr;
-            current_proc->orig_eax = restart_nr ? (int32_t)restart_nr - 1 : -1;
+            current_proc->orig_nr = restart_nr ? (int32_t)restart_nr - 1 : -1;
             signo = ptrace_signal_stop(signo, &info);
             restart_nr = current_proc->restart_nr;
             current_proc->restart_nr = 0;
@@ -4513,7 +4513,7 @@ static int32_t sigwait_set(uint64_t set, int timed, uint32_t deadline, void __us
  * makes, which would take a longer one for past; one of zero polls. SIGKILL
  * and SIGSTOP cannot be waited for.
  */
-int32_t sys_rt_sigtimedwait(isr_params_t *params)
+long sys_rt_sigtimedwait(isr_params_t *params)
 {
     struct kernel_timespec ts;
     uint64_t set;
@@ -4525,16 +4525,16 @@ int32_t sys_rt_sigtimedwait(isr_params_t *params)
     if (!current_proc) {
         return -ESRCH;
     }
-    if (params->esi != sizeof(uint64_t)) {
+    if (SC_ARG(params, 3) != sizeof(uint64_t)) {
         return -EINVAL;
     }
-    if (copy_from_user(&set, (const void __user *)params->ebx, sizeof(set)) != 0) {
+    if (copy_from_user(&set, (const void __user *)SC_ARG(params, 0), sizeof(set)) != 0) {
         return -EFAULT;
     }
-    if (params->edx) {
+    if (SC_ARG(params, 2)) {
         uint32_t ticks;
 
-        if (copy_from_user(&ts, (const void __user *)params->edx, sizeof(ts)) != 0) {
+        if (copy_from_user(&ts, (const void __user *)SC_ARG(params, 2), sizeof(ts)) != 0) {
             return -EFAULT;
         }
         if (ts.tv_sec < 0 || ts.tv_nsec < 0 || ts.tv_nsec >= 1000000000) {
@@ -4551,7 +4551,7 @@ int32_t sys_rt_sigtimedwait(isr_params_t *params)
     set &= ~(uint64_t)KSIG_UNCATCHABLE;
     saved = current_proc->sig_blocked;
     signal_set_blocked(saved & ~set);
-    rc = sigwait_set(set, timed, deadline, (void __user *)params->ecx);
+    rc = sigwait_set(set, timed, deadline, (void __user *)SC_ARG(params, 1));
     signal_set_blocked(saved);
     return rc;
 }
@@ -4675,15 +4675,15 @@ static const struct file_ops sigfd_ops = {sigfd_read, NULL, sigfd_poll, NULL, si
  */
 static int32_t signalfd_common(isr_params_t *params, uint32_t flags)
 {
-    int fd = (int)params->ebx;
+    int fd = (int)SC_ARG(params, 0);
     uint64_t mask;
     struct sigfd *sf;
     fd_entry_t *e;
 
-    if (params->edx != sizeof(mask) || (flags & ~(uint32_t)(SFD_NONBLOCK | SFD_CLOEXEC))) {
+    if (SC_ARG(params, 2) != sizeof(mask) || (flags & ~(uint32_t)(SFD_NONBLOCK | SFD_CLOEXEC))) {
         return -EINVAL;
     }
-    if (copy_from_user(&mask, (const void __user *)params->ecx, sizeof(mask)) != 0) {
+    if (copy_from_user(&mask, (const void __user *)SC_ARG(params, 1), sizeof(mask)) != 0) {
         return -EFAULT;
     }
     mask &= ~(uint64_t)KSIG_UNCATCHABLE;
@@ -4720,14 +4720,14 @@ static int32_t signalfd_common(isr_params_t *params, uint32_t flags)
     return fd;
 }
 
-int32_t sys_signalfd(isr_params_t *params)
+long sys_signalfd(isr_params_t *params)
 {
     return signalfd_common(params, 0);
 }
 
-int32_t sys_signalfd4(isr_params_t *params)
+long sys_signalfd4(isr_params_t *params)
 {
-    return signalfd_common(params, params->esi);
+    return signalfd_common(params, SC_ARG(params, 3));
 }
 
 /*
@@ -4735,7 +4735,7 @@ int32_t sys_signalfd4(isr_params_t *params)
  * thread group's id, in its PID namespace (`pid_seen`), as every id these
  * calls give and take is.
  */
-int32_t sys_getpid(isr_params_t *params)
+long sys_getpid(isr_params_t *params)
 {
     (void)params;
 
@@ -4749,7 +4749,7 @@ int32_t sys_getpid(isr_params_t *params)
  * The calling thread's id (gettid(2)); the process id for the thread that
  * began the process.
  */
-int32_t sys_gettid(isr_params_t *params)
+long sys_gettid(isr_params_t *params)
 {
     (void)params;
 
@@ -4781,7 +4781,7 @@ static void group_set_ids(const process_t *p, uint32_t sid, uint32_t pgid)
  * a process group (a group leader cannot carry its group into a new
  * session). Returns the new session id (the caller's pid).
  */
-int32_t sys_setsid(isr_params_t *params)
+long sys_setsid(isr_params_t *params)
 {
     (void)params;
 
@@ -4803,10 +4803,10 @@ int32_t sys_setsid(isr_params_t *params)
  * must not be a session leader, and the destination group must live in the
  * target's session. Returns 0 or -errno.
  */
-int32_t sys_setpgid(isr_params_t *params)
+long sys_setpgid(isr_params_t *params)
 {
-    int pid = (int)params->ebx;
-    int pgid = (int)params->ecx;
+    int pid = (int)SC_ARG(params, 0);
+    int pgid = (int)SC_ARG(params, 1);
     process_t *target;
 
     if (!current_proc) {
@@ -4861,14 +4861,14 @@ static process_t *pgrp_target(int pid)
  * sys_getpgid - return a process's process-group id (getpgid(2)).
  * Args: EBX = pid (0 = caller).
  */
-int32_t sys_getpgid(isr_params_t *params)
+long sys_getpgid(isr_params_t *params)
 {
     process_t *target;
 
     if (!current_proc) {
         return -ESRCH;
     }
-    target = pgrp_target((int)params->ebx);
+    target = pgrp_target((int)SC_ARG(params, 0));
     if (!target) {
         return -ESRCH;
     }
@@ -4878,7 +4878,7 @@ int32_t sys_getpgid(isr_params_t *params)
 /*
  * sys_getpgrp - the caller's process-group id (getpgrp(2), the no-arg form).
  */
-int32_t sys_getpgrp(isr_params_t *params)
+long sys_getpgrp(isr_params_t *params)
 {
     (void)params;
 
@@ -4892,14 +4892,14 @@ int32_t sys_getpgrp(isr_params_t *params)
  * sys_getsid - return a process's session id (getsid(2)).
  * Args: EBX = pid (0 = caller).
  */
-int32_t sys_getsid(isr_params_t *params)
+long sys_getsid(isr_params_t *params)
 {
     process_t *target;
 
     if (!current_proc) {
         return -ESRCH;
     }
-    target = pgrp_target((int)params->ebx);
+    target = pgrp_target((int)SC_ARG(params, 0));
     if (!target) {
         return -ESRCH;
     }
@@ -4909,7 +4909,7 @@ int32_t sys_getsid(isr_params_t *params)
 /*
  * sys_getppid - return the parent's PID (getppid(2)).
  */
-int32_t sys_getppid(isr_params_t *params)
+long sys_getppid(isr_params_t *params)
 {
     (void)params;
 
@@ -4924,7 +4924,7 @@ int32_t sys_getppid(isr_params_t *params)
  * (umask(2)). Args: EBX = new mask (only the low 9 permission bits are
  * kept).
  */
-int32_t sys_umask(isr_params_t *params)
+long sys_umask(isr_params_t *params)
 {
     uint32_t old;
 
@@ -4932,14 +4932,14 @@ int32_t sys_umask(isr_params_t *params)
         return -ESRCH;
     }
     old = current_proc->fs->umask;
-    current_proc->fs->umask = params->ebx & 0777;
+    current_proc->fs->umask = SC_ARG(params, 0) & 0777;
     return (int32_t)old;
 }
 
-int32_t sys_setuid(isr_params_t *params)
+long sys_setuid(isr_params_t *params)
 {
     process_t *p = current_proc;
-    uint32_t uid = params->ebx;
+    uint32_t uid = SC_ARG(params, 0);
     uint32_t old_euid = p->euid;
 
     if (uid == SC_ID_KEEP || ids_named(&uid, 1, 0) != 0) {
@@ -4960,10 +4960,10 @@ int32_t sys_setuid(isr_params_t *params)
     return -EPERM;
 }
 
-int32_t sys_setgid(isr_params_t *params)
+long sys_setgid(isr_params_t *params)
 {
     process_t *p = current_proc;
-    uint32_t gid = params->ebx;
+    uint32_t gid = SC_ARG(params, 0);
     uint32_t old_egid = p->egid;
 
     if (gid == SC_ID_KEEP || ids_named(&gid, 1, 1) != 0) {
@@ -4984,15 +4984,15 @@ int32_t sys_setgid(isr_params_t *params)
     return -EPERM;
 }
 
-int32_t sys_setreuid(isr_params_t *params)
+long sys_setreuid(isr_params_t *params)
 {
     process_t *p = current_proc;
     uint32_t v[2];
     uint32_t r, e, new_r, new_e;
     uint32_t old_euid = p->euid;
 
-    v[0] = params->ebx;
-    v[1] = params->ecx;
+    v[0] = SC_ARG(params, 0);
+    v[1] = SC_ARG(params, 1);
     if (ids_named(v, 2, 0) != 0) {
         return -EINVAL;
     }
@@ -5017,15 +5017,15 @@ int32_t sys_setreuid(isr_params_t *params)
     return 0;
 }
 
-int32_t sys_setregid(isr_params_t *params)
+long sys_setregid(isr_params_t *params)
 {
     process_t *p = current_proc;
     uint32_t v[2];
     uint32_t r, e, new_r, new_e;
     uint32_t old_egid = p->egid;
 
-    v[0] = params->ebx;
-    v[1] = params->ecx;
+    v[0] = SC_ARG(params, 0);
+    v[1] = SC_ARG(params, 1);
     if (ids_named(v, 2, 1) != 0) {
         return -EINVAL;
     }
@@ -5050,16 +5050,16 @@ int32_t sys_setregid(isr_params_t *params)
     return 0;
 }
 
-int32_t sys_setresuid(isr_params_t *params)
+long sys_setresuid(isr_params_t *params)
 {
     process_t *p = current_proc;
     uint32_t v[3];
     uint32_t r, e, s;
     uint32_t old_euid = p->euid;
 
-    v[0] = params->ebx;
-    v[1] = params->ecx;
-    v[2] = params->edx;
+    v[0] = SC_ARG(params, 0);
+    v[1] = SC_ARG(params, 1);
+    v[2] = SC_ARG(params, 2);
     if (ids_named(v, 3, 0) != 0) {
         return -EINVAL;
     }
@@ -5088,16 +5088,16 @@ int32_t sys_setresuid(isr_params_t *params)
     return 0;
 }
 
-int32_t sys_setresgid(isr_params_t *params)
+long sys_setresgid(isr_params_t *params)
 {
     process_t *p = current_proc;
     uint32_t v[3];
     uint32_t r, e, s;
     uint32_t old_egid = p->egid;
 
-    v[0] = params->ebx;
-    v[1] = params->ecx;
-    v[2] = params->edx;
+    v[0] = SC_ARG(params, 0);
+    v[1] = SC_ARG(params, 1);
+    v[2] = SC_ARG(params, 2);
     if (ids_named(v, 3, 1) != 0) {
         return -EINVAL;
     }
@@ -5128,27 +5128,27 @@ int32_t sys_setresgid(isr_params_t *params)
 
 /* getresuid/getresgid (the *32 forms): report all three ids through the three
  * user pointers, the introspection half of the saved-id model. */
-int32_t sys_getresuid(isr_params_t *params)
+long sys_getresuid(isr_params_t *params)
 {
     process_t *p = current_proc;
     uint32_t r = uid_seen(p->ruid), e = uid_seen(p->euid), s = uid_seen(p->suid);
 
-    if (copy_to_user((void __user *)params->ebx, &r, sizeof(r)) != 0 ||
-        copy_to_user((void __user *)params->ecx, &e, sizeof(e)) != 0 ||
-        copy_to_user((void __user *)params->edx, &s, sizeof(s)) != 0) {
+    if (copy_to_user((void __user *)SC_ARG(params, 0), &r, sizeof(r)) != 0 ||
+        copy_to_user((void __user *)SC_ARG(params, 1), &e, sizeof(e)) != 0 ||
+        copy_to_user((void __user *)SC_ARG(params, 2), &s, sizeof(s)) != 0) {
         return -EFAULT;
     }
     return 0;
 }
 
-int32_t sys_getresgid(isr_params_t *params)
+long sys_getresgid(isr_params_t *params)
 {
     process_t *p = current_proc;
     uint32_t r = gid_seen(p->rgid), e = gid_seen(p->egid), s = gid_seen(p->sgid);
 
-    if (copy_to_user((void __user *)params->ebx, &r, sizeof(r)) != 0 ||
-        copy_to_user((void __user *)params->ecx, &e, sizeof(e)) != 0 ||
-        copy_to_user((void __user *)params->edx, &s, sizeof(s)) != 0) {
+    if (copy_to_user((void __user *)SC_ARG(params, 0), &r, sizeof(r)) != 0 ||
+        copy_to_user((void __user *)SC_ARG(params, 1), &e, sizeof(e)) != 0 ||
+        copy_to_user((void __user *)SC_ARG(params, 2), &s, sizeof(s)) != 0) {
         return -EFAULT;
     }
     return 0;
@@ -5157,11 +5157,11 @@ int32_t sys_getresgid(isr_params_t *params)
 /* setgroups/getgroups (the *32 forms): the supplementary list, privileged to
  * set (effective uid 0), NGROUPS_MAX entries. getgroups with size 0 reports the
  * count, the POSIX sizing idiom. */
-int32_t sys_setgroups(isr_params_t *params)
+long sys_setgroups(isr_params_t *params)
 {
     process_t *p = current_proc;
-    uint32_t size = params->ebx;
-    uint32_t list_ptr = params->ecx;
+    uint32_t size = SC_ARG(params, 0);
+    uint32_t list_ptr = SC_ARG(params, 1);
     uint32_t tmp[NGROUPS_MAX];
     uint32_t i;
 
@@ -5186,11 +5186,11 @@ int32_t sys_setgroups(isr_params_t *params)
     return 0;
 }
 
-int32_t sys_getgroups(isr_params_t *params)
+long sys_getgroups(isr_params_t *params)
 {
     process_t *p = current_proc;
-    uint32_t size = params->ebx;
-    uint32_t list_ptr = params->ecx;
+    uint32_t size = SC_ARG(params, 0);
+    uint32_t list_ptr = SC_ARG(params, 1);
     uint32_t i;
 
     if ((int32_t)size < 0) {
@@ -5323,10 +5323,10 @@ static process_t *rlimit_target(uint32_t pid)
 
 /* getrlimit(76)/ugetrlimit(191): 32-bit struct rlimit { u32 rlim_cur,
  * rlim_max }. */
-int32_t sys_getrlimit(isr_params_t *params)
+long sys_getrlimit(isr_params_t *params)
 {
-    uint32_t resource = params->ebx;
-    uint32_t rl = params->ecx;
+    uint32_t resource = SC_ARG(params, 0);
+    uint32_t rl = SC_ARG(params, 1);
     uint32_t out[2];
 
     if (!rl) {
@@ -5340,10 +5340,10 @@ int32_t sys_getrlimit(isr_params_t *params)
 }
 
 /* setrlimit(75): the 32-bit form of a set. */
-int32_t sys_setrlimit(isr_params_t *params)
+long sys_setrlimit(isr_params_t *params)
 {
-    uint32_t resource = params->ebx;
-    uint32_t rl = params->ecx;
+    uint32_t resource = SC_ARG(params, 0);
+    uint32_t rl = SC_ARG(params, 1);
     uint32_t in[2];
 
     if (copy_from_user(in, (const void __user *)rl, sizeof(in)) != 0) {
@@ -5366,12 +5366,12 @@ static uint32_t rlimit_from64(uint32_t lo, uint32_t hi)
  * `getrlimit` see them, and written to the caller after: a copy that fails
  * leaves the new limits in place, as it does on Linux. This is the form musl
  * issues for both. */
-int32_t sys_prlimit64(isr_params_t *params)
+long sys_prlimit64(isr_params_t *params)
 {
-    uint32_t pid = params->ebx;
-    uint32_t resource = params->ecx;
-    uint32_t newp = params->edx;
-    uint32_t oldp = params->esi;
+    uint32_t pid = SC_ARG(params, 0);
+    uint32_t resource = SC_ARG(params, 1);
+    uint32_t newp = SC_ARG(params, 2);
+    uint32_t oldp = SC_ARG(params, 3);
     process_t *p;
     uint32_t cur32, max32;
     uint32_t in[4];
@@ -5441,9 +5441,9 @@ int32_t sys_prlimit64(isr_params_t *params)
  * the top, which merges with a read-write top piece, and shrinking removes
  * the range above the new top and frees its pages.
  */
-int32_t sys_brk(isr_params_t *params)
+long sys_brk(isr_params_t *params)
 {
-    uint32_t req = params->ebx;
+    uint32_t req = SC_ARG(params, 0);
     vm_space_t *vm;
     uint32_t old_top, new_top;
 
@@ -5828,12 +5828,12 @@ static int32_t mmap_install(uint32_t addr, uint32_t len, uint32_t flags, struct 
  * there. MAP_FIXED replaces whatever the range held. Pages are backed on
  * first touch: zeroed, read from the file, or the shared page itself.
  */
-int32_t sys_mmap2(isr_params_t *params)
+long sys_mmap2(isr_params_t *params)
 {
-    uint32_t addr = params->ebx;
-    uint32_t length = params->ecx;
-    uint32_t prot = params->edx;
-    uint32_t flags = params->esi;
+    uint32_t addr = SC_ARG(params, 0);
+    uint32_t length = SC_ARG(params, 1);
+    uint32_t prot = SC_ARG(params, 2);
+    uint32_t flags = SC_ARG(params, 3);
     struct map_source src;
     uint32_t len;
     int32_t rc;
@@ -5855,13 +5855,13 @@ int32_t sys_mmap2(isr_params_t *params)
     if ((flags & (MAP_FIXED | MAP_FIXED_NOREPLACE)) && (addr & (PAGE_SIZE - 1)) != 0) {
         return -EINVAL;
     }
-    if (params->ebp > 0xFFFFFFFFu - len / PAGE_SIZE) {
+    if (SC_ARG(params, 5) > 0xFFFFFFFFu - len / PAGE_SIZE) {
         return -EOVERFLOW;
     }
     mem_balance();
     src.prot = vm_prot_of(prot);
-    src.pgoff = params->ebp;
-    rc = mmap_backing(flags, (int)params->edi, len, &src);
+    src.pgoff = SC_ARG(params, 5);
+    rc = mmap_backing(flags, (int)SC_ARG(params, 4), len, &src);
     if (rc != 0) {
         return rc;
     }
@@ -5943,10 +5943,10 @@ uint32_t shm_attaches(const struct shmem *sh)
  * partial overlaps) and frees the backing frames; unmapping never-faulted or
  * never-mapped pages is a no-op, as on Linux.
  */
-int32_t sys_munmap(isr_params_t *params)
+long sys_munmap(isr_params_t *params)
 {
-    uint32_t addr = params->ebx;
-    uint32_t length = params->ecx;
+    uint32_t addr = SC_ARG(params, 0);
+    uint32_t length = SC_ARG(params, 1);
     vm_space_t *vm;
     uint32_t start, end;
 
@@ -6000,11 +6000,11 @@ static void protect_resident(uint32_t start, uint32_t end, uint32_t prot)
  * take the new protection first and the resident pages after, so a fault in
  * between reads the protection the call is setting.
  */
-int32_t sys_mprotect(isr_params_t *params)
+long sys_mprotect(isr_params_t *params)
 {
-    uint32_t addr = params->ebx;
-    uint32_t length = params->ecx;
-    uint32_t prot = params->edx;
+    uint32_t addr = SC_ARG(params, 0);
+    uint32_t length = SC_ARG(params, 1);
+    uint32_t prot = SC_ARG(params, 2);
     uint32_t end, vmprot;
     int rc;
 
@@ -6139,11 +6139,11 @@ static int remap_args_valid(uint32_t addr, uint32_t old_len, uint32_t new_len, u
  * not in one region; ENOMEM when it can grow in place and may not move, or
  * when no range is free. MREMAP_DONTUNMAP is not implemented.
  */
-int32_t sys_mremap(isr_params_t *params)
+long sys_mremap(isr_params_t *params)
 {
-    uint32_t addr = params->ebx;
-    uint32_t flags = params->esi;
-    uint32_t to = params->edi;
+    uint32_t addr = SC_ARG(params, 0);
+    uint32_t flags = SC_ARG(params, 3);
+    uint32_t to = SC_ARG(params, 4);
     uint32_t old_len, new_len;
     vm_space_t *vm;
     vma_t *r;
@@ -6153,11 +6153,11 @@ int32_t sys_mremap(isr_params_t *params)
         return -ESRCH;
     }
     vm = &current_proc->mm->vm;
-    if (!remap_args_valid(addr, params->ecx, params->edx, flags)) {
+    if (!remap_args_valid(addr, SC_ARG(params, 1), SC_ARG(params, 2), flags)) {
         return -EINVAL;
     }
-    old_len = PAGE_UP(params->ecx);
-    new_len = PAGE_UP(params->edx);
+    old_len = PAGE_UP(SC_ARG(params, 1));
+    new_len = PAGE_UP(SC_ARG(params, 2));
     r = vm_find(vm, addr);
     if (!r || addr + old_len > r->end) {
         return -EFAULT;
@@ -6224,20 +6224,20 @@ int32_t sys_mremap(isr_params_t *params)
  * space is EINVAL, judged by the length as given: a length within a page of
  * 4 GiB rounds up to 0, which would pass for an empty range.
  */
-int32_t sys_madvise(isr_params_t *params)
+long sys_madvise(isr_params_t *params)
 {
-    uint32_t addr = params->ebx;
-    uint32_t advice = params->edx;
+    uint32_t addr = SC_ARG(params, 0);
+    uint32_t advice = SC_ARG(params, 2);
     uint32_t len;
 
     if (!current_proc || !current_proc->mm) {
         return -ESRCH;
     }
     if ((addr & (PAGE_SIZE - 1)) != 0 || addr > USER_ADDR_MAX ||
-        params->ecx > USER_ADDR_MAX - addr || advice == MADV_REMOVE || advice >= MADV_HWPOISON) {
+        SC_ARG(params, 1) > USER_ADDR_MAX - addr || advice == MADV_REMOVE || advice >= MADV_HWPOISON) {
         return -EINVAL;
     }
-    len = PAGE_UP(params->ecx);
+    len = PAGE_UP(SC_ARG(params, 1));
     if (len == 0) {
         return 0;
     }
@@ -6299,20 +6299,20 @@ static int32_t msync_range(uint32_t addr, uint32_t end, int flush)
  * EINVAL, which a range that runs past user space is too, judged by the
  * length as given, as `sys_madvise` judges it.
  */
-int32_t sys_msync(isr_params_t *params)
+long sys_msync(isr_params_t *params)
 {
-    uint32_t addr = params->ebx;
-    uint32_t flags = params->edx;
+    uint32_t addr = SC_ARG(params, 0);
+    uint32_t flags = SC_ARG(params, 2);
     uint32_t len;
 
     if (!current_proc || !current_proc->mm) {
         return -ESRCH;
     }
     if ((addr & (PAGE_SIZE - 1)) != 0 || (flags & ~7u) != 0 || (flags & 5u) == 5u ||
-        addr > USER_ADDR_MAX || params->ecx > USER_ADDR_MAX - addr) {
+        addr > USER_ADDR_MAX || SC_ARG(params, 1) > USER_ADDR_MAX - addr) {
         return -EINVAL;
     }
-    len = PAGE_UP(params->ecx);
+    len = PAGE_UP(SC_ARG(params, 1));
     if (vm_covered(&current_proc->mm->vm, addr, addr + len) != len) {
         return -ENOMEM;
     }
@@ -6381,10 +6381,10 @@ static uint32_t prio_who(int which, uint32_t who)
  * and 40 for nice -20; the C library turns it back into the nice value.
  * -EINVAL for an unknown `which`, -ESRCH when nothing matches.
  */
-int32_t sys_getpriority(isr_params_t *params)
+long sys_getpriority(isr_params_t *params)
 {
-    int which = (int)params->ebx;
-    uint32_t who = prio_who(which, params->ecx);
+    int which = (int)SC_ARG(params, 0);
+    uint32_t who = prio_who(which, SC_ARG(params, 1));
     process_t *p;
     int32_t best = -ESRCH;
 
@@ -6412,11 +6412,11 @@ int32_t sys_getpriority(isr_params_t *params)
  * nothing matched. The value is kept and inherited, and the scheduler does
  * not read it: every ready process takes its turn.
  */
-int32_t sys_setpriority(isr_params_t *params)
+long sys_setpriority(isr_params_t *params)
 {
-    int which = (int)params->ebx;
-    uint32_t who = prio_who(which, params->ecx);
-    int32_t nice = (int32_t)params->edx;
+    int which = (int)SC_ARG(params, 0);
+    uint32_t who = prio_who(which, SC_ARG(params, 1));
+    int32_t nice = (int32_t)SC_ARG(params, 2);
     process_t *p;
     int32_t rc = -ESRCH;
 
@@ -6501,17 +6501,17 @@ static int32_t ioprio_check(uint32_t ioprio)
  * when every target took it, -ESRCH when nothing matched. The value is kept
  * and inherited, and no disk queue reads it.
  */
-int32_t sys_ioprio_set(isr_params_t *params)
+long sys_ioprio_set(isr_params_t *params)
 {
-    int which = (int)params->ebx;
-    uint32_t who = prio_who(which - 1, params->ecx);
+    int which = (int)SC_ARG(params, 0);
+    uint32_t who = prio_who(which - 1, SC_ARG(params, 1));
     process_t *p;
     int32_t rc;
 
     if (which < IOPRIO_WHO_PROCESS || which > IOPRIO_WHO_USER) {
         return -EINVAL;
     }
-    rc = ioprio_check(params->edx);
+    rc = ioprio_check(SC_ARG(params, 2));
     if (rc != 0) {
         return rc;
     }
@@ -6523,7 +6523,7 @@ int32_t sys_ioprio_set(isr_params_t *params)
         if (!cred_privileged() && p->ruid != current_proc->euid && p->ruid != current_proc->ruid) {
             return -EPERM;
         }
-        p->ioprio = (uint16_t)params->edx;
+        p->ioprio = (uint16_t)SC_ARG(params, 2);
         rc = 0;
     }
     return rc;
@@ -6538,10 +6538,10 @@ int32_t sys_ioprio_set(isr_params_t *params)
  * A process never given one has class none, level 0. -EINVAL for an
  * unknown `which`, -ESRCH when nothing matches.
  */
-int32_t sys_ioprio_get(isr_params_t *params)
+long sys_ioprio_get(isr_params_t *params)
 {
-    int which = (int)params->ebx;
-    uint32_t who = prio_who(which - 1, params->ecx);
+    int which = (int)SC_ARG(params, 0);
+    uint32_t who = prio_who(which - 1, SC_ARG(params, 1));
     process_t *p;
     int32_t best = -ESRCH;
 
@@ -6622,7 +6622,7 @@ static int sched_may_change(const process_t *p)
  * The caller is put behind them in the round-robin order and runs again when
  * its turn comes, at once when no other process is ready. Returns 0.
  */
-int32_t sys_sched_yield(isr_params_t *params)
+long sys_sched_yield(isr_params_t *params)
 {
     (void)params;
     schedule();
@@ -6686,28 +6686,28 @@ static int32_t sched_set(int pid, int policy, const void __user *uparam)
 
 /** sched_setscheduler(2), syscall 156: EBX = pid, ECX = policy, EDX = the
  * struct sched_param; see `sched_set`. A negative policy is -EINVAL first. */
-int32_t sys_sched_setscheduler(isr_params_t *params)
+long sys_sched_setscheduler(isr_params_t *params)
 {
-    if ((int)params->ecx < 0) {
+    if ((int)SC_ARG(params, 1) < 0) {
         return -EINVAL;
     }
-    return sched_set((int)params->ebx, (int)params->ecx, (const void __user *)params->edx);
+    return sched_set((int)SC_ARG(params, 0), (int)SC_ARG(params, 1), (const void __user *)SC_ARG(params, 2));
 }
 
 /** sched_setparam(2), syscall 154: EBX = pid, ECX = the struct
  * sched_param; see `sched_set`. */
-int32_t sys_sched_setparam(isr_params_t *params)
+long sys_sched_setparam(isr_params_t *params)
 {
-    return sched_set((int)params->ebx, -1, (const void __user *)params->ecx);
+    return sched_set((int)SC_ARG(params, 0), -1, (const void __user *)SC_ARG(params, 1));
 }
 
 /**
  * A process's policy (sched_getscheduler(2), syscall 157): SCHED_OTHER, the
  * one every process has. -EINVAL for a negative pid, -ESRCH for no process.
  */
-int32_t sys_sched_getscheduler(isr_params_t *params)
+long sys_sched_getscheduler(isr_params_t *params)
 {
-    int pid = (int)params->ebx;
+    int pid = (int)SC_ARG(params, 0);
 
     if (pid < 0) {
         return -EINVAL;
@@ -6720,10 +6720,10 @@ int32_t sys_sched_getscheduler(isr_params_t *params)
  * priority 0 of SCHED_OTHER, written to the struct sched_param at ECX.
  * -EINVAL for no parameter or a negative pid, -ESRCH, -EFAULT.
  */
-int32_t sys_sched_getparam(isr_params_t *params)
+long sys_sched_getparam(isr_params_t *params)
 {
-    int pid = (int)params->ebx;
-    void __user *uparam = (void __user *)params->ecx;
+    int pid = (int)SC_ARG(params, 0);
+    void __user *uparam = (void __user *)SC_ARG(params, 1);
     int32_t priority = 0;
 
     if (!uparam || pid < 0) {
@@ -6759,15 +6759,15 @@ static int32_t sched_priority_bound(int policy, int max)
 }
 
 /** sched_get_priority_max(2), syscall 159: EBX = policy. */
-int32_t sys_sched_get_priority_max(isr_params_t *params)
+long sys_sched_get_priority_max(isr_params_t *params)
 {
-    return sched_priority_bound((int)params->ebx, 1);
+    return sched_priority_bound((int)SC_ARG(params, 0), 1);
 }
 
 /** sched_get_priority_min(2), syscall 160: EBX = policy. */
-int32_t sys_sched_get_priority_min(isr_params_t *params)
+long sys_sched_get_priority_min(isr_params_t *params)
 {
-    return sched_priority_bound((int)params->ebx, 0);
+    return sched_priority_bound((int)SC_ARG(params, 0), 0);
 }
 
 /**
@@ -6776,9 +6776,9 @@ int32_t sys_sched_get_priority_min(isr_params_t *params)
  * from every process at each tick. -EINVAL for a negative pid, -ESRCH,
  * -EFAULT.
  */
-int32_t sys_sched_rr_get_interval(isr_params_t *params)
+long sys_sched_rr_get_interval(isr_params_t *params)
 {
-    int pid = (int)params->ebx;
+    int pid = (int)SC_ARG(params, 0);
     struct kernel_timespec slice;
 
     if (pid < 0) {
@@ -6789,7 +6789,7 @@ int32_t sys_sched_rr_get_interval(isr_params_t *params)
     }
     slice.tv_sec = 0;
     slice.tv_nsec = 10000000;
-    if (copy_to_user((void __user *)params->ecx, &slice, sizeof(slice)) != 0) {
+    if (copy_to_user((void __user *)SC_ARG(params, 1), &slice, sizeof(slice)) != 0) {
         return -EFAULT;
     }
     return 0;
@@ -6804,18 +6804,18 @@ int32_t sys_sched_rr_get_interval(isr_params_t *params)
  * set. -EINVAL for a length that is zero or not a multiple of four bytes,
  * -ESRCH for no process, -EFAULT.
  */
-int32_t sys_sched_getaffinity(isr_params_t *params)
+long sys_sched_getaffinity(isr_params_t *params)
 {
-    uint32_t len = params->ecx;
+    uint32_t len = SC_ARG(params, 1);
     uint32_t mask = 1;
 
     if (len == 0 || (len & 3u) != 0) {
         return -EINVAL;
     }
-    if (!sched_target((int)params->ebx)) {
+    if (!sched_target((int)SC_ARG(params, 0))) {
         return -ESRCH;
     }
-    if (copy_to_user((void __user *)params->edx, &mask, CPU_MASK_BYTES) != 0) {
+    if (copy_to_user((void __user *)SC_ARG(params, 2), &mask, CPU_MASK_BYTES) != 0) {
         return -EFAULT;
     }
     return (int32_t)CPU_MASK_BYTES;
@@ -6845,22 +6845,22 @@ static int32_t lock_range(uint32_t addr, uint32_t len)
  * already stays in memory; the calls check the range, and mlock2 its flags,
  * 0 or MLOCK_ONFAULT, and change nothing. RLIMIT_MEMLOCK is not kept.
  */
-int32_t sys_mlock(isr_params_t *params)
+long sys_mlock(isr_params_t *params)
 {
     if (!current_proc || !current_proc->mm) {
         return -ESRCH;
     }
-    return lock_range(params->ebx, params->ecx);
+    return lock_range(SC_ARG(params, 0), SC_ARG(params, 1));
 }
 
-int32_t sys_munlock(isr_params_t *params)
+long sys_munlock(isr_params_t *params)
 {
     return sys_mlock(params);
 }
 
-int32_t sys_mlock2(isr_params_t *params)
+long sys_mlock2(isr_params_t *params)
 {
-    if (params->edx & ~1u) {
+    if (SC_ARG(params, 2) & ~1u) {
         return -EINVAL;
     }
     return sys_mlock(params);
@@ -6871,9 +6871,9 @@ int32_t sys_mlock2(isr_params_t *params)
  * machine keeps in memory anyway; mlockall's flags must be MCL_CURRENT,
  * MCL_FUTURE and MCL_ONFAULT, not MCL_ONFAULT alone, and not none.
  */
-int32_t sys_mlockall(isr_params_t *params)
+long sys_mlockall(isr_params_t *params)
 {
-    uint32_t flags = params->ebx;
+    uint32_t flags = SC_ARG(params, 0);
 
     if (flags == 0 || (flags & ~7u) || flags == 4u) {
         return -EINVAL;
@@ -6881,7 +6881,7 @@ int32_t sys_mlockall(isr_params_t *params)
     return 0;
 }
 
-int32_t sys_munlockall(isr_params_t *params)
+long sys_munlockall(isr_params_t *params)
 {
     (void)params;
     return 0;
@@ -6893,9 +6893,9 @@ int32_t sys_munlockall(isr_params_t *params)
  * not been brought in yet. -EINVAL for an address not page-aligned, -ENOMEM
  * for a range with a gap, -EFAULT.
  */
-int32_t sys_mincore(isr_params_t *params)
+long sys_mincore(isr_params_t *params)
 {
-    uint32_t addr = params->ebx;
+    uint32_t addr = SC_ARG(params, 0);
     uint32_t pages;
     uint32_t i;
     int32_t rc;
@@ -6906,15 +6906,15 @@ int32_t sys_mincore(isr_params_t *params)
     if (addr & (PAGE_SIZE - 1)) {
         return -EINVAL;
     }
-    rc = lock_range(addr, params->ecx);
+    rc = lock_range(addr, SC_ARG(params, 1));
     if (rc != 0) {
         return rc;
     }
-    pages = (params->ecx + PAGE_SIZE - 1) / PAGE_SIZE;
+    pages = (SC_ARG(params, 1) + PAGE_SIZE - 1) / PAGE_SIZE;
     for (i = 0; i < pages; i++) {
         uint8_t in = paging_user_phys(current_proc->page_dir, addr + i * PAGE_SIZE) != 0;
 
-        if (copy_to_user((void __user *)(params->edx + i), &in, 1) != 0) {
+        if (copy_to_user((void __user *)(SC_ARG(params, 2) + i), &in, 1) != 0) {
             return -EFAULT;
         }
     }
@@ -6927,12 +6927,12 @@ int32_t sys_mincore(isr_params_t *params)
  * argument, is ignored, as Linux ignores it. -EFAULT for a word that cannot
  * be written.
  */
-int32_t sys_getcpu(isr_params_t *params)
+long sys_getcpu(isr_params_t *params)
 {
     uint32_t zero = 0;
 
-    if ((params->ebx && copy_to_user((void __user *)params->ebx, &zero, sizeof(zero)) != 0) ||
-        (params->ecx && copy_to_user((void __user *)params->ecx, &zero, sizeof(zero)) != 0)) {
+    if ((SC_ARG(params, 0) && copy_to_user((void __user *)SC_ARG(params, 0), &zero, sizeof(zero)) != 0) ||
+        (SC_ARG(params, 1) && copy_to_user((void __user *)SC_ARG(params, 1), &zero, sizeof(zero)) != 0)) {
         return -EFAULT;
     }
     return 0;
@@ -6946,7 +6946,7 @@ int32_t sys_getcpu(isr_params_t *params)
  * nothing, since this kernel has no address randomization for
  * ADDR_NO_RANDOMIZE, which GDB sets, to turn off, and no other domain.
  */
-int32_t sys_personality(isr_params_t *params)
+long sys_personality(isr_params_t *params)
 {
     uint32_t old;
 
@@ -6954,11 +6954,11 @@ int32_t sys_personality(isr_params_t *params)
         return -ESRCH;
     }
     old = current_proc->persona;
-    if (params->ebx != 0xFFFFFFFFu) {
-        if ((params->ebx & 0xFFu) != 0 && (params->ebx & 0xFFu) != 8u) {
+    if (SC_ARG(params, 0) != 0xFFFFFFFFu) {
+        if ((SC_ARG(params, 0) & 0xFFu) != 0 && (SC_ARG(params, 0) & 0xFFu) != 8u) {
             return -EINVAL;
         }
-        current_proc->persona = params->ebx;
+        current_proc->persona = SC_ARG(params, 0);
     }
     return (int32_t)old;
 }
@@ -6973,19 +6973,19 @@ int32_t sys_personality(isr_params_t *params)
  * with -EINVAL. -EFAULT, then -ESRCH, then -EPERM for a caller that may not
  * change the target, in Linux's order.
  */
-int32_t sys_sched_setaffinity(isr_params_t *params)
+long sys_sched_setaffinity(isr_params_t *params)
 {
-    uint32_t len = params->ecx;
+    uint32_t len = SC_ARG(params, 1);
     uint32_t mask = 0;
     process_t *p;
 
     if (len > CPU_MASK_BYTES) {
         len = CPU_MASK_BYTES;
     }
-    if (copy_from_user(&mask, (const void __user *)params->edx, len) != 0) {
+    if (copy_from_user(&mask, (const void __user *)SC_ARG(params, 2), len) != 0) {
         return -EFAULT;
     }
-    p = sched_target((int)params->ebx);
+    p = sched_target((int)SC_ARG(params, 0));
     if (!p) {
         return -ESRCH;
     }
@@ -7048,14 +7048,14 @@ int32_t sys_sched_setaffinity(isr_params_t *params)
  * past 64, a dumpable value other than 0 and 1, or arguments not as above;
  * -EFAULT for a pointer that cannot be read or written.
  */
-int32_t sys_prctl(isr_params_t *params)
+long sys_prctl(isr_params_t *params)
 {
-    uint32_t arg2 = params->ecx;
-    uint32_t rest = params->edx | params->esi | params->edi;
+    uint32_t arg2 = SC_ARG(params, 1);
+    uint32_t rest = SC_ARG(params, 2) | SC_ARG(params, 3) | SC_ARG(params, 4);
     int32_t value;
     char name[sizeof(current_proc->comm)];
 
-    switch (params->ebx) {
+    switch (SC_ARG(params, 0)) {
     case PR_SET_PDEATHSIG:
         if (arg2 > KSIG_MAX) {
             return -EINVAL;
@@ -7098,7 +7098,7 @@ int32_t sys_prctl(isr_params_t *params)
     case PR_GET_SECCOMP:
         return (int32_t)current_proc->seccomp_mode;
     case PR_SET_SECCOMP:
-        return seccomp_prctl_set(arg2, params->edx);
+        return seccomp_prctl_set(arg2, SC_ARG(params, 2));
     default:
         return -EINVAL;
     }
@@ -7192,18 +7192,18 @@ static int32_t cap_pid_in(uint32_t uhdr, int32_t *pid)
  * for a pid that names no thread, -EINVAL for a negative one or an unknown
  * version, -EFAULT for memory that cannot be read or written.
  */
-int32_t sys_capget(isr_params_t *params)
+long sys_capget(isr_params_t *params)
 {
     struct cap_data d[2];
     const process_t *p = current_proc;
     uint32_t words;
     int32_t pid;
-    int32_t rc = cap_version_in(params->ebx, &words);
+    int32_t rc = cap_version_in(SC_ARG(params, 0), &words);
 
-    if (rc != 0 || params->ecx == 0) {
-        return (params->ecx == 0 && rc == -EINVAL) ? 0 : rc;
+    if (rc != 0 || SC_ARG(params, 1) == 0) {
+        return (SC_ARG(params, 1) == 0 && rc == -EINVAL) ? 0 : rc;
     }
-    rc = cap_pid_in(params->ebx, &pid);
+    rc = cap_pid_in(SC_ARG(params, 0), &pid);
     if (rc != 0) {
         return rc;
     }
@@ -7219,7 +7219,7 @@ int32_t sys_capget(isr_params_t *params)
     k_memset(d, 0, sizeof(d));
     d[0].effective = d[0].permitted = cap_held(p, 0);
     d[1].effective = d[1].permitted = cap_held(p, 1);
-    if (copy_to_user((void __user *)params->ecx, d, words * sizeof(d[0])) != 0) {
+    if (copy_to_user((void __user *)SC_ARG(params, 1), d, words * sizeof(d[0])) != 0) {
         return -EFAULT;
     }
     return 0;
@@ -7242,17 +7242,17 @@ int32_t sys_capget(isr_params_t *params)
  * Linux keeps it; an unknown version is -EINVAL, and memory that cannot be
  * read -EFAULT.
  */
-int32_t sys_capset(isr_params_t *params)
+long sys_capset(isr_params_t *params)
 {
     struct cap_data d[2];
     uint32_t words, i, any = 0, whole = 1;
     int32_t pid;
-    int32_t rc = cap_version_in(params->ebx, &words);
+    int32_t rc = cap_version_in(SC_ARG(params, 0), &words);
 
     if (rc != 0) {
         return rc;
     }
-    rc = cap_pid_in(params->ebx, &pid);
+    rc = cap_pid_in(SC_ARG(params, 0), &pid);
     if (rc != 0) {
         return rc;
     }
@@ -7260,8 +7260,8 @@ int32_t sys_capset(isr_params_t *params)
         return -EPERM;
     }
     k_memset(d, 0, sizeof(d));
-    if (!params->ecx ||
-        copy_from_user(d, (const void __user *)params->ecx, words * sizeof(d[0])) != 0) {
+    if (!SC_ARG(params, 1) ||
+        copy_from_user(d, (const void __user *)SC_ARG(params, 1), words * sizeof(d[0])) != 0) {
         return -EFAULT;
     }
     for (i = 0; i < 2; i++) {

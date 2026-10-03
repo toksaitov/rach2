@@ -1660,19 +1660,19 @@ static int32_t msg_rcv_ipc(int version, int32_t id, int32_t size, uint32_t flag,
     return msg_rcv(id, (void __user *)kludge[0], size, (int32_t)kludge[1], flag);
 }
 
-int32_t sys_ipc(struct isr_params *params)
+long sys_ipc(struct isr_params *params)
 {
-    uint32_t call = params->ebx & 0xFFFFu;
-    int version = (int)(params->ebx >> 16);
-    int32_t first = (int32_t)params->ecx;
-    uint32_t second = params->edx, third = params->esi, ptr = params->edi;
+    uint32_t call = SC_ARG(params, 0) & 0xFFFFu;
+    int version = (int)(SC_ARG(params, 0) >> 16);
+    int32_t first = (int32_t)SC_ARG(params, 1);
+    uint32_t second = SC_ARG(params, 2), third = SC_ARG(params, 3), ptr = SC_ARG(params, 4);
     uint32_t arg;
 
     switch (call) {
     case SEMOP:
         return sem_timed(first, (const void __user *)ptr, second, NULL);
     case SEMTIMEDOP:
-        return sem_timed(first, (const void __user *)ptr, second, (const void __user *)params->ebp);
+        return sem_timed(first, (const void __user *)ptr, second, (const void __user *)SC_ARG(params, 5));
     case SEMGET:
         return sem_get(first, (int32_t)second, third);
     case SEMCTL:
@@ -1687,7 +1687,7 @@ int32_t sys_ipc(struct isr_params *params)
         return msg_snd(first, (const void __user *)ptr, second, third);
     case MSGRCV:
         return msg_rcv_ipc(version, first, (int32_t)second, third, (void __user *)ptr,
-                           (int32_t)params->ebp);
+                           (int32_t)SC_ARG(params, 5));
     case MSGGET:
         return msg_get(first, second);
     case MSGCTL:
@@ -1705,69 +1705,69 @@ int32_t sys_ipc(struct isr_params *params)
     }
 }
 
-int32_t sys_semget(struct isr_params *params)
+long sys_semget(struct isr_params *params)
 {
-    return sem_get((int32_t)params->ebx, (int32_t)params->ecx, params->edx);
+    return sem_get((int32_t)SC_ARG(params, 0), (int32_t)SC_ARG(params, 1), SC_ARG(params, 2));
 }
 
-int32_t sys_semctl(struct isr_params *params)
+long sys_semctl(struct isr_params *params)
 {
-    return sem_ctl((int32_t)params->ebx, (int)params->ecx, (int)params->edx, params->esi);
+    return sem_ctl((int32_t)SC_ARG(params, 0), (int)SC_ARG(params, 1), (int)SC_ARG(params, 2), SC_ARG(params, 3));
 }
 
-int32_t sys_shmget(struct isr_params *params)
+long sys_shmget(struct isr_params *params)
 {
-    return shm_get((int32_t)params->ebx, params->ecx, params->edx);
+    return shm_get((int32_t)SC_ARG(params, 0), SC_ARG(params, 1), SC_ARG(params, 2));
 }
 
-int32_t sys_shmctl(struct isr_params *params)
+long sys_shmctl(struct isr_params *params)
 {
-    return shm_ctl((int32_t)params->ebx, (int)params->ecx, (void __user *)params->edx);
+    return shm_ctl((int32_t)SC_ARG(params, 0), (int)SC_ARG(params, 1), (void __user *)SC_ARG(params, 2));
 }
 
-int32_t sys_shmat(struct isr_params *params)
+long sys_shmat(struct isr_params *params)
 {
     uint32_t base;
-    int32_t rc = shm_at((int32_t)params->ebx, params->ecx, params->edx, &base);
+    int32_t rc = shm_at((int32_t)SC_ARG(params, 0), SC_ARG(params, 1), SC_ARG(params, 2), &base);
 
     return rc != 0 ? rc : (int32_t)base;
 }
 
-int32_t sys_shmdt(struct isr_params *params)
+long sys_shmdt(struct isr_params *params)
 {
-    return shm_dt(params->ebx);
+    return shm_dt(SC_ARG(params, 0));
 }
 
-int32_t sys_msgget(struct isr_params *params)
+long sys_msgget(struct isr_params *params)
 {
-    return msg_get((int32_t)params->ebx, params->ecx);
+    return msg_get((int32_t)SC_ARG(params, 0), SC_ARG(params, 1));
 }
 
-int32_t sys_msgsnd(struct isr_params *params)
+long sys_msgsnd(struct isr_params *params)
 {
-    return msg_snd((int32_t)params->ebx, (const void __user *)params->ecx, params->edx,
-                   params->esi);
+    return msg_snd((int32_t)SC_ARG(params, 0), (const void __user *)SC_ARG(params, 1), SC_ARG(params, 2),
+                   SC_ARG(params, 3));
 }
 
-int32_t sys_msgrcv(struct isr_params *params)
+long sys_msgrcv(struct isr_params *params)
 {
-    return msg_rcv((int32_t)params->ebx, (void __user *)params->ecx, (int32_t)params->edx,
-                   (int32_t)params->esi, params->edi);
+    return msg_rcv((int32_t)SC_ARG(params, 0), (void __user *)SC_ARG(params, 1), (int32_t)SC_ARG(params, 2),
+                   (int32_t)SC_ARG(params, 3), SC_ARG(params, 4));
 }
 
-int32_t sys_msgctl(struct isr_params *params)
+long sys_msgctl(struct isr_params *params)
 {
-    return msg_ctl((int32_t)params->ebx, (int)params->ecx, (void __user *)params->edx);
+    return msg_ctl((int32_t)SC_ARG(params, 0), (int)SC_ARG(params, 1), (void __user *)SC_ARG(params, 2));
 }
 
 /** semtimedop_time64, number 420: the timeout a 64-bit timespec. */
-int32_t sys_semtimedop_time64(struct isr_params *params)
+long sys_semtimedop_time64(struct isr_params *params)
 {
     int64_t ts[2];
     uint32_t ticks = 0;
 
-    if (params->esi) {
-        if (copy_from_user(ts, (const void __user *)params->esi, sizeof(ts)) != 0) {
+    if (SC_ARG(params, 3)) {
+        if (copy_from_user(ts, (const void __user *)SC_ARG(params, 3), sizeof(ts)) != 0) {
             return -EFAULT;
         }
         if (ts[0] < 0 || ts[1] < 0 || ts[1] >= 1000000000) {
@@ -1776,8 +1776,8 @@ int32_t sys_semtimedop_time64(struct isr_params *params)
         ticks = (uint32_t)(ts[0] > 21474836 ? 21474836 : ts[0]) * 100u +
                 ((uint32_t)ts[1] + 9999999u) / 10000000u;
     }
-    return sem_op((int32_t)params->ebx, (const void __user *)params->ecx, params->edx,
-                  params->esi != 0, ticks);
+    return sem_op((int32_t)SC_ARG(params, 0), (const void __user *)SC_ARG(params, 1), SC_ARG(params, 2),
+                  SC_ARG(params, 3) != 0, ticks);
 }
 
 int sysv_row_at(int kind, int i, struct sysv_row *row)

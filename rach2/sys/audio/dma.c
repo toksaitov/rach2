@@ -2,10 +2,11 @@
  * ISA DMA controller (8237A) driver for Sound Blaster 16 audio transfers.
  */
 
+#include "../arch/x86/portio.h"
 #include "../klog.h"
 #include "dma.h"
 #include "../kio.h"
-#include "../arch/x86/serial.h"
+#include "../serial.h"
 
 /*
  * DMA controller 1 ports (channels 0-3, 8-bit)

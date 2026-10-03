@@ -1,7 +1,7 @@
 #include "../klog.h"
 #include "heap.h"
 #include "paging.h"
-#include "../arch/x86/serial.h"
+#include "../serial.h"
 
 uintptr_t mem_reserved_ptr;
 

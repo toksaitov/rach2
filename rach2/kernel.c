@@ -1,17 +1,14 @@
+#include "sys/arch/arch.h"
 #include "kernel.h"
-#include "vendor/multiboot.h"
 
 #include "sys/kio.h"
 #include "sys/lib/kerrno.h"
-#include "sys/arch/x86/fpu.h"
+#include "sys/fpu.h"
 #include "sys/klog.h"
-#include "sys/arch/x86/serial.h"
+#include "sys/serial.h"
 #include "sys/syscall.h"
 #include "sys/module.h"
 #include "sys/cmdline.h"
-#include "sys/arch/i686/gdt.h"
-#include "sys/arch/i686/tss.h"
-#include "sys/arch/i686/idt.h"
 #include "sys/irq.h"
 #include "sys/mm/heap.h"
 #include "sys/mm/paging.h"
@@ -23,9 +20,6 @@
 #include "sys/mm/frame.h"
 #include "sys/mm/pagecache.h"
 #include "sys/mm/modlayout.h"
-#include "sys/arch/x86/lapic.h"
-#include "sys/arch/x86/apicdiag.h"
-#include "sys/arch/x86/diag.h"
 #include "sys/block/mbr.h"
 #include "sys/fs/devfs.h"
 #include "sys/fs/vfs.h"
@@ -36,34 +30,32 @@
 #include "sys/tty/pty.h"
 #include "sys/ipc/pipe.h"
 #include "sys/proc/sched.h"
-#include "sys/arch/x86/power.h"
+#include "sys/power.h"
 #include "sys/proc/elf.h"
 #include "sys/proc/uimage.h"
 #include "sys/lib/krandom.h"
 #include "sys/lib/ksignal.h"
 #include "sys/arch/x86/rtc.h"
 #include "sys/fs/krffs.h"
-#include "sys/arch/x86/pit.h"
+#include "sys/timer.h"
+#include "sys/platform.h"
+#include "sys/boot.h"
 #include "sys/latency.h"
-#include "sys/arch/x86/kbd.h"
 #include "sys/input.h"
-#include "sys/arch/x86/mouse.h"
 #include "sys/usb/usb.h"
 #include "sys/block/block.h"
 #include "sys/block/ahci.h"
-#include "sys/block/ata.h"
 #include "sys/display/vga_text.h"
 #include "sys/audio/audio.h"
 #include "sys/audio/audio_debug.h"
 #include "sys/audio/hda.h"
-#include "sys/arch/x86/udelay.h"
+#include "sys/udelay.h"
 #include "sys/network/net.h"
 #include "sys/network/netconf.h"
 #include "sys/block/diskcmd.h"
 #include "sys/block/diskinfo.h"
 #include "sys/block/disk.h"
 #include "sys/block/recovery.h"
-#include "sys/arch/x86/board.h"
 #include "sys/network/driver/netdev.h"
 #include "sys/network/netconsole.h"
 #include "sys/network/ip/icmp.h"
@@ -72,13 +64,11 @@
 #include "sys/lib/kint.h"
 #include "sys/lib/kstring.h"
 
-/* Kernel stack, the page below it and ring-3 entry trampoline, from
- * loader.s. */
+/* The boot stack and the page below it, from the architecture's entry
+ * (sys/arch/i686/loader.s). */
 extern char stack[];
 extern char stack_guard[];
 #define KERNEL_STACK_SIZE 0x4000
-
-extern void enter_usermode(uint32_t eip, uint32_t esp);
 
 /* The stack the debug shell's ring-3 test runs on, reserved when it runs. */
 #define USER_STACK_SIZE 0x1000
@@ -126,7 +116,6 @@ void shell_reset_input(void);
 void panic_init_died(uint32_t pid); /* called from syscall.c too; never returns */
 static void process_command(const char *cmd);
 static void timer_handler(isr_params_t *params);
-static void keyboard_handler(isr_params_t *params);
 static bool str_equal(const char *a, const char *b);
 static void boot_init_process(void);
 
@@ -254,12 +243,12 @@ static void exec_program(int argc, char *argv[]);
  */
 static void timer_handler(isr_params_t *params)
 {
-    uint32_t lost = pit_lost_ticks();
+    uint32_t lost = timer_lost_ticks();
 
     ++kernel_ticks;
     /* The microsecond clock's periods are this tick's to count; see
-       `pit_now_us`. */
-    pit_tick_clock();
+       `timer_now_us`. */
+    timer_tick_clock();
     latency_tick();
     if (++kernel_second_ticks >= 100) {
         kernel_second_ticks = 0;
@@ -273,7 +262,7 @@ static void timer_handler(isr_params_t *params)
         }
     }
 
-    sched_account_tick((params->cs & 3u) == 3u);
+    sched_account_tick(FRAME_USER(params) != 0);
     sched_load_tick();
 
     /* Runs regardless of in_syscall, so a sleeper parked inside its syscall
@@ -297,7 +286,7 @@ static void timer_handler(isr_params_t *params)
     usb_poll();
     block_lag_tick();
     block_request_tick();
-    ata_tick();
+    platform_tick();
     tty_console_poll();
 
     sched_preempt();
@@ -402,7 +391,7 @@ void terminate_current_process(int32_t signo)
     pid = current_proc->tgid;
     is_init = (pid == init_pid && init_pid != 0);
     current_proc->in_syscall = 1;
-    __asm__ __volatile__("sti" ::: "memory");
+    arch_irq_enable();
 
     /* The signal ends the whole process: the other threads are sent SIGKILL,
      * and the process ends with this signal whichever thread ends last. */
@@ -424,11 +413,11 @@ void terminate_current_process(int32_t signo)
     }
 
     last = proc_exit_cleanup(signo);
-    __asm__ __volatile__("cli" ::: "memory");
+    arch_irq_disable();
 
     if (!last) {
         for (;;) {
-            __asm__ __volatile__("cli");
+            arch_irq_disable();
             schedule();
             idle_wait_irq_off();
         }
@@ -460,12 +449,7 @@ void terminate_current_process(int32_t signo)
 
         sched_disable();
 
-        __asm__ __volatile__("movl %0, %%esp\n\t"
-                             "sti\n\t"
-                             "jmp *%1\n\t"
-                             :
-                             : "r"((uint32_t)stack + KERNEL_STACK_SIZE), "r"((uint32_t)shell_loop)
-                             : "memory");
+        arch_run_on_stack((uintptr_t)stack + KERNEL_STACK_SIZE, shell_loop);
     } else {
         schedule();
         k_panic("a dying process was scheduled again");
@@ -491,49 +475,6 @@ static void kill_foreground_process(void)
     } else if (current_proc && current_proc->cr3 != 0 &&
                (int)current_proc->sid == console_tty.sid) {
         signal_post(current_proc, SIGINT);
-    }
-}
-
-/**
- * Handle the PS/2 keyboard interrupt: read the port and hand on the code.
- *
- * Reads the scancode from port 0x60 and gives it to the input layer, which
- * puts it in the ring graphics-mode readers drain and decides where the
- * keystroke goes. Everything that is not about the 8042 lives there,
- * because a USB keyboard's codes arrive by another road and are treated the
- * same.
- *
- * Runs in interrupt context with an arbitrary process's page directory loaded,
- * so it switches to the kernel directory around the work and restores CR3 on
- * the way out.
- */
-static void keyboard_handler(isr_params_t *params)
-{
-    uint8_t scancode;
-    uint32_t saved_cr3;
-    bool switched_cr3 = false;
-
-    (void)params;
-
-    scancode = inb(0x60);
-
-    /* The running process's page directory may not map the kernel data the
-     * input layer touches. Set CR3 directly rather than
-     * switch_page_directory(), whose own record of the current directory may
-     * be out of sync here. */
-    __asm__ __volatile__("mov %%cr3, %0" : "=r"(saved_cr3));
-    {
-        uint32_t kernel_cr3 = get_page_dir_phys(_kernel_dir);
-        if (saved_cr3 != kernel_cr3) {
-            __asm__ __volatile__("mov %0, %%cr3" : : "r"(kernel_cr3) : "memory");
-            switched_cr3 = true;
-        }
-    }
-
-    input_key(scancode);
-
-    if (switched_cr3) {
-        __asm__ __volatile__("mov %0, %%cr3" : : "r"(saved_cr3) : "memory");
     }
 }
 
@@ -617,7 +558,7 @@ static bool test_timer(void)
     start_ticks = kernel_ticks;
 
     for (i = 0; i < 5; ++i) {
-        __asm__ __volatile__("hlt");
+        arch_halt();
     }
 
     return kernel_ticks > start_ticks;
@@ -673,7 +614,7 @@ static bool test_udelay(uint32_t *measured_ms)
 /**
  * The microsecond clock against the wait that is measured a different way.
  *
- * `pit_now_us` counts the periods of the 8254's counter and reads where it is
+ * `timer_now_us` counts the periods of the 8254's counter and reads where it is
  * inside one; `k_udelay` measures that same counter by its drop. The wait is
  * taken eight times and the shortest of them is the reading: an interrupt in
  * the middle of one can only add to it, and this machine writes whole lines
@@ -697,11 +638,11 @@ static bool test_clock(uint32_t *measured_us, const char **why, uint32_t *walk_c
     *walk_tick = 0;
 
     for (i = 0; i < 8; i++) {
-        uint32_t start = pit_now_us();
+        uint32_t start = timer_now_us();
         uint32_t seen;
 
         k_udelay(2000);
-        seen = pit_now_us() - start;
+        seen = timer_now_us() - start;
         if (seen < best) {
             best = seen;
         }
@@ -727,13 +668,13 @@ static bool test_clock(uint32_t *measured_us, const char **why, uint32_t *walk_c
      */
     for (attempt = 0; attempt < 3; attempt++) {
         uint32_t ticks_before = kernel_ticks;
-        uint32_t clock_before = pit_now_us();
+        uint32_t clock_before = timer_now_us();
         uint32_t by_clock, by_tick;
         int stepped_back = 0;
 
         previous = clock_before;
         for (i = 0; i < 50; i++) {
-            uint32_t now = pit_now_us();
+            uint32_t now = timer_now_us();
 
             if (now < previous) {
                 stepped_back = 1;
@@ -751,7 +692,7 @@ static bool test_clock(uint32_t *measured_us, const char **why, uint32_t *walk_c
             *why = "three walks each saw the clock step backwards";
             continue;
         }
-        by_clock = pit_now_us() - clock_before;
+        by_clock = timer_now_us() - clock_before;
         by_tick = (kernel_ticks - ticks_before) * 10000u;
         *walk_clock = by_clock;
         *walk_tick = by_tick;
@@ -764,44 +705,18 @@ static bool test_clock(uint32_t *measured_us, const char **why, uint32_t *walk_c
     return false;
 }
 
-/* Ring-3 test message; must live in user-accessible memory. */
-static const char user_msg[] = "Hello from ring 3!\n";
-
-/**
- * Ring-3 test payload: write the test message, then spin forever.
- *
- * Runs in user mode, so it cannot halt; after the write syscall returns it
- * loops on nop. enter_usermode jumps here; it never returns.
- */
-static void user_test_entry(void)
-{
-    /* write(1, user_msg, 19) via int 0x80. */
-    __asm__ __volatile__("movl $4, %%eax\n\t"
-                         "movl $1, %%ebx\n\t"
-                         "movl %0, %%ecx\n\t"
-                         "movl $19, %%edx\n\t"
-                         "int $0x80\n\t"
-                         :
-                         : "r"(user_msg)
-                         : "eax", "ebx", "ecx", "edx", "memory");
-
-    for (;;) {
-        __asm__ __volatile__("nop");
-    }
-}
-
 /**
  * Prove ring 3 works by entering user mode and running user_test_entry.
  *
  * Reserves a user stack and marks the code, message, and stack pages
- * user-accessible, then enters ring 3 at user_test_entry, which writes "Hello
- * from ring 3!" through int 0x80. enter_usermode does not return, so the
- * trailing `return false` is unreachable.
+ * user-accessible, then enters ring 3 at the architecture's test payload,
+ * which writes "Hello from ring 3!" through a system call. The entry does not
+ * return, so the trailing `return false` is unreachable.
  */
 static bool test_usermode(void)
 {
-    uintptr_t func_addr = (uintptr_t)user_test_entry;
-    uintptr_t msg_addr = (uintptr_t)user_msg;
+    uintptr_t func_addr = (uintptr_t)arch_user_test_entry;
+    uintptr_t msg_addr = (uintptr_t)arch_user_test_msg;
     uintptr_t user_stack_addr;
     uintptr_t page;
     uint32_t i;
@@ -825,12 +740,12 @@ static bool test_usermode(void)
     console_printf("  Usermode test: pages marked user-accessible\n");
 
     for (i = 0; i < 3; i++) {
-        __asm__ __volatile__("hlt");
+        arch_halt();
     }
 
     console_printf("  Usermode test: entering ring 3...\n");
 
-    enter_usermode(func_addr, user_stack_addr + USER_STACK_SIZE);
+    arch_enter_user(func_addr, user_stack_addr + USER_STACK_SIZE);
 
     return false;
 }
@@ -852,7 +767,7 @@ static void proc_b_entry(void)
     switch_context(switch_proc_b, switch_proc_a);
 
     for (;;) {
-        __asm__ __volatile__("hlt");
+        arch_halt();
     }
 }
 
@@ -911,7 +826,7 @@ static volatile int preempt_count_b = 0;
 static void preempt_proc_a(void)
 {
     /* The process starts mid-interrupt, with IRQs masked. */
-    __asm__ __volatile__("sti");
+    arch_irq_enable();
 
     while (!preempt_done) {
         console_putc('A');
@@ -930,14 +845,14 @@ static void preempt_proc_a(void)
     }
 
     for (;;) {
-        __asm__ __volatile__("hlt");
+        arch_halt();
     }
 }
 
 static void preempt_proc_b(void)
 {
     /* The process starts mid-interrupt, with IRQs masked. */
-    __asm__ __volatile__("sti");
+    arch_irq_enable();
 
     while (!preempt_done) {
         console_putc('B');
@@ -956,7 +871,7 @@ static void preempt_proc_b(void)
     }
 
     for (;;) {
-        __asm__ __volatile__("hlt");
+        arch_halt();
     }
 }
 
@@ -1002,7 +917,7 @@ static void test_preempt(void)
     sched_enable();
 
     while (!preempt_done) {
-        __asm__ __volatile__("hlt");
+        arch_halt();
     }
 
     sched_disable();
@@ -1059,7 +974,7 @@ static void isolation_proc_a_entry(void)
     switch_context(isolation_proc_a, isolation_proc_main);
 
     for (;;) {
-        __asm__ __volatile__("hlt");
+        arch_halt();
     }
 }
 
@@ -1076,7 +991,7 @@ static void isolation_proc_b_entry(void)
     switch_context(isolation_proc_b, isolation_proc_a);
 
     for (;;) {
-        __asm__ __volatile__("hlt");
+        arch_halt();
     }
 }
 
@@ -1403,14 +1318,13 @@ static void exec_program(int argc, char *argv[])
 
     kernel_shell_active = false;
 
-    /* Program the shared TLS descriptor before ring 3. This first-entry path
-     * bypasses switch_context, which otherwise reprograms GDT entry 6 per
-     * process, so without this a fresh program could observe a previous
-     * process's TLS base if it loaded the TLS selector before calling
-     * set_thread_area. A new process has tls_base == 0. */
-    gdt_set_tls(user_proc->tls_base);
+    /* Load the thread pointer before ring 3. This first-entry path bypasses
+     * switch_context, which otherwise loads it per process, so without this a
+     * fresh program could observe a previous process's TLS base before it set
+     * its own. A new process has tls_base == 0. */
+    arch_tls_set(user_proc->tls_base);
 
-    enter_usermode(entry_point, user_esp);
+    arch_enter_user(entry_point, user_esp);
 
     console_puts("exec: returned from user mode");
 }
@@ -1448,7 +1362,7 @@ static void refuse_unmounted_root(void)
          "refused: no file system mounted and no rach2.rescue: "
          "the debug shell authenticates nobody\n");
     for (;;) {
-        __asm__ __volatile__("cli; hlt");
+        arch_stop();
     }
 }
 
@@ -1495,7 +1409,7 @@ static void refuse_contradictory_boot_line(void)
          "rach2.root=disk and no rach2.rescue: nothing would mount "
          "and the debug shell authenticates nobody\n");
     for (;;) {
-        __asm__ __volatile__("cli; hlt");
+        arch_stop();
     }
 }
 
@@ -1517,7 +1431,7 @@ void panic_init_died(uint32_t pid)
          (int)pid);
     sched_disable();
     for (;;) {
-        __asm__ __volatile__("cli; hlt");
+        arch_stop();
     }
 }
 
@@ -1563,7 +1477,7 @@ static void boot_init_process(void)
                  "debug shell, which authenticates nobody, is not the answer to a "
                  "disk that cannot be read\n");
             for (;;) {
-                __asm__ __volatile__("cli; hlt");
+                arch_stop();
             }
         }
         vfs_ref_release(&ref);
@@ -1616,7 +1530,7 @@ static void boot_init_process(void)
          init_path);
     sched_disable();
     for (;;) {
-        __asm__ __volatile__("cli; hlt");
+        arch_stop();
     }
 }
 
@@ -2570,7 +2484,7 @@ static int init_root_by_identity(const char *spec, int *krffs_mounted)
  * 256 bytes and the page-cache one ran against a RAM disk.
  *
  * The record's level is the clock's period accounting, checked on fixed
- * readings by `pit_clock_check`: a sweep counted as a period, or a period
+ * readings by `timer_clock_check`: a sweep counted as a period, or a period
  * counted twice, fails it on every machine and a stopped machine cannot.
  * The delay, the wait and the walk are measured against time the host
  * owns: a hypervisor that stops the machine and then delivers the ticks it
@@ -2590,12 +2504,12 @@ static void check_timing(void)
     tick_ok = test_timer();
     delay_ok = test_udelay(&measured_ms);
     walk_ok = test_clock(&measured_us, &why, &walk_clock, &walk_tick);
-    clock_ok = pit_clock_check();
-    tsc = pit_tsc_calibrate();
+    clock_ok = timer_clock_check();
+    tsc = timer_calibrate();
 
     klog(clock_ok ? KLOG_INFO : KLOG_ERR, "timing",
          "tick %d Hz, 200 ms delay measured %d ms, 2000 us wait measured %d us",
-         (int)(1193182u / pit_reload), (int)measured_ms, (int)measured_us);
+         (int)platform_timer_hz(), (int)measured_ms, (int)measured_us);
     if (!tick_ok) {
         klog(KLOG_WARN, "timing", "the tick did not arrive while the processor halted five times");
     }
@@ -3305,7 +3219,7 @@ static void process_command(const char *cmd)
  * Reset the kernel shell's command-line and stdin-wait state to a fresh prompt.
  *
  * Called on every transition back to the debug shell. An exec'd program never
- * returns through process_command (exec_program calls enter_usermode), so the
+ * returns through process_command (exec_program calls arch_enter_user), so the
  * post-process_command `cmd_pos = 0` never runs for it; without this reset the
  * next keystrokes append to the previous command's buffer and the shell re-runs
  * it. It also drops any stale stdin-wait state from a program that exited mid
@@ -3394,7 +3308,7 @@ void shell_loop(void)
             }
         }
 
-        __asm__ __volatile__("hlt");
+        arch_halt();
     }
 }
 
@@ -3432,16 +3346,9 @@ static void publish_disks(void)
  * as PID 1 (or, in rescue mode or on an init-less image, the kernel debug
  * shell). Does not return.
  */
-void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
+void kernel_main(const struct boot_info *boot)
 {
-    uint32_t num_modules;
-
-    serial_init();
-    klog(KLOG_INFO, "boot", "Rach2 Booting");
-
-    /* Parse multiboot modules BEFORE paging: reading module info needs direct
-     * physical access. */
-    num_modules = init_modules(magic, info);
+    uint32_t num_modules = boot->modules;
 
     /* Push the bump allocator past the modules below the window, so it does
      * not carve page tables over their bytes; a module above the window is
@@ -3493,8 +3400,8 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
     /* Capture the kernel command line now, before paging remaps low memory and
      * before the bump allocator can carve over the string the bootloader left.
      */
-    if ((info->flags & MULTIBOOT_INFO_CMDLINE) && info->cmdline != 0) {
-        kcmdline_capture((const char *)info->cmdline);
+    if (boot->cmdline != NULL) {
+        kcmdline_capture(boot->cmdline);
     }
 
     /* How much of its own record the screen shows. The ring and the port keep
@@ -3515,17 +3422,7 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
 
     klog(KLOG_DEBUG, "boot", "Initializing system components");
 
-    init_gdt();
-    klog(KLOG_DEBUG, "boot", "gdt: ready");
-
-    init_tss((uint32_t)stack + KERNEL_STACK_SIZE);
-    klog(KLOG_DEBUG, "boot", "tss: ready");
-
-    init_idt();
-    klog(KLOG_DEBUG, "boot", "idt: ready");
-
-    init_isr();
-    klog(KLOG_DEBUG, "boot", "isr: ready");
+    platform_cpu_init((uintptr_t)stack + KERNEL_STACK_SIZE);
 
     fpu_init();
     block_request_init();
@@ -3538,16 +3435,12 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
      * by name there. */
     {
         static struct frame_map map;
-        const void *mmap = NULL;
-        uint32_t mmap_len = 0;
+        const void *mmap = boot->mmap;
+        uint32_t mmap_len = boot->mmap_len;
         uint32_t m;
         uint64_t addr, len;
         uint32_t type;
 
-        if (info->flags & MULTIBOOT_INFO_MEM_MAP) {
-            mmap = (const void *)(uintptr_t)info->mmap_addr;
-            mmap_len = info->mmap_length;
-        }
         for (m = 0; frame_map_entry(mmap, mmap_len, m, &addr, &len, &type); m++) {
             char line[64];
 
@@ -3559,8 +3452,7 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
             memory_map_line(line, sizeof(line), addr, len, type);
             klog(KLOG_DEBUG, "memory", "map: %s", line);
         }
-        if (frame_map_build(&map, mmap, mmap_len,
-                            (info->flags & MULTIBOOT_INFO_MEMORY) ? info->mem_upper : 0) != 0) {
+        if (frame_map_build(&map, mmap, mmap_len, boot->mem_upper_kb) != 0) {
             k_panic("memory: the firmware's map has more ranges than the kernel keeps");
         }
         if (map.from_mem_upper) {
@@ -3596,55 +3488,9 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
     init_pagecache();
     klog(KLOG_DEBUG, "boot", "page cache: ready");
 
-    /* The boot report, after the page cache's window is mapped and before the
-     * disk and network drivers have configured a device. After, because the
-     * window's page tables and the report's own device peek take memory, and
-     * a figure printed before those is not what the machine has left. */
-    if (kcmdline_has("rach2.diag")) {
-        boot_diag_report();
-    }
+    platform_report();
 
-    /* What the machine's firmware left in the APIC and in the two devices
-     * this kernel drives by message, read and printed, nothing written. */
-    apic_diag_report();
-
-    __asm__ __volatile__("cli");
-    /* The local APIC, so that a device can be told to send its interrupts as
-     * messages. A machine that refuses leaves every device on its legacy
-     * line, which is the kernel as it was. Interrupts are off across it: it
-     * moves the road the 8259's interrupts take to the processor, and there
-     * is no reason to have one arrive in the middle of the move. */
-    lapic_init();
-    init_pit(100);
-    set_isr_handler(32, &timer_handler, "pit"); /* install the timer handler on IRQ0 */
-    __asm__ __volatile__("sti");
-
-    /*
-     * The 8259's interrupts now reach the processor through the APIC's
-     * `LINT0`, so the first thing the timer is asked is whether it still
-     * arrives. A masked entry would otherwise show as a machine that boots
-     * and never ticks, with nothing said about why. The wait is measured
-     * against the 8254's own counter, which needs no interrupt.
-     */
-    if (lapic_ready()) {
-        uint32_t before = kernel_ticks;
-        int ms;
-
-        for (ms = 0; ms < 50 && kernel_ticks == before; ms++) {
-            k_udelay(1000);
-        }
-        if (kernel_ticks == before) {
-            klog(KLOG_ERR, "lapic", "timer: no tick in 50 ms; writing lint0 again");
-            lapic_repair_lint0();
-            for (ms = 0; ms < 50 && kernel_ticks == before; ms++) {
-                k_udelay(1000);
-            }
-            if (kernel_ticks == before) {
-                klog(KLOG_ERR, "lapic",
-                     "timer: still no tick; the 8259's interrupts are not arriving");
-            }
-        }
-    }
+    platform_timer_start(&timer_handler);
     klog(KLOG_DEBUG, "boot", "timer: ready");
 
     rtc_init();
@@ -3668,40 +3514,14 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
     }
     set_fore_color(light_grey);
 
-    /* Which power controller this machine has. With ACPI on, an unhandled SCI
-     * is level-triggered and would be taken forever, so the line it sits on is
-     * masked here. A machine no profile
-     * matches keeps exactly the behaviour it had before this existed. */
-    {
-        const char *why = "";
-        int verdict = board_init(&why);
+    platform_board_init();
 
-        if (verdict == BOARD_FOUND) {
-            klog(KLOG_INFO, "board", "ready: %s", board_name());
-        } else if (verdict == BOARD_REFUSED) {
-            klog(KLOG_WARN, "board", "refused: %s", why);
-        } else {
-            klog(KLOG_WARN, "board", "none: no profile matched; poweroff will halt");
-        }
-    }
-
-    set_isr_handler(33, &keyboard_handler, "kbd"); /* install the IRQ 1 keyboard handler */
-    pic_unmask_irq(1);      /* now safe to take keyboard interrupts (masked since init_pic) */
+    platform_keyboard_init();
     tty_console_init();     /* console_tty: VGA + serial, line discipline for fds 0/1/2 */
     serial_enable_rx_irq(); /* COM1's bytes taken as they arrive, not at the tick */
     klog(KLOG_DEBUG, "boot", "keyboard: ready");
 
-    if (kcmdline_has("rach2.nomouse")) {
-        klog(KLOG_INFO, "mouse", "skipped: rach2.nomouse");
-    } else {
-        klog(KLOG_DEBUG, "mouse", "started");
-        if (init_mouse() == 0) {
-            input_mouse_found();
-            klog(KLOG_DEBUG, "mouse", "ready");
-        } else {
-            klog(KLOG_WARN, "mouse", "absent: nothing answered the probe");
-        }
-    }
+    platform_mouse_init();
 
     init_syscall();
     klog(KLOG_DEBUG, "boot", "syscall: ready");
@@ -3908,7 +3728,7 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
     /* The diagnostic numbers once more, on a screen nothing will scroll, before
      * init takes the console. */
     if (kcmdline_has("rach2.diag")) {
-        boot_diag_hold();
+        platform_report_hold();
     }
 
     rescue_mode = kcmdline_has("rach2.rescue") || kcmdline_has("init=rescue");

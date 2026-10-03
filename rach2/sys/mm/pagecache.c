@@ -41,7 +41,7 @@ static void pc_platform_unmap(uint32_t va)
 #include "pressure.h"
 #include "../klog.h"
 #include "../panic.h"
-#include "../arch/x86/pci.h"
+#include "../pci.h"
 
 #define PC_PAGE_SIZE  PAGE_SIZE
 

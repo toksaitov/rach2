@@ -1,16 +1,15 @@
 #ifndef _KERNEL_H_
 #define _KERNEL_H_
 
+#include "sys/boot.h"
+
 #include "sys/lib/kint.h"
-#include "vendor/multiboot.h"
 
 /*
- * What kernel.c exports: the entry the loader jumps to, and the two calls
- * the interrupt path and the system calls make into the process shell.
+ * What kernel.c exports: the shared boot the architecture's entry calls
+ * (sys/boot.h), and the two calls the interrupt path and the system calls
+ * make into the process shell.
  */
-
-/** The C entry, from loader.asm, with the Multiboot magic and info. */
-void k_main(multiboot_uint32_t magic, multiboot_info_t *info);
 
 /** Ends the running process as if by `signo` and schedules the next;
  * `signo | WCOREFLAG` leaves a core file first where one is allowed. */

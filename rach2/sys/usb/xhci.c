@@ -24,8 +24,8 @@
 #include "../lib/kstring.h"
 #include "../mm/kheap.h"
 #include "../mm/paging.h"
-#include "../arch/x86/pci.h"
-#include "../arch/x86/udelay.h"
+#include "../pci.h"
+#include "../udelay.h"
 #include "usb.h"
 
 /*
@@ -335,7 +335,7 @@ static int nctrls;
  * reordering or eliding what it cannot see another party doing.
  */
 #ifndef xhci_barrier
-#define xhci_barrier() __asm__ __volatile__("" : : : "memory")
+#define xhci_barrier() k_barrier()
 #endif
 
 static uint32_t xhci_mmio_r32(struct xhci_ctrl *hc, uint32_t offset)

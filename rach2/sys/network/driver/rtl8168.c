@@ -32,9 +32,9 @@
 #include "rtl8168.h"
 #include "../net.h"
 #include "../ethernet/ethernet.h"
-#include "../../arch/x86/serial.h"
-#include "../../arch/x86/udelay.h"
-#include "../../arch/x86/pci.h"
+#include "../../serial.h"
+#include "../../udelay.h"
+#include "../../pci.h"
 #include "../../mm/paging.h"
 #include "../../irq.h"
 #include "../../arch/x86/lapic.h"
@@ -785,7 +785,7 @@ static void r8168_rx_fill(void)
         r8168_rx_ring[i].addr_hi = 0;
         r8168_rx_ring[i].opts2 = 0;
         /* The address and options must be visible before ownership moves. */
-        __asm__ __volatile__("" : : : "memory");
+        k_barrier();
         r8168_rx_ring[i].opts1 = R8168_DESC_OWN | eor | R8168_RX_BUF_SIZE;
     }
     r8168_rx_cur = 0;
@@ -1091,7 +1091,7 @@ static uint32_t r8168_tx_reclaim(void)
         }
         /* The descriptor's other fields are read only after ownership is seen
          * to have returned. */
-        __asm__ __volatile__("" : : : "memory");
+        k_barrier();
         r8168_tx_tail++;
         reclaimed++;
     }
@@ -1171,10 +1171,10 @@ static int rtl8168_tx(void *dev, const uint8_t *data, uint16_t len)
     r8168_tx_ring[idx].addr_hi = 0;
     r8168_tx_ring[idx].opts2 = 0;
     /* Every field must be visible before ownership moves to the chip. */
-    __asm__ __volatile__("" : : : "memory");
+    k_barrier();
     r8168_tx_ring[idx].opts1 =
         R8168_DESC_OWN | R8168_DESC_FS | R8168_DESC_LS | eor | (uint32_t)total;
-    __asm__ __volatile__("" : : : "memory");
+    k_barrier();
     r8168_tx_head++;
 
     io->w8(R8168_TXPOLL, R8168_TXPOLL_NPQ);
@@ -1220,7 +1220,7 @@ static uint32_t r8168_service(void)
             break;
         }
         /* The descriptor's payload is read only after ownership returned. */
-        __asm__ __volatile__("" : : : "memory");
+        k_barrier();
 
         len = opts1 & R8168_DESC_LEN_MASK;
         if (opts1 & R8168_DESC_RX_RES) {
@@ -1239,7 +1239,7 @@ static uint32_t r8168_service(void)
         work++;
 
         r8168_rx_ring[idx].opts2 = 0;
-        __asm__ __volatile__("" : : : "memory");
+        k_barrier();
         r8168_rx_ring[idx].opts1 = R8168_DESC_OWN | eor | R8168_RX_BUF_SIZE;
         r8168_rx_cur++;
     }
@@ -1511,7 +1511,7 @@ static int r8168_counters_command(uint32_t command)
     for (i = 0; i < R8168_COUNTERS_WAIT_STEPS; i++) {
         if (!(io->r32(R8168_COUNTERADDRLOW) & command)) {
             /* The block is read only after the chip says it wrote it. */
-            __asm__ __volatile__("" : : : "memory");
+            k_barrier();
             return 1;
         }
         io->udelay(R8168_COUNTERS_WAIT_USEC);

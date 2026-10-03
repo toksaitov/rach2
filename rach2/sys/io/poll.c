@@ -452,11 +452,11 @@ static int32_t poll_common(uint32_t ufds, uint32_t nfds, int has_deadline, uint3
     return ready;
 }
 
-int32_t sys_poll(struct isr_params *params)
+long sys_poll(struct isr_params *params)
 {
-    uint32_t ufds = params->ebx;
-    uint32_t nfds = params->ecx;
-    int timeout_ms = (int)params->edx;
+    uint32_t ufds = SC_ARG(params, 0);
+    uint32_t nfds = SC_ARG(params, 1);
+    int timeout_ms = (int)SC_ARG(params, 2);
     int has_deadline;
     uint32_t deadline = poll_ms_deadline(timeout_ms, &has_deadline);
 
@@ -504,11 +504,11 @@ int32_t poll_mask_done(int32_t ret)
     return ret;
 }
 
-int32_t sys_ppoll(struct isr_params *params)
+long sys_ppoll(struct isr_params *params)
 {
-    uint32_t ufds = params->ebx;
-    uint32_t nfds = params->ecx;
-    uint32_t uts = params->edx;
+    uint32_t ufds = SC_ARG(params, 0);
+    uint32_t nfds = SC_ARG(params, 1);
+    uint32_t uts = SC_ARG(params, 2);
     struct poll_timespec ts;
     int has_deadline;
     uint32_t deadline;
@@ -528,7 +528,7 @@ int32_t sys_ppoll(struct isr_params *params)
         return -ESRCH;
     }
     {
-        int32_t rc = poll_mask_set(params->esi, params->edi);
+        int32_t rc = poll_mask_set(SC_ARG(params, 3), SC_ARG(params, 4));
 
         if (rc != 0) {
             return rc;
@@ -620,13 +620,13 @@ static int32_t select_common(int nfds, uint32_t ur, uint32_t uw, uint32_t ue, in
     return ready;
 }
 
-int32_t sys__newselect(struct isr_params *params)
+long sys__newselect(struct isr_params *params)
 {
-    int nfds = (int)params->ebx;
-    uint32_t ur = params->ecx;
-    uint32_t uw = params->edx;
-    uint32_t ue = params->esi;
-    uint32_t utv = params->edi;
+    int nfds = (int)SC_ARG(params, 0);
+    uint32_t ur = SC_ARG(params, 1);
+    uint32_t uw = SC_ARG(params, 2);
+    uint32_t ue = SC_ARG(params, 3);
+    uint32_t utv = SC_ARG(params, 4);
     struct poll_timeval tv;
     int has_deadline = 0;
     uint32_t deadline = 0;
@@ -645,10 +645,10 @@ int32_t sys__newselect(struct isr_params *params)
     return select_common(nfds, ur, uw, ue, has_deadline, deadline);
 }
 
-int32_t sys_select(struct isr_params *params)
+long sys_select(struct isr_params *params)
 {
     /* The old i386 select(82) packs its 5 args behind one pointer (ebx). */
-    uint32_t argp = params->ebx;
+    uint32_t argp = SC_ARG(params, 0);
     uint32_t a[5];
 
     if (!argp || copy_from_user(a, (const void __user *)argp, sizeof(a)) != 0) {
@@ -673,13 +673,13 @@ int32_t sys_select(struct isr_params *params)
     }
 }
 
-int32_t sys_pselect6(struct isr_params *params)
+long sys_pselect6(struct isr_params *params)
 {
-    int nfds = (int)params->ebx;
-    uint32_t ur = params->ecx;
-    uint32_t uw = params->edx;
-    uint32_t ue = params->esi;
-    uint32_t uts = params->edi;
+    int nfds = (int)SC_ARG(params, 0);
+    uint32_t ur = SC_ARG(params, 1);
+    uint32_t uw = SC_ARG(params, 2);
+    uint32_t ue = SC_ARG(params, 3);
+    uint32_t uts = SC_ARG(params, 4);
     struct poll_timespec ts;
     int has_deadline;
     uint32_t deadline;
@@ -690,8 +690,8 @@ int32_t sys_pselect6(struct isr_params *params)
         return -ESRCH;
     }
     /* EBP points at the mask's address and its size in bytes. */
-    if (params->ebp &&
-        copy_from_user(sigarg, (const void __user *)params->ebp, sizeof(sigarg)) != 0) {
+    if (SC_ARG(params, 5) &&
+        copy_from_user(sigarg, (const void __user *)SC_ARG(params, 5), sizeof(sigarg)) != 0) {
         return -EFAULT;
     }
     if (uts) {

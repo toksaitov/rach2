@@ -24,7 +24,7 @@
 #include "../socket/raw.h"
 #include "../net.h"
 #include "../netconf.h"
-#include "../../arch/x86/serial.h"
+#include "../../serial.h"
 #include "../../lib/kstring.h"
 
 /**

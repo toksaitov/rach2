@@ -144,9 +144,9 @@ elif case == 'line-end':
 elif case == 'slot-reset':
     replace('n_tty.c', '        t->rq_end[t->rq_tail & (N_TTY_READ_MAX - 1)] = 0;\n', '')
 elif case == 'input-kind':
-    replace('tty.c', '            t->ready_us = pit_now_us();\n        }\n'
+    replace('tty.c', '            t->ready_us = timer_now_us();\n        }\n'
                     '        wq_wake(&t->input_wq, WQ_DATA);',
-            '            t->ready_us = pit_now_us();\n        }\n'
+            '            t->ready_us = timer_now_us();\n        }\n'
             '        wq_wake_all(&t->input_wq);')
 elif case == 'echo-kind':
     replace('pty.c', 'p->m_tail != *from ? WQ_DATA : 0u', 'WQ_DATA')

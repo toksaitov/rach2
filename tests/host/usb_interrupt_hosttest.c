@@ -98,7 +98,7 @@ void kirq_restore(uint32_t flags)
     irq_flags = flags;
 }
 
-uint32_t pit_now_us(void)
+uint32_t timer_now_us(void)
 {
     return 0;
 }

@@ -2,11 +2,12 @@
  * VGA Graphics Mode driver (Mode 13h, 320x200, 256 colors).
  */
 
+#include "../arch/x86/portio.h"
 #include "vga_gfx.h"
 #include "vga_text.h"
 #include "vga_font.h"
 #include "../kio.h"
-#include "../arch/x86/serial.h"
+#include "../serial.h"
 #include "../lib/kstring.h"
 #include "../lib/kirq.h"
 

@@ -1,4 +1,18 @@
-#include "speaker.h"
+#include "portio.h"
+#include "../../speaker.h"
+
+/*
+ * The PC speaker: the PIT's channel 2 makes the frequency, and port 0x61's
+ * low two bits gate the channel to the speaker.
+ */
+
+/* PIT base oscillator frequency (Hz) */
+#define SPEAKER_PIT_BASE_FREQ 1193182
+
+/* I/O ports */
+#define SPEAKER_PORT 0x61
+#define PIT_CHANNEL2 0x42
+#define PIT_COMMAND  0x43
 #include "../../kio.h"
 
 static bool _speaker_on = false;

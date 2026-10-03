@@ -36,6 +36,9 @@ typedef uint64_t phys_addr_t;
 #define PAGE_SHIFT 12
 #define PAGE_SIZE  0x1000
 
+/* A floating-point save area: the 32 128-bit registers, FPSR and FPCR. */
+#define FPU_STATE_SIZE 528
+
 #define USER_ADDR_MIN 0x0000000000010000UL
 #define USER_ADDR_MAX 0x0001000000000000UL
 

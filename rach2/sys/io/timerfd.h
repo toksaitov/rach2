@@ -14,11 +14,11 @@
 
 struct isr_params;
 
-int32_t sys_timerfd_create(struct isr_params *params);
-int32_t sys_timerfd_settime(struct isr_params *params);
-int32_t sys_timerfd_gettime(struct isr_params *params);
-int32_t sys_timerfd_settime64(struct isr_params *params);
-int32_t sys_timerfd_gettime64(struct isr_params *params);
+long sys_timerfd_create(struct isr_params *params);
+long sys_timerfd_settime(struct isr_params *params);
+long sys_timerfd_gettime(struct isr_params *params);
+long sys_timerfd_settime64(struct isr_params *params);
+long sys_timerfd_gettime64(struct isr_params *params);
 
 /*
  * POSIX timers, timer_create's, which share the timer of a timerfd: each
@@ -33,13 +33,13 @@ int32_t sys_timerfd_gettime64(struct isr_params *params);
 struct tgroup;
 struct process;
 
-int32_t sys_timer_create(struct isr_params *params);
-int32_t sys_timer_settime(struct isr_params *params);
-int32_t sys_timer_gettime(struct isr_params *params);
-int32_t sys_timer_settime64(struct isr_params *params);
-int32_t sys_timer_gettime64(struct isr_params *params);
-int32_t sys_timer_getoverrun(struct isr_params *params);
-int32_t sys_timer_delete(struct isr_params *params);
+long sys_timer_create(struct isr_params *params);
+long sys_timer_settime(struct isr_params *params);
+long sys_timer_gettime(struct isr_params *params);
+long sys_timer_settime64(struct isr_params *params);
+long sys_timer_gettime64(struct isr_params *params);
+long sys_timer_getoverrun(struct isr_params *params);
+long sys_timer_delete(struct isr_params *params);
 
 /** Delete the POSIX timers of `tg`, at an exec and when its last thread
  * ends. */

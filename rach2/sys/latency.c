@@ -4,7 +4,7 @@
 
 #include "latency.h"
 
-#include "arch/x86/pit.h"
+#include "timer.h"
 
 static uint32_t worst[LAT_COUNT];
 static uint32_t last_tick_us;
@@ -30,7 +30,7 @@ uint32_t latency_max(int kind)
 
 void latency_tick(void)
 {
-    uint32_t now = pit_now_us();
+    uint32_t now = timer_now_us();
 
     if (last_tick_us) {
         latency_span(LAT_TIMER, last_tick_us, now);

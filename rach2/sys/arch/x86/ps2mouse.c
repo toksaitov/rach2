@@ -1,8 +1,11 @@
+#include "portio.h"
+#include "ps2mouse.h"
+#include "../../platform.h"
 #include "../../klog.h"
-#include "mouse.h"
+#include "../../mouse.h"
 #include "isr.h"
 #include "../../kio.h"
-#include "serial.h"
+#include "../../serial.h"
 
 /*
  * PS/2 Mouse Driver
@@ -55,18 +58,9 @@
 /* Timeout for waiting on 8042 controller (iterations) */
 #define PS2_TIMEOUT 100000
 
-/* Mouse packet ring buffer */
-#define MOUSE_BUF_SIZE 64
-static struct mouse_packet mouse_buf[MOUSE_BUF_SIZE];
-static volatile int mouse_head = 0;
-static volatile int mouse_tail = 0;
-
 /* Packet assembly state */
 static uint8_t packet_bytes[3];
 static int packet_index = 0;
-
-/* Driver state */
-static bool mouse_initialized = false;
 
 /**
  * Spin until the 8042 input buffer is empty, ready to accept a byte.
@@ -160,32 +154,6 @@ static int mouse_send_command(uint8_t cmd)
     }
 
     return -1;
-}
-
-/**
- * Append a completed packet to the ring buffer, dropping it when full.
- *
- * Runs in IRQ context (the producer); the consumer is mouse_read_packets.
- * Deltas are clamped to the int8_t range the packet struct has.
- */
-void mouse_push_packet(uint8_t buttons, int dx, int dy)
-{
-    int next = (mouse_tail + 1) % MOUSE_BUF_SIZE;
-    if (next != mouse_head) {
-        if (dx > 127)
-            dx = 127;
-        if (dx < -128)
-            dx = -128;
-        if (dy > 127)
-            dy = 127;
-        if (dy < -128)
-            dy = -128;
-
-        mouse_buf[mouse_tail].buttons = buttons & 0x07; /* button bits 0-2 */
-        mouse_buf[mouse_tail].dx = (int8_t)dx;
-        mouse_buf[mouse_tail].dy = (int8_t)dy;
-        mouse_tail = next;
-    }
 }
 
 /**
@@ -348,42 +316,15 @@ int init_mouse(void)
 
     register_isr_handler(44, mouse_irq_handler, "mouse");
 
-    mouse_initialized = true;
 
     __asm__ __volatile__("sti");
 
     return 0;
 }
 
-/**
- * Drain up to max_count packets from the ring buffer into buf.
- *
- * The consumer side of the buffer that mouse_irq_handler fills. It never
- * blocks: it copies whatever packets are present and returns the count,
- * which may be zero.
- *
- * @return the number of packets copied.
- */
-int mouse_read_packets(struct mouse_packet *buf, int max_count)
+/* Start the next packet afresh: the graphics-mode reader that empties the
+ * ring wants no half of one assembled before. */
+void platform_mouse_resync(void)
 {
-    int count = 0;
-
-    while (count < max_count && mouse_head != mouse_tail) {
-        buf[count++] = mouse_buf[mouse_head];
-        mouse_head = (mouse_head + 1) % MOUSE_BUF_SIZE;
-    }
-
-    return count;
-}
-
-void mouse_clear_packets(void)
-{
-    mouse_head = 0;
-    mouse_tail = 0;
     packet_index = 0;
-}
-
-bool mouse_is_available(void)
-{
-    return mouse_initialized;
 }

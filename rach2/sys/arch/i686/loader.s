@@ -34,13 +34,13 @@ k_stop:
     jmp k_stop
 
 # Enter user mode (ring 3)
-# void enter_usermode(uint32_t eip, uint32_t esp)
+# void arch_enter_user(uintptr_t pc, uintptr_t sp)
 # Arguments: eip at 4(%esp), esp at 8(%esp)
 .set USER_CODE_SEG, 0x1B  # User code segment selector (GDT index 3 | RPL 3)
 .set USER_DATA_SEG, 0x23  # User data segment selector (GDT index 4 | RPL 3)
 
-.globl enter_usermode
-enter_usermode:
+.globl arch_enter_user
+arch_enter_user:
     cli                    # Disable interrupts during transition
 
     movl 4(%esp), %ecx     # User EIP

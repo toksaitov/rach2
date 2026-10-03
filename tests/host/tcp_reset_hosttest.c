@@ -41,7 +41,7 @@ extern int printf(const char *fmt, ...);
 volatile uint32_t kernel_ticks;
 
 /* The microsecond clock TCP times its round trips by, for `ss -i`. */
-uint32_t pit_now_us(void)
+uint32_t timer_now_us(void)
 {
     return kernel_ticks * 10000u;
 }

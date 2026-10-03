@@ -6,7 +6,7 @@
 /*
  * latency: the longest delays the kernel has seen since boot, for the load
  * row and the record a machine keeps of itself. Four are kept, each a
- * maximum in microseconds from `pit_now_us`: the gap between two timer
+ * maximum in microseconds from `timer_now_us`: the gap between two timer
  * ticks, which a tick delayed by interrupts held off makes long; a block
  * request from its taking to its completion; a caller's wait for the
  * request limit before it could take one; and a console line from the
@@ -25,7 +25,7 @@
 void latency_note(int kind, uint32_t us);
 
 /**
- * Record the delay from the reading `from` of `pit_now_us` to the later
+ * Record the delay from the reading `from` of `timer_now_us` to the later
  * reading `to`. A reading taken later that answers less is a step of the
  * clock backwards within a tick, which the subtraction would turn into the
  * largest delay ever seen; such a pair is dropped.

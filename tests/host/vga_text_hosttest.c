@@ -148,11 +148,11 @@ static void row_release_echo(void)
         k_cls();
         x = 15;
         y = 3;
-        vga_text_hold();
-        vga_text_place_cursor();
+        textcon_hold();
+        textcon_place_cursor();
         masked = initial;
         inject_echo = 1;
-        vga_text_release();
+        textcon_release();
         CHECK(masked == initial, "release restores caller flags");
         CHECK(_hold == 0 && !_cursor_stale, "release completes outermost hold");
         if (initial) {
@@ -161,7 +161,7 @@ static void row_release_echo(void)
         }
         CHECK(!echo_pending && x == 16 && y == 3, "keyboard echo runs once");
         CHECK(cursor_address == 0x0100, "echo leaves cursor at 0x0100");
-        vga_text_release();
+        textcon_release();
         CHECK(_hold == 0 && masked == 0, "extra release preserves state");
     }
 }
@@ -212,11 +212,11 @@ static void row_byte(void)
     y = 0;
     stores = 0;
     ports = port_writes;
-    vga_text_write_cell(0, 0, 'A', 0x07);
+    textcon_write_cell(0, 0, 'A', 0x07);
     CHECK(stores == 1, "a byte stores one cell");
     CHECK(vram[0] == vga_text_make_cell('A', 0x07), "the byte's cell holds the byte");
     CHECK(port_writes == ports, "a byte alone touches no port");
-    vga_text_place_cursor();
+    textcon_place_cursor();
     CHECK(port_writes == ports + 4, "placing the cursor is four port writes");
     CHECK(cursor_address == 1, "the cursor is at the byte after the one written");
 }
@@ -226,20 +226,20 @@ static void row_hold(void)
 {
     unsigned int ports = port_writes;
 
-    vga_text_hold();
-    vga_text_hold();
+    textcon_hold();
+    textcon_hold();
     x = 5;
-    vga_text_place_cursor();
+    textcon_place_cursor();
     x = 7;
-    vga_text_place_cursor();
-    vga_text_release();
+    textcon_place_cursor();
+    textcon_release();
     CHECK(port_writes == ports, "a nested hold keeps the cursor where it was");
-    vga_text_release();
+    textcon_release();
     CHECK(port_writes == ports + 4, "the last release places the cursor once");
     CHECK(cursor_address == 7, "and places it where it last went");
     ports = port_writes;
-    vga_text_hold();
-    vga_text_release();
+    textcon_hold();
+    textcon_release();
     CHECK(port_writes == ports, "a hold in which the cursor did not move places nothing");
 }
 
@@ -254,7 +254,7 @@ static void row_scrolls(void)
     unsigned int n, ports;
 
     for (n = 0; n < 179; n++) {
-        vga_text_write_cell(0, VGA_TEXT_ROWS - 1, (char)('a' + (n % 26)), 0x07);
+        textcon_write_cell(0, VGA_TEXT_ROWS - 1, (char)('a' + (n % 26)), 0x07);
         stores = 0;
         ports = port_writes;
         k_scroll_down();
@@ -268,7 +268,7 @@ static void row_scrolls(void)
         }
     }
     CHECK(_hw_top == 179 * VGA_TEXT_COLS, "179 scrolls reach the end of the memory");
-    vga_text_write_cell(0, VGA_TEXT_ROWS - 1, 'Z', 0x07);
+    textcon_write_cell(0, VGA_TEXT_ROWS - 1, 'Z', 0x07);
     stores = 0;
     ports = port_writes;
     k_scroll_down();
@@ -296,7 +296,7 @@ static void row_scrollback(void)
     CHECK(!_follow_live, "page up leaves the live lines");
     CHECK(window_shows_viewport(), "the window shows the history page");
     stores = 0;
-    vga_text_write_cell(0, 0, 'Q', 0x07);
+    textcon_write_cell(0, 0, 'Q', 0x07);
     CHECK(stores == 0, "live output while scrolled back leaves the adapter alone");
     k_scroll_down();
     CHECK(stores == 0, "a scroll while scrolled back leaves the adapter alone");

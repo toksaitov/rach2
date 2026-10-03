@@ -1,3 +1,4 @@
+#include "../arch/arch.h"
 #include "../cmdline.h"
 #include "../klog.h"
 #include "paging.h"
@@ -5,7 +6,7 @@
 #include "pagecache.h"
 #include "frame.h"
 #include "usercopy.h"
-#include "../arch/x86/serial.h"
+#include "../serial.h"
 #include "../lib/ksignal.h"
 #include "../lib/kerrno.h"
 #include "../proc/process.h"
@@ -1046,7 +1047,7 @@ static void paging_irq_restore(uint32_t flags)
 {
 #ifndef RACH2_HOSTTEST
     if (flags & 0x200) {
-        __asm__ __volatile__("sti");
+        arch_irq_enable();
     }
 #else
     (void)flags;
@@ -1960,4 +1961,23 @@ void free_page_directory(page_dir_t *dir)
     }
 
     kfree_pages(dir, sizeof(page_dir_t) / PAGE_SIZE);
+}
+
+uintptr_t paging_enter_kernel(void)
+{
+    uintptr_t saved = arch_space_root();
+    uintptr_t kernel = get_page_dir_phys(_kernel_dir);
+
+    if (saved == kernel) {
+        return 0;
+    }
+    arch_space_load(kernel);
+    return saved;
+}
+
+void paging_leave_kernel(uintptr_t saved)
+{
+    if (saved != 0) {
+        arch_space_load(saved);
+    }
 }

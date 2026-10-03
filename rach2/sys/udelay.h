@@ -1,7 +1,7 @@
 #ifndef _UDELAY_H_
 #define _UDELAY_H_
 
-#include "../../lib/kint.h"
+#include "lib/kint.h"
 
 /*
  * udelay: a short wait measured against the timer chip, not counted.

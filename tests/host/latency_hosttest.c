@@ -13,7 +13,7 @@
 
 static uint32_t clock_us;
 
-uint32_t pit_now_us(void)
+uint32_t timer_now_us(void)
 {
     return clock_us;
 }

@@ -90,10 +90,10 @@ int32_t inotify_watch(int fd, struct vfs_mount *mnt, uint64_t ino, int isdir, ui
 
 /** inotify_init(291) and inotify_init1(332): EBX the flags IN_NONBLOCK and
  * IN_CLOEXEC. */
-int32_t sys_inotify_init(struct isr_params *params);
-int32_t sys_inotify_init1(struct isr_params *params);
+long sys_inotify_init(struct isr_params *params);
+long sys_inotify_init1(struct isr_params *params);
 
 /** inotify_rm_watch(293): EBX the instance, ECX the watch descriptor. */
-int32_t sys_inotify_rm_watch(struct isr_params *params);
+long sys_inotify_rm_watch(struct isr_params *params);
 
 #endif /* _INOTIFY_H_ */

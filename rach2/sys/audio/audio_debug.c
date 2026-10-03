@@ -6,6 +6,7 @@
  * neither the machine's log nor the wire.
  */
 
+#include "../arch/arch.h"
 #include "audio_debug.h"
 #include "hda.h"
 #include "../klog.h"
@@ -172,7 +173,7 @@ static void audio_stop_playback(void)
 static void audio_wait_until(uint32_t target_ticks)
 {
     while (kernel_ticks < target_ticks) {
-        __asm__ __volatile__("hlt");
+        arch_halt();
     }
 }
 
@@ -346,7 +347,7 @@ static void audio_run_write_test(uint32_t duration_ms)
             uint32_t to_write;
 
             while (kernel_ticks == tick_last) {
-                __asm__ __volatile__("hlt");
+                arch_halt();
             }
             tick_last = kernel_ticks;
 
@@ -378,7 +379,7 @@ static void audio_run_write_test(uint32_t duration_ms)
                         return;
                     }
                     if (written == 0) {
-                        __asm__ __volatile__("hlt");
+                        arch_halt();
                         continue;
                     }
 
@@ -497,7 +498,7 @@ static void audio_run_hda_watch(uint32_t freq_hz, uint32_t duration_ms, uint32_t
             }
         }
 
-        __asm__ __volatile__("hlt");
+        arch_halt();
     }
 
     audio_stop_playback();

@@ -14,15 +14,16 @@
  * it is parking the CPU instead.
  */
 
+#include "portio.h"
 #include "../../klog.h"
-#include "power.h"
+#include "../../power.h"
 
 #include "smbios.h"
 #include "board.h"
 #include "../../cmdline.h"
 #include "../../kio.h"
-#include "pci.h"
-#include "serial.h"
+#include "../../pci.h"
+#include "../../serial.h"
 
 /* The PIIX4 the QEMU `pc` machine has, at 00:01.3, and the two registers
  * that say where its ACPI power management block lives and whether that block

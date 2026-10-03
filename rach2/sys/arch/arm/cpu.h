@@ -37,6 +37,9 @@ typedef uint32_t phys_addr_t;
 #define PAGE_SHIFT 12
 #define PAGE_SIZE  0x1000
 
+/* A floating-point save area: the 32 doubleword registers of VFPv3 and FPSCR. */
+#define FPU_STATE_SIZE 264
+
 #define USER_ADDR_MIN 0x00010000UL
 #define USER_ADDR_MAX 0xC0000000UL
 

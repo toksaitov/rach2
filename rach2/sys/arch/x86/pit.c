@@ -1,11 +1,10 @@
+#include "portio.h"
 #include "pit.h"
 
 #include "kcpu.h"
 #include "../../lib/kirq.h"
-#include "udelay.h"
+#include "../../udelay.h"
 
-/* The tick, which is this chip's own count of the interrupts it has raised. */
-extern volatile uint32_t kernel_ticks;
 
 uint32_t pit_reload = 1193182 / 100;
 
@@ -98,8 +97,8 @@ static void pit_clock_tick(struct pit_clock *c, uint32_t phase)
  * on, and the PIC keeps one pending, so a stretch with them off longer than
  * a period loses periods, as a page fault that reclaims memory can take;
  * the time-stamp counter goes on counting. With the counts of one tick, from
- * `pit_tsc_calibrate`, the timer handler asks how many whole ticks have gone
- * by since the last one it saw (`pit_lost_ticks`), rounding down, so the
+ * `timer_calibrate`, the timer handler asks how many whole ticks have gone
+ * by since the last one it saw (`timer_lost_ticks`), rounding down, so the
  * count can fall short of the time by part of a tick in a gap and never run
  * ahead of it. Zero counts: no TSC that runs at one rate, or a hypervisor,
  * whose emulated timer delivers the ticks it held back again, and no ticks
@@ -146,7 +145,7 @@ static uint32_t pit_ticks_missed(uint32_t lo, uint32_t hi, uint32_t per_tick)
     return q - 1u > PIT_LOST_MAX ? PIT_LOST_MAX : q - 1u;
 }
 
-uint32_t pit_tsc_calibrate(void)
+uint32_t timer_calibrate(void)
 {
     uint32_t a, b, c, d, lo0, hi0, lo1, hi1, flags;
 
@@ -176,7 +175,7 @@ uint32_t pit_tsc_calibrate(void)
     return tsc_per_tick;
 }
 
-uint32_t pit_lost_ticks(void)
+uint32_t timer_lost_ticks(void)
 {
     uint32_t lo, hi, gap_lo, gap_hi, first = tsc_last_lo == 0 && tsc_last_hi == 0;
 
@@ -206,7 +205,7 @@ uint32_t pit_lost_ticks(void)
  * without a calibration, and the bound for a gap whose quotient is past 32
  * bits.
  */
-int pit_clock_check(void)
+int timer_clock_check(void)
 {
     uint32_t p = 2u * sweep_us();
     uint32_t want = pit_reload * 8381u / 10000u; /* 1193182 counts a second */
@@ -279,7 +278,7 @@ static uint32_t clock_phase(void)
  * is what `clock_wrapped` says. Both counting it would put the clock ten
  * milliseconds ahead once a period.
  */
-void pit_tick_clock(void)
+void timer_tick_clock(void)
 {
     uint32_t flags = kirq_save();
 
@@ -298,13 +297,13 @@ void pit_tick_clock(void)
  *
  * A machine whose interrupts are off for longer than a period loses that
  * period unless something reads the clock inside it. The tick counter makes
- * such periods up from the TSC where `pit_tsc_calibrate` found one at one
+ * such periods up from the TSC where `timer_calibrate` found one at one
  * rate; this clock does not.
  *
  * It wraps after about 71 minutes, which is a diagnostic clock's bound and
  * not a wall clock's; `rtc.c` is where the time of day lives.
  */
-uint32_t pit_now_us(void)
+uint32_t timer_now_us(void)
 {
     uint32_t flags = kirq_save();
     uint32_t now = pit_clock_read(&clock, clock_phase(), 2u * sweep_us());
@@ -320,7 +319,7 @@ uint32_t pit_now_us(void)
  * can combine the old OUT bit with the new count. Use the same latched phase
  * as the diagnostic clock; its microsecond resolution fits in 32 bits.
  */
-uint32_t pit_subtick_ns(void)
+uint32_t timer_subtick_ns(void)
 {
     return clock_phase() * 1000u;
 }

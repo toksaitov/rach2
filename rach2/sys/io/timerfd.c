@@ -298,10 +298,10 @@ static struct ktimer *timer_of(int fd)
     return (e && e->ops == &timerfd_ops) ? (struct ktimer *)e->priv : NULL;
 }
 
-int32_t sys_timerfd_create(struct isr_params *params)
+long sys_timerfd_create(struct isr_params *params)
 {
-    int clock = (int)params->ebx;
-    uint32_t flags = params->ecx;
+    int clock = (int)SC_ARG(params, 0);
+    uint32_t flags = SC_ARG(params, 1);
     struct ktimer *t;
     fd_entry_t *e;
     int fd;
@@ -493,49 +493,49 @@ static int32_t set_and_report(struct ktimer *t, int flags, uint32_t want_u, uint
 
 static int32_t settime(struct isr_params *params, int wide)
 {
-    struct ktimer *t = timer_of((int)params->ebx);
-    int flags = (int)params->ecx;
+    struct ktimer *t = timer_of((int)SC_ARG(params, 0));
+    int flags = (int)SC_ARG(params, 1);
 
-    if (!fd_get(current_proc->fds, (int)params->ebx)) {
+    if (!fd_get(current_proc->fds, (int)SC_ARG(params, 0))) {
         return -EBADF;
     }
     if (!t || (flags & ~(TFD_TIMER_ABSTIME | TFD_TIMER_CANCEL_ON_SET))) {
         return -EINVAL;
     }
-    return set_and_report(t, flags, params->edx, params->esi, wide);
+    return set_and_report(t, flags, SC_ARG(params, 2), SC_ARG(params, 3), wide);
 }
 
 static int32_t gettime(struct isr_params *params, int wide)
 {
-    struct ktimer *t = timer_of((int)params->ebx);
+    struct ktimer *t = timer_of((int)SC_ARG(params, 0));
     struct setting now;
 
-    if (!fd_get(current_proc->fds, (int)params->ebx)) {
+    if (!fd_get(current_proc->fds, (int)SC_ARG(params, 0))) {
         return -EBADF;
     }
     if (!t) {
         return -EINVAL;
     }
     current_setting(t, &now);
-    return put_setting(params->ecx, wide, &now);
+    return put_setting(SC_ARG(params, 1), wide, &now);
 }
 
-int32_t sys_timerfd_settime(struct isr_params *params)
+long sys_timerfd_settime(struct isr_params *params)
 {
     return settime(params, 0);
 }
 
-int32_t sys_timerfd_settime64(struct isr_params *params)
+long sys_timerfd_settime64(struct isr_params *params)
 {
     return settime(params, 1);
 }
 
-int32_t sys_timerfd_gettime(struct isr_params *params)
+long sys_timerfd_gettime(struct isr_params *params)
 {
     return gettime(params, 0);
 }
 
-int32_t sys_timerfd_gettime64(struct isr_params *params)
+long sys_timerfd_gettime64(struct isr_params *params)
 {
     return gettime(params, 1);
 }
@@ -624,16 +624,16 @@ static int32_t ptimer_clock(struct ktimer *t, int clock)
  * must be one of the caller's process. EINVAL for another clock,
  * notification or signal, EAGAIN past PTIMER_MAX.
  */
-int32_t sys_timer_create(struct isr_params *params)
+long sys_timer_create(struct isr_params *params)
 {
-    int clock = (int)params->ebx;
+    int clock = (int)SC_ARG(params, 0);
     struct tgroup *tg = current_proc->tg;
     struct ktimer *t, **link = &tg->timers;
     int32_t ev[4] = {0, SIGALRM, SIGEV_SIGNAL, 0}; /* value, signo, notify, tid */
     uint32_t irq;
     int id = 0;
 
-    if (params->ecx && copy_from_user(ev, (const void __user *)params->ecx, sizeof(ev)) != 0) {
+    if (SC_ARG(params, 1) && copy_from_user(ev, (const void __user *)SC_ARG(params, 1), sizeof(ev)) != 0) {
         return -EFAULT;
     }
     if ((ev[2] != SIGEV_SIGNAL && ev[2] != SIGEV_NONE && ev[2] != SIGEV_THREAD_ID) ||
@@ -654,7 +654,7 @@ int32_t sys_timer_create(struct isr_params *params)
         link = &(*link)->in_group;
         id++;
     }
-    if (id >= PTIMER_MAX || copy_to_user((void __user *)params->edx, &id, sizeof(id)) != 0) {
+    if (id >= PTIMER_MAX || copy_to_user((void __user *)SC_ARG(params, 2), &id, sizeof(id)) != 0) {
         kirq_restore(irq);
         tgroup_put(t->cpu_tg);
         kfree(t);
@@ -665,7 +665,7 @@ int32_t sys_timer_create(struct isr_params *params)
     t->id = id;
     t->notify = ev[2];
     t->signo = ev[1];
-    t->value = params->ecx ? ev[0] : id;
+    t->value = SC_ARG(params, 1) ? ev[0] : id;
     t->tid = (uint32_t)ev[3];
     t->in_group = *link;
     *link = t;
@@ -675,49 +675,49 @@ int32_t sys_timer_create(struct isr_params *params)
 
 static int32_t ptimer_settime(struct isr_params *params, int wide)
 {
-    struct ktimer *t = ptimer_of((int)params->ebx);
+    struct ktimer *t = ptimer_of((int)SC_ARG(params, 0));
 
-    if (!t || ((int)params->ecx & ~TIMER_ABSTIME) || params->edx == 0) {
+    if (!t || ((int)SC_ARG(params, 1) & ~TIMER_ABSTIME) || SC_ARG(params, 2) == 0) {
         return -EINVAL;
     }
-    return set_and_report(t, (int)params->ecx, params->edx, params->esi, wide);
+    return set_and_report(t, (int)SC_ARG(params, 1), SC_ARG(params, 2), SC_ARG(params, 3), wide);
 }
 
 static int32_t ptimer_gettime(struct isr_params *params, int wide)
 {
-    struct ktimer *t = ptimer_of((int)params->ebx);
+    struct ktimer *t = ptimer_of((int)SC_ARG(params, 0));
     struct setting now;
 
     if (!t) {
         return -EINVAL;
     }
     current_setting(t, &now);
-    return put_setting(params->ecx, wide, &now);
+    return put_setting(SC_ARG(params, 1), wide, &now);
 }
 
-int32_t sys_timer_settime(struct isr_params *params)
+long sys_timer_settime(struct isr_params *params)
 {
     return ptimer_settime(params, 0);
 }
 
-int32_t sys_timer_settime64(struct isr_params *params)
+long sys_timer_settime64(struct isr_params *params)
 {
     return ptimer_settime(params, 1);
 }
 
-int32_t sys_timer_gettime(struct isr_params *params)
+long sys_timer_gettime(struct isr_params *params)
 {
     return ptimer_gettime(params, 0);
 }
 
-int32_t sys_timer_gettime64(struct isr_params *params)
+long sys_timer_gettime64(struct isr_params *params)
 {
     return ptimer_gettime(params, 1);
 }
 
-int32_t sys_timer_getoverrun(struct isr_params *params)
+long sys_timer_getoverrun(struct isr_params *params)
 {
-    struct ktimer *t = ptimer_of((int)params->ebx);
+    struct ktimer *t = ptimer_of((int)SC_ARG(params, 0));
 
     return t ? (int32_t)t->overrun : -EINVAL;
 }
@@ -738,11 +738,11 @@ static void ptimer_free(struct ktimer **link)
     kfree(t);
 }
 
-int32_t sys_timer_delete(struct isr_params *params)
+long sys_timer_delete(struct isr_params *params)
 {
     struct ktimer **link = &current_proc->tg->timers;
 
-    while (*link && (*link)->id != (int)params->ebx) {
+    while (*link && (*link)->id != (int)SC_ARG(params, 0)) {
         link = &(*link)->in_group;
     }
     if (!*link) {

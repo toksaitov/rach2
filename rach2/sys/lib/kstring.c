@@ -1,5 +1,7 @@
 #include "kstring.h"
 
+#include "../arch/arch.h"
+
 size_t k_strlen(const char *str)
 {
     const char *end;
@@ -40,18 +42,19 @@ void k_strtoupper(char *str)
 }
 
 /*
- * `k_memcpy` and `k_memset` move a machine word at a time through the string
- * instructions on the kernel's own target. The kernel is built without
- * optimisation, so a byte loop costs a load, a store and a compare per byte,
- * and every disk and network path passes each byte through several of them;
- * on the Lenovo the byte loops bounded the SSD at 90 MB/s. `rep movsl` and
- * `rep stosl` move the words, a byte loop the tail of up to three, and the
- * direction flag is cleared first since a user program may leave it set at a
- * system call. Both compilers that build the kernel take this asm form. On
- * any other target, the host tests' among them, the byte loop is the whole
- * function, and the tests of the tail run against it.
+ * `k_memcpy` and `k_memset` move a machine word at a time where the
+ * architecture has string instructions for it: its cpu.h defines
+ * ARCH_STRING_WORDS, and `arch_copy_words` and `arch_fill_words` use them
+ * (on an x86, `rep movs` and `rep stos` with the direction flag cleared,
+ * since a user program may leave it set at a system call). The kernel is
+ * built without optimisation, so a byte loop costs a load, a store and a
+ * compare per byte, and every disk and network path passes each byte
+ * through several of them; on the Lenovo the byte loops bounded the SSD at
+ * 90 MB/s. A byte loop moves the tail. Elsewhere, and in the host tests, the
+ * byte loop is the whole function, and the tests of the tail run against
+ * it.
  */
-#if defined(__i386__)
+#if defined(ARCH_STRING_WORDS) && !defined(RACH2_HOSTTEST)
 #define KSTRING_WORDS 1
 #endif
 
@@ -59,18 +62,15 @@ void *k_memset(void *ptr, int c, size_t n)
 {
     char *str = (char *)ptr;
 #ifdef KSTRING_WORDS
-    size_t words = n >> 2;
+    size_t words = n / sizeof(unsigned long);
 
     if (words) {
-        unsigned int fill = (unsigned char)c;
+        /* The byte in every byte of a word: ~0 / 0xFF is 0x01 in each. */
+        unsigned long fill = (unsigned long)(unsigned char)c * (~0UL / 0xFFu);
 
-        fill |= fill << 8;
-        fill |= fill << 16;
-        __asm__ __volatile__("cld; rep stosl"
-                             : "+D"(str), "+c"(words)
-                             : "a"(fill)
-                             : "memory", "cc");
-        n &= 3;
+        arch_fill_words(str, fill, words);
+        str += words * sizeof(unsigned long);
+        n %= sizeof(unsigned long);
     }
 #endif
     while (n--) {
@@ -84,11 +84,13 @@ void *k_memcpy(void *dest, const void *src, size_t n)
     char *d = (char *)dest;
     const char *s = (const char *)src;
 #ifdef KSTRING_WORDS
-    size_t words = n >> 2;
+    size_t words = n / sizeof(unsigned long);
 
     if (words) {
-        __asm__ __volatile__("cld; rep movsl" : "+S"(s), "+D"(d), "+c"(words) : : "memory", "cc");
-        n &= 3;
+        arch_copy_words(d, s, words);
+        d += words * sizeof(unsigned long);
+        s += words * sizeof(unsigned long);
+        n %= sizeof(unsigned long);
     }
 #endif
     while (n--) {
@@ -110,17 +112,14 @@ void *k_memcpy(void *dest, const void *src, size_t n)
  * The overlap test compares addresses as integers, not as pointers: a
  * relational compare of pointers into two different objects is undefined in
  * C, and a copy between two separate structs is this function's normal case
- * under tcc. The integer type is `__SIZE_TYPE__` because it is pointer-width
- * under every compiler that builds this file, the host's included; the
- * kernel's own `uintptr_t` is 32 bits and would truncate the host test's
- * addresses.
+ * under tcc.
  */
 void *k_memmove(void *dest, const void *src, size_t n)
 {
     char *d = (char *)dest;
     const char *s = (const char *)src;
-    __SIZE_TYPE__ du = (__SIZE_TYPE__)dest;
-    __SIZE_TYPE__ su = (__SIZE_TYPE__)src;
+    uintptr_t du = (uintptr_t)dest;
+    uintptr_t su = (uintptr_t)src;
 
     if (du > su && du - su < n) {
         d += n;

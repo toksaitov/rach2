@@ -63,13 +63,13 @@ int32_t poll_mask_set(uint32_t umask, uint32_t size);
 int32_t poll_mask_done(int32_t ret);
 
 /* poll(168) / ppoll(309). */
-int32_t sys_poll(struct isr_params *params);
-int32_t sys_ppoll(struct isr_params *params);
+long sys_poll(struct isr_params *params);
+long sys_ppoll(struct isr_params *params);
 
 /* select(82) old single-arg-struct form, _newselect(142) normal form, and
  * pselect6(308). */
-int32_t sys_select(struct isr_params *params);
-int32_t sys__newselect(struct isr_params *params);
-int32_t sys_pselect6(struct isr_params *params);
+long sys_select(struct isr_params *params);
+long sys__newselect(struct isr_params *params);
+long sys_pselect6(struct isr_params *params);
 
 #endif /* _POLL_H_ */

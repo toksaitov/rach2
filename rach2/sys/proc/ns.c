@@ -916,9 +916,9 @@ int ns_caps_held(const process_t *p)
  * and CLONE_SYSVSEM, CLONE_THREAD, CLONE_SIGHAND and CLONE_VM are taken for
  * a process of one thread. Cgroup and time namespaces are refused.
  */
-int32_t sys_unshare(isr_params_t *params)
+long sys_unshare(isr_params_t *params)
 {
-    uint32_t flags = params->ebx;
+    uint32_t flags = SC_ARG(params, 0);
     process_t *self = current_proc;
     struct userns *uns = NULL;
     struct nsset *set = NULL;
@@ -1197,17 +1197,17 @@ static int32_t setns_user(struct userns *ns)
  * must be the caller's or below it; a mount namespace needs directories of
  * the caller's own.
  */
-int32_t sys_setns(isr_params_t *params)
+long sys_setns(isr_params_t *params)
 {
     process_t *self = current_proc;
-    struct ns_common *c = nsfs_ns(fd_get(self->fds, (int)params->ebx));
+    struct ns_common *c = nsfs_ns(fd_get(self->fds, (int)SC_ARG(params, 0)));
     struct nsset *set;
     int32_t err = 0;
 
     if (!c) {
-        return fd_get(self->fds, (int)params->ebx) ? -EINVAL : -EBADF;
+        return fd_get(self->fds, (int)SC_ARG(params, 0)) ? -EINVAL : -EBADF;
     }
-    if (params->ecx != 0 && params->ecx != kind_flags[c->kind]) {
+    if (SC_ARG(params, 1) != 0 && SC_ARG(params, 1) != kind_flags[c->kind]) {
         return -EINVAL;
     }
     if (c->kind == NS_USER) {

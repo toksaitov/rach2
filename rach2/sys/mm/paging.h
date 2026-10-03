@@ -154,6 +154,18 @@ uintptr_t get_page_dir_phys(page_dir_t *dir);
  */
 void switch_page_directory(page_dir_t *dir);
 
+/**
+ * Translate through the kernel's own page directory, for an interrupt
+ * handler that touches kernel data an arbitrary process's directory may not
+ * map, and return what `paging_leave_kernel` needs to put the interrupted
+ * one back. The processor's register is read and written directly, since
+ * the record `switch_page_directory` keeps may be out of step here.
+ */
+uintptr_t paging_enter_kernel(void);
+
+/** Put back the translation `paging_enter_kernel` replaced, if it did. */
+void paging_leave_kernel(uintptr_t saved);
+
 /*
  * Allocate a user page in a specific page directory.
  * virt_addr: virtual address to map (will be page-aligned)

@@ -16,7 +16,7 @@
 #include "../socket/socket.h"
 #include "../ip/ip.h"
 #include "../core/byteorder.h"
-#include "../../arch/x86/serial.h"
+#include "../../serial.h"
 #include "../../lib/kstring.h"
 #include "../../mm/kheap.h"
 
