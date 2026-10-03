@@ -69,6 +69,7 @@ bootpart|qemu|full|bootpart-test*,bootpart.*,bootpart-*,bootpart/*,wide-test*
 loopdev|qemu,mformat,mcopy,mtype,mke2fs|full
 tcc|qemu|full
 make|qemu|full
+smp|qemu|full||512
 host|-|full
 noentropy|qemu|full
 shutdown|qemu|full

@@ -39,6 +39,7 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `loopdev` (full tier; needs qemu, mformat, mcopy, mtype, mke2fs; 128 MiB): a file system in a file, through a loop device: a FAT32 image and an ext2 image on a FAT32 volume, each mounted, written and read back, and everything an attachment refuses.
 * `tcc` (full tier; needs qemu; 128 MiB): the machine compiling a program on itself.
 * `make` (full tier; needs qemu; 128 MiB): the machine building a program on itself, and the claim a compiler alone cannot make: that a second build does nothing, that touching one source rebuilds one object, and that the answer survives a reboot.
+* `smp` (full tier; needs qemu; 512 MiB): the kernel on one processor, on four and on two of four, each finding its processors and passing a stress of fork, exec, pipes, futexes and munmap across them, and a parallel build on the installed system that runs on every one of four (see tests/system/suites/smp.sh).
 * `host` (full tier; needs nothing beyond the build; no machine): the host tests, kernel code compiled and run natively under the sanitizers, and the fuzz corpora replayed through their harnesses.
 * `noentropy` (full tier; needs qemu; 128 MiB): the entropy policy's fail-closed half, which no other target can reach.
 * `shutdown` (full tier; needs qemu; 128 MiB): userland stopping the machine, on a disk fixture, with every claim of a stop asserted on the QEMU process ending rather than on a token, and every image checked by offline fsck afterwards.

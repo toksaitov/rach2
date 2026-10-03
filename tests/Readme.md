@@ -2,7 +2,7 @@
 
 ![List of Rach2 Test Programs](https://raw.githubusercontent.com/rachmiroff/images/refs/heads/main/rach2/tests.png)
 
-This directory has two guest test sets, and [`system/`](system/Readme.md) holds the QEMU runners, suite scripts, capture checkers, fixtures, and acceptance procedure. The root contains the programs `tests/Makefile` names, 101 of them, which usually make direct system calls. `musl/` contains 70 programs linked against the ported musl libc. The separate [host test suite](host/Readme.md) compiles selected kernel and tool code as native programs under AddressSanitizer and UndefinedBehaviorSanitizer.
+This directory has two guest test sets, and [`system/`](system/Readme.md) holds the QEMU runners, suite scripts, capture checkers, fixtures, and acceptance procedure. The root contains the programs `tests/Makefile` names, 101 of them, which usually make direct system calls. `musl/` contains 76 programs linked against the ported musl libc. The separate [host test suite](host/Readme.md) compiles selected kernel and tool code as native programs under AddressSanitizer and UndefinedBehaviorSanitizer.
 
 ## The suite runner
 
@@ -71,6 +71,8 @@ statxmusl lockmusl tmpfsmusl
 mknodmusl memfdmusl chrootmusl vforkmusl ptracemusl callsmusl coremusl
 threadmusl ishmusl
 ```
+
+`smpmusl`, which takes the number of processors the boot should have, runs in `tests/run smp` alone.
 
 `loopprobe` includes a server that closes immediately after accepting; the client must connect successfully and read EOF. `devprobe` checks graphics reentry and descriptors inherited or retained across a change of framebuffer owner. `sh tests/system/framebuffer_mutate.sh` builds only those two probes and a 2 MiB image, verifies the staged bytes, and runs them through the serial harness with no host network connection. Separate kernels with the framebuffer ownership check or graphics reentry removed must fail `devprobe`. Each restoration touches the source and removes its object before rebuilding; the restored kernel must match the original and both probes must pass. A trap stops test processes before restoring the source. Complete logs, images, kernels and checksums remain under the printed `build/framebuffer-guest.*` directory. The immediate-close row does not force the client's scheduling order; the native `syscall_hosttest` forces FIN before the connect wait resumes and checks the 497-day clock wrap.
 

@@ -1676,6 +1676,16 @@ run-tcc: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdpmake c
 	$(MKDISK) krffs/manifests/os-real.manifest $(TCC_TEST_DISK) 64 48
 	sh tests/system/suites/tcc.sh $(BOOT_KERNEL) $(TCC_TEST_DISK) \
 	    "`cat krffs/rach2_demo_password`" "`cat krffs/rach2_test_password`"
+# `tests/run smp`: the kernel on one processor, on four and on two of four,
+# each finding its processors and passing a stress of fork, exec, pipes,
+# futexes and munmap across them, and a parallel build on the installed
+# system that runs on every one of four (see tests/system/suites/smp.sh).
+SMP_TEST_DISK = $(IMAGES_DIR)/smp-test.disk
+run-smp: $(DEMO_CREDS) rach2 utils tests krffs test-image check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(HARNESS)
+	@mkdir -p $(IMAGES_DIR)
+	$(MKDISK) krffs/manifests/os-real.manifest $(SMP_TEST_DISK) 64 48
+	sh tests/system/suites/smp.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) $(SMP_TEST_DISK) \
+	    "`cat krffs/rach2_test_password`"
 # `tests/run make`: the machine building a program on itself, and the claim a
 # compiler alone cannot make: that a second build does nothing, that touching
 # one source rebuilds one object, and that the answer survives a reboot. Two
