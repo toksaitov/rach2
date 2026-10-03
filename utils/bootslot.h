@@ -22,11 +22,13 @@
  * `bootslot_read_env` fills that many, so a caller sizes its buffer from it. */
 #define BOOTSLOT_ENV_BYTES 1024
 
-/* Bounds on what the walk accepts: enough for the real 16 MiB boot partition
- * (252-sector FATs, 512-byte clusters) with generous headroom, small enough
- * that every array here is a plain static allocation. */
-#define BOOTSLOT_FAT_MAX_SECTORS   512
-#define BOOTSLOT_MAX_CLUSTERS      65536
+/* Bounds on what the walk accepts: enough for a 64 MiB EFI system partition
+ * at 512-byte clusters (1016-sector FATs, about 130000 clusters), the boot
+ * partition a GPT disk has, since UEFI firmware reads a FAT32 volume only
+ * when it has at least 65525 clusters; small enough that every array here
+ * is a plain static allocation. */
+#define BOOTSLOT_FAT_MAX_SECTORS   1024
+#define BOOTSLOT_MAX_CLUSTERS      131072
 #define BOOTSLOT_MAX_FILE_CLUSTERS 8192
 
 /** Sector I/O over the boot partition, supplied by the caller. `lba` is

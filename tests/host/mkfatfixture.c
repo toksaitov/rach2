@@ -72,11 +72,10 @@
 
 /* Sectors per cluster. Every fixture was one-to-one until milestone 25,
    which is why bootslot's cluster arithmetic had never run at any other
-   geometry: the sealed boot partition is 64 MiB, and at one sector per
-   cluster that is past both BOOTSLOT_FAT_MAX_SECTORS and
-   BOOTSLOT_MAX_CLUSTERS, so the real disk formats at eight. The default
-   stays one, which keeps every existing case at the byte offsets it
-   asserts on. */
+   geometry: the boot partition of an MBR disk is 64 MiB at eight sectors
+   per cluster, as the disks installed before milestone 57 have it. The
+   default stays one, which keeps every existing case at the byte offsets
+   it asserts on. */
 #define DEFAULT_SPC 1
 #define RESERVED    32
 #define FATSZ       64

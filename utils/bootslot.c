@@ -318,9 +318,10 @@ static int resolve_file(struct bootslot *bs, uint32_t first, uint32_t size,
 /**
  * Read and validate the volume; the contract is in `bootslot.h`.
  *
- * The BPB bounds are those of mformat's FAT32 on the 16 MiB and the 64 MiB
- * boot partitions `tools/image/mkdisk_grub.sh` builds, stated as bounds and
- * not as a FAT-type threshold. The scan marks every chain it reaches, so the
+ * The BPB bounds are those of the FAT32 boot partitions
+ * `tools/image/mkdisk_grub.sh` builds and has built, 16 MiB and 64 MiB at
+ * one or eight sectors per cluster, stated as bounds and not as a FAT-type
+ * threshold. The scan marks every chain it reaches, so the
  * bitmap is cleared before each named file's chain is walked again alone;
  * the scan has already proved them disjoint. A menu slot that is empty or not
  * a whole number of sectors is a disk built wrong and cannot be rewritten

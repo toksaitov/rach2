@@ -528,10 +528,10 @@ int main(void)
 
     /* Eight sectors per cluster. Every fixture before milestone 25 was
        one-to-one, so the library's cluster arithmetic had never been driven at
-       any other geometry, and the sealed 64 MiB boot partition cannot use the
-       old one: at one sector per cluster it is past both BOOTSLOT_FAT_MAX_SECTORS
-       and BOOTSLOT_MAX_CLUSTERS. Everything the library reports here is in
-       sectors and bytes, so the multiplication is what is under test. */
+       any other geometry, and the 64 MiB boot partition of an MBR disk
+       installed before milestone 57 has eight. Everything the library reports
+       here is in sectors and bytes, so the multiplication is what is under
+       test. */
     load("--cluster8");
     CHECK(bootslot_open(&bs, &IO, err, sizeof(err)) == 0, "a 4 KiB-cluster volume opens");
     CHECK(bs.cluster_sectors == 8, "the volume reports eight sectors per cluster");
