@@ -1,8 +1,9 @@
 /*
- * boot.c: the C entry of a PC's kernel, which a Multiboot loader reached
- * through the architecture's loader.s. It brings up the serial console
- * first, so that everything after can be logged, turns the loader's
- * Multiboot information into the boot record, and calls the shared boot.
+ * boot.c: the C entry of a PC's kernel, which a Multiboot or multiboot2
+ * loader reached through the architecture's loader.s. It brings up the
+ * serial console first, so that everything after can be logged, reads the
+ * loader's information into the boot record (mbinfo.c), and calls the
+ * shared boot.
  */
 
 #include "../../boot.h"
@@ -10,43 +11,88 @@
 #include "../../module.h"
 #include "../../serial.h"
 
-#include "../../../vendor/multiboot.h"
+#include "mbinfo.h"
 #if defined(__x86_64__)
 #include "../x86_64/mmu.h"
 #endif
 
 /* The kernel's address of the loader's physical address `pa`: the address
- * itself on i686, where the loader's structures lie in the identity-mapped
- * window, and its address in the direct map on x86-64, whose loader.s
- * passes `info` there too. */
+ * itself on i686, where paging is off until the boot turns it on, and its
+ * address in the direct map on x86-64, whose loader.s maps the first 4 GiB
+ * there and passes `info` there too. The kernel's own physical address of
+ * its image's `va`, the address itself on i686, linked where it runs. */
 #if defined(__x86_64__)
 #define LOADER_PTR(pa) MMU_VIRT(pa)
+#define IMAGE_PHYS(va) ((uint64_t)((uintptr_t)(va) - KVA_IMAGE))
 #else
 #define LOADER_PTR(pa) ((void *)(uintptr_t)(pa))
+#define IMAGE_PHYS(va) ((uint64_t)(uintptr_t)(va))
 #endif
 
-void k_main(multiboot_uint32_t magic, multiboot_info_t *info);
+/* The record and its copies, filled once. */
+static struct boot_info boot;
+static struct boot_store store;
 
-/** The entry from loader.s, with the Multiboot magic and information. */
-void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
+/** The loader's `len` bytes at `phys`, below the 4 GiB both entries
+ * reach. */
+static const void *loader_reach(uint64_t phys, uint32_t len)
 {
-    static struct boot_info boot;
+    if (phys == 0 || phys + len > 0x100000000ULL) {
+        return NULL;
+    }
+    return LOADER_PTR(phys);
+}
 
+/** What the loader said, in the log: who it was, the firmware where its
+ * form says, the screen, and what the record could not keep. Multiboot's
+ * structure does not say which firmware ran; multiboot2's lists the EFI
+ * tables under UEFI. */
+static void boot_report(const char *form, int says_firmware)
+{
+    static const char *const kinds[] = {"none", "rgb", "indexed", "text"};
+    const struct boot_framebuffer *fb = &boot.fb;
+
+    klog(KLOG_INFO, "boot", "loader: %s, by %s%s", boot.loader ? boot.loader : "unnamed", form,
+         !says_firmware ? ""
+         : boot.uefi    ? " on UEFI"
+                        : " on BIOS");
+    if (fb->type != BOOT_FB_NONE) {
+        klog(KLOG_DEBUG, "boot", "framebuffer: %s, %dx%d, %d bits, pitch %d, at 0x%x",
+             kinds[fb->type], (int)fb->width, (int)fb->height, (int)fb->bpp, (int)fb->pitch,
+             (uint32_t)fb->addr);
+    }
+    if (store.mmap_cut > 0) {
+        klog(KLOG_WARN, "boot", "memory map: %d entries past the %d the record keeps, ignored",
+             (int)store.mmap_cut, BOOT_MMAP_MAX);
+    }
+}
+
+void k_main(uint32_t magic, const void *info);
+
+/** The entry from loader.s, with the loader's magic and information. */
+void k_main(uint32_t magic, const void *info)
+{
     serial_init();
     klog(KLOG_INFO, "boot", "Rach2 Booting");
 
-    /* The modules are read before paging: the information is reached by
-     * its physical address. */
-    boot.modules = init_modules(magic, info);
-    if ((info->flags & MULTIBOOT_INFO_CMDLINE) && info->cmdline != 0) {
-        boot.cmdline = (const char *)LOADER_PTR(info->cmdline);
+    if (magic == MB1_LOADER_MAGIC) {
+        if (mb1_read(info, loader_reach, &boot, &store) != 0) {
+            klog(KLOG_WARN, "boot", "multiboot: a part of the information did not read");
+        }
+        boot_report("multiboot", 0);
+    } else if (magic == MB2_LOADER_MAGIC) {
+        if (mb2_read(info, &boot, &store) != 0) {
+            klog(KLOG_WARN, "boot", "multiboot2: the tag list is cut short; read up to there");
+        }
+        boot_report("multiboot2", 1);
+    } else {
+        klog(KLOG_ERR, "boot", "refused: loader magic 0x%X is neither multiboot's nor multiboot2's",
+             magic);
     }
-    if (info->flags & MULTIBOOT_INFO_MEM_MAP) {
-        boot.mmap = (const void *)LOADER_PTR(info->mmap_addr);
-        boot.mmap_len = info->mmap_length;
+    if (store.rsdp_len > 0) {
+        boot.acpi_rsdp = IMAGE_PHYS(store.rsdp);
     }
-    if (info->flags & MULTIBOOT_INFO_MEMORY) {
-        boot.mem_upper_kb = info->mem_upper;
-    }
+
+    init_modules(&boot);
     kernel_main(&boot);
 }

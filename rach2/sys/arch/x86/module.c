@@ -1,56 +1,27 @@
 #include "../../klog.h"
 #include "../../module.h"
-#include "../../serial.h"
 #include "../../lib/kstring.h"
-#if defined(__x86_64__)
-#include "../x86_64/mmu.h"
-#endif
-
-/* The kernel's address of the loader's physical address `pa`: the address
- * itself on i686, where the loader's structures lie in the identity-mapped
- * window, and its address in the direct map on x86-64. */
-#if defined(__x86_64__)
-#define LOADER_PTR(pa) MMU_VIRT(pa)
-#else
-#define LOADER_PTR(pa) ((void *)(pa))
-#endif
 
 module_info_t module_table[MAX_MODULES];
 
 uint32_t module_count = 0;
 
 /**
- * Record the boot modules the bootloader handed us through Multiboot.
+ * Record the boot modules of the boot record in `module_table`: each one's
+ * physical range, where the kernel reads it until the boot maps it, and its
+ * command line, the record's own copy. Both of Multiboot's forms give a
+ * module's addresses in 32 bits.
  *
- * The bootloader passes its information structure and a magic value; on a
- * valid handoff `info->mods_addr` points at an array of `mods_count`
- * descriptors, each giving a module's physical start, end, and command line.
- * Copy up to `MAX_MODULES` of these into `module_table`. Any of the three
- * preconditions failing (wrong magic, no module flag, no modules) leaves the
- * table empty.
- *
- * @return the number of modules recorded, which is the count truncated to
- * `MAX_MODULES`.
+ * @return the number of modules recorded.
  */
-uint32_t init_modules(multiboot_uint32_t magic, multiboot_info_t *info)
+uint32_t init_modules(const struct boot_info *boot)
 {
-    multiboot_module_t *mods;
     uint32_t i;
 
     k_memset(module_table, 0, sizeof(module_table));
     module_count = 0;
 
-    if (magic != MULTIBOOT_BOOTLOADER_MAGIC) {
-        klog(KLOG_ERR, "module", "refused: multiboot magic 0x%X", magic);
-        return 0;
-    }
-
-    if (!(info->flags & MULTIBOOT_INFO_MODS)) {
-        klog(KLOG_DEBUG, "module", "none: the loader set no module flag");
-        return 0;
-    }
-
-    if (info->mods_count == 0) {
+    if (boot->modules == 0) {
         klog(KLOG_DEBUG, "module", "none: the loader carried no module");
         return 0;
     }
@@ -58,30 +29,29 @@ uint32_t init_modules(multiboot_uint32_t magic, multiboot_info_t *info)
     /* The loader's view. `modules:` later says what the machine made of them,
        which is the line a person wants; two subsystems reporting the same
        count under near-identical names is what a boot log looked like. */
-    klog(KLOG_DEBUG, "module", "found %d", info->mods_count);
+    klog(KLOG_DEBUG, "module", "found %d", boot->modules_passed);
 
-    mods = (multiboot_module_t *)LOADER_PTR(info->mods_addr);
+    for (i = 0; i < boot->modules && i < MAX_MODULES; i++) {
+        const struct boot_module *bm = &boot->module[i];
+        module_info_t *mod = &module_table[i];
 
-    for (i = 0; i < info->mods_count && i < MAX_MODULES; i++) {
-        module_table[i].start = mods[i].mod_start;
-        module_table[i].end = mods[i].mod_end;
-        module_table[i].size = mods[i].mod_end - mods[i].mod_start;
-        module_table[i].phys = mods[i].mod_start;
-        module_table[i].cmdline =
-            (mods[i].cmdline != 0) ? (const char *)LOADER_PTR(mods[i].cmdline) : NULL;
+        mod->start = (uintptr_t)bm->start;
+        mod->end = (uintptr_t)bm->end;
+        mod->size = (uint32_t)(bm->end - bm->start);
+        mod->phys = (uint32_t)bm->start;
+        mod->cmdline = bm->cmdline;
 
         /* The empty brackets at the end of this line are a module with no
            command line, which is every module this loader is given. */
-        klog(KLOG_DEBUG, "module", "%d: 0x%X to 0x%X, %d bytes [%s]", i, module_table[i].start,
-             module_table[i].end, module_table[i].size,
-             module_table[i].cmdline ? module_table[i].cmdline : "");
+        klog(KLOG_DEBUG, "module", "%d: 0x%X to 0x%X, %d bytes [%s]", i, mod->start, mod->end,
+             mod->size, mod->cmdline ? mod->cmdline : "");
 
         module_count++;
     }
 
-    if (info->mods_count > MAX_MODULES) {
-        klog(KLOG_WARN, "module", "%d ignored: the table holds %d", info->mods_count - MAX_MODULES,
-             MAX_MODULES);
+    if (boot->modules_passed > boot->modules) {
+        klog(KLOG_WARN, "module", "%d ignored: the table holds %d",
+             boot->modules_passed - boot->modules, MAX_MODULES);
     }
 
     return module_count;

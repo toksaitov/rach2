@@ -4,6 +4,7 @@
 # devices only a PC has, wherever their subsystem keeps them.
 
 PC_C_SRC = sys/arch/x86/boot.c \
+    sys/arch/x86/mbinfo.c \
     sys/arch/x86/portio.c \
     sys/arch/x86/cpu.c \
     sys/arch/x86/cpuinfo.c \

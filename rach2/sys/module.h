@@ -3,12 +3,12 @@
 
 #include "lib/kint.h"
 #include "lib/kdef.h"
-#include "../vendor/multiboot.h"
+#include "boot.h"
 
 /* Policy: the boot modules recorded. A boot here passes one or two, the
  * root image and a second file system; what a loader passes past eight is
  * left unread, with a record saying how many. */
-#define MAX_MODULES 8
+#define MAX_MODULES BOOT_MODULE_MAX
 
 /* One boot module the bootloader handed us. */
 struct module_info {
@@ -29,8 +29,8 @@ extern module_info_t module_table[MAX_MODULES];
 /* Number of valid entries in `module_table`. */
 extern uint32_t module_count;
 
-/** Record the boot modules from Multiboot; returns the count recorded. */
-uint32_t init_modules(multiboot_uint32_t magic, multiboot_info_t *info);
+/** Record the boot modules of the boot record; returns the count recorded. */
+uint32_t init_modules(const struct boot_info *boot);
 
 /**
  * Return the module at `index`, or NULL if `index` is out of range.
