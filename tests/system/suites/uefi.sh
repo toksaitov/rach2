@@ -36,10 +36,14 @@
 #    table's sectors before the partition and the backup table at the disk's
 #    end are the same bytes after both installs.
 #
+# In the first boot the kernel's console is on the firmware's framebuffer,
+# and the screen QEMU dumps through its monitor, once the login prompt is
+# on the serial line, must show `rach2 login:` too, as the kernel's font
+# draws it: build/tests/system/screentext reads the console's cells off the
+# dump against that font.
+#
 # The kernel is the one ARCH names, i686 unless it is set, and the machine is
-# x86-64 QEMU for either. The row that reads one line of the framebuffer
-# console off QEMU's screen dump against the font is the framebuffer
-# console's, which comes with it.
+# x86-64 QEMU for either.
 #
 # Usage: uefi.sh <disk> <install-stick> <recovery-iso> <work-dir> <ssh-port>
 #            <demo-key>
@@ -47,6 +51,7 @@
 
 REPO=$(cd "$(dirname "$0")/../../.." && pwd)
 RUNUTIL="$REPO/build/tests/system/runutil"
+SCREENTEXT="$REPO/build/tests/system/screentext"
 # shellcheck source=tests/system/deadline.sh
 . "$REPO/tests/system/deadline.sh"
 # shellcheck source=tools/setup/ovmf_path.sh
@@ -157,11 +162,41 @@ booted_by_uefi() { # booted_by_uefi LOG WHAT
     grep -aq "BdsDxe: starting Boot.*$2" "$1"
 }
 
+# Ask the machine's monitor, on the pipes $DIR/monitor.in and .out, for a dump
+# of its screen into $1, and wait for the whole file: the PPM header and three
+# bytes a pixel.
+screen_dump() {
+    rm -f "$1"
+    printf 'screendump %s\n' "$1" > "$DIR/monitor.in"
+    tries=0
+    while :; do
+        if [ -s "$1" ]; then
+            size=$(wc -c < "$1" | tr -d ' ')
+            sleep 1 # interval: the dump is written whole by then, or still growing
+            [ "$(wc -c < "$1" | tr -d ' ')" = "$size" ] && return 0
+        fi
+        tries=$((tries + 1))
+        [ "$tries" -lt "$(scaled 30)" ] || return 1
+        sleep 1 # interval: the monitor takes the command between the guest's work
+    done
+}
+
 # ---- 1: the installed disk ----
 cp "$DISK" "$DIR/disk.img"
 LOG1="$DIR/disk.log"
-boot_uefi "$LOG1" -drive "file=$DIR/disk.img,format=raw,if=ide,index=0,media=disk"
+rm -f "$DIR/monitor.in" "$DIR/monitor.out"
+mkfifo "$DIR/monitor.in" "$DIR/monitor.out"
+boot_uefi "$LOG1" -monitor "pipe:$DIR/monitor" \
+    -drive "file=$DIR/disk.img,format=raw,if=ide,index=0,media=disk"
+cat "$DIR/monitor.out" > /dev/null &
+MONITOR_READER=$!
 if "$RUNUTIL" until "$LOG1" "rach2 login:" 240; then
+    if screen_dump "$DIR/screen.ppm" && "$SCREENTEXT" "$DIR/screen.ppm" > "$DIR/screen.txt" &&
+        grep -q '^rach2 login:' "$DIR/screen.txt"; then
+        note "and the framebuffer console shows the login prompt in the kernel's font: OK"
+    else
+        bad "the screen did not show 'rach2 login:' in the kernel's font; see $DIR/screen.txt"
+    fi
     if booted_by_uefi "$LOG1" "HARDDISK"; then
         note "the firmware boots the installed disk from its EFI system partition: OK"
     else
@@ -185,6 +220,9 @@ else
     bad "the installed disk never reached a login by UEFI; see $LOG1"
 fi
 stop_machine
+kill "$MONITOR_READER" 2>/dev/null || true
+wait "$MONITOR_READER" 2>/dev/null || true
+rm -f "$DIR/monitor.in" "$DIR/monitor.out"
 
 # ---- 2: the same disk's recovery entry ----
 # Armed the way grub-editenv arms it: next_entry set and every other line of

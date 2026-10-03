@@ -6,7 +6,7 @@
 # make would have to rebuild every one of them or silently use a stale one.
 #
 # What belongs here: the `run-NAME` target of every suite in tests/registry,
-# the disks, captures, logs and ports those suites write, the nine test tools
+# the disks, captures, logs and ports those suites write, the ten test tools
 # under build/tests/system/, and `prepare-all`, which is the union the pooled
 # runner builds once before it starts any suite.
 #
@@ -96,6 +96,10 @@ HARNESS         = build/tests/system/harness
 RUNTESTS        = build/tests/system/runtests
 PTYDRIVE        = build/tests/system/ptydrive
 RUNUTIL         = build/tests/system/runutil
+# The reader of a framebuffer console's text off QEMU's screen dump, which
+# the uefi suite runs (tests/system/runner/screentext.c), with the kernel's
+# own font compiled beside it.
+SCREENTEXT      = build/tests/system/screentext
 # The test-side disk tool, named here because a prerequisite list expands
 # its variables where it is read; its rule is with the suite that uses it.
 # The disk and stick tools and the sticks themselves are the product's, in
@@ -106,6 +110,9 @@ INSTALL_TEST_STICK = $(IMAGES_DIR)/install-test-stick.img
 # replacing coreutils' gtimeout. Built with the host compiler like the KRFFS
 # tools.
 $(DEADLINE): tests/system/runner/deadline.c
+	@mkdir -p $(dir $@)
+	$(HOST_LINK)
+$(SCREENTEXT): tests/system/runner/screentext.c rach2/sys/display/vga_font.c rach2/sys/display/vga_font.h
 	@mkdir -p $(dir $@)
 	$(HOST_LINK)
 # The capture checker (tests/system/checkers/pcapcheck.c): what the guest put on
@@ -189,7 +196,7 @@ components: harness-kernel busybox check-busybox check-dropbearmulti check-libc 
 
 prepare-images: $(DEMO_CREDS) $(BINFIND) $(DEADLINE) $(ELFCHECK) $(HARNESS) $(HOSTPEER) \
                 $(MKFIXTURE) $(MKGPT) $(MKMBR) $(PCAPCHECK) $(PTYDRIVE) $(RUNTESTS) $(RUNUTIL) \
-                $(SHA256TOOL) $(WAVCHECK) $(GROWSET) os-real-image os-simple-image \
+                $(SCREENTEXT) $(SHA256TOOL) $(WAVCHECK) $(GROWSET) os-real-image os-simple-image \
                 rach2-metal-image rach2-recovery-image $(SEALED_DISK) test-image \
                 $(INSTALL_STICK) $(INSTALL_TEST_STICK) $(INSTALLER_MBR_DISK)
 prepare-all: components
@@ -1602,7 +1609,7 @@ UEFI_DIR = $(IMAGES_DIR)/uefi
 UEFI_TEST_DISK = $(IMAGES_DIR)/uefi-test.disk
 UEFI_PORT = 2331
 run-uefi: $(DEMO_CREDS) rach2 utils krffs rach2-recovery $(RECOVERY_IMAGE) $(INSTALLER_EXT2) \
-          $(INSTALL_TEST_STICK) $(RECOVERY_ISO) $(RUNUTIL) $(DISK_TOOLS) $(MKGPT)
+          $(INSTALL_TEST_STICK) $(RECOVERY_ISO) $(RUNUTIL) $(SCREENTEXT) $(DISK_TOOLS) $(MKGPT)
 	@mkdir -p $(IMAGES_DIR)
 	RACH2_DISK_RECOVERY_MB=8 \
 	RACH2_DISK_EXT2_MB=64 \
