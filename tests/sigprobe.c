@@ -10,8 +10,9 @@
  *     terminates it (parent reaps WTERMSIG == SIGTERM);
  *   * a handler that writes a selector naming no descriptor into the saved
  *     `gs` of its own frame, which the kernel loads at ring 0 on the way
- *     back: the machine must survive it, since a process may not choose
- *     what the kernel loads;
+ *     back, or on x86-64 into the saved `cs` and `ss`, which `iretq` loads:
+ *     the machine must survive it, since a process may not choose what the
+ *     kernel loads;
  *   * a one-shot handler of `SA_RESETHAND`, which must run once on its signal;
  *   * a signal sent to a sleeping child, which must end that child's sleep
  *     where it lands and not at its deadline. What says which happened is
@@ -91,29 +92,19 @@ static void check(int cond, const char *msg)
 
 /**
  * The restorer trampoline, musl-style: when the handler returns to it, invoke
- * rt_sigreturn (173) to restore the interrupted context.
+ * rt_sigreturn to restore the interrupted context.
  */
 extern void sig_restorer(void);
-__asm__(".globl sig_restorer\n"
-        "sig_restorer:\n"
-        "    movl $173, %eax\n"
-        "    int $0x80\n");
+PROBE_RT_RESTORER(sig_restorer);
 
 static volatile int handler_ran;
 static volatile int handler_sig;
 static volatile int forge_ran;
 
-/* The saved `gs` in the Linux rt frame the kernel built for an SA_SIGINFO
- * handler: `&signo` is followed by the siginfo and ucontext pointers, and the
- * ucontext's `uc_mcontext` starts 20 bytes in with `gs` as its first word.
- * The restorer's rt_sigreturn reloads it from there. */
-#define SAVED_GS_FROM_ARG(argp) \
-    ((volatile unsigned *)(*(char *const *)((const char *)(argp) + 2 * 4) + 5 * 4))
-
 /* A selector with a ring-3 RPL whose index names no descriptor: the GDT has
- * seven entries, so index 8191 is past its limit. A kernel that loaded it
- * with `mov %ax, %gs` at ring 0 would take a general-protection fault in
- * kernel mode and panic. */
+ * a handful of entries, so index 8191 is past its limit. A kernel that loaded
+ * it with `mov %ax, %gs` at ring 0, or returned through it with `iretq`, would
+ * take a general-protection fault in kernel mode and panic. */
 #define BAD_SELECTOR 0xFFFFu
 
 static void usr1_handler(int sig)
@@ -122,12 +113,41 @@ static void usr1_handler(int sig)
     handler_sig = sig;
 }
 
+#if defined __x86_64__
+/* The saved `cs` and `ss` in the ucontext the kernel built for an SA_SIGINFO
+ * handler, its third argument: `uc_mcontext` starts 40 bytes in, and the
+ * selectors are at 144 and 150 in it. The restorer's rt_sigreturn returns
+ * through them with `iretq`. */
+#define SAVED_CS(uc) ((volatile unsigned short *)((char *)(uc) + 40 + 144))
+#define SAVED_SS(uc) ((volatile unsigned short *)((char *)(uc) + 40 + 150))
+
+static void forge_siginfo_handler(int sig, void *info, void *uc)
+{
+    forge_ran = 1;
+    (void)sig;
+    (void)info;
+    *SAVED_CS(uc) = BAD_SELECTOR;
+    *SAVED_SS(uc) = BAD_SELECTOR;
+}
+
+/* The handler as install takes it: a handler's own type, whose SA_SIGINFO
+ * call passes the other two arguments in RSI and RDX. */
+#define forge_handler ((void (*)(int))(void (*)(void))forge_siginfo_handler)
+#else
+/* The saved `gs` in the Linux rt frame the kernel built for an SA_SIGINFO
+ * handler: `&signo` is followed by the siginfo and ucontext pointers, and the
+ * ucontext's `uc_mcontext` starts 20 bytes in with `gs` as its first word.
+ * The restorer's rt_sigreturn reloads it from there. */
+#define SAVED_GS_FROM_ARG(argp) \
+    ((volatile unsigned *)(*(char *const *)((const char *)(argp) + 2 * 4) + 5 * 4))
+
 static void forge_handler(int sig)
 {
     forge_ran = 1;
     (void)sig;
     *SAVED_GS_FROM_ARG(&sig) = BAD_SELECTOR;
 }
+#endif
 
 static void install_with(int signo, void (*h)(int), unsigned long extra)
 {
@@ -226,7 +246,7 @@ static int asleep(int pid)
 /** Sleep `ms` milliseconds; returns what the call returned. */
 static int sleep_ms(int ms)
 {
-    int req[2];
+    long req[2];
 
     req[0] = ms / 1000;
     req[1] = (ms % 1000) * 1000000;
@@ -250,9 +270,9 @@ static void alarm_handler(int sig)
  * Arm the real-time timer for `value_ms` and then every `interval_ms`; `old`,
  * when it is not null, receives what the timer held.
  */
-static int itimer(int value_ms, int interval_ms, int *old)
+static int itimer(int value_ms, int interval_ms, long *old)
 {
-    int set[4];
+    long set[4];
 
     set[0] = interval_ms / 1000;
     set[1] = (interval_ms % 1000) * 1000;
@@ -264,7 +284,7 @@ static int itimer(int value_ms, int interval_ms, int *old)
 /** Whether the real-time timer reads as disarmed, all four fields zero. */
 static int itimer_disarmed(void)
 {
-    static int cur[4];
+    static long cur[4];
 
     return syscall2(SYS_GETITIMER, ITIMER_REAL, (long)cur) == 0 && cur[0] == 0 && cur[1] == 0 &&
            cur[2] == 0 && cur[3] == 0;
@@ -288,9 +308,9 @@ static int itimer_disarmed(void)
  */
 static void timer_rows(void)
 {
-    static int cur[4], old[4];
-    static const int bad[4] = {0, 0, 0, 1000000};
-    static const int second[4] = {0, 0, 1, 0};
+    static long cur[4], old[4];
+    static const long bad[4] = {0, 0, 0, 1000000};
+    static const long second[4] = {0, 0, 1, 0};
     unsigned alrm[2];
     int i, ended = 0, pid, status, before;
 
@@ -377,11 +397,12 @@ PROBE_START void _start(void)
     check(syscall3(SYS_WAITPID, pid, (long)&status, 0) == pid, "reap killed child");
     check((status & 0x7f) == SIGTERM, "child terminated by SIGTERM (WTERMSIG)");
 
-    /* 4. A forged selector in the frame the kernel restores. The return path
-       loads gs, fs, es and ds with `mov` while still at ring 0, so a
-       selector past the GDT's limit would fault the kernel and not the
-       process; the kernel must coerce it. Reaching the next statement at
-       all is the proof, since the alternative is a machine that stops. */
+    /* 4. A forged selector in the frame the kernel restores. The i386 return
+       path loads gs, fs, es and ds with `mov` while still at ring 0, and the
+       x86-64 one returns through cs and ss with `iretq`, so a selector past
+       the GDT's limit would fault the kernel and not the process; the kernel
+       must coerce it. Reaching the next statement at all is the proof, since
+       the alternative is a machine that stops. */
     install(SIGUSR1, forge_handler);
     forge_ran = 0;
     syscall2(SYS_KILL, syscall1(SYS_GETPID, 0), SIGUSR1);

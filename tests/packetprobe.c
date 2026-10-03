@@ -23,17 +23,7 @@ typedef unsigned char uint8_t;
 
 #define STDOUT_FILENO 1
 
-#define SC_GETSOCKNAME 6
-
 #define SIOCGIFHWADDR 0x8927
-
-#define SC_SOCKET     1
-#define SC_BIND       2
-#define SC_SENDTO     11
-#define SC_SETSOCKOPT 14
-#define SC_RECVFROM   12
-#define SC_RECVMSG    17
-#define SC_PING       0x1000
 
 #define AF_INET     2
 #define AF_PACKET   17
@@ -81,9 +71,9 @@ static void sys_exit(int status)
     __builtin_unreachable();
 }
 
-static int socketcall(int call, uint32_t *args)
+static int socketcall(int call, unsigned long *args)
 {
-    return syscall2(SYS_SOCKETCALL, (long)call, (long)args);
+    return (int)sock_call(call, args);
 }
 
 #define POLLIN 0x001
@@ -300,7 +290,7 @@ static uint8_t control[64];
 
 PROBE_START void _start(void)
 {
-    uint32_t args[6];
+    unsigned long args[6];
     struct sockaddr_ll_probe sll;
     struct sockaddr_ll_probe from_ll;
     struct iovec_probe iov;

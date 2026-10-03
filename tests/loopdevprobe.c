@@ -265,11 +265,7 @@ static void expect_file(const char *path, const char *want)
     }
 }
 
-__asm__(".global _start\n"
-        "_start:\n"
-        "   mov %esp, %eax\n"
-        "   push %eax\n"
-        "   call probe_main\n");
+PROBE_SP_ENTRY;
 
 /*
  * The pull row reads until the stick is not there any more; the hold is
@@ -332,7 +328,7 @@ static void set_fd_rows(const char *image, int index)
  */
 static void ioctl_rows(const char *image, const char *type)
 {
-    unsigned char config[304], info[232], first[512], sector[512], st[96];
+    unsigned char config[304], info[232], first[512], sector[512], st[KSTAT_SIZE];
     char node[] = "/dev/loop0";
     int ctl, index, file, dev, rc, i;
 
@@ -343,8 +339,10 @@ static void ioctl_rows(const char *image, const char *type)
     }
     syscall1(SYS_CLOSE, ctl);
     node[9] = (char)('0' + index);
-    if (syscall2(SYS_STAT, (long)node, (long)st) != 0 || (st[17] & 0xF0) != 0x60 || st[33] != 7 ||
-        st[32] != index) {
+    /* The mode's type bits, and the device number's major and minor in the
+       low two bytes of st_rdev, as Linux encodes them. */
+    if (syscall2(SYS_STAT, (long)node, (long)st) != 0 || (st[KSTAT_MODE + 1] & 0xF0) != 0x60 ||
+        st[KSTAT_RDEV + 1] != 7 || st[KSTAT_RDEV] != index) {
         fail("a loop device's node is not a block device of major 7");
     }
     file = syscall3(SYS_OPEN, (long)image, O_RDWR, 0);
@@ -387,7 +385,7 @@ static void ioctl_rows(const char *image, const char *type)
     set_fd_rows(image, index);
 }
 
-void probe_main(unsigned int *sp)
+void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];
     char **argv = (char **)(sp + 1);

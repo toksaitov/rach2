@@ -198,8 +198,8 @@ static int slurp(const char *path)
 static void sleep_ms(int ms)
 {
     struct {
-        int sec;
-        int nsec;
+        long sec;
+        long nsec;
     } ts;
 
     ts.sec = ms / 1000;
@@ -213,11 +213,11 @@ static int mount_at(const char *source, const char *type, int flags)
     return syscall5(SYS_MOUNT, (long)source, (long)MNT, (long)type, flags, 0);
 }
 
-/* stat's mode is at offset 16 of the kernel's stat64, which is the layout
-   the other probes read it at. S_IFBLK is 0060000. */
+/* stat's mode, at KSTAT_MODE in the kernel's stat, which is where the other
+   probes read it. S_IFBLK is 0060000. */
 static unsigned int mode_of(const char *path)
 {
-    static unsigned char st[144];
+    static unsigned char st[KSTAT_SIZE];
     int i;
 
     /* Cleared first, so a field the kernel does not fill reads as zero
@@ -228,8 +228,8 @@ static unsigned int mode_of(const char *path)
     if (syscall2(SYS_STAT, (long)path, (long)st) != 0) {
         return 0;
     }
-    return (unsigned int)st[16] | ((unsigned int)st[17] << 8) | ((unsigned int)st[18] << 16) |
-           ((unsigned int)st[19] << 24);
+    return (unsigned int)st[KSTAT_MODE] | ((unsigned int)st[KSTAT_MODE + 1] << 8) |
+           ((unsigned int)st[KSTAT_MODE + 2] << 16) | ((unsigned int)st[KSTAT_MODE + 3] << 24);
 }
 
 /** The number after `disks ` in /proc/usb, or -1 when there is no such line. */
@@ -581,8 +581,8 @@ static char big[32768];
 static void part_throughput(void)
 {
     struct {
-        int sec;
-        int nsec;
+        long sec;
+        long nsec;
     } before, after;
     int fd = syscall3(SYS_OPEN, (long)"/dev/disk0", O_RDONLY, 0);
     int total = 0;
@@ -838,15 +838,11 @@ static void part_luns(void)
     ok();
 }
 
-void probe_main(unsigned int *sp);
+void probe_main(unsigned long *sp);
 
-__asm__(".global _start\n"
-        "_start:\n"
-        "   mov %esp, %eax\n"
-        "   push %eax\n"
-        "   call probe_main\n");
+PROBE_SP_ENTRY;
 
-void probe_main(unsigned int *sp)
+void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];
     char **argv = (char **)(sp + 1);

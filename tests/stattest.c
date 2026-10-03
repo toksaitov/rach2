@@ -1,5 +1,7 @@
 /**
- * Exercises the file stat syscalls: sys_stat (106) and sys_stat64 (195).
+ * Exercises the file stat syscalls: sys_stat (106) and sys_stat64 (195) on
+ * i386, and stat (4), the only one, on x86-64, where the rows of the old
+ * narrow struct are not built.
  *
  * Each is checked against an existing file, the root directory, and a
  * nonexistent path, so both the success and the failure path are covered.
@@ -22,7 +24,6 @@ typedef unsigned long long ino64_t;
 
 #define STDOUT_FILENO 1
 
-/* Syscall numbers (32-bit Linux / Rach2 compatible) */
 #define AT_FDCWD (-100)
 
 /* File type bits from mode */
@@ -30,6 +31,7 @@ typedef unsigned long long ino64_t;
 #define S_IFREG 0100000
 #define S_IFDIR 0040000
 
+#if !defined __x86_64__
 /* 32-bit Linux stat (used by ISH), filled by sys_stat (syscall 106). */
 struct stat {
     unsigned long st_dev;
@@ -75,6 +77,37 @@ struct stat64 {
     unsigned long long st_ino;
 };
 
+/* The 32-bit inode number stat64 has beside the 64-bit one. */
+#define OLD_INO(s) ((s).__st_ino)
+#define WIDE_CALL  "stat64 (syscall 195)"
+#else
+/* x86-64's stat, filled by stat (syscall 4), under the name the i386 rows
+ * give the wide struct; it has no second inode number. */
+struct stat64 {
+    unsigned long st_dev;
+    unsigned long st_ino;
+    unsigned long st_nlink;
+    unsigned int st_mode;
+    unsigned int st_uid;
+    unsigned int st_gid;
+    unsigned int __pad0;
+    unsigned long st_rdev;
+    long st_size;
+    long st_blksize;
+    long st_blocks;
+    unsigned long st_atime;
+    unsigned long st_atime_nsec;
+    unsigned long st_mtime;
+    unsigned long st_mtime_nsec;
+    unsigned long st_ctime;
+    unsigned long st_ctime_nsec;
+    long __unused[3];
+};
+
+#define OLD_INO(s) ((s).st_ino)
+#define WIDE_CALL  "stat (syscall 4)"
+#endif
+
 static int sys_write(int fd, const void *buf, size_t count)
 {
     return syscall3(SYS_WRITE, (long)fd, (long)buf, (long)count);
@@ -86,20 +119,22 @@ static void sys_exit(int status)
     __builtin_unreachable();
 }
 
+#if !defined __x86_64__
 static int sys_stat(const char *path, struct stat *buf)
 {
     return syscall2(SYS_OLDSTAT, (long)path, (long)buf);
 }
+#endif
 
-static int sys_call3(int nr, int a, int b, int c)
+static int sys_call3(int nr, long a, long b, long c)
 {
-    return syscall3(nr, (long)a, (long)b, (long)c);
+    return syscall3(nr, a, b, c);
 }
 
 /** Make a four-argument system call, for utimensat and fstatat64. */
-static int sys_call4(int nr, int a, int b, int c, int d)
+static int sys_call4(int nr, long a, long b, long c, long d)
 {
-    return syscall4(nr, (long)a, (long)b, (long)c, (long)d);
+    return syscall4(nr, a, b, c, d);
 }
 
 /* Make DIR and a file NAME inside it; 0 on success. */
@@ -107,14 +142,14 @@ static int make_in(const char *dir, const char *file)
 {
     int fd;
 
-    if (sys_call3(39, (long)dir, 0755, 0) < 0) { /* mkdir */
+    if (sys_call3(SYS_MKDIR, (long)dir, 0755, 0) < 0) {
         return -1;
     }
-    fd = sys_call3(5, (long)file, 0101, 0644); /* open O_WRONLY|O_CREAT */
+    fd = sys_call3(SYS_OPEN, (long)file, 0101, 0644); /* open O_WRONLY|O_CREAT */
     if (fd < 0) {
         return -1;
     }
-    return sys_call3(6, fd, 0, 0) < 0 ? -1 : 0; /* close */
+    return sys_call3(SYS_CLOSE, fd, 0, 0) < 0 ? -1 : 0;
 }
 
 static int sys_stat64(const char *path, struct stat64 *buf)
@@ -193,11 +228,15 @@ static void same_name_rows(int *passed, int *failed)
     print("Test C1: /statc1/k and /statc2/k have different inode numbers... ");
     if (make_in("/statc1", "/statc1/k") == 0 && make_in("/statc2", "/statc2/k") == 0) {
         struct stat64 one, two;
+        int old_ok = 1;
+#if !defined __x86_64__
         struct stat oneb, twob;
 
-        if (sys_stat64("/statc1/k", &one) == 0 && sys_stat64("/statc2/k", &two) == 0 &&
-            sys_stat("/statc1/k", &oneb) == 0 && sys_stat("/statc2/k", &twob) == 0 &&
-            one.st_ino != two.st_ino && oneb.st_ino != twob.st_ino) {
+        old_ok = sys_stat("/statc1/k", &oneb) == 0 && sys_stat("/statc2/k", &twob) == 0 &&
+                 oneb.st_ino != twob.st_ino;
+#endif
+        if (old_ok && sys_stat64("/statc1/k", &one) == 0 && sys_stat64("/statc2/k", &two) == 0 &&
+            one.st_ino != two.st_ino) {
             puts("OK");
             (*passed)++;
         } else {
@@ -220,19 +259,23 @@ static void root_ino_rows(int *passed, int *failed)
     const char *paths[] = {"/", "/statroot/.."};
     unsigned int i;
 
-    if (sys_call3(39, (long)"/statroot", 0755, 0) < 0) { /* mkdir */
+    if (sys_call3(SYS_MKDIR, (long)"/statroot", 0755, 0) < 0) {
         puts("Root inode through stat and stat64: FAILED (/statroot could not be made)");
         (*failed)++;
         return;
     }
     for (i = 0; i < sizeof(paths) / sizeof(paths[0]); i++) {
-        struct stat old;
         struct stat64 wide;
+        int old_ok = 1;
+#if !defined __x86_64__
+        struct stat old;
 
+        old_ok =
+            sys_stat(paths[i], &old) == 0 && old.st_ino == 1 && (old.st_mode & S_IFMT) == S_IFDIR;
+#endif
         print("Root inode through stat and stat64: ");
         print(paths[i]);
-        if (sys_stat(paths[i], &old) == 0 && sys_stat64(paths[i], &wide) == 0 && old.st_ino == 1 &&
-            wide.st_ino == 1 && wide.__st_ino == 1 && (old.st_mode & S_IFMT) == S_IFDIR &&
+        if (old_ok && sys_stat64(paths[i], &wide) == 0 && wide.st_ino == 1 && OLD_INO(wide) == 1 &&
             (wide.st_mode & S_IFMT) == S_IFDIR) {
             puts(" OK");
             (*passed)++;
@@ -243,12 +286,12 @@ static void root_ino_rows(int *passed, int *failed)
     }
     {
         struct stat64 byfd, byat;
-        int fd = sys_call3(5, (long)"/", 0, 0); /* open O_RDONLY */
+        int fd = sys_call3(SYS_OPEN, (long)"/", 0, 0); /* open O_RDONLY */
 
         print("Root inode through fstat64 and fstatat64: ");
         if (fd >= 0 && sys_call3(SYS_FSTAT, fd, (long)&byfd, 0) == 0 &&
             sys_call4(SYS_FSTATAT, AT_FDCWD, (long)"/", (long)&byat, 0) == 0 && byfd.st_ino == 1 &&
-            byfd.__st_ino == 1 && byat.st_ino == 1 && byat.__st_ino == 1 &&
+            OLD_INO(byfd) == 1 && byat.st_ino == 1 && OLD_INO(byat) == 1 &&
             (byfd.st_mode & S_IFMT) == S_IFDIR && (byat.st_mode & S_IFMT) == S_IFDIR) {
             puts("OK");
             (*passed)++;
@@ -257,7 +300,7 @@ static void root_ino_rows(int *passed, int *failed)
             (*failed)++;
         }
         if (fd >= 0) {
-            sys_call3(6, fd, 0, 0);
+            sys_call3(SYS_CLOSE, fd, 0, 0);
         }
     }
 }
@@ -294,8 +337,8 @@ static int time_rows(void)
     int ok = 1;
     int fine = 0;
 
-    fd[0] = sys_call3(5, (long)paths[0], 0101, 0644);
-    fd[1] = sys_call3(5, (long)paths[1], 0101, 0644);
+    fd[0] = sys_call3(SYS_OPEN, (long)paths[0], 0101, 0644);
+    fd[1] = sys_call3(SYS_OPEN, (long)paths[1], 0101, 0644);
     if (fd[0] < 0 || fd[1] < 0) {
         ok = 0;
     } else {
@@ -307,14 +350,14 @@ static int time_rows(void)
             previous = next;
         }
         for (i = 0; ok && i < 50; i++) {
-            ok = sys_call4(320, -100, (long)paths[i % 2], 0, 0) == 0 &&
+            ok = sys_call4(SYS_UTIMENSAT, -100, (long)paths[i % 2], 0, 0) == 0 &&
                  sys_stat64(paths[i % 2], &next) == 0 && time_not_before(&next, &previous);
             fine = fine || below_tick(&next);
             previous = next;
         }
         ok = ok && fine;
         if (ok) {
-            ok = sys_call4(320, -100, (long)paths[0], (long)times, 0) == 0 &&
+            ok = sys_call4(SYS_UTIMENSAT, -100, (long)paths[0], (long)times, 0) == 0 &&
                  sys_stat64(paths[0], &next) == 0 && next.st_atime == 1234567890u &&
                  next.st_atime_nsec == 0 && next.st_mtime == 1234567890u &&
                  next.st_mtime_nsec == 123456789u;
@@ -322,9 +365,9 @@ static int time_rows(void)
     }
     for (i = 0; i < 2; i++) {
         if (fd[i] >= 0) {
-            sys_call3(6, fd[i], 0, 0);
+            sys_call3(SYS_CLOSE, fd[i], 0, 0);
         }
-        sys_call3(10, (long)paths[i], 0, 0);
+        sys_call3(SYS_UNLINK, (long)paths[i], 0, 0);
     }
     puts(ok ? "STATTIME OK: two writes, fifty stamps, explicit fractions"
             : "STATTIME FAIL: two writes, fifty stamps, explicit fractions");
@@ -334,11 +377,13 @@ static int time_rows(void)
 /**
  * Entry point: runs the stat64 (195) probes in part A, the stat (106) probes
  * in part B, then the inode and time rows, and exits 0 only if every row
- * passed.
+ * passed. On x86-64 part A is stat (4) and there is no part B.
  */
 PROBE_START void _start(void)
 {
+#if !defined __x86_64__
     struct stat st;
+#endif
     struct stat64 st64;
     int result;
     int passed = 0;
@@ -348,7 +393,7 @@ PROBE_START void _start(void)
     puts("");
 
     /* ===== Part A: stat64 (syscall 195) tests ===== */
-    puts("=== Part A: stat64 (syscall 195) ===");
+    puts("=== Part A: " WIDE_CALL " ===");
     puts("");
 
     /* Test A1: stat64 existing file */
@@ -414,6 +459,7 @@ PROBE_START void _start(void)
 
     puts("");
 
+#if !defined __x86_64__
     /* ===== Part B: stat (syscall 106) tests ===== */
     puts("=== Part B: stat (syscall 106) ===");
     puts("");
@@ -496,6 +542,7 @@ PROBE_START void _start(void)
     }
 
     puts("");
+#endif
 
     same_name_rows(&passed, &failed);
     root_ino_rows(&passed, &failed);

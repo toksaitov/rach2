@@ -112,16 +112,12 @@ static unsigned char pattern_byte(unsigned i)
 
 #define PATTERN_BYTES 65536u
 
-/* stat64's fields, at the offsets the kernel writes them. */
-#define ST_MODE_OFF 16
-#define ST_SIZE_OFF 44
-
 static unsigned stat_mode(const char *path, unsigned char *st)
 {
     if (syscall2(SYS_STAT, (long)path, (long)st) != 0) {
         fail("stat");
     }
-    return *(unsigned *)(st + ST_MODE_OFF);
+    return *(unsigned *)(st + KSTAT_MODE);
 }
 
 /**
@@ -217,8 +213,8 @@ static void read_rows(void)
     if ((mode & 0170000u) != 0100000u) {
         fail_with("/k/pattern.bin is not a regular file", (int)mode);
     }
-    if (*(unsigned *)(st + ST_SIZE_OFF) != PATTERN_BYTES) {
-        fail_with("the size stat reports", (int)*(unsigned *)(st + ST_SIZE_OFF));
+    if (*(unsigned *)(st + KSTAT_SIZE_AT) != PATTERN_BYTES) {
+        fail_with("the size stat reports", (int)*(unsigned *)(st + KSTAT_SIZE_AT));
     }
 
     /* The names, through getdents. */
@@ -433,7 +429,7 @@ static void write_rows(void)
     }
     syscall1(SYS_CLOSE, fd);
     if (syscall2(SYS_STAT, (long)"/k/grown.bin", (long)st) != 0 ||
-        *(unsigned *)(st + ST_SIZE_OFF) != 4000) {
+        *(unsigned *)(st + KSTAT_SIZE_AT) != 4000) {
         fail("the size after a truncate");
     }
 
@@ -683,9 +679,9 @@ static void write_rows(void)
         if (syscall2(SYS_STAT, (long)"/k/cut.bin", (long)st) != 0) {
             fail("stat after a grow through ftruncate");
         }
-        if (*(unsigned *)(st + ST_SIZE_OFF) != 8192) {
+        if (*(unsigned *)(st + KSTAT_SIZE_AT) != 8192) {
             fail_with("the size after a grow through ftruncate",
-                      (int)*(unsigned *)(st + ST_SIZE_OFF));
+                      (int)*(unsigned *)(st + KSTAT_SIZE_AT));
         }
         n = syscall3(SYS_READ, two, (long)got, (int)sizeof(got));
         if (n != (int)sizeof(got)) {
@@ -778,7 +774,7 @@ static void readback_rows(void)
 
     read_pattern("/k/written.bin", 20000);
     if (syscall2(SYS_STAT, (long)"/k/grown.bin", (long)st) != 0 ||
-        *(unsigned *)(st + ST_SIZE_OFF) != 4000) {
+        *(unsigned *)(st + KSTAT_SIZE_AT) != 4000) {
         fail("the truncated file's size after a reboot");
     }
     if ((stat_mode("/k/written.bin", st) & 07777) != 0600) {
@@ -806,7 +802,7 @@ static void readback_rows(void)
         syscall1(SYS_CLOSE, fd2);
     }
     if (syscall2(SYS_STAT, (long)"/k/cut.bin", (long)st) != 0 ||
-        *(unsigned *)(st + ST_SIZE_OFF) != 8192) {
+        *(unsigned *)(st + KSTAT_SIZE_AT) != 8192) {
         fail("the size of the file grown by truncation after a reboot");
     }
     fd = syscall3(SYS_OPEN, (long)"/k/made/inside", O_RDONLY, 0);
@@ -833,18 +829,14 @@ static void readback_rows(void)
     }
 }
 
-__asm__(".global _start\n"
-        "_start:\n"
-        "   mov %esp, %eax\n"
-        "   push %eax\n"
-        "   call probe_main\n");
+PROBE_SP_ENTRY;
 
 /*
  * The pull row writes until the stick is not there any more, then once
  * more; `KRFFSPROBE HOLDING` is said after the first write, so the pull the
  * suite makes on the word lands on a process writing.
  */
-void probe_main(unsigned int *sp)
+void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];
     char **argv = (char **)(sp + 1);

@@ -46,11 +46,11 @@ static void done(int code)
 }
 
 /* Find AT_SECURE by walking past argv and envp to the auxv on the initial
- * stack, exactly as a C runtime would. */
-static u32 at_secure(u32 *sp)
+ * stack, exactly as a C runtime would; each is a word of a long's width. */
+static u32 at_secure(unsigned long *sp)
 {
     int argc = (int)sp[0];
-    u32 *p = sp + 1 + argc + 1; /* skip argc, argv[], the argv NULL */
+    unsigned long *p = sp + 1 + argc + 1; /* skip argc, argv[], the argv NULL */
 
     while (*p) {
         p++; /* skip envp[] */
@@ -59,22 +59,18 @@ static u32 at_secure(u32 *sp)
 
     while (p[0] != AT_NULL) {
         if (p[0] == AT_SECURE) {
-            return p[1];
+            return (u32)p[1];
         }
         p += 2;
     }
     return 0;
 }
 
-void probe_main(u32 *sp);
+void probe_main(unsigned long *sp);
 
-__asm__(".global _start\n"
-        "_start:\n"
-        "   mov %esp, %eax\n"
-        "   push %eax\n"
-        "   call probe_main\n");
+PROBE_SP_ENTRY;
 
-void probe_main(u32 *sp)
+void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];
     char **argv = (char **)(sp + 1);

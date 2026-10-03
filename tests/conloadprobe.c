@@ -125,7 +125,7 @@ static void fail(const char *why)
 
 static void sleep_ms(int ms)
 {
-    int ts[2];
+    long ts[2];
 
     ts[0] = ms / 1000;
     ts[1] = (ms % 1000) * 1000000;
@@ -134,7 +134,7 @@ static void sleep_ms(int ms)
 
 static unsigned now_ms(void)
 {
-    int tv[2];
+    long tv[2];
 
     tv[0] = tv[1] = 0;
     syscall2(SYS_GETTIMEOFDAY, (long)tv, 0);
@@ -440,15 +440,11 @@ static void require(int good, int count, const char *stage)
     sys_exit(1);
 }
 
-void probe_main(unsigned int *sp);
+void probe_main(unsigned long *sp);
 
-__asm__(".global _start\n"
-        "_start:\n"
-        "   mov %esp, %eax\n"
-        "   push %eax\n"
-        "   call probe_main\n");
+PROBE_SP_ENTRY;
 
-void probe_main(unsigned int *sp)
+void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];
     char **argv = (char **)(sp + 1);

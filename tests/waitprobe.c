@@ -33,10 +33,8 @@
 #define SIGUSR1 10
 #define EINTR   4
 
-#define SC_SOCKET   1
-#define SC_RECVFROM 12
-#define AF_INET     2
-#define SOCK_DGRAM  2
+#define AF_INET    2
+#define SOCK_DGRAM 2
 
 #define HELLO "/hello.txt" /* staged "hello, world\n" */
 
@@ -127,13 +125,10 @@ static int sleeping(int pid)
 
 /**
  * Signal restorer trampoline: the handler returns here, which invokes
- * rt_sigreturn (173) to restore the interrupted context (musl's __restore_rt).
+ * rt_sigreturn to restore the interrupted context (musl's __restore_rt).
  */
 extern void sig_restorer(void);
-__asm__(".globl sig_restorer\n"
-        "sig_restorer:\n"
-        "    movl $173, %eax\n"
-        "    int $0x80\n");
+PROBE_RT_RESTORER(sig_restorer);
 
 struct k_sigaction {
     void (*handler)(int);
@@ -175,7 +170,7 @@ static void eintr_child(void)
     args[0] = AF_INET;
     args[1] = SOCK_DGRAM;
     args[2] = 0;
-    sfd = syscall2(SYS_SOCKETCALL, SC_SOCKET, (long)args);
+    sfd = sock_call(SC_SOCKET, args);
     if (sfd < 0) {
         sys_exit(3);
     }
@@ -187,7 +182,7 @@ static void eintr_child(void)
     args[3] = 0; /* flags */
     args[4] = 0;
     args[5] = 0;
-    rc = syscall2(SYS_SOCKETCALL, SC_RECVFROM, (long)args);
+    rc = sock_call(SC_RECVFROM, args);
 
     /* Expect -EINTR, and the handler must have run. */
     sys_exit((rc == -EINTR && got_usr1) ? 0 : 1);
@@ -232,8 +227,8 @@ PROBE_START void _start(void)
     } else {
         /* Signal the child once it is seen asleep in its recvfrom. */
         struct {
-            int tv_sec;
-            int tv_nsec;
+            long tv_sec;
+            long tv_nsec;
         } ts;
         int tries;
 

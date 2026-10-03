@@ -32,19 +32,11 @@ static void sys_exit(int status)
     __builtin_unreachable();
 }
 
-/** mmap2 anonymous; addr=0, fd=-1, pgoffset=0 (in %ebp, saved/restored). */
-static unsigned sys_mmap2_anon(unsigned len, int prot)
+/** An anonymous mapping of `len` bytes with `prot`; its address, or a
+ * negated errno. */
+static long mmap_anon(long len, int prot)
 {
-    unsigned result;
-    __asm__ __volatile__("push %%ebp\n\t"
-                         "xor %%ebp, %%ebp\n\t"
-                         "int $0x80\n\t"
-                         "pop %%ebp\n\t"
-                         : "=a"(result)
-                         : "0"(SYS_MMAP2), "b"(0), "c"(len), "d"(prot),
-                           "S"(MAP_PRIVATE | MAP_ANONYMOUS), "D"(-1)
-                         : "memory");
-    return result;
+    return probe_mmap(0, len, prot, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 }
 
 static size_t strlen(const char *s)
@@ -64,10 +56,10 @@ static void puts(const char *s)
 
 PROBE_START void _start(void)
 {
-    unsigned p = sys_mmap2_anon(PAGE, PROT_READ);
+    long p = mmap_anon(PAGE, PROT_READ);
     volatile unsigned char *ro = (volatile unsigned char *)p;
 
-    if (p >= 0xFFFFF001u) {
+    if (sys_failed(p)) {
         puts("vmro: ERROR mmap PROT_READ failed");
         sys_exit(1);
     }

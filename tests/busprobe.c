@@ -138,15 +138,11 @@ static void mount_write(const char *node, const char *at, const char *name, cons
     }
 }
 
-void probe_main(unsigned int *sp);
+void probe_main(unsigned long *sp);
 
-__asm__(".global _start\n"
-        "_start:\n"
-        "   mov %esp, %eax\n"
-        "   push %eax\n"
-        "   call probe_main\n");
+PROBE_SP_ENTRY;
 
-void probe_main(unsigned int *sp)
+void probe_main(unsigned long *sp)
 {
     static char text[8192];
     int argc = (int)sp[0];

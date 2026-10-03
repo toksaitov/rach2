@@ -13,9 +13,9 @@
 static const char *row;
 
 /** Make a direct i386 system call. */
-static int call(int n, int a, int b, int c)
+static int call(int n, long a, long b, long c)
 {
-    return syscall3(n, (long)a, (long)b, (long)c);
+    return syscall3(n, a, b, c);
 }
 
 /** Write one string to the serial console. */
@@ -76,7 +76,7 @@ static void wait_parent(int parent)
 {
     char path[40], buf[256];
     int fd, n, i;
-    int nap[2] = {0, 1000000};
+    long nap[2] = {0, 1000000};
     proc_path(path, parent);
     for (;;) {
         fd = call(SYS_OPEN, (long)path, 0, 0);
@@ -184,12 +184,23 @@ static int run_row(int mode, int timeout)
     return ok;
 }
 
-/** Write a complete ELF32 header with no program header bytes after it. */
+/**
+ * Write a complete ELF header of the architecture's class with no program
+ * header bytes after it: ELF32 i386, entry 0x08048000, or ELF64 x86-64,
+ * entry 0x400000, each with one program header named at the header's end.
+ */
 static int fixture(void)
 {
+#if defined __x86_64__
+    static const unsigned char header[64] = {
+        0x7f, 'E', 'L', 'F', 2,    1, 1, 0, 0,  0, 0,  0, 0, 0, 0, 0, 2, 0, 62, 0, 1, 0,
+        0,    0,   0,   0,   0x40, 0, 0, 0, 0,  0, 64, 0, 0, 0, 0, 0, 0, 0, 0,  0, 0, 0,
+        0,    0,   0,   0,   0,    0, 0, 0, 64, 0, 56, 0, 1, 0, 0, 0, 0, 0, 0,  0};
+#else
     static const unsigned char header[52] = {
         0x7f, 'E', 'L', 'F', 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0,  0, 2,  0, 3, 0, 1, 0, 0, 0, 0, 0x80,
         4,    8,   52,  0,   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 52, 0, 32, 0, 1, 0, 0, 0, 0, 0, 0, 0};
+#endif
     int fd, ok;
     call(SYS_MKDIR, (long)"/exit-cwd", 0700, 0);
     fd = call(SYS_OPEN, (long)"/exit-bad", 01101, 0700);
@@ -199,7 +210,7 @@ static int fixture(void)
 }
 
 /** Run all rows or one selected row, with a bound in milliseconds. */
-void probe_main(unsigned int *sp)
+void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0], first = 0, last = 2, timeout = 5000, i;
     char **argv = (char **)(sp + 1);
@@ -232,8 +243,5 @@ void probe_main(unsigned int *sp)
     die(0);
 }
 
-/** Pass the initial i386 stack before a C prologue changes ESP. */
-__asm__(".global _start\n"
-        "_start:\n"
-        "    pushl %esp\n"
-        "    call probe_main\n");
+/** Pass the initial stack before a C prologue changes the stack pointer. */
+PROBE_SP_ENTRY;

@@ -115,9 +115,6 @@ typedef unsigned int u32;
 #define R_OK     4
 #define AT_FDCWD (-100)
 
-/* i386 struct stat64: the 32-bit mode field is at offset 16. */
-#define ST_MODE 16
-
 /* Linux wait-status decode: a normal exit has the low 7 bits clear and the
  * code in bits 8-15; a signal death has the signal in the low 7 bits. */
 #define WIFEXITED(s)   (((s) & 0x7F) == 0)
@@ -285,13 +282,16 @@ static int stat_rc(const char *path)
     return syscall3(SYS_STAT, (long)path, (long)statbuf, 0);
 }
 
+#if !defined __x86_64__
 /* The legacy stat(2) (106), which has its own resolve site. musl builds on
  * stat64, so nothing but a freestanding caller reaches this one, and a mutation
- * that collapsed its walk error went uncaught until this case existed. */
+ * that collapsed its walk error went uncaught until this case existed. x86-64
+ * has no such call, and its rows are i686's alone. */
 static int old_stat_rc(const char *path)
 {
     return syscall3(SYS_OLDSTAT, (long)path, (long)statbuf, 0);
 }
+#endif
 
 /* fstatat64's own answer, the *at form of the same question. */
 static int fstatat_rc(int dirfd, const char *path)
@@ -307,7 +307,7 @@ static u32 stat_mode(const char *path)
     if (rc != 0) {
         fail("stat64 of a fixture", rc);
     }
-    return *(u32 *)(statbuf + ST_MODE) & 07777u;
+    return *(u32 *)(statbuf + KSTAT_MODE) & 07777u;
 }
 
 static void want_mode(const char *step, const char *path, u32 mode)
@@ -383,7 +383,9 @@ static void baseline_child(void)
     want_ok("baseline: open the one-level leaf", open_ro(LEAF));
     want_ok("baseline: open the two-level leaf", open_ro(DEEP_LEAF));
     want_eq("baseline: stat the two-level leaf", stat_rc(DEEP_LEAF), 0);
+#if !defined __x86_64__
     want_eq("baseline: legacy stat the one-level leaf", old_stat_rc(LEAF), 0);
+#endif
     want_eq("baseline: fstatat the two-level leaf", fstatat_rc(AT_FDCWD, DEEP_LEAF), 0);
     want_eq("baseline: access the one-level leaf", syscall3(SYS_ACCESS, (long)LEAF, R_OK, 0), 0);
     want_eq("baseline: faccessat the two-level leaf",
@@ -469,8 +471,10 @@ static void denied_child(void)
     want_eq("denied: open a missing two-level name", open_ro(DEEP_NOSUCH), -EACCES);
     want_eq("denied: stat the one-level leaf", stat_rc(LEAF), -EACCES);
     want_eq("denied: stat a missing name", stat_rc(NOSUCH), -EACCES);
+#if !defined __x86_64__
     want_eq("denied: legacy stat the one-level leaf", old_stat_rc(LEAF), -EACCES);
     want_eq("denied: legacy stat a missing name", old_stat_rc(NOSUCH), -EACCES);
+#endif
     want_eq("denied: fstatat the two-level leaf", fstatat_rc(AT_FDCWD, DEEP_LEAF), -EACCES);
     want_eq("denied: access the one-level leaf", syscall3(SYS_ACCESS, (long)LEAF, R_OK, 0),
             -EACCES);

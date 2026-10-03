@@ -44,14 +44,14 @@
 #define S_IFDIR 0040000
 
 /*
- * fstat64/fstatat64 fill a Linux i386 stat64 image (the kernel's struct
- * linux_stat64, 96 bytes). The probe only checks two fields, read straight from
- * the buffer at their ABI byte offsets: st_mode is a 32-bit field at +16, and
- * st_size's low 32 bits sit at +44.
+ * fstat and fstatat fill the kernel's stat image, i386's stat64 or x86-64's
+ * stat. The probe only checks two fields, read straight from the buffer at
+ * their ABI byte offsets (probe.h): st_mode, a 32-bit field, and st_size's
+ * low 32 bits.
  */
-#define STAT64_SIZE       96
-#define STAT64_MODE(b)    (*(unsigned int *)((b) + 16))
-#define STAT64_SIZE_LO(b) (*(unsigned int *)((b) + 44))
+#define STAT64_SIZE       KSTAT_SIZE
+#define STAT64_MODE(b)    (*(unsigned int *)((b) + KSTAT_MODE))
+#define STAT64_SIZE_LO(b) (*(unsigned int *)((b) + KSTAT_SIZE_AT))
 
 static void sys_exit(int status)
 {
@@ -282,8 +282,8 @@ PROBE_START void _start(void)
 
         /* _llseek SEEK_SET to offset 1; the result offset must come back
          * as 1. */
-        check(syscall5(SYS_LLSEEK, fd, 0, 1, (long)&result, 0) == 0, "_llseek /g");
-        check(result == 1, "_llseek result offset is 1");
+        check(probe_llseek(fd, 1, 0, &result) == 0, LLSEEK_NAME " /g");
+        check(result == 1, LLSEEK_NAME " result offset is 1");
         check(sys_read(fd, &c, 1) == 1 && c == 'e', "read byte after seek is 'e'");
 
         /* FD_CLOEXEC round-trip through fcntl64. */
@@ -322,7 +322,7 @@ PROBE_START void _start(void)
         fd = syscall3(SYS_OPENAT, AT_FDCWD, (long)"/g", O_WRONLY | O_APPEND);
         check(fd >= 0, "openat /g O_APPEND");
         if (fd >= 0) {
-            syscall5(SYS_LLSEEK, fd, 0, 0, (long)&result, 0); /* SEEK_SET 0 */
+            probe_llseek(fd, 0, 0, &result); /* SEEK_SET 0 */
             check(sys_write(fd, "!", 1) == 1, "append write /g");
             syscall1(SYS_CLOSE, fd);
         }

@@ -255,13 +255,9 @@ static int count_lines(int len)
     return lines;
 }
 
-void probe_main(unsigned int *sp);
+void probe_main(unsigned long *sp);
 
-__asm__(".global _start\n"
-        "_start:\n"
-        "   mov %esp, %eax\n"
-        "   push %eax\n"
-        "   call probe_main\n");
+PROBE_SP_ENTRY;
 
 /**
  * The probe: read the USB device table and say what it lists. With an
@@ -269,7 +265,7 @@ __asm__(".global _start\n"
  * be configuring them, so the file is read again until it lists that many,
  * a bounded number of times, and the count is said.
  */
-void probe_main(unsigned int *sp)
+void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];
     char **argv = (char **)(sp + 1);
@@ -288,7 +284,7 @@ void probe_main(unsigned int *sp)
         int tries;
 
         for (tries = 0; count_lines(len) < want && tries < 600; tries++) {
-            static const int pause[2] = {0, 100000000};
+            static const long pause[2] = {0, 100000000};
 
             syscall3(SYS_NANOSLEEP, (long)pause, 0, 0);
             len = read_usb();

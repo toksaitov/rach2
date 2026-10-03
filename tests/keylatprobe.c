@@ -61,13 +61,9 @@ static void puts(const char *s)
    loop inside one system call that the service point must break. */
 static unsigned char random_buf[8u << 20];
 
-__asm__(".global _start\n"
-        "_start:\n"
-        "   mov %esp, %eax\n"
-        "   push %eax\n"
-        "   call probe_main\n");
+PROBE_SP_ENTRY;
 
-void probe_main(unsigned *sp)
+void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];
     char **argv = (char **)(sp + 1);

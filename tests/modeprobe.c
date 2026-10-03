@@ -74,18 +74,6 @@ typedef unsigned int u32;
 /* The chown sentinel that keeps a field: (uid_t)-1 as an unsigned word. */
 #define KEEP 0xFFFFFFFFu
 
-/* i386 struct stat64: the 32-bit mode field is at offset 16, and the 64-bit
- * size at 44. Only the low word of the size is read; a KRFFS file cannot reach
- * 4 GB, so the high word is always zero. */
-#define ST_MODE       16
-#define ST_SIZE       44
-#define ST_UID        24
-#define ST_GID        28
-#define ST_MTIME      72
-#define ST_MTIME_NSEC 76
-#define ST_CTIME      80
-#define ST_CTIME_NSEC 84
-
 #define EPERM 1
 
 /* Linux wait-status decode: a normal exit has the low 7 bits clear and the
@@ -213,7 +201,7 @@ static void want_ok(const char *step, int got)
 }
 
 /* The one stat64 buffer: the kernel writes it, the readers below read it. */
-static char statbuf[144];
+static char statbuf[KSTAT_SIZE];
 
 static void stat_path(const char *path)
 {
@@ -232,7 +220,7 @@ static void want_mode(const char *step, const char *path, u32 mode)
     u32 got;
 
     stat_path(path);
-    got = *(u32 *)(statbuf + ST_MODE) & 07777u;
+    got = *(u32 *)(statbuf + KSTAT_MODE) & 07777u;
     if (got != mode) {
         puts_("MODEPROBE FAIL: ");
         puts_(step);
@@ -248,17 +236,17 @@ static void want_mode(const char *step, const char *path, u32 mode)
 /* The stored times of the last stat, for the rows that must leave them alone:
  * a chown that changes nothing changes nothing, and a status time that moved
  * is a write the kernel had no reason to make. */
-static u32 kept_mtime;
-static u32 kept_mtime_ns;
-static u32 kept_ctime;
-static u32 kept_ctime_ns;
+static unsigned long kept_mtime;
+static unsigned long kept_mtime_ns;
+static unsigned long kept_ctime;
+static unsigned long kept_ctime_ns;
 
 /* Wait until the clock has left the second the times were stamped in, so that
  * a call which wrongly stores the time of day is caught: ext2 keeps whole
  * seconds, and a store inside the same second would read back unchanged. */
 static void sleep_past_second(void)
 {
-    u32 ts[2];
+    long ts[2];
 
     ts[0] = 1;
     ts[1] = 100000000u; /* 1.1 s */
@@ -268,21 +256,21 @@ static void sleep_past_second(void)
 static void keep_times(const char *path)
 {
     stat_path(path);
-    kept_mtime = *(u32 *)(statbuf + ST_MTIME);
-    kept_mtime_ns = *(u32 *)(statbuf + ST_MTIME_NSEC);
-    kept_ctime = *(u32 *)(statbuf + ST_CTIME);
-    kept_ctime_ns = *(u32 *)(statbuf + ST_CTIME_NSEC);
+    kept_mtime = *(unsigned long *)(statbuf + KSTAT_MTIME);
+    kept_mtime_ns = *(unsigned long *)(statbuf + KSTAT_MTIME_NSEC);
+    kept_ctime = *(unsigned long *)(statbuf + KSTAT_CTIME);
+    kept_ctime_ns = *(unsigned long *)(statbuf + KSTAT_CTIME_NSEC);
     sleep_past_second();
 }
 
 static void want_times_kept(const char *step, const char *path)
 {
     stat_path(path);
-    if (*(u32 *)(statbuf + ST_MTIME) != kept_mtime ||
-        *(u32 *)(statbuf + ST_MTIME_NSEC) != kept_mtime_ns ||
-        *(u32 *)(statbuf + ST_CTIME) != kept_ctime ||
-        *(u32 *)(statbuf + ST_CTIME_NSEC) != kept_ctime_ns) {
-        fail(step, (int)*(u32 *)(statbuf + ST_CTIME));
+    if (*(unsigned long *)(statbuf + KSTAT_MTIME) != kept_mtime ||
+        *(unsigned long *)(statbuf + KSTAT_MTIME_NSEC) != kept_mtime_ns ||
+        *(unsigned long *)(statbuf + KSTAT_CTIME) != kept_ctime ||
+        *(unsigned long *)(statbuf + KSTAT_CTIME_NSEC) != kept_ctime_ns) {
+        fail(step, (int)*(unsigned long *)(statbuf + KSTAT_CTIME));
     }
 }
 
@@ -292,20 +280,22 @@ static void want_times_kept(const char *step, const char *path)
 static void want_owner(const char *step, const char *path, u32 uid, u32 gid)
 {
     stat_path(path);
-    if (*(u32 *)(statbuf + ST_UID) != uid) {
-        fail(step, (int)*(u32 *)(statbuf + ST_UID));
+    if (*(u32 *)(statbuf + KSTAT_UID) != uid) {
+        fail(step, (int)*(u32 *)(statbuf + KSTAT_UID));
     }
-    if (*(u32 *)(statbuf + ST_GID) != gid) {
-        fail(step, (int)*(u32 *)(statbuf + ST_GID));
+    if (*(u32 *)(statbuf + KSTAT_GID) != gid) {
+        fail(step, (int)*(u32 *)(statbuf + KSTAT_GID));
     }
 }
 
+/* The stored size: only its low 32 bits are read, since a KRFFS file cannot
+ * reach 4 GB and the rest are always zero. */
 static void want_size(const char *step, const char *path, u32 size)
 {
     u32 got;
 
     stat_path(path);
-    got = *(u32 *)(statbuf + ST_SIZE);
+    got = *(u32 *)(statbuf + KSTAT_SIZE_AT);
     if (got != size) {
         fail(step, (int)got);
     }
@@ -582,13 +572,9 @@ static void run_child(void (*body)(void), const char *what)
  * optional first argument sets. With no argument the probe works where it was
  * started, which for the test runner is the root of the boot image; a suite
  * that wants the same rows on another file system passes its mount point. */
-__asm__(".global _start\n"
-        "_start:\n"
-        "   mov %esp, %eax\n"
-        "   push %eax\n"
-        "   call probe_main\n");
+PROBE_SP_ENTRY;
 
-void probe_main(unsigned int *sp)
+void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];
     char **argv = (char **)(sp + 1);

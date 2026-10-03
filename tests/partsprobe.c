@@ -52,7 +52,7 @@ static void fail(const char *why)
 
 static int xstat(const char *path)
 {
-    char st[104];
+    char st[KSTAT_SIZE];
 
     st[0] = 0;
     return syscall2(SYS_STAT, (long)path, (long)st);
@@ -192,15 +192,11 @@ static int mount_vfat(const char *src, const char *at)
     return syscall5(SYS_MOUNT, (long)src, (long)at, (long)"vfat", 0, 0);
 }
 
-void probe_main(unsigned int *sp);
+void probe_main(unsigned long *sp);
 
-__asm__(".global _start\n"
-        "_start:\n"
-        "   mov %esp, %eax\n"
-        "   push %eax\n"
-        "   call probe_main\n");
+PROBE_SP_ENTRY;
 
-void probe_main(unsigned int *sp)
+void probe_main(unsigned long *sp)
 {
     static char text[8192];
     static char log[65536];

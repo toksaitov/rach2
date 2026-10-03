@@ -1,6 +1,6 @@
 /**
  * Exercises the VMA and demand-paging machinery end to end from user space:
- * brk() (query, grow, lazy-zero, read/write, shrink), anonymous mmap2() (map,
+ * brk() (query, grow, lazy-zero, read/write, shrink), anonymous mmap() (map,
  * lazy-zero, read/write, munmap), brk refusing to grow over an mmap region, and
  * stack growth by deep recursion that faults pages well past the initial one.
  *
@@ -17,7 +17,7 @@
 
 #define PAGE 4096u
 
-/* mmap2 prot/flags (Linux i386). */
+/* mmap prot/flags (Linux's, on i386 and x86-64). */
 #define PROT_READ     0x1
 #define PROT_WRITE    0x2
 #define MAP_PRIVATE   0x02
@@ -35,31 +35,19 @@ static void sys_exit(int status)
 }
 
 /** brk(addr): returns the resulting break (new on success, old on failure). */
-static unsigned sys_brk(unsigned addr)
+static unsigned long sys_brk(unsigned long addr)
 {
     return syscall1(SYS_BRK, (long)addr);
 }
 
-/**
- * mmap2 anonymous private. addr hint is 0, fd is -1, pgoffset is 0 (passed in
- * %ebp, which is saved/restored around the call). Returns the mapped address or
- * a small negative errno.
- */
-static unsigned sys_mmap2_anon(unsigned len, int prot)
+/** An anonymous private mapping of `len` bytes; its address, or a small
+ * negative errno. */
+static unsigned long mmap_anon(unsigned long len, int prot)
 {
-    unsigned result;
-    __asm__ __volatile__("push %%ebp\n\t"
-                         "xor %%ebp, %%ebp\n\t" /* pgoffset = 0 */
-                         "int $0x80\n\t"
-                         "pop %%ebp\n\t"
-                         : "=a"(result)
-                         : "0"(SYS_MMAP2), "b"(0), "c"(len), "d"(prot),
-                           "S"(MAP_PRIVATE | MAP_ANONYMOUS), "D"(-1)
-                         : "memory");
-    return result;
+    return (unsigned long)probe_mmap(0, (long)len, prot, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 }
 
-static int sys_munmap(unsigned addr, unsigned len)
+static int sys_munmap(unsigned long addr, unsigned long len)
 {
     return syscall2(SYS_MUNMAP, (long)addr, (long)len);
 }
@@ -153,9 +141,9 @@ PROBE_START void _start(void)
 
     /* 1. brk: query, grow four pages, lazy-zero, read/write, shrink. */
     {
-        unsigned base = sys_brk(0);
-        unsigned want = base + 4 * PAGE;
-        unsigned got = sys_brk(want);
+        unsigned long base = sys_brk(0);
+        unsigned long want = base + 4 * PAGE;
+        unsigned long got = sys_brk(want);
         volatile unsigned char *heap = (volatile unsigned char *)base;
         unsigned i;
 
@@ -174,12 +162,12 @@ PROBE_START void _start(void)
     /* 2. mmap anonymous: map eight pages, lazy-zero, read/write, munmap. */
     {
         unsigned len = 8 * PAGE;
-        unsigned p = sys_mmap2_anon(len, PROT_READ | PROT_WRITE);
+        unsigned long p = mmap_anon(len, PROT_READ | PROT_WRITE);
         volatile unsigned char *m = (volatile unsigned char *)p;
         unsigned i;
 
-        check(p < 0xFFFFF001u, "mmap returns an address, not -errno");
-        if (p < 0xFFFFF001u) {
+        check(!sys_failed((long)p), "mmap returns an address, not -errno");
+        if (!sys_failed((long)p)) {
             check(m[0] == 0 && m[5 * PAGE] == 0 && m[len - 1] == 0, "fresh mmap pages read zero");
             for (i = 0; i < len; i += 251) {
                 m[i] = (unsigned char)((i * 7) & 0xFF);
@@ -195,11 +183,11 @@ PROBE_START void _start(void)
      * try to push the break up past it. brk returns the (unchanged) old break
      * on refusal, never the requested value. */
     {
-        unsigned p = sys_mmap2_anon(PAGE, PROT_READ | PROT_WRITE);
+        unsigned long p = mmap_anon(PAGE, PROT_READ | PROT_WRITE);
 
-        if (p < 0xFFFFF001u) {
-            unsigned old = sys_brk(0);
-            unsigned got = sys_brk(p + PAGE); /* would overlap [p, p+PAGE) */
+        if (!sys_failed((long)p)) {
+            unsigned long old = sys_brk(0);
+            unsigned long got = sys_brk(p + PAGE); /* would overlap [p, p+PAGE) */
 
             check(got == old, "brk refuses to grow over an mmap region");
             check(got != p + PAGE, "brk did not honor the colliding request");

@@ -24,15 +24,6 @@ typedef unsigned char uint8_t;
 
 #define STDOUT_FILENO 1
 
-#define SC_SOCKET      1
-#define SC_BIND        2
-#define SC_CONNECT     3
-#define SC_GETSOCKNAME 6
-#define SC_SENDTO      11
-#define SC_RECVFROM    12
-#define SC_SETSOCKOPT  14
-#define SC_GETSOCKOPT  15
-
 #define AF_INET     2
 #define AF_UNSPEC   0
 #define AF_PACKET   17
@@ -86,9 +77,9 @@ static void sys_exit(int status)
     __builtin_unreachable();
 }
 
-static int socketcall(int call, uint32_t *args)
+static int socketcall(int call, unsigned long *args)
 {
-    return syscall2(SYS_SOCKETCALL, (long)call, (long)args);
+    return (int)sock_call(call, args);
 }
 
 struct timespec_probe {
@@ -141,7 +132,14 @@ static void fail(const char *what)
 
 static uint8_t sa[16];
 static uint8_t buf[64];
-static uint8_t ifreq[32];
+/* A `struct ifreq`: a 16-byte name and a union whose largest member is a
+ * map of longs and pointers, 32 bytes on i386 and 40 on x86-64. */
+#if defined __x86_64__
+#define IFREQ_SIZE 40
+#else
+#define IFREQ_SIZE 32
+#endif
+static uint8_t ifreq[IFREQ_SIZE];
 
 static void set_sockaddr(uint32_t ip, uint16_t port)
 {
@@ -162,7 +160,7 @@ static void set_sockaddr(uint32_t ip, uint16_t port)
 /** Open and bind, answering -1 instead of failing when the table is full. */
 static int open_bound_maybe(uint16_t port)
 {
-    uint32_t args[6];
+    unsigned long args[6];
     int fd;
 
     args[0] = AF_INET;
@@ -185,7 +183,7 @@ static int open_bound_maybe(uint16_t port)
 
 static int open_bound(uint16_t port)
 {
-    uint32_t args[6];
+    unsigned long args[6];
     int fd;
 
     args[0] = AF_INET;
@@ -207,7 +205,7 @@ static int open_bound(uint16_t port)
 
 PROBE_START void _start(void)
 {
-    uint32_t args[6];
+    unsigned long args[6];
     int peer, other, client, outside, stream, extra, listener, sender, r, i;
     int fillers[8];
     int pid, status;
@@ -702,9 +700,9 @@ PROBE_START void _start(void)
     if (socketcall(SC_SETSOCKOPT, args) != 0) {
         fail("an empty name did not unbind");
     }
-    /* And the shape busybox really sends: a whole `struct ifreq`, thirty-two
-       bytes of it, with the name at the front. */
-    for (i = 0; i < 32; i++) {
+    /* And the shape busybox really sends: a whole `struct ifreq`, with the
+       name at the front. */
+    for (i = 0; i < IFREQ_SIZE; i++) {
         ifreq[i] = 0;
     }
     ifreq[0] = 'e';
@@ -712,15 +710,15 @@ PROBE_START void _start(void)
     ifreq[2] = 'h';
     ifreq[3] = '0';
     args[3] = (unsigned long)ifreq;
-    args[4] = 32;
+    args[4] = IFREQ_SIZE;
     if (socketcall(SC_SETSOCKOPT, args) != 0) {
         fail("the whole struct ifreq a DHCP client sends was refused");
     }
     /* And it reads back as the name it is bound to, not as a number. */
-    for (i = 0; i < 32; i++) {
+    for (i = 0; i < IFREQ_SIZE; i++) {
         ifreq[i] = 0x5c;
     }
-    optlen = 32;
+    optlen = IFREQ_SIZE;
     args[3] = (unsigned long)ifreq;
     args[4] = (unsigned long)&optlen;
     if (socketcall(SC_GETSOCKOPT, args) != 0) {

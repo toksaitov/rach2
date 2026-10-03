@@ -21,9 +21,10 @@
 #define O_RDONLY        0
 #define CLOCK_MONOTONIC 1
 
+/* The kernel's timespec, whose fields are longs. */
 struct timespec {
-    int tv_sec;
-    int tv_nsec;
+    long tv_sec;
+    long tv_nsec;
 };
 
 static void sys_exit(int status)
@@ -58,10 +59,10 @@ static void check(int cond, const char *msg)
     }
 }
 
-/** Milliseconds between two timespecs, all in 32-bit math. */
+/** Milliseconds between two timespecs, in the width of their fields. */
 static int elapsed_ms(const struct timespec *a, const struct timespec *b)
 {
-    return (b->tv_sec - a->tv_sec) * 1000 + (b->tv_nsec - a->tv_nsec) / 1000000;
+    return (int)((b->tv_sec - a->tv_sec) * 1000 + (b->tv_nsec - a->tv_nsec) / 1000000);
 }
 
 /*

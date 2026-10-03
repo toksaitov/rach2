@@ -16,8 +16,6 @@ typedef long long int64_t;
 
 #define STDOUT_FILENO 1
 
-/* Syscall numbers (32-bit Linux / Rach2 compatible) */
-
 /* Open flags */
 #define O_RDONLY    0
 #define O_DIRECTORY 0200000 /* Must be a directory */

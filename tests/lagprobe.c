@@ -122,8 +122,8 @@ static int disk_counter(const char *label);
 static void say_numbers(unsigned a, unsigned b, unsigned c, unsigned d);
 
 struct timeval {
-    int sec;
-    int usec;
+    long sec;
+    long usec;
 };
 
 /* Milliseconds since boot, from gettimeofday. */
@@ -334,7 +334,7 @@ static void run_write(void)
 
 static void sleep_ms(int ms)
 {
-    int ts[2];
+    long ts[2];
 
     ts[0] = ms / 1000;
     ts[1] = (ms % 1000) * 1000000;
@@ -957,9 +957,9 @@ static void say_numbers(unsigned a, unsigned b, unsigned c, unsigned d)
  * back; the file whole and the mount writable after. */
 static void run_dirty(void)
 {
-    unsigned total, buffers_before, buffers_after, take;
+    unsigned total, buffers_before, buffers_after;
+    unsigned long take, off;
     unsigned char *mem;
-    unsigned off;
     int fd, i;
 
     if (syscall2(SYS_MKDIR, (long)"/ly", 0755) != 0) {
@@ -986,15 +986,16 @@ static void run_dirty(void)
     if (total == 0xFFFFFFFFu || buffers_before < 512) {
         fail("the buffer cache does not hold the file");
     }
-    take = (total - total / 20) * 1024; /* below the sixteenth that starts reclaim */
-    mem = (unsigned char *)syscall5(SYS_MMAP2, 0, (int)take, 3, 0x22, -1);
+    /* below the sixteenth that starts reclaim */
+    take = ((unsigned long)total - total / 20) * 1024;
+    mem = (unsigned char *)probe_mmap(0, (long)take, 3, 0x22, -1, 0);
     if ((long)mem < 0 && (long)mem > -4096) {
         fail("the anonymous mapping");
     }
     for (off = 0; off < take; off += 4096) {
         mem[off] = 1;
     }
-    if ((int)syscall5(SYS_MMAP2, 0, 4096, 3, 0x22, -1) == -ENOMEM) {
+    if (probe_mmap(0, 4096, 3, 0x22, -1, 0) == -ENOMEM) {
         fail("the mapping after the pressure");
     }
     buffers_after = meminfo_kb("Buffers:");
@@ -1081,15 +1082,11 @@ static void run_dead(void)
     puts("LAGPROBE OK");
 }
 
-void probe_main(unsigned int *sp);
+void probe_main(unsigned long *sp);
 
-__asm__(".global _start\n"
-        "_start:\n"
-        "   mov %esp, %eax\n"
-        "   push %eax\n"
-        "   call probe_main\n");
+PROBE_SP_ENTRY;
 
-void probe_main(unsigned int *sp)
+void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];
     char **argv = (char **)(sp + 1);

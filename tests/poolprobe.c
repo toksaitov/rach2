@@ -21,7 +21,6 @@
 
 #include "probe.h"
 
-#define SC_SOCKET  1
 #define AF_INET    2
 #define SOCK_DGRAM 2
 #define O_RDONLY   0
@@ -57,7 +56,7 @@ static void fail(const char *why)
 
 static void sleep_ms(int ms)
 {
-    int ts[2];
+    long ts[2];
 
     ts[0] = ms / 1000;
     ts[1] = (ms % 1000) * 1000000;
@@ -66,12 +65,12 @@ static void sleep_ms(int ms)
 
 static int open_socket(void)
 {
-    unsigned args[3];
+    unsigned long args[3];
 
     args[0] = AF_INET;
     args[1] = SOCK_DGRAM;
     args[2] = 0;
-    return syscall2(SYS_SOCKETCALL, SC_SOCKET, (long)args);
+    return sock_call(SC_SOCKET, args);
 }
 
 /* A field of /proc/meminfo, in its own units, or 0xFFFFFFFF when absent. */
@@ -253,15 +252,11 @@ static void cycle(int kind, const char *what)
     }
 }
 
-void probe_main(unsigned int *sp);
+void probe_main(unsigned long *sp);
 
-__asm__(".global _start\n"
-        "_start:\n"
-        "   mov %esp, %eax\n"
-        "   push %eax\n"
-        "   call probe_main\n");
+PROBE_SP_ENTRY;
 
-void probe_main(unsigned int *sp)
+void probe_main(unsigned long *sp)
 {
     (void)sp;
     if (meminfo("HeapUsed:") == 0xFFFFFFFFu) {

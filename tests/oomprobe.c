@@ -41,18 +41,8 @@
 
 static void *sys_mmap(size_t len)
 {
-    int r;
-    unsigned int args[6];
-
-    args[0] = 0;
-    args[1] = len;
-    args[2] = PROT_READ | PROT_WRITE;
-    args[3] = MAP_PRIVATE | MAP_ANONYMOUS;
-    args[4] = (unsigned int)-1;
-    args[5] = 0;
-    r = syscall5(SYS_MMAP2, (long)(args[0]), (long)(args[1]), (long)(args[2]), (long)(args[3]),
-                 (long)(args[4]));
-    return (void *)(size_t)r;
+    return (void *)probe_mmap(0, (long)len, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1,
+                              0);
 }
 
 static void sys_exit(int status)

@@ -31,19 +31,6 @@ typedef unsigned char uint8_t;
 
 #define STDOUT_FILENO 1
 
-#define SC_SOCKET      1
-#define SC_BIND        2
-#define SC_CONNECT     3
-#define SC_LISTEN      4
-#define SC_ACCEPT      5
-#define SC_GETSOCKNAME 6
-#define SC_SETSOCKOPT  14
-#define SC_RECV        10
-#define SC_SENDTO      11
-#define SC_RECVFROM    12
-#define SC_GETSOCKOPT  15
-#define SC_PING        0x1000
-
 #define AF_INET     2
 #define AF_PACKET   17
 #define SOCK_STREAM 1
@@ -151,9 +138,9 @@ static int sys_ioctl(int fd, uint32_t request, void *arg)
     return syscall3(SYS_IOCTL, (long)fd, (long)request, (long)arg);
 }
 
-static int socketcall(int call, uint32_t *args)
+static int socketcall(int call, unsigned long *args)
 {
-    return syscall2(SYS_SOCKETCALL, (long)call, (long)args);
+    return (int)sock_call(call, args);
 }
 
 static int sys_fork(void)
@@ -190,7 +177,7 @@ static void say(const char *s)
  */
 static int ping_retry(uint32_t ip)
 {
-    uint32_t args[6];
+    unsigned long args[6];
     int i, r = -1;
 
     for (i = 0; i < 4; i++) {
@@ -233,11 +220,29 @@ static void fail(const char *what)
     sys_exit(1);
 }
 
-/* struct ifreq: a 16-byte name, then a union. */
-static uint8_t ifr[32];
-/* struct rtentry: a pad word, three sockaddrs, the flags at 52, and a pointer
-   to the interface's name at 68. */
-static uint8_t rt[84];
+/* struct ifreq: a 16-byte name, then a union whose largest member is a map
+   of longs and pointers. struct rtentry: a pad word of a long, three
+   sockaddrs, the flags, and a pointer to the interface's name. Their sizes and
+   the rtentry's offsets are Linux's for each architecture. */
+#if defined __x86_64__
+#define IFREQ_SIZE 40
+#define RT_SIZE    120
+#define RT_DST     8
+#define RT_GW      24
+#define RT_MASK    40
+#define RT_FLAGS   56
+#define RT_DEV     88
+#else
+#define IFREQ_SIZE 32
+#define RT_SIZE    84
+#define RT_DST     4
+#define RT_GW      20
+#define RT_MASK    36
+#define RT_FLAGS   52
+#define RT_DEV     68
+#endif
+static uint8_t ifr[IFREQ_SIZE];
+static uint8_t rt[RT_SIZE];
 static const char other_dev[] = "eth9";
 static uint8_t sa_listen[16];
 static uint8_t sa_connect[16];
@@ -251,7 +256,7 @@ static void set_name(const char *name)
     while (name[n]) {
         n++;
     }
-    for (i = 0; i < 32; i++) {
+    for (i = 0; i < IFREQ_SIZE; i++) {
         ifr[i] = 0;
     }
     if (n > 15) {
@@ -282,25 +287,36 @@ static void set_route(uint32_t dst, uint32_t gw, uint32_t mask)
 {
     int i;
 
-    for (i = 0; i < 84; i++) {
+    for (i = 0; i < RT_SIZE; i++) {
         rt[i] = 0;
     }
-    rt[4] = AF_INET;
-    rt[8] = (uint8_t)(dst >> 24);
-    rt[9] = (uint8_t)(dst >> 16);
-    rt[10] = (uint8_t)(dst >> 8);
-    rt[11] = (uint8_t)dst;
-    rt[20] = AF_INET;
-    rt[24] = (uint8_t)(gw >> 24);
-    rt[25] = (uint8_t)(gw >> 16);
-    rt[26] = (uint8_t)(gw >> 8);
-    rt[27] = (uint8_t)gw;
-    rt[36] = AF_INET;
-    rt[40] = (uint8_t)(mask >> 24);
-    rt[41] = (uint8_t)(mask >> 16);
-    rt[42] = (uint8_t)(mask >> 8);
-    rt[43] = (uint8_t)mask;
-    rt[52] = (uint8_t)((RTF_UP | (gw ? RTF_GATEWAY : 0)) & 0xff);
+    rt[RT_DST] = AF_INET;
+    rt[RT_DST + 4] = (uint8_t)(dst >> 24);
+    rt[RT_DST + 5] = (uint8_t)(dst >> 16);
+    rt[RT_DST + 6] = (uint8_t)(dst >> 8);
+    rt[RT_DST + 7] = (uint8_t)dst;
+    rt[RT_GW] = AF_INET;
+    rt[RT_GW + 4] = (uint8_t)(gw >> 24);
+    rt[RT_GW + 5] = (uint8_t)(gw >> 16);
+    rt[RT_GW + 6] = (uint8_t)(gw >> 8);
+    rt[RT_GW + 7] = (uint8_t)gw;
+    rt[RT_MASK] = AF_INET;
+    rt[RT_MASK + 4] = (uint8_t)(mask >> 24);
+    rt[RT_MASK + 5] = (uint8_t)(mask >> 16);
+    rt[RT_MASK + 6] = (uint8_t)(mask >> 8);
+    rt[RT_MASK + 7] = (uint8_t)mask;
+    rt[RT_FLAGS] = (uint8_t)((RTF_UP | (gw ? RTF_GATEWAY : 0)) & 0xff);
+}
+
+/** Name the interface `dev` in the route: the pointer, a long's bytes. */
+static void set_route_dev(const char *dev)
+{
+    unsigned long p = (unsigned long)dev;
+    int i;
+
+    for (i = 0; i < (int)sizeof(p); i++) {
+        rt[RT_DEV + i] = (uint8_t)(p >> (8 * i));
+    }
 }
 
 static void set_sockaddr(uint8_t *sa, uint32_t ip, uint16_t port)
@@ -436,7 +452,7 @@ static void set_packet_addr(struct sockaddr_ll_probe *addr, int index)
 /** Check a packet socket's interface, protocol, MAC and returned length. */
 static void packet_name(int fd, int index, int raw_fd)
 {
-    uint32_t args[3];
+    unsigned long args[3];
     uint32_t len = sizeof(struct sockaddr_ll_probe);
     struct sockaddr_ll_probe addr = {0};
     int i;
@@ -469,7 +485,7 @@ static void packet_name(int fd, int index, int raw_fd)
 /** Check that SO_BINDTODEVICE preserves a name, a refusal and an unbind. */
 static void device_option(int fd)
 {
-    uint32_t args[5], len;
+    unsigned long args[5], len;
     char name[16];
     int i;
 
@@ -502,7 +518,7 @@ static void device_option(int fd)
 /** Refuse accept on datagrams and streams that have never listened. */
 static void invalid_accept(void)
 {
-    uint32_t args[3];
+    unsigned long args[3];
     int type, fd;
 
     for (type = SOCK_STREAM; type <= SOCK_DGRAM; type++) {
@@ -526,7 +542,7 @@ static void invalid_accept(void)
 /** Require the second interface's address at both ends of a TCP connection. */
 static void tcp_names(void)
 {
-    uint32_t args[3], len;
+    unsigned long args[3], len;
     uint8_t addr[16];
     int listener, client, conn, i, fd;
 
@@ -602,7 +618,7 @@ static void tcp_names(void)
  */
 static void packet_on_second(int raw_fd)
 {
-    uint32_t args[6];
+    unsigned long args[6];
     struct sockaddr_ll_probe to, from = {0};
     uint8_t mac[6];
     uint8_t arp[28];
@@ -761,7 +777,7 @@ static void packet_on_second(int raw_fd)
  */
 static void second_down(void)
 {
-    uint32_t args[6];
+    unsigned long args[6];
     int fd;
 
     args[0] = AF_INET;
@@ -819,7 +835,7 @@ static void second_down(void)
 
 static void netif_main(void);
 
-void probe_main(unsigned int *sp)
+void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];
     char **argv = (char **)(sp + 1);
@@ -830,15 +846,11 @@ void probe_main(unsigned int *sp)
     netif_main();
 }
 
-__asm__(".global _start\n"
-        "_start:\n"
-        "   mov %esp, %eax\n"
-        "   push %eax\n"
-        "   call probe_main\n");
+PROBE_SP_ENTRY;
 
 static void netif_main(void)
 {
-    uint32_t args[6];
+    unsigned long args[6];
     int fd, listener, client, conn, client2, conn2, pid, status;
     int inbound, tries, got_inbound, r;
     /* Written by the kernel through a pointer, which is why it is volatile: a
@@ -1334,18 +1346,12 @@ static void netif_main(void)
     /* A route names a device, and one this machine does not have must not
        change the route of the one it does. */
     set_route(0, SLIRP_GW, 0);
-    rt[68] = (uint8_t)((uint32_t)(size_t)other_dev & 0xff);
-    rt[69] = (uint8_t)(((uint32_t)(size_t)other_dev >> 8) & 0xff);
-    rt[70] = (uint8_t)(((uint32_t)(size_t)other_dev >> 16) & 0xff);
-    rt[71] = (uint8_t)(((uint32_t)(size_t)other_dev >> 24) & 0xff);
+    set_route_dev(other_dev);
     if (sys_ioctl(fd, SIOCADDRT, rt) != -ENODEV) {
         fail("a route for an interface this machine does not have was taken");
     }
     set_route(0, 0, 0);
-    rt[68] = (uint8_t)((uint32_t)(size_t)other_dev & 0xff);
-    rt[69] = (uint8_t)(((uint32_t)(size_t)other_dev >> 8) & 0xff);
-    rt[70] = (uint8_t)(((uint32_t)(size_t)other_dev >> 16) & 0xff);
-    rt[71] = (uint8_t)(((uint32_t)(size_t)other_dev >> 24) & 0xff);
+    set_route_dev(other_dev);
     if (sys_ioctl(fd, SIOCDELRT, rt) != -ENODEV) {
         fail("a removal for an interface this machine does not have was taken");
     }

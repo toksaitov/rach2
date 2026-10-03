@@ -17,9 +17,6 @@ typedef unsigned char uint8_t;
 
 #define STDOUT_FILENO 1
 
-#define SC_SOCKET  1
-#define SC_CONNECT 3
-
 #define AF_INET     2
 #define SOCK_STREAM 1
 
@@ -41,9 +38,9 @@ static int sys_close(int fd)
     return syscall1(SYS_CLOSE, (long)fd);
 }
 
-static int socketcall(int call, uint32_t *args)
+static int socketcall(int call, unsigned long *args)
 {
-    return syscall2(SYS_SOCKETCALL, (long)call, (long)args);
+    return (int)sock_call(call, args);
 }
 
 static void sys_exit(int status)
@@ -117,7 +114,7 @@ static void make_sockaddr(uint8_t *sa, uint16_t port, uint8_t a, uint8_t b, uint
 
 static int make_stream_socket(void)
 {
-    uint32_t args[3];
+    unsigned long args[3];
     args[0] = AF_INET;
     args[1] = SOCK_STREAM;
     args[2] = 0;
@@ -126,7 +123,7 @@ static int make_stream_socket(void)
 
 static int connect_to(int fd, uint16_t port)
 {
-    uint32_t args[3];
+    unsigned long args[3];
     uint8_t sa[16];
     make_sockaddr(sa, port, 10, 0, 2, 2);
     args[0] = (uint32_t)fd;

@@ -22,22 +22,23 @@
  * above any free-list jitter, so a real leak is unmistakable. */
 #define SLACK  (64u * 1024u)
 
-/* The Linux i386 sysinfo struct, sized so the kernel's copy_to_user fits. */
+/* Linux's sysinfo struct, of longs, sized so the kernel's copy_to_user fits:
+ * 64 bytes on i386 and 112 on x86-64. */
 struct sysinfo {
-    int uptime;
-    unsigned loads[3];
-    unsigned totalram;
-    unsigned freeram;
-    unsigned sharedram;
-    unsigned bufferram;
-    unsigned totalswap;
-    unsigned freeswap;
+    long uptime;
+    unsigned long loads[3];
+    unsigned long totalram;
+    unsigned long freeram;
+    unsigned long sharedram;
+    unsigned long bufferram;
+    unsigned long totalswap;
+    unsigned long freeswap;
     unsigned short procs;
     unsigned short pad;
-    unsigned totalhigh;
-    unsigned freehigh;
-    unsigned mem_unit;
-    char _f[8];
+    unsigned long totalhigh;
+    unsigned long freehigh;
+    unsigned int mem_unit;
+    char _f[20 - 2 * sizeof(long) - sizeof(int)];
 };
 
 static int sys_write(int fd, const void *buf, size_t count)
@@ -108,7 +109,7 @@ static void churn(void)
 PROBE_START void _start(void)
 {
     struct sysinfo si;
-    unsigned base_free, end_free;
+    unsigned long base_free, end_free;
     int i;
 
     /* Warm the page-table and page-directory free lists so the only frames that

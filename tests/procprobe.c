@@ -43,17 +43,10 @@
 
 #define CLOCK_REALTIME 0
 
-#define SC_SOCKET   1
-#define SC_BIND     2
-#define SC_LISTEN   4
-#define SC_CONNECT  3
 #define AF_INET     2
 #define AF_UNIX     1
 #define SOCK_STREAM 1
 #define SOCK_DGRAM  2
-
-/* i386 struct stat64: the 64-bit st_ino musl reads sits at offset 88. */
-#define ST_INO64 88
 
 #define CLOCK_MONOTONIC 1
 
@@ -678,12 +671,12 @@ static int same_str(const char *a, const char *b)
 }
 
 /** Open an AF_INET stream socket through socketcall. Returns its fd or < 0. */
-static int new_socket(unsigned int *args)
+static int new_socket(unsigned long *args)
 {
     args[0] = AF_INET;
     args[1] = SOCK_STREAM;
     args[2] = 0;
-    return syscall3(SYS_SOCKETCALL, SC_SOCKET, (long)args, 0);
+    return sock_call(SC_SOCKET, args);
 }
 
 /** The inode fstat reports for a socket descriptor, or -1. `st` is scratch. */
@@ -692,7 +685,7 @@ static int socket_inode(int fd, char *st)
     if (fd < 0 || syscall3(SYS_FSTAT, fd, (long)st, 0) != 0) {
         return -1;
     }
-    return (int)*(unsigned int *)(st + ST_INO64);
+    return (int)*(unsigned int *)(st + KSTAT_INO);
 }
 
 /**
@@ -700,7 +693,7 @@ static int socket_inode(int fd, char *st)
  *
  * `sa` is scratch for the sockaddr_in, and `args` for the socketcall block.
  */
-static int listen_on(int fd, int port, unsigned char *sa, unsigned int *args)
+static int listen_on(int fd, int port, unsigned char *sa, unsigned long *args)
 {
     int i;
 
@@ -713,11 +706,11 @@ static int listen_on(int fd, int port, unsigned char *sa, unsigned int *args)
     args[0] = (unsigned int)fd;
     args[1] = (unsigned int)(size_t)sa;
     args[2] = 16;
-    if (syscall3(SYS_SOCKETCALL, SC_BIND, (long)args, 0) != 0) {
+    if (sock_call(SC_BIND, args) != 0) {
         return -1;
     }
     args[1] = 4;
-    if (syscall3(SYS_SOCKETCALL, SC_LISTEN, (long)args, 0) != 0) {
+    if (sock_call(SC_LISTEN, args) != 0) {
         return -1;
     }
     return 0;
@@ -842,17 +835,11 @@ static void rtc_rows(void)
     syscall1(SYS_CLOSE, fd);
 }
 
-/* An anonymous private mapping of `len` bytes, read and write, by mmap2,
-   whose sixth argument goes in ebp. */
-static unsigned int map_anonymous(int len)
+/* An anonymous private mapping of `len` bytes, read and write; its address,
+   or a negated errno. */
+static long map_anonymous(int len)
 {
-    int ret;
-
-    __asm__ volatile("push %%ebp\n\tmov $0, %%ebp\n\tint $0x80\n\tpop %%ebp"
-                     : "=a"(ret)
-                     : "a"(192), "b"(0), "c"(len), "d"(3), "S"(0x22), "D"(-1)
-                     : "memory");
-    return (unsigned int)ret;
+    return probe_mmap(0, len, 3, 0x22, -1, 0);
 }
 
 /* /proc/self/smaps as BusyBox's pmap reads it: each region's maps line and
@@ -863,7 +850,7 @@ static void smaps_rows(void)
     static char maps[4096];
     int m, n, i, first = 0;
 
-    check(map_anonymous(4096) < 0xfffff000u, "an anonymous page is mapped");
+    check(!sys_failed(map_anonymous(4096)), "an anonymous page is mapped");
     m = slurp("/proc/self/maps", maps, (int)sizeof(maps));
     check(contains(maps, m, " 00:00 0 \n"),
           "and its maps line ends with the space after the inode");
@@ -1112,7 +1099,7 @@ static int mib_value(const char *b, int n, const char *group, const char *name)
 static void count_rows(void)
 {
     unsigned char sa[16];
-    unsigned int args[3];
+    unsigned long args[3];
     int n = slurp("/proc/net/sockstat", buf, (int)sizeof(buf));
     int fd, i;
 
@@ -1135,7 +1122,7 @@ static void count_rows(void)
     args[0] = (unsigned int)fd;
     args[1] = (unsigned int)(size_t)sa;
     args[2] = 16;
-    check(fd >= 0 && syscall3(SYS_SOCKETCALL, SC_CONNECT, (long)args, 0) == -ECONNREFUSED,
+    check(fd >= 0 && sock_call(SC_CONNECT, args) == -ECONNREFUSED,
           "a connect to a closed local port is refused");
     syscall1(SYS_CLOSE, fd);
     n = slurp("/proc/net/snmp", buf, (int)sizeof(buf));
@@ -1154,7 +1141,7 @@ static void count_rows(void)
  * one by its abstract name, which Linux writes with an @ for the NUL. */
 static void dgram_and_local_rows(void)
 {
-    unsigned int args[6];
+    unsigned long args[6];
     unsigned char sa[16];
     char st[8];
     int ufd, xfd, i, n;
@@ -1162,7 +1149,7 @@ static void dgram_and_local_rows(void)
     args[0] = AF_INET;
     args[1] = SOCK_DGRAM;
     args[2] = 0;
-    ufd = syscall3(SYS_SOCKETCALL, SC_SOCKET, (long)args, 0);
+    ufd = sock_call(SC_SOCKET, args);
     for (i = 0; i < 16; i++) {
         sa[i] = 0;
     }
@@ -1172,8 +1159,7 @@ static void dgram_and_local_rows(void)
     args[0] = (unsigned int)ufd;
     args[1] = (unsigned int)(size_t)sa;
     args[2] = 16;
-    check(ufd >= 0 && syscall3(SYS_SOCKETCALL, SC_BIND, (long)args, 0) == 0,
-          "a datagram socket opens and binds");
+    check(ufd >= 0 && sock_call(SC_BIND, args) == 0, "a datagram socket opens and binds");
     n = slurp("/proc/net/udp", buf, (int)sizeof(buf));
     check(contains(buf, n, " inode ref pointer drops\n"), "/proc/net/udp carries its header");
     check(line_field(buf, n, ":1F91 ", 3, st, (int)sizeof(st)) == 2 && st[0] == '0' && st[1] == '7',
@@ -1183,7 +1169,7 @@ static void dgram_and_local_rows(void)
     args[0] = AF_UNIX;
     args[1] = SOCK_STREAM;
     args[2] = 0;
-    xfd = syscall3(SYS_SOCKETCALL, SC_SOCKET, (long)args, 0);
+    xfd = sock_call(SC_SOCKET, args);
     sa[0] = AF_UNIX;
     sa[1] = 0;
     sa[2] = 0; /* the abstract name "procprobe" */
@@ -1193,7 +1179,7 @@ static void dgram_and_local_rows(void)
     args[0] = (unsigned int)xfd;
     args[1] = (unsigned int)(size_t)sa;
     args[2] = 12;
-    check(xfd >= 0 && syscall3(SYS_SOCKETCALL, SC_BIND, (long)args, 0) == 0,
+    check(xfd >= 0 && sock_call(SC_BIND, args) == 0,
           "a local socket opens and binds to an abstract name");
     n = slurp("/proc/net/unix", buf, (int)sizeof(buf));
     check(has_line_starting(buf, n, "Num       RefCount"), "/proc/net/unix carries its header");
@@ -1248,13 +1234,9 @@ static void memory_file_rows(void)
           "/proc/swaps has Linux's header and no swap area");
 }
 
-void probe_main(unsigned int *sp);
+void probe_main(unsigned long *sp);
 
-__asm__(".global _start\n"
-        "_start:\n"
-        "   mov %esp, %eax\n"
-        "   push %eax\n"
-        "   call probe_main\n");
+PROBE_SP_ENTRY;
 
 /* Print the root's line from /proc/mounts, which is the one thing in this
    file that differs per boot: a root mounted from a disk, from the module
@@ -1285,7 +1267,7 @@ static void mounts_rows(char *buf, int cap)
     print_rootmount(buf, n);
 }
 
-void probe_main(unsigned int *sp)
+void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];
     char **argv = (char **)(sp + 1);
@@ -1349,7 +1331,7 @@ void probe_main(unsigned int *sp)
         check(syscall3(SYS_STAT, (long)"/proc/loop", (long)st_loop, 0) == 0 &&
                   syscall3(SYS_STAT, (long)"/proc/interrupts", (long)st_intr, 0) == 0,
               "stat /proc/loop and /proc/interrupts");
-        check(*(unsigned int *)(st_loop + ST_INO64) != *(unsigned int *)(st_intr + ST_INO64),
+        check(*(unsigned int *)(st_loop + KSTAT_INO) != *(unsigned int *)(st_intr + KSTAT_INO),
               "/proc/loop and /proc/interrupts have different inodes");
         loop_fd = syscall3(SYS_OPEN, (long)"/proc/loop", O_RDONLY, 0);
         intr_fd = syscall3(SYS_OPEN, (long)"/proc/interrupts", O_RDONLY, 0);
@@ -1357,7 +1339,7 @@ void probe_main(unsigned int *sp)
         check(syscall3(SYS_FSTAT, loop_fd, (long)st_loop, 0) == 0 &&
                   syscall3(SYS_FSTAT, intr_fd, (long)st_intr, 0) == 0,
               "fstat both open files");
-        check(*(unsigned int *)(st_loop + ST_INO64) != *(unsigned int *)(st_intr + ST_INO64),
+        check(*(unsigned int *)(st_loop + KSTAT_INO) != *(unsigned int *)(st_intr + KSTAT_INO),
               "and the open files have different inodes too");
         syscall1(SYS_CLOSE, loop_fd);
         syscall1(SYS_CLOSE, intr_fd);
@@ -1538,10 +1520,10 @@ void probe_main(unsigned int *sp)
      * both of the other two paths, which the constant printed before could
      * never have been. */
     {
-        unsigned int args[6];
+        unsigned long args[6];
         int sfd, i, row_inode = -1, fd_inode = -1;
         unsigned char sa[16];
-        char stbuf[128] = {0}; /* fstat64 fills it through an int-cast pointer */
+        char stbuf[KSTAT_SIZE] = {0}; /* fstat fills it through a long-cast pointer */
         char link[64];
         char fdpath[32];
 
@@ -1573,7 +1555,7 @@ void probe_main(unsigned int *sp)
         args[0] = AF_INET;
         args[1] = SOCK_STREAM;
         args[2] = 0;
-        sfd = syscall3(SYS_SOCKETCALL, SC_SOCKET, (long)args, 0);
+        sfd = sock_call(SC_SOCKET, args);
         check(sfd >= 0, "a stream socket opens");
         for (i = 0; i < 16; i++) {
             sa[i] = 0;
@@ -1584,9 +1566,9 @@ void probe_main(unsigned int *sp)
         args[0] = (unsigned int)sfd;
         args[1] = (unsigned int)(size_t)sa;
         args[2] = 16;
-        check(syscall3(SYS_SOCKETCALL, SC_BIND, (long)args, 0) == 0, "and binds");
+        check(sock_call(SC_BIND, args) == 0, "and binds");
         args[1] = 4;
-        check(syscall3(SYS_SOCKETCALL, SC_LISTEN, (long)args, 0) == 0, "and listens");
+        check(sock_call(SC_LISTEN, args) == 0, "and listens");
 
         n = slurp("/proc/net/route", buf, (int)sizeof(buf));
         check(n > 0 && buf[n - 1] == '\n', "/proc/net/route ends with its newline");
@@ -1624,7 +1606,7 @@ void probe_main(unsigned int *sp)
               "the listener, which takes its port on every address, is at 0.0.0.0");
 
         check(syscall3(SYS_FSTAT, sfd, (long)stbuf, 0) == 0, "fstat the socket");
-        fd_inode = (int)*(unsigned int *)(stbuf + ST_INO64);
+        fd_inode = (int)*(unsigned int *)(stbuf + KSTAT_INO);
         check(fd_inode == row_inode, "fstat reports the inode /proc/net/tcp does");
         count_rows();
 
@@ -1651,8 +1633,8 @@ void probe_main(unsigned int *sp)
             "/proc/net/snmp",  "/proc/net/unix", "/proc/uptime",
             "/proc/meminfo",   "/proc/loadavg",  "/proc/version",
             "/proc/cpuinfo",   "/proc/stat",     "/proc/sys/kernel/hostname"};
-        char st_by_fd[128] = {0};   /* fstat64 fills it through an int-cast pointer */
-        char st_by_path[128] = {0}; /* and stat64 the same */
+        char st_by_fd[KSTAT_SIZE] = {0};   /* fstat fills it through a long-cast pointer */
+        char st_by_path[KSTAT_SIZE] = {0}; /* and stat the same */
         char pathbuf[128];
         char link[64];
         char fdpath[32];
@@ -1675,9 +1657,9 @@ void probe_main(unsigned int *sp)
                       "and the link names the file it was opened by, not another one");
             }
             check(syscall3(SYS_FSTAT, netfd, (long)st_by_fd, 0) == 0, "fstat it");
-            by_fd = *(unsigned int *)(st_by_fd + ST_INO64);
+            by_fd = *(unsigned int *)(st_by_fd + KSTAT_INO);
             check(syscall3(SYS_STAT, (long)pathbuf, (long)st_by_path, 0) == 0, "and stat its path");
-            by_path = *(unsigned int *)(st_by_path + ST_INO64);
+            by_path = *(unsigned int *)(st_by_path + KSTAT_INO);
             check(by_fd == by_path && by_fd != 0,
                   "the descriptor and the path report one identity");
             syscall1(SYS_CLOSE, netfd);
@@ -1698,7 +1680,7 @@ void probe_main(unsigned int *sp)
      * must then come back with every row and nothing cut: this is what the
      * declared bound is for, and three rows never reached it. */
     {
-        unsigned int args[6];
+        unsigned long args[6];
         unsigned char sa[16];
         int fds[FILL_HERE];
         int i, filler_pid, child_status;
@@ -1744,7 +1726,7 @@ void probe_main(unsigned int *sp)
      * taking the current process's uid would report root and pass a test whose
      * two sides had the same owner. */
     {
-        unsigned int args[6];
+        unsigned long args[6];
         unsigned char sa[16];
         int lfd, cfd, child_status, listener_pid, i;
         int owner_rows = 0, root_rows = 0;
@@ -1759,7 +1741,7 @@ void probe_main(unsigned int *sp)
             args[0] = AF_INET;
             args[1] = SOCK_STREAM;
             args[2] = 0;
-            lfd = syscall3(SYS_SOCKETCALL, SC_SOCKET, (long)args, 0);
+            lfd = sock_call(SC_SOCKET, args);
             if (lfd < 0) {
                 sys_exit(22);
             }
@@ -1772,11 +1754,11 @@ void probe_main(unsigned int *sp)
             args[0] = (unsigned int)lfd;
             args[1] = (unsigned int)(size_t)sa;
             args[2] = 16;
-            if (syscall3(SYS_SOCKETCALL, SC_BIND, (long)args, 0) != 0) {
+            if (sock_call(SC_BIND, args) != 0) {
                 sys_exit(23);
             }
             args[1] = 4;
-            if (syscall3(SYS_SOCKETCALL, SC_LISTEN, (long)args, 0) != 0) {
+            if (sock_call(SC_LISTEN, args) != 0) {
                 sys_exit(24);
             }
             /* Hold it open while the parent connects and reads the table. */
@@ -1787,7 +1769,7 @@ void probe_main(unsigned int *sp)
         args[0] = AF_INET;
         args[1] = SOCK_STREAM;
         args[2] = 0;
-        cfd = syscall3(SYS_SOCKETCALL, SC_SOCKET, (long)args, 0);
+        cfd = sock_call(SC_SOCKET, args);
         check(cfd >= 0, "root opens a connecting socket");
         for (i = 0; i < 16; i++) {
             sa[i] = 0;
@@ -1800,7 +1782,7 @@ void probe_main(unsigned int *sp)
         args[0] = (unsigned int)cfd;
         args[1] = (unsigned int)(size_t)sa;
         args[2] = 16;
-        check(syscall3(SYS_SOCKETCALL, SC_CONNECT, (long)args, 0) == 0,
+        check(sock_call(SC_CONNECT, args) == 0,
               "root connects to the child's listener over loopback");
 
         n = slurp("/proc/net/tcp", buf, (int)sizeof(buf));

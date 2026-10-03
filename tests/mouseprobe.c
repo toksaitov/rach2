@@ -77,13 +77,9 @@ static void put_int(int v)
     }
 }
 
-__asm__(".global _start\n"
-        "_start:\n"
-        "   mov %esp, %eax\n"
-        "   push %eax\n"
-        "   call probe_main\n");
+PROBE_SP_ENTRY;
 
-void probe_main(unsigned int *sp)
+void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];
     char **argv = (char **)(sp + 1);
@@ -107,7 +103,7 @@ void probe_main(unsigned int *sp)
        a hand and short enough for a suite that never moves the mouse. */
     puts("MOUSEPROBE: move the mouse");
     for (tries = 0; tries < 1500 && !moved; tries++) {
-        static const int pause[2] = {0, 10000000};
+        static const long pause[2] = {0, 10000000};
 
         n = syscall3(SYS_READ, fd, (long)packet, (int)sizeof(packet));
         if (n < 0) {

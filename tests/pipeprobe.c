@@ -155,7 +155,7 @@ static long mmap_anon(long len)
 /**
  * Calls pipe() into the two-element fds array. fds is pre-cleared so the
  * analyzer sees the output written even though the kernel fills it through the
- * cast-to-int address.
+ * long-cast address.
  */
 static int do_pipe(int fds[2])
 {

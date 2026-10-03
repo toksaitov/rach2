@@ -22,7 +22,6 @@
 
 #include "probe.h"
 
-#define SC_PING    0x1000
 #define GATEWAY_IP 0x0A000202u
 
 #define O_RDONLY 0
@@ -80,7 +79,7 @@ static void fail(const char *why)
 
 static void sleep_ms(int ms)
 {
-    int ts[2];
+    long ts[2];
 
     ts[0] = ms / 1000;
     ts[1] = (ms % 1000) * 1000000;
@@ -119,11 +118,11 @@ static void writer(const char *path)
 
 static void pinger(void)
 {
-    unsigned args[3];
+    unsigned long args[3];
 
     for (;;) {
         args[0] = GATEWAY_IP;
-        syscall2(SYS_SOCKETCALL, SC_PING, (long)args);
+        sock_call(SC_PING, args);
         sleep_ms(50);
     }
 }
@@ -181,13 +180,9 @@ static unsigned file_field(const char *path, const char *key)
     return 0xFFFFFFFFu;
 }
 
-void probe_main(unsigned int *sp);
+void probe_main(unsigned long *sp);
 
-__asm__(".global _start\n"
-        "_start:\n"
-        "   mov %esp, %eax\n"
-        "   push %eax\n"
-        "   call probe_main\n");
+PROBE_SP_ENTRY;
 
 /* Which of the four loads run: every one unless the argument names some
    by their first letters, `s`pinners, `w`riters, `p`inger, `r`eader. */
@@ -206,7 +201,7 @@ static int wanted(const char *arg, char kind)
     return 0;
 }
 
-void probe_main(unsigned int *sp)
+void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];
     char **argv = (char **)(sp + 1);

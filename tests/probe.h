@@ -184,20 +184,23 @@ typedef __SIZE_TYPE__ size_t;
 #define SYS_GETRANDOM       318
 
 /* Offsets in x86-64's struct stat, 144 bytes. */
-#define KSTAT_SIZE    144
-#define KSTAT_DEV     0
-#define KSTAT_INO     8
-#define KSTAT_NLINK   16
-#define KSTAT_MODE    24
-#define KSTAT_UID     28
-#define KSTAT_GID     32
-#define KSTAT_RDEV    40
-#define KSTAT_SIZE_AT 48
-#define KSTAT_BLKSIZE 56
-#define KSTAT_BLOCKS  64
-#define KSTAT_ATIME   72
-#define KSTAT_MTIME   88
-#define KSTAT_CTIME   104
+#define KSTAT_SIZE       144
+#define KSTAT_DEV        0
+#define KSTAT_INO        8
+#define KSTAT_NLINK      16
+#define KSTAT_MODE       24
+#define KSTAT_UID        28
+#define KSTAT_GID        32
+#define KSTAT_RDEV       40
+#define KSTAT_SIZE_AT    48
+#define KSTAT_BLKSIZE    56
+#define KSTAT_BLOCKS     64
+#define KSTAT_ATIME      72
+#define KSTAT_MTIME      88
+#define KSTAT_CTIME      104
+#define KSTAT_ATIME_NSEC 80
+#define KSTAT_MTIME_NSEC 96
+#define KSTAT_CTIME_NSEC 112
 
 static inline long syscall6(long n, long a, long b, long c, long d, long e, long f)
 {
@@ -438,6 +441,9 @@ static inline long syscall0(long n)
 #define KSTAT_ATIME         64
 #define KSTAT_MTIME         72
 #define KSTAT_CTIME         80
+#define KSTAT_ATIME_NSEC    68
+#define KSTAT_MTIME_NSEC    76
+#define KSTAT_CTIME_NSEC    84
 
 static inline long syscall0(long n)
 {
@@ -558,7 +564,76 @@ static inline long probe_mmap(long addr, long len, long prot, long flags, long f
 #endif
 }
 
-/* The socket operations of socketcall(2), by its numbers. */
+/*
+ * lseek to the 64-bit offset `off` from `whence`, with the offset it reaches
+ * in `*result`: on i386 through _llseek, which takes the offset in two words
+ * and writes the result, and on x86-64 through lseek, whose offset and result
+ * are 64 bits wide. 0, or a negated errno. LLSEEK_NAME names the call in a
+ * row's text.
+ */
+#if defined __x86_64__
+#define LLSEEK_NAME "lseek"
+#else
+#define LLSEEK_NAME "_llseek"
+#endif
+static inline long probe_llseek(int fd, long long off, int whence, long long *result)
+{
+#if defined __x86_64__
+    long r = syscall3(SYS_LSEEK, fd, (long)off, whence);
+
+    if (r < 0) {
+        return r;
+    }
+    *result = r;
+    return 0;
+#else
+    return syscall5(SYS_LLSEEK, fd, (long)((unsigned long long)off >> 32), (long)off, (long)result,
+                    whence);
+#endif
+}
+
+/**
+ * ftruncate to the 64-bit length `len`: on i386 through ftruncate64, which
+ * takes the length in two words, the low first, and on x86-64 through
+ * ftruncate. 0, or a negated errno.
+ */
+static inline long probe_ftruncate64(int fd, long long len)
+{
+#if defined __x86_64__
+    return syscall2(SYS_FTRUNCATE, fd, (long)len);
+#else
+    return syscall3(SYS_FTRUNCATE64, fd, (long)len, (long)((unsigned long long)len >> 32));
+#endif
+}
+
+/*
+ * statfs of `path` into `buf`: on i386 through statfs64, which takes the
+ * size of its 84-byte struct, and on x86-64 through statfs, whose struct of
+ * longs is 120 bytes. KSTATFS_SIZE is the larger, and f_type, the magic, is
+ * the 32-bit word at the start of either; KSTATFS_FILES and KSTATFS_FFREE
+ * are the offsets of the 64-bit inode counts. 0, or a negated errno.
+ */
+#define KSTATFS_SIZE 120
+#if defined __x86_64__
+#define KSTATFS_FILES 40
+#define KSTATFS_FFREE 48
+#else
+#define KSTATFS_FILES 32
+#define KSTATFS_FFREE 40
+#endif
+static inline long probe_statfs(const char *path, void *buf)
+{
+#if defined __x86_64__
+    return syscall2(SYS_STATFS, (long)path, (long)buf);
+#else
+    return syscall3(SYS_STATFS64, (long)path, 84, (long)buf);
+#endif
+}
+
+/* The socket operations of socketcall(2), by its numbers, and Rach2's ICMP
+ * echo, SC_PING and SC_PING_DATA, with its call (pingcall.h). */
+#include "../utils/pingcall.h"
+
 #define SC_SOCKET      1
 #define SC_BIND        2
 #define SC_CONNECT     3
@@ -582,8 +657,9 @@ static inline long probe_mmap(long addr, long len, long prot, long flags, long f
  * The socket operation `call` with the arguments `args`, as socketcall(2)
  * takes them: on i386 through socketcall itself, and on x86-64, which has no
  * socketcall, through the call of the operation's own. SC_SEND and SC_RECV
- * are sendto and recvfrom with no address there, and SC_ACCEPT is accept4
- * with no flags. The operation's result, or a negated errno.
+ * are sendto and recvfrom with no address there, SC_ACCEPT is accept4 with
+ * no flags, and the echo is Rach2's call for it. The operation's result, or a
+ * negated errno.
  */
 static inline long sock_call(int call, const unsigned long *args)
 {
@@ -627,6 +703,9 @@ static inline long sock_call(int call, const unsigned long *args)
         return syscall3(SYS_RECVMSG, a[0], a[1], a[2]);
     case SC_ACCEPT4:
         return syscall4(SYS_ACCEPT4, a[0], a[1], a[2], a[3]);
+    case SC_PING:
+    case SC_PING_DATA:
+        return syscall2(SYS_PINGCALL, call, (long)args);
     default:
         return -22; /* EINVAL, as socketcall answers an operation it lacks */
     }

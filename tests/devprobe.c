@@ -22,10 +22,8 @@
 #define O_WRONLY    1
 #define O_DIRECTORY 0200000
 
-/* i386 struct stat64: st_ino is the 64-bit field at offset 88. A
-   linux_dirent64 record has its 64-bit d_ino first, its length at 16 and its
-   name at 19. */
-#define ST_INO64 88
+/* A linux_dirent64 record has its 64-bit d_ino first, its length at 16 and
+   its name at 19, on i386 and x86-64 alike. */
 #define D_RECLEN 16
 #define D_NAME   19
 
@@ -162,7 +160,7 @@ static unsigned int listed_ino(const char *name)
  */
 static void null_is_not_a_disk(void)
 {
-    static char st[96];
+    static char st[KSTAT_SIZE];
     unsigned int ino;
     int fd;
 
@@ -171,8 +169,8 @@ static void null_is_not_a_disk(void)
     check(syscall3(SYS_IOCTL, fd, 0x125F, 0) == -25, "a disk's BLKRRPART on /dev/null is ENOTTY");
     check(syscall3(SYS_FSTAT, fd, (long)st, 0) == 0, "fstat /dev/null");
     ino = listed_ino("null");
-    check(ino != 0 && *(unsigned int *)(st + ST_INO64) == ino &&
-              *(unsigned int *)(st + ST_INO64 + 4) == 0u,
+    check(ino != 0 && *(unsigned int *)(st + KSTAT_INO) == ino &&
+              *(unsigned int *)(st + KSTAT_INO + 4) == 0u,
           "fstat and the /dev listing give /dev/null one inode");
     syscall1(SYS_CLOSE, fd);
 }

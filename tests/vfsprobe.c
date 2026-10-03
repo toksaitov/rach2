@@ -123,7 +123,7 @@ static unsigned root_magic(void)
     return 0;
 }
 
-static unsigned char stbuf[104];
+static unsigned char stbuf[KSTAT_SIZE];
 
 static int xstat(const char *path)
 {
@@ -131,8 +131,8 @@ static int xstat(const char *path)
     return syscall2(SYS_STAT, (long)path, (long)stbuf);
 }
 
-/* A field of the last stat64: the mode at 16, the mtime at 72, the 64-bit
-   inode's low word at 88, in the i386 layout. */
+/* The low 32 bits of a field of the last stat, at its KSTAT_ offset: the
+   mode, the link count, the blocks, the mtime, the inode. */
 static unsigned st_field(int off)
 {
     unsigned v;
@@ -179,11 +179,12 @@ static void check_blocks(unsigned magic)
     if (fd < 0 || syscall2(SYS_FTRUNCATE, fd, 65536) != 0 || xstat("/vp/d/s") != 0) {
         fail("ftruncate a new file to 64 KiB");
     }
-    if (st_field(56) != (magic == STATFS_MAGIC_EXT2 ? 0u : 128u)) {
+    if (st_field(KSTAT_BLOCKS) != (magic == STATFS_MAGIC_EXT2 ? 0u : 128u)) {
         fail("st_blocks of a file that is one hole");
     }
-    if (syscall3(SYS_WRITE, fd, (long)"x", 1) != 1 || xstat("/vp/d/s") != 0 || st_field(56) == 0 ||
-        (magic == STATFS_MAGIC_EXT2 && st_field(56) >= 128)) {
+    if (syscall3(SYS_WRITE, fd, (long)"x", 1) != 1 || xstat("/vp/d/s") != 0 ||
+        st_field(KSTAT_BLOCKS) == 0 ||
+        (magic == STATFS_MAGIC_EXT2 && st_field(KSTAT_BLOCKS) >= 128)) {
         fail("st_blocks after a write into the hole");
     }
     syscall1(SYS_CLOSE, fd);
@@ -201,10 +202,10 @@ static void check_link(unsigned magic)
     unsigned ino;
     int fd;
 
-    if (xstat("/vp/d/f") != 0 || st_field(20) != 1) {
+    if (xstat("/vp/d/f") != 0 || st_field(KSTAT_NLINK) != 1) {
         fail("the link source has one name");
     }
-    ino = st_field(88);
+    ino = st_field(KSTAT_INO);
     if (magic == STATFS_MAGIC_KRFFS) {
         if (syscall2(SYS_LINK, (long)"/vp/d/f", (long)"/vp/d/h") != -EPERM ||
             xstat("/vp/d/h") != -ENOENT) {
@@ -215,8 +216,8 @@ static void check_link(unsigned magic)
     if (syscall2(SYS_LINK, (long)"/vp/d/f", (long)"/vp/d/h") != 0) {
         fail("link on ext2 succeeds");
     }
-    if (xstat("/vp/d/h") != 0 || st_field(88) != ino || st_field(20) != 2 ||
-        xstat("/vp/d/f") != 0 || st_field(88) != ino || st_field(20) != 2) {
+    if (xstat("/vp/d/h") != 0 || st_field(KSTAT_INO) != ino || st_field(KSTAT_NLINK) != 2 ||
+        xstat("/vp/d/f") != 0 || st_field(KSTAT_INO) != ino || st_field(KSTAT_NLINK) != 2) {
         fail("both ext2 names report one inode with two links");
     }
     fd = syscall3(SYS_OPEN, (long)"/vp/d/h", O_RDONLY, 0);
@@ -226,7 +227,7 @@ static void check_link(unsigned magic)
     }
     syscall1(SYS_CLOSE, fd);
     if (syscall1(SYS_UNLINK, (long)"/vp/d/h") != 0 || xstat("/vp/d/h") != -ENOENT ||
-        xstat("/vp/d/f") != 0 || st_field(88) != ino || st_field(20) != 1) {
+        xstat("/vp/d/f") != 0 || st_field(KSTAT_INO) != ino || st_field(KSTAT_NLINK) != 1) {
         fail("unlink leaves the ext2 source with one link");
     }
 }
@@ -310,9 +311,9 @@ PROBE_START void _start(void)
         if (xstat("/") != 0) {
             fail("stat of the root");
         }
-        root_ino = st_field(88);
-        if (xstat("/..") != 0 || st_field(88) != root_ino || xstat("/vp/..") != 0 ||
-            st_field(88) != root_ino) {
+        root_ino = st_field(KSTAT_INO);
+        if (xstat("/..") != 0 || st_field(KSTAT_INO) != root_ino || xstat("/vp/..") != 0 ||
+            st_field(KSTAT_INO) != root_ino) {
             fail("dot-dot at the root is the root");
         }
     }
@@ -487,21 +488,21 @@ PROBE_START void _start(void)
 
     /* ---- attributes ---- */
     if (syscall2(SYS_CHMOD, (long)"/vp/d/f", 0640) != 0 || xstat("/vp/d/f") != 0 ||
-        (st_field(16) & 0777) != 0640) {
+        (st_field(KSTAT_MODE) & 0777) != 0640) {
         fail("chmod sets the mode stat reports");
     }
     if (syscall4(SYS_UTIMENSAT, AT_FDCWD, (long)"/vp/d/f", 0, 0) != 0) {
         fail("utimensat with the current time");
     }
     {
-        int ts[4];
+        long ts[4];
 
         ts[0] = 1000000000; /* atime */
         ts[1] = 0;
         ts[2] = 1234567890; /* mtime */
         ts[3] = 0;
         if (syscall4(SYS_UTIMENSAT, AT_FDCWD, (long)"/vp/d/f", (long)ts, 0) != 0 ||
-            xstat("/vp/d/f") != 0 || st_field(72) != 1234567890u) {
+            xstat("/vp/d/f") != 0 || st_field(KSTAT_MTIME) != 1234567890u) {
             fail("utimensat sets the time stat reports");
         }
     }
@@ -510,17 +511,17 @@ PROBE_START void _start(void)
     check_blocks(magic);
 
     /* ---- statfs identities ---- */
-    if (syscall3(SYS_STATFS64, (long)"/proc", 84, (long)iobuf) != 0 ||
-        *(unsigned *)iobuf != STATFS_MAGIC_PROC) {
+    if (probe_statfs("/proc", iobuf) != 0 || *(unsigned *)iobuf != STATFS_MAGIC_PROC) {
         fail("statfs64 of /proc");
     }
-    if (syscall3(SYS_STATFS64, (long)"/", 84, (long)iobuf) != 0 || *(unsigned *)iobuf != magic) {
+    if (probe_statfs("/", iobuf) != 0 || *(unsigned *)iobuf != magic) {
         fail("statfs64 of the root");
     }
-    /* f_files at 32 and f_ffree at 40: counted on ext2, not on KRFFS. */
-    if (magic == STATFS_MAGIC_EXT2 ? *(unsigned *)(iobuf + 32) == 0 ||
-                                         *(unsigned *)(iobuf + 40) > *(unsigned *)(iobuf + 32)
-                                   : *(unsigned *)(iobuf + 32) != 0) {
+    /* f_files and f_ffree: counted on ext2, not on KRFFS. */
+    if (magic == STATFS_MAGIC_EXT2
+            ? *(unsigned *)(iobuf + KSTATFS_FILES) == 0 ||
+                  *(unsigned *)(iobuf + KSTATFS_FFREE) > *(unsigned *)(iobuf + KSTATFS_FILES)
+            : *(unsigned *)(iobuf + KSTATFS_FILES) != 0) {
         fail("statfs64 of the root counts its inodes");
     }
 

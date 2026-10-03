@@ -105,9 +105,15 @@ static int streq(const char *a, const char *b)
     return *a == *b;
 }
 
-/* The stat64 buffer, in the i386 layout: st_mode at offset 16, st_nlink at
-   20. The kernel writes it through the pointer the syscall is given. */
-static unsigned char st[104];
+/* The stat buffer, in the architecture's layout (probe.h's KSTAT_ offsets).
+   The kernel writes it through the pointer the syscall is given. */
+static unsigned char st[KSTAT_SIZE];
+
+/* The 32-bit word at `at` in the stat buffer, least significant byte first. */
+static int st_word(int at)
+{
+    return (int)(st[at] | (st[at + 1] << 8) | (st[at + 2] << 16) | (st[at + 3] << 24));
+}
 
 /* The mode word of a stat or lstat. */
 static int stat_mode(int call, const char *path, int *mode)
@@ -115,7 +121,7 @@ static int stat_mode(int call, const char *path, int *mode)
     int rc = syscall2(call, (long)path, (long)st);
 
     if (rc == 0) {
-        *mode = (int)(st[16] | (st[17] << 8) | (st[18] << 16) | (st[19] << 24));
+        *mode = st_word(KSTAT_MODE);
     }
     return rc;
 }
@@ -126,7 +132,7 @@ static int stat_nlink(const char *path)
     if (syscall2(SYS_STAT, (long)path, (long)st) != 0) {
         return -1;
     }
-    return (int)(st[20] | (st[21] << 8) | (st[22] << 16) | (st[23] << 24));
+    return st_word(KSTAT_NLINK);
 }
 
 static int read_all(const char *path, char *buf, int cap)
@@ -156,10 +162,10 @@ static void expect_open(const char *path, int flags, int want, const char *what)
     }
 }
 
-/* The mode word of the stat64 buffer. */
+/* The mode word of the stat buffer. */
 static int st_mode(void)
 {
-    return (int)(st[16] | (st[17] << 8) | (st[18] << 16) | (st[19] << 24));
+    return st_word(KSTAT_MODE);
 }
 
 static char big[512];
@@ -290,7 +296,9 @@ static void links_rows(void)
     if (syscall4(SYS_UTIMENSAT, AT_FDCWD, (long)"/e2/fast", 0, AT_SYMLINK_FOLLOW) != -EINVAL) {
         fail("utimensat with AT_SYMLINK_FOLLOW answers EINVAL");
     }
-    /* The old stat and lstat, whose mode is a 16-bit word at offset 8. */
+#if !defined __x86_64__
+    /* The old stat and lstat, whose mode is a 16-bit word at offset 8, which
+       only i386 has. */
     if (syscall2(SYS_OLDLSTAT, (long)"/e2/fast", (long)st) != 0 ||
         ((st[8] | (st[9] << 8)) & 0170000) != 0120000) {
         fail("the old lstat reports the link");
@@ -299,6 +307,7 @@ static void links_rows(void)
         ((st[8] | (st[9] << 8)) & 0170000) != 0100000) {
         fail("the old stat reports the target");
     }
+#endif
     /* The links of /proc answer the same two ways. */
     expect_open("/proc/self", O_RDONLY | O_NOFOLLOW, ELOOP,
                 "/proc/self under O_NOFOLLOW answers ELOOP");
@@ -515,13 +524,9 @@ static void cost_rows(int append_only)
     cost_verify("/e2/cost-append", 64, 3);
 }
 
-__asm__(".global _start\n"
-        "_start:\n"
-        "   mov %esp, %eax\n"
-        "   push %eax\n"
-        "   call probe_main\n");
+PROBE_SP_ENTRY;
 
-void probe_main(unsigned int *sp)
+void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];
     char **argv = (char **)(sp + 1);

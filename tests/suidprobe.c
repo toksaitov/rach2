@@ -31,9 +31,6 @@ typedef unsigned int u32;
 #define STDOUT 1
 #define EACCES 13
 
-/* i386 struct stat64: the mode is a 32-bit field at offset 16. */
-#define ST_MODE 16
-
 /* Linux wait-status decode: a normal exit has the low 7 bits clear and the
  * code in bits 8-15; a signal death has the signal in the low 7 bits. A
  * probe that read WEXITSTATUS without WIFEXITED would decode a SIGSEGV (11) as
@@ -107,7 +104,7 @@ static u32 stat_mode(const char *path)
     if (syscall3(SYS_STAT, (long)path, (long)st, 0) != 0) {
         fail("stat64");
     }
-    return *(u32 *)(st + ST_MODE);
+    return *(u32 *)(st + KSTAT_MODE);
 }
 
 PROBE_START void _start(void)

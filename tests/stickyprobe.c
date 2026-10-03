@@ -83,9 +83,6 @@ typedef unsigned int u32;
 #define ENOENT 2
 #define EACCES 13
 
-/* i386 struct stat64: the 32-bit mode field is at offset 16. */
-#define ST_MODE 16
-
 /* Linux wait-status decode: a normal exit has the low 7 bits clear and the
  * code in bits 8-15; a signal death has the signal in the low 7 bits. */
 #define WIFEXITED(s)   (((s) & 0x7F) == 0)
@@ -233,7 +230,7 @@ static void want_mode(const char *step, const char *path, u32 mode)
     if (rc != 0) {
         fail(step, rc);
     }
-    got = *(u32 *)(statbuf + ST_MODE) & 07777u;
+    got = *(u32 *)(statbuf + KSTAT_MODE) & 07777u;
     if (got != mode) {
         puts_("STICKYPROBE FAIL: ");
         puts_(step);

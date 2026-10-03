@@ -28,21 +28,10 @@ typedef unsigned char uint8_t;
 
 #define STDOUT_FILENO 1
 
-#define SC_SOCKET      1
-#define SC_BIND        2
-#define SC_CONNECT     3
-#define SC_LISTEN      4
-#define SC_ACCEPT      5
-#define SC_GETSOCKNAME 6
-#define SC_GETPEERNAME 7
-#define SC_SENDTO      11
-#define MSG_DONTWAIT   0x40
-#define MSG_PEEK       0x2
-#define EAGAIN         11
-#define EFAULT         14
-
-#define SC_RECVFROM 12
-#define SC_SHUTDOWN 13
+#define MSG_DONTWAIT 0x40
+#define MSG_PEEK     0x2
+#define EAGAIN       11
+#define EFAULT       14
 
 #define AF_INET     2
 #define SOCK_STREAM 1
@@ -115,9 +104,9 @@ static void sys_exit(int status)
     __builtin_unreachable();
 }
 
-static int socketcall(int call, uint32_t *args)
+static int socketcall(int call, unsigned long *args)
 {
-    return syscall2(SYS_SOCKETCALL, (long)call, (long)args);
+    return (int)sock_call(call, args);
 }
 
 static size_t strlen(const char *s)
@@ -199,7 +188,7 @@ static uint8_t own_ip[4];
    a.b.c.d, into `me`. */
 static void source_for(uint8_t *me, uint8_t a, uint8_t b, uint8_t c, uint8_t d)
 {
-    uint32_t args[6];
+    unsigned long args[6];
     uint8_t sa[16];
     int len = 16;
     int fd;
@@ -251,7 +240,7 @@ static void learn_addresses(void)
 /* The local port `getsockname` reports for `fd`, or -1 when it refuses. */
 static int local_port(int fd)
 {
-    uint32_t args[6];
+    unsigned long args[6];
     uint8_t me[16];
     int len = 16;
     int i;
@@ -268,14 +257,11 @@ static int local_port(int fd)
 }
 
 /* The three system calls the round-trip row needs, in this file's shape. */
-/* The two descriptors are written by the kernel through `fds`, which is why
-   the operand is an output as well as an input. */
+/* The two descriptors are written by the kernel through `fds`, which the
+   call's memory clobber covers. */
 static int sys_pipe(int *fds)
 {
-    int r;
-
-    __asm__ __volatile__("int $0x80" : "=a"(r), "=m"(*(int (*)[2])fds) : "0"(SYS_PIPE), "b"(fds));
-    return r;
+    return syscall1(SYS_PIPE, (long)fds);
 }
 
 static int sys_fork(void)
@@ -291,7 +277,7 @@ static int sys_waitpid(int pid, int *status)
 /* The milliseconds from `a` to `b`, both as `gettimeofday` fills them. The
    microseconds are subtracted as signed values, so a second that borrows does
    not wrap through zero and report four billion. */
-static int elapsed_ms(const uint32_t *a, const uint32_t *b)
+static int elapsed_ms(const long *a, const long *b)
 {
     int sec = (int)(b[0] - a[0]);
     int usec = (int)b[1] - (int)a[1];
@@ -299,7 +285,7 @@ static int elapsed_ms(const uint32_t *a, const uint32_t *b)
     return sec * 1000 + usec / 1000;
 }
 
-static int sys_gettimeofday(uint32_t *tv)
+static int sys_gettimeofday(long *tv)
 {
     return syscall2(SYS_GETTIMEOFDAY, (long)tv, (long)0);
 }
@@ -327,7 +313,7 @@ static void sys_nanosleep_ms(long ms)
 
 static void udp_loop(void)
 {
-    uint32_t args[6];
+    unsigned long args[6];
     uint8_t sa[16], dst[16], src[16];
     uint32_t salen = 16;
     char rbuf[32];
@@ -450,7 +436,7 @@ static void udp_loop(void)
    two seconds. */
 static void udp_no_length(void)
 {
-    uint32_t args[6];
+    unsigned long args[6];
     uint8_t sa[16], src[16];
     uint32_t salen = 16;
     char rbuf[32];
@@ -509,7 +495,7 @@ static void udp_no_length(void)
    for two seconds while it answers EAGAIN. */
 static int recv_spin(int s, char *buf, int len, int flags)
 {
-    uint32_t args[6];
+    unsigned long args[6];
     int n = -EAGAIN, spin;
 
     for (spin = 0; spin < 100 && n == -EAGAIN; spin++) {
@@ -530,7 +516,7 @@ static int recv_spin(int s, char *buf, int len, int flags)
    sender, for the next receive, which takes it. */
 static void udp_peek(void)
 {
-    uint32_t args[6];
+    unsigned long args[6];
     uint8_t sa[16], src[16];
     uint32_t salen = 16;
     char rbuf[32];
@@ -586,7 +572,7 @@ static void udp_peek(void)
    the whole message from its first byte. */
 static void tcp_peek(void)
 {
-    uint32_t args[6];
+    unsigned long args[6];
     uint8_t sa[16];
     char rbuf[32];
     const char *msg = "peek-tcp";
@@ -636,7 +622,7 @@ static void tcp_peek(void)
 
 static void tcp_loop(void)
 {
-    uint32_t args[6];
+    unsigned long args[6];
     uint8_t sa[16], peer[16];
     uint32_t salen = 16;
     char rbuf[32];
@@ -786,7 +772,7 @@ static char stream_byte(uint32_t n)
 
 static void tcp_loop_bulk(void)
 {
-    uint32_t args[6];
+    unsigned long args[6];
     uint8_t sa[16];
     static char out[65536], in[16384];
     uint32_t sent = 0, got = 0, spins = 0;
@@ -912,7 +898,7 @@ static void tcp_loop_bulk(void)
 static int pipe_pingpong_ms(void)
 {
     int up[2], down[2];
-    uint32_t t0[2], t1[2];
+    long t0[2], t1[2];
     char one = 'p';
     int pid, status = 0, round;
 
@@ -967,9 +953,9 @@ static int pipe_pingpong_ms(void)
  */
 static void tcp_loop_pingpong(void)
 {
-    uint32_t args[6];
+    unsigned long args[6];
     uint8_t sa[16];
-    uint32_t t0[2], t1[2];
+    long t0[2], t1[2];
     char one = 'p';
     int ls, cs, as, pid, status = 0, round, ms, base;
     uint32_t idle, tick;
@@ -1066,7 +1052,7 @@ static void tcp_loop_pingpong(void)
    address the machine does not have is refused. */
 static void tcp_bound_loopback(void)
 {
-    uint32_t args[6];
+    unsigned long args[6];
     uint8_t sa[16];
     int ls, cs, as;
 
@@ -1129,7 +1115,7 @@ static void tcp_bound_loopback(void)
 
 static void tcp_refused(void)
 {
-    uint32_t args[6];
+    unsigned long args[6];
     uint8_t sa[16];
     int cs, rc;
 
@@ -1168,7 +1154,7 @@ static void tcp_refused(void)
  */
 static void shutdown_wakes_a_sharer(int cs)
 {
-    uint32_t args[6];
+    unsigned long args[6];
     uint8_t byte;
     int pid, status = 0;
 
@@ -1195,7 +1181,7 @@ static void shutdown_wakes_a_sharer(int cs)
 
 static void shutdown_rows(int cs, uint8_t *sa)
 {
-    uint32_t args[6];
+    unsigned long args[6];
     int fresh;
 
     args[0] = (uint32_t)cs;
@@ -1246,7 +1232,7 @@ static void shutdown_rows(int cs, uint8_t *sa)
  */
 static void tcp_ports(void)
 {
-    uint32_t args[6];
+    unsigned long args[6];
     uint8_t sa[16], peer[16];
     uint32_t salen = 16;
     int ls, cs, as, second;
@@ -1446,7 +1432,7 @@ static void tcp_ports(void)
  */
 static void tcp_simultaneous(void)
 {
-    uint32_t args[6];
+    unsigned long args[6];
     uint8_t sa[16];
     int a, b, rc, spin, round, crossed = 0;
     const char *msg = "simultaneous";
@@ -1557,7 +1543,7 @@ static void tcp_simultaneous(void)
 /** A server may close immediately after accept; connect still succeeds. */
 static void tcp_accept_close(void)
 {
-    uint32_t args[6];
+    unsigned long args[6];
     uint8_t sa[16];
     char byte;
     int listener, client, accepted, pid, status = 0;

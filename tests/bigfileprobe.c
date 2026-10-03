@@ -156,16 +156,15 @@ static u64 parse(const char *s)
 static long long seek(int fd, long long off, int whence)
 {
     long long result = 0;
-    int rc = syscall5(SYS_LLSEEK, fd, (int)(unsigned)((u64)off >> 32), (int)(unsigned)(u64)off,
-                      (long)&result, whence);
+    int rc = probe_llseek(fd, off, whence, &result);
 
     return rc < 0 ? rc : result;
 }
 
-/* fstat64's st_size, or a negative errno. */
+/* fstat's st_size, or a negative errno. */
 static long long size_of(int fd)
 {
-    unsigned char st[104];
+    unsigned char st[KSTAT_SIZE];
     u64 size = 0;
     int rc, i;
 
@@ -177,14 +176,14 @@ static long long size_of(int fd)
         return rc;
     }
     for (i = 7; i >= 0; i--) {
-        size = (size << 8) | st[44 + i];
+        size = (size << 8) | st[KSTAT_SIZE_AT + i];
     }
     return (long long)size;
 }
 
 static int ftruncate64(int fd, u64 length)
 {
-    return syscall3(SYS_FTRUNCATE64, fd, (int)(unsigned)length, (int)(unsigned)(length >> 32));
+    return probe_ftruncate64(fd, (long long)length);
 }
 
 static unsigned char chunk[CHUNK] __attribute__((aligned(4096)));
@@ -526,15 +525,11 @@ static void limit_mode(u64 offset)
     syscall1(SYS_UNLINK, (long)"/big/limit.bin");
 }
 
-void probe_main(unsigned int *sp);
+void probe_main(unsigned long *sp);
 
-__asm__(".global _start\n"
-        "_start:\n"
-        "   mov %esp, %eax\n"
-        "   push %eax\n"
-        "   call probe_main\n");
+PROBE_SP_ENTRY;
 
-void probe_main(unsigned int *sp)
+void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];
     char **argv = (char **)(sp + 1);

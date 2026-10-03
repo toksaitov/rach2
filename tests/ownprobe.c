@@ -60,10 +60,6 @@ static u32 stat_field(const char *path, int offset)
     return *(u32 *)(st + offset);
 }
 
-#define ST_MODE 16
-#define ST_UID  24
-#define ST_GID  28
-
 /* The identity-dependent walk runs in a child so the parent stays root. */
 static void child_main(void)
 {
@@ -77,23 +73,23 @@ static void child_main(void)
     if (fd < 0) {
         fail("creat");
     }
-    if ((stat_field("/own.txt", ST_MODE) & 0777) != 0640) {
+    if ((stat_field("/own.txt", KSTAT_MODE) & 0777) != 0640) {
         fail("umask on creat");
     }
-    if (stat_field("/own.txt", ST_UID) != 0 || stat_field("/own.txt", ST_GID) != 0) {
+    if (stat_field("/own.txt", KSTAT_UID) != 0 || stat_field("/own.txt", KSTAT_GID) != 0) {
         fail("creation owner not root");
     }
     if (syscall3(SYS_MKDIR, (long)"/own.d", 0777, 0) != 0 ||
-        (stat_field("/own.d", ST_MODE) & 0777) != 0750) {
+        (stat_field("/own.d", KSTAT_MODE) & 0777) != 0750) {
         fail("umask on mkdir");
     }
 
     /* chown: a uid change is root's; the stored ids come back from stat. */
     if (syscall3(SYS_CHOWN, (long)"/own.txt", 1000, 1000) != 0 ||
-        stat_field("/own.txt", ST_UID) != 1000 || stat_field("/own.txt", ST_GID) != 1000) {
+        stat_field("/own.txt", KSTAT_UID) != 1000 || stat_field("/own.txt", KSTAT_GID) != 1000) {
         fail("chown as root");
     }
-    if (syscall3(SYS_FCHOWN, fd, 1000, 2000) != 0 || stat_field("/own.txt", ST_GID) != 2000) {
+    if (syscall3(SYS_FCHOWN, fd, 1000, 2000) != 0 || stat_field("/own.txt", KSTAT_GID) != 2000) {
         fail("fchown as root");
     }
     if (syscall3(SYS_CHOWN, (long)"/own.d", 1000, 1000) != 0) {
@@ -107,12 +103,12 @@ static void child_main(void)
         fail("excursion out");
     }
     if (syscall3(SYS_CREAT, (long)"/own.d/e.txt", 0666, 0) < 0 ||
-        stat_field("/own.d/e.txt", ST_UID) != 1000 ||
-        (stat_field("/own.d/e.txt", ST_MODE) & 0777) != 0640) {
+        stat_field("/own.d/e.txt", KSTAT_UID) != 1000 ||
+        (stat_field("/own.d/e.txt", KSTAT_MODE) & 0777) != 0640) {
         fail("creation stamps euid under umask");
     }
     if (syscall3(SYS_CHMOD, (long)"/own.d/e.txt", 0666, 0) != 0 ||
-        (stat_field("/own.d/e.txt", ST_MODE) & 0777) != 0666) {
+        (stat_field("/own.d/e.txt", KSTAT_MODE) & 0777) != 0666) {
         fail("chmod is not masked");
     }
     if (syscall3(SYS_SETREUID, (int)KEEP, 0, 0) != 0) {
@@ -129,11 +125,11 @@ static void child_main(void)
 
     /* chmod: the owner may; fchmod agrees; a uid change stays root's. */
     if (syscall3(SYS_CHMOD, (long)"/own.txt", 0600, 0) != 0 ||
-        (stat_field("/own.txt", ST_MODE) & 0777) != 0600) {
+        (stat_field("/own.txt", KSTAT_MODE) & 0777) != 0600) {
         fail("chmod as owner");
     }
     if (syscall3(SYS_FCHMOD, fd, 0640, 0) != 0 ||
-        (stat_field("/own.txt", ST_MODE) & 0777) != 0640) {
+        (stat_field("/own.txt", KSTAT_MODE) & 0777) != 0640) {
         fail("fchmod as owner");
     }
     if (syscall3(SYS_CHOWN, (long)"/own.txt", 0, KEEP) != -EPERM) {
@@ -141,7 +137,7 @@ static void child_main(void)
     }
     /* chgrp: the owner, to an own group only. */
     if (syscall3(SYS_CHOWN, (long)"/own.txt", KEEP, 3000) != 0 ||
-        stat_field("/own.txt", ST_GID) != 3000) {
+        stat_field("/own.txt", KSTAT_GID) != 3000) {
         fail("owner chgrp to own group");
     }
     if (syscall3(SYS_CHOWN, (long)"/own.txt", KEEP, 4000) != -EPERM) {
@@ -158,7 +154,7 @@ static void child_main(void)
             fail("open own dir");
         }
         if (syscall3(SYS_FCHMOD, dfd, 0700, 0) != 0 ||
-            (stat_field("/own.d", ST_MODE) & 0777) != 0700) {
+            (stat_field("/own.d", KSTAT_MODE) & 0777) != 0700) {
             fail("fchmod on dir fd");
         }
         syscall3(SYS_CLOSE, dfd, 0, 0);

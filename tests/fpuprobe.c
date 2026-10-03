@@ -2,29 +2,39 @@
  * The floating-point state of a process, proved from user space.
  *
  * `fpuprobe`: the parent and a forked child each keep their own values in
- * `st(0)`, `st(1)` and `xmm0` to `xmm7`, a control word with the rounding
- * mode set to round down, and an MXCSR with flush-to-zero set, and each
- * checks them again and again for half a second while yielding to the
- * other and being preempted by the timer. Then the parent raises a signal
- * whose handler must start with the initial state, clobbers everything it
- * can reach, raises a second signal from inside the first, and returns; the
- * values must be as they were before the signal. A child then sets the same
- * state and executes this program with `reset`, which must find the initial
- * state: control word 0x37F, every register tagged empty, MXCSR 0x1F80. Last,
- * a child's handler sets a reserved bit of MXCSR in the frame the kernel
+ * `st(0)`, `st(1)` and `xmm0` to `xmm7`, or to `xmm15` on x86-64, a control
+ * word with the rounding mode set to round down, and an MXCSR with
+ * flush-to-zero set, and each checks them again and again for half a second
+ * while yielding to the other and being preempted by the timer. Then the parent
+ * raises a signal whose handler must start with the initial state, clobbers
+ * everything it can reach, raises a second signal from inside the first, and
+ * returns; the values must be as they were before the signal. A child then sets
+ * the same state and executes this program with `reset`, which must find the
+ * initial state: control word 0x37F, every register tagged empty, MXCSR 0x1F80.
+ * Last, a child's handler sets a reserved bit of MXCSR in the frame the kernel
  * built on its stack and returns through it; the kernel must refuse the
  * frame and the child must die of SIGSEGV.
  *
- * `fpuprobe x87`, for a boot with `rach2.nofxsr`: the same without the XMM
- * registers and MXCSR, since an SSE instruction is an invalid opcode there,
- * and without the damaged frame, since the x87 image has no bit a load can
- * fault on.
+ * `fpuprobe x87`, for a boot with `rach2.nofxsr`, which only the i686 kernel
+ * takes: the same without the XMM registers and MXCSR, since an SSE
+ * instruction is an invalid opcode there, and without the damaged frame,
+ * since the x87 image has no bit a load can fault on.
+ *
+ * On x86-64 the probe's own code is compiled to use the general registers
+ * alone, so that nothing but the rows' assembly touches an XMM register.
  *
  * Prints "FPUPROBE OK" or "FPUPROBE FAIL: reason". Freestanding; direct system
  * calls (probe.h).
  */
 
 #include "probe.h"
+
+#if defined __x86_64__
+#pragma GCC target("general-regs-only")
+#define NXMM 16
+#else
+#define NXMM 8
+#endif
 
 #define SIGSEGV     11
 #define SIGUSR1     10
@@ -68,8 +78,8 @@ static void fail(const char *why)
 }
 
 struct timeval {
-    int sec;
-    int usec;
+    long sec;
+    long usec;
 };
 
 static unsigned now_ms(void)
@@ -97,12 +107,12 @@ static unsigned read_mxcsr(void)
     return m;
 }
 
-/* One process's values: two doubles for the x87 stack and eight rows of
- * four words for the XMM registers, all derived from a seed. */
+/* One process's values: two doubles for the x87 stack and a row of four
+ * words for each XMM register, all derived from a seed. */
 struct values {
     unsigned st0[2];
     unsigned st1[2];
-    unsigned xmm[8][4];
+    unsigned xmm[NXMM][4];
 };
 
 static void make_values(struct values *v, unsigned seed)
@@ -113,7 +123,7 @@ static void make_values(struct values *v, unsigned seed)
     v->st0[1] = 0x40000000u | (seed & 0xFFFFu);
     v->st1[0] = ~seed;
     v->st1[1] = 0x40100000u | ((seed * 7u) & 0xFFFFu);
-    for (i = 0; i < 8; i++) {
+    for (i = 0; i < NXMM; i++) {
         for (j = 0; j < 4; j++) {
             v->xmm[i][j] = seed * 0x01000193u + (unsigned)(i * 4 + j) * 0x100001B3u;
         }
@@ -141,6 +151,16 @@ static void load_values(const struct values *v, unsigned cw, unsigned mxcsr)
             "movups %0, %%xmm4; movups %1, %%xmm5; movups %2, %%xmm6; movups %3, %%xmm7"
             :
             : "m"(v->xmm[4]), "m"(v->xmm[5]), "m"(v->xmm[6]), "m"(v->xmm[7]));
+#if defined __x86_64__
+        __asm__ __volatile__(
+            "movups %0, %%xmm8; movups %1, %%xmm9; movups %2, %%xmm10; movups %3, %%xmm11"
+            :
+            : "m"(v->xmm[8]), "m"(v->xmm[9]), "m"(v->xmm[10]), "m"(v->xmm[11]));
+        __asm__ __volatile__(
+            "movups %0, %%xmm12; movups %1, %%xmm13; movups %2, %%xmm14; movups %3, %%xmm15"
+            :
+            : "m"(v->xmm[12]), "m"(v->xmm[13]), "m"(v->xmm[14]), "m"(v->xmm[15]));
+#endif
     }
 }
 
@@ -162,6 +182,14 @@ static void read_values(struct values *v, unsigned *cw, unsigned *mxcsr)
         __asm__ __volatile__(
             "movups %%xmm4, %0; movups %%xmm5, %1; movups %%xmm6, %2; movups %%xmm7, %3"
             : "=m"(v->xmm[4]), "=m"(v->xmm[5]), "=m"(v->xmm[6]), "=m"(v->xmm[7]));
+#if defined __x86_64__
+        __asm__ __volatile__(
+            "movups %%xmm8, %0; movups %%xmm9, %1; movups %%xmm10, %2; movups %%xmm11, %3"
+            : "=m"(v->xmm[8]), "=m"(v->xmm[9]), "=m"(v->xmm[10]), "=m"(v->xmm[11]));
+        __asm__ __volatile__(
+            "movups %%xmm12, %0; movups %%xmm13, %1; movups %%xmm14, %2; movups %%xmm15, %3"
+            : "=m"(v->xmm[12]), "=m"(v->xmm[13]), "=m"(v->xmm[14]), "=m"(v->xmm[15]));
+#endif
     }
     *mxcsr = m;
 }
@@ -187,7 +215,7 @@ static const char *compare(const struct values *want, unsigned cw, unsigned mxcs
         if (got_mxcsr != mxcsr) {
             return "MXCSR";
         }
-        for (i = 0; i < 8; i++) {
+        for (i = 0; i < NXMM; i++) {
             for (j = 0; j < 4; j++) {
                 if (got.xmm[i][j] != want->xmm[i][j]) {
                     return "an XMM register";
@@ -220,10 +248,7 @@ static const char *hold(const struct values *v, unsigned cw, unsigned mxcsr, uns
 }
 
 extern void sig_restorer(void);
-__asm__(".globl sig_restorer\n"
-        "sig_restorer:\n"
-        "    movl $173, %eax\n"
-        "    int $0x80\n");
+PROBE_RT_RESTORER(sig_restorer);
 
 static void install(int signo, void (*h)(int))
 {
@@ -269,6 +294,40 @@ static void clobber_handler(int sig)
 
 static int damage_pipe[2];
 
+#if defined __x86_64__
+/**
+ * Damage MXCSR in the saved floating-point image.
+ *
+ * The handler of an SA_SIGINFO signal is given the ucontext as its third
+ * argument. Its `uc_mcontext` starts 40 bytes in, and its `fpstate` word,
+ * 184 bytes further, holds the address of the `_fpstate_64`, the `fxsave64`
+ * image, with MXCSR 24 bytes into it. A byte goes down the pipe after the
+ * write, so the parent knows the frame was damaged before the kernel refused
+ * it.
+ */
+static void damage_siginfo_handler(int sig, void *info, void *ucontext)
+{
+    unsigned char *uc = ucontext;
+    unsigned char *fpstate = *(unsigned char **)(uc + 40 + 184);
+    unsigned mxcsr;
+    int k;
+
+    (void)sig;
+    (void)info;
+    for (k = 0; k < 4; k++) {
+        ((unsigned char *)&mxcsr)[k] = fpstate[24 + k];
+    }
+    mxcsr |= 0x80000000u;
+    for (k = 0; k < 4; k++) {
+        fpstate[24 + k] = ((unsigned char *)&mxcsr)[k];
+    }
+    syscall3(SYS_WRITE, damage_pipe[1], (long)"d", 1);
+}
+
+/* The handler as install takes it; its SA_SIGINFO call passes the other two
+ * arguments in RSI and RDX. */
+#define damage_handler ((void (*)(int))(void (*)(void))damage_siginfo_handler)
+#else
 /**
  * Damage MXCSR in the saved floating-point image.
  *
@@ -305,6 +364,7 @@ static void damage_handler(int sig)
     }
     syscall3(SYS_WRITE, damage_pipe[1], (long)"d", 1);
 }
+#endif
 
 static void run_switches(void)
 {
@@ -448,15 +508,11 @@ static void run_damaged(void)
     }
 }
 
-void probe_main(unsigned int *sp);
+void probe_main(unsigned long *sp);
 
-__asm__(".global _start\n"
-        "_start:\n"
-        "   mov %esp, %eax\n"
-        "   push %eax\n"
-        "   call probe_main\n");
+PROBE_SP_ENTRY;
 
-void probe_main(unsigned int *sp)
+void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];
     char **argv = (char **)(sp + 1);

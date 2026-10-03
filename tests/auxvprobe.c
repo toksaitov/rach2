@@ -1,9 +1,10 @@
 /**
- * Verifies the SysV/i386 initial process stack the kernel hands a new program.
+ * Verifies the SysV initial process stack the kernel hands a new program.
  *
- * Walks its own initial stack exactly as a C runtime would: argc, the argv[]
- * pointers and their NULL, the envp[] pointers and their NULL, then the auxv
- * {type,value} pairs terminated by AT_NULL. It prints what it finds, including
+ * Walks its own initial stack exactly as a C runtime would, in words of a
+ * long, 4 bytes on i386 and 8 on x86-64: argc, the argv[] pointers and their
+ * NULL, the envp[] pointers and their NULL, then the auxv {type,value} pairs
+ * terminated by AT_NULL. It prints what it finds, including
  * the 16 AT_RANDOM bytes so the harness can confirm they differ across two
  * boots, and asserts the layout is correct, exiting 0 only if every check
  * passes. This is the same stack the dynamic loader and crt1 read on Linux.
@@ -27,6 +28,16 @@ typedef unsigned char u8;
 #define AT_CLKTCK 17
 #define AT_SECURE 23
 #define AT_RANDOM 25
+
+/* The size of a program header, which AT_PHENT reports: ELF32's on i386 and
+ * ELF64's on x86-64. */
+#if defined __x86_64__
+#define PHENT_SIZE 56
+#define PHENT_TEXT "56"
+#else
+#define PHENT_SIZE 32
+#define PHENT_TEXT "32"
+#endif
 
 static int sys_write(int fd, const void *buf, u32 n)
 {
@@ -92,36 +103,32 @@ static void check(int cond, const char *msg)
     }
 }
 
-void probe_main(u32 *sp);
+void probe_main(unsigned long *sp);
 
-__asm__(".global _start\n"
-        "_start:\n"
-        "   mov %esp, %eax\n" /* eax = initial esp (points at argc) */
-        "   push %eax\n"      /* pass it to probe_main */
-        "   call probe_main\n");
+PROBE_SP_ENTRY;
 
-void probe_main(u32 *sp)
+void probe_main(unsigned long *sp)
 {
     int argc;
     char **argv;
     char **envp;
-    u32 *auxv;
+    unsigned long *auxv;
     int envc = 0;
     int i;
     int saw_null = 0;
     int saw_secure = 0;
-    u32 *random_ptr = 0;
-    u32 pagesz = 0;
-    u32 phnum = 0;
-    u32 phent = 0;
-    u32 phdr = 0;
-    u32 clktck = 0;
-    u32 secure = 1;
-    u32 entry = 0;
+    u8 *random_ptr = 0;
+    unsigned long pagesz = 0;
+    unsigned long phnum = 0;
+    unsigned long phent = 0;
+    unsigned long phdr = 0;
+    unsigned long clktck = 0;
+    unsigned long secure = 1;
+    unsigned long entry = 0;
 
     puts_("auxvprobe: starting\n");
 
-    /* The kernel must hand us a 16-byte-aligned ESP. */
+    /* The kernel must hand us a 16-byte-aligned stack pointer. */
     check(((unsigned long)sp & 0xF) == 0, "esp not 16-byte aligned");
 
     /* argc and argv[]. */
@@ -149,17 +156,17 @@ void probe_main(u32 *sp)
     check(envc >= 1, "no envp entries");
 
     /* The auxv pairs sit just past envp's NULL. */
-    auxv = (u32 *)&envp[envc + 1];
+    auxv = (unsigned long *)&envp[envc + 1];
     for (i = 0; i < 128; i += 2) {
-        u32 type = auxv[i];
-        u32 val = auxv[i + 1];
+        unsigned long type = auxv[i];
+        unsigned long val = auxv[i + 1];
 
         if (type == AT_NULL) {
             saw_null = 1;
             break;
         }
         if (type == AT_RANDOM) {
-            random_ptr = (u32 *)val;
+            random_ptr = (u8 *)val;
         }
         if (type == AT_PAGESZ) {
             pagesz = val;
@@ -188,7 +195,7 @@ void probe_main(u32 *sp)
     check(pagesz == 4096, "AT_PAGESZ != 4096");
     check(phnum != 0, "AT_PHNUM == 0");
     check(phdr != 0, "AT_PHDR == 0");
-    check(phent == 32, "AT_PHENT != 32");
+    check(phent == PHENT_SIZE, "AT_PHENT != " PHENT_TEXT);
     check(clktck == 100, "AT_CLKTCK != 100");
     check(saw_secure && secure == 0, "AT_SECURE missing or nonzero");
     check(entry != 0, "AT_ENTRY == 0");
@@ -196,10 +203,10 @@ void probe_main(u32 *sp)
     /* AT_RANDOM: print the 16 bytes (the harness compares across two boots) and
      * confirm they are not all zero. */
     check(random_ptr != 0, "no AT_RANDOM");
-    check(((unsigned long)random_ptr & ~0xFFFu) == ((unsigned long)sp & ~0xFFFu),
+    check(((unsigned long)random_ptr & ~0xFFFul) == ((unsigned long)sp & ~0xFFFul),
           "AT_RANDOM not in the initial stack page");
     if (random_ptr) {
-        u8 *r = (u8 *)random_ptr;
+        u8 *r = random_ptr;
         u32 acc = 0;
 
         puts_("AT_RANDOM=");

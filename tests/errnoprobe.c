@@ -17,11 +17,21 @@ typedef unsigned int u32;
 
 #define STDOUT 1
 
-/* Linux i386 errno values we expect back (negated). */
+/* Linux errno values we expect back (negated), the same on i386 and x86-64. */
 #define ENOENT 2
 #define EBADF  9
 #define EFAULT 14
 #define ENOSYS 38
+
+/* A number in the table's range that no call has: 222 on i386, and on x86-64,
+ * where 222 is timer_create, 236, which Linux leaves unimplemented there. */
+#if defined __x86_64__
+#define NR_UNIMPL      236
+#define NR_UNIMPL_TEXT "236"
+#else
+#define NR_UNIMPL      222
+#define NR_UNIMPL_TEXT "222"
+#endif
 
 static u32 slen(const char *s)
 {
@@ -82,15 +92,11 @@ static void expect(int got, int want_errno, const char *label)
     }
 }
 
-void probe_main(u32 *sp);
+void probe_main(unsigned long *sp);
 
-__asm__(".global _start\n"
-        "_start:\n"
-        "   mov %esp, %eax\n"
-        "   push %eax\n"
-        "   call probe_main\n");
+PROBE_SP_ENTRY;
 
-void probe_main(u32 *sp)
+void probe_main(unsigned long *sp)
 {
     static const char missing[] = "/no_such_file_errnoprobe";
     char rbuf[16];
@@ -100,7 +106,7 @@ void probe_main(u32 *sp)
     puts_("errnoprobe: starting\n");
 
     /* Unimplemented in-range and out-of-range numbers must be -ENOSYS. */
-    expect(syscall3(222, 0, 0, 0), ENOSYS, "unimpl(222)");
+    expect(syscall3(NR_UNIMPL, 0, 0, 0), ENOSYS, "unimpl(" NR_UNIMPL_TEXT ")");
     expect(syscall3(909, 0, 0, 0), ENOSYS, "outofrange(909)");
 
     /* open() of a nonexistent path -> -ENOENT. */
@@ -110,8 +116,9 @@ void probe_main(u32 *sp)
     expect(syscall3(SYS_CLOSE, 999, 0, 0), EBADF, "close(999)");
     expect(syscall3(SYS_READ, 999, (long)rbuf, (int)sizeof(rbuf)), EBADF, "read(999)");
 
-    /* writev() with an iov pointer outside user space -> -EFAULT. */
-    expect(syscall3(SYS_WRITEV, STDOUT, (int)0xFFFFF000u, 1), EFAULT, "writev(bad iov)");
+    /* writev() with an iov pointer outside user space, in the last page of
+     * the address space, which is the kernel's, -> -EFAULT. */
+    expect(syscall3(SYS_WRITEV, STDOUT, -4096L, 1), EFAULT, "writev(bad iov)");
 
     if (fails == 0) {
         puts_("All errno checks passed!\n");

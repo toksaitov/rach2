@@ -12,8 +12,6 @@
 #define STDOUT_FILENO 1
 #define STDERR_FILENO 2
 
-/* Syscall numbers (32-bit Linux / Rach2 compatible) */
-
 /* Open flags */
 #define O_RDONLY 0
 #define O_WRONLY 1

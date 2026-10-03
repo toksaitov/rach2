@@ -92,8 +92,8 @@ static int do_read(int fd, char *buf, int n)
 static void msleep(int ms)
 {
     struct {
-        int tv_sec;
-        int tv_nsec;
+        long tv_sec;
+        long tv_nsec;
     } ts;
     ts.tv_sec = ms / 1000;
     ts.tv_nsec = (ms % 1000) * 1000000;
@@ -218,7 +218,7 @@ PROBE_START void _start(void)
 
     /* (g) an out-of-range timeout is rejected, not silently clamped. */
     {
-        int tv[2];
+        long tv[2];
         tv[0] = 0;
         tv[1] = 2000000; /* tv_usec >= 1e6 is invalid */
         check(syscall5(SYS_SELECT, 0, 0, 0, 0, (long)tv) == -EINVAL,

@@ -2,10 +2,11 @@
 #
 # Builds freestanding executables for testing kernel syscalls, for the
 # architecture mk/arch.mk names, into build/tests/ or build/x86_64/tests/. They
-# run in user mode on the Rach2 kernel. The one exception is dnstest, which
-# links the ported musl (like the utils) so it and the shared resolver it pulls
-# in (utils/resolv.c) use the real libc rather than hand-rolled system calls;
-# see its rule below.
+# run in user mode on the Rach2 kernel and make their system calls through
+# probe.h, which has each architecture's numbers, entry and layouts. The one
+# exception is dnstest, which links the ported musl (like the utils) so it and
+# the shared resolver it pulls in (utils/resolv.c) use the real libc rather
+# than hand-rolled system calls; see its rule below.
 
 # Shared cross toolchain + automatic header-dependency tracking (see ../mk/).
 include ../mk/toolchain.mk
@@ -38,6 +39,15 @@ PROGS = hello filetest forktest shelltest dirtest stattest usbprobe mouseprobe i
         waitprobe exitprobe pipeprobe pollprobe devprobe ttyprobe jobprobe miscprobe \
         ptyprobe rngprobe orphanprobe loopprobe zombieprobe survivorprobe procprobe suidprobe suidhelper sudoprobe modeprobe searchprobe stickyprobe blockprobe bootprobe persistprobe stressprobe winprobe dirtyprobe rebootprobe lagprobe fpuprobe memprobe poolprobe vfsprobe mountprobe fatwriteprobe usbdiskprobe calibprobe placeprobe ext2probe krffsprobe loopdevprobe \
         idreport fdfull diskfull oomprobe limitprobe loadprobe conloadprobe disksprobe partsprobe busprobe ahciprobe bigfileprobe
+
+# The probes of an interface only i386 has, built for i686 alone: tlsprobe
+# tests set_thread_area and the %gs thread pointer, where x86-64 keeps the
+# thread pointer in the FS base. A probe whose rows only partly test such an
+# interface builds those rows for i686 alone and is built for both.
+I686_ONLY = tlsprobe
+ifeq ($(ARCH),x86_64)
+PROGS := $(filter-out $(I686_ONLY),$(PROGS))
+endif
 
 # These compile+link in one step, so there are no .o intermediates; only the
 # GCC-written .d, which -MF puts under $(BUILD) (build/tests/, from

@@ -192,15 +192,11 @@ static void match(const char *item, const char *end, const u32 *ids, const char 
     done(EXIT_KEY);
 }
 
-void probe_main(u32 *sp);
+void probe_main(unsigned long *sp);
 
-__asm__(".global _start\n"
-        "_start:\n"
-        "   mov %esp, %eax\n"
-        "   push %eax\n"
-        "   call probe_main\n");
+PROBE_SP_ENTRY;
 
-void probe_main(u32 *sp)
+void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];
     char **argv = (char **)(sp + 1);

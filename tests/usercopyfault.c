@@ -39,13 +39,12 @@ static void sys_exit(int status)
     __builtin_unreachable();
 }
 
-static unsigned sys_mmap2_anon(unsigned len, int prot)
+static long mmap_anon(long len, int prot)
 {
-    return syscall5(SYS_MMAP2, (long)0, (long)len, (long)prot, (long)(MAP_PRIVATE | MAP_ANONYMOUS),
-                    (long)(-1));
+    return probe_mmap(0, len, prot, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 }
 
-static int sys_munmap(unsigned addr, unsigned len)
+static int sys_munmap(unsigned long addr, unsigned long len)
 {
     return syscall2(SYS_MUNMAP, (long)addr, (long)len);
 }
@@ -79,12 +78,12 @@ static void fail(const char *why)
 
 PROBE_START void _start(void)
 {
-    unsigned p;
+    long p;
     char *path;
     int i, r;
 
-    p = sys_mmap2_anon(2 * PAGE, PROT_READ | PROT_WRITE);
-    if (p >= 0xFFFFF001u) {
+    p = mmap_anon(2 * PAGE, PROT_READ | PROT_WRITE);
+    if (sys_failed(p)) {
         fail("mmap two pages");
     }
 

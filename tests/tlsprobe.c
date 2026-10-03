@@ -7,7 +7,7 @@
  * returned selector into %gs. It then writes sentinel words through %gs and
  * re-reads them while hammering the kernel:
  *
- *   1. Solo phase: thousands of int 0x80 syscalls plus busy-waits across many
+ *   1. Solo phase: thousands of system calls plus busy-waits across many
  *      100 Hz timer IRQs. Every %gs:off read must still equal the sentinel, so
  *      the syscall AND IRQ entry/exit paths must save and restore %gs (the old
  *      bug smeared %gs from the saved %ds, which this would catch immediately).
@@ -23,10 +23,17 @@
  * The Linux/BSD analogue is set_thread_area(2) plus the i386 %gs thread pointer
  * that glibc/musl, the stack-protector canary, and pthread_self() all rely on.
  *
- * Freestanding; direct system calls (probe.h).
+ * Freestanding; direct system calls (probe.h). set_thread_area and the TLS
+ * descriptor in the GDT are i386's, so tests/Makefile builds the probe for
+ * i686 alone; x86-64 keeps the thread pointer in the FS base, set by
+ * arch_prctl.
  */
 
 #include "probe.h"
+
+#if defined __x86_64__
+#error "tlsprobe tests i386's set_thread_area and %gs; it is built for i686 alone"
+#endif
 
 typedef unsigned int u32;
 typedef unsigned char u8;
@@ -66,7 +73,7 @@ static int sys_waitpid(int pid, int *status, int options)
 }
 
 /** A cheap, side-effect-free syscall used to exercise the int 0x80 path. */
-static void sys_gettimeofday(u32 *tv2)
+static void sys_gettimeofday(long *tv2)
 {
     int r;
     r = syscall1(SYS_GETTIMEOFDAY, (long)tv2);
@@ -188,21 +195,17 @@ static void busy(u32 spins)
     }
 }
 
-void probe_main(u32 *sp);
+void probe_main(unsigned long *sp);
 
-__asm__(".global _start\n"
-        "_start:\n"
-        "   mov %esp, %eax\n"
-        "   push %eax\n"
-        "   call probe_main\n");
+PROBE_SP_ENTRY;
 
-void probe_main(u32 *sp)
+void probe_main(unsigned long *sp)
 {
     int entry;
     int pid;
     int i;
     int fails = 0;
-    u32 tv2[2];
+    long tv2[2];
 
     (void)sp;
 

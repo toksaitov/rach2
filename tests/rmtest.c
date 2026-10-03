@@ -15,8 +15,6 @@
 
 #define STDOUT_FILENO 1
 
-/* Syscall numbers (32-bit Linux / Rach2 compatible) */
-
 /* The errno values the negative cases name. */
 #define ENOENT  2
 #define EISDIR  21

@@ -67,17 +67,11 @@ struct pollfd {
 
 #define POLLIN 1
 
-static unsigned mmap_anon(unsigned len)
+/* An anonymous read-write mapping of `len` bytes; its address, or a negated
+ * errno. */
+static long mmap_anon(unsigned long len)
 {
-    unsigned result;
-    __asm__ __volatile__("push %%ebp\n\t"
-                         "xor %%ebp, %%ebp\n\t"
-                         "int $0x80\n\t"
-                         "pop %%ebp\n\t"
-                         : "=a"(result)
-                         : "0"(SYS_MMAP2), "b"(0), "c"(len), "d"(3), "S"(0x22), "D"(-1)
-                         : "memory");
-    return result;
+    return probe_mmap(0, (long)len, 3, 0x22, -1, 0);
 }
 
 static void sys_exit(int status)
@@ -139,7 +133,7 @@ static int wait_status(int pid)
 
 static void sleep_ms(int ms)
 {
-    int ts[2];
+    long ts[2];
 
     ts[0] = ms / 1000;
     ts[1] = (ms % 1000) * 1000000;
@@ -199,7 +193,7 @@ static int body_sandbox(void)
 {
     unsigned rset[32];
     struct pollfd pfd;
-    int tv[2];
+    long tv[2];
     int fd, i;
 
     fd = syscall3(SYS_OPEN, (long)"/hello", O_RDONLY, 0);
@@ -233,11 +227,14 @@ static int body_fsize(void)
     static char block[8192];
     /* The kernel's sigaction: the handler, the flags, the restorer and the
        64-bit mask. */
-    static const unsigned ignore[5] = {SIG_IGN, 0, 0, 0, 0};
+    static const struct {
+        unsigned long handler, flags, restorer;
+        unsigned long long mask;
+    } ignore = {SIG_IGN, 0, 0, 0};
     int fd, wrote, again, cut;
 
     if (set_limit(RLIMIT_FSIZE, 4096, 4096) != 0 ||
-        syscall4(SYS_RT_SIGACTION, SIGXFSZ, (long)ignore, 0, 8) != 0) {
+        syscall4(SYS_RT_SIGACTION, SIGXFSZ, (long)&ignore, 0, 8) != 0) {
         return 2;
     }
     fd = syscall3(SYS_OPEN, (long)"/tmp/limitprobe.f", O_WRONLY | O_CREAT | O_TRUNC, 0644);
@@ -256,18 +253,18 @@ static int body_fsize(void)
    one is not, and the break does not move past the limit. */
 static int body_as(void)
 {
-    unsigned r;
-    int brk0, brk1;
+    long r;
+    long brk0, brk1;
 
     if (set_limit(RLIMIT_AS, 8u << 20, 8u << 20) != 0) {
         return 2;
     }
     r = mmap_anon(16u << 20);
-    if (r != (unsigned)-ENOMEM) {
+    if (r != -ENOMEM) {
         return 3;
     }
     r = mmap_anon(1u << 20);
-    if (r >= 0xFFFFF000u) {
+    if (sys_failed(r)) {
         return 4;
     }
     brk0 = syscall1(SYS_BRK, 0);
@@ -383,15 +380,11 @@ static void run_show(void)
     sys_exit(0);
 }
 
-void probe_main(unsigned int *sp);
+void probe_main(unsigned long *sp);
 
-__asm__(".global _start\n"
-        "_start:\n"
-        "   mov %esp, %eax\n"
-        "   push %eax\n"
-        "   call probe_main\n");
+PROBE_SP_ENTRY;
 
-void probe_main(unsigned int *sp)
+void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];
     char **argv = (char **)(sp + 1);

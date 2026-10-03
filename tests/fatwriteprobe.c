@@ -147,7 +147,7 @@ static int dirents_contain(const unsigned char *b, int n, const char *name)
 
 static int xstat(const char *path)
 {
-    char st[104];
+    char st[KSTAT_SIZE];
 
     st[0] = 0;
     return syscall2(SYS_STAT, (long)path, (long)st);
@@ -164,7 +164,7 @@ static int do_mount(const char *src, const char *target, unsigned flags, const c
 
 static void sleep_ms(int ms)
 {
-    int ts[2];
+    long ts[2];
 
     ts[0] = ms / 1000;
     ts[1] = (ms % 1000) * 1000000;
@@ -402,15 +402,11 @@ static void mode_repair(void)
     puts("FATWRITE OK (repaired)");
 }
 
-void probe_main(unsigned int *sp);
+void probe_main(unsigned long *sp);
 
-__asm__(".global _start\n"
-        "_start:\n"
-        "   mov %esp, %eax\n"
-        "   push %eax\n"
-        "   call probe_main\n");
+PROBE_SP_ENTRY;
 
-void probe_main(unsigned int *sp)
+void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];
     char **argv = (char **)(sp + 1);

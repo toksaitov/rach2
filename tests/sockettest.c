@@ -12,7 +12,6 @@ typedef unsigned int uint32_t;
 
 #define STDOUT_FILENO 1
 
-#define SC_SOCKET  1
 #define AF_INET    2
 #define SOCK_DGRAM 2
 
@@ -47,9 +46,9 @@ static int sys_dup2(int oldfd, int newfd)
     return syscall2(SYS_DUP2, (long)oldfd, (long)newfd);
 }
 
-static int socketcall(int call, uint32_t *args)
+static int socketcall(int call, unsigned long *args)
 {
-    return syscall2(SYS_SOCKETCALL, (long)call, (long)args);
+    return (int)sock_call(call, args);
 }
 
 static size_t strlen(const char *s)
@@ -92,7 +91,7 @@ static void print_num(int n)
 
 static int make_socket(void)
 {
-    uint32_t args[3];
+    unsigned long args[3];
     args[0] = AF_INET;
     args[1] = SOCK_DGRAM;
     args[2] = 0;

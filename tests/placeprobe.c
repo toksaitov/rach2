@@ -54,10 +54,10 @@ static void putnum(unsigned v)
     put(&buf[i]);
 }
 
-static void puthex(unsigned v)
+static void puthex(unsigned long v)
 {
-    char buf[12];
-    int i = 11;
+    char buf[20];
+    int i = 19;
 
     buf[i] = 0;
     do {
@@ -84,8 +84,8 @@ static unsigned char far_buf[BUFFER] __attribute__((aligned(4096)));
 static unsigned char page_out[PAGE];
 
 struct stamp {
-    int sec;
-    int nsec;
+    long sec;
+    long nsec;
 };
 
 static unsigned ms_between(const struct stamp *a, const struct stamp *b)
@@ -171,18 +171,14 @@ static void report(const char *which, unsigned ms)
     put(" KiB/s\n");
 }
 
-void probe_main(unsigned int *sp);
+void probe_main(unsigned long *sp);
 
-__asm__(".global _start\n"
-        "_start:\n"
-        "   mov %esp, %eax\n"
-        "   push %eax\n"
-        "   call probe_main\n");
+PROBE_SP_ENTRY;
 
-void probe_main(unsigned int *sp)
+void probe_main(unsigned long *sp)
 {
-    unsigned code_lo = (unsigned long)_start & ~(PAGE - 1);
-    unsigned code_hi = ((unsigned long)etext + PAGE - 1) & ~(PAGE - 1);
+    unsigned long code_lo = (unsigned long)_start & ~(unsigned long)(PAGE - 1);
+    unsigned long code_hi = ((unsigned long)etext + PAGE - 1) & ~(unsigned long)(PAGE - 1);
     unsigned i;
 
     (void)sp;
@@ -206,7 +202,14 @@ void probe_main(unsigned int *sp)
         ((unsigned long)far_buf < code_hi && (unsigned long)far_buf + BUFFER > code_lo)) {
         fail("a buffer shares a page with the program's own code");
     }
-    /* The near buffer's first page becomes code: one `ret`, called. */
+    /* The near buffer's first page becomes code: one `ret`, called. x86-64
+       maps `.bss` without execute permission, so the page is given it
+       first; i386 pages have no such bit. */
+#if defined __x86_64__
+    if (syscall3(SYS_MPROTECT, (long)near_buf, PAGE, 7) != 0) {
+        fail("the near buffer's first page could not be made executable");
+    }
+#endif
     near_buf[0] = 0xC3;
     ((void (*)(void))near_buf)();
 

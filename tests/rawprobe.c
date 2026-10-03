@@ -30,13 +30,6 @@ typedef unsigned int uint32_t;
 typedef unsigned short uint16_t;
 typedef unsigned char uint8_t;
 
-#define SC_SOCKET     1
-#define SC_SENDTO     11
-#define SC_RECVFROM   12
-#define SC_SETSOCKOPT 14
-#define SC_GETSOCKOPT 15
-#define SC_PING       0x1000
-
 #define AF_INET    2
 #define SOCK_DGRAM 2
 #define SOCK_RAW   3
@@ -87,9 +80,9 @@ static int sys_close(int fd)
 {
     return syscall1(SYS_CLOSE, fd);
 }
-static int socketcall(int call, uint32_t *args)
+static int socketcall(int call, unsigned long *args)
 {
-    return syscall3(SYS_SOCKETCALL, call, (long)args, 0);
+    return (int)sock_call(call, args);
 }
 /** pipe(2): the two ends in `fds`; 0, or the negative errno. */
 static int sys_pipe(int *fds)
@@ -102,7 +95,7 @@ static int sys_poll(struct pollfd_probe *fds, unsigned int n, int timeout)
 }
 static void nap_ms(int ms)
 {
-    int ts[2];
+    long ts[2];
 
     ts[0] = ms / 1000;
     ts[1] = (ms % 1000) * 1000000;
@@ -204,7 +197,7 @@ static void sockaddr_for(uint8_t *out, uint32_t ip, uint16_t port)
 }
 
 /** Open a raw ICMP socket, or return the negative errno. */
-static int raw_socket(uint32_t *args)
+static int raw_socket(unsigned long *args)
 {
     args[0] = AF_INET;
     args[1] = SOCK_RAW;
@@ -213,7 +206,7 @@ static int raw_socket(uint32_t *args)
 }
 
 /** Read one waiting datagram without blocking; the length, or the errno. */
-static int raw_take(uint32_t *args, int fd, uint8_t *buf, int cap)
+static int raw_take(unsigned long *args, int fd, uint8_t *buf, int cap)
 {
     args[0] = (uint32_t)fd;
     args[1] = (uint32_t)(size_t)buf;
@@ -231,7 +224,7 @@ static int raw_take(uint32_t *args, int fd, uint8_t *buf, int cap)
  * ICMP the machine receives while waiting is taken and skipped, so a reply to
  * something else cannot be mistaken for the message under test.
  */
-static int wait_for_icmp(uint32_t *args, int fd, uint8_t *buf, int cap, int want, int ms)
+static int wait_for_icmp(unsigned long *args, int fd, uint8_t *buf, int cap, int want, int ms)
 {
     struct pollfd_probe pfd;
     int waited = 0;
@@ -327,7 +320,7 @@ static uint8_t sa[16];
  * want of memory, and hold them until the parent closes the other end of
  * `release_r`, then let them go. Exits 0 when it held some.
  */
-static void fill_and_hold(uint32_t *args, int ready_w, int release_r)
+static void fill_and_hold(unsigned long *args, int ready_w, int release_r)
 {
     int held = 0;
     int rc;
@@ -359,7 +352,7 @@ static void fill_and_hold(uint32_t *args, int ready_w, int release_r)
  * this process closes `release`, so the checks run while both tables are
  * full, however long the children take to fill them.
  */
-static void socket_pressure(uint32_t *args, int fd_a)
+static void socket_pressure(unsigned long *args, int fd_a)
 {
     int kids[2], ready[2] = {-1, -1}, release[2] = {-1, -1};
     int k, n, status, full = 0;
@@ -424,7 +417,7 @@ static void socket_pressure(uint32_t *args, int fd_a)
 
 PROBE_START void _start(void)
 {
-    uint32_t args[6];
+    unsigned long args[6];
     int fd_a, fd_b, i, n, m, pid, status, val;
     volatile int got_ttl;
 

@@ -90,7 +90,7 @@ static int disk_counter(const char *label);
 
 static int now_ms(void)
 {
-    int ts[2];
+    long ts[2];
 
     ts[0] = ts[1] = 0;
     syscall2(SYS_CLOCK_GETTIME, CLOCK_MONOTONIC, (long)ts);
@@ -108,7 +108,7 @@ static int open_node(const char *node)
     for (tries = 0; tries < 40 && fd < 0; tries++) {
         fd = syscall3(SYS_OPEN, (long)node, O_RDONLY, 0);
         if (fd < 0) {
-            int ts[2];
+            long ts[2];
 
             ts[0] = 0;
             ts[1] = 250000000;
@@ -347,7 +347,7 @@ static void fault_row(void)
     syscall2(SYS_EXIT, 0, 0);
 }
 
-void probe_main(unsigned int *sp);
+void probe_main(unsigned long *sp);
 
 /* `ahciprobe late`: the throttled disk's ext2 partition mounted for
    writing, under a deadline period shorter than one of its requests, which
@@ -448,7 +448,7 @@ static int read_once(const char *node, int bytes, int *ms)
 
 static void sleep_ms(int ms)
 {
-    int ts[2];
+    long ts[2];
 
     ts[0] = ms / 1000;
     ts[1] = (ms % 1000) * 1000000;
@@ -605,13 +605,9 @@ static void pool_row(void)
     syscall2(SYS_EXIT, 0, 0);
 }
 
-__asm__(".global _start\n"
-        "_start:\n"
-        "   mov %esp, %eax\n"
-        "   push %eax\n"
-        "   call probe_main\n");
+PROBE_SP_ENTRY;
 
-void probe_main(unsigned int *sp)
+void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];
     char **argv = (char **)(sp + 1);

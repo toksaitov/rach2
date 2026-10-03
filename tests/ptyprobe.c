@@ -125,7 +125,7 @@ static void puts(const char *s)
 /** Sleep for `ms` milliseconds. */
 static void nap_ms(int ms)
 {
-    int ts[2];
+    long ts[2];
 
     ts[0] = ms / 1000;
     ts[1] = (ms % 1000) * 1000000;
@@ -371,20 +371,25 @@ static void stop_readers(int *pids)
  */
 static int hangup_readers(int block_hup)
 {
-    unsigned int action[5] = {1, 0, 0, 0, 0};
+    /* The kernel's sigaction: the handler, SIG_IGN, the flags, the restorer
+       and the 64-bit mask. */
+    struct {
+        unsigned long handler, flags, restorer;
+        unsigned long long mask;
+    } action = {1, 0, 0, 0};
     static const unsigned int mask[2] = {1, 0};
     int master = -1, slave = -1, pids[2] = {0, 0};
     int i, status, ok = 0;
     char byte;
 
     if (block_hup) {
-        action[0] = 0;
+        action.handler = 0;
         if (syscall4(SYS_RT_SIGPROCMASK, 0, (long)mask, 0, 8) < 0) {
             goto done;
         }
     }
-    if (syscall4(SYS_RT_SIGACTION, SIGHUP, (long)action, 0, 8) < 0 || !open_pair(&master, &slave) ||
-        sys_ioctl(slave, TIOCSCTTY, 0) < 0) {
+    if (syscall4(SYS_RT_SIGACTION, SIGHUP, (long)&action, 0, 8) < 0 ||
+        !open_pair(&master, &slave) || sys_ioctl(slave, TIOCSCTTY, 0) < 0) {
         goto done;
     }
     for (i = 0; i < 2; i++) {

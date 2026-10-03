@@ -9,8 +9,6 @@
 
 #define STDOUT_FILENO 1
 
-/* Syscall numbers (32-bit Linux / Rach2 compatible) */
-
 /* Exit status for child to return */
 #define CHILD_EXIT_STATUS 42
 

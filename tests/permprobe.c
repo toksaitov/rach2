@@ -120,9 +120,9 @@ static void child_main(void)
      * or any pair not both UTIME_NOW, is the owner's or root's alone; a
      * both-OMIT request changes nothing and needs no right at all. */
     {
-        static const int expl[4] = {5, 0, 5, 0};
-        static const int mixed[4] = {0, UTIME_NOW, 0, UTIME_OMIT};
-        static const int omit[4] = {0, UTIME_OMIT, 0, UTIME_OMIT};
+        static const long expl[4] = {5, 0, 5, 0};
+        static const long mixed[4] = {0, UTIME_NOW, 0, UTIME_OMIT};
+        static const long omit[4] = {0, UTIME_OMIT, 0, UTIME_OMIT};
 
         if (syscall4(SYS_UTIMENSAT, AT_FDCWD, (long)"/perm.rw", 0, 0) != 0) {
             fail("touch through other-write");

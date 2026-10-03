@@ -40,8 +40,6 @@ typedef unsigned int uint32_t;
 
 #define STDOUT_FILENO 1
 
-#define SC_PING 0x1000 /* renumbered off Linux getsockopt=15 */
-
 /* IPs in host byte order. */
 #define GATEWAY_IP     0x0A000202UL /* 10.0.2.2  */
 #define UNREACHABLE_IP 0x0A000263UL /* 10.0.2.99 */
@@ -80,9 +78,9 @@ static void sys_exit(int status)
     __builtin_unreachable();
 }
 
-static int socketcall(int call, uint32_t *args)
+static int socketcall(int call, unsigned long *args)
 {
-    return syscall2(SYS_SOCKETCALL, (long)call, (long)args);
+    return (int)sock_call(call, args);
 }
 
 static size_t strlen(const char *s)
@@ -182,7 +180,7 @@ static void sleep_ms(long ms)
 
 static int ping(uint32_t ip)
 {
-    uint32_t args[1];
+    unsigned long args[1];
     args[0] = ip;
     return socketcall(SC_PING, args);
 }

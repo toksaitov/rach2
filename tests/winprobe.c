@@ -1,13 +1,14 @@
 /**
  * Probes that a user touch of the page-cache window is killed, not honored.
  *
- * `PCWIN_BASE` (0xD0000000) is the base of the kernel-only demand-paged disk
- * window. A user process has no business there; the segments are flat, so the
- * read reaches the fault handler, which must treat a user-mode in-window fault
- * as an illegal access and segfault the process. The window branch is for the
- * supervisor-mode faults the file system raises, not for ring 3: serving a
- * ring-3 fault would map a supervisor-only page it loops on, or, with no disk
- * backing, panic the whole kernel. The "still alive" line must NEVER appear.
+ * `PCWIN_BASE` (0xD0000000 on i686, 0xFFFFC20000000000 on x86-64) is the base
+ * of the kernel-only demand-paged disk window. A user process has no business
+ * there; the segments are flat, so the read reaches the fault handler, which
+ * must treat a user-mode in-window fault as an illegal access and segfault the
+ * process. The window branch is for the supervisor-mode faults the file system
+ * raises, not for ring 3: serving a ring-3 fault would map a supervisor-only
+ * page it loops on, or, with no disk backing, panic the whole kernel. The
+ * "still alive" line must NEVER appear.
  *
  * Run as a standalone boot (it kills itself); the harness then checks that the
  * kernel survived and the shell came back. Freestanding; direct system calls
@@ -18,7 +19,11 @@
 
 #define STDOUT_FILENO 1
 
+#if defined __x86_64__
+#define PCWIN_BASE 0xFFFFC20000000000ul
+#else
 #define PCWIN_BASE 0xD0000000u
+#endif
 
 static int sys_write(int fd, const void *buf, size_t count)
 {

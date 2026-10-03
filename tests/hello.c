@@ -9,8 +9,6 @@
 
 #define STDOUT_FILENO 1
 
-/* Syscall numbers (32-bit Linux / Rach2 compatible) */
-
 static int sys_write(int fd, const void *buf, size_t count)
 {
     return syscall3(SYS_WRITE, (long)fd, (long)buf, (long)count);

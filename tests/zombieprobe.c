@@ -130,7 +130,7 @@ PROBE_START void _start(void)
             victim();
         }
         {
-            unsigned int req[2];
+            long req[2];
 
             req[0] = 0;
             req[1] = 60000000u; /* 60 ms, long enough for the victim to fill and unlink */

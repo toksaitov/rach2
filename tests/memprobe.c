@@ -15,7 +15,10 @@
  * which stay with the process until it exits, so the frames came back. The
  * mapping and the pattern come first and the fork after, so the fork's page
  * tables and directory, which the kernel takes from its heap, are taken
- * when the frames below the window are already in use.
+ * when the frames below the window are already in use. On x86-64 MIB may
+ * pass 4096, and a mapping of more memory than lies below 4 GiB has pages in
+ * the frames above it, which the memory suite's row of eight gigabytes asks
+ * for.
  *
  * `memprobe fail`, under `rach2.framefail`: with a patterned mapping of its
  * own, the probe arms the count-th frame allocation to fail for each count
@@ -52,18 +55,22 @@
 
 #define PAGE 4096u
 
-static unsigned sys_mmap2_anon(unsigned len)
+/* The KiB of page tables a mapping of `pages` pages keeps until the process
+ * exits: on i386 a table for each 4 MiB, and on x86-64 a table for each
+ * 2 MiB, a directory for each GiB and a pointer table for the 512 GiB the
+ * mapping is in, each a page and one more of each for a mapping across a
+ * boundary. */
+#if defined __x86_64__
+#define TABLE_KIB(pages) (((pages) / 512 + (pages) / (512ul * 512) + 4) * 4)
+#else
+#define TABLE_KIB(pages) (((pages) / 1024 + 1) * 4)
+#endif
+
+/* An anonymous mapping of `len` bytes; its address, or a negated errno. */
+static unsigned long mmap_anon(unsigned long len)
 {
-    unsigned result;
-    __asm__ __volatile__("push %%ebp\n\t"
-                         "xor %%ebp, %%ebp\n\t"
-                         "int $0x80\n\t"
-                         "pop %%ebp\n\t"
-                         : "=a"(result)
-                         : "0"(SYS_MMAP2), "b"(0), "c"(len), "d"(PROT_READ | PROT_WRITE),
-                           "S"(MAP_PRIVATE | MAP_ANONYMOUS), "D"(-1)
-                         : "memory");
-    return result;
+    return (unsigned long)probe_mmap(0, (long)len, PROT_READ | PROT_WRITE,
+                                     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 }
 
 static void sys_exit(int status)
@@ -86,9 +93,9 @@ static void print(const char *s)
     syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
 }
 
-static void print_num(unsigned v)
+static void print_num(unsigned long v)
 {
-    char tmp[12];
+    char tmp[21];
     int n = 0;
 
     do {
@@ -141,7 +148,7 @@ static int check_page(const unsigned *p, unsigned i)
 }
 
 /* MemFree from /proc/meminfo, in KiB, or 0. */
-static unsigned mem_free_kib(void)
+static unsigned long mem_free_kib(void)
 {
     static char buf[1024];
     int fd = syscall3(SYS_OPEN, (long)"/proc/meminfo", O_RDONLY, 0);
@@ -163,14 +170,14 @@ static unsigned mem_free_kib(void)
         for (k = 0; key[k] && buf[i + k] == key[k]; k++) {
         }
         if (!key[k]) {
-            unsigned v = 0;
+            unsigned long v = 0;
 
             i += k;
             while (buf[i] == ' ') {
                 i++;
             }
             while (buf[i] >= '0' && buf[i] <= '9') {
-                v = v * 10 + (unsigned)(buf[i] - '0');
+                v = v * 10 + (unsigned long)(buf[i] - '0');
                 i++;
             }
             return v;
@@ -204,10 +211,10 @@ static int wait_status(int pid)
 static void run_fresh(void)
 {
     unsigned len = 16u << 20;
-    unsigned base = sys_mmap2_anon(len);
+    unsigned long base = mmap_anon(len);
     unsigned i, w;
 
-    if (base >= 0xFFFFF000u) {
+    if (sys_failed((long)base)) {
         sys_exit(2);
     }
     for (i = 0; i < len / PAGE; i++) {
@@ -252,7 +259,7 @@ static void arm(unsigned n)
 }
 
 /* The parent's own pages after an attempt: as written, then rewritten. */
-static void survivors(unsigned base, unsigned pages, unsigned round)
+static void survivors(unsigned long base, unsigned pages, unsigned round)
 {
     unsigned i;
 
@@ -266,10 +273,12 @@ static void survivors(unsigned base, unsigned pages, unsigned round)
 
 static void run_fail(void)
 {
-    unsigned pages = 256, base = sys_mmap2_anon(pages * PAGE);
-    unsigned baseline, n, i, round = 0;
+    unsigned pages = 256;
+    unsigned long base = mmap_anon(pages * PAGE);
+    unsigned long baseline;
+    unsigned n, i, round = 0;
 
-    if (base >= 0xFFFFF000u) {
+    if (sys_failed((long)base)) {
         fail("the mapping");
     }
     for (i = 0; i < pages; i++) {
@@ -282,7 +291,7 @@ static void run_fail(void)
     baseline = mem_free_kib();
     for (n = 1; n <= 32; n++) {
         int pid, status;
-        unsigned free_now;
+        unsigned long free_now;
 
         arm(n);
         pid = syscall1(SYS_FORK, 0);
@@ -355,31 +364,33 @@ static void run_fail(void)
 static void run_hog(void)
 {
     int zero = syscall3(SYS_OPEN, (long)"/dev/zero", 0, 0);
-    unsigned act[5];
+    struct {
+        unsigned long handler, flags, restorer;
+        unsigned long long mask;
+    } act;
     unsigned taken = 0;
     int pid;
 
     if (zero < 0) {
         fail("open /dev/zero");
     }
-    act[0] = 1; /* SIG_IGN */
-    act[1] = 0;
-    act[2] = 0;
-    act[3] = 0;
-    act[4] = 0;
-    if (syscall4(SYS_RT_SIGACTION, SIGHUP, (long)act, 0, 8) != 0) {
+    act.handler = 1; /* SIG_IGN */
+    act.flags = 0;
+    act.restorer = 0;
+    act.mask = 0;
+    if (syscall4(SYS_RT_SIGACTION, SIGHUP, (long)&act, 0, 8) != 0) {
         fail("ignoring SIGHUP");
     }
     for (;;) {
-        unsigned base = sys_mmap2_anon(1u << 20);
+        unsigned long base = mmap_anon(1u << 20);
         unsigned off;
         int refused = 0;
 
-        if (base >= 0xFFFFF000u) {
+        if (sys_failed((long)base)) {
             break; /* no room for the region: the reserve reached another way */
         }
         for (off = 0; off < (1u << 20); off += PAGE) {
-            int r = syscall3(SYS_READ, zero, (int)(base + off), 16);
+            int r = syscall3(SYS_READ, zero, (long)(base + off), 16);
 
             if (r == -EFAULT) {
                 refused = 1;
@@ -406,7 +417,7 @@ static void run_hog(void)
     }
     puts("MEMPROBE HOG: fork refused with ENOMEM");
     for (;;) {
-        int ts[2];
+        long ts[2];
 
         ts[0] = 1;
         ts[1] = 0;
@@ -414,20 +425,16 @@ static void run_hog(void)
     }
 }
 
-void probe_main(unsigned int *sp);
+void probe_main(unsigned long *sp);
 
-__asm__(".global _start\n"
-        "_start:\n"
-        "   mov %esp, %eax\n"
-        "   push %eax\n"
-        "   call probe_main\n");
+PROBE_SP_ENTRY;
 
-void probe_main(unsigned int *sp)
+void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];
     char **argv = (char **)(sp + 1);
     unsigned mib = argc >= 2 ? parse_mib(argv[1]) : 64;
-    unsigned len, base, pages, i, before, after;
+    unsigned long len, base, pages, i, before, after;
     int pid, status;
 
     if (argc >= 2 && argv[1][0] == 'f' && argv[1][1] == 'r') {
@@ -442,21 +449,21 @@ void probe_main(unsigned int *sp)
     if (mib == 0) {
         fail("a size in MiB");
     }
-    len = mib << 20;
+    len = (unsigned long)mib << 20;
     pages = len / PAGE;
     before = mem_free_kib();
     if (before == 0) {
         fail("MemFree");
     }
-    base = sys_mmap2_anon(len);
-    if (base >= 0xFFFFF000u) {
+    base = mmap_anon(len);
+    if (sys_failed((long)base)) {
         fail("the mapping");
     }
     for (i = 0; i < pages; i++) {
-        write_page((unsigned *)(base + i * PAGE), i);
+        write_page((unsigned *)(base + i * PAGE), (unsigned)i);
     }
     for (i = 0; i < pages; i++) {
-        if (!check_page((const unsigned *)(base + i * PAGE), i)) {
+        if (!check_page((const unsigned *)(base + i * PAGE), (unsigned)i)) {
             fail("a page did not read back what was written");
         }
     }
@@ -467,10 +474,10 @@ void probe_main(unsigned int *sp)
     }
     if (pid == 0) {
         for (i = 0; i < pages; i += 4) {
-            write_page((unsigned *)(base + i * PAGE), i + 0x100000u);
+            write_page((unsigned *)(base + i * PAGE), (unsigned)i + 0x100000u);
         }
         for (i = 0; i < pages; i++) {
-            unsigned want = (i % 4 == 0) ? i + 0x100000u : i;
+            unsigned want = (i % 4 == 0) ? (unsigned)i + 0x100000u : (unsigned)i;
 
             if (!check_page((const unsigned *)(base + i * PAGE), want)) {
                 sys_exit(4);
@@ -483,7 +490,7 @@ void probe_main(unsigned int *sp)
         fail("the child's copies");
     }
     for (i = 0; i < pages; i++) {
-        if (!check_page((const unsigned *)(base + i * PAGE), i)) {
+        if (!check_page((const unsigned *)(base + i * PAGE), (unsigned)i)) {
             fail("a page changed under the parent when the child wrote its copy");
         }
     }
@@ -506,13 +513,13 @@ void probe_main(unsigned int *sp)
         fail("a fresh image did not see zeroed pages");
     }
 
-    if (syscall2(SYS_MUNMAP, (int)base, (int)len) != 0) {
+    if (syscall2(SYS_MUNMAP, (long)base, (long)len) != 0) {
         fail("munmap");
     }
-    /* The page tables of the mapping stay with the process until it exits,
-     * one page per 4 MiB; everything else must be back. */
+    /* The page tables of the mapping stay with the process until it exits
+     * (TABLE_KIB); everything else must be back. */
     after = mem_free_kib();
-    if (after + 256 + (pages / 1024 + 1) * 4 < before) {
+    if (after + 256 + TABLE_KIB(pages) < before) {
         fail("the frames did not come back");
     }
     puts("MEMPROBE OK");

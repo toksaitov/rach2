@@ -44,11 +44,6 @@
 #define ENOSPC    28
 #define EBUSY     16
 
-/* i386 struct stat64: st_mode at offset 16, the 64-bit st_ino (the field musl
- * reads) at 88 (96 bytes total). */
-#define ST_MODE  16
-#define ST_INO64 88
-
 #define PART_SECTORS 1024
 #define SECTOR       512
 
@@ -113,31 +108,14 @@ static int contains(const char *hay, const char *needle)
 }
 
 static char cmdline[300];
-static char statbuf[96];
-static char fstatbuf[96];
+static char statbuf[KSTAT_SIZE];
+static char fstatbuf[KSTAT_SIZE];
 static char sector[SECTOR];
 static char big[200 * SECTOR];
 /* More than one batch of 2048 sectors: a read or write of this many is two
    driver calls, and the bytes at the boundary between them are checked. */
 #define PAST_SECTORS 2100
 static char past[PAST_SECTORS * SECTOR];
-
-/**
- * The high and low halves `_llseek` takes its offset in.
- *
- * The shift is done on an unsigned value because shifting a negative one right
- * is not defined by the language, and these are used with negative
- * displacements.
- */
-static int off_hi(long long v)
-{
-    return (int)(unsigned)((unsigned long long)v >> 32);
-}
-
-static int off_lo(long long v)
-{
-    return (int)(unsigned)(unsigned long long)v;
-}
 
 /**
  * Read one decimal field out of /proc/disk, or -1 if it is not there.
@@ -229,7 +207,7 @@ static void auth_case(int recovery)
         }
     }
 
-    rc = syscall5(SYS_LLSEEK, fd, off_hi(at), off_lo(at), (long)&pos, SEEK_SET);
+    rc = probe_llseek(fd, at, SEEK_SET, &pos);
     check(rc == 0 && pos == at, "seek to 3 GiB");
 
     for (j = 0; j < SECTOR; j++) {
@@ -239,7 +217,7 @@ static void auth_case(int recovery)
 
     if (!recovery) {
         check(n == -EPERM, "an everyday kernel refuses the write");
-        rc = syscall5(SYS_LLSEEK, fd, off_hi(at), off_lo(at), (long)&pos, SEEK_SET);
+        rc = probe_llseek(fd, at, SEEK_SET, &pos);
         check(rc == 0, "seek back to it");
         n = syscall3(SYS_READ, fd, (long)sector, SECTOR);
         check(n == SECTOR, "but still reads it");
@@ -259,7 +237,7 @@ static void auth_case(int recovery)
     }
 
     check(n == SECTOR, "a recovery kernel writes a sector past 2 GiB");
-    rc = syscall5(SYS_LLSEEK, fd, off_hi(at), off_lo(at), (long)&pos, SEEK_SET);
+    rc = probe_llseek(fd, at, SEEK_SET, &pos);
     check(rc == 0, "seek back to it");
     for (j = 0; j < SECTOR; j++) {
         sector[j] = 0;
@@ -281,7 +259,7 @@ static void auth_case(int recovery)
     {
         unsigned long long rb = 0, ra = 0;
 
-        rc = syscall5(SYS_LLSEEK, fd, off_hi(at), off_lo(at), (long)&pos, SEEK_SET);
+        rc = probe_llseek(fd, at, SEEK_SET, &pos);
         check(rc == 0, "seek back for a batched read");
         check(proc_disk_field("raw-driver-calls ", &rb), "the call count is readable");
         n = syscall3(SYS_READ, fd, (long)big, 200 * SECTOR);
@@ -290,7 +268,7 @@ static void auth_case(int recovery)
               "and took one driver call, the batch holding the whole read");
     }
 
-    rc = syscall5(SYS_LLSEEK, fd, off_hi(at), off_lo(at), (long)&pos, SEEK_SET);
+    rc = probe_llseek(fd, at, SEEK_SET, &pos);
     check(rc == 0, "seek back once more");
     {
         unsigned long long before = 0, after = 0, batch = 0;
@@ -326,7 +304,7 @@ static void auth_case(int recovery)
     /* A transfer longer than one batch: two driver calls, two commands
        with their two flushes, and the bytes on both sides of the boundary
        between the calls are the ones written. */
-    rc = syscall5(SYS_LLSEEK, fd, off_hi(at), off_lo(at), (long)&pos, SEEK_SET);
+    rc = probe_llseek(fd, at, SEEK_SET, &pos);
     check(rc == 0, "seek back for a transfer past one batch");
     {
         unsigned long long before = 0, after = 0, cmd_before = 0, cmd_after = 0;
@@ -348,7 +326,7 @@ static void auth_case(int recovery)
               "and four disk commands, two writes and their two flushes");
         check(proc_disk_field("disk-flushes ", &flush_after) && flush_after - flush_before == 2,
               "and two cache flushes, one per batch");
-        rc = syscall5(SYS_LLSEEK, fd, off_hi(at), off_lo(at), (long)&pos, SEEK_SET);
+        rc = probe_llseek(fd, at, SEEK_SET, &pos);
         check(rc == 0, "seek back to read it");
         for (i = 0; i < PAST_SECTORS * SECTOR; i++) {
             past[i] = 0;
@@ -477,7 +455,7 @@ static void raw_readv_case(void)
 {
     struct {
         char *base;
-        unsigned int length;
+        size_t length;
     } vec[2];
     char bytes[2 * SECTOR], signal;
     unsigned long long before = 0, after = 0;
@@ -553,7 +531,8 @@ static void raw_write_readback(int fd)
 /**
  * Race an inherited description's transfer with a read, write or relative seek.
  * Kinds 0 and 1 cover sector and byte readers; 2 writes; 3 and 4 seek through
- * the two syscall ABIs. Both calls must advance the shared position once.
+ * the two syscall ABIs, which on x86-64 are both lseek. Both calls must
+ * advance the shared position once.
  */
 static void raw_shared_case(int kind)
 {
@@ -607,7 +586,7 @@ static void raw_shared_case(int kind)
             check(syscall3(SYS_LSEEK, fd, SECTOR, SEEK_CUR) == 2 * SECTOR,
                   "raw lseek waits for transfer offset");
         } else {
-            rc = syscall5(SYS_LLSEEK, fd, 0, SECTOR, (long)&position, SEEK_CUR);
+            rc = probe_llseek(fd, SECTOR, SEEK_CUR, &position);
             check(rc == 0 && position == 2 * SECTOR, "raw llseek waits for transfer offset");
         }
         status = -1;
@@ -705,12 +684,12 @@ PROBE_START void _start(void)
     check(rc == 0, "stat64 /proc/cmdline");
     rc = syscall3(SYS_FSTAT, fd, (long)fstatbuf, 0);
     check(rc == 0, "fstat64 the cmdline fd");
-    mode = *(unsigned int *)(statbuf + ST_MODE);
+    mode = *(unsigned int *)(statbuf + KSTAT_MODE);
     check(mode == 0100444, "stat mode is a read-only regular file");
-    ino_stat = *(unsigned int *)(statbuf + ST_INO64);
-    ino_fstat = *(unsigned int *)(fstatbuf + ST_INO64);
+    ino_stat = *(unsigned int *)(statbuf + KSTAT_INO);
+    ino_fstat = *(unsigned int *)(fstatbuf + KSTAT_INO);
     check(ino_stat == 0x101, "stat inode is the cmdline inode");
-    check(mode == *(unsigned int *)(fstatbuf + ST_MODE) && ino_fstat == 0x101,
+    check(mode == *(unsigned int *)(fstatbuf + KSTAT_MODE) && ino_fstat == 0x101,
           "fstat agrees on mode and the cmdline inode");
     syscall1(SYS_CLOSE, fd);
 
@@ -738,10 +717,10 @@ PROBE_START void _start(void)
     if (contains(cmdline, "rach2.bootprobe=ramroot")) {
         rc = syscall3(SYS_STAT, (long)"/dev/bootpart", (long)statbuf, 0);
         check(rc == 0, "a RAM-root boot still has /dev/bootpart");
-        check(*(unsigned int *)(statbuf + ST_MODE) == 020600, "and it is a 0600 device");
+        check(*(unsigned int *)(statbuf + KSTAT_MODE) == 020600, "and it is a 0600 device");
         rc = syscall3(SYS_STAT, (long)"/dev/grubcore", (long)statbuf, 0);
         check(rc == 0, "a RAM-root boot has /dev/grubcore");
-        check(*(unsigned int *)(statbuf + ST_MODE) == 020600, "and it is a 0600 device");
+        check(*(unsigned int *)(statbuf + KSTAT_MODE) == 020600, "and it is a 0600 device");
 
         fd = syscall3(SYS_OPEN, (long)"/dev/grubcore", O_RDWR, 0);
         check(fd >= 0, "root opens /dev/grubcore read-write");
@@ -826,58 +805,63 @@ PROBE_START void _start(void)
         fd = syscall3(SYS_OPEN, (long)"/dev/disk0", O_RDONLY, 0);
         check(fd >= 0, "root opens /dev/disk0 on a 260 GB drive");
 
-        rc = syscall5(SYS_LLSEEK, fd, 0, 0, (long)&pos, SEEK_END);
-        check(rc == 0, "_llseek to the end of a 260 GB window succeeds");
+        rc = probe_llseek(fd, 0, SEEK_END, &pos);
+        check(rc == 0, LLSEEK_NAME " to the end of a 260 GB window succeeds");
         check(pos == size, "and reports the whole drive, not a truncation");
 
-        rc = syscall5(SYS_LLSEEK, fd, off_hi(near_at), off_lo(near_at), (long)&pos, SEEK_SET);
-        check(rc == 0 && pos == near_at, "_llseek to 5 GiB lands where it was asked");
+        rc = probe_llseek(fd, near_at, SEEK_SET, &pos);
+        check(rc == 0 && pos == near_at, LLSEEK_NAME " to 5 GiB lands where it was asked");
         n = syscall3(SYS_READ, fd, (long)sector, SECTOR);
         check(n == SECTOR, "a sector reads at 5 GiB");
         check(pattern_ok(sector, 5), "and has the bytes written there");
 
-        rc = syscall5(SYS_LLSEEK, fd, off_hi(far_at), off_lo(far_at), (long)&pos, SEEK_SET);
-        check(rc == 0 && pos == far_at, "_llseek to 258 GiB lands where it was asked");
+        rc = probe_llseek(fd, far_at, SEEK_SET, &pos);
+        check(rc == 0 && pos == far_at, LLSEEK_NAME " to 258 GiB lands where it was asked");
         n = syscall3(SYS_READ, fd, (long)sector, SECTOR);
         check(n == SECTOR, "a sector reads at 258 GiB");
         check(pattern_ok(sector, 258), "and has the bytes written there");
 
-        rc = syscall5(SYS_LLSEEK, fd, 0, 0, (long)&pos, SEEK_SET);
+        rc = probe_llseek(fd, 0, SEEK_SET, &pos);
         check(rc == 0 && pos == 0, "seek back to the start");
         {
             long long step = near_at;
 
-            rc = syscall5(SYS_LLSEEK, fd, off_hi(step), off_lo(step), (long)&pos, SEEK_CUR);
+            rc = probe_llseek(fd, step, SEEK_CUR, &pos);
             check(rc == 0 && pos == near_at, "SEEK_CUR forward crosses 4 GiB");
             step = far_at - near_at;
-            rc = syscall5(SYS_LLSEEK, fd, off_hi(step), off_lo(step), (long)&pos, SEEK_CUR);
+            rc = probe_llseek(fd, step, SEEK_CUR, &pos);
             check(rc == 0 && pos == far_at, "SEEK_CUR forward again reaches 258 GiB");
             n = syscall3(SYS_READ, fd, (long)sector, SECTOR);
             check(n == SECTOR && pattern_ok(sector, 258),
                   "and a read there still finds the far marker");
             step = -(far_at + SECTOR);
-            rc = syscall5(SYS_LLSEEK, fd, off_hi(step), off_lo(step), (long)&pos, SEEK_CUR);
+            rc = probe_llseek(fd, step, SEEK_CUR, &pos);
             check(rc == 0 && pos == 0, "SEEK_CUR backward returns to the start");
             step = -1;
-            rc = syscall5(SYS_LLSEEK, fd, off_hi(step), off_lo(step), (long)&pos, SEEK_CUR);
+            rc = probe_llseek(fd, step, SEEK_CUR, &pos);
             check(rc == -EINVAL, "a seek before the start is refused, not wrapped");
         }
 
-        rc = syscall5(SYS_LLSEEK, fd, off_hi(far_at), off_lo(far_at), (long)&pos, SEEK_SET);
+        rc = probe_llseek(fd, far_at, SEEK_SET, &pos);
         check(rc == 0, "seek to the far marker before duplicating");
         fd2 = syscall1(SYS_DUP, fd);
         check(fd2 >= 0, "the descriptor duplicates");
-        rc = syscall5(SYS_LLSEEK, fd2, 0, 0, (long)&pos, SEEK_CUR);
+        rc = probe_llseek(fd2, 0, SEEK_CUR, &pos);
         check(rc == 0 && pos == far_at, "the duplicate shares the wide offset");
         n = syscall3(SYS_READ, fd2, (long)sector, SECTOR);
         check(n == SECTOR && pattern_ok(sector, 258), "and reads the far marker through it");
-        rc = syscall5(SYS_LLSEEK, fd, 0, 0, (long)&pos, SEEK_CUR);
+        rc = probe_llseek(fd, 0, SEEK_CUR, &pos);
         check(rc == 0 && pos == far_at + SECTOR,
               "the original saw the duplicate's read advance it");
         syscall1(SYS_CLOSE, fd2);
 
+#if defined __x86_64__
+        check(syscall3(SYS_LSEEK, fd, 0, SEEK_END) == size,
+              "lseek, of 64 bits on x86-64, reports the whole drive");
+#else
         rc = syscall3(SYS_LSEEK, fd, 0, SEEK_END);
         check(rc == -EOVERFLOW, "the 32-bit lseek reports overflow, not an invalid seek");
+#endif
         rc = syscall3(SYS_LSEEK, fd, 0, SEEK_SET);
         check(rc == 0, "and still works for an offset it can name");
         syscall1(SYS_CLOSE, fd);
@@ -907,13 +891,13 @@ PROBE_START void _start(void)
     /* The fixture: partition 1 is FAT-typed known bytes. */
     rc = syscall3(SYS_STAT, (long)"/dev/bootpart", (long)statbuf, 0);
     check(rc == 0, "stat64 /dev/bootpart");
-    mode = *(unsigned int *)(statbuf + ST_MODE);
+    mode = *(unsigned int *)(statbuf + KSTAT_MODE);
     check(mode == 020600, "bootpart is a 0600 character device");
 
     fd = syscall3(SYS_OPEN, (long)"/dev/bootpart", O_RDWR, 0);
     check(fd >= 0, "root opens /dev/bootpart read-write");
     rc = syscall3(SYS_FSTAT, fd, (long)fstatbuf, 0);
-    check(rc == 0 && *(unsigned int *)(fstatbuf + ST_MODE) == 020600,
+    check(rc == 0 && *(unsigned int *)(fstatbuf + KSTAT_MODE) == 020600,
           "fstat mode matches the path stat");
 
     /* Known bytes at a seek: sector 5 of the pattern. */

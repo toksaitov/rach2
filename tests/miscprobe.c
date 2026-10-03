@@ -13,6 +13,18 @@
 
 #include "probe.h"
 
+/* Linux's struct sysinfo, of longs: its size, and the offsets of procs and
+ * mem_unit, on i386 and on x86-64. */
+#if defined __x86_64__
+#define SI_SIZE     112
+#define SI_PROCS    80
+#define SI_MEM_UNIT 104
+#else
+#define SI_SIZE     64
+#define SI_PROCS    40
+#define SI_MEM_UNIT 52
+#endif
+
 static void sys_exit(int s)
 {
     syscall1(SYS_EXIT, s);
@@ -43,7 +55,18 @@ static int fork(void)
  */
 static int vfork_exit(int code)
 {
-    int r;
+    long r;
+#if defined __x86_64__
+    __asm__ __volatile__("syscall\n\t"
+                         "testq %%rax, %%rax\n\t"
+                         "jnz 1f\n\t"
+                         "movq %2, %%rax\n\t"
+                         "syscall\n"
+                         "1:"
+                         : "=a"(r)
+                         : "0"((long)SYS_VFORK), "i"(SYS_EXIT), "D"((long)code)
+                         : "rcx", "r11", "memory", "cc");
+#else
     __asm__ __volatile__("int $0x80\n\t"
                          "testl %%eax, %%eax\n\t"
                          "jnz 1f\n\t"
@@ -53,7 +76,8 @@ static int vfork_exit(int code)
                          : "=a"(r)
                          : "0"(SYS_VFORK), "i"(SYS_EXIT), "b"(code)
                          : "memory", "cc");
-    return r;
+#endif
+    return (int)r;
 }
 static int waitpid(int pid, int *st, int opt)
 {
@@ -125,26 +149,27 @@ PROBE_START void _start(void)
     /* times: the return is a positive tick count, and no CPU time in the
        tms is negative or more than the ticks since boot. */
     {
-        int tms[4];
+        long tms[4];
         int t;
         tms[0] = tms[1] = tms[2] = tms[3] = -1;
         t = times(tms);
         check(t > 0, "times() returns a positive tick count");
         check(tms[0] >= 0 && tms[1] >= 0 && tms[2] >= 0 && tms[3] >= 0,
               "times() fills the tms fields");
-        check(sum_within(tms[0], tms[1], t) && sum_within(tms[2], tms[3], t),
+        check(sum_within((int)tms[0], (int)tms[1], t) && sum_within((int)tms[2], (int)tms[3], t),
               "times() reports no more CPU time than the ticks since boot");
     }
 
     /* sysinfo: at least this process is counted; mem_unit is 1. */
     {
-        unsigned char si[64];
+        unsigned char si[SI_SIZE];
         unsigned short procs;
         unsigned int mem_unit;
         check(sysinfo(si) == 0, "sysinfo() ok");
-        procs = (unsigned short)(si[40] | (si[41] << 8)); /* `procs` offset */
-        mem_unit = (unsigned int)si[52] | ((unsigned int)si[53] << 8) |
-                   ((unsigned int)si[54] << 16) | ((unsigned int)si[55] << 24);
+        procs = (unsigned short)(si[SI_PROCS] | (si[SI_PROCS + 1] << 8));
+        mem_unit = (unsigned int)si[SI_MEM_UNIT] | ((unsigned int)si[SI_MEM_UNIT + 1] << 8) |
+                   ((unsigned int)si[SI_MEM_UNIT + 2] << 16) |
+                   ((unsigned int)si[SI_MEM_UNIT + 3] << 24);
         check(procs >= 1, "sysinfo() counts at least one process");
         check(mem_unit == 1, "sysinfo() mem_unit == 1");
     }

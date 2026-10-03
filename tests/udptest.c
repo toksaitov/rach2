@@ -1,13 +1,21 @@
 /**
- * Exercises the SYS_SOCKETCALL UDP path: socket, bind, sendto, and recvfrom
- * in both blocking and non-blocking (MSG_DONTWAIT) forms. Acts as a UDP echo
- * client against a host echo server reachable at the SLIRP gateway
+ * Exercises the socket calls of the UDP path: socket, bind, sendto, and
+ * recvfrom in both blocking and non-blocking (MSG_DONTWAIT) forms. Acts as a
+ * UDP echo client against a host echo server reachable at the SLIRP gateway
  * 10.0.2.2:7777.
  *
  * Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
+
+/* An address of the kernel's, outside user space: the first megabyte on i386,
+ * and on x86-64 the last page of the address space, in the kernel's half. */
+#if defined __x86_64__
+#define KERNEL_PTR 0xFFFFFFFFFFFFF000ul
+#else
+#define KERNEL_PTR 0x00100000
+#endif
 
 typedef unsigned int uint32_t;
 typedef unsigned short uint16_t;
@@ -16,10 +24,6 @@ typedef unsigned char uint8_t;
 #define STDOUT_FILENO 1
 
 /* socketcall sub-calls. */
-#define SC_SOCKET   1
-#define SC_BIND     2
-#define SC_SENDTO   11
-#define SC_RECVFROM 12
 
 #define AF_INET      2
 #define SOCK_DGRAM   2
@@ -55,9 +59,9 @@ static int sys_gettimeofday(struct timeval *tv)
     return syscall2(SYS_GETTIMEOFDAY, (long)tv, (long)0);
 }
 
-static int socketcall(int call, uint32_t *args)
+static int socketcall(int call, unsigned long *args)
 {
-    return syscall2(SYS_SOCKETCALL, (long)call, (long)args);
+    return (int)sock_call(call, args);
 }
 
 static size_t strlen(const char *s)
@@ -138,7 +142,7 @@ static void delay_ms(int ms)
 
 PROBE_START void _start(void)
 {
-    uint32_t args[6], rcv_len = 16;
+    unsigned long args[6], rcv_len = 16;
     uint8_t local_sa[16], dst_sa[16], rcv_sa[16];
     char msg[] = "rach2-udp-echo";
     uint8_t buf[64];
@@ -235,7 +239,7 @@ PROBE_START void _start(void)
     /* Test 5: recvfrom into a kernel address must be rejected, not faulted */
     print("Test 5: recvfrom into a kernel pointer is rejected... ");
     args[0] = (uint32_t)fd;
-    args[1] = 0x00100000;
+    args[1] = KERNEL_PTR;
     args[2] = sizeof(buf);
     args[3] = MSG_DONTWAIT;
     args[4] = 0;

@@ -136,9 +136,6 @@ typedef unsigned int u32;
 #define O_PATH      010000000
 #define SEEK_END    2
 
-/* i386 struct stat64: the 64-bit size field is at offset 44. */
-#define ST_SIZE 44
-
 /* linux_dirent64: d_reclen is at offset 16, the name begins at 19. */
 #define D_RECLEN 16
 #define D_NAME   19
@@ -326,7 +323,7 @@ static void want_fd_size(const char *step, int fd, int size)
     int got;
 
     want_eq(step, syscall3(SYS_FSTAT, fd, (long)statbuf, 0), 0);
-    got = *(int *)(statbuf + ST_SIZE);
+    got = *(int *)(statbuf + KSTAT_SIZE_AT);
     if (got != size) {
         fail(step, got);
     }
@@ -475,9 +472,9 @@ static void unlink_case(void)
         long long res = -1;
         int r;
 
-        r = syscall5(SYS_LLSEEK, (long)fd, (long)0, (long)0, (long)(&res), (long)SEEK_END);
-        want_eq("_llseek SEEK_END through the unlinked descriptor", r, 0);
-        want_eq("_llseek's result through the unlinked descriptor", (int)res, len);
+        r = probe_llseek(fd, 0, SEEK_END, &res);
+        want_eq(LLSEEK_NAME " SEEK_END through the unlinked descriptor", r, 0);
+        want_eq(LLSEEK_NAME "'s result through the unlinked descriptor", (int)res, len);
     }
     want_fd_size("fstat64 through the unlinked descriptor", fd, len);
     want_eq("fchmod through the unlinked descriptor", syscall3(SYS_FCHMOD, fd, 0600, 0), 0);

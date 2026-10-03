@@ -138,7 +138,7 @@ static int dirents_contain(const unsigned char *b, int n, const char *name)
 
 static int xstat(const char *path)
 {
-    char st[104];
+    char st[KSTAT_SIZE];
 
     st[0] = 0;
     return syscall2(SYS_STAT, (long)path, (long)st);
@@ -151,7 +151,7 @@ static int do_mount(const char *src, const char *target, unsigned flags, const c
 
 static void sleep_ms(int ms)
 {
-    int ts[2];
+    long ts[2];
 
     ts[0] = ms / 1000;
     ts[1] = (ms % 1000) * 1000000;
@@ -332,8 +332,7 @@ static void rows_reading(void)
         syscall1(SYS_CLOSE, f2);
     }
     syscall1(SYS_CLOSE, fd);
-    if (syscall3(SYS_STATFS64, (long)MNT "/hello.txt", 84, (long)buf) != 0 ||
-        *(unsigned *)buf != STATFS_MAGIC_VFAT) {
+    if (probe_statfs(MNT "/hello.txt", buf) != 0 || *(unsigned *)buf != STATFS_MAGIC_VFAT) {
         fail("statfs64 on the mount is vfat's");
     }
     if (xstat(MNT "/nosuch") != -ENOENT) {
@@ -469,7 +468,7 @@ static void rows_lifetime(void)
         syscall3(SYS_WRITE, opened[1], (long)"o", 1);
         syscall1(SYS_CLOSE, opened[1]);
         syscall1(SYS_CLOSE, opened[0]);
-        syscall3(SYS_EXECVE, (long)"/stdintest", (long)av, (long)av + 4);
+        syscall3(SYS_EXECVE, (long)"/stdintest", (long)av, (long)(av + 1));
         sys_exit(8);
     }
     syscall1(SYS_CLOSE, opened[1]);
@@ -567,7 +566,7 @@ static void rows_flags(void)
     }
     av[0] = (char *)MNT "/hello";
     av[1] = 0;
-    if (syscall3(SYS_EXECVE, (long)MNT "/hello", (long)av, (long)av + 4) != -EACCES) {
+    if (syscall3(SYS_EXECVE, (long)MNT "/hello", (long)av, (long)(av + 1)) != -EACCES) {
         fail("execve on a noexec mount is EACCES");
     }
     if (syscall2(SYS_UMOUNT2, (long)MNT, 0) != 0) {
@@ -579,7 +578,7 @@ static void rows_flags(void)
     }
     pid = syscall1(SYS_FORK, 0);
     if (pid == 0) {
-        int xr = syscall3(SYS_EXECVE, (long)MNT "/hello", (long)av, (long)av + 4);
+        int xr = syscall3(SYS_EXECVE, (long)MNT "/hello", (long)av, (long)(av + 1));
 
         sys_exit(-xr);
     }
@@ -629,13 +628,9 @@ static void rows_flags(void)
     }
 }
 
-void probe_main(unsigned int *sp);
+void probe_main(unsigned long *sp);
 
-__asm__(".global _start\n"
-        "_start:\n"
-        "   mov %esp, %eax\n"
-        "   push %eax\n"
-        "   call probe_main\n");
+PROBE_SP_ENTRY;
 
 /* `mountprobe claim`, on a disk whose entry 0 is the FAT volume: the boot
    partition mounted read-only refuses the raw writer with EBUSY, which is
@@ -752,7 +747,7 @@ static void rows_record(void)
     fail("the unmount record does not say 1 opens, 1 releases");
 }
 
-void probe_main(unsigned int *sp)
+void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];
     char **argv = (char **)(sp + 1);
