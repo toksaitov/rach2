@@ -223,7 +223,10 @@ static const char *guest_arch = "i686";
 /* Append `path`'s makefile text to `out`, with each `include` line replaced
    by the text it names, in turn. As make and pdpmake read them, an include
    names a path relative to the top makefile's directory `dir`, and
-   `$(ARCH)` in it is the architecture the guest is read for. */
+   `$(ARCH)` in it is the architecture the guest is read for. An include
+   that begins `$(dir $(lastword $(MAKEFILE_LIST)))`, as mk/toolchain.mk's
+   of mk/arch.mk does, names a path relative to the including file's own
+   directory, which is what GNU make expands that to there. */
 static void inline_text(const char *dir, const char *path, const char *name, char *out,
                         size_t *used, int depth)
 {
@@ -251,11 +254,26 @@ static void inline_text(const char *dir, const char *path, const char *name, cha
             const char *what = line + 8;
             char rel[MAX_LINE];
             char sub[1400];
+            char own[1400];
+            const char *base;
             const char *ref;
             size_t r = 0;
 
             while (*what == ' ' || *what == '\t')
                 what++;
+            base = dir;
+            ref = "$(dir $(lastword $(MAKEFILE_LIST)))";
+            if (strncmp(what, ref, strlen(ref)) == 0) {
+                const char *slash = strrchr(path, '/');
+                size_t n = slash != NULL ? (size_t)(slash - path) : 0;
+
+                if (n >= sizeof(own))
+                    fail("the directory of %s is longer than this reads", name);
+                memcpy(own, path, n);
+                own[n] = '\0';
+                base = own;
+                what += strlen(ref);
+            }
             while (*what != '\0' && r + 1 < sizeof(rel)) {
                 ref = "$(ARCH)";
                 if (strncmp(what, ref, strlen(ref)) == 0) {
@@ -269,7 +287,7 @@ static void inline_text(const char *dir, const char *path, const char *name, cha
                 }
             }
             rel[r] = '\0';
-            if (snprintf(sub, sizeof(sub), "%s/%s", dir, rel) >= (int)sizeof(sub))
+            if (snprintf(sub, sizeof(sub), "%s/%s", base, rel) >= (int)sizeof(sub))
                 fail("the path of %s, included by %s, is longer than this "
                      "reads",
                      rel, name);
