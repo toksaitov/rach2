@@ -39,8 +39,10 @@
 # it built is the ext2 root's exercise.
 #
 
-# The build tree and the emulator of the architecture
-# tests/system/suites.mk names.
+# The architecture, its build tree and its emulator, as
+# tests/system/suites.mk names them. The machine builds its own
+# architecture's kernel, with its own TinyCC.
+RACH2_ARCH=${RACH2_ARCH:-i686}
 ARCH_BUILD=${ARCH_BUILD:-build}
 QEMU=${RACH2_QEMU:-qemu-system-i386}
 
@@ -74,8 +76,12 @@ esac
 
 # Two clean kernel builds: the copied source tree, the objects, the response
 # file and the kernel, with margin. Computed once here, not discovered
-# as a mid-build failure inside the guest.
-NEED_BYTES=8388608
+# as a mid-build failure inside the guest. The x86-64 objects and kernel
+# are larger: its first build and the kernel set aside take about 13 MiB.
+case "$RACH2_ARCH" in
+    x86_64) NEED_BYTES=16777216 ;;
+    *) NEED_BYTES=8388608 ;;
+esac
 
 # The whole run's deadline. A successful run is two kernel builds under
 # emulation; this bounds a hang without cutting a slow build short.
@@ -276,8 +282,9 @@ if ! wait_token "SIZEEND" 240; then
     fail "the first build's kernel was never hashed"
 fi
 # A sanity floor, not a structure check (the kernel checker is that): the
-# tcc-linked kernel is about 1.1 MB, a little larger than the host's, and a
-# size under 200000 bytes means the build left a truncated or empty file.
+# tcc-linked kernel is about 1.7 MB on i686 and 2.0 MB on x86-64, a little
+# larger than the host's, and a size under 200000 bytes means the build left
+# a truncated or empty file.
 SIZEONE="$(grep -a -o 'SIZEONE=[0-9]*' "$LOG" | tail -1 | cut -d= -f2)"
 if [ -z "$SIZEONE" ] || [ "$SIZEONE" -lt 200000 ]; then
     fail "the built kernel is $SIZEONE bytes, which is no kernel"
