@@ -221,7 +221,9 @@ vim:120 perl:180 curl:600 git:300 coreutils:120 bash:120 grep:120 sed:120
 gawk:120 findutils:120 diffutils:120 patch:120 tar:120 gzip:120 xz:120 file:120 iproute2:120
 loopctl:120 losetup:120 e2fsprogs:120
 pkgconf:120 procps:120 utillinux:120 zstd:120 rsync:300 nano:120 texinfo:120 strace:120 lsof:120
-tmux:120 cron:180 zip:120 htop:120 dosfstools:120 shadow:120 chawan:120 python:300 gnupg:300
+tmux:120 cron:180 zip:120 htop:120 dosfstools:120 uname:120 ttygroup:120 disknode:120
+fallocate:120 chattr:120 filecache:120 shadow:120 chawan:120 python:300 gnupg:300 m4:120
+autoreconf:300 bison:120 flex:120 jq:120 screen:120 sudo:120 cmake:300 dig:120
 make:600 autotools:900 gcc:900 gdb:600 js:600 dbus:120 chromium:1200"
 FAILED=""
 TOTAL=0

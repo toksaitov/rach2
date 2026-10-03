@@ -607,6 +607,220 @@ row_dosfstools() {
     same "the label" "$(fatlabel "$WORK/v.img")" "RENAMED"
 }
 
+# m4 expands a macro it was given.
+row_m4() {
+    cat > "$WORK/greet.m4" << 'EOF'
+define(`greet', `hello $1')greet(`world')
+EOF
+    same "a macro" "$(m4 "$WORK/greet.m4")" "hello world"
+}
+
+# Autoconf and Automake make a package's build from configure.ac and
+# Makefile.am, as autoreconf runs them, and the package configures, builds
+# and runs.
+row_autoreconf() {
+    mkdir -p "$WORK/ar"
+    printf 'AC_INIT([hi], [1.0])\nAM_INIT_AUTOMAKE([foreign])\nAC_PROG_CC\nAC_CONFIG_FILES([Makefile])\nAC_OUTPUT\n' \
+        > "$WORK/ar/configure.ac"
+    printf 'bin_PROGRAMS = hi\nhi_SOURCES = hi.c\n' > "$WORK/ar/Makefile.am"
+    printf '#include <stdio.h>\nint main(void) { puts("hi from automake"); return 0; }\n' \
+        > "$WORK/ar/hi.c"
+    runs "autoreconf" sh -c "cd '$WORK/ar' && autoreconf -i"
+    runs "configure" sh -c "cd '$WORK/ar' && ./configure"
+    runs "make" make -C "$WORK/ar"
+    same "the program" "$("$WORK/ar/hi")" "hi from automake"
+}
+
+# Bison makes a parser of a grammar of sums, which GCC compiles.
+row_bison() {
+    cat > "$WORK/sum.y" << 'EOF'
+%{
+#include <stdio.h>
+int yylex(void);
+void yyerror(const char *s) { fputs(s, stderr); }
+%}
+%token NUM
+%%
+line: expr '\n' { printf("%d\n", $1); } ;
+expr: expr '+' NUM { $$ = $1 + $3; } | NUM ;
+%%
+int yylex(void)
+{
+    int c = getchar();
+    if (c >= '0' && c <= '9') { yylval = c - '0'; return NUM; }
+    return c == EOF ? 0 : c;
+}
+int main(void) { return yyparse(); }
+EOF
+    runs "bison" bison -o "$WORK/sum.c" "$WORK/sum.y"
+    runs "the parser's compile" cc -o "$WORK/sum" "$WORK/sum.c"
+    same "a sum" "$(printf '1+2+3\n' | "$WORK/sum")" "6"
+}
+
+# flex makes a scanner that counts the words of its input, which GCC
+# compiles against flex's library.
+row_flex() {
+    printf '%%{\nint words;\n%%}\n%%%%\n[a-z]+ { words++; }\n.|\\n ;\n%%%%\nint main(void) { yylex(); printf("%%d\\n", words); return 0; }\n' \
+        > "$WORK/words.l"
+    runs "flex" flex -o "$WORK/words.c" "$WORK/words.l"
+    runs "the scanner's compile" cc -o "$WORK/words" "$WORK/words.c" -lfl
+    same "the words" "$(echo 'one two three' | "$WORK/words")" "3"
+}
+
+# jq reads JSON, adds an array and matches a regular expression with the
+# Oniguruma its release carries.
+row_jq() {
+    same "a sum" "$(echo '{"a":[1,2,3]}' | jq '.a | add')" "6"
+    same "a regular expression" "$(jq -n '"abbbc" | test("b+")')" "true"
+}
+
+# screen starts a detached session, lists it and ends it.
+row_screen() {
+    runs "a detached session" screen -dmS row sleep 60
+    output "the list" screen -ls
+    has "the session" "$OUT" ".row"
+    runs "the end" screen -S row -X quit
+}
+
+# sudo runs a command as another user by /etc/sudoers, which gives root
+# every command, and is set-id root with the rules read-only.
+row_sudo() {
+    same "a command as test" "$(sudo -u test id -un)" "test"
+    same "the program and the rules" "$(stat -c '%a %U' /usr/bin/sudo /etc/sudoers)" "4755 root
+440 root"
+}
+
+# CMake configures and builds a project of one program.
+row_cmake() {
+    mkdir -p "$WORK/cm"
+    printf 'cmake_minimum_required(VERSION 3.20)\nproject(hi C)\nadd_executable(hi hi.c)\n' \
+        > "$WORK/cm/CMakeLists.txt"
+    printf '#include <stdio.h>\nint main(void) { puts("hi from cmake"); return 0; }\n' \
+        > "$WORK/cm/hi.c"
+    runs "configure" cmake -S "$WORK/cm" -B "$WORK/cm/b"
+    runs "build" cmake --build "$WORK/cm/b"
+    same "the program" "$("$WORK/cm/b/hi")" "hi from cmake"
+}
+
+# dig and host ask a name server, here a responder in Python on 127.0.0.1
+# that answers every question with 192.0.2.1.
+row_dig() {
+    local server
+
+    cat > "$WORK/dns.py" << 'EOF'
+import socket, struct, sys
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.bind(("127.0.0.1", 5353))
+for _ in range(int(sys.argv[1])):
+    q, peer = s.recvfrom(512)
+    end = 12
+    while q[end]:
+        end += q[end] + 1
+    question = q[12:end + 5]
+    head = q[:2] + struct.pack(">HHHHH", 0x8180, 1, 1, 0, 0)
+    answer = struct.pack(">HHHIH", 0xC00C, 1, 1, 60, 4) + socket.inet_aton("192.0.2.1")
+    s.sendto(head + question + answer, peer)
+EOF
+    python3 "$WORK/dns.py" 20 &
+    server=$!
+    same "dig" "$(dig +short +tries=5 +time=2 -p 5353 @127.0.0.1 row.example A)" "192.0.2.1"
+    has "host" "$(host -W 2 -p 5353 -t A row.example 127.0.0.1)" "has address 192.0.2.1"
+    kill "$server" 2> /dev/null
+    wait "$server" 2> /dev/null
+}
+
+# fallocate gives a file on ext2 its blocks ahead of its writes, as zeros,
+# and keeps the bytes a file has; it gives one in /dev/shm its pages, and
+# punches a hole in the second, which frees the pages it covers.
+row_fallocate() {
+    runs "a range on ext2" fallocate -l 1M "$WORK/fa"
+    same "its size" "$(stat -c %s "$WORK/fa")" "1048576"
+    [ "$(stat -c %b "$WORK/fa")" -ge 2048 ] || fail "its blocks: $(stat -c %b "$WORK/fa")"
+    printf data > "$WORK/fb"
+    runs "a range over a file's bytes" fallocate -l 8192 "$WORK/fb"
+    same "the bytes it had" "$(head -c 4 "$WORK/fb")" "data"
+    runs "a range in /dev/shm" fallocate -l 1M /dev/shm/rowfa
+    runs "a punched hole" fallocate -p -o 0 -l 512K /dev/shm/rowfa
+    same "its size and blocks" "$(stat -c '%s %b' /dev/shm/rowfa)" "1048576 1024"
+    rm -f /dev/shm/rowfa
+}
+
+# ext2's attributes: chattr +i makes a file immutable, which refuses a write,
+# a removal and a rename even to root, and lsattr lists the flag; +a makes it
+# append-only, which takes an append and refuses an overwrite; and an owner
+# who is not privileged may not set either, as on Linux.
+row_chattr() {
+    echo data > "$WORK/attr"
+    runs "chattr +i" chattr +i "$WORK/attr"
+    has "lsattr" "$(lsattr "$WORK/attr")" "----i"
+    if echo more >> "$WORK/attr" 2> /dev/null || rm -f "$WORK/attr" 2> /dev/null ||
+        mv "$WORK/attr" "$WORK/attr2" 2> /dev/null; then
+        fail "an immutable file was changed"
+    fi
+    runs "chattr -i +a" chattr -i +a "$WORK/attr"
+    runs "an append" sh -c "echo more >> '$WORK/attr'"
+    if echo over 2> /dev/null > "$WORK/attr"; then
+        fail "an append-only file was overwritten"
+    fi
+    same "the data" "$(cat "$WORK/attr")" "data
+more"
+    runs "chattr -a" chattr -a "$WORK/attr"
+    runs "the removal" rm "$WORK/attr"
+    echo mine > /tmp/rowattr
+    chown test /tmp/rowattr
+    has "an owner's chattr +i" "$(su test -c 'chattr +i /tmp/rowattr' 2>&1)" \
+        "Operation not permitted"
+    rm -f /tmp/rowattr
+}
+
+# The file page cache: a page of an ext2 file that a private mapping read,
+# which the cache keeps, is read again after a write changes it in place,
+# though the size and the modification time, which is put back, are the
+# same, so that only the write's dropping of the pages tells them apart.
+row_filecache() {
+    local when map='import mmap, sys
+f = open(sys.argv[1], "rb")
+print(mmap.mmap(f.fileno(), 0, flags=mmap.MAP_PRIVATE, prot=mmap.PROT_READ)[:5].decode())'
+
+    printf first > "$WORK/fc"
+    when=$(stat -c %Y "$WORK/fc")
+    same "the first mapping" "$(python3 -c "$map" "$WORK/fc")" "first"
+    printf other | dd of="$WORK/fc" conv=notrunc status=none
+    touch -m -d "@$when" "$WORK/fc"
+    same "a mapping after a write" "$(python3 -c "$map" "$WORK/fc")" "other"
+}
+
+# The system's name as uname gives it: Linux, whose interface the kernel
+# follows and whose name config.guess and scripts match, with Rach2 in the
+# release and the version.
+row_uname() {
+    same "the system" "$(uname -s)" "Linux"
+    same "the release" "$(uname -r)" "6.18.0-rach2"
+    has "the version" "$(uname -v)" "Rach2 1.0.0"
+}
+
+# A pseudo-terminal belongs to the group tty with mode 620, as Linux's devpts
+# gives it, and write and wall run as that group to write to one.
+row_ttygroup() {
+    # shellcheck disable=SC2016 # the shell that script starts expands it
+    output "a terminal's group and mode" script -qc 'stat -c "%G %a" "$(tty)"' /dev/null
+    has "the group tty, mode 620" "$OUT" "tty 620"
+    same "write's and wall's" "$(stat -c '%G %a' /usr/bin/write /usr/bin/wall)" "tty 2755
+tty 2755"
+}
+
+# The root's disk has its whole-disk node, root's alone, which reads from
+# sector zero as Linux's /dev/sda does; an open of it for writing over the
+# mounted root is EBUSY (disk(7)), and the write would put back the sector
+# just read, which changes nothing should it go through.
+row_disknode() {
+    same "the node" "$(stat -c '%F %a %U' /dev/disk0)" "block special file 400 root"
+    same "its first sector" "$(dd if=/dev/disk0 bs=512 count=1 2>/dev/null | wc -c)" "512"
+    has "a write refused" \
+        "$(dd if=/dev/disk0 bs=512 count=1 2>/dev/null | dd of=/dev/disk0 bs=512 count=1 conv=notrunc 2>&1)" \
+        "Device or resource busy"
+}
+
 # shadow's tools add an account with a home, saying nothing, change its
 # comment, shell and group, and remove it with its home.
 row_shadow() {

@@ -5901,3 +5901,57 @@ old
 new
     lo_ready = 0;
 end
+
+# The mqueue file system, the binds of KRFFS, fallocate on a tmpfs and the
+# system's name, of milestone 56.
+
+fault mqueue-dir-unlisted
+probe ipcmusl
+file rach2/sys/ipc/mqueue.c
+expect IPCMUSL FAIL (/dev/mqueue lists the queue
+old
+        if (i++ == *cursor) {
+new
+        if (i++ == *cursor + 1000u) {
+end
+
+fault krffs-bind-refused
+probe tmpfsmusl
+file rach2/sys/fs/vfs.c
+expect TMPFSMUSL FAIL (a bind of a directory of the KRFFS root
+old
+    if (base->type->ops->lookup_rest && sref->node != sref->mnt->root) {
+new
+    if (base->type == &vfs_krffs_type ||
+        (base->type->ops->lookup_rest && sref->node != sref->mnt->root)) {
+end
+
+fault krffs-bind-not-repointed
+probe tmpfsmusl
+file rach2/sys/fs/vfs.c
+expect TMPFSMUSL FAIL (a KRFFS file grown through its source reads alike through the bind
+old
+            (mounts[i] == mnt || mounts[i]->bind_of == mnt)) {
+new
+            mounts[i] == mnt) {
+end
+
+fault shm-fallocate-unallocated
+probe callsmusl
+file rach2/sys/fs/tmpfs.c
+expect CALLSMUSL FAIL (posix_fallocate in /dev/shm did not make the range's pages
+old
+    rc = shmem_allocate(&n->data, offset, len);
+new
+    rc = 0;
+end
+
+fault proc-version-old-name
+probe procprobe
+file rach2/sys/syscall.h
+expect FAIL: /proc/version gives the kernel's name and release, as uname does
+old
+#define UTS_SYSNAME "Linux"
+new
+#define UTS_SYSNAME "Rach2"
+end
