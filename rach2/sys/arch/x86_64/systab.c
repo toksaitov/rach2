@@ -5,7 +5,8 @@
  *
  * Where x86-64 has a call i386 makes another way, a short adapter here puts
  * the arguments in the form the shared handler takes: accept and semop as
- * accept4 and semtimedop with the argument they lack.
+ * accept4 and semtimedop with the argument they lack, and Rach2's ping as
+ * the two operations of socketcall it is on i386.
  */
 
 #include "sysnr.h"
@@ -109,6 +110,17 @@ static long sys_accept_noflags(isr_params_t *params)
 static long sys_semop_untimed(isr_params_t *params)
 {
     return with_arg(params, &params->r10, 0, sys_semtimedop_time64);
+}
+
+/* Rach2's ping(2): socketcall's operations 0x1000 and 0x1001, the operation
+ * in RDI and a pointer to its arguments, longs here, in RSI; any other
+ * operation is a socket call x86-64 makes directly. */
+static long sys_rach2_ping(isr_params_t *params)
+{
+    if (params->rdi != 0x1000u && params->rdi != 0x1001u) {
+        return -EINVAL;
+    }
+    return sys_socketcall(params);
 }
 
 void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *params))
@@ -372,6 +384,7 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_CLONE3] = sys_clone3;
     table[SYS_CLOSE_RANGE] = sys_close_range;
     table[SYS_EPOLL_PWAIT2] = sys_epoll_pwait2;
+    table[SYS_RACH2_PING] = sys_rach2_ping;
 
     register_isr_handler(SYSCALL_VECTOR, dispatch, "syscall");
 }

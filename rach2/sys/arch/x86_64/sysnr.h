@@ -272,4 +272,10 @@
 #define SYS_CLOSE_RANGE            436
 #define SYS_EPOLL_PWAIT2           441
 
+/* Rach2's own call, which Linux does not have: ping(2), the ICMP echo that
+ * i386 reaches as socketcall's operations 0x1000 and 0x1001. x86-64 has no
+ * socketcall, so the two operations have this number, the last below
+ * x32's, which Linux x86-64 leaves unused. */
+#define SYS_RACH2_PING 511
+
 #endif /* _X86_64_SYSNR_H_ */

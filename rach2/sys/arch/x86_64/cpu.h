@@ -181,10 +181,10 @@ phys_addr_t mmu_virt_to_phys(const volatile void *v);
 #define ARCH_GREGS 27
 typedef unsigned int core_uid_t;
 
-/* The system call table's size, one more than Linux x86-64's highest
- * number, 462; and clone's TLS argument and child tid address, which x86-64
- * orders child tid first. */
-#define SYSCALL_TABLE_SIZE 463
+/* The system call table's size, one more than the highest number, Rach2's
+ * own ping at 511 (sysnr.h), past Linux x86-64's 462; and clone's TLS
+ * argument and child tid address, which x86-64 orders child tid first. */
+#define SYSCALL_TABLE_SIZE 512
 #define SC_CLONE_TLS       4
 #define SC_CLONE_CTID      3
 
