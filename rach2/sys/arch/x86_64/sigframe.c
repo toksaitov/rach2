@@ -49,7 +49,7 @@ struct lx_ucontext {
 struct lx_rt_sigframe {
     uint64_t pretcode;
     struct lx_ucontext uc;
-    uint8_t info[128];
+    uint8_t info[SIGINFO_SIZE];
 };
 
 #define SS_ONSTACK 1u
@@ -108,7 +108,7 @@ void sigframe_fill_siginfo(uint8_t *out, int signo, const struct k_siginfo *info
                  signo == SIGTRAP) &&
                 info->code > 0;
 
-    k_memset(out, 0, 128);
+    k_memset(out, 0, SIGINFO_SIZE);
     put32(out, (uint32_t)signo);
     put32(out + 4, (uint32_t)info->err);
     put32(out + 8, (uint32_t)info->code);
@@ -119,6 +119,23 @@ void sigframe_fill_siginfo(uint8_t *out, int signo, const struct k_siginfo *info
     put32(out + 16, info->pid);
     put32(out + 20, info->uid);
     put32(out + 24, (uint32_t)info->status);
+}
+
+/** The fields of the x86-64 siginfo at `in` that sigframe_fill_siginfo
+ * writes, for PTRACE_SETSIGINFO. */
+void sigframe_take_siginfo(const uint8_t *in, struct k_siginfo *info)
+{
+    int32_t code;
+    uint64_t addr;
+
+    k_memset(info, 0, sizeof(*info));
+    k_memcpy(&code, in + 8, 4);
+    info->code = code;
+    k_memcpy(&info->pid, in + 16, 4);
+    k_memcpy(&info->uid, in + 20, 4);
+    k_memcpy(&info->status, in + 24, 4);
+    k_memcpy(&addr, in + 16, 8);
+    info->addr = addr;
 }
 
 static void fill_sigcontext(struct lx_sigcontext *sc, const isr_params_t *tf, uint64_t fp_addr,
