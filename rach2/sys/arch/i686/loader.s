@@ -61,6 +61,9 @@ _start:
     pushl %ebx # the loader's information
     pushl %eax # the loader's magic
 
+    # The boot processor's GDT first, so that %fs has its own segment, which
+    # this_cpu() reads, from the first C code on.
+    call init_gdt
     call k_main
 
 .globl k_halt

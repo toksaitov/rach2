@@ -1,14 +1,18 @@
 #include "tss.h"
+#include "gdt.h"
 #include "../x86/isr.h"
 #include "../../lib/kstring.h"
 
-tss_t kernel_tss;
-tss_t double_fault_tss;
+tss_t kernel_tss[NR_CPUS];
+tss_t double_fault_tss[NR_CPUS];
 
-/* The stack the double fault's task runs on, in words: a kernel stack's
- * size, for the record and the panic its handler writes. */
+/* The stack each processor's double fault task runs on, in words: a kernel
+ * stack's size, for the record and the panic its handler writes. */
 #define DOUBLE_FAULT_STACK_WORDS (0x4000 / 4)
-static uint32_t double_fault_stack[DOUBLE_FAULT_STACK_WORDS];
+static uint32_t double_fault_stack[NR_CPUS][DOUBLE_FAULT_STACK_WORDS];
+
+/* The page directory every double fault task loads, once paging is on. */
+static uint32_t double_fault_dir;
 
 /* EFLAGS with only bit 1 set, which the processor keeps as 1: interrupts
  * off. */
@@ -29,11 +33,11 @@ extern void _load_tss(uint16_t selector);
  * when it switches to the double fault's task.
  *
  * That switch is the kernel's one hardware task switch. The gate of vector
- * 8 names `double_fault_tss`, which starts `isr_double_fault` in the
- * kernel's segments, with interrupts off, on a stack of its own, since a
- * double fault may come from a kernel stack that has run out. Its page
- * directory is the kernel's, which `init_paging` gives it
- * (`tss_set_double_fault_dir`) before paging is on; until then the
+ * 8 names the processor's `double_fault_tss`, which starts `isr_double_fault`
+ * in the kernel's segments and the processor's own %fs, with interrupts off,
+ * on a stack of its own, since a double fault may come from a kernel stack
+ * that has run out. Its page directory is the kernel's, which `init_paging`
+ * gives it (`tss_set_double_fault_dir`) before paging is on; until then the
  * processor loads no directory from it.
  *
  * iomap_base is set to sizeof(tss_t), past the end of the segment, which the
@@ -42,36 +46,50 @@ extern void _load_tss(uint16_t selector);
  *
  * @param kernel_stack Top of the ring 0 stack to install in esp0.
  */
-void init_tss(uint32_t kernel_stack)
+void init_tss_cpu(uint32_t cpu, uint32_t kernel_stack)
 {
-    k_memset(&kernel_tss, 0, sizeof(kernel_tss));
+    tss_t *t = &kernel_tss[cpu];
+    tss_t *df = &double_fault_tss[cpu];
 
-    kernel_tss.ss0 = KERNEL_DATA_SELECTOR;
-    kernel_tss.esp0 = kernel_stack;
+    k_memset(t, 0, sizeof(*t));
 
-    kernel_tss.iomap_base = sizeof(tss_t);
+    t->ss0 = KERNEL_DATA_SELECTOR;
+    t->esp0 = kernel_stack;
 
-    k_memset(&double_fault_tss, 0, sizeof(double_fault_tss));
-    double_fault_tss.eip = (uint32_t)&isr_double_fault;
-    double_fault_tss.eflags = DOUBLE_FAULT_EFLAGS;
-    double_fault_tss.esp = (uint32_t)&double_fault_stack[DOUBLE_FAULT_STACK_WORDS];
-    double_fault_tss.cs = KERNEL_CODE_SELECTOR;
-    double_fault_tss.ss = KERNEL_DATA_SELECTOR;
-    double_fault_tss.ds = KERNEL_DATA_SELECTOR;
-    double_fault_tss.es = KERNEL_DATA_SELECTOR;
-    double_fault_tss.fs = KERNEL_DATA_SELECTOR;
-    double_fault_tss.gs = KERNEL_DATA_SELECTOR;
-    double_fault_tss.iomap_base = sizeof(tss_t);
+    t->iomap_base = sizeof(tss_t);
+
+    k_memset(df, 0, sizeof(*df));
+    df->eip = (uint32_t)&isr_double_fault;
+    df->eflags = DOUBLE_FAULT_EFLAGS;
+    df->esp = (uint32_t)&double_fault_stack[cpu][DOUBLE_FAULT_STACK_WORDS];
+    df->cs = KERNEL_CODE_SELECTOR;
+    df->ss = KERNEL_DATA_SELECTOR;
+    df->ds = KERNEL_DATA_SELECTOR;
+    df->es = KERNEL_DATA_SELECTOR;
+    df->fs = GDT_PERCPU_SELECTOR;
+    df->gs = KERNEL_DATA_SELECTOR;
+    df->cr3 = double_fault_dir;
+    df->iomap_base = sizeof(tss_t);
 
     _load_tss(TSS_SELECTOR);
 }
 
+void init_tss(uint32_t kernel_stack)
+{
+    init_tss_cpu(0, kernel_stack);
+}
+
 void tss_set_kernel_stack(uint32_t stack)
 {
-    kernel_tss.esp0 = stack;
+    kernel_tss[arch_cpu_id()].esp0 = stack;
 }
 
 void tss_set_double_fault_dir(uint32_t dir)
 {
-    double_fault_tss.cr3 = dir;
+    int i;
+
+    double_fault_dir = dir;
+    for (i = 0; i < NR_CPUS; i++) {
+        double_fault_tss[i].cr3 = dir;
+    }
 }

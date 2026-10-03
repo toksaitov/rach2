@@ -14,9 +14,12 @@
  * gate of DPL 0 naming the double fault's TSS selector; that GDT entry is an
  * available 32-bit TSS whose base and limit are `double_fault_tss`; the TSS
  * starts `isr_double_fault` in the kernel's code and data segments with
- * interrupts off, on the top of the stack tss.c keeps for it, and takes the
- * page directory it is given; every other exception gate is still an
- * interrupt gate to its stub; and the kernel's TSS keeps its ring 0 stack.
+ * interrupts off and the processor's own %fs, on the top of the stack tss.c
+ * keeps for it, and takes the page directory it is given; every other
+ * exception gate is still an interrupt gate to its stub; the kernel's TSS
+ * keeps its ring 0 stack; and entry 8 is the processor's own data segment,
+ * whose first word is its index. The rows read processor 0's tables, which
+ * `init_gdt` builds.
  *
  * gdt.c, tss.c and idt.c are included whole, the assembly they call is
  * stubbed, and each stub the IDT names is a function of its own here, so
@@ -163,15 +166,15 @@ static uint32_t gate_offset(int vector)
 
 static uint32_t gdt_base(int index)
 {
-    return (uint32_t)gdt_descriptors[index].base_low |
-           ((uint32_t)gdt_descriptors[index].base_middle << 16) |
-           ((uint32_t)gdt_descriptors[index].base_high << 24);
+    return (uint32_t)gdt_descriptors[0][index].base_low |
+           ((uint32_t)gdt_descriptors[0][index].base_middle << 16) |
+           ((uint32_t)gdt_descriptors[0][index].base_high << 24);
 }
 
 static uint32_t gdt_limit(int index)
 {
-    return (uint32_t)gdt_descriptors[index].limit_low |
-           ((uint32_t)(gdt_descriptors[index].flags_and_limit_high & 0x0Fu) << 16);
+    return (uint32_t)gdt_descriptors[0][index].limit_low |
+           ((uint32_t)(gdt_descriptors[0][index].flags_and_limit_high & 0x0Fu) << 16);
 }
 
 int main(void)
@@ -189,32 +192,34 @@ int main(void)
               gate_offset(8) == 0,
           "the gate of vector 8 is a present task gate of DPL 0 naming the double fault's TSS");
 
-    check(df < GDT_ENTRY_COUNT && gdt_address.limit == GDT_ENTRY_COUNT * 8 - 1,
+    check(df < GDT_ENTRY_COUNT && gdt_address[0].limit == GDT_ENTRY_COUNT * 8 - 1,
           "the double fault's TSS selector is inside the GDT the processor is given");
-    check(gdt_descriptors[df].access == 0x89 &&
-              (gdt_descriptors[df].flags_and_limit_high & 0xF0u) == 0 &&
-              gdt_base(df) == addr_of(&double_fault_tss) && gdt_limit(df) == sizeof(tss_t) - 1,
+    check(gdt_descriptors[0][df].access == 0x89 &&
+              (gdt_descriptors[0][df].flags_and_limit_high & 0xF0u) == 0 &&
+              gdt_base(df) == addr_of(&double_fault_tss[0]) && gdt_limit(df) == sizeof(tss_t) - 1,
           "that GDT entry is an available 32-bit TSS whose base and limit are the double fault's");
-    check(gdt_base(TSS_SELECTOR >> 3) == addr_of(&kernel_tss) &&
+    check(gdt_base(TSS_SELECTOR >> 3) == addr_of(&kernel_tss[0]) &&
               gdt_base(df) != gdt_base(TSS_SELECTOR >> 3),
           "and it is not the kernel's TSS, whose state the switch saves");
 
-    check(double_fault_tss.eip == fn_addr(isr_double_fault) &&
-              double_fault_tss.cs == KERNEL_CODE_SELECTOR &&
-              double_fault_tss.ss == KERNEL_DATA_SELECTOR &&
-              double_fault_tss.ds == KERNEL_DATA_SELECTOR &&
-              double_fault_tss.es == KERNEL_DATA_SELECTOR &&
-              double_fault_tss.fs == KERNEL_DATA_SELECTOR &&
-              double_fault_tss.gs == KERNEL_DATA_SELECTOR && double_fault_tss.ldt == 0,
-          "the double fault's TSS starts isr_double_fault in the kernel's segments");
-    check(double_fault_tss.eflags == 0x2u, "with interrupts off and no other flag");
-    check(double_fault_tss.esp == addr_of(&double_fault_stack[DOUBLE_FAULT_STACK_WORDS]) &&
-              double_fault_tss.esp != kernel_tss.esp0 && sizeof(double_fault_stack) >= 0x4000,
+    check(double_fault_tss[0].eip == fn_addr(isr_double_fault) &&
+              double_fault_tss[0].cs == KERNEL_CODE_SELECTOR &&
+              double_fault_tss[0].ss == KERNEL_DATA_SELECTOR &&
+              double_fault_tss[0].ds == KERNEL_DATA_SELECTOR &&
+              double_fault_tss[0].es == KERNEL_DATA_SELECTOR &&
+              double_fault_tss[0].fs == GDT_PERCPU_SELECTOR &&
+              double_fault_tss[0].gs == KERNEL_DATA_SELECTOR && double_fault_tss[0].ldt == 0,
+          "the double fault's TSS starts isr_double_fault in the kernel's segments and the "
+          "processor's own %fs");
+    check(double_fault_tss[0].eflags == 0x2u, "with interrupts off and no other flag");
+    check(double_fault_tss[0].esp == addr_of(&double_fault_stack[0][DOUBLE_FAULT_STACK_WORDS]) &&
+              double_fault_tss[0].esp != kernel_tss[0].esp0 &&
+              sizeof(double_fault_stack[0]) >= 0x4000,
           "on the top of a stack of its own, a kernel stack's size");
-    check(double_fault_tss.iomap_base == sizeof(tss_t) && double_fault_tss.trap == 0,
+    check(double_fault_tss[0].iomap_base == sizeof(tss_t) && double_fault_tss[0].trap == 0,
           "with no I/O bitmap and no trap on the switch");
     tss_set_double_fault_dir(0x00123000u);
-    check(double_fault_tss.cr3 == 0x00123000u, "and with the page directory it is given");
+    check(double_fault_tss[0].cr3 == 0x00123000u, "and with the page directory it is given");
 
     for (v = 0, others_ok = 1; v < 32; v++) {
         uint8_t flags = (v == 3 || v == 4) ? 0xEE : 0x8E;
@@ -229,9 +234,16 @@ int main(void)
     }
     check(others_ok, "every other exception gate is an interrupt gate to its own stub");
 
-    check(kernel_tss.esp0 == boot_stack_top && kernel_tss.ss0 == KERNEL_DATA_SELECTOR &&
-              kernel_tss.iomap_base == sizeof(tss_t),
+    check(kernel_tss[0].esp0 == boot_stack_top && kernel_tss[0].ss0 == KERNEL_DATA_SELECTOR &&
+              kernel_tss[0].iomap_base == sizeof(tss_t),
           "the kernel's TSS keeps its ring 0 stack and its empty I/O bitmap");
+
+    check(GDT_PERCPU_ENTRY < GDT_ENTRY_COUNT &&
+              gdt_descriptors[0][GDT_PERCPU_ENTRY].access == 0x92 &&
+              gdt_base(GDT_PERCPU_ENTRY) == addr_of(&cpus[0]) &&
+              gdt_limit(GDT_PERCPU_ENTRY) == sizeof(cpus[0]) - 1 && cpus[0].id == 0,
+          "entry 8 is a ring 0 data segment over the processor's record, whose first word is its "
+          "index");
 
     if (fails) {
         printf("tables-hosttest: result: fail: %d rows\n", fails);

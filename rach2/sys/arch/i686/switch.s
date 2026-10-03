@@ -20,10 +20,7 @@
 .set PROC_PAGE_DIR, 720    # offset of page_dir, the directory cr3 names, after
                            # the 512-byte floating-point area at 208
 
-# Shared TLS GDT descriptor (mirrors GDT_TLS_ENTRY / GDT_TLS_SELECTOR in
-# tables/gdt.h): entry 6, so its 8-byte descriptor lives at gdt_descriptors+48;
-# the selector is (6 << 3) | 3 = 0x33.
-.set GDT_TLS_ENTRY,    6
+# The TLS selector (GDT_TLS_SELECTOR in gdt.h): entry 6 at RPL 3, 0x33.
 .set GDT_TLS_SELECTOR, 0x33
 
 .globl switch_context
@@ -54,25 +51,25 @@ switch_context:
     movl 20(%esp), %ebx         # old
     movl 24(%esp), %eax         # new
 
-    # Program the incoming process's TLS base into the shared GDT TLS descriptor
-    # (entry 6) and refresh %gs, so %gs-relative reads resolve to this process's
-    # TCB, the i386 equivalent of Linux load_TLS() on __switch_to. Done with
-    # interrupts disabled (the switch can be entered from syscall context with
-    # IF=1) so a nested IRQ never observes a half-written descriptor. The actual
-    # gs/fs/es/ds the user runs with are restored from the trapframe by the
-    # IRQ/syscall epilogue; reloading %gs here keeps the CPU's hidden descriptor
-    # cache coherent with the just-rewritten base. eax (new) and ebx (old) are
-    # preserved; ecx/edx are scratch here and reloaded by the CR3 logic below.
-    movl PROC_TLS_BASE(%eax), %edx          # new->tls_base
+    # Program the incoming process's TLS base into the running processor's TLS
+    # descriptor (gdt_set_tls) and refresh %gs, so %gs-relative reads resolve to
+    # this process's TCB, the i386 equivalent of Linux load_TLS() on
+    # __switch_to. Done with interrupts disabled (the switch can be entered from
+    # syscall context with IF=1) so a nested IRQ never observes a half-written
+    # descriptor. The actual gs/fs/es/ds the user runs with are restored from
+    # the trapframe by the IRQ/syscall epilogue; reloading %gs here keeps the
+    # CPU's hidden descriptor cache coherent with the just-rewritten base. The
+    # call clobbers eax, ecx and edx, so old and new are reloaded after it.
     pushfl
     cli
-    movw %dx, gdt_descriptors + GDT_TLS_ENTRY * 8 + 2   # base bits 0-15
-    shrl $16, %edx
-    movb %dl, gdt_descriptors + GDT_TLS_ENTRY * 8 + 4   # base bits 16-23
-    movb %dh, gdt_descriptors + GDT_TLS_ENTRY * 8 + 7   # base bits 24-31
+    pushl PROC_TLS_BASE(%eax)               # new->tls_base
+    call gdt_set_tls
+    addl $4, %esp
     movw $GDT_TLS_SELECTOR, %cx
     movw %cx, %gs
     popfl
+    movl 20(%esp), %ebx         # old
+    movl 24(%esp), %eax         # new
 
     # Check if we need to switch page directories
     movl PROC_CR3(%ebx), %ecx   # old->cr3

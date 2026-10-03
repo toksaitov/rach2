@@ -299,11 +299,11 @@ static void _double_fault_handler(isr_params_t *params)
 }
 #else
 /**
- * The double fault's task, which the processor enters through the task gate
- * of vector 8 and not by a call: it saves what was running into
- * `kernel_tss`, loads `double_fault_tss` and starts here on that TSS's own
- * stack, with its error code, always 0, where a return address would be.
- * It never returns.
+ * The double fault's task, which the processor enters through the task gate of
+ * vector 8 and not by a call: it saves what was running into the processor's
+ * `kernel_tss`, loads its `double_fault_tss` and starts here on that TSS's own
+ * stack, with its error code, always 0, where a return address would be. It
+ * never returns.
  *
  * A double fault is an exception raised while the processor delivers
  * another. The one this kernel meets is a page fault whose frame could not
@@ -329,12 +329,12 @@ void isr_double_fault(void)
         klog(KLOG_CRIT, "isr",
              "kernel exception: double fault (vector 8, eip 0x%x, esp 0x%x): "
              "pid %d ran past the end of its kernel stack at 0x%x",
-             kernel_tss.eip, kernel_tss.esp, pid, cr2);
+             kernel_tss[arch_cpu_id()].eip, kernel_tss[arch_cpu_id()].esp, pid, cr2);
         k_panic("double fault: a kernel stack ran out");
     }
     klog(KLOG_CRIT, "isr",
-         "kernel exception: double fault (vector 8, eip 0x%x, esp 0x%x, cr2 0x%x)", kernel_tss.eip,
-         kernel_tss.esp, cr2);
+         "kernel exception: double fault (vector 8, eip 0x%x, esp 0x%x, cr2 0x%x)",
+         kernel_tss[arch_cpu_id()].eip, kernel_tss[arch_cpu_id()].esp, cr2);
     k_panic("unrecoverable CPU exception in kernel mode");
 }
 #endif

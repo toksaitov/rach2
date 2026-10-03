@@ -2,6 +2,7 @@
 #define _TSS_H_
 
 #include "../../lib/kint.h"
+#include "../../proc/percpu.h"
 
 /*
  * Task State Segment structure (104 bytes). The CPU loads esp0/ss0 from it
@@ -55,22 +56,26 @@ typedef struct tss tss_t;
 /* Kernel data segment selector, installed in ss0. */
 #define KERNEL_DATA_SELECTOR 0x10
 
-/* The single kernel TSS. */
-extern tss_t kernel_tss;
+/* Each processor's kernel TSS. */
+extern tss_t kernel_tss[NR_CPUS];
 
 /*
- * The double fault's TSS, which the gate of vector 8 names: the processor
- * saves what was running into `kernel_tss` and starts `isr_double_fault`
- * from this one, on a stack of its own.
+ * Each processor's double fault TSS, which the gate of vector 8 names in
+ * that processor's GDT: the processor saves what was running into its
+ * `kernel_tss` and starts `isr_double_fault` from this one, on a stack of
+ * its own.
  */
-extern tss_t double_fault_tss;
+extern tss_t double_fault_tss[NR_CPUS];
 
-/** Initialize the kernel TSS with the ring 0 stack top and load it, and
- * set up the double fault's TSS. */
+/** Initialize the boot processor's kernel TSS with the ring 0 stack top and
+ * load it, and set up its double fault TSS. */
 void init_tss(uint32_t kernel_stack);
 
+/** The same for processor `cpu`, on the processor running this. */
+void init_tss_cpu(uint32_t cpu, uint32_t kernel_stack);
+
 /**
- * Update the ring 0 stack pointer in the kernel TSS.
+ * Update the ring 0 stack pointer in the running processor's TSS.
  *
  * Called on each context switch so the next ring 3 to ring 0 crossing lands
  * on the incoming task's kernel stack.
@@ -78,9 +83,9 @@ void init_tss(uint32_t kernel_stack);
 void tss_set_kernel_stack(uint32_t stack);
 
 /**
- * Give the double fault's task the page directory at physical `dir`, which
- * the processor loads into CR3 when it switches to the task. `init_paging`
- * gives it the kernel's before it turns paging on.
+ * Give every processor's double fault task the page directory at physical
+ * `dir`, which the processor loads into CR3 when it switches to the task.
+ * `init_paging` gives it the kernel's before it turns paging on.
  */
 void tss_set_double_fault_dir(uint32_t dir);
 

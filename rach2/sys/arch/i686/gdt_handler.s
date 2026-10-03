@@ -8,9 +8,11 @@ _load_gdt:
     movw $0x10, %ax
     movw %ax, %ds
     movw %ax, %es
-    movw %ax, %fs
     movw %ax, %gs
     movw %ax, %ss
+    # The processor's own segment (GDT_PERCPU_SELECTOR in gdt.h).
+    movw $0x40, %ax
+    movw %ax, %fs
     ljmp $0x08, $.set_cs
 
 .set_cs:

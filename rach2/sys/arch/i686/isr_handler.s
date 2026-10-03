@@ -266,12 +266,15 @@ isr_common_handler:
     movw %gs, %ax
     pushl %eax
 
-    # Run the kernel with the kernel data selector in ds/es/fs/gs.
+    # Run the kernel with the kernel data selector in ds/es/gs and the
+    # processor's own segment in fs.
     movw $0x10, %ax
     movw %ax, %ds
     movw %ax, %es
-    movw %ax, %fs
     movw %ax, %gs
+    # The processor's own segment, which this_cpu() reads (GDT_PERCPU_SELECTOR).
+    movw $0x40, %ax
+    movw %ax, %fs
 
     # Enter the router with IF=0. The syscall handler (_syscall_handler) sets
     # the per-process in_syscall flag and only THEN does sti, closing the window
@@ -575,8 +578,10 @@ irq_common_handler:
     movw $0x10, %ax
     movw %ax, %ds
     movw %ax, %es
-    movw %ax, %fs
     movw %ax, %gs
+    # The processor's own segment, which this_cpu() reads (GDT_PERCPU_SELECTOR).
+    movw $0x40, %ax
+    movw %ax, %fs
 
     pushl %esp          # Push pointer to isr_params_t structure
     call _irq_router

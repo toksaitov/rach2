@@ -212,7 +212,19 @@ typedef unsigned short core_uid_t;
 #define ISR_DEVICE_LAST  63
 
 /* The running processor's index in the per-processor table
- * (proc/percpu.h). The i686 kernel runs on one processor. */
+ * (proc/percpu.h): the first word of the processor's own segment, which the
+ * loader puts in %fs before the first C code and every entry to the kernel
+ * loads again (gdt.h). A host test runs as one processor. */
+#if defined(RACH2_HOSTTEST)
 #define arch_cpu_id() 0u
+#else
+static __inline__ unsigned int arch_cpu_id(void)
+{
+    unsigned int id;
+
+    __asm__ __volatile__("movl %%fs:0, %0" : "=r"(id));
+    return id;
+}
+#endif
 
 #endif /* _I686_CPU_H_ */
