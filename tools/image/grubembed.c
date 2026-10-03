@@ -5,21 +5,27 @@
  * which a plain file is not, so this performs the same install directly:
  * it writes boot.img's first 440 bytes to the MBR (keeping the disk
  * identifier and the partition table, as grub-bios-setup does), places
- * core.img in the post-MBR gap at LBA 1, and patches the two pointers
- * grub-bios-setup would patch.
+ * core.img where the table leaves room for it, and patches the two
+ * pointers grub-bios-setup would patch.
  *
- *   boot.img[0x5c]  the 8-byte LBA of core.img's first sector (1)
+ *   boot.img[0x5c]  the 8-byte LBA of core.img's first sector
  *   boot.img[0x64]  the boot drive (0xff: use the BIOS-provided drive)
- *   core.img[0x1f4] the diskboot blocklist: the LBA (2) and count of the
+ *   core.img[0x1f4] the diskboot blocklist: the LBA and count of the
  *                   sectors after core.img's first, since core.img runs
- *                   contiguously from LBA 1
+ *                   contiguously from its first sector
  *
- * The gap is whatever lies between LBA 1 and the first partition; this
- * aborts if core.img would run past it into a partition. It also refuses
- * a core over 1024 sectors: the gap is two tail slots of 1023 sectors
- * (utils/grubslot.h) so the machine can replace its own boot loader by
- * writing the slot it is not running from, and an image whose tail ran
- * past LBA 1024 would leave no free slot.
+ * On an MBR disk the room is the post-MBR gap: core.img goes at LBA 1, and
+ * this aborts if it would run past the gap into a partition. It also
+ * refuses a core over 1024 sectors there: the gap is two tail slots of
+ * 1023 sectors (utils/grubslot.h) so the machine can replace its own boot
+ * loader by writing the slot it is not running from, and an image whose
+ * tail ran past LBA 1024 would leave no free slot.
+ *
+ * On a disk whose MBR is the protective one of a GUID table, the sectors
+ * after the MBR are the table's, and the room is the BIOS boot partition:
+ * the entry of type 21686148-6449-6E6F-744E-656564454649, read from the
+ * primary header and array after both checksums agree. core.img goes at
+ * the partition's first sector and must fit inside it.
  *
  * Usage: grubembed <disk.img> <boot.img> <core.img>
  */
@@ -29,7 +35,12 @@
 #include <string.h>
 
 #define SECTOR            512
-#define MAX_IMAGE_SECTORS 1024 /* a core image of 512 KiB, the post-MBR gap */
+#define MAX_IMAGE_SECTORS 1024   /* a core image of 512 KiB, the post-MBR gap */
+#define GPT_ARRAY_MAX     16384u /* 128 entries of 128 bytes */
+
+/* The BIOS boot partition's type GUID as the table stores it. */
+static const unsigned char bios_boot[16] = {0x48, 0x61, 0x68, 0x21, 0x49, 0x64, 0x6f, 0x6e,
+                                            0x74, 0x4e, 0x65, 0x65, 0x64, 0x45, 0x46, 0x49};
 
 static unsigned char *read_file(const char *path, size_t *n)
 {
@@ -55,6 +66,91 @@ static unsigned char *read_file(const char *path, size_t *n)
     return buf;
 }
 
+static uint32_t r32(const unsigned char *p)
+{
+    return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
+}
+
+static uint64_t r64(const unsigned char *p)
+{
+    return (uint64_t)r32(p) | (uint64_t)r32(p + 4) << 32;
+}
+
+/** The CRC32 a GUID table carries over its header and its array. */
+static uint32_t crc32_of(const unsigned char *data, size_t length)
+{
+    uint32_t crc = 0xFFFFFFFFu;
+    size_t i;
+    int bit;
+
+    for (i = 0; i < length; i++) {
+        crc ^= data[i];
+        for (bit = 0; bit < 8; bit++) {
+            crc = (crc >> 1) ^ (0xEDB88320u & (0u - (crc & 1u)));
+        }
+    }
+    return ~crc;
+}
+
+/**
+ * Find the BIOS boot partition of the GUID table on `f`: its first sector
+ * in `*first` and its length in `*count`. Returns 0, or 1 having said why
+ * not.
+ */
+static int bios_boot_partition(FILE *f, unsigned long *first, unsigned long *count)
+{
+    static unsigned char array[GPT_ARRAY_MAX];
+    unsigned char header[SECTOR];
+    uint32_t entries, size, header_size, crc;
+    uint64_t start, last;
+    uint32_t i;
+
+    if (fseek(f, SECTOR, SEEK_SET) != 0 || fread(header, 1, SECTOR, f) != SECTOR ||
+        memcmp(header, "EFI PART", 8) != 0) {
+        fprintf(stderr, "grub_embed: the disk has a protective MBR and no GUID header\n");
+        return 1;
+    }
+    header_size = r32(header + 12);
+    crc = r32(header + 16);
+    entries = r32(header + 80);
+    size = r32(header + 84);
+    if (header_size < 92 || header_size > SECTOR || size < 128 || entries == 0 ||
+        (uint64_t)entries * size > GPT_ARRAY_MAX) {
+        fprintf(stderr, "grub_embed: the GUID header's sizes are not ones this reads\n");
+        return 1;
+    }
+    memset(header + 16, 0, 4);
+    if (crc32_of(header, header_size) != crc) {
+        fprintf(stderr, "grub_embed: the GUID header's checksum does not match\n");
+        return 1;
+    }
+    if (fseek(f, (long)(r64(header + 72) * SECTOR), SEEK_SET) != 0 ||
+        fread(array, 1, (size_t)entries * size, f) != (size_t)entries * size ||
+        crc32_of(array, (size_t)entries * size) != r32(header + 88)) {
+        fprintf(stderr, "grub_embed: the GUID entry array does not read or check\n");
+        return 1;
+    }
+    for (i = 0; i < entries; i++) {
+        const unsigned char *e = array + (size_t)i * size;
+
+        if (memcmp(e, bios_boot, 16) != 0) {
+            continue;
+        }
+        start = r64(e + 32);
+        last = r64(e + 40);
+        if (start < 2 || last < start || last - start + 1 > 0xFFFFFFFFu) {
+            fprintf(stderr, "grub_embed: the BIOS boot partition's range is not one this "
+                            "writes\n");
+            return 1;
+        }
+        *first = (unsigned long)start;
+        *count = (unsigned long)(last - start + 1);
+        return 0;
+    }
+    fprintf(stderr, "grub_embed: the GUID table has no BIOS boot partition\n");
+    return 1;
+}
+
 static void w64(unsigned char *p, uint32_t lo)
 {
     int i;
@@ -72,7 +168,7 @@ int main(int argc, char **argv)
     unsigned char mbr[SECTOR];
     unsigned char *boot, *core;
     size_t boot_len, core_len;
-    unsigned long core_sectors, first_lba = 0;
+    unsigned long core_sectors, first_lba = 0, core_lba = 1;
     int i;
     FILE *f;
 
@@ -99,41 +195,55 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    for (i = 0; i < 4; i++) {
-        const unsigned char *e = mbr + 0x1be + 16 * i + 8;
-        unsigned long start = (unsigned long)e[0] | (unsigned long)e[1] << 8 |
-                              (unsigned long)e[2] << 16 | (unsigned long)e[3] << 24;
+    if (mbr[0x1be + 4] == 0xEE) {
+        unsigned long room;
 
-        if (start != 0 && (first_lba == 0 || start < first_lba))
-            first_lba = start;
-    }
-    if (first_lba != 0 && core_sectors >= first_lba) {
-        fprintf(stderr,
-                "grub_embed: core.img needs %lu sectors but the gap "
-                "before LBA %lu has only %lu\n",
-                core_sectors, first_lba, first_lba - 1);
-        return 1;
-    }
-    if (core_sectors > MAX_IMAGE_SECTORS) {
-        fprintf(stderr,
-                "grub_embed: core.img is %lu sectors and a tail slot "
-                "has %d; the disk would boot but could not have its boot "
-                "loader replaced\n",
-                core_sectors, MAX_IMAGE_SECTORS - 1);
-        return 1;
+        if (bios_boot_partition(f, &core_lba, &room) != 0) {
+            return 1;
+        }
+        if (core_sectors > room) {
+            fprintf(stderr,
+                    "grub_embed: core.img needs %lu sectors and the BIOS boot "
+                    "partition has %lu\n",
+                    core_sectors, room);
+            return 1;
+        }
+    } else {
+        for (i = 0; i < 4; i++) {
+            const unsigned char *e = mbr + 0x1be + 16 * i + 8;
+            unsigned long start = (unsigned long)r32(e);
+
+            if (start != 0 && (first_lba == 0 || start < first_lba))
+                first_lba = start;
+        }
+        if (first_lba != 0 && core_sectors >= first_lba) {
+            fprintf(stderr,
+                    "grub_embed: core.img needs %lu sectors but the gap "
+                    "before LBA %lu has only %lu\n",
+                    core_sectors, first_lba, first_lba - 1);
+            return 1;
+        }
+        if (core_sectors > MAX_IMAGE_SECTORS) {
+            fprintf(stderr,
+                    "grub_embed: core.img is %lu sectors and a tail slot "
+                    "has %d; the disk would boot but could not have its boot "
+                    "loader replaced\n",
+                    core_sectors, MAX_IMAGE_SECTORS - 1);
+            return 1;
+        }
     }
 
-    /* core.img lives at LBA 1; boot.img must load it from there. The
-       diskboot blocklist at the end of core.img's first sector names the
-       rest: starting LBA 2, count = all sectors but the first. */
-    w64(boot + 0x5c, 1);
+    /* boot.img loads core.img's first sector from core_lba; the diskboot
+       blocklist at the end of that sector names the rest: the next LBA,
+       and every sector but the first. */
+    w64(boot + 0x5c, (uint32_t)core_lba);
     boot[0x64] = 0xff;
-    w64(core + 0x1f4, 2);
+    w64(core + 0x1f4, (uint32_t)core_lba + 1);
     core[0x1fc] = (unsigned char)(core_sectors - 1);
     core[0x1fd] = (unsigned char)((core_sectors - 1) >> 8);
 
     if (fseek(f, 0, SEEK_SET) != 0 || fwrite(boot, 1, 440, f) != 440 ||
-        fseek(f, SECTOR, SEEK_SET) != 0 ||
+        fseek(f, (long)(core_lba * SECTOR), SEEK_SET) != 0 ||
         fwrite(core, 1, core_sectors * SECTOR, f) != core_sectors * SECTOR || fclose(f) != 0) {
         fprintf(stderr, "grub_embed: cannot write %s\n", argv[1]);
         return 1;

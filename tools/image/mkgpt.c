@@ -1,29 +1,35 @@
 /**
  * mkgpt: write a GUID partition table into a disk image file.
  *
- * Usage: `mkgpt [--seed N] [--damage-primary] DISK SPEC ...`, with one
- * SPEC of the form `START:SIZE:KIND[@INDEX][=LABEL]` per partition, at
- * most fifteen. START and SIZE are whole
- * sectors of 512 bytes, KIND is `fat` or `data` and selects the type GUID,
- * `@INDEX` puts the entry at that index of the array instead of the next
- * free one, which is how a table whose first used entry is not the first
- * entry is built, and `=LABEL` is the entry's name, `RACH2` and the entry's
- * position when absent. The GUIDs are made from the entry index and the
+ * Usage: `mkgpt [--seed N] [--guid GUID] [--damage-primary] DISK SPEC ...`,
+ * with one SPEC of the form `START:SIZE:KIND[@INDEX][=LABEL]` per partition,
+ * at most fifteen. START and SIZE are whole sectors of 512 bytes. KIND selects
+ * the type GUID: `fat` an EFI system partition, `data` a basic data
+ * partition, which is what a FAT or exFAT volume on a stick carries, `linux`
+ * a Linux file system, and `bios` a BIOS boot partition, which holds GRUB's
+ * BIOS core on a disk whose sectors after the MBR are the table's. `@INDEX`
+ * puts the entry at that index of the array instead of the next free one,
+ * which is how a table whose first used entry is not the first entry is
+ * built, and `=LABEL` is the entry's name, `RACH2` and the entry's position
+ * when absent. The partition GUIDs are made from the entry index and the
  * seed, so two disks built with one seed have the same identities, which
- * is what a test of a cloned disk wants, and two seeds give two sets.
- * `--damage-primary` writes the primary header with a wrong checksum after
- * the table is complete, leaving the backup as the table a reader finds.
+ * is what a test of a cloned disk wants, and two seeds give two sets. The
+ * disk's GUID is made from the seed too, unless `--guid` gives it in the
+ * 36-character text form, which is how a disk image is given the identity
+ * its boot menu names. `--damage-primary` writes the primary header with a
+ * wrong checksum after the table is complete, leaving the backup as the
+ * table a reader finds.
  *
  * What is written: a protective MBR whose single entry is type 0xEE over
  * the whole medium, the primary header at sector 1 with the array at sector
  * 2, and the backup array and header at the end, which is where a table's
  * second copy belongs and what a checker looks for. Both headers carry the
- * CRC32 of the whole array and of themselves.
+ * CRC32 of the whole array and of themselves. The MBR's boot code is zeros;
+ * `grubembed` puts GRUB's there afterwards.
  *
- * The tree had no GUID writer before this. The kernel reads such tables
- * (`rach2/sys/block/gpt.c`) and the suite needs one to read, so this builds
- * it; nothing in the kernel is built from this file, and nothing here reads
- * a table back.
+ * The kernel reads such tables (`rach2/sys/block/gpt.c`), the suites need
+ * them to read, and the disk builder lays out an installed disk with one;
+ * nothing here reads a table back.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -37,13 +43,29 @@
 #define ARRAY_SECS  (ARRAY_BYTES / SECTOR)
 #define MAX_PARTS   15
 
-/* The two type GUIDs this writes, in the mixed-endian form the standard
- * stores them in: the EFI system partition and a basic data partition,
- * which is what a FAT or exFAT volume on a stick carries. */
-static const unsigned char type_fat[16] = {0x28, 0x73, 0x2a, 0xc1, 0x1f, 0xf8, 0xd2, 0x11,
-                                           0xba, 0x4b, 0x00, 0xa0, 0xc9, 0x3e, 0xc9, 0x3b};
-static const unsigned char type_data[16] = {0xa2, 0xa0, 0xd0, 0xeb, 0xe5, 0xb9, 0x33, 0x44,
-                                            0x87, 0xc0, 0x68, 0xb6, 0xb7, 0x26, 0x99, 0xc7};
+/* The type GUIDs this writes, in the mixed-endian form the standard stores
+ * them in, by the name a SPEC gives them. */
+static const struct kind {
+    const char *name;
+    unsigned char guid[16];
+} kinds[] = {
+    /* C12A7328-F81F-11D2-BA4B-00A0C93EC93B, the EFI system partition */
+    {"fat",
+     {0x28, 0x73, 0x2a, 0xc1, 0x1f, 0xf8, 0xd2, 0x11, 0xba, 0x4b, 0x00, 0xa0, 0xc9, 0x3e, 0xc9,
+      0x3b}},
+    /* EBD0A0A2-B9E5-4433-87C0-68B6B72699C7, basic data */
+    {"data",
+     {0xa2, 0xa0, 0xd0, 0xeb, 0xe5, 0xb9, 0x33, 0x44, 0x87, 0xc0, 0x68, 0xb6, 0xb7, 0x26, 0x99,
+      0xc7}},
+    /* 0FC63DAF-8483-4772-8E79-3D69D8477DE4, a Linux file system */
+    {"linux",
+     {0xaf, 0x3d, 0xc6, 0x0f, 0x83, 0x84, 0x72, 0x47, 0x8e, 0x79, 0x3d, 0x69, 0xd8, 0x47, 0x7d,
+      0xe4}},
+    /* 21686148-6449-6E6F-744E-656564454649, BIOS boot */
+    {"bios",
+     {0x48, 0x61, 0x68, 0x21, 0x49, 0x64, 0x6f, 0x6e, 0x74, 0x4e, 0x65, 0x65, 0x64, 0x45, 0x46,
+      0x49}},
+};
 
 static unsigned long crc32_of(const unsigned char *data, unsigned long length)
 {
@@ -93,10 +115,132 @@ static void unique_guid(unsigned char *p, unsigned int index)
     }
 }
 
+/* The text form of a GUID: the first three fields are little-endian on the
+   disk and printed most significant byte first, the last two as stored. */
+static const int text_order[16] = {3, 2, 1, 0, 5, 4, 7, 6, 8, 9, 10, 11, 12, 13, 14, 15};
+
+/** The value of hexadecimal digit `c`, or -1. */
+static int hex_digit(int c)
+{
+    if (c >= '0' && c <= '9') {
+        return c - '0';
+    }
+    if (c >= 'a' && c <= 'f') {
+        return c - 'a' + 10;
+    }
+    if (c >= 'A' && c <= 'F') {
+        return c - 'A' + 10;
+    }
+    return -1;
+}
+
+/** Parse the 36-character text form into `p`; 0 on success, -1 otherwise. */
+static int parse_guid(const char *text, unsigned char *p)
+{
+    int i, n = 0;
+
+    for (i = 0; i < 16; i++) {
+        int hi, lo;
+
+        if (i == 4 || i == 6 || i == 8 || i == 10) {
+            if (text[n++] != '-') {
+                return -1;
+            }
+        }
+        hi = hex_digit((unsigned char)text[n]);
+        lo = hi < 0 ? -1 : hex_digit((unsigned char)text[n + 1]);
+        if (lo < 0) {
+            return -1;
+        }
+        p[text_order[i]] = (unsigned char)(hi << 4 | lo);
+        n += 2;
+    }
+    return text[n] == '\0' ? 0 : -1;
+}
+
 static int fail(const char *what)
 {
     fprintf(stderr, "mkgpt: %s\n", what);
     return 1;
+}
+
+/**
+ * Put the partition one SPEC argument describes into `array` as the entry
+ * after the `used` already there, or at the index the SPEC names, inside
+ * the usable range `[first_usable, last_usable]`. Returns 0, or 1 having
+ * said why not.
+ */
+static int put_entry(unsigned char *array, const char *arg, int used,
+                     unsigned long long first_usable, unsigned long long last_usable)
+{
+    unsigned long long start;
+    unsigned long long count;
+    char kind[16];
+    char spec[128];
+    char *label = 0;
+    unsigned int at;
+    int slot;
+    int fields;
+    unsigned char *e;
+    size_t k;
+
+    if (strlen(arg) >= sizeof(spec)) {
+        return fail("a partition argument is too long");
+    }
+    strcpy(spec, arg);
+    label = strchr(spec, '=');
+    if (label) {
+        *label++ = '\0';
+        if (strlen(label) > 36) {
+            return fail("a label is longer than 36 characters");
+        }
+    }
+    fields = sscanf(spec, "%llu:%llu:%15[^@]@%u", &start, &count, kind, &at);
+    if (fields == 3) {
+        at = (unsigned int)used;
+    } else if (fields != 4) {
+        return fail("a partition is not START:SIZE:KIND[@INDEX][=LABEL]");
+    }
+    if (at >= ENTRIES) {
+        return fail("an entry index is past the array");
+    }
+    if (used >= MAX_PARTS) {
+        return fail("more partitions than this writes");
+    }
+    if (count == 0 || start < first_usable || start + count - 1u > last_usable) {
+        return fail("a partition is outside the usable range");
+    }
+    slot = (int)at;
+    e = array + (unsigned long)slot * ENTRY_SIZE;
+    if (e[0] != 0 || e[1] != 0) {
+        return fail("two partitions were given the same entry");
+    }
+    for (k = 0; k < sizeof(kinds) / sizeof(kinds[0]); k++) {
+        if (strcmp(kind, kinds[k].name) == 0) {
+            memcpy(e, kinds[k].guid, 16);
+            break;
+        }
+    }
+    if (k == sizeof(kinds) / sizeof(kinds[0])) {
+        return fail("a partition's kind is not fat, data, linux or bios");
+    }
+    unique_guid(e + 16, at);
+    put64(e + 32, start);
+    put64(e + 40, start + count - 1u);
+    /* The name, in UTF-16: "RACH2 N". */
+    if (label) {
+        for (k = 0; label[k]; k++) {
+            e[56 + k * 2] = (unsigned char)label[k];
+        }
+    } else {
+        e[56] = 'R';
+        e[58] = 'A';
+        e[60] = 'C';
+        e[62] = 'H';
+        e[64] = '2';
+        e[66] = (unsigned char)('0' + used);
+    }
+    return 0;
 }
 
 int main(int argc, char **argv)
@@ -111,6 +255,8 @@ int main(int argc, char **argv)
     unsigned long array_crc;
     FILE *f;
     long size;
+    unsigned char disk_guid[16];
+    int given_guid = 0;
     int used = 0;
     int damage = 0;
     int i;
@@ -120,18 +266,28 @@ int main(int argc, char **argv)
             seed = (unsigned int)strtoul(argv[2], 0, 10);
             argv += 2;
             argc -= 2;
+        } else if (strcmp(argv[1], "--guid") == 0 && argc >= 3) {
+            if (parse_guid(argv[2], disk_guid) != 0) {
+                return fail("the disk GUID is not in the 36-character text form");
+            }
+            given_guid = 1;
+            argv += 2;
+            argc -= 2;
         } else if (strcmp(argv[1], "--damage-primary") == 0) {
             damage = 1;
             argv++;
             argc--;
         } else {
-            return fail("usage: mkgpt [--seed N] [--damage-primary] DISK "
+            return fail("usage: mkgpt [--seed N] [--guid GUID] [--damage-primary] DISK "
                         "START:SIZE:KIND[@INDEX][=LABEL] ...");
         }
     }
     if (argc < 3) {
-        return fail("usage: mkgpt [--seed N] [--damage-primary] DISK "
+        return fail("usage: mkgpt [--seed N] [--guid GUID] [--damage-primary] DISK "
                     "START:SIZE:KIND[@INDEX][=LABEL] ...");
+    }
+    if (!given_guid) {
+        unique_guid(disk_guid, 99u);
     }
     f = fopen(argv[1], "r+b");
     if (!f) {
@@ -154,71 +310,8 @@ int main(int argc, char **argv)
 
     memset(array, 0, sizeof(array));
     for (i = 2; i < argc; i++) {
-        unsigned long long start;
-        unsigned long long count;
-        char kind[16];
-        char spec[128];
-        char *label = 0;
-        unsigned int at;
-        int slot;
-        int fields;
-        unsigned char *e;
-
-        if (strlen(argv[i]) >= sizeof(spec)) {
-            return fail("a partition argument is too long");
-        }
-        strcpy(spec, argv[i]);
-        label = strchr(spec, '=');
-        if (label) {
-            *label++ = '\0';
-            if (strlen(label) > 36) {
-                return fail("a label is longer than 36 characters");
-            }
-        }
-        fields = sscanf(spec, "%llu:%llu:%15[^@]@%u", &start, &count, kind, &at);
-        if (fields == 3) {
-            at = (unsigned int)used;
-        } else if (fields != 4) {
-            return fail("a partition is not START:SIZE:KIND[@INDEX][=LABEL]");
-        }
-        if (at >= ENTRIES) {
-            return fail("an entry index is past the array");
-        }
-        if (used >= MAX_PARTS) {
-            return fail("more partitions than this writes");
-        }
-        if (count == 0 || start < first_usable || start + count - 1u > last_usable) {
-            return fail("a partition is outside the usable range");
-        }
-        slot = (int)at;
-        e = array + (unsigned long)slot * ENTRY_SIZE;
-        if (e[0] != 0 || e[1] != 0) {
-            return fail("two partitions were given the same entry");
-        }
-        if (strcmp(kind, "fat") == 0) {
-            memcpy(e, type_fat, 16);
-        } else if (strcmp(kind, "data") == 0) {
-            memcpy(e, type_data, 16);
-        } else {
-            return fail("a partition's kind is neither fat nor data");
-        }
-        unique_guid(e + 16, at);
-        put64(e + 32, start);
-        put64(e + 40, start + count - 1u);
-        /* The name, in UTF-16: "RACH2 N". */
-        if (label) {
-            int k;
-
-            for (k = 0; label[k]; k++) {
-                e[56 + k * 2] = (unsigned char)label[k];
-            }
-        } else {
-            e[56] = 'R';
-            e[58] = 'A';
-            e[60] = 'C';
-            e[62] = 'H';
-            e[64] = '2';
-            e[66] = (unsigned char)('0' + used);
+        if (put_entry(array, argv[i], used, first_usable, last_usable) != 0) {
+            return 1;
         }
         used++;
     }
@@ -255,7 +348,7 @@ int main(int argc, char **argv)
         put64(header + 32, primary ? sectors - 1u : 1ull);
         put64(header + 40, first_usable);
         put64(header + 48, last_usable);
-        unique_guid(header + 56, 99u);
+        memcpy(header + 56, disk_guid, 16);
         put64(header + 72, primary ? (unsigned long long)ARRAY_LBA : backup_array);
         put32(header + 80, ENTRIES);
         put32(header + 84, ENTRY_SIZE);
@@ -282,9 +375,6 @@ int main(int argc, char **argv)
     }
     for (i = 0; i < (int)ENTRIES; i++) {
         const unsigned char *e = array + (unsigned long)i * ENTRY_SIZE;
-        /* The text form: the first three fields little-endian on the disk,
-           printed most significant byte first, the last two as stored. */
-        static const int order[16] = {3, 2, 1, 0, 5, 4, 7, 6, 8, 9, 10, 11, 12, 13, 14, 15};
         int k;
 
         if (e[0] == 0 && e[1] == 0) {
@@ -295,7 +385,7 @@ int main(int argc, char **argv)
             if (k == 4 || k == 6 || k == 8 || k == 10) {
                 printf("-");
             }
-            printf("%02x", e[16 + order[k]]);
+            printf("%02x", e[16 + text_order[k]]);
         }
         printf("\n");
     }
