@@ -17,16 +17,22 @@ case "$(uname -s)" in
     *)      MAC=0 ;;
 esac
 
-# hint KEY: an OS-appropriate install suggestion. The i686-elf cross toolchain
-# is NOT a stock apt package on Linux, so its hint is spelled out rather than
-# assuming a package manager.
+# hint KEY: an OS-appropriate install suggestion. The i686-elf and x86_64-elf
+# cross toolchains are NOT stock apt packages on Linux, so their hints are
+# spelled out rather than assuming a package manager.
 hint() {
     case "$1" in
     cross)    [ "$MAC" = 1 ] && echo "brew install i686-elf-gcc" \
                              || echo "build it from source; tools/Readme.md has the commands" ;;
     binutils) [ "$MAC" = 1 ] && echo "brew install i686-elf-binutils" \
                              || echo "part of the i686-elf toolchain; tools/Readme.md has the commands" ;;
+    cross64)  [ "$MAC" = 1 ] && echo "brew install x86_64-elf-gcc" \
+                             || echo "build it from source; tools/Readme.md has the commands" ;;
+    binutils64) [ "$MAC" = 1 ] && echo "brew install x86_64-elf-binutils" \
+                             || echo "part of the x86_64-elf toolchain; tools/Readme.md has the commands" ;;
     qemu)     [ "$MAC" = 1 ] && echo "brew install qemu" || echo "apt install qemu-system-x86" ;;
+    ovmf)     [ "$MAC" = 1 ] && echo "brew install qemu, which ships edk2-x86_64-code.fd" \
+                             || echo "apt install ovmf" ;;
     pkgconf)  [ "$MAC" = 1 ] && echo "brew install pkg-config" || echo "apt install pkg-config" ;;
     make)     [ "$MAC" = 1 ] && echo "xcode-select --install" || echo "apt install make" ;;
     cc)       [ "$MAC" = 1 ] && echo "xcode-select --install" || echo "apt install build-essential" ;;
@@ -107,6 +113,25 @@ req qemu-system-i386 qemu
 req make             make
 req cc               cc
 req i686-elf-objcopy binutils
+# The x86-64 build (make ARCH=x86_64), which tests/run all builds beside the
+# i686 one: its own cross toolchain, the emulator that enters long mode, and
+# OVMF, the UEFI firmware the suites that boot by UEFI give it.
+req x86_64-elf-gcc     cross64
+req x86_64-elf-ld      binutils64
+req x86_64-elf-strip   binutils64
+req x86_64-elf-readelf binutils64
+req x86_64-elf-ar      binutils64
+req x86_64-elf-ranlib  binutils64
+req x86_64-elf-nm      binutils64
+req x86_64-elf-objcopy binutils64
+req qemu-system-x86_64 qemu
+. "$(dirname "$0")/ovmf_path.sh"
+if [ -n "$OVMF_CODE" ]; then
+    row "[PASS]" "OVMF" "$OVMF_CODE"
+else
+    row "[MISSING]" "OVMF" "$(hint ovmf)"
+    missing=$((missing + 1))
+fi
 # The rest of what tools/setup/preflight.sh requires. This report and that
 # check answer the same question, so they name the same tools: a machine this
 # passes and the build then rejects would make the report worthless.

@@ -14,20 +14,27 @@
 #
 # `--report` runs the full probes, prints one line per tool, and writes no
 # cache. `tools/setup/doctor.sh` remains the wider machine-setup report
-# covering QEMU, style, and optional tools.
+# covering QEMU, OVMF, style, and optional tools.
+#
+# The cross toolchain checked is the one of the architecture in RACH2_ARCH
+# (mk/arch.sh), which the root Makefile passes: i686-elf-* for i686, the
+# default, and x86_64-elf-* for x86-64. Each architecture keeps its own cache,
+# beside its build tree.
 #
 set -u
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
-STAMP="$REPO/build/.preflight"
+. "$REPO/mk/arch.sh"
+STAMP="$ARCH_BUILD/.preflight"
 SELF="$REPO/tools/setup/preflight.sh"
 
 # The tools the default build needs. Suites declare their own runtime tools
-# in tests/registry; QEMU is a suite tool, not a build tool. The three
-# e2fsprogs programs build and check the ext2 root image: mke2fs writes it,
-# debugfs sets the owners a build that is not root cannot, e2fsck checks it.
-TOOLS="make cc i686-elf-gcc i686-elf-ld i686-elf-ar i686-elf-strip \
-       i686-elf-objcopy awk sed tar gzip bzip2 patch ssh-keygen \
+# in tests/registry; QEMU and its UEFI firmware are suite tools, not build
+# tools. The three e2fsprogs programs build and check the ext2 root image:
+# mke2fs writes it, debugfs sets the owners a build that is not root cannot,
+# e2fsck checks it.
+TOOLS="make cc ${CROSS}gcc ${CROSS}ld ${CROSS}ar ${CROSS}strip \
+       ${CROSS}objcopy awk sed tar gzip bzip2 patch ssh-keygen \
        mke2fs debugfs e2fsck mandoc"
 
 # Where e2fsprogs is found when it is not on the path: the Homebrew keg, which
@@ -38,6 +45,7 @@ TOOLS="make cc i686-elf-gcc i686-elf-ld i686-elf-ar i686-elf-strip \
 hint() {
     case "$1" in
         i686-elf-*) echo "brew install i686-elf-gcc i686-elf-binutils, or see tools/Readme.md" ;;
+        x86_64-elf-*) echo "brew install x86_64-elf-gcc x86_64-elf-binutils, or see tools/Readme.md" ;;
         cc)         echo "install Xcode Command Line Tools or a C compiler package" ;;
         ssh-keygen) echo "install the OpenSSH client package" ;;
         mke2fs|debugfs|e2fsck) echo "brew install e2fsprogs, or apt install e2fsprogs" ;;
@@ -65,8 +73,8 @@ fingerprint() {
 }
 
 # The full probes: every tool present, the host compiler compiles and links,
-# the cross compiler compiles a freestanding i386 object. Under --report each
-# tool gets one line; otherwise the first failure is fatal.
+# the cross compiler compiles a freestanding object of its architecture. Under
+# --report each tool gets one line; otherwise the first failure is fatal.
 probe() {
     report=${1-}
     ok=0
@@ -87,8 +95,8 @@ probe() {
         sed 's/^/  /' "$work/err" >&2
         return 1
     fi
-    if ! i686-elf-gcc -m32 -ffreestanding -c -o "$work/t.o" "$work/t.c" 2>"$work/err"; then
-        echo "preflight: i686-elf-gcc cannot compile a freestanding object:" >&2
+    if ! "${CROSS}gcc" $MFLAG -ffreestanding -c -o "$work/t.o" "$work/t.c" 2>"$work/err"; then
+        echo "preflight: ${CROSS}gcc cannot compile a freestanding object:" >&2
         sed 's/^/  /' "$work/err" >&2
         return 1
     fi
@@ -125,6 +133,6 @@ fi
 
 [ -f "$STAMP" ] && echo "preflight: environment changed; rechecking" >&2
 probe '' || exit 1
-mkdir -p "$REPO/build"
+mkdir -p "$ARCH_BUILD"
 printf '%s\n' "$current" >"$STAMP"
 exit 0

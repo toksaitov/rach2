@@ -28,7 +28,7 @@ Command logs and `result.status` stay in the printed work directory on the store
 
 ## Machine setup
 
-To build and boot Rach2 a machine needs GNU Make, a host C compiler, the `i686-elf` freestanding cross toolchain, QEMU, `ssh-keygen`, e2fsprogs 1.43 or later, mandoc, which renders the manual pages the images stage, and the POSIX text utilities. The build finds `mke2fs`, `debugfs` and `e2fsck` on the path, under the Homebrew keg, which is never linked, or under `/sbin` and `/usr/sbin`, where Debian keeps them. To pass `tests/run style` it also needs cppcheck, ShellCheck, and clang-format. The suites that build a GRUB disk or a FAT volume need mtools, which `tests/registry` names for each of them; a plain `make` builds the three RAM images and reaches none of it. Nothing is fetched during a build: the six vendored projects are pinned tarballs already in the tree.
+To build and boot Rach2 a machine needs GNU Make, a host C compiler, the `i686-elf` and `x86_64-elf` freestanding cross toolchains, QEMU with OVMF, its UEFI firmware for x86-64, `ssh-keygen`, e2fsprogs 1.43 or later, mandoc, which renders the manual pages the images stage, and the POSIX text utilities. The build finds `mke2fs`, `debugfs` and `e2fsck` on the path, under the Homebrew keg, which is never linked, or under `/sbin` and `/usr/sbin`, where Debian keeps them. To pass `tests/run style` it also needs cppcheck, ShellCheck, and clang-format. The suites that build a GRUB disk or a FAT volume need mtools, which `tests/registry` names for each of them; a plain `make` builds the three RAM images and reaches none of it. Nothing is fetched during a build: the six vendored projects are pinned tarballs already in the tree. `make` builds for i686 and needs only the `i686-elf` toolchain; `make ARCH=x86_64` builds for x86-64 and needs only the `x86_64-elf` one, and `tests/run all` runs both.
 
 Install those, then run `sh tools/setup/doctor.sh`. It reports every tool in five groups and prints the install command for whatever is missing.
 
@@ -41,17 +41,21 @@ Xcode's command line tools supply `make` and `cc`; Homebrew supplies the rest. I
         https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
     eval "$(/opt/homebrew/bin/brew shellenv)"
 
-    brew install i686-elf-gcc i686-elf-binutils qemu mtools e2fsprogs mandoc \
-                 cppcheck shellcheck clang-format rsync
+    brew install i686-elf-gcc i686-elf-binutils x86_64-elf-gcc x86_64-elf-binutils \
+                 qemu mtools e2fsprogs mandoc cppcheck shellcheck clang-format rsync
+
+QEMU's formula ships OVMF as `share/qemu/edk2-x86_64-code.fd`, with the variable store `edk2-i386-vars.fd` beside it, which is where `setup/ovmf_path.sh` finds them.
 
 `ssh-keygen` ships with macOS. `xorriso` builds the ISOs (`make isos`) and the stick images made from them, which `tests/run usbdisk` boots, so a run of the whole set needs it. `pkg-config` with the `fuse-t` cask lets `make -C krffs mount` mount an image on the host, which no build or suite needs.
 
 ### Debian and Ubuntu
 
-The archive has everything except the cross toolchain.
+The archive has everything except the cross toolchains.
 
-    sudo apt install build-essential curl qemu-system-x86 mtools e2fsprogs \
+    sudo apt install build-essential curl qemu-system-x86 ovmf mtools e2fsprogs \
                      mandoc openssh-client cppcheck shellcheck clang-format
+
+The `ovmf` package installs the firmware as `/usr/share/OVMF/OVMF_CODE_4M.fd` with `OVMF_VARS_4M.fd`, or, in older releases, `OVMF_CODE.fd` with `OVMF_VARS.fd`.
 
 `xorriso` builds the ISOs and the stick images made from them, which `tests/run usbdisk` boots. `pkg-config` with `libfuse-dev` lets `make -C krffs mount` mount an image, which no build or suite needs.
 
@@ -72,6 +76,21 @@ The compiler itself is not linked but wrapped, because the archive's is a Linux-
         -fno-unwind-tables -U_FORTIFY_SOURCE -U__linux__ -U__gnu_linux__ -Ulinux \
         "$@"
 
+The x86-64 toolchain is made the same way from the archive's `x86_64-linux-gnu` compiler, which is the host's own compiler on an amd64 machine and the packages `gcc-x86-64-linux-gnu` and `binutils-x86-64-linux-gnu` on any other. Link its tools under `x86_64-elf-` names:
+
+    for t in ld ar objcopy strip nm objdump readelf as ranlib size strings; do
+        ln -sf "/usr/bin/x86_64-linux-gnu-$t" "$HOME/bin/x86_64-elf-$t"
+    done
+
+and wrap its compiler as `$HOME/bin/x86_64-elf-gcc`, with the flags of the i686 wrapper, for the same reasons:
+
+    #!/bin/sh
+    exec /usr/bin/x86_64-linux-gnu-gcc \
+        -fno-pie -no-pie -fno-stack-protector -fcf-protection=none \
+        -fno-stack-clash-protection -fno-asynchronous-unwind-tables \
+        -fno-unwind-tables -U_FORTIFY_SOURCE -U__linux__ -U__gnu_linux__ -Ulinux \
+        "$@"
+
 The archive's version is the lower bound this tree supports: GCC 15.2 and binutils 2.46 on Ubuntu 26.04. Two defaults of that binutils are answered in the makefiles rather than the wrapper: the linker's `-z separate-code`, which would give the kernel a third `PT_LOAD` segment, and `--build-id`, whose note section would land on the `.text` of a program linked at a fixed address.
 
 ### The testing host
@@ -84,16 +103,17 @@ The ssh server on that machine answers in an MSYS shell, so anything meant for W
 
 The machine has `/dev/kvm`, since `nestedVirtualization=true` is set in the Windows user's `.wslconfig` and the account is in the `kvm` group, and the runner takes it when nothing says otherwise. `dev/testing.sh run` says otherwise, with `RACH2_QEMU_ACCEL=tcg`: that KVM is nested under Hyper-V, and the ATA driver polls a port after every sector it writes, each poll an exit through two hypervisors, so a 64 MiB write measured 236 s there and 25 s emulated, and the 4 KiB write rows outran the runner's silence limit. That is the host's setting, like its worker count, not the runner's rule.
 
-The target prefix is not negotiable: `vendor/musl/build_libc.sh` configures with `CROSS_COMPILE=i686-elf-` and both `muslgcc` wrappers call `i686-elf-gcc` by name. A toolchain under that same command prefix works wherever it is installed, and so does the wrapped `i686-linux-gnu` toolchain described above.
+The target prefixes are not negotiable: `mk/arch.mk` and `mk/arch.sh` give each architecture its prefix, `i686-elf-` or `x86_64-elf-`, `vendor/musl/build_libc.sh` configures musl with it, and `vendor/musl/muslgcc` calls that compiler by name. A toolchain under the same command prefix works wherever it is installed, and so do the wrapped `i686-linux-gnu` and `x86_64-linux-gnu` toolchains described above. The x86-64 compiler with `-m32` does not stand in for the i686 one: it has no 32-bit libgcc.
 
 ### The two checkers
 
 * `setup/preflight.sh` is the build's own cached tool check. `make` and
-`tests/run` run it at each entry; it stats the recorded tool paths on a cache hit and repeats its compile probes only when the environment changed. A missing tool fails the build, named, before anything is compiled with the cross toolchain; a host tool may compile beside the check. `--report` prints one line per tool without caching.
+`tests/run` run it at each entry; it stats the recorded tool paths on a cache hit and repeats its compile probes only when the environment changed. It checks the cross toolchain of the architecture in `RACH2_ARCH`, which `make` sets from `ARCH`: `i686-elf-*` by default, `x86_64-elf-*` for `make ARCH=x86_64`, each with its own cache, `build/.preflight` or `build/x86_64/.preflight`. A missing tool fails the build, named, before anything is compiled with the cross toolchain; a host tool may compile beside the check. QEMU and OVMF are the suites' and not the build's, so it does not check them. `--report` prints one line per tool without caching.
 * `setup/e2fsprogs_path.sh` is the one place the three e2fsprogs programs are
 looked for off the path, sourced by `preflight.sh`, `doctor.sh` and `image/mkext2.sh`; it puts the first directory that has all three at the front, so that the three come from one installation.
+* `setup/ovmf_path.sh` is the one place OVMF is looked for. It sets `OVMF_CODE` and `OVMF_VARS` to the first pair of one build it finds: `RACH2_OVMF_CODE` and `RACH2_OVMF_VARS` when set, QEMU's own `share/qemu/edk2-x86_64-code.fd` and `edk2-i386-vars.fd` beside its binary, then the `ovmf` package's 4 MiB and 2 MiB builds under `/usr/share/OVMF`. The Secure Boot builds are left out, since the pinned GRUB is not signed. `doctor.sh` sources it.
 * `setup/doctor.sh` is the wider machine report, in five tiers: what a build
-and run need, which is everything `preflight.sh` requires plus QEMU; the three tools `tests/run style` refuses to start without; the three mtools commands the disk and FAT suites need; the optional `xorriso`, Docker (the `vendor/grub` regeneration procedure only), Git, and FUSE; and the judges, each tool's version beside the one `setup/judges` records from the testing host, a different version reported and not counted missing. It checks that tools run rather than that their names are present, probing `awk`, `sed`, and `ssh-keygen` by doing the work the build does with them, since none of the three accepts `--version` everywhere. For FUSE it runs `pkg-config --exists` for `fuse`, then for `fuse-t`.
+and run need, which is everything `preflight.sh` requires for both architectures, both toolchains, plus `qemu-system-i386`, `qemu-system-x86_64` and OVMF; the three tools `tests/run style` refuses to start without; the three mtools commands the disk and FAT suites need; the optional `xorriso`, Docker (the `vendor/grub` regeneration procedure only), Git, and FUSE; and the judges, each tool's version beside the one `setup/judges` records from the testing host, a different version reported and not counted missing. It checks that tools run rather than that their names are present, probing `awk`, `sed`, and `ssh-keygen` by doing the work the build does with them, since none of the three accepts `--version` everywhere. For FUSE it runs `pkg-config --exists` for `fuse`, then for `fuse-t`.
 
 ## Working an installed machine from the host
 

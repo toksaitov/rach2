@@ -25,7 +25,7 @@ Additional targets build persistent disks, GRUB images, metal images, and recove
 
 ## Build and run
 
-A machine needs GNU Make, a host C compiler, the `i686-elf` cross toolchain, QEMU, mtools, e2fsprogs, mandoc, and `ssh-keygen`; the style suite adds cppcheck, ShellCheck, and clang-format. The [tools Readme](tools/Readme.md) gives the exact commands for macOS and for Debian and Ubuntu, including how to build the cross toolchain the Debian archive does not carry. The build checks its tools before it compiles anything with the cross toolchain, and names anything missing; `sh tools/setup/doctor.sh` is the wider report and prints the install command for whatever is absent.
+A machine needs GNU Make, a host C compiler, the `i686-elf` cross toolchain, and the `x86_64-elf` one for `make ARCH=x86_64`, which builds the x86-64 system into `build/x86_64/`, QEMU with OVMF, its UEFI firmware, mtools, e2fsprogs, mandoc, and `ssh-keygen`; the style suite adds cppcheck, ShellCheck, and clang-format. The [tools Readme](tools/Readme.md) gives the exact commands for macOS and for Debian and Ubuntu, including how to build the cross toolchain the Debian archive does not carry. The build checks its tools before it compiles anything with the cross toolchain, and names anything missing; `sh tools/setup/doctor.sh` is the wider report and prints the install command for whatever is absent.
 
 ```sh
 git clone https://github.com/toksaitov/rach2.git
