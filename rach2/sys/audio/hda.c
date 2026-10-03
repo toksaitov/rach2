@@ -82,8 +82,9 @@ static uint16_t output_stream_index = 0; /* Set during init based on GCAP */
 static uint32_t stream_tag = 1;
 
 /* CORB/RIRB buffers (must be 128-byte aligned, volatile for DMA). These and
- * the other DMA buffers here are in the image's .bss, below 4 GiB, and the
- * controller is given `virt_to_phys` of each with the upper half 0. */
+ * the other DMA buffers here are in the image's .bss, and the controller is
+ * given `virt_to_phys` of each, its lower and upper halves in the
+ * registers and the descriptors that have both. */
 static volatile uint32_t corb_buffer[HDA_CORB_SIZE] __attribute__((aligned(128)));
 static volatile uint64_t rirb_buffer[HDA_RIRB_SIZE] __attribute__((aligned(128)));
 static volatile uint16_t corb_wp = 0;
@@ -215,6 +216,13 @@ static volatile uint32_t hw_fill_count = 0;
 static uint32_t hda_read32(uint32_t offset);
 static void hda_write32(uint32_t offset, uint32_t value);
 
+/** The upper half of a physical address, which the controller takes apart
+ * from its lower half. */
+static uint32_t hda_hi(uint64_t phys)
+{
+    return (uint32_t)(phys >> 32);
+}
+
 /**
  * Push a CPU-written range out to memory so the DMA engine sees it.
  *
@@ -255,7 +263,7 @@ static void hda_setup_dma_posbuf(void)
 
     /* Bit0 enables the position buffer (if implemented by the controller). */
     hda_write32(HDA_DPLBASE, addr | 0x1u);
-    hda_write32(HDA_DPUBASE, 0);
+    hda_write32(HDA_DPUBASE, hda_hi(virt_to_phys(dma_posbuf)));
 
     dpl = hda_read32(HDA_DPLBASE);
     dma_posbuf_enabled = ((dpl & 0x1u) != 0) && ((dpl & ~0x7Fu) == addr);
@@ -887,7 +895,7 @@ static void hda_setup_corb(void)
 
     addr = (uint32_t)virt_to_phys(corb_buffer);
     hda_write32(HDA_CORBLBASE, addr);
-    hda_write32(HDA_CORBUBASE, 0);
+    hda_write32(HDA_CORBUBASE, hda_hi(virt_to_phys(corb_buffer)));
 
     hda_write8(HDA_CORBSIZE, 0x02); /* 256 entries */
 
@@ -928,7 +936,7 @@ static void hda_setup_rirb(void)
 
     addr = (uint32_t)virt_to_phys(rirb_buffer);
     hda_write32(HDA_RIRBLBASE, addr);
-    hda_write32(HDA_RIRBUBASE, 0);
+    hda_write32(HDA_RIRBUBASE, hda_hi(virt_to_phys(rirb_buffer)));
 
     hda_write8(HDA_RIRBSIZE, 0x02); /* 256 entries */
 
@@ -2404,7 +2412,7 @@ static void fill_silence(volatile uint8_t *buffer, size_t size, bool is_signed)
 static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
 {
     uint16_t fmt;
-    uint32_t buf_addr;
+    uint64_t buf_addr;
     int i;
     int stream = output_stream_index;
     uint32_t wcap;
@@ -2456,10 +2464,10 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
         return -1;
     }
 
-    buf_addr = (uint32_t)virt_to_phys(audio_buffer);
+    buf_addr = (uint64_t)virt_to_phys(audio_buffer);
     for (i = 0; i < HDA_NUM_BUFFERS; i++) {
-        bdl[i].addr_low = buf_addr + (i * HDA_BUFFER_SIZE);
-        bdl[i].addr_high = 0;
+        bdl[i].addr_low = (uint32_t)(buf_addr + (uint64_t)i * HDA_BUFFER_SIZE);
+        bdl[i].addr_high = hda_hi(buf_addr + (uint64_t)i * HDA_BUFFER_SIZE);
         bdl[i].length = HDA_BUFFER_SIZE;
         bdl[i].ioc = 1; /* interrupt on completion */
     }
@@ -2477,7 +2485,7 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
     hda_dma_sync_range(audio_buffer, HDA_BUFFER_SIZE * HDA_NUM_BUFFERS);
 
     hda_sd_write32(stream, HDA_SD_BDPL, (uint32_t)virt_to_phys(bdl));
-    hda_sd_write32(stream, HDA_SD_BDPU, 0);
+    hda_sd_write32(stream, HDA_SD_BDPU, hda_hi(virt_to_phys(bdl)));
     hda_sd_write32(stream, HDA_SD_CBL, HDA_BUFFER_SIZE * HDA_NUM_BUFFERS);
     hda_sd_write16(stream, HDA_SD_LVI, HDA_NUM_BUFFERS - 1);
     hda_sd_write16(stream, HDA_SD_FORMAT, fmt);
