@@ -697,7 +697,7 @@ file rach2/sys/fs/procfs.c
 expect PTRACEMUSL FAIL (a transfer through /proc/PID/mem that runs into a hole
 old
         if (n > PAGE_SIZE - (addr & (PAGE_SIZE - 1u))) {
-            n = PAGE_SIZE - (addr & (PAGE_SIZE - 1u));
+            n = (uint32_t)(PAGE_SIZE - (addr & (PAGE_SIZE - 1u)));
         }
         if (write) {
 new
@@ -1864,9 +1864,8 @@ old
         sp = current_proc->altstack_sp + current_proc->altstack_size;
         on_alt = 1;
     }
-    sp -= FPU_LINUX_SIZE;
-    sp &= ~63u;
-    fp_addr = sp;
+    fp_addr = (uint32_t)fpu_frame_place(sp);
+    sp = fp_addr;
     size = rt ? sizeof(frame.rt) : sizeof(frame.plain);
     sp -= size;
     sp = ((sp + 4u) & ~(FRAME_ALIGN - 1u)) - 4u;
@@ -1884,9 +1883,8 @@ new
         sp = current_proc->altstack_sp + current_proc->altstack_size;
         on_alt = 1;
     }
-    sp -= FPU_LINUX_SIZE;
-    sp &= ~63u;
-    fp_addr = sp;
+    fp_addr = (uint32_t)fpu_frame_place(sp);
+    sp = fp_addr;
     size = rt ? sizeof(frame.rt) : sizeof(frame.plain);
     sp -= size;
     sp = ((sp + 4u) & ~(FRAME_ALIGN - 1u)) - 4u;
@@ -3697,11 +3695,13 @@ expect LOCKMUSL FAIL (the exit of a process sharing the table dropped the table'
 old
 #include "process.h"
 #include "ptrace.h"
+#include "sched.h"
 #include "tgroup.h"
 #include "../fs/vfs.h"
 new
 #include "process.h"
 #include "ptrace.h"
+#include "sched.h"
 #include "tgroup.h"
 #include "../fs/vfs.h"
 #include "../fs/lock.h"
@@ -5738,9 +5738,13 @@ probe procprobe
 file rach2/sys/fs/procfs.c
 expect FAIL: /sys/devices/system/cpu has processor 0 online and none offline
 old
-        ap_str(t, attr == 1 ? "\n" : "0\n");
+        } else if (attr != 1) {
+            ap_cpu_list(t);
+        }
 new
-        ap_str(t, "0\n");
+        } else {
+            ap_cpu_list(t);
+        }
 end
 
 # The state of a sleep, which procprobe checks.
@@ -5810,9 +5814,9 @@ probe procprobe
 file rach2/sys/fs/synthfs.c
 expect FAIL: /sys/devices/system/memory has a block size in bytes and memory0 online
 old
-                 {SYSFS_MEMORY, "memory0", SYSFS_MEMORY0}};
+        {SYSFS_SYSTEM, "memory", SYSFS_MEMORY},       {SYSFS_MEMORY, "memory0", SYSFS_MEMORY0}};
 new
-                 {SYSFS_MEMORY, "memory1", SYSFS_MEMORY0}};
+        {SYSFS_SYSTEM, "memory", SYSFS_MEMORY},       {SYSFS_MEMORY, "memory1", SYSFS_MEMORY0}};
 end
 
 fault link-stats64-short
