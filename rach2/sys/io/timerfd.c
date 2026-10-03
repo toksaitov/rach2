@@ -417,8 +417,9 @@ static int32_t arm(struct ktimer *t, int flags, const struct setting *s)
     return 0;
 }
 
-/* The two widths of struct itimerspec: 32-bit seconds and nanoseconds, or
- * 64-bit ones, the interval first. */
+/* The two widths of struct itimerspec, the interval first: seconds and
+ * nanoseconds of a long, 32 bits on i686 and 64 on x86-64, or of 64 bits,
+ * the time64 calls' on i686. */
 static int32_t get_setting(uintptr_t u, int wide, struct setting *s)
 {
     if (wide) {
@@ -435,7 +436,7 @@ static int32_t get_setting(uintptr_t u, int wide, struct setting *s)
         s->vsec = v[2];
         s->vnsec = (int32_t)v[3];
     } else {
-        int32_t v[4];
+        long v[4];
 
         if (copy_from_user(v, (const void __user *)u, sizeof(v)) != 0) {
             return -EFAULT;
@@ -444,9 +445,9 @@ static int32_t get_setting(uintptr_t u, int wide, struct setting *s)
             return -EINVAL;
         }
         s->isec = v[0];
-        s->insec = v[1];
+        s->insec = (int32_t)v[1];
         s->vsec = v[2];
-        s->vnsec = v[3];
+        s->vnsec = (int32_t)v[3];
     }
     return s->isec < 0 || s->vsec < 0 ? -EINVAL : 0;
 }
@@ -462,11 +463,11 @@ static int32_t put_setting(uintptr_t u, int wide, const struct setting *s)
         v[3] = s->vnsec;
         return copy_to_user((void __user *)u, v, sizeof(v)) != 0 ? -EFAULT : 0;
     } else {
-        int32_t v[4];
+        long v[4];
 
-        v[0] = (int32_t)s->isec;
+        v[0] = (long)s->isec;
         v[1] = s->insec;
-        v[2] = (int32_t)s->vsec;
+        v[2] = (long)s->vsec;
         v[3] = s->vnsec;
         return copy_to_user((void __user *)u, v, sizeof(v)) != 0 ? -EFAULT : 0;
     }

@@ -512,14 +512,15 @@ static int32_t mq_sleep(struct mqueue *q, struct mq_wait *w)
 
 /**
  * The deadline of the absolute real-time timeout at `uts`, a timespec of
- * 64-bit seconds when `wide` and of 32-bit ones else, as ticks from now in
+ * 64-bit seconds when `wide` and of longs else, 32 bits on i686 and 64 on
+ * x86-64, as ticks from now in
  * `w`; no deadline without one. EINVAL for nanoseconds outside 0 to 10^9-1
  * or negative seconds, as Linux checks it before it looks at the queue.
  */
 static int32_t mq_deadline(const void __user *uts, int wide, struct mq_wait *w)
 {
     int64_t sec, nsec, now, now_ns, dsec, dns;
-    int32_t ts32[2];
+    long tsl[2];
     int64_t ts64[2];
 
     w->timed = uts != NULL;
@@ -533,11 +534,11 @@ static int32_t mq_deadline(const void __user *uts, int wide, struct mq_wait *w)
         sec = ts64[0];
         nsec = ts64[1];
     } else {
-        if (copy_from_user(ts32, uts, sizeof(ts32)) != 0) {
+        if (copy_from_user(tsl, uts, sizeof(tsl)) != 0) {
             return -EFAULT;
         }
-        sec = ts32[0];
-        nsec = ts32[1];
+        sec = tsl[0];
+        nsec = tsl[1];
     }
     if (sec < 0 || nsec < 0 || nsec >= 1000000000) {
         return -EINVAL;
