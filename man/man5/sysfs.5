@@ -164,15 +164,15 @@ The processors:
 .Pa possible
 and
 .Pa present ,
-each
-.Ql 0 ,
-the one processor the kernel runs on;
+each the processors started, as Linux lists a set of them, such as
+.Ql 0-3 ;
 .Pa offline ,
 empty;
 .Pa kernel_max ,
-.Ql 0 ,
-the highest number a processor may have; and the directory
-.Pa cpu0 .
+.Ql 63 ,
+the highest number a processor may have; and a directory
+.Pa cpuN
+for each processor started.
 glibc's
 .Xr sysconf 3
 counts the processors that are online from

@@ -43,7 +43,10 @@ The scheduler gives every ready process the processor in turn, a tick at
 a time, and has one policy,
 .Dv SCHED_OTHER ,
 with priority 0.
-The machine has one processor, CPU 0.
+Each processor has its own run queue: a woken process joins the
+processor it last ran on unless that one is busy and another it may run
+on is idle, and a processor with nothing to run takes a process from the
+busiest queue.
 A
 .Fa pid
 of 0 names the caller; any other names a process that has not been
@@ -96,15 +99,20 @@ stores the time slice, one 10 ms tick, since the timer takes the
 processor from the running process at every tick.
 .Pp
 .Fn sched_getaffinity
-stores a mask with CPU 0 alone.
+stores the processors the process may run on, of those started, a bit
+for each, and returns the bytes it stored: a long for every 32 or 64
+processors up to the highest started, as Linux sizes its mask.
 .Fn sched_setaffinity
-accepts a mask that has CPU 0, whatever it says of CPUs the machine does
-not have, from a caller that may change the process, and changes nothing,
-since every process runs on CPU 0.
+reads at most that many bytes of the mask, binds the process to the
+started processors the mask has, whatever it says of others, and moves a
+process that runs on a processor it no longer has: the caller before the
+call returns, another process at its processor's next tick.
+A fork passes the set on, and an exec keeps it.
 .Pp
-.Fn getcpu ,
-number 318, stores 0 for the CPU and 0 for the NUMA node where its
-non-null arguments point.
+.Fn getcpu
+stores the number of the processor the caller runs on, which may change as
+soon as the call returns, and 0 for the NUMA node, where its non-null
+arguments point.
 .Pp
 .Fn sched_yield
 puts the caller behind the other ready processes in the round-robin
@@ -188,10 +196,14 @@ The kernel returns the negative error number.
 The default suite's
 .Pa tests/musl/schedmusl.c
 yields, reads the policy, the parameter, the priority ranges, the time
-slice and the affinity, sets
+slice and the affinity, which is every processor
+.Pa /proc/cpuinfo
+lists, sets
 .Dv SCHED_OTHER
-and an affinity with CPU 0, and checks the refusals of the other policies,
-of an affinity without CPU 0, and of another user's process.
+and an affinity of the last processor alone, after which
+.Fn getcpu
+returns that processor, and checks the refusals of the other policies, of
+an affinity of a processor past the last, and of another user's process.
 .Sh ERRORS
 .Bl -tag -width "[EFAULT]"
 .It Bq Er EFAULT
@@ -210,9 +222,9 @@ a
 .Fa cpusetsize
 for
 .Fn sched_getaffinity
-is zero or not a multiple of four, or a mask for
+is shorter than the mask or not a multiple of a long, or a mask for
 .Fn sched_setaffinity
-lacks CPU 0.
+has no processor that is started.
 .It Bq Er EPERM
 The caller may not change the process, or asked for
 .Dv SCHED_FIFO

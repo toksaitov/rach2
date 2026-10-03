@@ -17,11 +17,13 @@
  * SCHED_RR are refused with EPERM, and the other policies, a priority that
  * does not suit its policy, and an unknown policy with EINVAL. The priority
  * ranges are Linux's, and the time slice is one 10 ms tick. The affinity is
- * CPU 0 alone, read raw as the bytes of a long written, four on i386 and eight
- * on x86-64; a mask with CPU 0 is accepted and one without it refused. A caller
- * of another user may not change root's process, and a pid of no process is
- * refused with ESRCH. musl answers the policy and parameter calls with ENOSYS
- * itself, so those rows call the kernel through `syscall`.
+ * every processor /proc/cpuinfo lists, read raw as the bytes of a long
+ * written, four on i386 and eight on x86-64, on a machine of fewer than 32
+ * processors; a mask of the last processor alone is accepted, kept, and
+ * moves the caller there, as getcpu then says, and one of a processor past
+ * the last is refused. A caller of another user may not change root's
+ * process, and a pid of no process is refused with ESRCH. musl answers the policy and parameter
+ * calls with ENOSYS itself, so those rows call the kernel through `syscall`.
  *
  * /proc/self/oom_score_adj reads 0 at first and is root's, mode 0644, while
  * the process is dumpable; a write, opened as a shell's redirection opens
@@ -63,6 +65,25 @@
 #else
 #define MASK_BYTES "four"
 #endif
+
+/** The processors /proc/cpuinfo lists, by its "processor" lines, or 0. */
+static int cpuinfo_count(void)
+{
+    char line[256];
+    int n = 0;
+    FILE *f = fopen("/proc/cpuinfo", "r");
+
+    if (!f) {
+        return 0;
+    }
+    while (fgets(line, sizeof(line), f)) {
+        if (strncmp(line, "processor\t:", 11) == 0) {
+            n++;
+        }
+    }
+    fclose(f);
+    return n;
+}
 
 /** Report one failed check and return 1, the probe's failure status. */
 static int fail(const char *what)
@@ -256,7 +277,8 @@ static int scheduling(void)
     struct sched_param sp;
     struct timespec slice;
     cpu_set_t set;
-    unsigned int i;
+    unsigned int i, cpu = 99;
+    int cpus;
 
     if (sched_yield() != 0) {
         return fail("sched_yield did not return 0");
@@ -306,10 +328,14 @@ static int scheduling(void)
     if (sched_rr_get_interval(0, &slice) != 0 || slice.tv_sec != 0 || slice.tv_nsec != 10000000L) {
         return fail("the time slice is not one 10 ms tick");
     }
+    cpus = cpuinfo_count();
+    if (cpus < 1 || cpus >= 32) {
+        return fail("/proc/cpuinfo lists no processor, or 32 or more");
+    }
     memset(&set, 0xFF, sizeof(set));
-    if (sched_getaffinity(0, sizeof(set), &set) != 0 || CPU_COUNT(&set) != 1 ||
-        !CPU_ISSET(0, &set)) {
-        return fail("the affinity is not CPU 0 alone");
+    if (sched_getaffinity(0, sizeof(set), &set) != 0 || CPU_COUNT(&set) != cpus ||
+        !CPU_ISSET(cpus - 1, &set)) {
+        return fail("the affinity is not every processor /proc/cpuinfo lists");
     }
     if (syscall(SYS_sched_getaffinity, 0L, (long)sizeof(set), &set) != (long)sizeof(long)) {
         return fail("the raw sched_getaffinity did not return the " MASK_BYTES " bytes it wrote");
@@ -317,13 +343,27 @@ static int scheduling(void)
     if (syscall(SYS_sched_getaffinity, 0L, 3L, &set) != -1 || errno != EINVAL) {
         return fail("an affinity of three bytes was not refused with EINVAL");
     }
+    CPU_ZERO(&set);
+    CPU_SET(cpus - 1, &set);
     if (sched_setaffinity(0, sizeof(set), &set) != 0) {
-        return fail("an affinity with CPU 0 was refused");
+        return fail("an affinity of the last processor was refused");
+    }
+    memset(&set, 0xFF, sizeof(set));
+    if (sched_getaffinity(0, sizeof(set), &set) != 0 || CPU_COUNT(&set) != 1 ||
+        !CPU_ISSET(cpus - 1, &set)) {
+        return fail("the affinity set is not the one read back");
+    }
+    if (syscall(SYS_getcpu, &cpu, NULL, NULL) != 0 || cpu != (unsigned)(cpus - 1)) {
+        return fail("the caller did not move to the one processor of its affinity");
     }
     CPU_ZERO(&set);
-    CPU_SET(1, &set);
+    CPU_SET(cpus, &set);
     if (sched_setaffinity(0, sizeof(set), &set) != -1 || errno != EINVAL) {
-        return fail("an affinity without CPU 0 was not refused with EINVAL");
+        return fail("an affinity of a processor past the last was not refused with EINVAL");
+    }
+    memset(&set, 0xFF, sizeof(set));
+    if (sched_setaffinity(0, sizeof(set), &set) != 0) {
+        return fail("an affinity of every processor was refused");
     }
     if (in_child(not_root) != 0) {
         return fail("user 1000 changed the scheduling of root's process");

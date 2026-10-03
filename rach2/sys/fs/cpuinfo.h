@@ -7,15 +7,19 @@
  * cpuinfo: the text of /proc/cpuinfo, in Linux's format for x86, from what
  * `cpuid` reports: the vendor, family, model and stepping, the brand string,
  * the last-level cache, the APIC ID, the feature flags by Linux's names, the
- * cache line and the address sizes. The kernel runs on one processor, so
- * the text describes processor 0 alone. It has no "cpu MHz" or "bogomips"
- * line, since the kernel does not measure the processor's clock.
+ * cache line and the address sizes, a block for each processor. The
+ * processors are taken to be alike, as they are in the machines the kernel
+ * runs on, so `cpuid` on the running one answers for each but its APIC ID,
+ * and each is a core of one package with no sibling thread. It has no
+ * "cpu MHz" or "bogomips" line, since the kernel does not measure the
+ * processor's clock.
  */
 
 /** The largest text `cpuinfo_text` makes. */
 #define CPUINFO_TEXT_MAX 2048
 
-/** Write the text into `out`, at most `cap` bytes with the NUL; its length. */
-uint32_t cpuinfo_text(char *out, uint32_t cap);
+/** Write processor `cpu`'s block into `out`, at most `cap` bytes with the
+ * NUL; its length. */
+uint32_t cpuinfo_text(char *out, uint32_t cap, int cpu);
 
 #endif /* _CPUINFO_H_ */

@@ -6,7 +6,9 @@
 #include "../../fs/cpuinfo.h"
 
 #include "kcpu.h"
+#include "smpboot.h"
 #include "../../lib/kstring.h"
+#include "../../proc/smp.h"
 
 /* Linux's names of the feature bits (arch/x86/include/asm/cpufeatures.h),
  * one table for each register, in bit order; a bit Linux does not show is
@@ -238,7 +240,7 @@ static uint32_t cache_kb(uint32_t max, uint32_t ext_max, int intel)
     return 0;
 }
 
-uint32_t cpuinfo_text(char *out, uint32_t cap)
+uint32_t cpuinfo_text(char *out, uint32_t cap, int cpu)
 {
     struct text t;
     uint32_t max, ext_max, a, b, c, d, family, model;
@@ -273,7 +275,7 @@ uint32_t cpuinfo_text(char *out, uint32_t cap)
     }
     brand_string(ext_max, brand);
 
-    put_field(&t, "processor\t: ", 0);
+    put_field(&t, "processor\t: ", (uint32_t)cpu);
     put(&t, "vendor_id\t: ");
     put(&t, vendor);
     put(&t, "\n");
@@ -290,11 +292,11 @@ uint32_t cpuinfo_text(char *out, uint32_t cap)
         put(&t, " KB\n");
     }
     put_field(&t, "physical id\t: ", 0);
-    put_field(&t, "siblings\t: ", 1);
-    put_field(&t, "core id\t\t: ", 0);
-    put_field(&t, "cpu cores\t: ", 1);
-    put_field(&t, "apicid\t\t: ", b >> 24);
-    put_field(&t, "initial apicid\t: ", b >> 24);
+    put_field(&t, "siblings\t: ", (uint32_t)smp_cpu_count());
+    put_field(&t, "core id\t\t: ", (uint32_t)cpu);
+    put_field(&t, "cpu cores\t: ", (uint32_t)smp_cpu_count());
+    put_field(&t, "apicid\t\t: ", smpboot_apic_id(cpu));
+    put_field(&t, "initial apicid\t: ", smpboot_apic_id(cpu));
     put(&t,
         (d & 1u) ? "fpu\t\t: yes\nfpu_exception\t: yes\n" : "fpu\t\t: no\nfpu_exception\t: no\n");
     put_field(&t, "cpuid level\t: ", max);

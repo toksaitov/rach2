@@ -252,16 +252,16 @@ const char *synth_sysvipc_name(int origin);
 #define SYSFS_DEV_BLOCK   26 /* /sys/dev/block, a link for each disk node */
 #define SYSFS_SYSTEM      27 /* /sys/devices/system */
 #define SYSFS_CPU         28 /* /sys/devices/system/cpu, the processors */
-#define SYSFS_CPU0        29 /* /sys/devices/system/cpu/cpu0 */
+#define SYSFS_CPUN        29 /* /sys/devices/system/cpu/cpuN, whose key is N */
 #define SYSFS_MEMORY      30 /* /sys/devices/system/memory, the memory blocks */
 #define SYSFS_MEMORY0     31 /* /sys/devices/system/memory/memory0 */
 #define SYSFS_BLOCK_LOOP  32 /* /sys/block/loopN/loop, while a file backs it */
 
-/** Whether the /sys directory `node` is one of a device or an interface,
- * which `syskey` says, and which exists only while that does. */
+/** Whether the /sys directory `node` is one of a device, an interface or a
+ * processor, which `syskey` says, and which exists only while that does. */
 #define SYSFS_KEYED(node)                                                                  \
     ((node) == SYSFS_PCI_DEVICE || (node) == SYSFS_USB_DEVICE || (node) == SYSFS_NET_IF || \
-     (node) == SYSFS_NET_STATS || SYSFS_IS_BLOCK(node))
+     (node) == SYSFS_NET_STATS || (node) == SYSFS_CPUN || SYSFS_IS_BLOCK(node))
 
 /** Whether `node` is a directory of a disk node: its own, its queue's, its
  * device's or a loop device's `loop`. */

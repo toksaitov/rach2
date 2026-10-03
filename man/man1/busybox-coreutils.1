@@ -1151,7 +1151,9 @@ Run
 .Ar PROG
 with hangup signals ignored and output directed to a nonterminal.
 .It Nm nproc
-Print the number of available CPUs.
+Print the number of processors the caller may run on, which
+.Fn sched_getaffinity
+gives.
 .It Nm od
 Display file contents in the selected format.
 .It Nm paste
@@ -1842,12 +1844,10 @@ for none.
 .Ss nproc
 .Bl -tag -width Ds
 .It Fl -all
-Print the number of installed CPUs, which on Rach2 has no
-.Pa /sys
-directory to count, so the answer is 1, as it is without the option, since
-the kernel has no
-.Fn sched_getaffinity
-either.
+Print the number of processors started, by the
+.Pa cpuN
+directories of
+.Pa /sys/devices/system/cpu .
 .It Fl -ignore Ns = Ns Ar N
 Exclude
 .Ar N

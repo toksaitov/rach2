@@ -281,6 +281,11 @@ void x86_ap_entry(int cpu)
     ap_main(cpu);
 }
 
+uint32_t smpboot_apic_id(int cpu)
+{
+    return cpu_apic[cpu];
+}
+
 void platform_cpu_ipi(int cpu)
 {
     lapic_send_ipi(cpu_apic[cpu], IPI_VECTOR);

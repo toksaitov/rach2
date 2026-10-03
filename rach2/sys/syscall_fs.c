@@ -6605,8 +6605,7 @@ long ksys_fstatfs(int fd, struct user_statfs __user *out)
      * is on no file system at all, and Linux answers `-ENOSYS` for those rather
      * than handing back the root's numbers. */
     if (e->type == FD_TYPE_PROC) {
-        return statfs_fill(out,
-                           procfs_fd_is_sys(e) ? STATFS_MAGIC_SYSFS : STATFS_MAGIC_PROC);
+        return statfs_fill(out, procfs_fd_is_sys(e) ? STATFS_MAGIC_SYSFS : STATFS_MAGIC_PROC);
     }
     if (e->type == FD_TYPE_SYNTH_DIR && e->priv &&
         ((const struct synth_dir *)e->priv)->kind == VNODE_SYS_DIR) {
@@ -8859,8 +8858,7 @@ static long iov_at(int fd, uintptr_t iov_user, int iovcnt, long long pos, int wr
         if (iov.iov_len == 0) {
             continue;
         }
-        r = write ? ksys_pwrite64(fd, (const char __user *)iov.iov_base, (uint32_t)iov.iov_len,
-                                  pos)
+        r = write ? ksys_pwrite64(fd, (const char __user *)iov.iov_base, (uint32_t)iov.iov_len, pos)
                   : ksys_pread64(fd, (char __user *)iov.iov_base, (uint32_t)iov.iov_len, pos);
         if (r < 0) {
             return total > 0 ? total : r;
@@ -11390,7 +11388,6 @@ static int synth_sys_dirent(int node, int key, int n, char *name, uint64_t *ino,
                  {SYSFS_DEVICES, "usb", SYSFS_USB_ROOT},
                  {SYSFS_DEVICES, "system", SYSFS_SYSTEM},
                  {SYSFS_SYSTEM, "cpu", SYSFS_CPU},
-                 {SYSFS_CPU, "cpu0", SYSFS_CPU0},
                  {SYSFS_SYSTEM, "memory", SYSFS_MEMORY},
                  {SYSFS_MEMORY, "memory0", SYSFS_MEMORY0},
                  {SYSFS_ROOT, "class", SYSFS_CLASS},
@@ -11419,6 +11416,20 @@ static int synth_sys_dirent(int node, int key, int n, char *name, uint64_t *ino,
     }
     if (node == SYSFS_BLOCK || node == SYSFS_DEV_BLOCK || SYSFS_IS_BLOCK(node)) {
         return synth_sys_block_dirent(node, key, n, name, ino, dtype);
+    }
+    if (node == SYSFS_CPU && (key = sysfs_device_key(SYSFS_CPUN, n)) >= 0) {
+        name[0] = 'c';
+        name[1] = 'p';
+        name[2] = 'u';
+        k_itoa(key, name + 3, 28, 10, false);
+        *ino = sysfs_ino(SYSFS_CPUN, key, 0);
+        *dtype = DT_DIR;
+        return 1;
+    }
+    if (node == SYSFS_CPU) {
+        for (dev = 0; sysfs_device_key(SYSFS_CPUN, dev) >= 0; dev++) {
+        }
+        n -= dev;
     }
     if (node == SYSFS_RTC0 || node == SYSFS_RTC_POWER || node == SYSFS_POWER || node == SYSFS_CPU ||
         node == SYSFS_MEMORY || node == SYSFS_MEMORY0) {

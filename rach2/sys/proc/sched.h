@@ -23,6 +23,9 @@ void schedule(void);
  * that processor if it is idle. */
 void sched_make_ready(process_t *p);
 
+/** Bind a process to the processors of a mask; see sched.c. */
+void sched_set_affinity(process_t *p, uint64_t mask);
+
 /** The idle task's body, which does not return. */
 void sched_idle_loop(void);
 

@@ -3,11 +3,12 @@
 .Os
 .Sh NAME
 .Nm acpi
-.Nd the firmware's tables, the interrupt controllers and the tick
+.Nd the firmware's tables, the interrupt controllers, the tick and the processors
 .Sh SYNOPSIS
 .Pa /proc/interrupts
 .Pp
 Kernel command line:
+.Ql maxcpus=N ,
 .Ql noapic ,
 .Ql rach2.nomsi ,
 .Ql rach2.resetskip=N
@@ -43,6 +44,21 @@ refused, and with
 on the kernel command line.
 .Ql rach2.nomsi
 refuses the local APIC, and with it messages and the I/O APIC.
+.Pp
+The kernel runs on every processor the MADT lists as enabled, up to 64.
+Before the first program it starts each through its local APIC, with INIT
+and two startup messages, from code it copies to the page at 0x8000; each
+takes its own tick from its local APIC, at the boot processor's measured
+rate.
+.Ql maxcpus=N
+limits the processors to N, the boot processor counted; 0 and 1 leave the
+kernel on the boot processor.
+A machine whose local APIC does not tick, whose memory map does not give
+the pages at 0x8000 as free memory, or whose MADT gives a processor an
+APIC ID of 255 or more, which the xAPIC's messages cannot address, runs on
+the processors it can start, and the log says why.
+The log ends the start with
+.Ql smp: processors: N online of M .
 .Pp
 .Pa /proc/interrupts
 gives the controller each vector's interrupts come through in its third

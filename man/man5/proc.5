@@ -93,12 +93,20 @@ and
 each a
 .Ql name<TAB>: value
 line, and a blank line after the record.
-The kernel runs on one processor, so there is one record, processor 0,
-with
+There is a record for each processor started, with its number in
+.Li processor
+and its local APIC's in
+.Li apicid ;
+the processors are taken to be alike, so
+.Ql cpuid
+on the running one answers for the others, and each is a core of one
+package, with
+.Li core id
+its number and
 .Li siblings
 and
 .Li cpu cores
-1.
+the count.
 It has no
 .Li cpu MHz
 or
@@ -649,17 +657,19 @@ by a caller without privilege fails with
 .Er EACCES .
 .It Pa /proc/stat
 System counters, one named record per line.
-The first two lines have this form:
+The first line, and a line for each processor started, have this form:
 .Bd -literal -offset indent
-cpu  0 0 BUSY IDLE 0 0 0 0 0 0
-cpu0 0 0 BUSY IDLE 0 0 0 0 0 0
+cpu  USER 0 SYSTEM IDLE 0 0 0 0 0 0
+cpu0 USER 0 SYSTEM IDLE 0 0 0 0 0 0
 .Ed
 .Pp
-The first four columns are user, nice, system, and idle ticks.
-These machine-wide counters do not separate user and system time, which
-only the per-process ones in
-.Pa /proc/PID/stat
-do: busy ticks appear in the system column, and user and nice are zero.
+The first four columns are user, nice, system, and idle ticks: those that
+found the processor in user mode, none for nice, those that found it in
+the kernel, an interrupt handler's included, and those that found it in an
+idle wait.
+The
+.Li cpu
+line is the processors' sums.
 .Pp
 The remaining lines have a name and one value:
 .Bl -tag -width loopback_delivered_call
@@ -704,9 +714,10 @@ the state
 as Linux counts them.
 .El
 .It Pa /proc/uptime
-Seconds since boot and seconds spent idle, separated by a space,
-each with two decimal places.
-Both derive from delivered 100 Hz timer ticks.
+Seconds since boot and the seconds the processors spent idle, summed over
+them, separated by a space, each with two decimal places.
+Both derive from delivered 100 Hz timer ticks, the first from the boot
+processor's.
 Ticks lost while interrupts are disabled are not counted.
 .It Pa /proc/usb
 One line per configured USB device:

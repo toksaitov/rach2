@@ -750,11 +750,16 @@ void synth_sys_path(int node, int key, char *out, int cap)
         out[pos] = '\0';
         return;
     }
+    if (node == SYSFS_CPUN) {
+        synth_put(out, cap, &pos, "/sys/devices/system/cpu/cpu");
+        synth_put_uint(out, cap, &pos, (unsigned int)key);
+        out[pos] = '\0';
+        return;
+    }
     if (node >= SYSFS_SYSTEM) {
         synth_put(out, cap, &pos,
                   node == SYSFS_SYSTEM   ? "/sys/devices/system"
                   : node == SYSFS_CPU    ? "/sys/devices/system/cpu"
-                  : node == SYSFS_CPU0   ? "/sys/devices/system/cpu/cpu0"
                   : node == SYSFS_MEMORY ? "/sys/devices/system/memory"
                                          : "/sys/devices/system/memory/memory0");
         out[pos] = '\0';
@@ -887,6 +892,22 @@ static int synth_classify_sys_net(const struct comp *c, int n, struct vpath *vp)
     return vp->kind;
 }
 
+/** The processor number a component `cpuN` names, N written without a
+ * leading zero, or -1; whether that processor is started is the glue's to
+ * ask, as of every keyed directory. */
+static int sys_cpu_of(struct comp c)
+{
+    struct comp digits;
+
+    if (c.len < 4 || c.s[0] != 'c' || c.s[1] != 'p' || c.s[2] != 'u' ||
+        (c.s[3] == '0' && c.len > 4)) {
+        return -1;
+    }
+    digits.s = c.s + 3;
+    digits.len = c.len - 3;
+    return comp_uint(digits);
+}
+
 /**
  * The node at `c` of `n` components below the fixed directory `node` of
  * the clock and the sleep states: the directories under it by their names,
@@ -898,16 +919,19 @@ static int synth_classify_sys_fixed(const struct comp *c, int n, int node, struc
         int parent;
         const char *name;
         int child;
-    } chain[] = {{SYSFS_CLASS_RTC, "rtc0", SYSFS_RTC0},
-                 {SYSFS_RTC0, "device", SYSFS_RTC_DEVICE},
-                 {SYSFS_RTC_DEVICE, "power", SYSFS_RTC_POWER},
-                 {SYSFS_SYSTEM, "cpu", SYSFS_CPU},
-                 {SYSFS_CPU, "cpu0", SYSFS_CPU0},
-                 {SYSFS_SYSTEM, "memory", SYSFS_MEMORY},
-                 {SYSFS_MEMORY, "memory0", SYSFS_MEMORY0}};
-    int i, at = 0;
+    } chain[] = {
+        {SYSFS_CLASS_RTC, "rtc0", SYSFS_RTC0},        {SYSFS_RTC0, "device", SYSFS_RTC_DEVICE},
+        {SYSFS_RTC_DEVICE, "power", SYSFS_RTC_POWER}, {SYSFS_SYSTEM, "cpu", SYSFS_CPU},
+        {SYSFS_SYSTEM, "memory", SYSFS_MEMORY},       {SYSFS_MEMORY, "memory0", SYSFS_MEMORY0}};
+    int i, at = 0, cpu;
 
     while (at < n) {
+        if (node == SYSFS_CPU && (cpu = sys_cpu_of(c[at])) >= 0) {
+            node = SYSFS_CPUN;
+            vp->syskey = cpu;
+            at++;
+            continue;
+        }
         for (i = 0; i < (int)(sizeof(chain) / sizeof(chain[0])); i++) {
             if (chain[i].parent == node && comp_eq(c[at], chain[i].name)) {
                 break;

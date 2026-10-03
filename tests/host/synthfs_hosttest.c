@@ -99,7 +99,9 @@ static int eq(const char *a, const char *b)
  * ENOENT, and a path through a uevent is ENOTDIR. Under /sys/class/net an
  * interface's directory, an attribute, a counter of its statistics and its
  * device link are found by name, and an interface or attribute it does not
- * have is ENOENT.
+ * have is ENOENT. A processor's directory `cpuN` is found by its number,
+ * written without a leading zero, and has no attribute; whether the
+ * processor is started is the glue's to ask.
  */
 static void sys_tree(void)
 {
@@ -145,6 +147,18 @@ static void sys_tree(void)
     CHECK(synth_classify("sys/class/net/eth9", &vp) == VNODE_ENOENT);
     synth_sys_path(SYSFS_NET_STATS, 2, path, (int)sizeof(path));
     CHECK(eq(path, "/sys/class/net/eth0/statistics"));
+    CHECK(synth_classify("sys/devices/system/cpu/online", &vp) == VNODE_SYS_FILE &&
+          vp.sysent == SYSFS_CPU && vp.procfile == 2);
+    CHECK(synth_classify("sys/devices/system/cpu/cpu0", &vp) == VNODE_SYS_DIR &&
+          vp.sysent == SYSFS_CPUN && vp.syskey == 0);
+    CHECK(synth_classify("sys/devices/system/cpu/cpu13", &vp) == VNODE_SYS_DIR &&
+          vp.sysent == SYSFS_CPUN && vp.syskey == 13);
+    synth_sys_path(SYSFS_CPUN, 13, path, (int)sizeof(path));
+    CHECK(eq(path, "/sys/devices/system/cpu/cpu13"));
+    CHECK(synth_classify("sys/devices/system/cpu/cpu01", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("sys/devices/system/cpu/cpu", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("sys/devices/system/cpu/cpux", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("sys/devices/system/cpu/cpu1/x", &vp) == VNODE_ENOENT);
 }
 
 /** The parser's bounds, of a number and of a path's depth. */

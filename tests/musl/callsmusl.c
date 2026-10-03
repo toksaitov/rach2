@@ -35,7 +35,8 @@
  * descriptor open on its maps.
  * mlock, munlock, mlockall and munlockall accept a mapped range and refuse a
  * gap with ENOMEM; mincore reports a touched page resident.
- * getcpu reports CPU 0, and personality keeps and returns its value.
+ * getcpu reports a processor of the caller's affinity and node 0, and
+ * personality keeps and returns its value.
  * sendmmsg sends two datagrams in one call over an AF_UNIX pair and
  * recvmmsg receives both, each with its count. clock_gettime64 reads the
  * monotonic clock with 64-bit fields (clock_gettime on x86-64). close_range
@@ -74,6 +75,7 @@
 #include <netinet/in.h>
 #include <dirent.h>
 #include <poll.h>
+#include <sched.h>
 #include <stdlib.h>
 #include <signal.h>
 #include <stdint.h>
@@ -609,10 +611,13 @@ static int memory(void)
 
 static int identity(void)
 {
-    unsigned cpu = 7, node = 7;
+    unsigned cpu = 99, node = 7;
+    cpu_set_t set;
     long old;
 
-    if (syscall(SYS_getcpu, &cpu, &node, NULL) != 0 || cpu != 0 || node != 0) {
+    if (sched_getaffinity(0, sizeof(set), &set) != 0 ||
+        syscall(SYS_getcpu, &cpu, &node, NULL) != 0 || cpu >= CPU_SETSIZE ||
+        !CPU_ISSET(cpu, &set) || node != 0) {
         return fail("getcpu");
     }
     old = syscall(SYS_personality, 0xffffffffUL);

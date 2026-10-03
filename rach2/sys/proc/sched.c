@@ -159,20 +159,15 @@ static process_t *sched_steal(int cpu)
 }
 
 /**
- * The processor whose queue a process made ready joins: the one it ran on
+ * The processor a ready process of `p`'s affinity joins: the one it ran on
  * last, unless that one is busy and another it may run on is idle, where
- * it then goes. A process that is still a processor's current, woken
- * before its switch away, stays where it runs. The run queues' lock is
- * held.
+ * it then goes. The run queues' lock is held.
  */
-static int sched_place(const process_t *p)
+static int sched_choose(const process_t *p)
 {
     int last = p->cpu;
     int c;
 
-    if (cpu_table[last].current == p) {
-        return last;
-    }
     if (sched_allowed(p, last) && sched_cpu_idle(last)) {
         return last;
     }
@@ -190,6 +185,16 @@ static int sched_place(const process_t *p)
         }
     }
     return last;
+}
+
+/**
+ * The processor whose queue a process made ready joins, as `sched_choose`
+ * gives it; a process that is still a processor's current, woken before its
+ * switch away, stays where it runs. The run queues' lock is held.
+ */
+static int sched_place(const process_t *p)
+{
+    return cpu_table[p->cpu].current == p ? p->cpu : sched_choose(p);
 }
 
 /**
@@ -215,6 +220,34 @@ void sched_make_ready(process_t *p)
 }
 
 /**
+ * Bind `p` to the processors of `mask`, of which one is started at least,
+ * as sched_setaffinity(2) asks. A ready process on the queue of a processor
+ * outside the set moves to one inside it; a process running on one outside
+ * it leaves at that processor's next selection (`schedule`), which for the
+ * caller is now.
+ */
+void sched_set_affinity(process_t *p, uint64_t mask)
+{
+    uint32_t flags = spin_lock_irqsave(&sched_lock);
+    int kick = -1;
+
+    p->affinity = mask;
+    if (p->state == PROC_READY && cpu_table[p->cpu].current != p && !sched_allowed(p, p->cpu)) {
+        p->cpu = sched_choose(p);
+        if (sched_cpu_idle(p->cpu)) {
+            kick = p->cpu;
+        }
+    }
+    spin_unlock_irqrestore(&sched_lock, flags);
+    if (kick >= 0) {
+        smp_kick(kick);
+    }
+    if (p == current_proc && !((mask >> arch_cpu_id()) & 1u)) {
+        schedule();
+    }
+}
+
+/**
  * Switch this processor to the next process of its queue, alternating a
  * wake preference with an ordinary round-robin selection.
  *
@@ -225,9 +258,12 @@ void sched_make_ready(process_t *p)
  * busiest other queue (`sched_steal`), and with nothing there either it
  * goes on with its current process if that one can still run, or switches
  * to its idle task, which waits for work (`sched_idle_loop`). A current
- * process a suspend to idle holds is made ready where it is, and leaves: on
- * one processor the suspend's writer was the only one to run, and on
- * several the others' next tick stops what they run. A process that
+ * process whose affinity no longer has this processor is made ready on a
+ * processor it has, and so leaves; that processor cannot select it before
+ * the switch away from it is done, since the big lock is held across it. A
+ * current process a suspend to idle holds is made ready where it is, and
+ * leaves too: on one processor the suspend's writer was the only one to run,
+ * and on several the others' next tick stops what they run. A process that
  * blocks or ends therefore always leaves the processor, and a woken one may
  * run on any processor it may use. Before the idle tasks exist, at boot, a
  * process with nothing to switch to stays, and its caller idles in place.
@@ -271,6 +307,7 @@ void schedule(void)
     struct percpu *cpu;
     uint32_t saved_flags;
     int me;
+    int kick = -1;
 
     if (!_sched_enabled) {
         return;
@@ -286,6 +323,14 @@ void schedule(void)
     old = cpu->current;
     if (old->state != PROC_READY) {
         old->woken = 0;
+    }
+    if (cpu->idle && old != cpu->idle && (old->state == PROC_RUNNING || old->state == PROC_READY) &&
+        !((old->affinity >> me) & 1u)) {
+        old->state = PROC_READY;
+        old->cpu = sched_choose(old);
+        if (sched_cpu_idle(old->cpu)) {
+            kick = old->cpu;
+        }
     }
     if (cpu->idle && old != cpu->idle && old->state == PROC_RUNNING && !suspend_lets_run(old)) {
         old->state = PROC_READY;
@@ -311,6 +356,9 @@ void schedule(void)
             return;
         }
         next = cpu->idle;
+    }
+    if (kick >= 0) {
+        smp_kick(kick);
     }
 
     usb_stamp_dispatch(next->pid);

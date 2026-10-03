@@ -152,8 +152,9 @@ int procfs_fd_is_sys(struct fd_entry *e);
  * `file` 1 of the device's uevent, and 2 of its link. */
 uint32_t sysfs_ino(int node, int key, int file);
 
-/** The key of the `n`th device of `node`, SYSFS_PCI_DEVICE or
- * SYSFS_USB_DEVICE, counting from zero, or -1 when there are no more. */
+/** The key of the `n`th device of `node`, SYSFS_PCI_DEVICE,
+ * SYSFS_USB_DEVICE or SYSFS_CPUN, counting from zero, or -1 when there are
+ * no more. */
 int sysfs_device_key(int node, int n);
 
 /** Whether the device `key` of `node` is there. */

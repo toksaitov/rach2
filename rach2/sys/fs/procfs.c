@@ -2214,21 +2214,23 @@ static void ap_ticks_as_seconds(struct procfs_text *t, uint32_t ticks)
 }
 
 /**
- * Render /proc/uptime: seconds since boot, and seconds the processor idled.
+ * Render /proc/uptime: seconds since boot, and the seconds the processors
+ * idled, summed over them as Linux sums them.
  *
  * Both are counted from delivered ticks rather than timed. Interrupts are off
  * in several paths here and a tick can be lost, so what these say is what the
- * timer actually delivered, which is the number that makes the two add up
- * to each other. Both counters are read once, into locals: a
- * tick landing between two reads of the same file would report a total and an
- * idle from different moments, which is what the snapshot exists to prevent.
+ * timer actually delivered: the uptime is the boot processor's ticks, idle and
+ * busy, and on one processor the two numbers add up to each other. The
+ * counters are read once, into locals: a tick landing between two reads of
+ * the same file would report a total and an idle from different moments,
+ * which is what the snapshot exists to prevent.
  */
 static int procfs_gen_uptime(struct procfs_text *t)
 {
+    uint32_t up = cpu_table[0].idle_ticks + cpu_table[0].busy_ticks;
     uint32_t idle = sched_idle_ticks();
-    uint32_t busy = sched_busy_ticks();
 
-    ap_ticks_as_seconds(t, idle + busy);
+    ap_ticks_as_seconds(t, up);
     ap_ch(t, ' ');
     ap_ticks_as_seconds(t, idle);
     ap_ch(t, '\n');
@@ -2267,6 +2269,39 @@ static int procfs_gen_loadavg(struct procfs_text *t)
 }
 
 /**
+ * Render /proc/cpuinfo: a block for each processor online, in the order of
+ * their numbers, as the architecture writes one (`cpuinfo_text`).
+ */
+static int procfs_gen_cpuinfo(struct procfs_text *t)
+{
+    int c;
+
+    for (c = 0; c < NR_CPUS; c++) {
+        if (!cpu_table[c].online) {
+            continue;
+        }
+        if (procfs_text_room(t, t->len + CPUINFO_TEXT_MAX) != 0) {
+            return -1;
+        }
+        t->len += (int)cpuinfo_text(t->buf + t->len, CPUINFO_TEXT_MAX, c);
+    }
+    return t->len;
+}
+
+/** Append a /proc/stat processor line's columns after its name: `user`,
+ * no nice, `busy` less `user` as system, and `idle`. */
+static void ap_cpu_ticks(struct procfs_text *t, uint32_t user, uint32_t busy, uint32_t idle)
+{
+    ap_str(t, " ");
+    ap_u32(t, user);
+    ap_str(t, " 0 ");
+    ap_u32(t, busy - user);
+    ap_ch(t, ' ');
+    ap_u32(t, idle);
+    ap_str(t, " 0 0 0 0 0 0\n");
+}
+
+/**
  * Render /proc/stat: the tick counters, the interrupt total, the boot epoch,
  * the process counts, and this kernel's own latency and loopback counters.
  *
@@ -2275,11 +2310,12 @@ static int procfs_gen_loadavg(struct procfs_text *t)
  * has held at once, which is what says how much room it has over a window's
  * worth.
  *
- * The `cpu` line has user, nice, system and idle in that order. The
- * machine-wide counters do not separate user from system time, which only the
- * per-process ones do. This line reports busy and idle ticks: busy goes in
- * the system column, since that is where a kernel's own time belongs, and
- * user and nice are zero rather than a share invented to look plausible.
+ * The `cpu` line, and the `cpuN` line of each processor online, have user,
+ * nice, system and idle in that order, then six columns this kernel does not
+ * count, which are zero: a processor's ticks in user mode, in the kernel and
+ * in its idle wait, with the `cpu` line their sums. Nice is zero, since no
+ * tick is told apart by the nice value; an interrupt's time is the
+ * interrupted code's, as `sched_account_tick` charges it.
  *
  * `processes` is what Linux means by it, the count of processes CREATED since
  * boot and not the count alive now. `procs_running` and `procs_blocked` are
@@ -2290,22 +2326,27 @@ static int procfs_gen_loadavg(struct procfs_text *t)
  */
 static int procfs_gen_statsys(struct procfs_text *t)
 {
-    uint32_t busy = sched_busy_ticks();
-    uint32_t idle = sched_idle_ticks();
+    uint32_t user = 0, busy = 0, idle = 0;
     const process_t *p;
     uint32_t running = 0;
     uint32_t blocked = 0;
+    int c;
 
-    ap_str(t, "cpu  0 0 ");
-    ap_u32(t, busy);
-    ap_ch(t, ' ');
-    ap_u32(t, idle);
-    ap_str(t, " 0 0 0 0 0 0\n");
-    ap_str(t, "cpu0 0 0 ");
-    ap_u32(t, busy);
-    ap_ch(t, ' ');
-    ap_u32(t, idle);
-    ap_str(t, " 0 0 0 0 0 0\n");
+    for (c = 0; c < NR_CPUS; c++) {
+        user += cpu_table[c].user_ticks;
+        busy += cpu_table[c].busy_ticks;
+        idle += cpu_table[c].idle_ticks;
+    }
+    ap_str(t, "cpu ");
+    ap_cpu_ticks(t, user, busy, idle);
+    for (c = 0; c < NR_CPUS; c++) {
+        if (cpu_table[c].online) {
+            ap_str(t, "cpu");
+            ap_u32(t, (uint32_t)c);
+            ap_cpu_ticks(t, cpu_table[c].user_ticks, cpu_table[c].busy_ticks,
+                         cpu_table[c].idle_ticks);
+        }
+    }
     ap_str(t, "intr ");
     ap_u32(t, isr_interrupt_total());
     ap_ch(t, '\n');
@@ -3599,6 +3640,14 @@ int sysfs_device_key(int node, int n)
     if (node == SYSFS_PCI_DEVICE) {
         return pci_nth(n, &p) ? p.bus << 8 | p.device << 3 | p.function : -1;
     }
+    if (node == SYSFS_CPUN) {
+        for (i = 0; i < NR_CPUS; i++) {
+            if (cpu_table[i].online && seen++ == n) {
+                return i;
+            }
+        }
+        return -1;
+    }
     for (i = 0; i < USB_MAX_DEVICES; i++) {
         if (usb_core_row(i, &r) == 0 && (key = sysfs_usb_key(&r)) >= 0 && seen++ == n) {
             return key;
@@ -3845,6 +3894,9 @@ int sysfs_device_exists(int node, int key)
     if (node == SYSFS_NET_IF || node == SYSFS_NET_STATS) {
         return sysfs_netdev(key) != NULL;
     }
+    if (node == SYSFS_CPUN) {
+        return key >= 0 && key < NR_CPUS && cpu_table[key].online;
+    }
     return node == SYSFS_PCI_DEVICE ? sysfs_pci_present(key) : sysfs_usb_find(key, &r) >= 0;
 }
 
@@ -3870,6 +3922,34 @@ static void ap_hex_lower(struct procfs_text *t, uint32_t v)
     }
 }
 
+/** Append the processors online as Linux lists a set of them, ranges with
+ * commas between: 0-3, or 0,2-3. */
+static void ap_cpu_list(struct procfs_text *t)
+{
+    int c = 0, first = 1;
+
+    while (c < NR_CPUS) {
+        int end;
+
+        if (!cpu_table[c].online) {
+            c++;
+            continue;
+        }
+        for (end = c; end + 1 < NR_CPUS && cpu_table[end + 1].online; end++) {
+        }
+        if (!first) {
+            ap_ch(t, ',');
+        }
+        ap_u32(t, (uint32_t)c);
+        if (end > c) {
+            ap_ch(t, '-');
+            ap_u32(t, (uint32_t)end);
+        }
+        first = 0;
+        c = end + 1;
+    }
+}
+
 /**
  * Render the attribute `attr` of /sys/class/rtc/rtc0, of its device's power
  * directory, of /sys/power, of /sys/devices/system/cpu or of
@@ -3877,9 +3957,10 @@ static void ap_hex_lower(struct procfs_text *t, uint32_t v)
  * time in UTC and its seconds since 1970, its driver's name, that it set the
  * system's time at boot, and the wake alarm in seconds since 1970, nothing
  * when none is set, as Linux writes them; that the clock may wake the
- * machine; the one sleep state, suspend to idle, by its two names; the one
- * processor, 0, as the highest number the kernel takes and the processors
- * that may be, are and are online, with none offline; and the one memory
+ * machine; the one sleep state, suspend to idle, by its two names; the
+ * highest processor number the kernel takes, NR_CPUS less one, and the
+ * processors that may be, are and are online, which are the ones started,
+ * as a list of ranges, with none offline; and the one memory
  * block, memory0, the size of all the memory the kernel manages, online and
  * not removable, which lsmem reads.
  */
@@ -3899,7 +3980,12 @@ static int procfs_gen_sysattr(struct procfs_text *t, int node, int attr)
         return t->len;
     }
     if (node == SYSFS_CPU) {
-        ap_str(t, attr == 1 ? "\n" : "0\n");
+        if (attr == 0) {
+            ap_u32(t, NR_CPUS - 1);
+        } else if (attr != 1) {
+            ap_cpu_list(t);
+        }
+        ap_ch(t, '\n');
         return t->len;
     }
     if (node == SYSFS_MEMORY) {
@@ -5277,9 +5363,7 @@ int procfs_open(const struct vpath *vp, int flags)
         ap_str(&text, UTS_SYSNAME " version " UTS_RELEASE " " UTS_VERSION "\n");
         len = text.len;
     } else if (vp->kind == VNODE_PROC_CPUINFO) {
-        len = procfs_text_room(&text, CPUINFO_TEXT_MAX) == 0
-                  ? (int)cpuinfo_text(text.buf, CPUINFO_TEXT_MAX)
-                  : -1;
+        len = procfs_gen_cpuinfo(&text);
     } else if (vp->kind == VNODE_PROC_SYS_FILE) {
         procfs_sysctl_text(&text, vp->sysent);
         len = text.len;

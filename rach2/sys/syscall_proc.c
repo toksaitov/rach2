@@ -6496,9 +6496,37 @@ long sys_ioprio_get(isr_params_t *params)
 /* The highest real-time priority Linux gives SCHED_FIFO and SCHED_RR. */
 #define SCHED_RT_PRIO_MAX 99
 
-/* The bytes of a CPU mask: one 32-bit word, of which CPU 0 is the only
- * bit a machine of one processor sets. */
-#define CPU_MASK_BYTES 4u
+/**
+ * The bytes of a CPU mask as Linux sizes the one it copies: a long for
+ * every bits-of-a-long processors up to the highest started.
+ */
+static unsigned long cpu_mask_bytes(void)
+{
+    unsigned long bits = sizeof(unsigned long) * 8u;
+    unsigned long highest = 0;
+    int c;
+
+    for (c = 0; c < NR_CPUS; c++) {
+        if (cpu_table[c].online) {
+            highest = (unsigned long)c;
+        }
+    }
+    return (highest / bits + 1u) * sizeof(unsigned long);
+}
+
+/** The processors started, a bit for each. */
+static uint64_t cpu_online_mask(void)
+{
+    uint64_t mask = 0;
+    int c;
+
+    for (c = 0; c < NR_CPUS; c++) {
+        if (cpu_table[c].online) {
+            mask |= (uint64_t)1 << c;
+        }
+    }
+    return mask;
+}
 
 /**
  * The process a scheduling call names: the caller for pid 0, otherwise the
@@ -6706,26 +6734,31 @@ long sys_sched_rr_get_interval(isr_params_t *params)
  * The CPUs a process may run on (sched_getaffinity).
  *
  * Its arguments are the pid, the size of the mask and the mask. The mask has
- * CPU 0 alone, the one processor, and the call writes its four bytes and
- * returns 4, as Linux returns the bytes it wrote; the C library clears the rest
- * of a larger set. -EINVAL for a length that is zero or not a multiple of four
- * bytes, -ESRCH for no process, -EFAULT.
+ * a bit for each processor the process may run on of those started, and the
+ * call writes `cpu_mask_bytes()` of it and returns that count, as Linux
+ * returns the bytes it wrote; the C library clears the rest of a larger
+ * set. -EINVAL for a length shorter than that or not a multiple of a long,
+ * -ESRCH for no process, -EFAULT.
  */
 long sys_sched_getaffinity(isr_params_t *params)
 {
-    uintptr_t len = SC_ARG(params, 1);
-    uint32_t mask = 1;
+    unsigned long len = SC_ARG(params, 1);
+    unsigned long bytes = cpu_mask_bytes();
+    process_t *p;
+    uint64_t mask;
 
-    if (len == 0 || (len & 3u) != 0) {
+    if (len < bytes || (len & (sizeof(unsigned long) - 1u)) != 0) {
         return -EINVAL;
     }
-    if (!sched_target((int)SC_ARG(params, 0))) {
+    p = sched_target((int)SC_ARG(params, 0));
+    if (!p) {
         return -ESRCH;
     }
-    if (copy_to_user((void __user *)SC_ARG(params, 2), &mask, CPU_MASK_BYTES) != 0) {
+    mask = p->affinity & cpu_online_mask();
+    if (copy_to_user((void __user *)SC_ARG(params, 2), &mask, bytes) != 0) {
         return -EFAULT;
     }
-    return (int32_t)CPU_MASK_BYTES;
+    return (long)bytes;
 }
 
 /** Whether [`addr`, `addr` + `len`) is a range the current process's
@@ -6829,17 +6862,19 @@ long sys_mincore(isr_params_t *params)
 }
 
 /**
- * The CPU and NUMA node the caller runs on (getcpu): 0 and 0,
- * stored where the first two arguments point unless either is null. The third,
- * the old cache argument, is ignored, as Linux ignores it. -EFAULT for a word
- * that cannot be written.
+ * The CPU and NUMA node the caller runs on (getcpu): the processor's number
+ * and node 0, the one node, stored where the first two arguments point
+ * unless either is null. The processor may change as soon as the call
+ * returns, as on Linux. The third, the old cache argument, is ignored, as
+ * Linux ignores it. -EFAULT for a word that cannot be written.
  */
 long sys_getcpu(isr_params_t *params)
 {
+    uint32_t cpu = arch_cpu_id();
     uint32_t zero = 0;
 
     if ((SC_ARG(params, 0) &&
-         copy_to_user((void __user *)SC_ARG(params, 0), &zero, sizeof(zero)) != 0) ||
+         copy_to_user((void __user *)SC_ARG(params, 0), &cpu, sizeof(cpu)) != 0) ||
         (SC_ARG(params, 1) &&
          copy_to_user((void __user *)SC_ARG(params, 1), &zero, sizeof(zero)) != 0)) {
         return -EFAULT;
@@ -6875,21 +6910,22 @@ long sys_personality(isr_params_t *params)
 /**
  * Set the CPUs a process may run on (sched_setaffinity).
  *
- * Its arguments are the pid, the size of the mask and the mask. At most four
- * bytes are read, as Linux reads no more than its own mask's size, and a
- * shorter mask is zero past its end. A mask with CPU 0 is accepted, since that
- * is where every process runs; one without it names no CPU of this machine and
- * is refused with -EINVAL. -EFAULT, then -ESRCH, then -EPERM for a caller that
- * may not change the target, in Linux's order.
+ * Its arguments are the pid, the size of the mask and the mask. At most
+ * `cpu_mask_bytes()` are read, as Linux reads no more than its own mask's
+ * size, and a shorter mask is zero past its end. The process is bound to the
+ * started processors the mask has (`sched_set_affinity`), and moves off one
+ * it no longer has; a mask with none is refused with -EINVAL. -EFAULT, then
+ * -ESRCH, then -EPERM for a caller that may not change the target, in
+ * Linux's order.
  */
 long sys_sched_setaffinity(isr_params_t *params)
 {
-    uint32_t len = USER_LEN32(SC_ARG(params, 1));
-    uint32_t mask = 0;
+    unsigned long len = SC_ARG(params, 1);
+    uint64_t mask = 0;
     process_t *p;
 
-    if (len > CPU_MASK_BYTES) {
-        len = CPU_MASK_BYTES;
+    if (len > cpu_mask_bytes()) {
+        len = cpu_mask_bytes();
     }
     if (copy_from_user(&mask, (const void __user *)SC_ARG(params, 2), len) != 0) {
         return -EFAULT;
@@ -6901,7 +6937,12 @@ long sys_sched_setaffinity(isr_params_t *params)
     if (!sched_may_change(p)) {
         return -EPERM;
     }
-    return (mask & 1u) ? 0 : -EINVAL;
+    mask &= cpu_online_mask();
+    if (mask == 0) {
+        return -EINVAL;
+    }
+    sched_set_affinity(p, mask);
+    return 0;
 }
 
 /* The prctl options this kernel has; every other is EINVAL, as Linux answers

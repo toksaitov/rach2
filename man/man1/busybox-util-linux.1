@@ -446,8 +446,13 @@ Ctrl-C do not affect it.
 Request that swapping on a device stop or start, respectively.
 Rach2 does not support swap.
 .It Nm taskset
-Set or get CPU affinity.
-Rach2 does not implement the affinity calls, so the applet fails.
+Set or get the processors a process may run on, as a hexadecimal mask or
+with
+.Fl c
+a list, through
+.Xr sched_setaffinity 2
+and
+.Fn sched_getaffinity .
 .It Nm umount
 Unmount file systems; see
 .Xr mount 8 .

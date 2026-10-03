@@ -59,6 +59,9 @@ void arch_ap_tables(int cpu, uintptr_t stack_top);
 /** Load the IDT `init_idt` built, on a started processor. */
 void idt_load(void);
 
+/** The local APIC identity of processor `cpu`. */
+uint32_t smpboot_apic_id(int cpu);
+
 /** The trampoline's C entry, on the processor it started. */
 void x86_ap_entry(int cpu);
 
