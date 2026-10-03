@@ -323,8 +323,8 @@ struct kernel_timeval {
 
 /*
  * gettimeofday(2): EBX = tv (timeval*), ECX = tz (ignored). Reports real time
- * from the clock anchored at boot (sys/arch/x86/rtc.c), or time since boot when there
- * was no clock to read. Returns 0 or -errno.
+ * from the clock anchored at boot (sys/arch/x86/rtc.c), or time since boot
+ * when there was no clock to read. Returns 0 or -errno.
  */
 static int32_t sys_gettimeofday(isr_params_t *params)
 {

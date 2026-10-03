@@ -209,9 +209,9 @@ static void pwauth_stop_signals(sigset_t *set)
  * catching `SIGSEGV`, since a handler would run `exit` on a process that has
  * just faulted, cleaning up over undefined state. On this kernel a CPU
  * exception never reaches a disposition at all: `_exception_handler`
- * (`rach2/sys/isr.c`) and the page-fault path (`rach2/sys/mm/paging.c`) both
- * call `terminate_current_process`, which zombifies the process directly
- * without consulting `sigacts`. So the only `SIGSEGV` a handler here can ever
+ * (`rach2/sys/arch/x86/isr.c`) and the page-fault path
+ * (`rach2/sys/mm/paging.c`) both call `terminate_current_process`, which
+ * zombifies the process directly without consulting `sigacts`. So the only `SIGSEGV` a handler here can ever
  * see is one that was sent, which is an ordinary death from an ordinary
  * `kill`, and one the real uid that launched a setuid writer is allowed to
  * send. Handling them changes nothing about a real fault and closes five more

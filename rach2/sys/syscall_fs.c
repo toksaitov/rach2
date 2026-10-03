@@ -10728,10 +10728,10 @@ int32_t sys_renameat2(isr_params_t *params)
 /*
  * get_current_time - the current real time, in seconds and nanoseconds
  *
- * Answered by the clock (sys/arch/x86/rtc.c): the second the CMOS reported at boot plus
- * the ticks since that read, or time since boot on a machine whose clock could
- * not be read, either way with the PIT's place within the tick added and
- * never earlier than the reading before it (`rtc_realtime`).
+ * Answered by the clock (sys/arch/x86/rtc.c): the second the CMOS reported at
+ * boot plus the ticks since that read, or time since boot on a machine whose
+ * clock could not be read, either way with the PIT's place within the tick
+ * added and never earlier than the reading before it (`rtc_realtime`).
  */
 void get_current_time(int64_t *seconds, int64_t *nanoseconds)
 {
