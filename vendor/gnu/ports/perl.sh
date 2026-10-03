@@ -4,8 +4,11 @@
 # has linked. The build host runs i386 and x86-64 programs, so Perl is
 # configured as a native build whose programs run on the host. While Perl
 # builds, gcc on the path is a wrapper around the cross compiler that links
-# each program with the root's loader as its interpreter, and LD_LIBRARY_PATH
-# points that loader at the root's libraries rather than the host's. Configure
+# each program with the root's loader as its interpreter and the root's
+# library directories as its run path, so that the loader takes the root's
+# libraries rather than the host's. An environment variable cannot say that:
+# LD_LIBRARY_PATH reaches the host's own programs too, and on an x86-64 host
+# they would load the root's x86-64 glibc in place of the host's. Configure
 # records the compiler as gcc, its name on the target. It also asks the
 # compiler and the build host where headers and libraries are; config.sh gets
 # the root's directories in place of its answers before the build, and the
@@ -15,11 +18,11 @@
 # as Debian's perl has, so that `use threads` works.
 VERSION=5.44.0
 
-# perl_env COMMAND...: run a step of Perl's build with the wrapper and the
-# root's libraries.
+# perl_env COMMAND...: run a step of Perl's build with the wrapper first on
+# the path.
 perl_env()
 {
-    PATH="$WORK/bin:$PATH" LD_LIBRARY_PATH="$ROOT/lib:$ROOT/usr/lib" "$@"
+    PATH="$WORK/bin:$PATH" "$@"
 }
 
 port_build()
@@ -38,7 +41,7 @@ if [ -n "\$PERL_FINAL" ]; then
     exec "$CROSS/bin/$TARGET-gcc" --sysroot="$ROOT" "\$@"
 fi
 exec "$CROSS/bin/$TARGET-gcc" --sysroot="$ROOT" "\$@" \\
-    -Wl,--dynamic-linker="$ROOT$LOADER"
+    -Wl,--dynamic-linker="$ROOT$LOADER" -Wl,-rpath,"$ROOT/lib:$ROOT/usr/lib"
 EOF
     chmod +x "$WORK/bin/gcc"
     cd "$SRC" || exit
