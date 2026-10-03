@@ -420,8 +420,8 @@ static pid_t spawn_shell(void)
         return pid; /* init (the parent), or -1 if fork failed */
     }
 
-    setsid();                          /* new session; this child is its leader */
-    ioctl(STDIN_FILENO, TIOCSCTTY, 0); /* claim the console as our ctty */
+    setsid();                                  /* new session; this child is its leader */
+    ioctl(STDIN_FILENO, TIOCSCTTY, (void *)0); /* claim the console as our ctty */
 #ifdef INIT_CONSOLE_LOGIN
     {
         char *argv[2];
@@ -1642,7 +1642,8 @@ static void clear_var_run(void)
     clear_dir("/var/run", 1);
 }
 
-/* glibc's struct utmp on i386: 384 bytes, its times 32 bits wide. */
+/* glibc's struct utmp, on i386 and on x86-64 alike: 384 bytes, its times 32
+ * bits wide. */
 #define UTMP_SIZE 384
 #define UTMP_LINE 8   /* ut_line, 32 bytes */
 #define UTMP_ID   40  /* ut_id, 4 bytes */

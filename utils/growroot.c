@@ -329,7 +329,7 @@ static int reread_table(int fd, const char *dev)
 {
     int rc;
 
-    if (ioctl(fd, BLKRRPART, 0) != 0) {
+    if (ioctl(fd, BLKRRPART, (void *)0) != 0) {
         rc = errno;
         close(fd);
         return fail(dev, rc == EBUSY

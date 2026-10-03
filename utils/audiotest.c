@@ -148,7 +148,7 @@ int main(int argc, char **argv)
     }
     printf("audiotest: playing: %u hz tone, %u hz pcm, %u seconds\n", frequency, rate, seconds);
     result = play_tone(fd, rate, seconds, frequency);
-    if (ioctl(fd, AUDIO_STOP, 0) < 0) {
+    if (ioctl(fd, AUDIO_STOP, (void *)0) < 0) {
         perror("audiotest: stop");
         result = -1;
     }

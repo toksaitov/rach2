@@ -106,7 +106,7 @@ static int print_id(int fd, const char *path)
 /** Ask the kernel to read the table of the disk open on `fd` again. */
 static int reread(int fd, const char *path)
 {
-    if (ioctl(fd, BLKRRPART, 0) != 0) {
+    if (ioctl(fd, BLKRRPART, (void *)0) != 0) {
         int e = errno;
 
         if (e == EBUSY) {
