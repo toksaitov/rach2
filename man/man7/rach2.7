@@ -67,9 +67,15 @@ VGA text, a text console on the loader's framebuffer, and mode 13h
 graphics; COM1 serial; Sound Blaster 16,
 Intel HDA, and the PC speaker.
 .Pp
-Rach2 does not use UEFI's services and does not implement SMP, threads,
-swap, dynamic linking, IPv6, or a framebuffer device for programs.
-Every program is statically linked.
+Rach2 does not use UEFI's services and does not implement SMP, swap,
+IPv6, or a framebuffer device for programs.
+A process may have threads, which
+.Xr clone 2
+makes.
+The musl system's programs are statically linked; the GNU system's link
+dynamically against glibc, through the loader
+.Xr execve 2
+starts for a program that names one.
 .Ss Images
 .Bl -tag -width rach2-metal-disk
 .It test
