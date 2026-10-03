@@ -10,6 +10,7 @@
 .Nm lstat64 ,
 .Nm fstat64 ,
 .Nm fstatat64 ,
+.Nm newfstatat ,
 .Nm statx
 .Nd get file attributes
 .Sh SYNOPSIS
@@ -425,6 +426,36 @@ They do not check for truncation when converting wider attributes, and
 they report the fixed attributes of the boot root for
 .Pa /
 even on an ext2 root.
+.Pp
+The x86-64 calls are
+.Nm stat
+(4),
+.Nm fstat
+(5),
+.Nm lstat
+(6),
+.Nm newfstatat
+(262), and
+.Nm statx
+(332), with their arguments in RDI, RSI, RDX and R10 in the order the
+i386 calls take them, and
+.Nm statx Ns 's
+mask and result pointer in R10 and R8.
+The first four fill the x86-64
+.Vt struct stat ,
+144 bytes, whose fields are the attributes above at their full width:
+.Bd -literal -offset indent
+unsigned long st_dev, st_ino, st_nlink;
+unsigned int  st_mode, st_uid, st_gid, pad0;
+unsigned long st_rdev;
+long          st_size, st_blksize, st_blocks;
+unsigned long st_atime, st_atime_nsec;
+unsigned long st_mtime, st_mtime_nsec;
+unsigned long st_ctime, st_ctime_nsec;
+long          unused[3];
+.Ed
+.Pp
+x86-64 has no narrower structure and no 64-suffixed calls.
 .Sh RETURN VALUES
 These functions return 0 on success.
 On failure they return -1 and set

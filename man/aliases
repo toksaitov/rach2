@@ -252,6 +252,7 @@ munlockall 2 brk
 munmap 2 brk
 mv 1 busybox-coreutils
 netstat 1 busybox-networking
+newfstatat 2 stat
 newselect 2 select
 nice 1 busybox-coreutils
 nl 1 busybox-coreutils

@@ -167,7 +167,7 @@ The recovery stick is `build/images/rach2-recovery-stick.img` written to the who
 * Check `tests/registry` against `tests/system/suites.mk`: every suite has a target and every target is a suite.
 * Check that every product a `run-` target names is built by `prepare-all`.
 * Check the suites' waits and criteria with `verify/suitecheck.sh`: no `sleep` for a number of seconds, no `wait=` harness step, no typed line longer than the console keeps, no upper bound on a duration in a probe, except an interval marked with a reason that `tests/system/intervals` lists.
-* Check the manual against the machine with `verify/mancheck.c`: a page or an alias for every staged program, applet and registered call, every page lint-clean, the recovery pages staged.
+* Check the manual against the machine with `verify/mancheck.c`: a page or an alias for every staged program, applet and call either architecture registers, each table read with its own numbers, every page lint-clean, the recovery pages staged.
 * Run clang's positive warning list over the kernel, judged by the clang version `setup/judges` records.
 * Run sparse over the kernel with `__CHECKER__` defined, so the `__user` address-space annotations are checked; skipped where sparse is absent.
 * Check every Markdown link in the in-house documents with `verify/linkcheck.sh`: the target is a file that is there, and an anchor names a heading that is in it.

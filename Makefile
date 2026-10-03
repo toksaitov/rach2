@@ -560,9 +560,13 @@ $(MANCHECK): tools/verify/mancheck.c
 	@mkdir -p build/tools/verify
 	$(HOST_LINK)
 # `make mancheck`: every program, applet and call has a page; see the tool.
+# The calls are both architectures', each table read with its own numbers.
 .PHONY: mancheck
 mancheck: $(MANCHECK) $(BUSYBOX_STAMP)
 	$(MANCHECK) man rach2/sys/arch/i686/sysnr.h rach2/sys/arch/i686/systab.c:rach2/sys/syscall_net.c $(BUSYBOX_STAGE)/applet_tables-main.h \
+	    utils/programs.mk krffs/manifests/rach2-recovery.manifest krffs/manifests/os-simple.manifest \
+	    krffs/manifests/os-real.manifest krffs/manifests/rach2-metal-disk.manifest
+	$(MANCHECK) man rach2/sys/arch/x86_64/sysnr.h rach2/sys/arch/x86_64/systab.c $(BUSYBOX_STAGE)/applet_tables-main.h \
 	    utils/programs.mk krffs/manifests/rach2-recovery.manifest krffs/manifests/os-simple.manifest \
 	    krffs/manifests/os-real.manifest krffs/manifests/rach2-metal-disk.manifest
 
