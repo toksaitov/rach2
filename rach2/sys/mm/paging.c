@@ -15,17 +15,6 @@
 #include "mm.h"
 #include "pressure.h"
 
-/*
- * tests/host/paging_hosttest.c compiles this file natively with
- * RACH2_HOSTTEST defined. That build leaves out every instruction that
- * reaches the control registers, the flags or the TLB, which a host cannot
- * execute, and takes a fault's address from the test; the rest of the file
- * compiles as it is.
- */
-#ifdef RACH2_HOSTTEST
-uint32_t paging_hosttest_cr2(void);
-#endif
-
 page_dir_t *_kernel_dir;
 page_dir_t *_curr_dir;
 
@@ -711,11 +700,7 @@ static void _page_fault_handler(isr_params_t *params)
     uintptr_t fault_address;
     int write, user_mode, have_user_proc, in_user_range, pid;
 
-#ifndef RACH2_HOSTTEST
     fault_address = arch_fault_address();
-#else
-    fault_address = paging_hosttest_cr2();
-#endif
 
     write = FAULT_WRITE(params);
     user_mode = FAULT_USER(params);
@@ -829,27 +814,15 @@ uintptr_t map_mmio(uintptr_t phys_addr, size_t size)
     }
     _mmio_next += pages * PAGE_SIZE;
 
-#ifndef RACH2_HOSTTEST
     /* Every translation the processor cached goes. */
     arch_space_load(arch_space_root());
-#endif
 
     return va + (phys_addr - start_page);
 }
 
-static uint32_t paging_irq_save(void)
-{
-    return kirq_save();
-}
-
-static void paging_irq_restore(uint32_t flags)
-{
-    kirq_restore(flags);
-}
-
 void *kmap_temp(uintptr_t phys)
 {
-    uint32_t flags = paging_irq_save();
+    uint32_t flags = kirq_save();
     uint32_t slot;
 
     for (slot = 0; slot < KVA_TEMP_SLOTS; slot++) {
@@ -859,11 +832,11 @@ void *kmap_temp(uintptr_t phys)
             _temp_slots[slot / 32] |= 1u << (slot % 32);
             *kernel_pte(va) = (pte_t)(phys & ~(PAGE_SIZE - 1)) | PTE_P | PTE_W;
             paging_flush_tlb(va);
-            paging_irq_restore(flags);
+            kirq_restore(flags);
             return (void *)(va + (phys & (PAGE_SIZE - 1)));
         }
     }
-    paging_irq_restore(flags);
+    kirq_restore(flags);
     klog(KLOG_ERR, "vm", "temporary mappings: every slot is held");
     return 0;
 }
@@ -877,11 +850,11 @@ void kunmap_temp(void *va)
     if (addr < KVA_TEMP || slot >= KVA_TEMP_SLOTS) {
         return;
     }
-    flags = paging_irq_save();
+    flags = kirq_save();
     *kernel_pte(addr) = 0;
     paging_flush_tlb(addr);
     _temp_slots[slot / 32] &= ~(1u << (slot % 32));
-    paging_irq_restore(flags);
+    kirq_restore(flags);
 }
 
 int paging_zero_frame(uintptr_t phys)
@@ -965,14 +938,14 @@ uintptr_t alloc_frame(void)
     }
     /* Selection and claim as one step: a handler's own allocation between
      * them would take the frame this one had chosen. */
-    flags = paging_irq_save();
+    flags = kirq_save();
     frame = find_free_frame();
     if (frame >= _frames_number) {
-        paging_irq_restore(flags);
+        kirq_restore(flags);
         return 0;
     }
     frame_take(frame);
-    paging_irq_restore(flags);
+    kirq_restore(flags);
     return frame * PAGE_SIZE;
 }
 
@@ -1135,11 +1108,7 @@ void paging_set_writable(page_dir_t *dir, uintptr_t addr, bool writable)
 
 void paging_flush_tlb(uintptr_t addr)
 {
-#ifndef RACH2_HOSTTEST
     arch_tlb_flush_page(addr);
-#else
-    (void)addr;
-#endif
 }
 
 void frame_ref(uintptr_t phys)
@@ -1215,12 +1184,12 @@ uintptr_t alloc_user_frame(void)
     /* Selection and claim as one step, as in `alloc_frame`; the refusals
      * come first, so a refused selection does not move the hint past a
      * free frame. */
-    flags = paging_irq_save();
+    flags = kirq_save();
     frame = framefail_now() ? _frames_number : find_free_frame();
     if (frame < _frames_number) {
         frame_take(frame);
     }
-    paging_irq_restore(flags);
+    kirq_restore(flags);
 
     if (frame >= _frames_number) {
         /* Who holds the pool, so that a machine that runs out says what

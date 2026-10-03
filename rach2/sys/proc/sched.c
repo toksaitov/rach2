@@ -382,9 +382,7 @@ void idle_wait_irq_off(void)
         return;
     }
     _in_idle_wait = 1;
-#ifndef RACH2_HOSTTEST
     arch_idle_masked();
-#endif
     _in_idle_wait = 0;
 }
 
@@ -402,8 +400,6 @@ void idle_wait_irq_off(void)
 void idle_wait_irq_on(void)
 {
     _in_idle_wait = 1;
-#ifndef RACH2_HOSTTEST
     arch_idle();
-#endif
     _in_idle_wait = 0;
 }

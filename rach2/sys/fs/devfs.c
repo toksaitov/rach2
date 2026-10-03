@@ -1177,8 +1177,7 @@ static void rtc_alarm_irq(isr_params_t *params)
     }
 }
 
-/** Take the clock's interrupt, once: its handler, and the cascade line it
- * reaches the processor through. */
+/** Take the clock's alarm interrupt, once. */
 static void rtc_irq_setup(void)
 {
     if (!rtc_irq_ready) {
