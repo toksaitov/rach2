@@ -191,9 +191,9 @@ rach2/sys/network/tcp/tcp.c:tcp_rx lines 331 a state machine, one arm per state,
 rach2/sys/network/tcp/tcp.c:tcp_rx nesting 6 a state machine, one arm per state, read as a table
 rach2/sys/network/tcp/tcp.c:tcp_send_rst_unmatched params 8 the parameters are the fields of one packet or descriptor; a struct for them would be filled and unpacked once
 
-rach2/sys/arch/x86/pci.c:pci_find_device nesting 5 a hardware sequence, the registers written in the order the datasheet requires
-rach2/sys/arch/x86/pci.c:pci_find_device_skip nesting 6 a hardware sequence, the registers written in the order the datasheet requires
-rach2/sys/arch/x86/pci.c:pci_find_nth_by_id nesting 5 a hardware sequence, the registers written in the order the datasheet requires
+rach2/sys/pci.c:pci_find_device nesting 5 a hardware sequence, the registers written in the order the datasheet requires
+rach2/sys/pci.c:pci_find_device_skip nesting 6 a hardware sequence, the registers written in the order the datasheet requires
+rach2/sys/pci.c:pci_find_nth_by_id nesting 5 a hardware sequence, the registers written in the order the datasheet requires
 
 rach2/sys/proc/elf.c:elf_load_image_at complexity 42 one program loaded and entered, its stages in the order the loader takes them
 rach2/sys/proc/elf.c:elf_load_image_at lines 164 one program loaded and entered, its stages in the order the loader takes them
