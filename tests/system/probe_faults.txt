@@ -415,7 +415,7 @@ probe clonemusl
 file rach2/sys/proc/futex.c
 expect CLONEMUSL FAIL (a timed wait a handler with SA_RESTART interrupted did not end with EINTR)
 old
-    int cmd = (int)params->ecx & ~(FUTEX_PRIVATE_FLAG | FUTEX_CLOCK_REALTIME);
+    int cmd = (int)SC_ARG(params, 1) & ~(FUTEX_PRIVATE_FLAG | FUTEX_CLOCK_REALTIME);
 new
     int cmd = FUTEX_WAKE;
 end
@@ -432,23 +432,22 @@ end
 
 fault dr7-kernel-address
 probe ptracemusl
-file rach2/sys/proc/ptrace.c
+file rach2/sys/arch/x86/debugreg.c
 expect PTRACEMUSL FAIL (an execute breakpoint on a kernel address was not refused: errno
 old
-            (t->debugreg[i] & (bytes - 1u)) != 0 || t->debugreg[i] < USER_ADDR_MIN ||
-            t->debugreg[i] > USER_ADDR_MAX - bytes) {
+            t->debugreg[i] < USER_ADDR_MIN || t->debugreg[i] > USER_ADDR_MAX - bytes) {
 new
-            (t->debugreg[i] & (bytes - 1u)) != 0 || t->debugreg[i] > USER_ADDR_MAX - bytes) {
+            t->debugreg[i] > USER_ADDR_MAX - bytes) {
 end
 
 fault dr7-last-user-address
 probe ptracemusl
-file rach2/sys/proc/ptrace.c
+file rach2/sys/arch/x86/debugreg.c
 expect PTRACEMUSL FAIL (a breakpoint ending at the last user address was refused: errno
 old
-            t->debugreg[i] > USER_ADDR_MAX - bytes) {
+            t->debugreg[i] < USER_ADDR_MIN || t->debugreg[i] > USER_ADDR_MAX - bytes) {
 new
-            t->debugreg[i] >= USER_ADDR_MAX - bytes) {
+            t->debugreg[i] < USER_ADDR_MIN || t->debugreg[i] >= USER_ADDR_MAX - bytes) {
 end
 
 fault syscall-number-reload
@@ -1994,13 +1993,13 @@ probe execargmusl
 file rach2/sys/proc/uimage.c
 expect EXECARGMUSL FAIL (strings and pointers of exactly the budget were refused)
 old
-static int uimage_next(struct uwin *w, uint32_t *str)
+static int uimage_next(struct uwin *w, uintptr_t *str)
 {
     while (*str < w->u->top) {
 new
-static int uimage_next(struct uwin *w, uint32_t *str)
+static int uimage_next(struct uwin *w, uintptr_t *str)
 {
-    uint32_t first = *str;
+    uintptr_t first = *str;
 
     while (*str < w->u->top && *str - first < 65536u) {
 end
@@ -2062,7 +2061,7 @@ expect PTRACEMUSL FAIL (a write the tracee was killed at the entry of ran
 old
     sig = ptrace_stop((signo << 8) | 0x7F, NULL);
     if (!leaving && ((self->sig_pending | self->tg->pending) & KSIG_BIT(SIGKILL))) {
-        self->orig_eax = -1;
+        self->orig_nr = -1;
     }
 new
     sig = ptrace_stop((signo << 8) | 0x7F, NULL);
@@ -4456,10 +4455,14 @@ probe epollmusl
 file rach2/sys/ipc/pipe.c
 expect EPOLLMUSL FAIL (pipe changed the caller's ECX
 old
-    return pipe_open(params->ebx, 0);
+    return pipe_open(SC_ARG(params, 0), 0);
 new
+#if defined(__x86_64__)
+    params->rsi = 0;
+#else
     params->ecx = 0;
-    return pipe_open(params->ebx, 0);
+#endif
+    return pipe_open(SC_ARG(params, 0), 0);
 end
 
 fault eventfd-clobbers-ecx
@@ -4467,10 +4470,14 @@ probe epollmusl
 file rach2/sys/io/eventfd.c
 expect EPOLLMUSL FAIL (eventfd changed the caller's ECX
 old
-    return eventfd_open(params->ebx, 0);
+    return eventfd_open((uint32_t)SC_ARG(params, 0), 0);
 new
+#if defined(__x86_64__)
+    params->rsi = 0;
+#else
     params->ecx = 0;
-    return eventfd_open(params->ebx, 0);
+#endif
+    return eventfd_open((uint32_t)SC_ARG(params, 0), 0);
 end
 
 # The netlink route socket and the interface ioctls.
@@ -4510,9 +4517,9 @@ probe netlinkmusl
 file rach2/sys/network/netif.c
 expect NETLINKMUSL FAIL (SIOCGIFCONF with no buffer
 old
-    ifc[0] = (uint8_t)used;
+    ifc.len = (int)used;
 new
-    ifc[0] = 0;
+    ifc.len = 0;
 end
 
 fault uevent-socket-refused
@@ -4847,9 +4854,9 @@ probe netlinkmusl
 file rach2/sys/syscall_net.c
 expect NETLINKMUSL FAIL (an answer longer than the buffer was not cut with MSG_TRUNC
 old
-    SC_WLE32(hdr + MSGHDR_FLAGS, whole > taken ? (uint32_t)MSG_TRUNC : 0u);
+    hdr.msg_flags = whole > taken ? (unsigned int)MSG_TRUNC : 0u;
 new
-    SC_WLE32(hdr + MSGHDR_FLAGS, 0u);
+    hdr.msg_flags = 0u;
 end
 
 fault netlink-padding-refused
@@ -4930,7 +4937,7 @@ end
 
 fault monotonic-tick-only
 probe clockidmusl
-file rach2/sys/arch/x86/cmos.c
+file rach2/sys/clock.c
 expect CLOCKIDMUSL FAIL (time since boot does not read within the tick)
 old
     *nanoseconds = (int64_t)ticks * RTC_NANOSECONDS_PER_TICK + phase_ns;
