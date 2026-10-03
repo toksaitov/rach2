@@ -1197,11 +1197,18 @@ static int rtc_alarm_came(void *arg)
     return rtc_alarms != 0;
 }
 
+/**
+ * read(2) of /dev/rtc0: wait for the alarm and give the alarms since the
+ * last read above the low eight bits, with RTC_AF and RTC_IRQF, as Linux's
+ * `rtc_dev_read` gives them: four bytes to a read of exactly four, and an
+ * unsigned long, eight bytes on x86-64, to one of that size or more.
+ */
 static int32_t dev_rtc_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
-    uint32_t data, flags;
+    unsigned long data;
+    uint32_t word, flags;
 
-    if (count < sizeof(data)) {
+    if (count != sizeof(word) && count < sizeof(data)) {
         return -EINVAL;
     }
     rtc_irq_setup();
@@ -1214,9 +1221,13 @@ static int32_t dev_rtc_read(fd_entry_t *e, char __user *buf, uint32_t count)
         }
     }
     flags = kirq_save();
-    data = rtc_alarms << 8 | RTC_AF | RTC_IRQF;
+    data = (unsigned long)rtc_alarms << 8 | RTC_AF | RTC_IRQF;
     rtc_alarms = 0;
     kirq_restore(flags);
+    if (count == sizeof(word)) {
+        word = (uint32_t)data;
+        return copy_to_user(buf, &word, sizeof(word)) != 0 ? -EFAULT : (int32_t)sizeof(word);
+    }
     return copy_to_user(buf, &data, sizeof(data)) != 0 ? -EFAULT : (int32_t)sizeof(data);
 }
 

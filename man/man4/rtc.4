@@ -45,7 +45,8 @@ as Linux's driver requires.
 .Pp
 A
 .Xr read 2
-of four bytes or more waits for the alarm and gives an unsigned long: the
+of exactly four bytes, or of an unsigned long's or more, eight bytes on
+x86-64, waits for the alarm and gives that many: the
 alarms since the last read in the bits above the low eight, with
 .Dv RTC_AF ,
 0x20, and
@@ -70,7 +71,7 @@ A setting ioctl by a caller without privilege, as Linux answers it.
 .It Bq Er EINVAL
 .Dv RTC_SET_TIME
 with a time out of range or a year outside 2000 to 2099; a wake alarm more
-than a day ahead; a read of fewer than four bytes; or a
+than a day ahead; a read of another count below an unsigned long's; or a
 .Xr write 2
 of the device.
 The clock's update and periodic interrupts are not given.
