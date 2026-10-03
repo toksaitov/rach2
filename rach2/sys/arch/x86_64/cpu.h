@@ -43,16 +43,16 @@ typedef struct cpu_regs cpu_regs_t;
 
 /* Linux x86-64's system call convention: the number in RAX, the arguments
  * in RDI, RSI, RDX, R10, R8 and R9, the result in RAX. */
-#define SC_NR(p)     ((p)->rax)
-#define SC_RET(p)    ((p)->rax)
-#define SC_ARG(p, n) SC_ARG_N(p, n)
+#define SC_NR(p)       ((p)->rax)
+#define SC_RET(p)      ((p)->rax)
+#define SC_ARG(p, n)   SC_ARG_N(p, n)
 #define SC_ARG_N(p, n) SC_ARG_##n(p)
-#define SC_ARG_0(p)  ((unsigned long)(p)->rdi)
-#define SC_ARG_1(p)  ((unsigned long)(p)->rsi)
-#define SC_ARG_2(p)  ((unsigned long)(p)->rdx)
-#define SC_ARG_3(p)  ((unsigned long)(p)->r10)
-#define SC_ARG_4(p)  ((unsigned long)(p)->r8)
-#define SC_ARG_5(p)  ((unsigned long)(p)->r9)
+#define SC_ARG_0(p)    ((unsigned long)(p)->rdi)
+#define SC_ARG_1(p)    ((unsigned long)(p)->rsi)
+#define SC_ARG_2(p)    ((unsigned long)(p)->rdx)
+#define SC_ARG_3(p)    ((unsigned long)(p)->r10)
+#define SC_ARG_4(p)    ((unsigned long)(p)->r8)
+#define SC_ARG_5(p)    ((unsigned long)(p)->r9)
 
 /* The length of the instruction a system call is made by, `syscall`'s two
  * bytes, which a restart rewinds the return address over. */
@@ -118,6 +118,9 @@ typedef uint64_t pte_t;
  *                                it is
  *   0xFFFFC10000000000    4 MiB  temporary mappings, one page each
  *   0xFFFFC18000000000   64 MiB  the boot modules
+ *   0xFFFFC20000000000  512 MiB  the page-cache window (mm/pagecache.h), at
+ *                                most; its low 32 bits are zero, as the
+ *                                window's 32-bit sizing needs
  *   0xFFFFFFFF80000000    2 GiB  the kernel image, at its physical address
  *                                plus this base (-mcmodel=kernel)
  */
@@ -133,6 +136,7 @@ typedef uint64_t pte_t;
 #define KVA_TEMP_SLOTS   1024u
 #define KVA_MODULES      0xFFFFC18000000000UL
 #define KVA_MODULES_SIZE 0x04000000UL
+#define KVA_PCWIN        0xFFFFC20000000000UL
 #define KVA_IMAGE        0xFFFFFFFF80000000UL
 
 /* The page fault's vector, and what its error code says (Intel SDM Vol.
