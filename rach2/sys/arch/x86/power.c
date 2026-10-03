@@ -14,6 +14,7 @@
  * it is parking the CPU instead.
  */
 
+#include "acpi.h"
 #include "portio.h"
 #include "../../klog.h"
 #include "../../power.h"
@@ -113,17 +114,80 @@ static void power_reset_settle(void)
 }
 
 /**
+ * Ask for the soft-off state the way ACPI defines it. Returns only if the
+ * machine is still running, or the tables do not say how.
+ *
+ * The sleep types are \_S5's, which `acpi.c` found in the DSDT. Each PM1
+ * control register is read, its sleep type field set and its enable bit
+ * cleared, and written; then each is written again with SLP_EN, as the
+ * specification orders the two writes (ACPI 6.5, 16.1.7). A machine still
+ * in legacy mode, SCI_EN clear, is asked into ACPI mode first through the
+ * FADT's SMI command, which some chipsets want before they honour SLP_EN;
+ * the wait for it is bounded, since a firmware that does not answer must not
+ * stop the power off. A hardware-reduced machine has no PM1 registers and
+ * takes the sleep type and its enable in its sleep control register.
+ */
+static void power_acpi_s5(void)
+{
+    const struct acpi_info *a = acpi_get();
+    uint32_t pm1a = 0, pm1b = 0;
+    int spin, has_b;
+
+    if (!a->fadt || !a->s5) {
+        return;
+    }
+    if (a->fadt_flags & ACPI_FADT_HW_REDUCED) {
+        if (a->sleep_control.address == 0) {
+            return;
+        }
+        klog(KLOG_INFO, "poweroff", "acpi: sleep type %d to the sleep control register",
+             (int)a->slp_typa);
+        klog(KLOG_INFO, "poweroff", "powering off");
+        (void)acpi_gas_write(&a->sleep_control, ((uint32_t)(a->slp_typa & 7u) << 2) | 0x20u);
+        power_settle();
+        klog(KLOG_ERR, "poweroff", "acpi: the platform did not power off");
+        return;
+    }
+    if (acpi_gas_read(&a->pm1a_cnt, &pm1a) != 0) {
+        return;
+    }
+    has_b = acpi_gas_read(&a->pm1b_cnt, &pm1b) == 0;
+    if ((pm1a & ACPI_PM1_SCI_EN) == 0 && a->smi_cmd != 0 && a->smi_cmd <= 0xFFFFu &&
+        a->acpi_enable != 0) {
+        outb((uint16_t)a->smi_cmd, a->acpi_enable);
+        for (spin = 0; spin < 100000 && (pm1a & ACPI_PM1_SCI_EN) == 0; spin++) {
+            (void)acpi_gas_read(&a->pm1a_cnt, &pm1a);
+        }
+    }
+    klog(KLOG_INFO, "poweroff", "acpi: sleep types %d and %d", (int)a->slp_typa, (int)a->slp_typb);
+    klog(KLOG_INFO, "poweroff", "powering off");
+    pm1a = (pm1a & ~(ACPI_PM1_SLP_TYP | ACPI_PM1_SLP_EN)) |
+           ((uint32_t)a->slp_typa << ACPI_PM1_SLP_TYP_POS);
+    pm1b = (pm1b & ~(ACPI_PM1_SLP_TYP | ACPI_PM1_SLP_EN)) |
+           ((uint32_t)a->slp_typb << ACPI_PM1_SLP_TYP_POS);
+    (void)acpi_gas_write(&a->pm1a_cnt, pm1a);
+    if (has_b) {
+        (void)acpi_gas_write(&a->pm1b_cnt, pm1b);
+    }
+    (void)acpi_gas_write(&a->pm1a_cnt, pm1a | ACPI_PM1_SLP_EN);
+    if (has_b) {
+        (void)acpi_gas_write(&a->pm1b_cnt, pm1b | ACPI_PM1_SLP_EN);
+    }
+    power_settle();
+    klog(KLOG_ERR, "poweroff", "acpi: the platform did not power off; trying the board table");
+}
+
+/**
  * Ask a PIIX4 to remove power. Returns only if the machine is still running.
  *
- * This is QEMU's power-off and not a general one, and the difference is worth
- * stating instead of implying. The three checks below establish where the PM
- * block is; they do not establish that sleep type 0 means soft-off, which on
- * real hardware is a value firmware publishes in the ACPI tables this kernel
- * does not parse. On QEMU's PIIX4 model the write below powers the machine off;
- * on a board whose S5 is some other type it could ask for a different sleep
- * state instead of falling through to the halt, which is the one outcome here
- * that the fallback cannot catch. Reading S5 properly needs an AML interpreter,
- * which is a milestone of its own.
+ * This is QEMU's power-off and not a general one, the fallback for a machine
+ * whose ACPI tables gave no \_S5 and whose chipset no board profile matched.
+ * The three checks below establish where the PM block is; they do not
+ * establish that sleep type 0 means soft-off, which on real hardware is the
+ * value \_S5 publishes. On QEMU's PIIX4 model the write below powers the
+ * machine off; on a board whose S5 is some other type it could ask for a
+ * different sleep state instead of falling through to the halt, which is the
+ * one outcome here that the fallback cannot catch.
  *
  * The PM block's base is read out of configuration space, not assumed,
  * because this kernel also boots real hardware from a GRUB disk and the port
@@ -211,6 +275,7 @@ struct power_io {
     int (*kbc_ready)(void);
     void (*settle)(void);
     const char *(*vendor)(void);
+    const struct acpi_info *(*acpi)(void);
 };
 
 static void power_outb(uint16_t port, uint8_t value)
@@ -224,7 +289,7 @@ static void power_io_settle(void)
 }
 
 static const struct power_io power_mmio = {power_outb, kbc_ready, power_io_settle,
-                                           smbios_bios_vendor};
+                                           smbios_bios_vendor, acpi_get};
 static const struct power_io *power_io = &power_mmio;
 
 /**
@@ -250,28 +315,31 @@ static int firmware_takes_smi_reset(void)
 }
 
 /**
- * Ask the machine to reset, three ways. Returns only if it is still running.
+ * Ask the machine to reset, up to four ways. Returns only if it is still
+ * running.
  *
- * All three ports are fixed, not discovered, and the asymmetry with the
- * power-off above is deliberate: that one derives an address, and a wrong
- * address would put a sleep word into a live device, so it refuses unless it
- * knows the address is right. Each of these writes a byte to a port that is a
- * reset mechanism on the machines that have it and unclaimed on those that do
- * not, where the write is inert. Discovering them would need a mechanism PCI
- * configuration space does not offer for these registers.
+ * The first is the FADT's reset register, where the FADT says it has one:
+ * the way ACPI defines, the register and the value the firmware publishes,
+ * written in whatever space it gives. The other three ports are fixed, not
+ * discovered, and the asymmetry with the power-off above is deliberate: that
+ * one derives an address, and a wrong address would put a sleep word into a
+ * live device, so it refuses unless it knows the address is right. Each of
+ * these writes a byte to a port that is a reset mechanism on the machines
+ * that have it and unclaimed on those that do not, where the write is inert.
  *
- * The order is by how much of the machine each one goes through, most first.
- * The firmware's own SMI handler resets the way the firmware intends,
- * including whatever it does about the devices it owns; the chipset register
- * resets the chipset; the keyboard controller pulse is the oldest and the
- * least likely to be wired on a recent laptop. Trying them in the other order
- * would work on QEMU, where the chipset register is the one that acts, and
- * leave the target machine parked at a halt, which over SSH is
- * indistinguishable from a kernel that died.
+ * The order of the three is by how much of the machine each one goes
+ * through, most first. The firmware's own SMI handler resets the way the
+ * firmware intends, including whatever it does about the devices it owns;
+ * the chipset register resets the chipset; the keyboard controller pulse is
+ * the oldest and the least likely to be wired on a recent laptop. Trying
+ * them in the other order would work on QEMU, where the chipset register is
+ * the one that acts, and leave the target machine parked at a halt, which
+ * over SSH is indistinguishable from a kernel that died.
  */
 static void power_reset(void)
 {
-    int skip = 0;
+    const struct acpi_info *a = power_io->acpi();
+    int skip = 0, method = 0;
     char value[8];
 
     if (kcmdline_value("rach2.resetskip", value, (unsigned int)sizeof(value))) {
@@ -281,13 +349,26 @@ static void power_reset(void)
     }
     klog(KLOG_INFO, "reboot", "restarting (skipping %d)", skip);
 
-    /* `rach2.resetskip=N` leaves out the first N mechanisms. It exists so the
-     * later ones can be shown to work on their own, which is the only way to
-     * know the sequence is a real fallback chain, not a first method
+    /* `rach2.resetskip=N` leaves out the first N mechanisms before the
+     * keyboard controller's pulse: the FADT's register, where there is one,
+     * then the firmware's command and the chipset register. It exists so
+     * the later ones can be shown to work on their own, which is the only
+     * way to know the sequence is a real fallback chain, not a first method
      * that happens to work everywhere it has been tried; `tests/run reset`
-     * boots each value. It is also the switch to reach for on a machine where
-     * an earlier method makes things worse. */
-    if (skip < 1) {
+     * boots each value. It is also the switch to reach for on a machine
+     * where an earlier method makes things worse. */
+    if (a->reset_supported && method++ >= skip) {
+        klog(KLOG_INFO, "reboot", "acpi: writing 0x%x to the reset register",
+             (unsigned)a->reset_value);
+        if (a->reset_reg.space == ACPI_SPACE_IO && a->reset_reg.address <= 0xFFFFu) {
+            power_io->outb((uint16_t)a->reset_reg.address, a->reset_value);
+        } else {
+            (void)acpi_gas_write(&a->reset_reg, a->reset_value);
+        }
+        power_io->settle();
+    }
+
+    if (method++ >= skip) {
         if (firmware_takes_smi_reset()) {
             klog(KLOG_INFO, "reboot", "the firmware is %s: sending its own reset",
                  power_io->vendor());
@@ -299,7 +380,7 @@ static void power_reset(void)
         }
     }
 
-    if (skip < 2) {
+    if (method++ >= skip) {
         power_io->outb(RESET_CONTROL_PORT, RESET_CONTROL_ARM);
         power_io->outb(RESET_CONTROL_PORT, RESET_CONTROL_FIRE);
         power_io->settle();
@@ -324,6 +405,7 @@ void power_stop(int how)
     klog_set_screen_level(KLOG_INFO);
 
     if (how == POWER_OFF) {
+        power_acpi_s5();
         power_acpi_off();
     } else if (how == POWER_RESTART) {
         power_reset();

@@ -24,10 +24,12 @@
  * corrupts its clock. So the base is derived from the chipset's own register,
  * not assumed, and four separate checks must pass.
  *
- * One value cannot be derived and is not: which sleep type means "off". That
- * lives in the firmware's ACPI tables, in AML this kernel does not interpret.
- * It is carried per profile as a constant of belief, with its provenance in
- * the comment, and it is written only to a chipset that was positively
+ * One value cannot be derived from the chipset: which sleep type means
+ * "off". The firmware's \_S5 says, and the power off writes that first
+ * (power.c, from acpi.c's search of the DSDT); a profile is the fallback
+ * for a machine whose tables give none or whose write did not act. It
+ * has the value as a constant of belief, with its provenance in the
+ * comment, and it is written only to a chipset that was positively
  * identified. It is never swept for: on a PCH, sleep type 5 is suspend, and a
  * machine that suspends after its file system has been flushed and scheduling
  * stopped looks off to the person in the room and is not.
