@@ -15,13 +15,27 @@
 #
 set -u
 
-# RACH2_KERNEL=NAME boots every suite on build/rach2-NAME/kernel, built by
-# the NAME-kernel target of tests/system/suites.mk (ubsan, o2) before the
-# rest of the preparation, since the images the preparation stages hold that
-# kernel; unset, the suites boot build/rach2/kernel.
+# ARCH names the architecture the run builds and boots, as mk/arch.mk does:
+# i686 when it is unset, into build/ on qemu-system-i386, or x86_64, into
+# build/x86_64/ on qemu-system-x86_64. Every make the run starts is given it,
+# and a set is the suites the registry lists for it.
+ARCH=${ARCH:-i686}
+case "$ARCH" in
+    i686) ARCH_BUILD=build; RACH2_QEMU="qemu-system-i386" ;;
+    x86_64) ARCH_BUILD=build/x86_64; RACH2_QEMU="qemu-system-x86_64" ;;
+    *) echo "run: result: refused: ARCH=$ARCH: the architectures are i686 and x86_64" >&2; exit 2 ;;
+esac
+export RACH2_QEMU
+ARCH_VAR="ARCH=$ARCH"
+
+# RACH2_KERNEL=NAME boots every suite on rach2-NAME/kernel in the
+# architecture's build tree, built by the NAME-kernel target of
+# tests/system/suites.mk (ubsan, o2) before the rest of the preparation,
+# since the images the preparation stages hold that kernel; unset, the suites
+# boot rach2/kernel there.
 KERNEL_VAR=""
 if [ -n "${RACH2_KERNEL:-}" ]; then
-    KERNEL_VAR="BOOT_KERNEL=build/rach2-${RACH2_KERNEL}/kernel"
+    KERNEL_VAR="BOOT_KERNEL=$ARCH_BUILD/rach2-${RACH2_KERNEL}/kernel"
 fi
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
@@ -294,6 +308,18 @@ suite_names()  { awk -F'|' '!/^#/ && NF > 1 { print $1 }' "$REGISTRY"; }
 suite_tools()  { awk -F'|' -v s="$1" '!/^#/ && $1 == s { print $2 }' "$REGISTRY"; }
 suite_known()  { [ -n "$(suite_tools "$1")" ]; }
 tier_names()   { awk -F'|' -v t="$1" '!/^#/ && $3 == t { print $1 }' "$REGISTRY"; }
+# The architectures a suite runs on, the sixth field, commas between them;
+# empty is every architecture.
+suite_arches() { awk -F'|' -v s="$1" '!/^#/ && $1 == s { print $6 }' "$REGISTRY"; }
+suite_for_arch() { # suite_for_arch NAME: 0 when it runs on ARCH
+    case ",$(suite_arches "$1")," in
+        ,,|*",$ARCH,"*) return 0 ;;
+    esac
+    return 1
+}
+arch_only() { # arch_only NAME...: those of the names that run on ARCH
+    for s in "$@"; do suite_for_arch "$s" && echo "$s"; done
+}
 suite_images() { awk -F'|' -v s="$1" '!/^#/ && $1 == s { print $4 }' "$REGISTRY"; }
 suite_tier()   { awk -F'|' -v s="$1" '!/^#/ && $1 == s { print $3 }' "$REGISTRY"; }
 # What a suite proves, in one sentence: the comment in suites.mk that names
@@ -318,7 +344,7 @@ suite_proves() {
 inventory() {
     echo "# The suites"
     echo
-    echo "One line per suite, in the order the pool starts them, from \`tests/run inventory\`: the tier, the external commands the suite needs, the most guest memory its machines ask for at once, and what it proves, which is the sentence in \`tests/system/suites.mk\` that names it. \`tests/run style\` compares this file with that output."
+    echo "One line per suite, in the order the pool starts them, from \`tests/run inventory\`: the tier, the external commands the suite needs, \`qemu\` being the emulator of the architecture \`ARCH\` names, the most guest memory its machines ask for at once, the architectures it runs on when it does not run on both, and what it proves, which is the sentence in \`tests/system/suites.mk\` that names it. \`tests/run style\` compares this file with that output."
     echo
     for s in $(suite_names); do
         tools=$(suite_tools "$s" | sed 's/,/, /g')
@@ -326,13 +352,18 @@ inventory() {
             -) tools="needs nothing beyond the build" ;;
             *) tools="needs $tools" ;;
         esac
-        case "$(suite_tools "$s")" in
-            *qemu-system-*) memory="$(suite_memory "$s") MiB" ;;
+        case ",$(suite_tools "$s")," in
+            *,qemu,*|*qemu-system-*) memory="$(suite_memory "$s") MiB" ;;
             *) memory="no machine" ;;
+        esac
+        arches=$(suite_arches "$s")
+        case "$arches" in
+            '') arches="" ;;
+            *) arches="; $(echo "$arches" | sed 's/,/ and /g') only" ;;
         esac
         proves=$(suite_proves "$s"); [ -n "$proves" ] || proves="(no sentence in suites.mk names this suite)"
         # shellcheck disable=SC2016 # the backticks are Markdown, not a command
-        printf '* `%s` (%s tier; %s; %s): %s\n' "$s" "$(suite_tier "$s")" "$tools" "$memory" "$proves"
+        printf '* `%s` (%s tier; %s; %s%s): %s\n' "$s" "$(suite_tier "$s")" "$tools" "$memory" "$arches" "$proves"
     done
 }
 suite_memory() { # the guest memory a suite's machines ask for at once, MiB
@@ -372,16 +403,16 @@ check_images() { # check_images NAMES: 0 when every file made that is not a
                  # recorded build product belongs to one of them
     [ -f "$WORK/images.stamp" ] || return 0
     image_table "$1" > "$WORK/images.patterns"
-    ( cd "$REPO/build/images" 2>/dev/null && find . -type f -newer "$WORK/images.stamp" | sed 's|^\./||' | sort ) > "$WORK/images.made"
+    ( cd "$REPO/$ARCH_BUILD/images" 2>/dev/null && find . -type f -newer "$WORK/images.stamp" | sed 's|^\./||' | sort ) > "$WORK/images.made"
     # A product of the run's own target is the build's and not a suite's: a
     # suite's make remakes one whose prerequisite the parallel build left at
     # the same second, and the file is the same bytes, which `check_hashes`
     # is what proves. Only what no product covers is asked about below.
     if [ -f "$WORK/inventory.products" ]; then
-        { sed -n 's|^build/images/||p' "$WORK/inventory.products"
+        { sed -n "s|^$ARCH_BUILD/images/||p" "$WORK/inventory.products"
           # and the dependency file make wrote beside each, which is not a
           # target of its own and so is in no closure
-          sed -n 's|^build/images/||p' "$WORK/inventory.products" | sed 's/$/.d/'
+          sed -n "s|^$ARCH_BUILD/images/||p" "$WORK/inventory.products" | sed 's/$/.d/'
         } | sort -u > "$WORK/images.products"
         comm -23 "$WORK/images.made" "$WORK/images.products" > "$WORK/images.made.new"
         mv "$WORK/images.made.new" "$WORK/images.made"
@@ -399,8 +430,8 @@ check_images() { # check_images NAMES: 0 when every file made that is not a
         done < "$WORK/images.patterns"
         case "$(echo "$owners" | wc -w | tr -d ' ')" in
             1) ;;
-            0) echo "run: images: undeclared: build/images/$f" >&2; bad=1 ;;
-            *) echo "run: images: shared: build/images/$f:$owners" >&2; bad=1 ;;
+            0) echo "run: images: undeclared: $ARCH_BUILD/images/$f" >&2; bad=1 ;;
+            *) echo "run: images: shared: $ARCH_BUILD/images/$f:$owners" >&2; bad=1 ;;
         esac
     done < "$WORK/images.made"
     [ -z "$bad" ]
@@ -438,6 +469,7 @@ check_tools() {
     oldifs=$IFS; IFS=,
     for tool in $tools; do
         IFS=$oldifs
+        [ "$tool" = qemu ] && tool=$RACH2_QEMU
         command -v "$tool" >/dev/null 2>&1 || {
             echo "run: $1 needs $tool and it is not installed" >&2
             return 1
@@ -458,7 +490,7 @@ check_machines() {
 # at once, and the group kill takes the make and what it started.
 run_make() {
     # shellcheck disable=SC2086
-    "$RACH2_RUN_UTIL" group make -C "$REPO" --no-print-directory $KERNEL_VAR "$@" &
+    "$RACH2_RUN_UTIL" group make -C "$REPO" --no-print-directory $ARCH_VAR $KERNEL_VAR "$@" &
     make_pid=$!
     echo "$make_pid" >> "$WORK/build.groups"
     echo "$make_pid" >> "$WORK/run.jobs"
@@ -470,7 +502,7 @@ run_make() {
 suite_make() {
     # shellcheck disable=SC2086
     "$RACH2_RUN_UTIL" suite "$1" "$IDLE_SECONDS" "$RACH2_QEMU_LEDGER" \
-        make -C "$REPO" --no-print-directory $KERNEL_VAR "run-$1" &
+        make -C "$REPO" --no-print-directory $ARCH_VAR $KERNEL_VAR "run-$1" &
     suite_pid=$!
     echo "$suite_pid" >> "$WORK/run.jobs"
     wait "$suite_pid"
@@ -523,11 +555,11 @@ run_one() {
 # build/tests/failed, named for the suite, the time and this run's pid; the
 # next run writes over the logs under build/images, never over the copies.
 keep_logs() { # keep_logs NAME
-    kept="build/tests/failed/$1.$(date '+%Y%m%d-%H%M%S').$$"
+    kept="build/tests/failed/$1.$ARCH.$(date '+%Y%m%d-%H%M%S').$$"
     image_patterns "$1" > "$WORK/$1.kept.patterns"
     newer=""
     [ -f "$WORK/images.stamp" ] && newer="$WORK/images.stamp"
-    ( cd "$REPO/build/images" 2>/dev/null &&
+    ( cd "$REPO/$ARCH_BUILD/images" 2>/dev/null &&
       find . -type f -name '*.log' ${newer:+-newer "$newer"} | sed 's|^\./||' | sort ) > "$WORK/$1.kept.logs"
     while IFS= read -r f; do
         case "$1" in
@@ -538,7 +570,7 @@ keep_logs() { # keep_logs NAME
             # shellcheck disable=SC2254 # the glob is the pattern
             case "$f" in
                 $g) mkdir -p "$REPO/$kept/$(dirname "$f")" &&
-                        cp "$REPO/build/images/$f" "$REPO/$kept/$f"
+                        cp "$REPO/$ARCH_BUILD/images/$f" "$REPO/$kept/$f"
                     break ;;
             esac
         done < "$WORK/$1.kept.patterns"
@@ -667,7 +699,7 @@ pool_next() {
 # Two equal hashes do not say the file stood still in between; they say
 # what the result was made with is what is there now.
 closure() { # closure TARGET: the file prerequisites reachable from TARGET
-    make -C "$REPO" -pn "$1" 2>/dev/null | awk -v root="$1" '
+    make -C "$REPO" -pn "$ARCH_VAR" "$1" 2>/dev/null | awk -v root="$1" '
         /^#/ || /^$/ { next }
         /^[^ \t:=]+:[^=]/ {
             t = $1; sub(/:$/, "", t)
@@ -700,7 +732,7 @@ scripts_inventory() {
     } ) | present
 }
 products_inventory() { # products_inventory TARGET...
-    ( cd "$REPO" && ls build/rach2*/kernel 2>/dev/null; for t in "$@"; do closure "$t"; done ) |
+    ( cd "$REPO" && ls "$ARCH_BUILD"/rach2*/kernel 2>/dev/null; for t in "$@"; do closure "$t"; done ) |
         present
 }
 hasher() {
@@ -813,6 +845,19 @@ set_accel() {
     export RACH2_QEMU_ACCEL
 }
 
+# The processors every machine of the run has: RACH2_CPUS, 1 when it is unset,
+# which the shim passes to QEMU as `-smp` before the suite's own arguments, so
+# a suite that names a count of its own, as one that boots several counts
+# does, keeps it.
+set_cpus() {
+    RACH2_CPUS=${RACH2_CPUS:-1}
+    case "$RACH2_CPUS" in
+        ''|*[!0-9]*|0*) echo "run: result: refused: RACH2_CPUS must be a whole number from 1 to 64" >&2; return 1 ;;
+    esac
+    [ "$RACH2_CPUS" -le 64 ] || { echo "run: result: refused: RACH2_CPUS must be a whole number from 1 to 64" >&2; return 1; }
+    export RACH2_CPUS
+}
+
 set_factor() {
     CAL_FACTOR=${RACH2_TIMEOUT_FACTOR:-1}
     case "$CAL_FACTOR" in
@@ -871,10 +916,10 @@ case "${1-}" in
         }
         if [ "$1" = all ]; then
             # shellcheck disable=SC2046 # a suite name is one word by format
-            set -- $(suite_names)
+            set -- $(arch_only $(suite_names))
         else
             # shellcheck disable=SC2046 # a suite name is one word by format
-            set -- $(tier_names core)
+            set -- $(arch_only $(tier_names core))
         fi ;;
 esac
 
@@ -892,6 +937,9 @@ for suite in "$@"; do
         *" $suite "*) echo "run: result: refused: $suite is named twice" >&2; exit 2 ;;
     esac
     seen="$seen $suite"
+    suite_for_arch "$suite" || {
+        echo "run: result: refused: $suite runs on $(suite_arches "$suite") alone, and ARCH is $ARCH" >&2; exit 2
+    }
     check_tools "$suite" || { echo "run: result: refused: $suite has no tools to run with" >&2; exit 1; }
 done
 diskimage=""
@@ -916,6 +964,7 @@ IDLE_SECONDS=$(awk -v n="$IDLE_SECONDS" 'BEGIN {if (n < 1 || n > 86400) exit 1; 
 }
 set_factor || exit 2
 set_accel || exit 2
+set_cpus || exit 2
 lock_take "$@" || { echo "run: result: refused: the tree is not free" >&2; exit 1; }
 # Each suite names the machines it starts, so a leaked one can be blamed on the
 # suite that left it. Listing every QEMU on the host works only while one suite
@@ -928,17 +977,25 @@ lock_take "$@" || { echo "run: result: refused: the tree is not free" >&2; exit 
 # of machine and none names one: KVM where /dev/kvm can be opened, HVF on
 # an x86 Mac that reports it, the emulator otherwise. `RACH2_QEMU_ACCEL`
 # names one outright, and `tcg` is how a KVM host is measured without it.
-QEMU_REAL=$(command -v qemu-system-i386 2>/dev/null || true)
-if [ -n "$QEMU_REAL" ]; then
+# Both emulators have a shim, qemu-system-i386 and qemu-system-x86_64, so a
+# machine of either architecture, and the x86-64 machines an i686 suite boots
+# for UEFI, are in the ledger and on the accelerator alike; each shim also
+# gives its machine RACH2_CPUS processors.
+for qemu in qemu-system-i386 qemu-system-x86_64; do
+    real=$(command -v "$qemu" 2>/dev/null || true)
+    [ -n "$real" ] || continue
     mkdir -p "$WORK/bin"
-    export QEMU_REAL RACH2_QEMU_ACCEL
-    cat > "$WORK/bin/qemu-system-i386" <<'QEMU'
+    cat > "$WORK/bin/$qemu" <<QEMU
 #!/bin/sh
-exec "$RACH2_RUN_UTIL" machine "${RACH2_QEMU_LEDGER:?}" "$QEMU_REAL" -accel "${RACH2_QEMU_ACCEL:?}" "$@"
+smp=
+[ "\${RACH2_CPUS:-1}" = 1 ] || smp="-smp \$RACH2_CPUS"
+# shellcheck disable=SC2086 # smp is empty or the option and its count
+exec "\$RACH2_RUN_UTIL" machine "\${RACH2_QEMU_LEDGER:?}" "$real" -accel "\${RACH2_QEMU_ACCEL:?}" \$smp "\$@"
 QEMU
-    chmod +x "$WORK/bin/qemu-system-i386"
-    PATH="$WORK/bin:$PATH"; export PATH
-fi
+    chmod +x "$WORK/bin/$qemu"
+done
+export RACH2_QEMU_ACCEL
+[ ! -d "$WORK/bin" ] || { PATH="$WORK/bin:$PATH"; export PATH; }
 
 # A sweep of the process table for another runner stood here for an hour on
 # 2026-09-14 and was removed: a runner of another tree looks exactly like a
@@ -947,7 +1004,7 @@ fi
 # knows which tree a run holds, and it names the run that holds it.
 # The line that says this run began. Everything below it belongs to this run,
 # and a log without it is a run that never started.
-echo "run: starting: $* (pid $$, $(date '+%Y-%m-%d %H:%M:%S'), workers $WORKERS, memory $MEMORY_MIB MiB, timeout factor $CAL_FACTOR, accelerator $RACH2_QEMU_ACCEL)"
+echo "run: starting: $* (pid $$, $(date '+%Y-%m-%d %H:%M:%S'), architecture $ARCH, workers $WORKERS, memory $MEMORY_MIB MiB, timeout factor $CAL_FACTOR, accelerator $RACH2_QEMU_ACCEL, processors $RACH2_CPUS)"
 # The recovery system starts an SSH server only where a key was built into it,
 # and the suites that repair or update a machine do that work through recovery
 # over SSH. The key is minted here: after the names are checked and the tree is
