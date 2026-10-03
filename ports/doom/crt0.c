@@ -2,12 +2,27 @@
  * crt0.c - C runtime for Doom on Rach2
  *
  * Provides _start entry point, syscall wrappers, and minimal libc functions.
+ * The entry point, the wrappers and the system call numbers are written once
+ * for i386, with `int $0x80`, and once for x86-64, with `syscall`; the rest is
+ * the same C for both.
  */
 
 #include <stddef.h>
 #include <stdint.h>
 #include <stdarg.h>
 
+#if defined __x86_64__
+/* Syscall numbers (Linux x86-64, as musl's arch/x86_64/bits/syscall.h.in) */
+#define SYS_EXIT        60
+#define SYS_READ        0
+#define SYS_WRITE       1
+#define SYS_OPEN        2
+#define SYS_CLOSE       3
+#define SYS_LSEEK       8
+#define SYS_BRK         12
+#define SYS_IOCTL       16
+#define SYS_GETTIMEOFDAY 96
+#else
 /* Syscall numbers (Linux i386 compatible) */
 #define SYS_EXIT        1
 #define SYS_READ        3
@@ -18,6 +33,7 @@
 #define SYS_BRK         45
 #define SYS_IOCTL       54
 #define SYS_GETTIMEOFDAY 78
+#endif
 
 /* Open flags */
 #define O_RDONLY  0
@@ -33,9 +49,80 @@
 /* Forward declaration of main */
 int main(int argc, char **argv);
 
+struct timeval {
+    long tv_sec;
+    long tv_usec;
+};
+
 /*
  * Syscall wrappers
  */
+#if defined __x86_64__
+/*
+ * One x86-64 system call of up to three arguments: the number in RAX, the
+ * arguments in RDI, RSI and RDX, the result in RAX. The instruction
+ * overwrites RCX and R11.
+ */
+static long syscall3(long number, long a, long b, long c)
+{
+    long ret;
+    __asm__ __volatile__ (
+        "syscall"
+        : "=a"(ret)
+        : "a"(number), "D"(a), "S"(b), "d"(c)
+        : "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+void _exit(int status)
+{
+    syscall3(SYS_EXIT, status, 0, 0);
+    __builtin_unreachable();
+}
+
+int read(int fd, void *buf, size_t count)
+{
+    return (int)syscall3(SYS_READ, fd, (long)buf, (long)count);
+}
+
+int write(int fd, const void *buf, size_t count)
+{
+    return (int)syscall3(SYS_WRITE, fd, (long)buf, (long)count);
+}
+
+int open(const char *path, int flags, ...)
+{
+    return (int)syscall3(SYS_OPEN, (long)path, flags, 0);
+}
+
+int close(int fd)
+{
+    return (int)syscall3(SYS_CLOSE, fd, 0, 0);
+}
+
+int ioctl(int fd, unsigned long request, ...)
+{
+    va_list ap;
+    unsigned long arg;
+
+    va_start(ap, request);
+    arg = va_arg(ap, unsigned long);
+    va_end(ap);
+
+    return (int)syscall3(SYS_IOCTL, fd, (long)request, (long)arg);
+}
+
+int gettimeofday(struct timeval *tv, void *tz)
+{
+    return (int)syscall3(SYS_GETTIMEOFDAY, (long)tv, (long)tz, 0);
+}
+
+int lseek(int fd, int offset, int whence)
+{
+    return (int)syscall3(SYS_LSEEK, fd, offset, whence);
+}
+#else
 void _exit(int status)
 {
     __asm__ __volatile__ (
@@ -108,11 +195,6 @@ int ioctl(int fd, unsigned long request, ...)
     return ret;
 }
 
-struct timeval {
-    long tv_sec;
-    long tv_usec;
-};
-
 int gettimeofday(struct timeval *tv, void *tz)
 {
     int ret;
@@ -134,6 +216,7 @@ int lseek(int fd, int offset, int whence)
     );
     return ret;
 }
+#endif
 
 /*
  * Minimal libc functions
@@ -793,6 +876,12 @@ int putchar(int c)
 static char *_heap_break;   /* the end of what brk has given, or NULL */
 static char *_heap_next;    /* the next byte to hand out */
 
+#if defined __x86_64__
+static char *sys_brk(char *addr)
+{
+    return (char *)syscall3(SYS_BRK, (long)addr, 0, 0);
+}
+#else
 static char *sys_brk(char *addr)
 {
     char *ret;
@@ -803,6 +892,7 @@ static char *sys_brk(char *addr)
     );
     return ret;
 }
+#endif
 
 void *malloc(size_t size)
 {
@@ -1167,6 +1257,28 @@ unsigned long long __umoddi3(unsigned long long a, unsigned long long b)
     return a - __udivdi3(a, b) * b;
 }
 
+#if defined __x86_64__
+/*
+ * _start - ELF entry point, x86-64.
+ *
+ * The SysV x86-64 ABI hands control here with argc at 0(%rsp), the argv
+ * vector at 8(%rsp) and %rsp 16-byte aligned; the call to main pushes the
+ * return address that leaves %rsp where a called function expects it. The
+ * arguments go to main in %rdi and %rsi, and its status to _exit in %edi.
+ */
+__asm__(
+    ".text\n\t"
+    ".globl _start\n"
+    "_start:\n\t"
+    "xorq %rbp, %rbp\n\t"     /* mark the outermost stack frame (ABI) */
+    "movq (%rsp), %rdi\n\t"   /* argc */
+    "leaq 8(%rsp), %rsi\n\t"  /* argv */
+    "andq $-16, %rsp\n\t"     /* keep the entry stack 16-byte aligned */
+    "call main\n\t"
+    "movl %eax, %edi\n\t"     /* exit status from main */
+    "call _exit\n"
+);
+#else
 /*
  * _start - ELF entry point.
  *
@@ -1193,3 +1305,4 @@ __asm__(
     "pushl %eax\n\t"           /* exit status from main */
     "call _exit\n"
 );
+#endif
