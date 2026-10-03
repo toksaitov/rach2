@@ -40,7 +40,7 @@ typedef struct process {
     proc_state_t state;
     uint32_t pid;
     uint32_t tgid;
-    uint32_t cr3;
+    uintptr_t space_root;
     volatile uint32_t in_syscall;
     int signalled;
     int released;
@@ -94,9 +94,9 @@ static void schedule(void)
     }
     for (p = proc_list; p; p = p->next) {
         if (p != current_proc && (p->state == PROC_READY || p->state == PROC_BLOCKED) &&
-            (p->signalled == SIGKILL || (p->cr3 == 0 && p->in_syscall))) {
+            (p->signalled == SIGKILL || (p->space_root == 0 && p->in_syscall))) {
             p->state = PROC_ZOMBIE;
-            p->cr3 = 0;
+            p->space_root = 0;
         }
     }
 }
@@ -106,14 +106,14 @@ static void schedule(void)
 static struct thread_group groups[5];
 static process_t init, idle, kthread, ending, unused, running;
 
-/** Put `p` on the list, alone in thread group `tg`, with `cr3`, `in_syscall`
- * and `state`. */
-static void add(process_t *p, int tg, uint32_t pid, uint32_t cr3, uint32_t in_syscall,
+/** Put `p` on the list, alone in thread group `tg`, with `space_root`,
+ * `in_syscall` and `state`. */
+static void add(process_t *p, int tg, uint32_t pid, uintptr_t space_root, uint32_t in_syscall,
                 proc_state_t state)
 {
     p->tg = &groups[tg];
     p->pid = p->tgid = pid;
-    p->cr3 = cr3;
+    p->space_root = space_root;
     p->in_syscall = in_syscall;
     p->state = state;
     p->next = proc_list;
