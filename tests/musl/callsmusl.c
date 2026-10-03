@@ -38,11 +38,11 @@
  * getcpu reports CPU 0, and personality keeps and returns its value.
  * sendmmsg sends two datagrams in one call over an AF_UNIX pair and
  * recvmmsg receives both, each with its count. clock_gettime64 reads the
- * monotonic clock with 64-bit fields. close_range marks a range of
- * descriptors close-on-exec and closes it, reaches past the table's end,
- * and refuses a flag it does not take and a backward range. splice from a
- * pipe to /dev/null, tee and sendfile answer EINVAL, which GNU grep takes
- * for a descriptor it must read instead, and EBADF for a closed one.
+ * monotonic clock with 64-bit fields (clock_gettime on x86-64). close_range
+ * marks a range of descriptors close-on-exec and closes it, reaches past the
+ * table's end, and refuses a flag it does not take and a backward range. splice
+ * from a pipe to /dev/null, tee and sendfile answer EINVAL, which GNU grep
+ * takes for a descriptor it must read instead, and EBADF for a closed one.
  * posix_fallocate gives a file in /dev/shm its pages, the size and the blocks
  * of the range, and answers EOPNOTSUPP for a file of KRFFS open for writing,
  * a /proc file among them, after which glibc's writes the range itself,
@@ -96,6 +96,18 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+
+/*
+ * The calls of 64-bit fields and offsets, by their i386 names: i386's
+ * clock_gettime64, call 403, and sendfile64 are x86-64's clock_gettime and
+ * sendfile, whose fields and offsets are 64 bits wide.
+ */
+#if defined __x86_64__
+#define SYS_CLOCK_GETTIME64 SYS_clock_gettime
+#define SYS_sendfile64      SYS_sendfile
+#else
+#define SYS_CLOCK_GETTIME64 403
+#endif
 
 static int fail(const char *what)
 {
@@ -657,7 +669,8 @@ static int clocks(void)
 {
     int64_t t[2] = {-1, -1};
 
-    if (syscall(403, CLOCK_MONOTONIC, t) != 0 || t[0] < 0 || t[1] < 0 || t[1] >= 1000000000) {
+    if (syscall(SYS_CLOCK_GETTIME64, CLOCK_MONOTONIC, t) != 0 || t[0] < 0 || t[1] < 0 ||
+        t[1] >= 1000000000) {
         return fail("clock_gettime64");
     }
     return 0;

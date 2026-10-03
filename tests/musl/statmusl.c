@@ -3,9 +3,9 @@
  *
  * This kernel fills a stat buffer in four places: `krffs_fill_stat64` for a
  * path, `fstat_fill` for a descriptor, `do_old_stat` for the narrower stat(2)
- * ABI, and `synth_stat` for `/dev` and `/proc`. All four zeroed the three
- * times, and a fix to one of them would leave the others reporting 1970, so
- * each is asked here separately, not trusted to share code.
+ * ABI that only i386 has, and `synth_stat` for `/dev` and `/proc`. All four
+ * zeroed the three times, and a fix to one of them would leave the others
+ * reporting 1970, so each is asked here separately, not trusted to share code.
  *
  * The times are SET with `utimensat`, which is the one call that already wrote
  * them before this milestone, so this probe stands on its own: it proves the
@@ -27,12 +27,15 @@
 #include <time.h>
 #include <unistd.h>
 
+#if !defined __x86_64__
 /*
  * The old stat(2) struct, as the kernel writes it (struct linux_stat in
  * rach2/sys/syscall.c). It is declared here because musl never issues that call
  * on i386: stat() goes to statx, which this kernel does not have, and falls
  * back to fstatat64. So the only way to ask the old fill anything is to ask for
  * it by number, and a fill nothing exercises is a fill nobody notices is wrong.
+ * x86-64 has no narrower stat: its stat(2) is the whole struct, which musl's
+ * stat reaches, and the rows of the old struct are built for i686 alone.
  */
 struct old_stat {
     unsigned long st_dev;
@@ -54,6 +57,7 @@ struct old_stat {
     unsigned long unused4;
     unsigned long unused5;
 };
+#endif
 
 /* An instant with a nonzero nanosecond part, so a fill that reports whole
  * seconds and drops the rest is caught too. */
@@ -178,6 +182,7 @@ int main(void)
         return fail("a directory did not report itself as one");
     }
 
+#if !defined __x86_64__
     /* The old ABI, by number, on the file and then on the directory. */
     {
         struct old_stat os;
@@ -206,6 +211,7 @@ int main(void)
             return fail("the old stat(2) reported a directory as a regular file");
         }
     }
+#endif
 
     /* A synthetic node reports the BOOT time, and the probe works out what that
      * should be instead of taking the answer from the thing it is testing: the

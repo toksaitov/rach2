@@ -9,39 +9,38 @@
  * that touched 16 MiB has ended, and before it is reaped, a read through a
  * descriptor of its memory returns 0 and the free memory /proc/meminfo reports
  * is back; reads the registers with GETREGS and the floating-point state with
- * GETFPXREGS; steps one instruction with SINGLESTEP, which moves the
- * instruction pointer; plants a breakpoint with POKETEXT on a read-only text
- * page, continues to it, finds the child stopped by SIGTRAP just past it, puts
- * the text back, moves the instruction pointer back with SETREGS and continues.
- * PTRACE_SYSCALL stops the child at the entry and the exit of getpid, with the
- * call's number in orig_eax and its result in eax at the exit, and bit 0x80 on
- * the stop signal with PTRACE_O_TRACESYSGOOD. At an entry stop the tracer
- * changes the call through orig_eax: getpid made getppid returns the parent's
- * id, and a write made -1 is not run and returns the eax the tracer set. A
- * tracee SIGKILL reaches at the entry stop of a write writes nothing. At the
- * exit stop of a read a signal interrupted, -1 in orig_eax keeps the read from
- * being restarted after a handler with SA_RESTART. PTRACE_O_TRACEEXEC stops the
- * child after an execve with the exec event, which waitid reports in si_status
- * above the signal, and a /proc/PID/mem descriptor opened before the execve
- * reads nothing of the new image. A debug register set through POKEUSER reads
- * back through PEEKUSER, and DR7 enables a breakpoint on a user address, the
- * last of which a breakpoint may end at, and not on a kernel address.
- * PTRACE_ATTACH stops a running process, which runs on after PTRACE_DETACH, and
- * PTRACE_SEIZE stops for the tracer one that a stop signal has already stopped,
- * which stays stopped after PTRACE_DETACH until SIGCONT. PTRACE_INTERRUPT stops
- * a seized tracee blocked in a read, which is restarted after. The child a
- * seized tracee forks under PTRACE_O_TRACEFORK first stops with
- * PTRACE_EVENT_STOP and SIGTRAP. A signal sent to a process whose first thread
- * its tracer holds stopped wakes the other thread, asleep in pause, which takes
- * it. The usage a tracer's wait4 reports for the end of a traced thread that is
- * not the first has the time of the children its process reaped. A process
- * another process traces, which ends, is reported to its tracer before its
- * parent may reap it, and then to the parent; the tracer's next wait finds
- * nothing left to wait for. A tracee SIGKILL ends sends its tracer, here its
- * parent, a SIGCHLD of CLD_KILLED with the signal.
+ * GETFPXREGS, GETFPREGS on x86-64; steps one instruction with SINGLESTEP, which
+ * moves the instruction pointer; plants a breakpoint with POKETEXT on a
+ * read-only text page, continues to it, finds the child stopped by SIGTRAP just
+ * past it, puts the text back, moves the instruction pointer back with SETREGS
+ * and continues. PTRACE_SYSCALL stops the child at the entry and the exit of
+ * getpid, with the call's number in orig_eax and its result in eax at the exit
+ * (orig_rax and rax on x86-64), and bit 0x80 on the stop signal with
+ * PTRACE_O_TRACESYSGOOD. At an entry stop the tracer changes the call through
+ * orig_eax: getpid made getppid returns the parent's id, and a write made -1 is
+ * not run and returns the eax the tracer set. A tracee SIGKILL reaches at the
+ * entry stop of a write writes nothing. At the exit stop of a read a signal
+ * interrupted, -1 in orig_eax keeps the read from being restarted after a
+ * handler with SA_RESTART. PTRACE_O_TRACEEXEC stops the child after an execve
+ * with the exec event, which waitid reports in si_status above the signal, and
+ * a /proc/PID/mem descriptor opened before the execve reads nothing of the new
+ * image. A debug register set through POKEUSER reads back through PEEKUSER, and
+ * DR7 enables a breakpoint on a user address, the last of which a breakpoint
+ * may end at, and not on a kernel address. PTRACE_ATTACH stops a running
+ * process, which runs on after PTRACE_DETACH, and PTRACE_SEIZE stops for the
+ * tracer one that a stop signal has already stopped, which stays stopped after
+ * PTRACE_DETACH until SIGCONT. PTRACE_INTERRUPT stops a seized tracee blocked
+ * in a read, which is restarted after. The child a seized tracee forks under
+ * PTRACE_O_TRACEFORK first stops with PTRACE_EVENT_STOP and SIGTRAP. A signal
+ * sent to a process whose first thread its tracer holds stopped wakes the other
+ * thread, asleep in pause, which takes it. The usage a tracer's wait4 reports
+ * for the end of a traced thread that is not the first has the time of the
+ * children its process reaped. A process another process traces, which ends, is
+ * reported to its tracer before its parent may reap it, and then to the parent;
+ * the tracer's next wait finds nothing left to wait for. A tracee SIGKILL ends
+ * sends its tracer, here its parent, a SIGCHLD of CLD_KILLED with the signal.
  *
- * Prints "PTRACEMUSL OK" on success and "PTRACEMUSL FAIL (detail)"
- * otherwise.
+ * Prints "PTRACEMUSL OK" on success and "PTRACEMUSL FAIL (detail)" otherwise.
  */
 
 #define _GNU_SOURCE
@@ -60,6 +59,35 @@
 #include <sys/user.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+/*
+ * The fields of each architecture's user_regs_struct the rows read: the
+ * call's number, its result, the instruction pointer and the code segment,
+ * whose user selector is 0x1b on i386 and 0x33 on x86-64. The floating-point
+ * state is the fxsave image, which i386 reads with GETFPXREGS and x86-64 with
+ * GETFPREGS. LAST_USER_WORD is the last four bytes of user space: below the
+ * kernel at 3 GiB on i386, and below the last page of the lower half on
+ * x86-64, which user space does not reach.
+ */
+#if defined __x86_64__
+#define R_NR(r)        ((r).orig_rax)
+#define R_RET(r)       ((r).rax)
+#define R_IP(r)        ((r).rip)
+#define R_CS(r)        ((r).cs)
+#define USER_CS        0x33
+#define PTRACE_GETFX   PTRACE_GETFPREGS
+#define LAST_USER_WORD 0x00007FFFFFFFEFFCUL
+typedef struct user_fpregs_struct fxregs_t;
+#else
+#define R_NR(r)        ((r).orig_eax)
+#define R_RET(r)       ((r).eax)
+#define R_IP(r)        ((r).eip)
+#define R_CS(r)        ((r).xcs)
+#define USER_CS        0x1b
+#define PTRACE_GETFX   PTRACE_GETFPXREGS
+#define LAST_USER_WORD 0xbffffffcUL
+typedef struct user_fpxregs_struct fxregs_t;
+#endif
 
 static volatile int target = 1234;
 
@@ -107,7 +135,7 @@ static int into_hole(const char *path, char *page)
 static int memory_and_registers(void)
 {
     struct user_regs_struct regs, after;
-    struct user_fpxregs_struct fpx;
+    fxregs_t fpx;
     char path[32];
     long word;
     int status, fd;
@@ -146,14 +174,14 @@ static int memory_and_registers(void)
     if (into_hole(path, page) != 0) {
         return 1;
     }
-    if (ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0 || regs.xcs != 0x1b) {
+    if (ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0 || R_CS(regs) != USER_CS) {
         return fail("GETREGS");
     }
-    if (ptrace(PTRACE_GETFPXREGS, pid, NULL, &fpx) != 0 || fpx.cwd == 0) {
+    if (ptrace(PTRACE_GETFX, pid, NULL, &fpx) != 0 || fpx.cwd == 0) {
         return fail("GETFPXREGS");
     }
     if (ptrace(PTRACE_SINGLESTEP, pid, NULL, NULL) != 0 || !stopped_by(pid, SIGTRAP) ||
-        ptrace(PTRACE_GETREGS, pid, NULL, &after) != 0 || after.eip == regs.eip) {
+        ptrace(PTRACE_GETREGS, pid, NULL, &after) != 0 || R_IP(after) == R_IP(regs)) {
         return fail("SINGLESTEP");
     }
 
@@ -166,10 +194,10 @@ static int memory_and_registers(void)
             return fail("the breakpoint was not reached");
         }
         if (ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0 ||
-            regs.eip != (long)(uintptr_t)marked + 1) {
+            (uintptr_t)R_IP(regs) != (uintptr_t)marked + 1) {
             return fail("the stop was not just past the breakpoint");
         }
-        regs.eip = (long)(uintptr_t)marked;
+        R_IP(regs) = (uintptr_t)marked;
         if (ptrace(PTRACE_POKETEXT, pid, (void *)marked, (void *)text) != 0 ||
             ptrace(PTRACE_SETREGS, pid, NULL, &regs) != 0 ||
             ptrace(PTRACE_CONT, pid, NULL, NULL) != 0) {
@@ -201,25 +229,29 @@ static int exec_event(pid_t pid)
     return 0;
 }
 
-/* Set debug register `n` of the stopped `pid` to `v`; the raw result. */
+/* Set debug register `n` of the stopped `pid` to `v`; the raw result. The
+ * registers are words of struct user, 4 bytes on i386 and 8 on x86-64. */
 static long debug_set(pid_t pid, int n, unsigned long v)
 {
-    return ptrace(PTRACE_POKEUSER, pid, (void *)(offsetof(struct user, u_debugreg) + 4 * n),
+    struct user u;
+
+    return ptrace(PTRACE_POKEUSER, pid,
+                  (void *)(offsetof(struct user, u_debugreg) + sizeof(u.u_debugreg[0]) * n),
                   (void *)v);
 }
 
 /*
  * DR7 enables a breakpoint only on user addresses: an execute breakpoint
- * at the kernel's 0x1000 in DR0 is refused, and a 4-byte write breakpoint
- * whose last byte is the last user address, 0xbfffffff, is taken; DR7 is
- * then cleared again.
+ * at 0x1000 in DR0, which is not a user address, is refused, and a 4-byte
+ * write breakpoint whose last byte is the last user address is taken; DR7
+ * is then cleared again.
  */
 static int debug_bounds(pid_t pid)
 {
     if (debug_set(pid, 0, 0x1000) != 0 || debug_set(pid, 7, 0x1) != -1 || errno != EINVAL) {
         return fail("an execute breakpoint on a kernel address was not refused");
     }
-    if (debug_set(pid, 0, 0xbffffffcUL) != 0 ||
+    if (debug_set(pid, 0, LAST_USER_WORD) != 0 ||
         debug_set(pid, 7, 0x1 | 0x1UL << 16 | 0x3UL << 18) != 0 || debug_set(pid, 7, 0) != 0) {
         return fail("a breakpoint ending at the last user address was refused");
     }
@@ -262,13 +294,13 @@ static int syscalls_and_exec(void)
             ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0) {
             return fail("a syscall stop");
         }
-        if (regs.orig_eax == SYS_getpid) {
+        if (R_NR(regs) == SYS_getpid) {
             break;
         }
     }
     if (ptrace(PTRACE_SYSCALL, pid, NULL, NULL) != 0 || !stopped_by(pid, SIGTRAP | 0x80) ||
-        ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0 || regs.orig_eax != SYS_getpid ||
-        regs.eax != pid) {
+        ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0 || R_NR(regs) != SYS_getpid ||
+        (long)R_RET(regs) != pid) {
         return fail("the exit stop of getpid");
     }
     snprintf(path, sizeof(path), "/proc/%d/mem", (int)pid);
@@ -299,7 +331,7 @@ static int syscall_entry(pid_t pid, long nr, struct user_regs_struct *regs)
             ptrace(PTRACE_GETREGS, pid, NULL, regs) != 0) {
             return -1;
         }
-    } while (regs->orig_eax != nr);
+    } while ((long)R_NR(*regs) != nr);
     return 0;
 }
 
@@ -334,13 +366,13 @@ static int syscall_changes(void)
     if (!stopped_by(pid, SIGSTOP) || syscall_entry(pid, SYS_getpid, &regs) != 0) {
         return fail("the entry stop of getpid");
     }
-    regs.orig_eax = SYS_getppid;
+    R_NR(regs) = SYS_getppid;
     if (ptrace(PTRACE_SETREGS, pid, NULL, &regs) != 0 ||
         syscall_entry(pid, SYS_write, &regs) != 0) {
         return fail("the entry stop of write");
     }
-    regs.orig_eax = -1;
-    regs.eax = 42;
+    R_NR(regs) = -1;
+    R_RET(regs) = 42;
     if (ptrace(PTRACE_SETREGS, pid, NULL, &regs) != 0 ||
         ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 || waitpid(pid, &status, 0) != pid ||
         !WIFEXITED(status)) {
@@ -399,10 +431,10 @@ static int restart_cancelled(void)
     }
     if (ptrace(PTRACE_SYSCALL, pid, NULL, NULL) != 0 || kill(pid, SIGUSR1) != 0 ||
         !stopped_by(pid, SIGTRAP) || ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0 ||
-        regs.orig_eax != SYS_read || regs.eax != -EINTR) {
+        R_NR(regs) != SYS_read || (long)R_RET(regs) != -EINTR) {
         return fail("the exit stop of the interrupted read");
     }
-    regs.orig_eax = -1;
+    R_NR(regs) = -1;
     if (ptrace(PTRACE_SETREGS, pid, NULL, &regs) != 0 ||
         ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 || !stopped_by(pid, SIGUSR1) ||
         ptrace(PTRACE_CONT, pid, NULL, (void *)SIGUSR1) != 0 || write(p[1], "x", 1) != 1) {

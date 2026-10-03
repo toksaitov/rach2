@@ -14,7 +14,8 @@
  * first and returns its descriptor, IN_MASK_CREATE refuses it with EEXIST, a
  * one-shot watch goes after its first event, and inotify_rm_watch queues
  * IN_IGNORED. inotify_init made by hand leaves the caller's EBX, which i386
- * code keeps its global offset table in, as it was.
+ * code keeps its global offset table in, as it was, and on x86-64 its RDI,
+ * where inotify_init1 takes its flags.
  *
  * Prints "INOTIFYMUSL OK" on success and "INOTIFYMUSL FAIL (detail)"
  * otherwise.
@@ -215,9 +216,29 @@ static int refusals(int fd, int wd)
     }
 }
 
+#if defined __x86_64__
+/* inotify_init(253), which the kernel serves as inotify_init1 without
+ * flags, leaves the caller's RDI, where inotify_init1 takes them, as it was:
+ * `syscall` keeps every register but RAX, RCX and R11. */
+static int register_kept(void)
+{
+    unsigned long di;
+    long r;
+
+    __asm__ __volatile__("syscall"
+                         : "=a"(r), "=D"(di)
+                         : "0"(253L), "1"(0xA5A5A5A5A5A5A5A5UL)
+                         : "rcx", "r11", "memory");
+    if (r < 0 || di != 0xA5A5A5A5A5A5A5A5UL) {
+        return fail("inotify_init changed the caller's RDI");
+    }
+    close((int)r);
+    return 0;
+}
+#else
 /* inotify_init(291), which the kernel serves as inotify_init1 without
  * flags, leaves the caller's EBX as it was. */
-static int ebx_kept(void)
+static int register_kept(void)
 {
     unsigned int b;
     int r;
@@ -229,6 +250,7 @@ static int ebx_kept(void)
     close(r);
     return 0;
 }
+#endif
 
 int main(void)
 {
@@ -239,7 +261,7 @@ int main(void)
     if (fd < 0 || fcntl(fd, F_GETFD) != FD_CLOEXEC) {
         return fail("inotify_init1");
     }
-    if (ebx_kept() || events(fd, &wd) || refusals(fd, wd)) {
+    if (register_kept() || events(fd, &wd) || refusals(fd, wd)) {
         return 1;
     }
     close(fd);

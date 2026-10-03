@@ -35,12 +35,13 @@
 #include <time.h>
 #include <unistd.h>
 
+#if !defined __x86_64__
 /*
  * The old stat(2) struct, as the kernel writes it (struct linux_stat in
  * rach2/sys/syscall.c). Declared here because musl never issues that call on
  * i386: stat() goes to statx, which this kernel does not have, and falls back
  * to fstatat64. The root has a branch of its own in that fill, so it is asked
- * for by number.
+ * for by number. x86-64 has no narrower stat, and the row is i686's alone.
  */
 struct old_stat {
     unsigned long st_dev;
@@ -62,6 +63,7 @@ struct old_stat {
     unsigned long unused4;
     unsigned long unused5;
 };
+#endif
 
 static const char *const DIR = "/stampdir";
 static const char *const OTHER = "/stampdir2";
@@ -449,6 +451,7 @@ int main(void)
         }
         close(dirfd);
     }
+#if !defined __x86_64__
     {
         /* The old stat(2) has a root branch of its own, and musl never issues
          * that call on i386, so it is asked for by number or not at all. */
@@ -462,6 +465,7 @@ int main(void)
             return fail("the old stat(2) reports a different time for the root");
         }
     }
+#endif
     if (fstatat(AT_FDCWD, "/", &st, 0) != 0) {
         return fail("could not fstatat the root");
     }

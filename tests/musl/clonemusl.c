@@ -14,8 +14,9 @@
  * timed wait that a handler with SA_RESTART interrupts ends with EINTR, as
  * Linux ends one, and is not restarted with its whole timeout again.
  *
- * The futex call (240) takes the kernel's 32-bit timespec, not musl's, whose
- * seconds are 64 bits wide.
+ * The futex call (240, or 202 on x86-64) takes the kernel's timespec, whose
+ * fields are a long's width: on i386 that is not musl's, whose seconds are 64
+ * bits wide.
  *
  * Prints "CLONEMUSL OK" on success and "CLONEMUSL FAIL (detail)" otherwise.
  */
@@ -57,13 +58,21 @@ static long raw(long n, long a, long b, long c, long d, long e, long f)
     return r == -1 ? -errno : r;
 }
 
-/* The kernel's 32-bit timespec. */
-struct ts32 {
+/* The kernel's timespec, of a long's width: 32 bits on i386, 64 on x86-64. */
+struct kts {
     long sec;
     long nsec;
 };
 
-static long futex(volatile uint32_t *word, int op, uint32_t val, const struct ts32 *ts,
+/* The last two arguments of a raw clone, the TLS and the address the child's
+ * id goes to: i386 takes the TLS first, and x86-64 the address. */
+#if defined __x86_64__
+#define CLONE_TLS_CTID(tls, ctid) (long)(ctid), (long)(tls)
+#else
+#define CLONE_TLS_CTID(tls, ctid) (long)(tls), (long)(ctid)
+#endif
+
+static long futex(volatile uint32_t *word, int op, uint32_t val, const struct kts *ts,
                   uint32_t val3)
 {
     return raw(SYS_futex, (long)word, op, (long)val, (long)ts, 0, (long)val3);
@@ -78,8 +87,8 @@ static long long ns_of(clockid_t clk)
     return (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
 }
 
-/** A time in nanoseconds as a 32-bit timespec. */
-static void to32(long long ns, struct ts32 *ts)
+/** A time in nanoseconds as a kernel timespec. */
+static void to_kts(long long ns, struct kts *ts)
 {
     ts->sec = (long)(ns / 1000000000LL);
     ts->nsec = (long)(ns % 1000000000LL);
@@ -99,7 +108,7 @@ static long interrupted_wait(volatile uint32_t *word)
 {
     struct sigaction sa;
     struct itimerval it;
-    struct ts32 ts;
+    struct kts ts;
     long r;
 
     memset(&sa, 0, sizeof(sa));
@@ -121,7 +130,7 @@ int main(void)
     static volatile int32_t ctid;
     static volatile int32_t ptid;
     static volatile uint32_t word = 7;
-    struct ts32 ts;
+    struct kts ts;
     long long start;
     long long deadline;
     long pid;
@@ -132,7 +141,7 @@ int main(void)
     }
 
     pid = raw(SYS_clone, CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID | CLONE_PARENT_SETTID | SIGCHLD,
-              0, (long)&ptid, 0, (long)&ctid, 0);
+              0, (long)&ptid, CLONE_TLS_CTID(0, &ctid), 0);
     if (pid < 0) {
         return fail("clone refused the fork form");
     }
@@ -169,7 +178,7 @@ int main(void)
         return fail("a wait on another value did not return EAGAIN");
     }
     start = ns_of(CLOCK_MONOTONIC);
-    to32(20000000, &ts);
+    to_kts(20000000, &ts);
     if (futex(&word, FUTEX_WAIT, 7, &ts, 0) != -ETIMEDOUT) {
         return fail("a relative wait did not time out");
     }
@@ -177,14 +186,14 @@ int main(void)
         return fail("a relative wait of 20 ms ended sooner");
     }
     deadline = ns_of(CLOCK_MONOTONIC) + 20000000;
-    to32(deadline, &ts);
+    to_kts(deadline, &ts);
     if (futex(&word, FUTEX_WAIT_BITSET, 7, &ts, 0xFFFFFFFFu) != -ETIMEDOUT) {
         return fail("an absolute monotonic wait did not time out");
     }
     if (ns_of(CLOCK_MONOTONIC) < deadline) {
         return fail("an absolute monotonic wait ended before its deadline");
     }
-    to32(ns_of(CLOCK_REALTIME), &ts);
+    to_kts(ns_of(CLOCK_REALTIME), &ts);
     if (futex(&word, FUTEX_WAIT_BITSET | FUTEX_CLOCK_REALTIME, 7, &ts, 0xFFFFFFFFu) != -ETIMEDOUT) {
         return fail("an absolute real-time wait in the past did not time out");
     }

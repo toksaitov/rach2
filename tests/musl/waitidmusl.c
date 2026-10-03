@@ -30,9 +30,10 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-/* The i386 kernel's struct rusage, which the raw call writes: two timevals
- * of 32-bit seconds and microseconds, then fourteen counters. */
-struct rusage32 {
+/* The kernel's struct rusage, which the raw call writes: two timevals of
+ * seconds and microseconds of a long's width, 32 bits on i386 and 64 on
+ * x86-64, then fourteen counters. */
+struct krusage {
     long utime_sec;
     long utime_usec;
     long stime_sec;
@@ -236,7 +237,7 @@ static int selects(idtype_t idtype, int callers)
 /** WNOWAIT, the selections, the resource usage and the refusals. */
 static int selections(void)
 {
-    struct rusage32 ru;
+    struct krusage ru;
     siginfo_t si;
     pid_t pid;
     int status;

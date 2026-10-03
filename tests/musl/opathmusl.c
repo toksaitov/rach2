@@ -33,6 +33,12 @@
 #include <time.h>
 #include <unistd.h>
 
+/* fchown of 32-bit ids: fchown32 on i386, whose fchown takes 16-bit ones,
+ * and fchown on x86-64, which has only that. */
+#ifndef SYS_fchown32
+#define SYS_fchown32 SYS_fchown
+#endif
+
 /* The file and the directory the rows make and remove. */
 #define FILE_PATH "/opath.tmp"
 #define DIR_PATH  "/opathdir"

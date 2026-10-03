@@ -13,7 +13,9 @@
  * data in si_errno, and EAX holds the call's number, as Linux's rollback
  * leaves it. Both filters judge getppid, and the trap, of higher
  * precedence, wins over the errno. A grandchild inherits both and adds a
- * third that kills the process at getgid32, and dies by SIGSYS. TSYNC gives
+ * third that kills the process at getgid32, and dies by SIGSYS. On x86-64
+ * the calls are getuid and getgid, the architecture AUDIT_ARCH_X86_64 and the
+ * register RAX. TSYNC gives
  * a waiting thread the caller's new filter, and an exec keeps the four.
  * The strict mode lets write through and kills the process with SIGKILL at
  * getpid.
@@ -35,7 +37,6 @@
 #include <ucontext.h>
 #include <unistd.h>
 
-#define NR_SECCOMP       354
 #define SET_MODE_STRICT  0
 #define SET_MODE_FILTER  1
 #define GET_ACTION_AVAIL 2
@@ -46,16 +47,30 @@
 #define RET_ERRNO        0x00050000u
 #define RET_USER_NOTIF   0x7fc00000u
 #define RET_ALLOW        0x7fff0000u
-#define AUDIT_ARCH_I386  0x40000003u
 
 #define LD_W_ABS 0x20
 #define JEQ_K    0x15
 #define RET_K    0x06
 
-#define NR_GETPPID  64
-#define NR_GETUID32 199
-#define NR_GETGID32 200
-#define NR_GETTID   224
+/*
+ * The calls the filters judge, the architecture a trap's siginfo names, and
+ * the saved register a trap leaves the call's number in: i386's calls of
+ * 32-bit ids, getuid32 and getgid32, are x86-64's getuid and getgid.
+ */
+#define NR_SECCOMP SYS_seccomp
+#define NR_GETPPID SYS_getppid
+#define NR_GETTID  SYS_gettid
+#if defined __x86_64__
+#define NR_GETUID       SYS_getuid
+#define NR_GETGID       SYS_getgid
+#define AUDIT_ARCH_SELF 0xC000003Eu /* AUDIT_ARCH_X86_64 */
+#define REG_NR          REG_RAX
+#else
+#define NR_GETUID       SYS_getuid32
+#define NR_GETGID       SYS_getgid32
+#define AUDIT_ARCH_SELF 0x40000003u /* AUDIT_ARCH_I386 */
+#define REG_NR          REG_EAX
+#endif
 
 struct insn {
     uint16_t code;
@@ -122,14 +137,13 @@ static int status_has(const char *line)
 static void on_sigsys(int signo, siginfo_t *si, void *ctx)
 {
     ucontext_t *uc = ctx;
-    unsigned *words = (unsigned *)si;
 
     (void)signo;
     trapped++;
-    trap_ok = si->si_code == 1 && si->si_errno == 5 && words[4] == NR_GETUID32 &&
-              words[5] == AUDIT_ARCH_I386 && words[3] != 0 &&
-              uc->uc_mcontext.gregs[REG_EAX] == NR_GETUID32;
-    uc->uc_mcontext.gregs[REG_EAX] = 4242;
+    trap_ok = si->si_code == 1 && si->si_errno == 5 && si->si_syscall == NR_GETUID &&
+              si->si_arch == AUDIT_ARCH_SELF && si->si_call_addr != NULL &&
+              uc->uc_mcontext.gregs[REG_NR] == NR_GETUID;
+    uc->uc_mcontext.gregs[REG_NR] = 4242;
 }
 
 /** The refusals and the queries, in the probe itself. */
@@ -201,7 +215,7 @@ static int filters(const char *self)
     sa.sa_sigaction = on_sigsys;
     sa.sa_flags = SA_SIGINFO;
     sigaction(SIGSYS, &sa, NULL);
-    if (answer(NR_GETUID32, RET_TRAP | 5, 0) != 0 || syscall(NR_GETUID32) != 4242 || trapped != 1 ||
+    if (answer(NR_GETUID, RET_TRAP | 5, 0) != 0 || syscall(NR_GETUID) != 4242 || trapped != 1 ||
         !trap_ok) {
         return fail("a trap posts SIGSYS with the call's siginfo and its number in EAX");
     }
@@ -210,10 +224,10 @@ static int filters(const char *self)
     }
     pid = fork();
     if (pid == 0) {
-        if (answer(NR_GETGID32, RET_KILL_PROCESS, 0) != 0) {
+        if (answer(NR_GETGID, RET_KILL_PROCESS, 0) != 0) {
             _exit(4);
         }
-        syscall(NR_GETGID32);
+        syscall(NR_GETGID);
         _exit(3);
     }
     if (waitpid(pid, &status, 0) != pid || !WIFSIGNALED(status) || WTERMSIG(status) != SIGSYS) {

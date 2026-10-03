@@ -360,27 +360,20 @@ static int check_datagram(void)
      * rewrites the destinations behind it. The addresses that lands are ones
      * nothing checked, and the kernel must not write through them blind. This
      * payload is built to do exactly that: four bytes for the first buffer,
-     * then the eight bytes of a descriptor naming an address inside the user
-     * window that no mapping backs, then four more bytes for the kernel to put
-     * there. It must come back, not fault in kernel mode, and what it
-     * returns is whatever it managed before it gave up.
+     * then the bytes of a descriptor naming an address inside the user window
+     * that no mapping backs, 8 on i386 and 16 on x86-64, then four more bytes
+     * for the kernel to put there. It must come back, not fault in kernel mode,
+     * and what it returns is whatever it managed before it gave up.
      */
     {
         struct iovec alias[3];
-        unsigned char payload[20];
+        struct iovec forged = {(void *)0x30000000, 4};
+        unsigned char payload[4 + sizeof(struct iovec) + 8];
         char sink[4];
 
         memcpy(payload, "AAAA", 4);
-        /* { .iov_base = (void *)0x30000000, .iov_len = 4 }, little-endian */
-        payload[4] = 0x00;
-        payload[5] = 0x00;
-        payload[6] = 0x00;
-        payload[7] = 0x30;
-        payload[8] = 0x04;
-        payload[9] = 0x00;
-        payload[10] = 0x00;
-        payload[11] = 0x00;
-        memcpy(payload + 12, "BBBBCCCC", 8);
+        memcpy(payload + 4, &forged, sizeof(forged));
+        memcpy(payload + 4 + sizeof(forged), "BBBBCCCC", 8);
 
         if (sendto(fd, payload, sizeof(payload), 0, (struct sockaddr *)&me, sizeof(me)) !=
             (ssize_t)sizeof(payload)) {

@@ -26,6 +26,12 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 
+/* fchown of 32-bit ids: fchown32 on i386, whose fchown takes 16-bit ones,
+ * and fchown on x86-64, which has only that. */
+#ifndef SYS_fchown32
+#define SYS_fchown32 SYS_fchown
+#endif
+
 /* The names the rows make in the directory, and remove. */
 static char file[256], link_name[256], dangling[256], subdir[256];
 

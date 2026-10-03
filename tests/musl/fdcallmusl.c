@@ -3,10 +3,11 @@
  * libc's fstat and futimens are: fstatat64 with an empty path and
  * AT_EMPTY_PATH, and utimensat with a NULL path.
  *
- * musl reaches few of them: its fstat is fstat64, and its fstatat turns an
- * empty path into fstat64 as well. So the rows call the kernel by number,
- * with the stat64 layout the kernel writes, and require the empty-path form
- * to report what fstat64 reports for the same descriptor, byte for byte, on
+ * musl reaches few of them: its fstat is fstat64 (fstat on x86-64), and its
+ * fstatat turns an empty path into that as well. So the rows call the kernel
+ * by number, with the layout the kernel writes, and require the empty-path
+ * form to report what fstat64 reports for the same descriptor, byte for byte,
+ * on
  * each kind of descriptor there is: a file, a directory, a pipe, a socket, a
  * device and the terminal. With AT_FDCWD the empty path is the working
  * directory, which must report what a path to it reports.
@@ -46,8 +47,37 @@
 #define WHEN_SEC  1786712707L
 #define WHEN_NSEC 123456789L
 
-/* The i386 stat64 as the kernel writes it (man/man2/stat.2). */
-struct kstat64 {
+/*
+ * The stat the kernel writes (man/man2/stat.2): i386's stat64, through
+ * fstat64, stat64 and fstatat64, and x86-64's stat, through fstat, stat and
+ * newfstatat.
+ */
+#if defined __x86_64__
+struct kstat {
+    unsigned long st_dev;
+    unsigned long st_ino;
+    unsigned long st_nlink;
+    unsigned int st_mode;
+    unsigned int st_uid;
+    unsigned int st_gid;
+    unsigned int pad0;
+    unsigned long st_rdev;
+    long st_size;
+    long st_blksize;
+    long st_blocks;
+    unsigned long st_atime_sec;
+    unsigned long st_atime_nsec;
+    unsigned long st_mtime_sec;
+    unsigned long st_mtime_nsec;
+    unsigned long st_ctime_sec;
+    unsigned long st_ctime_nsec;
+    long unused[3];
+};
+#define SYS_FSTAT   SYS_fstat
+#define SYS_STAT    SYS_stat
+#define SYS_FSTATAT SYS_newfstatat
+#else
+struct kstat {
     unsigned long long st_dev;
     unsigned char pad0[4];
     unsigned long old_st_ino;
@@ -68,8 +98,13 @@ struct kstat64 {
     unsigned long st_ctime_nsec;
     unsigned long long st_ino;
 };
+#define SYS_FSTAT   SYS_fstat64
+#define SYS_STAT    SYS_stat64
+#define SYS_FSTATAT SYS_fstatat64
+#endif
 
-/* The timespec utimensat (320) takes on i386, with 32-bit seconds. */
+/* The timespec utimensat takes, with seconds of a long's width: 32 bits on
+ * i386, whose call is 320, and 64 on x86-64. */
 struct ktimespec {
     long tv_sec;
     long tv_nsec;
@@ -96,14 +131,14 @@ static int refused(long rc, int err)
  */
 static int same_as_fstat(int fd, unsigned int type, const char *path)
 {
-    struct kstat64 by_fd, by_empty;
+    struct kstat by_fd, by_empty;
 
     memset(&by_fd, 0xAA, sizeof(by_fd));
     memset(&by_empty, 0x55, sizeof(by_empty));
-    if (syscall(SYS_fstat64, fd, &by_fd) != 0) {
+    if (syscall(SYS_FSTAT, fd, &by_fd) != 0) {
         return 0;
     }
-    if (syscall(SYS_fstatat64, fd, path, &by_empty, AT_EMPTY_PATH) != 0) {
+    if (syscall(SYS_FSTATAT, fd, path, &by_empty, AT_EMPTY_PATH) != 0) {
         return 0;
     }
     return memcmp(&by_fd, &by_empty, sizeof(by_fd)) == 0 && (by_fd.st_mode & 0170000) == type;
@@ -112,7 +147,7 @@ static int same_as_fstat(int fd, unsigned int type, const char *path)
 /** The empty path on each kind of descriptor. */
 static int stat_rows(void)
 {
-    struct kstat64 by_path, by_empty;
+    struct kstat by_path, by_empty;
     int pipefd[2];
     int fd;
     int ok;
@@ -166,8 +201,8 @@ static int stat_rows(void)
     }
     memset(&by_path, 0xAA, sizeof(by_path));
     memset(&by_empty, 0x55, sizeof(by_empty));
-    ok = syscall(SYS_stat64, "/dev", &by_path) == 0 &&
-         syscall(SYS_fstatat64, AT_FDCWD, "", &by_empty, AT_EMPTY_PATH) == 0 &&
+    ok = syscall(SYS_STAT, "/dev", &by_path) == 0 &&
+         syscall(SYS_FSTATAT, AT_FDCWD, "", &by_empty, AT_EMPTY_PATH) == 0 &&
          memcmp(&by_path, &by_empty, sizeof(by_path)) == 0;
     chdir("/");
     if (!ok) {
@@ -177,19 +212,19 @@ static int stat_rows(void)
     /* A path that is not empty is looked up as ever, the flag or not. */
     memset(&by_path, 0xAA, sizeof(by_path));
     memset(&by_empty, 0x55, sizeof(by_empty));
-    if (syscall(SYS_stat64, "/hello.txt", &by_path) != 0 ||
-        syscall(SYS_fstatat64, AT_FDCWD, "/hello.txt", &by_empty, AT_EMPTY_PATH) != 0 ||
+    if (syscall(SYS_STAT, "/hello.txt", &by_path) != 0 ||
+        syscall(SYS_FSTATAT, AT_FDCWD, "/hello.txt", &by_empty, AT_EMPTY_PATH) != 0 ||
         memcmp(&by_path, &by_empty, sizeof(by_path)) != 0) {
         return fail("a path with AT_EMPTY_PATH is not looked up");
     }
 
-    if (!refused(syscall(SYS_fstatat64, 0, "", &by_empty, 0), ENOENT)) {
+    if (!refused(syscall(SYS_FSTATAT, 0, "", &by_empty, 0), ENOENT)) {
         return fail("an empty path without AT_EMPTY_PATH is not ENOENT");
     }
-    if (!refused(syscall(SYS_fstatat64, 999, "", &by_empty, AT_EMPTY_PATH), EBADF)) {
+    if (!refused(syscall(SYS_FSTATAT, 999, "", &by_empty, AT_EMPTY_PATH), EBADF)) {
         return fail("AT_EMPTY_PATH on a descriptor that is not open is not EBADF");
     }
-    if (!refused(syscall(SYS_fstatat64, AT_FDCWD, "/", &by_empty, 0x8000), EINVAL)) {
+    if (!refused(syscall(SYS_FSTATAT, AT_FDCWD, "/", &by_empty, 0x8000), EINVAL)) {
         return fail("an unknown flag with the root's path is not EINVAL");
     }
     return 0;
@@ -199,8 +234,8 @@ static int stat_rows(void)
  * the access and modification times `sec` and `nsec`. */
 static int times_are(int fd, const char *path, long sec, long nsec)
 {
-    struct kstat64 st;
-    long rc = path ? syscall(SYS_stat64, path, &st) : syscall(SYS_fstat64, fd, &st);
+    struct kstat st;
+    long rc = path ? syscall(SYS_STAT, path, &st) : syscall(SYS_FSTAT, fd, &st);
 
     return rc == 0 && (long)st.st_atime_sec == sec && (long)st.st_atime_nsec == nsec &&
            (long)st.st_mtime_sec == sec && (long)st.st_mtime_nsec == nsec;
@@ -220,7 +255,7 @@ static int utimens_rows(int fd)
 {
     struct ktimespec kt[2];
     struct timespec ts[2];
-    struct kstat64 st;
+    struct kstat st;
     int pipefd[2];
     long before;
     long after;
@@ -242,7 +277,7 @@ static int utimens_rows(int fd)
         return fail("an empty path with AT_EMPTY_PATH does not set the descriptor's times");
     }
     before = (long)time(NULL);
-    if (syscall(SYS_utimensat, fd, NULL, NULL, 0) != 0 || syscall(SYS_fstat64, fd, &st) != 0) {
+    if (syscall(SYS_utimensat, fd, NULL, NULL, 0) != 0 || syscall(SYS_FSTAT, fd, &st) != 0) {
         return fail("a null path with null times");
     }
     after = (long)time(NULL);

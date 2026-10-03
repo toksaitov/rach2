@@ -168,22 +168,27 @@ static int type_of(const char *dir, const char *name)
  * Paths that name a directory by their end: lstat of /proc/self/., and the
  * old lstat, call 107, of it, follow the link to the directory, and the
  * regular file `file` named with a trailing slash or a last "." is ENOTDIR
- * to stat and lstat. 0, or 1 once the failure is reported.
+ * to stat and lstat. 0, or 1 once the failure is reported. x86-64 has no old
+ * lstat, and its row is i686's alone.
  */
 static int dir_ends(const char *file)
 {
+#if !defined __x86_64__
     unsigned char old[64];
+#endif
     char path[520];
     struct stat st;
 
     if (lstat("/proc/self/.", &st) != 0 || !S_ISDIR(st.st_mode)) {
         return fail("lstat of /proc/self/. did not reach the directory");
     }
+#if !defined __x86_64__
     memset(old, 0, sizeof(old));
     if (syscall(SYS_lstat, "/proc/self/.", old) != 0 ||
         !S_ISDIR((mode_t)(old[8] | (old[9] << 8)))) {
         return fail("the old lstat of /proc/self/. did not reach the directory");
     }
+#endif
     snprintf(path, sizeof(path), "%s/", file);
     if (stat(path, &st) != -1 || errno != ENOTDIR || lstat(path, &st) != -1 || errno != ENOTDIR) {
         return fail("a file named with a trailing slash was not ENOTDIR");
@@ -555,18 +560,37 @@ static int connect_path(int fd, const char *path)
     return connect(fd, (struct sockaddr *)&a, sizeof(a));
 }
 
+/*
+ * The ELF image of a program of this architecture, which the kernel loads:
+ * ELF32 i386 at 0x08048000, or ELF64 x86-64 at 0x400000, where the linker
+ * places a program's text.
+ */
+#if defined __x86_64__
+typedef Elf64_Ehdr Ehdr;
+typedef Elf64_Phdr Phdr;
+#define ELF_CLASS   ELFCLASS64
+#define ELF_MACHINE EM_X86_64
+#define LOAD_BASE   0x400000
+#else
+typedef Elf32_Ehdr Ehdr;
+typedef Elf32_Phdr Phdr;
+#define ELF_CLASS   ELFCLASS32
+#define ELF_MACHINE EM_386
+#define LOAD_BASE   0x08048000
+#endif
+
 /**
  * Write the ELF image `path`, mode 0755, whose PT_INTERP is `interp`: the
- * ELF header, the PT_INTERP, and one PT_LOAD at 0x08048000 that covers the
+ * ELF header, the PT_INTERP, and one PT_LOAD at LOAD_BASE that covers the
  * whole file, headers and interpreter path included, which the kernel loads
  * before it opens the interpreter. 0, or -1 when the file could not be
  * written.
  */
 static int write_elf(const char *path, const char *interp)
 {
-    unsigned char img[sizeof(Elf32_Ehdr) + 2 * sizeof(Elf32_Phdr) + 320];
-    Elf32_Ehdr eh;
-    Elf32_Phdr ph[2];
+    unsigned char img[sizeof(Ehdr) + 2 * sizeof(Phdr) + 320];
+    Ehdr eh;
+    Phdr ph[2];
     size_t at = sizeof(eh) + sizeof(ph);
     size_t size = at + strlen(interp) + 1;
     int fd;
@@ -577,26 +601,26 @@ static int write_elf(const char *path, const char *interp)
     }
     memset(&eh, 0, sizeof(eh));
     memcpy(eh.e_ident, ELFMAG, SELFMAG);
-    eh.e_ident[EI_CLASS] = ELFCLASS32;
+    eh.e_ident[EI_CLASS] = ELF_CLASS;
     eh.e_ident[EI_DATA] = ELFDATA2LSB;
     eh.e_ident[EI_VERSION] = EV_CURRENT;
     eh.e_type = ET_EXEC;
-    eh.e_machine = EM_386;
+    eh.e_machine = ELF_MACHINE;
     eh.e_version = EV_CURRENT;
-    eh.e_entry = 0x08048000 + at;
+    eh.e_entry = LOAD_BASE + at;
     eh.e_phoff = sizeof(eh);
     eh.e_ehsize = sizeof(eh);
-    eh.e_phentsize = sizeof(Elf32_Phdr);
+    eh.e_phentsize = sizeof(Phdr);
     eh.e_phnum = 2;
     memset(ph, 0, sizeof(ph));
     ph[0].p_type = PT_INTERP;
     ph[0].p_offset = at;
-    ph[0].p_vaddr = 0x08048000 + at;
+    ph[0].p_vaddr = LOAD_BASE + at;
     ph[0].p_filesz = size - at;
     ph[0].p_memsz = size - at;
     ph[0].p_flags = PF_R;
     ph[1].p_type = PT_LOAD;
-    ph[1].p_vaddr = 0x08048000;
+    ph[1].p_vaddr = LOAD_BASE;
     ph[1].p_filesz = size;
     ph[1].p_memsz = size;
     ph[1].p_flags = PF_R | PF_X;

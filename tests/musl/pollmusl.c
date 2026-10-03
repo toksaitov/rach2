@@ -4,7 +4,8 @@
  * The freestanding pollprobe issues `int 0x80` directly; this test instead
  * goes through musl, so it pins the actual ABI musl emits on i386: poll()
  * becomes SYS_poll (168), and select() becomes SYS_pselect6_time64 (413,
- * which the kernel answers -ENOSYS) falling back to SYS__newselect (142).
+ * which the kernel answers -ENOSYS) falling back to SYS__newselect (142). On
+ * x86-64 poll() is SYS_poll (7) and select() SYS_select (23).
  *
  * It covers the family end to end. poll() of an empty pipe with a short
  * timeout returns 0. After a write, poll() reports the read end POLLIN.

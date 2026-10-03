@@ -2,8 +2,8 @@
  * Exercises the permission and identity syscalls through the ported musl.
  *
  * These are the calls a dropbear pty session and host-key write make, driven
- * by a real musl binary so the exact i386 syscall numbers musl emits are
- * pinned. The expected contracts:
+ * by a real musl binary so the exact syscall numbers musl emits, i386's or
+ * x86-64's, are pinned. The expected contracts:
  *
  * * `fsync(fd)` on a real file returns 0 (KRFFS is RAM, so durability is a
  *   no-op); `fsync` of a bad descriptor is -1 with EBADF.

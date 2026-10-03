@@ -1,6 +1,7 @@
 /**
  * Positioned reads and writes: pread64 and pwrite64, which musl's and GNU
- * libc's pread and pwrite are, with the offset split over ESI and EDI.
+ * libc's pread and pwrite are, with the offset split over ESI and EDI, or on
+ * x86-64 whole in R10.
  *
  * The rows read and write a file at offsets and require the descriptor's own
  * offset to stay where lseek left it, a write past the end to leave a hole of
@@ -8,10 +9,10 @@
  * Linux does. A /proc snapshot and /dev/zero are read at offsets without
  * moving theirs, and a position past 4 GiB in a snapshot is its end. A
  * /proc snapshot and /proc/self/mem seek with SEEK_SET and SEEK_CUR, by
- * _llseek and by the old call 19, and not with SEEK_END. Then
- * each refusal, in Linux's order: a negative offset before the descriptor, a
- * pipe, a socket and the terminal that cannot seek, a descriptor open for the
- * other direction, an end past the signed range, and a directory.
+ * _llseek and by the old call 19 (both lseek, call 8, on x86-64), and not with
+ * SEEK_END. Then each refusal, in Linux's order: a negative offset before the
+ * descriptor, a pipe, a socket and the terminal that cannot seek, a descriptor
+ * open for the other direction, an end past the signed range, and a directory.
  *
  * Prints "PREADMUSL OK" on success and "PREADMUSL FAIL (detail)" otherwise.
  */
@@ -29,6 +30,22 @@
 
 /* The file the rows make and remove. */
 #define FILE_PATH "/pread.tmp"
+
+/*
+ * A positioned transfer at the 64-bit offset of the words `lo` and `hi`:
+ * i386's pread64 and pwrite64 take them in ESI and EDI, and x86-64's take
+ * the whole offset in R10.
+ */
+#if defined __x86_64__
+#define WIDE(lo, hi)                    ((long)((unsigned long)(hi) << 32 | (unsigned long)(lo)))
+#define PREAD_WIDE(fd, buf, n, lo, hi)  syscall(SYS_pread64, fd, buf, n, WIDE(lo, hi))
+#define PWRITE_WIDE(fd, buf, n, lo, hi) syscall(SYS_pwrite64, fd, buf, n, WIDE(lo, hi))
+#define WIDE_ROW                        "the offset in R10"
+#else
+#define PREAD_WIDE(fd, buf, n, lo, hi)  syscall(SYS_pread64, fd, buf, n, lo, hi)
+#define PWRITE_WIDE(fd, buf, n, lo, hi) syscall(SYS_pwrite64, fd, buf, n, lo, hi)
+#define WIDE_ROW                        "the offset in ESI and EDI"
+#endif
 
 /** Report one failed check and return 1, the probe's failure status. */
 static int fail(const char *what)
@@ -86,8 +103,8 @@ static int file_rows(void)
     if (read(fd, buf, 2) != 2 || memcmp(buf, "34", 2) != 0 || !offset_is(fd, 5)) {
         return fail("read goes on from the offset lseek left");
     }
-    if (syscall(SYS_pread64, fd, buf, 3, 7, 0) != 3 || memcmp(buf, "789", 3) != 0) {
-        return fail("the offset in ESI and EDI");
+    if (PREAD_WIDE(fd, buf, 3, 7, 0) != 3 || memcmp(buf, "789", 3) != 0) {
+        return fail(WIDE_ROW);
     }
     close(fd);
 
@@ -143,10 +160,10 @@ static const char mem_mark[] = "procseek";
 
 /**
  * lseek of a /proc snapshot and of /proc/self/mem, as Linux seeks them:
- * SEEK_SET and SEEK_CUR move the offset, by _llseek and by the old call 19,
- * and the read after each finds the bytes at the offset returned, so an
- * offset returned and not kept fails; SEEK_END is EINVAL, and an address of
- * /proc/self/mem reads what the probe has there.
+ * SEEK_SET and SEEK_CUR move the offset, by _llseek and by the old call 19
+ * (both lseek on x86-64), and the read after each finds the bytes at the offset
+ * returned, so an offset returned and not kept fails; SEEK_END is EINVAL, and
+ * an address of /proc/self/mem reads what the probe has there.
  */
 static int proc_seek_rows(void)
 {
@@ -184,7 +201,7 @@ static int refusal_rows(void)
     if (!refused(pread(999, buf, 1, -1), EINVAL) || !refused(pread(999, buf, 1, 0), EBADF)) {
         return fail("a negative offset before the descriptor");
     }
-    if (!refused(syscall(SYS_pwrite64, 999, buf, 1, 0, 0x80000000L), EINVAL)) {
+    if (!refused(PWRITE_WIDE(999, buf, 1, 0, 0x80000000L), EINVAL)) {
         return fail("a high word with its sign bit set");
     }
     if (pipe(pipefd) != 0) {
@@ -210,7 +227,7 @@ static int refusal_rows(void)
 
     fd = open(FILE_PATH, O_RDONLY);
     ok = fd >= 0 && refused(pwrite(fd, "r", 1, 0), EBADF);
-    ok = ok && refused(syscall(SYS_pread64, fd, buf, 2, 0xFFFFFFFFL, 0x7FFFFFFFL), EINVAL);
+    ok = ok && refused(PREAD_WIDE(fd, buf, 2, 0xFFFFFFFFL, 0x7FFFFFFFL), EINVAL);
     close(fd);
     fd = open(FILE_PATH, O_WRONLY);
     ok = ok && fd >= 0 && refused(pread(fd, buf, 1, 0), EBADF);
@@ -221,7 +238,7 @@ static int refusal_rows(void)
     dirfd = open("/", O_RDONLY | O_DIRECTORY);
     ok = dirfd >= 0 && refused(pread(dirfd, buf, 1, 0), EISDIR) &&
          refused(pread(dirfd, buf, 0, 0), EISDIR) &&
-         refused(syscall(SYS_pread64, dirfd, buf, 2, 0xFFFFFFFFL, 0x7FFFFFFFL), EINVAL);
+         refused(PREAD_WIDE(dirfd, buf, 2, 0xFFFFFFFFL, 0x7FFFFFFFL), EINVAL);
     close(dirfd);
     dirfd = open("/dev", O_RDONLY | O_DIRECTORY);
     ok = ok && dirfd >= 0 && refused(pread(dirfd, buf, 1, 0), EISDIR);

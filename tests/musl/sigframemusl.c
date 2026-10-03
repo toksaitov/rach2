@@ -11,12 +11,13 @@
  * only after the answer. A handler with SA_ONSTACK runs on the alternate
  * stack, where sigaltstack reports SS_ONSTACK. `int3` reaches a SIGTRAP
  * handler and the program goes on after it. rt_sigpending reports a blocked
- * signal, and the old sigprocmask call blocks one. sigsuspend returns -1 with
- * EINTR once the pending signal's handler has run under the suspend's mask,
- * and the old mask comes back after it. A child's exit reaches a SIGCHLD
- * handler as CLD_EXITED with its pid and status. A handler that nests on a
- * small alternate stack until its frames no longer fit ends the process with
- * SIGSEGV and writes nothing below the stack.
+ * signal, and the old sigprocmask call blocks one, or on x86-64, which has no
+ * old call, rt_sigprocmask of one word. sigsuspend returns -1 with EINTR once
+ * the pending signal's handler has run under the suspend's mask, and the old
+ * mask comes back after it. A child's exit reaches a SIGCHLD handler as
+ * CLD_EXITED with its pid and status. A handler that nests on a small alternate
+ * stack until its frames no longer fit ends the process with SIGSEGV and writes
+ * nothing below the stack.
  *
  * Prints "SIGFRAMEMUSL OK" on success and "SIGFRAMEMUSL FAIL (detail)"
  * otherwise.
@@ -35,6 +36,19 @@
 #include <sys/syscall.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+/*
+ * A mask of one word, which blocks signals by number through BLOCK_RAW: the
+ * old sigprocmask's 32 bits on i386, and on x86-64, which has no old call,
+ * the 64 bits of rt_sigprocmask's whole mask.
+ */
+#if defined SYS_sigprocmask
+typedef uint32_t word_mask_t;
+#define BLOCK_RAW(set, old) syscall(SYS_sigprocmask, SIG_BLOCK, set, old)
+#else
+typedef uint64_t word_mask_t;
+#define BLOCK_RAW(set, old) syscall(SYS_rt_sigprocmask, SIG_BLOCK, set, old, sizeof(word_mask_t))
+#endif
 
 static volatile sig_atomic_t usr1_runs;
 static int usr1_answer = -1;
@@ -326,8 +340,8 @@ int main(void)
     sigset_t block, pending, now;
     stack_t st;
     volatile char *unmapped = (volatile char *)0x00001000;
-    uint32_t old = 0;
-    uint32_t set;
+    word_mask_t old = 0;
+    word_mask_t set;
     pid_t pid;
 
     page = mmap(NULL, 4096, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -387,7 +401,7 @@ int main(void)
         return fail("sigaction SIGUSR2");
     }
     set = 1u << (SIGUSR1 - 1);
-    if (syscall(SYS_sigprocmask, SIG_BLOCK, &set, &old) != 0) {
+    if (BLOCK_RAW(&set, &old) != 0) {
         return fail("the old sigprocmask call");
     }
     sigprocmask(SIG_BLOCK, NULL, &now);

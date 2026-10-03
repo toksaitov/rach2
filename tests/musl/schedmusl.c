@@ -17,11 +17,11 @@
  * SCHED_RR are refused with EPERM, and the other policies, a priority that
  * does not suit its policy, and an unknown policy with EINVAL. The priority
  * ranges are Linux's, and the time slice is one 10 ms tick. The affinity is
- * CPU 0 alone, read raw as the four bytes written; a mask with CPU 0 is
- * accepted and one without it refused. A caller of another user may not
- * change root's process, and a pid of no process is refused with ESRCH. musl
- * answers the policy and parameter calls with ENOSYS itself, so those rows
- * call the kernel through `syscall`.
+ * CPU 0 alone, read raw as the bytes of a long written, four on i386 and eight
+ * on x86-64; a mask with CPU 0 is accepted and one without it refused. A caller
+ * of another user may not change root's process, and a pid of no process is
+ * refused with ESRCH. musl answers the policy and parameter calls with ENOSYS
+ * itself, so those rows call the kernel through `syscall`.
  *
  * /proc/self/oom_score_adj reads 0 at first and is root's, mode 0644, while
  * the process is dumpable; a write, opened as a shell's redirection opens
@@ -55,6 +55,14 @@
 #include <sys/syscall.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+/* The bytes the kernel's affinity mask has, a long's, as Linux rounds the
+ * mask to longs: four on i386 and eight on x86-64. */
+#if defined __x86_64__
+#define MASK_BYTES "eight"
+#else
+#define MASK_BYTES "four"
+#endif
 
 /** Report one failed check and return 1, the probe's failure status. */
 static int fail(const char *what)
@@ -303,8 +311,8 @@ static int scheduling(void)
         !CPU_ISSET(0, &set)) {
         return fail("the affinity is not CPU 0 alone");
     }
-    if (syscall(SYS_sched_getaffinity, 0L, (long)sizeof(set), &set) != 4) {
-        return fail("the raw sched_getaffinity did not return the four bytes it wrote");
+    if (syscall(SYS_sched_getaffinity, 0L, (long)sizeof(set), &set) != (long)sizeof(long)) {
+        return fail("the raw sched_getaffinity did not return the " MASK_BYTES " bytes it wrote");
     }
     if (syscall(SYS_sched_getaffinity, 0L, 3L, &set) != -1 || errno != EINVAL) {
         return fail("an affinity of three bytes was not refused with EINVAL");

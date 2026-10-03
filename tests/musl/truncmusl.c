@@ -1,7 +1,8 @@
 /**
  * truncate by path: truncate64, which musl's and GNU libc's truncate are,
  * with the length in ECX and EDX, and the older call 92 with a signed 32-bit
- * length in ECX.
+ * length in ECX. On x86-64 both are truncate, call 76, with the whole length
+ * in RSI.
  *
  * The rows shorten and lengthen a file through both, and require an
  * extension to read as zeros and a descriptor open on the file to see each
@@ -36,6 +37,20 @@
 
 /* A length past the room a new, empty file's node has. */
 #define FAR 65536
+
+/*
+ * The truncate of a 64-bit length given as its low and high words: i386's
+ * truncate64, which takes them in two registers, and x86-64's truncate,
+ * which takes the length in one.
+ */
+#if defined __x86_64__
+#define TRUNCATE_WIDE(path, lo, hi) \
+    syscall(SYS_truncate, path, (long)((unsigned long)(hi) << 32 | (unsigned long)(lo)))
+#define WIDE_ROW "call 76 with the length in one word"
+#else
+#define TRUNCATE_WIDE(path, lo, hi) syscall(SYS_truncate64, path, lo, hi)
+#define WIDE_ROW                    "call 193 with the length in two words"
+#endif
 
 /** Report one failed check and return 1, the probe's failure status. */
 static int fail(const char *what)
@@ -137,8 +152,8 @@ static int length_rows(void)
     if (syscall(SYS_truncate, FILE_PATH, 2L) != 0 || !size_is(fd, 2)) {
         return fail("call 92");
     }
-    if (syscall(SYS_truncate64, FILE_PATH, 7L, 0L) != 0 || !size_is(fd, 7)) {
-        return fail("call 193 with the length in two words");
+    if (TRUNCATE_WIDE(FILE_PATH, 7L, 0L) != 0 || !size_is(fd, 7)) {
+        return fail(WIDE_ROW);
     }
     close(fd);
     if (fresh_file() != 0 || (fd = open(FILE_PATH, O_RDWR)) < 0) {
@@ -185,7 +200,7 @@ static int refusal_rows(void)
 
     if (!refused(truncate(FILE_PATH, -1), EINVAL) ||
         !refused(syscall(SYS_truncate, "/no.such.trunc", -5L), EINVAL) ||
-        !refused(syscall(SYS_truncate64, NULL, 0L, 0x80000000L), EINVAL)) {
+        !refused(TRUNCATE_WIDE(NULL, 0L, 0x80000000L), EINVAL)) {
         return fail("a negative length before the path");
     }
     if (!refused(truncate("/no.such.trunc", 0), ENOENT) || !refused(truncate("", 0), ENOENT)) {
@@ -215,7 +230,7 @@ static int refusal_rows(void)
         return fail("a path of 4096 bytes");
     }
     free(longpath);
-    if (!refused(syscall(SYS_truncate64, FILE_PATH, 0L, 1L), EFBIG)) {
+    if (!refused(TRUNCATE_WIDE(FILE_PATH, 0L, 1L), EFBIG)) {
         return fail("4 GiB on KRFFS");
     }
     return 0;

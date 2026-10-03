@@ -3,7 +3,8 @@
  * the kernel in the type of socket(2) and the flags of accept4(2), as Linux
  * takes them.
  *
- * The calls go through socketcall by number and not through musl, which sets
+ * The calls go through socketcall by number, or on x86-64, which has no
+ * socketcall, through the calls of their own, and not through musl, which sets
  * the flags itself with fcntl when the kernel refuses them and so would hide
  * a kernel that does. A type with another bit above its low four, and an
  * accept4 flag other than the two, are EINVAL. A socket made with
@@ -51,6 +52,7 @@ static int fail(const char *what)
     return 1;
 }
 
+#if defined SYS_socketcall
 /** Make the socket operation `call` with the arguments `a` to `d`; its
  * result, or -1 with errno set. */
 static long sc(int call, long a, long b, long c, long d)
@@ -63,6 +65,16 @@ static long sc(int call, long a, long b, long c, long d)
     args[3] = d;
     return syscall(SYS_socketcall, call, args);
 }
+#else
+/** Make the socket operation `call` with the arguments `a` to `d` through
+ * the call x86-64 has for it; its result, or -1 with errno set. */
+static long sc(int call, long a, long b, long c, long d)
+{
+    static const long nr[] = {0, SYS_socket, SYS_bind, SYS_connect, SYS_listen};
+
+    return syscall(call == SC_ACCEPT4 ? SYS_accept4 : nr[call], a, b, c, d);
+}
+#endif
 
 /** Whether `fd` is close-on-exec and non-blocking exactly as `cloexec` and
  * `nonblock` say. */

@@ -9,14 +9,13 @@
  * host's mkhash mints); getrlimit(RLIMIT_NOFILE) reports the real limit,
  * a thousand and twenty-four descriptors; gethostname() round-trips with
  * sethostname(); root sets the real time ahead and back again through
- * clock_settime, settimeofday and stime, and reads back each time it set;
- * dup3 onto an
- * explicit high fd with O_CLOEXEC dups and sets close-on-exec; an advisory
- * fcntl(F_SETLK) read lock on it is granted, and a write lock refused with
- * EBADF, since the file is open for reading alone, as in Linux; and the
- * credential walk a login server performs works through libc: the seteuid
- * excursion and return, the real drop (gid first, then uid), and no way back
- * up afterward, nor to the host name or the clock.
+ * clock_settime, settimeofday and stime (which x86-64 does not have), and reads
+ * back each time it set; dup3 onto an explicit high fd with O_CLOEXEC dups and
+ * sets close-on-exec; an advisory fcntl(F_SETLK) read lock on it is granted,
+ * and a write lock refused with EBADF, since the file is open for reading
+ * alone, as in Linux; and the credential walk a login server performs works
+ * through libc: the seteuid excursion and return, the real drop (gid first,
+ * then uid), and no way back up afterward, nor to the host name or the clock.
  *
  * Prints "AUTHMUSL OK" on success, "AUTHMUSL FAIL" otherwise. Linked against
  * the ported musl.
@@ -35,10 +34,19 @@
 #include <stdint.h>
 #include <time.h>
 
-/* The i386 calls with 32-bit times, which musl names for time64 programs by
- * other names. */
+/*
+ * The calls with times of a long's width, which musl names for time64
+ * programs by other names: i386's stime and settimeofday, whose times are 32
+ * bits wide, and x86-64's settimeofday, whose are 64. x86-64 has no stime.
+ */
+#if defined __x86_64__
+#define NR_SETTIMEOFDAY 164
+typedef long tv_word_t;
+#else
 #define NR_STIME        25
 #define NR_SETTIMEOFDAY 79
+typedef int32_t tv_word_t;
+#endif
 
 /** Whether the real time reads `sec` seconds, give or take two. */
 static int reads_near(long long sec)
@@ -50,18 +58,21 @@ static int reads_near(long long sec)
 
 /**
  * Set the real time `delta` seconds ahead with clock_settime, back with the
- * kernel's settimeofday, whose timeval has 32-bit fields, and to the second it
- * reads with stime: 0 when each reads back the time it set, and -1 with the
- * errno of the first call refused, or EIO for a time that did not take.
+ * kernel's settimeofday, whose timeval has fields of a long's width, and to the
+ * second it reads with stime where there is one: 0 when each reads back the
+ * time it set, and -1 with the errno of the first call refused, or EIO for a
+ * time that did not take.
  */
 static int clock_step(long delta)
 {
     struct timespec now, ahead;
     struct {
-        int32_t sec;
-        int32_t usec;
+        tv_word_t sec;
+        tv_word_t usec;
     } tv;
+#if defined NR_STIME
     int32_t sec;
+#endif
 
     if (clock_gettime(CLOCK_REALTIME, &now) != 0) {
         return -1;
@@ -75,8 +86,8 @@ static int clock_step(long delta)
         errno = EIO;
         return -1;
     }
-    tv.sec = (int32_t)(now.tv_sec - delta);
-    tv.usec = (int32_t)(now.tv_nsec / 1000);
+    tv.sec = (tv_word_t)(now.tv_sec - delta);
+    tv.usec = (tv_word_t)(now.tv_nsec / 1000);
     if (syscall(NR_SETTIMEOFDAY, &tv, NULL) != 0) {
         return -1;
     }
@@ -84,6 +95,7 @@ static int clock_step(long delta)
         errno = EIO;
         return -1;
     }
+#if defined NR_STIME
     sec = tv.sec;
     if (syscall(NR_STIME, &sec) != 0) {
         return -1;
@@ -92,6 +104,7 @@ static int clock_step(long delta)
         errno = EIO;
         return -1;
     }
+#endif
     return 0;
 }
 

@@ -4,18 +4,19 @@
  * An ordinary hosted C program that drives four contracts. First, a plain
  * SIGUSR1 handler installed with sigaction (sa_flags=0, so musl wires up
  * SA_RESTORER -> __restore -> the legacy sigreturn(119) trampoline, the common
- * path for a handler that takes no siginfo) runs when the signal is raised to
- * self, and control resumes after it. Second, a signal blocked with sigprocmask
- * stays pending instead of running, and is delivered once unblocked. Third,
- * the default action terminates: a child that abort()s with no handler is
- * reaped as killed by SIGABRT (WIFSIGNALED / WTERMSIG). Fourth, an SA_SIGINFO
- * handler finds the interrupted context in Linux's layout: the user code
- * selector and a stack pointer in the saved registers, the floating-point
- * state's address, the mask from before the handler, and a siginfo that names
- * raise's tkill and its sender. A handler that finds the user code selector,
- * the stack pointer or the floating-point state missing reports the context
- * and ends the program itself, since a return through that frame would
- * restore no registers and fault before any report.
+ * path for a handler that takes no siginfo; x86-64 has no legacy sigreturn, and
+ * there musl's __restore_rt makes rt_sigreturn(15)) runs when the signal is
+ * raised to self, and control resumes after it. Second, a signal blocked with
+ * sigprocmask stays pending instead of running, and is delivered once
+ * unblocked. Third, the default action terminates: a child that abort()s with
+ * no handler is reaped as killed by SIGABRT (WIFSIGNALED / WTERMSIG). Fourth,
+ * an SA_SIGINFO handler finds the interrupted context in Linux's layout: the
+ * user code selector and a stack pointer in the saved registers, the
+ * floating-point state's address, the mask from before the handler, and a
+ * siginfo that names raise's tkill and its sender. A handler that finds the
+ * user code selector, the stack pointer or the floating-point state missing
+ * reports the context and ends the program itself, since a return through that
+ * frame would restore no registers and fault before any report.
  *
  * "SIGMUSL OK" means the whole path worked through libc: sigaction, the signal
  * mask, synchronous delivery on syscall return, musl's restorer trampoline,
@@ -32,6 +33,24 @@
 #include <stdlib.h>
 #include <sys/wait.h>
 #include <ucontext.h>
+
+/*
+ * The saved registers a handler checks, by each architecture's index into
+ * gregs: the code segment, whose user selector is 0x1B on i386 and 0x33 on
+ * x86-64, where it is the low 16 bits of the word that also has gs and fs,
+ * and the stack pointer.
+ */
+#if defined __x86_64__
+#define CTX_CS  REG_CSGSFS
+#define CTX_SP  REG_RSP
+#define SP_NAME "rsp"
+#define USER_CS 0x33
+#else
+#define CTX_CS  REG_CS
+#define CTX_SP  REG_ESP
+#define SP_NAME "esp"
+#define USER_CS 0x1B
+#endif
 
 static volatile sig_atomic_t handler_ran;
 static volatile sig_atomic_t handler_sig;
@@ -55,9 +74,10 @@ static void usr1_handler(int sig)
 static void context_fail(void)
 {
     char line[128];
-    int n = snprintf(line, sizeof(line),
-                     "SIGMUSL FAIL: ucontext cs=0x%lx esp=0x%lx fpregs=0x%lx usr1-masked=%d\n",
-                     context_cs, context_esp, context_fpregs, context_mask_has_usr1);
+    int n =
+        snprintf(line, sizeof(line),
+                 "SIGMUSL FAIL: ucontext cs=0x%lx " SP_NAME "=0x%lx fpregs=0x%lx usr1-masked=%d\n",
+                 context_cs, context_esp, context_fpregs, context_mask_has_usr1);
 
     if (n > 0) {
         (void)write(1, line, (size_t)n < sizeof(line) ? (size_t)n : sizeof(line) - 1);
@@ -77,11 +97,11 @@ static void info_handler(int sig, siginfo_t *info, void *context)
     info_signo = info->si_signo;
     info_code = info->si_code;
     info_pid = info->si_pid;
-    context_cs = (unsigned long)uc->uc_mcontext.gregs[REG_CS] & 0xFFFFu;
-    context_esp = (unsigned long)uc->uc_mcontext.gregs[REG_ESP];
+    context_cs = (unsigned long)uc->uc_mcontext.gregs[CTX_CS] & 0xFFFFu;
+    context_esp = (unsigned long)uc->uc_mcontext.gregs[CTX_SP];
     context_fpregs = (unsigned long)uc->uc_mcontext.fpregs;
     context_mask_has_usr1 = sigismember(&uc->uc_sigmask, SIGUSR1);
-    if (context_cs != 0x1B || context_esp == 0 || context_fpregs == 0) {
+    if (context_cs != USER_CS || context_esp == 0 || context_fpregs == 0) {
         context_fail();
     }
 }
@@ -110,8 +130,8 @@ static int run_context(void)
         printf("SIGMUSL FAIL: siginfo code=%d pid=%d\n", (int)info_code, (int)info_pid);
         return 1;
     }
-    if (context_cs != 0x1B || context_esp == 0 || context_fpregs == 0 || context_mask_has_usr1) {
-        printf("SIGMUSL FAIL: ucontext cs=0x%lx esp=0x%lx fpregs=0x%lx usr1-masked=%d\n",
+    if (context_cs != USER_CS || context_esp == 0 || context_fpregs == 0 || context_mask_has_usr1) {
+        printf("SIGMUSL FAIL: ucontext cs=0x%lx " SP_NAME "=0x%lx fpregs=0x%lx usr1-masked=%d\n",
                context_cs, context_esp, context_fpregs, context_mask_has_usr1);
         return 1;
     }

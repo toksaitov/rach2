@@ -15,7 +15,7 @@
  * clock by id that reads what it reported, or one tick more, and that
  * advances by the three ticks it spins between two reports. Real time and
  * time since boot resolve to the microsecond, and the coarse and CPU clocks
- * to the 10 ms tick, and the 64-bit call answers as the 32-bit one.
+ * to the 10 ms tick, and on i686 the 64-bit call answers as the 32-bit one.
  *
  * `clock_nanosleep` is called through `syscall`, since musl answers some
  * clocks itself and uses `nanosleep` for a relative sleep of real time. An
@@ -46,11 +46,23 @@
 #include <time.h>
 #include <unistd.h>
 
-/* The kernel's 32-bit timespec, which the raw calls take. */
-struct ts32 {
+/*
+ * The kernel's timespec of a long's width, which the raw calls take: 32 bits
+ * on i386, whose clock_nanosleep and clock_getres of a 64-bit timespec are
+ * calls of their own, and 64 on x86-64, which has only the one of each.
+ */
+struct kts {
     long sec;
     long nsec;
 };
+
+#if defined __x86_64__
+#define SYS_CLOCK_NANOSLEEP SYS_clock_nanosleep
+#define SYS_CLOCK_GETRES    SYS_clock_getres
+#else
+#define SYS_CLOCK_NANOSLEEP SYS_clock_nanosleep_time32
+#define SYS_CLOCK_GETRES    SYS_clock_getres_time32
+#endif
 
 /* One tick, the granularity of the coarse and CPU clocks, in nanoseconds. */
 #define TICK_NS 10000000L
@@ -80,23 +92,23 @@ static long long ns_of(clockid_t clk)
     return (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
 }
 
-/** A 32-bit timespec as nanoseconds. */
-static long long ns32(const struct ts32 *ts)
+/** A kernel timespec as nanoseconds. */
+static long long ns_kts(const struct kts *ts)
 {
     return (long long)ts->sec * 1000000000LL + ts->nsec;
 }
 
-/** A time in nanoseconds as a 32-bit timespec. */
-static void to32(long long ns, struct ts32 *ts)
+/** A time in nanoseconds as a kernel timespec. */
+static void to_kts(long long ns, struct kts *ts)
 {
     ts->sec = (long)(ns / 1000000000LL);
     ts->nsec = (long)(ns % 1000000000LL);
 }
 
 /** The raw clock_nanosleep: 0, or -1 with errno set. */
-static long sleep_raw(long clk, long flags, const struct ts32 *req, struct ts32 *rem)
+static long sleep_raw(long clk, long flags, const struct kts *req, struct kts *rem)
 {
-    return syscall(SYS_clock_nanosleep_time32, clk, flags, req, rem);
+    return syscall(SYS_CLOCK_NANOSLEEP, clk, flags, req, rem);
 }
 
 /** Spend a while in user mode without a system call. */
@@ -202,8 +214,9 @@ static int clocks(void)
             return fail("a coarse or CPU clock does not resolve to the tick");
         }
     }
+#if defined SYS_clock_getres_time64
     for (i = 0; i <= 7; i++) {
-        struct ts32 r32;
+        struct kts r32;
         long long r64[2];
 
         if (syscall(SYS_clock_getres_time32, (long)i, &r32) != 0 ||
@@ -212,7 +225,8 @@ static int clocks(void)
             return fail("clock_getres_time64 does not answer as clock_getres");
         }
     }
-    if (syscall(SYS_clock_getres_time32, (long)CLOCK_MONOTONIC, NULL) != 0) {
+#endif
+    if (syscall(SYS_CLOCK_GETRES, (long)CLOCK_MONOTONIC, NULL) != 0) {
         return fail("a resolution asked for with no timespec was refused");
     }
     if (clock_gettime((clockid_t)12, &res) == 0 || errno != EINVAL) {
@@ -330,15 +344,15 @@ static int sleeps(void)
                                    CLOCK_REALTIME_COARSE, CLOCK_MONOTONIC_COARSE};
     static const long absolute[] = {CLOCK_MONOTONIC, CLOCK_BOOTTIME, CLOCK_REALTIME};
     struct sigaction sa;
-    struct ts32 req;
-    struct ts32 rem;
+    struct kts req;
+    struct kts rem;
     long long due;
     long long start;
     unsigned int i;
 
     for (i = 0; i < sizeof(absolute) / sizeof(absolute[0]); i++) {
         due = ns_of((clockid_t)absolute[i]) + 50000000LL;
-        to32(due, &req);
+        to_kts(due, &req);
         if (sleep_raw(absolute[i], TIMER_ABSTIME, &req, NULL) != 0) {
             return fail("an absolute sleep did not return 0");
         }
@@ -347,13 +361,13 @@ static int sleeps(void)
         }
     }
     start = ns_of(CLOCK_MONOTONIC);
-    to32(50000000LL, &req);
+    to_kts(50000000LL, &req);
     if (sleep_raw(CLOCK_MONOTONIC, 0, &req, NULL) != 0 ||
         ns_of(CLOCK_MONOTONIC) - start < 50000000LL) {
         return fail("a relative sleep of 50 ms took less than 50 ms of time since boot");
     }
     start = ns_of(CLOCK_MONOTONIC);
-    to32(start - 1000000000LL, &req);
+    to_kts(start - 1000000000LL, &req);
     if (sleep_raw(CLOCK_MONOTONIC, TIMER_ABSTIME, &req, NULL) != 0 ||
         ns_of(CLOCK_MONOTONIC) - start > 1000000000LL) {
         return fail("an absolute sleep to a time already past did not return");
@@ -375,11 +389,11 @@ static int sleeps(void)
     if (sleep_raw(CLOCK_MONOTONIC, 0, &req, &rem) != -1 || errno != EINTR || alarms != 1) {
         return fail("a signal did not end a relative sleep with EINTR");
     }
-    if (rem.sec < 0 || rem.nsec < 0 || rem.nsec >= 1000000000L || ns32(&rem) == 0 ||
-        ns32(&rem) > ns32(&req)) {
+    if (rem.sec < 0 || rem.nsec < 0 || rem.nsec >= 1000000000L || ns_kts(&rem) == 0 ||
+        ns_kts(&rem) > ns_kts(&req)) {
         return fail("the remainder of a relative sleep is not within its interval");
     }
-    to32(ns_of(CLOCK_MONOTONIC) + 5000000000LL, &req);
+    to_kts(ns_of(CLOCK_MONOTONIC) + 5000000000LL, &req);
     rem.sec = -1;
     rem.nsec = -1;
     alarm_in(100000);
@@ -391,7 +405,7 @@ static int sleeps(void)
         return fail("an absolute sleep a signal ended wrote a remainder");
     }
 
-    to32(10000000LL, &req);
+    to_kts(10000000LL, &req);
     for (i = 0; i < sizeof(nosleep) / sizeof(nosleep[0]); i++) {
         if (sleep_raw(nosleep[i], 0, &req, NULL) != -1 || errno != EOPNOTSUPP) {
             return fail("a clock Linux cannot sleep on was not refused with EOPNOTSUPP");
@@ -429,7 +443,7 @@ static void *spinner(void *arg)
 static int cpu_sleep_sibling(void)
 {
     struct sigaction sa;
-    struct ts32 req;
+    struct kts req;
     pthread_t t;
     long long before;
     long rc;
@@ -442,7 +456,7 @@ static int cpu_sleep_sibling(void)
         return fail("a spinning thread could not be made");
     }
     before = ns_of(CLOCK_PROCESS_CPUTIME_ID);
-    to32(50000000LL, &req);
+    to_kts(50000000LL, &req);
     alarm_in(10000000);
     rc = sleep_raw(CLOCK_PROCESS_CPUTIME_ID, 0, &req, NULL);
     alarm_in(0);

@@ -10,15 +10,15 @@
  * reaches read(2), and after a truncation and a growth a write to the file
  * is seen through the mapping. mprotect will not make a shared mapping of a
  * file opened read-only writable, and will a private one. Shared anonymous
- * memory ignores a raw mmap2's page offset, a file's offset whose last page
- * would not fit in 32 bits is EOVERFLOW, and a page of a file in memory
- * past its end is never backed. mremap without MREMAP_MAYMOVE does not grow a
- * mapping into the one after it, and with the flag moves the mapping with
- * its bytes. A shrink in place keeps the bytes of the page it keeps and
- * frees the two pages it cuts: MAP_FIXED_NOREPLACE maps them again, and the
- * byte stored in them before reads as zero. mremap refuses an old length
- * that would wrap past the end of memory, leaving the mapping; a fixed
- * mremap that shrinks a mapping is held to RLIMIT_AS by what it leaves;
+ * memory ignores a raw mmap2's page offset (mmap's, in bytes, on x86-64), a
+ * file's offset whose last page would not fit in 32 bits is EOVERFLOW, and a
+ * page of a file in memory past its end is never backed. mremap without
+ * MREMAP_MAYMOVE does not grow a mapping into the one after it, and with the
+ * flag moves the mapping with its bytes. A shrink in place keeps the bytes of
+ * the page it keeps and frees the two pages it cuts: MAP_FIXED_NOREPLACE maps
+ * them again, and the byte stored in them before reads as zero. mremap refuses
+ * an old length that would wrap past the end of memory, leaving the mapping; a
+ * fixed mremap that shrinks a mapping is held to RLIMIT_AS by what it leaves;
  * madvise(MADV_DONTNEED) gives a private anonymous mapping zero pages
  * again, and madvise and msync refuse a length that would round up to 0. A
  * write through /proc/self/mem to a read-only page a fork shared leaves the
@@ -47,9 +47,20 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#define FILE_PATH  "/tmp/mapmusl"
-#define SHM_PATH   "/dev/shm/mapmusl"
-#define PAGE       4096
+#define FILE_PATH "/tmp/mapmusl"
+#define SHM_PATH  "/dev/shm/mapmusl"
+#define PAGE      4096
+
+/*
+ * A raw mapping at a file offset given in pages: i386's mmap2 takes the page
+ * offset, and x86-64's mmap, which has no mmap2, the offset in bytes.
+ */
+#if defined SYS_mmap2
+#define MMAP_PAGES(len, prot, flags, fd, pgoff) syscall(SYS_mmap2, 0, len, prot, flags, fd, pgoff)
+#else
+#define MMAP_PAGES(len, prot, flags, fd, pgoff) \
+    syscall(SYS_mmap, 0, len, prot, flags, fd, (unsigned long)(pgoff) * PAGE)
+#endif
 #define EXT2_MAGIC 0xEF53
 
 static int fail(const char *what)
@@ -234,8 +245,8 @@ static int readonly_shared(void)
    empty file, is never backed: a child that touches it dies of SIGSEGV. */
 static int offsets(void)
 {
-    char *m = (char *)syscall(SYS_mmap2, 0, PAGE, PROT_READ | PROT_WRITE,
-                              MAP_SHARED | MAP_ANONYMOUS, -1, 0x80000000u);
+    char *m = (char *)MMAP_PAGES(PAGE, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1,
+                                 0x80000000u);
     int status;
     pid_t pid;
     int fd;
@@ -249,11 +260,10 @@ static int offsets(void)
     if (fd < 0) {
         return fail("a file in /dev/shm for the offsets");
     }
-    if (syscall(SYS_mmap2, 0, PAGE, PROT_READ, MAP_SHARED, fd, 0xFFFFFFFFu) != -1 ||
-        errno != EOVERFLOW) {
+    if (MMAP_PAGES(PAGE, PROT_READ, MAP_SHARED, fd, 0xFFFFFFFFu) != -1 || errno != EOVERFLOW) {
         return fail("mmap2 of a file whose last page is past 32 bits");
     }
-    m = (char *)syscall(SYS_mmap2, 0, PAGE, PROT_READ, MAP_SHARED, fd, 0x80000000u);
+    m = (char *)MMAP_PAGES(PAGE, PROT_READ, MAP_SHARED, fd, 0x80000000u);
     if (m == MAP_FAILED) {
         return fail("mmap2 of a file at a page offset of 2^31");
     }
@@ -304,7 +314,7 @@ static int remaps(void)
         return fail("the pages a shrink cut were still mapped");
     }
     munmap(cut, 2 * PAGE);
-    if (mremap(moved, 0xFFFFF000u, PAGE, MREMAP_MAYMOVE | MREMAP_FIXED, moved) != MAP_FAILED ||
+    if (mremap(moved, (size_t)-PAGE, PAGE, MREMAP_MAYMOVE | MREMAP_FIXED, moved) != MAP_FAILED ||
         errno != EINVAL || moved[0] != 'r') {
         return fail("mremap took an old length that wraps past the end of memory");
     }
@@ -320,10 +330,10 @@ static int remaps(void)
     if (madvise(m, PAGE, MADV_DONTNEED) != 0 || m[0] != 0 || m[PAGE] != 'z') {
         return fail("MADV_DONTNEED");
     }
-    if (madvise(m, 0xFFFFFFFFu, MADV_DONTNEED) != -1 || errno != EINVAL) {
+    if (madvise(m, (size_t)-1, MADV_DONTNEED) != -1 || errno != EINVAL) {
         return fail("madvise took a length that rounds up to 0 for an empty range");
     }
-    if (msync(m, 0xFFFFFFFFu, MS_SYNC) != -1 || errno != EINVAL) {
+    if (msync(m, (size_t)-1, MS_SYNC) != -1 || errno != EINVAL) {
         return fail("msync took a length that rounds up to 0 for an empty range");
     }
     munmap(m, 2 * PAGE);

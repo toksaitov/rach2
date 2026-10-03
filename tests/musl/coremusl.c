@@ -4,14 +4,14 @@
  * A child that raises its soft RLIMIT_CORE and aborts leaves "core" in its
  * working directory, where a symbolic link had the name: the parent's wait
  * reports SIGABRT with WCOREDUMP, the link's target is never created, and
- * the file is an i386 ELF core whose NT_PRSTATUS names the child and
- * SIGABRT, whose NT_PRPSINFO has the program's name, whose NT_AUXV has the
- * page size, and whose PT_LOAD for the child's data has the word the child
- * stored there. A child whose soft limit is two pages leaves no WCOREDUMP
- * and a file of its own, with the child's notes, that stops before its last
- * segment ends and has no more than two pages of bytes that are not zero,
- * since only a hole reads as zeros without being written. One whose limit
- * is 0, and one that is not dumpable, leave no file and no WCOREDUMP.
+ * the file is an ELF core of the architecture, i386 or x86-64, whose
+ * NT_PRSTATUS names the child and SIGABRT, whose NT_PRPSINFO has the program's
+ * name, whose NT_AUXV has the page size, and whose PT_LOAD for the child's data
+ * has the word the child stored there. A child whose soft limit is two pages
+ * leaves no WCOREDUMP and a file of its own, with the child's notes, that stops
+ * before its last segment ends and has no more than two pages of bytes that are
+ * not zero, since only a hole reads as zeros without being written. One whose
+ * limit is 0, and one that is not dumpable, leave no file and no WCOREDUMP.
  *
  * A dump whose last readable region ends in a page never touched is given
  * a zero at its last byte, so the file has its whole length, and that zero
@@ -51,10 +51,41 @@
 #define TARGET_PATH DIR_PATH "/target"
 #define MARK        0x5ca1ab1eu
 
+/*
+ * A core file's layout on each architecture: its ELF class and machine, and
+ * the offsets of what the rows read in the notes, NT_PRSTATUS's signal and
+ * pid and NT_PRPSINFO's program name, whose structs Linux lays out with
+ * longs; NT_AUXV is pairs of longs. STACK_TOP is the end of the stack, the
+ * kernel at 3 GiB on i386 and the last page of the lower half on x86-64.
+ */
+#if defined __x86_64__
+typedef Elf64_Ehdr Ehdr;
+typedef Elf64_Phdr Phdr;
+typedef Elf64_Nhdr Nhdr;
+#define ELF_CLASS     ELFCLASS64
+#define ELF_MACHINE   EM_X86_64
+#define PRSTATUS_SIZE 336
+#define PR_PID        32
+#define PRPSINFO_SIZE 136
+#define PR_FNAME      40
+#define STACK_TOP     0x00007FFFFFFFF000ul
+#else
+typedef Elf32_Ehdr Ehdr;
+typedef Elf32_Phdr Phdr;
+typedef Elf32_Nhdr Nhdr;
+#define ELF_CLASS     ELFCLASS32
+#define ELF_MACHINE   EM_386
+#define PRSTATUS_SIZE 144
+#define PR_PID        24
+#define PRPSINFO_SIZE 124
+#define PR_FNAME      28
+#define STACK_TOP     0xC0000000u
+#endif
+#define PR_CURSIG 12
+
 /* The pages `hole_dump` maps over the top of the stack: two readable ones,
  * the first marked and the second never touched, and the top page, where
  * the arguments are, with no access, so that the dump reads nothing there. */
-#define STACK_TOP  0xC0000000u
 #define HOLE_BASE  (STACK_TOP - 3u * 4096u)
 #define HOLE_FILL  0xA5
 #define ARGS_FLOOR (STACK_TOP - 4096u)
@@ -136,30 +167,30 @@ static unsigned char *slurp(const char *path, size_t *size)
 
 /** Check the notes of `seg`: the child's status and signal, its name and
  * its page size. */
-static int notes_check(const unsigned char *core, const Elf32_Phdr *seg, pid_t child)
+static int notes_check(const unsigned char *core, const Phdr *seg, pid_t child)
 {
     const unsigned char *p = core + seg->p_offset;
     const unsigned char *end = p + seg->p_filesz;
     int status = 0, info = 0, auxv = 0;
 
     while (p + 12 <= end) {
-        const Elf32_Nhdr *n = (const Elf32_Nhdr *)p;
+        const Nhdr *n = (const Nhdr *)p;
         const unsigned char *desc = p + 12 + ((n->n_namesz + 3) & ~3u);
 
-        if (n->n_type == NT_PRSTATUS && n->n_descsz == 144 && !status) {
+        if (n->n_type == NT_PRSTATUS && n->n_descsz == PRSTATUS_SIZE && !status) {
             int16_t cursig;
             int32_t pid;
 
-            memcpy(&cursig, desc + 12, sizeof(cursig));
-            memcpy(&pid, desc + 24, sizeof(pid));
+            memcpy(&cursig, desc + PR_CURSIG, sizeof(cursig));
+            memcpy(&pid, desc + PR_PID, sizeof(pid));
             status = cursig == SIGABRT && pid == child;
-        } else if (n->n_type == NT_PRPSINFO && n->n_descsz == 124) {
-            info = strncmp((const char *)desc + 28, "coremusl", 16) == 0;
+        } else if (n->n_type == NT_PRPSINFO && n->n_descsz == PRPSINFO_SIZE) {
+            info = strncmp((const char *)desc + PR_FNAME, "coremusl", 16) == 0;
         } else if (n->n_type == NT_AUXV) {
-            const uint32_t *a = (const uint32_t *)desc;
+            const unsigned long *a = (const unsigned long *)desc;
             uint32_t i;
 
-            for (i = 0; i + 1 < n->n_descsz / 4 && a[i] != AT_NULL; i += 2) {
+            for (i = 0; i + 1 < n->n_descsz / sizeof(*a) && a[i] != AT_NULL; i += 2) {
                 if (a[i] == AT_PAGESZ) {
                     auxv = a[i + 1] == 4096;
                 }
@@ -174,13 +205,13 @@ static int notes_check(const unsigned char *core, const Elf32_Phdr *seg, pid_t c
     return 0;
 }
 
-/** Check the core file of `child`: an ELF core for i386 whose notes are
- * right and whose memory has the mark at the marker's address. */
+/** Check the core file of `child`: an ELF core of the architecture whose
+ * notes are right and whose memory has the mark at the marker's address. */
 static int core_check(pid_t child)
 {
     size_t size;
     unsigned char *core = slurp(CORE_PATH, &size);
-    const Elf32_Ehdr *eh = (const Elf32_Ehdr *)core;
+    const Ehdr *eh = (const Ehdr *)core;
     uintptr_t at = (uintptr_t)&marker;
     int notes = 0, found = 0;
     int i;
@@ -189,13 +220,13 @@ static int core_check(pid_t child)
         return fail("reading the core file");
     }
     errno = 0;
-    if (memcmp(eh->e_ident, ELFMAG, SELFMAG) != 0 || eh->e_ident[EI_CLASS] != ELFCLASS32 ||
-        eh->e_type != ET_CORE || eh->e_machine != EM_386 || eh->e_phentsize != sizeof(Elf32_Phdr) ||
-        eh->e_phoff + (size_t)eh->e_phnum * sizeof(Elf32_Phdr) > size) {
+    if (memcmp(eh->e_ident, ELFMAG, SELFMAG) != 0 || eh->e_ident[EI_CLASS] != ELF_CLASS ||
+        eh->e_type != ET_CORE || eh->e_machine != ELF_MACHINE || eh->e_phentsize != sizeof(Phdr) ||
+        eh->e_phoff + (size_t)eh->e_phnum * sizeof(Phdr) > size) {
         return fail("the ELF header");
     }
     for (i = 0; i < eh->e_phnum; i++) {
-        const Elf32_Phdr *ph = (const Elf32_Phdr *)(core + eh->e_phoff) + i;
+        const Phdr *ph = (const Phdr *)(core + eh->e_phoff) + i;
 
         if ((size_t)ph->p_offset + ph->p_filesz > size) {
             return fail("a segment past the end of the file");
@@ -227,7 +258,7 @@ static int short_check(pid_t child, size_t limit)
 {
     size_t size, i, end = 0, written = 0;
     unsigned char *core = slurp(CORE_PATH, &size);
-    const Elf32_Ehdr *eh = (const Elf32_Ehdr *)core;
+    const Ehdr *eh = (const Ehdr *)core;
     int notes = 0;
     int k;
 
@@ -236,11 +267,11 @@ static int short_check(pid_t child, size_t limit)
     }
     errno = 0;
     if (memcmp(eh->e_ident, ELFMAG, SELFMAG) != 0 || eh->e_type != ET_CORE ||
-        eh->e_phoff + (size_t)eh->e_phnum * sizeof(Elf32_Phdr) > size) {
+        eh->e_phoff + (size_t)eh->e_phnum * sizeof(Phdr) > size) {
         return fail("the short core's ELF header");
     }
     for (k = 0; k < eh->e_phnum; k++) {
-        const Elf32_Phdr *ph = (const Elf32_Phdr *)(core + eh->e_phoff) + k;
+        const Phdr *ph = (const Phdr *)(core + eh->e_phoff) + k;
 
         if (ph->p_type == PT_NOTE) {
             if ((size_t)ph->p_offset + ph->p_filesz > size) {
@@ -313,7 +344,7 @@ static uint32_t dump_bytes(void)
         line = strchr(line, '\n');
         line = line ? line + 1 : NULL;
     }
-    return 52u + 32u * (regions + 1u) + note_bytes + 4096u * pages;
+    return sizeof(Ehdr) + sizeof(Phdr) * (regions + 1u) + note_bytes + 4096u * pages;
 }
 
 /**
@@ -406,17 +437,17 @@ static pid_t hole_child(const char *dir, rlim_t less, int *status, uint32_t *cou
 static int marked_page(const char *path, size_t *size, size_t *whole)
 {
     unsigned char *core = slurp(path, size);
-    const Elf32_Ehdr *eh = (const Elf32_Ehdr *)core;
+    const Ehdr *eh = (const Ehdr *)core;
     size_t end = 0, i;
     int k, marked = 0;
 
     if (!core || *size < sizeof(*eh) || memcmp(eh->e_ident, ELFMAG, SELFMAG) != 0 ||
-        eh->e_phoff + (size_t)eh->e_phnum * sizeof(Elf32_Phdr) > *size) {
+        eh->e_phoff + (size_t)eh->e_phnum * sizeof(Phdr) > *size) {
         free(core);
         return -1;
     }
     for (k = 0; k < eh->e_phnum; k++) {
-        const Elf32_Phdr *ph = (const Elf32_Phdr *)(core + eh->e_phoff) + k;
+        const Phdr *ph = (const Phdr *)(core + eh->e_phoff) + k;
 
         if (ph->p_type == PT_LOAD && (size_t)ph->p_offset + ph->p_filesz > end) {
             end = (size_t)ph->p_offset + ph->p_filesz;

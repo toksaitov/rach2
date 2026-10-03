@@ -1097,10 +1097,41 @@ static int nested_forked(void)
     return 0;
 }
 
+#if defined __x86_64__
+/* eventfd(284) and pipe(22), which the kernel serves as eventfd2 and pipe2
+ * without flags, leave the caller's RSI, where those take their flags, as it
+ * was: `syscall` keeps every register but RAX, RCX and R11, and a compiler
+ * keeps a value in RSI across a call that does not name it. */
+static int calls_keep_registers(void)
+{
+    unsigned long si;
+    long r;
+    int fds[2];
+
+    __asm__ __volatile__("syscall"
+                         : "=a"(r), "=S"(si)
+                         : "0"(284L), "D"(0L), "1"(0x5A5A5A5A5A5A5A5AUL)
+                         : "rcx", "r11", "memory");
+    if (r < 0 || si != 0x5A5A5A5A5A5A5A5AUL) {
+        return fail("eventfd changed the caller's RSI");
+    }
+    close((int)r);
+    __asm__ __volatile__("syscall"
+                         : "=a"(r), "=S"(si)
+                         : "0"(22L), "D"(fds), "1"(0x5A5A5A5A5A5A5A5AUL)
+                         : "rcx", "r11", "memory");
+    if (r != 0 || si != 0x5A5A5A5A5A5A5A5AUL) {
+        return fail("pipe changed the caller's RSI");
+    }
+    close(fds[0]);
+    close(fds[1]);
+    return 0;
+}
+#else
 /* eventfd(323) and pipe(42), which the kernel serves as eventfd2 and pipe2
  * without flags, leave the caller's ECX as it was: a compiler keeps a value
  * there across a call that does not name it. */
-static int calls_keep_ecx(void)
+static int calls_keep_registers(void)
 {
     unsigned int c;
     int fds[2];
@@ -1125,10 +1156,11 @@ static int calls_keep_ecx(void)
     close(fds[1]);
     return 0;
 }
+#endif
 
 int main(void)
 {
-    if (calls_keep_ecx() || counters() || sets() || hangup_no_events() || number_reused() ||
+    if (calls_keep_registers() || counters() || sets() || hangup_no_events() || number_reused() ||
         added_while_waiting() || polled_after_edge() || polled_set_woken() || nested() ||
         in_turn() || failed_copy() || long_timeout() || pipe_each_write() || unix_kinds() ||
         unix_shutdown_edge() || unix_own_room() || unix_accept_edge() || udp_arrival() ||
