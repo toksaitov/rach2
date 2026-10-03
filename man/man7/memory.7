@@ -1,12 +1,13 @@
-.Dd October 2, 2026
+.Dd October 3, 2026
 .Dt MEMORY 7
 .Os
 .Sh NAME
 .Nm memory
 .Nd memory allocation and accounting
 .Sh DESCRIPTION
-The kernel accounts for physical memory from the Multiboot memory map
-using 64-bit arithmetic.
+The kernel accounts for physical memory from the memory map the loader
+passes, Multiboot's or multiboot2's, or under UEFI the firmware's EFI
+memory map, using 64-bit arithmetic.
 Its virtual address space occupies the gigabyte starting at
 .Li 0xC0000000 ,
 with 256 page tables shared by every page directory.

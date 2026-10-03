@@ -27,9 +27,14 @@ each with a
 .Pa guest.mk
 for pdpmake.
 .Ss Boot
-Rach2 boots through Multiboot1, using QEMU's
+Rach2 boots through Multiboot, using QEMU's
 .Fl kernel
-option or GRUB from a disk or USB stick.
+option, or through multiboot2 or Multiboot, using GRUB from a disk or USB
+stick by BIOS or UEFI firmware.
+GRUB starts it by multiboot2 from a GPT disk and from an ISO under UEFI,
+and by Multiboot from an MBR disk and from an ISO by BIOS.
+The kernel calls no UEFI service: it takes the firmware's framebuffer and
+memory map from GRUB, which leaves the firmware's boot services first.
 The test, os-simple, os-real, and recovery images use a KRFFS root in memory.
 A disk root is a KRFFS or ext2 partition, selected by identity with
 .Ql rach2.root=
@@ -58,11 +63,12 @@ and
 Supported devices include ATA, AHCI and NVMe disks; USB keyboards, mice, and
 flash drives through xHCI, on root ports or behind hubs; RTL8139,
 e1000 (Intel 82540EM), and RTL8168GU network cards; PS/2 keyboards and mice;
-VGA text and mode 13h graphics; COM1 serial; Sound Blaster 16,
+VGA text, a text console on the loader's framebuffer, and mode 13h
+graphics; COM1 serial; Sound Blaster 16,
 Intel HDA, and the PC speaker.
 .Pp
-Rach2 does not implement UEFI, Multiboot2, SMP, threads, swap,
-dynamic linking, IPv6, or VESA graphics.
+Rach2 does not use UEFI's services and does not implement SMP, threads,
+swap, dynamic linking, IPv6, or a framebuffer device for programs.
 Every program is statically linked.
 .Ss Images
 .Bl -tag -width rach2-metal-disk

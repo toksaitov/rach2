@@ -96,6 +96,11 @@ At boot the kernel loads into the adapter a font that keeps code page
 Russian, Kyrgyz, Kazakh, Ukrainian and Belarusian, from GNU Unifont, and
 uses it when the adapter reads it back; otherwise the adapter's own font,
 code page 437, stays.
+When the loader leaves a framebuffer, as GRUB does under UEFI and by BIOS
+when its menu asks for one, the kernel draws the same 80 columns and 25
+rows on it, centered, in that font with code page 437's ASCII and box
+drawing, each character 8 pixels by 16, or 16 by 32 on a screen 2000
+pixels wide or more, and the cursor as two lines at the foot of its cell.
 A Latin letter with an accent that the font lacks is drawn without it,
 punctuation as its ASCII likeness, and any other character the font lacks
 as one
