@@ -27,7 +27,7 @@
 #include "e1000.h"
 #include "../net.h"
 #include "../ethernet/ethernet.h"
-#include "../../arch/x86/isr.h"
+#include "../../irq.h"
 #include "../../kio.h"
 #include "../../mm/paging.h"
 #include "../../arch/x86/pci.h"
@@ -595,7 +595,7 @@ static int e1000_init(struct netdev *nd, int nth)
 
     pci_enable_bus_master(&e->pci);
 
-    register_isr_handler((uint8_t)(32 + e->pci.irq), e1000_irq, "e1000");
+    register_isr_handler((uint8_t)IRQ_VECTOR(e->pci.irq), e1000_irq, "e1000");
 
     io->w32(e, E1000_RCTL, E1000_RCTL_EN | E1000_RCTL_BAM | E1000_RCTL_SZ_2048 | E1000_RCTL_SECRC);
     io->w32(e, E1000_TCTL,

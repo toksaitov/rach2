@@ -4,27 +4,10 @@
 #include "../../kio.h"
 #include "pic.h"
 
+#include "../../irq.h"
+
 #include "../../lib/kint.h"
 #include "../../lib/kstring.h"
-
-/*
- * Saved register frame pushed by the ISR common procedure.
- */
-struct isr_params {
-    uint32_t gs, fs, es, ds;
-    uint32_t edi, esi, ebp, esp, ebx, edx, ecx, eax;
-    uint32_t vector;
-    uint32_t error_code;
-    uint32_t eip, cs, eflags, user_esp, user_ss;
-};
-
-typedef struct isr_params isr_params_t;
-
-/*
- * Interrupt handler prototype. The frame is passed by pointer so a handler can
- * edit the saved registers (for example, a syscall return value).
- */
-typedef void (*isr_handler_t)(isr_params_t *);
 
 /*
  * First 32 interrupt handlers
@@ -102,31 +85,11 @@ extern void msi15(void);
 /* The vector the APIC raises for an interrupt that went away. */
 extern void spurious_isr(void);
 
-/** The count of interrupts taken on a vector from 32 to 63. */
-uint32_t isr_vector_count(int vector);
-
-/** The name registered in `slot` of `vector`'s chain, or null past the last. */
-const char *isr_vector_name(int vector, int slot);
-
-/** Every interrupt routed since the boot. */
-uint32_t isr_interrupt_total(void);
-
-/** How many handlers a vector's chain has. */
-#define ISR_MAX_VECTOR_HANDLERS 4
-
 /* The vectors a device may be given for its messages: the sixteen above
  * the 8259's, which are the ones the IDT has entries for; a seventeenth
  * device is refused. */
 #define ISR_MSI_FIRST 48
 #define ISR_MSI_LAST  63
-
-/**
- * A vector for a device's messages, the lowest not yet given, or -1 when
- * every one is taken. A device asks once, when it enables its messages,
- * and `/proc/interrupts` reports the vector with the device's name, which
- * is how a reader finds it: the number is not fixed.
- */
-int isr_alloc_vector(void);
 
 /*
  * Syscall interrupt handler (int 0x80)
@@ -142,11 +105,5 @@ void init_isr(void);
  * the task gate of vector 8; nothing calls it.
  */
 void isr_double_fault(void);
-
-/** Append `handler` to a vector's chain. */
-void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *name);
-
-/** Replace a vector's entire chain with a single `handler`. */
-void set_isr_handler(uint8_t vector, isr_handler_t handler, const char *name);
 
 #endif

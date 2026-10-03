@@ -10,14 +10,24 @@ typedef int bool;
 #define false 0
 #define true  1
 
-/* Unsigned size of an object, in bytes. */
-typedef unsigned int size_t;
-
-/* Signed size, for a byte count or a negative error return. */
-typedef signed int ssize_t;
-
-/* Signed difference between two pointers. */
-typedef signed int ptrdiff_t;
+/*
+ * The size of an object, the signed size a count or a negative error
+ * return takes, and the difference between two pointers: each as wide as a
+ * pointer, in the compiler's own type for it, so `sizeof` and the builtins
+ * agree with the declarations here.
+ */
+#ifdef __SIZE_TYPE__
+typedef __SIZE_TYPE__ size_t;
+#else
+typedef unsigned long size_t;
+#endif
+#ifdef __PTRDIFF_TYPE__
+typedef __PTRDIFF_TYPE__ ssize_t;
+typedef __PTRDIFF_TYPE__ ptrdiff_t;
+#else
+typedef long ssize_t;
+typedef long ptrdiff_t;
+#endif
 
 /*
  * What the compiler is told about a function beyond its type. `K_NORETURN`

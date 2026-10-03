@@ -4,7 +4,7 @@
 
 #include "tmpfs.h"
 
-#include "../arch/x86/isr.h"
+#include "../irq.h"
 #include "fd.h"
 #include "krffs.h"
 #include "../mm/kheap.h"

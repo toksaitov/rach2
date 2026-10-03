@@ -12,7 +12,7 @@
 #include "sys/arch/i686/gdt.h"
 #include "sys/arch/i686/tss.h"
 #include "sys/arch/i686/idt.h"
-#include "sys/arch/x86/isr.h"
+#include "sys/irq.h"
 #include "sys/mm/heap.h"
 #include "sys/mm/paging.h"
 #include "sys/mm/mm.h"

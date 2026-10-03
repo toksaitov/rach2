@@ -21,7 +21,21 @@ typedef signed long long int64_t;
 /* Unsigned 64-bit quad word. */
 typedef unsigned long long uint64_t;
 
-/* Unsigned integer wide enough to hold any memory address. */
-typedef unsigned int uintptr_t;
+/*
+ * An integer as wide as a pointer: 32 bits on i686 and 32-bit ARM, 64 on
+ * x86-64 and 64-bit ARM. The compiler's own name for the type is taken,
+ * so the type is the one its builtins and its warnings expect; TinyCC,
+ * which does not define it, gets `long`, as wide as a pointer on all four.
+ */
+#ifdef __UINTPTR_TYPE__
+typedef __UINTPTR_TYPE__ uintptr_t;
+#else
+typedef unsigned long uintptr_t;
+#endif
+#ifdef __INTPTR_TYPE__
+typedef __INTPTR_TYPE__ intptr_t;
+#else
+typedef long intptr_t;
+#endif
 
 #endif

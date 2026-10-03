@@ -10,7 +10,7 @@
  */
 
 #include "../klog.h"
-#include "../arch/x86/isr.h"
+#include "../irq.h"
 #include "../arch/x86/lapic.h"
 #include "procfs.h"
 
@@ -2895,7 +2895,7 @@ static int procfs_gen_interrupts(struct procfs_text *t)
 {
     int v;
 
-    for (v = 32; v <= ISR_MSI_LAST; v++) {
+    for (v = ISR_DEVICE_FIRST; v <= ISR_DEVICE_LAST; v++) {
         uint32_t n = isr_vector_count(v);
         int slot;
         int named = 0;
@@ -2906,7 +2906,9 @@ static int procfs_gen_interrupts(struct procfs_text *t)
         ap_u32(t, (uint32_t)v);
         ap_str(t, ":\t");
         ap_u32(t, n);
-        ap_str(t, v < 48 ? "\tPIC\t" : "\tMSI\t");
+        ap_str(t, "\t");
+        ap_str(t, isr_vector_source(v));
+        ap_str(t, "\t");
         for (slot = 0; slot < ISR_MAX_VECTOR_HANDLERS; slot++) {
             const char *name = isr_vector_name(v, slot);
 

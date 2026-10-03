@@ -16,7 +16,7 @@
 #include "sysv.h"
 #include "mqueue.h"
 
-#include "../arch/x86/isr.h"
+#include "../irq.h"
 #include "../proc/process.h"
 #include "../proc/tgroup.h"
 #include "../proc/ns.h"

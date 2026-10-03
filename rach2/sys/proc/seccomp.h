@@ -2,7 +2,7 @@
 #define _SECCOMP_H_
 
 #include "../lib/kint.h"
-#include "../arch/x86/isr.h"
+#include "../irq.h"
 #include "process.h"
 
 /*

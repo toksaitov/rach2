@@ -2,7 +2,7 @@
 #define _FUTEX_H_
 
 #include "../lib/kint.h"
-#include "../arch/x86/isr.h"
+#include "../irq.h"
 
 /*
  * futex(2): a process sleeps on a word of its memory until another wakes the

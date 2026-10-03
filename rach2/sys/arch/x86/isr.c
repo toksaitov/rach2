@@ -493,3 +493,9 @@ uint32_t isr_interrupt_total(void)
 {
     return irq_count;
 }
+
+/** "PIC" for the 8259's sixteen vectors, "MSI" for the messages' above. */
+const char *isr_vector_source(int vector)
+{
+    return vector < ISR_MSI_FIRST ? "PIC" : "MSI";
+}

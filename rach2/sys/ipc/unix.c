@@ -4,7 +4,7 @@
 
 #include "unix.h"
 
-#include "../arch/x86/isr.h"
+#include "../irq.h"
 #include "../fs/file.h"
 #include "../fs/krffs.h"
 #include "../fs/vfs.h"

@@ -19,7 +19,7 @@
 #include "poll.h"
 #include "poll_select.h"
 #include "epoll.h"
-#include "../arch/x86/isr.h"
+#include "../irq.h"
 #include "../fs/fd.h"
 #include "../fs/file.h"
 #include "../proc/process.h"

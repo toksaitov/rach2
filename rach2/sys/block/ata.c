@@ -65,7 +65,7 @@
 #include "disk.h"
 
 #include "../kio.h"
-#include "../arch/x86/isr.h"
+#include "../irq.h"
 #include "../lib/kirq.h"
 #include "../lib/kstring.h"
 #include "../arch/x86/pci.h"

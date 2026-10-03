@@ -34,7 +34,7 @@
 #include "../arch/x86/serial.h"
 #include "../arch/x86/rtc.h"
 #include "../lib/kirq.h"
-#include "../arch/x86/isr.h"
+#include "../irq.h"
 #include "../arch/x86/pic.h"
 #include "../proc/suspend.h"
 #include "../proc/wait_queue.h"

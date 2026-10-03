@@ -19,7 +19,7 @@
 
 #include "../cmdline.h"
 #include "../arch/x86/pic.h"
-#include "../arch/x86/isr.h"
+#include "../irq.h"
 #include "../klog.h"
 #include "../arch/x86/lapic.h"
 #include "../lib/kirq.h"
@@ -522,12 +522,12 @@ static void usb_interrupts_start(void)
         }
         irq = xhci_line_irq(hc);
         if (irq > 0) {
-            register_isr_handler((uint8_t)(32 + irq), usb_msi_handler, "xhci");
+            register_isr_handler((uint8_t)IRQ_VECTOR(irq), usb_msi_handler, "xhci");
             if (xhci_interrupts_enable_line(hc) == irq) {
                 interrupts_started = 1;
                 interrupt_sources[n].line_irq = irq;
                 klog(KLOG_INFO, "usb", "interrupts: xhci%d: the line, irq %d on vector %d", n, irq,
-                     32 + irq);
+                     IRQ_VECTOR(irq));
                 continue;
             }
         }

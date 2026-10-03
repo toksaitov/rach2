@@ -8,7 +8,7 @@
 #include "mm.h"
 #include "paging.h"
 #include "shmem.h"
-#include "../arch/x86/isr.h"
+#include "../irq.h"
 #include "../fs/krffs.h"
 #include "../fs/vfs.h"
 #include "../block/loop.h"

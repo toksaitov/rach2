@@ -11,17 +11,23 @@
 # the link line short however many objects there are. The response file is
 # written by one builtin printf (no execve) into a temporary file renamed only
 # after every line landed, so a printf that failed part way cannot leave a
-# shorter list that a retry would treat as current. OBJS keeps loader.o first:
-# the multiboot header lives in loader.o and the linker keeps input order, so
-# the header stays inside the first 8192 bytes of the kernel where the loaders
-# search for it. /lib/tcc/libtcc1.a supplies the 64-bit helper routines tcc
-# calls where gcc emits the arithmetic inline; -nostdlib keeps the C library and
-# its startup files out of a kernel that must not have them.
+# shorter list that a retry would treat as current. OBJS keeps the
+# architecture's loader.o first: the multiboot header lives in it and the
+# linker keeps input order, so the header stays inside the first 8192 bytes of
+# the kernel where the loaders search for it, at the text address the
+# architecture's list gives (ARCH_TCC_LDFLAGS). /lib/tcc/libtcc1.a supplies the
+# 64-bit helper routines tcc calls where gcc emits the arithmetic inline;
+# -nostdlib keeps the C library and its startup files out of a kernel that must
+# not have them.
 #
 # Run from a writable copy of this tree: make -f guest.mk
 
 KCC = /bin/cc
-KCFLAGS = -m32 -Wall -Wunsupported -nostdlib
+KCFLAGS = -Wall -Wunsupported -nostdlib
+
+# The machine's own architecture, whose directory under sys/arch/ sources.mk
+# takes the processor's files from.
+ARCH != uname -m
 
 include sources.mk
 
@@ -31,7 +37,7 @@ OBJS = $(ASM_SRC:.s=.o) $(C_SRC:.c=.o)
 # link cannot leave a newer partial kernel that the next make treats as
 # current. The structural check runs on the host, after extraction.
 kernel: $(OBJS) kernel.objs
-	$(KCC) -static -nostdlib -o kernel.new @kernel.objs -Wl,-Ttext=0x100074 /lib/tcc/libtcc1.a
+	$(KCC) -static -nostdlib -o kernel.new @kernel.objs $(ARCH_TCC_LDFLAGS) /lib/tcc/libtcc1.a
 	mv kernel.new kernel
 
 kernel.objs: guest.mk sources.mk

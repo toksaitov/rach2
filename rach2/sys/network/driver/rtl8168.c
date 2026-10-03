@@ -36,7 +36,7 @@
 #include "../../arch/x86/udelay.h"
 #include "../../arch/x86/pci.h"
 #include "../../mm/paging.h"
-#include "../../arch/x86/isr.h"
+#include "../../irq.h"
 #include "../../arch/x86/lapic.h"
 
 /* Register access, behind an indirection the host test can replace. */

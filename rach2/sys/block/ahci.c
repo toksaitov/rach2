@@ -9,7 +9,7 @@
 #include "../arch/x86/pci.h"
 #include "../arch/x86/serial.h"
 #include "../mm/paging.h"
-#include "../arch/x86/isr.h"
+#include "../irq.h"
 #include "../arch/x86/lapic.h"
 #include "../lib/kirq.h"
 #include "../arch/x86/pit.h"

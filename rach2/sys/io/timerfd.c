@@ -6,7 +6,7 @@
 #include "timerfd.h"
 
 #include "anon.h"
-#include "../arch/x86/isr.h"
+#include "../irq.h"
 #include "../fs/fd.h"
 #include "../fs/file.h"
 #include "../proc/process.h"

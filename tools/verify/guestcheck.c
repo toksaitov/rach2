@@ -216,27 +216,25 @@ static char *read_file(const char *path)
     return buf;
 }
 
-/* The makefile text with one level of `include` lines inlined, which is
-   how the shared source manifests reach the guest makefiles. */
-static char *guest_text(const char *name)
+/* The architecture whose lists the guest makefiles are read for: what
+   `ARCH != uname -m` gives on a guest of that architecture. */
+static const char *guest_arch = "i686";
+
+/* Append `path`'s makefile text to `out`, with each `include` line replaced
+   by the text it names, in turn. As make and pdpmake read them, an include
+   names a path relative to the top makefile's directory `dir`, and
+   `$(ARCH)` in it is the architecture the guest is read for. */
+static void inline_text(const char *dir, const char *path, const char *name, char *out,
+                        size_t *used, int depth)
 {
-    char path[1200];
-    char *text, *out;
-    char dir[1200];
-    char *slash;
-    size_t used = 0;
+    char *text;
     const char *p;
 
-    snprintf(path, sizeof(path), "%s/%s", repo, name);
+    if (depth > 4)
+        fail("%s nests its includes more than four deep", name);
     text = read_file(path);
     if (text == NULL)
         fail("cannot read %s", name);
-    snprintf(dir, sizeof(dir), "%s", path);
-    slash = strrchr(dir, '/');
-    if (slash != NULL)
-        *slash = '\0';
-    out = xalloc(MAX_TEXT);
-    out[0] = '\0';
     p = text;
     while (*p != '\0') {
         const char *end = strchr(p, '\n');
@@ -251,28 +249,59 @@ static char *guest_text(const char *name)
         line[len] = '\0';
         if (strncmp(line, "include ", 8) == 0) {
             const char *what = line + 8;
+            char rel[MAX_LINE];
             char sub[1400];
-            char *subtext;
+            const char *ref;
+            size_t r = 0;
 
             while (*what == ' ' || *what == '\t')
                 what++;
-            if (snprintf(sub, sizeof(sub), "%s/%s", dir, what) >= (int)sizeof(sub))
+            while (*what != '\0' && r + 1 < sizeof(rel)) {
+                ref = "$(ARCH)";
+                if (strncmp(what, ref, strlen(ref)) == 0) {
+                    if (r + strlen(guest_arch) + 1 >= sizeof(rel))
+                        break;
+                    memcpy(rel + r, guest_arch, strlen(guest_arch));
+                    r += strlen(guest_arch);
+                    what += strlen(ref);
+                } else {
+                    rel[r++] = *what++;
+                }
+            }
+            rel[r] = '\0';
+            if (snprintf(sub, sizeof(sub), "%s/%s", dir, rel) >= (int)sizeof(sub))
                 fail("the path of %s, included by %s, is longer than this "
                      "reads",
-                     what, name);
-            subtext = read_file(sub);
-            if (subtext == NULL)
-                fail("cannot read %s, included by %s", what, name);
-            appendf(out, MAX_TEXT, &used, "the included makefile text", "%s\n", subtext);
-            free(subtext);
+                     rel, name);
+            inline_text(dir, sub, rel, out, used, depth + 1);
         } else {
-            appendf(out, MAX_TEXT, &used, "the makefile text", "%s\n", line);
+            appendf(out, MAX_TEXT, used, "the makefile text", "%s\n", line);
         }
         if (end == NULL)
             break;
         p = end + 1;
     }
     free(text);
+}
+
+/* The makefile text with its `include` lines inlined, which is how the
+   shared source manifests reach the guest makefiles. */
+static char *guest_text(const char *name)
+{
+    char path[1200];
+    char dir[1200];
+    char *out;
+    char *slash;
+    size_t used = 0;
+
+    snprintf(path, sizeof(path), "%s/%s", repo, name);
+    snprintf(dir, sizeof(dir), "%s", path);
+    slash = strrchr(dir, '/');
+    if (slash != NULL)
+        *slash = '\0';
+    out = xalloc(MAX_TEXT);
+    out[0] = '\0';
+    inline_text(dir, path, name, out, &used, 0);
     return out;
 }
 
@@ -451,6 +480,44 @@ static void swap_suffix(char *out, size_t out_len, const char *word, const char 
 /* Expand `$(VAR:.a=.b)` tokens against the text's macros: a whole token
    that is one reference becomes the macro's words with their suffixes
    swapped. */
+/* The name in a plain reference `$(NAME)` that is the whole of `word`, or 0. */
+static int plain_ref(const char *word, char *name, size_t cap)
+{
+    size_t len = strlen(word), n;
+
+    if (len < 4 || word[0] != '$' || word[1] != '(' || word[len - 1] != ')')
+        return 0;
+    for (n = 2; n < len - 1; n++)
+        if (!isalnum((unsigned char)word[n]) && word[n] != '_')
+            return 0;
+    if (len - 3 >= cap)
+        return 0;
+    memcpy(name, word + 2, len - 3);
+    name[len - 3] = '\0';
+    return 1;
+}
+
+/* The words of macro `name`, with each plain reference in its value
+   replaced by that macro's words in turn, as make expands them. */
+static void macro_words(const char *text, const char *name, struct list *out, int depth)
+{
+    struct list value = {NULL, 0, 0};
+    int j;
+
+    if (depth > 8)
+        fail("the macro %s refers through more than eight levels", name);
+    read_macro(text, name, &value);
+    for (j = 0; j < value.n; j++) {
+        char inner[64];
+
+        if (plain_ref(value.item[j], inner, sizeof(inner)))
+            macro_words(text, inner, out, depth + 1);
+        else
+            push(out, value.item[j]);
+    }
+    list_free(&value);
+}
+
 static void expand_tokens(const char *text, const struct list *tokens, struct list *out)
 {
     int i;
@@ -465,7 +532,7 @@ static void expand_tokens(const char *text, const struct list *tokens, struct li
             push(out, tokens->item[i]);
             continue;
         }
-        read_macro(text, name, &value);
+        macro_words(text, name, &value, 0);
         for (j = 0; j < value.n; j++) {
             char word[512];
 
@@ -676,7 +743,8 @@ static void make_list(const char *target, struct list *out)
     FILE *pipe;
     size_t n;
 
-    snprintf(cmd, sizeof(cmd), "make -s -C '%s/rach2' %s 2>/dev/null", repo, target);
+    snprintf(cmd, sizeof(cmd), "make -s -C '%s/rach2' ARCH=%s %s 2>/dev/null", repo, guest_arch,
+             target);
     pipe = popen(cmd, "r");
     if (pipe == NULL)
         fail("cannot run make %s", target);
@@ -725,7 +793,7 @@ static int check_kernel_lists(void)
     char link[MAX_LINE];
     int i, count;
     static const char *const link_needs[] = {
-        "@kernel.objs", "-Wl,-Ttext=0x100074", "/lib/tcc/libtcc1.a",  "-nostdlib",
+        "@kernel.objs", "$(ARCH_TCC_LDFLAGS)", "/lib/tcc/libtcc1.a",  "-nostdlib",
         "-static",      "-o kernel.new",       "mv kernel.new kernel"};
 
     make_list("print-asm-src", &sources);
@@ -772,8 +840,9 @@ static int check_kernel_lists(void)
         strcmp(r->recipe.item[1], "mv kernel.objs.new kernel.objs") != 0)
         fail("kernel.objs must write $(OBJS) whole through the temporary "
              "file and publish it by rename");
-    if (objs.n == 0 || strcmp(objs.item[0], "loader.o") != 0)
-        fail("OBJS does not start with loader.o");
+    if (objs.n == 0 || strlen(objs.item[0]) < strlen("/loader.o") ||
+        strcmp(objs.item[0] + strlen(objs.item[0]) - strlen("/loader.o"), "/loader.o") != 0)
+        fail("OBJS does not start with the architecture's loader.o");
     for (i = 0; i < objs.n; i++) {
         int j;
 
@@ -789,6 +858,17 @@ static int check_kernel_lists(void)
     for (i = 0; i < (int)(sizeof(link_needs) / sizeof(link_needs[0])); i++)
         if (strstr(link, link_needs[i]) == NULL)
             fail("the kernel link line lacks %s", link_needs[i]);
+
+    {
+        struct list ld = {NULL, 0, 0};
+
+        if (!read_macro(text, "ARCH_TCC_LDFLAGS", &ld) || ld.n == 0 ||
+            strncmp(ld.item[0], "-Wl,-Ttext=", strlen("-Wl,-Ttext=")) != 0)
+            fail("sys/arch/%s/sources.mk gives no ARCH_TCC_LDFLAGS with the "
+                 "kernel's text address",
+                 guest_arch);
+        list_free(&ld);
+    }
 
     count = sources.n;
     rules_free(&rules);

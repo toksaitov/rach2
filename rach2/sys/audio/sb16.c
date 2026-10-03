@@ -8,7 +8,7 @@
 #include "dma.h"
 #include "../kio.h"
 #include "../arch/x86/serial.h"
-#include "../arch/x86/isr.h"
+#include "../irq.h"
 
 #define SB16_BASE      0x220
 #define SB16_IRQ       5

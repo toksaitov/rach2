@@ -1,10 +1,13 @@
 # Constants
 
-LOADER = loader
+# The architecture the kernel is built for, i686 unless the caller names
+# another; sys/arch/$(ARCH)/ has its processor's files.
+ARCH ?= i686
+
 KERNEL = kernel
 KERNEL_BIN = $(BUILD)/$(KERNEL)
 
-LINKER_SCRIPT = sys/arch/i686/link
+LINKER_SCRIPT = sys/arch/$(ARCH)/link
 
 # The kernel source lists (ASM_SRC and C_SRC) live in sources.mk, which guest.mk
 # includes too, so one file describes both builds.

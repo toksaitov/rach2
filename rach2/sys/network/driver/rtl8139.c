@@ -24,7 +24,7 @@
 #include "../ethernet/ethernet.h"
 #include "../../kio.h"
 #include "../../arch/x86/serial.h"
-#include "../../arch/x86/isr.h"
+#include "../../irq.h"
 #include "../../arch/x86/pci.h"
 #include "../../lib/kstring.h"
 #include "../../mm/heap.h"
@@ -168,7 +168,7 @@ int rtl8139_init(struct netdev *nd, int nth)
     outw(iobase + RTL_IMR,
          RTL_ISR_ROK | RTL_ISR_TOK | RTL_ISR_RER | RTL_ISR_TER | RTL_ISR_RXOVW | RTL_ISR_FOVW);
 
-    register_isr_handler((uint8_t)(32 + rtl_pci.irq), rtl8139_irq, "rtl8139");
+    register_isr_handler((uint8_t)IRQ_VECTOR(rtl_pci.irq), rtl8139_irq, "rtl8139");
 
     /* Enable the receiver and transmitter (after the buffers are
      * configured). */
