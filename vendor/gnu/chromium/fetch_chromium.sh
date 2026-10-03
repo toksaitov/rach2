@@ -270,8 +270,9 @@ step_fetch()
 }
 
 # The root has the merged /usr of trixie, whose packages expect /bin, /lib
-# and /sbin to be links into /usr; tar keeps the links when a package has
-# files under them.
+# and /sbin to be links into /usr, and on amd64 /lib64 as well, where libc6
+# puts the loader the browser asks for; tar keeps the links when a package
+# has files under them.
 step_unpack()
 {
     rm -rf "$ROOT" "$WORK/files"
@@ -279,6 +280,10 @@ step_unpack()
     ln -s usr/bin "$ROOT/bin"
     ln -s usr/lib "$ROOT/lib"
     ln -s usr/sbin "$ROOT/sbin"
+    if [ "$GNU_DEB_ARCH" = amd64 ]; then
+        mkdir -p "$ROOT/usr/lib64"
+        ln -s usr/lib64 "$ROOT/lib64"
+    fi
     while read -r name _ archive file _ sha; do
         deb="$DEBS/${file##*/}"
         if [ ! -f "$deb" ] || [ "$(sha256_of "$deb")" != "$sha" ]; then
