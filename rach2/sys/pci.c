@@ -585,11 +585,29 @@ int pci_msix_table(const pci_device_t *dev, uint8_t *bar, uint32_t *offset, uint
 }
 
 /**
+ * Enable `dev`'s MSI-X with the function mask set. MSI goes down first,
+ * since a device with both enabled is undefined.
+ */
+int pci_msix_hold(const pci_device_t *dev)
+{
+    uint8_t cap = pci_msix_capability(dev);
+    uint16_t control;
+
+    if (cap == 0) {
+        return -1;
+    }
+    pci_msi_disable(dev);
+    control = pci_read_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2));
+    pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2),
+                       (uint16_t)(control | PCI_MSIX_ENABLE | PCI_MSIX_MASK_ALL));
+    return 0;
+}
+
+/**
  * Program entry 0 of `dev`'s MSI-X table and enable MSI-X.
  *
- * MSI goes down first, since a device with both enabled is undefined. MSI-X
- * is then enabled with every vector masked by the function mask, because
- * some devices answer their table only while MSI-X is enabled; the entry is
+ * MSI-X is held first, enabled with every vector masked, because some
+ * devices answer their table only while MSI-X is enabled; the entry is
  * written with the same address and data MSI sends, and its own mask
  * cleared; and the function mask comes off last, when the entry is whole.
  */
@@ -599,15 +617,12 @@ int pci_msix_enable(const pci_device_t *dev, uintptr_t table, uint8_t vector)
     uint16_t control;
     uint32_t address, data;
 
-    if (cap == 0 || !table) {
+    if (!table || pci_msix_hold(dev) != 0) {
         klog(KLOG_WARN, "pci", "msi-x: %x:%x.%d has no usable msi-x capability", dev->bus,
              dev->device, dev->function);
         return -1;
     }
-    pci_msi_disable(dev);
     control = pci_read_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2));
-    pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2),
-                       (uint16_t)(control | PCI_MSIX_ENABLE | PCI_MSIX_MASK_ALL));
     pci_msi_message(vector, &address, &data);
     mmio_write32(table, address);
     mmio_write32(table + 4, 0);

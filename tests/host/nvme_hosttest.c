@@ -625,6 +625,8 @@ void pci_enable_memory_space(pci_device_t *dev)
 }
 
 static int msix_ok, msi_ok, msix_vector, msi_vector;
+/* The holds of MSI-X, and how many completion queues each found made. */
+static int msix_holds, msix_held_late;
 
 int pci_msix_table(const pci_device_t *dev, uint8_t *bar, uint32_t *offset, uint32_t *entries)
 {
@@ -636,6 +638,14 @@ int pci_msix_table(const pci_device_t *dev, uint8_t *bar, uint32_t *offset, uint
 }
 
 static uintptr_t mapped_last;
+
+int pci_msix_hold(const pci_device_t *dev)
+{
+    (void)dev;
+    msix_holds++;
+    msix_held_late += created_cq != 0;
+    return msix_ok ? 0 : -1;
+}
 
 int pci_msix_enable(const pci_device_t *dev, uintptr_t table, uint8_t vector)
 {
@@ -880,6 +890,7 @@ static void model_reset(void)
     controllers = 1;
     msix_ok = msi_ok = lapic_ok = vector_free = 1;
     msix_vector = msi_vector = -1;
+    msix_holds = msix_held_late = 0;
     nvmepoll = 0;
     policy_allows = 1;
     block0 = 0;
@@ -912,6 +923,8 @@ static void row_bring_up(void)
     CHECK("one I/O queue is asked for", set_queues == 1);
     CHECK("its completion queue has interrupts on vector 0 and comes first",
           created_cq == 1 && created_sq == 1 && cq_flags_bad == 0);
+    CHECK("MSI-X is held, every vector masked, before the completion queue is made",
+          msix_holds == 1 && msix_held_late == 0);
     CHECK("the controller decodes memory, masters the bus and has INTx off",
           (pci_command & (PCI_CMD_MEMORY_SPACE | PCI_CMD_BUS_MASTER | PCI_CMD_INTERRUPT_DIS)) ==
               (PCI_CMD_MEMORY_SPACE | PCI_CMD_BUS_MASTER | PCI_CMD_INTERRUPT_DIS));

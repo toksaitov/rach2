@@ -194,6 +194,18 @@ void pci_msi_disable(const pci_device_t *dev);
 int pci_msix_table(const pci_device_t *dev, uint8_t *bar, uint32_t *offset, uint32_t *entries);
 
 /**
+ * Enable `dev`'s MSI-X with every vector masked by the function mask, and
+ * MSI disabled: 0, or -1 when the device has no MSI-X capability.
+ *
+ * A device may tie a vector to what it sets up only while MSI-X is on, as
+ * QEMU's NVMe controller ties a completion queue's vector when the queue is
+ * created, so a driver that will take messages holds MSI-X this way before
+ * that setup. A message raised meanwhile waits in the device's pending bits
+ * until `pci_msix_enable` lifts the mask.
+ */
+int pci_msix_hold(const pci_device_t *dev);
+
+/**
  * Program entry 0 of `dev`'s MSI-X table, which the caller has mapped at
  * `table`, to send `vector` to this processor, and enable MSI-X with MSI
  * disabled: 0, or -1 with the reason in the log. The local APIC must be

@@ -502,9 +502,13 @@ static int nvme_create_io_queues(struct nvme_ctrl *c)
 
 /**
  * Map BAR0 and make the controller decode it and master the bus, with its
- * INTx line off: the queues are created with interrupts enabled, and until
- * `nvme_start` enables messages they must reach no line. A BAR the kernel
- * cannot map, one above its addresses on i686 among them, is refused.
+ * INTx line off and its MSI-X held, enabled with every vector masked: the
+ * queues are created with interrupts enabled, and until `nvme_start` enables
+ * messages they must reach no line. MSI-X is on before the queues are made
+ * because a controller may tie a queue's vector only then; QEMU's does, and
+ * one whose queue was made with MSI-X off never sends its messages. A BAR
+ * the kernel cannot map, one above its addresses on i686 among them, is
+ * refused.
  */
 static int nvme_map(struct nvme_ctrl *c)
 {
@@ -534,6 +538,7 @@ static int nvme_map(struct nvme_ctrl *c)
     pci_write_config16(c->pci.bus, c->pci.device, c->pci.function, PCI_COMMAND,
                        (uint16_t)(command | PCI_CMD_INTERRUPT_DIS));
     pci_enable_bus_master(&c->pci);
+    (void)pci_msix_hold(&c->pci);
     return 0;
 }
 

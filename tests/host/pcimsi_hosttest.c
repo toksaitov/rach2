@@ -296,7 +296,20 @@ static void msix_rows(const pci_device_t *dev)
 
     model_reset();
     model_cap(0x60, PCI_CAP_ID_MSI, 0x34);
+    space[0x62] = 0x80 | (unsigned char)PCI_MSI_ENABLE;
+    model_cap(0xA0, PCI_CAP_ID_MSIX, 0x60);
+    space[0xA2] = 0x01;
+    table[3] = 1;
+    check(pci_msix_hold(dev) == 0, "a device with MSI-X is held");
+    check((cfg16(0x62) & PCI_MSI_ENABLE) == 0, "with MSI disabled");
+    check((cfg16(0xA2) & PCI_MSIX_ENABLE) != 0 && (cfg16(0xA2) & PCI_MSIX_MASK_ALL) != 0,
+          "and MSI-X enabled with the function mask on");
+    check(table[3] == 1, "and its table untouched");
+
+    model_reset();
+    model_cap(0x60, PCI_CAP_ID_MSI, 0x34);
     space[0x62] = 0x80;
+    check(pci_msix_hold(dev) == -1 && nwrites == 0, "a device without MSI-X is not held");
     check(pci_msix_table(dev, &bar, &offset, &entries) == -1,
           "a device without MSI-X has no table");
     check(pci_msix_enable(dev, (uintptr_t)table, 55) == -1, "and is refused");

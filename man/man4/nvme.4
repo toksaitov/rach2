@@ -33,6 +33,9 @@ place among those the controller published.
 Its model, serial number and firmware revision are the controller's.
 .Pp
 The boot reads and writes by polling the completion queue.
+MSI-X is enabled with every vector masked before the I/O queues are
+created, since a controller may tie a queue to its vector only while
+MSI-X is on.
 Once the root is mounted, each controller is moved to its MSI-X message,
 or to MSI when it has no MSI-X table, on a vector of its own; a transfer
 then sleeps its caller until the message, and a page fault with
