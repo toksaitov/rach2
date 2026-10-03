@@ -4,9 +4,8 @@
  * (isr_handler.s), whose frame has the vector SYSCALL_VECTOR.
  *
  * Where x86-64 has a call i386 makes another way, a short adapter here puts
- * the arguments in the form the shared handler takes: mmap's offset in
- * bytes for mmap2's in pages, and accept and semop as accept4 and semtimedop
- * with the argument they lack.
+ * the arguments in the form the shared handler takes: accept and semop as
+ * accept4 and semtimedop with the argument they lack.
  */
 
 #include "sysnr.h"
@@ -100,16 +99,6 @@ static long with_arg(isr_params_t *params, uint64_t *reg, uint64_t value,
     return rc;
 }
 
-/* mmap(2) takes its offset in bytes, a multiple of the page; mmap2 in
- * pages. */
-static long sys_mmap_bytes(isr_params_t *params)
-{
-    if (params->r9 & (PAGE_SIZE - 1u)) {
-        return -EINVAL;
-    }
-    return with_arg(params, &params->r9, params->r9 >> PAGE_SHIFT, sys_mmap2);
-}
-
 /* accept(2): accept4 with no flags. */
 static long sys_accept_noflags(isr_params_t *params)
 {
@@ -133,7 +122,7 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_LSTAT] = sys_lstat64;
     table[SYS_POLL] = sys_poll;
     table[SYS_LSEEK] = sys_lseek;
-    table[SYS_MMAP] = sys_mmap_bytes;
+    table[SYS_MMAP] = sys_mmap;
     table[SYS_MPROTECT] = sys_mprotect;
     table[SYS_MUNMAP] = sys_munmap;
     table[SYS_BRK] = sys_brk;
@@ -141,6 +130,8 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_RT_SIGPROCMASK] = sys_rt_sigprocmask;
     table[SYS_RT_SIGRETURN] = sys_rt_sigreturn;
     table[SYS_IOCTL] = sys_ioctl;
+    table[SYS_PREAD64] = sys_pread64;
+    table[SYS_PWRITE64] = sys_pwrite64;
     table[SYS_READV] = sys_readv;
     table[SYS_WRITEV] = sys_writev;
     table[SYS_ACCESS] = sys_access;
@@ -253,6 +244,8 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_SIGALTSTACK] = sys_sigaltstack;
     table[SYS_MKNOD] = sys_mknod;
     table[SYS_PERSONALITY] = sys_personality;
+    table[SYS_STATFS] = sys_statfs;
+    table[SYS_FSTATFS] = sys_fstatfs;
     table[SYS_GETPRIORITY] = sys_getpriority;
     table[SYS_SETPRIORITY] = sys_setpriority;
     table[SYS_SCHED_SETPARAM] = sys_sched_setparam;
@@ -279,6 +272,7 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_SETHOSTNAME] = sys_sethostname;
     table[SYS_SETDOMAINNAME] = sys_setdomainname;
     table[SYS_GETTID] = sys_gettid;
+    table[SYS_READAHEAD] = sys_readahead;
     table[SYS_SETXATTR] = sys_setxattr;
     table[SYS_LSETXATTR] = sys_lsetxattr;
     table[SYS_FSETXATTR] = sys_fsetxattr;
@@ -299,6 +293,7 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_GETDENTS64] = sys_getdents64;
     table[SYS_SET_TID_ADDRESS] = sys_set_tid_address;
     table[SYS_SEMTIMEDOP] = sys_semtimedop_time64;
+    table[SYS_FADVISE64] = sys_fadvise64;
     table[SYS_TIMER_CREATE] = sys_timer_create;
     table[SYS_TIMER_SETTIME] = sys_timer_settime;
     table[SYS_TIMER_GETTIME] = sys_timer_gettime;
@@ -348,6 +343,7 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_SIGNALFD] = sys_signalfd;
     table[SYS_TIMERFD_CREATE] = sys_timerfd_create;
     table[SYS_EVENTFD] = sys_eventfd;
+    table[SYS_FALLOCATE] = sys_fallocate;
     table[SYS_TIMERFD_SETTIME] = sys_timerfd_settime;
     table[SYS_TIMERFD_GETTIME] = sys_timerfd_gettime;
     table[SYS_ACCEPT4] = sys_accept4;
@@ -357,6 +353,8 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_DUP3] = sys_dup3;
     table[SYS_PIPE2] = sys_pipe2;
     table[SYS_INOTIFY_INIT1] = sys_inotify_init1;
+    table[SYS_PREADV] = sys_preadv;
+    table[SYS_PWRITEV] = sys_pwritev;
     table[SYS_RT_TGSIGQUEUEINFO] = sys_rt_tgsigqueueinfo;
     table[SYS_RECVMMSG] = sys_recvmmsg;
     table[SYS_PRLIMIT64] = sys_prlimit64;

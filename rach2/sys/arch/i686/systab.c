@@ -4,6 +4,7 @@
  */
 
 #include "sysnr.h"
+#include "sys_ia32.h"
 
 #include "../arch.h"
 #include "../../../kernel.h"
@@ -84,8 +85,8 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_FORK] = sys_fork;
     table[SYS_READ] = sys_read;
     table[SYS_WRITE] = sys_write;
-    table[SYS_PREAD64] = sys_pread64;
-    table[SYS_PWRITE64] = sys_pwrite64;
+    table[SYS_PREAD64] = sys_ia32_pread64;
+    table[SYS_PWRITE64] = sys_ia32_pwrite64;
     table[SYS_OPEN] = sys_open;
     table[SYS_CLOSE] = sys_close;
     table[SYS_WAITPID] = sys_waitpid;
@@ -260,10 +261,10 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_DUP3] = sys_dup3;
     table[SYS_SYNC] = sys_sync;
     table[SYS_SYNCFS] = sys_syncfs;
-    table[SYS_FALLOCATE] = sys_fallocate;
+    table[SYS_FALLOCATE] = sys_ia32_fallocate;
     table[SYS_READAHEAD] = sys_readahead;
-    table[SYS_FADVISE64] = sys_fadvise64;
-    table[SYS_FADVISE64_64] = sys_fadvise64_64;
+    table[SYS_FADVISE64] = sys_ia32_fadvise64;
+    table[SYS_FADVISE64_64] = sys_ia32_fadvise64_64;
     table[SYS_SETXATTR] = sys_setxattr;
     table[SYS_LSETXATTR] = sys_lsetxattr;
     table[SYS_FSETXATTR] = sys_fsetxattr;
@@ -279,9 +280,9 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_REBOOT] = sys_reboot;
     table[SYS_FSYNC] = sys_fsync;
     table[SYS_TRUNCATE] = sys_truncate;
-    table[SYS_TRUNCATE64] = sys_truncate64;
+    table[SYS_TRUNCATE64] = sys_ia32_truncate64;
     table[SYS_FTRUNCATE] = sys_ftruncate;
-    table[SYS_FTRUNCATE64] = sys_ftruncate64;
+    table[SYS_FTRUNCATE64] = sys_ia32_ftruncate64;
     table[SYS_MOUNT] = sys_mount;
     table[SYS_UMOUNT2] = sys_umount2;
     table[SYS_FDATASYNC] = sys_fsync;

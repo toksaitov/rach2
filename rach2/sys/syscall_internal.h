@@ -31,7 +31,21 @@ long sys_exit(isr_params_t *params);
 
 long sys_ftruncate(isr_params_t *params);
 
-long sys_ftruncate64(isr_params_t *params);
+/*
+ * The cores of the calls whose arguments differ in shape between i386 and
+ * a 64-bit architecture, Linux's ksys_ functions: each takes its offsets
+ * and lengths whole. The shared sys_ handler of each is the one-register
+ * form a 64-bit architecture maps; i386's, which split a 64-bit value into
+ * two registers, are in arch/i686/sys_ia32.c.
+ */
+long ksys_ftruncate(int fd, uint64_t length);
+long ksys_truncate(const char __user *upath, long long length);
+long ksys_pread64(int fd, char __user *buf, uint32_t count, long long pos);
+long ksys_pwrite64(int fd, const char __user *buf, uint32_t count, long long pos);
+long ksys_fadvise64(int fd, long long len, uint32_t advice);
+long ksys_fallocate(int fd, uint32_t mode, uint64_t offset, uint64_t len);
+long ksys_mmap_pgoff(uintptr_t addr, uintptr_t length, uint32_t prot, uint32_t flags, int fd,
+                     unsigned long pgoff);
 
 long sys_write(isr_params_t *params);
 
@@ -125,8 +139,6 @@ int32_t fs_flags_ioctl(fd_entry_t *entry, uint32_t request, uintptr_t arg, int *
 
 long sys_fadvise64(isr_params_t *params);
 
-long sys_fadvise64_64(isr_params_t *params);
-
 long sys_setxattr(isr_params_t *params);
 long sys_lsetxattr(isr_params_t *params);
 long sys_fsetxattr(isr_params_t *params);
@@ -152,6 +164,10 @@ long sys_pread64(isr_params_t *params);
 
 long sys_pwrite64(isr_params_t *params);
 
+long sys_preadv(isr_params_t *params);
+
+long sys_pwritev(isr_params_t *params);
+
 int32_t readv_dgram(fd_entry_t *entry, uintptr_t iov_user, int iovcnt, uint32_t *src_ip,
                     uint16_t *src_port, int peek, int32_t *whole);
 
@@ -176,6 +192,16 @@ long sys_readlinkat(isr_params_t *params);
 long sys_stat64(isr_params_t *params);
 
 long sys_lstat64(isr_params_t *params);
+
+struct user_statfs;
+
+long ksys_statfs(const char __user *upath, struct user_statfs __user *out);
+
+long ksys_fstatfs(int fd, struct user_statfs __user *out);
+
+long sys_statfs(isr_params_t *params);
+
+long sys_fstatfs(isr_params_t *params);
 
 long sys_statfs64(isr_params_t *params);
 
@@ -207,8 +233,6 @@ long sys_fchownat(isr_params_t *params);
 long sys_fchown(isr_params_t *params);
 
 long sys_truncate(isr_params_t *params);
-
-long sys_truncate64(isr_params_t *params);
 
 long sys_symlink(isr_params_t *params);
 
@@ -455,6 +479,8 @@ long sys_dup3(isr_params_t *params);
 long sys_brk(isr_params_t *params);
 
 long sys_mmap2(isr_params_t *params);
+
+long sys_mmap(isr_params_t *params);
 
 long sys_munmap(isr_params_t *params);
 

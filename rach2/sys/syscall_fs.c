@@ -800,12 +800,11 @@ static int size_guarded(struct vfs_mount *mnt, void *node);
  * The descriptor must be a writable file on a mounted file system, and an
  * O_PATH one is -EBADF, as on Linux. A successful shrink or extend clears
  * set-uid, and set-gid where group execute is set, for an unprivileged
- * caller, like a write. ftruncate takes the length in its second argument,
- * and i386's ftruncate64, the form musl calls there, in its second and third
- * as the low and high halves; the file system answers a length past what it
- * can hold.
+ * caller, like a write. The core of ftruncate(2) and of i386's
+ * ftruncate64, the form musl calls there, whose handlers give it the length
+ * whole; the file system answers a length past what it can hold.
  */
-static int32_t truncate_fd(int fd, uint64_t length)
+long ksys_ftruncate(int fd, uint64_t length)
 {
     fd_entry_t *entry;
     int rc;
@@ -857,15 +856,11 @@ static int32_t truncate_fd(int fd, uint64_t length)
     return rc;
 }
 
+/** ftruncate(2): the descriptor and the length, in one register, so of 32
+ * bits on i686, whose ftruncate64 is in arch/i686/sys_ia32.c. */
 long sys_ftruncate(isr_params_t *params)
 {
-    return truncate_fd((int)SC_ARG(params, 0), (uint64_t)SC_ARG(params, 1));
-}
-
-long sys_ftruncate64(isr_params_t *params)
-{
-    return truncate_fd((int)SC_ARG(params, 0),
-                       (uint64_t)SC_ARG(params, 1) | ((uint64_t)SC_ARG(params, 2) << 32));
+    return ksys_ftruncate((int)SC_ARG(params, 0), (uint64_t)SC_ARG(params, 1));
 }
 
 /* write(2) takes fd, buf and count. */
@@ -3619,8 +3614,9 @@ long sys_syncfs(isr_params_t *params)
 /**
  * Advise the kernel of reads to come (readahead).
  *
- * Its arguments are the descriptor, the offset and the count, which only
- * the descriptor matters for here: the page cache fills on demand, so there
+ * Its arguments are the descriptor, the offset and the count, the offset in
+ * one register on x86-64 and in two on i386, which only the descriptor, the
+ * first on both, matters for here: the page cache fills on demand, so there
  * is nothing to start early, and the call returns 0, as Linux does once it
  * has queued the reads. -EBADF for a descriptor not open
  * for reading, and -EINVAL for one that is not a regular file, as on Linux.
@@ -3646,9 +3642,10 @@ long sys_readahead(isr_params_t *params)
  * nothing; GNU `cp`, `cat` and `sort` give it and do not look at the
  * result. The call fails as Linux's does: -EBADF for a descriptor not open,
  * -ESPIPE for a pipe or a FIFO, and -EINVAL for a negative length or an
- * advice outside POSIX_FADV_NORMAL (0) to POSIX_FADV_NOREUSE (5).
+ * advice outside POSIX_FADV_NORMAL (0) to POSIX_FADV_NOREUSE (5). The
+ * core of fadvise64 in every form; the offset does not matter to it.
  */
-static int32_t fadvise(int fd, uint32_t len_hi, uint32_t advice)
+long ksys_fadvise64(int fd, long long len, uint32_t advice)
 {
     fd_entry_t *e;
 
@@ -3662,26 +3659,18 @@ static int32_t fadvise(int fd, uint32_t len_hi, uint32_t advice)
     if (e->type == FD_TYPE_PIPE) {
         return -ESPIPE;
     }
-    return (len_hi & 0x80000000u) || advice > 5 ? -EINVAL : 0;
+    return len < 0 || advice > 5 ? -EINVAL : 0;
 }
 
 /**
- * i386's fadvise64: the descriptor, the offset in two arguments low
- * word first, a 32-bit length and the advice.
+ * fadvise64(2) as a 64-bit architecture has it: the descriptor, the offset,
+ * the length and the advice, one register each. i386's two forms, which
+ * split the offset and the length, are in arch/i686/sys_ia32.c.
  */
 long sys_fadvise64(isr_params_t *params)
 {
-    return fadvise((int)SC_ARG(params, 0), 0, (uint32_t)SC_ARG(params, 4));
-}
-
-/**
- * i386's fadvise64_64, which musl calls: the descriptor, the offset
- * and the length each in two arguments low word first, and the advice.
- */
-long sys_fadvise64_64(isr_params_t *params)
-{
-    return fadvise((int)SC_ARG(params, 0), (uint32_t)SC_ARG(params, 4),
-                   (uint32_t)SC_ARG(params, 5));
+    return ksys_fadvise64((int)SC_ARG(params, 0), (long long)(long)SC_ARG(params, 2),
+                          (uint32_t)SC_ARG(params, 3));
 }
 
 /* The requests of chattr(1) and lsattr(1): _IOR and _IOW of 'f', and _IOR
@@ -3884,8 +3873,13 @@ static int seek_add(uint64_t base, long long off, long long *out)
     return 0;
 }
 
+/* The largest offset lseek(2) returns, a long's: 2 GiB less a byte on
+ * i686, where a larger one is -EOVERFLOW and _llseek reaches it, and the
+ * largest file offset on x86-64. */
+#define LSEEK_MAX ((uint64_t)(~0UL >> 1))
+
 /** Seek a raw description after any transfer using its offset completes. */
-static int32_t raw_lseek(fd_entry_t *entry, int32_t offset, int whence)
+static long raw_lseek(fd_entry_t *entry, long offset, int whence)
 {
     uint64_t resolved, raw_size;
     int32_t rc;
@@ -3896,14 +3890,14 @@ static int32_t raw_lseek(fd_entry_t *entry, int32_t offset, int whence)
         return -ENXIO;
     }
     rc = raw_seek_resolve(entry->ofd->raw_offset, raw_size, (long long)offset, whence, &resolved);
-    if (rc == 0 && resolved > (uint64_t)0x7FFFFFFF) {
+    if (rc == 0 && resolved > LSEEK_MAX) {
         rc = -EOVERFLOW;
     }
     if (rc == 0) {
         entry->ofd->raw_offset = resolved;
     }
     fd_ofd_unlock(entry->ofd);
-    return rc != 0 ? rc : (int32_t)resolved;
+    return rc != 0 ? rc : (long)resolved;
 }
 
 /** Whether `entry` is a directory or a /proc file, which `seek_listing`
@@ -4043,10 +4037,15 @@ static int seek_bootlog(fd_entry_t *entry, long long off, int whence, uint64_t l
     return rc;
 }
 
+/**
+ * lseek(2): the descriptor, the offset, a long, and whence; the new offset,
+ * a long too, or a negative errno. On i686 both are 32 bits, a place past
+ * 2 GiB is -EOVERFLOW, and _llseek reaches it; on x86-64 both are 64.
+ */
 long sys_lseek(isr_params_t *params)
 {
     int fd = (int)SC_ARG(params, 0);
-    int32_t offset = (int32_t)SC_ARG(params, 1);
+    long offset = (long)SC_ARG(params, 1);
     int whence = (int)SC_ARG(params, 2);
     fd_entry_t *entry;
     uint64_t file_size;
@@ -4069,8 +4068,8 @@ long sys_lseek(isr_params_t *params)
             return raw_lseek(entry, offset, whence);
         }
         if (devfs_fd_log_size(entry, NULL)) {
-            seek_rc = seek_bootlog(entry, (long long)offset, whence, 0x7FFFFFFFull, 1, &at);
-            return seek_rc != 0 ? seek_rc : (int32_t)at;
+            seek_rc = seek_bootlog(entry, (long long)offset, whence, LSEEK_MAX, 1, &at);
+            return seek_rc != 0 ? seek_rc : (long)at;
         }
         /* mem devices (null/zero/full) accept a seek that always lands at 0;
          * the stream devices (random/urandom) are not seekable. */
@@ -4084,8 +4083,8 @@ long sys_lseek(isr_params_t *params)
         return -ESPIPE; /* a terminal/mouse is a valid fd, just not seekable */
     }
     if (seeks_listing(entry)) {
-        seek_rc = seek_listing(entry, (long long)offset, whence, 0x7FFFFFFFull, &at);
-        return seek_rc != 0 ? seek_rc : (int32_t)at;
+        seek_rc = seek_listing(entry, (long long)offset, whence, LSEEK_MAX, &at);
+        return seek_rc != 0 ? seek_rc : (long)at;
     }
     if (entry->type != FD_TYPE_FILE) {
         return -EBADF;
@@ -4131,14 +4130,14 @@ long sys_lseek(isr_params_t *params)
         fd_ofd_unlock(entry->ofd);
         return -EINVAL;
     }
-    if (at > (long long)0x7FFFFFFF) {
+    if ((uint64_t)at > LSEEK_MAX) {
         fd_ofd_unlock(entry->ofd);
         return -EOVERFLOW; /* a real offset this call cannot return; llseek can */
     }
 
     entry->ofd->offset = (uint64_t)at;
     fd_ofd_unlock(entry->ofd);
-    return (int32_t)at;
+    return (long)at;
 }
 
 /**
@@ -6549,27 +6548,17 @@ static uint32_t statfs_magic_for_kind(int kind)
 }
 
 /**
- * statfs64(2): the file system a path is on.
- *
- * Its arguments are the path, the caller's sizeof(struct statfs64) and the
- * buffer. The size is checked rather than ignored: a caller built against a
- * different layout would otherwise be handed bytes it would read as different
- * fields. A path that names a directory by its end must reach one
- * (`resolve_named`).
+ * The core of statfs(2) in every form: the file system the path `upath` is
+ * on, into `out`; the caller has refused a NULL for either. A path that
+ * names a directory by its end must reach one (`resolve_named`).
  */
-long sys_statfs64(isr_params_t *params)
+long ksys_statfs(const char __user *upath, struct user_statfs __user *out)
 {
     char *pathbuf;
     int len;
     int dir;
 
-    if (!current_proc || !SC_ARG(params, 0) || !SC_ARG(params, 2)) {
-        return -EFAULT;
-    }
-    if (SC_ARG(params, 1) != sizeof(struct user_statfs)) {
-        return -EINVAL;
-    }
-    len = path_from_user_dir(AT_FDCWD, (const char __user *)SC_ARG(params, 0), &pathbuf, &dir);
+    len = path_from_user_dir(AT_FDCWD, upath, &pathbuf, &dir);
     if (len != 0) {
         return len;
     }
@@ -6593,31 +6582,24 @@ long sys_statfs64(isr_params_t *params)
             struct vfs_mount *m = ref.mnt;
 
             vfs_ref_release(&ref);
-            return statfs_fill_mount((struct user_statfs __user *)SC_ARG(params, 2), m);
+            return statfs_fill_mount(out, m);
         }
         vfs_ref_release(&ref);
-        return statfs_fill((struct user_statfs __user *)SC_ARG(params, 2), magic);
+        return statfs_fill(out, magic);
     }
 }
 
 /**
- * fstatfs64(2): the same numbers, named by an open descriptor; a /proc
- * file's descriptor answers proc's, and a device's or a synthetic
+ * The core of fstatfs(2) in every form: the same numbers, named by the open
+ * descriptor `fd`, into `out`, which the caller has refused a NULL for; a
+ * /proc file's descriptor answers proc's, and a device's or a synthetic
  * directory's, /proc and /proc/PID among them, answers devfs's.
- *
- * Its arguments are the descriptor, the caller's size and the buffer.
  */
-long sys_fstatfs64(isr_params_t *params)
+long ksys_fstatfs(int fd, struct user_statfs __user *out)
 {
     fd_entry_t *e;
 
-    if (SC_ARG(params, 1) != sizeof(struct user_statfs)) {
-        return -EINVAL;
-    }
-    if (!current_proc || !SC_ARG(params, 2)) {
-        return -EFAULT;
-    }
-    e = fd_get(current_proc->fds, (int)SC_ARG(params, 0));
+    e = fd_get(current_proc->fds, fd);
     if (!e) {
         return -EBADF;
     }
@@ -6625,12 +6607,12 @@ long sys_fstatfs64(isr_params_t *params)
      * is on no file system at all, and Linux answers `-ENOSYS` for those rather
      * than handing back the root's numbers. */
     if (e->type == FD_TYPE_PROC) {
-        return statfs_fill((struct user_statfs __user *)SC_ARG(params, 2),
+        return statfs_fill(out,
                            procfs_fd_is_sys(e) ? STATFS_MAGIC_SYSFS : STATFS_MAGIC_PROC);
     }
     if (e->type == FD_TYPE_SYNTH_DIR && e->priv &&
         ((const struct synth_dir *)e->priv)->kind == VNODE_SYS_DIR) {
-        return statfs_fill((struct user_statfs __user *)SC_ARG(params, 2), STATFS_MAGIC_SYSFS);
+        return statfs_fill(out, STATFS_MAGIC_SYSFS);
     }
     if (e->type == FD_TYPE_SYNTH_PATH) {
         const struct vpath *vp = (const struct vpath *)e->priv;
@@ -6640,19 +6622,73 @@ long sys_fstatfs64(isr_params_t *params)
         if (synth_is_sys(vp)) {
             magic = STATFS_MAGIC_SYSFS;
         }
-        return statfs_fill((struct user_statfs __user *)SC_ARG(params, 2), magic);
+        return statfs_fill(out, magic);
     }
     if (e->type == FD_TYPE_DEVICE || e->type == FD_TYPE_CONSOLE || e->type == FD_TYPE_PTM ||
         e->type == FD_TYPE_SYNTH_DIR) {
-        return statfs_fill((struct user_statfs __user *)SC_ARG(params, 2), STATFS_MAGIC_DEVFS);
+        return statfs_fill(out, STATFS_MAGIC_DEVFS);
     }
     if (e->type != FD_TYPE_FILE && e->type != FD_TYPE_DIR) {
         return -ENOSYS;
     }
     if (e->ofd && e->ofd->vmnt && !mnt_is_root(e->ofd->vmnt)) {
-        return statfs_fill_mount((struct user_statfs __user *)SC_ARG(params, 2), e->ofd->vmnt);
+        return statfs_fill_mount(out, e->ofd->vmnt);
     }
-    return statfs_fill((struct user_statfs __user *)SC_ARG(params, 2), STATFS_MAGIC_KRFFS);
+    return statfs_fill(out, STATFS_MAGIC_KRFFS);
+}
+
+/**
+ * statfs(2) as a 64-bit architecture has it: the path and the buffer, the
+ * architecture's struct statfs.
+ */
+long sys_statfs(isr_params_t *params)
+{
+    if (!current_proc || !SC_ARG(params, 0) || !SC_ARG(params, 1)) {
+        return -EFAULT;
+    }
+    return ksys_statfs((const char __user *)SC_ARG(params, 0),
+                       (struct user_statfs __user *)SC_ARG(params, 1));
+}
+
+/** fstatfs(2) as a 64-bit architecture has it: the descriptor and the
+ * buffer. */
+long sys_fstatfs(isr_params_t *params)
+{
+    if (!current_proc || !SC_ARG(params, 1)) {
+        return -EFAULT;
+    }
+    return ksys_fstatfs((int)SC_ARG(params, 0), (struct user_statfs __user *)SC_ARG(params, 1));
+}
+
+/**
+ * statfs64(2) of a 32-bit architecture: the path, the caller's
+ * sizeof(struct statfs64) and the buffer. The size is checked rather than
+ * ignored: a caller built against a different layout would otherwise be
+ * handed bytes it would read as different fields.
+ */
+long sys_statfs64(isr_params_t *params)
+{
+    if (!current_proc || !SC_ARG(params, 0) || !SC_ARG(params, 2)) {
+        return -EFAULT;
+    }
+    if (SC_ARG(params, 1) != sizeof(struct user_statfs)) {
+        return -EINVAL;
+    }
+    return ksys_statfs((const char __user *)SC_ARG(params, 0),
+                       (struct user_statfs __user *)SC_ARG(params, 2));
+}
+
+/** fstatfs64(2) of a 32-bit architecture: the descriptor, the caller's size
+ * and the buffer. */
+long sys_fstatfs64(isr_params_t *params)
+{
+    if (SC_ARG(params, 1) != sizeof(struct user_statfs)) {
+        return -EINVAL;
+    }
+    if (!current_proc || !SC_ARG(params, 2)) {
+        return -EFAULT;
+    }
+    return ksys_fstatfs((int)SC_ARG(params, 0), (struct user_statfs __user *)SC_ARG(params, 2));
 }
 
 /**
@@ -8038,11 +8074,11 @@ static int32_t truncate_path(const char *path, long long length, int dir)
 }
 
 /**
- * The shared body of truncate(2) and truncate64(2): a negative length is
+ * The core of truncate(2) and of i386's truncate64(2): a negative length is
  * -EINVAL before the path is looked at, as on Linux, and the path is copied
  * into a path page for `truncate_path`.
  */
-static int32_t truncate_user(const char __user *upath, long long length)
+long ksys_truncate(const char __user *upath, long long length)
 {
     char *path;
     int dir;
@@ -8066,22 +8102,11 @@ static int32_t truncate_user(const char __user *upath, long long length)
     return rc;
 }
 
-/** truncate(2) takes path and the length, a signed 32-bit value. */
+/** truncate(2) takes path and the length, a signed long, so of 32 bits on
+ * i686, whose truncate64 is in arch/i686/sys_ia32.c. */
 long sys_truncate(isr_params_t *params)
 {
-    return truncate_user((const char __user *)SC_ARG(params, 0),
-                         (long long)(int32_t)SC_ARG(params, 1));
-}
-
-/**
- * i386's truncate64(2): the path, then the length's low and high words. Musl's
- * and GNU libc's truncate are this call on i386.
- */
-long sys_truncate64(isr_params_t *params)
-{
-    uint64_t length = (uint64_t)SC_ARG(params, 1) | ((uint64_t)SC_ARG(params, 2) << 32);
-
-    return truncate_user((const char __user *)SC_ARG(params, 0), (long long)length);
+    return ksys_truncate((const char __user *)SC_ARG(params, 0), (long long)(long)SC_ARG(params, 1));
 }
 
 /**
@@ -8706,22 +8731,19 @@ static void pio_view(fd_entry_t *entry, uint64_t at, fd_entry_t *view, struct op
 }
 
 /**
- * pread64 on i386: the descriptor, the buffer, the count, then the
- * offset's low and high words. Reads at the offset and
- * leaves the descriptor's own where it was; `pio_entry` has what it refuses.
- * A regular file is read at the offset under the description's lock, as
- * read(2) reads it, and a device or a /proc snapshot through `pio_view`.
+ * The core of pread64(2) in every form: `count` bytes of `fd` at `pos` into
+ * `buf`. Reads at the offset and leaves the descriptor's own where it was;
+ * `pio_entry` has what it refuses. A regular file is read at the offset
+ * under the description's lock, as read(2) reads it, and a device or a
+ * /proc snapshot through `pio_view`.
  */
-long sys_pread64(isr_params_t *params)
+long ksys_pread64(int fd, char __user *buf, uint32_t count, long long pos)
 {
-    char __user *buf = (char __user *)SC_ARG(params, 1);
-    uint32_t count = USER_LEN32(SC_ARG(params, 2));
-    long long pos = off_from((uint32_t)SC_ARG(params, 4), (uint32_t)SC_ARG(params, 3));
     uint64_t at = (uint64_t)pos;
     fd_entry_t *entry = NULL;
     fd_entry_t view;
     struct open_file desc;
-    int32_t rc = pio_entry((int)SC_ARG(params, 0), 0, count, pos, &entry);
+    int32_t rc = pio_entry(fd, 0, count, pos, &entry);
 
     if (rc != 0 || count == 0) {
         return rc;
@@ -8737,22 +8759,19 @@ long sys_pread64(isr_params_t *params)
 }
 
 /**
- * pwrite64(2): pread64's arguments, with the buffer written from. Writes at
- * the offset and leaves the descriptor's own where it was, except that
- * O_APPEND writes at the end of the file, as Linux's pwrite does; the
- * set-id bits and the loop device's file are write's rules (`file_write`).
- * A device is written as pread64 reads it.
+ * The core of pwrite64(2) in every form: pread64's, with the buffer written
+ * from. Writes at the offset and leaves the descriptor's own where it was,
+ * except that O_APPEND writes at the end of the file, as Linux's pwrite
+ * does; the set-id bits and the loop device's file are write's rules
+ * (`file_write`). A device is written as pread64 reads it.
  */
-long sys_pwrite64(isr_params_t *params)
+long ksys_pwrite64(int fd, const char __user *buf, uint32_t count, long long pos)
 {
-    const char __user *buf = (const char __user *)SC_ARG(params, 1);
-    uint32_t count = USER_LEN32(SC_ARG(params, 2));
-    long long pos = off_from((uint32_t)SC_ARG(params, 4), (uint32_t)SC_ARG(params, 3));
     uint64_t at = (uint64_t)pos;
     fd_entry_t *entry = NULL;
     fd_entry_t view;
     struct open_file desc;
-    int32_t rc = pio_entry((int)SC_ARG(params, 0), 1, count, pos, &entry);
+    int32_t rc = pio_entry(fd, 1, count, pos, &entry);
 
     if (rc != 0 || count == 0) {
         return rc;
@@ -8765,6 +8784,111 @@ long sys_pwrite64(isr_params_t *params)
     }
     pio_view(entry, at, &view, &desc);
     return entry->ops->write(&view, buf, count);
+}
+
+/**
+ * pread64(2) as a 64-bit architecture has it: the descriptor, the buffer,
+ * the count and the offset, one register each. i386's, which splits the
+ * offset, is in arch/i686/sys_ia32.c.
+ */
+long sys_pread64(isr_params_t *params)
+{
+    return ksys_pread64((int)SC_ARG(params, 0), (char __user *)SC_ARG(params, 1),
+                        USER_LEN32(SC_ARG(params, 2)), (long long)(long)SC_ARG(params, 3));
+}
+
+/** pwrite64(2) as a 64-bit architecture has it, pread64's arguments. */
+long sys_pwrite64(isr_params_t *params)
+{
+    return ksys_pwrite64((int)SC_ARG(params, 0), (const char __user *)SC_ARG(params, 1),
+                         USER_LEN32(SC_ARG(params, 2)), (long long)(long)SC_ARG(params, 3));
+}
+
+/* The position preadv(2) and pwritev(2) take as two registers, low first:
+ * the high one's bits lie above a long's, so on a 64-bit architecture the
+ * low register is the whole position, as Linux's pos_from_hilo has it. */
+static long long pos_from_hilo(unsigned long high, unsigned long low)
+{
+    return (long long)((((uint64_t)high << (sizeof(long) * 4)) << (sizeof(long) * 4)) | low);
+}
+
+/**
+ * The elements of the vector at `iov_user` read from or, with `write`,
+ * written to `fd` at the position `pos`, which the descriptor's own offset
+ * does not follow: each through `ksys_pread64` or `ksys_pwrite64`, at the
+ * position the elements before it reached. The vector is checked whole
+ * first, as readv checks it, so a bad element is refused before a byte
+ * moves; a vector of no bytes still has the descriptor checked. A short
+ * transfer ends the call, and an error after bytes moved returns those
+ * bytes. A negative position is -EINVAL.
+ */
+static long iov_at(int fd, uintptr_t iov_user, int iovcnt, long long pos, int write)
+{
+    struct kernel_iovec iov;
+    uint32_t wanted = 0;
+    long total = 0;
+    int i;
+
+    if (iovcnt < 0 || iovcnt > IOV_MAX_LOCAL || pos < 0) {
+        return -EINVAL;
+    }
+    for (i = 0; i < iovcnt; i++) {
+        if (copy_from_user(&iov, (const void __user *)(iov_user + (uintptr_t)i * sizeof(iov)),
+                           sizeof(iov)) != 0) {
+            return -EFAULT;
+        }
+        if (iov.iov_len == 0) {
+            continue;
+        }
+        if (iov.iov_len > 0x7FFFFFFFu || wanted > 0x7FFFFFFFu - iov.iov_len) {
+            return -EINVAL;
+        }
+        if (!user_buffer_ok(iov.iov_base, iov.iov_len, !write)) {
+            return -EFAULT;
+        }
+        wanted += (uint32_t)iov.iov_len;
+    }
+    if (wanted == 0) {
+        return write ? ksys_pwrite64(fd, NULL, 0, pos) : ksys_pread64(fd, NULL, 0, pos);
+    }
+    for (i = 0; i < iovcnt; i++) {
+        long r;
+
+        if (copy_from_user(&iov, (const void __user *)(iov_user + (uintptr_t)i * sizeof(iov)),
+                           sizeof(iov)) != 0) {
+            return total > 0 ? total : -EFAULT;
+        }
+        if (iov.iov_len == 0) {
+            continue;
+        }
+        r = write ? ksys_pwrite64(fd, (const char __user *)iov.iov_base, (uint32_t)iov.iov_len,
+                                  pos)
+                  : ksys_pread64(fd, (char __user *)iov.iov_base, (uint32_t)iov.iov_len, pos);
+        if (r < 0) {
+            return total > 0 ? total : r;
+        }
+        total += r;
+        pos += r;
+        if ((uint32_t)r < iov.iov_len) {
+            break;
+        }
+    }
+    return total;
+}
+
+/** preadv(2): the descriptor, the vector, its count and the position as two
+ * registers, low first. */
+long sys_preadv(isr_params_t *params)
+{
+    return iov_at((int)SC_ARG(params, 0), SC_ARG(params, 1), (int)SC_ARG(params, 2),
+                  pos_from_hilo(SC_ARG(params, 4), SC_ARG(params, 3)), 0);
+}
+
+/** pwritev(2): preadv's arguments, the vector written from. */
+long sys_pwritev(isr_params_t *params)
+{
+    return iov_at((int)SC_ARG(params, 0), SC_ARG(params, 1), (int)SC_ARG(params, 2),
+                  pos_from_hilo(SC_ARG(params, 4), SC_ARG(params, 3)), 1);
 }
 
 /* fcntl64's lock commands: struct flock, with 32-bit offsets, for the first
@@ -9158,8 +9282,8 @@ static uint32_t fallocate_type(fd_entry_t *entry)
 }
 
 /**
- * fallocate on i386: the descriptor, the mode, then the offset and the
- * length in two arguments each, low word first.
+ * The core of fallocate(2) in every form: give `fd` the range of `len`
+ * bytes at `offset` as `mode` asks.
  *
  * A regular file of a mounted file system goes to its type's operation
  * (vfs_fallocate): tmpfs makes the range's pages or punches a hole, as Linux's
@@ -9175,10 +9299,8 @@ static uint32_t fallocate_type(fd_entry_t *entry)
  * pipe, -EISDIR for a directory and -ENODEV for anything but a regular file
  * or a block device, and -EFBIG for a range past the largest offset.
  */
-long sys_fallocate(isr_params_t *params)
+long ksys_fallocate(int fd, uint32_t mode, uint64_t offset, uint64_t len)
 {
-    uint64_t offset = (uint64_t)SC_ARG(params, 2) | ((uint64_t)SC_ARG(params, 3) << 32);
-    uint64_t len = (uint64_t)SC_ARG(params, 4) | ((uint64_t)SC_ARG(params, 5) << 32);
     fd_entry_t *entry;
     uint32_t type;
     int32_t rc;
@@ -9186,14 +9308,14 @@ long sys_fallocate(isr_params_t *params)
     if (!current_proc) {
         return -ESRCH;
     }
-    entry = fd_get(current_proc->fds, (int)SC_ARG(params, 0));
+    entry = fd_get(current_proc->fds, fd);
     if (!entry || (entry->flags & FD_FLAG_PATH)) {
         return -EBADF;
     }
     if ((offset >> 63) != 0 || len == 0 || (len >> 63) != 0) {
         return -EINVAL;
     }
-    if (!fallocate_mode_ok((uint32_t)SC_ARG(params, 1))) {
+    if (!fallocate_mode_ok(mode)) {
         return -EOPNOTSUPP;
     }
     if (!(entry->flags & FD_FLAG_WRITE)) {
@@ -9215,14 +9337,24 @@ long sys_fallocate(isr_params_t *params)
     if (type != S_IFREG || entry->type != FD_TYPE_FILE || !entry->ofd || !entry->ofd->vmnt) {
         return -EOPNOTSUPP;
     }
-    if (!(SC_ARG(params, 1) & FALLOC_FL_KEEP_SIZE) && fsize_refused(offset + len) != 0) {
+    if (!(mode & FALLOC_FL_KEEP_SIZE) && fsize_refused(offset + len) != 0) {
         return -EFBIG;
     }
     fd_ofd_lock(entry->ofd);
-    rc = vfs_fallocate(entry->ofd->vmnt, entry->ofd->fhandle, (uint32_t)SC_ARG(params, 1), offset,
-                       len);
+    rc = vfs_fallocate(entry->ofd->vmnt, entry->ofd->fhandle, mode, offset, len);
     fd_ofd_unlock(entry->ofd);
     return rc;
+}
+
+/**
+ * fallocate(2) as a 64-bit architecture has it: the descriptor, the mode,
+ * the offset and the length, one register each. i386's, which splits the
+ * offset and the length, is in arch/i686/sys_ia32.c.
+ */
+long sys_fallocate(isr_params_t *params)
+{
+    return ksys_fallocate((int)SC_ARG(params, 0), (uint32_t)SC_ARG(params, 1),
+                          (uint64_t)SC_ARG(params, 2), (uint64_t)SC_ARG(params, 3));
 }
 
 /* The longest memfd name: Linux's NAME_MAX less the "memfd:" of its link. */

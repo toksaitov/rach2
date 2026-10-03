@@ -5705,10 +5705,11 @@ static long mmap_install(uintptr_t addr, uintptr_t len, uint32_t flags, struct m
 }
 
 /*
- * sys_mmap2 - map memory. Its arguments are addr, length, prot, flags, fd
- * and pgoffset, the offset in the file in pages, which anonymous memory
- * ignores; an offset whose last page would not fit in 32 bits is EOVERFLOW, as
- * in Linux, whatever is mapped. Returns the mapped base address, or -errno.
+ * The core of mmap(2) and mmap2(2): map memory. Its arguments are addr,
+ * length, prot, flags, fd and pgoff, the offset in the file in pages, which
+ * anonymous memory ignores; an offset whose last page would not fit in 32
+ * bits is EOVERFLOW, as in Linux, whatever is mapped. Returns the mapped base
+ * address, or -errno.
  * What is mapped is `mmap_backing`'s: anonymous memory, private or shared, or a
  * file, private or shared; where it goes is `mmap_place`'s. The backing is
  * found first, since finding it may sleep, and the place after, so that nothing
@@ -5718,12 +5719,9 @@ static long mmap_install(uintptr_t addr, uintptr_t len, uint32_t flags, struct m
  * Pages are backed on first touch: zeroed, read from the file, or the shared
  * page itself.
  */
-long sys_mmap2(isr_params_t *params)
+long ksys_mmap_pgoff(uintptr_t addr, uintptr_t length, uint32_t prot, uint32_t flags, int fd,
+                     unsigned long pgoff)
 {
-    uintptr_t addr = SC_ARG(params, 0);
-    uintptr_t length = SC_ARG(params, 1);
-    uint32_t prot = (uint32_t)SC_ARG(params, 2);
-    uint32_t flags = (uint32_t)SC_ARG(params, 3);
     struct map_source src;
     uintptr_t len;
     int32_t rc;
@@ -5745,17 +5743,36 @@ long sys_mmap2(isr_params_t *params)
     if ((flags & (MAP_FIXED | MAP_FIXED_NOREPLACE)) && (addr & (PAGE_SIZE - 1)) != 0) {
         return -EINVAL;
     }
-    if (SC_ARG(params, 5) > 0xFFFFFFFFu - len / PAGE_SIZE) {
+    if (pgoff > 0xFFFFFFFFu - len / PAGE_SIZE) {
         return -EOVERFLOW;
     }
     mem_balance();
     src.prot = vm_prot_of(prot);
-    src.pgoff = (uint32_t)SC_ARG(params, 5);
-    rc = mmap_backing(flags, (int)SC_ARG(params, 4), len, &src);
+    src.pgoff = (uint32_t)pgoff;
+    rc = mmap_backing(flags, fd, len, &src);
     if (rc != 0) {
         return rc;
     }
     return mmap_install(addr, len, flags, &src);
+}
+
+/** mmap2(2): addr, length, prot, flags, fd and the offset in pages. */
+long sys_mmap2(isr_params_t *params)
+{
+    return ksys_mmap_pgoff(SC_ARG(params, 0), SC_ARG(params, 1), (uint32_t)SC_ARG(params, 2),
+                           (uint32_t)SC_ARG(params, 3), (int)SC_ARG(params, 4), SC_ARG(params, 5));
+}
+
+/** mmap(2): mmap2's arguments with the offset in bytes, a multiple of the
+ * page, or EINVAL. */
+long sys_mmap(isr_params_t *params)
+{
+    if (SC_ARG(params, 5) & (PAGE_SIZE - 1u)) {
+        return -EINVAL;
+    }
+    return ksys_mmap_pgoff(SC_ARG(params, 0), SC_ARG(params, 1), (uint32_t)SC_ARG(params, 2),
+                           (uint32_t)SC_ARG(params, 3), (int)SC_ARG(params, 4),
+                           SC_ARG(params, 5) >> PAGE_SHIFT);
 }
 
 long mmap_shm(struct open_file *ofd, uintptr_t addr, uintptr_t len, uint32_t access, int place,

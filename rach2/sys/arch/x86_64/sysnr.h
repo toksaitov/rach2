@@ -29,6 +29,8 @@
 #define SYS_RT_SIGPROCMASK         14
 #define SYS_RT_SIGRETURN           15
 #define SYS_IOCTL                  16
+#define SYS_PREAD64                17
+#define SYS_PWRITE64               18
 #define SYS_READV                  19
 #define SYS_WRITEV                 20
 #define SYS_ACCESS                 21
@@ -141,6 +143,8 @@
 #define SYS_SIGALTSTACK            131
 #define SYS_MKNOD                  133
 #define SYS_PERSONALITY            135
+#define SYS_STATFS                 137
+#define SYS_FSTATFS                138
 #define SYS_GETPRIORITY            140
 #define SYS_SETPRIORITY            141
 #define SYS_SCHED_SETPARAM         142
@@ -167,6 +171,7 @@
 #define SYS_SETHOSTNAME            170
 #define SYS_SETDOMAINNAME          171
 #define SYS_GETTID                 186
+#define SYS_READAHEAD              187
 #define SYS_SETXATTR               188
 #define SYS_LSETXATTR              189
 #define SYS_FSETXATTR              190
@@ -187,6 +192,7 @@
 #define SYS_GETDENTS64             217
 #define SYS_SET_TID_ADDRESS        218
 #define SYS_SEMTIMEDOP             220
+#define SYS_FADVISE64              221
 #define SYS_TIMER_CREATE           222
 #define SYS_TIMER_SETTIME          223
 #define SYS_TIMER_GETTIME          224
@@ -236,6 +242,7 @@
 #define SYS_SIGNALFD               282
 #define SYS_TIMERFD_CREATE         283
 #define SYS_EVENTFD                284
+#define SYS_FALLOCATE              285
 #define SYS_TIMERFD_SETTIME        286
 #define SYS_TIMERFD_GETTIME        287
 #define SYS_ACCEPT4                288
@@ -245,6 +252,8 @@
 #define SYS_DUP3                   292
 #define SYS_PIPE2                  293
 #define SYS_INOTIFY_INIT1          294
+#define SYS_PREADV                 295
+#define SYS_PWRITEV                296
 #define SYS_RT_TGSIGQUEUEINFO      297
 #define SYS_RECVMMSG               299
 #define SYS_PRLIMIT64              302
