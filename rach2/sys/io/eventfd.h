@@ -15,8 +15,8 @@
 
 struct isr_params;
 
-/** eventfd and eventfd2: its arguments are the initial value and the
- * flags EFD_CLOEXEC, EFD_NONBLOCK and EFD_SEMAPHORE. */
+/** eventfd and eventfd2 take the initial value and the flags EFD_CLOEXEC,
+ * EFD_NONBLOCK and EFD_SEMAPHORE. */
 long sys_eventfd(struct isr_params *params);
 long sys_eventfd2(struct isr_params *params);
 

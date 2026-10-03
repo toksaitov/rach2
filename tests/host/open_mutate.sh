@@ -199,9 +199,9 @@ changes = {
          "    if (rc != 0) {\n        return rc;\n    }\n    if (leaf_is_dot(leaf)) {\n"
          "        rc = leaf[1] == '\\0' ? -EINVAL : -ENOTEMPTY;"),
         ("        vfs_ns_unlock(parent.mnt);\n    }\n    vfs_walk_unlock(parent.mnt);\n"
-         "    vfs_ref_release(&parent);\n    return rc;\n}\n\n/* rmdir(2): EBX = path. */",
+         "    vfs_ref_release(&parent);\n    return rc;\n}\n\n/* rmdir(2) takes path. */",
          "        vfs_ns_unlock(parent.mnt);\n    }\n"
-         "    vfs_ref_release(&parent);\n    return rc;\n}\n\n/* rmdir(2): EBX = path. */"),
+         "    vfs_ref_release(&parent);\n    return rc;\n}\n\n/* rmdir(2) takes path. */"),
         ("    return rc != 0 ? rc : vfs_rmdir(parent->mnt, parent->node, leaf);",
          "    if (rc == 0) {\n        vfs_ns_lock(parent->mnt);\n"
          "        rc = vfs_rmdir(parent->mnt, parent->node, leaf);\n"

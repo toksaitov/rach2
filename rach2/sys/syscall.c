@@ -316,9 +316,9 @@ struct kernel_timeval {
 };
 
 /*
- * gettimeofday(2): its arguments are tv (timeval*) and tz (ignored). Reports
- * real time from the clock anchored at boot (sys/arch/x86/rtc.c), or time since
- * boot when there was no clock to read. Returns 0 or -errno.
+ * gettimeofday(2) takes tv (timeval*) and tz (ignored). Reports real time from
+ * the clock anchored at boot (sys/arch/x86/rtc.c), or time since boot when
+ * there was no clock to read. Returns 0 or -errno.
  */
 long sys_gettimeofday(isr_params_t *params)
 {
@@ -643,8 +643,8 @@ static int32_t realtime_set(int64_t seconds, int64_t nanoseconds)
 }
 
 /**
- * clock_settime: its arguments are clockid and the 32-bit timespec. Only
- * CLOCK_REALTIME may be set, as on Linux; another clock is -EINVAL.
+ * clock_settime takes clockid and the 32-bit timespec. Only CLOCK_REALTIME may
+ * be set, as on Linux; another clock is -EINVAL.
  */
 long sys_clock_settime(isr_params_t *params)
 {
@@ -947,17 +947,16 @@ static int32_t timex_call(uintptr_t uaddr, int wide)
     return rc;
 }
 
-/** adjtimex: its argument is the 128-byte struct timex. */
+/** adjtimex takes the 128-byte struct timex. */
 long sys_adjtimex(isr_params_t *params)
 {
     return timex_call(SC_ARG(params, 0), TIMEX_LONGS_WIDE);
 }
 
 /**
- * clock_adjtime and clock_adjtime64: its arguments are the clock
- * and the timex, in the 64-bit layout for the second. CLOCK_REALTIME is the one
- * clock that adjusts; another of the clocks is -EOPNOTSUPP and anything else
- * -EINVAL, as Linux answers.
+ * clock_adjtime and clock_adjtime64 take the clock and the timex, in the 64-bit
+ * layout for the second. CLOCK_REALTIME is the one clock that adjusts; another
+ * of the clocks is -EOPNOTSUPP and anything else -EINVAL, as Linux answers.
  */
 static int32_t clock_adjtime_common(isr_params_t *params, int wide)
 {
@@ -980,9 +979,9 @@ long sys_clock_adjtime64(isr_params_t *params)
 }
 
 /**
- * settimeofday: its arguments are timeval and timezone. The time zone is
- * not kept, so a call with only one is done and changes nothing; a call with
- * neither is too, as on Linux.
+ * settimeofday takes timeval and timezone. The time zone is not kept, so a call
+ * with only one is done and changes nothing; a call with neither is too, as on
+ * Linux.
  */
 long sys_settimeofday(isr_params_t *params)
 {
@@ -1000,7 +999,7 @@ long sys_settimeofday(isr_params_t *params)
     return realtime_set(tv.tv_sec, (int64_t)tv.tv_usec * 1000);
 }
 
-/** stime: its argument is the seconds, a 32-bit time_t. */
+/** stime takes the seconds, a 32-bit time_t. */
 long sys_stime(isr_params_t *params)
 {
     int32_t seconds;

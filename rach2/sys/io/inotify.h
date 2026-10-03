@@ -88,13 +88,11 @@ int inotify_is(int fd);
  */
 int32_t inotify_watch(int fd, struct vfs_mount *mnt, uint64_t ino, int isdir, uint32_t mask);
 
-/** inotify_init and inotify_init1: its argument is the flags
- * IN_NONBLOCK and IN_CLOEXEC. */
+/** inotify_init and inotify_init1 take the flags IN_NONBLOCK and IN_CLOEXEC. */
 long sys_inotify_init(struct isr_params *params);
 long sys_inotify_init1(struct isr_params *params);
 
-/** inotify_rm_watch: its arguments are the instance and the watch
- * descriptor. */
+/** inotify_rm_watch takes the instance and the watch descriptor. */
 long sys_inotify_rm_watch(struct isr_params *params);
 
 #endif /* _INOTIFY_H_ */

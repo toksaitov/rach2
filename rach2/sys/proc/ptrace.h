@@ -31,7 +31,7 @@
 #define PTRACE_EVENT_SECCOMP    7
 #define PTRACE_EVENT_STOP       128
 
-/** ptrace: its arguments are request, pid, addr and data. */
+/** ptrace takes request, pid, addr and data. */
 long sys_ptrace(isr_params_t *params);
 
 /**

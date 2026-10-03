@@ -407,12 +407,12 @@ static int32_t mq_install(struct mqueue *q, uint32_t oflag)
 }
 
 /**
- * mq_open: its arguments are the name without its leading slash, as the C
- * library passes it, the flags, the mode and the attributes of a new
- * queue. An existing queue is EEXIST under O_CREAT|O_EXCL and EACCES
- * for an access its bits do not give; a missing one is ENOENT without
- * O_CREAT. EINVAL for the access mode 3, ENFILE past MQ_QUEUES queues for an
- * unprivileged caller, and the refusals of `mq_name` and `mq_new_attr`.
+ * mq_open takes the name without its leading slash, as the C library passes it,
+ * the flags, the mode and the attributes of a new queue. An existing queue is
+ * EEXIST under O_CREAT|O_EXCL and EACCES for an access its bits do not give; a
+ * missing one is ENOENT without O_CREAT. EINVAL for the access mode 3, ENFILE
+ * past MQ_QUEUES queues for an unprivileged caller, and the refusals of
+ * `mq_name` and `mq_new_attr`.
  */
 long sys_mq_open(struct isr_params *params)
 {

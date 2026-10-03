@@ -3606,14 +3606,13 @@ long sys_kill(isr_params_t *params)
     return do_kill((int)SC_ARG(params, 0), (int)SC_ARG(params, 1));
 }
 
-/** tkill: its arguments are tid and signal. */
+/** tkill takes tid and signal. */
 long sys_tkill(isr_params_t *params)
 {
     return do_tkill(0, (int)SC_ARG(params, 0), (int)SC_ARG(params, 1));
 }
 
-/** tgkill: its arguments are tgid, tid and signal; a tgid of 0 is
- * -EINVAL. */
+/** tgkill takes tgid, tid and signal; a tgid of 0 is -EINVAL. */
 long sys_tgkill(isr_params_t *params)
 {
     if ((int)SC_ARG(params, 0) <= 0) {
@@ -3644,10 +3643,10 @@ static int32_t queued_info(uintptr_t u, int own, struct k_siginfo *info)
 }
 
 /**
- * rt_sigqueueinfo, which sigqueue calls: its arguments are pid, signal
- * and the siginfo, posted to the process with that siginfo, under kill's
- * permission. The kernel keeps one pending instance of each signal, so a
- * real-time signal sent again while pending is merged, where Linux queues it.
+ * rt_sigqueueinfo, which sigqueue calls, takes pid, signal and the siginfo,
+ * posted to the process with that siginfo, under kill's permission. The kernel
+ * keeps one pending instance of each signal, so a real-time signal sent again
+ * while pending is merged, where Linux queues it.
  */
 long sys_rt_sigqueueinfo(isr_params_t *params)
 {
@@ -3673,8 +3672,8 @@ long sys_rt_sigqueueinfo(isr_params_t *params)
     return rc;
 }
 
-/** rt_tgsigqueueinfo: its arguments are tgid, tid, signal and the
- * siginfo, posted to the thread alone, as tgkill posts. */
+/** rt_tgsigqueueinfo takes tgid, tid, signal and the siginfo, posted to the
+ * thread alone, as tgkill posts. */
 long sys_rt_tgsigqueueinfo(isr_params_t *params)
 {
     int tgid = (int)SC_ARG(params, 0);
@@ -4555,11 +4554,11 @@ static void sigfd_close(fd_entry_t *e)
 static const struct file_ops sigfd_ops = {sigfd_read, NULL, sigfd_poll, NULL, sigfd_close};
 
 /**
- * signalfd and signalfd4: its arguments are -1 for a new signalfd
- * or one to change, the mask and its size, which must be 8, and for signalfd4
- * the flags SFD_NONBLOCK and SFD_CLOEXEC. SIGKILL and SIGSTOP are left out of
- * the mask, as Linux leaves them. The descriptor, or EBADF for an open
- * descriptor that is not a signalfd, EINVAL.
+ * signalfd and signalfd4 take -1 for a new signalfd or one to change, the mask
+ * and its size, which must be 8, and for signalfd4 the flags SFD_NONBLOCK and
+ * SFD_CLOEXEC. SIGKILL and SIGSTOP are left out of the mask, as Linux leaves
+ * them. The descriptor, or EBADF for an open descriptor that is not a signalfd,
+ * EINVAL.
  */
 static int32_t signalfd_common(isr_params_t *params, uint32_t flags)
 {
@@ -5248,12 +5247,14 @@ static uint32_t rlimit_from64(uint32_t lo, uint32_t hi)
     return hi ? RLIM_INF32 : lo;
 }
 
-/* prlimit64: its arguments are pid (0/self), resource, new (rlimit64* or
- * NULL) and old (rlimit64* or NULL). 64-bit struct rlimit64 { u64 cur, max }.
- * The old limits are read before the new are set, as POSIX's `setrlimit` and
- * `getrlimit` see them, and written to the caller after: a copy that fails
+/**
+ * prlimit64 takes pid (0 for the caller), resource, new (rlimit64* or NULL)
+ * and old (rlimit64* or NULL); a struct rlimit64 is two 64-bit words, cur and
+ * max. The old limits are read before the new are set, as POSIX's `setrlimit`
+ * and `getrlimit` see them, and written to the caller after: a copy that fails
  * leaves the new limits in place, as it does on Linux. This is the form musl
- * issues for both. */
+ * issues for both.
+ */
 long sys_prlimit64(isr_params_t *params)
 {
     uint32_t pid = (uint32_t)SC_ARG(params, 0);
@@ -6574,8 +6575,8 @@ static int32_t sched_set(int pid, int policy, const void __user *uparam)
     }
 }
 
-/** sched_setscheduler: its arguments are pid, policy and the
- * struct sched_param; see `sched_set`. A negative policy is -EINVAL first. */
+/** sched_setscheduler takes pid, policy and the struct sched_param; see
+ * `sched_set`. A negative policy is -EINVAL first. */
 long sys_sched_setscheduler(isr_params_t *params)
 {
     if ((int)SC_ARG(params, 1) < 0) {
@@ -6585,8 +6586,7 @@ long sys_sched_setscheduler(isr_params_t *params)
                      (const void __user *)SC_ARG(params, 2));
 }
 
-/** sched_setparam: its arguments are pid and the struct
- * sched_param; see `sched_set`. */
+/** sched_setparam takes pid and the struct sched_param; see `sched_set`. */
 long sys_sched_setparam(isr_params_t *params)
 {
     return sched_set((int)SC_ARG(params, 0), -1, (const void __user *)SC_ARG(params, 1));
@@ -6650,13 +6650,13 @@ static int32_t sched_priority_bound(int policy, int max)
     }
 }
 
-/** sched_get_priority_max: its argument is policy. */
+/** sched_get_priority_max takes policy. */
 long sys_sched_get_priority_max(isr_params_t *params)
 {
     return sched_priority_bound((int)SC_ARG(params, 0), 1);
 }
 
-/** sched_get_priority_min: its argument is policy. */
+/** sched_get_priority_min takes policy. */
 long sys_sched_get_priority_min(isr_params_t *params)
 {
     return sched_priority_bound((int)SC_ARG(params, 0), 0);
@@ -6780,10 +6780,10 @@ long sys_munlockall(isr_params_t *params)
 }
 
 /**
- * mincore: its arguments are a page-aligned address, a length and a byte
- * for each page, which gets 1 when the page is in memory and 0 when it has not
- * been brought in yet. -EINVAL for an address not page-aligned, -ENOMEM for a
- * range with a gap, -EFAULT.
+ * mincore takes a page-aligned address, a length and a byte for each page,
+ * which gets 1 when the page is in memory and 0 when it has not been brought in
+ * yet. -EINVAL for an address not page-aligned, -ENOMEM for a range with a gap,
+ * -EFAULT.
  */
 long sys_mincore(isr_params_t *params)
 {
@@ -6833,12 +6833,12 @@ long sys_getcpu(isr_params_t *params)
 }
 
 /**
- * The execution domain (personality): its argument is the new
- * value, or 0xFFFFFFFF to read it, and the old value is returned. The domain,
- * the low byte, must be PER_LINUX (0) or PER_LINUX32 (8), the two a Linux i386
- * program runs in, else -EINVAL; the flag bits above it are kept and change
- * nothing, since this kernel has no address randomization for
- * ADDR_NO_RANDOMIZE, which GDB sets, to turn off, and no other domain.
+ * personality, the execution domain, takes the new value, or 0xFFFFFFFF to read
+ * it, and the old value is returned. The domain, the low byte, must be
+ * PER_LINUX (0) or PER_LINUX32 (8), the two a Linux i386 program runs in, else
+ * -EINVAL; the flag bits above it are kept and change nothing, since this
+ * kernel has no address randomization for ADDR_NO_RANDOMIZE, which GDB sets, to
+ * turn off, and no other domain.
  */
 long sys_personality(isr_params_t *params)
 {
@@ -7078,7 +7078,7 @@ static int32_t cap_pid_in(uintptr_t uhdr, int32_t *pid)
 }
 
 /**
- * capget: its arguments are header and the sets' words.
+ * capget takes header and the sets' words.
  *
  * The sets of the thread the header's pid names, the caller for 0, as
  * `cap_held` gives them; the inheritable set is always empty. A null second
@@ -7120,7 +7120,7 @@ long sys_capget(isr_params_t *params)
 }
 
 /**
- * capset: its arguments are header and the sets' words.
+ * capset takes header and the sets' words.
  *
  * The kernel keeps every capability or none, so the calling thread may give
  * up all its capabilities, with every set empty, after which it is not

@@ -868,7 +868,7 @@ long sys_ftruncate64(isr_params_t *params)
                        (uint64_t)SC_ARG(params, 1) | ((uint64_t)SC_ARG(params, 2) << 32));
 }
 
-/* write(2): its arguments are fd, buf and count. */
+/* write(2) takes fd, buf and count. */
 long sys_write(isr_params_t *params)
 {
     return write_fd((int)SC_ARG(params, 0), (const char __user *)SC_ARG(params, 1),
@@ -976,10 +976,10 @@ static int32_t writev_elements(int fd, uintptr_t iov_user, int iovcnt)
 }
 
 /**
- * writev(2): its arguments are fd, the vector and its count. The elements are
- * written in order (`writev_elements`); on a tmpfs file the mount's lock is
- * held across them, and a vector a seal refuses whole is refused before the
- * first (`writev_begin`).
+ * writev(2) takes fd, the vector and its count. The elements are written in
+ * order (`writev_elements`); on a tmpfs file the mount's lock is held across
+ * them, and a vector a seal refuses whole is refused before the first
+ * (`writev_begin`).
  */
 long sys_writev(isr_params_t *params)
 {
@@ -3097,7 +3097,7 @@ static int32_t bind_at(uintptr_t source, const char *target, uint32_t flags)
 }
 
 /**
- * mount(2): its arguments are source, target, type, flags and data.
+ * mount(2) takes source, target, type, flags and data.
  *
  * Effective uid 0 is required, or privilege over the caller's mount
  * namespace for proc, sysfs and tmpfs (`mount_privileged`). The strings are
@@ -3174,9 +3174,9 @@ long sys_mount(isr_params_t *params)
 }
 
 /**
- * umount2(2): its arguments are target and flags. Effective uid 0 is required,
- * and the flags must be zero: MNT_FORCE, MNT_DETACH and UMOUNT_NOFOLLOW are
- * promises this kernel cannot keep and answer EINVAL.
+ * umount2(2) takes target and flags. Effective uid 0 is required, and the flags
+ * must be zero: MNT_FORCE, MNT_DETACH and UMOUNT_NOFOLLOW are promises this
+ * kernel cannot keep and answer EINVAL.
  *
  * A target that names a directory by its end must reach one, which the walk
  * that finds the mount checks (`vfs_do_umount`), so a file named with a
@@ -3353,7 +3353,7 @@ static int32_t open_from_user(int dirfd, const char __user *upath, int flags, ui
     return rc;
 }
 
-/* open(2): its arguments are path, flags and the O_CREAT mode. */
+/* open(2) takes path, flags and the O_CREAT mode. */
 long sys_open(isr_params_t *params)
 {
     if (!current_proc) {
@@ -3364,11 +3364,11 @@ long sys_open(isr_params_t *params)
 }
 
 /*
- * openat: its arguments are dirfd, path, flags and the O_CREAT
- * mode. musl's openat() issues it; its open() and <stdio.h> use the legacy open
- * on i386, which has the number. An absolute path is taken as-is, a relative
- * path resolves against the cwd (AT_FDCWD) or against the directory the dirfd
- * refers to (see copy_path_at).
+ * openat takes dirfd, path, flags and the O_CREAT mode. musl's openat() issues
+ * it; its open() and <stdio.h> use the legacy open on i386, which has the
+ * number. An absolute path is taken as-is, a relative path resolves against the
+ * cwd (AT_FDCWD) or against the directory the dirfd refers to (see
+ * copy_path_at).
  */
 long sys_openat(isr_params_t *params)
 {
@@ -3481,12 +3481,11 @@ void fd_holds_release(void)
 #define CLOSE_RANGE_CLOEXEC 0x4u
 
 /**
- * close_range: its arguments are first, last and flags.
- * Closes each open descriptor from `first` to `last`, or with
- * CLOSE_RANGE_CLOEXEC marks each close-on-exec instead; CLOSE_RANGE_UNSHARE
- * first gives a caller that shares its table a copy of its own. A number past
- * the table is no descriptor. 0, or -EINVAL for a flag it does not take or
- * `first` past `last`, or -ENOMEM.
+ * close_range takes first, last and flags. Closes each open descriptor from
+ * `first` to `last`, or with CLOSE_RANGE_CLOEXEC marks each close-on-exec
+ * instead; CLOSE_RANGE_UNSHARE first gives a caller that shares its table a
+ * copy of its own. A number past the table is no descriptor. 0, or -EINVAL for
+ * a flag it does not take or `first` past `last`, or -ENOMEM.
  */
 long sys_close_range(isr_params_t *params)
 {
@@ -3513,9 +3512,9 @@ long sys_close_range(isr_params_t *params)
     return 0;
 }
 
-/* close(2): its argument is fd. Returns 0 or -EBADF. Closing 0, 1 or 2 is
- * legal; a shell or daemon closes one and opens again onto the freed (lowest)
- * number to redirect it. */
+/* close(2) takes fd. Returns 0 or -EBADF. Closing 0, 1 or 2 is legal; a shell
+ * or daemon closes one and opens again onto the freed (lowest) number to
+ * redirect it. */
 long sys_close(isr_params_t *params)
 {
     if (!current_proc) {
@@ -4384,7 +4383,7 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
 }
 
 /**
- * read(2): its arguments are fd, buf and count.
+ * read(2) takes fd, buf and count.
  *
  * An eventfd and a timerfd read whole eight-byte counts and refuse a
  * shorter read with EINVAL, as Linux does, and a read of zero bytes among
@@ -4769,9 +4768,8 @@ static int32_t dup_clear(int fd)
 }
 
 /**
- * dup2(2): its arguments are oldfd and newfd. Returns newfd or -errno. A
- * `newfd` past the end of the table grows it, and a heap with no room for that
- * is ENOMEM.
+ * dup2(2) takes oldfd and newfd. Returns newfd or -errno. A `newfd` past the
+ * end of the table grows it, and a heap with no room for that is ENOMEM.
  *
  * The replacement of an open `newfd` may sleep (`dup_clear`), and another
  * thread may close `oldfd` meanwhile. The call holds `oldfd`, so the close
@@ -5030,8 +5028,7 @@ long sys_chdir(isr_params_t *params)
 }
 
 /**
- * fchdir(2): its argument is fd. Make the directory `fd` is open on the working
- * directory.
+ * fchdir(2) takes fd. Make the directory `fd` is open on the working directory.
  *
  * The working directory's path is the one the descriptor's `*at` calls
  * resolve against (`fd_dir_path`), so it follows a directory a type can name
@@ -5237,9 +5234,9 @@ static int32_t root_enter(const struct vfs_ref *ref, char *buf)
 }
 
 /**
- * chroot(2): its argument is path. Make the directory `path` names the calling
- * process's root: its absolute paths and the absolute targets of its symbolic
- * links start there, and `..` there stays there (vfs.Readme.md).
+ * chroot(2) takes path. Make the directory `path` names the calling process's
+ * root: its absolute paths and the absolute targets of its symbolic links start
+ * there, and `..` there stays there (vfs.Readme.md).
  *
  * The refusals come in Linux's order: the path's own (ENOENT, ENOTDIR,
  * ELOOP, ENAMETOOLONG, EACCES on the way), then `root_check`'s. The working
@@ -5288,8 +5285,8 @@ long sys_chroot(isr_params_t *params)
 }
 
 /**
- * getcwd(2): its arguments are buf and size. Returns the path's length with its
- * NUL, as Linux's system call does, or -errno.
+ * getcwd(2) takes buf and size. Returns the path's length with its NUL, as
+ * Linux's system call does, or -errno.
  *
  * The path is copied into a path page before the copy out, which may sleep
  * on a fault: a thread that shares the working directory (CLONE_FS) may
@@ -6832,9 +6829,8 @@ static int32_t fstat_fill(fd_entry_t *entry, struct user_stat *kst)
 }
 
 /*
- * fstat64: its arguments are fd and stat64 buffer. The
- * descriptor's node is stat'd; a root directory fd (node == NULL) reports the
- * root directory.
+ * fstat64 takes fd and stat64 buffer. The descriptor's node is stat'd; a root
+ * directory fd (node == NULL) reports the root directory.
  */
 long sys_fstat64(isr_params_t *params)
 {
@@ -6977,8 +6973,7 @@ static int32_t stat_at(int dirfd, const char __user *upath, int flags, struct us
 }
 
 /**
- * fstatat64: its arguments are dirfd, path, stat64 buffer and
- * flags.
+ * fstatat64 takes dirfd, path, stat64 buffer and flags.
  *
  * The attributes are `stat_at`'s; GNU libc's fstat is this call with
  * AT_EMPTY_PATH when statx is missing. AT_NO_AUTOMOUNT is accepted and
@@ -7090,8 +7085,7 @@ static void statx_from_stat64(struct linux_statx *sx, const struct user_stat *st
 }
 
 /**
- * statx: its arguments are dirfd, path, flags, mask and struct
- * statx buffer.
+ * statx takes dirfd, path, flags, mask and struct statx buffer.
  *
  * The attributes are fstatat64's, found by `stat_at` for the same path and
  * flags, in struct statx: the basic set of STATX_BASIC_STATS whatever `mask`
@@ -7212,8 +7206,7 @@ long sys_access(isr_params_t *params)
 }
 
 /**
- * inotify_add_watch: its arguments are the instance, the path and the
- * mask.
+ * inotify_add_watch takes the instance, the path and the mask.
  *
  * The path is resolved through a final link unless IN_DONT_FOLLOW, it must
  * name a directory under IN_ONLYDIR, and the caller must be able to read
@@ -7702,7 +7695,7 @@ long sys_fchmod(isr_params_t *params)
     return current_proc->euid == 0 ? 0 : -EPERM;
 }
 
-/** The path form of chown and lchown: its arguments are path, uid and gid. */
+/** The path form of chown and lchown takes path, uid and gid. */
 /**
  * The kernel's ids of the owner `*uid` and group `*gid` a chown names in the
  * caller's user namespace (`uid_named`), -1 left as it is. 0, or -EINVAL
@@ -7762,7 +7755,7 @@ long sys_lchown(isr_params_t *params)
 static int32_t chown_fd(fd_entry_t *entry, uint32_t uid, uint32_t gid);
 
 /**
- * fchownat(2): its arguments are dirfd, path, uid, gid and flags.
+ * fchownat(2) takes dirfd, path, uid, gid and flags.
  *
  * The flags are Linux's two, checked first: AT_SYMLINK_NOFOLLOW changes a
  * final symbolic link itself, and AT_EMPTY_PATH with an empty path changes
@@ -8073,8 +8066,7 @@ static int32_t truncate_user(const char __user *upath, long long length)
     return rc;
 }
 
-/** truncate(2): its arguments are path and the length, a signed 32-bit value.
- * */
+/** truncate(2) takes path and the length, a signed 32-bit value. */
 long sys_truncate(isr_params_t *params)
 {
     return truncate_user((const char __user *)SC_ARG(params, 0),
@@ -9237,7 +9229,7 @@ long sys_fallocate(isr_params_t *params)
 #define MFD_NAME_MAX 249
 
 /**
- * memfd_create(2): its arguments are name and flags.
+ * memfd_create(2) takes name and flags.
  *
  * A file in memory that no path names, on the tmpfs `vfs_memfd_mount` has,
  * open for reading and writing on a new descriptor: mode 0777 and the
@@ -9310,7 +9302,7 @@ long sys_memfd_create(isr_params_t *params)
 #define LOCK_MAND 32
 
 /**
- * flock(2): its arguments are fd and operation.
+ * flock(2) takes fd and operation.
  *
  * LOCK_SH, LOCK_EX or LOCK_UN, with LOCK_NB for no wait, over the whole of
  * what `fd` is open on, owned by the open file description, as
@@ -9667,9 +9659,9 @@ long sys_lstat(isr_params_t *params)
 #endif /* ARCH_WANT_OLD_STAT */
 
 /*
- * creat(2): its arguments are path and mode. Returns an fd open for writing, or
- * -errno. An existing regular file is truncated to zero by the call; a
- * directory, the root included, is EISDIR.
+ * creat(2) takes path and mode. Returns an fd open for writing, or -errno. An
+ * existing regular file is truncated to zero by the call; a directory, the root
+ * included, is EISDIR.
  */
 long sys_creat(isr_params_t *params)
 {
@@ -9830,7 +9822,7 @@ static int32_t do_unlink(const char *path)
     return unlink_named(path, 0);
 }
 
-/* unlink(2): its argument is path. Returns 0 or -errno. */
+/* unlink(2) takes path. Returns 0 or -errno. */
 long sys_unlink(isr_params_t *params)
 {
     const char __user *upath = (const char __user *)SC_ARG(params, 0);
@@ -10029,7 +10021,7 @@ static int32_t do_mkdir(const char *pathbuf, uint32_t mode)
     return rc;
 }
 
-/* mkdir(2): its arguments are path and mode. */
+/* mkdir(2) takes path and mode. */
 long sys_mkdir(isr_params_t *params)
 {
     const char __user *upath = (const char __user *)SC_ARG(params, 0);
@@ -10049,8 +10041,8 @@ long sys_mkdir(isr_params_t *params)
     return rc;
 }
 
-/* mkdirat(2): its arguments are dirfd, path and mode; a relative path is
- * resolved from `dirfd` as openat's is. */
+/* mkdirat(2) takes dirfd, path and mode; a relative path is resolved from
+ * `dirfd` as openat's is. */
 long sys_mkdirat(isr_params_t *params)
 {
     const char __user *upath = (const char __user *)SC_ARG(params, 1);
@@ -10151,8 +10143,8 @@ static int32_t do_mknod(const char *path, uint32_t mode, uint32_t dev, int end)
     return rc;
 }
 
-/* mknod(2): its arguments are path, mode and dev. The kind is checked before
- * the path is read. */
+/* mknod(2) takes path, mode and dev. The kind is checked before the path is
+ * read. */
 long sys_mknod(isr_params_t *params)
 {
     const char __user *upath = (const char __user *)SC_ARG(params, 0);
@@ -10179,8 +10171,8 @@ long sys_mknod(isr_params_t *params)
     return rc;
 }
 
-/* mknodat(2): its arguments are dirfd, path, mode and dev; a relative path is
- * resolved from `dirfd` as openat's is, after the kind is checked. */
+/* mknodat(2) takes dirfd, path, mode and dev; a relative path is resolved from
+ * `dirfd` as openat's is, after the kind is checked. */
 long sys_mknodat(isr_params_t *params)
 {
     const char __user *upath = (const char __user *)SC_ARG(params, 1);
@@ -10316,7 +10308,7 @@ static int32_t do_rmdir(const char *pathbuf)
     return rc;
 }
 
-/* rmdir(2): its argument is path. */
+/* rmdir(2) takes path. */
 long sys_rmdir(isr_params_t *params)
 {
     const char __user *upath = (const char __user *)SC_ARG(params, 0);
@@ -10340,9 +10332,9 @@ long sys_rmdir(isr_params_t *params)
 #define AT_REMOVEDIR 0x200
 
 /**
- * unlinkat(2): its arguments are dirfd, path and flags. The name is removed as
- * unlink removes it, or as rmdir does with AT_REMOVEDIR; any other flag is
- * -EINVAL before the path is read. A relative path is resolved from `dirfd`.
+ * unlinkat(2) takes dirfd, path and flags. The name is removed as unlink
+ * removes it, or as rmdir does with AT_REMOVEDIR; any other flag is -EINVAL
+ * before the path is read. A relative path is resolved from `dirfd`.
  */
 long sys_unlinkat(isr_params_t *params)
 {
@@ -10655,7 +10647,7 @@ static int32_t rename_from_user(int olddirfd, const char __user *uold, int newdi
     return rc;
 }
 
-/* rename(2): its arguments are old path and new path. Returns 0 or -errno. */
+/* rename(2) takes old path and new path. Returns 0 or -errno. */
 long sys_rename(isr_params_t *params)
 {
     const char __user *old_path = (const char __user *)SC_ARG(params, 0);
@@ -10667,8 +10659,8 @@ long sys_rename(isr_params_t *params)
     return rename_from_user(AT_FDCWD, old_path, AT_FDCWD, new_path, 0);
 }
 
-/* renameat(2): its arguments are old dirfd, old path, new dirfd and new path;
- * each relative path is resolved from its own descriptor. */
+/* renameat(2) takes old dirfd, old path, new dirfd and new path; each relative
+ * path is resolved from its own descriptor. */
 long sys_renameat(isr_params_t *params)
 {
     const char __user *old_path = (const char __user *)SC_ARG(params, 1);

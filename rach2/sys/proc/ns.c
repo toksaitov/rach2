@@ -906,13 +906,13 @@ int ns_caps_held(const process_t *p)
 /* ---- unshare and setns ---- */
 
 /**
- * unshare: its argument is the flags. CLONE_NEWUSER gives the caller a
- * new user namespace, in which it has every capability, and needs no privilege;
- * the other CLONE_NEW flags need privilege in the caller's user namespace, the
- * new one with CLONE_NEWUSER, and give it new namespaces of those kinds, but
- * CLONE_NEWPID, whose namespace is the one the caller's next children are made
- * in. CLONE_FILES and CLONE_FS give it a descriptor table and directories of
- * its own, CLONE_NEWNS and CLONE_NEWUSER the second with it, and CLONE_SYSVSEM,
+ * unshare takes the flags. CLONE_NEWUSER gives the caller a new user namespace,
+ * in which it has every capability, and needs no privilege; the other CLONE_NEW
+ * flags need privilege in the caller's user namespace, the new one with
+ * CLONE_NEWUSER, and give it new namespaces of those kinds, but CLONE_NEWPID,
+ * whose namespace is the one the caller's next children are made in.
+ * CLONE_FILES and CLONE_FS give it a descriptor table and directories of its
+ * own, CLONE_NEWNS and CLONE_NEWUSER the second with it, and CLONE_SYSVSEM,
  * CLONE_THREAD, CLONE_SIGHAND and CLONE_VM are taken for a process of one
  * thread. Cgroup and time namespaces are refused.
  */
@@ -1190,12 +1190,11 @@ static int32_t setns_user(struct userns *ns)
 }
 
 /**
- * setns: its arguments are a descriptor open on a namespace, from
- * /proc/PID/ns and its CLONE_NEW flag or 0 for any kind. The caller must be
- * privileged in its own user namespace and in the one that owns the target. A
- * PID namespace becomes the one the caller's next children are made in, and
- * must be the caller's or below it; a mount namespace needs directories of the
- * caller's own.
+ * setns takes a descriptor open on a namespace, from /proc/PID/ns and its
+ * CLONE_NEW flag or 0 for any kind. The caller must be privileged in its own
+ * user namespace and in the one that owns the target. A PID namespace becomes
+ * the one the caller's next children are made in, and must be the caller's or
+ * below it; a mount namespace needs directories of the caller's own.
  */
 long sys_setns(isr_params_t *params)
 {

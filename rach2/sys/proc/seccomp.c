@@ -667,7 +667,7 @@ int32_t seccomp_prctl_set(uint32_t mode, uintptr_t prog)
 }
 
 /**
- * seccomp: its arguments are the operation, its flags and its argument.
+ * seccomp takes the operation, its flags and its argument.
  *
  * SECCOMP_SET_MODE_STRICT, with no flags and no argument, leaves the thread
  * only read, write, exit and sigreturn; any other call kills it.
