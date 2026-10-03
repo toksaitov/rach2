@@ -1,7 +1,8 @@
 #!/usr/bin/env sh
 #
-# mkfont.sh: write rach2/sys/display/vga_font.c, the glyphs the console loads
-# into the VGA adapter's font, from GNU Unifont.
+# mkfont.sh: write rach2/sys/display/vga_font.c, the console's font, from GNU
+# Unifont: the glyphs the console loads into the VGA adapter's font, and the
+# whole font, which the console draws itself on a framebuffer.
 #
 # Usage: mkfont.sh UNIFONT_HEX_GZ > rach2/sys/display/vga_font.c
 #
@@ -19,6 +20,12 @@
 # of Kyrgyz and Kazakh, and code page 866's signs at 0xF8 to 0xFF to a few
 # signs and the Ukrainian letters.
 #
+# The adapter keeps the glyphs it already has: ASCII, and the box drawing
+# the layout keeps. A framebuffer has no font of its own, so the whole font
+# takes those from Unifont too. Codes 0x00 to 0x1F and 0x7F stay blank in
+# it, since the console shows a control byte as a question mark and never
+# draws its code.
+#
 set -e
 HEX_SHA256=14c96e497466a82e46cf20032ce510e186bdc8658c9158e2290f452cda9bc498
 
@@ -32,10 +39,16 @@ if [ "${sum%% *}" != "$HEX_SHA256" ]; then
     exit 1
 fi
 
-# Slot and Unicode value of every character of the upper half; a slot this
-# list gives a letter or a sign to is loaded from Unifont.
+# Slot and Unicode value of every character the console draws, and how the
+# adapter gets it: `load` from Unifont, or `keep` and `ascii` from its own
+# font, which has code page 437's.
 layout()
 {
+    i=32
+    while [ $i -lt 127 ]; do
+        printf '%d %d ascii\n' $i $i
+        i=$((i + 1))
+    done
     i=0
     while [ $i -lt 32 ]; do
         printf '%d %d load\n' $((0x80 + i)) $((0x410 + i))
@@ -75,8 +88,7 @@ BEGIN {
         split(line, f, " ")
         code[f[1]] = f[2]
         how[f[1]] = f[3]
-        if (f[3] == "load")
-            want[sprintf("%04X", f[2])] = f[1]
+        want[sprintf("%04X", f[2])] = f[1]
     }
 }
 {
@@ -89,9 +101,23 @@ BEGIN {
         glyph[want[f[1]]] = f[2]
     }
 }
+function entry(s, rows,    r)
+{
+    printf "    {0x%02X,\n     {", s
+    for (r = 0; r < 15; r++)
+        printf "0x%s%s", substr(rows, r * 2 + 1, 2), (r < 14 ? ", " : ",\n")
+    printf "      0x%s}},\n", substr(rows, 31, 2)
+}
 END {
+    for (s in how) {
+        if (!(s in glyph)) {
+            printf "mkfont: U+%04X is not in the font\n", code[s] > "/dev/stderr"
+            exit 1
+        }
+    }
     print "/*"
-    print " * vga_font.c: the glyphs the console loads into the VGA adapter."
+    print " * vga_font.c: the font of the console, the glyphs it loads into the"
+    print " * VGA adapter and the whole font it draws on a framebuffer."
     print " *"
     print " * Written by tools/font/mkfont.sh from GNU Unifont 18.0.01, under the"
     print " * SIL Open Font License 1.1; do not edit. The upper half of the font"
@@ -116,14 +142,7 @@ END {
     for (s = 128; s < 256; s++) {
         if (how[s] != "load")
             continue
-        if (!(s in glyph)) {
-            printf "mkfont: U+%04X is not in the font\n", code[s] > "/dev/stderr"
-            exit 1
-        }
-        printf "    {0x%02X,\n     {", s
-        for (r = 0; r < 15; r++)
-            printf "0x%s%s", substr(glyph[s], r * 2 + 1, 2), (r < 14 ? ", " : ",\n")
-        printf "      0x%s}},\n", substr(glyph[s], 31, 2)
+        entry(s, glyph[s])
         n++
     }
     print "};"
@@ -131,4 +150,9 @@ END {
         print "mkfont: " n " glyphs, not the 98 vga_font.h declares" > "/dev/stderr"
         exit 1
     }
+    print ""
+    print "const struct vga_glyph vga_font_all[256] = {"
+    for (s = 0; s < 256; s++)
+        entry(s, (s in glyph) ? glyph[s] : "00000000000000000000000000000000")
+    print "};"
 }'
