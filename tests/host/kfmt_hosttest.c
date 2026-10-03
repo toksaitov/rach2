@@ -75,6 +75,13 @@ int main(void)
     row("A", "%c", 1, (char *)'A');
     row("100%", "100%%", 0);
 
+    /* Unsigned decimal, at an int's width and a long's: a count past the
+       largest int prints as itself, not as a negative number. */
+    row("4000000000", "%u", 1, (char *)(unsigned long)4000000000u);
+    row("0", "%u", 1, (char *)0);
+    row("4294967295", "%lu", 1, (char *)(unsigned long)4294967295ul);
+    row("  9", "%3u", 1, (char *)9);
+
     /* The `0` flag and the width, which is what a PCI address asks for and
        what the machine could not print. */
     row("0f", "%02x", 1, (char *)15);

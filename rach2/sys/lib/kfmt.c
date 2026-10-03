@@ -5,8 +5,9 @@
  * Format `format` against the arguments in `ap`, emitting each byte through
  * `putc_fn`.
  *
- * Supported conversions are `%d` (signed decimal), `%b`, `%o`, `%x`, `%X`
- * (binary, octal, lower- and upper-case hex), `%p` (a pointer, as `0x` and
+ * Supported conversions are `%d` (signed decimal), `%u` (unsigned decimal),
+ * `%b`, `%o`, `%x`, `%X` (binary, octal, lower- and upper-case hex), `%p`
+ * (a pointer, as `0x` and
  * its hex digits at the pointer's full width), `%s` (a string, with a NULL
  * pointer rendered as `(null)`), `%c` (a character), and `%%` (a literal
  * percent). The numeric conversions and `%s` take an optional `0` flag and
@@ -63,6 +64,22 @@ void k_vprintf(putc_fn_t putc_fn, const char *format, va_list ap)
                 }
                 str = buffer;
                 goto string;
+            case 'u': {
+                unsigned long v = wide ? va_arg(ap, unsigned long) : va_arg(ap, unsigned int);
+                char digits[24];
+                int n = 0, k = 0;
+
+                do {
+                    digits[n++] = (char)('0' + v % 10u);
+                    v /= 10u;
+                } while (v != 0);
+                while (n > 0) {
+                    buffer[k++] = digits[--n];
+                }
+                buffer[k] = '\0';
+                str = buffer;
+                goto string;
+            }
             case 'b':
             case 'o':
             case 'x':
@@ -71,8 +88,7 @@ void k_vprintf(putc_fn_t putc_fn, const char *format, va_list ap)
                     k_ltoa((long)va_arg(ap, unsigned long), buffer, _K_PRINTF_BUFFER_SIZE_, c,
                            false);
                 } else {
-                    k_itoa((int)va_arg(ap, unsigned int), buffer, _K_PRINTF_BUFFER_SIZE_, c,
-                           false);
+                    k_itoa((int)va_arg(ap, unsigned int), buffer, _K_PRINTF_BUFFER_SIZE_, c, false);
                 }
                 str = buffer;
                 goto string;
@@ -93,16 +109,17 @@ void k_vprintf(putc_fn_t putc_fn, const char *format, va_list ap)
                 if (!str)
                     str = "(null)";
 
-            string: {
-                size_t len = 0;
+            string:
+                {
+                    size_t len = 0;
 
-                while (str[len])
-                    len++;
-                while ((int)len < width) {
-                    putc_fn(fill);
-                    width--;
+                    while (str[len])
+                        len++;
+                    while ((int)len < width) {
+                        putc_fn(fill);
+                        width--;
+                    }
                 }
-            }
                 while (*str)
                     putc_fn(*str++);
                 break;

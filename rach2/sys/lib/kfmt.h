@@ -23,8 +23,9 @@ typedef void (*putc_fn_t)(char);
  * Format according to `format` against `ap`, emitting each byte through
  * `putc_fn`.
  *
- * Supported conversions are `%d` (signed decimal), `%b`, `%o`, `%x`, `%X`
- * (binary, octal, lower- and upper-case hex), `%p` (a pointer), `%s` (a
+ * Supported conversions are `%d` (signed decimal), `%u` (unsigned decimal),
+ * `%b`, `%o`, `%x`, `%X` (binary, octal, lower- and upper-case hex), `%p` (a
+ * pointer), `%s` (a
  * string, with a NULL pointer rendered as `(null)`), `%c` (a character), and
  * `%%` (a literal percent). The numeric conversions and `%s` take an optional
  * `0` flag and a single-digit width, and a numeric conversion an `l` or `z`

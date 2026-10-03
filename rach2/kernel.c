@@ -1287,8 +1287,7 @@ static void exec_program(int argc, char *argv[])
     /* The ELF segments are loaded eagerly above; these VMAs let the
      * demand-paging fault handler resolve later heap/stack/mmap faults. */
     if (elf_setup_vmas(&mm->vm, &img, USER_STACK_BASE, VM_STACK_MAX_GROWTH) != 0 ||
-        (stack_bottom < USER_STACK_BASE &&
-         !vm_grow_stack(&mm->vm, stack_bottom, RLIM_INFINITY))) {
+        (stack_bottom < USER_STACK_BASE && !vm_grow_stack(&mm->vm, stack_bottom, RLIM_INFINITY))) {
         k_panic("boot: no memory for the first process's regions");
     }
 
@@ -3538,13 +3537,16 @@ void kernel_main(const struct boot_info *boot)
         guard_boot_stack();
         map_modules();
         klog(KLOG_INFO, "memory",
-             "usable %ld KiB, unreachable %ld KiB, reserved %ld KiB, managed %ld KiB",
-             (long)(map.usable_bytes / 1024), (long)(map.unreachable_bytes / 1024),
-             (long)(map.reserved_bytes / 1024), (long)(frame_total_count() * (PAGE_SIZE / 1024)));
+             "usable %lu KiB, unreachable %lu KiB, reserved %lu KiB, managed %lu KiB",
+             (unsigned long)(map.usable_bytes / 1024),
+             (unsigned long)(map.unreachable_bytes / 1024),
+             (unsigned long)(map.reserved_bytes / 1024),
+             (unsigned long)(frame_total_count() * (PAGE_SIZE / 1024)));
         if (frame_total_count() * (PAGE_SIZE / 1024) < FRAME_MIN_MANAGED_KIB) {
             klog(KLOG_ERR, "memory",
-                 "refused: %ld KiB managed after the kernel's reservations, at least %d KiB needed",
-                 (long)(frame_total_count() * (PAGE_SIZE / 1024)), (int)FRAME_MIN_MANAGED_KIB);
+                 "refused: %lu KiB managed after the kernel's reservations, at least %d KiB needed",
+                 (unsigned long)(frame_total_count() * (PAGE_SIZE / 1024)),
+                 (int)FRAME_MIN_MANAGED_KIB);
             k_panic("memory: too little for this kernel");
         }
     }

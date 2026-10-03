@@ -9,10 +9,10 @@
 # on the desk printed `audio: not driven: 8086:a0c at 02x:02x.0` from a format
 # of `%x:%x at %02x:%02x.%d`, before the `0` flag and the width were understood.
 #
-# What the formatter takes: `%d %b %o %x %X %p %s %c %%`, each with an
+# What the formatter takes: `%d %u %b %o %x %X %p %s %c %%`, each with an
 # optional `0` flag and one decimal digit of width before the letter, and `l`
-# or `z` before the letter of a numeric conversion. Anything else, `%u`,
-# `%lu`, `%llx` and the rest, is a finding here.
+# or `z` before the letter of a numeric conversion. Anything else, `%llx`,
+# `%hd` and the rest, is a finding here.
 #
 # Usage: fmtcheck.sh
 set -u
@@ -36,7 +36,7 @@ for f in $(find rach2 -name '*.c' -o -name '*.h' | sort); do
             }
             while (match(text, /%/)) {
                 rest = substr(text, RSTART + 1)
-                if (rest != "" && rest !~ /^0?[1-9]?[lz]?[dboxX]/ && rest !~ /^0?[1-9]?[psc%]/) {
+                if (rest != "" && rest !~ /^0?[1-9]?[lz]?[duboxX]/ && rest !~ /^0?[1-9]?[psc%]/) {
                     printf "fmtcheck: %s:%d: %%%s is not a conversion this formatter has\n", \
                         file, NR, substr(rest, 1, 2)
                     bad++

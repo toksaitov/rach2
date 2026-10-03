@@ -2410,8 +2410,8 @@ void devfs_grubcore_publish_gpt(struct block_device *backing, const struct part_
     }
     block_partition_init(&grubcore.part, backing, first, count);
     grubcore.present = 1;
-    klog(KLOG_INFO, "devfs", "/dev/grubcore: BIOS boot partition %d, %ld sectors at LBA %ld",
-         number, (long)count, (long)first);
+    klog(KLOG_INFO, "devfs", "/dev/grubcore: BIOS boot partition %d, %lu sectors at LBA %lu",
+         number, (unsigned long)count, (unsigned long)first);
 }
 
 /**
