@@ -75,9 +75,13 @@ int paging_framefail_arm(uint32_t count)
 }
 
 #ifndef ARCH_DIRECT_MAP_ALL
-/* The temporary mappings: one bit per slot of the region, set while a
- * caller holds it. */
+/* The temporary mappings: one bit per slot of the region set while a caller
+ * holds it, and one per slot given back but still mapped, which no caller is
+ * given until the next sweep unmaps it. */
 static uint32_t _temp_slots[KVA_TEMP_SLOTS / 32];
+static uint32_t _temp_stale[KVA_TEMP_SLOTS / 32];
+/* The slot the next search for a free one starts at. */
+static uint32_t _temp_next;
 #endif
 /* The next free page of the MMIO region; a region is mapped for good. */
 static uintptr_t _mmio_next = KVA_MMIO;
@@ -892,25 +896,71 @@ void kunmap_temp(void *va)
     (void)va;
 }
 #else
-void *kmap_temp(uintptr_t phys)
+/**
+ * The first slot from `_temp_next` that is neither held nor stale, or
+ * `KVA_TEMP_SLOTS` when there is none. Interrupts are off.
+ *
+ * Such a slot has been unmapped since every processor that holds the big
+ * lock last dropped its translations, so none that runs the caller has one
+ * for it and its new entry needs no flush.
+ */
+static uint32_t temp_find(void)
 {
-    uint32_t flags = kirq_save();
+    uint32_t i;
+
+    for (i = 0; i < KVA_TEMP_SLOTS; i++) {
+        uint32_t slot = (_temp_next + i) % KVA_TEMP_SLOTS;
+        uint32_t bit = 1u << (slot % 32);
+
+        if (!((_temp_slots[slot / 32] | _temp_stale[slot / 32]) & bit)) {
+            _temp_next = (slot + 1) % KVA_TEMP_SLOTS;
+            return slot;
+        }
+    }
+    return KVA_TEMP_SLOTS;
+}
+
+/**
+ * Unmap every stale slot and drop this processor's translations, and have
+ * every other drop its own before it next takes the big lock: one change of
+ * kernel mappings for all the slots given back since the last sweep, where
+ * unmapping each as it was given back would be one change for each.
+ * Interrupts are off.
+ */
+static void temp_sweep(void)
+{
     uint32_t slot;
 
     for (slot = 0; slot < KVA_TEMP_SLOTS; slot++) {
-        if (!(_temp_slots[slot / 32] & (1u << (slot % 32)))) {
-            uintptr_t va = KVA_TEMP + slot * PAGE_SIZE;
-
-            _temp_slots[slot / 32] |= 1u << (slot % 32);
-            *kernel_pte(va) = (pte_t)(phys & ~(PAGE_SIZE - 1)) | PTE_P | PTE_W;
-            paging_flush_tlb(va);
-            kirq_restore(flags);
-            return (void *)(va + (phys & (PAGE_SIZE - 1)));
+        if (_temp_stale[slot / 32] & (1u << (slot % 32))) {
+            *kernel_pte(KVA_TEMP + slot * PAGE_SIZE) = 0;
         }
     }
+    k_memset(_temp_stale, 0, sizeof _temp_stale);
+    arch_space_load(arch_space_root());
+    smp_kernel_mapping_changed();
+}
+
+void *kmap_temp(uintptr_t phys)
+{
+    uint32_t flags = kirq_save();
+    uint32_t slot = temp_find();
+    uintptr_t va;
+
+    if (slot == KVA_TEMP_SLOTS) {
+        temp_sweep();
+        slot = temp_find();
+    }
+    if (slot == KVA_TEMP_SLOTS) {
+        kirq_restore(flags);
+        klog(KLOG_ERR, "vm", "temporary mappings: every slot is held");
+        return 0;
+    }
+    va = KVA_TEMP + slot * PAGE_SIZE;
+    _temp_slots[slot / 32] |= 1u << (slot % 32);
+    *kernel_pte(va) = (pte_t)(phys & ~(PAGE_SIZE - 1)) | PTE_P | PTE_W;
     kirq_restore(flags);
-    klog(KLOG_ERR, "vm", "temporary mappings: every slot is held");
-    return 0;
+    return (void *)(va + (phys & (PAGE_SIZE - 1)));
 }
 
 void kunmap_temp(void *va)
@@ -923,9 +973,8 @@ void kunmap_temp(void *va)
         return;
     }
     flags = kirq_save();
-    *kernel_pte(addr) = 0;
-    paging_flush_tlb(addr);
     _temp_slots[slot / 32] &= ~(1u << (slot % 32));
+    _temp_stale[slot / 32] |= 1u << (slot % 32);
     kirq_restore(flags);
 }
 #endif

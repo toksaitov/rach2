@@ -250,7 +250,13 @@ void *kmap_temp(uintptr_t phys);
  * megabyte, as Linux's STRICT_DEVMEM allows. */
 int paging_frame_is_device(uintptr_t phys);
 
-/** Release a mapping `kmap_temp` returned. */
+/**
+ * Release a mapping `kmap_temp` returned. The caller must not use the
+ * address again. On i686 the slot stays mapped until the slots are next
+ * swept: when none is free, every released slot is unmapped at once and
+ * every processor drops its translations, once for up to 1024 releases, as
+ * Linux's `kmap` does with its pool.
+ */
 void kunmap_temp(void *va);
 
 /** Zero the frame at physical `phys`; -1 when no temporary mapping was

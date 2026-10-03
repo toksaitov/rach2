@@ -1,6 +1,7 @@
 /**
- * Host test for the two range checks of mm/paging.c and arch/i686/mmu.c, and
- * for the panic of a supervisor fault in a kernel stack's guard page.
+ * Host test for the two range checks of mm/paging.c and arch/i686/mmu.c, for
+ * its temporary mappings, and for the panic of a supervisor fault in a
+ * kernel stack's guard page.
  *
  * host-deps: rach2/sys/mm/frame.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
@@ -36,6 +37,13 @@
  * the top given its table; and a window at address 0, given its table,
  * which is the regression a868ba10 fixed.
  *
+ * Five rows hold the temporary mappings to their contract on i686: a
+ * released slot stays mapped and no caller is given it again until a sweep,
+ * which comes only when no slot is free and unmaps every released slot with
+ * one change of kernel mappings, so 1024 mappings make one change where they
+ * made 2048; a held slot survives the sweeps; and a mapping is refused when
+ * every slot is held.
+ *
  * Two rows drive the page fault handler with a supervisor write fault
  * (entry 248 of milestone 50): at an address in the guard page below the
  * running thread's kernel stack, which `kstack_overrun_pid` answers with
@@ -45,8 +53,8 @@
  *
  * tests/host/paging_mutate.sh compiles the old rounding, the old loop
  * bounded by `va_start + size`, the refusal without its exception for
- * address 0, and the handler without its test of the guard page, and
- * requires each to fail its row. Returns 0 when every row passes, 1
+ * address 0, the handler without its test of the guard page, and four
+ * faults of the temporary mappings, and requires each to fail its row. Returns 0 when every row passes, 1
  * otherwise.
  */
 
@@ -271,9 +279,15 @@ uintptr_t arch_space_root(void)
     return 0;
 }
 
+/* The reloads of the translation root and the changes of kernel mappings,
+ * which the temporary mappings' rows count. */
+static int space_loads;
+static int kernel_changes;
+
 void arch_space_load(uintptr_t root)
 {
     (void)root;
+    space_loads++;
 }
 
 /** One processor: no other has a translation to drop. */
@@ -284,7 +298,9 @@ void smp_tlb_shootdown(const struct page_dir *dir, uintptr_t va)
 }
 
 void smp_kernel_mapping_changed(void)
-{}
+{
+    kernel_changes++;
+}
 
 void arch_tlb_flush_page(uintptr_t va)
 {
@@ -396,6 +412,68 @@ static void window_rows(void)
     }
 }
 
+/* The entry of temporary slot `slot`. */
+#define TEMP_PTE(slot) (test_dir.logical_page_tables[TABLE_OF(KVA_TEMP)]->pages[slot])
+
+/**
+ * The temporary mappings: a released slot stays mapped and is not given
+ * again before a sweep, which comes only when no slot is free and unmaps
+ * every released slot with one change of kernel mappings; a held slot
+ * survives the sweeps; and with every slot held a mapping is refused.
+ */
+static void temp_rows(void)
+{
+    static uint8_t *held[KVA_TEMP_SLOTS];
+    uint8_t *va;
+    uint32_t i, mapped;
+    int wrong = 0;
+
+    test_dir.logical_page_tables[TABLE_OF(KVA_TEMP)] = calloc(1, PAGE_SIZE);
+    space_loads = 0;
+    kernel_changes = 0;
+
+    va = kmap_temp(0x5000123u);
+    check(va == (uint8_t *)KVA_TEMP + 0x123 && TEMP_PTE(0) == (0x5000000u | 0x3u),
+          "a frame is mapped at the first temporary slot, at its offset in the page");
+    kunmap_temp(va);
+    check(TEMP_PTE(0) == (0x5000000u | 0x3u) && kernel_changes == 0,
+          "a released temporary slot stays mapped and changes no kernel mapping");
+
+    for (i = 1; i < KVA_TEMP_SLOTS; i++) {
+        va = kmap_temp(0x6000000u + i * PAGE_SIZE);
+        wrong |= va != (uint8_t *)KVA_TEMP + i * PAGE_SIZE;
+        kunmap_temp(va);
+    }
+    check(!wrong && kernel_changes == 0 && space_loads == 0,
+          "1024 temporary mappings take the 1024 slots in turn with no change of kernel mappings");
+
+    held[0] = kmap_temp(0x7000000u);
+    for (i = 1, mapped = 0; i < KVA_TEMP_SLOTS; i++) {
+        mapped += TEMP_PTE(i) != 0;
+    }
+    check(held[0] == (uint8_t *)KVA_TEMP && mapped == 0 && kernel_changes == 1 && space_loads == 1,
+          "with no slot free, a mapping sweeps every released slot with one change of kernel "
+          "mappings and takes the first");
+
+    kernel_changes = 0;
+    for (i = 0; i < 2 * KVA_TEMP_SLOTS; i++) {
+        va = kmap_temp(0x8000000u);
+        wrong |= va == held[0];
+        kunmap_temp(va);
+    }
+    check(!wrong && TEMP_PTE(0) == (0x7000000u | 0x3u) && kernel_changes == 2,
+          "a held temporary slot is not given again and survives two sweeps");
+
+    for (i = 1; i < KVA_TEMP_SLOTS; i++) {
+        held[i] = kmap_temp(0x9000000u);
+        wrong |= held[i] == 0;
+    }
+    check(!wrong && kmap_temp(0xA000000u) == 0, "with every temporary slot held, a mapping is refused");
+    for (i = 0; i < KVA_TEMP_SLOTS; i++) {
+        kunmap_temp(held[i]);
+    }
+}
+
 /**
  * Drive the page fault handler in a forked child with a supervisor write
  * fault at `addr`, which must panic with a text containing `text`.
@@ -442,6 +520,7 @@ int main(void)
 
     mmio_rows();
     window_rows();
+    temp_rows();
     fault_rows();
     check(boot_carves == 0, "no row reached the boot allocator after the heap exists");
 
