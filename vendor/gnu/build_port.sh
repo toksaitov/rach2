@@ -106,6 +106,29 @@ configure_autoconf()
         --sysconfdir=/etc --localstatedir=/var $CONFIGURE_ARGS "$@"
 }
 
+# configure_cmake ARG...: run the build host's CMake, which the cmake port
+# builds into build/vendor/gnu/host, for the target in the current directory
+# over the port's source, with a toolchain file that names the cross
+# compilers and finds libraries and headers in the root alone; the programs
+# under /usr and the libraries in /usr/lib, as the other ports have them,
+# and then these arguments.
+configure_cmake()
+{
+    cat >toolchain.cmake <<EOF
+set(CMAKE_SYSTEM_NAME Linux)
+set(CMAKE_SYSTEM_PROCESSOR i686)
+set(CMAKE_C_COMPILER $WRAP/$TARGET-gcc)
+set(CMAKE_CXX_COMPILER $WRAP/$TARGET-g++)
+set(CMAKE_FIND_ROOT_PATH $ROOT)
+set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
+EOF
+    "$OUT/host/bin/cmake" -S "$SRC" -B . -DCMAKE_TOOLCHAIN_FILE="$PWD/toolchain.cmake" \
+        -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_INSTALL_LIBDIR=lib -DCMAKE_BUILD_TYPE=Release "$@"
+}
+
 # libtool_static: the make argument a static link needs in a port whose
 # configure made a libtool script; nothing for a shared link or a port
 # without one.

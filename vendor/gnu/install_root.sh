@@ -173,7 +173,12 @@ ln -s ../proc/self/mounts "$TREE/etc/mtab"
 
 # /run, where D-Bus's programs look for the system bus's socket,
 # /run/dbus/system_bus_socket: a link to /var/run, which init empties at
-# boot as Linux keeps /run in memory.
+# boot as Linux keeps /run in memory. A port that installed into /run would
+# turn the link into a link inside that directory.
+if [ -e "$TREE/run" ] || [ -L "$TREE/run" ]; then
+    echo "gnu: install: a port installed /run, where the link to /var/run goes" >&2
+    exit 1
+fi
 ln -s var/run "$TREE/run"
 
 # BusyBox's applets are not files: ash runs one for its name before it

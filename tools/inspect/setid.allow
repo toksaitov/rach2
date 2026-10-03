@@ -116,6 +116,7 @@ setid /usr/bin/newgrp 04755:0:0 build/vendor/gnu/setid/newgrp
 setid /usr/bin/crontab 02755:0:63 build/vendor/gnu/setid/crontab
 setid /usr/bin/write 02755:0:5 build/vendor/gnu/setid/write
 setid /usr/bin/wall 02755:0:5 build/vendor/gnu/setid/wall
+setid /usr/bin/sudo 04755:0:0 build/vendor/gnu/setid/sudo
 setid /usr/bin/chsh 04755:0:0 build/vendor/gnu/setid/chsh
 setid /usr/bin/chfn 04755:0:0 build/vendor/gnu/setid/chfn
 setid /usr/bin/gpasswd 04755:0:0 build/vendor/gnu/setid/gpasswd
@@ -123,8 +124,9 @@ trusted file 0755:0:0 /bin/busybox build/vendor/busybox/busybox
 trusted overlay 0755:0:0 /bin/sh build/vendor/gnu/root/usr/bin/bash
 trusted text 0644:0:0 /etc/passwd root:x:0:0:root:/root:/bin/bash\ntest:x:1000:1000:test:/home/test:/bin/bash\nsshd:x:74:74::/var/empty:/usr/bin/false\nmessagebus:x:81:81::/nonexistent:/usr/bin/false\nnobody:x:65534:65534:nobody:/nonexistent:/usr/bin/false\n
 trusted file 0600:0:0 /etc/shadow krffs/shadow
-trusted text 0644:0:0 /etc/group root:x:0:\ntty:x:5:\ntest:x:1000:\nsshd:x:74:\nmessagebus:x:81:\ncrontab:x:63:\nnogroup:x:65534:\n
+trusted text 0644:0:0 /etc/group root:x:0:\ntty:x:5:\nsudo:x:27:\ntest:x:1000:\nsshd:x:74:\nmessagebus:x:81:\ncrontab:x:63:\nnogroup:x:65534:\n
 trusted text 0644:0:0 /etc/shells /bin/sh\n/bin/bash\n
+trusted text 0440:0:0 /etc/sudoers Defaults env_reset\nDefaults use_pty\nroot ALL=(ALL:ALL) ALL\n%sudo ALL=(ALL:ALL) ALL\n@includedir /etc/sudoers.d\n
 trusted text 0644:0:0 /etc/profile export PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin\nexport HOME="${HOME:-/root}"\nexport PS1='\u@\h:\w\$ '\ncase "$TERM" in dumb|'') ;; *) export LANG=C.UTF-8 ;; esac\nif [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ] && [ -x /usr/bin/dbus-daemon ]; then\n    export DBUS_SESSION_BUS_ADDRESS="unix:path=$HOME/.dbus/session_bus_socket"\n    dbus-send --session --dest=org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus.GetId 2>/dev/null ||\n        { mkdir -p "$HOME/.dbus" && chmod 700 "$HOME/.dbus" &&\n          dbus-daemon --session --address="$DBUS_SESSION_BUS_ADDRESS" --fork --nopidfile >/dev/null 2>&1; }\nfi\n
 trusted text 0644:0:0 /etc/nsswitch.conf passwd: files\ngroup: files\nshadow: files\nhosts: files dns\nnetworks: files\nprotocols: files\nservices: files\n
 trusted text 0644:0:0 /etc/ld.so.conf /usr/lib/i386-linux-gnu\n

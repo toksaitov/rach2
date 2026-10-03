@@ -104,6 +104,24 @@ The ports milestone 55 added were built one at a time, so the table of them give
 | libssh2      | 1.11.1        | 1.2 MB   |
 | Chawan       | 0.5~dev1      | 6.3 MB   |
 
+The ports milestone 56 added, built the same way:
+
+| Port          | Version  | Size     |
+| ------------- | -------- | -------- |
+| m4            | 1.4.21   | 0.7 MB   |
+| Autoconf      | 2.73     | 3.6 MB   |
+| Automake      | 1.19     | 2.5 MB   |
+| Bison         | 3.8.2    | 2.8 MB   |
+| flex          | 2.6.4    | 0.8 MB   |
+| jq            | 1.8.2    | 1.6 MB   |
+| screen        | 5.0.2    | 1.3 MB   |
+| sudo          | 1.9.17p2 | 8.5 MB   |
+| CMake         | 4.3.4    | 107.2 MB |
+| libuv         | 1.52.1   | 0.9 MB   |
+| Userspace RCU | 0.15.7   | 1.4 MB   |
+| libcap        | 2.75     | 0.6 MB   |
+| BIND          | 9.20.4   | 6.7 MB   |
+
 These notes say what some ports provide and what they leave to the system they are installed on.
 
 * OpenSSL is built for `linux-x86`, shared, with zlib. Its configuration is in `/etc/ssl`, where the programs that use it look for certificates; the root has none, and the root image installs the CA bundle there.
@@ -121,7 +139,13 @@ These notes say what some ports provide and what they leave to the system they a
 * Python has the modules of its standard library that link the root's libraries, and neither `tkinter`, `dbm.gnu`, pip nor the test suite. Its ssl module is built against OpenSSL 4, which has no SSLv3 and no methods of one protocol version. Its byte code records a hash of each source, since the image gives every file the same time.
 * htop has ncurses' wide characters and CPU affinity, and no sensors, capabilities, delay accounting, hwloc or libunwind. dosfstools installs `mkfs.fat` and `fsck.fat` with Debian's other names for them, which the path finds before BusyBox's `mkdosfs`.
 * shadow installs the account tools BusyBox has not, `useradd`, `usermod`, `userdel`, the group tools, `gpasswd`, `chsh`, `chfn`, `chage`, `vipw` and the checkers, with `/etc/login.defs`; `passwd`, `su`, `login`, `chpasswd` and `nologin` stay BusyBox's and `newgrp` util-linux's. `chsh`, `chfn` and `gpasswd` are set-id root, as on Debian; `chage` is not, where Debian's is set-group-ID `shadow`, so only root runs it. There is no PAM, no subordinate ids and no `lastlog`.
-* Chawan, `cha`, is the terminal's web browser: its own HTML and CSS engine with flow, table and flex layout, JavaScript in QuickJS when its configuration turns scripting on, HTTP and HTTPS with brotli, SFTP through libssh2, Gopher and Gemini, and images in a terminal that shows sixels or the kitty protocol. Each page loads in a process of its own under a seccomp filter. Its recipe builds Nim 2.2.12 for the build host and compiles Chawan with it, and `chac`, which compiles its startup script to QuickJS byte code, runs on the build host. brotli's libraries and its `brotli` program are compiled by the recipe itself, since upstream builds with CMake.
+* m4, Autoconf, Automake, Bison and flex build a package from its sources on the machine: `autoreconf -i` makes a `configure` and a `Makefile.in` from `configure.ac` and `Makefile.am`, as the gnu suite's autoreconf row does. Automake's recipe builds an Autoconf for the build host first, since its `configure` runs one, and flex's makes its own scanner with the build host's flex.
+* CMake, with `ccmake`, configures and builds a project from its `CMakeLists.txt`. Its recipe bootstraps a CMake for the build host into `build/vendor/gnu/host`, which builds the root's and the ports built with CMake, libuv among them.
+* jq reads and transforms JSON, with the Oniguruma its release carries for its regular expressions.
+* screen multiplexes a terminal, not set-id: a user's sessions are sockets in `~/.screen`.
+* sudo runs a command as another user by `/etc/sudoers`, which gives root and the group `sudo`, 27, every command, against the shadow file, since the root has no PAM. It is set-id root through `build/vendor/gnu/setid`.
+* BIND's `dig`, `host`, `nslookup`, `delv` and `nsupdate` ask a name server, on libuv, Userspace RCU, libcap and OpenSSL; the server is built and left out.
+* Chawan, `cha`, is the terminal's web browser: its own HTML and CSS engine with flow, table and flex layout, JavaScript in QuickJS when its configuration turns scripting on, HTTP and HTTPS with brotli, SFTP through libssh2, Gopher and Gemini, and images in a terminal that shows sixels or the kitty protocol. Each page loads in a process of its own under a seccomp filter. Its recipe builds Nim 2.2.12 for the build host and compiles Chawan with it, and `chac`, which compiles its startup script to QuickJS byte code, runs on the build host. brotli's libraries and its `brotli` program are compiled by the recipe itself, since upstream builds with CMake. The recipe adds the Rach2 console, `TERM=rach2`, to Chawan's table of terminals, so it uses the ANSI colours and none of the scroll regions, line-drawing set, alternate screen and mouse an XTerm has, and keeps the right edge's column free.
 * GnuPG has its agent, `dirmngr` with NTBTLS for hkps, `keyboxd` with SQLite and `pinentry`'s curses and tty programs, and no LDAP and no TPM2 daemon.
 
 ## The root image
@@ -145,7 +169,7 @@ The image is built where the layer is, on a Linux host, and is not part of `make
 * `ssh-keysign` without its set-id bit: the system uses no host-based authentication, and the guard admits no set-id file the manifest does not declare.
 * `/run`, a link to `/var/run`, where D-Bus's programs look for the system bus's socket, `/run/dbus/system_bus_socket`.
 
-The ports install their upstream manual pages under `/usr/share/man/manN` as troff sources, which the system's `man` does not read: it reads plain text. `render_man.sh` renders the pages of sections 1, 5, 7 and 8 with the build host's mandoc, as `man/render.sh` renders this project's, into `/usr/share/man/gnu/catN`, 1213 pages, and `man` looks a name up there when this project's manual has no page for it, or first when the command the path finds by the name is a port's and not a link to BusyBox, so `man git` shows Git's page and `man ls` GNU's. A page dated `$Mdocdate$` alone, which mandoc would render with the day of the build, is refused, and its recipe gives it the date its file has in the release, as tmux's does, so two builds of the root render alike.
+The ports install their upstream manual pages under `/usr/share/man/manN` as troff sources, which the system's `man` does not read: it reads plain text. `render_man.sh` renders the pages of sections 1, 5, 7 and 8 with the build host's mandoc, as `man/render.sh` renders this project's, into `/usr/share/man/gnu/catN`, 1642 pages, and `man` looks a name up there when this project's manual has no page for it, or first when the command the path finds by the name is a port's and not a link to BusyBox, so `man git` shows Git's page and `man ls` GNU's. A page dated `$Mdocdate$` alone, which mandoc would render with the day of the build, is refused, and its recipe gives it the date its file has in the release, as tmux's does, so two builds of the root render alike.
 
 ### Which program a name finds
 

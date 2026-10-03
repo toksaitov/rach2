@@ -6,8 +6,9 @@
 #
 # * GNU projects (binutils, GCC, GMP, MPFR, MPC, glibc, coreutils, make, bash
 #   and its patches, grep, sed, gawk, findutils, diffutils, patch, tar, gzip,
-#   ncurses, GDB, nano, Texinfo, and Readline and its patches): the GNU
-#   keyring, ftp.gnu.org/gnu/gnu-keyring.gpg.
+#   ncurses, GDB, nano, Texinfo, Readline and its patches, m4, Autoconf,
+#   Automake, Bison and screen): the GNU keyring,
+#   ftp.gnu.org/gnu/gnu-keyring.gpg.
 # * Linux: the kernel.org release keys.
 # * Git and its manual pages: Junio C Hamano's key,
 #   96E07AF25771955980DAD10020D04E5A713660A7, which signs the uncompressed tar.
@@ -91,6 +92,12 @@
 #   Debian's, from its snapshot archive, since Debian's brotli is a git
 #   archive of the tag and its Chawan a repacked snapshot of the development
 #   after 0.4.4, from 2026-09-16, which no release has.
+# * flex, jq, sudo, CMake, liburcu, libcap and BIND, checked the same way
+#   against Debian's source index for unstable of 2026-10-02, whose release
+#   file is dated 20:13:57 UTC: each release tarball is the one Debian has.
+# * libuv: Santiago Gimeno's key, 612F0EAD9401622379DF4402F28C3C8DA33C03BE,
+#   which libuv's MAINTAINERS.md lists; Debian's libuv is a git archive of
+#   the tag, and neither has the files autoconf generates.
 binutils 2.47 https://ftp.gnu.org/gnu/binutils/binutils-2.47.tar.xz 154ab23b60070e8f27013c22977f1129425d67d1e8acd6e13010e617811e4cff
 gcc 16.2.0 https://ftp.gnu.org/gnu/gcc/gcc-16.2.0/gcc-16.2.0.tar.xz e6738e29597f733270731aa90600f37ffdc045079dfc27ec7e8192cc81085c3e
 gmp 6.3.0 https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz a3c2b80201b89e68616f4ad30bc66aee4927c3ce50e33929ca819d5c43538898
@@ -189,3 +196,16 @@ nim 2.2.12 https://github.com/nim-lang/nightlies/releases/download/2026-09-08-ve
 libssh2 1.11.1 https://libssh2.org/download/libssh2-1.11.1.tar.gz d9ec76cbe34db98eec3539fe2c899d26b0c837cb3eb466a56b0f109cabf658f7
 brotli 1.2.0 https://snapshot.debian.org/archive/debian/20261002T000000Z/pool/main/b/brotli/brotli_1.2.0.orig.tar.gz eb5f7dadf215d0670665fd81566e1fe2dfdc154d983f09142de7299df4c182e6
 chawan 0.5~dev1 https://snapshot.debian.org/archive/debian/20261002T000000Z/pool/main/c/chawan/chawan_0.5~dev1+ds.orig.tar.xz 2e6ce739a797bf5e9fefa0d566408dc0505f84dd492683625fdf1bde2e76ea1a
+m4 1.4.21 https://ftp.gnu.org/gnu/m4/m4-1.4.21.tar.xz f25c6ab51548a73a75558742fb031e0625d6485fe5f9155949d6486a2408ab66
+autoconf 2.73 https://ftp.gnu.org/gnu/autoconf/autoconf-2.73.tar.xz 9fd672b1c8425fac2fa67fa0477b990987268b90ff36d5f016dae57be0d6b52e
+automake 1.19 https://ftp.gnu.org/gnu/automake/automake-1.19.tar.xz e3e2c2e3abf37898138db5b6c1d1dc35c9160c5978be7947d2c741705251d445
+bison 3.8.2 https://ftp.gnu.org/gnu/bison/bison-3.8.2.tar.xz 9bba0214ccf7f1079c5d59210045227bcf619519840ebfa80cd3849cff5a5bf2
+flex 2.6.4 https://github.com/westes/flex/releases/download/v2.6.4/flex-2.6.4.tar.gz e87aae032bf07c26f85ac0ed3250998c37621d95f8bd748b31f15b33c45ee995
+jq 1.8.2 https://github.com/jqlang/jq/releases/download/jq-1.8.2/jq-1.8.2.tar.gz 71b8d6e8f5fe81f6c6d0d110e3892251f6ce76ed095abd315e26e6e1193af3af
+screen 5.0.2 https://ftp.gnu.org/gnu/screen/screen-5.0.2.tar.gz ca9a2c7e240919bc7ac12124593ae4529bb4eb5f7349d8857829b7e3f0b3b332
+sudo 1.9.17p2 https://www.sudo.ws/dist/sudo-1.9.17p2.tar.gz 4a38a1ab3adb1199257edc2a7c4a2bd714665eb605b04368843b06dada2cfcfb
+cmake 4.3.4 https://github.com/Kitware/CMake/releases/download/v4.3.4/cmake-4.3.4.tar.gz fdeff897b9eb49d764539f2b1edc6eb7e1440df325678a97c1978499e931adda
+libuv 1.52.1 https://dist.libuv.org/dist/v1.52.1/libuv-v1.52.1.tar.gz 66d511b9e6e334c0e62279eb234fbfb2b3110b1479c09b95b44c7afca8cff9e7
+liburcu 0.15.7 https://lttng.org/files/urcu/userspace-rcu-0.15.7.tar.bz2 2556b83adc0f9b3ac8024e613e17d014d04c4c49110604ce55fcb14eae32edd3
+libcap 2.75 https://kernel.org/pub/linux/libs/security/linux-privs/libcap2/libcap-2.75.tar.xz de4e7e064c9ba451d5234dd46e897d7c71c96a9ebf9a0c445bc04f4742d83632
+bind9 9.20.4 https://downloads.isc.org/isc/bind9/9.20.4/bind-9.20.4.tar.xz 3a8e1a05e00e3e9bc02bdffded7862faf7726ba76ba997f42ab487777bd8210b
