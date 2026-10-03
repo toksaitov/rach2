@@ -3669,7 +3669,7 @@ long ksys_fadvise64(int fd, long long len, uint32_t advice)
  */
 long sys_fadvise64(isr_params_t *params)
 {
-    return ksys_fadvise64((int)SC_ARG(params, 0), (long long)(long)SC_ARG(params, 2),
+    return ksys_fadvise64((int)SC_ARG(params, 0), SC_SIGNED(params, 2),
                           (uint32_t)SC_ARG(params, 3));
 }
 
@@ -3873,13 +3873,9 @@ static int seek_add(uint64_t base, long long off, long long *out)
     return 0;
 }
 
-/* The largest offset lseek(2) returns, a long's: 2 GiB less a byte on
- * i686, where a larger one is -EOVERFLOW and _llseek reaches it, and the
- * largest file offset on x86-64. */
-#define LSEEK_MAX ((uint64_t)(~0UL >> 1))
-
-/** Seek a raw description after any transfer using its offset completes. */
-static long raw_lseek(fd_entry_t *entry, long offset, int whence)
+/** Seek a raw description after any transfer using its offset completes;
+ * an offset past `limit`, the largest lseek(2) returns, is -EOVERFLOW. */
+static long raw_lseek(fd_entry_t *entry, long long offset, int whence, uint64_t limit)
 {
     uint64_t resolved, raw_size;
     int32_t rc;
@@ -3890,7 +3886,7 @@ static long raw_lseek(fd_entry_t *entry, long offset, int whence)
         return -ENXIO;
     }
     rc = raw_seek_resolve(entry->ofd->raw_offset, raw_size, (long long)offset, whence, &resolved);
-    if (rc == 0 && resolved > LSEEK_MAX) {
+    if (rc == 0 && resolved > limit) {
         rc = -EOVERFLOW;
     }
     if (rc == 0) {
@@ -4038,14 +4034,16 @@ static int seek_bootlog(fd_entry_t *entry, long long off, int whence, uint64_t l
 }
 
 /**
- * lseek(2): the descriptor, the offset, a long, and whence; the new offset,
- * a long too, or a negative errno. On i686 both are 32 bits, a place past
- * 2 GiB is -EOVERFLOW, and _llseek reaches it; on x86-64 both are 64.
+ * lseek(2): the descriptor, the offset, a signed register's worth, and
+ * whence; the new offset, or a negative errno. On i686 the offset is 32
+ * bits, a place past 2 GiB is -EOVERFLOW, and _llseek reaches it; on x86-64
+ * it is 64.
  */
 long sys_lseek(isr_params_t *params)
 {
     int fd = (int)SC_ARG(params, 0);
-    long offset = (long)SC_ARG(params, 1);
+    long long offset = SC_SIGNED(params, 1);
+    uint64_t limit = SC_SIGNED_MAX(params);
     int whence = (int)SC_ARG(params, 2);
     fd_entry_t *entry;
     uint64_t file_size;
@@ -4065,10 +4063,10 @@ long sys_lseek(isr_params_t *params)
     }
     if (entry->type == FD_TYPE_DEVICE) {
         if (devfs_fd_is_raw(entry)) {
-            return raw_lseek(entry, offset, whence);
+            return raw_lseek(entry, offset, whence, limit);
         }
         if (devfs_fd_log_size(entry, NULL)) {
-            seek_rc = seek_bootlog(entry, (long long)offset, whence, LSEEK_MAX, 1, &at);
+            seek_rc = seek_bootlog(entry, offset, whence, limit, 1, &at);
             return seek_rc != 0 ? seek_rc : (long)at;
         }
         /* mem devices (null/zero/full) accept a seek that always lands at 0;
@@ -4083,7 +4081,7 @@ long sys_lseek(isr_params_t *params)
         return -ESPIPE; /* a terminal/mouse is a valid fd, just not seekable */
     }
     if (seeks_listing(entry)) {
-        seek_rc = seek_listing(entry, (long long)offset, whence, LSEEK_MAX, &at);
+        seek_rc = seek_listing(entry, offset, whence, limit, &at);
         return seek_rc != 0 ? seek_rc : (long)at;
     }
     if (entry->type != FD_TYPE_FILE) {
@@ -4107,14 +4105,14 @@ long sys_lseek(isr_params_t *params)
 
     switch (whence) {
     case 0: /* SEEK_SET */
-        at = (long long)offset;
+        at = offset;
         seek_rc = 0;
         break;
     case 1: /* SEEK_CUR */
-        seek_rc = seek_add(entry->ofd->offset, (long long)offset, &at);
+        seek_rc = seek_add(entry->ofd->offset, offset, &at);
         break;
     case 2: /* SEEK_END */
-        seek_rc = seek_add(file_size, (long long)offset, &at);
+        seek_rc = seek_add(file_size, offset, &at);
         break;
     default:
         at = -1;
@@ -4130,7 +4128,7 @@ long sys_lseek(isr_params_t *params)
         fd_ofd_unlock(entry->ofd);
         return -EINVAL;
     }
-    if ((uint64_t)at > LSEEK_MAX) {
+    if ((uint64_t)at > limit) {
         fd_ofd_unlock(entry->ofd);
         return -EOVERFLOW; /* a real offset this call cannot return; llseek can */
     }
@@ -8102,11 +8100,11 @@ long ksys_truncate(const char __user *upath, long long length)
     return rc;
 }
 
-/** truncate(2) takes path and the length, a signed long, so of 32 bits on
- * i686, whose truncate64 is in arch/i686/sys_ia32.c. */
+/** truncate(2) takes path and the length, a signed register's worth, so of
+ * 32 bits on i686, whose truncate64 is in arch/i686/sys_ia32.c. */
 long sys_truncate(isr_params_t *params)
 {
-    return ksys_truncate((const char __user *)SC_ARG(params, 0), (long long)(long)SC_ARG(params, 1));
+    return ksys_truncate((const char __user *)SC_ARG(params, 0), SC_SIGNED(params, 1));
 }
 
 /**
@@ -8794,14 +8792,14 @@ long ksys_pwrite64(int fd, const char __user *buf, uint32_t count, long long pos
 long sys_pread64(isr_params_t *params)
 {
     return ksys_pread64((int)SC_ARG(params, 0), (char __user *)SC_ARG(params, 1),
-                        USER_LEN32(SC_ARG(params, 2)), (long long)(long)SC_ARG(params, 3));
+                        USER_LEN32(SC_ARG(params, 2)), SC_SIGNED(params, 3));
 }
 
 /** pwrite64(2) as a 64-bit architecture has it, pread64's arguments. */
 long sys_pwrite64(isr_params_t *params)
 {
     return ksys_pwrite64((int)SC_ARG(params, 0), (const char __user *)SC_ARG(params, 1),
-                         USER_LEN32(SC_ARG(params, 2)), (long long)(long)SC_ARG(params, 3));
+                         USER_LEN32(SC_ARG(params, 2)), SC_SIGNED(params, 3));
 }
 
 /* The position preadv(2) and pwritev(2) take as two registers, low first:
