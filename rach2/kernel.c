@@ -2309,6 +2309,29 @@ static int spec_entry_number(const char *p)
 }
 
 /**
+ * The disk id of an identity, eight hexadecimal digits at `p`, into `*id`:
+ * 0, or -1 when a digit is not one.
+ */
+static int spec_mbr_id(const char *p, uint32_t *id)
+{
+    int i;
+
+    *id = 0;
+    for (i = 0; i < 8; i++) {
+        int v = p[i] >= '0' && p[i] <= '9'   ? p[i] - '0'
+                : p[i] >= 'a' && p[i] <= 'f' ? p[i] - 'a' + 10
+                : p[i] >= 'A' && p[i] <= 'F' ? p[i] - 'A' + 10
+                                             : -1;
+
+        if (v < 0) {
+            return -1;
+        }
+        *id = (*id << 4) | (uint32_t)v;
+    }
+    return 0;
+}
+
+/**
  * Whether partition `slot` of `d` is the one `spec` names.
  *
  * `LABEL=` and `UUID=` read the partition's ext2 superblock, since a label
@@ -2328,22 +2351,10 @@ static int root_spec_matches(const char *spec, struct disk *d, int slot)
                part_guid_equal(guid, e->guid);
     }
     if (str_starts(spec, "MBRID=")) {
-        uint32_t id = 0;
-        const char *p = spec + 6;
+        uint32_t id;
 
-        for (i = 0; i < 8; i++) {
-            int v = p[i] >= '0' && p[i] <= '9'   ? p[i] - '0'
-                    : p[i] >= 'a' && p[i] <= 'f' ? p[i] - 'a' + 10
-                    : p[i] >= 'A' && p[i] <= 'F' ? p[i] - 'A' + 10
-                                                 : -1;
-
-            if (v < 0) {
-                return 0;
-            }
-            id = (id << 4) | (uint32_t)v;
-        }
-        return d->table.kind == PART_MBR && d->table.mbr_id == id &&
-               e->number == spec_entry_number(p + 8);
+        return spec_mbr_id(spec + 6, &id) == 0 && d->table.kind == PART_MBR &&
+               d->table.mbr_id == id && e->number == spec_entry_number(spec + 14);
     }
     if (str_starts(spec, "GPTID=")) {
         uint8_t guid[16];

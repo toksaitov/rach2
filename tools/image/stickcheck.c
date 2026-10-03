@@ -58,6 +58,18 @@ static unsigned long long rd64(const unsigned char *p)
     return v;
 }
 
+/**
+ * Whether the third entry is an EFI boot image, of type 0xEF, between the
+ * first entry's end and the volume's start.
+ */
+static int efi_entry_ok(const struct mbr_part *parts, const struct mbr_range *taken,
+                        unsigned long long start)
+{
+    return parts[2].type == 0xEF &&
+           taken[2].start_lba >= taken[0].start_lba + taken[0].sector_count &&
+           taken[2].start_lba + taken[2].sector_count <= start;
+}
+
 int main(int argc, char **argv)
 {
     unsigned char table[SECTOR];
@@ -102,8 +114,9 @@ int main(int argc, char **argv)
         return fail("the table does not give exactly three partitions");
     }
     /* `mbr_take` packs what it takes, so the three must be the first three
-     * entries for the type read from an entry to be the range's own. */
-    if (parts[0].type == 0 || parts[1].type == 0 || parts[2].type == 0 || parts[3].type != 0) {
+     * entries for the type read from an entry to be the range's own: with
+     * three taken and the fourth empty, the third is not. */
+    if (parts[0].type == 0 || parts[1].type == 0 || parts[3].type != 0) {
         return fail("the three partitions are not the table's first three entries");
     }
     if (parts[1].type != 0x07 || taken[1].start_lba != start || taken[1].sector_count != length) {
@@ -112,8 +125,7 @@ int main(int argc, char **argv)
     if (taken[0].start_lba + taken[0].sector_count > start) {
         return fail("the first entry runs into the volume");
     }
-    if (parts[2].type != 0xEF || taken[2].start_lba < taken[0].start_lba + taken[0].sector_count ||
-        taken[2].start_lba + taken[2].sector_count > start) {
+    if (!efi_entry_ok(parts, taken, start)) {
         return fail("the third entry is not an EFI boot image between the ISO and the volume");
     }
     if (start % 2048u != 0) {
