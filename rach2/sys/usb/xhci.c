@@ -341,12 +341,12 @@ static int nctrls;
 
 static uint32_t xhci_mmio_r32(struct xhci_ctrl *hc, uint32_t offset)
 {
-    return *(volatile uint32_t *)(hc->base + offset);
+    return mmio_read32(hc->base + offset);
 }
 
 static void xhci_mmio_w32(struct xhci_ctrl *hc, uint32_t offset, uint32_t value)
 {
-    *(volatile uint32_t *)(hc->base + offset) = value;
+    mmio_write32(hc->base + offset, value);
 }
 
 static const struct xhci_io xhci_mmio_io = {xhci_mmio_r32, xhci_mmio_w32, k_udelay};
@@ -1158,6 +1158,13 @@ static uint32_t *trb_at(uint32_t *ring, uint32_t index)
     return &ring[index * TRB_WORDS];
 }
 
+/** The high half of the physical address `a`, which the controller takes
+ * apart from its low half. */
+static uint32_t phys_hi(uintptr_t a)
+{
+    return (uint32_t)((uint64_t)a >> 32);
+}
+
 /** A TRB's address as the controller takes it: the command and event rings
  * are in the controller's record, in the kernel image's .bss, below 4 GiB,
  * so the address is the physical one's low half and the high half is 0. */
@@ -1480,6 +1487,7 @@ static void event_dispatch(struct xhci_ctrl *hc, const uint32_t *trb)
         struct xhci_slot *s;
         struct xhci_td *t;
         uint32_t at, k, through, n;
+        uint64_t off;
         int last;
 
         if (device <= 0 || device > (int)hc->nslots || !hc->slots[device].used) {
@@ -1489,11 +1497,12 @@ static void event_dispatch(struct xhci_ctrl *hc, const uint32_t *trb)
         if (dci == 0 || dci >= XHCI_MAX_DCI || !s->ring[dci]) {
             return;
         }
-        at = (uint32_t)((trb[0] - (uint32_t)s->ring_phys[dci]) / (TRB_WORDS * 4u));
-        if (at >= XHCI_EP_RING_TRBS) {
+        off = ((uint64_t)trb[0] | ((uint64_t)trb[1] << 32)) - (uint64_t)s->ring_phys[dci];
+        if (off >= (uint64_t)XHCI_EP_RING_TRBS * TRB_WORDS * 4u) {
             s->dropped_events++;
             return;
         }
+        at = (uint32_t)off / (TRB_WORDS * 4u);
         t = td_at(s, dci, at, &k);
         if (!t) {
             s->dropped_events++;
@@ -1865,7 +1874,7 @@ int xhci_start(struct xhci_ctrl *hc)
     op_w32(hc, XHCI_CONFIG, slots_enabled);
 
     op_w32(hc, XHCI_DCBAAP, (uint32_t)hc->dcbaa_phys);
-    op_w32(hc, XHCI_DCBAAP + 4, 0);
+    op_w32(hc, XHCI_DCBAAP + 4, phys_hi(hc->dcbaa_phys));
 
     op_w32(hc, XHCI_CRCR, trb_addr(hc->cmd_ring) | CRCR_RCS);
     op_w32(hc, XHCI_CRCR + 4, 0);
@@ -2207,7 +2216,7 @@ int xhci_device_address(struct xhci_ctrl *hc, int device)
     ep0 = context_entry(hc, hc->input_ctx, 2);
     ep0[1] = (4u << 3) | (3u << 1) | (default_packet_size(s->speed) << 16);
     ep0[2] = (uint32_t)s->ring_phys[1] | TRB_CYCLE;
-    ep0[3] = 0;
+    ep0[3] = phys_hi(s->ring_phys[1]);
     ep0[4] = 8;
 
     for (i = 0; i < XHCI_EP_RING_TRBS * TRB_WORDS; i++) {
@@ -2350,7 +2359,7 @@ int xhci_endpoint_open(struct xhci_ctrl *hc, int device, const struct usb_endpoi
     /* wMaxPacketSize bits 0-10 are the size; bits 11-12 are not used here. */
     entry[1] = (type << 3) | (3u << 1) | (((uint32_t)ep->max_packet & 0x7FFu) << 16);
     entry[2] = (uint32_t)s->ring_phys[dci] | TRB_CYCLE;
-    entry[3] = 0;
+    entry[3] = phys_hi(s->ring_phys[dci]);
     /* Average TRB Length, and Max ESIT Payload, which sets the bandwidth. */
     entry[4] = (uint32_t)ep->max_packet | ((uint32_t)ep->max_packet << 16);
 
@@ -2428,7 +2437,7 @@ static uint32_t *ring_put(struct xhci_ctrl *hc, int device, uint32_t dci, uint32
 
         /* The Link has the ring's physical address, not the kernel's. */
         link[0] = (uint32_t)s->ring_phys[dci];
-        link[1] = 0;
+        link[1] = phys_hi(s->ring_phys[dci]);
         link[2] = 0;
         link[3] = (TRB_TYPE_LINK << TRB_TYPE_SHIFT) | TRB_TOGGLE | (chain ? TRB_CHAIN : 0u) |
                   s->cycle[dci];
@@ -2849,7 +2858,7 @@ int xhci_endpoint_dequeue_here(struct xhci_ctrl *hc, int device, int endpoint)
         return -1;
     }
     s = &hc->slots[device];
-    where = (uint64_t)((uint32_t)s->ring_phys[endpoint] + s->enqueue[endpoint] * TRB_WORDS * 4u) |
+    where = ((uint64_t)s->ring_phys[endpoint] + s->enqueue[endpoint] * TRB_WORDS * 4u) |
             (uint64_t)s->cycle[endpoint];
     return xhci_command_issue(hc, TRB_TYPE_SET_TR_DEQUEUE, where,
                               (uint32_t)device | ((uint32_t)endpoint << 16));

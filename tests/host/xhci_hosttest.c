@@ -824,7 +824,7 @@ static void post_transfer(uint32_t code, uint32_t residual, uint32_t slot, uint3
     uint32_t *event = &hc->event_ring[model_event_write * TRB_WORDS];
 
     event[0] = (uint32_t)(uintptr_t)t;
-    event[1] = 0;
+    event[1] = (uint32_t)((uint64_t)(uintptr_t)t >> 32);
     event[2] = residual | (code << TRB_COMPLETION_SHIFT);
     event[3] = (TRB_TYPE_TRANSFER_EVENT << TRB_TYPE_SHIFT) | (slot << TRB_SLOT_SHIFT) |
                (dci << 16) | model_event_cycle;
@@ -1841,8 +1841,9 @@ int main(void)
     CHECK("one segment in its event ring table", reg[RTSOFF + 0x20u + 0x08u] == 1);
     CHECK("the table naming the ring it built", hc->erst[0] == (uint32_t)(uintptr_t)hc->event_ring);
     CHECK("with the ring's length", hc->erst[2] == XHCI_RING_TRBS);
-    CHECK("and nothing in the halves this kernel cannot address",
-          hc->erst[1] == 0 && reg[RTSOFF + 0x20u + 0x14u] == 0 && reg[OP(0x34u)] == 0);
+    CHECK("the context array's high half its own, and none for the rings in the image",
+          hc->erst[1] == 0 && reg[RTSOFF + 0x20u + 0x14u] == 0 &&
+              reg[OP(0x34u)] == (uint32_t)((uint64_t)hc->dcbaa_phys >> 32));
     CHECK("that table programmed", reg[RTSOFF + 0x20u + 0x10u] != 0);
     CHECK("and a dequeue pointer to start from", reg[RTSOFF + 0x20u + 0x18u] != 0);
     CHECK("it is running", (reg[OP(O_USBSTS)] & M_USBSTS_HCH) == 0);
@@ -2946,7 +2947,8 @@ int main(void)
             /* Each block names its piece's physical page, as the map placed
                it, and its length: 2048 bytes of the first page, whole pages
                between, and 2048 of the last. */
-            if (t[0] == (uint32_t)permuted_map((uintptr_t)(big + 2048 + at)) && t[1] == 0 &&
+            if (((uint64_t)t[0] | ((uint64_t)t[1] << 32)) ==
+                    (uint64_t)permuted_map((uintptr_t)(big + 2048 + at)) &&
                 (t[2] & 0x1FFFFu) == (i == 0 || i == 128 ? 2048u : 4096u)) {
                 placed++;
             }
