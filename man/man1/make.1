@@ -22,8 +22,9 @@ A rule gives its prerequisites and the commands needed to build it.
 Prerequisites may themselves be targets and are built first.
 Rules may be explicit or inferred.
 .Pp
-Rach2 installs pdpmake 2.0.4 as the static i386 executable
-.Pa /bin/make .
+Rach2 installs pdpmake 2.0.4 as the static executable
+.Pa /bin/make ,
+built for the machine's architecture, i686 or x86-64.
 The built-in macros are
 .Ql CC=tcc
 and

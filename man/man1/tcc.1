@@ -14,7 +14,9 @@
 .Op Ar file ...
 .Sh DESCRIPTION
 .Nm
-is TinyCC 0.9.27, installed as a static i386 executable.
+is TinyCC 0.9.27, installed as a static executable that compiles for the
+machine it runs on: an i386 compiler on i686 Rach2 and an x86-64 compiler
+on x86-64 Rach2.
 It includes an assembler and a linker; the machine has no binutils.
 It compiles C89 with the C99 features implemented by TinyCC.
 The C library is musl.
@@ -218,7 +220,10 @@ for a dynamic-library search path; the static output carries neither.
 .It Fl Wl,--oformat= Ns Ar format
 Select the output format.
 The default is
-.Ql elf32-i386 .
+.Ql elf32-i386
+on i686 and
+.Ql elf64-x86-64
+on x86-64.
 Non-ELF executable output, including
 .Ql binary ,
 is refused on Rach2.
@@ -313,11 +318,16 @@ or
 .Ql hard
 floating-point ABI on the ARM target.
 .It Fl mno-sse
-Disable SSE registers on the x86_64 target.
-.It Fl m32
-Continue with this i386 compiler.
-.It Fl m64
-Run
+On x86-64, keep the SSE registers out of the calling convention: a
+variadic function saves none in its prologue, and a floating-point
+argument is an error.
+The kernel is compiled so on x86-64 Rach2.
+The i386 compiler ignores the option.
+.It Fl m32 , Fl m64
+The word size of this compiler, 32 on i686 and 64 on x86-64, continues
+with it; the other runs
+.Nm i386-tcc
+or
 .Nm x86_64-tcc ,
 which the images do not install.
 .El
