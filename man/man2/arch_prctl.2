@@ -1,0 +1,102 @@
+.Dd October 3, 2026
+.Dt ARCH_PRCTL 2
+.Os
+.Sh NAME
+.Nm arch_prctl
+.Nd set or get the thread's FS and GS bases on x86-64
+.Sh SYNOPSIS
+.Fd "#define _GNU_SOURCE"
+.In unistd.h
+.In sys/syscall.h
+.Ft long
+.Fn syscall "long number" "..."
+.Sh DESCRIPTION
+.Nm
+is the x86-64 kernel's call, number 158; the i686 kernel does not have it,
+and a program there sets its thread pointer with
+.Xr set_thread_area 2 .
+Musl declares no function for it; use
+.Fn syscall
+with
+.Dv SYS_arch_prctl ,
+.Fa code
+and
+.Fa addr .
+Musl's
+.Fn __set_thread_area
+issues the call itself, with
+.Dv ARCH_SET_FS ,
+to install the thread-local storage of the first thread.
+.Pp
+Each thread has two bases of its own, kept in its process record and
+loaded at every switch to it;
+.Xr fork 2
+gives the child its parent's, and
+.Xr execve 2
+sets both to 0.
+FS's base is the thread pointer, where the thread's thread-local storage
+begins; GS's base is the program's to use as it likes.
+.Fa code
+selects the operation:
+.Bl -tag -width "ARCH_SET_FS"
+.It Dv ARCH_SET_FS No (0x1002)
+Make
+.Fa addr
+the thread's FS base.
+.It Dv ARCH_GET_FS No (0x1003)
+Store the thread's FS base, a 64-bit word, at the user address
+.Fa addr .
+.It Dv ARCH_SET_GS No (0x1001)
+Make
+.Fa addr
+the thread's GS base.
+.It Dv ARCH_GET_GS No (0x1004)
+Store the thread's GS base at the user address
+.Fa addr .
+.El
+.Pp
+A base must be a user address, below 0x00007ffffffff000, the end of the
+range a program may map.
+A thread
+.Xr clone 2
+makes with
+.Dv CLONE_SETTLS
+gets the clone's TLS argument as its FS base, which must be such an
+address too.
+.Xr ptrace 2 Ns 's
+.Dv PTRACE_ARCH_PRCTL
+does the same operations on a stopped tracee, with the operation in
+.Fa data
+and the base or the address in
+.Fa addr .
+.Sh RETURN VALUES
+0, or -1 with
+.Va errno
+set.
+.Sh ERRORS
+.Bl -tag -width Er
+.It Bq Er EPERM
+A base to set is not below 0x00007ffffffff000.
+.It Bq Er EFAULT
+.Dv ARCH_GET_FS
+or
+.Dv ARCH_GET_GS
+was given an address that cannot be written.
+.It Bq Er EINVAL
+.Fa code
+is none of the four.
+.El
+.Sh SEE ALSO
+.Xr clone 2 ,
+.Xr execve 2 ,
+.Xr fork 2 ,
+.Xr ptrace 2 ,
+.Xr set_thread_area 2
+.Sh STANDARDS
+Linux's x86-64 call, with the same number and codes.
+Linux also takes
+.Dv ARCH_GET_CPUID ,
+.Dv ARCH_SET_CPUID ,
+the vDSO's and the extended state's codes and those of the shadow stack;
+this kernel refuses them with
+.Er EINVAL .
