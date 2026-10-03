@@ -719,9 +719,11 @@ row_cmake() {
 }
 
 # dig and host ask a name server, here a responder in Python on 127.0.0.1
-# that answers every question with 192.0.2.1.
+# that answers every question with 192.0.2.1. The questions wait until its
+# port, 5353, is in /proc/net/udp: one sent before it is bound is refused at
+# once, and dig's five tries can all be spent before Python has started.
 row_dig() {
-    local server
+    local server i=0
 
     cat > "$WORK/dns.py" << 'EOF'
 import socket, struct, sys
@@ -739,6 +741,10 @@ for _ in range(int(sys.argv[1])):
 EOF
     python3 "$WORK/dns.py" 20 &
     server=$!
+    until grep -q ':14E9 ' /proc/net/udp || [ $i -ge 600 ]; do
+        sleep 0.1
+        i=$((i + 1))
+    done
     same "dig" "$(dig +short +tries=5 +time=2 -p 5353 @127.0.0.1 row.example A)" "192.0.2.1"
     has "host" "$(host -W 2 -p 5353 -t A row.example 127.0.0.1)" "has address 192.0.2.1"
     kill "$server" 2> /dev/null
