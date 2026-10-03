@@ -119,8 +119,7 @@ typedef uint64_t pte_t;
  *   0xFFFFC10000000000    4 MiB  temporary mappings, one page each
  *   0xFFFFC18000000000   64 MiB  the boot modules
  *   0xFFFFC20000000000  512 MiB  the page-cache window (mm/pagecache.h), at
- *                                most; its low 32 bits are zero, as the
- *                                window's 32-bit sizing needs
+ *                                most
  *   0xFFFFFFFF80000000    2 GiB  the kernel image, at its physical address
  *                                plus this base (-mcmodel=kernel)
  */
