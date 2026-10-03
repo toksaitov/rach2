@@ -304,15 +304,14 @@ new
     mem_balance();
 end
 
-fault shmem-page-past-1gib-backed
+fault shmem-page-past-end-backed
 probe mapmusl
-file rach2/sys/mm/shmem.c
-expect MAPMUSL FAIL (a touch of a file in memory past 1 GiB was not SIGSEGV
+file rach2/sys/mm/filemap.c
+expect MAPMUSL FAIL (a touch of a file in memory past its end was not SIGSEGV
 old
-    if (i >= SHMEM_MAX_PAGES || reach(sh, i + 1u) != 0) {
+    if (m->sh != &m->own && (uint64_t)pgoff << 12 >= m->sh->size) {
 new
-    i %= SHMEM_MAX_PAGES;
-    if (reach(sh, i + 1u) != 0) {
+    if (0) {
 end
 
 fault mremap-wrap-removes-source

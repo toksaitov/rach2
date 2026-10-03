@@ -12,7 +12,7 @@
  * file opened read-only writable, and will a private one. Shared anonymous
  * memory ignores a raw mmap2's page offset, a file's offset whose last page
  * would not fit in 32 bits is EOVERFLOW, and a page of a file in memory
- * past 1 GiB is never backed. mremap without MREMAP_MAYMOVE does not grow a
+ * past its end is never backed. mremap without MREMAP_MAYMOVE does not grow a
  * mapping into the one after it, and with the flag moves the mapping with
  * its bytes. A shrink in place keeps the bytes of the page it keeps and
  * frees the two pages it cuts: MAP_FIXED_NOREPLACE maps them again, and the
@@ -230,8 +230,8 @@ static int readonly_shared(void)
    offset of 2^31 pages would double the length of the memory's table of
    pages until the length wrapped to zero, and the first touch would not end.
    A file's offset whose last page would not fit in 32 bits is EOVERFLOW,
-   and the page of a file in memory 2^31 pages in, past the 1 GiB such a
-   file holds, is never backed: a child that touches it dies of SIGSEGV. */
+   and the page of a file in memory 2^31 pages in, past the end of the
+   empty file, is never backed: a child that touches it dies of SIGSEGV. */
 static int offsets(void)
 {
     char *m = (char *)syscall(SYS_mmap2, 0, PAGE, PROT_READ | PROT_WRITE,
@@ -262,7 +262,7 @@ static int offsets(void)
         _exit(m[0] == 0 ? 0 : 1);
     }
     if (waitpid(pid, &status, 0) != pid || !WIFSIGNALED(status) || WTERMSIG(status) != SIGSEGV) {
-        return fail("a touch of a file in memory past 1 GiB was not SIGSEGV");
+        return fail("a touch of a file in memory past its end was not SIGSEGV");
     }
     munmap(m, PAGE);
     close(fd);

@@ -1,4 +1,4 @@
-.Dd October 1, 2026
+.Dd October 3, 2026
 .Dt BRK 2
 .Os
 .Sh NAME
@@ -204,11 +204,15 @@ a fault reads the file with interrupts off, where only a disk the kernel
 polls can answer, and such a device would stop the machine.
 .Pp
 Shared memory, anonymous, a file on tmpfs or the pages in memory of a file
-on ext2, has pages up to 1 GiB, the most a file in memory holds.
-A page at or past that, which a mapping reaches from a large offset or
-past 1 GiB of its own length, is never backed, and an access to it
-ends in
-.Dv SIGSEGV .
+on ext2, has pages up to 16 TiB less a page, the most a file in memory
+holds, and a shared mapping of a file on tmpfs has the pages its size
+reaches.
+A page past either, which a mapping reaches from a large offset or past
+the end of the file, is never backed, and an access to it ends in
+.Dv SIGSEGV ,
+where Linux sends
+.Dv SIGBUS
+for a page wholly past the end of a file.
 .Pp
 .Fa length
 is rounded up to a page boundary.

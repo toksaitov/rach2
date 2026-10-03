@@ -86,9 +86,17 @@ static int filemap_fill(struct vm_file *f, uint32_t pgoff, uintptr_t phys)
     return 0;
 }
 
+/** A page of a shared mapping of memory: shared anonymous memory has every
+ * page, and a file in memory those its size reaches, as on Linux, where a
+ * touch past a file's end is SIGBUS; 0 for any other. */
 static uintptr_t filemap_share(struct vm_file *f, uint32_t pgoff)
 {
-    return shmem_map_page(((struct filemap *)f)->sh, pgoff);
+    struct filemap *m = (struct filemap *)f;
+
+    if (m->sh != &m->own && (uint64_t)pgoff << 12 >= m->sh->size) {
+        return 0;
+    }
+    return shmem_map_page(m->sh, pgoff);
 }
 
 /* The KRFFS root node the mapping's file is now, or NULL for a file of
