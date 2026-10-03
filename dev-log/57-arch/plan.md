@@ -14,7 +14,8 @@ The kernel, its programs and its tests build for an architecture named at build 
 * The shared code holds an address in `uintptr_t`, a length in `size_t`, and a physical address or a file offset in a 64-bit type, `phys_addr_t` for the first. It reaches physical memory through `phys_to_virt`, a device's registers through `mmio_read32` and its kind, and PCI configuration through `pci_cfg_read` and `pci_cfg_write`, and it names no register, instruction or i386 address. Port I/O stays in `arch/x86/` and in the drivers of devices only a PC has.
 * The kernel's formatter takes the `l` and `z` length modifiers and `%p`.
 * Each architecture has its own system call table, from Linux's numbers for it to the shared handlers, and its own layouts of the user structs. A handler takes `unsigned long` arguments through an accessor and returns `long`. i686 keeps its numbers, its layouts and `int 0x80`. x86-64 takes Linux's x86-64 numbers and layouts, entered by `syscall`. The x86-64 kernel runs no i386 program; the i686 kernel runs those.
-* x86-64's memory: the kernel in the top 2 GiB, built with `-mcmodel=kernel`, no red zone and no SSE; all physical memory mapped from 0xFFFF800000000000; user space from 64 KiB to 0x00007FFFFFFFF000; four-level paging with the NX bit; a device's DMA buffers and rings from a pool below 4 GiB. The i686 layout does not change.
+* x86-64's memory: the kernel in the top 2 GiB, built with `-mcmodel=kernel`, no red zone and no SSE; all physical memory mapped from 0xFFFF800000000000, with 2 MiB and 1 GiB pages where the processor has them; user space from 64 KiB to 0x00007FFFFFFFF000; four-level paging with the NX bit; a device's DMA buffers and rings from a pool below 4 GiB. The i686 layout does not change.
+* x86-64 uses all the memory the firmware reports, on any machine or QEMU instance, up to the direct map's 64 TiB. The frame allocator takes every usable range, where it now counts memory at or above 4 GiB as unreachable. The kernel heap's region is sized at boot from the memory, an eighth of it with i686's 256 MiB as the least, where it is now fixed, and the block cache's limit, half the heap, grows with it. The page cache reaches its pages through the direct map instead of the window at 0xD0000000. Process limits, tmpfs and shared memory take 64-bit sizes.
 * x86-64's boot: the kernel's multiboot header sets the a.out kludge with physical addresses, so that GRUB and QEMU's `-kernel`, which refuses an ELF64, load it alike, and a 32-bit entry builds the first page tables and enters long mode. The six pinned GRUB images do not change.
 * The build: `make ARCH=x86_64`, with `ARCH` `i686` by default. i686 builds into `build/` as it does now; another architecture builds into `build/ARCH/`, its vendored ports and their stamps included. The x86-64 kernel builds with `x86_64-elf-gcc`, and its programs with musl's x86-64 port through `muslgcc`. `make check-arch` compiles the shared kernel code for `arm` and `arm64` with `clang --target` and `-fsyntax-only`, and `tests/run style` runs it.
 * x86-64's programs: musl, BusyBox, Dropbear, TinyCC, pdpmake, the programs of `utils/` and `ish/`, Doom and the test probes, in the test, os-simple and os-real images. The GNU layer stays i686 in this milestone.
@@ -47,7 +48,7 @@ The types (`uintptr_t`, `size_t`, `phys_addr_t`, `long` results); `phys_to_virt`
 
 #### Phase 3: the x86-64 kernel
 
-The multiboot entry and long mode; the GDT, IDT and TSS with interrupt stacks; interrupts and `syscall`; four-level paging, the direct map and NX; the context switch; `fxsave64` and XSAVE; TLS through the FS base, `arch_prctl` and `clone`; the signal frame; ptrace's registers and words; ELF64 loading and core dumps; seccomp's `AUDIT_ARCH_X86_64`; the x86-64 system call table and layouts; the DMA pool below 4 GiB; the kernel's virtual windows (heap, page cache, MMIO) placed by architecture.
+The multiboot entry and long mode; the GDT, IDT and TSS with interrupt stacks; interrupts and `syscall`; four-level paging, the direct map and NX; the context switch; `fxsave64` and XSAVE; TLS through the FS base, `arch_prctl` and `clone`; the signal frame; ptrace's registers and words; ELF64 loading and core dumps; seccomp's `AUDIT_ARCH_X86_64`; the x86-64 system call table and layouts; the DMA pool below 4 GiB; the kernel's virtual windows (heap, MMIO) placed by architecture; all of memory in the frame allocator, the heap and the block cache sized from it, and the page cache through the direct map.
 
 #### Phase 4: the x86-64 programs
 
@@ -55,7 +56,7 @@ The toolchain in `tools/setup` and `doctor.sh` (`x86_64-elf-gcc` and its binutil
 
 #### Phase 5: the tests
 
-`ARCH` in `tests/run` and the QEMU it starts; the registry's architectures; each suite's i386 expectations given per architecture; `selfbuild` on x86-64; `tests/run all` over both.
+`ARCH` in `tests/run` and the QEMU it starts; the registry's architectures; each suite's i386 expectations given per architecture; a row that boots x86-64 with 8 GiB, finds all of it in `/proc/meminfo`, and fills and checks memory above 4 GiB from a program; `selfbuild` on x86-64; `tests/run all` over both.
 
 #### Phase 6: the documents
 
