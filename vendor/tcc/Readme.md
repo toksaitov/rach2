@@ -2,7 +2,7 @@
 
 Rach2 stages a static TinyCC that runs on the guest and produces objects and executables for it: on i686 Rach2 an i386 compiler, on x86-64 Rach2 an x86-64 one, each the machine's native compiler. TinyCC includes its own assembler and linker, so a guest build needs no GNU binutils.
 
-The tracked integration has six files: `.gitignore`, this Readme, `build_tcc.sh`, `rach2-output-policy.patch`, `rach2-x86_64-static-link.patch`, and `tcc-0.9.27.tar.bz2`. The extracted source, generated cross-tool shims, compiler, runtime archive, headers, and stamp are ignored and reproducible.
+The tracked integration has seven files: `.gitignore`, this Readme, `build_tcc.sh`, three patches, and `tcc-0.9.27.tar.bz2`. The patches are `rach2-output-policy.patch` and `rach2-x86_64-static-link.patch`, which every program needs, and `rach2-x86-asm.patch`, which the kernel's build on the machine needs. The extracted source, generated cross-tool shims, compiler, runtime archive, headers, and stamp are ignored and reproducible.
 
 ## Build
 
@@ -15,12 +15,12 @@ make tcc ARCH=x86_64
 
 The build is for the architecture the root `make` names in `ARCH`: i686 by default, x86-64 with `make ARCH=x86_64`. The script reads it from `RACH2_ARCH` through `mk/arch.sh`, which gives the cross prefix, `i686-elf-` or `x86_64-elf-`, and the directories. An i686 build extracts here and stages under `build/vendor/tcc/`; an x86-64 build extracts under `build/x86_64/vendor-work/tcc/` and stages under `build/x86_64/vendor/tcc/`. Each has its own stamp, so building one architecture leaves the other's files alone.
 
-The root `make` also builds TinyCC through the same stamp. The stamp depends on the script, both patches, the musl wrapper, `mk/arch.sh`, exact archive, and musl stamp.
+The root `make` also builds TinyCC through the same stamp. The stamp depends on the script, every `rach2-*.patch`, the musl wrapper, `mk/arch.sh`, exact archive, and musl stamp.
 
 The build script:
 
 1. Requires `tcc-0.9.27.tar.bz2` to have SHA-256 `de23af78fca90ce32dff2dd45b3432b2334740bb9bb7b05bf60fdbfc396ceb9c`.
-2. Replaces the extracted tree and applies `rach2-output-policy.patch` and `rach2-x86_64-static-link.patch` with `patch --batch --forward`.
+2. Replaces the extracted tree, applies the three patches in the order above with `patch --batch --forward`, and checks that a line of each is in the source it builds.
 3. Creates a `rach2-` cross prefix: `rach2-gcc` invokes the project musl wrapper, while `rach2-ar` and `rach2-strip` invoke the architecture's ELF tools.
 4. Configures an i386 or x86_64 musl target with the guest search paths, then rewrites the generated target OS from the macOS build host to Linux and removes `CONFIG_OSX`.
 5. Builds the compiler without executing it on the host, and builds `libtcc1.a` with the cross GCC through TinyCC's `i386-libtcc1-usegcc=yes` or `x86_64-libtcc1-usegcc=yes` rule.
@@ -89,6 +89,12 @@ TinyCC 0.9.27 left two parts of a static x86-64 executable unfilled, and every p
 
 The i386 compiler is built from the same source and is unchanged: both changes are under `TCC_TARGET_X86_64`.
 
+## The kernel's build
+
+On Rach2 the staged TinyCC builds the kernel of the machine (`tests/run selfbuild`). One patch gives it what the kernel's sources and its x86-64 link need. It keeps the output of a build that does not use it: every object of the kernel's sources that the unpatched compiler builds is the same byte for byte under the patched one, on either architecture.
+
+`rach2-x86-asm.patch` makes both assemblers take `.code16` and `.code32`, and the x86-64 one `.code64`, as GNU as does: the x86-64 kernel's entry is 32-bit code, and a processor started by INIT and SIPI runs 16-bit code first. In 16-bit and 32-bit code an instruction gets the operand-size and address-size prefixes its operands need, 16-bit code addresses memory through `%bx`, `%bp`, `%si` and `%di`, and a near jump has a 16-bit displacement there; the x86-64 assembler takes the instructions only those modes have and refuses what needs 64-bit code. The size suffixes GNU as has for `pushf`, `popf`, `pusha`, `popa`, `iret`, `lret`, `ret`, `ljmp`, `lcall` and the descriptor-table loads and stores are taken, and on x86-64 `iretq`, `lretq`, `xsave` and the other XSAVE instructions with their 64-bit forms, `fxsave64`, `xgetbv`, `xsetbv` and `rdtscp`. A label less an earlier label of its section, the first defined after the instruction that uses it, came out short by the bytes ahead of the field it was written in, without a diagnostic; it is now right in a field of 16, 32 or 64 bits, and the linkers apply the 16-bit relocations this takes. The patch's header lists the rest. 16-bit and 32-bit code assembles to what GNU as gives, instruction for instruction, and the x86-64 assembler's 32-bit code to the i386 one's bytes, but for four forms the i386 assembler has always written its own way: `movw` to a segment register with an operand-size prefix, and `sldt`, `smsw`, `str` and `jmp` or `call` through a 16-bit register without one.
+
 ## Static link closure
 
 Musl was built with GCC and refers to compiler-runtime symbols that the unmodified TinyCC runtime does not export. On i386 they are three: `__udivmoddi4`, `__divmoddi4`, and `__mulxc3`. On x86-64, where a 64-bit division needs no helper, they are the complex multiplications `__mulsc3`, `__muldc3` and `__mulxc3`. The build extracts their object files from the libgcc of the compiler that built musl and adds them to `libtcc1.a`.
@@ -101,7 +107,7 @@ To update TinyCC:
 
 1. Replace the archive with a release tarball from the [TinyCC release directory](https://download.savannah.gnu.org/releases/tinycc/).
 2. Change `VERSION` and `TARBALL_SHA256` in `build_tcc.sh`, and change `TCC_TARBALL` in the root Makefile.
-3. Rebase both patches, or drop `rach2-x86_64-static-link.patch` where the release already links a static x86-64 executable whole, and review configure, `config.mak`, the runtime build rule, guest paths, and compiler-runtime helper references.
+3. Rebase the patches, or drop one whose change the release has made, as `rach2-x86_64-static-link.patch` where it links a static x86-64 executable whole, and review configure, `config.mak`, the runtime build rule, guest paths, and compiler-runtime helper references.
 4. Rebuild and inspect every staged artifact before running the verification below.
 
 ## Verification

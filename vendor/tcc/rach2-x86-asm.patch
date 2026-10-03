@@ -1,0 +1,1114 @@
+Assemble the 16-bit and 32-bit code a kernel starts in, and the system
+instructions of its 64-bit code, as GNU as does.
+
+An x86-64 kernel that a Multiboot loader starts in protected mode enters
+long mode in 32-bit code of its own, and the other processors of a
+machine start in 16-bit real mode, in a trampoline that goes on through
+32-bit code to 64-bit code. GNU as takes .code16, .code32 and .code64
+for such code. TinyCC 0.9.27's x86-64 assembler took none of the first
+two, and its i386 assembler took .code16 and went on writing 32-bit code
+under it. Both now write the code of the size the directive names, the
+x86-64 one in any of the three and the i386 one in 16 or 32 bits, and a
+file starts in its target's own:
+
+  * An instruction whose operand is not of the code's size has the
+    operand-size prefix 0x66, and one whose address registers are not of
+    the code's address size the address-size prefix 0x67. In 16-bit code
+    memory is addressed through %bx or %bp, %si or %di, or a 16-bit
+    displacement, with the 16-bit ModRM forms, and a near jump or call
+    has a 16-bit displacement.
+  * The x86-64 assembler takes, in 16-bit and 32-bit code, what only that
+    code has: push and pop of a 32-bit register, the one-byte inc and
+    dec, a move between %eax and an absolute address, the moves of the
+    control and debug registers through a 32-bit register, pusha and
+    popa, and ljmp and lcall to a selector and an offset. It refuses
+    there what needs a REX prefix or 64-bit code.
+  * The suffixes GNU as gives an instruction whose operand is implicit or
+    a pointer in memory: w, l or q on pushf, popf, iret, lret and ret, as
+    the code size allows; w or l on pusha, popa, ljmp and lcall, and on
+    lgdt, lidt, sgdt and sidt. lss, lfs and lgs take a 16-bit register.
+
+The difference of two labels whose first comes later in the file, as
+`lgdtl gdt_ptr - start + BASE` in a trampoline copied to BASE, became a
+PC-relative relocation whose addend took the field to begin at the start
+of the instruction, so every such value in an instruction came out short
+by the length of the opcode and ModRM bytes ahead of its field, with no
+diagnostic. The code that writes the field now adds the field's own
+offset. A 16-bit or 64-bit field takes such a difference too, and a
+16-bit one a symbol: R_X86_64_16 and R_X86_64_PC16, or R_386_16 and
+R_386_PC16, which the linkers now apply in an ELF file, with a value
+that does not fit an error, as with GNU ld.
+
+The x86-64 assembler gains the 64-bit iretq and lretq, the 16-bit retw,
+the XSAVE instructions (xsave, xrstor, xsaveopt and xsavec, and their
+64-bit forms xsave64 and the others), fxsave64 and fxrstor64 beside
+fxsaveq and fxrstorq, xgetbv, xsetbv and rdtscp. The i386 assembler
+gains the same but the 64-bit forms.
+
+Code of the target's own size is assembled as before, byte for byte: the
+object of every source of the Rach2 kernel is unchanged on either target.
+Neither assembler relaxes a forward jump: loop and jecxz to a label later
+in the file are still an error, and jmp and jcc to one take the long form.
+
+--- a/i386-asm.c
++++ b/i386-asm.c
+@@ -43,6 +43,7 @@
+ 
+ #define OPC_0F        0x100 /* Is secondary map (0x0f prefix) */
+ #define OPC_48        0x200 /* Always has REX prefix */
++#define OPC_NOT64     0x400 /* Not in 64-bit code: .code16 and .code32 only */
+ #ifdef TCC_TARGET_X86_64
+ # define OPC_WLQ     0x1000  /* accepts w, l, q or no suffix */
+ # define OPC_BWLQ    (OPC_B | OPC_WLQ) /* accepts b, w, l, q or no suffix */
+@@ -159,6 +160,7 @@ typedef struct Operand {
+     int8_t  reg; /* register, -1 if none */
+     int8_t  reg2; /* second register, -1 if none */
+     uint8_t shift;
++    uint8_t asize; /* 16, 32 or 64: the size of the address registers; 0 if none */
+     ExprValue e;
+ } Operand;
+ 
+@@ -238,7 +240,7 @@ static const ASMInstr asm_instrs[] = {
+     { 0, },
+ };
+ 
+-static const uint16_t op0_codes[] = {
++static const uint32_t op0_codes[] = {
+ #define ALT(x)
+ #define DEF_ASM_OP0(x, opcode) opcode,
+ #define DEF_ASM_OP0L(name, opcode, group, instr_type)
+@@ -327,6 +329,10 @@ static int asm_parse_reg(unsigned int *type)
+     if (tok >= TOK_ASM_eax && tok <= TOK_ASM_edi) {
+         reg = tok - TOK_ASM_eax;
+ 	*type = OP_REG32;
++    } else if (tok >= TOK_ASM_ax && tok <= TOK_ASM_di) {
++        /* 16-bit addressing, as .code16 has it; asm_modrm16 checks the pair */
++        reg = tok - TOK_ASM_ax;
++	*type = OP_REG16;
+ #ifdef TCC_TARGET_X86_64
+     } else if (tok >= TOK_ASM_rax && tok <= TOK_ASM_rdi) {
+         reg = tok - TOK_ASM_rax;
+@@ -432,6 +438,7 @@ static void parse_operand(TCCState *s1, Operand *op)
+         op->reg = -1;
+         op->reg2 = -1;
+         op->shift = 0;
++        op->asize = 0;
+         if (tok != '(') {
+             asm_expr(s1, &e);
+             op->e = e;
+@@ -453,7 +460,7 @@ static void parse_operand(TCCState *s1, Operand *op)
+ 	    op->e.pcrel = 0;
+         }
+         if (tok == '(') {
+-	    unsigned int type = 0;
++	    unsigned int type = 0, type2 = 0;
+             next();
+             if (tok != ',') {
+                 op->reg = asm_parse_reg(&type);
+@@ -461,15 +468,19 @@ static void parse_operand(TCCState *s1, Operand *op)
+             if (tok == ',') {
+                 next();
+                 if (tok != ',') {
+-                    op->reg2 = asm_parse_reg(&type);
++                    op->reg2 = asm_parse_reg(&type2);
+                 }
+                 if (tok == ',') {
+                     next();
+                     op->shift = get_reg_shift(s1);
+                 }
+             }
++            if (type && type2 && type != type2)
++                tcc_error("base and index registers of different sizes");
++            type |= type2;
+ 	    if (type & OP_REG32)
+ 	        op->type |= OP_EA32;
++            op->asize = type & OP_REG16 ? 16 : type & OP_REG32 ? 32 : type ? 64 : 0;
+             skip(')');
+         }
+         if (op->reg == -1 && op->reg2 == -1)
+@@ -483,16 +494,51 @@ ST_FUNC void gen_expr32(ExprValue *pe)
+ {
+     if (pe->pcrel)
+         /* If PC-relative, always set VT_SYM, even without symbol,
+-	   so as to force a relocation to be emitted.  */
+-	gen_addrpc32(VT_SYM, pe->sym, pe->v);
++	   so as to force a relocation to be emitted. The value is
++	   relative to the field, which starts at ind.  */
++	gen_addrpc32(VT_SYM, pe->sym, pe->v + (ind + 4));
++#ifdef TCC_TARGET_X86_64
++    else if (pe->sym && tcc_state->seg_size != 64) {
++        /* an address in 16-bit or 32-bit code is zero-extended */
++        greloca(cur_text_section, pe->sym, ind, R_X86_64_32, pe->v);
++        gen_le32(0);
++    }
++#endif
+     else
+ 	gen_addr32(pe->sym ? VT_SYM : 0, pe->sym, pe->v);
+ }
+ 
++/* A 16-bit field: an immediate, a displacement or an offset of 16-bit
++   code, or .word. */
++ST_FUNC void gen_expr16(ExprValue *pe)
++{
++#ifdef TCC_TARGET_X86_64
++    if (pe->pcrel)
++        greloca(cur_text_section, pe->sym, ind, R_X86_64_PC16, pe->v + ind);
++    else if (pe->sym)
++        greloca(cur_text_section, pe->sym, ind, R_X86_64_16, pe->v);
++    gen_le16(pe->sym ? 0 : pe->v);
++#else
++    if (pe->pcrel) {
++        greloc(cur_text_section, pe->sym, ind, R_386_PC16);
++        gen_le16(pe->v + ind);
++        return;
++    }
++    if (pe->sym)
++        greloc(cur_text_section, pe->sym, ind, R_386_16);
++    gen_le16(pe->v);
++#endif
++}
++
+ #ifdef TCC_TARGET_X86_64
+ ST_FUNC void gen_expr64(ExprValue *pe)
+ {
+-    gen_addr64(pe->sym ? VT_SYM : 0, pe->sym, pe->v);
++    if (pe->pcrel) {
++        greloca(cur_text_section, pe->sym, ind, R_X86_64_PC64, pe->v + ind);
++        gen_le32(0);
++        gen_le32(0);
++    } else
++        gen_addr64(pe->sym ? VT_SYM : 0, pe->sym, pe->v);
+ }
+ #endif
+ 
+@@ -516,21 +562,85 @@ static void gen_disp32(ExprValue *pe)
+     }
+ }
+ 
+-/* generate the modrm operand */
+-static inline int asm_modrm(int reg, Operand *op)
++/* The relative displacement of a near jump or call in 16-bit code. */
++static void gen_disp16(ExprValue *pe)
++{
++    Sym *sym = pe->sym;
++    ElfSym *esym = elfsym(sym);
++    if (esym && esym->st_shndx == cur_text_section->sh_num) {
++        gen_le16(pe->v + esym->st_value - ind - 2);
++    } else {
++        if (sym && sym->type.t == VT_VOID) {
++            sym->type.t = VT_FUNC;
++            sym->type.ref = NULL;
++        }
++#ifdef TCC_TARGET_X86_64
++        greloca(cur_text_section, sym, ind, R_X86_64_PC16, pe->v - 2);
++        gen_le16(0);
++#else
++        greloc(cur_text_section, sym, ind, R_386_PC16);
++        gen_le16(pe->v - 2);
++#endif
++    }
++}
++
++/* The ModRM byte and displacement of a memory operand addressed by 16-bit
++   registers or by a 16-bit displacement alone, as 16-bit code addresses
++   memory: a base of %bx or %bp, an index of %si or %di, either alone or
++   one of each, and no scale. */
++static void asm_modrm16(int reg, Operand *op)
++{
++    enum { BX = 3, BP = 5, SI = 6, DI = 7 };
++    int mod, rm;
++
++    if (op->reg == -1 && op->reg2 == -1) {
++        g(0x06 + (reg << 3));
++        gen_expr16(&op->e);
++        return;
++    }
++    rm = -1;
++    if (op->shift != 0)
++        ;
++    else if (op->reg2 < 0)
++        rm = op->reg == BX ? 7 : op->reg == BP ? 6 : op->reg == SI ? 4 :
++             op->reg == DI ? 5 : -1;
++    else if ((op->reg == BX || op->reg == BP) &&
++             (op->reg2 == SI || op->reg2 == DI))
++        rm = (op->reg == BP ? 2 : 0) + (op->reg2 == DI);
++    if (rm < 0)
++        tcc_error("16-bit addressing takes %%bx or %%bp, %%si or %%di, "
++                  "or one of each");
++    if (op->e.v == 0 && !op->e.sym && rm != 6)
++        mod = 0x00;
++    else if (op->e.v == (int8_t)op->e.v && !op->e.sym)
++        mod = 0x40;
++    else
++        mod = 0x80;
++    g(mod + (reg << 3) + rm);
++    if (mod == 0x40)
++        g(op->e.v);
++    else if (mod == 0x80)
++        gen_expr16(&op->e);
++}
++
++/* generate the modrm operand; asize is the address size, 16, 32 or 64 */
++static inline int asm_modrm(int reg, Operand *op, int asize)
+ {
+     int mod, reg1, reg2, sib_reg1;
+ 
+     if (op->type & (OP_REG | OP_MMX | OP_SSE)) {
+         g(0xc0 + (reg << 3) + op->reg);
++    } else if (asize == 16) {
++        asm_modrm16(reg, op);
+     } else if (op->reg == -1 && op->reg2 == -1) {
+         /* displacement only */
+ #ifdef TCC_TARGET_X86_64
+-	g(0x04 + (reg << 3));
+-	g(0x25);
+-#else
+-	g(0x05 + (reg << 3));
++        if (asize == 64) {
++	    g(0x04 + (reg << 3));
++	    g(0x25);
++        } else
+ #endif
++	g(0x05 + (reg << 3));
+ 	gen_expr32(&op->e);
+ #ifdef TCC_TARGET_X86_64
+     } else if (op->reg == -2) {
+@@ -676,6 +786,136 @@ static void maybe_print_stats (void)
+     }
+ }
+ 
++/* The operand size, in bits, that the suffix of a mnemonic gives an
++   instruction whose operand is implicit or a pointer in memory; 0 for
++   every other one, whose size its operands or its table entry give. */
++static int mnemonic_size(int opcode)
++{
++    switch (opcode) {
++    case TOK_ASM_cbw: case TOK_ASM_cbtw: case TOK_ASM_cwd: case TOK_ASM_cwtd:
++    case TOK_ASM_pushfw: case TOK_ASM_popfw:
++    case TOK_ASM_pushaw: case TOK_ASM_popaw:
++    case TOK_ASM_iretw: case TOK_ASM_lretw: case TOK_ASM_retw:
++    case TOK_ASM_ljmpw: case TOK_ASM_lcallw:
++    case TOK_ASM_lgdtw: case TOK_ASM_lidtw: case TOK_ASM_sgdtw: case TOK_ASM_sidtw:
++        return 16;
++    case TOK_ASM_cwde: case TOK_ASM_cwtl: case TOK_ASM_cdq: case TOK_ASM_cltd:
++    case TOK_ASM_pushfl: case TOK_ASM_popfl:
++    case TOK_ASM_pushal: case TOK_ASM_popal:
++    case TOK_ASM_iretl: case TOK_ASM_lretl: case TOK_ASM_retl:
++    case TOK_ASM_ljmpl: case TOK_ASM_lcalll:
++    case TOK_ASM_lgdtl: case TOK_ASM_lidtl: case TOK_ASM_sgdtl: case TOK_ASM_sidtl:
++        return 32;
++#ifdef TCC_TARGET_X86_64
++    case TOK_ASM_cqto: case TOK_ASM_pushfq: case TOK_ASM_popfq:
++    case TOK_ASM_iretq: case TOK_ASM_lretq: case TOK_ASM_retq:
++    case TOK_ASM_lgdtq: case TOK_ASM_lidtq: case TOK_ASM_sgdtq: case TOK_ASM_sidtq:
++        return 64;
++#endif
++    }
++    return 0;
++}
++
++/* The operand size of a sized instruction with no size prefix: the code
++   size in 16-bit and 32-bit code; in 64-bit code, 64 for the pushes and
++   pops of the flags, the near return, and the loads and stores of the
++   descriptor-table registers, and 32 for the others. */
++static int unprefixed_size(TCCState *s1, int opcode)
++{
++    if (s1->seg_size != 64)
++        return s1->seg_size;
++#ifdef TCC_TARGET_X86_64
++    switch (opcode) {
++    case TOK_ASM_pushfw: case TOK_ASM_pushfl: case TOK_ASM_pushfq:
++    case TOK_ASM_popfw: case TOK_ASM_popfl: case TOK_ASM_popfq:
++    case TOK_ASM_retw: case TOK_ASM_retl: case TOK_ASM_retq:
++    case TOK_ASM_lgdtw: case TOK_ASM_lgdtl: case TOK_ASM_lgdtq:
++    case TOK_ASM_lidtw: case TOK_ASM_lidtl: case TOK_ASM_lidtq:
++    case TOK_ASM_sgdtw: case TOK_ASM_sgdtl: case TOK_ASM_sgdtq:
++    case TOK_ASM_sidtw: case TOK_ASM_sidtl: case TOK_ASM_sidtq:
++        return 64;
++    }
++#endif
++    return 32;
++}
++
++/* Emit the prefix that gives a sized instruction the operand size its
++   mnemonic names: none, the operand-size prefix 0x66, or REX.W. */
++static void asm_size_prefix(TCCState *s1, int opcode, int size)
++{
++    int plain = unprefixed_size(s1, opcode);
++
++    if (size == plain)
++        return;
++    if (size == 64) {
++        if (s1->seg_size != 64)
++            tcc_error("'%s' is not available in %d-bit code",
++                      get_tok_str(opcode, NULL), s1->seg_size);
++        g(0x48);
++    } else if (plain == 64 && size == 32) {
++        tcc_error("'%s' is not available in 64-bit code",
++                  get_tok_str(opcode, NULL));
++    } else {
++        g(0x66);
++    }
++}
++
++/* Emit an instruction without operands, whose code is b. */
++static void asm_op0(TCCState *s1, int opcode, uint32_t b)
++{
++    int size = mnemonic_size(opcode);
++
++#ifdef TCC_TARGET_X86_64
++    if (s1->seg_size == 64 &&
++        (opcode == TOK_ASM_pusha || opcode == TOK_ASM_pushaw ||
++         opcode == TOK_ASM_pushal || opcode == TOK_ASM_popa ||
++         opcode == TOK_ASM_popaw || opcode == TOK_ASM_popal))
++        tcc_error("'%s' is not available in 64-bit code",
++                  get_tok_str(opcode, NULL));
++#endif
++    if (size) {
++        /* the code's own prefix, 0x66 or REX.W, is the size's */
++        if ((b >> 8) == 0x66 || (b >> 8) == 0x48)
++            b &= 0xff;
++        asm_size_prefix(s1, opcode, size);
++    }
++    if (b & 0xff0000)
++        g(b >> 16);
++    if (b & 0xff00)
++        g(b >> 8);
++    g(b);
++}
++
++#ifdef TCC_TARGET_X86_64
++/* Refuse in 16-bit and 32-bit code what only 64-bit code encodes: a REX
++   prefix, which the 64-bit operand size, the 64-bit registers, the
++   registers numbered 8 to 15 and %spl to %dil need, and swapgs. */
++static void asm_check_legacy(TCCState *s1, int opcode, const ASMInstr *pa,
++                             Operand *ops, int nb_ops, int alltypes, int s)
++{
++    int i, wide = 0;
++
++    if (opcode == TOK_ASM_swapgs || (pa->opcode >> 8) == 0x48)
++        tcc_error("'%s' is not available in %d-bit code",
++                  get_tok_str(opcode, NULL), s1->seg_size);
++    if ((pa->instr_type & OPC_48) || (alltypes & (OP_REG64 | OP_REG8_LOW | OP_IM64)))
++        wide = 1;
++    if ((pa->instr_type & (OPC_B | OPC_WL | OPC_WLX)) && s == 3)
++        wide = 1;
++    for (i = 0; i < nb_ops; i++) {
++        if ((ops[i].type & (OP_REG | OP_MMX | OP_SSE | OP_CR | OP_DB | OP_ST)) &&
++            ops[i].reg >= 8)
++            wide = 1;
++        if ((ops[i].type & OP_EA) &&
++            (ops[i].asize == 64 || ops[i].reg >= 8 || ops[i].reg2 >= 8))
++            wide = 1;
++    }
++    if (wide)
++        tcc_error("'%s' with a 64-bit register or operand in %d-bit code",
++                  get_tok_str(opcode, NULL), s1->seg_size);
++}
++#endif
++
+ ST_FUNC void asm_opcode(TCCState *s1, int opcode)
+ {
+     const ASMInstr *pa;
+@@ -686,6 +926,10 @@ ST_FUNC void asm_opcode(TCCState *s1, int opcode)
+     int alltypes;   /* OR of all operand types */
+     int autosize;
+     int p66;
++    int mode = s1->seg_size; /* 16, 32 or 64 */
++    int size;  /* the operand size the mnemonic names, or 0 */
++    int asize; /* the address size */
++    int not64 = 0; /* an entry for 16-bit and 32-bit code was passed over */
+ #ifdef TCC_TARGET_X86_64
+     int rex64;
+ #endif
+@@ -792,6 +1036,10 @@ again:
+ 	    && (ops[1].type & OP_REG) == OP_REG64
+ 	    && !(pa->instr_type & OPC_0F))
+ 	    continue;
++	if ((pa->instr_type & OPC_NOT64) && mode == 64) {
++	    not64 = 1;
++	    continue;
++	}
+ #endif
+         /* now decode and check each operand */
+ 	alltypes = 0;
+@@ -836,13 +1084,12 @@ again:
+     }
+     if (pa->sym == 0) {
+         if (opcode >= TOK_ASM_first && opcode <= TOK_ASM_last) {
+-            int b;
+-            b = op0_codes[opcode - TOK_ASM_first];
+-            if (b & 0xff00) 
+-                g(b >> 8);
+-            g(b);
++            asm_op0(s1, opcode, op0_codes[opcode - TOK_ASM_first]);
+             return;
+         } else if (opcode <= TOK_ASM_alllast) {
++            if (not64)
++                tcc_error("'%s' is not available in 64-bit code",
++                      get_tok_str(opcode, NULL));
+             tcc_error("bad operand with opcode '%s'",
+                   get_tok_str(opcode, NULL));
+         } else {
+@@ -876,31 +1123,62 @@ again:
+                 s = reg_to_size[ops[i].type & OP_REG];
+         }
+         if (s == autosize) {
++            /* a push or pop of an immediate, a segment register or
++               memory has the size of the stack's slot */
+             if ((opcode == TOK_ASM_push || opcode == TOK_ASM_pop) &&
+                 (ops[0].type & (OP_SEG | OP_IM8S | OP_IM32)))
+-                s = 2;
++                s = mode == 16 ? 1 : 2;
+ 	    else if ((opcode == TOK_ASM_push || opcode == TOK_ASM_pop) &&
+ 		     (ops[0].type & OP_EA))
+-	        s = NBWLX - 2;
++	        s = mode == 16 ? 1 : mode == 32 ? 2 : NBWLX - 2;
+             else
+                 tcc_error("cannot infer opcode suffix");
+         }
+     }
+ 
+ #ifdef TCC_TARGET_X86_64
+-    /* Generate addr32 prefix if needed */
++    if (mode != 64)
++        asm_check_legacy(s1, opcode, pa, ops, nb_ops, alltypes, s);
++#endif
++
++    /* the address size: that of the registers of the memory operand, or
++       the code's own; generate addr32 or addr16 prefix if needed */
++    asize = mode;
+     for(i = 0; i < nb_ops; i++) {
+-        if (ops[i].type & OP_EA32) {
+-	    g(0x67);
+-	    break;
++        if ((ops[i].type & OP_EA) && ops[i].asize) {
++            asize = ops[i].asize;
++            break;
+         }
+     }
+-#endif
++    if (asize != mode) {
++        if (asize == 16 && mode == 64)
++            tcc_error("16-bit addressing in 64-bit code");
++        g(0x67);
++    }
++
+     /* generate data16 prefix if needed */
++    size = mnemonic_size(opcode);
+     p66 = 0;
+-    if (s == 1)
++    if (size) {
++        asm_size_prefix(s1, opcode, size);
++    } else if (mode == 16) {
++        /* 16-bit code: the prefix makes the operand 32 bits wide. A move
++           to or from a control, debug or test register is 32 bits wide
++           without it, and a move to a segment register 16. */
++        if (alltypes & (OP_CR | OP_DB | OP_TR) ||
++            ((alltypes & OP_SEG) && pa->opcode == 0x8e)) {
++            p66 = 0;
++        } else if (pa->instr_type & (OPC_B | OPC_WL | OPC_WLX)) {
++            p66 = s == 2;
++        } else if (!(alltypes & (OP_CR | OP_DB | OP_TR | OP_MMX | OP_SSE))) {
++            for (i = 0; i < nb_ops; i++)
++                if (ops[i].type & OP_REG32)
++                    p66 = 1;
++        }
++    } else if (s == 1) {
+         p66 = 1;
+-    else {
++    }
++    if (!p66) {
+ 	/* accepting mmx+sse in all operands --> needs 0x66 to
+ 	   switch to sse mode.  Accepting only sse in an operand --> is
+ 	   already SSE insn and needs 0x66/f2/f3 handling.  */
+@@ -913,7 +1191,9 @@ again:
+         g(0x66);
+ #ifdef TCC_TARGET_X86_64
+     rex64 = 0;
+-    if (pa->instr_type & OPC_48)
++    if (mode != 64)
++        ;
++    else if (pa->instr_type & OPC_48)
+         rex64 = 1;
+     else if (s == 3 || (alltypes & OP_REG64)) {
+         /* generate REX prefix */
+@@ -947,6 +1227,12 @@ again:
+     v = pa->opcode;
+     if (pa->instr_type & OPC_0F)
+         v = ((v & ~0xff) << 8) | 0x0f00 | (v & 0xff);
++    if (mode == 16 && (pa->opcode >> 8) == 0x66 &&
++        !(alltypes & (OP_MMX | OP_SSE))) {
++        /* the table's operand-size prefix for a 16-bit operand, which
++           16-bit code does without */
++        v = (pa->instr_type & OPC_0F) ? 0x0f00 | (v & 0xff) : v & 0xff;
++    }
+     if ((v == 0x69 || v == 0x6b) && nb_ops == 2) {
+         /* kludge for imul $im, %reg */
+         nb_ops = 3;
+@@ -969,6 +1255,10 @@ again:
+     } else if ((pa->instr_type & (OPCT_MASK | OPC_MODRM)) == OPC_FARITH) {
+         /* fpu arith case */
+         v += ((opcode - pa->sym) / 6) << 3;
++    } else if (v == 0xe3 || v == 0x67e3) {
++        /* jecxz: in 16-bit and 64-bit code an addr32 prefix makes the
++           count %ecx */
++        v = mode == 32 ? 0xe3 : 0x67e3;
+     }
+ 
+     /* search which operand will be used for modrm */
+@@ -1011,7 +1301,8 @@ again:
+         }
+     }
+ #ifdef TCC_TARGET_X86_64
+-    asm_rex (rex64, ops, nb_ops, op_type, modreg_index, modrm_index);
++    if (mode == 64)
++        asm_rex (rex64, ops, nb_ops, op_type, modreg_index, modrm_index);
+ #endif
+ 
+     if (pa->instr_type & OPC_REG) {
+@@ -1081,21 +1372,23 @@ again:
+            used instead of group */
+ 	if (modreg_index >= 0)
+ 	    reg = ops[modreg_index].reg;
+-        pc = asm_modrm(reg, &ops[modrm_index]);
++        pc = asm_modrm(reg, &ops[modrm_index], asize);
+     }
+ 
+     /* emit constants */
+-#ifndef TCC_TARGET_X86_64
+     if (!(pa->instr_type & OPC_0F)
+ 	&& (pa->opcode == 0x9a || pa->opcode == 0xea)) {
+-        /* ljmp or lcall kludge */
+-	gen_expr32(&ops[1].e);
++        /* ljmp or lcall kludge: the offset, of the operand size, then
++           the selector */
++        if ((size ? size : mode) == 16)
++            gen_expr16(&ops[1].e);
++        else
++	    gen_expr32(&ops[1].e);
+         if (ops[0].e.sym)
+             tcc_error("cannot relocate");
+         gen_le16(ops[0].e.v);
+         return;
+     }
+-#endif
+     for(i = 0;i < nb_ops; i++) {
+         v = op_type[i];
+         if (v & (OP_IM8 | OP_IM16 | OP_IM32 | OP_IM64 | OP_IM8S | OP_ADDR)) {
+@@ -1110,21 +1403,30 @@ again:
+                     v = OP_IM32;
+                 else
+                     v = OP_IM64;
++            } else if (v == OP_IM32 && s == 1 && (pa->instr_type & OPC_WLX)) {
++                /* a push of a 16-bit immediate */
++                v = OP_IM16;
+             }
+ 
+-            if ((v & (OP_IM8 | OP_IM8S | OP_IM16)) && ops[i].e.sym)
++            if ((v & (OP_IM8 | OP_IM8S)) && ops[i].e.sym)
+                 tcc_error("cannot relocate");
+ 
+             if (v & (OP_IM8 | OP_IM8S)) {
+                 g(ops[i].e.v);
+             } else if (v & OP_IM16) {
+-                gen_le16(ops[i].e.v);
++                gen_expr16(&ops[i].e);
+ #ifdef TCC_TARGET_X86_64
+             } else if (v & OP_IM64) {
+                 gen_expr64(&ops[i].e);
+ #endif
+ 	    } else if (pa->op_type[i] == OPT_DISP || pa->op_type[i] == OPT_DISP8) {
+-                gen_disp32(&ops[i].e);
++                if (mode == 16)
++                    gen_disp16(&ops[i].e);
++                else
++                    gen_disp32(&ops[i].e);
++            } else if (asize == 16 && pa->op_type[i] == OPT_ADDR) {
++                /* the offset of a moffs operand */
++                gen_expr16(&ops[i].e);
+             } else {
+                 gen_expr32(&ops[i].e);
+             }
+--- a/i386-asm.h
++++ b/i386-asm.h
+@@ -9,6 +9,12 @@
+      DEF_ASM_OP0(popa, 0x61)
+      DEF_ASM_OP0(pushfl, 0x9c)
+      DEF_ASM_OP0(popfl, 0x9d)
++     DEF_ASM_OP0(pushaw, 0x60)
++     DEF_ASM_OP0(pushal, 0x60)
++     DEF_ASM_OP0(popaw, 0x61)
++     DEF_ASM_OP0(popal, 0x61)
++     DEF_ASM_OP0(pushfw, 0x9c)
++     DEF_ASM_OP0(popfw, 0x9d)
+      DEF_ASM_OP0(pushf, 0x9c)
+      DEF_ASM_OP0(popf, 0x9d)
+      DEF_ASM_OP0(stc, 0xf9)
+@@ -31,6 +37,8 @@
+      DEF_ASM_OP0(int3, 0xcc)
+      DEF_ASM_OP0(into, 0xce)
+      DEF_ASM_OP0(iret, 0xcf)
++     DEF_ASM_OP0(iretw, 0xcf)
++     DEF_ASM_OP0(iretl, 0xcf)
+      DEF_ASM_OP0(rsm, 0x0faa)
+      DEF_ASM_OP0(hlt, 0xf4)
+      DEF_ASM_OP0(nop, 0x90)
+@@ -94,6 +102,9 @@ ALT(DEF_ASM_OP2(btcw, 0x0fba, 7, OPC_MODRM | OPC_WLX, OPT_IM8, OPT_REGW | OPT_EA
+      DEF_ASM_OP0(rdtsc, 0x0f31)
+      DEF_ASM_OP0(rdmsr, 0x0f32)
+      DEF_ASM_OP0(rdpmc, 0x0f33)
++     DEF_ASM_OP0(rdtscp, 0x0f01f9)
++     DEF_ASM_OP0(xgetbv, 0x0f01d0)
++     DEF_ASM_OP0(xsetbv, 0x0f01d1)
+      DEF_ASM_OP0(ud2, 0x0f0b)
+ 
+      /* NOTE: we took the same order as gas opcode definition order */
+@@ -152,6 +163,9 @@ ALT(DEF_ASM_OP2(lds, 0xc5, 0, OPC_MODRM, OPT_EA, OPT_REG32))
+ ALT(DEF_ASM_OP2(lss, 0x0fb2, 0, OPC_MODRM, OPT_EA, OPT_REG32))
+ ALT(DEF_ASM_OP2(lfs, 0x0fb4, 0, OPC_MODRM, OPT_EA, OPT_REG32))
+ ALT(DEF_ASM_OP2(lgs, 0x0fb5, 0, OPC_MODRM, OPT_EA, OPT_REG32))
++ALT(DEF_ASM_OP2(lss, 0x660fb2, 0, OPC_MODRM, OPT_EA, OPT_REG16))
++ALT(DEF_ASM_OP2(lfs, 0x660fb4, 0, OPC_MODRM, OPT_EA, OPT_REG16))
++ALT(DEF_ASM_OP2(lgs, 0x660fb5, 0, OPC_MODRM, OPT_EA, OPT_REG16))
+ 
+      /* arith */
+ ALT(DEF_ASM_OP2(addb, 0x00, 0, OPC_ARITH | OPC_MODRM | OPC_BWLX, OPT_REG, OPT_EA | OPT_REG)) /* XXX: use D bit ? */
+@@ -208,6 +222,14 @@ ALT(DEF_ASM_OP2(lcall, 0x9a, 0, 0, OPT_IM16, OPT_IM32))
+ ALT(DEF_ASM_OP1(lcall, 0xff, 3, OPC_MODRM, OPT_EA))
+ ALT(DEF_ASM_OP2(ljmp, 0xea, 0, 0, OPT_IM16, OPT_IM32))
+ ALT(DEF_ASM_OP1(ljmp, 0xff, 5, OPC_MODRM, OPT_EA))
++    DEF_ASM_OP2(lcallw, 0x9a, 0, 0, OPT_IM16, OPT_IM32)
++ALT(DEF_ASM_OP1(lcallw, 0xff, 3, OPC_MODRM, OPT_EA))
++    DEF_ASM_OP2(lcalll, 0x9a, 0, 0, OPT_IM16, OPT_IM32)
++ALT(DEF_ASM_OP1(lcalll, 0xff, 3, OPC_MODRM, OPT_EA))
++    DEF_ASM_OP2(ljmpw, 0xea, 0, 0, OPT_IM16, OPT_IM32)
++ALT(DEF_ASM_OP1(ljmpw, 0xff, 5, OPC_MODRM, OPT_EA))
++    DEF_ASM_OP2(ljmpl, 0xea, 0, 0, OPT_IM16, OPT_IM32)
++ALT(DEF_ASM_OP1(ljmpl, 0xff, 5, OPC_MODRM, OPT_EA))
+ 
+ ALT(DEF_ASM_OP1(int, 0xcd, 0, 0, OPT_IM8))
+ ALT(DEF_ASM_OP1(seto, 0x0f90, 0, OPC_MODRM | OPC_TEST, OPT_REG8 | OPT_EA))
+@@ -217,9 +239,12 @@ ALT(DEF_ASM_OP1(setob, 0x0f90, 0, OPC_MODRM | OPC_TEST, OPT_REG8 | OPT_EA))
+     DEF_ASM_OP0(ret, 0xc3)
+     DEF_ASM_OP0(retl,0xc3)
+ ALT(DEF_ASM_OP1(retl,0xc2, 0, 0, OPT_IM16))
++    DEF_ASM_OP0(retw, 0xc3)
+ ALT(DEF_ASM_OP1(ret, 0xc2, 0, 0, OPT_IM16))
+     DEF_ASM_OP0(lret, 0xcb)
+ ALT(DEF_ASM_OP1(lret, 0xca, 0, 0, OPT_IM16))
++    DEF_ASM_OP0(lretw, 0xcb)
++    DEF_ASM_OP0(lretl, 0xcb)
+ 
+ ALT(DEF_ASM_OP1(jo, 0x70, 0, OPC_TEST, OPT_DISP8))
+     DEF_ASM_OP1(loopne, 0xe0, 0, 0, OPT_DISP8)
+@@ -337,22 +362,35 @@ ALT(DEF_ASM_OP1(fstsw, 0xdd, 7, OPC_MODRM | OPC_FWAIT, OPT_EA ))
+     DEF_ASM_OP1(ffree, 0xddc0, 4, OPC_REG, OPT_ST )
+     DEF_ASM_OP1(ffreep, 0xdfc0, 4, OPC_REG, OPT_ST )
+     DEF_ASM_OP1(fxsave, 0x0fae, 0, OPC_MODRM, OPT_EA )
++    DEF_ASM_OP1(xsave, 0x0fae, 4, OPC_MODRM, OPT_EA )
++    DEF_ASM_OP1(xrstor, 0x0fae, 5, OPC_MODRM, OPT_EA )
++    DEF_ASM_OP1(xsaveopt, 0x0fae, 6, OPC_MODRM, OPT_EA )
++    DEF_ASM_OP1(xsavec, 0x0fc7, 4, OPC_MODRM, OPT_EA )
+     DEF_ASM_OP1(fxrstor, 0x0fae, 1, OPC_MODRM, OPT_EA )
+ 
+     /* segments */
+     DEF_ASM_OP2(arpl, 0x63, 0, OPC_MODRM, OPT_REG16, OPT_REG16 | OPT_EA)
+ ALT(DEF_ASM_OP2(larw, 0x0f02, 0, OPC_MODRM | OPC_WLX, OPT_REG | OPT_EA, OPT_REG))
+     DEF_ASM_OP1(lgdt, 0x0f01, 2, OPC_MODRM, OPT_EA)
++    DEF_ASM_OP1(lgdtw, 0x0f01, 2, OPC_MODRM, OPT_EA)
++    DEF_ASM_OP1(lgdtl, 0x0f01, 2, OPC_MODRM, OPT_EA)
+     DEF_ASM_OP1(lidt, 0x0f01, 3, OPC_MODRM, OPT_EA)
++    DEF_ASM_OP1(lidtw, 0x0f01, 3, OPC_MODRM, OPT_EA)
++    DEF_ASM_OP1(lidtl, 0x0f01, 3, OPC_MODRM, OPT_EA)
+     DEF_ASM_OP1(lldt, 0x0f00, 2, OPC_MODRM, OPT_EA | OPT_REG)
+     DEF_ASM_OP1(lmsw, 0x0f01, 6, OPC_MODRM, OPT_EA | OPT_REG)
+ ALT(DEF_ASM_OP2(lslw, 0x0f03, 0, OPC_MODRM | OPC_WLX, OPT_EA | OPT_REG, OPT_REG))
+     DEF_ASM_OP1(ltr, 0x0f00, 3, OPC_MODRM, OPT_EA | OPT_REG)
+     DEF_ASM_OP1(sgdt, 0x0f01, 0, OPC_MODRM, OPT_EA)
++    DEF_ASM_OP1(sgdtw, 0x0f01, 0, OPC_MODRM, OPT_EA)
++    DEF_ASM_OP1(sgdtl, 0x0f01, 0, OPC_MODRM, OPT_EA)
+     DEF_ASM_OP1(sidt, 0x0f01, 1, OPC_MODRM, OPT_EA)
++    DEF_ASM_OP1(sidtw, 0x0f01, 1, OPC_MODRM, OPT_EA)
++    DEF_ASM_OP1(sidtl, 0x0f01, 1, OPC_MODRM, OPT_EA)
+     DEF_ASM_OP1(sldt, 0x0f00, 0, OPC_MODRM, OPT_REG | OPT_EA)
+     DEF_ASM_OP1(smsw, 0x0f01, 4, OPC_MODRM, OPT_REG | OPT_EA)
+     DEF_ASM_OP1(str, 0x0f00, 1, OPC_MODRM, OPT_REG16| OPT_EA)
++ALT(DEF_ASM_OP1(str, 0x0f00, 1, OPC_MODRM, OPT_REG32))
+     DEF_ASM_OP1(verr, 0x0f00, 4, OPC_MODRM, OPT_REG | OPT_EA)
+     DEF_ASM_OP1(verw, 0x0f00, 5, OPC_MODRM, OPT_REG | OPT_EA)
+ 
+--- a/i386-link.c
++++ b/i386-link.c
+@@ -213,17 +213,19 @@ void relocate(TCCState *s1, ElfW_Rel *rel, int type, unsigned char *ptr, addr_t
+             /* we load the got offset */
+             add32le(ptr, s1->sym_attrs[sym_index].got_offset);
+             return;
++        /* The fields of 16-bit code: what does not fit is an error, as
++           GNU ld has it. */
+         case R_386_16:
+-            if (s1->output_format != TCC_OUTPUT_FORMAT_BINARY) {
+-            output_file:
+-                tcc_error("can only produce 16-bit binary files");
+-            }
+-            write16le(ptr, read16le(ptr) + val);
++            val += (int16_t)read16le(ptr);
++            if ((int)val < -32768 || (int)val > 65535)
++                tcc_error("a 16-bit relocation overflows: 0x%x", (unsigned)val);
++            write16le(ptr, val);
+             return;
+         case R_386_PC16:
+-            if (s1->output_format != TCC_OUTPUT_FORMAT_BINARY)
+-                goto output_file;
+-            write16le(ptr, read16le(ptr) + val - addr);
++            val += (int16_t)read16le(ptr) - addr;
++            if ((int)val < -32768 || (int)val > 65535)
++                tcc_error("a 16-bit relocation overflows: 0x%x", (unsigned)val);
++            write16le(ptr, val);
+             return;
+         case R_386_RELATIVE:
+ #ifdef TCC_TARGET_PE
+--- a/libtcc.c
++++ b/libtcc.c
+@@ -636,6 +636,10 @@ static int tcc_compile(TCCState *s1)
+         s1->error_set_jmp_enabled = 1;
+ 
+         preprocess_start(s1, is_asm);
++#if defined TCC_TARGET_I386 || defined TCC_TARGET_X86_64
++        /* Each file starts in the target's own code size, as with GAS. */
++        s1->seg_size = PTR_SIZE * 8;
++#endif
+         if (s1->output_type == TCC_OUTPUT_PREPROCESS) {
+             tcc_preprocess(s1);
+         } else if (is_asm) {
+@@ -741,8 +745,8 @@ LIBTCCAPI TCCState *tcc_new(void)
+ #ifdef CHAR_IS_UNSIGNED
+     s->char_is_unsigned = 1;
+ #endif
+-#ifdef TCC_TARGET_I386
+-    s->seg_size = 32;
++#if defined TCC_TARGET_I386 || defined TCC_TARGET_X86_64
++    s->seg_size = PTR_SIZE * 8;
+ #endif
+     /* enable this if you want symbols with leading underscore on windows: */
+ #if 0 /* def TCC_TARGET_PE */
+--- a/tcc.h
++++ b/tcc.h
+@@ -692,8 +692,8 @@ struct TCCState {
+     char *init_symbol; /* symbols to call at load-time (not used currently) */
+     char *fini_symbol; /* symbols to call at unload-time (not used currently) */
+ 
+-#ifdef TCC_TARGET_I386
+-    int seg_size; /* 32. Can be 16 with i386 assembler (.code16) */
++#if defined TCC_TARGET_I386 || defined TCC_TARGET_X86_64
++    int seg_size; /* the assembler's code size: 16, 32 or 64 (.code16, .code32, .code64) */
+ #endif
+ #ifdef TCC_TARGET_X86_64
+     int nosse; /* For -mno-sse support. */
+@@ -1587,6 +1587,7 @@ ST_FUNC int asm_int_expr(TCCState *s1);
+ ST_FUNC int tcc_assemble(TCCState *s1, int do_preprocess);
+ /* ------------ i386-asm.c ------------ */
+ ST_FUNC void gen_expr32(ExprValue *pe);
++ST_FUNC void gen_expr16(ExprValue *pe);
+ #ifdef TCC_TARGET_X86_64
+ ST_FUNC void gen_expr64(ExprValue *pe);
+ #endif
+--- a/tccasm.c
++++ b/tccasm.c
+@@ -294,8 +294,13 @@ static inline void asm_expr_sum(TCCState *s1, ExprValue *pe)
+ 		    pe->sym = NULL;
+ 		} else if (esym2->st_shndx == cur_text_section->sh_num) {
+ 		    /* When subtracting a defined symbol in current section
+-		       this actually makes the value PC-relative.  */
+-		    pe->v -= esym2->st_value - ind - 4;
++		       this actually makes the value PC-relative. The field
++		       the value goes into may lie further on than ind, past
++		       an instruction's opcode and ModRM bytes, so only the
++		       symbol's offset is subtracted here, and the code that
++		       writes the field adds its own offset (gen_expr16,
++		       gen_expr32, gen_expr64). */
++		    pe->v -= esym2->st_value;
+ 		    pe->pcrel = 1;
+ 		    e2.sym = NULL;
+ 		} else {
+@@ -413,6 +418,9 @@ static Sym* set_symbol(TCCState *s1, int label)
+     ElfSym *esym;
+     next();
+     asm_expr(s1, &e);
++    if (e.pcrel)
++        tcc_error("the value of '%s' depends on a label defined later",
++                  get_tok_str(label, NULL));
+     n = e.v;
+     esym = elfsym(e.sym);
+     if (esym)
+@@ -555,6 +563,10 @@ static void asm_parse_directive(TCCState *s1, int global)
+ #ifdef TCC_TARGET_X86_64
+ 		} else if (size == 8) {
+ 		    gen_expr64(&e);
++#endif
++#if defined TCC_TARGET_I386 || defined TCC_TARGET_X86_64
++                } else if (size == 2) {
++                    gen_expr16(&e);
+ #endif
+                 } else {
+                     if (e.sym)
+@@ -874,7 +886,7 @@ static void asm_parse_directive(TCCState *s1, int global)
+ 	next();
+ 	pop_section(s1);
+ 	break;
+-#ifdef TCC_TARGET_I386
++#if defined TCC_TARGET_I386 || defined TCC_TARGET_X86_64
+     case TOK_ASMDIR_code16:
+         {
+             next();
+@@ -889,9 +901,9 @@ static void asm_parse_directive(TCCState *s1, int global)
+         break;
+ #endif
+ #ifdef TCC_TARGET_X86_64
+-    /* added for compatibility with GAS */
+     case TOK_ASMDIR_code64:
+         next();
++        s1->seg_size = 64;
+         break;
+ #endif
+     default:
+--- a/tcctok.h
++++ b/tcctok.h
+@@ -334,10 +334,11 @@
+  DEF_ASMDIR(endr)
+  DEF_ASMDIR(org)
+  DEF_ASMDIR(quad)
+-#if defined(TCC_TARGET_I386)
++#if defined(TCC_TARGET_I386) || defined(TCC_TARGET_X86_64)
+  DEF_ASMDIR(code16)
+  DEF_ASMDIR(code32)
+-#elif defined(TCC_TARGET_X86_64)
++#endif
++#if defined(TCC_TARGET_X86_64)
+  DEF_ASMDIR(code64)
+ #endif
+  DEF_ASMDIR(short)
+--- a/x86_64-asm.h
++++ b/x86_64-asm.h
+@@ -9,6 +9,16 @@
+      DEF_ASM_OP0(popfq, 0x9d)
+      DEF_ASM_OP0(pushf, 0x9c)
+      DEF_ASM_OP0(popf, 0x9d)
++     DEF_ASM_OP0(pushfw, 0x9c)
++     DEF_ASM_OP0(pushfl, 0x9c)
++     DEF_ASM_OP0(popfw, 0x9d)
++     DEF_ASM_OP0(popfl, 0x9d)
++     DEF_ASM_OP0(pusha, 0x60)
++     DEF_ASM_OP0(pushaw, 0x60)
++     DEF_ASM_OP0(pushal, 0x60)
++     DEF_ASM_OP0(popa, 0x61)
++     DEF_ASM_OP0(popaw, 0x61)
++     DEF_ASM_OP0(popal, 0x61)
+      DEF_ASM_OP0(stc, 0xf9)
+      DEF_ASM_OP0(std, 0xfd)
+      DEF_ASM_OP0(sti, 0xfb)
+@@ -30,6 +40,9 @@
+      DEF_ASM_OP0(int3, 0xcc)
+      DEF_ASM_OP0(into, 0xce)
+      DEF_ASM_OP0(iret, 0xcf)
++     DEF_ASM_OP0(iretw, 0xcf)
++     DEF_ASM_OP0(iretl, 0xcf)
++     DEF_ASM_OP0(iretq, 0xcf)
+      DEF_ASM_OP0(rsm, 0x0faa)
+      DEF_ASM_OP0(hlt, 0xf4)
+      DEF_ASM_OP0(wait, 0x9b)
+@@ -88,6 +101,9 @@ ALT(DEF_ASM_OP2(btcw, 0x0fba, 7, OPC_MODRM | OPC_WLX, OPT_IM8, OPT_REGW | OPT_EA
+      DEF_ASM_OP0(rdtsc, 0x0f31)
+      DEF_ASM_OP0(rdmsr, 0x0f32)
+      DEF_ASM_OP0(rdpmc, 0x0f33)
++     DEF_ASM_OP0(rdtscp, 0x0f01f9)
++     DEF_ASM_OP0(xgetbv, 0x0f01d0)
++     DEF_ASM_OP0(xsetbv, 0x0f01d1)
+ 
+      DEF_ASM_OP0(syscall, 0x0f05)
+      DEF_ASM_OP0(sysret, 0x0f07)
+@@ -99,6 +115,8 @@ ALT(DEF_ASM_OP2(btcw, 0x0fba, 7, OPC_MODRM | OPC_WLX, OPT_IM8, OPT_REGW | OPT_EA
+    32 bit moffset as operands.
+ ALT(DEF_ASM_OP2(movb, 0xa0, 0, OPC_BWLX, OPT_ADDR, OPT_EAX))
+ ALT(DEF_ASM_OP2(movb, 0xa2, 0, OPC_BWLX, OPT_EAX, OPT_ADDR)) */
++ALT(DEF_ASM_OP2(movb, 0xa0, 0, OPC_BWLX | OPC_NOT64, OPT_ADDR, OPT_EAX))
++ALT(DEF_ASM_OP2(movb, 0xa2, 0, OPC_BWLX | OPC_NOT64, OPT_EAX, OPT_ADDR))
+ ALT(DEF_ASM_OP2(movb, 0x88, 0, OPC_MODRM | OPC_BWLX, OPT_REG, OPT_EA | OPT_REG))
+ ALT(DEF_ASM_OP2(movb, 0x8a, 0, OPC_MODRM | OPC_BWLX, OPT_EA | OPT_REG, OPT_REG))
+ /* The moves are special: the 0xb8 form supports IM64 (the only insn that
+@@ -117,6 +135,10 @@ ALT(DEF_ASM_OP2(movw, 0x0f20, 0, OPC_MODRM | OPC_WLX, OPT_CR, OPT_REG64))
+ ALT(DEF_ASM_OP2(movw, 0x0f21, 0, OPC_MODRM | OPC_WLX, OPT_DB, OPT_REG64))
+ ALT(DEF_ASM_OP2(movw, 0x0f22, 0, OPC_MODRM | OPC_WLX, OPT_REG64, OPT_CR))
+ ALT(DEF_ASM_OP2(movw, 0x0f23, 0, OPC_MODRM | OPC_WLX, OPT_REG64, OPT_DB))
++ALT(DEF_ASM_OP2(movw, 0x0f20, 0, OPC_MODRM | OPC_WLX | OPC_NOT64, OPT_CR, OPT_REG32))
++ALT(DEF_ASM_OP2(movw, 0x0f21, 0, OPC_MODRM | OPC_WLX | OPC_NOT64, OPT_DB, OPT_REG32))
++ALT(DEF_ASM_OP2(movw, 0x0f22, 0, OPC_MODRM | OPC_WLX | OPC_NOT64, OPT_REG32, OPT_CR))
++ALT(DEF_ASM_OP2(movw, 0x0f23, 0, OPC_MODRM | OPC_WLX | OPC_NOT64, OPT_REG32, OPT_DB))
+ 
+ ALT(DEF_ASM_OP2(movsbw, 0x660fbe, 0, OPC_MODRM, OPT_REG8 | OPT_EA, OPT_REG16))
+ ALT(DEF_ASM_OP2(movsbl, 0x0fbe, 0, OPC_MODRM, OPT_REG8 | OPT_EA, OPT_REG32))
+@@ -133,13 +155,16 @@ ALT(DEF_ASM_OP1(push, 0x6a, 0, 0, OPT_IM8S))
+ ALT(DEF_ASM_OP1(pushw, 0x666a, 0, 0, OPT_IM8S))
+ ALT(DEF_ASM_OP1(pushw, 0x50, 0, OPC_REG | OPC_WLX, OPT_REG64))
+ ALT(DEF_ASM_OP1(pushw, 0x50, 0, OPC_REG | OPC_WLX, OPT_REG16))
++ALT(DEF_ASM_OP1(pushw, 0x50, 0, OPC_REG | OPC_WLX | OPC_NOT64, OPT_REG32))
+ ALT(DEF_ASM_OP1(pushw, 0xff, 6, OPC_MODRM | OPC_WLX, OPT_REG64 | OPT_EA))
+ ALT(DEF_ASM_OP1(pushw, 0x6668, 0, 0, OPT_IM16))
++ALT(DEF_ASM_OP1(pushw, 0x6a, 0, OPC_WLX | OPC_NOT64, OPT_IM8S))
+ ALT(DEF_ASM_OP1(pushw, 0x68, 0, OPC_WLX, OPT_IM32))
+ ALT(DEF_ASM_OP1(pushw, 0x06, 0, OPC_WLX, OPT_SEG))
+ 
+ ALT(DEF_ASM_OP1(popw, 0x58, 0, OPC_REG | OPC_WLX, OPT_REG64))
+ ALT(DEF_ASM_OP1(popw, 0x58, 0, OPC_REG | OPC_WLX, OPT_REG16))
++ALT(DEF_ASM_OP1(popw, 0x58, 0, OPC_REG | OPC_WLX | OPC_NOT64, OPT_REG32))
+ ALT(DEF_ASM_OP1(popw, 0x8f, 0, OPC_MODRM | OPC_WLX, OPT_REGW | OPT_EA))
+ ALT(DEF_ASM_OP1(popw, 0x07, 0, OPC_WLX, OPT_SEG))
+ 
+@@ -165,6 +190,9 @@ ALT(DEF_ASM_OP2(lds, 0xc5, 0, OPC_MODRM, OPT_EA, OPT_REG32))
+ ALT(DEF_ASM_OP2(lss, 0x0fb2, 0, OPC_MODRM, OPT_EA, OPT_REG32))
+ ALT(DEF_ASM_OP2(lfs, 0x0fb4, 0, OPC_MODRM, OPT_EA, OPT_REG32))
+ ALT(DEF_ASM_OP2(lgs, 0x0fb5, 0, OPC_MODRM, OPT_EA, OPT_REG32))
++ALT(DEF_ASM_OP2(lss, 0x660fb2, 0, OPC_MODRM, OPT_EA, OPT_REG16))
++ALT(DEF_ASM_OP2(lfs, 0x660fb4, 0, OPC_MODRM, OPT_EA, OPT_REG16))
++ALT(DEF_ASM_OP2(lgs, 0x660fb5, 0, OPC_MODRM, OPT_EA, OPT_REG16))
+ 
+      /* arith */
+ ALT(DEF_ASM_OP2(addb, 0x00, 0, OPC_ARITH | OPC_MODRM | OPC_BWLX, OPT_REG, OPT_EA | OPT_REG)) /* XXX: use D bit ? */
+@@ -178,7 +206,9 @@ ALT(DEF_ASM_OP2(testb, 0x84, 0, OPC_MODRM | OPC_BWLX, OPT_EA | OPT_REG, OPT_REG)
+ ALT(DEF_ASM_OP2(testb, 0xa8, 0, OPC_BWLX, OPT_IM, OPT_EAX))
+ ALT(DEF_ASM_OP2(testb, 0xf6, 0, OPC_MODRM | OPC_BWLX, OPT_IM, OPT_EA | OPT_REG))
+ 
++ALT(DEF_ASM_OP1(incw, 0x40, 0, OPC_REG | OPC_WLX | OPC_NOT64, OPT_REGW))
+ ALT(DEF_ASM_OP1(incb, 0xfe, 0, OPC_MODRM | OPC_BWLX, OPT_REG | OPT_EA))
++ALT(DEF_ASM_OP1(decw, 0x48, 0, OPC_REG | OPC_WLX | OPC_NOT64, OPT_REGW))
+ ALT(DEF_ASM_OP1(decb, 0xfe, 1, OPC_MODRM | OPC_BWLX, OPT_REG | OPT_EA))
+ 
+ ALT(DEF_ASM_OP1(notb, 0xf6, 2, OPC_MODRM | OPC_BWLX, OPT_REG | OPT_EA))
+@@ -217,8 +247,17 @@ ALT(DEF_ASM_OP1(jmp, 0xeb, 0, 0, OPT_DISP8))
+ 
+ ALT(DEF_ASM_OP1(lcall, 0xff, 3, OPC_MODRM, OPT_EA))
+ ALT(DEF_ASM_OP1(ljmp, 0xff, 5, OPC_MODRM, OPT_EA))
+-    DEF_ASM_OP1(ljmpw, 0x66ff, 5, OPC_MODRM, OPT_EA)
++    DEF_ASM_OP1(ljmpw, 0xff, 5, OPC_MODRM, OPT_EA)
+     DEF_ASM_OP1(ljmpl, 0xff, 5, OPC_MODRM, OPT_EA)
++    DEF_ASM_OP1(lcallw, 0xff, 3, OPC_MODRM, OPT_EA)
++    DEF_ASM_OP1(lcalll, 0xff, 3, OPC_MODRM, OPT_EA)
++    /* a far pointer, selector and offset, in 16-bit and 32-bit code */
++ALT(DEF_ASM_OP2(lcall, 0x9a, 0, OPC_NOT64, OPT_IM16, OPT_IM32))
++ALT(DEF_ASM_OP2(lcallw, 0x9a, 0, OPC_NOT64, OPT_IM16, OPT_IM32))
++ALT(DEF_ASM_OP2(lcalll, 0x9a, 0, OPC_NOT64, OPT_IM16, OPT_IM32))
++ALT(DEF_ASM_OP2(ljmp, 0xea, 0, OPC_NOT64, OPT_IM16, OPT_IM32))
++ALT(DEF_ASM_OP2(ljmpw, 0xea, 0, OPC_NOT64, OPT_IM16, OPT_IM32))
++ALT(DEF_ASM_OP2(ljmpl, 0xea, 0, OPC_NOT64, OPT_IM16, OPT_IM32))
+ 
+ ALT(DEF_ASM_OP1(int, 0xcd, 0, 0, OPT_IM8))
+ ALT(DEF_ASM_OP1(seto, 0x0f90, 0, OPC_MODRM | OPC_TEST, OPT_REG8 | OPT_EA))
+@@ -227,10 +266,15 @@ ALT(DEF_ASM_OP1(setob, 0x0f90, 0, OPC_MODRM | OPC_TEST, OPT_REG8 | OPT_EA))
+     DEF_ASM_OP0(leave, 0xc9)
+     DEF_ASM_OP0(ret, 0xc3)
+     DEF_ASM_OP0(retq, 0xc3)
++    DEF_ASM_OP0(retw, 0xc3)
++    DEF_ASM_OP0(retl, 0xc3)
+ ALT(DEF_ASM_OP1(retq, 0xc2, 0, 0, OPT_IM16))
+ ALT(DEF_ASM_OP1(ret, 0xc2, 0, 0, OPT_IM16))
+     DEF_ASM_OP0(lret, 0xcb)
+ ALT(DEF_ASM_OP1(lret, 0xca, 0, 0, OPT_IM16))
++    DEF_ASM_OP0(lretw, 0xcb)
++    DEF_ASM_OP0(lretl, 0xcb)
++    DEF_ASM_OP0(lretq, 0xcb)
+ 
+ ALT(DEF_ASM_OP1(jo, 0x70, 0, OPC_TEST, OPT_DISP8))
+     DEF_ASM_OP1(loopne, 0xe0, 0, 0, OPT_DISP8)
+@@ -356,22 +400,40 @@ ALT(DEF_ASM_OP1(fstsw, 0xdd, 7, OPC_MODRM | OPC_FWAIT, OPT_EA ))
+        problem with TCC, we don't use extended registers.  */
+     DEF_ASM_OP1(fxsaveq, 0x0fae, 0, OPC_MODRM | OPC_48, OPT_EA )
+     DEF_ASM_OP1(fxrstorq, 0x0fae, 1, OPC_MODRM | OPC_48, OPT_EA )
++    DEF_ASM_OP1(fxsave64, 0x0fae, 0, OPC_MODRM | OPC_48, OPT_EA )
++    DEF_ASM_OP1(fxrstor64, 0x0fae, 1, OPC_MODRM | OPC_48, OPT_EA )
++    DEF_ASM_OP1(xsave, 0x0fae, 4, OPC_MODRM, OPT_EA )
++    DEF_ASM_OP1(xrstor, 0x0fae, 5, OPC_MODRM, OPT_EA )
++    DEF_ASM_OP1(xsaveopt, 0x0fae, 6, OPC_MODRM, OPT_EA )
++    DEF_ASM_OP1(xsavec, 0x0fc7, 4, OPC_MODRM, OPT_EA )
++    DEF_ASM_OP1(xsave64, 0x0fae, 4, OPC_MODRM | OPC_48, OPT_EA )
++    DEF_ASM_OP1(xrstor64, 0x0fae, 5, OPC_MODRM | OPC_48, OPT_EA )
++    DEF_ASM_OP1(xsaveopt64, 0x0fae, 6, OPC_MODRM | OPC_48, OPT_EA )
++    DEF_ASM_OP1(xsavec64, 0x0fc7, 4, OPC_MODRM | OPC_48, OPT_EA )
+ 
+     /* segments */
+     DEF_ASM_OP2(arpl, 0x63, 0, OPC_MODRM, OPT_REG16, OPT_REG16 | OPT_EA)
+ ALT(DEF_ASM_OP2(larw, 0x0f02, 0, OPC_MODRM | OPC_WLX, OPT_REG | OPT_EA, OPT_REG))
+     DEF_ASM_OP1(lgdt, 0x0f01, 2, OPC_MODRM, OPT_EA)
+     DEF_ASM_OP1(lgdtq, 0x0f01, 2, OPC_MODRM, OPT_EA)
++    DEF_ASM_OP1(lgdtw, 0x0f01, 2, OPC_MODRM | OPC_NOT64, OPT_EA)
++    DEF_ASM_OP1(lgdtl, 0x0f01, 2, OPC_MODRM | OPC_NOT64, OPT_EA)
+     DEF_ASM_OP1(lidt, 0x0f01, 3, OPC_MODRM, OPT_EA)
+     DEF_ASM_OP1(lidtq, 0x0f01, 3, OPC_MODRM, OPT_EA)
++    DEF_ASM_OP1(lidtw, 0x0f01, 3, OPC_MODRM | OPC_NOT64, OPT_EA)
++    DEF_ASM_OP1(lidtl, 0x0f01, 3, OPC_MODRM | OPC_NOT64, OPT_EA)
+     DEF_ASM_OP1(lldt, 0x0f00, 2, OPC_MODRM, OPT_EA | OPT_REG)
+     DEF_ASM_OP1(lmsw, 0x0f01, 6, OPC_MODRM, OPT_EA | OPT_REG)
+ ALT(DEF_ASM_OP2(lslw, 0x0f03, 0, OPC_MODRM | OPC_WLX, OPT_EA | OPT_REG, OPT_REG))
+     DEF_ASM_OP1(ltr, 0x0f00, 3, OPC_MODRM, OPT_EA | OPT_REG16)
+     DEF_ASM_OP1(sgdt, 0x0f01, 0, OPC_MODRM, OPT_EA)
+     DEF_ASM_OP1(sgdtq, 0x0f01, 0, OPC_MODRM, OPT_EA)
++    DEF_ASM_OP1(sgdtw, 0x0f01, 0, OPC_MODRM | OPC_NOT64, OPT_EA)
++    DEF_ASM_OP1(sgdtl, 0x0f01, 0, OPC_MODRM | OPC_NOT64, OPT_EA)
+     DEF_ASM_OP1(sidt, 0x0f01, 1, OPC_MODRM, OPT_EA)
+     DEF_ASM_OP1(sidtq, 0x0f01, 1, OPC_MODRM, OPT_EA)
++    DEF_ASM_OP1(sidtw, 0x0f01, 1, OPC_MODRM | OPC_NOT64, OPT_EA)
++    DEF_ASM_OP1(sidtl, 0x0f01, 1, OPC_MODRM | OPC_NOT64, OPT_EA)
+     DEF_ASM_OP1(sldt, 0x0f00, 0, OPC_MODRM, OPT_REG | OPT_EA)
+     DEF_ASM_OP1(smsw, 0x0f01, 4, OPC_MODRM, OPT_REG | OPT_EA)
+     DEF_ASM_OP1(str, 0x0f00, 1, OPC_MODRM, OPT_REG32 | OPT_EA)
+--- a/x86_64-link.c
++++ b/x86_64-link.c
+@@ -27,6 +27,7 @@
+ int code_reloc (int reloc_type)
+ {
+     switch (reloc_type) {
++        case R_X86_64_16:
+         case R_X86_64_32:
+         case R_X86_64_32S:
+         case R_X86_64_64:
+@@ -44,6 +45,7 @@ int code_reloc (int reloc_type)
+         case R_X86_64_GOTOFF64:
+             return 0;
+ 
++        case R_X86_64_PC16:
+         case R_X86_64_PC32:
+         case R_X86_64_PC64:
+         case R_X86_64_PLT32:
+@@ -66,6 +68,8 @@ int gotplt_entry_type (int reloc_type)
+         case R_X86_64_JUMP_SLOT:
+         case R_X86_64_COPY:
+         case R_X86_64_RELATIVE:
++        case R_X86_64_16:
++        case R_X86_64_PC16:
+             return NO_GOTPLT_ENTRY;
+ 
+ 	/* The following relocs wouldn't normally need GOT or PLT
+@@ -240,6 +244,24 @@ void relocate(TCCState *s1, ElfW_Rel *rel, int type, unsigned char *ptr, addr_t
+             add64le(ptr, val - s1->got->sh_addr + rel->r_addend);
+             break;
+ 
++        /* The fields of 16-bit code: what does not fit is an error, as
++           GNU ld has it. */
++        case R_X86_64_16:
++            if ((long long)val < -32768 || (long long)val > 65535)
++                tcc_error("a 16-bit relocation overflows: 0x%llx",
++                          (unsigned long long)val);
++            write16le(ptr, read16le(ptr) + val);
++            break;
++        case R_X86_64_PC16:
++            {
++                long long diff = (long long)(val - addr);
++                if (diff < -32768 || diff > 65535)
++                    tcc_error("a 16-bit relocation overflows: 0x%llx",
++                              (unsigned long long)diff);
++                write16le(ptr, read16le(ptr) + diff);
++            }
++            break;
++
+         case R_X86_64_PC64:
+             if (s1->output_type == TCC_OUTPUT_DLL) {
+                 /* DLL relocation */

@@ -19,6 +19,30 @@ It includes an assembler and a linker; the machine has no binutils.
 It compiles C89 with the C99 features implemented by TinyCC.
 The C library is musl.
 .Pp
+The assembler reads the syntax of GNU as.
+The directives
+.Ic .code16
+and
+.Ic .code32 ,
+and on x86-64
+.Ic .code64 ,
+select the size of the code that follows, and a file begins in the
+machine's own; 16-bit code addresses memory through
+.Li %bx ,
+.Li %bp ,
+.Li %si
+and
+.Li %di .
+A label less an earlier label of its section is right in any field, the
+first defined before the difference or after it; the earlier label less a
+later one is an error until the later is defined.
+Neither a forward
+.Ic loop
+or
+.Ic jecxz
+nor a forward jump is shortened: the first is an error and the second takes
+the long form.
+.Pp
 Executables must be linked with
 .Fl static
 and must use ELF format: the C library is here only as a static archive,
