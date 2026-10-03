@@ -61,7 +61,7 @@ struct part {
 };
 
 static struct part parts[128];
-static struct gptdisk table;
+static struct gptdisk gpt_table;
 static int nparts;
 static unsigned long long disk_sectors[16];
 static char disk_table[16][12];
@@ -266,9 +266,9 @@ static int gpt_disk_is(int n, const unsigned char *guid)
     if (fd < 0) {
         return 0;
     }
-    kind = gptdisk_read(fd, disk_sectors[n], &table);
+    kind = gptdisk_read(fd, disk_sectors[n], &gpt_table);
     close(fd);
-    return kind == 1 && memcmp(table.header + 56, guid, 16) == 0;
+    return kind == 1 && memcmp(gpt_table.header + 56, guid, 16) == 0;
 }
 
 /**
@@ -455,8 +455,9 @@ static int grow_gpt(int disk, int entry, const unsigned char *want_guid, const s
     if (fd < 0) {
         return fail(dev, strerror(errno));
     }
-    e = gptdisk_read(fd, disk_sectors[disk], &table) == 1 ? gptdisk_entry(&table, entry) : NULL;
-    if (!e || memcmp(table.header + 56, want_guid, 16) != 0 || !gptdisk_used(e) ||
+    e = gptdisk_read(fd, disk_sectors[disk], &gpt_table) == 1 ? gptdisk_entry(&gpt_table, entry)
+                                                              : NULL;
+    if (!e || memcmp(gpt_table.header + 56, want_guid, 16) != 0 || !gptdisk_used(e) ||
         gptdisk_le64(e + 32) != p->start || gptdisk_le64(e + 40) + 1 != end) {
         close(fd);
         return fail(dev, "the table changed while this was deciding; nothing written");
@@ -466,9 +467,9 @@ static int grow_gpt(int disk, int entry, const unsigned char *want_guid, const s
         return fail(part_node, "not a Linux file system's entry");
     }
     limit = disk_sectors[disk] - 1 -
-            (table.entries * table.entry_size + GPTDISK_SECTOR - 1) / GPTDISK_SECTOR;
-    for (n = 1; n <= (int)table.entries; n++) {
-        const unsigned char *o = gptdisk_entry(&table, n);
+            (gpt_table.entries * gpt_table.entry_size + GPTDISK_SECTOR - 1) / GPTDISK_SECTOR;
+    for (n = 1; n <= (int)gpt_table.entries; n++) {
+        const unsigned char *o = gptdisk_entry(&gpt_table, n);
 
         if (n != entry && gptdisk_used(o) && gptdisk_le64(o + 32) >= end &&
             gptdisk_le64(o + 32) < limit) {
@@ -480,14 +481,14 @@ static int grow_gpt(int disk, int entry, const unsigned char *want_guid, const s
         return fail(part_node, "the entry ends past the disk");
     }
     *grown = limit - p->start;
-    if (*grown == p->count && gptdisk_backup_at_end(&table)) {
+    if (*grown == p->count && gptdisk_backup_at_end(&gpt_table)) {
         close(fd);
         printf("growroot: entry: %s already fills the %llu sectors after it\n", part_node, *grown);
         return 0;
     }
     printf("growroot: entry: %s from %llu to %llu sectors\n", part_node, p->count, *grown);
     gptdisk_put64(e + 40, limit - 1);
-    if (gptdisk_write(fd, &table, &why) != 0) {
+    if (gptdisk_write(fd, &gpt_table, &why) != 0) {
         close(fd);
         return fail(dev, why);
     }
