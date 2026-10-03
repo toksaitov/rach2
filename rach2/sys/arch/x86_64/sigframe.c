@@ -76,15 +76,10 @@ struct lx_rt_sigframe {
  * can take (isr_handler.s). */
 #define LOWER_HALF_END 0x0000800000000000UL
 
-static int on_altstack(uintptr_t sp)
+int sigframe_on_altstack(uintptr_t sp)
 {
     return current_proc->altstack_on &&
            sp - (uintptr_t)current_proc->altstack_sp < (uintptr_t)current_proc->altstack_size;
-}
-
-int sigframe_on_altstack(uint32_t sp)
-{
-    return on_altstack(sp);
 }
 
 static void put32(uint8_t *p, uint32_t v)
@@ -181,7 +176,7 @@ int sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *sa,
     if (!(sa->flags & SA_RESTORER)) {
         return -1;
     }
-    on_alt = on_altstack(tf->rsp);
+    on_alt = sigframe_on_altstack(tf->rsp);
     if ((sa->flags & SA_ONSTACK) && current_proc->altstack_on && !on_alt) {
         sp = (uintptr_t)current_proc->altstack_sp + (uintptr_t)current_proc->altstack_size;
         on_alt = 1;
@@ -192,7 +187,7 @@ int sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *sa,
     sp -= sizeof(frame);
     sp = (sp & ~(uintptr_t)15u) - 8u;
     frame_addr = sp;
-    if (on_alt && !on_altstack(frame_addr)) {
+    if (on_alt && !sigframe_on_altstack(frame_addr)) {
         return -1;
     }
 
@@ -292,7 +287,7 @@ int sigframe_restore(isr_params_t *tf, int rt, uint64_t *mask)
 
     /* A frame's alternate stack comes back as sigaltstack would take it,
      * except that a stack in use or too small is left as it is. */
-    if (!on_altstack(tf->rsp)) {
+    if (!sigframe_on_altstack(tf->rsp)) {
         if (frame.uc.uc_stack.ss_flags & SS_DISABLE) {
             current_proc->altstack_on = 0;
         } else if (frame.uc.uc_stack.ss_size >= 2048u) {
