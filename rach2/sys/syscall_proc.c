@@ -25,9 +25,7 @@
 #include "proc/ptrace.h"
 #include "proc/elf.h"
 #include "proc/uimage.h"
-#include "arch/i686/tls.h"
 #include "proc/sigframe.h"
-#include "arch/i686/gdt.h"
 #include "lib/krandom.h"
 #include "lib/kerrno.h"
 #include "lib/kirq.h"
@@ -58,7 +56,7 @@
 #include "mm/vm.h"
 #include "lib/kuser.h"
 #include "lib/kstring.h"
-#include "display/vga_gfx.h"
+#include "display/fb.h"
 #include "speaker.h"
 #include "audio/audio.h"
 #include "network/socket/socket.h"
@@ -89,7 +87,7 @@
 void fb_release_if_owner(uint32_t pid)
 {
     if (fb_owner_pid == pid && fb_owner_pid != 0) {
-        vga_mode13h_exit();
+        fb_exit();
         fb_owner_pid = 0;
     }
 }
@@ -227,7 +225,7 @@ void kstack_overrun_test(void)
         return;
     }
     thread->kernel_stack = base + KERNEL_STACK_SIZE;
-    thread->cr3 = 0;
+    thread->space_root = 0;
     thread->state = PROC_RUNNING;
     setup_process_stack(thread, kstack_overrun_run);
     current_proc = thread;
@@ -250,7 +248,6 @@ static void proc_release(process_t *p)
 }
 
 /* Fork child return point in isr_handler.s */
-extern void isr_return(void);
 
 /*
  * Init process tracking from kernel.c. A real init's death is fatal
@@ -414,7 +411,7 @@ static void proc_end_others(void)
                 }
                 break;
             }
-            if (p->cr3 == 0) {
+            if (p->space_root == 0) {
                 alive += p->in_syscall != 0 && p->state != PROC_UNUSED;
                 continue;
             }
@@ -1764,7 +1761,7 @@ static void exec_commit(isr_params_t *params, struct exec_state *s)
     current_proc->vma_reported = 0;
 
     current_proc->mm = s->mm;
-    current_proc->cr3 = s->mm->cr3;
+    current_proc->space_root = s->mm->space_root;
     current_proc->page_dir = s->mm->dir;
     s->mm = NULL;
     switch_page_directory(current_proc->page_dir);
@@ -2208,30 +2205,13 @@ static void fork_store_ids(process_t *child, const struct fork_req *req)
 
 /**
  * Lay out `child`'s kernel stack for its first switch, from the parent's
- * trap frame `params`: the frame, with 0 in EAX, fork's return, and the new
- * stack pointer a clone asks for; above it the return address `isr_return`
- * and the four registers `switch_context` pops. When the child is first
- * scheduled, switch_context pops EDI, ESI, EBX and EBP, returns to
- * isr_return, and the frame takes it to user mode.
+ * trap frame `params`: the architecture copies the frame with 0 for fork's
+ * result and the new stack pointer a clone asks for, and above it what its
+ * `switch_context` pops on the way back to user mode (`arch_fork_frame`).
  */
 static void fork_frame(process_t *child, const isr_params_t *params, const struct fork_req *req)
 {
-    uint32_t *sp = (uint32_t *)child->kernel_stack;
-    isr_params_t *frame;
-
-    sp -= sizeof(isr_params_t) / sizeof(uint32_t);
-    frame = (isr_params_t *)sp;
-    k_memcpy(frame, params, sizeof(isr_params_t));
-    frame->eax = 0;
-    if (req->newsp) {
-        frame->user_esp = req->newsp;
-    }
-    *--sp = (uint32_t)isr_return;
-    *--sp = 0; /* EBP */
-    *--sp = 0; /* EBX */
-    *--sp = 0; /* ESI */
-    *--sp = 0; /* EDI */
-    child->regs.esp = (uint32_t)sp;
+    arch_fork_frame(child, params, req->newsp);
 }
 
 /**
@@ -2291,7 +2271,7 @@ static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
         free_process(child);
         return -ENOMEM;
     }
-    child->cr3 = child->mm->cr3;
+    child->space_root = child->mm->space_root;
     child->page_dir = child->mm->dir;
 
     child_kstack_base = kstack_alloc();

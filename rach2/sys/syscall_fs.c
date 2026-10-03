@@ -21,8 +21,6 @@
 #include "proc/ns.h"
 #include "proc/elf.h"
 #include "proc/uimage.h"
-#include "arch/i686/tls.h"
-#include "arch/i686/gdt.h"
 #include "lib/krandom.h"
 #include "lib/kerrno.h"
 #include "lib/ksignal.h"
@@ -54,7 +52,7 @@
 #include "mm/vm.h"
 #include "lib/kuser.h"
 #include "lib/kstring.h"
-#include "display/vga_gfx.h"
+#include "display/fb.h"
 #include "speaker.h"
 #include "audio/audio.h"
 #include "network/socket/socket.h"
@@ -400,7 +398,7 @@ static void fd_release_objects(fd_entry_t *e)
      * parent's graphics mode when the child closes the fd or exits. */
     if (e->type == FD_TYPE_FRAMEBUFFER && current_proc && fb_owner_pid == current_proc->tgid &&
         e->ofd && e->ofd->refcount == 1) {
-        vga_mode13h_exit();
+        fb_exit();
         fb_owner_pid = 0;
     }
     if (e->type == FD_TYPE_SOCKET && e->sock) {
@@ -773,16 +771,16 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
     if (entry->type == FD_TYPE_FRAMEBUFFER) {
         uint32_t to_copy;
 
-        if (!vga_graphics_mode) {
+        if (!gfx_is_active()) {
             return -EBADF; /* Not in graphics mode */
         }
 
         to_copy = count;
-        if (to_copy > VGA_MODE13H_SIZE) {
-            to_copy = VGA_MODE13H_SIZE;
+        if (to_copy > gfx_current.size) {
+            to_copy = gfx_current.size;
         }
 
-        if (copy_from_user((void *)VGA_FRAMEBUFFER, (const void __user *)buf, to_copy) != 0) {
+        if (copy_from_user((void *)gfx_current.framebuffer, (const void __user *)buf, to_copy) != 0) {
             return -EFAULT;
         }
 
@@ -2240,7 +2238,7 @@ static int32_t open_framebuffer(void)
     entry->ofd->offset = 0;
     entry->flags = FD_FLAG_READ | FD_FLAG_WRITE;
 
-    vga_mode13h_enter();
+    fb_enter();
     fb_owner_pid = current_proc->tgid;
 
     kbd_clear_scancodes(); /* drop stale scancodes left by the shell */

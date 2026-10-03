@@ -12,30 +12,6 @@
 
 extern volatile uint32_t kernel_ticks;
 
-/* The offsets switch.s reads from the process record, as `.set` values
- * there and as numbers here; a field added before one of them stops the
- * GNU build. TinyCC cannot fold an offset into an array size, so a kernel it
- * builds finds the change at boot, in `init_proc`, which checks every
- * build. A host test compiles this file with 64-bit pointers, where the
- * offsets differ, and skips the compile-time check. */
-#define PROC_OFF(field)       ((uint32_t)&((process_t *)0)->field)
-#define PROC_OFF_REGS_ESP     48u
-#define PROC_OFF_CR3          52u
-#define PROC_OFF_KERNEL_STACK 56u
-#define PROC_OFF_TLS_BASE     80u
-#define PROC_OFF_PAGE_DIR     720u
-#if !defined(__TINYC__) && !defined(RACH2_HOSTTEST)
-typedef char process_offsets_fit
-    [(__builtin_offsetof(struct process, regs) + __builtin_offsetof(cpu_regs_t, esp) ==
-          PROC_OFF_REGS_ESP &&
-      __builtin_offsetof(struct process, cr3) == PROC_OFF_CR3 &&
-      __builtin_offsetof(struct process, kernel_stack) == PROC_OFF_KERNEL_STACK &&
-      __builtin_offsetof(struct process, tls_base) == PROC_OFF_TLS_BASE &&
-      __builtin_offsetof(struct process, page_dir) == PROC_OFF_PAGE_DIR)
-         ? 1
-         : -1];
-#endif
-
 process_t *proc_list;
 process_t *proc_idle;
 static process_t *proc_tail;
@@ -71,17 +47,14 @@ uint32_t proc_last_pid(void)
 /**
  * Reset the process table to its boot state and check the record's layout.
  *
- * `switch.s` hard-codes the byte offsets of the fields it reads during a
- * context switch; `process_offsets_fit` above checks them at build time
- * where the compiler can, and this checks them again here for the build
- * that cannot.
+ * The architecture's context switch reads fields of the record at fixed
+ * byte offsets; `arch_context_check` checks them here for the build whose
+ * compiler cannot check them at build time.
  */
 void init_proc(void)
 {
-    if (PROC_OFF(regs.esp) != PROC_OFF_REGS_ESP || PROC_OFF(cr3) != PROC_OFF_CR3 ||
-        PROC_OFF(kernel_stack) != PROC_OFF_KERNEL_STACK ||
-        PROC_OFF(tls_base) != PROC_OFF_TLS_BASE || PROC_OFF(page_dir) != PROC_OFF_PAGE_DIR) {
-        k_panic("process: the record's layout is not what switch.s reads");
+    if (arch_context_check() != 0) {
+        k_panic("process: the record's layout is not what the context switch reads");
     }
     proc_list = NULL;
     proc_tail = NULL;
@@ -425,37 +398,13 @@ void proc_set_comm(process_t *p, const char *path)
 }
 
 /**
- * Prime a new process's kernel stack for its first context switch.
- *
- * `switch_context` restores callee-saved registers and rets, so it expects
- * the stack to look as if it had pushed them. The frame this builds, from
- * high to low address:
- *
- *     [entry_point]  return address (where execution begins)
- *     [ebp]          saved EBP (0 for a new process)
- *     [ebx]          saved EBX (0)
- *     [esi]          saved ESI (0)
- *     [edi]          saved EDI (0)   <- regs.esp points here
+ * Prime a new process's kernel stack for its first context switch, which
+ * returns into `entry_point`: the architecture lays the stack out as its
+ * `switch_context` expects to find it (`arch_context_init`).
  */
 void setup_process_stack(process_t *proc, void (*entry_point)(void))
 {
-    uint32_t *sp;
-
-    sp = (uint32_t *)proc->kernel_stack;
-
-    --sp;
-    *sp = (uint32_t)entry_point;
-
-    --sp;
-    *sp = 0; /* EBP */
-    --sp;
-    *sp = 0; /* EBX */
-    --sp;
-    *sp = 0; /* ESI */
-    --sp;
-    *sp = 0; /* EDI */
-
-    proc->regs.esp = (uint32_t)sp;
+    arch_context_init(proc, entry_point);
 }
 
 void proc_child_info(const process_t *child, struct k_siginfo *info)

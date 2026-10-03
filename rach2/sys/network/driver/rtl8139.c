@@ -18,7 +18,6 @@
  * service-loop note in rtl8139_irq for the shared-line handling.
  */
 
-#include "../../arch/x86/portio.h"
 #include "../../klog.h"
 #include "rtl8139.h"
 #include "../net.h"
@@ -112,12 +111,12 @@ int rtl8139_init(struct netdev *nd, int nth)
     iobase = (uint16_t)pci_bar_address(rtl_pci.bar[0]);
 
     /* Enter config-write mode so the configuration registers are writable. */
-    outb(iobase + RTL_9346CR, 0xC0);
+    pci_io_write8(iobase + RTL_9346CR, 0xC0);
 
     /* Software reset; the RST bit self-clears when the reset completes. */
-    outb(iobase + RTL_CHIPCMD, RTL_CMD_RST);
+    pci_io_write8(iobase + RTL_CHIPCMD, RTL_CMD_RST);
     timeout = 100000;
-    while ((inb(iobase + RTL_CHIPCMD) & RTL_CMD_RST) && --timeout) {
+    while ((pci_io_read8(iobase + RTL_CHIPCMD) & RTL_CMD_RST) && --timeout) {
         /* spin */
     }
     if (timeout == 0) {
@@ -126,8 +125,8 @@ int rtl8139_init(struct netdev *nd, int nth)
     }
 
     /* The MAC address is latched at I/O offsets 0x00-0x05 after reset. */
-    mac_lo = inl(iobase + RTL_MAC0);
-    mac_hi = inw(iobase + RTL_MAC4);
+    mac_lo = pci_io_read32(iobase + RTL_MAC0);
+    mac_hi = pci_io_read16(iobase + RTL_MAC4);
     rtl8139_mac[0] = (uint8_t)(mac_lo >> 0);
     rtl8139_mac[1] = (uint8_t)(mac_lo >> 8);
     rtl8139_mac[2] = (uint8_t)(mac_lo >> 16);
@@ -145,35 +144,35 @@ int rtl8139_init(struct netdev *nd, int nth)
             return NETDEV_FAILED;
         }
     }
-    outl(iobase + RTL_RBSTART, (uint32_t)rx_buf);
+    pci_io_write32(iobase + RTL_RBSTART, (uint32_t)rx_buf);
     rx_ptr = 0;
 
     /* Pre-load each TX start address; the lengths are written per packet. */
     for (i = 0; i < RTL_TX_NUM; i++) {
-        outl(iobase + RTL_TSAD0 + i * 4, (uint32_t)tx_buf[i]);
+        pci_io_write32(iobase + RTL_TSAD0 + i * 4, (uint32_t)tx_buf[i]);
     }
     tx_idx = 0;
 
-    outl(iobase + RTL_RCR, RTL_RCR_VALUE);
-    outl(iobase + RTL_TCR, RTL_TCR_VALUE);
+    pci_io_write32(iobase + RTL_RCR, RTL_RCR_VALUE);
+    pci_io_write32(iobase + RTL_TCR, RTL_TCR_VALUE);
 
     /* Accept all multicast (fine on SLIRP). */
-    outl(iobase + RTL_MAR0, 0xFFFFFFFF);
-    outl(iobase + RTL_MAR4, 0xFFFFFFFF);
+    pci_io_write32(iobase + RTL_MAR0, 0xFFFFFFFF);
+    pci_io_write32(iobase + RTL_MAR4, 0xFFFFFFFF);
 
     /* Leave config-write mode. */
-    outb(iobase + RTL_9346CR, 0x00);
+    pci_io_write8(iobase + RTL_9346CR, 0x00);
 
     /* Clear any stale interrupt status, then unmask the events we handle. */
-    outw(iobase + RTL_ISR, 0xFFFF);
-    outw(iobase + RTL_IMR,
+    pci_io_write16(iobase + RTL_ISR, 0xFFFF);
+    pci_io_write16(iobase + RTL_IMR,
          RTL_ISR_ROK | RTL_ISR_TOK | RTL_ISR_RER | RTL_ISR_TER | RTL_ISR_RXOVW | RTL_ISR_FOVW);
 
     register_isr_handler((uint8_t)IRQ_VECTOR(rtl_pci.irq), rtl8139_irq, "rtl8139");
 
     /* Enable the receiver and transmitter (after the buffers are
      * configured). */
-    outb(iobase + RTL_CHIPCMD, RTL_CMD_RE | RTL_CMD_TE);
+    pci_io_write8(iobase + RTL_CHIPCMD, RTL_CMD_RE | RTL_CMD_TE);
 
     /* The card's address is its interface's; netdev_probe sets net_mac. */
     for (i = 0; i < 6; i++) {
@@ -240,9 +239,9 @@ static void rtl8139_stop(void *dev)
 {
     (void)dev; /* this driver has one card */
     if (iobase != 0) {
-        outb(iobase + RTL_CHIPCMD, 0);
-        outw(iobase + RTL_IMR, 0);
-        outw(iobase + RTL_ISR, 0xFFFF);
+        pci_io_write8(iobase + RTL_CHIPCMD, 0);
+        pci_io_write16(iobase + RTL_IMR, 0);
+        pci_io_write16(iobase + RTL_ISR, 0xFFFF);
     }
     if (rtl_pci.vendor_id == 0x10EC && rtl_pci.device_id == 0x8139) {
         pci_disable_bus_master(&rtl_pci);
@@ -269,10 +268,10 @@ static int rtl8139_link(void *dev, struct netdev_link *out)
     if (iobase == 0) {
         return 0;
     }
-    msr = inb(iobase + RTL_MSR);
+    msr = pci_io_read8(iobase + RTL_MSR);
     out->up = (msr & RTL_MSR_LINKB) ? 0 : 1;
     out->mbps = (uint16_t)((msr & RTL_MSR_SPEED_10) ? 10 : 100);
-    out->full_duplex = (inw(iobase + RTL_BMCR) & RTL_BMCR_DUPLEX) ? 1 : 0;
+    out->full_duplex = (pci_io_read16(iobase + RTL_BMCR) & RTL_BMCR_DUPLEX) ? 1 : 0;
     return 1;
 }
 
@@ -321,8 +320,8 @@ int rtl8139_tx(void *dev, const uint8_t *data, uint16_t len)
         txlen = 60;
     }
 
-    outl(iobase + RTL_TSAD0 + tx_idx * 4, (uint32_t)tx_buf[tx_idx]);
-    outl(iobase + RTL_TSD0 + tx_idx * 4, (uint32_t)txlen & 0x1FFFUL);
+    pci_io_write32(iobase + RTL_TSAD0 + tx_idx * 4, (uint32_t)tx_buf[tx_idx]);
+    pci_io_write32(iobase + RTL_TSD0 + tx_idx * 4, (uint32_t)txlen & 0x1FFFUL);
 
     tx_idx = (tx_idx + 1) & 3;
 
@@ -338,13 +337,13 @@ int rtl8139_tx(void *dev, const uint8_t *data, uint16_t len)
  */
 static void rtl8139_rx_reset(void)
 {
-    outb(iobase + RTL_CHIPCMD, RTL_CMD_TE);
+    pci_io_write8(iobase + RTL_CHIPCMD, RTL_CMD_TE);
     rx_ptr = 0;
-    outl(iobase + RTL_RBSTART, (uint32_t)rx_buf);
-    outl(iobase + RTL_RCR, RTL_RCR_VALUE);
-    outw(iobase + RTL_CAPR, (uint16_t)(0 - 16));
-    outw(iobase + RTL_ISR, RTL_ISR_RXOVW | RTL_ISR_FOVW | RTL_ISR_RER);
-    outb(iobase + RTL_CHIPCMD, RTL_CMD_RE | RTL_CMD_TE);
+    pci_io_write32(iobase + RTL_RBSTART, (uint32_t)rx_buf);
+    pci_io_write32(iobase + RTL_RCR, RTL_RCR_VALUE);
+    pci_io_write16(iobase + RTL_CAPR, (uint16_t)(0 - 16));
+    pci_io_write16(iobase + RTL_ISR, RTL_ISR_RXOVW | RTL_ISR_FOVW | RTL_ISR_RER);
+    pci_io_write8(iobase + RTL_CHIPCMD, RTL_CMD_RE | RTL_CMD_TE);
 }
 
 /**
@@ -371,10 +370,10 @@ static void rtl8139_rx(void)
     uint32_t bound;
     uint32_t taken;
 
-    bound = (uint32_t)inw(iobase + RTL_CBR) % RTL_RX_RING;
+    bound = (uint32_t)pci_io_read16(iobase + RTL_CBR) % RTL_RX_RING;
     taken = 0;
 
-    while (!(inb(iobase + RTL_CHIPCMD) & RTL_CMD_RXEMPTY)) {
+    while (!(pci_io_read8(iobase + RTL_CHIPCMD) & RTL_CMD_RXEMPTY)) {
         if (taken > 0 && rx_ptr == bound) {
             break;
         }
@@ -405,7 +404,7 @@ static void rtl8139_rx(void)
         advance = (uint32_t)pkt_len + 4 + 3;
         rx_ptr = (rx_ptr + advance) & ~3UL;
         rx_ptr %= RTL_RX_RING;
-        outw(iobase + RTL_CAPR, (uint16_t)(rx_ptr - 16));
+        pci_io_write16(iobase + RTL_CAPR, (uint16_t)(rx_ptr - 16));
     }
 }
 
@@ -440,11 +439,11 @@ static void rtl8139_irq(isr_params_t *params)
     (void)params;
 
     for (guard = 0; guard < 64; guard++) {
-        isr_val = inw(iobase + RTL_ISR);
+        isr_val = pci_io_read16(iobase + RTL_ISR);
         if ((isr_val & RTL_ISR_HANDLED) == 0) {
             break;
         }
-        outw(iobase + RTL_ISR, isr_val); /* write-1-to-clear acknowledge */
+        pci_io_write16(iobase + RTL_ISR, isr_val); /* write-1-to-clear acknowledge */
 
         if (isr_val & RTL_ISR_ROK) {
             rtl8139_rx();

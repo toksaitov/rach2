@@ -1,7 +1,6 @@
 #ifndef _KBD_H_
 #define _KBD_H_
 
-#include "arch/x86/isr.h"
 #include "kio.h"
 
 #include "lib/kint.h"

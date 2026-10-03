@@ -27,7 +27,7 @@ struct mm *mm_new(void)
         kfree(mm);
         return NULL;
     }
-    mm->cr3 = get_page_dir_phys(mm->dir);
+    mm->space_root = get_page_dir_phys(mm->dir);
     mm->users = 1;
     mm->holds = 1;
     mm->dumpable = 1;
@@ -56,7 +56,7 @@ void mm_put(struct mm *mm)
     free_user_pages(mm->dir);
     free_page_directory(mm->dir);
     mm->dir = NULL;
-    mm->cr3 = 0;
+    mm->space_root = 0;
     vm_free(&mm->vm);
     mm_exe_close(mm);
     vm_file_reap();
@@ -217,7 +217,7 @@ void mm_drop(struct process *p)
         switch_page_directory(_kernel_dir);
     }
     p->mm = NULL;
-    p->cr3 = 0;
+    p->space_root = 0;
     p->page_dir = NULL;
     mm_put(mm);
 }

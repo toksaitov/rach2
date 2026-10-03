@@ -11,7 +11,6 @@
 
 #include "../klog.h"
 #include "../irq.h"
-#include "../arch/x86/lapic.h"
 #include "procfs.h"
 
 #include "../latency.h"
@@ -2926,7 +2925,7 @@ static int procfs_gen_interrupts(struct procfs_text *t)
         ap_ch(t, '\n');
     }
     ap_str(t, "SPU:\t");
-    ap_u32(t, lapic_spurious_count());
+    ap_u32(t, isr_spurious_count());
     ap_str(t, "\tspurious\n");
     ap_str(t, "FBK:\t");
     ap_u32(t, usb_fallback_count());

@@ -45,7 +45,6 @@
 #include "sys/usb/usb.h"
 #include "sys/block/block.h"
 #include "sys/block/ahci.h"
-#include "sys/display/vga_text.h"
 #include "sys/audio/audio.h"
 #include "sys/audio/audio_debug.h"
 #include "sys/audio/hda.h"
@@ -472,7 +471,7 @@ static void kill_foreground_process(void)
     console_puts("^C");
     if (console_tty.fg_pgid != 0) {
         tty_signal_group(console_tty.fg_pgid, SIGINT);
-    } else if (current_proc && current_proc->cr3 != 0 &&
+    } else if (current_proc && current_proc->space_root != 0 &&
                (int)current_proc->sid == console_tty.sid) {
         signal_post(current_proc, SIGINT);
     }
@@ -789,7 +788,7 @@ static void test_switch(void)
 
     stack_b = mem_reserve(KERNEL_STACK_SIZE, true);
     switch_proc_b->kernel_stack = stack_b + KERNEL_STACK_SIZE;
-    switch_proc_b->cr3 = 0; /* shares the kernel page directory */
+    switch_proc_b->space_root = 0; /* shares the kernel page directory */
     switch_proc_b->parent_pid = switch_proc_a->pid;
 
     setup_process_stack(switch_proc_b, proc_b_entry);
@@ -898,7 +897,7 @@ static void test_preempt(void)
     }
     stack_a = mem_reserve(KERNEL_STACK_SIZE, true);
     proc_a->kernel_stack = stack_a + KERNEL_STACK_SIZE;
-    proc_a->cr3 = 0;
+    proc_a->space_root = 0;
     proc_a->parent_pid = current_proc->pid;
     setup_process_stack(proc_a, preempt_proc_a);
 
@@ -910,7 +909,7 @@ static void test_preempt(void)
     }
     stack_b = mem_reserve(KERNEL_STACK_SIZE, true);
     proc_b->kernel_stack = stack_b + KERNEL_STACK_SIZE;
-    proc_b->cr3 = 0;
+    proc_b->space_root = 0;
     proc_b->parent_pid = current_proc->pid;
     setup_process_stack(proc_b, preempt_proc_b);
 
@@ -1026,7 +1025,7 @@ static bool test_isolation(void)
     }
     stack_a = mem_reserve(KERNEL_STACK_SIZE, true);
     isolation_proc_a->kernel_stack = stack_a + KERNEL_STACK_SIZE;
-    isolation_proc_a->cr3 = get_page_dir_phys(dir_a);
+    isolation_proc_a->space_root = get_page_dir_phys(dir_a);
     isolation_proc_a->page_dir = dir_a;
     isolation_proc_a->parent_pid = isolation_proc_main->pid;
     setup_process_stack(isolation_proc_a, isolation_proc_a_entry);
@@ -1038,7 +1037,7 @@ static bool test_isolation(void)
     }
     stack_b = mem_reserve(KERNEL_STACK_SIZE, true);
     isolation_proc_b->kernel_stack = stack_b + KERNEL_STACK_SIZE;
-    isolation_proc_b->cr3 = get_page_dir_phys(dir_b);
+    isolation_proc_b->space_root = get_page_dir_phys(dir_b);
     isolation_proc_b->page_dir = dir_b;
     isolation_proc_b->parent_pid = isolation_proc_main->pid;
     setup_process_stack(isolation_proc_b, isolation_proc_b_entry);
@@ -1264,7 +1263,7 @@ static void exec_program(int argc, char *argv[])
     user_proc->state = PROC_RUNNING;
     mm_set_exe(mm, path);
     user_proc->mm = mm;
-    user_proc->cr3 = mm->cr3;
+    user_proc->space_root = mm->space_root;
     user_proc->page_dir = mm->dir;
     user_proc->kernel_stack = (uint32_t)stack + KERNEL_STACK_SIZE;
     user_proc->parent_pid = current_proc ? current_proc->tgid : 0;
@@ -3532,7 +3531,7 @@ void kernel_main(const struct boot_info *boot)
         process_t *proc0 = alloc_process();
         if (proc0) {
             proc0->state = PROC_RUNNING;
-            proc0->cr3 = 0; /* shares the kernel page directory */
+            proc0->space_root = 0; /* shares the kernel page directory */
             proc0->kernel_stack = (uint32_t)stack + KERNEL_STACK_SIZE;
             proc0->parent_pid = 0;
             proc_idle = proc0;

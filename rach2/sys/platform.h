@@ -38,6 +38,19 @@ void platform_timer_start(isr_handler_t tick);
 /** The ticks a second `platform_timer_start` set. */
 uint32_t platform_timer_hz(void);
 
+/** Probe the disk controllers only this platform has, after the shared
+ * ones (on a PC, the ATA channels, after AHCI). */
+void platform_disks_probe(void);
+
+struct audio_driver;
+
+/**
+ * The sound device only this platform has, which the boot tries after HD
+ * Audio and before the speaker (on a PC, the Sound Blaster 16), with its
+ * name for the boot's status in `*name`; NULL when it has none.
+ */
+struct audio_driver *platform_audio_driver(const char **name);
+
 /** Find the machine's power controller, for the power off. */
 void platform_board_init(void);
 

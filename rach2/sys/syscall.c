@@ -21,13 +21,11 @@
 #include "proc/sched.h"
 #include "proc/elf.h"
 #include "proc/uimage.h"
-#include "arch/i686/tls.h"
 #include "proc/futex.h"
 #include "proc/tgroup.h"
 #include "proc/ptrace.h"
 #include "proc/seccomp.h"
 #include "proc/ns.h"
-#include "arch/i686/gdt.h"
 #include "lib/krandom.h"
 #include "lib/kerrno.h"
 #include "lib/kirq.h"
@@ -56,7 +54,7 @@
 #include "mm/vm.h"
 #include "lib/kuser.h"
 #include "lib/kstring.h"
-#include "display/vga_gfx.h"
+#include "display/fb.h"
 #include "speaker.h"
 #include "audio/audio.h"
 #include "network/socket/socket.h"
@@ -1978,20 +1976,20 @@ static int32_t framebuffer_ioctl(uint32_t request, uint32_t arg)
     }
     switch (request) {
     case FB_MODE_13H:
-        if (!vga_graphics_mode) {
-            vga_mode13h_enter();
+        if (!gfx_is_active()) {
+            fb_enter();
         }
         fb_owner_pid = current_proc->tgid;
         return 0;
     case FB_MODE_TEXT:
-        vga_mode13h_exit();
+        fb_exit();
         fb_owner_pid = 0;
         return 0;
     default:
         if (!arg || !user_buffer_ok(arg, 768, 0)) {
             return -EFAULT;
         }
-        vga_mode13h_set_palette((const uint8_t *)arg);
+        fb_set_palette((const uint8_t *)arg);
         return 0;
     }
 }

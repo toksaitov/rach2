@@ -25,6 +25,15 @@ struct isr_params {
 typedef struct isr_params isr_params_t;
 typedef uint64_t phys_addr_t;
 
+/* The process record's register block: the kernel stack pointer
+ * `switch_context` saved when the process last switched away, or the one
+ * built for its first switch. */
+struct cpu_regs {
+    uint64_t rsp;
+};
+
+typedef struct cpu_regs cpu_regs_t;
+
 /* Linux x86-64's system call convention: the number in RAX, the arguments
  * in RDI, RSI, RDX, R10, R8 and R9, the result in RAX. */
 #define SC_NR(p)     ((p)->rax)

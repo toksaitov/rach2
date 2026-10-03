@@ -1,5 +1,4 @@
 #include "kio.h"
-#include "display/vga_font.h"
 #include "klog.h"
 #include "lib/kirq.h"
 
@@ -506,8 +505,10 @@ static char vt_glyph(uint32_t code)
 
 void k_font_init(void)
 {
-    if (vga_font_load()) {
-        vt_font = vga_font_map;
+    const uint16_t *map = textcon_load_font();
+
+    if (map != NULL) {
+        vt_font = map;
         klog(KLOG_INFO, "vga", "font: loaded: code page 437 box drawing with Cyrillic");
     } else {
         klog(KLOG_INFO, "vga", "font: kept: the adapter's code page 437");

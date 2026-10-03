@@ -499,3 +499,23 @@ const char *isr_vector_source(int vector)
 {
     return vector < ISR_MSI_FIRST ? "PIC" : "MSI";
 }
+
+int isr_msi_ready(void)
+{
+    return lapic_ready();
+}
+
+int isr_line_pending(int line)
+{
+    return pic_irq_pending((uint8_t)line);
+}
+
+int isr_vector_pending(int vector)
+{
+    return lapic_pending((uint8_t)vector);
+}
+
+uint32_t isr_spurious_count(void)
+{
+    return lapic_spurious_count();
+}

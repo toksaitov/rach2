@@ -10,7 +10,6 @@
 #include "../serial.h"
 #include "../mm/paging.h"
 #include "../irq.h"
-#include "../arch/x86/lapic.h"
 #include "../lib/kirq.h"
 #include "../timer.h"
 #include "../cmdline.h"
@@ -1318,7 +1317,7 @@ void ahci_start(void)
     if (!ahci_base || ahci_ndisks == 0 || kcmdline_has("rach2.ahcipoll")) {
         return;
     }
-    if (!lapic_ready() || (ahci_vector = isr_alloc_vector()) < 0) {
+    if (!isr_msi_ready() || (ahci_vector = isr_alloc_vector()) < 0) {
         klog(KLOG_INFO, "ahci", "polled: no vector for the controller's messages");
         return;
     }

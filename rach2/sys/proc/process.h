@@ -24,27 +24,8 @@ typedef enum {
     PROC_STOPPED  /* Job-control stopped (SIGSTOP/SIGTSTP), resumes on SIGCONT */
 } proc_state_t;
 
-/*
- * The record's register block. Only `esp` is used: the kernel stack pointer
- * `switch_context` saved when the process last switched away, or the one
- * built for its first switch. The other fields are read by nothing; they
- * keep `esp` at the offset switch.s reads.
- */
-struct cpu_regs {
-    uint32_t edi;
-    uint32_t esi;
-    uint32_t ebp;
-    uint32_t esp_dummy; /* Ignored by popal */
-    uint32_t ebx;
-    uint32_t edx;
-    uint32_t ecx;
-    uint32_t eax;
-    uint32_t eip;
-    uint32_t eflags;
-    uint32_t esp; /* Kernel stack pointer for switch_context */
-};
-
-typedef struct cpu_regs cpu_regs_t;
+/* The registers `switch_context` saves for a process that is not running,
+ * the architecture's (cpu_regs_t in its cpu.h). */
 
 /* A limit as `prlimit64` keeps it: the soft value enforced, the hard one
  * the soft may be raised to, `RLIM_INFINITY32` for none. */
@@ -133,8 +114,8 @@ struct process {
     uint32_t pid;                 /* Process ID */
     proc_state_t state;           /* Current state */
     cpu_regs_t regs;              /* Saved CPU registers */
-    uint32_t cr3;                 /* Page directory physical address */
-    uint32_t kernel_stack;        /* Top of kernel stack for this process */
+    uintptr_t space_root;                 /* Page directory physical address */
+    uintptr_t kernel_stack;       /* Top of kernel stack for this process */
     uint32_t parent_pid;          /* Parent process ID */
     int32_t exit_code;            /* Exit status (for zombie) */
     fd_table_t *fds;              /* Descriptor table, shared under CLONE_FILES */
@@ -144,7 +125,7 @@ struct process {
      * `page_dir` at fixed offsets, so a new field goes at the end of the
      * record. process.c has the same offsets and checks them against the
      * compiler's, at build time where the compiler can and at boot. */
-    uint32_t tls_base;    /* Per-process %gs TLS base (set_thread_area) */
+    uintptr_t tls_base;   /* The thread pointer (arch_tls_set) */
     struct mm *mm;        /* The address space, shared by CLONE_VM (mm/mm.h) */
     uint32_t wakeup_tick; /* nanosleep: kernel tick to wake a timed sleeper (0 = none) */
     /* Signal state: the dispositions, `sigacts[signo]` with index 0 unused,
@@ -337,7 +318,7 @@ struct process {
     struct k_siginfo ptrace_info;
     int32_t orig_nr;
     uint32_t ptrace_exit_seen;
-    uint32_t debugreg[8];
+    uintptr_t debugreg[8];
     /* The execution domain and its flags personality(2) keeps; fork passes
      * it on and exec keeps it. */
     uint32_t persona;

@@ -16,6 +16,7 @@
 #include "../i686/idt.h"
 #include "../i686/tss.h"
 
+#include "../../audio/sb16.h"
 #include "../../block/ata.h"
 #include "../../cmdline.h"
 #include "../../input.h"
@@ -147,4 +148,15 @@ void platform_mouse_init(void)
 void platform_tick(void)
 {
     ata_tick();
+}
+
+void platform_disks_probe(void)
+{
+    (void)ata_init();
+}
+
+struct audio_driver *platform_audio_driver(const char **name)
+{
+    *name = "Sound Blaster 16";
+    return &sb16_driver;
 }

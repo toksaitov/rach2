@@ -7,7 +7,7 @@
  */
 
 #include "audio.h"
-#include "sb16.h"
+#include "../platform.h"
 #include "hda.h"
 #include "../serial.h"
 #include "../pci.h"
@@ -84,8 +84,8 @@ audio_driver_t speaker_driver = {
  * Detect and initialize the best available audio driver.
  *
  * Each candidate is probed in order of preference and the first whose
- * `init` succeeds becomes the active driver: HD Audio, then SB16, then
- * the PC speaker. `audio` is left NULL and the boot status reads "No
+ * `init` succeeds becomes the active driver: HD Audio, then the platform's
+ * own (on a PC, the Sound Blaster 16), then the speaker. `audio` is left NULL and the boot status reads "No
  * audio" if every probe fails.
  */
 void init_audio(void)
@@ -99,10 +99,15 @@ void init_audio(void)
         return;
     }
 
-    if (sb16_driver.init && sb16_driver.init() == 0) {
-        audio = &sb16_driver;
-        audio_boot_status = "Sound Blaster 16";
-        return;
+    {
+        const char *name = "";
+        struct audio_driver *own = platform_audio_driver(&name);
+
+        if (own && own->init && own->init() == 0) {
+            audio = own;
+            audio_boot_status = name;
+            return;
+        }
     }
 
     if (speaker_driver.init() == 0) {

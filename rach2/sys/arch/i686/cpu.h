@@ -26,6 +26,28 @@ struct isr_params {
 typedef struct isr_params isr_params_t;
 typedef uint32_t phys_addr_t;
 
+/*
+ * The process record's register block. Only `esp` is used: the kernel stack
+ * pointer `switch_context` saved when the process last switched away, or the
+ * one built for its first switch (context.c). The other fields are read by
+ * nothing; they keep `esp` at the offset switch.s reads.
+ */
+struct cpu_regs {
+    uint32_t edi;
+    uint32_t esi;
+    uint32_t ebp;
+    uint32_t esp_dummy; /* Ignored by popal */
+    uint32_t ebx;
+    uint32_t edx;
+    uint32_t ecx;
+    uint32_t eax;
+    uint32_t eip;
+    uint32_t eflags;
+    uint32_t esp; /* Kernel stack pointer for switch_context */
+};
+
+typedef struct cpu_regs cpu_regs_t;
+
 /* Linux i386's system call convention: the number in EAX, the arguments in
  * EBX, ECX, EDX, ESI, EDI and EBP, the result in EAX. */
 #define SC_NR(p)     ((p)->eax)

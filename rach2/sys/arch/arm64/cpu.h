@@ -21,6 +21,14 @@ struct isr_params {
 };
 
 typedef struct isr_params isr_params_t;
+
+/* The process record's register block: the kernel stack pointer the context
+ * switch saved when the process last switched away. */
+struct cpu_regs {
+    uint64_t sp;
+};
+
+typedef struct cpu_regs cpu_regs_t;
 typedef uint64_t phys_addr_t;
 
 /* Linux AArch64's system call convention: the number in x8, the arguments

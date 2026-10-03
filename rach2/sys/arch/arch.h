@@ -100,6 +100,21 @@ void arch_tls_set(uintptr_t base);
  * points at a struct user_desc; elsewhere it is the pointer itself. */
 long arch_clone_tls(unsigned long arg, uintptr_t *base_out);
 
+struct process;
+
+/** Lay out a new process's kernel stack as the context switch expects to
+ * find it, so that its first switch returns into `entry`. */
+void arch_context_init(struct process *proc, void (*entry)(void));
+
+/** Lay out a forked `child`'s kernel stack for its first switch, from the
+ * parent's saved frame `params`, with 0 for fork's result and `newsp`, when
+ * not 0, for the user stack pointer. */
+void arch_fork_frame(struct process *child, const isr_params_t *params, uintptr_t newsp);
+
+/** Nonzero when the process record's layout is not what the context switch
+ * reads at fixed offsets. */
+int arch_context_check(void);
+
 /* The debug shell's ring-3 exercise: a payload that writes this message
  * through a system call, then spins, and the message, both in pages the
  * exercise makes user-accessible. */

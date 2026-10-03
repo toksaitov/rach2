@@ -37,7 +37,6 @@
 #include "../../pci.h"
 #include "../../mm/paging.h"
 #include "../../irq.h"
-#include "../../arch/x86/lapic.h"
 
 /* Register access, behind an indirection the host test can replace. */
 
@@ -1393,7 +1392,7 @@ static void r8168_interrupts_enable(void)
     int vector;
 
     r8168_msi_vector = -1;
-    if (!lapic_ready()) {
+    if (!isr_msi_ready()) {
         klog(KLOG_INFO, "rtl8168", "interrupts: polled, no usable APIC");
         return;
     }

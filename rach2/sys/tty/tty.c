@@ -71,7 +71,7 @@ void tty_signal_group(int pgid, int signo)
         return;
     }
     for (p = proc_list; p; p = p->next) {
-        if (p->state != PROC_ZOMBIE && p->cr3 != 0 && (int)p->pgid == pgid) {
+        if (p->state != PROC_ZOMBIE && p->space_root != 0 && (int)p->pgid == pgid) {
             signal_post(p, signo);
         }
     }

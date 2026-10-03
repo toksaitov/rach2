@@ -86,6 +86,13 @@ void set_back_color(display_color_t color);
  */
 uint8_t get_curr_color_attr(void);
 
+/**
+ * Load the console's font, with the Cyrillic letters, into the display and
+ * return its map from code page 437's upper half to the glyphs it now has,
+ * or NULL when the display keeps its own font.
+ */
+const uint16_t *textcon_load_font(void);
+
 /*
  * The scrollback: the rows that left the top of the screen, which these move
  * through and back to the live screen.

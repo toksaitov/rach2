@@ -300,13 +300,13 @@ int vga_font_load(void)
 /**
  * Switch to Mode 13h and return the linear framebuffer at A0000.
  *
- * Saves the text font first so vga_mode13h_exit can restore it, clears the
+ * Saves the text font first so fb_exit can restore it, clears the
  * framebuffer to color 0, and publishes gfx_current, all with interrupts off.
  * A no-op that returns the framebuffer if already in graphics mode.
  *
  * @return Pointer to the 320x200 8bpp framebuffer.
  */
-uint8_t *vga_mode13h_enter(void)
+uint8_t *fb_enter(void)
 {
     uint32_t flags = kirq_save();
 
@@ -396,7 +396,7 @@ static void vga_restore_text_palette(void)
  * clears the text screen, all with interrupts off. A no-op if not currently
  * in graphics mode.
  */
-void vga_mode13h_exit(void)
+void fb_exit(void)
 {
     uint32_t flags = kirq_save();
 
@@ -432,7 +432,7 @@ void vga_mode13h_exit(void)
  *   shifted right by 2 because the VGA DAC has 6-bit values (0-63).
  *   Ignored if NULL.
  */
-void vga_mode13h_set_palette(const uint8_t *data)
+void fb_set_palette(const uint8_t *data)
 {
     int i;
 

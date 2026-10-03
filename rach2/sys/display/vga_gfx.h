@@ -42,13 +42,5 @@
 /** True while the VGA is in graphics mode. */
 extern bool vga_graphics_mode;
 
-/** Enter Mode 13h; returns the framebuffer at 0xA0000. */
-uint8_t *vga_mode13h_enter(void);
-
-/** Leave Mode 13h and return to text mode (Mode 3). */
-void vga_mode13h_exit(void);
-
-/** Load a 256-entry RGB palette into the DAC. */
-void vga_mode13h_set_palette(const uint8_t *data);
 
 #endif /* _VGA_GFX_H_ */

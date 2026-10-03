@@ -18,10 +18,8 @@
 #include "usb.h"
 
 #include "../cmdline.h"
-#include "../arch/x86/pic.h"
 #include "../irq.h"
 #include "../klog.h"
-#include "../arch/x86/lapic.h"
 #include "../lib/kirq.h"
 #include "../pci.h"
 #include "../timer.h"
@@ -311,8 +309,7 @@ static int interrupt_pending(void)
         int irq = interrupt_sources[n].line_irq;
         int vector = interrupt_sources[n].msi_vector;
 
-        if ((irq >= 0 && pic_irq_pending((uint8_t)irq)) ||
-            (vector >= 0 && lapic_pending((uint8_t)vector))) {
+        if ((irq >= 0 && isr_line_pending(irq)) || (vector >= 0 && isr_vector_pending(vector))) {
             return 1;
         }
     }
@@ -497,7 +494,7 @@ static void usb_interrupts_start(void)
         struct xhci_ctrl *hc = xhci_controller(n);
         int vector;
 
-        if (lapic_ready() && (vector = isr_alloc_vector()) >= 0) {
+        if (isr_msi_ready() && (vector = isr_alloc_vector()) >= 0) {
             register_isr_handler((uint8_t)vector, usb_msi_handler, "xhci");
             if (xhci_interrupts_enable(hc, (uint8_t)vector) == 0) {
                 interrupts_started = 1;

@@ -46,6 +46,20 @@ const char *isr_vector_name(int vector, int slot);
 /** Every interrupt routed since the boot. */
 uint32_t isr_interrupt_total(void);
 
+/** Whether a device may be given a vector for its messages: the
+ * architecture's message controller is up (on a PC, the local APIC). */
+int isr_msi_ready(void);
+
+/** Whether the platform line `line` has raised an interrupt not yet taken. */
+int isr_line_pending(int line);
+
+/** Whether `vector` has a message delivered and not yet taken. */
+int isr_vector_pending(int vector);
+
+/** The interrupts that went away before the processor took them, which the
+ * interrupt controller reports on a vector of its own. */
+uint32_t isr_spurious_count(void);
+
 /**
  * What delivers interrupts on a vector from `ISR_DEVICE_FIRST` to
  * `ISR_DEVICE_LAST`, for `/proc/interrupts`: "PIC" or "MSI" on a PC.

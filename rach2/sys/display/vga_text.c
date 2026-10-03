@@ -31,6 +31,7 @@
  * and a keyboard's echo comes through k_putc from its interrupt.
  */
 
+#include "vga_font.h"
 #include "../arch/x86/portio.h"
 #include "vga_text.h"
 #include "vga_gfx.h"
@@ -469,4 +470,9 @@ void k_scrollback_end(void)
 bool k_scrollback_is_active(void)
 {
     return !_follow_live;
+}
+
+const uint16_t *textcon_load_font(void)
+{
+    return vga_font_load() ? vga_font_map : NULL;
 }

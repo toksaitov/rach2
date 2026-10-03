@@ -12,7 +12,6 @@
 #include "../kio.h"
 #include "../serial.h"
 #include "../irq.h"
-#include "../arch/x86/lapic.h"
 #include "../pci.h"
 #include "../udelay.h"
 #include "../lib/kstd.h"
@@ -1804,7 +1803,7 @@ static int hda_init(void)
      * begins by asking the controller whether the interrupt is its own, so
      * being called twice for one event costs a register read.
      */
-    if (lapic_ready() && (msi_vector = isr_alloc_vector()) >= 0 &&
+    if (isr_msi_ready() && (msi_vector = isr_alloc_vector()) >= 0 &&
         pci_msi_enable(&hda_pci, (uint8_t)msi_vector) == 0) {
         register_isr_handler((uint8_t)msi_vector, hda_irq_handler, "hda");
         hda_write32(HDA_INTCTL, 0x80000000 | (1 << output_stream_index));
