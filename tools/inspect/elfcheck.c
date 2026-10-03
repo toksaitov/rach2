@@ -18,7 +18,10 @@
  * `p_paddr == p_vaddr`, the entry inside file-backed bytes, and, where a
  * symbol table exists, `_start` equal to the entry and `_end` equal to the
  * image end. `--tcc` accepts the symbol-free TinyCC layout and adds its
- * first-load rules (file offset 0, address exactly 1 MiB).
+ * first-load rules (file offset 0, address exactly 1 MiB). An ELF64 file is
+ * held to the x86-64 kernel's profile instead (`kernel_check64`): linked at
+ * KVA_IMAGE plus its physical address and loaded by the header's a.out
+ * kludge, which copies the file from the header on, byte for byte.
  *
  * `--selftest` runs both batteries: the user checker's literal window
  * boundary cases for each architecture (the numbers rach2/sys/proc/elf.c
@@ -281,6 +284,9 @@ static int name_is(const unsigned char *d, size_t n, uint64_t off, const char *w
     return off + k < n && d[off + k] == '\0';
 }
 
+static int kernel_check64(const unsigned char *d, size_t n, int tcc, char *detail,
+                          size_t detail_len);
+
 /* Returns 0 and fills `detail` on success; nonzero with `kfail` set on
    the first violation. */
 static int kernel_check(const unsigned char *d, size_t n, int tcc, char *detail, size_t detail_len)
@@ -302,6 +308,8 @@ static int kernel_check(const unsigned char *d, size_t n, int tcc, char *detail,
                          "ELF",
                          4) != 0)
         return kf("not an ELF file");
+    if (d[4] == 2)
+        return kernel_check64(d, n, tcc, detail, detail_len);
     if (d[4] != 1 || d[5] != 1)
         return kf("not a 32-bit little-endian ELF");
     e_type = r16(d + 16);
@@ -472,6 +480,216 @@ static int kernel_check(const unsigned char *d, size_t n, int tcc, char *detail,
              "%s: 2 loads, entry 0x%x, _end 0x%x, multiboot header at file "
              "offset 0x%x",
              tcc ? "tcc profile" : "common profile", e_entry, image_end, mb_off);
+    return 0;
+}
+
+/* ---- the x86-64 kernel ---- */
+
+/* The x86-64 kernel's link base, which its PT_LOADs' virtual addresses
+   are their physical ones plus (rach2/sys/arch/x86_64/link.ld), and the
+   multiboot flags its header has: page alignment, the memory map and the
+   a.out kludge, bit 16, without which QEMU's -kernel refuses an ELF64. */
+#define KVA_IMAGE         0xFFFFFFFF80000000ull
+#define MULTIBOOT_FLAGS64 0x10003u
+
+struct load64 {
+    uint64_t off, vaddr, paddr, filesz, memsz, align;
+};
+
+/*
+ * The x86-64 kernel against what a multiboot loader does with it. The
+ * loader reads no ELF header: it finds the multiboot header, copies the
+ * file from `mb_off - (header_addr - load_addr)` to physical `load_addr` up
+ * to `load_end_addr`, zeroes to `bss_end_addr` and jumps to the physical
+ * `entry_addr`. So each PT_LOAD's file bytes must lie in the file as far
+ * from the copy's start as the load lies from `load_addr`, the bytes before
+ * the copy's start, the ELF headers of a first load at file offset 0, being
+ * the only ones it leaves behind; the copy must
+ * reach the end of every load's file bytes and no further than the file,
+ * `bss_end_addr` must be the image's end, and `entry_addr` the entry's
+ * physical address. The loads are linked at KVA_IMAGE plus their physical
+ * addresses. Returns 0 and fills `detail`, or nonzero with `kfail` set.
+ */
+static int kernel_check64(const unsigned char *d, size_t n, int tcc, char *detail,
+                          size_t detail_len)
+{
+    uint64_t e_entry, e_phoff, shoff, start_val = 0, end_val = 0, image_end, file_base;
+    uint32_t e_type, e_machine, e_phentsize, e_phnum, e_shentsize, e_shnum;
+    uint32_t header_addr, load_addr, load_end, bss_end, entry_addr;
+    uint32_t i, nloads = 0, mb_off = 0, mb_flags = 0;
+    int mb_found = 0, have_start = 0, have_end = 0, have_symtab = 0;
+    struct load64 loads[2], tmp;
+
+    if (tcc)
+        return kf("an x86-64 kernel has no tcc profile");
+    if (n < 64 || d[5] != 1)
+        return kf("not a 64-bit little-endian ELF");
+    e_type = r16(d + 16);
+    e_machine = r16(d + 18);
+    e_entry = r64(d + 24);
+    e_phoff = r64(d + 32);
+    shoff = r64(d + 40);
+    e_phentsize = r16(d + 54);
+    e_phnum = r16(d + 56);
+    e_shentsize = r16(d + 58);
+    e_shnum = r16(d + 60);
+    if (e_type != ET_EXEC)
+        return kf("type is %u, not ET_EXEC", e_type);
+    if (e_machine != EM_X86_64)
+        return kf("machine is %u, not EM_X86_64", e_machine);
+    if (e_phentsize != 56)
+        return kf("program header entry size is %u, not 56", e_phentsize);
+    if (e_phoff > n || (uint64_t)e_phnum * 56 > n - e_phoff)
+        return kf("truncated or malformed ELF headers");
+    for (i = 0; i < e_phnum; i++) {
+        const unsigned char *p = d + e_phoff + 56 * i;
+
+        if (r32(p) != PT_LOAD)
+            continue;
+        if (nloads < 2) {
+            loads[nloads].off = r64(p + 8);
+            loads[nloads].vaddr = r64(p + 16);
+            loads[nloads].paddr = r64(p + 24);
+            loads[nloads].filesz = r64(p + 32);
+            loads[nloads].memsz = r64(p + 40);
+            loads[nloads].align = r64(p + 48);
+        }
+        nloads++;
+    }
+    if (nloads != 2)
+        return kf("%u PT_LOAD segments, not 2", nloads);
+    if (loads[1].paddr < loads[0].paddr) {
+        tmp = loads[0];
+        loads[0] = loads[1];
+        loads[1] = tmp;
+    }
+    for (i = 0; i < 2; i++) {
+        struct load64 *l = &loads[i];
+
+        if (l->paddr < LOAD_FLOOR)
+            return kf("load at physical 0x%llx is below 0x%x", (unsigned long long)l->paddr,
+                      LOAD_FLOOR);
+        if (l->filesz > l->memsz)
+            return kf("load at physical 0x%llx has p_filesz > p_memsz",
+                      (unsigned long long)l->paddr);
+        if (l->paddr + l->memsz > 0xFFFFFFFFull || l->paddr + l->memsz < l->paddr)
+            return kf("load at physical 0x%llx runs past the 32 bits a multiboot address has",
+                      (unsigned long long)l->paddr);
+        if (l->vaddr != l->paddr + KVA_IMAGE)
+            return kf("load at physical 0x%llx is linked at 0x%llx, not at KVA_IMAGE plus it",
+                      (unsigned long long)l->paddr, (unsigned long long)l->vaddr);
+        if (l->off > n || l->filesz > n - l->off)
+            return kf("load at physical 0x%llx: its file range runs past the end of the file",
+                      (unsigned long long)l->paddr);
+    }
+    if (loads[1].paddr < loads[0].paddr + loads[0].memsz)
+        return kf("loads overlap");
+    image_end = loads[1].paddr + loads[1].memsz;
+
+    for (i = 0; i + 32 <= n && i < SEARCH_END; i += 4) {
+        if (r32(d + i) == MULTIBOOT_MAGIC) {
+            uint32_t flags = r32(d + i + 4), sum = r32(d + i + 8);
+
+            if (((MULTIBOOT_MAGIC + flags + sum) & 0xFFFFFFFFu) == 0) {
+                mb_found = 1;
+                mb_off = i;
+                mb_flags = flags;
+                break;
+            }
+        }
+    }
+    if (!mb_found)
+        return kf("no multiboot header with a valid checksum in the loader's search window");
+    if (mb_flags != MULTIBOOT_FLAGS64)
+        return kf("the first valid multiboot header (file offset 0x%x) has flags 0x%x, not 0x%x",
+                  mb_off, mb_flags, MULTIBOOT_FLAGS64);
+    header_addr = r32(d + mb_off + 12);
+    load_addr = r32(d + mb_off + 16);
+    load_end = r32(d + mb_off + 20);
+    bss_end = r32(d + mb_off + 24);
+    entry_addr = r32(d + mb_off + 28);
+    if (load_addr > header_addr || header_addr - load_addr > mb_off)
+        return kf("a.out kludge: load_addr 0x%x is before the file's start", load_addr);
+    file_base = mb_off - (header_addr - load_addr);
+    if (load_end < load_addr || load_end - load_addr > n - file_base)
+        return kf("a.out kludge: the copy to load_end_addr 0x%x runs past the end of the file",
+                  load_end);
+    for (i = 0; i < 2; i++) {
+        struct load64 *l = &loads[i];
+
+        if ((int64_t)(l->off - file_base) != (int64_t)(l->paddr - load_addr))
+            return kf("a.out kludge: the load at physical 0x%llx lies at file offset 0x%llx, "
+                      "not where the copy from file offset 0x%llx puts it",
+                      (unsigned long long)l->paddr, (unsigned long long)l->off,
+                      (unsigned long long)file_base);
+        if (l->paddr + l->filesz > load_end)
+            return kf("a.out kludge: load_end_addr 0x%x stops before the file bytes of the load "
+                      "at physical 0x%llx",
+                      load_end, (unsigned long long)l->paddr);
+    }
+    if (bss_end != image_end)
+        return kf("a.out kludge: bss_end_addr 0x%x is not the image end 0x%llx", bss_end,
+                  (unsigned long long)image_end);
+    if (e_entry < KVA_IMAGE || entry_addr != e_entry - KVA_IMAGE)
+        return kf("a.out kludge: entry_addr 0x%x is not the entry 0x%llx less KVA_IMAGE",
+                  entry_addr, (unsigned long long)e_entry);
+    for (i = 0; i < 2; i++)
+        if (loads[i].paddr <= entry_addr && entry_addr < loads[i].paddr + loads[i].filesz)
+            break;
+    if (i == 2)
+        return kf("entry 0x%llx is not in the file bytes of a load", (unsigned long long)e_entry);
+
+    if (shoff != 0 && e_shentsize != 0) {
+        if (e_shentsize < 64)
+            return kf("section header entry size is %u, under the 64 bytes of an ELF64 section "
+                      "header",
+                      e_shentsize);
+        if (shoff > n || (uint64_t)e_shentsize * e_shnum > n - shoff)
+            return kf("truncated or malformed symbol table");
+        for (i = 0; i < e_shnum; i++) {
+            const unsigned char *sh = d + shoff + (uint64_t)e_shentsize * i;
+            uint64_t sh_offset = r64(sh + 24), sh_size = r64(sh + 32), sh_entsize = r64(sh + 56);
+            uint32_t sh_link = r32(sh + 40);
+            uint64_t str_offset, count, j;
+
+            if (r32(sh + 4) != 2)
+                continue;
+            have_symtab = 1;
+            if (sh_link >= e_shnum || sh_entsize < 24 || sh_offset > n || sh_size > n - sh_offset)
+                return kf("truncated or malformed symbol table");
+            str_offset = r64(d + shoff + (uint64_t)e_shentsize * sh_link + 24);
+            if (str_offset >= n)
+                return kf("truncated or malformed symbol table");
+            count = sh_size / sh_entsize;
+            for (j = 0; j < count; j++) {
+                const unsigned char *sym = d + sh_offset + sh_entsize * j;
+
+                if (name_is(d, n, str_offset + r32(sym), "_start")) {
+                    have_start = 1;
+                    start_val = r64(sym + 8);
+                } else if (name_is(d, n, str_offset + r32(sym), "_end")) {
+                    have_end = 1;
+                    end_val = r64(sym + 8);
+                }
+            }
+        }
+    }
+    if (!have_symtab)
+        return kf("no symbol table (the GNU-linked kernel has one)");
+    if (!have_start)
+        return kf("no _start symbol");
+    if (start_val != e_entry)
+        return kf("entry 0x%llx is not _start 0x%llx", (unsigned long long)e_entry,
+                  (unsigned long long)start_val);
+    if (!have_end)
+        return kf("no _end symbol");
+    if (end_val != image_end)
+        return kf("_end 0x%llx is not the image end 0x%llx", (unsigned long long)end_val,
+                  (unsigned long long)image_end);
+    snprintf(detail, detail_len,
+             "x86-64 profile: 2 loads, entry 0x%llx, _end 0x%llx, multiboot header at file "
+             "offset 0x%x",
+             (unsigned long long)e_entry, (unsigned long long)image_end, mb_off);
     return 0;
 }
 
@@ -654,6 +872,90 @@ static size_t craft_kernel(unsigned char *b, uint32_t first_off, uint32_t mb_at,
     w32(b + shoff + 80 + 20, strtab_len);
     w32(b + shoff + 80 + 32, 1);
     return shoff + 3 * 40;
+}
+
+/* The x86-64 kernel's shape: the ELF header and two program headers at
+   file offset 0 and physical 1 MiB, the multiboot header with the a.out
+   kludge right after them, an entry after it, a data and .bss load on the
+   next page, and a symtab with `_start` and `_end`. Returns its size. */
+static size_t craft_kernel64(unsigned char *b)
+{
+    uint64_t hdr = 64 + 2 * 56, mb = hdr, entry_off = mb + 32, text_end = entry_off + 16;
+    uint64_t data_off = 0x1000, data_len = 8, bss_size = 0x20;
+    uint64_t data_paddr = LOAD_FLOOR + data_off, image_end = data_paddr + data_len + bss_size;
+    uint64_t entry = KVA_IMAGE + LOAD_FLOOR + entry_off;
+    uint64_t sym_off = data_off + data_len, str_off = sym_off + 3 * 24, shoff;
+    static const char strtab[] = "\0_start\0_end";
+    uint64_t strtab_len = 13;
+
+    shoff = (str_off + strtab_len + 7) & ~7ull;
+    memset(b, 0, shoff + 3 * 64);
+    memcpy(b,
+           "\x7f"
+           "ELF\x02\x01\x01",
+           7);
+    w16(b + 16, ET_EXEC);
+    w16(b + 18, EM_X86_64);
+    w32(b + 20, 1);
+    w64(b + 24, entry);
+    w64(b + 32, 64);
+    w64(b + 40, shoff);
+    w16(b + 52, 64);
+    w16(b + 54, 56);
+    w16(b + 56, 2);
+    w16(b + 58, 64);
+    w16(b + 60, 3);
+    /* ph1: the headers and the text from file offset 0; ph2: data+bss. */
+    w32(b + 64, PT_LOAD);
+    w32(b + 64 + 4, 5);
+    w64(b + 64 + 8, 0);
+    w64(b + 64 + 16, KVA_IMAGE + LOAD_FLOOR);
+    w64(b + 64 + 24, LOAD_FLOOR);
+    w64(b + 64 + 32, text_end);
+    w64(b + 64 + 40, text_end);
+    w64(b + 64 + 48, 0x1000);
+    w32(b + 120, PT_LOAD);
+    w32(b + 120 + 4, 6);
+    w64(b + 120 + 8, data_off);
+    w64(b + 120 + 16, KVA_IMAGE + data_paddr);
+    w64(b + 120 + 24, data_paddr);
+    w64(b + 120 + 32, data_len);
+    w64(b + 120 + 40, data_len + bss_size);
+    w64(b + 120 + 48, 0x1000);
+    /* The multiboot header with the a.out kludge's addresses, then a hlt
+       loop at the entry. */
+    w32(b + mb, MULTIBOOT_MAGIC);
+    w32(b + mb + 4, MULTIBOOT_FLAGS64);
+    w32(b + mb + 8, (uint32_t)(0 - (MULTIBOOT_MAGIC + MULTIBOOT_FLAGS64)));
+    w32(b + mb + 12, (uint32_t)(LOAD_FLOOR + mb));
+    w32(b + mb + 16, (uint32_t)(LOAD_FLOOR + mb));
+    w32(b + mb + 20, (uint32_t)(data_paddr + data_len));
+    w32(b + mb + 24, (uint32_t)image_end);
+    w32(b + mb + 28, (uint32_t)(LOAD_FLOOR + entry_off));
+    b[entry_off] = 0xF4;
+    b[entry_off + 1] = 0xEB;
+    b[entry_off + 2] = 0xFD;
+    memset(b + data_off, 0x11, data_len);
+    /* Three symbols: null, _start, _end. */
+    w32(b + sym_off + 24, 1);
+    b[sym_off + 24 + 4] = 0x10;
+    w16(b + sym_off + 24 + 6, 1);
+    w64(b + sym_off + 24 + 8, entry);
+    w32(b + sym_off + 48, 8);
+    b[sym_off + 48 + 4] = 0x10;
+    w16(b + sym_off + 48 + 6, 2);
+    w64(b + sym_off + 48 + 8, image_end);
+    memcpy(b + str_off, strtab, strtab_len);
+    /* Three sections: null, symtab, strtab. */
+    w32(b + shoff + 64 + 4, 2);
+    w64(b + shoff + 64 + 24, sym_off);
+    w64(b + shoff + 64 + 32, 3 * 24);
+    w32(b + shoff + 64 + 40, 2);
+    w64(b + shoff + 64 + 56, 24);
+    w32(b + shoff + 128 + 4, 3);
+    w64(b + shoff + 128 + 24, str_off);
+    w64(b + shoff + 128 + 32, strtab_len);
+    return shoff + 3 * 64;
 }
 
 static int st_bad;
@@ -850,12 +1152,52 @@ static int selftest(void)
                          "no _start symbol");
     }
 
+    {
+        unsigned char k64[8192], m64[8192];
+        size_t k64n = craft_kernel64(k64);
+        uint32_t mb64 = 64 + 2 * 56;
+
+        if (kernel_check(k64, k64n, 0, detail, sizeof(detail)) != 0) {
+            fprintf(stderr, "elfcheck: selftest: the x86-64 fixture was refused: %s\n", kfail);
+            st_bad++;
+        }
+        st_expect_kernel(k64, k64n, 1, "an x86-64 kernel under the tcc profile",
+                         "no tcc profile");
+        memcpy(m64, k64, k64n);
+        w32(m64 + mb64 + 4, MULTIBOOT_FLAGS);
+        w32(m64 + mb64 + 8, (uint32_t)(0 - (MULTIBOOT_MAGIC + MULTIBOOT_FLAGS)));
+        st_expect_kernel(m64, k64n, 0, "an x86-64 header without the a.out kludge", "flags");
+        memcpy(m64, k64, k64n);
+        w64(m64 + 120 + 8, r64(k64 + 120 + 8) + 8);
+        st_expect_kernel(m64, k64n, 0, "an x86-64 data load the a.out copy misplaces",
+                         "not where the copy");
+        memcpy(m64, k64, k64n);
+        w32(m64 + mb64 + 20, r32(k64 + mb64 + 20) - 4);
+        st_expect_kernel(m64, k64n, 0, "an x86-64 copy that stops short of the data",
+                         "load_end_addr");
+        memcpy(m64, k64, k64n);
+        w32(m64 + mb64 + 24, r32(k64 + mb64 + 24) + 0x1000);
+        st_expect_kernel(m64, k64n, 0, "an x86-64 .bss end past the image", "bss_end_addr");
+        memcpy(m64, k64, k64n);
+        w32(m64 + mb64 + 28, r32(k64 + mb64 + 28) + 1);
+        st_expect_kernel(m64, k64n, 0, "an x86-64 entry_addr that is not the entry's",
+                         "entry_addr");
+        memcpy(m64, k64, k64n);
+        w64(m64 + 64 + 16, LOAD_FLOOR);
+        st_expect_kernel(m64, k64n, 0, "an x86-64 load linked at its physical address",
+                         "KVA_IMAGE");
+        memcpy(m64, k64, k64n);
+        w64(m64 + 0x1000 + 8 + 48 + 8, r64(k64 + 0x1000 + 8 + 48 + 8) - 1);
+        st_expect_kernel(m64, k64n, 0, "an x86-64 _end that is not the image end",
+                         "is not the image end");
+    }
+
     if (st_bad) {
         fprintf(stderr, "elfcheck: selftest: %d case(s) failed\n", st_bad);
         return 1;
     }
-    printf("elfcheck: selftest: ok: 10 i686 and 10 x86_64 window cases, 5 accepted kernels, "
-           "13 refused, each for its own rule\n");
+    printf("elfcheck: selftest: ok: 10 i686 and 10 x86_64 window cases, 6 accepted kernels, "
+           "21 refused, each for its own rule\n");
     return 0;
 }
 

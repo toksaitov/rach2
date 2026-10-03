@@ -99,14 +99,10 @@ all : $(KERNEL_BIN)
 # `nm` read. The rule names this file among its inputs, so a change to how
 # the kernel is made makes it again.
 ELFCHECK = ../build/tools/inspect/elfcheck
-# The checker's kernel profile is the i686's: a 32-bit ELF loaded where its
-# headers say. The x86-64 kernel, loaded through the a.out kludge, waits for
-# a profile of its own.
-ifeq ($(ARCH),x86_64)
-KERNEL_CHECK = :
-else
+# The checker takes the profile from the file: an ELF32 kernel loaded where
+# its headers say, or the ELF64 x86-64 kernel loaded through the a.out
+# kludge, whose copy must put every byte where the kernel is linked.
 KERNEL_CHECK = $(ELFCHECK) --kernel
-endif
 
 $(KERNEL_BIN) : $(ASM_OBJECTS) $(C_OBJECTS) $(LINKER_SCRIPT).ld Makefile
 	@mkdir -p $(dir $@)
