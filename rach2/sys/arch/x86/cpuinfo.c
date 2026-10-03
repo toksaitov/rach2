@@ -1,11 +1,12 @@
 /*
- * cpuinfo.c: the text of /proc/cpuinfo, as cpuinfo.h describes it.
+ * cpuinfo.c: the text of /proc/cpuinfo on an x86, as fs/cpuinfo.h describes
+ * it.
  */
 
-#include "cpuinfo.h"
+#include "../../fs/cpuinfo.h"
 
-#include "../arch/x86/kcpu.h"
-#include "../lib/kstring.h"
+#include "kcpu.h"
+#include "../../lib/kstring.h"
 
 /* Linux's names of the feature bits (arch/x86/include/asm/cpufeatures.h),
  * one table for each register, in bit order; a bit Linux does not show is

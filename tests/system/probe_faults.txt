@@ -4595,7 +4595,7 @@ end
 
 fault proc-cpuinfo-no-flags
 probe direntmusl
-file rach2/sys/fs/cpuinfo.c
+file rach2/sys/arch/x86/cpuinfo.c
 expect DIRENTMUSL FAIL (/proc/cpuinfo is not a record of processor 0 with its flags
 old
     put(&t, "wp\t\t: yes\nflags\t\t:");

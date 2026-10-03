@@ -830,7 +830,7 @@ static void preempt_proc_a(void)
         {
             volatile int i;
             for (i = 0; i < 5000000; i++) {
-                __asm__ __volatile__("nop");
+                arch_relax();
             }
         }
 
@@ -856,7 +856,7 @@ static void preempt_proc_b(void)
         {
             volatile int i;
             for (i = 0; i < 5000000; i++) {
-                __asm__ __volatile__("nop");
+                arch_relax();
             }
         }
 

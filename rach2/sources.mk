@@ -103,7 +103,6 @@ C_SRC_SHARED = kernel.c \
     sys/fs/devfs.c \
     sys/fs/synthfs.c \
     sys/fs/procfs.c \
-    sys/fs/cpuinfo.c \
     sys/usb/usb.c \
     sys/usb/stamp.c \
     sys/usb/xhci.c \
