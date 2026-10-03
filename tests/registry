@@ -62,6 +62,7 @@ stress-ahci|qemu|full|stress-ahci-test*,stress-ahci.*,stress-ahci/*,stress-test-
 default|qemu|core
 stress|qemu|full|stress-test.*,stress.*,stress/*
 procfiles|qemu|full
+bigmem|qemu|full||8192|x86_64
 memory|qemu|core||4096
 parts|qemu,mformat,mtype|core
 bootpart|qemu|full|bootpart-test*,bootpart.*,bootpart-*,bootpart/*,wide-test*

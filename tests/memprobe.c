@@ -17,8 +17,7 @@
  * tables and directory, which the kernel takes from its heap, are taken
  * when the frames below the window are already in use. On x86-64 MIB may
  * pass 4096, and a mapping of more memory than lies below 4 GiB has pages in
- * the frames above it, which the memory suite's row of eight gigabytes asks
- * for.
+ * the frames above it, which `tests/run bigmem` asks for.
  *
  * `memprobe fail`, under `rach2.framefail`: with a patterned mapping of its
  * own, the probe arms the count-th frame allocation to fail for each count
@@ -30,6 +29,9 @@
  * every attempt the parent's pages read as it wrote them, take a write, and
  * the free memory is what it was, so nothing leaked and nothing that
  * survived was changed.
+ *
+ * `memprobe total` prints the MemTotal `/proc/meminfo` reports, in KiB, as
+ * `MEMPROBE MemTotal N kB`, for a suite to judge against the machine's size.
  *
  * `memprobe hog`: the probe takes anonymous memory a page at a time, each
  * page backed through a `read` of `/dev/zero` into it, until the kernel
@@ -147,13 +149,12 @@ static int check_page(const unsigned *p, unsigned i)
     return 1;
 }
 
-/* MemFree from /proc/meminfo, in KiB, or 0. */
-static unsigned long mem_free_kib(void)
+/* The field `key` of /proc/meminfo, in KiB, or 0. */
+static unsigned long meminfo_kib(const char *key)
 {
     static char buf[1024];
     int fd = syscall3(SYS_OPEN, (long)"/proc/meminfo", O_RDONLY, 0);
     int n, i;
-    const char *key = "MemFree:";
 
     if (fd < 0) {
         return 0;
@@ -184,6 +185,26 @@ static unsigned long mem_free_kib(void)
         }
     }
     return 0;
+}
+
+/* MemFree from /proc/meminfo, in KiB, or 0. */
+static unsigned long mem_free_kib(void)
+{
+    return meminfo_kib("MemFree:");
+}
+
+/* `memprobe total`: the MemTotal /proc/meminfo reports, printed. */
+static void run_total(void)
+{
+    unsigned long total = meminfo_kib("MemTotal:");
+
+    if (total == 0) {
+        fail("MemTotal");
+    }
+    print("MEMPROBE MemTotal ");
+    print_num(total);
+    print(" kB\n");
+    sys_exit(0);
 }
 
 static unsigned parse_mib(const char *s)
@@ -442,6 +463,9 @@ void probe_main(unsigned long *sp)
     }
     if (argc >= 2 && argv[1][0] == 'h') {
         run_hog();
+    }
+    if (argc >= 2 && argv[1][0] == 't') {
+        run_total();
     }
     if (argc >= 2 && argv[1][0] == 'f') {
         run_fail();

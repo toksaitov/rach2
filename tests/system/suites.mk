@@ -273,6 +273,11 @@ ifeq ($(ARCH),i686)
 	    --log $(IMAGES_DIR)/fpu-test.x87.log \
 	    "expect=fpu: fxsr: off" "expect=Type 'help'" "send=exec /fpuprobe x87" "expect=FPUPROBE"
 endif
+# `tests/run bigmem`: all of an x86-64 machine's eight gigabytes is counted,
+# and a program's pages fill memory past what lies below 4 GiB and read back
+# as written (see tests/system/suites/bigmem.sh).
+run-bigmem: rach2 tests krffs test-image $(HARNESS)
+	sh tests/system/suites/bigmem.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS)
 # `tests/run memory`: the kernel's account of physical memory at five sizes
 # (see tests/system/suites/memory.sh).
 run-memory: rach2 rach2-recovery tests krffs test-image $(RECOVERY_IMAGE) $(HARNESS)
