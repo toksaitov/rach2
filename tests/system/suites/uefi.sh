@@ -38,9 +38,9 @@
 # 6. An install onto a 4 TiB NVMe disk, past the 2 TiB an MBR addresses. The
 #    stick boots by OVMF beside the disk, `rach2-install` is answered over
 #    SSH and grows the root into the whole disk, and the disk then boots by
-#    OVMF alone, root logs in with the demonstration key the install took as
-#    an authorized key, and `df` finds the root on the NVMe disk and larger
-#    than 2 TiB. The disk is a sparse file, and QEMU turns the zeroed blocks
+#    OVMF alone, the first account logs in with the demonstration key the
+#    install took as its authorized key, and `df` finds the root on the NVMe
+#    disk and larger than 2 TiB. The disk is a sparse file, and QEMU turns the zeroed blocks
 #    the grow writes, its new groups' inode tables, back into holes.
 #
 # In the first boot the kernel's console is on the firmware's framebuffer,
@@ -145,12 +145,17 @@ key_ssh_input() { # key_ssh_input FILE COMMAND
 # ssh to the machine as root with the demonstration key and nothing of the
 # runner's own, tried until the server answers or the time is up.
 key_ssh() { # key_ssh COMMAND
+    key_ssh_as root "$1"
+}
+
+# The same as USER.
+key_ssh_as() { # key_ssh_as USER COMMAND
     tries=0
     while :; do
         if out=$(ssh -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$KNOWN" \
             -o "ConnectTimeout=$(scaled 20)" -o BatchMode=yes -o IdentitiesOnly=yes \
             -o PreferredAuthentications=publickey -o PasswordAuthentication=no \
-            -i "$DEMO_KEY" -p "$PORT" root@localhost "$1" 2>&1); then
+            -i "$DEMO_KEY" -p "$PORT" "$1@localhost" "$2" 2>&1); then
             printf '%s\n' "$out"
             return 0
         fi
@@ -423,8 +428,8 @@ dd if=/dev/zero of="$BIG" bs=1048576 seek=4194304 count=0 2>/dev/null
 cp "$STICK" "$DIR/big-stick.img"
 # The answers, in the order rach2-install asks: the disk, root's password
 # twice, the first account and its password twice, the demonstration key the
-# recovery system was reached with as root's authorized key, no key for the
-# recovery system, the grow it offers, and the disk's name again.
+# recovery system was reached with as that account's authorized key, no key
+# for the recovery system, the grow it offers, and the disk's name again.
 cat > "$DIR/big-install.sh" <<'GUEST'
 n=$(awk '$1 == "disk" && $3 == "nvme" { print $2 }' /proc/disk)
 [ -n "$n" ] || { echo "no NVMe disk"; exit 1; }
@@ -470,10 +475,10 @@ if "$RUNUTIL" until "$LOG8" "rach2 login:" 240; then
     else
         bad "the firmware did not say it booted the NVMe disk"
     fi
-    OUT=$(key_ssh 'df -k / | tail -n 1; echo BIG""LOGIN' || true)
+    OUT=$(key_ssh_as owner 'df -k / | tail -n 1; echo BIG""LOGIN' || true)
     if printf '%s\n' "$OUT" |
         awk '$1 ~ /^\/dev\/disk[0-9]+p3$/ && $2 > 2147483648 { found = 1 } END { exit !found }'; then
-        note "and root finds its root on the NVMe disk, larger than 2 TiB: OK"
+        note "and the first account finds the root on the NVMe disk, larger than 2 TiB: OK"
     else
         bad "the root of the 4 TiB disk: $OUT"
     fi
