@@ -1683,7 +1683,7 @@ static bool is_hdmi_controller(uint16_t vendor_id, uint16_t device_id)
 static int hda_init(void)
 {
     uint16_t gcap;
-    uint32_t bar0;
+    uint64_t bar0;
     uintptr_t mapped;
     pci_device_t *skip_dev = NULL;
     pci_device_t temp_pci;
@@ -1737,15 +1737,15 @@ static int hda_init(void)
 
     hda_probe_log("HDA: Using %x:%x BAR0=", hda_pci.vendor_id, hda_pci.device_id);
 
-    bar0 = pci_bar_address(hda_pci.bar[0]);
-    hda_probe_log("0x%x\n", bar0);
-    if (bar0 == 0) {
-        hda_probe_log("HDA: BAR0 invalid\n");
+    bar0 = pci_bar_address64(&hda_pci, 0);
+    hda_probe_log("0x%lx\n", (unsigned long)bar0);
+    if (bar0 == 0 || (uint64_t)(uintptr_t)bar0 != bar0) {
+        hda_probe_log("HDA: BAR0 invalid, or above the addresses this kernel maps\n");
         return -1;
     }
 
     hda_probe_log("HDA: Mapping MMIO...");
-    mapped = map_mmio(bar0, HDA_MMIO_SIZE);
+    mapped = map_mmio((uintptr_t)bar0, HDA_MMIO_SIZE);
     if (mapped == 0) {
         hda_probe_log("FAIL\n");
         return -1;

@@ -472,9 +472,8 @@ static int e1000_pages(struct e1000 *e)
  */
 static int e1000_init(struct netdev *nd, int nth)
 {
-    uint32_t addr;
+    uint64_t addr = 0;
     uintptr_t mapped;
-    uint32_t bar = 0;
     uint32_t ctrl;
     uint32_t i;
     struct e1000 *e;
@@ -522,8 +521,8 @@ static int e1000_init(struct netdev *nd, int nth)
     e->iobase = 0;
     for (i = 0; i < 6; i++) {
         if (pci_bar_is_memory(e->pci.bar[i])) {
-            if (bar == 0 && pci_bar_address(e->pci.bar[i]) != 0) {
-                bar = e->pci.bar[i];
+            if (addr == 0) {
+                addr = pci_bar_address64(&e->pci, (int)i);
             }
             if (pci_bar_is_64bit(e->pci.bar[i])) {
                 i++;
@@ -532,16 +531,19 @@ static int e1000_init(struct netdev *nd, int nth)
             e->iobase = (uint16_t)pci_bar_address(e->pci.bar[i]);
         }
     }
-    if (bar == 0) {
+    if (addr == 0) {
         e1000_err = "the e1000 has no memory window";
+        return NETDEV_FAILED;
+    }
+    if ((uint64_t)(uintptr_t)addr != addr) {
+        e1000_err = "the e1000 window is above the addresses this kernel maps";
         return NETDEV_FAILED;
     }
     if (e->iobase == 0) {
         e1000_err = "the e1000 has no I/O window, which its reset needs";
         return NETDEV_FAILED;
     }
-    addr = pci_bar_address(bar);
-    mapped = map_mmio(addr, E1000_BAR_WINDOW);
+    mapped = map_mmio((uintptr_t)addr, E1000_BAR_WINDOW);
     if (mapped == 0) {
         e1000_err = "the e1000 window would not map";
         return NETDEV_FAILED;

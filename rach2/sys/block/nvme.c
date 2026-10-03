@@ -500,24 +500,6 @@ static int nvme_create_io_queues(struct nvme_ctrl *c)
     return 0;
 }
 
-/** The address BAR `i` of `c` decodes, or 0 when it is not a memory BAR. */
-static uint64_t nvme_bar(const struct nvme_ctrl *c, uint32_t i)
-{
-    uint64_t phys;
-
-    if (i > 5 || !pci_bar_is_memory(c->pci.bar[i])) {
-        return 0;
-    }
-    phys = pci_bar_address(c->pci.bar[i]);
-    if (pci_bar_is_64bit(c->pci.bar[i])) {
-        if (i == 5) {
-            return 0;
-        }
-        phys |= (uint64_t)c->pci.bar[i + 1] << 32;
-    }
-    return phys;
-}
-
 /**
  * Map BAR0 and make the controller decode it and master the bus, with its
  * INTx line off: the queues are created with interrupts enabled, and until
@@ -526,7 +508,7 @@ static uint64_t nvme_bar(const struct nvme_ctrl *c, uint32_t i)
  */
 static int nvme_map(struct nvme_ctrl *c)
 {
-    uint64_t phys = nvme_bar(c, 0);
+    uint64_t phys = pci_bar_address64(&c->pci, 0);
     uintptr_t mapped;
     uint16_t command;
 
@@ -1545,7 +1527,7 @@ static int nvme_msix(struct nvme_ctrl *c, uint8_t vector)
     if (pci_msix_table(&c->pci, &bir, &offset, &entries) != 0 || entries == 0) {
         return -1;
     }
-    phys = nvme_bar(c, bir);
+    phys = pci_bar_address64(&c->pci, (int)bir);
     if (phys == 0 || (uint64_t)(uintptr_t)(phys + offset) != phys + offset) {
         return -1;
     }

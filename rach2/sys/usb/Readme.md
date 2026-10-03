@@ -67,7 +67,7 @@ The only waits in the driver are in bring-up, which runs once: the reset, the fi
 
 `CAPLENGTH`, the interface version, the slot, interrupter and port counts, the scratchpad count, the context size, the addressing width, the register offsets and the supported page sizes are all read rather than assumed: the two machines this kernel runs on differ in several of them, and a driver that guessed any one would work on one machine and corrupt memory on the other.
 
-A controller is refused, with a record saying which, when its aperture is a 64-bit window above 4 GiB, when its registers do not fit the 64 KiB this driver maps, when it does not offer 4 KiB pages, when its capability list leaves the aperture, when it never halts or never resets or never says it is ready, when the firmware never gives it up, or when it asks for more scratchpad pages than this kernel compiles in.
+A controller is refused, with a record saying which, when its aperture is a 64-bit window past the addresses the kernel maps, above 4 GiB on i686 (the x86-64 kernel maps it at its whole address), when its registers do not fit the 64 KiB this driver maps, when it does not offer 4 KiB pages, when its capability list leaves the aperture, when it never halts or never resets or never says it is ready, when the firmware never gives it up, or when it asks for more scratchpad pages than this kernel compiles in.
 
 Register offsets are checked against the mapped window before the length is compared with the remaining space, so a wrapping end offset cannot pass. Each Configure Endpoint command sets Context Entries to the highest device context index among the open endpoints and the endpoint being added. Adding a lower index does not reduce it.
 

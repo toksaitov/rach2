@@ -364,6 +364,23 @@ bool pci_bar_is_64bit(uint32_t bar)
     return pci_bar_is_memory(bar) && ((bar & 0x06) == 0x04);
 }
 
+uint64_t pci_bar_address64(const pci_device_t *dev, int i)
+{
+    uint64_t phys;
+
+    if (i < 0 || i > 5 || !pci_bar_is_memory(dev->bar[i])) {
+        return 0;
+    }
+    phys = pci_bar_address(dev->bar[i]);
+    if (pci_bar_is_64bit(dev->bar[i])) {
+        if (i == 5) {
+            return 0;
+        }
+        phys |= (uint64_t)dev->bar[i + 1] << 32;
+    }
+    return phys;
+}
+
 /**
  * Walk the capability list for `cap_id`.
  *

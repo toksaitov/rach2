@@ -574,6 +574,24 @@ uint32_t pci_bar_address(uint32_t bar)
     return bar & ~0xFu;
 }
 
+/** The whole address of memory BAR `i`, as sys/pci.c reads it. */
+uint64_t pci_bar_address64(const pci_device_t *dev, int i)
+{
+    uint64_t phys;
+
+    if (i < 0 || i > 5 || !pci_bar_is_memory(dev->bar[i])) {
+        return 0;
+    }
+    phys = pci_bar_address(dev->bar[i]);
+    if (pci_bar_is_64bit(dev->bar[i])) {
+        if (i == 5) {
+            return 0;
+        }
+        phys |= (uint64_t)dev->bar[i + 1] << 32;
+    }
+    return phys;
+}
+
 static uint16_t pci_command;
 
 uint16_t pci_read_config16(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t off)

@@ -513,28 +513,29 @@ static void take_ports(const pci_device_t *dev)
  * map its aperture into the kernel MMIO region, whose virtual address is used
  * for register access from then on.
  *
- * A 64-bit aperture is legal and common, and its upper half must be zero
- * here: this kernel addresses 32 bits, and taking the low half of a base
- * above 4 GiB would point the driver at some other device's registers.
+ * A 64-bit aperture is legal and common, and is taken whole: the x86-64
+ * kernel maps one anywhere, and the i686 kernel, whose addresses are 32
+ * bits, refuses one above 4 GiB, since taking its low half would point the
+ * driver at some other device's registers.
  *
  * @return 0, or -1 with `hc->err` saying what stopped it.
  */
 static int discover_one(struct xhci_ctrl *hc, pci_device_t *dev)
 {
-    uint32_t base;
+    uint64_t base;
     uintptr_t mapped;
 
     if (!pci_bar_is_memory(dev->bar[0])) {
         hc->err = "the controller's aperture is not a memory window";
         return -1;
     }
-    if (pci_bar_is_64bit(dev->bar[0]) && dev->bar[1] != 0) {
-        hc->err = "the controller's aperture is above 4 GiB";
-        return -1;
-    }
-    base = pci_bar_address(dev->bar[0]);
+    base = pci_bar_address64(dev, 0);
     if (base == 0) {
         hc->err = "the controller's aperture was never programmed";
+        return -1;
+    }
+    if ((uint64_t)(uintptr_t)base != base) {
+        hc->err = "the controller's aperture is above the addresses this kernel maps";
         return -1;
     }
 
@@ -544,16 +545,16 @@ static int discover_one(struct xhci_ctrl *hc, pci_device_t *dev)
     pci_enable_memory_space(dev);
     pci_enable_bus_master(dev);
 
-    mapped = map_mmio(base, XHCI_MAP_SIZE);
+    mapped = map_mmio((uintptr_t)base, XHCI_MAP_SIZE);
     if (mapped == 0) {
         hc->err = "the controller's aperture could not be mapped";
         return -1;
     }
     hc->base = mapped;
 
-    klog(KLOG_INFO, "usb", "found: xhci%d: %x:%x at %d:%d.%d, aperture 0x%X", hc->number,
+    klog(KLOG_INFO, "usb", "found: xhci%d: %x:%x at %d:%d.%d, aperture 0x%lX", hc->number,
          (int)dev->vendor_id, (int)dev->device_id, (int)dev->bus, (int)dev->device,
-         (int)dev->function, base);
+         (int)dev->function, (unsigned long)base);
     hc->err = "none";
     return 0;
 }

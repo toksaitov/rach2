@@ -951,8 +951,7 @@ static struct netdev *rtl8168_iface;
 static int rtl8168_init(struct netdev *nd, int nth)
 {
     uint32_t txconfig;
-    uint32_t bar = 0;
-    uint32_t addr;
+    uint64_t addr = 0;
     uintptr_t mapped;
     int i;
 
@@ -974,20 +973,23 @@ static int rtl8168_init(struct netdev *nd, int nth)
         if (!pci_bar_is_memory(r8168_pci.bar[i])) {
             continue;
         }
-        if (pci_bar_address(r8168_pci.bar[i]) != 0) {
-            bar = r8168_pci.bar[i];
+        addr = pci_bar_address64(&r8168_pci, i);
+        if (addr != 0) {
             break;
         }
         if (pci_bar_is_64bit(r8168_pci.bar[i])) {
             i++;
         }
     }
-    if (bar == 0) {
+    if (addr == 0) {
         r8168_err = "the RTL8168 has no memory window";
         return NETDEV_FAILED;
     }
-    addr = pci_bar_address(bar);
-    mapped = map_mmio(addr, 256);
+    if ((uint64_t)(uintptr_t)addr != addr) {
+        r8168_err = "the RTL8168 window is above the addresses this kernel maps";
+        return NETDEV_FAILED;
+    }
+    mapped = map_mmio((uintptr_t)addr, 256);
     if (mapped == 0) {
         r8168_err = "the RTL8168 window would not map";
         return NETDEV_FAILED;

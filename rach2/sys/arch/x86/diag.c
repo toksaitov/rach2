@@ -67,7 +67,7 @@ struct diag_eth {
     uint8_t bus;
     uint8_t device;
     uint8_t function;
-    uint32_t mmio;
+    uint64_t mmio;
     uint32_t txconfig;
     uint32_t xid;
 };
@@ -91,7 +91,6 @@ static void diag_eth_probe(struct diag_eth *out)
     uintptr_t mapped;
     pci_device_t dev;
     uint16_t command;
-    uint32_t bar = 0;
     int i;
 
     out->state = DIAG_ETH_ABSENT;
@@ -122,21 +121,20 @@ static void diag_eth_probe(struct diag_eth *out)
         if (!pci_bar_is_memory(dev.bar[i])) {
             continue;
         }
-        if (pci_bar_address(dev.bar[i]) != 0) {
-            bar = dev.bar[i];
+        out->mmio = pci_bar_address64(&dev, i);
+        if (out->mmio != 0) {
             break;
         }
         if (pci_bar_is_64bit(dev.bar[i])) {
             i++;
         }
     }
-    if (bar == 0) {
+    if (out->mmio == 0 || (uint64_t)(uintptr_t)out->mmio != out->mmio) {
         out->state = DIAG_ETH_NO_WINDOW;
         return;
     }
 
-    out->mmio = pci_bar_address(bar);
-    mapped = map_mmio(out->mmio, DIAG_MMIO_WINDOW);
+    mapped = map_mmio((uintptr_t)out->mmio, DIAG_MMIO_WINDOW);
     if (mapped == 0) {
         out->state = DIAG_ETH_NO_MAP;
         return;
@@ -171,8 +169,8 @@ static void diag_eth_report(const struct diag_eth *e)
         return;
     }
 
-    klog(KLOG_INFO, "diag", "ethernet: mmio 0x%X txconfig 0x%X xid 0x%X", e->mmio, e->txconfig,
-         e->xid);
+    klog(KLOG_INFO, "diag", "ethernet: mmio 0x%lX txconfig 0x%X xid 0x%X", (unsigned long)e->mmio,
+         e->txconfig, e->xid);
     if ((e->xid & DIAG_XID_FAMILY_MASK) == DIAG_XID_RTL8168GU) {
         diag_say("  ethernet: RTL8168GU, the chip this port targets");
     } else {

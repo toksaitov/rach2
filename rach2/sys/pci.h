@@ -233,4 +233,12 @@ bool pci_bar_is_memory(uint32_t bar);
 /** True if a BAR is a 64-bit memory BAR (uses two consecutive BARs). */
 bool pci_bar_is_64bit(uint32_t bar);
 
+/**
+ * The physical address memory BAR `i` of `dev` decodes, with the BAR after
+ * it as the upper half when it is a 64-bit one: 0 for an I/O BAR, an
+ * unprogrammed one, or a 64-bit BAR in the last slot. A driver maps it only
+ * when it is within `uintptr_t`, which on i686 is 32 bits.
+ */
+uint64_t pci_bar_address64(const pci_device_t *dev, int i);
+
 #endif /* _PCI_H_ */
