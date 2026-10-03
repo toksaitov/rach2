@@ -2,8 +2,8 @@
  * ptrace.c: the x86-64 part of ptrace(2) and of core files: the registers
  * in Linux x86-64's `user_regs_struct`, the words of its `struct user`, the
  * floating-point state as `user_i387_struct`, the 512-byte `fxsave64`
- * image, and as the XSAVE image, and the FS and GS bases through
- * PTRACE_ARCH_PRCTL.
+ * image, and as the XSAVE image, the register sets of PTRACE_GETREGSET, and
+ * the FS and GS bases through PTRACE_ARCH_PRCTL.
  */
 
 #include "../arch.h"
@@ -68,6 +68,8 @@ enum {
 #define FLAG_MASK   0x00054DD5u
 #define RFLAGS_TF   0x00000100u
 #define WORD        8u
+/* The register set of the general registers, by its core note's type. */
+#define NT_PRSTATUS 1u
 
 typedef char user_regs_fit[(R_COUNT == ARCH_GREGS) ? 1 : -1];
 
@@ -285,6 +287,79 @@ static int fp_access(uint32_t pid, process_t *t, uintptr_t data, int set)
         return -ESRCH;
     }
     return fpu_fx_set(t->fpu, buf) == 0 ? 0 : -EINVAL;
+}
+
+/** The register sets: NT_PRSTATUS, the `user_regs_struct`; NT_PRFPREG, the
+ * `fxsave64` image; and NT_X86_XSTATE, the XSAVE image, which a processor
+ * without XSAVE lacks. */
+long arch_regset_size(unsigned long type, uint32_t *unit)
+{
+    *unit = WORD;
+    switch (type) {
+    case NT_PRSTATUS:
+        return (long)(R_COUNT * WORD);
+    case NT_PRFPREG:
+        return (long)FX_SIZE;
+    case NT_X86_XSTATE:
+        return fpu_xstate_size() != 0 ? (long)fpu_xstate_size() : -ENODEV;
+    default:
+        return -EINVAL;
+    }
+}
+
+void arch_regset_get(const process_t *t, unsigned long type, uint8_t *out)
+{
+    unsigned long r[R_COUNT];
+
+    switch (type) {
+    case NT_PRSTATUS:
+        arch_regs_get(t, r);
+        k_memcpy(out, r, sizeof(r));
+        break;
+    case NT_PRFPREG:
+        fpu_fx_get(t->fpu, out);
+        break;
+    default:
+        k_memcpy(out, t->fpu, fpu_xstate_size());
+        fpu_xstate_view(out);
+        break;
+    }
+}
+
+/**
+ * As Linux sets them: the registers one at a time, as many as `len` holds,
+ * stopping at the first one `regs_set` refuses; the `fxsave64` image whole,
+ * -EINVAL for a part or for one `fxrstor64` would fault on; and the XSAVE
+ * image whole, -EFAULT for a part and -EINVAL for one `fpu_xstate_set`
+ * refuses.
+ */
+long arch_regset_set(process_t *t, unsigned long type, const uint8_t *in, uint32_t len)
+{
+    unsigned long r[R_COUNT];
+    uint32_t i;
+    int rc;
+
+    switch (type) {
+    case NT_PRSTATUS:
+        k_memcpy(r, in, len);
+        for (i = 0; i < len / WORD; i++) {
+            rc = regs_set(t, (int)i, r[i]);
+            if (rc != 0) {
+                return rc;
+            }
+        }
+        return 0;
+    case NT_PRFPREG:
+        if (len != FX_SIZE) {
+            return -EINVAL;
+        }
+        return fpu_fx_set(t->fpu, in) == 0 ? 0 : -EINVAL;
+    default:
+        if (len != fpu_xstate_size()) {
+            return -EFAULT;
+        }
+        return fpu_xstate_set(t->fpu, in) == 0 ? 0 : -EINVAL;
+    }
 }
 
 /**

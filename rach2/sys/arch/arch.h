@@ -182,6 +182,28 @@ void arch_ptrace_step(struct process *t, int on);
 long arch_ptrace(struct process *t, uint32_t pid, long request, unsigned long addr,
                  unsigned long data);
 
+/*
+ * The register sets of PTRACE_GETREGSET and PTRACE_SETREGSET, named by the
+ * type of the core note that has each (NT_PRSTATUS and the rest). The
+ * shared ptrace(2) reads the iovec, applies Linux's rules of length and
+ * copies the set; the architecture says which sets it has and converts
+ * each.
+ */
+
+/** The bytes of the register set `type`, with `*unit` the size of its
+ * unit, of which a length must be a multiple: -EINVAL for a set the
+ * architecture lacks, -ENODEV for one the processor lacks. */
+long arch_regset_size(unsigned long type, uint32_t *unit);
+
+/** Write all of the register set `type` of `t`, a thread stopped for its
+ * tracer, into `out`. */
+void arch_regset_get(const struct process *t, unsigned long type, uint8_t *out);
+
+/** Set the register set `type` of the stopped thread `t` from the first
+ * `len` bytes of `in`, a multiple of its unit and at most its size: 0, or a
+ * negative errno as Linux's set of that type returns it. */
+long arch_regset_set(struct process *t, unsigned long type, const uint8_t *in, uint32_t len);
+
 /** At a switch from `old` to `next`: load the hardware breakpoints `next`
  * has, or clear those `old` left. */
 void arch_debug_switch(const struct process *old, const struct process *next);

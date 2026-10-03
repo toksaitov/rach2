@@ -1,4 +1,4 @@
-.Dd October 1, 2026
+.Dd October 3, 2026
 .Dt PTRACE 2
 .Os
 .Sh NAME
@@ -226,6 +226,63 @@ image;
 on a processor without FXSR, and
 .Er EINVAL
 for an MXCSR the processor refuses.
+.It Dv PTRACE_GETREGSET , PTRACE_SETREGSET
+The register set that
+.Fa addr
+names by the type of the core note that has it, to or from the buffer of
+the
+.Vt struct iovec
+at
+.Fa data ,
+whose length becomes the bytes moved:
+.Dv NT_PRSTATUS
+(1), the
+.Vt user_regs_struct ;
+.Dv NT_PRFPREG
+(2), the
+.Vt user_i387_struct ,
+or on x86-64 the
+.Ic fxsave64
+image;
+.Dv NT_PRXFPREG
+(0x46e62b7f), on i386 the
+.Ic fxsave
+image; and
+.Dv NT_X86_XSTATE
+(0x202), the XSAVE image, as large as leaf 0xD of
+.Ic cpuid
+gives for the components the kernel enabled, with XCR0 in the first eight
+of its 48 software bytes at byte 464, where GDB reads which components the
+image has.
+The length must be a multiple of 4, or of 8 for
+.Dv NT_X86_XSTATE
+and on x86-64, and is cut to the set's size; a get of less gives the set's
+first bytes.
+A set of the registers takes as many as the length holds, in order, and
+one of the i386
+.Dv NT_PRFPREG
+the bytes the length covers.
+The
+.Ic fxsave
+images and the XSAVE image are set whole:
+.Er EINVAL
+for less of an
+.Ic fxsave
+image and
+.Er EFAULT
+for less of the XSAVE image, as on Linux.
+A set XSAVE image becomes the initial state with the components its
+XSTATE_BV marks in use, and MXCSR, copied from it;
+.Er EINVAL
+for an XSTATE_BV that names a component XCR0 lacks, a header whose other
+bytes are not zero, or a reserved MXCSR bit.
+.Dv NT_X86_XSTATE
+on a processor whose state the kernel keeps without XSAVE, and
+.Dv NT_PRXFPREG
+on one without FXSR, are
+.Er ENODEV ;
+another type is
+.Er EINVAL .
 .It Dv PTRACE_CONT , PTRACE_SYSCALL , PTRACE_SINGLESTEP
 Resume the tracee with the signal
 .Fa data ,
@@ -350,11 +407,18 @@ ends.
 .Bl -tag -width "[EINVAL]"
 .It Bq Er EFAULT
 A buffer at
-.Fa data
-cannot be read or written.
+.Fa data ,
+or the buffer of its
+.Vt struct iovec ,
+cannot be read or written, or a
+.Dv PTRACE_SETREGSET
+of
+.Dv NT_X86_XSTATE
+has less than the whole image.
 .It Bq Er EINVAL
-A debug register, an MXCSR, a TLS descriptor or entry, or an option the
-kernel does not take.
+A debug register, an MXCSR, an XSAVE header, a TLS descriptor or entry,
+an option, or a register set the kernel does not take, or a register set's
+length that is not a multiple of its unit.
 .It Bq Er EIO
 An unknown request, a
 .Vt struct user
@@ -364,6 +428,14 @@ a signal past 64, a memory address no mapping allows, or
 or
 .Dv PTRACE_LISTEN
 for a tracee that was not seized.
+.It Bq Er ENODEV
+A register set the processor lacks:
+.Dv NT_X86_XSTATE
+without XSAVE, or
+.Dv NT_PRXFPREG
+without FXSR.
+.It Bq Er ENOMEM
+The kernel has no room for the buffer of a register set.
 .It Bq Er EPERM
 The attach is not allowed, the target is inside
 .Xr execve 2

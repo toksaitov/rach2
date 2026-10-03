@@ -8,12 +8,16 @@
 #include "sched.h"
 #include "sigframe.h"
 #include "tgroup.h"
+#include "../fs/krffs.h"
+#include "../fs/vfs.h"
 #include "../lib/kerrno.h"
 #include "../lib/kirq.h"
 #include "../lib/kstring.h"
+#include "../mm/kheap.h"
 #include "../mm/mm.h"
 #include "../mm/paging.h"
 #include "../mm/usercopy.h"
+#include "../syscall_internal.h"
 
 /* The requests. */
 #define PTRACE_TRACEME     0
@@ -31,6 +35,8 @@
 #define PTRACE_GETEVENTMSG 0x4201
 #define PTRACE_GETSIGINFO  0x4202
 #define PTRACE_SETSIGINFO  0x4203
+#define PTRACE_GETREGSET   0x4204
+#define PTRACE_SETREGSET   0x4205
 #define PTRACE_SEIZE       0x4206
 #define PTRACE_INTERRUPT   0x4207
 #define PTRACE_LISTEN      0x4208
@@ -554,6 +560,58 @@ static int siginfo_access(uint32_t pid, process_t *t, uintptr_t data, int set)
 }
 
 /**
+ * PTRACE_GETREGSET and PTRACE_SETREGSET: the register set `type` of `t`, the
+ * thread `pid`, to or from the buffer the `struct iovec` at `data` names,
+ * as Linux's `ptrace_regset` moves it. The length must be a multiple of the
+ * set's unit; it is cut to the set's size, and the iovec's length becomes
+ * the bytes moved. The set goes through the heap, since an XSAVE image is
+ * larger than a frame of the kernel's stack should be.
+ */
+static long regset_access(uint32_t pid, process_t *t, unsigned long type, uintptr_t data, int set)
+{
+    struct kernel_iovec iov;
+    uint32_t unit = 1;
+    uint32_t len;
+    uint8_t *buf;
+    long size;
+    long rc = 0;
+
+    if (copy_from_user(&iov, (const void __user *)data, sizeof(iov)) != 0) {
+        return -EFAULT;
+    }
+    size = arch_regset_size(type, &unit);
+    if (size < 0) {
+        return size;
+    }
+    if (iov.iov_len % unit != 0) {
+        return -EINVAL;
+    }
+    len = iov.iov_len < (unsigned long)size ? (uint32_t)iov.iov_len : (uint32_t)size;
+    buf = kmalloc((size_t)size);
+    if (!buf) {
+        return -ENOMEM;
+    }
+    if (!set) {
+        arch_regset_get(t, type, buf);
+        if (copy_to_user((void __user *)iov.iov_base, buf, len) != 0) {
+            rc = -EFAULT;
+        }
+    } else if (copy_from_user(buf, (const void __user *)iov.iov_base, len) != 0) {
+        rc = -EFAULT;
+    } else {
+        t = ptrace_tracee(pid);
+        rc = t ? arch_regset_set(t, type, buf, len) : -ESRCH;
+    }
+    kfree(buf);
+    iov.iov_len = len;
+    if (rc == 0 && copy_to_user((void __user *)(data + sizeof(iov.iov_base)), &iov.iov_len,
+                                sizeof(iov.iov_len)) != 0) {
+        rc = -EFAULT;
+    }
+    return rc;
+}
+
+/**
  * The requests that need `t`, the thread `pid`, stopped for the caller, as
  * Linux has them. No request uses `t` after a copy that may sleep: one that
  * copies from the caller's memory finds the thread again after the copy
@@ -603,6 +661,9 @@ static long ptrace_stopped(process_t *t, uint32_t pid, long request, uintptr_t a
     case PTRACE_GETSIGINFO:
     case PTRACE_SETSIGINFO:
         return siginfo_access(pid, t, data, request == PTRACE_SETSIGINFO);
+    case PTRACE_GETREGSET:
+    case PTRACE_SETREGSET:
+        return regset_access(pid, t, addr, data, request == PTRACE_SETREGSET);
     default:
         return arch_ptrace(t, pid, request, addr, data);
     }

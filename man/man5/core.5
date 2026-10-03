@@ -127,8 +127,10 @@ Where the kernel keeps the state with XSAVE, named
 .Dq LINUX ,
 the thread's XSAVE image, as large as leaf 0xD of
 .Ic cpuid
-gives, with XCR0 in the first eight of its 48 software bytes at byte 464:
-GDB reads the AVX and AVX-512 registers from it.
+gives, with XCR0 in the first eight of its 48 software bytes at byte 464,
+as
+.Dv PTRACE_GETREGSET
+gives it: GDB reads the AVX and AVX-512 registers from it.
 .El
 .Pp
 .Dv NT_PRSTATUS ,
