@@ -1768,18 +1768,7 @@ static void exec_commit(isr_params_t *params, struct exec_state *s)
     mm_put(old);
     proc_vfork_release(current_proc);
 
-    params->eip = s->entry;
-    params->user_esp = s->args.esp;
-    params->ebp = 0;
-    params->edx = 0;
-    params->ebx = 0;
-    params->ecx = 0;
-    params->esi = 0;
-    params->edi = 0;
-    params->gs = 0x23;
-    params->fs = 0x23;
-    params->es = 0x23;
-    params->ds = 0x23;
+    arch_exec_frame(params, s->entry, s->args.esp);
     current_proc->tls_base = 0;
     arch_tls_set(0);
     fpu_init_area(current_proc->fpu);
@@ -3963,7 +3952,7 @@ long sys_rt_sigprocmask(isr_params_t *params)
  * would load a faulting state kills the process with SIGSEGV. Returns the
  * restored EAX, so the dispatcher's store of the result leaves it as it was.
  */
-static int32_t signal_return(isr_params_t *tf, int rt)
+static long signal_return(isr_params_t *tf, int rt)
 {
     uint64_t mask;
 
@@ -3975,7 +3964,7 @@ static int32_t signal_return(isr_params_t *tf, int rt)
         return 0;
     }
     signal_set_blocked(mask);
-    return (int32_t)tf->eax;
+    return (long)SC_RET(tf);
 }
 
 /*
@@ -4030,7 +4019,7 @@ long sys_sigaltstack(isr_params_t *params)
     if (!current_proc) {
         return -ESRCH;
     }
-    on = sigframe_on_altstack(params->user_esp);
+    on = sigframe_on_altstack(FRAME_SP(params));
     cur.ss_sp = current_proc->altstack_sp;
     cur.ss_size = current_proc->altstack_size;
     cur.ss_flags = !current_proc->altstack_on ? SS_DISABLE : (on ? SS_ONSTACK : 0);
@@ -4136,12 +4125,13 @@ long sys_sigprocmask(isr_params_t *params)
     return 0;
 }
 
-/* Restart the system call the dispatcher recorded: its number back in EAX and
- * the instruction pointer back on its two-byte `int $0x80`. */
+/* Restart the system call the dispatcher recorded: its number back in the
+ * number's register and the instruction pointer back on the instruction that
+ * made the call. */
 static void restart_syscall(isr_params_t *tf, uint32_t restart_nr)
 {
-    tf->eax = restart_nr - 1u;
-    tf->eip -= 2u;
+    SC_NR(tf) = restart_nr - 1u;
+    FRAME_PC(tf) -= SYSCALL_INSN_LEN;
 }
 
 /**
@@ -4313,7 +4303,7 @@ void deliver_signals(isr_params_t *tf)
     if (!current_proc) {
         return;
     }
-    if ((tf->cs & 3) != 3) {
+    if (!FRAME_USER(tf)) {
         return; /* not returning to user mode */
     }
     if (proc_dead_threads != 0) {

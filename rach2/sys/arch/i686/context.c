@@ -98,3 +98,19 @@ void arch_fork_frame(process_t *child, const isr_params_t *params, uintptr_t new
     *--sp = 0; /* EDI */
     child->regs.esp = (uint32_t)sp;
 }
+
+void arch_exec_frame(isr_params_t *p, uintptr_t entry, uintptr_t sp)
+{
+    p->eip = (uint32_t)entry;
+    p->user_esp = (uint32_t)sp;
+    p->ebp = 0;
+    p->edx = 0;
+    p->ebx = 0;
+    p->ecx = 0;
+    p->esi = 0;
+    p->edi = 0;
+    p->gs = 0x23; /* the user data segment, GDT entry 4 at ring 3 */
+    p->fs = 0x23;
+    p->es = 0x23;
+    p->ds = 0x23;
+}

@@ -22,6 +22,8 @@
  *   SC_RET(p)              the register the call's result goes in (an lvalue)
  *   FRAME_PC(p), FRAME_SP(p)  the interrupted instruction and stack pointers
  *   FRAME_USER(p)          whether the entry came from user mode
+ *   SYSCALL_INSN_LEN       the bytes of the instruction a system call is
+ *                          made by, which a restart rewinds over
  *   PAGE_SIZE, PAGE_SHIFT  the page the kernel maps
  *   FPU_STATE_SIZE         the bytes of a floating-point save area
  *   USER_ADDR_MIN, USER_ADDR_MAX  the range a program may map
@@ -101,6 +103,11 @@ void arch_tls_set(uintptr_t base);
 long arch_clone_tls(unsigned long arg, uintptr_t *base_out);
 
 struct process;
+
+/** Make the saved frame `p` start a new program image: at `entry`, with the
+ * stack pointer `sp`, the general registers cleared and the user segments
+ * loaded where the architecture has them. */
+void arch_exec_frame(isr_params_t *p, uintptr_t entry, uintptr_t sp);
 
 /** Lay out a new process's kernel stack as the context switch expects to
  * find it, so that its first switch returns into `entry`. */

@@ -38,6 +38,10 @@ typedef uint32_t phys_addr_t;
 #define SC_RET(p)    ((p)->r[0])
 #define SC_ARG(p, n) ((unsigned long)(p)->r[n])
 
+/* The length of the instruction a system call is made by, `svc`'s four
+ * bytes, which a restart rewinds the return address over. */
+#define SYSCALL_INSN_LEN 4u
+
 #define FRAME_PC(p)   ((p)->pc)
 #define FRAME_SP(p)   ((p)->sp)
 #define FRAME_USER(p) (((p)->cpsr & 0x1Fu) == 0x10u)
@@ -45,7 +49,7 @@ typedef uint32_t phys_addr_t;
 #define PAGE_SHIFT 12
 #define PAGE_SIZE  0x1000
 
-/* A floating-point save area: the 32 doubleword registers of VFPv3 and FPSCR. */
+/* A floating-point save area: VFPv3's 32 doubleword registers and FPSCR. */
 #define FPU_STATE_SIZE 264
 
 #define USER_ADDR_MIN 0x00010000UL

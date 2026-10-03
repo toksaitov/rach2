@@ -973,12 +973,12 @@ static void _page_fault_handler(isr_params_t *params)
         klog(KLOG_CRIT, "vm",
              "fault: in kernel mode at 0x%X (err 0x%X), eip 0x%X: "
              "pid %d ran past the end of its kernel stack",
-             fault_address, params->error_code, params->eip, pid);
+             fault_address, params->error_code, FRAME_PC(params), pid);
         k_panic("page fault: a kernel stack ran out");
     }
 
     klog(KLOG_CRIT, "vm", "fault: in kernel mode at 0x%X (err 0x%X), eip 0x%X", fault_address,
-         params->error_code, params->eip);
+         params->error_code, FRAME_PC(params));
 
     k_panic("Unrecoverable error: page fault while in kernel mode.");
 }

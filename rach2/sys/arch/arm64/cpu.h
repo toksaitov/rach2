@@ -37,6 +37,10 @@ typedef uint64_t phys_addr_t;
 #define SC_RET(p)    ((p)->x[0])
 #define SC_ARG(p, n) ((unsigned long)(p)->x[n])
 
+/* The length of the instruction a system call is made by, `svc`'s four
+ * bytes, which a restart rewinds the return address over. */
+#define SYSCALL_INSN_LEN 4u
+
 #define FRAME_PC(p)   ((p)->pc)
 #define FRAME_SP(p)   ((p)->sp)
 #define FRAME_USER(p) (((p)->pstate & 0xFu) == 0u)

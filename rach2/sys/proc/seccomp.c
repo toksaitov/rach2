@@ -677,7 +677,8 @@ int32_t seccomp_prctl_set(uint32_t mode, uint32_t prog)
  */
 long sys_seccomp(isr_params_t *params)
 {
-    uint32_t op = params->ebx, flags = params->ecx, arg = params->edx;
+    uint32_t op = (uint32_t)SC_ARG(params, 0), flags = (uint32_t)SC_ARG(params, 1);
+    uintptr_t arg = SC_ARG(params, 2);
     uint32_t action;
     uint16_t sizes[3] = {80, 24, SECCOMP_DATA_SIZE};
 

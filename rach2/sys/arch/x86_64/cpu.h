@@ -46,6 +46,10 @@ typedef struct cpu_regs cpu_regs_t;
 #define SC_ARG_4(p)  ((unsigned long)(p)->r8)
 #define SC_ARG_5(p)  ((unsigned long)(p)->r9)
 
+/* The length of the instruction a system call is made by, `syscall`'s two
+ * bytes, which a restart rewinds the return address over. */
+#define SYSCALL_INSN_LEN 2u
+
 #define FRAME_PC(p)   ((p)->rip)
 #define FRAME_SP(p)   ((p)->rsp)
 #define FRAME_USER(p) (((p)->cs & 3u) == 3u)
