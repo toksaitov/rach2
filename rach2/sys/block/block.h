@@ -137,13 +137,12 @@ int block_is_below(block_device_t *ancestor, block_device_t *device);
 extern block_device_t *block0;
 
 /**
- * Bring up the boot block device and publish it as `block0`.
+ * Bring up the disks and publish the first as `block0`.
  *
- * Selects the AHCI driver when `rach2.disk=ahci` is on the kernel command
- * line (falling back to ATA if no AHCI HBA is present), and the ATA driver
- * otherwise. Returns 0 when a device answered and `block0` is set, or -1
- * when none did. Polled and IRQ-free, so it is safe to call before the
- * scheduler runs.
+ * Runs the AHCI, NVMe and ATA drivers in that order; each registers the
+ * disks it finds, and the first disk found is `block0`. Returns 0 when a
+ * device answered and `block0` is set, or -1 when none did. Polled and
+ * IRQ-free, so it is safe to call before the scheduler runs.
  */
 int block_probe(void);
 

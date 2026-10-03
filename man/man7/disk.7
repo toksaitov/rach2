@@ -6,7 +6,8 @@
 .Nd disks, partitions, device nodes and identities
 .Sh DESCRIPTION
 Rach2 uses 512-byte sectors.
-The disk probe tries AHCI before ATA; USB sticks also register as disks.
+The disk probe tries AHCI, then NVMe, then ATA; USB sticks also register
+as disks.
 The registry has eight records, numbered in registration order.
 A new disk reuses the lowest released number.
 .Ss Device nodes
@@ -99,7 +100,7 @@ The ordinary kernel returns
 .Er EPERM
 for writes through whole-disk and partition nodes.
 The recovery kernel permits root to write them.
-The metal kernel's ATA and AHCI driver policy permits only reads.
+The metal kernel's ATA, AHCI and NVMe driver policy permits only reads.
 A raw write to a write-protected USB stick returns
 .Er EIO .
 .Pp
@@ -163,6 +164,7 @@ Devices over regular files.
 Disk records and counters.
 .El
 .Sh SEE ALSO
+.Xr nvme 4 ,
 .Xr recovery 7 ,
 .Xr bootctl 8 ,
 .Xr growroot 8 ,

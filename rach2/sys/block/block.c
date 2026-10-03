@@ -3,6 +3,7 @@
 #include "../klog.h"
 #include "../platform.h"
 #include "ahci.h"
+#include "nvme.h"
 #include "disk.h"
 #include "../serial.h"
 
@@ -151,13 +152,14 @@ int block_probe(void)
         return -1;
     }
     klog(KLOG_INFO, "block", "started");
-    /* Both drivers probe, AHCI first and then the platform's own (on a PC,
-       ATA), so a machine with a SATA disk and an IDE one has both, and the
-       first disk found is `block0`. Each driver
-       registers what it finds; `rach2.disk=ahci` is accepted for the boot
-       lines that have it and changes nothing. */
+    /* Every driver probes, AHCI, then NVMe, then the platform's own (on a
+       PC, ATA), so a machine with disks of several kinds has them all, and
+       the first disk found is `block0`. Each driver registers what it finds;
+       `rach2.disk=ahci` is accepted for the boot lines that have it and
+       changes nothing. */
     block0 = 0;
     (void)ahci_init();
+    (void)nvme_init();
     platform_disks_probe();
     if (!block0) {
         return -1;

@@ -50,6 +50,7 @@ C_SRC_SHARED = kernel.c \
     sys/block/disk.c \
     sys/block/partition.c \
     sys/block/ahci.c \
+    sys/block/nvme.c \
     sys/audio/audio.c \
     sys/audio/audio_debug.c \
     sys/audio/hda.c \

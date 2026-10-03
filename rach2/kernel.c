@@ -45,6 +45,7 @@
 #include "sys/usb/usb.h"
 #include "sys/block/block.h"
 #include "sys/block/ahci.h"
+#include "sys/block/nvme.h"
 #include "sys/audio/audio.h"
 #include "sys/audio/audio_debug.h"
 #include "sys/audio/hda.h"
@@ -3665,10 +3666,11 @@ void kernel_main(const struct boot_info *boot)
         usb_init();
     }
 
-    /* The SATA disks go over to their interrupts here, after the root: the
-     * boot's reads were polled where no process could sleep, and from here
-     * a transfer lets the processor run someone else. */
+    /* The SATA and NVMe disks go over to their interrupts here, after the
+     * root: the boot's reads were polled where no process could sleep, and
+     * from here a transfer lets the processor run someone else. */
     ahci_start();
+    nvme_start();
 
     publish_disks();
 

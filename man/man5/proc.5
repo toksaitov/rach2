@@ -238,11 +238,13 @@ are sectors.
 is
 .Ql ahci ,
 .Ql ata ,
+.Ql nvme ,
 or
 .Ql usb .
 .Ar LOCATION
-is the AHCI port, ATA position, or USB class-driver slot times four
-plus the logical unit number.
+is the AHCI port; the ATA position; the NVMe controller's number times
+four plus the namespace's place among those the controller published; or
+the USB class-driver slot times four plus the logical unit number.
 ATA positions 0 through 3 are primary master, primary slave,
 secondary master, and secondary slave.
 .Ar TABLE

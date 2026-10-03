@@ -1,0 +1,116 @@
+.Dd October 3, 2026
+.Dt NVME 4
+.Os
+.Sh NAME
+.Nm nvme
+.Nd NVM Express disk driver
+.Sh SYNOPSIS
+.Pa /dev/diskN
+.Pp
+.Pa /dev/diskNpM
+.Sh DESCRIPTION
+The
+.Nm
+driver drives each NVM Express controller on the PCI bus, up to four,
+through an admin queue and one I/O queue pair.
+Each active namespace with 512-byte blocks and no metadata becomes a disk,
+up to four a controller, with the nodes
+.Xr disk 4
+describes.
+The kernel probes AHCI, then NVMe, then ATA, and the first disk found is
+disk 0.
+Partitions, mounts, a root selected by
+.Ql rach2.root=
+and a boot partition selected by
+.Ql rach2.boot=
+take a namespace as they take a SATA disk.
+.Pp
+.Pa /proc/disk
+lists a namespace with transport
+.Ql nvme
+and a location of the controller's number times four plus the namespace's
+place among those the controller published.
+Its model, serial number and firmware revision are the controller's.
+.Pp
+The boot reads and writes by polling the completion queue.
+Once the root is mounted, each controller is moved to its MSI-X message,
+or to MSI when it has no MSI-X table, on a vector of its own; a transfer
+then sleeps its caller until the message, and a page fault with
+interrupts off still polls.
+.Pa /proc/interrupts
+lists the vector as
+.Ql nvme .
+The controller keeps polling when the kernel command line has
+.Ql rach2.nvmepoll ,
+when the local APIC is not in use, when no vector is free, and when the
+controller has neither MSI-X nor MSI.
+.Pp
+A write is sent with force unit access, so it is on the medium when it
+returns.
+A file system that writes several blocks and flushes once after them
+sends them without it, and its flush is the controller's Flush command.
+.Pp
+The metal kernel's read-only policy, which
+.Xr disk 7
+describes, judges an NVMe command by the ATA command it corresponds to: a
+read is allowed, and a write and a flush are refused.
+.Sh DIAGNOSTICS
+The driver writes these lines to the kernel log, with
+.Ar N
+the controller's number and
+.Ar M
+the namespace identifier.
+.Bl -tag -width Ds
+.It Ql nvme: N: unusable: reason
+The controller does not become ready, reports a fatal status, lacks the
+NVM command set, has no page size of 4 KiB, does not answer or refuses an
+admin command, or has registers the kernel cannot map.
+It is left disabled and the boot goes on.
+.It Ql nvme: N: namespace M: refused: reason
+The namespace has blocks of another size than 512 bytes, 4096 among
+them, or metadata, or did not answer Identify; it is not published.
+.It Ql nvme: N: namespace M: command 0xC failed: status 0xS
+The controller failed the command, and the transfer fails with
+.Er EIO .
+.It Ql nvme: N: namespace M: command 0xC failed: no answer in thirty seconds
+The controller did not answer within the wait, five seconds with
+interrupts off.
+The transfer fails with
+.Er EIO ,
+and the controller is reset and its queues created again; every request
+it held fails with
+.Er EIO .
+A controller that does not stop for the reset stops the kernel with a
+panic, since it may still write into memory given back to its owner.
+.It Ql nvme: N: recovery: failed: reason; the controller is out of use
+The controller did not come back from the reset, and every later transfer
+to its namespaces fails with
+.Er EIO .
+.It Ql nvme: interrupts: messages on vector V, msi-x, K disks queued
+The controller was moved to its messages, MSI-X or MSI.
+.It Ql nvme: polled: reason
+The controller keeps polling, for the reason given.
+.El
+.Sh SEE ALSO
+.Xr disk 4 ,
+.Xr proc 5 ,
+.Xr disk 7
+.Sh STANDARDS
+The commands and registers are those of the NVM Express Base
+Specification, revision 1.4.
+.Sh CAVEATS
+Linux names a namespace
+.Pa /dev/nvmeCnN
+and its partitions
+.Pa /dev/nvmeCnNpP ,
+gives each controller a character device for passing commands through, and
+takes namespaces of 4096-byte blocks.
+Rach2 names a namespace as a disk, has no pass-through, and refuses
+4096-byte blocks: the partition table on such a disk, and the firmware that
+reads it, count in its blocks, and Rach2's block layer counts in 512-byte
+sectors.
+Linux makes an I/O queue pair for each processor and tells the controller
+of a power-off; Rach2 makes one pair and sends no shutdown notification,
+so the controller counts each power-off as an unsafe shutdown, though
+every write it answered with force unit access or flushed is on the
+medium.
