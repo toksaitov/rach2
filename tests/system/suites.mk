@@ -87,11 +87,10 @@ HARNESS         = build/tests/system/harness
 RUNTESTS        = build/tests/system/runtests
 PTYDRIVE        = build/tests/system/ptydrive
 RUNUTIL         = build/tests/system/runutil
-# The test-side disk tools, named here because a prerequisite list expands
-# its variables where it is read; their rules are with the suites that use
-# them. The stick tools and the sticks themselves are the product's,
-# in mk/images.mk.
-MKGPT           = build/tools/image/mkgpt
+# The test-side disk tool, named here because a prerequisite list expands
+# its variables where it is read; its rule is with the suite that uses it.
+# The disk and stick tools and the sticks themselves are the product's, in
+# the root Makefile and mk/images.mk.
 GROWSET         = build/tools/inspect/growset
 INSTALL_TEST_STICK = $(IMAGES_DIR)/install-test-stick.img
 # The deadline tool: the suites' wall-clock limit with process-group kill,
@@ -1458,11 +1457,6 @@ run-diskrate: $(DEMO_CREDS) rach2 tests krffs os-real-image test-image $(MKEXFAT
 	    "`cat krffs/rach2_demo_password`" $(MKEXFATFIXTURE) $(MKMBR) $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) \
 	    $(TEST_IMAGE)
 
-# The GUID table writer (tools/image/mkgpt.c), for `tests/run usbdisk`: the
-# tree had no writer and the suite needs a table to read.
-$(MKGPT): tools/image/mkgpt.c
-	@mkdir -p $(dir $@)
-	$(HOST_LINK)
 # The grow set (tools/inspect/growset.c), for `tests/run grow`: the sectors
 # a grow writes, checked against what the grow in QEMU changed. The tool
 # includes utils/growset.c, so that file is a dependency and not a link

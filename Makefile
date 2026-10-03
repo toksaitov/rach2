@@ -868,10 +868,15 @@ fs-demo-images: $(FS_DEMO_IMAGES)
 # reads it. What builds them is in mk/images.mk, which is included at the end
 # of this file, after the names the rules there need.
 MKMBR           = build/tools/image/mkmbr
+MKGPT           = build/tools/image/mkgpt
 FATCHAINS       = build/tools/image/fatchains
 GRUBEMBED       = build/tools/image/grubembed
 STICKCHECK      = build/tools/image/stickcheck
-DISK_TOOLS      = $(MKMBR) $(FATCHAINS) $(GRUBEMBED)
+DISK_TOOLS      = $(MKMBR) $(MKGPT) $(FATCHAINS) $(GRUBEMBED)
+# The pinned GRUB images and their manifest, which the disk and ISO scripts
+# copy and check, so that a regenerated image rebuilds what carries it.
+GRUB_FILES      = $(wildcard vendor/grub/*.img) vendor/grub/bootx64.efi \
+                  vendor/grub/manifest.txt vendor/grub/verify_grub.sh
 MKEXFATFIXTURE  = build/tests/host/mkexfatfixture
 
 SEALED_EXT2 = $(IMAGES_DIR)/rach2-metal-disk.ext2
@@ -886,7 +891,8 @@ rach2-sealed-disk: krffs rach2 utils rach2-recovery rach2-recovery-image check-b
 
 $(SEALED_DISK): $(KERNEL) $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $(SEALED_EXT2) \
                 krffs/manifests/rach2-metal-disk.manifest krffs/rescue-static.script \
-                tools/image/mkdisk_grub.sh tools/image/keyname.sh $(DISK_TOOLS) $(CFGCHECK)
+                tools/image/mkdisk_grub.sh tools/image/keyname.sh $(DISK_TOOLS) $(GRUB_FILES) \
+                $(CFGCHECK)
 	@sh tools/image/keyname.sh $@
 	@$(CFGCHECK) sealednet $(SEALED_ADDRESS) $(SEALED_PREFIX) \
 	    $(SEALED_MASK) $(SEALED_GATEWAY) krffs/rescue-static.script
@@ -917,7 +923,7 @@ os-real-grub-disk: krffs rach2 utils rach2-recovery rach2-recovery-image check-b
 
 $(OS_REAL_GRUB_DISK): $(KERNEL) $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $(OS_REAL_EXT2) \
                       krffs/manifests/os-real.manifest tools/image/mkdisk_grub.sh \
-                      tools/image/keyname.sh $(DISK_TOOLS)
+                      tools/image/keyname.sh $(DISK_TOOLS) $(GRUB_FILES)
 	@sh tools/image/keyname.sh $@
 	RACH2_DISK_BOOT_MB=64 \
 	RACH2_DISK_CLUSTER=8 \
