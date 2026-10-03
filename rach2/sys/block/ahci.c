@@ -8,6 +8,7 @@
 
 #include "../pci.h"
 #include "../serial.h"
+#include "../mm/kheap.h"
 #include "../mm/paging.h"
 #include "../irq.h"
 #include "../lib/kirq.h"
@@ -43,6 +44,7 @@
 #define AHCI_BOHC_BOS    0x1u        /* BIOS owned */
 #define AHCI_BOHC_OOS    0x2u        /* OS ownership request */
 #define AHCI_CAP_NP_MASK 0x1Fu       /* CAP.NP: number of ports minus one */
+#define AHCI_CAP_S64A    0x80000000u /* CAP.S64A: 64-bit addressing */
 
 /* Per-port register block N lives at ABAR + 0x100 + N*0x80. */
 #define AHCI_PORT_BASE   0x100
@@ -140,7 +142,8 @@
 /* The DMA regions the HBA reads and writes, one set per disk. They are
    static so they land in the kernel image's .bss, below HARD_MEMORY_LIMIT,
    where their bytes are physically contiguous and below 4 GiB; the HBA is
-   given `virt_to_phys` of each. The alignments are AHCI-mandated. */
+   given `virt_to_phys` of each, both halves. The alignments are
+   AHCI-mandated. */
 #define AHCI_CMDLIST_SIZE  1024 /* 32 command headers of 32 bytes */
 #define AHCI_RECV_FIS_SIZE 256
 /* The command table: the 128-byte FIS area and then the PRDT, one 16-byte
@@ -152,6 +155,8 @@
 /* How many disks one controller may publish. A port beyond the count is
    stopped and left, with a record. */
 #define AHCI_DISKS 4
+
+struct ahci_bounce;
 
 /**
  * One disk on one port: its DMA areas, its capacity, and the device the
@@ -177,6 +182,9 @@ struct ahci_disk {
      * that caller reads. */
     int polling;
     struct block_request *queue_head, *queue_tail;
+    /* The pages a controller without 64-bit addressing moves a buffer's
+     * pieces above 4 GiB through, or NULL on one with it. */
+    struct ahci_bounce *bounce;
 };
 
 static struct ahci_disk ahci_disks[AHCI_DISKS];
@@ -241,6 +249,30 @@ static volatile uint8_t ahci_reset_fis[AHCI_RECV_FIS_SIZE] __attribute__((aligne
 #define AHCI_REQ_SECTORS BLOCK_REQ_MAX_SECTORS
 #define AHCI_DBC_MASK    0x3FFFFFu /* PRDT byte count, bits 0-21 */
 
+/* The first address a controller without CAP.S64A cannot reach. */
+#define AHCI_FOUR_GIB 0x100000000ULL
+
+/*
+ * A controller whose CAP.S64A is clear takes only 32-bit addresses
+ * (AHCI 1.3.1, 3.1.1), and a buffer of the heap may have pages above 4 GiB
+ * on x86-64. Each piece of a buffer there moves through a page of the DMA
+ * pool (`alloc_kernel_frame`), one page for each entry of the table, taken
+ * when an entry first needs it and kept: a write's piece is copied in when
+ * the command is built, and a read's is copied back when it is judged.
+ * `to` is where a read's piece goes back, NULL for an entry the controller
+ * reaches directly, and `count` the entries of the command in the slot.
+ */
+struct ahci_bounce {
+    uint8_t *page[AHCI_PRDT_MAX];
+    volatile uint8_t *to[AHCI_PRDT_MAX];
+    uint32_t len[AHCI_PRDT_MAX];
+    uint32_t count;
+};
+
+/* Whether the controller takes 64-bit addresses: CAP.S64A, unless the test
+   switch `rach2.dma32` says to treat it as one that does not. */
+static int ahci_dma64;
+
 /* Typed overlays on the DMA byte regions: one command-list header (the HBA
    reads 32 bytes per slot, of which only the first 16 are software-set; the
    rest stay zero), the H2D FIS at the command-table head, and one PRDT
@@ -295,6 +327,13 @@ static int ahci_port = -1;
 static uint32_t ahci_mmio_r32(uint32_t offset)
 {
     return mmio_read32(ahci_base + offset);
+}
+
+/** The high half of a physical address, which the controller takes apart
+ * from its low half. */
+static uint32_t ahci_hi(uint64_t phys)
+{
+    return (uint32_t)(phys >> 32);
 }
 
 static void ahci_mmio_w32(uint32_t offset, uint32_t value)
@@ -463,9 +502,9 @@ static int ahci_port_comreset(int port)
      * never updates and every port looks like a device that will not answer.
      * The command engine stays off: nothing is being issued here. */
     ahci_write32(ahci_port_off(port, AHCI_PxCLB), (uint32_t)virt_to_phys(ahci_reset_cmdlist));
-    ahci_write32(ahci_port_off(port, AHCI_PxCLBU), 0);
+    ahci_write32(ahci_port_off(port, AHCI_PxCLBU), ahci_hi(virt_to_phys(ahci_reset_cmdlist)));
     ahci_write32(ahci_port_off(port, AHCI_PxFB), (uint32_t)virt_to_phys(ahci_reset_fis));
-    ahci_write32(ahci_port_off(port, AHCI_PxFBU), 0);
+    ahci_write32(ahci_port_off(port, AHCI_PxFBU), ahci_hi(virt_to_phys(ahci_reset_fis)));
     pci_enable_bus_master(&ahci_pci);
 
     /* Bring the port's power state up before asking it for a link. Our own
@@ -771,11 +810,11 @@ static int ahci_port_start(struct ahci_disk *d)
         return -1;
     }
 
-    /* Program the command list and received-FIS bases (32-bit; upper = 0). */
+    /* Program the command list and received-FIS bases, both halves. */
     ahci_write32(ahci_port_off(port, AHCI_PxCLB), (uint32_t)virt_to_phys(d->cmdlist));
-    ahci_write32(ahci_port_off(port, AHCI_PxCLBU), 0);
+    ahci_write32(ahci_port_off(port, AHCI_PxCLBU), ahci_hi(virt_to_phys(d->cmdlist)));
     ahci_write32(ahci_port_off(port, AHCI_PxFB), (uint32_t)virt_to_phys(d->recv_fis));
-    ahci_write32(ahci_port_off(port, AHCI_PxFBU), 0);
+    ahci_write32(ahci_port_off(port, AHCI_PxFBU), ahci_hi(virt_to_phys(d->recv_fis)));
 
     /* Clear latched errors and interrupt status (write 1 to clear). */
     ahci_write32(ahci_port_off(port, AHCI_PxSERR), 0xFFFFFFFFu);
@@ -828,13 +867,61 @@ static int ahci_io_error(struct ahci_disk *d)
 }
 
 /**
+ * The address entry `n` of the table gives the controller for the `len`
+ * bytes at `va`, whose physical address is `*phys`: that address itself,
+ * or, on a controller without 64-bit addressing and for a piece that ends
+ * above 4 GiB, the address of the entry's page of the DMA pool, with a
+ * write's bytes copied into it. Returns 0, or -1 when no page could be had.
+ */
+static int ahci_piece(struct ahci_disk *d, uint32_t n, volatile uint8_t *va, uint32_t len,
+                      int write, uint64_t *phys)
+{
+    struct ahci_bounce *b = d->bounce;
+    uint32_t i;
+
+    if (ahci_dma64 || *phys + len <= AHCI_FOUR_GIB) {
+        if (b) {
+            b->to[n] = 0;
+        }
+        return 0;
+    }
+    if (!b || (!b->page[n] && !(b->page[n] = (uint8_t *)alloc_kernel_frame()))) {
+        return -1;
+    }
+    if (write) {
+        for (i = 0; i < len; i++) {
+            b->page[n][i] = va[i];
+        }
+    }
+    b->to[n] = write ? 0 : va;
+    b->len[n] = len;
+    *phys = virt_to_phys(b->page[n]);
+    return 0;
+}
+
+/** Copy a read's pieces back from the pages they moved through. */
+static void ahci_unbounce(struct ahci_disk *d)
+{
+    struct ahci_bounce *b = d->bounce;
+    uint32_t n, i;
+
+    for (n = 0; b && n < b->count; n++) {
+        for (i = 0; b->to[n] && i < b->len[n]; i++) {
+            b->to[n][i] = b->page[n][i];
+        }
+    }
+}
+
+/**
  * Build the command in `d`'s slot: the command-list header, a Register H2D
  * FIS, and the PRDT over the disk's DMA regions, synced for the HBA.
  *
  * A `buf` below HARD_MEMORY_LIMIT, which only i686's identity window has, is
  * physically contiguous and goes in one PRDT entry; any other is a buffer
  * whose pages may lie anywhere, and gets an entry per page with the page's
- * physical address, up to the AHCI_PRDT_MAX entries of the table.
+ * physical address, both halves, up to the AHCI_PRDT_MAX entries of the
+ * table, a piece above 4 GiB moving through the DMA pool on a controller
+ * without 64-bit addressing (`ahci_piece`).
  *
  * Returns 0, or -1 when the policy refuses the command or the table cannot
  * describe the buffer.
@@ -856,6 +943,9 @@ static int ahci_build_command(struct ahci_disk *d, uint8_t command, uint64_t lba
     }
 
     ahci_zero(d->cmdtable, AHCI_CMDTABLE_SIZE);
+    if (d->bounce) {
+        d->bounce->count = 0;
+    }
 
     fis->fis_type = AHCI_FIS_H2D;
     fis->pmport_c = AHCI_FIS_H2D_C;
@@ -886,22 +976,26 @@ static int ahci_build_command(struct ahci_disk *d, uint8_t command, uint64_t lba
 
         while (off < bytes) {
             uintptr_t va = (uintptr_t)buf + off;
-            uintptr_t phys = paging_virt_to_phys(va);
+            uint64_t phys = paging_virt_to_phys(va);
             uint32_t chunk = PAGE_SIZE - (uint32_t)(va & (PAGE_SIZE - 1));
 
             if (chunk > bytes - off) {
                 chunk = bytes - off;
             }
-            if (phys == 0 || n >= AHCI_PRDT_MAX) {
+            if (phys == 0 || n >= AHCI_PRDT_MAX ||
+                ahci_piece(d, n, (volatile uint8_t *)va, chunk, write, &phys) != 0) {
                 klog(KLOG_WARN, "ahci", "refused: a buffer the command table cannot describe");
                 return -1;
             }
             prdt[n].dba = (uint32_t)phys;
-            prdt[n].dbau = 0;
+            prdt[n].dbau = ahci_hi(phys);
             prdt[n].reserved = 0;
             prdt[n].dbc = (chunk - 1) & AHCI_DBC_MASK;
             n++;
             off += chunk;
+        }
+        if (d->bounce) {
+            d->bounce->count = n;
         }
         prdtl = n << 16;
     }
@@ -909,7 +1003,7 @@ static int ahci_build_command(struct ahci_disk *d, uint8_t command, uint64_t lba
     hdr->dw0 = AHCI_CFL_DWORDS | (write ? AHCI_CMD_W : 0u) | prdtl;
     hdr->prdbc = 0;
     hdr->ctba = (uint32_t)virt_to_phys(d->cmdtable);
-    hdr->ctbau = 0;
+    hdr->ctbau = ahci_hi(virt_to_phys(d->cmdtable));
 
     ahci_dma_sync(d->cmdtable, AHCI_CMDTABLE_SIZE);
     ahci_dma_sync(d->cmdlist, sizeof(ahci_cmd_header_t));
@@ -948,6 +1042,7 @@ static int ahci_judge(struct ahci_disk *d, uint32_t bytes, volatile uint8_t *buf
     }
     if (!write && bytes > 0) {
         ahci_dma_sync(buf, bytes); /* evict stale lines; CPU reads fresh */
+        ahci_unbounce(d);
     }
     return 0;
 }
@@ -1454,6 +1549,10 @@ int ahci_init(void)
         klog(KLOG_INFO, "ahci", "none: %s", ahci_err);
         return -1;
     }
+    ahci_dma64 = (ahci_read32(AHCI_CAP) & AHCI_CAP_S64A) != 0 && !kcmdline_has("rach2.dma32");
+    if (!ahci_dma64) {
+        klog(KLOG_INFO, "ahci", "32-bit addresses: a buffer above 4 GiB moves through the DMA pool");
+    }
     if (ahci_hba_own() != 0 || ahci_quiesce_ports() != 0 || ahci_select_port() != 0) {
         klog(KLOG_ERR, "ahci", "unusable: %s", ahci_err);
         /* The registers behind the refusal, into the log the machine hands
@@ -1469,6 +1568,13 @@ int ahci_init(void)
     for (i = 0; i < ahci_ndisks; i++) {
         struct ahci_disk *d = &ahci_disks[i];
 
+        if (!ahci_dma64 && !d->bounce) {
+            d->bounce = kzalloc(sizeof(*d->bounce));
+        }
+        if (!ahci_dma64 && !d->bounce) {
+            klog(KLOG_ERR, "ahci", "port %d: unusable: no memory for its bounce record", d->port);
+            continue;
+        }
         if (ahci_port_start(d) != 0 || ahci_identify(d) != 0) {
             klog(KLOG_ERR, "ahci", "port %d: unusable: %s", d->port, ahci_err);
             (void)ahci_port_stop(d->port);

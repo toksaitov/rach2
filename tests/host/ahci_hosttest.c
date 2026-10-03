@@ -476,6 +476,55 @@ struct disk *disk_register(block_device_t *dev, const char *transport, int locat
 #define HARD_MEMORY_LIMIT 0u
 #include "../../rach2/sys/block/ahci.c"
 
+/* The heap and the DMA pool, for a controller without 64-bit addressing:
+   the record of the pages a buffer above 4 GiB moves through, and those
+   pages, from an arena whose pages are counted out and back. A host buffer
+   lies above 4 GiB, as the identity of `paging_virt_to_phys` gives it, so
+   every piece of one moves through a page. */
+extern void *calloc(unsigned long count, unsigned long size);
+extern void free(void *p);
+
+#define POOL_PAGES 8
+static uint8_t pool[POOL_PAGES][4096] __attribute__((aligned(4096)));
+static int pool_taken[POOL_PAGES];
+static unsigned pool_out;
+
+void *kzalloc(size_t size)
+{
+    return calloc(1, size);
+}
+
+void kfree(void *p)
+{
+    free(p);
+}
+
+void *alloc_kernel_frame(void)
+{
+    int i;
+
+    for (i = 0; i < POOL_PAGES; i++) {
+        if (!pool_taken[i]) {
+            pool_taken[i] = 1;
+            pool_out++;
+            return pool[i];
+        }
+    }
+    return 0;
+}
+
+static int in_pool(const volatile void *p)
+{
+    int i;
+
+    for (i = 0; i < POOL_PAGES; i++) {
+        if ((const volatile uint8_t *)p == pool[i]) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *name)
 {
     (void)vector;
@@ -522,7 +571,7 @@ static void model_reset(void)
     for (i = 0; i < REGS; i++) {
         reg[i] = 0;
     }
-    reg[R_CAP] = 0x00000001u | (31u << 8); /* one port, 32 command slots */
+    reg[R_CAP] = 0x80000001u | (31u << 8); /* 64-bit, one port, 32 command slots */
     reg[R_PI] = 0x1u;                      /* port 0 implemented */
     reg[R_VS] = 0x10300u;
     reg[P0 + P_SSTS] = 0x123u;     /* DET 3, IPM 1, SPD 2: a live link */
@@ -545,6 +594,7 @@ static void model_reset(void)
     interrupts_masked = 0;
     reg[R_CAP2] = 0u; /* no handoff, unless a row asks for one */
     block0 = 0;
+    ahci_dma64 = 1;
     ahci_set_io(&model_io);
 }
 
@@ -710,6 +760,79 @@ static int polled_identify(unsigned after, int masked)
  * completes. A command that moves fewer bytes than asked is refused and
  * logged.
  */
+/*
+ * A controller without 64-bit addressing, CAP.S64A clear: a write's pieces
+ * above 4 GiB are copied into pages of the DMA pool and the table names
+ * those pages, each address's high half 0; a read's are copied back from
+ * them into the buffer after the command; the pages are taken once and
+ * kept, and a write of the same pieces again takes none. With the bit set
+ * the table names the buffer's own pages, both halves.
+ */
+static void dma32_rows(void)
+{
+    static uint8_t out[3 * 4096] __attribute__((aligned(4096)));
+    static uint8_t back[3 * 4096] __attribute__((aligned(4096)));
+    struct ahci_disk *d = &ahci_disks[0];
+    volatile ahci_prdt_t *prdt = (volatile ahci_prdt_t *)(d->cmdtable + AHCI_PRDT_OFFSET);
+    uint64_t at;
+    unsigned i, n, same;
+
+    model_reset();
+    CHECK("the port starts for the 32-bit rows",
+          ahci_select_port() == 0 && ahci_port_start(d) == 0);
+    moved_bytes = 2 * 4096;
+    CHECK("a 64-bit controller is given a read of a buffer above 4 GiB",
+          ahci_run_command(d, ATA_READ_DMA_EXT, 0, 16, out + 2048, 2 * 4096, 0) == 0);
+    at = ((uint64_t)prdt[1].dbau << 32) | prdt[1].dba;
+    CHECK("named by its own pages, both halves",
+          (uintptr_t)(out + 4096) > 0xFFFFFFFFu && at == (uintptr_t)(out + 4096) && pool_out == 0);
+
+    ahci_dma64 = 0;
+    d->bounce = kzalloc(sizeof(*d->bounce));
+    for (i = 0; i < sizeof(out); i++) {
+        out[i] = (uint8_t)(i * 13u + 5u);
+    }
+    CHECK("a 32-bit controller is given a write of a buffer above 4 GiB",
+          ahci_run_command(d, ATA_WRITE_DMA_EXT, 0, 16, out + 2048, 2 * 4096, 1) == 0);
+    CHECK("in three pieces, each through a page of the DMA pool",
+          (((ahci_cmd_header_t *)d->cmdlist)->dw0 >> 16) == 3 && pool_out == 3 &&
+              in_pool(d->bounce->page[0]) && in_pool(d->bounce->page[2]));
+    for (n = 0, same = 1; n < 3; n++) {
+        same &= prdt[n].dbau == 0 && prdt[n].dba == (uint32_t)(uintptr_t)d->bounce->page[n];
+    }
+    CHECK("the table names the pages, the high halves 0", same);
+    if (!d->bounce->page[0] || !d->bounce->page[1] || !d->bounce->page[2]) {
+        CHECK("the pages exist for the rows after", 0);
+        ahci_dma64 = 1;
+        return;
+    }
+    for (i = 0, same = 1; i < 2048; i++) {
+        same &= d->bounce->page[0][i] == out[2048 + i] &&
+                d->bounce->page[1][i] == out[4096 + i] && d->bounce->page[2][i] == out[8192 + i];
+    }
+    CHECK("holding the bytes written", same);
+
+    for (n = 0; n < 3; n++) {
+        for (i = 0; i < 4096; i++) {
+            d->bounce->page[n][i] = (uint8_t)(n * 31u + i * 3u);
+        }
+    }
+    for (i = 0; i < sizeof(back); i++) {
+        back[i] = 0;
+    }
+    CHECK("a read into a buffer above 4 GiB is given",
+          ahci_run_command(d, ATA_READ_DMA_EXT, 0, 16, back + 2048, 2 * 4096, 0) == 0);
+    for (i = 0, same = 1; i < 2048; i++) {
+        same &= back[2048 + i] == (uint8_t)(i * 3u) &&
+                back[4096 + i] == (uint8_t)(31u + i * 3u) &&
+                back[6144 + i] == (uint8_t)(31u + (i + 2048) * 3u) &&
+                back[8192 + i] == (uint8_t)(62u + i * 3u);
+    }
+    CHECK("and the bytes come back from the pages into it", same && back[2047] == 0);
+    CHECK("the pages taken once and kept", pool_out == 3);
+    ahci_dma64 = 1;
+}
+
 static void command_waits(void)
 {
     static uint8_t buf[512];
@@ -875,6 +998,7 @@ int main(void)
         }
 
         command_waits();
+        dma32_rows();
 
         model_reset();
         (void)ahci_select_port();
