@@ -1498,9 +1498,11 @@ $(INSTALLER_DISK): $(DEMO_CREDS) $(INSTALLER_EXT2) $(RECOVERY_IMAGE) tools/image
 	RACH2_DISK_RECOVERY_KERNEL=$(RECOVERY_KERNEL) \
 	RACH2_DISK_RECOVERY_IMAGE=$(RECOVERY_IMAGE) \
 	    sh tools/image/mkdisk_grub.sh build/rach2/kernel $@
-# The disk an installer of before milestone 57 wrote, for installer-repair's
-# conversion row: an MBR, with the 64 MiB boot partition at eight sectors to a
-# cluster that the sealed disk had then, which UEFI firmware does not read.
+# The disk an installer of before milestone 57 wrote: an MBR, with the 64 MiB
+# boot and recovery partitions at the notebook's offsets that the sealed disk
+# had then, the boot partition at eight sectors to a cluster, which UEFI
+# firmware does not read. installer-repair's conversion row updates it, and
+# `tests/run grow` takes its first 130 MiB for the notebook's fixture.
 INSTALLER_MBR_DISK = $(IMAGES_DIR)/installer-test-mbr.disk
 $(INSTALLER_MBR_DISK): $(DEMO_CREDS) $(INSTALLER_EXT2) $(RECOVERY_IMAGE) tools/image/mkdisk_grub.sh $(DISK_TOOLS) \
                        | rach2 rach2-recovery utils krffs
@@ -1508,7 +1510,7 @@ $(INSTALLER_MBR_DISK): $(DEMO_CREDS) $(INSTALLER_EXT2) $(RECOVERY_IMAGE) tools/i
 	RACH2_DISK_TABLE=mbr \
 	RACH2_DISK_BOOT_MB=64 \
 	RACH2_DISK_CLUSTER=8 \
-	RACH2_DISK_RECOVERY_MB=8 \
+	RACH2_DISK_RECOVERY_MB=64 \
 	RACH2_DISK_EXT2_MB=64 \
 	RACH2_DISK_EXT2_IMAGE=$(INSTALLER_EXT2) \
 	RACH2_DISK_RECOVERY_KERNEL=$(RECOVERY_KERNEL) \
@@ -1860,14 +1862,14 @@ run-large: rach2 tests krffs test-image $(MKMBR) $(HARNESS)
 GROW_DIR = $(IMAGES_DIR)/grow
 run-grow: $(DEMO_CREDS) rach2 tests krffs test-image $(MKMBR) $(GROWSET) $(HARNESS) \
           utils check-busybox check-dropbearmulti rach2-recovery $(RECOVERY_IMAGE) \
-          $(SEALED_DISK) $(INSTALL_TEST_STICK) $(MKEXFATFIXTURE)
+          $(INSTALLER_MBR_DISK) $(INSTALL_TEST_STICK) $(MKEXFATFIXTURE)
 	sh tests/system/grow_measure_test.sh
 	sh tests/system/machine_grow_check.sh
 	sh tests/system/machine_grow_boot.sh
 	sh tests/system/machine_grow_space_test.sh
 	sh tests/system/suites/grow.sh $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $(HARNESS) $(MKMBR) $(GROWSET) \
 	    $(GROW_DIR)
-	sh tests/system/grow_machine.sh $(HARNESS) $(RECOVERY_ISO) $(INSTALLER_DISK) $(SEALED_DISK) $(GROW_DIR)
+	sh tests/system/grow_machine.sh $(HARNESS) $(RECOVERY_ISO) $(INSTALLER_DISK) $(INSTALLER_MBR_DISK) $(GROW_DIR)
 # `tests/run queue`: the AHCI disks on their interrupts: a throttled disk
 # beside a fast one, and the fallback root's faults beside the queue.
 QUEUE_DIR = $(IMAGES_DIR)/queue
