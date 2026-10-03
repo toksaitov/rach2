@@ -10,9 +10,11 @@
  *
  *   1. rach2/guest.mk derives OBJS from the shared rach2/sources.mk lists
  *      the host build includes, object for object, loader.o first, no
- *      duplicates; the kernel.objs recipe writes $(OBJS) whole, and the
- *      link reads @kernel.objs plus the tcc runtime at the pinned text
- *      address.
+ *      duplicates, for each architecture; the kernel.objs recipe writes
+ *      $(OBJS) whole, and the link reads @kernel.objs plus the tcc runtime
+ *      with the architecture's flags: the pinned text address of i686, or
+ *      the x86-64 kernel's own linker script and 4 KiB segment alignment,
+ *      which its compile adds no SSE register to.
  *   2. utils/guest.mk's per-program source map equals the host
  *      utils/Makefile map, including the companion sources (pwauth.c,
  *      resolv.c) and the two -D builds (init-login, adduser-crash).
@@ -799,6 +801,64 @@ static int file_has_line(const char *path, const char *want)
     return found;
 }
 
+/* The flags the architecture's list gives the guest compile and link. The
+   i686 kernel links at its pinned text address. The x86-64 kernel links by
+   sys/arch/x86_64/link.ld, the script the host's link reads, with segments
+   congruent modulo 4 KiB as the host's -z max-page-size=0x1000 has them, and
+   compiles with -mno-sse, as the host does: a variadic function compiled by
+   tcc would otherwise save the SSE registers in its prologue, in a kernel
+   that keeps out of them. */
+static void check_arch_flags(const char *text)
+{
+    struct list cf = {NULL, 0, 0};
+    struct list ld = {NULL, 0, 0};
+    const char *suffix, *recipe_end;
+    char recipe[MAX_LINE];
+
+    if (!read_macro(text, "ARCH_TCC_CFLAGS", &cf))
+        fail("sys/arch/%s/sources.mk gives no ARCH_TCC_CFLAGS", guest_arch);
+    if (!read_macro(text, "ARCH_TCC_LDFLAGS", &ld) || ld.n == 0)
+        fail("sys/arch/%s/sources.mk gives no ARCH_TCC_LDFLAGS", guest_arch);
+    if (strcmp(guest_arch, "x86_64") == 0) {
+        char script[1200];
+        struct stat st;
+
+        snprintf(script, sizeof(script), "%s/rach2/sys/arch/x86_64/link.ld", repo);
+        if (!has(&ld, "-Wl,-T,sys/arch/x86_64/link.ld") || stat(script, &st) != 0)
+            fail("ARCH_TCC_LDFLAGS of x86_64 does not link by "
+                 "sys/arch/x86_64/link.ld, the host's linker script");
+        if (!has(&ld, "-Wl,-section-alignment=0x1000"))
+            fail("ARCH_TCC_LDFLAGS of x86_64 does not align segments to "
+                 "4 KiB, as the host's link does");
+        if (!has(&cf, "-mno-sse"))
+            fail("ARCH_TCC_CFLAGS of x86_64 does not keep the kernel out of "
+                 "the SSE registers, as the host's compile does");
+    } else if (strncmp(ld.item[0], "-Wl,-Ttext=", strlen("-Wl,-Ttext=")) != 0) {
+        fail("sys/arch/%s/sources.mk gives no ARCH_TCC_LDFLAGS with the "
+             "kernel's text address",
+             guest_arch);
+    }
+    /* The suffix rule, which rules_of passes over, and its one recipe line. */
+    suffix = strstr(text, "\n.c.o:\n\t");
+    recipe_end = suffix != NULL ? strchr(suffix + 8, '\n') : NULL;
+    recipe[0] = '\0';
+    if (recipe_end != NULL && (size_t)(recipe_end - (suffix + 8)) < sizeof(recipe)) {
+        memcpy(recipe, suffix + 8, (size_t)(recipe_end - (suffix + 8)));
+        recipe[recipe_end - (suffix + 8)] = '\0';
+    }
+    if (strstr(recipe, "$(KCFLAGS)") == NULL)
+        fail("rach2/guest.mk compiles a kernel source without $(KCFLAGS)");
+    {
+        struct list kc = {NULL, 0, 0};
+
+        if (!read_macro(text, "KCFLAGS", &kc) || !has(&kc, "$(ARCH_TCC_CFLAGS)"))
+            fail("rach2/guest.mk's KCFLAGS leaves out $(ARCH_TCC_CFLAGS)");
+        list_free(&kc);
+    }
+    list_free(&cf);
+    list_free(&ld);
+}
+
 static int check_kernel_lists(void)
 {
     struct list sources = {NULL, 0, 0};
@@ -877,16 +937,7 @@ static int check_kernel_lists(void)
         if (strstr(link, link_needs[i]) == NULL)
             fail("the kernel link line lacks %s", link_needs[i]);
 
-    {
-        struct list ld = {NULL, 0, 0};
-
-        if (!read_macro(text, "ARCH_TCC_LDFLAGS", &ld) || ld.n == 0 ||
-            strncmp(ld.item[0], "-Wl,-Ttext=", strlen("-Wl,-Ttext=")) != 0)
-            fail("sys/arch/%s/sources.mk gives no ARCH_TCC_LDFLAGS with the "
-                 "kernel's text address",
-                 guest_arch);
-        list_free(&ld);
-    }
+    check_arch_flags(text);
 
     count = sources.n;
     rules_free(&rules);
@@ -1500,20 +1551,24 @@ static void check_staging(void)
 
 int main(int argc, char **argv)
 {
-    int sources, programs, ish_objects, depth;
+    int sources, sources64, programs, ish_objects, depth;
 
     if (argc > 1) {
         snprintf(repo, sizeof(repo), "%s", argv[1]);
     } else if (getcwd(repo, sizeof(repo)) == NULL) {
         fail("cannot read the working directory");
     }
+    guest_arch = "i686";
     sources = check_kernel_lists();
+    depth = check_limits();
+    guest_arch = "x86_64";
+    sources64 = check_kernel_lists();
+    check_limits();
     programs = check_utils();
     ish_objects = check_ish();
-    depth = check_limits();
     check_staging();
-    printf("check-guest: ok: %d kernel sources, %d programs, %d ish "
-           "objects, include depth %d, three /src trees staged\n",
-           sources, programs, ish_objects, depth);
+    printf("check-guest: ok: %d i686 and %d x86_64 kernel sources, %d programs, "
+           "%d ish objects, include depth %d, three /src trees staged\n",
+           sources, sources64, programs, ish_objects, depth);
     return 0;
 }

@@ -14,16 +14,18 @@
 # shorter list that a retry would treat as current. OBJS keeps the
 # architecture's loader.o first: the multiboot header lives in it and the
 # linker keeps input order, so the header stays inside the first 8192 bytes of
-# the kernel where the loaders search for it, at the text address the
-# architecture's list gives (ARCH_TCC_LDFLAGS). /lib/tcc/libtcc1.a supplies the
-# 64-bit helper routines tcc calls where gcc emits the arithmetic inline;
-# -nostdlib keeps the C library and its startup files out of a kernel that must
-# not have them.
+# the kernel where the loaders search for it. The architecture's list gives
+# the flags of the compile and of the link (ARCH_TCC_CFLAGS, ARCH_TCC_LDFLAGS):
+# the i686 kernel's text address, or the x86-64 kernel's linker script.
+# /lib/tcc/libtcc1.a supplies the helper routines tcc calls where gcc emits the
+# code inline, the 64-bit arithmetic on i686 and va_arg on x86-64; -nostdlib
+# keeps the C library and its startup files out of a kernel that must not have
+# them.
 #
 # Run from a writable copy of this tree: make -f guest.mk
 
 KCC = /bin/cc
-KCFLAGS = -Wall -Wunsupported -nostdlib
+KCFLAGS = -Wall -Wunsupported -nostdlib $(ARCH_TCC_CFLAGS)
 
 # The machine's own architecture, whose directory under sys/arch/ sources.mk
 # takes the processor's files from.

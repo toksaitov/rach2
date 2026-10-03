@@ -4,9 +4,11 @@
 
 include sys/arch/x86/sources.mk
 
-# Where TinyCC's link puts the kernel's text on Rach2: 1 MiB plus the ELF
+# What TinyCC on Rach2 compiles the kernel with beyond guest.mk's flags,
+# nothing; and where its link puts the kernel's text: 1 MiB plus the ELF
 # and program headers, so that the multiboot header lies where GNU ld's
 # link puts it.
+ARCH_TCC_CFLAGS =
 ARCH_TCC_LDFLAGS = -Wl,-Ttext=0x100074
 
 ARCH_ASM_SRC = sys/arch/i686/loader.s \

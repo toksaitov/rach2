@@ -4,10 +4,12 @@
 
 include sys/arch/x86/sources.mk
 
-# Where TinyCC's link would put the kernel's text on Rach2: KVA_IMAGE plus
-# 1 MiB plus the ELF64 header and two program headers, as i686's puts its
-# own, so that the multiboot header lies where GNU ld's link puts it.
-ARCH_TCC_LDFLAGS = -Wl,-Ttext=0xFFFFFFFF801000B0
+# What TinyCC on Rach2 compiles and links the kernel with: no SSE register,
+# as GCC's -mno-sse has it, since a variadic function's prologue would save
+# them; and link.ld, the layout GNU ld's link has, with segments congruent
+# modulo 4 KiB, as its -z max-page-size=0x1000 has them.
+ARCH_TCC_CFLAGS = -mno-sse
+ARCH_TCC_LDFLAGS = -Wl,-T,sys/arch/x86_64/link.ld -Wl,-section-alignment=0x1000
 
 ARCH_ASM_SRC = sys/arch/x86_64/loader.s \
     sys/arch/x86_64/isr_handler.s \

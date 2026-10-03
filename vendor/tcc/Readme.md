@@ -99,7 +99,7 @@ On Rach2 the staged TinyCC builds the kernel of the machine (`tests/run selfbuil
 
 `rach2-builtin-offsetof.patch` defines `__builtin_offsetof`, the name GCC's `stddef.h` gives `offsetof` and the kernel's `sys/lib/kdef.h` uses, as the expression TinyCC's own `stddef.h` has.
 
-`rach2-va-list-trap.patch` makes the x86-64 runtime's `__va_arg` stop on an argument class it does not know with `__builtin_trap()`, where it called `abort()`, which a kernel does not have. The build then compiles `va_list.o` again with `-mno-sse -mno-red-zone`, since a kernel keeps out of the SSE registers and an interrupt overwrites the 128 bytes below its stack pointer; at `-O2` GCC copied `__va_start`'s struct through `%xmm0`.
+`rach2-va-list-trap.patch` makes the x86-64 runtime's `__va_arg` stop on an argument class it does not know with `__builtin_trap()`, where it called `abort()`, which a kernel does not have. The build then compiles `va_list.o` again with `-mno-sse -mno-red-zone`, since a kernel keeps out of the SSE registers and an interrupt overwrites the 128 bytes below its stack pointer; at `-O2` GCC copied `__va_start`'s struct through `%xmm0`. The kernel itself is compiled with `-mno-sse`, without which a variadic function saves the SSE registers in its prologue.
 
 ## Static link closure
 
