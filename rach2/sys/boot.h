@@ -14,7 +14,7 @@
 /* The most memory-map entries, modules, and bytes of a command line the
  * record keeps. A loader's map past BOOT_MMAP_MAX entries is cut there, and
  * the entry says so in the log. */
-#define BOOT_MMAP_MAX           128
+#define BOOT_MMAP_MAX           256
 #define BOOT_MODULE_MAX         8
 #define BOOT_CMDLINE_MAX        512
 #define BOOT_MODULE_CMDLINE_MAX 128

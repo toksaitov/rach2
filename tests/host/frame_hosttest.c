@@ -418,7 +418,11 @@ static void x86_64_past_reach(void)
 /* The UEFI-shaped map's groups: a run of memory the firmware lists as two
  * entries of two of its types, both usable, then a small region of
  * another type. */
-#define UEFI_GROUPS     40u
+/* The runs that, with the map's eight other entries, fill the record's
+ * BOOT_MMAP_MAX, three entries each, and the entries left over, which the
+ * last range above 4 GiB takes as adjacent pieces. */
+#define UEFI_GROUPS     ((BOOT_MMAP_MAX - 8u) / 3u)
+#define UEFI_PIECES     ((BOOT_MMAP_MAX - 8u) % 3u)
 #define UEFI_GROUP_SPAN (MIB(16) + KIB(64))
 
 static uint64_t uefi_group(uint32_t k)
@@ -429,9 +433,10 @@ static uint64_t uefi_group(uint32_t k)
 /**
  * A map shaped as a UEFI firmware gives one, through GRUB's conversion of
  * its types, with the record's whole BOOT_MMAP_MAX entries: the first
- * 640 KiB, then forty runs of 16 MiB each listed as two usable entries and
- * closed by 64 KiB of runtime, ACPI or NVS memory, the platform's ranges
- * below 4 GiB, and 12 GiB above it with a hole. With x86-64's reach all of
+ * 640 KiB, then UEFI_GROUPS runs of 16 MiB each listed as two usable
+ * entries and closed by 64 KiB of runtime, ACPI or NVS memory, the
+ * platform's ranges below 4 GiB, and 12 GiB above it with a hole, its last
+ * range in as many adjacent pieces as fill the record. With x86-64's reach all of
  * it is usable; with i686's the 12 GiB less the hole is unreachable. The
  * boot's reservations on it, the kernel, eight modules each inside a run
  * and the break, and the frame table at the top, all fit the ranges the
@@ -460,7 +465,11 @@ static void uefi(void)
     n += put_entry(map, n, 0xFFC00000ULL, MIB(4), MAP_RESERVED);
     n += put_entry(map, n, 0x100000000ULL, MIB(8 * 1024), MAP_USABLE);
     n += put_entry(map, n, 0x300000000ULL, MIB(2), MAP_RESERVED);
-    n += put_entry(map, n, 0x300000000ULL + MIB(2), MIB(4 * 1024) - MIB(2), MAP_USABLE);
+    for (k = 0; k < UEFI_PIECES; k++) {
+        n += put_entry(map, n, 0x300000000ULL + MIB(2) + k * MIB(1), MIB(1), MAP_USABLE);
+    }
+    n += put_entry(map, n, 0x300000000ULL + MIB(2) + UEFI_PIECES * MIB(1),
+                   MIB(4 * 1024) - MIB(2) - UEFI_PIECES * MIB(1), MAP_USABLE);
     CHECK(n == BOOT_MMAP_MAX * BOOT_MMAP_ENTRY);
 
     CHECK(frame_map_build(&m, map, n, 0, REACH_I686) == 0);
@@ -534,7 +543,8 @@ static void place(void)
     n += put_entry(map, n, 0x100000000ULL, MIB(1) + 0x800, MAP_USABLE);
     CHECK(frame_map_build(&m, map, n, 0, REACH_X86_64) == 0);
     CHECK(frame_map_place(&m, KIB(1024), MIB(32), &at) == 0 && at == 0x100000000ULL);
-    CHECK(frame_map_place(&m, KIB(1024) + 1, MIB(32), &at) == 0 && at == MIB(192) - MIB(1) - KIB(4));
+    CHECK(frame_map_place(&m, KIB(1024) + 1, MIB(32), &at) == 0 &&
+          at == MIB(192) - MIB(1) - KIB(4));
     CHECK(frame_map_place(&m, MIB(64), MIB(32), &at) == 0 && at == MIB(128));
     CHECK(frame_map_place(&m, MIB(32), MIB(160), &at) == 0 && at == MIB(160));
     CHECK(frame_map_place(&m, MIB(64) + 1, MIB(32), &at) == -1);
