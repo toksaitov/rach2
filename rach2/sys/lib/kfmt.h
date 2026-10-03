@@ -24,13 +24,14 @@ typedef void (*putc_fn_t)(char);
  * `putc_fn`.
  *
  * Supported conversions are `%d` (signed decimal), `%b`, `%o`, `%x`, `%X`
- * (binary, octal, lower- and upper-case hex), `%s` (a string, with a NULL
- * pointer rendered as `(null)`), `%c` (a character), and `%%` (a literal
- * percent). The numeric conversions and `%s` take an optional `0` flag and a
- * single-digit width. An unknown conversion writes its letter alone, without
- * the `%`, flag or width, and consumes no argument. `ap` is consumed left to
- * right; each consumed slot is one stack word, which is why integers and
- * characters are read as `int`.
+ * (binary, octal, lower- and upper-case hex), `%p` (a pointer), `%s` (a
+ * string, with a NULL pointer rendered as `(null)`), `%c` (a character), and
+ * `%%` (a literal percent). The numeric conversions and `%s` take an optional
+ * `0` flag and a single-digit width, and a numeric conversion an `l` or `z`
+ * for a long or a `size_t`. An unknown conversion writes its letter alone,
+ * without the `%`, flag or width, and consumes no argument. `ap` is consumed
+ * left to right, an int, a long or a pointer for each conversion as its
+ * letter and length say.
  */
 void k_vprintf(putc_fn_t putc_fn, const char *format, va_list ap);
 

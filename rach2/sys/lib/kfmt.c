@@ -6,14 +6,18 @@
  * `putc_fn`.
  *
  * Supported conversions are `%d` (signed decimal), `%b`, `%o`, `%x`, `%X`
- * (binary, octal, lower- and upper-case hex), `%s` (a string, with a NULL
+ * (binary, octal, lower- and upper-case hex), `%p` (a pointer, as `0x` and
+ * its hex digits at the pointer's full width), `%s` (a string, with a NULL
  * pointer rendered as `(null)`), `%c` (a character), and `%%` (a literal
  * percent). The numeric conversions and `%s` take an optional `0` flag and
  * an optional single-digit width between the percent and the letter, and are
  * padded on the left to that width, so `%02x` writes a byte as two hex
- * digits. The padding is done here and not in `k_itoa`, so numbers and
- * strings share one rule. `ap` is consumed left to right; a character is
- * read as `int`, which is what the call passed.
+ * digits. The padding is done here and not in `k_ltoa`, so numbers and
+ * strings share one rule. A numeric conversion takes an `l` before its
+ * letter for a long or an unsigned long, and a `z` for a `size_t` or a
+ * `ssize_t`, which are as wide as a long; without one it reads an int. `ap`
+ * is consumed left to right; a character is read as `int`, which is what
+ * the call passed.
  *
  * An unknown conversion writes its letter alone, without the `%`, flag or
  * width, and consumes nothing, so every argument after it in the same call
@@ -34,6 +38,7 @@ void k_vprintf(putc_fn_t putc_fn, const char *format, va_list ap)
         if (c == '%') {
             char fill = ' ';
             int width = 0;
+            int wide = 0;
 
             c = *(format++);
             if (c == '0') {
@@ -44,19 +49,44 @@ void k_vprintf(putc_fn_t putc_fn, const char *format, va_list ap)
                 width = c - '0';
                 c = *(format++);
             }
+            if (c == 'l' || c == 'z') {
+                wide = 1;
+                c = *(format++);
+            }
 
             switch (c) {
             case 'd':
-                k_itoa(va_arg(ap, unsigned int), buffer, _K_PRINTF_BUFFER_SIZE_, c, false);
+                if (wide) {
+                    k_ltoa(va_arg(ap, long), buffer, _K_PRINTF_BUFFER_SIZE_, c, false);
+                } else {
+                    k_itoa(va_arg(ap, int), buffer, _K_PRINTF_BUFFER_SIZE_, c, false);
+                }
                 str = buffer;
                 goto string;
             case 'b':
             case 'o':
             case 'x':
             case 'X':
-                k_itoa(va_arg(ap, int), buffer, _K_PRINTF_BUFFER_SIZE_, c, false);
+                if (wide) {
+                    k_ltoa((long)va_arg(ap, unsigned long), buffer, _K_PRINTF_BUFFER_SIZE_, c,
+                           false);
+                } else {
+                    k_itoa((int)va_arg(ap, unsigned int), buffer, _K_PRINTF_BUFFER_SIZE_, c,
+                           false);
+                }
                 str = buffer;
                 goto string;
+            case 'p': {
+                unsigned long v = (unsigned long)va_arg(ap, void *);
+                int digits = (int)sizeof(void *) * 2;
+
+                putc_fn('0');
+                putc_fn('x');
+                while (digits-- > 0) {
+                    putc_fn("0123456789abcdef"[(v >> (4 * digits)) & 0xFu]);
+                }
+                break;
+            }
 
             case 's':
                 str = va_arg(ap, const char *);
