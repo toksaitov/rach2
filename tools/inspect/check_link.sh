@@ -28,13 +28,16 @@
 # `alloca86-bt.o` is the bounds-checking alloca and wants the `bcheck.o`
 # this build leaves out, and a link without `-b` never asks for it.
 #
-# Usage: check_link.sh LIB_OR_OBJECT...
+# The symbols are read with CHECK_LINK_NM, the cross nm of the architecture
+# the files are for, i686-elf-nm when it is not set.
+#
+# Usage: [CHECK_LINK_NM=x86_64-elf-nm] check_link.sh LIB_OR_OBJECT...
 # Exits non-zero if anything would be left undefined.
 #
 
 set -eu
 
-NM=i686-elf-nm
+NM="${CHECK_LINK_NM:-i686-elf-nm}"
 
 if [ $# -eq 0 ]; then
     echo "usage: check_link.sh LIB_OR_OBJECT..." >&2
