@@ -99,9 +99,6 @@ void mmio_write32(uintptr_t a, uint32_t v);
  * entry tells apart; the data abort above is never one. */
 #define FAULT_EXEC(p)     ((void)(p), 0)
 
-/* A floating-point save area: VFPv3's 32 doubleword registers and FPSCR. */
-#define FPU_STATE_SIZE 264
-
 #define USER_ADDR_MIN 0x00010000UL
 #define USER_ADDR_MAX 0xC0000000UL
 

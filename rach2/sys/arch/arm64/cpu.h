@@ -97,9 +97,6 @@ void mmio_write32(uintptr_t a, uint32_t v);
 /* An instruction abort from EL0, ESR_EL1's class 0x20. */
 #define FAULT_EXEC(p)     (((p)->error_code >> 26) == 0x20u)
 
-/* A floating-point save area: the 32 128-bit registers, FPSR and FPCR. */
-#define FPU_STATE_SIZE 528
-
 #define USER_ADDR_MIN 0x0000000000010000UL
 #define USER_ADDR_MAX 0x0001000000000000UL
 

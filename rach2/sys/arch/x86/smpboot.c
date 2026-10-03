@@ -7,6 +7,7 @@
 
 #include "acpi.h"
 #include "apictimer.h"
+#include "fpu.h"
 #include "kcpu.h"
 #include "lapic.h"
 
@@ -55,17 +56,13 @@ static uint32_t cpu_apic[NR_CPUS];
 static int trampoline_free;
 
 /* What the processor being started takes from the boot one: the shared
- * entry, its stack, and XCR0 where CR4 has OSXSAVE. One processor starts
- * at a time, so one copy serves each in turn. */
+ * entry and its stack. One processor starts at a time, so one copy serves
+ * each in turn. */
 static void (*ap_main)(int cpu);
 static uintptr_t ap_stack;
-static int ap_xsave;
-static uint32_t ap_xcr0_lo;
-static uint32_t ap_xcr0_hi;
 static volatile int ap_alive;
 
 #define MSR_EFER       0xC0000080u
-#define CR4_OSXSAVE    0x00040000u
 #define MMAP_AVAILABLE 1u
 
 /**
@@ -114,17 +111,6 @@ static uintptr_t read_cr4(void)
 
     __asm__ __volatile__("mov %%cr4, %0" : "=r"(v));
     return v;
-}
-
-/* `xgetbv` and `xsetbv` as bytes: the staged TinyCC's assembler has neither. */
-static void read_xcr0(uint32_t *lo, uint32_t *hi)
-{
-    __asm__ __volatile__(".byte 0x0f, 0x01, 0xd0" : "=a"(*lo), "=d"(*hi) : "c"(0));
-}
-
-static void write_xcr0(uint32_t lo, uint32_t hi)
-{
-    __asm__ __volatile__(".byte 0x0f, 0x01, 0xd1" : : "a"(lo), "d"(hi), "c"(0));
 }
 
 /**
@@ -207,8 +193,8 @@ int platform_cpu_count(int limit)
  * messages 200 microseconds apart, as the MultiProcessor Specification
  * gives the sequence; a processor already running ignores the second. The
  * trampoline and its mailbox are copied afresh for each processor, which
- * starts with the boot processor's CR0, CR4 and EFER, and its XCR0 once it
- * runs C. A processor that does not reach its entry in time is sent INIT
+ * starts with the boot processor's CR0, CR4 and EFER. A processor that does
+ * not reach its entry in time is sent INIT
  * again, which holds it, so that it cannot start late on a mailbox meant
  * for the next.
  */
@@ -235,10 +221,6 @@ int platform_cpu_start(int cpu, uintptr_t stack_top, void (*entry)(int cpu))
     mb->stack = stack_top;
     mb->entry = (uintptr_t)x86_ap_entry;
 
-    ap_xsave = (mb->cr4 & CR4_OSXSAVE) != 0;
-    if (ap_xsave) {
-        read_xcr0(&ap_xcr0_lo, &ap_xcr0_hi);
-    }
     ap_main = entry;
     ap_stack = stack_top;
     ap_alive = 0;
@@ -262,8 +244,9 @@ int platform_cpu_start(int cpu, uintptr_t stack_top, void (*entry)(int cpu))
 
 /**
  * The started processor's first C, from the trampoline, with interrupts
- * off and the boot processor waiting for `ap_alive`: its own tables, its
- * XCR0, its APIC with the MADT's NMI inputs and the boot processor's tick,
+ * off and the boot processor waiting for `ap_alive`: its own tables, the
+ * floating-point format the boot processor chose (`fpu_cpu_setup`), its
+ * APIC with the MADT's NMI inputs and the boot processor's tick,
  * and then the shared start (`smp_cpu_main`), which does not return. The
  * first tick waits for the interrupts the idle loop allows. Nothing here
  * logs, since the big lock is not yet this processor's.
@@ -271,9 +254,7 @@ int platform_cpu_start(int cpu, uintptr_t stack_top, void (*entry)(int cpu))
 void x86_ap_entry(int cpu)
 {
     arch_ap_tables(cpu, ap_stack);
-    if (ap_xsave) {
-        write_xcr0(ap_xcr0_lo, ap_xcr0_hi);
-    }
+    fpu_cpu_setup();
     lapic_init_ap();
     apic_lint_init(acpi_get());
     apic_timer_start(x86_tick_counts(), platform_timer_hz());
