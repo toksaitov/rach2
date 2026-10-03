@@ -275,7 +275,7 @@ The kernel currently supports:
 * VGA text mode, a text console on the loader's framebuffer, and Mode 13h graphics.
 * PS/2 keyboard and mouse input, and USB keyboards, mice and flash drives through xHCI, on a root port or behind a hub.
 * COM1 serial input and output.
-* Polled ATA PIO on both channels and both drives with LBA28 and LBA48; AHCI disks; and NVMe namespaces on an admin queue and one I/O queue pair, with MSI-X or MSI. AHCI and NVMe take interrupt-driven request queues and keep a polled path for boot and page faults. Disks carry MBR or GUID partition tables.
+* Polled ATA PIO on both channels and both drives with LBA28 and LBA48; AHCI disks; and NVMe namespaces on an admin queue and one I/O queue pair, with MSI-X or MSI; the i686 kernel cannot use a controller whose 64-bit BAR the firmware placed above 4 GiB, as OVMF places it. AHCI and NVMe take interrupt-driven request queues and keep a polled path for boot and page faults. Disks carry MBR or GUID partition tables.
 * RTL8139, Intel 82540EM (e1000), and RTL8168GU Ethernet devices.
 * Sound Blaster 16, Intel HDA, and the PC speaker.
 

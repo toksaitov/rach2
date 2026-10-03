@@ -67,7 +67,10 @@ the namespace identifier.
 .It Ql nvme: N: unusable: reason
 The controller does not become ready, reports a fatal status, lacks the
 NVM command set, has no page size of 4 KiB, does not answer or refuses an
-admin command, or has registers the kernel cannot map.
+admin command, or has registers the kernel cannot map: on i686, whose
+kernel reaches no physical address past 4 GiB, a controller whose 64-bit
+BAR the firmware placed above it, as OVMF places it, is
+.Ql BAR0 lies above the addresses this kernel maps .
 It is left disabled and the boot goes on.
 .It Ql nvme: N: namespace M: refused: reason
 The namespace has blocks of another size than 512 bytes, 4096 among

@@ -38,16 +38,19 @@
 # 6. An install onto a 4 TiB NVMe disk, past the 2 TiB an MBR addresses. The
 #    stick boots by OVMF beside the disk, `rach2-install` is answered over
 #    SSH and grows the root into the whole disk, and the disk then boots by
-#    OVMF alone, the first account logs in with the demonstration key the
-#    install took as its authorized key, and `df` finds the root on the NVMe
-#    disk and larger than 2 TiB. The disk is a sparse file, and QEMU turns
+#    OVMF alone; on i686 both boots are by SeaBIOS, since OVMF gives the
+#    controller's 64-bit BAR an address above 4 GiB, which the i686 kernel
+#    does not reach, and SeaBIOS one below it. Then the first account logs
+#    in with the demonstration key the install took as its authorized key,
+#    and `df` finds the root on the NVMe disk and larger than 2 TiB. The disk is a sparse file, and QEMU turns
 #    the zeroed blocks the grow writes, its new groups' inode tables, back
 #    into holes.
 # 7. A GPT disk whose primary header does not check, which GRUB's BIOS core
-#    cannot boot: it reads no backup table. The stick boots by OVMF beside
-#    it, and its recovery system must name the disk as read from its backup;
-#    `diskctl relocate` writes the primary again, and the disk then boots by
-#    SeaBIOS.
+#    cannot boot: it reads no backup table. The stick boots by SeaBIOS beside
+#    it, since OVMF, as EDK2's firmware does, writes such a primary again from
+#    the backup when it reads the disk; the recovery system must name the
+#    disk as read from its backup, `diskctl relocate` writes the primary
+#    again, and the disk then boots by SeaBIOS.
 #
 # In the first boot the kernel's console is on the firmware's framebuffer,
 # and the screen QEMU dumps through its monitor, once the login prompt is
@@ -444,7 +447,9 @@ printf '%s\n' "/dev/disk$n" uefi-big uefi-big owner owner-big owner-big \
 echo "INSTALL STATUS $?"
 GUEST
 LOG7="$DIR/big-install.log"
-boot_uefi "$LOG7" -device qemu-xhci,id=xhci \
+BIG_BOOT=boot_uefi
+[ "$ARCH" = x86_64 ] || BIG_BOOT=boot_bios
+"$BIG_BOOT" "$LOG7" -device qemu-xhci,id=xhci \
     -drive "if=none,id=stick,format=raw,file=$DIR/big-stick.img" \
     -device usb-storage,bus=xhci.0,drive=stick,bootindex=0 \
     -drive "$BIG_DRIVE" -device nvme,drive=big,serial=rach2big
@@ -474,9 +479,11 @@ else
 fi
 stop_machine
 LOG8="$DIR/big.log"
-boot_uefi "$LOG8" -drive "$BIG_DRIVE" -device nvme,drive=big,serial=rach2big
+"$BIG_BOOT" "$LOG8" -drive "$BIG_DRIVE" -device nvme,drive=big,serial=rach2big
 if "$RUNUTIL" until "$LOG8" "rach2 login:" 240; then
-    if booted_by_uefi "$LOG8" "NVMe"; then
+    if [ "$BIG_BOOT" = boot_bios ]; then
+        note "SeaBIOS boots the NVMe disk through its BIOS core: OK"
+    elif booted_by_uefi "$LOG8" "NVMe"; then
         note "the firmware boots the NVMe disk from its EFI system partition: OK"
     else
         bad "the firmware did not say it booted the NVMe disk"
@@ -490,7 +497,7 @@ if "$RUNUTIL" until "$LOG8" "rach2 login:" 240; then
     fi
     note "the disk's file holds $(du -k "$BIG" | cut -f1) KiB on the host"
 else
-    bad "the 4 TiB disk never reached a login by UEFI; see $LOG8"
+    bad "the 4 TiB disk never reached a login; see $LOG8"
 fi
 stop_machine
 rm -f "$BIG"
@@ -502,7 +509,7 @@ cp "$DISK" "$DAMAGED"
 printf 'RACH' | dd of="$DAMAGED" bs=1 seek=528 conv=notrunc 2>/dev/null
 cp "$STICK" "$DIR/damaged-stick.img"
 LOG9="$DIR/damaged.log"
-boot_uefi "$LOG9" -device qemu-xhci,id=xhci \
+boot_bios "$LOG9" -device qemu-xhci,id=xhci \
     -drive "if=none,id=stick,format=raw,file=$DIR/damaged-stick.img" \
     -device usb-storage,bus=xhci.0,drive=stick,bootindex=0 \
     -drive "file=$DAMAGED,format=raw,if=ide,index=0,media=disk"
