@@ -268,8 +268,9 @@ changes = {
     "log-seek-past-signed": ("    if (rc == -EOVERFLOW || (rc == 0 && (at < 0 || at > (long long)0xFFFFFFFFu))) {\n",
                              "    if (rc == 0 && (at < 0 || at > (long long)0xFFFFFFFFu)) {\n"),
     "mapping-left-unlocked": [
-        ("    struct vfs_mount *locked = m->entry.ofd ? fd_release_lock(&m->entry) : NULL;\n",
-         "    struct vfs_mount *locked;\n"),
+        ("    locked = m->entry.ofd ? fd_release_lock(&m->entry) : NULL;\n"
+         "    while (*link && *link != m) {\n",
+         "    while (*link && *link != m) {\n"),
         ("    if (*link) {\n        *link = m->next;\n    }\n    if (m->sh) {\n",
          "    if (*link) {\n        *link = m->next;\n    }\n"
          "    locked = m->entry.ofd ? fd_release_lock(&m->entry) : NULL;\n    if (m->sh) {\n"),

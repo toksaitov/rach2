@@ -5,7 +5,7 @@
 # `kstack_alloc`, `kstack_free` and `kstack_overrun_pid` are extracted
 # unchanged from a private copy of rach2/sys/syscall_proc.c, with
 # KERNEL_STACK_SIZE from the same file and PAGE_SIZE from
-# rach2/sys/mm/paging.h, and compiled under ASan and UBSan in
+# rach2/sys/arch/i686/cpu.h, and compiled under ASan and UBSan in
 # tests/host/fixtures/kstack.c, whose heap hands out pages full of code
 # bytes.
 #
@@ -28,7 +28,7 @@ mkdir -p build/tests
 work=$(mktemp -d "$repo/build/tests/kstack-proof.XXXXXX")
 child=
 cp rach2/sys/syscall_proc.c "$work/syscall_proc.c"
-cp rach2/sys/mm/paging.h "$work/paging.h"
+cp rach2/sys/arch/i686/cpu.h "$work/cpu.h"
 cp "$work/syscall_proc.c" "$work/syscall_proc.saved"
 
 restore()
@@ -89,8 +89,8 @@ def function(text, name):
 
 
 source = (work / 'syscall_proc.c').read_text()
-paging = (work / 'paging.h').read_text()
-parts = [define(source, 'KERNEL_STACK_SIZE'), define(paging, 'PAGE_SIZE'),
+cpu = (work / 'cpu.h').read_text()
+parts = [define(source, 'KERNEL_STACK_SIZE'), define(cpu, 'PAGE_SIZE'),
          function(source, 'kstack_alloc'), function(source, 'kstack_free'),
          function(source, 'kstack_overrun_pid')]
 (work / 'kstack.inc').write_text('\n\n'.join(parts) + '\n')
@@ -131,7 +131,7 @@ changes = {
     'unguarded': ('static uintptr_t kstack_alloc(void)\n{',
                   '    void *base = kalloc_guarded(KERNEL_STACK_SIZE / PAGE_SIZE);\n',
                   '    void *base = kalloc_pages(KERNEL_STACK_SIZE / PAGE_SIZE, NULL);\n'),
-    'guard-in-stack': ('int kstack_overrun_pid(uint32_t addr)\n{',
+    'guard-in-stack': ('int kstack_overrun_pid(uintptr_t addr)\n{',
                        '    guard = current_proc->kernel_stack - KERNEL_STACK_SIZE - PAGE_SIZE;\n',
                        '    guard = current_proc->kernel_stack - KERNEL_STACK_SIZE;\n'),
     'boot-freed': ('static void kstack_free(uintptr_t top)\n{',

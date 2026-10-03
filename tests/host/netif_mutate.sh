@@ -72,8 +72,8 @@ changes = {
                      "int ifindex = NETDEV_IFINDEX;"),
     "packet-mac": ("struct netdev *nd = netdev_at(ifindex - 1);",
                    "struct netdev *nd = netdev_first();"),
-    "tcp-address": ("entry->sock->tcb ? entry->sock->tcb->local_ip : net_ip_addr",
-                    "net_ip_addr"),
+    "tcp-address": ("        local_ip = entry->sock->tcb->local_ip;\n",
+                    "        local_ip = net_ip_addr;\n"),
     "accept": ("if (listen_sock->type != SOCK_STREAM || !listen_sock->listening) {",
                "if (0) {"),
     "socket-check": ("    if (flags & ~(uint32_t)(SOCK_CLOEXEC | SOCK_NONBLOCK)) {\n"

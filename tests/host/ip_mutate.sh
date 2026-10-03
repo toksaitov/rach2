@@ -73,16 +73,16 @@ import pathlib
 import sys
 
 changes = {
-    "log-per-drop": ("            if (!loop_drop_logged) {\n"
-                     "                loop_drop_logged = 1;\n",
-                     "            {\n"
-                     "                loop_drop_logged = 1;\n"),
-    "silent-drop": ("further drops are counted\");\n            }\n            return -ENOBUFS;",
-                    "further drops are counted\");\n            }\n            return 0;"),
-    "uncounted": ("            loop_dropped++;\n", ""),
-    "overwrite": ("            loop_dropped++;\n",
-                  "            k_memcpy(loop_ring[loop_tail % LOOP_RING_SLOTS], ip_tx_buf, total_len);\n"
-                  "            loop_dropped++;\n"),
+    "log-per-drop": ("        if (!loop_drop_logged) {\n"
+                     "            loop_drop_logged = 1;\n",
+                     "        {\n"
+                     "            loop_drop_logged = 1;\n"),
+    "silent-drop": ("further drops are counted\");\n        }\n        return -ENOBUFS;",
+                    "further drops are counted\");\n        }\n        return 0;"),
+    "uncounted": ("        loop_dropped++;\n", ""),
+    "overwrite": ("        loop_dropped++;\n",
+                  "        k_memcpy(loop_ring[loop_tail % LOOP_RING_SLOTS], ip_tx_buf, total_len);\n"
+                  "        loop_dropped++;\n"),
     "first-card": ("out = ip_broadcast_iface(dst_ip);", "out = netdev_first();"),
     "limited-scan": ("    if (dst == 0xFFFFFFFFu) {\n        return netdev_first();",
                      "    if (0) {\n        return netdev_first();"),

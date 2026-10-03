@@ -33,7 +33,7 @@
 /* The two fields of the kernel's process record the extracted code reads. */
 typedef struct process {
     uint32_t pid;
-    uint32_t kernel_stack;
+    uintptr_t kernel_stack;
 } process_t;
 
 process_t *current_proc;
@@ -49,7 +49,7 @@ void kfree_pages(void *pages, uint32_t count);
 void *kalloc_guarded(uint32_t count);
 void kfree_guarded(void *pages, uint32_t count);
 void *k_memset(void *dst, int c, size_t n);
-int kstack_overrun_pid(uint32_t addr);
+int kstack_overrun_pid(uintptr_t addr);
 
 #include "kstack.inc"
 
