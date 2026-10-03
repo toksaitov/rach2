@@ -9,8 +9,11 @@
  * reaches it with. The test asserts a partition forwards an in-range request
  * with its base added, rejects an out-of-range or zero-length request
  * without touching the backing, and clamps a partition that starts or runs
- * past the backing to an empty or truncated view. Returns the failed-check
- * count (0 == pass).
+ * past the backing to an empty or truncated view. `block_physical` reaches
+ * the backing through a view and through a view of a view, and stops at a
+ * device whose `drvdata` points at a record that begins with it, as a loop
+ * device's does, which is no view and was once read as one. Returns the
+ * failed-check count (0 == pass).
  */
 
 /* The stubs block_probe links against; this test drives only the partition
@@ -171,6 +174,29 @@ int main(void)
     /* A partition whose length overruns the device clamps to the remainder. */
     block_partition_init(&part, &backing, 900u, 500u);
     CHECK(part.device.sector_count == 100u);
+
+    /* The disk under a view, and under a view of a view, is the backing; a
+       device that wraps nothing is its own. A record that begins with its
+       device and is the device's `drvdata`, as a loop device's is, is no
+       view, whatever its next word holds. */
+    {
+        block_partition_t inner;
+        static struct {
+            block_device_t dev;
+            int used;
+            int attaching;
+        } loop;
+
+        block_partition_init(&part, &backing, 100u, 200u);
+        block_partition_init(&inner, &part.device, 10u, 20u);
+        CHECK(block_physical(&part.device) == &backing);
+        CHECK(block_physical(&inner.device) == &backing);
+        CHECK(block_physical(&backing) == &backing);
+        loop.dev.drvdata = &loop;
+        loop.used = 1;
+        loop.attaching = 0;
+        CHECK(block_physical(&loop.dev) == &loop.dev);
+    }
 
     return (fails > 100) ? 100 : fails;
 }
