@@ -153,6 +153,13 @@ static void fill_sigcontext(struct lx_sigcontext *sc, const isr_params_t *tf, ui
     sc->cr2 = current_proc->trap_addr;
 }
 
+uintptr_t sigframe_stack_bytes(void)
+{
+    uintptr_t rt = sizeof(struct lx_rt_sigframe), plain = sizeof(struct lx_sigframe);
+
+    return fpu_frame_bytes() + (rt > plain ? rt : plain) + FRAME_ALIGN - 1u;
+}
+
 int sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *sa,
                    const struct k_siginfo *info, uint64_t oldmask)
 {

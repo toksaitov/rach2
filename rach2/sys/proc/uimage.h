@@ -8,7 +8,7 @@
 struct page_dir;
 
 /* The auxiliary vector's entries, AT_NULL included. */
-#define UIMAGE_AUXV 15u
+#define UIMAGE_AUXV 16u
 
 /* Linux's limits on what execve carries (fs/exec.c): one string, its NUL
  * included, is at most 32 pages; the strings with their pointers take a

@@ -323,6 +323,12 @@ A process on its alternate stack cannot change it, and a stack smaller
 than
 .Dv MINSIGSTKSZ ,
 2048 bytes, is refused.
+A frame needs the stack the initial stack's
+.Dv AT_MINSIGSTKSZ
+gives, which a processor's XSAVE state can make larger than that; a
+signal whose frame does not fit the alternate stack ends the process with
+.Dv SIGSEGV ,
+as on Linux.
 .Dv SS_AUTODISARM
 is accepted and has no effect.
 A child made by

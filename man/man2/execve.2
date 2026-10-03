@@ -55,23 +55,29 @@ the distance the interpreter was moved by, 0 without one,
 .Dv AT_GID ,
 .Dv AT_EGID ,
 .Dv AT_SECURE ,
-.Dv AT_RANDOM
-and
+.Dv AT_RANDOM ,
 .Dv AT_EXECFN ,
-the address of the path as the caller passed it.
+the address of the path as the caller passed it, and
+.Dv AT_MINSIGSTKSZ ,
+the least alternate signal stack a frame fits on this processor, whose
+XSAVE state can make it larger than
+.Dv MINSIGSTKSZ .
 There is no vDSO, so there is no
 .Dv AT_SYSINFO
 or
 .Dv AT_SYSINFO_EHDR ,
 and a C library makes its system calls with
-.Li int $0x80 .
+.Li int $0x80
+on i686 and
+.Li syscall
+on x86-64.
 .Pp
 .Fa argv
 and
 .Fa envp
 are null-terminated arrays of pointers to null-terminated strings.
-They become the new program's arguments and environment on a System V
-i386 initial stack.
+They become the new program's arguments and environment on the System V
+initial stack of the i386 or the x86-64 ABI.
 A null pointer for either array supplies an empty vector.
 An empty
 .Fa argv

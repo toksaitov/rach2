@@ -1,6 +1,7 @@
 #include "uimage.h"
 #include "auxv.h"
 #include "sched.h"
+#include "sigframe.h"
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
 #include "../mm/kheap.h"
@@ -326,8 +327,8 @@ static int uimage_next(struct uwin *w, uintptr_t *str)
  * argc, the pointers to the `argc` strings of argv and then the `envc` of
  * the environment, each array ending in NULL, and the auxiliary vector
  * (AT_PHDR, AT_PHENT, AT_PHNUM, AT_ENTRY, AT_PAGESZ, AT_CLKTCK 100,
- * AT_SECURE, AT_RANDOM, AT_BASE, AT_UID, AT_EUID, AT_GID, AT_EGID, AT_EXECFN
- * and AT_NULL), which a dynamic linker reads to find itself and the program
+ * AT_SECURE, AT_RANDOM, AT_BASE, AT_UID, AT_EUID, AT_GID, AT_EGID, AT_EXECFN,
+ * AT_MINSIGSTKSZ and AT_NULL), which a dynamic linker reads to find itself and the program
  * it loads. The pointers are found by walking the
  * strings from the lowest, which is argv[0], as Linux's `create_elf_tables`
  * finds them; the walk stops before any string above the environment, such
@@ -374,8 +375,10 @@ int uimage_write(struct uimage *u, uint32_t argc, uint32_t envc, const elf_image
     aux[25] = ids->egid;
     aux[26] = AT_EXECFN;
     aux[27] = u->execfn;
-    aux[28] = AT_NULL;
-    aux[29] = 0;
+    aux[28] = AT_MINSIGSTKSZ;
+    aux[29] = sigframe_stack_bytes();
+    aux[30] = AT_NULL;
+    aux[31] = 0;
 
     uwin_open(&out, u);
     uwin_open(&in, u);

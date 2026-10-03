@@ -156,6 +156,10 @@ void fpu_env_set(void *area, const uint8_t *env);
  * pointer `sp`, aligned as Linux aligns it. */
 uintptr_t fpu_frame_place(uintptr_t sp);
 
+/** The most bytes `fpu_frame_place` puts between a stack pointer and the
+ * state it places, the state's alignment included. */
+uintptr_t fpu_frame_bytes(void);
+
 /** Write the state in `area` into a frame, at the user address `fp` that
  * `fpu_frame_place` gave. Returns 0, or -1 when the stack cannot be
  * written. */

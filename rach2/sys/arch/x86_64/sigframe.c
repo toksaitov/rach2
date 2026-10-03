@@ -207,6 +207,11 @@ static void fill_sigcontext(struct lx_sigcontext *sc, const isr_params_t *tf, ui
     sc->fpstate = fp_addr;
 }
 
+uintptr_t sigframe_stack_bytes(void)
+{
+    return fpu_frame_bytes() + sizeof(struct lx_rt_sigframe) + 15u + 8u;
+}
+
 int sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *sa,
                    const struct k_siginfo *info, uint64_t oldmask)
 {

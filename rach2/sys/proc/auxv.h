@@ -38,6 +38,7 @@
 #define AT_SECURE 23 /* 1 when euid != ruid or egid != rgid    (populated) */
 #define AT_RANDOM 25 /* Address of 16 random bytes             (populated) */
 #define AT_EXECFN 31 /* Address of the program's path          (populated) */
+#define AT_MINSIGSTKSZ 51 /* The least alternate stack a frame fits (populated) */
 
 /*
  * One auxv entry: a {type, value} pair of machine words, 32 bits on i686 and

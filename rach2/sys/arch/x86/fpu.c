@@ -444,6 +444,14 @@ uintptr_t fpu_frame_place(uintptr_t sp)
     return (sp - FPU_LINUX_SIZE) & ~(uintptr_t)63u;
 }
 
+uintptr_t fpu_frame_bytes(void)
+{
+    if (use_xsave) {
+        return area_size + 4u + 63u + FRAME_PREFIX;
+    }
+    return FPU_LINUX_SIZE + 63u;
+}
+
 /** Write the software bytes `sw` of a frame's XSAVE image, Linux's
  * `struct _fpx_sw_bytes`. */
 static void sw_bytes_put(uint8_t *sw)

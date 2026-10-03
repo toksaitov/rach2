@@ -76,7 +76,7 @@ This section is the i686 kernel's contract; the x86-64 kernel's follows Linux's 
 
 The kernel gives a new process one System V i386 entry stack: `argc`, the `argv` pointers and null, the `envp` pointers and null, an auxiliary vector ending with `AT_NULL`, then the referenced strings and 16 random bytes. Entry ESP is aligned to 16 bytes.
 
-Rach2 supplies `AT_PHDR`, `AT_PHENT`, `AT_PHNUM`, `AT_ENTRY`, `AT_PAGESZ`, `AT_CLKTCK`, `AT_SECURE`, and `AT_RANDOM`. `AT_SECURE` is one when an effective uid or gid differs from its real id. `AT_RANDOM` gives musl the bytes used for its stack protector and allocator state; the [randomness document](../../rach2/sys/lib/krandom.Readme.md) defines their trust policy.
+Rach2 supplies `AT_PHDR`, `AT_PHENT`, `AT_PHNUM`, `AT_ENTRY`, `AT_PAGESZ`, `AT_CLKTCK`, `AT_SECURE`, `AT_RANDOM`, `AT_BASE`, the four ids, `AT_EXECFN` and `AT_MINSIGSTKSZ`, the least alternate stack a signal frame fits, which `sysconf(_SC_MINSIGSTKSZ)` returns when it is above `MINSIGSTKSZ`. `AT_SECURE` is one when an effective uid or gid differs from its real id. `AT_RANDOM` gives musl the bytes used for its stack protector and allocator state; the [randomness document](../../rach2/sys/lib/krandom.Readme.md) defines their trust policy.
 
 Musl's i386 `_start` preserves the entry stack, aligns its working stack, and calls `__libc_start_main`. Startup finds envp and the following auxiliary vector, initializes the thread pointer and stack protector, runs constructors, calls `main`, and passes its return value to `exit`.
 

@@ -28,6 +28,7 @@ typedef unsigned char u8;
 #define AT_CLKTCK 17
 #define AT_SECURE 23
 #define AT_RANDOM 25
+#define AT_MINSIGSTKSZ 51
 
 /* The size of a program header, which AT_PHENT reports: ELF32's on i386 and
  * ELF64's on x86-64. */
@@ -125,6 +126,7 @@ void probe_main(unsigned long *sp)
     unsigned long clktck = 0;
     unsigned long secure = 1;
     unsigned long entry = 0;
+    unsigned long minsigstksz = 0;
 
     puts_("auxvprobe: starting\n");
 
@@ -190,6 +192,9 @@ void probe_main(unsigned long *sp)
         if (type == AT_ENTRY) {
             entry = val;
         }
+        if (type == AT_MINSIGSTKSZ) {
+            minsigstksz = val;
+        }
     }
     check(saw_null, "auxv not AT_NULL-terminated");
     check(pagesz == 4096, "AT_PAGESZ != 4096");
@@ -199,6 +204,9 @@ void probe_main(unsigned long *sp)
     check(clktck == 100, "AT_CLKTCK != 100");
     check(saw_secure && secure == 0, "AT_SECURE missing or nonzero");
     check(entry != 0, "AT_ENTRY == 0");
+    /* A frame is the floating-point state, 512 bytes at the least, and the
+       registers and siginfo above it. */
+    check(minsigstksz > 512, "AT_MINSIGSTKSZ missing or smaller than a frame");
 
     /* AT_RANDOM: print the 16 bytes (the harness compares across two boots) and
      * confirm they are not all zero. */

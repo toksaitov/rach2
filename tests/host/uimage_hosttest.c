@@ -59,6 +59,13 @@ static int failures;
         }                                                  \
     } while (0)
 
+/** The frame size the architecture would give, a value the vector must
+ * carry as it is. */
+uintptr_t sigframe_stack_bytes(void)
+{
+    return 3389u;
+}
+
 /** A frame of the pool, filled with a pattern the stack must not show. */
 uintptr_t alloc_frame(void)
 {
@@ -324,7 +331,9 @@ static void check_auxv(uintptr_t va, const elf_image_t *img, const uint8_t rnd[1
               "the auxiliary vector has the interpreter's base and the ids");
     }
     CHECK(str_is(word(va + 27u * W), path), "AT_EXECFN points at the program's path");
-    CHECK(word(va + 28u * W) == AT_NULL && word(va + 29u * W) == 0,
+    CHECK(word(va + 28u * W) == AT_MINSIGSTKSZ && word(va + 29u * W) == 3389u,
+          "AT_MINSIGSTKSZ gives the stack a signal frame needs");
+    CHECK(word(va + 30u * W) == AT_NULL && word(va + 31u * W) == 0,
           "the auxiliary vector ends in AT_NULL");
     CHECK((rnd_at & 15u) == 0, "AT_RANDOM is aligned to 16 bytes");
     for (i = 0; i < 16; i++) {

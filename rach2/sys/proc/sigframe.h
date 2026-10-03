@@ -30,6 +30,15 @@ int sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *sa,
                    const struct k_siginfo *info, uint64_t oldmask);
 
 /**
+ * The most bytes `sigframe_setup` puts below the top of an alternate stack:
+ * the floating-point state, which XSAVE makes as large as its components,
+ * and the larger frame, each with its alignment. A stack smaller than this
+ * may not take a frame. The initial stack's auxiliary vector gives it as
+ * AT_MINSIGSTKSZ, as Linux gives it on x86.
+ */
+uintptr_t sigframe_stack_bytes(void);
+
+/**
  * Restore the state a frame saved, for rt_sigreturn with `rt` and sigreturn
  * without: the general registers, the flags a program may change, the segment
  * selectors this kernel has, and the floating-point state; the rt frame's
