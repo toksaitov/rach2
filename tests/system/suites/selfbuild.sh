@@ -397,6 +397,7 @@ GRUB_DISK="$DISK.grub"
 # manifest until 2026-09-14; every disk carries an ext2 root now, and what this
 # proves is the guest-built kernel booting through GRUB, not what it mounts.
 if ! bounded 900 env \
+        RACH2_DISK_TABLE=mbr \
         RACH2_DISK_RECOVERY_MB=8 \
         RACH2_DISK_EXT2_MB=16 \
         RACH2_DISK_EXT2_IMAGE="$REPO/build/images/os-simple.ext2" \

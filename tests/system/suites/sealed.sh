@@ -21,8 +21,9 @@
 # made missing, faulty and dirty in turn under an armed trial and each lands in
 # the recovery system, after which recovery repairs it and the candidate is
 # committed again; a menu is staged and then truncated from the host, which the
-# stub must survive; the boot loader is replaced with a marked core and put
-# back;
+# stub must survive; a boot loader's replacement is refused by name, since the
+# artifact has a GUID table, whose sectors after the MBR are the table's, and
+# `tests/run grub` replaces the loader through `/dev/grubcore` on an MBR disk;
 # and finally the root is destroyed with the machine stopped and rewritten from
 # recovery through an ssh pipe, after which the machine boots from what
 # arrived.
@@ -258,9 +259,16 @@ echo "sealed-test: artifact $DISK_SHA ($(wc -c < "$DISK") bytes)"
 #
 # There were two roots here until 2026-09-14, a KRFFS one the fallback booted
 # and this ext2 one, each discovered separately. The disk has one.
-BOOT_LBA="$("$REPO/build/tools/image/mkmbr" --list "$WORK" |
-    awk 'NR == 1 { print $3 / 512; exit }')"
-EXTENTS="$("$REPO/build/tools/image/mkmbr" --list "$WORK" |
+#
+# The table is the GUID table the artifact has, read by `mkgpt --list`, which
+# prints its entries as `mkmbr --list` prints an MBR's; the artifact's
+# identity is its disk GUID, which its menu names the roots by.
+list_table() {
+    "$REPO/build/tools/image/mkgpt" --list "$WORK"
+}
+DISK_ID="GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001"
+BOOT_LBA="$(list_table | awk 'NR == 1 { print $3 / 512; exit }')"
+EXTENTS="$(list_table |
     while read -r idx _type start size; do
         [ -n "$idx" ] || continue
         magic="$(dd if="$WORK" bs=512 skip=$((start / 512 + 2)) count=1 \
@@ -320,7 +328,7 @@ esac
 # the mount table; the fallback boots the same one.
 ROOTS="$(machine 'cat /proc/cmdline; cat /proc/mounts' || true)"
 case "$ROOTS" in
-    *"rach2.root=MBRID="*",3 rach2.rootfstype=ext2"*) ;;
+    *"rach2.root=$DISK_ID,3 rach2.rootfstype=ext2"*) ;;
     *) fail "the candidate's command line does not name the ext2 root: $ROOTS" ;;
 esac
 case "$ROOTS" in
@@ -440,7 +448,7 @@ esac
 # losing the person's files and landing in the demonstration accounts.
 ROOTS="$(machine 'cat /proc/cmdline; cat /proc/mounts' || true)"
 case "$ROOTS" in
-    *"rach2.root=MBRID="*",3 rach2.rootfstype=ext2"*) ;;
+    *"rach2.root=$DISK_ID,3 rach2.rootfstype=ext2"*) ;;
     *) fail "the fallback's command line does not name the installed root: $ROOTS" ;;
 esac
 case "$ROOTS" in
@@ -514,7 +522,7 @@ landed_in_recovery() {
 # nothing and halts, which is the state the trial exists for.
 arm_candidate_trial arm-missing
 dd if=/dev/zero of="$WORK" bs=512 seek=$((EXT2_LBA + 2)) count=2 conv=notrunc status=none
-cold_watch missing "root: MBRID=1acef00d,3: /dev/disk0p3 has no ext2 file system this kernel mounts"
+cold_watch missing "root: $DISK_ID,3: /dev/disk0p3 has no ext2 file system this kernel mounts"
 if grep -aq "rach2 login:" "$LOG"; then
     fail "a candidate whose ext2 root is missing still reached a login"
 fi
@@ -525,7 +533,7 @@ dd if="$WORK.sb" of="$WORK" bs=512 seek=$((EXT2_LBA + 2)) count=2 conv=notrunc s
 # check runs. The root mounts read-only with the fault named; the machine
 # may reach a login on it, and it is not committed.
 . "$REPO/tools/setup/e2fsprogs_path.sh"
-EXT2_SECTORS="$("$REPO/build/tools/image/mkmbr" --list "$WORK" |
+EXT2_SECTORS="$(list_table |
     awk -v lba="$EXT2_OFF" '$3 == lba { print $4 / 512; exit }')"
 [ -n "$EXT2_SECTORS" ] || fail "the ext2 partition's size could not be read from the table"
 EXT2IMG="$DISK.ext2.img"
@@ -638,53 +646,25 @@ case "$OUT" in
 esac
 stop_machine
 
-phase "the boot loader, replaced and put back"
-# A core image with a marker in it, installed into the tail that is not in use.
-# The marker prints before anything on a partition, so what it proves is which
-# image the machine is running, not which bytes are at rest.
+phase "the boot loader, which a GUID table's disk does not replace"
+# The core is in the BIOS boot partition, and the gap that `/dev/grubcore`
+# covers on an MBR disk holds the table here, so the kernel publishes no such
+# window and `bootctl grub` says so before it reads the image.
 sh "$REPO/tools/image/mkgrubcore.sh" A "$CORE" > /dev/null 2>&1 || \
     fail "the marked core image could not be built"
 cold_boot core
+grep -aq "a GUID table holds the boot loader's gap; /dev/grubcore absent" "$LOG" || \
+    fail "the kernel did not say why the boot loader window is absent"
 machine 'cat > /tmp/core.img' < "$CORE" > /dev/null 2>&1 || fail "the core image did not arrive"
-OUT="$(machine 'bootctl grub /tmp/core.img' || true)"
+OUT="$(machine 'bootctl grub /tmp/core.img' 2>&1 || true)"
 case "$OUT" in
-    *"installed:"*"boot loader"*) ;;
-    *) fail "the boot loader install did not report success: $OUT" ;;
+    *"no boot loader window (no /dev/grubcore)"*) ;;
+    *) fail "the boot loader install on a GUID table was not refused by name: $OUT" ;;
 esac
-FIRST_TAIL="$(printf '%s' "$OUT" | sed -n 's/.*tail at LBA \([0-9]*\).*/\1/p')"
-if [ -z "$FIRST_TAIL" ]; then
-    fail "the install did not say which tail it wrote: $OUT"
-fi
-reboot_machine 2
-grep -aq "GRUBCORE=A" "$LOG" || fail "the machine did not boot the core it installed"
 OUT="$(machine 'bootctl status' || true)"
 case "$OUT" in
     *"booted: candidate"*) ;;
-    *) fail "the machine did not boot its candidate through the new loader: $OUT" ;;
-esac
-
-# And back again. The gap has two tails and an install writes the one that is
-# not running, so a second install has to land in the other one: a defect in
-# that direction alone would leave a machine whose next loader update makes GRUB
-# unreachable, and recovery with it.
-sh "$REPO/tools/image/mkgrubcore.sh" B "$CORE" > /dev/null 2>&1 || \
-    fail "the second core image could not be built"
-machine 'cat > /tmp/core.img' < "$CORE" > /dev/null 2>&1 || fail "the second core did not arrive"
-OUT="$(machine 'bootctl grub /tmp/core.img' || true)"
-case "$OUT" in
-    *"installed:"*"boot loader"*) ;;
-    *) fail "the second boot loader install did not report success: $OUT" ;;
-esac
-SECOND_TAIL="$(printf '%s' "$OUT" | sed -n 's/.*tail at LBA \([0-9]*\).*/\1/p')"
-if [ -z "$SECOND_TAIL" ] || [ "$SECOND_TAIL" = "$FIRST_TAIL" ]; then
-    fail "the second install wrote the same tail as the first ($FIRST_TAIL and $SECOND_TAIL)"
-fi
-reboot_machine 3
-grep -aq "GRUBCORE=B" "$LOG" || fail "the machine did not boot the second core"
-OUT="$(machine 'bootctl status' || true)"
-case "$OUT" in
-    *"booted: candidate"*) ;;
-    *) fail "the machine did not boot its candidate through the second loader: $OUT" ;;
+    *) fail "the refused install left the machine off its candidate: $OUT" ;;
 esac
 stop_machine
 
@@ -724,7 +704,7 @@ dd if=/dev/zero of="$WORK" bs=512 seek=$((ROOT_OFF / 512 + 2)) count=2 \
 # would find the machine in. Booting straight into recovery would prove the
 # repair without ever showing that anything was broken.
 arm_next fallback
-cold_watch broken "root: MBRID=1acef00d,3: /dev/disk0p3 has no ext2 file system this kernel mounts"
+cold_watch broken "root: $DISK_ID,3: /dev/disk0p3 has no ext2 file system this kernel mounts"
 if grep -aq "rach2 login:" "$LOG"; then
     fail "a machine whose root is destroyed still reached a login"
 fi

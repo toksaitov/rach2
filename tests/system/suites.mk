@@ -517,6 +517,7 @@ run-grub: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image utils krffs $(
 	    krffs/manifests/grub-test.manifest > $(IMAGES_DIR)/grub-test.manifest.stripped
 	sed -e '/^#/d' -e '/^$$/d' krffs/manifests/os-real.manifest \
 	    | diff - $(IMAGES_DIR)/grub-test.manifest.stripped
+	RACH2_DISK_TABLE=mbr \
 	RACH2_DISK_EXT2_MB=48 \
 	RACH2_DISK_EXT2_IMAGE=$(GRUB_TEST_EXT2) \
 	RACH2_DISK_RECOVERY_MB=8 \
@@ -543,6 +544,7 @@ MENU_TEST_DISK = $(IMAGES_DIR)/menu-test.disk
 # deadline.
 run-menu: $(DEMO_CREDS) rach2 utils krffs $(OS_REAL_SMALL_EXT2) check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(BINFIND) $(RUNUTIL) $(DISK_TOOLS)
 	@mkdir -p $(IMAGES_DIR)
+	RACH2_DISK_TABLE=mbr \
 	RACH2_DISK_RECOVERY_MB=8 \
 	RACH2_DISK_EXT2_MB=96 \
 	RACH2_DISK_EXT2_IMAGE=$(OS_REAL_SMALL_EXT2) \
@@ -593,6 +595,7 @@ $(OS_REAL_SMALL_EXT2): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST
 INSTALL_TEST_DISK = $(IMAGES_DIR)/install-test.disk
 run-install: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(BINFIND) rach2-recovery $(RECOVERY_IMAGE) $(OS_REAL_SMALL_EXT2) $(RUNUTIL) $(DISK_TOOLS)
 	@mkdir -p $(IMAGES_DIR)
+	RACH2_DISK_TABLE=mbr \
 	RACH2_DISK_RECOVERY_MB=8 \
 	RACH2_DISK_EXT2_MB=96 \
 	RACH2_DISK_EXT2_IMAGE=$(OS_REAL_SMALL_EXT2) \
@@ -614,7 +617,7 @@ run-install: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdpma
 # recipe always runs, and two suites of the pool that named it would write the
 # one image at the same time. `prepare-images` builds the file before the pool
 # starts, and a suite run on its own builds it through this rule.
-run-sealed: $(DEMO_CREDS) $(SEALED_DISK) $(DEADLINE) $(ELFCHECK) $(BINFIND) $(MKMBR) $(RUNUTIL)
+run-sealed: $(DEMO_CREDS) $(SEALED_DISK) $(DEADLINE) $(ELFCHECK) $(BINFIND) $(MKGPT) $(RUNUTIL)
 	sh tests/system/suites/sealed.sh $(SEALED_DISK) \
 	    "`cat krffs/rach2_demo_password`" $(SEALED_PORT)
 # `tests/run drill`: the recovery drill, boots of one disk that carries the same
@@ -643,6 +646,7 @@ $(OS_SIMPLE_EXT2): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(MANIFEST_D
 DRILL_DISK = $(IMAGES_DIR)/drill-test.disk
 run-drill: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image utils krffs check-setid $(BINFIND) $(MKMBR) $(HARNESS) $(OS_SIMPLE_EXT2) $(RUNUTIL) $(DISK_TOOLS)
 	@mkdir -p $(IMAGES_DIR)
+	RACH2_DISK_TABLE=mbr \
 	RACH2_DISK_RECOVERY_MB=8 \
 	RACH2_DISK_EXT2_MB=16 \
 	RACH2_DISK_EXT2_IMAGE=$(OS_SIMPLE_EXT2) \

@@ -27,9 +27,14 @@
  * CRC32 of the whole array and of themselves. The MBR's boot code is zeros;
  * `grubembed` puts GRUB's there afterwards.
  *
+ * `mkgpt --list DISK` reads instead of writing: one line per used entry,
+ * `INDEX KIND START SIZE`, with the index counted from 1, the kind by the
+ * names above or `other`, and the extent in bytes, as `mkmbr --list` prints
+ * an MBR's, from the primary table when its header and array check and from
+ * the backup at the image's last sector otherwise.
+ *
  * The kernel reads such tables (`rach2/sys/block/gpt.c`), the suites need
- * them to read, and the disk builder lays out an installed disk with one;
- * nothing here reads a table back.
+ * them to read, and the disk builder lays out an installed disk with one.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -164,6 +169,85 @@ static int fail(const char *what)
     return 1;
 }
 
+static unsigned long get32(const unsigned char *p)
+{
+    return (unsigned long)p[0] | (unsigned long)p[1] << 8 | (unsigned long)p[2] << 16 |
+           (unsigned long)p[3] << 24;
+}
+
+static unsigned long long get64(const unsigned char *p)
+{
+    return (unsigned long long)get32(p) | (unsigned long long)get32(p + 4) << 32;
+}
+
+/**
+ * Read the header at sector `lba` of `f` into `header` and its array into
+ * `array`, and check both checksums. Returns 0, or -1.
+ */
+static int read_table(FILE *f, unsigned long long lba, unsigned char *header, unsigned char *array)
+{
+    unsigned char copy[SECTOR];
+    unsigned long size;
+
+    if (fseek(f, (long)(lba * SECTOR), SEEK_SET) != 0 || fread(header, 1, SECTOR, f) != SECTOR ||
+        memcmp(header, "EFI PART", 8) != 0 || get32(header + 80) != ENTRIES ||
+        get32(header + 84) != ENTRY_SIZE) {
+        return -1;
+    }
+    size = get32(header + 12);
+    if (size < 92 || size > SECTOR) {
+        return -1;
+    }
+    memcpy(copy, header, SECTOR);
+    memset(copy + 16, 0, 4);
+    if (crc32_of(copy, size) != get32(header + 16) ||
+        fseek(f, (long)(get64(header + 72) * SECTOR), SEEK_SET) != 0 ||
+        fread(array, 1, ARRAY_BYTES, f) != ARRAY_BYTES ||
+        crc32_of(array, ARRAY_BYTES) != get32(header + 88)) {
+        return -1;
+    }
+    return 0;
+}
+
+/** Print the used entries of the table on `path`, as the usage says. */
+static int list_table(const char *path)
+{
+    static unsigned char array[ARRAY_BYTES];
+    unsigned char header[SECTOR];
+    FILE *f = fopen(path, "rb");
+    long size;
+    unsigned int i;
+
+    if (!f || fseek(f, 0, SEEK_END) != 0 || (size = ftell(f)) < (long)(3 * SECTOR)) {
+        return fail("the image would not open or is too small for a table");
+    }
+    if (read_table(f, 1, header, array) != 0 &&
+        read_table(f, (unsigned long long)size / SECTOR - 1, header, array) != 0) {
+        fclose(f);
+        return fail("neither the primary nor the backup table checks");
+    }
+    fclose(f);
+    for (i = 0; i < ENTRIES; i++) {
+        const unsigned char *e = array + (unsigned long)i * ENTRY_SIZE;
+        const char *name = "other";
+        size_t k;
+
+        for (k = 0; k < sizeof(kinds) / sizeof(kinds[0]); k++) {
+            if (memcmp(e, kinds[k].guid, 16) == 0) {
+                name = kinds[k].name;
+            }
+        }
+        for (k = 0; k < 16 && e[k] == 0; k++) {
+        }
+        if (k == 16) {
+            continue;
+        }
+        printf("%u %s %llu %llu\n", i + 1, name, get64(e + 32) * SECTOR,
+               (get64(e + 40) - get64(e + 32) + 1) * SECTOR);
+    }
+    return 0;
+}
+
 /**
  * Put the partition one SPEC argument describes into `array` as the entry
  * after the `used` already there, or at the index the SPEC names, inside
@@ -261,6 +345,9 @@ int main(int argc, char **argv)
     int damage = 0;
     int i;
 
+    if (argc == 3 && strcmp(argv[1], "--list") == 0) {
+        return list_table(argv[2]);
+    }
     while (argc >= 2 && argv[1][0] == '-') {
         if (strcmp(argv[1], "--seed") == 0 && argc >= 3) {
             seed = (unsigned int)strtoul(argv[2], 0, 10);

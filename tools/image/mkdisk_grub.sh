@@ -1,16 +1,26 @@
 #!/usr/bin/env sh
 
 #
-# mkdisk_grub.sh: build a BIOS-bootable disk image with kernel slots.
+# mkdisk_grub.sh: build a disk image with kernel slots that boots by BIOS
+# and by UEFI.
 #
-# The disk has one MBR partition, two when a recovery partition is asked for,
-# and three when an ext2 root is. Partition 1 is a FAT32 boot file system
-# holding GRUB and two kernel slots. Partition 2, when RACH2_DISK_RECOVERY_MB
-# is nonzero, is a FAT32 volume for the recovery kernel and its RAM image, in a
-# file system of its own so that a boot partition damaged by the writes an
-# install makes still leaves a way to repair the machine. Partition 3, when
-# RACH2_DISK_EXT2_MB is set, is the ext2 image RACH2_DISK_EXT2_IMAGE names,
-# which both kernel entries boot as their root.
+# The disk has a GUID partition table, or an MBR when RACH2_DISK_TABLE is
+# `mbr`, and three partitions in the same roles on either. Partition 1 is a
+# FAT32 boot file system holding GRUB's menu, its environment block and two
+# kernel slots. Partition 2 is a FAT32 volume for the recovery kernel and its
+# RAM image, in a file system of its own so that a boot partition damaged by
+# the writes an install makes still leaves a way to repair the machine.
+# Partition 3 is the ext2 image RACH2_DISK_EXT2_IMAGE names, which both kernel
+# entries boot as their root.
+#
+# On a GUID table, partition 1 is the EFI system partition, which UEFI
+# firmware starts \EFI\BOOT\BOOTX64.EFI from: GRUB's EFI image, which opens
+# the same menu. Partition 4 is the BIOS boot partition, in the sectors
+# between the table and the first megabyte, and holds GRUB's BIOS core, since
+# the sectors after the MBR are the table's. A GUID table addresses any disk,
+# where an MBR stops at 2 TiB, so this is the table a new install writes. The
+# MBR layout is the one disks installed before milestone 57 have, which the
+# suites of the boot loader's replacement and of their conversion build.
 #
 # There was a KRFFS root between them until 2026-09-14: a second complete
 # system with the demonstration accounts, which the fallback entry booted so
@@ -20,9 +30,11 @@
 # failure GRUB can detect by itself, a kernel image that will not load, and
 # boots the person's own root with it.
 #
-# GRUB's boot.img goes in the MBR and core.img in the post-MBR gap (partition 1
-# starts at 1 MiB), so a real machine, or QEMU with no -kernel, boots
-# BIOS -> MBR -> GRUB -> the Multiboot kernel.
+# GRUB's boot.img goes in the MBR and its core in the post-MBR gap of an MBR
+# disk, or in the BIOS boot partition of a GPT disk (partition 1 starts at
+# 1 MiB on both), so a real machine, or QEMU with no -kernel, boots
+# BIOS -> MBR -> GRUB -> the Multiboot kernel; UEFI firmware boots
+# BOOTX64.EFI -> GRUB -> the Multiboot kernel from the same disk.
 #
 # The boot partition is the install surface (dev-log/23-install/plan.md):
 # /boot/kernel is the candidate, the kernel padded with zeros to a fixed
@@ -67,19 +79,30 @@ OUT="${2:-$REPO/build/images/os-real-grub$KEY_TAG.disk}"
 EXTRA_APPEND="${RACH2_DISK_APPEND:-}"
 DHCP_APPEND="${RACH2_DISK_DHCP_APPEND:-}"
 
-# Three more for the sealed disk, each defaulting to what this script always
-# built. BOOT_MB is the FAT partition; CLUSTER is mformat's sectors-per-cluster
-# (empty leaves mformat's own choice, which is one sector at the sizes this
-# script used before); RECOVERY_MB adds a third partition after the root, and
-# zero leaves the table with two entries as it has always had.
+# The table, `gpt` or `mbr`, and three more for the sealed disk. BOOT_MB is the
+# FAT boot partition; CLUSTER is mformat's sectors-per-cluster for the recovery
+# partition, and for the boot partition of an MBR disk (empty leaves mformat's
+# own choice, which is one sector at these sizes); RECOVERY_MB is partition 2.
 #
-# The two are not independent. bootslot_open refuses a volume whose FAT exceeds
-# BOOTSLOT_FAT_MAX_SECTORS (512) or whose cluster count exceeds
-# BOOTSLOT_MAX_CLUSTERS (65536), and a 64 MiB partition at one sector per
-# cluster is about 130500 clusters with a 1020-sector FAT, which fails both. At
-# eight sectors per cluster it is 16348 clusters with a 128-sector FAT.
+# The boot partition of a GPT disk is the EFI system partition, and UEFI
+# firmware reads a FAT32 volume only when it has at least 65525 clusters:
+# OVMF does not mount a 64 MiB one at eight sectors per cluster, which has
+# 16348. So it takes one sector per cluster, whatever CLUSTER says, and at
+# least 33 MiB. bootslot_open refuses a volume whose FAT exceeds
+# BOOTSLOT_FAT_MAX_SECTORS (1024) or whose cluster count exceeds
+# BOOTSLOT_MAX_CLUSTERS (131072), which a 64 MiB partition at one sector per
+# cluster, about 130000 clusters with a 1016-sector FAT, stays within. The
+# build reads the count back from the volume and refuses one outside both.
 GAP_MB=1
-BOOT_MB="${RACH2_DISK_BOOT_MB:-16}"
+TABLE="${RACH2_DISK_TABLE:-gpt}"
+case "$TABLE" in
+    gpt) BOOT_MB="${RACH2_DISK_BOOT_MB:-33}" ;;
+    mbr) BOOT_MB="${RACH2_DISK_BOOT_MB:-16}" ;;
+    *)
+        echo "mkdisk_grub: RACH2_DISK_TABLE is gpt or mbr, not $TABLE" >&2
+        exit 1
+        ;;
+esac
 CLUSTER="${RACH2_DISK_CLUSTER:-}"
 RECOVERY_MB="${RACH2_DISK_RECOVERY_MB:-0}"
 # A file to read in each FAT partition, so that every partition of a fresh
@@ -107,13 +130,14 @@ if [ "$EXT2_MB" -gt 0 ] && [ ! -f "$EXT2_IMAGE" ]; then
     echo "mkdisk_grub: RACH2_DISK_EXT2_IMAGE names no file ($EXT2_IMAGE)" >&2
     exit 1
 fi
-# The identities: the MBR's disk id, which the menu names the roots and the
-# boot partition by, and the two FAT serials, which the menu finds the
-# partitions holding the kernels by. Pinned here, distinct from each other
-# so a search by serial finds one partition, and replaced by the installer
-# when it copies a disk. The labels are what the core image searches for
-# and are the same on every disk.
+# The identities: the disk's, the MBR's disk id or the GUID table's disk GUID,
+# which the menu names the roots and the boot partition by, and the two FAT
+# serials, which the menu finds the partitions holding the kernels by. Pinned
+# here, distinct from each other so a search by serial finds one partition,
+# and the same on every disk this image is installed to. The labels are what
+# the core image searches for and are the same on every disk.
 MBR_ID=1acef00d
+DISK_GUID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001
 FAT_SERIAL=1acef00d
 RECOVERY_SERIAL=1acef003
 BOOT_LABEL=RACH2BOOT
@@ -131,8 +155,13 @@ RECOVERY_LABEL=RACH2RECOV
 # fallback slot now guards the one failure it can actually catch, a kernel
 # image that will not load: GRUB falls into it by itself and the machine comes
 # back on the previous kernel with the person's own files.
-CANDIDATE_ROOT="MBRID=$MBR_ID,3 rach2.rootfstype=ext2"
-FALLBACK_ROOT="MBRID=$MBR_ID,3 rach2.rootfstype=ext2"
+if [ "$TABLE" = gpt ]; then
+    DISK_IDENTITY="GPTID=$DISK_GUID"
+else
+    DISK_IDENTITY="MBRID=$MBR_ID"
+fi
+CANDIDATE_ROOT="$DISK_IDENTITY,3 rach2.rootfstype=ext2"
+FALLBACK_ROOT="$DISK_IDENTITY,3 rach2.rootfstype=ext2"
 
 # The FAT half of this disk used to differ between two builds of one tree, in
 # two places that have nothing to do with its contents: mformat picks a random
@@ -183,6 +212,8 @@ done
 # built the same way.
 MKMBR="$REPO/build/tools/image/mkmbr"
 make -s -C "$REPO" build/tools/image/mkmbr || exit 1
+MKGPT="$REPO/build/tools/image/mkgpt"
+make -s -C "$REPO" build/tools/image/mkgpt || exit 1
 FATCHAINS="$REPO/build/tools/image/fatchains"
 make -s -C "$REPO" build/tools/image/fatchains || exit 1
 GRUBEMBED="$REPO/build/tools/image/grubembed"
@@ -207,11 +238,19 @@ EMBED_CFG="$TMPD/grub-embed.cfg"
 # the copies verified against the manifest, so the bytes checked are the
 # bytes written to the disk and a regeneration racing this build cannot
 # slip a file between the check and the read.
+# A GPT disk takes the core that reads a GUID table, and GRUB's EFI image.
+if [ "$TABLE" = gpt ]; then
+    CORE=gpt-core.img
+else
+    CORE=disk-core.img
+fi
 cp "$REPO/vendor/grub/bios-boot.img" "$TMPD/bios-boot.img"
-cp "$REPO/vendor/grub/disk-core.img" "$TMPD/disk-core.img"
+cp "$REPO/vendor/grub/$CORE" "$TMPD/$CORE"
+cp "$REPO/vendor/grub/bootx64.efi" "$TMPD/bootx64.efi"
 sh "$REPO/vendor/grub/verify_grub.sh" \
     "bios-boot.img=$TMPD/bios-boot.img" \
-    "disk-core.img=$TMPD/disk-core.img"
+    "$CORE=$TMPD/$CORE" \
+    "bootx64.efi=$TMPD/bootx64.efi"
 
 # The install contract (dev-log/23-install/plan.md): /boot/kernel is the
 # candidate slot bootctl rewrites, /boot/fallback the untouched copy,
@@ -374,7 +413,7 @@ fi
 sed -e "s|RACH2_DHCP_TOKENS|$(sedq "$DHCP_APPEND")|" \
     -e "s|RACH2_CANDIDATE_ROOT|$CANDIDATE_ROOT|" \
     -e "s|RACH2_FALLBACK_ROOT|$FALLBACK_ROOT|" \
-    -e "s|RACH2_BOOT_PART|MBRID=$MBR_ID,1|" \
+    -e "s|RACH2_BOOT_PART|$DISK_IDENTITY,1|" \
     -e "s|RACH2_BOOT_SERIAL|$(fat_uuid $FAT_SERIAL)|" \
     -e "s|RACH2_RECOVERY_SERIAL|$(fat_uuid $RECOVERY_SERIAL)|" \
     -e "s|RACH2_RECOVERY_TITLE|$(sedq "$RECOVERY_TITLE")|" \
@@ -401,7 +440,7 @@ menuentry "Start the Rach2 recovery system (the boot partition does not read)" -
 RCFG
 
 sed -e "s|RACH2_DHCP_TOKENS|$(sedq "$DHCP_APPEND")|" \
-    -e "s|RACH2_BOOT_PART|MBRID=$MBR_ID,1|" \
+    -e "s|RACH2_BOOT_PART|$DISK_IDENTITY,1|" \
     -e "s|RACH2_RECOVERY_SERIAL|$(fat_uuid $RECOVERY_SERIAL)|" \
     -e "s|RACH2_APPEND_TOKENS|$(sedq "$EXTRA_APPEND")|" \
     "$RECOVERY_CFG" > "$RECOVERY_CFG.new"
@@ -430,24 +469,30 @@ if ! awk '/^[[:space:]]*multiboot /{ n = gsub(/rach2\.ip=/, "&"); if (n > 1) exi
     exit 1
 fi
 
-# Everything below runs on the host: mtools for the FAT volumes, the MBR
-# writer for the partition table, the pinned GRUB core for the boot path.
-# No container, no loop mount, no GRUB toolchain.
+# Everything below runs on the host: mtools for the FAT volumes, the MBR or
+# GUID writer for the partition table, the pinned GRUB images for the boot
+# path. No container, no loop mount, no GRUB toolchain.
 export MTOOLS_SKIP_CHECK=1
 # UTC, so the SOURCE_DATE_EPOCH timestamps land in FAT fields the way the
 # retired container (which ran UTC) wrote them.
 export TZ=UTC
 
 dd if=/dev/zero of="$NEW" bs=1048576 count="$DISK_MB" 2>/dev/null
-if [ "$EXT2_MB" -gt 0 ]; then
+# The GUID table's entries are in sectors: the three partitions at the same
+# megabytes as on an MBR disk, and the BIOS boot partition from the first
+# usable sector, 34, to the first megabyte. Its partition GUIDs come from
+# mkgpt's seed, the same on every build.
+MIB=2048
+if [ "$TABLE" = gpt ]; then
+    "$MKGPT" --guid "$DISK_GUID" "$NEW" \
+        "$((GAP_MB * MIB)):$((BOOT_MB * MIB)):fat=Rach2 boot" \
+        "$(((GAP_MB + BOOT_MB) * MIB)):$((RECOVERY_MB * MIB)):data=Rach2 recovery" \
+        "$((EXT2_START_MB * MIB)):$((EXT2_MB * MIB)):linux=Rach2 root" \
+        "34:$((GAP_MB * MIB - 34)):bios=BIOS boot" > /dev/null
+else
     "$MKMBR" --id "$MBR_ID" "$NEW" "${GAP_MB}:${BOOT_MB}:0c:boot" \
         "$((GAP_MB + BOOT_MB)):${RECOVERY_MB}:0c" \
         "${EXT2_START_MB}:${EXT2_MB}:83"
-elif [ "$RECOVERY_MB" -gt 0 ]; then
-    "$MKMBR" --id "$MBR_ID" "$NEW" "${GAP_MB}:${BOOT_MB}:0c:boot" \
-        "$((GAP_MB + BOOT_MB)):${RECOVERY_MB}:0c"
-else
-    "$MKMBR" --id "$MBR_ID" "$NEW" "${GAP_MB}:${BOOT_MB}:0c:boot"
 fi
 
 KBYTES=$(wc -c < "$KERNEL" | tr -d ' ')
@@ -459,13 +504,23 @@ fi
 dd if=/dev/zero of="$TMPD/candidate.pad" bs="$SLOT_BYTES" count=1 2>/dev/null
 dd if="$KERNEL" of="$TMPD/candidate.pad" conv=notrunc 2>/dev/null
 dd if=/dev/zero of="$TMPD/p1.img" bs=1048576 count="$BOOT_MB" 2>/dev/null
-if [ -n "$CLUSTER" ]; then
+if [ "$TABLE" = gpt ]; then
+    mformat -i "$TMPD/p1.img" -F -N $FAT_SERIAL -v $BOOT_LABEL -c 1 ::
+elif [ -n "$CLUSTER" ]; then
     mformat -i "$TMPD/p1.img" -F -N $FAT_SERIAL -v $BOOT_LABEL -c "$CLUSTER" ::
 else
     mformat -i "$TMPD/p1.img" -F -N $FAT_SERIAL -v $BOOT_LABEL ::
 fi
 mmd -i "$TMPD/p1.img" ::/boot
 mmd -i "$TMPD/p1.img" ::/boot/grub
+# GRUB's EFI image where UEFI firmware looks for a disk's boot program. Its
+# prefix is /boot/grub on this partition, so it opens the menu the BIOS core
+# opens.
+if [ "$TABLE" = gpt ]; then
+    mmd -i "$TMPD/p1.img" ::/EFI
+    mmd -i "$TMPD/p1.img" ::/EFI/BOOT
+    mcopy -i "$TMPD/p1.img" "$TMPD/bootx64.efi" ::/EFI/BOOT/BOOTX64.EFI
+fi
 mcopy -i "$TMPD/p1.img" "$TMPD/candidate.pad" ::/boot/kernel
 mcopy -i "$TMPD/p1.img" "$TMPD/candidate.pad" ::/boot/fallback
 mcopy -i "$TMPD/p1.img" "$GRUB_CFG" ::/boot/grub/grub.cfg
@@ -510,6 +565,18 @@ CLBYTES=$(( ($1 + $2 * 256) * $3 ))
     echo "mkdisk_grub: the formatted volume reports a zero cluster size" >&2
     exit 1
 }
+# The cluster count, from the BPB as a FAT driver computes it: the data
+# sectors after the reserved ones and the two FATs, by the cluster's sectors.
+# shellcheck disable=SC2046 # od output is exactly the numeric fields
+set -- $(od -An -j 13 -N 4 -t u1 "$TMPD/p1.img") \
+    $(od -An -j 32 -N 8 -t u4 "$TMPD/p1.img")
+CLUSTERS=$(( ($5 - ($2 + $3 * 256) - $4 * $6) / $1 ))
+if [ "$TABLE" = gpt ] && { [ "$CLUSTERS" -lt 65525 ] || [ "$CLUSTERS" -gt 131070 ]; }; then
+    echo "mkdisk_grub: the EFI system partition has $CLUSTERS clusters; UEFI firmware reads" \
+         "a FAT32 volume with 65525 or more and bootctl walks 131070 at most, so" \
+         "RACH2_DISK_BOOT_MB is 33 to 64" >&2
+    exit 1
+fi
 awk -v cbytes="$CLBYTES" -v kernel="$SLOT_BYTES" -v fallback="$SLOT_BYTES" \
     -v grubcfg="$CFGBYTES" -v grubenv=1024 -v bootcfg="$MENU_BYTES" '
 function need(bytes) { return int((bytes + cbytes - 1) / cbytes) }
@@ -570,7 +637,7 @@ END {
 
 dd if="$TMPD/p1.img" of="$NEW" bs=1048576 seek="$GAP_MB" conv=notrunc 2>/dev/null
 
-"$GRUBEMBED" "$NEW" "$TMPD/bios-boot.img" "$TMPD/disk-core.img"
+"$GRUBEMBED" "$NEW" "$TMPD/bios-boot.img" "$TMPD/$CORE"
 
 
 # Partition 2, when asked for: a FAT32 volume holding the recovery kernel

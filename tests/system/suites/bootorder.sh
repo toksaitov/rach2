@@ -21,6 +21,7 @@ BLANK="$DISK.blank"
 # The root this disk boots. It was a KRFFS partition built from a manifest
 # until 2026-09-14; the same tree as an ext2 root, which the builder now
 # requires of every disk.
+RACH2_DISK_TABLE=mbr \
 RACH2_DISK_APPEND="rach2.disk=ahci" \
 RACH2_DISK_RECOVERY_MB=8 \
 RACH2_DISK_EXT2_MB=48 \
