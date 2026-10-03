@@ -92,10 +92,37 @@ static void put64(uint8_t *p, uint64_t v)
     k_memcpy(p, &v, sizeof(v));
 }
 
+static uint32_t get32(const uint8_t *p)
+{
+    uint32_t v;
+
+    k_memcpy(&v, p, sizeof(v));
+    return v;
+}
+
+static uint64_t get64(const uint8_t *p)
+{
+    uint64_t v;
+
+    k_memcpy(&v, p, sizeof(v));
+    return v;
+}
+
+/* Whether `signo` with `code` is a seccomp filter's SIGSYS, whose union
+ * has the call's address, number and architecture. */
+static int is_sigsys(int signo, int32_t code)
+{
+    return signo == SIGSYS && code == SIGSYS_SECCOMP;
+}
+
 /**
  * The x86-64 siginfo: signo, errno and code, then at byte 16, past the
- * padding that aligns the union, the fault's address, or the sender's pid
- * and uid and a child's status.
+ * padding that aligns the union, Linux x86-64's fields of the kind the
+ * code says: a fault's address; a seccomp SIGSYS's call address, call
+ * number at 24 and architecture at 28; and otherwise the sender's or
+ * child's pid and uid at 16 and 20 and, at 24, a timer's or a queued
+ * signal's si_value, all eight bytes, or a child's status. For a timer the
+ * first two are its id and overrun.
  */
 void sigframe_fill_siginfo(uint8_t *out, int signo, const struct k_siginfo *info)
 {
@@ -111,26 +138,42 @@ void sigframe_fill_siginfo(uint8_t *out, int signo, const struct k_siginfo *info
         put64(out + 16, (uint64_t)info->addr);
         return;
     }
+    if (is_sigsys(signo, info->code)) {
+        put64(out + 16, (uint64_t)info->addr);
+        put32(out + 24, info->uid);
+        put32(out + 28, (uint32_t)info->status);
+        return;
+    }
     put32(out + 16, info->pid);
     put32(out + 20, info->uid);
-    put32(out + 24, (uint32_t)info->status);
+    if (info->code == SI_TIMER || info->code == SI_QUEUE || info->code == SI_MESGQ) {
+        put64(out + 24, (uint64_t)info->value);
+    } else {
+        put32(out + 24, (uint32_t)info->status);
+    }
 }
 
 /** The fields of the x86-64 siginfo at `in` that sigframe_fill_siginfo
- * writes, for PTRACE_SETSIGINFO. */
+ * writes, for rt_sigqueueinfo and PTRACE_SETSIGINFO, read by the signal and
+ * the code the siginfo has: a field another kind has there is read too,
+ * and the fill of the kind the code says puts back the one it has. */
 void sigframe_take_siginfo(const uint8_t *in, struct k_siginfo *info)
 {
-    int32_t code;
-    uint64_t addr;
+    int32_t code = (int32_t)get32(in + 8);
 
     k_memset(info, 0, sizeof(*info));
-    k_memcpy(&code, in + 8, 4);
     info->code = code;
-    k_memcpy(&info->pid, in + 16, 4);
-    k_memcpy(&info->uid, in + 20, 4);
-    k_memcpy(&info->status, in + 24, 4);
-    k_memcpy(&addr, in + 16, 8);
-    info->addr = addr;
+    info->addr = get64(in + 16);
+    if (is_sigsys((int)get32(in), code)) {
+        info->pid = (uint32_t)info->addr;
+        info->uid = get32(in + 24);
+        info->status = (int32_t)get32(in + 28);
+        return;
+    }
+    info->pid = get32(in + 16);
+    info->uid = get32(in + 20);
+    info->status = (int32_t)get32(in + 24);
+    info->value = get64(in + 24);
 }
 
 static void fill_sigcontext(struct lx_sigcontext *sc, const isr_params_t *tf, uint64_t fp_addr,

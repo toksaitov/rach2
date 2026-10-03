@@ -48,9 +48,9 @@
     (SECCOMP_FILTER_FLAG_TSYNC | SECCOMP_FILTER_FLAG_LOG | SECCOMP_FILTER_FLAG_SPEC_ALLOW | \
      SECCOMP_FILTER_FLAG_TSYNC_ESRCH)
 
-/* SIGSYS's code for a call a filter trapped. The architecture the filters
- * see is AUDIT_ARCH, from the architecture's cpu.h. */
-#define SYS_SECCOMP 1
+/* The architecture the filters see is AUDIT_ARCH, from the architecture's
+ * cpu.h; SIGSYS's code for a call a filter trapped is ksignal.h's
+ * SIGSYS_SECCOMP. */
 
 /* Linux's limits: instructions in one program, and in a chain, each filter
  * counted with four more. */
@@ -364,7 +364,8 @@ static void seccomp_trap(isr_params_t *tf, uint32_t nr, uint32_t data)
     struct k_siginfo info;
 
     k_memset(&info, 0, sizeof(info));
-    info.code = SYS_SECCOMP;
+    info.code = SIGSYS_SECCOMP;
+    info.addr = FRAME_PC(tf);
     info.pid = (uint32_t)FRAME_PC(tf);
     info.uid = nr;
     info.status = (int32_t)AUDIT_ARCH;

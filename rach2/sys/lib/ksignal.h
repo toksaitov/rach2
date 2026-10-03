@@ -63,6 +63,9 @@
 /* si_code values (Linux). */
 #define SI_USER       0
 #define SI_KERNEL     0x80
+/* SIGSYS's code for a call a seccomp filter trapped, Linux's SYS_SECCOMP,
+ * a name the system call numbers have here. */
+#define SIGSYS_SECCOMP 1
 #define SI_QUEUE      (-1)
 #define SI_MESGQ      (-3)
 #define SI_TKILL      (-6)
