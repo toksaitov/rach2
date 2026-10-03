@@ -252,7 +252,7 @@ int fd_table_cap(const fd_table_t *table)
 
 int fd_limit(const fd_table_t *table)
 {
-    uint32_t cur;
+    unsigned long cur;
 
     if (!current_proc || table != current_proc->fds) {
         return FD_TABLE_LIMIT;
