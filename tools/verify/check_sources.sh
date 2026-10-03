@@ -9,10 +9,11 @@
 # list and the architecture's own, sys/arch/ARCH/sources.mk, so the list
 # checked is the union over every architecture that has a processor's
 # directory with a source list: an i686 file is in i686's alone, an x86-64
-# one in x86-64's alone, and the PC's in both. A new kernel .c that is not added to C_SRC would be
-# silently left out of the build (and out of the ABI/boot tests), so this fails
-# loudly instead. Doom and the vendored musl/busybox/dropbear trees keep their
-# own source lists and are intentionally NOT gated here.
+# one in x86-64's alone, and the PC's in both. A new kernel .c that is not
+# added to C_SRC would be silently left out of the build (and out of the
+# ABI/boot tests), so this fails loudly instead. Doom and the vendored
+# musl/busybox/dropbear trees keep their own source lists and are
+# intentionally NOT gated here.
 #
 # Exits non-zero (and prints the offending files) if the list and the disk
 # disagree.

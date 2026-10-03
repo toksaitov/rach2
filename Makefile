@@ -688,12 +688,12 @@ $(OS_SIMPLE_IMAGE): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(MANIFEST_
 # dropbear SSH server and client, Doom, the manual, and an /etc + /root tree).
 # 18 MiB on i686: the tree is under 16 MiB without the manual, and the
 # manual's gzipped pages and alias table take under 1 MiB more. 20 MiB on
-# x86-64, whose programs are larger: the tree with Doom's WAD takes 18.2 MiB. The module sits in
-# the kernel's 32 MiB identity-mapped window, where the DMA buffers and the
-# kernel stacks are carved, so it is kept small; and the manual's aliases
-# are a table and not files, since the RAM root and a KRFFS disk walk
-# every node on a lookup and four hundred alias files made the self-build
-# suite five times slower. gen_demo_key.sh provisions the SSH login keys and
+# x86-64, whose programs are larger: the tree with Doom's WAD takes 18.2 MiB.
+# The module sits in the kernel's 32 MiB window, where the DMA buffers and the
+# kernel stacks are carved, so it is kept small; and the manual's aliases are
+# a table and not files, since the RAM root and a KRFFS disk walk every node
+# on a lookup and four hundred alias files made the self-build suite five
+# times slower. gen_demo_key.sh provisions the SSH login keys and
 # gen_demo_password.sh the account passwords and /etc/shadow, each when
 # absent; the check targets ensure the busybox/dropbear binaries are real.
 OS_REAL_MIB = $(if $(filter x86_64,$(ARCH)),20,18)
