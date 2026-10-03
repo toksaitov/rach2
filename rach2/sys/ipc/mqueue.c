@@ -236,7 +236,7 @@ static int32_t mq_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
     char text[96];
     int n = mq_status(((struct mq_file *)e->priv)->q, text, (int)sizeof(text) - 1);
-    uint32_t at = (uint32_t)e->ofd->offset;
+    uint32_t at = e->ofd->offset > 0xFFFFFFFFu ? 0xFFFFFFFFu : (uint32_t)e->ofd->offset;
 
     if (at >= (uint32_t)n) {
         return 0;

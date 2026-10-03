@@ -4262,13 +4262,10 @@ static int32_t procfs_read(fd_entry_t *e, char __user *buf, uint32_t count)
     struct procfs_file *f = (struct procfs_file *)e->priv;
     uint32_t off, avail, n;
 
-    if (!f) {
-        return 0;
-    }
-    off = (uint32_t)e->ofd->offset;
-    if (off >= (uint32_t)f->len) {
+    if (!f || e->ofd->offset >= (uint64_t)f->len) {
         return 0; /* end of the snapshot */
     }
+    off = (uint32_t)e->ofd->offset;
     avail = (uint32_t)f->len - off;
     n = count < avail ? count : avail;
     if (copy_to_user(buf, f->data + off, n) != 0) {
@@ -4349,7 +4346,7 @@ static int32_t procfs_mem_access(fd_entry_t *e, char __user *ubuf, uint32_t coun
 {
     struct procfs_file *f = (struct procfs_file *)e->priv;
     struct mm *mm = f ? procfs_mem_mm(f) : NULL;
-    uint32_t addr = (uint32_t)e->ofd->offset;
+    uintptr_t addr = (uintptr_t)e->ofd->offset;
     uint32_t done = 0;
     char buf[256];
     int rc = 0;
@@ -4361,7 +4358,7 @@ static int32_t procfs_mem_access(fd_entry_t *e, char __user *ubuf, uint32_t coun
         uint32_t n = count - done < sizeof(buf) ? count - done : (uint32_t)sizeof(buf);
 
         if (n > PAGE_SIZE - (addr & (PAGE_SIZE - 1u))) {
-            n = PAGE_SIZE - (addr & (PAGE_SIZE - 1u));
+            n = (uint32_t)(PAGE_SIZE - (addr & (PAGE_SIZE - 1u)));
         }
         if (write) {
             if (copy_from_user(buf, ubuf + done, n) != 0) {
@@ -4665,7 +4662,7 @@ static int32_t procfs_oom_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
     struct procfs_file *f = (struct procfs_file *)e->priv;
     process_t *p = f ? procfs_proc(f->origin_pid) : NULL;
-    uint32_t off = (uint32_t)e->ofd->offset;
+    uint32_t off = e->ofd->offset > 0xFFFFFFFFu ? 0xFFFFFFFFu : (uint32_t)e->ofd->offset;
     struct procfs_text t;
     uint32_t n = 0;
 
@@ -4765,7 +4762,7 @@ static int procfs_gen_idmap(struct procfs_text *t, int pid, int file)
 static int32_t procfs_idmap_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
     struct procfs_file *f = (struct procfs_file *)e->priv;
-    uint32_t off = (uint32_t)e->ofd->offset;
+    uint32_t off = e->ofd->offset > 0xFFFFFFFFu ? 0xFFFFFFFFu : (uint32_t)e->ofd->offset;
     struct procfs_text t;
     uint32_t n = 0;
 

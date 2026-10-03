@@ -1056,6 +1056,9 @@ static int32_t dev_bootlog_read(fd_entry_t *e, char __user *buf, uint32_t count)
     char chunk[256];
     uint32_t done = 0;
 
+    if (e->ofd->offset > 0xFFFFFFFFu) {
+        return 0; /* past any log's end */
+    }
     while (done < count) {
         uint32_t want = count - done;
         uint32_t n;

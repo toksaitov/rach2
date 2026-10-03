@@ -8712,16 +8712,18 @@ static int32_t pio_entry(int fd, int write, uint32_t count, long long pos, fd_en
  * for pread64 and pwrite64.
  *
  * A device's read or write moves the offset it uses, a raw window's own or
- * the description's for the log and a /proc snapshot, and reads nothing else
- * of the description. Given the copy, it uses and moves the copy's, and the
- * shared description, which a sharer may be reading or seeking at the same
- * time, never changes. The log and a snapshot take a 32-bit offset and are
- * shorter than 4 GiB, so a position past that is their end.
+ * the description's for the log, a /proc snapshot and /proc/PID/mem, and
+ * reads nothing else of the description. Given the copy, it uses and moves
+ * the copy's, and the shared description, which a sharer may be reading or
+ * seeking at the same time, never changes. The offset is the whole
+ * position, since one of /proc/PID/mem is an address, past 4 GiB on x86-64;
+ * the log and a snapshot are shorter than 4 GiB, and take a position past
+ * that as their end.
  */
 static void pio_view(fd_entry_t *entry, uint64_t at, fd_entry_t *view, struct open_file *desc)
 {
     *desc = *entry->ofd;
-    desc->offset = at > 0xFFFFFFFFu ? 0xFFFFFFFFu : at;
+    desc->offset = at;
     desc->raw_offset = at;
     *view = *entry;
     view->ofd = desc;
