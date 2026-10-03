@@ -9,8 +9,8 @@
 # emulator. This one gives an x86-64 machine QEMU's UEFI firmware, OVMF, and
 # nothing else: the firmware starts GRUB's EFI image from the disk's EFI
 # system partition, or from the stick's EFI boot image, and the image opens
-# the menu the BIOS core opens. Four boots by OVMF, then a fifth part that
-# boots the GPT disk by SeaBIOS as well:
+# the menu the BIOS core opens. Four boots by OVMF, a fifth part that boots
+# the GPT disk by SeaBIOS as well, and an install by OVMF:
 #
 # 1. The installed disk, a GPT disk as the disk builder makes one and an
 #    install writes it: the firmware boots it, the kernel finds its root by
@@ -35,6 +35,13 @@
 #    and the disk still boots by OVMF, whose path does not use the core. The
 #    table's sectors before the partition and the backup table at the disk's
 #    end are the same bytes after both installs.
+# 6. An install onto a 4 TiB NVMe disk, past the 2 TiB an MBR addresses. The
+#    stick boots by OVMF beside the disk, `rach2-install` is answered over
+#    SSH and grows the root into the whole disk, and the disk then boots by
+#    OVMF alone, root logs in with the demonstration key the install took as
+#    an authorized key, and `df` finds the root on the NVMe disk and larger
+#    than 2 TiB. The disk is a sparse file, and QEMU turns the zeroed blocks
+#    the grow writes, its new groups' inode tables, back into holes.
 #
 # In the first boot the kernel's console is on the firmware's framebuffer,
 # and the screen QEMU dumps through its monitor, once the login prompt is
@@ -124,6 +131,15 @@ boot_uefi() {
         -netdev "user,id=net0,hostfwd=tcp::$PORT-:22" -device rtl8139,netdev=net0 \
         "$@" > "$log.qemu" 2>&1 &
     QPID=$!
+}
+
+# ssh to the machine as root with the demonstration key and nothing of the
+# runner's own, once, with standard input from FILE.
+key_ssh_input() { # key_ssh_input FILE COMMAND
+    ssh -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$KNOWN" \
+        -o "ConnectTimeout=$(scaled 20)" -o BatchMode=yes -o IdentitiesOnly=yes \
+        -o PreferredAuthentications=publickey -o PasswordAuthentication=no \
+        -i "$DEMO_KEY" -p "$PORT" root@localhost "$2" < "$1"
 }
 
 # ssh to the machine as root with the demonstration key and nothing of the
@@ -355,12 +371,9 @@ swap_core() {
         bad "the machine booted by SeaBIOS did not answer SSH"
         return 1
     fi
-    OUT=$(ssh -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$KNOWN" \
-        -o "ConnectTimeout=$(scaled 20)" -o BatchMode=yes -o IdentitiesOnly=yes \
-        -o PreferredAuthentications=publickey -o PasswordAuthentication=no \
-        -i "$DEMO_KEY" -p "$PORT" root@localhost \
+    OUT=$(key_ssh_input "$CORE" \
         'cat > /tmp/core.img && bootctl grub /tmp/core.img && sync && echo GRUB""DONE' \
-        < "$CORE" 2>&1 || true)
+        2>&1 || true)
     case "$OUT" in
         *"in the tail at LBA $want; the entry sector at LBA $BB_FIRST now points there"*GRUBDONE*)
             note "bootctl grub writes the tail at LBA $want and selects it: OK" ;;
@@ -402,8 +415,77 @@ else
 fi
 stop_machine
 
+# ---- 6: an install onto a sparse 4 TiB NVMe disk ----
+BIG="$DIR/big.img"
+BIG_DRIVE="file=$BIG,if=none,id=big,format=raw,discard=unmap,detect-zeroes=unmap"
+rm -f "$BIG"
+dd if=/dev/zero of="$BIG" bs=1048576 seek=4194304 count=0 2>/dev/null
+cp "$STICK" "$DIR/big-stick.img"
+# The answers, in the order rach2-install asks: the disk, root's password
+# twice, the first account and its password twice, the demonstration key the
+# recovery system was reached with as root's authorized key, no key for the
+# recovery system, the grow it offers, and the disk's name again.
+cat > "$DIR/big-install.sh" <<'GUEST'
+n=$(awk '$1 == "disk" && $3 == "nvme" { print $2 }' /proc/disk)
+[ -n "$n" ] || { echo "no NVMe disk"; exit 1; }
+printf '%s\n' "/dev/disk$n" uefi-big uefi-big owner owner-big owner-big \
+    /root/.ssh/authorized_keys "" "" "/dev/disk$n" | rach2-install
+echo "INSTALL STATUS $?"
+GUEST
+LOG7="$DIR/big-install.log"
+boot_uefi "$LOG7" -device qemu-xhci,id=xhci \
+    -drive "if=none,id=stick,format=raw,file=$DIR/big-stick.img" \
+    -device usb-storage,bus=xhci.0,drive=stick,bootindex=0 \
+    -drive "$BIG_DRIVE" -device nvme,drive=big,serial=rach2big
+if "$RUNUTIL" until "$LOG7" "SSH is on" 240 && key_ssh 'echo up' > /dev/null; then
+    key_ssh_input "$DIR/big-install.sh" 'sh -s' > "$DIR/big-install.out" 2>&1 &
+    INSTALLER=$!
+    # The grow writes for minutes; its last line is printed each minute, so
+    # the run sees the suite is alive.
+    waited=0
+    while ! "$RUNUTIL" gone "$INSTALLER" 60; do
+        waited=$((waited + 60))
+        note "installing for ${waited}s: $(tail -n 1 "$DIR/big-install.out")"
+        if [ "$waited" -ge 1800 ]; then
+            kill "$INSTALLER" 2>/dev/null || true
+            break
+        fi
+    done
+    wait "$INSTALLER" 2>/dev/null || true
+    if grep -q "growing the root into the rest of the disk" "$DIR/big-install.out" &&
+        grep -q "^INSTALL STATUS 0$" "$DIR/big-install.out"; then
+        note "the stick installs onto the 4 TiB NVMe disk and grows its root: OK"
+    else
+        bad "the install onto the 4 TiB disk; see $DIR/big-install.out"
+    fi
+else
+    bad "the stick beside the 4 TiB disk never answered SSH; see $LOG7"
+fi
+stop_machine
+LOG8="$DIR/big.log"
+boot_uefi "$LOG8" -drive "$BIG_DRIVE" -device nvme,drive=big,serial=rach2big
+if "$RUNUTIL" until "$LOG8" "rach2 login:" 240; then
+    if booted_by_uefi "$LOG8" "NVMe"; then
+        note "the firmware boots the NVMe disk from its EFI system partition: OK"
+    else
+        bad "the firmware did not say it booted the NVMe disk"
+    fi
+    OUT=$(key_ssh 'df -k / | tail -n 1; echo BIG""LOGIN' || true)
+    if printf '%s\n' "$OUT" |
+        awk '$1 ~ /^\/dev\/disk[0-9]+p3$/ && $2 > 2147483648 { found = 1 } END { exit !found }'; then
+        note "and root finds its root on the NVMe disk, larger than 2 TiB: OK"
+    else
+        bad "the root of the 4 TiB disk: $OUT"
+    fi
+    note "the disk's file holds $(du -k "$BIG" | cut -f1) KiB on the host"
+else
+    bad "the 4 TiB disk never reached a login by UEFI; see $LOG8"
+fi
+stop_machine
+rm -f "$BIG"
+
 if [ "$fail" -ne 0 ]; then
     echo "uefi-test: result: FAIL" >&2
     exit 1
 fi
-echo "uefi-test: result: the installed disk, its recovery entry, the stick and the CD boot by UEFI; the disk's BIOS core is replaced twice and boots by either firmware"
+echo "uefi-test: result: the installed disk, its recovery entry, the stick and the CD boot by UEFI; the disk's BIOS core is replaced twice and boots by either firmware; an install grows its root past 2 TiB on a 4 TiB NVMe disk"

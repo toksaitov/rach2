@@ -1521,14 +1521,17 @@ $(GROWSET): tools/inspect/growset.c utils/growset.c
 # server and reads the policy the installer writes. It is 64 MiB, the smallest
 # that holds it, because every row that installs reads and hashes the whole
 # image and the emulator hashes at a megabyte or two a second. Its 16384-block
-# groups fill the first 64 MiB group, as growset requires.
+# groups fill the first 64 MiB group, as growset requires, and it has one
+# inode for each 32 KiB, 2048, twice the nodes it holds, so that the
+# uefi suite's grow to 4 TiB writes 16 GiB of inode tables and not the 128
+# GiB mke2fs's ratio for a small volume would make it.
 INSTALLER_EXT2 = $(IMAGES_DIR)/installer-root.ext2
 $(INSTALLER_EXT2): $(FS_DEMO_IMAGES) $(DEMO_CREDS) krffs/manifests/rach2-metal-disk.manifest \
                    $(MANIFEST_DEPS_rach2_metal_disk) \
                    tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils \
                    check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti \
                    ports/doom
-	sh tools/image/mkext2.sh krffs/manifests/rach2-metal-disk.manifest $@ 64 16384
+	sh tools/image/mkext2.sh krffs/manifests/rach2-metal-disk.manifest $@ 64 16384 32768
 INSTALLER_DISK = $(IMAGES_DIR)/installer-test.disk
 $(INSTALLER_DISK): $(DEMO_CREDS) $(INSTALLER_EXT2) $(RECOVERY_IMAGE) tools/image/mkdisk_grub.sh $(DISK_TOOLS) \
                    | rach2 rach2-recovery utils krffs
@@ -1602,7 +1605,9 @@ run-installer-repair: $(DEMO_CREDS) $(INSTALL_STICK) $(INSTALL_TEST_STICK) $(PTY
 	    $(INSTALLER_EXT2) $(INSTALLER_MBR_DISK)
 # `tests/run uefi`: the machine booted by UEFI firmware, OVMF, from its
 # installed disk and that disk's recovery entry, from the install stick's
-# image as a USB device and from the recovery ISO as a CD, each answering SSH.
+# image as a USB device and from the recovery ISO as a CD, each answering SSH,
+# and installed from the stick onto a 4 TiB NVMe disk whose root grows past
+# 2 TiB.
 # The disk is a GPT disk as the disk builder makes one for a machine, with the
 # installer's root, the metal system whose init starts the SSH server.
 UEFI_DIR = $(IMAGES_DIR)/uefi
