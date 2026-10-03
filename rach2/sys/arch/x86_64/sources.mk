@@ -21,4 +21,5 @@ ARCH_C_SRC = sys/arch/x86_64/mmu.c \
     sys/arch/x86_64/sigframe.c \
     sys/arch/x86_64/tls.c \
     sys/arch/x86_64/ptrace.c \
+    sys/arch/x86_64/systab.c \
     $(PC_C_SRC)
