@@ -112,8 +112,8 @@ struct core_prpsinfo {
 struct core_out {
     core_write_fn write;
     void *ctx;
-    uint32_t done;
-    uint32_t limit;
+    uint64_t done;
+    uint64_t limit;
     int32_t err;
 };
 
@@ -318,9 +318,9 @@ uint8_t *core_notes(int signo, uint32_t *size)
 /** The bytes of region `r` the file has: all of a readable region, none of
  * one that is not, as Linux leaves a PROT_NONE reservation out, and none of
  * device memory, which Linux leaves out too. */
-static uint32_t region_file_size(const struct core_region *r)
+static uintptr_t region_file_size(const struct core_region *r)
 {
-    return (r->prot & VM_PROT_READ) && !(r->prot & VM_PROT_IO) ? (uint32_t)(r->end - r->start) : 0u;
+    return (r->prot & VM_PROT_READ) && !(r->prot & VM_PROT_IO) ? r->end - r->start : 0u;
 }
 
 /**
@@ -387,7 +387,7 @@ static struct core_region *regions_take(const vm_space_t *vm, uint32_t *count)
  * at the header's end. With PN_XNUM or more, the header's count is PN_XNUM
  * and the file has one section header, at `shoff`, which has the count.
  */
-static void ehdr_write(struct core_out *o, uint32_t phnum, uint32_t shoff)
+static void ehdr_write(struct core_out *o, uint32_t phnum, uintptr_t shoff)
 {
     uint8_t ehdr[EHDR_SIZE];
 
@@ -416,7 +416,7 @@ static void ehdr_write(struct core_out *o, uint32_t phnum, uint32_t shoff)
 
 /** Write the program header of the load of region `r`, whose bytes are at
  * `off` in the file. */
-static void load_write(struct core_out *o, const struct core_region *r, uint32_t off)
+static void load_write(struct core_out *o, const struct core_region *r, uintptr_t off)
 {
     uint8_t phdr[PHDR_SIZE];
     uint32_t flags = 0;
@@ -455,7 +455,7 @@ static void shdr_write(struct core_out *o, uint32_t phnum)
 }
 
 int32_t core_write(core_write_fn write, void *ctx, const uint8_t *notes, uint32_t notes_size,
-                   uint32_t limit)
+                   uint64_t limit)
 {
     struct mm *mm = current_proc->mm;
     struct core_region *regions;
@@ -464,8 +464,8 @@ int32_t core_write(core_write_fn write, void *ctx, const uint8_t *notes, uint32_
     uint32_t count;
     uint32_t phnum;
     uint32_t data;
-    uint32_t end;
-    uint32_t off;
+    uintptr_t end;
+    uintptr_t off;
     uint32_t i;
 
     (void)wq_wait_event_nointr(&current_proc->tg->gone, core_quiet, current_proc->tg);

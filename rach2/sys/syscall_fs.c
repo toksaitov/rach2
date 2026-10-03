@@ -9979,7 +9979,7 @@ struct core_file {
     struct open_file *ofd;
     uint64_t pos;
     uint64_t end;
-    uint32_t written;
+    uint64_t written;
 };
 
 /** The core file's writer for `core_write`: `len` bytes of `buf` at the
@@ -10023,7 +10023,7 @@ static int32_t core_file_put(void *ctx, const void *buf, uint32_t len)
 int32_t fs_core_file(int signo, unsigned long limit)
 {
     static const char zero;
-    uint32_t most = (uint32_t)limit == limit ? (uint32_t)limit : 0xFFFFFFFFu;
+    uint64_t most = limit;
     struct core_file cf;
     fd_entry_t *entry;
     uint32_t notes_size;

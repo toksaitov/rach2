@@ -212,13 +212,13 @@ uint8_t *core_notes(int signo, uint32_t *size)
  * holes, the bytes counted toward `limit` as `core_write` counts them.
  */
 int32_t core_write(core_write_fn write, void *ctx, const uint8_t *notes, uint32_t notes_size,
-                   uint32_t limit)
+                   uint64_t limit)
 {
     static const uint8_t header[MODEL_HEADER] = {0x7F, 'E', 'L', 'F'};
     static uint8_t page[PAGE_SIZE];
     const uint8_t *parts[4];
     uint32_t lens[4];
-    uint32_t done = 0;
+    uint64_t done = 0;
     int32_t rc;
     int i;
 

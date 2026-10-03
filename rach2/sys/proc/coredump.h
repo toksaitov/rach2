@@ -52,15 +52,14 @@ void core_note_put(uint8_t **p, const char *name, uint32_t type, const void *des
  * while the writer sleeps.
  */
 int32_t core_write(core_write_fn write, void *ctx, const uint8_t *notes, uint32_t notes_size,
-                   uint32_t limit);
+                   uint64_t limit);
 
 /**
  * Write the core file of the current process through `core_write` as
  * "core" in its working directory, a new file of mode 0600 less the umask,
  * after unlinking whatever had the name, at most `limit` bytes, the soft
- * RLIMIT_CORE; `core_write` counts in 32 bits, so a limit past them writes
- * at most 4 GiB less a byte. 0, or a negative errno. Defined in
- * syscall_fs.c, which opens files.
+ * RLIMIT_CORE. 0, or a negative errno. Defined in syscall_fs.c, which opens
+ * files.
  */
 int32_t fs_core_file(int signo, unsigned long limit);
 
