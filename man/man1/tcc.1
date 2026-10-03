@@ -227,8 +227,34 @@ The upstream
 format is for the TMS320C67xx target only.
 .It Fl Wl,-Ttext= Ns Ar address
 Set the text address in the executable layout.
+.It Fl Wl,-T,\& Ns Ar script , Fl Wl,--script= Ns Ar script
+Lay a static executable out by the GNU ld script in the file
+.Ar script :
+the addresses and load addresses of its sections, its program headers,
+which the script must name in
+.Ic PHDRS ,
+and the symbols it assigns.
+The script may have
+.Ic ENTRY ,
+assignments,
+.Ic PHDRS ,
+and
+.Ic SECTIONS
+with
+.Ic AT ,
+input section patterns and
+.Pa /DISCARD/ ;
+its expressions may have
+.Ic ALIGN ,
+.Ic ADDR ,
+.Ic LOADADDR ,
+.Ic SIZEOF
+and
+.Ic SIZEOF_HEADERS .
+Anything else is an error.
 .It Fl Wl,-section-alignment= Ns Ar value
-Set section alignment in the executable layout.
+Set section alignment in the executable layout: with a script, the
+alignment modulo which a segment's file offset follows its address.
 .It Fl Wl,-file-alignment= Ns Ar value
 An option of the Windows target; the Rach2 compiler rejects it as an
 unsupported linker option.

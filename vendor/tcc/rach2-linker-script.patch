@@ -1,0 +1,921 @@
+Link a static executable by a GNU ld script, the file -Wl,-T or
+-Wl,--script names.
+
+A kernel linked at an address in the top of the address space and loaded
+at a low physical one takes its layout from a script: the address of
+each section, its load address, the program headers, and symbols such as
+the end of the image by physical address. TinyCC 0.9.27 read a script
+only for INPUT and GROUP and placed the sections itself, the data
+segment a page further from the code in memory than in the file. This
+reads the part of the script language such a layout has, and lays a
+static executable out by it:
+
+  * ENTRY; symbol assignments, at the top and in SECTIONS, with `.` among
+    them; PHDRS with PT_LOAD, FILEHDR, PHDRS and FLAGS; output sections
+    with an address, AT(), a list of input section patterns and
+    assignments, and :phdr; and /DISCARD/.
+  * Expressions of numbers, with K or M after them, symbols the script
+    assigned before, `.`, the operators of C from unary minus and ~ to |,
+    and ALIGN, ADDR, LOADADDR, SIZEOF and SIZEOF_HEADERS.
+
+An allocated section the script names nowhere, as TinyCC's own .got,
+joins the end of the last output section of its kind, code, read-only
+data, data or .bss. A section lies in the file as far from its segment's
+start as it lies in memory, and a segment starts at the first file offset
+past the one before that is congruent to its address modulo the section
+alignment, -Wl,-section-alignment, as GNU ld lays one out with its
+maximum page size. Where the script's sections follow one another in
+memory, the file then holds them as memory does, which the a.out kludge
+of a Multiboot header needs: its loader copies the file to memory whole.
+The script's symbols are absolute, and take the place of any other
+definition, TinyCC's own _etext and _end among them.
+
+Anything else in a script is an error, not something passed over. A link
+without a script is unchanged.
+
+--- a/libtcc.c
++++ b/libtcc.c
+@@ -916,6 +916,8 @@ LIBTCCAPI void tcc_delete(TCCState *s1)
+     tcc_free(s1->tcc_lib_path);
+     tcc_free(s1->soname);
+     tcc_free(s1->rpath);
++    tcc_free(s1->linker_script);
++    tcc_free(s1->elf_entry);
+     tcc_free(s1->init_symbol);
+     tcc_free(s1->fini_symbol);
+     tcc_free(s1->outfile);
+@@ -1345,6 +1347,9 @@ static int tcc_set_linker(TCCState *s, const char *option)
+                 || link_option(option, "Ttext=", &p)) {
+             s->text_addr = strtoull(p, &end, 16);
+             s->has_text_addr = 1;
++        } else if (link_option(option, "T=", &p)
++                || link_option(option, "script=", &p)) {
++            copy_linker_arg(&s->linker_script, p, 0);
+         } else if (link_option(option, "init=", &p)) {
+             copy_linker_arg(&s->init_symbol, p, 0);
+             ignoring = 1;
+--- a/tcc.h
++++ b/tcc.h
+@@ -651,6 +651,8 @@ struct TCCState {
+     char *tcc_lib_path; /* CONFIG_TCCDIR or -B option */
+     char *soname; /* as specified on the command line (-soname) */
+     char *rpath; /* as specified on the command line (-Wl,-rpath=) */
++    char *linker_script; /* a GNU ld script for a static executable (-Wl,-T) */
++    char *elf_entry; /* the entry symbol the script names, if not _start */
+     int enable_new_dtags; /* ditto, (-Wl,--enable-new-dtags) */
+ 
+     /* output type, see TCC_OUTPUT_XXX */
+--- a/tccelf.c
++++ b/tccelf.c
+@@ -1911,7 +1911,7 @@ static void tcc_output_elf(TCCState *s1, FILE *f, int phnum, ElfW(Phdr) *phdr,
+     default:
+     case TCC_OUTPUT_EXE:
+         ehdr.e_type = ET_EXEC;
+-        ehdr.e_entry = get_elf_sym_addr(s1, "_start", 1);
++        ehdr.e_entry = get_elf_sym_addr(s1, s1->elf_entry ? s1->elf_entry : "_start", 1);
+         break;
+     case TCC_OUTPUT_DLL:
+         ehdr.e_type = ET_DYN;
+@@ -2057,6 +2057,795 @@ static void tidy_section_headers(TCCState *s1, int *sec_order)
+     tcc_free(backmap);
+ }
+ 
++/* ------------------------------------------------------------------------- */
++/* A GNU ld script for a static executable, the file -Wl,-T names: the part
++   of the language a kernel's layout has. The script sets the address of
++   each output section, its load address with AT(), and the program headers
++   it goes in (PHDRS, with FILEHDR and PHDRS for the first), and assigns
++   symbols where it lays the sections out. Output sections gather TinyCC's
++   sections by name; one the script names nowhere goes at the end of the
++   last output section of its kind (code, read-only data, data, .bss), and
++   /DISCARD/ leaves a section out of the image. Each section lies in the
++   file as far from the start of its segment as in memory, and a segment
++   begins at a file offset congruent to its address modulo the section
++   alignment (-Wl,-section-alignment), as GNU ld lays one out.
++
++   The expressions have numbers, with K or M after them for KiB or MiB,
++   symbols the script assigned before, `.`, the operators of C from unary
++   minus and ~ to |, and ALIGN, ADDR, LOADADDR, SIZEOF and SIZEOF_HEADERS.
++   Anything else in the script is an error rather than something passed
++   over. */
++
++typedef struct LdSym {
++    char *name;
++    addr_t value;
++} LdSym;
++
++typedef struct LdPhdr {
++    char *name;
++    int filehdr;    /* FILEHDR: the segment begins with the ELF headers */
++    int flags;      /* FLAGS(n), or -1 for the flags of its sections */
++} LdPhdr;
++
++enum { LD_ASSIGN, LD_INPUT, LD_OUTPUT };
++
++typedef struct LdItem {     /* an assignment, or a list of section patterns */
++    int kind;
++    char *name;             /* LD_ASSIGN: the symbol, or "." */
++    const char *expr;       /* LD_ASSIGN: where the expression starts */
++    int npat;
++    char **pat;             /* LD_INPUT: the patterns */
++    int out;                /* LD_OUTPUT: the output section */
++} LdItem;
++
++typedef struct LdOut {      /* an output section */
++    char *name;
++    const char *addr;       /* the address expression, or NULL */
++    const char *at;         /* the expression of AT(), or NULL */
++    int discard;            /* /DISCARD/ */
++    int phdr;               /* the program header, -1 for the previous one's */
++    int nitem;
++    LdItem *item;
++    int laid;               /* its address is known */
++    addr_t vaddr, lma, size;
++} LdOut;
++
++typedef struct LdScript {
++    const char *file;
++    char *text;
++    char *entry;
++    int nphdr;
++    LdPhdr *phdr;
++    int nout;
++    LdOut *out;
++    int nstmt;
++    LdItem *stmt;           /* SECTIONS: assignments and output sections */
++    int nsym;
++    LdSym *sym;
++    addr_t dot;
++    addr_t headers;
++} LdScript;
++
++static void ld_error(LdScript *ls, const char *p, const char *msg)
++{
++    int line = 1;
++    const char *q;
++    for (q = ls->text; q < p; q++)
++        line += *q == '\n';
++    tcc_error("%s:%d: %s", ls->file, line, msg);
++}
++
++static void ld_skip(LdScript *ls, const char **pp)
++{
++    const char *p = *pp;
++    for (;;) {
++        while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')
++            p++;
++        if (p[0] == '/' && p[1] == '*') {
++            const char *e = strstr(p + 2, "*/");
++            if (!e)
++                ld_error(ls, p, "a comment does not end");
++            p = e + 2;
++        } else
++            break;
++    }
++    *pp = p;
++}
++
++/* A name: a section, a pattern or a symbol. In an expression a name has
++   only the characters of an identifier and the dot. */
++static char *ld_name(LdScript *ls, const char **pp, int in_expr)
++{
++    const char *p, *q;
++    char *s;
++    ld_skip(ls, pp);
++    p = q = *pp;
++    while (isid(*q) || isnum(*q) || *q == '.' || *q == '$' ||
++           (!in_expr && (*q == '*' || *q == '?' || *q == '/' || *q == '-' ||
++                         *q == '[' || *q == ']')))
++        q++;
++    if (q == p)
++        ld_error(ls, p, "a name is expected");
++    s = tcc_malloc(q - p + 1);
++    memcpy(s, p, q - p);
++    s[q - p] = '\0';
++    *pp = q;
++    return s;
++}
++
++static int ld_word(LdScript *ls, const char **pp, const char *word)
++{
++    size_t n = strlen(word);
++    const char *p;
++    ld_skip(ls, pp);
++    p = *pp;
++    if (strncmp(p, word, n) || isid(p[n]) || isnum(p[n]))
++        return 0;
++    *pp = p + n;
++    return 1;
++}
++
++static int ld_char(LdScript *ls, const char **pp, int c)
++{
++    ld_skip(ls, pp);
++    if (**pp != c)
++        return 0;
++    ++*pp;
++    return 1;
++}
++
++static void ld_need(LdScript *ls, const char **pp, int c)
++{
++    char msg[32];
++    if (!ld_char(ls, pp, c)) {
++        snprintf(msg, sizeof msg, "'%c' is expected", c);
++        ld_error(ls, *pp, msg);
++    }
++}
++
++static LdOut *ld_out_named(LdScript *ls, const char *name)
++{
++    int i;
++    for (i = 0; i < ls->nout; i++)
++        if (!strcmp(ls->out[i].name, name))
++            return &ls->out[i];
++    return NULL;
++}
++
++static addr_t ld_expr(LdScript *ls, const char **pp, int eval);
++
++/* ALIGN, ADDR and the other functions, a number, a symbol or `.`. */
++static addr_t ld_primary(LdScript *ls, const char **pp, int eval)
++{
++    const char *p;
++    char *name, *end;
++    addr_t v = 0, a;
++    LdOut *o;
++    int i;
++
++    ld_skip(ls, pp);
++    p = *pp;
++    if (ld_char(ls, pp, '(')) {
++        v = ld_expr(ls, pp, eval);
++        ld_need(ls, pp, ')');
++        return v;
++    }
++    if (isnum(*p)) {
++        v = strtoull(p, &end, 0);
++        if (*end == 'K' || *end == 'k')
++            v <<= 10, end++;
++        else if (*end == 'M' || *end == 'm')
++            v <<= 20, end++;
++        *pp = end;
++        return v;
++    }
++    if (*p == '.' && !isid(p[1]) && !isnum(p[1]) && p[1] != '.') {
++        *pp = p + 1;
++        return ls->dot;
++    }
++    if (ld_word(ls, pp, "SIZEOF_HEADERS"))
++        return ls->headers;
++    if (ld_word(ls, pp, "ALIGN")) {
++        ld_need(ls, pp, '(');
++        v = ld_expr(ls, pp, eval);
++        if (ld_char(ls, pp, ',')) {
++            a = ld_expr(ls, pp, eval);
++        } else {
++            a = v;
++            v = ls->dot;
++        }
++        ld_need(ls, pp, ')');
++        if (eval && (a == 0 || (a & (a - 1))))
++            ld_error(ls, p, "ALIGN takes a power of two");
++        return eval ? (v + a - 1) & ~(a - 1) : 0;
++    }
++    if (ld_word(ls, pp, "ADDR") || ld_word(ls, pp, "LOADADDR") ||
++        ld_word(ls, pp, "SIZEOF")) {
++        int which = *p;
++        ld_need(ls, pp, '(');
++        name = ld_name(ls, pp, 0);
++        ld_need(ls, pp, ')');
++        o = ld_out_named(ls, name);
++        tcc_free(name);
++        if (!eval)
++            return 0;
++        if (!o || !o->laid)
++            ld_error(ls, p, "the output section is not laid out yet");
++        return which == 'A' ? o->vaddr : which == 'L' ? o->lma : o->size;
++    }
++    name = ld_name(ls, pp, 1);
++    for (i = ls->nsym - 1; i >= 0; i--)
++        if (!strcmp(ls->sym[i].name, name))
++            break;
++    tcc_free(name);
++    if (!eval)
++        return 0;
++    if (i < 0)
++        ld_error(ls, p, "the symbol is not assigned before this");
++    return ls->sym[i].value;
++}
++
++static addr_t ld_unary(LdScript *ls, const char **pp, int eval)
++{
++    if (ld_char(ls, pp, '-'))
++        return -ld_unary(ls, pp, eval);
++    if (ld_char(ls, pp, '~'))
++        return ~ld_unary(ls, pp, eval);
++    return ld_primary(ls, pp, eval);
++}
++
++static addr_t ld_mul(LdScript *ls, const char **pp, int eval)
++{
++    addr_t v = ld_unary(ls, pp, eval), w;
++    const char *p;
++    for (;;) {
++        ld_skip(ls, pp);
++        p = *pp;
++        if (*p != '*' && *p != '/' && *p != '%')
++            return v;
++        ++*pp;
++        w = ld_unary(ls, pp, eval);
++        if (*p == '*')
++            v *= w;
++        else if (!eval)
++            ;
++        else if (w == 0)
++            ld_error(ls, p, "a division by zero");
++        else if (*p == '/')
++            v /= w;
++        else
++            v %= w;
++    }
++}
++
++static addr_t ld_add(LdScript *ls, const char **pp, int eval)
++{
++    addr_t v = ld_mul(ls, pp, eval);
++    for (;;) {
++        if (ld_char(ls, pp, '+'))
++            v += ld_mul(ls, pp, eval);
++        else if (ld_char(ls, pp, '-'))
++            v -= ld_mul(ls, pp, eval);
++        else
++            return v;
++    }
++}
++
++static addr_t ld_shift(LdScript *ls, const char **pp, int eval)
++{
++    addr_t v = ld_add(ls, pp, eval);
++    for (;;) {
++        ld_skip(ls, pp);
++        if (!strncmp(*pp, "<<", 2))
++            *pp += 2, v <<= ld_add(ls, pp, eval);
++        else if (!strncmp(*pp, ">>", 2))
++            *pp += 2, v >>= ld_add(ls, pp, eval);
++        else
++            return v;
++    }
++}
++
++static addr_t ld_and(LdScript *ls, const char **pp, int eval)
++{
++    addr_t v = ld_shift(ls, pp, eval);
++    for (;;) {
++        ld_skip(ls, pp);
++        if (**pp != '&' || (*pp)[1] == '&')
++            return v;
++        ++*pp;
++        v &= ld_shift(ls, pp, eval);
++    }
++}
++
++static addr_t ld_expr(LdScript *ls, const char **pp, int eval)
++{
++    addr_t v = ld_and(ls, pp, eval);
++    for (;;) {
++        ld_skip(ls, pp);
++        if (**pp != '|' || (*pp)[1] == '|')
++            return v;
++        ++*pp;
++        v |= ld_and(ls, pp, eval);
++    }
++}
++
++static void ld_assign(LdScript *ls, const char *name, addr_t value)
++{
++    ls->sym = tcc_realloc(ls->sym, (ls->nsym + 1) * sizeof *ls->sym);
++    ls->sym[ls->nsym].name = tcc_strdup(name);
++    ls->sym[ls->nsym].value = value;
++    ls->nsym++;
++}
++
++/* `NAME = expression;` once NAME is read: where the expression starts. */
++static const char *ld_parse_assign(LdScript *ls, const char **pp)
++{
++    const char *e;
++    ld_need(ls, pp, '=');
++    e = *pp;
++    ld_expr(ls, pp, 0);
++    ld_need(ls, pp, ';');
++    return e;
++}
++
++static void ld_add_item(LdItem **items, int *n, LdItem *it)
++{
++    *items = tcc_realloc(*items, (*n + 1) * sizeof **items);
++    (*items)[(*n)++] = *it;
++}
++
++/* An output section, once its name is read: `NAME [address] : [AT(lma)]
++   { contents } [:phdr]`. */
++static void ld_parse_output(LdScript *ls, const char **pp, char *name)
++{
++    LdOut o;
++    LdItem it;
++    char *s;
++    int i;
++
++    memset(&o, 0, sizeof o);
++    o.name = name;
++    o.phdr = -1;
++    o.discard = !strcmp(name, "/DISCARD/");
++    ld_skip(ls, pp);
++    if (**pp != ':') {
++        o.addr = *pp;
++        ld_expr(ls, pp, 0);
++    }
++    ld_need(ls, pp, ':');
++    if (ld_word(ls, pp, "AT")) {
++        ld_need(ls, pp, '(');
++        o.at = *pp;
++        ld_expr(ls, pp, 0);
++        ld_need(ls, pp, ')');
++    }
++    ld_need(ls, pp, '{');
++    while (!ld_char(ls, pp, '}')) {
++        memset(&it, 0, sizeof it);
++        ld_skip(ls, pp);
++        if (**pp == '*' && ld_char(ls, pp, '*') && ld_char(ls, pp, '(')) {
++            it.kind = LD_INPUT;
++            while (!ld_char(ls, pp, ')')) {
++                s = ld_name(ls, pp, 0);
++                it.pat = tcc_realloc(it.pat, (it.npat + 1) * sizeof *it.pat);
++                it.pat[it.npat++] = s;
++            }
++        } else {
++            it.kind = LD_ASSIGN;
++            it.name = ld_name(ls, pp, 1);
++            it.expr = ld_parse_assign(ls, pp);
++        }
++        ld_add_item(&o.item, &o.nitem, &it);
++    }
++    if (ld_char(ls, pp, ':')) {
++        s = ld_name(ls, pp, 1);
++        for (i = 0; i < ls->nphdr; i++)
++            if (!strcmp(ls->phdr[i].name, s))
++                o.phdr = i;
++        if (o.phdr < 0)
++            ld_error(ls, *pp, "PHDRS has no such program header");
++        tcc_free(s);
++    }
++    ls->out = tcc_realloc(ls->out, (ls->nout + 1) * sizeof *ls->out);
++    ls->out[ls->nout] = o;
++    memset(&it, 0, sizeof it);
++    it.kind = LD_OUTPUT;
++    it.out = ls->nout++;
++    ld_add_item(&ls->stmt, &ls->nstmt, &it);
++}
++
++static LdScript *ld_parse(const char *file)
++{
++    LdScript *ls;
++    FILE *f;
++    long n;
++    const char *p;
++    char *name;
++    LdItem it;
++
++    ls = tcc_mallocz(sizeof *ls);
++    ls->file = file;
++    f = fopen(file, "rb");
++    if (!f || fseek(f, 0, SEEK_END) || (n = ftell(f)) < 0 || fseek(f, 0, SEEK_SET))
++        tcc_error("cannot read the linker script '%s'", file);
++    ls->text = tcc_malloc(n + 1);
++    if (fread(ls->text, 1, n, f) != (size_t)n)
++        tcc_error("cannot read the linker script '%s'", file);
++    ls->text[n] = '\0';
++    fclose(f);
++
++    p = ls->text;
++    for (;;) {
++        ld_skip(ls, &p);
++        if (!*p)
++            break;
++        if (ld_word(ls, &p, "ENTRY")) {
++            ld_need(ls, &p, '(');
++            ls->entry = ld_name(ls, &p, 1);
++            ld_need(ls, &p, ')');
++        } else if (ld_word(ls, &p, "PHDRS")) {
++            ld_need(ls, &p, '{');
++            while (!ld_char(ls, &p, '}')) {
++                LdPhdr ph;
++                ph.name = ld_name(ls, &p, 1);
++                ph.filehdr = 0;
++                ph.flags = -1;
++                if (!ld_word(ls, &p, "PT_LOAD"))
++                    ld_error(ls, p, "a program header here is PT_LOAD");
++                for (;;) {
++                    if (ld_word(ls, &p, "FILEHDR")) {
++                        ph.filehdr = 1;
++                    } else if (ld_word(ls, &p, "PHDRS")) {
++                        if (!ph.filehdr)
++                            ld_error(ls, p, "PHDRS comes after FILEHDR");
++                    } else if (ld_word(ls, &p, "FLAGS")) {
++                        ld_need(ls, &p, '(');
++                        ph.flags = ld_expr(ls, &p, 1);
++                        ld_need(ls, &p, ')');
++                    } else
++                        break;
++                }
++                ld_need(ls, &p, ';');
++                ls->phdr = tcc_realloc(ls->phdr, (ls->nphdr + 1) * sizeof *ls->phdr);
++                ls->phdr[ls->nphdr++] = ph;
++            }
++        } else if (ld_word(ls, &p, "SECTIONS")) {
++            ld_need(ls, &p, '{');
++            while (!ld_char(ls, &p, '}')) {
++                name = ld_name(ls, &p, 0);
++                ld_skip(ls, &p);
++                if (*p == '=' && p[1] != '=') {
++                    memset(&it, 0, sizeof it);
++                    it.kind = LD_ASSIGN;
++                    it.name = name;
++                    it.expr = ld_parse_assign(ls, &p);
++                    ld_add_item(&ls->stmt, &ls->nstmt, &it);
++                } else {
++                    ld_parse_output(ls, &p, name);
++                }
++            }
++        } else {
++            const char *e;
++            name = ld_name(ls, &p, 1);
++            e = ld_parse_assign(ls, &p);
++            ld_assign(ls, name, ld_expr(ls, &e, 1));
++            tcc_free(name);
++        }
++    }
++    if (ls->nphdr == 0)
++        ld_error(ls, p, "the script has no PHDRS");
++    return ls;
++}
++
++/* `*` for any run of characters and `?` for any one. */
++static int ld_match(const char *pat, const char *s)
++{
++    for (; *pat; pat++, s++) {
++        if (*pat == '*') {
++            for (;; s++) {
++                if (ld_match(pat + 1, s))
++                    return 1;
++                if (!*s)
++                    return 0;
++            }
++        }
++        if (!*s || (*pat != '?' && *pat != *s))
++            return 0;
++    }
++    return !*s;
++}
++
++static void ld_eval_assign(LdScript *ls, LdItem *it)
++{
++    const char *e = it->expr;
++    addr_t v = ld_expr(ls, &e, 1);
++    if (!strcmp(it->name, "."))
++        ls->dot = v;
++    else
++        ld_assign(ls, it->name, v);
++}
++
++/* The kind of section an orphan joins: code, read-only data, data, .bss. */
++static int ld_kind(Section *s)
++{
++    return (s->sh_type == SHT_NOBITS) * 4 + !!(s->sh_flags & SHF_WRITE) * 2 +
++        !!(s->sh_flags & SHF_EXECINSTR);
++}
++
++/* Lay out the allocated sections as the script says, fill the program
++   headers, and return the file offset past the last section. owner[i] is
++   the output section of TinyCC's section i, and slot[i] the item of it
++   that names it, or its item count for an orphan. */
++static int ld_layout(TCCState *s1, LdScript *ls, ElfW(Phdr) *phdr, int phnum,
++                     int *sec_order)
++{
++    int i, j, k, n, last, *owner, *slot, *order, norder, file_offset;
++    unsigned long s_align;
++    addr_t a, dot, seg_vaddr, seg_off, lma_delta, last_off;
++    Section *s;
++    LdOut *o, *prev;
++
++    owner = tcc_malloc(s1->nb_sections * sizeof *owner);
++    slot = tcc_malloc(s1->nb_sections * sizeof *slot);
++    order = tcc_malloc(s1->nb_sections * sizeof *order);
++    s_align = s1->section_align ? s1->section_align : ELF_PAGE_SIZE;
++    ls->headers = sizeof(ElfW(Ehdr)) + phnum * sizeof(ElfW(Phdr));
++
++    /* Which output section each allocated section joins. */
++    for (i = 1; i < s1->nb_sections; i++) {
++        s = s1->sections[i];
++        owner[i] = -1;
++        slot[i] = 0;
++        if (!(s->sh_flags & SHF_ALLOC))
++            continue;
++        for (j = 0; j < ls->nout && owner[i] < 0; j++)
++            for (k = 0; k < ls->out[j].nitem && owner[i] < 0; k++) {
++                LdItem *it = &ls->out[j].item[k];
++                for (n = 0; it->kind == LD_INPUT && n < it->npat; n++)
++                    if (ld_match(it->pat[n], s->name)) {
++                        owner[i] = j;
++                        slot[i] = k;
++                        break;
++                    }
++            }
++        if (owner[i] >= 0 && ls->out[owner[i]].discard) {
++            /* left out of the image: kept as an unloaded section */
++            s->sh_flags &= ~SHF_ALLOC;
++            owner[i] = -1;
++        }
++    }
++    for (i = 1; i < s1->nb_sections; i++) {
++        s = s1->sections[i];
++        if (!(s->sh_flags & SHF_ALLOC) || owner[i] >= 0)
++            continue;
++        for (j = 1; j < s1->nb_sections; j++)
++            if (owner[j] >= 0 && slot[j] < ls->out[owner[j]].nitem &&
++                ld_kind(s1->sections[j]) == ld_kind(s) &&
++                (owner[i] < 0 || owner[j] > owner[i]))
++                owner[i] = owner[j];
++        if (owner[i] < 0)
++            tcc_error("%s: no output section takes %s", ls->file, s->name);
++        slot[i] = ls->out[owner[i]].nitem;
++    }
++
++    /* Addresses, in the order of the statements. */
++    ls->dot = 0;
++    norder = 0;
++    prev = NULL;
++    last = -1;
++    for (i = 0; i < ls->nstmt; i++) {
++        if (ls->stmt[i].kind == LD_ASSIGN) {
++            ld_eval_assign(ls, &ls->stmt[i]);
++            continue;
++        }
++        o = &ls->out[ls->stmt[i].out];
++        if (o->discard)
++            continue;
++        k = 1;
++        for (j = 1; j < s1->nb_sections; j++)
++            if (owner[j] == ls->stmt[i].out && s1->sections[j]->sh_addralign > k)
++                k = s1->sections[j]->sh_addralign;
++        if (o->addr) {
++            const char *e = o->addr;
++            o->vaddr = ld_expr(ls, &e, 1);
++        } else {
++            o->vaddr = (ls->dot + k - 1) & -(addr_t)k;
++        }
++        o->laid = 1;
++        ls->dot = o->vaddr;
++        lma_delta = prev ? prev->lma - prev->vaddr : 0;
++        if (o->at) {
++            const char *e = o->at;
++            o->lma = ld_expr(ls, &e, 1);
++        } else {
++            o->lma = o->vaddr + lma_delta;
++        }
++        if (o->phdr < 0)
++            o->phdr = last;
++        if (o->phdr < 0)
++            tcc_error("%s: %s is in no program header", ls->file, o->name);
++        last = o->phdr;
++        for (k = 0; k <= o->nitem; k++) {
++            if (k < o->nitem && o->item[k].kind == LD_ASSIGN) {
++                ld_eval_assign(ls, &o->item[k]);
++                continue;
++            }
++            for (j = 1; j < s1->nb_sections; j++) {
++                if (owner[j] != ls->stmt[i].out || slot[j] != k)
++                    continue;
++                s = s1->sections[j];
++                a = s->sh_addralign ? s->sh_addralign : 1;
++                dot = (ls->dot + a - 1) & -a;
++                s->sh_addr = dot;
++                ls->dot = dot + s->sh_size;
++                order[norder++] = j;
++            }
++        }
++        o->size = ls->dot - o->vaddr;
++        prev = o;
++    }
++
++    /* The segments and the file offsets: a segment begins with its first
++       output section, at the first file offset past the segment before that
++       is congruent to its address, and a section lies as far into the
++       segment's file bytes as into its memory, so that what alignment opens
++       between an output section's start and its first section is in the
++       file too. */
++    file_offset = ls->headers;
++    for (k = 0; k < phnum; k++) {
++        ElfW(Phdr) *ph = &phdr[k];
++        int first = 1;
++        addr_t file_end = 0, mem_end = 0, flags = PF_R;
++
++        seg_vaddr = seg_off = 0;
++        for (n = 0; n < norder; n++) {
++            j = order[n];
++            s = s1->sections[j];
++            o = &ls->out[owner[j]];
++            if (o->phdr != k)
++                continue;
++            if (first) {
++                first = 0;
++                seg_vaddr = o->vaddr;
++                ph->p_paddr = o->lma;
++                if (ls->phdr[k].filehdr) {
++                    if (k != 0 || seg_vaddr < ls->headers)
++                        tcc_error("%s: FILEHDR belongs to the first program "
++                                  "header, before its first section", ls->file);
++                    seg_vaddr -= ls->headers;
++                    ph->p_paddr -= ls->headers;
++                    seg_off = 0;
++                } else {
++                    seg_off = file_offset +
++                        ((seg_vaddr - file_offset) & (s_align - 1));
++                }
++                if ((seg_off - seg_vaddr) & (s_align - 1))
++                    tcc_error("%s: the segment at 0x%llx would lie at file "
++                              "offset 0x%llx, which differs from it modulo "
++                              "the section alignment 0x%lx", ls->file,
++                              (unsigned long long)seg_vaddr,
++                              (unsigned long long)seg_off, s_align);
++                ph->p_vaddr = seg_vaddr;
++                ph->p_offset = seg_off;
++                file_end = mem_end =
++                    seg_vaddr + (ls->phdr[k].filehdr ? ls->headers : 0);
++            }
++            if (s->sh_addr < mem_end)
++                tcc_error("%s: %s overlaps what comes before it in its "
++                          "segment", ls->file, s->name);
++            if (s->sh_type != SHT_NOBITS) {
++                if (file_end != mem_end)
++                    tcc_error("%s: %s has contents after a section of none "
++                              "in its segment", ls->file, s->name);
++                file_end = s->sh_addr + s->sh_size;
++            }
++            s->sh_offset = seg_off + (s->sh_addr - seg_vaddr);
++            mem_end = s->sh_addr + s->sh_size;
++            if (s->sh_flags & SHF_EXECINSTR)
++                flags |= PF_X;
++            if (s->sh_flags & SHF_WRITE)
++                flags |= PF_W;
++        }
++        if (first)
++            tcc_error("%s: program header %s has no sections", ls->file,
++                      ls->phdr[k].name);
++        ph->p_type = PT_LOAD;
++        ph->p_flags = ls->phdr[k].flags >= 0 ? ls->phdr[k].flags : flags;
++        ph->p_filesz = file_end - seg_vaddr;
++        ph->p_memsz = mem_end - seg_vaddr;
++        ph->p_align = s_align;
++        file_offset = seg_off + ph->p_filesz;
++    }
++    last_off = 0;
++    for (n = 0; n < norder; n++) {
++        s = s1->sections[order[n]];
++        if (s->sh_type == SHT_NOBITS)
++            continue;
++        if (s->sh_offset < last_off)
++            tcc_error("%s: the sections are not in the file in the order of "
++                      "their addresses", ls->file);
++        last_off = s->sh_offset;
++    }
++
++    /* The sections in the order they lie in the file, and then those not
++       loaded, after them. */
++    for (n = 0; n < norder; n++)
++        sec_order[n + 1] = order[n];
++    n = norder + 1;
++    for (i = 1; i < s1->nb_sections; i++) {
++        s = s1->sections[i];
++        if (s->sh_flags & SHF_ALLOC)
++            continue;
++        sec_order[n++] = i;
++        file_offset = (file_offset + s->sh_addralign - 1) & ~(s->sh_addralign - 1);
++        s->sh_offset = file_offset;
++        if (s->sh_type != SHT_NOBITS)
++            file_offset += s->sh_size;
++    }
++    tcc_free(owner);
++    tcc_free(slot);
++    tcc_free(order);
++    return file_offset;
++}
++
++/* The script's symbols in the symbol table, absolute, each in place of any
++   other definition, as GNU ld assigns them. */
++static void ld_define_symbols(TCCState *s1, LdScript *ls)
++{
++    int i, j, idx;
++    ElfW(Sym) *esym;
++
++    for (i = 0; i < ls->nsym; i++) {
++        for (j = i + 1; j < ls->nsym; j++)
++            if (!strcmp(ls->sym[j].name, ls->sym[i].name))
++                break;
++        if (j < ls->nsym)
++            continue; /* a later assignment has the value */
++        idx = find_elf_sym(symtab_section, ls->sym[i].name);
++        if (!idx) {
++            set_elf_sym(symtab_section, ls->sym[i].value, 0,
++                        ELFW(ST_INFO)(STB_GLOBAL, STT_NOTYPE), 0, SHN_ABS,
++                        ls->sym[i].name);
++            continue;
++        }
++        esym = &((ElfW(Sym) *)symtab_section->data)[idx];
++        esym->st_value = ls->sym[i].value;
++        esym->st_shndx = SHN_ABS;
++        esym->st_info = ELFW(ST_INFO)(STB_GLOBAL, STT_NOTYPE);
++        esym->st_size = 0;
++    }
++}
++
++static void ld_free(LdScript *ls)
++{
++    int i, j, k;
++    for (i = 0; i < ls->nout; i++) {
++        for (j = 0; j < ls->out[i].nitem; j++) {
++            LdItem *it = &ls->out[i].item[j];
++            tcc_free(it->name);
++            for (k = 0; k < it->npat; k++)
++                tcc_free(it->pat[k]);
++            tcc_free(it->pat);
++        }
++        tcc_free(ls->out[i].item);
++        tcc_free(ls->out[i].name);
++    }
++    for (i = 0; i < ls->nstmt; i++)
++        if (ls->stmt[i].kind == LD_ASSIGN)
++            tcc_free(ls->stmt[i].name);
++    for (i = 0; i < ls->nphdr; i++)
++        tcc_free(ls->phdr[i].name);
++    for (i = 0; i < ls->nsym; i++)
++        tcc_free(ls->sym[i].name);
++    tcc_free(ls->out);
++    tcc_free(ls->stmt);
++    tcc_free(ls->phdr);
++    tcc_free(ls->sym);
++    tcc_free(ls->entry);
++    tcc_free(ls->text);
++    tcc_free(ls);
++}
++
+ /* Output an elf, coff or binary file */
+ /* XXX: suppress unneeded sections */
+ static int elf_output_file(TCCState *s1, const char *filename)
+@@ -2067,6 +2856,7 @@ static int elf_output_file(TCCState *s1, const char *filename)
+     ElfW(Sym) *sym;
+     Section *strsec, *interp, *dynamic, *dynstr;
+     int textrel;
++    LdScript *ls = NULL;
+ 
+     file_type = s1->output_type;
+     s1->nb_errors = 0;
+@@ -2162,8 +2952,21 @@ static int elf_output_file(TCCState *s1, const char *filename)
+         dynstr->sh_size = dynstr->data_offset;
+     }
+ 
++    if (s1->linker_script && file_type == TCC_OUTPUT_EXE) {
++        if (!s1->static_link || s1->has_text_addr)
++            tcc_error("a linker script lays out a static executable, "
++                      "without -Ttext");
++        ls = ld_parse(s1->linker_script);
++        if (ls->entry) {
++            tcc_free(s1->elf_entry);
++            s1->elf_entry = tcc_strdup(ls->entry);
++        }
++    }
++
+     /* compute number of program headers */
+-    if (file_type == TCC_OUTPUT_OBJ)
++    if (ls)
++        phnum = ls->nphdr;
++    else if (file_type == TCC_OUTPUT_OBJ)
+         phnum = 0;
+     else if (file_type == TCC_OUTPUT_DLL)
+         phnum = 3;
+@@ -2183,8 +2986,13 @@ static int elf_output_file(TCCState *s1, const char *filename)
+     sec_order[0] = 0;
+ 
+     /* compute section to program header mapping */
+-    file_offset = layout_sections(s1, phdr, phnum, interp, strsec, &dyninf,
+-                                  sec_order);
++    if (ls) {
++        file_offset = ld_layout(s1, ls, phdr, phnum, sec_order);
++        ld_define_symbols(s1, ls);
++        ld_free(ls);
++    } else
++        file_offset = layout_sections(s1, phdr, phnum, interp, strsec, &dyninf,
++                                      sec_order);
+ 
+     /* Fill remaining program header and finalize relocation related to dynamic
+        linking. */
