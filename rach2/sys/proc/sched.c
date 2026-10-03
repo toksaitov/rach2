@@ -224,7 +224,10 @@ void sched_make_ready(process_t *p)
  * A processor whose own queue has nothing to run takes a process from the
  * busiest other queue (`sched_steal`), and with nothing there either it
  * goes on with its current process if that one can still run, or switches
- * to its idle task, which waits for work (`sched_idle_loop`). A process that
+ * to its idle task, which waits for work (`sched_idle_loop`). A current
+ * process a suspend to idle holds is made ready where it is, and leaves: on
+ * one processor the suspend's writer was the only one to run, and on
+ * several the others' next tick stops what they run. A process that
  * blocks or ends therefore always leaves the processor, and a woken one may
  * run on any processor it may use. Before the idle tasks exist, at boot, a
  * process with nothing to switch to stays, and its caller idles in place.
@@ -283,6 +286,9 @@ void schedule(void)
     old = cpu->current;
     if (old->state != PROC_READY) {
         old->woken = 0;
+    }
+    if (cpu->idle && old != cpu->idle && old->state == PROC_RUNNING && !suspend_lets_run(old)) {
+        old->state = PROC_READY;
     }
     if (_wake_turn[me]) {
         next = sched_find(me, 1);
@@ -361,7 +367,11 @@ void sched_idle_loop(void)
  * Preempt from an interrupt handler.
  *
  * A process interrupted in user mode, the idle process and a kernel thread
- * are switched at once. A process inside a system call is not: the call's
+ * are switched at once. A processor's idle task is not: the interrupt ended
+ * its halt, and its loop selects as soon as the handler returns, with the
+ * idle marker of the halt cleared first, which a switch from inside the
+ * handler would leave set for the process switched to. A process inside a
+ * system call is not either: the call's
  * code runs with interrupts on while its own state is half changed, and
  * `sys_exit`, for one, publishes the zombie its parent may reap, kernel
  * stack and all, before it calls `schedule`. The request is kept on the
@@ -370,6 +380,9 @@ void sched_idle_loop(void)
  */
 void sched_preempt(void)
 {
+    if (current_proc && current_proc == this_cpu()->idle) {
+        return;
+    }
     if (current_proc && current_proc->in_syscall) {
         current_proc->need_resched = 1;
         return;
