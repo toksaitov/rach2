@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd October 3, 2026
 .Dt RACH2-RECOVER 8
 .Os
 .Sh NAME
@@ -74,10 +74,13 @@ Write the image at offset 0 with
 then read it back with
 .Ql reflash --verify .
 A write failure or differing readback hash is reported.
-Run
-.Ql diskctl reread
-to reload the partition table.
-If it cannot, report that the image was written and verified and that
+For an image with a GUID table, run
+.Ql diskctl relocate ,
+which moves the table's backup from where the image ends to the disk's
+last sectors and reloads the partition table; for an image with an MBR,
+run
+.Ql diskctl reread .
+If either cannot, report that the image was written and verified and that
 the machine must be rebooted before anything on that disk is mounted.
 On success, report that the disk was restored and read back.
 .It 4: install a kernel on a boot partition

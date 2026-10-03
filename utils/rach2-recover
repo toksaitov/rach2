@@ -193,7 +193,16 @@ $(($(disk_field "$n" 5) * 512)) bytes, $(disk_field "$n" 3), table $(disk_field 
         warn "what reached the disk hashes to $back and the image to $want"
         return 0
     }
-    if ! diskctl reread "$target" > /dev/null; then
+    # An image with a GUID table, which its protective MBR's type 0xEE says,
+    # has its backup where the image ends; on a larger disk it goes to the
+    # disk's end, as the installer puts it, and the table is read again.
+    if [ "$(dd if="$image" bs=1 skip=450 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')" = ee ]; then
+        if ! diskctl relocate "$target" > /dev/null; then
+            warn "$target: the image is on the disk and read back, and its GUID table's backup \
+was not moved to the disk's end; reboot before mounting anything from it"
+            return 0
+        fi
+    elif ! diskctl reread "$target" > /dev/null; then
         warn "$target: the image is on the disk and read back, and the kernel would not read \
 its new table; reboot before mounting anything from it"
         return 0
