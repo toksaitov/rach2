@@ -27,9 +27,12 @@ Rach2 becomes a machine that students share: logged in over SSH at once, compili
 
 ### The boot by UEFI and by BIOS
 
-* GRUB's `x86_64-efi` image is pinned in `vendor/grub/` beside the six BIOS images, which do not change, made by `regen_grub.sh` from the same snapshot (the package `grub-efi-amd64-bin`) under its review procedure.
+* `regen_grub.sh` adds to `vendor/grub/`, from the same snapshot and under its review procedure, GRUB's `x86_64-efi` image (the package `grub-efi-amd64-bin`) and a BIOS core image for a GPT disk's BIOS boot partition. The six BIOS images stay, for MBR disks and the stick.
 * Both kernels carry a multiboot2 header beside the multiboot one. GRUB loads them with multiboot2 on either firmware, entering the i686 kernel and the x86-64 kernel's 32-bit entry in protected mode; QEMU's `-kernel` keeps multiboot, through the a.out kludge for x86-64. The kernel reads either form into one boot record: the memory map (the EFI map under UEFI), the framebuffer, the ACPI RSDP, the modules and the command line.
-* The disk keeps its MBR layout, and its boot partition becomes the EFI system partition: type 0xEF, the FAT volume it is now, with GRUB's EFI image as `\EFI\BOOT\BOOTX64.EFI` beside the kernels, `grub.cfg` and the environment block, which the GRUB of either firmware reads. UEFI firmware boots an MBR disk from a partition of type 0xEF, as the UEFI specification requires. The MBR, its identity, the BIOS core in the gap after it, the recovery and root partitions, `growroot` and `bootctl`'s slots and trial boot do not change, so one disk boots by either firmware. `rach2-install --update` converts an installed disk. GPT, which disks over 2 TiB need, is later work. The recovery stick's image has an EFI boot image as a second El Torito entry and as an MBR partition of type 0xEF, so that it boots by either firmware too.
+* A new install writes GPT, since MBR addresses no more than 2 TiB: a protective MBR with GRUB's BIOS boot code, a BIOS boot partition with GRUB's BIOS core, the EFI system partition, the recovery partition and the ext2 root. The EFI system partition is the boot partition of now, a FAT volume, with GRUB's EFI image as `\EFI\BOOT\BOOTX64.EFI` beside the kernels, `grub.cfg` and the environment block, which the GRUB of either firmware reads. One disk of any size thus boots by either firmware, and its root fills it, up to ext2's 16 TiB with 4 KiB blocks.
+* The boot line names a GPT disk by its GUID, `rach2.boot=GPTID=GUID,N`, beside `MBRID` for the disks installed before, in the kernel, `init`, `diskctl`, the recovery system and the image tools. The installer moves the backup GPT to the disk's last sector after it writes the image, and `growroot` grows a GPT partition and rewrites both tables. `bootctl`'s slots and trial boot do not change.
+* `rach2-install --update` keeps an MBR disk as MBR and makes its boot partition the EFI system partition, type 0xEF, which UEFI firmware boots as its specification requires. The recovery stick keeps its MBR, with an EFI boot image as a second El Torito entry and as an MBR partition of type 0xEF, so that it boots by either firmware too.
+* An NVMe driver, since most PCs since 2018 keep their disk on NVMe: the admin queue and one I/O queue pair, PRP lists, MSI-X or MSI, and each namespace as a disk that the installer, `growroot` and the boot by either firmware take as they take a SATA disk.
 * Secure Boot must be off: the pinned GRUB is not signed. The documents say so.
 * The console draws its font, Cyrillic included, on the firmware's framebuffer when there is one, as there always is under UEFI, at twice the size on a screen 2000 pixels wide or more; VGA text stays when the machine boots in text mode. `/dev/fb0` for programs is left to the framebuffer's milestone.
 * The kernel reads ACPI's tables: the RSDP from multiboot2 or the BIOS area, the RSDT or XSDT, the MADT (the processors, the IOAPICs and the interrupt overrides), the FADT (the PM timer, the reset register, the PM1 control block), the HPET and the MCFG. Power off takes `\_S5` from the DSDT by a search of its bytes, with the board table as the fallback; there is no AML interpreter.
@@ -49,7 +52,7 @@ Rach2 becomes a machine that students share: logged in over SSH at once, compili
 
 * `tests/run` takes the architecture from `ARCH`, and the registry says which suites each runs: x86-64 runs every suite but the GNU root's. The suites boot QEMU with two processors. `tests/run all` runs both architectures.
 * QEMU's UEFI firmware, OVMF, joins `tools/setup` and `doctor.sh`: the package `ovmf` on Debian and Ubuntu, and the `edk2-x86_64-code.fd` QEMU ships on macOS.
-* The Lenovo's disk is converted by `rach2-install --update`, and the owner sets its firmware to boot by UEFI, the one step of the milestone that needs a person at the machine. It boots the x86-64 kernel with its base system once as a trial, with its disk, USB, network, sound, display, all of its memory and all of its processors used there, and ends on the final i686 build with the GNU root, booted by UEFI.
+* The Lenovo is installed again with the GPT layout, and the owner sets its firmware to boot by UEFI, the one step of the milestone that needs a person at the machine; the conversion of an MBR disk by `--update` is checked in QEMU. It boots the x86-64 kernel with its base system once as a trial, with its disk, USB, network, sound, display, all of its memory and all of its processors used there, and ends on the final i686 build with the GNU root, booted by UEFI.
 * Codex reviews the milestone's whole diff once, at its end, the owner's choice of 2026-10-03; batches 1 and 2 are checked without a review.
 
 ## How the work runs
@@ -86,7 +89,7 @@ The toolchain in `tools/setup` and `doctor.sh` (`x86_64-elf-gcc` and its binutil
 
 `ARCH` in `tests/run` and the QEMU it starts; the registry's architectures; each suite's i386 expectations given per architecture; a row that boots x86-64 with 8 GiB, finds all of it in `/proc/meminfo`, and fills and checks memory above 4 GiB from a program; `selfbuild` on x86-64; `tests/run all` over both.
 
-### Batch 3: UEFI and SMP, on both architectures
+### Batch 3: UEFI, GPT, NVMe and SMP, on both architectures
 
 #### Phase 6: ACPI and the interrupt controllers
 
@@ -96,18 +99,18 @@ ACPI's tables; the IOAPIC in place of the PIC, with the MADT's overrides; the lo
 
 The trampoline and the start of each processor; the per-processor GDT, TSS, stacks and idle task; spinlocks and the big lock on every entry; the sections of the subsystems that leave it turned into their spinlocks; TLB shootdowns, reschedules and the stop by interprocessor interrupt; the run queues per processor with their balancing and affinity; `/proc/cpuinfo`, `/proc/stat`, `/sys/devices/system/cpu/` and the affinity calls; `maxcpus=`.
 
-#### Phase 8: the boot by UEFI
+#### Phase 8: the boot by UEFI, GPT and NVMe
 
-The EFI GRUB image through `regen_grub.sh`; the multiboot2 headers and the boot record; the framebuffer console; the boot partition as the EFI system partition in the installer, its `--update`, the disk images and the recovery stick's image; OVMF in `tools/setup`.
+The EFI GRUB image and the GPT BIOS core through `regen_grub.sh`; the multiboot2 headers and the boot record; the framebuffer console; the GPT layout and `GPTID` in the installer, `growroot`, `init`, `diskctl`, the recovery system, the kernel and the image tools; the conversion of an MBR disk by `--update`; the recovery stick's image; the NVMe driver; OVMF in `tools/setup`.
 
 #### Phase 9: the tests of batch 3
 
-The suites at two processors; an `smp` suite that boots with one processor and with four, finds them all, sees every processor's user time grow in `/proc/stat` during a parallel build on Rach2, and checks the counts of a stress of `fork`, `exec`, pipes, futexes and `munmap` across processors, a page unmapped on one processor faulting on another; a `uefi` suite that boots both kernels under OVMF from the installed disk and from the recovery stick's image, logs in over SSH, and reads one line of the framebuffer console from QEMU's screen dump against the font; the installer suites on the converted layout.
+The suites at two processors; an `smp` suite that boots with one processor and with four, finds them all, sees every processor's user time grow in `/proc/stat` during a parallel build on Rach2, and checks the counts of a stress of `fork`, `exec`, pipes, futexes and `munmap` across processors, a page unmapped on one processor faulting on another; a `uefi` suite that boots both kernels under OVMF from the installed disk and from the recovery stick's image, logs in over SSH, and reads one line of the framebuffer console from QEMU's screen dump against the font; a row that installs onto a sparse 4 TiB NVMe disk under OVMF, boots it, and finds the grown root past 2 TiB; the installer suites on the GPT layout and on the conversion of an MBR disk.
 
 #### Phase 10: the documents
 
-The top-level Readme, `rach2/Readme.md`, `tools/Readme.md` and the Readmes of what changed; the manual's pages for the calls x86-64 has and i386 lacks, `arch_prctl(2)` first, and for those it has under other names (`mmap`, `lseek`, `stat`, `fcntl`, the socket and IPC calls), with `uname -m`'s `x86_64`; `sched_setaffinity(2)`, `cpuinfo` and the CPU entries of `proc(5)` and `sysfs(5)`; the installer's and `bootctl`'s pages for UEFI; `mancheck` by architecture.
+The top-level Readme, `rach2/Readme.md`, `tools/Readme.md` and the Readmes of what changed; the manual's pages for the calls x86-64 has and i386 lacks, `arch_prctl(2)` first, and for those it has under other names (`mmap`, `lseek`, `stat`, `fcntl`, the socket and IPC calls), with `uname -m`'s `x86_64`; `sched_setaffinity(2)`, `cpuinfo` and the CPU entries of `proc(5)` and `sysfs(5)`; the pages of the installer, `bootctl`, `growroot` and `diskctl` for UEFI and GPT, and `nvme(4)`; `mancheck` by architecture.
 
 #### Phase 11: the machine
 
-The Lenovo's disk converted and its firmware set to UEFI by the owner; the x86-64 kernel and base system there as a trial boot; the final i686 build installed and committed.
+The Lenovo installed again with the GPT layout and its firmware set to UEFI by the owner; the x86-64 kernel and base system there as a trial boot; the final i686 build installed and committed.
