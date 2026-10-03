@@ -1502,7 +1502,7 @@ $(INSTALLER_DISK): $(DEMO_CREDS) $(INSTALLER_EXT2) $(RECOVERY_IMAGE) tools/image
 # boot and recovery partitions at the notebook's offsets that the sealed disk
 # had then, the boot partition at eight sectors to a cluster, which UEFI
 # firmware does not read. installer-repair's conversion row updates it, and
-# `tests/run grow` takes its first 130 MiB for the notebook's fixture.
+# the grow suite takes its first 130 MiB for the notebook's fixture.
 INSTALLER_MBR_DISK = $(IMAGES_DIR)/installer-test-mbr.disk
 $(INSTALLER_MBR_DISK): $(DEMO_CREDS) $(INSTALLER_EXT2) $(RECOVERY_IMAGE) tools/image/mkdisk_grub.sh $(DISK_TOOLS) \
                        | rach2 rach2-recovery utils krffs

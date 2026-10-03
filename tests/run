@@ -327,7 +327,7 @@ inventory() {
             *) tools="needs $tools" ;;
         esac
         case "$(suite_tools "$s")" in
-            *qemu-system-i386*) memory="$(suite_memory "$s") MiB" ;;
+            *qemu-system-*) memory="$(suite_memory "$s") MiB" ;;
             *) memory="no machine" ;;
         esac
         proves=$(suite_proves "$s"); [ -n "$proves" ] || proves="(no sentence in suites.mk names this suite)"
