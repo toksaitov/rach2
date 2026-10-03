@@ -296,7 +296,7 @@ probe mapmusl
 file rach2/sys/syscall_proc.c
 expect MAPMUSL FAIL (mmap2 of a file whose last page is past 32 bits
 old
-    if (params->ebp > 0xFFFFFFFFu - len / PAGE_SIZE) {
+    if (pgoff > 0xFFFFFFFFu - len / PAGE_SIZE) {
         return -EOVERFLOW;
     }
     mem_balance();
@@ -332,7 +332,7 @@ old
  * near 4 GiB the old range would seem to end below its start, and a fixed
  * move onto its own address would remove its source.
  */
-static int remap_args_valid(uint32_t addr, uint32_t old_len, uint32_t new_len, uint32_t flags)
+static int remap_args_valid(uintptr_t addr, uintptr_t old_len, uintptr_t new_len, uint32_t flags)
 {
     return (addr & (PAGE_SIZE - 1)) == 0 && old_len != 0 && new_len != 0 &&
            (flags & ~(uint32_t)(MREMAP_MAYMOVE | MREMAP_FIXED)) == 0 &&
@@ -353,7 +353,7 @@ new
  * near 4 GiB the old range would seem to end below its start, and a fixed
  * move onto its own address would remove its source.
  */
-static int remap_args_valid(uint32_t addr, uint32_t old_len, uint32_t new_len, uint32_t flags)
+static int remap_args_valid(uintptr_t addr, uintptr_t old_len, uintptr_t new_len, uint32_t flags)
 {
     return (addr & (PAGE_SIZE - 1)) == 0 && old_len != 0 && new_len != 0 &&
            (flags & ~(uint32_t)(MREMAP_MAYMOVE | MREMAP_FIXED)) == 0 &&
@@ -367,10 +367,11 @@ file rach2/sys/syscall_proc.c
 expect MAPMUSL FAIL (madvise took a length that rounds up to 0 for an empty range
 old
     if ((addr & (PAGE_SIZE - 1)) != 0 || addr > USER_ADDR_MAX ||
-        params->ecx > USER_ADDR_MAX - addr || advice == MADV_REMOVE || advice >= MADV_HWPOISON) {
+        SC_ARG(params, 1) > USER_ADDR_MAX - addr || advice == MADV_REMOVE ||
+        advice >= MADV_HWPOISON) {
 new
     if ((addr & (PAGE_SIZE - 1)) != 0 || addr > USER_ADDR_MAX ||
-        PAGE_UP(params->ecx) > USER_ADDR_MAX - addr || advice == MADV_REMOVE ||
+        PAGE_UP(SC_ARG(params, 1)) > USER_ADDR_MAX - addr || advice == MADV_REMOVE ||
         advice >= MADV_HWPOISON) {
 end
 
@@ -380,10 +381,10 @@ file rach2/sys/syscall_proc.c
 expect MAPMUSL FAIL (msync took a length that rounds up to 0 for an empty range
 old
     if ((addr & (PAGE_SIZE - 1)) != 0 || (flags & ~7u) != 0 || (flags & 5u) == 5u ||
-        addr > USER_ADDR_MAX || params->ecx > USER_ADDR_MAX - addr) {
+        addr > USER_ADDR_MAX || SC_ARG(params, 1) > USER_ADDR_MAX - addr) {
 new
     if ((addr & (PAGE_SIZE - 1)) != 0 || (flags & ~7u) != 0 || (flags & 5u) == 5u ||
-        addr > USER_ADDR_MAX || PAGE_UP(params->ecx) > USER_ADDR_MAX - addr) {
+        addr > USER_ADDR_MAX || PAGE_UP(SC_ARG(params, 1)) > USER_ADDR_MAX - addr) {
 end
 
 fault forced-write-grants-write
@@ -455,10 +456,10 @@ probe ptracemusl
 file rach2/sys/syscall.c
 expect PTRACEMUSL FAIL (the entry stop of write: errno
 old
-            syscall_num = (uint32_t)current_proc->orig_eax;
-            skip = current_proc->orig_eax == -1;
+            syscall_num = (uint32_t)current_proc->orig_nr;
+            skip = current_proc->orig_nr == -1;
 new
-            skip = current_proc->orig_eax == -1;
+            skip = current_proc->orig_nr == -1;
 end
 
 fault syscall-skip-runs-call
@@ -466,11 +467,11 @@ probe ptracemusl
 file rach2/sys/syscall.c
 expect PTRACEMUSL FAIL (a write changed to -1 did not return 42: errno
 old
-            syscall_num = (uint32_t)current_proc->orig_eax;
-            skip = current_proc->orig_eax == -1;
+            syscall_num = (uint32_t)current_proc->orig_nr;
+            skip = current_proc->orig_nr == -1;
 new
-            if (current_proc->orig_eax != -1) {
-                syscall_num = (uint32_t)current_proc->orig_eax;
+            if (current_proc->orig_nr != -1) {
+                syscall_num = (uint32_t)current_proc->orig_nr;
             }
 end
 
@@ -494,14 +495,16 @@ probe ptracemusl
 file rach2/sys/syscall.c
 expect PTRACEMUSL FAIL (a read whose restart the tracer cancelled was restarted: errno
 old
-        ret = (int32_t)params->eax;
+        ret = (long)SC_RET(params);
         if (ret != -EINTR) {
             current_proc->restart_nr = 0;
         }
 new
-        ret = (int32_t)params->eax;
+        ret = (long)SC_RET(params);
         current_proc->restart_nr = 0;
-        if (!skip && ret == -EINTR && syscall_restartable(syscall_num, params)) {
+        if (!skip && ret == -EINTR && syscall_num < SYSCALL_TABLE_SIZE &&
+            _syscall_table[syscall_num] &&
+            syscall_restartable(_syscall_table[syscall_num], params)) {
             current_proc->restart_nr = syscall_num + 1u;
         }
 end
@@ -533,7 +536,7 @@ probe mknodmusl
 file rach2/sys/syscall_fs.c
 expect MKNODMUSL FAIL (the kind before the path
 old
-    rc = mknod_kind(params->ecx);
+    rc = mknod_kind((uint32_t)SC_ARG(params, 1));
     if (rc != 0) {
         return rc;
     }
@@ -544,7 +547,7 @@ new
     if (!upath) {
         return -EFAULT;
     }
-    rc = mknod_kind(params->ecx);
+    rc = mknod_kind((uint32_t)SC_ARG(params, 1));
     if (rc != 0) {
         return rc;
     }
@@ -555,7 +558,7 @@ probe mknodmusl
 file rach2/sys/syscall_fs.c
 expect MKNODMUSL FAIL (the kind before the path
 old
-    rc = mknod_kind(params->edx);
+    rc = mknod_kind((uint32_t)SC_ARG(params, 2));
     if (rc != 0) {
         return rc;
     }
@@ -566,7 +569,7 @@ new
     if (!upath) {
         return -EFAULT;
     }
-    rc = mknod_kind(params->edx);
+    rc = mknod_kind((uint32_t)SC_ARG(params, 2));
     if (rc != 0) {
         return rc;
     }
@@ -1023,13 +1026,11 @@ probe epollmusl
 file rach2/sys/syscall_fs.c
 expect EPOLLMUSL FAIL (a read of zero bytes was not EINVAL: errno
 old
-    if (params->edx == 0 && e && e->type == FD_TYPE_ANON && e->ops && e->ops->read) {
-        return read_ops(e, (char __user *)params->ecx, 0);
+    if (SC_ARG(params, 2) == 0 && e && e->type == FD_TYPE_ANON && e->ops && e->ops->read) {
+        return read_ops(e, (char __user *)SC_ARG(params, 1), 0);
     }
-    return read_fd((int)params->ebx, (char __user *)params->ecx, params->edx);
 new
     (void)e;
-    return read_fd((int)params->ebx, (char __user *)params->ecx, params->edx);
 end
 
 fault epoll-edge-polls-readable
@@ -1174,13 +1175,11 @@ probe timerfdmusl
 file rach2/sys/syscall_fs.c
 expect TIMERFDMUSL FAIL (a read of zero bytes was not EINVAL: errno
 old
-    if (params->edx == 0 && e && e->type == FD_TYPE_ANON && e->ops && e->ops->read) {
-        return read_ops(e, (char __user *)params->ecx, 0);
+    if (SC_ARG(params, 2) == 0 && e && e->type == FD_TYPE_ANON && e->ops && e->ops->read) {
+        return read_ops(e, (char __user *)SC_ARG(params, 1), 0);
     }
-    return read_fd((int)params->ebx, (char __user *)params->ecx, params->edx);
 new
     (void)e;
-    return read_fd((int)params->ebx, (char __user *)params->ecx, params->edx);
 end
 
 fault timerfd-long-cut-to-span
@@ -1311,11 +1310,11 @@ old
         }
         unmap_user_range(_curr_dir, addr + new_len, addr + old_len);
         vm_file_reap();
-        return (int32_t)addr;
+        return (long)addr;
     }
 new
     if (new_len <= old_len) {
-        return (int32_t)addr;
+        return (long)addr;
     }
 end
 
@@ -1326,11 +1325,11 @@ expect MAPMUSL FAIL (the page a shrink kept lost its bytes
 old
         unmap_user_range(_curr_dir, addr + new_len, addr + old_len);
         vm_file_reap();
-        return (int32_t)addr;
+        return (long)addr;
 new
         unmap_user_range(_curr_dir, addr, addr + old_len);
         vm_file_reap();
-        return (int32_t)addr;
+        return (long)addr;
 end
 
 fault setlkw-never-waits
@@ -1440,12 +1439,12 @@ probe sigframemusl
 file rach2/sys/syscall_proc.c
 expect SIGFRAMEMUSL FAIL (the handler with SA_RESTART did not run once)
 old
-        handler_flags = sa->flags;
+        handler_flags = (uint32_t)sa->flags;
         if (restart_nr != 0 && (handler_flags & SA_RESTART)) {
             restart_syscall(tf, restart_nr);
         }
 new
-        handler_flags = sa->flags;
+        handler_flags = (uint32_t)sa->flags;
         if (restart_nr != 0 && (handler_flags & SA_RESTART)) {
             continue;
         }
@@ -1456,12 +1455,12 @@ probe sigframemusl
 file rach2/sys/syscall_proc.c
 expect SIGFRAMEMUSL FAIL (the handler without SA_RESTART did not run once)
 old
-        handler_flags = sa->flags;
+        handler_flags = (uint32_t)sa->flags;
         if (restart_nr != 0 && (handler_flags & SA_RESTART)) {
             restart_syscall(tf, restart_nr);
         }
 new
-        handler_flags = sa->flags;
+        handler_flags = (uint32_t)sa->flags;
         if (restart_nr != 0 && !(handler_flags & SA_RESTART) && signo == SIGUSR1) {
             restart_nr = 0;
             continue;
@@ -2356,16 +2355,16 @@ probe capmusl
 file rach2/sys/syscall_proc.c
 expect CAPMUSL FAIL (a header whose version ends a page was not asked the version alone)
 old
-    if (rc != 0 || params->ecx == 0) {
-        return (params->ecx == 0 && rc == -EINVAL) ? 0 : rc;
+    if (rc != 0 || SC_ARG(params, 1) == 0) {
+        return (SC_ARG(params, 1) == 0 && rc == -EINVAL) ? 0 : rc;
     }
-    rc = cap_pid_in(params->ebx, &pid);
+    rc = cap_pid_in(SC_ARG(params, 0), &pid);
 new
     if (rc == 0) {
-        rc = cap_pid_in(params->ebx, &pid);
+        rc = cap_pid_in(SC_ARG(params, 0), &pid);
     }
-    if (rc != 0 || params->ecx == 0) {
-        return (params->ecx == 0 && rc == -EINVAL) ? 0 : rc;
+    if (rc != 0 || SC_ARG(params, 1) == 0) {
+        return (SC_ARG(params, 1) == 0 && rc == -EINVAL) ? 0 : rc;
     }
 end
 
@@ -2509,8 +2508,8 @@ file rach2/sys/syscall_fs.c
 expect PREADMUSL FAIL (lseek of a /proc snapshot or of /proc/self/mem)
 old
     if (seeks_listing(entry)) {
-        seek_rc = seek_listing(entry, (long long)offset, whence, 0x7FFFFFFFull, &at);
-        return seek_rc != 0 ? seek_rc : (int32_t)at;
+        seek_rc = seek_listing(entry, offset, whence, limit, &at);
+        return seek_rc != 0 ? seek_rc : (long)at;
     }
 new
 end
@@ -2686,14 +2685,14 @@ old
     if (rc != 0) {
         return rc;
     }
-    rc = do_mknod(path, params->ecx, params->edx, end);
+    rc = do_mknod(path, (uint32_t)SC_ARG(params, 1), (uint32_t)SC_ARG(params, 2), end);
 new
     rc = path_from_user(AT_FDCWD, upath, &path);
     end = 0;
     if (rc != 0) {
         return rc;
     }
-    rc = do_mknod(path, params->ecx, params->edx, end);
+    rc = do_mknod(path, (uint32_t)SC_ARG(params, 1), (uint32_t)SC_ARG(params, 2), end);
 end
 
 fault mkdir-end-not-asked
@@ -2705,14 +2704,14 @@ old
     if (rc != 0) {
         return rc;
     }
-    rc = do_mkdir(path, params->ecx);
+    rc = do_mkdir(path, (uint32_t)SC_ARG(params, 1));
 new
     rc = path_from_user(AT_FDCWD, upath, &path);
     (void)end;
     if (rc != 0) {
         return rc;
     }
-    rc = do_mkdir(path, params->ecx);
+    rc = do_mkdir(path, (uint32_t)SC_ARG(params, 1));
 end
 
 fault unlink-end-not-asked
@@ -2975,10 +2974,10 @@ probe direntmusl
 file rach2/sys/syscall_fs.c
 expect DIRENTMUSL FAIL (mkdir of a path whose last name is .)
 old
-    rc = do_mkdir(path, params->ecx);
+    rc = do_mkdir(path, (uint32_t)SC_ARG(params, 1));
 new
     path_drop_dot(path, end);
-    rc = do_mkdir(path, params->ecx);
+    rc = do_mkdir(path, (uint32_t)SC_ARG(params, 1));
 end
 
 fault open-excl-dot-eisdir
@@ -3056,9 +3055,9 @@ probe direntmusl
 file rach2/sys/syscall_fs.c
 expect DIRENTMUSL FAIL (renameat of a name whose last component is . or .. through a descriptor)
 old
-    return rename_from_user((int)params->ebx, old_path, (int)params->edx, new_path, 0);
+    return rename_from_user((int)SC_ARG(params, 0), old_path, (int)SC_ARG(params, 2), new_path, 0);
 new
-    return rename_from_user(AT_FDCWD, old_path, (int)params->edx, new_path, 0);
+    return rename_from_user(AT_FDCWD, old_path, (int)SC_ARG(params, 2), new_path, 0);
 end
 
 fault open-create-root-dir-opens
@@ -4136,7 +4135,7 @@ probe miscprobe
 file rach2/sys/syscall_proc.c
 expect FAIL: child getppid() == parent pid
 old
-int32_t sys_getppid(isr_params_t *params)
+long sys_getppid(isr_params_t *params)
 {
     (void)params;
 
@@ -4146,7 +4145,7 @@ int32_t sys_getppid(isr_params_t *params)
     return (int32_t)pid_seen(current_proc->parent_pid);
 }
 new
-int32_t sys_getppid(isr_params_t *params)
+long sys_getppid(isr_params_t *params)
 {
     static const char probe[] = "miscprobe";
     uint32_t i = 0;
@@ -4171,12 +4170,12 @@ probe pipeprobe
 file rach2/sys/syscall_proc.c
 expect FAIL: child read every byte intact
 old
-int32_t sys_exit(isr_params_t *params)
+long sys_exit(isr_params_t *params)
 {
-    return exit_current((int32_t)((params->ebx & 0xFFu) << 8));
+    return exit_current((int32_t)((SC_ARG(params, 0) & 0xFFu) << 8));
 }
 new
-int32_t sys_exit(isr_params_t *params)
+long sys_exit(isr_params_t *params)
 {
     static const char probe[] = "pipeprobe";
     process_t *parent = get_process(current_proc->parent_pid);
@@ -4185,10 +4184,10 @@ int32_t sys_exit(isr_params_t *params)
     while (parent && i < sizeof(probe) && parent->comm[i] == probe[i]) {
         i++;
     }
-    if (i == sizeof(probe) && params->ebx == 0) {
+    if (i == sizeof(probe) && SC_ARG(params, 0) == 0) {
         terminate_current_process(SIGSEGV);
     }
-    return exit_current((int32_t)((params->ebx & 0xFFu) << 8));
+    return exit_current((int32_t)((SC_ARG(params, 0) & 0xFFu) << 8));
 }
 end
 
@@ -4197,12 +4196,12 @@ probe pipeprobe
 file rach2/sys/syscall_proc.c
 expect FAIL: and said so
 old
-int32_t sys_exit(isr_params_t *params)
+long sys_exit(isr_params_t *params)
 {
-    return exit_current((int32_t)((params->ebx & 0xFFu) << 8));
+    return exit_current((int32_t)((SC_ARG(params, 0) & 0xFFu) << 8));
 }
 new
-int32_t sys_exit(isr_params_t *params)
+long sys_exit(isr_params_t *params)
 {
     static const char probe[] = "pipeprobe";
     process_t *parent = get_process(current_proc->parent_pid);
@@ -4211,10 +4210,10 @@ int32_t sys_exit(isr_params_t *params)
     while (parent && i < sizeof(probe) && parent->comm[i] == probe[i]) {
         i++;
     }
-    if (i == sizeof(probe) && params->ebx == 0) {
+    if (i == sizeof(probe) && SC_ARG(params, 0) == 0) {
         terminate_current_process(SIGSEGV);
     }
-    return exit_current((int32_t)((params->ebx & 0xFFu) << 8));
+    return exit_current((int32_t)((SC_ARG(params, 0) & 0xFFu) << 8));
 }
 end
 
@@ -4223,12 +4222,12 @@ probe jobprobe
 file rach2/sys/syscall_proc.c
 expect FAIL: child: inherit group, setpgid(0,0) -> own group
 old
-int32_t sys_exit(isr_params_t *params)
+long sys_exit(isr_params_t *params)
 {
-    return exit_current((int32_t)((params->ebx & 0xFFu) << 8));
+    return exit_current((int32_t)((SC_ARG(params, 0) & 0xFFu) << 8));
 }
 new
-int32_t sys_exit(isr_params_t *params)
+long sys_exit(isr_params_t *params)
 {
     static const char probe[] = "jobprobe";
     process_t *parent = get_process(current_proc->parent_pid);
@@ -4237,10 +4236,10 @@ int32_t sys_exit(isr_params_t *params)
     while (parent && i < sizeof(probe) && parent->comm[i] == probe[i]) {
         i++;
     }
-    if (i == sizeof(probe) && params->ebx == 0) {
+    if (i == sizeof(probe) && SC_ARG(params, 0) == 0) {
         terminate_current_process(SIGSEGV);
     }
-    return exit_current((int32_t)((params->ebx & 0xFFu) << 8));
+    return exit_current((int32_t)((SC_ARG(params, 0) & 0xFFu) << 8));
 }
 end
 
@@ -4370,12 +4369,12 @@ probe jobprobe
 file rach2/sys/syscall_proc.c
 expect FAIL: child: setsid -> new session (sid==pgid==pid)
 old
-int32_t sys_exit(isr_params_t *params)
+long sys_exit(isr_params_t *params)
 {
-    return exit_current((int32_t)((params->ebx & 0xFFu) << 8));
+    return exit_current((int32_t)((SC_ARG(params, 0) & 0xFFu) << 8));
 }
 new
-int32_t sys_exit(isr_params_t *params)
+long sys_exit(isr_params_t *params)
 {
     static const char probe[] = "jobprobe";
     process_t *parent = get_process(current_proc->parent_pid);
@@ -4384,10 +4383,10 @@ int32_t sys_exit(isr_params_t *params)
     while (parent && i < sizeof(probe) && parent->comm[i] == probe[i]) {
         i++;
     }
-    if (i == sizeof(probe) && params->ebx == 0) {
+    if (i == sizeof(probe) && SC_ARG(params, 0) == 0) {
         terminate_current_process(SIGSEGV);
     }
-    return exit_current((int32_t)((params->ebx & 0xFFu) << 8));
+    return exit_current((int32_t)((SC_ARG(params, 0) & 0xFFu) << 8));
 }
 end
 
@@ -4765,10 +4764,10 @@ end
 
 fault syncfs-missing
 probe vfsprobe
-file rach2/sys/syscall.c
+file rach2/sys/arch/i686/systab.c
 expect syncfs flushes through an open descriptor and refuses a closed one
 old
-    _syscall_table[SYS_SYNCFS] = sys_syncfs;
+    table[SYS_SYNCFS] = sys_syncfs;
 new
     (void)sys_syncfs;
 end
@@ -4897,10 +4896,10 @@ end
 
 fault splice-missing
 probe callsmusl
-file rach2/sys/syscall.c
+file rach2/sys/arch/i686/systab.c
 expect CALLSMUSL FAIL (splice from a pipe to /dev/null was not EINVAL
 old
-    _syscall_table[SYS_SPLICE] = sys_splice;
+    table[SYS_SPLICE] = sys_splice;
 new
     (void)sys_splice;
 end
@@ -5025,12 +5024,12 @@ end
 
 fault fallocate-missing
 probe callsmusl
-file rach2/sys/syscall.c
+file rach2/sys/arch/i686/systab.c
 expect CALLSMUSL FAIL (posix_fallocate of a file open for writing was not EOPNOTSUPP
 old
-    _syscall_table[SYS_FALLOCATE] = sys_fallocate;
+    table[SYS_FALLOCATE] = sys_ia32_fallocate;
 new
-    (void)sys_fallocate;
+    (void)sys_ia32_fallocate;
 end
 
 # The route socket's answers to ip route get and ip rule.
@@ -5072,11 +5071,11 @@ probe callsmusl
 file rach2/sys/syscall_fs.c
 expect CALLSMUSL FAIL (listxattr of /bin/sh was not an empty list
 old
-int32_t sys_listxattr(isr_params_t *params)
+long sys_listxattr(isr_params_t *params)
 {
     return xattr_call(params, XATTR_FOLLOW, 0);
 new
-int32_t sys_listxattr(isr_params_t *params)
+long sys_listxattr(isr_params_t *params)
 {
     return xattr_call(params, XATTR_FOLLOW, -EOPNOTSUPP);
 end
@@ -5272,12 +5271,11 @@ end
 
 fault sigqueue-value-dropped
 probe callsmusl
-file rach2/sys/syscall_proc.c
+file rach2/sys/arch/i686/sigframe.c
 expect CALLSMUSL FAIL (sigqueue's signal did not come with SI_QUEUE, its value and its sender
 old
-    info->status = w[5];
+    k_memcpy(&info->status, in + 20, 4);
 new
-    info->status = 0;
 end
 
 fault pty-output-dropped
