@@ -513,14 +513,6 @@ else
 fi
 mmd -i "$TMPD/p1.img" ::/boot
 mmd -i "$TMPD/p1.img" ::/boot/grub
-# GRUB's EFI image where UEFI firmware looks for a disk's boot program. Its
-# prefix is /boot/grub on this partition, so it opens the menu the BIOS core
-# opens.
-if [ "$TABLE" = gpt ]; then
-    mmd -i "$TMPD/p1.img" ::/EFI
-    mmd -i "$TMPD/p1.img" ::/EFI/BOOT
-    mcopy -i "$TMPD/p1.img" "$TMPD/bootx64.efi" ::/EFI/BOOT/BOOTX64.EFI
-fi
 mcopy -i "$TMPD/p1.img" "$TMPD/candidate.pad" ::/boot/kernel
 mcopy -i "$TMPD/p1.img" "$TMPD/candidate.pad" ::/boot/fallback
 mcopy -i "$TMPD/p1.img" "$GRUB_CFG" ::/boot/grub/grub.cfg
@@ -548,6 +540,17 @@ GENVN=$(wc -c < "$TMPD/genv.head" | tr -d ' ')
 mcopy -i "$TMPD/p1.img" "$TMPD/genv" ::/boot/grub/grubenv
 if [ -n "$HELLO" ]; then
     mcopy -i "$TMPD/p1.img" "$HELLO" ::/hello.txt
+fi
+# GRUB's EFI image where UEFI firmware looks for a disk's boot program. Its
+# prefix is /boot/grub on this partition, so it opens the menu the BIOS core
+# opens. It is copied last, after the environment block, since it is not
+# compressed and holds the block's signature among its strings: a search of
+# the disk for the block, which the suites arm a boot by, finds the block
+# first.
+if [ "$TABLE" = gpt ]; then
+    mmd -i "$TMPD/p1.img" ::/EFI
+    mmd -i "$TMPD/p1.img" ::/EFI/BOOT
+    mcopy -i "$TMPD/p1.img" "$TMPD/bootx64.efi" ::/EFI/BOOT/BOOTX64.EFI
 fi
 
 # Every staged chain, verified before the partition is committed: each of

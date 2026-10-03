@@ -28,9 +28,10 @@
 gnu|qemu-system-i386,ssh,scp,sftp,debugfs|full|gnu-test*|2048
 install|qemu-system-i386,mformat,mmd,mcopy,mke2fs,debugfs,e2fsck|full
 selfbuild|qemu-system-i386,mformat,mmd,mcopy|full|selfbuild-test*,selfbuild.*,selfbuild/*
-installer-repair|qemu-system-i386,qemu-img,shasum,ssh,ssh-keygen,mcopy,mmd,mdeltree,debugfs|full
+installer-repair|qemu-system-i386,qemu-system-x86_64,qemu-img,shasum,ssh,ssh-keygen,mcopy,mmd,mdeltree,mtype,minfo,debugfs|full
 installer|qemu-system-i386,shasum,ssh,ssh-keygen,mformat,mcopy,mtype,mdel|full|installer-test*,installer.*,installer/*|512
 menu|qemu-system-i386,mformat,mmd,mcopy,mke2fs,debugfs,e2fsck|full
+uefi|qemu-system-x86_64,ssh,mformat,mmd,mcopy|full||512
 installer-rehearse|qemu-system-i386,qemu-img,shasum|full||512
 selfbuild-ext2|qemu-system-i386,mformat,mmd,mcopy,mke2fs,debugfs,e2fsck|full
 sealed|qemu-system-i386,ssh,mformat,mmd,mcopy|full

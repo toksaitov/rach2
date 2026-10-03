@@ -17,10 +17,13 @@
 #   installer.sh <stick-image> <sealed-disk> <harness> <work-dir> <password>
 #       <test-stick> <test-disk> <ssh-port> <ptydrive> <demo-key>
 #       [all|install|repair|resume|rehearse|recoverykey] [root-image]
+#       [mbr-disk]
 #
 # The first stick is the product's, carrying the sealed disk; the second
-# carries a 65 MiB disk instead, so the rows that install do not each write a
-# gibibyte and a half.
+# carries a disk of 108 MiB instead, so the rows that install do not each
+# write a gibibyte and a half. Both disks have a GUID table, as a new install
+# writes one. The MBR disk is one installed before milestone 57, which the
+# repair half's conversion row updates.
 #
 
 # shellcheck source=tests/system/deadline.sh
@@ -42,6 +45,7 @@ PTYDRIVE="$9"
 DEMO_KEY="${10}"
 PART="${11:-all}"
 INSTALLER_EXT2="${12:-}"
+MBR_DISK="${13:-}"
 
 if [ -z "$DEMO_KEY" ]; then
     echo "usage: installer.sh <stick-image> <sealed-disk> <harness> <work-dir>" \
@@ -127,10 +131,22 @@ keyless_image() {
     keyless_made=yes
 }
 
+# A field of entry N of a disk image's table, in sectors: its first sector,
+# field 3, or its length, field 4. A GUID table, which a protective MBR's
+# type 0xEE in its first entry says the image has, is read by `mkgpt --list`
+# and an MBR by `mkmbr --list`; both print the extent in bytes.
+entry_field() { # entry_field IMAGE N FIELD
+    if [ "$(od -An -tx1 -j 450 -N 1 "$1" | tr -d ' ')" = ee ]; then
+        "$REPO/build/tools/image/mkgpt" --list "$1"
+    else
+        "$REPO/build/tools/image/mkmbr" --list "$1"
+    fi | awk -v n="$2" -v f="$3" '$1 == n { printf "%d\n", $f / 512; exit }'
+}
+
 # The first sector of the installed disk's recovery partition, its second
 # entry.
 recovery_start() { # recovery_start IMAGE
-    od -An -tu4 -j $((446 + 16 + 8)) -N 4 "$1" | tr -d ' '
+    entry_field "$1" 2 3
 }
 
 # The keyless image put on an installed disk's recovery partition in place of
@@ -632,10 +648,9 @@ else
     bad "the first disk begins $BOOT1 and the second $BOOT2, and the image $BOOTIMG"
 fi
 # The disk that was grown has a larger root than the image; the one that was
-# not has the image's own. The entry's sector count is at offset 12 of the
-# third entry, which begins at 446 + 32.
-GROWN=$(dd if="$DIR/two.img" bs=1 skip=490 count=4 2>/dev/null | od -An -tu4 | tr -d ' ')
-KEPT=$(dd if="$DIR/one.img" bs=1 skip=490 count=4 2>/dev/null | od -An -tu4 | tr -d ' ')
+# not has the image's own. The root is the third entry of the GUID table.
+GROWN=$(entry_field "$DIR/two.img" 3 4)
+KEPT=$(entry_field "$DIR/one.img" 3 4)
 if [ -n "$GROWN" ] && [ "$GROWN" -gt "$KEPT" ]; then
     note "and the root of the disk that was told to grow is larger than the one that was not: OK"
 else
@@ -1118,8 +1133,8 @@ mark "row 11"
 # ---- 14: the root damaged, and the machine updated from the archive: the
 #          superblock zeroed so the root does not mount, then the update
 #          takes the accounts from the archive the last update refreshed and
-#          writes the image into the last ext2 entry of the table. The
-#          archive keeps SSH keys but no other home files. ----
+#          writes the image into the root's entry, the third of the GUID
+#          table. The archive keeps SSH keys but no other home files. ----
 LOG14="$DIR/archive-update.log"
 if "$HARNESS" --bios \
     --qemu-arg=-cpu --qemu-arg=max \
@@ -1164,6 +1179,95 @@ else
 fi
 
 mark "row 14"
+
+# ---- 18: an MBR disk installed before this system booted by UEFI, updated
+#          from the stick and converted on the way. Its boot partition is a
+#          FAT32 of 16348 clusters, at eight sectors to a cluster, which UEFI
+#          firmware does not read: the update makes it again at one sector to
+#          a cluster with its files and its serial, puts GRUB's EFI image in
+#          it beside the kernels and gives its entry the type 0xEF, and the
+#          disk keeps its MBR. The disk then boots by UEFI to a login, with
+#          the root it names by its MBR identity, and by BIOS as before. ----
+if [ -n "$MBR_DISK" ]; then
+# shellcheck source=tools/setup/ovmf_path.sh
+. "$REPO/tools/setup/ovmf_path.sh"
+cp "$MBR_DISK" "$DIR/mbr.img"
+ESP_AT=$(entry_field "$DIR/mbr.img" 1 3)
+if [ "$(od -An -tx1 -j 450 -N 1 "$DIR/mbr.img" | tr -d ' ')" = 0c ] &&
+    minfo -i "$DIR/mbr.img@@$((ESP_AT * 512))" :: 2>/dev/null | grep -q '^cluster size: 8 sectors'; then
+    note "row 18: the MBR disk's boot partition is FAT32 at eight sectors to a cluster, type 0x0c: OK"
+else
+    bad "row 18: the MBR disk is not the layout installed before"
+fi
+LOG18="$DIR/convert.log"
+if "$HARNESS" --bios \
+    --qemu-arg=-cpu --qemu-arg=max \
+    --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
+    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0 \
+    --drive "if=none,id=stick,format=raw,file=$DIR/test-stick.img" \
+    --qemu-arg=-device --qemu-arg=usb-storage,bus=xhci.0,drive=stick,bootindex=0 \
+    --qemu-arg=-drive --qemu-arg="file=$DIR/mbr.img,format=raw,if=ide,index=0,media=disk" \
+    --timeout 3600 --steptmo 1800 --ok "CONVERTDONE" --log "$LOG18" \
+    "expect=recovery image" \
+    "expect=# " "send=mkdir -p /m && mount -t exfat /dev/disk1p2 /m && echo MOUNT\"\"ED" \
+    "expect=MOUNTED" \
+    "send=rach2-install --update /m/$(basename "$INSTALLER_EXT2") /dev/disk0" \
+    "expect=making /dev/disk0p1's file system again" \
+    "expect=converted: /dev/disk0 keeps its MBR and boots by UEFI as well" \
+    "expect=what reached the root is the image" \
+    "expect=armed for one trial boot" \
+    "expect=updated:" "send=bootctl --target /dev/disk0p1 status; umount /m; echo CONVERT\"\"DONE" \
+    "expect=CONVERTDONE" > "$LOG18.harness" 2>&1; then
+    note "row 18: an MBR disk is updated and converted to boot by UEFI as well: OK"
+else
+    sed -n 's/^HARNESS: /installer-test: /p' "$LOG18.harness" >&2
+    bad "row 18: the update that converts an MBR disk"
+fi
+mcopy -n -i "$DIR/mbr.img@@$((ESP_AT * 512))" ::/EFI/BOOT/BOOTX64.EFI "$DIR/converted.efi" 2>/dev/null || true
+if [ "$(od -An -tx1 -j 450 -N 1 "$DIR/mbr.img" | tr -d ' ')" = ef ] &&
+    [ "$(entry_field "$DIR/mbr.img" 1 3)" = "$ESP_AT" ] &&
+    minfo -i "$DIR/mbr.img@@$((ESP_AT * 512))" :: 2>/dev/null | grep -q '^cluster size: 1 sectors' &&
+    minfo -i "$DIR/mbr.img@@$((ESP_AT * 512))" :: 2>/dev/null | grep -q '^serial number: 1ACEF00D' &&
+    cmp -s "$DIR/converted.efi" "$REPO/vendor/grub/bootx64.efi" &&
+    mtype -i "$DIR/mbr.img@@$((ESP_AT * 512))" ::/boot/grub/grub.cfg 2>/dev/null | grep -q 'MBRID=1acef00d,3'; then
+    note "row 18: entry 1 is type 0xef in the same place, one sector to a cluster, serial 1ACE-F00D, GRUB's EFI image and the menu beside it: OK"
+else
+    bad "row 18: the converted disk's MBR entry, file system, serial or EFI image"
+fi
+if [ -n "$OVMF_ARGS" ]; then
+    LOG18B="$DIR/converted-uefi.log"
+    rm -f "$LOG18B"
+    # shellcheck disable=SC2086 # the firmware's arguments are separate words
+    qemu-system-x86_64 -m 512 -cpu max -display none $OVMF_ARGS -no-reboot \
+        -serial "file:$LOG18B" -drive "file=$DIR/mbr.img,format=raw,if=ide,index=0,media=disk" \
+        > "$LOG18B.qemu" 2>&1 &
+    UPID=$!
+    if "$RUNUTIL" until "$LOG18B" "rach2 login:" 240 &&
+        grep -aq "BdsDxe: starting Boot.*HARDDISK" "$LOG18B" &&
+        grep -aq "root: MBRID=1acef00d,3: /dev/disk0p3, ext2" "$LOG18B"; then
+        note "row 18: the converted disk boots by UEFI to a login on its root: OK"
+    else
+        bad "row 18: the converted disk did not boot by UEFI to a login; see $LOG18B"
+    fi
+    kill "$UPID" 2>/dev/null || true
+    "$RUNUTIL" gone "$UPID" 60 || true
+    wait "$UPID" 2>/dev/null || true
+else
+    bad "row 18: no UEFI firmware for x86-64; tools/setup/doctor.sh says where to get it"
+fi
+# The trial was spent on the boot by UEFI and nothing committed it, so the
+# boot by BIOS starts the saved default, the recovery system, through the
+# same menu.
+if "$HARNESS" --bios --qemu-arg=-cpu --qemu-arg=max \
+    --qemu-arg=-drive --qemu-arg="file=$DIR/mbr.img,format=raw,if=ide,index=0,media=disk" \
+    --timeout 300 --steptmo 120 --ok "recovery image" --log "$DIR/converted-bios.log" \
+    "expect=recovery image" > /dev/null 2>&1; then
+    note "row 18: and it still boots by BIOS, into its saved default until a commit: OK"
+else
+    bad "row 18: the converted disk no longer boots by BIOS"
+fi
+mark "row 18"
+fi
 fi
 
 if [ "$PART" = "all" ] || [ "$PART" = "repair" ] || [ "$PART" = "resume" ]; then
@@ -1307,7 +1411,7 @@ else
     exit 1
 fi
 
-REC_START=$(od -An -tu4 -j $((446 + 1 * 16 + 8)) -N 4 "$DIR/one.img" | tr -d ' ')
+REC_START=$(recovery_start "$DIR/one.img")
 [ -n "$REC_START" ] && [ "$REC_START" -gt 0 ] || bad "the recovery partition's start could not be read"
 rm -rf "$DIR/saved-archive"
 mkdir -p "$DIR/saved-archive"
@@ -1327,7 +1431,7 @@ printf '%s\n' "$PUBKEY" "# orphan-uid-2999" > "$DIR/orphan-key"
 mcopy -i "$DIR/one.img@@$((REC_START * 512))" "$DIR/orphan-key" ::rach2-config/keys/2999/authorized_keys ||
     { bad "the unowned archived key could not be written"; exit 1; }
 echo "$(basename "$INSTALLER_EXT2") stopped" > "$DIR/update-in-progress"
-ROOT3_START=$(od -An -tu4 -j $((446 + 2 * 16 + 8)) -N 4 "$DIR/one.img" | tr -d ' ')
+ROOT3_START=$(entry_field "$DIR/one.img" 3 3)
 [ -n "$ROOT3_START" ] && [ "$ROOT3_START" -gt 0 ] || bad "the root partition's start could not be read"
 dd if="$INSTALLER_EXT2" of="$DIR/one.img" bs=512 seek="$ROOT3_START" conv=notrunc 2>/dev/null ||
     bad "the image could not be written onto the root, as the stopped update left it"
@@ -1520,18 +1624,25 @@ rm -rf "$R"; mkdir -p "$R"
 IMAGE_BYTES=$(wc -c < "$DISK" | tr -d ' ')
 IMAGE_SECTORS=$((IMAGE_BYTES / 512))
 # The root's entry in the image's table, the third: its first sector from
-# the MBR's bytes.
-ROOT_START=$(od -An -tu4 -j $((446 + 2 * 16 + 8)) -N 4 "$DISK" | tr -d ' ')
+# the image's GUID table.
+ROOT_START=$(entry_field "$DISK" 3 3)
 [ -n "$ROOT_START" ] && [ "$ROOT_START" -gt 0 ] || { bad "the image's third entry has no start"; exit 1; }
 dd if="$DISK" of="$R/head.vol" bs=512 skip="$ROOT_START" count=$((128 * 2048)) 2>/dev/null \
     || { bad "the root's head could not be read from the image"; exit 1; }
-"$GROWSET" --lba "$ROOT_START" "$R/head.vol" $((LENOVO - ROOT_START)) > "$R/save.set" \
+# The root grows to the sector before the GUID table's backup, 33 sectors
+# short of the disk's end.
+"$GROWSET" --lba "$ROOT_START" "$R/head.vol" $((LENOVO - 33 - ROOT_START)) > "$R/save.set" \
     || { bad "growset did not compute the save set"; exit 1; }
 # The ranges to save, `START COUNT` in sectors: the image's extent, then the
-# grow's ranges beyond it; a range inside the extent is saved with it.
+# grow's ranges beyond it; a range inside the extent is saved with it. The
+# image's GUID table has its backup in the disk's last 33 sectors once the
+# install has moved it there, and the grow writes it there again, so those
+# sectors are a range of their own.
 {
     echo "0 $IMAGE_SECTORS"
-    awk -v n="$IMAGE_SECTORS" '$1 == "range" && $2 + $3 > n { s = $2 < n ? n : $2; print s, $2 + $3 - s }' "$R/save.set"
+    awk -v n="$IMAGE_SECTORS" -v b=$((LENOVO - 33)) '$1 == "range" && $2 + $3 > n {
+        s = $2 < n ? n : $2; e = $2 + $3 < b ? $2 + $3 : b; if (e > s) print s, e - s }' "$R/save.set"
+    echo "$((LENOVO - 33)) 33"
 } > "$R/ranges"
 NRANGES=$(grep -c . "$R/ranges")
 note "rehearsal: the save set is the image's $IMAGE_SECTORS sectors and $((NRANGES - 1)) ranges of the grow beyond it"
@@ -1648,13 +1759,15 @@ else
 fi
 # Every sector the install wrote lies in the save set: growset judges its
 # own ranges from the overlay's map, and an extent it calls outside must lie
-# inside the image's extent, which the install writes whole.
+# inside the image's extent, which the install writes whole, or in the
+# overlay's clusters that hold the GUID table's backup at the disk's end.
+BACKUP_FROM=$(( (LENOVO - 33) / 8 * 8 ))
 qemu-img map --output=json "$R/disk.qcow2" > "$R/after-install.json" || bad "the overlay's map"
 grep -q '"start"' "$R/after-install.json" || bad "the overlay's map lists no extent, and the install wrote"
 growset_rc=0
-"$GROWSET" --lba "$ROOT_START" --map "$R/after-install.json" "$R/head.vol" $((LENOVO - ROOT_START)) > "$R/after-install.check" 2>&1 || growset_rc=$?
+"$GROWSET" --lba "$ROOT_START" --map "$R/after-install.json" "$R/head.vol" $((LENOVO - 33 - ROOT_START)) > "$R/after-install.check" 2>&1 || growset_rc=$?
 [ "$growset_rc" -eq 0 ] || grep -q '^outside' "$R/after-install.check" || bad "growset failed on the install's map: $(head -1 "$R/after-install.check")"
-if awk -v n="$IMAGE_SECTORS" '$1 == "outside" && $2 + $3 > n { bad = 1 } END { exit bad }' "$R/after-install.check"; then
+if awk -v n="$IMAGE_SECTORS" -v b="$BACKUP_FROM" '$1 == "outside" && $2 + $3 > n && $2 < b { bad = 1 } END { exit bad }' "$R/after-install.check"; then
     note "rehearsal: every sector the install and the grow wrote lies in the save set: OK"
 else
     grep '^outside' "$R/after-install.check" | head -5 >&2
@@ -1702,9 +1815,9 @@ else
 fi
 qemu-img map --output=json "$R/disk.qcow2" > "$R/after-restore.json" || bad "the overlay's map after the restore"
 growset_rc=0
-"$GROWSET" --lba "$ROOT_START" --map "$R/after-restore.json" "$R/head.vol" $((LENOVO - ROOT_START)) > "$R/after-restore.check" 2>&1 || growset_rc=$?
+"$GROWSET" --lba "$ROOT_START" --map "$R/after-restore.json" "$R/head.vol" $((LENOVO - 33 - ROOT_START)) > "$R/after-restore.check" 2>&1 || growset_rc=$?
 [ "$growset_rc" -eq 0 ] || grep -q '^outside' "$R/after-restore.check" || bad "growset failed on the restore's map: $(head -1 "$R/after-restore.check")"
-if awk -v n="$IMAGE_SECTORS" '$1 == "outside" && $2 + $3 > n { bad = 1 } END { exit bad }' "$R/after-restore.check"; then
+if awk -v n="$IMAGE_SECTORS" -v b="$BACKUP_FROM" '$1 == "outside" && $2 + $3 > n && $2 < b { bad = 1 } END { exit bad }' "$R/after-restore.check"; then
     note "rehearsal: the restore wrote nothing outside the save set either: OK"
 else
     bad "the restore wrote outside the save set"

@@ -79,11 +79,13 @@ rm "$work/root.actual"
     >"$work/manifest" 2>"$work/manifest.check.log"
 disk_name=$(basename "$disk")
 grep -Fx "image $disk_name" "$work/manifest" >/dev/null || fail 'wrong sealed disk name'
+# The sealed disk's boot and recovery partitions, entries 1 and 2 of its GUID
+# table, which `mkgpt --list` prints in bytes.
+"$repo/build/tools/image/mkgpt" --list "$disk" >"$work/table" || fail 'the sealed disk has no GUID table'
 for p in 1 2; do
-    entry=$((446 + (p - 1) * 16))
-    first=$(od -An -tu4 -j $((entry + 8)) -N 4 "$disk" | tr -d ' ')
-    count=$(od -An -tu4 -j $((entry + 12)) -N 4 "$disk" | tr -d ' ')
-    [ "$count" -eq 131072 ] && [ $((first % 2048)) -eq 0 ] || fail 'expected two aligned 64 MiB partitions'
+    first=$(awk -v n="$p" '$1 == n { printf "%d", $3 / 512 }' "$work/table")
+    count=$(awk -v n="$p" '$1 == n { printf "%d", $4 / 512 }' "$work/table")
+    [ "${count:-0}" -eq 131072 ] && [ $((first % 2048)) -eq 0 ] || fail 'expected two aligned 64 MiB partitions'
     dd if="$disk" of="$work/p$p.before" bs=1048576 skip=$((first / 2048)) count=64 2>"$work/p$p.read.log"
     printf '%s\n' "$((first / 2048))" >"$work/p$p.offset"
 done

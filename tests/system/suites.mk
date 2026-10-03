@@ -183,7 +183,7 @@ prepare-images: $(DEMO_CREDS) $(BINFIND) $(DEADLINE) $(ELFCHECK) $(HARNESS) $(HO
                 $(MKFIXTURE) $(MKGPT) $(MKMBR) $(PCAPCHECK) $(PTYDRIVE) $(RUNTESTS) $(RUNUTIL) \
                 $(SHA256TOOL) $(WAVCHECK) $(GROWSET) os-real-image os-simple-image \
                 rach2-metal-image rach2-recovery-image $(SEALED_DISK) test-image \
-                $(INSTALL_STICK) $(INSTALL_TEST_STICK)
+                $(INSTALL_STICK) $(INSTALL_TEST_STICK) $(INSTALLER_MBR_DISK)
 prepare-all: components
 	$(MAKE) --no-print-directory prepare-images prepare-products
 # `tests/run addressed`: the address named on the boot line, and the proof that
@@ -1498,6 +1498,22 @@ $(INSTALLER_DISK): $(DEMO_CREDS) $(INSTALLER_EXT2) $(RECOVERY_IMAGE) tools/image
 	RACH2_DISK_RECOVERY_KERNEL=$(RECOVERY_KERNEL) \
 	RACH2_DISK_RECOVERY_IMAGE=$(RECOVERY_IMAGE) \
 	    sh tools/image/mkdisk_grub.sh build/rach2/kernel $@
+# The disk an installer of before milestone 57 wrote, for installer-repair's
+# conversion row: an MBR, with the 64 MiB boot partition at eight sectors to a
+# cluster that the sealed disk had then, which UEFI firmware does not read.
+INSTALLER_MBR_DISK = $(IMAGES_DIR)/installer-test-mbr.disk
+$(INSTALLER_MBR_DISK): $(DEMO_CREDS) $(INSTALLER_EXT2) $(RECOVERY_IMAGE) tools/image/mkdisk_grub.sh $(DISK_TOOLS) \
+                       | rach2 rach2-recovery utils krffs
+	@mkdir -p $(IMAGES_DIR)
+	RACH2_DISK_TABLE=mbr \
+	RACH2_DISK_BOOT_MB=64 \
+	RACH2_DISK_CLUSTER=8 \
+	RACH2_DISK_RECOVERY_MB=8 \
+	RACH2_DISK_EXT2_MB=64 \
+	RACH2_DISK_EXT2_IMAGE=$(INSTALLER_EXT2) \
+	RACH2_DISK_RECOVERY_KERNEL=$(RECOVERY_KERNEL) \
+	RACH2_DISK_RECOVERY_IMAGE=$(RECOVERY_IMAGE) \
+	    sh tools/image/mkdisk_grub.sh build/rach2/kernel $@
 $(INSTALL_TEST_STICK): $(RECOVERY_ISO) $(INSTALLER_DISK) $(INSTALLER_EXT2) \
                        tools/image/mkinstallstick.sh $(MKEXFATFIXTURE) $(MKMBR) $(STICKCHECK)
 	sh tools/image/mkinstallstick.sh $(RECOVERY_ISO) $(INSTALLER_DISK) $@ \
@@ -1510,7 +1526,7 @@ INSTALLER_PORT = 2327
 # The repair half forwards SSH too, for its key login after a resumed update,
 # and the pool runs it beside the install half, so it has a port of its own.
 INSTALLER_REPAIR_PORT = 2329
-run-installer: $(DEMO_CREDS) $(INSTALL_STICK) $(INSTALL_TEST_STICK) $(PTYDRIVE) $(HARNESS) $(GROWSET) $(MKEXFATFIXTURE) $(RUNUTIL)
+run-installer: $(DEMO_CREDS) $(INSTALL_STICK) $(INSTALL_TEST_STICK) $(PTYDRIVE) $(HARNESS) $(GROWSET) $(MKEXFATFIXTURE) $(MKGPT) $(RUNUTIL)
 	sh tests/system/install_stick_test.sh $(INSTALL_STICK) $(SEALED_DISK) $(SEALED_EXT2) \
 	    $(INSTALLER_DIR)/stick-update
 	sh tests/system/suites/installer.sh $(INSTALL_STICK) $(SEALED_DISK) $(HARNESS) \
@@ -1530,17 +1546,36 @@ INSTALLER_REHEARSE_DIR = $(IMAGES_DIR)/installer-rehearse
 # `tests/run installer-rehearse`: the rehearsal of the machine sitting in its
 # small form, minutes: the same rows RACH2_REHEARSE_LENOVO runs at the
 # machine's size in most of an hour.
-run-installer-rehearse: $(DEMO_CREDS) $(INSTALL_STICK) $(INSTALL_TEST_STICK) $(PTYDRIVE) $(HARNESS) $(GROWSET) $(RUNUTIL)
+run-installer-rehearse: $(DEMO_CREDS) $(INSTALL_STICK) $(INSTALL_TEST_STICK) $(PTYDRIVE) $(HARNESS) $(GROWSET) $(MKGPT) $(RUNUTIL)
 	sh tests/system/suites/installer.sh $(INSTALL_STICK) $(SEALED_DISK) $(HARNESS) \
 	    $(INSTALLER_REHEARSE_DIR) "`cat krffs/rach2_demo_password`" $(INSTALL_TEST_STICK) \
 	    $(INSTALLER_DISK) $(INSTALLER_PORT) $(PTYDRIVE) krffs/rach2_demo_ed25519 rehearse
 
 run-installer-repair: $(DEMO_CREDS) $(INSTALL_STICK) $(INSTALL_TEST_STICK) $(PTYDRIVE) \
-                      $(HARNESS) $(MKEXFATFIXTURE) $(RUNUTIL)
+                      $(HARNESS) $(MKEXFATFIXTURE) $(MKGPT) $(INSTALLER_MBR_DISK) $(RUNUTIL)
 	sh tests/system/suites/installer.sh $(INSTALL_STICK) $(SEALED_DISK) $(HARNESS) \
 	    $(INSTALLER_REPAIR_DIR) "`cat krffs/rach2_demo_password`" $(INSTALL_TEST_STICK) \
 	    $(INSTALLER_DISK) $(INSTALLER_REPAIR_PORT) $(PTYDRIVE) krffs/rach2_demo_ed25519 repair \
-	    $(INSTALLER_EXT2)
+	    $(INSTALLER_EXT2) $(INSTALLER_MBR_DISK)
+# `tests/run uefi`: the machine booted by UEFI firmware, OVMF, from its
+# installed disk and that disk's recovery entry, from the install stick's
+# image as a USB device and from the recovery ISO as a CD, each answering SSH.
+# The disk is a GPT disk as the disk builder makes one for a machine, with the
+# installer's root, the metal system whose init starts the SSH server.
+UEFI_DIR = $(IMAGES_DIR)/uefi
+UEFI_TEST_DISK = $(IMAGES_DIR)/uefi-test.disk
+UEFI_PORT = 2331
+run-uefi: $(DEMO_CREDS) rach2 utils krffs rach2-recovery $(RECOVERY_IMAGE) $(INSTALLER_EXT2) \
+          $(INSTALL_TEST_STICK) $(RECOVERY_ISO) $(RUNUTIL) $(DISK_TOOLS) $(MKGPT)
+	@mkdir -p $(IMAGES_DIR)
+	RACH2_DISK_RECOVERY_MB=8 \
+	RACH2_DISK_EXT2_MB=64 \
+	RACH2_DISK_EXT2_IMAGE=$(INSTALLER_EXT2) \
+	RACH2_DISK_RECOVERY_KERNEL=$(RECOVERY_KERNEL) \
+	RACH2_DISK_RECOVERY_IMAGE=$(RECOVERY_IMAGE) \
+	    sh tools/image/mkdisk_grub.sh build/rach2/kernel $(UEFI_TEST_DISK)
+	sh tests/system/suites/uefi.sh $(UEFI_TEST_DISK) $(INSTALL_TEST_STICK) $(RECOVERY_ISO) \
+	    $(UEFI_DIR) $(UEFI_PORT) krffs/rach2_demo_ed25519
 # `tests/run usbdisk`: a flash drive as a disk. Three sticks built on the
 # host, an MBR one, a GUID one and one with no table; the nodes, the mounts,
 # a write, the pull from under a mount and the replug, ten plugs and pulls

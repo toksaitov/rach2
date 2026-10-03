@@ -1,9 +1,12 @@
 # shellcheck shell=sh disable=SC2034 # the variables are the callers'
 # ovmf_path.sh: find OVMF, QEMU's UEFI firmware for x86-64, which the suites
-# that boot by UEFI give QEMU. Sourced by doctor.sh, so the report and the
-# suites look in the same places. It sets OVMF_CODE to the firmware's code
-# image and OVMF_VARS to the template of its variable store, each empty when
-# no file is found.
+# that boot by UEFI give QEMU. Sourced by doctor.sh and by those suites, so
+# the report and the suites look in the same places. It sets OVMF_CODE to the
+# firmware's code image and OVMF_VARS to the template of its variable store,
+# each empty when no file is found, and OVMF_PATH and OVMF_ARGS to the code
+# image and the arguments that give it to qemu-system-x86_64: the code as the
+# first flash device, read-only, with the firmware's variables kept in
+# memory, which a boot of a test disk needs no more of.
 #
 # RACH2_OVMF_CODE and RACH2_OVMF_VARS, when set, name the two files and are
 # taken as they are. Otherwise the first pair found is used: the one QEMU
@@ -33,3 +36,6 @@ if [ -z "$OVMF_CODE" ]; then
     done
     unset _ovmf_qemu _ovmf_share _ovmf_pair
 fi
+OVMF_PATH=$OVMF_CODE
+OVMF_ARGS=
+[ -n "$OVMF_CODE" ] && OVMF_ARGS="-drive if=pflash,format=raw,readonly=on,file=$OVMF_CODE"
