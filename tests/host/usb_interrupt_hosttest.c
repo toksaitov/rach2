@@ -231,6 +231,8 @@ int usb_core_count(void)
     return 0;
 }
 
+int xhci_dma32;
+
 int xhci_discover(void)
 {
     return 0;

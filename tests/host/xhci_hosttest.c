@@ -657,6 +657,51 @@ void kfree(void *p)
     }
 }
 
+/* The DMA pool, which a controller whose AC64 is clear has its pages from:
+   an arena of its own, its pages counted out and back. */
+#define POOL_PAGES 16
+static uint8_t pool[POOL_PAGES][4096] __attribute__((aligned(4096)));
+static uint8_t pool_taken[POOL_PAGES];
+static unsigned pool_out;
+
+void *alloc_kernel_frame(void)
+{
+    unsigned i;
+
+    for (i = 0; i < POOL_PAGES; i++) {
+        if (!pool_taken[i]) {
+            pool_taken[i] = 1;
+            pool_out++;
+            return pool[i];
+        }
+    }
+    return 0;
+}
+
+void free_kernel_frame(void *frame)
+{
+    unsigned i;
+
+    for (i = 0; i < POOL_PAGES; i++) {
+        if (frame == pool[i] && pool_taken[i]) {
+            pool_taken[i] = 0;
+            pool_out--;
+        }
+    }
+}
+
+static int in_pool(const void *p)
+{
+    unsigned i;
+
+    for (i = 0; i < POOL_PAGES; i++) {
+        if ((const uint8_t *)p == pool[i]) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* Two of the kernel's own, which the driver reaches and this test does not
  * build: a fill, and the name of a controller's register interface. */
 void *k_memset(void *ptr, int c, size_t n)
@@ -1546,6 +1591,114 @@ static void register_range_rows(void)
     model_reset();
     reg[R_HCSPARAMS1] = 1u | (4u << 24);
     CHECK("controller without an interrupter is refused", xhci_read_caps(hc) != 0);
+}
+
+/*
+ * A controller whose AC64 is clear takes only 32-bit addresses: its context
+ * array and a slot's context and rings come from the DMA pool, below 4 GiB,
+ * and go back to it; a transfer's pieces that end above 4 GiB move through
+ * pages of the pool kept with the transfer's record, an OUT piece copied in
+ * and the table given the page, an IN piece copied back up to the bytes the
+ * events counted; a piece below 4 GiB, and every piece on a controller with
+ * AC64, is given as it is.
+ */
+static void dma32_pool_rows(void)
+{
+    struct usb_location where = root_at(0);
+    struct usb_command_result result;
+
+    model_reset();
+    reg[R_HCCPARAMS1] &= ~1u;
+    CHECK("a controller without AC64 is read", xhci_read_caps(hc) == 0 && !hc->dma64);
+    CHECK("its context array from the DMA pool", in_pool(hc->dcbaa) && pool_out == 1 &&
+                                                    hc->dcbaa_phys == (uintptr_t)virt_to_phys(hc->dcbaa));
+    CHECK("it starts", xhci_halt_reset(hc) == 0 && xhci_start(hc) == 0);
+    reg[M_PORTSC(0)] |= M_PORTSC_CCS | (3u << 10);
+    xhci_device_open(hc, &where, USB_SPEED_HIGH);
+    xhci_events(hc);
+    xhci_command_done(hc, &result);
+    CHECK("a device on it is addressed", xhci_device_address(hc, 1) == 0);
+    CHECK("with its context and control ring from the pool",
+          in_pool(hc->slots[1].ctx) && in_pool(hc->slots[1].ring[1]) && pool_out == 3);
+    xhci_events(hc);
+    xhci_command_done(hc, &result);
+    xhci_device_closed(hc, 1);
+    CHECK("and given back when it closes", pool_out == 1);
+}
+
+static void dma32_bounce_rows(void)
+{
+    static uint8_t buf[3 * 4096];
+    struct xhci_td r[XHCI_TD_RECORDS];
+    struct usb_transfer tr;
+    uintptr_t phys[3];
+    uint32_t len[3] = {4096, 4096, 100};
+    unsigned i, same;
+
+    k_memset(r, 0, sizeof(r));
+    for (i = 0; i < sizeof(buf); i++) {
+        buf[i] = (uint8_t)(i * 7u + 1u);
+    }
+    tr.setup = 0;
+    tr.buffer = buf;
+    tr.length = 8292;
+    tr.direction = USB_DIR_OUT;
+    tr.generation = 0;
+    phys[0] = 0xFFFFF000u;
+    phys[1] = (uintptr_t)0x100000000ULL;
+    phys[2] = (uintptr_t)0x2FFFFF000ULL;
+    CHECK("an OUT transfer is given", td_bounce(hc, &r[0], &tr, phys, len, 3) == 0);
+    CHECK("its piece that ends at 4 GiB as it is", phys[0] == 0xFFFFF000u);
+    if (!r[0].bounce || !r[0].bounce->page[1] || !r[0].bounce->page[2]) {
+        CHECK("its pieces above 4 GiB have pages", 0);
+        return;
+    }
+    CHECK("the pieces that end above it through pages of the pool",
+          in_pool(r[0].bounce->page[1]) && in_pool(r[0].bounce->page[2]) && !r[0].bounce->page[0] &&
+              phys[1] == (uintptr_t)virt_to_phys(r[0].bounce->page[1]) &&
+              phys[2] == (uintptr_t)virt_to_phys(r[0].bounce->page[2]) && pool_out == 3);
+    for (i = 0, same = 1; i < 4096; i++) {
+        same &= r[0].bounce->page[1][i] == buf[4096 + i] &&
+                (i >= 100 || r[0].bounce->page[2][i] == buf[8192 + i]);
+    }
+    CHECK("holding its bytes", same);
+
+    tr.direction = USB_DIR_IN;
+    phys[0] = 0xFFFFF000u;
+    phys[1] = (uintptr_t)0x100000000ULL;
+    phys[2] = (uintptr_t)0x2FFFFF000ULL;
+    CHECK("an IN transfer is given", td_bounce(hc, &r[0], &tr, phys, len, 3) == 0 && pool_out == 3);
+    for (i = 0; i < 4096; i++) {
+        r[0].bounce->page[1][i] = (uint8_t)(i + 9u);
+        r[0].bounce->page[2][i] = (uint8_t)(i + 77u);
+    }
+    for (i = 0; i < sizeof(buf); i++) {
+        buf[i] = 0;
+    }
+    r[0].moved = 4096 + 4096 + 30;
+    td_unbounce(&r[0]);
+    for (i = 0, same = 1; i < 4096; i++) {
+        same &= buf[i] == 0 && buf[4096 + i] == (uint8_t)(i + 9u) &&
+                buf[8192 + i] == (i < 30 ? (uint8_t)(i + 77u) : 0);
+    }
+    CHECK("its bytes come back up to the bytes moved", same);
+
+    hc->dma64 = 1;
+    phys[1] = (uintptr_t)0x100000000ULL;
+    CHECK("a controller with AC64 is given every piece as it is",
+          td_bounce(hc, &r[0], &tr, phys, len, 3) == 0 && phys[1] == (uintptr_t)0x100000000ULL &&
+              r[0].bounce->pieces == 0);
+    td_bounce_free(r);
+    CHECK("the pages go back with the records", pool_out == 1 && r[0].bounce == 0);
+    ctrl_free_tables(hc);
+    hc->dma64 = 0;
+    ctrl_free_tables(hc);
+}
+
+static void dma32_rows(void)
+{
+    dma32_pool_rows();
+    dma32_bounce_rows();
 }
 
 int main(void)
@@ -3390,6 +3543,8 @@ int main(void)
         CHECK("and it completes",
               xhci_poll(hc, &completion) == 1 && completion.status == USB_XFER_OK);
     }
+
+    dma32_rows();
 
     if (fails == 0) {
         printf("xhci_hosttest: OK\n");

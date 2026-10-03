@@ -111,6 +111,11 @@ struct xhci_caps {
     uint32_t pagesize;     /* the page sizes the controller supports, as a bitmap */
 };
 
+/* The boot line's `rach2.dma32`, a test switch the USB layer sets before
+ * discovery: every controller is treated as one whose AC64 is clear, so its
+ * pages come from the DMA pool and a buffer above 4 GiB moves through it. */
+extern int xhci_dma32;
+
 /**
  * Find an xHCI controller, put it in D0, and map its register aperture.
  *

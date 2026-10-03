@@ -147,6 +147,8 @@
  * a wrapper on one endpoint at most, and the layer above lets a record go
  * at its command's end. */
 #define XHCI_TD_DCI     XHCI_MAX_DCI
+/* The first address a controller whose AC64 is clear cannot reach. */
+#define XHCI_FOUR_GIB   0x100000000ULL
 #define XHCI_TD_TRBS    130
 #define XHCI_TD_RECORDS 2
 
@@ -159,6 +161,20 @@
  * new submission unless its caller holds it, which a caller that asks about
  * its transfers after their events does until it lets the record go.
  */
+/* The pages a transfer's pieces above 4 GiB move through on a controller
+ * that takes only 32-bit addresses, one for each piece, taken from the DMA
+ * pool when a piece first needs it and kept with the record: an OUT piece is
+ * copied in when the transfer is given, and an IN piece, whose `to` is where
+ * its bytes go back, NULL for a piece the controller reached directly, is
+ * copied back before the transfer's completion is posted. `pieces` is the
+ * pieces of the transfer last given. */
+struct xhci_bounce {
+    uint8_t *page[XHCI_TD_TRBS];
+    uint8_t *to[XHCI_TD_TRBS];
+    uint32_t len[XHCI_TD_TRBS];
+    uint32_t pieces;
+};
+
 struct xhci_td {
     int used;
     int retired;
@@ -173,6 +189,7 @@ struct xhci_td {
     uint32_t count;             /* blocks, Links not counted */
     uint32_t idx[XHCI_TD_TRBS]; /* each block's ring index */
     uint32_t len[XHCI_TD_TRBS]; /* each block's bytes */
+    struct xhci_bounce *bounce; /* NULL until a piece first needs a page */
 };
 
 struct xhci_slot {
@@ -221,9 +238,11 @@ struct xhci_slot {
  *
  * The command ring, event ring, segment table and input context are embedded
  * in this static record, in the image below 4 GiB, and the controller is
- * given `virt_to_phys` of each. The context base array,
- * scratchpads, device contexts and endpoint rings are allocated from the heap;
- * their physical addresses are recorded separately from their virtual ones.
+ * given `virt_to_phys` of each, both halves. The context base array,
+ * scratchpads, device contexts and endpoint rings are pages from the heap,
+ * anywhere in memory, or from the DMA pool, below 4 GiB, for a controller
+ * that takes only 32-bit addresses (`dma_page`); their physical addresses
+ * are recorded separately from their virtual ones.
  */
 struct xhci_ctrl {
     int used;
@@ -242,6 +261,9 @@ struct xhci_ctrl {
     uintptr_t base;
     struct xhci_caps caps;
     const char *err;
+    /* Whether the pages the controller reads may lie above 4 GiB: AC64,
+     * unless the boot line's `rach2.dma32` says to treat it as clear. */
+    int dma64;
 
     /* Where the controller is on the bus, kept from the walk that found it:
      * the MSI capability is programmed through configuration space, long
@@ -295,7 +317,7 @@ struct xhci_ctrl {
     int command_stop_seen;
     struct usb_command_result command_result;
     uint32_t command_deadline;
-    uint32_t command_trb;
+    uint64_t command_trb;
     uint32_t command_type;
 
     /* This driver's own clock, in milliseconds, and the per-port state that
@@ -390,9 +412,15 @@ const struct xhci_caps *xhci_capabilities(struct xhci_ctrl *hc)
     return &hc->caps;
 }
 
-static void slot_pages_free(struct xhci_slot *s);
+static void slot_pages_free(struct xhci_ctrl *hc, struct xhci_slot *s);
+static void td_bounce_free(struct xhci_td *r);
+static void td_unbounce(struct xhci_td *t);
+static void *dma_page(struct xhci_ctrl *hc, uintptr_t *phys);
+static void dma_page_free(struct xhci_ctrl *hc, void *page);
 static void ctrl_free_tables(struct xhci_ctrl *hc);
 static struct xhci_td *td_at(struct xhci_slot *s, uint32_t dci, uint32_t at, uint32_t *k);
+
+int xhci_dma32;
 
 /* What the last discovery had to say when it found no controller at all.
  * Before there is a record there is nowhere else to put it. */
@@ -810,27 +838,27 @@ static void ctrl_free_tables(struct xhci_ctrl *hc)
 
     if (hc->slots) {
         for (i = 0; i <= hc->nslots; i++) {
-            slot_pages_free(&hc->slots[i]);
+            slot_pages_free(hc, &hc->slots[i]);
         }
         kfree(hc->slots);
         hc->slots = 0;
     }
     if (hc->dcbaa) {
-        kfree_pages(hc->dcbaa, 1);
+        dma_page_free(hc, hc->dcbaa);
         hc->dcbaa = 0;
         hc->dcbaa_phys = 0;
     }
     if (hc->scratchpad_page) {
         for (i = 0; i < hc->scratchpads; i++) {
             if (hc->scratchpad_page[i]) {
-                kfree_pages(hc->scratchpad_page[i], 1);
+                dma_page_free(hc, hc->scratchpad_page[i]);
             }
         }
         kfree(hc->scratchpad_page);
         hc->scratchpad_page = 0;
     }
     if (hc->scratchpad_array) {
-        kfree_pages(hc->scratchpad_array, 1);
+        dma_page_free(hc, hc->scratchpad_array);
         hc->scratchpad_array = 0;
         hc->scratchpad_array_phys = 0;
     }
@@ -883,6 +911,7 @@ int xhci_read_caps(struct xhci_ctrl *hc)
 
     word = r32(hc, XHCI_HCCPARAMS1);
     hc->caps.ac64 = (int)(word & 0x1u);
+    hc->dma64 = hc->caps.ac64 && !xhci_dma32;
     hc->caps.context_size = (word & 0x4u) ? 64u : 32u;
     hc->caps.xecp = ((word >> 16) & 0xFFFFu) * 4u;
 
@@ -918,7 +947,7 @@ int xhci_read_caps(struct xhci_ctrl *hc)
     }
     hc->nslots = hc->caps.max_slots;
     hc->slots = (struct xhci_slot *)kzalloc((hc->nslots + 1) * sizeof(struct xhci_slot));
-    hc->dcbaa = (uint64_t *)kalloc_pages(1, &hc->dcbaa_phys);
+    hc->dcbaa = (uint64_t *)dma_page(hc, &hc->dcbaa_phys);
     if (!hc->slots || !hc->dcbaa) {
         hc->err = "the slot table could not be allocated";
         return -1;
@@ -940,6 +969,11 @@ int xhci_read_caps(struct xhci_ctrl *hc)
          hc->caps.pagesize);
     klog(KLOG_DEBUG, "usb", "caps: scratchpads %d, contexts %d bytes, 64-bit %d",
          (int)hc->caps.scratchpads, (int)hc->caps.context_size, hc->caps.ac64);
+    if (!hc->dma64) {
+        klog(KLOG_INFO, "usb",
+             "%d: 32-bit addresses: its pages from the DMA pool, a buffer above 4 GiB through it",
+             hc->number);
+    }
     if (!(hc->caps.pagesize & 0x1u)) {
         hc->err = "the controller does not take 4 KiB pages";
         return -1;
@@ -979,7 +1013,7 @@ int xhci_scratchpads(struct xhci_ctrl *hc)
         hc->err = "the controller requires more scratchpad pages than the array holds";
         return -1;
     }
-    hc->scratchpad_array = (uint64_t *)kalloc_pages(1, &hc->scratchpad_array_phys);
+    hc->scratchpad_array = (uint64_t *)dma_page(hc, &hc->scratchpad_array_phys);
     hc->scratchpad_page = (void **)kzalloc(hc->scratchpads * sizeof(void *));
     if (!hc->scratchpad_array || !hc->scratchpad_page) {
         hc->err = "the scratchpad array could not be allocated";
@@ -987,7 +1021,7 @@ int xhci_scratchpads(struct xhci_ctrl *hc)
     }
     k_memset(hc->scratchpad_array, 0, 4096);
     for (i = 0; i < hc->scratchpads; i++) {
-        void *page = kalloc_pages(1, &phys);
+        void *page = dma_page(hc, &phys);
 
         if (!page) {
             hc->err = "a scratchpad page could not be allocated";
@@ -1165,12 +1199,42 @@ static uint32_t phys_hi(uintptr_t a)
     return (uint32_t)((uint64_t)a >> 32);
 }
 
-/** A TRB's address as the controller takes it: the command and event rings
- * are in the controller's record, in the kernel image's .bss, below 4 GiB,
- * so the address is the physical one's low half and the high half is 0. */
-static uint32_t trb_addr(uint32_t *trb)
+/** A TRB's address as the controller takes it, the physical one: the
+ * command and event rings are in the controller's record, in the kernel
+ * image's .bss. */
+static uint64_t trb_addr(uint32_t *trb)
 {
-    return (uint32_t)virt_to_phys(trb);
+    return (uint64_t)virt_to_phys(trb);
+}
+
+/**
+ * A page the controller reads or writes, its physical address in `*phys`:
+ * from the heap, anywhere in memory, for a controller that takes 64-bit
+ * addresses, and from the DMA pool, below 4 GiB, for one whose AC64 is
+ * clear (xHCI 1.2, 5.3.6). NULL when there is none. Not zeroed.
+ */
+static void *dma_page(struct xhci_ctrl *hc, uintptr_t *phys)
+{
+    void *page;
+
+    if (hc->dma64) {
+        return kalloc_pages(1, phys);
+    }
+    page = alloc_kernel_frame();
+    if (page) {
+        *phys = (uintptr_t)virt_to_phys(page);
+    }
+    return page;
+}
+
+/** Give back a page `dma_page` gave for `hc`. */
+static void dma_page_free(struct xhci_ctrl *hc, void *page)
+{
+    if (hc->dma64) {
+        kfree_pages(page, 1);
+    } else {
+        free_kernel_frame(page);
+    }
 }
 
 /**
@@ -1282,8 +1346,9 @@ int xhci_command_issue(struct xhci_ctrl *hc, uint32_t type, uint64_t parameter, 
             return -1;
         }
         hc->command_aborting = 0;
-        op_w32(hc, XHCI_CRCR, trb_addr(trb_at(hc->cmd_ring, hc->cmd_enqueue)) | hc->cmd_cycle);
-        op_w32(hc, XHCI_CRCR + 4, 0);
+        op_w32(hc, XHCI_CRCR,
+               (uint32_t)trb_addr(trb_at(hc->cmd_ring, hc->cmd_enqueue)) | hc->cmd_cycle);
+        op_w32(hc, XHCI_CRCR + 4, phys_hi(trb_addr(trb_at(hc->cmd_ring, hc->cmd_enqueue))));
     }
 
     trb = trb_at(hc->cmd_ring, hc->cmd_enqueue);
@@ -1299,8 +1364,8 @@ int xhci_command_issue(struct xhci_ctrl *hc, uint32_t type, uint64_t parameter, 
     if (hc->cmd_enqueue == XHCI_RING_TRBS - 1) {
         uint32_t *link = trb_at(hc->cmd_ring, hc->cmd_enqueue);
 
-        link[0] = trb_addr(hc->cmd_ring);
-        link[1] = 0;
+        link[0] = (uint32_t)trb_addr(hc->cmd_ring);
+        link[1] = phys_hi(trb_addr(hc->cmd_ring));
         link[2] = 0;
         link[3] = (TRB_TYPE_LINK << TRB_TYPE_SHIFT) | TRB_TOGGLE | hc->cmd_cycle;
         hc->cmd_enqueue = 0;
@@ -1439,7 +1504,7 @@ static void event_dispatch(struct xhci_ctrl *hc, const uint32_t *trb)
                 return;
             }
             hc->command_stop_seen = 1;
-        } else if (trb[0] != hc->command_trb) {
+        } else if (((uint64_t)trb[0] | ((uint64_t)trb[1] << 32)) != hc->command_trb) {
             return;
         }
         if (!hc->command_running) {
@@ -1557,6 +1622,7 @@ static void event_dispatch(struct xhci_ctrl *hc, const uint32_t *trb)
         if (t->delivered) {
             return;
         }
+        td_unbounce(t);
         {
             struct usb_completion *c = &hc->completions[hc->completion_head % XHCI_COMPLETIONS];
 
@@ -1817,9 +1883,10 @@ int xhci_events(struct xhci_ctrl *hc)
     port_scan(hc);
 
     if (taken != 0 || hc->msi_on || hc->line_on) {
-        w32(hc, hc->caps.rtsoff + XHCI_IR0 + IR_ERDP,
-            trb_addr(trb_at(hc->event_ring, hc->event_index)) | ERDP_HANDLER);
-        w32(hc, hc->caps.rtsoff + XHCI_IR0 + IR_ERDP + 4, 0);
+        uint64_t erdp = trb_addr(trb_at(hc->event_ring, hc->event_index));
+
+        w32(hc, hc->caps.rtsoff + XHCI_IR0 + IR_ERDP, (uint32_t)erdp | ERDP_HANDLER);
+        w32(hc, hc->caps.rtsoff + XHCI_IR0 + IR_ERDP + 4, phys_hi(erdp));
     }
     return (int)taken;
 }
@@ -1876,18 +1943,18 @@ int xhci_start(struct xhci_ctrl *hc)
     op_w32(hc, XHCI_DCBAAP, (uint32_t)hc->dcbaa_phys);
     op_w32(hc, XHCI_DCBAAP + 4, phys_hi(hc->dcbaa_phys));
 
-    op_w32(hc, XHCI_CRCR, trb_addr(hc->cmd_ring) | CRCR_RCS);
-    op_w32(hc, XHCI_CRCR + 4, 0);
+    op_w32(hc, XHCI_CRCR, (uint32_t)trb_addr(hc->cmd_ring) | CRCR_RCS);
+    op_w32(hc, XHCI_CRCR + 4, phys_hi(trb_addr(hc->cmd_ring)));
 
-    hc->erst[0] = trb_addr(hc->event_ring);
-    hc->erst[1] = 0;
+    hc->erst[0] = (uint32_t)trb_addr(hc->event_ring);
+    hc->erst[1] = phys_hi(trb_addr(hc->event_ring));
     hc->erst[2] = XHCI_RING_TRBS;
     hc->erst[3] = 0;
     w32(hc, hc->caps.rtsoff + XHCI_IR0 + IR_ERSTSZ, 1);
-    w32(hc, hc->caps.rtsoff + XHCI_IR0 + IR_ERDP, trb_addr(hc->event_ring));
-    w32(hc, hc->caps.rtsoff + XHCI_IR0 + IR_ERDP + 4, 0);
+    w32(hc, hc->caps.rtsoff + XHCI_IR0 + IR_ERDP, (uint32_t)trb_addr(hc->event_ring));
+    w32(hc, hc->caps.rtsoff + XHCI_IR0 + IR_ERDP + 4, phys_hi(trb_addr(hc->event_ring)));
     w32(hc, hc->caps.rtsoff + XHCI_IR0 + IR_ERSTBA, (uint32_t)virt_to_phys(hc->erst));
-    w32(hc, hc->caps.rtsoff + XHCI_IR0 + IR_ERSTBA + 4, 0);
+    w32(hc, hc->caps.rtsoff + XHCI_IR0 + IR_ERSTBA + 4, phys_hi(virt_to_phys(hc->erst)));
 
     xhci_barrier(); /* every table is written before the controller runs */
     op_w32(hc, XHCI_USBCMD, op_r32(hc, XHCI_USBCMD) | USBCMD_RS);
@@ -2125,17 +2192,17 @@ int xhci_device_hub(struct xhci_ctrl *hc, int device, int ports, int multi_tt, i
  *
  * @return 0, or -1 when the heap has nothing to give.
  */
-static int slot_pages(struct xhci_slot *s)
+static int slot_pages(struct xhci_ctrl *hc, struct xhci_slot *s)
 {
     if (!s->ctx) {
-        s->ctx = (uint8_t *)kalloc_pages(1, &s->ctx_phys);
+        s->ctx = (uint8_t *)dma_page(hc, &s->ctx_phys);
         if (!s->ctx) {
             return -1;
         }
         k_memset(s->ctx, 0, 4096);
     }
     if (!s->ring[1]) {
-        s->ring[1] = (uint32_t *)kalloc_pages(1, &s->ring_phys[1]);
+        s->ring[1] = (uint32_t *)dma_page(hc, &s->ring_phys[1]);
         if (!s->ring[1]) {
             return -1;
         }
@@ -2148,24 +2215,25 @@ static int slot_pages(struct xhci_slot *s)
  * has finished with the slot by the time this runs, so nothing of its is left
  * pointing at them.
  */
-static void slot_pages_free(struct xhci_slot *s)
+static void slot_pages_free(struct xhci_ctrl *hc, struct xhci_slot *s)
 {
     uint32_t i;
 
     for (i = 0; i < XHCI_MAX_DCI; i++) {
         if (s->ring[i]) {
-            kfree_pages(s->ring[i], 1);
+            dma_page_free(hc, s->ring[i]);
             s->ring[i] = 0;
             s->ring_phys[i] = 0;
         }
     }
     if (s->ctx) {
-        kfree_pages(s->ctx, 1);
+        dma_page_free(hc, s->ctx);
         s->ctx = 0;
         s->ctx_phys = 0;
     }
     for (i = 0; i < XHCI_TD_DCI; i++) {
         if (s->td[i]) {
+            td_bounce_free(s->td[i]);
             kfree(s->td[i]);
             s->td[i] = 0;
         }
@@ -2200,7 +2268,7 @@ int xhci_device_address(struct xhci_ctrl *hc, int device)
         return -1;
     }
     s = &hc->slots[device];
-    if (slot_pages(s) != 0) {
+    if (slot_pages(hc, s) != 0) {
         return -1;
     }
 
@@ -2286,7 +2354,7 @@ void xhci_device_closed(struct xhci_ctrl *hc, int device)
     }
     hc->slots[device].used = 0;
     hc->dcbaa[device] = 0;
-    slot_pages_free(&hc->slots[device]);
+    slot_pages_free(hc, &hc->slots[device]);
 }
 
 int xhci_command_busy(struct xhci_ctrl *hc)
@@ -2332,7 +2400,7 @@ int xhci_endpoint_open(struct xhci_ctrl *hc, int device, const struct usb_endpoi
     }
     s = &hc->slots[device];
     if (!s->ring[dci]) {
-        s->ring[dci] = (uint32_t *)kalloc_pages(1, &s->ring_phys[dci]);
+        s->ring[dci] = (uint32_t *)dma_page(hc, &s->ring_phys[dci]);
         if (!s->ring[dci]) {
             return -1;
         }
@@ -2462,6 +2530,91 @@ static int td_outstanding(const struct xhci_td *t)
     return t->used && !t->retired;
 }
 
+/** Give back the pages the records `r` of one endpoint moved pieces
+ * through, and their lists. */
+static void td_bounce_free(struct xhci_td *r)
+{
+    uint32_t i, n;
+
+    for (i = 0; i < XHCI_TD_RECORDS; i++) {
+        if (!r[i].bounce) {
+            continue;
+        }
+        for (n = 0; n < XHCI_TD_TRBS; n++) {
+            if (r[i].bounce->page[n]) {
+                free_kernel_frame(r[i].bounce->page[n]);
+            }
+        }
+        kfree(r[i].bounce);
+        r[i].bounce = 0;
+    }
+}
+
+/**
+ * Move the pieces of `transfer` that a controller taking only 32-bit
+ * addresses cannot reach, those that end above 4 GiB, through record `t`'s
+ * pages of the DMA pool: `phys[i]` becomes the page's address, an OUT
+ * piece is copied in, and an IN piece's place is kept for `td_unbounce`.
+ * Returns 0, or -1 when a page could not be had, with nothing given to the
+ * controller.
+ */
+static int td_bounce(struct xhci_ctrl *hc, struct xhci_td *t, const struct usb_transfer *transfer,
+                     uintptr_t *phys, const uint32_t *len, uint32_t pieces)
+{
+    struct xhci_bounce *b;
+    uint8_t *at = transfer->buffer;
+    uint32_t i, j;
+    int need = 0;
+
+    for (i = 0; !hc->dma64 && i < pieces; i++) {
+        need |= (uint64_t)phys[i] + len[i] > XHCI_FOUR_GIB;
+    }
+    if (t->bounce) {
+        t->bounce->pieces = 0;
+    }
+    if (!need) {
+        return 0;
+    }
+    if (!t->bounce && !(t->bounce = kzalloc(sizeof(*t->bounce)))) {
+        return -1;
+    }
+    b = t->bounce;
+    for (i = 0; i < pieces; at += len[i], i++) {
+        b->to[i] = 0;
+        b->len[i] = len[i];
+        if ((uint64_t)phys[i] + len[i] <= XHCI_FOUR_GIB) {
+            continue;
+        }
+        if (!b->page[i] && !(b->page[i] = (uint8_t *)alloc_kernel_frame())) {
+            return -1;
+        }
+        if (transfer->direction == USB_DIR_IN) {
+            b->to[i] = at;
+        } else {
+            for (j = 0; j < len[i]; j++) {
+                b->page[i][j] = at[j];
+            }
+        }
+        phys[i] = (uintptr_t)virt_to_phys(b->page[i]);
+    }
+    b->pieces = pieces;
+    return 0;
+}
+
+/** Copy the bytes an IN transfer moved into record `t`'s pages back to
+ * where they belong, before its completion is posted. */
+static void td_unbounce(struct xhci_td *t)
+{
+    struct xhci_bounce *b = t->bounce;
+    uint32_t i, j, done = 0;
+
+    for (i = 0; b && i < b->pieces; done += b->len[i], i++) {
+        for (j = 0; b->to[i] && j < b->len[i] && done + j < t->moved; j++) {
+            b->to[i][j] = b->page[i][j];
+        }
+    }
+}
+
 /** A free record of `dci`: unused, or retired and not held by its caller. */
 static struct xhci_td *td_take(struct xhci_slot *s, uint32_t dci)
 {
@@ -2510,6 +2663,29 @@ static int td_holds(struct xhci_slot *s, uint32_t dci, uint32_t at)
     uint32_t k;
 
     return td_at(s, dci, at, &k) != 0;
+}
+
+/** Whether `dci`'s ring has room from where the next block goes for
+ * `blocks` blocks and the Link after them, none of them a block of a
+ * transfer still outstanding. */
+static int ring_room(struct xhci_slot *s, uint32_t dci, uint32_t blocks)
+{
+    uint32_t at = s->enqueue[dci];
+    uint32_t i;
+
+    if (blocks + 1 > XHCI_EP_RING_TRBS - 1) {
+        return 0;
+    }
+    for (i = 0; i < blocks + 1; i++) {
+        if (td_holds(s, dci, at)) {
+            return 0;
+        }
+        at++;
+        if (at >= XHCI_EP_RING_TRBS - 1) {
+            at = 0;
+        }
+    }
+    return 1;
 }
 
 /**
@@ -2575,7 +2751,6 @@ int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint, const struct usb
     uint32_t len[XHCI_TD_TRBS];
     uint32_t pieces = 0;
     uint32_t blocks;
-    uint32_t at;
     uint32_t i;
     uint32_t through = 0;
     uint32_t *first = 0;
@@ -2641,18 +2816,8 @@ int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint, const struct usb
     if (!t) {
         return -1;
     }
-    if (blocks + 1 > XHCI_EP_RING_TRBS - 1) {
+    if (!ring_room(s, dci, blocks) || td_bounce(hc, t, transfer, phys, len, pieces) != 0) {
         return -1;
-    }
-    at = s->enqueue[dci];
-    for (i = 0; i < blocks + 1; i++) {
-        if (td_holds(s, dci, at)) {
-            return -1;
-        }
-        at++;
-        if (at >= XHCI_EP_RING_TRBS - 1) {
-            at = 0;
-        }
     }
 
     t->used = 1;

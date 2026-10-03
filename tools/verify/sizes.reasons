@@ -498,7 +498,7 @@ tests/host/xhci_hosttest.c:endpoint_doorbell complexity 38 a test's rows, each a
 tests/host/xhci_hosttest.c:endpoint_doorbell lines 101 a test's rows, each a case, read as one table
 tests/host/xhci_hosttest.c:endpoint_doorbell nesting 6 a test's rows, each a case, read as one table
 tests/host/xhci_hosttest.c:main complexity 115 a test's rows, each a case, read as one table
-tests/host/xhci_hosttest.c:main lines 1845 a test's rows, each a case, read as one table
+tests/host/xhci_hosttest.c:main lines 1849 a test's rows, each a case, read as one table
 tests/host/xhci_hosttest.c:model_reset lines 111 a test's rows, each a case, read as one table
 tests/host/xhci_hosttest.c:model_w32 complexity 40 a test's rows, each a case, read as one table
 tests/host/xhci_hosttest.c:model_w32 lines 150 a test's rows, each a case, read as one table

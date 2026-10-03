@@ -400,6 +400,7 @@ int usb_init(void)
     int n;
     int seen = 0;
 
+    xhci_dma32 = kcmdline_has("rach2.dma32");
     if (xhci_discover() != 0) {
         klog(KLOG_INFO, "usb", "absent: %s", xhci_error(0));
         return -1;
