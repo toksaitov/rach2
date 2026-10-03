@@ -134,7 +134,7 @@ static int relocate(int fd, const char *path)
 {
     const char *why = "";
     int kind = read_table(fd, path);
-    int moved;
+    int moved, repaired;
 
     if (kind < 0) {
         return 1;
@@ -144,6 +144,7 @@ static int relocate(int fd, const char *path)
         return 1;
     }
     moved = !gptdisk_backup_at_end(&table);
+    repaired = table.from_backup;
     if (gptdisk_write(fd, &table, &why) != 0) {
         fprintf(stderr, "diskctl: %s: %s\n", path, why);
         return 1;
@@ -151,7 +152,7 @@ static int relocate(int fd, const char *path)
     if (reread(fd, path) != 0) {
         return 1;
     }
-    if (table.from_backup) {
+    if (repaired) {
         printf("diskctl: result: %s: the primary table was written again from the backup, which "
                "is in sectors %llu to %llu\n",
                path, (unsigned long long)gptdisk_le64(table.header + 48) + 1,
