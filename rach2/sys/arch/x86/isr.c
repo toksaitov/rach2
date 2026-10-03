@@ -225,10 +225,9 @@ static void _exception_handler(isr_params_t *params)
         if (current_proc->sigacts[signo].handler == KSIG_DFL &&
             !(current_proc->ptrace & PT_TRACED)) {
 #if defined(__x86_64__)
-            klog(KLOG_WARN, "isr",
-                 "user exception: %s (vector %d, err 0x%x, rip 0x%x%08x): signal %d", name,
-                 (uint32_t)params->vector, (uint32_t)params->error_code,
-                 (uint32_t)(params->rip >> 32), (uint32_t)params->rip, signo);
+            klog(KLOG_WARN, "isr", "user exception: %s (vector %d, err 0x%x, rip 0x%lx): signal %d",
+                 name, (uint32_t)params->vector, (uint32_t)params->error_code,
+                 (unsigned long)params->rip, signo);
 #else
             klog(KLOG_WARN, "isr", "user exception: %s (vector %d, err 0x%x, eip 0x%x): signal %d",
                  name, params->vector, params->error_code, params->eip, signo);
@@ -238,9 +237,8 @@ static void _exception_handler(isr_params_t *params)
     }
 
 #if defined(__x86_64__)
-    klog(KLOG_CRIT, "isr", "kernel exception: %s (vector %d, err 0x%x, rip 0x%x%08x)", name,
-         (uint32_t)params->vector, (uint32_t)params->error_code, (uint32_t)(params->rip >> 32),
-         (uint32_t)params->rip);
+    klog(KLOG_CRIT, "isr", "kernel exception: %s (vector %d, err 0x%x, rip 0x%lx)", name,
+         (uint32_t)params->vector, (uint32_t)params->error_code, (unsigned long)params->rip);
 #else
     klog(KLOG_CRIT, "isr",
          "kernel exception: %s (vector %d, err 0x%x, "
@@ -275,16 +273,14 @@ static void _double_fault_handler(isr_params_t *params)
     pid = kstack_overrun_pid(cr2);
     if (pid >= 0) {
         klog(KLOG_CRIT, "isr",
-             "kernel exception: double fault (vector 8, rip 0x%x%08x, rsp 0x%x%08x): "
-             "pid %d ran past the end of its kernel stack at 0x%x%08x",
-             (uint32_t)(params->rip >> 32), (uint32_t)params->rip, (uint32_t)(params->rsp >> 32),
-             (uint32_t)params->rsp, pid, (uint32_t)(cr2 >> 32), (uint32_t)cr2);
+             "kernel exception: double fault (vector 8, rip 0x%lx, rsp 0x%lx): "
+             "pid %d ran past the end of its kernel stack at 0x%lx",
+             (unsigned long)params->rip, (unsigned long)params->rsp, pid, cr2);
         k_panic("double fault: a kernel stack ran out");
     }
     klog(KLOG_CRIT, "isr",
-         "kernel exception: double fault (vector 8, rip 0x%x%08x, rsp 0x%x%08x, cr2 0x%x%08x)",
-         (uint32_t)(params->rip >> 32), (uint32_t)params->rip, (uint32_t)(params->rsp >> 32),
-         (uint32_t)params->rsp, (uint32_t)(cr2 >> 32), (uint32_t)cr2);
+         "kernel exception: double fault (vector 8, rip 0x%lx, rsp 0x%lx, cr2 0x%lx)",
+         (unsigned long)params->rip, (unsigned long)params->rsp, cr2);
     k_panic("unrecoverable CPU exception in kernel mode");
 }
 #else
