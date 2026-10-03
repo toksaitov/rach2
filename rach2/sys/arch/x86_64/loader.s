@@ -1,12 +1,17 @@
-# The x86-64 kernel's entry from a Multiboot loader.
+# The x86-64 kernel's entry from a Multiboot or multiboot2 loader.
 #
-# A Multiboot loader starts the kernel in 32-bit protected mode, paging off,
-# with the magic in EAX and the physical address of its information in EBX.
-# The kernel is an ELF64 file, which QEMU's -kernel refuses as Multiboot's
-# ELF; the header therefore sets the a.out kludge, bit 16, and gives the
-# addresses itself: the file from the header on is copied to physical 1 MiB
-# up to _load_end, the memory up to _end is zeroed, and the loader jumps to
-# the physical address of _start. GRUB reads the same header.
+# Both loaders start the kernel in 32-bit protected mode, paging off, with
+# their magic in EAX and the physical address of their information in EBX;
+# k_main (x86/boot.c) tells the two forms apart by the magic. The kernel is
+# an ELF64 file, which QEMU's -kernel refuses as Multiboot's ELF, and whose
+# entry, an address in the top 2 GiB, GRUB's multiboot2 refuses; each header
+# therefore gives the addresses itself, the Multiboot one by the a.out
+# kludge, bit 16, and the multiboot2 one by its address and entry tags: the
+# file from the Multiboot header on is copied to physical 1 MiB up to
+# _load_end, the memory up to _end is zeroed, and the loader jumps to the
+# physical address of _start. QEMU's -kernel reads the first header and
+# GRUB's multiboot2 command the second, on BIOS or UEFI firmware; on UEFI
+# GRUB leaves the firmware's boot services before it jumps here.
 #
 # The kernel is linked at KVA_IMAGE plus its physical address (link.ld), so
 # the 32-bit code below runs at addresses that are not its own and names
@@ -32,6 +37,24 @@
 .set MULTIBOOT_FLAGS,       MULTIBOOT_PAGEALIGN | MULTIBOOT_MEMINFO | MULTIBOOT_AOUT_KLUDGE
 .set MULTIBOOT_CHECKSUM,    -(MULTIBOOT_MAGIC + MULTIBOOT_FLAGS)
 .set KERNEL_STACK_SIZE,     0x4000
+
+# The multiboot2 header: the magic, the architecture (0, i386 protected
+# mode), its length in bytes and a checksum, then its tags, each a 16-bit
+# type, 16-bit flags and a 32-bit size, starting on an 8-byte boundary. The
+# address and entry tags place the file as the a.out kludge does; the
+# console tag says the kernel takes the VGA's text mode; the framebuffer
+# tag, optional, asks for a framebuffer and leaves its size and depth to
+# the loader, which on UEFI is the firmware's.
+.set MULTIBOOT2_MAGIC,      0xE85250D6
+.set MULTIBOOT2_I386,       0
+.set MULTIBOOT2_LENGTH,     104
+.set MULTIBOOT2_CHECKSUM,   -(MULTIBOOT2_MAGIC + MULTIBOOT2_I386 + MULTIBOOT2_LENGTH)
+.set MULTIBOOT2_ADDRESS,    2
+.set MULTIBOOT2_ENTRY,      3
+.set MULTIBOOT2_CONSOLE,    4
+.set MULTIBOOT2_EGA_TEXT,   1 << 1
+.set MULTIBOOT2_FB,         5
+.set MULTIBOOT2_OPTIONAL,   1
 
 .set KVA_IMAGE,  0xFFFFFFFF80000000
 .set KVA_DIRECT, 0xFFFF800000000000
@@ -68,6 +91,33 @@ multiboot_header:
 .long _load_end                      # load_end_addr
 .long _end                           # bss_end_addr
 .long _start - KVA_IMAGE             # entry_addr
+
+.align 8
+multiboot2_header:
+.long MULTIBOOT2_MAGIC
+.long MULTIBOOT2_I386
+.long MULTIBOOT2_LENGTH
+.long MULTIBOOT2_CHECKSUM
+.short MULTIBOOT2_ADDRESS, 0
+.long 24
+.long multiboot2_header - KVA_IMAGE  # header_addr
+.long multiboot_header - KVA_IMAGE   # load_addr: the copy starts at the Multiboot header
+.long _load_end                      # load_end_addr
+.long _end                           # bss_end_addr
+.short MULTIBOOT2_ENTRY, 0
+.long 12
+.long _start - KVA_IMAGE             # entry_addr
+.long 0
+.short MULTIBOOT2_CONSOLE, 0
+.long 12
+.long MULTIBOOT2_EGA_TEXT
+.long 0
+.short MULTIBOOT2_FB, MULTIBOOT2_OPTIONAL
+.long 20
+.long 0, 0, 0
+.long 0
+.short 0, 0
+.long 8
 
 .globl _start
 _start:
