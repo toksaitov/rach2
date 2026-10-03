@@ -11,7 +11,7 @@
  * own cap is what stops it. */
 uint32_t host_cache_target = 128;
 
-uint32_t mem_cache_target(void)
+size_t mem_cache_target(void)
 {
     return host_cache_target;
 }
@@ -21,14 +21,14 @@ int in_interrupt(void)
     return 0;
 }
 
-uint32_t mem_reserve_frames(void)
+size_t mem_reserve_frames(void)
 {
     return 0;
 }
 
 uint32_t host_free_frames = 1u << 20; /* a test lowers it to run the machine short */
 
-uint32_t frame_free_count(void)
+size_t frame_free_count(void)
 {
     return host_free_frames;
 }

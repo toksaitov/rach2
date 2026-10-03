@@ -752,7 +752,7 @@ static int tmpfs_readlink(struct vfs_mount *mnt, void *node, char *buf, uint32_t
 static int tmpfs_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
 {
     const struct shmem_quota *q = &((struct tmpfs_mount *)mnt->priv)->quota;
-    uint32_t total = q->limit ? q->limit : frame_total_count();
+    size_t total = q->limit ? q->limit : frame_total_count();
 
     st->magic = TMPFS_MAGIC;
     st->bsize = PAGE_SIZE;
@@ -985,7 +985,7 @@ static int64_t size_pages(const char *options)
 {
     const char *p = option(options, "size");
     uint64_t n = 0;
-    uint32_t total = frame_total_count();
+    size_t total = frame_total_count();
     int shift = 0;
 
     if (!p) {
@@ -999,7 +999,7 @@ static int64_t size_pages(const char *options)
     }
     if (*p == '%') {
         n = n > 1000u ? 1000u : n;
-        return (int64_t)(((uint32_t)n * (total / 100u)) + (uint32_t)n * (total % 100u) / 100u);
+        return (int64_t)((size_t)n * (total / 100u) + (size_t)n * (total % 100u) / 100u);
     }
     if (*p == 'k' || *p == 'K') {
         shift = 10;
@@ -1012,8 +1012,11 @@ static int64_t size_pages(const char *options)
     if (*p != '\0' && *p != ',') {
         return -EINVAL;
     }
+    if (n > (~0ull - (PAGE_SIZE - 1u)) >> shift) {
+        n = (~0ull - (PAGE_SIZE - 1u)) >> shift;
+    }
     n = ((n << shift) + PAGE_SIZE - 1u) >> 12;
-    return (int64_t)(n > 0xFFFFFFFFull ? 0xFFFFFFFFull : n);
+    return (int64_t)(n > (size_t)~(size_t)0 ? (size_t)~(size_t)0 : n);
 }
 
 static int tmpfs_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
@@ -1032,7 +1035,7 @@ static int tmpfs_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flag
     if (!tm) {
         return -ENOMEM;
     }
-    tm->quota.limit = (uint32_t)limit;
+    tm->quota.limit = (size_t)limit;
     mnt->priv = tm;
     root = new_node(mnt, NULL, T_IFDIR | root_mode(options));
     if (!root) {
@@ -1121,10 +1124,10 @@ static int tmpfs_remount(struct vfs_mount *mnt, uint32_t flags, const char *opti
     if (limit < 0) {
         return (int)limit;
     }
-    if (limit != 0 && (uint32_t)limit < tm->quota.used) {
+    if (limit != 0 && (size_t)limit < tm->quota.used) {
         return -EINVAL;
     }
-    tm->quota.limit = (uint32_t)limit;
+    tm->quota.limit = (size_t)limit;
     return 0;
 }
 

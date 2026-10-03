@@ -1,6 +1,7 @@
 #ifndef _SHMEM_H_
 #define _SHMEM_H_
 
+#include "../lib/kdef.h"
 #include "../lib/kint.h"
 
 /* The pages one leaf of a table reaches: a page of entries. */
@@ -8,11 +9,12 @@
 
 /*
  * A count of the pages that files hold against a limit, which a tmpfs mount
- * keeps for its files; a limit of 0 is none.
+ * keeps for its files; a limit of 0 is none. Both are as wide as the frame
+ * counts, so a mount on x86-64 may hold more than 16 TiB of pages.
  */
 struct shmem_quota {
-    uint32_t used;
-    uint32_t limit;
+    size_t used;
+    size_t limit;
 };
 
 /*

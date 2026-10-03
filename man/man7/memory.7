@@ -8,12 +8,19 @@
 The kernel accounts for physical memory from the memory map the loader
 passes, Multiboot's or multiboot2's, or under UEFI the firmware's EFI
 memory map, using 64-bit arithmetic.
-Its virtual address space occupies the gigabyte starting at
+It manages the usable memory below its reach: 4 GiB on i686, whose
+physical addresses are 32 bits, and on x86-64 all of the memory, up to the
+64 TiB its direct map covers.
+On i686 its virtual address space occupies the gigabyte starting at
 .Li 0xC0000000 ,
-with 256 page tables shared by every page directory.
+with 256 page tables shared by every page directory; on x86-64 it is the
+upper half of the address space, where all of physical memory is mapped
+from
+.Li 0xFFFF800000000000 .
 .Pp
-The direct physical-memory window is 32 MiB and is identity-mapped:
-virtual and physical addresses in that window are equal.
+The first 32 MiB of physical memory is the DMA pool, below 4 GiB on both,
+and on i686 it is identity-mapped: virtual and physical addresses there
+are equal.
 The frame allocators used for user pages search above it first.
 They allocate below it only while more than sixty-four frames remain free
 there.
@@ -78,6 +85,11 @@ At boot the kernel reports:
 .Bd -literal -offset indent
 memory: usable N KiB, unreachable N KiB, reserved N KiB, managed N KiB
 .Ed
+.Pp
+Usable is the available memory below the reach and unreachable the
+available memory at or above it, so on x86-64 unreachable is 0 on any
+machine of less than 64 TiB; reserved is what the boot took of the usable
+memory, and managed what the frame allocator offers.
 .Pp
 A kernel stack that runs out stops the machine with a record that says
 .Dl pid N ran past the end of its kernel stack

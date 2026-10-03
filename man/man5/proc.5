@@ -336,7 +336,9 @@ pair per line.
 .Li MemTotal
 and
 .Li MemFree
-give the total and free physical frame pool.
+give the total and free physical frame pool: the usable memory below the
+architecture's reach less what the boot reserved, which is the memory below
+4 GiB on i686 and all of the memory on x86-64, up to 64 TiB.
 .Li Buffers
 and
 .Li Cached

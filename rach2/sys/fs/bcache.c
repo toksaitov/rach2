@@ -51,7 +51,7 @@ static uint64_t stat_visits;
 
 static uint32_t bcache_limit(void)
 {
-    uint32_t n = limit_set ? limit_set : mem_cache_target() / 2u;
+    uint32_t n = limit_set ? limit_set : (uint32_t)(mem_cache_target() / 2u);
 
     if (n > BCACHE_HEAP_SHARE) {
         n = BCACHE_HEAP_SHARE;

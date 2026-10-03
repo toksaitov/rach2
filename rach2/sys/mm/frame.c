@@ -4,13 +4,27 @@
 
 #include "frame.h"
 
-#include "../../vendor/multiboot.h"
+/* An entry of the boot record's map (boot.h): a 32-bit size of what
+ * follows, a 64-bit base, a 64-bit length and a 32-bit type, packed and
+ * little-endian, at these offsets. The record keeps no alignment, so the
+ * fields are read a byte at a time. */
+#define ENTRY_SIZE 0
+#define ENTRY_BASE 4
+#define ENTRY_LEN  12
+#define ENTRY_TYPE 20
 
-#define FOUR_GIB 0x100000000ULL
+static uint32_t le32(const uint8_t *p)
+{
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+static uint64_t le64(const uint8_t *p)
+{
+    return (uint64_t)le32(p) | ((uint64_t)le32(p + 4) << 32);
+}
 
 /* The `index`-th entry, walking the map as its format says. */
-static const multiboot_memory_map_t *entry_at(const void *mmap_buf, uint32_t mmap_len,
-                                              uint32_t index)
+static const uint8_t *entry_at(const void *mmap_buf, uint32_t mmap_len, uint32_t index)
 {
     const uint8_t *p;
     const uint8_t *end;
@@ -21,19 +35,17 @@ static const multiboot_memory_map_t *entry_at(const void *mmap_buf, uint32_t mma
     }
     p = (const uint8_t *)mmap_buf;
     end = p + mmap_len;
-    while (p + sizeof(multiboot_uint32_t) <= end) {
-        const multiboot_memory_map_t *e = (const multiboot_memory_map_t *)p;
-        uint32_t advance = e->size + (uint32_t)sizeof(e->size);
+    while (end - p >= 4) {
+        uint32_t size = le32(p + ENTRY_SIZE);
 
-        if (advance < (uint32_t)sizeof(multiboot_memory_map_t) ||
-            (const uint8_t *)e + advance > end) {
+        if (size < BOOT_MMAP_ENTRY - 4 || (uint32_t)(end - p) - 4 < size) {
             return NULL;
         }
         if (i == index) {
-            return e;
+            return p;
         }
         i++;
-        p += advance;
+        p += size + 4;
     }
     return NULL;
 }
@@ -41,14 +53,14 @@ static const multiboot_memory_map_t *entry_at(const void *mmap_buf, uint32_t mma
 int frame_map_entry(const void *mmap_buf, uint32_t mmap_len, uint32_t index, uint64_t *addr,
                     uint64_t *len, uint32_t *type)
 {
-    const multiboot_memory_map_t *e = entry_at(mmap_buf, mmap_len, index);
+    const uint8_t *e = entry_at(mmap_buf, mmap_len, index);
 
     if (e == NULL) {
         return 0;
     }
-    *addr = e->addr;
-    *len = e->len;
-    *type = e->type;
+    *addr = le64(e + ENTRY_BASE);
+    *len = le64(e + ENTRY_LEN);
+    *type = le32(e + ENTRY_TYPE);
     return 1;
 }
 
@@ -154,29 +166,24 @@ static void recount(struct frame_map *m)
         m->usable_bytes += m->usable[i].end - m->usable[i].start;
     }
     if (m->count > 0) {
-        m->top_frame =
-            (uint32_t)((m->usable[m->count - 1].end + FRAME_PAGE_SIZE - 1) / FRAME_PAGE_SIZE);
+        m->top_frame = (m->usable[m->count - 1].end + FRAME_PAGE_SIZE - 1) / FRAME_PAGE_SIZE;
     }
 }
 
+/* The end of an entry: its base plus its length, or the space's last byte
+ * for a length that wraps. */
+static uint64_t entry_end(uint64_t addr, uint64_t len)
+{
+    return addr + len < addr ? ~(uint64_t)0 : addr + len;
+}
+
 int frame_map_build(struct frame_map *m, const void *mmap_buf, uint32_t mmap_len,
-                    uint32_t mem_upper_kb)
+                    uint32_t mem_upper_kb, uint64_t reach)
 {
     uint32_t i;
     uint64_t addr, len;
     uint32_t type;
     uint64_t dropped = 0;
-    /* The part at or above 4 GiB, merged and subtracted like the usable
-     * part, so an entry given twice or overlapped by a reserved one counts
-     * once and not at all. */
-    struct frame_map hi;
-
-    hi.count = 0;
-    hi.usable_bytes = 0;
-    hi.unreachable_bytes = 0;
-    hi.reserved_bytes = 0;
-    hi.top_frame = 0;
-    hi.from_mem_upper = 0;
 
     m->count = 0;
     m->usable_bytes = 0;
@@ -186,22 +193,7 @@ int frame_map_build(struct frame_map *m, const void *mmap_buf, uint32_t mmap_len
     m->from_mem_upper = 0;
 
     for (i = 0; frame_map_entry(mmap_buf, mmap_len, i, &addr, &len, &type); i++) {
-        uint64_t end = addr + len;
-
-        if (end < addr) {
-            end = ~(uint64_t)0; /* a length that wraps: to the space's last byte */
-        }
-        if (type != MULTIBOOT_MEMORY_AVAILABLE) {
-            continue;
-        }
-        if (end > FOUR_GIB) {
-            if (range_add(&hi, addr > FOUR_GIB ? addr : FOUR_GIB, end) != 0) {
-                m->count = 0;
-                return -1;
-            }
-            end = FOUR_GIB;
-        }
-        if (addr < end && range_add(m, addr, end) != 0) {
+        if (type == FRAME_MAP_USABLE && range_add(m, addr, entry_end(addr, len)) != 0) {
             m->count = 0;
             return -1;
         }
@@ -209,30 +201,18 @@ int frame_map_build(struct frame_map *m, const void *mmap_buf, uint32_t mmap_len
     /* Anything of another type wins where it overlaps an available range:
      * the conservative reading of a map that contradicts itself. */
     for (i = 0; frame_map_entry(mmap_buf, mmap_len, i, &addr, &len, &type); i++) {
-        uint64_t end = addr + len;
-
-        if (type == MULTIBOOT_MEMORY_AVAILABLE) {
-            continue;
-        }
-        if (end < addr) {
-            end = ~(uint64_t)0;
-        }
-        if (end > FOUR_GIB) {
-            uint64_t taken = 0;
-
-            if (range_subtract(&hi, addr > FOUR_GIB ? addr : FOUR_GIB, end, &taken) != 0) {
-                m->count = 0;
-                return -1;
-            }
-            end = FOUR_GIB;
-        }
-        if (range_subtract(m, addr, end, &dropped) != 0) {
+        if (type != FRAME_MAP_USABLE &&
+            range_subtract(m, addr, entry_end(addr, len), &dropped) != 0) {
             m->count = 0;
             return -1;
         }
     }
-    for (i = 0; i < hi.count; i++) {
-        m->unreachable_bytes += hi.usable[i].end - hi.usable[i].start;
+    /* What lies past the reach is counted and dropped: merged and
+     * subtracted like the rest first, so an entry given twice or overlapped
+     * by a reserved one counts once and not at all. */
+    if (range_subtract(m, reach, ~(uint64_t)0, &m->unreachable_bytes) != 0) {
+        m->count = 0;
+        return -1;
     }
     if (m->count == 0 && m->unreachable_bytes == 0) {
         /* No map, or nothing available in it: the older field, as one range
@@ -241,9 +221,9 @@ int frame_map_build(struct frame_map *m, const void *mmap_buf, uint32_t mmap_len
         if (mem_upper_kb > 0) {
             uint64_t end = 0x100000ULL + (uint64_t)mem_upper_kb * 1024u;
 
-            if (end > FOUR_GIB) {
-                m->unreachable_bytes += end - FOUR_GIB;
-                end = FOUR_GIB;
+            if (end > reach) {
+                m->unreachable_bytes += end - reach;
+                end = reach;
             }
             range_add(m, 0x100000ULL, end);
         }
@@ -263,9 +243,9 @@ int frame_map_reserve(struct frame_map *m, uint64_t start, uint64_t end)
     return 0;
 }
 
-int frame_map_usable(const struct frame_map *m, uint32_t frame)
+int frame_map_usable(const struct frame_map *m, uint64_t frame)
 {
-    uint64_t start = (uint64_t)frame * FRAME_PAGE_SIZE;
+    uint64_t start = frame * FRAME_PAGE_SIZE;
     uint64_t end = start + FRAME_PAGE_SIZE;
     uint32_t i;
 
@@ -280,4 +260,29 @@ int frame_map_usable(const struct frame_map *m, uint32_t frame)
 uint64_t frame_map_managed(const struct frame_map *m)
 {
     return m->usable_bytes - m->reserved_bytes;
+}
+
+int frame_map_place(const struct frame_map *m, uint64_t bytes, uint64_t floor, uint64_t *at)
+{
+    uint64_t span = (bytes + FRAME_PAGE_SIZE - 1) & ~(uint64_t)(FRAME_PAGE_SIZE - 1);
+    uint32_t i = m->count;
+
+    if (bytes == 0 || span < bytes) {
+        return -1;
+    }
+    while (i-- > 0) {
+        uint64_t lo = m->usable[i].start > floor ? m->usable[i].start : floor;
+        uint64_t hi = m->usable[i].end;
+        uint64_t start;
+
+        if (lo >= hi || hi - lo < span) {
+            continue;
+        }
+        start = (hi - span) & ~(uint64_t)(FRAME_PAGE_SIZE - 1);
+        if (start >= lo) {
+            *at = start;
+            return 0;
+        }
+    }
+    return -1;
 }

@@ -41,12 +41,12 @@ int in_interrupt(void)
     return current_proc ? current_proc->irq_depth > 0 : irq_depth > 0;
 }
 
-uint32_t mem_cache_target(void)
+size_t mem_cache_target(void)
 {
     return frame_total_count() / 4u;
 }
 
-uint32_t mem_reserve_frames(void)
+size_t mem_reserve_frames(void)
 {
     return frame_total_count() / 32u;
 }
@@ -58,7 +58,7 @@ uint32_t mem_reserve_frames(void)
  * Reclaim stops at `high_mark`, an eighth, so it runs in bursts and not on
  * every allocation.
  */
-static uint32_t low_mark(void)
+static size_t low_mark(void)
 {
     return frame_total_count() / 16u;
 }
@@ -67,7 +67,7 @@ static uint32_t low_mark(void)
  * The free-frame count at which `mem_reclaim` stops: an eighth of managed
  * memory.
  */
-static uint32_t high_mark(void)
+static size_t high_mark(void)
 {
     return frame_total_count() / 8u;
 }
@@ -117,7 +117,7 @@ static int may_write_back(void)
  */
 uint32_t mem_reclaim(void)
 {
-    uint32_t before = frame_free_count();
+    size_t before = frame_free_count();
     uint32_t got = 0, written = 0;
     int can_write = may_write_back();
 
@@ -125,7 +125,8 @@ uint32_t mem_reclaim(void)
         current_proc->reclaiming++;
     }
     while (frame_free_count() < high_mark()) {
-        uint32_t want = high_mark() - frame_free_count();
+        size_t short_by = high_mark() - frame_free_count();
+        uint32_t want = (uint32_t)short_by == short_by ? (uint32_t)short_by : 0xFFFFFFFFu;
         uint32_t freed = bcache_shrink(want, can_write, &written);
 
         if (freed < want) {
@@ -144,8 +145,8 @@ uint32_t mem_reclaim(void)
     }
     if (got) {
         klog(KLOG_INFO, "memory",
-             "reclaim: %d frames from the caches, %d written back, %d free before", (int)got,
-             (int)written, (int)before);
+             "reclaim: %d frames from the caches, %d written back, %ld free before", (int)got,
+             (int)written, (long)before);
     }
     return got;
 }

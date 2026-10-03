@@ -98,6 +98,23 @@ static page_dir_t *alloc_page_dir(void)
     return dir;
 }
 
+/** A physical address without PAE is 32 bits: the kernel reaches the first
+ * 4 GiB and nothing above. */
+uint64_t mmu_phys_reach(void)
+{
+    return FRAME_REACH_32;
+}
+
+/**
+ * The frame table at the boot allocator's break, in the identity window,
+ * where the kernel reaches it before paging is on.
+ */
+void *mmu_frame_table(struct frame_map *map, size_t bytes)
+{
+    (void)map;
+    return mem_reserve_ptr(bytes, true);
+}
+
 /**
  * Build the kernel directory: the window identity-mapped, supervisor-only,
  * so the kernel reaches any physical address below `HARD_MEMORY_LIMIT`

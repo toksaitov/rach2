@@ -23,8 +23,8 @@ size_t _frames_number;
 /* The frames below the identity-mapped window, which `alloc_kernel_frame`
  * hands out: a frame the kernel reaches through its physical address. */
 static size_t _window_frames;
-static uint32_t _managed_frames;
-static uint32_t _free_frames; /* words of the table that are 0, kept by every writer */
+static size_t _managed_frames;
+static size_t _free_frames; /* words of the table that are 0, kept by every writer */
 
 static void frame_take(uintptr_t frame);
 /* Where the next scan for a free frame starts: no frame below it is free.
@@ -36,7 +36,7 @@ static uintptr_t _next_free_frame;
  * the address of, so the last WINDOW_KEEP of them are left to the requests
  * and the page cache, which take from the window's top. */
 static uintptr_t _next_free_upper;
-static uint32_t _free_window_frames; /* free frames below the window */
+static size_t _free_window_frames; /* free frames below the window */
 #define WINDOW_KEEP 64u
 /* rach2.framefail: the allocation that fails on purpose, counted down. */
 static uint32_t _framefail_left;
@@ -91,26 +91,31 @@ static void _page_fault_handler(isr_params_t *params);
  * Build the frame table and the kernel directory, turn paging on, and start
  * the heap.
  *
- * The frame table has one word per frame below the map's top, and lies
- * below the window with the other boot tables; a map with nothing usable
- * gets the window, so a machine whose firmware gives no map still boots.
- * The boot allocator placed the table before the map could be consulted, so
- * a table that lies over memory the map does not offer would overwrite
- * firmware's memory, and the machine is refused by name in the memory
- * report and stops rather than run on it: on a machine too small for the
- * kernel, its modules and the table, this is where the table lands. A frame
- * the map does not offer is marked `FRAME_ABSENT`.
+ * The frame table has one word per frame below the map's top, and the
+ * architecture places it (`mmu_frame_table`): below the window with the
+ * other boot tables on i686, at the top of memory on x86-64. A map with
+ * nothing usable gets the window, so a machine whose firmware gives no map
+ * still boots. On i686 the boot allocator placed the table before the map
+ * could be consulted, so a table that lies over memory the map does not
+ * offer would overwrite firmware's memory, and the machine is refused by
+ * name in the memory report and stops rather than run on it: on a machine
+ * too small for the kernel, its modules and the table, this is where the
+ * table lands. The table's frames are reserved in the map, and a frame the
+ * map does not offer is marked `FRAME_ABSENT`.
  *
  * The architecture then builds the kernel's directory (`mmu_init`), marking
  * the frames below the break it passes, and every frame below
- * `mem_reserved_ptr` is marked used once more, for the tables carved at
- * frames the architecture had already passed and for those carved after it. The map has the same
- * range reserved, and what the allocator manages and has free is counted from the table and not
- * from the map's arithmetic, so the boot's report compares the two.
+ * `mem_reserved_ptr` and of the table is marked used once more, for the
+ * tables carved at frames the architecture had already passed and for those
+ * carved after it. The map has the same ranges reserved, and what the
+ * allocator manages and has free is counted from the table and not from the
+ * map's arithmetic, so the boot's report compares the two.
  */
 void init_paging(struct frame_map *map)
 {
-    uintptr_t frame;
+    uintptr_t frame, first, last;
+    size_t table_bytes;
+    uint32_t i;
 
     /* frame.h mirrors these two values so it can stay host-linkable; fail
      * loudly if the mirror ever drifts from the real definitions. */
@@ -118,34 +123,43 @@ void init_paging(struct frame_map *map)
         k_panic("frame.h constants drifted from the architecture's");
     }
 
-    _frames_number = map->top_frame ? map->top_frame : (HARD_MEMORY_LIMIT / PAGE_SIZE);
+    _frames_number = map->top_frame ? (size_t)map->top_frame : (HARD_MEMORY_LIMIT / PAGE_SIZE);
     _window_frames = _frames_number < HARD_MEMORY_LIMIT / PAGE_SIZE ? _frames_number
                                                                     : HARD_MEMORY_LIMIT / PAGE_SIZE;
-    _frames = mem_reserve_ptr(_frames_number * sizeof(uint32_t), true);
+    table_bytes = _frames_number * sizeof(uint32_t);
+    _frames = mmu_frame_table(map, table_bytes);
     if (_frames == NULL) {
         k_panic("init_paging: no reserved memory for the frame table");
     }
+    first = virt_to_phys(_frames) / PAGE_SIZE;
+    last = (virt_to_phys(_frames) + table_bytes - 1) / PAGE_SIZE;
     if (map->top_frame) {
-        uintptr_t first = virt_to_phys(_frames) / PAGE_SIZE;
-        uintptr_t last =
-            (virt_to_phys(_frames) + _frames_number * sizeof(uint32_t) - 1) / PAGE_SIZE;
-
         for (frame = first; frame <= last; frame++) {
-            if (!frame_map_usable(map, (uint32_t)frame)) {
+            if (!frame_map_usable(map, frame)) {
                 klog(KLOG_ERR, "memory",
                      "refused: the frame table needs memory past what the map offers after the "
                      "kernel's reservations");
                 k_panic("memory: too little for this kernel");
             }
         }
+        if (frame_map_reserve(map, (uint64_t)first * PAGE_SIZE, (uint64_t)(last + 1) * PAGE_SIZE) !=
+            0) {
+            k_panic("init_paging: the frame table splits more ranges than the map keeps");
+        }
     }
-    _managed_frames = 0;
-    for (frame = 0; frame < _frames_number; frame++) {
-        if (map->top_frame == 0 || frame_map_usable(map, (uint32_t)frame)) {
-            _frames[frame] = 0;
-            _managed_frames++;
-        } else {
+    if (map->top_frame == 0) {
+        k_memset(_frames, 0, table_bytes);
+    } else {
+        for (frame = 0; frame < _frames_number; frame++) {
             _frames[frame] = FRAME_ABSENT;
+        }
+        for (i = 0; i < map->count; i++) {
+            uintptr_t lo = (uintptr_t)((map->usable[i].start + PAGE_SIZE - 1) / PAGE_SIZE);
+            uintptr_t hi = (uintptr_t)(map->usable[i].end / PAGE_SIZE);
+
+            for (frame = lo; frame < hi; frame++) {
+                _frames[frame] = 0;
+            }
         }
     }
 
@@ -157,6 +171,9 @@ void init_paging(struct frame_map *map)
         for (f = 0; f < final_frame && f < _frames_number; f++) {
             _frames[f] = 1;
         }
+    }
+    for (frame = first; frame <= last; frame++) {
+        _frames[frame] = 1;
     }
 
     _user_frames_start = mem_reserved_ptr / PAGE_SIZE;
@@ -194,7 +211,7 @@ void init_paging(struct frame_map *map)
 
 void frame_take_boot(uintptr_t frame)
 {
-    if (frame < _frames_number) {
+    if (_frames != NULL && frame < _frames_number) {
         frame_take(frame);
     }
 }
@@ -1052,7 +1069,7 @@ void free_kernel_frame(void *frame)
 /**
  * Return the number of physical frames the pool manages.
  */
-uint32_t frame_total_count(void)
+size_t frame_total_count(void)
 {
     return _managed_frames;
 }
@@ -1065,7 +1082,7 @@ uint32_t frame_total_count(void)
  * sysinfo, the leak probe and reclaim need, so no locking is needed under
  * the IF discipline.
  */
-uint32_t frame_free_count(void)
+size_t frame_free_count(void)
 {
     return _free_frames;
 }
@@ -1258,7 +1275,7 @@ uintptr_t alloc_user_frame(void)
          * filled it: the boot's reservations below the user frames, the
          * kernel's frames from the top, and the user frames between, with
          * the shared ones counted apart. */
-        uint32_t user_used = 0, user_shared = 0;
+        size_t user_used = 0, user_shared = 0;
         uintptr_t f;
 
         for (f = _user_frames_start; f < _frames_number; f++) {
@@ -1271,10 +1288,10 @@ uintptr_t alloc_user_frame(void)
         }
         user_used -= user_used < _kernel_frames_reserved ? user_used : _kernel_frames_reserved;
         klog(KLOG_ERR, "vm",
-             "user page: no free frames in %d: %d boot, %d kernel, %d user of which %d shared, pid "
-             "%d",
-             (int)_frames_number, (int)_user_frames_start, (int)_kernel_frames_reserved,
-             (int)user_used, (int)user_shared, current_proc ? current_proc->pid : 0);
+             "user page: no free frames in %ld: %ld boot, %d kernel, %ld user of which %ld shared, "
+             "pid %d",
+             (long)_frames_number, (long)_user_frames_start, (int)_kernel_frames_reserved,
+             (long)user_used, (long)user_shared, current_proc ? current_proc->pid : 0);
         if (current_proc) {
             current_proc->frame_refused = 1;
         }

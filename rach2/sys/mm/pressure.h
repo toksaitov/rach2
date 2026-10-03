@@ -33,10 +33,10 @@
  */
 
 /** Frames the caches together aim to hold at most while memory is short. */
-uint32_t mem_cache_target(void);
+size_t mem_cache_target(void);
 
 /** Frames kept back for the kernel and root. */
-uint32_t mem_reserve_frames(void);
+size_t mem_reserve_frames(void);
 
 /**
  * Whether a frame may be taken now: 1 unless the caller acts for a process

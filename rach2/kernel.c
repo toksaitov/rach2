@@ -3520,7 +3520,7 @@ void kernel_main(const struct boot_info *boot)
             memory_map_line(line, sizeof(line), addr, len, type);
             klog(KLOG_DEBUG, "memory", "map: %s", line);
         }
-        if (frame_map_build(&map, mmap, mmap_len, boot->mem_upper_kb) != 0) {
+        if (frame_map_build(&map, mmap, mmap_len, boot->mem_upper_kb, mmu_phys_reach()) != 0) {
             k_panic("memory: the firmware's map has more ranges than the kernel keeps");
         }
         if (map.from_mem_upper) {
@@ -3538,13 +3538,13 @@ void kernel_main(const struct boot_info *boot)
         guard_boot_stack();
         map_modules();
         klog(KLOG_INFO, "memory",
-             "usable %d KiB, unreachable %d KiB, reserved %d KiB, managed %d KiB",
-             (int)(map.usable_bytes / 1024), (int)(map.unreachable_bytes / 1024),
-             (int)(map.reserved_bytes / 1024), (int)(frame_total_count() * (PAGE_SIZE / 1024)));
+             "usable %ld KiB, unreachable %ld KiB, reserved %ld KiB, managed %ld KiB",
+             (long)(map.usable_bytes / 1024), (long)(map.unreachable_bytes / 1024),
+             (long)(map.reserved_bytes / 1024), (long)(frame_total_count() * (PAGE_SIZE / 1024)));
         if (frame_total_count() * (PAGE_SIZE / 1024) < FRAME_MIN_MANAGED_KIB) {
             klog(KLOG_ERR, "memory",
-                 "refused: %d KiB managed after the kernel's reservations, at least %d KiB needed",
-                 (int)(frame_total_count() * (PAGE_SIZE / 1024)), (int)FRAME_MIN_MANAGED_KIB);
+                 "refused: %ld KiB managed after the kernel's reservations, at least %d KiB needed",
+                 (long)(frame_total_count() * (PAGE_SIZE / 1024)), (int)FRAME_MIN_MANAGED_KIB);
             k_panic("memory: too little for this kernel");
         }
     }

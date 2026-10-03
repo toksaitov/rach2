@@ -42,14 +42,33 @@ pte_t *mmu_kernel_table(uintptr_t va);
 
 /*
  * The steps of `init_paging` the architecture takes (arch/i686/mmu.c):
- * `mmu_init` builds the kernel's directory with the identity window and the
- * tables of the kernel's layout, marking the frames it carves in the frame
- * table (`frame_take_boot`); `mmu_start` turns translation on through it;
- * `mmu_heap_ready` says the heap exists, from which page tables then come.
+ * `mmu_frame_table` places the frame table; `mmu_init` builds the kernel's
+ * directory with the identity window and the tables of the kernel's layout,
+ * marking the frames it carves in the frame table (`frame_take_boot`);
+ * `mmu_start` turns translation on through it; `mmu_heap_ready` says the
+ * heap exists, from which page tables then come.
  */
 void mmu_init(void);
 void mmu_start(void);
 void mmu_heap_ready(void);
+
+/*
+ * The first physical address the kernel cannot reach, which bounds the
+ * memory the frame allocator takes: 4 GiB on i686, whose physical addresses
+ * without PAE are 32 bits, and the direct map's end on x86-64.
+ */
+uint64_t mmu_phys_reach(void);
+
+/*
+ * The kernel's address of `bytes` for the frame table, page-aligned, or
+ * NULL when no memory holds it. `map` is the firmware's memory with the
+ * kernel and the modules reserved; the caller reserves the table in it. On
+ * i686 the table is carved at the boot allocator's break, in the identity
+ * window. On x86-64 the direct map is built and loaded first, so that the
+ * table may lie anywhere, and it goes at the top of the highest usable
+ * range above the window that holds it.
+ */
+void *mmu_frame_table(struct frame_map *map, size_t bytes);
 
 /** Mark the boot's frame `frame` used, for the architecture's table carving
  * before the heap exists. */
@@ -64,7 +83,7 @@ int paging_fork_copy(struct mm *from, page_dir_t *child);
  * Initialize paging. `map` is the physical memory the firmware's map
  * establishes, with the kernel image and the modules already reserved; the
  * frame table is sized from it, one word per frame below its top, and the
- * tables this carves are reserved in it before it returns.
+ * table and the tables this carves are reserved in it before it returns.
  */
 void init_paging(struct frame_map *map);
 
@@ -301,7 +320,7 @@ void free_kernel_frame(void *frame);
 void paging_mark_reserved(uintptr_t frame);
 
 /** Total physical frames the pool manages. */
-uint32_t frame_total_count(void);
+size_t frame_total_count(void);
 
 /** The least memory, in KiB, the kernel boots with once its own image, the
  * modules and the frame table are reserved. Below it the boot faults in
@@ -310,7 +329,7 @@ uint32_t frame_total_count(void);
 #define FRAME_MIN_MANAGED_KIB 1024u
 
 /** Physical frames currently free, kept as a count by the table's writers. */
-uint32_t frame_free_count(void);
+size_t frame_free_count(void);
 
 /*
  * Pre-allocate the kernel page tables spanning [va_start, va_start+size) with

@@ -17,6 +17,7 @@
 #include "../arch.h"
 #include "../x86/kcpu.h"
 
+#include "../../klog.h"
 #include "../../panic.h"
 #include "../../mm/heap.h"
 #include "../../mm/paging.h"
@@ -28,6 +29,11 @@ pte_t mmu_nx;
  * allocator, given back when the table goes. Before, the boot carves one
  * below the window, and it stays for good. */
 static int _heap_ready;
+
+/* The firmware's memory while the boot carves, which a carved page must lie
+ * in: on a machine too small for the kernel and its modules the break is
+ * past the memory, and a table there would read back as garbage. */
+static const struct frame_map *_boot_map;
 
 #define GIB 0x40000000UL
 #define MIB 0x100000UL
@@ -51,6 +57,8 @@ extern char _text[], _etext[], _rodata[], _data[];
 
 /**
  * A zeroed page for a table, by physical address; 0 when there is none.
+ * A page the boot carves past the memory the map offers refuses the machine
+ * by name, as `init_paging` refuses one too small for the frame table.
  */
 static uintptr_t table_alloc(void)
 {
@@ -60,6 +68,13 @@ static uintptr_t table_alloc(void)
         phys = alloc_frame();
     } else {
         phys = mem_reserve(PAGE_SIZE, true);
+        if (phys && _boot_map && _boot_map->top_frame &&
+            !frame_map_usable(_boot_map, phys / PAGE_SIZE)) {
+            klog(KLOG_ERR, "memory",
+                 "refused: the kernel's page tables need memory past what the map offers after "
+                 "the kernel's reservations");
+            k_panic("memory: too little for this kernel");
+        }
         if (phys) {
             frame_take_boot(phys / PAGE_SIZE);
         }
@@ -134,23 +149,20 @@ static void map_image(uintptr_t from, uintptr_t to, pte_t flags)
 }
 
 /**
- * Build the kernel's PML4.
+ * Build the kernel's PML4 with the direct map and the image.
  *
  * The direct map covers physical memory to the top of the frame table and
  * at least the first 4 GiB, where the firmware's tables and the devices'
  * registers are, in 1 GiB pages where CPUID says the processor has them
  * (leaf 0x80000001, EDX bit 26) and in 2 MiB pages where it does not. Its
- * pages are writable and never executable. The windows get their PML4
- * entries and every page table of the regions cpu.h gives them, as on
- * i686, so that map_mmio and the temporary mappings write entries that
- * exist. The image is mapped in 4 KiB pages: its text read-only, its
- * read-only data read-only and not executable, its data and .bss writable
- * and not executable.
+ * pages are writable and never executable. The image is mapped in 4 KiB
+ * pages: its text read-only, its read-only data read-only and not
+ * executable, its data and .bss writable and not executable.
  *
- * The loader's tables, which also map the first 4 GiB at 0, stay in use
- * until `mmu_start`; this PML4 has nothing in the lower half.
+ * This PML4 has nothing in the lower half: the loader's tables, which map
+ * the first 4 GiB at 0 too, are left once it is loaded.
  */
-void mmu_init(void)
+static void map_direct_and_image(void)
 {
     uint32_t max_ext = 0, edx = 0;
     uintptr_t top, at, i;
@@ -203,6 +215,47 @@ void mmu_init(void)
         pdpt[LEVEL_INDEX(KVA_DIRECT + at, 3)] = pd_phys | PTE_P | PTE_W;
     }
 
+    map_image((uintptr_t)_text, (uintptr_t)_etext, 0);
+    map_image((uintptr_t)_rodata, (uintptr_t)_data, mmu_nx);
+    map_image((uintptr_t)_data, KVA_IMAGE + (uintptr_t)&_end, PTE_W | mmu_nx);
+}
+
+/** The direct map's end: every physical address below it has a kernel
+ * address, and none above it does. */
+uint64_t mmu_phys_reach(void)
+{
+    return KVA_DIRECT_SIZE;
+}
+
+/**
+ * Build the kernel's PML4 with the direct map and the image and load it, so
+ * that all of memory is reached from here, and place the frame table at the
+ * top of the highest usable range above the window that holds it, out of
+ * the window the boot's tables and the DMA pool share. A machine with no
+ * room for it above the window has it carved at the break, as on i686.
+ */
+void *mmu_frame_table(struct frame_map *map, size_t bytes)
+{
+    uint64_t at;
+
+    _boot_map = map;
+    map_direct_and_image();
+    arch_space_load(get_page_dir_phys(_kernel_dir));
+    if (frame_map_place(map, bytes, HARD_MEMORY_LIMIT, &at) == 0) {
+        return phys_to_virt(at);
+    }
+    return mem_reserve_ptr(bytes, true);
+}
+
+/**
+ * Give the kernel's windows their PML4 entries and every page table of the
+ * regions cpu.h gives them, as on i686, so that the heap, map_mmio and the
+ * temporary mappings write entries that exist.
+ */
+void mmu_init(void)
+{
+    uintptr_t i;
+
     for (i = 0; i < PML4_WINDOW_COUNT; i++) {
         uintptr_t pdpt = table_alloc();
 
@@ -215,14 +268,11 @@ void mmu_init(void)
     boot_tables(KVA_MMIO, KVA_MMIO_SIZE);
     boot_tables(KVA_TEMP, (uintptr_t)KVA_TEMP_SLOTS * PAGE_SIZE);
     boot_tables(KVA_MODULES, KVA_MODULES_SIZE);
-
-    map_image((uintptr_t)_text, (uintptr_t)_etext, 0);
-    map_image((uintptr_t)_rodata, (uintptr_t)_data, mmu_nx);
-    map_image((uintptr_t)_data, KVA_IMAGE + (uintptr_t)&_end, PTE_W | mmu_nx);
 }
 
 /**
- * Translate through the kernel's PML4. The loader already turned paging,
+ * Translate through the kernel's PML4, which `mmu_frame_table` loaded
+ * already, so this loads it once more. The loader already turned paging,
  * PAE, long mode and write protection on (loader.s); CR0.WP makes a ring-0
  * write to a read-only page fault, which the page cache's dirty tracking
  * and copy-on-write depend on, as on i686.
@@ -234,6 +284,7 @@ void mmu_start(void)
 
 void mmu_heap_ready(void)
 {
+    _boot_map = NULL;
     _heap_ready = 1;
 }
 

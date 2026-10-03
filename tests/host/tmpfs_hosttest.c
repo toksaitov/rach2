@@ -135,14 +135,14 @@ int paging_zero_frame(uintptr_t phys)
     return 0;
 }
 
-uint32_t frame_total_count(void)
+size_t frame_total_count(void)
 {
     return POOL;
 }
 
-uint32_t frame_free_count(void)
+size_t frame_free_count(void)
 {
-    uint32_t n = 0;
+    size_t n = 0;
     int i;
 
     for (i = 0; i < POOL; i++) {
