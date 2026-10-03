@@ -2523,7 +2523,7 @@ long sys_uname(isr_params_t *params)
     uname_field(uts.nodename, uts_hostname());
     uname_field(uts.release, UTS_RELEASE);
     uname_field(uts.version, UTS_VERSION);
-    uname_field(uts.machine, "i686");
+    uname_field(uts.machine, ARCH_NAME);
     uname_field(uts.domainname, uts_domainname());
 
     if (copy_to_user(user_uts, &uts, sizeof(uts)) != 0) {
