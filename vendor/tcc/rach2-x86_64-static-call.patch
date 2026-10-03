@@ -1,0 +1,30 @@
+Call a function an executable defines directly on x86-64, not through a PLT.
+
+GNU as since binutils 2.31 writes R_X86_64_PLT32 for every `call` to a global
+function, PIC or not, where it wrote R_X86_64_PC32 before. TinyCC 0.9.27
+gives each PLT32 relocation a PLT slot and a GOT entry, and fills them only
+for a dynamic link: in a static executable the slot's `jmp *disp(%rip)` keeps
+the GOT entry's offset as its displacement, and the GOT stays zero. musl's
+crt1.o calls __libc_start_main that way, so every program this TinyCC linked
+for x86-64 Rach2 jumped into the bytes after the PLT and faulted before main.
+
+The call needs no slot when the executable itself defines the function: it is
+a plain PC-relative call, which is what this change makes of it, as TinyCC
+already did for a local or hidden symbol and as its later releases do for any
+symbol an executable defines. An undefined symbol keeps its slot, and a static
+link then refuses it as before. i386 is untouched: its calls are R_386_PC32
+unless written `@PLT`, and the code is under TCC_TARGET_X86_64.
+
+--- a/tccelf.c
++++ b/tccelf.c
+@@ -1081,7 +1081,9 @@
+ #ifdef TCC_TARGET_X86_64
+             if ((type == R_X86_64_PLT32 || type == R_X86_64_PC32) &&
+                 (ELFW(ST_VISIBILITY)(sym->st_other) != STV_DEFAULT ||
+-		 ELFW(ST_BIND)(sym->st_info) == STB_LOCAL)) {
++		 ELFW(ST_BIND)(sym->st_info) == STB_LOCAL ||
++		 (s1->output_type == TCC_OUTPUT_EXE &&
++		  sym->st_shndx != SHN_UNDEF))) {
+                 rel->r_info = ELFW(R_INFO)(sym_index, R_X86_64_PC32);
+                 continue;
+             }
