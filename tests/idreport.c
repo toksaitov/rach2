@@ -30,18 +30,15 @@
  * variable the environment does not hold, 31 for an environment holding more
  * than was named, and 40 for an unknown key.
  *
- * Freestanding; direct int 0x80. Staged 0755 at `/idreport` by the test image's
- * `exec-dir` sweep, a helper like `suidhelper` and not a probe: it is run by
- * `tests/musl/pwauthmusl.c` and prints no success token of its own.
+ * Freestanding; direct system calls (probe.h). Staged 0755 at `/idreport` by
+ * the test image's `exec-dir` sweep, a helper like `suidhelper` and not a
+ * probe: it is run by `tests/musl/pwauthmusl.c` and prints no success token of
+ * its own.
  */
 
-typedef unsigned int u32;
+#include "probe.h"
 
-#define SYS_EXIT        1
-#define SYS_WRITE       4
-#define SYS_GETCWD      183
-#define SYS_GETRESUID32 209
-#define SYS_GETRESGID32 211
+typedef unsigned int u32;
 
 #define EXIT_USAGE     2
 #define EXIT_UID       10
@@ -50,20 +47,6 @@ typedef unsigned int u32;
 #define EXIT_ENV       30
 #define EXIT_ENV_EXTRA 31
 #define EXIT_KEY       40
-
-static int syscall1(int num, int a)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "a"(num), "b"(a) : "memory");
-    return r;
-}
-
-static int syscall3(int num, int a, int b, int c)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "a"(num), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
-}
 
 static void done(int code)
 {
@@ -131,7 +114,7 @@ static void put_u32(u32 value)
 
 static void flush(void)
 {
-    syscall3(SYS_WRITE, 2, (int)Line, (int)Filled);
+    syscall3(SYS_WRITE, 2, (long)Line, (int)Filled);
 }
 
 /**
@@ -233,12 +216,12 @@ void probe_main(u32 *sp)
     for (i = 0; i < 6; i++) {
         ids[i] = 0;
     }
-    if (syscall3(SYS_GETRESUID32, (int)&ids[0], (int)&ids[1], (int)&ids[2]) != 0 ||
-        syscall3(SYS_GETRESGID32, (int)&ids[3], (int)&ids[4], (int)&ids[5]) != 0) {
+    if (syscall3(SYS_GETRESUID, (long)&ids[0], (long)&ids[1], (long)&ids[2]) != 0 ||
+        syscall3(SYS_GETRESGID, (long)&ids[3], (long)&ids[4], (long)&ids[5]) != 0) {
         done(EXIT_USAGE);
     }
     cwd[0] = '\0';
-    if (syscall3(SYS_GETCWD, (int)cwd, (int)sizeof(cwd), 0) < 0) {
+    if (syscall3(SYS_GETCWD, (long)cwd, (int)sizeof(cwd), 0) < 0) {
         cwd[0] = '\0';
     }
     while (envp[env_count]) {

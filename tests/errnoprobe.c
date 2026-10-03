@@ -1,38 +1,27 @@
 /**
  * Verify the kernel's negative-errno syscall return contract.
  *
- * Raw int 0x80 calls must return the correct negative Linux errno, not a bare
+ * Raw system calls must return the correct negative Linux errno, not a bare
  * -1. An unimplemented or out-of-range syscall number returns -ENOSYS so musl's
  * feature-detection fallbacks work, and a deliberately failing real call
  * returns the specific errno Linux would (-ENOENT, -EBADF, -EFAULT). Prints
  * "All errno checks passed!" and exits 0 only if every check matches.
  *
- * Freestanding; direct int 0x80, so the test sees the raw -errno the kernel
- * returns (a libc caller would negate it into a positive errno).
+ * Freestanding; direct system calls (probe.h), so the test sees the raw -errno
+ * the kernel returns (a libc caller would negate it into a positive errno).
  */
+
+#include "probe.h"
 
 typedef unsigned int u32;
 
-#define SYS_EXIT   1
-#define SYS_READ   3
-#define SYS_WRITE  4
-#define SYS_OPEN   5
-#define SYS_CLOSE  6
-#define SYS_WRITEV 146
-#define STDOUT     1
+#define STDOUT 1
 
 /* Linux i386 errno values we expect back (negated). */
 #define ENOENT 2
 #define EBADF  9
 #define EFAULT 14
 #define ENOSYS 38
-
-static int syscall3(int num, int a, int b, int c)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "a"(num), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
-}
 
 static u32 slen(const char *s)
 {
@@ -46,7 +35,7 @@ static u32 slen(const char *s)
 
 static void puts_(const char *s)
 {
-    syscall3(SYS_WRITE, STDOUT, (int)s, (int)slen(s));
+    syscall3(SYS_WRITE, STDOUT, (long)s, (int)slen(s));
 }
 
 static void put_int(int v)
@@ -115,11 +104,11 @@ void probe_main(u32 *sp)
     expect(syscall3(909, 0, 0, 0), ENOSYS, "outofrange(909)");
 
     /* open() of a nonexistent path -> -ENOENT. */
-    expect(syscall3(SYS_OPEN, (int)missing, 0, 0), ENOENT, "open(missing)");
+    expect(syscall3(SYS_OPEN, (long)missing, 0, 0), ENOENT, "open(missing)");
 
     /* Operations on a bad fd -> -EBADF. */
     expect(syscall3(SYS_CLOSE, 999, 0, 0), EBADF, "close(999)");
-    expect(syscall3(SYS_READ, 999, (int)rbuf, (int)sizeof(rbuf)), EBADF, "read(999)");
+    expect(syscall3(SYS_READ, 999, (long)rbuf, (int)sizeof(rbuf)), EBADF, "read(999)");
 
     /* writev() with an iov pointer outside user space -> -EFAULT. */
     expect(syscall3(SYS_WRITEV, STDOUT, (int)0xFFFFF000u, 1), EFAULT, "writev(bad iov)");

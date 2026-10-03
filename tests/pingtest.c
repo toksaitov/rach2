@@ -31,24 +31,14 @@
  *
  * Prints "PINGTEST OK" on a clean run, which is what `tests/run ping` matches.
  *
- * Freestanding; direct int 0x80.
+ * Freestanding; direct system calls (probe.h).
  */
 
-typedef unsigned int size_t;
+#include "probe.h"
+
 typedef unsigned int uint32_t;
 
 #define STDOUT_FILENO 1
-
-#define SYS_EXIT         1
-#define SYS_FORK         2
-#define SYS_READ         3
-#define SYS_WRITE        4
-#define SYS_CLOSE        6
-#define SYS_WAITPID      7
-#define SYS_PIPE         42
-#define SYS_GETTIMEOFDAY 78
-#define SYS_SOCKETCALL   102
-#define SYS_NANOSLEEP    162
 
 #define SC_PING 0x1000 /* renumbered off Linux getsockopt=15 */
 
@@ -57,7 +47,7 @@ typedef unsigned int uint32_t;
 #define UNREACHABLE_IP 0x0A000263UL /* 10.0.2.99 */
 #define LOOPBACK_IP    0x7F000001UL /* 127.0.0.1 */
 
-/* What the kernel answers with, negated the way a raw int 0x80 returns it. */
+/* What the kernel answers with, negated as a raw system call returns it. */
 #define PING_EBUSY     (-16)
 #define PING_ETIMEDOUT (-110)
 
@@ -81,28 +71,18 @@ struct timespec_probe {
 
 static int sys_write(int fd, const void *buf, size_t count)
 {
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_WRITE), "b"(fd), "c"(buf), "d"(count)
-                         : "memory");
-    return r;
+    return syscall3(SYS_WRITE, (long)fd, (long)buf, (long)count);
 }
 
 static void sys_exit(int status)
 {
-    __asm__ __volatile__("int $0x80" : : "a"(SYS_EXIT), "b"(status));
+    syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
 static int socketcall(int call, uint32_t *args)
 {
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_SOCKETCALL), "b"(call), "c"(args)
-                         : "memory");
-    return r;
+    return syscall2(SYS_SOCKETCALL, (long)call, (long)args);
 }
 
 static size_t strlen(const char *s)
@@ -145,57 +125,37 @@ static void print_num(int n)
 
 static int sys_fork(void)
 {
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(SYS_FORK));
-    return r;
+    return syscall0(SYS_FORK);
 }
 
 static int sys_read(int fd, void *buf, size_t count)
 {
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_READ), "b"(fd), "c"(buf), "d"(count)
-                         : "memory");
-    return r;
+    return syscall3(SYS_READ, (long)fd, (long)buf, (long)count);
 }
 
 static int sys_close(int fd)
 {
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(SYS_CLOSE), "b"(fd));
-    return r;
+    return syscall1(SYS_CLOSE, (long)fd);
 }
 
 static int sys_pipe(int fds[2])
 {
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(SYS_PIPE), "b"(fds) : "memory");
-    return r;
+    return syscall1(SYS_PIPE, (long)fds);
 }
 
 static int sys_waitpid(int pid, int *status, int options)
 {
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_WAITPID), "b"(pid), "c"(status), "d"(options)
-                         : "memory");
-    return r;
+    return syscall3(SYS_WAITPID, (long)pid, (long)status, (long)options);
 }
 
 static int sys_gettimeofday(struct timeval_probe *tv)
 {
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(SYS_GETTIMEOFDAY), "b"(tv), "c"(0) : "memory");
-    return r;
+    return syscall2(SYS_GETTIMEOFDAY, (long)tv, (long)0);
 }
 
 static int sys_nanosleep(const struct timespec_probe *req)
 {
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(SYS_NANOSLEEP), "b"(req), "c"(0) : "memory");
-    return r;
+    return syscall2(SYS_NANOSLEEP, (long)req, (long)0);
 }
 
 /** Milliseconds since the epoch, low enough to subtract without overflow. */
@@ -227,7 +187,7 @@ static int ping(uint32_t ip)
     return socketcall(SC_PING, args);
 }
 
-void _start(void)
+PROBE_START void _start(void)
 {
     int passed = 0, failed = 0, i, rtt;
 

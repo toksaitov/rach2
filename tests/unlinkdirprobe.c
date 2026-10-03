@@ -17,27 +17,19 @@
  * removable afterwards. A single large read would not reproduce it, which is
  * why the buffer here is deliberately small.
  *
- * Prints "UNLINKDIRPROBE OK" and exits 0 on success. Freestanding; int 0x80.
+ * Prints "UNLINKDIRPROBE OK" and exits 0 on success. Freestanding; direct
+ * system calls (probe.h).
  */
+
+#include "probe.h"
 
 typedef unsigned int uint32_t;
 typedef unsigned short uint16_t;
 typedef unsigned char uint8_t;
 typedef unsigned long long uint64_t;
 typedef long long int64_t;
-typedef unsigned int size_t;
 
 #define STDOUT_FILENO 1
-
-#define SYS_EXIT       1
-#define SYS_WRITE      4
-#define SYS_OPEN       5
-#define SYS_CLOSE      6
-#define SYS_CREAT      8
-#define SYS_UNLINK     10
-#define SYS_MKDIR      39
-#define SYS_RMDIR      40
-#define SYS_GETDENTS64 220
 
 #define O_RDONLY    0
 #define O_DIRECTORY 0200000
@@ -63,79 +55,48 @@ struct linux_dirent64 {
 
 static int sys_write(int fd, const void *buf, size_t count)
 {
-    int result;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(result)
-                         : "0"(SYS_WRITE), "b"(fd), "c"(buf), "d"(count)
-                         : "memory");
-    return result;
+    return syscall3(SYS_WRITE, (long)fd, (long)buf, (long)count);
 }
 
 static void sys_exit(int status)
 {
-    __asm__ __volatile__("int $0x80" : : "a"(SYS_EXIT), "b"(status));
+    syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
 static int sys_open(const char *path, int flags)
 {
-    int result;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(result)
-                         : "0"(SYS_OPEN), "b"(path), "c"(flags)
-                         : "memory");
-    return result;
+    return syscall2(SYS_OPEN, (long)path, (long)flags);
 }
 
 static int sys_close(int fd)
 {
-    int result;
-    __asm__ __volatile__("int $0x80" : "=a"(result) : "0"(SYS_CLOSE), "b"(fd) : "memory");
-    return result;
+    return syscall1(SYS_CLOSE, (long)fd);
 }
 
 static int sys_creat(const char *path, int mode)
 {
-    int result;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(result)
-                         : "0"(SYS_CREAT), "b"(path), "c"(mode)
-                         : "memory");
-    return result;
+    return syscall2(SYS_CREAT, (long)path, (long)mode);
 }
 
 static int sys_unlink(const char *path)
 {
-    int result;
-    __asm__ __volatile__("int $0x80" : "=a"(result) : "0"(SYS_UNLINK), "b"(path) : "memory");
-    return result;
+    return syscall1(SYS_UNLINK, (long)path);
 }
 
 static int sys_mkdir(const char *path, int mode)
 {
-    int result;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(result)
-                         : "0"(SYS_MKDIR), "b"(path), "c"(mode)
-                         : "memory");
-    return result;
+    return syscall2(SYS_MKDIR, (long)path, (long)mode);
 }
 
 static int sys_rmdir(const char *path)
 {
-    int result;
-    __asm__ __volatile__("int $0x80" : "=a"(result) : "0"(SYS_RMDIR), "b"(path) : "memory");
-    return result;
+    return syscall1(SYS_RMDIR, (long)path);
 }
 
 static int sys_getdents64(int fd, void *dirp, unsigned int count)
 {
-    int result;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(result)
-                         : "0"(SYS_GETDENTS64), "b"(fd), "c"(dirp), "d"(count)
-                         : "memory");
-    return result;
+    return syscall3(SYS_GETDENTS64, (long)fd, (long)dirp, (long)count);
 }
 
 static size_t strlen(const char *s)
@@ -181,7 +142,7 @@ static void path_for(char *out, int n)
     out[i] = '\0';
 }
 
-void _start(void)
+PROBE_START void _start(void)
 {
     char path[32];
     char dir[32];

@@ -36,21 +36,11 @@
  * it is killed, ignoring the hangup its shell's exit sends. What the row
  * then shows is that root can still log in beside it.
  *
- * Prints "MEMPROBE OK" or "MEMPROBE FAIL: reason". Freestanding; int 0x80.
+ * Prints "MEMPROBE OK" or "MEMPROBE FAIL: reason". Freestanding; direct system
+ * calls (probe.h).
  */
 
-typedef unsigned int size_t;
-
-#define SYS_EXIT    1
-#define SYS_FORK    2
-#define SYS_READ    3
-#define SYS_WRITE   4
-#define SYS_OPEN    5
-#define SYS_CLOSE   6
-#define SYS_WAITPID 7
-#define SYS_EXECVE  11
-#define SYS_MUNMAP  91
-#define SYS_MMAP2   192
+#include "probe.h"
 
 #define PROT_READ     0x1
 #define PROT_WRITE    0x2
@@ -61,34 +51,6 @@ typedef unsigned int size_t;
 #define ENOMEM        12
 
 #define PAGE 4096u
-
-static int syscall1(int n, int a)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a) : "memory");
-    return r;
-}
-
-static int syscall2(int n, int a, int b)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b) : "memory");
-    return r;
-}
-
-static int syscall3(int n, int a, int b, int c)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
-}
-
-static int syscall4(int n, int a, int b, int c, int d)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c), "S"(d) : "memory");
-    return r;
-}
 
 static unsigned sys_mmap2_anon(unsigned len)
 {
@@ -121,7 +83,7 @@ static size_t strlen(const char *s)
 
 static void print(const char *s)
 {
-    syscall3(SYS_WRITE, 1, (int)(size_t)s, (int)strlen(s));
+    syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
 }
 
 static void print_num(unsigned v)
@@ -134,19 +96,19 @@ static void print_num(unsigned v)
         v /= 10;
     } while (v);
     while (n) {
-        syscall3(SYS_WRITE, 1, (int)(size_t)&tmp[--n], 1);
+        syscall3(SYS_WRITE, 1, (long)&tmp[--n], 1);
     }
 }
 
 static void puts(const char *s)
 {
-    syscall3(SYS_WRITE, 1, (int)(size_t)s, (int)strlen(s));
-    syscall3(SYS_WRITE, 1, (int)(size_t)"\n", 1);
+    syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
+    syscall3(SYS_WRITE, 1, (long)"\n", 1);
 }
 
 static void fail(const char *why)
 {
-    syscall3(SYS_WRITE, 1, (int)(size_t)"MEMPROBE FAIL: ", 15);
+    syscall3(SYS_WRITE, 1, (long)"MEMPROBE FAIL: ", 15);
     puts(why);
     sys_exit(1);
 }
@@ -182,14 +144,14 @@ static int check_page(const unsigned *p, unsigned i)
 static unsigned mem_free_kib(void)
 {
     static char buf[1024];
-    int fd = syscall3(SYS_OPEN, (int)(size_t)"/proc/meminfo", O_RDONLY, 0);
+    int fd = syscall3(SYS_OPEN, (long)"/proc/meminfo", O_RDONLY, 0);
     int n, i;
     const char *key = "MemFree:";
 
     if (fd < 0) {
         return 0;
     }
-    n = syscall3(SYS_READ, fd, (int)(size_t)buf, (int)sizeof(buf) - 1);
+    n = syscall3(SYS_READ, fd, (long)buf, (int)sizeof(buf) - 1);
     syscall1(SYS_CLOSE, fd);
     if (n <= 0) {
         return 0;
@@ -232,7 +194,7 @@ static int wait_status(int pid)
 {
     int status = -1;
 
-    if (syscall3(SYS_WAITPID, pid, (int)(size_t)&status, 0) != pid) {
+    if (syscall3(SYS_WAITPID, pid, (long)&status, 0) != pid) {
         return -1;
     }
     return status;
@@ -284,7 +246,7 @@ static void arm(unsigned n)
         digits[v] = digits[i - 1 - (int)v];
         digits[i - 1 - (int)v] = t;
     }
-    if (syscall3(SYS_WRITE, framefail, (int)(size_t)digits, i) != i) {
+    if (syscall3(SYS_WRITE, framefail, (long)digits, i) != i) {
         fail("rach2.framefail is not on this boot's line");
     }
 }
@@ -313,7 +275,7 @@ static void run_fail(void)
     for (i = 0; i < pages; i++) {
         write_page((unsigned *)(base + i * PAGE), i);
     }
-    framefail = syscall3(SYS_OPEN, (int)(size_t)"/dev/framefail", O_WRONLY, 0);
+    framefail = syscall3(SYS_OPEN, (long)"/dev/framefail", O_WRONLY, 0);
     if (framefail < 0) {
         fail("/dev/framefail did not open");
     }
@@ -350,7 +312,7 @@ static void run_fail(void)
             args[0] = (char *)"memprobe";
             args[1] = (char *)"fresh";
             args[2] = 0;
-            status = syscall3(SYS_EXECVE, (int)(size_t)"/memprobe", (int)(size_t)args, 0);
+            status = syscall3(SYS_EXECVE, (long)"/memprobe", (long)args, 0);
             sys_exit(status == -ENOMEM ? 7 : 5);
         }
         if (pid < 0) {
@@ -387,14 +349,12 @@ static void run_fail(void)
     sys_exit(0);
 }
 
-#define SYS_NANOSLEEP    162
-#define SYS_RT_SIGACTION 174
-#define SIGHUP           1
-#define EFAULT           14
+#define SIGHUP 1
+#define EFAULT 14
 
 static void run_hog(void)
 {
-    int zero = syscall3(SYS_OPEN, (int)(size_t)"/dev/zero", 0, 0);
+    int zero = syscall3(SYS_OPEN, (long)"/dev/zero", 0, 0);
     unsigned act[5];
     unsigned taken = 0;
     int pid;
@@ -407,7 +367,7 @@ static void run_hog(void)
     act[2] = 0;
     act[3] = 0;
     act[4] = 0;
-    if (syscall4(SYS_RT_SIGACTION, SIGHUP, (int)(size_t)act, 0, 8) != 0) {
+    if (syscall4(SYS_RT_SIGACTION, SIGHUP, (long)act, 0, 8) != 0) {
         fail("ignoring SIGHUP");
     }
     for (;;) {
@@ -450,7 +410,7 @@ static void run_hog(void)
 
         ts[0] = 1;
         ts[1] = 0;
-        syscall2(SYS_NANOSLEEP, (int)(size_t)ts, 0);
+        syscall2(SYS_NANOSLEEP, (long)ts, 0);
     }
 }
 
@@ -538,7 +498,7 @@ void probe_main(unsigned int *sp)
         args[0] = (char *)"memprobe";
         args[1] = (char *)"fresh";
         args[2] = 0;
-        syscall3(SYS_EXECVE, (int)(size_t)"/memprobe", (int)(size_t)args, 0);
+        syscall3(SYS_EXECVE, (long)"/memprobe", (long)args, 0);
         sys_exit(5);
     }
     status = wait_status(pid);

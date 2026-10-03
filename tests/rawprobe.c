@@ -21,26 +21,14 @@
  *
  * Runs on the test image with QEMU's user network: 10.0.2.2 is the gateway and
  * answers, and 10.0.2.3 is the name server. Prints "RAWPROBE OK" and exits 0.
- * Freestanding; direct int 0x80.
+ * Freestanding; direct system calls (probe.h).
  */
 
-typedef unsigned int size_t;
+#include "probe.h"
+
 typedef unsigned int uint32_t;
 typedef unsigned short uint16_t;
 typedef unsigned char uint8_t;
-
-#define SYS_EXIT       1
-#define SYS_FORK       2
-#define SYS_WRITE      4
-#define SYS_CLOSE      6
-#define SYS_WAITPID    7
-#define SYS_SOCKETCALL 102
-#define SYS_NANOSLEEP  162
-#define SYS_POLL       168
-#define SYS_SETUID32   213
-#define SYS_OPEN       5
-#define SYS_READ       3
-#define SYS_PIPE       42
 
 #define SC_SOCKET     1
 #define SC_SENDTO     11
@@ -90,20 +78,6 @@ struct pollfd_probe {
     short revents;
 };
 
-static int syscall1(int n, int a)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a) : "memory");
-    return r;
-}
-
-static int syscall3(int n, int a, int b, int c)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
-}
-
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, status);
@@ -115,16 +89,16 @@ static int sys_close(int fd)
 }
 static int socketcall(int call, uint32_t *args)
 {
-    return syscall3(SYS_SOCKETCALL, call, (int)(size_t)args, 0);
+    return syscall3(SYS_SOCKETCALL, call, (long)args, 0);
 }
 /** pipe(2): the two ends in `fds`; 0, or the negative errno. */
 static int sys_pipe(int *fds)
 {
-    return syscall1(SYS_PIPE, (int)(size_t)fds);
+    return syscall1(SYS_PIPE, (long)fds);
 }
 static int sys_poll(struct pollfd_probe *fds, unsigned int n, int timeout)
 {
-    return syscall3(SYS_POLL, (int)(size_t)fds, (int)n, timeout);
+    return syscall3(SYS_POLL, (long)fds, (int)n, timeout);
 }
 static void nap_ms(int ms)
 {
@@ -132,7 +106,7 @@ static void nap_ms(int ms)
 
     ts[0] = ms / 1000;
     ts[1] = (ms % 1000) * 1000000;
-    syscall3(SYS_NANOSLEEP, (int)(size_t)ts, 0, 0);
+    syscall3(SYS_NANOSLEEP, (long)ts, 0, 0);
 }
 
 static size_t strlen(const char *s)
@@ -145,7 +119,7 @@ static size_t strlen(const char *s)
 }
 static void say(const char *s)
 {
-    syscall3(SYS_WRITE, 1, (int)(size_t)s, (int)strlen(s));
+    syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
 }
 static void say_int(int v)
 {
@@ -287,23 +261,13 @@ static int wait_for_icmp(uint32_t *args, int fd, uint8_t *buf, int cap, int want
 /** open(2), read-only. */
 static int sys_open_ro(const char *path)
 {
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_OPEN), "b"(path), "c"(0), "d"(0)
-                         : "memory");
-    return r;
+    return syscall3(SYS_OPEN, (long)path, (long)0, (long)0);
 }
 
 /** read(2). */
 static int sys_read(int fd, void *buf, int n)
 {
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_READ), "b"(fd), "c"(buf), "d"(n)
-                         : "memory");
-    return r;
+    return syscall3(SYS_READ, (long)fd, (long)buf, (long)n);
 }
 
 /** 1 if `needle` occurs in `hay[0..len)`, else 0. */
@@ -380,9 +344,9 @@ static void fill_and_hold(uint32_t *args, int ready_w, int release_r)
         held++;
     }
     c = held > 0 && rc == -EMFILE ? 'y' : 'n';
-    syscall3(SYS_WRITE, ready_w, (int)(size_t)&c, 1);
+    syscall3(SYS_WRITE, ready_w, (long)&c, 1);
     sys_close(ready_w);
-    syscall3(SYS_READ, release_r, (int)(size_t)&c, 1);
+    syscall3(SYS_READ, release_r, (long)&c, 1);
     sys_exit(held > 0 ? 0 : 4);
 }
 
@@ -416,7 +380,7 @@ static void socket_pressure(uint32_t *args, int fd_a)
     check(kids[0] > 0 && kids[1] > 0, "two children forked to fill their tables");
     for (k = 0; k < 2; k++) {
         c = 0;
-        if (syscall3(SYS_READ, ready[0], (int)(size_t)&c, 1) == 1 && c == 'y') {
+        if (syscall3(SYS_READ, ready[0], (long)&c, 1) == 1 && c == 'y') {
             full++;
         }
     }
@@ -444,8 +408,8 @@ static void socket_pressure(uint32_t *args, int fd_a)
     sys_close(ready[0]);
     for (k = 0; k < 2; k++) {
         status = -1;
-        check(syscall3(SYS_WAITPID, kids[k], (int)(size_t)&status, 0) == kids[k] &&
-                  (status & 0x7f) == 0 && ((status >> 8) & 0xff) == 0,
+        check(syscall3(SYS_WAITPID, kids[k], (long)&status, 0) == kids[k] && (status & 0x7f) == 0 &&
+                  ((status >> 8) & 0xff) == 0,
               "the child that held sockets held some");
     }
     args[0] = AF_INET;
@@ -458,7 +422,7 @@ static void socket_pressure(uint32_t *args, int fd_a)
     }
 }
 
-void _start(void)
+PROBE_START void _start(void)
 {
     uint32_t args[6];
     int fd_a, fd_b, i, n, m, pid, status, val;
@@ -470,14 +434,14 @@ void _start(void)
        and sends datagrams no transport layer checked, so it is root's. */
     pid = syscall1(SYS_FORK, 0);
     if (pid == 0) {
-        if (syscall1(SYS_SETUID32, 1000) != 0) {
+        if (syscall1(SYS_SETUID, 1000) != 0) {
             sys_exit(2);
         }
         sys_exit(raw_socket(args) == -EPERM ? 0 : 3);
     }
     check(pid > 0, "fork for the unprivileged case");
     status = -1;
-    syscall3(SYS_WAITPID, pid, (int)(size_t)&status, 0);
+    syscall3(SYS_WAITPID, pid, (long)&status, 0);
     check((status & 0x7f) == 0, "the unprivileged case did not die on a signal");
     check(((status >> 8) & 0xff) == 0, "an ordinary user was refused a raw socket");
 

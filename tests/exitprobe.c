@@ -7,32 +7,15 @@
  * separate supervisor bounds completion with poll, so a lost zombie produces
  * a named failure. No resource, scheduler or reaper is substituted.
  */
-#define SYS_EXIT      1
-#define SYS_FORK      2
-#define SYS_READ      3
-#define SYS_WRITE     4
-#define SYS_OPEN      5
-#define SYS_CLOSE     6
-#define SYS_WAITPID   7
-#define SYS_UNLINK    10
-#define SYS_EXECVE    11
-#define SYS_CHDIR     12
-#define SYS_GETPID    20
-#define SYS_KILL      37
-#define SYS_MKDIR     39
-#define SYS_PIPE      42
-#define SYS_FCNTL     221
-#define SYS_NANOSLEEP 162
-#define SYS_POLL      168
+
+#include "probe.h"
 
 static const char *row;
 
 /** Make a direct i386 system call. */
 static int call(int n, int a, int b, int c)
 {
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
+    return syscall3(n, (long)a, (long)b, (long)c);
 }
 
 /** Write one string to the serial console. */
@@ -42,7 +25,7 @@ static void put(const char *s)
     while (s[n]) {
         n++;
     }
-    call(SYS_WRITE, 1, (int)s, n);
+    call(SYS_WRITE, 1, (long)s, n);
 }
 
 /** Print the row and its result as one complete line. */
@@ -96,8 +79,8 @@ static void wait_parent(int parent)
     int nap[2] = {0, 1000000};
     proc_path(path, parent);
     for (;;) {
-        fd = call(SYS_OPEN, (int)path, 0, 0);
-        n = call(SYS_READ, fd, (int)buf, sizeof(buf));
+        fd = call(SYS_OPEN, (long)path, 0, 0);
+        n = call(SYS_READ, fd, (long)buf, sizeof(buf));
         call(SYS_CLOSE, fd, 0, 0);
         for (i = 0; i + 3 < n; i++) {
             if (buf[i] == ')' && buf[i + 1] == ' ' && buf[i + 2] == 'S' && buf[i + 3] == ' ') {
@@ -105,7 +88,7 @@ static void wait_parent(int parent)
                 return;
             }
         }
-        call(SYS_NANOSLEEP, (int)nap, 0, 0);
+        call(SYS_NANOSLEEP, (long)nap, 0, 0);
     }
 }
 
@@ -121,10 +104,10 @@ static void victim(int mode, int parent, int report, int reader)
     int fd;
     call(SYS_CLOSE, report, 0, 0);
     call(SYS_CLOSE, reader, 0, 0);
-    fd = call(SYS_OPEN, (int)"/exit-file", 0102, 0600);
-    if (fd < 0 || call(SYS_WRITE, fd, (int)"held", 4) != 4 ||
-        call(SYS_UNLINK, (int)"/exit-file", 0, 0) != 0 ||
-        call(SYS_CHDIR, (int)"/exit-cwd", 0, 0) != 0) {
+    fd = call(SYS_OPEN, (long)"/exit-file", 0102, 0600);
+    if (fd < 0 || call(SYS_WRITE, fd, (long)"held", 4) != 4 ||
+        call(SYS_UNLINK, (long)"/exit-file", 0, 0) != 0 ||
+        call(SYS_CHDIR, (long)"/exit-cwd", 0, 0) != 0) {
         die(90);
     }
     wait_parent(parent);
@@ -132,7 +115,7 @@ static void victim(int mode, int parent, int report, int reader)
         die(37);
     } else if (mode == 1) {
         call(SYS_KILL, call(SYS_GETPID, 0, 0, 0), 15, 0);
-    } else if (call(SYS_EXECVE, (int)args[0], (int)args, 0) == -8) {
+    } else if (call(SYS_EXECVE, (long)args[0], (long)args, 0) == -8) {
         die(38);
     }
     die(91);
@@ -144,7 +127,7 @@ static void reaper(int mode, int report)
     int fds[2], parent, pid, status = -1, ok, fd;
     char byte = 0, path[40];
     int expected = mode == 0 ? 37 << 8 : (mode == 1 ? 15 : 38 << 8);
-    if (call(SYS_PIPE, (int)fds, 0, 0) != 0 || call(SYS_FCNTL, fds[0], 4, 04000) != 0) {
+    if (call(SYS_PIPE, (long)fds, 0, 0) != 0 || call(SYS_FCNTL, fds[0], 4, 04000) != 0) {
         die(92);
     }
     parent = call(SYS_GETPID, 0, 0, 0);
@@ -153,17 +136,17 @@ static void reaper(int mode, int report)
         victim(mode, parent, report, fds[0]);
     }
     call(SYS_CLOSE, fds[1], 0, 0);
-    ok = pid > 0 && call(SYS_WAITPID, pid, (int)&status, 0) == pid && status == expected;
-    ok = ok && call(SYS_READ, fds[0], (int)&byte, 1) == 0;
-    ok = ok && call(SYS_WAITPID, pid, (int)&status, 1) == -10;
+    ok = pid > 0 && call(SYS_WAITPID, pid, (long)&status, 0) == pid && status == expected;
+    ok = ok && call(SYS_READ, fds[0], (long)&byte, 1) == 0;
+    ok = ok && call(SYS_WAITPID, pid, (long)&status, 1) == -10;
     proc_path(path, pid);
-    fd = call(SYS_OPEN, (int)path, 0, 0);
+    fd = call(SYS_OPEN, (long)path, 0, 0);
     ok = ok && fd == -2;
     if (fd >= 0) {
         call(SYS_CLOSE, fd, 0, 0);
     }
     byte = (char)ok;
-    call(SYS_WRITE, report, (int)&byte, 1);
+    call(SYS_WRITE, report, (long)&byte, 1);
     die(ok ? 0 : 93);
 }
 
@@ -177,7 +160,7 @@ static int run_row(int mode, int timeout)
     int report[2], pid, status = -1, ok;
     char byte = 0;
     row = mode == 0 ? "normal" : (mode == 1 ? "signal" : "exec");
-    if (call(SYS_PIPE, (int)report, 0, 0) != 0) {
+    if (call(SYS_PIPE, (long)report, 0, 0) != 0) {
         return 0;
     }
     pid = call(SYS_FORK, 0, 0, 0);
@@ -189,14 +172,14 @@ static int run_row(int mode, int timeout)
     pollfd.fd = report[0];
     pollfd.events = 1;
     pollfd.revents = 0;
-    ok = pid > 0 && call(SYS_POLL, (int)&pollfd, 1, timeout) == 1;
-    ok = ok && call(SYS_READ, report[0], (int)&byte, 1) == 1 && byte == 1;
+    ok = pid > 0 && call(SYS_POLL, (long)&pollfd, 1, timeout) == 1;
+    ok = ok && call(SYS_READ, report[0], (long)&byte, 1) == 1 && byte == 1;
     call(SYS_CLOSE, report[0], 0, 0);
     if (!ok) {
         result("EXITPROBE FAIL ", ": reap or release");
         return 0;
     }
-    ok = call(SYS_WAITPID, pid, (int)&status, 0) == pid && status == 0;
+    ok = call(SYS_WAITPID, pid, (long)&status, 0) == pid && status == 0;
     result(ok ? "EXITPROBE OK " : "EXITPROBE FAIL ", ": status, eof, echild, proc absent");
     return ok;
 }
@@ -208,9 +191,9 @@ static int fixture(void)
         0x7f, 'E', 'L', 'F', 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0,  0, 2,  0, 3, 0, 1, 0, 0, 0, 0, 0x80,
         4,    8,   52,  0,   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 52, 0, 32, 0, 1, 0, 0, 0, 0, 0, 0, 0};
     int fd, ok;
-    call(SYS_MKDIR, (int)"/exit-cwd", 0700, 0);
-    fd = call(SYS_OPEN, (int)"/exit-bad", 01101, 0700);
-    ok = fd >= 0 && call(SYS_WRITE, fd, (int)header, sizeof(header)) == sizeof(header);
+    call(SYS_MKDIR, (long)"/exit-cwd", 0700, 0);
+    fd = call(SYS_OPEN, (long)"/exit-bad", 01101, 0700);
+    ok = fd >= 0 && call(SYS_WRITE, fd, (long)header, sizeof(header)) == sizeof(header);
     call(SYS_CLOSE, fd, 0, 0);
     return ok;
 }

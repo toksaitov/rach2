@@ -18,34 +18,17 @@
  * root; every uid must read 0. Any mismatch exits with the failing step
  * number, so the parent probe sees exactly what broke.
  *
- * Freestanding; direct int 0x80. Staged into the test image at several modes
- * and owners (04755:0, 04755:5, 02755::5, 0755, 04644) by suidprobe's fixtures.
+ * Freestanding; direct system calls (probe.h). Staged into the test image at
+ * several modes and owners (04755:0, 04755:5, 02755::5, 0755, 04644) by
+ * suidprobe's fixtures.
  */
+
+#include "probe.h"
 
 typedef unsigned int u32;
 
-#define SYS_EXIT        1
-#define SYS_SETRESUID32 208
-#define SYS_GETRESUID32 209
-#define SYS_SETRESGID32 210
-#define SYS_GETRESGID32 211
-
 #define AT_NULL   0
 #define AT_SECURE 23
-
-static int syscall1(int num, int a)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "a"(num), "b"(a) : "memory");
-    return r;
-}
-
-static int syscall3(int num, int a, int b, int c)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "a"(num), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
-}
 
 static int streq(const char *a, const char *b)
 {
@@ -102,10 +85,10 @@ void probe_main(u32 *sp)
     if (argc < 2) {
         done(90);
     }
-    if (syscall3(SYS_GETRESUID32, (int)&ruid, (int)&euid, (int)&suid) != 0) {
+    if (syscall3(SYS_GETRESUID, (long)&ruid, (long)&euid, (long)&suid) != 0) {
         done(91);
     }
-    if (syscall3(SYS_GETRESGID32, (int)&rgid, (int)&egid, (int)&sgid) != 0) {
+    if (syscall3(SYS_GETRESGID, (long)&rgid, (long)&egid, (long)&sgid) != 0) {
         done(92);
     }
     secure = at_secure(sp);
@@ -123,15 +106,15 @@ void probe_main(u32 *sp)
             done(5);
 
         /* Shed the acquired root and take it back: the saved uid is 0. */
-        if (syscall3(SYS_SETRESUID32, -1, 1000, -1) != 0)
+        if (syscall3(SYS_SETRESUID, -1, 1000, -1) != 0)
             done(6);
-        if (syscall3(SYS_GETRESUID32, (int)&ruid, (int)&euid, (int)&suid) != 0)
+        if (syscall3(SYS_GETRESUID, (long)&ruid, (long)&euid, (long)&suid) != 0)
             done(7);
         if (euid != 1000)
             done(8);
-        if (syscall3(SYS_SETRESUID32, -1, 0, -1) != 0)
+        if (syscall3(SYS_SETRESUID, -1, 0, -1) != 0)
             done(9);
-        if (syscall3(SYS_GETRESUID32, (int)&ruid, (int)&euid, (int)&suid) != 0)
+        if (syscall3(SYS_GETRESUID, (long)&ruid, (long)&euid, (long)&suid) != 0)
             done(10);
         if (euid != 0)
             done(11);

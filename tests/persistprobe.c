@@ -9,18 +9,10 @@
  * the second boot proves fsync actually pushed the write through the page cache
  * to the disk, since a RAM-only or dropped write would leave the file absent.
  *
- * Freestanding; direct int 0x80.
+ * Freestanding; direct system calls (probe.h).
  */
 
-typedef unsigned int size_t;
-
-#define SYS_EXIT  1
-#define SYS_READ  3
-#define SYS_WRITE 4
-#define SYS_OPEN  5
-#define SYS_CLOSE 6
-#define SYS_SYNC  36
-#define SYS_FSYNC 118
+#include "probe.h"
 
 #define O_RDONLY 0
 #define O_WRONLY 1
@@ -29,20 +21,6 @@ typedef unsigned int size_t;
 
 static const char MARKER[] = "RACH2 PERSIST MARKER v1\n";
 #define MARKER_LEN (sizeof(MARKER) - 1)
-
-static int syscall1(int n, int a)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a) : "memory");
-    return r;
-}
-
-static int syscall3(int n, int a, int b, int c)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
-}
 
 static void sys_exit(int status)
 {
@@ -61,20 +39,20 @@ static size_t strlen(const char *s)
 
 static void puts(const char *s)
 {
-    syscall3(SYS_WRITE, 1, (int)(size_t)s, (int)strlen(s));
-    syscall3(SYS_WRITE, 1, (int)(size_t)"\n", 1);
+    syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
+    syscall3(SYS_WRITE, 1, (long)"\n", 1);
 }
 
-void _start(void)
+PROBE_START void _start(void)
 {
     const char *path = "/persist.txt";
     char buf[64];
     int fd;
     size_t i;
 
-    fd = syscall3(SYS_OPEN, (int)(size_t)path, O_RDONLY, 0);
+    fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
     if (fd >= 0) {
-        int n = syscall3(SYS_READ, fd, (int)(size_t)buf, (int)sizeof(buf));
+        int n = syscall3(SYS_READ, fd, (long)buf, (int)sizeof(buf));
         syscall1(SYS_CLOSE, fd);
         if (n != (int)MARKER_LEN) {
             puts("PERSISTPROBE FAIL: short read");
@@ -90,12 +68,12 @@ void _start(void)
         sys_exit(0);
     }
 
-    fd = syscall3(SYS_OPEN, (int)(size_t)path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    fd = syscall3(SYS_OPEN, (long)path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) {
         puts("PERSISTPROBE FAIL: open for write");
         sys_exit(1);
     }
-    if (syscall3(SYS_WRITE, fd, (int)(size_t)MARKER, (int)MARKER_LEN) != (int)MARKER_LEN) {
+    if (syscall3(SYS_WRITE, fd, (long)MARKER, (int)MARKER_LEN) != (int)MARKER_LEN) {
         puts("PERSISTPROBE FAIL: write");
         sys_exit(1);
     }

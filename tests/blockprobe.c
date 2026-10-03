@@ -13,18 +13,10 @@
  * limit. Prints "BLOCKPROBE OK" and exits 0 on success, or exits 1 on any
  * mismatch.
  *
- * Freestanding; direct int 0x80.
+ * Freestanding; direct system calls (probe.h).
  */
 
-typedef unsigned int size_t;
-
-#define SYS_EXIT   1
-#define SYS_READ   3
-#define SYS_WRITE  4
-#define SYS_OPEN   5
-#define SYS_CLOSE  6
-#define SYS_UNLINK 10
-#define SYS_FSYNC  118
+#include "probe.h"
 
 #define O_RDONLY 0
 #define O_WRONLY 1
@@ -45,20 +37,6 @@ typedef unsigned int size_t;
 
 static unsigned char buf[FILE_SIZE];
 
-static int syscall1(int n, int a)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a) : "memory");
-    return r;
-}
-
-static int syscall3(int n, int a, int b, int c)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
-}
-
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, status);
@@ -76,8 +54,8 @@ static size_t strlen(const char *s)
 
 static void puts(const char *s)
 {
-    syscall3(SYS_WRITE, 1, (int)(size_t)s, (int)strlen(s));
-    syscall3(SYS_WRITE, 1, (int)(size_t)"\n", 1);
+    syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
+    syscall3(SYS_WRITE, 1, (long)"\n", 1);
 }
 
 /* "/bpNN", the file's index in two decimal digits. It was one byte, '0' + n,
@@ -104,7 +82,7 @@ static int write_all(int fd, const unsigned char *p, size_t n)
 {
     size_t off = 0;
     while (off < n) {
-        int w = syscall3(SYS_WRITE, fd, (int)(size_t)(p + off), (int)(n - off));
+        int w = syscall3(SYS_WRITE, fd, (long)(p + off), (int)(n - off));
         if (w <= 0) {
             return -1;
         }
@@ -117,7 +95,7 @@ static int read_all(int fd, unsigned char *p, size_t n)
 {
     size_t off = 0;
     while (off < n) {
-        int r = syscall3(SYS_READ, fd, (int)(size_t)(p + off), (int)(n - off));
+        int r = syscall3(SYS_READ, fd, (long)(p + off), (int)(n - off));
         if (r <= 0) {
             return -1;
         }
@@ -126,7 +104,7 @@ static int read_all(int fd, unsigned char *p, size_t n)
     return 0;
 }
 
-void _start(void)
+PROBE_START void _start(void)
 {
     char path[8];
     unsigned f;
@@ -138,7 +116,7 @@ void _start(void)
         for (i = 0; i < FILE_SIZE; ++i) {
             buf[i] = pattern(f, i);
         }
-        fd = syscall3(SYS_OPEN, (int)(size_t)path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        fd = syscall3(SYS_OPEN, (long)path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (fd < 0) {
             puts("BLOCKPROBE FAIL: open for write");
             sys_exit(1);
@@ -159,7 +137,7 @@ void _start(void)
         for (i = 0; i < FILE_SIZE; ++i) {
             buf[i] = 0;
         }
-        fd = syscall3(SYS_OPEN, (int)(size_t)path, O_RDONLY, 0);
+        fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
         if (fd < 0) {
             puts("BLOCKPROBE FAIL: open for read");
             sys_exit(1);
@@ -175,7 +153,7 @@ void _start(void)
                 sys_exit(1);
             }
         }
-        syscall3(SYS_UNLINK, (int)(size_t)path, 0, 0);
+        syscall3(SYS_UNLINK, (long)path, 0, 0);
     }
 
     puts("BLOCKPROBE OK");

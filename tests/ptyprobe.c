@@ -26,24 +26,11 @@
  * echo the parent checks is never settled while the child has ECHO off, and
  * every wait here is bounded (a non-blocking master, a reaped-within-a-limit
  * child) so a stalled half fails the test rather than hanging it.
- * Prints "PTYPROBE OK" or "PTYPROBE FAIL". Freestanding; direct int 0x80.
+ * Prints "PTYPROBE OK" or "PTYPROBE FAIL". Freestanding; direct system calls
+ * (probe.h).
  */
 
-typedef unsigned int size_t;
-
-#define SYS_EXIT           1
-#define SYS_FORK           2
-#define SYS_READ           3
-#define SYS_WRITE          4
-#define SYS_OPEN           5
-#define SYS_CLOSE          6
-#define SYS_WAITPID        7
-#define SYS_KILL           37
-#define SYS_IOCTL          54
-#define SYS_SETSID         66
-#define SYS_NANOSLEEP      162
-#define SYS_RT_SIGACTION   174
-#define SYS_RT_SIGPROCMASK 175
+#include "probe.h"
 
 #define O_RDONLY 0
 #define O_RDWR   2
@@ -84,28 +71,6 @@ typedef unsigned int size_t;
 #define WIFEXITED(s)   (((s) & 0x7f) == 0)
 #define WEXITSTATUS(s) (((s) >> 8) & 0xff)
 
-static int syscall1(int n, int a)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a) : "memory");
-    return r;
-}
-
-static int syscall3(int n, int a, int b, int c)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
-}
-
-/** Pass the signal ABI's fourth argument in ESI. */
-static int syscall4(int n, int a, int b, int c, int d)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c), "S"(d) : "memory");
-    return r;
-}
-
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, status);
@@ -121,7 +86,7 @@ static int sys_setsid(void)
 }
 static int sys_open(const char *p, int flags)
 {
-    return syscall3(SYS_OPEN, (int)(size_t)p, flags, 0);
+    return syscall3(SYS_OPEN, (long)p, flags, 0);
 }
 static int sys_close(int fd)
 {
@@ -129,19 +94,19 @@ static int sys_close(int fd)
 }
 static int sys_read(int fd, void *b, int n)
 {
-    return syscall3(SYS_READ, fd, (int)(size_t)b, n);
+    return syscall3(SYS_READ, fd, (long)b, n);
 }
 static int sys_write(int fd, const void *b, int n)
 {
-    return syscall3(SYS_WRITE, fd, (int)(size_t)b, n);
+    return syscall3(SYS_WRITE, fd, (long)b, n);
 }
 static int sys_ioctl(int fd, int req, void *arg)
 {
-    return syscall3(SYS_IOCTL, fd, req, (int)(size_t)arg);
+    return syscall3(SYS_IOCTL, fd, req, (long)arg);
 }
 static int sys_waitpid(int pid, int *st, int o)
 {
-    return syscall3(SYS_WAITPID, pid, (int)(size_t)st, o);
+    return syscall3(SYS_WAITPID, pid, (long)st, o);
 }
 
 static size_t strlen(const char *s)
@@ -164,7 +129,7 @@ static void nap_ms(int ms)
 
     ts[0] = ms / 1000;
     ts[1] = (ms % 1000) * 1000000;
-    syscall3(SYS_NANOSLEEP, (int)(size_t)ts, 0, 0);
+    syscall3(SYS_NANOSLEEP, (long)ts, 0, 0);
 }
 
 /**
@@ -414,12 +379,12 @@ static int hangup_readers(int block_hup)
 
     if (block_hup) {
         action[0] = 0;
-        if (syscall4(SYS_RT_SIGPROCMASK, 0, (int)(size_t)mask, 0, 8) < 0) {
+        if (syscall4(SYS_RT_SIGPROCMASK, 0, (long)mask, 0, 8) < 0) {
             goto done;
         }
     }
-    if (syscall4(SYS_RT_SIGACTION, SIGHUP, (int)(size_t)action, 0, 8) < 0 ||
-        !open_pair(&master, &slave) || sys_ioctl(slave, TIOCSCTTY, 0) < 0) {
+    if (syscall4(SYS_RT_SIGACTION, SIGHUP, (long)action, 0, 8) < 0 || !open_pair(&master, &slave) ||
+        sys_ioctl(slave, TIOCSCTTY, 0) < 0) {
         goto done;
     }
     for (i = 0; i < 2; i++) {
@@ -501,7 +466,7 @@ done:
     return ok;
 }
 
-void _start(void)
+PROBE_START void _start(void)
 {
     int master, slave, ptn, unlock, pid, status, nb;
     char path[16];

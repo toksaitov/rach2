@@ -20,23 +20,11 @@
  * and without the damaged frame, since the x87 image has no bit a load can
  * fault on.
  *
- * Prints "FPUPROBE OK" or "FPUPROBE FAIL: reason". Freestanding; int 0x80.
+ * Prints "FPUPROBE OK" or "FPUPROBE FAIL: reason". Freestanding; direct system
+ * calls (probe.h).
  */
 
-typedef unsigned int size_t;
-
-#define SYS_EXIT         1
-#define SYS_FORK         2
-#define SYS_READ         3
-#define SYS_WRITE        4
-#define SYS_WAITPID      7
-#define SYS_EXECVE       11
-#define SYS_GETPID       20
-#define SYS_KILL         37
-#define SYS_PIPE         42
-#define SYS_GETTIMEOFDAY 78
-#define SYS_SCHED_YIELD  158
-#define SYS_RT_SIGACTION 174
+#include "probe.h"
 
 #define SIGSEGV     11
 #define SIGUSR1     10
@@ -50,34 +38,6 @@ struct k_sigaction {
     void (*restorer)(void);
     unsigned mask[2];
 };
-
-static int syscall1(int n, int a)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a) : "memory");
-    return r;
-}
-
-static int syscall2(int n, int a, int b)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b) : "memory");
-    return r;
-}
-
-static int syscall3(int n, int a, int b, int c)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
-}
-
-static int syscall4(int n, int a, int b, int c, int d)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c), "S"(d) : "memory");
-    return r;
-}
 
 static void sys_exit(int status)
 {
@@ -96,13 +56,13 @@ static size_t strlen(const char *s)
 
 static void puts(const char *s)
 {
-    syscall3(SYS_WRITE, 1, (int)(size_t)s, (int)strlen(s));
-    syscall3(SYS_WRITE, 1, (int)(size_t)"\n", 1);
+    syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
+    syscall3(SYS_WRITE, 1, (long)"\n", 1);
 }
 
 static void fail(const char *why)
 {
-    syscall3(SYS_WRITE, 1, (int)(size_t)"FPUPROBE FAIL: ", 15);
+    syscall3(SYS_WRITE, 1, (long)"FPUPROBE FAIL: ", 15);
     puts(why);
     sys_exit(1);
 }
@@ -115,7 +75,7 @@ struct timeval {
 static unsigned now_ms(void)
 {
     struct timeval tv;
-    syscall2(SYS_GETTIMEOFDAY, (int)(size_t)&tv, 0);
+    syscall2(SYS_GETTIMEOFDAY, (long)&tv, 0);
     return (unsigned)tv.sec * 1000u + (unsigned)tv.usec / 1000u;
 }
 
@@ -274,7 +234,7 @@ static void install(int signo, void (*h)(int))
     ka.restorer = sig_restorer;
     ka.mask[0] = 0;
     ka.mask[1] = 0;
-    if (syscall4(SYS_RT_SIGACTION, signo, (int)(size_t)&ka, 0, 8) != 0) {
+    if (syscall4(SYS_RT_SIGACTION, signo, (long)&ka, 0, 8) != 0) {
         fail("rt_sigaction");
     }
 }
@@ -343,7 +303,7 @@ static void damage_handler(int sig)
     for (k = 0; k < 4; k++) {
         fpstate[112 + 24 + k] = ((unsigned char *)&mxcsr)[k];
     }
-    syscall3(SYS_WRITE, damage_pipe[1], (int)(size_t)"d", 1);
+    syscall3(SYS_WRITE, damage_pipe[1], (long)"d", 1);
 }
 
 static void run_switches(void)
@@ -362,7 +322,7 @@ static void run_switches(void)
     }
     why = compare(&before, CW_ROUND_DOWN, MXCSR_FLUSH);
     if (why) {
-        syscall3(SYS_WRITE, 1, (int)(size_t)"FPUPROBE FAIL: across fork: ", 28);
+        syscall3(SYS_WRITE, 1, (long)"FPUPROBE FAIL: across fork: ", 28);
         puts(why);
         sys_exit(1);
     }
@@ -371,18 +331,18 @@ static void run_switches(void)
     why = hold(&mine, CW_ROUND_DOWN, MXCSR_FLUSH, 500u);
     if (pid == 0) {
         if (why) {
-            syscall3(SYS_WRITE, 1, (int)(size_t)"FPUPROBE FAIL: the child lost ", 30);
+            syscall3(SYS_WRITE, 1, (long)"FPUPROBE FAIL: the child lost ", 30);
             puts(why);
             sys_exit(1);
         }
         sys_exit(0);
     }
     if (why) {
-        syscall3(SYS_WRITE, 1, (int)(size_t)"FPUPROBE FAIL: the parent lost ", 31);
+        syscall3(SYS_WRITE, 1, (long)"FPUPROBE FAIL: the parent lost ", 31);
         puts(why);
         sys_exit(1);
     }
-    if (syscall3(SYS_WAITPID, pid, (int)(size_t)&status, 0) != pid || status != 0) {
+    if (syscall3(SYS_WAITPID, pid, (long)&status, 0) != pid || status != 0) {
         fail("the child's state across switches");
     }
 }
@@ -405,7 +365,7 @@ static void run_signals(void)
     }
     why = compare(&mine, CW_ROUND_DOWN, MXCSR_FLUSH);
     if (why) {
-        syscall3(SYS_WRITE, 1, (int)(size_t)"FPUPROBE FAIL: after the signal: ", 33);
+        syscall3(SYS_WRITE, 1, (long)"FPUPROBE FAIL: after the signal: ", 33);
         puts(why);
         sys_exit(1);
     }
@@ -428,10 +388,10 @@ static void run_exec(void)
         argv[0] = (char *)"fpuprobe";
         argv[1] = (char *)(with_sse ? "reset" : "reset-x87");
         argv[2] = 0;
-        syscall3(SYS_EXECVE, (int)(size_t)"/fpuprobe", (int)(size_t)argv, 0);
+        syscall3(SYS_EXECVE, (long)"/fpuprobe", (long)argv, 0);
         sys_exit(2);
     }
-    if (syscall3(SYS_WAITPID, pid, (int)(size_t)&status, 0) != pid || status != 0) {
+    if (syscall3(SYS_WAITPID, pid, (long)&status, 0) != pid || status != 0) {
         fail("exec did not reset the state");
     }
 }
@@ -464,7 +424,7 @@ static void run_damaged(void)
     int pid, status;
     char byte = 0;
 
-    if (syscall1(SYS_PIPE, (int)(size_t)damage_pipe) != 0) {
+    if (syscall1(SYS_PIPE, (long)damage_pipe) != 0) {
         fail("pipe for the damaged frame");
     }
     pid = syscall1(SYS_FORK, 0);
@@ -477,10 +437,10 @@ static void run_damaged(void)
         puts("FPUPROBE FAIL: the damaged frame was restored");
         sys_exit(6);
     }
-    if (syscall3(SYS_READ, damage_pipe[0], (int)(size_t)&byte, 1) != 1 || byte != 'd') {
+    if (syscall3(SYS_READ, damage_pipe[0], (long)&byte, 1) != 1 || byte != 'd') {
         fail("the handler did not report the frame damaged");
     }
-    if (syscall3(SYS_WAITPID, pid, (int)(size_t)&status, 0) != pid) {
+    if (syscall3(SYS_WAITPID, pid, (long)&status, 0) != pid) {
         fail("waitpid for the damaged frame");
     }
     if ((status & 0x7F) != SIGSEGV) {

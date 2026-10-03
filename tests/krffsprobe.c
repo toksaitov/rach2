@@ -21,31 +21,10 @@
  * errno plus the kernel's own line on the console.
  *
  * Prints "KRFFSPROBE OK (mode)" or "KRFFSPROBE FAIL: reason". Freestanding;
- * int 0x80.
+ * direct system calls (probe.h).
  */
 
-typedef unsigned int size_t;
-
-#define SYS_EXIT       1
-#define SYS_READ       3
-#define SYS_WRITE      4
-#define SYS_OPEN       5
-#define SYS_CLOSE      6
-#define SYS_MOUNT      21
-#define SYS_MKDIR      39
-#define SYS_UMOUNT2    52
-#define SYS_FORK       2
-#define SYS_UNLINK     10
-#define SYS_CHMOD      15
-#define SYS_LSEEK      19
-#define SYS_RENAME     38
-#define SYS_RMDIR      40
-#define SYS_SYNC       36
-#define SYS_FSYNC      118
-#define SYS_FTRUNCATE  93
-#define SYS_WAITPID    7
-#define SYS_STAT64     195
-#define SYS_GETDENTS64 220
+#include "probe.h"
 
 #define O_RDONLY 0
 #define O_WRONLY 1
@@ -61,41 +40,10 @@ typedef unsigned int size_t;
 #define EBUSY  16
 #define EROFS  30
 
-static int sys1(int n, int a)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a) : "memory");
-    return r;
-}
-
-static int sys2(int n, int a, int b)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b) : "memory");
-    return r;
-}
-
-static int sys3(int n, int a, int b, int c)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
-}
-
-static int sys5(int n, int a, int b, int c, int d, int e)
-{
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(n), "b"(a), "c"(b), "d"(c), "S"(d), "D"(e)
-                         : "memory");
-    return r;
-}
-
 static void sys_exit(int status) __attribute__((noreturn));
 static void sys_exit(int status)
 {
-    sys1(SYS_EXIT, status);
+    syscall1(SYS_EXIT, status);
     __builtin_unreachable();
 }
 
@@ -111,14 +59,14 @@ static size_t strlen(const char *s)
 
 static void puts(const char *s)
 {
-    sys3(SYS_WRITE, 1, (int)s, (int)strlen(s));
-    sys3(SYS_WRITE, 1, (int)"\n", 1);
+    syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
+    syscall3(SYS_WRITE, 1, (long)"\n", 1);
 }
 
 static void fail(const char *why) __attribute__((noreturn));
 static void fail(const char *why)
 {
-    sys3(SYS_WRITE, 1, (int)"KRFFSPROBE FAIL: ", 17);
+    syscall3(SYS_WRITE, 1, (long)"KRFFSPROBE FAIL: ", 17);
     puts(why);
     sys_exit(1);
 }
@@ -138,10 +86,10 @@ static void fail_with(const char *why, int n)
     if (n < 0) {
         digits[--i] = '-';
     }
-    sys3(SYS_WRITE, 1, (int)"KRFFSPROBE FAIL: ", 17);
-    sys3(SYS_WRITE, 1, (int)why, (int)strlen(why));
-    sys3(SYS_WRITE, 1, (int)" (got ", 6);
-    sys3(SYS_WRITE, 1, (int)(digits + i), (int)strlen(digits + i));
+    syscall3(SYS_WRITE, 1, (long)"KRFFSPROBE FAIL: ", 17);
+    syscall3(SYS_WRITE, 1, (long)why, (int)strlen(why));
+    syscall3(SYS_WRITE, 1, (long)" (got ", 6);
+    syscall3(SYS_WRITE, 1, (long)(digits + i), (int)strlen(digits + i));
     puts(")");
     sys_exit(1);
 }
@@ -170,7 +118,7 @@ static unsigned char pattern_byte(unsigned i)
 
 static unsigned stat_mode(const char *path, unsigned char *st)
 {
-    if (sys2(SYS_STAT64, (int)path, (int)st) != 0) {
+    if (syscall2(SYS_STAT, (long)path, (long)st) != 0) {
         fail("stat");
     }
     return *(unsigned *)(st + ST_MODE_OFF);
@@ -185,15 +133,15 @@ static unsigned stat_mode(const char *path, unsigned char *st)
 static void listed_rows(void)
 {
     char buf[512];
-    int fd = sys3(SYS_OPEN, (int)"/proc/filesystems", O_RDONLY, 0);
+    int fd = syscall3(SYS_OPEN, (long)"/proc/filesystems", O_RDONLY, 0);
     int n;
     int i;
 
     if (fd < 0) {
         fail_with("opening /proc/filesystems", fd);
     }
-    n = sys3(SYS_READ, fd, (int)buf, (int)sizeof(buf) - 1);
-    sys1(SYS_CLOSE, fd);
+    n = syscall3(SYS_READ, fd, (long)buf, (int)sizeof(buf) - 1);
+    syscall1(SYS_CLOSE, fd);
     if (n <= 0) {
         fail_with("reading /proc/filesystems", n);
     }
@@ -216,14 +164,14 @@ static void read_rows(void)
     int fd;
     int n;
 
-    fd = sys3(SYS_OPEN, (int)"/k/pattern.bin", O_RDONLY, 0);
+    fd = syscall3(SYS_OPEN, (long)"/k/pattern.bin", O_RDONLY, 0);
     if (fd < 0) {
         fail_with("opening /k/pattern.bin", fd);
     }
     while (at < PATTERN_BYTES) {
         int i;
 
-        n = sys3(SYS_READ, fd, (int)buf, (int)sizeof(buf));
+        n = syscall3(SYS_READ, fd, (long)buf, (int)sizeof(buf));
         if (n <= 0) {
             fail_with("reading /k/pattern.bin", n);
         }
@@ -237,23 +185,23 @@ static void read_rows(void)
     if (at != PATTERN_BYTES) {
         fail_with("the length of /k/pattern.bin", (int)at);
     }
-    n = sys3(SYS_READ, fd, (int)buf, (int)sizeof(buf));
+    n = syscall3(SYS_READ, fd, (long)buf, (int)sizeof(buf));
     if (n != 0) {
         fail_with("a read past the end", n);
     }
-    sys1(SYS_CLOSE, fd);
+    syscall1(SYS_CLOSE, fd);
 
-    fd = sys3(SYS_OPEN, (int)"/k/sub/inner.txt", O_RDONLY, 0);
+    fd = syscall3(SYS_OPEN, (long)"/k/sub/inner.txt", O_RDONLY, 0);
     if (fd < 0) {
         fail_with("opening a file in a subdirectory", fd);
     }
-    n = sys3(SYS_READ, fd, (int)buf, (int)sizeof(buf));
+    n = syscall3(SYS_READ, fd, (long)buf, (int)sizeof(buf));
     if (n != 6 || buf[0] != 'i' || buf[5] != '\n') {
         fail_with("the bytes of /k/sub/inner.txt", n);
     }
-    sys1(SYS_CLOSE, fd);
+    syscall1(SYS_CLOSE, fd);
 
-    if (sys3(SYS_OPEN, (int)"/k/nothing", O_RDONLY, 0) != -ENOENT) {
+    if (syscall3(SYS_OPEN, (long)"/k/nothing", O_RDONLY, 0) != -ENOENT) {
         fail("a name that is not there");
     }
 
@@ -279,11 +227,11 @@ static void read_rows(void)
         int saw_sub = 0;
         int off = 0;
 
-        fd = sys3(SYS_OPEN, (int)"/k", O_RDONLY, 0);
+        fd = syscall3(SYS_OPEN, (long)"/k", O_RDONLY, 0);
         if (fd < 0) {
             fail_with("opening the mount as a directory", fd);
         }
-        n = sys3(SYS_GETDENTS64, fd, (int)buf, (int)sizeof(buf));
+        n = syscall3(SYS_GETDENTS64, fd, (long)buf, (int)sizeof(buf));
         if (n <= 0) {
             fail_with("getdents on the mount", n);
         }
@@ -302,7 +250,7 @@ static void read_rows(void)
             }
             off += reclen;
         }
-        sys1(SYS_CLOSE, fd);
+        syscall1(SYS_CLOSE, fd);
         if (!saw_pattern || !saw_sub) {
             fail("the listing of the mount");
         }
@@ -323,7 +271,7 @@ static void mounts_say_ro(void)
 {
     {
         char mounts[1024];
-        int fd = sys3(SYS_OPEN, (int)"/proc/mounts", O_RDONLY, 0);
+        int fd = syscall3(SYS_OPEN, (long)"/proc/mounts", O_RDONLY, 0);
         int n;
         int i;
         int saw = 0;
@@ -331,8 +279,8 @@ static void mounts_say_ro(void)
         if (fd < 0) {
             fail_with("opening /proc/mounts", fd);
         }
-        n = sys3(SYS_READ, fd, (int)mounts, (int)sizeof(mounts) - 1);
-        sys1(SYS_CLOSE, fd);
+        n = syscall3(SYS_READ, fd, (long)mounts, (int)sizeof(mounts) - 1);
+        syscall1(SYS_CLOSE, fd);
         if (n <= 0) {
             fail_with("reading /proc/mounts", n);
         }
@@ -353,12 +301,12 @@ static void mounts_say_ro(void)
 /* A read-only mount refuses every way of changing it. */
 static void refusal_rows(void)
 {
-    int rc = sys3(SYS_OPEN, (int)"/k/pattern.bin", O_WRONLY, 0);
+    int rc = syscall3(SYS_OPEN, (long)"/k/pattern.bin", O_WRONLY, 0);
 
     if (rc != -EROFS) {
         fail_with("opening a file for writing on a read-only mount", rc);
     }
-    rc = sys3(SYS_OPEN, (int)"/k/made", O_WRONLY | O_CREAT, 0644);
+    rc = syscall3(SYS_OPEN, (long)"/k/made", O_WRONLY | O_CREAT, 0644);
     if (rc != -EROFS) {
         fail_with("creating a file on a read-only mount", rc);
     }
@@ -379,7 +327,7 @@ static void write_pattern_from(int fd, unsigned start, unsigned bytes)
         for (i = 0; i < take; i++) {
             buf[i] = (char)pattern_byte(at + i);
         }
-        n = sys3(SYS_WRITE, fd, (int)buf, (int)take);
+        n = syscall3(SYS_WRITE, fd, (long)buf, (int)take);
         if (n != (int)take) {
             fail_with("writing the pattern", n);
         }
@@ -397,7 +345,7 @@ static void read_pattern(const char *path, unsigned bytes)
 {
     char buf[512];
     unsigned at = 0;
-    int fd = sys3(SYS_OPEN, (int)path, O_RDONLY, 0);
+    int fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
     int n;
 
     if (fd < 0) {
@@ -406,7 +354,7 @@ static void read_pattern(const char *path, unsigned bytes)
     while (at < bytes) {
         int i;
 
-        n = sys3(SYS_READ, fd, (int)buf, (int)sizeof(buf));
+        n = syscall3(SYS_READ, fd, (long)buf, (int)sizeof(buf));
         if (n <= 0) {
             fail_with("reading what was written", n);
         }
@@ -417,11 +365,11 @@ static void read_pattern(const char *path, unsigned bytes)
         }
         at += (unsigned)n;
     }
-    n = sys3(SYS_READ, fd, (int)buf, (int)sizeof(buf));
+    n = syscall3(SYS_READ, fd, (long)buf, (int)sizeof(buf));
     if (n != 0) {
         fail_with("the length of what was written", n);
     }
-    sys1(SYS_CLOSE, fd);
+    syscall1(SYS_CLOSE, fd);
 }
 
 /* What a write boot leaves behind, which the boot after it checks. */
@@ -434,119 +382,119 @@ static void write_rows(void)
     /* The rows run twice in one suite: once on a volume nobody has written
        and once on the volume a killed machine left, so they start by taking
        away what they are about to make. What is not there does not matter. */
-    sys1(SYS_UNLINK, (int)"/k/made/inside");
-    sys1(SYS_RMDIR, (int)"/k/made");
-    sys1(SYS_UNLINK, (int)"/k/after.txt");
-    sys1(SYS_UNLINK, (int)"/k/before.txt");
-    sys1(SYS_UNLINK, (int)"/k/gone.txt");
-    sys1(SYS_UNLINK, (int)"/k/grown.bin");
-    sys1(SYS_UNLINK, (int)"/k/held.bin");
-    sys1(SYS_UNLINK, (int)"/k/moved.bin");
-    sys1(SYS_UNLINK, (int)"/k/blocker.bin");
-    sys1(SYS_RMDIR, (int)"/k/empty");
-    sys1(SYS_UNLINK, (int)"/k/secret.txt");
-    sys1(SYS_RMDIR, (int)"/k/private");
-    sys1(SYS_UNLINK, (int)"/k/hold/keep.txt");
-    sys1(SYS_UNLINK, (int)"/k/hold/gone.bin");
-    sys1(SYS_RMDIR, (int)"/k/hold");
-    sys1(SYS_RMDIR, (int)"/k/busydir");
-    sys1(SYS_UNLINK, (int)"/k/over.txt");
-    sys1(SYS_UNLINK, (int)"/k/spare.txt");
-    sys1(SYS_UNLINK, (int)"/k/cut.bin");
-    sys1(SYS_UNLINK, (int)"/k/cutblock.bin");
-    sys1(SYS_UNLINK, (int)"/k/over.bin");
+    syscall1(SYS_UNLINK, (long)"/k/made/inside");
+    syscall1(SYS_RMDIR, (long)"/k/made");
+    syscall1(SYS_UNLINK, (long)"/k/after.txt");
+    syscall1(SYS_UNLINK, (long)"/k/before.txt");
+    syscall1(SYS_UNLINK, (long)"/k/gone.txt");
+    syscall1(SYS_UNLINK, (long)"/k/grown.bin");
+    syscall1(SYS_UNLINK, (long)"/k/held.bin");
+    syscall1(SYS_UNLINK, (long)"/k/moved.bin");
+    syscall1(SYS_UNLINK, (long)"/k/blocker.bin");
+    syscall1(SYS_RMDIR, (long)"/k/empty");
+    syscall1(SYS_UNLINK, (long)"/k/secret.txt");
+    syscall1(SYS_RMDIR, (long)"/k/private");
+    syscall1(SYS_UNLINK, (long)"/k/hold/keep.txt");
+    syscall1(SYS_UNLINK, (long)"/k/hold/gone.bin");
+    syscall1(SYS_RMDIR, (long)"/k/hold");
+    syscall1(SYS_RMDIR, (long)"/k/busydir");
+    syscall1(SYS_UNLINK, (long)"/k/over.txt");
+    syscall1(SYS_UNLINK, (long)"/k/spare.txt");
+    syscall1(SYS_UNLINK, (long)"/k/cut.bin");
+    syscall1(SYS_UNLINK, (long)"/k/cutblock.bin");
+    syscall1(SYS_UNLINK, (long)"/k/over.bin");
 
-    fd = sys3(SYS_OPEN, (int)"/k/written.bin", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    fd = syscall3(SYS_OPEN, (long)"/k/written.bin", O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) {
         fail_with("creating a file on the volume", fd);
     }
     write_pattern(fd, 20000);
-    if (sys1(SYS_FSYNC, fd) != 0) {
+    if (syscall1(SYS_FSYNC, fd) != 0) {
         fail("fsync");
     }
-    sys1(SYS_CLOSE, fd);
+    syscall1(SYS_CLOSE, fd);
     read_pattern("/k/written.bin", 20000);
 
     /* A grow past what the node holds, then a truncate back. */
-    fd = sys3(SYS_OPEN, (int)"/k/grown.bin", O_WRONLY | O_CREAT, 0644);
+    fd = syscall3(SYS_OPEN, (long)"/k/grown.bin", O_WRONLY | O_CREAT, 0644);
     if (fd < 0) {
         fail_with("creating the file to grow", fd);
     }
     write_pattern(fd, 100);
     write_pattern_from(fd, 100, 7900);
-    sys1(SYS_CLOSE, fd);
-    fd = sys3(SYS_OPEN, (int)"/k/grown.bin", O_WRONLY, 0);
+    syscall1(SYS_CLOSE, fd);
+    fd = syscall3(SYS_OPEN, (long)"/k/grown.bin", O_WRONLY, 0);
     if (fd < 0) {
         fail_with("opening the file to truncate", fd);
     }
-    rc = sys2(SYS_FTRUNCATE, fd, 4000);
+    rc = syscall2(SYS_FTRUNCATE, fd, 4000);
     if (rc != 0) {
         fail_with("truncating", rc);
     }
-    sys1(SYS_CLOSE, fd);
-    if (sys2(SYS_STAT64, (int)"/k/grown.bin", (int)st) != 0 ||
+    syscall1(SYS_CLOSE, fd);
+    if (syscall2(SYS_STAT, (long)"/k/grown.bin", (long)st) != 0 ||
         *(unsigned *)(st + ST_SIZE_OFF) != 4000) {
         fail("the size after a truncate");
     }
 
     /* A directory, a file in it, a rename, and a removal. */
-    if (sys2(SYS_MKDIR, (int)"/k/made", 0755) != 0) {
+    if (syscall2(SYS_MKDIR, (long)"/k/made", 0755) != 0) {
         fail("mkdir on the volume");
     }
-    fd = sys3(SYS_OPEN, (int)"/k/made/inside", O_WRONLY | O_CREAT, 0644);
+    fd = syscall3(SYS_OPEN, (long)"/k/made/inside", O_WRONLY | O_CREAT, 0644);
     if (fd < 0) {
         fail_with("creating a file in a new directory", fd);
     }
-    if (sys3(SYS_WRITE, fd, (int)"inside\n", 7) != 7) {
+    if (syscall3(SYS_WRITE, fd, (long)"inside\n", 7) != 7) {
         fail("writing in a new directory");
     }
-    sys1(SYS_CLOSE, fd);
-    fd = sys3(SYS_OPEN, (int)"/k/gone.txt", O_WRONLY | O_CREAT, 0644);
+    syscall1(SYS_CLOSE, fd);
+    fd = syscall3(SYS_OPEN, (long)"/k/gone.txt", O_WRONLY | O_CREAT, 0644);
     if (fd < 0) {
         fail_with("creating the file to remove", fd);
     }
-    sys1(SYS_CLOSE, fd);
-    if (sys1(SYS_UNLINK, (int)"/k/gone.txt") != 0) {
+    syscall1(SYS_CLOSE, fd);
+    if (syscall1(SYS_UNLINK, (long)"/k/gone.txt") != 0) {
         fail("unlink on the volume");
     }
-    fd = sys3(SYS_OPEN, (int)"/k/before.txt", O_WRONLY | O_CREAT, 0644);
+    fd = syscall3(SYS_OPEN, (long)"/k/before.txt", O_WRONLY | O_CREAT, 0644);
     if (fd < 0) {
         fail_with("creating the file to rename", fd);
     }
-    if (sys3(SYS_WRITE, fd, (int)"renamed\n", 8) != 8) {
+    if (syscall3(SYS_WRITE, fd, (long)"renamed\n", 8) != 8) {
         fail("writing the file to rename");
     }
-    sys1(SYS_CLOSE, fd);
-    if (sys2(SYS_RENAME, (int)"/k/before.txt", (int)"/k/after.txt") != 0) {
+    syscall1(SYS_CLOSE, fd);
+    if (syscall2(SYS_RENAME, (long)"/k/before.txt", (long)"/k/after.txt") != 0) {
         fail("rename on the volume");
     }
-    if (sys2(SYS_MKDIR, (int)"/k/empty", 0755) != 0) {
+    if (syscall2(SYS_MKDIR, (long)"/k/empty", 0755) != 0) {
         fail("the directory to remove");
     }
-    if (sys1(SYS_RMDIR, (int)"/k/empty") != 0) {
+    if (syscall1(SYS_RMDIR, (long)"/k/empty") != 0) {
         fail("rmdir on the volume");
     }
     /* A name taken away while the file is open: the reader keeps the file,
        the name is gone at once, and the space comes back at the close. */
-    fd = sys3(SYS_OPEN, (int)"/k/held.bin", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    fd = syscall3(SYS_OPEN, (long)"/k/held.bin", O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) {
         fail_with("creating the file to hold open", fd);
     }
     write_pattern(fd, 200);
-    sys1(SYS_CLOSE, fd);
-    fd = sys3(SYS_OPEN, (int)"/k/held.bin", O_RDONLY, 0);
+    syscall1(SYS_CLOSE, fd);
+    fd = syscall3(SYS_OPEN, (long)"/k/held.bin", O_RDONLY, 0);
     if (fd < 0) {
         fail_with("opening the file to hold", fd);
     }
-    if (sys1(SYS_UNLINK, (int)"/k/held.bin") != 0) {
+    if (syscall1(SYS_UNLINK, (long)"/k/held.bin") != 0) {
         fail("unlinking a file that is open");
     }
-    if (sys3(SYS_OPEN, (int)"/k/held.bin", O_RDONLY, 0) != -ENOENT) {
+    if (syscall3(SYS_OPEN, (long)"/k/held.bin", O_RDONLY, 0) != -ENOENT) {
         fail("the name of an unlinked file is still there");
     }
     {
         char held[200];
-        int n = sys3(SYS_READ, fd, (int)held, (int)sizeof(held));
+        int n = syscall3(SYS_READ, fd, (long)held, (int)sizeof(held));
         int i;
 
         if (n != 200) {
@@ -558,7 +506,7 @@ static void write_rows(void)
             }
         }
     }
-    sys1(SYS_CLOSE, fd);
+    syscall1(SYS_CLOSE, fd);
 
     /* A directory somebody has open is not taken away under them, and a
        rename over an open file leaves that file for its holder the way an
@@ -566,130 +514,131 @@ static void write_rows(void)
     {
         int dirfd;
 
-        if (sys2(SYS_MKDIR, (int)"/k/busydir", 0755) != 0) {
+        if (syscall2(SYS_MKDIR, (long)"/k/busydir", 0755) != 0) {
             fail("the directory to hold open");
         }
-        dirfd = sys3(SYS_OPEN, (int)"/k/busydir", O_RDONLY, 0);
+        dirfd = syscall3(SYS_OPEN, (long)"/k/busydir", O_RDONLY, 0);
         if (dirfd < 0) {
             fail_with("opening a directory of the volume", dirfd);
         }
-        if (sys1(SYS_RMDIR, (int)"/k/busydir") != -EBUSY) {
+        if (syscall1(SYS_RMDIR, (long)"/k/busydir") != -EBUSY) {
             fail("a directory somebody had open was removed");
         }
-        sys1(SYS_CLOSE, dirfd);
-        if (sys1(SYS_RMDIR, (int)"/k/busydir") != 0) {
+        syscall1(SYS_CLOSE, dirfd);
+        if (syscall1(SYS_RMDIR, (long)"/k/busydir") != 0) {
             fail("removing the directory after its holder let go");
         }
     }
-    fd = sys3(SYS_OPEN, (int)"/k/over.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    fd = syscall3(SYS_OPEN, (long)"/k/over.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) {
         fail_with("creating the file to be renamed over", fd);
     }
-    if (sys3(SYS_WRITE, fd, (int)"under\n", 6) != 6) {
+    if (syscall3(SYS_WRITE, fd, (long)"under\n", 6) != 6) {
         fail("writing the file to be renamed over");
     }
-    sys1(SYS_CLOSE, fd);
-    fd = sys3(SYS_OPEN, (int)"/k/over.txt", O_RDONLY, 0);
+    syscall1(SYS_CLOSE, fd);
+    fd = syscall3(SYS_OPEN, (long)"/k/over.txt", O_RDONLY, 0);
     if (fd < 0) {
         fail_with("holding the file to be renamed over", fd);
     }
     {
-        int spare = sys3(SYS_OPEN, (int)"/k/spare.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        int spare = syscall3(SYS_OPEN, (long)"/k/spare.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
         char kept[8];
         int n;
 
         if (spare < 0) {
             fail_with("the file to rename over it", spare);
         }
-        if (sys3(SYS_WRITE, spare, (int)"spare\n", 6) != 6) {
+        if (syscall3(SYS_WRITE, spare, (long)"spare\n", 6) != 6) {
             fail("writing the file to rename over it");
         }
-        sys1(SYS_CLOSE, spare);
-        if (sys2(SYS_RENAME, (int)"/k/spare.txt", (int)"/k/over.txt") != 0) {
+        syscall1(SYS_CLOSE, spare);
+        if (syscall2(SYS_RENAME, (long)"/k/spare.txt", (long)"/k/over.txt") != 0) {
             fail("renaming over a file somebody has open");
         }
-        n = sys3(SYS_READ, fd, (int)kept, (int)sizeof(kept));
+        n = syscall3(SYS_READ, fd, (long)kept, (int)sizeof(kept));
         if (n != 6 || kept[0] != 'u') {
             fail_with("the bytes of a file renamed over while it was open", n);
         }
-        sys1(SYS_CLOSE, fd);
-        fd = sys3(SYS_OPEN, (int)"/k/over.txt", O_RDONLY, 0);
+        syscall1(SYS_CLOSE, fd);
+        fd = syscall3(SYS_OPEN, (long)"/k/over.txt", O_RDONLY, 0);
         if (fd < 0) {
             fail_with("the file that took the name", fd);
         }
-        n = sys3(SYS_READ, fd, (int)kept, (int)sizeof(kept));
+        n = syscall3(SYS_READ, fd, (long)kept, (int)sizeof(kept));
         if (n != 6 || kept[0] != 's') {
             fail_with("the bytes of the file that took the name", n);
         }
-        sys1(SYS_CLOSE, fd);
+        syscall1(SYS_CLOSE, fd);
     }
 
     /* A truncation of a file whose name is gone. It has no path, and the one
        its parent and empty name spell reaches the directory it was in; the
        truncation must reach the file itself and leave that directory and
        everything else in it exactly as they were. */
-    if (sys2(SYS_MKDIR, (int)"/k/hold", 0755) != 0) {
+    if (syscall2(SYS_MKDIR, (long)"/k/hold", 0755) != 0) {
         fail("the directory for the truncation of a nameless file");
     }
-    fd = sys3(SYS_OPEN, (int)"/k/hold/keep.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    fd = syscall3(SYS_OPEN, (long)"/k/hold/keep.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) {
         fail_with("the file that must survive", fd);
     }
-    if (sys3(SYS_WRITE, fd, (int)"keep\n", 5) != 5) {
+    if (syscall3(SYS_WRITE, fd, (long)"keep\n", 5) != 5) {
         fail("writing the file that must survive");
     }
-    sys1(SYS_CLOSE, fd);
-    fd = sys3(SYS_OPEN, (int)"/k/hold/gone.bin", O_RDWR | O_CREAT | O_TRUNC, 0644);
+    syscall1(SYS_CLOSE, fd);
+    fd = syscall3(SYS_OPEN, (long)"/k/hold/gone.bin", O_RDWR | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) {
         fail_with("the file to truncate after its name goes", fd);
     }
     write_pattern(fd, 300);
-    if (sys1(SYS_UNLINK, (int)"/k/hold/gone.bin") != 0) {
+    if (syscall1(SYS_UNLINK, (long)"/k/hold/gone.bin") != 0) {
         fail("unlinking the file to truncate");
     }
-    sys3(SYS_FTRUNCATE, fd, 0, 0);
-    sys1(SYS_CLOSE, fd);
-    if (sys2(SYS_STAT64, (int)"/k/hold", (int)st) != 0) {
+    syscall3(SYS_FTRUNCATE, fd, 0, 0);
+    syscall1(SYS_CLOSE, fd);
+    if (syscall2(SYS_STAT, (long)"/k/hold", (long)st) != 0) {
         fail("the directory of a nameless file that was truncated");
     }
     {
         char keep[8];
         int n;
 
-        fd = sys3(SYS_OPEN, (int)"/k/hold/keep.txt", O_RDONLY, 0);
+        fd = syscall3(SYS_OPEN, (long)"/k/hold/keep.txt", O_RDONLY, 0);
         if (fd < 0) {
             fail_with("the file beside the nameless one that was truncated", fd);
         }
-        n = sys3(SYS_READ, fd, (int)keep, (int)sizeof(keep));
+        n = syscall3(SYS_READ, fd, (long)keep, (int)sizeof(keep));
         if (n != 5 || keep[0] != 'k') {
             fail_with("the bytes beside the nameless file that was truncated", n);
         }
-        sys1(SYS_CLOSE, fd);
+        syscall1(SYS_CLOSE, fd);
     }
 
     /* A descriptor open across a grow that moves the file: the write path
        repoints it, and the same descriptor reads what it wrote. */
-    fd = sys3(SYS_OPEN, (int)"/k/moved.bin", O_RDWR | O_CREAT | O_TRUNC, 0644);
+    fd = syscall3(SYS_OPEN, (long)"/k/moved.bin", O_RDWR | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) {
         fail_with("creating the file to move", fd);
     }
     write_pattern(fd, 64);
     {
-        int blocker = sys3(SYS_OPEN, (int)"/k/blocker.bin", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        int blocker =
+            syscall3(SYS_OPEN, (long)"/k/blocker.bin", O_WRONLY | O_CREAT | O_TRUNC, 0644);
 
         if (blocker < 0) {
             fail_with("creating the file that boxes it in", blocker);
         }
         write_pattern(blocker, 64);
-        sys1(SYS_CLOSE, blocker);
+        syscall1(SYS_CLOSE, blocker);
     }
     write_pattern_from(fd, 64, 6000);
-    if (sys3(SYS_LSEEK, fd, 0, 0) != 0) {
+    if (syscall3(SYS_LSEEK, fd, 0, 0) != 0) {
         fail("seeking back through a descriptor whose file moved");
     }
     {
         char moved[512];
-        int n = sys3(SYS_READ, fd, (int)moved, (int)sizeof(moved));
+        int n = syscall3(SYS_READ, fd, (long)moved, (int)sizeof(moved));
         int i;
 
         if (n != (int)sizeof(moved)) {
@@ -701,13 +650,13 @@ static void write_rows(void)
             }
         }
     }
-    sys1(SYS_CLOSE, fd);
+    syscall1(SYS_CLOSE, fd);
 
     /* A grow through ftruncate, which is the other way a file moves, with two
        descriptors on it: both must follow the file, the bytes it had must
        still be there, and the length it gained must read as zeroes. */
     {
-        int one = sys3(SYS_OPEN, (int)"/k/cut.bin", O_RDWR | O_CREAT | O_TRUNC, 0644);
+        int one = syscall3(SYS_OPEN, (long)"/k/cut.bin", O_RDWR | O_CREAT | O_TRUNC, 0644);
         int two;
         int blocker;
         char got[512];
@@ -718,27 +667,27 @@ static void write_rows(void)
             fail_with("creating the file to grow by truncation", one);
         }
         write_pattern(one, 256);
-        two = sys3(SYS_OPEN, (int)"/k/cut.bin", O_RDONLY, 0);
+        two = syscall3(SYS_OPEN, (long)"/k/cut.bin", O_RDONLY, 0);
         if (two < 0) {
             fail_with("opening it a second time", two);
         }
-        blocker = sys3(SYS_OPEN, (int)"/k/cutblock.bin", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        blocker = syscall3(SYS_OPEN, (long)"/k/cutblock.bin", O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (blocker < 0) {
             fail_with("creating the file that boxes the truncation in", blocker);
         }
         write_pattern(blocker, 64);
-        sys1(SYS_CLOSE, blocker);
-        if (sys3(SYS_FTRUNCATE, one, 8192, 0) != 0) {
+        syscall1(SYS_CLOSE, blocker);
+        if (syscall3(SYS_FTRUNCATE, one, 8192, 0) != 0) {
             fail("growing a boxed-in file through ftruncate");
         }
-        if (sys2(SYS_STAT64, (int)"/k/cut.bin", (int)st) != 0) {
+        if (syscall2(SYS_STAT, (long)"/k/cut.bin", (long)st) != 0) {
             fail("stat after a grow through ftruncate");
         }
         if (*(unsigned *)(st + ST_SIZE_OFF) != 8192) {
             fail_with("the size after a grow through ftruncate",
                       (int)*(unsigned *)(st + ST_SIZE_OFF));
         }
-        n = sys3(SYS_READ, two, (int)got, (int)sizeof(got));
+        n = syscall3(SYS_READ, two, (long)got, (int)sizeof(got));
         if (n != (int)sizeof(got)) {
             fail_with("reading through the second descriptor after the move", n);
         }
@@ -752,20 +701,20 @@ static void write_rows(void)
                 fail_with("a byte of the length a truncation added", i);
             }
         }
-        if (sys3(SYS_LSEEK, one, 0, 0) != 0) {
+        if (syscall3(SYS_LSEEK, one, 0, 0) != 0) {
             fail("seeking the writing descriptor after the move");
         }
-        if (sys3(SYS_WRITE, one, (int)"after\n", 6) != 6) {
+        if (syscall3(SYS_WRITE, one, (long)"after\n", 6) != 6) {
             fail("writing through the descriptor whose file was moved");
         }
-        sys1(SYS_CLOSE, one);
-        sys1(SYS_CLOSE, two);
+        syscall1(SYS_CLOSE, one);
+        syscall1(SYS_CLOSE, two);
     }
 
     /* An overwrite of bytes that are already there, which a write that
        reported what it never wrote would leave unchanged. */
     {
-        int over = sys3(SYS_OPEN, (int)"/k/over.bin", O_RDWR | O_CREAT | O_TRUNC, 0644);
+        int over = syscall3(SYS_OPEN, (long)"/k/over.bin", O_RDWR | O_CREAT | O_TRUNC, 0644);
         char got[16];
         int n;
 
@@ -773,26 +722,26 @@ static void write_rows(void)
         if (over < 0) {
             fail_with("creating the file to overwrite", over);
         }
-        if (sys3(SYS_WRITE, over, (int)"aaaaaaaaaaaaaaaa", 16) != 16) {
+        if (syscall3(SYS_WRITE, over, (long)"aaaaaaaaaaaaaaaa", 16) != 16) {
             fail("writing the file to overwrite");
         }
-        if (sys3(SYS_LSEEK, over, 4, 0) != 4) {
+        if (syscall3(SYS_LSEEK, over, 4, 0) != 4) {
             fail("seeking into the file to overwrite");
         }
-        if (sys3(SYS_WRITE, over, (int)"bbbb", 4) != 4) {
+        if (syscall3(SYS_WRITE, over, (long)"bbbb", 4) != 4) {
             fail("overwriting inside a file");
         }
-        if (sys3(SYS_LSEEK, over, 0, 0) != 0) {
+        if (syscall3(SYS_LSEEK, over, 0, 0) != 0) {
             fail("seeking back over the overwrite");
         }
-        n = sys3(SYS_READ, over, (int)got, 16);
+        n = syscall3(SYS_READ, over, (long)got, 16);
         if (n != 16 || got[3] != 'a' || got[4] != 'b' || got[7] != 'b' || got[8] != 'a') {
             fail_with("the bytes an overwrite inside a file left", n);
         }
-        sys1(SYS_CLOSE, over);
+        syscall1(SYS_CLOSE, over);
     }
 
-    if (sys2(SYS_CHMOD, (int)"/k/written.bin", 0600) != 0) {
+    if (syscall2(SYS_CHMOD, (long)"/k/written.bin", 0600) != 0) {
         fail("chmod on the volume");
     }
     rc = (int)stat_mode("/k/written.bin", st);
@@ -802,16 +751,16 @@ static void write_rows(void)
 
     /* The mode a creation asks for is the mode it gets: the format stamps a
        new node 0644 and the volume must put the caller's own bits on it. */
-    fd = sys3(SYS_OPEN, (int)"/k/secret.txt", O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    fd = syscall3(SYS_OPEN, (long)"/k/secret.txt", O_WRONLY | O_CREAT | O_TRUNC, 0600);
     if (fd < 0) {
         fail_with("creating a file with a mode of its own", fd);
     }
-    sys1(SYS_CLOSE, fd);
+    syscall1(SYS_CLOSE, fd);
     rc = (int)stat_mode("/k/secret.txt", st);
     if ((rc & 07777) != 0600) {
         fail_with("the mode of a file created 0600", rc & 07777);
     }
-    if (sys2(SYS_MKDIR, (int)"/k/private", 0700) != 0) {
+    if (syscall2(SYS_MKDIR, (long)"/k/private", 0700) != 0) {
         fail("making a directory with a mode of its own");
     }
     rc = (int)stat_mode("/k/private", st);
@@ -828,7 +777,7 @@ static void readback_rows(void)
     int fd;
 
     read_pattern("/k/written.bin", 20000);
-    if (sys2(SYS_STAT64, (int)"/k/grown.bin", (int)st) != 0 ||
+    if (syscall2(SYS_STAT, (long)"/k/grown.bin", (long)st) != 0 ||
         *(unsigned *)(st + ST_SIZE_OFF) != 4000) {
         fail("the truncated file's size after a reboot");
     }
@@ -842,7 +791,7 @@ static void readback_rows(void)
         fail("the made directory's own mode after a reboot");
     }
     {
-        int fd2 = sys3(SYS_OPEN, (int)"/k/over.bin", O_RDONLY, 0);
+        int fd2 = syscall3(SYS_OPEN, (long)"/k/over.bin", O_RDONLY, 0);
         char got[16];
         int n;
 
@@ -850,36 +799,36 @@ static void readback_rows(void)
         if (fd2 < 0) {
             fail_with("the overwritten file after a reboot", fd2);
         }
-        n = sys3(SYS_READ, fd2, (int)got, 16);
+        n = syscall3(SYS_READ, fd2, (long)got, 16);
         if (n != 16 || got[3] != 'a' || got[4] != 'b' || got[7] != 'b' || got[8] != 'a') {
             fail_with("the bytes of the overwritten file after a reboot", n);
         }
-        sys1(SYS_CLOSE, fd2);
+        syscall1(SYS_CLOSE, fd2);
     }
-    if (sys2(SYS_STAT64, (int)"/k/cut.bin", (int)st) != 0 ||
+    if (syscall2(SYS_STAT, (long)"/k/cut.bin", (long)st) != 0 ||
         *(unsigned *)(st + ST_SIZE_OFF) != 8192) {
         fail("the size of the file grown by truncation after a reboot");
     }
-    fd = sys3(SYS_OPEN, (int)"/k/made/inside", O_RDONLY, 0);
+    fd = syscall3(SYS_OPEN, (long)"/k/made/inside", O_RDONLY, 0);
     if (fd < 0) {
         fail_with("the file in the new directory after a reboot", fd);
     }
-    if (sys3(SYS_READ, fd, (int)buf, (int)sizeof(buf)) != 7) {
+    if (syscall3(SYS_READ, fd, (long)buf, (int)sizeof(buf)) != 7) {
         fail("the bytes in the new directory after a reboot");
     }
-    sys1(SYS_CLOSE, fd);
-    fd = sys3(SYS_OPEN, (int)"/k/after.txt", O_RDONLY, 0);
+    syscall1(SYS_CLOSE, fd);
+    fd = syscall3(SYS_OPEN, (long)"/k/after.txt", O_RDONLY, 0);
     if (fd < 0) {
         fail_with("the renamed file after a reboot", fd);
     }
-    sys1(SYS_CLOSE, fd);
-    if (sys3(SYS_OPEN, (int)"/k/before.txt", O_RDONLY, 0) != -ENOENT) {
+    syscall1(SYS_CLOSE, fd);
+    if (syscall3(SYS_OPEN, (long)"/k/before.txt", O_RDONLY, 0) != -ENOENT) {
         fail("the old name is still there after a reboot");
     }
-    if (sys3(SYS_OPEN, (int)"/k/gone.txt", O_RDONLY, 0) != -ENOENT) {
+    if (syscall3(SYS_OPEN, (long)"/k/gone.txt", O_RDONLY, 0) != -ENOENT) {
         fail("the removed file is still there after a reboot");
     }
-    if (sys3(SYS_OPEN, (int)"/k/empty", O_RDONLY, 0) != -ENOENT) {
+    if (syscall3(SYS_OPEN, (long)"/k/empty", O_RDONLY, 0) != -ENOENT) {
         fail("the removed directory is still there after a reboot");
     }
 }
@@ -902,10 +851,10 @@ void probe_main(unsigned int *sp)
     const char *mode = argc > 1 ? argv[1] : "";
     int rc;
 
-    sys2(SYS_MKDIR, (int)"/k", 0755);
+    syscall2(SYS_MKDIR, (long)"/k", 0755);
 
     if (streq(mode, "refuse")) {
-        rc = sys5(SYS_MOUNT, (int)"/dev/disk0p1", (int)"/k", (int)"krffs", MS_RDONLY, 0);
+        rc = syscall5(SYS_MOUNT, (long)"/dev/disk0p1", (long)"/k", (long)"krffs", MS_RDONLY, 0);
         if (rc == 0) {
             fail("the kernel mounted a volume it should have refused");
         }
@@ -924,28 +873,28 @@ void probe_main(unsigned int *sp)
         int i;
         int refused = 0;
 
-        rc = sys5(SYS_MOUNT, (int)"/dev/disk0p1", (int)"/k", (int)"krffs", 0, 0);
+        rc = syscall5(SYS_MOUNT, (long)"/dev/disk0p1", (long)"/k", (long)"krffs", 0, 0);
         if (rc != 0) {
             fail_with("mounting the volume the device will fail", rc);
         }
         for (i = 0; i < 64 && !refused; i++) {
-            fd = sys3(SYS_OPEN, (int)"/k/failing.bin", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            fd = syscall3(SYS_OPEN, (long)"/k/failing.bin", O_WRONLY | O_CREAT | O_TRUNC, 0644);
             if (fd < 0) {
                 refused = 1;
                 break;
             }
-            if (sys3(SYS_WRITE, fd, (int)"failing\n", 8) != 8) {
+            if (syscall3(SYS_WRITE, fd, (long)"failing\n", 8) != 8) {
                 refused = 1;
             }
-            if (sys1(SYS_FSYNC, fd) != 0) {
+            if (syscall1(SYS_FSYNC, fd) != 0) {
                 refused = 1;
             }
-            sys1(SYS_CLOSE, fd);
+            syscall1(SYS_CLOSE, fd);
         }
         if (!refused) {
             fail("the device never failed a write");
         }
-        rc = sys2(SYS_UMOUNT2, (int)"/k", 0);
+        rc = syscall2(SYS_UMOUNT2, (long)"/k", 0);
         if (rc != 0) {
             fail_with("unmounting a volume the device took read-only", rc);
         }
@@ -960,58 +909,58 @@ void probe_main(unsigned int *sp)
         int fd;
         char got[16];
 
-        sys2(SYS_MKDIR, (int)"/k2", 0755);
-        sys2(SYS_MKDIR, (int)"/k3", 0755);
-        rc = sys5(SYS_MOUNT, (int)"/dev/disk0p1", (int)"/k", (int)"krffs", 0, 0);
+        syscall2(SYS_MKDIR, (long)"/k2", 0755);
+        syscall2(SYS_MKDIR, (long)"/k3", 0755);
+        rc = syscall5(SYS_MOUNT, (long)"/dev/disk0p1", (long)"/k", (long)"krffs", 0, 0);
         if (rc != 0) {
             fail_with("mounting the first volume", rc);
         }
-        rc = sys5(SYS_MOUNT, (int)"/dev/disk0p2", (int)"/k2", (int)"krffs", 0, 0);
+        rc = syscall5(SYS_MOUNT, (long)"/dev/disk0p2", (long)"/k2", (long)"krffs", 0, 0);
         if (rc != 0) {
             fail_with("mounting the second volume", rc);
         }
-        rc = sys5(SYS_MOUNT, (int)"/dev/disk0p3", (int)"/k3", (int)"krffs", 0, 0);
+        rc = syscall5(SYS_MOUNT, (long)"/dev/disk0p3", (long)"/k3", (long)"krffs", 0, 0);
         if (rc != 0) {
             fail_with("mounting the third volume", rc);
         }
-        fd = sys3(SYS_OPEN, (int)"/k3/third.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
-        if (fd < 0 || sys3(SYS_WRITE, fd, (int)"third\n", 6) != 6) {
+        fd = syscall3(SYS_OPEN, (long)"/k3/third.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd < 0 || syscall3(SYS_WRITE, fd, (long)"third\n", 6) != 6) {
             fail("writing the third volume");
         }
-        sys1(SYS_CLOSE, fd);
-        if (sys3(SYS_OPEN, (int)"/k/third.txt", O_RDONLY, 0) != -ENOENT ||
-            sys3(SYS_OPEN, (int)"/k2/third.txt", O_RDONLY, 0) != -ENOENT) {
+        syscall1(SYS_CLOSE, fd);
+        if (syscall3(SYS_OPEN, (long)"/k/third.txt", O_RDONLY, 0) != -ENOENT ||
+            syscall3(SYS_OPEN, (long)"/k2/third.txt", O_RDONLY, 0) != -ENOENT) {
             fail("a file of the third volume is in another");
         }
-        fd = sys3(SYS_OPEN, (int)"/k/first.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
-        if (fd < 0 || sys3(SYS_WRITE, fd, (int)"first\n", 6) != 6) {
+        fd = syscall3(SYS_OPEN, (long)"/k/first.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd < 0 || syscall3(SYS_WRITE, fd, (long)"first\n", 6) != 6) {
             fail("writing the first volume");
         }
-        sys1(SYS_CLOSE, fd);
-        fd = sys3(SYS_OPEN, (int)"/k2/second.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
-        if (fd < 0 || sys3(SYS_WRITE, fd, (int)"second\n", 7) != 7) {
+        syscall1(SYS_CLOSE, fd);
+        fd = syscall3(SYS_OPEN, (long)"/k2/second.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd < 0 || syscall3(SYS_WRITE, fd, (long)"second\n", 7) != 7) {
             fail("writing the second volume");
         }
-        sys1(SYS_CLOSE, fd);
-        if (sys3(SYS_OPEN, (int)"/k2/first.txt", O_RDONLY, 0) != -ENOENT) {
+        syscall1(SYS_CLOSE, fd);
+        if (syscall3(SYS_OPEN, (long)"/k2/first.txt", O_RDONLY, 0) != -ENOENT) {
             fail("a file of one volume is in the other");
         }
-        if (sys3(SYS_OPEN, (int)"/k/second.txt", O_RDONLY, 0) != -ENOENT) {
+        if (syscall3(SYS_OPEN, (long)"/k/second.txt", O_RDONLY, 0) != -ENOENT) {
             fail("a file of the other volume is in the one");
         }
         got[0] = 0;
-        fd = sys3(SYS_OPEN, (int)"/k2/second.txt", O_RDONLY, 0);
-        if (fd < 0 || sys3(SYS_READ, fd, (int)got, 7) != 7 || got[0] != 's') {
+        fd = syscall3(SYS_OPEN, (long)"/k2/second.txt", O_RDONLY, 0);
+        if (fd < 0 || syscall3(SYS_READ, fd, (long)got, 7) != 7 || got[0] != 's') {
             fail("reading back the second volume");
         }
-        sys1(SYS_CLOSE, fd);
-        if (sys2(SYS_UMOUNT2, (int)"/k", 0) != 0) {
+        syscall1(SYS_CLOSE, fd);
+        if (syscall2(SYS_UMOUNT2, (long)"/k", 0) != 0) {
             fail("unmounting the first volume");
         }
-        if (sys2(SYS_UMOUNT2, (int)"/k3", 0) != 0) {
+        if (syscall2(SYS_UMOUNT2, (long)"/k3", 0) != 0) {
             fail("unmounting the third volume");
         }
-        if (sys2(SYS_UMOUNT2, (int)"/k2", 0) != 0) {
+        if (syscall2(SYS_UMOUNT2, (long)"/k2", 0) != 0) {
             fail("unmounting the second volume");
         }
         puts("KRFFSPROBE OK (three)");
@@ -1026,33 +975,33 @@ void probe_main(unsigned int *sp)
         int tries = 0;
         int writes = 0;
 
-        rc = sys5(SYS_MOUNT, (int)"/dev/disk0p1", (int)"/k", (int)"krffs", 0, 0);
+        rc = syscall5(SYS_MOUNT, (long)"/dev/disk0p1", (long)"/k", (long)"krffs", 0, 0);
         if (rc != 0) {
             fail_with("mounting the stick's volume", rc);
         }
         {
-            int fd = sys3(SYS_OPEN, (int)"/k/hello.txt", O_RDONLY, 0);
+            int fd = syscall3(SYS_OPEN, (long)"/k/hello.txt", O_RDONLY, 0);
             char one[8];
 
             one[0] = 0;
-            if (fd < 0 || sys3(SYS_READ, fd, (int)one, (int)sizeof(one)) <= 0) {
+            if (fd < 0 || syscall3(SYS_READ, fd, (long)one, (int)sizeof(one)) <= 0) {
                 fail("reading the stick's volume before the pull");
             }
-            sys1(SYS_CLOSE, fd);
+            syscall1(SYS_CLOSE, fd);
         }
         for (;;) {
-            int fd = sys3(SYS_OPEN, (int)"/k/pulled.bin", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            int fd = syscall3(SYS_OPEN, (long)"/k/pulled.bin", O_WRONLY | O_CREAT | O_TRUNC, 0644);
             int wrote;
 
             if (fd < 0) {
                 break;
             }
-            wrote = sys3(SYS_WRITE, fd, (int)"pull\n", 5);
-            sys1(SYS_FSYNC, fd);
+            wrote = syscall3(SYS_WRITE, fd, (long)"pull\n", 5);
+            syscall1(SYS_FSYNC, fd);
             if (++writes == 1) {
                 puts("KRFFSPROBE HOLDING");
             }
-            sys1(SYS_CLOSE, fd);
+            syscall1(SYS_CLOSE, fd);
             if (wrote != 5) {
                 break;
             }
@@ -1066,13 +1015,13 @@ void probe_main(unsigned int *sp)
            mount a pointer into it. */
         puts("KRFFSPROBE GONE");
         for (tries = 0; tries < 2000000; tries++) {
-            int fd = sys3(SYS_OPEN, (int)"/dev/disk0p1", O_RDONLY, 0);
+            int fd = syscall3(SYS_OPEN, (long)"/dev/disk0p1", O_RDONLY, 0);
 
             if (fd >= 0) {
                 char one[512];
-                int got = sys3(SYS_READ, fd, (int)one, (int)sizeof(one));
+                int got = syscall3(SYS_READ, fd, (long)one, (int)sizeof(one));
 
-                sys1(SYS_CLOSE, fd);
+                syscall1(SYS_CLOSE, fd);
                 if (got == (int)sizeof(one)) {
                     break; /* a stick answers there again */
                 }
@@ -1081,19 +1030,19 @@ void probe_main(unsigned int *sp)
         {
             /* And the mount over the device that went answers as it did:
                nothing of the new stick reaches it. */
-            int fd = sys3(SYS_OPEN, (int)"/k/hello.txt", O_RDONLY, 0);
+            int fd = syscall3(SYS_OPEN, (long)"/k/hello.txt", O_RDONLY, 0);
             char one[8];
 
             one[0] = 0;
             if (fd >= 0) {
-                if (sys3(SYS_READ, fd, (int)one, (int)sizeof(one)) > 0) {
+                if (syscall3(SYS_READ, fd, (long)one, (int)sizeof(one)) > 0) {
                     fail("a mount whose stick went read the stick that replaced it");
                 }
-                sys1(SYS_CLOSE, fd);
+                syscall1(SYS_CLOSE, fd);
             }
         }
-        sys1(SYS_SYNC, 0);
-        rc = sys2(SYS_UMOUNT2, (int)"/k", 0);
+        syscall1(SYS_SYNC, 0);
+        rc = syscall2(SYS_UMOUNT2, (long)"/k", 0);
         if (rc != 0) {
             fail_with("unmounting a volume whose stick has gone", rc);
         }
@@ -1102,12 +1051,12 @@ void probe_main(unsigned int *sp)
     }
 
     if (streq(mode, "write") || streq(mode, "crash") || streq(mode, "writers")) {
-        rc = sys5(SYS_MOUNT, (int)"/dev/disk0p1", (int)"/k", (int)"krffs", 0, 0);
+        rc = syscall5(SYS_MOUNT, (long)"/dev/disk0p1", (long)"/k", (long)"krffs", 0, 0);
         if (rc != 0) {
             fail_with("mounting the volume for writing", rc);
         }
         if (streq(mode, "crash")) {
-            int fd = sys3(SYS_OPEN, (int)"/k/killed.bin", O_WRONLY | O_CREAT, 0644);
+            int fd = syscall3(SYS_OPEN, (long)"/k/killed.bin", O_WRONLY | O_CREAT, 0644);
 
             if (fd < 0) {
                 fail_with("creating the file to be killed", fd);
@@ -1118,16 +1067,16 @@ void probe_main(unsigned int *sp)
                round, so what the machine is killed in the middle of is a
                write and not a mount. */
             for (;;) {
-                sys3(SYS_LSEEK, fd, 0, 0);
+                syscall3(SYS_LSEEK, fd, 0, 0);
                 write_pattern(fd, 4096);
-                sys1(SYS_FSYNC, fd);
+                syscall1(SYS_FSYNC, fd);
                 puts("KRFFSPROBE WRITING");
             }
         }
         if (streq(mode, "writers")) {
-            int child = sys1(SYS_FORK, 0);
+            int child = syscall1(SYS_FORK, 0);
             const char *name = child == 0 ? "/k/child.bin" : "/k/parent.bin";
-            int fd = sys3(SYS_OPEN, (int)name, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            int fd = syscall3(SYS_OPEN, (long)name, O_WRONLY | O_CREAT | O_TRUNC, 0644);
             int i;
 
             if (fd < 0) {
@@ -1136,15 +1085,15 @@ void probe_main(unsigned int *sp)
             for (i = 0; i < 8; i++) {
                 write_pattern_from(fd, (unsigned)i * 2000, 2000);
             }
-            sys1(SYS_FSYNC, fd);
-            sys1(SYS_CLOSE, fd);
+            syscall1(SYS_FSYNC, fd);
+            syscall1(SYS_CLOSE, fd);
             if (child == 0) {
                 sys_exit(0);
             }
             {
                 int status = 0;
 
-                if (sys3(SYS_WAITPID, child, (int)&status, 0) != child) {
+                if (syscall3(SYS_WAITPID, child, (long)&status, 0) != child) {
                     fail("waiting for the other writer");
                 }
                 if (status != 0) {
@@ -1156,23 +1105,23 @@ void probe_main(unsigned int *sp)
         } else {
             write_rows();
         }
-        rc = sys2(SYS_UMOUNT2, (int)"/k", 0);
+        rc = syscall2(SYS_UMOUNT2, (long)"/k", 0);
         if (rc != 0) {
             fail_with("unmounting after writing", rc);
         }
-        sys3(SYS_WRITE, 1, (int)"KRFFSPROBE OK (", 15);
-        sys3(SYS_WRITE, 1, (int)mode, (int)strlen(mode));
+        syscall3(SYS_WRITE, 1, (long)"KRFFSPROBE OK (", 15);
+        syscall3(SYS_WRITE, 1, (long)mode, (int)strlen(mode));
         puts(")");
         sys_exit(0);
     }
 
     if (streq(mode, "readback")) {
-        rc = sys5(SYS_MOUNT, (int)"/dev/disk0p1", (int)"/k", (int)"krffs", MS_RDONLY, 0);
+        rc = syscall5(SYS_MOUNT, (long)"/dev/disk0p1", (long)"/k", (long)"krffs", MS_RDONLY, 0);
         if (rc != 0) {
             fail_with("mounting the volume to read it back", rc);
         }
         readback_rows();
-        rc = sys2(SYS_UMOUNT2, (int)"/k", 0);
+        rc = syscall2(SYS_UMOUNT2, (long)"/k", 0);
         if (rc != 0) {
             fail_with("unmounting after reading back", rc);
         }
@@ -1185,19 +1134,19 @@ void probe_main(unsigned int *sp)
     }
 
     listed_rows();
-    rc = sys5(SYS_MOUNT, (int)"/dev/disk0p1", (int)"/k", (int)"krffs", MS_RDONLY, 0);
+    rc = syscall5(SYS_MOUNT, (long)"/dev/disk0p1", (long)"/k", (long)"krffs", MS_RDONLY, 0);
     if (rc != 0) {
         fail_with("mounting the volume", rc);
     }
     read_rows();
     mounts_say_ro();
     refusal_rows();
-    rc = sys2(SYS_UMOUNT2, (int)"/k", 0);
+    rc = syscall2(SYS_UMOUNT2, (long)"/k", 0);
     if (rc != 0) {
         fail_with("unmounting the volume", rc);
     }
 
-    if (sys3(SYS_OPEN, (int)"/k/pattern.bin", O_RDONLY, 0) >= 0) {
+    if (syscall3(SYS_OPEN, (long)"/k/pattern.bin", O_RDONLY, 0) >= 0) {
         fail("a file of the volume is still there after the unmount");
     }
     puts("KRFFSPROBE OK (read)");

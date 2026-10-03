@@ -10,17 +10,12 @@
  *   3. NO LEAK: 64 fork/exit cycles do not exhaust frames: each COW share is
  *      reference-counted and freed when the last owner exits.
  *
- * Prints "COWPROBE OK" on success. Freestanding; direct int 0x80 syscalls.
+ * Prints "COWPROBE OK" on success. Freestanding; direct system calls (probe.h).
  */
 
-typedef unsigned int size_t;
+#include "probe.h"
 
 #define STDOUT_FILENO 1
-
-#define SYS_EXIT    1
-#define SYS_FORK    2
-#define SYS_WRITE   4
-#define SYS_WAITPID 7
 
 #define WIFEXITED(s)   (((s) & 0x7F) == 0)
 #define WEXITSTATUS(s) (((s) >> 8) & 0xFF)
@@ -31,35 +26,23 @@ static volatile unsigned shared_val;
 
 static int sys_write(int fd, const void *buf, size_t count)
 {
-    int result;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(result)
-                         : "0"(SYS_WRITE), "b"(fd), "c"(buf), "d"(count)
-                         : "memory");
-    return result;
+    return syscall3(SYS_WRITE, (long)fd, (long)buf, (long)count);
 }
 
 static void sys_exit(int status)
 {
-    __asm__ __volatile__("int $0x80" : : "a"(SYS_EXIT), "b"(status));
+    syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
 static int sys_fork(void)
 {
-    int result;
-    __asm__ __volatile__("int $0x80" : "=a"(result) : "0"(SYS_FORK));
-    return result;
+    return syscall0(SYS_FORK);
 }
 
 static int sys_waitpid(int pid, int *status, int options)
 {
-    int result;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(result)
-                         : "0"(SYS_WAITPID), "b"(pid), "c"(status), "d"(options)
-                         : "memory");
-    return result;
+    return syscall3(SYS_WAITPID, (long)pid, (long)status, (long)options);
 }
 
 static size_t strlen(const char *s)
@@ -84,7 +67,7 @@ static void fail(const char *why)
     sys_exit(1);
 }
 
-void _start(void)
+PROBE_START void _start(void)
 {
     int pid, status, i;
 

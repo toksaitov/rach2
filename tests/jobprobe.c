@@ -1,7 +1,7 @@
 /**
  * Exercises the session and process-group identity model from user space.
  *
- * The probe establishes, through raw `int 0x80`, that:
+ * The probe establishes, through raw system calls, that:
  *   * a process is its own session and group leader by default (getpgrp ==
  *     getsid == getpid for the init process);
  *   * fork inherits the parent's session and group;
@@ -15,7 +15,8 @@
  *
  * Children report each check via exit status; the parent decodes WEXITSTATUS,
  * and a child that a signal ended fails its row, whatever its status reads.
- * Prints "JOBPROBE OK" or "JOBPROBE FAIL". Freestanding; direct int 0x80.
+ * Prints "JOBPROBE OK" or "JOBPROBE FAIL". Freestanding; direct system calls
+ * (probe.h).
  *
  * Needs: a shell with job control, which makes each command its own
  * process group with the terminal's foreground group set. A run from a
@@ -25,23 +26,7 @@
  * leader all read the arrangement rather than the kernel.
  */
 
-typedef unsigned int size_t;
-
-#define SYS_EXIT      1
-#define SYS_FORK      2
-#define SYS_READ      3
-#define SYS_WRITE     4
-#define SYS_WAITPID   7
-#define SYS_GETPID    20
-#define SYS_KILL      37
-#define SYS_PAUSE     29
-#define SYS_SETPGID   57
-#define SYS_NANOSLEEP 162
-#define SYS_GETPGRP   65
-#define SYS_SETSID    66
-#define SYS_GETPGID   132
-#define SYS_GETSID    147
-#define SYS_IOCTL     54
+#include "probe.h"
 
 #define SIGKILL 9
 #define SIGTERM 15
@@ -69,20 +54,6 @@ typedef unsigned int size_t;
 #define ESRCH  3
 #define EINVAL 22
 #define ENOTTY 25
-
-static int syscall1(int n, int a)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a) : "memory");
-    return r;
-}
-
-static int syscall3(int n, int a, int b, int c)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
-}
 
 static void sys_exit(int status)
 {
@@ -120,7 +91,7 @@ static int fork(void)
 }
 static int waitpid(int pid, int *status, int options)
 {
-    return syscall3(SYS_WAITPID, pid, (int)(size_t)status, options);
+    return syscall3(SYS_WAITPID, pid, (long)status, options);
 }
 /* Long enough for a child that does nothing but exit to have done so. */
 struct timespec_probe {
@@ -134,12 +105,12 @@ static void sleep_ms(long ms)
 
     req.tv_sec = ms / 1000L;
     req.tv_nsec = (ms % 1000L) * 1000000L;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(SYS_NANOSLEEP), "b"(&req), "c"(0) : "memory");
+    r = syscall2(SYS_NANOSLEEP, (long)(&req), (long)0);
     (void)r;
 }
 static int ioctl(int fd, int req, void *arg)
 {
-    return syscall3(SYS_IOCTL, fd, req, (int)(size_t)arg);
+    return syscall3(SYS_IOCTL, fd, req, (long)arg);
 }
 static int kill(int pid, int sig)
 {
@@ -151,7 +122,7 @@ static int pause(void)
 }
 static int read(int fd, void *buf, int n)
 {
-    return syscall3(SYS_READ, fd, (int)(size_t)buf, n);
+    return syscall3(SYS_READ, fd, (long)buf, n);
 }
 
 static size_t strlen(const char *s)
@@ -165,8 +136,8 @@ static size_t strlen(const char *s)
 
 static void puts(const char *s)
 {
-    syscall3(SYS_WRITE, 1, (int)(size_t)s, (int)strlen(s));
-    syscall3(SYS_WRITE, 1, (int)(size_t)"\n", 1);
+    syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
+    syscall3(SYS_WRITE, 1, (long)"\n", 1);
 }
 
 static int fails = 0;
@@ -175,7 +146,7 @@ static void check(int cond, const char *msg)
 {
     if (!cond) {
         fails++;
-        syscall3(SYS_WRITE, 1, (int)(size_t)"  FAIL: ", 8);
+        syscall3(SYS_WRITE, 1, (long)"  FAIL: ", 8);
         puts(msg);
     }
 }
@@ -253,7 +224,7 @@ static int run_child(int (*body)(void))
     return (status >> 8) & 0xff; /* WEXITSTATUS */
 }
 
-void _start(void)
+PROBE_START void _start(void)
 {
     int me = getpid();
 

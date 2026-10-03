@@ -70,26 +70,12 @@
  * checks WIFEXITED before WEXITSTATUS: a signal death has the signal in
  * the low bits and would otherwise decode as exit 0. Prints "STICKYPROBE OK"
  * and exits 0 only when every case passed; any failure names the step and
- * the answer it got, and exits 1. Freestanding; direct int 0x80.
+ * the answer it got, and exits 1. Freestanding; direct system calls (probe.h).
  */
 
-typedef unsigned int u32;
+#include "probe.h"
 
-#define SYS_EXIT        1
-#define SYS_FORK        2
-#define SYS_WRITE       4
-#define SYS_CLOSE       6
-#define SYS_WAITPID     7
-#define SYS_CREAT       8
-#define SYS_UNLINK      10
-#define SYS_CHMOD       15
-#define SYS_RENAME      38
-#define SYS_MKDIR       39
-#define SYS_RMDIR       40
-#define SYS_STAT64      195
-#define SYS_SETRESUID32 208
-#define SYS_SETRESGID32 210
-#define SYS_CHOWN32     212
+typedef unsigned int u32;
 
 #define STDOUT 1
 
@@ -147,20 +133,6 @@ typedef unsigned int u32;
 /* The victim behind a directory that grants nobody but root write. */
 #define LOCK_VICTIM "/st_locked/victim"
 
-static int syscall1(int num, int a)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "a"(num), "b"(a) : "memory");
-    return r;
-}
-
-static int syscall3(int num, int a, int b, int c)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "a"(num), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
-}
-
 static u32 slen(const char *s)
 {
     u32 n = 0;
@@ -173,7 +145,7 @@ static u32 slen(const char *s)
 
 static void puts_(const char *s)
 {
-    syscall3(SYS_WRITE, STDOUT, (int)s, (int)slen(s));
+    syscall3(SYS_WRITE, STDOUT, (long)s, (int)slen(s));
 }
 
 /* Print a signed decimal, so a failing line has the answer it got. */
@@ -234,7 +206,7 @@ static char statbuf[144];
 
 static int stat_rc(const char *path)
 {
-    return syscall3(SYS_STAT64, (int)path, (int)statbuf, 0);
+    return syscall3(SYS_STAT, (long)path, (long)statbuf, 0);
 }
 
 /* The name must still be there: the check a refused call's errno cannot
@@ -277,33 +249,33 @@ static void want_mode(const char *step, const char *path, u32 mode)
 /* Create `path` with `mode`, pinned against the boot shell's umask. */
 static void mint_file(const char *path, u32 mode)
 {
-    int fd = syscall3(SYS_CREAT, (int)path, (int)mode, 0);
+    int fd = syscall3(SYS_CREAT, (long)path, (int)mode, 0);
 
     if (fd < 0) {
         fail("mint a fixture file", fd);
     }
     syscall3(SYS_CLOSE, fd, 0, 0);
-    want_eq("chmod a fixture file", syscall3(SYS_CHMOD, (int)path, (int)mode, 0), 0);
+    want_eq("chmod a fixture file", syscall3(SYS_CHMOD, (long)path, (int)mode, 0), 0);
 }
 
 static void mint_dir(const char *path, u32 mode)
 {
-    want_eq("mint a fixture directory", syscall3(SYS_MKDIR, (int)path, (int)mode, 0), 0);
-    want_eq("chmod a fixture directory", syscall3(SYS_CHMOD, (int)path, (int)mode, 0), 0);
+    want_eq("mint a fixture directory", syscall3(SYS_MKDIR, (long)path, (int)mode, 0), 0);
+    want_eq("chmod a fixture directory", syscall3(SYS_CHMOD, (long)path, (int)mode, 0), 0);
 }
 
 /* Hand a fixture to `uid`, which only the root parent may do. */
 static void give_to(const char *path, int uid)
 {
-    want_eq("chown a fixture", syscall3(SYS_CHOWN32, (int)path, uid, uid), 0);
+    want_eq("chown a fixture", syscall3(SYS_CHOWN, (long)path, uid, uid), 0);
 }
 
 /* Become `uid` outright, with no saved id to swing back on. The gids go first:
  * once the effective uid is not 0 the gid calls are refused. */
 static void drop_to(int uid)
 {
-    want_eq("drop the gids", syscall3(SYS_SETRESGID32, uid, uid, uid), 0);
-    want_eq("drop the uids", syscall3(SYS_SETRESUID32, uid, uid, uid), 0);
+    want_eq("drop the gids", syscall3(SYS_SETRESGID, uid, uid, uid), 0);
+    want_eq("drop the uids", syscall3(SYS_SETRESUID, uid, uid, uid), 0);
 }
 
 /* Create a file of the caller's own at `path` and take it away again. In a
@@ -312,13 +284,13 @@ static void drop_to(int uid)
  * entry-owner clause lets a caller remove what it owns. */
 static void own_round_trip(const char *step, const char *path)
 {
-    int fd = syscall3(SYS_CREAT, (int)path, 0644, 0);
+    int fd = syscall3(SYS_CREAT, (long)path, 0644, 0);
 
     if (fd < 0) {
         fail(step, fd);
     }
     syscall3(SYS_CLOSE, fd, 0, 0);
-    want_eq(step, syscall3(SYS_UNLINK, (int)path, 0, 0), 0);
+    want_eq(step, syscall3(SYS_UNLINK, (long)path, 0, 0), 0);
 }
 
 /* Uid 1000: the four denials in the sticky directory, the same four calls
@@ -329,40 +301,40 @@ static void user_child(void)
     drop_to(1000);
 
     /* The pair: one file, one mode, one owner, two directories, one bit. */
-    want_eq("sticky: unlink root's file", syscall3(SYS_UNLINK, (int)S_VICTIM, 0, 0), -EPERM);
-    want_eq("plain: unlink root's file", syscall3(SYS_UNLINK, (int)P_VICTIM, 0, 0), 0);
+    want_eq("sticky: unlink root's file", syscall3(SYS_UNLINK, (long)S_VICTIM, 0, 0), -EPERM);
+    want_eq("plain: unlink root's file", syscall3(SYS_UNLINK, (long)P_VICTIM, 0, 0), 0);
 
     /* Renaming an entry within the directory takes it out of that directory,
      * whatever it is called. */
-    want_eq("sticky: rename root's file", syscall3(SYS_RENAME, (int)S_MOVER, (int)S_MOVED, 0),
+    want_eq("sticky: rename root's file", syscall3(SYS_RENAME, (long)S_MOVER, (long)S_MOVED, 0),
             -EPERM);
-    want_eq("plain: rename root's file", syscall3(SYS_RENAME, (int)P_MOVER, (int)P_MOVED, 0), 0);
+    want_eq("plain: rename root's file", syscall3(SYS_RENAME, (long)P_MOVER, (long)P_MOVED, 0), 0);
 
     /* Both directories are empty, so a permitted rmdir has nothing else to
      * refuse it. */
-    want_eq("sticky: rmdir root's directory", syscall3(SYS_RMDIR, (int)S_RMME, 0, 0), -EPERM);
-    want_eq("plain: rmdir root's directory", syscall3(SYS_RMDIR, (int)P_RMME, 0, 0), 0);
+    want_eq("sticky: rmdir root's directory", syscall3(SYS_RMDIR, (long)S_RMME, 0, 0), -EPERM);
+    want_eq("plain: rmdir root's directory", syscall3(SYS_RMDIR, (long)P_RMME, 0, 0), 0);
 
     /* The entry-owner clause, and with it the source end of rename: this
      * caller's own entry leaves the sticky directory both ways. */
-    want_eq("sticky: unlink its own file", syscall3(SYS_UNLINK, (int)S_MINE, 0, 0), 0);
-    want_eq("sticky: rename its own file", syscall3(SYS_RENAME, (int)S_MYRN, (int)S_MYRN2, 0), 0);
+    want_eq("sticky: unlink its own file", syscall3(SYS_UNLINK, (long)S_MINE, 0, 0), 0);
+    want_eq("sticky: rename its own file", syscall3(SYS_RENAME, (long)S_MYRN, (long)S_MYRN2, 0), 0);
 
     /* The destination end. The source is this caller's own and the line above
      * has just shown the source end permits it, so the refusal can only be the
      * root-owned entry the rename would replace. */
     want_eq("sticky: rename its own file over root's",
-            syscall3(SYS_RENAME, (int)S_MYSRC, (int)S_TARGET, 0), -EPERM);
+            syscall3(SYS_RENAME, (long)S_MYSRC, (long)S_TARGET, 0), -EPERM);
     want_eq("plain: rename its own file over root's",
-            syscall3(SYS_RENAME, (int)P_MYSRC, (int)P_TARGET, 0), 0);
+            syscall3(SYS_RENAME, (long)P_MYSRC, (long)P_TARGET, 0), 0);
 
     /* The directory-owner clause: the same caller, a root-owned entry it does
      * not own, and a sticky directory it does. */
-    want_eq("owned: unlink root's file", syscall3(SYS_UNLINK, (int)OWN_VICTIM, 0, 0), 0);
+    want_eq("owned: unlink root's file", syscall3(SYS_UNLINK, (long)OWN_VICTIM, 0, 0), 0);
 
     /* The order of the two checks: no write permission on the directory is
      * -EACCES, and the sticky rule never gets to speak. */
-    want_eq("locked: unlink root's file", syscall3(SYS_UNLINK, (int)LOCK_VICTIM, 0, 0), -EACCES);
+    want_eq("locked: unlink root's file", syscall3(SYS_UNLINK, (long)LOCK_VICTIM, 0, 0), -EACCES);
 
     syscall1(SYS_EXIT, 0);
 }
@@ -376,9 +348,9 @@ static void other_child(void)
     own_round_trip("sticky: a third uid's own file", S_OTHOWN);
     own_round_trip("owned: a third uid's own file", OWN_OTHOWN);
 
-    want_eq("sticky: a third uid unlinks root's file", syscall3(SYS_UNLINK, (int)S_OTHER, 0, 0),
+    want_eq("sticky: a third uid unlinks root's file", syscall3(SYS_UNLINK, (long)S_OTHER, 0, 0),
             -EPERM);
-    want_eq("owned: a third uid unlinks root's file", syscall3(SYS_UNLINK, (int)OWN_OTHER, 0, 0),
+    want_eq("owned: a third uid unlinks root's file", syscall3(SYS_UNLINK, (long)OWN_OTHER, 0, 0),
             -EPERM);
 
     syscall1(SYS_EXIT, 0);
@@ -402,7 +374,7 @@ static void run_child(void (*body)(void), const char *what)
          * ever grew a path out the bottom would fail, not pass. */
         syscall1(SYS_EXIT, 127);
     }
-    reaped = syscall3(SYS_WAITPID, pid, (int)&status, 0);
+    reaped = syscall3(SYS_WAITPID, pid, (long)&status, 0);
     if (reaped != pid) {
         fail(what, reaped);
     }
@@ -419,7 +391,7 @@ static void run_child(void (*body)(void), const char *what)
     }
 }
 
-void _start(void)
+PROBE_START void _start(void)
 {
     /* What the manifest staged, before anything else is asked: the whole point
      * of staging these two is that `dir 1777` must store the bit the shipped
@@ -500,24 +472,24 @@ void _start(void)
     /* The privileged clause, and the way the image is handed back as the
      * manifest staged it: root takes out of the sticky directory every entry
      * the two children were refused. */
-    want_eq("root removes the victim", syscall3(SYS_UNLINK, (int)S_VICTIM, 0, 0), 0);
-    want_eq("root removes the mover", syscall3(SYS_UNLINK, (int)S_MOVER, 0, 0), 0);
-    want_eq("root removes the third uid's victim", syscall3(SYS_UNLINK, (int)S_OTHER, 0, 0), 0);
-    want_eq("root removes the rmdir target", syscall3(SYS_RMDIR, (int)S_RMME, 0, 0), 0);
-    want_eq("root removes the renamed file", syscall3(SYS_UNLINK, (int)S_MYRN2, 0, 0), 0);
-    want_eq("root removes the destination case's source", syscall3(SYS_UNLINK, (int)S_MYSRC, 0, 0),
+    want_eq("root removes the victim", syscall3(SYS_UNLINK, (long)S_VICTIM, 0, 0), 0);
+    want_eq("root removes the mover", syscall3(SYS_UNLINK, (long)S_MOVER, 0, 0), 0);
+    want_eq("root removes the third uid's victim", syscall3(SYS_UNLINK, (long)S_OTHER, 0, 0), 0);
+    want_eq("root removes the rmdir target", syscall3(SYS_RMDIR, (long)S_RMME, 0, 0), 0);
+    want_eq("root removes the renamed file", syscall3(SYS_UNLINK, (long)S_MYRN2, 0, 0), 0);
+    want_eq("root removes the destination case's source", syscall3(SYS_UNLINK, (long)S_MYSRC, 0, 0),
             0);
-    want_eq("root removes the destination case's victim", syscall3(SYS_UNLINK, (int)S_TARGET, 0, 0),
-            0);
-    want_eq("root removes the plain rename's destination", syscall3(SYS_UNLINK, (int)P_MOVED, 0, 0),
-            0);
+    want_eq("root removes the destination case's victim",
+            syscall3(SYS_UNLINK, (long)S_TARGET, 0, 0), 0);
+    want_eq("root removes the plain rename's destination",
+            syscall3(SYS_UNLINK, (long)P_MOVED, 0, 0), 0);
     want_eq("root removes the plain destination case's victim",
-            syscall3(SYS_UNLINK, (int)P_TARGET, 0, 0), 0);
-    want_eq("root removes the third uid's owned victim", syscall3(SYS_UNLINK, (int)OWN_OTHER, 0, 0),
-            0);
-    want_eq("root removes the owned directory", syscall3(SYS_RMDIR, (int)OWNED, 0, 0), 0);
-    want_eq("root removes the locked victim", syscall3(SYS_UNLINK, (int)LOCK_VICTIM, 0, 0), 0);
-    want_eq("root removes the locked directory", syscall3(SYS_RMDIR, (int)LOCKED, 0, 0), 0);
+            syscall3(SYS_UNLINK, (long)P_TARGET, 0, 0), 0);
+    want_eq("root removes the third uid's owned victim",
+            syscall3(SYS_UNLINK, (long)OWN_OTHER, 0, 0), 0);
+    want_eq("root removes the owned directory", syscall3(SYS_RMDIR, (long)OWNED, 0, 0), 0);
+    want_eq("root removes the locked victim", syscall3(SYS_UNLINK, (long)LOCK_VICTIM, 0, 0), 0);
+    want_eq("root removes the locked directory", syscall3(SYS_RMDIR, (long)LOCKED, 0, 0), 0);
 
     puts_("STICKYPROBE OK\n");
     syscall1(SYS_EXIT, 0);

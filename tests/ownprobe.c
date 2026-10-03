@@ -11,48 +11,19 @@
  * for the probes that follow.
  *
  * Prints "OWNPROBE OK" and exits 0 on success; prints the failing step and
- * exits 1 otherwise. Freestanding; direct int 0x80.
+ * exits 1 otherwise. Freestanding; direct system calls (probe.h).
  */
+
+#include "probe.h"
 
 typedef unsigned int u32;
 
-#define SYS_EXIT        1
-#define SYS_FORK        2
-#define SYS_WRITE       4
-#define SYS_OPEN        5
-#define SYS_CLOSE       6
-#define SYS_WAITPID     7
-#define SYS_CREAT       8
-#define SYS_UNLINK      10
-#define SYS_CHMOD       15
-#define SYS_KILL        37
-#define SYS_MKDIR       39
-#define SYS_RMDIR       40
-#define SYS_UMASK       60
-#define SYS_FCHMOD      94
-#define SYS_GETPPID     64
-#define SYS_SETSID      66
-#define SIGCONT         18
-#define SIGTERM         15
-#define SYS_GETPID      20
-#define SYS_STAT64      195
-#define SYS_SETREUID32  203
-#define SYS_SETGROUPS32 206
-#define SYS_FCHOWN32    207
-#define SYS_SETRESUID32 208
-#define SYS_SETRESGID32 210
-#define SYS_CHOWN32     212
+#define SIGCONT 18
+#define SIGTERM 15
 
 #define STDOUT 1
 #define EPERM  1
 #define KEEP   0xFFFFFFFFu
-
-static int syscall3(int num, int a, int b, int c)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "a"(num), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
-}
 
 static u32 slen(const char *s)
 {
@@ -66,7 +37,7 @@ static u32 slen(const char *s)
 
 static void puts_(const char *s)
 {
-    syscall3(SYS_WRITE, STDOUT, (int)s, (int)slen(s));
+    syscall3(SYS_WRITE, STDOUT, (long)s, (int)slen(s));
 }
 
 static void fail(const char *step)
@@ -83,7 +54,7 @@ static u32 stat_field(const char *path, int offset)
 {
     static char st[144];
 
-    if (syscall3(SYS_STAT64, (int)path, (int)st, 0) != 0) {
+    if (syscall3(SYS_STAT, (long)path, (long)st, 0) != 0) {
         fail("stat");
     }
     return *(u32 *)(st + offset);
@@ -102,7 +73,7 @@ static void child_main(void)
     /* Creation applies the mask and stamps the creator: umask 027 turns 0666
      * into 0640 and 0777 into 0750, owned by the effective ids. */
     syscall3(SYS_UMASK, 027, 0, 0);
-    fd = syscall3(SYS_CREAT, (int)"/own.txt", 0666, 0);
+    fd = syscall3(SYS_CREAT, (long)"/own.txt", 0666, 0);
     if (fd < 0) {
         fail("creat");
     }
@@ -112,52 +83,52 @@ static void child_main(void)
     if (stat_field("/own.txt", ST_UID) != 0 || stat_field("/own.txt", ST_GID) != 0) {
         fail("creation owner not root");
     }
-    if (syscall3(SYS_MKDIR, (int)"/own.d", 0777, 0) != 0 ||
+    if (syscall3(SYS_MKDIR, (long)"/own.d", 0777, 0) != 0 ||
         (stat_field("/own.d", ST_MODE) & 0777) != 0750) {
         fail("umask on mkdir");
     }
 
     /* chown: a uid change is root's; the stored ids come back from stat. */
-    if (syscall3(SYS_CHOWN32, (int)"/own.txt", 1000, 1000) != 0 ||
+    if (syscall3(SYS_CHOWN, (long)"/own.txt", 1000, 1000) != 0 ||
         stat_field("/own.txt", ST_UID) != 1000 || stat_field("/own.txt", ST_GID) != 1000) {
         fail("chown as root");
     }
-    if (syscall3(SYS_FCHOWN32, fd, 1000, 2000) != 0 || stat_field("/own.txt", ST_GID) != 2000) {
+    if (syscall3(SYS_FCHOWN, fd, 1000, 2000) != 0 || stat_field("/own.txt", ST_GID) != 2000) {
         fail("fchown as root");
     }
-    if (syscall3(SYS_CHOWN32, (int)"/own.d", 1000, 1000) != 0) {
+    if (syscall3(SYS_CHOWN, (long)"/own.d", 1000, 1000) != 0) {
         fail("chown dir as root");
     }
 
     /* Creation stamps the EFFECTIVE id: with ruid 0 and euid 1000, the new
      * file belongs to 1000, still under the 027 mask. chmod then sets 0666
      * exactly: the mask applies at creation, never to chmod. */
-    if (syscall3(SYS_SETREUID32, (int)KEEP, 1000, 0) != 0) {
+    if (syscall3(SYS_SETREUID, (int)KEEP, 1000, 0) != 0) {
         fail("excursion out");
     }
-    if (syscall3(SYS_CREAT, (int)"/own.d/e.txt", 0666, 0) < 0 ||
+    if (syscall3(SYS_CREAT, (long)"/own.d/e.txt", 0666, 0) < 0 ||
         stat_field("/own.d/e.txt", ST_UID) != 1000 ||
         (stat_field("/own.d/e.txt", ST_MODE) & 0777) != 0640) {
         fail("creation stamps euid under umask");
     }
-    if (syscall3(SYS_CHMOD, (int)"/own.d/e.txt", 0666, 0) != 0 ||
+    if (syscall3(SYS_CHMOD, (long)"/own.d/e.txt", 0666, 0) != 0 ||
         (stat_field("/own.d/e.txt", ST_MODE) & 0777) != 0666) {
         fail("chmod is not masked");
     }
-    if (syscall3(SYS_SETREUID32, (int)KEEP, 0, 0) != 0) {
+    if (syscall3(SYS_SETREUID, (int)KEEP, 0, 0) != 0) {
         fail("excursion back");
     }
 
     /* Drop to 1000 with supplementary group 3000 for the rules below. */
     groups[0] = 3000;
-    if (syscall3(SYS_SETGROUPS32, 1, (int)groups, 0) != 0 ||
-        syscall3(SYS_SETRESGID32, 1000, 1000, 1000) != 0 ||
-        syscall3(SYS_SETRESUID32, 1000, 1000, 1000) != 0) {
+    if (syscall3(SYS_SETGROUPS, 1, (long)groups, 0) != 0 ||
+        syscall3(SYS_SETRESGID, 1000, 1000, 1000) != 0 ||
+        syscall3(SYS_SETRESUID, 1000, 1000, 1000) != 0) {
         fail("drop to 1000");
     }
 
     /* chmod: the owner may; fchmod agrees; a uid change stays root's. */
-    if (syscall3(SYS_CHMOD, (int)"/own.txt", 0600, 0) != 0 ||
+    if (syscall3(SYS_CHMOD, (long)"/own.txt", 0600, 0) != 0 ||
         (stat_field("/own.txt", ST_MODE) & 0777) != 0600) {
         fail("chmod as owner");
     }
@@ -165,24 +136,24 @@ static void child_main(void)
         (stat_field("/own.txt", ST_MODE) & 0777) != 0640) {
         fail("fchmod as owner");
     }
-    if (syscall3(SYS_CHOWN32, (int)"/own.txt", 0, KEEP) != -EPERM) {
+    if (syscall3(SYS_CHOWN, (long)"/own.txt", 0, KEEP) != -EPERM) {
         fail("chown uid as non-root not EPERM");
     }
     /* chgrp: the owner, to an own group only. */
-    if (syscall3(SYS_CHOWN32, (int)"/own.txt", KEEP, 3000) != 0 ||
+    if (syscall3(SYS_CHOWN, (long)"/own.txt", KEEP, 3000) != 0 ||
         stat_field("/own.txt", ST_GID) != 3000) {
         fail("owner chgrp to own group");
     }
-    if (syscall3(SYS_CHOWN32, (int)"/own.txt", KEEP, 4000) != -EPERM) {
+    if (syscall3(SYS_CHOWN, (long)"/own.txt", KEEP, 4000) != -EPERM) {
         fail("owner chgrp to foreign group not EPERM");
     }
     /* A non-owner may not chmod: /hello.txt is root's and we are 1000. */
-    if (syscall3(SYS_CHMOD, (int)"/hello.txt", 0777, 0) != -EPERM) {
+    if (syscall3(SYS_CHMOD, (long)"/hello.txt", 0777, 0) != -EPERM) {
         fail("chmod as non-owner not EPERM");
     }
     /* The fd variants agree for a directory descriptor: /own.d is ours. */
     {
-        int dfd = syscall3(SYS_OPEN, (int)"/own.d", 0, 0);
+        int dfd = syscall3(SYS_OPEN, (long)"/own.d", 0, 0);
         if (dfd < 0) {
             fail("open own dir");
         }
@@ -232,7 +203,7 @@ static void child_main(void)
     syscall3(SYS_EXIT, 0, 0, 0);
 }
 
-void _start(void)
+PROBE_START void _start(void)
 {
     int pid, status;
 
@@ -244,7 +215,7 @@ void _start(void)
     if (pid == 0) {
         child_main();
     }
-    if (syscall3(SYS_WAITPID, pid, (int)&status, 0) != pid || status != 0) {
+    if (syscall3(SYS_WAITPID, pid, (long)&status, 0) != pid || status != 0) {
         fail("child walk");
     }
 
@@ -254,7 +225,7 @@ void _start(void)
      * parent keeps 1000 there while staying root, and the child probes with
      * signal 0, not a real one, which would land on this probe's own
      * init and could end the run. */
-    if (syscall3(SYS_SETRESUID32, 0, 0, 1000) != 0) {
+    if (syscall3(SYS_SETRESUID, 0, 0, 1000) != 0) {
         fail("park 1000 in the saved slot");
     }
     pid = syscall3(SYS_FORK, 0, 0, 0);
@@ -264,7 +235,7 @@ void _start(void)
     if (pid == 0) {
         int ppid = syscall3(SYS_GETPPID, 0, 0, 0);
 
-        if (syscall3(SYS_SETRESUID32, 1000, 1000, 1000) != 0) {
+        if (syscall3(SYS_SETRESUID, 1000, 1000, 1000) != 0) {
             syscall3(SYS_EXIT, 21, 0, 0);
         }
         if (syscall3(SYS_KILL, ppid, 0, 0) != 0) {
@@ -272,18 +243,18 @@ void _start(void)
         }
         syscall3(SYS_EXIT, 0, 0, 0);
     }
-    if (syscall3(SYS_WAITPID, pid, (int)&status, 0) != pid || status != 0) {
+    if (syscall3(SYS_WAITPID, pid, (long)&status, 0) != pid || status != 0) {
         fail("the saved-uid child");
     }
-    if (syscall3(SYS_SETRESUID32, 0, 0, 0) != 0) {
+    if (syscall3(SYS_SETRESUID, 0, 0, 0) != 0) {
         fail("restore the saved uid");
     }
 
     /* The parent is still root: remove the probe's droppings and restore the
      * mask, so the shared boot stays clean for the next probe. */
-    if (syscall3(SYS_UNLINK, (int)"/own.txt", 0, 0) != 0 ||
-        syscall3(SYS_UNLINK, (int)"/own.d/e.txt", 0, 0) != 0 ||
-        syscall3(SYS_RMDIR, (int)"/own.d", 0, 0) != 0) {
+    if (syscall3(SYS_UNLINK, (long)"/own.txt", 0, 0) != 0 ||
+        syscall3(SYS_UNLINK, (long)"/own.d/e.txt", 0, 0) != 0 ||
+        syscall3(SYS_RMDIR, (long)"/own.d", 0, 0) != 0) {
         fail("cleanup");
     }
     syscall3(SYS_UMASK, 022, 0, 0);

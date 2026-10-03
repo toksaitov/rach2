@@ -28,26 +28,11 @@
  * held by two slow readers, and a third reader that must wait for one and
  * succeed. Each says what it needs of the machine at its definition.
  *
- * Prints "AHCIPROBE OK" or "AHCIPROBE FAIL: reason". Freestanding; int 0x80.
+ * Prints "AHCIPROBE OK" or "AHCIPROBE FAIL: reason". Freestanding; direct
+ * system calls (probe.h).
  */
 
-typedef unsigned int size_t;
-
-#define SYS_EXIT          1
-#define SYS_FORK          2
-#define SYS_READ          3
-#define SYS_WRITE         4
-#define SYS_OPEN          5
-#define SYS_CLOSE         6
-#define SYS_WAITPID       7
-#define SYS_EXECVE        11
-#define SYS_PIPE          42
-#define SYS_SYNC          36
-#define SYS_MKDIR         39
-#define SYS_MOUNT         21
-#define SYS_UMOUNT2       52
-#define SYS_CLOCK_GETTIME 265
-#define SYS_NANOSLEEP     162
+#include "probe.h"
 
 #define O_RDONLY        0
 #define O_WRONLY        1
@@ -60,38 +45,6 @@ typedef unsigned int size_t;
 #define CHUNK      (32 * 1024)
 #define WNOHANG    1
 
-static int sys1(int n, int a)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a) : "memory");
-    return r;
-}
-
-static int sys2(int n, int a, int b)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b) : "memory");
-    return r;
-}
-
-static int sys3(int n, int a, int b, int c)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
-}
-
-/** A system call with five arguments. */
-static int sys5(int n, int a, int b, int c, int d, int e)
-{
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(n), "b"(a), "c"(b), "d"(c), "S"(d), "D"(e)
-                         : "memory");
-    return r;
-}
-
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -103,8 +56,8 @@ static size_t strlen(const char *s)
 
 static void puts(const char *s)
 {
-    sys3(SYS_WRITE, 1, (int)(size_t)s, (int)strlen(s));
-    sys3(SYS_WRITE, 1, (int)(size_t)"\n", 1);
+    syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
+    syscall3(SYS_WRITE, 1, (long)"\n", 1);
 }
 
 static void putnum(int v)
@@ -113,7 +66,7 @@ static void putnum(int v)
     int n = 0, i;
 
     if (v < 0) {
-        sys3(SYS_WRITE, 1, (int)(size_t)"-", 1);
+        syscall3(SYS_WRITE, 1, (long)"-", 1);
         v = -v;
     }
     do {
@@ -121,15 +74,15 @@ static void putnum(int v)
         v /= 10;
     } while (v > 0);
     for (i = n - 1; i >= 0; i--) {
-        sys3(SYS_WRITE, 1, (int)(size_t)&buf[i], 1);
+        syscall3(SYS_WRITE, 1, (long)&buf[i], 1);
     }
 }
 
 static void fail(const char *why)
 {
-    sys3(SYS_WRITE, 1, (int)(size_t)"AHCIPROBE FAIL: ", 16);
+    syscall3(SYS_WRITE, 1, (long)"AHCIPROBE FAIL: ", 16);
     puts(why);
-    sys2(SYS_EXIT, 1, 0);
+    syscall2(SYS_EXIT, 1, 0);
 }
 
 /* A counter of /proc/disk by its label, defined with the file readers below. */
@@ -140,7 +93,7 @@ static int now_ms(void)
     int ts[2];
 
     ts[0] = ts[1] = 0;
-    sys2(SYS_CLOCK_GETTIME, CLOCK_MONOTONIC, (int)(size_t)ts);
+    syscall2(SYS_CLOCK_GETTIME, CLOCK_MONOTONIC, (long)ts);
     return ts[0] * 1000 + ts[1] / 1000000;
 }
 
@@ -153,13 +106,13 @@ static int open_node(const char *node)
     int fd = -1, tries;
 
     for (tries = 0; tries < 40 && fd < 0; tries++) {
-        fd = sys3(SYS_OPEN, (int)(size_t)node, O_RDONLY, 0);
+        fd = syscall3(SYS_OPEN, (long)node, O_RDONLY, 0);
         if (fd < 0) {
             int ts[2];
 
             ts[0] = 0;
             ts[1] = 250000000;
-            sys2(SYS_NANOSLEEP, (int)(size_t)ts, 0);
+            syscall2(SYS_NANOSLEEP, (long)ts, 0);
         }
     }
     return fd;
@@ -179,9 +132,9 @@ static int read_node(const char *node, int bytes, int *longest)
     while (done < bytes) {
         int t0 = now_ms(), n, dt;
 
-        n = sys3(SYS_READ, fd, (int)(size_t)buf, CHUNK);
+        n = syscall3(SYS_READ, fd, (long)buf, CHUNK);
         if (n != CHUNK) {
-            sys2(SYS_CLOSE, fd, 0);
+            syscall2(SYS_CLOSE, fd, 0);
             return -1;
         }
         dt = now_ms() - t0;
@@ -190,26 +143,26 @@ static int read_node(const char *node, int bytes, int *longest)
         }
         done += n;
     }
-    sys2(SYS_CLOSE, fd, 0);
+    syscall2(SYS_CLOSE, fd, 0);
     return 0;
 }
 
 static int slurp(const char *path, char *buf, int cap)
 {
-    int fd = sys3(SYS_OPEN, (int)(size_t)path, O_RDONLY, 0);
+    int fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
     int n, total = 0;
 
     if (fd < 0) {
         return -1;
     }
     while (total < cap - 1) {
-        n = sys3(SYS_READ, fd, (int)(size_t)(buf + total), cap - 1 - total);
+        n = syscall3(SYS_READ, fd, (long)(buf + total), cap - 1 - total);
         if (n <= 0) {
             break;
         }
         total += n;
     }
-    sys2(SYS_CLOSE, fd, 0);
+    syscall2(SYS_CLOSE, fd, 0);
     buf[total] = 0;
     return total;
 }
@@ -264,7 +217,7 @@ static void slow_row(void)
     /* A vector that has counted nothing is not listed, so the controller's
        line is asked for after the reads and not before. */
     pipefd[0] = pipefd[1] = -1;
-    if (sys1(SYS_PIPE, (int)(size_t)pipefd) != 0) {
+    if (syscall1(SYS_PIPE, (long)pipefd) != 0) {
         fail("pipe");
     }
     /* The clock starts before the slow reader, since a driver that holds
@@ -272,20 +225,20 @@ static void slow_row(void)
        a clock started after its word would start after its whole read. */
     overlaps = disk_counter("disk-overlaps ");
     t0 = now_ms();
-    slow = sys1(SYS_FORK, 0);
+    slow = syscall1(SYS_FORK, 0);
     if (slow < 0) {
         fail("fork");
     }
     if (slow == 0) {
         int l;
 
-        sys3(SYS_WRITE, pipefd[1], (int)(size_t)"s", 1);
-        sys2(SYS_EXIT, read_node("/dev/disk0p1", SLOW_BYTES, &l) == 0 ? 0 : 3, 0);
+        syscall3(SYS_WRITE, pipefd[1], (long)"s", 1);
+        syscall2(SYS_EXIT, read_node("/dev/disk0p1", SLOW_BYTES, &l) == 0 ? 0 : 3, 0);
     }
-    if (sys3(SYS_READ, pipefd[0], (int)(size_t)&byte, 1) != 1) {
+    if (syscall3(SYS_READ, pipefd[0], (long)&byte, 1) != 1) {
         fail("the slow reader did not start");
     }
-    fast = sys1(SYS_FORK, 0);
+    fast = syscall1(SYS_FORK, 0);
     if (fast < 0) {
         fail("fork");
     }
@@ -294,10 +247,10 @@ static void slow_row(void)
 
         /* The longest single read, back to the parent through the exit
            status, below the value that means a failed read. */
-        sys2(SYS_EXIT, rc != 0 ? 200 : (l > 199 ? 199 : l), 0);
+        syscall2(SYS_EXIT, rc != 0 ? 200 : (l > 199 ? 199 : l), 0);
     }
     status = -1;
-    if (sys3(SYS_WAITPID, fast, (int)(size_t)&status, 0) != fast) {
+    if (syscall3(SYS_WAITPID, fast, (long)&status, 0) != fast) {
         fail("waiting for the fast reader");
     }
     t_fast = now_ms() - t0;
@@ -308,7 +261,7 @@ static void slow_row(void)
     /* The order: the slow reader has not ended when the fast one has. The
        one wait that reaps it is the one whose status is read. */
     status = -1;
-    reaped = sys3(SYS_WAITPID, slow, (int)(size_t)&status, WNOHANG);
+    reaped = syscall3(SYS_WAITPID, slow, (long)&status, WNOHANG);
     slow_running = reaped == 0;
     puts("AHCIPROBE READ fast reader ms:");
     putnum(t_fast);
@@ -332,7 +285,7 @@ static void slow_row(void)
         fail("no request of the fast disk completed while the slow disk's was in flight");
     }
     status = -1;
-    if (sys3(SYS_WAITPID, slow, (int)(size_t)&status, 0) != slow || ((status >> 8) & 0xFF) != 0) {
+    if (syscall3(SYS_WAITPID, slow, (long)&status, 0) != slow || ((status >> 8) & 0xFF) != 0) {
         fail("the slow disk's read");
     }
     if (slurp("/proc/interrupts", text, (int)sizeof(text)) <= 0) {
@@ -342,7 +295,7 @@ static void slow_row(void)
         fail("the controller's vector did not count the completions");
     }
     puts("AHCIPROBE OK");
-    sys2(SYS_EXIT, 0, 0);
+    syscall2(SYS_EXIT, 0, 0);
 }
 
 static void fault_row(void)
@@ -353,34 +306,34 @@ static void fault_row(void)
     int child, status = -1, fd, reads = 0;
 
     buf[0] = 0;
-    child = sys1(SYS_FORK, 0);
+    child = syscall1(SYS_FORK, 0);
     if (child < 0) {
         fail("fork");
     }
     if (child == 0) {
-        sys3(SYS_EXECVE, (int)(size_t)"/blockprobe", (int)(size_t)argv, (int)(size_t)envp);
-        sys2(SYS_EXIT, 4, 0);
+        syscall3(SYS_EXECVE, (long)"/blockprobe", (long)argv, (long)envp);
+        syscall2(SYS_EXIT, 4, 0);
     }
-    fd = sys3(SYS_OPEN, (int)(size_t)"/dev/disk0p2", O_RDONLY, 0);
+    fd = syscall3(SYS_OPEN, (long)"/dev/disk0p2", O_RDONLY, 0);
     if (fd < 0) {
         fail("/dev/disk0p2");
     }
-    while (sys3(SYS_WAITPID, child, (int)(size_t)&status, 1) == 0) {
-        int n = sys3(SYS_READ, fd, (int)(size_t)buf, CHUNK);
+    while (syscall3(SYS_WAITPID, child, (long)&status, 1) == 0) {
+        int n = syscall3(SYS_READ, fd, (long)buf, CHUNK);
 
         if (n < 0) {
             fail("a raw read beside the faults");
         }
         if (n == 0) {
-            sys2(SYS_CLOSE, fd, 0);
-            fd = sys3(SYS_OPEN, (int)(size_t)"/dev/disk0p2", O_RDONLY, 0);
+            syscall2(SYS_CLOSE, fd, 0);
+            fd = syscall3(SYS_OPEN, (long)"/dev/disk0p2", O_RDONLY, 0);
             if (fd < 0) {
                 fail("/dev/disk0p2 again");
             }
         }
         reads++;
     }
-    sys2(SYS_CLOSE, fd, 0);
+    syscall2(SYS_CLOSE, fd, 0);
     if (((status >> 8) & 0xFF) != 0) {
         fail("blockprobe on the root beside the queue");
     }
@@ -391,7 +344,7 @@ static void fault_row(void)
         fail("too few raw reads ran beside the faults to have met one");
     }
     puts("AHCIPROBE OK");
-    sys2(SYS_EXIT, 0, 0);
+    syscall2(SYS_EXIT, 0, 0);
 }
 
 void probe_main(unsigned int *sp);
@@ -418,14 +371,13 @@ static void late_row(void)
     static unsigned char block[4096];
     int fd, i, j, start;
 
-    if (sys2(SYS_MKDIR, (int)(size_t)"/late", 0755) != 0) {
+    if (syscall2(SYS_MKDIR, (long)"/late", 0755) != 0) {
         fail("mkdir /late");
     }
-    if (sys5(SYS_MOUNT, (int)(size_t)"/dev/disk0p1", (int)(size_t)"/late", (int)(size_t)"ext2", 0,
-             0) != 0) {
+    if (syscall5(SYS_MOUNT, (long)"/dev/disk0p1", (long)"/late", (long)"ext2", 0, 0) != 0) {
         fail("the mount of the throttled disk");
     }
-    fd = sys3(SYS_OPEN, (int)(size_t)"/late/late.bin", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    fd = syscall3(SYS_OPEN, (long)"/late/late.bin", O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) {
         fail("create late.bin");
     }
@@ -433,21 +385,21 @@ static void late_row(void)
         whole[i] = (unsigned char)((i / (int)sizeof(block)) * 7 + i % (int)sizeof(block));
     }
     start = now_ms();
-    if (sys3(SYS_WRITE, fd, (int)(size_t)whole, LATE_BYTES) != LATE_BYTES) {
+    if (syscall3(SYS_WRITE, fd, (long)whole, LATE_BYTES) != LATE_BYTES) {
         fail("the write of late.bin");
     }
-    sys1(SYS_CLOSE, fd);
+    syscall1(SYS_CLOSE, fd);
     puts("AHCIPROBE WRITE ms:");
     putnum(now_ms() - start);
-    if (sys1(SYS_SYNC, 0) != 0) {
+    if (syscall1(SYS_SYNC, 0) != 0) {
         fail("the sync after the late answers");
     }
-    fd = sys3(SYS_OPEN, (int)(size_t)"/late/late.bin", O_RDONLY, 0);
+    fd = syscall3(SYS_OPEN, (long)"/late/late.bin", O_RDONLY, 0);
     if (fd < 0) {
         fail("open late.bin to read it back");
     }
     for (i = 0; i < LATE_BYTES / (int)sizeof(block); i++) {
-        if (sys3(SYS_READ, fd, (int)(size_t)block, (int)sizeof(block)) != (int)sizeof(block)) {
+        if (syscall3(SYS_READ, fd, (long)block, (int)sizeof(block)) != (int)sizeof(block)) {
             fail("a read of late.bin");
         }
         for (j = 0; j < (int)sizeof(block); j++) {
@@ -456,20 +408,20 @@ static void late_row(void)
             }
         }
     }
-    sys1(SYS_CLOSE, fd);
-    fd = sys3(SYS_OPEN, (int)(size_t)"/late/again.bin", O_WRONLY | O_CREAT, 0644);
+    syscall1(SYS_CLOSE, fd);
+    fd = syscall3(SYS_OPEN, (long)"/late/again.bin", O_WRONLY | O_CREAT, 0644);
     if (fd < 0) {
         fail("the mount is not writable after the late answers");
     }
-    sys1(SYS_CLOSE, fd);
-    if (sys1(SYS_SYNC, 0) != 0) {
+    syscall1(SYS_CLOSE, fd);
+    if (syscall1(SYS_SYNC, 0) != 0) {
         fail("the second sync");
     }
-    if (sys2(SYS_UMOUNT2, (int)(size_t)"/late", 0) != 0) {
+    if (syscall2(SYS_UMOUNT2, (long)"/late", 0) != 0) {
         fail("umount2 /late");
     }
     puts("AHCIPROBE OK");
-    sys2(SYS_EXIT, 0, 0);
+    syscall2(SYS_EXIT, 0, 0);
 }
 
 /* One raw read of `bytes` from `node`, at most a window's request; the
@@ -488,9 +440,9 @@ static int read_once(const char *node, int bytes, int *ms)
         return -1;
     }
     t0 = now_ms();
-    n = sys3(SYS_READ, fd, (int)(size_t)read_once_buf, bytes);
+    n = syscall3(SYS_READ, fd, (long)read_once_buf, bytes);
     *ms = now_ms() - t0;
-    sys2(SYS_CLOSE, fd, 0);
+    syscall2(SYS_CLOSE, fd, 0);
     return n;
 }
 
@@ -500,7 +452,7 @@ static void sleep_ms(int ms)
 
     ts[0] = ms / 1000;
     ts[1] = (ms % 1000) * 1000000;
-    sys2(SYS_NANOSLEEP, (int)(size_t)ts, 0);
+    syscall2(SYS_NANOSLEEP, (long)ts, 0);
 }
 
 /* `ahciprobe edge`: the deadline's boundary, one request of 4 KiB on the
@@ -524,7 +476,7 @@ static void edge_row(void)
     puts("AHCIPROBE EDGE ms:");
     putnum(ms);
     puts("AHCIPROBE OK");
-    sys2(SYS_EXIT, 0, 0);
+    syscall2(SYS_EXIT, 0, 0);
 }
 
 /* `ahciprobe quarantine`: one slot in the pool, `rach2.blockpool=1`, and
@@ -540,14 +492,14 @@ static void edge_row(void)
 static int disk_counter(const char *label)
 {
     static char text[2048];
-    int fd = sys3(SYS_OPEN, (int)(size_t)"/proc/disk", O_RDONLY, 0);
+    int fd = syscall3(SYS_OPEN, (long)"/proc/disk", O_RDONLY, 0);
     int n, i, j;
 
     if (fd < 0) {
         return -1;
     }
-    n = sys3(SYS_READ, fd, (int)(size_t)text, sizeof(text) - 1);
-    sys1(SYS_CLOSE, fd);
+    n = syscall3(SYS_READ, fd, (long)text, sizeof(text) - 1);
+    syscall1(SYS_CLOSE, fd);
     if (n <= 0) {
         return -1;
     }
@@ -599,7 +551,7 @@ static void quarantine_row(void)
     puts("AHCIPROBE AFTER ms:");
     putnum(ms);
     puts("AHCIPROBE OK");
-    sys2(SYS_EXIT, 0, 0);
+    syscall2(SYS_EXIT, 0, 0);
 }
 
 /* `ahciprobe pool`: two slots in the pool, `rach2.blockpool=2`, two disks
@@ -613,26 +565,26 @@ static void pool_row(void)
     char byte;
 
     pipefd[0] = pipefd[1] = -1;
-    if (sys1(SYS_PIPE, (int)(size_t)pipefd) != 0) {
+    if (syscall1(SYS_PIPE, (long)pipefd) != 0) {
         fail("pipe");
     }
     for (i = 0; i < 2; i++) {
-        readers[i] = sys1(SYS_FORK, 0);
+        readers[i] = syscall1(SYS_FORK, 0);
         if (readers[i] < 0) {
             fail("fork");
         }
         if (readers[i] == 0) {
             int l;
 
-            sys3(SYS_WRITE, pipefd[1], (int)(size_t)"s", 1);
-            sys2(SYS_EXIT,
-                 read_node(i == 0 ? "/dev/disk0p1" : "/dev/disk1p1", 64 * 1024, &l) == 0 ? 0 : 3,
-                 0);
+            syscall3(SYS_WRITE, pipefd[1], (long)"s", 1);
+            syscall2(
+                SYS_EXIT,
+                read_node(i == 0 ? "/dev/disk0p1" : "/dev/disk1p1", 64 * 1024, &l) == 0 ? 0 : 3, 0);
         }
     }
-    sys2(SYS_CLOSE, pipefd[1], 0); /* so a reader that dies first ends the wait */
+    syscall2(SYS_CLOSE, pipefd[1], 0); /* so a reader that dies first ends the wait */
     for (i = 0; i < 2; i++) {
-        if (sys3(SYS_READ, pipefd[0], (int)(size_t)&byte, 1) != 1) {
+        if (syscall3(SYS_READ, pipefd[0], (long)&byte, 1) != 1) {
             fail("a slow reader did not start");
         }
     }
@@ -645,12 +597,12 @@ static void pool_row(void)
     putnum(ms);
     for (i = 0; i < 2; i++) {
         status = 0;
-        if (sys3(SYS_WAITPID, readers[i], (int)(size_t)&status, 0) != readers[i] || status != 0) {
+        if (syscall3(SYS_WAITPID, readers[i], (long)&status, 0) != readers[i] || status != 0) {
             fail("a slow reader failed or was killed");
         }
     }
     puts("AHCIPROBE OK");
-    sys2(SYS_EXIT, 0, 0);
+    syscall2(SYS_EXIT, 0, 0);
 }
 
 __asm__(".global _start\n"

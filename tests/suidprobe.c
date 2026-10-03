@@ -15,7 +15,8 @@
  * grants nothing. The helper checks each and exits 0 or a step number.
  *
  * The helper is staged by the manifest; this probe only drives it. Prints
- * "SUIDPROBE OK" and exits 0 on success. Freestanding; direct int 0x80.
+ * "SUIDPROBE OK" and exits 0 on success. Freestanding; direct system calls
+ * (probe.h).
  *
  * Needs: the set-id fixtures the test image stages at its root,
  * `/suidhelper` and the `.suid`, `.u5` and `.sgid` copies beside it. They
@@ -23,16 +24,9 @@
  * needs them put there first.
  */
 
-typedef unsigned int u32;
+#include "probe.h"
 
-#define SYS_EXIT        1
-#define SYS_FORK        2
-#define SYS_WRITE       4
-#define SYS_WAITPID     7
-#define SYS_EXECVE      11
-#define SYS_STAT64      195
-#define SYS_SETRESGID32 210
-#define SYS_SETRESUID32 208
+typedef unsigned int u32;
 
 #define STDOUT 1
 #define EACCES 13
@@ -47,20 +41,6 @@ typedef unsigned int u32;
 #define WIFEXITED(s)   (((s) & 0x7F) == 0)
 #define WEXITSTATUS(s) (((s) >> 8) & 0xFF)
 
-static int syscall1(int num, int a)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "a"(num), "b"(a) : "memory");
-    return r;
-}
-
-static int syscall3(int num, int a, int b, int c)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "a"(num), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
-}
-
 static u32 slen(const char *s)
 {
     u32 n = 0;
@@ -73,7 +53,7 @@ static u32 slen(const char *s)
 
 static void puts_(const char *s)
 {
-    syscall3(SYS_WRITE, STDOUT, (int)s, (int)slen(s));
+    syscall3(SYS_WRITE, STDOUT, (long)s, (int)slen(s));
 }
 
 static void fail(const char *step)
@@ -97,8 +77,8 @@ static int run_helper(const char *path, const char *arg)
     if (pid == 0) {
         static char *argv[3];
 
-        if (syscall3(SYS_SETRESGID32, 1000, 1000, 1000) != 0 ||
-            syscall3(SYS_SETRESUID32, 1000, 1000, 1000) != 0) {
+        if (syscall3(SYS_SETRESGID, 1000, 1000, 1000) != 0 ||
+            syscall3(SYS_SETRESUID, 1000, 1000, 1000) != 0) {
             syscall1(SYS_EXIT, 200);
         }
         argv[0] = (char *)path;
@@ -106,11 +86,11 @@ static int run_helper(const char *path, const char *arg)
         argv[2] = 0;
         /* Reached only if the exec is refused: report the errno as the code. */
         {
-            int e = syscall3(SYS_EXECVE, (int)path, (int)argv, 0);
+            int e = syscall3(SYS_EXECVE, (long)path, (long)argv, 0);
             syscall1(SYS_EXIT, 128 + ((-e) & 0x7F));
         }
     }
-    if (syscall3(SYS_WAITPID, pid, (int)&status, 0) != pid) {
+    if (syscall3(SYS_WAITPID, pid, (long)&status, 0) != pid) {
         fail("waitpid");
     }
     if (!WIFEXITED(status)) {
@@ -124,13 +104,13 @@ static u32 stat_mode(const char *path)
 {
     static char st[144];
 
-    if (syscall3(SYS_STAT64, (int)path, (int)st, 0) != 0) {
+    if (syscall3(SYS_STAT, (long)path, (long)st, 0) != 0) {
         fail("stat64");
     }
     return *(u32 *)(st + ST_MODE);
 }
 
-void _start(void)
+PROBE_START void _start(void)
 {
     int rc;
 

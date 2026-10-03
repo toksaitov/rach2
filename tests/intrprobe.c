@@ -23,18 +23,12 @@
  *   vector is required to have counted in every one of them.
  *
  * Prints "INTRPROBE OK" with the two numbers and exits 0. Freestanding;
- * direct int 0x80.
+ * direct system calls (probe.h).
  */
 
-typedef unsigned int size_t;
+#include "probe.h"
 
 #define STDOUT_FILENO 1
-
-#define SYS_EXIT  1
-#define SYS_READ  3
-#define SYS_WRITE 4
-#define SYS_OPEN  5
-#define SYS_CLOSE 6
 
 #define O_RDONLY 0
 
@@ -49,16 +43,9 @@ typedef unsigned int size_t;
 static char text[4096];
 static char cmdline[512];
 
-static int syscall3(int n, int a, int b, int c)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
-}
-
 static void sys_exit(int status)
 {
-    __asm__ __volatile__("int $0x80" : : "a"(SYS_EXIT), "b"(status));
+    syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
@@ -74,7 +61,7 @@ static size_t strlen(const char *s)
 
 static void puts(const char *s)
 {
-    syscall3(SYS_WRITE, STDOUT_FILENO, (int)(size_t)s, (int)strlen(s));
+    syscall3(SYS_WRITE, STDOUT_FILENO, (long)s, (int)strlen(s));
 }
 
 static void putnum(int v)
@@ -114,14 +101,14 @@ static void fail(const char *why)
 /** Read a whole file into `buf`, or -1. */
 static int slurp(const char *path, char *buf, int cap)
 {
-    int fd = syscall3(SYS_OPEN, (int)(size_t)path, O_RDONLY, 0);
+    int fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
     int done = 0;
 
     if (fd < 0) {
         return -1;
     }
     for (;;) {
-        int n = syscall3(SYS_READ, fd, (int)(size_t)(buf + done), cap - 1 - done);
+        int n = syscall3(SYS_READ, fd, (long)(buf + done), cap - 1 - done);
 
         if (n <= 0) {
             break;
@@ -325,7 +312,7 @@ static int count_for_named(const char *kind, const char *name, const char *file)
     return -1;
 }
 
-void _start(void)
+PROBE_START void _start(void)
 {
     int vector, audio, fallback, drop, devices, n, line;
 

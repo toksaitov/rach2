@@ -23,28 +23,10 @@
  * Prints "BOOTPROBE OK", "BOOTPROBE ABSENT OK", "BOOTPROBE RAMROOT OK" or
  * "BOOTPROBE WIDE OK".
  *
- * Freestanding; direct int 0x80.
+ * Freestanding; direct system calls (probe.h).
  */
 
-typedef unsigned int size_t;
-
-#define SYS_EXIT       1
-#define SYS_FORK       2
-#define SYS_READ       3
-#define SYS_WRITE      4
-#define SYS_OPEN       5
-#define SYS_CLOSE      6
-#define SYS_WAITPID    7
-#define SYS_LSEEK      19
-#define SYS_DUP        41
-#define SYS_PIPE       42
-#define SYS_LLSEEK     140
-#define SYS_READV      145
-#define SYS_READLINK   85
-#define SYS_STAT64     195
-#define SYS_FSTAT64    197
-#define SYS_SETUID32   213
-#define SYS_GETDENTS64 220
+#include "probe.h"
 
 #define O_RDONLY 0
 #define O_WRONLY 1
@@ -70,20 +52,6 @@ typedef unsigned int size_t;
 #define PART_SECTORS 1024
 #define SECTOR       512
 
-static int syscall1(int n, int a)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a) : "memory");
-    return r;
-}
-
-static int syscall3(int n, int a, int b, int c)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
-}
-
 /** Whether `buf` has the 512-byte marker this fixture writes at `gib` GiB. */
 static int pattern_ok(const char *buf, int gib)
 {
@@ -95,16 +63,6 @@ static int pattern_ok(const char *buf, int gib)
         }
     }
     return 1;
-}
-
-static int syscall5(int n, int a, int b, int c, int d, int e)
-{
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(n), "b"(a), "c"(b), "d"(c), "S"(d), "D"(e)
-                         : "memory");
-    return r;
 }
 
 static void sys_exit(int status)
@@ -124,8 +82,8 @@ static size_t strlen(const char *s)
 
 static void puts(const char *s)
 {
-    syscall3(SYS_WRITE, 1, (int)(size_t)s, (int)strlen(s));
-    syscall3(SYS_WRITE, 1, (int)(size_t)"\n", 1);
+    syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
+    syscall3(SYS_WRITE, 1, (long)"\n", 1);
 }
 
 static int fails = 0;
@@ -134,7 +92,7 @@ static void check(int cond, const char *msg)
 {
     if (!cond) {
         fails++;
-        syscall3(SYS_WRITE, 1, (int)(size_t)"  FAIL: ", 8);
+        syscall3(SYS_WRITE, 1, (long)"  FAIL: ", 8);
         puts(msg);
     }
 }
@@ -194,11 +152,11 @@ static int proc_disk_field(const char *key, unsigned long long *out)
     int fd, n, i, j;
     unsigned long long v = 0;
 
-    fd = syscall3(SYS_OPEN, (int)(size_t)"/proc/disk", O_RDONLY, 0);
+    fd = syscall3(SYS_OPEN, (long)"/proc/disk", O_RDONLY, 0);
     if (fd < 0) {
         return 0;
     }
-    n = syscall3(SYS_READ, fd, (int)(size_t)text, (int)sizeof(text) - 1);
+    n = syscall3(SYS_READ, fd, (long)text, (int)sizeof(text) - 1);
     syscall1(SYS_CLOSE, fd);
     if (n <= 0) {
         return 0;
@@ -244,7 +202,7 @@ static void auth_case(int recovery)
     long long pos = 0;
     int fd, rc, n, j;
 
-    fd = syscall3(SYS_OPEN, (int)(size_t)"/dev/disk0", O_RDWR, 0);
+    fd = syscall3(SYS_OPEN, (long)"/dev/disk0", O_RDWR, 0);
     check(fd >= 0, "root opens /dev/disk0 read-write");
 
     /* One writer at a time, across every window onto this disk. Two reflashes
@@ -254,36 +212,36 @@ static void auth_case(int recovery)
        inside the whole one. So the second writer is refused whichever name it
        asks by. A reader is not a writer and is not counted. */
     {
-        int second = syscall3(SYS_OPEN, (int)(size_t)"/dev/disk0", O_RDWR, 0);
+        int second = syscall3(SYS_OPEN, (long)"/dev/disk0", O_RDWR, 0);
 
         check(second == -EBUSY, "a second writer of the whole disk is refused");
-        second = syscall3(SYS_OPEN, (int)(size_t)"/dev/disk0", O_WRONLY, 0);
+        second = syscall3(SYS_OPEN, (long)"/dev/disk0", O_WRONLY, 0);
         check(second == -EBUSY, "however it asks for the write");
-        second = syscall3(SYS_OPEN, (int)(size_t)"/dev/bootpart", O_RDWR, 0);
+        second = syscall3(SYS_OPEN, (long)"/dev/bootpart", O_RDWR, 0);
         check(second == -EBUSY || second == -ENOENT,
               "a writer of the boot partition is refused while the whole disk is held");
-        second = syscall3(SYS_OPEN, (int)(size_t)"/dev/grubcore", O_RDWR, 0);
+        second = syscall3(SYS_OPEN, (long)"/dev/grubcore", O_RDWR, 0);
         check(second == -EBUSY || second == -ENOENT, "and so is a writer of the loader's gap");
-        second = syscall3(SYS_OPEN, (int)(size_t)"/dev/disk0", O_RDONLY, 0);
+        second = syscall3(SYS_OPEN, (long)"/dev/disk0", O_RDONLY, 0);
         check(second >= 0, "but a reader alongside it is not");
         if (second >= 0) {
             syscall1(SYS_CLOSE, second);
         }
     }
 
-    rc = syscall5(SYS_LLSEEK, fd, off_hi(at), off_lo(at), (int)(size_t)&pos, SEEK_SET);
+    rc = syscall5(SYS_LLSEEK, fd, off_hi(at), off_lo(at), (long)&pos, SEEK_SET);
     check(rc == 0 && pos == at, "seek to 3 GiB");
 
     for (j = 0; j < SECTOR; j++) {
         sector[j] = (char)((j * 11 + 5) & 0xff);
     }
-    n = syscall3(SYS_WRITE, fd, (int)(size_t)sector, SECTOR);
+    n = syscall3(SYS_WRITE, fd, (long)sector, SECTOR);
 
     if (!recovery) {
         check(n == -EPERM, "an everyday kernel refuses the write");
-        rc = syscall5(SYS_LLSEEK, fd, off_hi(at), off_lo(at), (int)(size_t)&pos, SEEK_SET);
+        rc = syscall5(SYS_LLSEEK, fd, off_hi(at), off_lo(at), (long)&pos, SEEK_SET);
         check(rc == 0, "seek back to it");
-        n = syscall3(SYS_READ, fd, (int)(size_t)sector, SECTOR);
+        n = syscall3(SYS_READ, fd, (long)sector, SECTOR);
         check(n == SECTOR, "but still reads it");
         {
             int ok = 1;
@@ -301,12 +259,12 @@ static void auth_case(int recovery)
     }
 
     check(n == SECTOR, "a recovery kernel writes a sector past 2 GiB");
-    rc = syscall5(SYS_LLSEEK, fd, off_hi(at), off_lo(at), (int)(size_t)&pos, SEEK_SET);
+    rc = syscall5(SYS_LLSEEK, fd, off_hi(at), off_lo(at), (long)&pos, SEEK_SET);
     check(rc == 0, "seek back to it");
     for (j = 0; j < SECTOR; j++) {
         sector[j] = 0;
     }
-    n = syscall3(SYS_READ, fd, (int)(size_t)sector, SECTOR);
+    n = syscall3(SYS_READ, fd, (long)sector, SECTOR);
     check(n == SECTOR, "and reads it back");
     {
         int ok = 1;
@@ -323,16 +281,16 @@ static void auth_case(int recovery)
     {
         unsigned long long rb = 0, ra = 0;
 
-        rc = syscall5(SYS_LLSEEK, fd, off_hi(at), off_lo(at), (int)(size_t)&pos, SEEK_SET);
+        rc = syscall5(SYS_LLSEEK, fd, off_hi(at), off_lo(at), (long)&pos, SEEK_SET);
         check(rc == 0, "seek back for a batched read");
         check(proc_disk_field("raw-driver-calls ", &rb), "the call count is readable");
-        n = syscall3(SYS_READ, fd, (int)(size_t)big, 200 * SECTOR);
+        n = syscall3(SYS_READ, fd, (long)big, 200 * SECTOR);
         check(n == 200 * SECTOR, "a 200-sector read of the whole-disk window is taken whole");
         check(proc_disk_field("raw-driver-calls ", &ra) && ra - rb == 1,
               "and took one driver call, the batch holding the whole read");
     }
 
-    rc = syscall5(SYS_LLSEEK, fd, off_hi(at), off_lo(at), (int)(size_t)&pos, SEEK_SET);
+    rc = syscall5(SYS_LLSEEK, fd, off_hi(at), off_lo(at), (long)&pos, SEEK_SET);
     check(rc == 0, "seek back once more");
     {
         unsigned long long before = 0, after = 0, batch = 0;
@@ -344,7 +302,7 @@ static void auth_case(int recovery)
         got_before = proc_disk_field("raw-driver-calls ", &before);
         (void)proc_disk_field("disk-commands ", &cmd_before);
         (void)proc_disk_field("disk-flushes ", &flush_before);
-        n = syscall3(SYS_WRITE, fd, (int)(size_t)big, 200 * SECTOR);
+        n = syscall3(SYS_WRITE, fd, (long)big, 200 * SECTOR);
         check(n == 200 * SECTOR, "a 200-sector write is taken whole");
         got_after = proc_disk_field("raw-driver-calls ", &after);
         check(got_before && got_after, "/proc/disk reports a driver-call count");
@@ -368,7 +326,7 @@ static void auth_case(int recovery)
     /* A transfer longer than one batch: two driver calls, two commands
        with their two flushes, and the bytes on both sides of the boundary
        between the calls are the ones written. */
-    rc = syscall5(SYS_LLSEEK, fd, off_hi(at), off_lo(at), (int)(size_t)&pos, SEEK_SET);
+    rc = syscall5(SYS_LLSEEK, fd, off_hi(at), off_lo(at), (long)&pos, SEEK_SET);
     check(rc == 0, "seek back for a transfer past one batch");
     {
         unsigned long long before = 0, after = 0, cmd_before = 0, cmd_after = 0;
@@ -382,7 +340,7 @@ static void auth_case(int recovery)
         (void)proc_disk_field("raw-driver-calls ", &before);
         (void)proc_disk_field("disk-commands ", &cmd_before);
         (void)proc_disk_field("disk-flushes ", &flush_before);
-        n = syscall3(SYS_WRITE, fd, (int)(size_t)past, PAST_SECTORS * SECTOR);
+        n = syscall3(SYS_WRITE, fd, (long)past, PAST_SECTORS * SECTOR);
         check(n == PAST_SECTORS * SECTOR, "a 2100-sector write is taken whole");
         check(proc_disk_field("raw-driver-calls ", &after) && after - before == 2,
               "and took two driver calls, a batch of 2048 and one of 52");
@@ -390,13 +348,13 @@ static void auth_case(int recovery)
               "and four disk commands, two writes and their two flushes");
         check(proc_disk_field("disk-flushes ", &flush_after) && flush_after - flush_before == 2,
               "and two cache flushes, one per batch");
-        rc = syscall5(SYS_LLSEEK, fd, off_hi(at), off_lo(at), (int)(size_t)&pos, SEEK_SET);
+        rc = syscall5(SYS_LLSEEK, fd, off_hi(at), off_lo(at), (long)&pos, SEEK_SET);
         check(rc == 0, "seek back to read it");
         for (i = 0; i < PAST_SECTORS * SECTOR; i++) {
             past[i] = 0;
         }
         (void)proc_disk_field("raw-driver-calls ", &before);
-        n = syscall3(SYS_READ, fd, (int)(size_t)past, PAST_SECTORS * SECTOR);
+        n = syscall3(SYS_READ, fd, (long)past, PAST_SECTORS * SECTOR);
         check(n == PAST_SECTORS * SECTOR, "a 2100-sector read is taken whole");
         check(proc_disk_field("raw-driver-calls ", &after) && after - before == 2,
               "in two driver calls");
@@ -426,24 +384,24 @@ static void window_batch_case(void)
     unsigned long long before = 0, after = 0;
     int fd, rc, n;
 
-    fd = syscall3(SYS_OPEN, (int)(size_t)"/dev/grubcore", O_RDONLY, 0);
+    fd = syscall3(SYS_OPEN, (long)"/dev/grubcore", O_RDONLY, 0);
     check(fd >= 0, "root opens /dev/grubcore");
     rc = syscall3(SYS_LSEEK, fd, 0, SEEK_SET);
     check(rc == 0, "seek to the start of the gap");
 
     check(proc_disk_field("raw-driver-calls ", &before), "the driver-call count is readable");
-    n = syscall3(SYS_READ, fd, (int)(size_t)big, 200 * SECTOR);
+    n = syscall3(SYS_READ, fd, (long)big, 200 * SECTOR);
     check(n == 200 * SECTOR, "a 200-sector read of the gap is taken whole");
     check(proc_disk_field("raw-driver-calls ", &after), "and the count is readable after");
     check(after - before == 1, "and took one driver call, not two hundred");
     syscall1(SYS_CLOSE, fd);
 
-    fd = syscall3(SYS_OPEN, (int)(size_t)"/dev/grubcore", O_RDWR, 0);
+    fd = syscall3(SYS_OPEN, (long)"/dev/grubcore", O_RDWR, 0);
     check(fd >= 0, "root opens /dev/grubcore read-write");
     rc = syscall3(SYS_LSEEK, fd, 0, SEEK_SET);
     check(rc == 0, "seek to the start of the gap again");
     check(proc_disk_field("raw-driver-calls ", &before), "the call count is readable again");
-    n = syscall3(SYS_WRITE, fd, (int)(size_t)big, 200 * SECTOR);
+    n = syscall3(SYS_WRITE, fd, (long)big, 200 * SECTOR);
     check(n == 200 * SECTOR, "a 200-sector write of the gap is taken whole");
     check(proc_disk_field("raw-driver-calls ", &after) && after - before == 1,
           "and took one driver call, so the bounded write loop batches too");
@@ -480,11 +438,11 @@ static int raw_child_sleeping(int pid)
         path[at++] = suffix[i];
     }
     for (tries = 0; tries < 100000; tries++) {
-        fd = syscall3(SYS_OPEN, (int)path, O_RDONLY, 0);
+        fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
         if (fd < 0) {
             return 0;
         }
-        got = syscall3(SYS_READ, fd, (int)status, sizeof(status));
+        got = syscall3(SYS_READ, fd, (long)status, sizeof(status));
         syscall1(SYS_CLOSE, fd);
         for (i = got - 4; i >= 0; i--) {
             if (status[i] == ')' && status[i + 1] == ' ') {
@@ -525,12 +483,12 @@ static void raw_readv_case(void)
     unsigned long long before = 0, after = 0;
     int fd, pid, pipefd[2], rc, status, tries;
 
-    fd = syscall3(SYS_OPEN, (int)"/dev/disk0p1", O_RDONLY, 0);
+    fd = syscall3(SYS_OPEN, (long)"/dev/disk0p1", O_RDONLY, 0);
     check(fd >= 0, "open raw readv description");
     if (fd < 0) {
         return;
     }
-    rc = syscall1(SYS_PIPE, (int)pipefd);
+    rc = syscall1(SYS_PIPE, (long)pipefd);
     check(rc == 0, "create raw readv rendezvous");
     if (rc != 0) {
         syscall1(SYS_CLOSE, fd);
@@ -545,25 +503,25 @@ static void raw_readv_case(void)
         vec[0].length = SECTOR;
         vec[1].base = bytes + SECTOR;
         vec[1].length = SECTOR;
-        if (syscall3(SYS_WRITE, pipefd[1], (int)"x", 1) != 1) {
+        if (syscall3(SYS_WRITE, pipefd[1], (long)"x", 1) != 1) {
             sys_exit(1);
         }
-        rc = syscall3(SYS_READV, fd, (int)vec, 2);
+        rc = syscall3(SYS_READV, fd, (long)vec, 2);
         sys_exit(rc != 2 * SECTOR || !raw_pattern(bytes, 0) || !raw_pattern(bytes + SECTOR, 1));
     }
     syscall1(SYS_CLOSE, pipefd[1]);
     if (pid > 0) {
-        check(syscall3(SYS_READ, pipefd[0], (int)&signal, 1) == 1, "child starts raw readv");
+        check(syscall3(SYS_READ, pipefd[0], (long)&signal, 1) == 1, "child starts raw readv");
         for (tries = 0; tries < 100000; tries++) {
             if (!proc_disk_field("raw-driver-calls ", &after) || after >= before + 2) {
                 break;
             }
         }
         check(after == before + 2 && raw_child_sleeping(pid), "second raw vector blocks");
-        rc = syscall3(SYS_READ, fd, (int)bytes, SECTOR);
+        rc = syscall3(SYS_READ, fd, (long)bytes, SECTOR);
         check(rc == SECTOR && raw_pattern(bytes, 2), "raw readv reserves its second sector");
         status = -1;
-        check(syscall3(SYS_WAITPID, pid, (int)&status, 0) == pid && status == 0,
+        check(syscall3(SYS_WAITPID, pid, (long)&status, 0) == pid && status == 0,
               "raw readv child exits successfully");
         check(syscall3(SYS_LSEEK, fd, 0, SEEK_CUR) == 3 * SECTOR,
               "raw readv retains all three offset updates");
@@ -582,7 +540,7 @@ static void raw_write_readback(int fd)
     for (i = 0; i < 2; i++) {
         int j, ok = 1;
 
-        rc = syscall3(SYS_READ, fd, (int)bytes, SECTOR);
+        rc = syscall3(SYS_READ, fd, (long)bytes, SECTOR);
         for (j = 0; j < SECTOR; j++) {
             if (bytes[j] != (char)('a' + i)) {
                 ok = 0;
@@ -604,12 +562,12 @@ static void raw_shared_case(int kind)
     int pipefd[2], fd, pid, status, rc, i;
     long long position = -1;
 
-    fd = syscall3(SYS_OPEN, (int)path, kind == 2 ? O_RDWR : O_RDONLY, 0);
+    fd = syscall3(SYS_OPEN, (long)path, kind == 2 ? O_RDWR : O_RDONLY, 0);
     check(fd >= 0, "open shared raw description");
     if (fd < 0) {
         return;
     }
-    rc = syscall1(SYS_PIPE, (int)pipefd);
+    rc = syscall1(SYS_PIPE, (long)pipefd);
     check(rc == 0, "create raw transfer rendezvous");
     if (rc != 0) {
         syscall1(SYS_CLOSE, fd);
@@ -622,10 +580,10 @@ static void raw_shared_case(int kind)
         for (i = 0; i < SECTOR; i++) {
             bytes[i] = 'a';
         }
-        if (syscall3(SYS_WRITE, pipefd[1], (int)"x", 1) != 1) {
+        if (syscall3(SYS_WRITE, pipefd[1], (long)"x", 1) != 1) {
             sys_exit(1);
         }
-        rc = syscall3(kind == 2 ? SYS_WRITE : SYS_READ, fd, (int)bytes, SECTOR);
+        rc = syscall3(kind == 2 ? SYS_WRITE : SYS_READ, fd, (long)bytes, SECTOR);
         if (rc != SECTOR || (kind < 2 && !raw_pattern(bytes, 0))) {
             sys_exit(1);
         }
@@ -633,27 +591,27 @@ static void raw_shared_case(int kind)
     }
     syscall1(SYS_CLOSE, pipefd[1]);
     if (pid > 0) {
-        check(syscall3(SYS_READ, pipefd[0], (int)&signal, 1) == 1, "child starts raw transfer");
+        check(syscall3(SYS_READ, pipefd[0], (long)&signal, 1) == 1, "child starts raw transfer");
         check(raw_child_sleeping(pid), "child blocks in raw transfer");
         if (kind < 2) {
-            rc = syscall3(SYS_READ, fd, (int)bytes, SECTOR);
+            rc = syscall3(SYS_READ, fd, (long)bytes, SECTOR);
             check(rc == SECTOR && raw_pattern(bytes, 1),
                   "concurrent raw reader consumes second sector");
         } else if (kind == 2) {
             for (i = 0; i < SECTOR; i++) {
                 bytes[i] = 'b';
             }
-            check(syscall3(SYS_WRITE, fd, (int)bytes, SECTOR) == SECTOR,
+            check(syscall3(SYS_WRITE, fd, (long)bytes, SECTOR) == SECTOR,
                   "concurrent raw writer completes");
         } else if (kind == 3) {
             check(syscall3(SYS_LSEEK, fd, SECTOR, SEEK_CUR) == 2 * SECTOR,
                   "raw lseek waits for transfer offset");
         } else {
-            rc = syscall5(SYS_LLSEEK, fd, 0, SECTOR, (int)&position, SEEK_CUR);
+            rc = syscall5(SYS_LLSEEK, fd, 0, SECTOR, (long)&position, SEEK_CUR);
             check(rc == 0 && position == 2 * SECTOR, "raw llseek waits for transfer offset");
         }
         status = -1;
-        rc = syscall3(SYS_WAITPID, pid, (int)&status, 0);
+        rc = syscall3(SYS_WAITPID, pid, (long)&status, 0);
         check(rc == pid && status == 0, "raw child exits successfully");
         check(syscall3(SYS_LSEEK, fd, 0, SEEK_CUR) == 2 * SECTOR,
               "raw shared offset retains both operations");
@@ -670,13 +628,13 @@ static void proc_listing_case(void)
 {
     int fd, n;
 
-    fd = syscall3(SYS_OPEN, (int)(size_t)"/proc", O_RDONLY, 0);
+    fd = syscall3(SYS_OPEN, (long)"/proc", O_RDONLY, 0);
     check(fd >= 0, "open /proc as a directory");
     if (fd >= 0) {
         char dbuf[512];
         int saw = 0, off = 0;
 
-        n = syscall3(SYS_GETDENTS64, fd, (int)(size_t)dbuf, (int)sizeof(dbuf));
+        n = syscall3(SYS_GETDENTS64, fd, (long)dbuf, (int)sizeof(dbuf));
         while (off + 19 < n) {
             unsigned short reclen = *(unsigned short *)(dbuf + off + 16);
             const char *nm = dbuf + off + 19;
@@ -694,15 +652,15 @@ static void proc_listing_case(void)
     }
 }
 
-void _start(void)
+PROBE_START void _start(void)
 {
     int fd, rc, n, fixture;
     unsigned int mode, ino_stat, ino_fstat;
 
     /* /proc/cmdline: content, then the descriptor's readlink origin. */
-    fd = syscall3(SYS_OPEN, (int)(size_t)"/proc/cmdline", O_RDONLY, 0);
+    fd = syscall3(SYS_OPEN, (long)"/proc/cmdline", O_RDONLY, 0);
     check(fd >= 0, "open /proc/cmdline");
-    n = syscall3(SYS_READ, fd, (int)(size_t)cmdline, (int)sizeof(cmdline) - 1);
+    n = syscall3(SYS_READ, fd, (long)cmdline, (int)sizeof(cmdline) - 1);
     check(n > 0, "read /proc/cmdline");
     if (n > 0) {
         cmdline[n] = '\0';
@@ -734,7 +692,7 @@ void _start(void)
             path[len++] = digits[--k];
         }
         path[len] = '\0';
-        rc = syscall3(SYS_READLINK, (int)(size_t)path, (int)(size_t)link, (int)sizeof(link) - 1);
+        rc = syscall3(SYS_READLINK, (long)path, (long)link, (int)sizeof(link) - 1);
         check(rc > 0, "readlink the cmdline fd");
         if (rc > 0) {
             link[rc] = '\0';
@@ -743,9 +701,9 @@ void _start(void)
     }
 
     /* stat and fstat agree on the file's identity. */
-    rc = syscall3(SYS_STAT64, (int)(size_t)"/proc/cmdline", (int)(size_t)statbuf, 0);
+    rc = syscall3(SYS_STAT, (long)"/proc/cmdline", (long)statbuf, 0);
     check(rc == 0, "stat64 /proc/cmdline");
-    rc = syscall3(SYS_FSTAT64, fd, (int)(size_t)fstatbuf, 0);
+    rc = syscall3(SYS_FSTAT, fd, (long)fstatbuf, 0);
     check(rc == 0, "fstat64 the cmdline fd");
     mode = *(unsigned int *)(statbuf + ST_MODE);
     check(mode == 0100444, "stat mode is a read-only regular file");
@@ -778,62 +736,62 @@ void _start(void)
        Before discovery ran ahead of the root choice, /dev/bootpart appeared
        only at the end of a successful mount, so this boot had neither. */
     if (contains(cmdline, "rach2.bootprobe=ramroot")) {
-        rc = syscall3(SYS_STAT64, (int)(size_t)"/dev/bootpart", (int)(size_t)statbuf, 0);
+        rc = syscall3(SYS_STAT, (long)"/dev/bootpart", (long)statbuf, 0);
         check(rc == 0, "a RAM-root boot still has /dev/bootpart");
         check(*(unsigned int *)(statbuf + ST_MODE) == 020600, "and it is a 0600 device");
-        rc = syscall3(SYS_STAT64, (int)(size_t)"/dev/grubcore", (int)(size_t)statbuf, 0);
+        rc = syscall3(SYS_STAT, (long)"/dev/grubcore", (long)statbuf, 0);
         check(rc == 0, "a RAM-root boot has /dev/grubcore");
         check(*(unsigned int *)(statbuf + ST_MODE) == 020600, "and it is a 0600 device");
 
-        fd = syscall3(SYS_OPEN, (int)(size_t)"/dev/grubcore", O_RDWR, 0);
+        fd = syscall3(SYS_OPEN, (long)"/dev/grubcore", O_RDWR, 0);
         check(fd >= 0, "root opens /dev/grubcore read-write");
         rc = syscall3(SYS_LSEEK, fd, 0, SEEK_END);
         check(rc == 2047 * SECTOR, "grubcore spans LBA 1 through 2047 and no more");
 
         rc = syscall3(SYS_LSEEK, fd, 0, SEEK_SET);
         check(rc == 0, "seek to the gap's first sector");
-        n = syscall3(SYS_READ, fd, (int)(size_t)sector, SECTOR);
+        n = syscall3(SYS_READ, fd, (long)sector, SECTOR);
         check(n == SECTOR, "the gap's first sector reads whole");
 
         /* The window ends at LBA 2047 and the checks are on the whole request,
            so a write starting past the end writes nothing, not part. */
         rc = syscall3(SYS_LSEEK, fd, 2047 * SECTOR, SEEK_SET);
         check(rc == 2047 * SECTOR, "seek to the gap's end");
-        n = syscall3(SYS_READ, fd, (int)(size_t)sector, SECTOR);
+        n = syscall3(SYS_READ, fd, (long)sector, SECTOR);
         check(n == 0, "a read at the end is exactly 0");
-        n = syscall3(SYS_WRITE, fd, (int)(size_t)sector, SECTOR);
+        n = syscall3(SYS_WRITE, fd, (long)sector, SECTOR);
         check(n == -ENOSPC, "a write at the end is -ENOSPC");
         rc = syscall3(SYS_LSEEK, fd, 2046 * SECTOR, SEEK_SET);
         check(rc == 2046 * SECTOR, "seek to the last sector");
-        n = syscall3(SYS_WRITE, fd, (int)(size_t)sector, 2 * SECTOR);
+        n = syscall3(SYS_WRITE, fd, (long)sector, 2 * SECTOR);
         check(n == -ENOSPC, "a write crossing the end writes nothing");
 
         rc = syscall3(SYS_LSEEK, fd, 1, SEEK_SET);
         check(rc == 1, "an unaligned seek is allowed");
-        n = syscall3(SYS_READ, fd, (int)(size_t)sector, SECTOR);
+        n = syscall3(SYS_READ, fd, (long)sector, SECTOR);
         check(n == -EINVAL, "an unaligned read is -EINVAL");
-        n = syscall3(SYS_WRITE, fd, (int)(size_t)sector, SECTOR);
+        n = syscall3(SYS_WRITE, fd, (long)sector, SECTOR);
         check(n == -EINVAL, "an unaligned write is -EINVAL");
         rc = syscall3(SYS_LSEEK, fd, 0, SEEK_SET);
         check(rc == 0, "seek back to the start");
-        n = syscall3(SYS_WRITE, fd, (int)(size_t)sector, SECTOR - 1);
+        n = syscall3(SYS_WRITE, fd, (long)sector, SECTOR - 1);
         check(n == -EINVAL, "a partial-sector count is -EINVAL");
 
         /* The mode stops a non-root caller at open and nothing else: the
            credential check passes uid 0 whatever the mode says. So the write
            handler asks again, and this descriptor, opened while privileged and
            carried across a privilege drop, must stop working. */
-        rc = syscall1(SYS_SETUID32, 1000);
+        rc = syscall1(SYS_SETUID, 1000);
         check(rc == 0, "the probe drops to an unprivileged uid");
         rc = syscall3(SYS_LSEEK, fd, 0, SEEK_SET);
         check(rc == 0, "the descriptor still seeks after the drop");
-        n = syscall3(SYS_READ, fd, (int)(size_t)sector, SECTOR);
+        n = syscall3(SYS_READ, fd, (long)sector, SECTOR);
         check(n == SECTOR, "and still reads, which is not the privilege in question");
-        n = syscall3(SYS_WRITE, fd, (int)(size_t)sector, SECTOR);
+        n = syscall3(SYS_WRITE, fd, (long)sector, SECTOR);
         check(n == -EPERM, "but a write through it is -EPERM after the drop");
         syscall1(SYS_CLOSE, fd);
 
-        rc = syscall3(SYS_OPEN, (int)(size_t)"/dev/grubcore", O_RDONLY, 0);
+        rc = syscall3(SYS_OPEN, (long)"/dev/grubcore", O_RDONLY, 0);
         check(rc == -EACCES, "and an unprivileged open of grubcore is -EACCES");
 
         if (fails == 0) {
@@ -865,56 +823,55 @@ void _start(void)
         long long size = 260LL * 1024 * 1024 * 1024;
         int fd2;
 
-        fd = syscall3(SYS_OPEN, (int)(size_t)"/dev/disk0", O_RDONLY, 0);
+        fd = syscall3(SYS_OPEN, (long)"/dev/disk0", O_RDONLY, 0);
         check(fd >= 0, "root opens /dev/disk0 on a 260 GB drive");
 
-        rc = syscall5(SYS_LLSEEK, fd, 0, 0, (int)(size_t)&pos, SEEK_END);
+        rc = syscall5(SYS_LLSEEK, fd, 0, 0, (long)&pos, SEEK_END);
         check(rc == 0, "_llseek to the end of a 260 GB window succeeds");
         check(pos == size, "and reports the whole drive, not a truncation");
 
-        rc =
-            syscall5(SYS_LLSEEK, fd, off_hi(near_at), off_lo(near_at), (int)(size_t)&pos, SEEK_SET);
+        rc = syscall5(SYS_LLSEEK, fd, off_hi(near_at), off_lo(near_at), (long)&pos, SEEK_SET);
         check(rc == 0 && pos == near_at, "_llseek to 5 GiB lands where it was asked");
-        n = syscall3(SYS_READ, fd, (int)(size_t)sector, SECTOR);
+        n = syscall3(SYS_READ, fd, (long)sector, SECTOR);
         check(n == SECTOR, "a sector reads at 5 GiB");
         check(pattern_ok(sector, 5), "and has the bytes written there");
 
-        rc = syscall5(SYS_LLSEEK, fd, off_hi(far_at), off_lo(far_at), (int)(size_t)&pos, SEEK_SET);
+        rc = syscall5(SYS_LLSEEK, fd, off_hi(far_at), off_lo(far_at), (long)&pos, SEEK_SET);
         check(rc == 0 && pos == far_at, "_llseek to 258 GiB lands where it was asked");
-        n = syscall3(SYS_READ, fd, (int)(size_t)sector, SECTOR);
+        n = syscall3(SYS_READ, fd, (long)sector, SECTOR);
         check(n == SECTOR, "a sector reads at 258 GiB");
         check(pattern_ok(sector, 258), "and has the bytes written there");
 
-        rc = syscall5(SYS_LLSEEK, fd, 0, 0, (int)(size_t)&pos, SEEK_SET);
+        rc = syscall5(SYS_LLSEEK, fd, 0, 0, (long)&pos, SEEK_SET);
         check(rc == 0 && pos == 0, "seek back to the start");
         {
             long long step = near_at;
 
-            rc = syscall5(SYS_LLSEEK, fd, off_hi(step), off_lo(step), (int)(size_t)&pos, SEEK_CUR);
+            rc = syscall5(SYS_LLSEEK, fd, off_hi(step), off_lo(step), (long)&pos, SEEK_CUR);
             check(rc == 0 && pos == near_at, "SEEK_CUR forward crosses 4 GiB");
             step = far_at - near_at;
-            rc = syscall5(SYS_LLSEEK, fd, off_hi(step), off_lo(step), (int)(size_t)&pos, SEEK_CUR);
+            rc = syscall5(SYS_LLSEEK, fd, off_hi(step), off_lo(step), (long)&pos, SEEK_CUR);
             check(rc == 0 && pos == far_at, "SEEK_CUR forward again reaches 258 GiB");
-            n = syscall3(SYS_READ, fd, (int)(size_t)sector, SECTOR);
+            n = syscall3(SYS_READ, fd, (long)sector, SECTOR);
             check(n == SECTOR && pattern_ok(sector, 258),
                   "and a read there still finds the far marker");
             step = -(far_at + SECTOR);
-            rc = syscall5(SYS_LLSEEK, fd, off_hi(step), off_lo(step), (int)(size_t)&pos, SEEK_CUR);
+            rc = syscall5(SYS_LLSEEK, fd, off_hi(step), off_lo(step), (long)&pos, SEEK_CUR);
             check(rc == 0 && pos == 0, "SEEK_CUR backward returns to the start");
             step = -1;
-            rc = syscall5(SYS_LLSEEK, fd, off_hi(step), off_lo(step), (int)(size_t)&pos, SEEK_CUR);
+            rc = syscall5(SYS_LLSEEK, fd, off_hi(step), off_lo(step), (long)&pos, SEEK_CUR);
             check(rc == -EINVAL, "a seek before the start is refused, not wrapped");
         }
 
-        rc = syscall5(SYS_LLSEEK, fd, off_hi(far_at), off_lo(far_at), (int)(size_t)&pos, SEEK_SET);
+        rc = syscall5(SYS_LLSEEK, fd, off_hi(far_at), off_lo(far_at), (long)&pos, SEEK_SET);
         check(rc == 0, "seek to the far marker before duplicating");
         fd2 = syscall1(SYS_DUP, fd);
         check(fd2 >= 0, "the descriptor duplicates");
-        rc = syscall5(SYS_LLSEEK, fd2, 0, 0, (int)(size_t)&pos, SEEK_CUR);
+        rc = syscall5(SYS_LLSEEK, fd2, 0, 0, (long)&pos, SEEK_CUR);
         check(rc == 0 && pos == far_at, "the duplicate shares the wide offset");
-        n = syscall3(SYS_READ, fd2, (int)(size_t)sector, SECTOR);
+        n = syscall3(SYS_READ, fd2, (long)sector, SECTOR);
         check(n == SECTOR && pattern_ok(sector, 258), "and reads the far marker through it");
-        rc = syscall5(SYS_LLSEEK, fd, 0, 0, (int)(size_t)&pos, SEEK_CUR);
+        rc = syscall5(SYS_LLSEEK, fd, 0, 0, (long)&pos, SEEK_CUR);
         check(rc == 0 && pos == far_at + SECTOR,
               "the original saw the duplicate's read advance it");
         syscall1(SYS_CLOSE, fd2);
@@ -935,9 +892,9 @@ void _start(void)
 
     if (!fixture) {
         /* A single-partition disk: the device must not exist anywhere. */
-        rc = syscall3(SYS_STAT64, (int)(size_t)"/dev/bootpart", (int)(size_t)statbuf, 0);
+        rc = syscall3(SYS_STAT, (long)"/dev/bootpart", (long)statbuf, 0);
         check(rc == -ENOENT, "stat64 /dev/bootpart is -ENOENT");
-        rc = syscall3(SYS_OPEN, (int)(size_t)"/dev/bootpart", O_RDONLY, 0);
+        rc = syscall3(SYS_OPEN, (long)"/dev/bootpart", O_RDONLY, 0);
         check(rc == -ENOENT, "open /dev/bootpart is -ENOENT");
         if (fails == 0) {
             puts("BOOTPROBE ABSENT OK");
@@ -948,21 +905,21 @@ void _start(void)
     }
 
     /* The fixture: partition 1 is FAT-typed known bytes. */
-    rc = syscall3(SYS_STAT64, (int)(size_t)"/dev/bootpart", (int)(size_t)statbuf, 0);
+    rc = syscall3(SYS_STAT, (long)"/dev/bootpart", (long)statbuf, 0);
     check(rc == 0, "stat64 /dev/bootpart");
     mode = *(unsigned int *)(statbuf + ST_MODE);
     check(mode == 020600, "bootpart is a 0600 character device");
 
-    fd = syscall3(SYS_OPEN, (int)(size_t)"/dev/bootpart", O_RDWR, 0);
+    fd = syscall3(SYS_OPEN, (long)"/dev/bootpart", O_RDWR, 0);
     check(fd >= 0, "root opens /dev/bootpart read-write");
-    rc = syscall3(SYS_FSTAT64, fd, (int)(size_t)fstatbuf, 0);
+    rc = syscall3(SYS_FSTAT, fd, (long)fstatbuf, 0);
     check(rc == 0 && *(unsigned int *)(fstatbuf + ST_MODE) == 020600,
           "fstat mode matches the path stat");
 
     /* Known bytes at a seek: sector 5 of the pattern. */
     rc = syscall3(SYS_LSEEK, fd, 5 * SECTOR, SEEK_SET);
     check(rc == 5 * SECTOR, "seek to sector 5");
-    n = syscall3(SYS_READ, fd, (int)(size_t)sector, SECTOR);
+    n = syscall3(SYS_READ, fd, (long)sector, SECTOR);
     check(n == SECTOR, "read sector 5 whole");
     {
         int j, ok = 1;
@@ -980,23 +937,23 @@ void _start(void)
        0, a read past it is exactly 0, and a write there is -ENOSPC. */
     rc = syscall3(SYS_LSEEK, fd, 0, SEEK_END);
     check(rc == PART_SECTORS * SECTOR, "SEEK_END is the partition size");
-    n = syscall3(SYS_READ, fd, (int)(size_t)sector, SECTOR);
+    n = syscall3(SYS_READ, fd, (long)sector, SECTOR);
     check(n == 0, "a read at the end returns exactly 0");
     rc = syscall3(SYS_LSEEK, fd, SECTOR, SEEK_END);
     check(rc == (PART_SECTORS + 1) * SECTOR, "a seek past the end is allowed");
-    n = syscall3(SYS_READ, fd, (int)(size_t)sector, SECTOR);
+    n = syscall3(SYS_READ, fd, (long)sector, SECTOR);
     check(n == 0, "a read past the end returns exactly 0");
-    n = syscall3(SYS_WRITE, fd, (int)(size_t)sector, SECTOR);
+    n = syscall3(SYS_WRITE, fd, (long)sector, SECTOR);
     check(n == -ENOSPC, "a write past the end is -ENOSPC");
 
     /* Alignment: partial sectors are refused in both directions. */
     rc = syscall3(SYS_LSEEK, fd, 0, SEEK_SET);
     check(rc == 0, "seek back to 0");
-    n = syscall3(SYS_READ, fd, (int)(size_t)sector, 100);
+    n = syscall3(SYS_READ, fd, (long)sector, 100);
     check(n == -EINVAL, "an unaligned read count is -EINVAL");
     rc = syscall3(SYS_LSEEK, fd, 100, SEEK_SET);
     check(rc == 100, "a seek needs no alignment");
-    n = syscall3(SYS_READ, fd, (int)(size_t)sector, SECTOR);
+    n = syscall3(SYS_READ, fd, (long)sector, SECTOR);
     check(n == -EINVAL, "an unaligned offset is -EINVAL");
 
     /* A write comes back on a re-read. */
@@ -1009,11 +966,11 @@ void _start(void)
     }
     rc = syscall3(SYS_LSEEK, fd, 7 * SECTOR, SEEK_SET);
     check(rc == 7 * SECTOR, "seek to sector 7");
-    n = syscall3(SYS_WRITE, fd, (int)(size_t)written, SECTOR);
+    n = syscall3(SYS_WRITE, fd, (long)written, SECTOR);
     check(n == SECTOR, "write sector 7 whole");
     rc = syscall3(SYS_LSEEK, fd, 7 * SECTOR, SEEK_SET);
     check(rc == 7 * SECTOR, "seek back to sector 7");
-    n = syscall3(SYS_READ, fd, (int)(size_t)sector, SECTOR);
+    n = syscall3(SYS_READ, fd, (long)sector, SECTOR);
     check(n == SECTOR, "read sector 7 back");
     {
         int j, ok = 1;
@@ -1029,11 +986,11 @@ void _start(void)
     syscall1(SYS_CLOSE, fd);
 
     /* Unprivileged, the device refuses at open with -EACCES. */
-    rc = syscall1(SYS_SETUID32, 1000);
+    rc = syscall1(SYS_SETUID, 1000);
     check(rc == 0, "drop to uid 1000");
-    rc = syscall3(SYS_OPEN, (int)(size_t)"/dev/bootpart", O_RDONLY, 0);
+    rc = syscall3(SYS_OPEN, (long)"/dev/bootpart", O_RDONLY, 0);
     check(rc == -EACCES, "an unprivileged open is -EACCES");
-    rc = syscall3(SYS_OPEN, (int)(size_t)"/dev/bootpart", O_RDWR, 0);
+    rc = syscall3(SYS_OPEN, (long)"/dev/bootpart", O_RDWR, 0);
     check(rc == -EACCES, "an unprivileged read-write open is -EACCES");
 
     if (fails == 0) {

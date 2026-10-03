@@ -15,7 +15,7 @@
  * would also wedge the table. Prints "ORPHANPROBE OK" only when every round
  * reaped both.
  *
- * Freestanding; direct int 0x80.
+ * Freestanding; direct system calls (probe.h).
  *
  * Needs: to be the kernel's designated init process. The debug shell's exec
  * supplies this role on either root type; its PID need not be 1. An ordinary
@@ -23,14 +23,9 @@
  * probe, not a login session.
  */
 
-typedef unsigned int size_t;
+#include "probe.h"
 
 #define STDOUT_FILENO 1
-
-#define SYS_EXIT    1
-#define SYS_FORK    2
-#define SYS_WRITE   4
-#define SYS_WAITPID 7
 
 /* Far past MAX_PROCS (16): a per-round orphan leak fills the table well inside
  * this count, on top of the per-round two-reaps check. */
@@ -38,35 +33,23 @@ typedef unsigned int size_t;
 
 static int sys_write(int fd, const void *buf, size_t count)
 {
-    int result;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(result)
-                         : "0"(SYS_WRITE), "b"(fd), "c"(buf), "d"(count)
-                         : "memory");
-    return result;
+    return syscall3(SYS_WRITE, (long)fd, (long)buf, (long)count);
 }
 
 static void sys_exit(int status)
 {
-    __asm__ __volatile__("int $0x80" : : "a"(SYS_EXIT), "b"(status));
+    syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
 static int sys_fork(void)
 {
-    int result;
-    __asm__ __volatile__("int $0x80" : "=a"(result) : "0"(SYS_FORK));
-    return result;
+    return syscall0(SYS_FORK);
 }
 
 static int sys_waitpid(int pid, int *status, int options)
 {
-    int result;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(result)
-                         : "0"(SYS_WAITPID), "b"(pid), "c"(status), "d"(options)
-                         : "memory");
-    return result;
+    return syscall3(SYS_WAITPID, (long)pid, (long)status, (long)options);
 }
 
 static size_t strlen(const char *s)
@@ -107,7 +90,7 @@ static void print_num(int n)
     }
 }
 
-void _start(void)
+PROBE_START void _start(void)
 {
     int i;
     int reaped = 0;

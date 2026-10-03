@@ -19,21 +19,14 @@
  * Prints "REBOOTPROBE OK" at the end, which is also the proof that nothing
  * here stopped the machine.
  *
- * Freestanding; direct int 0x80.
+ * Freestanding; direct system calls (probe.h).
  */
 
-typedef unsigned int size_t;
+#include "probe.h"
+
 typedef unsigned int uint32_t;
 
 #define STDOUT_FILENO 1
-
-#define SYS_EXIT      1
-#define SYS_FORK      2
-#define SYS_WRITE     4
-#define SYS_WAITPID   7
-#define SYS_REBOOT    88
-#define SYS_GETEUID32 201
-#define SYS_SETUID32  213
 
 /* The magics musl passes for a caller of reboot(2), and the four commands this
  * kernel answers without stopping. */
@@ -54,58 +47,38 @@ typedef unsigned int uint32_t;
 
 static int sys_write(int fd, const void *buf, size_t count)
 {
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_WRITE), "b"(fd), "c"(buf), "d"(count)
-                         : "memory");
-    return r;
+    return syscall3(SYS_WRITE, (long)fd, (long)buf, (long)count);
 }
 
 static void sys_exit(int status)
 {
-    __asm__ __volatile__("int $0x80" : : "a"(SYS_EXIT), "b"(status));
+    syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
 static int sys_fork(void)
 {
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(SYS_FORK));
-    return r;
+    return syscall0(SYS_FORK);
 }
 
 static int sys_waitpid(int pid, int *status, int options)
 {
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_WAITPID), "b"(pid), "c"(status), "d"(options)
-                         : "memory");
-    return r;
+    return syscall3(SYS_WAITPID, (long)pid, (long)status, (long)options);
 }
 
 static int sys_setuid(int uid)
 {
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(SYS_SETUID32), "b"(uid));
-    return r;
+    return syscall1(SYS_SETUID, (long)uid);
 }
 
 static int sys_geteuid(void)
 {
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(SYS_GETEUID32));
-    return r;
+    return syscall0(SYS_GETEUID);
 }
 
 static int sys_reboot(uint32_t magic1, uint32_t magic2, uint32_t cmd)
 {
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_REBOOT), "b"(magic1), "c"(magic2), "d"(cmd));
-    return r;
+    return syscall3(SYS_REBOOT, (long)magic1, (long)magic2, (long)cmd);
 }
 
 static size_t strlen(const char *s)
@@ -164,7 +137,7 @@ static void expect(const char *what, int got, int want)
     failures++;
 }
 
-void _start(void)
+PROBE_START void _start(void)
 {
     int child, status = 0;
 

@@ -9,28 +9,14 @@
  * resolves /proc/self/fd/0 to the console. Prints "DEVPROBE OK" when every
  * check passes.
  *
- * Freestanding; direct int 0x80.
+ * Freestanding; direct system calls (probe.h).
  *
  * Needs: the console as stdin. One row reads /proc/self/fd/0 and requires it
  * to name /dev/console, which is true of a console session and not of one
  * carried over SSH.
  */
 
-typedef unsigned int size_t;
-
-#define SYS_EXIT       1
-#define SYS_READ       3
-#define SYS_WRITE      4
-#define SYS_OPEN       5
-#define SYS_CLOSE      6
-#define SYS_GETPID     20
-#define SYS_READLINK   85
-#define SYS_IOCTL      54
-#define SYS_FORK       2
-#define SYS_WAITPID    7
-#define SYS_PIPE       42
-#define SYS_FSTAT64    197
-#define SYS_GETDENTS64 220
+#include "probe.h"
 
 #define O_RDONLY    0
 #define O_WRONLY    1
@@ -49,20 +35,6 @@ typedef unsigned int size_t;
 #define FB_MODE_TEXT  0x4602
 #define FB_SETPALETTE 0x4603
 
-static int syscall1(int n, int a)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a) : "memory");
-    return r;
-}
-
-static int syscall3(int n, int a, int b, int c)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
-}
-
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, status);
@@ -80,8 +52,8 @@ static size_t strlen(const char *s)
 
 static void puts(const char *s)
 {
-    syscall3(SYS_WRITE, 1, (int)(size_t)s, (int)strlen(s));
-    syscall3(SYS_WRITE, 1, (int)(size_t)"\n", 1);
+    syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
+    syscall3(SYS_WRITE, 1, (long)"\n", 1);
 }
 
 static int fails = 0;
@@ -90,24 +62,24 @@ static void check(int cond, const char *msg)
 {
     if (!cond) {
         fails++;
-        syscall3(SYS_WRITE, 1, (int)(size_t)"  FAIL: ", 8);
+        syscall3(SYS_WRITE, 1, (long)"  FAIL: ", 8);
         puts(msg);
     }
 }
 
 static int do_open(const char *path, int flags)
 {
-    return syscall3(SYS_OPEN, (int)(size_t)path, flags, 0);
+    return syscall3(SYS_OPEN, (long)path, flags, 0);
 }
 
 static int do_read(int fd, char *buf, int n)
 {
-    return syscall3(SYS_READ, fd, (int)(size_t)buf, n);
+    return syscall3(SYS_READ, fd, (long)buf, n);
 }
 
 static int do_readlink(const char *path, char *buf, int n)
 {
-    return syscall3(SYS_READLINK, (int)(size_t)path, (int)(size_t)buf, n);
+    return syscall3(SYS_READLINK, (long)path, (long)buf, n);
 }
 
 /** Parse the leading decimal of s. */
@@ -161,7 +133,7 @@ static unsigned int listed_ino(const char *name)
     if (fd < 0) {
         return 0;
     }
-    while ((n = syscall3(SYS_GETDENTS64, fd, (int)(size_t)dbuf, (int)sizeof(dbuf))) > 0) {
+    while ((n = syscall3(SYS_GETDENTS64, fd, (long)dbuf, (int)sizeof(dbuf))) > 0) {
         for (pos = 0; pos < n; pos += reclen) {
             reclen = *(unsigned short *)(dbuf + pos + D_RECLEN);
             if (reclen <= 0) {
@@ -197,7 +169,7 @@ static void null_is_not_a_disk(void)
     fd = do_open("/dev/null", O_RDONLY);
     check(fd >= 0, "open /dev/null for the disk rows");
     check(syscall3(SYS_IOCTL, fd, 0x125F, 0) == -25, "a disk's BLKRRPART on /dev/null is ENOTTY");
-    check(syscall3(SYS_FSTAT64, fd, (int)(size_t)st, 0) == 0, "fstat /dev/null");
+    check(syscall3(SYS_FSTAT, fd, (long)st, 0) == 0, "fstat /dev/null");
     ino = listed_ino("null");
     check(ino != 0 && *(unsigned int *)(st + ST_INO64) == ino &&
               *(unsigned int *)(st + ST_INO64 + 4) == 0u,
@@ -213,13 +185,13 @@ static void framebuffer(void)
     char one = 1;
     static char palette[768];
 
-    check(syscall1(SYS_PIPE, (int)(size_t)ready) == 0, "framebuffer ready pipe");
-    check(syscall1(SYS_PIPE, (int)(size_t)next) == 0, "framebuffer command pipe");
+    check(syscall1(SYS_PIPE, (long)ready) == 0, "framebuffer ready pipe");
+    check(syscall1(SYS_PIPE, (long)next) == 0, "framebuffer command pipe");
     fd = do_open("/fb", O_WRONLY);
     check(fd >= 0, "open framebuffer");
     check(syscall3(SYS_IOCTL, fd, FB_MODE_TEXT, 0) == 0, "framebuffer text mode");
     check(syscall3(SYS_IOCTL, fd, FB_MODE_13H, 0) == 0, "framebuffer graphics reentry");
-    check(syscall3(SYS_WRITE, fd, (int)(size_t)&one, 1) == 1,
+    check(syscall3(SYS_WRITE, fd, (long)&one, 1) == 1,
           "graphics reentry restores writable display");
     child = syscall1(SYS_FORK, 0);
     check(child >= 0, "framebuffer fork");
@@ -233,13 +205,13 @@ static void framebuffer(void)
         check(do_open("/fb", O_WRONLY) == -EBUSY, "second opener cannot take owned display");
         check(syscall3(SYS_IOCTL, fd, FB_MODE_TEXT, 0) == -EBUSY,
               "inherited descriptor cannot release parent's display");
-        syscall3(SYS_WRITE, ready[1], (int)(size_t)&one, 1);
+        syscall3(SYS_WRITE, ready[1], (long)&one, 1);
         check(do_read(next[0], &one, 1) == 1, "wait for display release");
         other = do_open("/fb", O_WRONLY);
         check(other >= 0, "second opener acquires released display");
-        syscall3(SYS_WRITE, ready[1], (int)(size_t)&one, 1);
+        syscall3(SYS_WRITE, ready[1], (long)&one, 1);
         check(do_read(next[0], &one, 1) == 1, "wait for stale requests");
-        check(syscall3(SYS_WRITE, other, (int)(size_t)&one, 1) == 1,
+        check(syscall3(SYS_WRITE, other, (long)&one, 1) == 1,
               "stale requests preserve owner's graphics mode");
         syscall1(SYS_CLOSE, other);
         syscall1(SYS_CLOSE, fd);
@@ -248,27 +220,27 @@ static void framebuffer(void)
     syscall1(SYS_CLOSE, ready[1]);
     syscall1(SYS_CLOSE, next[0]);
     check(do_read(ready[0], &one, 1) == 1, "wait for inherited descriptor check");
-    check(syscall3(SYS_WRITE, fd, (int)(size_t)&one, 1) == 1,
+    check(syscall3(SYS_WRITE, fd, (long)&one, 1) == 1,
           "second opener preserves first owner's graphics mode");
     check(syscall3(SYS_IOCTL, fd, FB_MODE_TEXT, 0) == 0, "first owner releases display");
-    syscall3(SYS_WRITE, next[1], (int)(size_t)&one, 1);
+    syscall3(SYS_WRITE, next[1], (long)&one, 1);
     check(do_read(ready[0], &one, 1) == 1, "wait for second owner");
     check(syscall3(SYS_IOCTL, fd, FB_MODE_TEXT, 0) == -EBUSY,
           "stale descriptor cannot release second owner's display");
     check(syscall3(SYS_IOCTL, fd, FB_MODE_13H, 0) == -EBUSY,
           "stale descriptor cannot acquire second owner's display");
-    check(syscall3(SYS_IOCTL, fd, FB_SETPALETTE, (int)(size_t)palette) == -EBUSY,
+    check(syscall3(SYS_IOCTL, fd, FB_SETPALETTE, (long)palette) == -EBUSY,
           "stale descriptor cannot set second owner's palette");
     check(do_open("/fb", O_WRONLY) == -EBUSY, "second owner retains display");
-    syscall3(SYS_WRITE, next[1], (int)(size_t)&one, 1);
-    check(syscall3(SYS_WAITPID, child, (int)(size_t)&status, 0) == child && status == 0,
+    syscall3(SYS_WRITE, next[1], (long)&one, 1);
+    check(syscall3(SYS_WAITPID, child, (long)&status, 0) == child && status == 0,
           "framebuffer child checks pass");
     syscall1(SYS_CLOSE, fd);
     syscall1(SYS_CLOSE, ready[0]);
     syscall1(SYS_CLOSE, next[1]);
 }
 
-void _start(void)
+PROBE_START void _start(void)
 {
     char buf[64];
     char buf2[64];
@@ -301,14 +273,14 @@ void _start(void)
 
     fd = do_open("/dev/null", O_WRONLY);
     check(fd >= 0, "open /dev/null O_WRONLY");
-    check(syscall3(SYS_WRITE, fd, (int)(size_t)"discard me", 10) == 10,
+    check(syscall3(SYS_WRITE, fd, (long)"discard me", 10) == 10,
           "/dev/null write is accepted and discarded");
     syscall1(SYS_CLOSE, fd);
 
     /* (c) /dev/full: a write fails with -ENOSPC. */
     fd = do_open("/dev/full", O_WRONLY);
     check(fd >= 0, "open /dev/full");
-    check(syscall3(SYS_WRITE, fd, (int)(size_t)"x", 1) == -ENOSPC, "/dev/full write -> -ENOSPC");
+    check(syscall3(SYS_WRITE, fd, (long)"x", 1) == -ENOSPC, "/dev/full write -> -ENOSPC");
     syscall1(SYS_CLOSE, fd);
 
     /* (d) /dev/urandom: two reads differ (the stream is not constant). */

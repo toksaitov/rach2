@@ -12,35 +12,10 @@
  * what that left, which runs the check, and counts what survived.
  *
  * Prints "FATWRITE OK (mode)" or "FATWRITE FAIL: reason". Freestanding;
- * int 0x80.
+ * direct system calls (probe.h).
  */
-typedef unsigned int size_t;
 
-#define SYS_EXIT       1
-#define SYS_FORK       2
-#define SYS_READ       3
-#define SYS_WRITE      4
-#define SYS_OPEN       5
-#define SYS_CLOSE      6
-#define SYS_WAITPID    7
-#define SYS_UNLINK     10
-#define SYS_EXECVE     11
-#define SYS_CHDIR      12
-#define SYS_MOUNT      21
-#define SYS_SETUID     213
-#define SYS_RENAME     38
-#define SYS_MKDIR      39
-#define SYS_RMDIR      40
-#define SYS_DUP        41
-#define SYS_UMOUNT2    52
-#define SYS_FCNTL      221
-#define SYS_DUP2       63
-#define SYS_STAT64     195
-#define SYS_GETDENTS64 220
-#define SYS_STATFS64   268
-#define SYS_OPENAT     295
-#define SYS_NANOSLEEP  162
-#define SYS_KILL       37
+#include "probe.h"
 
 #define O_CREAT   0100
 #define O_RDONLY  0
@@ -70,48 +45,10 @@ typedef unsigned int size_t;
 
 #define STATFS_MAGIC_VFAT 0x4d44
 
-static int sys1(int n, int a)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a) : "memory");
-    return r;
-}
-
-static int sys2(int n, int a, int b)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b) : "memory");
-    return r;
-}
-
-static int sys3(int n, int a, int b, int c)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
-}
-
-static int sys4(int n, int a, int b, int c, int d)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c), "S"(d) : "memory");
-    return r;
-}
-
-static int sys5(int n, int a, int b, int c, int d, int e)
-{
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(n), "b"(a), "c"(b), "d"(c), "S"(d), "D"(e)
-                         : "memory");
-    return r;
-}
-
 static void sys_exit(int status) __attribute__((noreturn));
 static void sys_exit(int status)
 {
-    sys1(SYS_EXIT, status);
+    syscall1(SYS_EXIT, status);
     __builtin_unreachable();
 }
 
@@ -126,14 +63,14 @@ static size_t strlen(const char *s)
 
 static void puts(const char *s)
 {
-    sys3(SYS_WRITE, 1, (int)s, (int)strlen(s));
-    sys3(SYS_WRITE, 1, (int)"\n", 1);
+    syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
+    syscall3(SYS_WRITE, 1, (long)"\n", 1);
 }
 
 static void fail(const char *why) __attribute__((noreturn));
 static void fail(const char *why)
 {
-    sys3(SYS_WRITE, 1, (int)"FATWRITE FAIL: ", 15);
+    syscall3(SYS_WRITE, 1, (long)"FATWRITE FAIL: ", 15);
     puts(why);
     sys_exit(1);
 }
@@ -154,10 +91,10 @@ static void fail_n(const char *why, int n)
     if (neg) {
         digits[--i] = '-';
     }
-    sys3(SYS_WRITE, 1, (int)"FATWRITE FAIL: ", 15);
-    sys3(SYS_WRITE, 1, (int)why, (int)strlen(why));
-    sys3(SYS_WRITE, 1, (int)" (", 2);
-    sys3(SYS_WRITE, 1, (int)(digits + i), (int)strlen(digits + i));
+    syscall3(SYS_WRITE, 1, (long)"FATWRITE FAIL: ", 15);
+    syscall3(SYS_WRITE, 1, (long)why, (int)strlen(why));
+    syscall3(SYS_WRITE, 1, (long)" (", 2);
+    syscall3(SYS_WRITE, 1, (long)(digits + i), (int)strlen(digits + i));
     puts(")");
     sys_exit(1);
 }
@@ -213,7 +150,7 @@ static int xstat(const char *path)
     char st[104];
 
     st[0] = 0;
-    return sys2(SYS_STAT64, (int)path, (int)st);
+    return syscall2(SYS_STAT, (long)path, (long)st);
 }
 
 /* The type mounted: vfat unless the second argument names another, which
@@ -222,7 +159,7 @@ static const char *fs_type = "vfat";
 
 static int do_mount(const char *src, const char *target, unsigned flags, const char *data)
 {
-    return sys5(SYS_MOUNT, (int)src, (int)target, (int)fs_type, (int)flags, (int)data);
+    return syscall5(SYS_MOUNT, (long)src, (long)target, (long)fs_type, (int)flags, (long)data);
 }
 
 static void sleep_ms(int ms)
@@ -231,14 +168,14 @@ static void sleep_ms(int ms)
 
     ts[0] = ms / 1000;
     ts[1] = (ms % 1000) * 1000000;
-    sys2(SYS_NANOSLEEP, (int)ts, 0);
+    syscall2(SYS_NANOSLEEP, (long)ts, 0);
 }
 
 static int wait_status(int pid)
 {
     int status = 0;
 
-    if (sys3(SYS_WAITPID, pid, (int)&status, 0) != pid) {
+    if (syscall3(SYS_WAITPID, pid, (long)&status, 0) != pid) {
         fail("waitpid");
     }
     return status;
@@ -249,26 +186,24 @@ static unsigned char buf[4096];
 /* Read a whole /proc file into buf as text. */
 static void read_text(const char *path)
 {
-    int fd = sys3(SYS_OPEN, (int)path, O_RDONLY, 0);
+    int fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
     int n;
 
     if (fd < 0) {
         fail(path);
     }
-    n = sys3(SYS_READ, fd, (int)buf, sizeof(buf) - 1);
+    n = syscall3(SYS_READ, fd, (long)buf, sizeof(buf) - 1);
     if (n < 0) {
         fail("reading a /proc file");
     }
     buf[n] = 0;
-    sys1(SYS_CLOSE, fd);
+    syscall1(SYS_CLOSE, fd);
 }
 
-#define FW        "/fw"
-#define SRC       "/dev/disk0p2"
-#define SYS_FSYNC 118
-#define SYS_LSEEK 19
-#define O_CREAT   0100
-#define O_TRUNC   01000
+#define FW      "/fw"
+#define SRC     "/dev/disk0p2"
+#define O_CREAT 0100
+#define O_TRUNC 01000
 
 static unsigned char pattern[65536];
 static unsigned char back[65536];
@@ -284,29 +219,29 @@ static void fill_pattern(void)
 
 static int write_file(const char *path, const void *data, int n)
 {
-    int fd = sys3(SYS_OPEN, (int)path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    int fd = syscall3(SYS_OPEN, (long)path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     int rc;
 
     if (fd < 0) {
         return fd;
     }
-    rc = sys3(SYS_WRITE, fd, (int)data, n);
-    sys1(SYS_CLOSE, fd);
+    rc = syscall3(SYS_WRITE, fd, (long)data, n);
+    syscall1(SYS_CLOSE, fd);
     return rc == n ? 0 : (rc < 0 ? rc : -1);
 }
 
 static int read_file(const char *path, void *dst, int cap)
 {
-    int fd = sys3(SYS_OPEN, (int)path, O_RDONLY, 0);
+    int fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
     int total = 0, n;
 
     if (fd < 0) {
         return fd;
     }
-    while ((n = sys3(SYS_READ, fd, (int)dst + total, cap - total)) > 0) {
+    while ((n = syscall3(SYS_READ, fd, (long)dst + total, cap - total)) > 0) {
         total += n;
     }
-    sys1(SYS_CLOSE, fd);
+    syscall1(SYS_CLOSE, fd);
     return n < 0 ? n : total;
 }
 
@@ -315,7 +250,7 @@ static void mode_write(void)
     int fd;
 
     fill_pattern();
-    sys2(SYS_MKDIR, (int)FW, 0755);
+    syscall2(SYS_MKDIR, (long)FW, 0755);
     if (do_mount(SRC, FW, 0, 0) != 0) {
         fail("the writable mount");
     }
@@ -325,23 +260,24 @@ static void mode_write(void)
     if (write_file(FW "/Long Name File.txt", "long", 4) != 0) {
         fail("the long-named file");
     }
-    if (sys2(SYS_MKDIR, (int)FW "/Sub Dir", 0755) != 0 ||
+    if (syscall2(SYS_MKDIR, (long)FW "/Sub Dir", 0755) != 0 ||
         write_file(FW "/Sub Dir/inner.txt", "inner", 5) != 0) {
         fail("the directory and its file");
     }
     if (write_file(FW "/tmp.txt", "moved", 5) != 0 ||
-        sys2(SYS_RENAME, (int)FW "/tmp.txt", (int)FW "/renamed.txt") != 0) {
+        syscall2(SYS_RENAME, (long)FW "/tmp.txt", (long)FW "/renamed.txt") != 0) {
         fail("the renamed file");
     }
-    if (write_file(FW "/gone.txt", "gone", 4) != 0 || sys1(SYS_UNLINK, (int)FW "/gone.txt") != 0) {
+    if (write_file(FW "/gone.txt", "gone", 4) != 0 ||
+        syscall1(SYS_UNLINK, (long)FW "/gone.txt") != 0) {
         fail("the removed file");
     }
-    fd = sys3(SYS_OPEN, (int)FW "/synced.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (fd < 0 || sys3(SYS_WRITE, fd, (int)"synced", 6) != 6 || sys1(SYS_FSYNC, fd) != 0) {
+    fd = syscall3(SYS_OPEN, (long)FW "/synced.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0 || syscall3(SYS_WRITE, fd, (long)"synced", 6) != 6 || syscall1(SYS_FSYNC, fd) != 0) {
         fail("the fsynced file");
     }
-    sys1(SYS_CLOSE, fd);
-    if (sys2(SYS_UMOUNT2, (int)FW, 0) != 0) {
+    syscall1(SYS_CLOSE, fd);
+    if (syscall2(SYS_UMOUNT2, (long)FW, 0) != 0) {
         fail("the clean unmount");
     }
     puts("FATWRITE OK (wrote)");
@@ -352,7 +288,7 @@ static void mode_readback(void)
     int n, i;
 
     fill_pattern();
-    sys2(SYS_MKDIR, (int)FW, 0755);
+    syscall2(SYS_MKDIR, (long)FW, 0755);
     if (do_mount(SRC, FW, MS_RDONLY, 0) != 0) {
         fail("the read-only mount for the read back");
     }
@@ -380,14 +316,14 @@ static void mode_readback(void)
     if (read_file(FW "/renamed.txt", back, sizeof(back)) != 5 || back[0] != 'm') {
         fail("the renamed file");
     }
-    if (sys3(SYS_OPEN, (int)FW "/tmp.txt", O_RDONLY, 0) != -ENOENT ||
-        sys3(SYS_OPEN, (int)FW "/gone.txt", O_RDONLY, 0) != -ENOENT) {
+    if (syscall3(SYS_OPEN, (long)FW "/tmp.txt", O_RDONLY, 0) != -ENOENT ||
+        syscall3(SYS_OPEN, (long)FW "/gone.txt", O_RDONLY, 0) != -ENOENT) {
         fail("the old and the removed names are gone");
     }
     if (read_file(FW "/synced.txt", back, sizeof(back)) != 6) {
         fail("the fsynced file");
     }
-    if (sys2(SYS_UMOUNT2, (int)FW, 0) != 0) {
+    if (syscall2(SYS_UMOUNT2, (long)FW, 0) != 0) {
         fail("umount2 after the read back");
     }
     puts("FATWRITE OK (read back)");
@@ -399,7 +335,7 @@ static void mode_crash(void)
     static char name[32];
 
     fill_pattern();
-    sys2(SYS_MKDIR, (int)FW, 0755);
+    syscall2(SYS_MKDIR, (long)FW, 0755);
     if (do_mount(SRC, FW, 0, 0) != 0) {
         fail("the writable mount for the crash");
     }
@@ -431,15 +367,15 @@ static void mode_repair(void)
     int fd, n, count = 0;
     static unsigned char dents[4096];
 
-    sys2(SYS_MKDIR, (int)FW, 0755);
+    syscall2(SYS_MKDIR, (long)FW, 0755);
     if (do_mount(SRC, FW, 0, 0) != 0) {
         fail("the mount after the crash");
     }
-    fd = sys3(SYS_OPEN, (int)FW, O_RDONLY, 0);
+    fd = syscall3(SYS_OPEN, (long)FW, O_RDONLY, 0);
     if (fd < 0) {
         fail("open the volume's root");
     }
-    while ((n = sys3(SYS_GETDENTS64, fd, (int)dents, (int)sizeof(dents))) > 0) {
+    while ((n = syscall3(SYS_GETDENTS64, fd, (long)dents, (int)sizeof(dents))) > 0) {
         int off = 0;
 
         while (off + 19 < n) {
@@ -456,11 +392,11 @@ static void mode_repair(void)
             off += reclen;
         }
     }
-    sys1(SYS_CLOSE, fd);
+    syscall1(SYS_CLOSE, fd);
     if (count < 1) {
         fail("nothing of the crash sequence survived");
     }
-    if (sys2(SYS_UMOUNT2, (int)FW, 0) != 0) {
+    if (syscall2(SYS_UMOUNT2, (long)FW, 0) != 0) {
         fail("umount2 after the repair");
     }
     puts("FATWRITE OK (repaired)");

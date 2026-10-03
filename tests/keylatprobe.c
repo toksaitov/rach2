@@ -22,36 +22,23 @@
  * instead of spinning, which is the loop inside one system call that the
  * scheduler's service point must break.
  *
- * Prints "KEYLAT OK" and exits 0. Freestanding; direct int 0x80.
+ * Prints "KEYLAT OK" and exits 0. Freestanding; direct system calls (probe.h).
  */
 
-typedef unsigned int size_t;
+#include "probe.h"
 
 #define STDIN_FILENO  0
 #define STDOUT_FILENO 1
 
-#define SYS_EXIT      1
-#define SYS_FORK      2
-#define SYS_READ      3
-#define SYS_WRITE     4
-#define SYS_KILL      37
-#define SYS_GETRANDOM 355
 #define GRND_INSECURE 0x0004u
 
 #define SIGKILL 9
 
 static char line[64];
 
-static int syscall3(int n, int a, int b, int c)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
-}
-
 static void sys_exit(int status)
 {
-    __asm__ __volatile__("int $0x80" : : "a"(SYS_EXIT), "b"(status));
+    syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
@@ -67,7 +54,7 @@ static size_t strlen(const char *s)
 
 static void puts(const char *s)
 {
-    syscall3(SYS_WRITE, STDOUT_FILENO, (int)(size_t)s, (int)strlen(s));
+    syscall3(SYS_WRITE, STDOUT_FILENO, (long)s, (int)strlen(s));
 }
 
 /* The child's buffer in the `random` mode: a call that fills it is the
@@ -110,7 +97,7 @@ void probe_main(unsigned *sp)
                 random_buf[off] = 1;
             }
             for (n = 0;; n++) {
-                if (syscall3(SYS_GETRANDOM, (int)(size_t)random_buf, (int)sizeof(random_buf),
+                if (syscall3(SYS_GETRANDOM, (long)random_buf, (int)sizeof(random_buf),
                              GRND_INSECURE) != (int)sizeof(random_buf)) {
                     puts("KEYLAT FAIL: getrandom did not fill the buffer\n");
                     sys_exit(1);
@@ -128,7 +115,7 @@ void probe_main(unsigned *sp)
     }
 
     puts("KEYLAT READING\n");
-    n = syscall3(SYS_READ, STDIN_FILENO, (int)(size_t)line, (int)sizeof(line));
+    n = syscall3(SYS_READ, STDIN_FILENO, (long)line, (int)sizeof(line));
     if (syscall3(SYS_KILL, child, SIGKILL, 0) != 0) {
         puts("KEYLAT FAIL: the child would not be killed\n");
         sys_exit(1);

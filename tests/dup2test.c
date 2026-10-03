@@ -3,24 +3,16 @@
  * write through stdout, then read the file back and check the content.
  * Also covers the identity case dup2(fd, fd) and failure on invalid fds.
  *
- * Freestanding; direct int 0x80.
+ * Freestanding; direct system calls (probe.h).
  */
 
-typedef unsigned int size_t;
+#include "probe.h"
 
 #define STDIN_FILENO  0
 #define STDOUT_FILENO 1
 #define STDERR_FILENO 2
 
 /* Syscall numbers (32-bit Linux / Rach2 compatible) */
-#define SYS_EXIT   1
-#define SYS_READ   3
-#define SYS_WRITE  4
-#define SYS_OPEN   5
-#define SYS_CLOSE  6
-#define SYS_CREAT  8
-#define SYS_UNLINK 10
-#define SYS_DUP2   63
 
 /* Open flags */
 #define O_RDONLY 0
@@ -29,71 +21,42 @@ typedef unsigned int size_t;
 
 static int sys_write(int fd, const void *buf, size_t count)
 {
-    int result;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(result)
-                         : "0"(SYS_WRITE), "b"(fd), "c"(buf), "d"(count)
-                         : "memory");
-    return result;
+    return syscall3(SYS_WRITE, (long)fd, (long)buf, (long)count);
 }
 
 static int sys_read(int fd, void *buf, size_t count)
 {
-    int result;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(result)
-                         : "0"(SYS_READ), "b"(fd), "c"(buf), "d"(count)
-                         : "memory");
-    return result;
+    return syscall3(SYS_READ, (long)fd, (long)buf, (long)count);
 }
 
 static int sys_open(const char *path, int flags)
 {
-    int result;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(result)
-                         : "0"(SYS_OPEN), "b"(path), "c"(flags)
-                         : "memory");
-    return result;
+    return syscall2(SYS_OPEN, (long)path, (long)flags);
 }
 
 static int sys_close(int fd)
 {
-    int result;
-    __asm__ __volatile__("int $0x80" : "=a"(result) : "0"(SYS_CLOSE), "b"(fd));
-    return result;
+    return syscall1(SYS_CLOSE, (long)fd);
 }
 
 static int sys_creat(const char *path, unsigned int mode)
 {
-    int result;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(result)
-                         : "0"(SYS_CREAT), "b"(path), "c"(mode)
-                         : "memory");
-    return result;
+    return syscall2(SYS_CREAT, (long)path, (long)mode);
 }
 
 static int sys_unlink(const char *path)
 {
-    int result;
-    __asm__ __volatile__("int $0x80" : "=a"(result) : "0"(SYS_UNLINK), "b"(path) : "memory");
-    return result;
+    return syscall1(SYS_UNLINK, (long)path);
 }
 
 static int sys_dup2(int oldfd, int newfd)
 {
-    int result;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(result)
-                         : "0"(SYS_DUP2), "b"(oldfd), "c"(newfd)
-                         : "memory");
-    return result;
+    return syscall2(SYS_DUP2, (long)oldfd, (long)newfd);
 }
 
 static void sys_exit(int status)
 {
-    __asm__ __volatile__("int $0x80" : : "a"(SYS_EXIT), "b"(status));
+    syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
@@ -168,7 +131,7 @@ static const char *test_content = "Hello from dup2!";
  * redirecting stdout onto a file and reading the bytes back, and the failure
  * cases for an invalid oldfd and an invalid newfd. Exits 0 on all-pass.
  */
-void _start(void)
+PROBE_START void _start(void)
 {
     char buf[128];
     int fd, fd2, n, result;

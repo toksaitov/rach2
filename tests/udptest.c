@@ -4,20 +4,16 @@
  * client against a host echo server reachable at the SLIRP gateway
  * 10.0.2.2:7777.
  *
- * Freestanding; direct int 0x80.
+ * Freestanding; direct system calls (probe.h).
  */
 
-typedef unsigned int size_t;
+#include "probe.h"
+
 typedef unsigned int uint32_t;
 typedef unsigned short uint16_t;
 typedef unsigned char uint8_t;
 
 #define STDOUT_FILENO 1
-
-#define SYS_EXIT         1
-#define SYS_WRITE        4
-#define SYS_GETTIMEOFDAY 78
-#define SYS_SOCKETCALL   102
 
 /* socketcall sub-calls. */
 #define SC_SOCKET   1
@@ -45,35 +41,23 @@ struct timeval {
 
 static int sys_write(int fd, const void *buf, size_t count)
 {
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_WRITE), "b"(fd), "c"(buf), "d"(count)
-                         : "memory");
-    return r;
+    return syscall3(SYS_WRITE, (long)fd, (long)buf, (long)count);
 }
 
 static void sys_exit(int status)
 {
-    __asm__ __volatile__("int $0x80" : : "a"(SYS_EXIT), "b"(status));
+    syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
 static int sys_gettimeofday(struct timeval *tv)
 {
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(SYS_GETTIMEOFDAY), "b"(tv), "c"(0) : "memory");
-    return r;
+    return syscall2(SYS_GETTIMEOFDAY, (long)tv, (long)0);
 }
 
 static int socketcall(int call, uint32_t *args)
 {
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_SOCKETCALL), "b"(call), "c"(args)
-                         : "memory");
-    return r;
+    return syscall2(SYS_SOCKETCALL, (long)call, (long)args);
 }
 
 static size_t strlen(const char *s)
@@ -152,7 +136,7 @@ static void delay_ms(int ms)
     } while (elapsed < ms);
 }
 
-void _start(void)
+PROBE_START void _start(void)
 {
     uint32_t args[6], rcv_len = 16;
     uint8_t local_sa[16], dst_sa[16], rcv_sa[16];
@@ -184,7 +168,7 @@ void _start(void)
     print("Test 2: bind local port... ");
     make_sockaddr(local_sa, LOCAL_PORT, 0, 0, 0, 0);
     args[0] = (uint32_t)fd;
-    args[1] = (uint32_t)local_sa;
+    args[1] = (unsigned long)local_sa;
     args[2] = 16;
     if (socketcall(SC_BIND, args) == 0) {
         puts("OK");
@@ -197,7 +181,7 @@ void _start(void)
     /* Test 3: non-blocking recv on an empty socket returns EAGAIN. */
     print("Test 3: recvfrom(MSG_DONTWAIT) with no data... ");
     args[0] = (uint32_t)fd;
-    args[1] = (uint32_t)buf;
+    args[1] = (unsigned long)buf;
     args[2] = sizeof(buf);
     args[3] = MSG_DONTWAIT;
     args[4] = 0;
@@ -220,21 +204,21 @@ void _start(void)
     n = EAGAIN;
     for (attempt = 0; attempt < 40 && n < 0; attempt++) {
         args[0] = (uint32_t)fd;
-        args[1] = (uint32_t)msg;
+        args[1] = (unsigned long)msg;
         args[2] = (uint32_t)msglen;
         args[3] = 0;
-        args[4] = (uint32_t)dst_sa;
+        args[4] = (unsigned long)dst_sa;
         args[5] = 16;
         socketcall(SC_SENDTO, args);
 
         delay_ms(50);
 
         args[0] = (uint32_t)fd;
-        args[1] = (uint32_t)buf;
+        args[1] = (unsigned long)buf;
         args[2] = sizeof(buf);
         args[3] = MSG_DONTWAIT;
-        args[4] = (uint32_t)rcv_sa;
-        args[5] = (uint32_t)&rcv_len;
+        args[4] = (unsigned long)rcv_sa;
+        args[5] = (unsigned long)&rcv_len;
         n = socketcall(SC_RECVFROM, args);
     }
 

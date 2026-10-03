@@ -1,5 +1,5 @@
 /**
- * Exercises signal delivery from user space via direct int 0x80 syscalls.
+ * Exercises signal delivery from user space via direct system calls.
  *
  * Its checks:
  *   * install a SIGUSR1 handler (with a tiny rt_sigreturn restorer), raise it
@@ -24,28 +24,12 @@
  *     that ends three sleeps, a child with no timer, and the timers the
  *     kernel does not keep refused.
  *
- * Prints "SIGPROBE OK" on success. Freestanding; direct int 0x80.
+ * Prints "SIGPROBE OK" on success. Freestanding; direct system calls (probe.h).
  */
 
-typedef unsigned int size_t;
+#include "probe.h"
 
 #define STDOUT_FILENO 1
-
-#define SYS_EXIT           1
-#define SYS_FORK           2
-#define SYS_WRITE          4
-#define SYS_WAITPID        7
-#define SYS_GETPID         20
-#define SYS_KILL           37
-#define SYS_RT_SIGACTION   174
-#define SYS_RT_SIGPROCMASK 175
-#define SYS_READ           3
-#define SYS_OPEN           5
-#define SYS_CLOSE          6
-#define SYS_NANOSLEEP      162
-#define SYS_ALARM          27
-#define SYS_SETITIMER      104
-#define SYS_GETITIMER      105
 
 #define O_RDONLY 0
 
@@ -73,34 +57,6 @@ struct k_sigaction {
     unsigned mask[2];
 };
 
-static int syscall1(int n, int a)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a) : "memory");
-    return r;
-}
-
-static int syscall2(int n, int a, int b)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b) : "memory");
-    return r;
-}
-
-static int syscall3(int n, int a, int b, int c)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
-}
-
-static int syscall4(int n, int a, int b, int c, int d)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c), "S"(d) : "memory");
-    return r;
-}
-
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, status);
@@ -118,8 +74,8 @@ static size_t strlen(const char *s)
 
 static void puts(const char *s)
 {
-    syscall3(SYS_WRITE, STDOUT_FILENO, (int)(size_t)s, (int)strlen(s));
-    syscall3(SYS_WRITE, STDOUT_FILENO, (int)(size_t)"\n", 1);
+    syscall3(SYS_WRITE, STDOUT_FILENO, (long)s, (int)strlen(s));
+    syscall3(SYS_WRITE, STDOUT_FILENO, (long)"\n", 1);
 }
 
 static int fails = 0;
@@ -128,7 +84,7 @@ static void check(int cond, const char *msg)
 {
     if (!cond) {
         fails++;
-        syscall3(SYS_WRITE, STDOUT_FILENO, (int)(size_t)"  FAIL: ", 8);
+        syscall3(SYS_WRITE, STDOUT_FILENO, (long)"  FAIL: ", 8);
         puts(msg);
     }
 }
@@ -182,7 +138,7 @@ static void install_with(int signo, void (*h)(int), unsigned long extra)
     ka.restorer = sig_restorer;
     ka.mask[0] = 0;
     ka.mask[1] = 0;
-    check(syscall4(SYS_RT_SIGACTION, signo, (int)(size_t)&ka, 0, 8) == 0, "rt_sigaction");
+    check(syscall4(SYS_RT_SIGACTION, signo, (long)&ka, 0, 8) == 0, "rt_sigaction");
 }
 
 /** The decimal after `key` in `text`, or -1 if the key is not there. */
@@ -214,13 +170,13 @@ static int number_after(const char *text, int len, const char *key)
 static int sleeps_cut_short(void)
 {
     static char text[2048];
-    int fd = syscall3(SYS_OPEN, (int)(size_t)"/proc/stat", O_RDONLY, 0);
+    int fd = syscall3(SYS_OPEN, (long)"/proc/stat", O_RDONLY, 0);
     int n;
 
     if (fd < 0) {
         return -1;
     }
-    n = syscall3(SYS_READ, fd, (int)(size_t)text, (int)sizeof(text));
+    n = syscall3(SYS_READ, fd, (long)text, (int)sizeof(text));
     syscall1(SYS_CLOSE, fd);
     if (n <= 0) {
         return -1;
@@ -253,11 +209,11 @@ static int asleep(int pid)
         path[i++] = tail[j];
     }
     path[i] = '\0';
-    fd = syscall3(SYS_OPEN, (int)(size_t)path, O_RDONLY, 0);
+    fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
     if (fd < 0) {
         return 0;
     }
-    len = syscall3(SYS_READ, fd, (int)(size_t)text, (int)sizeof(text));
+    len = syscall3(SYS_READ, fd, (long)text, (int)sizeof(text));
     syscall1(SYS_CLOSE, fd);
     for (i = 0; i + 2 < len; i++) {
         if (text[i] == ')' && text[i + 1] == ' ') {
@@ -274,7 +230,7 @@ static int sleep_ms(int ms)
 
     req[0] = ms / 1000;
     req[1] = (ms % 1000) * 1000000;
-    return syscall2(SYS_NANOSLEEP, (int)(size_t)req, 0);
+    return syscall2(SYS_NANOSLEEP, (long)req, 0);
 }
 
 static void install(int signo, void (*h)(int))
@@ -302,7 +258,7 @@ static int itimer(int value_ms, int interval_ms, int *old)
     set[1] = (interval_ms % 1000) * 1000;
     set[2] = value_ms / 1000;
     set[3] = (value_ms % 1000) * 1000;
-    return syscall3(SYS_SETITIMER, ITIMER_REAL, (int)(size_t)set, (int)(size_t)old);
+    return syscall3(SYS_SETITIMER, ITIMER_REAL, (long)set, (long)old);
 }
 
 /** Whether the real-time timer reads as disarmed, all four fields zero. */
@@ -310,8 +266,8 @@ static int itimer_disarmed(void)
 {
     static int cur[4];
 
-    return syscall2(SYS_GETITIMER, ITIMER_REAL, (int)(size_t)cur) == 0 && cur[0] == 0 &&
-           cur[1] == 0 && cur[2] == 0 && cur[3] == 0;
+    return syscall2(SYS_GETITIMER, ITIMER_REAL, (long)cur) == 0 && cur[0] == 0 && cur[1] == 0 &&
+           cur[2] == 0 && cur[3] == 0;
 }
 
 /**
@@ -339,21 +295,19 @@ static void timer_rows(void)
     int i, ended = 0, pid, status, before;
 
     install(SIGALRM, alarm_handler);
-    check(syscall3(SYS_SETITIMER, ITIMER_PROF + 1, (int)(size_t)second, 0) == -EINVAL &&
-              itimer_disarmed(),
+    check(syscall3(SYS_SETITIMER, ITIMER_PROF + 1, (long)second, 0) == -EINVAL && itimer_disarmed(),
           "a timer other than the three is refused and arms nothing");
-    check(syscall3(SYS_SETITIMER, ITIMER_REAL, (int)(size_t)bad, 0) == -EINVAL,
+    check(syscall3(SYS_SETITIMER, ITIMER_REAL, (long)bad, 0) == -EINVAL,
           "a million microseconds is refused");
 
     alrm[0] = 1u << (SIGALRM - 1);
     alrm[1] = 0;
     alarms = 0;
-    check(syscall4(SYS_RT_SIGPROCMASK, SIG_BLOCK, (int)(size_t)alrm, 0, 8) == 0 &&
-              itimer(20, 0, 0) == 0,
+    check(syscall4(SYS_RT_SIGPROCMASK, SIG_BLOCK, (long)alrm, 0, 8) == 0 && itimer(20, 0, 0) == 0,
           "arm a single alarm with SIGALRM blocked");
     check(sleep_ms(1000) == 0 && itimer_disarmed(),
           "a blocked alarm does not end a sleep and leaves the timer disarmed");
-    check(syscall4(SYS_RT_SIGPROCMASK, SIG_UNBLOCK, (int)(size_t)alrm, 0, 8) == 0 && alarms == 1,
+    check(syscall4(SYS_RT_SIGPROCMASK, SIG_UNBLOCK, (long)alrm, 0, 8) == 0 && alarms == 1,
           "and its handler runs once SIGALRM is unblocked");
 
     before = sleeps_cut_short();
@@ -367,9 +321,8 @@ static void timer_rows(void)
     check(old[0] == 0 && old[1] == 20000, "and reports its interval as it is disarmed");
     check(sleeps_cut_short() >= before + 3, "the kernel counted the sleeps the timer cut short");
 
-    check(itimer(5000, 250, 0) == 0 &&
-              syscall2(SYS_GETITIMER, ITIMER_REAL, (int)(size_t)cur) == 0 && cur[0] == 0 &&
-              cur[1] == 250000 && (cur[2] > 0 || cur[3] > 0) &&
+    check(itimer(5000, 250, 0) == 0 && syscall2(SYS_GETITIMER, ITIMER_REAL, (long)cur) == 0 &&
+              cur[0] == 0 && cur[1] == 250000 && (cur[2] > 0 || cur[3] > 0) &&
               (cur[2] < 5 || (cur[2] == 5 && cur[3] == 0)),
           "getitimer reports the interval set and no more than the value set");
     check(itimer(0, 0, 0) == 0 && itimer_disarmed(), "a value of zero disarms the timer");
@@ -379,7 +332,7 @@ static void timer_rows(void)
     if (pid == 0) {
         sys_exit(itimer_disarmed() ? 0 : 1);
     }
-    check(pid > 0 && syscall3(SYS_WAITPID, pid, (int)(size_t)&status, 0) == pid && status == 0,
+    check(pid > 0 && syscall3(SYS_WAITPID, pid, (long)&status, 0) == pid && status == 0,
           "a fork's child has no timer");
     check(itimer(0, 0, 0) == 0, "and the alarm is disarmed again");
 
@@ -389,7 +342,7 @@ static void timer_rows(void)
     check(syscall1(SYS_ALARM, 0) == 0 && itimer_disarmed(), "and alarm(0) leaves none");
 }
 
-void _start(void)
+PROBE_START void _start(void)
 {
     int pid, status;
     unsigned set[2];
@@ -405,12 +358,10 @@ void _start(void)
     set[0] = 1u << (SIGUSR1 - 1);
     set[1] = 0;
     handler_ran = 0;
-    check(syscall4(SYS_RT_SIGPROCMASK, SIG_BLOCK, (int)(size_t)set, 0, 8) == 0,
-          "sigprocmask block");
+    check(syscall4(SYS_RT_SIGPROCMASK, SIG_BLOCK, (long)set, 0, 8) == 0, "sigprocmask block");
     syscall2(SYS_KILL, syscall1(SYS_GETPID, 0), SIGUSR1);
     check(handler_ran == 0, "blocked signal does not deliver");
-    check(syscall4(SYS_RT_SIGPROCMASK, SIG_UNBLOCK, (int)(size_t)set, 0, 8) == 0,
-          "sigprocmask unblock");
+    check(syscall4(SYS_RT_SIGPROCMASK, SIG_UNBLOCK, (long)set, 0, 8) == 0, "sigprocmask unblock");
     check(handler_ran == 1, "unblocking delivers the pending signal");
 
     /* 3. Default action terminates a process that does not handle it. */
@@ -423,7 +374,7 @@ void _start(void)
         }
     }
     syscall2(SYS_KILL, pid, SIGTERM);
-    check(syscall3(SYS_WAITPID, pid, (int)(size_t)&status, 0) == pid, "reap killed child");
+    check(syscall3(SYS_WAITPID, pid, (long)&status, 0) == pid, "reap killed child");
     check((status & 0x7f) == SIGTERM, "child terminated by SIGTERM (WTERMSIG)");
 
     /* 4. A forged selector in the frame the kernel restores. The return path
@@ -469,7 +420,7 @@ void _start(void)
         }
         check(i < 500, "the sleeper is seen asleep before it is signalled");
         syscall2(SYS_KILL, pid, SIGUSR1);
-        check(syscall3(SYS_WAITPID, pid, (int)(size_t)&status, 0) == pid, "reap the sleeper");
+        check(syscall3(SYS_WAITPID, pid, (long)&status, 0) == pid, "reap the sleeper");
         check((status & 0x7f) == 0 && ((status >> 8) & 0xff) == 0,
               "the sleeper's own sleep returned EINTR");
         check(sleeps_cut_short() > before, "the kernel counted a sleep the signal cut short");

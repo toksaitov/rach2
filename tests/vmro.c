@@ -8,16 +8,12 @@
  * must NEVER appear. Companion to vmfault (an address in no VMA at all).
  *
  * Run as a standalone boot; the harness then checks the kernel survived.
- * Freestanding; direct int 0x80.
+ * Freestanding; direct system calls (probe.h).
  */
 
-typedef unsigned int size_t;
+#include "probe.h"
 
 #define STDOUT_FILENO 1
-
-#define SYS_EXIT  1
-#define SYS_WRITE 4
-#define SYS_MMAP2 192
 
 #define PAGE 4096u
 
@@ -27,17 +23,12 @@ typedef unsigned int size_t;
 
 static int sys_write(int fd, const void *buf, size_t count)
 {
-    int result;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(result)
-                         : "0"(SYS_WRITE), "b"(fd), "c"(buf), "d"(count)
-                         : "memory");
-    return result;
+    return syscall3(SYS_WRITE, (long)fd, (long)buf, (long)count);
 }
 
 static void sys_exit(int status)
 {
-    __asm__ __volatile__("int $0x80" : : "a"(SYS_EXIT), "b"(status));
+    syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
@@ -71,7 +62,7 @@ static void puts(const char *s)
     sys_write(STDOUT_FILENO, "\n", 1);
 }
 
-void _start(void)
+PROBE_START void _start(void)
 {
     unsigned p = sys_mmap2_anon(PAGE, PROT_READ);
     volatile unsigned char *ro = (volatile unsigned char *)p;

@@ -15,22 +15,11 @@
  * give a partition's first sector, size, number and device numbers, and
  * /sys/dev/block a link to its directory.
  *
- * Prints "PARTSPROBE OK" or "PARTSPROBE FAIL: reason". Freestanding; int 0x80.
+ * Prints "PARTSPROBE OK" or "PARTSPROBE FAIL: reason". Freestanding; direct
+ * system calls (probe.h).
  */
 
-typedef unsigned int size_t;
-
-#define SYS_EXIT     1
-#define SYS_READ     3
-#define SYS_WRITE    4
-#define SYS_OPEN     5
-#define SYS_CLOSE    6
-#define SYS_MOUNT    21
-#define SYS_MKDIR    39
-#define SYS_IOCTL    54
-#define SYS_UMOUNT2  52
-#define SYS_STAT64   195
-#define SYS_READLINK 85
+#include "probe.h"
 
 #define O_RDONLY  0
 #define O_WRONLY  1
@@ -38,30 +27,6 @@ typedef unsigned int size_t;
 #define O_TRUNC   01000
 #define EBUSY     16
 #define BLKRRPART 0x125F
-
-static int sys2(int n, int a, int b)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b) : "memory");
-    return r;
-}
-
-static int sys3(int n, int a, int b, int c)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
-}
-
-static int sys5(int n, int a, int b, int c, int d, int e)
-{
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(n), "b"(a), "c"(b), "d"(c), "S"(d), "D"(e)
-                         : "memory");
-    return r;
-}
 
 static size_t strlen(const char *s)
 {
@@ -74,15 +39,15 @@ static size_t strlen(const char *s)
 
 static void puts(const char *s)
 {
-    sys3(SYS_WRITE, 1, (int)(size_t)s, (int)strlen(s));
-    sys3(SYS_WRITE, 1, (int)(size_t)"\n", 1);
+    syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
+    syscall3(SYS_WRITE, 1, (long)"\n", 1);
 }
 
 static void fail(const char *why)
 {
-    sys3(SYS_WRITE, 1, (int)(size_t)"PARTSPROBE FAIL: ", 17);
+    syscall3(SYS_WRITE, 1, (long)"PARTSPROBE FAIL: ", 17);
     puts(why);
-    sys2(SYS_EXIT, 1, 0);
+    syscall2(SYS_EXIT, 1, 0);
 }
 
 static int xstat(const char *path)
@@ -90,7 +55,7 @@ static int xstat(const char *path)
     char st[104];
 
     st[0] = 0;
-    return sys2(SYS_STAT64, (int)(size_t)path, (int)(size_t)st);
+    return syscall2(SYS_STAT, (long)path, (long)st);
 }
 
 /* Whether `text` has a line beginning with `line`. */
@@ -136,20 +101,20 @@ static int has_text(const char *text, const char *needle)
 
 static int slurp(const char *path, char *buf, int cap)
 {
-    int fd = sys3(SYS_OPEN, (int)(size_t)path, O_RDONLY, 0);
+    int fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
     int n, total = 0;
 
     if (fd < 0) {
         return -1;
     }
     while (total < cap - 1) {
-        n = sys3(SYS_READ, fd, (int)(size_t)(buf + total), cap - 1 - total);
+        n = syscall3(SYS_READ, fd, (long)(buf + total), cap - 1 - total);
         if (n <= 0) {
             break;
         }
         total += n;
     }
-    sys2(SYS_CLOSE, fd, 0);
+    syscall2(SYS_CLOSE, fd, 0);
     buf[total] = 0;
     return total;
 }
@@ -181,8 +146,7 @@ static void sys_block_rows(void)
         !reads_as("/sys/block/disk0/queue/logical_block_size", "512\n")) {
         fail("/sys/block: a partition's numbers and the disk's sector size");
     }
-    n = sys3(SYS_READLINK, (int)(size_t)"/sys/dev/block/240:4", (int)(size_t)link,
-             (int)sizeof(link) - 1);
+    n = syscall3(SYS_READLINK, (long)"/sys/dev/block/240:4", (long)link, (int)sizeof(link) - 1);
     if (n <= 0) {
         fail("/sys/dev/block has no link for 240:4");
     }
@@ -198,20 +162,20 @@ static void write_and_read_back(const char *path, const char *text)
     static char back[64];
     int fd, n = (int)strlen(text), got;
 
-    fd = sys3(SYS_OPEN, (int)(size_t)path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    fd = syscall3(SYS_OPEN, (long)path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) {
         fail(path);
     }
-    if (sys3(SYS_WRITE, fd, (int)(size_t)text, n) != n) {
+    if (syscall3(SYS_WRITE, fd, (long)text, n) != n) {
         fail(path);
     }
-    sys2(SYS_CLOSE, fd, 0);
-    fd = sys3(SYS_OPEN, (int)(size_t)path, O_RDONLY, 0);
+    syscall2(SYS_CLOSE, fd, 0);
+    fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
     if (fd < 0) {
         fail(path);
     }
-    got = sys3(SYS_READ, fd, (int)(size_t)back, (int)sizeof(back));
-    sys2(SYS_CLOSE, fd, 0);
+    got = syscall3(SYS_READ, fd, (long)back, (int)sizeof(back));
+    syscall2(SYS_CLOSE, fd, 0);
     if (got != n) {
         fail(path);
     }
@@ -224,8 +188,8 @@ static void write_and_read_back(const char *path, const char *text)
 
 static int mount_vfat(const char *src, const char *at)
 {
-    sys2(SYS_MKDIR, (int)(size_t)at, 0755);
-    return sys5(SYS_MOUNT, (int)(size_t)src, (int)(size_t)at, (int)(size_t)"vfat", 0, 0);
+    syscall2(SYS_MKDIR, (long)at, 0755);
+    return syscall5(SYS_MOUNT, (long)src, (long)at, (long)"vfat", 0, 0);
 }
 
 void probe_main(unsigned int *sp);
@@ -332,26 +296,26 @@ void probe_main(unsigned int *sp)
     write_and_read_back("/mnt3/gpt.txt", "gpt three says hello\n");
 
     /* The table read again: refused under a mount, done once it is gone. */
-    fd = sys3(SYS_OPEN, (int)(size_t)"/dev/disk1", O_RDONLY, 0);
+    fd = syscall3(SYS_OPEN, (long)"/dev/disk1", O_RDONLY, 0);
     if (fd < 0) {
         fail("opening /dev/disk1");
     }
-    if (sys3(SYS_IOCTL, fd, BLKRRPART, 0) != -EBUSY) {
+    if (syscall3(SYS_IOCTL, fd, BLKRRPART, 0) != -EBUSY) {
         fail("BLKRRPART was not refused under a mounted partition");
     }
-    if (sys2(SYS_UMOUNT2, (int)(size_t)"/mnt3", 0) != 0) {
+    if (syscall2(SYS_UMOUNT2, (long)"/mnt3", 0) != 0) {
         fail("unmounting the GPT partition");
     }
-    if (sys3(SYS_IOCTL, fd, BLKRRPART, 0) != 0) {
+    if (syscall3(SYS_IOCTL, fd, BLKRRPART, 0) != 0) {
         fail("BLKRRPART after the unmount");
     }
-    sys2(SYS_CLOSE, fd, 0);
+    syscall2(SYS_CLOSE, fd, 0);
     if (xstat("/dev/disk1p3") != 0 || xstat("/dev/disk1p6") != 0 || xstat("/dev/disk1p7") == 0) {
         fail("the nodes after the table was read again");
     }
-    if (sys2(SYS_UMOUNT2, (int)(size_t)"/mnt6", 0) != 0) {
+    if (syscall2(SYS_UMOUNT2, (long)"/mnt6", 0) != 0) {
         fail("unmounting the logical partition");
     }
     puts("PARTSPROBE OK");
-    sys2(SYS_EXIT, 0, 0);
+    syscall2(SYS_EXIT, 0, 0);
 }

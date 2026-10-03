@@ -11,22 +11,16 @@
  *
  * This gates the coursework: a student's own sudo passes the same probe the
  * reference does. Prints "SUDOPROBE OK" and exits 0 on success. Freestanding;
- * direct int 0x80.
+ * direct system calls (probe.h).
  *
  * Needs: the test image's sudo arrangement, the staged `sudo` with its
  * policy file and the accounts it names. A run on an installed machine
  * needs them put there first.
  */
 
-typedef unsigned int u32;
+#include "probe.h"
 
-#define SYS_EXIT        1
-#define SYS_FORK        2
-#define SYS_WRITE       4
-#define SYS_WAITPID     7
-#define SYS_EXECVE      11
-#define SYS_SETRESGID32 210
-#define SYS_SETRESUID32 208
+typedef unsigned int u32;
 
 #define STDOUT 1
 
@@ -34,20 +28,6 @@ typedef unsigned int u32;
  * child (its signal in the low 7 bits) is not decoded as a clean exit 0. */
 #define WIFEXITED(s)   (((s) & 0x7F) == 0)
 #define WEXITSTATUS(s) (((s) >> 8) & 0xFF)
-
-static int syscall1(int num, int a)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "a"(num), "b"(a) : "memory");
-    return r;
-}
-
-static int syscall3(int num, int a, int b, int c)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "a"(num), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
-}
 
 static u32 slen(const char *s)
 {
@@ -61,7 +41,7 @@ static u32 slen(const char *s)
 
 static void puts_(const char *s)
 {
-    syscall3(SYS_WRITE, STDOUT, (int)s, (int)slen(s));
+    syscall3(SYS_WRITE, STDOUT, (long)s, (int)slen(s));
 }
 
 static void fail(const char *step)
@@ -85,18 +65,18 @@ static int run_sudo(int uid)
     if (pid == 0) {
         static char *argv[4];
 
-        if (syscall3(SYS_SETRESGID32, uid, uid, uid) != 0 ||
-            syscall3(SYS_SETRESUID32, uid, uid, uid) != 0) {
+        if (syscall3(SYS_SETRESGID, uid, uid, uid) != 0 ||
+            syscall3(SYS_SETRESUID, uid, uid, uid) != 0) {
             syscall1(SYS_EXIT, 200);
         }
         argv[0] = (char *)"/sudo";
         argv[1] = (char *)"/suidhelper";
         argv[2] = (char *)"root";
         argv[3] = 0;
-        syscall3(SYS_EXECVE, (int)"/sudo", (int)argv, 0);
+        syscall3(SYS_EXECVE, (long)"/sudo", (long)argv, 0);
         syscall1(SYS_EXIT, 201); /* exec of sudo itself failed */
     }
-    if (syscall3(SYS_WAITPID, pid, (int)&status, 0) != pid) {
+    if (syscall3(SYS_WAITPID, pid, (long)&status, 0) != pid) {
         fail("waitpid");
     }
     if (!WIFEXITED(status)) {
@@ -105,7 +85,7 @@ static int run_sudo(int uid)
     return WEXITSTATUS(status);
 }
 
-void _start(void)
+PROBE_START void _start(void)
 {
     /* A permitted uid becomes root and the helper confirms it (exit 0). */
     if (run_sudo(1000) != 0) {

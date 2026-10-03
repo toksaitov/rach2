@@ -15,48 +15,17 @@
  * `HeapUsed` in `/proc/meminfo` must be what it was before, with
  * `HeapPages` within two pages of it, so nothing leaked.
  *
- * Prints "POOLPROBE OK" or "POOLPROBE FAIL: reason". Freestanding; int 0x80.
+ * Prints "POOLPROBE OK" or "POOLPROBE FAIL: reason". Freestanding; direct
+ * system calls (probe.h).
  */
 
-typedef unsigned int size_t;
-
-#define SYS_EXIT       1
-#define SYS_FORK       2
-#define SYS_READ       3
-#define SYS_WRITE      4
-#define SYS_OPEN       5
-#define SYS_CLOSE      6
-#define SYS_WAITPID    7
-#define SYS_PIPE       42
-#define SYS_SOCKETCALL 102
-#define SYS_NANOSLEEP  162
+#include "probe.h"
 
 #define SC_SOCKET  1
 #define AF_INET    2
 #define SOCK_DGRAM 2
 #define O_RDONLY   0
 #define O_RDWR     2
-
-static int syscall1(int n, int a)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a) : "memory");
-    return r;
-}
-
-static int syscall2(int n, int a, int b)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b) : "memory");
-    return r;
-}
-
-static int syscall3(int n, int a, int b, int c)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
-}
 
 static void sys_exit(int status)
 {
@@ -75,13 +44,13 @@ static size_t strlen(const char *s)
 
 static void puts(const char *s)
 {
-    syscall3(SYS_WRITE, 1, (int)(size_t)s, (int)strlen(s));
-    syscall3(SYS_WRITE, 1, (int)(size_t)"\n", 1);
+    syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
+    syscall3(SYS_WRITE, 1, (long)"\n", 1);
 }
 
 static void fail(const char *why)
 {
-    syscall3(SYS_WRITE, 1, (int)(size_t)"POOLPROBE FAIL: ", 16);
+    syscall3(SYS_WRITE, 1, (long)"POOLPROBE FAIL: ", 16);
     puts(why);
     sys_exit(1);
 }
@@ -92,7 +61,7 @@ static void sleep_ms(int ms)
 
     ts[0] = ms / 1000;
     ts[1] = (ms % 1000) * 1000000;
-    syscall2(SYS_NANOSLEEP, (int)(size_t)ts, 0);
+    syscall2(SYS_NANOSLEEP, (long)ts, 0);
 }
 
 static int open_socket(void)
@@ -102,20 +71,20 @@ static int open_socket(void)
     args[0] = AF_INET;
     args[1] = SOCK_DGRAM;
     args[2] = 0;
-    return syscall2(SYS_SOCKETCALL, SC_SOCKET, (int)(size_t)args);
+    return syscall2(SYS_SOCKETCALL, SC_SOCKET, (long)args);
 }
 
 /* A field of /proc/meminfo, in its own units, or 0xFFFFFFFF when absent. */
 static unsigned meminfo(const char *key)
 {
     static char buf[1024];
-    int fd = syscall3(SYS_OPEN, (int)(size_t)"/proc/meminfo", O_RDONLY, 0);
+    int fd = syscall3(SYS_OPEN, (long)"/proc/meminfo", O_RDONLY, 0);
     int n, i;
 
     if (fd < 0) {
         return 0xFFFFFFFFu;
     }
-    n = syscall3(SYS_READ, fd, (int)(size_t)buf, (int)sizeof(buf) - 1);
+    n = syscall3(SYS_READ, fd, (long)buf, (int)sizeof(buf) - 1);
     syscall1(SYS_CLOSE, fd);
     if (n <= 0) {
         return 0xFFFFFFFFu;
@@ -149,7 +118,7 @@ static void wait_for_word(void)
 {
     char byte;
 
-    syscall3(SYS_READ, ack_fd, (int)(size_t)&byte, 1);
+    syscall3(SYS_READ, ack_fd, (long)&byte, 1);
 }
 
 /* A child: `kind` objects opened and held while the parent counts. */
@@ -165,13 +134,13 @@ static void hold(int kind, int count, int report)
             int pair[2];
 
             pair[0] = pair[1] = -1;
-            if (syscall1(SYS_PIPE, (int)(size_t)pair) != 0) {
+            if (syscall1(SYS_PIPE, (long)pair) != 0) {
                 sys_exit(2);
             }
             fd = pair[0];
             fds[i * 2 + 1] = pair[1];
         } else if (kind == 1) {
-            fd = syscall3(SYS_OPEN, (int)(size_t)"/dev/ptmx", O_RDWR, 0);
+            fd = syscall3(SYS_OPEN, (long)"/dev/ptmx", O_RDWR, 0);
         } else if (kind == 2) {
             fd = open_socket();
         } else {
@@ -191,13 +160,13 @@ static void hold(int kind, int count, int report)
         }
         fds[kind == 0 ? i * 2 : i] = fd;
     }
-    syscall3(SYS_WRITE, report, (int)(size_t)"h", 1);
+    syscall3(SYS_WRITE, report, (long)"h", 1);
     wait_for_word();
     if (kind == 3) {
         for (i = 0; i < count; i++) {
             int status;
 
-            syscall3(SYS_WAITPID, fds[i], (int)(size_t)&status, 0);
+            syscall3(SYS_WAITPID, fds[i], (long)&status, 0);
         }
     }
     sys_exit(0);
@@ -213,7 +182,7 @@ static void crossed(int kind, int per_child, const char *what)
 
     report[0] = report[1] = -1;
     ack[0] = ack[1] = -1;
-    if (syscall1(SYS_PIPE, (int)(size_t)report) != 0 || syscall1(SYS_PIPE, (int)(size_t)ack) != 0) {
+    if (syscall1(SYS_PIPE, (long)report) != 0 || syscall1(SYS_PIPE, (long)ack) != 0) {
         fail("the report pipe");
     }
     ack_fd = ack[0];
@@ -230,19 +199,19 @@ static void crossed(int kind, int per_child, const char *what)
     }
     syscall1(SYS_CLOSE, report[1]); /* a holder that dies unheard is end of input */
     for (i = 0; i < 8; i++) {
-        if (syscall3(SYS_READ, report[0], (int)(size_t)&byte, 1) != 1 || byte != 'h') {
+        if (syscall3(SYS_READ, report[0], (long)&byte, 1) != 1 || byte != 'h') {
             fail(what);
         }
     }
     /* Every holder has reported: the word to let go, one byte per waiter,
        the holders and their children. */
     for (i = 0; i < 8 * (1 + (kind == 3 ? per_child : 0)); i++) {
-        syscall3(SYS_WRITE, ack[1], (int)(size_t)"g", 1);
+        syscall3(SYS_WRITE, ack[1], (long)"g", 1);
     }
     for (i = 0; i < 8; i++) {
         int status = -1;
 
-        if (syscall3(SYS_WAITPID, pids[i], (int)(size_t)&status, 0) != pids[i] || status != 0) {
+        if (syscall3(SYS_WAITPID, pids[i], (long)&status, 0) != pids[i] || status != 0) {
             fail(what);
         }
     }
@@ -263,14 +232,13 @@ static void cycle(int kind, const char *what)
             int pair[2];
 
             pair[0] = pair[1] = -1;
-            if (syscall1(SYS_PIPE, (int)(size_t)pair) != 0) {
+            if (syscall1(SYS_PIPE, (long)pair) != 0) {
                 fail(what);
             }
             syscall1(SYS_CLOSE, pair[0]);
             syscall1(SYS_CLOSE, pair[1]);
         } else {
-            int fd =
-                kind == 1 ? syscall3(SYS_OPEN, (int)(size_t)"/dev/ptmx", O_RDWR, 0) : open_socket();
+            int fd = kind == 1 ? syscall3(SYS_OPEN, (long)"/dev/ptmx", O_RDWR, 0) : open_socket();
 
             if (fd < 0) {
                 fail(what);

@@ -13,35 +13,22 @@
  * direction passes and the movement seen is printed; without it the suite's
  * rule holds: right and up, and right by more.
  *
- * Prints "MOUSEPROBE OK" and exits 0. Freestanding; direct int 0x80.
+ * Prints "MOUSEPROBE OK" and exits 0. Freestanding; direct system calls
+ * (probe.h).
  */
 
-typedef unsigned int size_t;
+#include "probe.h"
 
 #define STDOUT_FILENO 1
-
-#define SYS_EXIT      1
-#define SYS_READ      3
-#define SYS_WRITE     4
-#define SYS_OPEN      5
-#define SYS_CLOSE     6
-#define SYS_NANOSLEEP 162
 
 #define O_RDONLY 0
 
 /* One packet as the kernel hands it out: buttons, then two signed movements. */
 static unsigned char packet[3 * 32];
 
-static int syscall3(int n, int a, int b, int c)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
-}
-
 static void sys_exit(int status)
 {
-    __asm__ __volatile__("int $0x80" : : "a"(SYS_EXIT), "b"(status));
+    syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
@@ -57,7 +44,7 @@ static size_t strlen(const char *s)
 
 static void puts(const char *s)
 {
-    syscall3(SYS_WRITE, STDOUT_FILENO, (int)(size_t)s, (int)strlen(s));
+    syscall3(SYS_WRITE, STDOUT_FILENO, (long)s, (int)strlen(s));
 }
 
 static void fail(const char *why)
@@ -108,7 +95,7 @@ void probe_main(unsigned int *sp)
     int total_x = 0;
     int total_y = 0;
 
-    fd = syscall3(SYS_OPEN, (int)(size_t)"mouse", O_RDONLY, 0);
+    fd = syscall3(SYS_OPEN, (long)"mouse", O_RDONLY, 0);
     if (fd < 0) {
         fail("the mouse device did not open");
     }
@@ -122,7 +109,7 @@ void probe_main(unsigned int *sp)
     for (tries = 0; tries < 1500 && !moved; tries++) {
         static const int pause[2] = {0, 10000000};
 
-        n = syscall3(SYS_READ, fd, (int)(size_t)packet, (int)sizeof(packet));
+        n = syscall3(SYS_READ, fd, (long)packet, (int)sizeof(packet));
         if (n < 0) {
             syscall3(SYS_CLOSE, fd, 0, 0);
             fail("the mouse device did not read");
@@ -139,7 +126,7 @@ void probe_main(unsigned int *sp)
             }
         }
         if (!moved) {
-            syscall3(SYS_NANOSLEEP, (int)(size_t)pause, 0, 0);
+            syscall3(SYS_NANOSLEEP, (long)pause, 0, 0);
         }
     }
     syscall3(SYS_CLOSE, fd, 0, 0);

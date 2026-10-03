@@ -9,18 +9,12 @@
  * is flat across churn. The probe reads sysinfo's freeram after a warm-up, runs
  * many fork/exit/wait cycles, and asserts the free count did not fall.
  *
- * Prints "FORKLEAK OK". Freestanding; direct int 0x80.
+ * Prints "FORKLEAK OK". Freestanding; direct system calls (probe.h).
  */
 
-typedef unsigned int size_t;
+#include "probe.h"
 
 #define STDOUT_FILENO 1
-
-#define SYS_EXIT    1
-#define SYS_FORK    2
-#define SYS_WRITE   4
-#define SYS_WAITPID 7
-#define SYS_SYSINFO 116
 
 #define WARMUP 8
 #define CYCLES 120
@@ -48,42 +42,28 @@ struct sysinfo {
 
 static int sys_write(int fd, const void *buf, size_t count)
 {
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_WRITE), "b"(fd), "c"(buf), "d"(count)
-                         : "memory");
-    return r;
+    return syscall3(SYS_WRITE, (long)fd, (long)buf, (long)count);
 }
 
 static void sys_exit(int status)
 {
-    __asm__ __volatile__("int $0x80" : : "a"(SYS_EXIT), "b"(status));
+    syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
 static int sys_fork(void)
 {
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(SYS_FORK));
-    return r;
+    return syscall0(SYS_FORK);
 }
 
 static int sys_waitpid(int pid, int *status, int options)
 {
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_WAITPID), "b"(pid), "c"(status), "d"(options)
-                         : "memory");
-    return r;
+    return syscall3(SYS_WAITPID, (long)pid, (long)status, (long)options);
 }
 
 static int sys_sysinfo(struct sysinfo *si)
 {
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(SYS_SYSINFO), "b"(si) : "memory");
-    return r;
+    return syscall1(SYS_SYSINFO, (long)si);
 }
 
 static size_t strlen(const char *s)
@@ -125,7 +105,7 @@ static void churn(void)
     }
 }
 
-void _start(void)
+PROBE_START void _start(void)
 {
     struct sysinfo si;
     unsigned base_free, end_free;

@@ -16,22 +16,12 @@
  *
  * Prints "OFDPROBE OK" on success.
  *
- * Freestanding; direct int 0x80.
+ * Freestanding; direct system calls (probe.h).
  */
 
-typedef unsigned int size_t;
+#include "probe.h"
 
 #define STDOUT_FILENO 1
-
-#define SYS_EXIT    1
-#define SYS_FORK    2
-#define SYS_READ    3
-#define SYS_WRITE   4
-#define SYS_OPEN    5
-#define SYS_CLOSE   6
-#define SYS_WAITPID 7
-#define SYS_DUP2    63
-#define SYS_FCNTL64 221
 
 #define O_RDONLY 0
 
@@ -41,27 +31,6 @@ typedef unsigned int size_t;
 
 /* "hello, world\n": 0-4 hello, 5 ',', 6 ' ', 7 w... */
 #define HELLO "/hello.txt"
-
-static int syscall1(int n, int a)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a) : "memory");
-    return r;
-}
-
-static int syscall2(int n, int a, int b)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b) : "memory");
-    return r;
-}
-
-static int syscall3(int n, int a, int b, int c)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
-}
 
 static void sys_exit(int status)
 {
@@ -80,8 +49,8 @@ static size_t strlen(const char *s)
 
 static void puts(const char *s)
 {
-    syscall3(SYS_WRITE, STDOUT_FILENO, (int)(size_t)s, (int)strlen(s));
-    syscall3(SYS_WRITE, STDOUT_FILENO, (int)(size_t)"\n", 1);
+    syscall3(SYS_WRITE, STDOUT_FILENO, (long)s, (int)strlen(s));
+    syscall3(SYS_WRITE, STDOUT_FILENO, (long)"\n", 1);
 }
 
 static int fails = 0;
@@ -90,7 +59,7 @@ static void check(int cond, const char *msg)
 {
     if (!cond) {
         fails++;
-        syscall3(SYS_WRITE, STDOUT_FILENO, (int)(size_t)"  FAIL: ", 8);
+        syscall3(SYS_WRITE, STDOUT_FILENO, (long)"  FAIL: ", 8);
         puts(msg);
     }
 }
@@ -98,7 +67,7 @@ static void check(int cond, const char *msg)
 /** Read `n` bytes from `fd` into `buf`; returns the byte count. */
 static int rd(int fd, char *buf, int n)
 {
-    return syscall3(SYS_READ, fd, (int)(size_t)buf, n);
+    return syscall3(SYS_READ, fd, (long)buf, n);
 }
 
 static int eqn(const char *a, const char *b, int n)
@@ -112,13 +81,13 @@ static int eqn(const char *a, const char *b, int n)
     return 1;
 }
 
-void _start(void)
+PROBE_START void _start(void)
 {
     char buf[16];
     int fd, fd2, pid, status, i, n;
 
     /* (a) dup2 shares the seek offset. */
-    fd = syscall3(SYS_OPEN, (int)(size_t)HELLO, O_RDONLY, 0);
+    fd = syscall3(SYS_OPEN, (long)HELLO, O_RDONLY, 0);
     check(fd >= 0, "open hello.txt");
     check(rd(fd, buf, 5) == 5 && eqn(buf, "hello", 5), "read first 5 == hello");
 
@@ -135,7 +104,7 @@ void _start(void)
     syscall1(SYS_CLOSE, fd2);
 
     /* (b) fork shares the seek offset. */
-    fd = syscall3(SYS_OPEN, (int)(size_t)HELLO, O_RDONLY, 0);
+    fd = syscall3(SYS_OPEN, (long)HELLO, O_RDONLY, 0);
     check(fd >= 0, "reopen hello.txt");
     check(rd(fd, buf, 3) == 3 && eqn(buf, "hel", 3), "parent reads first 3 == hel");
 
@@ -146,14 +115,14 @@ void _start(void)
         rd(fd, cb, 3); /* child advances offset 3 -> 6 */
         sys_exit(0);
     }
-    syscall3(SYS_WAITPID, pid, (int)(size_t)&status, 0);
+    syscall3(SYS_WAITPID, pid, (long)&status, 0);
     n = rd(fd, buf, 3); /* must see the child's advance: " wo" */
     check(n == 3 && eqn(buf, " wo", 3), "fork shares offset (parent reads ' wo')");
     syscall1(SYS_CLOSE, fd);
 
     /* (c) many open/close cycles must not exhaust the OFD pool (no leak). */
     for (i = 0; i < 300; i++) {
-        int f = syscall3(SYS_OPEN, (int)(size_t)HELLO, O_RDONLY, 0);
+        int f = syscall3(SYS_OPEN, (long)HELLO, O_RDONLY, 0);
         if (f < 0) {
             check(0, "open/close cycle exhausted the OFD pool (leak)");
             break;
@@ -169,9 +138,9 @@ void _start(void)
         if (p == 0) {
             sys_exit(0);
         }
-        syscall3(SYS_WAITPID, p, (int)(size_t)&status, 0);
+        syscall3(SYS_WAITPID, p, (long)&status, 0);
     }
-    fd = syscall3(SYS_OPEN, (int)(size_t)HELLO, O_RDONLY, 0);
+    fd = syscall3(SYS_OPEN, (long)HELLO, O_RDONLY, 0);
     check(fd >= 0, "open after 100 forks (no fork OFD leak)");
     if (fd >= 0) {
         syscall1(SYS_CLOSE, fd);
@@ -179,13 +148,13 @@ void _start(void)
 
     /* (d) FD_CLOEXEC is per-fd: it round-trips, and dup2 clears it on the new
      * fd. */
-    fd = syscall3(SYS_OPEN, (int)(size_t)HELLO, O_RDONLY, 0);
+    fd = syscall3(SYS_OPEN, (long)HELLO, O_RDONLY, 0);
     check(fd >= 0, "open for cloexec test");
-    syscall3(SYS_FCNTL64, fd, F_SETFD, FD_CLOEXEC);
-    check(syscall3(SYS_FCNTL64, fd, F_GETFD, 0) == FD_CLOEXEC, "F_SETFD/F_GETFD CLOEXEC");
+    syscall3(SYS_FCNTL, fd, F_SETFD, FD_CLOEXEC);
+    check(syscall3(SYS_FCNTL, fd, F_GETFD, 0) == FD_CLOEXEC, "F_SETFD/F_GETFD CLOEXEC");
     fd2 = syscall2(SYS_DUP2, fd, 10);
     check(fd2 == 10, "dup2 onto fd 10");
-    check(syscall3(SYS_FCNTL64, fd2, F_GETFD, 0) == 0, "dup2 clears CLOEXEC on new fd");
+    check(syscall3(SYS_FCNTL, fd2, F_GETFD, 0) == 0, "dup2 clears CLOEXEC on new fd");
     syscall1(SYS_CLOSE, fd);
     syscall1(SYS_CLOSE, fd2);
 

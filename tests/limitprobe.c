@@ -30,31 +30,10 @@
  * Neither path nor limit depends on the root file system's type.
  *
  * Prints "LIMITPROBE OK" or "LIMITPROBE FAIL: reason". Freestanding;
- * int 0x80.
+ * direct system calls (probe.h).
  */
 
-typedef unsigned int size_t;
-
-#define SYS_EXIT         1
-#define SYS_FORK         2
-#define SYS_READ         3
-#define SYS_WRITE        4
-#define SYS_OPEN         5
-#define SYS_CLOSE        6
-#define SYS_WAITPID      7
-#define SYS_DUP2         63
-#define SYS_EXECVE       11
-#define SYS_BRK          45
-#define SYS_PIPE         42
-#define SYS_NANOSLEEP    162
-#define SYS_MMAP2        192
-#define SYS_SETUID32     213
-#define SYS_PRLIMIT64    340
-#define SYS_NEWSELECT    142
-#define SYS_POLL         168
-#define SYS_RT_SIGACTION 174
-#define SYS_FTRUNCATE    93
-#define SYS_UNLINK       10
+#include "probe.h"
 
 #define RLIMIT_FSIZE  1
 #define RLIMIT_NPROC  6
@@ -88,44 +67,6 @@ struct pollfd {
 
 #define POLLIN 1
 
-static int syscall1(int n, int a)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a) : "memory");
-    return r;
-}
-
-static int syscall2(int n, int a, int b)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b) : "memory");
-    return r;
-}
-
-static int syscall3(int n, int a, int b, int c)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
-}
-
-static int syscall4(int n, int a, int b, int c, int d)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c), "S"(d) : "memory");
-    return r;
-}
-
-static int syscall5(int n, int a, int b, int c, int d, int e)
-{
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(n), "b"(a), "c"(b), "d"(c), "S"(d), "D"(e)
-                         : "memory");
-    return r;
-}
-
 static unsigned mmap_anon(unsigned len)
 {
     unsigned result;
@@ -156,20 +97,20 @@ static size_t strlen(const char *s)
 
 static void puts(const char *s)
 {
-    syscall3(SYS_WRITE, 1, (int)(size_t)s, (int)strlen(s));
-    syscall3(SYS_WRITE, 1, (int)(size_t)"\n", 1);
+    syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
+    syscall3(SYS_WRITE, 1, (long)"\n", 1);
 }
 
 static void fail(const char *why)
 {
-    syscall3(SYS_WRITE, 1, (int)(size_t)"LIMITPROBE FAIL: ", 17);
+    syscall3(SYS_WRITE, 1, (long)"LIMITPROBE FAIL: ", 17);
     puts(why);
     sys_exit(1);
 }
 
 static int get_limit(int resource, struct rlimit64 *rl)
 {
-    return syscall4(SYS_PRLIMIT64, 0, resource, 0, (int)(size_t)rl);
+    return syscall4(SYS_PRLIMIT64, 0, resource, 0, (long)rl);
 }
 
 static int set_limit(int resource, unsigned cur, unsigned max)
@@ -180,14 +121,14 @@ static int set_limit(int resource, unsigned cur, unsigned max)
     rl.cur_hi = 0;
     rl.max_lo = max;
     rl.max_hi = 0;
-    return syscall4(SYS_PRLIMIT64, 0, resource, (int)(size_t)&rl, 0);
+    return syscall4(SYS_PRLIMIT64, 0, resource, (long)&rl, 0);
 }
 
 static int wait_status(int pid)
 {
     int status = -1;
 
-    if (syscall3(SYS_WAITPID, pid, (int)(size_t)&status, 0) != pid) {
+    if (syscall3(SYS_WAITPID, pid, (long)&status, 0) != pid) {
         return -1;
     }
     if ((status & 0x7f) != 0) {
@@ -202,7 +143,7 @@ static void sleep_ms(int ms)
 
     ts[0] = ms / 1000;
     ts[1] = (ms % 1000) * 1000000;
-    syscall2(SYS_NANOSLEEP, (int)(size_t)ts, 0);
+    syscall2(SYS_NANOSLEEP, (long)ts, 0);
 }
 
 /* A child that runs `body` and exits with its answer; the parent requires
@@ -233,7 +174,7 @@ static int body_nofile(void)
         return 2;
     }
     for (i = 0; i < 8; i++) {
-        fd = syscall3(SYS_OPEN, (int)(size_t)"/hello", O_RDONLY, 0);
+        fd = syscall3(SYS_OPEN, (long)"/hello", O_RDONLY, 0);
         if (fd < 0) {
             break;
         }
@@ -247,7 +188,7 @@ static int body_nofile(void)
     argv[0] = (char *)"/limitprobe";
     argv[1] = (char *)"show";
     argv[2] = 0;
-    syscall3(SYS_EXECVE, (int)(size_t)argv[0], (int)(size_t)argv, 0);
+    syscall3(SYS_EXECVE, (long)argv[0], (long)argv, 0);
     return 4;
 }
 
@@ -261,7 +202,7 @@ static int body_sandbox(void)
     int tv[2];
     int fd, i;
 
-    fd = syscall3(SYS_OPEN, (int)(size_t)"/hello", O_RDONLY, 0);
+    fd = syscall3(SYS_OPEN, (long)"/hello", O_RDONLY, 0);
     if (fd < 0 || set_limit(RLIMIT_FSIZE, 0, 0) != 0 || set_limit(RLIMIT_NOFILE, 0, 0) != 0 ||
         set_limit(RLIMIT_NPROC, 0, 0) != 0) {
         return 2;
@@ -272,13 +213,13 @@ static int body_sandbox(void)
     rset[fd / 32] |= 1u << (fd % 32);
     tv[0] = 1;
     tv[1] = 0;
-    if (syscall5(SYS_NEWSELECT, fd + 1, (int)(size_t)rset, 0, 0, (int)(size_t)tv) != 1) {
+    if (syscall5(SYS_SELECT, fd + 1, (long)rset, 0, 0, (long)tv) != 1) {
         return 3;
     }
     pfd.fd = fd;
     pfd.events = POLLIN;
     pfd.revents = 0;
-    if (syscall3(SYS_POLL, (int)(size_t)&pfd, 1, 1) != 1 || !(pfd.revents & POLLIN)) {
+    if (syscall3(SYS_POLL, (long)&pfd, 1, 1) != 1 || !(pfd.revents & POLLIN)) {
         return 4;
     }
     return 0;
@@ -296,18 +237,18 @@ static int body_fsize(void)
     int fd, wrote, again, cut;
 
     if (set_limit(RLIMIT_FSIZE, 4096, 4096) != 0 ||
-        syscall4(SYS_RT_SIGACTION, SIGXFSZ, (int)(size_t)ignore, 0, 8) != 0) {
+        syscall4(SYS_RT_SIGACTION, SIGXFSZ, (long)ignore, 0, 8) != 0) {
         return 2;
     }
-    fd = syscall3(SYS_OPEN, (int)(size_t)"/tmp/limitprobe.f", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    fd = syscall3(SYS_OPEN, (long)"/tmp/limitprobe.f", O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) {
         return 3;
     }
-    wrote = syscall3(SYS_WRITE, fd, (int)(size_t)block, (int)sizeof(block));
-    again = syscall3(SYS_WRITE, fd, (int)(size_t)block, 1);
+    wrote = syscall3(SYS_WRITE, fd, (long)block, (int)sizeof(block));
+    again = syscall3(SYS_WRITE, fd, (long)block, 1);
     cut = syscall2(SYS_FTRUNCATE, fd, 8192);
     syscall1(SYS_CLOSE, fd);
-    syscall1(SYS_UNLINK, (int)(size_t)"/tmp/limitprobe.f");
+    syscall1(SYS_UNLINK, (long)"/tmp/limitprobe.f");
     return wrote == 4096 && again == -EFBIG && cut == -EFBIG ? 0 : 4;
 }
 
@@ -346,7 +287,7 @@ static int body_hard(void)
     if (set_limit(RLIMIT_NOFILE, 512, 1024) != 0) {
         return 3; /* root raising it back */
     }
-    if (set_limit(RLIMIT_NOFILE, 512, 512) != 0 || syscall1(SYS_SETUID32, 1000) != 0) {
+    if (set_limit(RLIMIT_NOFILE, 512, 512) != 0 || syscall1(SYS_SETUID, 1000) != 0) {
         return 4;
     }
     if (set_limit(RLIMIT_NOFILE, 512, 1000) != -EPERM) {
@@ -369,7 +310,7 @@ static int body_nproc(void)
 {
     int i, pid;
 
-    if (syscall1(SYS_SETUID32, 1000) != 0 || set_limit(RLIMIT_NPROC, 4, 4) != 0) {
+    if (syscall1(SYS_SETUID, 1000) != 0 || set_limit(RLIMIT_NPROC, 4, 4) != 0) {
         return 2;
     }
     for (i = 0; i < 3; i++) {
@@ -386,7 +327,7 @@ static int body_nproc(void)
     if (pid != -EAGAIN) {
         return 4;
     }
-    syscall3(SYS_WRITE, report_fd, (int)(size_t)"s", 1);
+    syscall3(SYS_WRITE, report_fd, (long)"s", 1);
     for (i = 0; i < 3; i++) {
         syscall3(SYS_WAITPID, -1, 0, 0);
     }
@@ -399,7 +340,7 @@ static int body_others(void)
 {
     int pid;
 
-    if (syscall1(SYS_SETUID32, 1001) != 0) {
+    if (syscall1(SYS_SETUID, 1001) != 0) {
         return 2;
     }
     pid = syscall1(SYS_FORK, 0);
@@ -417,7 +358,7 @@ static int body_others(void)
    counted; a kernel that left it out would see four and allow the fork. */
 static int body_setuid(void)
 {
-    if (set_limit(RLIMIT_NPROC, 5, 5) != 0 || syscall1(SYS_SETUID32, 1000) != 0) {
+    if (set_limit(RLIMIT_NPROC, 5, 5) != 0 || syscall1(SYS_SETUID, 1000) != 0) {
         return 2;
     }
     return syscall1(SYS_FORK, 0) == -EAGAIN ? 0 : 3;
@@ -482,7 +423,7 @@ void probe_main(unsigned int *sp)
         fail("raising the limit back as root");
     }
     fds[0] = fds[1] = -1;
-    if (syscall1(SYS_PIPE, (int)(size_t)fds) != 0) {
+    if (syscall1(SYS_PIPE, (long)fds) != 0) {
         fail("the report pipe");
     }
     report_fd = fds[1];
@@ -494,7 +435,7 @@ void probe_main(unsigned int *sp)
         sys_exit(body_nproc());
     }
     syscall1(SYS_CLOSE, fds[1]); /* so a family that dies unheard is end of input here */
-    if (syscall3(SYS_READ, fds[0], (int)(size_t)&byte, 1) != 1 || byte != 's') {
+    if (syscall3(SYS_READ, fds[0], (long)&byte, 1) != 1 || byte != 's') {
         fail("four processes of one user: three forks and a fourth refused with EAGAIN");
     }
     child_must(body_others, 0, "another user forks beside the limited one");

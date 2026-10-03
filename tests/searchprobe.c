@@ -92,38 +92,12 @@
  * signal in the low bits and would otherwise decode as exit 0, scoring a
  * crashed child as a passing one. Prints "SEARCHPROBE OK" and exits 0 only
  * when every case passed; any failure names the step and the answer it got,
- * and exits 1. Freestanding; direct int 0x80.
+ * and exits 1. Freestanding; direct system calls (probe.h).
  */
 
-typedef unsigned int u32;
+#include "probe.h"
 
-#define SYS_EXIT        1
-#define SYS_FORK        2
-#define SYS_WRITE       4
-#define SYS_OPEN        5
-#define SYS_CLOSE       6
-#define SYS_WAITPID     7
-#define SYS_CREAT       8
-#define SYS_UNLINK      10
-#define SYS_EXECVE      11
-#define SYS_CHDIR       12
-#define SYS_CHMOD       15
-#define SYS_ACCESS      33
-#define SYS_RENAME      38
-#define SYS_MKDIR       39
-#define SYS_RMDIR       40
-#define SYS_STAT        106
-#define SYS_STAT64      195
-#define SYS_SETRESUID32 208
-#define SYS_SETRESGID32 210
-#define SYS_CHOWN32     212
-#define SYS_OPENAT      295
-#define SYS_FCHOWNAT    298
-#define SYS_FSTATAT64   300
-#define SYS_LINKAT      303
-#define SYS_FCHMODAT    306
-#define SYS_FACCESSAT   307
-#define SYS_UTIMENSAT   320
+typedef unsigned int u32;
 
 #define STDOUT 1
 
@@ -205,40 +179,6 @@ typedef unsigned int u32;
 #define UPWARD "/sp_denied/../sp_up.txt"
 #define ROOT   "/"
 
-static int syscall1(int num, int a)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "a"(num), "b"(a) : "memory");
-    return r;
-}
-
-static int syscall3(int num, int a, int b, int c)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "a"(num), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
-}
-
-static int syscall4(int num, int a, int b, int c, int d)
-{
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "a"(num), "b"(a), "c"(b), "d"(c), "S"(d)
-                         : "memory");
-    return r;
-}
-
-static int syscall5(int num, int a, int b, int c, int d, int e)
-{
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "a"(num), "b"(a), "c"(b), "d"(c), "S"(d), "D"(e)
-                         : "memory");
-    return r;
-}
-
 static u32 slen(const char *s)
 {
     u32 n = 0;
@@ -251,7 +191,7 @@ static u32 slen(const char *s)
 
 static void puts_(const char *s)
 {
-    syscall3(SYS_WRITE, STDOUT, (int)s, (int)slen(s));
+    syscall3(SYS_WRITE, STDOUT, (long)s, (int)slen(s));
 }
 
 /* Print a signed decimal, so a failing line has the answer it got. */
@@ -317,7 +257,7 @@ static void want_ok(const char *step, int got)
 /* Open `path` read-only and close it again, reporting open's own answer. */
 static int open_ro(const char *path)
 {
-    int fd = syscall3(SYS_OPEN, (int)path, O_RDONLY, 0);
+    int fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
 
     if (fd >= 0) {
         syscall3(SYS_CLOSE, fd, 0, 0);
@@ -328,7 +268,7 @@ static int open_ro(const char *path)
 /* As open_ro, but relative to a directory descriptor. */
 static int openat_ro(int dirfd, const char *name)
 {
-    int fd = syscall4(SYS_OPENAT, dirfd, (int)name, O_RDONLY, 0);
+    int fd = syscall4(SYS_OPENAT, dirfd, (long)name, O_RDONLY, 0);
 
     if (fd >= 0) {
         syscall3(SYS_CLOSE, fd, 0, 0);
@@ -342,7 +282,7 @@ static char statbuf[144];
 /* stat64's own answer, for the existence assertions. */
 static int stat_rc(const char *path)
 {
-    return syscall3(SYS_STAT64, (int)path, (int)statbuf, 0);
+    return syscall3(SYS_STAT, (long)path, (long)statbuf, 0);
 }
 
 /* The legacy stat(2) (106), which has its own resolve site. musl builds on
@@ -350,13 +290,13 @@ static int stat_rc(const char *path)
  * that collapsed its walk error went uncaught until this case existed. */
 static int old_stat_rc(const char *path)
 {
-    return syscall3(SYS_STAT, (int)path, (int)statbuf, 0);
+    return syscall3(SYS_OLDSTAT, (long)path, (long)statbuf, 0);
 }
 
 /* fstatat64's own answer, the *at form of the same question. */
 static int fstatat_rc(int dirfd, const char *path)
 {
-    return syscall4(SYS_FSTATAT64, dirfd, (int)path, (int)statbuf, 0);
+    return syscall4(SYS_FSTATAT, dirfd, (long)path, (long)statbuf, 0);
 }
 
 /* The permission bits of `path`; a stat that fails is a setup failure. */
@@ -405,10 +345,10 @@ static int run_exec(const char *path)
 
         argv[0] = (char *)path;
         argv[1] = 0;
-        e = syscall3(SYS_EXECVE, (int)path, (int)argv, 0);
+        e = syscall3(SYS_EXECVE, (long)path, (long)argv, 0);
         syscall1(SYS_EXIT, 128 + ((-e) & 0x7F));
     }
-    reaped = syscall3(SYS_WAITPID, pid, (int)&status, 0);
+    reaped = syscall3(SYS_WAITPID, pid, (long)&status, 0);
     if (reaped != pid) {
         fail("waitpid for exec", reaped);
     }
@@ -422,8 +362,8 @@ static int run_exec(const char *path)
  * gids go first: once the effective uid is 1000 the gid calls are refused. */
 static void drop_to_1000(void)
 {
-    want_eq("drop the gids", syscall3(SYS_SETRESGID32, 1000, 1000, 1000), 0);
-    want_eq("drop the uids", syscall3(SYS_SETRESUID32, 1000, 1000, 1000), 0);
+    want_eq("drop the gids", syscall3(SYS_SETRESGID, 1000, 1000, 1000), 0);
+    want_eq("drop the uids", syscall3(SYS_SETRESUID, 1000, 1000, 1000), 0);
 }
 
 /* Dirfds the parent opens while the ancestor is still searchable, inherited by
@@ -445,54 +385,56 @@ static void baseline_child(void)
     want_eq("baseline: stat the two-level leaf", stat_rc(DEEP_LEAF), 0);
     want_eq("baseline: legacy stat the one-level leaf", old_stat_rc(LEAF), 0);
     want_eq("baseline: fstatat the two-level leaf", fstatat_rc(AT_FDCWD, DEEP_LEAF), 0);
-    want_eq("baseline: access the one-level leaf", syscall3(SYS_ACCESS, (int)LEAF, R_OK, 0), 0);
+    want_eq("baseline: access the one-level leaf", syscall3(SYS_ACCESS, (long)LEAF, R_OK, 0), 0);
     want_eq("baseline: faccessat the two-level leaf",
-            syscall4(SYS_FACCESSAT, AT_FDCWD, (int)DEEP_LEAF, R_OK, 0), 0);
+            syscall4(SYS_FACCESSAT, AT_FDCWD, (long)DEEP_LEAF, R_OK, 0), 0);
     want_ok("baseline: openat through the denied dirfd", openat_ro(dfd_denied, "leaf.txt"));
     want_ok("baseline: openat through the shared dirfd", openat_ro(dfd_shared, "victim"));
 
-    want_eq("baseline: chdir one level", syscall3(SYS_CHDIR, (int)DENIED, 0, 0), 0);
-    want_eq("baseline: chdir two levels", syscall3(SYS_CHDIR, (int)DEEP, 0, 0), 0);
-    want_eq("baseline: chdir back to the root", syscall3(SYS_CHDIR, (int)ROOT, 0, 0), 0);
+    want_eq("baseline: chdir one level", syscall3(SYS_CHDIR, (long)DENIED, 0, 0), 0);
+    want_eq("baseline: chdir two levels", syscall3(SYS_CHDIR, (long)DEEP, 0, 0), 0);
+    want_eq("baseline: chdir back to the root", syscall3(SYS_CHDIR, (long)ROOT, 0, 0), 0);
 
     want_eq("baseline: exec the staged program", run_exec(PROG), 0);
     want_eq("baseline: exec a missing name", run_exec(NOSUCH), 128 + ENOENT);
 
     /* The first round's ground: what uid 1000 may do inside the 0777
      * directory. */
-    fd = syscall3(SYS_CREAT, (int)BL, 0644, 0);
+    fd = syscall3(SYS_CREAT, (long)BL, 0644, 0);
     want_ok("baseline: creat in the 0777 directory", fd);
     syscall3(SYS_CLOSE, fd, 0, 0);
-    want_eq("baseline: chmod its own file", syscall3(SYS_CHMOD, (int)BL, 0600, 0), 0);
-    want_eq("baseline: fchmodat its own file", syscall4(SYS_FCHMODAT, AT_FDCWD, (int)BL, 0644, 0),
+    want_eq("baseline: chmod its own file", syscall3(SYS_CHMOD, (long)BL, 0600, 0), 0);
+    want_eq("baseline: fchmodat its own file", syscall4(SYS_FCHMODAT, AT_FDCWD, (long)BL, 0644, 0),
             0);
     want_eq("baseline: fchownat with no change",
-            syscall5(SYS_FCHOWNAT, AT_FDCWD, (int)BL, -1, -1, 0), 0);
+            syscall5(SYS_FCHOWNAT, AT_FDCWD, (long)BL, -1, -1, 0), 0);
     want_eq("baseline: utimensat through the other-write bit",
-            syscall4(SYS_UTIMENSAT, AT_FDCWD, (int)VICTIM, 0, 0), 0);
+            syscall4(SYS_UTIMENSAT, AT_FDCWD, (long)VICTIM, 0, 0), 0);
     want_eq("baseline: linkat reaches the no-hard-links answer",
-            syscall5(SYS_LINKAT, AT_FDCWD, (int)VICTIM, AT_FDCWD, (int)LNK, 0), -EPERM);
-    want_eq("baseline: mkdir in the 0777 directory", syscall3(SYS_MKDIR, (int)BLDIR, 0755, 0), 0);
-    want_eq("baseline: rmdir in the 0777 directory", syscall3(SYS_RMDIR, (int)BLDIR, 0, 0), 0);
-    want_eq("baseline: rename out of the tree", syscall3(SYS_RENAME, (int)BL, (int)OUTBL, 0), 0);
-    want_eq("baseline: rename back into the tree", syscall3(SYS_RENAME, (int)OUTBL, (int)BL, 0), 0);
-    want_eq("baseline: unlink in the 0777 directory", syscall3(SYS_UNLINK, (int)BL, 0, 0), 0);
+            syscall5(SYS_LINKAT, AT_FDCWD, (long)VICTIM, AT_FDCWD, (long)LNK, 0), -EPERM);
+    want_eq("baseline: mkdir in the 0777 directory", syscall3(SYS_MKDIR, (long)BLDIR, 0755, 0), 0);
+    want_eq("baseline: rmdir in the 0777 directory", syscall3(SYS_RMDIR, (long)BLDIR, 0, 0), 0);
+    want_eq("baseline: rename out of the tree", syscall3(SYS_RENAME, (long)BL, (long)OUTBL, 0), 0);
+    want_eq("baseline: rename back into the tree", syscall3(SYS_RENAME, (long)OUTBL, (long)BL, 0),
+            0);
+    want_eq("baseline: unlink in the 0777 directory", syscall3(SYS_UNLINK, (long)BL, 0, 0), 0);
 
     /* The second round's ground: the same rights directly inside /sp_denied,
      * which the denied child will find at 0666. Between the two children that
      * directory loses its execute bit and keeps its write bit, so a refusal
      * there can be nothing but the search charge. */
-    fd = syscall3(SYS_CREAT, (int)PBL, 0644, 0);
+    fd = syscall3(SYS_CREAT, (long)PBL, 0644, 0);
     want_ok("baseline: creat directly under /sp_denied", fd);
     syscall3(SYS_CLOSE, fd, 0, 0);
-    want_eq("baseline: mkdir directly under /sp_denied", syscall3(SYS_MKDIR, (int)PBLDIR, 0755, 0),
+    want_eq("baseline: mkdir directly under /sp_denied", syscall3(SYS_MKDIR, (long)PBLDIR, 0755, 0),
             0);
-    want_eq("baseline: rmdir directly under /sp_denied", syscall3(SYS_RMDIR, (int)PBLDIR, 0, 0), 0);
-    want_eq("baseline: rename out of /sp_denied", syscall3(SYS_RENAME, (int)PBL, (int)POUTBL, 0),
+    want_eq("baseline: rmdir directly under /sp_denied", syscall3(SYS_RMDIR, (long)PBLDIR, 0, 0),
             0);
-    want_eq("baseline: rename back into /sp_denied", syscall3(SYS_RENAME, (int)POUTBL, (int)PBL, 0),
+    want_eq("baseline: rename out of /sp_denied", syscall3(SYS_RENAME, (long)PBL, (long)POUTBL, 0),
             0);
-    want_eq("baseline: unlink directly under /sp_denied", syscall3(SYS_UNLINK, (int)PBL, 0, 0), 0);
+    want_eq("baseline: rename back into /sp_denied",
+            syscall3(SYS_RENAME, (long)POUTBL, (long)PBL, 0), 0);
+    want_eq("baseline: unlink directly under /sp_denied", syscall3(SYS_UNLINK, (long)PBL, 0, 0), 0);
 
     syscall1(SYS_EXIT, 0);
 }
@@ -505,20 +447,20 @@ static void denied_child(void)
 {
     /* The effective id alone is 1000: the walk is charged by it, and access(2)
      * is charged by the real id, which is still 0. */
-    want_eq("drop the gids", syscall3(SYS_SETRESGID32, 1000, 1000, 1000), 0);
-    want_eq("drop only the effective uid", syscall3(SYS_SETRESUID32, 0, 1000, 0), 0);
+    want_eq("drop the gids", syscall3(SYS_SETRESGID, 1000, 1000, 1000), 0);
+    want_eq("drop only the effective uid", syscall3(SYS_SETRESUID, 0, 1000, 0), 0);
     want_eq("denied: open is charged by the effective id", open_ro(LEAF), -EACCES);
     want_eq("denied: access is charged by the real id (root)",
-            syscall3(SYS_ACCESS, (int)LEAF, R_OK, 0), 0);
+            syscall3(SYS_ACCESS, (long)LEAF, R_OK, 0), 0);
 
     /* Now the set-id program's own view: real 1000, effective 0. The answers
      * must swap, which is what makes access(2) worth asking. */
-    want_eq("take the effective id back", syscall3(SYS_SETRESUID32, 1000, 0, 0), 0);
+    want_eq("take the effective id back", syscall3(SYS_SETRESUID, 1000, 0, 0), 0);
     want_ok("denied: open under the effective root", open_ro(LEAF));
     want_eq("denied: access is charged by the real id (1000)",
-            syscall3(SYS_ACCESS, (int)LEAF, R_OK, 0), -EACCES);
+            syscall3(SYS_ACCESS, (long)LEAF, R_OK, 0), -EACCES);
 
-    want_eq("drop the uids", syscall3(SYS_SETRESUID32, 1000, 1000, 1000), 0);
+    want_eq("drop the uids", syscall3(SYS_SETRESUID, 1000, 1000, 1000), 0);
 
     /* The reads, one level and two, and a name that is not there. */
     want_eq("denied: open the one-level leaf", open_ro(LEAF), -EACCES);
@@ -530,10 +472,11 @@ static void denied_child(void)
     want_eq("denied: legacy stat the one-level leaf", old_stat_rc(LEAF), -EACCES);
     want_eq("denied: legacy stat a missing name", old_stat_rc(NOSUCH), -EACCES);
     want_eq("denied: fstatat the two-level leaf", fstatat_rc(AT_FDCWD, DEEP_LEAF), -EACCES);
-    want_eq("denied: access the one-level leaf", syscall3(SYS_ACCESS, (int)LEAF, R_OK, 0), -EACCES);
-    want_eq("denied: access a missing name", syscall3(SYS_ACCESS, (int)NOSUCH, F_OK, 0), -EACCES);
+    want_eq("denied: access the one-level leaf", syscall3(SYS_ACCESS, (long)LEAF, R_OK, 0),
+            -EACCES);
+    want_eq("denied: access a missing name", syscall3(SYS_ACCESS, (long)NOSUCH, F_OK, 0), -EACCES);
     want_eq("denied: faccessat the two-level leaf",
-            syscall4(SYS_FACCESSAT, AT_FDCWD, (int)DEEP_LEAF, R_OK, 0), -EACCES);
+            syscall4(SYS_FACCESSAT, AT_FDCWD, (long)DEEP_LEAF, R_OK, 0), -EACCES);
 
     /* A dirfd is a name, not a capability: both were opened while the ancestor
      * was still searchable. */
@@ -543,9 +486,9 @@ static void denied_child(void)
     /* The two-level chdir and the chdir into the 0777 directory are the ones
      * the walk decides; the one-level chdir names the denied directory as its
      * own target, which chdir's own execute check refuses on its own. */
-    want_eq("denied: chdir one level", syscall3(SYS_CHDIR, (int)DENIED, 0, 0), -EACCES);
-    want_eq("denied: chdir two levels", syscall3(SYS_CHDIR, (int)DEEP, 0, 0), -EACCES);
-    want_eq("denied: chdir into the 0777 directory", syscall3(SYS_CHDIR, (int)SHARED, 0, 0),
+    want_eq("denied: chdir one level", syscall3(SYS_CHDIR, (long)DENIED, 0, 0), -EACCES);
+    want_eq("denied: chdir two levels", syscall3(SYS_CHDIR, (long)DEEP, 0, 0), -EACCES);
+    want_eq("denied: chdir into the 0777 directory", syscall3(SYS_CHDIR, (long)SHARED, 0, 0),
             -EACCES);
 
     want_eq("denied: exec the staged program", run_exec(PROG), 128 + EACCES);
@@ -553,50 +496,50 @@ static void denied_child(void)
 
     /* First round: inside the 0777 directory the baseline child has just
      * proved writable by uid 1000, so only the ancestor above it can refuse. */
-    want_eq("denied: creat", syscall3(SYS_CREAT, (int)NEWFILE, 0644, 0), -EACCES);
-    want_eq("denied: open with O_CREAT", syscall3(SYS_OPEN, (int)CREATED, O_WRONLY | O_CREAT, 0644),
+    want_eq("denied: creat", syscall3(SYS_CREAT, (long)NEWFILE, 0644, 0), -EACCES);
+    want_eq("denied: open with O_CREAT",
+            syscall3(SYS_OPEN, (long)CREATED, O_WRONLY | O_CREAT, 0644), -EACCES);
+    want_eq("denied: mkdir", syscall3(SYS_MKDIR, (long)NEWDIR, 0755, 0), -EACCES);
+    want_eq("denied: rmdir", syscall3(SYS_RMDIR, (long)RMME, 0, 0), -EACCES);
+    want_eq("denied: unlink", syscall3(SYS_UNLINK, (long)VICTIM, 0, 0), -EACCES);
+    want_eq("denied: rename out of the tree", syscall3(SYS_RENAME, (long)MOVER, (long)MOVED, 0),
             -EACCES);
-    want_eq("denied: mkdir", syscall3(SYS_MKDIR, (int)NEWDIR, 0755, 0), -EACCES);
-    want_eq("denied: rmdir", syscall3(SYS_RMDIR, (int)RMME, 0, 0), -EACCES);
-    want_eq("denied: unlink", syscall3(SYS_UNLINK, (int)VICTIM, 0, 0), -EACCES);
-    want_eq("denied: rename out of the tree", syscall3(SYS_RENAME, (int)MOVER, (int)MOVED, 0),
+    want_eq("denied: rename into the tree", syscall3(SYS_RENAME, (long)OUTSRC, (long)LANDED, 0),
             -EACCES);
-    want_eq("denied: rename into the tree", syscall3(SYS_RENAME, (int)OUTSRC, (int)LANDED, 0),
-            -EACCES);
-    want_eq("denied: chmod its own file", syscall3(SYS_CHMOD, (int)MINE, 0600, 0), -EACCES);
-    want_eq("denied: fchmodat its own file", syscall4(SYS_FCHMODAT, AT_FDCWD, (int)MINE, 0600, 0),
+    want_eq("denied: chmod its own file", syscall3(SYS_CHMOD, (long)MINE, 0600, 0), -EACCES);
+    want_eq("denied: fchmodat its own file", syscall4(SYS_FCHMODAT, AT_FDCWD, (long)MINE, 0600, 0),
             -EACCES);
     want_eq("denied: fchownat with no change",
-            syscall5(SYS_FCHOWNAT, AT_FDCWD, (int)MINE, -1, -1, 0), -EACCES);
-    want_eq("denied: utimensat", syscall4(SYS_UTIMENSAT, AT_FDCWD, (int)VICTIM, 0, 0), -EACCES);
-    want_eq("denied: linkat", syscall5(SYS_LINKAT, AT_FDCWD, (int)VICTIM, AT_FDCWD, (int)LNK, 0),
+            syscall5(SYS_FCHOWNAT, AT_FDCWD, (long)MINE, -1, -1, 0), -EACCES);
+    want_eq("denied: utimensat", syscall4(SYS_UTIMENSAT, AT_FDCWD, (long)VICTIM, 0, 0), -EACCES);
+    want_eq("denied: linkat", syscall5(SYS_LINKAT, AT_FDCWD, (long)VICTIM, AT_FDCWD, (long)LNK, 0),
             -EACCES);
 
     /* Second round: directly inside /sp_denied, which grants write to everyone
      * and withholds search. The write check walks only as far as this
      * directory and a walk never charges the one it ends on, so each of these
      * rests on the syscall's own full-path resolve and on nothing else. */
-    want_eq("denied: creat under the denied parent", syscall3(SYS_CREAT, (int)PNEWFILE, 0644, 0),
+    want_eq("denied: creat under the denied parent", syscall3(SYS_CREAT, (long)PNEWFILE, 0644, 0),
             -EACCES);
     want_eq("denied: open with O_CREAT under the denied parent",
-            syscall3(SYS_OPEN, (int)PCREATED, O_WRONLY | O_CREAT, 0644), -EACCES);
-    want_eq("denied: mkdir under the denied parent", syscall3(SYS_MKDIR, (int)PNEWDIR, 0755, 0),
+            syscall3(SYS_OPEN, (long)PCREATED, O_WRONLY | O_CREAT, 0644), -EACCES);
+    want_eq("denied: mkdir under the denied parent", syscall3(SYS_MKDIR, (long)PNEWDIR, 0755, 0),
             -EACCES);
-    want_eq("denied: rmdir under the denied parent", syscall3(SYS_RMDIR, (int)PRMME, 0, 0),
+    want_eq("denied: rmdir under the denied parent", syscall3(SYS_RMDIR, (long)PRMME, 0, 0),
             -EACCES);
-    want_eq("denied: unlink under the denied parent", syscall3(SYS_UNLINK, (int)PVICTIM, 0, 0),
+    want_eq("denied: unlink under the denied parent", syscall3(SYS_UNLINK, (long)PVICTIM, 0, 0),
             -EACCES);
     want_eq("denied: rename out of the denied parent",
-            syscall3(SYS_RENAME, (int)PMOVER, (int)PMOVED, 0), -EACCES);
+            syscall3(SYS_RENAME, (long)PMOVER, (long)PMOVED, 0), -EACCES);
     want_eq("denied: rename into the denied parent",
-            syscall3(SYS_RENAME, (int)POUTSRC, (int)PLANDED, 0), -EACCES);
+            syscall3(SYS_RENAME, (long)POUTSRC, (long)PLANDED, 0), -EACCES);
 
     /* `..` is physical: the walk enters the denied directory before it can
      * climb out, so the spelling is refused like any other entry. The root
      * stays open to everyone. */
     want_eq("denied: open through the denied directory's ..", open_ro(UPWARD), -EACCES);
     want_ok("denied: open the root", open_ro(ROOT));
-    want_eq("denied: search the root", syscall3(SYS_ACCESS, (int)ROOT, X_OK, 0), 0);
+    want_eq("denied: search the root", syscall3(SYS_ACCESS, (long)ROOT, X_OK, 0), 0);
 
     syscall1(SYS_EXIT, 0);
 }
@@ -616,14 +559,14 @@ static void moved_child(void)
     want_ok("moved: openat through the denied dirfd", openat_ro(dfd_denied, "leaf.txt"));
     want_eq("moved: open under the new denier", open_ro(DEEP_LEAF), -EACCES);
     want_eq("moved: stat a missing name under the new denier", stat_rc(DEEP_NOSUCH), -EACCES);
-    want_eq("moved: chdir into the new denier", syscall3(SYS_CHDIR, (int)DEEP, 0, 0), -EACCES);
-    want_eq("moved: chdir into its searchable parent", syscall3(SYS_CHDIR, (int)DENIED, 0, 0), 0);
-    want_eq("moved: chdir back to the root", syscall3(SYS_CHDIR, (int)ROOT, 0, 0), 0);
+    want_eq("moved: chdir into the new denier", syscall3(SYS_CHDIR, (long)DEEP, 0, 0), -EACCES);
+    want_eq("moved: chdir into its searchable parent", syscall3(SYS_CHDIR, (long)DENIED, 0, 0), 0);
+    want_eq("moved: chdir back to the root", syscall3(SYS_CHDIR, (long)ROOT, 0, 0), 0);
 
-    fd = syscall3(SYS_CREAT, (int)THIRD, 0644, 0);
+    fd = syscall3(SYS_CREAT, (long)THIRD, 0644, 0);
     want_ok("moved: creat in the reachable 0777 directory", fd);
     syscall3(SYS_CLOSE, fd, 0, 0);
-    want_eq("moved: unlink it again", syscall3(SYS_UNLINK, (int)THIRD, 0, 0), 0);
+    want_eq("moved: unlink it again", syscall3(SYS_UNLINK, (long)THIRD, 0, 0), 0);
 
     syscall1(SYS_EXIT, 0);
 }
@@ -646,7 +589,7 @@ static void run_child(void (*body)(void), const char *what)
          * ever grew a path out the bottom would fail, not pass. */
         syscall1(SYS_EXIT, 127);
     }
-    reaped = syscall3(SYS_WAITPID, pid, (int)&status, 0);
+    reaped = syscall3(SYS_WAITPID, pid, (long)&status, 0);
     if (reaped != pid) {
         fail(what, reaped);
     }
@@ -666,22 +609,22 @@ static void run_child(void (*body)(void), const char *what)
 /* Create `path` with `mode`, pinned against the boot shell's umask. */
 static void mint_file(const char *path, u32 mode)
 {
-    int fd = syscall3(SYS_CREAT, (int)path, (int)mode, 0);
+    int fd = syscall3(SYS_CREAT, (long)path, (int)mode, 0);
 
     if (fd < 0) {
         fail("mint a fixture file", fd);
     }
     syscall3(SYS_CLOSE, fd, 0, 0);
-    want_eq("chmod a fixture file", syscall3(SYS_CHMOD, (int)path, (int)mode, 0), 0);
+    want_eq("chmod a fixture file", syscall3(SYS_CHMOD, (long)path, (int)mode, 0), 0);
 }
 
 static void mint_dir(const char *path, u32 mode)
 {
-    want_eq("mint a fixture directory", syscall3(SYS_MKDIR, (int)path, (int)mode, 0), 0);
-    want_eq("chmod a fixture directory", syscall3(SYS_CHMOD, (int)path, (int)mode, 0), 0);
+    want_eq("mint a fixture directory", syscall3(SYS_MKDIR, (long)path, (int)mode, 0), 0);
+    want_eq("chmod a fixture directory", syscall3(SYS_CHMOD, (long)path, (int)mode, 0), 0);
 }
 
-void _start(void)
+PROBE_START void _start(void)
 {
     /* The staged tree is what the manifest declares, before anything flips
      * a mode: a probe that assumed its fixtures would prove nothing about
@@ -702,7 +645,7 @@ void _start(void)
     mint_file(VICTIM, 0666);
     mint_file(MOVER, 0666);
     mint_file(MINE, 0644);
-    want_eq("give mine to uid 1000", syscall3(SYS_CHOWN32, (int)MINE, 1000, 1000), 0);
+    want_eq("give mine to uid 1000", syscall3(SYS_CHOWN, (long)MINE, 1000, 1000), 0);
     mint_dir(RMME, 0755);
     mint_file(PVICTIM, 0666);
     mint_file(PMOVER, 0666);
@@ -712,15 +655,15 @@ void _start(void)
     mint_file(POUTSRC, 0666);
     mint_file(UPFILE, 0644);
 
-    dfd_denied = syscall3(SYS_OPEN, (int)DENIED, O_RDONLY | O_DIRECTORY, 0);
+    dfd_denied = syscall3(SYS_OPEN, (long)DENIED, O_RDONLY | O_DIRECTORY, 0);
     want_ok("open a dirfd on /sp_denied", dfd_denied);
-    dfd_shared = syscall3(SYS_OPEN, (int)SHARED, O_RDONLY | O_DIRECTORY, 0);
+    dfd_shared = syscall3(SYS_OPEN, (long)SHARED, O_RDONLY | O_DIRECTORY, 0);
     want_ok("open a dirfd on /sp_denied/shared", dfd_shared);
 
     run_child(baseline_child, "the baseline child");
 
     /* One bit down from the staged 0777: read and write stay, search goes. */
-    want_eq("close /sp_denied to 0666", syscall3(SYS_CHMOD, (int)DENIED, 0666, 0), 0);
+    want_eq("close /sp_denied to 0666", syscall3(SYS_CHMOD, (long)DENIED, 0666, 0), 0);
     run_child(denied_child, "the denied child");
 
     /* Refused and nothing done: the check an errno alone cannot make. linkat
@@ -748,25 +691,25 @@ void _start(void)
     want_eq("rename took the second outside source away", stat_rc(POUTSRC), 0);
 
     /* Move the denial one level down and ask again. */
-    want_eq("reopen /sp_denied to 0777", syscall3(SYS_CHMOD, (int)DENIED, 0777, 0), 0);
-    want_eq("close /sp_denied/deep to 0666", syscall3(SYS_CHMOD, (int)DEEP, 0666, 0), 0);
+    want_eq("reopen /sp_denied to 0777", syscall3(SYS_CHMOD, (long)DENIED, 0777, 0), 0);
+    want_eq("close /sp_denied/deep to 0666", syscall3(SYS_CHMOD, (long)DEEP, 0666, 0), 0);
     run_child(moved_child, "the moved-denial child");
-    want_eq("reopen /sp_denied/deep to 0777", syscall3(SYS_CHMOD, (int)DEEP, 0777, 0), 0);
+    want_eq("reopen /sp_denied/deep to 0777", syscall3(SYS_CHMOD, (long)DEEP, 0777, 0), 0);
 
     /* Hand the image back the way the manifest staged it. */
     syscall3(SYS_CLOSE, dfd_denied, 0, 0);
     syscall3(SYS_CLOSE, dfd_shared, 0, 0);
-    want_eq("remove the victim", syscall3(SYS_UNLINK, (int)VICTIM, 0, 0), 0);
-    want_eq("remove the mover", syscall3(SYS_UNLINK, (int)MOVER, 0, 0), 0);
-    want_eq("remove mine", syscall3(SYS_UNLINK, (int)MINE, 0, 0), 0);
-    want_eq("remove the rmdir target", syscall3(SYS_RMDIR, (int)RMME, 0, 0), 0);
-    want_eq("remove the second victim", syscall3(SYS_UNLINK, (int)PVICTIM, 0, 0), 0);
-    want_eq("remove the second mover", syscall3(SYS_UNLINK, (int)PMOVER, 0, 0), 0);
-    want_eq("remove the second rmdir target", syscall3(SYS_RMDIR, (int)PRMME, 0, 0), 0);
-    want_eq("remove the outside source", syscall3(SYS_UNLINK, (int)OUTSRC, 0, 0), 0);
-    want_eq("remove the second outside source", syscall3(SYS_UNLINK, (int)POUTSRC, 0, 0), 0);
-    want_eq("remove the outside directory", syscall3(SYS_RMDIR, (int)OUTDIR, 0, 0), 0);
-    want_eq("remove the upward target", syscall3(SYS_UNLINK, (int)UPFILE, 0, 0), 0);
+    want_eq("remove the victim", syscall3(SYS_UNLINK, (long)VICTIM, 0, 0), 0);
+    want_eq("remove the mover", syscall3(SYS_UNLINK, (long)MOVER, 0, 0), 0);
+    want_eq("remove mine", syscall3(SYS_UNLINK, (long)MINE, 0, 0), 0);
+    want_eq("remove the rmdir target", syscall3(SYS_RMDIR, (long)RMME, 0, 0), 0);
+    want_eq("remove the second victim", syscall3(SYS_UNLINK, (long)PVICTIM, 0, 0), 0);
+    want_eq("remove the second mover", syscall3(SYS_UNLINK, (long)PMOVER, 0, 0), 0);
+    want_eq("remove the second rmdir target", syscall3(SYS_RMDIR, (long)PRMME, 0, 0), 0);
+    want_eq("remove the outside source", syscall3(SYS_UNLINK, (long)OUTSRC, 0, 0), 0);
+    want_eq("remove the second outside source", syscall3(SYS_UNLINK, (long)POUTSRC, 0, 0), 0);
+    want_eq("remove the outside directory", syscall3(SYS_RMDIR, (long)OUTDIR, 0, 0), 0);
+    want_eq("remove the upward target", syscall3(SYS_UNLINK, (long)UPFILE, 0, 0), 0);
 
     puts_("SEARCHPROBE OK\n");
     syscall1(SYS_EXIT, 0);

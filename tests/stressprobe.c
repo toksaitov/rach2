@@ -13,18 +13,10 @@
  * result or the offset that differs, and exits 1. A file, 256 KiB, is a
  * thirty-second of the cache's largest size.
  *
- * Freestanding; direct int 0x80.
+ * Freestanding; direct system calls (probe.h).
  */
 
-typedef unsigned int size_t;
-
-#define SYS_EXIT   1
-#define SYS_READ   3
-#define SYS_WRITE  4
-#define SYS_OPEN   5
-#define SYS_CLOSE  6
-#define SYS_UNLINK 10
-#define SYS_FSYNC  118
+#include "probe.h"
 
 #define O_RDONLY 0
 #define O_WRONLY 1
@@ -36,20 +28,6 @@ typedef unsigned int size_t;
 #define FILE_SIZE (256u * 1024u)
 
 static unsigned char buf[FILE_SIZE];
-
-static int syscall1(int n, int a)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a) : "memory");
-    return r;
-}
-
-static int syscall3(int n, int a, int b, int c)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
-}
 
 static void sys_exit(int status)
 {
@@ -68,7 +46,7 @@ static size_t strlen(const char *s)
 
 static void out(const char *s)
 {
-    syscall3(SYS_WRITE, 1, (int)(size_t)s, (int)strlen(s));
+    syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
 }
 
 static void out_num(unsigned long v)
@@ -85,7 +63,7 @@ static void out_num(unsigned long v)
     }
     while (i > 0) {
         char c = d[--i];
-        syscall3(SYS_WRITE, 1, (int)(size_t)&c, 1);
+        syscall3(SYS_WRITE, 1, (long)&c, 1);
     }
 }
 
@@ -111,7 +89,7 @@ static int write_all(int fd, const unsigned char *p, size_t n)
 {
     size_t off = 0;
     while (off < n) {
-        int w = syscall3(SYS_WRITE, fd, (int)(size_t)(p + off), (int)(n - off));
+        int w = syscall3(SYS_WRITE, fd, (long)(p + off), (int)(n - off));
         if (w <= 0) {
             return w;
         }
@@ -125,7 +103,7 @@ static int read_all(int fd, unsigned char *p, size_t n)
 {
     size_t off = 0;
     while (off < n) {
-        int r = syscall3(SYS_READ, fd, (int)(size_t)(p + off), (int)(n - off));
+        int r = syscall3(SYS_READ, fd, (long)(p + off), (int)(n - off));
         if (r <= 0) {
             return r;
         }
@@ -153,7 +131,7 @@ static void fail_at(const char *what, unsigned file, int rc)
     sys_exit(1);
 }
 
-void _start(void)
+PROBE_START void _start(void)
 {
     char path[8];
     unsigned f;
@@ -165,7 +143,7 @@ void _start(void)
         for (i = 0; i < FILE_SIZE; ++i) {
             buf[i] = pattern(f, i);
         }
-        fd = syscall3(SYS_OPEN, (int)(size_t)path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        fd = syscall3(SYS_OPEN, (long)path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (fd < 0) {
             fail_at("the open to write", f, fd);
         }
@@ -185,7 +163,7 @@ void _start(void)
         for (i = 0; i < FILE_SIZE; ++i) {
             buf[i] = 0;
         }
-        fd = syscall3(SYS_OPEN, (int)(size_t)path, O_RDONLY, 0);
+        fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
         if (fd < 0) {
             fail_at("the open to read", f, fd);
         }
@@ -199,7 +177,7 @@ void _start(void)
                 fail_at("the bytes", f, (int)i);
             }
         }
-        syscall3(SYS_UNLINK, (int)(size_t)path, 0, 0);
+        syscall3(SYS_UNLINK, (long)path, 0, 0);
     }
 
     out("STRESSPROBE OK n=");

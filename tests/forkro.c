@@ -9,18 +9,12 @@
  * == SIGSEGV). If fork wrongly made the child's copy writable, the child
  * would survive and exit 0, which this probe reports as a failure.
  *
- * Freestanding; direct int 0x80.
+ * Freestanding; direct system calls (probe.h).
  */
 
-typedef unsigned int size_t;
+#include "probe.h"
 
 #define STDOUT_FILENO 1
-
-#define SYS_EXIT    1
-#define SYS_FORK    2
-#define SYS_WRITE   4
-#define SYS_WAITPID 7
-#define SYS_MMAP2   192
 
 #define PAGE 4096u
 
@@ -36,35 +30,23 @@ typedef unsigned int size_t;
 
 static int sys_write(int fd, const void *buf, size_t count)
 {
-    int result;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(result)
-                         : "0"(SYS_WRITE), "b"(fd), "c"(buf), "d"(count)
-                         : "memory");
-    return result;
+    return syscall3(SYS_WRITE, (long)fd, (long)buf, (long)count);
 }
 
 static void sys_exit(int status)
 {
-    __asm__ __volatile__("int $0x80" : : "a"(SYS_EXIT), "b"(status));
+    syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
 static int sys_fork(void)
 {
-    int result;
-    __asm__ __volatile__("int $0x80" : "=a"(result) : "0"(SYS_FORK));
-    return result;
+    return syscall0(SYS_FORK);
 }
 
 static int sys_waitpid(int pid, int *status, int options)
 {
-    int result;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(result)
-                         : "0"(SYS_WAITPID), "b"(pid), "c"(status), "d"(options)
-                         : "memory");
-    return result;
+    return syscall3(SYS_WAITPID, (long)pid, (long)status, (long)options);
 }
 
 static unsigned sys_mmap2_anon(unsigned len, int prot)
@@ -96,7 +78,7 @@ static void puts(const char *s)
     sys_write(STDOUT_FILENO, "\n", 1);
 }
 
-void _start(void)
+PROBE_START void _start(void)
 {
     unsigned p = sys_mmap2_anon(PAGE, PROT_READ);
     volatile unsigned char *ro = (volatile unsigned char *)p;

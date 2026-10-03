@@ -3,10 +3,11 @@
  *
  * Each is checked against an existing file, the root directory, and a
  * nonexistent path, so both the success and the failure path are covered.
- * Freestanding; direct int 0x80.
+ * Freestanding; direct system calls (probe.h).
  */
 
-typedef unsigned int size_t;
+#include "probe.h"
+
 typedef unsigned int mode_t;
 typedef unsigned int ino_t;
 typedef unsigned int dev_t;
@@ -22,13 +23,7 @@ typedef unsigned long long ino64_t;
 #define STDOUT_FILENO 1
 
 /* Syscall numbers (32-bit Linux / Rach2 compatible) */
-#define SYS_EXIT      1
-#define SYS_WRITE     4
-#define SYS_STAT      106
-#define SYS_STAT64    195
-#define SYS_FSTAT64   197
-#define SYS_FSTATAT64 300
-#define AT_FDCWD      (-100)
+#define AT_FDCWD (-100)
 
 /* File type bits from mode */
 #define S_IFMT  0170000
@@ -82,47 +77,29 @@ struct stat64 {
 
 static int sys_write(int fd, const void *buf, size_t count)
 {
-    int result;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(result)
-                         : "0"(SYS_WRITE), "b"(fd), "c"(buf), "d"(count)
-                         : "memory");
-    return result;
+    return syscall3(SYS_WRITE, (long)fd, (long)buf, (long)count);
 }
 
 static void sys_exit(int status)
 {
-    __asm__ __volatile__("int $0x80" : : "a"(SYS_EXIT), "b"(status));
+    syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
 static int sys_stat(const char *path, struct stat *buf)
 {
-    int result;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(result)
-                         : "0"(SYS_STAT), "b"(path), "c"(buf)
-                         : "memory");
-    return result;
+    return syscall2(SYS_OLDSTAT, (long)path, (long)buf);
 }
 
 static int sys_call3(int nr, int a, int b, int c)
 {
-    int result;
-    __asm__ __volatile__("int $0x80" : "=a"(result) : "0"(nr), "b"(a), "c"(b), "d"(c) : "memory");
-    return result;
+    return syscall3(nr, (long)a, (long)b, (long)c);
 }
 
 /** Make a four-argument system call, for utimensat and fstatat64. */
 static int sys_call4(int nr, int a, int b, int c, int d)
 {
-    int result;
-
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(result)
-                         : "0"(nr), "b"(a), "c"(b), "d"(c), "S"(d)
-                         : "memory");
-    return result;
+    return syscall4(nr, (long)a, (long)b, (long)c, (long)d);
 }
 
 /* Make DIR and a file NAME inside it; 0 on success. */
@@ -130,10 +107,10 @@ static int make_in(const char *dir, const char *file)
 {
     int fd;
 
-    if (sys_call3(39, (int)dir, 0755, 0) < 0) { /* mkdir */
+    if (sys_call3(39, (long)dir, 0755, 0) < 0) { /* mkdir */
         return -1;
     }
-    fd = sys_call3(5, (int)file, 0101, 0644); /* open O_WRONLY|O_CREAT */
+    fd = sys_call3(5, (long)file, 0101, 0644); /* open O_WRONLY|O_CREAT */
     if (fd < 0) {
         return -1;
     }
@@ -142,12 +119,7 @@ static int make_in(const char *dir, const char *file)
 
 static int sys_stat64(const char *path, struct stat64 *buf)
 {
-    int result;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(result)
-                         : "0"(SYS_STAT64), "b"(path), "c"(buf)
-                         : "memory");
-    return result;
+    return syscall2(SYS_STAT, (long)path, (long)buf);
 }
 
 static size_t strlen(const char *s)
@@ -248,7 +220,7 @@ static void root_ino_rows(int *passed, int *failed)
     const char *paths[] = {"/", "/statroot/.."};
     unsigned int i;
 
-    if (sys_call3(39, (int)"/statroot", 0755, 0) < 0) { /* mkdir */
+    if (sys_call3(39, (long)"/statroot", 0755, 0) < 0) { /* mkdir */
         puts("Root inode through stat and stat64: FAILED (/statroot could not be made)");
         (*failed)++;
         return;
@@ -271,11 +243,11 @@ static void root_ino_rows(int *passed, int *failed)
     }
     {
         struct stat64 byfd, byat;
-        int fd = sys_call3(5, (int)"/", 0, 0); /* open O_RDONLY */
+        int fd = sys_call3(5, (long)"/", 0, 0); /* open O_RDONLY */
 
         print("Root inode through fstat64 and fstatat64: ");
-        if (fd >= 0 && sys_call3(SYS_FSTAT64, fd, (int)&byfd, 0) == 0 &&
-            sys_call4(SYS_FSTATAT64, AT_FDCWD, (int)"/", (int)&byat, 0) == 0 && byfd.st_ino == 1 &&
+        if (fd >= 0 && sys_call3(SYS_FSTAT, fd, (long)&byfd, 0) == 0 &&
+            sys_call4(SYS_FSTATAT, AT_FDCWD, (long)"/", (long)&byat, 0) == 0 && byfd.st_ino == 1 &&
             byfd.__st_ino == 1 && byat.st_ino == 1 && byat.__st_ino == 1 &&
             (byfd.st_mode & S_IFMT) == S_IFDIR && (byat.st_mode & S_IFMT) == S_IFDIR) {
             puts("OK");
@@ -322,8 +294,8 @@ static int time_rows(void)
     int ok = 1;
     int fine = 0;
 
-    fd[0] = sys_call3(5, (int)paths[0], 0101, 0644);
-    fd[1] = sys_call3(5, (int)paths[1], 0101, 0644);
+    fd[0] = sys_call3(5, (long)paths[0], 0101, 0644);
+    fd[1] = sys_call3(5, (long)paths[1], 0101, 0644);
     if (fd[0] < 0 || fd[1] < 0) {
         ok = 0;
     } else {
@@ -335,14 +307,14 @@ static int time_rows(void)
             previous = next;
         }
         for (i = 0; ok && i < 50; i++) {
-            ok = sys_call4(320, -100, (int)paths[i % 2], 0, 0) == 0 &&
+            ok = sys_call4(320, -100, (long)paths[i % 2], 0, 0) == 0 &&
                  sys_stat64(paths[i % 2], &next) == 0 && time_not_before(&next, &previous);
             fine = fine || below_tick(&next);
             previous = next;
         }
         ok = ok && fine;
         if (ok) {
-            ok = sys_call4(320, -100, (int)paths[0], (int)times, 0) == 0 &&
+            ok = sys_call4(320, -100, (long)paths[0], (long)times, 0) == 0 &&
                  sys_stat64(paths[0], &next) == 0 && next.st_atime == 1234567890u &&
                  next.st_atime_nsec == 0 && next.st_mtime == 1234567890u &&
                  next.st_mtime_nsec == 123456789u;
@@ -352,7 +324,7 @@ static int time_rows(void)
         if (fd[i] >= 0) {
             sys_call3(6, fd[i], 0, 0);
         }
-        sys_call3(10, (int)paths[i], 0, 0);
+        sys_call3(10, (long)paths[i], 0, 0);
     }
     puts(ok ? "STATTIME OK: two writes, fifty stamps, explicit fractions"
             : "STATTIME FAIL: two writes, fifty stamps, explicit fractions");
@@ -364,7 +336,7 @@ static int time_rows(void)
  * in part B, then the inode and time rows, and exits 0 only if every row
  * passed.
  */
-void _start(void)
+PROBE_START void _start(void)
 {
     struct stat st;
     struct stat64 st64;

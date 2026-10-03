@@ -16,25 +16,17 @@
  * reset a matching connection does not answer. Nothing here touches ARP or
  * the wire.
  *
- * Prints "LOOPPROBE OK" and exits 0 on success. Freestanding; direct int 0x80.
+ * Prints "LOOPPROBE OK" and exits 0 on success. Freestanding; direct system
+ * calls (probe.h).
  */
 
-typedef unsigned int size_t;
+#include "probe.h"
+
 typedef unsigned int uint32_t;
 typedef unsigned short uint16_t;
 typedef unsigned char uint8_t;
 
 #define STDOUT_FILENO 1
-
-#define SYS_EXIT       1
-#define SYS_READ       3
-#define SYS_WRITE      4
-#define SYS_CLOSE      6
-#define SYS_OPEN       5
-#define SYS_SOCKETCALL 102
-#define SYS_NANOSLEEP  162
-#define SYS_FCNTL64    221
-#define SYS_PIPE       42
 
 #define SC_SOCKET      1
 #define SC_BIND        2
@@ -71,9 +63,6 @@ typedef unsigned char uint8_t;
 /* Where the simultaneous-open case's port pairs start; each round takes two. */
 #define SIM_PORT_A       7310
 #define TCP_PORT         7200
-#define SYS_FORK         2
-#define SYS_WAITPID      7
-#define SYS_GETTIMEOFDAY 78
 /* Round trips of one byte. The same rounds run over a pipe first, and both
    times are printed for a person; the verdict is the kernel's count of who
    delivered the loopback's datagrams: with a single queued datagram left to
@@ -100,57 +89,35 @@ typedef unsigned char uint8_t;
 
 static int sys_write(int fd, const void *buf, size_t count)
 {
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_WRITE), "b"(fd), "c"(buf), "d"(count)
-                         : "memory");
-    return r;
+    return syscall3(SYS_WRITE, (long)fd, (long)buf, (long)count);
 }
 
 static int sys_read(int fd, void *buf, size_t count)
 {
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_READ), "b"(fd), "c"(buf), "d"(count)
-                         : "memory");
-    return r;
+    return syscall3(SYS_READ, (long)fd, (long)buf, (long)count);
 }
 
 #define O_RDONLY 0
 
 static int sys_open(const char *path, int flags, int mode)
 {
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_OPEN), "b"(path), "c"(flags), "d"(mode)
-                         : "memory");
-    return r;
+    return syscall3(SYS_OPEN, (long)path, (long)flags, (long)mode);
 }
 
 static int sys_close(int fd)
 {
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(SYS_CLOSE), "b"(fd));
-    return r;
+    return syscall1(SYS_CLOSE, (long)fd);
 }
 
 static void sys_exit(int status)
 {
-    __asm__ __volatile__("int $0x80" : : "a"(SYS_EXIT), "b"(status));
+    syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
 static int socketcall(int call, uint32_t *args)
 {
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_SOCKETCALL), "b"(call), "c"(args)
-                         : "memory");
-    return r;
+    return syscall2(SYS_SOCKETCALL, (long)call, (long)args);
 }
 
 static size_t strlen(const char *s)
@@ -250,13 +217,13 @@ static void source_for(uint8_t *me, uint8_t a, uint8_t b, uint8_t c, uint8_t d)
         fail("a socket to learn the local address");
     make_sockaddr(sa, 9, a, b, c, d);
     args[0] = (uint32_t)fd;
-    args[1] = (uint32_t)sa;
+    args[1] = (unsigned long)sa;
     args[2] = 16;
     if (socketcall(SC_CONNECT, args) != 0)
         fail("connecting to learn the local address");
     args[0] = (uint32_t)fd;
-    args[1] = (uint32_t)me;
-    args[2] = (uint32_t)&len;
+    args[1] = (unsigned long)me;
+    args[2] = (unsigned long)&len;
     if (socketcall(SC_GETSOCKNAME, args) != 0)
         fail("getsockname to learn the local address");
     sys_close(fd);
@@ -293,8 +260,8 @@ static int local_port(int fd)
         me[i] = 0; /* the kernel fills this; a refusal must not read as a port */
     }
     args[0] = (uint32_t)fd;
-    args[1] = (uint32_t)me;
-    args[2] = (uint32_t)&len;
+    args[1] = (unsigned long)me;
+    args[2] = (unsigned long)&len;
     if (socketcall(SC_GETSOCKNAME, args) != 0)
         return -1;
     return me[2] * 256 + me[3];
@@ -313,18 +280,12 @@ static int sys_pipe(int *fds)
 
 static int sys_fork(void)
 {
-    int r;
-
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(SYS_FORK));
-    return r;
+    return syscall0(SYS_FORK);
 }
 
 static int sys_waitpid(int pid, int *status)
 {
-    int r;
-
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(SYS_WAITPID), "b"(pid), "c"(status), "d"(0));
-    return r;
+    return syscall3(SYS_WAITPID, (long)pid, (long)status, (long)0);
 }
 
 /* The milliseconds from `a` to `b`, both as `gettimeofday` fills them. The
@@ -340,17 +301,12 @@ static int elapsed_ms(const uint32_t *a, const uint32_t *b)
 
 static int sys_gettimeofday(uint32_t *tv)
 {
-    int r;
-
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(SYS_GETTIMEOFDAY), "b"(tv), "c"(0));
-    return r;
+    return syscall2(SYS_GETTIMEOFDAY, (long)tv, (long)0);
 }
 
 static int sys_fcntl(int fd, int cmd, int arg)
 {
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(SYS_FCNTL64), "b"(fd), "c"(cmd), "d"(arg));
-    return r;
+    return syscall3(SYS_FCNTL, (long)fd, (long)cmd, (long)arg);
 }
 
 struct timespec_probe {
@@ -365,7 +321,7 @@ static void sys_nanosleep_ms(long ms)
 
     req.tv_sec = ms / 1000L;
     req.tv_nsec = (ms % 1000L) * 1000000L;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(SYS_NANOSLEEP), "b"(&req), "c"(0) : "memory");
+    r = syscall2(SYS_NANOSLEEP, (long)(&req), (long)0);
     (void)r;
 }
 
@@ -387,27 +343,27 @@ static void udp_loop(void)
 
     make_sockaddr(sa, UDP_PORT, 0, 0, 0, 0);
     args[0] = (uint32_t)s;
-    args[1] = (uint32_t)sa;
+    args[1] = (unsigned long)sa;
     args[2] = 16;
     if (socketcall(SC_BIND, args) != 0)
         fail("udp bind");
 
     make_sockaddr(dst, UDP_PORT, 127, 0, 0, 1);
     args[0] = (uint32_t)s;
-    args[1] = (uint32_t)msg;
+    args[1] = (unsigned long)msg;
     args[2] = (uint32_t)strlen(msg);
     args[3] = 0;
-    args[4] = (uint32_t)dst;
+    args[4] = (unsigned long)dst;
     args[5] = 16;
     if (socketcall(SC_SENDTO, args) != (int)strlen(msg))
         fail("udp sendto");
 
     args[0] = (uint32_t)s;
-    args[1] = (uint32_t)rbuf;
+    args[1] = (unsigned long)rbuf;
     args[2] = sizeof(rbuf);
     args[3] = 0;
-    args[4] = (uint32_t)src;
-    args[5] = (uint32_t)&salen;
+    args[4] = (unsigned long)src;
+    args[5] = (unsigned long)&salen;
     n = socketcall(SC_RECVFROM, args);
     if (n != (int)strlen(msg) || !mem_eq((const uint8_t *)rbuf, (const uint8_t *)msg, n)) {
         fail("udp payload");
@@ -424,20 +380,20 @@ static void udp_loop(void)
      * at the last step, leaving the recvfrom below blocked forever. A hang here
      * is a detection too: the runner reports a probe that never returns. */
     args[0] = (uint32_t)s;
-    args[1] = (uint32_t)msg;
+    args[1] = (unsigned long)msg;
     args[2] = 0;
     args[3] = 0;
-    args[4] = (uint32_t)dst;
+    args[4] = (unsigned long)dst;
     args[5] = 16;
     if (socketcall(SC_SENDTO, args) != 0)
         fail("udp empty sendto");
 
     args[0] = (uint32_t)s;
-    args[1] = (uint32_t)rbuf;
+    args[1] = (unsigned long)rbuf;
     args[2] = sizeof(rbuf);
     args[3] = 0;
-    args[4] = (uint32_t)src;
-    args[5] = (uint32_t)&salen;
+    args[4] = (unsigned long)src;
+    args[5] = (unsigned long)&salen;
     salen = 16;
     n = socketcall(SC_RECVFROM, args);
     if (n != 0)
@@ -451,20 +407,20 @@ static void udp_loop(void)
     /* And the slot was cleared by that read, not merely reported: the next
      * datagram must arrive whole. */
     args[0] = (uint32_t)s;
-    args[1] = (uint32_t)msg;
+    args[1] = (unsigned long)msg;
     args[2] = (uint32_t)strlen(msg);
     args[3] = 0;
-    args[4] = (uint32_t)dst;
+    args[4] = (unsigned long)dst;
     args[5] = 16;
     if (socketcall(SC_SENDTO, args) != (int)strlen(msg))
         fail("udp sendto after empty");
 
     args[0] = (uint32_t)s;
-    args[1] = (uint32_t)rbuf;
+    args[1] = (unsigned long)rbuf;
     args[2] = sizeof(rbuf);
     args[3] = 0;
-    args[4] = (uint32_t)src;
-    args[5] = (uint32_t)&salen;
+    args[4] = (unsigned long)src;
+    args[5] = (unsigned long)&salen;
     salen = 16;
     n = socketcall(SC_RECVFROM, args);
     if (n != (int)strlen(msg) || !mem_eq((const uint8_t *)rbuf, (const uint8_t *)msg, n)) {
@@ -474,11 +430,11 @@ static void udp_loop(void)
     /* And an empty slot is still empty. This is the assertion a fix that made
      * the slot unconditionally ready would fail while passing both above. */
     args[0] = (uint32_t)s;
-    args[1] = (uint32_t)rbuf;
+    args[1] = (unsigned long)rbuf;
     args[2] = sizeof(rbuf);
     args[3] = MSG_DONTWAIT;
-    args[4] = (uint32_t)src;
-    args[5] = (uint32_t)&salen;
+    args[4] = (unsigned long)src;
+    args[5] = (unsigned long)&salen;
     salen = 16;
     n = socketcall(SC_RECVFROM, args);
     if (n != -EAGAIN)
@@ -509,25 +465,25 @@ static void udp_no_length(void)
         fail("udp socket for the recvfrom with no length");
     make_sockaddr(sa, NOLEN_PORT, 0, 0, 0, 0);
     args[0] = (uint32_t)s;
-    args[1] = (uint32_t)sa;
+    args[1] = (unsigned long)sa;
     args[2] = 16;
     if (socketcall(SC_BIND, args) != 0)
         fail("udp bind for the recvfrom with no length");
     make_sockaddr(sa, NOLEN_PORT, 127, 0, 0, 1);
     args[0] = (uint32_t)s;
-    args[1] = (uint32_t)msg;
+    args[1] = (unsigned long)msg;
     args[2] = (uint32_t)strlen(msg);
     args[3] = 0;
-    args[4] = (uint32_t)sa;
+    args[4] = (unsigned long)sa;
     args[5] = 16;
     if (socketcall(SC_SENDTO, args) != (int)strlen(msg))
         fail("udp sendto for the recvfrom with no length");
 
     args[0] = (uint32_t)s;
-    args[1] = (uint32_t)rbuf;
+    args[1] = (unsigned long)rbuf;
     args[2] = sizeof(rbuf);
     args[3] = 0;
-    args[4] = (uint32_t)src;
+    args[4] = (unsigned long)src;
     args[5] = 0;
     if (socketcall(SC_RECVFROM, args) != -EFAULT)
         fail("a recvfrom with an address and no length was not EFAULT");
@@ -535,11 +491,11 @@ static void udp_no_length(void)
     n = -EAGAIN;
     for (spin = 0; spin < 100 && n == -EAGAIN; spin++) {
         args[0] = (uint32_t)s;
-        args[1] = (uint32_t)rbuf;
+        args[1] = (unsigned long)rbuf;
         args[2] = sizeof(rbuf);
         args[3] = MSG_DONTWAIT;
-        args[4] = (uint32_t)src;
-        args[5] = (uint32_t)&salen;
+        args[4] = (unsigned long)src;
+        args[5] = (unsigned long)&salen;
         n = socketcall(SC_RECVFROM, args);
         if (n == -EAGAIN)
             sys_nanosleep_ms(20);
@@ -558,7 +514,7 @@ static int recv_spin(int s, char *buf, int len, int flags)
 
     for (spin = 0; spin < 100 && n == -EAGAIN; spin++) {
         args[0] = (uint32_t)s;
-        args[1] = (uint32_t)buf;
+        args[1] = (unsigned long)buf;
         args[2] = (uint32_t)len;
         args[3] = (uint32_t)flags | MSG_DONTWAIT;
         args[4] = 0;
@@ -589,16 +545,16 @@ static void udp_peek(void)
         fail("udp socket for the peek");
     make_sockaddr(sa, PEEK_PORT, 0, 0, 0, 0);
     args[0] = (uint32_t)s;
-    args[1] = (uint32_t)sa;
+    args[1] = (unsigned long)sa;
     args[2] = 16;
     if (socketcall(SC_BIND, args) != 0)
         fail("udp bind for the peek");
     make_sockaddr(sa, PEEK_PORT, 127, 0, 0, 1);
     args[0] = (uint32_t)s;
-    args[1] = (uint32_t)msg;
+    args[1] = (unsigned long)msg;
     args[2] = (uint32_t)strlen(msg);
     args[3] = 0;
-    args[4] = (uint32_t)sa;
+    args[4] = (unsigned long)sa;
     args[5] = 16;
     if (socketcall(SC_SENDTO, args) != (int)strlen(msg))
         fail("udp sendto for the peek");
@@ -606,11 +562,11 @@ static void udp_peek(void)
         fail("a udp peek did not copy the datagram");
 
     args[0] = (uint32_t)s;
-    args[1] = (uint32_t)rbuf;
+    args[1] = (unsigned long)rbuf;
     args[2] = sizeof(rbuf);
     args[3] = MSG_PEEK | MSG_DONTWAIT;
-    args[4] = (uint32_t)src;
-    args[5] = (uint32_t)&salen;
+    args[4] = (unsigned long)src;
+    args[5] = (unsigned long)&salen;
     n = socketcall(SC_RECVFROM, args);
     if (n != (int)strlen(msg) || !mem_eq((const uint8_t *)rbuf, (const uint8_t *)msg, n) ||
         src[2] != (PEEK_PORT >> 8) || src[3] != (PEEK_PORT & 0xFF))
@@ -645,7 +601,7 @@ static void tcp_peek(void)
         fail("tcp sockets for the peek");
     make_sockaddr(sa, PEEK_PORT, 0, 0, 0, 0);
     args[0] = (uint32_t)ls;
-    args[1] = (uint32_t)sa;
+    args[1] = (unsigned long)sa;
     args[2] = 16;
     if (socketcall(SC_BIND, args) != 0)
         fail("tcp bind for the peek");
@@ -654,7 +610,7 @@ static void tcp_peek(void)
         fail("tcp listen for the peek");
     make_sockaddr(sa, PEEK_PORT, 127, 0, 0, 1);
     args[0] = (uint32_t)cs;
-    args[1] = (uint32_t)sa;
+    args[1] = (unsigned long)sa;
     args[2] = 16;
     if (socketcall(SC_CONNECT, args) != 0)
         fail("tcp connect for the peek");
@@ -697,7 +653,7 @@ static void tcp_loop(void)
 
     make_sockaddr(sa, TCP_PORT, 0, 0, 0, 0);
     args[0] = (uint32_t)ls;
-    args[1] = (uint32_t)sa;
+    args[1] = (unsigned long)sa;
     args[2] = 16;
     if (socketcall(SC_BIND, args) != 0)
         fail("tcp bind");
@@ -716,7 +672,7 @@ static void tcp_loop(void)
 
     make_sockaddr(sa, TCP_PORT, 127, 0, 0, 1);
     args[0] = (uint32_t)cs;
-    args[1] = (uint32_t)sa;
+    args[1] = (unsigned long)sa;
     args[2] = 16;
     if (socketcall(SC_CONNECT, args) != 0)
         fail("tcp connect");
@@ -745,8 +701,8 @@ static void tcp_loop(void)
     }
 
     args[0] = (uint32_t)cs;
-    args[1] = (uint32_t)peer;
-    args[2] = (uint32_t)&salen;
+    args[1] = (unsigned long)peer;
+    args[2] = (unsigned long)&salen;
     if (socketcall(SC_GETPEERNAME, args) != 0)
         fail("tcp getpeername");
     if (!mem_eq(peer + 4, loop_ip, 4))
@@ -854,7 +810,7 @@ static void tcp_loop_bulk(void)
         fail("bulk listener socket");
     make_sockaddr(sa, TCP_PORT + 3, 0, 0, 0, 0);
     args[0] = (uint32_t)ls;
-    args[1] = (uint32_t)sa;
+    args[1] = (unsigned long)sa;
     args[2] = 16;
     if (socketcall(SC_BIND, args) != 0)
         fail("bulk bind");
@@ -871,7 +827,7 @@ static void tcp_loop_bulk(void)
         fail("bulk client socket");
     make_sockaddr(sa, TCP_PORT + 3, 127, 0, 0, 1);
     args[0] = (uint32_t)cs;
-    args[1] = (uint32_t)sa;
+    args[1] = (unsigned long)sa;
     args[2] = 16;
     if (socketcall(SC_CONNECT, args) != 0)
         fail("bulk connect");
@@ -1028,7 +984,7 @@ static void tcp_loop_pingpong(void)
         fail("ping-pong listener socket");
     make_sockaddr(sa, TCP_PORT + 5, 0, 0, 0, 0);
     args[0] = (uint32_t)ls;
-    args[1] = (uint32_t)sa;
+    args[1] = (unsigned long)sa;
     args[2] = 16;
     if (socketcall(SC_BIND, args) != 0)
         fail("ping-pong bind");
@@ -1049,7 +1005,7 @@ static void tcp_loop_pingpong(void)
             sys_exit(1);
         make_sockaddr(sa, TCP_PORT + 5, 127, 0, 0, 1);
         args[0] = (uint32_t)cs;
-        args[1] = (uint32_t)sa;
+        args[1] = (unsigned long)sa;
         args[2] = 16;
         if (socketcall(SC_CONNECT, args) != 0)
             sys_exit(1);
@@ -1122,7 +1078,7 @@ static void tcp_bound_loopback(void)
         fail("bound listener socket");
     make_sockaddr(sa, TCP_PORT + 7, 192, 0, 2, 1);
     args[0] = (uint32_t)ls;
-    args[1] = (uint32_t)sa;
+    args[1] = (unsigned long)sa;
     args[2] = 16;
     if (socketcall(SC_BIND, args) != -EADDRNOTAVAIL)
         fail("a bind to an address the machine lacks was not refused");
@@ -1142,7 +1098,7 @@ static void tcp_bound_loopback(void)
         fail("bound client socket");
     make_sockaddr(sa, TCP_PORT + 7, own_ip[0], own_ip[1], own_ip[2], own_ip[3]);
     args[0] = (uint32_t)cs;
-    args[1] = (uint32_t)sa;
+    args[1] = (unsigned long)sa;
     args[2] = 16;
     if (socketcall(SC_CONNECT, args) != -ECONNREFUSED)
         fail("a listener bound to 127.0.0.1 took a connection to the interface address");
@@ -1156,7 +1112,7 @@ static void tcp_bound_loopback(void)
         fail("bound client socket");
     make_sockaddr(sa, TCP_PORT + 7, 127, 0, 0, 1);
     args[0] = (uint32_t)cs;
-    args[1] = (uint32_t)sa;
+    args[1] = (unsigned long)sa;
     args[2] = 16;
     if (socketcall(SC_CONNECT, args) != 0)
         fail("connect to a listener bound to 127.0.0.1");
@@ -1186,7 +1142,7 @@ static void tcp_refused(void)
 
     make_sockaddr(sa, CLOSED_PORT, 127, 0, 0, 1);
     args[0] = (uint32_t)cs;
-    args[1] = (uint32_t)sa;
+    args[1] = (unsigned long)sa;
     args[2] = 16;
     rc = socketcall(SC_CONNECT, args);
     if (rc != -ECONNREFUSED)
@@ -1247,7 +1203,7 @@ static void shutdown_rows(int cs, uint8_t *sa)
     if (socketcall(SC_SHUTDOWN, args) != 0)
         fail("shutdown of the client");
     args[0] = (uint32_t)cs;
-    args[1] = (uint32_t)"x";
+    args[1] = (unsigned long)"x";
     args[2] = 1;
     args[3] = 0;
     args[4] = 0;
@@ -1307,7 +1263,7 @@ static void tcp_ports(void)
 
     make_sockaddr(sa, BOUND_LISTEN_PORT, 0, 0, 0, 0);
     args[0] = (uint32_t)ls;
-    args[1] = (uint32_t)sa;
+    args[1] = (unsigned long)sa;
     args[2] = 16;
     if (socketcall(SC_BIND, args) != 0)
         fail("bound-port listen bind");
@@ -1319,7 +1275,7 @@ static void tcp_ports(void)
     if (second < 0)
         fail("second listener socket");
     args[0] = (uint32_t)second;
-    args[1] = (uint32_t)sa;
+    args[1] = (unsigned long)sa;
     args[2] = 16;
     if (socketcall(SC_BIND, args) != 0)
         fail("a second bind before any listen was refused");
@@ -1346,7 +1302,7 @@ static void tcp_ports(void)
     if (second < 0)
         fail("late bind socket");
     args[0] = (uint32_t)second;
-    args[1] = (uint32_t)sa;
+    args[1] = (unsigned long)sa;
     args[2] = 16;
     if (socketcall(SC_BIND, args) != -EADDRINUSE)
         fail("binding a live listener's port was not reported");
@@ -1376,7 +1332,7 @@ static void tcp_ports(void)
         fail("port 0 socket");
     make_sockaddr(sa, 0, 0, 0, 0, 0);
     args[0] = (uint32_t)second;
-    args[1] = (uint32_t)sa;
+    args[1] = (unsigned long)sa;
     args[2] = 16;
     if (socketcall(SC_BIND, args) != 0)
         fail("bind to port 0");
@@ -1398,7 +1354,7 @@ static void tcp_ports(void)
         fail("restart socket");
     make_sockaddr(sa, TCP_PORT, 0, 0, 0, 0);
     args[0] = (uint32_t)second;
-    args[1] = (uint32_t)sa;
+    args[1] = (unsigned long)sa;
     args[2] = 16;
     if (socketcall(SC_BIND, args) != 0)
         fail("a port a closed session still has could not be bound");
@@ -1418,21 +1374,21 @@ static void tcp_ports(void)
 
     make_sockaddr(sa, BOUND_CLIENT_PORT, 0, 0, 0, 0);
     args[0] = (uint32_t)cs;
-    args[1] = (uint32_t)sa;
+    args[1] = (unsigned long)sa;
     args[2] = 16;
     if (socketcall(SC_BIND, args) != 0)
         fail("bound-port client bind");
 
     make_sockaddr(sa, BOUND_LISTEN_PORT, 127, 0, 0, 1);
     args[0] = (uint32_t)cs;
-    args[1] = (uint32_t)sa;
+    args[1] = (unsigned long)sa;
     args[2] = 16;
     if (socketcall(SC_CONNECT, args) != 0)
         fail("bound-port connect");
 
     args[0] = (uint32_t)ls;
-    args[1] = (uint32_t)peer;
-    args[2] = (uint32_t)&salen;
+    args[1] = (unsigned long)peer;
+    args[2] = (unsigned long)&salen;
     salen = 16;
     as = socketcall(SC_ACCEPT, args);
     if (as < 0)
@@ -1454,13 +1410,13 @@ static void tcp_ports(void)
         fail("duplicate pairing socket");
     make_sockaddr(sa, BOUND_CLIENT_PORT, 0, 0, 0, 0);
     args[0] = (uint32_t)second;
-    args[1] = (uint32_t)sa;
+    args[1] = (unsigned long)sa;
     args[2] = 16;
     if (socketcall(SC_BIND, args) != 0)
         fail("duplicate pairing bind");
     make_sockaddr(sa, BOUND_LISTEN_PORT, 127, 0, 0, 1);
     args[0] = (uint32_t)second;
-    args[1] = (uint32_t)sa;
+    args[1] = (unsigned long)sa;
     args[2] = 16;
     if (socketcall(SC_CONNECT, args) != -EADDRINUSE)
         fail("a repeated local-remote pairing was not refused");
@@ -1516,13 +1472,13 @@ static void tcp_simultaneous(void)
 
         make_sockaddr(sa, (uint16_t)(SIM_PORT_A + round * 2), 0, 0, 0, 0);
         args[0] = (uint32_t)a;
-        args[1] = (uint32_t)sa;
+        args[1] = (unsigned long)sa;
         args[2] = 16;
         if (socketcall(SC_BIND, args) != 0)
             fail("simultaneous bind a");
         make_sockaddr(sa, (uint16_t)(SIM_PORT_A + round * 2 + 1), 0, 0, 0, 0);
         args[0] = (uint32_t)b;
-        args[1] = (uint32_t)sa;
+        args[1] = (unsigned long)sa;
         args[2] = 16;
         if (socketcall(SC_BIND, args) != 0)
             fail("simultaneous bind b");
@@ -1536,7 +1492,7 @@ static void tcp_simultaneous(void)
 
         make_sockaddr(sa, (uint16_t)(SIM_PORT_A + round * 2 + 1), 127, 0, 0, 1);
         args[0] = (uint32_t)a;
-        args[1] = (uint32_t)sa;
+        args[1] = (unsigned long)sa;
         args[2] = 16;
         rc = socketcall(SC_CONNECT, args);
         if (rc != -EINPROGRESS && rc != 0)
@@ -1544,7 +1500,7 @@ static void tcp_simultaneous(void)
 
         make_sockaddr(sa, (uint16_t)(SIM_PORT_A + round * 2), 127, 0, 0, 1);
         args[0] = (uint32_t)b;
-        args[1] = (uint32_t)sa;
+        args[1] = (unsigned long)sa;
         args[2] = 16;
         rc = socketcall(SC_CONNECT, args);
         if (rc != -EINPROGRESS && rc != 0)
@@ -1552,7 +1508,7 @@ static void tcp_simultaneous(void)
 
         for (spin = 0; spin < 100; spin++) {
             args[0] = (uint32_t)a;
-            args[1] = (uint32_t)sa;
+            args[1] = (unsigned long)sa;
             args[2] = 16;
             if (socketcall(SC_CONNECT, args) == -EISCONN) {
                 break;
@@ -1568,7 +1524,7 @@ static void tcp_simultaneous(void)
          * crossed; anything else is a lost round. */
         n = 0;
         args[0] = (uint32_t)a;
-        args[1] = (uint32_t)msg;
+        args[1] = (unsigned long)msg;
         args[2] = (uint32_t)strlen(msg);
         args[3] = 0;
         args[4] = 0;
@@ -1576,7 +1532,7 @@ static void tcp_simultaneous(void)
         if (socketcall(SC_SENDTO, args) == (int)strlen(msg)) {
             for (spin = 0; spin < 100; spin++) {
                 args[0] = (uint32_t)b;
-                args[1] = (uint32_t)rbuf;
+                args[1] = (unsigned long)rbuf;
                 args[2] = sizeof(rbuf);
                 args[3] = MSG_DONTWAIT;
                 args[4] = 0;
@@ -1614,7 +1570,7 @@ static void tcp_accept_close(void)
         fail("immediate-close listener");
     make_sockaddr(sa, TCP_PORT + 6, 0, 0, 0, 0);
     args[0] = (uint32_t)listener;
-    args[1] = (uint32_t)sa;
+    args[1] = (unsigned long)sa;
     args[2] = sizeof(sa);
     if (socketcall(SC_BIND, args) != 0)
         fail("immediate-close bind");
@@ -1644,7 +1600,7 @@ static void tcp_accept_close(void)
         fail("immediate-close client");
     make_sockaddr(sa, TCP_PORT + 6, 127, 0, 0, 1);
     args[0] = (uint32_t)client;
-    args[1] = (uint32_t)sa;
+    args[1] = (unsigned long)sa;
     args[2] = sizeof(sa);
     if (socketcall(SC_CONNECT, args) != 0)
         fail("immediate-close connect");
@@ -1655,7 +1611,7 @@ static void tcp_accept_close(void)
         fail("immediate-close child");
 }
 
-void _start(void)
+PROBE_START void _start(void)
 {
     learn_addresses();
     udp_loop();

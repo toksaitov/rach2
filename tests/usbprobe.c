@@ -15,34 +15,21 @@
  * missing file and an empty one are different answers and both have to be the
  * right one.
  *
- * Prints "USBPROBE OK" and exits 0. Freestanding; direct int 0x80.
+ * Prints "USBPROBE OK" and exits 0. Freestanding; direct system calls
+ * (probe.h).
  */
 
-typedef unsigned int size_t;
+#include "probe.h"
 
 #define STDOUT_FILENO 1
-
-#define SYS_EXIT      1
-#define SYS_READ      3
-#define SYS_WRITE     4
-#define SYS_OPEN      5
-#define SYS_CLOSE     6
-#define SYS_NANOSLEEP 162
 
 #define O_RDONLY 0
 
 static char text[4096];
 
-static int syscall3(int n, int a, int b, int c)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
-}
-
 static void sys_exit(int status)
 {
-    __asm__ __volatile__("int $0x80" : : "a"(SYS_EXIT), "b"(status));
+    syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
@@ -58,7 +45,7 @@ static size_t strlen(const char *s)
 
 static void puts(const char *s)
 {
-    syscall3(SYS_WRITE, STDOUT_FILENO, (int)(size_t)s, (int)strlen(s));
+    syscall3(SYS_WRITE, STDOUT_FILENO, (long)s, (int)strlen(s));
 }
 
 static void fail(const char *why)
@@ -103,7 +90,7 @@ static int count_in_log(const char *needle)
     int n;
     int found = 0;
 
-    fd = syscall3(SYS_OPEN, (int)(size_t)"/dev/bootlog", O_RDONLY, 0);
+    fd = syscall3(SYS_OPEN, (long)"/dev/bootlog", O_RDONLY, 0);
     if (fd < 0) {
         return 0;
     }
@@ -115,7 +102,7 @@ static int count_in_log(const char *needle)
         int i;
         int m = (int)strlen(needle);
 
-        n = syscall3(SYS_READ, fd, (int)(size_t)chunk, (int)sizeof(chunk));
+        n = syscall3(SYS_READ, fd, (long)chunk, (int)sizeof(chunk));
         if (n <= 0) {
             break;
         }
@@ -145,11 +132,11 @@ static int cmdline_has(const char *word)
     int n;
     int i;
 
-    fd = syscall3(SYS_OPEN, (int)(size_t)"/proc/cmdline", O_RDONLY, 0);
+    fd = syscall3(SYS_OPEN, (long)"/proc/cmdline", O_RDONLY, 0);
     if (fd < 0) {
         return 0;
     }
-    n = syscall3(SYS_READ, fd, (int)(size_t)line, (int)sizeof(line) - 1);
+    n = syscall3(SYS_READ, fd, (long)line, (int)sizeof(line) - 1);
     syscall3(SYS_CLOSE, fd, 0, 0);
     if (n <= 0) {
         return 0;
@@ -231,14 +218,14 @@ static int within(const char *needle, int from, int to)
    than one read of the file returns. Returns the length. */
 static int read_usb(void)
 {
-    int fd = syscall3(SYS_OPEN, (int)(size_t)"/proc/usb", O_RDONLY, 0);
+    int fd = syscall3(SYS_OPEN, (long)"/proc/usb", O_RDONLY, 0);
     int len = 0;
 
     if (fd < 0) {
         fail("/proc/usb did not open");
     }
     for (;;) {
-        int got = syscall3(SYS_READ, fd, (int)(size_t)text + len, (int)sizeof(text) - 1 - len);
+        int got = syscall3(SYS_READ, fd, (long)text + len, (int)sizeof(text) - 1 - len);
 
         if (got < 0) {
             fail("/proc/usb did not read");
@@ -303,7 +290,7 @@ void probe_main(unsigned int *sp)
         for (tries = 0; count_lines(len) < want && tries < 600; tries++) {
             static const int pause[2] = {0, 100000000};
 
-            syscall3(SYS_NANOSLEEP, (int)(size_t)pause, 0, 0);
+            syscall3(SYS_NANOSLEEP, (long)pause, 0, 0);
             len = read_usb();
         }
         if (count_lines(len) < want) {

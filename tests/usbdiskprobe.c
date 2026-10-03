@@ -34,29 +34,10 @@
  *   page-sized request gives under the emulator.
  *
  * Prints "USBDISKPROBE OK" or "USBDISKPROBE FAIL: reason". Freestanding;
- * direct int 0x80.
+ * direct system calls (probe.h).
  */
 
-typedef unsigned int size_t;
-
-#define SYS_EXIT          1
-#define SYS_FORK          2
-#define SYS_WAITPID       7
-#define SYS_READ          3
-#define SYS_WRITE         4
-#define SYS_OPEN          5
-#define SYS_CLOSE         6
-#define SYS_LSEEK         19
-#define SYS_UNLINK        10
-#define SYS_MOUNT         21
-#define SYS_MKDIR         39
-#define SYS_UMOUNT2       52
-#define SYS_SYNC          36
-#define SYS_FSYNC         118
-#define SYS_STAT64        195
-#define SYS_GETDENTS64    220
-#define SYS_NANOSLEEP     162
-#define SYS_CLOCK_GETTIME 265
+#include "probe.h"
 
 #define CLOCK_MONOTONIC 1
 
@@ -68,47 +49,15 @@ typedef unsigned int size_t;
 
 #define MS_RDONLY 1
 
-#define EIO       5
-#define SYS_LSEEK 19
-#define EBUSY     16
+#define EIO   5
+#define EBUSY 16
 
 #define MNT "/mnt"
-
-static int sys1(int n, int a)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a) : "memory");
-    return r;
-}
-
-static int sys2(int n, int a, int b)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b) : "memory");
-    return r;
-}
-
-static int sys3(int n, int a, int b, int c)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
-}
-
-static int sys5(int n, int a, int b, int c, int d, int e)
-{
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(n), "b"(a), "c"(b), "d"(c), "S"(d), "D"(e)
-                         : "memory");
-    return r;
-}
 
 static void sys_exit(int status) __attribute__((noreturn));
 static void sys_exit(int status)
 {
-    sys1(SYS_EXIT, status);
+    syscall1(SYS_EXIT, status);
     __builtin_unreachable();
 }
 
@@ -124,7 +73,7 @@ static size_t strlen(const char *s)
 
 static void put(const char *s)
 {
-    sys3(SYS_WRITE, 1, (int)s, (int)strlen(s));
+    syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
 }
 
 static void puts(const char *s)
@@ -152,7 +101,7 @@ static void putnum(int v)
     while (n > 0) {
         char c = digits[--n];
 
-        sys3(SYS_WRITE, 1, (int)&c, 1);
+        syscall3(SYS_WRITE, 1, (long)&c, 1);
     }
 }
 
@@ -231,14 +180,14 @@ static int disk_counter(const char *label)
 
 static int slurp(const char *path)
 {
-    int fd = sys3(SYS_OPEN, (int)path, O_RDONLY, 0);
+    int fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
     int n;
 
     if (fd < 0) {
         return fd;
     }
-    n = sys3(SYS_READ, fd, (int)text, (int)sizeof(text) - 1);
-    sys1(SYS_CLOSE, fd);
+    n = syscall3(SYS_READ, fd, (long)text, (int)sizeof(text) - 1);
+    syscall1(SYS_CLOSE, fd);
     if (n < 0) {
         return n;
     }
@@ -255,13 +204,13 @@ static void sleep_ms(int ms)
 
     ts.sec = ms / 1000;
     ts.nsec = (ms % 1000) * 1000000;
-    sys2(SYS_NANOSLEEP, (int)&ts, 0);
+    syscall2(SYS_NANOSLEEP, (long)&ts, 0);
 }
 
 static int mount_at(const char *source, const char *type, int flags)
 {
-    sys2(SYS_MKDIR, (int)MNT, 0755);
-    return sys5(SYS_MOUNT, (int)source, (int)MNT, (int)type, flags, 0);
+    syscall2(SYS_MKDIR, (long)MNT, 0755);
+    return syscall5(SYS_MOUNT, (long)source, (long)MNT, (long)type, flags, 0);
 }
 
 /* stat's mode is at offset 16 of the kernel's stat64, which is the layout
@@ -276,7 +225,7 @@ static unsigned int mode_of(const char *path)
     for (i = 0; i < (int)sizeof(st); i++) {
         st[i] = 0;
     }
-    if (sys2(SYS_STAT64, (int)path, (int)st) != 0) {
+    if (syscall2(SYS_STAT, (long)path, (long)st) != 0) {
         return 0;
     }
     return (unsigned int)st[16] | ((unsigned int)st[17] << 8) | ((unsigned int)st[18] << 16) |
@@ -357,23 +306,23 @@ static void part_volumes(void)
     if (!contains(text, "hello from the stick")) {
         fail("the file on the FAT volume holds something else");
     }
-    if (sys2(SYS_UMOUNT2, (int)MNT, 0) != 0) {
+    if (syscall2(SYS_UMOUNT2, (long)MNT, 0) != 0) {
         fail("the FAT volume would not unmount");
     }
     if (mount_at(exfat_node, "exfat", MS_RDONLY) != 0) {
         fail("the exFAT volume would not mount");
     }
-    if (sys2(SYS_UMOUNT2, (int)MNT, 0) != 0) {
+    if (syscall2(SYS_UMOUNT2, (long)MNT, 0) != 0) {
         fail("the exFAT volume would not unmount");
     }
 
     /* The whole node is the table the two partitions came from. */
-    fd = sys3(SYS_OPEN, (int)"/dev/disk0", O_RDONLY, 0);
+    fd = syscall3(SYS_OPEN, (long)"/dev/disk0", O_RDONLY, 0);
     if (fd < 0) {
         fail("/dev/disk0 would not open");
     }
-    n = sys3(SYS_READ, fd, (int)text, 512);
-    sys1(SYS_CLOSE, fd);
+    n = syscall3(SYS_READ, fd, (long)text, 512);
+    syscall1(SYS_CLOSE, fd);
     if (n != 512) {
         fail("a sector of /dev/disk0 did not read");
     }
@@ -432,23 +381,23 @@ static void part_write(void)
     if (mount_at("/dev/disk0p1", "vfat", 0) != 0) {
         fail("the FAT volume would not mount for writing");
     }
-    fd = sys3(SYS_OPEN, (int)MNT "/written.txt", O_RDWR | O_CREAT | O_TRUNC, 0644);
+    fd = syscall3(SYS_OPEN, (long)MNT "/written.txt", O_RDWR | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) {
         fail("the file would not be created");
     }
-    if (sys3(SYS_WRITE, fd, (int)"a stick takes a write\n", 22) != 22) {
+    if (syscall3(SYS_WRITE, fd, (long)"a stick takes a write\n", 22) != 22) {
         fail("the write was short");
     }
-    if (sys1(SYS_FSYNC, fd) != 0) {
+    if (syscall1(SYS_FSYNC, fd) != 0) {
         fail("fsync failed");
     }
-    sys1(SYS_CLOSE, fd);
-    sys1(SYS_SYNC, 0);
+    syscall1(SYS_CLOSE, fd);
+    syscall1(SYS_SYNC, 0);
     /* The unmount tells the stick to put its own cache on the medium, which
        its line in /proc/usb counts. A volume whole on the wire is not yet
        whole on the medium. */
     flushes_before = stick_flushes();
-    if (sys2(SYS_UMOUNT2, (int)MNT, 0) != 0) {
+    if (syscall2(SYS_UMOUNT2, (long)MNT, 0) != 0) {
         fail("the volume would not unmount after the write");
     }
     if (flushes_before < 0 || stick_flushes() <= flushes_before) {
@@ -461,7 +410,7 @@ static void part_write(void)
     if (n != 22 || !contains(text, "a stick takes a write")) {
         fail("what was written did not come back");
     }
-    if (sys2(SYS_UMOUNT2, (int)MNT, 0) != 0) {
+    if (syscall2(SYS_UMOUNT2, (long)MNT, 0) != 0) {
         fail("the volume would not unmount at the end");
     }
     ok();
@@ -487,41 +436,42 @@ static void part_hold(const char *source, const char *type, int children)
         fail("the volume would not mount");
     }
     if (children) {
-        if (sys2(SYS_MKDIR, (int)MNT "/nested", 0755) != 0 ||
-            sys5(SYS_MOUNT, (int)(source == fat_node ? exfat_node : fat_node), (int)MNT "/nested",
-                 (int)(source == fat_node ? "exfat" : "vfat"), MS_RDONLY, 0) != 0) {
+        if (syscall2(SYS_MKDIR, (long)MNT "/nested", 0755) != 0 ||
+            syscall5(SYS_MOUNT, (long)(source == fat_node ? exfat_node : fat_node),
+                     (long)MNT "/nested", (long)(source == fat_node ? "exfat" : "vfat"), MS_RDONLY,
+                     0) != 0) {
             fail("the child volume would not mount");
         }
-        nested = sys3(SYS_OPEN, (int)MNT "/nested", O_RDONLY, 0);
+        nested = syscall3(SYS_OPEN, (long)MNT "/nested", O_RDONLY, 0);
         if (nested < 0) {
             fail("the child mount would not open");
         }
     }
-    rw = sys3(SYS_OPEN, (int)MNT "/held.txt", O_RDWR | O_CREAT, 0644);
+    rw = syscall3(SYS_OPEN, (long)MNT "/held.txt", O_RDWR | O_CREAT, 0644);
     if (rw < 0) {
         fail("a file for writing would not be created on the volume");
     }
-    if (sys3(SYS_WRITE, rw, (int)"kept\n", 5) != 5 || sys1(SYS_FSYNC, rw) != 0) {
+    if (syscall3(SYS_WRITE, rw, (long)"kept\n", 5) != 5 || syscall1(SYS_FSYNC, rw) != 0) {
         fail("the held file would not write and sync");
     }
-    fd = sys3(SYS_OPEN, (int)MNT "/held.txt", O_RDONLY, 0);
-    if (fd < 0 || sys3(SYS_READ, fd, (int)buf, 5) != 5 || sys3(SYS_LSEEK, fd, 0, 0) != 0) {
+    fd = syscall3(SYS_OPEN, (long)MNT "/held.txt", O_RDONLY, 0);
+    if (fd < 0 || syscall3(SYS_READ, fd, (long)buf, 5) != 5 || syscall3(SYS_LSEEK, fd, 0, 0) != 0) {
         fail("the held file would not read before removal");
     }
-    dir = sys3(SYS_OPEN, (int)MNT, O_RDONLY, 0);
-    if (dir < 0 || sys3(SYS_GETDENTS64, dir, (int)buf, (int)sizeof(buf)) <= 0) {
+    dir = syscall3(SYS_OPEN, (long)MNT, O_RDONLY, 0);
+    if (dir < 0 || syscall3(SYS_GETDENTS64, dir, (long)buf, (int)sizeof(buf)) <= 0) {
         fail("the directory would not list before removal");
     }
     /* The reads that meet the pull go to the whole node, which has no cache
        in front of it: every one of them is a request on the stick, so the
        process is inside such a request when the stick goes. The file stays
        open on the mount meanwhile, which is what the unmount must refuse. */
-    raw = sys3(SYS_OPEN, (int)source, O_RDONLY, 0);
+    raw = syscall3(SYS_OPEN, (long)source, O_RDONLY, 0);
     if (raw < 0) {
         fail("the partition would not open");
     }
     while (reads < 2000000) {
-        int n = sys3(SYS_READ, raw, (int)buf, (int)sizeof(buf));
+        int n = syscall3(SYS_READ, raw, (long)buf, (int)sizeof(buf));
 
         reads++;
         if (n == -EIO) {
@@ -535,8 +485,8 @@ static void part_hold(const char *source, const char *type, int children)
             puts("USBDISKPROBE HOLDING");
         }
         if (n == 0) {
-            sys1(SYS_CLOSE, raw);
-            raw = sys3(SYS_OPEN, (int)source, O_RDONLY, 0);
+            syscall1(SYS_CLOSE, raw);
+            raw = syscall3(SYS_OPEN, (long)source, O_RDONLY, 0);
             if (raw < 0) {
                 gone = 1; /* the node went with the stick */
                 break;
@@ -546,11 +496,11 @@ static void part_hold(const char *source, const char *type, int children)
     if (!gone) {
         fail("the stick was never pulled out");
     }
-    if (sys3(SYS_GETDENTS64, dir, (int)buf, (int)sizeof(buf)) != -EIO) {
+    if (syscall3(SYS_GETDENTS64, dir, (long)buf, (int)sizeof(buf)) != -EIO) {
         fail("a cached directory listed after removal");
     }
-    if (sys3(SYS_OPEN, (int)MNT, O_RDONLY, 0) != -EIO ||
-        sys2(SYS_STAT64, (int)MNT, (int)buf) != -EIO) {
+    if (syscall3(SYS_OPEN, (long)MNT, O_RDONLY, 0) != -EIO ||
+        syscall2(SYS_STAT, (long)MNT, (long)buf) != -EIO) {
         fail("the removed mount still resolves");
     }
     if (slurp("/proc/disk") < 0 || contains(text, "disk 0 ") || contains(text, "identity 0 ") ||
@@ -560,37 +510,37 @@ static void part_hold(const char *source, const char *type, int children)
     if (slurp("/proc/mounts") < 0 || contains(text, " " MNT " ")) {
         fail("the removed volume is still listed as mounted");
     }
-    if (sys3(SYS_READ, fd, (int)buf, (int)sizeof(buf)) != -EIO) {
+    if (syscall3(SYS_READ, fd, (long)buf, (int)sizeof(buf)) != -EIO) {
         fail("a read of the mounted file after the pull did not answer EIO");
     }
-    if (sys3(SYS_WRITE, rw, (int)"gone\n", 5) != -EIO) {
+    if (syscall3(SYS_WRITE, rw, (long)"gone\n", 5) != -EIO) {
         fail("a write to the mounted file after the pull did not answer EIO");
     }
-    if (sys3(SYS_OPEN, (int)MNT "/held.txt", O_RDONLY, 0) != -EIO) {
+    if (syscall3(SYS_OPEN, (long)MNT "/held.txt", O_RDONLY, 0) != -EIO) {
         fail("an open on the pulled stick's mount did not answer EIO");
     }
-    if (sys2(SYS_UMOUNT2, (int)MNT, 0) != -EBUSY) {
+    if (syscall2(SYS_UMOUNT2, (long)MNT, 0) != -EBUSY) {
         fail("the mount unmounted with a description still open on it");
     }
-    sys1(SYS_CLOSE, fd);
-    sys1(SYS_CLOSE, rw);
-    sys1(SYS_CLOSE, dir);
+    syscall1(SYS_CLOSE, fd);
+    syscall1(SYS_CLOSE, rw);
+    syscall1(SYS_CLOSE, dir);
     if (raw >= 0) {
-        sys1(SYS_CLOSE, raw);
+        syscall1(SYS_CLOSE, raw);
     }
     if (children) {
-        if (sys2(SYS_UMOUNT2, (int)MNT, 0) != -EBUSY) {
+        if (syscall2(SYS_UMOUNT2, (long)MNT, 0) != -EBUSY) {
             fail("the parent unmounted while its child mount remained");
         }
-        if (sys2(SYS_UMOUNT2, (int)MNT "/nested", 0) != -EBUSY) {
+        if (syscall2(SYS_UMOUNT2, (long)MNT "/nested", 0) != -EBUSY) {
             fail("the removed child mount did not retain its open description");
         }
-        sys1(SYS_CLOSE, nested);
-        if (sys2(SYS_UMOUNT2, (int)MNT "/nested", 0) != 0) {
+        syscall1(SYS_CLOSE, nested);
+        if (syscall2(SYS_UMOUNT2, (long)MNT "/nested", 0) != 0) {
             fail("the child mount would not unmount below its removed parent");
         }
     }
-    if (sys2(SYS_UMOUNT2, (int)MNT, 0) != 0) {
+    if (syscall2(SYS_UMOUNT2, (long)MNT, 0) != 0) {
         fail("the mount would not unmount after its files were closed");
     }
     ok();
@@ -607,7 +557,7 @@ static void part_replug(void)
     if (!contains(text, "hello from the stick")) {
         fail("the volume holds something else after the replug");
     }
-    if (sys2(SYS_UMOUNT2, (int)MNT, 0) != 0) {
+    if (syscall2(SYS_UMOUNT2, (long)MNT, 0) != 0) {
         fail("the volume would not unmount after the replug");
     }
     ok();
@@ -634,24 +584,24 @@ static void part_throughput(void)
         int sec;
         int nsec;
     } before, after;
-    int fd = sys3(SYS_OPEN, (int)"/dev/disk0", O_RDONLY, 0);
+    int fd = syscall3(SYS_OPEN, (long)"/dev/disk0", O_RDONLY, 0);
     int total = 0;
     int ms;
 
     if (fd < 0) {
         fail("/dev/disk0 would not open");
     }
-    sys2(SYS_CLOCK_GETTIME, CLOCK_MONOTONIC, (int)&before);
+    syscall2(SYS_CLOCK_GETTIME, CLOCK_MONOTONIC, (long)&before);
     while (total < 16 * 1024 * 1024) {
-        int n = sys3(SYS_READ, fd, (int)big, (int)sizeof(big));
+        int n = syscall3(SYS_READ, fd, (long)big, (int)sizeof(big));
 
         if (n <= 0) {
             fail("a read of /dev/disk0 failed before 16 MiB");
         }
         total += n;
     }
-    sys2(SYS_CLOCK_GETTIME, CLOCK_MONOTONIC, (int)&after);
-    sys1(SYS_CLOSE, fd);
+    syscall2(SYS_CLOCK_GETTIME, CLOCK_MONOTONIC, (long)&after);
+    syscall1(SYS_CLOSE, fd);
     ms = (after.sec - before.sec) * 1000 + (after.nsec - before.nsec) / 1000000;
     if (ms <= 0) {
         ms = 1;
@@ -672,39 +622,39 @@ static void part_throughput(void)
  */
 static void part_pullread(void)
 {
-    int fd = sys3(SYS_OPEN, (int)"/dev/disk0", O_RDONLY, 0);
+    int fd = syscall3(SYS_OPEN, (long)"/dev/disk0", O_RDONLY, 0);
     int reads = 0;
     int child, status, tries;
 
     if (fd < 0) {
         fail("/dev/disk0 would not open");
     }
-    child = sys1(SYS_FORK, 0);
+    child = syscall1(SYS_FORK, 0);
     if (child < 0) {
         fail("no child to read the stick");
     }
     if (child == 0) {
         while (reads < 2000000) {
-            int n = sys3(SYS_READ, fd, (int)big, (int)sizeof(big));
+            int n = syscall3(SYS_READ, fd, (long)big, (int)sizeof(big));
 
             reads++;
             if (n == -EIO) {
-                sys1(SYS_EXIT, 0);
+                syscall1(SYS_EXIT, 0);
             }
             if (n < 0) {
-                sys1(SYS_EXIT, 3);
+                syscall1(SYS_EXIT, 3);
             }
             if (n == 0) {
-                sys1(SYS_CLOSE, fd);
-                fd = sys3(SYS_OPEN, (int)"/dev/disk0", O_RDONLY, 0);
+                syscall1(SYS_CLOSE, fd);
+                fd = syscall3(SYS_OPEN, (long)"/dev/disk0", O_RDONLY, 0);
                 if (fd < 0) {
-                    sys1(SYS_EXIT, 4);
+                    syscall1(SYS_EXIT, 4);
                 }
             }
         }
-        sys1(SYS_EXIT, 5);
+        syscall1(SYS_EXIT, 5);
     }
-    sys1(SYS_CLOSE, fd);
+    syscall1(SYS_CLOSE, fd);
     for (tries = 0; tries < 2000000; tries++) {
         if (disk_counter("disk-in-flight ") > 0) {
             break;
@@ -714,7 +664,7 @@ static void part_pullread(void)
         fail("no request of the child's was in flight to be pulled");
     }
     puts("USBDISKPROBE READING");
-    if (sys3(SYS_WAITPID, child, (int)&status, 0) != child) {
+    if (syscall3(SYS_WAITPID, child, (long)&status, 0) != child) {
         fail("waiting for the reading child");
     }
     switch ((status >> 8) & 0xFF) {
@@ -735,7 +685,7 @@ static void part_super(void)
     if (mount_at("/dev/disk0", "exfat", MS_RDONLY) != 0) {
         fail("the stick with no table would not mount through its whole node");
     }
-    if (sys2(SYS_UMOUNT2, (int)MNT, 0) != 0) {
+    if (syscall2(SYS_UMOUNT2, (long)MNT, 0) != 0) {
         fail("the stick with no table would not unmount");
     }
     ok();
@@ -757,7 +707,7 @@ static void part_three(void)
         if (slurp(MNT "/hello.txt") <= 0 || !contains(text, "hello from the stick")) {
             fail("one of the three sticks did not read its file");
         }
-        if (sys2(SYS_UMOUNT2, (int)MNT, 0) != 0) {
+        if (syscall2(SYS_UMOUNT2, (long)MNT, 0) != 0) {
             fail("one of the three sticks would not unmount");
         }
     }
@@ -798,13 +748,13 @@ static void part_pullone(int which)
         o++;
     }
 
-    fd = sys3(SYS_OPEN, (int)node, O_RDONLY, 0);
+    fd = syscall3(SYS_OPEN, (long)node, O_RDONLY, 0);
     sector[0] = 0;
     if (fd < 0) {
         fail("the stick to be pulled would not open");
     }
     for (;;) {
-        n = sys3(SYS_READ, fd, (int)sector, 512);
+        n = syscall3(SYS_READ, fd, (long)sector, 512);
         if (n == 512) {
             reads++;
             if (reads == 8) {
@@ -813,7 +763,7 @@ static void part_pullone(int which)
             continue;
         }
         if (n == 0) {
-            sys3(SYS_LSEEK, fd, 0, 0);
+            syscall3(SYS_LSEEK, fd, 0, 0);
             continue;
         }
         if (n != -EIO) {
@@ -821,13 +771,13 @@ static void part_pullone(int which)
         }
         break;
     }
-    sys1(SYS_CLOSE, fd);
+    syscall1(SYS_CLOSE, fd);
     if (reads < 8) {
         fail("too few reads ran before the pull to have met it");
     }
     for (i = 0; i < 2; i++) {
         if (mount_at(other[i], "vfat", MS_RDONLY) != 0 || slurp(MNT "/hello.txt") <= 0 ||
-            !contains(text, "hello from the stick") || sys2(SYS_UMOUNT2, (int)MNT, 0) != 0) {
+            !contains(text, "hello from the stick") || syscall2(SYS_UMOUNT2, (long)MNT, 0) != 0) {
             fail("a stick beside the pulled one was harmed by the pull");
         }
     }
@@ -854,15 +804,15 @@ static void part_big(void)
     if (mount_at("/dev/disk0p1", "vfat", 0) != 0) {
         fail("the far partition would not mount");
     }
-    fd = sys3(SYS_OPEN, (int)MNT "/far.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (fd < 0 || sys3(SYS_WRITE, fd, (int)"written past two terabytes\n", 27) != 27) {
+    fd = syscall3(SYS_OPEN, (long)MNT "/far.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0 || syscall3(SYS_WRITE, fd, (long)"written past two terabytes\n", 27) != 27) {
         fail("the file past two terabytes would not write");
     }
-    sys1(SYS_CLOSE, fd);
+    syscall1(SYS_CLOSE, fd);
     if (slurp(MNT "/far.txt") != 27 || !contains(text, "written past two terabytes")) {
         fail("the file past two terabytes did not read back");
     }
-    if (sys2(SYS_UMOUNT2, (int)MNT, 0) != 0) {
+    if (syscall2(SYS_UMOUNT2, (long)MNT, 0) != 0) {
         fail("the far partition would not unmount");
     }
     ok();
@@ -878,11 +828,11 @@ static void part_luns(void)
         fail("/proc/usb does not list both units");
     }
     if (mount_at("/dev/disk0p1", "vfat", MS_RDONLY) != 0 || slurp(MNT "/hello.txt") <= 0 ||
-        sys2(SYS_UMOUNT2, (int)MNT, 0) != 0) {
+        syscall2(SYS_UMOUNT2, (long)MNT, 0) != 0) {
         fail("the first unit would not mount and read");
     }
     if (mount_at("/dev/disk1p1", "vfat", MS_RDONLY) != 0 || slurp(MNT "/hello.txt") <= 0 ||
-        sys2(SYS_UMOUNT2, (int)MNT, 0) != 0) {
+        syscall2(SYS_UMOUNT2, (long)MNT, 0) != 0) {
         fail("the second unit would not mount and read");
     }
     ok();

@@ -13,18 +13,13 @@
  * own allocation and touch succeed. A kernel that leaked the dead process's
  * frames would fail that second half while passing the first.
  *
- * Prints "OOMPROBE OK" and exits 0. Freestanding; direct int 0x80.
+ * Prints "OOMPROBE OK" and exits 0. Freestanding; direct system calls
+ * (probe.h).
  */
 
-typedef unsigned int size_t;
+#include "probe.h"
 
 #define STDOUT_FILENO 1
-
-#define SYS_EXIT    1
-#define SYS_FORK    2
-#define SYS_WRITE   4
-#define SYS_WAITPID 7
-#define SYS_MMAP2   192
 
 #define PROT_READ     0x1
 #define PROT_WRITE    0x2
@@ -44,13 +39,6 @@ typedef unsigned int size_t;
 #define SPAN  (4u * 1024u * 1024u)
 #define SPANS 64
 
-static int syscall3(int n, int a, int b, int c)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
-}
-
 static void *sys_mmap(size_t len)
 {
     int r;
@@ -62,25 +50,20 @@ static void *sys_mmap(size_t len)
     args[3] = MAP_PRIVATE | MAP_ANONYMOUS;
     args[4] = (unsigned int)-1;
     args[5] = 0;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_MMAP2), "b"(args[0]), "c"(args[1]), "d"(args[2]), "S"(args[3]),
-                           "D"(args[4])
-                         : "memory");
+    r = syscall5(SYS_MMAP2, (long)(args[0]), (long)(args[1]), (long)(args[2]), (long)(args[3]),
+                 (long)(args[4]));
     return (void *)(size_t)r;
 }
 
 static void sys_exit(int status)
 {
-    __asm__ __volatile__("int $0x80" : : "a"(SYS_EXIT), "b"(status));
+    syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
 static int sys_fork(void)
 {
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(SYS_FORK));
-    return r;
+    return syscall0(SYS_FORK);
 }
 
 static size_t strlen(const char *s)
@@ -94,13 +77,13 @@ static size_t strlen(const char *s)
 
 static void print(const char *s)
 {
-    syscall3(SYS_WRITE, STDOUT_FILENO, (int)(size_t)s, (int)strlen(s));
+    syscall3(SYS_WRITE, STDOUT_FILENO, (long)s, (int)strlen(s));
 }
 
 static void puts(const char *s)
 {
     print(s);
-    syscall3(SYS_WRITE, STDOUT_FILENO, (int)(size_t)"\n", 1);
+    syscall3(SYS_WRITE, STDOUT_FILENO, (long)"\n", 1);
 }
 
 static void print_num(int v)
@@ -120,7 +103,7 @@ static void print_num(int v)
         v /= 10;
     }
     while (i > 0) {
-        syscall3(SYS_WRITE, STDOUT_FILENO, (int)(size_t)&buf[--i], 1);
+        syscall3(SYS_WRITE, STDOUT_FILENO, (long)&buf[--i], 1);
     }
 }
 
@@ -146,7 +129,7 @@ static void eat_memory(void)
     sys_exit(4);
 }
 
-void _start(void)
+PROBE_START void _start(void)
 {
     int pid, status;
     char *m;
@@ -160,7 +143,7 @@ void _start(void)
         puts("OOMPROBE FAIL: the child could not be started");
         sys_exit(1);
     }
-    if (syscall3(SYS_WAITPID, pid, (int)(size_t)&status, 0) != pid) {
+    if (syscall3(SYS_WAITPID, pid, (long)&status, 0) != pid) {
         puts("OOMPROBE FAIL: the child could not be reaped");
         sys_exit(1);
     }

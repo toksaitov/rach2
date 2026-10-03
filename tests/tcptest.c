@@ -6,21 +6,16 @@
  * socket fd (the unified descriptor path), closes gracefully, then verifies
  * that connecting to a closed port fails instead of hanging.
  *
- * Freestanding; direct int 0x80.
+ * Freestanding; direct system calls (probe.h).
  */
 
-typedef unsigned int size_t;
+#include "probe.h"
+
 typedef unsigned int uint32_t;
 typedef unsigned short uint16_t;
 typedef unsigned char uint8_t;
 
 #define STDOUT_FILENO 1
-
-#define SYS_EXIT       1
-#define SYS_READ       3
-#define SYS_WRITE      4
-#define SYS_CLOSE      6
-#define SYS_SOCKETCALL 102
 
 #define SC_SOCKET  1
 #define SC_CONNECT 3
@@ -33,44 +28,27 @@ typedef unsigned char uint8_t;
 
 static int sys_write(int fd, const void *buf, size_t count)
 {
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_WRITE), "b"(fd), "c"(buf), "d"(count)
-                         : "memory");
-    return r;
+    return syscall3(SYS_WRITE, (long)fd, (long)buf, (long)count);
 }
 
 static int sys_read(int fd, void *buf, size_t count)
 {
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_READ), "b"(fd), "c"(buf), "d"(count)
-                         : "memory");
-    return r;
+    return syscall3(SYS_READ, (long)fd, (long)buf, (long)count);
 }
 
 static int sys_close(int fd)
 {
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(SYS_CLOSE), "b"(fd));
-    return r;
+    return syscall1(SYS_CLOSE, (long)fd);
 }
 
 static int socketcall(int call, uint32_t *args)
 {
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_SOCKETCALL), "b"(call), "c"(args)
-                         : "memory");
-    return r;
+    return syscall2(SYS_SOCKETCALL, (long)call, (long)args);
 }
 
 static void sys_exit(int status)
 {
-    __asm__ __volatile__("int $0x80" : : "a"(SYS_EXIT), "b"(status));
+    syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
@@ -152,12 +130,12 @@ static int connect_to(int fd, uint16_t port)
     uint8_t sa[16];
     make_sockaddr(sa, port, 10, 0, 2, 2);
     args[0] = (uint32_t)fd;
-    args[1] = (uint32_t)sa;
+    args[1] = (unsigned long)sa;
     args[2] = 16;
     return socketcall(SC_CONNECT, args);
 }
 
-void _start(void)
+PROBE_START void _start(void)
 {
     char msg[] = "hello-tcp-echo";
     uint8_t buf[64];

@@ -7,34 +7,11 @@
  * sysinfo (a live-process count, mem_unit 1), and vfork (the child runs
  * and exits with 7, and the parent then gets its pid and that status).
  *
- * Prints "MISCPROBE OK" / "MISCPROBE FAIL". Freestanding; direct int 0x80.
+ * Prints "MISCPROBE OK" / "MISCPROBE FAIL". Freestanding; direct system calls
+ * (probe.h).
  */
 
-typedef unsigned int size_t;
-
-#define SYS_EXIT    1
-#define SYS_FORK    2
-#define SYS_WRITE   4
-#define SYS_WAITPID 7
-#define SYS_GETPID  20
-#define SYS_TIMES   43
-#define SYS_UMASK   60
-#define SYS_GETPPID 64
-#define SYS_SYSINFO 116
-#define SYS_VFORK   190
-
-static int syscall1(int n, int a)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a) : "memory");
-    return r;
-}
-static int syscall3(int n, int a, int b, int c)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
-}
+#include "probe.h"
 
 static void sys_exit(int s)
 {
@@ -80,15 +57,15 @@ static int vfork_exit(int code)
 }
 static int waitpid(int pid, int *st, int opt)
 {
-    return syscall3(SYS_WAITPID, pid, (int)(size_t)st, opt);
+    return syscall3(SYS_WAITPID, pid, (long)st, opt);
 }
 static int times(void *tms)
 {
-    return syscall1(SYS_TIMES, (int)(size_t)tms);
+    return syscall1(SYS_TIMES, (long)tms);
 }
 static int sysinfo(void *si)
 {
-    return syscall1(SYS_SYSINFO, (int)(size_t)si);
+    return syscall1(SYS_SYSINFO, (long)si);
 }
 
 static size_t strlen(const char *s)
@@ -101,8 +78,8 @@ static size_t strlen(const char *s)
 }
 static void puts(const char *s)
 {
-    syscall3(SYS_WRITE, 1, (int)(size_t)s, (int)strlen(s));
-    syscall3(SYS_WRITE, 1, (int)(size_t)"\n", 1);
+    syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
+    syscall3(SYS_WRITE, 1, (long)"\n", 1);
 }
 
 /** Whether a + b is at most t, for t > 0 and a and b not negative, by a
@@ -117,12 +94,12 @@ static void check(int cond, const char *msg)
 {
     if (!cond) {
         fails++;
-        syscall3(SYS_WRITE, 1, (int)(size_t)"  FAIL: ", 8);
+        syscall3(SYS_WRITE, 1, (long)"  FAIL: ", 8);
         puts(msg);
     }
 }
 
-void _start(void)
+PROBE_START void _start(void)
 {
     int me = getpid();
     int st;

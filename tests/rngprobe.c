@@ -13,30 +13,16 @@
  * noentropy` boots a CPU with neither instruction and takes the second.
  *
  * Prints "RNGPROBE OK (trusted)" / "RNGPROBE OK (fail-closed)" /
- * "RNGPROBE FAIL". Freestanding; direct int 0x80.
+ * "RNGPROBE FAIL". Freestanding; direct system calls (probe.h).
  */
 
-typedef unsigned int size_t;
+#include "probe.h"
 
 #include "../rach2/sys/arch/x86/kcpu.c"
-
-#define SYS_EXIT      1
-#define SYS_READ      3
-#define SYS_WRITE     4
-#define SYS_OPEN      5
-#define SYS_CLOSE     6
-#define SYS_GETRANDOM 355
 
 #define O_RDONLY      0
 #define GRND_INSECURE 0x0004u
 #define EIO           5
-
-static int syscall3(int n, int a, int b, int c)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
-}
 
 static void sys_exit(int status)
 {
@@ -45,7 +31,7 @@ static void sys_exit(int status)
 }
 static int sys_open(const char *p, int flags)
 {
-    return syscall3(SYS_OPEN, (int)(size_t)p, flags, 0);
+    return syscall3(SYS_OPEN, (long)p, flags, 0);
 }
 static int sys_close(int fd)
 {
@@ -53,11 +39,11 @@ static int sys_close(int fd)
 }
 static int sys_read(int fd, void *b, int n)
 {
-    return syscall3(SYS_READ, fd, (int)(size_t)b, n);
+    return syscall3(SYS_READ, fd, (long)b, n);
 }
 static int getrandom(void *b, int n, unsigned f)
 {
-    return syscall3(SYS_GETRANDOM, (int)(size_t)b, n, (int)f);
+    return syscall3(SYS_GETRANDOM, (long)b, n, (int)f);
 }
 
 static size_t strlen(const char *s)
@@ -70,7 +56,7 @@ static size_t strlen(const char *s)
 }
 static void puts(const char *s)
 {
-    syscall3(SYS_WRITE, 1, (int)(size_t)s, (int)strlen(s));
+    syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
 }
 
 static int popcount_buf(const unsigned char *b, int n)
@@ -131,7 +117,7 @@ static int cpuid_subleaf_zero(void)
     return got_a == want_a && got_b == want_b && got_c == want_c && got_d == want_d;
 }
 
-void _start(void)
+PROBE_START void _start(void)
 {
     unsigned char a[32], b[32];
     int g, fd, bits;

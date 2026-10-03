@@ -19,38 +19,17 @@
  * Prints, per run, `PLACEPROBE NEAR N ms KiB/s` or `PLACEPROBE FAR N ms
  * KiB/s`, and first the mappings: the code's pages from `_start` to
  * `etext` and each buffer's pages, which must not meet. Then `PLACEPROBE
- * OK`, or `PLACEPROBE FAIL: reason`. Freestanding; direct int 0x80.
+ * OK`, or `PLACEPROBE FAIL: reason`. Freestanding; direct system calls
+ * (probe.h).
  */
 
-typedef unsigned int size_t;
-
-#define SYS_EXIT          1
-#define SYS_FORK          2
-#define SYS_READ          3
-#define SYS_WRITE         4
-#define SYS_CLOSE         6
-#define SYS_WAITPID       7
-#define SYS_PIPE          42
-#define SYS_CLOCK_GETTIME 265
+#include "probe.h"
 
 #define CLOCK_MONOTONIC 1
 #define PAGE            4096u
 #define TOTAL           (32u * 1024u * 1024u)
 #define BUFFER          65536u
 #define READ_AT         16u
-
-static int sys3(int n, int a, int b, int c)
-{
-    int r;
-
-    __asm__ volatile("int $0x80" : "=a"(r) : "a"(n), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
-}
-
-static int sys1(int n, int a)
-{
-    return sys3(n, a, 0, 0);
-}
 
 static void put(const char *s)
 {
@@ -59,7 +38,7 @@ static void put(const char *s)
     while (s[n]) {
         n++;
     }
-    sys3(SYS_WRITE, 1, (int)s, n);
+    syscall3(SYS_WRITE, 1, (long)s, n);
 }
 
 static void putnum(unsigned v)
@@ -94,7 +73,7 @@ static void fail(const char *why)
     put("PLACEPROBE FAIL: ");
     put(why);
     put("\n");
-    sys1(SYS_EXIT, 1);
+    syscall1(SYS_EXIT, 1);
 }
 
 extern char _start[];
@@ -126,32 +105,32 @@ static unsigned run(unsigned char *buf, int near)
 
     p[0] = -1;
     p[1] = -1;
-    if (sys1(SYS_PIPE, (int)p) != 0) {
+    if (syscall1(SYS_PIPE, (long)p) != 0) {
         fail("pipe");
     }
-    pid = sys1(SYS_FORK, 0);
+    pid = syscall1(SYS_FORK, 0);
     if (pid < 0) {
         fail("fork");
     }
     if (pid == 0) {
         unsigned written = 0;
 
-        sys1(SYS_CLOSE, p[0]);
+        syscall1(SYS_CLOSE, p[0]);
         while (written < TOTAL) {
-            int w = sys3(SYS_WRITE, p[1], (int)page_out, (int)PAGE);
+            int w = syscall3(SYS_WRITE, p[1], (long)page_out, (int)PAGE);
 
             if (w <= 0) {
-                sys1(SYS_EXIT, 2);
+                syscall1(SYS_EXIT, 2);
             }
             written += (unsigned)w;
         }
-        sys1(SYS_CLOSE, p[1]);
-        sys1(SYS_EXIT, 0);
+        syscall1(SYS_CLOSE, p[1]);
+        syscall1(SYS_EXIT, 0);
     }
-    sys1(SYS_CLOSE, p[1]);
-    sys3(SYS_CLOCK_GETTIME, CLOCK_MONOTONIC, (int)&before, 0);
+    syscall1(SYS_CLOSE, p[1]);
+    syscall3(SYS_CLOCK_GETTIME, CLOCK_MONOTONIC, (long)&before, 0);
     for (;;) {
-        int n = sys3(SYS_READ, p[0], (int)(buf + READ_AT), (int)(BUFFER - READ_AT));
+        int n = syscall3(SYS_READ, p[0], (long)(buf + READ_AT), (int)(BUFFER - READ_AT));
 
         if (n < 0) {
             fail("a read of the pipe failed");
@@ -169,9 +148,9 @@ static unsigned run(unsigned char *buf, int near)
             code(); /* the page's code, run again after the write into it */
         }
     }
-    sys3(SYS_CLOCK_GETTIME, CLOCK_MONOTONIC, (int)&after, 0);
-    sys1(SYS_CLOSE, p[0]);
-    sys3(SYS_WAITPID, pid, (int)&status, 0);
+    syscall3(SYS_CLOCK_GETTIME, CLOCK_MONOTONIC, (long)&after, 0);
+    syscall1(SYS_CLOSE, p[0]);
+    syscall3(SYS_WAITPID, pid, (long)&status, 0);
     if (total != TOTAL) {
         fail("the end of file came before 32 MiB");
     }
@@ -202,8 +181,8 @@ __asm__(".global _start\n"
 
 void probe_main(unsigned int *sp)
 {
-    unsigned code_lo = (unsigned)_start & ~(PAGE - 1);
-    unsigned code_hi = ((unsigned)etext + PAGE - 1) & ~(PAGE - 1);
+    unsigned code_lo = (unsigned long)_start & ~(PAGE - 1);
+    unsigned code_hi = ((unsigned long)etext + PAGE - 1) & ~(PAGE - 1);
     unsigned i;
 
     (void)sp;
@@ -215,16 +194,16 @@ void probe_main(unsigned int *sp)
     put("-");
     puthex(code_hi);
     put(" near ");
-    puthex((unsigned)near_buf);
+    puthex((unsigned long)near_buf);
     put("-");
-    puthex((unsigned)near_buf + BUFFER);
+    puthex((unsigned long)near_buf + BUFFER);
     put(" far ");
-    puthex((unsigned)far_buf);
+    puthex((unsigned long)far_buf);
     put("-");
-    puthex((unsigned)far_buf + BUFFER);
+    puthex((unsigned long)far_buf + BUFFER);
     put("\n");
-    if (((unsigned)near_buf < code_hi && (unsigned)near_buf + BUFFER > code_lo) ||
-        ((unsigned)far_buf < code_hi && (unsigned)far_buf + BUFFER > code_lo)) {
+    if (((unsigned long)near_buf < code_hi && (unsigned long)near_buf + BUFFER > code_lo) ||
+        ((unsigned long)far_buf < code_hi && (unsigned long)far_buf + BUFFER > code_lo)) {
         fail("a buffer shares a page with the program's own code");
     }
     /* The near buffer's first page becomes code: one `ret`, called. */
@@ -236,5 +215,5 @@ void probe_main(unsigned int *sp)
         report("FAR", run(far_buf, 0));
     }
     put("PLACEPROBE OK\n");
-    sys1(SYS_EXIT, 0);
+    syscall1(SYS_EXIT, 0);
 }

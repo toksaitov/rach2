@@ -3,40 +3,29 @@
  * current directory; chdir to "/", ".", and ".." (whose parent at the root is
  * the root itself) all succeed and leave the working directory at "/"; a
  * nonexistent name fails, and a plain file fails because it is not a directory.
- * Freestanding; direct int 0x80.
+ * Freestanding; direct system calls (probe.h).
  */
 
-typedef unsigned int size_t;
+#include "probe.h"
 
 #define STDOUT_FILENO 1
 
 /* Syscall numbers (32-bit Linux / Rach2 compatible) */
-#define SYS_EXIT   1
-#define SYS_WRITE  4
-#define SYS_CHDIR  12
-#define SYS_GETCWD 183
 
 static int sys_write(int fd, const void *buf, size_t count)
 {
-    int result;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(result)
-                         : "0"(SYS_WRITE), "b"(fd), "c"(buf), "d"(count)
-                         : "memory");
-    return result;
+    return syscall3(SYS_WRITE, (long)fd, (long)buf, (long)count);
 }
 
 static void sys_exit(int status)
 {
-    __asm__ __volatile__("int $0x80" : : "a"(SYS_EXIT), "b"(status));
+    syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
 static int sys_chdir(const char *path)
 {
-    int result;
-    __asm__ __volatile__("int $0x80" : "=a"(result) : "0"(SYS_CHDIR), "b"(path) : "memory");
-    return result;
+    return syscall1(SYS_CHDIR, (long)path);
 }
 
 /**
@@ -45,12 +34,7 @@ static int sys_chdir(const char *path)
  */
 static int sys_getcwd(char *buf, size_t size)
 {
-    int result;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(result)
-                         : "0"(SYS_GETCWD), "b"(buf), "c"(size)
-                         : "memory");
-    return result;
+    return syscall2(SYS_GETCWD, (long)buf, (long)size);
 }
 
 static size_t strlen(const char *s)
@@ -77,7 +61,7 @@ static void print(const char *s)
  * ELF entry point. Runs the getcwd and chdir cases, tallies passes and
  * failures, prints the count, and exits 0 only if all pass.
  */
-void _start(void)
+PROBE_START void _start(void)
 {
     char cwdbuf[64];
     int cwd;

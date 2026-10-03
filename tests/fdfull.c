@@ -9,17 +9,12 @@
  * descriptor given back by `close` has to be usable again. A kernel that
  * leaked a slot per close would pass a test that only opened once.
  *
- * Prints "FDFULL OK" and exits 0. Freestanding; direct int 0x80.
+ * Prints "FDFULL OK" and exits 0. Freestanding; direct system calls (probe.h).
  */
 
-typedef unsigned int size_t;
+#include "probe.h"
 
 #define STDOUT_FILENO 1
-
-#define SYS_EXIT  1
-#define SYS_WRITE 4
-#define SYS_OPEN  5
-#define SYS_CLOSE 6
 
 #define O_RDONLY 0
 #define EMFILE   24
@@ -28,16 +23,9 @@ typedef unsigned int size_t;
 #define TRIES 1040
 #define LIMIT 1024
 
-static int syscall3(int n, int a, int b, int c)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
-}
-
 static void sys_exit(int status)
 {
-    __asm__ __volatile__("int $0x80" : : "a"(SYS_EXIT), "b"(status));
+    syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
@@ -52,13 +40,13 @@ static size_t strlen(const char *s)
 
 static void print(const char *s)
 {
-    syscall3(SYS_WRITE, STDOUT_FILENO, (int)(size_t)s, (int)strlen(s));
+    syscall3(SYS_WRITE, STDOUT_FILENO, (long)s, (int)strlen(s));
 }
 
 static void puts(const char *s)
 {
     print(s);
-    syscall3(SYS_WRITE, STDOUT_FILENO, (int)(size_t)"\n", 1);
+    syscall3(SYS_WRITE, STDOUT_FILENO, (long)"\n", 1);
 }
 
 static void print_num(int v)
@@ -78,7 +66,7 @@ static void print_num(int v)
         v /= 10;
     }
     while (i > 0) {
-        syscall3(SYS_WRITE, STDOUT_FILENO, (int)(size_t)&buf[--i], 1);
+        syscall3(SYS_WRITE, STDOUT_FILENO, (long)&buf[--i], 1);
     }
 }
 
@@ -95,7 +83,7 @@ static void close_all(void)
     n_fds = 0;
 }
 
-void _start(void)
+PROBE_START void _start(void)
 {
     int fd, i, refused, opened;
 
@@ -103,7 +91,7 @@ void _start(void)
        not anything the file system holds. */
     refused = 0;
     for (i = 0; i < TRIES; i++) {
-        fd = syscall3(SYS_OPEN, (int)(size_t)"/hello", O_RDONLY, 0);
+        fd = syscall3(SYS_OPEN, (long)"/hello", O_RDONLY, 0);
         if (fd < 0) {
             refused = fd;
             break;
@@ -136,7 +124,7 @@ void _start(void)
         puts("FDFULL FAIL: a descriptor could not be closed");
         sys_exit(1);
     }
-    fd = syscall3(SYS_OPEN, (int)(size_t)"/hello", O_RDONLY, 0);
+    fd = syscall3(SYS_OPEN, (long)"/hello", O_RDONLY, 0);
     if (fd < 0) {
         n_fds--;
         close_all();

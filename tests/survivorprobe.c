@@ -9,28 +9,10 @@
  *
  * Prints "SURVIVORPROBE OK" before exiting. The verdict is the kernel's
  * return record, which the runner requires after the probe's own exit.
- * Freestanding; direct int 0x80.
+ * Freestanding; direct system calls (probe.h).
  */
 
-typedef unsigned int size_t;
-
-#define SYS_EXIT  1
-#define SYS_FORK  2
-#define SYS_WRITE 4
-
-static int sys1(int n, int a)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a));
-    return r;
-}
-
-static int sys3(int n, int a, int b, int c)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c));
-    return r;
-}
+#include "probe.h"
 
 static size_t slen(const char *s)
 {
@@ -43,16 +25,16 @@ static size_t slen(const char *s)
 
 static void print(const char *s)
 {
-    sys3(SYS_WRITE, 1, (int)(size_t)s, (int)slen(s));
+    syscall3(SYS_WRITE, 1, (long)s, (int)slen(s));
 }
 
-void _start(void)
+PROBE_START void _start(void)
 {
-    int pid = sys1(SYS_FORK, 0);
+    int pid = syscall1(SYS_FORK, 0);
 
     if (pid < 0) {
         print("SURVIVORPROBE FAIL: fork\n");
-        sys1(SYS_EXIT, 1);
+        syscall1(SYS_EXIT, 1);
     }
     if (pid == 0) {
         for (;;) {
@@ -60,5 +42,5 @@ void _start(void)
         }
     }
     print("SURVIVORPROBE OK\n");
-    sys1(SYS_EXIT, 0);
+    syscall1(SYS_EXIT, 0);
 }

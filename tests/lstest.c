@@ -3,24 +3,20 @@
  * the linux_dirent64 stream, and confirm a second call reaches end-of-directory
  * while a bad fd fails. KRFFS is flat, so every file appears in root "/".
  *
- * Freestanding; direct int 0x80.
+ * Freestanding; direct system calls (probe.h).
  */
+
+#include "probe.h"
 
 typedef unsigned int uint32_t;
 typedef unsigned short uint16_t;
 typedef unsigned char uint8_t;
 typedef unsigned long long uint64_t;
 typedef long long int64_t;
-typedef unsigned int size_t;
 
 #define STDOUT_FILENO 1
 
 /* Syscall numbers (32-bit Linux / Rach2 compatible) */
-#define SYS_EXIT       1
-#define SYS_WRITE      4
-#define SYS_OPEN       5
-#define SYS_CLOSE      6
-#define SYS_GETDENTS64 220
 
 /* Open flags */
 #define O_RDONLY    0
@@ -48,45 +44,28 @@ struct linux_dirent64 {
 
 static int sys_write(int fd, const void *buf, size_t count)
 {
-    int result;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(result)
-                         : "0"(SYS_WRITE), "b"(fd), "c"(buf), "d"(count)
-                         : "memory");
-    return result;
+    return syscall3(SYS_WRITE, (long)fd, (long)buf, (long)count);
 }
 
 static void sys_exit(int status)
 {
-    __asm__ __volatile__("int $0x80" : : "a"(SYS_EXIT), "b"(status));
+    syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
 static int sys_open(const char *pathname, int flags)
 {
-    int result;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(result)
-                         : "0"(SYS_OPEN), "b"(pathname), "c"(flags)
-                         : "memory");
-    return result;
+    return syscall2(SYS_OPEN, (long)pathname, (long)flags);
 }
 
 static int sys_close(int fd)
 {
-    int result;
-    __asm__ __volatile__("int $0x80" : "=a"(result) : "0"(SYS_CLOSE), "b"(fd) : "memory");
-    return result;
+    return syscall1(SYS_CLOSE, (long)fd);
 }
 
 static int sys_getdents64(int fd, void *dirp, unsigned int count)
 {
-    int result;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(result)
-                         : "0"(SYS_GETDENTS64), "b"(fd), "c"(dirp), "d"(count)
-                         : "memory");
-    return result;
+    return syscall3(SYS_GETDENTS64, (long)fd, (long)dirp, (long)count);
 }
 
 static size_t strlen(const char *s)
@@ -160,7 +139,7 @@ static const char *get_type_name(uint8_t d_type)
  * each one, calls getdents64 again to verify end-of-directory, checks that a
  * bad fd fails, then closes the directory.
  */
-void _start(void)
+PROBE_START void _start(void)
 {
     char buf[1024]; /* Buffer for directory entries */
     struct linux_dirent64 *d;

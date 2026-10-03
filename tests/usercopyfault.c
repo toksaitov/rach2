@@ -11,18 +11,13 @@
  * the boundary, and calls open() with a path pointer near the end so the copy
  * walks off the mapped page into the hole.
  *
- * Prints "USERCOPYFAULT OK" and exits 0. Freestanding; direct int 0x80.
+ * Prints "USERCOPYFAULT OK" and exits 0. Freestanding; direct system calls
+ * (probe.h).
  */
 
-typedef unsigned int size_t;
+#include "probe.h"
 
 #define STDOUT_FILENO 1
-
-#define SYS_EXIT   1
-#define SYS_WRITE  4
-#define SYS_OPEN   5
-#define SYS_MUNMAP 91
-#define SYS_MMAP2  192
 
 #define PROT_READ     0x1
 #define PROT_WRITE    0x2
@@ -35,46 +30,29 @@ typedef unsigned int size_t;
 
 static int sys_write(int fd, const void *buf, size_t count)
 {
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_WRITE), "b"(fd), "c"(buf), "d"(count)
-                         : "memory");
-    return r;
+    return syscall3(SYS_WRITE, (long)fd, (long)buf, (long)count);
 }
 
 static void sys_exit(int status)
 {
-    __asm__ __volatile__("int $0x80" : : "a"(SYS_EXIT), "b"(status));
+    syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
 static unsigned sys_mmap2_anon(unsigned len, int prot)
 {
-    unsigned r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_MMAP2), "b"(0), "c"(len), "d"(prot),
-                           "S"(MAP_PRIVATE | MAP_ANONYMOUS), "D"(-1)
-                         : "memory");
-    return r;
+    return syscall5(SYS_MMAP2, (long)0, (long)len, (long)prot, (long)(MAP_PRIVATE | MAP_ANONYMOUS),
+                    (long)(-1));
 }
 
 static int sys_munmap(unsigned addr, unsigned len)
 {
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(SYS_MUNMAP), "b"(addr), "c"(len) : "memory");
-    return r;
+    return syscall2(SYS_MUNMAP, (long)addr, (long)len);
 }
 
 static int sys_open(const char *path, int flags)
 {
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_OPEN), "b"(path), "c"(flags), "d"(0)
-                         : "memory");
-    return r;
+    return syscall3(SYS_OPEN, (long)path, (long)flags, (long)0);
 }
 
 static size_t strlen(const char *s)
@@ -99,7 +77,7 @@ static void fail(const char *why)
     sys_exit(1);
 }
 
-void _start(void)
+PROBE_START void _start(void)
 {
     unsigned p;
     char *path;

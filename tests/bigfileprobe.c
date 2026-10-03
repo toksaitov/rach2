@@ -25,27 +25,12 @@
  * kernel log has the refusal by name.
  *
  * Prints "BIGFILE OK (mode)" or "BIGFILE FAIL: reason". Freestanding;
- * int 0x80.
+ * direct system calls (probe.h).
  */
 
-typedef unsigned int size_t;
-typedef unsigned long long u64;
+#include "probe.h"
 
-#define SYS_EXIT        1
-#define SYS_READ        3
-#define SYS_WRITE       4
-#define SYS_OPEN        5
-#define SYS_CLOSE       6
-#define SYS_UNLINK      10
-#define SYS_TIMES       43
-#define SYS_MOUNT       21
-#define SYS_MKDIR       39
-#define SYS_DUP         41
-#define SYS_UMOUNT2     52
-#define SYS_FSYNC       118
-#define SYS_LLSEEK      140
-#define SYS_FTRUNCATE64 194
-#define SYS_FSTAT64     197
+typedef unsigned long long u64;
 
 #define O_RDONLY 0
 #define O_WRONLY 1
@@ -62,41 +47,10 @@ typedef unsigned long long u64;
 #define BLOCK 4096u
 #define CHUNK (1u << 20)
 
-static int sys1(int n, int a)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a) : "memory");
-    return r;
-}
-
-static int sys2(int n, int a, int b)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b) : "memory");
-    return r;
-}
-
-static int sys3(int n, int a, int b, int c)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
-}
-
-static int sys5(int n, int a, int b, int c, int d, int e)
-{
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(n), "b"(a), "c"(b), "d"(c), "S"(d), "D"(e)
-                         : "memory");
-    return r;
-}
-
 static void sys_exit(int status) __attribute__((noreturn));
 static void sys_exit(int status)
 {
-    sys1(SYS_EXIT, status);
+    syscall1(SYS_EXIT, status);
     __builtin_unreachable();
 }
 
@@ -112,7 +66,7 @@ static size_t strlen(const char *s)
 
 static void put(const char *s)
 {
-    sys3(SYS_WRITE, 1, (int)s, (int)strlen(s));
+    syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
 }
 
 /* `v / 10` by shifting and subtracting, since a freestanding program has no
@@ -151,7 +105,7 @@ static void put_u64(u64 v)
 /* The clock in seconds: times(2) answers ticks of a hundredth. */
 static unsigned now(void)
 {
-    return (unsigned)sys1(SYS_TIMES, 0) / 100u;
+    return (unsigned)syscall1(SYS_TIMES, 0) / 100u;
 }
 
 static void fail(const char *why) __attribute__((noreturn));
@@ -202,8 +156,8 @@ static u64 parse(const char *s)
 static long long seek(int fd, long long off, int whence)
 {
     long long result = 0;
-    int rc = sys5(SYS_LLSEEK, fd, (int)(unsigned)((u64)off >> 32), (int)(unsigned)(u64)off,
-                  (int)&result, whence);
+    int rc = syscall5(SYS_LLSEEK, fd, (int)(unsigned)((u64)off >> 32), (int)(unsigned)(u64)off,
+                      (long)&result, whence);
 
     return rc < 0 ? rc : result;
 }
@@ -218,7 +172,7 @@ static long long size_of(int fd)
     for (i = 0; i < (int)sizeof(st); i++) {
         st[i] = 0;
     }
-    rc = sys2(SYS_FSTAT64, fd, (int)st);
+    rc = syscall2(SYS_FSTAT, fd, (long)st);
     if (rc < 0) {
         return rc;
     }
@@ -230,7 +184,7 @@ static long long size_of(int fd)
 
 static int ftruncate64(int fd, u64 length)
 {
-    return sys3(SYS_FTRUNCATE64, fd, (int)(unsigned)length, (int)(unsigned)(length >> 32));
+    return syscall3(SYS_FTRUNCATE64, fd, (int)(unsigned)length, (int)(unsigned)(length >> 32));
 }
 
 static unsigned char chunk[CHUNK] __attribute__((aligned(4096)));
@@ -266,7 +220,7 @@ static void read_full(int fd, unsigned len, const char *what)
     unsigned done = 0;
 
     while (done < len) {
-        int n = sys3(SYS_READ, fd, (int)(chunk + done), (int)(len - done));
+        int n = syscall3(SYS_READ, fd, (long)(chunk + done), (int)(len - done));
 
         if (n <= 0) {
             fail_with(what, n);
@@ -280,7 +234,7 @@ static void write_full(int fd, unsigned len, const char *what)
     unsigned done = 0;
 
     while (done < len) {
-        int n = sys3(SYS_WRITE, fd, (int)(chunk + done), (int)(len - done));
+        int n = syscall3(SYS_WRITE, fd, (long)(chunk + done), (int)(len - done));
 
         if (n <= 0) {
             fail_with(what, n);
@@ -308,14 +262,14 @@ static int disk_commands(u64 *out)
 {
     static char text[2048];
     const char *label = "disk-commands ";
-    int fd = sys3(SYS_OPEN, (int)"/proc/disk", O_RDONLY, 0);
+    int fd = syscall3(SYS_OPEN, (long)"/proc/disk", O_RDONLY, 0);
     int n, i, j;
 
     if (fd < 0) {
         return -1;
     }
-    n = sys3(SYS_READ, fd, (int)text, sizeof(text) - 1);
-    sys1(SYS_CLOSE, fd);
+    n = syscall3(SYS_READ, fd, (long)text, sizeof(text) - 1);
+    syscall1(SYS_CLOSE, fd);
     if (n <= 0) {
         return -1;
     }
@@ -357,7 +311,7 @@ static void write_mode(u64 mib)
     unsigned t0, t1;
     long long got;
 
-    fd = sys3(SYS_OPEN, (int)"/big/big.bin", O_RDWR | O_CREAT | O_TRUNC, 0644);
+    fd = syscall3(SYS_OPEN, (long)"/big/big.bin", O_RDWR | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) {
         fail_with("creating big.bin", fd);
     }
@@ -372,7 +326,7 @@ static void write_mode(u64 mib)
             put(" GiB\n");
         }
     }
-    if (sys1(SYS_FSYNC, fd) != 0) {
+    if (syscall1(SYS_FSYNC, fd) != 0) {
         fail("fsync");
     }
     t1 = now();
@@ -402,7 +356,7 @@ static void write_mode(u64 mib)
     check_block(fd, total - 3 * CHUNK + BLOCK, "a block near the end");
     /* Two descriptions: the second open has its own offset, the duplicate
        shares the first's. */
-    fd2 = sys3(SYS_OPEN, (int)"/big/big.bin", O_RDONLY, 0);
+    fd2 = syscall3(SYS_OPEN, (long)"/big/big.bin", O_RDONLY, 0);
     if (fd2 < 0) {
         fail_with("a second open", fd2);
     }
@@ -413,7 +367,7 @@ static void write_mode(u64 mib)
     if (got != 0) {
         fail_with("the second open's own offset", got);
     }
-    fd3 = sys1(SYS_DUP, fd);
+    fd3 = syscall1(SYS_DUP, fd);
     if (fd3 < 0) {
         fail_with("dup", fd3);
     }
@@ -429,8 +383,8 @@ static void write_mode(u64 mib)
     if (!holds((line >> 12) + 1, BLOCK)) {
         fail("the first descriptor's read after the duplicate's");
     }
-    sys1(SYS_CLOSE, fd3);
-    sys1(SYS_CLOSE, fd2);
+    syscall1(SYS_CLOSE, fd3);
+    syscall1(SYS_CLOSE, fd2);
     /* Three quarters, then a mebibyte appended at the end. */
     put("bigfile: read back\n");
     if (disk_commands(&before) != 0) {
@@ -464,17 +418,17 @@ static void write_mode(u64 mib)
     }
     check_block(fd, three_quarters + CHUNK - BLOCK, "the appended tail");
     check_block(fd, three_quarters - BLOCK, "the block before the truncate point");
-    if (sys1(SYS_FSYNC, fd) != 0) {
+    if (syscall1(SYS_FSYNC, fd) != 0) {
         fail("fsync after the append");
     }
     put("bigfile: appended and synced\n");
-    sys1(SYS_CLOSE, fd);
+    syscall1(SYS_CLOSE, fd);
 }
 
 static void verify_mode(u64 mib)
 {
     u64 total = ((mib << 20) >> 2) * 3 + CHUNK, done = 0;
-    int fd = sys3(SYS_OPEN, (int)"/big/big.bin", O_RDONLY, 0);
+    int fd = syscall3(SYS_OPEN, (long)"/big/big.bin", O_RDONLY, 0);
     long long got;
 
     if (fd < 0) {
@@ -494,17 +448,17 @@ static void verify_mode(u64 mib)
         }
         done += CHUNK;
     }
-    got = sys3(SYS_READ, fd, (int)chunk, (int)BLOCK);
+    got = syscall3(SYS_READ, fd, (long)chunk, (int)BLOCK);
     if (got != 0) {
         fail_with("a read at the end", got);
     }
-    sys1(SYS_CLOSE, fd);
+    syscall1(SYS_CLOSE, fd);
 }
 
 static void sparse_mode(void)
 {
     u64 line = (u64)1 << 32, at = line - CHUNK / 2;
-    int fd = sys3(SYS_OPEN, (int)"/big/sparse.bin", O_RDWR | O_CREAT | O_TRUNC, 0644);
+    int fd = syscall3(SYS_OPEN, (long)"/big/sparse.bin", O_RDWR | O_CREAT | O_TRUNC, 0644);
     long long got;
 
     if (fd < 0) {
@@ -515,7 +469,7 @@ static void sparse_mode(void)
     }
     fill(at >> 12);
     write_full(fd, CHUNK, "the write astride the 4 GiB line");
-    if (sys1(SYS_FSYNC, fd) != 0) {
+    if (syscall1(SYS_FSYNC, fd) != 0) {
         fail("fsync");
     }
     got = size_of(fd);
@@ -543,13 +497,13 @@ static void sparse_mode(void)
     if (got != (long long)(line + BLOCK)) {
         fail_with("the size after the truncate", got);
     }
-    sys1(SYS_CLOSE, fd);
-    sys1(SYS_UNLINK, (int)"/big/sparse.bin");
+    syscall1(SYS_CLOSE, fd);
+    syscall1(SYS_UNLINK, (long)"/big/sparse.bin");
 }
 
 static void limit_mode(u64 offset)
 {
-    int fd = sys3(SYS_OPEN, (int)"/big/limit.bin", O_RDWR | O_CREAT | O_TRUNC, 0644);
+    int fd = syscall3(SYS_OPEN, (long)"/big/limit.bin", O_RDWR | O_CREAT | O_TRUNC, 0644);
     long long got;
     int rc;
 
@@ -560,7 +514,7 @@ static void limit_mode(u64 offset)
     if (got != (long long)offset) {
         fail_with("the seek to the offset", got);
     }
-    rc = sys3(SYS_WRITE, fd, (int)chunk, 1);
+    rc = syscall3(SYS_WRITE, fd, (long)chunk, 1);
     if (rc != -EFBIG) {
         fail_with("the write at the offset was not refused with EFBIG", rc);
     }
@@ -568,8 +522,8 @@ static void limit_mode(u64 offset)
     if (got != 0) {
         fail_with("the file grew", got);
     }
-    sys1(SYS_CLOSE, fd);
-    sys1(SYS_UNLINK, (int)"/big/limit.bin");
+    syscall1(SYS_CLOSE, fd);
+    syscall1(SYS_UNLINK, (long)"/big/limit.bin");
 }
 
 void probe_main(unsigned int *sp);
@@ -591,8 +545,8 @@ void probe_main(unsigned int *sp)
         fail("usage: bigfileprobe MODE NODE TYPE ARG");
     }
     mode = argv[1];
-    sys2(SYS_MKDIR, (int)"/big", 0755);
-    rc = sys5(SYS_MOUNT, (int)argv[2], (int)"/big", (int)argv[3], 0, 0);
+    syscall2(SYS_MKDIR, (long)"/big", 0755);
+    rc = syscall5(SYS_MOUNT, (long)argv[2], (long)"/big", (long)argv[3], 0, 0);
     if (rc != 0) {
         fail_with("mounting the volume", rc);
     }
@@ -607,7 +561,7 @@ void probe_main(unsigned int *sp)
     } else {
         fail("unknown mode");
     }
-    rc = sys2(SYS_UMOUNT2, (int)"/big", 0);
+    rc = syscall2(SYS_UMOUNT2, (long)"/big", 0);
     if (rc != 0) {
         fail_with("unmount", rc);
     }

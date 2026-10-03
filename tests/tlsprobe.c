@@ -23,19 +23,15 @@
  * The Linux/BSD analogue is set_thread_area(2) plus the i386 %gs thread pointer
  * that glibc/musl, the stack-protector canary, and pthread_self() all rely on.
  *
- * Freestanding; direct int 0x80.
+ * Freestanding; direct system calls (probe.h).
  */
+
+#include "probe.h"
 
 typedef unsigned int u32;
 typedef unsigned char u8;
 
-#define SYS_EXIT            1
-#define SYS_FORK            2
-#define SYS_WRITE           4
-#define SYS_WAITPID         7
-#define SYS_GETTIMEOFDAY    78
-#define SYS_SET_THREAD_AREA 243
-#define STDOUT              1
+#define STDOUT 1
 
 /* user_desc.flags: seg_32bit | limit_in_pages | useable (what musl passes). */
 #define UD_FLAGS 0x51
@@ -50,42 +46,30 @@ typedef unsigned char u8;
 
 static int sys_write(int fd, const void *buf, u32 n)
 {
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_WRITE), "b"(fd), "c"(buf), "d"(n)
-                         : "memory");
-    return r;
+    return syscall3(SYS_WRITE, (long)fd, (long)buf, (long)n);
 }
 
 static void sys_exit(int status)
 {
-    __asm__ __volatile__("int $0x80" : : "a"(SYS_EXIT), "b"(status));
+    syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
 static int sys_fork(void)
 {
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(SYS_FORK));
-    return r;
+    return syscall0(SYS_FORK);
 }
 
 static int sys_waitpid(int pid, int *status, int options)
 {
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_WAITPID), "b"(pid), "c"(status), "d"(options)
-                         : "memory");
-    return r;
+    return syscall3(SYS_WAITPID, (long)pid, (long)status, (long)options);
 }
 
 /** A cheap, side-effect-free syscall used to exercise the int 0x80 path. */
 static void sys_gettimeofday(u32 *tv2)
 {
     int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(SYS_GETTIMEOFDAY), "b"(tv2) : "memory");
+    r = syscall1(SYS_GETTIMEOFDAY, (long)tv2);
 }
 
 /**
@@ -98,12 +82,12 @@ static int set_thread_area(void *base)
     u32 desc[4];
     int r;
 
-    desc[0] = (u32)-1;   /* entry_number: allocate */
-    desc[1] = (u32)base; /* base_addr */
-    desc[2] = 0xfffff;   /* limit */
-    desc[3] = UD_FLAGS;  /* flags */
+    desc[0] = (u32)-1;             /* entry_number: allocate */
+    desc[1] = (unsigned long)base; /* base_addr */
+    desc[2] = 0xfffff;             /* limit */
+    desc[3] = UD_FLAGS;            /* flags */
 
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(SYS_SET_THREAD_AREA), "b"(desc) : "memory");
+    r = syscall1(SYS_SET_THREAD_AREA, (long)desc);
     if (r != 0) {
         return -1;
     }

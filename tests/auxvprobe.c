@@ -8,15 +8,15 @@
  * boots, and asserts the layout is correct, exiting 0 only if every check
  * passes. This is the same stack the dynamic loader and crt1 read on Linux.
  *
- * Freestanding; direct int 0x80.
+ * Freestanding; direct system calls (probe.h).
  */
+
+#include "probe.h"
 
 typedef unsigned int u32;
 typedef unsigned char u8;
 
-#define SYS_EXIT  1
-#define SYS_WRITE 4
-#define STDOUT    1
+#define STDOUT 1
 
 #define AT_NULL   0
 #define AT_PHDR   3
@@ -30,17 +30,12 @@ typedef unsigned char u8;
 
 static int sys_write(int fd, const void *buf, u32 n)
 {
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_WRITE), "b"(fd), "c"(buf), "d"(n)
-                         : "memory");
-    return r;
+    return syscall3(SYS_WRITE, (long)fd, (long)buf, (long)n);
 }
 
 static void sys_exit(int status)
 {
-    __asm__ __volatile__("int $0x80" : : "a"(SYS_EXIT), "b"(status));
+    syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
@@ -127,7 +122,7 @@ void probe_main(u32 *sp)
     puts_("auxvprobe: starting\n");
 
     /* The kernel must hand us a 16-byte-aligned ESP. */
-    check(((u32)sp & 0xF) == 0, "esp not 16-byte aligned");
+    check(((unsigned long)sp & 0xF) == 0, "esp not 16-byte aligned");
 
     /* argc and argv[]. */
     argc = (int)sp[0];
@@ -201,7 +196,7 @@ void probe_main(u32 *sp)
     /* AT_RANDOM: print the 16 bytes (the harness compares across two boots) and
      * confirm they are not all zero. */
     check(random_ptr != 0, "no AT_RANDOM");
-    check(((u32)random_ptr & ~0xFFFu) == ((u32)sp & ~0xFFFu),
+    check(((unsigned long)random_ptr & ~0xFFFu) == ((unsigned long)sp & ~0xFFFu),
           "AT_RANDOM not in the initial stack page");
     if (random_ptr) {
         u8 *r = (u8 *)random_ptr;

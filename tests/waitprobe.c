@@ -15,27 +15,14 @@
  * accept and read block on the wait queue and are woken by the card's
  * interrupt, since a datagram cannot be delivered hermetically here.
  *
- * Prints "WAITPROBE OK". Freestanding; direct int 0x80.
+ * Prints "WAITPROBE OK". Freestanding; direct system calls (probe.h).
  */
 
-typedef unsigned int size_t;
+#include "probe.h"
 
 #define STDIN_FILENO  0
 #define STDOUT_FILENO 1
 #define STDERR_FILENO 2
-
-#define SYS_EXIT         1
-#define SYS_FORK         2
-#define SYS_READ         3
-#define SYS_WRITE        4
-#define SYS_OPEN         5
-#define SYS_CLOSE        6
-#define SYS_WAITPID      7
-#define SYS_KILL         37
-#define SYS_SOCKETCALL   102
-#define SYS_NANOSLEEP    162
-#define SYS_RT_SIGACTION 174
-#define SYS_FCNTL64      221
 
 #define O_RDONLY   0
 #define O_NONBLOCK 04000
@@ -52,34 +39,6 @@ typedef unsigned int size_t;
 #define SOCK_DGRAM  2
 
 #define HELLO "/hello.txt" /* staged "hello, world\n" */
-
-static int syscall1(int n, int a)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a) : "memory");
-    return r;
-}
-
-static int syscall2(int n, int a, int b)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b) : "memory");
-    return r;
-}
-
-static int syscall3(int n, int a, int b, int c)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
-}
-
-static int syscall4(int n, int a, int b, int c, int d)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c), "S"(d) : "memory");
-    return r;
-}
 
 static void sys_exit(int status)
 {
@@ -98,8 +57,8 @@ static size_t strlen(const char *s)
 
 static void puts(const char *s)
 {
-    syscall3(SYS_WRITE, STDOUT_FILENO, (int)(size_t)s, (int)strlen(s));
-    syscall3(SYS_WRITE, STDOUT_FILENO, (int)(size_t)"\n", 1);
+    syscall3(SYS_WRITE, STDOUT_FILENO, (long)s, (int)strlen(s));
+    syscall3(SYS_WRITE, STDOUT_FILENO, (long)"\n", 1);
 }
 
 static int fails = 0;
@@ -108,7 +67,7 @@ static void check(int cond, const char *msg)
 {
     if (!cond) {
         fails++;
-        syscall3(SYS_WRITE, STDOUT_FILENO, (int)(size_t)"  FAIL: ", 8);
+        syscall3(SYS_WRITE, STDOUT_FILENO, (long)"  FAIL: ", 8);
         puts(msg);
     }
 }
@@ -130,7 +89,7 @@ static int eqn(const char *a, const char *b, int n)
  */
 static int rd(int fd, char *buf, int n)
 {
-    return syscall3(SYS_READ, fd, (int)(size_t)buf, n);
+    return syscall3(SYS_READ, fd, (long)buf, n);
 }
 
 /** Whether process `pid` sleeps, by the state its /proc/<pid>/stat gives. */
@@ -152,7 +111,7 @@ static int sleeping(int pid)
         path[j++] = "/stat"[i];
     }
     path[j] = '\0';
-    fd = syscall3(SYS_OPEN, (int)(size_t)path, O_RDONLY, 0);
+    fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
     if (fd < 0) {
         return 0;
     }
@@ -209,14 +168,14 @@ static void eintr_child(void)
     ka.flags = SA_SIGINFO | SA_RESTORER; /* the rt frame its restorer returns from */
     ka.restorer = sig_restorer;
     ka.mask = 0;
-    if (syscall4(SYS_RT_SIGACTION, SIGUSR1, (int)(size_t)&ka, 0, 8) != 0) {
+    if (syscall4(SYS_RT_SIGACTION, SIGUSR1, (long)&ka, 0, 8) != 0) {
         sys_exit(2);
     }
 
     args[0] = AF_INET;
     args[1] = SOCK_DGRAM;
     args[2] = 0;
-    sfd = syscall2(SYS_SOCKETCALL, SC_SOCKET, (int)(size_t)args);
+    sfd = syscall2(SYS_SOCKETCALL, SC_SOCKET, (long)args);
     if (sfd < 0) {
         sys_exit(3);
     }
@@ -228,38 +187,37 @@ static void eintr_child(void)
     args[3] = 0; /* flags */
     args[4] = 0;
     args[5] = 0;
-    rc = syscall2(SYS_SOCKETCALL, SC_RECVFROM, (int)(size_t)args);
+    rc = syscall2(SYS_SOCKETCALL, SC_RECVFROM, (long)args);
 
     /* Expect -EINTR, and the handler must have run. */
     sys_exit((rc == -EINTR && got_usr1) ? 0 : 1);
 }
 
-void _start(void)
+PROBE_START void _start(void)
 {
     char buf[16];
     int fd, r, n, pid, status;
 
     /* (a) O_NONBLOCK round-trips through F_SETFL/F_GETFL on the OFD. */
-    fd = syscall3(SYS_OPEN, (int)(size_t)HELLO, O_RDONLY, 0);
+    fd = syscall3(SYS_OPEN, (long)HELLO, O_RDONLY, 0);
     check(fd >= 0, "open hello.txt");
-    check(syscall3(SYS_FCNTL64, fd, F_SETFL, O_NONBLOCK) == 0, "F_SETFL O_NONBLOCK");
-    check((syscall3(SYS_FCNTL64, fd, F_GETFL, 0) & O_NONBLOCK) != 0, "F_GETFL reports O_NONBLOCK");
-    check(syscall3(SYS_FCNTL64, fd, F_SETFL, 0) == 0, "F_SETFL clear");
-    check((syscall3(SYS_FCNTL64, fd, F_GETFL, 0) & O_NONBLOCK) == 0,
-          "F_GETFL no longer O_NONBLOCK");
+    check(syscall3(SYS_FCNTL, fd, F_SETFL, O_NONBLOCK) == 0, "F_SETFL O_NONBLOCK");
+    check((syscall3(SYS_FCNTL, fd, F_GETFL, 0) & O_NONBLOCK) != 0, "F_GETFL reports O_NONBLOCK");
+    check(syscall3(SYS_FCNTL, fd, F_SETFL, 0) == 0, "F_SETFL clear");
+    check((syscall3(SYS_FCNTL, fd, F_GETFL, 0) & O_NONBLOCK) == 0, "F_GETFL no longer O_NONBLOCK");
     syscall1(SYS_CLOSE, fd);
 
     /* (b) close(2) is legal. fd 0/1 stay open, so the freed lowest number is
      * 2 and the reopen lands there. */
     r = syscall1(SYS_CLOSE, STDERR_FILENO);
     check(r == 0, "close(stderr) is legal");
-    fd = syscall3(SYS_OPEN, (int)(size_t)HELLO, O_RDONLY, 0);
+    fd = syscall3(SYS_OPEN, (long)HELLO, O_RDONLY, 0);
     check(fd == STDERR_FILENO, "reopen lands on the freed fd 2");
     syscall1(SYS_CLOSE, fd);
 
     /* close(0) is legal, and with fd 0 freed the reopen lands on 0. */
     check(syscall1(SYS_CLOSE, STDIN_FILENO) == 0, "close(stdin) is legal");
-    fd = syscall3(SYS_OPEN, (int)(size_t)HELLO, O_RDONLY, 0);
+    fd = syscall3(SYS_OPEN, (long)HELLO, O_RDONLY, 0);
     check(fd == STDIN_FILENO, "reopen lands on the freed fd 0");
     n = rd(fd, buf, 5);
     check(n == 5 && eqn(buf, "hello", 5), "read through reopened fd 0");
@@ -282,11 +240,11 @@ void _start(void)
         ts.tv_sec = 0;
         ts.tv_nsec = 10000000; /* 10 ms */
         for (tries = 0; tries < 300 && !sleeping(pid); tries++) {
-            syscall2(SYS_NANOSLEEP, (int)(size_t)&ts, 0);
+            syscall2(SYS_NANOSLEEP, (long)&ts, 0);
         }
         check(tries < 300, "the child was seen asleep in its recvfrom");
         syscall2(SYS_KILL, pid, SIGUSR1);
-        r = syscall3(SYS_WAITPID, pid, (int)(size_t)&status, 0);
+        r = syscall3(SYS_WAITPID, pid, (long)&status, 0);
         check(r == pid && status == 0, "child recvfrom interrupted with -EINTR (no hang)");
     }
 

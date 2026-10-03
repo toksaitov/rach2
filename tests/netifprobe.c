@@ -19,28 +19,17 @@
  * and the one a machine that refused to hold an address without a mask could
  * never complete.
  *
- * Prints "NETIFPROBE OK" and exits 0 on success. Freestanding; direct int 0x80.
+ * Prints "NETIFPROBE OK" and exits 0 on success. Freestanding; direct system
+ * calls (probe.h).
  */
 
-typedef unsigned int size_t;
+#include "probe.h"
+
 typedef unsigned int uint32_t;
 typedef unsigned short uint16_t;
 typedef unsigned char uint8_t;
 
 #define STDOUT_FILENO 1
-
-#define SYS_EXIT       1
-#define SYS_FORK       2
-#define SYS_WRITE      4
-#define SYS_CLOSE      6
-#define SYS_WAITPID    7
-#define SYS_IOCTL      54
-#define SYS_READ       3
-#define SYS_OPEN       5
-#define SYS_POLL       168
-#define SYS_SOCKETCALL 102
-#define SYS_NANOSLEEP  162
-#define SYS_SETUID32   213
 
 #define SC_SOCKET      1
 #define SC_BIND        2
@@ -122,12 +111,7 @@ typedef unsigned char uint8_t;
 
 static int sys_write(int fd, const void *buf, size_t count)
 {
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_WRITE), "b"(fd), "c"(buf), "d"(count)
-                         : "memory");
-    return r;
+    return syscall3(SYS_WRITE, (long)fd, (long)buf, (long)count);
 }
 
 struct pollfd_probe {
@@ -138,89 +122,53 @@ struct pollfd_probe {
 
 static int sys_read(int fd, void *buf, size_t count)
 {
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_READ), "b"(fd), "c"(buf), "d"(count)
-                         : "memory");
-    return r;
+    return syscall3(SYS_READ, (long)fd, (long)buf, (long)count);
 }
 
 static int sys_poll(struct pollfd_probe *fds, unsigned int n, int timeout)
 {
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_POLL), "b"(fds), "c"(n), "d"(timeout)
-                         : "memory");
-    return r;
+    return syscall3(SYS_POLL, (long)fds, (long)n, (long)timeout);
 }
 
 static int sys_open(const char *path, int flags)
 {
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_OPEN), "b"(path), "c"(flags), "d"(0)
-                         : "memory");
-    return r;
+    return syscall3(SYS_OPEN, (long)path, (long)flags, (long)0);
 }
 
 static int sys_close(int fd)
 {
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(SYS_CLOSE), "b"(fd));
-    return r;
+    return syscall1(SYS_CLOSE, (long)fd);
 }
 
 static void sys_exit(int status)
 {
-    __asm__ __volatile__("int $0x80" : : "a"(SYS_EXIT), "b"(status));
+    syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
 static int sys_ioctl(int fd, uint32_t request, void *arg)
 {
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_IOCTL), "b"(fd), "c"(request), "d"(arg)
-                         : "memory");
-    return r;
+    return syscall3(SYS_IOCTL, (long)fd, (long)request, (long)arg);
 }
 
 static int socketcall(int call, uint32_t *args)
 {
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_SOCKETCALL), "b"(call), "c"(args)
-                         : "memory");
-    return r;
+    return syscall2(SYS_SOCKETCALL, (long)call, (long)args);
 }
 
 static int sys_fork(void)
 {
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(SYS_FORK) : "memory");
-    return r;
+    return syscall0(SYS_FORK);
 }
 
 static int sys_setuid(int uid)
 {
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(SYS_SETUID32), "b"(uid));
-    return r;
+    return syscall1(SYS_SETUID, (long)uid);
 }
 
 static int sys_waitpid(int pid, int *status, int options)
 {
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_WAITPID), "b"(pid), "c"(status), "d"(options)
-                         : "memory");
-    return r;
+    return syscall3(SYS_WAITPID, (long)pid, (long)status, (long)options);
 }
 
 static void say(const char *s)
@@ -494,8 +442,8 @@ static void packet_name(int fd, int index, int raw_fd)
     int i;
 
     args[0] = (uint32_t)fd;
-    args[1] = (uint32_t)&addr;
-    args[2] = (uint32_t)&len;
+    args[1] = (unsigned long)&addr;
+    args[2] = (unsigned long)&len;
     if (socketcall(SC_GETSOCKNAME, args) != 0 || len != sizeof(addr) ||
         addr.sll_family != AF_PACKET || addr.sll_protocol != ETH_P_ARP_BE ||
         addr.sll_ifindex != index) {
@@ -529,14 +477,14 @@ static void device_option(int fd)
         args[0] = (uint32_t)fd;
         args[1] = SOL_SOCKET;
         args[2] = SO_BINDTODEVICE;
-        args[3] = (uint32_t)(i == 0 ? "eth1" : i == 1 ? "eth9" : "");
+        args[3] = (unsigned long)(i == 0 ? "eth1" : i == 1 ? "eth9" : "");
         args[4] = i == 2 ? 1 : 5;
         if (socketcall(SC_SETSOCKOPT, args) != (i == 1 ? -ENODEV : 0)) {
             fail("SO_BINDTODEVICE did not validate the interface name");
         }
         len = sizeof(name);
-        args[3] = (uint32_t)name;
-        args[4] = (uint32_t)&len;
+        args[3] = (unsigned long)name;
+        args[4] = (unsigned long)&len;
         if (socketcall(SC_GETSOCKOPT, args) != 0) {
             fail("SO_BINDTODEVICE did not read back");
         }
@@ -592,7 +540,7 @@ static void tcp_names(void)
     }
     set_sockaddr(addr, 0, LOOP_PORT + 1);
     args[0] = (uint32_t)listener;
-    args[1] = (uint32_t)addr;
+    args[1] = (unsigned long)addr;
     args[2] = sizeof(addr);
     if (socketcall(SC_BIND, args) != 0) {
         fail("TCP address test listener did not bind");
@@ -603,7 +551,7 @@ static void tcp_names(void)
     }
     set_sockaddr(addr, SECOND_IP, LOOP_PORT + 1);
     args[0] = (uint32_t)client;
-    args[1] = (uint32_t)addr;
+    args[1] = (unsigned long)addr;
     args[2] = sizeof(addr);
     if (socketcall(SC_CONNECT, args) != 0) {
         fail("TCP connection to the second interface did not open");
@@ -619,8 +567,8 @@ static void tcp_names(void)
         fd = i ? conn : client;
         len = sizeof(addr);
         args[0] = (uint32_t)fd;
-        args[1] = (uint32_t)addr;
-        args[2] = (uint32_t)&len;
+        args[1] = (unsigned long)addr;
+        args[2] = (unsigned long)&len;
         if (socketcall(SC_GETSOCKNAME, args) != 0 || len != sizeof(addr) || addr[4] != 10 ||
             addr[5] != 0 || addr[6] != 3 || addr[7] != 5) {
             fail("TCP getsockname reported the first interface");
@@ -680,14 +628,14 @@ static void packet_on_second(int raw_fd)
     packet_name(on_second, 0, raw_fd);
     set_packet_addr(&to, 2);
     args[0] = (uint32_t)on_second;
-    args[1] = (uint32_t)&to;
+    args[1] = (unsigned long)&to;
     args[2] = sizeof(to);
     if (socketcall(SC_BIND, args) != 0) {
         fail("the socket would not bind to the second interface");
     }
     set_packet_addr(&to, 1);
     args[0] = (uint32_t)on_first;
-    args[1] = (uint32_t)&to;
+    args[1] = (unsigned long)&to;
     args[2] = sizeof(to);
     if (socketcall(SC_BIND, args) != 0) {
         fail("the socket would not bind to the first interface");
@@ -731,10 +679,10 @@ static void packet_on_second(int raw_fd)
         to.sll_addr[i] = 0xff;
     }
     args[0] = (uint32_t)on_second;
-    args[1] = (uint32_t)arp;
+    args[1] = (unsigned long)arp;
     args[2] = sizeof(arp);
     args[3] = 0;
-    args[4] = (uint32_t)&to;
+    args[4] = (unsigned long)&to;
     args[5] = sizeof(to);
     if (socketcall(SC_SENDTO, args) != (int)sizeof(arp)) {
         fail("the request would not send through the second interface");
@@ -754,11 +702,11 @@ static void packet_on_second(int raw_fd)
         }
         fromlen = sizeof(from);
         args[0] = (uint32_t)on_second;
-        args[1] = (uint32_t)buf;
+        args[1] = (unsigned long)buf;
         args[2] = sizeof(buf);
         args[3] = 0x40; /* MSG_DONTWAIT */
-        args[4] = (uint32_t)&from;
-        args[5] = (uint32_t)&fromlen;
+        args[4] = (unsigned long)&from;
+        args[5] = (unsigned long)&fromlen;
         if (socketcall(SC_RECVFROM, args) < 0) {
             continue;
         }
@@ -786,11 +734,11 @@ static void packet_on_second(int raw_fd)
         }
         fromlen = sizeof(from);
         args[0] = (uint32_t)on_first;
-        args[1] = (uint32_t)buf;
+        args[1] = (unsigned long)buf;
         args[2] = sizeof(buf);
         args[3] = 0x40; /* MSG_DONTWAIT */
-        args[4] = (uint32_t)&from;
-        args[5] = (uint32_t)&fromlen;
+        args[4] = (unsigned long)&from;
+        args[5] = (unsigned long)&fromlen;
         if (socketcall(SC_RECVFROM, args) < 0) {
             break;
         }
@@ -990,7 +938,7 @@ static void netif_main(void)
     /* The query descriptor has ioctls and refuses everything else, rather
        than answering with a silence a caller would wait in. */
     args[0] = (uint32_t)fd;
-    args[1] = (uint32_t)sa_listen;
+    args[1] = (unsigned long)sa_listen;
     args[2] = 16;
     if (socketcall(SC_BIND, args) != -EOPNOTSUPP) {
         fail("the query descriptor accepted a bind");
@@ -1026,7 +974,7 @@ static void netif_main(void)
     }
     set_sockaddr(sa_listen, 0, LOOP_PORT);
     args[0] = (uint32_t)listener;
-    args[1] = (uint32_t)sa_listen;
+    args[1] = (unsigned long)sa_listen;
     args[2] = 16;
     if (socketcall(SC_BIND, args) != 0) {
         fail("the listener did not bind");
@@ -1045,7 +993,7 @@ static void netif_main(void)
     }
     set_sockaddr(sa_connect, SLIRP_IP, LOOP_PORT);
     args[0] = (uint32_t)client;
-    args[1] = (uint32_t)sa_connect;
+    args[1] = (unsigned long)sa_connect;
     args[2] = 16;
     if (socketcall(SC_CONNECT, args) != 0) {
         fail("the connection to this machine itself did not complete");
@@ -1113,9 +1061,9 @@ static void netif_main(void)
     args[0] = (uint32_t)conn;
     args[1] = SOL_SOCKET;
     args[2] = SO_ERROR;
-    args[3] = (uint32_t)&err;
+    args[3] = (unsigned long)&err;
     optlen = sizeof(err);
-    args[4] = (uint32_t)&optlen;
+    args[4] = (unsigned long)&optlen;
     err = -1;
     if (socketcall(SC_GETSOCKOPT, args) != 0) {
         fail("the connection's error did not read");
@@ -1136,7 +1084,7 @@ static void netif_main(void)
     }
     set_sockaddr(sa_connect, OTHER_IP, LOOP_PORT);
     args[0] = (uint32_t)client2;
-    args[1] = (uint32_t)sa_connect;
+    args[1] = (unsigned long)sa_connect;
     args[2] = 16;
     if (socketcall(SC_CONNECT, args) != 0) {
         fail("a connection to the new address was refused, so the listener died with the old one");
@@ -1166,9 +1114,9 @@ static void netif_main(void)
     args[0] = (uint32_t)conn2;
     args[1] = SOL_SOCKET;
     args[2] = SO_ERROR;
-    args[3] = (uint32_t)&err;
+    args[3] = (unsigned long)&err;
     optlen = sizeof(err);
-    args[4] = (uint32_t)&optlen;
+    args[4] = (unsigned long)&optlen;
     err = -1;
     if (socketcall(SC_GETSOCKOPT, args) != 0) {
         fail("the surviving connection's error did not read");
@@ -1195,9 +1143,9 @@ static void netif_main(void)
     args[0] = (uint32_t)conn;
     args[1] = SOL_SOCKET;
     args[2] = SO_ERROR;
-    args[3] = (uint32_t)&err;
+    args[3] = (unsigned long)&err;
     optlen = sizeof(err);
-    args[4] = (uint32_t)&optlen;
+    args[4] = (unsigned long)&optlen;
     err = -1;
     if (socketcall(SC_GETSOCKOPT, args) != 0) {
         fail("the closed connection's error did not read");
@@ -1245,7 +1193,7 @@ static void netif_main(void)
     }
     set_sockaddr(sa_listen, 0, INBOUND_PORT);
     args[0] = (uint32_t)inbound;
-    args[1] = (uint32_t)sa_listen;
+    args[1] = (unsigned long)sa_listen;
     args[2] = 16;
     if (socketcall(SC_BIND, args) != 0) {
         fail("the socket for the inbound case did not bind");
@@ -1293,7 +1241,7 @@ static void netif_main(void)
     /* The second connection was open across this address change too, so the
        nonblocking read path can be held to the same contract on it. */
     args[0] = (uint32_t)conn2;
-    args[1] = (uint32_t)ifr;
+    args[1] = (unsigned long)ifr;
     args[2] = 1;
     args[3] = 0x40; /* MSG_DONTWAIT */
     if (socketcall(SC_RECV, args) != -ENETRESET) {

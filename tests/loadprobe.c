@@ -16,25 +16,11 @@
  * delays was one machine's.
  *
  * Prints "LOADPROBE timer N disk N diskwait N console N" and then
- * "LOADPROBE OK" or "LOADPROBE FAIL: reason". Freestanding; int 0x80.
+ * "LOADPROBE OK" or "LOADPROBE FAIL: reason". Freestanding; direct system calls
+ * (probe.h).
  */
 
-typedef unsigned int size_t;
-
-#define SYS_EXIT       1
-#define SYS_FORK       2
-#define SYS_READ       3
-#define SYS_WRITE      4
-#define SYS_OPEN       5
-#define SYS_CLOSE      6
-#define SYS_WAITPID    7
-#define SYS_MOUNT      21
-#define SYS_SYNC       36
-#define SYS_KILL       37
-#define SYS_MKDIR      39
-#define SYS_PIPE       42
-#define SYS_SOCKETCALL 102
-#define SYS_NANOSLEEP  162
+#include "probe.h"
 
 #define SC_PING    0x1000
 #define GATEWAY_IP 0x0A000202u
@@ -44,37 +30,6 @@ typedef unsigned int size_t;
 #define O_CREAT  0100
 #define O_TRUNC  01000
 #define SIGKILL  9
-
-static int syscall1(int n, int a)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a) : "memory");
-    return r;
-}
-
-static int syscall2(int n, int a, int b)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b) : "memory");
-    return r;
-}
-
-static int syscall3(int n, int a, int b, int c)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
-}
-
-static int sys5(int n, int a, int b, int c, int d, int e)
-{
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(n), "b"(a), "c"(b), "d"(c), "S"(d), "D"(e)
-                         : "memory");
-    return r;
-}
 
 static void sys_exit(int status)
 {
@@ -93,7 +48,7 @@ static size_t strlen(const char *s)
 
 static void print(const char *s)
 {
-    syscall3(SYS_WRITE, 1, (int)(size_t)s, (int)strlen(s));
+    syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
 }
 
 static void puts(const char *s)
@@ -112,7 +67,7 @@ static void print_num(unsigned v)
         v /= 10;
     } while (v);
     while (n) {
-        syscall3(SYS_WRITE, 1, (int)(size_t)&tmp[--n], 1);
+        syscall3(SYS_WRITE, 1, (long)&tmp[--n], 1);
     }
 }
 
@@ -129,7 +84,7 @@ static void sleep_ms(int ms)
 
     ts[0] = ms / 1000;
     ts[1] = (ms % 1000) * 1000000;
-    syscall2(SYS_NANOSLEEP, (int)(size_t)ts, 0);
+    syscall2(SYS_NANOSLEEP, (long)ts, 0);
 }
 
 static unsigned char block[4096];
@@ -145,14 +100,13 @@ static void writer(const char *path)
         block[i] = (unsigned char)i;
     }
     for (;;) {
-        int fd = syscall3(SYS_OPEN, (int)(size_t)path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        int fd = syscall3(SYS_OPEN, (long)path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
 
         if (fd < 0) {
             sys_exit(2);
         }
         for (i = 0; i < 64; i++) {
-            if (syscall3(SYS_WRITE, fd, (int)(size_t)block, (int)sizeof(block)) !=
-                (int)sizeof(block)) {
+            if (syscall3(SYS_WRITE, fd, (long)block, (int)sizeof(block)) != (int)sizeof(block)) {
                 sys_exit(3);
             }
         }
@@ -169,7 +123,7 @@ static void pinger(void)
 
     for (;;) {
         args[0] = GATEWAY_IP;
-        syscall2(SYS_SOCKETCALL, SC_PING, (int)(size_t)args);
+        syscall2(SYS_SOCKETCALL, SC_PING, (long)args);
         sleep_ms(50);
     }
 }
@@ -182,8 +136,8 @@ static void reader(int report)
     char c;
 
     for (;;) {
-        if (syscall3(SYS_READ, 0, (int)(size_t)&c, 1) == 1 && c == '\n') {
-            syscall3(SYS_WRITE, report, (int)(size_t)"l", 1);
+        if (syscall3(SYS_READ, 0, (long)&c, 1) == 1 && c == '\n') {
+            syscall3(SYS_WRITE, report, (long)"l", 1);
             puts("LOADPROBE read");
         }
     }
@@ -193,13 +147,13 @@ static void reader(int report)
 static unsigned file_field(const char *path, const char *key)
 {
     static char text[4096];
-    int fd = syscall3(SYS_OPEN, (int)(size_t)path, O_RDONLY, 0);
+    int fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
     int n, i;
 
     if (fd < 0) {
         return 0xFFFFFFFFu;
     }
-    n = syscall3(SYS_READ, fd, (int)(size_t)text, (int)sizeof(text) - 1);
+    n = syscall3(SYS_READ, fd, (long)text, (int)sizeof(text) - 1);
     syscall1(SYS_CLOSE, fd);
     if (n <= 0) {
         return 0xFFFFFFFFu;
@@ -263,13 +217,13 @@ void probe_main(unsigned int *sp)
     unsigned timer, disk, diskwait, console, quarantines;
     char byte;
 
-    if (syscall2(SYS_MKDIR, (int)(size_t)"/lo", 0755) != 0 ||
-        sys5(SYS_MOUNT, (int)(size_t)"/dev/disk0p1", (int)(size_t)"/lo",
-             (int)(size_t)(wanted(arg, 'k') && arg ? "krffs" : "vfat"), 0, 0) != 0) {
+    if (syscall2(SYS_MKDIR, (long)"/lo", 0755) != 0 ||
+        syscall5(SYS_MOUNT, (long)"/dev/disk0p1", (long)"/lo",
+                 (long)(wanted(arg, 'k') && arg ? "krffs" : "vfat"), 0, 0) != 0) {
         fail("the mount of the volume");
     }
     report[0] = report[1] = -1;
-    if (syscall1(SYS_PIPE, (int)(size_t)report) != 0) {
+    if (syscall1(SYS_PIPE, (long)report) != 0) {
         fail("the report pipe");
     }
     for (i = 0; i < 10; i++) {
@@ -310,12 +264,12 @@ void probe_main(unsigned int *sp)
     for (i = 0; i < 10; i++) {
         int status = 0;
 
-        syscall3(SYS_WAITPID, pids[i], (int)(size_t)&status, 0);
+        syscall3(SYS_WAITPID, pids[i], (long)&status, 0);
         if ((status & 0x7F) == 0) {
             fail("a load process exited on its own before it was killed");
         }
     }
-    while (syscall3(SYS_READ, report[0], (int)(size_t)&byte, 1) == 1) {
+    while (syscall3(SYS_READ, report[0], (long)&byte, 1) == 1) {
         lines++;
     }
     timer = file_field("/proc/stat", "latency_timer_us ");

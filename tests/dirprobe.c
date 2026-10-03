@@ -15,30 +15,12 @@
  * O_APPEND and O_CREAT mode, and chdir/getcwd with relative-name resolution.
  * Prints "DIRPROBE OK" when every check passes, else "DIRPROBE FAIL".
  *
- * Freestanding; direct int 0x80.
+ * Freestanding; direct system calls (probe.h).
  */
 
-typedef unsigned int size_t;
+#include "probe.h"
 
 #define STDOUT_FILENO 1
-
-#define SYS_EXIT       1
-#define SYS_READ       3
-#define SYS_WRITE      4
-#define SYS_OPEN       5
-#define SYS_CLOSE      6
-#define SYS_CREAT      8
-#define SYS_UNLINK     10
-#define SYS_CHDIR      12
-#define SYS_GETCWD     183
-#define SYS_LLSEEK     140
-#define SYS_FSTAT64    197
-#define SYS_FCNTL64    221
-#define SYS_MKDIR      39
-#define SYS_RMDIR      40
-#define SYS_GETDENTS64 220
-#define SYS_OPENAT     295
-#define SYS_FSTATAT64  300
 
 #define F_DUPFD    0
 #define F_GETFD    1
@@ -71,37 +53,6 @@ typedef unsigned int size_t;
 #define STAT64_MODE(b)    (*(unsigned int *)((b) + 16))
 #define STAT64_SIZE_LO(b) (*(unsigned int *)((b) + 44))
 
-static int syscall1(int n, int a)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a) : "memory");
-    return r;
-}
-
-static int syscall2(int n, int a, int b)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b) : "memory");
-    return r;
-}
-
-static int syscall3(int n, int a, int b, int c)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
-}
-
-static int syscall5(int n, int a, int b, int c, int d, int e)
-{
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(n), "b"(a), "c"(b), "d"(c), "S"(d), "D"(e)
-                         : "memory");
-    return r;
-}
-
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, status);
@@ -110,12 +61,12 @@ static void sys_exit(int status)
 
 static int sys_write(int fd, const void *buf, size_t n)
 {
-    return syscall3(SYS_WRITE, fd, (int)(size_t)buf, (int)n);
+    return syscall3(SYS_WRITE, fd, (long)buf, (int)n);
 }
 
 static int sys_read(int fd, void *buf, size_t n)
 {
-    return syscall3(SYS_READ, fd, (int)(size_t)buf, (int)n);
+    return syscall3(SYS_READ, fd, (long)buf, (int)n);
 }
 
 static size_t strlen(const char *s)
@@ -151,13 +102,13 @@ static int fails = 0;
 static int root_type(void)
 {
     static char mounts[2048];
-    int fd = syscall3(SYS_OPEN, (int)(size_t)"/proc/mounts", O_RDONLY, 0);
+    int fd = syscall3(SYS_OPEN, (long)"/proc/mounts", O_RDONLY, 0);
     int n, i;
 
     if (fd < 0) {
         return 0;
     }
-    n = syscall3(SYS_READ, fd, (int)(size_t)mounts, (int)sizeof(mounts) - 1);
+    n = syscall3(SYS_READ, fd, (long)mounts, (int)sizeof(mounts) - 1);
     syscall1(SYS_CLOSE, fd);
     if (n <= 0) {
         return 0;
@@ -191,7 +142,7 @@ static void check(int cond, const char *msg)
     }
 }
 
-void _start(void)
+PROBE_START void _start(void)
 {
     int fd;
     int root = root_type();
@@ -207,11 +158,11 @@ void _start(void)
     }
 
     /* 1. Create a directory; a second mkdir of the same name must fail. */
-    check(syscall2(SYS_MKDIR, (int)(size_t)"/d", 0755) == 0, "mkdir /d");
-    check(syscall2(SYS_MKDIR, (int)(size_t)"/d", 0755) < 0, "mkdir /d again fails");
+    check(syscall2(SYS_MKDIR, (long)"/d", 0755) == 0, "mkdir /d");
+    check(syscall2(SYS_MKDIR, (long)"/d", 0755) < 0, "mkdir /d again fails");
 
     /* 2. Create a file INSIDE the directory and write to it. */
-    fd = syscall2(SYS_CREAT, (int)(size_t)"/d/f", 0644);
+    fd = syscall2(SYS_CREAT, (long)"/d/f", 0644);
     check(fd >= 0, "creat /d/f");
     if (fd >= 0) {
         check(sys_write(fd, "hi", 2) == 2, "write /d/f");
@@ -219,10 +170,10 @@ void _start(void)
     }
 
     /* 3. Creating inside a missing directory must fail. */
-    check(syscall2(SYS_CREAT, (int)(size_t)"/nope/f", 0644) < 0, "creat in missing dir fails");
+    check(syscall2(SYS_CREAT, (long)"/nope/f", 0644) < 0, "creat in missing dir fails");
 
     /* 4. Reopen the nested file and read the data back. */
-    fd = syscall3(SYS_OPEN, (int)(size_t)"/d/f", O_RDONLY, 0);
+    fd = syscall3(SYS_OPEN, (long)"/d/f", O_RDONLY, 0);
     check(fd >= 0, "open /d/f");
     if (fd >= 0) {
         int r = sys_read(fd, buf, sizeof buf);
@@ -231,30 +182,30 @@ void _start(void)
     }
 
     /* 5. rmdir must refuse a non-empty directory. */
-    check(syscall1(SYS_RMDIR, (int)(size_t)"/d") < 0, "rmdir non-empty /d fails");
+    check(syscall1(SYS_RMDIR, (long)"/d") < 0, "rmdir non-empty /d fails");
 
     /* 6. Remove the file, then the now-empty directory. */
-    check(syscall1(SYS_UNLINK, (int)(size_t)"/d/f") == 0, "unlink /d/f");
-    check(syscall1(SYS_RMDIR, (int)(size_t)"/d") == 0, "rmdir empty /d");
+    check(syscall1(SYS_UNLINK, (long)"/d/f") == 0, "unlink /d/f");
+    check(syscall1(SYS_RMDIR, (long)"/d") == 0, "rmdir empty /d");
 
     /* 7. The file is gone. */
-    check(syscall3(SYS_OPEN, (int)(size_t)"/d/f", O_RDONLY, 0) < 0, "open removed /d/f fails");
+    check(syscall3(SYS_OPEN, (long)"/d/f", O_RDONLY, 0) < 0, "open removed /d/f fails");
 
     /* 8. getdents on a subdirectory lists EXACTLY its own children. */
-    check(syscall2(SYS_MKDIR, (int)(size_t)"/e", 0755) == 0, "mkdir /e");
-    fd = syscall2(SYS_CREAT, (int)(size_t)"/e/a", 0644);
+    check(syscall2(SYS_MKDIR, (long)"/e", 0755) == 0, "mkdir /e");
+    fd = syscall2(SYS_CREAT, (long)"/e/a", 0644);
     if (fd >= 0) {
         syscall1(SYS_CLOSE, fd);
     }
-    fd = syscall2(SYS_CREAT, (int)(size_t)"/e/b", 0644);
+    fd = syscall2(SYS_CREAT, (long)"/e/b", 0644);
     if (fd >= 0) {
         syscall1(SYS_CLOSE, fd);
     }
-    fd = syscall3(SYS_OPEN, (int)(size_t)"/e", O_RDONLY, 0);
+    fd = syscall3(SYS_OPEN, (long)"/e", O_RDONLY, 0);
     check(fd >= 0, "open /e as directory");
     if (fd >= 0) {
         char dbuf[256];
-        int n = syscall3(SYS_GETDENTS64, fd, (int)(size_t)dbuf, (int)sizeof dbuf);
+        int n = syscall3(SYS_GETDENTS64, fd, (long)dbuf, (int)sizeof dbuf);
         int off = 0, count = 0, saw_a = 0, saw_b = 0;
         int saw_dot = 0, saw_dotdot = 0, other = 0;
 
@@ -290,34 +241,33 @@ void _start(void)
         }
         syscall1(SYS_CLOSE, fd);
     }
-    syscall1(SYS_UNLINK, (int)(size_t)"/e/a");
-    syscall1(SYS_UNLINK, (int)(size_t)"/e/b");
-    check(syscall1(SYS_RMDIR, (int)(size_t)"/e") == 0, "rmdir emptied /e");
+    syscall1(SYS_UNLINK, (long)"/e/a");
+    syscall1(SYS_UNLINK, (long)"/e/b");
+    check(syscall1(SYS_RMDIR, (long)"/e") == 0, "rmdir emptied /e");
 
     /* 8b. A KRFFS directory's identifier is its parent's mixed with the hash
        of its name, which bC and cb share: the second of the two in one
        directory is a name the format cannot hold, EINVAL, and not a full
        or a failing volume. */
     if (root == ROOT_KRFFS) {
-        check(syscall2(SYS_MKDIR, (int)(size_t)"/ids", 0755) == 0 &&
-                  syscall2(SYS_MKDIR, (int)(size_t)"/ids/bC", 0755) == 0,
+        check(syscall2(SYS_MKDIR, (long)"/ids", 0755) == 0 &&
+                  syscall2(SYS_MKDIR, (long)"/ids/bC", 0755) == 0,
               "mkdir /ids and /ids/bC");
-        check(syscall2(SYS_MKDIR, (int)(size_t)"/ids/cb", 0755) == -EINVAL,
+        check(syscall2(SYS_MKDIR, (long)"/ids/cb", 0755) == -EINVAL,
               "mkdir /ids/cb beside /ids/bC is EINVAL on krffs");
-        check(syscall1(SYS_RMDIR, (int)(size_t)"/ids/bC") == 0 &&
-                  syscall1(SYS_RMDIR, (int)(size_t)"/ids") == 0,
+        check(syscall1(SYS_RMDIR, (long)"/ids/bC") == 0 && syscall1(SYS_RMDIR, (long)"/ids") == 0,
               "rmdir /ids/bC and /ids");
     }
 
     /* 9. The *at API on a regular file: openat, fstat64, _llseek, fcntl64. */
-    fd = syscall2(SYS_CREAT, (int)(size_t)"/g", 0644);
+    fd = syscall2(SYS_CREAT, (long)"/g", 0644);
     check(fd >= 0, "creat /g");
     if (fd >= 0) {
         check(sys_write(fd, "hello", 5) == 5, "write /g");
         syscall1(SYS_CLOSE, fd);
     }
     /* openat with AT_FDCWD resolves from the root, like open. */
-    fd = syscall3(SYS_OPENAT, AT_FDCWD, (int)(size_t)"/g", O_RDONLY);
+    fd = syscall3(SYS_OPENAT, AT_FDCWD, (long)"/g", O_RDONLY);
     check(fd >= 0, "openat /g");
     if (fd >= 0) {
         /* fstat64 overwrites st; the initializer just quiets cppcheck. */
@@ -326,19 +276,19 @@ void _start(void)
         char c = 0;
 
         /* fstat64 the descriptor: a 5-byte regular file. */
-        check(syscall2(SYS_FSTAT64, fd, (int)(size_t)st) == 0, "fstat64 /g");
+        check(syscall2(SYS_FSTAT, fd, (long)st) == 0, "fstat64 /g");
         check((STAT64_MODE(st) & S_IFMT) == S_IFREG, "fstat64 /g is regular");
         check(STAT64_SIZE_LO(st) == 5, "fstat64 /g size is 5");
 
         /* _llseek SEEK_SET to offset 1; the result offset must come back
          * as 1. */
-        check(syscall5(SYS_LLSEEK, fd, 0, 1, (int)(size_t)&result, 0) == 0, "_llseek /g");
+        check(syscall5(SYS_LLSEEK, fd, 0, 1, (long)&result, 0) == 0, "_llseek /g");
         check(result == 1, "_llseek result offset is 1");
         check(sys_read(fd, &c, 1) == 1 && c == 'e', "read byte after seek is 'e'");
 
         /* FD_CLOEXEC round-trip through fcntl64. */
-        check(syscall3(SYS_FCNTL64, fd, F_SETFD, FD_CLOEXEC) == 0, "fcntl F_SETFD CLOEXEC");
-        check(syscall3(SYS_FCNTL64, fd, F_GETFD, 0) == FD_CLOEXEC, "fcntl F_GETFD CLOEXEC");
+        check(syscall3(SYS_FCNTL, fd, F_SETFD, FD_CLOEXEC) == 0, "fcntl F_SETFD CLOEXEC");
+        check(syscall3(SYS_FCNTL, fd, F_GETFD, 0) == FD_CLOEXEC, "fcntl F_GETFD CLOEXEC");
 
         syscall1(SYS_CLOSE, fd);
     }
@@ -348,16 +298,14 @@ void _start(void)
     {
         unsigned char st[STAT64_SIZE] = {0}; /* fstatat64 overwrites; init quiets cppcheck */
 
-        check(syscall5(SYS_FSTATAT64, AT_FDCWD, (int)(size_t)"/g", (int)(size_t)st, 0, 0) == 0,
-              "fstatat64 /g");
+        check(syscall5(SYS_FSTATAT, AT_FDCWD, (long)"/g", (long)st, 0, 0) == 0, "fstatat64 /g");
         check((STAT64_MODE(st) & S_IFMT) == S_IFREG && STAT64_SIZE_LO(st) == 5,
               "fstatat64 /g regular, size 5");
 
-        check(syscall2(SYS_MKDIR, (int)(size_t)"/h", 0755) == 0, "mkdir /h");
-        check(syscall5(SYS_FSTATAT64, AT_FDCWD, (int)(size_t)"/h", (int)(size_t)st, 0, 0) == 0,
-              "fstatat64 /h");
+        check(syscall2(SYS_MKDIR, (long)"/h", 0755) == 0, "mkdir /h");
+        check(syscall5(SYS_FSTATAT, AT_FDCWD, (long)"/h", (long)st, 0, 0) == 0, "fstatat64 /h");
         check((STAT64_MODE(st) & S_IFMT) == S_IFDIR, "fstatat64 /h is directory");
-        check(syscall1(SYS_RMDIR, (int)(size_t)"/h") == 0, "rmdir /h");
+        check(syscall1(SYS_RMDIR, (long)"/h") == 0, "rmdir /h");
     }
 
     /* 11. O_APPEND forces writes to EOF; F_DUPFD honors its minimum fd; O_CREAT
@@ -371,20 +319,20 @@ void _start(void)
 
         /* /g holds "hello". Open O_APPEND, seek to 0, write '!': the append
          * contract must ignore the seek and place it at EOF -> "hello!". */
-        fd = syscall3(SYS_OPENAT, AT_FDCWD, (int)(size_t)"/g", O_WRONLY | O_APPEND);
+        fd = syscall3(SYS_OPENAT, AT_FDCWD, (long)"/g", O_WRONLY | O_APPEND);
         check(fd >= 0, "openat /g O_APPEND");
         if (fd >= 0) {
-            syscall5(SYS_LLSEEK, fd, 0, 0, (int)(size_t)&result, 0); /* SEEK_SET 0 */
+            syscall5(SYS_LLSEEK, fd, 0, 0, (long)&result, 0); /* SEEK_SET 0 */
             check(sys_write(fd, "!", 1) == 1, "append write /g");
             syscall1(SYS_CLOSE, fd);
         }
-        fd = syscall3(SYS_OPENAT, AT_FDCWD, (int)(size_t)"/g", O_RDONLY);
+        fd = syscall3(SYS_OPENAT, AT_FDCWD, (long)"/g", O_RDONLY);
         if (fd >= 0) {
             r = sys_read(fd, rb, sizeof rb);
             check(r == 6 && rb[5] == '!', "O_APPEND wrote at EOF (hello!)");
 
             /* F_DUPFD must return the lowest free fd >= 10, not just any fd. */
-            dupfd = syscall3(SYS_FCNTL64, fd, F_DUPFD, 10);
+            dupfd = syscall3(SYS_FCNTL, fd, F_DUPFD, 10);
             check(dupfd >= 10, "F_DUPFD honors minimum fd");
             if (dupfd >= 0) {
                 syscall1(SYS_CLOSE, dupfd);
@@ -394,17 +342,17 @@ void _start(void)
 
         /* O_CREAT must apply the requested mode (openat's mode is the 4th arg,
          * passed in ESI, so use the 5-arg form). */
-        fd = syscall5(SYS_OPENAT, AT_FDCWD, (int)(size_t)"/m", O_WRONLY | O_CREAT, 0644, 0);
+        fd = syscall5(SYS_OPENAT, AT_FDCWD, (long)"/m", O_WRONLY | O_CREAT, 0644, 0);
         check(fd >= 0, "openat /m O_CREAT");
         if (fd >= 0) {
-            check(syscall2(SYS_FSTAT64, fd, (int)(size_t)st) == 0, "fstat64 /m");
+            check(syscall2(SYS_FSTAT, fd, (long)st) == 0, "fstat64 /m");
             check((STAT64_MODE(st) & 0777) == 0644, "O_CREAT applied mode 0644");
             syscall1(SYS_CLOSE, fd);
         }
-        check(syscall1(SYS_UNLINK, (int)(size_t)"/m") == 0, "unlink /m");
+        check(syscall1(SYS_UNLINK, (long)"/m") == 0, "unlink /m");
     }
 
-    check(syscall1(SYS_UNLINK, (int)(size_t)"/g") == 0, "unlink /g");
+    check(syscall1(SYS_UNLINK, (long)"/g") == 0, "unlink /g");
 
     /* 12. chdir into a subdir, getcwd, relative-name resolution, and a
      *     dirfd-relative openat. */
@@ -413,23 +361,23 @@ void _start(void)
         char rb[8];
         int n, dfd;
 
-        check(syscall2(SYS_MKDIR, (int)(size_t)"/work", 0755) == 0, "mkdir /work");
-        check(syscall1(SYS_CHDIR, (int)(size_t)"/work") == 0, "chdir /work");
+        check(syscall2(SYS_MKDIR, (long)"/work", 0755) == 0, "mkdir /work");
+        check(syscall1(SYS_CHDIR, (long)"/work") == 0, "chdir /work");
 
-        n = syscall2(SYS_GETCWD, (int)(size_t)cwd, sizeof cwd);
+        n = syscall2(SYS_GETCWD, (long)cwd, sizeof cwd);
         check(n > 0 && cwd[0] == '/' && cwd[1] == 'w' && cwd[2] == 'o' && cwd[3] == 'r' &&
                   cwd[4] == 'k' && cwd[5] == '\0',
               "getcwd is /work");
 
         /* Create + write a file by a RELATIVE name; it must land in /work. */
-        fd = syscall2(SYS_CREAT, (int)(size_t)"rel.txt", 0644);
+        fd = syscall2(SYS_CREAT, (long)"rel.txt", 0644);
         check(fd >= 0, "creat relative rel.txt");
         if (fd >= 0) {
             check(sys_write(fd, "deep", 4) == 4, "write rel.txt");
             syscall1(SYS_CLOSE, fd);
         }
         /* The same file is visible at the absolute path /work/rel.txt. */
-        fd = syscall3(SYS_OPEN, (int)(size_t)"/work/rel.txt", O_RDONLY, 0);
+        fd = syscall3(SYS_OPEN, (long)"/work/rel.txt", O_RDONLY, 0);
         check(fd >= 0, "open /work/rel.txt (absolute)");
         if (fd >= 0) {
             int r = sys_read(fd, rb, sizeof rb);
@@ -439,10 +387,10 @@ void _start(void)
 
         /* dirfd-relative openat: open /work as a dir fd, then resolve "rel.txt"
          * against it. */
-        dfd = syscall3(SYS_OPENAT, AT_FDCWD, (int)(size_t)"/work", O_RDONLY);
+        dfd = syscall3(SYS_OPENAT, AT_FDCWD, (long)"/work", O_RDONLY);
         check(dfd >= 0, "open /work as a dir fd");
         if (dfd >= 0) {
-            fd = syscall3(SYS_OPENAT, dfd, (int)(size_t)"rel.txt", O_RDONLY);
+            fd = syscall3(SYS_OPENAT, dfd, (long)"rel.txt", O_RDONLY);
             check(fd >= 0, "openat(dirfd, rel.txt)");
             if (fd >= 0) {
                 int r = sys_read(fd, rb, sizeof rb);
@@ -454,25 +402,24 @@ void _start(void)
 
         /* A path that descends through a regular file is ENOTDIR, not
          * ENOENT. */
-        check(syscall1(SYS_CHDIR, (int)(size_t)"rel.txt/x") == -ENOTDIR,
+        check(syscall1(SYS_CHDIR, (long)"rel.txt/x") == -ENOTDIR,
               "chdir through a file is ENOTDIR");
 
         /* "/work/.." resolves back to the root, which is a directory. */
         {
             unsigned char rst[STAT64_SIZE] = {0}; /* fstatat64 overwrites */
-            check(syscall5(SYS_FSTATAT64, AT_FDCWD, (int)(size_t)"/work/..", (int)(size_t)rst, 0,
-                           0) == 0,
+            check(syscall5(SYS_FSTATAT, AT_FDCWD, (long)"/work/..", (long)rst, 0, 0) == 0,
                   "fstatat64 /work/..");
             check((STAT64_MODE(rst) & S_IFMT) == S_IFDIR, "/work/.. is the root directory");
         }
 
         /* chdir back to the root via ".."; getcwd is "/". */
-        check(syscall1(SYS_CHDIR, (int)(size_t)"..") == 0, "chdir ..");
-        n = syscall2(SYS_GETCWD, (int)(size_t)cwd, sizeof cwd);
+        check(syscall1(SYS_CHDIR, (long)"..") == 0, "chdir ..");
+        n = syscall2(SYS_GETCWD, (long)cwd, sizeof cwd);
         check(n > 0 && cwd[0] == '/' && cwd[1] == '\0', "getcwd is / after chdir ..");
 
-        check(syscall1(SYS_UNLINK, (int)(size_t)"/work/rel.txt") == 0, "unlink /work/rel.txt");
-        check(syscall1(SYS_RMDIR, (int)(size_t)"/work") == 0, "rmdir /work");
+        check(syscall1(SYS_UNLINK, (long)"/work/rel.txt") == 0, "unlink /work/rel.txt");
+        check(syscall1(SYS_RMDIR, (long)"/work") == 0, "rmdir /work");
     }
 
     if (fails == 0) {

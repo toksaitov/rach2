@@ -2,21 +2,15 @@
  * Exercises the socket reference count: sockets are first-class file
  * descriptors, so close releases them, dup2 and fork share them, and process
  * exit releases any still open. A leak or double-free shows up as the socket
- * pool exhausting or the kernel faulting. Freestanding; direct int 0x80.
+ * pool exhausting or the kernel faulting. Freestanding; direct system calls
+ * (probe.h).
  */
 
-typedef unsigned int size_t;
+#include "probe.h"
+
 typedef unsigned int uint32_t;
 
 #define STDOUT_FILENO 1
-
-#define SYS_EXIT       1
-#define SYS_FORK       2
-#define SYS_WRITE      4
-#define SYS_CLOSE      6
-#define SYS_WAITPID    7
-#define SYS_DUP2       63
-#define SYS_SOCKETCALL 102
 
 #define SC_SOCKET  1
 #define AF_INET    2
@@ -24,59 +18,38 @@ typedef unsigned int uint32_t;
 
 static int sys_write(int fd, const void *buf, size_t count)
 {
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_WRITE), "b"(fd), "c"(buf), "d"(count)
-                         : "memory");
-    return r;
+    return syscall3(SYS_WRITE, (long)fd, (long)buf, (long)count);
 }
 
 static void sys_exit(int status)
 {
-    __asm__ __volatile__("int $0x80" : : "a"(SYS_EXIT), "b"(status));
+    syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
 static int sys_close(int fd)
 {
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(SYS_CLOSE), "b"(fd));
-    return r;
+    return syscall1(SYS_CLOSE, (long)fd);
 }
 
 static int sys_fork(void)
 {
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(SYS_FORK) : "memory");
-    return r;
+    return syscall0(SYS_FORK);
 }
 
 static int sys_waitpid(int pid, int *status, int options)
 {
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_WAITPID), "b"(pid), "c"(status), "d"(options)
-                         : "memory");
-    return r;
+    return syscall3(SYS_WAITPID, (long)pid, (long)status, (long)options);
 }
 
 static int sys_dup2(int oldfd, int newfd)
 {
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(SYS_DUP2), "b"(oldfd), "c"(newfd) : "memory");
-    return r;
+    return syscall2(SYS_DUP2, (long)oldfd, (long)newfd);
 }
 
 static int socketcall(int call, uint32_t *args)
 {
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_SOCKETCALL), "b"(call), "c"(args)
-                         : "memory");
-    return r;
+    return syscall2(SYS_SOCKETCALL, (long)call, (long)args);
 }
 
 static size_t strlen(const char *s)
@@ -126,7 +99,7 @@ static int make_socket(void)
     return socketcall(SC_SOCKET, args);
 }
 
-void _start(void)
+PROBE_START void _start(void)
 {
     int passed = 0, failed = 0;
     int i, fd, fd2, pid, status;

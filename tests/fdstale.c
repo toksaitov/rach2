@@ -113,33 +113,12 @@
  *
  * Prints "FDSTALE OK" and exits 0 only when every case passed; any failure
  * names the step and the answer it got, and exits 1. Freestanding; direct
- * int 0x80.
+ * system calls (probe.h).
  */
 
-typedef unsigned int u32;
+#include "probe.h"
 
-#define SYS_EXIT       1
-#define SYS_FORK       2
-#define SYS_READ       3
-#define SYS_WRITE      4
-#define SYS_OPEN       5
-#define SYS_CLOSE      6
-#define SYS_WAITPID    7
-#define SYS_CREAT      8
-#define SYS_UNLINK     10
-#define SYS_CHDIR      12
-#define SYS_LSEEK      19
-#define SYS_RENAME     38
-#define SYS_MKDIR      39
-#define SYS_RMDIR      40
-#define SYS_DUP        41
-#define SYS_PIPE       42
-#define SYS_FCHMOD     94
-#define SYS_FTRUNCATE  93
-#define SYS_LLSEEK     140
-#define SYS_FSTAT64    197
-#define SYS_GETDENTS64 220
-#define SYS_OPENAT     295
+typedef unsigned int u32;
 
 #define STDOUT 1
 
@@ -213,30 +192,6 @@ typedef unsigned int u32;
 #define LEAK_CHUNK  4096
 #define LEAK_CHUNKS 16
 
-static int syscall1(int num, int a)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "a"(num), "b"(a) : "memory");
-    return r;
-}
-
-static int syscall3(int num, int a, int b, int c)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "a"(num), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
-}
-
-static int syscall4(int num, int a, int b, int c, int d)
-{
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "a"(num), "b"(a), "c"(b), "d"(c), "S"(d)
-                         : "memory");
-    return r;
-}
-
 static u32 slen(const char *s)
 {
     u32 n = 0;
@@ -249,7 +204,7 @@ static u32 slen(const char *s)
 
 static void puts_(const char *s)
 {
-    syscall3(SYS_WRITE, STDOUT, (int)s, (int)slen(s));
+    syscall3(SYS_WRITE, STDOUT, (long)s, (int)slen(s));
 }
 
 /* Print a signed decimal, so a failing line has the answer it got. */
@@ -332,7 +287,7 @@ static int streq(const char *a, const char *b)
  * place is a different file or a mixture of two. */
 static void want_bytes(const char *step, int fd, const char *want, int len)
 {
-    int n = syscall3(SYS_READ, fd, (int)rdbuf, (int)sizeof(rdbuf));
+    int n = syscall3(SYS_READ, fd, (long)rdbuf, (int)sizeof(rdbuf));
     int i;
 
     if (n != len) {
@@ -348,7 +303,7 @@ static void want_bytes(const char *step, int fd, const char *want, int len)
             syscall1(SYS_EXIT, 1);
         }
     }
-    n = syscall3(SYS_READ, fd, (int)rdbuf, (int)sizeof(rdbuf));
+    n = syscall3(SYS_READ, fd, (long)rdbuf, (int)sizeof(rdbuf));
     if (n != 0) {
         fail(step, n);
     }
@@ -358,7 +313,7 @@ static void want_bytes(const char *step, int fd, const char *want, int len)
  * held descriptor's view is judged against. */
 static void want_named_bytes(const char *step, const char *path, const char *want, int len)
 {
-    int fd = syscall3(SYS_OPEN, (int)path, O_RDONLY, 0);
+    int fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
 
     want_ok(step, fd);
     want_bytes(step, fd, want, len);
@@ -370,7 +325,7 @@ static void want_fd_size(const char *step, int fd, int size)
 {
     int got;
 
-    want_eq(step, syscall3(SYS_FSTAT64, fd, (int)statbuf, 0), 0);
+    want_eq(step, syscall3(SYS_FSTAT, fd, (long)statbuf, 0), 0);
     got = *(int *)(statbuf + ST_SIZE);
     if (got != size) {
         fail(step, got);
@@ -380,11 +335,11 @@ static void want_fd_size(const char *step, int fd, int size)
 /* Create `path` holding `text`, whatever was there before. */
 static void mint(const char *path, const char *text)
 {
-    int fd = syscall3(SYS_CREAT, (int)path, 0644, 0);
+    int fd = syscall3(SYS_CREAT, (long)path, 0644, 0);
     int len = (int)slen(text);
 
     want_ok("mint a fixture", fd);
-    want_eq("fill a fixture", syscall3(SYS_WRITE, fd, (int)text, len), len);
+    want_eq("fill a fixture", syscall3(SYS_WRITE, fd, (long)text, len), len);
     want_eq("close a fixture", syscall3(SYS_CLOSE, fd, 0, 0), 0);
 }
 
@@ -395,13 +350,13 @@ static void mint(const char *path, const char *text)
 static int dir_entries(const char *step, const char *dirpath, const char *forbidden)
 {
     static char dbuf[1024];
-    int fd = syscall3(SYS_OPEN, (int)dirpath, O_RDONLY | O_DIRECTORY, 0);
+    int fd = syscall3(SYS_OPEN, (long)dirpath, O_RDONLY | O_DIRECTORY, 0);
     int seen = 0;
     int pos = 0;
     int n;
 
     want_ok(step, fd);
-    n = syscall3(SYS_GETDENTS64, fd, (int)dbuf, (int)sizeof(dbuf));
+    n = syscall3(SYS_GETDENTS64, fd, (long)dbuf, (int)sizeof(dbuf));
     if (n < 0) {
         fail(step, n);
     }
@@ -435,14 +390,14 @@ static int down[2];
 
 static void notify(const char *step, int fd)
 {
-    want_eq(step, syscall3(SYS_WRITE, fd, (int)"x", 1), 1);
+    want_eq(step, syscall3(SYS_WRITE, fd, (long)"x", 1), 1);
 }
 
 static void wait_for(const char *step, int fd)
 {
     char c;
 
-    want_eq(step, syscall3(SYS_READ, fd, (int)&c, 1), 1);
+    want_eq(step, syscall3(SYS_READ, fd, (long)&c, 1), 1);
 }
 
 static int spawn(void (*body)(void), const char *what)
@@ -467,7 +422,7 @@ static int spawn(void (*body)(void), const char *what)
 static void reap(int pid, const char *what)
 {
     int status = 0;
-    int reaped = syscall3(SYS_WAITPID, pid, (int)&status, 0);
+    int reaped = syscall3(SYS_WAITPID, pid, (long)&status, 0);
 
     if (reaped != pid) {
         fail(what, reaped);
@@ -492,11 +447,11 @@ static void control_case(void)
     int fd;
 
     mint(CTL, CTL_LINE);
-    fd = syscall3(SYS_OPEN, (int)CTL, O_RDONLY, 0);
+    fd = syscall3(SYS_OPEN, (long)CTL, O_RDONLY, 0);
     want_ok("the control open", fd);
     want_bytes("the control read", fd, CTL_LINE, (int)slen(CTL_LINE));
     want_eq("the control close", syscall3(SYS_CLOSE, fd, 0, 0), 0);
-    want_eq("remove the control", syscall3(SYS_UNLINK, (int)CTL, 0, 0), 0);
+    want_eq("remove the control", syscall3(SYS_UNLINK, (long)CTL, 0, 0), 0);
 }
 
 /* The case whose assertion inverted: the four calls that used to answer -EBADF
@@ -507,9 +462,9 @@ static void unlink_case(void)
     int fd;
 
     mint(HELD, HELD_LINE);
-    fd = syscall3(SYS_OPEN, (int)HELD, O_RDONLY, 0);
+    fd = syscall3(SYS_OPEN, (long)HELD, O_RDONLY, 0);
     want_ok("open the file to be unlinked", fd);
-    want_eq("unlink under the descriptor", syscall3(SYS_UNLINK, (int)HELD, 0, 0), 0);
+    want_eq("unlink under the descriptor", syscall3(SYS_UNLINK, (long)HELD, 0, 0), 0);
 
     want_bytes("read through the unlinked descriptor", fd, HELD_LINE, len);
     want_eq("lseek SEEK_END through the unlinked descriptor", syscall3(SYS_LSEEK, fd, 0, SEEK_END),
@@ -520,10 +475,7 @@ static void unlink_case(void)
         long long res = -1;
         int r;
 
-        __asm__ __volatile__("int $0x80"
-                             : "=a"(r)
-                             : "a"(SYS_LLSEEK), "b"(fd), "c"(0), "d"(0), "S"(&res), "D"(SEEK_END)
-                             : "memory");
+        r = syscall5(SYS_LLSEEK, (long)fd, (long)0, (long)0, (long)(&res), (long)SEEK_END);
         want_eq("_llseek SEEK_END through the unlinked descriptor", r, 0);
         want_eq("_llseek's result through the unlinked descriptor", (int)res, len);
     }
@@ -531,10 +483,10 @@ static void unlink_case(void)
     want_eq("fchmod through the unlinked descriptor", syscall3(SYS_FCHMOD, fd, 0600, 0), 0);
 
     /* The lifetime is the descriptor's, not the name's: the name is gone. */
-    want_eq("open the unlinked name", syscall3(SYS_OPEN, (int)HELD, O_RDONLY, 0), -ENOENT);
+    want_eq("open the unlinked name", syscall3(SYS_OPEN, (long)HELD, O_RDONLY, 0), -ENOENT);
     want_eq("close the unlinked descriptor", syscall3(SYS_CLOSE, fd, 0, 0), 0);
     want_eq("open the unlinked name after the last close",
-            syscall3(SYS_OPEN, (int)HELD, O_RDONLY, 0), -ENOENT);
+            syscall3(SYS_OPEN, (long)HELD, O_RDONLY, 0), -ENOENT);
 }
 
 /**
@@ -548,16 +500,16 @@ static void orphan_truncate_case(void)
 {
     int fd, held, duplicate, wall, i;
 
-    fd = syscall3(SYS_OPEN, (int)HELD, O_CREAT | O_RDWR, 0600);
+    fd = syscall3(SYS_OPEN, (long)HELD, O_CREAT | O_RDWR, 0600);
     want_ok("create orphan truncate file", fd);
-    want_eq("seed orphan truncate file", syscall3(SYS_WRITE, fd, (int)"abc", 3), 3);
-    wall = syscall3(SYS_CREAT, (int)WALL, 0600, 0);
+    want_eq("seed orphan truncate file", syscall3(SYS_WRITE, fd, (long)"abc", 3), 3);
+    wall = syscall3(SYS_CREAT, (long)WALL, 0600, 0);
     want_ok("allocate orphan truncate neighbour", wall);
-    held = syscall3(SYS_OPEN, (int)HELD, O_RDWR, 0);
+    held = syscall3(SYS_OPEN, (long)HELD, O_RDWR, 0);
     want_ok("independent orphan truncate open", held);
     duplicate = syscall1(SYS_DUP, fd);
     want_ok("duplicate orphan truncate open", duplicate);
-    want_eq("unlink before truncate", syscall1(SYS_UNLINK, (int)HELD), 0);
+    want_eq("unlink before truncate", syscall1(SYS_UNLINK, (long)HELD), 0);
     want_eq("shrink orphan", syscall3(SYS_FTRUNCATE, fd, 1, 0), 0);
     want_fd_size("independent open sees orphan shrink", held, 1);
     want_eq("shrink preserves shared offset", syscall3(SYS_LSEEK, duplicate, 0, 1), 3);
@@ -567,18 +519,18 @@ static void orphan_truncate_case(void)
     want_fd_size("duplicate sees relocated orphan", duplicate, LEAK_CHUNK);
     want_eq("growth preserves shared offset", syscall3(SYS_LSEEK, duplicate, 0, 1), 3);
     want_eq("rewind relocated orphan", syscall3(SYS_LSEEK, held, 0, 0), 0);
-    want_eq("read relocated orphan", syscall3(SYS_READ, held, (int)rdbuf, LEAK_CHUNK), LEAK_CHUNK);
+    want_eq("read relocated orphan", syscall3(SYS_READ, held, (long)rdbuf, LEAK_CHUNK), LEAK_CHUNK);
     want_eq("relocated orphan retains first byte", rdbuf[0], 'a');
     for (i = 1; i < LEAK_CHUNK; i++) {
         want_eq("orphan growth is zero filled", rdbuf[i], 0);
     }
-    want_eq("truncate keeps orphan nameless", syscall3(SYS_OPEN, (int)HELD, O_RDONLY, 0), -ENOENT);
+    want_eq("truncate keeps orphan nameless", syscall3(SYS_OPEN, (long)HELD, O_RDONLY, 0), -ENOENT);
     want_eq("close orphan writer", syscall1(SYS_CLOSE, fd), 0);
     want_eq("close orphan duplicate", syscall1(SYS_CLOSE, duplicate), 0);
     want_fd_size("last open retains relocated orphan", held, LEAK_CHUNK);
     want_eq("close last orphan holder", syscall1(SYS_CLOSE, held), 0);
     want_eq("close orphan neighbour", syscall1(SYS_CLOSE, wall), 0);
-    want_eq("remove orphan neighbour", syscall1(SYS_UNLINK, (int)WALL), 0);
+    want_eq("remove orphan neighbour", syscall1(SYS_UNLINK, (long)WALL), 0);
 }
 
 /* The orphan is unreachable by name; it must be invisible to the scans that
@@ -587,17 +539,17 @@ static void orphan_scan_case(void)
 {
     int fd;
 
-    want_eq("mkdir the orphan's directory", syscall3(SYS_MKDIR, (int)ODIR, 0755, 0), 0);
+    want_eq("mkdir the orphan's directory", syscall3(SYS_MKDIR, (long)ODIR, 0755, 0), 0);
     mint(KID, KID_LINE);
     want_eq("count the directory's children", dir_entries("list the directory", ODIR, ""), 1);
 
-    fd = syscall3(SYS_OPEN, (int)KID, O_RDONLY, 0);
+    fd = syscall3(SYS_OPEN, (long)KID, O_RDONLY, 0);
     want_ok("open the child", fd);
-    want_eq("unlink the child under the descriptor", syscall3(SYS_UNLINK, (int)KID, 0, 0), 0);
+    want_eq("unlink the child under the descriptor", syscall3(SYS_UNLINK, (long)KID, 0, 0), 0);
 
     want_eq("count the children past the orphan", dir_entries("list past the orphan", ODIR, "kid"),
             0);
-    want_eq("rmdir over the orphan", syscall3(SYS_RMDIR, (int)ODIR, 0, 0), 0);
+    want_eq("rmdir over the orphan", syscall3(SYS_RMDIR, (long)ODIR, 0, 0), 0);
 
     want_bytes("read the orphan after its directory went", fd, KID_LINE, (int)slen(KID_LINE));
     want_eq("close the orphan", syscall3(SYS_CLOSE, fd, 0, 0), 0);
@@ -611,13 +563,13 @@ static void orphan_scan_case(void)
 static int root_is_krffs(void)
 {
     static char mounts[1024];
-    int fd = syscall3(SYS_OPEN, (int)"/proc/mounts", O_RDONLY, 0);
+    int fd = syscall3(SYS_OPEN, (long)"/proc/mounts", O_RDONLY, 0);
     int n, i;
 
     if (fd < 0) {
         return 1;
     }
-    n = syscall3(SYS_READ, fd, (int)mounts, (int)sizeof(mounts) - 1);
+    n = syscall3(SYS_READ, fd, (long)mounts, (int)sizeof(mounts) - 1);
     syscall3(SYS_CLOSE, fd, 0, 0);
     if (n <= 0) {
         return 1;
@@ -654,35 +606,35 @@ static void failed_rename_case(void)
     int again;
 
     mint(KEEP, KEEP_LINE);
-    want_eq("mkdir the refused source", syscall3(SYS_MKDIR, (int)RDIR, 0755, 0), 0);
-    fd = syscall3(SYS_OPEN, (int)KEEP, O_RDONLY, 0);
+    want_eq("mkdir the refused source", syscall3(SYS_MKDIR, (long)RDIR, 0755, 0), 0);
+    fd = syscall3(SYS_OPEN, (long)KEEP, O_RDONLY, 0);
     want_ok("open the refused rename's destination", fd);
 
-    want_eq("rename a directory onto a held name", syscall3(SYS_RENAME, (int)RDIR, (int)KEEP, 0),
+    want_eq("rename a directory onto a held name", syscall3(SYS_RENAME, (long)RDIR, (long)KEEP, 0),
             root_moves_directories() ? -ENOTDIR : -EPERM);
     want_bytes("read the spared file through the held descriptor", fd, KEEP_LINE, len);
     want_named_bytes("read the spared file by name", KEEP, KEEP_LINE, len);
 
-    dirfd = syscall3(SYS_OPEN, (int)RDIR, O_RDONLY | O_DIRECTORY, 0);
+    dirfd = syscall3(SYS_OPEN, (long)RDIR, O_RDONLY | O_DIRECTORY, 0);
     want_ok("open the directory destination", dirfd);
-    want_eq("rename a file onto a held directory", syscall3(SYS_RENAME, (int)KEEP, (int)RDIR, 0),
+    want_eq("rename a file onto a held directory", syscall3(SYS_RENAME, (long)KEEP, (long)RDIR, 0),
             -EISDIR);
-    again = syscall3(SYS_OPEN, (int)RDIR, O_RDONLY | O_DIRECTORY, 0);
+    again = syscall3(SYS_OPEN, (long)RDIR, O_RDONLY | O_DIRECTORY, 0);
     want_ok("open the spared directory by name", again);
     want_eq("close the re-opened directory", syscall3(SYS_CLOSE, again, 0, 0), 0);
     want_eq("close the directory destination", syscall3(SYS_CLOSE, dirfd, 0, 0), 0);
 
     want_eq("close the spared file", syscall3(SYS_CLOSE, fd, 0, 0), 0);
-    want_eq("remove the refused source", syscall3(SYS_RMDIR, (int)RDIR, 0, 0), 0);
-    want_eq("remove the spared file", syscall3(SYS_UNLINK, (int)KEEP, 0, 0), 0);
+    want_eq("remove the refused source", syscall3(SYS_RMDIR, (long)RDIR, 0, 0), 0);
+    want_eq("remove the spared file", syscall3(SYS_UNLINK, (long)KEEP, 0, 0), 0);
 }
 
 /* The child of the cross-process case: it opens both names and then blocks,
  * so the parent's replacement lands squarely between its open and its read. */
 static void reader_child(void)
 {
-    int fd_old = syscall3(SYS_OPEN, (int)OLD, O_RDONLY, 0);
-    int fd_gone = syscall3(SYS_OPEN, (int)GONE, O_RDONLY, 0);
+    int fd_old = syscall3(SYS_OPEN, (long)OLD, O_RDONLY, 0);
+    int fd_gone = syscall3(SYS_OPEN, (long)GONE, O_RDONLY, 0);
 
     /* Before the opens are judged: a failed open must report itself through
      * the exit status, not hang the parent on a byte that never comes. */
@@ -714,8 +666,8 @@ static void cross_process_case(void)
 
     mint(NEW, NEW_LINE);
     want_eq("rename the replacement onto the held name",
-            syscall3(SYS_RENAME, (int)NEW, (int)OLD, 0), 0);
-    want_eq("unlink the re-created name", syscall3(SYS_UNLINK, (int)GONE, 0, 0), 0);
+            syscall3(SYS_RENAME, (long)NEW, (long)OLD, 0), 0);
+    want_eq("unlink the re-created name", syscall3(SYS_UNLINK, (long)GONE, 0, 0), 0);
     mint(GONE, FRESH_LINE);
 
     notify("the parent releases the child", down[1]);
@@ -726,15 +678,15 @@ static void cross_process_case(void)
                      (int)slen(NEW_LINE));
     want_named_bytes("the re-created name has the new file", GONE, FRESH_LINE,
                      (int)slen(FRESH_LINE));
-    want_eq("remove the renamed-onto name", syscall3(SYS_UNLINK, (int)OLD, 0, 0), 0);
-    want_eq("remove the re-created name", syscall3(SYS_UNLINK, (int)GONE, 0, 0), 0);
+    want_eq("remove the renamed-onto name", syscall3(SYS_UNLINK, (long)OLD, 0, 0), 0);
+    want_eq("remove the re-created name", syscall3(SYS_UNLINK, (long)GONE, 0, 0), 0);
 }
 
 /* The child of the release case: it has the only descriptor on an orphan and
  * exits without closing it. */
 static void holder_child(void)
 {
-    int fd = syscall3(SYS_OPEN, (int)EXITF, O_RDONLY, 0);
+    int fd = syscall3(SYS_OPEN, (long)EXITF, O_RDONLY, 0);
 
     notify("the holder signals its open", up[1]);
     want_ok("the holder opens the file", fd);
@@ -750,10 +702,10 @@ static void exit_release_case(void)
     mint(EXITF, EXIT_LINE);
     pid = spawn(holder_child, "fork the holder");
     wait_for("the parent waits for the holder's open", up[0]);
-    want_eq("unlink under the holder", syscall3(SYS_UNLINK, (int)EXITF, 0, 0), 0);
+    want_eq("unlink under the holder", syscall3(SYS_UNLINK, (long)EXITF, 0, 0), 0);
     notify("the parent releases the holder", down[1]);
     reap(pid, "the holder child");
-    want_eq("open the name the holder let go", syscall3(SYS_OPEN, (int)EXITF, O_RDONLY, 0),
+    want_eq("open the name the holder let go", syscall3(SYS_OPEN, (long)EXITF, O_RDONLY, 0),
             -ENOENT);
 }
 
@@ -761,7 +713,7 @@ static void exit_release_case(void)
  * write that moves it and reads it after. */
 static void moved_child(void)
 {
-    int fd = syscall3(SYS_OPEN, (int)XGROW, O_RDONLY, 0);
+    int fd = syscall3(SYS_OPEN, (long)XGROW, O_RDONLY, 0);
 
     notify("the moved-file child signals its open", up[1]);
     want_ok("the moved-file child opens the file", fd);
@@ -784,26 +736,26 @@ static void cross_reloc_case(void)
 {
     int pid, fd, writer;
 
-    fd = syscall3(SYS_CREAT, (int)XGROW, 0644, 0);
+    fd = syscall3(SYS_CREAT, (long)XGROW, 0644, 0);
     want_ok("mint the file another process moves", fd);
     want_eq("close the file another process moves", syscall3(SYS_CLOSE, fd, 0, 0), 0);
-    fd = syscall3(SYS_CREAT, (int)XWALL, 0644, 0);
+    fd = syscall3(SYS_CREAT, (long)XWALL, 0644, 0);
     want_ok("mint the wall behind the shared file", fd);
     want_eq("close the wall behind the shared file", syscall3(SYS_CLOSE, fd, 0, 0), 0);
 
     pid = spawn(moved_child, "fork the moved-file reader");
     wait_for("the parent waits for the moved-file child's open", up[0]);
 
-    writer = syscall3(SYS_OPEN, (int)XGROW, O_RDWR, 0);
+    writer = syscall3(SYS_OPEN, (long)XGROW, O_RDWR, 0);
     want_ok("open the writer that moves the file", writer);
     want_eq("the write that must move the file under another process",
-            syscall3(SYS_WRITE, writer, (int)blob, GROW_BYTES), GROW_BYTES);
+            syscall3(SYS_WRITE, writer, (long)blob, GROW_BYTES), GROW_BYTES);
     want_eq("close the writer that moved the file", syscall3(SYS_CLOSE, writer, 0, 0), 0);
 
     notify("the parent releases the moved-file child", down[1]);
     reap(pid, "the moved-file child");
-    want_eq("remove the shared moved file", syscall3(SYS_UNLINK, (int)XGROW, 0, 0), 0);
-    want_eq("remove the wall behind it", syscall3(SYS_UNLINK, (int)XWALL, 0, 0), 0);
+    want_eq("remove the shared moved file", syscall3(SYS_UNLINK, (long)XGROW, 0, 0), 0);
+    want_eq("remove the wall behind it", syscall3(SYS_UNLINK, (long)XWALL, 0, 0), 0);
 }
 
 /* The release counts descriptors, not files: a dup'd pair has one orphan and
@@ -814,11 +766,11 @@ static void dup_case(void)
     int fd, dupfd;
 
     mint(DUPF, DUP_LINE);
-    fd = syscall3(SYS_OPEN, (int)DUPF, O_RDONLY, 0);
+    fd = syscall3(SYS_OPEN, (long)DUPF, O_RDONLY, 0);
     want_ok("open the file to be dup'd", fd);
     dupfd = syscall1(SYS_DUP, fd);
     want_ok("dup the descriptor", dupfd);
-    want_eq("unlink under the dup'd pair", syscall3(SYS_UNLINK, (int)DUPF, 0, 0), 0);
+    want_eq("unlink under the dup'd pair", syscall3(SYS_UNLINK, (long)DUPF, 0, 0), 0);
     want_eq("close one of the pair", syscall3(SYS_CLOSE, fd, 0, 0), 0);
     want_bytes("read through the surviving descriptor", dupfd, DUP_LINE, len);
     want_eq("close the survivor", syscall3(SYS_CLOSE, dupfd, 0, 0), 0);
@@ -830,20 +782,20 @@ static void reloc_case(void)
 {
     int fd, reader, writer;
 
-    fd = syscall3(SYS_CREAT, (int)GROW, 0644, 0);
+    fd = syscall3(SYS_CREAT, (long)GROW, 0644, 0);
     want_ok("mint the file to be moved", fd);
     want_eq("close the file to be moved", syscall3(SYS_CLOSE, fd, 0, 0), 0);
-    fd = syscall3(SYS_CREAT, (int)WALL, 0644, 0);
+    fd = syscall3(SYS_CREAT, (long)WALL, 0644, 0);
     want_ok("mint the wall behind it", fd);
     want_eq("close the wall", syscall3(SYS_CLOSE, fd, 0, 0), 0);
 
-    reader = syscall3(SYS_OPEN, (int)GROW, O_RDONLY, 0);
+    reader = syscall3(SYS_OPEN, (long)GROW, O_RDONLY, 0);
     want_ok("open the reader before the move", reader);
-    writer = syscall3(SYS_OPEN, (int)GROW, O_RDWR, 0);
+    writer = syscall3(SYS_OPEN, (long)GROW, O_RDWR, 0);
     want_ok("open the writer", writer);
 
-    want_eq("the write that must move the file", syscall3(SYS_WRITE, writer, (int)blob, GROW_BYTES),
-            GROW_BYTES);
+    want_eq("the write that must move the file",
+            syscall3(SYS_WRITE, writer, (long)blob, GROW_BYTES), GROW_BYTES);
 
     want_eq("lseek SEEK_END through the moved-from descriptor",
             syscall3(SYS_LSEEK, reader, 0, SEEK_END), GROW_BYTES);
@@ -853,8 +805,8 @@ static void reloc_case(void)
 
     want_eq("close the reader", syscall3(SYS_CLOSE, reader, 0, 0), 0);
     want_eq("close the writer", syscall3(SYS_CLOSE, writer, 0, 0), 0);
-    want_eq("remove the moved file", syscall3(SYS_UNLINK, (int)GROW, 0, 0), 0);
-    want_eq("remove the wall", syscall3(SYS_UNLINK, (int)WALL, 0, 0), 0);
+    want_eq("remove the moved file", syscall3(SYS_UNLINK, (long)GROW, 0, 0), 0);
+    want_eq("remove the wall", syscall3(SYS_UNLINK, (long)WALL, 0, 0), 0);
 }
 
 /* Fill `fd` to 64 KB, the size at which 256 rounds outgrow the image. */
@@ -863,7 +815,7 @@ static void fill_round(const char *step, int fd, int round)
     int i;
 
     for (i = 0; i < LEAK_CHUNKS; i++) {
-        int n = syscall3(SYS_WRITE, fd, (int)blob, LEAK_CHUNK);
+        int n = syscall3(SYS_WRITE, fd, (long)blob, LEAK_CHUNK);
 
         if (n != LEAK_CHUNK) {
             fail_round(step, round, n);
@@ -878,14 +830,14 @@ static void leak_by_close_case(void)
     int round;
 
     for (round = 0; round < LEAK_ROUNDS; round++) {
-        int fd = syscall3(SYS_OPEN, (int)LEAK, O_RDWR | O_CREAT, 0644);
+        int fd = syscall3(SYS_OPEN, (long)LEAK, O_RDWR | O_CREAT, 0644);
         int rc;
 
         if (fd < 0) {
             fail_round("open in the unlink leak loop", round, fd);
         }
         fill_round("fill in the unlink leak loop", fd, round);
-        rc = syscall3(SYS_UNLINK, (int)LEAK, 0, 0);
+        rc = syscall3(SYS_UNLINK, (long)LEAK, 0, 0);
         if (rc != 0) {
             fail_round("unlink in the unlink leak loop", round, rc);
         }
@@ -905,7 +857,7 @@ static void leak_by_unlink_case(void)
     int round;
 
     for (round = 0; round < LEAK_ROUNDS; round++) {
-        int fd = syscall3(SYS_CREAT, (int)SOLO, 0644, 0);
+        int fd = syscall3(SYS_CREAT, (long)SOLO, 0644, 0);
         int rc;
 
         if (fd < 0) {
@@ -916,7 +868,7 @@ static void leak_by_unlink_case(void)
         if (rc != 0) {
             fail_round("close in the unheld unlink loop", round, rc);
         }
-        rc = syscall3(SYS_UNLINK, (int)SOLO, 0, 0);
+        rc = syscall3(SYS_UNLINK, (long)SOLO, 0, 0);
         if (rc != 0) {
             fail_round("unlink in the unheld unlink loop", round, rc);
         }
@@ -931,7 +883,7 @@ static void leak_by_rename_case(void)
     int round;
 
     for (round = 0; round < LEAK_ROUNDS; round++) {
-        int fd = syscall3(SYS_CREAT, (int)STAGE, 0644, 0);
+        int fd = syscall3(SYS_CREAT, (long)STAGE, 0644, 0);
         int rc;
 
         if (fd < 0) {
@@ -942,19 +894,19 @@ static void leak_by_rename_case(void)
         if (rc != 0) {
             fail_round("close in the rename leak loop", round, rc);
         }
-        rc = syscall3(SYS_RENAME, (int)STAGE, (int)REPL, 0);
+        rc = syscall3(SYS_RENAME, (long)STAGE, (long)REPL, 0);
         if (rc != 0) {
             fail_round("rename in the rename leak loop", round, rc);
         }
     }
-    want_eq("remove the replaced name", syscall3(SYS_UNLINK, (int)REPL, 0, 0), 0);
+    want_eq("remove the replaced name", syscall3(SYS_UNLINK, (long)REPL, 0, 0), 0);
 }
 
 /* The child of the directory case: its working directory is the directory
  * the parent tries to remove. */
 static void cwd_child(void)
 {
-    int rc = syscall1(SYS_CHDIR, (int)DDIR);
+    int rc = syscall1(SYS_CHDIR, (long)DDIR);
 
     notify("the working-directory child signals its chdir", up[1]);
     want_eq("the child enters the directory", rc, 0);
@@ -976,39 +928,39 @@ static void directory_case(void)
     int dot;
     int pid;
 
-    want_eq("mkdir the directory to be removed", syscall3(SYS_MKDIR, (int)DDIR, 0755, 0), 0);
-    fd = syscall3(SYS_OPEN, (int)DDIR, O_RDONLY | O_DIRECTORY, 0);
+    want_eq("mkdir the directory to be removed", syscall3(SYS_MKDIR, (long)DDIR, 0755, 0), 0);
+    fd = syscall3(SYS_OPEN, (long)DDIR, O_RDONLY | O_DIRECTORY, 0);
     want_ok("open the directory", fd);
-    want_eq("rmdir refused under the directory descriptor", syscall3(SYS_RMDIR, (int)DDIR, 0, 0),
+    want_eq("rmdir refused under the directory descriptor", syscall3(SYS_RMDIR, (long)DDIR, 0, 0),
             -EBUSY);
     want_ok("getdents64 through the held directory",
-            syscall3(SYS_GETDENTS64, fd, (int)dbuf, (int)sizeof(dbuf)));
-    dot = syscall4(SYS_OPENAT, fd, (int)".", O_RDONLY | O_DIRECTORY, 0);
+            syscall3(SYS_GETDENTS64, fd, (long)dbuf, (int)sizeof(dbuf)));
+    dot = syscall4(SYS_OPENAT, fd, (long)".", O_RDONLY | O_DIRECTORY, 0);
     want_ok("a relative path through the held directory", dot);
     want_eq("close what the relative path opened", syscall3(SYS_CLOSE, dot, 0, 0), 0);
     want_eq("close the held directory", syscall3(SYS_CLOSE, fd, 0, 0), 0);
 
-    fd = syscall3(SYS_OPEN, (int)DDIR, O_PATH, 0);
+    fd = syscall3(SYS_OPEN, (long)DDIR, O_PATH, 0);
     want_ok("open the directory with O_PATH", fd);
-    want_eq("rmdir refused under the O_PATH descriptor", syscall3(SYS_RMDIR, (int)DDIR, 0, 0),
+    want_eq("rmdir refused under the O_PATH descriptor", syscall3(SYS_RMDIR, (long)DDIR, 0, 0),
             -EBUSY);
     want_eq("close the O_PATH descriptor", syscall3(SYS_CLOSE, fd, 0, 0), 0);
 
     pid = spawn(cwd_child, "fork the working-directory child");
     wait_for("the parent waits for the child's chdir", up[0]);
-    want_eq("rmdir refused under a working directory", syscall3(SYS_RMDIR, (int)DDIR, 0, 0),
+    want_eq("rmdir refused under a working directory", syscall3(SYS_RMDIR, (long)DDIR, 0, 0),
             -EBUSY);
     notify("the parent releases the working-directory child", down[1]);
     reap(pid, "the working-directory child");
 
-    want_eq("chdir into the directory", syscall1(SYS_CHDIR, (int)DDIR), 0);
+    want_eq("chdir into the directory", syscall1(SYS_CHDIR, (long)DDIR), 0);
     want_eq("rmdir refused under the caller's own working directory",
-            syscall3(SYS_RMDIR, (int)DDIR, 0, 0), -EBUSY);
-    want_eq("chdir back to the root", syscall1(SYS_CHDIR, (int)"/"), 0);
-    want_eq("rmdir once nothing refers to the directory", syscall3(SYS_RMDIR, (int)DDIR, 0, 0), 0);
+            syscall3(SYS_RMDIR, (long)DDIR, 0, 0), -EBUSY);
+    want_eq("chdir back to the root", syscall1(SYS_CHDIR, (long)"/"), 0);
+    want_eq("rmdir once nothing refers to the directory", syscall3(SYS_RMDIR, (long)DDIR, 0, 0), 0);
 }
 
-void _start(void)
+PROBE_START void _start(void)
 {
     int i;
 
@@ -1022,8 +974,8 @@ void _start(void)
     orphan_scan_case();
     failed_rename_case();
 
-    want_eq("pipe for the child's signal", syscall3(SYS_PIPE, (int)up, 0, 0), 0);
-    want_eq("pipe for the parent's signal", syscall3(SYS_PIPE, (int)down, 0, 0), 0);
+    want_eq("pipe for the child's signal", syscall3(SYS_PIPE, (long)up, 0, 0), 0);
+    want_eq("pipe for the parent's signal", syscall3(SYS_PIPE, (long)down, 0, 0), 0);
     cross_process_case();
     exit_release_case();
     cross_reloc_case();

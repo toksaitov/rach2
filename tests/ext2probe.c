@@ -15,30 +15,10 @@
  * Both counts include fsync, and both files are reopened and checked.
  *
  * Prints "EXT2PROBE OK (mode)" or "EXT2PROBE FAIL: reason". Freestanding;
- * int 0x80.
+ * direct system calls (probe.h).
  */
 
-typedef unsigned int size_t;
-
-#define SYS_EXIT      1
-#define SYS_READ      3
-#define SYS_WRITE     4
-#define SYS_OPEN      5
-#define SYS_CLOSE     6
-#define SYS_LINK      9
-#define SYS_LSEEK     19
-#define SYS_MOUNT     21
-#define SYS_MKDIR     39
-#define SYS_UMOUNT2   52
-#define SYS_SYMLINK   83
-#define SYS_READLINK  85
-#define SYS_STAT64    195
-#define SYS_LSTAT64   196
-#define SYS_STAT      106
-#define SYS_LSTAT     107
-#define SYS_FSYNC     118
-#define SYS_FSTATAT64 300
-#define SYS_UTIMENSAT 320
+#include "probe.h"
 
 #define AT_FDCWD            (-100)
 #define AT_SYMLINK_NOFOLLOW 0x100
@@ -61,48 +41,10 @@ typedef unsigned int size_t;
 #define EROFS  30
 #define ELOOP  40
 
-static int sys1(int n, int a)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a) : "memory");
-    return r;
-}
-
-static int sys2(int n, int a, int b)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b) : "memory");
-    return r;
-}
-
-static int sys3(int n, int a, int b, int c)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
-}
-
-static int sys4(int n, int a, int b, int c, int d)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c), "S"(d) : "memory");
-    return r;
-}
-
-static int sys5(int n, int a, int b, int c, int d, int e)
-{
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(n), "b"(a), "c"(b), "d"(c), "S"(d), "D"(e)
-                         : "memory");
-    return r;
-}
-
 static void sys_exit(int status) __attribute__((noreturn));
 static void sys_exit(int status)
 {
-    sys1(SYS_EXIT, status);
+    syscall1(SYS_EXIT, status);
     __builtin_unreachable();
 }
 
@@ -118,14 +60,14 @@ static size_t strlen(const char *s)
 
 static void puts(const char *s)
 {
-    sys3(SYS_WRITE, 1, (int)s, (int)strlen(s));
-    sys3(SYS_WRITE, 1, (int)"\n", 1);
+    syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
+    syscall3(SYS_WRITE, 1, (long)"\n", 1);
 }
 
 static void fail(const char *why) __attribute__((noreturn));
 static void fail(const char *why)
 {
-    sys3(SYS_WRITE, 1, (int)"EXT2PROBE FAIL: ", 16);
+    syscall3(SYS_WRITE, 1, (long)"EXT2PROBE FAIL: ", 16);
     puts(why);
     sys_exit(1);
 }
@@ -146,10 +88,10 @@ static void fail_with(const char *why, int n)
     if (n < 0) {
         digits[--i] = '-';
     }
-    sys3(SYS_WRITE, 1, (int)"EXT2PROBE FAIL: ", 16);
-    sys3(SYS_WRITE, 1, (int)why, (int)strlen(why));
-    sys3(SYS_WRITE, 1, (int)" (got ", 6);
-    sys3(SYS_WRITE, 1, (int)(digits + i), (int)strlen(digits + i));
+    syscall3(SYS_WRITE, 1, (long)"EXT2PROBE FAIL: ", 16);
+    syscall3(SYS_WRITE, 1, (long)why, (int)strlen(why));
+    syscall3(SYS_WRITE, 1, (long)" (got ", 6);
+    syscall3(SYS_WRITE, 1, (long)(digits + i), (int)strlen(digits + i));
     puts(")");
     sys_exit(1);
 }
@@ -170,7 +112,7 @@ static unsigned char st[104];
 /* The mode word of a stat or lstat. */
 static int stat_mode(int call, const char *path, int *mode)
 {
-    int rc = sys2(call, (int)path, (int)st);
+    int rc = syscall2(call, (long)path, (long)st);
 
     if (rc == 0) {
         *mode = (int)(st[16] | (st[17] << 8) | (st[18] << 16) | (st[19] << 24));
@@ -181,7 +123,7 @@ static int stat_mode(int call, const char *path, int *mode)
 /* The link count. */
 static int stat_nlink(const char *path)
 {
-    if (sys2(SYS_STAT64, (int)path, (int)st) != 0) {
+    if (syscall2(SYS_STAT, (long)path, (long)st) != 0) {
         return -1;
     }
     return (int)(st[20] | (st[21] << 8) | (st[22] << 16) | (st[23] << 24));
@@ -189,26 +131,26 @@ static int stat_nlink(const char *path)
 
 static int read_all(const char *path, char *buf, int cap)
 {
-    int fd = sys3(SYS_OPEN, (int)path, O_RDONLY, 0);
+    int fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
     int n;
 
     if (fd < 0) {
         return fd;
     }
-    n = sys3(SYS_READ, fd, (int)buf, cap);
-    sys1(SYS_CLOSE, fd);
+    n = syscall3(SYS_READ, fd, (long)buf, cap);
+    syscall1(SYS_CLOSE, fd);
     return n;
 }
 
 static void expect_open(const char *path, int flags, int want, const char *what)
 {
-    int fd = sys3(SYS_OPEN, (int)path, flags, 0644);
+    int fd = syscall3(SYS_OPEN, (long)path, flags, 0644);
 
     if (want == 0) {
         if (fd < 0) {
             fail(what);
         }
-        sys1(SYS_CLOSE, fd);
+        syscall1(SYS_CLOSE, fd);
     } else if (fd != -want) {
         fail(what);
     }
@@ -263,26 +205,26 @@ static void links_rows(void)
     expect_open("/e2/dangling", O_WRONLY | O_CREAT | O_EXCL, EEXIST,
                 "O_CREAT|O_EXCL on a dangling link answers EEXIST");
     /* lstat sees the link, stat its target. */
-    if (stat_mode(SYS_LSTAT64, "/e2/fast", &mode) != 0 || (mode & 0170000) != 0120000) {
+    if (stat_mode(SYS_LSTAT, "/e2/fast", &mode) != 0 || (mode & 0170000) != 0120000) {
         fail("lstat reports the link");
     }
-    if (stat_mode(SYS_STAT64, "/e2/fast", &mode) != 0 || (mode & 0170000) != 0100000) {
+    if (stat_mode(SYS_STAT, "/e2/fast", &mode) != 0 || (mode & 0170000) != 0100000) {
         fail("stat reports the target");
     }
     /* readlink gives the bytes without a terminator. */
-    n = sys3(SYS_READLINK, (int)"/e2/fast", (int)buf, sizeof(buf));
+    n = syscall3(SYS_READLINK, (long)"/e2/fast", (long)buf, sizeof(buf));
     if (n != 9 || buf[0] != 'h' || buf[8] != 't') {
         fail("readlink gives the target's bytes");
     }
-    n = sys3(SYS_READLINK, (int)"/e2/hello.txt", (int)buf, sizeof(buf));
+    n = syscall3(SYS_READLINK, (long)"/e2/hello.txt", (long)buf, sizeof(buf));
     if (n != -22) {
         fail("readlink on a file answers EINVAL");
     }
     /* A dangling link: ENOENT through it, the link itself by lstat. */
-    if (stat_mode(SYS_STAT64, "/e2/dangling", &mode) != -ENOENT) {
+    if (stat_mode(SYS_STAT, "/e2/dangling", &mode) != -ENOENT) {
         fail("a dangling link answers ENOENT to stat");
     }
-    if (stat_mode(SYS_LSTAT64, "/e2/dangling", &mode) != 0 || (mode & 0170000) != 0120000) {
+    if (stat_mode(SYS_LSTAT, "/e2/dangling", &mode) != 0 || (mode & 0170000) != 0120000) {
         fail("and is there for lstat");
     }
     if (read_all("/e2/dangling", buf, sizeof(buf)) != -ENOENT) {
@@ -290,7 +232,7 @@ static void links_rows(void)
     }
     /* A link in the middle of a path is always followed, even under
        O_NOFOLLOW: `fast` becomes the file, and `..` on a file is refused. */
-    n = sys3(SYS_OPEN, (int)"/e2/fast/../hello.txt", O_RDONLY | O_NOFOLLOW, 0);
+    n = syscall3(SYS_OPEN, (long)"/e2/fast/../hello.txt", O_RDONLY | O_NOFOLLOW, 0);
     if (n != -20) {
         fail_with("a link in the middle of a path is followed to its file", n);
     }
@@ -298,19 +240,19 @@ static void links_rows(void)
     if (stat_nlink("/e2/hello.txt") != 2 || stat_nlink("/e2/hello.link") != 2) {
         fail("a hard link's count is two on both names");
     }
-    if (sys2(SYS_LINK, (int)"/e2/sub", (int)"/e2/sub2") != -EPERM) {
+    if (syscall2(SYS_LINK, (long)"/e2/sub", (long)"/e2/sub2") != -EPERM) {
         fail("a directory cannot be hard-linked");
     }
-    if (sys2(SYS_LINK, (int)"/e2/hello.txt", (int)"/e2/another") != -EROFS) {
+    if (syscall2(SYS_LINK, (long)"/e2/hello.txt", (long)"/e2/another") != -EROFS) {
         fail("a hard link on a read-only mount answers EROFS");
     }
-    if (sys2(SYS_SYMLINK, (int)"hello.txt", (int)"/e2/newlink") != -EROFS) {
+    if (syscall2(SYS_SYMLINK, (long)"hello.txt", (long)"/e2/newlink") != -EROFS) {
         fail("a symbolic link on a read-only mount answers EROFS");
     }
-    if (sys2(SYS_SYMLINK, (int)"x", (int)"/newlink") != -EPERM) {
+    if (syscall2(SYS_SYMLINK, (long)"x", (long)"/newlink") != -EPERM) {
         fail("a symbolic link on the KRFFS root answers EPERM");
     }
-    if (sys2(SYS_LINK, (int)"/e2/hello.txt", (int)"/another") != -EXDEV) {
+    if (syscall2(SYS_LINK, (long)"/e2/hello.txt", (long)"/another") != -EXDEV) {
         fail("a hard link across mounts answers EXDEV");
     }
     /* O_CREAT through a dangling link is the target's creation, which the
@@ -321,39 +263,39 @@ static void links_rows(void)
                 "O_CREAT|O_EXCL on a link with a target answers EEXIST");
     /* readlink: a short buffer, an empty one, no terminator, a long target. */
     buf[1] = 'Z';
-    n = sys3(SYS_READLINK, (int)"/e2/fast", (int)buf, 1);
+    n = syscall3(SYS_READLINK, (long)"/e2/fast", (long)buf, 1);
     if (n != 1 || buf[0] != 'h' || ((volatile char *)buf)[1] != 'Z') {
         fail_with("readlink into a one-byte buffer gives one byte and no terminator", n);
     }
-    n = sys3(SYS_READLINK, (int)"/e2/fast", (int)buf, 0);
+    n = syscall3(SYS_READLINK, (long)"/e2/fast", (long)buf, 0);
     if (n != -EINVAL) {
         fail_with("readlink into an empty buffer answers EINVAL", n);
     }
-    n = sys3(SYS_READLINK, (int)"/e2/long300", (int)big, sizeof(big));
+    n = syscall3(SYS_READLINK, (long)"/e2/long300", (long)big, sizeof(big));
     if (n != 300 || big[0] != 'x' || big[299] != 'x') {
         fail_with("readlink gives a 300-byte target", n);
     }
     /* fstatat64 with and without AT_SYMLINK_NOFOLLOW, and an invalid flag. */
-    if (sys4(SYS_FSTATAT64, AT_FDCWD, (int)"/e2/fast", (int)st, AT_SYMLINK_NOFOLLOW) != 0 ||
+    if (syscall4(SYS_FSTATAT, AT_FDCWD, (long)"/e2/fast", (long)st, AT_SYMLINK_NOFOLLOW) != 0 ||
         (st_mode() & 0170000) != 0120000) {
         fail("fstatat64 with AT_SYMLINK_NOFOLLOW reports the link");
     }
-    if (sys4(SYS_FSTATAT64, AT_FDCWD, (int)"/e2/fast", (int)st, 0) != 0 ||
+    if (syscall4(SYS_FSTATAT, AT_FDCWD, (long)"/e2/fast", (long)st, 0) != 0 ||
         (st_mode() & 0170000) != 0100000) {
         fail("fstatat64 without it reports the target");
     }
-    if (sys4(SYS_FSTATAT64, AT_FDCWD, (int)"/e2/fast", (int)st, AT_SYMLINK_FOLLOW) != -EINVAL) {
+    if (syscall4(SYS_FSTATAT, AT_FDCWD, (long)"/e2/fast", (long)st, AT_SYMLINK_FOLLOW) != -EINVAL) {
         fail("fstatat64 with AT_SYMLINK_FOLLOW answers EINVAL");
     }
-    if (sys4(SYS_UTIMENSAT, AT_FDCWD, (int)"/e2/fast", 0, AT_SYMLINK_FOLLOW) != -EINVAL) {
+    if (syscall4(SYS_UTIMENSAT, AT_FDCWD, (long)"/e2/fast", 0, AT_SYMLINK_FOLLOW) != -EINVAL) {
         fail("utimensat with AT_SYMLINK_FOLLOW answers EINVAL");
     }
     /* The old stat and lstat, whose mode is a 16-bit word at offset 8. */
-    if (sys2(SYS_LSTAT, (int)"/e2/fast", (int)st) != 0 ||
+    if (syscall2(SYS_OLDLSTAT, (long)"/e2/fast", (long)st) != 0 ||
         ((st[8] | (st[9] << 8)) & 0170000) != 0120000) {
         fail("the old lstat reports the link");
     }
-    if (sys2(SYS_STAT, (int)"/e2/fast", (int)st) != 0 ||
+    if (syscall2(SYS_OLDSTAT, (long)"/e2/fast", (long)st) != 0 ||
         ((st[8] | (st[9] << 8)) & 0170000) != 0100000) {
         fail("the old stat reports the target");
     }
@@ -439,22 +381,22 @@ static void cost_number(unsigned value)
         digits[--i] = (char)('0' + value % 10);
         value /= 10;
     } while (value);
-    sys3(SYS_WRITE, 1, (int)(digits + i), (int)sizeof(digits) - i);
+    syscall3(SYS_WRITE, 1, (long)(digits + i), (int)sizeof(digits) - i);
 }
 
 /** Record counts before checking them, including a failing mutation's cost. */
 static void cost_report(const char *name, struct disk_counts before, struct disk_counts collected,
                         struct disk_counts committed)
 {
-    sys3(SYS_WRITE, 1, (int)"ext2-cost: result: ", 19);
-    sys3(SYS_WRITE, 1, (int)name, (int)strlen(name));
-    sys3(SYS_WRITE, 1, (int)" collected commands=", 20);
+    syscall3(SYS_WRITE, 1, (long)"ext2-cost: result: ", 19);
+    syscall3(SYS_WRITE, 1, (long)name, (int)strlen(name));
+    syscall3(SYS_WRITE, 1, (long)" collected commands=", 20);
     cost_number(collected.commands - before.commands);
-    sys3(SYS_WRITE, 1, (int)" flushes=", 9);
+    syscall3(SYS_WRITE, 1, (long)" flushes=", 9);
     cost_number(collected.flushes - before.flushes);
-    sys3(SYS_WRITE, 1, (int)" committed commands=", 20);
+    syscall3(SYS_WRITE, 1, (long)" committed commands=", 20);
     cost_number(committed.commands - before.commands);
-    sys3(SYS_WRITE, 1, (int)" flushes=", 9);
+    syscall3(SYS_WRITE, 1, (long)" flushes=", 9);
     cost_number(committed.flushes - before.flushes);
     puts("");
 }
@@ -467,7 +409,7 @@ static void cost_write(int fd, unsigned char pattern)
     for (i = 0; i < sizeof(cost_block); i++) {
         cost_block[i] = pattern;
     }
-    if (sys3(SYS_WRITE, fd, (int)cost_block, sizeof(cost_block)) != (int)sizeof(cost_block)) {
+    if (syscall3(SYS_WRITE, fd, (long)cost_block, sizeof(cost_block)) != (int)sizeof(cost_block)) {
         fail("writing a cost block");
     }
 }
@@ -475,13 +417,13 @@ static void cost_write(int fd, unsigned char pattern)
 /** Create and sync one block before either count begins. */
 static int cost_create(const char *path, unsigned char pattern)
 {
-    int fd = sys3(SYS_OPEN, (int)path, O_RDWR | O_CREAT | O_EXCL, 0644);
+    int fd = syscall3(SYS_OPEN, (long)path, O_RDWR | O_CREAT | O_EXCL, 0644);
 
     if (fd < 0) {
         fail("creating a cost file");
     }
     cost_write(fd, pattern);
-    if (sys1(SYS_FSYNC, fd) != 0) {
+    if (syscall1(SYS_FSYNC, fd) != 0) {
         fail("syncing a cost fixture");
     }
     return fd;
@@ -490,14 +432,15 @@ static int cost_create(const char *path, unsigned char pattern)
 /** Reopen and check every byte and the exact file length after the count. */
 static void cost_verify(const char *path, unsigned first, unsigned blocks)
 {
-    int fd = sys3(SYS_OPEN, (int)path, O_RDONLY, 0);
+    int fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
     unsigned block, i;
 
     if (fd < 0) {
         fail("reopening a cost file");
     }
     for (block = 0; block < blocks; block++) {
-        if (sys3(SYS_READ, fd, (int)cost_block, sizeof(cost_block)) != (int)sizeof(cost_block)) {
+        if (syscall3(SYS_READ, fd, (long)cost_block, sizeof(cost_block)) !=
+            (int)sizeof(cost_block)) {
             fail("reading a cost block");
         }
         for (i = 0; i < sizeof(cost_block); i++) {
@@ -506,7 +449,7 @@ static void cost_verify(const char *path, unsigned first, unsigned blocks)
             }
         }
     }
-    if (sys3(SYS_READ, fd, (int)cost_block, 1) != 0 || sys1(SYS_CLOSE, fd) != 0) {
+    if (syscall3(SYS_READ, fd, (long)cost_block, 1) != 0 || syscall1(SYS_CLOSE, fd) != 0) {
         fail("a cost file has the wrong length or failed close");
     }
 }
@@ -525,13 +468,13 @@ static void cost_rows(int append_only)
 
     before = disk_counts();
     for (i = 1; i <= 16; i++) {
-        if (sys3(SYS_LSEEK, fd, 0, 0) != 0) {
+        if (syscall3(SYS_LSEEK, fd, 0, 0) != 0) {
             fail("seeking to rewrite a cost block");
         }
         cost_write(fd, (unsigned char)i);
     }
     collected = disk_counts();
-    if (sys1(SYS_FSYNC, fd) != 0) {
+    if (syscall1(SYS_FSYNC, fd) != 0) {
         fail("syncing the rewrites");
     }
     committed = disk_counts();
@@ -544,7 +487,7 @@ static void cost_rows(int append_only)
         (collected.commands != before.commands || collected.flushes != before.flushes)) {
         fail("rewrite collection issued commands");
     }
-    if (sys1(SYS_CLOSE, fd) != 0) {
+    if (syscall1(SYS_CLOSE, fd) != 0) {
         fail("closing the rewrite file");
     }
     cost_verify("/e2/cost-rewrite", 16, 1);
@@ -554,7 +497,7 @@ static void cost_rows(int append_only)
     cost_write(fd, 65);
     cost_write(fd, 66);
     collected = disk_counts();
-    if (sys1(SYS_FSYNC, fd) != 0) {
+    if (syscall1(SYS_FSYNC, fd) != 0) {
         fail("syncing the appends");
     }
     committed = disk_counts();
@@ -566,7 +509,7 @@ static void cost_rows(int append_only)
     if (collected.flushes != before.flushes) {
         fail("append collection issued flushes");
     }
-    if (sys1(SYS_CLOSE, fd) != 0) {
+    if (syscall1(SYS_CLOSE, fd) != 0) {
         fail("closing the append file");
     }
     cost_verify("/e2/cost-append", 64, 3);
@@ -585,9 +528,9 @@ void probe_main(unsigned int *sp)
     const char *mode = argc > 1 ? argv[1] : "links";
     int writable = streq(mode, "cost") || streq(mode, "cost-append");
 
-    sys2(SYS_MKDIR, (int)"/e2", 0755);
-    if (sys5(SYS_MOUNT, (int)"/dev/disk0p1", (int)"/e2", (int)"ext2", writable ? 0 : MS_RDONLY,
-             0) != 0) {
+    syscall2(SYS_MKDIR, (long)"/e2", 0755);
+    if (syscall5(SYS_MOUNT, (long)"/dev/disk0p1", (long)"/e2", (long)"ext2",
+                 writable ? 0 : MS_RDONLY, 0) != 0) {
         fail("mounting the fixture");
     }
     if (streq(mode, "links")) {
@@ -597,11 +540,11 @@ void probe_main(unsigned int *sp)
     } else {
         fail("unknown mode");
     }
-    if (sys2(SYS_UMOUNT2, (int)"/e2", 0) != 0) {
+    if (syscall2(SYS_UMOUNT2, (long)"/e2", 0) != 0) {
         fail("unmount");
     }
-    sys3(SYS_WRITE, 1, (int)"EXT2PROBE OK (", 14);
-    sys3(SYS_WRITE, 1, (int)mode, (int)strlen(mode));
+    syscall3(SYS_WRITE, 1, (long)"EXT2PROBE OK (", 14);
+    syscall3(SYS_WRITE, 1, (long)mode, (int)strlen(mode));
     puts(")");
     sys_exit(0);
 }

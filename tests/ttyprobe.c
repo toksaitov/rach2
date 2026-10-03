@@ -18,17 +18,13 @@
  *   (h) Alt: the driver presses Alt with x on the keyboard after
  *       `TTYPROBE ALT`, which reads as ESC and x.
  *
- * Prints "TTYPROBE OK" or "TTYPROBE FAIL". Freestanding; direct int 0x80.
- * Driven by `tests/run console`, whose harness steps send the cooked line and
- * then, after the raw switch, the single byte with no newline after it.
+ * Prints "TTYPROBE OK" or "TTYPROBE FAIL". Freestanding; direct system calls
+ * (probe.h). Driven by `tests/run console`, whose harness steps send the cooked
+ * line and then, after the raw switch, the single byte with no newline after
+ * it.
  */
 
-typedef unsigned int size_t;
-
-#define SYS_EXIT  1
-#define SYS_READ  3
-#define SYS_WRITE 4
-#define SYS_IOCTL 54
+#include "probe.h"
 
 #define TCGETS     0x5401
 #define TCSETS     0x5402
@@ -62,13 +58,6 @@ struct winsize {
     unsigned short ws_ypixel;
 };
 
-static int syscall3(int n, int a, int b, int c)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
-}
-
 static void sys_exit(int status)
 {
     syscall3(SYS_EXIT, status, 0, 0);
@@ -86,7 +75,7 @@ static size_t strlen(const char *s)
 
 static void out(const char *s, int len)
 {
-    syscall3(SYS_WRITE, 1, (int)(size_t)s, len);
+    syscall3(SYS_WRITE, 1, (long)s, len);
 }
 
 static void puts(const char *s)
@@ -97,12 +86,12 @@ static void puts(const char *s)
 
 static int do_read(int fd, char *buf, int n)
 {
-    return syscall3(SYS_READ, fd, (int)(size_t)buf, n);
+    return syscall3(SYS_READ, fd, (long)buf, n);
 }
 
 static int do_ioctl(int fd, int req, void *arg)
 {
-    return syscall3(SYS_IOCTL, fd, req, (int)(size_t)arg);
+    return syscall3(SYS_IOCTL, fd, req, (long)arg);
 }
 
 static int fails = 0;
@@ -131,7 +120,7 @@ static void show(const char *tag, const char *buf, int n)
  * `TTYPROBE RAW` is said once the terminal is raw, so the byte the suite
  * types on the word reaches a raw terminal and not the cooked one before it.
  */
-void _start(void)
+PROBE_START void _start(void)
 {
     struct ktermios t;
     struct ktermios t2;

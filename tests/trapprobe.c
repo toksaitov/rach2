@@ -10,52 +10,36 @@
  * triple-faults the machine with no diagnostic. The probe reaps each child and
  * checks the wait status has the expected signal.
  *
- * Prints "TRAPPROBE OK" and exits 0. Freestanding; direct int 0x80.
+ * Prints "TRAPPROBE OK" and exits 0. Freestanding; direct system calls
+ * (probe.h).
  */
 
-typedef unsigned int size_t;
+#include "probe.h"
 
 #define STDOUT_FILENO 1
-
-#define SYS_EXIT    1
-#define SYS_FORK    2
-#define SYS_WRITE   4
-#define SYS_WAITPID 7
 
 #define SIGILL 4
 #define SIGFPE 8
 
 static int sys_write(int fd, const void *buf, size_t count)
 {
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_WRITE), "b"(fd), "c"(buf), "d"(count)
-                         : "memory");
-    return r;
+    return syscall3(SYS_WRITE, (long)fd, (long)buf, (long)count);
 }
 
 static void sys_exit(int status)
 {
-    __asm__ __volatile__("int $0x80" : : "a"(SYS_EXIT), "b"(status));
+    syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
 static int sys_fork(void)
 {
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(SYS_FORK) : "memory");
-    return r;
+    return syscall0(SYS_FORK);
 }
 
 static int sys_waitpid(int pid, int *status, int options)
 {
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_WAITPID), "b"(pid), "c"(status), "d"(options)
-                         : "memory");
-    return r;
+    return syscall3(SYS_WAITPID, (long)pid, (long)status, (long)options);
 }
 
 static size_t strlen(const char *s)
@@ -117,7 +101,7 @@ static int faulted_with(void (*fault)(void), int expect_signo)
     return (status & 0x7f) == expect_signo;
 }
 
-void _start(void)
+PROBE_START void _start(void)
 {
     if (!faulted_with(raise_invalid_opcode, SIGILL)) {
         puts("trapprobe: #UD was not contained as SIGILL");

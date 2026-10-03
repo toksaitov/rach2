@@ -12,33 +12,16 @@
  *   (d) blocking across a fork: a writer of more than one buffer blocks until
  *       the forked reader drains it, and every byte arrives intact.
  *
- * Prints "PIPEPROBE OK". Freestanding; direct int 0x80.
+ * Prints "PIPEPROBE OK". Freestanding; direct system calls (probe.h).
  */
 
-typedef unsigned int size_t;
+#include "probe.h"
 
-#define SYS_EXIT         1
-#define SYS_FORK         2
-#define SYS_READ         3
-#define SYS_WRITE        4
-#define SYS_CLOSE        6
-#define SYS_WAITPID      7
-#define SYS_PIPE         42
-#define SYS_PIPE2        331
-#define SYS_RT_SIGACTION 174
-#define SYS_READLINK     85
-#define SYS_MUNMAP       91
-#define SYS_MMAP2        192
-#define PROT_READ        0x1
-#define PROT_WRITE       0x2
-#define MAP_PRIVATE      0x02
-#define MAP_ANONYMOUS    0x20
-#define SYS_FSTAT64      197
-#define SYS_FCNTL64      221
-#define F_GETPIPE_SZ     1032
-
-/* i386 struct stat64: st_ino is the 64-bit field at offset 88. */
-#define ST_INO64 88
+#define PROT_READ     0x1
+#define PROT_WRITE    0x2
+#define MAP_PRIVATE   0x02
+#define MAP_ANONYMOUS 0x20
+#define F_GETPIPE_SZ  1032
 
 #define O_NONBLOCK 04000
 
@@ -49,34 +32,6 @@ typedef unsigned int size_t;
 #define SA_RESTORER 0x04000000
 
 #define PIPE_BUF_SIZE 65536
-
-static int syscall1(int n, int a)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a) : "memory");
-    return r;
-}
-
-static int syscall2(int n, int a, int b)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b) : "memory");
-    return r;
-}
-
-static int syscall3(int n, int a, int b, int c)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
-}
-
-static int syscall4(int n, int a, int b, int c, int d)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c), "S"(d) : "memory");
-    return r;
-}
 
 static void sys_exit(int status)
 {
@@ -95,8 +50,8 @@ static size_t strlen(const char *s)
 
 static void puts(const char *s)
 {
-    syscall3(SYS_WRITE, 1, (int)(size_t)s, (int)strlen(s));
-    syscall3(SYS_WRITE, 1, (int)(size_t)"\n", 1);
+    syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
+    syscall3(SYS_WRITE, 1, (long)"\n", 1);
 }
 
 /** Build "/proc/self/fd/<fd>" for a small descriptor. */
@@ -162,7 +117,7 @@ static void check(int cond, const char *msg)
 {
     if (!cond) {
         fails++;
-        syscall3(SYS_WRITE, 1, (int)(size_t)"  FAIL: ", 8);
+        syscall3(SYS_WRITE, 1, (long)"  FAIL: ", 8);
         puts(msg);
     }
 }
@@ -184,24 +139,17 @@ static int eqn(const char *a, const char *b, int n)
  */
 static int rd(int fd, char *buf, int n)
 {
-    return syscall3(SYS_READ, fd, (int)(size_t)buf, n);
+    return syscall3(SYS_READ, fd, (long)buf, n);
 }
 
 static int wr(int fd, const char *buf, int n)
 {
-    return syscall3(SYS_WRITE, fd, (int)(size_t)buf, n);
+    return syscall3(SYS_WRITE, fd, (long)buf, n);
 }
 
-static unsigned mmap2_anon(unsigned len)
+static long mmap_anon(long len)
 {
-    unsigned r;
-
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_MMAP2), "b"(0), "c"(len), "d"(PROT_READ | PROT_WRITE),
-                           "S"(MAP_PRIVATE | MAP_ANONYMOUS), "D"(-1)
-                         : "memory");
-    return r;
+    return probe_mmap(0, len, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 }
 
 /**
@@ -213,22 +161,19 @@ static int do_pipe(int fds[2])
 {
     fds[0] = -1;
     fds[1] = -1;
-    return syscall1(SYS_PIPE, (int)(size_t)fds);
+    return syscall1(SYS_PIPE, (long)fds);
 }
 
 static int do_pipe2(int fds[2], int flags)
 {
     fds[0] = -1;
     fds[1] = -1;
-    return syscall2(SYS_PIPE2, (int)(size_t)fds, flags);
+    return syscall2(SYS_PIPE2, (long)fds, flags);
 }
 
-/* Signal restorer trampoline (musl-style): invokes rt_sigreturn (173). */
+/* Signal restorer trampoline (musl-style): invokes rt_sigreturn. */
 extern void sig_restorer(void);
-__asm__(".globl sig_restorer\n"
-        "sig_restorer:\n"
-        "    movl $173, %eax\n"
-        "    int $0x80\n");
+PROBE_RT_RESTORER(sig_restorer);
 
 struct k_sigaction {
     void (*handler)(int);
@@ -250,7 +195,7 @@ static void sigpipe_handler(int sig)
 #define BIG 70000
 static char big[BIG];
 
-void _start(void)
+PROBE_START void _start(void)
 {
     int p[2];
     char buf[64];
@@ -273,8 +218,8 @@ void _start(void)
     /* (b) O_NONBLOCK: empty read -> EAGAIN; the FIFO holds 64 KiB; a write
      * past full -> EAGAIN. */
     check(do_pipe2(p, O_NONBLOCK) == 0, "pipe2(O_NONBLOCK)");
-    check(syscall3(SYS_FCNTL64, p[0], F_GETPIPE_SZ, 0) == PIPE_BUF_SIZE &&
-              syscall3(SYS_FCNTL64, p[1], F_GETPIPE_SZ, 0) == PIPE_BUF_SIZE,
+    check(syscall3(SYS_FCNTL, p[0], F_GETPIPE_SZ, 0) == PIPE_BUF_SIZE &&
+              syscall3(SYS_FCNTL, p[1], F_GETPIPE_SZ, 0) == PIPE_BUF_SIZE,
           "F_GETPIPE_SZ reports 64 KiB at both ends");
     check(rd(p[0], buf, 8) == -EAGAIN, "nonblocking read of empty pipe -> -EAGAIN");
     check(wr(p[1], big, PIPE_BUF_SIZE) == PIPE_BUF_SIZE, "a write of 64 KiB fills the pipe");
@@ -288,7 +233,7 @@ void _start(void)
     ka.flags = SA_SIGINFO | SA_RESTORER; /* the rt frame its restorer returns from */
     ka.restorer = sig_restorer;
     ka.mask = 0;
-    syscall4(SYS_RT_SIGACTION, SIGPIPE, (int)(size_t)&ka, 0, 8);
+    syscall4(SYS_RT_SIGACTION, SIGPIPE, (long)&ka, 0, 8);
     got_sigpipe = 0;
     check(do_pipe(p) == 0, "pipe() for SIGPIPE test");
     syscall1(SYS_CLOSE, p[0]); /* close the read end */
@@ -329,7 +274,7 @@ void _start(void)
         syscall1(SYS_CLOSE, p[1]); /* signal EOF to the reader */
         check(off == BIG, "parent wrote the whole buffer (blocked through full)");
         status = -1;
-        check(syscall3(SYS_WAITPID, pid, (int)(size_t)&status, 0) == pid && (status & 0x7f) == 0 &&
+        check(syscall3(SYS_WAITPID, pid, (long)&status, 0) == pid && (status & 0x7f) == 0 &&
                   ((status >> 8) & 0xff) == 0,
               "child read every byte intact");
     }
@@ -355,7 +300,7 @@ void _start(void)
         unsigned int ino[4];
         char link[64];
         char fdpath[32];
-        char st[128] = {0}; /* fstat64 fills it through an int-cast pointer */
+        char st[KSTAT_SIZE] = {0}; /* fstat fills it through a long-cast pointer */
         int k, ends[4];
 
         check(do_pipe(a) == 0 && do_pipe(b) == 0, "two pipes open");
@@ -368,19 +313,18 @@ void _start(void)
 
             ino[k] = 0;
             fd_path_of(fdpath, ends[k]);
-            ln = syscall3(SYS_READLINK, (int)(size_t)fdpath, (int)(size_t)link,
-                          (int)sizeof(link) - 1);
+            ln = syscall3(SYS_READLINK, (long)fdpath, (long)link, (int)sizeof(link) - 1);
             check(ln > 0, "a pipe end has a link to read");
             if (ln > 0) {
                 link[ln] = '\0';
                 check(parse_pipe_link(link, ln, &ino[k]),
                       "and it is a pipe link, spelled exactly as one");
             }
-            check(syscall3(SYS_FSTAT64, ends[k], (int)(size_t)st, 0) == 0, "fstat a pipe end");
+            check(syscall3(SYS_FSTAT, ends[k], (long)st, 0) == 0, "fstat a pipe end");
             /* Both words of the 64-bit inode: a match in the low one alone is
                a different number. */
-            check(*(unsigned int *)(st + ST_INO64) == ino[k] &&
-                      *(unsigned int *)(st + ST_INO64 + 4) == 0u && ino[k] != 0,
+            check(*(unsigned int *)(st + KSTAT_INO) == ino[k] &&
+                      *(unsigned int *)(st + KSTAT_INO + 4) == 0u && ino[k] != 0,
                   "and fstat reports the number the link does");
         }
         check(ino[0] == ino[1] && ino[2] == ino[3], "the two ends of one pipe name one pipe");
@@ -396,14 +340,15 @@ void _start(void)
      * faults is left in the ring. The hole is an anonymous mapping of two
      * pages with the second unmapped. */
     {
-        unsigned m = mmap2_anon(8192);
-        char *first = (char *)(size_t)m;
+        long m = mmap_anon(8192);
+        char *first = (char *)m;
         char rest[2048];
         int got;
         int k;
 
-        check(m != 0 && m < 0xfffff000u, "an anonymous mapping of two pages");
-        check(syscall2(SYS_MUNMAP, (int)(m + 4096), 4096) == 0, "with its second page unmapped");
+        check(m != 0 && !sys_failed(m), "an anonymous mapping of two pages");
+        check(syscall2(SYS_MUNMAP, (long)(first + 4096), 4096) == 0,
+              "with its second page unmapped");
         check(do_pipe(p) == 0, "pipe() for the fault test");
         /* A pattern with no period of 2048, so the second half cannot pass
            as the first read again: the byte's 128-byte block enters it. */
@@ -471,8 +416,8 @@ void _start(void)
             syscall1(SYS_CLOSE, p[1]);
             syscall1(SYS_CLOSE, q[0]);
             status = -1;
-            check(syscall3(SYS_WAITPID, pid, (int)(size_t)&status, 0) == pid &&
-                      (status & 0x7f) == 0 && ((status >> 8) & 0xff) == 0,
+            check(syscall3(SYS_WAITPID, pid, (long)&status, 0) == pid && (status & 0x7f) == 0 &&
+                      ((status >> 8) & 0xff) == 0,
                   "and said so");
         }
     }
@@ -481,7 +426,8 @@ void _start(void)
      * the reader's buffers, through the pipe and compared byte for byte, with
      * a sentinel on each side of the reader's bytes. The kernel's copies move
      * words with a tail of bytes, so a wrong tail, a wrong start or a byte
-     * written past the end shows at the length and alignment that has it. */
+     * written past the end shows at the length and alignment that has it; the
+     * alignments run over a word, a long, of each buffer. */
     {
         static char pat[80], got[80];
         int len, sa, da, bad = 0;
@@ -491,8 +437,8 @@ void _start(void)
         }
         check(do_pipe(p) == 0, "pipe() for the alignment sweep");
         for (len = 1; len <= 67 && bad == 0; len++) {
-            for (sa = 0; sa < 4 && bad == 0; sa++) {
-                for (da = 1; da <= 4 && bad == 0; da++) {
+            for (sa = 0; sa < (int)sizeof(long) && bad == 0; sa++) {
+                for (da = 1; da <= (int)sizeof(long) && bad == 0; da++) {
                     for (i = 0; i < 80; i++) {
                         got[i] = (char)0x5a;
                     }

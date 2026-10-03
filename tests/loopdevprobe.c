@@ -30,26 +30,10 @@
  *
  * `loopdevprobe vfat`, `ext2` and `krffs` name the type inside the image.
  * Prints "LOOPPROBE OK (type)" or "LOOPPROBE FAIL: reason". Freestanding;
- * int 0x80.
+ * direct system calls (probe.h).
  */
 
-typedef unsigned int size_t;
-
-#define SYS_EXIT      1
-#define SYS_READ      3
-#define SYS_WRITE     4
-#define SYS_OPEN      5
-#define SYS_CLOSE     6
-#define SYS_LINK      9
-#define SYS_UNLINK    10
-#define SYS_RENAME    38
-#define SYS_MKDIR     39
-#define SYS_MOUNT     21
-#define SYS_UMOUNT2   52
-#define SYS_FTRUNCATE 93
-#define SYS_FSYNC     118
-#define SYS_STAT64    195
-#define SYS_IOCTL     54
+#include "probe.h"
 
 #define O_RDONLY 0
 #define O_WRONLY 1
@@ -66,41 +50,10 @@ typedef unsigned int size_t;
 #define EROFS  30
 #define ELOOP  40
 
-static int sys1(int n, int a)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a) : "memory");
-    return r;
-}
-
-static int sys2(int n, int a, int b)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b) : "memory");
-    return r;
-}
-
-static int sys3(int n, int a, int b, int c)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
-}
-
-static int sys5(int n, int a, int b, int c, int d, int e)
-{
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(n), "b"(a), "c"(b), "d"(c), "S"(d), "D"(e)
-                         : "memory");
-    return r;
-}
-
 static void sys_exit(int status) __attribute__((noreturn));
 static void sys_exit(int status)
 {
-    sys1(SYS_EXIT, status);
+    syscall1(SYS_EXIT, status);
     __builtin_unreachable();
 }
 
@@ -116,14 +69,14 @@ static size_t strlen(const char *s)
 
 static void puts(const char *s)
 {
-    sys3(SYS_WRITE, 1, (int)s, (int)strlen(s));
-    sys3(SYS_WRITE, 1, (int)"\n", 1);
+    syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
+    syscall3(SYS_WRITE, 1, (long)"\n", 1);
 }
 
 static void fail(const char *why) __attribute__((noreturn));
 static void fail(const char *why)
 {
-    sys3(SYS_WRITE, 1, (int)"LOOPPROBE FAIL: ", 16);
+    syscall3(SYS_WRITE, 1, (long)"LOOPPROBE FAIL: ", 16);
     puts(why);
     sys_exit(1);
 }
@@ -143,10 +96,10 @@ static void fail_with(const char *why, int n)
     if (n < 0) {
         digits[--i] = '-';
     }
-    sys3(SYS_WRITE, 1, (int)"LOOPPROBE FAIL: ", 16);
-    sys3(SYS_WRITE, 1, (int)why, (int)strlen(why));
-    sys3(SYS_WRITE, 1, (int)" (got ", 6);
-    sys3(SYS_WRITE, 1, (int)(digits + i), (int)strlen(digits + i));
+    syscall3(SYS_WRITE, 1, (long)"LOOPPROBE FAIL: ", 16);
+    syscall3(SYS_WRITE, 1, (long)why, (int)strlen(why));
+    syscall3(SYS_WRITE, 1, (long)" (got ", 6);
+    syscall3(SYS_WRITE, 1, (long)(digits + i), (int)strlen(digits + i));
     puts(")");
     sys_exit(1);
 }
@@ -177,28 +130,28 @@ static int streq(const char *a, const char *b)
 /** One command to /dev/loop-control; the errno, or 0. */
 static int control(const char *line)
 {
-    int fd = sys3(SYS_OPEN, (int)"/dev/loop-control", O_WRONLY, 0);
+    int fd = syscall3(SYS_OPEN, (long)"/dev/loop-control", O_WRONLY, 0);
     int rc;
 
     if (fd < 0) {
         fail_with("opening /dev/loop-control", fd);
     }
-    rc = sys3(SYS_WRITE, fd, (int)line, (int)strlen(line));
-    sys1(SYS_CLOSE, fd);
+    rc = syscall3(SYS_WRITE, fd, (long)line, (int)strlen(line));
+    syscall1(SYS_CLOSE, fd);
     return rc < 0 ? rc : 0;
 }
 
 /** What /proc/loop says, into `buffer`. */
 static int loop_lines(char *buffer, int cap)
 {
-    int fd = sys3(SYS_OPEN, (int)"/proc/loop", O_RDONLY, 0);
+    int fd = syscall3(SYS_OPEN, (long)"/proc/loop", O_RDONLY, 0);
     int n;
 
     if (fd < 0) {
         fail_with("opening /proc/loop", fd);
     }
-    n = sys3(SYS_READ, fd, (int)buffer, cap - 1);
-    sys1(SYS_CLOSE, fd);
+    n = syscall3(SYS_READ, fd, (long)buffer, cap - 1);
+    syscall1(SYS_CLOSE, fd);
     if (n < 0) {
         fail_with("reading /proc/loop", n);
     }
@@ -240,7 +193,7 @@ static int read_number(const char *text)
 static int proc_disk_number(const char *name)
 {
     char buffer[2048];
-    int fd = sys3(SYS_OPEN, (int)"/proc/disk", O_RDONLY, 0);
+    int fd = syscall3(SYS_OPEN, (long)"/proc/disk", O_RDONLY, 0);
     int n;
     int i;
     int j;
@@ -252,7 +205,7 @@ static int proc_disk_number(const char *name)
        row wants is not in the first of them. */
     n = 0;
     for (;;) {
-        int got = sys3(SYS_READ, fd, (int)(buffer + n), (int)sizeof(buffer) - 1 - n);
+        int got = syscall3(SYS_READ, fd, (long)(buffer + n), (int)sizeof(buffer) - 1 - n);
 
         if (got <= 0) {
             break;
@@ -262,7 +215,7 @@ static int proc_disk_number(const char *name)
             break;
         }
     }
-    sys1(SYS_CLOSE, fd);
+    syscall1(SYS_CLOSE, fd);
     if (n <= 0) {
         fail_with("reading /proc/disk", n);
     }
@@ -284,7 +237,7 @@ static int proc_disk_number(const char *name)
             return value;
         }
     }
-    sys3(SYS_WRITE, 1, (int)buffer, n > 200 ? 200 : n);
+    syscall3(SYS_WRITE, 1, (long)buffer, n > 200 ? 200 : n);
     fail("a name /proc/disk does not have");
     return -1;
 }
@@ -292,15 +245,15 @@ static int proc_disk_number(const char *name)
 static void expect_file(const char *path, const char *want)
 {
     char buffer[256];
-    int fd = sys3(SYS_OPEN, (int)path, O_RDONLY, 0);
+    int fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
     int n;
     int i;
 
     if (fd < 0) {
         fail_with("opening a file in the image", fd);
     }
-    n = sys3(SYS_READ, fd, (int)buffer, (int)sizeof(buffer) - 1);
-    sys1(SYS_CLOSE, fd);
+    n = syscall3(SYS_READ, fd, (long)buffer, (int)sizeof(buffer) - 1);
+    syscall1(SYS_CLOSE, fd);
     if (n < 0) {
         fail_with("reading a file in the image", n);
     }
@@ -326,7 +279,7 @@ __asm__(".global _start\n"
  * errno, or 0. */
 static int loop_status(int dev, unsigned char *info)
 {
-    return sys3(SYS_IOCTL, dev, LOOP_GET_STATUS64, (int)info);
+    return syscall3(SYS_IOCTL, dev, LOOP_GET_STATUS64, (long)info);
 }
 
 /** The flags of the struct loop_info64 at `info`. */
@@ -341,7 +294,7 @@ static int open_loop(int index, int flags)
     char node[] = "/dev/loop0";
 
     node[9] = (char)('0' + index);
-    return sys3(SYS_OPEN, (int)node, flags, 0);
+    return syscall3(SYS_OPEN, (long)node, flags, 0);
 }
 
 /**
@@ -358,19 +311,19 @@ static void set_fd_rows(const char *image, int index)
     if (loop_status(dev, info) != -ENXIO) {
         fail("the device set to clear itself was still attached after the unmount");
     }
-    file = sys3(SYS_OPEN, (int)image, O_RDONLY, 0);
-    rc = sys3(SYS_IOCTL, dev, LOOP_SET_FD, file);
+    file = syscall3(SYS_OPEN, (long)image, O_RDONLY, 0);
+    rc = syscall3(SYS_IOCTL, dev, LOOP_SET_FD, file);
     if (rc != 0) {
         fail_with("LOOP_SET_FD of an image open for reading", rc);
     }
     if (loop_status(dev, info) != 0 || info_flags(info) != LO_FLAGS_READ_ONLY) {
         fail("LOOP_SET_FD of a file open for reading did not attach it read-only");
     }
-    if (sys3(SYS_IOCTL, dev, LOOP_CLR_FD, 0) != 0 || loop_status(dev, info) != -ENXIO) {
+    if (syscall3(SYS_IOCTL, dev, LOOP_CLR_FD, 0) != 0 || loop_status(dev, info) != -ENXIO) {
         fail("LOOP_CLR_FD did not detach the device");
     }
-    sys1(SYS_CLOSE, dev);
-    sys1(SYS_CLOSE, file);
+    syscall1(SYS_CLOSE, dev);
+    syscall1(SYS_CLOSE, file);
 }
 
 /**
@@ -383,20 +336,20 @@ static void ioctl_rows(const char *image, const char *type)
     char node[] = "/dev/loop0";
     int ctl, index, file, dev, rc, i;
 
-    ctl = sys3(SYS_OPEN, (int)"/dev/loop-control", O_RDWR, 0);
-    index = ctl < 0 ? ctl : sys3(SYS_IOCTL, ctl, LOOP_CTL_GET_FREE, 0);
+    ctl = syscall3(SYS_OPEN, (long)"/dev/loop-control", O_RDWR, 0);
+    index = ctl < 0 ? ctl : syscall3(SYS_IOCTL, ctl, LOOP_CTL_GET_FREE, 0);
     if (index < 0 || index > 3) {
         fail_with("LOOP_CTL_GET_FREE named no free device", index);
     }
-    sys1(SYS_CLOSE, ctl);
+    syscall1(SYS_CLOSE, ctl);
     node[9] = (char)('0' + index);
-    if (sys2(SYS_STAT64, (int)node, (int)st) != 0 || (st[17] & 0xF0) != 0x60 || st[33] != 7 ||
+    if (syscall2(SYS_STAT, (long)node, (long)st) != 0 || (st[17] & 0xF0) != 0x60 || st[33] != 7 ||
         st[32] != index) {
         fail("a loop device's node is not a block device of major 7");
     }
-    file = sys3(SYS_OPEN, (int)image, O_RDWR, 0);
+    file = syscall3(SYS_OPEN, (long)image, O_RDWR, 0);
     dev = open_loop(index, O_RDWR);
-    if (file < 0 || dev < 0 || sys3(SYS_READ, file, (int)first, 512) != 512) {
+    if (file < 0 || dev < 0 || syscall3(SYS_READ, file, (long)first, 512) != 512) {
         fail("opening and reading the image and opening a free loop device");
     }
     for (i = 0; i < (int)sizeof(config); i++) {
@@ -404,7 +357,7 @@ static void ioctl_rows(const char *image, const char *type)
     }
     config[0] = (unsigned char)file;
     config[CONFIG_INFO + INFO_FLAGS] = LO_FLAGS_AUTOCLEAR;
-    rc = sys3(SYS_IOCTL, dev, LOOP_CONFIGURE, (int)config);
+    rc = syscall3(SYS_IOCTL, dev, LOOP_CONFIGURE, (long)config);
     if (rc != 0) {
         fail_with("LOOP_CONFIGURE of an image open on a descriptor", rc);
     }
@@ -412,7 +365,7 @@ static void ioctl_rows(const char *image, const char *type)
         info_flags(info) != LO_FLAGS_AUTOCLEAR) {
         fail("LOOP_GET_STATUS64 did not name the file and its flags");
     }
-    if (sys3(SYS_READ, dev, (int)sector, 512) != 512) {
+    if (syscall3(SYS_READ, dev, (long)sector, 512) != 512) {
         fail("reading the first sector of the device");
     }
     for (i = 0; i < 512 && first[i] == sector[i]; i++) {
@@ -420,14 +373,14 @@ static void ioctl_rows(const char *image, const char *type)
     if (i != 512) {
         fail("the device's first sector is not the image's");
     }
-    rc = sys5(SYS_MOUNT, (int)node, (int)"/l", (int)type, 0, 0);
+    rc = syscall5(SYS_MOUNT, (long)node, (long)"/l", (long)type, 0, 0);
     if (rc != 0) {
         fail_with("mounting a device LOOP_CONFIGURE attached", rc);
     }
-    sys1(SYS_CLOSE, dev);
-    sys1(SYS_CLOSE, file);
+    syscall1(SYS_CLOSE, dev);
+    syscall1(SYS_CLOSE, file);
     expect_file("/l/hello.txt", "hello from inside an image");
-    rc = sys2(SYS_UMOUNT2, (int)"/l", 0);
+    rc = syscall2(SYS_UMOUNT2, (long)"/l", 0);
     if (rc != 0) {
         fail_with("unmounting the device LOOP_CONFIGURE attached", rc);
     }
@@ -448,8 +401,8 @@ void probe_main(unsigned int *sp)
     int rc;
     int i;
 
-    sys2(SYS_MKDIR, (int)"/m", 0755);
-    sys2(SYS_MKDIR, (int)"/l", 0755);
+    syscall2(SYS_MKDIR, (long)"/m", 0755);
+    syscall2(SYS_MKDIR, (long)"/l", 0755);
 
     /* A write through a loop device is durable when it returns, and not when
        something later flushes: the device writes the backing file and syncs
@@ -460,7 +413,7 @@ void probe_main(unsigned int *sp)
         int filler;
         int block_at;
 
-        rc = sys5(SYS_MOUNT, (int)"/dev/disk0p1", (int)"/m", (int)"vfat", 0, 0);
+        rc = syscall5(SYS_MOUNT, (long)"/dev/disk0p1", (long)"/m", (long)"vfat", 0, 0);
         if (rc != 0) {
             fail_with("mounting the volume that holds the image", rc);
         }
@@ -468,12 +421,12 @@ void probe_main(unsigned int *sp)
         if (rc != 0) {
             fail_with("attaching the image", rc);
         }
-        rc = sys5(SYS_MOUNT, (int)"/dev/loop0", (int)"/l", (int)"krffs", 0, 0);
+        rc = syscall5(SYS_MOUNT, (long)"/dev/loop0", (long)"/l", (long)"krffs", 0, 0);
         if (rc != 0) {
             fail_with("mounting the image", rc);
         }
         (void)proc_disk_number;
-        filler = sys3(SYS_OPEN, (int)"/l/filler.bin", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        filler = syscall3(SYS_OPEN, (long)"/l/filler.bin", O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (filler < 0) {
             fail_with("the file that fills the cache", filler);
         }
@@ -484,11 +437,12 @@ void probe_main(unsigned int *sp)
             for (k = 0; k < (int)sizeof(block); k++) {
                 block[k] = (char)(block_at + k);
             }
-            if (sys3(SYS_WRITE, filler, (int)block, (int)sizeof(block)) != (int)sizeof(block)) {
+            if (syscall3(SYS_WRITE, filler, (long)block, (int)sizeof(block)) !=
+                (int)sizeof(block)) {
                 fail("filling the cache through the image");
             }
         }
-        sys1(SYS_CLOSE, filler);
+        syscall1(SYS_CLOSE, filler);
         /* Every write the device made, and every sync it owed for one. The
            blocks reached it by eviction alone: nothing here asked for a sync
            or an unmount. */
@@ -514,13 +468,13 @@ void probe_main(unsigned int *sp)
                 fail_with("the writes the device did not sync", writes - syncs);
             }
         }
-        if (sys2(SYS_UMOUNT2, (int)"/l", 0) != 0) {
+        if (syscall2(SYS_UMOUNT2, (long)"/l", 0) != 0) {
             fail("unmounting the image after filling it");
         }
         if (control("detach 0") != 0) {
             fail("detaching after filling it");
         }
-        if (sys2(SYS_UMOUNT2, (int)"/m", 0) != 0) {
+        if (syscall2(SYS_UMOUNT2, (long)"/m", 0) != 0) {
             fail("unmounting the volume after filling it");
         }
         puts("LOOPPROBE OK (durable)");
@@ -532,11 +486,11 @@ void probe_main(unsigned int *sp)
        attached image is the same file and a second device over it is
        refused. */
     if (streq(type, "ext2back")) {
-        rc = sys5(SYS_MOUNT, (int)"/dev/disk0p1", (int)"/m", (int)"ext2", 0, 0);
+        rc = syscall5(SYS_MOUNT, (long)"/dev/disk0p1", (long)"/m", (long)"ext2", 0, 0);
         if (rc != 0) {
             fail_with("mounting the ext2 volume that holds the image", rc);
         }
-        if (sys2(SYS_LINK, (int)"/m/krffs.img", (int)"/m/alias.img") != 0) {
+        if (syscall2(SYS_LINK, (long)"/m/krffs.img", (long)"/m/alias.img") != 0) {
             fail("a second name for the image");
         }
         rc = control("attach 0 /m/krffs.img");
@@ -546,30 +500,31 @@ void probe_main(unsigned int *sp)
         if (control("attach 1 /m/alias.img") != -EBUSY) {
             fail("the same file was attached twice under two names");
         }
-        rc = sys5(SYS_MOUNT, (int)"/dev/loop0", (int)"/l", (int)"krffs", 0, 0);
+        rc = syscall5(SYS_MOUNT, (long)"/dev/loop0", (long)"/l", (long)"krffs", 0, 0);
         if (rc != 0) {
             fail_with("mounting the image on the ext2 volume", rc);
         }
         expect_file("/l/hello.txt", "hello from inside an image");
         {
-            int made = sys3(SYS_OPEN, (int)"/l/on-ext2.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            int made =
+                syscall3(SYS_OPEN, (long)"/l/on-ext2.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
 
-            if (made < 0 || sys3(SYS_WRITE, made, (int)"on ext2\n", 8) != 8) {
+            if (made < 0 || syscall3(SYS_WRITE, made, (long)"on ext2\n", 8) != 8) {
                 fail("writing the image on an ext2 volume");
             }
-            sys1(SYS_FSYNC, made);
-            sys1(SYS_CLOSE, made);
+            syscall1(SYS_FSYNC, made);
+            syscall1(SYS_CLOSE, made);
         }
-        if (sys2(SYS_UMOUNT2, (int)"/l", 0) != 0) {
+        if (syscall2(SYS_UMOUNT2, (long)"/l", 0) != 0) {
             fail("unmounting the image on an ext2 volume");
         }
         if (control("detach 0") != 0) {
             fail("detaching the image on an ext2 volume");
         }
-        if (sys1(SYS_UNLINK, (int)"/m/alias.img") != 0) {
+        if (syscall1(SYS_UNLINK, (long)"/m/alias.img") != 0) {
             fail("removing the second name");
         }
-        if (sys2(SYS_UMOUNT2, (int)"/m", 0) != 0) {
+        if (syscall2(SYS_UMOUNT2, (long)"/m", 0) != 0) {
             fail("unmounting the ext2 volume");
         }
         puts("LOOPPROBE OK (ext2back)");
@@ -580,7 +535,7 @@ void probe_main(unsigned int *sp)
         int reads = 0;
         int opens = 0;
 
-        rc = sys5(SYS_MOUNT, (int)"/dev/disk0p1", (int)"/m", (int)"vfat", 0, 0);
+        rc = syscall5(SYS_MOUNT, (long)"/dev/disk0p1", (long)"/m", (long)"vfat", 0, 0);
         if (rc != 0) {
             fail_with("mounting the stick's volume", rc);
         }
@@ -588,14 +543,14 @@ void probe_main(unsigned int *sp)
         if (rc != 0) {
             fail_with("attaching an image on a stick", rc);
         }
-        rc = sys5(SYS_MOUNT, (int)"/dev/loop0", (int)"/l", (int)"vfat", 0, 0);
+        rc = syscall5(SYS_MOUNT, (long)"/dev/loop0", (long)"/l", (long)"vfat", 0, 0);
         if (rc != 0) {
             fail_with("mounting an image on a stick", rc);
         }
         expect_file("/l/hello.txt", "hello from inside an image");
 
         for (;;) {
-            int fd2 = sys3(SYS_OPEN, (int)"/l/hello.txt", O_RDONLY, 0);
+            int fd2 = syscall3(SYS_OPEN, (long)"/l/hello.txt", O_RDONLY, 0);
 
             if (fd2 < 0) {
                 break;
@@ -605,9 +560,9 @@ void probe_main(unsigned int *sp)
             }
             {
                 char one[8];
-                int got = sys3(SYS_READ, fd2, (int)one, (int)sizeof(one));
+                int got = syscall3(SYS_READ, fd2, (long)one, (int)sizeof(one));
 
-                sys1(SYS_CLOSE, fd2);
+                syscall1(SYS_CLOSE, fd2);
                 if (got < 0) {
                     break;
                 }
@@ -622,7 +577,7 @@ void probe_main(unsigned int *sp)
         if (control("attach 0 /m/fat.img") != -EBUSY) {
             fail("a device whose stick went took another file");
         }
-        rc = sys2(SYS_UMOUNT2, (int)"/l", 0);
+        rc = syscall2(SYS_UMOUNT2, (long)"/l", 0);
         if (rc != 0) {
             fail_with("unmounting an image whose stick has gone", rc);
         }
@@ -630,7 +585,7 @@ void probe_main(unsigned int *sp)
         if (rc != 0 && rc != -ENOENT) {
             fail_with("detaching a device whose stick has gone", rc);
         }
-        rc = sys2(SYS_UMOUNT2, (int)"/m", 0);
+        rc = syscall2(SYS_UMOUNT2, (long)"/m", 0);
         if (rc != 0) {
             fail_with("unmounting the volume of a stick that has gone", rc);
         }
@@ -638,7 +593,7 @@ void probe_main(unsigned int *sp)
         sys_exit(0);
     }
 
-    rc = sys5(SYS_MOUNT, (int)"/dev/disk0p1", (int)"/m", (int)"vfat", 0, 0);
+    rc = syscall5(SYS_MOUNT, (long)"/dev/disk0p1", (long)"/m", (long)"vfat", 0, 0);
     if (rc != 0) {
         fail_with("mounting the volume that holds the images", rc);
     }
@@ -666,7 +621,7 @@ void probe_main(unsigned int *sp)
         fail("/proc/loop does not name what was attached");
     }
 
-    rc = sys5(SYS_MOUNT, (int)"/dev/loop0", (int)"/l", (int)type, 0, 0);
+    rc = syscall5(SYS_MOUNT, (long)"/dev/loop0", (long)"/l", (long)type, 0, 0);
     if (rc != 0) {
         fail_with("mounting the image through the device", rc);
     }
@@ -695,23 +650,23 @@ void probe_main(unsigned int *sp)
     if (control("attach 0 /m/odd2.img") != -EBUSY) {
         fail("the device that is taken took another file");
     }
-    fd = sys3(SYS_OPEN, (int)image, O_WRONLY, 0);
+    fd = syscall3(SYS_OPEN, (long)image, O_WRONLY, 0);
     if (fd < 0) {
         fail_with("opening a file that backs a device", fd);
     }
-    rc = sys3(SYS_WRITE, fd, (int)"x", 1);
+    rc = syscall3(SYS_WRITE, fd, (long)"x", 1);
     if (rc != -EBUSY) {
         fail_with("writing a file that backs a device", rc);
     }
-    rc = sys2(SYS_FTRUNCATE, fd, 0);
+    rc = syscall2(SYS_FTRUNCATE, fd, 0);
     if (rc != -EBUSY) {
         fail_with("truncating a file that backs a device", rc);
     }
-    sys1(SYS_CLOSE, fd);
+    syscall1(SYS_CLOSE, fd);
     if (control("detach 0") != -EBUSY) {
         fail("a device with a mount on it was detached");
     }
-    if (sys2(SYS_UMOUNT2, (int)"/m", 0) != -EBUSY) {
+    if (syscall2(SYS_UMOUNT2, (long)"/m", 0) != -EBUSY) {
         fail("the volume holding an attached file was unmounted");
     }
     if (control("attach 1 /m") != -EINVAL) {
@@ -756,16 +711,16 @@ void probe_main(unsigned int *sp)
     if (!contains(lines, "loop1 ") || !contains(lines, " ro ")) {
         fail("/proc/loop does not say the device will not write");
     }
-    sys2(SYS_MKDIR, (int)"/r", 0755);
-    rc = sys5(SYS_MOUNT, (int)"/dev/loop1", (int)"/r", (int)"vfat", 0, 0);
+    syscall2(SYS_MKDIR, (long)"/r", 0755);
+    rc = syscall5(SYS_MOUNT, (long)"/dev/loop1", (long)"/r", (long)"vfat", 0, 0);
     if (rc != 0) {
         fail_with("mounting a device that will not write", rc);
     }
-    rc = sys3(SYS_OPEN, (int)"/r/made.txt", O_WRONLY | O_CREAT, 0644);
+    rc = syscall3(SYS_OPEN, (long)"/r/made.txt", O_WRONLY | O_CREAT, 0644);
     if (rc != -EROFS) {
         fail_with("creating a file on a device that will not write", rc);
     }
-    rc = sys2(SYS_UMOUNT2, (int)"/r", 0);
+    rc = syscall2(SYS_UMOUNT2, (long)"/r", 0);
     if (rc != 0) {
         fail_with("unmounting the device that will not write", rc);
     }
@@ -775,19 +730,19 @@ void probe_main(unsigned int *sp)
 
     /* A write through the mount, then the same bytes read back from the file
        after a detach and a fresh attachment. */
-    fd = sys3(SYS_OPEN, (int)"/l/made.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    fd = syscall3(SYS_OPEN, (long)"/l/made.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) {
         fail_with("creating a file inside the image", fd);
     }
-    if (sys3(SYS_WRITE, fd, (int)"written through a loop device\n", 30) != 30) {
+    if (syscall3(SYS_WRITE, fd, (long)"written through a loop device\n", 30) != 30) {
         fail("writing inside the image");
     }
-    if (sys1(SYS_FSYNC, fd) != 0) {
+    if (syscall1(SYS_FSYNC, fd) != 0) {
         fail("fsync inside the image");
     }
-    sys1(SYS_CLOSE, fd);
+    syscall1(SYS_CLOSE, fd);
 
-    rc = sys2(SYS_UMOUNT2, (int)"/l", 0);
+    rc = syscall2(SYS_UMOUNT2, (long)"/l", 0);
     if (rc != 0) {
         fail_with("unmounting the image", rc);
     }
@@ -804,12 +759,12 @@ void probe_main(unsigned int *sp)
     if (rc != 0) {
         fail_with("attaching the image again", rc);
     }
-    rc = sys5(SYS_MOUNT, (int)"/dev/loop0", (int)"/l", (int)type, MS_RDONLY, 0);
+    rc = syscall5(SYS_MOUNT, (long)"/dev/loop0", (long)"/l", (long)type, MS_RDONLY, 0);
     if (rc != 0) {
         fail_with("mounting the image again", rc);
     }
     expect_file("/l/made.txt", "written through a loop device\n");
-    rc = sys2(SYS_UMOUNT2, (int)"/l", 0);
+    rc = syscall2(SYS_UMOUNT2, (long)"/l", 0);
     if (rc != 0) {
         fail_with("unmounting the image the second time", rc);
     }
@@ -818,31 +773,31 @@ void probe_main(unsigned int *sp)
     }
 
     /* The file the device stood on is an ordinary file again. */
-    fd = sys3(SYS_OPEN, (int)image, O_WRONLY, 0);
+    fd = syscall3(SYS_OPEN, (long)image, O_WRONLY, 0);
     if (fd < 0) {
         fail_with("opening the image after the detach", fd);
     }
-    sys1(SYS_CLOSE, fd);
+    syscall1(SYS_CLOSE, fd);
 
     /* The same image, copied onto the root, which is memory and has no
        device under it at all: a loop device reads its file through the file
        system holding it, so where that file lives does not matter. */
     {
         char block[4096];
-        int from = sys3(SYS_OPEN, (int)image, O_RDONLY, 0);
-        int to = sys3(SYS_OPEN, (int)"/ram.img", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        int from = syscall3(SYS_OPEN, (long)image, O_RDONLY, 0);
+        int to = syscall3(SYS_OPEN, (long)"/ram.img", O_WRONLY | O_CREAT | O_TRUNC, 0644);
         int n;
 
         if (from < 0 || to < 0) {
             fail("opening the image to copy it onto the root");
         }
-        while ((n = sys3(SYS_READ, from, (int)block, (int)sizeof(block))) > 0) {
-            if (sys3(SYS_WRITE, to, (int)block, n) != n) {
+        while ((n = syscall3(SYS_READ, from, (long)block, (int)sizeof(block))) > 0) {
+            if (syscall3(SYS_WRITE, to, (long)block, n) != n) {
                 fail("copying the image onto the root");
             }
         }
-        sys1(SYS_CLOSE, from);
-        sys1(SYS_CLOSE, to);
+        syscall1(SYS_CLOSE, from);
+        syscall1(SYS_CLOSE, to);
         if (n < 0) {
             fail_with("reading the image to copy it", n);
         }
@@ -855,52 +810,52 @@ void probe_main(unsigned int *sp)
        somebody holds is the descriptor tables, and an attachment is not one.
        So a removal of the file under this device, by either name it can be
        removed by, is refused while the device stands on it. */
-    if (sys1(SYS_UNLINK, (int)"/ram.img") != -EBUSY) {
+    if (syscall1(SYS_UNLINK, (long)"/ram.img") != -EBUSY) {
         fail("the file under an attached device was unlinked");
     }
     {
-        int spare = sys3(SYS_OPEN, (int)"/spare.img", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        int spare = syscall3(SYS_OPEN, (long)"/spare.img", O_WRONLY | O_CREAT | O_TRUNC, 0644);
 
         if (spare < 0) {
             fail("making a file to rename over the attached one");
         }
-        sys3(SYS_WRITE, spare, (int)"x", 1);
-        sys1(SYS_CLOSE, spare);
-        if (sys2(SYS_RENAME, (int)"/spare.img", (int)"/ram.img") != -EBUSY) {
+        syscall3(SYS_WRITE, spare, (long)"x", 1);
+        syscall1(SYS_CLOSE, spare);
+        if (syscall2(SYS_RENAME, (long)"/spare.img", (long)"/ram.img") != -EBUSY) {
             fail("the file under an attached device was renamed over");
         }
-        if (sys1(SYS_UNLINK, (int)"/spare.img") != 0) {
+        if (syscall1(SYS_UNLINK, (long)"/spare.img") != 0) {
             fail("removing the spare file");
         }
     }
     /* And an open that truncates is a change of its length like any other. */
-    if (sys3(SYS_OPEN, (int)"/ram.img", O_WRONLY | O_TRUNC, 0) != -EBUSY) {
+    if (syscall3(SYS_OPEN, (long)"/ram.img", O_WRONLY | O_TRUNC, 0) != -EBUSY) {
         fail("an attached image was truncated by an open");
     }
-    rc = sys5(SYS_MOUNT, (int)"/dev/loop0", (int)"/l", (int)type, MS_RDONLY, 0);
+    rc = syscall5(SYS_MOUNT, (long)"/dev/loop0", (long)"/l", (long)type, MS_RDONLY, 0);
     if (rc != 0) {
         fail_with("mounting an image that lives in memory", rc);
     }
     expect_file("/l/hello.txt", "hello from inside an image");
-    rc = sys2(SYS_UMOUNT2, (int)"/l", 0);
+    rc = syscall2(SYS_UMOUNT2, (long)"/l", 0);
     if (rc != 0) {
         fail_with("unmounting the image in memory", rc);
     }
     if (control("detach 0") != 0) {
         fail("detaching the image in memory");
     }
-    if (sys1(SYS_UNLINK, (int)"/ram.img") != 0) {
+    if (syscall1(SYS_UNLINK, (long)"/ram.img") != 0) {
         fail("removing the copy from the root");
     }
     ioctl_rows(image, type);
 
-    rc = sys2(SYS_UMOUNT2, (int)"/m", 0);
+    rc = syscall2(SYS_UMOUNT2, (long)"/m", 0);
     if (rc != 0) {
         fail_with("unmounting the volume that holds the images", rc);
     }
 
-    sys3(SYS_WRITE, 1, (int)"LOOPPROBE OK (", 14);
-    sys3(SYS_WRITE, 1, (int)type, (int)strlen(type));
+    syscall3(SYS_WRITE, 1, (long)"LOOPPROBE OK (", 14);
+    syscall3(SYS_WRITE, 1, (long)type, (int)strlen(type));
     puts(")");
     sys_exit(0);
 }

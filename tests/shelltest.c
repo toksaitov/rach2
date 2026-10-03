@@ -2,61 +2,39 @@
  * Exercises the fork+exec+waitpid chain that a shell uses to run a program.
  *
  * The child exec's `hello`; the parent waits and checks its exit status.
- * Freestanding; direct int 0x80.
+ * Freestanding; direct system calls (probe.h).
  */
 
-typedef unsigned int size_t;
+#include "probe.h"
 
 #define STDOUT_FILENO 1
 
 /* Syscall numbers (32-bit Linux / Rach2 compatible) */
-#define SYS_EXIT    1
-#define SYS_FORK    2
-#define SYS_WRITE   4
-#define SYS_WAITPID 7
-#define SYS_EXECVE  11
 
 static int sys_write(int fd, const void *buf, size_t count)
 {
-    int result;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(result)
-                         : "0"(SYS_WRITE), "b"(fd), "c"(buf), "d"(count)
-                         : "memory");
-    return result;
+    return syscall3(SYS_WRITE, (long)fd, (long)buf, (long)count);
 }
 
 static void sys_exit(int status)
 {
-    __asm__ __volatile__("int $0x80" : : "a"(SYS_EXIT), "b"(status));
+    syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
 static int sys_fork(void)
 {
-    int result;
-    __asm__ __volatile__("int $0x80" : "=a"(result) : "0"(SYS_FORK));
-    return result;
+    return syscall0(SYS_FORK);
 }
 
 static int sys_waitpid(int pid, int *status, int options)
 {
-    int result;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(result)
-                         : "0"(SYS_WAITPID), "b"(pid), "c"(status), "d"(options)
-                         : "memory");
-    return result;
+    return syscall3(SYS_WAITPID, (long)pid, (long)status, (long)options);
 }
 
 static int sys_execve(const char *path, char *const argv[], char *const envp[])
 {
-    int result;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(result)
-                         : "0"(SYS_EXECVE), "b"(path), "c"(argv), "d"(envp)
-                         : "memory");
-    return result;
+    return syscall3(SYS_EXECVE, (long)path, (long)argv, (long)envp);
 }
 
 static size_t strlen(const char *s)
@@ -116,7 +94,7 @@ static void print_num(int n)
  * rather than by a bare word, so a run whose working directory is not the
  * root fails on what the kernel did and not on where it was started.
  */
-void _start(void)
+PROBE_START void _start(void)
 {
     int pid;
     int status;

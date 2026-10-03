@@ -15,18 +15,13 @@
  * fill; `tests/run diskfull` gives it a small one. It removes its own file
  * whatever happens.
  *
- * Prints "DISKFULL OK" and exits 0. Freestanding; direct int 0x80.
+ * Prints "DISKFULL OK" and exits 0. Freestanding; direct system calls
+ * (probe.h).
  */
 
-typedef unsigned int size_t;
+#include "probe.h"
 
 #define STDOUT_FILENO 1
-
-#define SYS_EXIT   1
-#define SYS_WRITE  4
-#define SYS_OPEN   5
-#define SYS_CLOSE  6
-#define SYS_UNLINK 10
 
 #define O_WRONLY 1
 #define O_CREAT  0100
@@ -41,16 +36,9 @@ typedef unsigned int size_t;
 
 static char block[CHUNK];
 
-static int syscall3(int n, int a, int b, int c)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
-}
-
 static void sys_exit(int status)
 {
-    __asm__ __volatile__("int $0x80" : : "a"(SYS_EXIT), "b"(status));
+    syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
@@ -65,13 +53,13 @@ static size_t strlen(const char *s)
 
 static void print(const char *s)
 {
-    syscall3(SYS_WRITE, STDOUT_FILENO, (int)(size_t)s, (int)strlen(s));
+    syscall3(SYS_WRITE, STDOUT_FILENO, (long)s, (int)strlen(s));
 }
 
 static void puts(const char *s)
 {
     print(s);
-    syscall3(SYS_WRITE, STDOUT_FILENO, (int)(size_t)"\n", 1);
+    syscall3(SYS_WRITE, STDOUT_FILENO, (long)"\n", 1);
 }
 
 static void print_num(int v)
@@ -91,7 +79,7 @@ static void print_num(int v)
         v /= 10;
     }
     while (i > 0) {
-        syscall3(SYS_WRITE, STDOUT_FILENO, (int)(size_t)&buf[--i], 1);
+        syscall3(SYS_WRITE, STDOUT_FILENO, (long)&buf[--i], 1);
     }
 }
 
@@ -100,13 +88,13 @@ static void fail(const char *why, int fd)
     if (fd >= 0) {
         syscall3(SYS_CLOSE, fd, 0, 0);
     }
-    syscall3(SYS_UNLINK, (int)(size_t)"/diskfull.tmp", 0, 0);
+    syscall3(SYS_UNLINK, (long)"/diskfull.tmp", 0, 0);
     print("DISKFULL FAIL: ");
     puts(why);
     sys_exit(1);
 }
 
-void _start(void)
+PROBE_START void _start(void)
 {
     int fd, n, i, refused, written;
 
@@ -114,7 +102,7 @@ void _start(void)
         block[i] = (char)('a' + (i & 15));
     }
 
-    fd = syscall3(SYS_OPEN, (int)(size_t)"/diskfull.tmp", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    fd = syscall3(SYS_OPEN, (long)"/diskfull.tmp", O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) {
         fail("the file could not be created", -1);
     }
@@ -122,7 +110,7 @@ void _start(void)
     refused = 0;
     written = 0;
     for (i = 0; i < TRIES; i++) {
-        n = syscall3(SYS_WRITE, fd, (int)(size_t)block, CHUNK);
+        n = syscall3(SYS_WRITE, fd, (long)block, CHUNK);
         if (n < 0) {
             refused = n;
             break;
@@ -138,7 +126,7 @@ void _start(void)
         print_num(refused);
         puts(", not -ENOSPC");
         syscall3(SYS_CLOSE, fd, 0, 0);
-        syscall3(SYS_UNLINK, (int)(size_t)"/diskfull.tmp", 0, 0);
+        syscall3(SYS_UNLINK, (long)"/diskfull.tmp", 0, 0);
         sys_exit(1);
     }
     if (written == 0) {
@@ -148,19 +136,19 @@ void _start(void)
 
     /* The space comes back. A file system that refused the same write again
        after the file was removed would have lost it, not freed it. */
-    if (syscall3(SYS_UNLINK, (int)(size_t)"/diskfull.tmp", 0, 0) != 0) {
+    if (syscall3(SYS_UNLINK, (long)"/diskfull.tmp", 0, 0) != 0) {
         fail("the file could not be removed", -1);
     }
-    fd = syscall3(SYS_OPEN, (int)(size_t)"/diskfull.tmp", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    fd = syscall3(SYS_OPEN, (long)"/diskfull.tmp", O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) {
         fail("the file could not be created again", -1);
     }
-    n = syscall3(SYS_WRITE, fd, (int)(size_t)block, CHUNK);
+    n = syscall3(SYS_WRITE, fd, (long)block, CHUNK);
     if (n != CHUNK) {
         fail("the space a removed file held did not come back", fd);
     }
     syscall3(SYS_CLOSE, fd, 0, 0);
-    syscall3(SYS_UNLINK, (int)(size_t)"/diskfull.tmp", 0, 0);
+    syscall3(SYS_UNLINK, (long)"/diskfull.tmp", 0, 0);
 
     print("DISKFULL OK (");
     print_num(written / 1024);

@@ -16,21 +16,10 @@
  *       width is -EINVAL (never a silent truncation);
  *   (g) bad timeout: an out-of-range timeval (tv_usec >= 1e6) is -EINVAL.
  *
- * Prints "POLLPROBE OK". Freestanding; direct int 0x80.
+ * Prints "POLLPROBE OK". Freestanding; direct system calls (probe.h).
  */
 
-typedef unsigned int size_t;
-
-#define SYS_EXIT      1
-#define SYS_FORK      2
-#define SYS_READ      3
-#define SYS_WRITE     4
-#define SYS_CLOSE     6
-#define SYS_WAITPID   7
-#define SYS_PIPE      42
-#define SYS_NANOSLEEP 162
-#define SYS_NEWSELECT 142
-#define SYS_POLL      168
+#include "probe.h"
 
 #define POLLIN  0x001
 #define POLLOUT 0x004
@@ -44,37 +33,6 @@ struct pollfd {
     short events;
     short revents;
 };
-
-static int syscall1(int n, int a)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a) : "memory");
-    return r;
-}
-
-static int syscall2(int n, int a, int b)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b) : "memory");
-    return r;
-}
-
-static int syscall3(int n, int a, int b, int c)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
-}
-
-static int syscall5(int n, int a, int b, int c, int d, int e)
-{
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(n), "b"(a), "c"(b), "d"(c), "S"(d), "D"(e)
-                         : "memory");
-    return r;
-}
 
 static void sys_exit(int status)
 {
@@ -93,8 +51,8 @@ static size_t strlen(const char *s)
 
 static void puts(const char *s)
 {
-    syscall3(SYS_WRITE, 1, (int)(size_t)s, (int)strlen(s));
-    syscall3(SYS_WRITE, 1, (int)(size_t)"\n", 1);
+    syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
+    syscall3(SYS_WRITE, 1, (long)"\n", 1);
 }
 
 static int fails = 0;
@@ -103,7 +61,7 @@ static void check(int cond, const char *msg)
 {
     if (!cond) {
         fails++;
-        syscall3(SYS_WRITE, 1, (int)(size_t)"  FAIL: ", 8);
+        syscall3(SYS_WRITE, 1, (long)"  FAIL: ", 8);
         puts(msg);
     }
 }
@@ -112,12 +70,12 @@ static int do_pipe(int fds[2])
 {
     fds[0] = -1;
     fds[1] = -1;
-    return syscall1(SYS_PIPE, (int)(size_t)fds);
+    return syscall1(SYS_PIPE, (long)fds);
 }
 
 static int do_poll(struct pollfd *fds, int nfds, int timeout_ms)
 {
-    return syscall3(SYS_POLL, (int)(size_t)fds, nfds, timeout_ms);
+    return syscall3(SYS_POLL, (long)fds, nfds, timeout_ms);
 }
 
 /**
@@ -128,7 +86,7 @@ static int do_poll(struct pollfd *fds, int nfds, int timeout_ms)
  */
 static int do_read(int fd, char *buf, int n)
 {
-    return syscall3(SYS_READ, fd, (int)(size_t)buf, n);
+    return syscall3(SYS_READ, fd, (long)buf, n);
 }
 
 static void msleep(int ms)
@@ -139,10 +97,10 @@ static void msleep(int ms)
     } ts;
     ts.tv_sec = ms / 1000;
     ts.tv_nsec = (ms % 1000) * 1000000;
-    syscall2(SYS_NANOSLEEP, (int)(size_t)&ts, 0);
+    syscall2(SYS_NANOSLEEP, (long)&ts, 0);
 }
 
-void _start(void)
+PROBE_START void _start(void)
 {
     int a[2], b[2];
     struct pollfd pfd[2];
@@ -161,7 +119,7 @@ void _start(void)
 
     /* (b) readiness: write one end, poll returns it with POLLIN, the other
      * clear. */
-    syscall3(SYS_WRITE, a[1], (int)(size_t)"x", 1);
+    syscall3(SYS_WRITE, a[1], (long)"x", 1);
     pfd[0].revents = 0;
     pfd[1].revents = 0;
     n = do_poll(pfd, 2, 100);
@@ -181,7 +139,7 @@ void _start(void)
 
     /* (d) select via _newselect: a[0] is drained/empty, write then select
      * it. */
-    syscall3(SYS_WRITE, a[1], (int)(size_t)"y", 1);
+    syscall3(SYS_WRITE, a[1], (long)"y", 1);
     {
         unsigned int rset[32];
         int i;
@@ -191,7 +149,7 @@ void _start(void)
         rset[a[0] / 32] = 1u << (a[0] % 32);
         /* select(nfds, &rset, NULL, NULL, NULL): NULL timeout, but a[0] is
          * already readable so it returns at once. */
-        n = syscall5(SYS_NEWSELECT, a[0] + 1, (int)(size_t)rset, 0, 0, 0);
+        n = syscall5(SYS_SELECT, a[0] + 1, (long)rset, 0, 0, 0);
         check(n == 1, "select finds the readable fd");
         check((rset[a[0] / 32] & (1u << (a[0] % 32))) != 0, "select set the ready bit");
     }
@@ -205,7 +163,7 @@ void _start(void)
     if (pid == 0) {
         syscall1(SYS_CLOSE, a[0]);
         msleep(60);
-        syscall3(SYS_WRITE, a[1], (int)(size_t)"z", 1);
+        syscall3(SYS_WRITE, a[1], (long)"z", 1);
         sys_exit(0);
     } else {
         pfd[0].fd = a[0];
@@ -215,7 +173,7 @@ void _start(void)
         check(n == 1 && (pfd[0].revents & POLLIN) != 0,
               "poll blocks then wakes on the child's write");
         do_read(a[0], buf, 1);
-        syscall3(SYS_WAITPID, pid, (int)(size_t)&status, 0);
+        syscall3(SYS_WAITPID, pid, (long)&status, 0);
     }
     syscall1(SYS_CLOSE, a[0]);
     syscall1(SYS_CLOSE, a[1]);
@@ -232,7 +190,7 @@ void _start(void)
             set[i] = 0;
         }
         set[1u / 32] = 1u << (1u % 32);
-        n = syscall5(SYS_NEWSELECT, 64, 0, (int)(size_t)set, 0, 0);
+        n = syscall5(SYS_SELECT, 64, 0, (long)set, 0, 0);
         check(n == 1 && (set[0] & (1u << 1)) != 0, "wide select with an in-range bit works");
 
         /* A bit for an fd past the table's sixteen, which nothing has
@@ -241,7 +199,7 @@ void _start(void)
             set[i] = 0;
         }
         set[17u / 32] = 1u << (17u % 32);
-        check(syscall5(SYS_NEWSELECT, 18, (int)(size_t)set, 0, 0, 0) == -EBADF,
+        check(syscall5(SYS_SELECT, 18, (long)set, 0, 0, 0) == -EBADF,
               "select bit past the table -> -EBADF");
 
         /* A bit for a closed in-range fd is also -EBADF, not ignored: a[0] was
@@ -250,11 +208,11 @@ void _start(void)
             set[i] = 0;
         }
         set[(unsigned)a[0] / 32] = 1u << ((unsigned)a[0] % 32);
-        check(syscall5(SYS_NEWSELECT, a[0] + 1, (int)(size_t)set, 0, 0, 0) == -EBADF,
+        check(syscall5(SYS_SELECT, a[0] + 1, (long)set, 0, 0, 0) == -EBADF,
               "select bit for a closed fd -> -EBADF");
 
         /* nfds beyond the fd_set width (FD_SETSIZE) is -EINVAL. */
-        check(syscall5(SYS_NEWSELECT, 2000, 0, 0, 0, 0) == -EINVAL,
+        check(syscall5(SYS_SELECT, 2000, 0, 0, 0, 0) == -EINVAL,
               "select nfds > FD_SETSIZE -> -EINVAL");
     }
 
@@ -263,7 +221,7 @@ void _start(void)
         int tv[2];
         tv[0] = 0;
         tv[1] = 2000000; /* tv_usec >= 1e6 is invalid */
-        check(syscall5(SYS_NEWSELECT, 0, 0, 0, 0, (int)(size_t)tv) == -EINVAL,
+        check(syscall5(SYS_SELECT, 0, 0, 0, 0, (long)tv) == -EINVAL,
               "select with tv_usec >= 1e6 -> -EINVAL");
     }
 

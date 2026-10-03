@@ -12,25 +12,17 @@
  * The peer here is the machine itself over loopback, so both ends of every
  * exchange are in this one process and nothing outside is needed.
  *
- * Prints "DGRAMPROBE OK" and exits 0 on success. Freestanding; direct int 0x80.
+ * Prints "DGRAMPROBE OK" and exits 0 on success. Freestanding; direct system
+ * calls (probe.h).
  */
 
-typedef unsigned int size_t;
+#include "probe.h"
+
 typedef unsigned int uint32_t;
 typedef unsigned short uint16_t;
 typedef unsigned char uint8_t;
 
 #define STDOUT_FILENO 1
-
-#define SYS_EXIT       1
-#define SYS_READ       3
-#define SYS_WRITE      4
-#define SYS_CLOSE      6
-#define SYS_FORK       2
-#define SYS_WAITPID    7
-#define SYS_SOCKETCALL 102
-#define SYS_SETUID32   213
-#define SYS_NANOSLEEP  162
 
 #define SC_SOCKET      1
 #define SC_BIND        2
@@ -75,45 +67,28 @@ typedef unsigned char uint8_t;
 
 static int sys_write(int fd, const void *data, size_t count)
 {
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_WRITE), "b"(fd), "c"(data), "d"(count)
-                         : "memory");
-    return r;
+    return syscall3(SYS_WRITE, (long)fd, (long)data, (long)count);
 }
 
 static int sys_read(int fd, void *data, size_t count)
 {
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_READ), "b"(fd), "c"(data), "d"(count)
-                         : "memory");
-    return r;
+    return syscall3(SYS_READ, (long)fd, (long)data, (long)count);
 }
 
 static int sys_close(int fd)
 {
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(SYS_CLOSE), "b"(fd));
-    return r;
+    return syscall1(SYS_CLOSE, (long)fd);
 }
 
 static void sys_exit(int status)
 {
-    __asm__ __volatile__("int $0x80" : : "a"(SYS_EXIT), "b"(status));
+    syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
 static int socketcall(int call, uint32_t *args)
 {
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_SOCKETCALL), "b"(call), "c"(args)
-                         : "memory");
-    return r;
+    return syscall2(SYS_SOCKETCALL, (long)call, (long)args);
 }
 
 struct timespec_probe {
@@ -128,31 +103,22 @@ static void nap(long ms)
 
     ts.tv_sec = ms / 1000;
     ts.tv_nsec = (ms % 1000) * 1000000L;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(SYS_NANOSLEEP), "b"(&ts), "c"(0) : "memory");
+    r = syscall2(SYS_NANOSLEEP, (long)(&ts), (long)0);
 }
 
 static int sys_fork(void)
 {
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(SYS_FORK) : "memory");
-    return r;
+    return syscall0(SYS_FORK);
 }
 
 static int sys_setuid(int uid)
 {
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(SYS_SETUID32), "b"(uid));
-    return r;
+    return syscall1(SYS_SETUID, (long)uid);
 }
 
 static int sys_waitpid(int pid, int *status, int options)
 {
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_WAITPID), "b"(pid), "c"(status), "d"(options)
-                         : "memory");
-    return r;
+    return syscall3(SYS_WAITPID, (long)pid, (long)status, (long)options);
 }
 
 static void say(const char *s)
@@ -208,7 +174,7 @@ static int open_bound_maybe(uint16_t port)
     }
     set_sockaddr(0, port);
     args[0] = (uint32_t)fd;
-    args[1] = (uint32_t)sa;
+    args[1] = (unsigned long)sa;
     args[2] = 16;
     if (socketcall(SC_BIND, args) != 0) {
         sys_close(fd);
@@ -231,7 +197,7 @@ static int open_bound(uint16_t port)
     }
     set_sockaddr(0, port);
     args[0] = (uint32_t)fd;
-    args[1] = (uint32_t)sa;
+    args[1] = (unsigned long)sa;
     args[2] = 16;
     if (socketcall(SC_BIND, args) != 0) {
         fail("a datagram socket did not bind");
@@ -239,7 +205,7 @@ static int open_bound(uint16_t port)
     return fd;
 }
 
-void _start(void)
+PROBE_START void _start(void)
 {
     uint32_t args[6];
     int peer, other, client, outside, stream, extra, listener, sender, r, i;
@@ -272,7 +238,7 @@ void _start(void)
     /* Connected, it writes to its peer without being told again. */
     set_sockaddr(OUR_IP, PEER_PORT);
     args[0] = (uint32_t)client;
-    args[1] = (uint32_t)sa;
+    args[1] = (unsigned long)sa;
     args[2] = 16;
     if (socketcall(SC_CONNECT, args) != 0) {
         fail("connecting a datagram socket failed");
@@ -281,7 +247,7 @@ void _start(void)
         fail("a write to the connected peer failed");
     }
     args[0] = (uint32_t)peer;
-    args[1] = (uint32_t)buf;
+    args[1] = (unsigned long)buf;
     args[2] = sizeof(buf);
     args[3] = 0;
     args[4] = 0;
@@ -293,9 +259,9 @@ void _start(void)
 
     /* And it hears from that peer and from nobody else. */
     args[0] = (uint32_t)client;
-    args[1] = (uint32_t)sa;
+    args[1] = (unsigned long)sa;
     optlen = 16;
-    args[2] = (uint32_t)&optlen;
+    args[2] = (unsigned long)&optlen;
     if (socketcall(SC_GETSOCKNAME, args) != 0) {
         fail("the client's own address did not read");
     }
@@ -306,20 +272,20 @@ void _start(void)
 
     set_sockaddr(OUR_IP, client_port);
     args[0] = (uint32_t)peer;
-    args[1] = (uint32_t)"peer";
+    args[1] = (unsigned long)"peer";
     args[2] = 4;
     args[3] = 0;
-    args[4] = (uint32_t)sa;
+    args[4] = (unsigned long)sa;
     args[5] = 16;
     if (socketcall(SC_SENDTO, args) != 4) {
         fail("the peer's reply did not send");
     }
     set_sockaddr(OUR_IP, client_port);
     args[0] = (uint32_t)other;
-    args[1] = (uint32_t)"other";
+    args[1] = (unsigned long)"other";
     args[2] = 5;
     args[3] = 0;
-    args[4] = (uint32_t)sa;
+    args[4] = (unsigned long)sa;
     args[5] = 16;
     if (socketcall(SC_SENDTO, args) != 5) {
         fail("the third socket's datagram did not send");
@@ -330,7 +296,7 @@ void _start(void)
        datagram is delivered the moment it is sent; the rest do not, and none of
        them may find anything, whichever order the two arrived in. */
     args[0] = (uint32_t)client;
-    args[1] = (uint32_t)buf;
+    args[1] = (unsigned long)buf;
     args[2] = sizeof(buf);
     args[3] = 0;
     args[4] = 0;
@@ -341,7 +307,7 @@ void _start(void)
     }
     for (i = 0; i < 40; i++) {
         args[0] = (uint32_t)client;
-        args[1] = (uint32_t)buf;
+        args[1] = (unsigned long)buf;
         args[2] = sizeof(buf);
         args[3] = MSG_DONTWAIT;
         args[4] = 0;
@@ -360,7 +326,7 @@ void _start(void)
     outside = open_bound(OUTSIDE_PORT);
     set_sockaddr(OUR_IP, PEER_PORT);
     args[0] = (uint32_t)outside;
-    args[1] = (uint32_t)sa;
+    args[1] = (unsigned long)sa;
     args[2] = 16;
     if (socketcall(SC_CONNECT, args) != 0) {
         fail("connecting the socket for the outside case failed");
@@ -368,7 +334,7 @@ void _start(void)
     say("DGRAMPROBE OUTSIDE\n");
     for (i = 0; i < 60; i++) {
         args[0] = (uint32_t)outside;
-        args[1] = (uint32_t)buf;
+        args[1] = (unsigned long)buf;
         args[2] = sizeof(buf);
         args[3] = MSG_DONTWAIT;
         args[4] = 0;
@@ -382,16 +348,16 @@ void _start(void)
        only that nothing was sent. */
     set_sockaddr(OUR_IP, OUTSIDE_PORT);
     args[0] = (uint32_t)peer;
-    args[1] = (uint32_t)"peer";
+    args[1] = (unsigned long)"peer";
     args[2] = 4;
     args[3] = 0;
-    args[4] = (uint32_t)sa;
+    args[4] = (unsigned long)sa;
     args[5] = 16;
     if (socketcall(SC_SENDTO, args) != 4) {
         fail("the peer's datagram to the outside-case socket did not send");
     }
     args[0] = (uint32_t)outside;
-    args[1] = (uint32_t)buf;
+    args[1] = (unsigned long)buf;
     args[2] = sizeof(buf);
     args[3] = 0;
     args[4] = 0;
@@ -414,7 +380,7 @@ void _start(void)
     set_sockaddr(0, 0);
     sa[0] = AF_UNSPEC;
     args[0] = (uint32_t)client;
-    args[1] = (uint32_t)sa;
+    args[1] = (unsigned long)sa;
     args[2] = 2;
     if (socketcall(SC_CONNECT, args) != 0) {
         fail("disconnecting a datagram socket failed");
@@ -436,7 +402,7 @@ void _start(void)
         fail("the stream socket did not open");
     }
     args[0] = (uint32_t)stream;
-    args[1] = (uint32_t)sa;
+    args[1] = (unsigned long)sa;
     args[2] = 2;
     if (socketcall(SC_CONNECT, args) != -EAFNOSUPPORT) {
         fail("a stream socket accepted a two-byte disconnect");
@@ -457,7 +423,7 @@ void _start(void)
         }
         set_sockaddr(OUR_IP, PEER_PORT);
         args[0] = (uint32_t)pkt;
-        args[1] = (uint32_t)sa;
+        args[1] = (unsigned long)sa;
         args[2] = 16;
         if (socketcall(SC_CONNECT, args) != -EOPNOTSUPP) {
             fail("a packet socket was connected like a datagram one");
@@ -482,7 +448,7 @@ void _start(void)
     }
     set_sockaddr(0, RENEW_PORT);
     args[0] = (uint32_t)sender;
-    args[1] = (uint32_t)sa;
+    args[1] = (unsigned long)sa;
     args[2] = 16;
     if (socketcall(SC_BIND, args) != -EADDRINUSE) {
         fail("a second socket took a bound port without asking to share it");
@@ -491,14 +457,14 @@ void _start(void)
     args[0] = (uint32_t)sender;
     args[1] = SOL_SOCKET;
     args[2] = SO_REUSEADDR;
-    args[3] = (uint32_t)&on;
+    args[3] = (unsigned long)&on;
     args[4] = sizeof(on);
     if (socketcall(SC_SETSOCKOPT, args) != 0) {
         fail("SO_REUSEADDR was refused on the renewal socket");
     }
     set_sockaddr(0, RENEW_PORT);
     args[0] = (uint32_t)sender;
-    args[1] = (uint32_t)sa;
+    args[1] = (unsigned long)sa;
     args[2] = 16;
     if (socketcall(SC_BIND, args) != -EADDRINUSE) {
         fail("one socket asking to share was enough");
@@ -506,14 +472,14 @@ void _start(void)
     args[0] = (uint32_t)listener;
     args[1] = SOL_SOCKET;
     args[2] = SO_REUSEADDR;
-    args[3] = (uint32_t)&on;
+    args[3] = (unsigned long)&on;
     args[4] = sizeof(on);
     if (socketcall(SC_SETSOCKOPT, args) != 0) {
         fail("SO_REUSEADDR was refused on the listener");
     }
     set_sockaddr(0, RENEW_PORT);
     args[0] = (uint32_t)sender;
-    args[1] = (uint32_t)sa;
+    args[1] = (unsigned long)sa;
     args[2] = 16;
     if (socketcall(SC_BIND, args) != 0) {
         fail("two sockets that both asked to share a port could not");
@@ -522,7 +488,7 @@ void _start(void)
     /* The sender connects to the peer, so the peer's answer is its own. */
     set_sockaddr(OUR_IP, PEER_PORT);
     args[0] = (uint32_t)sender;
-    args[1] = (uint32_t)sa;
+    args[1] = (unsigned long)sa;
     args[2] = 16;
     if (socketcall(SC_CONNECT, args) != 0) {
         fail("the renewal socket could not connect to the server");
@@ -531,7 +497,7 @@ void _start(void)
         fail("the renewal did not send");
     }
     args[0] = (uint32_t)peer;
-    args[1] = (uint32_t)buf;
+    args[1] = (unsigned long)buf;
     args[2] = sizeof(buf);
     args[3] = 0;
     args[4] = 0;
@@ -541,16 +507,16 @@ void _start(void)
     }
     set_sockaddr(OUR_IP, RENEW_PORT);
     args[0] = (uint32_t)peer;
-    args[1] = (uint32_t)"ack";
+    args[1] = (unsigned long)"ack";
     args[2] = 3;
     args[3] = 0;
-    args[4] = (uint32_t)sa;
+    args[4] = (unsigned long)sa;
     args[5] = 16;
     if (socketcall(SC_SENDTO, args) != 3) {
         fail("the server's answer did not send");
     }
     args[0] = (uint32_t)sender;
-    args[1] = (uint32_t)buf;
+    args[1] = (unsigned long)buf;
     args[2] = sizeof(buf);
     args[3] = 0;
     args[4] = 0;
@@ -559,7 +525,7 @@ void _start(void)
         fail("the answer went to the listener instead of the socket that asked for it");
     }
     args[0] = (uint32_t)listener;
-    args[1] = (uint32_t)buf;
+    args[1] = (unsigned long)buf;
     args[2] = sizeof(buf);
     args[3] = MSG_DONTWAIT;
     args[4] = 0;
@@ -572,16 +538,16 @@ void _start(void)
     sys_close(sender);
     set_sockaddr(OUR_IP, RENEW_PORT);
     args[0] = (uint32_t)peer;
-    args[1] = (uint32_t)"after";
+    args[1] = (unsigned long)"after";
     args[2] = 5;
     args[3] = 0;
-    args[4] = (uint32_t)sa;
+    args[4] = (unsigned long)sa;
     args[5] = 16;
     if (socketcall(SC_SENDTO, args) != 5) {
         fail("the datagram after the close did not send");
     }
     args[0] = (uint32_t)listener;
-    args[1] = (uint32_t)buf;
+    args[1] = (unsigned long)buf;
     args[2] = sizeof(buf);
     args[3] = 0;
     args[4] = 0;
@@ -606,7 +572,7 @@ void _start(void)
         }
         set_sockaddr(0, 68);
         args[0] = (uint32_t)low;
-        args[1] = (uint32_t)sa;
+        args[1] = (unsigned long)sa;
         args[2] = 16;
         sys_exit(socketcall(SC_BIND, args) == -EACCES ? 0 : 3);
     }
@@ -638,7 +604,7 @@ void _start(void)
     if (extra >= 0) {
         set_sockaddr(OUR_IP, PEER_PORT);
         args[0] = (uint32_t)extra;
-        args[1] = (uint32_t)sa;
+        args[1] = (unsigned long)sa;
         args[2] = 16;
         r = socketcall(SC_CONNECT, args);
         if (r != 0 && r != -EAGAIN) {
@@ -655,16 +621,16 @@ void _start(void)
     /* Broadcasting is asked for, not assumed. */
     set_sockaddr(BCAST_IP, PEER_PORT);
     args[0] = (uint32_t)client;
-    args[1] = (uint32_t)"b";
+    args[1] = (unsigned long)"b";
     args[2] = 1;
     args[3] = 0;
-    args[4] = (uint32_t)sa;
+    args[4] = (unsigned long)sa;
     args[5] = 16;
     if (socketcall(SC_SENDTO, args) != -EACCES) {
         fail("a broadcast was sent by a socket that never asked to broadcast");
     }
     set_sockaddr(SUBNET_BC, PEER_PORT);
-    args[4] = (uint32_t)sa;
+    args[4] = (unsigned long)sa;
     if (socketcall(SC_SENDTO, args) != -EACCES) {
         fail("the subnet's broadcast address was not treated as a broadcast");
     }
@@ -673,17 +639,17 @@ void _start(void)
     args[0] = (uint32_t)client;
     args[1] = SOL_SOCKET;
     args[2] = SO_BROADCAST;
-    args[3] = (uint32_t)&on;
+    args[3] = (unsigned long)&on;
     args[4] = sizeof(on);
     if (socketcall(SC_SETSOCKOPT, args) != 0) {
         fail("SO_BROADCAST was refused");
     }
     set_sockaddr(BCAST_IP, PEER_PORT);
     args[0] = (uint32_t)client;
-    args[1] = (uint32_t)"b";
+    args[1] = (unsigned long)"b";
     args[2] = 1;
     args[3] = 0;
-    args[4] = (uint32_t)sa;
+    args[4] = (unsigned long)sa;
     args[5] = 16;
     if (socketcall(SC_SENDTO, args) != 1) {
         fail("a broadcast was refused after the socket asked to broadcast");
@@ -694,24 +660,24 @@ void _start(void)
     args[0] = (uint32_t)client;
     args[1] = SOL_SOCKET;
     args[2] = SO_BROADCAST;
-    args[3] = (uint32_t)&on;
+    args[3] = (unsigned long)&on;
     optlen = sizeof(on);
-    args[4] = (uint32_t)&optlen;
+    args[4] = (unsigned long)&optlen;
     if (socketcall(SC_GETSOCKOPT, args) != 0 || on != 1) {
         fail("SO_BROADCAST did not read back as set");
     }
     on = 1;
     args[1] = SOL_SOCKET;
     args[2] = SO_REUSEADDR;
-    args[3] = (uint32_t)&on;
+    args[3] = (unsigned long)&on;
     args[4] = sizeof(on);
     if (socketcall(SC_SETSOCKOPT, args) != 0) {
         fail("SO_REUSEADDR was refused");
     }
     on = 0;
-    args[3] = (uint32_t)&on;
+    args[3] = (unsigned long)&on;
     optlen = sizeof(on);
-    args[4] = (uint32_t)&optlen;
+    args[4] = (unsigned long)&optlen;
     if (socketcall(SC_GETSOCKOPT, args) != 0 || on != 1) {
         fail("SO_REUSEADDR did not read back as set");
     }
@@ -721,17 +687,17 @@ void _start(void)
     args[0] = (uint32_t)client;
     args[1] = SOL_SOCKET;
     args[2] = SO_BINDTODEVICE;
-    args[3] = (uint32_t)"eth0";
+    args[3] = (unsigned long)"eth0";
     args[4] = 5;
     if (socketcall(SC_SETSOCKOPT, args) != 0) {
         fail("binding to this machine's interface was refused");
     }
-    args[3] = (uint32_t)"eth9";
+    args[3] = (unsigned long)"eth9";
     args[4] = 5;
     if (socketcall(SC_SETSOCKOPT, args) != -ENODEV) {
         fail("binding to an interface this machine does not have was allowed");
     }
-    args[3] = (uint32_t)"";
+    args[3] = (unsigned long)"";
     args[4] = 1;
     if (socketcall(SC_SETSOCKOPT, args) != 0) {
         fail("an empty name did not unbind");
@@ -745,7 +711,7 @@ void _start(void)
     ifreq[1] = 't';
     ifreq[2] = 'h';
     ifreq[3] = '0';
-    args[3] = (uint32_t)ifreq;
+    args[3] = (unsigned long)ifreq;
     args[4] = 32;
     if (socketcall(SC_SETSOCKOPT, args) != 0) {
         fail("the whole struct ifreq a DHCP client sends was refused");
@@ -755,8 +721,8 @@ void _start(void)
         ifreq[i] = 0x5c;
     }
     optlen = 32;
-    args[3] = (uint32_t)ifreq;
-    args[4] = (uint32_t)&optlen;
+    args[3] = (unsigned long)ifreq;
+    args[4] = (unsigned long)&optlen;
     if (socketcall(SC_GETSOCKOPT, args) != 0) {
         fail("the bound interface did not read back");
     }

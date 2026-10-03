@@ -15,24 +15,14 @@
  * reads the root's type from `/proc/mounts`, prints it, and fails the row on
  * a root that is neither.
  *
- * Freestanding; direct int 0x80.
+ * Freestanding; direct system calls (probe.h).
  */
 
-typedef unsigned int size_t;
+#include "probe.h"
 
 #define STDOUT_FILENO 1
 
 /* Syscall numbers (32-bit Linux / Rach2 compatible) */
-#define SYS_EXIT   1
-#define SYS_WRITE  4
-#define SYS_READ   3
-#define SYS_OPEN   5
-#define SYS_CLOSE  6
-#define SYS_CREAT  8
-#define SYS_UNLINK 10
-#define SYS_RENAME 38
-#define SYS_MKDIR  39
-#define SYS_RMDIR  40
 
 /* The errno values the negative cases name. */
 #define ENOENT 2
@@ -49,79 +39,48 @@ typedef unsigned int size_t;
 
 static int sys_write(int fd, const void *buf, size_t count)
 {
-    int result;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(result)
-                         : "0"(SYS_WRITE), "b"(fd), "c"(buf), "d"(count)
-                         : "memory");
-    return result;
+    return syscall3(SYS_WRITE, (long)fd, (long)buf, (long)count);
 }
 
 static void sys_exit(int status)
 {
-    __asm__ __volatile__("int $0x80" : : "a"(SYS_EXIT), "b"(status));
+    syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
 static int sys_creat(const char *path, unsigned int mode)
 {
-    int result;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(result)
-                         : "0"(SYS_CREAT), "b"(path), "c"(mode)
-                         : "memory");
-    return result;
+    return syscall2(SYS_CREAT, (long)path, (long)mode);
 }
 
 static int sys_open(const char *path, int flags)
 {
-    int result;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(result)
-                         : "0"(SYS_OPEN), "b"(path), "c"(flags)
-                         : "memory");
-    return result;
+    return syscall2(SYS_OPEN, (long)path, (long)flags);
 }
 
 static int sys_close(int fd)
 {
-    int result;
-    __asm__ __volatile__("int $0x80" : "=a"(result) : "0"(SYS_CLOSE), "b"(fd));
-    return result;
+    return syscall1(SYS_CLOSE, (long)fd);
 }
 
 static int sys_unlink(const char *path)
 {
-    int result;
-    __asm__ __volatile__("int $0x80" : "=a"(result) : "0"(SYS_UNLINK), "b"(path) : "memory");
-    return result;
+    return syscall1(SYS_UNLINK, (long)path);
 }
 
 static int sys_mkdir(const char *path, int mode)
 {
-    int result;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(result)
-                         : "0"(SYS_MKDIR), "b"(path), "c"(mode)
-                         : "memory");
-    return result;
+    return syscall2(SYS_MKDIR, (long)path, (long)mode);
 }
 
 static int sys_rmdir(const char *path)
 {
-    int result;
-    __asm__ __volatile__("int $0x80" : "=a"(result) : "0"(SYS_RMDIR), "b"(path) : "memory");
-    return result;
+    return syscall1(SYS_RMDIR, (long)path);
 }
 
 static int sys_rename(const char *oldpath, const char *newpath)
 {
-    int result;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(result)
-                         : "0"(SYS_RENAME), "b"(oldpath), "c"(newpath)
-                         : "memory");
-    return result;
+    return syscall2(SYS_RENAME, (long)oldpath, (long)newpath);
 }
 
 static size_t strlen(const char *s)
@@ -150,10 +109,7 @@ static int root_is_ext2(void)
     if (fd < 0) {
         return -1;
     }
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(n)
-                         : "0"(SYS_READ), "b"(fd), "c"(mounts), "d"(sizeof(mounts) - 1)
-                         : "memory");
+    n = syscall3(SYS_READ, (long)fd, (long)mounts, (long)(sizeof(mounts) - 1));
     sys_close(fd);
     if (n <= 0) {
         return -1;
@@ -198,7 +154,7 @@ static void print_num(int n)
 /**
  * ELF entry point: run the rename tests and exit 0 only if all pass.
  */
-void _start(void)
+PROBE_START void _start(void)
 {
     int fd;
     int result;

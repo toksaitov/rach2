@@ -11,48 +11,16 @@
  * cannot address. The disk must be listed at its full size, the partition
  * mounted, a file written and read back, so the 48-bit commands moved it.
  *
- * Prints "BUSPROBE OK" or "BUSPROBE FAIL: reason". Freestanding; int 0x80.
+ * Prints "BUSPROBE OK" or "BUSPROBE FAIL: reason". Freestanding; direct system
+ * calls (probe.h).
  */
 
-typedef unsigned int size_t;
-
-#define SYS_EXIT    1
-#define SYS_READ    3
-#define SYS_WRITE   4
-#define SYS_OPEN    5
-#define SYS_CLOSE   6
-#define SYS_MOUNT   21
-#define SYS_MKDIR   39
-#define SYS_UMOUNT2 52
+#include "probe.h"
 
 #define O_RDONLY 0
 #define O_WRONLY 1
 #define O_CREAT  0100
 #define O_TRUNC  01000
-
-static int sys2(int n, int a, int b)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b) : "memory");
-    return r;
-}
-
-static int sys3(int n, int a, int b, int c)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
-}
-
-static int sys5(int n, int a, int b, int c, int d, int e)
-{
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(n), "b"(a), "c"(b), "d"(c), "S"(d), "D"(e)
-                         : "memory");
-    return r;
-}
 
 static size_t strlen(const char *s)
 {
@@ -65,15 +33,15 @@ static size_t strlen(const char *s)
 
 static void puts(const char *s)
 {
-    sys3(SYS_WRITE, 1, (int)(size_t)s, (int)strlen(s));
-    sys3(SYS_WRITE, 1, (int)(size_t)"\n", 1);
+    syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
+    syscall3(SYS_WRITE, 1, (long)"\n", 1);
 }
 
 static void fail(const char *why)
 {
-    sys3(SYS_WRITE, 1, (int)(size_t)"BUSPROBE FAIL: ", 15);
+    syscall3(SYS_WRITE, 1, (long)"BUSPROBE FAIL: ", 15);
     puts(why);
-    sys2(SYS_EXIT, 1, 0);
+    syscall2(SYS_EXIT, 1, 0);
 }
 
 static int has_line(const char *text, const char *line)
@@ -99,20 +67,20 @@ static int has_line(const char *text, const char *line)
 
 static int slurp(const char *path, char *buf, int cap)
 {
-    int fd = sys3(SYS_OPEN, (int)(size_t)path, O_RDONLY, 0);
+    int fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
     int n, total = 0;
 
     if (fd < 0) {
         return -1;
     }
     while (total < cap - 1) {
-        n = sys3(SYS_READ, fd, (int)(size_t)(buf + total), cap - 1 - total);
+        n = syscall3(SYS_READ, fd, (long)(buf + total), cap - 1 - total);
         if (n <= 0) {
             break;
         }
         total += n;
     }
-    sys2(SYS_CLOSE, fd, 0);
+    syscall2(SYS_CLOSE, fd, 0);
     buf[total] = 0;
     return total;
 }
@@ -122,20 +90,20 @@ static void write_and_read_back(const char *path, const char *text)
     static char back[64];
     int fd, n = (int)strlen(text), got;
 
-    fd = sys3(SYS_OPEN, (int)(size_t)path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    fd = syscall3(SYS_OPEN, (long)path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) {
         fail(path);
     }
-    if (sys3(SYS_WRITE, fd, (int)(size_t)text, n) != n) {
+    if (syscall3(SYS_WRITE, fd, (long)text, n) != n) {
         fail(path);
     }
-    sys2(SYS_CLOSE, fd, 0);
-    fd = sys3(SYS_OPEN, (int)(size_t)path, O_RDONLY, 0);
+    syscall2(SYS_CLOSE, fd, 0);
+    fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
     if (fd < 0) {
         fail(path);
     }
-    got = sys3(SYS_READ, fd, (int)(size_t)back, (int)sizeof(back));
-    sys2(SYS_CLOSE, fd, 0);
+    got = syscall3(SYS_READ, fd, (long)back, (int)sizeof(back));
+    syscall2(SYS_CLOSE, fd, 0);
     if (got != n) {
         fail(path);
     }
@@ -152,8 +120,8 @@ static void mount_write(const char *node, const char *at, const char *name, cons
     static char path[64];
     int i = 0, k;
 
-    sys2(SYS_MKDIR, (int)(size_t)at, 0755);
-    if (sys5(SYS_MOUNT, (int)(size_t)node, (int)(size_t)at, (int)(size_t)"vfat", 0, 0) != 0) {
+    syscall2(SYS_MKDIR, (long)at, 0755);
+    if (syscall5(SYS_MOUNT, (long)node, (long)at, (long)"vfat", 0, 0) != 0) {
         fail(node);
     }
     for (k = 0; at[k]; k++) {
@@ -165,7 +133,7 @@ static void mount_write(const char *node, const char *at, const char *name, cons
     }
     path[i] = 0;
     write_and_read_back(path, text);
-    if (sys2(SYS_UMOUNT2, (int)(size_t)at, 0) != 0) {
+    if (syscall2(SYS_UMOUNT2, (long)at, 0) != 0) {
         fail(at);
     }
 }
@@ -197,7 +165,7 @@ void probe_main(unsigned int *sp)
         }
         mount_write("/dev/disk0p1", "/mnt0", "far.txt", "written past 128 GiB\n");
         puts("BUSPROBE OK");
-        sys2(SYS_EXIT, 0, 0);
+        syscall2(SYS_EXIT, 0, 0);
     }
     if (!has_line(text, "disk 0 ata 0 32768 mbr ") || !has_line(text, "disk 1 ata 1 40960 mbr ") ||
         !has_line(text, "disk 2 ata 2 49152 mbr ") || !has_line(text, "disk 3 ata 3 57344 mbr ")) {
@@ -208,5 +176,5 @@ void probe_main(unsigned int *sp)
     mount_write("/dev/disk2p1", "/mnt2", "drive.txt", "secondary master\n");
     mount_write("/dev/disk3p1", "/mnt3", "drive.txt", "secondary slave\n");
     puts("BUSPROBE OK");
-    sys2(SYS_EXIT, 0, 0);
+    syscall2(SYS_EXIT, 0, 0);
 }

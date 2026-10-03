@@ -62,50 +62,19 @@
  * file's bytes must read back whole after a sync, the mount must still
  * take a write, and the buffer cache must have shrunk.
  *
- * Prints "LAGPROBE OK" or "LAGPROBE FAIL: reason". Freestanding; int 0x80.
+ * Prints "LAGPROBE OK" or "LAGPROBE FAIL: reason". Freestanding; direct system
+ * calls (probe.h).
  */
 
-typedef unsigned int size_t;
+#include "probe.h"
 
-#define SYS_EXIT         1
-#define SYS_FORK         2
-#define SYS_READ         3
-#define SYS_WRITE        4
-#define SYS_OPEN         5
-#define SYS_CLOSE        6
-#define SYS_LSEEK        19
-#define SYS_KILL         37
-#define SYS_PIPE         42
-#define SYS_SYNC         36
-#define EIO              5
-#define EROFS            30
-#define O_CREAT          0100
-#define SYS_GETTIMEOFDAY 78
+#define EIO     5
+#define EROFS   30
+#define O_CREAT 0100
 
 #define O_RDONLY 0
 #define O_WRONLY 1
 #define O_RDWR   2
-
-static int syscall1(int n, int a)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a) : "memory");
-    return r;
-}
-
-static int syscall2(int n, int a, int b)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b) : "memory");
-    return r;
-}
-
-static int syscall3(int n, int a, int b, int c)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
-}
 
 static void sys_exit(int status)
 {
@@ -124,13 +93,13 @@ static size_t strlen(const char *s)
 
 static void puts(const char *s)
 {
-    syscall3(SYS_WRITE, 1, (int)(size_t)s, (int)strlen(s));
-    syscall3(SYS_WRITE, 1, (int)(size_t)"\n", 1);
+    syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
+    syscall3(SYS_WRITE, 1, (long)"\n", 1);
 }
 
 static void fail(const char *why)
 {
-    syscall3(SYS_WRITE, 1, (int)(size_t)"LAGPROBE FAIL: ", 15);
+    syscall3(SYS_WRITE, 1, (long)"LAGPROBE FAIL: ", 15);
     puts(why);
     sys_exit(1);
 }
@@ -146,7 +115,7 @@ static void putnum(unsigned n)
         digits[--i] = (char)('0' + n % 10u);
         n /= 10u;
     } while (n);
-    syscall3(SYS_WRITE, 1, (int)(size_t)&digits[i], (int)strlen(&digits[i]));
+    syscall3(SYS_WRITE, 1, (long)&digits[i], (int)strlen(&digits[i]));
 }
 
 static int disk_counter(const char *label);
@@ -161,7 +130,7 @@ struct timeval {
 static unsigned now_ms(void)
 {
     struct timeval tv;
-    syscall2(SYS_GETTIMEOFDAY, (int)(size_t)&tv, 0);
+    syscall2(SYS_GETTIMEOFDAY, (long)&tv, 0);
     return (unsigned)tv.sec * 1000u + (unsigned)tv.usec / 1000u;
 }
 
@@ -170,13 +139,13 @@ static unsigned char sector_buf[64 * 1024];
 /* One read of `len` bytes from the start of /dev/disk0p1; bytes or -errno. */
 static int read_part(unsigned len)
 {
-    int fd = syscall3(SYS_OPEN, (int)(size_t)"/dev/disk0p1", O_RDONLY, 0);
+    int fd = syscall3(SYS_OPEN, (long)"/dev/disk0p1", O_RDONLY, 0);
     int r;
 
     if (fd < 0) {
         return fd;
     }
-    r = syscall3(SYS_READ, fd, (int)(size_t)sector_buf, (int)len);
+    r = syscall3(SYS_READ, fd, (long)sector_buf, (int)len);
     syscall1(SYS_CLOSE, fd);
     return r;
 }
@@ -198,18 +167,18 @@ static void run_sleep(void)
 
     /* The MBR behind this boot has two entries; a third node would be a
        node for an empty entry. */
-    fd = syscall3(SYS_OPEN, (int)(size_t)"/dev/disk0p2", O_RDONLY, 0);
+    fd = syscall3(SYS_OPEN, (long)"/dev/disk0p2", O_RDONLY, 0);
     if (fd < 0) {
         fail("the second partition node");
     }
     syscall1(SYS_CLOSE, fd);
-    if (syscall3(SYS_OPEN, (int)(size_t)"/dev/disk0p3", O_RDONLY, 0) >= 0) {
+    if (syscall3(SYS_OPEN, (long)"/dev/disk0p3", O_RDONLY, 0) >= 0) {
         fail("a node for an empty MBR entry");
     }
 
     fds[0] = -1;
     fds[1] = -1;
-    if (syscall1(SYS_PIPE, (int)(size_t)fds) != 0) {
+    if (syscall1(SYS_PIPE, (long)fds) != 0) {
         fail("pipe");
     }
     pid = syscall1(SYS_FORK, 0);
@@ -223,7 +192,7 @@ static void run_sleep(void)
             unsigned t = now_ms();
             if (t - last >= 10u) {
                 last = t;
-                syscall3(SYS_WRITE, fds[1], (int)(size_t)"x", 1);
+                syscall3(SYS_WRITE, fds[1], (long)"x", 1);
             }
         }
     }
@@ -233,7 +202,7 @@ static void run_sleep(void)
         fail("the partition read");
     }
     elapsed = now_ms() - start;
-    got = syscall3(SYS_READ, fds[0], (int)(size_t)sector_buf, 64);
+    got = syscall3(SYS_READ, fds[0], (long)sector_buf, 64);
     syscall2(SYS_KILL, pid, 9);
     puts("LAGPROBE sleep ms:");
     putnum(elapsed);
@@ -312,7 +281,7 @@ static void run_deadline(void)
  * inside even the small fixture partition, and clear of what it reads. */
 static void run_write(void)
 {
-    int fd = syscall3(SYS_OPEN, (int)(size_t)"/dev/bootpart", O_RDWR, 0);
+    int fd = syscall3(SYS_OPEN, (long)"/dev/bootpart", O_RDWR, 0);
     unsigned char *pattern = sector_buf;
     unsigned char *back = sector_buf + 512;
     int lagged;
@@ -328,7 +297,7 @@ static void run_write(void)
         pattern[i] = (unsigned char)(0xa5 ^ i);
     }
     lagged = disk_counter("lag-completions ");
-    if (syscall3(SYS_WRITE, fd, (int)(size_t)pattern, 512) != 512) {
+    if (syscall3(SYS_WRITE, fd, (long)pattern, 512) != 512) {
         fail("the write through the lag");
     }
     if (disk_counter("lag-completions ") - lagged < 1) {
@@ -338,7 +307,7 @@ static void run_write(void)
         fail("seek back");
     }
     lagged = disk_counter("lag-completions ");
-    if (syscall3(SYS_READ, fd, (int)(size_t)back, 512) != 512) {
+    if (syscall3(SYS_READ, fd, (long)back, 512) != 512) {
         fail("the read back");
     }
     if (disk_counter("lag-completions ") - lagged < 1) {
@@ -360,25 +329,8 @@ static void run_write(void)
  * every byte once; and a child runs rmdir on the target while the parent's
  * mount sleeps in the constructor and gets EBUSY. */
 
-#define SYS_WAITPID   7
-#define SYS_MKDIR     39
-#define SYS_RMDIR     40
-#define SYS_MOUNT     21
-#define SYS_UMOUNT2   52
-#define SYS_NANOSLEEP 162
-
 #define MS_RDONLY 1
 #define EBUSY     16
-
-static int sys5(int n, int a, int b, int c, int d, int e)
-{
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(n), "b"(a), "c"(b), "d"(c), "S"(d), "D"(e)
-                         : "memory");
-    return r;
-}
 
 static void sleep_ms(int ms)
 {
@@ -386,14 +338,14 @@ static void sleep_ms(int ms)
 
     ts[0] = ms / 1000;
     ts[1] = (ms % 1000) * 1000000;
-    syscall2(SYS_NANOSLEEP, (int)ts, 0);
+    syscall2(SYS_NANOSLEEP, (long)ts, 0);
 }
 
 static int wait_status(int pid)
 {
     int status = 0;
 
-    if (syscall3(SYS_WAITPID, pid, (int)&status, 0) != pid) {
+    if (syscall3(SYS_WAITPID, pid, (long)&status, 0) != pid) {
         fail("waitpid");
     }
     return status;
@@ -403,13 +355,13 @@ static int wait_status(int pid)
 static int disk_counter(const char *label)
 {
     static char text[2048];
-    int fd = syscall3(SYS_OPEN, (int)"/proc/disk", O_RDONLY, 0);
+    int fd = syscall3(SYS_OPEN, (long)"/proc/disk", O_RDONLY, 0);
     int n, i, j;
 
     if (fd < 0) {
         return -1;
     }
-    n = syscall3(SYS_READ, fd, (int)text, sizeof(text) - 1);
+    n = syscall3(SYS_READ, fd, (long)text, sizeof(text) - 1);
     syscall1(SYS_CLOSE, fd);
     if (n <= 0) {
         return -1;
@@ -441,13 +393,13 @@ static int disk_counter(const char *label)
 static void run_root(void)
 {
     static char text[512];
-    int fd = syscall3(SYS_OPEN, (int)"/proc/mounts", O_RDONLY, 0);
+    int fd = syscall3(SYS_OPEN, (long)"/proc/mounts", O_RDONLY, 0);
     int n;
 
     if (fd < 0) {
         fail("open /proc/mounts");
     }
-    n = syscall3(SYS_READ, fd, (int)text, (int)sizeof(text) - 1);
+    n = syscall3(SYS_READ, fd, (long)text, (int)sizeof(text) - 1);
     syscall1(SYS_CLOSE, fd);
     if (n <= 0) {
         fail("read /proc/mounts");
@@ -469,19 +421,19 @@ static void run_blockfail(void)
     static char text[1024];
     int fd, n, i, ro = 0;
 
-    if (syscall2(SYS_MKDIR, (int)"/lb", 0755) != 0) {
+    if (syscall2(SYS_MKDIR, (long)"/lb", 0755) != 0) {
         fail("mkdir /lb");
     }
-    if (sys5(SYS_MOUNT, (int)"/dev/disk0p2", (int)"/lb", (int)"vfat", 0, 0) != 0) {
+    if (syscall5(SYS_MOUNT, (long)"/dev/disk0p2", (long)"/lb", (long)"vfat", 0, 0) != 0) {
         fail("the writable mount through the lag");
     }
-    fd = syscall3(SYS_OPEN, (int)"/lb/FAIL.TXT", O_WRONLY | O_CREAT, 0644);
+    fd = syscall3(SYS_OPEN, (long)"/lb/FAIL.TXT", O_WRONLY | O_CREAT, 0644);
     if (fd >= 0) {
         syscall1(SYS_CLOSE, fd);
         fail("the first write to the volume did not fail");
     }
-    fd = syscall3(SYS_OPEN, (int)"/proc/mounts", O_RDONLY, 0);
-    n = fd < 0 ? -1 : syscall3(SYS_READ, fd, (int)text, (int)sizeof(text) - 1);
+    fd = syscall3(SYS_OPEN, (long)"/proc/mounts", O_RDONLY, 0);
+    n = fd < 0 ? -1 : syscall3(SYS_READ, fd, (long)text, (int)sizeof(text) - 1);
     syscall1(SYS_CLOSE, fd);
     if (n <= 0) {
         fail("read /proc/mounts");
@@ -504,10 +456,10 @@ static void run_blockfail(void)
     if (!ro) {
         fail("the mount whose device failed a write is not read-only in /proc/mounts");
     }
-    if (syscall3(SYS_OPEN, (int)"/lb/AGAIN.TXT", O_WRONLY | O_CREAT, 0644) != -EROFS) {
+    if (syscall3(SYS_OPEN, (long)"/lb/AGAIN.TXT", O_WRONLY | O_CREAT, 0644) != -EROFS) {
         fail("a write after the failure is not EROFS");
     }
-    if (syscall2(SYS_UMOUNT2, (int)"/lb", 0) != 0) {
+    if (syscall2(SYS_UMOUNT2, (long)"/lb", 0) != 0) {
         fail("umount2 of the read-only mount");
     }
     puts("LAGPROBE OK");
@@ -532,12 +484,12 @@ static void writer(const char *path, unsigned char fill)
     for (i = 0; i < WRITER_CHUNK; i++) {
         chunk[i] = (unsigned char)(fill + i);
     }
-    fd = syscall3(SYS_OPEN, (int)path, O_WRONLY | O_CREAT, 0644);
+    fd = syscall3(SYS_OPEN, (long)path, O_WRONLY | O_CREAT, 0644);
     if (fd < 0) {
         sys_exit(2);
     }
     for (r = 0; r < WRITER_ROUNDS; r++) {
-        if (syscall3(SYS_WRITE, fd, (int)chunk, WRITER_CHUNK) != WRITER_CHUNK) {
+        if (syscall3(SYS_WRITE, fd, (long)chunk, WRITER_CHUNK) != WRITER_CHUNK) {
             sys_exit(3);
         }
     }
@@ -549,14 +501,14 @@ static void check_written(const char *path, unsigned char fill)
 {
     static unsigned char storage[WRITER_CHUNK];
     unsigned char *buf = storage; /* read into through the pointer */
-    int fd = syscall3(SYS_OPEN, (int)path, O_RDONLY, 0);
+    int fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
     int r, i;
 
     if (fd < 0) {
         fail("a writer's file is missing");
     }
     for (r = 0; r < WRITER_ROUNDS; r++) {
-        if (syscall3(SYS_READ, fd, (int)buf, WRITER_CHUNK) != WRITER_CHUNK) {
+        if (syscall3(SYS_READ, fd, (long)buf, WRITER_CHUNK) != WRITER_CHUNK) {
             fail("a writer's file is short");
         }
         for (i = 0; i < WRITER_CHUNK; i++) {
@@ -565,7 +517,7 @@ static void check_written(const char *path, unsigned char fill)
             }
         }
     }
-    if (syscall3(SYS_READ, fd, (int)buf, 16) != 0) {
+    if (syscall3(SYS_READ, fd, (long)buf, 16) != 0) {
         fail("a writer's file is long");
     }
     syscall1(SYS_CLOSE, fd);
@@ -577,10 +529,10 @@ static void run_writers(void)
 {
     int a, b, s;
 
-    if (syscall2(SYS_MKDIR, (int)"/lw", 0755) != 0) {
+    if (syscall2(SYS_MKDIR, (long)"/lw", 0755) != 0) {
         fail("mkdir /lw");
     }
-    if (sys5(SYS_MOUNT, (int)"/dev/disk0p2", (int)"/lw", (int)writers_type, 0, 0) != 0) {
+    if (syscall5(SYS_MOUNT, (long)"/dev/disk0p2", (long)"/lw", (long)writers_type, 0, 0) != 0) {
         fail("the writable mount through the lag");
     }
     a = syscall1(SYS_FORK, 0);
@@ -602,7 +554,7 @@ static void run_writers(void)
     }
     check_written("/lw/writer-a.bin", 0x11);
     check_written("/lw/writer-b.bin", 0x77);
-    if (syscall2(SYS_UMOUNT2, (int)"/lw", 0) != 0) {
+    if (syscall2(SYS_UMOUNT2, (long)"/lw", 0) != 0) {
         fail("umount2 of the written volume");
     }
     puts("LAGPROBE OK");
@@ -621,7 +573,7 @@ static void mark_sectors(int fd, unsigned char *marks)
 {
     int n, i, v;
 
-    while ((n = syscall3(SYS_READ, fd, (int)sector_buf, 512)) > 0) {
+    while ((n = syscall3(SYS_READ, fd, (long)sector_buf, 512)) > 0) {
         if (n != 512) {
             fail("a short read of pattern.bin");
         }
@@ -652,7 +604,7 @@ static void run_mounted(void)
     int total;
     int hello_bytes;
 
-    if (syscall2(SYS_MKDIR, (int)"/lm", 0755) != 0) {
+    if (syscall2(SYS_MKDIR, (long)"/lm", 0755) != 0) {
         fail("mkdir /lm");
     }
 
@@ -661,12 +613,12 @@ static void run_mounted(void)
     pid = syscall1(SYS_FORK, 0);
     if (pid == 0) {
         sleep_ms(30);
-        if (syscall1(SYS_RMDIR, (int)"/lm") != -EBUSY) {
+        if (syscall1(SYS_RMDIR, (long)"/lm") != -EBUSY) {
             sys_exit(3);
         }
         sys_exit(0);
     }
-    if (sys5(SYS_MOUNT, (int)"/dev/disk0p2", (int)"/lm", (int)"vfat", MS_RDONLY, 0) != 0) {
+    if (syscall5(SYS_MOUNT, (long)"/dev/disk0p2", (long)"/lm", (long)"vfat", MS_RDONLY, 0) != 0) {
         fail("the mount through the lag");
     }
     if (wait_status(pid) != 0) {
@@ -679,8 +631,8 @@ static void run_mounted(void)
     pid = syscall1(SYS_FORK, 0);
     pid2 = pid == 0 ? 0 : syscall1(SYS_FORK, 0);
     if (pid == 0 || pid2 == 0) {
-        fd = syscall3(SYS_OPEN, (int)"/lm/hello.txt", O_RDONLY, 0);
-        if (fd < 0 || syscall3(SYS_READ, fd, (int)sector_buf, 512) <= 0) {
+        fd = syscall3(SYS_OPEN, (long)"/lm/hello.txt", O_RDONLY, 0);
+        if (fd < 0 || syscall3(SYS_READ, fd, (long)sector_buf, 512) <= 0) {
             sys_exit(4);
         }
         sys_exit(0);
@@ -698,7 +650,7 @@ static void run_mounted(void)
        number every sector of pattern.bin carries in each of its 128 fields;
        the child's marks come back through a pipe, and every sector must
        be marked by exactly one of the two. */
-    fd = syscall3(SYS_OPEN, (int)"/lm/pattern.bin", O_RDONLY, 0);
+    fd = syscall3(SYS_OPEN, (long)"/lm/pattern.bin", O_RDONLY, 0);
     if (fd < 0) {
         fail("open the shared file");
     }
@@ -706,13 +658,13 @@ static void run_mounted(void)
     if (hello_bytes != PATTERN_SECTORS * 512 || syscall3(SYS_LSEEK, fd, 0, 0) != 0) {
         fail("the shared file's size");
     }
-    if (syscall1(SYS_PIPE, (int)pipe_fds) != 0) {
+    if (syscall1(SYS_PIPE, (long)pipe_fds) != 0) {
         fail("pipe");
     }
     pid = syscall1(SYS_FORK, 0);
     if (pid == 0) {
         mark_sectors(fd, child_marks);
-        if (syscall3(SYS_WRITE, pipe_fds[1], (int)child_marks, PATTERN_SECTORS) !=
+        if (syscall3(SYS_WRITE, pipe_fds[1], (long)child_marks, PATTERN_SECTORS) !=
             PATTERN_SECTORS) {
             sys_exit(5);
         }
@@ -722,7 +674,7 @@ static void run_mounted(void)
     if (wait_status(pid) != 0) {
         fail("the child reader");
     }
-    if (syscall3(SYS_READ, pipe_fds[0], (int)child_marks, PATTERN_SECTORS) != PATTERN_SECTORS) {
+    if (syscall3(SYS_READ, pipe_fds[0], (long)child_marks, PATTERN_SECTORS) != PATTERN_SECTORS) {
         fail("the child's marks");
     }
     syscall1(SYS_CLOSE, fd);
@@ -742,14 +694,14 @@ static void run_mounted(void)
 
     /* The whole-disk window is on the real disk and the mount is on the lag
        wrapper over it; the claim must compare the disk under both. */
-    if (syscall3(SYS_OPEN, (int)"/dev/disk0", O_RDWR, 0) != -EBUSY) {
+    if (syscall3(SYS_OPEN, (long)"/dev/disk0", O_RDWR, 0) != -EBUSY) {
         fail("a whole-disk writer opened over a mounted range");
     }
 
-    if (syscall2(SYS_UMOUNT2, (int)"/lm", 0) != 0) {
+    if (syscall2(SYS_UMOUNT2, (long)"/lm", 0) != 0) {
         fail("umount2 of the lag mount");
     }
-    syscall1(SYS_RMDIR, (int)"/lm");
+    syscall1(SYS_RMDIR, (long)"/lm");
     puts("LAGPROBE OK");
 }
 
@@ -757,8 +709,8 @@ static void run_mounted(void)
 static int mount_is_ro(const char *dir)
 {
     static char text[1024];
-    int fd = syscall3(SYS_OPEN, (int)"/proc/mounts", O_RDONLY, 0);
-    int n = fd < 0 ? -1 : syscall3(SYS_READ, fd, (int)text, (int)sizeof(text) - 1);
+    int fd = syscall3(SYS_OPEN, (long)"/proc/mounts", O_RDONLY, 0);
+    int n = fd < 0 ? -1 : syscall3(SYS_READ, fd, (long)text, (int)sizeof(text) - 1);
     int i, j, ro = 0;
     size_t dlen = strlen(dir);
 
@@ -793,15 +745,15 @@ static void write_and_sync(const char *dir, const char *first, const char *secon
 {
     int fd;
 
-    fd = syscall3(SYS_OPEN, (int)first, O_WRONLY | O_CREAT, 0644);
-    if (fd < 0 || syscall3(SYS_WRITE, fd, (int)"pool", 4) != 4) {
+    fd = syscall3(SYS_OPEN, (long)first, O_WRONLY | O_CREAT, 0644);
+    if (fd < 0 || syscall3(SYS_WRITE, fd, (long)"pool", 4) != 4) {
         fail("the first write to the volume");
     }
     syscall1(SYS_CLOSE, fd);
     if (syscall1(SYS_SYNC, 0) != 0) {
         fail("sync of the volume");
     }
-    fd = syscall3(SYS_OPEN, (int)second, O_WRONLY | O_CREAT, 0644);
+    fd = syscall3(SYS_OPEN, (long)second, O_WRONLY | O_CREAT, 0644);
     if (fd < 0) {
         fail("a write after the sync");
     }
@@ -815,13 +767,13 @@ static void write_and_sync(const char *dir, const char *first, const char *secon
  * or -errno. */
 static int read_file(const char *path)
 {
-    int fd = syscall3(SYS_OPEN, (int)(size_t)path, O_RDONLY, 0);
+    int fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
     int total = 0, r;
 
     if (fd < 0) {
         return fd;
     }
-    while ((r = syscall3(SYS_READ, fd, (int)(size_t)sector_buf, 4096)) > 0) {
+    while ((r = syscall3(SYS_READ, fd, (long)sector_buf, 4096)) > 0) {
         total += r;
     }
     syscall1(SYS_CLOSE, fd);
@@ -845,10 +797,10 @@ static void run_pool(void)
 {
     int a, b, c;
 
-    if (syscall2(SYS_MKDIR, (int)"/lp", 0755) != 0) {
+    if (syscall2(SYS_MKDIR, (long)"/lp", 0755) != 0) {
         fail("mkdir /lp");
     }
-    if (sys5(SYS_MOUNT, (int)"/dev/disk0p2", (int)"/lp", (int)"vfat", 0, 0) != 0) {
+    if (syscall5(SYS_MOUNT, (long)"/dev/disk0p2", (long)"/lp", (long)"vfat", 0, 0) != 0) {
         fail("the writable mount of the second partition");
     }
     a = syscall1(SYS_FORK, 0);
@@ -870,7 +822,7 @@ static void run_pool(void)
     if (wait_status(a) != 0 || wait_status(b) != 0 || wait_status(c) != 0) {
         fail("a reader under the small pool failed");
     }
-    if (syscall2(SYS_UMOUNT2, (int)"/lp", 0) != 0) {
+    if (syscall2(SYS_UMOUNT2, (long)"/lp", 0) != 0) {
         fail("umount2 of the volume");
     }
     puts("LAGPROBE OK");
@@ -879,7 +831,7 @@ static void run_pool(void)
 /* One block of `path` at `offset`, into the sector buffer; bytes or -errno. */
 static int read_block_at(const char *path, int offset)
 {
-    int fd = syscall3(SYS_OPEN, (int)(size_t)path, O_RDONLY, 0);
+    int fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
     int r;
 
     if (fd < 0) {
@@ -889,7 +841,7 @@ static int read_block_at(const char *path, int offset)
         syscall1(SYS_CLOSE, fd);
         return -1;
     }
-    r = syscall3(SYS_READ, fd, (int)(size_t)sector_buf, 4096);
+    r = syscall3(SYS_READ, fd, (long)sector_buf, 4096);
     syscall1(SYS_CLOSE, fd);
     return r;
 }
@@ -901,10 +853,10 @@ static void run_queue(void)
     int pids[16];
     int i;
 
-    if (syscall2(SYS_MKDIR, (int)"/lq", 0755) != 0) {
+    if (syscall2(SYS_MKDIR, (long)"/lq", 0755) != 0) {
         fail("mkdir /lq");
     }
-    if (sys5(SYS_MOUNT, (int)"/dev/disk0p2", (int)"/lq", (int)"vfat", 0, 0) != 0) {
+    if (syscall5(SYS_MOUNT, (long)"/dev/disk0p2", (long)"/lq", (long)"vfat", 0, 0) != 0) {
         fail("the mount of the second partition");
     }
     for (i = 0; i < 16; i++) {
@@ -921,7 +873,7 @@ static void run_queue(void)
             fail("a queued reader failed");
         }
     }
-    if (syscall2(SYS_UMOUNT2, (int)"/lq", 0) != 0) {
+    if (syscall2(SYS_UMOUNT2, (long)"/lq", 0) != 0) {
         fail("umount2 of the volume");
     }
     puts("LAGPROBE OK");
@@ -931,13 +883,13 @@ static void run_queue(void)
 static unsigned meminfo_kb(const char *key)
 {
     static char text[2048];
-    int fd = syscall3(SYS_OPEN, (int)(size_t)"/proc/meminfo", O_RDONLY, 0);
+    int fd = syscall3(SYS_OPEN, (long)"/proc/meminfo", O_RDONLY, 0);
     int n, i;
 
     if (fd < 0) {
         return 0xFFFFFFFFu;
     }
-    n = syscall3(SYS_READ, fd, (int)(size_t)text, (int)sizeof(text) - 1);
+    n = syscall3(SYS_READ, fd, (long)text, (int)sizeof(text) - 1);
     syscall1(SYS_CLOSE, fd);
     if (n <= 0) {
         return 0xFFFFFFFFu;
@@ -965,8 +917,7 @@ static unsigned meminfo_kb(const char *key)
     return 0xFFFFFFFFu;
 }
 
-#define SYS_MMAP2 192
-#define ENOMEM    12
+#define ENOMEM 12
 
 /* Four numbers on one line, for a row that fails to say what it saw. */
 static void say_numbers(unsigned a, unsigned b, unsigned c, unsigned d)
@@ -994,7 +945,7 @@ static void say_numbers(unsigned a, unsigned b, unsigned c, unsigned d)
         line[n++] = ' ';
     }
     line[n++] = '\n';
-    syscall3(SYS_WRITE, 1, (int)(size_t)line, n);
+    syscall3(SYS_WRITE, 1, (long)line, n);
 }
 #define DIRTY_BYTES (1024 * 1024)
 
@@ -1011,13 +962,13 @@ static void run_dirty(void)
     unsigned off;
     int fd, i;
 
-    if (syscall2(SYS_MKDIR, (int)"/ly", 0755) != 0) {
+    if (syscall2(SYS_MKDIR, (long)"/ly", 0755) != 0) {
         fail("mkdir /ly");
     }
-    if (sys5(SYS_MOUNT, (int)"/dev/disk0p1", (int)"/ly", (int)"krffs", 0, 0) != 0) {
+    if (syscall5(SYS_MOUNT, (long)"/dev/disk0p1", (long)"/ly", (long)"krffs", 0, 0) != 0) {
         fail("the writable mount of the first partition");
     }
-    fd = syscall3(SYS_OPEN, (int)"/ly/dirty.bin", O_WRONLY | O_CREAT, 0644);
+    fd = syscall3(SYS_OPEN, (long)"/ly/dirty.bin", O_WRONLY | O_CREAT, 0644);
     if (fd < 0) {
         fail("creating the dirty file");
     }
@@ -1025,7 +976,7 @@ static void run_dirty(void)
         for (i = 0; i < 4096; i++) {
             sector_buf[i] = (unsigned char)((off / 4096 + i) & 0xff);
         }
-        if (syscall3(SYS_WRITE, fd, (int)(size_t)sector_buf, 4096) != 4096) {
+        if (syscall3(SYS_WRITE, fd, (long)sector_buf, 4096) != 4096) {
             fail("a write of the dirty file");
         }
     }
@@ -1036,14 +987,14 @@ static void run_dirty(void)
         fail("the buffer cache does not hold the file");
     }
     take = (total - total / 20) * 1024; /* below the sixteenth that starts reclaim */
-    mem = (unsigned char *)sys5(SYS_MMAP2, 0, (int)take, 3, 0x22, -1);
-    if ((int)(size_t)mem < 0 && (int)(size_t)mem > -4096) {
+    mem = (unsigned char *)syscall5(SYS_MMAP2, 0, (int)take, 3, 0x22, -1);
+    if ((long)mem < 0 && (long)mem > -4096) {
         fail("the anonymous mapping");
     }
     for (off = 0; off < take; off += 4096) {
         mem[off] = 1;
     }
-    if ((int)sys5(SYS_MMAP2, 0, 4096, 3, 0x22, -1) == -ENOMEM) {
+    if ((int)syscall5(SYS_MMAP2, 0, 4096, 3, 0x22, -1) == -ENOMEM) {
         fail("the mapping after the pressure");
     }
     buffers_after = meminfo_kb("Buffers:");
@@ -1054,13 +1005,13 @@ static void run_dirty(void)
     if (syscall1(SYS_SYNC, 0) != 0) {
         fail("sync after the pressure");
     }
-    fd = syscall3(SYS_OPEN, (int)"/ly/dirty.bin", O_RDONLY, 0);
+    fd = syscall3(SYS_OPEN, (long)"/ly/dirty.bin", O_RDONLY, 0);
     if (fd < 0) {
         say_numbers((unsigned)-fd, meminfo_kb("MemFree:"), 0, 0);
         fail("reopening the dirty file");
     }
     for (off = 0; off < DIRTY_BYTES; off += 4096) {
-        if (syscall3(SYS_READ, fd, (int)(size_t)sector_buf, 4096) != 4096) {
+        if (syscall3(SYS_READ, fd, (long)sector_buf, 4096) != 4096) {
             fail("reading the file back");
         }
         for (i = 0; i < 4096; i++) {
@@ -1071,7 +1022,7 @@ static void run_dirty(void)
     }
     syscall1(SYS_CLOSE, fd);
     write_and_sync("/ly", "/ly/after.txt", "/ly/again.txt");
-    if (syscall2(SYS_UMOUNT2, (int)"/ly", 0) != 0) {
+    if (syscall2(SYS_UMOUNT2, (long)"/ly", 0) != 0) {
         fail("umount2 of the volume");
     }
     /* The row's cost, for the record: the commands, the flushes, the ticks
@@ -1101,10 +1052,10 @@ static void run_dead(void)
         fail("fork of the reader");
     }
     sleep_ms(200);
-    if (syscall2(SYS_MKDIR, (int)"/ld1", 0755) != 0) {
+    if (syscall2(SYS_MKDIR, (long)"/ld1", 0755) != 0) {
         fail("mkdir /ld1");
     }
-    rc = sys5(SYS_MOUNT, (int)"/dev/disk0p1", (int)"/ld1", (int)"krffs", 0, 0);
+    rc = syscall5(SYS_MOUNT, (long)"/dev/disk0p1", (long)"/ld1", (long)"krffs", 0, 0);
     if (rc != -EIO) {
         fail("the mount of the partition that never answers was not EIO");
     }
@@ -1117,14 +1068,14 @@ static void run_dead(void)
         disk_counter("disk-releases ") - releases != 2) {
         fail("the reader and the waiter were not the two released by the one deadline");
     }
-    if (syscall2(SYS_MKDIR, (int)"/ld", 0755) != 0) {
+    if (syscall2(SYS_MKDIR, (long)"/ld", 0755) != 0) {
         fail("mkdir /ld");
     }
-    if (sys5(SYS_MOUNT, (int)"/dev/disk0p2", (int)"/ld", (int)"vfat", 0, 0) != 0) {
+    if (syscall5(SYS_MOUNT, (long)"/dev/disk0p2", (long)"/ld", (long)"vfat", 0, 0) != 0) {
         fail("the writable mount of the second partition");
     }
     write_and_sync("/ld", "/ld/DEAD.TXT", "/ld/AGAIN.TXT");
-    if (syscall2(SYS_UMOUNT2, (int)"/ld", 0) != 0) {
+    if (syscall2(SYS_UMOUNT2, (long)"/ld", 0) != 0) {
         fail("umount2 of the volume");
     }
     puts("LAGPROBE OK");

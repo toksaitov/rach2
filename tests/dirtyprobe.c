@@ -43,19 +43,12 @@
  *
  * Prints "DIRTYPROBE OK" and exits 0 only when every answer held; any failure
  * names the step and the answer it got, and exits 1. Freestanding; direct
- * int 0x80.
+ * system calls (probe.h).
  */
 
-typedef unsigned int u32;
+#include "probe.h"
 
-#define SYS_EXIT    1
-#define SYS_WRITE   4
-#define SYS_OPEN    5
-#define SYS_CLOSE   6
-#define SYS_CREAT   8
-#define SYS_CHMOD   15
-#define SYS_SYNC    36
-#define SYS_CHOWN32 212
+typedef unsigned int u32;
 
 #define STDOUT 1
 
@@ -72,20 +65,6 @@ typedef unsigned int u32;
 
 #define ROOT "/"
 
-static int syscall1(int num, int a)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "a"(num), "b"(a) : "memory");
-    return r;
-}
-
-static int syscall3(int num, int a, int b, int c)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "a"(num), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
-}
-
 static u32 slen(const char *s)
 {
     u32 n = 0;
@@ -98,7 +77,7 @@ static u32 slen(const char *s)
 
 static void puts_(const char *s)
 {
-    syscall3(SYS_WRITE, STDOUT, (int)s, (int)slen(s));
+    syscall3(SYS_WRITE, STDOUT, (long)s, (int)slen(s));
 }
 
 /* Print a signed decimal, so a failing line has the answer it got. */
@@ -145,7 +124,7 @@ static void want_eq(const char *step, int got, int want)
     }
 }
 
-void _start(void)
+PROBE_START void _start(void)
 {
     char byte = 'x';
     int fd;
@@ -158,26 +137,26 @@ void _start(void)
      * only call in this probe that reaches the helper with the root node, and
      * it is therefore the whole of the guard's proof. The group goes out and
      * comes straight back, so the image is handed on as it was found. */
-    want_eq("chown(-1, -1) on the root", syscall3(SYS_CHOWN32, (int)ROOT, (int)KEEP, (int)KEEP), 0);
-    want_eq("chown(0, 0) on the root", syscall3(SYS_CHOWN32, (int)ROOT, 0, 0), 0);
-    want_eq("chown(-1, 1) on the root", syscall3(SYS_CHOWN32, (int)ROOT, (int)KEEP, 1), 0);
-    want_eq("restore the root's group", syscall3(SYS_CHOWN32, (int)ROOT, (int)KEEP, 0), 0);
+    want_eq("chown(-1, -1) on the root", syscall3(SYS_CHOWN, (long)ROOT, (int)KEEP, (int)KEEP), 0);
+    want_eq("chown(0, 0) on the root", syscall3(SYS_CHOWN, (long)ROOT, 0, 0), 0);
+    want_eq("chown(-1, 1) on the root", syscall3(SYS_CHOWN, (long)ROOT, (int)KEEP, 1), 0);
+    want_eq("restore the root's group", syscall3(SYS_CHOWN, (long)ROOT, (int)KEEP, 0), 0);
 
     /* The chmod rule answers for the root but stores nothing. */
-    want_eq("chmod the root", syscall3(SYS_CHMOD, (int)ROOT, 0755, 0), 0);
+    want_eq("chmod the root", syscall3(SYS_CHMOD, (long)ROOT, 0755, 0), 0);
 
     /* The two truncating opens, each refused before it can reach a clear. */
     want_eq("open the root for writing with O_TRUNC",
-            syscall3(SYS_OPEN, (int)ROOT, O_WRONLY | O_TRUNC, 0), -EISDIR);
-    want_eq("creat the root", syscall3(SYS_CREAT, (int)ROOT, 0644, 0), -EISDIR);
+            syscall3(SYS_OPEN, (long)ROOT, O_WRONLY | O_TRUNC, 0), -EISDIR);
+    want_eq("creat the root", syscall3(SYS_CREAT, (long)ROOT, 0644, 0), -EISDIR);
 
     /* A descriptor on the root exists and reads; writing through it is refused
      * by the descriptor's own type, so the write clear is never reached. */
-    fd = syscall3(SYS_OPEN, (int)ROOT, O_RDONLY, 0);
+    fd = syscall3(SYS_OPEN, (long)ROOT, O_RDONLY, 0);
     if (fd < 0) {
         fail("open the root for reading", fd);
     }
-    want_eq("write through a descriptor on the root", syscall3(SYS_WRITE, fd, (int)&byte, 1),
+    want_eq("write through a descriptor on the root", syscall3(SYS_WRITE, fd, (long)&byte, 1),
             -EBADF);
     want_eq("close the descriptor on the root", syscall3(SYS_CLOSE, fd, 0, 0), 0);
 

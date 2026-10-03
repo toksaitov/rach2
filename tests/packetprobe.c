@@ -15,26 +15,13 @@
  * 0x80.
  */
 
-typedef unsigned int size_t;
+#include "probe.h"
+
 typedef unsigned int uint32_t;
 typedef unsigned short uint16_t;
 typedef unsigned char uint8_t;
 
 #define STDOUT_FILENO 1
-
-#define SYS_EXIT       1
-#define SYS_FORK       2
-#define SYS_WRITE      4
-#define SYS_CLOSE      6
-#define SYS_WAITPID    7
-#define SYS_SOCKETCALL 102
-#define SYS_NANOSLEEP  162
-#define SYS_SETUID32   213
-#define SYS_POLL       168
-#define SYS_SELECT     142
-#define SYS_OPEN       5
-#define SYS_READ       3
-#define SYS_IOCTL      54
 
 #define SC_GETSOCKNAME 6
 
@@ -80,35 +67,23 @@ typedef unsigned char uint8_t;
 
 static int sys_write(int fd, const void *buf, size_t count)
 {
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_WRITE), "b"(fd), "c"(buf), "d"(count)
-                         : "memory");
-    return r;
+    return syscall3(SYS_WRITE, (long)fd, (long)buf, (long)count);
 }
 
 static int sys_close(int fd)
 {
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(SYS_CLOSE), "b"(fd));
-    return r;
+    return syscall1(SYS_CLOSE, (long)fd);
 }
 
 static void sys_exit(int status)
 {
-    __asm__ __volatile__("int $0x80" : : "a"(SYS_EXIT), "b"(status));
+    syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
 static int socketcall(int call, uint32_t *args)
 {
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_SOCKETCALL), "b"(call), "c"(args)
-                         : "memory");
-    return r;
+    return syscall2(SYS_SOCKETCALL, (long)call, (long)args);
 }
 
 #define POLLIN 0x001
@@ -130,31 +105,22 @@ static void nap(long ms)
 
     ts.tv_sec = ms / 1000;
     ts.tv_nsec = (ms % 1000) * 1000000L;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(SYS_NANOSLEEP), "b"(&ts), "c"(0) : "memory");
+    r = syscall2(SYS_NANOSLEEP, (long)(&ts), (long)0);
 }
 
 static int sys_fork(void)
 {
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(SYS_FORK) : "memory");
-    return r;
+    return syscall0(SYS_FORK);
 }
 
 static int sys_setuid(int uid)
 {
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(SYS_SETUID32), "b"(uid));
-    return r;
+    return syscall1(SYS_SETUID, (long)uid);
 }
 
 static int sys_waitpid(int pid, int *status, int options)
 {
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_WAITPID), "b"(pid), "c"(status), "d"(options)
-                         : "memory");
-    return r;
+    return syscall3(SYS_WAITPID, (long)pid, (long)status, (long)options);
 }
 
 /* The one's-complement sum an IP header has; SLIRP checks it, so a wrong
@@ -184,22 +150,12 @@ struct pollfd_probe {
 
 static int sys_poll(struct pollfd_probe *fds, unsigned int n, int timeout)
 {
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_POLL), "b"(fds), "c"(n), "d"(timeout)
-                         : "memory");
-    return r;
+    return syscall3(SYS_POLL, (long)fds, (long)n, (long)timeout);
 }
 
 static int sys_select(int n, void *rd, void *wr, void *ex, void *tv)
 {
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_SELECT), "b"(n), "c"(rd), "d"(wr), "S"(ex), "D"(tv)
-                         : "memory");
-    return r;
+    return syscall5(SYS_SELECT, (long)n, (long)rd, (long)wr, (long)ex, (long)tv);
 }
 
 static void say(const char *s)
@@ -217,34 +173,19 @@ static void say(const char *s)
 /** ioctl(2). */
 static int sys_ioctl(int fd, unsigned int req, void *arg)
 {
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_IOCTL), "b"(fd), "c"(req), "d"(arg)
-                         : "memory");
-    return r;
+    return syscall3(SYS_IOCTL, (long)fd, (long)req, (long)arg);
 }
 
 /** open(2), read-only. */
 static int sys_open_ro(const char *path)
 {
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_OPEN), "b"(path), "c"(0), "d"(0)
-                         : "memory");
-    return r;
+    return syscall3(SYS_OPEN, (long)path, (long)0, (long)0);
 }
 
 /** read(2). */
 static int sys_read(int fd, void *buf, int n)
 {
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_READ), "b"(fd), "c"(buf), "d"(n)
-                         : "memory");
-    return r;
+    return syscall3(SYS_READ, (long)fd, (long)buf, (long)n);
 }
 
 /** Read a whole small file into `out`; the bytes read, or a negative errno. */
@@ -357,7 +298,7 @@ static uint8_t discover[DHCP_LEN];
 static uint8_t sender[24];
 static uint8_t control[64];
 
-void _start(void)
+PROBE_START void _start(void)
 {
     uint32_t args[6];
     struct sockaddr_ll_probe sll;
@@ -407,7 +348,7 @@ void _start(void)
     args[0] = (uint32_t)fd;
     args[1] = SOL_PACKET;
     args[2] = PACKET_AUXDATA;
-    args[3] = (uint32_t)&r;
+    args[3] = (unsigned long)&r;
     args[4] = sizeof(int);
     if (socketcall(SC_SETSOCKOPT, args) != -ENOPROTOOPT) {
         fail("PACKET_AUXDATA was not refused");
@@ -420,7 +361,7 @@ void _start(void)
     sll.sll_protocol = ETH_P_IP_BE;
     sll.sll_ifindex = 99;
     args[0] = (uint32_t)fd;
-    args[1] = (uint32_t)&sll;
+    args[1] = (unsigned long)&sll;
     args[2] = sizeof(sll);
     if (socketcall(SC_BIND, args) != -ENODEV) {
         fail("a bind to an interface that does not exist was not refused");
@@ -486,10 +427,10 @@ void _start(void)
         sll.sll_addr[i] = 0xff;
     }
     args[0] = (uint32_t)fd;
-    args[1] = (uint32_t)frame;
+    args[1] = (unsigned long)frame;
     args[2] = DHCP_LEN;
     args[3] = 0;
-    args[4] = (uint32_t)&sll;
+    args[4] = (unsigned long)&sll;
     args[5] = sizeof(sll);
     for (i = 0; i < DHCP_LEN; i++) {
         discover[i] = frame[i];
@@ -544,7 +485,7 @@ void _start(void)
         }
 
         args[0] = (uint32_t)fd;
-        args[1] = (uint32_t)&msg;
+        args[1] = (unsigned long)&msg;
         args[2] = 0x40; /* MSG_DONTWAIT */
         r = socketcall(SC_RECVMSG, args);
         if (r < 0) {
@@ -618,11 +559,11 @@ void _start(void)
     }
     senderlen = 16;
     args[0] = (uint32_t)fd;
-    args[1] = (uint32_t)frame;
+    args[1] = (unsigned long)frame;
     args[2] = 100;
     args[3] = 0x40; /* MSG_DONTWAIT */
-    args[4] = (uint32_t)sender;
-    args[5] = (uint32_t)&senderlen;
+    args[4] = (unsigned long)sender;
+    args[5] = (unsigned long)&senderlen;
     if (socketcall(SC_RECVFROM, args) != -EAGAIN) {
         fail("an empty socket did not report that it was empty");
     }
@@ -634,10 +575,10 @@ void _start(void)
        through recvfrom, with a buffer too small for the address, which is
        where the truncation rule is proved. */
     args[0] = (uint32_t)fd;
-    args[1] = (uint32_t)discover;
+    args[1] = (unsigned long)discover;
     args[2] = DHCP_LEN;
     args[3] = 0;
-    args[4] = (uint32_t)&sll;
+    args[4] = (unsigned long)&sll;
     args[5] = sizeof(sll);
     sll.sll_halen = 6;
     if (socketcall(SC_SENDTO, args) != DHCP_LEN) {
@@ -653,11 +594,11 @@ void _start(void)
         }
         senderlen = 16;
         args[0] = (uint32_t)fd;
-        args[1] = (uint32_t)frame;
+        args[1] = (unsigned long)frame;
         args[2] = sizeof(frame);
         args[3] = 0x40;
-        args[4] = (uint32_t)sender;
-        args[5] = (uint32_t)&senderlen;
+        args[4] = (unsigned long)sender;
+        args[5] = (unsigned long)&senderlen;
         r = socketcall(SC_RECVFROM, args);
         if (r < 0) {
             fail_n("a socket poll called readable had nothing for recvfrom", r);
@@ -690,7 +631,7 @@ void _start(void)
         sll.sll_protocol = ETH_P_ARP_BE;
         sll.sll_ifindex = 99; /* no such interface */
         args[0] = (uint32_t)fd;
-        args[1] = (uint32_t)&sll;
+        args[1] = (unsigned long)&sll;
         args[2] = sizeof(sll);
         if (socketcall(SC_BIND, args) != -ENODEV) {
             fail("a bind to an interface that does not exist was not refused");
@@ -700,8 +641,8 @@ void _start(void)
         }
         senderlen = sizeof(back);
         args[0] = (uint32_t)fd;
-        args[1] = (uint32_t)&back;
-        args[2] = (uint32_t)&senderlen;
+        args[1] = (unsigned long)&back;
+        args[2] = (unsigned long)&senderlen;
         if (socketcall(SC_GETSOCKNAME, args) != 0) {
             fail("getsockname after the refused bind failed");
         }
@@ -722,10 +663,10 @@ void _start(void)
             sll.sll_addr[i] = 0xff;
         }
         args[0] = (uint32_t)fd;
-        args[1] = (uint32_t)discover;
+        args[1] = (unsigned long)discover;
         args[2] = DHCP_LEN;
         args[3] = 0;
-        args[4] = (uint32_t)&sll;
+        args[4] = (unsigned long)&sll;
         args[5] = sizeof(sll);
         if (socketcall(SC_SENDTO, args) != DHCP_LEN) {
             fail("the third discover did not send");
@@ -744,18 +685,18 @@ void _start(void)
         }
         sll.sll_protocol = ETH_P_ARP_BE;
         args[0] = (uint32_t)fd;
-        args[1] = (uint32_t)&sll;
+        args[1] = (unsigned long)&sll;
         args[2] = sizeof(sll);
         if (socketcall(SC_BIND, args) != 0) {
             fail("a rebind to ARP was refused");
         }
         senderlen = sizeof(sender);
         args[0] = (uint32_t)fd;
-        args[1] = (uint32_t)frame;
+        args[1] = (unsigned long)frame;
         args[2] = sizeof(frame);
         args[3] = 0x40; /* MSG_DONTWAIT */
-        args[4] = (uint32_t)sender;
-        args[5] = (uint32_t)&senderlen;
+        args[4] = (unsigned long)sender;
+        args[5] = (unsigned long)&senderlen;
         if (socketcall(SC_RECVFROM, args) != -EAGAIN) {
             fail("a rebound socket still had what arrived under its old protocol");
         }
@@ -789,7 +730,7 @@ void _start(void)
         sll.sll_protocol = ETH_P_ARP_BE;
         sll.sll_ifindex = 1;
         args[0] = (uint32_t)arp_fd;
-        args[1] = (uint32_t)&sll;
+        args[1] = (unsigned long)&sll;
         args[2] = sizeof(sll);
         if (socketcall(SC_BIND, args) != 0) {
             fail("a bind naming ARP was refused");
@@ -818,8 +759,8 @@ void _start(void)
         sll = zero_sll; /* so each field below is the kernel's answer */
         senderlen = sizeof(sll);
         args[0] = (uint32_t)arp_fd;
-        args[1] = (uint32_t)&sll;
-        args[2] = (uint32_t)&senderlen;
+        args[1] = (unsigned long)&sll;
+        args[2] = (unsigned long)&senderlen;
         if (socketcall(SC_GETSOCKNAME, args) != 0) {
             fail("getsockname on a packet socket failed");
         }
@@ -852,7 +793,7 @@ void _start(void)
         sll.sll_protocol = ETH_P_IP_BE;
         sll.sll_ifindex = 1;
         args[0] = (uint32_t)ip_fd;
-        args[1] = (uint32_t)&sll;
+        args[1] = (unsigned long)&sll;
         args[2] = sizeof(sll);
         if (socketcall(SC_BIND, args) != 0) {
             fail("a bind naming IPv4 was refused");
@@ -894,10 +835,10 @@ void _start(void)
             sll.sll_addr[i] = 0xff;
         }
         args[0] = (uint32_t)arp_fd;
-        args[1] = (uint32_t)frame;
+        args[1] = (unsigned long)frame;
         args[2] = 28;
         args[3] = 0;
-        args[4] = (uint32_t)&sll;
+        args[4] = (unsigned long)&sll;
         args[5] = sizeof(sll);
         if (socketcall(SC_SENDTO, args) != 28) {
             fail("the ARP request did not send");
@@ -915,7 +856,7 @@ void _start(void)
             if (sys_poll(&pfd, 1, 20) > 0 && (pfd.revents & POLLIN)) {
                 senderlen = 0;
                 args[0] = (uint32_t)arp_fd;
-                args[1] = (uint32_t)frame;
+                args[1] = (unsigned long)frame;
                 args[2] = sizeof(frame);
                 args[3] = 0x40; /* MSG_DONTWAIT */
                 args[4] = 0;
@@ -944,7 +885,7 @@ void _start(void)
             pfd.revents = 0;
             if (sys_poll(&pfd, 1, 20) > 0 && (pfd.revents & POLLIN)) {
                 args[0] = (uint32_t)ip_fd;
-                args[1] = (uint32_t)frame;
+                args[1] = (unsigned long)frame;
                 args[2] = sizeof(frame);
                 args[3] = 0x40;
                 args[4] = 0;
@@ -1003,7 +944,7 @@ void _start(void)
         }
         sll.sll_ifindex = 1;
         args[0] = (uint32_t)again;
-        args[1] = (uint32_t)&sll;
+        args[1] = (unsigned long)&sll;
         args[2] = sizeof(sll);
         if (socketcall(SC_BIND, args) != 0) {
             fail("a bind failed, so closing did not free the delivery table");

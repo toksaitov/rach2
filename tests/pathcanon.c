@@ -10,42 +10,21 @@
  * checks a '..' path through it onto /proc and /dev is refused, and that a '..'
  * path that canonicalizes onto a real device or directory still works.
  *
- * Prints "PATHCANON OK". Freestanding; direct int 0x80.
+ * Prints "PATHCANON OK". Freestanding; direct system calls (probe.h).
  */
 
-typedef unsigned int size_t;
+#include "probe.h"
 
 #define STDOUT_FILENO 1
-
-#define SYS_EXIT   1
-#define SYS_WRITE  4
-#define SYS_OPEN   5
-#define SYS_CLOSE  6
-#define SYS_EXECVE 11
-#define SYS_MKDIR  39
 
 #define O_RDONLY 0
 #define O_RDWR   2
 
 #define EACCES 13
 
-static int sys2(int n, int a, int b)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b) : "memory");
-    return r;
-}
-
-static int sys3(int n, int a, int b, int c)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
-}
-
 static void sys_exit(int status)
 {
-    __asm__ __volatile__("int $0x80" : : "a"(SYS_EXIT), "b"(status));
+    syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
@@ -60,50 +39,50 @@ static size_t strlen(const char *s)
 
 static void puts(const char *s)
 {
-    sys3(SYS_WRITE, STDOUT_FILENO, (int)s, (int)strlen(s));
-    sys3(SYS_WRITE, STDOUT_FILENO, (int)"\n", 1);
+    syscall3(SYS_WRITE, STDOUT_FILENO, (long)s, (int)strlen(s));
+    syscall3(SYS_WRITE, STDOUT_FILENO, (long)"\n", 1);
 }
 
 static void fail(const char *why)
 {
-    sys3(SYS_WRITE, STDOUT_FILENO, (int)"PATHCANON FAIL: ", 16);
+    syscall3(SYS_WRITE, STDOUT_FILENO, (long)"PATHCANON FAIL: ", 16);
     puts(why);
     sys_exit(1);
 }
 
-void _start(void)
+PROBE_START void _start(void)
 {
     int fd;
 
-    if (sys2(SYS_MKDIR, (int)"/cx", 0755) != 0) {
+    if (syscall2(SYS_MKDIR, (long)"/cx", 0755) != 0) {
         fail("mkdir /cx");
     }
 
     /* A '..' path that canonicalizes onto a synthetic mount must be refused,
      * not create a shadowing KRFFS node. */
-    if (sys2(SYS_MKDIR, (int)"/cx/../proc", 0755) == 0) {
+    if (syscall2(SYS_MKDIR, (long)"/cx/../proc", 0755) == 0) {
         fail("mkdir /cx/../proc created a KRFFS shadow of synthetic /proc");
     }
-    if (sys2(SYS_MKDIR, (int)"/cx/../dev", 0755) == 0) {
+    if (syscall2(SYS_MKDIR, (long)"/cx/../dev", 0755) == 0) {
         fail("mkdir /cx/../dev created a KRFFS shadow of synthetic /dev");
     }
 
     /* A '..' path that canonicalizes onto a real device still reaches it. */
-    fd = sys3(SYS_OPEN, (int)"/cx/../dev/null", O_RDWR, 0);
+    fd = syscall3(SYS_OPEN, (long)"/cx/../dev/null", O_RDWR, 0);
     if (fd < 0) {
         fail("/cx/../dev/null did not reach the device");
     }
-    if (sys3(SYS_WRITE, fd, (int)"x", 1) != 1) {
+    if (syscall3(SYS_WRITE, fd, (long)"x", 1) != 1) {
         fail("write to /dev/null via a '..' path");
     }
-    sys2(SYS_CLOSE, fd, 0);
+    syscall2(SYS_CLOSE, fd, 0);
 
     /* And one that canonicalizes back onto a real directory opens it. */
-    fd = sys3(SYS_OPEN, (int)"/cx/../cx", O_RDONLY, 0);
+    fd = syscall3(SYS_OPEN, (long)"/cx/../cx", O_RDONLY, 0);
     if (fd < 0) {
         fail("/cx/../cx did not resolve to the real directory");
     }
-    sys2(SYS_CLOSE, fd, 0);
+    syscall2(SYS_CLOSE, fd, 0);
 
     /* execve classifies the canonical path like open: a synthetic path is
      * refused with -EACCES before it can reach KRFFS, so a file a hostile image
@@ -112,7 +91,7 @@ void _start(void)
     {
         char *av[1];
         av[0] = 0;
-        if (sys3(SYS_EXECVE, (int)"/cx/../dev/null", (int)av, (int)av) != -EACCES) {
+        if (syscall3(SYS_EXECVE, (long)"/cx/../dev/null", (long)av, (long)av) != -EACCES) {
             fail("execve of a synthetic path was not refused with EACCES");
         }
     }

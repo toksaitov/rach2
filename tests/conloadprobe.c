@@ -25,29 +25,11 @@
  * announcement. Each loaded stage also requires a completed writer file
  * by the end of its console work. The end prints the
  * `/proc/console` counters and
- * `CONLOAD OK lines=N`, or `CONLOAD FAIL: reason`. Freestanding; int 0x80.
+ * `CONLOAD OK lines=N`, or `CONLOAD FAIL: reason`. Freestanding; direct system
+ * calls (probe.h).
  */
 
-typedef unsigned int size_t;
-
-#define SYS_EXIT         1
-#define SYS_FORK         2
-#define SYS_READ         3
-#define SYS_WRITE        4
-#define SYS_OPEN         5
-#define SYS_CLOSE        6
-#define SYS_WAITPID      7
-#define SYS_EXECVE       11
-#define SYS_MOUNT        21
-#define SYS_SYNC         36
-#define SYS_KILL         37
-#define SYS_MKDIR        39
-#define SYS_PIPE         42
-#define SYS_GETPID       20
-#define SYS_IOCTL        54
-#define SYS_SETPGID      57
-#define SYS_GETTIMEOFDAY 78
-#define SYS_NANOSLEEP    162
+#include "probe.h"
 
 #define O_RDONLY      0
 #define O_WRONLY      1
@@ -56,7 +38,6 @@ typedef unsigned int size_t;
 #define SIGINT        2
 #define SIGKILL       9
 #define TIOCSPGRP     0x5410
-#define SYS_POLL      168
 #define POLLIN        0x001
 #define READ_LIMIT_MS 5000
 
@@ -71,37 +52,6 @@ struct pollfd {
 #define LINES_C   60
 #define LINES_D   40
 #define LINES_ALL (LINES_A + LINES_B + LINES_C + LINES_D)
-
-static int syscall1(int n, int a)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a) : "memory");
-    return r;
-}
-
-static int syscall2(int n, int a, int b)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b) : "memory");
-    return r;
-}
-
-static int syscall3(int n, int a, int b, int c)
-{
-    int r;
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c) : "memory");
-    return r;
-}
-
-static int sys5(int n, int a, int b, int c, int d, int e)
-{
-    int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(n), "b"(a), "c"(b), "d"(c), "S"(d), "D"(e)
-                         : "memory");
-    return r;
-}
 
 static void sys_exit(int status)
 {
@@ -120,7 +70,7 @@ static size_t strlen(const char *s)
 
 static void print(const char *s)
 {
-    syscall3(SYS_WRITE, 1, (int)(size_t)s, (int)strlen(s));
+    syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
 }
 
 static void puts(const char *s)
@@ -139,7 +89,7 @@ static void print_num(unsigned v)
         v /= 10;
     } while (v);
     while (n) {
-        syscall3(SYS_WRITE, 1, (int)(size_t)&tmp[--n], 1);
+        syscall3(SYS_WRITE, 1, (long)&tmp[--n], 1);
     }
 }
 
@@ -157,7 +107,7 @@ static void stop_load(void)
     }
     for (i = 0; i < npids; i++) {
         int status = 0;
-        syscall3(SYS_WAITPID, pids[i], (int)(size_t)&status, 0);
+        syscall3(SYS_WAITPID, pids[i], (long)&status, 0);
         if ((status & 0x7f) != SIGKILL) {
             load_died = 1;
         }
@@ -179,7 +129,7 @@ static void sleep_ms(int ms)
 
     ts[0] = ms / 1000;
     ts[1] = (ms % 1000) * 1000000;
-    syscall2(SYS_NANOSLEEP, (int)(size_t)ts, 0);
+    syscall2(SYS_NANOSLEEP, (long)ts, 0);
 }
 
 static unsigned now_ms(void)
@@ -187,7 +137,7 @@ static unsigned now_ms(void)
     int tv[2];
 
     tv[0] = tv[1] = 0;
-    syscall2(SYS_GETTIMEOFDAY, (int)(size_t)tv, 0);
+    syscall2(SYS_GETTIMEOFDAY, (long)tv, 0);
     return (unsigned)tv[0] * 1000u + (unsigned)tv[1] / 1000u;
 }
 
@@ -211,20 +161,19 @@ static void writer(const char *path)
         block[i] = (unsigned char)i;
     }
     for (;;) {
-        int fd = syscall3(SYS_OPEN, (int)(size_t)path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        int fd = syscall3(SYS_OPEN, (long)path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
 
         if (fd < 0) {
             sys_exit(2);
         }
         for (i = 0; i < 64; i++) {
-            if (syscall3(SYS_WRITE, fd, (int)(size_t)block, (int)sizeof(block)) !=
-                (int)sizeof(block)) {
+            if (syscall3(SYS_WRITE, fd, (long)block, (int)sizeof(block)) != (int)sizeof(block)) {
                 sys_exit(3);
             }
         }
         syscall1(SYS_CLOSE, fd);
         syscall1(SYS_SYNC, 0);
-        syscall3(SYS_WRITE, progress[1], (int)(size_t)"w", 1);
+        syscall3(SYS_WRITE, progress[1], (long)"w", 1);
     }
 }
 
@@ -248,8 +197,8 @@ static void writer_progressed(const char *stage)
     pfd.fd = progress[0];
     pfd.events = POLLIN;
     pfd.revents = 0;
-    while (syscall3(SYS_POLL, (int)(size_t)&pfd, 1, 0) > 0 &&
-           syscall3(SYS_READ, progress[0], (int)(size_t)&b, 1) == 1) {
+    while (syscall3(SYS_POLL, (long)&pfd, 1, 0) > 0 &&
+           syscall3(SYS_READ, progress[0], (long)&b, 1) == 1) {
         n++;
     }
     print("CONLOAD writer files in stage ");
@@ -263,7 +212,7 @@ static void start_load(void)
 {
     int i;
 
-    if (syscall1(SYS_PIPE, (int)(size_t)progress) != 0) {
+    if (syscall1(SYS_PIPE, (long)progress) != 0) {
         fail("the progress pipe");
     }
     for (i = 0; i < 6; i++) {
@@ -332,7 +281,7 @@ static int read_line(void)
         pfd.fd = 0;
         pfd.events = POLLIN;
         pfd.revents = 0;
-        if (syscall3(SYS_POLL, (int)(size_t)&pfd, 1, READ_LIMIT_MS) <= 0) {
+        if (syscall3(SYS_POLL, (long)&pfd, 1, READ_LIMIT_MS) <= 0) {
             line[line_len] = 0;
             print("CONLOAD FAIL: no byte for five seconds; so far: ");
             puts(line);
@@ -340,7 +289,7 @@ static int read_line(void)
             stop_load();
             sys_exit(1);
         }
-        r = syscall3(SYS_READ, 0, (int)(size_t)&c, 1);
+        r = syscall3(SYS_READ, 0, (long)&c, 1);
         if (r <= 0) {
             return 0;
         }
@@ -417,14 +366,14 @@ static int read_lines(int first, int count)
 static void print_counters(void)
 {
     static char text[2048];
-    int fd = syscall3(SYS_OPEN, (int)(size_t)"/proc/console", O_RDONLY, 0);
+    int fd = syscall3(SYS_OPEN, (long)"/proc/console", O_RDONLY, 0);
     int n;
 
     if (fd < 0) {
         puts("CONLOAD counters: none");
         return;
     }
-    n = syscall3(SYS_READ, fd, (int)(size_t)text, (int)sizeof(text) - 1);
+    n = syscall3(SYS_READ, fd, (long)text, (int)sizeof(text) - 1);
     syscall1(SYS_CLOSE, fd);
     if (n > 0) {
         text[n] = 0;
@@ -437,13 +386,13 @@ static void print_counters(void)
 static unsigned counter(const char *key)
 {
     static char text[2048];
-    int fd = syscall3(SYS_OPEN, (int)(size_t)"/proc/console", O_RDONLY, 0);
+    int fd = syscall3(SYS_OPEN, (long)"/proc/console", O_RDONLY, 0);
     int n, i;
 
     if (fd < 0) {
         return 0xFFFFFFFFu;
     }
-    n = syscall3(SYS_READ, fd, (int)(size_t)text, (int)sizeof(text) - 1);
+    n = syscall3(SYS_READ, fd, (long)text, (int)sizeof(text) - 1);
     syscall1(SYS_CLOSE, fd);
     if (n <= 0) {
         return 0xFFFFFFFFu;
@@ -518,9 +467,8 @@ void probe_main(unsigned int *sp)
         sys_exit(0);
     }
 
-    if (syscall2(SYS_MKDIR, (int)(size_t)"/lo", 0755) != 0 ||
-        sys5(SYS_MOUNT, (int)(size_t)"/dev/disk0p1", (int)(size_t)"/lo", (int)(size_t)"vfat", 0,
-             0) != 0) {
+    if (syscall2(SYS_MKDIR, (long)"/lo", 0755) != 0 ||
+        syscall5(SYS_MOUNT, (long)"/dev/disk0p1", (long)"/lo", (long)"vfat", 0, 0) != 0) {
         fail("the mount of the volume");
     }
     start_load();
@@ -569,19 +517,19 @@ void probe_main(unsigned int *sp)
         }
     }
     syscall2(SYS_SETPGID, child, child);
-    if (syscall3(SYS_IOCTL, 0, TIOCSPGRP, (int)(size_t)&child) != 0) {
+    if (syscall3(SYS_IOCTL, 0, TIOCSPGRP, (long)&child) != 0) {
         fail("the terminal to the child's group");
     }
     puts("CONLOAD C");
     status = 0;
-    if (syscall3(SYS_WAITPID, child, (int)(size_t)&status, 0) != child) {
+    if (syscall3(SYS_WAITPID, child, (long)&status, 0) != child) {
         fail("the wait for the foreground child");
     }
     if ((status & 0x7f) != SIGINT) {
         fail("the foreground child did not die of the interrupt character");
     }
     pgid = syscall1(SYS_GETPID, 0);
-    if (syscall3(SYS_IOCTL, 0, TIOCSPGRP, (int)(size_t)&pgid) != 0) {
+    if (syscall3(SYS_IOCTL, 0, TIOCSPGRP, (long)&pgid) != 0) {
         fail("the terminal back to the parent");
     }
     good = read_lines(LINES_A + LINES_B, LINES_C);
@@ -604,7 +552,7 @@ void probe_main(unsigned int *sp)
         args[1] = (char *)"D";
         args[2] = 0;
         envp[0] = 0;
-        syscall3(SYS_EXECVE, (int)(size_t)"/conloadprobe", (int)(size_t)args, (int)(size_t)envp);
+        syscall3(SYS_EXECVE, (long)"/conloadprobe", (long)args, (long)envp);
     }
     fail("the exec did not happen");
 }
