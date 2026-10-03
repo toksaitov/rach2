@@ -27,6 +27,9 @@
 
 #include "../../lib/kint.h"
 #include "../../mm/paging.h"
+#if defined(__x86_64__)
+#include "../x86_64/mmu.h"
+#endif
 
 #define SMBIOS_SCAN_START 0xF0000u
 #define SMBIOS_SCAN_END   0x100000u
@@ -80,7 +83,11 @@ static const uint8_t *find_anchor(void)
     uint32_t at;
 
     for (at = SMBIOS_SCAN_START; at + 32u <= SMBIOS_SCAN_END; at += SMBIOS_SCAN_STEP) {
+#if defined(__x86_64__)
+        const uint8_t *p = (const uint8_t *)MMU_VIRT(at);
+#else
         const uint8_t *p = (const uint8_t *)at;
+#endif
 
         if (four_are(p, "_SM_") && p[5] >= SMBIOS_EP32_LEN && sum_of(p, p[5]) == 0 &&
             four_are(p + 0x10, "_DMI") && p[0x14] == '_' && sum_of(p + 0x10, 15) == 0) {
@@ -144,12 +151,17 @@ static int table_of(const uint8_t *anchor, uint32_t *at, uint32_t *len)
  * is mapped first: on a machine with more than 32 MiB the firmware usually
  * publishes its table near the top of memory, and reading that through its
  * physical address would fault. The mapping lasts for the life of the kernel,
- * which costs a few pages once, since the vendor is read once.
+ * which costs a few pages once, since the vendor is read once. On x86-64 the
+ * direct map has every table already.
  *
  * @return the address, or 0 when the table cannot be reached.
  */
 static const uint8_t *table_at(uint32_t at, uint32_t len)
 {
+#if defined(__x86_64__)
+    (void)len;
+    return (const uint8_t *)MMU_VIRT(at);
+#else
     uintptr_t mapped;
 
     if (at + len <= (uint32_t)HARD_MEMORY_LIMIT) {
@@ -157,6 +169,7 @@ static const uint8_t *table_at(uint32_t at, uint32_t len)
     }
     mapped = map_mmio((uintptr_t)at, (size_t)len);
     return (const uint8_t *)mapped;
+#endif
 }
 
 /**
