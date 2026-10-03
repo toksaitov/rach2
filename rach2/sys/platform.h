@@ -20,6 +20,17 @@
  */
 void platform_cpu_init(uintptr_t boot_stack_top);
 
+struct boot_info;
+
+/**
+ * Read the firmware's description of the machine, once paging is on and
+ * before the interrupt controllers and the timer start: on a PC, ACPI's
+ * tables, from the RSDP `boot` gives or from the BIOS area, the counter
+ * the timer is measured against, and PCI configuration through ECAM where
+ * the tables give a window for it.
+ */
+void platform_firmware_init(const struct boot_info *boot);
+
 /** Report what the firmware left in the machine's devices, before the
  * drivers change it: `rach2.diag`'s full report and the interrupt
  * controller's state. */
@@ -30,8 +41,9 @@ void platform_report(void);
 void platform_report_hold(void);
 
 /**
- * Start the periodic tick, 100 times a second, with `tick` its handler, and
- * check that it arrives. Interrupts are on when this returns.
+ * Bring up the interrupt controllers and start the periodic tick, 100 times
+ * a second, with `tick` its handler, and check that it arrives. Interrupts
+ * are on when this returns.
  */
 void platform_timer_start(isr_handler_t tick);
 

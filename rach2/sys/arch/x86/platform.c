@@ -3,6 +3,7 @@
  * the machine's own devices up in kept by kernel.c and carried out here.
  */
 
+#include "acpi.h"
 #include "apicdiag.h"
 #include "board.h"
 #include "diag.h"
@@ -22,6 +23,7 @@
 
 #include "../../audio/sb16.h"
 #include "../../block/ata.h"
+#include "../../boot.h"
 #include "../../cmdline.h"
 #include "../../input.h"
 #include "../../klog.h"
@@ -46,6 +48,11 @@ void platform_cpu_init(uintptr_t boot_stack_top)
 
     init_isr();
     klog(KLOG_DEBUG, "boot", "isr: ready");
+}
+
+void platform_firmware_init(const struct boot_info *boot)
+{
+    acpi_init(boot->acpi_rsdp);
 }
 
 void platform_report(void)

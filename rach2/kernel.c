@@ -3532,6 +3532,8 @@ void kernel_main(const struct boot_info *boot)
     init_pagecache();
     klog(KLOG_DEBUG, "boot", "page cache: ready");
 
+    platform_firmware_init(boot);
+
     platform_report();
 
     platform_timer_start(&timer_handler);

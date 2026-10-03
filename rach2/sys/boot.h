@@ -20,6 +20,11 @@ struct boot_info {
     uint32_t mem_upper_kb;
     /* The boot modules, which `get_module` (module.h) then reads. */
     uint32_t modules;
+    /* The physical address of ACPI's root system description pointer, the
+     * firmware's own or a loader's copy of it (multiboot2's tags 14 and 15
+     * hold the structure itself), or 0, and the platform then searches the
+     * BIOS area for it. */
+    uint64_t acpi_rsdp;
 };
 
 /** The shared boot, from the architecture's entry: brings the kernel up and
