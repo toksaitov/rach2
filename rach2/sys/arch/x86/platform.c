@@ -9,6 +9,7 @@
 #include "diag.h"
 #include "ps2kbd.h"
 #include "lapic.h"
+#include "pciconf.h"
 #include "ps2mouse.h"
 #include "pit.h"
 
@@ -27,9 +28,16 @@
 #include "../../cmdline.h"
 #include "../../input.h"
 #include "../../klog.h"
+#include "../../mm/paging.h"
+#include "../../pci.h"
 #include "../../platform.h"
 #include "../../timer.h"
 #include "../../udelay.h"
+
+/* The most buses of segment 0 mapped for ECAM, a mebibyte each; a bus past
+ * them is reached by mechanism #1. */
+#define ECAM_MAX_BUSES 32
+
 
 void platform_cpu_init(uintptr_t boot_stack_top)
 {
@@ -50,9 +58,130 @@ void platform_cpu_init(uintptr_t boot_stack_top)
     klog(KLOG_DEBUG, "boot", "isr: ready");
 }
 
+/** The functions device `dev` of `bus` has: 0 when it does not answer, 8
+ * when its header says it has several, 1 otherwise. */
+static uint8_t pci_functions(uint8_t bus, uint8_t dev)
+{
+    if (pci_read_config16(bus, dev, 0, PCI_VENDOR_ID) == 0xFFFFu) {
+        return 0;
+    }
+    return (pci_read_config8(bus, dev, 0, PCI_HEADER_TYPE) & 0x80u) ? 8u : 1u;
+}
+
+/**
+ * Call `visit` for each function that answers on buses `first` to `*last`,
+ * by whichever configuration mechanism serves each bus. `*last` is read
+ * again after each bus, so a visit may move it on.
+ */
+static void pci_each(uint32_t first, uint32_t *last,
+                     void (*visit)(uint8_t bus, uint8_t dev, uint8_t fn, void *arg), void *arg)
+{
+    uint32_t bus;
+    uint8_t dev, fn, n;
+
+    for (bus = first; bus <= *last && bus < 256u; bus++) {
+        for (dev = 0; dev < 32; dev++) {
+            n = pci_functions((uint8_t)bus, dev);
+            for (fn = 0; fn < n; fn++) {
+                if (pci_read_config16((uint8_t)bus, dev, fn, PCI_VENDOR_ID) != 0xFFFFu) {
+                    visit((uint8_t)bus, dev, fn, arg);
+                }
+            }
+        }
+    }
+}
+
+/* The buses a walk reaches through bridges, and the most it may. */
+struct bus_reach {
+    uint32_t top;
+    uint32_t cap;
+};
+
+static void reach_bridge(uint8_t bus, uint8_t dev, uint8_t fn, void *arg)
+{
+    struct bus_reach *r = (struct bus_reach *)arg;
+    uint32_t sub;
+
+    if ((pci_read_config8(bus, dev, fn, PCI_HEADER_TYPE) & 0x7Fu) != 1u) {
+        return;
+    }
+    sub = pci_read_config8(bus, dev, fn, 0x1A); /* the subordinate bus */
+    if (sub > r->top) {
+        r->top = sub > r->cap ? r->cap : sub;
+    }
+}
+
+static void count_extended(uint8_t bus, uint8_t dev, uint8_t fn, void *arg)
+{
+    uint32_t cap = pci_read_config32_ext(bus, dev, fn, 0x100);
+
+    if (cap != 0 && cap != 0xFFFFFFFFu) {
+        (*(int *)arg)++;
+        klog(KLOG_DEBUG, "pci", "ecam: %x:%x.%d: extended capability 0x%x, version %d, at 0x100",
+             (unsigned)bus, (unsigned)dev, (int)fn, cap & 0xFFFFu, (int)((cap >> 16) & 0xFu));
+    }
+}
+
+/**
+ * Map segment 0's ECAM window for the buses that exist, the MCFG's first
+ * and those behind the bridges on it, read through mechanism #1 before the
+ * window is in place, and at most `ECAM_MAX_BUSES`; and hand it to the
+ * configuration functions once its first function reads as mechanism #1
+ * reads it. Each function whose extended space begins with a capability is
+ * logged, which is the space only ECAM reaches.
+ */
+static void ecam_init(const struct acpi_info *a)
+{
+    const struct acpi_ecam *e = 0;
+    struct bus_reach r;
+    uint64_t base;
+    uintptr_t va;
+    int i, extended = 0;
+
+    for (i = 0; i < a->necam && !e; i++) {
+        if (a->ecam[i].segment == 0) {
+            e = &a->ecam[i];
+        }
+    }
+    if (!e) {
+        return;
+    }
+    r.top = e->bus_first;
+    r.cap = e->bus_first + ECAM_MAX_BUSES - 1u;
+    if (r.cap > e->bus_last) {
+        r.cap = e->bus_last;
+    }
+    pci_each(e->bus_first, &r.top, reach_bridge, &r);
+    base = e->base + ((uint64_t)e->bus_first << 20);
+    if (sizeof(uintptr_t) < 8 &&
+        ((base + ((uint64_t)(r.top - e->bus_first + 1u) << 20) - 1u) >> 32) != 0) {
+        klog(KLOG_WARN, "pci", "ecam: refused: the window is above 4 gib");
+        return;
+    }
+    va = map_mmio((uintptr_t)base, (size_t)(r.top - e->bus_first + 1u) << 20);
+    if (va == 0) {
+        klog(KLOG_WARN, "pci", "ecam: refused: the window could not be mapped");
+        return;
+    }
+    if (*(volatile uint32_t *)va != pci_read_config32(e->bus_first, 0, 0, 0)) {
+        klog(KLOG_WARN, "pci", "ecam: refused: bus %d's first function reads otherwise there",
+             (int)e->bus_first);
+        return;
+    }
+    pci_ecam_set(va, e->bus_first, (uint8_t)r.top);
+    klog(KLOG_INFO, "pci", "ecam: buses %d to %d of segment 0 at 0x%x", (int)e->bus_first,
+         (int)r.top, (uint32_t)base);
+    pci_each(e->bus_first, &r.top, count_extended, &extended);
+    klog(KLOG_INFO, "pci", "ecam: %d functions with extended capabilities", extended);
+}
+
 void platform_firmware_init(const struct boot_info *boot)
 {
+    const struct acpi_info *a;
+
     acpi_init(boot->acpi_rsdp);
+    a = acpi_get();
+    ecam_init(a);
 }
 
 void platform_report(void)
