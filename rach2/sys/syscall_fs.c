@@ -553,7 +553,7 @@ static int32_t fsize_refused(uint64_t end)
     unsigned long limit = current_proc->rlim[RLIM_FSIZE].cur;
     struct k_siginfo info;
 
-    if (limit == RLIM_INFINITY32 || end <= limit) {
+    if (limit == RLIM_INFINITY || end <= limit) {
         return 0;
     }
     k_memset(&info, 0, sizeof(info));
@@ -626,7 +626,7 @@ static int32_t file_write(fd_entry_t *entry, const char __user *buf, uint32_t co
         fd_ofd_unlock(ofd);
         return -EFBIG;
     }
-    if (current_proc->rlim[RLIM_FSIZE].cur != RLIM_INFINITY32 &&
+    if (current_proc->rlim[RLIM_FSIZE].cur != RLIM_INFINITY &&
         (uint64_t)count > current_proc->rlim[RLIM_FSIZE].cur - pos) {
         count = (uint32_t)(current_proc->rlim[RLIM_FSIZE].cur - pos);
     }

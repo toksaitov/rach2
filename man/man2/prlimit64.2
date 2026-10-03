@@ -150,9 +150,11 @@ it happens, so a process that raises its own
 may grow its stack further at once; here the limit of the exec that
 started the image applies until the next exec.
 .Pp
-The kernel stores limits in 32 bits.
-A 64-bit value with a nonzero high word, or the value 4294967295,
-is treated as unlimited.
+The kernel stores limits as Linux does, in a
+.Vt long ,
+32 bits on i386 and 64 bits on x86-64.
+On i386 a 64-bit value of 4294967295 or more is treated as unlimited; on
+x86-64 the value with all 64 bits set is.
 An unlimited value is returned with all 64 bits set.
 .Pp
 The i386 system call
@@ -170,6 +172,13 @@ The older calls
 (75), and
 .Nm ugetrlimit
 (191) use two unsigned 32-bit fields, with 4294967295 as infinity.
+On x86-64,
+.Nm getrlimit
+(97) and
+.Nm setrlimit
+(160) use two unsigned 64-bit fields, and
+.Nm prlimit64
+is number 302.
 Musl has no separate
 .Fn ugetrlimit
 declaration; its getrlimit fallback uses that kernel number on i386.

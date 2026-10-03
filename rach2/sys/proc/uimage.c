@@ -65,9 +65,9 @@ static void uwin_open(struct uwin *w, const struct uimage *u)
  * quarter of the limit, at most UIMAGE_ARGS_MAX and at least
  * UIMAGE_ARGS_MIN.
  */
-uint32_t uimage_budget(uint32_t stack_limit)
+uint32_t uimage_budget(unsigned long stack_limit)
 {
-    uint32_t limit = stack_limit / 4u;
+    unsigned long limit = stack_limit / 4u;
 
     if (limit > UIMAGE_ARGS_MAX) {
         limit = UIMAGE_ARGS_MAX;
@@ -75,7 +75,7 @@ uint32_t uimage_budget(uint32_t stack_limit)
     if (limit < UIMAGE_ARGS_MIN) {
         limit = UIMAGE_ARGS_MIN;
     }
-    return limit;
+    return (uint32_t)limit;
 }
 
 /**
@@ -93,7 +93,7 @@ uint32_t uimage_budget(uint32_t stack_limit)
  * @return 0; -E2BIG when the pointers alone take the budget; -ENOMEM when
  *         the array could not be had.
  */
-int uimage_start(struct uimage *u, uintptr_t top, uint32_t stack_limit, uint32_t argc,
+int uimage_start(struct uimage *u, uintptr_t top, unsigned long stack_limit, uint32_t argc,
                  uint32_t envc)
 {
     uint32_t limit = uimage_budget(stack_limit);

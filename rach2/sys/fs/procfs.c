@@ -1356,7 +1356,7 @@ static void ap_limit(struct procfs_text *t, unsigned long v)
     char digits[24];
     int i = (int)sizeof(digits) - 1;
 
-    if (v == RLIM_INFINITY32) {
+    if (v == RLIM_INFINITY) {
         ap_left(t, "unlimited", 21);
         return;
     }
@@ -1411,8 +1411,8 @@ static int procfs_gen_limits(struct procfs_text *t, int pid)
 
         ap_ch(t, '\n');
         ap_left(t, rows[i].name, 26);
-        ap_limit(t, s < 0 ? RLIM_INFINITY32 : p->rlim[s].cur);
-        ap_limit(t, s < 0 ? RLIM_INFINITY32 : p->rlim[s].max);
+        ap_limit(t, s < 0 ? RLIM_INFINITY : p->rlim[s].cur);
+        ap_limit(t, s < 0 ? RLIM_INFINITY : p->rlim[s].max);
         if (rows[i].unit) {
             ap_left(t, rows[i].unit, 10);
         }

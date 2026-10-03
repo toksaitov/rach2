@@ -71,8 +71,8 @@ from pathlib import Path
 import sys
 work = Path(sys.argv[1])
 changes = {
-    'budget-quarter': [('uint32_t limit = stack_limit / 4u;',
-                        'uint32_t limit = stack_limit / 2u;')],
+    'budget-quarter': [('unsigned long limit = stack_limit / 4u;',
+                        'unsigned long limit = stack_limit / 2u;')],
     'budget-cap': [('if (limit > UIMAGE_ARGS_MAX) {', 'if (0) {')],
     'budget-floor': [('if (limit < UIMAGE_ARGS_MIN) {', 'if (0) {')],
     'pointers-argv0': [('pointers = ((argc > 0 ? argc : 1u) + envc) * word;',

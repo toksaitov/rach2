@@ -1033,9 +1033,9 @@ static void exec_privileges(struct mm *mm, int secure, int unreadable, uint32_t 
  * anonymous mappings are placed, and always as far as `bottom`. A limit
  * changed later applies at the next exec.
  */
-static uintptr_t exec_stack_window(uintptr_t bottom, uint32_t limit)
+static uintptr_t exec_stack_window(uintptr_t bottom, unsigned long limit)
 {
-    uintptr_t size = limit & ~(uint32_t)(PAGE_SIZE - 1);
+    uintptr_t size = limit & ~(unsigned long)(PAGE_SIZE - 1);
     uintptr_t floor;
 
     if (size > USER_ADDR_MAX - USER_MMAP_BASE) {
@@ -1121,7 +1121,7 @@ static int32_t exec_copy_args(struct exec_state *s, const char __user *user_path
                               char *const __user *user_argv, char *const __user *user_envp,
                               uint32_t *argc, uint32_t *envc)
 {
-    uint32_t limit = current_proc->rlim[RLIM_STACK].cur;
+    unsigned long limit = current_proc->rlim[RLIM_STACK].cur;
     uint32_t max = uimage_budget(limit) / 4u;
     int32_t rc;
 
@@ -1445,7 +1445,7 @@ static int32_t exec_build(struct exec_state *s)
     struct uimage_aux aux;
     uintptr_t bias = 0;
     uintptr_t bottom = uimage_bottom(&s->args);
-    uint32_t limit = current_proc->rlim[RLIM_STACK].cur;
+    unsigned long limit = current_proc->rlim[RLIM_STACK].cur;
     uint8_t random16[16];
     int32_t rc;
 
@@ -1476,7 +1476,7 @@ static int32_t exec_build(struct exec_state *s)
     if (elf_setup_vmas(&s->mm->vm, &s->img, USER_STACK_BASE, exec_stack_window(bottom, limit)) !=
             0 ||
         (s->layout.interp[0] != '\0' && elf_add_vmas(&s->mm->vm, &s->iimg) != 0) ||
-        (bottom < USER_STACK_BASE && !vm_grow_stack(&s->mm->vm, bottom, RLIM_INFINITY32)) ||
+        (bottom < USER_STACK_BASE && !vm_grow_stack(&s->mm->vm, bottom, RLIM_INFINITY)) ||
         vm_total(&s->mm->vm) > current_proc->rlim[RLIM_AS].cur) {
         return -ENOMEM;
     }
@@ -1978,7 +1978,7 @@ static int32_t fork_nproc(const process_t *parent)
     const process_t *q;
     uint32_t mine = 0;
 
-    if (parent->ruid == 0 || parent->rlim[RLIM_NPROC].cur == RLIM_INFINITY32) {
+    if (parent->ruid == 0 || parent->rlim[RLIM_NPROC].cur == RLIM_INFINITY) {
         return 0;
     }
     for (q = proc_list; q; q = q->next) {
@@ -5111,8 +5111,6 @@ long sys_getgroups(isr_params_t *params)
 
 #define RLIMIT_AS_RES 9
 
-#define RLIM_INF32 RLIM_INFINITY32
-
 /** The record's slot for `resource`, or -1 for one that is not kept. */
 static int rlimit_slot(uint32_t resource)
 {
@@ -5134,7 +5132,8 @@ static int rlimit_slot(uint32_t resource)
     }
 }
 
-static void rlimit_for(const process_t *p, uint32_t resource, uint32_t *cur, uint32_t *max)
+static void rlimit_for(const process_t *p, uint32_t resource, unsigned long *cur,
+                       unsigned long *max)
 {
     int slot = rlimit_slot(resource);
 
@@ -5143,7 +5142,7 @@ static void rlimit_for(const process_t *p, uint32_t resource, uint32_t *cur, uin
         *max = p->rlim[slot].max;
         return;
     }
-    *cur = *max = RLIM_INF32;
+    *cur = *max = RLIM_INFINITY;
 }
 
 /**
@@ -5155,7 +5154,7 @@ static void rlimit_for(const process_t *p, uint32_t resource, uint32_t *cur, uin
  * since each allocation reads the caller's (`fd_limit`). 0, or -EINVAL and
  * -EPERM as POSIX names them.
  */
-static int rlimit_set(process_t *p, uint32_t resource, uint32_t cur, uint32_t max)
+static int rlimit_set(process_t *p, uint32_t resource, unsigned long cur, unsigned long max)
 {
     int slot = rlimit_slot(resource);
     process_t *t;
@@ -5206,13 +5205,13 @@ static process_t *rlimit_target(uint32_t pid)
     return p;
 }
 
-/* getrlimit/ugetrlimit: 32-bit struct rlimit { u32 rlim_cur,
- * rlim_max }. */
+/* getrlimit/ugetrlimit: struct rlimit { unsigned long rlim_cur, rlim_max },
+ * the record's own width, with RLIM_INFINITY all ones in either. */
 long sys_getrlimit(isr_params_t *params)
 {
     uint32_t resource = (uint32_t)SC_ARG(params, 0);
     uintptr_t rl = SC_ARG(params, 1);
-    uint32_t out[2];
+    unsigned long out[2];
 
     if (!rl) {
         return -EFAULT;
@@ -5224,12 +5223,12 @@ long sys_getrlimit(isr_params_t *params)
     return 0;
 }
 
-/* setrlimit: the 32-bit form of a set. */
+/* setrlimit: a set in the form getrlimit reads. */
 long sys_setrlimit(isr_params_t *params)
 {
     uint32_t resource = (uint32_t)SC_ARG(params, 0);
     uintptr_t rl = SC_ARG(params, 1);
-    uint32_t in[2];
+    unsigned long in[2];
 
     if (copy_from_user(in, (const void __user *)rl, sizeof(in)) != 0) {
         return -EFAULT;
@@ -5237,12 +5236,19 @@ long sys_setrlimit(isr_params_t *params)
     return rlimit_set(current_proc, resource, in[0], in[1]);
 }
 
-/* A 64-bit limit as the record holds it: the high word set is no limit, and
- * a value past 32 bits is kept as no limit too, since nothing here reaches
- * it. */
-static uint32_t rlimit_from64(uint32_t lo, uint32_t hi)
+/* A 64-bit limit as the record holds it: a value as large as the record's
+ * RLIM_INFINITY or larger is no limit, as Linux's `rlim64_is_infinity`
+ * reads it, so on i686 a value past 32 bits is kept as no limit. */
+static unsigned long rlimit_from64(uint64_t v)
 {
-    return hi ? RLIM_INF32 : lo;
+    return v >= (uint64_t)RLIM_INFINITY ? RLIM_INFINITY : (unsigned long)v;
+}
+
+/* The record's limit as prlimit64 gives it: RLIM_INFINITY as the 64-bit
+ * one, all ones. */
+static uint64_t rlimit_to64(unsigned long v)
+{
+    return v == RLIM_INFINITY ? ~(uint64_t)0 : (uint64_t)v;
 }
 
 /**
@@ -5260,9 +5266,9 @@ long sys_prlimit64(isr_params_t *params)
     uintptr_t newp = SC_ARG(params, 2);
     uintptr_t oldp = SC_ARG(params, 3);
     process_t *p;
-    uint32_t cur32, max32;
-    uint32_t in[4];
-    uint32_t out[4]; /* cur_lo, cur_hi, max_lo, max_hi */
+    unsigned long cur, max;
+    uint64_t in[2];
+    uint64_t out[2]; /* cur, max */
     int rc = 0;
 
     /* The user copies may sleep, and another process may end while they
@@ -5275,13 +5281,11 @@ long sys_prlimit64(isr_params_t *params)
     if (!p) {
         return pid != 0 && get_process(pid_named(pid)) ? -EPERM : -ESRCH;
     }
-    rlimit_for(p, resource, &cur32, &max32);
-    out[0] = cur32;
-    out[1] = (cur32 == RLIM_INF32) ? 0xFFFFFFFFu : 0u; /* 64-bit RLIM_INFINITY */
-    out[2] = max32;
-    out[3] = (max32 == RLIM_INF32) ? 0xFFFFFFFFu : 0u;
+    rlimit_for(p, resource, &cur, &max);
+    out[0] = rlimit_to64(cur);
+    out[1] = rlimit_to64(max);
     if (newp) {
-        rc = rlimit_set(p, resource, rlimit_from64(in[0], in[1]), rlimit_from64(in[2], in[3]));
+        rc = rlimit_set(p, resource, rlimit_from64(in[0]), rlimit_from64(in[1]));
     }
     if (oldp && copy_to_user((void __user *)oldp, out, sizeof(out)) != 0) {
         return -EFAULT;
@@ -5640,7 +5644,7 @@ static int32_t mmap_backing(uint32_t flags, int fd, uintptr_t len, struct map_so
 static int32_t mmap_place(vm_space_t *vm, uintptr_t addr, uintptr_t len, uint32_t flags,
                           uintptr_t *base)
 {
-    uint32_t limit = current_proc->rlim[RLIM_AS].cur;
+    unsigned long limit = current_proc->rlim[RLIM_AS].cur;
 
     if (flags & (MAP_FIXED | MAP_FIXED_NOREPLACE)) {
         if (addr < USER_ADDR_MIN || addr > USER_ADDR_MAX - len) {
@@ -5994,7 +5998,7 @@ static long remap_move(vm_space_t *vm, vma_t *r, uintptr_t addr, uintptr_t len, 
 static long remap_fixed(vm_space_t *vm, uintptr_t addr, uintptr_t old_len, uintptr_t to,
                         uintptr_t new_len)
 {
-    uint32_t limit = current_proc->rlim[RLIM_AS].cur;
+    unsigned long limit = current_proc->rlim[RLIM_AS].cur;
     uintptr_t rest;
 
     if ((to & (PAGE_SIZE - 1)) != 0 || to < USER_ADDR_MIN || to > USER_ADDR_MAX - new_len ||

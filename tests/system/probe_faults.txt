@@ -5850,9 +5850,9 @@ probe limitprobe
 file rach2/sys/syscall_fs.c
 expect LIMITPROBE FAIL: a file limit of 4096
 old
-    if (limit == RLIM_INFINITY32 || end <= limit) {
+    if (limit == RLIM_INFINITY || end <= limit) {
 new
-    if (limit == RLIM_INFINITY32 || end <= limit || 1) {
+    if (limit == RLIM_INFINITY || end <= limit || 1) {
 end
 
 fault oom-segv

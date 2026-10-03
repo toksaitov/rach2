@@ -51,11 +51,11 @@ struct uimage {
 
 /** The bytes the strings and their pointers may take under a soft
  * RLIMIT_STACK of `stack_limit`. */
-uint32_t uimage_budget(uint32_t stack_limit);
+uint32_t uimage_budget(unsigned long stack_limit);
 
 /** Start an initial stack whose top is `top` for `argc` and `envc` strings
  * under a soft RLIMIT_STACK of `stack_limit`; 0, -E2BIG, -ENOMEM. */
-int uimage_start(struct uimage *u, uintptr_t top, uint32_t stack_limit, uint32_t argc,
+int uimage_start(struct uimage *u, uintptr_t top, unsigned long stack_limit, uint32_t argc,
                  uint32_t envc);
 
 /** Copy the user string at `s` below the strings already there; 0, -E2BIG,

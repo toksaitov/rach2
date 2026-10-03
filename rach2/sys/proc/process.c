@@ -152,12 +152,12 @@ process_t *alloc_process(void)
     p->pgid = candidate;
     p->rlim[RLIM_NPROC].cur = p->rlim[RLIM_NPROC].max = PROC_COUNT_POLICY;
     p->rlim[RLIM_NOFILE].cur = p->rlim[RLIM_NOFILE].max = FD_TABLE_LIMIT;
-    p->rlim[RLIM_AS].cur = p->rlim[RLIM_AS].max = RLIM_INFINITY32;
+    p->rlim[RLIM_AS].cur = p->rlim[RLIM_AS].max = RLIM_INFINITY;
     p->rlim[RLIM_STACK].cur = RLIM_STACK_DEFAULT;
-    p->rlim[RLIM_STACK].max = RLIM_INFINITY32;
+    p->rlim[RLIM_STACK].max = RLIM_INFINITY;
     p->rlim[RLIM_CORE].cur = 0;
-    p->rlim[RLIM_CORE].max = RLIM_INFINITY32;
-    p->rlim[RLIM_FSIZE].cur = p->rlim[RLIM_FSIZE].max = RLIM_INFINITY32;
+    p->rlim[RLIM_CORE].max = RLIM_INFINITY;
+    p->rlim[RLIM_FSIZE].cur = p->rlim[RLIM_FSIZE].max = RLIM_INFINITY;
     p->waiter.proc = p;
     p->cpu = (int)arch_cpu_id();
     p->affinity = ~(uint64_t)0;

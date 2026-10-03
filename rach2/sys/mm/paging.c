@@ -650,7 +650,7 @@ static int access_page(struct mm *mm, uintptr_t addr, uint8_t *p, uint32_t len, 
         !(vma->prot & (VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXEC))) {
         return -EIO;
     }
-    if (!pte_present(mm->dir, addr) && !vm_resolve_in(mm, addr, 0, RLIM_INFINITY32)) {
+    if (!pte_present(mm->dir, addr) && !vm_resolve_in(mm, addr, 0, (uintptr_t)RLIM_INFINITY)) {
         return -EIO;
     }
     if (write) {

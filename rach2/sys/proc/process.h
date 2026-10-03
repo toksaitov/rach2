@@ -29,10 +29,12 @@ typedef enum {
  * the architecture's (cpu_regs_t in its cpu.h). */
 
 /* A limit as `prlimit64` keeps it: the soft value enforced, the hard one
- * the soft may be raised to, `RLIM_INFINITY32` for none. */
-struct rlimit32 {
-    uint32_t cur;
-    uint32_t max;
+ * the soft may be raised to, `RLIM_INFINITY` for none. The values are
+ * longs, as Linux keeps them: 32 bits on i686, where a value past them is no
+ * limit, and 64 bits on x86-64. */
+struct proc_rlimit {
+    unsigned long cur;
+    unsigned long max;
 };
 #define RLIM_NPROC      0
 #define RLIM_NOFILE     1
@@ -41,7 +43,7 @@ struct rlimit32 {
 #define RLIM_CORE       4
 #define RLIM_FSIZE      5
 #define RLIM_COUNT      6
-#define RLIM_INFINITY32 0xFFFFFFFFu
+#define RLIM_INFINITY   (~0UL)
 
 /* The soft RLIMIT_STACK a process starts with, 8 MiB, which is Linux's;
  * an exec that runs with ids its caller lacks lowers a larger one to it. */
@@ -197,7 +199,7 @@ struct process {
     /* The resource limits `prlimit64` keeps: threads of the real user,
      * open descriptors, the address space and the stack in bytes; soft and
      * hard, inherited by fork and exec. */
-    struct rlimit32 rlim[RLIM_COUNT];
+    struct proc_rlimit rlim[RLIM_COUNT];
     /* Inside `mem_reclaim`: its own allocations, the requests a writeback
      * needs, may take from the reserve. */
     uint32_t reclaiming;
