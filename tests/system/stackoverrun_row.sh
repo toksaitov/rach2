@@ -12,15 +12,15 @@
 # The page below every kernel stack is left unmapped, so the first store
 # past the stack's base faults, and since the page fault's own frame cannot
 # be pushed there either, the processor raises a double fault, whose task
-# gate runs its handler on a stack of its own. The row requires the
-# descent's announcement, a record, the double fault's or the page fault's,
-# that names the pid the announcement gave, and the panic `a kernel stack ran
-# out`, and that the debug shell is never reached; a gate on the exhausted
-# stack would have faulted a third time and stopped the machine with neither
-# line. The console is kept in LOG. The row prints one line,
-# `stackoverrun: WHERE: pass` or `stackoverrun: WHERE: fail: REASON`, and
-# returns 0 or 1. Its variables begin with `so_`, since a sourced function
-# shares the caller's.
+# gate on i686, or interrupt stack table entry on x86-64, runs its handler
+# on a stack of its own. The row requires the descent's announcement, a
+# record, the double fault's or the page fault's, that names the pid the
+# announcement gave, and the panic `a kernel stack ran out`, and that the
+# debug shell is never reached; a handler on the exhausted stack would have
+# faulted a third time and stopped the machine with neither line. The console
+# is kept in LOG. The row prints one line, `stackoverrun: WHERE: pass` or
+# `stackoverrun: WHERE: fail: REASON`, and returns 0 or 1. Its variables begin
+# with `so_`, since a sourced function shares the caller's.
 stackoverrun_row()
 {
     so_harness=$1

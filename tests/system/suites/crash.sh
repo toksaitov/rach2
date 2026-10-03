@@ -16,6 +16,9 @@
 # Usage: crash_test.sh <kernel> <disk> <fsck.krffs>
 #
 
+# The emulator of the architecture tests/system/suites.mk names.
+QEMU=${RACH2_QEMU:-qemu-system-i386}
+
 # shellcheck source=tests/system/deadline.sh
 # The runner helper, whose `until` and `gone` are the suite's waits.
 RUNUTIL="$(cd "$(dirname "$0")/../../.." && pwd)/build/tests/system/runutil"
@@ -133,7 +136,7 @@ fsck_says_clean() {
 # the subshell and QEMU is re-parented to init and runs until the host is
 # rebooted. Each of the three phases below leaked one machine that way.
 qemu_disk() {
-    exec qemu-system-i386 -cpu max -display none -kernel "$KERNEL" \
+    exec "$QEMU" -cpu max -display none -kernel "$KERNEL" \
         -append "rach2.fsdisk rach2.rescue" \
         -drive "file=$1,format=raw,if=ide,index=0,media=disk" -serial stdio
 }
@@ -188,7 +191,7 @@ echo "crash-test: cleanly-halted image is clean: OK"
 FEED="$DISK.feed"
 rm -f "$FEED"
 mkfifo "$FEED"
-qemu-system-i386 -cpu max -display none -kernel "$KERNEL" \
+"$QEMU" -cpu max -display none -kernel "$KERNEL" \
     -append "rach2.fsdisk rach2.rescue" \
     -drive "file=$OFF,format=raw,if=ide,index=0,media=disk" \
     -serial stdio < "$FEED" > "$OFF.log" 2>&1 &

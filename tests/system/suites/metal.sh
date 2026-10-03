@@ -31,6 +31,11 @@
 # Usage: metal_test.sh <kernel> <image> <port>
 #
 
+# The build tree and the emulator of the architecture
+# tests/system/suites.mk names.
+ARCH_BUILD=${ARCH_BUILD:-build}
+QEMU=${RACH2_QEMU:-qemu-system-i386}
+
 # shellcheck source=tests/system/deadline.sh
 # The runner helper, whose `until` and `gone` are the suite's waits.
 RUNUTIL="$(cd "$(dirname "$0")/../../.." && pwd)/build/tests/system/runutil"
@@ -157,7 +162,7 @@ for r in 1 2; do
         > /dev/null || fail "mkmbr for the recovery stick $r"
     mformat -i "$RSTICK"@@1048576 -F -T 32768 -v ACCEPT :: || fail "mformat for the recovery stick $r"
 done
-qemu-system-i386 -cpu max -display none -kernel "$KERNEL" \
+"$QEMU" -cpu max -display none -kernel "$KERNEL" \
     -initrd "$WORK" \
     -append "rach2.ip=$GUEST_IP/24 rach2.gateway=$GUEST_GW rach2.netconsole" \
     -netdev "user,id=n0,net=$GUEST_NET,host=$GUEST_GW,hostfwd=tcp::$PORT-$GUEST_IP:22" \
@@ -508,6 +513,6 @@ echo "metal-test: the live boot log retains the early inventory after acceptance
 
 cleanup_boot
 sh "$REPO/tests/system/accept/installed_test.sh" \
-    "$REPO/build/rach2/kernel" "$REPO/build/tests/system/harness" \
-    "$REPO/build/images/metal-installed" || fail "the installed acceptance rows"
+    "$REPO/$ARCH_BUILD/rach2/kernel" "$REPO/build/tests/system/harness" \
+    "$REPO/$ARCH_BUILD/images/metal-installed" || fail "the installed acceptance rows"
 echo "metal-test: PASS"

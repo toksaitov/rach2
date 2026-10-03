@@ -3,6 +3,12 @@
 # Only disposable image files are opened by the host or guest.
 # shellcheck disable=SC2016
 set -eu
+
+# The build tree and the emulator of the architecture
+# tests/system/suites.mk names.
+ARCH_BUILD=${ARCH_BUILD:-build}
+QEMU=${RACH2_QEMU:-qemu-system-i386}
+
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 if [ "$#" -le 1 ]; then
@@ -13,8 +19,8 @@ if [ "$#" -le 1 ]; then
     # them; a direct proof runs against the same prepared artifacts.
     if [ -f krffs/recovery_authorized_keys ]; then tag=-with-key; else tag=; fi
     exec sh tests/system/grow_machine.sh build/tests/system/harness \
-        "build/images/rach2-recovery$tag.iso" build/images/installer-test.disk \
-        "build/images/rach2-sealed$tag.disk" build/images/grow "$mode"
+        "$ARCH_BUILD/images/rach2-recovery$tag.iso" "$ARCH_BUILD"/images/installer-test.disk \
+        "$ARCH_BUILD/images/rach2-sealed$tag.disk" "$ARCH_BUILD"/images/grow "$mode"
 fi
 [ "$#" = 3 ] || exit 2
 harness=$1
@@ -90,7 +96,7 @@ start()
     DRIVE_LOG="$proof/$phase.console"
     DRIVE_FIFO="$proof/$phase.input"
     mkfifo "$DRIVE_FIFO"
-    qemu-system-i386 -m 512 -cpu max -display none -serial stdio -monitor none -no-reboot \
+    "$QEMU" -m 512 -cpu max -display none -serial stdio -monitor none -no-reboot \
         -net none -device qemu-xhci,id=xhci \
         -drive "if=none,id=stick,format=raw,file=$fixture/stick.img" \
         -device usb-storage,bus=xhci.0,drive=stick,bootindex=0 \

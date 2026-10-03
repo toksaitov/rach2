@@ -19,6 +19,9 @@
 # Usage: bootline_test.sh <kernel> <disk> <harness> <mkmbr>
 #
 
+# The emulator of the architecture tests/system/suites.mk names.
+QEMU=${RACH2_QEMU:-qemu-system-i386}
+
 # shellcheck source=tests/system/deadline.sh
 # The runner helper, whose `until` and `gone` are the suite's waits.
 RUNUTIL="$(cd "$(dirname "$0")/../../.." && pwd)/build/tests/system/runutil"
@@ -76,7 +79,7 @@ fail() {
 boot() {
     rm -f "$LOG" "$WORK"
     cp "$DISK" "$WORK"
-    qemu-system-i386 -cpu max -display none -kernel "$KERNEL" \
+    "$QEMU" -cpu max -display none -kernel "$KERNEL" \
         -append "$1" \
         -drive "file=$WORK,format=raw,if=ide,index=0,media=disk" \
         -serial stdio < /dev/null > "$LOG" 2>&1 &
@@ -112,7 +115,7 @@ rm -f "$WORK.blank"
 dd if=/dev/zero of="$WORK.blank" bs=1048576 count=48 2>/dev/null
 boot_blank() {
     rm -f "$LOG"
-    qemu-system-i386 -cpu max -display none -kernel "$KERNEL" \
+    "$QEMU" -cpu max -display none -kernel "$KERNEL" \
         -append "$1" \
         -drive "file=$WORK.blank,format=raw,if=ide,index=0,media=disk" \
         -serial stdio < /dev/null > "$LOG" 2>&1 &

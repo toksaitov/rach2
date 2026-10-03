@@ -37,6 +37,9 @@
 # Usage: install_test.sh <grub-disk> <root password>
 #
 
+# The emulator of the architecture tests/system/suites.mk names.
+QEMU=${RACH2_QEMU:-qemu-system-i386}
+
 # The runner helper, whose `until` and `gone` are the suite's waits.
 RUNUTIL="$(cd "$(dirname "$0")/../../.." && pwd)/build/tests/system/runutil"
 set -e
@@ -134,7 +137,7 @@ step() {
 boot_feed() {
     rm -f "$FEED"
     mkfifo "$FEED"
-    qemu-system-i386 -cpu max -display none -rtc base=utc \
+    "$QEMU" -cpu max -display none -rtc base=utc \
         -drive "file=$WORK,format=raw,if=ide,index=0,media=disk" \
         -serial stdio < "$FEED" > "$LOG" 2>&1 &
     QPID=$!
@@ -156,7 +159,7 @@ boot_feed() {
 boot_watch() {
     rm -f "$FEED"
     mkfifo "$FEED"
-    qemu-system-i386 -cpu max -display none -rtc base=utc \
+    "$QEMU" -cpu max -display none -rtc base=utc \
         -drive "file=$WORK,format=raw,if=ide,index=0,media=disk" \
         -serial stdio < "$FEED" > "$LOG" 2>&1 &
     QPID=$!

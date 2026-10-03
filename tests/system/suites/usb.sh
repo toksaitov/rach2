@@ -18,6 +18,9 @@
 # Usage: usb.sh KERNEL IMAGE HARNESS
 set -u
 
+# The build tree of the architecture tests/system/suites.mk names.
+ARCH_BUILD=${ARCH_BUILD:-build}
+
 KERNEL=$1
 IMAGE=$2
 # What this suite writes under the images directory carries its name.
@@ -40,7 +43,7 @@ run_harness() {
 # right for a boot that runs one probe; a probe run in parts needs the
 # ordinary kernel and its debug shell between the parts.
 run_shell() {
-    "$HARNESS" --kernel "$REPO/build/rach2/kernel" --initrd "$IMAGE" "$@"
+    "$HARNESS" --kernel "$REPO/$ARCH_BUILD/rach2/kernel" --initrd "$IMAGE" "$@"
 }
 
 # ---- 1: a keyboard and a mouse at high speed are enumerated, and the guest
@@ -166,11 +169,11 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci.0,port=2.4 \
     --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci.0,port=2.5 \
     --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci.0,port=2.6 \
-    --timeout 120 --log "$REPO/build/images/usb-sixteen.log" "probe=usbprobe" > /dev/null 2>&1 \
-    && [ "$(grep -ac 'usb: device: port [0-9.]*: .*class' "$REPO/build/images/usb-sixteen.log")" = 16 ]; then
+    --timeout 120 --log "$REPO/$ARCH_BUILD/images/usb-sixteen.log" "probe=usbprobe" > /dev/null 2>&1 \
+    && [ "$(grep -ac 'usb: device: port [0-9.]*: .*class' "$REPO/$ARCH_BUILD/images/usb-sixteen.log")" = 16 ]; then
     note "two hubs with fourteen devices between them, sixteen in all, are every one configured: OK"
 else
-    bad "sixteen devices were not every one configured: $(grep -ac 'usb: device: port [0-9.]*: .*class' "$REPO/build/images/usb-sixteen.log") configured, $(grep -a 'USBPROBE' "$REPO/build/images/usb-sixteen.log" | tr -d '\r' | tail -1)"
+    bad "sixteen devices were not every one configured: $(grep -ac 'usb: device: port [0-9.]*: .*class' "$REPO/$ARCH_BUILD/images/usb-sixteen.log") configured, $(grep -a 'USBPROBE' "$REPO/$ARCH_BUILD/images/usb-sixteen.log" | tr -d '\r' | tail -1)"
 fi
 
 # ---- 6c: the same sixteen with the hubs' scans slowed to 300 ms a port
@@ -199,12 +202,12 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci.0,port=2.5 \
     --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci.0,port=2.6 \
     --append "rach2.hubslow=300" \
-    --timeout 240 --steptmo 120 --ok "USBPROBE OK" --log "$REPO/build/images/usb-slowscan.log" \
+    --timeout 240 --steptmo 120 --ok "USBPROBE OK" --log "$REPO/$ARCH_BUILD/images/usb-slowscan.log" \
     "expect=Type 'help'" "send=exec usbprobe 16" "expect=USBPROBE settled" "expect=USBPROBE OK" > /dev/null 2>&1 \
-    && [ "$(grep -ac 'usb: device: port [0-9.]*: .*class' "$REPO/build/images/usb-slowscan.log")" = 16 ]; then
+    && [ "$(grep -ac 'usb: device: port [0-9.]*: .*class' "$REPO/$ARCH_BUILD/images/usb-slowscan.log")" = 16 ]; then
     note "sixteen devices behind hubs whose scans take 300 ms a port are every one configured: OK"
 else
-    bad "with the hubs' scans slowed, $(grep -ac 'usb: device: port [0-9.]*: .*class' "$REPO/build/images/usb-slowscan.log") of sixteen devices were configured"
+    bad "with the hubs' scans slowed, $(grep -ac 'usb: device: port [0-9.]*: .*class' "$REPO/$ARCH_BUILD/images/usb-slowscan.log") of sixteen devices were configured"
 fi
 
 # ---- 7: a device this kernel cannot drive is refused once and left alone,

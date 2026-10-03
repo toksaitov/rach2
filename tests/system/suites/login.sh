@@ -25,6 +25,9 @@
 #            <user> <password>
 #
 
+# The emulator of the architecture tests/system/suites.mk names.
+QEMU=${RACH2_QEMU:-qemu-system-i386}
+
 # shellcheck source=tests/system/deadline.sh
 # The runner helper, whose `until` and `gone` are the suite's waits.
 RUNUTIL="$(cd "$(dirname "$0")/../../.." && pwd)/build/tests/system/runutil"
@@ -58,7 +61,7 @@ QPID=""
 # Type `id` at whatever the console offers. A shell answers it; a console that
 # never came up does not, which is the whole distinction being drawn.
 boot() {
-    printf '\nid\n' | qemu-system-i386 -cpu max -display none -kernel "$KERNEL" \
+    printf '\nid\n' | "$QEMU" -cpu max -display none -kernel "$KERNEL" \
         -initrd "$2" -append "$3" -serial stdio >"$1" 2>&1 &
     QPID=$!
 }
@@ -148,7 +151,7 @@ echo "login-test: the strict init refuses and keeps refusing: OK"
 FEED="$REAL.stop.feed"
 rm -f "$FEED"
 mkfifo "$FEED"
-qemu-system-i386 -cpu max -display none \
+"$QEMU" -cpu max -display none \
     -kernel "$KERNEL" -initrd "$REAL" -serial stdio < "$FEED" >"$REAL.stop.log" 2>&1 &
 QPID=$!
 # Each line is typed when the prompt it answers has been printed, through

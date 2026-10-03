@@ -21,6 +21,9 @@
 
 set -e
 
+# The build tree of the architecture tests/system/suites.mk names.
+ARCH_BUILD=${ARCH_BUILD:-build}
+
 RW_KERNEL="$1"
 RO_KERNEL="$2"
 
@@ -30,7 +33,7 @@ if [ -z "$RW_KERNEL" ] || [ -z "$RO_KERNEL" ]; then
 fi
 
 REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
-WORK="$REPO/build/images/diskpolicy"
+WORK="$REPO/$ARCH_BUILD/images/diskpolicy"
 BASE="$WORK.base.disk"
 RW="$WORK.rw.disk"
 RO="$WORK.ro.disk"

@@ -36,6 +36,11 @@
 # Usage: sealed_test.sh <sealed-disk> <root password> [ssh port]
 #
 
+# The build tree and the emulator of the architecture
+# tests/system/suites.mk names.
+ARCH_BUILD=${ARCH_BUILD:-build}
+QEMU=${RACH2_QEMU:-qemu-system-i386}
+
 # The runner helper, whose `until` and `gone` are the suite's waits.
 RUNUTIL="$(cd "$(dirname "$0")/../../.." && pwd)/build/tests/system/runutil"
 set -e
@@ -128,7 +133,7 @@ wait_count() {
 start_qemu() {
     LOG="$DISK.log.$1"
     rm -f "$LOG" "$KNOWN"
-    qemu-system-i386 -cpu max -display none -rtc base=utc \
+    "$QEMU" -cpu max -display none -rtc base=utc \
         -drive "file=$WORK,format=raw,if=none,id=drv0" \
         -device ich9-ahci,id=ahci0 -device ide-hd,drive=drv0,bus=ahci0.0 \
         -netdev "user,id=n0,net=192.168.0.0/24,host=192.168.0.2,hostfwd=tcp::$PORT-:22" \
@@ -299,7 +304,7 @@ ROOT_SHA="$(sha256_of "$ROOTIMG")"
 # length as what it replaces, so nothing in the artifact moves. The structural
 # checker still accepts it, and a machine that installs it prints the marker in
 # its own boot and nowhere else.
-cp "$REPO/build/rach2/kernel" "$MARKED"
+cp "$REPO/$ARCH_BUILD/rach2/kernel" "$MARKED"
 "$REPO/build/tools/inspect/binfind" --replace \
     'Rach2 Booting' 'Rach2 SEALED!' \
     "$MARKED" || fail "the kernel has no banner to mark"

@@ -32,6 +32,11 @@
 # repair, so the last boot mounts the ext2 root again.
 #
 
+# The build tree and the emulator of the architecture
+# tests/system/suites.mk names.
+ARCH_BUILD=${ARCH_BUILD:-build}
+QEMU=${RACH2_QEMU:-qemu-system-i386}
+
 # The runner helper, whose `until` and `gone` are the suite's waits.
 RUNUTIL="$(cd "$(dirname "$0")/../../.." && pwd)/build/tests/system/runutil"
 set -e
@@ -51,8 +56,8 @@ REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
 # answers SSH, which this suite needs, and is what make builds when a key was
 # minted. Run by hand with neither built, the name make would have chosen.
 if [ -z "$RECOVERY" ]; then
-    RECOVERY="$REPO/build/images/rach2-recovery-with-key.krffs"
-    [ -f "$RECOVERY" ] || RECOVERY="$REPO/build/images/rach2-recovery.krffs"
+    RECOVERY="$REPO/$ARCH_BUILD/images/rach2-recovery-with-key.krffs"
+    [ -f "$RECOVERY" ] || RECOVERY="$REPO/$ARCH_BUILD/images/rach2-recovery.krffs"
 fi
 # shellcheck source=tests/system/deadline.sh
 . "$REPO/tests/system/deadline.sh"
@@ -134,12 +139,12 @@ boot_feed() {
     rm -f "$FEED"
     mkfifo "$FEED"
     if [ "${1:-}" = "net" ]; then
-        qemu-system-i386 -cpu max -display none -rtc base=utc \
+        "$QEMU" -cpu max -display none -rtc base=utc \
             -drive "file=$WORK,format=raw,if=ide,index=0,media=disk" \
             -netdev "user,id=n0,hostfwd=tcp::$PORT-:22" -device rtl8139,netdev=n0 \
             -serial stdio < "$FEED" > "$LOG" 2>&1 &
     else
-        qemu-system-i386 -cpu max -display none -rtc base=utc \
+        "$QEMU" -cpu max -display none -rtc base=utc \
             -drive "file=$WORK,format=raw,if=ide,index=0,media=disk" \
             -serial stdio < "$FEED" > "$LOG" 2>&1 &
     fi
@@ -162,7 +167,7 @@ boot_feed() {
 boot_watch() {
     rm -f "$FEED"
     mkfifo "$FEED"
-    qemu-system-i386 -cpu max -display none -rtc base=utc \
+    "$QEMU" -cpu max -display none -rtc base=utc \
         -drive "file=$WORK,format=raw,if=ide,index=0,media=disk" \
         -serial stdio < "$FEED" > "$LOG" 2>&1 &
     QPID=$!
@@ -257,7 +262,7 @@ ROOT_SHA="$(sha256_of "$ROOTIMG")"
 # An everyday artifact offered as recovery must be rejected by the check that
 # reads the authority off a built kernel, or a mis-built one would reach the day
 # it is needed unnoticed.
-if sh "$REPO/tools/inspect/check_recovery.sh" "$REPO/build/rach2/kernel" recovery \
+if sh "$REPO/tools/inspect/check_recovery.sh" "$REPO/$ARCH_BUILD/rach2/kernel" recovery \
         > /dev/null 2>&1; then
     fail "the everyday kernel passed the recovery artifact check"
 fi
@@ -267,7 +272,7 @@ fi
 # kernel from a menu entry nobody will edit on the day it is needed, so a build
 # that waited to be asked would be a build that could not repair anything. This
 # boot mounts nothing from the disk and writes nothing to it.
-if ! "$REPO/build/tests/system/harness" --kernel "$REPO/build/rach2-recovery/kernel" \
+if ! "$REPO/build/tests/system/harness" --kernel "$REPO/$ARCH_BUILD/rach2-recovery/kernel" \
         --initrd "$RECOVERY" --qemu-arg=-cpu --qemu-arg=max \
         --drive "file=$WORK,format=raw,if=ide,index=0,media=disk" \
         --append "rach2.root=ram" --timeout 180 --steptmo 60 --ok "NODETHERE" \
@@ -482,7 +487,7 @@ mv "$WORK.save" "$WORK"
 # well: one that answered later would replace the address under a session
 # already using it.
 # interval: the service log is read every second for recovery's fixed address
-if ! "$REPO/build/tests/system/harness" --kernel "$REPO/build/rach2-recovery/kernel" \
+if ! "$REPO/build/tests/system/harness" --kernel "$REPO/$ARCH_BUILD/rach2-recovery/kernel" \
         --initrd "$RECOVERY" --qemu-arg=-cpu --qemu-arg=max \
         --drive "file=$WORK,format=raw,if=ide,index=0,media=disk" \
         --net "hubport,id=net0,hubid=1" \

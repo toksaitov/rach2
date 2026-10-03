@@ -19,13 +19,22 @@
 # `prepare-all` names it. A suite target names only its own fixtures and the
 # tools it invokes.
 
+# The architecture the suites boot, ARCH (mk/arch.mk): its build tree and its
+# emulator, which the recipes name and which the shell suites and the runners
+# read from the environment, RACH2_QEMU for the emulator, so that a suite
+# written once boots i686 on qemu-system-i386 and x86-64 on
+# qemu-system-x86_64.
+export RACH2_ARCH := $(ARCH)
+export ARCH_BUILD
+export RACH2_QEMU := $(ARCH_QEMU)
+
 # The kernel every suite boots directly; tests/run points it at another
 # component's kernel under RACH2_KERNEL (see ubsan-kernel below). Not
 # KERNEL, which rach2/Makefile uses for its own output name and a sub-make
-# would inherit. The disks the suites make carry build/rach2/kernel: a
-# checked kernel does not fit the disk's kernel slot, and what a disk suite
+# would inherit. The disks the suites make carry $(ARCH_BUILD)/rach2/kernel:
+# a checked kernel does not fit the disk's kernel slot, and what a disk suite
 # proves is the boot path.
-BOOT_KERNEL ?= build/rach2/kernel
+BOOT_KERNEL ?= $(ARCH_BUILD)/rach2/kernel
 
 # No file is named `run-<suite>`, so every suite target is phony. The names are
 # read from the registry rather than written out again: `tests/run style`
@@ -248,18 +257,22 @@ run-noentropy: $(DEMO_CREDS) rach2 test-image os-real-image $(HARNESS)
 # boots of `fpuprobe`: with FXSR, where the x87 and XMM registers, the control
 # word and MXCSR are saved by `fxsave`, and with `rach2.nofxsr`, where the x87
 # state is saved by `fnsave` and an SSE instruction is an invalid opcode, so
-# the probe's x87 branch runs alone.
+# the probe's x87 branch runs alone. Only the i686 kernel takes
+# `rach2.nofxsr`, since every x86-64 processor has FXSR, so x86-64 boots the
+# first alone.
 run-fpu: rach2 tests krffs test-image $(HARNESS)
 	$(HARNESS) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
 	    --qemu-arg=-cpu --qemu-arg=max --append "rach2.rescue" \
 	    --timeout 90 --steptmo 30 --ok "FPUPROBE OK" --never "FPUPROBE FAIL" \
 	    --log $(IMAGES_DIR)/fpu-test.log \
 	    "expect=fpu: fxsr: on" "expect=Type 'help'" "send=exec /fpuprobe" "expect=FPUPROBE"
+ifeq ($(ARCH),i686)
 	$(HARNESS) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
 	    --qemu-arg=-cpu --qemu-arg=max --append "rach2.rescue rach2.nofxsr" \
 	    --timeout 90 --steptmo 30 --ok "FPUPROBE OK" --never "FPUPROBE FAIL" \
 	    --log $(IMAGES_DIR)/fpu-test.x87.log \
 	    "expect=fpu: fxsr: off" "expect=Type 'help'" "send=exec /fpuprobe x87" "expect=FPUPROBE"
+endif
 # `tests/run memory`: the kernel's account of physical memory at five sizes
 # (see tests/system/suites/memory.sh).
 run-memory: rach2 rach2-recovery tests krffs test-image $(RECOVERY_IMAGE) $(HARNESS)
@@ -520,7 +533,7 @@ run-grub: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image utils krffs $(
 	RACH2_DISK_EXT2_MB=48 \
 	RACH2_DISK_EXT2_IMAGE=$(GRUB_TEST_EXT2) \
 	RACH2_DISK_RECOVERY_MB=8 \
-	    sh tools/image/mkdisk_grub.sh build/rach2/kernel $(GRUB_TEST_DISK)
+	    sh tools/image/mkdisk_grub.sh $(ARCH_BUILD)/rach2/kernel $(GRUB_TEST_DISK)
 	sh tests/system/suites/grub.sh $(GRUB_TEST_DISK) \
 	    "`cat krffs/rach2_demo_password`"
 # `tests/run bootorder`: the GRUB disk on the second AHCI port behind a
@@ -547,7 +560,7 @@ run-menu: $(DEMO_CREDS) rach2 utils krffs $(OS_REAL_SMALL_EXT2) check-busybox ch
 	RACH2_DISK_RECOVERY_MB=8 \
 	RACH2_DISK_EXT2_MB=96 \
 	RACH2_DISK_EXT2_IMAGE=$(OS_REAL_SMALL_EXT2) \
-	    sh tools/image/mkdisk_grub.sh build/rach2/kernel $(MENU_TEST_DISK)
+	    sh tools/image/mkdisk_grub.sh $(ARCH_BUILD)/rach2/kernel $(MENU_TEST_DISK)
 	sh tests/system/suites/menu.sh $(MENU_TEST_DISK) \
 	    "`cat krffs/rach2_demo_password`"
 # `tests/run authority`: which kernel may write the whole disk. Two boots of one
@@ -600,7 +613,7 @@ run-install: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdpma
 	RACH2_DISK_EXT2_IMAGE=$(OS_REAL_SMALL_EXT2) \
 	RACH2_DISK_RECOVERY_KERNEL=$(RECOVERY_KERNEL) \
 	RACH2_DISK_RECOVERY_IMAGE=$(RECOVERY_IMAGE) \
-	    sh tools/image/mkdisk_grub.sh build/rach2/kernel $(INSTALL_TEST_DISK)
+	    sh tools/image/mkdisk_grub.sh $(ARCH_BUILD)/rach2/kernel $(INSTALL_TEST_DISK)
 	sh tests/system/suites/install.sh $(INSTALL_TEST_DISK) \
 	    "`cat krffs/rach2_demo_password`"
 # `tests/run sealed`: the disk that goes into the laptop, operated the way it
@@ -653,7 +666,7 @@ run-drill: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image utils krffs c
 	RACH2_DISK_DHCP_APPEND="rach2.ip=none" \
 	RACH2_DISK_RECOVERY_KERNEL=$(RECOVERY_KERNEL) \
 	RACH2_DISK_RECOVERY_IMAGE=$(RECOVERY_IMAGE) \
-	    sh tools/image/mkdisk_grub.sh build/rach2/kernel $(DRILL_DISK)
+	    sh tools/image/mkdisk_grub.sh $(ARCH_BUILD)/rach2/kernel $(DRILL_DISK)
 	sh tests/system/suites/drill.sh $(DRILL_DISK) \
 	    "`cat krffs/rach2_demo_password`" $(DRILL_PORT) $(RECOVERY_IMAGE)
 # `tests/run persist`: fsync durability across a reboot. Builds a disk holding
@@ -748,7 +761,7 @@ run-bootline: rach2 tests krffs $(RUNUTIL) $(HARNESS) $(MKMBR)
 SERVICELOG_DIR = $(IMAGES_DIR)/servicelog
 run-servicelog: rach2 utils check-busybox $(MKMBR) $(HARNESS)
 	sh tests/system/suites/servicelog.sh $(BOOT_KERNEL) $(HARNESS) $(MKMBR) \
-	    build/utils/sbin/init-shell build/utils/update $(BUSYBOX_BIN) $(SERVICELOG_DIR)
+	    $(ARCH_BUILD)/utils/sbin/init-shell $(ARCH_BUILD)/utils/update $(BUSYBOX_BIN) $(SERVICELOG_DIR)
 # `tests/run raw`: the raw ICMP socket, which is what `ping` and `traceroute`
 # are. Three boots, because the three things it must show cannot be shown in
 # one: the probe with the network answering, the same probe with an address and
@@ -1374,7 +1387,7 @@ run-diskdiag: rach2 rach2-metal rach2-metal-image $(HARNESS) $(SHA256TOOL) $(RUN
 # `tests/run mount`: the mount milestone's suite. Phase 2 boots the lag device
 # and the partition nodes; later phases grow it. Its disk is the test disk
 # with a FAT32 partition added at 49 MiB by mkmbr and mtools.
-MOUNT_DISK = build/images/mount-test.disk
+MOUNT_DISK = $(IMAGES_DIR)/mount-test.disk
 run-mount: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(MKFIXTURE) $(MKMBR) $(HARNESS)
 	sh tests/system/suites/mount.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) $(MOUNT_DISK) \
 	    $(OS_REAL_IMAGE) "`cat krffs/rach2_demo_password`"
@@ -1491,7 +1504,7 @@ $(INSTALLER_DISK): $(DEMO_CREDS) $(INSTALLER_EXT2) $(RECOVERY_IMAGE) tools/image
 	RACH2_DISK_EXT2_IMAGE=$(INSTALLER_EXT2) \
 	RACH2_DISK_RECOVERY_KERNEL=$(RECOVERY_KERNEL) \
 	RACH2_DISK_RECOVERY_IMAGE=$(RECOVERY_IMAGE) \
-	    sh tools/image/mkdisk_grub.sh build/rach2/kernel $@
+	    sh tools/image/mkdisk_grub.sh $(ARCH_BUILD)/rach2/kernel $@
 # The disk an installer of before milestone 57 wrote: an MBR, with the 64 MiB
 # boot and recovery partitions at the notebook's offsets that the sealed disk
 # had then, the boot partition at eight sectors to a cluster, which UEFI
@@ -1509,7 +1522,7 @@ $(INSTALLER_MBR_DISK): $(DEMO_CREDS) $(INSTALLER_EXT2) $(RECOVERY_IMAGE) tools/i
 	RACH2_DISK_EXT2_IMAGE=$(INSTALLER_EXT2) \
 	RACH2_DISK_RECOVERY_KERNEL=$(RECOVERY_KERNEL) \
 	RACH2_DISK_RECOVERY_IMAGE=$(RECOVERY_IMAGE) \
-	    sh tools/image/mkdisk_grub.sh build/rach2/kernel $@
+	    sh tools/image/mkdisk_grub.sh $(ARCH_BUILD)/rach2/kernel $@
 $(INSTALL_TEST_STICK): $(RECOVERY_ISO) $(INSTALLER_DISK) $(INSTALLER_EXT2) \
                        tools/image/mkinstallstick.sh $(MKEXFATFIXTURE) $(MKMBR) $(STICKCHECK)
 	sh tools/image/mkinstallstick.sh $(RECOVERY_ISO) $(INSTALLER_DISK) $@ \
@@ -1569,7 +1582,7 @@ run-uefi: $(DEMO_CREDS) rach2 utils krffs rach2-recovery $(RECOVERY_IMAGE) $(INS
 	RACH2_DISK_EXT2_IMAGE=$(INSTALLER_EXT2) \
 	RACH2_DISK_RECOVERY_KERNEL=$(RECOVERY_KERNEL) \
 	RACH2_DISK_RECOVERY_IMAGE=$(RECOVERY_IMAGE) \
-	    sh tools/image/mkdisk_grub.sh build/rach2/kernel $(UEFI_TEST_DISK)
+	    sh tools/image/mkdisk_grub.sh $(ARCH_BUILD)/rach2/kernel $(UEFI_TEST_DISK)
 	sh tests/system/suites/uefi.sh $(UEFI_TEST_DISK) $(INSTALL_TEST_STICK) $(RECOVERY_ISO) \
 	    $(UEFI_DIR) $(UEFI_PORT) krffs/rach2_demo_ed25519
 # `tests/run usbdisk`: a flash drive as a disk. Three sticks built on the
@@ -1727,7 +1740,7 @@ run-procfiles: $(DEMO_CREDS) rach2 tests utils krffs busybox os-real-image test-
 # forked program runs, the test image that must still print it for a child and a
 # probe, a killed probe whose dedicated marker must survive, and a the harness
 # run with no token, which has only the plain line to read.
-HARNESS_KERNEL = build/rach2-harness/kernel
+HARNESS_KERNEL = $(ARCH_BUILD)/rach2-harness/kernel
 
 # The kernels a tier can be run on instead of the default one, each a
 # component of its own beside the harness kernel: the UBSan-trap kernel,

@@ -44,6 +44,9 @@
 
 set -e
 
+# The build tree of the architecture tests/system/suites.mk names.
+ARCH_BUILD=${ARCH_BUILD:-build}
+
 KERNEL="$1"
 IMAGE="$2"
 
@@ -53,7 +56,7 @@ if [ -z "$KERNEL" ] || [ -z "$IMAGE" ]; then
 fi
 
 REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
-LOG="$REPO/build/images/reset-test.log"
+LOG="$REPO/$ARCH_BUILD/images/reset-test.log"
 
 cleanup() {
     rm -f "$LOG" "$LOG.harness"

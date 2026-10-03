@@ -3,6 +3,9 @@
 # Usage: probe_roots.sh KERNEL OUTPUT_PREFIX krffs|ext2 [PROBE...]
 set -eu
 
+# The build tree of the architecture tests/system/suites.mk names.
+ARCH_BUILD=${ARCH_BUILD:-build}
+
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 kernel=$1
@@ -32,11 +35,11 @@ trap 'exit 143' TERM
 
 case "$root" in
     krffs)
-        cp build/images/test.krffs "$prefix.krffs"
+        cp "$ARCH_BUILD"/images/test.krffs "$prefix.krffs"
         for probe in "$@"; do
             tag=$(echo "$probe" | tr / -)
             build/krffs/readfile.krffs "$prefix.krffs" "/$probe" "$prefix.$tag.staged"
-            cmp "build/tests/$probe" "$prefix.$tag.staged"
+            cmp "$ARCH_BUILD/tests/$probe" "$prefix.$tag.staged"
         done
         ;;
     ext2)
@@ -47,7 +50,7 @@ case "$root" in
             tag=$(echo "$probe" | tr / -)
             debugfs -R "dump /$probe $prefix.$tag.staged" "$prefix.vol" \
                 >"$prefix.$tag.extract.log" 2>&1
-            cmp "build/tests/$probe" "$prefix.$tag.staged"
+            cmp "$ARCH_BUILD/tests/$probe" "$prefix.$tag.staged"
         done
         dd if=/dev/zero of="$prefix.disk" bs=1048576 count=1 2>/dev/null
         cat "$prefix.vol" >>"$prefix.disk"
@@ -58,7 +61,7 @@ esac
 cksum "$kernel" "$prefix".* >"$prefix.artifacts"
 
 for probe in "$@"; do
-    # A probe under build/tests/musl is named by its path there, and its
+    # A probe under $ARCH_BUILD/tests/musl is named by its path there, and its
     # files here by that path with dashes for the slashes.
     tag=$(echo "$probe" | tr / -)
     case "$root" in

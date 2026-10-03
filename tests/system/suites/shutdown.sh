@@ -22,6 +22,9 @@
 # Usage: shutdown_test.sh <kernel> <disk> <fsck.krffs> <password>
 #
 
+# The emulator of the architecture tests/system/suites.mk names.
+QEMU=${RACH2_QEMU:-qemu-system-i386}
+
 # shellcheck source=tests/system/deadline.sh
 # The runner helper, whose `until` and `gone` are the suite's waits.
 RUNUTIL="$(cd "$(dirname "$0")/../../.." && pwd)/build/tests/system/runutil"
@@ -137,7 +140,7 @@ start_boot() {
     rm -f "$LOG" "$FEED"
     mkfifo "$FEED"
     # shellcheck disable=SC2086
-    qemu-system-i386 -cpu max -display none $EXTRA_QEMU -kernel "$KERNEL" \
+    "$QEMU" -cpu max -display none $EXTRA_QEMU -kernel "$KERNEL" \
         -append "rach2.fsdisk" \
         -drive "file=$WORK,format=raw,if=ide,index=0,media=disk" \
         -serial stdio < "$FEED" > "$LOG" 2>&1 &

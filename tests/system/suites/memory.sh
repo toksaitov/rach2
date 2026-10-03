@@ -96,8 +96,8 @@ done
 # The kernel's own copies, fill and move, swept on the processor that runs
 # them: `rach2.strings` makes the boot walk 68 lengths at four source and four
 # destination alignments before anything else starts. The host test beside
-# `kstring.c` runs the C the host compiler writes; the `rep movsl` and
-# `rep stosl` in that file are i386's, and this is where they run.
+# `kstring.c` runs the C the host compiler writes; the `rep movs` and
+# `rep stos` in that file are the processor's, and this is where they run.
 LOG="$OUT.strings.log"
 "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" --qemu-arg=-cpu --qemu-arg=max \
     --append "rach2.rescue rach2.strings" --timeout 90 --ok "Type 'help'" \

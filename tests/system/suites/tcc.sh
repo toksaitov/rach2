@@ -29,6 +29,9 @@
 # Usage: tcc_test.sh <kernel> <disk> <root password> <test password>
 #
 
+# The emulator of the architecture tests/system/suites.mk names.
+QEMU=${RACH2_QEMU:-qemu-system-i386}
+
 # shellcheck source=tests/system/deadline.sh
 # The runner helper, whose `until` and `gone` are the suite's waits.
 RUNUTIL="$(cd "$(dirname "$0")/../../.." && pwd)/build/tests/system/runutil"
@@ -116,7 +119,7 @@ REPO=$(cd "$(dirname "$0")/../../.." && pwd)
 boot_lines() {
     rm -f "$LOG" "$FEED"
     mkfifo "$FEED"
-    qemu-system-i386 -cpu max -display none -kernel "$KERNEL" \
+    "$QEMU" -cpu max -display none -kernel "$KERNEL" \
         -append "rach2.fsdisk rach2.trace=enosys" \
         -drive "file=$WORK,format=raw,if=ide,index=0,media=disk" \
         -serial stdio < "$FEED" > "$LOG" 2>&1 &

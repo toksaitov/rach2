@@ -19,6 +19,9 @@ set -u
 # set's deadline factor, which scales them, is unset here: this suite is
 # the measurement of the mechanism, not a user of it.
 unset RACH2_DEADLINES RACH2_DEADLINE_FACTOR
+# The harness's fake machine is named qemu-system-i386, the emulator the
+# harness runs when RACH2_QEMU is unset, so an architecture's is dropped.
+unset RACH2_QEMU
 
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/rach2-drive.XXXXXX")

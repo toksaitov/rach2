@@ -9,6 +9,10 @@
 #
 # Usage: mount.sh KERNEL IMAGE HARNESS DISK OSREAL PASSWORD
 set -u
+
+# The build tree of the architecture tests/system/suites.mk names.
+ARCH_BUILD=${ARCH_BUILD:-build}
+
 KERNEL=$1; IMAGE=$2; HARNESS=$3; DISK=$4; OSREAL=$5; PASSWORD=$6
 REPO=$(cd "$(dirname "$0")/../../.." && pwd)
 fail() { echo "mount-test: FAIL: $1" >&2; exit 1; }
@@ -26,10 +30,10 @@ mcopy -i "$DISK"@@51380224 "${DISK}.hello" ::/hello.txt || fail "mcopy"
 # A program on the volume, for the noexec and the shared-description rows,
 # and a name written and deleted and written again so the volume is
 # fragmented the way a used one is.
-mcopy -i "$DISK"@@51380224 "$REPO/build/tests/hello" ::/hello || fail "mcopy hello"
+mcopy -i "$DISK"@@51380224 "$REPO/$ARCH_BUILD/tests/hello" ::/hello || fail "mcopy hello"
 mcopy -i "$DISK"@@51380224 "${DISK}.hello" ::/gone.txt || fail "mcopy gone"
 mdel -i "$DISK"@@51380224 ::/gone.txt || fail "mdel"
-mcopy -i "$DISK"@@51380224 "$REPO/build/tests/hello" ::/again.bin || fail "mcopy again"
+mcopy -i "$DISK"@@51380224 "$REPO/$ARCH_BUILD/tests/hello" ::/again.bin || fail "mcopy again"
 # 128 sectors, each 128 copies of its own number and a dot, so a reader can
 # tell which sector it was given.
 awk 'BEGIN { for (i = 0; i < 128; i++) for (j = 0; j < 128; j++) printf "%03d.", i }' \
@@ -37,7 +41,7 @@ awk 'BEGIN { for (i = 0; i < 128; i++) for (j = 0; j < 128; j++) printf "%03d.",
 mcopy -i "$DISK"@@51380224 "${DISK}.pattern" ::/pattern.bin || fail "mcopy pattern"
 # The memory probe, for the row where a user takes every frame outside the
 # reserve and root logs in beside it.
-mcopy -i "$DISK"@@51380224 "$REPO/build/tests/memprobe" ::/memprobe || fail "mcopy memprobe"
+mcopy -i "$DISK"@@51380224 "$REPO/$ARCH_BUILD/tests/memprobe" ::/memprobe || fail "mcopy memprobe"
 TESTPASSWORD=$(cat "$REPO/krffs/rach2_test_password") || fail "the test account's password"
 
 run() {

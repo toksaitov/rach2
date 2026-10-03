@@ -24,6 +24,9 @@
 #            <user> <password> <image-mb>
 #
 
+# The emulator of the architecture tests/system/suites.mk names.
+QEMU=${RACH2_QEMU:-qemu-system-i386}
+
 # shellcheck source=tests/system/deadline.sh
 # The runner helper, whose `until` and `gone` are the suite's waits.
 RUNUTIL="$(cd "$(dirname "$0")/../../.." && pwd)/build/tests/system/runutil"
@@ -81,7 +84,7 @@ stop() {
 boot_driven() {
     rm -f "$FEED"
     mkfifo "$FEED"
-    qemu-system-i386 -cpu max -display none "$@" -serial stdio < "$FEED" > "$DRIVE_LOG" 2>&1 &
+    "$QEMU" -cpu max -display none "$@" -serial stdio < "$FEED" > "$DRIVE_LOG" 2>&1 &
     QPID=$!
     DRIVE_FIFO=$FEED
     drive_feed "$QPID"
@@ -97,7 +100,6 @@ cleanup() {
     fi
 }
 PASSED=""
-
 
 trap 'cleanup' EXIT
 trap 'cleanup; exit 130' INT

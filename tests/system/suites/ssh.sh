@@ -27,6 +27,9 @@
 #                    [port] [card]
 #
 
+# The emulator of the architecture tests/system/suites.mk names.
+QEMU=${RACH2_QEMU:-qemu-system-i386}
+
 # shellcheck source=tests/system/deadline.sh
 . "$(cd "$(dirname "$0")/../../.." && pwd)/tests/system/deadline.sh"
 set -e
@@ -138,7 +141,6 @@ fail() {
 type_line() { drive_type "$1"; }
 wait_token() { drive_expect "$1" "$(scaled "$2")"; }
 
-
 rm -f "$WORK"
 cp "$DISK" "$WORK"
 
@@ -148,7 +150,7 @@ cp "$DISK" "$WORK"
 # image is built around.
 rm -f "$LOG" "$FEED"
 mkfifo "$FEED"
-qemu-system-i386 -cpu max -display none -kernel "$KERNEL" \
+"$QEMU" -cpu max -display none -kernel "$KERNEL" \
     -append "rach2.fsdisk" \
     -drive "file=$WORK,format=raw,if=ide,index=0,media=disk" \
     -netdev "user,id=n0,hostfwd=tcp::$PORT-:22" -device "$CARD,netdev=n0" \

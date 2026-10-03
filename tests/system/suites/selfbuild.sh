@@ -39,6 +39,11 @@
 # it built is the ext2 root's exercise.
 #
 
+# The build tree and the emulator of the architecture
+# tests/system/suites.mk names.
+ARCH_BUILD=${ARCH_BUILD:-build}
+QEMU=${RACH2_QEMU:-qemu-system-i386}
+
 # The runner helper, whose `until` and `gone` are the suite's waits.
 RUNUTIL="$(cd "$(dirname "$0")/../../.." && pwd)/build/tests/system/runutil"
 set -e
@@ -160,7 +165,7 @@ boot_steps() {
     login_password="$2"
     rm -f "$FEED"
     mkfifo "$FEED"
-    qemu-system-i386 -cpu max -display none -kernel "$KERNEL" \
+    "$QEMU" -cpu max -display none -kernel "$KERNEL" \
         -append "$ROOT_TOKEN" -rtc base=utc \
         -drive "file=$WORK,format=raw,if=ide,index=0,media=disk" \
         -serial stdio < "$FEED" > "$LOG" 2>&1 &
@@ -364,7 +369,7 @@ if ! build/tools/inspect/elfcheck --kernel --tcc "$KEXTRACT"; then
     fail "the built kernel failed the structural checker"
 fi
 if ! build/tests/system/runtests --kernel "$KEXTRACT" \
-        --initrd build/images/test.krffs --timeout 300 --steptmo 60 \
+        --initrd "$ARCH_BUILD"/images/test.krffs --timeout 300 --steptmo 60 \
         --log "$DISK.probes.log"; then
     fail "the probe suite did not pass on the machine-built kernel"
 fi
@@ -400,14 +405,14 @@ if ! bounded 900 env \
         RACH2_DISK_TABLE=mbr \
         RACH2_DISK_RECOVERY_MB=8 \
         RACH2_DISK_EXT2_MB=16 \
-        RACH2_DISK_EXT2_IMAGE="$REPO/build/images/os-simple.ext2" \
+        RACH2_DISK_EXT2_IMAGE="$REPO/$ARCH_BUILD/images/os-simple.ext2" \
         sh tools/image/mkdisk_grub.sh "$KEXTRACT" "$GRUB_DISK"; then
     rm -f "$GRUB_DISK"
     fail "the GRUB disk around the built kernel did not assemble inside its bound"
 fi
 GLOG="$DISK.grub.log"
 rm -f "$GLOG"
-qemu-system-i386 -cpu max -display none -rtc base=utc \
+"$QEMU" -cpu max -display none -rtc base=utc \
     -drive "file=$GRUB_DISK,format=raw,if=ide,index=0,media=disk" \
     -serial stdio < /dev/null > "$GLOG" 2>&1 &
 QPID=$!

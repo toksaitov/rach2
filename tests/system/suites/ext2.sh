@@ -14,6 +14,9 @@
 # Usage: ext2.sh KERNEL IMAGE HARNESS DISK MKMBR RECOVERY_KERNEL RECOVERY_IMAGE
 #
 set -u
+
+# The build tree of the architecture tests/system/suites.mk names.
+ARCH_BUILD=${ARCH_BUILD:-build}
 KERNEL=$1; IMAGE=$2; HARNESS=$3; DISK=$4; MKMBR=$5; RKERNEL=$6; RIMAGE=$7
 REPO=$(cd "$(dirname "$0")/../../.." && pwd)
 fail() { echo "ext2-test: FAIL: $1" >&2; exit 1; }
@@ -68,7 +71,7 @@ sh "$REPO/tools/image/mkext2.sh" "$REPO/krffs/manifests/os-real.manifest" "$VOL"
 # these need, so each mode is set after it.
 for prog in modeprobe suidhelper zombieprobe musl/lchownmusl musl/direntmusl; do
     name=$(basename "$prog")
-    debugfs -w -R "write $REPO/build/tests/$prog $name" "$VOL" > /dev/null 2>&1 \
+    debugfs -w -R "write $REPO/$ARCH_BUILD/tests/$prog $name" "$VOL" > /dev/null 2>&1 \
         || fail "staging $name in the ext2 volume"
     debugfs -w -R "sif $name mode 0100755" "$VOL" > /dev/null 2>&1 \
         || fail "the mode of $name in the ext2 volume"

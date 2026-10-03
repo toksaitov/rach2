@@ -13,6 +13,10 @@
 #
 # Usage: bootorder.sh KERNEL HARNESS DISK
 set -u
+
+# The build tree of the architecture tests/system/suites.mk names.
+ARCH_BUILD=${ARCH_BUILD:-build}
+
 KERNEL=$1; HARNESS=$2; DISK=$3
 REPO=$(cd "$(dirname "$0")/../../.." && pwd)
 fail() { echo "bootorder-test: FAIL: $1" >&2; exit 1; }
@@ -25,7 +29,7 @@ RACH2_DISK_TABLE=mbr \
 RACH2_DISK_APPEND="rach2.disk=ahci" \
 RACH2_DISK_RECOVERY_MB=8 \
 RACH2_DISK_EXT2_MB=48 \
-RACH2_DISK_EXT2_IMAGE="$REPO/build/images/grub-test.ext2" \
+RACH2_DISK_EXT2_IMAGE="$REPO/$ARCH_BUILD/images/grub-test.ext2" \
     sh "$REPO/tools/image/mkdisk_grub.sh" "$KERNEL" "$DISK" > "$DISK.mkdisk.log" 2>&1 \
     || fail "mkdisk_grub"
 rm -f "$BLANK"

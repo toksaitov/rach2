@@ -28,6 +28,11 @@
 # [port]
 #
 
+# The build tree and the emulator of the architecture
+# tests/system/suites.mk names.
+ARCH_BUILD=${ARCH_BUILD:-build}
+QEMU=${RACH2_QEMU:-qemu-system-i386}
+
 # shellcheck source=tests/system/deadline.sh
 # The runner helper, whose `until` and `gone` are the suite's waits.
 RUNUTIL="$(cd "$(dirname "$0")/../../.." && pwd)/build/tests/system/runutil"
@@ -46,7 +51,7 @@ fi
 
 REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
 KEY="$REPO/krffs/rach2_demo_ed25519"
-W="$REPO/build/images/diskdiag"
+W="$REPO/$ARCH_BUILD/images/diskdiag"
 BASE="$W.base.disk"
 RW="$W.rw.disk"
 RO="$W.ro.disk"
@@ -123,7 +128,7 @@ echo "diskdiag-test: the control boot mounted the disk and wrote to it: OK"
 cp "$BASE" "$RO"
 GUEST_IP="192.168.90.15"
 GUEST_GW="192.168.90.2"
-qemu-system-i386 -cpu max -display none -kernel "$RO_KERNEL" \
+"$QEMU" -cpu max -display none -kernel "$RO_KERNEL" \
     -initrd "$IMG" \
     -append "rach2.ip=$GUEST_IP/24 rach2.gateway=$GUEST_GW rach2.disk=ahci rach2.diskdiag" \
     -drive "file=$RO,format=raw,if=none,id=drv0" \
