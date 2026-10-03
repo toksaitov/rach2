@@ -23,6 +23,12 @@
  * a length past 4 GiB taken as the most that fits. */
 #define USER_LEN32(n) ((n) == (uint32_t)(n) ? (uint32_t)(n) : 0xFFFFFFFFu)
 
+/* Whether `v`, a result that is either a user address or a negative errno,
+ * is the errno: one of the last 4095 values, as Linux's IS_ERR_VALUE has it.
+ * A sign test is wrong, since on i686 an address above 2 GiB is negative as
+ * a long. */
+#define USER_ADDR_ERRNO(v) ((unsigned long)(v) > (unsigned long)-4096L)
+
 /** Report whether [addr, addr+len) lies wholly within user space; 1 yes, 0
  * no. */
 int user_range_ok(uintptr_t addr, size_t len);

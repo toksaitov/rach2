@@ -482,7 +482,7 @@ static int32_t shm_at(int32_t id, uintptr_t addr, uint32_t flag, uintptr_t *base
                   : (flag & SHM_REMAP) ? 2
                                        : 1,
                   path);
-    if (at < 0) {
+    if (USER_ADDR_ERRNO(at)) {
         return at == -EEXIST ? -EINVAL : (int32_t)at;
     }
     *base = (uintptr_t)at;
