@@ -1,6 +1,8 @@
 # Doom for Rach2 - Makefile
 #
-# Builds Doom using doomgeneric for the Rach2 kernel (freestanding ELF32).
+# Builds Doom using doomgeneric for the Rach2 kernel: a freestanding static
+# executable of the architecture mk/arch.mk names, ELF32 i386 into
+# build/ports/doom/ or ELF64 x86-64 into build/x86_64/ports/doom/.
 
 # Shared cross toolchain + automatic header-dependency tracking (see ../../mk/).
 include ../../mk/toolchain.mk
@@ -14,7 +16,7 @@ CC := $(CROSS_CC)
 DOOMGENERIC_DIR = src
 
 # Compiler flags
-CFLAGS = -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 -Wl,--build-id=none
+CFLAGS = $(ARCH_CFLAGS) -nostdlib -static -ffreestanding -Wl,-Ttext=$(ARCH_USER_TEXT) -Wl,--build-id=none $(ARCH_LDFLAGS)
 # Our stub headers MUST come first to override system headers
 CFLAGS += -I./include -I$(DOOMGENERIC_DIR) -I.
 CFLAGS += -DNORMALUNIX -DCMAP256 -DDOOMGENERIC_RESX=320 -DDOOMGENERIC_RESY=200

@@ -13,6 +13,8 @@
 #                   vendored userland, Doom, and the three RAM images. The
 #                   first build compiles the five vendor projects and takes
 #                   minutes; later runs rebuild only what changed.
+#   make ARCH=x86_64  the same for x86-64, into build/x86_64/; ARCH is i686,
+#                   into build/, when it is not given (mk/arch.mk).
 #   make test       boot the test image and check every probe passes.
 #   tests/run NAME  run one named suite (style, host, ssh, all, ...).
 #   make isos       a bootable ISO per image, for real hardware (needs xorriso).
@@ -24,6 +26,11 @@
 # Run a built image with rach2/run.sh <test|os-simple|os-real>; the build system
 # does not run QEMU (that script models the disk/audio/network/-cpu matrix).
 
+# The architecture (mk/arch.mk): ARCH, and the paths of its build tree
+# (ARCH_BUILD) and of its ported musl (ARCH_MUSL). The host programs under
+# build/tools and build/krffs serve both architectures and keep their paths.
+include mk/arch.mk
+
 # --- components (each builds via its own sub-make) ---
 BASE_DIRS = krffs rach2 tests ish utils
 FULL_DIRS = ports/doom
@@ -34,29 +41,43 @@ FULL_DIRS = ports/doom
 #     pdpmake's bare POSIX makefile), tracked with stamp files so a clean
 #     clone "just works" without running the build_*.sh by hand, and each
 #     rebuilds only when its real inputs (tarball, build script, config)
-#     change. ---
-LIBC_STAMP     = vendor/musl/.stamp
-BUSYBOX_STAMP  = vendor/busybox/.stamp
-DROPBEAR_STAMP = vendor/dropbear/.stamp
-TCC_STAMP      = vendor/tcc/.stamp
-PDPMAKE_STAMP  = vendor/pdpmake/.stamp
-E2FSPROGS_STAMP = vendor/e2fsprogs/.stamp
+#     change. Each architecture has its own stamps, extracted trees and
+#     staged files: an i686 port's work is under vendor/NAME/, an x86-64
+#     port's under build/x86_64/vendor-work/NAME/ (ARCH_VENDOR), and the
+#     build_*.sh scripts take the architecture from RACH2_ARCH (mk/arch.sh). ---
+LIBC_STAMP     = $(ARCH_VENDOR)/musl/.stamp
+BUSYBOX_STAMP  = $(ARCH_VENDOR)/busybox/.stamp
+DROPBEAR_STAMP = $(ARCH_VENDOR)/dropbear/.stamp
+TCC_STAMP      = $(ARCH_VENDOR)/tcc/.stamp
+PDPMAKE_STAMP  = $(ARCH_VENDOR)/pdpmake/.stamp
+E2FSPROGS_STAMP = $(ARCH_VENDOR)/e2fsprogs/.stamp
+LIBC_OUTPUTS_LIST = $(ARCH_VENDOR)/musl/.outputs
+TCC_OUTPUTS_LIST  = $(ARCH_VENDOR)/tcc/.outputs
+TCC_VALIDATED     = $(ARCH_VENDOR)/tcc/.validated
+PDPMAKE_VALIDATED = $(ARCH_VENDOR)/pdpmake/.validated
+# What each port's build script and its stamp rule share: the wrapper every
+# port but musl compiles through, and the architecture table both read.
+VENDOR_COMMON = vendor/musl/muslgcc mk/arch.sh
 
 # The staged capstone binaries the build_*.sh scripts produce, out of tree under
-# build/vendor/ (mirroring their vendor/<name>/ sources). A routine `make clean`
+# build/vendor/, or build/x86_64/vendor/ (mirroring their vendor/<name>/
+# sources). A routine `make clean`
 # never reaches build/vendor, so these expensive artifacts survive it; only
 # `make distclean` removes them. They are the REAL prerequisites of the capstone
 # image (see the check targets below): a stamp only proves its build RAN.
-BUSYBOX_BIN  = build/vendor/busybox/busybox
-BUSYBOX_SUID_BIN = build/vendor/busybox/busybox-suid
-DROPBEAR_BIN = build/vendor/dropbear/dropbearmulti
-TCC_BIN      = build/vendor/tcc/tcc
-PDPMAKE_BIN  = build/vendor/pdpmake/make
-E2FSCK_BIN   = build/vendor/e2fsprogs/e2fsck
-RESIZE2FS_BIN = build/vendor/e2fsprogs/resize2fs
-MKE2FS_BIN   = build/vendor/e2fsprogs/mke2fs
-TUNE2FS_BIN  = build/vendor/e2fsprogs/tune2fs
-DUMPE2FS_BIN = build/vendor/e2fsprogs/dumpe2fs
+VENDOR_STAGE = $(ARCH_BUILD)/vendor
+BUSYBOX_STAGE = $(VENDOR_STAGE)/busybox
+TCC_STAGE    = $(VENDOR_STAGE)/tcc
+BUSYBOX_BIN  = $(BUSYBOX_STAGE)/busybox
+BUSYBOX_SUID_BIN = $(BUSYBOX_STAGE)/busybox-suid
+DROPBEAR_BIN = $(VENDOR_STAGE)/dropbear/dropbearmulti
+TCC_BIN      = $(TCC_STAGE)/tcc
+PDPMAKE_BIN  = $(VENDOR_STAGE)/pdpmake/make
+E2FSCK_BIN   = $(VENDOR_STAGE)/e2fsprogs/e2fsck
+RESIZE2FS_BIN = $(VENDOR_STAGE)/e2fsprogs/resize2fs
+MKE2FS_BIN   = $(VENDOR_STAGE)/e2fsprogs/mke2fs
+TUNE2FS_BIN  = $(VENDOR_STAGE)/e2fsprogs/tune2fs
+DUMPE2FS_BIN = $(VENDOR_STAGE)/e2fsprogs/dumpe2fs
 
 # The pinned vendored source tarballs: the exact names the build_*.sh scripts
 # verify by sha256. Used as stamp prerequisites (not a $(wildcard), which would
@@ -75,11 +96,15 @@ E2FSPROGS_PATCHES = vendor/e2fsprogs/patches/series $(wildcard vendor/e2fsprogs/
 # cross-compiled userland links against, at a fixed path under the install
 # directory, and the extracted source of the SHA-512 crypt, whose path comes
 # from the tarball name so the pinned version is written once. The
-# host-compiled mkhash and its host test read that source.
-LIBC_A         = vendor/musl/install/lib/libc.a
-MUSL_CRYPT_SRC = $(LIBC_TARBALL:.tar.gz=)/src/crypt/crypt_sha512.c
+# host-compiled mkhash and its host test read that source, which is the same
+# file in either architecture's tree, so krffs takes it from the tree of the
+# architecture being built.
+LIBC_A         = $(ARCH_MUSL)/lib/libc.a
+MUSL_CRYPT_SRC = $(ARCH_VENDOR)/musl/$(notdir $(LIBC_TARBALL:.tar.gz=))/src/crypt/crypt_sha512.c
 
-IMAGES_DIR      = build/images
+# The kernel and the images of this architecture.
+KERNEL          = $(ARCH_BUILD)/rach2/kernel
+IMAGES_DIR      = $(ARCH_BUILD)/images
 TEST_IMAGE      = $(IMAGES_DIR)/test.krffs
 OS_SIMPLE_IMAGE = $(IMAGES_DIR)/os-simple.krffs
 OS_REAL_IMAGE   = $(IMAGES_DIR)/os-real.krffs
@@ -127,7 +152,7 @@ all: images host-tools
 # tool can compile beside it; what it guards is the compilation that needs the
 # cross toolchain. clean and distclean never run it.
 preflight:
-	@./tools/setup/preflight.sh
+	@RACH2_ARCH=$(ARCH) ./tools/setup/preflight.sh
 
 all images $(BASE_DIRS) $(FULL_DIRS): | preflight
 $(LIBC_STAMP) $(BUSYBOX_STAMP) $(DROPBEAR_STAMP) $(TCC_STAMP) $(PDPMAKE_STAMP) \
@@ -161,11 +186,11 @@ include mk/dryrun.mk
 # edit to one that exists.
 LIBC_PATCHES = vendor/musl/patches/series $(wildcard vendor/musl/patches/*.patch)
 
-$(LIBC_STAMP): vendor/musl/build_libc.sh $(LIBC_TARBALL) $(LIBC_PATCHES)
-	@rm -f $@ vendor/musl/install/lib/libc.a
-	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else t0=$$(date +%s); ./vendor/musl/build_libc.sh && echo "libc: result: built in $$(($$(date +%s)-t0))s"; fi
-	@test -s vendor/musl/install/lib/libc.a || { echo "libc: build produced no libc.a" >&2; exit 1; }
-	@{ find vendor/musl/install -type f | sort; echo $(MUSL_CRYPT_SRC); } > vendor/musl/.outputs
+$(LIBC_STAMP): vendor/musl/build_libc.sh mk/arch.sh $(LIBC_TARBALL) $(LIBC_PATCHES)
+	@rm -f $@ $(LIBC_A)
+	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else t0=$$(date +%s); RACH2_ARCH=$(ARCH) ./vendor/musl/build_libc.sh && echo "libc: result: built in $$(($$(date +%s)-t0))s"; fi
+	@test -s $(LIBC_A) || { echo "libc: build produced no libc.a" >&2; exit 1; }
+	@{ find $(ARCH_MUSL) -type f | sort; echo $(MUSL_CRYPT_SRC); } > $(LIBC_OUTPUTS_LIST)
 	@touch $@
 
 # The patches are a prerequisite for the same reason musl's are:
@@ -178,24 +203,24 @@ $(LIBC_STAMP): vendor/musl/build_libc.sh $(LIBC_TARBALL) $(LIBC_PATCHES)
 BUSYBOX_PATCHES = vendor/busybox/patches $(wildcard vendor/busybox/patches/*.patch)
 
 $(BUSYBOX_STAMP): vendor/busybox/build_busybox.sh vendor/busybox/rach2.config \
-                  vendor/busybox/rach2-suid.config vendor/busybox/muslgcc \
+                  vendor/busybox/rach2-suid.config $(VENDOR_COMMON) \
                   $(BUSYBOX_TARBALL) $(BUSYBOX_PATCHES) $(LIBC_STAMP)
 	@rm -f $@ $(BUSYBOX_BIN) $(BUSYBOX_SUID_BIN) \
-	    build/vendor/busybox/applet_tables-main.h \
-	    build/vendor/busybox/applet_tables-suid.h \
-	    build/vendor/busybox/config-main \
-	    build/vendor/busybox/config-suid
-	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else t0=$$(date +%s); ./vendor/busybox/build_busybox.sh && echo "busybox: result: built in $$(($$(date +%s)-t0))s"; fi
+	    $(BUSYBOX_STAGE)/applet_tables-main.h \
+	    $(BUSYBOX_STAGE)/applet_tables-suid.h \
+	    $(BUSYBOX_STAGE)/config-main \
+	    $(BUSYBOX_STAGE)/config-suid
+	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else t0=$$(date +%s); RACH2_ARCH=$(ARCH) ./vendor/busybox/build_busybox.sh && echo "busybox: result: built in $$(($$(date +%s)-t0))s"; fi
 	@test -s $(BUSYBOX_BIN) || { echo "busybox: build produced no $(BUSYBOX_BIN)" >&2; exit 1; }
 	@touch $@
 
 $(TCC_STAMP): vendor/tcc/build_tcc.sh vendor/tcc/rach2-output-policy.patch \
-              vendor/busybox/muslgcc $(TCC_TARBALL) $(LIBC_STAMP)
-	@rm -f $@ $(TCC_BIN) build/vendor/tcc/libtcc1.a \
-	    build/vendor/tcc/include/stdarg.h
-	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else t0=$$(date +%s); ./vendor/tcc/build_tcc.sh && echo "tcc: result: built in $$(($$(date +%s)-t0))s"; fi
+              $(VENDOR_COMMON) $(TCC_TARBALL) $(LIBC_STAMP)
+	@rm -f $@ $(TCC_BIN) $(TCC_STAGE)/libtcc1.a \
+	    $(TCC_STAGE)/include/stdarg.h
+	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else t0=$$(date +%s); RACH2_ARCH=$(ARCH) ./vendor/tcc/build_tcc.sh && echo "tcc: result: built in $$(($$(date +%s)-t0))s"; fi
 	@test -s $(TCC_BIN) || { echo "tcc: build produced no $(TCC_BIN)" >&2; exit 1; }
-	@find build/vendor/tcc -type f | sort > vendor/tcc/.outputs
+	@find $(TCC_STAGE) -type f | sort > $(TCC_OUTPUTS_LIST)
 	@touch $@
 
 # pdpmake, the make that runs ON the machine. Its patches are prerequisites for
@@ -203,20 +228,20 @@ $(TCC_STAMP): vendor/tcc/build_tcc.sh vendor/tcc/rach2-output-policy.patch \
 # predates one would keep a make whose built-in rules name a compiler this image
 # does not have and whose default link this system's compiler refuses.
 $(PDPMAKE_STAMP): vendor/pdpmake/build_pdpmake.sh $(PDPMAKE_PATCHES) \
-                  vendor/busybox/muslgcc $(PDPMAKE_TARBALL) $(LIBC_STAMP)
+                  $(VENDOR_COMMON) $(PDPMAKE_TARBALL) $(LIBC_STAMP)
 	@rm -f $@ $(PDPMAKE_BIN)
-	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else t0=$$(date +%s); ./vendor/pdpmake/build_pdpmake.sh && echo "pdpmake: result: built in $$(($$(date +%s)-t0))s"; fi
+	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else t0=$$(date +%s); RACH2_ARCH=$(ARCH) ./vendor/pdpmake/build_pdpmake.sh && echo "pdpmake: result: built in $$(($$(date +%s)-t0))s"; fi
 	@test -s $(PDPMAKE_BIN) || { echo "pdpmake: build produced no $(PDPMAKE_BIN)" >&2; exit 1; }
 	@touch $@
 
 # e2fsprogs, of which the images stage e2fsck, resize2fs, mke2fs, tune2fs
 # and dumpe2fs. The patch manifest is a prerequisite as Dropbear's is below,
 # and mke2fs.conf is one because mke2fs compiles it in as its defaults.
-$(E2FSPROGS_STAMP): vendor/e2fsprogs/build_e2fsprogs.sh vendor/e2fsprogs/muslgcc \
+$(E2FSPROGS_STAMP): vendor/e2fsprogs/build_e2fsprogs.sh $(VENDOR_COMMON) \
                     vendor/e2fsprogs/mke2fs.conf \
                     $(E2FSPROGS_PATCHES) $(E2FSPROGS_TARBALL) $(LIBC_STAMP)
 	@rm -f $@ $(E2FSCK_BIN) $(RESIZE2FS_BIN) $(MKE2FS_BIN) $(TUNE2FS_BIN) $(DUMPE2FS_BIN)
-	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else t0=$$(date +%s); ./vendor/e2fsprogs/build_e2fsprogs.sh && echo "e2fsprogs: result: built in $$(($$(date +%s)-t0))s"; fi
+	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else t0=$$(date +%s); RACH2_ARCH=$(ARCH) ./vendor/e2fsprogs/build_e2fsprogs.sh && echo "e2fsprogs: result: built in $$(($$(date +%s)-t0))s"; fi
 	@test -s $(E2FSCK_BIN) || { echo "e2fsprogs: build produced no $(E2FSCK_BIN)" >&2; exit 1; }
 	@test -s $(RESIZE2FS_BIN) || { echo "e2fsprogs: build produced no $(RESIZE2FS_BIN)" >&2; exit 1; }
 	@test -s $(MKE2FS_BIN) || { echo "e2fsprogs: build produced no $(MKE2FS_BIN)" >&2; exit 1; }
@@ -229,10 +254,10 @@ $(E2FSPROGS_STAMP): vendor/e2fsprogs/build_e2fsprogs.sh vendor/e2fsprogs/muslgcc
 # invalidate the stamp.
 DROPBEAR_PATCHES = vendor/dropbear/patches/series $(wildcard vendor/dropbear/patches/*.patch)
 
-$(DROPBEAR_STAMP): vendor/dropbear/build_dropbear.sh vendor/dropbear/localoptions.h vendor/dropbear/muslgcc \
+$(DROPBEAR_STAMP): vendor/dropbear/build_dropbear.sh vendor/dropbear/localoptions.h $(VENDOR_COMMON) \
                    $(DROPBEAR_PATCHES) $(DROPBEAR_TARBALL) $(LIBC_STAMP)
 	@rm -f $@ $(DROPBEAR_BIN)
-	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else t0=$$(date +%s); ./vendor/dropbear/build_dropbear.sh && echo "dropbear: result: built in $$(($$(date +%s)-t0))s"; fi
+	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else t0=$$(date +%s); RACH2_ARCH=$(ARCH) ./vendor/dropbear/build_dropbear.sh && echo "dropbear: result: built in $$(($$(date +%s)-t0))s"; fi
 	@test -s $(DROPBEAR_BIN) || { echo "dropbear: build produced no $(DROPBEAR_BIN)" >&2; exit 1; }
 	@touch $@
 
@@ -246,20 +271,20 @@ $(DROPBEAR_STAMP): vendor/dropbear/build_dropbear.sh vendor/dropbear/localoption
 #     empty is size-tested below as well, so a truncated one rebuilds its
 #     vendor rather than failing a later check. musl and TinyCC declare their
 #     whole staged trees in .outputs lists their stamp recipes write. ---
-MUSL_OUTPUTS = $(shell cat vendor/musl/.outputs 2>/dev/null)
-TCC_OUTPUTS = $(shell cat vendor/tcc/.outputs 2>/dev/null)
+MUSL_OUTPUTS = $(shell cat $(LIBC_OUTPUTS_LIST) 2>/dev/null)
+TCC_OUTPUTS = $(shell cat $(TCC_OUTPUTS_LIST) 2>/dev/null)
 BUSYBOX_OUTPUTS = $(BUSYBOX_BIN) $(BUSYBOX_SUID_BIN) \
-                  build/vendor/busybox/applet_tables-main.h \
-                  build/vendor/busybox/applet_tables-suid.h \
-                  build/vendor/busybox/config-main \
-                  build/vendor/busybox/config-suid
+                  $(BUSYBOX_STAGE)/applet_tables-main.h \
+                  $(BUSYBOX_STAGE)/applet_tables-suid.h \
+                  $(BUSYBOX_STAGE)/config-main \
+                  $(BUSYBOX_STAGE)/config-suid
 
-_ := $(shell [ ! -f $(LIBC_STAMP) ] || [ ! -f vendor/musl/.outputs ] || \
+_ := $(shell [ ! -f $(LIBC_STAMP) ] || [ ! -f $(LIBC_OUTPUTS_LIST) ] || \
         while IFS= read -r f; do [ -e "$$f" ] || { rm -f $(LIBC_STAMP); break; }; done \
-            < vendor/musl/.outputs)
-_ := $(shell [ ! -f $(TCC_STAMP) ] || [ ! -f vendor/tcc/.outputs ] || \
+            < $(LIBC_OUTPUTS_LIST))
+_ := $(shell [ ! -f $(TCC_STAMP) ] || [ ! -f $(TCC_OUTPUTS_LIST) ] || \
         while IFS= read -r f; do [ -e "$$f" ] || { rm -f $(TCC_STAMP); break; }; done \
-            < vendor/tcc/.outputs)
+            < $(TCC_OUTPUTS_LIST))
 _ := $(shell [ ! -f $(BUSYBOX_STAMP) ] || \
         for f in $(BUSYBOX_OUTPUTS); do [ -e "$$f" ] || { rm -f $(BUSYBOX_STAMP); break; }; done)
 _ := $(shell [ ! -f $(DROPBEAR_STAMP) ] || [ -s $(DROPBEAR_BIN) ] || rm -f $(DROPBEAR_STAMP))
@@ -270,7 +295,7 @@ _ := $(shell [ ! -f $(E2FSPROGS_STAMP) ] || { [ -s $(E2FSCK_BIN) ] && [ -s $(RES
 # legitimately empty headers. The binaries that can never be empty also get a
 # size test, so a truncated one rebuilds its vendor instead of failing a check
 # with advice.
-_ := $(shell [ ! -f $(LIBC_STAMP) ] || [ -s vendor/musl/install/lib/libc.a ] || rm -f $(LIBC_STAMP))
+_ := $(shell [ ! -f $(LIBC_STAMP) ] || [ -s $(LIBC_A) ] || rm -f $(LIBC_STAMP))
 _ := $(shell [ ! -f $(TCC_STAMP) ] || [ -s $(TCC_BIN) ] || rm -f $(TCC_STAMP))
 _ := $(shell [ ! -f $(BUSYBOX_STAMP) ] || { [ -s $(BUSYBOX_BIN) ] && [ -s $(BUSYBOX_SUID_BIN) ]; } || rm -f $(BUSYBOX_STAMP))
 
@@ -284,20 +309,37 @@ _ := $(shell [ ! -f $(BUSYBOX_STAMP) ] || { [ -s $(BUSYBOX_BIN) ] && [ -s $(BUSY
 # than what it staged, so every image would be restaged by every make.
 # The files each manifest stages, read once here and used by every rule that
 # builds an image from that manifest.
-MANIFEST_DEPS_test := $(shell sh krffs/manifest_deps.sh krffs/manifests/test.manifest)
-MANIFEST_DEPS_os_simple := $(shell sh krffs/manifest_deps.sh krffs/manifests/os-simple.manifest)
-MANIFEST_DEPS_os_real := $(shell sh krffs/manifest_deps.sh krffs/manifests/os-real.manifest)
-MANIFEST_DEPS_os_real_gnu := $(shell sh krffs/manifest_deps.sh krffs/manifests/os-real-gnu.manifest)
-MANIFEST_DEPS_rach2_metal := $(shell sh krffs/manifest_deps.sh krffs/manifests/rach2-metal.manifest)
-MANIFEST_DEPS_rach2_recovery := $(shell sh krffs/manifest_deps.sh krffs/manifests/rach2-recovery.manifest)
-MANIFEST_DEPS_rach2_metal_disk := $(shell sh krffs/manifest_deps.sh krffs/manifests/rach2-metal-disk.manifest)
-MANIFEST_DEPS_grub_test := $(shell sh krffs/manifest_deps.sh krffs/manifests/grub-test.manifest)
+#
+# A manifest names its host files by their i686 paths, build/... and
+# vendor/musl/install/..., and so does the set-id allowlist that judges it, so
+# one manifest describes the image of either architecture. For x86-64 the
+# stager, the set-id guard and manifest_deps.sh read each such path from the
+# x86-64 tree instead, by the prefixes RACH2_PATH_MAP lists in order, the
+# first that matches taking the path. The manual's pages and the suites'
+# fixtures under build/tests/system are host files and stay where they are.
+# The map is exported to the recipes and given by name to the parse-time
+# reads below, since whether $(shell) sees an exported variable has differed
+# between versions of GNU Make.
+ifneq ($(ARCH_SUFFIX),)
+RACH2_PATH_MAP = build/man/=build/man/ build/tests/system/=build/tests/system/ \
+                 build/=$(ARCH_BUILD)/ vendor/musl/install/=$(ARCH_MUSL)/
+export RACH2_PATH_MAP
+endif
+MANIFEST_DEPS = RACH2_PATH_MAP='$(RACH2_PATH_MAP)' sh krffs/manifest_deps.sh
+MANIFEST_DEPS_test := $(shell $(MANIFEST_DEPS) krffs/manifests/test.manifest)
+MANIFEST_DEPS_os_simple := $(shell $(MANIFEST_DEPS) krffs/manifests/os-simple.manifest)
+MANIFEST_DEPS_os_real := $(shell $(MANIFEST_DEPS) krffs/manifests/os-real.manifest)
+MANIFEST_DEPS_os_real_gnu := $(shell $(MANIFEST_DEPS) krffs/manifests/os-real-gnu.manifest)
+MANIFEST_DEPS_rach2_metal := $(shell $(MANIFEST_DEPS) krffs/manifests/rach2-metal.manifest)
+MANIFEST_DEPS_rach2_recovery := $(shell $(MANIFEST_DEPS) krffs/manifests/rach2-recovery.manifest)
+MANIFEST_DEPS_rach2_metal_disk := $(shell $(MANIFEST_DEPS) krffs/manifests/rach2-metal-disk.manifest)
+MANIFEST_DEPS_grub_test := $(shell $(MANIFEST_DEPS) krffs/manifests/grub-test.manifest)
 MANIFEST_INPUTS = $(sort $(MANIFEST_DEPS_test) $(MANIFEST_DEPS_os_simple) \
     $(MANIFEST_DEPS_os_real) $(MANIFEST_DEPS_os_real_gnu) $(MANIFEST_DEPS_rach2_metal) \
     $(MANIFEST_DEPS_rach2_recovery) $(MANIFEST_DEPS_rach2_metal_disk) $(MANIFEST_DEPS_grub_test))
-STAGED_IN_MANIFESTS = $(filter vendor/musl/install/% build/vendor/tcc/%,$(MANIFEST_INPUTS))
-MUSL_KNOWN = $(sort $(MUSL_OUTPUTS) $(filter vendor/musl/install/%,$(STAGED_IN_MANIFESTS)))
-TCC_KNOWN = $(sort $(TCC_OUTPUTS) $(filter build/vendor/tcc/%,$(STAGED_IN_MANIFESTS)))
+STAGED_IN_MANIFESTS = $(filter $(ARCH_MUSL)/% $(TCC_STAGE)/%,$(MANIFEST_INPUTS))
+MUSL_KNOWN = $(sort $(MUSL_OUTPUTS) $(filter $(ARCH_MUSL)/%,$(STAGED_IN_MANIFESTS)))
+TCC_KNOWN = $(sort $(TCC_OUTPUTS) $(filter $(TCC_STAGE)/%,$(STAGED_IN_MANIFESTS)))
 ifneq ($(MUSL_KNOWN),)
 $(MUSL_KNOWN): $(LIBC_STAMP)
 endif
@@ -327,28 +369,28 @@ $(E2FSCK_BIN) $(RESIZE2FS_BIN) $(MKE2FS_BIN) $(TUNE2FS_BIN) $(DUMPE2FS_BIN): $(E
 .PHONY: ask-the-sub-make
 ask-the-sub-make:
 
-build/rach2/kernel: ask-the-sub-make
+$(KERNEL): ask-the-sub-make
 	@$(MAKE) --no-print-directory -C rach2
-build/ish/ish: ask-the-sub-make
+$(ARCH_BUILD)/ish/ish: ask-the-sub-make
 	@$(MAKE) --no-print-directory -C ish
 # One of the three asks the sub-make and the other two wait for it. A rule with
 # several targets is a rule per target to make, so the three missing files of a
 # clean build were three sub-makes of one directory at once.
 build/krffs/mkfs.krffs: ask-the-sub-make | check-libc
-	@$(MAKE) --no-print-directory -C krffs
+	@$(MAKE) --no-print-directory -C krffs $(if $(ARCH_SUFFIX),MUSL_CRYPT=../$(MUSL_CRYPT_SRC))
 build/krffs/stageimage.krffs build/krffs/fsck.krffs: build/krffs/mkfs.krffs
 	@:
 
 # A staged file waits for its component, then make reads its time again.
 # Each component still runs once, even when several images stage its files.
 # The empty recipes run under -n too, without claiming a file has changed.
-$(filter-out build/tests/musl/%,$(filter build/tests/%,$(MANIFEST_INPUTS))): tests
+$(filter-out $(ARCH_BUILD)/tests/musl/%,$(filter $(ARCH_BUILD)/tests/%,$(MANIFEST_INPUTS))): tests
 	+@:
-$(filter build/tests/musl/%,$(MANIFEST_INPUTS)): musl-programs
+$(filter $(ARCH_BUILD)/tests/musl/%,$(MANIFEST_INPUTS)): musl-programs
 	+@:
-$(filter build/utils/%,$(MANIFEST_INPUTS)): utils
+$(filter $(ARCH_BUILD)/utils/%,$(MANIFEST_INPUTS)): utils
 	+@:
-$(filter build/ports/doom/%,$(MANIFEST_INPUTS)): ports/doom
+$(filter $(ARCH_BUILD)/ports/doom/%,$(MANIFEST_INPUTS)): ports/doom
 	+@:
 
 # The binary byte searcher (tools/inspect/binfind.c), replacing strings(1) piped
@@ -427,29 +469,29 @@ $(SHA256TOOL): tools/verify/sha256.c
 #     next run rebuilds it through the ordinary rules. fsck would clear the
 #     image's dirty flag in place, so the image stamp runs only the
 #     non-mutating set-id inventory. ---
-build/rach2/.kernel-checked: build/rach2/kernel $(ELFCHECK)
-	@$(ELFCHECK) --kernel build/rach2/kernel || { rm -f build/rach2/kernel $@; exit 1; }
+$(ARCH_BUILD)/rach2/.kernel-checked: $(KERNEL) $(ELFCHECK)
+	@$(ELFCHECK) --kernel $(KERNEL) || { rm -f $(KERNEL) $@; exit 1; }
 	@touch $@
 
-vendor/tcc/.validated: $(TCC_STAMP) tools/inspect/check_link.sh
-	@sh tools/inspect/check_link.sh vendor/musl/install/lib/libc.a build/vendor/tcc/libtcc1.a \
-	    vendor/musl/install/lib/crt1.o vendor/musl/install/lib/crti.o \
-	    vendor/musl/install/lib/crtn.o || { rm -rf build/vendor/tcc $@; exit 1; }
+$(TCC_VALIDATED): $(TCC_STAMP) tools/inspect/check_link.sh
+	@CHECK_LINK_NM=$(CROSS_PREFIX)nm sh tools/inspect/check_link.sh $(LIBC_A) $(TCC_STAGE)/libtcc1.a \
+	    $(ARCH_MUSL)/lib/crt1.o $(ARCH_MUSL)/lib/crti.o \
+	    $(ARCH_MUSL)/lib/crtn.o || { rm -rf $(TCC_STAGE) $@; exit 1; }
 	@touch $@
 
-vendor/pdpmake/.validated: $(PDPMAKE_STAMP) $(ELFCHECK)
-	@$(ELFCHECK) $(PDPMAKE_BIN) || { rm -f $(PDPMAKE_BIN) $@; exit 1; }
+$(PDPMAKE_VALIDATED): $(PDPMAKE_STAMP) $(ELFCHECK)
+	@$(ELFCHECK) --arch $(ARCH) $(PDPMAKE_BIN) || { rm -f $(PDPMAKE_BIN) $@; exit 1; }
 	@touch $@
 
-build/images/%.checked: build/images/%.krffs $(SETIDCHECK) tools/inspect/setid.allow
+$(IMAGES_DIR)/%.checked: $(IMAGES_DIR)/%.krffs $(SETIDCHECK) tools/inspect/setid.allow
 	@$(SETIDCHECK) --image $< --manifest krffs/manifests/$*.manifest \
 	    || { rm -f $< $@; exit 1; }
 	@touch $@
 
-all images: build/rach2/.kernel-checked vendor/tcc/.validated vendor/pdpmake/.validated
-test-image: build/images/test.checked
-os-simple-image: build/images/os-simple.checked
-os-real-image: build/images/os-real.checked
+all images: $(ARCH_BUILD)/rach2/.kernel-checked $(TCC_VALIDATED) $(PDPMAKE_VALIDATED)
+test-image: $(IMAGES_DIR)/test.checked
+os-simple-image: $(IMAGES_DIR)/os-simple.checked
+os-real-image: $(IMAGES_DIR)/os-real.checked
 
 # --- component sub-makes + the build-order DAG ---
 #
@@ -465,8 +507,8 @@ $(filter-out rach2 ish krffs,$(BASE_DIRS)) $(FULL_DIRS):
 	@echo "$(notdir $@): building"
 	@$(MAKE) --no-print-directory -C $@
 
-rach2: build/rach2/kernel
-ish: build/ish/ish
+rach2: $(KERNEL)
+ish: $(ARCH_BUILD)/ish/ish
 krffs: build/krffs/mkfs.krffs
 
 # krffs waits on the vendored musl because mkhash compiles its SHA-512 crypt
@@ -520,7 +562,7 @@ $(MANCHECK): tools/verify/mancheck.c
 # `make mancheck`: every program, applet and call has a page; see the tool.
 .PHONY: mancheck
 mancheck: $(MANCHECK) $(BUSYBOX_STAMP)
-	$(MANCHECK) man rach2/sys/syscall.h rach2/sys/syscall.c:rach2/sys/syscall_net.c build/vendor/busybox/applet_tables-main.h \
+	$(MANCHECK) man rach2/sys/syscall.h rach2/sys/syscall.c:rach2/sys/syscall_net.c $(BUSYBOX_STAGE)/applet_tables-main.h \
 	    utils/programs.mk krffs/manifests/rach2-recovery.manifest krffs/manifests/os-simple.manifest \
 	    krffs/manifests/os-real.manifest krffs/manifests/rach2-metal-disk.manifest
 
@@ -622,8 +664,13 @@ IMAGE_TOOLS = krffs/mkimage.sh $(SETIDCHECK) tools/inspect/setid.allow \
 
 # The musl integration programs (tests/musl/*.c -> build/tests/musl/), built by
 # their own script. They are end-to-end libc tests staged into the test image.
+# The script builds for i686 alone, so an x86-64 test image stops here, named.
 musl-programs: $(LIBC_STAMP)
+ifeq ($(ARCH_SUFFIX),)
 	sh tests/musl/build.sh
+else
+	@echo "musl-programs: tests/musl/build.sh builds for i686 only, so the $(ARCH) test image has no musl programs" >&2; exit 1
+endif
 
 # The test image: the freestanding syscall probes plus the musl integration
 # programs. The default suite boots it and judges each probe by its exit
@@ -676,7 +723,7 @@ $(OS_REAL_EXT2): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_
 # somebody else's Windows installation. check_diskpolicy.sh then reads the
 # policy back off the artifact, since there is nothing to check for by absence:
 # the commands are numbers and the functions that issue them are static.
-METAL_KERNEL = build/rach2-metal/kernel
+METAL_KERNEL = $(ARCH_BUILD)/rach2-metal/kernel
 $(METAL_KERNEL): ask-the-sub-make
 	@$(MAKE) --no-print-directory -C rach2 COMPONENT=rach2-metal KEXTRA=-DRACH2_DISK_READONLY
 # One invocation, in the file rule above; see the note on `rach2-recovery`.
@@ -691,7 +738,7 @@ rach2-metal: krffs $(METAL_KERNEL)
 # it; that one is enforced below devfs and would stop this kernel writing the
 # boot partition too, which recovery needs to do. check_recovery.sh reads the
 # authority back off the artifact in both directions.
-RECOVERY_KERNEL = build/rach2-recovery/kernel
+RECOVERY_KERNEL = $(ARCH_BUILD)/rach2-recovery/kernel
 $(RECOVERY_KERNEL): ask-the-sub-make
 	@$(MAKE) --no-print-directory -C rach2 COMPONENT=rach2-recovery KEXTRA=-DRACH2_RECOVERY
 # The file rule above is the only place this kernel is built. Running the
@@ -700,7 +747,7 @@ $(RECOVERY_KERNEL): ask-the-sub-make
 # could link while the other rewrote an object under it.
 rach2-recovery: krffs rach2 $(RECOVERY_KERNEL)
 	sh tools/inspect/check_recovery.sh $(RECOVERY_KERNEL) recovery
-	sh tools/inspect/check_recovery.sh build/rach2/kernel ordinary
+	sh tools/inspect/check_recovery.sh $(KERNEL) ordinary
 	sh tools/inspect/check_diskpolicy.sh $(RECOVERY_KERNEL) read-write
 
 # A real file target with the components as order-only prerequisites, the shape
@@ -769,14 +816,14 @@ SEALED_ADDRESS ?= 192.168.0.105
 SEALED_MASK ?= 255.255.255.0
 SEALED_PREFIX ?= 24
 SEALED_GATEWAY ?= 192.168.0.1
-SEALED_DISK = build/images/rach2-sealed$(RECOVERY_KEY_TAG).disk
+SEALED_DISK = $(IMAGES_DIR)/rach2-sealed$(RECOVERY_KEY_TAG).disk
 
 # The file systems in files a fresh disk carries in /demo, one of each kind
 # this kernel mounts, each with a hello.txt in it, and an empty KRFFS volume
 # to copy when a person wants an image of their own. They are built here
 # rather than staged from somewhere, because what they are is what the host's
 # own formatters write.
-FS_DEMO_DIR = build/images/fs-demo
+FS_DEMO_DIR = $(IMAGES_DIR)/fs-demo
 FS_DEMO_IMAGES = $(FS_DEMO_DIR)/fat32.img $(FS_DEMO_DIR)/exfat.img \
                  $(FS_DEMO_DIR)/ext2.img $(FS_DEMO_DIR)/krffs.img \
                  $(FS_DEMO_DIR)/empty.krffs
@@ -827,7 +874,7 @@ STICKCHECK      = build/tools/image/stickcheck
 DISK_TOOLS      = $(MKMBR) $(FATCHAINS) $(GRUBEMBED)
 MKEXFATFIXTURE  = build/tests/host/mkexfatfixture
 
-SEALED_EXT2 = build/images/rach2-metal-disk.ext2
+SEALED_EXT2 = $(IMAGES_DIR)/rach2-metal-disk.ext2
 $(SEALED_EXT2): $(FS_DEMO_IMAGES) $(DEMO_CREDS) krffs/manifests/rach2-metal-disk.manifest $(MANIFEST_DEPS_rach2_metal_disk) $(MAN_ALL) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	sh tools/image/mkext2.sh krffs/manifests/rach2-metal-disk.manifest $@ 1024
 # The alias builds everything the disk is made of, then asks for the disk
@@ -837,7 +884,7 @@ $(SEALED_EXT2): $(FS_DEMO_IMAGES) $(DEMO_CREDS) krffs/manifests/rach2-metal-disk
 rach2-sealed-disk: krffs rach2 utils rach2-recovery rach2-recovery-image check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(CFGCHECK)
 	@$(MAKE) --no-print-directory $(SEALED_DISK)
 
-$(SEALED_DISK): build/rach2/kernel $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $(SEALED_EXT2) \
+$(SEALED_DISK): $(KERNEL) $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $(SEALED_EXT2) \
                 krffs/manifests/rach2-metal-disk.manifest krffs/rescue-static.script \
                 tools/image/mkdisk_grub.sh tools/image/keyname.sh $(DISK_TOOLS) $(CFGCHECK)
 	@sh tools/image/keyname.sh $@
@@ -853,7 +900,7 @@ $(SEALED_DISK): build/rach2/kernel $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $(SEALED
 	RACH2_DISK_EXT2_MB=1024 \
 	RACH2_DISK_EXT2_IMAGE=$(SEALED_EXT2) \
 	RACH2_DISK_HELLO=krffs/demo/hello.txt \
-	    sh tools/image/mkdisk_grub.sh build/rach2/kernel $(SEALED_DISK)
+	    sh tools/image/mkdisk_grub.sh $(KERNEL) $(SEALED_DISK)
 
 
 
@@ -868,7 +915,7 @@ $(SEALED_DISK): build/rach2/kernel $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $(SEALED
 os-real-grub-disk: krffs rach2 utils rach2-recovery rach2-recovery-image check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti check-e2fsck ports/doom
 	@$(MAKE) --no-print-directory $(OS_REAL_GRUB_DISK)
 
-$(OS_REAL_GRUB_DISK): build/rach2/kernel $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $(OS_REAL_EXT2) \
+$(OS_REAL_GRUB_DISK): $(KERNEL) $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $(OS_REAL_EXT2) \
                       krffs/manifests/os-real.manifest tools/image/mkdisk_grub.sh \
                       tools/image/keyname.sh $(DISK_TOOLS)
 	@sh tools/image/keyname.sh $@
@@ -879,7 +926,7 @@ $(OS_REAL_GRUB_DISK): build/rach2/kernel $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $(
 	RACH2_DISK_RECOVERY_IMAGE=$(RECOVERY_IMAGE) \
 	RACH2_DISK_EXT2_MB=1024 \
 	RACH2_DISK_EXT2_IMAGE=$(OS_REAL_EXT2) \
-	    sh tools/image/mkdisk_grub.sh build/rach2/kernel $(OS_REAL_GRUB_DISK)
+	    sh tools/image/mkdisk_grub.sh $(KERNEL) $(OS_REAL_GRUB_DISK)
 
 
 # The public test entry: the source checks, the native tests, and the core
@@ -907,12 +954,12 @@ test:
 # build/images/<image>.iso.
 isos: test-iso os-simple-iso os-real-iso rach2-metal-iso rach2-recovery-iso
 test-iso: test-image
-	sh tools/image/mkiso.sh test
+	RACH2_ARCH=$(ARCH) sh tools/image/mkiso.sh test
 os-simple-iso: os-simple-image
-	sh tools/image/mkiso.sh os-simple
+	RACH2_ARCH=$(ARCH) sh tools/image/mkiso.sh os-simple
 os-real-iso: os-real-image
-	sh tools/image/mkiso.sh os-real
-rach2-metal-iso: rach2-metal rach2-metal-image build/images/rach2-metal.iso
+	RACH2_ARCH=$(ARCH) sh tools/image/mkiso.sh os-real
+rach2-metal-iso: rach2-metal rach2-metal-image $(IMAGES_DIR)/rach2-metal.iso
 rach2-recovery-iso: rach2-recovery rach2-recovery-image $(RECOVERY_ISO)
 
 # The staged capstone binaries are the REAL prerequisites of the os-real image.
@@ -933,16 +980,17 @@ rach2-recovery-iso: rach2-recovery rach2-recovery-image $(RECOVERY_ISO)
 # outside.
 check-pdpmake: $(PDPMAKE_STAMP) $(PDPMAKE_BIN) $(ELFCHECK)
 	@test -s $(PDPMAKE_BIN) || { \
-	    echo "pdpmake: $(PDPMAKE_BIN) missing or empty; rm vendor/pdpmake/.stamp and rebuild (make pdpmake)" >&2; \
+	    echo "pdpmake: $(PDPMAKE_BIN) missing or empty; rm $(PDPMAKE_STAMP) and rebuild (make pdpmake)" >&2; \
 	    exit 1; }
-	@$(ELFCHECK) $(PDPMAKE_BIN)
+	@$(ELFCHECK) --arch $(ARCH) $(PDPMAKE_BIN)
 
 # The port's size limits, each set from its first build with a tenth of
 # headroom, e2fsck's in milestone 42 at 673672 bytes stripped,
 # resize2fs's in milestone 47, mke2fs's in milestone 55 at 501608 and
 # tune2fs's and dumpe2fs's in the same at 482664 and 389896: a configure
 # that let a library or a program back in would be caught here and not in an
-# image.
+# image. The limits serve both architectures: the first x86-64 build, in
+# milestone 57, came in under the i686 sizes, e2fsck at 649848 bytes.
 E2FSCK_LIMIT = 737280
 RESIZE2FS_LIMIT = 430080
 MKE2FS_LIMIT = 552960
@@ -951,13 +999,13 @@ DUMPE2FS_LIMIT = 430080
 check-e2fsck: $(E2FSPROGS_STAMP) $(E2FSCK_BIN) $(RESIZE2FS_BIN) $(MKE2FS_BIN) $(TUNE2FS_BIN) \
               $(DUMPE2FS_BIN) $(ELFCHECK)
 	@for f in $(E2FSCK_BIN) $(RESIZE2FS_BIN) $(MKE2FS_BIN) $(TUNE2FS_BIN) $(DUMPE2FS_BIN); do test -s $$f || { \
-	    echo "e2fsprogs: $$f missing or empty; rm vendor/e2fsprogs/.stamp and rebuild (make e2fsprogs)" >&2; \
+	    echo "e2fsprogs: $$f missing or empty; rm $(E2FSPROGS_STAMP) and rebuild (make e2fsprogs)" >&2; \
 	    exit 1; }; done
-	@$(ELFCHECK) $(E2FSCK_BIN)
-	@$(ELFCHECK) $(RESIZE2FS_BIN)
-	@$(ELFCHECK) $(MKE2FS_BIN)
-	@$(ELFCHECK) $(TUNE2FS_BIN)
-	@$(ELFCHECK) $(DUMPE2FS_BIN)
+	@$(ELFCHECK) --arch $(ARCH) $(E2FSCK_BIN)
+	@$(ELFCHECK) --arch $(ARCH) $(RESIZE2FS_BIN)
+	@$(ELFCHECK) --arch $(ARCH) $(MKE2FS_BIN)
+	@$(ELFCHECK) --arch $(ARCH) $(TUNE2FS_BIN)
+	@$(ELFCHECK) --arch $(ARCH) $(DUMPE2FS_BIN)
 	@size=$$(wc -c < $(E2FSCK_BIN) | tr -d ' '); test "$$size" -le $(E2FSCK_LIMIT) || { \
 	    echo "e2fsprogs: e2fsck is $$size bytes, over the $(E2FSCK_LIMIT) limit vendor/e2fsprogs/Readme.md sets" >&2; \
 	    exit 1; }
@@ -975,28 +1023,28 @@ check-e2fsck: $(E2FSPROGS_STAMP) $(E2FSCK_BIN) $(RESIZE2FS_BIN) $(MKE2FS_BIN) $(
 	    exit 1; }
 
 check-tcc: $(TCC_STAMP) $(TCC_OUTPUTS) $(BINFIND) $(ELFCHECK)
-	@for f in $(TCC_BIN) build/vendor/tcc/libtcc1.a \
-	          build/vendor/tcc/include/stdarg.h \
-	          build/vendor/tcc/include/stddef.h \
-	          build/vendor/tcc/include/stdbool.h \
-	          build/vendor/tcc/include/float.h \
-	          build/vendor/tcc/include/varargs.h; do \
-	    test -s "$$f" || { echo "tcc: $$f missing or empty; rm vendor/tcc/.stamp and rebuild (make tcc)" >&2; exit 1; }; \
+	@for f in $(TCC_BIN) $(TCC_STAGE)/libtcc1.a \
+	          $(TCC_STAGE)/include/stdarg.h \
+	          $(TCC_STAGE)/include/stddef.h \
+	          $(TCC_STAGE)/include/stdbool.h \
+	          $(TCC_STAGE)/include/float.h \
+	          $(TCC_STAGE)/include/varargs.h; do \
+	    test -s "$$f" || { echo "tcc: $$f missing or empty; rm $(TCC_STAMP) and rebuild (make tcc)" >&2; exit 1; }; \
 	done
 	@$(ELFCHECK) --selftest
-	@$(ELFCHECK) $(TCC_BIN)
+	@$(ELFCHECK) --arch $(ARCH) $(TCC_BIN)
 	@for m in "must be linked with -static" "run is not available" \
 	          "shared is not available" "must be an ELF"; do \
-	    $(BINFIND) "$$m" $(TCC_BIN) || { echo "tcc: the shipped compiler does not carry the output policy ($$m); rm vendor/tcc/.stamp and rebuild" >&2; exit 1; }; \
+	    $(BINFIND) "$$m" $(TCC_BIN) || { echo "tcc: the shipped compiler does not carry the output policy ($$m); rm $(TCC_STAMP) and rebuild" >&2; exit 1; }; \
 	done
 
 check-busybox: $(BUSYBOX_STAMP) $(BUSYBOX_OUTPUTS)
 	@for f in $(BUSYBOX_BIN) $(BUSYBOX_SUID_BIN) \
-	          build/vendor/busybox/applet_tables-main.h \
-	          build/vendor/busybox/applet_tables-suid.h \
-	          build/vendor/busybox/config-main \
-	          build/vendor/busybox/config-suid; do \
-	    test -s "$$f" || { echo "busybox: $$f missing or empty; rm vendor/busybox/.stamp and rebuild (make busybox)" >&2; exit 1; }; \
+	          $(BUSYBOX_STAGE)/applet_tables-main.h \
+	          $(BUSYBOX_STAGE)/applet_tables-suid.h \
+	          $(BUSYBOX_STAGE)/config-main \
+	          $(BUSYBOX_STAGE)/config-suid; do \
+	    test -s "$$f" || { echo "busybox: $$f missing or empty; rm $(BUSYBOX_STAMP) and rebuild (make busybox)" >&2; exit 1; }; \
 	done
 
 # Privilege climbs through a declared set of paths and no others. The sweep
@@ -1022,7 +1070,7 @@ check-setid: $(BUSYBOX_STAMP) utils $(SETIDCHECK)
 	@$(SETIDCHECK)
 	@$(SETIDCHECK) --applets
 check-dropbearmulti: $(DROPBEAR_STAMP) $(DROPBEAR_BIN)
-	@test -s $(DROPBEAR_BIN) || { echo "dropbear: $(DROPBEAR_BIN) missing or empty; rm vendor/dropbear/.stamp and rebuild (make dropbear)" >&2; exit 1; }
+	@test -s $(DROPBEAR_BIN) || { echo "dropbear: $(DROPBEAR_BIN) missing or empty; rm $(DROPBEAR_STAMP) and rebuild (make dropbear)" >&2; exit 1; }
 
 # musl's stamp guards two artifacts, not one: the installed libc the cross links
 # against, and the EXTRACTED source tree, which krffs (mkhash's crypt) and the
@@ -1030,8 +1078,8 @@ check-dropbearmulti: $(DROPBEAR_STAMP) $(DROPBEAR_BIN)
 # without either, so check both here rather than let a consumer fail later on a
 # missing file with no cause named.
 check-libc: $(LIBC_STAMP) $(MUSL_OUTPUTS)
-	@test -s $(LIBC_A) || { echo "libc: $(LIBC_A) missing or empty; rm vendor/musl/.stamp and rebuild (make)" >&2; exit 1; }
-	@test -f $(MUSL_CRYPT_SRC) || { echo "libc: $(MUSL_CRYPT_SRC) missing; rm vendor/musl/.stamp and rebuild (make)" >&2; exit 1; }
+	@test -s $(LIBC_A) || { echo "libc: $(LIBC_A) missing or empty; rm $(LIBC_STAMP) and rebuild (make)" >&2; exit 1; }
+	@test -f $(MUSL_CRYPT_SRC) || { echo "libc: $(MUSL_CRYPT_SRC) missing; rm $(LIBC_STAMP) and rebuild (make)" >&2; exit 1; }
 
 # The test suites: every `run-NAME` target, the fixtures they write, the nine
 # test tools, and `prepare-all`. Included rather than kept apart so that one
@@ -1073,19 +1121,21 @@ check-sources:
 # build/vendor (which no sub-make owns). Use distclean for those.
 clean:
 	@for dir in $(BASE_DIRS) $(FULL_DIRS); do $(MAKE) -C $$dir clean; done
-	rm -rf build/images build/iso
+	rm -rf $(IMAGES_DIR) $(ARCH_BUILD)/iso
 
 # distclean: a full from-scratch reset; clean plus every third-party build
 # product: the stamps, vendor/musl/install, the extracted vendored source trees,
 # and the entire out-of-tree build/ (including the staged capstones under
-# build/vendor that a routine clean leaves in place). The next build rebuilds
-# musl/busybox/dropbear/tcc/pdpmake from the tarballs. The stamps go with the
-# trees they stand for: a stamp left behind while its binary went with build/
-# would say work was done that was not. The parse-time rules above retire such
-# a stamp when they find its output gone, so the two paths agree.
+# build/vendor that a routine clean leaves in place, and everything of x86-64,
+# whose stamps and extracted trees are under build/x86_64/vendor-work). The
+# next build rebuilds musl/busybox/dropbear/tcc/pdpmake from the tarballs. The
+# stamps go with the trees they stand for: a stamp left behind while its binary
+# went with build/ would say work was done that was not. The parse-time rules
+# above retire such a stamp when they find its output gone, so the two paths
+# agree.
 distclean: clean
-	rm -f $(LIBC_STAMP) $(BUSYBOX_STAMP) $(DROPBEAR_STAMP) $(TCC_STAMP) \
-	      $(PDPMAKE_STAMP) $(E2FSPROGS_STAMP) vendor/musl/.outputs vendor/tcc/.outputs \
+	rm -f vendor/musl/.stamp vendor/busybox/.stamp vendor/dropbear/.stamp vendor/tcc/.stamp \
+	      vendor/pdpmake/.stamp vendor/e2fsprogs/.stamp vendor/musl/.outputs vendor/tcc/.outputs \
 	      vendor/tcc/.validated vendor/pdpmake/.validated
 	rm -rf vendor/musl/install \
 	       $(LIBC_TARBALL:.tar.gz=) $(BUSYBOX_TARBALL:.tar.bz2=) \

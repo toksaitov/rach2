@@ -9,22 +9,32 @@
 # libraries and the five programs, strips them, and stages them out of tree
 # under build/vendor/e2fsprogs/, from which the manifests stage them. mke2fs
 # is built with mke2fs.conf beside this script as its defaults. debugfs is
-# not built. Run vendor/musl/build_libc.sh first.
+# not built. Run vendor/musl/build_libc.sh first. The architecture is
+# RACH2_ARCH's (mk/arch.sh); an x86-64 build extracts into
+# build/x86_64/vendor-work/e2fsprogs/ and stages under
+# build/x86_64/vendor/e2fsprogs/.
 #
-# Usage: ./build_e2fsprogs.sh
+# Usage: RACH2_ARCH=i686|x86_64 ./build_e2fsprogs.sh
 #
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
+. "$REPO/mk/arch.sh"
 cd "$SCRIPT_DIR"
 
 VERSION="1.47.4"
 TARBALL="e2fsprogs-${VERSION}.tar.gz"
-SRC="e2fsprogs-${VERSION}"
-PREFIX="$SCRIPT_DIR/../musl/install"
-WRAP="$SCRIPT_DIR/muslgcc"
-STAGE="$(cd "$SCRIPT_DIR/../.." && pwd)/build/vendor/e2fsprogs"
+WORK="$ARCH_VENDOR/e2fsprogs"
+SRC="$WORK/e2fsprogs-${VERSION}"
+PREFIX="$MUSL_PREFIX"
+WRAP="$SCRIPT_DIR/../musl/muslgcc"
+STAGE="$ARCH_BUILD/vendor/e2fsprogs"
+# The project patches test __rach2__, which the wrapper adds to every compile
+# and final link of this port and of no other.
+MUSLGCC_DEFINES=-D__rach2__
+export MUSLGCC_DEFINES
 
 # Pinned sha256 of the vendored tarball, from the sha256sums file published
 # beside it under kernel.org/pub/linux/kernel/people/tytso/e2fsprogs/v1.47.4.
@@ -58,9 +68,10 @@ if [ "$GOT" != "$TARBALL_SHA256" ]; then
     exit 1
 fi
 
-echo "e2fsprogs: extracting"
+echo "e2fsprogs: extracting into $WORK"
 rm -rf "$SRC"
-tar xzf "$TARBALL"
+mkdir -p "$WORK"
+tar xzf "$TARBALL" -C "$WORK"
 
 # The patches patches/series names, in its order. A named patch that is
 # absent fails, and so does a patches/*.patch file the series does not name.
@@ -97,7 +108,7 @@ cd "$SRC"
 # none of which the five programs need and each of which is a build of its
 # own.
 echo "e2fsprogs: configuring"
-./configure --host=i686-linux-musl CC="$WRAP" AR=i686-elf-ar RANLIB=i686-elf-ranlib \
+./configure --host="$HOST_TRIPLE" CC="$WRAP" AR="${CROSS}ar" RANLIB="${CROSS}ranlib" \
     --disable-nls --disable-tls --disable-uuidd --disable-fuse2fs \
     --disable-e2initrd-helper --disable-imager --enable-resizer --disable-defrag \
     --disable-debugfs --disable-mmp --disable-backtrace --disable-tdb --disable-rpath \
@@ -118,11 +129,11 @@ make -j"${JOBS:-4}" -C misc mke2fs tune2fs dumpe2fs RDYNAMIC= > build-mke2fs.log
     { tail -20 build-mke2fs.log >&2; exit 1; }
 
 mkdir -p "$STAGE"
-i686-elf-strip -o "$STAGE/e2fsck" e2fsck/e2fsck
+"${CROSS}strip" -o "$STAGE/e2fsck" e2fsck/e2fsck
 echo "e2fsprogs: staged $STAGE/e2fsck ($(wc -c < "$STAGE/e2fsck" | tr -d ' ') bytes)"
-i686-elf-strip -o "$STAGE/resize2fs" resize/resize2fs
+"${CROSS}strip" -o "$STAGE/resize2fs" resize/resize2fs
 echo "e2fsprogs: staged $STAGE/resize2fs ($(wc -c < "$STAGE/resize2fs" | tr -d ' ') bytes)"
 for p in mke2fs tune2fs dumpe2fs; do
-    i686-elf-strip -o "$STAGE/$p" misc/$p
+    "${CROSS}strip" -o "$STAGE/$p" misc/$p
     echo "e2fsprogs: staged $STAGE/$p ($(wc -c < "$STAGE/$p" | tr -d ' ') bytes)"
 done

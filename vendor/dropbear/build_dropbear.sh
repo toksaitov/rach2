@@ -10,25 +10,31 @@
 # client, and dropbearkey, dispatched on argv[1], so `dropbearmulti dropbear`),
 # strips, and stages it out of tree
 # to build/vendor/dropbear/dropbearmulti (staged at /bin/dropbearmulti in the os-real
-# image by its manifest). Run vendor/musl/build_libc.sh first.
+# image by its manifest). Run vendor/musl/build_libc.sh first. The
+# architecture is RACH2_ARCH's (mk/arch.sh); an x86-64 build extracts into
+# build/x86_64/vendor-work/dropbear/ and stages under
+# build/x86_64/vendor/dropbear/.
 #
-# Usage: ./build_dropbear.sh
+# Usage: RACH2_ARCH=i686|x86_64 ./build_dropbear.sh
 #
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
+. "$REPO/mk/arch.sh"
 cd "$SCRIPT_DIR"
 
 VERSION="2022.83"
 TARBALL="dropbear-${VERSION}.tar.bz2"
-SRC="dropbear-${VERSION}"
-PREFIX="$SCRIPT_DIR/../musl/install"
-WRAP="$SCRIPT_DIR/muslgcc"
+WORK="$ARCH_VENDOR/dropbear"
+SRC="$WORK/dropbear-${VERSION}"
+PREFIX="$MUSL_PREFIX"
+WRAP="$SCRIPT_DIR/../musl/muslgcc"
 # Out-of-tree staging dir, mirroring the source path vendor/dropbear/ (mk/build.mk).
 # It lives under build/ so a routine `make clean` never reaches it; only `make
 # distclean` (which removes build/vendor) forces this multi-minute rebuild.
-STAGE="$(cd "$SCRIPT_DIR/../.." && pwd)/build/vendor/dropbear"
+STAGE="$ARCH_BUILD/vendor/dropbear"
 
 # Pinned sha256 of the vendored tarball (published on matt.ucc.asn.au/dropbear).
 TARBALL_SHA256="bc5a121ffbc94b5171ad5ebe01be42746d50aa797c9549a4639894a16749443b"
@@ -61,9 +67,10 @@ if [ "$GOT" != "$TARBALL_SHA256" ]; then
     exit 1
 fi
 
-echo "dropbear: extracting"
+echo "dropbear: extracting into $WORK"
 rm -rf "$SRC"
-tar xjf "$TARBALL"
+mkdir -p "$WORK"
+tar xjf "$TARBALL" -C "$WORK"
 
 # Apply the curated patches named in patches/series, in its order, before
 # building. The vendored tree is otherwise pristine; this is the escape
@@ -104,9 +111,9 @@ echo "dropbear: configuring (muslgcc, bundled libtom, static, hardening off)"
 BUILD_TRIPLE="$(sh "$SRC/config.guess" 2>/dev/null || true)"
 (
     cd "$SRC"
-    set -- --host=i686-linux-musl
+    set -- --host="$HOST_TRIPLE"
     [ -n "$BUILD_TRIPLE" ] && set -- "$@" --build="$BUILD_TRIPLE"
-    CC="$WRAP" AR=i686-elf-ar RANLIB=i686-elf-ranlib \
+    CC="$WRAP" AR="${CROSS}ar" RANLIB="${CROSS}ranlib" \
         ./configure "$@" \
         --disable-zlib --enable-bundled-libtom --disable-syslog --disable-harden \
         --disable-utmp --disable-utmpx --disable-wtmp --disable-wtmpx \
@@ -118,10 +125,10 @@ echo "dropbear: building dropbearmulti (dropbear server + dbclient + dropbearkey
 make -C "$SRC" \
     PROGRAMS="dropbear dbclient dropbearkey" MULTI=1 STATIC=1 SKIP_STRIP=y dropbearmulti
 
-echo "dropbear: staging the stripped binary to build/vendor/dropbear/dropbearmulti"
+echo "dropbear: staging the stripped binary to $STAGE/dropbearmulti"
 mkdir -p "$STAGE"
-i686-elf-strip "$SRC/dropbearmulti" -o "$STAGE/dropbearmulti"
+"${CROSS}strip" "$SRC/dropbearmulti" -o "$STAGE/dropbearmulti"
 ls -l "$STAGE/dropbearmulti"
 
-echo "dropbear: built $VERSION ($(wc -c < "$STAGE/dropbearmulti") bytes, static, musl, i686)"
+echo "dropbear: built $VERSION ($(wc -c < "$STAGE/dropbearmulti") bytes, static, musl, $RACH2_ARCH)"
 echo "dropbear: rebuild the os-real image (make os-real-image) to install it"

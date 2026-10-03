@@ -1,8 +1,10 @@
 # musl 1.2.5 integration
 
-Rach2 links its hosted user programs against a static i386 build of [musl libc](https://musl.libc.org/). Musl supplies the C library, startup objects, headers, and Linux i386 syscall ABI used by the utilities, tests, and larger ports.
+Rach2 links its hosted user programs against a static build of [musl libc](https://musl.libc.org/) for each architecture it builds: i386 for `ARCH=i686`, the default, and x86-64 for `ARCH=x86_64`. Musl supplies the C library, startup objects, headers, and the Linux system call ABI of the architecture used by the utilities, tests, and larger ports.
 
-This directory contains the project-owned integration files and the pinned upstream archive. The tracked inputs are `.gitignore`, this Readme, `build_libc.sh`, `musl-1.2.5.tar.gz`, and `patches/0001-posix-spawn-forks.patch`. The extracted source, installed files, and build stamp are ignored and reproducible.
+This directory contains the project-owned integration files and the pinned upstream archive. The tracked inputs are `.gitignore`, this Readme, `build_libc.sh`, `muslgcc`, `musl-1.2.5.tar.gz`, and `patches/0001-posix-spawn-forks.patch`. The extracted source, installed files, and build stamp are ignored and reproducible.
+
+The i686 build extracts, installs and stamps here, under `musl-1.2.5/`, `install/` and `.stamp`. The x86-64 build does the same under `build/x86_64/vendor-work/musl/`, so neither architecture's build touches the other's files. `mk/arch.sh` names the directories, the cross prefix and the configure target of each architecture.
 
 ## Build
 
@@ -10,20 +12,21 @@ From the repository root:
 
 ```
 make musl
+make musl ARCH=x86_64
 ```
 
 The ordinary root `make` builds musl before everything that links it. `make busybox`, `make dropbear`, `make tcc`, and `make pdpmake` build the other four ports individually.
 
-The root stamp depends on `build_libc.sh`, the exact archive, the patch manifest `patches/series`, and every patch currently under `patches/`. The script applies exactly the patches the series names, in its order, and fails on a named patch that is absent or a patch file the series does not name, so adding, editing, or removing a patch always invalidates the stamp through a tracked input. The recipe removes the old installed archive, invokes the script, requires a nonempty `install/lib/libc.a`, and records success only afterward. `make clean` preserves the extracted and installed trees; `make distclean` removes them and the stamp.
+The root stamp depends on `build_libc.sh`, the exact archive, the patch manifest `patches/series`, and every patch currently under `patches/`. The script applies exactly the patches the series names, in its order, and fails on a named patch that is absent or a patch file the series does not name, so adding, editing, or removing a patch always invalidates the stamp through a tracked input. The stamp also depends on `mk/arch.sh`. The recipe removes the old installed archive, invokes the script with `RACH2_ARCH` set to the build's `ARCH`, requires a nonempty `install/lib/libc.a`, and records success only afterward. `make clean` preserves the extracted and installed trees; `make distclean` removes them and the stamp.
 
 `build_libc.sh` performs these steps:
 
 1. Require `musl-1.2.5.tar.gz` to have SHA-256 `a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4`.
 2. Replace the extracted `musl-1.2.5/` tree and apply `patches/*.patch` in name order with no fuzz.
-3. Clear inherited compiler and make overrides. Configure with `CROSS_COMPILE=i686-elf-`, `--target=i686`, `--disable-shared`, and the absolute `install/` prefix.
+3. Clear inherited compiler and make overrides. Configure with `CROSS_COMPILE=i686-elf-` and `--target=i686`, or `CROSS_COMPILE=x86_64-elf-` and `--target=x86_64`, with `--disable-shared` and the absolute `install/` prefix.
 4. Build in parallel, replace the old install tree, and run musl's install target.
 
-The compiler is deliberately fixed at `i686-elf-gcc`; a caller's `CC`, `CROSS_CC`, or make flags cannot change this vendor build. The generated configuration selects the i386 architecture and static libraries.
+The compiler is deliberately fixed at the architecture's `i686-elf-gcc` or `x86_64-elf-gcc`; a caller's `CC`, `CROSS_CC`, `ARCH` or make flags cannot change this vendor build. The generated configuration selects musl's i386 or x86_64 architecture and static libraries.
 
 The integration consumes:
 
@@ -46,7 +49,7 @@ Any additional project patch belongs under `patches/` with a numbered descriptiv
 
 ## Static link contract
 
-A direct link from the repository root has this order:
+A direct i686 link from the repository root has this order:
 
 ```
 i686-elf-gcc -m32 -static -nostdlib -nostartfiles \
@@ -63,9 +66,13 @@ i686-elf-gcc -m32 -static -nostdlib -nostartfiles \
 
 `crt1.o` and `crti.o` precede program objects. `libc.a` and 32-bit libgcc follow them, and `crtn.o` closes the init/fini sections. The result is a static, non-PIE, little-endian ELF32 `ET_EXEC` for i386 with no `PT_INTERP`. The current linker places its first load at `0x08048000`; the exact entry address depends on the program.
 
-The utilities and `tests/musl/build.sh` use this order directly. BusyBox and Dropbear have project-owned `muslgcc` wrappers that add only headers during compilation, omit startup and libraries from partial links, and add the complete sequence at the final link. TinyCC and pdpmake use the BusyBox wrapper for their host builds.
+An x86-64 link has the same order with `x86_64-elf-gcc -m64`, the objects and archive of `build/x86_64/vendor-work/musl/install`, the compiler's 64-bit libgcc, and `-Wl,-z,max-page-size=0x1000`, which aligns segments to 4 KiB pages where the x86-64 linker would use 2 MiB. The result is a static, non-PIE ELF64 `ET_EXEC` for x86-64 whose first load is at `0x400000`.
+
+The utilities use this order directly, and so does `tests/musl/build.sh`, for i686 alone. The ports build through `muslgcc`, one wrapper for all five, which reads the architecture from `RACH2_ARCH` through `mk/arch.sh`, calls that architecture's compiler with `-m32` or `-m64`, adds only headers during compilation, omits startup and libraries from partial links, and adds the complete sequence at the final link. `MUSLGCC_DEFINES`, set by a port's build script, is added to its compiles and final links; e2fsprogs sets `-D__rach2__` there.
 
 ## Process ABI
+
+This section is the i686 kernel's contract; the x86-64 kernel's follows Linux's x86-64 ABI, with `syscall` in place of `int 0x80`.
 
 The kernel gives a new process one System V i386 entry stack: `argc`, the `argv` pointers and null, the `envp` pointers and null, an auxiliary vector ending with `AT_NULL`, then the referenced strings and 16 random bytes. Entry ESP is aligned to 16 bytes.
 

@@ -71,21 +71,22 @@ x86-64 has no `waitpid`, so the x86-64 wrapper issues `wait4` with no resource u
 
 ## Builds
 
-The normal host build uses the shared freestanding cross compiler and writes `build/ish/ish`:
+The normal host build uses the shared freestanding cross compiler of the architecture `ARCH` names (`mk/arch.mk`) and writes `build/ish/ish`, or `build/x86_64/ish/ish`:
 
 ```sh
 make -C ish
+make -C ish ARCH=x86_64
 ```
 
-It builds five objects under `build/ish/`, links a static ELF32 Intel 80386 executable, and places `.text` and `_start` at `0x08048000`. The shared toolchain rules select `i686-elf-gcc`, fall back to `x86_64-elf-gcc -m32`, or accept an explicit `CROSS_CC`.
+It builds five objects, links a static executable, and places `.text` and `_start` where TinyCC places a program's text on the architecture: an ELF32 Intel 80386 executable at `0x08048000`, or an ELF64 x86-64 one at `0x400000`. The shared toolchain rules select `i686-elf-gcc` or `x86_64-elf-gcc`, or accept an explicit `CROSS_CC`.
 
-The Linux compatibility build writes `build/ish/linux/ish`:
+The Linux compatibility build writes `build/ish/linux/ish`, or `build/x86_64/ish/linux/ish`:
 
 ```sh
-make -C ish -f Makefile.linux
+make -C ish -f Makefile.linux [ARCH=x86_64]
 ```
 
-It uses the same source and raw Linux i386 ABI but leaves the text address to the linker. The result is a static Linux ELF32 executable; it does not run natively on macOS.
+It uses the same source and raw Linux ABI but leaves the text address to the linker. The result is a static Linux executable; it does not run natively on macOS.
 
 The staged source tree has a POSIX makefile for pdpmake and TinyCC:
 
@@ -93,7 +94,7 @@ The staged source tree has a POSIX makefile for pdpmake and TinyCC:
 make -f guest.mk
 ```
 
-Run it in a writable copy of `/src/ish`. Root may also build the staged tree in place. `guest.mk` builds the same five objects and links a local `ish` with `-m32 -nostdlib -static`, to `ish.new` and then renamed, so a link stopped part way is not taken for a built program; TinyCC's default i386 text address supplies the address named explicitly by the host build.
+Run it in a writable copy of `/src/ish`. Root may also build the staged tree in place. `guest.mk` builds the same five objects and links a local `ish` with `-nostdlib -static`, to `ish.new` and then renamed, so a link stopped part way is not taken for a built program. The staged TinyCC compiles for the machine it runs on and refuses the other architecture's `-m` flag, so the makefile names no word size, and its default text address supplies the address named explicitly by the host build.
 
 ## Source map
 

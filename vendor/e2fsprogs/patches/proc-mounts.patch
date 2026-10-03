@@ -1,6 +1,7 @@
 The library finds whether a device is mounted from /proc/mounts on Linux and
-from the file MOUNTED names, /etc/mtab, otherwise. The compiler behind
-muslgcc defines __rach2__ and no __linux__, so without this patch the
+from the file MOUNTED names, /etc/mtab, otherwise. The muslgcc wrapper
+defines __rach2__ for this port and its compiler no __linux__, so without
+this patch the
 programs read /etc/mtab alone, which only the GNU system has, as a link to
 /proc/self/mounts; elsewhere every run warned that the file was missing and
 could not see a mounted volume. Rach2's /proc/mounts has the kernel's one

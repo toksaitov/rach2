@@ -12,7 +12,9 @@
 #
 # Usage: ./mkiso.sh <test|os-simple|os-real|rach2-metal>
 #
-# Requires xorriso. Build the kernel and the image first (make).
+# Requires xorriso. Build the kernel and the image first (make). The kernel,
+# the image and the ISO are those of the architecture in RACH2_ARCH
+# (mk/arch.sh), i686 when it is unset: under build/x86_64/ for x86-64.
 #
 
 set -e
@@ -38,6 +40,7 @@ esac
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
+. "$REPO/mk/arch.sh"
 
 # The metal profile has the kernel that cannot write a disk, and no other
 # profile does. This is the stick that goes into a laptop whose SSD has
@@ -45,21 +48,21 @@ REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
 # staging the ordinary kernel under the metal name would produce exactly the
 # image this milestone promises not to make.
 if [ "$IMAGE" = rach2-metal ]; then
-    KERNEL="$REPO/build/rach2-metal/kernel"
+    KERNEL="$ARCH_BUILD/rach2-metal/kernel"
     POLICY=read-only
 elif [ "$RECOVERY" = yes ]; then
     # The recovery kernel and its RAM image on a stick: a machine boots it
     # without its disk and reaches reflash. The disk policy is read-write,
     # since writing the disk is what recovery is for.
-    KERNEL="$REPO/build/rach2-recovery/kernel"
+    KERNEL="$ARCH_BUILD/rach2-recovery/kernel"
     POLICY=read-write
 else
-    KERNEL="$REPO/build/rach2/kernel"
+    KERNEL="$ARCH_BUILD/rach2/kernel"
     POLICY=read-write
 fi
-KRFFS="$REPO/build/images/$IMAGE.krffs"
-ISO_OUT="$REPO/build/images/$IMAGE.iso"
-ISODIR="$REPO/build/iso/$IMAGE"
+KRFFS="$ARCH_BUILD/images/$IMAGE.krffs"
+ISO_OUT="$ARCH_BUILD/images/$IMAGE.iso"
+ISODIR="$ARCH_BUILD/iso/$IMAGE"
 
 if [ ! -f "$KERNEL" ]; then
     if [ "$IMAGE" = rach2-metal ]; then

@@ -2,20 +2,18 @@
 # components (the kernel, the user-mode tests/ish/utils, the Doom port). Include
 # this once instead of re-deriving the compiler in every Makefile.
 #
-# It picks the i686 *freestanding* cross GCC: `i686-elf-gcc` if present, else
-# `x86_64-elf-gcc` (which builds 32-bit with -m32). The matching binutils `ld`,
-# `ar`, `strip`, and `objcopy` are derived from its name. The host FUSE tools in
-# krffs/ build with the *host* compiler and deliberately do NOT include this
-# file.
+# It reads the architecture from mk/arch.mk, which it includes, and picks that
+# architecture's freestanding cross GCC: `i686-elf-gcc` for i686 and
+# `x86_64-elf-gcc` for x86_64. The matching binutils `ld`, `ar`, `strip`, and
+# `objcopy` are derived from its name. The host FUSE tools in krffs/ build with
+# the *host* compiler and deliberately do NOT include this file.
 #
-# The fallback serves a STANDALONE component build (`make -C rach2`, `make -C
-# ish`), which reaches no vendored userland. A whole-tree `make` needs
-# i686-elf-gcc on the path whatever this selects: vendor/musl/build_libc.sh
-# configures with CROSS_COMPILE=i686-elf-, both muslgcc wrappers call
-# i686-elf-gcc by name, and neither reads CROSS_CC. tools/setup/preflight.sh
-# requires the i686-elf binutils for that reason, so a whole-tree build on a
-# machine with only x86_64-elf-gcc stops there, named, rather than failing
-# later inside musl.
+# The prefix is the architecture's and nothing else's. An x86_64-elf-gcc given
+# -m32 compiles i386 code, but it has no 32-bit libgcc, and the vendored ports
+# call their toolchain by the prefix mk/arch.sh gives them, so a build of
+# one architecture with the other's compiler would fail part way, in musl.
+# tools/setup/preflight.sh requires the toolchain of the ARCH in force, so a
+# missing one stops the build there, named.
 #
 # Override on the command line if your toolchain is named differently, e.g.
 #   make CROSS_CC=/path/to/i686-elf-gcc
@@ -24,16 +22,15 @@
 # CROSS_CC : the freestanding cross C compiler
 # CROSS_LD : the matching linker (used for the kernel's `-T link.ld` link)
 # CROSS_AR / CROSS_STRIP / CROSS_OBJCOPY : the matching binutils
+include $(dir $(lastword $(MAKEFILE_LIST)))arch.mk
 
 # $(or ...) returns the first non-empty: a caller-supplied CROSS_CC wins; then
 # an explicit command-line `make CC=...` (so the conventional knob works too,
 # but NOT an incidental environment CC=clang, which is not a cross GCC); then
-# i686-elf-gcc, then x86_64-elf-gcc. ($(or) short-circuits, so a later probe
-# runs only if needed.)
+# the architecture's compiler found on the path.
 CROSS_CC := $(or $(CROSS_CC),\
                  $(if $(filter command line,$(origin CC)),$(CC)),\
-                 $(shell command -v i686-elf-gcc 2>/dev/null),\
-                 $(shell command -v x86_64-elf-gcc 2>/dev/null))
+                 $(shell command -v $(CROSS_PREFIX)gcc 2>/dev/null))
 
 # Fail fast with an actionable message, not later running an empty
 # compiler as a command. Only `clean` needs no toolchain, so error for a default
@@ -43,7 +40,7 @@ CROSS_CC := $(or $(CROSS_CC),\
 # goal list. `sh tools/setup/doctor.sh` explains how to install the toolchain.
 ifeq ($(strip $(CROSS_CC)),)
 ifneq ($(filter-out clean,$(or $(MAKECMDGOALS),build)),)
-$(error no cross compiler found: install i686-elf-gcc (or x86_64-elf-gcc), or pass CROSS_CC=/path/to/gcc; see `sh tools/setup/doctor.sh`)
+$(error no cross compiler found for ARCH=$(ARCH): install $(CROSS_PREFIX)gcc, or pass CROSS_CC=/path/to/gcc; see `sh tools/setup/doctor.sh`)
 endif
 endif
 

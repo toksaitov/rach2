@@ -1,7 +1,8 @@
 The kernel's partition nodes are raw windows: whole 512-byte sectors at
 sector-aligned offsets, and BLKGETSIZE and BLKGETSIZE64 for the size. The
-compiler behind muslgcc is i686-elf-gcc and defines no operating-system
-macro, so the wrapper defines __rach2__, and this patch takes it in the two
+compiler behind muslgcc, i686-elf-gcc or x86_64-elf-gcc, defines no
+operating-system macro, so the wrapper defines __rach2__ for this port, and
+this patch takes it in the two
 places the library decides how to reach a device: getsize.c defines the two
 size requests, which it otherwise does only under __linux__, and without
 them sizes a device by reading single bytes at offsets; unix_io.c aligns

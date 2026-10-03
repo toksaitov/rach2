@@ -1,0 +1,41 @@
+#!/bin/sh
+# muslgcc: wrap the bare cross compiler of the architecture mk/arch.sh
+# names, i686-elf-gcc or x86_64-elf-gcc, to build a vendored port against the
+# ported musl of that architecture (vendor/musl/install, or
+# build/x86_64/vendor-work/musl/install). BusyBox, Dropbear, e2fsprogs, TinyCC and
+# pdpmake all compile through it. Three modes: a compile (-c/-S/-E) just adds
+# the musl headers; a partial/relocatable link (-r, busybox's built-in.o
+# merge) adds the headers but NO crt/libs (else crt would be merged into
+# built-in.o and then clash at the final link); a final link injects the musl
+# crt objects, the lib search path, libc.a and libgcc (the tests/musl/build.sh
+# recipe).
+# The -fno- and -no-pie flags turn off what a distribution's GCC adds by
+# default, unwind tables, the stack protector, control-flow protection and
+# PIE, so a bare cross GCC and the archive's cross GCC build the same
+# binary; --build-id=none keeps its note out of a fixed-address link.
+# MUSLGCC_DEFINES, when a build script sets it, is added to a compile and a
+# final link: e2fsprogs's patches test __rach2__, which it defines there.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
+. "$REPO/mk/arch.sh"
+PREFIX="$MUSL_PREFIX"
+GCC="${CROSS}gcc"
+MODE='link'
+for a in "$@"; do
+  case "$a" in
+    -c|-S|-E|-M|-MM) MODE=compile ;;
+    -r) MODE=partial ;;
+  esac
+done
+# The flags in variables are lists of words, empty or one each.
+# shellcheck disable=SC2086
+case "$MODE" in
+  compile) exec "$GCC" $MFLAG -fno-asynchronous-unwind-tables -fno-unwind-tables -fno-stack-protector -fno-stack-clash-protection -fcf-protection=none -fno-pie $MUSLGCC_DEFINES -isystem "$PREFIX/include" "$@" ;;
+  partial) exec "$GCC" $MFLAG -isystem "$PREFIX/include" -nostdlib "$@" ;;
+  *)
+    LIBGCC=$("$GCC" -print-libgcc-file-name)
+    exec "$GCC" $MFLAG -fno-asynchronous-unwind-tables -fno-unwind-tables -fno-stack-protector -fno-stack-clash-protection -fcf-protection=none -fno-pie -no-pie -Wl,--build-id=none $ARCH_LDFLAGS $MUSLGCC_DEFINES -isystem "$PREFIX/include" -nostdlib -nostartfiles -static \
+         -L "$PREFIX/lib" \
+         "$PREFIX/lib/crt1.o" "$PREFIX/lib/crti.o" "$@" \
+         "$PREFIX/lib/libc.a" "$LIBGCC" "$PREFIX/lib/crtn.o" ;;
+esac

@@ -18,23 +18,30 @@
 # non-login shell, an SSH command, or a direct exec, so a make started any other
 # way would ask tcc for a dynamic link and be refused by tcc's own policy.
 #
-# Usage: ./build_pdpmake.sh
+# The architecture is RACH2_ARCH's (mk/arch.sh); an x86-64 build extracts
+# into build/x86_64/vendor-work/pdpmake/ and stages under
+# build/x86_64/vendor/pdpmake/.
+#
+# Usage: RACH2_ARCH=i686|x86_64 ./build_pdpmake.sh
 #
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
+. "$REPO/mk/arch.sh"
 cd "$SCRIPT_DIR"
 
 VERSION="2.0.4"
 TARBALL="pdpmake-${VERSION}.tgz"
-SRC="pdpmake-${VERSION}"
-PREFIX="$SCRIPT_DIR/../musl/install"
-WRAP="$SCRIPT_DIR/../busybox/muslgcc"
+WORK="$ARCH_VENDOR/pdpmake"
+SRC="$WORK/pdpmake-${VERSION}"
+PREFIX="$MUSL_PREFIX"
+WRAP="$SCRIPT_DIR/../musl/muslgcc"
 # Out-of-tree staging dir, mirroring the source path vendor/pdpmake/
 # (mk/build.mk). Under build/ so a routine `make clean` never reaches it; only
 # `make distclean` forces this rebuild.
-STAGE="$(cd "$SCRIPT_DIR/../.." && pwd)/build/vendor/pdpmake"
+STAGE="$ARCH_BUILD/vendor/pdpmake"
 
 # Pinned sha256 of the vendored tarball (published on frippery.org/make). The
 # build refuses to proceed if the tarball does not match; the version is locked.
@@ -72,9 +79,10 @@ if [ "$GOT" != "$TARBALL_SHA256" ]; then
     exit 1
 fi
 
-echo "pdpmake: extracting"
+echo "pdpmake: extracting into $WORK"
 rm -rf "$SRC"
-tar xzf "$TARBALL"
+mkdir -p "$WORK"
+tar xzf "$TARBALL" -C "$WORK"
 
 # The platform patch is REQUIRED, not discovered. A missing patch directory or an
 # empty glob would build quietly and ship a make whose default rules call a
@@ -106,22 +114,22 @@ if grep -q '"CC=c99' "$SRC/rules.c" || grep -q '"CC=c17' "$SRC/rules.c" ||
     exit 1
 fi
 
-echo "pdpmake: building (static, musl, i386)"
+echo "pdpmake: building (static, musl, $RACH2_ARCH)"
 mkdir -p "$STAGE"
 (cd "$SRC" && make CC="$WRAP" LDFLAGS="-static" >/dev/null)
 
 cp "$SRC/make" "$STAGE/make"
 
 # Judged against what this kernel will actually load, the way tcc's own build
-# judges its output: `file(1)` calls a dynamic i386 binary and a static one the
-# same thing, and this loader does not.
+# judges its output: `file(1)` calls a dynamic binary and a static one the same
+# thing, and this loader does not.
 echo "pdpmake: checking the result is loadable by this kernel"
 ELFCHECK="$SCRIPT_DIR/../../build/tools/inspect/elfcheck"
 if [ ! -x "$ELFCHECK" ] || [ "$SCRIPT_DIR/../../tools/inspect/elfcheck.c" -nt "$ELFCHECK" ]; then
     mkdir -p "${ELFCHECK%/*}"
     cc -O2 -o "$ELFCHECK" "$SCRIPT_DIR/../../tools/inspect/elfcheck.c"
 fi
-"$ELFCHECK" "$STAGE/make"
+"$ELFCHECK" --arch "$RACH2_ARCH" "$STAGE/make"
 
-echo "pdpmake: built $VERSION ($(wc -c < "$STAGE/make") bytes, static, musl, i386)"
+echo "pdpmake: built $VERSION ($(wc -c < "$STAGE/make") bytes, static, musl, $RACH2_ARCH)"
 echo "pdpmake: rebuild the os-real image (make os-real-image) to install it"

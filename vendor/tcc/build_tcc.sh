@@ -4,15 +4,19 @@
 # build_tcc.sh: build the Tiny C Compiler for Rach2 from the pinned, vendored
 # tarball, so the machine can compile a program on itself.
 #
-# The result is a static i386 executable that RUNS on Rach2 and COMPILES for
-# Rach2. Both halves of that sentence have to be arranged, and the arranging is
-# what most of this script is: tcc's configure decides what it is building for
-# from the machine it is building on, and this machine is neither.
+# The result is a static executable that RUNS on Rach2 and COMPILES for Rach2,
+# for the architecture in RACH2_ARCH (mk/arch.sh): an i386 compiler on
+# i686 Rach2, an x86-64 one on x86-64 Rach2, each the machine's native
+# compiler. Both halves of that sentence have to be arranged, and the arranging
+# is what most of this script is: tcc's configure decides what it is building
+# for from the machine it is building on, and this machine is neither. An
+# x86-64 build extracts into build/x86_64/vendor-work/tcc/ and stages under
+# build/x86_64/vendor/tcc/.
 #
 # Three decisions, each read out of the tarball rather than guessed:
 #
 # A cross prefix, always. With an empty one, configure calls itself native and
-# RUNS the conftest it just built (configure:309-316); our compiler emits i386
+# RUNS the conftest it just built (configure:309-316); our compiler emits
 # Rach2 binaries, which the build host cannot run. So a toolchain directory is
 # written here holding rach2-gcc (the musl wrapper), rach2-ar and rach2-strip,
 # and configure is given --cross-prefix pointing at it. That also routes every
@@ -43,24 +47,41 @@
 # which musl does not have. Without the flag the runtime does not build at all.
 # The cost is that `tcc -b`, bounds checking, is not available on this machine.
 #
-# Usage: ./build_tcc.sh
+# Usage: RACH2_ARCH=i686|x86_64 ./build_tcc.sh
 #
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
+. "$REPO/mk/arch.sh"
 cd "$SCRIPT_DIR"
 
 VERSION="0.9.27"
 TARBALL="tcc-${VERSION}.tar.bz2"
-SRC="tcc-${VERSION}"
-PREFIX="$SCRIPT_DIR/../musl/install"
-WRAP="$SCRIPT_DIR/../busybox/muslgcc"
+WORK="$ARCH_VENDOR/tcc"
+SRC="$WORK/tcc-${VERSION}"
+PREFIX="$MUSL_PREFIX"
+WRAP="$SCRIPT_DIR/../musl/muslgcc"
 # Out-of-tree staging dir, mirroring the source path vendor/tcc/ (mk/build.mk).
 # It lives under build/ so a routine `make clean` never reaches it; only `make
 # distclean` (which removes build/vendor) forces this rebuild.
-STAGE="$(cd "$SCRIPT_DIR/../.." && pwd)/build/vendor/tcc"
+STAGE="$ARCH_BUILD/vendor/tcc"
 TOOLS="$STAGE/toolchain"
+
+# tcc's name for the CPU, which is configure's --cpu, config.mak's ARCH and the
+# prefix of lib/Makefile's runtime target; and the libgcc helpers the guest's
+# libc references, which the runtime takes (see below).
+case "$RACH2_ARCH" in
+    i686)
+        TCC_CPU=i386
+        LIBGCC_HELPERS="_udivmoddi4.o _divmoddi4.o _mulxc3.o"
+        ;;
+    x86_64)
+        TCC_CPU=x86_64
+        LIBGCC_HELPERS="_mulsc3.o _muldc3.o _mulxc3.o"
+        ;;
+esac
 
 # Pinned sha256 of the vendored tarball (published on savannah.gnu.org). The
 # build refuses to proceed if the tarball does not match; the version is locked.
@@ -99,9 +120,10 @@ if [ "$GOT" != "$TARBALL_SHA256" ]; then
     exit 1
 fi
 
-echo "tcc: extracting"
+echo "tcc: extracting into $WORK"
 rm -rf "$SRC"
-tar xf "$TARBALL"
+mkdir -p "$WORK"
+tar xf "$TARBALL" -C "$WORK"
 
 # The one change this project makes to somebody else's compiler: it refuses the
 # output kinds this system cannot run. A patch applied here rather than an
@@ -110,7 +132,7 @@ tar xf "$TARBALL"
 # a build that stops: silently shipping an unpatched compiler would ship one
 # that accepts `-run` and dies strangely.
 echo "tcc: applying the output policy"
-if ! (cd "$SRC" && patch -p1 --batch --forward < ../rach2-output-policy.patch >/dev/null); then
+if ! (cd "$SRC" && patch -p1 --batch --forward < "$SCRIPT_DIR/rach2-output-policy.patch" >/dev/null); then
     echo "tcc: rach2-output-policy.patch did not apply to $SRC" >&2
     exit 1
 fi
@@ -130,21 +152,21 @@ cat > "$TOOLS/rach2-gcc" <<EOF
 #!/bin/sh
 exec "$WRAP" "\$@"
 EOF
-cat > "$TOOLS/rach2-ar" <<'EOF'
+cat > "$TOOLS/rach2-ar" <<EOF
 #!/bin/sh
-exec i686-elf-ar "$@"
+exec ${CROSS}ar "\$@"
 EOF
-cat > "$TOOLS/rach2-strip" <<'EOF'
+cat > "$TOOLS/rach2-strip" <<EOF
 #!/bin/sh
-exec i686-elf-strip "$@"
+exec ${CROSS}strip "\$@"
 EOF
 chmod 0755 "$TOOLS/rach2-gcc" "$TOOLS/rach2-ar" "$TOOLS/rach2-strip"
 
-echo "tcc: configuring for i386, with the guest's own paths"
+echo "tcc: configuring for $TCC_CPU, with the guest's own paths"
 (
     cd "$SRC"
     ./configure \
-        --cpu=i386 \
+        --cpu="$TCC_CPU" \
         --config-musl \
         --cross-prefix="$TOOLS/rach2-" \
         --tccdir="$GUEST_TCCDIR" \
@@ -156,8 +178,8 @@ echo "tcc: configuring for i386, with the guest's own paths"
 
 # On a Mac, configure has just written TARGETOS=Darwin and CONFIG_OSX=yes into
 # config.mak, and the Makefile turns those into -DTCC_TARGET_MACHO and a target
-# named i386-osx. Both are corrected in the file rather than only on the make
-# command line, so that what config.mak says is what the build does, and so the
+# named i386-osx or x86_64-osx. Both are corrected in the file rather than only
+# on the make command line, so that what config.mak says is what the build does, and so the
 # libtcc1 target below keeps the name this script uses.
 sed -e 's/^TARGETOS=.*/TARGETOS=Linux/' -e '/^CONFIG_OSX=/d' \
     "$SRC/config.mak" > "$SRC/config.mak.rach2"
@@ -167,8 +189,8 @@ mv "$SRC/config.mak.rach2" "$SRC/config.mak"
 # build produces code for; the guest paths are the ones the compiler will look
 # in when it runs on the machine; no CONFIG_OSX is what keeps the Makefile from
 # defining TCC_TARGET_MACHO.
-if ! grep -q '^ARCH=i386$' "$SRC/config.mak"; then
-    echo "tcc: configure did not select i386; config.mak says:" >&2
+if ! grep -q "^ARCH=$TCC_CPU\$" "$SRC/config.mak"; then
+    echo "tcc: configure did not select $TCC_CPU; config.mak says:" >&2
     grep '^ARCH=' "$SRC/config.mak" >&2 || true
     exit 1
 fi
@@ -191,34 +213,39 @@ make -C "$SRC" \
 # was just built. lib/Makefile honors this knob; the target name is the ARCH
 # asserted above.
 echo "tcc: building libtcc1.a with the cross gcc"
-make -C "$SRC" TARGETOS=Linux CONFIG_OSX= i386-libtcc1-usegcc=yes libtcc1.a >/dev/null
+make -C "$SRC" TARGETOS=Linux CONFIG_OSX= "$TCC_CPU-libtcc1-usegcc=yes" libtcc1.a >/dev/null
 
 # The runtime has to answer what the guest's libc ASKS FOR, and the guest's libc
-# was compiled by gcc, which emits calls to helpers that live in libgcc: musl's
-# vfprintf wants __udivmoddi4, __secs_to_tm wants __divmoddi4, cpowl wants
-# __mulxc3. tcc's own runtime defines the first only as a file-local symbol and
-# the other two not at all, because tcc's code generator never emits those
-# calls; on the host the muslgcc wrapper appends libgcc and the question never
-# comes up. In the guest there is no libgcc, so the three objects are taken from
-# the same compiler that built musl and added to the runtime archive.
+# was compiled by gcc, which emits calls to helpers that live in libgcc. On
+# i386, musl's vfprintf wants __udivmoddi4, __secs_to_tm wants __divmoddi4,
+# cpowl wants __mulxc3. On x86-64 a 64-bit division is one instruction and
+# needs no helper, and the complex powers want the multiplications of all
+# three widths: cpowf __mulsc3, cpow __muldc3, cpowl __mulxc3. tcc's own
+# runtime defines __udivmoddi4 only as a file-local symbol and the others not
+# at all, because tcc's code generator never emits those calls; on the host
+# the muslgcc wrapper appends libgcc and the question never comes up. In the
+# guest there is no libgcc, so the objects are taken from the same compiler
+# that built musl and added to the runtime archive.
 #
 # The list is written out rather than computed, and then CHECKED: if musl ever
-# references a fourth, the assertion below says so instead of a student meeting
+# references another, the assertion below says so instead of a student meeting
 # an undefined symbol at their first link.
 echo "tcc: adding the libgcc helpers musl references to libtcc1.a"
-LIBGCC="$(i686-elf-gcc -m32 -print-libgcc-file-name)"
+LIBGCC="$("${CROSS}gcc" $MFLAG -print-libgcc-file-name)"
 (
     cd "$SRC"
     rm -rf rach2-libgcc
     mkdir rach2-libgcc
     cd rach2-libgcc
-    i686-elf-ar x "$LIBGCC" _udivmoddi4.o _divmoddi4.o _mulxc3.o
-    i686-elf-ar rcs ../libtcc1.a _udivmoddi4.o _divmoddi4.o _mulxc3.o
+    # shellcheck disable=SC2086 # the helpers are a list of words
+    "${CROSS}ar" x "$LIBGCC" $LIBGCC_HELPERS
+    # shellcheck disable=SC2086
+    "${CROSS}ar" rcs ../libtcc1.a $LIBGCC_HELPERS
 )
 
 mkdir -p "$STAGE" "$STAGE/include"
-echo "tcc: staging to build/vendor/tcc"
-i686-elf-strip "$SRC/tcc" -o "$STAGE/tcc"
+echo "tcc: staging to $STAGE"
+"${CROSS}strip" "$SRC/tcc" -o "$STAGE/tcc"
 cp "$SRC/libtcc1.a" "$STAGE/libtcc1.a"
 # tcc's own headers, which must be found BEFORE musl's: musl expects the
 # compiler to provide stdarg.h and friends, and tcc with musl's copies ahead of
@@ -230,9 +257,9 @@ done
 # Nothing the guest's libc asks for may be left for the guest to discover. The
 # question is asked of the artifacts that will actually be staged.
 echo "tcc: checking the guest can link against what it will carry"
-sh "$SCRIPT_DIR/../../tools/inspect/check_link.sh" \
+CHECK_LINK_NM="${CROSS}nm" sh "$SCRIPT_DIR/../../tools/inspect/check_link.sh" \
     "$PREFIX/lib/libc.a" "$STAGE/libtcc1.a" \
     "$PREFIX/lib/crt1.o" "$PREFIX/lib/crti.o" "$PREFIX/lib/crtn.o"
 
-echo "tcc: built $VERSION ($(wc -c < "$STAGE/tcc") bytes, static, musl, i386, targeting i386)"
+echo "tcc: built $VERSION ($(wc -c < "$STAGE/tcc") bytes, static, musl, $TCC_CPU, targeting $TCC_CPU)"
 echo "tcc: rebuild the os-real image (make os-real-image) to install it"

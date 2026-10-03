@@ -1,10 +1,11 @@
 # Rach2 Syscall Test Programs Makefile
 #
-# Builds freestanding ELF32 executables for testing kernel syscalls. They run in
-# user mode on the Rach2 kernel. The one exception is dnstest, which links the
-# ported musl (like the utils) so it and the shared resolver it pulls in
-# (utils/resolv.c) use the real libc rather than hand-rolled int 0x80; see its
-# rule below.
+# Builds freestanding executables for testing kernel syscalls, for the
+# architecture mk/arch.mk names, into build/tests/ or build/x86_64/tests/. They
+# run in user mode on the Rach2 kernel. The one exception is dnstest, which
+# links the ported musl (like the utils) so it and the shared resolver it pulls
+# in (utils/resolv.c) use the real libc rather than hand-rolled system calls;
+# see its rule below.
 
 # Shared cross toolchain + automatic header-dependency tracking (see ../mk/).
 include ../mk/toolchain.mk
@@ -12,21 +13,21 @@ include ../mk/deps.mk
 include ../mk/build.mk
 CC := $(CROSS_CC)
 
-CFLAGS = -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 -Wl,--build-id=none $(DEPFLAGS)
+CFLAGS = $(ARCH_CFLAGS) -nostdlib -static -ffreestanding -Wl,-Ttext=$(ARCH_USER_TEXT) -Wl,--build-id=none $(ARCH_LDFLAGS) $(DEPFLAGS)
 # Flags an analysis adds from the command line (tools/verify/analyze.sh).
 EXTRA ?=
 CFLAGS += $(EXTRA)
 
-# The musl link for dnstest: i686-elf-gcc specifically (for the 32-bit libgcc),
-# the ported musl headers and crt objects, exactly as utils/Makefile links.
-MUSL_CC     := $(or $(shell command -v i686-elf-gcc 2>/dev/null),$(CROSS_CC))
-MUSL_PREFIX := ../vendor/musl/install
-MUSL_LIBGCC := $(shell $(MUSL_CC) -m32 -print-libgcc-file-name)
-MUSL_CFLAGS  = -m32 -static -nostdlib -nostartfiles -isystem $(MUSL_PREFIX)/include \
+# The musl link for dnstest: the architecture's compiler (for its libgcc), the
+# ported musl headers and crt objects, exactly as utils/Makefile links.
+MUSL_CC     := $(CROSS_CC)
+MUSL_PREFIX := $(TOP)/$(ARCH_MUSL)
+MUSL_LIBGCC := $(shell $(MUSL_CC) $(ARCH_CFLAGS) -print-libgcc-file-name)
+MUSL_CFLAGS  = $(ARCH_CFLAGS) -static -nostdlib -nostartfiles -isystem $(MUSL_PREFIX)/include \
                -O2 -Wall -Wextra $(DEPFLAGS)
 MUSL_PRE     = $(MUSL_PREFIX)/lib/crt1.o $(MUSL_PREFIX)/lib/crti.o
 MUSL_POST    = $(MUSL_PREFIX)/lib/libc.a $(MUSL_LIBGCC) $(MUSL_PREFIX)/lib/crtn.o \
-               -Wl,-z,noexecstack
+               -Wl,-z,noexecstack $(ARCH_LDFLAGS)
 
 # All test programs
 PROGS = hello filetest forktest shelltest dirtest stattest usbprobe mouseprobe intrprobe keylatprobe \

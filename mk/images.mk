@@ -32,18 +32,18 @@ $(MKEXFATFIXTURE): tests/host/mkexfatfixture.c tests/host/exfat_upcase.inc
 # each embeds its kernel and RAM image as GRUB modules under the pinned GRUB
 # artifacts. The recovery ISO takes the recovery image's name, with the key
 # tag when this tree has a key.
-build/images/rach2-metal.iso: $(METAL_KERNEL) $(METAL_IMAGE) tools/image/mkiso.sh
-	sh tools/image/mkiso.sh rach2-metal
+$(IMAGES_DIR)/rach2-metal.iso: $(METAL_KERNEL) $(METAL_IMAGE) tools/image/mkiso.sh
+	RACH2_ARCH=$(ARCH) sh tools/image/mkiso.sh rach2-metal
 $(RECOVERY_ISO): $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) tools/image/mkiso.sh tools/image/keyname.sh
 	@sh tools/image/keyname.sh $@
-	sh tools/image/mkiso.sh $(RECOVERY_NAME)
+	RACH2_ARCH=$(ARCH) sh tools/image/mkiso.sh $(RECOVERY_NAME)
 
 # The stick image (tools/image/mkstick.sh): the metal hybrid ISO followed by
 # an exFAT volume, judged whole by stickcheck and walked by mkexfatfixture.
 STICK_IMAGE = $(IMAGES_DIR)/rach2-stick.img
 rach2-stick-image: $(STICK_IMAGE)
-$(STICK_IMAGE): build/images/rach2-metal.iso tools/image/mkstick.sh $(MKEXFATFIXTURE) $(MKMBR) $(STICKCHECK)
-	sh tools/image/mkstick.sh build/images/rach2-metal.iso $@ $(MKEXFATFIXTURE) $(MKMBR) $(STICKCHECK)
+$(STICK_IMAGE): $(IMAGES_DIR)/rach2-metal.iso tools/image/mkstick.sh $(MKEXFATFIXTURE) $(MKMBR) $(STICKCHECK)
+	sh tools/image/mkstick.sh $(IMAGES_DIR)/rach2-metal.iso $@ $(MKEXFATFIXTURE) $(MKMBR) $(STICKCHECK)
 
 # The install stick (tools/image/mkinstallstick.sh): the recovery ISO followed
 # by an exFAT volume with the sealed disk, its manifest, the root update image

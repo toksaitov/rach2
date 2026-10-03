@@ -123,7 +123,7 @@ check_phase()
 check_phase fixed || exit 1
 if [ "$mutate" -eq 1 ]; then
     awk '
-        /^\$\(filter-out build\/tests\/musl\/%.*: tests$/ { found++; skip = 1; next }
+        /^\$\(filter-out \$\(ARCH_BUILD\)\/tests\/musl\/%.*: tests$/ { found++; skip = 1; next }
         skip && /^\t/ { next }
         { skip = 0; print }
         END { if (found != 1) exit 1 }

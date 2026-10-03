@@ -1,22 +1,19 @@
 # ISH Shell Makefile (Linux)
 #
 # Builds shell for Linux using cross-compiler.
-# Usage: make -f Makefile.linux
+# Usage: make -f Makefile.linux [ARCH=x86_64]
 #
-# Builds out of tree, into build/ish/linux/ (its own subdir, distinct from the main
-# build's build/ish/). See ../mk/build.mk.
+# Builds out of tree, into build/ish/linux/, or build/x86_64/ish/linux/ (its own
+# subdir, distinct from the main build's build/ish/). See ../mk/build.mk. The
+# compiler is the architecture's (mk/toolchain.mk).
 
 COMPONENT = ish/linux
+include ../mk/toolchain.mk
 include ../mk/build.mk
+CC := $(CROSS_CC)
 
-# Cross-compiler detection
-CC := $(shell command -v i686-elf-gcc 2>/dev/null)
-ifeq ($(CC),)
-CC := $(shell command -v x86_64-elf-gcc 2>/dev/null)
-endif
-
-CFLAGS = -m32 -ffreestanding
-LDFLAGS = -m32 -nostdlib -static
+CFLAGS = $(ARCH_CFLAGS) -ffreestanding
+LDFLAGS = $(ARCH_CFLAGS) -nostdlib -static $(ARCH_LDFLAGS)
 
 TARGET = $(BUILD)/ish
 

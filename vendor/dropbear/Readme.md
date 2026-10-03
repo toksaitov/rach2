@@ -2,7 +2,7 @@
 
 Rach2 uses a static Dropbear multi-call binary for the SSH server, client, and key generator. It is linked against the project [musl integration](../musl/Readme.md) and staged as `/bin/dropbearmulti`.
 
-The tracked integration has seven files: `.gitignore`, this Readme, `build_dropbear.sh`, `dropbear-2022.83.tar.bz2`, `localoptions.h`, a Dropbear-specific `muslgcc` wrapper, and the patch manifest `patches/series`, which is empty because there are no project source patches. The extracted source, staged binary, and stamp are ignored and reproducible.
+The tracked integration has six files: `.gitignore`, this Readme, `build_dropbear.sh`, `dropbear-2022.83.tar.bz2`, `localoptions.h`, and the patch manifest `patches/series`, which is empty because there are no project source patches. It compiles through the musl integration's `muslgcc` wrapper. The extracted source, staged binary, and stamp are ignored and reproducible.
 
 ## Build
 
@@ -10,21 +10,24 @@ From the repository root:
 
 ```
 make dropbear
+make dropbear ARCH=x86_64
 ```
 
-The root `make` also builds Dropbear through the same stamp. The stamp depends on the build script, archive, local options, wrapper, patch manifest and patches, and musl stamp. `make check-dropbearmulti` requires the staged binary to be nonempty.
+The build is for the architecture the root `make` names in `ARCH`: i686 by default, x86-64 with `make ARCH=x86_64`. The script reads it from `RACH2_ARCH` through `mk/arch.sh`, which gives the cross prefix, `i686-elf-` or `x86_64-elf-`, and the directories. An i686 build extracts here and stages under `build/vendor/dropbear/`; an x86-64 build extracts under `build/x86_64/vendor-work/dropbear/` and stages under `build/x86_64/vendor/dropbear/`. Each has its own stamp, so building one architecture leaves the other's files alone.
+
+The root `make` also builds Dropbear through the same stamp. The stamp depends on the build script, archive, local options, wrapper, `mk/arch.sh`, patch manifest and patches, and musl stamp. `make check-dropbearmulti` requires the staged binary to be nonempty.
 
 The build script:
 
 1. Requires `dropbear-2022.83.tar.bz2` to have SHA-256 `bc5a121ffbc94b5171ad5ebe01be42746d50aa797c9549a4639894a16749443b`.
 2. Replaces the extracted tree and copies `localoptions.h` into it.
-3. Configures for `i686-linux-musl` through `muslgcc`, with `i686-elf-ar` and `i686-elf-ranlib`.
+3. Configures for `i686-linux-musl` or `x86_64-linux-musl` through `muslgcc`, with the architecture's `ar` and `ranlib`.
 4. Uses bundled libtomcrypt and libtommath and disables zlib, syslog, hardening, utmp, utmpx, wtmp, wtmpx, lastlog, login functions, pututline, and pututxline.
-5. Builds `dropbear`, `dbclient`, and `dropbearkey` into one `MULTI=1 STATIC=1` executable, strips it, and stages `build/vendor/dropbear/dropbearmulti`.
+5. Builds `dropbear`, `dbclient`, and `dropbearkey` into one `MULTI=1 STATIC=1` executable, strips it, and stages `dropbearmulti`.
 
-The current artifact is a stripped static ELF32 i386 `ET_EXEC`. `--disable-harden` prevents Dropbear's configure script from adding PIE flags, which the Rach2 ELF loader cannot support.
+The artifact is a stripped static `ET_EXEC`, ELF32 i386 or ELF64 x86-64. `--disable-harden` prevents Dropbear's configure script from adding PIE flags, which the Rach2 ELF loader cannot support.
 
-The wrapper has compile, partial-link, and final-link modes. Final links add musl's startup objects, `libc.a`, 32-bit libgcc, and `crtn.o` in the required order.
+The wrapper has compile, partial-link, and final-link modes. Final links add musl's startup objects, `libc.a`, the architecture's libgcc, and `crtn.o` in the required order.
 
 ## Feature selection
 

@@ -16,21 +16,24 @@ Run the port through the root Makefile:
 
 ```
 make pdpmake
+make pdpmake ARCH=x86_64
 ```
 
-The stamp rule depends on the build script, the exact archive, the platform patch, the BusyBox musl compiler wrapper, and the installed musl libc. It removes the old stamp and staged executable before invoking `vendor/pdpmake/build_pdpmake.sh`. A failed build therefore leaves neither a trusted stamp nor a stale output.
+The build is for the architecture the root `make` names in `ARCH`: i686 by default, x86-64 with `make ARCH=x86_64`. The script reads it from `RACH2_ARCH` through `mk/arch.sh`. An x86-64 build extracts under `build/x86_64/vendor-work/pdpmake/` and has its own stamp there.
+
+The stamp rule depends on the build script, the exact archive, the platform patch, the musl compiler wrapper, `mk/arch.sh`, and the installed musl libc. It removes the old stamp and staged executable before invoking `vendor/pdpmake/build_pdpmake.sh`. A failed build therefore leaves neither a trusted stamp nor a stale output.
 
 The script performs these steps:
 
 1. Verify the archive digest.
-2. Replace the extracted `vendor/pdpmake/pdpmake-2.0.4/` tree.
+2. Replace the extracted `pdpmake-2.0.4/` tree.
 3. Apply `patches/0001-platform-macros.patch` with no fuzz.
 4. Check the patched built-in macros.
-5. Build with `vendor/busybox/muslgcc` and `LDFLAGS=-static`.
-6. Copy the executable to `build/vendor/pdpmake/make`.
-7. Pass the staged executable to the project ELF validator (`tools/inspect/elfcheck.c`).
+5. Build with `vendor/musl/muslgcc` and `LDFLAGS=-static`.
+6. Copy the executable to `build/vendor/pdpmake/make`, or `build/x86_64/vendor/pdpmake/make` for x86-64.
+7. Pass the staged executable to the project ELF validator (`tools/inspect/elfcheck.c`) with the architecture's `--arch`.
 
-The output is a static ELF32 i386 executable. The os-real, GRUB-test, and metal-disk manifests install it as `/bin/make`.
+The output is a static executable, ELF32 i386 or ELF64 x86-64. The os-real, GRUB-test, and metal-disk manifests install it as `/bin/make`.
 
 ## Platform macros
 

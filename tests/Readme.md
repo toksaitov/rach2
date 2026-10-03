@@ -28,9 +28,9 @@ make musl-programs  # build every tests/musl/*.c program
 make test-image     # build both sets and stage build/images/test.krffs
 ```
 
-`tests/Makefile` compiles the root programs as static, freestanding ELF32 executables under `build/tests/`. `dnstest` is the exception: it links the ported musl and `utils/resolv.c`. Its rule requires `i686-elf-gcc` and the installed musl sysroot.
+`tests/Makefile` compiles the root programs as static, freestanding executables of the architecture `ARCH` names (`mk/arch.mk`): ELF32 i386 under `build/tests/`, or ELF64 x86-64 under `build/x86_64/tests/` with `make -C tests ARCH=x86_64`. `dnstest` is the exception: it links the ported musl and `utils/resolv.c`. Its rule requires the architecture's compiler and installed musl sysroot. The probe sources issue i386 system calls, so an x86-64 build compiles only some of them, and those it compiles are not yet x86-64 programs.
 
-`tests/musl/build.sh` uses `i686-elf-gcc` and builds every `tests/musl/*.c` file under `build/tests/musl/`. A program that needs another project source lists it in a `link-deps:` line. The declaration may be repeated but may not wrap. The script rejects an absent dependency before invoking the compiler.
+`tests/musl/build.sh` uses `i686-elf-gcc` and builds every `tests/musl/*.c` file under `build/tests/musl/`; it builds for i686 alone, and `make musl-programs ARCH=x86_64` stops and says so. A program that needs another project source lists it in a `link-deps:` line. The declaration may be repeated but may not wrap. The script rejects an absent dependency before invoking the compiler.
 
 `krffs/manifests/test.manifest` stages every root executable at `/name` and every musl executable at `/musl/name`. It also stages ISH, `echo`, account files, name-service files, and the fixtures that need specific modes or owners. The image has no `/sbin/init`, so the kernel starts its debug shell and can run each program as a transient init process.
 

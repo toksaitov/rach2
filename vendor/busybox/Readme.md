@@ -2,7 +2,7 @@
 
 Rach2 uses a static BusyBox as the os-real shell and general command set. A second BusyBox contains only the three applets installed set-id root. Both are linked against the project [musl integration](../musl/Readme.md).
 
-The tracked integration has ten files: `.gitignore`, this Readme, `build_busybox.sh`, `busybox-1.36.1.tar.bz2`, `muslgcc`, two configs, two patches, and the [patch documentation](patches/Readme.md). The extracted source, six staged build artifacts, and stamp are ignored and reproducible.
+The tracked integration has nine files: `.gitignore`, this Readme, `build_busybox.sh`, `busybox-1.36.1.tar.bz2`, two configs, two patches, and the [patch documentation](patches/Readme.md). It compiles through the musl integration's `muslgcc` wrapper. The extracted source, six staged build artifacts, and stamp are ignored and reproducible.
 
 ## Build
 
@@ -10,15 +10,18 @@ From the repository root:
 
 ```
 make busybox
+make busybox ARCH=x86_64
 ```
 
-The root `make` also builds BusyBox through the same stamp. The stamp depends on the script, archive, wrapper, both configs, the musl stamp, the patch directory, and every current patch. The directory prerequisite makes adding or deleting the last patch invalidate the build.
+The build is for the architecture the root `make` names in `ARCH`: i686 by default, x86-64 with `make ARCH=x86_64`. The script reads it from `RACH2_ARCH` through `mk/arch.sh`, which gives the cross prefix, `i686-elf-` or `x86_64-elf-`, and the directories. An i686 build extracts here and stages under `build/vendor/busybox/`; an x86-64 build extracts under `build/x86_64/vendor-work/busybox/` and stages under `build/x86_64/vendor/busybox/`. Each has its own stamp, so building one architecture leaves the other's files alone.
+
+The root `make` also builds BusyBox through the same stamp. The stamp depends on the script, archive, wrapper, `mk/arch.sh`, both configs, the musl stamp, the patch directory, and every current patch. The directory prerequisite makes adding or deleting the last patch invalidate the build.
 
 The build script:
 
 1. Requires `busybox-1.36.1.tar.bz2` to have SHA-256 `b8cc24c9574d809e7279c3be349795c5d5ceb6fdf19ca709f80cde50e47de314`.
 2. Replaces the extracted tree and applies `patches/*.patch` in name order.
-3. Copies `rach2.config`, resolves it with `oldconfig`, and builds with `CROSS_COMPILE=i686-elf-`, `CC=muslgcc`, and `HOSTCC=cc`.
+3. Copies `rach2.config`, resolves it with `oldconfig`, and builds with `CROSS_COMPILE` set to the architecture's prefix, `CC=muslgcc`, and `HOSTCC=cc`.
 4. Strips and stages the main binary, generated applet table, and resolved config.
 5. Runs `mrproper`, repeats the build with `rach2-suid.config`, and stages the corresponding three artifacts.
 
@@ -33,16 +36,16 @@ build/vendor/busybox/config-main
 build/vendor/busybox/config-suid
 ```
 
-`make check-busybox` requires all six to be nonempty. The current binaries are stripped, static ELF32 i386 executables. `make clean` preserves them; `make distclean` removes them, the extracted tree, and the stamp.
+`make check-busybox` requires all six to be nonempty. The binaries are stripped, static executables: ELF32 i386, or ELF64 x86-64 under `build/x86_64/vendor/busybox/`. `make clean` preserves them; `make distclean` removes them, the extracted tree, and the stamp.
 
 ## Musl wrapper and patches
 
-`muslgcc` has three modes. Compilation adds `-m32` and the installed musl headers. A relocatable `-r` link also adds `-nostdlib` but no startup objects or libraries. A final link adds `crt1.o` and `crti.o` before caller objects, then `libc.a`, 32-bit libgcc, and `crtn.o`.
+`muslgcc` (`../musl/muslgcc`) has three modes. Compilation adds `-m32` or `-m64` and the installed musl headers. A relocatable `-r` link also adds `-nostdlib` but no startup objects or libraries. A final link adds `crt1.o` and `crti.o` before caller objects, then `libc.a`, the architecture's libgcc, and `crtn.o`.
 
 Two source patches are applied before either configuration:
 
 * `0001-udhcpc-build-against-musl.patch` replaces unavailable Linux packet headers with musl's packet header and supplies the auxiliary-data definitions that musl omits.
-* `0002-free-uptime-include-sysinfo.patch` includes musl's `sys/sysinfo.h` for `free` and `uptime`. The bare `i686-elf-gcc` target does not define `__linux__`, which guarded the upstream includes.
+* `0002-free-uptime-include-sysinfo.patch` includes musl's `sys/sysinfo.h` for `free` and `uptime`. The bare `i686-elf-gcc` and `x86_64-elf-gcc` targets do not define `__linux__`, which guarded the upstream includes.
 
 The [patch Readme](patches/Readme.md) owns the exact hunks and update checks.
 

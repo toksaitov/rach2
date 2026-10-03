@@ -1,7 +1,8 @@
 # ISH Shell Makefile (Rach2)
 #
-# Builds the shell for the Rach2 kernel (freestanding ELF32). For Linux builds,
-# use: make -f Makefile.linux
+# Builds the shell for the Rach2 kernel, a freestanding static executable of the
+# architecture mk/arch.mk names: ELF32 i386 into build/ish/, or ELF64 x86-64
+# into build/x86_64/ish/. For Linux builds, use: make -f Makefile.linux
 
 # Shared cross toolchain + automatic header-dependency tracking (see ../mk/).
 include ../mk/toolchain.mk
@@ -9,11 +10,13 @@ include ../mk/deps.mk
 include ../mk/build.mk
 CC := $(CROSS_CC)
 
-CFLAGS = -m32 -ffreestanding $(DEPFLAGS)
+CFLAGS = $(ARCH_CFLAGS) -ffreestanding $(DEPFLAGS)
 # Flags an analysis adds from the command line (tools/verify/analyze.sh).
 EXTRA ?=
 CFLAGS += $(EXTRA)
-LDFLAGS = -m32 -nostdlib -static -Wl,-Ttext=0x08048000 -Wl,--build-id=none
+# The text is placed where TinyCC places a program's on the architecture, so a
+# guest build of ish has the host build's layout (mk/arch.mk).
+LDFLAGS = $(ARCH_CFLAGS) -nostdlib -static -Wl,-Ttext=$(ARCH_USER_TEXT) -Wl,--build-id=none $(ARCH_LDFLAGS)
 
 # Everything builds out of tree under $(BUILD) (build/ish/, from mk/build.mk):
 # the objects and the ish binary the RAM-disk staging picks up. The source list

@@ -11,32 +11,31 @@
 # Linux host builds, use: make -f Makefile.linux
 
 # Shared header-dependency tracking + the toolchain guard (see ../mk/). The musl
-# utilities are special: they link the i686 libc AND a 32-bit libgcc that
-# build_libc.sh's i686-elf-gcc produced, so they need i686-elf-gcc specifically:
-# a non-multilib x86_64-elf-gcc cannot supply a 32-bit libgcc (the freestanding
-# components link no libgcc, so they use the generic CROSS_CC, which may be
-# x86_64-elf-gcc). So prefer i686-elf-gcc, falling back to CROSS_CC; -m32 is
-# then a no-op but keeps the i686 ABI explicit.
+# utilities link the ported libc of the architecture mk/arch.mk names AND the
+# libgcc of the compiler that built it, so they take that architecture's
+# compiler, which mk/toolchain.mk gives as CROSS_CC: i686-elf-gcc, whose -m32
+# is a no-op but keeps the i686 ABI explicit, or x86_64-elf-gcc with -m64. The
+# programs land in build/utils/, or build/x86_64/utils/ (mk/build.mk).
 include ../mk/toolchain.mk
 include ../mk/deps.mk
 include ../mk/build.mk
-CC := $(or $(shell command -v i686-elf-gcc 2>/dev/null),$(CROSS_CC))
+CC := $(CROSS_CC)
 
 # Ported musl install tree (headers + static libc.a + crt objects).
-PREFIX  := ../vendor/musl/install
-LIBGCC  := $(shell $(CC) -m32 -print-libgcc-file-name)
+PREFIX  := $(TOP)/$(ARCH_MUSL)
+LIBGCC  := $(shell $(CC) $(ARCH_CFLAGS) -print-libgcc-file-name)
 CRT1    := $(PREFIX)/lib/crt1.o
 CRTI    := $(PREFIX)/lib/crti.o
 CRTN    := $(PREFIX)/lib/crtn.o
 
-CFLAGS  = -m32 -static -nostdlib -nostartfiles -isystem $(PREFIX)/include \
+CFLAGS  = $(ARCH_CFLAGS) -static -nostdlib -nostartfiles -isystem $(PREFIX)/include \
           -O2 -Wall -Wextra $(DEPFLAGS)
 # Flags an analysis adds from the command line (tools/verify/analyze.sh).
 EXTRA ?=
 CFLAGS += $(EXTRA)
 # crt1/crti come before the program objects; libc + libgcc + crtn after.
 LINK_PRE  = $(CRT1) $(CRTI)
-LINK_POST = $(PREFIX)/lib/libc.a $(LIBGCC) $(CRTN) -Wl,-z,noexecstack
+LINK_POST = $(PREFIX)/lib/libc.a $(LIBGCC) $(CRTN) -Wl,-z,noexecstack $(ARCH_LDFLAGS)
 
 # The program lists and the per-program source map live in programs.mk, which
 # guest.mk includes too, so one file describes both builds.

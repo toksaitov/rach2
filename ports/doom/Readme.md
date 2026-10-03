@@ -1,6 +1,6 @@
 # Doom for Rach2
 
-This port runs Doom as a freestanding static ELF32 i386 program. It uses the doomgeneric engine with a Rach2 platform layer for VGA graphics, keyboard and mouse input, elapsed time, PCM sound, PC speaker sound, and synthesized music.
+This port runs Doom as a freestanding static program, ELF32 i386 or ELF64 x86-64. It uses the doomgeneric engine with a Rach2 platform layer for VGA graphics, keyboard and mouse input, elapsed time, PCM sound, PC speaker sound, and synthesized music.
 
 The engine sources under `src/` come from doomgeneric and its Doom ancestry. `midifile.c` and `mus2mid.c` are adapted from Chocolate Doom. `opl3.c` and `opl3.h` contain Nuked OPL3. The files above `src/`, the stub headers under `include/`, and the component Makefile form the Rach2 integration.
 
@@ -10,11 +10,12 @@ From the repository root, run:
 
 ```
 make ports/doom
+make ports/doom ARCH=x86_64
 ```
 
-The component Makefile uses `i686-elf-gcc` with GNU99, freestanding static i386 flags, local replacement headers, and a fixed text address of `0x08048000`. Header dependencies rebuild the affected objects. The output is `build/ports/doom/doom`.
+The component Makefile uses the architecture's compiler (`mk/arch.mk`), `i686-elf-gcc -m32` or `x86_64-elf-gcc -m64`, with GNU99, freestanding static flags, local replacement headers, and a fixed text address: `0x08048000` on i686 and `0x400000` on x86-64, where TinyCC places a program's. Header dependencies rebuild the affected objects. The output is `build/ports/doom/doom`, or `build/x86_64/ports/doom/doom`.
 
-The build contains `crt0.c`, six local platform and audio sources, and the 80 engine sources named by `DOOM_SRC`. `crt0.c` supplies `_start`, nine Linux i386-compatible syscall wrappers, the file interface used by the engine, a small libc subset, and a bump heap over the process's `brk` range, grown 64 KiB at a time. `free` does not reclaim memory.
+The build contains `crt0.c`, six local platform and audio sources, and the 80 engine sources named by `DOOM_SRC`. `crt0.c` supplies `_start`, nine Linux system call wrappers, written with `int $0x80` and the i386 numbers or with `syscall` and the x86-64 numbers, the file interface used by the engine, a small libc subset, and a bump heap over the process's `brk` range, grown 64 KiB at a time. `free` does not reclaim memory.
 
 The engine's zone stores game data. Its initial request is 16 MiB. The platform reads `MemFree` from `/proc/meminfo`, converts it to whole MiB and subtracts 8 MiB. The engine uses that suggestion only when it is at least 6 MiB and less than 16 MiB. A smaller suggestion leaves the request at 16 MiB: 13 MiB free suggests 5 MiB but requests 16 MiB. This is not a lower-bound clamp. If allocation fails, the engine retries in 1 MiB steps down to 6 MiB. The runtime reserves addresses through `brk`; physical pages are allocated on first access, so a successful allocation does not ensure enough physical memory for the zone. `-mb N` requests exactly N MiB without those retries.
 

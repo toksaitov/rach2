@@ -480,8 +480,8 @@ for fault in unlisted missing clean grub-target tools-late include-early plain-s
             row='images-include' ;;
         plain-sealed)
             copies="$C/Makefile=$WORK/Makefile.saved"
-            mutate "$C/Makefile" 'SEALED_DISK = build/images/rach2-sealed$(RECOVERY_KEY_TAG).disk' \
-                'SEALED_DISK = build/images/rach2-sealed.disk'
+            mutate "$C/Makefile" 'SEALED_DISK = $(IMAGES_DIR)/rach2-sealed$(RECOVERY_KEY_TAG).disk' \
+                'SEALED_DISK = $(IMAGES_DIR)/rach2-sealed.disk'
             row='key-names' ;;
         release)
             copies="$C/Makefile=$WORK/Makefile.saved"

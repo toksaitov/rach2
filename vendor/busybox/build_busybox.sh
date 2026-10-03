@@ -6,24 +6,30 @@
 # rach2.config, builds against the ported musl via the muslgcc wrapper, strips,
 # and stages the binary out of tree to build/vendor/busybox/busybox (staged into the
 # os-real RAM-disk image by its manifest). Run vendor/musl/build_libc.sh first.
+# The architecture is RACH2_ARCH's (mk/arch.sh); an x86-64 build extracts
+# into build/x86_64/vendor-work/busybox/ and stages under
+# build/x86_64/vendor/busybox/.
 #
-# Usage: ./build_busybox.sh
+# Usage: RACH2_ARCH=i686|x86_64 ./build_busybox.sh
 #
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
+. "$REPO/mk/arch.sh"
 cd "$SCRIPT_DIR"
 
 VERSION="1.36.1"
 TARBALL="busybox-${VERSION}.tar.bz2"
-SRC="busybox-${VERSION}"
-PREFIX="$SCRIPT_DIR/../musl/install"
-WRAP="$SCRIPT_DIR/muslgcc"
+WORK="$ARCH_VENDOR/busybox"
+SRC="$WORK/busybox-${VERSION}"
+PREFIX="$MUSL_PREFIX"
+WRAP="$SCRIPT_DIR/../musl/muslgcc"
 # Out-of-tree staging dir, mirroring the source path vendor/busybox/ (mk/build.mk).
 # It lives under build/ so a routine `make clean` never reaches it; only `make
 # distclean` (which removes build/vendor) forces this multi-minute rebuild.
-STAGE="$(cd "$SCRIPT_DIR/../.." && pwd)/build/vendor/busybox"
+STAGE="$ARCH_BUILD/vendor/busybox"
 
 # Pinned sha256 of the vendored tarball (published on busybox.net). The build
 # refuses to proceed if the tarball does not match; the version is locked.
@@ -57,9 +63,10 @@ if [ "$GOT" != "$TARBALL_SHA256" ]; then
     exit 1
 fi
 
-echo "busybox: extracting"
+echo "busybox: extracting into $WORK"
 rm -rf "$SRC"
-tar xjf "$TARBALL"
+mkdir -p "$WORK"
+tar xjf "$TARBALL" -C "$WORK"
 
 # Apply any curated patches, in order, before configuring. The vendored tree is
 # otherwise pristine; this is the escape hatch for the rare fix the config cannot
@@ -77,13 +84,13 @@ cp rach2.config "$SRC/.config"
 # Resolve any new/derived symbols against the pinned config, taking defaults.
 yes "" | make -C "$SRC" oldconfig HOSTCC=cc >/dev/null
 
-echo "busybox: building (CC=muslgcc, CROSS_COMPILE=i686-elf-, HOSTCC=cc)"
+echo "busybox: building (CC=muslgcc, CROSS_COMPILE=$CROSS, HOSTCC=cc)"
 make -C "$SRC" \
-    CROSS_COMPILE=i686-elf- CC="$WRAP" HOSTCC=cc SKIP_STRIP=y busybox
+    CROSS_COMPILE="$CROSS" CC="$WRAP" HOSTCC=cc SKIP_STRIP=y busybox
 
-echo "busybox: staging the stripped binary to build/vendor/busybox/busybox"
+echo "busybox: staging the stripped binary to $STAGE/busybox"
 mkdir -p "$STAGE"
-i686-elf-strip "$SRC/busybox" -o "$STAGE/busybox"
+"${CROSS}strip" "$SRC/busybox" -o "$STAGE/busybox"
 
 # The generated applet table goes with it. The set-id guard reads this copy and
 # not the one in the source tree, because that tree is deleted and re-extracted
@@ -114,12 +121,12 @@ yes "" | make -C "$SRC" oldconfig HOSTCC=cc >/dev/null
 
 echo "busybox: building the set-id binary"
 make -C "$SRC" \
-    CROSS_COMPILE=i686-elf- CC="$WRAP" HOSTCC=cc SKIP_STRIP=y busybox
+    CROSS_COMPILE="$CROSS" CC="$WRAP" HOSTCC=cc SKIP_STRIP=y busybox
 
-echo "busybox: staging the set-id binary to build/vendor/busybox/busybox-suid"
-i686-elf-strip "$SRC/busybox" -o "$STAGE/busybox-suid"
+echo "busybox: staging the set-id binary to $STAGE/busybox-suid"
+"${CROSS}strip" "$SRC/busybox" -o "$STAGE/busybox-suid"
 cp "$SRC/include/applet_tables.h" "$STAGE/applet_tables-suid.h"
 cp "$SRC/.config" "$STAGE/config-suid"
 
-echo "busybox: built $VERSION ($(wc -c < "$STAGE/busybox") bytes main, $(wc -c < "$STAGE/busybox-suid") bytes set-id, static, musl, i686)"
+echo "busybox: built $VERSION ($(wc -c < "$STAGE/busybox") bytes main, $(wc -c < "$STAGE/busybox-suid") bytes set-id, static, musl, $RACH2_ARCH)"
 echo "busybox: rebuild the os-real image (make os-real-image) to install it"

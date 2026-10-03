@@ -16,9 +16,10 @@ After musl has been built, the component can be built directly:
 
 ```
 make -C utils
+make -C utils ARCH=x86_64
 ```
 
-The main Makefile prefers `i686-elf-gcc`, falls back to `CROSS_CC`, and links musl's startup objects, `libc.a`, 32-bit `libgcc`, and `crtn.o`. It prunes obsolete files from both output directories before building so an old binary cannot be staged by a later image.
+The main Makefile builds for the architecture `ARCH` names (`mk/arch.mk`), i686 by default: it compiles with that architecture's `CROSS_CC`, `i686-elf-gcc -m32` or `x86_64-elf-gcc -m64`, and links that architecture's musl startup objects, `libc.a`, the compiler's `libgcc`, and `crtn.o`. The programs land in `build/utils/`, or `build/x86_64/utils/`. On x86-64 every program builds but `ping`, whose `SYS_socketcall` x86-64 does not have. It prunes obsolete files from both output directories before building so an old binary cannot be staged by a later image.
 
 The native Linux build produces only the portable file utilities `Makefile.linux` lists, under `build/utils/linux/`:
 
