@@ -12,6 +12,7 @@
 #define DHCPMSG_H
 
 #include <stddef.h>
+#include <stdint.h>
 #include <time.h>
 
 #define DHCP_SERVER_PORT 67
@@ -57,7 +58,7 @@ struct dhcp_lease {
 /** What one message is asking for. */
 struct dhcp_request {
     int type;
-    unsigned long xid;
+    uint32_t xid;                /* the transaction id, 32 bits on the wire */
     const unsigned char *hwaddr; /* six bytes */
     unsigned long ciaddr;        /* the address in hand, 0 unless renewing */
     unsigned long server;        /* the server identifier option, 0 for none */
@@ -67,7 +68,7 @@ struct dhcp_request {
 
 unsigned int dhcp_build(unsigned char *out, unsigned int outlen, const struct dhcp_request *r);
 int dhcp_frame_ok(const unsigned char *f, int n, unsigned int *ihl, unsigned int *udplen);
-int dhcp_parse(const unsigned char *msg, unsigned int len, unsigned long xid,
+int dhcp_parse(const unsigned char *msg, unsigned int len, uint32_t xid,
                const unsigned char *hwaddr, struct dhcp_lease *l);
 int dhcp_lease_usable(const struct dhcp_lease *l, char *err, size_t errlen);
 unsigned long dhcp_sane_lease(unsigned long seconds, unsigned long max);

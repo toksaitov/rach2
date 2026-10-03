@@ -85,7 +85,7 @@
 static const char *ifname = "eth0";
 static int ifindex;
 static unsigned char hwaddr[6];
-static unsigned long xid;
+static uint32_t xid;
 
 /* The longest lease this client acts on; dhcp_sane_lease says why it is a
  * week. `-l` may lower it and may not raise it. */
@@ -122,10 +122,14 @@ static unsigned char in[1600];
  * machine without that CPU has. A reply is matched on this id and on the
  * hardware address, so two machines booted together with the same hardware
  * address must not choose the same id, or each takes the other's answers.
+ *
+ * The id is 32 bits, the width of the field a reply carries it back in. A
+ * wider one, which an `unsigned long` read from the device is on x86-64,
+ * would never equal the field, and no reply would match.
  */
-static unsigned long random_xid(void)
+static uint32_t random_xid(void)
 {
-    unsigned long v = 0;
+    uint32_t v = 0;
     int fd = open("/dev/urandom", O_RDONLY);
 
     if (fd >= 0) {
@@ -136,7 +140,7 @@ static unsigned long random_xid(void)
             return v;
         }
     }
-    return ((unsigned long)time(0) << 8) ^ (unsigned long)getpid();
+    return (uint32_t)(((unsigned long)time(0) << 8) ^ (unsigned long)getpid());
 }
 
 /** Ask the interface for its index and hardware address. */

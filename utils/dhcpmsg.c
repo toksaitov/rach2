@@ -255,7 +255,7 @@ int dhcp_frame_ok(const unsigned char *f, int n, unsigned int *ihl, unsigned int
  *         us. `l` is overwritten once the fixed fields match, even when 0 is
  *         returned.
  */
-int dhcp_parse(const unsigned char *msg, unsigned int len, unsigned long xid,
+int dhcp_parse(const unsigned char *msg, unsigned int len, uint32_t xid,
                const unsigned char *hwaddr, struct dhcp_lease *l)
 {
     const unsigned char *o;
