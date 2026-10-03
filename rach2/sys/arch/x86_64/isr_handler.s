@@ -287,18 +287,21 @@ isr_return:
     call deliver_signals
 
 # Restore the frame and return with `iretq`, interrupts off until the flags
-# it loads. A return to user mode at an address outside the lower half would
-# fault `iretq` itself, in ring 0 with the user's GS; the address becomes 0
-# instead, below USER_ADDR_MIN, where the program takes its SIGSEGV in user
-# mode. Only a frame a program wrote can have one: a signal return's or a
-# tracer's.
+# it loads. A return to user mode at a non-canonical address, one whose bits
+# 47 to 63 are not all equal, would fault `iretq` itself, in ring 0 with the
+# user's GS; the address becomes 0 instead, below USER_ADDR_MIN, where the
+# program takes its SIGSEGV in user mode. Only a frame a tracer wrote can
+# have one. Shifted right by 47 with its sign, a canonical address is 0 or
+# -1, and one more than that is at most 1.
 .globl isr_exit
 isr_exit:
     testb $3, F_CS(%rsp)
     jz .exit_restore
     movq F_RIP(%rsp), %rax
-    shrq $47, %rax
-    jz .exit_restore
+    sarq $47, %rax
+    incq %rax
+    cmpq $1, %rax
+    jbe .exit_restore
     movq $0, F_RIP(%rsp)
 .exit_restore:
     popq %r15
