@@ -76,13 +76,13 @@ static void ml_put(char *buf, uint32_t buflen, uint32_t *pos, const char *src)
 }
 
 /** Append `v` as eight hexadecimal digits with the 0x prefix. */
-static void ml_put_hex(char *buf, uint32_t buflen, uint32_t *pos, uint32_t v)
+static void ml_put_hex(char *buf, uint32_t buflen, uint32_t *pos, uintptr_t v)
 {
     static const char digits[] = "0123456789ABCDEF";
     int shift;
 
     ml_put(buf, buflen, pos, "0x");
-    for (shift = 28; shift >= 0; shift -= 4) {
+    for (shift = (int)sizeof(v) * 8 - 4; shift >= 0; shift -= 4) {
         if (*pos + 1 < buflen) {
             buf[*pos] = digits[(v >> shift) & 0xF];
             (*pos)++;
@@ -112,7 +112,7 @@ static void ml_put_dec(char *buf, uint32_t buflen, uint32_t *pos, uint32_t v)
     }
 }
 
-void modlayout_describe(int code, uint32_t index, uint32_t start, uint32_t end, char *buf,
+void modlayout_describe(int code, uint32_t index, uintptr_t start, uintptr_t end, char *buf,
                         uint32_t buflen)
 {
     uint32_t pos = 0;

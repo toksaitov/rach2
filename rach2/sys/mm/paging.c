@@ -209,7 +209,7 @@ void frame_take_boot(uintptr_t frame)
     }
 }
 
-static int cow_fault(page_dir_t *dir, uint32_t addr);
+static int cow_fault(page_dir_t *dir, uintptr_t addr);
 
 /* The entry of `dir`'s own table for the user address `addr`, or NULL where
  * there is no table. */
@@ -233,7 +233,7 @@ static pte_t *kernel_pte(uintptr_t addr)
  * a present copy-on-write page answers 0, which is what tells the resolver to
  * make it private before promising a caller it may write there.
  */
-static int pte_writable(page_dir_t *dir, uint32_t addr)
+static int pte_writable(page_dir_t *dir, uintptr_t addr)
 {
     pte_t *e = user_pte(dir, addr);
 
@@ -246,7 +246,7 @@ static int pte_writable(page_dir_t *dir, uint32_t addr)
  * the pre-fault path already backed, must not be allocated a second time
  * (which would leak the old frame and wipe the page's contents).
  */
-static int pte_present(page_dir_t *dir, uint32_t addr)
+static int pte_present(page_dir_t *dir, uintptr_t addr)
 {
     pte_t *e = user_pte(dir, addr);
 
@@ -256,7 +256,7 @@ static int pte_present(page_dir_t *dir, uint32_t addr)
 /* Take back the page `alloc_user_page` mapped at `addr` in `dir`: the
  * entry cleared and the frame given back. For a page that could not be
  * made ready. */
-static void unmap_user_page_frame(page_dir_t *dir, uint32_t addr)
+static void unmap_user_page_frame(page_dir_t *dir, uintptr_t addr)
 {
     pte_t *e = user_pte(dir, addr);
     pte_t pte;
@@ -287,11 +287,11 @@ static void unmap_user_page_frame(page_dir_t *dir, uint32_t addr)
  * gives. 1 with the page mapped, 0 when no frame could be had or the read
  * failed, -1 to resolve again.
  */
-static int file_fault(page_dir_t *dir, vm_space_t *vm, const vma_t *vma, uint32_t addr)
+static int file_fault(page_dir_t *dir, vm_space_t *vm, const vma_t *vma, uintptr_t addr)
 {
     struct vm_file *f = vma->file;
-    uint32_t page = addr & ~(PAGE_SIZE - 1);
-    uint32_t pgoff = vma->pgoff + (page - vma->start) / PAGE_SIZE;
+    uintptr_t page = addr & ~(PAGE_SIZE - 1);
+    uint32_t pgoff = vma->pgoff + (uint32_t)((page - vma->start) / PAGE_SIZE);
     uint32_t prot = vma->prot;
     uintptr_t phys = alloc_user_frame();
     int rc;
@@ -326,11 +326,11 @@ static int file_fault(page_dir_t *dir, vm_space_t *vm, const vma_t *vma, uint32_
  * page backed meanwhile, has the resolution run again. 1 with the page
  * mapped, 0 when no frame could be had, -1 to resolve again.
  */
-static int shared_fault(page_dir_t *dir, vm_space_t *vm, const vma_t *vma, uint32_t addr)
+static int shared_fault(page_dir_t *dir, vm_space_t *vm, const vma_t *vma, uintptr_t addr)
 {
     struct vm_file *f = vma->file;
-    uint32_t page = addr & ~(PAGE_SIZE - 1);
-    uint32_t pgoff = vma->pgoff + (page - vma->start) / PAGE_SIZE;
+    uintptr_t page = addr & ~(PAGE_SIZE - 1);
+    uint32_t pgoff = vma->pgoff + (uint32_t)((page - vma->start) / PAGE_SIZE);
     uint32_t prot = vma->prot;
     uintptr_t phys;
     int rc = 1;
@@ -372,7 +372,7 @@ static int region_allows(const vma_t *vma, int write)
  * in a writeback; the region is looked up after that, and nothing from the
  * lookup on sleeps but a file's fill, which checks what it found again.
  */
-static int vm_resolve_once(struct mm *mm, uint32_t addr, int write, uint32_t as_limit)
+static int vm_resolve_once(struct mm *mm, uintptr_t addr, int write, uintptr_t as_limit)
 {
     page_dir_t *dir = mm->dir;
     vm_space_t *vm = &mm->vm;
@@ -452,7 +452,7 @@ static int vm_resolve_once(struct mm *mm, uint32_t addr, int write, uint32_t as_
  * pre-fault answers -EFAULT. `mm` is the current process's for a fault and
  * a pre-fault, and a stopped tracee's for ptrace.
  */
-static int vm_resolve_in(struct mm *mm, uint32_t addr, int write, uint32_t as_limit)
+static int vm_resolve_in(struct mm *mm, uintptr_t addr, int write, uintptr_t as_limit)
 {
     int rc;
 
@@ -463,16 +463,16 @@ static int vm_resolve_in(struct mm *mm, uint32_t addr, int write, uint32_t as_li
 }
 
 /** `vm_resolve_in` for the current process's address space. */
-static int vm_resolve(uint32_t addr, int write)
+static int vm_resolve(uintptr_t addr, int write)
 {
     return vm_resolve_in(current_proc->mm, addr, write, current_proc->rlim[RLIM_AS].cur);
 }
 
 /* Whether every page of [start, end) is present in `mm` and allows the
  * access, found with nothing that sleeps. */
-static int range_ready(struct mm *mm, uint32_t start, uint32_t end, int write)
+static int range_ready(struct mm *mm, uintptr_t start, uintptr_t end, int write)
 {
-    uint32_t page;
+    uintptr_t page;
 
     for (page = start & ~(PAGE_SIZE - 1); page < end; page += PAGE_SIZE) {
         const vma_t *vma = vm_find(&mm->vm, page);
@@ -494,9 +494,9 @@ static int range_ready(struct mm *mm, uint32_t start, uint32_t end, int write)
  * range is checked again with nothing that sleeps, and brought in again
  * when a page went; the answer holds until the caller sleeps.
  */
-int vm_prefault_range(uint32_t addr, uint32_t len, int write)
+int vm_prefault_range(uintptr_t addr, uintptr_t len, int write)
 {
-    uint32_t page, end;
+    uintptr_t page, end;
 
     if (!current_proc || current_proc->mm == NULL) {
         return 0; /* no user address space to fault against */
@@ -531,7 +531,7 @@ int vm_prefault_range(uint32_t addr, uint32_t len, int write)
  * could be had or copied for it (the caller continues to demand paging /
  * segfault).
  */
-static int cow_fault(page_dir_t *dir, uint32_t addr)
+static int cow_fault(page_dir_t *dir, uintptr_t addr)
 {
     pte_t *e = user_pte(dir, addr);
     pte_t pte;
@@ -586,7 +586,7 @@ static int cow_fault(page_dir_t *dir, uint32_t addr)
  * first, so nothing here sleeps. 0, or -1 when no frame could be had or
  * copied.
  */
-static int page_private(page_dir_t *dir, uint32_t addr, int writable)
+static int page_private(page_dir_t *dir, uintptr_t addr, int writable)
 {
     pte_t *e = user_pte(dir, addr);
     pte_t pte;
@@ -624,7 +624,7 @@ static int page_private(page_dir_t *dir, uint32_t addr, int writable)
  * memory before a copy may sleep, so the region is looked up again after
  * them, and the page must still be present in a region that allows some
  * access. */
-static int access_page(struct mm *mm, uint32_t addr, uint8_t *p, uint32_t len, int write)
+static int access_page(struct mm *mm, uintptr_t addr, uint8_t *p, uint32_t len, int write)
 {
     const vma_t *vma = vm_find(&mm->vm, addr);
     uint8_t *map;
@@ -662,7 +662,7 @@ static int access_page(struct mm *mm, uint32_t addr, uint8_t *p, uint32_t len, i
     return 0;
 }
 
-int paging_access(struct mm *mm, uint32_t addr, void *buf, uint32_t len, int write)
+int paging_access(struct mm *mm, uintptr_t addr, void *buf, uint32_t len, int write)
 {
     uint8_t *p = buf;
     int rc = 0;
@@ -708,7 +708,7 @@ int paging_access(struct mm *mm, uint32_t addr, void *buf, uint32_t len, int wri
  */
 static void _page_fault_handler(isr_params_t *params)
 {
-    uint32_t fault_address;
+    uintptr_t fault_address;
     int write, user_mode, have_user_proc, in_user_range, pid;
 
 #ifndef RACH2_HOSTTEST
@@ -766,7 +766,7 @@ static void _page_fault_handler(isr_params_t *params)
         info.code = vm_find(&current_proc->mm->vm, fault_address) ? SEGV_ACCERR : SEGV_MAPERR;
         info.addr = fault_address;
         current_proc->trap_nr = PAGE_FAULT_VECTOR;
-        current_proc->trap_err = params->error_code;
+        current_proc->trap_err = (uint32_t)params->error_code;
         current_proc->trap_addr = fault_address;
         signal_force(current_proc, SIGSEGV, &info);
         if (current_proc->sigacts[SIGSEGV].handler == KSIG_DFL &&
@@ -871,7 +871,7 @@ void *kmap_temp(uintptr_t phys)
 void kunmap_temp(void *va)
 {
     uintptr_t addr = (uintptr_t)va & ~(PAGE_SIZE - 1);
-    uint32_t slot = (addr - KVA_TEMP) / PAGE_SIZE;
+    uint32_t slot = (uint32_t)((addr - KVA_TEMP) / PAGE_SIZE);
     uint32_t flags;
 
     if (addr < KVA_TEMP || slot >= KVA_TEMP_SLOTS) {
@@ -998,7 +998,7 @@ uintptr_t paging_virt_to_phys(uintptr_t va)
     return PTE_ADDR(*e) | (va & (PAGE_SIZE - 1));
 }
 
-uintptr_t paging_user_phys(page_dir_t *dir, uint32_t va)
+uintptr_t paging_user_phys(page_dir_t *dir, uintptr_t va)
 {
     pte_t *e = user_pte(dir, va);
 
@@ -1008,7 +1008,7 @@ uintptr_t paging_user_phys(page_dir_t *dir, uint32_t va)
     return PTE_ADDR(*e) | (va & (PAGE_SIZE - 1));
 }
 
-int paging_user_state(page_dir_t *dir, uint32_t va)
+int paging_user_state(page_dir_t *dir, uintptr_t va)
 {
     pte_t *e = user_pte(dir, va);
 
@@ -1279,9 +1279,9 @@ uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
     return phys_addr;
 }
 
-void unmap_user_range(page_dir_t *dir, uint32_t start, uint32_t end)
+void unmap_user_range(page_dir_t *dir, uintptr_t start, uintptr_t end)
 {
-    uint32_t addr;
+    uintptr_t addr;
 
     if (!dir) {
         return;
@@ -1310,9 +1310,9 @@ void unmap_user_range(page_dir_t *dir, uint32_t start, uint32_t end)
     }
 }
 
-int paging_move_range(page_dir_t *dir, uint32_t from, uint32_t to, uint32_t len)
+int paging_move_range(page_dir_t *dir, uintptr_t from, uintptr_t to, uintptr_t len)
 {
-    uint32_t off;
+    uintptr_t off;
 
     /* The tables first, so the move cannot stop half way. */
     for (off = 0; off < len; off += PAGE_SIZE) {
@@ -1338,9 +1338,9 @@ int paging_move_range(page_dir_t *dir, uint32_t from, uint32_t to, uint32_t len)
     return 0;
 }
 
-void paging_protect_range(page_dir_t *dir, uint32_t start, uint32_t end, uint32_t prot)
+void paging_protect_range(page_dir_t *dir, uintptr_t start, uintptr_t end, uint32_t prot)
 {
-    uint32_t addr;
+    uintptr_t addr;
 
     for (addr = start; addr < end; addr += PAGE_SIZE) {
         pte_t *e = user_pte(dir, addr);

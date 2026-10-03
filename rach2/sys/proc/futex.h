@@ -17,7 +17,7 @@ long sys_futex(isr_params_t *params);
 
 /** Wake up to `n` waiters on `uaddr` in the current address space, as
  * FUTEX_WAKE does; the number woken. */
-int futex_wake_address(uint32_t uaddr, uint32_t n);
+int futex_wake_address(uintptr_t uaddr, uint32_t n);
 
 /**
  * Whether the futex call `params` describes, which a signal ended with

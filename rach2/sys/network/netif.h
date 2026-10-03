@@ -67,7 +67,7 @@
  * @param arg     the user pointer to a `struct ifreq` or `struct rtentry`.
  * @return 0 or a negative errno.
  */
-int32_t netif_ioctl(uint32_t request, uint32_t arg, int *handled);
+int32_t netif_ioctl(uint32_t request, uintptr_t arg, int *handled);
 
 /**
  * Whether `name` is this machine's interface.

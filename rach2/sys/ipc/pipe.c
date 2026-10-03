@@ -146,9 +146,9 @@ static void pipe_wake(pipe_t *p, wait_queue_t *wq, uint32_t kinds)
  * user memory goes a page at a time, so a page that faults leaves the ones
  * before it moved and reported.
  */
-static uint32_t page_piece(uint32_t addr, uint32_t n)
+static uint32_t page_piece(uintptr_t addr, uint32_t n)
 {
-    uint32_t left = 4096u - (addr & 4095u);
+    uint32_t left = PAGE_SIZE - (uint32_t)(addr & (PAGE_SIZE - 1));
 
     return n < left ? n : left;
 }
@@ -180,13 +180,13 @@ static int32_t pipe_read(fd_entry_t *e, char __user *buf, uint32_t count)
     if (count == 0) {
         return 0;
     }
-    if (!user_range_ok((uint32_t)(__force uintptr_t)buf, count)) {
+    if (!user_range_ok((__force uintptr_t)buf, count)) {
         return -EFAULT;
     }
 
     while (done < to_read) {
         const uint8_t *at;
-        uint32_t addr = (uint32_t)(__force uintptr_t)(buf + done);
+        uintptr_t addr = (__force uintptr_t)(buf + done);
         uint32_t chunk;
 
         if (pipe_available(p) == 0) {
@@ -257,14 +257,14 @@ static int32_t pipe_write(fd_entry_t *e, const char __user *buf, uint32_t count)
     if (count == 0) {
         return 0;
     }
-    if (!user_range_ok((uint32_t)(__force uintptr_t)buf, count)) {
+    if (!user_range_ok((__force uintptr_t)buf, count)) {
         return -EFAULT;
     }
 
     while (done < count) {
         uint32_t space;
         uint32_t chunk;
-        uint32_t addr = (uint32_t)(__force uintptr_t)(buf + done);
+        uintptr_t addr = (__force uintptr_t)(buf + done);
 
         if (!p->read_open) {
             {
@@ -380,7 +380,7 @@ static short pipe_poll(fd_entry_t *e, short events, struct wait_queue **wq)
     return revents;
 }
 
-static int32_t pipe_ioctl(fd_entry_t *e, uint32_t request, uint32_t arg)
+static int32_t pipe_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 {
     pipe_t *p = (pipe_t *)e->priv;
 
@@ -553,7 +553,7 @@ int32_t fifo_attach(fd_entry_t *e, const void *mnt, uint64_t ino, int flags)
  * duplicate an end before the call succeeds, and a copy that fails frees
  * the slots and the pipe, which nothing else can reach.
  */
-static int32_t pipe_open(uint32_t fds_ptr, int flags)
+static int32_t pipe_open(uintptr_t fds_ptr, int flags)
 {
     pipe_t *pipe;
     int kfds[2];

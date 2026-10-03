@@ -72,7 +72,7 @@ struct lx_sigframe {
 static const uint8_t rt_retcode[8] = {0xB8, 0xAD, 0x00, 0x00, 0x00, 0xCD, 0x80, 0x00};
 static const uint8_t plain_retcode[8] = {0x58, 0xB8, 0x77, 0x00, 0x00, 0x00, 0xCD, 0x80};
 
-int sigframe_on_altstack(uint32_t sp)
+int sigframe_on_altstack(uintptr_t sp)
 {
     return current_proc->altstack_on &&
            sp - current_proc->altstack_sp < current_proc->altstack_size;

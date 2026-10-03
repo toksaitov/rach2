@@ -132,9 +132,9 @@ static short dev_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 }
 
 static int32_t dev_disk_rescan(fd_entry_t *e);
-static int32_t dev_getgeo(fd_entry_t *e, uint32_t arg);
-static int32_t dev_sector_size(fd_entry_t *e, uint32_t arg);
-static int32_t dev_block_info(fd_entry_t *e, uint32_t request, uint32_t arg);
+static int32_t dev_getgeo(fd_entry_t *e, uintptr_t arg);
+static int32_t dev_sector_size(fd_entry_t *e, uintptr_t arg);
+static int32_t dev_block_info(fd_entry_t *e, uint32_t request, uintptr_t arg);
 
 /*
  * The size of a raw window, which is what a checker asks a block device
@@ -151,7 +151,7 @@ static int32_t dev_block_info(fd_entry_t *e, uint32_t request, uint32_t arg);
  * size, which util-linux's blockdev reads for every device it reports.
  * Everything else is not a terminal.
  */
-static int32_t dev_ioctl(fd_entry_t *e, uint32_t request, uint32_t arg)
+static int32_t dev_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 {
     uint64_t size;
 
@@ -846,11 +846,11 @@ static int32_t loop_node_write(fd_entry_t *entry, const char __user *buffer, uin
  * writing; the rest are `loop_ioctl`'s, and a request that is not a loop
  * one is the disk ioctls' of every device node.
  */
-static int32_t loop_node_ioctl(fd_entry_t *e, uint32_t request, uint32_t arg)
+static int32_t loop_node_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 {
     uint8_t config[LOOP_CONFIG_SIZE];
     char path[256];
-    uint32_t fd = arg, flags = 0, block_size = 0;
+    uint32_t fd = (uint32_t)arg, flags = 0, block_size = 0;
     fd_entry_t *file;
     int32_t rc;
     int len;
@@ -943,7 +943,7 @@ static const struct file_ops framefail_ops = {dev_eof_read, framefail_write, dev
                                               NULL};
 /* LOOP_CTL_GET_FREE, LOOP_CTL_ADD and LOOP_CTL_REMOVE, which losetup and
  * mount make before they attach a file. */
-static int32_t loopctl_ioctl(fd_entry_t *e, uint32_t request, uint32_t arg)
+static int32_t loopctl_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 {
     int32_t rc = loop_control_ioctl(request, arg);
 
@@ -1286,7 +1286,7 @@ static void rtc_to_tm(const rtc_time_t *t, int32_t *tm)
 
 /** RTC_WKALM_SET and RTC_WKALM_RD's `struct rtc_wkalrm` at `arg`: whether
  * the alarm is enabled, whether it has come, and its date and time. */
-static int32_t dev_rtc_wkalarm(uint32_t request, uint32_t arg)
+static int32_t dev_rtc_wkalarm(uint32_t request, uintptr_t arg)
 {
     uint8_t w[40];
     rtc_time_t t;
@@ -1330,7 +1330,7 @@ static int32_t dev_rtc_write(fd_entry_t *e, const char __user *buf, uint32_t cou
 /** RTC_ALM_READ, RTC_ALM_SET, RTC_AIE_ON and RTC_AIE_OFF: the alarm's time
  * of day, read with today's date, or set, and its interrupt on or off, the
  * last three for a privileged caller. */
-static int32_t dev_rtc_alarm(uint32_t request, uint32_t arg)
+static int32_t dev_rtc_alarm(uint32_t request, uintptr_t arg)
 {
     int32_t tm[9];
     rtc_time_t t;
@@ -1364,7 +1364,7 @@ static int32_t dev_rtc_alarm(uint32_t request, uint32_t arg)
     return 0;
 }
 
-static int32_t dev_rtc_ioctl(fd_entry_t *e, uint32_t request, uint32_t arg)
+static int32_t dev_rtc_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 {
     int32_t tm[9];
     rtc_time_t t;
@@ -2376,7 +2376,7 @@ void devfs_grubcore_publish(struct block_device *backing)
  * sector, 0 for a whole disk. BusyBox's `fdisk -l` reads the start to tell a
  * whole disk, whose name here ends in a digit, from a partition.
  */
-static int32_t dev_getgeo(fd_entry_t *e, uint32_t arg)
+static int32_t dev_getgeo(fd_entry_t *e, uintptr_t arg)
 {
     struct {
         uint8_t heads;
@@ -2403,7 +2403,7 @@ static int32_t dev_getgeo(fd_entry_t *e, uint32_t arg)
 /* BLKROGET, BLKRAGET and BLKBSZGET of a disk or loop node: read-only only for
  * a loop device attached so, 256 sectors of read-ahead and 4096-byte blocks,
  * an int each. */
-static int32_t dev_block_info(fd_entry_t *e, uint32_t request, uint32_t arg)
+static int32_t dev_block_info(fd_entry_t *e, uint32_t request, uintptr_t arg)
 {
     uint64_t size;
     const block_device_t *loop =
@@ -2418,7 +2418,7 @@ static int32_t dev_block_info(fd_entry_t *e, uint32_t request, uint32_t arg)
     return copy_to_user((void __user *)arg, &v, sizeof(v)) != 0 ? -EFAULT : 0;
 }
 
-static int32_t dev_sector_size(fd_entry_t *e, uint32_t arg)
+static int32_t dev_sector_size(fd_entry_t *e, uintptr_t arg)
 {
     int32_t sector = 512;
     struct disk_window *w = e->dev ? raw_window_of(e->dev) : NULL;

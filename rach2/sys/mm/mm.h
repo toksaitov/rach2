@@ -61,11 +61,11 @@ struct mm {
     char *exe;
     /* The dynamic linker the program names, from the heap; NULL for none. */
     char *interp;
-    uint32_t arg_start;
-    uint32_t arg_end;
-    uint32_t env_start;
-    uint32_t env_end;
-    uint32_t auxv[MM_AUXV_WORDS];
+    uintptr_t arg_start;
+    uintptr_t arg_end;
+    uintptr_t env_start;
+    uintptr_t env_end;
+    unsigned long auxv[MM_AUXV_WORDS];
     /* Whether the process running this image may leave a core file, and be
      * traced or have its memory opened through /proc by a caller without
      * effective uid 0: 1 for a new address space and for an image an exec

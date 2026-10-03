@@ -1,5 +1,6 @@
 /*
- * elf.c - ELF32 executable validation and loading for user programs.
+ * elf.c - ELF executable validation and loading for user programs, of the
+ * class and machine the architecture's programs have.
  */
 
 #include "elf.h"
@@ -11,18 +12,23 @@
 
 /* The user image window: a PT_LOAD segment must fit between USER_ADDR_MIN,
  * the bottom of user space as `user_range_ok` has it, and the user stack's
- * first page at 0xBFFFF000. Segments outside it are rejected so a hostile ELF
- * cannot request kernel- or stack-range mappings. The floor is below the
- * conventional ELF base (a freestanding -Ttext=0x08048000 binary maps its
- * header page at 0x08047000). */
-#define ELF_USER_MIN 0x02000000u
-#define ELF_USER_MAX 0xBFFFF000u
+ * first page, USER_STACK_BASE. Segments outside it are rejected so a hostile
+ * ELF cannot request kernel- or stack-range mappings. On i686 the floor is
+ * below the conventional ELF base (a freestanding -Ttext=0x08048000 binary
+ * maps its header page at 0x08047000). */
+#define ELF_USER_MIN USER_ADDR_MIN
+#define ELF_USER_MAX USER_STACK_BASE
+
+/* Whether a file offset or size, 64 bits in ELF64, fits the 32 bits the
+ * readers take; always so for ELF32. */
+#define ELF_FITS32(v) (((uint64_t)(v) >> 31 >> 1) == 0)
 
 /**
- * Report whether `data` is a valid ELF32 executable for i386.
+ * Report whether `data` is a valid ELF executable for this architecture.
  *
- * The image must begin with the ELF magic `0x7F 'E' 'L' 'F'`, be 32-bit
- * little-endian of the current version, type `ET_EXEC` for machine `EM_386`,
+ * The image must begin with the ELF magic `0x7F 'E' 'L' 'F'`, be of the
+ * class `ELF_CLASS`, little-endian of the current version, type `ET_EXEC`
+ * for machine `ELF_MACHINE`,
  * and have a non-zero entry point and a program header table of entries this
  * kernel's size that lies wholly within the first `size` bytes. The bound is
  * taken by division and not by addition, since an offset near 2^32 and a
@@ -31,9 +37,9 @@
  */
 bool elf_check(const void *data, uint32_t size)
 {
-    const Elf32_Ehdr *ehdr = (const Elf32_Ehdr *)data;
+    const Elf_Ehdr *ehdr = (const Elf_Ehdr *)data;
 
-    if (size < sizeof(Elf32_Ehdr)) {
+    if (size < sizeof(Elf_Ehdr)) {
         return false;
     }
 
@@ -42,7 +48,7 @@ bool elf_check(const void *data, uint32_t size)
         return false;
     }
 
-    if (ehdr->e_ident[EI_CLASS] != ELFCLASS32) {
+    if (ehdr->e_ident[EI_CLASS] != ELF_CLASS) {
         return false;
     }
 
@@ -58,7 +64,7 @@ bool elf_check(const void *data, uint32_t size)
         return false;
     }
 
-    if (ehdr->e_machine != EM_386) {
+    if (ehdr->e_machine != ELF_MACHINE) {
         return false;
     }
 
@@ -66,11 +72,11 @@ bool elf_check(const void *data, uint32_t size)
         return false;
     }
 
-    if (ehdr->e_phentsize != sizeof(Elf32_Phdr)) {
+    if (ehdr->e_phentsize != sizeof(Elf_Phdr)) {
         return false;
     }
-    if ((uint32_t)ehdr->e_phoff > size ||
-        (uint32_t)ehdr->e_phnum > (size - (uint32_t)ehdr->e_phoff) / sizeof(Elf32_Phdr)) {
+    if (ehdr->e_phoff > size ||
+        (uint32_t)ehdr->e_phnum > (size - (uint32_t)ehdr->e_phoff) / sizeof(Elf_Phdr)) {
         return false;
     }
 
@@ -86,10 +92,10 @@ bool elf_check(const void *data, uint32_t size)
  *
  * The caller must have already validated the image with `elf_check`.
  */
-uint32_t elf_entry_point(const void *data)
+uintptr_t elf_entry_point(const void *data)
 {
-    const Elf32_Ehdr *ehdr = (const Elf32_Ehdr *)data;
-    return ehdr->e_entry;
+    const Elf_Ehdr *ehdr = (const Elf_Ehdr *)data;
+    return (uintptr_t)ehdr->e_entry;
 }
 
 /**
@@ -97,20 +103,20 @@ uint32_t elf_entry_point(const void *data)
  *
  * The table is not bounded here; the caller runs `elf_check` first.
  */
-const Elf32_Phdr *elf_program_headers(const void *data)
+const Elf_Phdr *elf_program_headers(const void *data)
 {
-    const Elf32_Ehdr *ehdr = (const Elf32_Ehdr *)data;
+    const Elf_Ehdr *ehdr = (const Elf_Ehdr *)data;
 
     if (ehdr->e_phoff == 0 || ehdr->e_phnum == 0) {
         return NULL;
     }
 
-    return (const Elf32_Phdr *)((const uint8_t *)data + ehdr->e_phoff);
+    return (const Elf_Phdr *)((const uint8_t *)data + (uintptr_t)ehdr->e_phoff);
 }
 
 uint16_t elf_program_header_count(const void *data)
 {
-    const Elf32_Ehdr *ehdr = (const Elf32_Ehdr *)data;
+    const Elf_Ehdr *ehdr = (const Elf_Ehdr *)data;
     return ehdr->e_phnum;
 }
 
@@ -126,23 +132,24 @@ uint16_t elf_program_header_count(const void *data)
  */
 bool elf_valid_exec(const void *ehdr, uint32_t len)
 {
-    const Elf32_Ehdr *e = (const Elf32_Ehdr *)ehdr;
+    const Elf_Ehdr *e = (const Elf_Ehdr *)ehdr;
 
-    if (len < sizeof(Elf32_Ehdr)) {
+    if (len < sizeof(Elf_Ehdr)) {
         return false;
     }
     if (e->e_ident[EI_MAG0] != ELFMAG0 || e->e_ident[EI_MAG1] != ELFMAG1 ||
         e->e_ident[EI_MAG2] != ELFMAG2 || e->e_ident[EI_MAG3] != ELFMAG3) {
         return false;
     }
-    if (e->e_ident[EI_CLASS] != ELFCLASS32 || e->e_ident[EI_DATA] != ELFDATA2LSB ||
+    if (e->e_ident[EI_CLASS] != ELF_CLASS || e->e_ident[EI_DATA] != ELFDATA2LSB ||
         e->e_ident[EI_VERSION] != EV_CURRENT) {
         return false;
     }
-    if ((e->e_type != ET_EXEC && e->e_type != ET_DYN) || e->e_machine != EM_386) {
+    if ((e->e_type != ET_EXEC && e->e_type != ET_DYN) || e->e_machine != ELF_MACHINE) {
         return false;
     }
-    if (e->e_phoff == 0 || e->e_phnum == 0 || e->e_phentsize != sizeof(Elf32_Phdr)) {
+    if (e->e_phoff == 0 || e->e_phnum == 0 || e->e_phentsize != sizeof(Elf_Phdr) ||
+        !ELF_FITS32(e->e_phoff)) {
         return false;
     }
     return true;
@@ -165,8 +172,8 @@ static int elf_read_exact(elf_read_fn readfn, void *ctx, void *dst, uint32_t cou
 
 int elf_read_layout(elf_read_fn readfn, void *ctx, int interp, elf_layout_t *out)
 {
-    Elf32_Phdr phdrs[ELF_MAX_PHNUM];
-    Elf32_Ehdr ehdr;
+    Elf_Phdr phdrs[ELF_MAX_PHNUM];
+    Elf_Ehdr ehdr;
     uint16_t i;
     int rc;
 
@@ -178,33 +185,35 @@ int elf_read_layout(elf_read_fn readfn, void *ctx, int interp, elf_layout_t *out
     if (!elf_valid_exec(&ehdr, sizeof(ehdr)) || ehdr.e_phnum > ELF_MAX_PHNUM) {
         return -ENOEXEC;
     }
-    rc = elf_read_exact(readfn, ctx, phdrs, (uint32_t)ehdr.e_phnum * sizeof(Elf32_Phdr),
-                        ehdr.e_phoff);
+    rc = elf_read_exact(readfn, ctx, phdrs, (uint32_t)ehdr.e_phnum * sizeof(Elf_Phdr),
+                        (uint32_t)ehdr.e_phoff);
     if (rc != 0) {
         return rc;
     }
     out->type = ehdr.e_type;
-    out->lo = 0xFFFFFFFFu;
+    out->lo = ~(uintptr_t)0;
     for (i = 0; i < ehdr.e_phnum; i++) {
-        const Elf32_Phdr *ph = &phdrs[i];
+        const Elf_Phdr *ph = &phdrs[i];
 
         if (ph->p_type == PT_LOAD) {
-            uint32_t end = ph->p_vaddr + ph->p_memsz;
+            uintptr_t end = (uintptr_t)(ph->p_vaddr + ph->p_memsz);
 
-            if (end < ph->p_vaddr || end > 0xFFFFF000u) {
+            if (end < ph->p_vaddr || end > USER_ADDR_MAX) {
                 return -ENOEXEC;
             }
-            if ((ph->p_vaddr & ~(PAGE_SIZE - 1)) < out->lo) {
-                out->lo = ph->p_vaddr & ~(PAGE_SIZE - 1);
+            if ((ph->p_vaddr & ~(uintptr_t)(PAGE_SIZE - 1)) < out->lo) {
+                out->lo = (uintptr_t)ph->p_vaddr & ~(uintptr_t)(PAGE_SIZE - 1);
             }
-            if (((end + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1)) > out->hi) {
-                out->hi = (end + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+            if (((end + PAGE_SIZE - 1) & ~(uintptr_t)(PAGE_SIZE - 1)) > out->hi) {
+                out->hi = (end + PAGE_SIZE - 1) & ~(uintptr_t)(PAGE_SIZE - 1);
             }
         } else if (ph->p_type == PT_INTERP && interp) {
-            if (ph->p_filesz < 2 || ph->p_filesz > sizeof(out->interp)) {
+            if (ph->p_filesz < 2 || ph->p_filesz > sizeof(out->interp) ||
+                !ELF_FITS32(ph->p_offset)) {
                 return -ENOEXEC;
             }
-            rc = elf_read_exact(readfn, ctx, out->interp, ph->p_filesz, ph->p_offset);
+            rc = elf_read_exact(readfn, ctx, out->interp, (uint32_t)ph->p_filesz,
+                                (uint32_t)ph->p_offset);
             if (rc != 0) {
                 return rc;
             }
@@ -227,17 +236,17 @@ int elf_read_layout(elf_read_fn readfn, void *ctx, int interp, elf_layout_t *out
  * keep them from underflowing, and `table_bytes` cannot overflow, since
  * `phnum` has 16 bits.
  */
-uint32_t elf_phdr_vaddr(const Elf32_Phdr *phdrs, uint16_t phnum, uint32_t phoff)
+uintptr_t elf_phdr_vaddr(const Elf_Phdr *phdrs, uint16_t phnum, uint64_t phoff)
 {
-    uint32_t table_bytes = (uint32_t)phnum * (uint32_t)sizeof(Elf32_Phdr);
+    uint32_t table_bytes = (uint32_t)phnum * (uint32_t)sizeof(Elf_Phdr);
     uint16_t i;
 
     for (i = 0; i < phnum; i++) {
-        const Elf32_Phdr *p = &phdrs[i];
+        const Elf_Phdr *p = &phdrs[i];
 
         if (p->p_type == PT_LOAD && phoff >= p->p_offset && p->p_filesz >= table_bytes &&
             phoff - p->p_offset <= p->p_filesz - table_bytes) {
-            return p->p_vaddr + (phoff - p->p_offset);
+            return (uintptr_t)(p->p_vaddr + (phoff - p->p_offset));
         }
     }
     return 0;
@@ -281,13 +290,13 @@ int elf_load_image(elf_read_fn readfn, void *ctx, page_dir_t *dir, elf_image_t *
     return elf_load_image_at(readfn, ctx, dir, 0, out);
 }
 
-int elf_load_image_at(elf_read_fn readfn, void *ctx, page_dir_t *dir, uint32_t bias,
+int elf_load_image_at(elf_read_fn readfn, void *ctx, page_dir_t *dir, uintptr_t bias,
                       elf_image_t *out)
 {
-    Elf32_Phdr phdrs[ELF_MAX_PHNUM];
-    Elf32_Ehdr ehdr;
+    Elf_Phdr phdrs[ELF_MAX_PHNUM];
+    Elf_Ehdr ehdr;
     uint16_t i;
-    uint32_t prev_end = ELF_USER_MIN; /* page-aligned end of the previous PT_LOAD */
+    uintptr_t prev_end = ELF_USER_MIN; /* page-aligned end of the previous PT_LOAD */
     int nload = 0;
     int rc;
 
@@ -309,15 +318,15 @@ int elf_load_image_at(elf_read_fn readfn, void *ctx, page_dir_t *dir, uint32_t b
         return -ENOEXEC;
     }
 
-    rc = elf_read_exact(readfn, ctx, phdrs, (uint32_t)ehdr.e_phnum * sizeof(Elf32_Phdr),
-                        ehdr.e_phoff);
+    rc = elf_read_exact(readfn, ctx, phdrs, (uint32_t)ehdr.e_phnum * sizeof(Elf_Phdr),
+                        (uint32_t)ehdr.e_phoff);
     if (rc != 0) {
         return rc;
     }
 
     for (i = 0; i < ehdr.e_phnum; i++) {
-        const Elf32_Phdr *ph = &phdrs[i];
-        uint32_t vaddr, vaddr_end, page_addr;
+        const Elf_Phdr *ph = &phdrs[i];
+        uintptr_t vaddr, vaddr_end, page_addr;
         uint32_t file_offset, copied, to_copy;
 
         if (ph->p_type != PT_LOAD) {
@@ -327,24 +336,25 @@ int elf_load_image_at(elf_read_fn readfn, void *ctx, page_dir_t *dir, uint32_t b
             return -ENOEXEC;
         }
 
-        vaddr = ph->p_vaddr + bias;
-        vaddr_end = vaddr + ph->p_memsz;
+        vaddr = (uintptr_t)ph->p_vaddr + bias;
+        vaddr_end = vaddr + (uintptr_t)ph->p_memsz;
 
-        if (vaddr < bias || vaddr_end < vaddr || ph->p_offset + ph->p_filesz < ph->p_offset) {
+        if (vaddr < bias || vaddr_end < vaddr || ph->p_offset + ph->p_filesz < ph->p_offset ||
+            !ELF_FITS32(ph->p_offset + ph->p_filesz)) {
             return -ENOEXEC;
         }
         if (vaddr < ELF_USER_MIN || vaddr_end > ELF_USER_MAX) {
             return -ENOEXEC;
         }
-        if ((vaddr & ~(PAGE_SIZE - 1)) < prev_end) {
+        if ((vaddr & ~(uintptr_t)(PAGE_SIZE - 1)) < prev_end) {
             return -ENOEXEC;
         }
-        prev_end = (vaddr_end + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+        prev_end = (vaddr_end + PAGE_SIZE - 1) & ~(uintptr_t)(PAGE_SIZE - 1);
         nload++;
 
         {
-            uint32_t seg_start = vaddr & ~(PAGE_SIZE - 1);
-            uint32_t seg_end = (vaddr_end + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+            uintptr_t seg_start = vaddr & ~(uintptr_t)(PAGE_SIZE - 1);
+            uintptr_t seg_end = (vaddr_end + PAGE_SIZE - 1) & ~(uintptr_t)(PAGE_SIZE - 1);
 
             if (out->nsegs >= ELF_MAX_SEGS) {
                 return -ENOEXEC;
@@ -358,7 +368,7 @@ int elf_load_image_at(elf_read_fn readfn, void *ctx, page_dir_t *dir, uint32_t b
             }
         }
 
-        for (page_addr = (vaddr & ~(PAGE_SIZE - 1)); page_addr < vaddr_end;
+        for (page_addr = (vaddr & ~(uintptr_t)(PAGE_SIZE - 1)); page_addr < vaddr_end;
              page_addr += PAGE_SIZE) {
             uintptr_t phys_addr = alloc_user_page(dir, page_addr);
 
@@ -367,14 +377,14 @@ int elf_load_image_at(elf_read_fn readfn, void *ctx, page_dir_t *dir, uint32_t b
             }
         }
 
-        file_offset = ph->p_offset;
+        file_offset = (uint32_t)ph->p_offset;
         copied = 0;
-        to_copy = ph->p_filesz;
+        to_copy = (uint32_t)ph->p_filesz;
 
         while (copied < to_copy) {
-            uint32_t curr_vaddr = vaddr + copied;
-            uint32_t page_base = curr_vaddr & ~(PAGE_SIZE - 1);
-            uint32_t page_offset = curr_vaddr & (PAGE_SIZE - 1);
+            uintptr_t curr_vaddr = vaddr + copied;
+            uintptr_t page_base = curr_vaddr & ~(uintptr_t)(PAGE_SIZE - 1);
+            uint32_t page_offset = (uint32_t)(curr_vaddr & (PAGE_SIZE - 1));
             uint32_t chunk_size = PAGE_SIZE - page_offset;
             uintptr_t phys_base;
 
@@ -408,7 +418,7 @@ int elf_load_image_at(elf_read_fn readfn, void *ctx, page_dir_t *dir, uint32_t b
         int si, sj;
 
         for (si = 0; si < out->nsegs; si++) {
-            uint32_t pg;
+            uintptr_t pg;
 
             if (out->segs[si].flags & PF_W) {
                 continue;
@@ -438,7 +448,7 @@ int elf_load_image_at(elf_read_fn readfn, void *ctx, page_dir_t *dir, uint32_t b
     if (ehdr.e_entry + bias < ELF_USER_MIN || ehdr.e_entry + bias >= ELF_USER_MAX) {
         return -ENOEXEC;
     }
-    out->entry = ehdr.e_entry + bias;
+    out->entry = (uintptr_t)ehdr.e_entry + bias;
     out->phent = ehdr.e_phentsize;
     out->phnum = ehdr.e_phnum;
     return 0;
@@ -480,8 +490,8 @@ int elf_add_vmas(struct vm_space *vm, const elf_image_t *img)
     return 0;
 }
 
-int elf_setup_vmas(struct vm_space *vm, const elf_image_t *img, uint32_t stack_top,
-                   uint32_t stack_growth)
+int elf_setup_vmas(struct vm_space *vm, const elf_image_t *img, uintptr_t stack_top,
+                   uintptr_t stack_growth)
 {
     vm_init(vm);
     if (elf_add_vmas(vm, img) != 0) {

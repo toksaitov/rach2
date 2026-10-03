@@ -3054,7 +3054,7 @@ static int fat_path(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
             return -ENOENT;
         }
         {
-            uint32_t nl = k_strlen(sc.name);
+            uint32_t nl = (uint32_t)k_strlen(sc.name);
 
             if (len + nl + 1 >= cap) {
                 return -ENAMETOOLONG;

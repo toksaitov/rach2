@@ -351,6 +351,26 @@ static void ap_u32(struct procfs_text *t, uint32_t v)
     }
 }
 
+/** Append `v` as unsigned decimal, a count of bytes or an address as wide
+ * as a pointer. */
+static void ap_ulong(struct procfs_text *t, unsigned long v)
+{
+    char tmp[24];
+    int n = 0;
+
+    if (v == 0) {
+        ap_ch(t, '0');
+        return;
+    }
+    while (v && n < (int)sizeof(tmp)) {
+        tmp[n++] = (char)('0' + (v % 10u));
+        v /= 10u;
+    }
+    while (n > 0) {
+        ap_ch(t, tmp[--n]);
+    }
+}
+
 /** Append `v` as `ap_u32` does, right-aligned in `width` places. */
 static void ap_u32_width(struct procfs_text *t, uint32_t v, int width)
 {
@@ -556,7 +576,7 @@ static int procfs_gen_stat(struct procfs_text *t, int pid, int whole)
     ap_u32(t, p->start_ticks);
     ap_ch(t, ' ');
     mm = p->mm;
-    ap_u32(t, mm ? vm_total(&mm->vm) : 0);
+    ap_ulong(t, mm ? vm_total(&mm->vm) : 0);
     ap_ch(t, ' ');
     ap_u32(t, mm ? mm_resident(mm) : 0);
     ap_ch(t, '\n');
@@ -795,7 +815,7 @@ int procfs_readlink_dir(int pid, int root, char *buf, int cap)
  * the length of the reads, and `p`, whose record the reap frees, is read
  * only before the first; the caller took `start` and `end` from it before.
  */
-static void ap_memory(struct procfs_text *t, const process_t *p, uint32_t start, uint32_t end)
+static void ap_memory(struct procfs_text *t, const process_t *p, uintptr_t start, uintptr_t end)
 {
     struct mm *mm = p->mm;
     char chunk[128];
@@ -805,7 +825,7 @@ static void ap_memory(struct procfs_text *t, const process_t *p, uint32_t start,
     }
     mm_get(mm);
     while (start < end) {
-        uint32_t n = end - start < sizeof(chunk) ? end - start : (uint32_t)sizeof(chunk);
+        uint32_t n = end - start < sizeof(chunk) ? (uint32_t)(end - start) : (uint32_t)sizeof(chunk);
         uint32_t i;
 
         if (paging_access(mm, start, chunk, n, 0) != 0) {
@@ -836,8 +856,8 @@ static int procfs_gen_cmdline(struct procfs_text *t, int pid)
         return -ENOENT;
     }
     if (p->mm && p->mm->arg_end > p->mm->arg_start) {
-        uint32_t start = p->mm->arg_start;
-        uint32_t end = p->mm->arg_end;
+        uintptr_t start = p->mm->arg_start;
+        uintptr_t end = p->mm->arg_end;
 
         ap_memory(t, p, start, end);
         return t->len;
@@ -864,8 +884,8 @@ static int procfs_gen_environ(struct procfs_text *t, int pid)
         return -EACCES;
     }
     if (p->mm && p->mm->env_end > p->mm->env_start) {
-        uint32_t start = p->mm->env_start;
-        uint32_t end = p->mm->env_end;
+        uintptr_t start = p->mm->env_start;
+        uintptr_t end = p->mm->env_end;
 
         ap_memory(t, p, start, end);
     }
@@ -887,8 +907,10 @@ static int procfs_gen_auxv(struct procfs_text *t, int pid)
         return -EACCES;
     }
     for (i = 0; p->mm && i + 1 < MM_AUXV_WORDS; i += 2) {
-        for (b = 0; b < 8; b++) {
-            ap_ch(t, (char)(p->mm->auxv[i + (uint32_t)b / 4u] >> (8 * (b % 4))));
+        const uint8_t *pair = (const uint8_t *)&p->mm->auxv[i];
+
+        for (b = 0; b < (int)(2 * sizeof(p->mm->auxv[0])); b++) {
+            ap_ch(t, (char)pair[b]);
         }
         if (p->mm->auxv[i] == 0) {
             break;
@@ -913,13 +935,16 @@ static int procfs_gen_comm(struct procfs_text *t, int pid)
     return t->len;
 }
 
-/** Append `v` as `width` lowercase hex digits, as /proc/<pid>/maps and
- * status write numbers. */
-static void ap_xlow(struct procfs_text *t, uint32_t v, int width)
+/** Append `v` as lowercase hex digits, at least `width` of them, as
+ * /proc/<pid>/maps and status write numbers. */
+static void ap_xlow(struct procfs_text *t, unsigned long v, int width)
 {
     static const char digits[] = "0123456789abcdef";
     int i;
 
+    while (width < (int)sizeof(v) * 2 && (v >> (width * 4)) != 0) {
+        width++;
+    }
     for (i = width - 1; i >= 0; i--) {
         ap_ch(t, digits[(v >> (i * 4)) & 0xFu]);
     }
@@ -1052,7 +1077,7 @@ static int procfs_gen_smaps(struct procfs_text *t, int pid)
     for (i = 0; mm && i < mm->vm.count; i++) {
         const vma_t *r = &mm->vm.vmas[i];
         uint32_t clean = 0, dirty = 0;
-        uint32_t a;
+        uintptr_t a;
         int shared = r->type == VM_SHARED;
         int of_file = r->file || r->type == VM_CODE || r->type == VM_DATA;
 
@@ -1063,7 +1088,7 @@ static int procfs_gen_smaps(struct procfs_text *t, int pid)
             dirty += state == 2;
         }
         ap_maps_line(t, mm, r);
-        ap_smaps_kb(t, "Size:", (r->end - r->start) / PAGE_SIZE);
+        ap_smaps_kb(t, "Size:", (uint32_t)((r->end - r->start) / PAGE_SIZE));
         ap_smaps_kb(t, "KernelPageSize:", 1);
         ap_smaps_kb(t, "MMUPageSize:", 1);
         ap_smaps_kb(t, "Rss:", clean + dirty);
@@ -1090,9 +1115,9 @@ static int procfs_gen_smaps(struct procfs_text *t, int pid)
 }
 
 /** The bytes of `mm`'s regions of type `type`. */
-static uint32_t mm_bytes(const struct mm *mm, vm_type_t type)
+static unsigned long mm_bytes(const struct mm *mm, vm_type_t type)
 {
-    uint32_t n = 0;
+    unsigned long n = 0;
     uint32_t i;
 
     for (i = 0; i < mm->vm.count; i++) {
@@ -1105,11 +1130,11 @@ static uint32_t mm_bytes(const struct mm *mm, vm_type_t type)
 
 /** Append "Name:\t" and the kilobytes of `bytes`, right-aligned in eight
  * places as Linux writes them, and " kB". */
-static void ap_kb(struct procfs_text *t, const char *name, uint32_t bytes)
+static void ap_kb(struct procfs_text *t, const char *name, unsigned long bytes)
 {
-    uint32_t kb = bytes / 1024u;
+    unsigned long kb = bytes / 1024u;
     uint32_t w = 1;
-    uint32_t v;
+    unsigned long v;
 
     for (v = kb; v >= 10u; v /= 10u) {
         w++;
@@ -1119,7 +1144,7 @@ static void ap_kb(struct procfs_text *t, const char *name, uint32_t bytes)
     while (w++ < 8u) {
         ap_ch(t, ' ');
     }
-    ap_u32(t, kb);
+    ap_ulong(t, kb);
     ap_str(t, " kB\n");
 }
 
@@ -1245,8 +1270,8 @@ static int procfs_gen_status(struct procfs_text *t, int pid)
     ap_u32(t, pid_seen(p->sid));
     ap_ch(t, '\n');
     if (mm) {
-        uint32_t size = vm_total(&mm->vm);
-        uint32_t rss = mm_resident(mm) * PAGE_SIZE;
+        unsigned long size = vm_total(&mm->vm);
+        unsigned long rss = (unsigned long)mm_resident(mm) * PAGE_SIZE;
 
         ap_kb(t, "VmPeak", size);
         ap_kb(t, "VmSize", size);
@@ -1299,15 +1324,15 @@ static int procfs_gen_statm(struct procfs_text *t, int pid)
         ap_str(t, "0 0 0 0 0 0 0\n");
         return t->len;
     }
-    ap_u32(t, vm_total(&mm->vm) / PAGE_SIZE);
+    ap_ulong(t, vm_total(&mm->vm) / PAGE_SIZE);
     ap_ch(t, ' ');
     ap_u32(t, mm_resident(mm));
     ap_str(t, " 0 ");
-    ap_u32(t, mm_bytes(mm, VM_CODE) / PAGE_SIZE);
+    ap_ulong(t, mm_bytes(mm, VM_CODE) / PAGE_SIZE);
     ap_str(t, " 0 ");
-    ap_u32(t, (mm_bytes(mm, VM_DATA) + mm_bytes(mm, VM_HEAP) + mm_bytes(mm, VM_ANON) +
-               mm_bytes(mm, VM_STACK)) /
-                  PAGE_SIZE);
+    ap_ulong(t, (mm_bytes(mm, VM_DATA) + mm_bytes(mm, VM_HEAP) + mm_bytes(mm, VM_ANON) +
+                 mm_bytes(mm, VM_STACK)) /
+                    PAGE_SIZE);
     ap_str(t, " 0\n");
     return t->len;
 }
@@ -4183,7 +4208,7 @@ static short procfs_poll(fd_entry_t *e, short events, struct wait_queue **wq)
     return (short)(events & POLLIN); /* always has data (or EOF) ready */
 }
 
-static int32_t procfs_ioctl(fd_entry_t *e, uint32_t request, uint32_t arg)
+static int32_t procfs_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 {
     (void)e;
     (void)request;

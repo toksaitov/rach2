@@ -36,10 +36,6 @@
 /* How far below its base the main stack VMA may grow on demand (8 MB). */
 #define VM_STACK_MAX_GROWTH 0x800000u
 
-/* A mapping without a usable hint goes in the highest free range below here
- * and above the heap, as a Linux mmap_base places it. */
-#define VM_MMAP_BASE 0xB0000000u
-
 /* Region protection bits (mirror the PROT_* / page-table permission flags). */
 #define VM_PROT_READ    0x1u
 #define VM_PROT_WRITE   0x2u
@@ -96,8 +92,8 @@ struct vm_file {
  * maps a file has it in `file`, and `pgoff` is the page of the file at
  * `start`; an anonymous region has neither. */
 typedef struct vma {
-    uint32_t start; /* inclusive, page-aligned */
-    uint32_t end;   /* exclusive, page-aligned */
+    uintptr_t start; /* inclusive, page-aligned */
+    uintptr_t end;   /* exclusive, page-aligned */
     uint32_t prot;  /* VM_PROT_* */
     vm_type_t type;
     struct vm_file *file;
@@ -109,9 +105,9 @@ typedef struct vm_space {
     vma_t *vmas; /* `cap` entries in the heap, `count` of them in use */
     uint32_t cap;
     uint32_t count;
-    uint32_t heap_start;  /* initial program break (base of the heap VMA) */
-    uint32_t brk;         /* current program break (top of the heap VMA)  */
-    uint32_t stack_limit; /* lowest address the stack VMA may grow down to */
+    uintptr_t heap_start;  /* initial program break (base of the heap VMA) */
+    uintptr_t brk;         /* current program break (top of the heap VMA)  */
+    uintptr_t stack_limit; /* lowest address the stack VMA may grow down to */
 } vm_space_t;
 
 /* Reset an address space to empty, dropping the files its regions map; the
@@ -126,19 +122,19 @@ void vm_free(vm_space_t *vm);
 int vm_copy(vm_space_t *dst, const vm_space_t *src);
 
 /* Return the VMA containing 'addr' (start <= addr < end), or NULL. */
-vma_t *vm_find(vm_space_t *vm, uint32_t addr);
+vma_t *vm_find(vm_space_t *vm, uintptr_t addr);
 
 /* Return 1 if any existing VMA intersects [start, end), else 0. */
-int vm_overlaps(const vm_space_t *vm, uint32_t start, uint32_t end);
+int vm_overlaps(const vm_space_t *vm, uintptr_t start, uintptr_t end);
 
 /** Insert a region [start, end) with 'prot'/'type', `prot` being the access
  * bits and VM_PROT_NOWRITE for a region never to be written; 0 ok, -1 on
  * error, which includes the limit reached and a heap with no room to grow. */
-int vm_insert(vm_space_t *vm, uint32_t start, uint32_t end, uint32_t prot, vm_type_t type);
+int vm_insert(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot, vm_type_t type);
 
 /** The same, for a region that maps `file` from its page `pgoff`; the region
  * takes a reference of its own. */
-int vm_insert_file(vm_space_t *vm, uint32_t start, uint32_t end, uint32_t prot, vm_type_t type,
+int vm_insert_file(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot, vm_type_t type,
                    struct vm_file *file, uint32_t pgoff);
 
 /** Take a reference to `f`, or drop one. The last one does not release the
@@ -158,13 +154,13 @@ void vm_file_reap(void);
 
 /** Remove [start, end) (munmap semantics); 0 ok, -1 if a split has no room,
  * in which case nothing has changed. */
-int vm_remove(vm_space_t *vm, uint32_t start, uint32_t end);
+int vm_remove(vm_space_t *vm, uintptr_t start, uintptr_t end);
 
 /** Give [start, end), which regions must cover without a gap, the access
  * bits `prot`, each region keeping its VM_PROT_NOWRITE; 0 ok, -1 for a gap,
  * -2 when a split has no room, and -3 when `prot` has write and a region of
  * the range has VM_PROT_NOWRITE, all with nothing changed. */
-int vm_protect(vm_space_t *vm, uint32_t start, uint32_t end, uint32_t prot);
+int vm_protect(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot);
 
 /** Make room for `n` more regions now, so the changes after cannot fail;
  * 0 ok, -1 at the limit or with no memory. */
@@ -172,16 +168,16 @@ int vm_reserve(vm_space_t *vm, uint32_t n);
 
 /** The start of the highest free range of `len` bytes inside [lo, hi), or 0
  * when there is none. */
-uint32_t vm_find_free(const vm_space_t *vm, uint32_t len, uint32_t lo, uint32_t hi);
+uintptr_t vm_find_free(const vm_space_t *vm, uintptr_t len, uintptr_t lo, uintptr_t hi);
 
 /** Bytes of [start, end) that regions cover. */
-uint32_t vm_covered(const vm_space_t *vm, uint32_t start, uint32_t end);
+uintptr_t vm_covered(const vm_space_t *vm, uintptr_t start, uintptr_t end);
 
 /** Bytes the regions cover together: what RLIMIT_AS is measured against. */
-uint32_t vm_total(const vm_space_t *vm);
+uintptr_t vm_total(const vm_space_t *vm);
 
 /** Grow the stack VMA down to cover 'page' (page-aligned; the fault handler
  * floors the fault address); 1 if grown, 0 if not. */
-int vm_grow_stack(vm_space_t *vm, uint32_t page, uint32_t as_limit);
+int vm_grow_stack(vm_space_t *vm, uintptr_t page, uintptr_t as_limit);
 
 #endif /* _VM_H_ */

@@ -2851,7 +2851,7 @@ static int dir_add(struct ext2_mount *em, struct ext2_node *d, const char *name,
     uint32_t name_len = (uint32_t)k_strlen(name);
     uint32_t need = dirent_len(name_len);
     uint32_t start = d->add_from < d->size ? d->add_from : 0;
-    uint32_t cursor = start, limit = d->size;
+    uint32_t cursor = start, limit = (uint32_t)d->size;
     struct ext2_scan sc;
     struct ext2_window w;
     uint8_t entry[8 + EXT2_NAME_MAX + 4];

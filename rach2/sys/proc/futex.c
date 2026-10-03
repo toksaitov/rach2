@@ -35,9 +35,9 @@ extern volatile uint32_t kernel_second_ticks;
  * distance from an entry to its futex word, and the entry being taken or
  * released when the thread ended, if any. */
 struct robust_head {
-    uint32_t next;
-    int32_t futex_offset;
-    uint32_t op_pending;
+    uintptr_t next;
+    long futex_offset;
+    uintptr_t op_pending;
 };
 
 /* The name futexes in shared memory have instead of an address space. */
@@ -50,7 +50,7 @@ static const char futex_shared_space;
 /* A sleeping waiter, on its own kernel stack while it sleeps. */
 struct futex_q {
     const void *space; /* the address space's page directory, or shared memory */
-    uint32_t uaddr;    /* the address in it, or the frame and offset */
+    uintptr_t uaddr;   /* the address in it, or the frame and offset */
     uint32_t bitset;
     int woken;
     int timed;
@@ -61,9 +61,9 @@ struct futex_q {
 static struct futex_q *_waiters[FUTEX_BUCKETS];
 static wait_queue_t _queues[FUTEX_BUCKETS];
 
-static uint32_t futex_bucket(const void *space, uint32_t uaddr)
+static uint32_t futex_bucket(const void *space, uintptr_t uaddr)
 {
-    return (((uint32_t)space >> 4) ^ (uaddr >> 2) ^ (uaddr >> 12)) % FUTEX_BUCKETS;
+    return (uint32_t)((((uintptr_t)space >> 4) ^ (uaddr >> 2) ^ (uaddr >> 12)) % FUTEX_BUCKETS);
 }
 
 /* Whole 10 ms ticks in `sec` seconds and `nsec` nanoseconds, a partial tick
@@ -118,7 +118,7 @@ static uint32_t futex_ticks_until(const struct kernel_timespec *at, int realtime
  * PTHREAD_PROCESS_SHARED mutex in /dev/shm among them, is named the second
  * way unless the caller passed FUTEX_PRIVATE_FLAG.
  */
-static void futex_key(uint32_t uaddr, int shared, const void **space, uint32_t *key)
+static void futex_key(uintptr_t uaddr, int shared, const void **space, uintptr_t *key)
 {
     const vma_t *r;
     uintptr_t phys;
@@ -135,7 +135,7 @@ static void futex_key(uint32_t uaddr, int shared, const void **space, uint32_t *
     phys = paging_user_phys(current_proc->page_dir, uaddr);
     if (phys != 0) {
         *space = &futex_shared_space;
-        *key = (uint32_t)phys;
+        *key = phys;
     }
 }
 
@@ -174,7 +174,7 @@ static void futex_unlink(struct futex_q *q, uint32_t bucket)
  * deadline, -EINTR for a signal and -EFAULT for an address the process
  * cannot read.
  */
-static int32_t futex_wait(uint32_t uaddr, uint32_t val, const struct kernel_timespec __user *utime,
+static int32_t futex_wait(uintptr_t uaddr, uint32_t val, const struct kernel_timespec __user *utime,
                           uint32_t bitset, int absolute, int flags_op)
 {
     struct futex_q q;
@@ -243,7 +243,7 @@ static int32_t futex_wait(uint32_t uaddr, uint32_t val, const struct kernel_time
 /* Wake up to `n` waiters on the futex at `uaddr` whose bitset meets
  * `bitset`, named as `futex_key` names it with `flags_op`; the number
  * woken. */
-static int futex_wake(uint32_t uaddr, uint32_t n, uint32_t bitset, int flags_op)
+static int futex_wake(uintptr_t uaddr, uint32_t n, uint32_t bitset, int flags_op)
 {
     const void *space;
     uint32_t bucket;
@@ -277,7 +277,7 @@ static int futex_wake(uint32_t uaddr, uint32_t n, uint32_t bitset, int flags_op)
     return woken;
 }
 
-int futex_wake_address(uint32_t uaddr, uint32_t n)
+int futex_wake_address(uintptr_t uaddr, uint32_t n)
 {
     return futex_wake(uaddr, n, FUTEX_MATCH_ANY, 0);
 }
@@ -308,7 +308,7 @@ int futex_restartable(const isr_params_t *params)
  * the read and the write. A waiter that set FUTEX_WAITERS during such a
  * sleep would have its bit written over and would not be woken.
  */
-static void robust_release(uint32_t uaddr, uint32_t tid, int pending)
+static void robust_release(uintptr_t uaddr, uint32_t tid, int pending)
 {
     uint32_t word;
     uint32_t flags;
@@ -344,29 +344,30 @@ static void robust_release(uint32_t uaddr, uint32_t tid, int pending)
 static void robust_exit(process_t *p)
 {
     struct robust_head head;
-    uint32_t entry;
-    uint32_t pending;
+    uintptr_t entry;
+    uintptr_t pending;
     int left = ROBUST_LIST_LIMIT;
 
     if (p->robust_list == 0 ||
         copy_from_user(&head, (const void __user *)p->robust_list, sizeof(head)) != 0) {
         return;
     }
-    entry = head.next & ~1u;
-    pending = head.op_pending & ~1u;
+    entry = head.next & ~(uintptr_t)1;
+    pending = head.op_pending & ~(uintptr_t)1;
     while (entry != p->robust_list && entry != 0 && left-- > 0) {
-        uint32_t next;
+        uintptr_t next;
 
-        if (copy_from_user(&next, (const void __user *)entry, 4) != 0) {
+        if (copy_from_user(&next, (const void __user *)entry, sizeof(next)) != 0) {
             break;
         }
         if (entry != pending) {
-            robust_release(entry + (uint32_t)head.futex_offset, p->pid, 0);
+            robust_release(entry + (uintptr_t)head.futex_offset, p->pid, 0);
         }
-        entry = next & ~1u;
+        entry = next & ~(uintptr_t)1;
     }
     if (pending != 0) {
-        robust_release(pending + (uint32_t)head.futex_offset, p->pid, (head.op_pending & 1u) == 0);
+        robust_release(pending + (uintptr_t)head.futex_offset, p->pid,
+                       (head.op_pending & 1u) == 0);
     }
 }
 
@@ -392,7 +393,7 @@ long sys_set_robust_list(isr_params_t *params)
         return -EINVAL;
     }
     current_proc->robust_list = SC_ARG(params, 0);
-    current_proc->robust_len = SC_ARG(params, 1);
+    current_proc->robust_len = (uint32_t)SC_ARG(params, 1);
     return 0;
 }
 
@@ -407,14 +408,14 @@ long sys_set_robust_list(isr_params_t *params)
 long sys_get_robust_list(isr_params_t *params)
 {
     process_t *t = current_proc;
-    uint32_t head;
-    uint32_t len = sizeof(struct robust_head);
+    uintptr_t head;
+    unsigned long len = sizeof(struct robust_head);
 
     if (!current_proc) {
         return -ESRCH;
     }
     if (SC_ARG(params, 0) != 0) {
-        t = get_process(SC_ARG(params, 0));
+        t = get_process((uint32_t)SC_ARG(params, 0));
         if (t == NULL || t->state == PROC_ZOMBIE || t->state == PROC_UNUSED) {
             return -ESRCH;
         }
@@ -434,11 +435,11 @@ long sys_get_robust_list(isr_params_t *params)
 
 long sys_futex(isr_params_t *params)
 {
-    uint32_t uaddr = SC_ARG(params, 0);
+    uintptr_t uaddr = SC_ARG(params, 0);
     int op = (int)SC_ARG(params, 1);
-    uint32_t val = SC_ARG(params, 2);
+    uint32_t val = (uint32_t)SC_ARG(params, 2);
     const struct kernel_timespec __user *utime = (const struct kernel_timespec __user *)SC_ARG(params, 3);
-    uint32_t val3 = SC_ARG(params, 5);
+    uint32_t val3 = (uint32_t)SC_ARG(params, 5);
     int cmd = op & ~(FUTEX_PRIVATE_FLAG | FUTEX_CLOCK_REALTIME);
 
     if (!current_proc) {

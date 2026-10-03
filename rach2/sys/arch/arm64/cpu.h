@@ -67,6 +67,7 @@ typedef uint64_t pte_t;
 #define KVA_BASE          USER_ADDR_MAX
 #define KVA_HEAP          KVA_BASE
 #define KVA_HEAP_SIZE     0x10000000u
+#define KVA_PCWIN         (KVA_BASE + 0x10000000u)
 #define KVA_MMIO          (KVA_BASE + 0x30000000u)
 #define KVA_MMIO_SIZE     0x08000000u
 #define KVA_TEMP          (KVA_BASE + 0x38000000u)
@@ -84,6 +85,13 @@ typedef uint64_t pte_t;
 
 #define USER_ADDR_MIN 0x0000000000010000UL
 #define USER_ADDR_MAX 0x0001000000000000UL
+
+/* A new image's layout: a position-independent program's base, the top
+ * page of its stack, and the address below which a mapping without a hint
+ * goes, above the heap, as Linux's mmap_base places it. */
+#define ELF_ET_DYN_BASE 0x0000AAAAAAAAA000UL
+#define USER_STACK_BASE 0x0000FFFFFFFFE000UL
+#define USER_MMAP_BASE  0x0000FFFF00000000UL
 
 #define ELF_CLASS   2u          /* ELFCLASS64 */
 #define ELF_MACHINE 183u        /* EM_AARCH64 */

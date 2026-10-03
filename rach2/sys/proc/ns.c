@@ -918,7 +918,7 @@ int ns_caps_held(const process_t *p)
  */
 long sys_unshare(isr_params_t *params)
 {
-    uint32_t flags = SC_ARG(params, 0);
+    uint32_t flags = (uint32_t)SC_ARG(params, 0);
     process_t *self = current_proc;
     struct userns *uns = NULL;
     struct nsset *set = NULL;
@@ -1039,7 +1039,7 @@ static int ns_below_own(const struct ns_common *c)
  * and the first has no parent: -EPERM; -EINVAL for a request of the wrong
  * kind, -ENOTTY for another.
  */
-static int32_t nsfs_ioctl(fd_entry_t *e, uint32_t request, uint32_t arg)
+static int32_t nsfs_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 {
     struct ns_common *c = nsfs_ns(e);
     struct ns_common *to;

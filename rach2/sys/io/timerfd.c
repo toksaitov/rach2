@@ -301,7 +301,7 @@ static struct ktimer *timer_of(int fd)
 long sys_timerfd_create(struct isr_params *params)
 {
     int clock = (int)SC_ARG(params, 0);
-    uint32_t flags = SC_ARG(params, 1);
+    uint32_t flags = (uint32_t)SC_ARG(params, 1);
     struct ktimer *t;
     fd_entry_t *e;
     int fd;
@@ -419,7 +419,7 @@ static int32_t arm(struct ktimer *t, int flags, const struct setting *s)
 
 /* The two widths of struct itimerspec: 32-bit seconds and nanoseconds, or
  * 64-bit ones, the interval first. */
-static int32_t get_setting(uint32_t u, int wide, struct setting *s)
+static int32_t get_setting(uintptr_t u, int wide, struct setting *s)
 {
     if (wide) {
         int64_t v[4];
@@ -451,7 +451,7 @@ static int32_t get_setting(uint32_t u, int wide, struct setting *s)
     return s->isec < 0 || s->vsec < 0 ? -EINVAL : 0;
 }
 
-static int32_t put_setting(uint32_t u, int wide, const struct setting *s)
+static int32_t put_setting(uintptr_t u, int wide, const struct setting *s)
 {
     if (wide) {
         int64_t v[4];
@@ -474,7 +474,7 @@ static int32_t put_setting(uint32_t u, int wide, const struct setting *s)
 
 /* Arm `t` from the setting at `want`, which `flags` may make absolute, and
  * give the setting it had at `old` when that is not 0. */
-static int32_t set_and_report(struct ktimer *t, int flags, uint32_t want_u, uint32_t old_u,
+static int32_t set_and_report(struct ktimer *t, int flags, uintptr_t want_u, uintptr_t old_u,
                               int wide)
 {
     struct setting now, want;

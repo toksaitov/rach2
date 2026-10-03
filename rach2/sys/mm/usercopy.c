@@ -11,7 +11,7 @@
  * end wraps past the top of the address space is rejected without overflowing.
  * An empty range is always in bounds.
  */
-int user_range_ok(uint32_t addr, uint32_t len)
+int user_range_ok(uintptr_t addr, size_t len)
 {
     if (len == 0) {
         return 1; /* an empty range touches nothing */
@@ -38,9 +38,9 @@ int user_range_ok(uint32_t addr, uint32_t len)
  * user space, in no region that may be read, or cannot be backed. Returns 0
  * for a zero-length copy.
  */
-int copy_from_user(void *dst, const void __user *src, uint32_t n)
+int copy_from_user(void *dst, const void __user *src, size_t n)
 {
-    uint32_t addr = (uint32_t)(__force uintptr_t)src;
+    uintptr_t addr = (__force uintptr_t)src;
 
     if (n == 0) {
         return 0;
@@ -68,9 +68,9 @@ int copy_from_user(void *dst, const void __user *src, uint32_t n)
  * outside user space, unmapped, read-only, or cannot be backed. Returns 0
  * for a zero-length copy.
  */
-int copy_to_user(void __user *dst, const void *src, uint32_t n)
+int copy_to_user(void __user *dst, const void *src, size_t n)
 {
-    uint32_t addr = (uint32_t)(__force uintptr_t)dst;
+    uintptr_t addr = (__force uintptr_t)dst;
 
     if (n == 0) {
         return 0;
@@ -101,7 +101,7 @@ int copy_to_user(void __user *dst, const void *src, uint32_t n)
  */
 int strncpy_from_user(char *dst, const char __user *src, uint32_t n)
 {
-    uint32_t addr = (uint32_t)(__force uintptr_t)src;
+    uintptr_t addr = (__force uintptr_t)src;
     const char *s = (const char __force *)src;
     uint32_t i;
 
@@ -109,7 +109,7 @@ int strncpy_from_user(char *dst, const char __user *src, uint32_t n)
         return -EINVAL;
     }
     for (i = 0; i < n; i++) {
-        uint32_t a = addr + i;
+        uintptr_t a = addr + i;
 
         if (!user_range_ok(a, 1)) {
             return -EFAULT;
@@ -141,7 +141,7 @@ int strncpy_from_user(char *dst, const char __user *src, uint32_t n)
  */
 int strnlen_user(const char __user *src, uint32_t n)
 {
-    uint32_t addr = (uint32_t)(__force uintptr_t)src;
+    uintptr_t addr = (__force uintptr_t)src;
     const char *s = (const char __force *)src;
     uint32_t i;
 
@@ -149,7 +149,7 @@ int strnlen_user(const char __user *src, uint32_t n)
         return -EINVAL;
     }
     for (i = 0; i < n; i++) {
-        uint32_t a = addr + i;
+        uintptr_t a = addr + i;
 
         if (!user_range_ok(a, 1)) {
             return -EFAULT;

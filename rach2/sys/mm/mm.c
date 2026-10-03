@@ -188,7 +188,7 @@ uint32_t mm_resident(const struct mm *mm)
     uint32_t i;
 
     for (i = 0; i < mm->vm.count; i++) {
-        uint32_t a;
+        uintptr_t a;
 
         for (a = mm->vm.vmas[i].start; a < mm->vm.vmas[i].end; a += PAGE_SIZE) {
             if (paging_user_phys(mm->dir, a) != 0) {

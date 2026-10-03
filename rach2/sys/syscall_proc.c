@@ -155,9 +155,9 @@ static void kstack_free(uintptr_t top)
  * is the stack running out; the double fault's handler and the page
  * fault's ask with the address the processor left in CR2.
  */
-int kstack_overrun_pid(uint32_t addr)
+int kstack_overrun_pid(uintptr_t addr)
 {
-    uint32_t guard;
+    uintptr_t guard;
 
     if (!current_proc || current_proc->kernel_stack < KERNEL_STACK_SIZE + PAGE_SIZE) {
         return -1;
@@ -788,7 +788,7 @@ struct exec_state {
     uint32_t nocaps; /* whether it has no capabilities (`exec_ids`) */
     int secure;      /* AT_SECURE */
     int unreadable;  /* an image loaded is one the caller may not read */
-    uint32_t entry;  /* where the new image starts */
+    uintptr_t entry; /* where the new image starts */
     elf_layout_t layout;
     elf_layout_t ilayout; /* the interpreter's */
     elf_image_t img;
@@ -1033,17 +1033,17 @@ static void exec_privileges(struct mm *mm, int secure, int unreadable, uint32_t 
  * How far below its top page the stack of a new image may grow, when the
  * pages its arguments took start at `bottom`: to `limit`, the soft
  * RLIMIT_STACK in force at the exec, in whole pages, which bounds the whole
- * stack as Linux's does, but never into the range below VM_MMAP_BASE where
+ * stack as Linux's does, but never into the range below USER_MMAP_BASE where
  * anonymous mappings are placed, and always as far as `bottom`. A limit
  * changed later applies at the next exec.
  */
-static uint32_t exec_stack_window(uint32_t bottom, uint32_t limit)
+static uintptr_t exec_stack_window(uintptr_t bottom, uint32_t limit)
 {
-    uint32_t size = limit & ~(uint32_t)(PAGE_SIZE - 1);
-    uint32_t floor;
+    uintptr_t size = limit & ~(uint32_t)(PAGE_SIZE - 1);
+    uintptr_t floor;
 
-    if (size > USER_ADDR_MAX - VM_MMAP_BASE) {
-        size = USER_ADDR_MAX - VM_MMAP_BASE;
+    if (size > USER_ADDR_MAX - USER_MMAP_BASE) {
+        size = USER_ADDR_MAX - USER_MMAP_BASE;
     }
     floor = USER_ADDR_MAX - size;
     if (floor > bottom) {
@@ -1094,7 +1094,7 @@ static int32_t exec_count(char *const __user *vec, uint32_t max, uint32_t *n)
 static int32_t exec_copy_strings(struct uimage *u, char *const __user *vec, uint32_t n)
 {
     while (n > 0) {
-        uint32_t ptr;
+        uintptr_t ptr;
         int32_t rc;
 
         n--;
@@ -1266,7 +1266,7 @@ static int32_t exec_open(struct exec_file *f, const char *path, int end, struct 
  */
 static int32_t exec_script(struct exec_state *s)
 {
-    Elf32_Ehdr ehdr;
+    Elf_Ehdr ehdr;
     int32_t rc;
 
     if (exec_file_read(&s->prog, &ehdr, sizeof(ehdr), 0) == (int)sizeof(ehdr) &&
@@ -1383,7 +1383,7 @@ static void exec_ids(struct exec_state *s)
  * Load the interpreter the program's PT_INTERP names into the new address
  * space, as Linux's `load_elf_interp` loads it: a position-independent one,
  * which every dynamic linker is, at the top of the range mmap places
- * mappings in, just below VM_MMAP_BASE, and one with fixed addresses at
+ * mappings in, just below USER_MMAP_BASE, and one with fixed addresses at
  * those. Its own PT_INTERP is ignored. The new image starts at its entry,
  * and `*base`, AT_BASE, is the distance it was moved by.
  *
@@ -1395,9 +1395,9 @@ static void exec_ids(struct exec_state *s)
  * -ENOMEM for one that would cover the program or for memory its load could
  * not have, -EIO or a mount's error for a read that failed.
  */
-static int32_t exec_interp(struct exec_state *s, uint32_t *base)
+static int32_t exec_interp(struct exec_state *s, uintptr_t *base)
 {
-    uint32_t bias = 0;
+    uintptr_t bias = 0;
     int end;
     int32_t rc;
 
@@ -1417,7 +1417,7 @@ static int32_t exec_interp(struct exec_state *s, uint32_t *base)
         return exec_load_err(&s->prog, rc, -ELIBBAD);
     }
     if (s->ilayout.type == ET_DYN) {
-        bias = VM_MMAP_BASE - (s->ilayout.hi - s->ilayout.lo) - s->ilayout.lo;
+        bias = USER_MMAP_BASE - (s->ilayout.hi - s->ilayout.lo) - s->ilayout.lo;
     }
     if (s->ilayout.lo + bias < s->img.image_end && s->ilayout.hi + bias > s->img.segs[0].start) {
         return -ENOMEM;
@@ -1447,8 +1447,8 @@ static int32_t exec_interp(struct exec_state *s, uint32_t *base)
 static int32_t exec_build(struct exec_state *s)
 {
     struct uimage_aux aux;
-    uint32_t bias = 0;
-    uint32_t bottom = uimage_bottom(&s->args);
+    uintptr_t bias = 0;
+    uintptr_t bottom = uimage_bottom(&s->args);
     uint32_t limit = current_proc->rlim[RLIM_STACK].cur;
     uint8_t random16[16];
     int32_t rc;
@@ -1685,7 +1685,7 @@ static void exec_commit(isr_params_t *params, struct exec_state *s)
     mm_put(old);
     proc_vfork_release(current_proc);
 
-    arch_exec_frame(params, s->entry, s->args.esp);
+    arch_exec_frame(params, s->entry, s->args.sp);
     current_proc->tls_base = 0;
     arch_tls_set(0);
     fpu_init_area(current_proc->fpu);
@@ -1879,10 +1879,10 @@ long sys_execve(isr_params_t *params)
  * CLONE_SETTLS gives the child. */
 struct fork_req {
     uint32_t flags;
-    uint32_t newsp;
-    uint32_t ptid;
-    uint32_t settid;
-    uint32_t cleartid;
+    uintptr_t newsp;
+    uintptr_t ptid;
+    uintptr_t settid;
+    uintptr_t cleartid;
     uintptr_t tls;
 };
 
@@ -2265,8 +2265,8 @@ long sys_vfork(isr_params_t *params)
 
 /** The clone `sys_clone` describes, from the arguments of `clone` or of
  * `clone3`, the registers of `params` aside. */
-static int32_t clone_with(isr_params_t *params, uint32_t flags, uint32_t newsp, uint32_t ptid,
-                          uint32_t tls, uint32_t ctid)
+static int32_t clone_with(isr_params_t *params, uint32_t flags, uintptr_t newsp, uintptr_t ptid,
+                          unsigned long tls, uintptr_t ctid)
 {
     struct fork_req req;
 
@@ -2286,7 +2286,7 @@ static int32_t clone_with(isr_params_t *params, uint32_t flags, uint32_t newsp, 
         long err = arch_clone_tls(tls, &base);
 
         if (err != 0) {
-            return err;
+            return (int32_t)err;
         }
         req.tls = base;
     }
@@ -2308,11 +2308,13 @@ static int32_t clone_with(isr_params_t *params, uint32_t flags, uint32_t newsp, 
  * CLONE_FILES shares the caller's descriptor table in place of a copy, and
  * CLONE_FS its working directory, root directory and umask.
  *
- * i386 argument order: EBX=flags, ECX=new stack or 0, EDX=parent tid address,
- * ESI=TLS descriptor, EDI=child tid address. The exit signal must be SIGCHLD
- * for a process; a thread sends none, whatever the low byte says.
- * CLONE_SETTLS gives the child the TLS base of the user_desc at ESI, which
- * set_thread_area would take. CLONE_PARENT makes the child a child of the
+ * The arguments are the flags, the new stack or 0 and the parent tid
+ * address, then the TLS argument and the child tid address in the order of
+ * the architecture (SC_CLONE_TLS and SC_CLONE_CTID): i386 has the TLS
+ * argument first, x86-64 the child tid. The exit signal must be SIGCHLD for
+ * a process; a thread sends none, whatever the low byte says. CLONE_SETTLS
+ * gives the child the thread pointer its TLS argument gives
+ * (`arch_clone_tls`). CLONE_PARENT makes the child a child of the
  * caller's parent. CLONE_PARENT_SETTID stores the child's id in the
  * parent's memory before the child runs, and a failed store is ignored, as
  * Linux ignores it. CLONE_SYSVSEM and CLONE_DETACHED are ignored: a
@@ -2323,13 +2325,20 @@ static int32_t clone_with(isr_params_t *params, uint32_t flags, uint32_t newsp, 
  */
 long sys_clone(isr_params_t *params)
 {
-    return clone_with(params, SC_ARG(params, 0), SC_ARG(params, 1), SC_ARG(params, 2), SC_ARG(params, 3), SC_ARG(params, 4));
+    return clone_with(params, (uint32_t)SC_ARG(params, 0), SC_ARG(params, 1), SC_ARG(params, 2),
+                      SC_ARG(params, SC_CLONE_TLS), SC_ARG(params, SC_CLONE_CTID));
 }
 
-/* clone3's structure, Linux's struct clone_args as eight 64-bit fields of its
- * first version, each a low and a high word: flags, pidfd, child_tid,
- * parent_tid, exit_signal, stack, stack_size and tls. */
-#define CLONE_ARGS_WORDS 16
+/* clone3's structure, Linux's struct clone_args as the eight 64-bit fields
+ * of its first version, on every architecture. */
+#define CA_FLAGS       0
+#define CA_CHILD_TID   2
+#define CA_PARENT_TID  3
+#define CA_EXIT_SIGNAL 4
+#define CA_STACK       5
+#define CA_STACK_SIZE  6
+#define CA_TLS         7
+#define CLONE_ARGS_FIELDS 8
 
 /* How much of a larger structure Linux knows, through set_tid, set_tid_size
  * and cgroup; past it the bytes must be zero, and at most a page is read. */
@@ -2344,14 +2353,17 @@ long sys_clone(isr_params_t *params)
  * EINVAL; a longer one is read when the fields this kernel does not take,
  * set_tid, set_tid_size and cgroup, are zero, and its bytes past those
  * fields are zero, else E2BIG, as Linux reads it. CLONE_PIDFD is EINVAL,
- * since no descriptor names a process here, and so is a flag or a field
- * with bits past 32. The caller's registers are left as they were, since a
- * caller may keep the structure's address in one across the call.
+ * since no descriptor names a process here, and so is a flag past bit 31
+ * or a field wider than an address. The caller's registers are left as they
+ * were, since a caller may keep the structure's address in one across the
+ * call.
  */
 long sys_clone3(isr_params_t *params)
 {
-    uint32_t a[CLONE_ARGS_WORDS], extra[(CLONE_ARGS_KNOWN - 64) / 4];
-    uint32_t size = SC_ARG(params, 1), at, byte, i;
+    uint64_t a[CLONE_ARGS_FIELDS];
+    uint32_t extra[(CLONE_ARGS_KNOWN - 64) / 4];
+    uintptr_t uargs = SC_ARG(params, 0);
+    uint32_t size = USER_LEN32(SC_ARG(params, 1)), at, byte, i;
 
     if (size < 64u) {
         return -EINVAL;
@@ -2359,14 +2371,14 @@ long sys_clone3(isr_params_t *params)
     if (size > 4096u) {
         return -E2BIG;
     }
-    if (copy_from_user(a, (const void __user *)SC_ARG(params, 0), sizeof(a)) != 0) {
+    if (copy_from_user(a, (const void __user *)uargs, sizeof(a)) != 0) {
         return -EFAULT;
     }
     for (at = 64u; at < size; at += 4u) {
         uint32_t n = size - at < 4u ? size - at : 4u;
 
         byte = 0;
-        if (copy_from_user(&byte, (const void __user *)(SC_ARG(params, 0) + at), n) != 0) {
+        if (copy_from_user(&byte, (const void __user *)(uargs + at), n) != 0) {
             return -EFAULT;
         }
         if (at < CLONE_ARGS_KNOWN) {
@@ -2380,15 +2392,19 @@ long sys_clone3(isr_params_t *params)
             return -EINVAL;
         }
     }
-    for (i = 1; i < CLONE_ARGS_WORDS; i += 2) {
-        if (a[i] != 0) {
+    for (i = 0; i < CLONE_ARGS_FIELDS; i++) {
+        if (a[i] != (uintptr_t)a[i]) {
             return -EINVAL;
         }
     }
-    if ((a[0] & (CSIGNAL | CLONE_PIDFD)) != 0 || a[8] > 64u || (a[10] == 0) != (a[12] == 0)) {
+    if ((a[CA_FLAGS] >> 31 >> 1) != 0 || (a[CA_FLAGS] & (CSIGNAL | CLONE_PIDFD)) != 0 ||
+        a[CA_EXIT_SIGNAL] > 64u || (a[CA_STACK] == 0) != (a[CA_STACK_SIZE] == 0)) {
         return -EINVAL;
     }
-    return clone_with(params, a[0] | a[8], a[10] ? a[10] + a[12] : 0, a[6], a[14], a[4]);
+    return clone_with(params, (uint32_t)(a[CA_FLAGS] | a[CA_EXIT_SIGNAL]),
+                      a[CA_STACK] ? (uintptr_t)(a[CA_STACK] + a[CA_STACK_SIZE]) : 0,
+                      (uintptr_t)a[CA_PARENT_TID], (unsigned long)a[CA_TLS],
+                      (uintptr_t)a[CA_CHILD_TID]);
 }
 
 /* The options of waitpid, wait4 and waitid. */
@@ -2870,7 +2886,7 @@ static int32_t wait_find(int idtype, uint32_t id, int options, struct wait_repor
  * (`wait_done`): no zombie is lost. The pid returned is the child's in the
  * caller's PID namespace, found before `wait_done` frees a reaped child.
  */
-static int32_t do_wait(int pid, int __user *status, int options, uint32_t rusage_ptr)
+static int32_t do_wait(int pid, int __user *status, int options, uintptr_t rusage_ptr)
 {
     struct wait_report r;
     int idtype = P_PGID;
@@ -2881,7 +2897,7 @@ static int32_t do_wait(int pid, int __user *status, int options, uint32_t rusage
     if (!current_proc) {
         return -ESRCH;
     }
-    if (status && !user_buffer_ok((uint32_t)(__force uintptr_t)status, sizeof(int), 1)) {
+    if (status && !user_buffer_ok((__force uintptr_t)status, sizeof(int), 1)) {
         return -EFAULT;
     }
     if (rusage_ptr && !user_buffer_ok(rusage_ptr, RUSAGE_BYTES, 1)) {
@@ -2966,9 +2982,9 @@ long sys_waitid(isr_params_t *params)
 {
     int idtype = (int)SC_ARG(params, 0);
     int32_t upid = (int32_t)SC_ARG(params, 1);
-    uint32_t uinfo = SC_ARG(params, 2);
+    uintptr_t uinfo = SC_ARG(params, 2);
     int options = (int)SC_ARG(params, 3);
-    uint32_t rusage_ptr = SC_ARG(params, 4);
+    uintptr_t rusage_ptr = SC_ARG(params, 4);
     struct kernel_chld_info info;
     struct wait_report r;
     uint32_t id = 0;
@@ -3617,7 +3633,7 @@ long sys_tgkill(isr_params_t *params)
  * to send, and a caller may give one only to its own process (`own`), as
  * on Linux; -EPERM otherwise.
  */
-static int32_t queued_info(uint32_t u, int own, struct k_siginfo *info)
+static int32_t queued_info(uintptr_t u, int own, struct k_siginfo *info)
 {
     int32_t w[6]; /* signo, errno, code, pid, uid, value */
 
@@ -3744,7 +3760,7 @@ long sys_pause(isr_params_t *params)
 long sys_rt_sigsuspend(isr_params_t *params)
 {
     const void __user *umask = (const void __user *)SC_ARG(params, 0);
-    uint32_t sigsetsize = SC_ARG(params, 1);
+    uint32_t sigsetsize = USER_LEN32(SC_ARG(params, 1));
     uint64_t newmask = 0;
 
     if (!current_proc) {
@@ -3775,7 +3791,7 @@ long sys_rt_sigaction(isr_params_t *params)
     int signo = (int)SC_ARG(params, 0);
     const struct k_sigaction __user *uact = (const struct k_sigaction __user *)SC_ARG(params, 1);
     struct k_sigaction __user *uold = (struct k_sigaction __user *)SC_ARG(params, 2);
-    uint32_t setsize = SC_ARG(params, 3);
+    uint32_t setsize = USER_LEN32(SC_ARG(params, 3));
     struct k_sigaction act;
 
     if (!current_proc) {
@@ -3822,7 +3838,7 @@ long sys_rt_sigprocmask(isr_params_t *params)
     int how = (int)SC_ARG(params, 0);
     const void __user *uset = (const void __user *)SC_ARG(params, 1);
     void __user *uold = (void __user *)SC_ARG(params, 2);
-    uint32_t setsize = SC_ARG(params, 3);
+    uint32_t setsize = USER_LEN32(SC_ARG(params, 3));
     uint32_t words[2];
     uint64_t set;
 
@@ -3976,7 +3992,7 @@ long sys_sigaltstack(isr_params_t *params)
  */
 long sys_rt_sigpending(isr_params_t *params)
 {
-    uint32_t size = SC_ARG(params, 1);
+    uint32_t size = USER_LEN32(SC_ARG(params, 1));
     uint32_t words[2];
     uint64_t set;
     uint32_t flags;
@@ -4445,6 +4461,11 @@ static void put_word(uint8_t *at, uint32_t v)
     k_memcpy(at, &v, sizeof(v));
 }
 
+static void put_u64(uint8_t *at, uint64_t v)
+{
+    k_memcpy(at, &v, sizeof(v));
+}
+
 /*
  * The 128-byte struct signalfd_siginfo of `signo` and `info`, in Linux's
  * fields: a timer's id, overrun and value, a child's pid, uid and status, a
@@ -4460,7 +4481,7 @@ static void sigfd_fill(uint8_t *out, int signo, const struct k_siginfo *info)
     put_word(out, (uint32_t)signo);
     put_word(out + 8, (uint32_t)info->code);
     if (fault) {
-        put_word(out + 72, info->addr); /* ssi_addr */
+        put_u64(out + 72, info->addr); /* ssi_addr */
     } else if (info->code == SI_TIMER) {
         put_word(out + 24, info->pid); /* ssi_tid */
         put_word(out + 32, info->uid); /* ssi_overrun */
@@ -4602,7 +4623,7 @@ long sys_signalfd(isr_params_t *params)
 
 long sys_signalfd4(isr_params_t *params)
 {
-    return signalfd_common(params, SC_ARG(params, 3));
+    return signalfd_common(params, (uint32_t)SC_ARG(params, 3));
 }
 
 /*
@@ -4814,7 +4835,7 @@ long sys_umask(isr_params_t *params)
 long sys_setuid(isr_params_t *params)
 {
     process_t *p = current_proc;
-    uint32_t uid = SC_ARG(params, 0);
+    uint32_t uid = (uint32_t)SC_ARG(params, 0);
     uint32_t old_euid = p->euid;
 
     if (uid == SC_ID_KEEP || ids_named(&uid, 1, 0) != 0) {
@@ -4838,7 +4859,7 @@ long sys_setuid(isr_params_t *params)
 long sys_setgid(isr_params_t *params)
 {
     process_t *p = current_proc;
-    uint32_t gid = SC_ARG(params, 0);
+    uint32_t gid = (uint32_t)SC_ARG(params, 0);
     uint32_t old_egid = p->egid;
 
     if (gid == SC_ID_KEEP || ids_named(&gid, 1, 1) != 0) {
@@ -4866,8 +4887,8 @@ long sys_setreuid(isr_params_t *params)
     uint32_t r, e, new_r, new_e;
     uint32_t old_euid = p->euid;
 
-    v[0] = SC_ARG(params, 0);
-    v[1] = SC_ARG(params, 1);
+    v[0] = (uint32_t)SC_ARG(params, 0);
+    v[1] = (uint32_t)SC_ARG(params, 1);
     if (ids_named(v, 2, 0) != 0) {
         return -EINVAL;
     }
@@ -4899,8 +4920,8 @@ long sys_setregid(isr_params_t *params)
     uint32_t r, e, new_r, new_e;
     uint32_t old_egid = p->egid;
 
-    v[0] = SC_ARG(params, 0);
-    v[1] = SC_ARG(params, 1);
+    v[0] = (uint32_t)SC_ARG(params, 0);
+    v[1] = (uint32_t)SC_ARG(params, 1);
     if (ids_named(v, 2, 1) != 0) {
         return -EINVAL;
     }
@@ -4932,9 +4953,9 @@ long sys_setresuid(isr_params_t *params)
     uint32_t r, e, s;
     uint32_t old_euid = p->euid;
 
-    v[0] = SC_ARG(params, 0);
-    v[1] = SC_ARG(params, 1);
-    v[2] = SC_ARG(params, 2);
+    v[0] = (uint32_t)SC_ARG(params, 0);
+    v[1] = (uint32_t)SC_ARG(params, 1);
+    v[2] = (uint32_t)SC_ARG(params, 2);
     if (ids_named(v, 3, 0) != 0) {
         return -EINVAL;
     }
@@ -4970,9 +4991,9 @@ long sys_setresgid(isr_params_t *params)
     uint32_t r, e, s;
     uint32_t old_egid = p->egid;
 
-    v[0] = SC_ARG(params, 0);
-    v[1] = SC_ARG(params, 1);
-    v[2] = SC_ARG(params, 2);
+    v[0] = (uint32_t)SC_ARG(params, 0);
+    v[1] = (uint32_t)SC_ARG(params, 1);
+    v[2] = (uint32_t)SC_ARG(params, 2);
     if (ids_named(v, 3, 1) != 0) {
         return -EINVAL;
     }
@@ -5035,8 +5056,8 @@ long sys_getresgid(isr_params_t *params)
 long sys_setgroups(isr_params_t *params)
 {
     process_t *p = current_proc;
-    uint32_t size = SC_ARG(params, 0);
-    uint32_t list_ptr = SC_ARG(params, 1);
+    uint32_t size = USER_LEN32(SC_ARG(params, 0));
+    uintptr_t list_ptr = SC_ARG(params, 1);
     uint32_t tmp[NGROUPS_MAX];
     uint32_t i;
 
@@ -5064,8 +5085,8 @@ long sys_setgroups(isr_params_t *params)
 long sys_getgroups(isr_params_t *params)
 {
     process_t *p = current_proc;
-    uint32_t size = SC_ARG(params, 0);
-    uint32_t list_ptr = SC_ARG(params, 1);
+    uint32_t size = USER_LEN32(SC_ARG(params, 0));
+    uintptr_t list_ptr = SC_ARG(params, 1);
     uint32_t i;
 
     if ((int32_t)size < 0) {
@@ -5200,8 +5221,8 @@ static process_t *rlimit_target(uint32_t pid)
  * rlim_max }. */
 long sys_getrlimit(isr_params_t *params)
 {
-    uint32_t resource = SC_ARG(params, 0);
-    uint32_t rl = SC_ARG(params, 1);
+    uint32_t resource = (uint32_t)SC_ARG(params, 0);
+    uintptr_t rl = SC_ARG(params, 1);
     uint32_t out[2];
 
     if (!rl) {
@@ -5217,8 +5238,8 @@ long sys_getrlimit(isr_params_t *params)
 /* setrlimit(75): the 32-bit form of a set. */
 long sys_setrlimit(isr_params_t *params)
 {
-    uint32_t resource = SC_ARG(params, 0);
-    uint32_t rl = SC_ARG(params, 1);
+    uint32_t resource = (uint32_t)SC_ARG(params, 0);
+    uintptr_t rl = SC_ARG(params, 1);
     uint32_t in[2];
 
     if (copy_from_user(in, (const void __user *)rl, sizeof(in)) != 0) {
@@ -5243,10 +5264,10 @@ static uint32_t rlimit_from64(uint32_t lo, uint32_t hi)
  * issues for both. */
 long sys_prlimit64(isr_params_t *params)
 {
-    uint32_t pid = SC_ARG(params, 0);
-    uint32_t resource = SC_ARG(params, 1);
-    uint32_t newp = SC_ARG(params, 2);
-    uint32_t oldp = SC_ARG(params, 3);
+    uint32_t pid = (uint32_t)SC_ARG(params, 0);
+    uint32_t resource = (uint32_t)SC_ARG(params, 1);
+    uintptr_t newp = SC_ARG(params, 2);
+    uintptr_t oldp = SC_ARG(params, 3);
     process_t *p;
     uint32_t cur32, max32;
     uint32_t in[4];
@@ -5318,9 +5339,9 @@ long sys_prlimit64(isr_params_t *params)
  */
 long sys_brk(isr_params_t *params)
 {
-    uint32_t req = SC_ARG(params, 0);
+    uintptr_t req = SC_ARG(params, 0);
     vm_space_t *vm;
-    uint32_t old_top, new_top;
+    uintptr_t old_top, new_top;
 
     if (!current_proc || !current_proc->mm) {
         return -ESRCH;
@@ -5331,7 +5352,7 @@ long sys_brk(isr_params_t *params)
     /* brk(0) queries the break; below the heap base or into the stack window is
      * refused with the break left unchanged. */
     if (req < vm->heap_start || req > vm->stack_limit) {
-        return (int32_t)vm->brk;
+        return (long)vm->brk;
     }
 
     old_top = PAGE_UP(vm->brk);
@@ -5341,24 +5362,24 @@ long sys_brk(isr_params_t *params)
         /* Grow: the new pages [old_top, new_top) must not collide with mmap or
          * any other region. */
         if (vm_overlaps(vm, old_top, new_top)) {
-            return (int32_t)vm->brk;
+            return (long)vm->brk;
         }
         if (vm_total(vm) + (new_top - old_top) > current_proc->rlim[RLIM_AS].cur) {
-            return (int32_t)vm->brk; /* RLIMIT_AS: brk reports the break unchanged */
+            return (long)vm->brk; /* RLIMIT_AS: brk reports the break unchanged */
         }
         if (vm_insert(vm, old_top, new_top, VM_PROT_READ | VM_PROT_WRITE, VM_HEAP) != 0) {
-            return (int32_t)vm->brk;
+            return (long)vm->brk;
         }
     } else if (new_top < old_top) {
         if (vm_remove(vm, new_top, old_top) != 0) {
-            return (int32_t)vm->brk;
+            return (long)vm->brk;
         }
         unmap_user_range(_curr_dir, new_top, old_top);
     }
 
     vm->brk = req;
     vm_file_reap();
-    return (int32_t)req;
+    return (long)req;
 }
 
 /**
@@ -5534,7 +5555,7 @@ static int32_t mmap_file(fd_entry_t *e, int fd, int shared, struct map_source *s
  * another caller or another frame, EINVAL for a private mapping, ENOMEM
  * with no memory for the region's object.
  */
-static int32_t mmap_devmem(uint32_t flags, uint32_t len, struct map_source *src)
+static int32_t mmap_devmem(uint32_t flags, uintptr_t len, struct map_source *src)
 {
     uint32_t i;
 
@@ -5562,7 +5583,7 @@ static int32_t mmap_devmem(uint32_t flags, uint32_t len, struct map_source *src)
  * `prot`. Each mapping takes a reference, which a frame the allocator counts,
  * one of the first megabyte, keeps while unmapping drops it; the others have
  * no count. 0, or -ENOMEM with no memory for a page table. */
-static int32_t mmap_devmem_fill(uint32_t base, uint32_t len, uint32_t pgoff, uint32_t prot)
+static int32_t mmap_devmem_fill(uintptr_t base, uintptr_t len, uint32_t pgoff, uint32_t prot)
 {
     uint32_t i;
 
@@ -5587,7 +5608,7 @@ static int32_t mmap_devmem_fill(uint32_t base, uint32_t len, uint32_t pgoff, uin
  * Anonymous memory has its pages from its own first on, so its offset is
  * set to 0, as Linux ignores it. It may sleep, finding a file's path.
  */
-static int32_t mmap_backing(uint32_t flags, int fd, uint32_t len, struct map_source *src)
+static int32_t mmap_backing(uint32_t flags, int fd, uintptr_t len, struct map_source *src)
 {
     int shared = (flags & MAP_TYPE) != MAP_PRIVATE;
     fd_entry_t *e;
@@ -5620,13 +5641,13 @@ static int32_t mmap_backing(uint32_t flags, int fd, uint32_t len, struct map_sou
  * MAP_FIXED or MAP_FIXED_NOREPLACE, which refuses a range in use with
  * EEXIST; otherwise a page-aligned hint whose range is free below the
  * stack's growth window, and without one the highest free range below
- * VM_MMAP_BASE and above the heap's top, so the ranges munmap frees are used
+ * USER_MMAP_BASE and above the heap's top, so the ranges munmap frees are used
  * again. RLIMIT_AS counts the range, less what a fixed mapping replaces.
  * 0, -ENOMEM or -EEXIST. Nothing here sleeps, so the range is still as it
  * was found when the caller inserts the region straight after.
  */
-static int32_t mmap_place(vm_space_t *vm, uint32_t addr, uint32_t len, uint32_t flags,
-                          uint32_t *base)
+static int32_t mmap_place(vm_space_t *vm, uintptr_t addr, uintptr_t len, uint32_t flags,
+                          uintptr_t *base)
 {
     uint32_t limit = current_proc->rlim[RLIM_AS].cur;
 
@@ -5647,7 +5668,7 @@ static int32_t mmap_place(vm_space_t *vm, uint32_t addr, uint32_t len, uint32_t 
         *base = addr;
     }
     if (*base == 0) {
-        *base = vm_find_free(vm, len, PAGE_UP(vm->brk), VM_MMAP_BASE);
+        *base = vm_find_free(vm, len, PAGE_UP(vm->brk), USER_MMAP_BASE);
     }
     return *base == 0 || vm_total(vm) + len > limit ? -ENOMEM : 0;
 }
@@ -5658,10 +5679,10 @@ static int32_t mmap_place(vm_space_t *vm, uint32_t addr, uint32_t len, uint32_t 
  * /dev/mem region's frames at once. The region takes its own reference to
  * the file, and the caller's is put here. Returns the address, or -errno.
  */
-static int32_t mmap_install(uint32_t addr, uint32_t len, uint32_t flags, struct map_source *src)
+static long mmap_install(uintptr_t addr, uintptr_t len, uint32_t flags, struct map_source *src)
 {
     vm_space_t *vm = &current_proc->mm->vm;
-    uint32_t base = 0;
+    uintptr_t base = 0;
     int32_t rc = mmap_place(vm, addr, len, flags, &base);
 
     if (rc == 0 && (flags & MAP_FIXED)) {
@@ -5687,7 +5708,7 @@ static int32_t mmap_install(uint32_t addr, uint32_t len, uint32_t flags, struct 
     }
     vm_file_put(src->file);
     vm_file_reap();
-    return rc == 0 ? (int32_t)base : rc;
+    return rc == 0 ? (long)base : rc;
 }
 
 /*
@@ -5706,12 +5727,12 @@ static int32_t mmap_install(uint32_t addr, uint32_t len, uint32_t flags, struct 
  */
 long sys_mmap2(isr_params_t *params)
 {
-    uint32_t addr = SC_ARG(params, 0);
-    uint32_t length = SC_ARG(params, 1);
-    uint32_t prot = SC_ARG(params, 2);
-    uint32_t flags = SC_ARG(params, 3);
+    uintptr_t addr = SC_ARG(params, 0);
+    uintptr_t length = SC_ARG(params, 1);
+    uint32_t prot = (uint32_t)SC_ARG(params, 2);
+    uint32_t flags = (uint32_t)SC_ARG(params, 3);
     struct map_source src;
-    uint32_t len;
+    uintptr_t len;
     int32_t rc;
 
     if (!current_proc || !current_proc->mm) {
@@ -5736,7 +5757,7 @@ long sys_mmap2(isr_params_t *params)
     }
     mem_balance();
     src.prot = vm_prot_of(prot);
-    src.pgoff = SC_ARG(params, 5);
+    src.pgoff = (uint32_t)SC_ARG(params, 5);
     rc = mmap_backing(flags, (int)SC_ARG(params, 4), len, &src);
     if (rc != 0) {
         return rc;
@@ -5744,7 +5765,7 @@ long sys_mmap2(isr_params_t *params)
     return mmap_install(addr, len, flags, &src);
 }
 
-int32_t mmap_shm(struct open_file *ofd, uint32_t addr, uint32_t len, uint32_t access, int place,
+long mmap_shm(struct open_file *ofd, uintptr_t addr, uintptr_t len, uint32_t access, int place,
                  char *path)
 {
     static const uint32_t places[] = {0, MAP_FIXED_NOREPLACE, MAP_FIXED};
@@ -5774,11 +5795,11 @@ int32_t mmap_shm(struct open_file *ofd, uint32_t addr, uint32_t len, uint32_t ac
     return mmap_install(addr, PAGE_UP(len), places[place], &src);
 }
 
-int32_t munmap_shm(uint32_t addr, const struct shmem *sh, uint32_t size)
+int32_t munmap_shm(uintptr_t addr, const struct shmem *sh, uint32_t size)
 {
     vm_space_t *vm = &current_proc->mm->vm;
     vma_t *r = vm_find(vm, addr);
-    uint32_t end = addr;
+    uintptr_t end = addr;
 
     if (!r || r->start != addr || r->pgoff != 0 || filemap_shmem(r->file) != sh) {
         return -EINVAL;
@@ -5821,10 +5842,10 @@ uint32_t shm_attaches(const struct shmem *sh)
  */
 long sys_munmap(isr_params_t *params)
 {
-    uint32_t addr = SC_ARG(params, 0);
-    uint32_t length = SC_ARG(params, 1);
+    uintptr_t addr = SC_ARG(params, 0);
+    uintptr_t length = SC_ARG(params, 1);
     vm_space_t *vm;
-    uint32_t start, end;
+    uintptr_t start, end;
 
     if (!current_proc || !current_proc->mm) {
         return -ESRCH;
@@ -5854,11 +5875,11 @@ long sys_munmap(isr_params_t *params)
 
 /* Bring the resident pages of [start, end) to `prot`, region by region, so a
  * shared region's pages stay shared. */
-static void protect_resident(uint32_t start, uint32_t end, uint32_t prot)
+static void protect_resident(uintptr_t start, uintptr_t end, uint32_t prot)
 {
     while (start < end) {
         vma_t *r = vm_find(&current_proc->mm->vm, start);
-        uint32_t stop = (r && r->end < end) ? r->end : end;
+        uintptr_t stop = (r && r->end < end) ? r->end : end;
 
         paging_protect_range(_curr_dir, start, stop,
                              prot | ((r && r->type == VM_SHARED) ? VM_PROT_SHARED : 0u));
@@ -5878,10 +5899,11 @@ static void protect_resident(uint32_t start, uint32_t end, uint32_t prot)
  */
 long sys_mprotect(isr_params_t *params)
 {
-    uint32_t addr = SC_ARG(params, 0);
-    uint32_t length = SC_ARG(params, 1);
-    uint32_t prot = SC_ARG(params, 2);
-    uint32_t end, vmprot;
+    uintptr_t addr = SC_ARG(params, 0);
+    uintptr_t length = SC_ARG(params, 1);
+    uint32_t prot = (uint32_t)SC_ARG(params, 2);
+    uintptr_t end;
+    uint32_t vmprot;
     int rc;
 
     if (!current_proc || !current_proc->mm) {
@@ -5922,14 +5944,14 @@ long sys_mprotect(isr_params_t *params)
  * the region at `to`, moving the pages there and making the region `new_len`
  * long. The file the region maps is held across the move, which removes
  * the old region's hold before the new region takes its own. */
-static int32_t remap_move(vm_space_t *vm, vma_t *r, uint32_t addr, uint32_t len, uint32_t to,
-                          uint32_t new_len)
+static long remap_move(vm_space_t *vm, vma_t *r, uintptr_t addr, uintptr_t len, uintptr_t to,
+                          uintptr_t new_len)
 {
     struct vm_file *file = r->file;
-    uint32_t pgoff = r->pgoff + (addr - r->start) / PAGE_SIZE;
+    uint32_t pgoff = r->pgoff + (uint32_t)((addr - r->start) / PAGE_SIZE);
     uint32_t prot = r->prot;
     vm_type_t type = r->type;
-    uint32_t moved = len < new_len ? len : new_len;
+    uintptr_t moved = len < new_len ? len : new_len;
 
     if (vm_reserve(vm, 3) != 0) {
         vma_exhausted("mremap");
@@ -5947,7 +5969,7 @@ static int32_t remap_move(vm_space_t *vm, vma_t *r, uint32_t addr, uint32_t len,
         return -ENOMEM;
     }
     vm_file_put(file);
-    return (int32_t)to;
+    return (long)to;
 }
 
 /**
@@ -5961,11 +5983,11 @@ static int32_t remap_move(vm_space_t *vm, vma_t *r, uint32_t addr, uint32_t len,
  * wrap. The destination's removal does not sleep, so the old range is still
  * in its region when the move starts.
  */
-static int32_t remap_fixed(vm_space_t *vm, uint32_t addr, uint32_t old_len, uint32_t to,
-                           uint32_t new_len)
+static long remap_fixed(vm_space_t *vm, uintptr_t addr, uintptr_t old_len, uintptr_t to,
+                           uintptr_t new_len)
 {
     uint32_t limit = current_proc->rlim[RLIM_AS].cur;
-    uint32_t rest;
+    uintptr_t rest;
 
     if ((to & (PAGE_SIZE - 1)) != 0 || to < USER_ADDR_MIN || to > USER_ADDR_MAX - new_len ||
         (to < addr + old_len && addr < to + new_len)) {
@@ -5994,7 +6016,7 @@ static int32_t remap_fixed(vm_space_t *vm, uint32_t addr, uint32_t old_len, uint
  * near 4 GiB the old range would seem to end below its start, and a fixed
  * move onto its own address would remove its source.
  */
-static int remap_args_valid(uint32_t addr, uint32_t old_len, uint32_t new_len, uint32_t flags)
+static int remap_args_valid(uintptr_t addr, uintptr_t old_len, uintptr_t new_len, uint32_t flags)
 {
     return (addr & (PAGE_SIZE - 1)) == 0 && old_len != 0 && new_len != 0 &&
            (flags & ~(uint32_t)(MREMAP_MAYMOVE | MREMAP_FIXED)) == 0 &&
@@ -6017,13 +6039,13 @@ static int remap_args_valid(uint32_t addr, uint32_t old_len, uint32_t new_len, u
  */
 long sys_mremap(isr_params_t *params)
 {
-    uint32_t addr = SC_ARG(params, 0);
-    uint32_t flags = SC_ARG(params, 3);
-    uint32_t to = SC_ARG(params, 4);
-    uint32_t old_len, new_len;
+    uintptr_t addr = SC_ARG(params, 0);
+    uint32_t flags = (uint32_t)SC_ARG(params, 3);
+    uintptr_t to = SC_ARG(params, 4);
+    uintptr_t old_len, new_len;
     vm_space_t *vm;
     vma_t *r;
-    int32_t rc;
+    long rc;
 
     if (!current_proc || !current_proc->mm) {
         return -ESRCH;
@@ -6056,7 +6078,7 @@ long sys_mremap(isr_params_t *params)
         }
         unmap_user_range(_curr_dir, addr + new_len, addr + old_len);
         vm_file_reap();
-        return (int32_t)addr;
+        return (long)addr;
     }
     if (vm_total(vm) + (new_len - old_len) > current_proc->rlim[RLIM_AS].cur) {
         return -ENOMEM;
@@ -6064,16 +6086,16 @@ long sys_mremap(isr_params_t *params)
     if (addr + old_len == r->end && addr <= USER_ADDR_MAX - new_len &&
         addr + new_len <= vm->stack_limit && !vm_overlaps(vm, addr + old_len, addr + new_len)) {
         if (vm_insert_file(vm, addr + old_len, addr + new_len, r->prot, r->type, r->file,
-                           r->pgoff + (addr + old_len - r->start) / PAGE_SIZE) != 0) {
+                           r->pgoff + (uint32_t)((addr + old_len - r->start) / PAGE_SIZE)) != 0) {
             vma_exhausted("mremap");
             return -ENOMEM;
         }
-        return (int32_t)addr;
+        return (long)addr;
     }
     if (!(flags & MREMAP_MAYMOVE)) {
         return -ENOMEM;
     }
-    to = vm_find_free(vm, new_len, PAGE_UP(vm->brk), VM_MMAP_BASE);
+    to = vm_find_free(vm, new_len, PAGE_UP(vm->brk), USER_MMAP_BASE);
     if (to == 0) {
         return -ENOMEM;
     }
@@ -6102,9 +6124,9 @@ long sys_mremap(isr_params_t *params)
  */
 long sys_madvise(isr_params_t *params)
 {
-    uint32_t addr = SC_ARG(params, 0);
-    uint32_t advice = SC_ARG(params, 2);
-    uint32_t len;
+    uintptr_t addr = SC_ARG(params, 0);
+    uint32_t advice = (uint32_t)SC_ARG(params, 2);
+    uintptr_t len;
 
     if (!current_proc || !current_proc->mm) {
         return -ESRCH;
@@ -6121,7 +6143,7 @@ long sys_madvise(isr_params_t *params)
         return -ENOMEM;
     }
     if (advice == MADV_DONTNEED || advice == MADV_FREE) {
-        uint32_t at;
+        uintptr_t at;
 
         for (at = addr; at < addr + len; at = vm_find(&current_proc->mm->vm, at)->end) {
             if (vm_find(&current_proc->mm->vm, at)->prot & VM_PROT_IO) {
@@ -6140,7 +6162,7 @@ long sys_madvise(isr_params_t *params)
  * The writes sleep, so each region is found again by address and its file
  * held across its write. 0, or -EIO when a write failed.
  */
-static int32_t msync_range(uint32_t addr, uint32_t end, int flush)
+static int32_t msync_range(uintptr_t addr, uintptr_t end, int flush)
 {
     int32_t rc = 0;
 
@@ -6177,9 +6199,9 @@ static int32_t msync_range(uint32_t addr, uint32_t end, int flush)
  */
 long sys_msync(isr_params_t *params)
 {
-    uint32_t addr = SC_ARG(params, 0);
-    uint32_t flags = SC_ARG(params, 2);
-    uint32_t len;
+    uintptr_t addr = SC_ARG(params, 0);
+    uint32_t flags = (uint32_t)SC_ARG(params, 2);
+    uintptr_t len;
 
     if (!current_proc || !current_proc->mm) {
         return -ESRCH;
@@ -6260,7 +6282,7 @@ static uint32_t prio_who(int which, uint32_t who)
 long sys_getpriority(isr_params_t *params)
 {
     int which = (int)SC_ARG(params, 0);
-    uint32_t who = prio_who(which, SC_ARG(params, 1));
+    uint32_t who = prio_who(which, (uint32_t)SC_ARG(params, 1));
     process_t *p;
     int32_t best = -ESRCH;
 
@@ -6291,7 +6313,7 @@ long sys_getpriority(isr_params_t *params)
 long sys_setpriority(isr_params_t *params)
 {
     int which = (int)SC_ARG(params, 0);
-    uint32_t who = prio_who(which, SC_ARG(params, 1));
+    uint32_t who = prio_who(which, (uint32_t)SC_ARG(params, 1));
     int32_t nice = (int32_t)SC_ARG(params, 2);
     process_t *p;
     int32_t rc = -ESRCH;
@@ -6380,14 +6402,14 @@ static int32_t ioprio_check(uint32_t ioprio)
 long sys_ioprio_set(isr_params_t *params)
 {
     int which = (int)SC_ARG(params, 0);
-    uint32_t who = prio_who(which - 1, SC_ARG(params, 1));
+    uint32_t who = prio_who(which - 1, (uint32_t)SC_ARG(params, 1));
     process_t *p;
     int32_t rc;
 
     if (which < IOPRIO_WHO_PROCESS || which > IOPRIO_WHO_USER) {
         return -EINVAL;
     }
-    rc = ioprio_check(SC_ARG(params, 2));
+    rc = ioprio_check((uint32_t)SC_ARG(params, 2));
     if (rc != 0) {
         return rc;
     }
@@ -6417,7 +6439,7 @@ long sys_ioprio_set(isr_params_t *params)
 long sys_ioprio_get(isr_params_t *params)
 {
     int which = (int)SC_ARG(params, 0);
-    uint32_t who = prio_who(which - 1, SC_ARG(params, 1));
+    uint32_t who = prio_who(which - 1, (uint32_t)SC_ARG(params, 1));
     process_t *p;
     int32_t best = -ESRCH;
 
@@ -6682,7 +6704,7 @@ long sys_sched_rr_get_interval(isr_params_t *params)
  */
 long sys_sched_getaffinity(isr_params_t *params)
 {
-    uint32_t len = SC_ARG(params, 1);
+    uintptr_t len = SC_ARG(params, 1);
     uint32_t mask = 1;
 
     if (len == 0 || (len & 3u) != 0) {
@@ -6700,15 +6722,15 @@ long sys_sched_getaffinity(isr_params_t *params)
 /** Whether [`addr`, `addr` + `len`) is a range the current process's
  * regions cover without a gap, as mlock asks: -EINVAL for an address past
  * the end of the address space, -ENOMEM for a gap, 0. */
-static int32_t lock_range(uint32_t addr, uint32_t len)
+static int32_t lock_range(uintptr_t addr, uintptr_t len)
 {
-    uint32_t start = addr & ~(uint32_t)(PAGE_SIZE - 1);
-    uint32_t end = addr + len;
+    uintptr_t start = addr & ~(uintptr_t)(PAGE_SIZE - 1);
+    uintptr_t end = addr + len;
 
     if (end < addr) {
         return -EINVAL;
     }
-    end = (end + PAGE_SIZE - 1) & ~(uint32_t)(PAGE_SIZE - 1);
+    end = (end + PAGE_SIZE - 1) & ~(uintptr_t)(PAGE_SIZE - 1);
     if (end < start) {
         return -EINVAL;
     }
@@ -6749,7 +6771,7 @@ long sys_mlock2(isr_params_t *params)
  */
 long sys_mlockall(isr_params_t *params)
 {
-    uint32_t flags = SC_ARG(params, 0);
+    uint32_t flags = (uint32_t)SC_ARG(params, 0);
 
     if (flags == 0 || (flags & ~7u) || flags == 4u) {
         return -EINVAL;
@@ -6771,9 +6793,9 @@ long sys_munlockall(isr_params_t *params)
  */
 long sys_mincore(isr_params_t *params)
 {
-    uint32_t addr = SC_ARG(params, 0);
-    uint32_t pages;
-    uint32_t i;
+    uintptr_t addr = SC_ARG(params, 0);
+    uintptr_t pages;
+    uintptr_t i;
     int32_t rc;
 
     if (!current_proc || !current_proc->mm) {
@@ -6834,7 +6856,7 @@ long sys_personality(isr_params_t *params)
         if ((SC_ARG(params, 0) & 0xFFu) != 0 && (SC_ARG(params, 0) & 0xFFu) != 8u) {
             return -EINVAL;
         }
-        current_proc->persona = SC_ARG(params, 0);
+        current_proc->persona = (uint32_t)SC_ARG(params, 0);
     }
     return (int32_t)old;
 }
@@ -6851,7 +6873,7 @@ long sys_personality(isr_params_t *params)
  */
 long sys_sched_setaffinity(isr_params_t *params)
 {
-    uint32_t len = SC_ARG(params, 1);
+    uint32_t len = USER_LEN32(SC_ARG(params, 1));
     uint32_t mask = 0;
     process_t *p;
 
@@ -6926,8 +6948,8 @@ long sys_sched_setaffinity(isr_params_t *params)
  */
 long sys_prctl(isr_params_t *params)
 {
-    uint32_t arg2 = SC_ARG(params, 1);
-    uint32_t rest = SC_ARG(params, 2) | SC_ARG(params, 3) | SC_ARG(params, 4);
+    uintptr_t arg2 = SC_ARG(params, 1);
+    unsigned long rest = SC_ARG(params, 2) | SC_ARG(params, 3) | SC_ARG(params, 4);
     int32_t value;
     char name[sizeof(current_proc->comm)];
 
@@ -6936,7 +6958,7 @@ long sys_prctl(isr_params_t *params)
         if (arg2 > KSIG_MAX) {
             return -EINVAL;
         }
-        current_proc->pdeath_signal = arg2;
+        current_proc->pdeath_signal = (uint32_t)arg2;
         return 0;
     case PR_GET_PDEATHSIG:
         value = (int32_t)current_proc->pdeath_signal;
@@ -6947,7 +6969,7 @@ long sys_prctl(isr_params_t *params)
         if (arg2 > 1) {
             return -EINVAL;
         }
-        current_proc->mm->dumpable = arg2;
+        current_proc->mm->dumpable = (uint32_t)arg2;
         return 0;
     case PR_SET_NAME:
         k_memset(name, 0, sizeof(name));
@@ -6974,7 +6996,7 @@ long sys_prctl(isr_params_t *params)
     case PR_GET_SECCOMP:
         return (int32_t)current_proc->seccomp_mode;
     case PR_SET_SECCOMP:
-        return seccomp_prctl_set(arg2, SC_ARG(params, 2));
+        return seccomp_prctl_set((uint32_t)arg2, SC_ARG(params, 2));
     default:
         return -EINVAL;
     }
@@ -7006,7 +7028,7 @@ struct cap_data {
  * is read only by a call that needs it (`cap_pid_in`), so a header whose
  * version ends a page asks for the version as on Linux.
  */
-static int32_t cap_version_in(uint32_t uhdr, uint32_t *words)
+static int32_t cap_version_in(uintptr_t uhdr, uint32_t *words)
 {
     uint32_t version, preferred = CAP_VERSION_3;
 
@@ -7051,7 +7073,7 @@ static uint32_t cap_held(const process_t *p, uint32_t i)
 }
 
 /** The pid in the header at `uhdr`, after its version, into `*pid`. */
-static int32_t cap_pid_in(uint32_t uhdr, int32_t *pid)
+static int32_t cap_pid_in(uintptr_t uhdr, int32_t *pid)
 {
     if (copy_from_user(pid, (const void __user *)(uhdr + 4u), sizeof(*pid)) != 0) {
         return -EFAULT;

@@ -490,17 +490,20 @@ uint32_t seccomp_filter_count(const process_t *p)
  * program. NULL with `*err` set: -EFAULT, -EINVAL for an empty, long or
  * refused program, or -ENOMEM.
  */
-static struct seccomp_filter *filter_from_user(uint32_t uprog, int32_t *err)
+static struct seccomp_filter *filter_from_user(uintptr_t uprog, int32_t *err)
 {
-    uint32_t words[2]; /* struct sock_fprog: a 16-bit length, then the address */
+    struct {
+        unsigned short len;
+        uintptr_t filter;
+    } prog; /* Linux's struct sock_fprog, in the processor's layout */
     struct seccomp_filter *f;
     uint32_t len;
 
-    if (copy_from_user(words, (const void __user *)uprog, sizeof(words)) != 0) {
+    if (copy_from_user(&prog, (const void __user *)uprog, sizeof(prog)) != 0) {
         *err = -EFAULT;
         return NULL;
     }
-    len = words[0] & 0xFFFFu;
+    len = prog.len;
     if (len == 0 || len > BPF_MAXINSNS) {
         *err = -EINVAL;
         return NULL;
@@ -513,7 +516,8 @@ static struct seccomp_filter *filter_from_user(uint32_t uprog, int32_t *err)
     f->refs = 1;
     f->prev = NULL;
     f->len = len;
-    if (copy_from_user(f->insns, (const void __user *)words[1], len * sizeof(f->insns[0])) != 0) {
+    if (copy_from_user(f->insns, (const void __user *)prog.filter, len * sizeof(f->insns[0])) !=
+        0) {
         *err = -EFAULT;
     } else if (!program_valid(f->insns, f->len)) {
         *err = -EINVAL;
@@ -593,7 +597,7 @@ static void tsync_apply(process_t *self)
  * TSYNC every thread of the process takes the new chain, unless one cannot,
  * whose id is returned, or -ESRCH with TSYNC_ESRCH.
  */
-static int32_t set_mode_filter(uint32_t flags, uint32_t uprog)
+static int32_t set_mode_filter(uint32_t flags, uintptr_t uprog)
 {
     process_t *self = current_proc;
     struct seccomp_filter *f;
@@ -647,7 +651,7 @@ static int action_available(uint32_t action)
     }
 }
 
-int32_t seccomp_prctl_set(uint32_t mode, uint32_t prog)
+int32_t seccomp_prctl_set(uint32_t mode, uintptr_t prog)
 {
     if (mode == SECCOMP_MODE_STRICT) {
         if (current_proc->seccomp_mode == SECCOMP_MODE_FILTER) {

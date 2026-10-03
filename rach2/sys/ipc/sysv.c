@@ -472,11 +472,11 @@ static char *shm_path(int32_t key)
  * to read the segment, and to write it without SHM_RDONLY, else EACCES. A
  * removed segment may still be attached, as on Linux.
  */
-static int32_t shm_at(int32_t id, uint32_t addr, uint32_t flag, uint32_t *base)
+static int32_t shm_at(int32_t id, uintptr_t addr, uint32_t flag, uintptr_t *base)
 {
     struct shm_seg *s = (struct shm_seg *)sysv_find(SYSV_SHM, id);
     char *path;
-    int32_t rc;
+    long at;
 
     if (!s) {
         return -EINVAL;
@@ -484,27 +484,27 @@ static int32_t shm_at(int32_t id, uint32_t addr, uint32_t flag, uint32_t *base)
     if (!sysv_may(&s->perm, (flag & SHM_RDONLY) ? 0444u : 0666u)) {
         return -EACCES;
     }
-    if ((addr & 4095u) != 0) {
+    if ((addr & (PAGE_SIZE - 1)) != 0) {
         if (!(flag & SHM_RND)) {
             return -EINVAL;
         }
-        addr &= ~4095u;
+        addr &= ~(uintptr_t)(PAGE_SIZE - 1);
     }
     if (addr == 0 && (flag & SHM_REMAP)) {
         return -EINVAL;
     }
     path = shm_path(s->perm.key);
-    rc = mmap_shm(s->ofd, addr, s->size,
+    at = mmap_shm(s->ofd, addr, s->size,
                   ((flag & SHM_RDONLY) ? 0u : SHM_MAP_WRITE) |
                       ((flag & SHM_EXEC) ? SHM_MAP_EXEC : 0u),
                   addr == 0            ? 0
                   : (flag & SHM_REMAP) ? 2
                                        : 1,
                   path);
-    if ((uint32_t)rc > 0xFFFFF000u) {
-        return rc == -EEXIST ? -EINVAL : rc;
+    if (at < 0) {
+        return at == -EEXIST ? -EINVAL : (int32_t)at;
     }
-    *base = (uint32_t)rc;
+    *base = (uintptr_t)at;
     s->atime = sysv_now();
     s->lpid = (int32_t)current_proc->tgid;
     return 0;
@@ -512,11 +512,11 @@ static int32_t shm_at(int32_t id, uint32_t addr, uint32_t flag, uint32_t *base)
 
 /** shmdt: unmap the segment attached at `addr`. EINVAL when no attachment
  * begins there. */
-static int32_t shm_dt(uint32_t addr)
+static int32_t shm_dt(uintptr_t addr)
 {
     int i;
 
-    if ((addr & 4095u) != 0) {
+    if ((addr & (PAGE_SIZE - 1)) != 0) {
         return -EINVAL;
     }
     for (i = 0; i < SYSV_SLOTS; i++) {
@@ -1081,7 +1081,7 @@ static int32_t sem_set_values(struct sem_set *set, int num, int32_t val, const v
  * value, the last pid and the counts of waiters, and SETVAL. EINVAL for a
  * semaphore past the set's, EACCES for one the caller may not read, or with
  * SETVAL write. */
-static int32_t sem_ctl_one(struct sem_set *set, int num, int cmd, uint32_t arg)
+static int32_t sem_ctl_one(struct sem_set *set, int num, int cmd, uintptr_t arg)
 {
     const struct sem *s;
 
@@ -1161,7 +1161,7 @@ static int32_t sem_ctl_owner(struct sem_set *set, int cmd, void __user *buf)
  * id, IPC_SET and IPC_RMID (`sem_ctl_owner`), and IPC_INFO and SEM_INFO.
  * EINVAL for another command.
  */
-static int32_t sem_ctl(int32_t id, int num, int cmd, uint32_t arg)
+static int32_t sem_ctl(int32_t id, int num, int cmd, uintptr_t arg)
 {
     struct semid64_ds ds;
     struct sem_set *set;
@@ -1630,9 +1630,9 @@ static int32_t sem_timed(int32_t id, const void __user *uops, uint32_t n, const 
 }
 
 /** ipc's SHMAT, which stores the address at `third` and returns 0. */
-static int32_t shm_at_ipc(int32_t id, uint32_t addr, uint32_t flag, void __user *third)
+static int32_t shm_at_ipc(int32_t id, uintptr_t addr, uint32_t flag, void __user *third)
 {
-    uint32_t base;
+    uintptr_t base;
     int32_t rc = shm_at(id, addr, flag, &base);
 
     if (rc == 0 && copy_to_user(third, &base, sizeof(base)) != 0) {
@@ -1646,7 +1646,10 @@ static int32_t shm_at_ipc(int32_t id, uint32_t addr, uint32_t flag, void __user 
 static int32_t msg_rcv_ipc(int version, int32_t id, int32_t size, uint32_t flag, void __user *ptr,
                            int32_t fifth)
 {
-    uint32_t kludge[2];
+    struct {
+        uintptr_t msgp;
+        long msgtyp;
+    } kludge; /* Linux's struct ipc_kludge */
 
     if (version != 0) {
         return msg_rcv(id, ptr, size, fifth, flag);
@@ -1654,10 +1657,10 @@ static int32_t msg_rcv_ipc(int version, int32_t id, int32_t size, uint32_t flag,
     if (!ptr) {
         return -EINVAL;
     }
-    if (copy_from_user(kludge, ptr, sizeof(kludge)) != 0) {
+    if (copy_from_user(&kludge, ptr, sizeof(kludge)) != 0) {
         return -EFAULT;
     }
-    return msg_rcv(id, (void __user *)kludge[0], size, (int32_t)kludge[1], flag);
+    return msg_rcv(id, (void __user *)kludge.msgp, size, (int32_t)kludge.msgtyp, flag);
 }
 
 long sys_ipc(struct isr_params *params)
@@ -1665,8 +1668,9 @@ long sys_ipc(struct isr_params *params)
     uint32_t call = SC_ARG(params, 0) & 0xFFFFu;
     int version = (int)(SC_ARG(params, 0) >> 16);
     int32_t first = (int32_t)SC_ARG(params, 1);
-    uint32_t second = SC_ARG(params, 2), third = SC_ARG(params, 3), ptr = SC_ARG(params, 4);
-    uint32_t arg;
+    uint32_t second = (uint32_t)SC_ARG(params, 2);
+    uintptr_t third = SC_ARG(params, 3), ptr = SC_ARG(params, 4);
+    unsigned long arg;
 
     switch (call) {
     case SEMOP:
@@ -1674,7 +1678,7 @@ long sys_ipc(struct isr_params *params)
     case SEMTIMEDOP:
         return sem_timed(first, (const void __user *)ptr, second, (const void __user *)SC_ARG(params, 5));
     case SEMGET:
-        return sem_get(first, (int32_t)second, third);
+        return sem_get(first, (int32_t)second, (uint32_t)third);
     case SEMCTL:
         if (!ptr) {
             return -EINVAL;
@@ -1684,9 +1688,9 @@ long sys_ipc(struct isr_params *params)
         }
         return sem_ctl(first, (int)second, (int)third, arg);
     case MSGSND:
-        return msg_snd(first, (const void __user *)ptr, second, third);
+        return msg_snd(first, (const void __user *)ptr, second, (uint32_t)third);
     case MSGRCV:
-        return msg_rcv_ipc(version, first, (int32_t)second, third, (void __user *)ptr,
+        return msg_rcv_ipc(version, first, (int32_t)second, (uint32_t)third, (void __user *)ptr,
                            (int32_t)SC_ARG(params, 5));
     case MSGGET:
         return msg_get(first, second);
@@ -1697,7 +1701,7 @@ long sys_ipc(struct isr_params *params)
     case SHMDT:
         return shm_dt(ptr);
     case SHMGET:
-        return shm_get(first, second, third);
+        return shm_get(first, second, (uint32_t)third);
     case SHMCTL:
         return shm_ctl(first, (int)second, (void __user *)ptr);
     default:
@@ -1707,7 +1711,7 @@ long sys_ipc(struct isr_params *params)
 
 long sys_semget(struct isr_params *params)
 {
-    return sem_get((int32_t)SC_ARG(params, 0), (int32_t)SC_ARG(params, 1), SC_ARG(params, 2));
+    return sem_get((int32_t)SC_ARG(params, 0), (int32_t)SC_ARG(params, 1), (uint32_t)SC_ARG(params, 2));
 }
 
 long sys_semctl(struct isr_params *params)
@@ -1717,7 +1721,7 @@ long sys_semctl(struct isr_params *params)
 
 long sys_shmget(struct isr_params *params)
 {
-    return shm_get((int32_t)SC_ARG(params, 0), SC_ARG(params, 1), SC_ARG(params, 2));
+    return shm_get((int32_t)SC_ARG(params, 0), USER_LEN32(SC_ARG(params, 1)), (uint32_t)SC_ARG(params, 2));
 }
 
 long sys_shmctl(struct isr_params *params)
@@ -1727,10 +1731,11 @@ long sys_shmctl(struct isr_params *params)
 
 long sys_shmat(struct isr_params *params)
 {
-    uint32_t base;
-    int32_t rc = shm_at((int32_t)SC_ARG(params, 0), SC_ARG(params, 1), SC_ARG(params, 2), &base);
+    uintptr_t base;
+    int32_t rc =
+        shm_at((int32_t)SC_ARG(params, 0), SC_ARG(params, 1), (uint32_t)SC_ARG(params, 2), &base);
 
-    return rc != 0 ? rc : (int32_t)base;
+    return rc != 0 ? rc : (long)base;
 }
 
 long sys_shmdt(struct isr_params *params)
@@ -1740,19 +1745,19 @@ long sys_shmdt(struct isr_params *params)
 
 long sys_msgget(struct isr_params *params)
 {
-    return msg_get((int32_t)SC_ARG(params, 0), SC_ARG(params, 1));
+    return msg_get((int32_t)SC_ARG(params, 0), (uint32_t)SC_ARG(params, 1));
 }
 
 long sys_msgsnd(struct isr_params *params)
 {
-    return msg_snd((int32_t)SC_ARG(params, 0), (const void __user *)SC_ARG(params, 1), SC_ARG(params, 2),
-                   SC_ARG(params, 3));
+    return msg_snd((int32_t)SC_ARG(params, 0), (const void __user *)SC_ARG(params, 1), USER_LEN32(SC_ARG(params, 2)),
+                   (uint32_t)SC_ARG(params, 3));
 }
 
 long sys_msgrcv(struct isr_params *params)
 {
     return msg_rcv((int32_t)SC_ARG(params, 0), (void __user *)SC_ARG(params, 1), (int32_t)SC_ARG(params, 2),
-                   (int32_t)SC_ARG(params, 3), SC_ARG(params, 4));
+                   (int32_t)SC_ARG(params, 3), (uint32_t)SC_ARG(params, 4));
 }
 
 long sys_msgctl(struct isr_params *params)
@@ -1776,7 +1781,7 @@ long sys_semtimedop_time64(struct isr_params *params)
         ticks = (uint32_t)(ts[0] > 21474836 ? 21474836 : ts[0]) * 100u +
                 ((uint32_t)ts[1] + 9999999u) / 10000000u;
     }
-    return sem_op((int32_t)SC_ARG(params, 0), (const void __user *)SC_ARG(params, 1), SC_ARG(params, 2),
+    return sem_op((int32_t)SC_ARG(params, 0), (const void __user *)SC_ARG(params, 1), (uint32_t)SC_ARG(params, 2),
                   SC_ARG(params, 3) != 0, ticks);
 }
 

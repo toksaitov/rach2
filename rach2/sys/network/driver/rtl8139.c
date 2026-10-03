@@ -144,12 +144,12 @@ int rtl8139_init(struct netdev *nd, int nth)
             return NETDEV_FAILED;
         }
     }
-    pci_io_write32(iobase + RTL_RBSTART, (uint32_t)rx_buf);
+    pci_io_write32(iobase + RTL_RBSTART, (uint32_t)(uintptr_t)rx_buf);
     rx_ptr = 0;
 
     /* Pre-load each TX start address; the lengths are written per packet. */
     for (i = 0; i < RTL_TX_NUM; i++) {
-        pci_io_write32(iobase + RTL_TSAD0 + i * 4, (uint32_t)tx_buf[i]);
+        pci_io_write32(iobase + RTL_TSAD0 + i * 4, (uint32_t)(uintptr_t)tx_buf[i]);
     }
     tx_idx = 0;
 
@@ -320,7 +320,7 @@ int rtl8139_tx(void *dev, const uint8_t *data, uint16_t len)
         txlen = 60;
     }
 
-    pci_io_write32(iobase + RTL_TSAD0 + tx_idx * 4, (uint32_t)tx_buf[tx_idx]);
+    pci_io_write32(iobase + RTL_TSAD0 + tx_idx * 4, (uint32_t)(uintptr_t)tx_buf[tx_idx]);
     pci_io_write32(iobase + RTL_TSD0 + tx_idx * 4, (uint32_t)txlen & 0x1FFFUL);
 
     tx_idx = (tx_idx + 1) & 3;
@@ -339,7 +339,7 @@ static void rtl8139_rx_reset(void)
 {
     pci_io_write8(iobase + RTL_CHIPCMD, RTL_CMD_TE);
     rx_ptr = 0;
-    pci_io_write32(iobase + RTL_RBSTART, (uint32_t)rx_buf);
+    pci_io_write32(iobase + RTL_RBSTART, (uint32_t)(uintptr_t)rx_buf);
     pci_io_write32(iobase + RTL_RCR, RTL_RCR_VALUE);
     pci_io_write16(iobase + RTL_CAPR, (uint16_t)(0 - 16));
     pci_io_write16(iobase + RTL_ISR, RTL_ISR_RXOVW | RTL_ISR_FOVW | RTL_ISR_RER);
@@ -402,7 +402,7 @@ static void rtl8139_rx(void)
         /* Advance past header + packet, rounded up to the next dword, and wrap
          * within the ring. CAPR trails the read pointer by 16 bytes. */
         advance = (uint32_t)pkt_len + 4 + 3;
-        rx_ptr = (rx_ptr + advance) & ~3UL;
+        rx_ptr = (rx_ptr + advance) & ~3u;
         rx_ptr %= RTL_RX_RING;
         pci_io_write16(iobase + RTL_CAPR, (uint16_t)(rx_ptr - 16));
     }

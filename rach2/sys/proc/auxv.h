@@ -40,13 +40,13 @@
 #define AT_EXECFN 31 /* Address of the program's path          (populated) */
 
 /*
- * One auxv entry: a {type, value} pair of machine words (32-bit on i386). The
- * kernel writes consecutive pairs onto the initial stack, terminated by an
- * AT_NULL entry.
+ * One auxv entry: a {type, value} pair of machine words, 32 bits on i686 and
+ * 64 on x86-64. The kernel writes consecutive pairs onto the initial stack,
+ * terminated by an AT_NULL entry.
  */
 typedef struct {
-    uint32_t a_type;
-    uint32_t a_val;
-} Elf32_auxv_t;
+    unsigned long a_type;
+    unsigned long a_val;
+} Elf_auxv_t;
 
 #endif /* _AUXV_H_ */

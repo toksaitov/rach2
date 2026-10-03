@@ -895,7 +895,7 @@ static void ntp_rtc_sync(void)
     }
 }
 
-static int32_t timex_call(uint32_t uaddr, int wide)
+static int32_t timex_call(uintptr_t uaddr, int wide)
 {
     uint8_t b[208];
     uint32_t size = wide ? 208u : 128u;
@@ -1607,8 +1607,8 @@ long sys_alarm(isr_params_t *params)
 long sys_getrandom(isr_params_t *params)
 {
     void __user *buf = (void __user *)SC_ARG(params, 0);
-    uint32_t len = SC_ARG(params, 1);
-    uint32_t flags = SC_ARG(params, 2);
+    uint32_t len = USER_LEN32(SC_ARG(params, 1));
+    uint32_t flags = (uint32_t)SC_ARG(params, 2);
     uint8_t kbuf[256];
     uint32_t done = 0;
 
@@ -1707,7 +1707,7 @@ static uint32_t tty_code_speed(uint32_t code)
  * the speeds after it that its baud codes name, the input speed that of the
  * input code or, with none, the output speed.
  */
-static int32_t tty_get_termios_at(const struct tty *t, uint32_t request, uint32_t arg)
+static int32_t tty_get_termios_at(const struct tty *t, uint32_t request, uintptr_t arg)
 {
     struct ktermios2 kt2;
     uint32_t size = request == TCGETS2 ? sizeof(struct ktermios2) : sizeof(struct ktermios);
@@ -1732,7 +1732,7 @@ static int32_t tty_get_termios_at(const struct tty *t, uint32_t request, uint32_
  * install runs with interrupts off, so an input interrupt never reads a
  * half-written termios; TCSETSF and TCSETSF2 also discard pending input.
  */
-static int32_t tty_set_termios_at(struct tty *t, uint32_t request, uint32_t arg)
+static int32_t tty_set_termios_at(struct tty *t, uint32_t request, uintptr_t arg)
 {
     struct ktermios2 kt2;
     int two = request == TCSETS2 || request == TCSETSW2 || request == TCSETSF2;
@@ -1782,7 +1782,7 @@ static int tty_request(uint32_t request)
  * Linux answers it for every descriptor before the file's own ioctl, and so
  * does sys_ioctl.
  */
-static int32_t fd_ioctl_nbio(fd_entry_t *entry, uint32_t arg)
+static int32_t fd_ioctl_nbio(fd_entry_t *entry, uintptr_t arg)
 {
     int on;
 
@@ -1823,7 +1823,7 @@ struct tty *fd_tty(fd_entry_t *e)
  * TCGETS2 takes from the baud codes of c_cflag and a set does not keep;
  * TCSETSF, TCSETSF2 and TCFLSH flush the unread input.
  */
-static int32_t tty_common_ioctl(struct tty *t, uint32_t request, uint32_t arg, int *handled)
+static int32_t tty_common_ioctl(struct tty *t, uint32_t request, uintptr_t arg, int *handled)
 {
     *handled = 1;
     switch (request) {
@@ -1959,7 +1959,7 @@ static int32_t tty_common_ioctl(struct tty *t, uint32_t request, uint32_t arg, i
  * A descriptor can survive a return to text mode and another process's open.
  * Mode 13h reacquires an unowned display; other requests require ownership.
  */
-static int32_t framebuffer_ioctl(uint32_t request, uint32_t arg)
+static int32_t framebuffer_ioctl(uint32_t request, uintptr_t arg)
 {
     if (request != FB_MODE_13H && request != FB_MODE_TEXT && request != FB_SETPALETTE) {
         return -ENOTTY;
@@ -1999,8 +1999,8 @@ static int32_t framebuffer_ioctl(uint32_t request, uint32_t arg)
 long sys_ioctl(isr_params_t *params)
 {
     int fd_num = (int)SC_ARG(params, 0);
-    uint32_t request = SC_ARG(params, 1);
-    uint32_t arg = SC_ARG(params, 2);
+    uint32_t request = (uint32_t)SC_ARG(params, 1);
+    uintptr_t arg = SC_ARG(params, 2);
     fd_entry_t *entry;
 
     if (!current_proc) {
@@ -2081,7 +2081,7 @@ long sys_ioctl(isr_params_t *params)
             if (arg == 0) {
                 speaker_off();
             } else {
-                speaker_on(arg);
+                speaker_on((uint32_t)arg);
             }
             return 0;
         }
@@ -2130,7 +2130,7 @@ long sys_ioctl(isr_params_t *params)
             if (copy_from_user(&kp, (const void __user *)arg, sizeof(kp)) != 0) {
                 return -EFAULT;
             }
-            if (!kp.buffer || !user_buffer_ok((uint32_t)(uintptr_t)kp.buffer, kp.size, 0)) {
+            if (!kp.buffer || !user_buffer_ok((uintptr_t)kp.buffer, kp.size, 0)) {
                 return -EFAULT;
             }
             return audio->write(kp.buffer, kp.size);
@@ -2158,7 +2158,7 @@ long sys_ioctl(isr_params_t *params)
  * live in mm/usercopy (USER_ADDR_MIN/MAX, user_range_ok); user_access_ok is a
  * thin alias kept for the existing call sites.
  */
-int user_access_ok(uint32_t addr, uint32_t len)
+int user_access_ok(uintptr_t addr, size_t len)
 {
     return user_range_ok(addr, len);
 }
@@ -2173,7 +2173,7 @@ int user_access_ok(uint32_t addr, uint32_t len)
  * panic. 'write' is 1 when that layer writes into the buffer (so the pages
  * need write permission).
  */
-int user_buffer_ok(uint32_t addr, uint32_t len, int write)
+int user_buffer_ok(uintptr_t addr, size_t len, int write)
 {
     return user_access_ok(addr, len) && vm_prefault_range(addr, len, write);
 }
@@ -2355,7 +2355,7 @@ int uts_privileged(void)
  * NUL-terminated). */
 static void uname_field(char *dst, const char *src)
 {
-    uint32_t n = k_strlen(src);
+    uint32_t n = (uint32_t)k_strlen(src);
 
     if (n > 64) {
         n = 64;

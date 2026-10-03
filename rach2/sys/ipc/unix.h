@@ -38,30 +38,30 @@ void unix_init(void);
 int32_t unix_socket(int type, int protocol, int flags);
 
 /** socketpair(2): two connected sockets, their descriptors stored at `sv`. */
-int32_t unix_socketpair(int type, int protocol, int flags, uint32_t sv);
+int32_t unix_socketpair(int type, int protocol, int flags, uintptr_t sv);
 
-int32_t unix_bind(fd_entry_t *e, uint32_t addr, uint32_t addrlen);
-int32_t unix_connect(fd_entry_t *e, uint32_t addr, uint32_t addrlen);
+int32_t unix_bind(fd_entry_t *e, uintptr_t addr, uint32_t addrlen);
+int32_t unix_connect(fd_entry_t *e, uintptr_t addr, uint32_t addrlen);
 int32_t unix_listen(fd_entry_t *e, int backlog);
 
 /** accept4(2); `flags` are SOCK_CLOEXEC and SOCK_NONBLOCK for the new
  * descriptor. */
-int32_t unix_accept(fd_entry_t *e, uint32_t addr, uint32_t addrlen_ptr, int flags);
+int32_t unix_accept(fd_entry_t *e, uintptr_t addr, uintptr_t addrlen_ptr, int flags);
 
 /** getsockname(2), or getpeername(2) with `peer`. */
-int32_t unix_getname(fd_entry_t *e, uint32_t addr, uint32_t addrlen_ptr, int peer);
+int32_t unix_getname(fd_entry_t *e, uintptr_t addr, uintptr_t addrlen_ptr, int peer);
 
 int32_t unix_shutdown(fd_entry_t *e, int how);
-int32_t unix_setsockopt(fd_entry_t *e, int level, int name, uint32_t val, uint32_t len);
-int32_t unix_getsockopt(fd_entry_t *e, int level, int name, uint32_t val, uint32_t len_ptr);
-int32_t unix_sendto(fd_entry_t *e, uint32_t buf, uint32_t len, int flags, uint32_t addr,
+int32_t unix_setsockopt(fd_entry_t *e, int level, int name, uintptr_t val, uint32_t len);
+int32_t unix_getsockopt(fd_entry_t *e, int level, int name, uintptr_t val, uintptr_t len_ptr);
+int32_t unix_sendto(fd_entry_t *e, uintptr_t buf, uint32_t len, int flags, uintptr_t addr,
                     uint32_t addrlen);
-int32_t unix_recvfrom(fd_entry_t *e, uint32_t buf, uint32_t len, int flags, uint32_t addr,
-                      uint32_t addrlen_ptr);
+int32_t unix_recvfrom(fd_entry_t *e, uintptr_t buf, uint32_t len, int flags, uintptr_t addr,
+                      uintptr_t addrlen_ptr);
 
 /** sendmsg(2) and recvmsg(2), with `msg` the caller's struct msghdr. */
-int32_t unix_sendmsg(fd_entry_t *e, uint32_t msg, int flags);
-int32_t unix_recvmsg(fd_entry_t *e, uint32_t msg, int flags);
+int32_t unix_sendmsg(fd_entry_t *e, uintptr_t msg, int flags);
+int32_t unix_recvmsg(fd_entry_t *e, uintptr_t msg, int flags);
 
 /** The socket's inode number, for fstat and /proc/PID/fd. */
 uint32_t unix_inode(const fd_entry_t *e);

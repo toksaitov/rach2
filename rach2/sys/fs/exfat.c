@@ -3996,7 +3996,7 @@ static int ex_path(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
             return rc;
         }
         {
-            uint32_t l = k_strlen(rev);
+            uint32_t l = (uint32_t)k_strlen(rev);
 
             if (len + l + 1 >= cap) {
                 return -ENAMETOOLONG;

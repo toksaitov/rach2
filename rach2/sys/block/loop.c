@@ -819,7 +819,7 @@ static void loop_info_fill(const struct loop_device *loop, uint8_t *info)
     k_strncpy((char *)info + INFO_NAME, loop->path, INFO_NAME_SIZE - 1);
 }
 
-int32_t loop_ioctl(int index, int privileged, uint32_t request, uint32_t arg)
+int32_t loop_ioctl(int index, int privileged, uint32_t request, uintptr_t arg)
 {
     struct loop_device *loop = &loops[index];
     uint8_t info[INFO_SIZE];
@@ -870,7 +870,7 @@ int32_t loop_ioctl(int index, int privileged, uint32_t request, uint32_t arg)
     return 0;
 }
 
-int32_t loop_control_ioctl(uint32_t request, uint32_t arg)
+int32_t loop_control_ioctl(uint32_t request, uintptr_t arg)
 {
     int i;
 

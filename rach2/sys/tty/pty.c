@@ -200,7 +200,7 @@ static int32_t ptm_read(fd_entry_t *e, char __user *buf, uint32_t count)
     if (count == 0) {
         return 0;
     }
-    if (!user_range_ok((uint32_t)(__force uintptr_t)buf, count)) {
+    if (!user_range_ok((__force uintptr_t)buf, count)) {
         return -EFAULT;
     }
     while (pty_m_avail(p) == 0) {
@@ -296,7 +296,7 @@ static int32_t ptm_write(fd_entry_t *e, const char __user *buf, uint32_t count)
     if (count == 0) {
         return 0;
     }
-    if (!user_range_ok((uint32_t)(__force uintptr_t)buf, count)) {
+    if (!user_range_ok((__force uintptr_t)buf, count)) {
         return -EFAULT;
     }
     while (done < count) {
@@ -387,7 +387,7 @@ static int32_t ptm_flush(struct pty *p, uint32_t which)
 }
 
 /** Set or read packet mode (TIOCPKT, TIOCGPKT) through the int at `arg`. */
-static int32_t ptm_packet(struct pty *p, uint32_t request, uint32_t arg)
+static int32_t ptm_packet(struct pty *p, uint32_t request, uintptr_t arg)
 {
     int on = p->packet;
 
@@ -401,7 +401,7 @@ static int32_t ptm_packet(struct pty *p, uint32_t request, uint32_t arg)
     return 0;
 }
 
-static int32_t ptm_ioctl(fd_entry_t *e, uint32_t request, uint32_t arg)
+static int32_t ptm_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 {
     struct pty *p = (struct pty *)e->priv;
 
@@ -440,7 +440,7 @@ static int32_t ptm_ioctl(fd_entry_t *e, uint32_t request, uint32_t arg)
     case TIOCGPKT:
         return ptm_packet(p, request, arg);
     case TCFLSH:
-        return ptm_flush(p, arg);
+        return ptm_flush(p, (uint32_t)arg);
     case FIONREAD: {
         int n = (int)pty_m_avail(p);
         if (copy_to_user((void __user *)arg, &n, sizeof(n)) != 0) {

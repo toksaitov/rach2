@@ -36,6 +36,10 @@ typedef long ssize_t;
 typedef long ptrdiff_t;
 #endif
 
+/* The offset of member `m` in structure type `t`, which GCC, clang and
+ * TinyCC each compute. */
+#define offsetof(t, m) __builtin_offsetof(t, m)
+
 /*
  * What the compiler is told about a function beyond its type. `K_NORETURN`
  * marks one that never returns, so an analyser stops at a panic instead of

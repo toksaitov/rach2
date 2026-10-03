@@ -602,7 +602,7 @@ static int32_t file_write(fd_entry_t *entry, const char __user *buf, uint32_t co
     if (!ofd || !ofd->vmnt) {
         return -EBADF;
     }
-    if (!user_buffer_ok((uint32_t)(__force uintptr_t)buf, count, 0)) {
+    if (!user_buffer_ok((__force uintptr_t)buf, count, 0)) {
         return -EFAULT;
     }
     if (loop_backs(ofd->vmnt, ofd->vnode)) {
@@ -693,7 +693,7 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
             return -EBADF;
         }
         if (entry->sock->type == SOCK_STREAM) {
-            if (!user_buffer_ok((uint32_t)buf, count, 0)) {
+            if (!user_buffer_ok((uintptr_t)buf, count, 0)) {
                 return -EFAULT;
             }
             /* socket_tcp_send copies the user buffer into the socket send ring
@@ -708,7 +708,7 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
             if (!entry->sock->connected) {
                 return -EDESTADDRREQ;
             }
-            if (!user_buffer_ok((uint32_t)buf, count, 0)) {
+            if (!user_buffer_ok((uintptr_t)buf, count, 0)) {
                 return -EFAULT;
             }
             if (count > 1500) {
@@ -867,7 +867,7 @@ long sys_ftruncate64(isr_params_t *params)
 /* write(2): EBX = fd, ECX = buf, EDX = count. */
 long sys_write(isr_params_t *params)
 {
-    return write_fd((int)SC_ARG(params, 0), (const char __user *)SC_ARG(params, 1), SC_ARG(params, 2));
+    return write_fd((int)SC_ARG(params, 0), (const char __user *)SC_ARG(params, 1), USER_LEN32(SC_ARG(params, 2)));
 }
 
 /**
@@ -881,7 +881,7 @@ long sys_write(isr_params_t *params)
  * is taken, as one write's are. `*held` is the mount to unlock after the
  * elements, or NULL for a descriptor of anything else.
  */
-static int32_t writev_begin(int fd, uint32_t iov_user, int iovcnt, struct vfs_mount **held)
+static int32_t writev_begin(int fd, uintptr_t iov_user, int iovcnt, struct vfs_mount **held)
 {
     fd_entry_t *entry = fd_get(current_proc->fds, fd);
     struct kernel_iovec iov;
@@ -905,7 +905,7 @@ static int32_t writev_begin(int fd, uint32_t iov_user, int iovcnt, struct vfs_mo
             (iov.iov_len > 0 && !user_buffer_ok(iov.iov_base, iov.iov_len, 0))) {
             break;
         }
-        extent += iov.iov_len;
+        extent += (uint32_t)iov.iov_len;
     }
     vfs_ns_lock(ofd->vmnt);
     *held = ofd->vmnt;
@@ -928,7 +928,7 @@ static int32_t writev_begin(int fd, uint32_t iov_user, int iovcnt, struct vfs_mo
  * failed write ends the call: with the error when nothing was written yet,
  * and otherwise with the bytes before it, as a short write does.
  */
-static int32_t writev_elements(int fd, uint32_t iov_user, int iovcnt)
+static int32_t writev_elements(int fd, uintptr_t iov_user, int iovcnt)
 {
     struct kernel_iovec iov;
     int32_t total = 0;
@@ -957,7 +957,7 @@ static int32_t writev_elements(int fd, uint32_t iov_user, int iovcnt)
             return (total > 0) ? total : -EFAULT;
         }
 
-        r = write_fd(fd, (const char __user *)iov.iov_base, iov.iov_len);
+        r = write_fd(fd, (const char __user *)iov.iov_base, USER_LEN32(iov.iov_len));
         if (r < 0) {
             return (total > 0) ? total : r;
         }
@@ -979,7 +979,7 @@ static int32_t writev_elements(int fd, uint32_t iov_user, int iovcnt)
 long sys_writev(isr_params_t *params)
 {
     int fd = (int)SC_ARG(params, 0);
-    uint32_t iov_user = SC_ARG(params, 1);
+    uintptr_t iov_user = SC_ARG(params, 1);
     int iovcnt = (int)SC_ARG(params, 2);
     struct vfs_mount *held;
     int32_t rc;
@@ -3079,7 +3079,7 @@ static int32_t remount_call(const isr_params_t *params)
 
 /* mount(2) with MS_BIND: the source is a path, as the target is, and MS_REC
  * shows the mounts below it too (`vfs_do_bind`). */
-static int32_t bind_at(uint32_t source, const char *target, uint32_t flags)
+static int32_t bind_at(uintptr_t source, const char *target, uint32_t flags)
 {
     char *spath;
     int rc = path_from_user(AT_FDCWD, (const char __user *)source, &spath);
@@ -3134,7 +3134,7 @@ long sys_mount(isr_params_t *params)
         }
         n = path_from_user(AT_FDCWD, (const char __user *)SC_ARG(params, 1), &tpath);
         if (n == 0) {
-            n = bind_at(SC_ARG(params, 0), tpath, SC_ARG(params, 3));
+            n = bind_at(SC_ARG(params, 0), tpath, (uint32_t)SC_ARG(params, 3));
             path_buf_put(tpath);
         }
         return n;
@@ -3162,7 +3162,7 @@ long sys_mount(isr_params_t *params)
         n = strncpy_from_user(data, (const char __user *)SC_ARG(params, 4), sizeof(data));
     }
     if (n >= 0) {
-        n = vfs_do_mount(source, tpath, type, SC_ARG(params, 3), data);
+        n = vfs_do_mount(source, tpath, type, (uint32_t)SC_ARG(params, 3), data);
     }
     path_buf_put(tpath);
     return n;
@@ -3355,7 +3355,7 @@ long sys_open(isr_params_t *params)
         return -EFAULT;
     }
     return open_from_user(AT_FDCWD, (const char __user *)SC_ARG(params, 0), (int)SC_ARG(params, 1),
-                          SC_ARG(params, 2));
+                          (uint32_t)SC_ARG(params, 2));
 }
 
 /*
@@ -3371,7 +3371,7 @@ long sys_openat(isr_params_t *params)
         return -EFAULT;
     }
     return open_from_user((int)SC_ARG(params, 0), (const char __user *)SC_ARG(params, 1), (int)SC_ARG(params, 2),
-                          SC_ARG(params, 3));
+                          (uint32_t)SC_ARG(params, 3));
 }
 
 /** Whether a call of a thread other than the caller that shares `table`
@@ -3485,9 +3485,9 @@ void fd_holds_release(void)
  */
 long sys_close_range(isr_params_t *params)
 {
-    uint32_t first = SC_ARG(params, 0);
-    uint32_t last = SC_ARG(params, 1);
-    uint32_t flags = SC_ARG(params, 2);
+    uint32_t first = (uint32_t)SC_ARG(params, 0);
+    uint32_t last = (uint32_t)SC_ARG(params, 1);
+    uint32_t flags = (uint32_t)SC_ARG(params, 2);
     uint32_t fd;
 
     if ((flags & ~(CLOSE_RANGE_UNSHARE | CLOSE_RANGE_CLOEXEC)) != 0 || first > last) {
@@ -3668,7 +3668,7 @@ static int32_t fadvise(int fd, uint32_t len_hi, uint32_t advice)
  */
 long sys_fadvise64(isr_params_t *params)
 {
-    return fadvise((int)SC_ARG(params, 0), 0, SC_ARG(params, 4));
+    return fadvise((int)SC_ARG(params, 0), 0, (uint32_t)SC_ARG(params, 4));
 }
 
 /**
@@ -3677,7 +3677,7 @@ long sys_fadvise64(isr_params_t *params)
  */
 long sys_fadvise64_64(isr_params_t *params)
 {
-    return fadvise((int)SC_ARG(params, 0), SC_ARG(params, 4), SC_ARG(params, 5));
+    return fadvise((int)SC_ARG(params, 0), (uint32_t)SC_ARG(params, 4), (uint32_t)SC_ARG(params, 5));
 }
 
 /* The i386 requests of chattr(1) and lsattr(1): _IOR and _IOW of 'f', and
@@ -3698,7 +3698,7 @@ long sys_fadvise64_64(isr_params_t *params)
  * enforces, only a privileged caller changes, as CAP_LINUX_IMMUTABLE does on
  * Linux, and another caller is -EPERM.
  */
-int32_t fs_flags_ioctl(fd_entry_t *entry, uint32_t request, uint32_t arg, int *handled)
+int32_t fs_flags_ioctl(fd_entry_t *entry, uint32_t request, uintptr_t arg, int *handled)
 {
     struct vfs_stat st;
     uint32_t want;
@@ -4189,7 +4189,7 @@ static int32_t file_read(fd_entry_t *entry, char __user *buf, uint32_t count, co
     if (!ofd || !ofd->vmnt) {
         return -EBADF;
     }
-    if (!user_buffer_ok((uint32_t)(__force uintptr_t)buf, count, 1)) {
+    if (!user_buffer_ok((__force uintptr_t)buf, count, 1)) {
         return -EFAULT;
     }
     if (filemap_file_reading(ofd->vmnt, ofd->ino, at ? *at : ofd->offset, count) != 0) {
@@ -4250,7 +4250,7 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
      * routing to the non-blocking variant. */
     if (entry->type == FD_TYPE_SOCKET) {
         int sock_nonblock;
-        if (!entry->sock || !user_buffer_ok((uint32_t)buf, count, 1)) {
+        if (!entry->sock || !user_buffer_ok((uintptr_t)buf, count, 1)) {
             return -EFAULT;
         }
         if (sock_is_query(entry->sock)) {
@@ -4289,7 +4289,7 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
             /* Non-blocking raw scancode read for games. kbd_read_scancodes
              * writes into the user buffer; range-check it first, then __force
              * strips the __user tag at the boundary. */
-            if (!user_buffer_ok((uint32_t)buf, count, 1)) {
+            if (!user_buffer_ok((uintptr_t)buf, count, 1)) {
                 return -EFAULT;
             }
             return kbd_read_scancodes((uint8_t __force *)buf, (int)count);
@@ -4358,7 +4358,7 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
         /* Read packets from the mouse ring buffer. mouse_read_packets writes
          * into the user buffer; range-check it, then __force at the boundary.
          */
-        if (!user_buffer_ok((uint32_t)buf,
+        if (!user_buffer_ok((uintptr_t)buf,
                             (uint32_t)packets_requested * sizeof(struct mouse_packet), 1)) {
             return -EFAULT;
         }
@@ -4389,7 +4389,7 @@ long sys_read(isr_params_t *params)
     if (SC_ARG(params, 2) == 0 && e && e->type == FD_TYPE_ANON && e->ops && e->ops->read) {
         return read_ops(e, (char __user *)SC_ARG(params, 1), 0);
     }
-    return read_fd((int)SC_ARG(params, 0), (char __user *)SC_ARG(params, 1), SC_ARG(params, 2));
+    return read_fd((int)SC_ARG(params, 0), (char __user *)SC_ARG(params, 1), USER_LEN32(SC_ARG(params, 2)));
 }
 
 /**
@@ -4433,7 +4433,7 @@ static int32_t read_ready(fd_entry_t *entry, int fd, char __user *buf, uint32_t 
         if (sock_is_query(entry->sock)) {
             return -EOPNOTSUPP;
         }
-        if (!user_buffer_ok((uint32_t)buf, count, 1)) {
+        if (!user_buffer_ok((uintptr_t)buf, count, 1)) {
             return -EFAULT;
         }
         if (entry->sock->type == SOCK_RAW) {
@@ -4486,7 +4486,7 @@ static int32_t read_ready(fd_entry_t *entry, int fd, char __user *buf, uint32_t 
  *
  * Returns the bytes copied, or a negative errno.
  */
-int32_t readv_dgram(fd_entry_t *entry, uint32_t iov_user, int iovcnt, uint32_t *src_ip,
+int32_t readv_dgram(fd_entry_t *entry, uintptr_t iov_user, int iovcnt, uint32_t *src_ip,
                     uint16_t *src_port, int peek, int32_t *whole)
 {
     uint8_t message[SOCK_RECV_BUF_SIZE];
@@ -4540,7 +4540,7 @@ int32_t readv_dgram(fd_entry_t *entry, uint32_t iov_user, int iovcnt, uint32_t *
         }
         chunk = (uint32_t)taken - offset;
         if (chunk > iov.iov_len) {
-            chunk = iov.iov_len;
+            chunk = USER_LEN32(iov.iov_len);
         }
         if (copy_to_user((void __user *)iov.iov_base, message + offset, chunk) != 0) {
             break; /* the caller moved its own buffer out from under itself */
@@ -4609,7 +4609,7 @@ int32_t readv_dgram(fd_entry_t *entry, uint32_t iov_user, int iovcnt, uint32_t *
 long sys_readv(isr_params_t *params)
 {
     int fd = (int)SC_ARG(params, 0);
-    uint32_t iov_user = SC_ARG(params, 1);
+    uintptr_t iov_user = SC_ARG(params, 1);
     int iovcnt = (int)SC_ARG(params, 2);
     struct kernel_iovec iov;
     fd_entry_t *entry;
@@ -4637,7 +4637,7 @@ long sys_readv(isr_params_t *params)
         if (!user_buffer_ok(iov.iov_base, iov.iov_len, 1)) {
             return -EFAULT;
         }
-        wanted += iov.iov_len;
+        wanted += (uint32_t)iov.iov_len;
     }
 
     if (wanted == 0) {
@@ -4668,12 +4668,12 @@ long sys_readv(isr_params_t *params)
         /* The first buffer is filled by the ordinary read, which waits if it
          * must; every buffer after it only by one that will not wait. */
         if (total > 0 && !walk) {
-            r = read_ready(entry, fd, (char __user *)iov.iov_base, iov.iov_len);
+            r = read_ready(entry, fd, (char __user *)iov.iov_base, USER_LEN32(iov.iov_len));
             if (r <= 0) {
                 break;
             }
         } else {
-            r = read_fd(fd, (char __user *)iov.iov_base, iov.iov_len);
+            r = read_fd(fd, (char __user *)iov.iov_base, USER_LEN32(iov.iov_len));
             if (r < 0) {
                 return (total > 0) ? total : r;
             }
@@ -5289,7 +5289,7 @@ long sys_chroot(isr_params_t *params)
 long sys_getcwd(isr_params_t *params)
 {
     char __user *buf = (char __user *)SC_ARG(params, 0);
-    uint32_t size = SC_ARG(params, 1);
+    uint32_t size = USER_LEN32(SC_ARG(params, 1));
     uint32_t cwd_len;
     char *cwd;
     int32_t rc;
@@ -5476,8 +5476,8 @@ static int synth_sys_link(const struct vpath *vp, char *out, int cap)
  * maps them (`uid_seen`), which every stat gives the caller. */
 static void stat64_seen(struct linux_stat64 *kst)
 {
-    kst->st_uid = uid_seen(kst->st_uid);
-    kst->st_gid = gid_seen(kst->st_gid);
+    kst->st_uid = uid_seen((uint32_t)kst->st_uid);
+    kst->st_gid = gid_seen((uint32_t)kst->st_gid);
 }
 
 /**
@@ -6343,7 +6343,7 @@ long sys_readlink(isr_params_t *params)
 {
     const char __user *upath = (const char __user *)SC_ARG(params, 0);
     char __user *ubuf = (char __user *)SC_ARG(params, 1);
-    uint32_t bufsiz = SC_ARG(params, 2);
+    uint32_t bufsiz = USER_LEN32(SC_ARG(params, 2));
     char *path;
     int dir;
     int32_t rc;
@@ -6365,7 +6365,7 @@ long sys_readlinkat(isr_params_t *params)
     int dirfd = (int)SC_ARG(params, 0);
     const char __user *upath = (const char __user *)SC_ARG(params, 1);
     char __user *ubuf = (char __user *)SC_ARG(params, 2);
-    uint32_t bufsiz = SC_ARG(params, 3);
+    uint32_t bufsiz = USER_LEN32(SC_ARG(params, 3));
     char *path;
     int dir;
     int32_t rc;
@@ -7228,7 +7228,7 @@ static int32_t do_access(const char *name, int mode, int dir)
         }
         /* Synthetic metadata is fixed and root-owned; judge it by the real
          * ids like any other access(2) answer. */
-        return cred_access_bits(s.st_uid, s.st_gid, s.st_mode & 0777u, mode, 1);
+        return cred_access_bits((uint32_t)s.st_uid, (uint32_t)s.st_gid, s.st_mode & 0777u, mode, 1);
     }
     /* R_OK/W_OK/X_OK are the same octal digits the checker takes. */
     if (!mnt_is_root(ref.mnt)) {
@@ -7277,7 +7277,7 @@ long sys_inotify_add_watch(isr_params_t *params)
 {
     int fd = (int)SC_ARG(params, 0);
     const char __user *upath = (const char __user *)SC_ARG(params, 1);
-    uint32_t mask = SC_ARG(params, 2);
+    uint32_t mask = (uint32_t)SC_ARG(params, 2);
     const struct vpath *vp;
     struct vfs_ref ref;
     uint64_t ino = 0;
@@ -7313,7 +7313,8 @@ long sys_inotify_add_watch(isr_params_t *params)
 
         rc = synth_stat(vp, &s, !(mask & IN_DONT_FOLLOW));
         if (rc == 0) {
-            rc = cred_access_bits(s.st_uid, s.st_gid, s.st_mode & 0777u, CRED_R, 0);
+            rc = cred_access_bits((uint32_t)s.st_uid, (uint32_t)s.st_gid, s.st_mode & 0777u, CRED_R,
+                                  0);
             ino = s.st_ino;
             isdir = (s.st_mode & S_IFMT) == S_IFDIR;
         }
@@ -7658,7 +7659,7 @@ static int32_t do_chown(const char *name, uint32_t uid, uint32_t gid, int follow
 long sys_chmod(isr_params_t *params)
 {
     const char __user *upath = (const char __user *)SC_ARG(params, 0);
-    uint32_t mode = SC_ARG(params, 1);
+    uint32_t mode = (uint32_t)SC_ARG(params, 1);
     char *path;
     int dir;
     int32_t rc;
@@ -7679,7 +7680,7 @@ long sys_fchmodat(isr_params_t *params)
 {
     int dirfd = (int)SC_ARG(params, 0);
     const char __user *upath = (const char __user *)SC_ARG(params, 1);
-    uint32_t mode = SC_ARG(params, 2);
+    uint32_t mode = (uint32_t)SC_ARG(params, 2);
     char *path;
     int dir;
     int32_t rc;
@@ -7704,7 +7705,7 @@ long sys_fchmodat(isr_params_t *params)
 long sys_fchmod(isr_params_t *params)
 {
     int fd = (int)SC_ARG(params, 0);
-    uint32_t mode = SC_ARG(params, 1);
+    uint32_t mode = (uint32_t)SC_ARG(params, 1);
     fd_entry_t *entry;
 
     if (!current_proc) {
@@ -7799,13 +7800,13 @@ static int32_t chown_path(const char __user *upath, uint32_t uid, uint32_t gid, 
  */
 long sys_chown(isr_params_t *params)
 {
-    return chown_path((const char __user *)SC_ARG(params, 0), SC_ARG(params, 1), SC_ARG(params, 2), 1);
+    return chown_path((const char __user *)SC_ARG(params, 0), (uint32_t)SC_ARG(params, 1), (uint32_t)SC_ARG(params, 2), 1);
 }
 
 /** lchown(2), 16 and 198: a final symbolic link itself, as on Linux. */
 long sys_lchown(isr_params_t *params)
 {
-    return chown_path((const char __user *)SC_ARG(params, 0), SC_ARG(params, 1), SC_ARG(params, 2), 0);
+    return chown_path((const char __user *)SC_ARG(params, 0), (uint32_t)SC_ARG(params, 1), (uint32_t)SC_ARG(params, 2), 0);
 }
 
 static int32_t chown_fd(fd_entry_t *entry, uint32_t uid, uint32_t gid);
@@ -7823,8 +7824,8 @@ long sys_fchownat(isr_params_t *params)
 {
     int dirfd = (int)SC_ARG(params, 0);
     const char __user *upath = (const char __user *)SC_ARG(params, 1);
-    uint32_t uid = SC_ARG(params, 2);
-    uint32_t gid = SC_ARG(params, 3);
+    uint32_t uid = (uint32_t)SC_ARG(params, 2);
+    uint32_t gid = (uint32_t)SC_ARG(params, 3);
     int flags = (int)SC_ARG(params, 4);
     char *path;
     int empty = 0;
@@ -7884,8 +7885,8 @@ long sys_fchown(isr_params_t *params)
     if (!entry || (entry->flags & FD_FLAG_PATH)) {
         return -EBADF;
     }
-    uid = SC_ARG(params, 1);
-    gid = SC_ARG(params, 2);
+    uid = (uint32_t)SC_ARG(params, 1);
+    gid = (uint32_t)SC_ARG(params, 2);
     if (chown_ids_named(&uid, &gid) != 0) {
         return -EINVAL;
     }
@@ -8561,8 +8562,8 @@ static int file_size_now(fd_entry_t *entry, uint64_t *out)
 long sys__llseek(isr_params_t *params)
 {
     int fd = (int)SC_ARG(params, 0);
-    uint32_t offset_high = SC_ARG(params, 1);
-    uint32_t offset_low = SC_ARG(params, 2);
+    uint32_t offset_high = (uint32_t)SC_ARG(params, 1);
+    uint32_t offset_low = (uint32_t)SC_ARG(params, 2);
     long long __user *result = (long long __user *)SC_ARG(params, 3);
     int whence = (int)SC_ARG(params, 4);
     fd_entry_t *entry;
@@ -8770,8 +8771,8 @@ static void pio_view(fd_entry_t *entry, uint64_t at, fd_entry_t *view, struct op
 long sys_pread64(isr_params_t *params)
 {
     char __user *buf = (char __user *)SC_ARG(params, 1);
-    uint32_t count = SC_ARG(params, 2);
-    long long pos = off_from(SC_ARG(params, 4), SC_ARG(params, 3));
+    uint32_t count = USER_LEN32(SC_ARG(params, 2));
+    long long pos = off_from((uint32_t)SC_ARG(params, 4), (uint32_t)SC_ARG(params, 3));
     uint64_t at = (uint64_t)pos;
     fd_entry_t *entry = NULL;
     fd_entry_t view;
@@ -8801,8 +8802,8 @@ long sys_pread64(isr_params_t *params)
 long sys_pwrite64(isr_params_t *params)
 {
     const char __user *buf = (const char __user *)SC_ARG(params, 1);
-    uint32_t count = SC_ARG(params, 2);
-    long long pos = off_from(SC_ARG(params, 4), SC_ARG(params, 3));
+    uint32_t count = USER_LEN32(SC_ARG(params, 2));
+    long long pos = off_from((uint32_t)SC_ARG(params, 4), (uint32_t)SC_ARG(params, 3));
     uint64_t at = (uint64_t)pos;
     fd_entry_t *entry = NULL;
     fd_entry_t view;
@@ -8925,7 +8926,7 @@ struct flock_args {
  * bytes, when `wide`, and otherwise struct flock, 16 bytes with 32-bit
  * offsets. Returns 0 or -EFAULT.
  */
-static int32_t flock_read(uint32_t arg, int wide, struct flock_args *fl)
+static int32_t flock_read(uintptr_t arg, int wide, struct flock_args *fl)
 {
     uint8_t raw[24];
     int32_t s32, l32;
@@ -8956,7 +8957,7 @@ static int32_t flock_read(uint32_t arg, int wide, struct flock_args *fl)
  * owner's pid; or F_UNLCK in `l_type` alone when none conflicts. Returns 0,
  * -EFAULT, or -EOVERFLOW for a lock struct flock cannot describe.
  */
-static int32_t flock_write(uint32_t arg, int wide, const struct lock_req *req)
+static int32_t flock_write(uintptr_t arg, int wide, const struct lock_req *req)
 {
     uint8_t raw[24];
     int16_t type = (int16_t)req->type, whence = 0;
@@ -9010,7 +9011,7 @@ static int32_t flock_write(uint32_t arg, int wide, const struct lock_req *req)
  * during the wait has a new one. An OFD lock belongs to the description,
  * which the call still holds.
  */
-static int32_t fcntl_lock(fd_entry_t *entry, int cmd, uint32_t arg)
+static int32_t fcntl_lock(fd_entry_t *entry, int cmd, uintptr_t arg)
 {
     int wide, by_ofd;
     int op = flock_cmd(cmd, &wide, &by_ofd);
@@ -9218,7 +9219,7 @@ long sys_fallocate(isr_params_t *params)
     if ((offset >> 63) != 0 || len == 0 || (len >> 63) != 0) {
         return -EINVAL;
     }
-    if (!fallocate_mode_ok(SC_ARG(params, 1))) {
+    if (!fallocate_mode_ok((uint32_t)SC_ARG(params, 1))) {
         return -EOPNOTSUPP;
     }
     if (!(entry->flags & FD_FLAG_WRITE)) {
@@ -9244,7 +9245,7 @@ long sys_fallocate(isr_params_t *params)
         return -EFBIG;
     }
     fd_ofd_lock(entry->ofd);
-    rc = vfs_fallocate(entry->ofd->vmnt, entry->ofd->fhandle, SC_ARG(params, 1), offset, len);
+    rc = vfs_fallocate(entry->ofd->vmnt, entry->ofd->fhandle, (uint32_t)SC_ARG(params, 1), offset, len);
     fd_ofd_unlock(entry->ofd);
     return rc;
 }
@@ -9266,7 +9267,7 @@ long sys_fallocate(isr_params_t *params)
  */
 long sys_memfd_create(isr_params_t *params)
 {
-    uint32_t flags = SC_ARG(params, 1);
+    uint32_t flags = (uint32_t)SC_ARG(params, 1);
     struct vfs_mount *mnt = vfs_memfd_mount();
     uint32_t mode = 0777u, seals = TMPFS_SEAL_SEAL;
     char name[MFD_NAME_MAX + 2];
@@ -9380,7 +9381,7 @@ long sys_fcntl64(isr_params_t *params)
 {
     int fd = (int)SC_ARG(params, 0);
     int cmd = (int)SC_ARG(params, 1);
-    uint32_t arg = SC_ARG(params, 2);
+    uintptr_t arg = SC_ARG(params, 2);
     fd_entry_t *entry;
 
     enum {
@@ -9452,7 +9453,7 @@ long sys_fcntl64(isr_params_t *params)
          * contract). An arg past the descriptor limit is -EINVAL, since the
          * table grows to it and no higher; no slot at or above it is
          * -EMFILE, and no room in the heap -ENOMEM. */
-        if (arg >= (uint32_t)fd_limit(current_proc->fds)) {
+        if (arg >= (uintptr_t)fd_limit(current_proc->fds)) {
             return -EINVAL;
         }
         newfd = fd_alloc_from(current_proc->fds, (int)arg);
@@ -9498,7 +9499,7 @@ long sys_fcntl64(isr_params_t *params)
         return fcntl_lock(entry, cmd, arg);
     case F_ADD_SEALS:
     case F_GET_SEALS:
-        return fcntl_seals(entry, cmd, arg);
+        return fcntl_seals(entry, cmd, (uint32_t)arg);
     case F_GETPIPE_SZ:
         return entry->type == FD_TYPE_PIPE ? PIPE_BUF_SIZE : -EBADF;
     default:
@@ -9688,7 +9689,7 @@ long sys_lstat(isr_params_t *params)
 long sys_creat(isr_params_t *params)
 {
     const char __user *path = (const char __user *)SC_ARG(params, 0);
-    uint32_t mode = SC_ARG(params, 1);
+    uint32_t mode = (uint32_t)SC_ARG(params, 1);
     char *pathbuf;
     int end;
     int32_t rc;
@@ -10058,7 +10059,7 @@ long sys_mkdir(isr_params_t *params)
     if (rc != 0) {
         return rc;
     }
-    rc = do_mkdir(path, SC_ARG(params, 1));
+    rc = do_mkdir(path, (uint32_t)SC_ARG(params, 1));
     path_buf_put(path);
     return rc;
 }
@@ -10079,7 +10080,7 @@ long sys_mkdirat(isr_params_t *params)
     if (rc != 0) {
         return rc;
     }
-    rc = do_mkdir(path, SC_ARG(params, 2));
+    rc = do_mkdir(path, (uint32_t)SC_ARG(params, 2));
     path_buf_put(path);
     return rc;
 }
@@ -10177,7 +10178,7 @@ long sys_mknod(isr_params_t *params)
     if (!current_proc) {
         return -EFAULT;
     }
-    rc = mknod_kind(SC_ARG(params, 1));
+    rc = mknod_kind((uint32_t)SC_ARG(params, 1));
     if (rc != 0) {
         return rc;
     }
@@ -10188,7 +10189,7 @@ long sys_mknod(isr_params_t *params)
     if (rc != 0) {
         return rc;
     }
-    rc = do_mknod(path, SC_ARG(params, 1), SC_ARG(params, 2), end);
+    rc = do_mknod(path, (uint32_t)SC_ARG(params, 1), (uint32_t)SC_ARG(params, 2), end);
     path_buf_put(path);
     return rc;
 }
@@ -10205,7 +10206,7 @@ long sys_mknodat(isr_params_t *params)
     if (!current_proc) {
         return -EFAULT;
     }
-    rc = mknod_kind(SC_ARG(params, 2));
+    rc = mknod_kind((uint32_t)SC_ARG(params, 2));
     if (rc != 0) {
         return rc;
     }
@@ -10216,7 +10217,7 @@ long sys_mknodat(isr_params_t *params)
     if (rc != 0) {
         return rc;
     }
-    rc = do_mknod(path, SC_ARG(params, 2), SC_ARG(params, 3), end);
+    rc = do_mknod(path, (uint32_t)SC_ARG(params, 2), (uint32_t)SC_ARG(params, 3), end);
     path_buf_put(path);
     return rc;
 }
@@ -11621,7 +11622,7 @@ static int32_t synth_getdents(fd_entry_t *e, char *buf, uint32_t count)
             struct linux_dirent64 rec;
             uint8_t bytes[64];
         } recbuf;
-        uint32_t name_len = k_strlen(name);
+        uint32_t name_len = (uint32_t)k_strlen(name);
         uint32_t rec_len =
             sizeof(uint64_t) + sizeof(int64_t) + sizeof(uint16_t) + sizeof(uint8_t) + name_len + 1;
         struct linux_dirent64 *d;
@@ -11663,7 +11664,7 @@ long sys_getdents64(isr_params_t *params)
 {
     int fd_num = (int)SC_ARG(params, 0);
     char *buf = (char *)SC_ARG(params, 1);
-    uint32_t count = SC_ARG(params, 2);
+    uint32_t count = USER_LEN32(SC_ARG(params, 2));
     fd_entry_t *entry;
     uint32_t bytes_written = 0;
     uint32_t name_len;
@@ -11677,7 +11678,7 @@ long sys_getdents64(isr_params_t *params)
     /* Each record is built in a kernel buffer and copied out, and the whole
      * [buf, buf+count) span is range-checked and faulted in once here, so a
      * copy part way through the batch cannot meet an unmapped page. */
-    if (!user_buffer_ok((uint32_t)buf, count, 1)) {
+    if (!user_buffer_ok((uintptr_t)buf, count, 1)) {
         return -EFAULT;
     }
 
@@ -11759,7 +11760,7 @@ long sys_getdents64(isr_params_t *params)
                 fd_ofd_unlock(ofd);
                 return (bytes_written > 0) ? (int32_t)bytes_written : got;
             }
-            name_len = k_strlen(de.name);
+            name_len = (uint32_t)k_strlen(de.name);
             /* Fixed fields (19 bytes) + name + NUL, padded to 8-byte
              * align. */
             rec_len = sizeof(uint64_t) + sizeof(int64_t) + sizeof(uint16_t) + sizeof(uint8_t) +
@@ -11803,7 +11804,7 @@ long sys_dup3(isr_params_t *params)
 {
     int oldfd = (int)SC_ARG(params, 0);
     int newfd = (int)SC_ARG(params, 1);
-    uint32_t flags = SC_ARG(params, 2);
+    uint32_t flags = (uint32_t)SC_ARG(params, 2);
     int32_t r;
 
     if (oldfd == newfd) {
@@ -11812,7 +11813,7 @@ long sys_dup3(isr_params_t *params)
     if (flags & ~(uint32_t)O_CLOEXEC) {
         return -EINVAL;
     }
-    r = sys_dup2(params); /* shares EBX=oldfd, ECX=newfd */
+    r = (int32_t)sys_dup2(params); /* the same first two arguments */
     if (r >= 0 && (flags & O_CLOEXEC)) {
         fd_entry_t *e = fd_get(current_proc->fds, newfd);
         if (e) {

@@ -22,8 +22,8 @@
 
 /** One module's half-open physical range, as Multiboot reports it. */
 struct modlayout_range {
-    uint32_t start;
-    uint32_t end;
+    uintptr_t start;
+    uintptr_t end;
 };
 
 /* What a check found. `modlayout_reason` turns each into its diagnostic. */
@@ -60,7 +60,7 @@ const char *modlayout_reason(int code);
  * for the same reason the check is, so the host test can assert the exact
  * text. The result is always NUL-terminated and truncated to fit.
  */
-void modlayout_describe(int code, uint32_t index, uint32_t start, uint32_t end, char *buf,
+void modlayout_describe(int code, uint32_t index, uintptr_t start, uintptr_t end, char *buf,
                         uint32_t buflen);
 
 #endif /* _MODLAYOUT_H_ */

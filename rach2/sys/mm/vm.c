@@ -52,13 +52,13 @@ static void vm_drop_files(vm_space_t *vm)
 /* Cut region `r` at `at`, inside it: the part from `at` up, which the caller
  * places, maps the file on from its own page and holds a reference of its
  * own. */
-static vma_t vm_cut(vma_t *r, uint32_t at)
+static vma_t vm_cut(vma_t *r, uintptr_t at)
 {
     vma_t upper = *r;
 
     upper.start = at;
     if (upper.file) {
-        upper.pgoff += (at - r->start) >> VM_PAGE_SHIFT;
+        upper.pgoff += (uint32_t)((at - r->start) >> VM_PAGE_SHIFT);
         vm_file_get(upper.file);
     }
     r->end = at;
@@ -146,7 +146,7 @@ int vm_reserve(vm_space_t *vm, uint32_t n)
 
 /* The index of the first region that ends above addr: the region holding
  * addr if there is one, else the first region above it, else count. */
-static uint32_t vm_lower(const vm_space_t *vm, uint32_t addr)
+static uint32_t vm_lower(const vm_space_t *vm, uintptr_t addr)
 {
     uint32_t lo = 0;
     uint32_t hi = vm->count;
@@ -206,7 +206,7 @@ static void vm_merge_left(vm_space_t *vm, uint32_t i)
  *
  * Regions are half-open [start, end), so end is not part of the region.
  */
-vma_t *vm_find(vm_space_t *vm, uint32_t addr)
+vma_t *vm_find(vm_space_t *vm, uintptr_t addr)
 {
     uint32_t i = vm_lower(vm, addr);
 
@@ -219,7 +219,7 @@ vma_t *vm_find(vm_space_t *vm, uint32_t addr)
 /**
  * Report whether [start, end) intersects any existing region.
  */
-int vm_overlaps(const vm_space_t *vm, uint32_t start, uint32_t end)
+int vm_overlaps(const vm_space_t *vm, uintptr_t start, uintptr_t end)
 {
     uint32_t i = vm_lower(vm, start);
 
@@ -235,12 +235,12 @@ int vm_overlaps(const vm_space_t *vm, uint32_t start, uint32_t end)
  * same kind and protection. Returns 0 on success or -1 if any of those
  * conditions fails.
  */
-int vm_insert(vm_space_t *vm, uint32_t start, uint32_t end, uint32_t prot, vm_type_t type)
+int vm_insert(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot, vm_type_t type)
 {
     return vm_insert_file(vm, start, end, prot, type, NULL, 0);
 }
 
-int vm_insert_file(vm_space_t *vm, uint32_t start, uint32_t end, uint32_t prot, vm_type_t type,
+int vm_insert_file(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot, vm_type_t type,
                    struct vm_file *file, uint32_t pgoff)
 {
     vma_t r;
@@ -281,7 +281,7 @@ int vm_insert_file(vm_space_t *vm, uint32_t start, uint32_t end, uint32_t prot, 
  * new entry, and it is made room for before anything changes, so a -1 leaves
  * the regions as they were.
  */
-int vm_remove(vm_space_t *vm, uint32_t start, uint32_t end)
+int vm_remove(vm_space_t *vm, uintptr_t start, uintptr_t end)
 {
     uint32_t i;
 
@@ -309,7 +309,7 @@ int vm_remove(vm_space_t *vm, uint32_t start, uint32_t end)
             vm_delete_at(vm, i);
         } else if (start <= r->start) {
             /* The low end goes; nothing above reaches back. */
-            r->pgoff += r->file ? (end - r->start) >> VM_PAGE_SHIFT : 0u;
+            r->pgoff += r->file ? (uint32_t)((end - r->start) >> VM_PAGE_SHIFT) : 0u;
             r->start = end;
             break;
         } else {
@@ -333,9 +333,10 @@ int vm_remove(vm_space_t *vm, uint32_t start, uint32_t end)
  * neighbours that now match. Returns 0, -1 for a gap, -2 when the split has
  * no room, or -3; every error leaves the regions as they were.
  */
-int vm_protect(vm_space_t *vm, uint32_t start, uint32_t end, uint32_t prot)
+int vm_protect(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot)
 {
-    uint32_t i, at;
+    uintptr_t at;
+    uint32_t i, first;
 
     if (start >= end) {
         return 0;
@@ -364,7 +365,7 @@ int vm_protect(vm_space_t *vm, uint32_t start, uint32_t end, uint32_t prot)
         vm_insert_at(vm, i + 1, &upper);
         i++;
     }
-    at = i;
+    first = i;
     while (i < vm->count && vm->vmas[i].start < end) {
         if (vm->vmas[i].end > end) {
             vma_t upper = vm_cut(&vm->vmas[i], end);
@@ -379,16 +380,17 @@ int vm_protect(vm_space_t *vm, uint32_t start, uint32_t end, uint32_t prot)
     if (i < vm->count) {
         vm_merge_left(vm, i);
     }
-    while (i > at) {
+    while (i > first) {
         i--;
         vm_merge_left(vm, i);
     }
     return 0;
 }
 
-uint32_t vm_find_free(const vm_space_t *vm, uint32_t len, uint32_t lo, uint32_t hi)
+uintptr_t vm_find_free(const vm_space_t *vm, uintptr_t len, uintptr_t lo, uintptr_t hi)
 {
-    uint32_t i, top, bottom;
+    uint32_t i;
+    uintptr_t top, bottom;
 
     if (len == 0 || hi <= lo || hi - lo < len) {
         return 0;
@@ -417,13 +419,14 @@ uint32_t vm_find_free(const vm_space_t *vm, uint32_t len, uint32_t lo, uint32_t 
     }
 }
 
-uint32_t vm_covered(const vm_space_t *vm, uint32_t start, uint32_t end)
+uintptr_t vm_covered(const vm_space_t *vm, uintptr_t start, uintptr_t end)
 {
-    uint32_t i, total = 0;
+    uintptr_t total = 0;
+    uint32_t i;
 
     for (i = vm_lower(vm, start); i < vm->count && vm->vmas[i].start < end; i++) {
-        uint32_t s = vm->vmas[i].start > start ? vm->vmas[i].start : start;
-        uint32_t e = vm->vmas[i].end < end ? vm->vmas[i].end : end;
+        uintptr_t s = vm->vmas[i].start > start ? vm->vmas[i].start : start;
+        uintptr_t e = vm->vmas[i].end < end ? vm->vmas[i].end : end;
 
         total += e - s;
     }
@@ -431,9 +434,10 @@ uint32_t vm_covered(const vm_space_t *vm, uint32_t start, uint32_t end)
 }
 
 /** Bytes the regions cover together, what RLIMIT_AS is measured against. */
-uint32_t vm_total(const vm_space_t *vm)
+uintptr_t vm_total(const vm_space_t *vm)
 {
-    uint32_t i, total = 0;
+    uintptr_t total = 0;
+    uint32_t i;
 
     for (i = 0; i < vm->count; i++) {
         total += vm->vmas[i].end - vm->vmas[i].start;
@@ -452,7 +456,7 @@ uint32_t vm_total(const vm_space_t *vm)
  * must be clear of every other region: a hostile ELF segment or mmap
  * inside the growth window must not be absorbed into the stack.
  */
-int vm_grow_stack(vm_space_t *vm, uint32_t page, uint32_t as_limit)
+int vm_grow_stack(vm_space_t *vm, uintptr_t page, uintptr_t as_limit)
 {
     uint32_t i, j;
 

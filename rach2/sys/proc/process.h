@@ -222,7 +222,7 @@ struct process {
     /* The user address set_tid_address and CLONE_CHILD_CLEARTID name, whose
      * word is cleared and woken when the thread ends and another thread
      * shares the address space; 0 for none. */
-    uint32_t clear_child_tid;
+    uintptr_t clear_child_tid;
     /* The siginfo of each pending signal, kept with its pending bit. */
     struct k_siginfo sig_info[KSIG_MAX + 1];
     /* The alternate signal stack sigaltstack set: its base and size, and
@@ -245,7 +245,7 @@ struct process {
      * exception, for the signal frame's sigcontext. */
     uint32_t trap_nr;
     uint32_t trap_err;
-    uint32_t trap_addr;
+    uintptr_t trap_addr;
     /* The pages this process's system calls copy their paths into, and which
      * of them a call is using now, bit i for page i: taken as a call first
      * needs more at once than the record has, and kept, so that a path costs
@@ -294,7 +294,7 @@ struct process {
     uint32_t tgid;
     /* The robust futex list set_robust_list names, walked at the thread's
      * end, and its length; 0 for none. */
-    uint32_t robust_list;
+    uintptr_t robust_list;
     uint32_t robust_len;
     /* Set once this thread has been through the stop in effect in its
      * process, which a tracer may then have resumed it from; cleared when
@@ -566,7 +566,7 @@ void process_count_fork(void);
  * page below its kernel stack, which an access there says has run out,
  * or -1. Defined in syscall_proc.c.
  */
-int kstack_overrun_pid(uint32_t addr);
+int kstack_overrun_pid(uintptr_t addr);
 
 /** Test switch `rach2.stackoverrun`: run a thread down its kernel stack
  * until the guard below it faults. Defined in syscall_proc.c. */

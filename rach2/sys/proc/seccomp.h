@@ -34,7 +34,7 @@ long sys_seccomp(isr_params_t *params);
 
 /** prctl's PR_SET_SECCOMP: `mode` strict, or filter with the program at the
  * user address `prog`. */
-int32_t seccomp_prctl_set(uint32_t mode, uint32_t prog);
+int32_t seccomp_prctl_set(uint32_t mode, uintptr_t prog);
 
 /** The child `child` takes `parent`'s mode and chain. */
 void seccomp_inherit(process_t *child, const process_t *parent);

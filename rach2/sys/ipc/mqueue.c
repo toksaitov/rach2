@@ -418,7 +418,7 @@ static int32_t mq_install(struct mqueue *q, uint32_t oflag)
 long sys_mq_open(struct isr_params *params)
 {
     char name[MQ_NAME_MAX + 1];
-    uint32_t oflag = SC_ARG(params, 1);
+    uint32_t oflag = (uint32_t)SC_ARG(params, 1);
     struct mqueue *q;
     int created = 0;
     int32_t rc;
@@ -441,7 +441,7 @@ long sys_mq_open(struct isr_params *params)
         return -EACCES;
     }
     if (!q) {
-        rc = mq_create(name, SC_ARG(params, 2), (const void __user *)SC_ARG(params, 3), &q);
+        rc = mq_create(name, (uint32_t)SC_ARG(params, 2), (const void __user *)SC_ARG(params, 3), &q);
         if (rc != 0) {
             return rc;
         }
@@ -705,25 +705,25 @@ static int32_t mq_receive(int fd, void __user *umsg, uint32_t len, void __user *
 
 long sys_mq_timedsend(struct isr_params *params)
 {
-    return mq_send((int)SC_ARG(params, 0), (const void __user *)SC_ARG(params, 1), SC_ARG(params, 2), SC_ARG(params, 3),
+    return mq_send((int)SC_ARG(params, 0), (const void __user *)SC_ARG(params, 1), USER_LEN32(SC_ARG(params, 2)), (uint32_t)SC_ARG(params, 3),
                    (const void __user *)SC_ARG(params, 4), 0);
 }
 
 long sys_mq_timedreceive(struct isr_params *params)
 {
-    return mq_receive((int)SC_ARG(params, 0), (void __user *)SC_ARG(params, 1), SC_ARG(params, 2),
+    return mq_receive((int)SC_ARG(params, 0), (void __user *)SC_ARG(params, 1), USER_LEN32(SC_ARG(params, 2)),
                       (void __user *)SC_ARG(params, 3), (const void __user *)SC_ARG(params, 4), 0);
 }
 
 long sys_mq_timedsend_time64(struct isr_params *params)
 {
-    return mq_send((int)SC_ARG(params, 0), (const void __user *)SC_ARG(params, 1), SC_ARG(params, 2), SC_ARG(params, 3),
+    return mq_send((int)SC_ARG(params, 0), (const void __user *)SC_ARG(params, 1), USER_LEN32(SC_ARG(params, 2)), (uint32_t)SC_ARG(params, 3),
                    (const void __user *)SC_ARG(params, 4), 1);
 }
 
 long sys_mq_timedreceive_time64(struct isr_params *params)
 {
-    return mq_receive((int)SC_ARG(params, 0), (void __user *)SC_ARG(params, 1), SC_ARG(params, 2),
+    return mq_receive((int)SC_ARG(params, 0), (void __user *)SC_ARG(params, 1), USER_LEN32(SC_ARG(params, 2)),
                       (void __user *)SC_ARG(params, 3), (const void __user *)SC_ARG(params, 4), 1);
 }
 

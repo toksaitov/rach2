@@ -123,6 +123,13 @@ typedef uint32_t pte_t;
 #define KVA_BASE         0xC0000000u
 #define KVA_HEAP         0xC0000000u
 #define KVA_HEAP_SIZE    0x10000000u
+/* The page-cache window sat at USER_ADDR_MAX until the first real machine:
+ * its firmware places device MMIO from 0xC0500000, and since the window is
+ * sized down to the lowest BAR above its base, a window starting there was
+ * five megabytes long, smaller than any disk worth mounting. So it starts
+ * a quarter of the way up, past the gap where that firmware's
+ * identity-mapped MMIO lives. */
+#define KVA_PCWIN        0xD0000000u
 #define KVA_MMIO         0xF0000000u
 #define KVA_MMIO_SIZE    0x08000000u
 #define KVA_TEMP         0xF8000000u
@@ -149,6 +156,13 @@ typedef uint32_t pte_t;
  * to 3 GiB, where the kernel's own layout begins. */
 #define USER_ADDR_MIN 0x02000000UL
 #define USER_ADDR_MAX 0xC0000000UL
+
+/* A new image's layout: a position-independent program's base, the top
+ * page of its stack, and the address below which a mapping without a hint
+ * goes, above the heap, as Linux's mmap_base places it. */
+#define ELF_ET_DYN_BASE 0x08000000UL
+#define USER_STACK_BASE 0xBFFFF000UL
+#define USER_MMAP_BASE  0xB0000000UL
 
 #define ELF_CLASS   1u          /* ELFCLASS32 */
 #define ELF_MACHINE 3u          /* EM_386 */

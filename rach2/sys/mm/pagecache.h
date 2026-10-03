@@ -1,6 +1,7 @@
 #ifndef _PAGECACHE_H_
 #define _PAGECACHE_H_
 
+#include "../arch/arch.h"
 #include "../lib/kint.h"
 
 /*
@@ -12,14 +13,8 @@
  * interrupts off.
  */
 
-/* Base of the demand-paged window. It sat at USER_ADDR_MAX (0xC0000000) until
-   the first real machine: its firmware places device MMIO from 0xC0500000,
-   and since the window is sized down to the lowest BAR above its base, a
-   window starting at 0xC0000000 was five megabytes long there, smaller than
-   any disk worth mounting. So the window starts a quarter of the way up
-   instead. User space still ends at 0xC0000000, and the 0xC0000000-0xD0000000
-   gap is exactly where that firmware's identity-mapped MMIO lives. */
-#define PCWIN_BASE 0xD0000000u
+/* Base of the demand-paged window, the architecture's KVA_PCWIN. */
+#define PCWIN_BASE KVA_PCWIN
 
 /* Policy: the most resident pages, in PAGE_SIZE frames, and a power of two,
    since the lookup hash is sized at twice this. A page's frame is taken
@@ -79,7 +74,7 @@ void pc_set_backing(pc_read_fn read, pc_write_fn write, uint32_t fs_size);
  * must panic on). `write` requests write permission and marks the page
  * dirty.
  */
-int pc_fault(uint32_t fault_address, int write);
+int pc_fault(uintptr_t fault_address, int write);
 
 #define PC_SYNC_BUSY   1
 #define PC_SYNC_FAILED 2

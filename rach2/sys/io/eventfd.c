@@ -178,12 +178,12 @@ static int32_t eventfd_open(uint32_t count, uint32_t flags)
 
 long sys_eventfd2(struct isr_params *params)
 {
-    return eventfd_open(SC_ARG(params, 0), SC_ARG(params, 1));
+    return eventfd_open((uint32_t)SC_ARG(params, 0), (uint32_t)SC_ARG(params, 1));
 }
 
 /* eventfd() has no flags. The caller's ECX is no argument of it and comes
  * back as it went, as every register but EAX does. */
 long sys_eventfd(struct isr_params *params)
 {
-    return eventfd_open(SC_ARG(params, 0), 0);
+    return eventfd_open((uint32_t)SC_ARG(params, 0), 0);
 }

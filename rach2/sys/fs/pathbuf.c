@@ -87,7 +87,7 @@ const char *proc_cwd(const struct process *p)
  */
 int proc_cwd_set(struct process *p, const char *path)
 {
-    uint32_t len = k_strlen(path);
+    uint32_t len = (uint32_t)k_strlen(path);
     char *heap = NULL;
 
     if (len + 1 > VFS_PATH_MAX) {

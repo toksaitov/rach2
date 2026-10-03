@@ -1,6 +1,7 @@
 #ifndef _USERCOPY_H_
 #define _USERCOPY_H_
 
+#include "../arch/arch.h"
 #include "../lib/kint.h"
 #include "../lib/kuser.h"
 
@@ -15,24 +16,24 @@
  * Linux and BSD analogue: copy_from_user, copy_to_user, strncpy_from_user.
  */
 
-/*
- * User virtual address range. Must match the kernel's user mapping (the loader
- * places images and the stack within [USER_ADDR_MIN, USER_ADDR_MAX)).
- */
-#define USER_ADDR_MIN 0x02000000UL
-#define USER_ADDR_MAX 0xC0000000UL
+/* The user address range is the architecture's, USER_ADDR_MIN and
+ * USER_ADDR_MAX (arch/arch.h). */
+
+/* A user's `size_t` length as the 32 bits the kernel's buffers count in,
+ * a length past 4 GiB taken as the most that fits. */
+#define USER_LEN32(n) ((n) == (uint32_t)(n) ? (uint32_t)(n) : 0xFFFFFFFFu)
 
 /** Report whether [addr, addr+len) lies wholly within user space; 1 yes, 0
  * no. */
-int user_range_ok(uint32_t addr, uint32_t len);
+int user_range_ok(uintptr_t addr, size_t len);
 
 /** Copy n bytes from a user pointer into kernel memory; 0 ok, -EFAULT on a
  * bad range. */
-int copy_from_user(void *dst, const void __user *src, uint32_t n);
+int copy_from_user(void *dst, const void __user *src, size_t n);
 
 /** Copy n bytes from kernel memory to a user pointer; 0 ok, -EFAULT on a
  * bad range. */
-int copy_to_user(void __user *dst, const void *src, uint32_t n);
+int copy_to_user(void __user *dst, const void *src, size_t n);
 
 /** Copy a NUL-terminated string from user space into dst, at most n bytes;
  * returns its length, or a negative errno. */

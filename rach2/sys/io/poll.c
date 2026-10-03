@@ -421,7 +421,7 @@ static uint32_t ts_deadline(const struct poll_timespec *ts, int *has_deadline)
 
 /** Shared poll(2) implementation: ufds/nfds plus an already-computed
  * deadline. An nfds of 0 is a sleep until the deadline. */
-static int32_t poll_common(uint32_t ufds, uint32_t nfds, int has_deadline, uint32_t deadline)
+static int32_t poll_common(uintptr_t ufds, uint32_t nfds, int has_deadline, uint32_t deadline)
 {
     struct kernel_pollfd *fds;
     uint32_t bytes;
@@ -453,8 +453,8 @@ static int32_t poll_common(uint32_t ufds, uint32_t nfds, int has_deadline, uint3
 
 long sys_poll(struct isr_params *params)
 {
-    uint32_t ufds = SC_ARG(params, 0);
-    uint32_t nfds = SC_ARG(params, 1);
+    uintptr_t ufds = SC_ARG(params, 0);
+    uint32_t nfds = (uint32_t)SC_ARG(params, 1);
     int timeout_ms = (int)SC_ARG(params, 2);
     int has_deadline;
     uint32_t deadline = poll_ms_deadline(timeout_ms, &has_deadline);
@@ -473,7 +473,7 @@ long sys_poll(struct isr_params *params)
  * leaves a signal of the process that a mask blocks to another thread.
  * Returns 0, or -EINVAL or -EFAULT.
  */
-int32_t poll_mask_set(uint32_t umask, uint32_t size)
+int32_t poll_mask_set(uintptr_t umask, uint32_t size)
 {
     uint64_t mask;
 
@@ -505,9 +505,9 @@ int32_t poll_mask_done(int32_t ret)
 
 long sys_ppoll(struct isr_params *params)
 {
-    uint32_t ufds = SC_ARG(params, 0);
-    uint32_t nfds = SC_ARG(params, 1);
-    uint32_t uts = SC_ARG(params, 2);
+    uintptr_t ufds = SC_ARG(params, 0);
+    uint32_t nfds = (uint32_t)SC_ARG(params, 1);
+    uintptr_t uts = SC_ARG(params, 2);
     struct poll_timespec ts;
     int has_deadline;
     uint32_t deadline;
@@ -527,7 +527,7 @@ long sys_ppoll(struct isr_params *params)
         return -ESRCH;
     }
     {
-        int32_t rc = poll_mask_set(SC_ARG(params, 3), SC_ARG(params, 4));
+        int32_t rc = poll_mask_set(SC_ARG(params, 3), USER_LEN32(SC_ARG(params, 4)));
 
         if (rc != 0) {
             return rc;
@@ -544,7 +544,7 @@ long sys_ppoll(struct isr_params *params)
  * as POLLNVAL, which no fd_set can show, and counts it ready, so the check
  * never hides a real wait.
  */
-static int32_t select_common(int nfds, uint32_t ur, uint32_t uw, uint32_t ue, int has_deadline,
+static int32_t select_common(int nfds, uintptr_t ur, uintptr_t uw, uintptr_t ue, int has_deadline,
                              uint32_t deadline)
 {
     struct kernel_pollfd *fds;
@@ -622,10 +622,10 @@ static int32_t select_common(int nfds, uint32_t ur, uint32_t uw, uint32_t ue, in
 long sys__newselect(struct isr_params *params)
 {
     int nfds = (int)SC_ARG(params, 0);
-    uint32_t ur = SC_ARG(params, 1);
-    uint32_t uw = SC_ARG(params, 2);
-    uint32_t ue = SC_ARG(params, 3);
-    uint32_t utv = SC_ARG(params, 4);
+    uintptr_t ur = SC_ARG(params, 1);
+    uintptr_t uw = SC_ARG(params, 2);
+    uintptr_t ue = SC_ARG(params, 3);
+    uintptr_t utv = SC_ARG(params, 4);
     struct poll_timeval tv;
     int has_deadline = 0;
     uint32_t deadline = 0;
@@ -647,8 +647,8 @@ long sys__newselect(struct isr_params *params)
 long sys_select(struct isr_params *params)
 {
     /* The old i386 select(82) packs its 5 args behind one pointer (ebx). */
-    uint32_t argp = SC_ARG(params, 0);
-    uint32_t a[5];
+    uintptr_t argp = SC_ARG(params, 0);
+    unsigned long a[5]; /* Linux's sel_arg_struct: n, inp, outp, exp, tvp */
 
     if (!argp || copy_from_user(a, (const void __user *)argp, sizeof(a)) != 0) {
         return -EFAULT;
@@ -675,22 +675,25 @@ long sys_select(struct isr_params *params)
 long sys_pselect6(struct isr_params *params)
 {
     int nfds = (int)SC_ARG(params, 0);
-    uint32_t ur = SC_ARG(params, 1);
-    uint32_t uw = SC_ARG(params, 2);
-    uint32_t ue = SC_ARG(params, 3);
-    uint32_t uts = SC_ARG(params, 4);
+    uintptr_t ur = SC_ARG(params, 1);
+    uintptr_t uw = SC_ARG(params, 2);
+    uintptr_t ue = SC_ARG(params, 3);
+    uintptr_t uts = SC_ARG(params, 4);
     struct poll_timespec ts;
     int has_deadline;
     uint32_t deadline;
 
-    uint32_t sigarg[2] = {0, 0};
+    struct {
+        uintptr_t mask;
+        unsigned long size;
+    } sigarg = {0, 0}; /* the mask's address and its size in bytes */
 
     if (!current_proc) {
         return -ESRCH;
     }
-    /* EBP points at the mask's address and its size in bytes. */
+    /* The sixth argument points at the mask's address and its size. */
     if (SC_ARG(params, 5) &&
-        copy_from_user(sigarg, (const void __user *)SC_ARG(params, 5), sizeof(sigarg)) != 0) {
+        copy_from_user(&sigarg, (const void __user *)SC_ARG(params, 5), sizeof(sigarg)) != 0) {
         return -EFAULT;
     }
     if (uts) {
@@ -705,7 +708,7 @@ long sys_pselect6(struct isr_params *params)
         deadline = ts_deadline(NULL, &has_deadline);
     }
     {
-        int32_t rc = poll_mask_set(sigarg[0], sigarg[1]);
+        int32_t rc = poll_mask_set(sigarg.mask, USER_LEN32(sigarg.size));
 
         if (rc != 0) {
             return rc;

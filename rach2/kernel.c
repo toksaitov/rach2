@@ -218,11 +218,6 @@ static void test_switch(void);
 static void test_preempt(void);
 static void exec_program(int argc, char *argv[]);
 
-/* The highest user page, the top page of a program's first stack. The
-   stack's strings start at the page's end, a page higher, and take as many
-   pages below it as they need; the stack grows down from there. */
-#define USER_STACK_BASE 0xBFFFF000
-
 /**
  * Service the 100 Hz timer IRQ and preempt the current process.
  *
@@ -1116,14 +1111,14 @@ static void boot_exec_done(void)
  *         `*bottom`; 0 when the strings do not fit or the pages or their
  *         mappings could not be had.
  */
-static uint32_t boot_stack(struct mm *mm, int argc, char *argv[], char *envp[],
-                           const elf_image_t *img, uint32_t *bottom)
+static uintptr_t boot_stack(struct mm *mm, int argc, char *argv[], char *envp[],
+                            const elf_image_t *img, uintptr_t *bottom)
 {
     struct uimage u;
     static const struct uimage_aux root = {0, 0, 0, 0, 0, 0};
     uint8_t random16[16];
     uint32_t envc = 0;
-    uint32_t esp = 0;
+    uintptr_t sp = 0;
     int rc;
     int i;
 
@@ -1146,7 +1141,7 @@ static uint32_t boot_stack(struct mm *mm, int argc, char *argv[], char *envp[],
     krandom_bytes(random16, 16);
     if (rc == 0 && uimage_write(&u, (uint32_t)argc, envc, img, random16, &root) == 0 &&
         uimage_map(&u, mm->dir) == 0) {
-        esp = u.esp;
+        sp = u.sp;
         *bottom = uimage_bottom(&u);
         mm->arg_start = u.arg_start;
         mm->arg_end = u.env_start;
@@ -1155,7 +1150,7 @@ static uint32_t boot_stack(struct mm *mm, int argc, char *argv[], char *envp[],
         k_memcpy(mm->auxv, u.auxv, sizeof(u.auxv));
     }
     uimage_release(&u);
-    return esp;
+    return sp;
 }
 
 /**
@@ -1181,12 +1176,12 @@ static uint32_t boot_stack(struct mm *mm, int argc, char *argv[], char *envp[],
 static void exec_program(int argc, char *argv[])
 {
     const char *path;
-    uint32_t entry_point;
+    uintptr_t entry_point;
     elf_image_t img;
     struct mm *mm;
     process_t *user_proc;
-    uint32_t user_esp;
-    uint32_t stack_bottom = USER_STACK_BASE;
+    uintptr_t user_sp;
+    uintptr_t stack_bottom = USER_STACK_BASE;
     int init_is_starting;
     struct exec_krffs_ctx kctx;
     static char env_path[] = "PATH=/bin:/usr/bin:/";
@@ -1247,8 +1242,8 @@ static void exec_program(int argc, char *argv[])
     boot_exec_done();
     entry_point = img.entry;
 
-    user_esp = boot_stack(mm, argc, argv, default_envp, &img, &stack_bottom);
-    if (user_esp == 0) {
+    user_sp = boot_stack(mm, argc, argv, default_envp, &img, &stack_bottom);
+    if (user_sp == 0) {
         mm_put(mm);
         console_puts("exec: the initial stack could not be built");
         return;
@@ -1266,7 +1261,7 @@ static void exec_program(int argc, char *argv[])
     user_proc->mm = mm;
     user_proc->space_root = mm->space_root;
     user_proc->page_dir = mm->dir;
-    user_proc->kernel_stack = (uint32_t)stack + KERNEL_STACK_SIZE;
+    user_proc->kernel_stack = (uintptr_t)stack + KERNEL_STACK_SIZE;
     user_proc->parent_pid = current_proc ? current_proc->tgid : 0;
     proc_set_comm(user_proc, path); /* program name for /proc/<pid>/stat and ps */
     current_proc = user_proc;
@@ -1324,7 +1319,7 @@ static void exec_program(int argc, char *argv[])
      * its own. A new process has tls_base == 0. */
     arch_tls_set(user_proc->tls_base);
 
-    arch_enter_user(entry_point, user_esp);
+    arch_enter_user(entry_point, user_sp);
 
     console_puts("exec: returned from user mode");
 }
@@ -2941,9 +2936,9 @@ static void process_command(const char *cmd)
         static char buffer[8192];
         int bytes_read;
         uint32_t file_size;
-        uint32_t entry_point;
+        uintptr_t entry_point;
         uint16_t phdr_count;
-        const Elf32_Phdr *phdrs;
+        const Elf_Phdr *phdrs;
         uint16_t i;
 
         if (!krffs_fs) {
@@ -2961,21 +2956,24 @@ static void process_command(const char *cmd)
                 if (bytes_read != (int)file_size) {
                     console_printf("Read error: %d/%d bytes\n", bytes_read, file_size);
                 } else if (!elf_check(buffer, file_size)) {
-                    console_printf("Not a valid ELF32 executable\n");
+                    console_printf("Not a valid ELF executable\n");
                 } else {
                     entry_point = elf_entry_point(buffer);
                     phdrs = elf_program_headers(buffer);
                     phdr_count = elf_program_header_count(buffer);
 
                     console_printf("ELF Header:\n");
-                    console_printf("  Entry point:       0x%X\n", entry_point);
+                    console_printf("  Entry point:       0x%lX\n", (unsigned long)entry_point);
                     console_printf("  Program headers:   %d\n", phdr_count);
                     for (i = 0; i < phdr_count; i++) {
                         if (phdrs[i].p_type == PT_LOAD) {
                             console_printf("  LOAD segment:\n");
-                            console_printf("    Virtual addr:  0x%X\n", phdrs[i].p_vaddr);
-                            console_printf("    File size:     %d bytes\n", phdrs[i].p_filesz);
-                            console_printf("    Memory size:   %d bytes\n", phdrs[i].p_memsz);
+                            console_printf("    Virtual addr:  0x%lX\n",
+                                           (unsigned long)phdrs[i].p_vaddr);
+                            console_printf("    File size:     %ld bytes\n",
+                                           (long)phdrs[i].p_filesz);
+                            console_printf("    Memory size:   %ld bytes\n",
+                                           (long)phdrs[i].p_memsz);
                             console_printf("    Flags:         %s%s%s\n",
                                            (phdrs[i].p_flags & PF_R) ? "R" : "-",
                                            (phdrs[i].p_flags & PF_W) ? "W" : "-",
@@ -3131,7 +3129,7 @@ static void process_command(const char *cmd)
             /* Overwrite, not append. */
             krffs_truncate(file_buf, 0);
             {
-                uint32_t len = k_strlen(data);
+                uint32_t len = (uint32_t)k_strlen(data);
                 /* A write past the old extent relocates the file and frees the
                    node it moved from, so any descriptor still on it must be
                    repointed, the same as on the write syscall's path. Captured
@@ -3533,7 +3531,7 @@ void kernel_main(const struct boot_info *boot)
         if (proc0) {
             proc0->state = PROC_RUNNING;
             proc0->space_root = 0; /* shares the kernel page directory */
-            proc0->kernel_stack = (uint32_t)stack + KERNEL_STACK_SIZE;
+            proc0->kernel_stack = (uintptr_t)stack + KERNEL_STACK_SIZE;
             proc0->parent_pid = 0;
             proc_idle = proc0;
             current_proc = proc0;

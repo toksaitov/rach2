@@ -327,7 +327,7 @@ static short inotify_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 }
 
 /** FIONREAD: the bytes a read of the whole queue returns. */
-static int32_t inotify_ioctl(fd_entry_t *e, uint32_t request, uint32_t arg)
+static int32_t inotify_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 {
     struct inotify *in = (struct inotify *)e->priv;
 
@@ -521,7 +521,7 @@ static int32_t inotify_open(uint32_t flags)
 
 long sys_inotify_init1(struct isr_params *params)
 {
-    return inotify_open(SC_ARG(params, 0));
+    return inotify_open((uint32_t)SC_ARG(params, 0));
 }
 
 /* inotify_init() has no arguments, and the caller's EBX, which i386 code

@@ -541,8 +541,8 @@ void filemap_shmem_cut(struct shmem *sh, uint32_t first)
 
         for (i = 0; vm && i < vm->count; i++) {
             const vma_t *r = &vm->vmas[i];
-            uint32_t pages = (r->end - r->start) / PAGE_SIZE;
-            uint32_t from;
+            uint32_t pages = (uint32_t)((r->end - r->start) / PAGE_SIZE);
+            uintptr_t from;
 
             if (r->type != VM_SHARED || !r->file ||
                 (r->file->share != filemap_share && r->file->share != filemap_share_disk) ||

@@ -35,17 +35,18 @@ struct uimage {
     uint32_t cap;
     uint32_t nframes; /* frames taken, from the top page down */
     uint32_t given;   /* frames a page directory has taken over */
-    uint32_t top;     /* the address just past the stack */
+    uintptr_t top;    /* the address just past the stack */
     uint32_t used;    /* bytes of strings below `top` */
-    uint32_t execfn;  /* the first string, the program's path: AT_EXECFN */
+    uintptr_t execfn; /* the first string, the program's path: AT_EXECFN */
     /* Where `uimage_write` found argv's strings to begin and the
-     * environment's to begin and end, and the auxiliary vector it wrote. */
-    uint32_t arg_start;
-    uint32_t env_start;
-    uint32_t env_end;
-    uint32_t auxv[2 * UIMAGE_AUXV];
+     * environment's to begin and end, and the auxiliary vector it wrote,
+     * in words of a pointer's width. */
+    uintptr_t arg_start;
+    uintptr_t env_start;
+    uintptr_t env_end;
+    unsigned long auxv[2 * UIMAGE_AUXV];
     uint32_t room; /* bytes the strings may take */
-    uint32_t esp;  /* the entry stack pointer, once placed */
+    uintptr_t sp;  /* the entry stack pointer, once placed */
 };
 
 /** The bytes the strings and their pointers may take under a soft
@@ -54,7 +55,7 @@ uint32_t uimage_budget(uint32_t stack_limit);
 
 /** Start an initial stack whose top is `top` for `argc` and `envc` strings
  * under a soft RLIMIT_STACK of `stack_limit`; 0, -E2BIG, -ENOMEM. */
-int uimage_start(struct uimage *u, uint32_t top, uint32_t stack_limit, uint32_t argc,
+int uimage_start(struct uimage *u, uintptr_t top, uint32_t stack_limit, uint32_t argc,
                  uint32_t envc);
 
 /** Copy the user string at `s` below the strings already there; 0, -E2BIG,
@@ -77,7 +78,7 @@ int uimage_place(struct uimage *u, uint32_t argc, uint32_t envc);
  * interpreter was loaded (AT_BASE, 0 without one), the ids the image runs
  * with, and AT_SECURE. */
 struct uimage_aux {
-    uint32_t base;
+    uintptr_t base;
     uint32_t uid;
     uint32_t euid;
     uint32_t gid;
@@ -95,7 +96,7 @@ int uimage_write(struct uimage *u, uint32_t argc, uint32_t envc, const elf_image
 int uimage_map(struct uimage *u, struct page_dir *dir);
 
 /** The lowest address of the stack's pages. */
-uint32_t uimage_bottom(const struct uimage *u);
+uintptr_t uimage_bottom(const struct uimage *u);
 
 /** Give back the frames no page directory took and the array. */
 void uimage_release(struct uimage *u);

@@ -31,7 +31,7 @@ struct file_ops {
      * nothing itself; the poll core owns the blocking. */
     short (*poll)(fd_entry_t *e, short events, struct wait_queue **wq);
     /* Device/terminal control; request value and arg are the ioctl ABI. */
-    int32_t (*ioctl)(fd_entry_t *e, uint32_t request, uint32_t arg);
+    int32_t (*ioctl)(fd_entry_t *e, uint32_t request, uintptr_t arg);
     /* Release the backing object when its last referencing descriptor
      * closes. */
     void (*close)(fd_entry_t *e);

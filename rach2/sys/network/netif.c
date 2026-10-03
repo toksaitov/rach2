@@ -204,7 +204,7 @@ static int32_t loopback_set(uint32_t request, const uint8_t *ifr, const struct n
  * follows from the subnet, so SIOCSIFBRDADDR accepts the one the interface
  * already derives and refuses any other.
  */
-static int32_t ifreq_ioctl(uint32_t request, uint32_t arg)
+static int32_t ifreq_ioctl(uint32_t request, uintptr_t arg)
 {
     uint8_t ifr[IFREQ_LEN];
     struct netdev *nd;
@@ -309,7 +309,7 @@ static int32_t ifreq_ioctl(uint32_t request, uint32_t arg)
  * interface, EOPNOTSUPP for `lo`, which no route names, and EFAULT when the
  * name cannot be read.
  */
-static int32_t route_device(uint32_t dev, uint32_t gw, struct netdev **out)
+static int32_t route_device(uintptr_t dev, uint32_t gw, struct netdev **out)
 {
     uint8_t name[IFREQ_NAMESIZE];
     int i, got;
@@ -352,7 +352,7 @@ static int32_t route_device(uint32_t dev, uint32_t gw, struct netdev **out)
  * (`netdev_route_add`), with the metric the caller gives, which `route` sends
  * one more than, as Linux takes it.
  */
-static int32_t route_ioctl(uint32_t request, uint32_t arg)
+static int32_t route_ioctl(uint32_t request, uintptr_t arg)
 {
     uint8_t rt[RTENTRY_LEN];
     uint32_t dst, gw, mask, dev, metric, flags;
@@ -415,7 +415,7 @@ static int32_t route_ioctl(uint32_t request, uint32_t arg)
  * EINVAL, and a published one, for proxy ARP, which this stack does not
  * answer, EOPNOTSUPP. Root only.
  */
-static int32_t arp_ioctl(uint32_t request, uint32_t arg)
+static int32_t arp_ioctl(uint32_t request, uintptr_t arg)
 {
     uint8_t req[ARPREQ_LEN];
     struct netdev *nd = 0;
@@ -463,20 +463,22 @@ static int32_t arp_ioctl(uint32_t request, uint32_t arg)
  * them would take, which is how a caller sizes one. An interface the buffer
  * has no room for whole is left out, as on Linux.
  */
-static int32_t ifconf_ioctl(uint32_t arg)
+static int32_t ifconf_ioctl(uintptr_t arg)
 {
-    uint8_t ifc[8];
+    struct {
+        int len;
+        uintptr_t buf;
+    } ifc; /* Linux's struct ifconf, in the processor's layout */
     uint8_t ifr[IFREQ_LEN];
-    uint32_t len, buf, used = 0;
+    uint32_t len, used = 0;
+    uintptr_t buf;
     int i;
 
-    if (copy_from_user(ifc, (const void __user *)arg, sizeof(ifc)) != 0) {
+    if (copy_from_user(&ifc, (const void __user *)arg, sizeof(ifc)) != 0) {
         return -EFAULT;
     }
-    len = (uint32_t)ifc[0] | ((uint32_t)ifc[1] << 8) | ((uint32_t)ifc[2] << 16) |
-          ((uint32_t)ifc[3] << 24);
-    buf = (uint32_t)ifc[4] | ((uint32_t)ifc[5] << 8) | ((uint32_t)ifc[6] << 16) |
-          ((uint32_t)ifc[7] << 24);
+    len = (uint32_t)ifc.len;
+    buf = ifc.buf;
     for (i = 0; i < netdev_seen_count(); i++) {
         struct netdev *nd = netdev_at(i);
 
@@ -496,14 +498,11 @@ static int32_t ifconf_ioctl(uint32_t arg)
         }
         used += IFREQ_LEN;
     }
-    ifc[0] = (uint8_t)used;
-    ifc[1] = (uint8_t)(used >> 8);
-    ifc[2] = (uint8_t)(used >> 16);
-    ifc[3] = (uint8_t)(used >> 24);
-    return copy_to_user((void __user *)arg, ifc, 4) == 0 ? 0 : -EFAULT;
+    ifc.len = (int)used;
+    return copy_to_user((void __user *)arg, &ifc.len, sizeof(ifc.len)) == 0 ? 0 : -EFAULT;
 }
 
-int32_t netif_ioctl(uint32_t request, uint32_t arg, int *handled)
+int32_t netif_ioctl(uint32_t request, uintptr_t arg, int *handled)
 {
     *handled = 1;
     switch (request) {

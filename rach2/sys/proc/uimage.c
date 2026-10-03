@@ -11,13 +11,13 @@
  * accesses made through it stay in that page. */
 struct uwin {
     const struct uimage *u;
-    uint32_t page;
+    uintptr_t page;
     uint8_t *map;
 };
 
 /** The frame that backs `addr`, which lies below the stack's top and above
  * its lowest frame. */
-static uintptr_t uimage_frame(const struct uimage *u, uint32_t addr)
+static uintptr_t uimage_frame(const struct uimage *u, uintptr_t addr)
 {
     return u->frames[(u->top - 1u - addr) / PAGE_SIZE];
 }
@@ -25,9 +25,9 @@ static uintptr_t uimage_frame(const struct uimage *u, uint32_t addr)
 /** The kernel address of stack address `addr` through `w`, which maps the
  * page when it is not the one mapped; NULL when no temporary mapping was
  * free. */
-static uint8_t *uwin_at(struct uwin *w, uint32_t addr)
+static uint8_t *uwin_at(struct uwin *w, uintptr_t addr)
 {
-    uint32_t page = addr & ~(uint32_t)(PAGE_SIZE - 1u);
+    uintptr_t page = addr & ~(uintptr_t)(PAGE_SIZE - 1u);
 
     if (w->map == NULL || page != w->page) {
         if (w->map != NULL) {
@@ -93,17 +93,19 @@ uint32_t uimage_budget(uint32_t stack_limit)
  * @return 0; -E2BIG when the pointers alone take the budget; -ENOMEM when
  *         the array could not be had.
  */
-int uimage_start(struct uimage *u, uint32_t top, uint32_t stack_limit, uint32_t argc, uint32_t envc)
+int uimage_start(struct uimage *u, uintptr_t top, uint32_t stack_limit, uint32_t argc,
+                 uint32_t envc)
 {
     uint32_t limit = uimage_budget(stack_limit);
+    uint32_t word = (uint32_t)sizeof(unsigned long);
     uint32_t pointers;
 
     k_memset(u, 0, sizeof(*u));
     u->top = top;
-    if (argc > limit / 4u || envc > limit / 4u) {
+    if (argc > limit / word || envc > limit / word) {
         return -E2BIG;
     }
-    pointers = ((argc > 0 ? argc : 1u) + envc) * 4u;
+    pointers = ((argc > 0 ? argc : 1u) + envc) * word;
     if (pointers >= limit) {
         return -E2BIG;
     }
@@ -157,7 +159,7 @@ static int uimage_grow(struct uimage *u, uint32_t bytes)
 static int uimage_copy(struct uimage *u, const char __user *user, const char *kernel, uint32_t len)
 {
     struct uwin w;
-    uint32_t start;
+    uintptr_t start;
     uint32_t done = 0;
     int rc;
 
@@ -171,8 +173,8 @@ static int uimage_copy(struct uimage *u, const char __user *user, const char *ke
     start = u->top - u->used - len;
     uwin_open(&w, u);
     while (done < len) {
-        uint32_t addr = start + done;
-        uint32_t chunk = PAGE_SIZE - (addr & (PAGE_SIZE - 1u));
+        uintptr_t addr = start + done;
+        uint32_t chunk = PAGE_SIZE - (uint32_t)(addr & (PAGE_SIZE - 1u));
         uint8_t *dst = uwin_at(&w, addr);
 
         if (chunk > len - done) {
@@ -238,7 +240,7 @@ int uimage_push(struct uimage *u, const char *s)
 int uimage_drop_first(struct uimage *u)
 {
     struct uwin w;
-    uint32_t addr = u->top - u->used;
+    uintptr_t addr = u->top - u->used;
 
     uwin_open(&w, u);
     while (addr < u->top) {
@@ -256,16 +258,16 @@ int uimage_drop_first(struct uimage *u)
         }
     }
     uwin_close(&w);
-    u->used = u->top - addr;
+    u->used = (uint32_t)(u->top - addr);
     return 0;
 }
 
 /** Where the 16 bytes AT_RANDOM points at go: below the strings, aligned
  * down to 16 bytes as Linux aligns them, so no word of them crosses a
  * page. */
-static uint32_t uimage_random_at(const struct uimage *u)
+static uintptr_t uimage_random_at(const struct uimage *u)
 {
-    return (u->top - u->used - 16u) & ~15u;
+    return (u->top - u->used - 16u) & ~(uintptr_t)15u;
 }
 
 /**
@@ -274,21 +276,22 @@ static uint32_t uimage_random_at(const struct uimage *u)
  *
  * Below the strings go the 16 bytes AT_RANDOM points at, and below them
  * argc, the argv pointers and their NULL, the envp pointers and theirs, and
- * the auxiliary vector, whose start, the entry stack pointer, is aligned down
- * to 16 bytes for the i386 call ABI. 0, -E2BIG, -ENOMEM.
+ * the auxiliary vector, each a word of a pointer's width. Their start, the
+ * entry stack pointer, is aligned down to 16 bytes, as the call ABIs of
+ * i386 and x86-64 want it. 0, -E2BIG, -ENOMEM.
  */
 int uimage_place(struct uimage *u, uint32_t argc, uint32_t envc)
 {
     uint32_t words = 3u + argc + envc + 2u * UIMAGE_AUXV;
 
-    u->esp = (uimage_random_at(u) - words * 4u) & ~15u;
-    return uimage_grow(u, u->top - u->esp);
+    u->sp = (uimage_random_at(u) - words * sizeof(unsigned long)) & ~(uintptr_t)15u;
+    return uimage_grow(u, (uint32_t)(u->top - u->sp));
 }
 
 /** Write the word `value` at `*at` through `w`, and step `*at` past it; 0,
  * or -1 when no temporary mapping was free. The information block is
  * aligned, so no word crosses a page. */
-static int uimage_put(struct uwin *w, uint32_t *at, uint32_t value)
+static int uimage_put(struct uwin *w, uintptr_t *at, unsigned long value)
 {
     uint8_t *p = uwin_at(w, *at);
 
@@ -302,7 +305,7 @@ static int uimage_put(struct uwin *w, uint32_t *at, uint32_t value)
 
 /** Step `*str` from the start of a string on the stack to the start of the
  * next, reading through `w`; 0, or -1 when no temporary mapping was free. */
-static int uimage_next(struct uwin *w, uint32_t *str)
+static int uimage_next(struct uwin *w, uintptr_t *str)
 {
     while (*str < w->u->top) {
         uint8_t *p = uwin_at(w, *str);
@@ -335,10 +338,11 @@ int uimage_write(struct uimage *u, uint32_t argc, uint32_t envc, const elf_image
 {
     struct uwin out;
     struct uwin in;
-    uint32_t random_at = uimage_random_at(u);
-    uint32_t aux[2u * UIMAGE_AUXV];
-    uint32_t at = random_at;
-    uint32_t str = u->top - u->used;
+    uintptr_t random_at = uimage_random_at(u);
+    unsigned long aux[2u * UIMAGE_AUXV];
+    uintptr_t at;
+    uintptr_t str = u->top - u->used;
+    uint8_t *random;
     uint32_t i;
     int rc = 0;
 
@@ -375,13 +379,13 @@ int uimage_write(struct uimage *u, uint32_t argc, uint32_t envc, const elf_image
 
     uwin_open(&out, u);
     uwin_open(&in, u);
-    for (i = 0; i < 16u && rc == 0; i += 4u) {
-        uint32_t word;
-
-        k_memcpy(&word, random16 + i, sizeof(word));
-        rc = uimage_put(&out, &at, word);
+    random = uwin_at(&out, random_at);
+    if (random == NULL) {
+        rc = -1;
+    } else {
+        k_memcpy(random, random16, 16);
     }
-    at = u->esp;
+    at = u->sp;
     u->arg_start = str;
     u->env_start = str;
     if (rc == 0) {
@@ -426,7 +430,7 @@ int uimage_write(struct uimage *u, uint32_t argc, uint32_t envc, const elf_image
 int uimage_map(struct uimage *u, struct page_dir *dir)
 {
     while (u->given < u->nframes) {
-        uint32_t page = u->top - (u->given + 1u) * PAGE_SIZE;
+        uintptr_t page = u->top - (uintptr_t)(u->given + 1u) * PAGE_SIZE;
 
         if (map_user_frame(dir, page, u->frames[u->given], PTE_P | PTE_W | PTE_U) != 0) {
             return -1;
@@ -436,9 +440,9 @@ int uimage_map(struct uimage *u, struct page_dir *dir)
     return 0;
 }
 
-uint32_t uimage_bottom(const struct uimage *u)
+uintptr_t uimage_bottom(const struct uimage *u)
 {
-    return u->top - u->nframes * PAGE_SIZE;
+    return u->top - (uintptr_t)u->nframes * PAGE_SIZE;
 }
 
 /** Give back the frames no page directory took, and the array; `u` holds

@@ -69,6 +69,13 @@ typedef struct cpu_regs cpu_regs_t;
 #define USER_ADDR_MIN 0x0000000000010000UL
 #define USER_ADDR_MAX 0x00007FFFFFFFF000UL
 
+/* A new image's layout: a position-independent program's base, the top
+ * page of its stack, and the address below which a mapping without a hint
+ * goes, above the heap, as Linux's mmap_base places it. */
+#define ELF_ET_DYN_BASE 0x0000555555554000UL
+#define USER_STACK_BASE 0x00007FFFFFFFE000UL
+#define USER_MMAP_BASE  0x00007F0000000000UL
+
 #define ELF_CLASS   2u          /* ELFCLASS64 */
 #define ELF_MACHINE 62u         /* EM_X86_64 */
 #define AUDIT_ARCH  0xC000003Eu /* AUDIT_ARCH_X86_64 */

@@ -9,11 +9,6 @@
  * milestone 53 divided it along its arms; the bodies did not change.
  */
 
-/* The highest user page, the top page of a new image's stack. execve lays
-   the strings down from the page's end (`proc/uimage.c`), taking as many
-   pages below it as they need. */
-#define USER_STACK_BASE 0xBFFFF000
-
 extern volatile uint32_t fb_owner_pid;
 
 void fd_release_backing(fd_entry_t *e);
@@ -41,14 +36,39 @@ long sys_ftruncate64(isr_params_t *params);
 long sys_write(isr_params_t *params);
 
 /*
- * Gather write (writev(2)). musl's buffered stdio (printf) emits its output
- * through this call. EBX = fd, ECX = struct iovec[], EDX = iovcnt. Returns the
- * total bytes written across the iovecs, or a negative errno.
+ * The user's structures that a call reads or writes whole, declared with the
+ * C types of Linux's own declarations: a pointer as `uintptr_t`, a `size_t`
+ * as `unsigned long`. The kernel is compiled for the processor's C ABI, as
+ * a program is, so each structure has the program's layout on either
+ * architecture: 8 bytes for an iovec on i686 and 16 on x86-64.
  */
 struct kernel_iovec {
-    uint32_t iov_base;
-    uint32_t iov_len;
+    uintptr_t iov_base;
+    unsigned long iov_len;
 };
+
+/* Linux's `struct user_msghdr`, which sendmsg(2) and recvmsg(2) take. */
+struct kernel_msghdr {
+    uintptr_t msg_name;
+    int msg_namelen;
+    uintptr_t msg_iov;
+    unsigned long msg_iovlen;
+    uintptr_t msg_control;
+    unsigned long msg_controllen;
+    unsigned int msg_flags;
+};
+
+/* The header of one control message, and the alignment of what follows
+ * it and of the next message: that of the `size_t` it begins with. */
+struct kernel_cmsghdr {
+    unsigned long cmsg_len;
+    int cmsg_level;
+    int cmsg_type;
+};
+
+#define CMSG_ALIGN(n)                                                          \
+    (((n) + sizeof(unsigned long) - 1u) & ~(sizeof(unsigned long) - 1u))
+#define CMSG_HDR CMSG_ALIGN(sizeof(struct kernel_cmsghdr))
 
 /* Format: the vectors readv, writev and sendmsg accept, the Linux IOV_MAX. */
 #define IOV_MAX_LOCAL 1024
@@ -102,7 +122,7 @@ long sys_syncfs(isr_params_t *params);
 
 long sys_readahead(isr_params_t *params);
 
-int32_t fs_flags_ioctl(fd_entry_t *entry, uint32_t request, uint32_t arg, int *handled);
+int32_t fs_flags_ioctl(fd_entry_t *entry, uint32_t request, uintptr_t arg, int *handled);
 
 long sys_fadvise64(isr_params_t *params);
 
@@ -133,7 +153,7 @@ long sys_pread64(isr_params_t *params);
 
 long sys_pwrite64(isr_params_t *params);
 
-int32_t readv_dgram(fd_entry_t *entry, uint32_t iov_user, int iovcnt, uint32_t *src_ip,
+int32_t readv_dgram(fd_entry_t *entry, uintptr_t iov_user, int iovcnt, uint32_t *src_ip,
                     uint16_t *src_port, int peek, int32_t *whole);
 
 long sys_readv(isr_params_t *params);
@@ -332,9 +352,9 @@ int pgrp_in_session(int pgid, int sid);
 
 struct tty *fd_tty(fd_entry_t *e);
 
-int user_access_ok(uint32_t addr, uint32_t len);
+int user_access_ok(uintptr_t addr, size_t len);
 
-int user_buffer_ok(uint32_t addr, uint32_t len, int write);
+int user_buffer_ok(uintptr_t addr, size_t len, int write);
 
 int32_t dgram_send(struct socket *sock, uint32_t dst_ip, uint16_t dst_port, const uint8_t *buf,
                    uint16_t len);
@@ -507,13 +527,13 @@ struct shmem;
  * writable. `path`, from the heap, is what /proc/PID/maps names it, and the
  * region takes it. Returns the address, or -errno as mmap does.
  */
-int32_t mmap_shm(struct open_file *ofd, uint32_t addr, uint32_t len, uint32_t access, int place,
+long mmap_shm(struct open_file *ofd, uintptr_t addr, uintptr_t len, uint32_t access, int place,
                  char *path);
 
 /** Unmap the System V attachment at `addr`: the regions from it on that map
  * the pages `sh` from the segment's start, within `size` bytes. -EINVAL
  * when no such region begins at `addr`. */
-int32_t munmap_shm(uint32_t addr, const struct shmem *sh, uint32_t size);
+int32_t munmap_shm(uintptr_t addr, const struct shmem *sh, uint32_t size);
 
 /** How many attachments the pages `sh` have, each address space's regions
  * that map them from the start counted once however many threads share it. */

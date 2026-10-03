@@ -153,7 +153,7 @@ int map_user_frame(page_dir_t *dir, uintptr_t virt, uintptr_t phys, uint32_t fla
  * It may sleep; a 1 holds until the caller sleeps, since the range is checked
  * again after the last page is in and brought in again when a page went.
  */
-int vm_prefault_range(uint32_t addr, uint32_t len, int write);
+int vm_prefault_range(uintptr_t addr, uintptr_t len, int write);
 
 /** Free all user pages in 'dir' (used by exec to replace the process image). */
 void free_user_pages(page_dir_t *dir);
@@ -164,7 +164,7 @@ void free_user_pages(page_dir_t *dir);
  * is active. Never-faulted lazy pages in the range are skipped. Used by munmap
  * and by brk when the heap shrinks. start/end should be page-aligned.
  */
-void unmap_user_range(page_dir_t *dir, uint32_t start, uint32_t end);
+void unmap_user_range(page_dir_t *dir, uintptr_t start, uintptr_t end);
 
 /*
  * Move the entries of [from, from + len) in `dir` to [to, to + len), for
@@ -173,14 +173,14 @@ void unmap_user_range(page_dir_t *dir, uint32_t start, uint32_t end);
  * or -1 when a page table for the new range cannot be had, with nothing
  * moved.
  */
-int paging_move_range(page_dir_t *dir, uint32_t from, uint32_t to, uint32_t len);
+int paging_move_range(page_dir_t *dir, uintptr_t from, uintptr_t to, uintptr_t len);
 
 /* Bring the resident pages of [start, end) in `dir` to the VMA protection
  * `prot` (VM_PROT_*): no access makes them PTE_NONE, read-only clears the
  * write bit, and write sets it only on a page this process alone holds; a
  * shared page becomes copy-on-write instead, unless `prot` has
  * VM_PROT_SHARED for a shared region, whose pages are written in place. */
-void paging_protect_range(page_dir_t *dir, uint32_t start, uint32_t end, uint32_t prot);
+void paging_protect_range(page_dir_t *dir, uintptr_t start, uintptr_t end, uint32_t prot);
 
 /** Free a page directory and its private page tables; call after
  * free_user_pages(). */
@@ -236,11 +236,11 @@ uintptr_t paging_virt_to_phys(uintptr_t va);
 
 /** The physical address `dir` maps the user address `va` to, or 0 when the
  * page is not present. */
-uintptr_t paging_user_phys(page_dir_t *dir, uint32_t va);
+uintptr_t paging_user_phys(page_dir_t *dir, uintptr_t va);
 
 /** Whether `dir` has the user page at `va`: 0 when it is not present, 1 when
  * it is and has not been written since it was mapped, 2 when it has. */
-int paging_user_state(page_dir_t *dir, uint32_t va);
+int paging_user_state(page_dir_t *dir, uintptr_t va);
 
 struct mm;
 
@@ -255,7 +255,7 @@ struct mm;
  * releasing a file a region let go of meanwhile, and looks each page up
  * again after a sleep.
  */
-int paging_access(struct mm *mm, uint32_t addr, void *buf, uint32_t len, int write);
+int paging_access(struct mm *mm, uintptr_t addr, void *buf, uint32_t len, int write);
 
 /**
  * Test switch: with `rach2.framefail` on the boot line, `/dev/framefail`

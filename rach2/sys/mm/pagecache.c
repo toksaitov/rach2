@@ -23,7 +23,7 @@ static void klog(int level, const char *subsystem, const char *format, ...)
     (void)format;
 }
 
-static void pc_platform_map(uint32_t va, uintptr_t phys, int writable)
+static void pc_platform_map(uintptr_t va, uintptr_t phys, int writable)
 {
     (void)va;
     (void)phys;
@@ -51,7 +51,7 @@ static void pc_platform_unmap(uint32_t va)
    own disk, not for a test image. */
 #define PC_WINDOW_CAP 0x20000000u
 
-static void pc_platform_map(uint32_t va, uintptr_t phys, int writable)
+static void pc_platform_map(uintptr_t va, uintptr_t phys, int writable)
 {
     map_kernel_frame(va, phys, writable);
 }
@@ -366,9 +366,9 @@ static int32_t pc_get_slot(void)
     return -1;
 }
 
-int pc_fault(uint32_t fault_address, int write)
+int pc_fault(uintptr_t fault_address, int write)
 {
-    uint32_t page_va = fault_address & ~(PC_PAGE_SIZE - 1u);
+    uintptr_t page_va = fault_address & ~(uintptr_t)(PC_PAGE_SIZE - 1u);
     uint32_t disk_off;
     int32_t slot;
     struct pc_entry *e;
@@ -376,10 +376,10 @@ int pc_fault(uint32_t fault_address, int write)
     if (!pc_read || page_va < PCWIN_BASE) {
         return 0;
     }
-    disk_off = page_va - PCWIN_BASE;
-    if (disk_off >= pc_fs_size) {
+    if (page_va - PCWIN_BASE >= pc_fs_size) {
         return 0; /* past the backed size: a wild kernel pointer */
     }
+    disk_off = (uint32_t)(page_va - PCWIN_BASE);
 
     slot = pc_hash_find(disk_off);
     if (slot >= 0) {

@@ -552,7 +552,7 @@ int vfs_leaf_root(struct vfs_mount *mnt, void *node, const char *name)
 
 int vfs_node_path(struct vfs_mount *mnt, void *node, char *out, uint32_t cap)
 {
-    uint32_t ml = k_strlen(mnt->covered_path);
+    uint32_t ml = (uint32_t)k_strlen(mnt->covered_path);
     int root_krffs = mount_base(mnt) == mounts[0] && mnt->type == &vfs_krffs_type;
     int r;
 
@@ -1981,7 +1981,7 @@ static int kfs_readdir_locked(struct vfs_mount *mnt, void *handle, uint32_t *cur
          * cannot reach it by path must not see it in a listing either. */
         if (node->type == KRFFS_RESERVED_NODE && node->parent_id == dir_id &&
             node->name[0] != '\0' && node_off >= *cursor) {
-            uint32_t nlen = k_strlen((const char *)node->name);
+            uint32_t nlen = (uint32_t)k_strlen((const char *)node->name);
 
             if (nlen > VFS_NAME_MAX) {
                 nlen = VFS_NAME_MAX;
@@ -2009,8 +2009,8 @@ static int kfs_join(void *dir, const char *name, char *path, uint32_t cap)
     if (krffs_node_path(d, path, cap) != 0) {
         return -ENAMETOOLONG;
     }
-    dlen = k_strlen(path);
-    nlen = k_strlen(name);
+    dlen = (uint32_t)k_strlen(path);
+    nlen = (uint32_t)k_strlen(name);
     if (dlen == 0 || path[dlen - 1] != '/') {
         if (dlen + 1 >= cap) {
             return -ENAMETOOLONG;

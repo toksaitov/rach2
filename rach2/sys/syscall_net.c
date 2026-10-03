@@ -140,10 +140,14 @@
 
 #define SC_SENDMMSG 20
 
-/* The i386 struct mmsghdr: a struct msghdr, then the count the call stores
- * for it. */
-#define MMSGHDR_SIZE 32u
-#define MMSG_LEN_OFF 28u
+/* A struct mmsghdr: a struct msghdr, then the count the call stores for
+ * it. */
+struct kernel_mmsghdr {
+    struct kernel_msghdr msg_hdr;
+    unsigned int msg_len;
+};
+
+#define MMSG_LEN_OFF offsetof(struct kernel_mmsghdr, msg_len)
 
 /* Policy: the messages one sendmmsg or recvmmsg takes, Linux's UIO_MAXIOV. */
 #define MMSG_MAX 1024u
@@ -292,7 +296,7 @@ static int32_t not_a_socket(const fd_entry_t *entry)
  * length (16), the recvfrom(2)/accept(2) truncation semantics. Returns 0 or
  * -EFAULT.
  */
-static int copy_sockaddr_to_user(uint32_t sa_ptr, uint32_t salen_ptr, uint16_t port, uint32_t ip)
+static int copy_sockaddr_to_user(uintptr_t sa_ptr, uintptr_t salen_ptr, uint16_t port, uint32_t ip)
 {
     uint8_t sa[16];
     uint32_t caller_len;
@@ -491,7 +495,7 @@ static int32_t socket_with_flags(int domain, int type, int protocol)
 
 /* Bind the netlink socket `sock` to the port id and the groups of the
  * sockaddr_nl of `addrlen` bytes at user address `sa_ptr`. */
-static int32_t netlink_bind_user(struct socket *sock, uint32_t sa_ptr, int addrlen)
+static int32_t netlink_bind_user(struct socket *sock, uintptr_t sa_ptr, int addrlen)
 {
     uint8_t nl[SOCKADDR_NL_LEN];
 
@@ -571,7 +575,7 @@ static int32_t bind_inet(struct socket *sock, uint32_t ip, uint16_t port)
  * socket takes a port id (`netlink_bind_user`). The address must be any (0),
  * one of 127/8, an interface's, or for a datagram socket a broadcast address;
  * any other is refused with -EADDRNOTAVAIL, as Linux refuses it. */
-static int32_t do_bind(int fd, uint32_t sa_ptr, int addrlen)
+static int32_t do_bind(int fd, uintptr_t sa_ptr, int addrlen)
 {
     fd_entry_t *entry;
     uint8_t sa[SOCKADDR_MIN];
@@ -670,7 +674,7 @@ static int32_t do_bind(int fd, uint32_t sa_ptr, int addrlen)
  * ephemeral bind are the same for sendto, sendmsg and a write to a connected
  * socket.
  */
-static int32_t udp_sendto(fd_entry_t *entry, const uint8_t *buf, int len, uint32_t sa_ptr,
+static int32_t udp_sendto(fd_entry_t *entry, const uint8_t *buf, int len, uintptr_t sa_ptr,
                           int addrlen)
 {
     uint8_t sa[SOCKADDR_MIN];
@@ -710,7 +714,7 @@ static uint32_t sockaddr_len_of(const struct socket *sock)
 #define NETLINK_SEND_MAX 65536
 
 /* Send the netlink message of `len` bytes at user address `buf_ptr`. */
-static int32_t netlink_send_user(struct socket *sock, uint32_t buf_ptr, int len)
+static int32_t netlink_send_user(struct socket *sock, uintptr_t buf_ptr, int len)
 {
     uint8_t *copy;
     int32_t rc;
@@ -733,7 +737,7 @@ static int32_t netlink_send_user(struct socket *sock, uint32_t buf_ptr, int len)
 
 /* Copy the sockaddr_nl `nl` to the caller's (sa_ptr, salen_ptr), truncated
  * to its capacity, with the true length written back. */
-static int32_t netlink_addr_to_user(const uint8_t *nl, uint32_t sa_ptr, uint32_t salen_ptr)
+static int32_t netlink_addr_to_user(const uint8_t *nl, uintptr_t sa_ptr, uintptr_t salen_ptr)
 {
     uint32_t cap, give;
 
@@ -751,7 +755,7 @@ static int32_t netlink_addr_to_user(const uint8_t *nl, uint32_t sa_ptr, uint32_t
 /* sendto(2): a stream socket ignores the destination and behaves like send; a
  * datagram socket sends to the sockaddr, binding an ephemeral source port
  * first. */
-static int32_t do_sendto(int fd, uint32_t buf_ptr, int len, int flags, uint32_t sa_ptr, int addrlen)
+static int32_t do_sendto(int fd, uintptr_t buf_ptr, int len, int flags, uintptr_t sa_ptr, int addrlen)
 {
     fd_entry_t *entry;
 
@@ -888,8 +892,8 @@ static int32_t do_sendto(int fd, uint32_t buf_ptr, int len, int flags, uint32_t 
  * capacity. An address with no length pointer is EFAULT before anything is
  * taken, so the message stays queued; Linux fails the call only after it
  * has taken the message. Honors MSG_PEEK, MSG_DONTWAIT and O_NONBLOCK. */
-static int32_t do_recvfrom(int fd, uint32_t buf_ptr, int len, int flags, uint32_t sa_ptr,
-                           uint32_t salen_ptr)
+static int32_t do_recvfrom(int fd, uintptr_t buf_ptr, int len, int flags, uintptr_t sa_ptr,
+                           uintptr_t salen_ptr)
 {
     fd_entry_t *entry;
     uint32_t src_ip = 0;
@@ -1027,7 +1031,7 @@ static int accept_ready(void *arg)
 
 /* connect(2): start the TCP handshake to the sockaddr. A blocking socket waits
  * it out (-EINTR on a signal); a non-blocking one returns 0 or -EINPROGRESS. */
-static int32_t do_connect(int fd, uint32_t sa_ptr, int addrlen)
+static int32_t do_connect(int fd, uintptr_t sa_ptr, int addrlen)
 {
     fd_entry_t *entry;
     uint32_t dst_ip;
@@ -1219,7 +1223,7 @@ static int32_t do_listen(int fd, int backlog)
  * and the connection, and so does an address with no length pointer, which
  * is EFAULT, as in Linux.
  */
-static int32_t do_accept(int fd, uint32_t sa_ptr, uint32_t salen_ptr, uint32_t flags)
+static int32_t do_accept(int fd, uintptr_t sa_ptr, uintptr_t salen_ptr, uint32_t flags)
 {
     fd_entry_t *entry;
     fd_entry_t *new_entry;
@@ -1289,7 +1293,7 @@ static int32_t do_accept(int fd, uint32_t sa_ptr, uint32_t salen_ptr, uint32_t f
  * connection's; any other socket sends as sendto(2) with no address does,
  * which is what POSIX makes send, and what glibc's DNS resolver asks of a
  * connected UDP socket through subcall 9. */
-static int32_t do_send(int fd, uint32_t buf_ptr, int len, int flags)
+static int32_t do_send(int fd, uintptr_t buf_ptr, int len, int flags)
 {
     fd_entry_t *entry;
     int nonblock;
@@ -1318,7 +1322,7 @@ static int32_t do_send(int fd, uint32_t buf_ptr, int len, int flags)
 
 /* recv(2): read from a connected stream socket. Honors MSG_PEEK,
  * MSG_DONTWAIT and O_NONBLOCK. */
-static int32_t do_recv(int fd, uint32_t buf_ptr, int len, int flags)
+static int32_t do_recv(int fd, uintptr_t buf_ptr, int len, int flags)
 {
     fd_entry_t *entry;
     int nonblock;
@@ -1370,7 +1374,7 @@ static int32_t do_recv(int fd, uint32_t buf_ptr, int len, int flags)
  * report their binding's interface; an unbound socket or an all-interface
  * binding has index zero and no MAC.
  */
-static int32_t do_getsockname(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
+static int32_t do_getsockname(int fd, uintptr_t sa_ptr, uintptr_t salen_ptr)
 {
     fd_entry_t *entry = fd_get(current_proc->fds, fd);
     uint32_t flags, local_ip;
@@ -1438,7 +1442,7 @@ static int32_t do_getsockname(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
 
 /* getpeername: the connected peer's address (an established stream socket
  * or a datagram socket that connect(2) gave a peer). */
-static int32_t do_getpeername(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
+static int32_t do_getpeername(int fd, uintptr_t sa_ptr, uintptr_t salen_ptr)
 {
     fd_entry_t *entry = fd_get(current_proc->fds, fd);
 
@@ -1546,7 +1550,7 @@ static int32_t do_shutdown(int fd, int how)
  * listen ports and sends promptly, so these are honored-by-behavior or
  * documented no-ops; an unknown option is accepted instead of failing a
  * server's startup. */
-static int32_t do_setsockopt(int fd, int level, int optname, uint32_t optval_ptr, int optlen)
+static int32_t do_setsockopt(int fd, int level, int optname, uintptr_t optval_ptr, int optlen)
 {
     fd_entry_t *entry = fd_get(current_proc->fds, fd);
     int val = 0;
@@ -1651,8 +1655,8 @@ static int32_t do_setsockopt(int fd, int level, int optname, uint32_t optval_ptr
  * socket keeps IP options: OpenSSH's server ends a connection whose socket
  * reports any. A result is truncated to the caller's capacity, and the length
  * written is what was copied. */
-static int32_t do_getsockopt(int fd, int level, int optname, uint32_t optval_ptr,
-                             uint32_t optlen_ptr)
+static int32_t do_getsockopt(int fd, int level, int optname, uintptr_t optval_ptr,
+                             uintptr_t optlen_ptr)
 {
     fd_entry_t *entry = fd_get(current_proc->fds, fd);
     int val = 0;
@@ -1691,7 +1695,7 @@ static int32_t do_getsockopt(int fd, int level, int optname, uint32_t optval_ptr
         if (copy_from_user(&olen, (const void __user *)optlen_ptr, sizeof(olen)) != 0) {
             return -EFAULT;
         }
-        give = k_strlen(name) + 1u;
+        give = (uint32_t)k_strlen(name) + 1u;
         if (give > olen) {
             give = olen;
         }
@@ -1736,26 +1740,6 @@ static int32_t do_getsockopt(int fd, int level, int optname, uint32_t optval_ptr
     return 0;
 }
 
-/*
- * struct msghdr on i386: name (4), namelen (4), iov (4), iovlen (4), control
- * (4), controllen (4), flags (4). The offsets are the ABI and are written out,
- * not modelled, because a struct here would have to match a layout
- * this kernel does not otherwise depend on.
- */
-#define MSGHDR_LEN 28
-
-#define MSGHDR_NAME 0
-
-#define MSGHDR_NAMELEN 4
-
-#define MSGHDR_IOV 8
-
-#define MSGHDR_IOVLEN 12
-
-#define MSGHDR_CONTROLLEN 20
-
-#define MSGHDR_FLAGS 24
-
 /**
  * Receive one datagram into a scatter list (recvmsg, socketcall 17).
  *
@@ -1775,11 +1759,12 @@ static int32_t do_getsockopt(int fd, int level, int optname, uint32_t optval_ptr
  * socket, and for a packet socket the `sockaddr_ll` the frame came from, with
  * the sender's hardware address and who the frame was addressed to.
  */
-static int32_t do_recvmsg(int fd, uint32_t msg_ptr, int flags)
+static int32_t do_recvmsg(int fd, uintptr_t msg_ptr, int flags)
 {
-    uint8_t hdr[MSGHDR_LEN];
+    struct kernel_msghdr hdr;
     fd_entry_t *entry;
-    uint32_t iov_user, name_ptr, namelen;
+    uintptr_t iov_user, name_ptr;
+    uint32_t namelen;
     uint32_t addr_len, addr_give;
     uint32_t iovlen;
     uint32_t src_ip = 0;
@@ -1788,7 +1773,7 @@ static int32_t do_recvmsg(int fd, uint32_t msg_ptr, int flags)
     int32_t taken;
     int32_t whole = 0;
 
-    if (copy_from_user(hdr, (const void __user *)msg_ptr, MSGHDR_LEN) != 0) {
+    if (copy_from_user(&hdr, (const void __user *)msg_ptr, sizeof(hdr)) != 0) {
         return -EFAULT;
     }
     entry = current_proc ? fd_get(current_proc->fds, fd) : (fd_entry_t *)0;
@@ -1799,19 +1784,19 @@ static int32_t do_recvmsg(int fd, uint32_t msg_ptr, int flags)
         return -EOPNOTSUPP;
     }
 
-    name_ptr = SC_LE32(hdr + MSGHDR_NAME);
-    namelen = SC_LE32(hdr + MSGHDR_NAMELEN);
-    iov_user = SC_LE32(hdr + MSGHDR_IOV);
-    iovlen = SC_LE32(hdr + MSGHDR_IOVLEN);
-    if (iovlen > (uint32_t)IOV_MAX_LOCAL) {
+    name_ptr = hdr.msg_name;
+    namelen = (uint32_t)hdr.msg_namelen;
+    iov_user = hdr.msg_iov;
+    if (hdr.msg_iovlen > IOV_MAX_LOCAL) {
         return -EINVAL;
     }
+    iovlen = (uint32_t)hdr.msg_iovlen;
 
     /* Every destination is checked before the datagram is taken, because
        taking it is what destroys it: a fault discovered half way through the
        copy would report an error for a message the machine no longer has.
        This is the pass `sys_readv` makes for the same reason. */
-    if (!user_buffer_ok(msg_ptr, MSGHDR_LEN, 1)) {
+    if (!user_buffer_ok(msg_ptr, sizeof(hdr), 1)) {
         return -EFAULT;
     }
     /* Only what will be written is checked, and it is settled here rather than
@@ -1827,9 +1812,8 @@ static int32_t do_recvmsg(int fd, uint32_t msg_ptr, int flags)
     for (i = 0; i < iovlen; i++) {
         struct kernel_iovec iov;
 
-        if (copy_from_user(
-                &iov, (const void __user *)(iov_user + i * (uint32_t)sizeof(struct kernel_iovec)),
-                sizeof(iov)) != 0) {
+        if (copy_from_user(&iov, (const void __user *)(iov_user + i * sizeof(struct kernel_iovec)),
+                           sizeof(iov)) != 0) {
             return -EFAULT;
         }
         if (iov.iov_len == 0) {
@@ -1878,10 +1862,10 @@ static int32_t do_recvmsg(int fd, uint32_t msg_ptr, int flags)
     /* The true length, whatever the caller's capacity was: that is how a caller
        learns its buffer was too small. Zero for a packet socket, which has no
        sender to report. */
-    SC_WLE32(hdr + MSGHDR_NAMELEN, name_ptr ? addr_len : 0u);
-    SC_WLE32(hdr + MSGHDR_CONTROLLEN, 0);
-    SC_WLE32(hdr + MSGHDR_FLAGS, whole > taken ? (uint32_t)MSG_TRUNC : 0u);
-    if (copy_to_user((void __user *)msg_ptr, hdr, MSGHDR_LEN) != 0) {
+    hdr.msg_namelen = name_ptr ? (int)addr_len : 0;
+    hdr.msg_controllen = 0;
+    hdr.msg_flags = whole > taken ? (unsigned int)MSG_TRUNC : 0u;
+    if (copy_to_user((void __user *)msg_ptr, &hdr, sizeof(hdr)) != 0) {
         return -EFAULT;
     }
     return (flags & MSG_TRUNC) ? whole : taken;
@@ -1894,29 +1878,30 @@ static int32_t do_recvmsg(int fd, uint32_t msg_ptr, int flags)
  * packet socket takes one buffer. Control messages carry nothing here and
  * are ignored.
  */
-static int32_t do_sendmsg(int fd, uint32_t msg_ptr, int flags)
+static int32_t do_sendmsg(int fd, uintptr_t msg_ptr, int flags)
 {
-    uint8_t hdr[MSGHDR_LEN];
+    struct kernel_msghdr hdr;
     struct kernel_iovec iov[8];
     uint8_t *gathered;
     fd_entry_t *entry;
-    uint32_t iov_user, iovlen, name_ptr, namelen, i, total = 0;
+    uintptr_t iov_user, name_ptr;
+    uint32_t iovlen, namelen, i, total = 0;
     int32_t rc;
 
-    if (copy_from_user(hdr, (const void __user *)msg_ptr, MSGHDR_LEN) != 0) {
+    if (copy_from_user(&hdr, (const void __user *)msg_ptr, sizeof(hdr)) != 0) {
         return -EFAULT;
     }
     entry = current_proc ? fd_get(current_proc->fds, fd) : (fd_entry_t *)0;
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
         return not_a_socket(entry);
     }
-    name_ptr = SC_LE32(hdr + MSGHDR_NAME);
-    namelen = SC_LE32(hdr + MSGHDR_NAMELEN);
-    iov_user = SC_LE32(hdr + MSGHDR_IOV);
-    iovlen = SC_LE32(hdr + MSGHDR_IOVLEN);
-    if (iovlen > (uint32_t)IOV_MAX_LOCAL) {
+    name_ptr = hdr.msg_name;
+    namelen = (uint32_t)hdr.msg_namelen;
+    iov_user = hdr.msg_iov;
+    if (hdr.msg_iovlen > IOV_MAX_LOCAL) {
         return -EMSGSIZE;
     }
+    iovlen = (uint32_t)hdr.msg_iovlen;
     if (socket_outside(entry->sock)) {
         return -ENETUNREACH;
     }
@@ -1924,7 +1909,8 @@ static int32_t do_sendmsg(int fd, uint32_t msg_ptr, int flags)
         for (i = 0; i < iovlen; i++) {
             struct kernel_iovec one;
 
-            if (copy_from_user(&one, (const void __user *)(iov_user + i * 8u), sizeof(one)) != 0) {
+            if (copy_from_user(&one, (const void __user *)(iov_user + i * sizeof(one)), sizeof(one)) !=
+                0) {
                 return total ? (int32_t)total : -EFAULT;
             }
             if (one.iov_len == 0) {
@@ -1961,7 +1947,7 @@ static int32_t do_sendmsg(int fd, uint32_t msg_ptr, int flags)
         if (iov[i].iov_len > most - total) {
             return -EMSGSIZE;
         }
-        total += iov[i].iov_len;
+        total += (uint32_t)iov[i].iov_len;
     }
     gathered = kmalloc(total ? total : 1u);
     if (!gathered) {
@@ -1974,7 +1960,7 @@ static int32_t do_sendmsg(int fd, uint32_t msg_ptr, int flags)
             kfree(gathered);
             return -EFAULT;
         }
-        total += iov[i].iov_len;
+        total += (uint32_t)iov[i].iov_len;
     }
     if (entry->sock->family == AF_NETLINK) {
         rc = netlink_send(entry->sock, gathered, total);
@@ -1986,13 +1972,13 @@ static int32_t do_sendmsg(int fd, uint32_t msg_ptr, int flags)
 }
 
 /* The calls on an AF_UNIX socket, which ipc/unix.c answers. */
-static int32_t unix_call(int call, fd_entry_t *e, const uint32_t *args)
+static int32_t unix_call(int call, fd_entry_t *e, const unsigned long *args)
 {
     switch (call) {
     case SC_BIND:
-        return unix_bind(e, args[1], args[2]);
+        return unix_bind(e, args[1], (uint32_t)args[2]);
     case SC_CONNECT:
-        return unix_connect(e, args[1], args[2]);
+        return unix_connect(e, args[1], (uint32_t)args[2]);
     case SC_LISTEN:
         return unix_listen(e, (int)args[1]);
     case SC_ACCEPT:
@@ -2004,17 +1990,18 @@ static int32_t unix_call(int call, fd_entry_t *e, const uint32_t *args)
     case SC_GETPEERNAME:
         return unix_getname(e, args[1], args[2], 1);
     case SC_SEND:
-        return unix_sendto(e, args[1], args[2], (int)args[3], 0, 0);
+        return unix_sendto(e, args[1], USER_LEN32(args[2]), (int)args[3], 0, 0);
     case SC_RECV:
-        return unix_recvfrom(e, args[1], args[2], (int)args[3], 0, 0);
+        return unix_recvfrom(e, args[1], USER_LEN32(args[2]), (int)args[3], 0, 0);
     case SC_SENDTO:
-        return unix_sendto(e, args[1], args[2], (int)args[3], args[4], args[5]);
+        return unix_sendto(e, args[1], USER_LEN32(args[2]), (int)args[3], args[4],
+                           (uint32_t)args[5]);
     case SC_RECVFROM:
-        return unix_recvfrom(e, args[1], args[2], (int)args[3], args[4], args[5]);
+        return unix_recvfrom(e, args[1], USER_LEN32(args[2]), (int)args[3], args[4], args[5]);
     case SC_SHUTDOWN:
         return unix_shutdown(e, (int)args[1]);
     case SC_SETSOCKOPT:
-        return unix_setsockopt(e, (int)args[1], (int)args[2], args[3], args[4]);
+        return unix_setsockopt(e, (int)args[1], (int)args[2], args[3], (uint32_t)args[4]);
     case SC_GETSOCKOPT:
         return unix_getsockopt(e, (int)args[1], (int)args[2], args[3], args[4]);
     case SC_SENDMSG:
@@ -2028,9 +2015,9 @@ static int32_t unix_call(int call, fd_entry_t *e, const uint32_t *args)
 
 /* socket(2) and socketpair(2) of AF_UNIX: the type with its SOCK_CLOEXEC and
  * SOCK_NONBLOCK bits taken off, and any other bit refused. */
-static int32_t unix_make(int call, const uint32_t *args)
+static int32_t unix_make(int call, const unsigned long *args)
 {
-    uint32_t flags = args[1] & ~(uint32_t)SOCK_TYPE_MASK;
+    uint32_t flags = (uint32_t)args[1] & ~(uint32_t)SOCK_TYPE_MASK;
     int type = (int)(args[1] & SOCK_TYPE_MASK);
 
     if (flags & ~(uint32_t)(SOCK_CLOEXEC | SOCK_NONBLOCK)) {
@@ -2042,7 +2029,7 @@ static int32_t unix_make(int call, const uint32_t *args)
     return unix_socket(type, (int)args[2], (int)flags);
 }
 
-static int32_t socket_dispatch(int call, uint32_t *args);
+static int32_t socket_dispatch(int call, unsigned long *args);
 
 /**
  * sendmmsg and recvmmsg: sendmsg or recvmsg on the socket `args[0]` for each
@@ -2053,17 +2040,17 @@ static int32_t socket_dispatch(int call, uint32_t *args);
  * without MSG_WAITFORONE, so a call returns what has come; its timeout is not
  * read.
  */
-static int32_t mmsg(int call, const uint32_t *args)
+static int32_t mmsg(int call, const unsigned long *args)
 {
-    uint32_t sub[3];
-    uint32_t vlen = args[2] > MMSG_MAX ? MMSG_MAX : args[2];
+    unsigned long sub[3];
+    uint32_t vlen = args[2] > MMSG_MAX ? MMSG_MAX : (uint32_t)args[2];
     uint32_t i;
     int32_t rc = 0;
 
     sub[0] = args[0];
     sub[2] = args[3] & ~MSG_WAITFORONE;
     for (i = 0; i < vlen; i++) {
-        sub[1] = args[1] + i * MMSGHDR_SIZE;
+        sub[1] = args[1] + i * sizeof(struct kernel_mmsghdr);
         rc = socket_dispatch(call == SC_SENDMMSG ? SC_SENDMSG : SC_RECVMSG, sub);
         if (rc < 0) {
             break;
@@ -2090,8 +2077,8 @@ static int32_t mmsg(int call, const uint32_t *args)
 long sys_socketcall(isr_params_t *params)
 {
     int call = (int)SC_ARG(params, 0);
-    uint32_t argp = SC_ARG(params, 1);
-    uint32_t args[6];
+    uintptr_t argp = SC_ARG(params, 1);
+    unsigned long args[6];
     int nargs;
 
     switch (call) {
@@ -2138,7 +2125,7 @@ long sys_socketcall(isr_params_t *params)
     }
 
     /* Pull the argument array out of user memory in one fault-checked copy. */
-    if (copy_from_user(args, (const void __user *)argp, (uint32_t)nargs * 4) != 0) {
+    if (copy_from_user(args, (const void __user *)argp, (uint32_t)nargs * sizeof(args[0])) != 0) {
         return -EFAULT;
     }
     return socket_dispatch(call, args);
@@ -2149,7 +2136,7 @@ long sys_socketcall(isr_params_t *params)
  * for the direct socket calls. A call on an AF_UNIX socket, or one that
  * makes one, goes to ipc/unix.c; the rest to the calls above.
  */
-static int32_t socket_dispatch(int call, uint32_t *args)
+static int32_t socket_dispatch(int call, unsigned long *args)
 {
     fd_entry_t *e;
 
@@ -2179,7 +2166,7 @@ static int32_t socket_dispatch(int call, uint32_t *args)
     case SC_RECVFROM:
         return do_recvfrom((int)args[0], args[1], (int)args[2], (int)args[3], args[4], args[5]);
     case SC_PING:
-        return do_ping(args[0]);
+        return do_ping((uint32_t)args[0]);
     case SC_PING_DATA: {
         uint16_t got = 0;
         uint8_t got_ttl = 0;
@@ -2188,7 +2175,7 @@ static int32_t socket_dispatch(int call, uint32_t *args)
         if (args[2] < 1 || args[2] > 255) {
             return -EINVAL;
         }
-        rc = icmp_ping_data(args[0], args[1], (uint8_t)args[2], &got, &got_ttl);
+        rc = icmp_ping_data((uint32_t)args[0], (uint32_t)args[1], (uint8_t)args[2], &got, &got_ttl);
         return rc < 0 ? rc : (int32_t)((uint32_t)got | (uint32_t)got_ttl << 16);
     }
     case SC_CONNECT:
@@ -2198,7 +2185,7 @@ static int32_t socket_dispatch(int call, uint32_t *args)
     case SC_ACCEPT:
         return do_accept((int)args[0], args[1], args[2], 0);
     case SC_ACCEPT4:
-        return do_accept((int)args[0], args[1], args[2], args[3]);
+        return do_accept((int)args[0], args[1], args[2], (uint32_t)args[3]);
     case SC_GETSOCKNAME:
         return do_getsockname((int)args[0], args[1], args[2]);
     case SC_GETPEERNAME:
@@ -2227,7 +2214,7 @@ static int32_t socket_dispatch(int call, uint32_t *args)
  * their arguments in registers. */
 static int32_t direct(int call, isr_params_t *params)
 {
-    uint32_t args[6];
+    unsigned long args[6];
 
     args[0] = SC_ARG(params, 0);
     args[1] = SC_ARG(params, 1);

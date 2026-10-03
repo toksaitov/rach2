@@ -42,9 +42,9 @@ uintptr_t mem_reserve(size_t size, bool align)
     uintptr_t new_ptr;
 
 retry:
-    if (align && (mem_reserved_ptr & 0xFFF)) {
-        mem_reserved_ptr &= 0xFFFFF000;
-        mem_reserved_ptr += 0x1000;
+    if (align && (mem_reserved_ptr & (PAGE_SIZE - 1))) {
+        mem_reserved_ptr &= ~(uintptr_t)(PAGE_SIZE - 1);
+        mem_reserved_ptr += PAGE_SIZE;
     }
 
     result = mem_reserved_ptr;

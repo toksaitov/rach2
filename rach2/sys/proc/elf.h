@@ -1,15 +1,19 @@
 /*
- * elf.h - ELF32 executable format definitions
+ * elf.h - ELF executable format definitions
  *
- * Defines structures for parsing ELF32 executables used by the Rach2 kernel
- * to load and execute user programs from the file system.
+ * Defines structures for parsing the ELF executables the Rach2 kernel loads
+ * and runs from the file system: ELF32 on i686 and ELF64 on x86-64, the
+ * class `ELF_CLASS` names (arch/arch.h), through the types `Elf_Ehdr` and
+ * `Elf_Phdr`.
  *
- * Reference: ELF specification (TIS Committee, v1.2)
+ * Reference: ELF specification (TIS Committee, v1.2), and the System V ABI's
+ * ELF-64 Object File Format.
  */
 
 #ifndef _ELF_H_
 #define _ELF_H_
 
+#include "../arch/arch.h"
 #include "../lib/kint.h"
 #include "../lib/kdef.h"
 
@@ -71,7 +75,8 @@
  * Machine type (e_machine)
  */
 #define EM_NONE 0 /* No machine */
-#define EM_386  3 /* Intel 80386 */
+#define EM_386    3  /* Intel 80386 */
+#define EM_X86_64 62 /* AMD x86-64 */
 
 /*
  * Program header types (p_type)
@@ -131,14 +136,61 @@ typedef struct {
 } Elf32_Phdr;
 #pragma pack(pop)
 
-/** True if `data` is a valid ELF32 executable for i386. */
+/*
+ * ELF64 Header Structure (64 bytes)
+ */
+#pragma pack(push, 1)
+typedef struct {
+    uint8_t e_ident[EI_NIDENT]; /* ELF identification */
+    uint16_t e_type;            /* Object file type */
+    uint16_t e_machine;         /* Machine type */
+    uint32_t e_version;         /* Object file version */
+    uint64_t e_entry;           /* Entry point address */
+    uint64_t e_phoff;           /* Program header offset */
+    uint64_t e_shoff;           /* Section header offset */
+    uint32_t e_flags;           /* Processor-specific flags */
+    uint16_t e_ehsize;          /* ELF header size */
+    uint16_t e_phentsize;       /* Program header entry size */
+    uint16_t e_phnum;           /* Number of program headers */
+    uint16_t e_shentsize;       /* Section header entry size */
+    uint16_t e_shnum;           /* Number of section headers */
+    uint16_t e_shstrndx;        /* Section name string table index */
+} Elf64_Ehdr;
+#pragma pack(pop)
+
+/*
+ * ELF64 Program Header Structure (56 bytes), whose flags come second
+ */
+#pragma pack(push, 1)
+typedef struct {
+    uint32_t p_type;   /* Segment type */
+    uint32_t p_flags;  /* Segment flags */
+    uint64_t p_offset; /* Segment file offset */
+    uint64_t p_vaddr;  /* Segment virtual address */
+    uint64_t p_paddr;  /* Segment physical address (unused) */
+    uint64_t p_filesz; /* Segment size in file */
+    uint64_t p_memsz;  /* Segment size in memory */
+    uint64_t p_align;  /* Segment alignment */
+} Elf64_Phdr;
+#pragma pack(pop)
+
+/* The headers of the class the architecture's programs have. */
+#if ELF_CLASS == ELFCLASS64
+typedef Elf64_Ehdr Elf_Ehdr;
+typedef Elf64_Phdr Elf_Phdr;
+#else
+typedef Elf32_Ehdr Elf_Ehdr;
+typedef Elf32_Phdr Elf_Phdr;
+#endif
+
+/** True if `data` is a valid ELF executable for this architecture. */
 bool elf_check(const void *data, uint32_t size);
 
 /** Entry point virtual address; valid only after `elf_check`. */
-uint32_t elf_entry_point(const void *data);
+uintptr_t elf_entry_point(const void *data);
 
 /** Pointer to the program header table, or NULL if there is none. */
-const Elf32_Phdr *elf_program_headers(const void *data);
+const Elf_Phdr *elf_program_headers(const void *data);
 
 /** Number of program headers (`e_phnum`). */
 uint16_t elf_program_header_count(const void *data);
@@ -169,9 +221,9 @@ struct exec_krffs_ctx {
 /* One recorded PT_LOAD segment, page-aligned, so exec can build a VMA for it
  * with the right protection. */
 typedef struct elf_seg {
-    uint32_t start; /* page-aligned segment start (inclusive) */
-    uint32_t end;   /* page-aligned segment end (exclusive)   */
-    uint32_t flags; /* ELF p_flags (PF_R/PF_W/PF_X)           */
+    uintptr_t start; /* page-aligned segment start (inclusive) */
+    uintptr_t end;   /* page-aligned segment end (exclusive)   */
+    uint32_t flags;  /* ELF p_flags (PF_R/PF_W/PF_X)           */
 } elf_seg_t;
 
 /*
@@ -179,11 +231,11 @@ typedef struct elf_seg {
  * address-space map (VMAs).
  */
 typedef struct {
-    uint32_t entry;      /* AT_ENTRY: program entry point */
-    uint32_t phdr_vaddr; /* AT_PHDR: vaddr of the program header table */
-    uint32_t phent;      /* AT_PHENT: size in bytes of one program header */
-    uint32_t phnum;      /* AT_PHNUM: number of program headers */
-    uint32_t image_end;  /* page-aligned end of all loaded segments (heap base) */
+    uintptr_t entry;      /* AT_ENTRY: program entry point */
+    uintptr_t phdr_vaddr; /* AT_PHDR: vaddr of the program header table */
+    uint32_t phent;       /* AT_PHENT: size in bytes of one program header */
+    uint32_t phnum;       /* AT_PHNUM: number of program headers */
+    uintptr_t image_end;  /* page-aligned end of all loaded segments (heap base) */
     int nsegs;           /* number of recorded PT_LOAD segments */
     elf_seg_t segs[ELF_MAX_SEGS];
 } elf_image_t;
@@ -195,9 +247,6 @@ bool elf_valid_exec(const void *ehdr, uint32_t len);
 /* The longest interpreter path PT_INTERP may name, its NUL included. */
 #define ELF_INTERP_MAX 256
 
-/* The base a position-independent program (ET_DYN) is loaded at. */
-#define ELF_ET_DYN_BASE 0x08000000u
-
 /*
  * What exec needs to know of an image before it loads it: its type, the page
  * span of its PT_LOAD segments, and the interpreter PT_INTERP names, "" for
@@ -205,8 +254,8 @@ bool elf_valid_exec(const void *ehdr, uint32_t len);
  */
 typedef struct {
     uint16_t type;
-    uint32_t lo;
-    uint32_t hi;
+    uintptr_t lo;
+    uintptr_t hi;
     char interp[ELF_INTERP_MAX];
 } elf_layout_t;
 
@@ -219,7 +268,7 @@ int elf_read_layout(elf_read_fn readfn, void *ctx, int interp, elf_layout_t *out
 
 /** Run-time vaddr of the program header table (AT_PHDR), or 0 if none
  * covers `phoff`. */
-uint32_t elf_phdr_vaddr(const Elf32_Phdr *phdrs, uint16_t phnum, uint32_t phoff);
+uintptr_t elf_phdr_vaddr(const Elf_Phdr *phdrs, uint16_t phnum, uint64_t phoff);
 
 /** Stream an ELF into `dir` via `read`, recording layout in `out`; 0, or
  * -ENOEXEC for a malformed image, -EIO for a failed read and -ENOMEM for
@@ -228,7 +277,7 @@ int elf_load_image(elf_read_fn read, void *ctx, struct page_dir *dir, elf_image_
 
 /** The same with every address moved by `bias`, page-aligned, which must be
  * 0 for an ET_EXEC image: an ET_DYN program or interpreter at its base. */
-int elf_load_image_at(elf_read_fn read, void *ctx, struct page_dir *dir, uint32_t bias,
+int elf_load_image_at(elf_read_fn read, void *ctx, struct page_dir *dir, uintptr_t bias,
                       elf_image_t *out);
 
 struct vm_space; /* mm/vm.h */
@@ -238,7 +287,7 @@ struct vm_space; /* mm/vm.h */
 int elf_add_vmas(struct vm_space *vm, const elf_image_t *img);
 
 /** Build the VMA map of a fresh address space from a loaded image. */
-int elf_setup_vmas(struct vm_space *vm, const elf_image_t *img, uint32_t stack_top,
-                   uint32_t stack_growth);
+int elf_setup_vmas(struct vm_space *vm, const elf_image_t *img, uintptr_t stack_top,
+                   uintptr_t stack_growth);
 
 #endif /* _ELF_H_ */

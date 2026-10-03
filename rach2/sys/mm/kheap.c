@@ -268,7 +268,7 @@ void kfree_pages(void *p, uint32_t count)
         return;
     }
     flags = irq_save();
-    release_run((va - KVA_HEAP) / PAGE_SIZE, count);
+    release_run((uint32_t)((va - KVA_HEAP) / PAGE_SIZE), count);
     irq_restore(flags);
 }
 
@@ -307,7 +307,7 @@ void kfree_guarded(void *p, uint32_t count)
         klog(KLOG_ERR, "kheap", "free of pages the heap did not give: 0x%x", (uint32_t)va);
         return;
     }
-    page = (va - KVA_HEAP) / PAGE_SIZE;
+    page = (uint32_t)((va - KVA_HEAP) / PAGE_SIZE);
     flags = irq_save();
     if (count == 0 || count >= KHEAP_RESERVE_FIRST || page > KHEAP_RESERVE_FIRST - count ||
         !page_taken(page - 1) || paging_virt_to_phys(va - PAGE_SIZE) != 0) {
@@ -444,7 +444,7 @@ void kfree(void *p)
 
         bytes_used -= hdr->used;
         hdr->magic = 0;
-        release_run(((uintptr_t)hdr - KVA_HEAP) / PAGE_SIZE, count);
+        release_run((uint32_t)(((uintptr_t)hdr - KVA_HEAP) / PAGE_SIZE), count);
         irq_restore(flags);
         return;
     }
@@ -462,7 +462,7 @@ void kfree(void *p)
         drop_class_page(hdr, hdr->cls);
         class_pages[hdr->cls]--;
         hdr->magic = 0;
-        release_run(((uintptr_t)hdr - KVA_HEAP) / PAGE_SIZE, 1);
+        release_run((uint32_t)(((uintptr_t)hdr - KVA_HEAP) / PAGE_SIZE), 1);
     }
     irq_restore(flags);
 }

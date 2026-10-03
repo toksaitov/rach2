@@ -131,11 +131,11 @@ int loop_attach_file(int index, const char *path, int writable, uint32_t flags);
  * a file-backed device has one answer for. `privileged` is the caller's
  * standing to change the device. `ENOTTY` for a request that is not one.
  */
-int32_t loop_ioctl(int index, int privileged, uint32_t request, uint32_t arg);
+int32_t loop_ioctl(int index, int privileged, uint32_t request, uintptr_t arg);
 
 /** LOOP_CTL_GET_FREE, LOOP_CTL_ADD and LOOP_CTL_REMOVE on /dev/loop-control;
  * `ENOTTY` for another request. */
-int32_t loop_control_ioctl(uint32_t request, uint32_t arg);
+int32_t loop_control_ioctl(uint32_t request, uintptr_t arg);
 
 /** A description of device `index`'s node was opened, or its last
  * reference closed; a close may clear a device set to clear itself. */

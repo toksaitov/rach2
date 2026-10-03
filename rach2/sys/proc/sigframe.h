@@ -54,6 +54,6 @@ void sigframe_take_siginfo(const uint8_t *in, struct k_siginfo *info);
  * Whether the user stack pointer `sp` lies on the current process's
  * alternate signal stack.
  */
-int sigframe_on_altstack(uint32_t sp);
+int sigframe_on_altstack(uintptr_t sp);
 
 #endif /* _SIGFRAME_H_ */

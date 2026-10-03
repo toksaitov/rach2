@@ -59,7 +59,7 @@ uint32_t poll_ms_deadline(int timeout_ms, int *has_deadline);
 /** Install the signal mask a wait runs under, from the user set `umask` of
  * `size` bytes (0 for none), and restore it after with `poll_mask_done`,
  * which passes the wait's result through. */
-int32_t poll_mask_set(uint32_t umask, uint32_t size);
+int32_t poll_mask_set(uintptr_t umask, uint32_t size);
 int32_t poll_mask_done(int32_t ret);
 
 /* poll(168) / ppoll(309). */

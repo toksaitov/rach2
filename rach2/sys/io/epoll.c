@@ -633,7 +633,7 @@ long sys_epoll_create(struct isr_params *params)
 
 long sys_epoll_create1(struct isr_params *params)
 {
-    return make_epoll(SC_ARG(params, 0));
+    return make_epoll((uint32_t)SC_ARG(params, 0));
 }
 
 /*
@@ -753,7 +753,7 @@ long sys_epoll_ctl(struct isr_params *params)
  * events copied before it, or EFAULT when there are none, as Linux's
  * does.
  */
-static int32_t epoll_wait_common(int epfd, uint32_t uevents, int max, int has_deadline,
+static int32_t epoll_wait_common(int epfd, uintptr_t uevents, int max, int has_deadline,
                                  uint32_t deadline)
 {
     struct epoll *ep = epoll_of(epfd);
@@ -813,7 +813,7 @@ long sys_epoll_pwait(struct isr_params *params)
 {
     int has_deadline;
     uint32_t deadline = poll_ms_deadline((int)SC_ARG(params, 3), &has_deadline);
-    int32_t rc = poll_mask_set(SC_ARG(params, 4), SC_ARG(params, 5));
+    int32_t rc = poll_mask_set(SC_ARG(params, 4), USER_LEN32(SC_ARG(params, 5)));
 
     if (rc != 0) {
         return rc;
@@ -856,7 +856,7 @@ long sys_epoll_pwait2(struct isr_params *params)
         }
         deadline = poll_ms_deadline((int)ms, &has_deadline);
     }
-    rc = poll_mask_set(SC_ARG(params, 4), SC_ARG(params, 5));
+    rc = poll_mask_set(SC_ARG(params, 4), USER_LEN32(SC_ARG(params, 5)));
     if (rc != 0) {
         return rc;
     }

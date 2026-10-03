@@ -72,20 +72,6 @@
 #define SCM_RIGHTS      1
 #define SCM_CREDENTIALS 2
 
-/* Format: the i386 struct cmsghdr (length, level, type) and the alignment
- * of what follows it. */
-#define CMSG_HDR      12u
-#define CMSG_ALIGN(n) (((n) + 3u) & ~3u)
-
-/* Format: the i386 struct msghdr, as words. */
-#define MH_NAME       0
-#define MH_NAMELEN    1
-#define MH_IOV        2
-#define MH_IOVLEN     3
-#define MH_CONTROL    4
-#define MH_CONTROLLEN 5
-#define MH_FLAGS      6
-#define MH_WORDS      7
 
 #define POLLIN     0x001
 #define POLLOUT    0x004
@@ -209,7 +195,7 @@ struct unix_in {
 static int32_t unix_read(fd_entry_t *e, char __user *buf, uint32_t count);
 static int32_t unix_write(fd_entry_t *e, const char __user *buf, uint32_t count);
 static short unix_poll(fd_entry_t *e, short events, struct wait_queue **wq);
-static int32_t unix_ioctl(fd_entry_t *e, uint32_t request, uint32_t arg);
+static int32_t unix_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg);
 static void unix_close(fd_entry_t *e);
 
 static const struct file_ops unix_ops = {unix_read, unix_write, unix_poll, unix_ioctl, unix_close};
@@ -842,7 +828,7 @@ static void join(struct unix_sock *a, struct unix_sock *b)
  * to `sv` before either is published, so a failed copy leaves nothing that
  * another thread could have used, and both sockets are released.
  */
-int32_t unix_socketpair(int type, int protocol, int flags, uint32_t sv)
+int32_t unix_socketpair(int type, int protocol, int flags, uintptr_t sv)
 {
     struct unix_sock *a, *b;
     int32_t rc = check_type(&type, protocol);
@@ -891,7 +877,7 @@ int32_t unix_socketpair(int type, int protocol, int flags, uint32_t sv)
  * alone gives an empty name; a path ends at its first NUL or at the end of
  * the address. EINVAL for a length or a family that is not AF_UNIX's.
  */
-static int32_t get_name(uint32_t addr, uint32_t addrlen, struct unix_name *n)
+static int32_t get_name(uintptr_t addr, uint32_t addrlen, struct unix_name *n)
 {
     uint8_t sa[SUN_PATH_OFF + UNIX_PATH_MAX];
     uint32_t i;
@@ -948,7 +934,7 @@ static uint32_t name_addrlen(const struct unix_name *n)
  * address as the caller's length has room for, and the true length. A
  * receive reports a sender with no name as a length of 0.
  */
-static int32_t put_name(uint32_t addr, uint32_t lenp, const struct unix_name *n, int sender)
+static int32_t put_name(uintptr_t addr, uintptr_t lenp, const struct unix_name *n, int sender)
 {
     uint8_t sa[SUN_PATH_OFF + UNIX_PATH_MAX + 1];
     uint32_t full = (sender && n->len == 0) ? 0u : name_addrlen(n);
@@ -1156,7 +1142,7 @@ static int32_t bind_name(struct unix_sock *s, const struct unix_name *n)
  * is made, so two binds of one socket cannot both succeed and lose the
  * first one's hold on its file and its mount.
  */
-int32_t unix_bind(fd_entry_t *e, uint32_t addr, uint32_t addrlen)
+int32_t unix_bind(fd_entry_t *e, uintptr_t addr, uint32_t addrlen)
 {
     struct unix_sock *s = sock_of(e);
     struct unix_name n;
@@ -1244,7 +1230,7 @@ static void dgram_repeer(struct unix_sock *s, struct unix_sock *target)
  * target connected to another socket refuses with EPERM and the connection
  * is left as it was, as Linux's unix_may_send has it.
  */
-static int32_t connect_dgram(struct unix_sock *s, uint32_t addr, uint32_t addrlen)
+static int32_t connect_dgram(struct unix_sock *s, uintptr_t addr, uint32_t addrlen)
 {
     struct unix_name n;
     struct unix_sock *target;
@@ -1314,7 +1300,7 @@ static int32_t connect_refusal(const struct unix_sock *s, const struct unix_sock
  * sockets is judged after the last of them, and nothing between that and
  * the join can sleep.
  */
-int32_t unix_connect(fd_entry_t *e, uint32_t addr, uint32_t addrlen)
+int32_t unix_connect(fd_entry_t *e, uintptr_t addr, uint32_t addrlen)
 {
     struct unix_sock *s = sock_of(e);
     struct unix_sock *target, *c;
@@ -1405,7 +1391,7 @@ static int has_connection(void *arg)
  * down for reading gives up the connections queued before and then fails
  * with EINVAL, as Linux's does.
  */
-int32_t unix_accept(fd_entry_t *e, uint32_t addr, uint32_t addrlen_ptr, int flags)
+int32_t unix_accept(fd_entry_t *e, uintptr_t addr, uintptr_t addrlen_ptr, int flags)
 {
     static const struct unix_name none;
     struct unix_sock *s = sock_of(e);
@@ -1455,7 +1441,7 @@ int32_t unix_accept(fd_entry_t *e, uint32_t addr, uint32_t addrlen_ptr, int flag
     return fd;
 }
 
-int32_t unix_getname(fd_entry_t *e, uint32_t addr, uint32_t addrlen_ptr, int peer)
+int32_t unix_getname(fd_entry_t *e, uintptr_t addr, uintptr_t addrlen_ptr, int peer)
 {
     struct unix_sock *s = sock_of(e);
 
@@ -1522,7 +1508,7 @@ static uint32_t buf_size(int32_t v)
     return (uint32_t)v * 2u;
 }
 
-int32_t unix_setsockopt(fd_entry_t *e, int level, int name, uint32_t val, uint32_t len)
+int32_t unix_setsockopt(fd_entry_t *e, int level, int name, uintptr_t val, uint32_t len)
 {
     struct unix_sock *s = sock_of(e);
     int32_t v = 0;
@@ -1583,7 +1569,7 @@ int32_t unix_setsockopt(fd_entry_t *e, int level, int name, uint32_t val, uint32
     }
 }
 
-int32_t unix_getsockopt(fd_entry_t *e, int level, int name, uint32_t val, uint32_t len_ptr)
+int32_t unix_getsockopt(fd_entry_t *e, int level, int name, uintptr_t val, uintptr_t len_ptr)
 {
     struct unix_sock *s = sock_of(e);
     struct unix_cred c;
@@ -1669,10 +1655,10 @@ static int iov_copy(const struct kernel_iovec *iov, uint32_t iovlen, uint32_t sk
         uint32_t take;
 
         if (skip >= iov[i].iov_len) {
-            skip -= iov[i].iov_len;
+            skip -= (uint32_t)iov[i].iov_len;
             continue;
         }
-        take = iov[i].iov_len - skip;
+        take = (uint32_t)(iov[i].iov_len - skip);
         if (take > n) {
             take = n;
         }
@@ -1689,7 +1675,7 @@ static int iov_copy(const struct kernel_iovec *iov, uint32_t iovlen, uint32_t sk
 
 /* The descriptors of one SCM_RIGHTS message added to `out`, each with the
  * references of a descriptor taken. */
-static int32_t get_rights(uint32_t data, uint32_t n, struct unix_out *out)
+static int32_t get_rights(uintptr_t data, uint32_t n, struct unix_out *out)
 {
     fd_entry_t *grown;
     uint32_t i;
@@ -1729,7 +1715,7 @@ static int32_t get_rights(uint32_t data, uint32_t n, struct unix_out *out)
  * id, the thread group's and not a thread's, and ids, unless it is root, as
  * Linux checks them. They are named in the sender's namespaces and kept as
  * the kernel's ids. */
-static int32_t get_cred(uint32_t data, struct unix_out *out)
+static int32_t get_cred(uintptr_t data, struct unix_out *out)
 {
     const process_t *p = current_proc;
     struct unix_cred c;
@@ -1758,23 +1744,26 @@ static int32_t get_cred(uint32_t data, struct unix_out *out)
 }
 
 /* Read the caller's control messages into `out`. */
-static int32_t get_control(uint32_t control, uint32_t controllen, struct unix_out *out)
+static int32_t get_control(uintptr_t control, uint32_t controllen, struct unix_out *out)
 {
     uint32_t off = 0;
 
     while (off + CMSG_HDR <= controllen) {
-        uint32_t hdr[3];
+        struct kernel_cmsghdr hdr;
         int32_t rc;
 
-        if (copy_from_user(hdr, (const void __user *)(control + off), sizeof(hdr)) != 0) {
+        if (copy_from_user(&hdr, (const void __user *)(control + off), sizeof(hdr)) != 0) {
             return -EFAULT;
         }
-        if (hdr[0] < CMSG_HDR || hdr[0] > controllen - off || hdr[1] != SOL_SOCKET) {
+        if (hdr.cmsg_len < CMSG_HDR || hdr.cmsg_len > controllen - off ||
+            hdr.cmsg_level != SOL_SOCKET) {
             return -EINVAL;
         }
-        if (hdr[2] == SCM_RIGHTS) {
-            rc = get_rights(control + off + CMSG_HDR, (hdr[0] - CMSG_HDR) / 4u, out);
-        } else if (hdr[2] == SCM_CREDENTIALS && hdr[0] == CMSG_HDR + sizeof(struct unix_cred)) {
+        if (hdr.cmsg_type == SCM_RIGHTS) {
+            rc = get_rights(control + off + CMSG_HDR, (uint32_t)(hdr.cmsg_len - CMSG_HDR) / 4u,
+                            out);
+        } else if (hdr.cmsg_type == SCM_CREDENTIALS &&
+                   hdr.cmsg_len == CMSG_HDR + sizeof(struct unix_cred)) {
             rc = get_cred(control + off + CMSG_HDR, out);
         } else {
             rc = -EINVAL;
@@ -1782,7 +1771,7 @@ static int32_t get_control(uint32_t control, uint32_t controllen, struct unix_ou
         if (rc != 0) {
             return rc;
         }
-        off += CMSG_ALIGN(hdr[0]);
+        off += (uint32_t)CMSG_ALIGN(hdr.cmsg_len);
     }
     return 0;
 }
@@ -2295,7 +2284,7 @@ static void release_in(struct unix_in *in)
  * the rest once the table or the heap has no room for one or its number
  * cannot be written; the receive succeeds, as in Linux.
  */
-static uint32_t put_rights(uint32_t at, uint32_t room, struct unix_in *in, int flags)
+static uint32_t put_rights(uintptr_t at, uint32_t room, struct unix_in *in, int flags)
 {
     uint32_t given = 0;
 
@@ -2333,24 +2322,25 @@ static uint32_t put_rights(uint32_t at, uint32_t room, struct unix_in *in, int f
  * credentials, and the descriptors, each installed as a new descriptor.
  * Returns the bytes of the buffer used.
  */
-static uint32_t put_control(uint32_t control, uint32_t controllen, struct unix_in *in, int flags)
+static uint32_t put_control(uintptr_t control, uint32_t controllen, struct unix_in *in, int flags)
 {
     uint32_t used = 0;
-    uint32_t hdr[3];
+    struct kernel_cmsghdr hdr;
     uint32_t given;
     struct unix_cred seen;
 
+    k_memset(&hdr, 0, sizeof(hdr));
     if (in->has_cred) {
         seen = cred_seen(in->cred);
-        hdr[0] = CMSG_HDR + sizeof(seen);
-        hdr[1] = SOL_SOCKET;
-        hdr[2] = SCM_CREDENTIALS;
-        if (!control || controllen < hdr[0] ||
-            copy_to_user((void __user *)control, hdr, sizeof(hdr)) != 0 ||
+        hdr.cmsg_len = CMSG_HDR + sizeof(seen);
+        hdr.cmsg_level = SOL_SOCKET;
+        hdr.cmsg_type = SCM_CREDENTIALS;
+        if (!control || controllen < hdr.cmsg_len ||
+            copy_to_user((void __user *)control, &hdr, sizeof(hdr)) != 0 ||
             copy_to_user((void __user *)(control + CMSG_HDR), &seen, sizeof(seen)) != 0) {
             in->flags |= MSG_CTRUNC;
         } else {
-            used = CMSG_ALIGN(hdr[0]);
+            used = (uint32_t)CMSG_ALIGN(hdr.cmsg_len);
         }
     }
     if (in->nfds == 0) {
@@ -2358,20 +2348,22 @@ static uint32_t put_control(uint32_t control, uint32_t controllen, struct unix_i
     }
     given = put_rights(
         control + used,
-        (control && controllen > used + CMSG_HDR) ? (controllen - used - CMSG_HDR) / 4u : 0u, in,
+        (control && controllen > used + CMSG_HDR) ? (uint32_t)(controllen - used - CMSG_HDR) / 4u
+                                                  : 0u,
+        in,
         flags);
     if (given > 0) {
-        hdr[0] = CMSG_HDR + 4u * given;
-        hdr[1] = SOL_SOCKET;
-        hdr[2] = SCM_RIGHTS;
-        if (copy_to_user((void __user *)(control + used), hdr, sizeof(hdr)) == 0) {
-            used += CMSG_ALIGN(hdr[0]);
+        hdr.cmsg_len = CMSG_HDR + 4u * given;
+        hdr.cmsg_level = SOL_SOCKET;
+        hdr.cmsg_type = SCM_RIGHTS;
+        if (copy_to_user((void __user *)(control + used), &hdr, sizeof(hdr)) == 0) {
+            used += (uint32_t)CMSG_ALIGN(hdr.cmsg_len);
         }
     }
     return used;
 }
 
-int32_t unix_sendto(fd_entry_t *e, uint32_t buf, uint32_t len, int flags, uint32_t addr,
+int32_t unix_sendto(fd_entry_t *e, uintptr_t buf, uint32_t len, int flags, uintptr_t addr,
                     uint32_t addrlen)
 {
     struct kernel_iovec iov;
@@ -2399,8 +2391,8 @@ int32_t unix_sendto(fd_entry_t *e, uint32_t buf, uint32_t len, int flags, uint32
  * length pointer is EFAULT before anything is taken, so the message stays
  * queued; Linux fails the call only after it has taken the message.
  */
-int32_t unix_recvfrom(fd_entry_t *e, uint32_t buf, uint32_t len, int flags, uint32_t addr,
-                      uint32_t addrlen_ptr)
+int32_t unix_recvfrom(fd_entry_t *e, uintptr_t buf, uint32_t len, int flags, uintptr_t addr,
+                      uintptr_t addrlen_ptr)
 {
     struct kernel_iovec iov;
     struct unix_in in;
@@ -2431,9 +2423,10 @@ int32_t unix_recvfrom(fd_entry_t *e, uint32_t buf, uint32_t len, int flags, uint
 
 /* The caller's iovec array, copied in and checked, with its total length
  * in `*total`. The caller frees the array, whatever the result. */
-static int32_t get_iov(uint32_t uiov, uint32_t iovlen, struct kernel_iovec **iov, uint32_t *total)
+static int32_t get_iov(uintptr_t uiov, unsigned long iovlen, struct kernel_iovec **iov,
+                       uint32_t *total)
 {
-    uint32_t i;
+    unsigned long i;
 
     *iov = NULL;
     *total = 0;
@@ -2455,14 +2448,14 @@ static int32_t get_iov(uint32_t uiov, uint32_t iovlen, struct kernel_iovec **iov
         if ((*iov)[i].iov_len > 0x7FFFFFFFu - *total) {
             return -EINVAL;
         }
-        *total += (*iov)[i].iov_len;
+        *total += (uint32_t)(*iov)[i].iov_len;
     }
     return 0;
 }
 
-int32_t unix_sendmsg(fd_entry_t *e, uint32_t msg, int flags)
+int32_t unix_sendmsg(fd_entry_t *e, uintptr_t msg, int flags)
 {
-    uint32_t hdr[MH_WORDS];
+    struct kernel_msghdr hdr;
     struct kernel_iovec *iov;
     struct unix_out out;
     struct unix_name to;
@@ -2470,23 +2463,23 @@ int32_t unix_sendmsg(fd_entry_t *e, uint32_t msg, int flags)
     uint32_t total;
     int32_t rc;
 
-    if (copy_from_user(hdr, (const void __user *)msg, sizeof(hdr)) != 0) {
+    if (copy_from_user(&hdr, (const void __user *)msg, sizeof(hdr)) != 0) {
         return -EFAULT;
     }
-    named = hdr[MH_NAME] != 0 && hdr[MH_NAMELEN] != 0;
+    named = hdr.msg_name != 0 && hdr.msg_namelen != 0;
     if (named) {
-        rc = get_name(hdr[MH_NAME], hdr[MH_NAMELEN], &to);
+        rc = get_name(hdr.msg_name, hdr.msg_namelen, &to);
         if (rc != 0) {
             return rc;
         }
     }
     k_memset(&out, 0, sizeof(out));
-    rc = get_iov(hdr[MH_IOV], hdr[MH_IOVLEN], &iov, &total);
-    if (rc == 0 && hdr[MH_CONTROL] && hdr[MH_CONTROLLEN]) {
-        rc = get_control(hdr[MH_CONTROL], hdr[MH_CONTROLLEN], &out);
+    rc = get_iov(hdr.msg_iov, hdr.msg_iovlen, &iov, &total);
+    if (rc == 0 && hdr.msg_control && hdr.msg_controllen) {
+        rc = get_control(hdr.msg_control, USER_LEN32(hdr.msg_controllen), &out);
     }
     if (rc == 0) {
-        rc = send_core(e, iov, hdr[MH_IOVLEN], total, named ? &to : NULL, &out, flags);
+        rc = send_core(e, iov, (uint32_t)hdr.msg_iovlen, total, named ? &to : NULL, &out, flags);
     } else {
         release_out(&out);
     }
@@ -2494,52 +2487,54 @@ int32_t unix_sendmsg(fd_entry_t *e, uint32_t msg, int flags)
     return rc;
 }
 
-int32_t unix_recvmsg(fd_entry_t *e, uint32_t msg, int flags)
+int32_t unix_recvmsg(fd_entry_t *e, uintptr_t msg, int flags)
 {
-    uint32_t hdr[MH_WORDS];
+    struct kernel_msghdr hdr;
     struct kernel_iovec *iov;
     struct unix_in in;
     uint32_t total;
     int32_t rc;
 
-    if (copy_from_user(hdr, (const void __user *)msg, sizeof(hdr)) != 0) {
+    if (copy_from_user(&hdr, (const void __user *)msg, sizeof(hdr)) != 0) {
         return -EFAULT;
     }
     if (!user_buffer_ok(msg, sizeof(hdr), 1) ||
-        (hdr[MH_CONTROL] && !user_buffer_ok(hdr[MH_CONTROL], hdr[MH_CONTROLLEN], 1))) {
+        (hdr.msg_control &&
+         !user_buffer_ok(hdr.msg_control, USER_LEN32(hdr.msg_controllen), 1))) {
         return -EFAULT;
     }
-    rc = get_iov(hdr[MH_IOV], hdr[MH_IOVLEN], &iov, &total);
+    rc = get_iov(hdr.msg_iov, hdr.msg_iovlen, &iov, &total);
     if (rc != 0) {
         kfree(iov);
         return rc;
     }
     k_memset(&in, 0, sizeof(in));
     transit_enter(&in);
-    rc = recv_core(e, iov, hdr[MH_IOVLEN], total, flags, &in);
+    rc = recv_core(e, iov, (uint32_t)hdr.msg_iovlen, total, flags, &in);
     kfree(iov);
     if (rc < 0) {
         release_in(&in);
         transit_leave(&in);
         return rc;
     }
-    hdr[MH_CONTROLLEN] = put_control(hdr[MH_CONTROL], hdr[MH_CONTROLLEN], &in, flags);
+    hdr.msg_controllen =
+        put_control(hdr.msg_control, USER_LEN32(hdr.msg_controllen), &in, flags);
     transit_leave(&in);
-    if (hdr[MH_NAME]) {
+    if (hdr.msg_name) {
         uint8_t sa[SUN_PATH_OFF + UNIX_PATH_MAX + 1];
         uint32_t full = in.from.len ? name_addrlen(&in.from) : 0u;
-        uint32_t give = hdr[MH_NAMELEN] < full ? hdr[MH_NAMELEN] : full;
+        uint32_t give = (uint32_t)hdr.msg_namelen < full ? (uint32_t)hdr.msg_namelen : full;
 
         k_memset(sa, 0, sizeof(sa));
         sa[0] = AF_UNIX;
         k_memcpy(sa + SUN_PATH_OFF, in.from.path, in.from.len);
-        if (give > 0 && copy_to_user((void __user *)hdr[MH_NAME], sa, give) != 0) {
+        if (give > 0 && copy_to_user((void __user *)hdr.msg_name, sa, give) != 0) {
             return -EFAULT;
         }
-        hdr[MH_NAMELEN] = full;
+        hdr.msg_namelen = full;
     }
-    hdr[MH_FLAGS] = in.flags;
-    if (copy_to_user((void __user *)msg, hdr, sizeof(hdr)) != 0) {
+    hdr.msg_flags = in.flags;
+    if (copy_to_user((void __user *)msg, &hdr, sizeof(hdr)) != 0) {
         return -EFAULT;
     }
     return rc;
@@ -2547,12 +2542,12 @@ int32_t unix_recvmsg(fd_entry_t *e, uint32_t msg, int flags)
 
 static int32_t unix_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
-    return unix_recvfrom(e, (uint32_t)(__force uintptr_t)buf, count, 0, 0, 0);
+    return unix_recvfrom(e, (__force uintptr_t)buf, count, 0, 0, 0);
 }
 
 static int32_t unix_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
-    return unix_sendto(e, (uint32_t)(__force uintptr_t)buf, count, 0, 0, 0);
+    return unix_sendto(e, (__force uintptr_t)buf, count, 0, 0, 0);
 }
 
 /* Whether a send would not wait: a connected socket's peer has room in its
@@ -2600,7 +2595,7 @@ static short unix_poll(fd_entry_t *e, short events, struct wait_queue **wq)
     return (short)((mask & events) | (mask & (POLLERR | POLLHUP)));
 }
 
-static int32_t unix_ioctl(fd_entry_t *e, uint32_t request, uint32_t arg)
+static int32_t unix_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 {
     struct unix_sock *s = sock_of(e);
     int32_t n;
