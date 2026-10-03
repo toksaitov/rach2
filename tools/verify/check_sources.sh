@@ -4,8 +4,12 @@
 # run by the style check, tools/verify/check.sh).
 #
 # Every C source on disk in the kernel tree (rach2/kernel.c + rach2/sys/**/*.c)
-# must appear in the explicit C_SRC list in rach2/sources.mk, and every C_SRC
-# entry must exist on disk. A new kernel .c that is not added to C_SRC would be
+# must appear in the explicit C_SRC list in rach2/sources.mk of some
+# architecture, and every C_SRC entry must exist on disk. C_SRC is the shared
+# list and the architecture's own, sys/arch/ARCH/sources.mk, so the list
+# checked is the union over every architecture that has a processor's
+# directory with a source list: an i686 file is in i686's alone, an x86-64
+# one in x86-64's alone, and the PC's in both. A new kernel .c that is not added to C_SRC would be
 # silently left out of the build (and out of the ABI/boot tests), so this fails
 # loudly instead. Doom and the vendored musl/busybox/dropbear trees keep their
 # own source lists and are intentionally NOT gated here.
@@ -18,9 +22,25 @@ set -u
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 K="$REPO/rach2"
 
-# The explicit list the build compiles, expanded by Make (one source per line).
-listed=$(make --no-print-directory -C "$K" print-c-src 2>/dev/null \
-         | tr ' ' '\n' | sed '/^[[:space:]]*$/d' | sort -u)
+# The architectures: each directory under sys/arch with a cpu.h, the
+# processor's, and a sources.mk. sys/arch/x86 has the PC's list, which the
+# two x86 architectures include, and no cpu.h; arm and arm64 have no list.
+arches=$(cd "$K/sys/arch" && for d in */; do
+    d=${d%/}
+    [ -f "$d/cpu.h" ] && [ -f "$d/sources.mk" ] && echo "$d"
+done)
+if [ -z "$arches" ]; then
+    echo "check-sources: no architecture with a source list under rach2/sys/arch" >&2
+    exit 2
+fi
+
+# The explicit lists the builds compile, expanded by Make (one source per
+# line). Printing a list compiles nothing, so CROSS_CC names a command that
+# exists, and a machine without one architecture's cross compiler still
+# checks its list.
+listed=$(for a in $arches; do
+    make --no-print-directory -C "$K" ARCH="$a" CROSS_CC=true print-c-src 2>/dev/null
+done | tr ' ' '\n' | sed '/^[[:space:]]*$/d' | sort -u)
 
 # Every C source actually on disk in the kernel tree.
 ondisk=$(cd "$K" && find kernel.c sys -name '*.c' 2>/dev/null | sed 's#^\./##' | sort -u)
@@ -52,6 +72,6 @@ if [ -n "$missing" ]; then
 fi
 
 if [ "$rc" -eq 0 ]; then
-    echo "check-sources: OK ($(grep -c . "$lf") kernel sources listed and present)"
+    echo "check-sources: OK ($(grep -c . "$lf") kernel sources listed and present, for" $arches")"
 fi
 exit "$rc"
