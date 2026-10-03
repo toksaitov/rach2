@@ -160,7 +160,7 @@ void schedule(void)
 
     fpu_save(old->fpu);
     fpu_restore(next->fpu);
-    ptrace_switch_debug(old, next);
+    arch_debug_switch(old, next);
     current_proc = next;
 
     switch_context(old, next);

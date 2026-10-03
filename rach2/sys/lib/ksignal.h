@@ -97,7 +97,7 @@ struct k_siginfo {
     uint32_t pid;
     uint32_t uid;
     int32_t status;
-    uint32_t addr;
+    uintptr_t addr;
     int32_t err;
 };
 

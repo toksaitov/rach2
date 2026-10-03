@@ -91,6 +91,13 @@ typedef uint32_t pte_t;
 #define AUDIT_ARCH  0x40000028u /* AUDIT_ARCH_ARM */
 #define ARCH_NAME   "armv7l"
 
+/* The words of ARM's `user_regs_struct`, which ptrace(2)'s register
+ * set and a core file's NT_PRSTATUS note have, and the type of the user
+ * and group ids in the core file's NT_PRPSINFO note, Linux's
+ * `__kernel_uid_t`. */
+#define ARCH_GREGS 18
+typedef unsigned short core_uid_t;
+
 /* A GIC's shared peripheral interrupts are numbered from 32. */
 #define IRQ_VECTOR(line) (32 + (line))
 #define ISR_DEVICE_FIRST 32

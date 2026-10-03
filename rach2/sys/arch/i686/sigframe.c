@@ -112,6 +112,19 @@ void sigframe_fill_siginfo(uint8_t *out, int signo, const struct k_siginfo *info
     put32(out + 20, (uint32_t)info->status);
 }
 
+void sigframe_take_siginfo(const uint8_t *in, struct k_siginfo *info)
+{
+    int32_t code;
+
+    k_memset(info, 0, sizeof(*info));
+    k_memcpy(&code, in + 8, 4);
+    info->code = code;
+    k_memcpy(&info->pid, in + 12, 4);
+    k_memcpy(&info->uid, in + 16, 4);
+    k_memcpy(&info->status, in + 20, 4);
+    k_memcpy(&info->addr, in + 12, 4);
+}
+
 static void fill_sigcontext(struct lx_sigcontext *sc, const isr_params_t *tf, uint32_t fp_addr,
                             uint64_t oldmask)
 {

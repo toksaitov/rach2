@@ -386,6 +386,11 @@ void free_process(process_t *proc);
 /** Get process by PID; returns the record, or NULL if not found. */
 process_t *get_process(uint32_t pid);
 
+/** The user-mode registers of the thread `t`, which is not running in user
+ * mode: the frame its entry to the kernel saved at the top of its kernel
+ * stack. */
+isr_params_t *proc_user_frame(const process_t *t);
+
 /* Whether thread `p` has privilege, which Linux divides into capabilities
  * and this kernel keeps whole: an effective user ID of 0, with the
  * capabilities not given up (`nocaps`), in the first user namespace; a

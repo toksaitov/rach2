@@ -319,6 +319,11 @@ process_t *get_process(uint32_t pid)
     return NULL;
 }
 
+isr_params_t *proc_user_frame(const process_t *t)
+{
+    return (isr_params_t *)(t->kernel_stack - sizeof(isr_params_t));
+}
+
 /**
  * Reparent every child of `dead_pid` onto init, the init of its PID
  * namespace for a child in a namespace below the first (`ns_reaper`), and

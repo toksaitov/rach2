@@ -106,16 +106,9 @@ void ptrace_tracer_gone(uint32_t tgid);
  * since each may make the tracer's requests. 0 for no tracer. */
 int ptrace_tracer_privileged(const process_t *t);
 
-/** Load the debug registers of `next`, or clear what `old` left, at a switch
- * between the two. */
-void ptrace_switch_debug(const process_t *old, const process_t *next);
-
-/**
- * Read the debug status (DR6) after a debug exception into the current
- * thread's copy, clear it for the next exception, and say what it was: the
- * siginfo code, TRAP_TRACE for a single step and TRAP_HWBKPT for a hardware
- * breakpoint, 0 for neither.
- */
-int32_t ptrace_debug_status(void);
+/** The thread `pid` when it is still traced by the caller and stopped for
+ * it, or NULL: how a request that copied from the caller's memory, which may
+ * sleep, finds its thread again. */
+process_t *ptrace_tracee(uint32_t pid);
 
 #endif /* _PTRACE_H_ */

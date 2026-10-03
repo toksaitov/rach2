@@ -9,6 +9,7 @@
 #include "../../lib/kstring.h"
 #include "../../proc/process.h"
 #include "../../proc/ptrace.h"
+#include "debugreg.h"
 #include "../i686/tss.h"
 
 /*
@@ -137,7 +138,7 @@ static int _exception_signal(const isr_params_t *params, struct k_siginfo *info)
         info->addr = params->eip;
         return SIGFPE;
     case 1: /* debug: DR6 says whether a step or a breakpoint */
-        info->code = ptrace_debug_status();
+        info->code = debugreg_status();
         if (info->code == 0) {
             info->code = TRAP_TRACE;
         }
@@ -196,7 +197,7 @@ static void _exception_handler(isr_params_t *params)
         struct k_siginfo info;
 
         k_memset(&info, 0, sizeof(info));
-        info.code = ptrace_debug_status();
+        info.code = debugreg_status();
         params->eflags &= ~0x100u;
         if (info.code == TRAP_HWBKPT) {
             signal_post_thread(current_proc, SIGTRAP, &info);

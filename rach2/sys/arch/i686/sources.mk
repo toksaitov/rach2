@@ -17,6 +17,7 @@ ARCH_ASM_SRC = sys/arch/i686/loader.s \
 
 ARCH_C_SRC = sys/arch/i686/mmu.c \
     sys/arch/i686/context.c \
+    sys/arch/i686/ptrace.c \
     sys/arch/i686/usertest.c \
     sys/arch/i686/gdt.c \
     sys/arch/i686/tss.c \

@@ -28,6 +28,7 @@
  *   FPU_STATE_SIZE         the bytes of a floating-point save area
  *   USER_ADDR_MIN, USER_ADDR_MAX  the range a program may map
  *   ELF_CLASS, ELF_MACHINE the programs the kernel loads
+ *   ARCH_GREGS             the words of Linux's `user_regs_struct`
  *   AUDIT_ARCH             the architecture seccomp's filters see
  *   ARCH_NAME              what uname(2) reports as the machine
  *   pte_t, PTE_*, MMU_TABLE_ENTRIES  a page table entry, its bits, and the
@@ -128,6 +129,38 @@ void arch_fork_frame(struct process *child, const isr_params_t *params, uintptr_
 /** Nonzero when the process record's layout is not what the context switch
  * reads at fixed offsets. */
 int arch_context_check(void);
+
+/*
+ * Tracing and core files. The shared ptrace(2) answers the requests every
+ * architecture has; the registers, the floating-point state and the
+ * hardware breakpoints are the architecture's.
+ */
+
+/** Fill `regs` with the ARCH_GREGS user registers of `t`, a thread stopped
+ * for its tracer or dumping core, in the order of Linux's
+ * `user_regs_struct`. */
+void arch_regs_get(const struct process *t, unsigned long *regs);
+
+/** Turn single-stepping of the stopped thread `t` on or off. */
+void arch_ptrace_step(struct process *t, int on);
+
+/** The ptrace(2) requests of this architecture for `t`, the thread `pid`,
+ * stopped for the caller: the register sets, the floating-point state, the
+ * words of `struct user` and the thread pointer. -EIO for a request it does
+ * not have. */
+long arch_ptrace(struct process *t, uint32_t pid, long request, unsigned long addr,
+                 unsigned long data);
+
+/** At a switch from `old` to `next`: load the hardware breakpoints `next`
+ * has, or clear those `old` left. */
+void arch_debug_switch(const struct process *old, const struct process *next);
+
+/** The bytes of the floating-point notes of one thread in a core file. */
+uint32_t arch_core_fp_size(void);
+
+/** Put the floating-point notes of the thread `t` at `*p`, with
+ * `core_note_put`, and step past them. */
+void arch_core_fp_notes(uint8_t **p, const struct process *t);
 
 /* The debug shell's ring-3 exercise: a payload that writes this message
  * through a system call, then spins, and the message, both in pages the

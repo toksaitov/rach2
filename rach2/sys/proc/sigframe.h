@@ -38,10 +38,17 @@ int sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *sa,
  */
 int sigframe_restore(isr_params_t *tf, int rt, uint64_t *mask);
 
-/** Write the 128-byte i386 `siginfo_t` of `signo` with `info` into `out`:
- * signo, errno and code, then the fault's address, or the sender's pid and
- * uid and a child's status. */
+/* The bytes of a `siginfo_t`, on every architecture. */
+#define SIGINFO_SIZE 128
+
+/** Write the `siginfo_t` of `signo` with `info` into `out`: signo, errno and
+ * code, then the fault's address, or the sender's pid and uid and a child's
+ * status. */
 void sigframe_fill_siginfo(uint8_t *out, int signo, const struct k_siginfo *info);
+
+/** Read the code, the sender's pid and uid, the status and the address of
+ * the `siginfo_t` at `in` into `info`, for PTRACE_SETSIGINFO. */
+void sigframe_take_siginfo(const uint8_t *in, struct k_siginfo *info);
 
 /**
  * Whether the user stack pointer `sp` lies on the current process's

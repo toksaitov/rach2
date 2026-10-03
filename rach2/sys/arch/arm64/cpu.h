@@ -90,6 +90,13 @@ typedef uint64_t pte_t;
 #define AUDIT_ARCH  0xC00000B7u /* AUDIT_ARCH_AARCH64 */
 #define ARCH_NAME   "aarch64"
 
+/* The words of AArch64's `user_regs_struct`, which ptrace(2)'s register
+ * set and a core file's NT_PRSTATUS note have, and the type of the user
+ * and group ids in the core file's NT_PRPSINFO note, Linux's
+ * `__kernel_uid_t`. */
+#define ARCH_GREGS 34
+typedef unsigned int core_uid_t;
+
 /* A GIC's shared peripheral interrupts are numbered from 32. */
 #define IRQ_VECTOR(line) (32 + (line))
 #define ISR_DEVICE_FIRST 32

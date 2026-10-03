@@ -4,42 +4,29 @@
 
 #include "ptrace.h"
 
-#include "../arch/x86/fpu.h"
 #include "ns.h"
 #include "sched.h"
 #include "sigframe.h"
 #include "tgroup.h"
-#include "../arch/i686/tls.h"
 #include "../lib/kerrno.h"
 #include "../lib/kirq.h"
 #include "../lib/kstring.h"
 #include "../mm/mm.h"
 #include "../mm/paging.h"
 #include "../mm/usercopy.h"
-#include "../arch/i686/gdt.h"
 
 /* The requests. */
 #define PTRACE_TRACEME         0
 #define PTRACE_PEEKTEXT        1
 #define PTRACE_PEEKDATA        2
-#define PTRACE_PEEKUSER        3
 #define PTRACE_POKETEXT        4
 #define PTRACE_POKEDATA        5
-#define PTRACE_POKEUSER        6
 #define PTRACE_CONT            7
 #define PTRACE_KILL            8
 #define PTRACE_SINGLESTEP      9
-#define PTRACE_GETREGS         12
-#define PTRACE_SETREGS         13
-#define PTRACE_GETFPREGS       14
-#define PTRACE_SETFPREGS       15
 #define PTRACE_ATTACH          16
 #define PTRACE_DETACH          17
-#define PTRACE_GETFPXREGS      18
-#define PTRACE_SETFPXREGS      19
 #define PTRACE_SYSCALL         24
-#define PTRACE_GET_THREAD_AREA 25
-#define PTRACE_SET_THREAD_AREA 26
 #define PTRACE_SETOPTIONS      0x4200
 #define PTRACE_GETEVENTMSG     0x4201
 #define PTRACE_GETSIGINFO      0x4202
@@ -53,74 +40,6 @@
 #define PTRACE_O_TRACEEXEC    0x00000010u
 #define PTRACE_O_EXITKILL     0x00100000u
 #define PTRACE_O_MASK         0x001000FFu
-
-/* The i386 `struct user`: the 17 words of `user_regs_struct`, then the
- * floating-point and accounting fields, and the eight debug registers at
- * byte 252, 284 bytes in all. */
-enum {
-    R_EBX,
-    R_ECX,
-    R_EDX,
-    R_ESI,
-    R_EDI,
-    R_EBP,
-    R_EAX,
-    R_DS,
-    R_ES,
-    R_FS,
-    R_GS,
-    R_ORIG_EAX,
-    R_EIP,
-    R_CS,
-    R_EFL,
-    R_UESP,
-    R_SS,
-    R_COUNT
-};
-#define USER_FPVALID  68u
-#define USER_DEBUGREG 252u
-#define USER_SIZE     284u
-
-/* The user selectors: code, data, and the TLS entry's. */
-#define SEL_UCODE 0x1Bu
-#define SEL_UDATA 0x23u
-#define SEL_UTLS  0x33u
-
-/* The flags a tracer may change, Linux's FLAG_MASK: CF, PF, AF, ZF, SF, TF,
- * DF, OF, NT, RF and AC. */
-#define FLAG_MASK 0x00054DD5u
-#define EFLAGS_TF 0x00000100u
-
-/* DR7: the enable bits of the four breakpoints, the bits the processor
- * keeps set, and GD, which a tracer may not set. */
-#define DR7_ENABLES 0x000000FFu
-#define DR7_ONE     0x00000400u
-#define DR7_GD      0x00002000u
-
-/* DR6: the four breakpoints' bits and the single-step bit. */
-#define DR6_HITS 0x0000000Fu
-#define DR6_BS   0x00004000u
-
-/*
- * The debug registers, as bytes: TinyCC's assembler has no mnemonic for
- * them. `mov %drN, %eax` is 0F 21 /r and `mov %eax, %drN` 0F 23 /r, with
- * the register N in the ModRM byte's reg field and %eax in its r/m field.
- */
-#define DR_READ(n, v)  __asm__ __volatile__(".byte 0x0f, 0x21, " n : "=a"(v))
-#define DR_WRITE(n, v) __asm__ __volatile__(".byte 0x0f, 0x23, " n : : "a"(v) : "memory")
-#define DR0_MODRM      "0xc0"
-#define DR1_MODRM      "0xc8"
-#define DR2_MODRM      "0xd0"
-#define DR3_MODRM      "0xd8"
-#define DR6_MODRM      "0xf0"
-#define DR7_MODRM      "0xf8"
-
-/** The user-mode registers of the thread `t`, which is not running: the frame
- * its entry to the kernel pushed at the top of its kernel stack. */
-static isr_params_t *user_frame(const process_t *t)
-{
-    return (isr_params_t *)(t->kernel_stack - sizeof(isr_params_t));
-}
 
 /** Whether the current thread has SIGKILL pending, its own or its process's. */
 static int kill_pending(void)
@@ -265,7 +184,7 @@ void ptrace_syscall_stop(isr_params_t *tf, uint32_t nr, int leaving)
     }
     self->orig_nr = (int32_t)nr;
     if (!leaving) {
-        tf->eax = (uint32_t)-ENOSYS;
+        SC_RET(tf) = (unsigned long)-ENOSYS;
     }
     sig = ptrace_stop((signo << 8) | 0x7F, NULL);
     if (!leaving && ((self->sig_pending | self->tg->pending) & KSIG_BIT(SIGKILL))) {
@@ -375,7 +294,7 @@ static void ptrace_detach(process_t *t, int sig)
     uint32_t tracer = t->tracer;
 
     if (t->ptrace & PT_STEP) {
-        user_frame(t)->eflags &= ~EFLAGS_TF;
+        arch_ptrace_step(t, 0);
     }
     t->ptrace = 0;
     t->tracer = 0;
@@ -424,265 +343,18 @@ void ptrace_tracer_gone(uint32_t tgid)
     }
 }
 
-void ptrace_switch_debug(const process_t *old, const process_t *next)
-{
-    uint32_t v;
-
-    if (next && (next->debugreg[7] & DR7_ENABLES)) {
-        v = next->debugreg[0];
-        DR_WRITE(DR0_MODRM, v);
-        v = next->debugreg[1];
-        DR_WRITE(DR1_MODRM, v);
-        v = next->debugreg[2];
-        DR_WRITE(DR2_MODRM, v);
-        v = next->debugreg[3];
-        DR_WRITE(DR3_MODRM, v);
-        v = next->debugreg[7] | DR7_ONE;
-        DR_WRITE(DR7_MODRM, v);
-    } else if (old && (old->debugreg[7] & DR7_ENABLES)) {
-        v = DR7_ONE;
-        DR_WRITE(DR7_MODRM, v);
-    }
-}
-
-int32_t ptrace_debug_status(void)
-{
-    uint32_t dr6;
-    uint32_t zero = 0;
-
-    DR_READ(DR6_MODRM, dr6);
-    DR_WRITE(DR6_MODRM, zero);
-    if (current_proc) {
-        current_proc->debugreg[6] = dr6;
-    }
-    if (dr6 & DR6_HITS) {
-        return TRAP_HWBKPT;
-    }
-    return (dr6 & DR6_BS) ? TRAP_TRACE : 0;
-}
-
-/**
- * Whether the DR7 value `v` sets what a tracer may set with the addresses
- * `t` has in DR0 to DR3: no general-detect bit, and for each breakpoint it
- * enables an address aligned to its length whose bytes are all user
- * addresses, from USER_ADDR_MIN to the last below USER_ADDR_MAX, a length of
- * 1, 2 or 4 bytes, and an execute breakpoint of length 1; an I/O breakpoint,
- * which needs CR4.DE, is refused. The scheduler loads what this accepts into
- * the processor, where a breakpoint on a kernel address would fire in the
- * kernel's own code, an execute breakpoint there at every return to it.
- */
-static int dr7_valid(const process_t *t, uint32_t v)
-{
-    int i;
-
-    if (v & DR7_GD) {
-        return 0;
-    }
-    for (i = 0; i < 4; i++) {
-        uint32_t rw = (v >> (16 + 4 * i)) & 3u;
-        uint32_t len = (v >> (18 + 4 * i)) & 3u;
-        uint32_t bytes = len == 3u ? 4u : len + 1u;
-
-        if (!(v & (3u << (2 * i)))) {
-            continue;
-        }
-        if (rw == 2u || len == 2u || (rw == 0u && len != 0u) ||
-            (t->debugreg[i] & (bytes - 1u)) != 0 || t->debugreg[i] < USER_ADDR_MIN ||
-            t->debugreg[i] > USER_ADDR_MAX - bytes) {
-            return 0;
-        }
-    }
-    return 1;
-}
-
-/** Fill `r` with the user registers of the stopped thread `t`, in the order
- * of `user_regs_struct`. */
-static void regs_get(const process_t *t, uint32_t r[R_COUNT])
-{
-    const isr_params_t *tf = user_frame(t);
-
-    r[R_EBX] = tf->ebx;
-    r[R_ECX] = tf->ecx;
-    r[R_EDX] = tf->edx;
-    r[R_ESI] = tf->esi;
-    r[R_EDI] = tf->edi;
-    r[R_EBP] = tf->ebp;
-    r[R_EAX] = tf->eax;
-    r[R_DS] = tf->ds & 0xFFFFu;
-    r[R_ES] = tf->es & 0xFFFFu;
-    r[R_FS] = tf->fs & 0xFFFFu;
-    r[R_GS] = tf->gs & 0xFFFFu;
-    r[R_ORIG_EAX] = (uint32_t)t->orig_nr;
-    r[R_EIP] = tf->eip;
-    r[R_CS] = tf->cs & 0xFFFFu;
-    r[R_EFL] = tf->eflags;
-    r[R_UESP] = tf->user_esp;
-    r[R_SS] = tf->user_ss & 0xFFFFu;
-}
-
-/**
- * Set the user register `i` of the stopped thread `t` to `v`, as Linux's
- * `putreg` does: the flags only where a program may change them, a data
- * segment register only to a selector this kernel has (null, user data, or
- * the TLS entry's), and CS and SS only to the ones they have, since a return
- * to user mode with any other would fault in the kernel. An orig_eax of -1
- * stops an interrupted system call from being restarted. 0, or -EIO.
- */
-static int regs_set(process_t *t, int i, uint32_t v)
-{
-    isr_params_t *tf = user_frame(t);
-
-    switch (i) {
-    case R_EBX:
-        tf->ebx = v;
-        break;
-    case R_ECX:
-        tf->ecx = v;
-        break;
-    case R_EDX:
-        tf->edx = v;
-        break;
-    case R_ESI:
-        tf->esi = v;
-        break;
-    case R_EDI:
-        tf->edi = v;
-        break;
-    case R_EBP:
-        tf->ebp = v;
-        break;
-    case R_EAX:
-        tf->eax = v;
-        break;
-    case R_DS:
-    case R_ES:
-    case R_FS:
-    case R_GS:
-        v &= 0xFFFFu;
-        if (v != 0 && v != SEL_UDATA && v != SEL_UTLS) {
-            return -EIO;
-        }
-        if (i == R_DS) {
-            tf->ds = v;
-        } else if (i == R_ES) {
-            tf->es = v;
-        } else if (i == R_FS) {
-            tf->fs = v;
-        } else {
-            tf->gs = v;
-        }
-        break;
-    case R_ORIG_EAX:
-        t->orig_nr = (int32_t)v;
-        if ((int32_t)v == -1) {
-            t->restart_nr = 0;
-        }
-        break;
-    case R_EIP:
-        tf->eip = v;
-        break;
-    case R_CS:
-        if ((v & 0xFFFFu) != SEL_UCODE) {
-            return -EIO;
-        }
-        break;
-    case R_EFL:
-        tf->eflags = (tf->eflags & ~FLAG_MASK) | (v & FLAG_MASK);
-        break;
-    case R_UESP:
-        tf->user_esp = v;
-        break;
-    case R_SS:
-        if ((v & 0xFFFFu) != SEL_UDATA) {
-            return -EIO;
-        }
-        break;
-    default:
-        return -EIO;
-    }
-    return 0;
-}
-
-/** PTRACE_PEEKUSER: the word at byte `off` of `struct user`, the registers,
- * the valid mark of the floating-point state, or a debug register, into
- * `*out`; the other fields read as 0. -EIO for an offset outside the
- * structure or not aligned to a word. */
-static int user_peek(const process_t *t, uint32_t off, uint32_t *out)
-{
-    uint32_t r[R_COUNT];
-
-    if ((off & 3u) != 0 || off >= USER_SIZE) {
-        return -EIO;
-    }
-    *out = 0;
-    if (off < R_COUNT * 4u) {
-        regs_get(t, r);
-        *out = r[off / 4u];
-    } else if (off == USER_FPVALID) {
-        *out = 1;
-    } else if (off >= USER_DEBUGREG) {
-        uint32_t n = (off - USER_DEBUGREG) / 4u;
-
-        *out = n == 7 ? (t->debugreg[7] | DR7_ONE) : t->debugreg[n];
-    }
-    return 0;
-}
-
-/** PTRACE_POKEUSER: set a register or a debug register; DR4 and DR5 and the
- * other fields of `struct user` are -EIO, and a DR7 `dr7_valid` refuses, or
- * an address in an enabled breakpoint's register that DR7 would then refuse,
- * -EINVAL. */
-static int user_poke(process_t *t, uint32_t off, uint32_t v)
-{
-    uint32_t n;
-
-    if ((off & 3u) != 0 || off >= USER_SIZE) {
-        return -EIO;
-    }
-    if (off < R_COUNT * 4u) {
-        return regs_set(t, (int)(off / 4u), v);
-    }
-    if (off < USER_DEBUGREG) {
-        return -EIO;
-    }
-    n = (off - USER_DEBUGREG) / 4u;
-    if (n == 4 || n == 5) {
-        return -EIO;
-    }
-    if (n < 4) {
-        uint32_t old = t->debugreg[n];
-
-        t->debugreg[n] = v;
-        if (!dr7_valid(t, t->debugreg[7])) {
-            t->debugreg[n] = old;
-            return -EINVAL;
-        }
-    } else if (n == 6) {
-        t->debugreg[6] = v;
-    } else {
-        v &= ~DR7_ONE;
-        if (!dr7_valid(t, v)) {
-            return -EINVAL;
-        }
-        t->debugreg[7] = v;
-    }
-    return 0;
-}
-
 /** Resume the stopped thread `t` with the signal `sig`, stepping one
  * instruction with `step` and stopping at system calls with `syscalls`. */
-static int ptrace_resume(process_t *t, uint32_t sig, int step, int syscalls)
+static int ptrace_resume(process_t *t, unsigned long sig, int step, int syscalls)
 {
-    isr_params_t *tf = user_frame(t);
-
     if (sig > KSIG_MAX) {
         return -EIO;
     }
     if (step) {
-        tf->eflags |= EFLAGS_TF;
+        arch_ptrace_step(t, 1);
         t->ptrace |= PT_STEP;
     } else if (t->ptrace & PT_STEP) {
-        tf->eflags &= ~EFLAGS_TF;
+        arch_ptrace_step(t, 0);
         t->ptrace &= ~PT_STEP;
     }
     if (syscalls) {
@@ -823,7 +495,7 @@ static int ptrace_traceme(void)
  * thread of the tracer may resume the thread, and reap it when it ends, or
  * SIGKILL end it, and its record may be gone.
  */
-static process_t *ptrace_tracee(uint32_t pid)
+process_t *ptrace_tracee(uint32_t pid)
 {
     process_t *t = get_process(pid);
 
@@ -846,7 +518,7 @@ static process_t *ptrace_tracee(uint32_t pid)
  * may not read, or one with ids the caller lacks, as Linux's
  * `ptrace_access_vm` refuses it.
  */
-static int32_t tracee_memory(process_t *t, uint32_t addr, uint32_t *word, int write)
+static int32_t tracee_memory(process_t *t, uintptr_t addr, unsigned long *word, int write)
 {
     struct mm *mm = t->mm;
     int32_t rc;
@@ -860,59 +532,11 @@ static int32_t tracee_memory(process_t *t, uint32_t addr, uint32_t *word, int wr
     return rc;
 }
 
-/** The 624-byte form of `t`'s floating-point state that `fpu_to_linux`
- * writes: the x87 part in the `fnsave` layout, then the `fxsave` image at
- * byte 112 unless the magic word at byte 110 is 0xFFFF. */
-static void fp_linux(const process_t *t, uint8_t *buf)
-{
-    fpu_to_linux(t->fpu, buf);
-}
-
-/** PTRACE_GETFPREGS and friends: copy the floating-point state of `t`, the
- * thread `pid`, to or from the user at `data`, as the 108-byte
- * `user_i387_struct` or, with `fx`, the 512-byte `fxsave` image. -EIO for
- * the image on a processor without FXSR, -EINVAL for one `fxrstor` would
- * fault on, -ESRCH for a thread that left its stop during the copy. */
-static int fp_access(uint32_t pid, process_t *t, uint32_t data, int fx, int set)
-{
-    uint8_t buf[FPU_LINUX_SIZE];
-    uint8_t area[FPU_STATE_SIZE + 16];
-    uint8_t *aligned = (uint8_t *)(((uintptr_t)area + 15u) & ~(uintptr_t)15u);
-    uint32_t off = fx ? 112u : 0u;
-    uint32_t len = fx ? (uint32_t)FPU_STATE_SIZE : 108u;
-
-    fp_linux(t, buf);
-    if (fx && buf[110] == 0xFF && buf[111] == 0xFF) {
-        return -EIO;
-    }
-    if (!set) {
-        return copy_to_user((void __user *)data, buf + off, len) == 0 ? 0 : -EFAULT;
-    }
-    if (copy_from_user(aligned, (const void __user *)data, len) != 0) {
-        return -EFAULT;
-    }
-    t = ptrace_tracee(pid);
-    if (!t) {
-        return -ESRCH;
-    }
-    fp_linux(t, buf);
-    k_memcpy(buf + off, aligned, len);
-    if (fx) {
-        fpu_to_linux(aligned, buf);
-    }
-    if (fpu_from_linux(buf, aligned) != 0) {
-        return -EINVAL;
-    }
-    k_memcpy(t->fpu, aligned, FPU_STATE_SIZE);
-    return 0;
-}
-
 /** PTRACE_GETSIGINFO and PTRACE_SETSIGINFO: the siginfo of the stop of `t`,
- * the thread `pid`, as the 128-byte i386 `siginfo_t`. */
-static int siginfo_access(uint32_t pid, process_t *t, uint32_t data, int set)
+ * the thread `pid`, as the 128-byte `siginfo_t`. */
+static int siginfo_access(uint32_t pid, process_t *t, uintptr_t data, int set)
 {
-    uint8_t buf[128];
-    int32_t code;
+    uint8_t buf[SIGINFO_SIZE];
 
     if (!set) {
         sigframe_fill_siginfo(buf, (int)((t->ptrace_status >> 8) & 0x7F), &t->ptrace_info);
@@ -925,66 +549,7 @@ static int siginfo_access(uint32_t pid, process_t *t, uint32_t data, int set)
     if (!t) {
         return -ESRCH;
     }
-    k_memcpy(&code, buf + 8, 4);
-    k_memset(&t->ptrace_info, 0, sizeof(t->ptrace_info));
-    t->ptrace_info.code = code;
-    k_memcpy(&t->ptrace_info.pid, buf + 12, 4);
-    k_memcpy(&t->ptrace_info.uid, buf + 16, 4);
-    k_memcpy(&t->ptrace_info.status, buf + 20, 4);
-    k_memcpy(&t->ptrace_info.addr, buf + 12, 4);
-    return 0;
-}
-
-/**
- * PTRACE_GET_THREAD_AREA and PTRACE_SET_THREAD_AREA: the TLS entry `idx` of
- * `t`, the thread `pid`, as a `user_desc` at `data`.
- *
- * Linux i386 has three TLS entries, 6 to 8, and GDB reads and writes back all
- * three. The kernel has one, GDT_TLS_ENTRY; the other two read as Linux reads
- * an unused entry, and a write to them may only leave them unused, in either
- * of the two forms Linux takes for that.
- */
-static int tls_access(uint32_t pid, process_t *t, uint32_t idx, uint32_t data, int set)
-{
-    user_desc_t desc;
-    uint32_t base;
-    uint32_t kind;
-
-    if (idx < GDT_TLS_ENTRY || idx > GDT_TLS_ENTRY + 2u) {
-        return -EINVAL;
-    }
-    if (!set) {
-        desc.entry_number = idx;
-        desc.base_addr = 0;
-        desc.limit = 0;
-        desc.flags = UD_READ_EXEC_ONLY | UD_SEG_NOT_PRESENT;
-        if (idx == GDT_TLS_ENTRY) {
-            desc.base_addr = t->tls_base;
-            desc.limit = 0xFFFFFu;
-            desc.flags = UD_SEG_32BIT | UD_LIMIT_IN_PAGES | UD_USEABLE;
-        }
-        return copy_to_user((void __user *)data, &desc, sizeof(desc)) == 0 ? 0 : -EFAULT;
-    }
-    if (copy_from_user(&desc, (const void __user *)data, sizeof(desc)) != 0) {
-        return -EFAULT;
-    }
-    if (idx != GDT_TLS_ENTRY) {
-        kind = desc.flags & 0x7Fu;
-        if (desc.base_addr != 0 || desc.limit != 0 ||
-            (kind != 0 && kind != (UD_READ_EXEC_ONLY | UD_SEG_NOT_PRESENT))) {
-            return -EINVAL;
-        }
-        return ptrace_tracee(pid) ? 0 : -ESRCH;
-    }
-    desc.entry_number = idx;
-    if (tls_resolve_base(&desc, &base) != 0) {
-        return -EINVAL;
-    }
-    t = ptrace_tracee(pid);
-    if (!t) {
-        return -ESRCH;
-    }
-    t->tls_base = base;
+    sigframe_take_siginfo(buf, &t->ptrace_info);
     return 0;
 }
 
@@ -995,13 +560,11 @@ static int tls_access(uint32_t pid, process_t *t, uint32_t idx, uint32_t data, i
  * (`ptrace_tracee`), one that copies out takes what it copies first, and
  * the memory requests hold the address space themselves (`tracee_memory`).
  */
-static int32_t ptrace_stopped(process_t *t, uint32_t pid, uint32_t request, uint32_t addr,
-                              uint32_t data)
+static long ptrace_stopped(process_t *t, uint32_t pid, long request, uintptr_t addr,
+                           unsigned long data)
 {
-    uint32_t word;
-    uint32_t r[R_COUNT];
+    unsigned long word;
     int32_t rc;
-    int i;
 
     switch (request) {
     case PTRACE_PEEKTEXT:
@@ -1014,38 +577,6 @@ static int32_t ptrace_stopped(process_t *t, uint32_t pid, uint32_t request, uint
     case PTRACE_POKETEXT:
     case PTRACE_POKEDATA:
         return tracee_memory(t, addr, &data, 1);
-    case PTRACE_PEEKUSER:
-        rc = user_peek(t, addr, &word);
-        if (rc == 0 && copy_to_user((void __user *)data, &word, sizeof(word)) != 0) {
-            rc = -EFAULT;
-        }
-        return rc;
-    case PTRACE_POKEUSER:
-        return user_poke(t, addr, data);
-    case PTRACE_GETREGS:
-        regs_get(t, r);
-        return copy_to_user((void __user *)data, r, sizeof(r)) == 0 ? 0 : -EFAULT;
-    case PTRACE_SETREGS:
-        if (copy_from_user(r, (const void __user *)data, sizeof(r)) != 0) {
-            return -EFAULT;
-        }
-        t = ptrace_tracee(pid);
-        if (!t) {
-            return -ESRCH;
-        }
-        for (i = 0; i < R_COUNT; i++) {
-            rc = regs_set(t, i, r[i]);
-            if (rc != 0) {
-                return rc;
-            }
-        }
-        return 0;
-    case PTRACE_GETFPREGS:
-    case PTRACE_SETFPREGS:
-        return fp_access(pid, t, data, 0, request == PTRACE_SETFPREGS);
-    case PTRACE_GETFPXREGS:
-    case PTRACE_SETFPXREGS:
-        return fp_access(pid, t, data, 1, request == PTRACE_SETFPXREGS);
     case PTRACE_CONT:
         return ptrace_resume(t, data, 0, 0);
     case PTRACE_SYSCALL:
@@ -1064,7 +595,7 @@ static int32_t ptrace_stopped(process_t *t, uint32_t pid, uint32_t request, uint
         if (data & ~PTRACE_O_MASK) {
             return -EINVAL;
         }
-        t->ptrace_opts = data;
+        t->ptrace_opts = (uint32_t)data;
         return 0;
     case PTRACE_GETEVENTMSG:
         word = t->ptrace_msg;
@@ -1072,19 +603,16 @@ static int32_t ptrace_stopped(process_t *t, uint32_t pid, uint32_t request, uint
     case PTRACE_GETSIGINFO:
     case PTRACE_SETSIGINFO:
         return siginfo_access(pid, t, data, request == PTRACE_SETSIGINFO);
-    case PTRACE_GET_THREAD_AREA:
-    case PTRACE_SET_THREAD_AREA:
-        return tls_access(pid, t, addr, data, request == PTRACE_SET_THREAD_AREA);
     default:
-        return -EIO;
+        return arch_ptrace(t, pid, request, addr, data);
     }
 }
 
 long sys_ptrace(isr_params_t *params)
 {
-    uint32_t request = params->ebx;
-    uint32_t addr = params->edx;
-    uint32_t data = params->esi;
+    long request = (long)SC_ARG(params, 0);
+    uintptr_t addr = SC_ARG(params, 2);
+    unsigned long data = SC_ARG(params, 3);
     uint32_t pid;
     process_t *t;
     struct k_siginfo info;
@@ -1095,13 +623,13 @@ long sys_ptrace(isr_params_t *params)
     if (request == PTRACE_TRACEME) {
         return ptrace_traceme();
     }
-    pid = pid_named(params->ecx);
+    pid = pid_named((uint32_t)SC_ARG(params, 1));
     t = get_process(pid);
     if (!t || t->state == PROC_UNUSED || t->state == PROC_ZOMBIE) {
         return -ESRCH;
     }
     if (request == PTRACE_ATTACH || request == PTRACE_SEIZE) {
-        return ptrace_attach(t, request == PTRACE_SEIZE, data);
+        return ptrace_attach(t, request == PTRACE_SEIZE, (uint32_t)data);
     }
     if (!(t->ptrace & PT_TRACED) || t->tracer != current_proc->tgid) {
         return -ESRCH;

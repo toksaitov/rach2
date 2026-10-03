@@ -6,7 +6,7 @@
 #include "coredump.h"
 
 #include "elf.h"
-#include "../arch/x86/fpu.h"
+#include "../fpu.h"
 #include "process.h"
 #include "tgroup.h"
 #include "wait_queue.h"
@@ -17,26 +17,96 @@
 #include "../mm/paging.h"
 #include "../mm/vm.h"
 
-/* The notes Linux writes for an i386 process, and their sizes. */
+/* The notes every architecture's core file has; the floating-point notes
+ * are the architecture's (`arch_core_fp_notes`). */
 #define NT_PRSTATUS 1u
-#define NT_FPREGSET 2u
 #define NT_PRPSINFO 3u
 #define NT_AUXV     6u
-#define NT_PRXFPREG 0x46E62B7Fu
 
-#define PRSTATUS_SIZE 144u
-#define PRPSINFO_SIZE 124u
-#define FPREGSET_SIZE 108u
-#define PRXFPREG_SIZE 512u
+/*
+ * Linux's `struct elf_prstatus` and `struct elf_prpsinfo`, declared with
+ * their C types, so that the compiler gives them the layout of the
+ * processor's ABI, as it gives a program's: 144 and 124 bytes on i686, 336
+ * and 136 on x86-64.
+ */
+struct core_prstatus {
+    int si_signo;
+    int si_code;
+    int si_errno;
+    short cursig;
+    unsigned long sigpend;
+    unsigned long sighold;
+    int pid;
+    int ppid;
+    int pgrp;
+    int sid;
+    long utime[2];
+    long stime[2];
+    long cutime[2];
+    long cstime[2];
+    unsigned long regs[ARCH_GREGS];
+    int fpvalid;
+};
 
-/* The ELF header, a program header and a section header. A file of PN_XNUM
- * program headers or more has PN_XNUM as the header's count, and the count
- * itself in the one section header it then has: ELF's extended numbering,
- * which Linux's core files use. */
-#define EHDR_SIZE 52u
-#define PHDR_SIZE 32u
-#define SHDR_SIZE 40u
-#define PN_XNUM   0xFFFFu
+struct core_prpsinfo {
+    char state;
+    char sname;
+    char zomb;
+    char nice;
+    unsigned long flag;
+    core_uid_t uid;
+    core_uid_t gid;
+    int pid;
+    int ppid;
+    int pgrp;
+    int sid;
+    char fname[16];
+    char psargs[80];
+};
+
+/*
+ * The ELF header, a program header and a section header, and the offsets of
+ * the fields this file sets, in the class the architecture's programs have.
+ * A file of PN_XNUM program headers or more has PN_XNUM as the header's
+ * count, and the count itself in the one section header it then has: ELF's
+ * extended numbering, which Linux's core files use.
+ */
+#if ELF_CLASS == ELFCLASS64
+#define EHDR_SIZE   64u
+#define PHDR_SIZE   56u
+#define SHDR_SIZE   64u
+#define E_SHOFF     40u
+#define E_EHSIZE    52u
+#define E_PHOFF     32u
+#define P_FLAGS     4u
+#define P_OFFSET    8u
+#define P_VADDR     16u
+#define P_FILESZ    32u
+#define P_MEMSZ     40u
+#define P_ALIGN     48u
+#define S_SIZE      32u
+#define S_INFO      44u
+#else
+#define EHDR_SIZE   52u
+#define PHDR_SIZE   32u
+#define SHDR_SIZE   40u
+#define E_SHOFF     32u
+#define E_EHSIZE    40u
+#define E_PHOFF     28u
+#define P_FLAGS     24u
+#define P_OFFSET    4u
+#define P_VADDR     8u
+#define P_FILESZ    16u
+#define P_MEMSZ     20u
+#define P_ALIGN     28u
+#define S_SIZE      20u
+#define S_INFO      28u
+#endif
+#define E_PHENTSIZE (E_EHSIZE + 2u)
+#define E_PHNUM     (E_EHSIZE + 4u)
+#define E_SHENTSIZE (E_EHSIZE + 6u)
+#define E_SHNUM     (E_EHSIZE + 8u)
+#define PN_XNUM     0xFFFFu
 
 /* What is being written and how much may be. */
 struct core_out {
@@ -50,8 +120,8 @@ struct core_out {
 /* What the file has of a region: its range and protection, and whether it
  * maps a file, taken once before anything is written. */
 struct core_region {
-    uint32_t start;
-    uint32_t end;
+    uintptr_t start;
+    uintptr_t end;
     uint32_t prot;
     int of_file;
 };
@@ -64,6 +134,18 @@ static void put16(uint8_t *p, uint16_t v)
 static void put32(uint8_t *p, uint32_t v)
 {
     k_memcpy(p, &v, sizeof(v));
+}
+
+/** Put an address, an offset or a size of the ELF class: 32 or 64 bits. */
+static void put_word(uint8_t *p, uintptr_t v)
+{
+#if ELF_CLASS == ELFCLASS64
+    uint64_t w = v;
+#else
+    uint32_t w = (uint32_t)v;
+#endif
+
+    k_memcpy(p, &w, sizeof(w));
 }
 
 /** Write `len` bytes of `buf`, or a hole of `len` zeros when `buf` is null,
@@ -91,16 +173,13 @@ static int out(struct core_out *o, const void *buf, uint32_t len)
     return 0;
 }
 
-/** The bytes a note of `descsz` bytes takes, its name "CORE" or "LINUX"
- * padded to eight bytes and its description to a word. */
-static uint32_t note_bytes(uint32_t descsz)
+uint32_t core_note_bytes(uint32_t descsz)
 {
     return 12u + 8u + ((descsz + 3u) & ~3u);
 }
 
-/** Put the note `type` named `name` with `desc` at `*p` and step past it. */
-static void note_put(uint8_t **p, const char *name, uint32_t type, const void *desc,
-                     uint32_t descsz)
+void core_note_put(uint8_t **p, const char *name, uint32_t type, const void *desc,
+                   uint32_t descsz)
 {
     uint8_t *q = *p;
     uint32_t namesz = (uint32_t)k_strlen(name) + 1u;
@@ -112,98 +191,75 @@ static void note_put(uint8_t **p, const char *name, uint32_t type, const void *d
     k_memcpy(q + 12, name, namesz);
     k_memcpy(q + 20, desc, descsz);
     k_memset(q + 20 + descsz, 0, ((descsz + 3u) & ~3u) - descsz);
-    *p = q + note_bytes(descsz);
+    *p = q + core_note_bytes(descsz);
 }
 
 /** Put a time in ticks as the timeval of an elf_prstatus. */
-static void put_timeval(uint8_t *p, uint32_t ticks)
+static void put_timeval(long *tv, uint32_t ticks)
 {
-    put32(p, ticks / 100u);
-    put32(p + 4, (ticks % 100u) * 10000u);
+    tv[0] = (long)(ticks / 100u);
+    tv[1] = (long)((ticks % 100u) * 10000u);
 }
 
 /**
- * Fill the i386 `elf_prstatus` of thread `t`, whose user registers are the
- * frame at the top of its kernel stack, with `signo` the signal that ends
- * the process: the signal, the pending and blocked sets' low words, the ids,
- * the times, the 17 registers in `user_regs_struct`'s order, and a valid
- * floating-point mark.
+ * Fill the `elf_prstatus` of thread `t`, with `signo` the signal that ends
+ * the process: the signal, the pending and blocked sets, the ids, the times,
+ * the registers in `user_regs_struct`'s order, and a valid floating-point
+ * mark.
  */
-static void prstatus_fill(uint8_t *d, const process_t *t, int signo)
+static void prstatus_fill(struct core_prstatus *d, const process_t *t, int signo)
 {
-    const isr_params_t *tf = (const isr_params_t *)(t->kernel_stack - sizeof(isr_params_t));
-    uint32_t regs[17];
-    int i;
-
-    regs[0] = tf->ebx;
-    regs[1] = tf->ecx;
-    regs[2] = tf->edx;
-    regs[3] = tf->esi;
-    regs[4] = tf->edi;
-    regs[5] = tf->ebp;
-    regs[6] = tf->eax;
-    regs[7] = tf->ds & 0xFFFFu;
-    regs[8] = tf->es & 0xFFFFu;
-    regs[9] = tf->fs & 0xFFFFu;
-    regs[10] = tf->gs & 0xFFFFu;
-    regs[11] = (uint32_t)t->orig_nr;
-    regs[12] = tf->eip;
-    regs[13] = tf->cs & 0xFFFFu;
-    regs[14] = tf->eflags;
-    regs[15] = tf->user_esp;
-    regs[16] = tf->user_ss & 0xFFFFu;
-    k_memset(d, 0, PRSTATUS_SIZE);
-    put32(d, (uint32_t)signo);
-    put16(d + 12, (uint16_t)signo);
-    put32(d + 16, (uint32_t)t->sig_pending);
-    put32(d + 20, (uint32_t)t->sig_blocked);
-    put32(d + 24, t->pid);
-    put32(d + 28, t->parent_pid);
-    put32(d + 32, t->pgid);
-    put32(d + 36, t->sid);
-    put_timeval(d + 40, t->utime);
-    put_timeval(d + 48, t->stime);
-    put_timeval(d + 56, t->tg->cutime);
-    put_timeval(d + 64, t->tg->cstime);
-    for (i = 0; i < 17; i++) {
-        put32(d + 72 + 4 * i, regs[i]);
-    }
-    put32(d + 140, 1);
+    k_memset(d, 0, sizeof(*d));
+    d->si_signo = signo;
+    d->cursig = (short)signo;
+    d->sigpend = (unsigned long)t->sig_pending;
+    d->sighold = (unsigned long)t->sig_blocked;
+    d->pid = (int)t->pid;
+    d->ppid = (int)t->parent_pid;
+    d->pgrp = (int)t->pgid;
+    d->sid = (int)t->sid;
+    put_timeval(d->utime, t->utime);
+    put_timeval(d->stime, t->stime);
+    put_timeval(d->cutime, t->tg->cutime);
+    put_timeval(d->cstime, t->tg->cstime);
+    arch_regs_get(t, d->regs);
+    d->fpvalid = 1;
 }
 
 /**
- * Fill the i386 `elf_prpsinfo` of the current process: its state, nice
- * value, ids, program name, and the start of its arguments, NULs made
- * spaces, as `ps` shows them, read from its stack.
+ * Fill the `elf_prpsinfo` of the current process: its state, nice value,
+ * ids, program name, and the start of its arguments, NULs made spaces, as
+ * `ps` shows them, read from its stack.
  */
-static void prpsinfo_fill(uint8_t *d)
+static void prpsinfo_fill(struct core_prpsinfo *d)
 {
     const process_t *p = current_proc;
     struct mm *mm = p->mm;
-    uint32_t len = mm->arg_end - mm->arg_start;
-    uint32_t i;
+    uintptr_t len = mm->arg_end - mm->arg_start;
+    uintptr_t i;
 
-    k_memset(d, 0, PRPSINFO_SIZE);
-    d[1] = 'R';
-    d[3] = (uint8_t)p->nice;
-    put16(d + 8, (uint16_t)p->ruid);
-    put16(d + 10, (uint16_t)p->rgid);
-    put32(d + 12, p->tgid);
-    put32(d + 16, p->parent_pid);
-    put32(d + 20, p->pgid);
-    put32(d + 24, p->sid);
-    k_memcpy(d + 28, p->comm, 16);
-    if (len > 79u) {
-        len = 79u;
+    k_memset(d, 0, sizeof(*d));
+    d->sname = 'R';
+    d->nice = (char)p->nice;
+    d->uid = (core_uid_t)p->ruid;
+    d->gid = (core_uid_t)p->rgid;
+    d->pid = (int)p->tgid;
+    d->ppid = (int)p->parent_pid;
+    d->pgrp = (int)p->pgid;
+    d->sid = (int)p->sid;
+    k_memcpy(d->fname, p->comm, sizeof(d->fname));
+    if (len > sizeof(d->psargs) - 1u) {
+        len = sizeof(d->psargs) - 1u;
     }
-    if (mm->arg_end > mm->arg_start && paging_access(mm, mm->arg_start, d + 44, len, 0) == 0) {
+    if (mm->arg_end > mm->arg_start &&
+        paging_access(mm, mm->arg_start, d->psargs, (uint32_t)len, 0) == 0) {
         for (i = 0; i + 1u < len; i++) {
-            if (d[44 + i] == 0) {
-                d[44 + i] = ' ';
+            if (d->psargs[i] == 0) {
+                d->psargs[i] = ' ';
             }
         }
     }
-    d[44 + 79] = 0;
+    d->psargs[sizeof(d->psargs) - 1u] = 0;
 }
 
 /** Whether `t` is a thread of the dumping process the core describes: its
@@ -221,12 +277,11 @@ static int core_thread(const process_t *t)
  * last switch saved. */
 uint8_t *core_notes(int signo, uint32_t *size)
 {
-    uint8_t status[PRSTATUS_SIZE];
-    uint8_t info[PRPSINFO_SIZE];
-    uint8_t fp[FPU_LINUX_SIZE];
+    struct core_prstatus status;
+    struct core_prpsinfo info;
+    uint32_t auxv_size = (uint32_t)sizeof(current_proc->mm->auxv);
     uint32_t threads = 0;
-    uint32_t each =
-        note_bytes(PRSTATUS_SIZE) + note_bytes(FPREGSET_SIZE) + note_bytes(PRXFPREG_SIZE);
+    uint32_t each = core_note_bytes(sizeof(status)) + arch_core_fp_size();
     uint8_t *buf;
     uint8_t *p;
     process_t *t;
@@ -236,30 +291,26 @@ uint8_t *core_notes(int signo, uint32_t *size)
             threads++;
         }
     }
-    *size = threads * each + note_bytes(PRPSINFO_SIZE) + note_bytes(MM_AUXV_WORDS * 4u);
+    *size = threads * each + core_note_bytes(sizeof(info)) + core_note_bytes(auxv_size);
     buf = kmalloc(*size);
     if (!buf) {
         return NULL;
     }
     p = buf;
-    prstatus_fill(status, current_proc, signo);
-    note_put(&p, "CORE", NT_PRSTATUS, status, PRSTATUS_SIZE);
-    prpsinfo_fill(info);
-    note_put(&p, "CORE", NT_PRPSINFO, info, PRPSINFO_SIZE);
-    note_put(&p, "CORE", NT_AUXV, current_proc->mm->auxv, MM_AUXV_WORDS * 4u);
+    prstatus_fill(&status, current_proc, signo);
+    core_note_put(&p, "CORE", NT_PRSTATUS, &status, sizeof(status));
+    prpsinfo_fill(&info);
+    core_note_put(&p, "CORE", NT_PRPSINFO, &info, sizeof(info));
+    core_note_put(&p, "CORE", NT_AUXV, current_proc->mm->auxv, auxv_size);
     fpu_save(current_proc->fpu);
-    fpu_to_linux(current_proc->fpu, fp);
-    note_put(&p, "CORE", NT_FPREGSET, fp, FPREGSET_SIZE);
-    note_put(&p, "LINUX", NT_PRXFPREG, fp + 112, PRXFPREG_SIZE);
+    arch_core_fp_notes(&p, current_proc);
     for (t = proc_list; t; t = t->next) {
         if (t == current_proc || !core_thread(t)) {
             continue;
         }
-        prstatus_fill(status, t, signo);
-        note_put(&p, "CORE", NT_PRSTATUS, status, PRSTATUS_SIZE);
-        fpu_to_linux(t->fpu, fp);
-        note_put(&p, "CORE", NT_FPREGSET, fp, FPREGSET_SIZE);
-        note_put(&p, "LINUX", NT_PRXFPREG, fp + 112, PRXFPREG_SIZE);
+        prstatus_fill(&status, t, signo);
+        core_note_put(&p, "CORE", NT_PRSTATUS, &status, sizeof(status));
+        arch_core_fp_notes(&p, t);
     }
     *size = (uint32_t)(p - buf);
     return buf;
@@ -270,7 +321,8 @@ uint8_t *core_notes(int signo, uint32_t *size)
  * device memory, which Linux leaves out too. */
 static uint32_t region_file_size(const struct core_region *r)
 {
-    return (r->prot & VM_PROT_READ) && !(r->prot & VM_PROT_IO) ? r->end - r->start : 0u;
+    return (r->prot & VM_PROT_READ) && !(r->prot & VM_PROT_IO) ? (uint32_t)(r->end - r->start)
+                                                                 : 0u;
 }
 
 /**
@@ -286,7 +338,7 @@ static uint32_t region_file_size(const struct core_region *r)
 static void region_write(struct core_out *o, struct mm *mm, const struct core_region *r)
 {
     uint8_t *page = kmalloc(PAGE_SIZE);
-    uint32_t addr;
+    uintptr_t addr;
 
     if (!page) {
         o->err = -ENOMEM;
@@ -346,20 +398,20 @@ static void ehdr_write(struct core_out *o, uint32_t phnum, uint32_t shoff)
     ehdr[EI_MAG1] = ELFMAG1;
     ehdr[EI_MAG2] = ELFMAG2;
     ehdr[EI_MAG3] = ELFMAG3;
-    ehdr[EI_CLASS] = ELFCLASS32;
+    ehdr[EI_CLASS] = ELF_CLASS;
     ehdr[EI_DATA] = ELFDATA2LSB;
     ehdr[EI_VERSION] = EV_CURRENT;
     put16(ehdr + 16, ET_CORE);
-    put16(ehdr + 18, EM_386);
+    put16(ehdr + 18, ELF_MACHINE);
     put32(ehdr + 20, EV_CURRENT);
-    put32(ehdr + 28, EHDR_SIZE);
-    put16(ehdr + 40, EHDR_SIZE);
-    put16(ehdr + 42, PHDR_SIZE);
-    put16(ehdr + 44, (uint16_t)(phnum < PN_XNUM ? phnum : PN_XNUM));
+    put_word(ehdr + E_PHOFF, EHDR_SIZE);
+    put16(ehdr + E_EHSIZE, EHDR_SIZE);
+    put16(ehdr + E_PHENTSIZE, PHDR_SIZE);
+    put16(ehdr + E_PHNUM, (uint16_t)(phnum < PN_XNUM ? phnum : PN_XNUM));
     if (phnum >= PN_XNUM) {
-        put32(ehdr + 32, shoff);
-        put16(ehdr + 46, SHDR_SIZE);
-        put16(ehdr + 48, 1);
+        put_word(ehdr + E_SHOFF, shoff);
+        put16(ehdr + E_SHENTSIZE, SHDR_SIZE);
+        put16(ehdr + E_SHNUM, 1);
     }
     (void)out(o, ehdr, sizeof(ehdr));
 }
@@ -382,12 +434,12 @@ static void load_write(struct core_out *o, const struct core_region *r, uint32_t
     }
     k_memset(phdr, 0, sizeof(phdr));
     put32(phdr, PT_LOAD);
-    put32(phdr + 4, off);
-    put32(phdr + 8, r->start);
-    put32(phdr + 16, region_file_size(r));
-    put32(phdr + 20, r->end - r->start);
-    put32(phdr + 24, flags);
-    put32(phdr + 28, PAGE_SIZE);
+    put_word(phdr + P_OFFSET, off);
+    put_word(phdr + P_VADDR, r->start);
+    put_word(phdr + P_FILESZ, region_file_size(r));
+    put_word(phdr + P_MEMSZ, r->end - r->start);
+    put32(phdr + P_FLAGS, flags);
+    put_word(phdr + P_ALIGN, PAGE_SIZE);
     (void)out(o, phdr, sizeof(phdr));
 }
 
@@ -399,8 +451,8 @@ static void shdr_write(struct core_out *o, uint32_t phnum)
     uint8_t shdr[SHDR_SIZE];
 
     k_memset(shdr, 0, sizeof(shdr));
-    put32(shdr + 20, 1);
-    put32(shdr + 28, phnum);
+    put_word(shdr + S_SIZE, 1);
+    put32(shdr + S_INFO, phnum);
     (void)out(o, shdr, sizeof(shdr));
 }
 
@@ -438,8 +490,8 @@ int32_t core_write(core_write_fn write, void *ctx, const uint8_t *notes, uint32_
     ehdr_write(&o, phnum, end);
     k_memset(phdr, 0, sizeof(phdr));
     put32(phdr, PT_NOTE);
-    put32(phdr + 4, EHDR_SIZE + phnum * PHDR_SIZE);
-    put32(phdr + 16, notes_size);
+    put_word(phdr + P_OFFSET, EHDR_SIZE + phnum * PHDR_SIZE);
+    put_word(phdr + P_FILESZ, notes_size);
     (void)out(&o, phdr, sizeof(phdr));
     off = data;
     for (i = 0; i < count; i++) {

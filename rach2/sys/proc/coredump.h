@@ -5,9 +5,10 @@
 
 /*
  * The core file of a process a signal ends, as Linux's `elf_core_dump`
- * writes it on i386: an ELF32 file of type ET_CORE whose PT_NOTE segment has
- * the threads' registers and the process's state, and whose PT_LOAD segments
- * have the memory of its regions, which GDB reads. See ptrace.Readme.md.
+ * writes it: an ELF file of type ET_CORE, of the class the architecture's
+ * programs have, whose PT_NOTE segment has the threads' registers and the
+ * process's state, and whose PT_LOAD segments have the memory of its
+ * regions, which GDB reads. See ptrace.Readme.md.
  */
 
 /** Where the file goes: write `len` bytes from `buf` at the end of what was
@@ -23,6 +24,15 @@ typedef int32_t (*core_write_fn)(void *ctx, const void *buf, uint32_t len);
  * record is freed. `*size` gets its bytes; NULL when the heap has no room.
  */
 uint8_t *core_notes(int signo, uint32_t *size);
+
+/** The bytes a note of `descsz` bytes takes, its name "CORE" or "LINUX"
+ * padded to eight bytes and its description to a word. */
+uint32_t core_note_bytes(uint32_t descsz);
+
+/** Put the note `type` named `name` with the `descsz` bytes of `desc` at
+ * `*p` and step past it. */
+void core_note_put(uint8_t **p, const char *name, uint32_t type, const void *desc,
+                   uint32_t descsz);
 
 /**
  * Write the core file of the current process through `write` with `ctx`,
