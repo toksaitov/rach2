@@ -35,7 +35,7 @@ A program in the root runs on the build host through the root's own loader, whic
     R=build/vendor/gnu/root
     $R/lib/ld-linux.so.2 --library-path $R/lib:$R/usr/lib $R/usr/bin/git --version
 
-The table gives each port's version, the time it took under `make -j32 gnu-ports` on the testing host, and the size of what it installs after stripping. The whole run took 565 seconds and made a root of 326 MB.
+The table gives each port's version, the time it took under `make -j32 gnu-ports` on the testing host, and the size of what it installs after stripping, for the ports of the layer's first set. That run took 565 seconds and made a root of 326 MB. All 72 ports today make a root of 611 MB for i686; for x86-64 they took 1349 seconds together, under one `make ARCH=x86_64 -j32` that built the native compiler, GDB, the shell and the browser at the same time, and made a root of 628 MB.
 
 | Port      | Version    | Time  | Size    |
 | --------- | ---------- | ----- | ------- |
