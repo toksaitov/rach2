@@ -20,7 +20,7 @@ This file states the rules in force; their history is in commit messages and `de
 
 * Claude Code does the work: code, tests and prose. Codex does work only when the owner asks for it.
 * Codex reviews at the end of each batch, as Batches says, and otherwise when the owner asks.
-* Claude Code works alone, with no subagents of any kind. Its one helper is the Codex plugin, one Astra instance at xhigh effort at a time, used for review. Codex, when it runs, does its work itself and starts no subagents.
+* Claude Code may run at most three helpers at once, each Claude Opus 5.5 at xhigh effort in a git worktree of its own, as `CLAUDE.md` says; it starts no other subagents. Codex, one Astra instance at xhigh effort at a time, is used for review. A helper or Codex does its work itself and starts no subagents.
 
 ## Batches
 

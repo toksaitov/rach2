@@ -9,7 +9,7 @@ Rach2 becomes a machine that students share: logged in over SSH at once, compili
 ### The architectures
 
 * The layout under `rach2/sys/arch/`:
-  * `i386/` and `x86_64/` have the processor's part: the entry and the switch to the kernel's address space, the start of the other processors, the interrupt and system call entry, the descriptor tables, paging, the context switch, the FPU state, TLS, the signal frames, the registers of ptrace and of core dumps, the ELF class and machine, and the system call table with the layouts of the structs it copies to and from user space.
+  * `i686/` and `x86_64/`, named as `ARCH` names them, have the processor's part: the entry and the switch to the kernel's address space, the start of the other processors, the interrupt and system call entry, the descriptor tables, paging, the context switch, the FPU state, TLS, the signal frames, the registers of ptrace and of core dumps, the ELF class and machine, and the system call table with the layouts of the structs it copies to and from user space.
   * `x86/` has the PC platform both use: ACPI's tables, the local APIC and the IOAPIC, the PIC, the PIT, the HPET and the ACPI PM timer, the RTC, the 8042 keyboard and mouse, the 8250 serial port, the speaker, SMBIOS, power, PCI configuration through ports 0xCF8 and 0xCFC and through ECAM, the VGA text console and port I/O.
   * `arm/` and `arm64/` have headers alone: the word size, page size, user address range, register frame and the other types the shared code names, enough for it to compile. They have no code.
   * `arch.h` and the headers beside it declare what an architecture supplies, and `rach2/sys/arch/Readme.md` documents it and lists what an ARM port must add.
@@ -59,7 +59,7 @@ Rach2 becomes a machine that students share: logged in over SSH at once, compili
 
 ## How the work runs
 
-* One agent, serially, in three batches, as the Batches section of `AGENTS.md` describes.
+* In three batches, as the Batches section of `AGENTS.md` describes, by Claude Code with at most three helpers, the owner's allowance of 2026-10-03. A helper takes a part whose files no other part changes, in a worktree and on a branch of its own; Claude Code merges each part into the batch it belongs to and checks it there.
 * `audit.md` lists, scope by scope, what assumes i386, from a read of the whole tree on 2026-10-03 at commit `5349d3df`. The work starts from it instead of a new search.
 * Batch 1 changes no behavior of the i686 build. It is checked once, at its end: the compile, `tests/run style` and one `tests/run all`.
 * In batches 2 and 3, the work is booted under QEMU as it is built; those boots are the building, not its checks. Batch 2's checks run once, at its end, as batch 1's do. Batch 3 ends with the checks of `AGENTS.md`, the Codex review of the whole milestone among them, and the machine comes last.
@@ -71,11 +71,11 @@ Rach2 becomes a machine that students share: logged in over SSH at once, compili
 
 #### Phase 1: the layout
 
-The processor's code moves to `arch/i386/` and the PC's to `arch/x86/`, with `git mv` where a file moves whole. `arch.h` and its headers declare the interface; `arch/arm/` and `arch/arm64/` get their headers; `make check-arch` compiles the shared kernel code for `arm` and `arm64` with `clang --target` and `-fsyntax-only`, and `tests/run style` runs it. The manifests (`rach2/sources.mk`, `guest.mk`) list the files by architecture, and `make check-sources` and `guestcheck` know it.
+The processor's code moves to `arch/i686/` and the PC's to `arch/x86/`, with `git mv` where a file moves whole. `arch.h` and its headers declare the interface; `arch/arm/` and `arch/arm64/` get their headers; `make check-arch` compiles the shared kernel code for `arm` and `arm64` with `clang --target` and `-fsyntax-only`, and `tests/run style` runs it. The manifests (`rach2/sources.mk`, `guest.mk`) list the files by architecture, and `make check-sources` and `guestcheck` know it.
 
 #### Phase 2: the shared code
 
-The types (`uintptr_t`, `size_t`, `phys_addr_t`, `long` results); `phys_to_virt`; the MMIO and PCI accessors in the drivers; the formatter; the per-processor record behind `this_cpu()`, with one processor; the system call table, its numbers and the user layouts moved into `arch/i386/`, with the handlers reading arguments through accessors; the ELF class and machine, the auxiliary vector's word and the initial stack by architecture; `make ARCH=x86_64`, with `ARCH` `i686` by default, i686 building into `build/` as it does now and another architecture into `build/ARCH/`, its vendored ports and their stamps included. The Readmes of what moved are rewritten.
+The types (`uintptr_t`, `size_t`, `phys_addr_t`, `long` results); `phys_to_virt`; the MMIO and PCI accessors in the drivers; the formatter; the per-processor record behind `this_cpu()`, with one processor; the system call table, its numbers and the user layouts moved into `arch/i686/`, with the handlers reading arguments through accessors; the ELF class and machine, the auxiliary vector's word and the initial stack by architecture; `make ARCH=x86_64`, with `ARCH` `i686` by default, i686 building into `build/` as it does now and another architecture into `build/ARCH/`, its vendored ports and their stamps included. The Readmes of what moved are rewritten.
 
 ### Batch 2: x86-64 and all of its programs
 
