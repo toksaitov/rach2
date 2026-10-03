@@ -2,11 +2,15 @@
  * elfcheck: judge ELF artifacts against what this system will actually load.
  *
  * Two commands in one tool, because they share one parser. `elfcheck
- * FILE...` judges user executables the way `exec` does: the LOADER half is
- * `elf_load_image`'s contract (rach2/sys/proc/elf.c) rule for rule, and the
- * POLICY half is this project's, refusing `PT_INTERP` and `PT_DYNAMIC`,
- * since the musl roots these artifacts are staged in have no loader for a
- * dynamic program, and exec refuses one whose loader it cannot find. `elfcheck
+ * [--arch ARCH] FILE...` judges user executables the way `exec` does: the
+ * LOADER half is `elf_load_image`'s contract (rach2/sys/proc/elf.c) rule for
+ * rule, and the POLICY half is this project's, refusing `PT_INTERP` and
+ * `PT_DYNAMIC`, since the musl roots these artifacts are staged in have no
+ * loader for a dynamic program, and exec refuses one whose loader it cannot
+ * find. ARCH is `i686`, the default, for ELF32 i386 programs and the window
+ * the i686 kernel loads into, or `x86_64` for ELF64 x86-64 programs and the
+ * x86-64 user window of milestone 57's plan, [64 KiB, 0x00007FFFFFFFF000),
+ * which the x86-64 loader is to have. `elfcheck
  * --kernel [--tcc] FILE` checks a kernel against what the multiboot loaders
  * (QEMU's -kernel and GRUB) read: the first checksum-valid multiboot header
  * in the search window with exactly the declared flags, exactly two
@@ -17,10 +21,11 @@
  * first-load rules (file offset 0, address exactly 1 MiB).
  *
  * `--selftest` runs both batteries: the user checker's literal window
- * boundary cases (the numbers rach2/sys/proc/elf.c actually has, written
- * out, so a case built out of a wrong constant cannot pass by moving with
- * it), and the kernel checker's synthesized fixture with every malformed
- * variant refused for its own rule, matched against the diagnostic text.
+ * boundary cases for each architecture (the numbers rach2/sys/proc/elf.c
+ * actually has, written out, so a case built out of a wrong constant cannot
+ * pass by moving with it), and the kernel checker's synthesized fixture with
+ * every malformed variant refused for its own rule, matched against the
+ * diagnostic text.
  */
 #include <stdarg.h>
 #include <stdint.h>
@@ -30,8 +35,6 @@
 
 #define ELF_MAX_PHNUM 32
 #define ELF_MAX_SEGS  8
-#define ELF_USER_MIN  0x02000000u
-#define ELF_USER_MAX  0xBFFFF000u
 #define PAGE          0x1000u
 
 #define MULTIBOOT_MAGIC 0x1BADB002u
@@ -41,6 +44,7 @@
 
 #define ET_EXEC    2
 #define EM_386     3
+#define EM_X86_64  62
 #define PT_LOAD    1
 #define PT_DYNAMIC 2
 #define PT_INTERP  3
@@ -53,8 +57,30 @@ static uint32_t r32(const unsigned char *p)
 {
     return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
 }
+static uint64_t r64(const unsigned char *p)
+{
+    return (uint64_t)r32(p) | (uint64_t)r32(p + 4) << 32;
+}
 
 /* ---- the user-executable checker (check_elf semantics) ---- */
+
+/* What an architecture's loader takes: the ELF class and machine, the sizes
+   of the header and of a program header, and the window exec loads into,
+   from its floor up to but not including its ceiling. */
+struct user_arch {
+    const char *name;
+    unsigned elf_class, bits, machine;
+    const char *machine_name;
+    unsigned ehsize, phentsize;
+    uint64_t user_min, user_max;
+};
+
+static const struct user_arch user_arches[] = {
+    {"i686", 1, 32, EM_386, "EM_386", 52, 32, 0x02000000u, 0xBFFFF000u},
+    {"x86_64", 2, 64, EM_X86_64, "EM_X86_64", 64, 56, 0x10000u, 0x00007FFFFFFFF000ull},
+};
+static const struct user_arch *const arch_i686 = &user_arches[0];
+static const struct user_arch *const arch_x86_64 = &user_arches[1];
 
 static int user_problems;
 
@@ -71,11 +97,15 @@ static void problem(const char *name, const char *fmt, ...)
 }
 
 /* Returns the number of findings; `quiet` suppresses the report so the
-   selftest can count without printing. */
-static int user_check(const char *name, const unsigned char *d, size_t n, int quiet)
+   selftest can count without printing. The fields are read at the offsets of
+   `a`'s ELF class, so one walk serves both. */
+static int user_check(const struct user_arch *a, const char *name, const unsigned char *d, size_t n,
+                      int quiet)
 {
-    uint32_t e_type, e_machine, e_entry, e_phoff, e_phentsize, e_phnum;
-    uint32_t i, end, loads, phdr_covered;
+    uint64_t e_entry, e_phoff, end, wrap;
+    uint32_t e_type, e_machine, e_phentsize, e_phnum;
+    uint32_t i, loads, phdr_covered;
+    int wide = a->elf_class == 2;
     int before = user_problems;
     FILE *hold = NULL;
 
@@ -87,7 +117,7 @@ static int user_check(const char *name, const unsigned char *d, size_t n, int qu
             stderr = sink;
         }
     }
-    if (n < 52) {
+    if (n < a->ehsize) {
         problem(name, "shorter than an ELF header");
         goto out;
     }
@@ -98,31 +128,31 @@ static int user_check(const char *name, const unsigned char *d, size_t n, int qu
         problem(name, "no ELF signature");
         goto out;
     }
-    if (d[4] != 1)
-        problem(name, "not ELFCLASS32");
+    if (d[4] != a->elf_class)
+        problem(name, "not ELFCLASS%u", a->bits);
     if (d[5] != 1)
         problem(name, "not ELFDATA2LSB");
     if (d[6] != 1)
         problem(name, "not EV_CURRENT");
     e_type = r16(d + 16);
     e_machine = r16(d + 18);
-    e_entry = r32(d + 24);
-    e_phoff = r32(d + 28);
-    e_phentsize = r16(d + 42);
-    e_phnum = r16(d + 44);
+    e_entry = wide ? r64(d + 24) : r32(d + 24);
+    e_phoff = wide ? r64(d + 32) : r32(d + 28);
+    e_phentsize = r16(d + (wide ? 54 : 42));
+    e_phnum = r16(d + (wide ? 56 : 44));
     if (e_type != ET_EXEC)
         problem(name,
                 "e_type is %u, not ET_EXEC; this kernel loads no "
                 "other kind",
                 e_type);
-    if (e_machine != EM_386)
-        problem(name, "e_machine is %u, not EM_386", e_machine);
+    if (e_machine != a->machine)
+        problem(name, "e_machine is %u, not %s", e_machine, a->machine_name);
     if (e_phoff == 0 || e_phnum == 0) {
         problem(name, "no program header table");
         goto out;
     }
-    if (e_phentsize != 32) {
-        problem(name, "e_phentsize is %u, not 32", e_phentsize);
+    if (e_phentsize != a->phentsize) {
+        problem(name, "e_phentsize is %u, not %u", e_phentsize, a->phentsize);
         goto out;
     }
     if (e_phnum > ELF_MAX_PHNUM)
@@ -130,20 +160,25 @@ static int user_check(const char *name, const unsigned char *d, size_t n, int qu
                 "%u program headers, more than the %u this kernel "
                 "reads",
                 e_phnum, ELF_MAX_PHNUM);
-    if ((uint64_t)e_phoff + (uint64_t)e_phnum * 32 > n) {
+    if (e_phoff > n || (uint64_t)e_phnum * a->phentsize > n - e_phoff) {
         problem(name, "the program header table runs past the file");
         goto out;
     }
 
+    /* The address space a segment must not wrap: 32 bits for ELF32, and
+       for ELF64 the 64 bits a sum of two fields can overflow. */
+    wrap = wide ? UINT64_MAX : 0xFFFFFFFFull;
     loads = 0;
     end = 0;
     phdr_covered = 0;
     for (i = 0; i < e_phnum; i++) {
-        const unsigned char *p = d + e_phoff + 32 * i;
-        uint32_t p_type = r32(p), p_offset = r32(p + 4);
-        uint32_t p_vaddr = r32(p + 8), p_filesz = r32(p + 16);
-        uint32_t p_memsz = r32(p + 20);
-        uint32_t page_start;
+        const unsigned char *p = d + e_phoff + (uint64_t)a->phentsize * i;
+        uint32_t p_type = r32(p);
+        uint64_t p_offset = wide ? r64(p + 8) : r32(p + 4);
+        uint64_t p_vaddr = wide ? r64(p + 16) : r32(p + 8);
+        uint64_t p_filesz = wide ? r64(p + 32) : r32(p + 16);
+        uint64_t p_memsz = wide ? r64(p + 40) : r32(p + 20);
+        uint64_t page_start;
 
         if (p_type == PT_INTERP)
             problem(name, "has a PT_INTERP, so it wants a loader, which "
@@ -159,25 +194,31 @@ static int user_check(const char *name, const unsigned char *d, size_t n, int qu
         }
         if (p_filesz > p_memsz)
             problem(name, "a segment's file size exceeds its memory size");
-        if ((uint64_t)p_offset + p_filesz > 0xFFFFFFFFull ||
-            (uint64_t)p_vaddr + p_memsz > 0xFFFFFFFFull) {
-            problem(name, "a segment wraps the 32-bit address space");
+        if (p_offset > wrap - p_filesz || p_vaddr > wrap - p_memsz) {
+            problem(name, "a segment wraps the %u-bit address space", a->bits);
             continue;
         }
-        if ((uint64_t)p_offset + p_filesz > n)
+        if (p_offset + p_filesz > n)
             problem(name, "a segment runs past the file");
-        if (p_vaddr < ELF_USER_MIN || (uint64_t)p_vaddr + p_memsz > ELF_USER_MAX)
-            problem(name,
-                    "a segment lies outside the window exec loads "
-                    "into, [0x%08x, 0x%08x)",
-                    ELF_USER_MIN, ELF_USER_MAX);
-        page_start = p_vaddr & ~(PAGE - 1);
+        if (p_vaddr < a->user_min || p_vaddr + p_memsz > a->user_max) {
+            if (wide)
+                problem(name,
+                        "a segment lies outside the window exec loads "
+                        "into, [0x%llx, 0x%llx)",
+                        (unsigned long long)a->user_min, (unsigned long long)a->user_max);
+            else
+                problem(name,
+                        "a segment lies outside the window exec loads "
+                        "into, [0x%08x, 0x%08x)",
+                        (uint32_t)a->user_min, (uint32_t)a->user_max);
+        }
+        page_start = p_vaddr & ~(uint64_t)(PAGE - 1);
         if (page_start < end)
             problem(name, "the PT_LOAD segments are not ascending and "
                           "page-disjoint");
-        end = (uint32_t)(((uint64_t)p_vaddr + p_memsz + PAGE - 1) & ~(uint64_t)(PAGE - 1));
+        end = (p_vaddr + p_memsz + PAGE - 1) & ~(uint64_t)(PAGE - 1);
         if (p_offset <= e_phoff &&
-            (uint64_t)e_phoff + (uint64_t)e_phnum * 32 <= (uint64_t)p_offset + p_filesz)
+            e_phoff + (uint64_t)e_phnum * a->phentsize <= p_offset + p_filesz)
             phdr_covered = 1;
     }
     if (loads == 0) {
@@ -192,7 +233,7 @@ static int user_check(const char *name, const unsigned char *d, size_t n, int qu
     if (!phdr_covered)
         problem(name, "the program header table lies outside every "
                       "PT_LOAD, so AT_PHDR would name nothing");
-    if (e_entry < ELF_USER_MIN || e_entry >= ELF_USER_MAX)
+    if (e_entry < a->user_min || e_entry >= a->user_max)
         problem(name, "the entry point is outside the window exec loads "
                       "into");
 out:
@@ -449,6 +490,12 @@ static void w16(unsigned char *p, uint32_t v)
     p[1] = (unsigned char)(v >> 8);
 }
 
+static void w64(unsigned char *p, uint64_t v)
+{
+    w32(p, (uint32_t)v);
+    w32(p + 4, (uint32_t)(v >> 32));
+}
+
 /* One PT_LOAD user image with the header table inside it, for the window
    boundary cases. */
 static size_t craft_user(unsigned char *b, uint32_t entry, uint32_t vaddr, uint32_t memsz)
@@ -477,6 +524,35 @@ static size_t craft_user(unsigned char *b, uint32_t entry, uint32_t vaddr, uint3
     w32(b + 76, 5);
     w32(b + 80, PAGE);
     return filesz;
+}
+
+/* The same image as ELF64 x86-64, for the x86-64 window's cases. */
+static size_t craft_user64(unsigned char *b, uint64_t entry, uint64_t vaddr, uint64_t memsz)
+{
+    uint64_t filesz = 64 + 56;
+
+    memset(b, 0, 64 + 56);
+    memcpy(b,
+           "\x7f"
+           "ELF\x02\x01\x01",
+           7);
+    w16(b + 16, ET_EXEC);
+    w16(b + 18, EM_X86_64);
+    w32(b + 20, 1);
+    w64(b + 24, entry);
+    w64(b + 32, 64);
+    w16(b + 52, 64);
+    w16(b + 54, 56);
+    w16(b + 56, 1);
+    w32(b + 64, PT_LOAD);
+    w32(b + 64 + 4, 5);
+    w64(b + 64 + 8, 0);
+    w64(b + 64 + 16, vaddr);
+    w64(b + 64 + 24, vaddr);
+    w64(b + 64 + 32, filesz);
+    w64(b + 64 + 40, memsz > filesz ? memsz : filesz);
+    w64(b + 64 + 48, PAGE);
+    return (size_t)filesz;
 }
 
 /* A minimal kernel-shaped fixture: a text load at 1 MiB, a data+bss load
@@ -617,9 +693,25 @@ static int selftest(void)
         {"an entry point exactly at the floor", 0x02000000, 0x02000000, 0x1000, 1},
         {"an entry point one byte below the floor", 0x01FFFFFF, 0x02000000, 0x1000, 0},
     };
+    static const struct {
+        const char *name;
+        uint64_t entry, vaddr, memsz;
+        int want_ok;
+    } cases64[] = {
+        {"x86_64: a segment ending at the ceiling", 0x400000, 0x7FFFFFFFE000ull, 0x1000, 1},
+        {"x86_64: a segment ending a byte past it", 0x400000, 0x7FFFFFFFE000ull, 0x1001, 0},
+        {"x86_64: a segment in the page exec leaves out", 0x400000, 0x7FFFFFFFF000ull, 0x1000, 0},
+        {"x86_64: an entry point at the ceiling", 0x7FFFFFFFF000ull, 0x400000, 0x1000, 0},
+        {"x86_64: an entry point one byte below it", 0x7FFFFFFFEFFFull, 0x400000, 0x1000, 1},
+        {"x86_64: a segment starting below the floor", 0x400000, 0xF000, 0x1000, 0},
+        {"x86_64: a segment starting exactly at the floor", 0x10000, 0x10000, 0x1000, 1},
+        {"x86_64: a segment wrapping the address space", 0x400000, ~0xFFFull, 0x2000, 0},
+        {"x86_64: an entry point exactly at the floor", 0x10000, 0x10000, 0x1000, 1},
+        {"x86_64: an entry point one byte below the floor", 0xFFFF, 0x10000, 0x1000, 0},
+    };
     unsigned char user[128];
     unsigned char good[16384], gnu[16384], mut[16384], big[32768];
-    size_t goodn, gnun, bign;
+    size_t goodn, gnun, bign, n32, n64;
     char detail[160];
     unsigned i;
     uint32_t hdr = 52 + 64, mb = 52 + 64 + 16, last;
@@ -627,7 +719,7 @@ static int selftest(void)
     st_bad = 0;
     for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
         size_t n = craft_user(user, cases[i].entry, cases[i].vaddr, cases[i].memsz);
-        int got = user_check("case", user, n, 1);
+        int got = user_check(arch_i686, "case", user, n, 1);
 
         if (cases[i].want_ok && got) {
             fprintf(stderr, "elfcheck: selftest: %s: expected a clean run\n", cases[i].name);
@@ -639,6 +731,31 @@ static int selftest(void)
                     cases[i].name);
             st_bad++;
         }
+    }
+    for (i = 0; i < sizeof(cases64) / sizeof(cases64[0]); i++) {
+        size_t n = craft_user64(user, cases64[i].entry, cases64[i].vaddr, cases64[i].memsz);
+        int got = user_check(arch_x86_64, "case", user, n, 1);
+
+        if (cases64[i].want_ok && got) {
+            fprintf(stderr, "elfcheck: selftest: %s: expected a clean run\n", cases64[i].name);
+            st_bad++;
+        } else if (!cases64[i].want_ok && !got) {
+            fprintf(stderr,
+                    "elfcheck: selftest: %s: expected a finding, "
+                    "the run was clean\n",
+                    cases64[i].name);
+            st_bad++;
+        }
+    }
+    n64 = craft_user64(user, 0x400000, 0x400000, 0x1000);
+    if (user_check(arch_i686, "case", user, n64, 1) == 0) {
+        fprintf(stderr, "elfcheck: selftest: an x86_64 program passed for i686\n");
+        st_bad++;
+    }
+    n32 = craft_user(user, 0x08048000, 0x08048000, 0x1000);
+    if (user_check(arch_x86_64, "case", user, n32, 1) == 0) {
+        fprintf(stderr, "elfcheck: selftest: an i686 program passed for x86_64\n");
+        st_bad++;
     }
 
     goodn = craft_kernel(good, 0, 16, 0x100);
@@ -737,7 +854,7 @@ static int selftest(void)
         fprintf(stderr, "elfcheck: selftest: %d case(s) failed\n", st_bad);
         return 1;
     }
-    printf("elfcheck: selftest: ok: 10 window cases, 5 accepted kernels, "
+    printf("elfcheck: selftest: ok: 10 i686 and 10 x86_64 window cases, 5 accepted kernels, "
            "13 refused, each for its own rule\n");
     return 0;
 }
@@ -770,9 +887,26 @@ static unsigned char *read_file(const char *path, size_t *n)
 int main(int argc, char **argv)
 {
     int i, kernel_mode = 0, tcc = 0, first = 1;
+    const struct user_arch *arch = arch_i686;
 
     if (argc >= 2 && strcmp(argv[1], "--selftest") == 0)
         return selftest();
+    if (argc >= 3 && strcmp(argv[1], "--arch") == 0) {
+        size_t k;
+
+        arch = NULL;
+        for (k = 0; k < sizeof(user_arches) / sizeof(user_arches[0]); k++)
+            if (strcmp(argv[2], user_arches[k].name) == 0)
+                arch = &user_arches[k];
+        if (arch == NULL) {
+            fprintf(stderr,
+                    "check-elf: unknown architecture '%s'; the architectures are "
+                    "i686 and x86_64\n",
+                    argv[2]);
+            return 2;
+        }
+        first = 3;
+    }
     if (argc >= 2 && strcmp(argv[1], "--kernel") == 0) {
         kernel_mode = 1;
         first = 2;
@@ -782,7 +916,7 @@ int main(int argc, char **argv)
         }
     }
     if (first >= argc) {
-        fprintf(stderr, "usage: elfcheck FILE... | elfcheck --kernel "
+        fprintf(stderr, "usage: elfcheck [--arch i686|x86_64] FILE... | elfcheck --kernel "
                         "[--tcc] KERNEL | elfcheck --selftest\n");
         return 2;
     }
@@ -823,7 +957,7 @@ int main(int argc, char **argv)
         if (n == 0)
             problem(argv[i], "empty");
         else
-            user_check(argv[i], d, n, 0);
+            user_check(arch, argv[i], d, n, 0);
         free(d);
     }
     if (user_problems) {
