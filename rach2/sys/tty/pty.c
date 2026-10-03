@@ -26,6 +26,9 @@
 #define TIOCSWINSZ 0x5414
 #define TIOCGPTN   0x80045430 /* master: get the slave index N (arg int*) */
 #define TIOCSPTLCK 0x40045431 /* master: set/clear the slave lock (arg int*, 0 = unlock) */
+#define TIOCPKT    0x5420     /* master: packet mode on or off (arg int*) */
+#define TIOCGPKT   0x80045438 /* master: whether packet mode is on (arg int*) */
+#define TCFLSH     0x540B     /* flush the queues: arg 0 input, 1 output, 2 both */
 
 /* O_* flags honored on open (mirror syscall.c / fd.h). */
 #define O_CLOEXEC_FLAG  02000000
@@ -181,13 +184,17 @@ static int ptm_readable(void *arg)
  * Blocks until the ring has a byte or every slave description has closed,
  * which reads as end of file; -EAGAIN when non-blocking, -EINTR on a signal.
  * The ring is drained into a stack buffer with interrupts off and copied to
- * user memory, which may fault, after they are restored.
+ * user memory, which may fault, after they are restored. In packet mode
+ * (TIOCPKT) the bytes follow a status byte, TIOCPKT_DATA, 0, as on Linux,
+ * which also sends the byte alone for a flush or a stop of the slave's
+ * output; this driver sends only the first kind.
  */
 static int32_t ptm_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
     struct pty *p = (struct pty *)e->priv;
     uint8_t kbuf[512];
     uint32_t got = 0;
+    uint32_t lead = p->packet ? 1u : 0u;
     uint32_t to_read;
 
     if (count == 0) {
@@ -208,8 +215,11 @@ static int32_t ptm_read(fd_entry_t *e, char __user *buf, uint32_t count)
         }
     }
     to_read = pty_m_avail(p);
-    if (to_read > count) {
-        to_read = count;
+    if (to_read > count - lead) {
+        to_read = count - lead;
+    }
+    if (lead && copy_to_user((void __user *)buf, "", 1) != 0) {
+        return -EFAULT;
     }
     while (got < to_read) {
         uint32_t chunk = to_read - got;
@@ -226,12 +236,12 @@ static int32_t ptm_read(fd_entry_t *e, char __user *buf, uint32_t count)
         }
         kirq_restore(flags);
         wq_wake(&p->slave.input_wq, WQ_ROOM); /* a slave writer waiting for room */
-        if (copy_to_user((void __user *)(buf + got), kbuf, chunk) != 0) {
-            return (got > 0) ? (int32_t)got : -EFAULT;
+        if (copy_to_user((void __user *)(buf + lead + got), kbuf, chunk) != 0) {
+            return (got > 0) ? (int32_t)(lead + got) : -EFAULT;
         }
         got += chunk;
     }
-    return (int32_t)got;
+    return (int32_t)(lead + got);
 }
 
 /* Whether the slave's discipline can take a line: the master's write wait. */
@@ -352,6 +362,45 @@ static short ptm_poll(fd_entry_t *e, short events, struct wait_queue **wq)
     return revents;
 }
 
+/**
+ * TCFLSH on the master, whose input is the slave's output and whose output
+ * the slave's input: `which` 0 drops the first, 1 the second, 2 both, as on
+ * Linux; anything else is -EINVAL.
+ */
+static int32_t ptm_flush(struct pty *p, uint32_t which)
+{
+    uint32_t flags;
+
+    if (which > 2) {
+        return -EINVAL;
+    }
+    if (which != 1) {
+        flags = kirq_save();
+        p->m_head = p->m_tail;
+        kirq_restore(flags);
+        wq_wake(&p->slave.input_wq, WQ_ROOM);
+    }
+    if (which != 0) {
+        tty_flush_input(&p->slave);
+    }
+    return 0;
+}
+
+/** Set or read packet mode (TIOCPKT, TIOCGPKT) through the int at `arg`. */
+static int32_t ptm_packet(struct pty *p, uint32_t request, uint32_t arg)
+{
+    int on = p->packet;
+
+    if (request == TIOCGPKT) {
+        return copy_to_user((void __user *)arg, &on, sizeof(on)) != 0 ? -EFAULT : 0;
+    }
+    if (copy_from_user(&on, (const void __user *)arg, sizeof(on)) != 0) {
+        return -EFAULT;
+    }
+    p->packet = on != 0;
+    return 0;
+}
+
 static int32_t ptm_ioctl(fd_entry_t *e, uint32_t request, uint32_t arg)
 {
     struct pty *p = (struct pty *)e->priv;
@@ -387,6 +436,11 @@ static int32_t ptm_ioctl(fd_entry_t *e, uint32_t request, uint32_t arg)
             tty_signal_group(p->slave.fg_pgid, SIGWINCH);
         }
         return 0;
+    case TIOCPKT:
+    case TIOCGPKT:
+        return ptm_packet(p, request, arg);
+    case TCFLSH:
+        return ptm_flush(p, arg);
     case FIONREAD: {
         int n = (int)pty_m_avail(p);
         if (copy_to_user((void __user *)arg, &n, sizeof(n)) != 0) {

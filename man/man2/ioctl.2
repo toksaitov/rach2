@@ -171,6 +171,20 @@ Read or replace the slave's window size.
 Setting it through the master sends
 .Dv SIGWINCH
 to the slave's foreground group, if one is set.
+.It Dv TIOCPKT , TIOCGPKT
+Set packet mode from an
+.Vt int ,
+nonzero on, or read it back.
+In packet mode each read of the master begins with a status byte,
+.Dv TIOCPKT_DATA ,
+0, before the slave's output, as screen asks for; Linux also sends the
+byte alone when the slave flushes or stops its output, which this kernel
+does not.
+.It Dv TCFLSH
+With
+.Fa arg
+0, drop the slave's output the master has not read; with 1, the input the
+slave has not read; with 2, both.
 .El
 .Ss Disk requests
 Raw disk windows and loop devices with a file attached accept:

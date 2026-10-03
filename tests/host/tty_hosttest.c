@@ -15,7 +15,9 @@
  * for the slave, and its echo data for the master, or no change with echo off;
  * a slave read and an input flush are room for the master, and so is input the
  * master writes that takes bytes out of the slave's discipline, a signal
- * char's flush or an erase; and slave output is data for it.
+ * char's flush or an erase; and slave output is data for it. In packet mode
+ * a master read begins with the status byte, and TCFLSH on the master drops
+ * the slave's output.
  */
 #define WAIT_QUEUE_HOSTTEST
 #define wq_wait_event model_wait_event
@@ -529,6 +531,25 @@ static void input_room(void)
 }
 
 /** Run the independent wake and locking regressions. */
+/** Packet mode, which TIOCPKT sets: a master read gives TIOCPKT_DATA, 0,
+ * before the slave's output; TCFLSH 0 on the master drops that output. The
+ * ioctls' int travels through a 32-bit argument the host's pointers do not
+ * fit in, so the row sets the mode and calls the flush itself. */
+static void packet_mode(void)
+{
+    char out[8];
+
+    setup_pair();
+    scheduled_action = NULL;
+    pair.packet = 1;
+    CHECK(pts_write(&slave, "ab", 2) == 2, "the slave writes two bytes");
+    CHECK(ptm_read(&master, out, sizeof(out)) == 3 && out[0] == 0 && out[1] == 'a' && out[2] == 'b',
+          "a packet read begins with TIOCPKT_DATA");
+    CHECK(pts_write(&slave, "c", 1) == 1 && ptm_flush(&pair, 0) == 0 && pty_m_avail(&pair) == 0,
+          "TCFLSH 0 drops the slave's output");
+    CHECK(ptm_flush(&pair, 3) == -EINVAL, "TCFLSH takes 0, 1 and 2");
+}
+
 int main(void)
 {
     read_wakes_poll();
@@ -539,6 +560,7 @@ int main(void)
     latency_read();
     wake_kinds();
     input_room();
+    packet_mode();
     printf("tty-test: result: %d failures\n", failures);
     return failures ? 1 : 0;
 }
