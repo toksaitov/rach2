@@ -3,7 +3,7 @@
 #
 # gnu_rows.sh: the rows of `tests/run gnu` that run on the machine.
 #
-# Usage: gnu_rows.sh NAME
+# Usage: gnu_rows.sh NAME [ARCH]
 #
 # The gnu suite puts this script on the machine it boots, the GNU system's
 # ext2 root, and runs it there as root under /bin/bash, once for each row,
@@ -15,7 +15,10 @@
 # the SpiderMonkey shell and the browser. It prints `GNUROW OK NAME` when
 # every comparison holds, and otherwise `GNUROW FAIL NAME: ` with the first
 # that did not. The path has /usr/bin first, so each name finds the GNU
-# program, and bash runs no BusyBox applet for a name.
+# program, and bash runs no BusyBox applet for a name. ARCH is the
+# architecture the suite booted, i686 unless it is given, which `uname -m`
+# must name and which decides what a row expects of glibc's loader, of the
+# class `file` names a program by and of the triple config.guess names.
 #
 
 set -u
@@ -23,7 +26,20 @@ export PATH=/usr/bin:/bin:/usr/sbin:/sbin
 export HOME=/root LC_ALL=C
 
 ROW=${1:-}
+MACHINE=${2:-i686}
 WORK=/tmp/gnu/$ROW
+case "$MACHINE" in
+    x86_64)
+        LOADER=/lib64/ld-linux-x86-64.so.2
+        ELF_CLASS="ELF 64-bit LSB"
+        TRIPLE=x86_64-pc-linux-gnu
+        ;;
+    *)
+        LOADER=/lib/ld-linux.so.2
+        ELF_CLASS="ELF 32-bit LSB"
+        TRIPLE=i686-pc-linux-gnu
+        ;;
+esac
 FAILED=
 OUT=
 ABC=ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
@@ -82,7 +98,7 @@ row_names() {
 # Debian's netbase gives, and the zone the clock is kept in.
 row_glibc() {
     same "getconf" "$(getconf GNU_LIBC_VERSION)" "glibc 2.44"
-    has "the loader" "$(/lib/ld-linux.so.2 --version 2>&1 | head -n 1)" "2.44"
+    has "the loader" "$("$LOADER" --version 2>&1 | head -n 1)" "2.44"
     has "the cache" "$(ldconfig -p | head -n 1)" "libs found in cache"
     same "a locale of the archive" "$(LC_ALL=en_US.UTF-8 locale charmap)" "UTF-8"
     same "a service by its name" "$(getent services https | tr -s ' ')" "https 443/tcp"
@@ -378,7 +394,7 @@ row_file() {
     printf 'plain text\n' > "$WORK/t.txt"
     gzip -c "$WORK/t.txt" > "$WORK/t.gz"
     output "file" file -L /bin/bash "$WORK/t.txt" "$WORK/t.gz"
-    has "the program" "$OUT" "ELF 32-bit LSB"
+    has "the program" "$OUT" "$ELF_CLASS"
     has "the text" "$OUT" "t.txt: ASCII text"
     has "the gzip file" "$OUT" "gzip compressed data"
     output "file -z" file -bz "$WORK/t.gz"
@@ -792,9 +808,10 @@ print(mmap.mmap(f.fileno(), 0, flags=mmap.MAP_PRIVATE, prot=mmap.PROT_READ)[:5].
 
 # The system's name as uname gives it: Linux, whose interface the kernel
 # follows and whose name config.guess and scripts match, with Rach2 in the
-# release and the version.
+# release and the version, and the machine the architecture the suite booted.
 row_uname() {
     same "the system" "$(uname -s)" "Linux"
+    same "the machine" "$(uname -m)" "$MACHINE"
     same "the release" "$(uname -r)" "6.18.0-rach2"
     has "the version" "$(uname -v)" "Rach2 1.0.0"
 }
@@ -894,7 +911,7 @@ row_autotools() {
         return
     }
     output "configure" bash -lc "./configure --prefix=$WORK/inst"
-    has "the build, which config.guess names" "$OUT" "checking build system type... i686-pc-linux-gnu"
+    has "the build, which config.guess names" "$OUT" "checking build system type... $TRIPLE"
     runs "make" make -j2
     output "the sed made" ./sed/sed --version
     has "its version" "$OUT" "(GNU sed)"

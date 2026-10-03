@@ -31,6 +31,11 @@
 # Usage: gnu.sh KERNEL IMAGE DISK PORT ROOT_PASSWORD TEST_PASSWORD
 #
 
+# The build tree and the emulator of the architecture
+# tests/system/suites.mk names.
+ARCH_BUILD=${ARCH_BUILD:-build}
+QEMU=${RACH2_QEMU:-qemu-system-i386}
+
 # shellcheck source=tests/system/deadline.sh
 . "$(cd "$(dirname "$0")/../../.." && pwd)/tests/system/deadline.sh"
 set -u
@@ -105,7 +110,7 @@ dd if="$IMAGE" of="$DISK" bs=1048576 seek=1 conv=notrunc,sparse 2>/dev/null ||
 
 # Two GiB, for the compilers and the browser; the disk on an AHCI port,
 # whose transfers are DMA, since the rows read most of the volume.
-qemu-system-i386 -cpu max -m 2048 -display none -kernel "$KERNEL" \
+"$QEMU" -cpu max -m 2048 -display none -kernel "$KERNEL" \
     -append "rach2.root=ext2" \
     -device ich9-ahci,id=ahci0 \
     -drive "if=none,id=drv0,file=$DISK,format=raw" -device ide-hd,drive=drv0,bus=ahci0.0 \
@@ -233,7 +238,7 @@ for row in $ROWS; do
     "$DEADLINE" "$(scaled "${row#*:}")" \
         ssh -i "$ROOT_KEY" -p "$PORT" -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$KNOWN" \
         -o "ConnectTimeout=$(scaled 30)" -o BatchMode=yes -o IdentitiesOnly=yes \
-        root@127.0.0.1 "/bin/bash /tmp/gnu/rows.sh $name" > "$DISK.$name.log" 2>&1
+        root@127.0.0.1 "/bin/bash /tmp/gnu/rows.sh $name ${RACH2_ARCH:-i686}" > "$DISK.$name.log" 2>&1
     status=$?
     if [ "$status" -eq 0 ] && grep -q "^GNUROW OK $name\$" "$DISK.$name.log"; then
         echo "gnu-test: $name: OK"
