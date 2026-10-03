@@ -64,6 +64,13 @@ and, each time it starts the SSH server,
 .Dl init: sshd: started as pid N
 A restore of the whole disk from the stick's image leaves no recovery key
 file, since the image has none.
+Init then names each disk whose GUID table it reads from the backup at the
+disk's end, its primary failing its checksums:
+.Dl init: /dev/diskN: its primary GUID table does not check and was read from the backup; diskctl relocate /dev/diskN writes it again
+GRUB's BIOS core reads no backup, so such a disk boots by UEFI and not by
+BIOS until
+.Xr diskctl 8
+writes the primary again; recovery leaves the table as it is unless told.
 With
 .Ql rach2.fsck
 on the boot line, init first runs

@@ -10,7 +10,7 @@
 # nothing else: the firmware starts GRUB's EFI image from the disk's EFI
 # system partition, or from the stick's EFI boot image, and the image opens
 # the menu the BIOS core opens. Four boots by OVMF, a fifth part that boots
-# the GPT disk by SeaBIOS as well, and an install by OVMF:
+# the GPT disk by SeaBIOS as well, an install by OVMF, and a repair:
 #
 # 1. The installed disk, a GPT disk as the disk builder makes one and an
 #    install writes it: the firmware boots it, the kernel finds its root by
@@ -40,8 +40,14 @@
 #    SSH and grows the root into the whole disk, and the disk then boots by
 #    OVMF alone, the first account logs in with the demonstration key the
 #    install took as its authorized key, and `df` finds the root on the NVMe
-#    disk and larger than 2 TiB. The disk is a sparse file, and QEMU turns the zeroed blocks
-#    the grow writes, its new groups' inode tables, back into holes.
+#    disk and larger than 2 TiB. The disk is a sparse file, and QEMU turns
+#    the zeroed blocks the grow writes, its new groups' inode tables, back
+#    into holes.
+# 7. A GPT disk whose primary header does not check, which GRUB's BIOS core
+#    cannot boot: it reads no backup table. The stick boots by OVMF beside
+#    it, and its recovery system must name the disk as read from its backup;
+#    `diskctl relocate` writes the primary again, and the disk then boots by
+#    SeaBIOS.
 #
 # In the first boot the kernel's console is on the firmware's framebuffer,
 # and the screen QEMU dumps through its monitor, once the login prompt is
@@ -489,8 +495,46 @@ fi
 stop_machine
 rm -f "$BIG"
 
+# ---- 7: a disk whose primary GUID table does not check ----
+DAMAGED="$DIR/damaged.img"
+cp "$DISK" "$DAMAGED"
+# Four bytes of the primary header's checksum, at byte 16 of LBA 1.
+printf 'RACH' | dd of="$DAMAGED" bs=1 seek=528 conv=notrunc 2>/dev/null
+cp "$STICK" "$DIR/damaged-stick.img"
+LOG9="$DIR/damaged.log"
+boot_uefi "$LOG9" -device qemu-xhci,id=xhci \
+    -drive "if=none,id=stick,format=raw,file=$DIR/damaged-stick.img" \
+    -device usb-storage,bus=xhci.0,drive=stick,bootindex=0 \
+    -drive "file=$DAMAGED,format=raw,if=ide,index=0,media=disk"
+if "$RUNUTIL" until "$LOG9" "SSH is on" 240; then
+    OUT=$(key_ssh 'diskctl relocate /dev/disk0' || true)
+    if grep -aq "init: /dev/disk0: its primary GUID table does not check and was read from the backup" \
+        "$LOG9"; then
+        note "the recovery system names the disk whose primary table does not check: OK"
+    else
+        bad "the recovery system did not name the damaged table; see $LOG9"
+    fi
+    case "$OUT" in
+        *"the primary table was written again from the backup"*)
+            note "and diskctl relocate writes the primary again: OK" ;;
+        *) bad "diskctl relocate on the damaged table: $OUT" ;;
+    esac
+else
+    bad "the stick beside the damaged disk never came up; see $LOG9"
+fi
+stop_machine
+LOG10="$DIR/repaired.log"
+boot_bios "$LOG10" -drive "file=$DAMAGED,format=raw,if=ide,index=0,media=disk"
+if "$RUNUTIL" until "$LOG10" "rach2 login:" 240; then
+    note "and the repaired disk boots by SeaBIOS: OK"
+else
+    bad "the repaired disk did not boot by SeaBIOS; see $LOG10"
+fi
+stop_machine
+rm -f "$DAMAGED"
+
 if [ "$fail" -ne 0 ]; then
     echo "uefi-test: result: FAIL" >&2
     exit 1
 fi
-echo "uefi-test: result: the installed disk, its recovery entry, the stick and the CD boot by UEFI; the disk's BIOS core is replaced twice and boots by either firmware; an install grows its root past 2 TiB on a 4 TiB NVMe disk"
+echo "uefi-test: result: the installed disk, its recovery entry, the stick and the CD boot by UEFI; the disk's BIOS core is replaced twice and boots by either firmware; an install grows its root past 2 TiB on a 4 TiB NVMe disk; a disk whose primary table was damaged boots by SeaBIOS once recovery writes it again"

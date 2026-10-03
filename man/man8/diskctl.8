@@ -52,6 +52,9 @@ Move a GUID table's backup to the disk's last 33 sectors and rewrite both
 copies with their checksums.
 A disk image written to a larger disk leaves its backup where the image
 ended, and a reader looks for it at the disk's end.
+A table whose primary header or array does not check is read from the
+backup, and the primary is written again from it; GRUB's BIOS core reads
+no backup, so a disk in that state boots by BIOS only after this.
 The last usable sector becomes the one before the backup entry array, and
 the protective MBR's entry is made to cover the disk, with the boot code
 around it kept.
@@ -95,7 +98,9 @@ A completed relocation prints:
 or, when the backup was already there,
 .Ql is in
 in place of
-.Ql was moved to .
+.Ql was moved to ,
+and, when the primary was written again from the backup:
+.Dl diskctl: result: DEVICE: the primary table was written again from the backup, which is in sectors FIRST to LAST
 Refusals of
 .Cm relocate
 include

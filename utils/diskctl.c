@@ -24,7 +24,9 @@
  * rewrites both copies with their checksums. An image written to a disk
  * larger than itself leaves its backup where the image ended, and a reader
  * looks for it at the disk's end; this puts it there, makes the space between
- * usable, and asks the kernel to read the table again.
+ * usable, and asks the kernel to read the table again. A table whose primary
+ * does not check is read from its backup, so the same command writes the
+ * primary again, which GRUB's BIOS core needs: it reads no backup.
  *
  * `esp` gives entry 1 of an MBR the EFI system partition's type, 0xEF, which
  * UEFI firmware boots from on an MBR disk, and asks the kernel to read the
@@ -124,7 +126,10 @@ static int reread(int fd, const char *path)
     return 0;
 }
 
-/** Move the GUID table's backup of the disk open on `fd` to its end. */
+/**
+ * Move the GUID table's backup of the disk open on `fd` to its end, writing
+ * both copies, the primary from the backup when only the backup checked.
+ */
 static int relocate(int fd, const char *path)
 {
     const char *why = "";
@@ -146,10 +151,17 @@ static int relocate(int fd, const char *path)
     if (reread(fd, path) != 0) {
         return 1;
     }
-    printf("diskctl: result: %s: the backup table %s sectors %llu to %llu\n", path,
-           moved ? "was moved to" : "is in",
-           (unsigned long long)gptdisk_le64(table.header + 48) + 1,
-           (unsigned long long)table.sectors - 1);
+    if (table.from_backup) {
+        printf("diskctl: result: %s: the primary table was written again from the backup, which "
+               "is in sectors %llu to %llu\n",
+               path, (unsigned long long)gptdisk_le64(table.header + 48) + 1,
+               (unsigned long long)table.sectors - 1);
+    } else {
+        printf("diskctl: result: %s: the backup table %s sectors %llu to %llu\n", path,
+               moved ? "was moved to" : "is in",
+               (unsigned long long)gptdisk_le64(table.header + 48) + 1,
+               (unsigned long long)table.sectors - 1);
+    }
     return 0;
 }
 

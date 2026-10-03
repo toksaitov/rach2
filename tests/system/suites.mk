@@ -1606,8 +1606,9 @@ run-installer-repair: $(DEMO_CREDS) $(INSTALL_STICK) $(INSTALL_TEST_STICK) $(PTY
 # `tests/run uefi`: the machine booted by UEFI firmware, OVMF, from its
 # installed disk and that disk's recovery entry, from the install stick's
 # image as a USB device and from the recovery ISO as a CD, each answering SSH,
-# and installed from the stick onto a 4 TiB NVMe disk whose root grows past
-# 2 TiB.
+# installed from the stick onto a 4 TiB NVMe disk whose root grows past
+# 2 TiB, and booted by SeaBIOS after recovery writes a damaged primary GUID
+# table again.
 # The disk is a GPT disk as the disk builder makes one for a machine, with the
 # installer's root, the metal system whose init starts the SSH server.
 UEFI_DIR = $(IMAGES_DIR)/uefi

@@ -994,6 +994,41 @@ static void report_recovery_keys(void)
         printf("init: no key was built into this recovery image, so SSH is off\n");
     }
 }
+
+/**
+ * Name on the console each disk whose GUID table was read from its backup.
+ *
+ * The kernel and the tools here take a table's backup at the disk's end
+ * when its primary header or array does not check. GRUB's BIOS core reads
+ * only the primary, so such a disk boots by UEFI and not by BIOS until the
+ * primary is written again. Recovery changes nothing it was not asked to,
+ * so this says which disk it is and the command that rewrites the primary
+ * from the backup.
+ */
+static void report_backup_tables(void)
+{
+    static struct gptdisk table;
+    char node[16];
+    uint64_t sectors;
+    int n, fd;
+
+    for (n = 0; n < DISK_NODES; n++) {
+        if (gptdisk_sectors(n, &sectors) != 0) {
+            continue;
+        }
+        snprintf(node, sizeof(node), "/dev/disk%d", n);
+        fd = open(node, O_RDONLY);
+        if (fd < 0) {
+            continue;
+        }
+        if (gptdisk_read(fd, sectors, &table) == 1 && table.from_backup) {
+            printf("init: %s: its primary GUID table does not check and was read from the "
+                   "backup; diskctl relocate %s writes it again\n",
+                   node, node);
+        }
+        close(fd);
+    }
+}
 #endif
 
 /**
@@ -1895,6 +1930,7 @@ int main(void)
     open_service_log();
 #ifdef INIT_RECOVERY
     report_recovery_keys();
+    report_backup_tables();
 #endif
 #ifdef INIT_METAL
     if (boot_line_has("rach2.fsck")) {
