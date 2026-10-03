@@ -2,17 +2,17 @@
 
 ![Rach2 running its self-tests](https://raw.githubusercontent.com/rachmiroff/images/refs/heads/main/auca/com-341/fall-2025/os-project/self-test.png)
 
-Rach2 is a small educational operating system for 32-bit x86. It boots into a Unix-like system with accounts, a shell, a writable file system, networking, SSH, audio, a C compiler, and Doom. Rach2 can rebuild its own kernel, shell, and utilities from source.
+Rach2 is a small educational operating system for x86 PCs, built from one tree for 32-bit x86, i686, or for x86-64. It boots by BIOS or UEFI firmware into a Unix-like system with accounts, a shell, a writable file system, networking, SSH, audio, a C compiler, and Doom, and runs on every processor the machine has. Rach2 can rebuild its own kernel, shell, and utilities from source.
 
 ## System
 
-The [kernel](rach2/Readme.md) boots through Multiboot1 and runs static ELF32 programs in ring 3. It implements preemptive processes, paged address spaces, files, pipes, terminals, signals, and sockets through a Linux i386-style system call interface. The kernel Readme indexes the subsystem documents.
+The [kernel](rach2/Readme.md) boots through Multiboot or multiboot2 and runs ELF programs in ring 3, ELF32 on i686 and ELF64 on x86-64. It implements preemptive processes on every processor, paged address spaces, files, pipes, terminals, signals, and sockets through Linux's system call interface for the architecture, i386's or x86-64's. The kernel Readme indexes the subsystem documents.
 
-[KRFFS](rach2/sys/fs/Readme.md) is the native hierarchical file system and the root of every RAM image. The kernel can mount it directly from a RAM module or from an ATA or AHCI disk through a write-back page cache, or boot an [ext2](rach2/sys/fs/ext2.Readme.md) partition as its root, read and written through the buffer cache, checked before a writable mount when it was not unmounted and repaired by `e2fsck` from the recovery system; a program with root's privilege can mount a FAT32 partition of the same disk with `mount(2)`, for reading and writing, an ext2 partition the same way, an exFAT partition, read and written the same way, and a KRFFS volume of a partition or of a stick, read and written through the same buffer cache ([the VFS](rach2/sys/fs/vfs.Readme.md)). A file system can also live in a file: `loopctl` attaches an image to `/dev/loop0` and `mount(2)` takes that device as its source ([the block layer](rach2/sys/block/Readme.md)). The [KRFFS host tools](krffs/Readme.md) build, inspect, repair, and mount its images.
+[KRFFS](rach2/sys/fs/Readme.md) is the native hierarchical file system and the root of every RAM image. The kernel can mount it directly from a RAM module or from an ATA, AHCI or NVMe disk through a write-back page cache, or boot an [ext2](rach2/sys/fs/ext2.Readme.md) partition as its root, read and written through the buffer cache, checked before a writable mount when it was not unmounted and repaired by `e2fsck` from the recovery system; a program with root's privilege can mount a FAT32 partition of the same disk with `mount(2)`, for reading and writing, an ext2 partition the same way, an exFAT partition, read and written the same way, and a KRFFS volume of a partition or of a stick, read and written through the same buffer cache ([the VFS](rach2/sys/fs/vfs.Readme.md)). A file system can also live in a file: `loopctl` attaches an image to `/dev/loop0` and `mount(2)` takes that device as its source ([the block layer](rach2/sys/block/Readme.md)). The [KRFFS host tools](krffs/Readme.md) build, inspect, repair, and mount its images.
 
 The [network stack](rach2/sys/network/Readme.md) implements Ethernet, ARP, IPv4, ICMP, UDP, and TCP for RTL8139, Intel 82540EM, and RTL8168GU devices. The two userlands include DHCP and DNS clients, ping, netcat, and a small HTTP server; `os-real` also runs Dropbear SSH.
 
-Kernel drivers support VGA text and mode 13h graphics, PS/2 keyboard and mouse input, USB keyboards, mice and flash drives through an xHCI controller, on root ports and behind USB 2.0 and USB 3.0 hubs, COM1, Sound Blaster 16, Intel HD Audio, and the PC speaker. A stick that answers can be pulled out at any moment: the read in flight answers `EIO`, and the mount stays until it is unmounted, which is what a volume should be unmounted before its stick is pulled. A stick that had stopped answering once panicked the kernel when pulled; entry 1 of the shortcomings record closes that in milestone 50, with a host test for a class reset that never answers and `tests/run usbdisk` for a removal with a command in flight. The [Doom port](ports/doom/Readme.md) uses the graphics, input, and audio interfaces. Its IWAD game data is supplied separately and is not committed.
+Kernel drivers support VGA text and mode 13h graphics, a text console on the firmware's framebuffer, PS/2 keyboard and mouse input, USB keyboards, mice and flash drives through an xHCI controller, on root ports and behind USB 2.0 and USB 3.0 hubs, COM1, Sound Blaster 16, Intel HD Audio, and the PC speaker. A stick that answers can be pulled out at any moment: the read in flight answers `EIO`, and the mount stays until it is unmounted, which is what a volume should be unmounted before its stick is pulled. A stick that had stopped answering once panicked the kernel when pulled; entry 1 of the shortcomings record closes that in milestone 50, with a host test for a class reset that never answers and `tests/run usbdisk` for a removal with a command in flight. The [Doom port](ports/doom/Readme.md) uses the graphics, input, and audio interfaces. Its IWAD game data is supplied separately and is not committed.
 
 ## Images
 
@@ -20,6 +20,8 @@ Kernel drivers support VGA text and mode 13h graphics, PS/2 keyboard and mouse i
 * `os-simple` uses the project's own init, login, ISH shell, and utilities.
 * `os-real` uses BusyBox and Dropbear and includes TinyCC, pdpmake, the musl development files, and the project sources under `/src`. `make os-real-ext2` builds the same manifest as an ext2 volume, `build/images/os-real.ext2`, which the kernel boots from a disk partition with `rach2.root=ext2`.
 * `os-real-gnu` is the os-real system with the GNU system of milestone 54 installed over it, on a 4 GiB ext2 root: glibc, bash, the GNU tools, Perl, Git, Vim, curl, OpenSSH in Dropbear's place, GCC, GDB, the SpiderMonkey shell and Debian's chromium-headless-shell. `make os-real-gnu-ext2` builds it, on a Linux host only ([the GNU layer](vendor/gnu/Readme.md#the-root-image)).
+
+`make ARCH=x86_64` builds the same images for x86-64 under `build/x86_64/images`, and `make ARCH=x86_64 os-real-gnu-ext2` the GNU root.
 
 Additional targets build persistent disks, GRUB images, metal images, and recovery images. `make rach2-stick-image` builds `build/images/rach2-stick.img`, the metal ISO followed by an exFAT volume, which a machine boots from a USB socket and then mounts through `/dev/diskNp2`, using the stick's disk number from `/proc/usb`. With no other disk registered, the source is `/dev/disk0p2`. The root Makefile names them. The [kernel Readme](rach2/Readme.md) describes the boot paths and disk authority.
 
@@ -58,13 +60,13 @@ tcc -static -o /tmp/echo /src/utils/echo.c
 
 The musl system's executables are static: [TinyCC](vendor/tcc/Readme.md) compiles, assembles, and links them; [pdpmake](vendor/pdpmake/Readme.md) reads the guest makefiles.
 
-`tests/run selfbuild` builds the kernel twice in clean guest directories and requires identical hashes. It also builds the utilities and ISH, extracts and checks the guest-built kernel on the host, and boots that kernel through the guest probe suite.
+`tests/run selfbuild` builds the kernel twice in clean guest directories and requires identical hashes. It also builds the utilities and ISH, extracts and checks the guest-built kernel on the host, and boots that kernel through the guest probe suite. Each architecture's machine builds its own: `ARCH=x86_64 tests/run selfbuild` has x86-64 Rach2 build the x86-64 kernel.
 
 ## Limits
 
-The kernel manages every usable whole frame of physical memory below 4 GiB that the firmware's map describes, after boot reservations, and identity-maps the first 32 MiB. Process records, sockets, pipes, mounts and file-system nodes are allocated from the kernel heap without a fixed count; a fork or an open the heap cannot serve answers `ENOMEM`. Each process's descriptor table grows from 16 entries to a limit of 1024. `prlimit64` maintains limits on threads per real user, on descriptors, address-space bytes, the stack and core files per process; init reads their initial settings from `/etc/rach2/limits`, or leaves the kernel defaults when the file is absent.
+The i686 kernel manages every usable whole frame of physical memory below 4 GiB that the firmware's map describes, after boot reservations, and identity-maps the first 32 MiB; the x86-64 kernel manages all of it, to the 64 TiB its direct map reaches. Both run on up to 64 processors, every enabled one the ACPI tables list, with one lock over the kernel, so programs run on every processor at once and the kernel on one at a time. Process records, sockets, pipes, mounts and file-system nodes are allocated from the kernel heap without a fixed count; a fork or an open the heap cannot serve answers `ENOMEM`. Each process's descriptor table grows from 16 entries to a limit of 1024. `prlimit64` maintains limits on threads per real user, on descriptors, address-space bytes, the stack and core files per process; init reads their initial settings from `/etc/rach2/limits`, or leaves the kernel defaults when the file is absent.
 
-The musl system's programs are static, and the GNU system's are linked against glibc and started by its loader, `/lib/ld-linux.so.2`, with threads of their own; a root is KRFFS or ext2, and the network stack implements IPv4 only. USB is keyboards, mice and flash drives through xHCI, on root ports and behind hubs, with sixteen device table entries shared by every device, hubs included, and eight hubs at once. Rach2 does not implement UEFI, swap, IPv6, or VESA graphics.
+The musl system's programs are static, and the GNU system's are linked against glibc and started by its loader, `/lib/ld-linux.so.2` on i686 and `/lib64/ld-linux-x86-64.so.2` on x86-64, with threads of their own; a root is KRFFS or ext2, and the network stack implements IPv4 only. USB is keyboards, mice and flash drives through xHCI, on root ports and behind hubs, with sixteen device table entries shared by every device, hubs included, and eight hubs at once. Rach2 boots by UEFI through GRUB and calls none of the firmware's services after it, and does not implement swap, IPv6, or VESA graphics.
 
 [`limits(7)`](man/man7/limits.7) is the manual's page of these numbers, and the [kernel Readme](rach2/Readme.md#hardware-and-limits) states them beside what enforces each one. `dev-log/53-audit/bounds.md` is the inventory of every bound in the tree with its class and its reason.
 
@@ -144,7 +146,7 @@ System sources:
 
 Integrated software:
 
-* [`vendor/musl/`](vendor/musl/Readme.md): static i386 C library.
+* [`vendor/musl/`](vendor/musl/Readme.md): static C library, for i386 or x86-64.
 * [`vendor/busybox/`](vendor/busybox/Readme.md): main and set-id BusyBox builds.
 * [`vendor/dropbear/`](vendor/dropbear/Readme.md): Dropbear SSH server and client.
 * [`vendor/tcc/`](vendor/tcc/Readme.md): TinyCC and its guest runtime.
@@ -168,7 +170,7 @@ The development procedure, including when `tests/run style` and `tests/run host`
 
 ## Third-party sources and license
 
-The repository includes pinned source archives for musl, BusyBox, Dropbear, TinyCC, and pdpmake. Their build scripts verify SHA-256 digests before extracting them. Project configuration and patches stay beside the archives; generated extraction and installation directories are ignored by Git. The integration Readmes describe each build and update procedure.
+The repository includes pinned source archives for musl, BusyBox, Dropbear, TinyCC, pdpmake and e2fsprogs, and the GNU layer pins its tarballs by digest in `vendor/gnu/sources.txt`. Their build scripts verify SHA-256 digests before extracting them. Project configuration and patches stay beside the archives; generated extraction and installation directories are ignored by Git. The integration Readmes describe each build and update procedure.
 
 `ports/doom/` is a maintained project fork. Its Readme identifies the upstream-derived engine and audio sources.
 
