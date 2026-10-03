@@ -1,6 +1,6 @@
 /**
- * The three things a program that has just written a whole disk needs:
- * `diskctl reread DEV`, `diskctl id DEV` and `diskctl relocate DEV`.
+ * The things a program that writes a whole disk needs: `diskctl reread DEV`,
+ * `diskctl id DEV`, `diskctl relocate DEV` and `diskctl esp DEV`.
  *
  * A program that writes a whole disk changes the table under a kernel that
  * read the old one at boot, and the nodes for the partitions it just made do
@@ -25,6 +25,12 @@
  * larger than itself leaves its backup where the image ended, and a reader
  * looks for it at the disk's end; this puts it there, makes the space between
  * usable, and asks the kernel to read the table again.
+ *
+ * `esp` gives entry 1 of an MBR the EFI system partition's type, 0xEF, which
+ * UEFI firmware boots from on an MBR disk, and asks the kernel to read the
+ * table again. The entry must be a FAT one already, 0x0B or 0x0C: this is the
+ * last step of converting an installed MBR disk's boot partition, whose file
+ * system the installer has made one UEFI firmware reads.
  */
 
 #include <errno.h>
@@ -147,18 +153,53 @@ static int relocate(int fd, const char *path)
     return 0;
 }
 
+/** Give entry 1 of the MBR of the disk open on `fd` the type 0xEF. */
+static int make_esp(int fd, const char *path)
+{
+    unsigned char sector[512];
+    unsigned char *type = sector + 446 + 4;
+
+    if (read(fd, sector, sizeof(sector)) != (ssize_t)sizeof(sector) || sector[510] != 0x55 ||
+        sector[511] != 0xAA) {
+        fprintf(stderr, "diskctl: %s: its first sector is not a table\n", path);
+        return 1;
+    }
+    if (*type == 0xEE) {
+        fprintf(stderr, "diskctl: %s has a GUID table, whose entries have no type byte\n", path);
+        return 1;
+    }
+    if (*type != 0x0B && *type != 0x0C && *type != 0xEF) {
+        fprintf(stderr, "diskctl: %s: entry 1 has type 0x%02x, which is not a FAT one\n", path,
+                *type);
+        return 1;
+    }
+    if (*type != 0xEF) {
+        *type = 0xEF;
+        if (lseek(fd, 0, SEEK_SET) != 0 ||
+            write(fd, sector, sizeof(sector)) != (ssize_t)sizeof(sector)) {
+            fprintf(stderr, "diskctl: %s: the table was not written: %s\n", path, strerror(errno));
+            return 1;
+        }
+        if (reread(fd, path) != 0) {
+            return 1;
+        }
+    }
+    printf("diskctl: result: %s: entry 1 is the EFI system partition, type 0xef\n", path);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     int fd, rc;
     int writing;
 
     if (argc != 3 || (strcmp(argv[1], "reread") != 0 && strcmp(argv[1], "id") != 0 &&
-                      strcmp(argv[1], "relocate") != 0)) {
-        fprintf(stderr,
-                "usage: diskctl reread DEVICE | diskctl id DEVICE | diskctl relocate DEVICE\n");
+                      strcmp(argv[1], "relocate") != 0 && strcmp(argv[1], "esp") != 0)) {
+        fprintf(stderr, "usage: diskctl reread DEVICE | diskctl id DEVICE | "
+                        "diskctl relocate DEVICE | diskctl esp DEVICE\n");
         return 2;
     }
-    writing = strcmp(argv[1], "relocate") == 0;
+    writing = strcmp(argv[1], "relocate") == 0 || strcmp(argv[1], "esp") == 0;
     fd = open(argv[2], writing ? O_RDWR : O_RDONLY);
     if (fd < 0) {
         fprintf(stderr, "diskctl: cannot open %s: %s\n", argv[2], strerror(errno));
@@ -166,6 +207,8 @@ int main(int argc, char **argv)
     }
     if (strcmp(argv[1], "id") == 0) {
         rc = print_id(fd, argv[2]);
+    } else if (strcmp(argv[1], "esp") == 0) {
+        rc = make_esp(fd, argv[2]);
     } else if (writing) {
         rc = relocate(fd, argv[2]);
     } else {

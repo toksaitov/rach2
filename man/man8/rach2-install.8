@@ -1,4 +1,4 @@
-.Dd October 2, 2026
+.Dd October 3, 2026
 .Dt RACH2-INSTALL 8
 .Os
 .Sh NAME
@@ -18,8 +18,22 @@ The stick contains a whole disk image and a manifest giving its name,
 length, and SHA-256.
 Its exFAT volume also contains
 .Pa rach2-metal-disk.ext2
-for root updates, with room beside the images for saved copies of the
-64 MiB boot and recovery partitions.
+for root updates, GRUB's EFI image
+.Pa bootx64.efi
+with its digest in
+.Pa bootx64.efi.sha256 ,
+which an update takes to convert an MBR disk, and room beside the images
+for saved copies of the 64 MiB boot and recovery partitions.
+.Pp
+The disk image has a GUID partition table: partition 1 is the boot
+partition, the EFI system partition, with GRUB's EFI image as
+.Pa \eEFI\eBOOT\eBOOTX64.EFI
+beside the kernels, the menu and its environment block; partition 2 is
+the recovery partition, partition 3 the ext2 root, and partition 4 the
+BIOS boot partition, which holds GRUB's BIOS core.
+The disk boots by BIOS and by UEFI.
+UEFI firmware must have Secure Boot turned off, since the pinned GRUB
+image is not signed.
 The manifest identifies the stick, regardless of its position among
 the machine's disks.
 The
@@ -101,9 +115,12 @@ which reports progress every sixteen mebibytes.
 .It
 Read the written range back and compare its hash with the image's hash.
 .It
-Run
-.Ql diskctl reread
-to reload the partition table.
+Move the GUID table's backup to the disk's last sectors with
+.Ql diskctl relocate ,
+which also reloads the partition table, since the image's backup is
+where the image ended and a reader looks for it at the disk's end.
+An image with an MBR is reloaded with
+.Ql diskctl reread .
 .It
 Write
 .Pa /etc/passwd ,
@@ -133,7 +150,12 @@ This makes init start Dropbear without
 .Fl g ,
 permitting root to log in over SSH with a password.
 .It
-Grow the root into the free space after it, if requested.
+Grow the root into the free space after it, if requested, with
+.Xr growroot 8
+and the disk's identity
+.Ql diskctl id
+prints, as
+.Ql GPTID=GUID,3 .
 .El
 .Pp
 If the installer finds a recovery partition, it archives the three account
@@ -202,7 +224,8 @@ installation, and the image's system accounts the restored files lack are
 appended to them, as for an install.
 The absence of account keys is preserved too.
 If the root cannot be read, the account files, policy and keys are taken
-from the recovery partition's archive and the last ext2 partition is replaced.
+from the recovery partition's archive and the root partition is replaced:
+entry 3 of a GUID table, or the last ext2 entry of an MBR.
 When the root and archive can both be read but differ, each differing
 configuration file is reported and the root's copy is kept.
 .Pp
@@ -263,6 +286,46 @@ exists, the image's SHA-256 must match it.
 Before writing, the installer sets the saved boot entry to
 .Ql recovery
 and cancels any armed trial.
+.Pp
+An MBR disk, the layout disks installed before Rach2 booted by UEFI have,
+is then converted to boot by UEFI as well, when
+.Pa bootx64.efi
+is beside
+.Ar IMAGE ,
+as the install stick has it.
+The disk keeps its MBR.
+If
+.Pa bootx64.efi.sha256
+is there, the EFI image's SHA-256 must match it.
+UEFI firmware reads a FAT32 volume only when it has 65525 clusters or more,
+and the 64 MiB boot partition such a disk has, at eight sectors to a
+cluster, has 16348; its files are copied to
+.Pa /dev/shm ,
+its file system is made again with
+.Ql mkfs.vfat ,
+which takes one sector to a cluster, its serial, by which the menu finds
+it, is written back into the new boot sector and its backup, and the
+files are copied back, after which
+.Xr bootctl 8
+must read the volume.
+A boot partition of less than 33 MiB holds no such volume, and its disk is
+left to boot by BIOS alone, as one is when
+.Pa bootx64.efi
+is not beside the image.
+GRUB's EFI image is copied to the boot partition as
+.Pa \eEFI\eBOOT\eBOOTX64.EFI ,
+where its prefix opens the menu the BIOS core opens, and
+.Ql diskctl esp
+gives the partition the EFI system partition's type, 0xEF.
+A stop while the file system is made again leaves a boot partition the
+BIOS core reads no menu from; it then starts the recovery system from
+partition 2, where the update can be run again.
+The kernels in the disk's slots must be of this version or later for
+.Ql bootctl commit
+to work after the conversion, since an older kernel publishes no
+.Pa /dev/bootpart
+for a boot partition of type 0xEF.
+.Pp
 Both kernel entries boot the same root; recovery runs from RAM.
 After the update, the new root is armed for one trial boot.
 A failed trial or an interrupted write returns the machine to recovery.
@@ -295,8 +358,10 @@ The space reserved for the boot and recovery copies does not cover a
 backup of a grown root.
 The RAM root has no room for the 1 GiB update image.
 .Sh SEE ALSO
+.Xr mkfs.vfat 1 ,
 .Xr disk 7 ,
 .Xr recovery 7 ,
 .Xr bootctl 8 ,
+.Xr diskctl 8 ,
 .Xr growroot 8 ,
 .Xr reflash 8

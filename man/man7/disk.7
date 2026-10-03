@@ -60,11 +60,14 @@ select partitions by identity.
 The forms of
 .Ar SPEC
 are:
-.Bl -tag -width MBRID=XXXXXXXX,M
+.Bl -tag -width GPTID=GUID,M
 .It Ql PARTUUID=GUID
 A GPT partition GUID.
 .It Ql MBRID=XXXXXXXX,M
 An eight-digit hexadecimal MBR disk identifier and partition number.
+.It Ql GPTID=GUID,M
+A GUID partition table's 36-character disk GUID and partition number,
+which a disk this system installs is named by.
 .It Ql UUID=UUID
 An ext2 volume UUID.
 .It Ql LABEL=NAME
@@ -76,13 +79,23 @@ A partition node.
 Exactly one partition must match.
 A root identity that matches none or more than one mounts no root and
 produces a diagnostic.
-A boot identity must resolve to the first primary entry of an MBR disk
-that passes the boot-window checks; otherwise neither boot device is
+A boot identity must resolve to entry 1 of an MBR or a GUID table that
+passes the boot-window checks; otherwise neither boot device is
 published.
+The boot partition's type must be FAT, 0x0B or 0x0C, or the EFI system
+partition's, 0xEF on an MBR and its type GUID on a GUID table.
+A disk with a GUID table has no
+.Pa /dev/grubcore ,
+since the table is in the sectors that window covers on an MBR disk and
+GRUB's BIOS core is in the BIOS boot partition.
 .Xr growroot 8
 uses the
 .Ql MBRID=XXXXXXXX,M
-form to identify its partition.
+and
+.Ql GPTID=GUID,M
+forms to identify its partition, and
+.Ql diskctl id
+prints the identity of a disk.
 .Ss Reads and writes
 Whole-disk and partition nodes accept reads of any byte range.
 Raw writes and boot-window reads require sector-aligned offsets and lengths.

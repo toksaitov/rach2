@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd October 3, 2026
 .Dt BOOTCTL 8
 .Os
 .Sh NAME
@@ -41,6 +41,14 @@ The
 .Fl -target Ar PARTITION
 option selects a named boot partition, such as
 .Pa /dev/disk0p1 .
+The boot partition is partition 1 of an MBR or a GUID table: on a GUID
+table, and on an MBR disk converted by
+.Ql rach2-install --update ,
+it is the EFI system partition, from which UEFI firmware starts GRUB's EFI
+image, and the slots, the menu and the trial boot work there as they do on
+an MBR disk, since GRUB opens the same menu under either firmware.
+The volume must be FAT32 with two FATs of at most 1024 sectors and at most
+131070 clusters, which a 64 MiB partition at one sector to a cluster has.
 The
 .Cm grub
 and
@@ -166,7 +174,10 @@ An empty file, a file larger than the slot, or a disk without a menu
 slot is refused.
 .It Cm grub Ar FILE
 Replace the i386-pc GRUB core image through
-.Pa /dev/grubcore .
+.Pa /dev/grubcore ,
+which the kernel publishes on an MBR disk only.
+A disk with a GUID table keeps the core in its BIOS boot partition, and
+the command is refused there with the message below.
 The image must be 2 through 1024 sectors long.
 The unused part of the core-image area after the master boot record is
 written and verified, then sector 1 is updated to refer to it.

@@ -3,7 +3,7 @@
 .Os
 .Sh NAME
 .Nm diskctl
-.Nd reread a disk's partition table, print its identity or move its backup table
+.Nd reread a disk's partition table, print its identity, move its backup table or type its EFI system partition
 .Sh SYNOPSIS
 .Nm
 .Cm reread Ar DEVICE
@@ -11,12 +11,15 @@
 .Cm id Ar DEVICE
 .Nm
 .Cm relocate Ar DEVICE
+.Nm
+.Cm esp Ar DEVICE
 .Sh DESCRIPTION
 The
 .Nm
 command rereads a disk's partition table, prints the identity the boot
-command line names the disk by, or moves a GUID table's backup to the
-disk's last sectors.
+command line names the disk by, moves a GUID table's backup to the
+disk's last sectors, or gives an MBR's first entry the EFI system
+partition's type.
 The commands are:
 .Bl -tag -width Ds
 .It Cm reread Ar DEVICE
@@ -62,15 +65,27 @@ The size of the disk is the kernel's, from
 .Pa /proc/disk ;
 a disk past the 2 TiB the whole-disk node reaches is refused.
 Writing a whole-disk node requires the recovery kernel.
+.It Cm esp Ar DEVICE
+Give entry 1 of the disk's MBR the type 0xEF, which UEFI firmware boots
+from on an MBR disk, and read the table again as
+.Cm reread
+does.
+The entry must have a FAT type already, 0x0B or 0x0C, or have 0xEF, which
+is left as it is; a GUID table's protective MBR is refused.
+This is the last step of
+.Ql rach2-install --update
+converting an MBR disk to boot by UEFI as well, after it has made the
+boot partition's file system one UEFI firmware reads.
+Writing a whole-disk node requires the recovery kernel.
 .El
 .Sh EXAMPLES
 .Dl diskctl id /dev/disk0
 .Dl diskctl relocate /dev/disk0
 .Pp
-The installer uses all three commands.
+The installer uses all four commands.
 .Sh DIAGNOSTICS
 An invalid command or operand count prints:
-.Dl usage: diskctl reread DEVICE | diskctl id DEVICE | diskctl relocate DEVICE
+.Dl usage: diskctl reread DEVICE | diskctl id DEVICE | diskctl relocate DEVICE | diskctl esp DEVICE
 Diagnostics identify the device.
 A reread refused with
 .Er EBUSY
@@ -90,6 +105,13 @@ include
 .Ql the whole-disk node does not reach the disk's last sector
 and
 .Ql a partition reaches past where the backup table would go .
+.Cm esp
+prints
+.Ql diskctl: result: DEVICE: entry 1 is the EFI system partition, type 0xef
+and refuses a disk with
+.Ql has a GUID table, whose entries have no type byte
+or
+.Ql entry 1 has type 0xNN, which is not a FAT one .
 .Sh SEE ALSO
 .Xr ioctl 2 ,
 .Xr disk 7 ,

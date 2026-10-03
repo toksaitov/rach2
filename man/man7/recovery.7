@@ -1,4 +1,4 @@
-.Dd October 2, 2026
+.Dd October 3, 2026
 .Dt RECOVERY 7
 .Os
 .Sh NAME
@@ -40,7 +40,11 @@ token, and it must be
 .Ql rach2.boot=MBRID=ID,1
 with
 .Ar ID
-eight hexadecimal digits.
+eight hexadecimal digits, or
+.Ql rach2.boot=GPTID=GUID,1
+with
+.Ar GUID
+a GUID table's disk GUID in its 36-character text form.
 Init reads the key file from partition 2 of the one disk with that
 identity only when that partition's FAT32 boot sector has the label
 .Ql RACH2RECOV
@@ -131,6 +135,10 @@ as
 .Ar IMAGE ;
 the RAM root cannot store this 1 GiB file.
 This preserves the accounts, SSH policy and keys.
+On an MBR disk it also converts the disk to boot by UEFI, taking GRUB's
+EFI image from beside the image, as
+.Xr rach2-install 8
+describes.
 The recovery archive stores account files and SSH policy under
 .Pa rach2-config-a/etc ,
 Dropbear's host keys under

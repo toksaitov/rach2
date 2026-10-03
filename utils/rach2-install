@@ -24,14 +24,20 @@
 # mounted, which is how the tests drive it without a stick.
 #
 # `--update` writes a root file system image into the root partition of a
-# machine that is already installed, without touching its table. The account
+# machine that is already installed, without moving its partitions. The account
 # files, the SSH policy, the server's host keys and the accounts' own keys are
 # copied off the root first and written back afterwards, so a password changed
 # after the install is still the machine's password. The root is grown again
 # into its partition. The machine is saved to its recovery system for the whole
 # of the write and the new root is armed for one trial boot, so an update cut
 # off by a power cut, or one that does not come up, costs a reboot into
-# recovery rather than a journey.
+# recovery rather than a journey. An MBR disk is converted on the way to boot
+# by UEFI as well, when GRUB's EFI image is beside IMAGE: it keeps its MBR,
+# and its boot partition becomes the EFI system partition.
+#
+# A new install writes the image's table, a GUID table on the images this
+# system builds, and moves its backup to the disk's last sectors, where a
+# reader looks for it on a disk larger than the image.
 #
 
 set -u
@@ -40,6 +46,7 @@ ME=rach2-install
 MNT=/mnt/install-source
 TARGET_MNT=/mnt/install-root
 RECOVERY_MNT=/mnt/install-recovery
+BOOT_MNT=/mnt/install-boot
 CONFIG_FILES="etc/passwd etc/group etc/shadow etc/rach2/sshd.conf"
 ARCHIVE_NEEDS="etc/passwd etc/group etc/shadow"
 # The recovery system's key, on the recovery partition, where its init reads it.
@@ -63,6 +70,7 @@ die() {
 mounted_source=""
 mounted_root=""
 mounted_recovery=""
+mounted_boot=""
 key_dir=""
 echo_off=""
 screen_level=""
@@ -88,6 +96,7 @@ cleanup() {
     [ -n "$echo_off" ] && stty echo 2>/dev/null
     [ -n "$mounted_root" ] && umount "$mounted_root" 2>/dev/null
     [ -n "$mounted_recovery" ] && umount "$mounted_recovery" 2>/dev/null
+    [ -n "$mounted_boot" ] && umount "$mounted_boot" 2>/dev/null
     [ -n "$mounted_source" ] && umount "$mounted_source" 2>/dev/null
     [ -n "$key_dir" ] && rm -rf "$key_dir"
     return 0
@@ -158,6 +167,17 @@ identity_field() { # identity_field N FIELD
 
 disk_serial() {
     grep "^identity $1 " /proc/disk | head -1 | cut -d' ' -f6-
+}
+
+# The identity growroot and the boot line name disk N by, `MBRID=ID` or
+# `GPTID=GUID`, by the table the kernel read on it.
+disk_identity() { # disk_identity N
+    id=$(diskctl id "/dev/disk$1") || return 1
+    case "$(disk_field "$1" 6)" in
+        mbr) echo "MBRID=$id" ;;
+        gpt) echo "GPTID=$id" ;;
+        *) return 1 ;;
+    esac
 }
 
 # The fields of the two lines, counting the word that names them:
@@ -485,6 +505,125 @@ restore_archive_keys() (
     done < "$keep/etc/passwd"
 )
 
+# ---- an MBR disk's conversion ----
+#
+# A disk installed with an MBR is converted by an update to boot by UEFI as
+# well, when GRUB's EFI image, `bootx64.efi`, is beside the image, where the
+# install stick carries it. The disk keeps its MBR; its boot partition becomes
+# the EFI system partition, type 0xEF, which UEFI firmware boots from on an MBR
+# disk, and the image goes into it as \EFI\BOOT\BOOTX64.EFI beside the
+# kernels, where the image's prefix opens the menu the BIOS core opens.
+#
+# UEFI firmware reads a FAT32 volume only with 65525 clusters or more, and the
+# 64 MiB boot partition the disks installed before have, at eight sectors to a
+# cluster, has 16348. Its file system is made again at one sector to a
+# cluster, with every file it held put back and its serial kept, since the
+# menu finds the kernels' partition by that serial. A boot partition of less
+# than 33 MiB holds no FAT32 volume of that many clusters, and its disk is
+# left to boot by BIOS alone, as one is when the image is not there.
+
+# The clusters of the FAT volume on NODE, as a FAT driver counts them from the
+# boot sector: the data sectors after the reserved ones and the FATs, by the
+# sectors of a cluster.
+fat_clusters() { # fat_clusters NODE
+    dd if="$1" bs=512 count=1 2>/dev/null | od -An -tu1 -v | awk '
+        { for (i = 1; i <= NF; i++) b[n++] = $i }
+        END {
+            total = b[19] + 256 * b[20]
+            if (total == 0) total = b[32] + 256 * (b[33] + 256 * (b[34] + 256 * b[35]))
+            fat = b[22] + 256 * b[23]
+            if (fat == 0) fat = b[36] + 256 * (b[37] + 256 * (b[38] + 256 * b[39]))
+            if (b[13] == 0) { print 0; exit }
+            print int((total - (b[14] + 256 * b[15]) - b[16] * fat) / b[13])
+        }'
+}
+
+# The volume serial at byte 67 of the boot sector saved in SAVED, written into
+# the boot sector of NODE and its backup, at the sector its byte 50 names.
+keep_serial() { # keep_serial SAVED NODE SCRATCH
+    serial_backup=$(dd if="$2" bs=512 count=1 2>/dev/null | od -An -tu1 -j 50 -N 2 |
+        awk '{ print $1 + 256 * $2 }')
+    for serial_at in 0 $serial_backup; do
+        dd if="$2" of="$3" bs=512 skip="$serial_at" count=1 2>/dev/null &&
+            dd if="$1" of="$3" bs=1 skip=67 seek=67 count=4 conv=notrunc 2>/dev/null &&
+            dd if="$3" of="$2" bs=512 seek="$serial_at" count=1 conv=notrunc 2>/dev/null ||
+            return 1
+    done
+}
+
+# Make the file system of the boot partition BOOT again, one UEFI firmware
+# reads, with what it held put back. A stop part way leaves a boot partition
+# the BIOS core reads no menu from, and it starts the recovery system from
+# partition 2 by its label instead.
+remake_boot_partition() { # remake_boot_partition BOOT
+    boot_keep=/tmp/rach2-update-boot
+    [ -d /dev/shm ] && boot_keep=/dev/shm/rach2-update-boot
+    rm -rf "$boot_keep" && mkdir -p "$boot_keep/files" ||
+        die "there is nowhere to keep the boot partition's files; nothing was written"
+    dd if="$1" of="$boot_keep/sector" bs=512 count=1 2>/dev/null ||
+        die "$1's first sector did not read; nothing was written"
+    mkdir -p "$BOOT_MNT" 2>/dev/null
+    mount -t vfat -o ro "$1" "$BOOT_MNT" || die "$1 would not mount; nothing was written"
+    mounted_boot=$BOOT_MNT
+    cp -R "$BOOT_MNT/." "$boot_keep/files/" ||
+        die "$1's files could not be kept; nothing was written"
+    umount "$BOOT_MNT" || die "$1 would not unmount; nothing was written"
+    mounted_boot=""
+    boot_kept="its files are in $boot_keep until this system stops, and the disk starts \
+its recovery system until they are back"
+    say "making $1's file system again, at one sector to a cluster, for UEFI firmware"
+    mkfs.vfat -n RACH2BOOT "$1" > /dev/null || die "$1's file system was not made; $boot_kept"
+    keep_serial "$boot_keep/sector" "$1" "$boot_keep/new" ||
+        die "$1's serial was not kept; $boot_kept"
+    [ "$(fat_clusters "$1")" -ge 65525 ] ||
+        die "$1's new file system has fewer clusters than UEFI firmware reads; $boot_kept"
+    mount -t vfat "$1" "$BOOT_MNT" || die "$1's new file system would not mount; $boot_kept"
+    mounted_boot=$BOOT_MNT
+    cp -R "$boot_keep/files/." "$BOOT_MNT/" || die "$1's files were not put back; $boot_kept"
+    sync
+    umount "$BOOT_MNT" || die "$1 would not unmount; $boot_kept"
+    mounted_boot=""
+    bootctl --target "$1" status > /dev/null ||
+        die "$1, made again, is not a boot partition bootctl reads; $boot_kept"
+    rm -rf "$boot_keep"
+}
+
+# Convert the MBR disk being updated, $update_disk, to boot by UEFI as well.
+convert_mbr_disk() {
+    efi_image="$(dirname "$update_image")/bootx64.efi"
+    boot="${update_disk}p1"
+    if [ ! -f "$efi_image" ]; then
+        say "there is no bootx64.efi beside $update_image, so $update_disk boots by BIOS alone"
+        return 0
+    fi
+    if [ -f "$efi_image.sha256" ]; then
+        efi_sum=$(sha256sum "$efi_image" | cut -d' ' -f1)
+        [ "$efi_sum" = "$(cut -d' ' -f1 < "$efi_image.sha256")" ] ||
+            die "$efi_image hashes to $efi_sum and $efi_image.sha256 says otherwise; nothing was written"
+    fi
+    [ "$(dd if="$efi_image" bs=2 count=1 2>/dev/null)" = MZ ] ||
+        die "$efi_image is not an EFI program; nothing was written"
+    if [ "$(fat_clusters "$boot")" -lt 65525 ]; then
+        boot_sectors=$(grep "^part $target 1 " /proc/disk | cut -d' ' -f5)
+        if [ "${boot_sectors:-0}" -lt 67584 ]; then
+            say "$boot is smaller than the 33 MiB of a FAT32 volume UEFI firmware reads, so \
+$update_disk boots by BIOS alone"
+            return 0
+        fi
+        remake_boot_partition "$boot"
+    fi
+    mkdir -p "$BOOT_MNT" 2>/dev/null
+    mount -t vfat "$boot" "$BOOT_MNT" || die "$boot would not mount; the root is not written"
+    mounted_boot=$BOOT_MNT
+    { mkdir -p "$BOOT_MNT/EFI/BOOT" && cp "$efi_image" "$BOOT_MNT/EFI/BOOT/BOOTX64.EFI" && sync; } ||
+        die "GRUB's EFI image was not put on $boot; the root is not written"
+    umount "$BOOT_MNT" || die "$boot would not unmount; the root is not written"
+    mounted_boot=""
+    diskctl esp "$update_disk" > /dev/null ||
+        die "$boot was not given the EFI system partition's type; the root is not written"
+    say "converted: $update_disk keeps its MBR and boots by UEFI as well, from $boot"
+}
+
 # ---- the update ----
 #
 # A machine that is already installed, given a new root file system. The
@@ -556,7 +695,13 @@ $update_disk was not installed from here"
             die "$update_disk carries no root of this system whose accounts can be taken and no \
 whole configuration archived on its recovery partition; its accounts are not there to be kept"
         if [ -z "$root_entry" ]; then
-            root_entry=$(grep "^part $target " /proc/disk | awk '$6 == "mbr:83" { print $3 }' | tail -1)
+            # A GUID table's entries have no type in /proc/disk, and a disk
+            # this system installs keeps its root in entry 3.
+            if [ "$(disk_field "$target" 6)" = gpt ]; then
+                root_entry=$(grep "^part $target 3 " /proc/disk | cut -d' ' -f3)
+            else
+                root_entry=$(grep "^part $target " /proc/disk | awk '$6 == "mbr:83" { print $3 }' | tail -1)
+            fi
             [ -n "$root_entry" ] || die "$update_disk has no ext2 partition in its table"
         fi
         say "$from_archive; taking the configuration saved on the recovery partition"
@@ -697,6 +842,10 @@ whole configuration archived on its recovery partition; its accounts are not the
         die "an armed trial could not be cancelled, so recovery would not hold; nothing was written"
     say "the machine is saved to its recovery system until the new root is tried"
 
+    if [ "$(disk_field "$target" 6)" = mbr ]; then
+        convert_mbr_disk
+    fi
+
     say "writing $bytes bytes into ${update_disk}p${root_entry}, at $at"
     reflash -p "$update_disk" "$at" "$bytes" < "$update_image" ||
         die "the root was not written"
@@ -704,8 +853,8 @@ whole configuration archived on its recovery partition; its accounts are not the
     [ "$back" = "$want" ] || die "what reached the root hashes to $back and the image to $want"
     say "what reached the root is the image"
 
-    id=$(diskctl id "$update_disk") || die "the disk's identity could not be read"
-    growroot "MBRID=$id,$root_entry" || die "the root was not grown into its partition"
+    spec=$(disk_identity "$target") || die "the disk's identity could not be read"
+    growroot "$spec,$root_entry" || die "the root was not grown into its partition"
 
     mount -t ext2 "${update_disk}p${root_entry}" "$TARGET_MNT" ||
         die "the new root would not mount"
@@ -1205,8 +1354,19 @@ back=$(reflash --verify "/dev/disk$target" 0 "$bytes" | cut -d' ' -f3)
 say "what reached the disk is the image"
 
 # ---- the new table ----
+#
+# An image with a GUID table, which a protective MBR's type 0xEE in its first
+# entry says it has, carries its backup where the image ends, and the disk is
+# usually larger: the backup goes to the disk's last sectors, where a reader
+# looks for it, and the kernel reads the table again. An MBR needs only the
+# reading.
 
-diskctl reread "/dev/disk$target" || die "the new table was not read"
+if [ "$(dd if="$source_dir/$image" bs=1 skip=450 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')" = ee ]; then
+    diskctl relocate "/dev/disk$target" ||
+        die "the GUID table's backup was not moved to the disk's end"
+else
+    diskctl reread "/dev/disk$target" || die "the new table was not read"
+fi
 say "the table is the one the image carries:"
 grep "^part $target " /proc/disk | sed 's/^/  /'
 
@@ -1350,10 +1510,10 @@ say "the accounts are root and $user_name, and root may log in over SSH with a p
 # why it comes after the accounts and not before them.
 
 if [ "$grow" = "yes" ]; then
-    id=$(diskctl id "/dev/disk$target") || die "the disk's identity could not be read"
+    spec=$(disk_identity "$target") || die "the disk's identity could not be read"
     say "growing the root into the rest of the disk: a check, a repair pass and the \
 resize, each of which takes minutes and is quiet while it runs"
-    growroot "MBRID=$id,$root_entry" ||
+    growroot "$spec,$root_entry" ||
         die "the root was not grown; the disk carries the image and boots as it is"
 fi
 say "installed: /dev/disk$target now carries this system. Reboot from it."
