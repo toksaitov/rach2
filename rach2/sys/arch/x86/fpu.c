@@ -29,14 +29,25 @@ static int use_fxsr;
 static int have_sse;                  /* MXCSR and the XMM registers exist and are enabled */
 static uint32_t mxcsr_mask = 0xFFBFu; /* what `fxsave` reports, or the default */
 
-static uint32_t irq_save(void)
+/* The 64-bit forms of the save and the load on x86-64, which keep the x87
+ * unit's 64-bit instruction and operand pointers; TinyCC spells them with a
+ * `q` as GNU as also accepts. */
+#if defined(__x86_64__)
+#define FXSAVE  "fxsaveq"
+#define FXRSTOR "fxrstorq"
+#else
+#define FXSAVE  "fxsave"
+#define FXRSTOR "fxrstor"
+#endif
+
+static uintptr_t irq_save(void)
 {
-    uint32_t flags;
-    __asm__ __volatile__("pushfl; popl %0; cli" : "=r"(flags)::"memory");
+    uintptr_t flags;
+    __asm__ __volatile__("pushf; pop %0; cli" : "=r"(flags)::"memory");
     return flags;
 }
 
-static void irq_restore(uint32_t flags)
+static void irq_restore(uintptr_t flags)
 {
     if (flags & 0x200) {
         __asm__ __volatile__("sti");
@@ -52,7 +63,7 @@ static void irq_restore(uint32_t flags)
 static void save_aligned(void *area)
 {
     if (use_fxsr) {
-        __asm__ __volatile__("fxsave (%0)" : : "r"(area) : "memory");
+        __asm__ __volatile__(FXSAVE " (%0)" : : "r"(area) : "memory");
     } else {
         __asm__ __volatile__("fnsave (%0); frstor (%0)" : : "r"(area) : "memory");
     }
@@ -69,7 +80,7 @@ static void save_aligned(void *area)
 static void restore_aligned(const void *area)
 {
     if (use_fxsr) {
-        __asm__ __volatile__("fxrstor (%0)" : : "r"(area) : "memory");
+        __asm__ __volatile__(FXRSTOR " (%0)" : : "r"(area) : "memory");
     } else {
         __asm__ __volatile__("fnclex; frstor (%0)" : : "r"(area) : "memory");
     }
@@ -77,22 +88,26 @@ static void restore_aligned(const void *area)
 
 static int aligned(const void *p)
 {
-    return ((uint32_t)p & 15u) == 0;
+    return ((uintptr_t)p & 15u) == 0;
 }
 
 void fpu_init(void)
 {
     uint32_t a = 0, d = 0;
-    uint32_t cr0, cr4;
+    uintptr_t cr0, cr4;
 
     kcpu_id(0, &a, 0, 0, 0);
     if (a >= 1) {
         kcpu_id(1, 0, 0, 0, &d);
     }
     use_fxsr = (d & CPUID_EDX_FXSR) != 0;
+#if !defined(__x86_64__)
+    /* Every x86-64 processor has FXSR and SSE, and its programs use SSE for
+     * their floating point, so the switch is i686's alone. */
     if (use_fxsr && kcmdline_has("rach2.nofxsr")) {
         use_fxsr = 0;
     }
+#endif
     /* A processor can have FXSR without SSE, the Pentium II for one; the
      * SSE instructions and CR4.OSFXSR are for a processor that has both. */
     have_sse = use_fxsr && (d & CPUID_EDX_SSE) != 0;
@@ -123,7 +138,7 @@ void fpu_init(void)
     if (use_fxsr) {
         uint32_t reported;
 
-        __asm__ __volatile__("fxsave (%0)" : : "r"(initial_state) : "memory");
+        __asm__ __volatile__(FXSAVE " (%0)" : : "r"(initial_state) : "memory");
         k_memcpy(&reported, initial_state + 28, sizeof(reported));
         if (reported != 0) {
             mxcsr_mask = reported;
@@ -136,7 +151,7 @@ void fpu_init(void)
 
 void fpu_save(void *area)
 {
-    uint32_t flags;
+    uintptr_t flags;
 
     if (aligned(area)) {
         save_aligned(area);
@@ -150,7 +165,7 @@ void fpu_save(void *area)
 
 void fpu_restore(const void *area)
 {
-    uint32_t flags;
+    uintptr_t flags;
 
     if (aligned(area)) {
         restore_aligned(area);
@@ -183,6 +198,31 @@ void fpu_reset(void)
 #define FX_FOS   20
 #define FX_MXCSR 24
 #define FX_ST    32
+
+#if defined(__x86_64__)
+
+/* The bytes of the `fxsave` image the processor leaves alone, which Linux's
+ * x86-64 frame uses to say whether an XSAVE area follows: zero here, since
+ * none does. */
+#define FX_SW_RESERVED      464
+#define FX_SW_RESERVED_SIZE 48
+
+void fpu_to_linux(const void *area, uint8_t *out)
+{
+    k_memcpy(out, area, FPU_LINUX_SIZE);
+    k_memset(out + FX_SW_RESERVED, 0, FX_SW_RESERVED_SIZE);
+}
+
+int fpu_from_linux(const uint8_t *in, void *area)
+{
+    uint32_t mxcsr;
+
+    k_memcpy(area, in, FPU_STATE_SIZE);
+    k_memcpy(&mxcsr, (const uint8_t *)area + FX_MXCSR, sizeof(mxcsr));
+    return (mxcsr & ~mxcsr_mask) ? -1 : 0;
+}
+
+#else
 
 /* Byte offsets in the `fnsave` layout that opens `_fpstate_32`. */
 #define FN_CWD    0
@@ -318,3 +358,5 @@ int fpu_from_linux(const uint8_t *in, void *area)
     }
     return 0;
 }
+
+#endif

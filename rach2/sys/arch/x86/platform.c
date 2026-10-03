@@ -12,9 +12,13 @@
 #include "pit.h"
 
 #include "../arch.h"
+#if defined(__x86_64__)
+#include "../x86_64/percpu.h"
+#else
 #include "../i686/gdt.h"
 #include "../i686/idt.h"
 #include "../i686/tss.h"
+#endif
 
 #include "../../audio/sb16.h"
 #include "../../block/ata.h"
@@ -30,7 +34,11 @@ void platform_cpu_init(uintptr_t boot_stack_top)
     init_gdt();
     klog(KLOG_DEBUG, "boot", "gdt: ready");
 
+#if defined(__x86_64__)
+    init_tss(boot_stack_top);
+#else
     init_tss((uint32_t)boot_stack_top);
+#endif
     klog(KLOG_DEBUG, "boot", "tss: ready");
 
     init_idt();

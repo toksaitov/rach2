@@ -63,20 +63,42 @@ uint32_t ind(uint16_t port)
     return result;
 }
 
+/* On x86-64 `rep` counts in the whole of RCX, so the count is widened
+ * before the instruction is given it. */
 void insw(uint16_t port, void *buffer, uint32_t count)
 {
+#if defined(__x86_64__)
+    unsigned long n = count;
+
+    __asm__ __volatile__("cld\n\t"
+                         "rep insw"
+                         : "+D"(buffer), "+c"(n)
+                         : "d"(port)
+                         : "memory", "cc");
+#else
     __asm__ __volatile__("cld\n\t"
                          "rep insw"
                          : "+D"(buffer), "+c"(count)
                          : "d"(port)
                          : "memory", "cc");
+#endif
 }
 
 void outsw(uint16_t port, const void *buffer, uint32_t count)
 {
+#if defined(__x86_64__)
+    unsigned long n = count;
+
+    __asm__ __volatile__("cld\n\t"
+                         "rep outsw"
+                         : "+S"(buffer), "+c"(n)
+                         : "d"(port)
+                         : "memory", "cc");
+#else
     __asm__ __volatile__("cld\n\t"
                          "rep outsw"
                          : "+S"(buffer), "+c"(count)
                          : "d"(port)
                          : "memory", "cc");
+#endif
 }

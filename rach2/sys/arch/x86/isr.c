@@ -10,7 +10,9 @@
 #include "../../proc/process.h"
 #include "../../proc/ptrace.h"
 #include "debugreg.h"
+#if !defined(__x86_64__)
 #include "../i686/tss.h"
+#endif
 
 /*
  * Kill the faulting process with `signo` and schedule another; defined in the
@@ -26,6 +28,13 @@
  * in the whole process header to ask which context it interrupted.
  */
 extern void sched_preempt(void);
+
+/* The saved flags register of a frame: EFLAGS, or RFLAGS on x86-64. */
+#if defined(__x86_64__)
+#define FRAME_FLAGS(p) ((p)->rflags)
+#else
+#define FRAME_FLAGS(p) ((p)->eflags)
+#endif
 
 /* Every interrupt this kernel has routed through `_irq_router`, which is what
  * /proc/stat's `intr` line reports. */
@@ -135,20 +144,20 @@ static int _exception_signal(const isr_params_t *params, struct k_siginfo *info)
     switch (params->vector) {
     case 0: /* divide error */
         info->code = FPE_INTDIV;
-        info->addr = params->eip;
+        info->addr = FRAME_PC(params);
         return SIGFPE;
     case 1: /* debug: DR6 says whether a step or a breakpoint */
         info->code = debugreg_status();
         if (info->code == 0) {
             info->code = TRAP_TRACE;
         }
-        info->addr = params->eip;
+        info->addr = FRAME_PC(params);
         return SIGTRAP;
     case 3: /* breakpoint */
         return SIGTRAP;
     case 6: /* invalid opcode */
         info->code = ILL_ILLOPN;
-        info->addr = params->eip;
+        info->addr = FRAME_PC(params);
         return SIGILL;
     case 11: /* segment not present */
     case 12: /* stack-segment fault */
@@ -157,7 +166,7 @@ static int _exception_signal(const isr_params_t *params, struct k_siginfo *info)
         __asm__ __volatile__("fnstsw %%ax; movzwl %%ax, %0" : "=r"(status) : : "eax");
         __asm__ __volatile__("fnstcw (%0)" : : "r"(&mask) : "memory");
         info->code = _fpe_code(status, mask & 0x3Fu);
-        info->addr = params->eip;
+        info->addr = FRAME_PC(params);
         return SIGFPE;
     case 17: /* alignment check */
         info->code = BUS_ADRALN;
@@ -166,7 +175,7 @@ static int _exception_signal(const isr_params_t *params, struct k_siginfo *info)
         /* `stmxcsr (%eax)` as bytes: the staged TinyCC's assembler lacks it. */
         __asm__ __volatile__(".byte 0x0f, 0xae, 0x18" : : "a"(&status) : "memory");
         info->code = _fpe_code(status & 0x3Fu, (status >> 7) & 0x3Fu);
-        info->addr = params->eip;
+        info->addr = FRAME_PC(params);
         return SIGFPE;
     default:
         return SIGSEGV;
@@ -198,7 +207,7 @@ static void _exception_handler(isr_params_t *params)
 
         k_memset(&info, 0, sizeof(info));
         info.code = debugreg_status();
-        params->eflags &= ~0x100u;
+        FRAME_FLAGS(params) &= ~0x100u;
         if (info.code == TRAP_HWBKPT) {
             signal_post_thread(current_proc, SIGTRAP, &info);
         }
@@ -215,19 +224,70 @@ static void _exception_handler(isr_params_t *params)
         signal_force(current_proc, signo, &info);
         if (current_proc->sigacts[signo].handler == KSIG_DFL &&
             !(current_proc->ptrace & PT_TRACED)) {
+#if defined(__x86_64__)
+            klog(KLOG_WARN, "isr",
+                 "user exception: %s (vector %d, err 0x%x, rip 0x%x%08x): signal %d", name,
+                 (uint32_t)params->vector, (uint32_t)params->error_code,
+                 (uint32_t)(params->rip >> 32), (uint32_t)params->rip, signo);
+#else
             klog(KLOG_WARN, "isr", "user exception: %s (vector %d, err 0x%x, eip 0x%x): signal %d",
                  name, params->vector, params->error_code, params->eip, signo);
+#endif
         }
         return;
     }
 
+#if defined(__x86_64__)
+    klog(KLOG_CRIT, "isr", "kernel exception: %s (vector %d, err 0x%x, rip 0x%x%08x)", name,
+         (uint32_t)params->vector, (uint32_t)params->error_code, (uint32_t)(params->rip >> 32),
+         (uint32_t)params->rip);
+#else
     klog(KLOG_CRIT, "isr",
          "kernel exception: %s (vector %d, err 0x%x, "
          "eip 0x%x)\n",
          name, params->vector, params->error_code, params->eip);
+#endif
     k_panic("unrecoverable CPU exception in kernel mode");
 }
 
+#if defined(__x86_64__)
+/**
+ * The double fault, vector 8, on the interrupt stack its gate names
+ * (arch/x86_64/idt.c), with the frame of what was running. It never
+ * returns.
+ *
+ * A double fault is an exception raised while the processor delivers
+ * another. The one this kernel meets is a page fault whose frame could not
+ * be pushed, since the stack in use ran into the unmapped guard page below
+ * it; the interrupt stack is why this handler can run at all. CR2 has the
+ * address the push faulted at; one in the guard below the running thread's
+ * kernel stack (`kstack_overrun_pid`) says that stack ran out, and the
+ * diagnostic names the thread. Either way the kernel cannot go on and the
+ * handler panics; its record goes out directly, even when the fault came
+ * while another record was being written.
+ */
+static void _double_fault_handler(isr_params_t *params)
+{
+    uintptr_t cr2 = arch_fault_address();
+    int pid;
+
+    klog_deliver_directly();
+    pid = kstack_overrun_pid(cr2);
+    if (pid >= 0) {
+        klog(KLOG_CRIT, "isr",
+             "kernel exception: double fault (vector 8, rip 0x%x%08x, rsp 0x%x%08x): "
+             "pid %d ran past the end of its kernel stack at 0x%x%08x",
+             (uint32_t)(params->rip >> 32), (uint32_t)params->rip, (uint32_t)(params->rsp >> 32),
+             (uint32_t)params->rsp, pid, (uint32_t)(cr2 >> 32), (uint32_t)cr2);
+        k_panic("double fault: a kernel stack ran out");
+    }
+    klog(KLOG_CRIT, "isr",
+         "kernel exception: double fault (vector 8, rip 0x%x%08x, rsp 0x%x%08x, cr2 0x%x%08x)",
+         (uint32_t)(params->rip >> 32), (uint32_t)params->rip, (uint32_t)(params->rsp >> 32),
+         (uint32_t)params->rsp, (uint32_t)(cr2 >> 32), (uint32_t)cr2);
+    k_panic("unrecoverable CPU exception in kernel mode");
+}
+#else
 /**
  * The double fault's task, which the processor enters through the task gate
  * of vector 8 and not by a call: it saves what was running into
@@ -267,6 +327,7 @@ void isr_double_fault(void)
          kernel_tss.esp, cr2);
     k_panic("unrecoverable CPU exception in kernel mode");
 }
+#endif
 
 /**
  * Clear the handler table, install the default exception handler, and enable
@@ -275,10 +336,11 @@ void isr_double_fault(void)
  * Every CPU exception but two gets the shared default, so a fault yields a
  * diagnostic and a contained kill or panic, not a silent triple-fault reset.
  * The page fault, vector 14, has its handler from `init_paging`, and the
- * double fault, vector 8, is taken through a task gate onto a stack of its
- * own by `isr_double_fault`, which reports it and panics: a kernel stack
- * that runs into its guard page raises one, since the page fault's frame
- * cannot be pushed there.
+ * double fault, vector 8, is taken onto a stack of its own, by a task gate
+ * to `isr_double_fault` on i686 and by an interrupt stack to
+ * `_double_fault_handler` on x86-64, which reports it and panics: a kernel
+ * stack that runs into its guard page raises one, since the page fault's
+ * frame cannot be pushed there.
  */
 void init_isr(void)
 {
@@ -291,6 +353,9 @@ void init_isr(void)
             register_isr_handler((uint8_t)vector, &_exception_handler, "exception");
         }
     }
+#if defined(__x86_64__)
+    register_isr_handler(8, &_double_fault_handler, "double fault");
+#endif
 
     __asm__ __volatile__("sti"); /* Enable interrupt handling. */
 }
