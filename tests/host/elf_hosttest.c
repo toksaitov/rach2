@@ -69,6 +69,13 @@ void paging_set_writable(page_dir_t *dir, uintptr_t addr, bool writable)
     (void)writable;
 }
 
+void paging_set_exec(page_dir_t *dir, uintptr_t addr, bool exec)
+{
+    (void)dir;
+    (void)addr;
+    (void)exec;
+}
+
 /** Map synthetic frame numbers without truncating a host pointer to 32 bits. */
 void *kmap_temp(uintptr_t phys)
 {
