@@ -103,9 +103,10 @@ if [ -n "$OVERLAY" ]; then
     "$OVERLAY" "$TREE"
     # The nodes the program added are the paths of the directory the node
     # list does not have; the list has a directory twice when a line
-    # makes it as a parent before its own line. debugfs reads a command's
-    # words split at spaces, so a name with a space or a quote could not be
-    # given to it.
+    # makes it as a parent before its own line. debugfs splits a command's
+    # words at spaces outside double quotes, so each name added is given to
+    # it quoted, and a name with a quote, a backslash or a tab, which the
+    # quotes do not carry, is refused.
     awk '$1 == "node" { print $5 }' "$NODES" | LC_ALL=C sort -u > "$WORK/staged"
     (cd "$TREE" && find . -mindepth 1) | sed 's|^\.||' | LC_ALL=C sort > "$WORK/paths"
     LC_ALL=C comm -23 "$WORK/staged" "$WORK/paths" > "$WORK/removed"
@@ -115,9 +116,10 @@ if [ -n "$OVERLAY" ]; then
         exit 1
     fi
     LC_ALL=C comm -13 "$WORK/staged" "$WORK/paths" > "$ADDED"
-    if grep -q '[[:space:]"\\]' "$ADDED"; then
-        echo "mkext2: $OVERLAY added a name with a space, a quote or a backslash:" >&2
-        grep '[[:space:]"\\]' "$ADDED" | head -n 3 >&2
+    BAD="[\"\\\\$(printf '\t')]"
+    if grep -q "$BAD" "$ADDED"; then
+        echo "mkext2: $OVERLAY added a name with a quote, a backslash or a tab:" >&2
+        grep "$BAD" "$ADDED" | head -n 3 >&2
         exit 1
     fi
 fi
@@ -173,11 +175,11 @@ awk -v overlay="$OVERLAY" '$1 == "node" {
     }
 }' "$NODES" > "$SCRIPT"
 awk '{
-    printf "set_inode_field %s uid 0\n", $0;
-    printf "set_inode_field %s gid 0\n", $0;
-    printf "set_inode_field %s atime @1\n", $0;
-    printf "set_inode_field %s mtime @1\n", $0;
-    printf "set_inode_field %s ctime @1\n", $0;
+    printf "set_inode_field \"%s\" uid 0\n", $0;
+    printf "set_inode_field \"%s\" gid 0\n", $0;
+    printf "set_inode_field \"%s\" atime @1\n", $0;
+    printf "set_inode_field \"%s\" mtime @1\n", $0;
+    printf "set_inode_field \"%s\" ctime @1\n", $0;
 }' "$ADDED" >> "$SCRIPT"
 if [ -n "$OVERLAY" ]; then
     printf 'set_inode_field / %s @1\n' atime mtime ctime >> "$SCRIPT"
