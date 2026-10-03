@@ -644,7 +644,7 @@ static int boot_disk_id(struct disk_identity *want)
     for (end = at; *end != '\0' && *end != ' ' && *end != '\t' && *end != '\n'; end++) {
     }
     length = (size_t)(end - at);
-    if (length < 2 || length >= sizeof(want->text) || strncmp(end - 2, ",1", 2) != 0) {
+    if (length < 2 || length - 2 >= sizeof(want->text) || strncmp(end - 2, ",1", 2) != 0) {
         return 0;
     }
     memcpy(want->text, at, length - 2);
