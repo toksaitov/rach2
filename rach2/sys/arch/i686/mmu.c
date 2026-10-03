@@ -259,7 +259,8 @@ int premap_kernel_window(uintptr_t va_start, size_t size)
                 return -1;
             }
             _kernel_dir->logical_page_tables[table_index] = table;
-            _kernel_dir->phys_page_tables[table_index] = (uint32_t)table_phys(table) | PTE_P | PTE_W;
+            _kernel_dir->phys_page_tables[table_index] =
+                (uint32_t)table_phys(table) | PTE_P | PTE_W;
         }
     }
 
@@ -367,8 +368,8 @@ pte_t *mmu_user_table(page_dir_t *dir, uintptr_t va, int create)
         for (i = 0; i < 1024; i++) {
             new_table->pages[i] = table->pages[i];
         }
-        dir->phys_page_tables[table_index] = (uint32_t)table_phys(new_table) | PTE_P | PTE_W |
-                                             PTE_U;
+        dir->phys_page_tables[table_index] =
+            (uint32_t)table_phys(new_table) | PTE_P | PTE_W | PTE_U;
         dir->logical_page_tables[table_index] = new_table;
         table = new_table;
     } else if (!table) {

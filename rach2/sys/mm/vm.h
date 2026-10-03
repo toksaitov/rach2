@@ -94,7 +94,7 @@ struct vm_file {
 typedef struct vma {
     uintptr_t start; /* inclusive, page-aligned */
     uintptr_t end;   /* exclusive, page-aligned */
-    uint32_t prot;  /* VM_PROT_* */
+    uint32_t prot;   /* VM_PROT_* */
     vm_type_t type;
     struct vm_file *file;
     uint32_t pgoff;

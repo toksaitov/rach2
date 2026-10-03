@@ -53,7 +53,7 @@ struct mm {
     uint32_t users;
     uint32_t holds;
     struct page_dir *dir; /* NULL once the last user has gone */
-    uintptr_t space_root;         /* the directory's physical address */
+    uintptr_t space_root; /* the directory's physical address */
     vm_space_t vm;
     struct open_file *exe_file; /* the program's file; NULL for none */
     struct mm *exe_next;        /* the next on the list of those with one */

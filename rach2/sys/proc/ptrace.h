@@ -31,7 +31,7 @@
 #define PTRACE_EVENT_SECCOMP    7
 #define PTRACE_EVENT_STOP       128
 
-/** ptrace (26): EBX=request, ECX=pid, EDX=addr, ESI=data. */
+/** ptrace: its arguments are request, pid, addr and data. */
 long sys_ptrace(isr_params_t *params);
 
 /**
@@ -63,13 +63,13 @@ int ptrace_group_stop(int signo);
 void ptrace_event(int event, uint32_t msg);
 
 /**
- * The stop at the entry, or with `leaving` the exit, of system call `nr`,
- * when the current thread's tracer asked for them with PTRACE_SYSCALL; `tf`
- * is its trap frame, and orig_nr is `nr` during the stop. At the entry EAX
- * is -ENOSYS during the stop, as on Linux, and both stay as the tracer
- * leaves them: the dispatcher runs the call orig_nr then names, or none for
- * -1, with EAX its result. A thread SIGKILL was sent during the entry stop
- * gets -1, so the call does not run, as Linux skips it.
+ * The stop at the entry, or with `leaving` the exit, of system call `nr`, when
+ * the current thread's tracer asked for them with PTRACE_SYSCALL; `tf` is its
+ * trap frame, and orig_nr is `nr` during the stop. At the entry the result
+ * register is -ENOSYS during the stop, as on Linux, and both stay as the tracer
+ * leaves them: the dispatcher runs the call orig_nr then names, or none for -1,
+ * with the result register its result. A thread SIGKILL was sent during the
+ * entry stop gets -1, so the call does not run, as Linux skips it.
  */
 void ptrace_syscall_stop(isr_params_t *tf, uint32_t nr, int leaving);
 

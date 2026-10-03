@@ -200,7 +200,7 @@ static syscall_fn_t _syscall_table[SYSCALL_TABLE_SIZE];
 #define REBOOT_CMD_CAD_OFF 0x00000000u
 
 /**
- * reboot(2): stop the machine. EBX = magic1, ECX = magic2, EDX = command.
+ * reboot(2): stop the machine. Its arguments are magic1, magic2 and command.
  *
  * Does not return for the three commands that stop the machine. Returns
  * `-EPERM` for an unprivileged caller, `-EINVAL` for a wrong magic or an
@@ -311,14 +311,14 @@ int32_t raw_seek_resolve(uint64_t cur, uint64_t size, long long delta, int whenc
  * timeval structure for gettimeofday
  */
 struct kernel_timeval {
-    int32_t tv_sec;  /* seconds */
-    int32_t tv_usec; /* microseconds */
+    long tv_sec;  /* seconds */
+    long tv_usec; /* microseconds */
 };
 
 /*
- * gettimeofday(2): EBX = tv (timeval*), ECX = tz (ignored). Reports real time
- * from the clock anchored at boot (sys/arch/x86/rtc.c), or time since boot
- * when there was no clock to read. Returns 0 or -errno.
+ * gettimeofday(2): its arguments are tv (timeval*) and tz (ignored). Reports
+ * real time from the clock anchored at boot (sys/arch/x86/rtc.c), or time since
+ * boot when there was no clock to read. Returns 0 or -errno.
  */
 long sys_gettimeofday(isr_params_t *params)
 {
@@ -550,17 +550,17 @@ int32_t clock_now(int32_t clk, int64_t *sec, int32_t *nsec)
     }
     clock_read(&c, &ts);
     *sec = ts.tv_sec;
-    *nsec = ts.tv_nsec;
+    *nsec = (int32_t)ts.tv_nsec;
     return 0;
 }
 
 /**
- * Read a POSIX clock (clock_gettime, syscall 265, 32-bit timespec).
+ * Read a POSIX clock (clock_gettime, 32-bit timespec).
  *
- * EBX = clockid, ECX = struct timespec*. The clocks are `clock_resolve`'s and
- * the readings `clock_read`'s. clock_gettime64 (403) reads the same with 64-bit
- * fields. An unknown clock is refused before the timespec is written, as
- * Linux refuses it.
+ * Its arguments are clockid and struct timespec*. The clocks are
+ * `clock_resolve`'s and the readings `clock_read`'s. clock_gettime64
+ * reads the same with 64-bit fields. An unknown clock is refused before the
+ * timespec is written, as Linux refuses it.
  */
 long sys_clock_gettime(isr_params_t *params)
 {
@@ -586,7 +586,7 @@ struct kernel_timespec64 {
 };
 
 /**
- * clock_gettime64 (403): clock_gettime with the 64-bit timespec GNU libc and
+ * clock_gettime64: clock_gettime with the 64-bit timespec GNU libc and
  * musl try first, so a clock read is one call and not a refused call and a
  * second. The seconds are the ones the 32-bit call reports.
  */
@@ -605,7 +605,7 @@ long sys_clock_gettime64(isr_params_t *params)
     return copy_to_user((void __user *)SC_ARG(params, 1), &t, sizeof(t)) == 0 ? 0 : -EFAULT;
 }
 
-/** clock_getres_time64 (406): clock_getres with the 64-bit timespec. */
+/** clock_getres_time64: clock_getres with the 64-bit timespec. */
 long sys_clock_getres_time64(isr_params_t *params)
 {
     struct kernel_timespec64 t;
@@ -643,7 +643,7 @@ static int32_t realtime_set(int64_t seconds, int64_t nanoseconds)
 }
 
 /**
- * clock_settime (264): EBX = clockid, ECX = the 32-bit timespec. Only
+ * clock_settime: its arguments are clockid and the 32-bit timespec. Only
  * CLOCK_REALTIME may be set, as on Linux; another clock is -EINVAL.
  */
 long sys_clock_settime(isr_params_t *params)
@@ -659,7 +659,7 @@ long sys_clock_settime(isr_params_t *params)
     return realtime_set(ts.tv_sec, ts.tv_nsec);
 }
 
-/** clock_settime64 (404): clock_settime with the 64-bit timespec. */
+/** clock_settime64: clock_settime with the 64-bit timespec. */
 long sys_clock_settime64(isr_params_t *params)
 {
     struct kernel_timespec64 ts;
@@ -824,8 +824,9 @@ static int32_t ktimex_adjust(struct ktimex *tx)
     return (ntp.status & STA_UNSYNC) ? TIME_ERROR : TIME_OK;
 }
 
-/* The bytes of a timex, in the layout of i386's 128-byte struct timex, or of
- * the 208-byte struct __kernel_timex of the 64-bit calls, at `wide`: each
+/* The bytes of a timex, in the layout of the 128-byte struct timex of
+ * 32-bit longs, or of the 208-byte struct __kernel_timex of the 64-bit calls
+ * and of x86-64's longs, at `wide`: each
  * field's offset in each, in the order modes, offset, freq, maxerror,
  * esterror, status, constant, precision, tolerance, the time's seconds and
  * fraction, tick, shift, tai and a pad. */
@@ -895,6 +896,11 @@ static void ntp_rtc_sync(void)
     }
 }
 
+/* Whether a struct timex of longs, which adjtimex and clock_adjtime take,
+ * has the 64-bit layout of clock_adjtime64's: so where a long has 64 bits,
+ * as on x86-64. */
+#define TIMEX_LONGS_WIDE (sizeof(long) == 8)
+
 static int32_t timex_call(uintptr_t uaddr, int wide)
 {
     uint8_t b[208];
@@ -941,17 +947,17 @@ static int32_t timex_call(uintptr_t uaddr, int wide)
     return rc;
 }
 
-/** adjtimex (124): EBX = the 128-byte struct timex. */
+/** adjtimex: its argument is the 128-byte struct timex. */
 long sys_adjtimex(isr_params_t *params)
 {
-    return timex_call(SC_ARG(params, 0), 0);
+    return timex_call(SC_ARG(params, 0), TIMEX_LONGS_WIDE);
 }
 
 /**
- * clock_adjtime (343) and clock_adjtime64 (405): EBX = the clock, ECX = the
- * timex, in the 64-bit layout for the second. CLOCK_REALTIME is the one
- * clock that adjusts; another of the clocks is -EOPNOTSUPP and anything
- * else -EINVAL, as Linux answers.
+ * clock_adjtime and clock_adjtime64: its arguments are the clock
+ * and the timex, in the 64-bit layout for the second. CLOCK_REALTIME is the one
+ * clock that adjusts; another of the clocks is -EOPNOTSUPP and anything else
+ * -EINVAL, as Linux answers.
  */
 static int32_t clock_adjtime_common(isr_params_t *params, int wide)
 {
@@ -965,7 +971,7 @@ static int32_t clock_adjtime_common(isr_params_t *params, int wide)
 
 long sys_clock_adjtime(isr_params_t *params)
 {
-    return clock_adjtime_common(params, 0);
+    return clock_adjtime_common(params, TIMEX_LONGS_WIDE);
 }
 
 long sys_clock_adjtime64(isr_params_t *params)
@@ -974,8 +980,8 @@ long sys_clock_adjtime64(isr_params_t *params)
 }
 
 /**
- * settimeofday (79): EBX = timeval, ECX = timezone. The time zone is not
- * kept, so a call with only one is done and changes nothing; a call with
+ * settimeofday: its arguments are timeval and timezone. The time zone is
+ * not kept, so a call with only one is done and changes nothing; a call with
  * neither is too, as on Linux.
  */
 long sys_settimeofday(isr_params_t *params)
@@ -994,7 +1000,7 @@ long sys_settimeofday(isr_params_t *params)
     return realtime_set(tv.tv_sec, (int64_t)tv.tv_usec * 1000);
 }
 
-/** stime (25): EBX = the seconds, a 32-bit time_t. */
+/** stime: its argument is the seconds, a 32-bit time_t. */
 long sys_stime(isr_params_t *params)
 {
     int32_t seconds;
@@ -1006,12 +1012,12 @@ long sys_stime(isr_params_t *params)
 }
 
 /**
- * A clock's resolution (clock_getres, syscall 266, 32-bit timespec).
+ * A clock's resolution (clock_getres, 32-bit timespec).
  *
- * EBX = clockid, ECX = struct timespec*, which may be NULL. Each clock's
- * true granularity: a microsecond for real time and time since boot, which
- * the PIT's place is read in, and the 10 ms tick for every other clock, the
- * coarse clocks and the CPU clocks. Returns 0, -EINVAL for a clock
+ * Its arguments are clockid and struct timespec*, which may be NULL. Each
+ * clock's true granularity: a microsecond for real time and time since boot,
+ * which the PIT's place is read in, and the 10 ms tick for every other clock,
+ * the coarse clocks and the CPU clocks. Returns 0, -EINVAL for a clock
  * `clock_resolve` refuses, or -EFAULT.
  */
 long sys_clock_getres(isr_params_t *params)
@@ -1167,16 +1173,17 @@ static int32_t sleep_for(const struct kernel_timespec *req, struct kernel_timesp
 }
 
 /**
- * Block-and-schedule sleep (nanosleep, syscall 162, 32-bit timespec).
+ * Block-and-schedule sleep (nanosleep, 32-bit timespec).
  *
- * EBX = const struct timespec* req, ECX = struct timespec* rem (optional).
- * Sleeps to the first tick at or after the interval's end through
+ * Its arguments are const struct timespec* req and struct timespec* rem
+ * (optional). Sleeps to the first tick at or after the interval's end through
  * `sleep_for`, which has the rules of the deadline, the signals and the
  * remainder. rem is written as zero on normal completion.
  */
 long sys_nanosleep(isr_params_t *params)
 {
-    const struct kernel_timespec __user *ureq = (const struct kernel_timespec __user *)SC_ARG(params, 0);
+    const struct kernel_timespec __user *ureq =
+        (const struct kernel_timespec __user *)SC_ARG(params, 0);
     struct kernel_timespec __user *urem = (struct kernel_timespec __user *)SC_ARG(params, 1);
     struct kernel_timespec req;
     int32_t rc;
@@ -1318,16 +1325,16 @@ static int32_t sleep_until_cpu(int32_t clk, uint32_t due, struct kernel_timespec
 }
 
 /**
- * Sleep against a chosen clock (clock_nanosleep, syscall 267, 32-bit
+ * Sleep against a chosen clock (clock_nanosleep, 32-bit
  * timespec).
  *
- * EBX = clockid, ECX = flags, EDX = const struct timespec *req, ESI = struct
+ * Its arguments are clockid, flags, const struct timespec *req and struct
  * timespec *rem. Flags 0 makes `req` an interval, which sleeps as `nanosleep`
  * does except that nothing is written to `rem` on completion; TIMER_ABSTIME
  * makes it a time of the clock, reached as `sleep_until_time` or
  * `sleep_until_cpu` describe, and returns at once for a time already past.
- * Other flag bits are ignored, as Linux ignores them, and `rem` is written
- * only for an interval a signal cut short.
+ * Other flag bits are ignored, as Linux ignores them, and `rem` is written only
+ * for an interval a signal cut short.
  *
  * Real time, time since boot and boot time sleep; the raw and coarse clocks
  * and the calling thread's CPU clock return -EOPNOTSUPP, the clocks Linux
@@ -1343,7 +1350,8 @@ long sys_clock_nanosleep(isr_params_t *params)
 {
     int32_t clk = (int32_t)SC_ARG(params, 0);
     int absolute = (SC_ARG(params, 1) & TIMER_ABSTIME) != 0;
-    const struct kernel_timespec __user *ureq = (const struct kernel_timespec __user *)SC_ARG(params, 2);
+    const struct kernel_timespec __user *ureq =
+        (const struct kernel_timespec __user *)SC_ARG(params, 2);
     struct kernel_timespec __user *urem = (struct kernel_timespec __user *)SC_ARG(params, 3);
     struct kernel_timespec req;
     struct kclock c;
@@ -1393,15 +1401,15 @@ long sys_clock_nanosleep(isr_params_t *params)
 #define ITIMER_PROF    2
 
 /*
- * The itimerval of i386 setitimer and getitimer: the interval, then the
- * value, each in seconds and microseconds of 32 bits. musl passes this form
- * for its 64-bit time_t.
+ * The itimerval of setitimer and getitimer: the interval, then the value,
+ * each in seconds and microseconds of a long, 32 bits on i686. musl passes
+ * this form for its 64-bit time_t.
  */
 struct kernel_itimerval {
-    int32_t interval_sec;
-    int32_t interval_usec;
-    int32_t value_sec;
-    int32_t value_usec;
+    long interval_sec;
+    long interval_usec;
+    long value_sec;
+    long value_usec;
 };
 
 /*
@@ -1411,14 +1419,11 @@ struct kernel_itimerval {
  * positive with the tick in progress added and with the tick `proc_alarm_at`
  * adds when the sum wraps to zero. Zero only for a time of zero.
  */
-static uint32_t itimer_ticks(int32_t sec, int32_t usec)
+static uint32_t itimer_ticks(long sec, long usec)
 {
-    uint32_t whole = (uint32_t)sec;
+    uint32_t whole = (unsigned long)sec > 21474836u ? 21474836u : (uint32_t)sec;
     uint32_t ticks;
 
-    if (whole > 21474836u) {
-        whole = 21474836u;
-    }
     ticks = whole * 100u + ((uint32_t)usec + 9999u) / 10000u;
     return ticks > 0x7FFFFFFDu ? 0x7FFFFFFDu : ticks;
 }
@@ -1444,10 +1449,10 @@ static uint32_t itimer_left(void)
 }
 
 /* `ticks` as the seconds and microseconds of an itimerval. */
-static void itimer_put(uint32_t ticks, int32_t *sec, int32_t *usec)
+static void itimer_put(uint32_t ticks, long *sec, long *usec)
 {
-    *sec = (int32_t)(ticks / 100u);
-    *usec = (int32_t)((ticks % 100u) * 10000u);
+    *sec = (long)(ticks / 100u);
+    *usec = (long)((ticks % 100u) * 10000u);
 }
 
 /* What the current process's timer `which` is set to, as setitimer and
@@ -1494,17 +1499,17 @@ static void itimer_set(int32_t which, uint32_t value, uint32_t interval)
 }
 
 /**
- * setitimer(2), syscall 104: the interval timers.
+ * setitimer: the interval timers.
  *
- * EBX = which, ECX = const struct itimerval *new, EDX = struct itimerval
+ * Its arguments are which, const struct itimerval *new and struct itimerval
  * *old, which may be null. ITIMER_REAL counts real time and posts SIGALRM,
- * ITIMER_VIRTUAL the process's processor time in user mode and posts
- * SIGVTALRM, and ITIMER_PROF its time in both modes and posts SIGPROF, which
- * glibc's profil and gprof's sampling use. Another `which` is EINVAL, as is
- * a negative time or microseconds past a second. A value of zero disarms the
- * timer; otherwise the first signal is due that long from now, rounded up to
- * whole 10 ms ticks, then every interval, or only once for an interval of
- * zero. `old` receives the timer's setting before the call.
+ * ITIMER_VIRTUAL the process's processor time in user mode and posts SIGVTALRM,
+ * and ITIMER_PROF its time in both modes and posts SIGPROF, which glibc's
+ * profil and gprof's sampling use. Another `which` is EINVAL, as is a negative
+ * time or microseconds past a second. A value of zero disarms the timer;
+ * otherwise the first signal is due that long from now, rounded up to whole 10
+ * ms ticks, then every interval, or only once for an interval of zero. `old`
+ * receives the timer's setting before the call.
  */
 long sys_setitimer(isr_params_t *params)
 {
@@ -1537,10 +1542,10 @@ long sys_setitimer(isr_params_t *params)
 }
 
 /**
- * getitimer(2), syscall 105: what an interval timer is set to.
+ * getitimer: what an interval timer is set to.
  *
- * EBX = which, ECX = struct itimerval *cur: the time left before the next
- * signal, zero when the timer is disarmed, and the interval.
+ * Its arguments are which and struct itimerval *cur: the time left before the
+ * next signal, zero when the timer is disarmed, and the interval.
  */
 long sys_getitimer(isr_params_t *params)
 {
@@ -1562,10 +1567,10 @@ long sys_getitimer(isr_params_t *params)
 }
 
 /**
- * alarm(2), syscall 27: one SIGALRM `seconds` from now, or none for 0.
+ * alarm: one SIGALRM `seconds` from now, or none for 0.
  *
- * EBX = seconds. The same timer as setitimer's, with no interval. Returns
- * the seconds that were left before the earlier alarm, rounded as Linux
+ * Its argument is seconds. The same timer as setitimer's, with no interval.
+ * Returns the seconds that were left before the earlier alarm, rounded as Linux
  * rounds them: to the nearest second, and up to one when any time was left.
  * musl's `alarm` calls setitimer; this is the call older programs make.
  */
@@ -1576,8 +1581,10 @@ long sys_alarm(isr_params_t *params)
     uint32_t seconds = left / 100u;
     uint32_t usec = (left % 100u) * 10000u;
 
-    itimer_set(ITIMER_REAL,
-               itimer_ticks((int32_t)(SC_ARG(params, 0) > 21474836u ? 21474836u : SC_ARG(params, 0)), 0), 0);
+    itimer_set(
+        ITIMER_REAL,
+        itimer_ticks((int32_t)(SC_ARG(params, 0) > 21474836u ? 21474836u : SC_ARG(params, 0)), 0),
+        0);
     kirq_restore(flags);
     if ((seconds == 0 && usec != 0) || usec >= 500000u) {
         seconds++;
@@ -1596,13 +1603,13 @@ long sys_alarm(isr_params_t *params)
 #define GRND_INSECURE 0x0004u
 
 /**
- * Fill a buffer with random bytes (getrandom, syscall 355).
+ * Fill a buffer with random bytes (getrandom).
  *
- * EBX = buf, ECX = buflen, EDX = flags. Backed by the kernel CSPRNG
+ * Its arguments are buf, buflen and flags. Backed by the kernel CSPRNG
  * (lib/krandom, ChaCha20). Returns the byte count, like Linux; musl's
- * getrandom/arc4random sit on top of this. We never block (GRND_NONBLOCK is
- * a no-op) and have a single source (GRND_RANDOM is equivalent); unknown
- * flag bits are rejected.
+ * getrandom/arc4random sit on top of this. We never block (GRND_NONBLOCK is a
+ * no-op) and have a single source (GRND_RANDOM is equivalent); unknown flag
+ * bits are rejected.
  */
 long sys_getrandom(isr_params_t *params)
 {
@@ -1990,9 +1997,9 @@ static int32_t framebuffer_ioctl(uint32_t request, uintptr_t arg)
 /**
  * Device control (ioctl(2)).
  *
- * EBX = fd, ECX = request, EDX = arg. A tty fd (console or pty slave) routes
- * to the shared termios/session handler first; an ops-backed object handles
- * its own remaining requests; the framebuffer and console handle their
+ * Its arguments are fd, request and arg. A tty fd (console or pty slave) routes
+ * to the shared termios/session handler first; an ops-backed object handles its
+ * own remaining requests; the framebuffer and console handle their
  * device-specific ones (FB_*, KIOCSOUND, AUDIO_*). Returns 0, the request
  * result, or -errno (-ENOTTY for a terminal request on a non-terminal fd).
  */
@@ -2181,20 +2188,20 @@ int user_buffer_ok(uintptr_t addr, size_t len, int write)
 /**
  * Process times (times(2)).
  *
- * EBX = struct tms *, which may be NULL when the caller wants only the
- * return value. The four fields are the CPU time the timer charged to the
- * caller in user mode and in the kernel, and the same two for the children
- * it has reaped, in ticks, which are the 100 Hz CLK_TCK units the structure
- * uses. They are read with interrupts masked, since the tick adds to them.
- * The return value is the monotonic tick count.
+ * Its argument is struct tms *, which may be NULL when the caller wants only
+ * the return value. The four fields are the CPU time the timer charged to the
+ * caller in user mode and in the kernel, and the same two for the children it
+ * has reaped, in ticks, which are the 100 Hz CLK_TCK units the structure uses.
+ * They are read with interrupts masked, since the tick adds to them. The return
+ * value is the monotonic tick count.
  */
 long sys_times(isr_params_t *params)
 {
     struct kernel_tms {
-        int32_t tms_utime;
-        int32_t tms_stime;
-        int32_t tms_cutime;
-        int32_t tms_cstime;
+        long tms_utime;
+        long tms_stime;
+        long tms_cutime;
+        long tms_cstime;
     } t;
 
     if (SC_ARG(params, 0)) {
@@ -2216,33 +2223,32 @@ long sys_times(isr_params_t *params)
 /**
  * System statistics (sysinfo(2)).
  *
- * Fills the 64-byte i386 struct sysinfo: uptime in seconds, the load
+ * Fills the struct sysinfo of longs: uptime in seconds, the load
  * averages the scheduler keeps (`sched_loadavg`), with 16 bits of fraction
  * as Linux gives them, the count of process records including unreaped
  * children, total and free RAM from the frame counts, the buffer cache's
  * pages as the buffer RAM, which free(1) adds to /proc/meminfo's Cached for
  * its buff/cache, mem_unit = 1; shared and swap figures are reported as zero
- * (not tracked). EBX = struct sysinfo *.
+ * (not tracked). Its argument is struct sysinfo *.
  */
 long sys_sysinfo(isr_params_t *params)
 {
-    struct kernel_sysinfo {
-        int32_t uptime;
-        uint32_t loads[3];
-        uint32_t totalram;
-        uint32_t freeram;
-        uint32_t sharedram;
-        uint32_t bufferram;
-        uint32_t totalswap;
-        uint32_t freeswap;
-        uint16_t procs;
-        uint16_t pad;
-        uint32_t totalhigh;
-        uint32_t freehigh;
-        uint32_t mem_unit;
-        char _f[8];
-    } si;
-    uint32_t i;
+    /* Linux's struct sysinfo, whose tail pads it to 64 bytes where a long
+     * has 32 bits and to nothing where it has 64: 64 bytes on i686 and 112
+     * on x86-64, the size of the union. */
+    union {
+        struct kernel_sysinfo {
+            long uptime;
+            unsigned long loads[3];
+            unsigned long totalram, freeram, sharedram, bufferram;
+            unsigned long totalswap, freeswap;
+            uint16_t procs;
+            uint16_t pad;
+            unsigned long totalhigh, freehigh;
+            uint32_t mem_unit;
+        } si;
+        char bytes[64];
+    } u;
     uint32_t avg[3];
     int n = 0;
 
@@ -2259,26 +2265,24 @@ long sys_sysinfo(isr_params_t *params)
     /* Fill every field of the ABI struct explicitly: uptime, the loads, the
      * process count, mem_unit, physical RAM (from the frame bitmap) and the
      * buffer cache are real; swap is not tracked, so it is reported as zero. */
-    si.uptime = (int32_t)(kernel_ticks / 100);
+    k_memset(&u, 0, sizeof(u));
+    u.si.uptime = (long)(kernel_ticks / 100);
     sched_loadavg(avg);
-    si.loads[0] = avg[0] << (16 - SCHED_LOAD_SHIFT);
-    si.loads[1] = avg[1] << (16 - SCHED_LOAD_SHIFT);
-    si.loads[2] = avg[2] << (16 - SCHED_LOAD_SHIFT);
-    si.totalram = frame_total_count() * PAGE_SIZE;
-    si.freeram = frame_free_count() * PAGE_SIZE;
-    si.sharedram = 0;
-    si.bufferram = bcache_resident() * PAGE_SIZE;
-    si.totalswap = 0;
-    si.freeswap = 0;
-    si.procs = (uint16_t)n;
-    si.pad = 0;
-    si.totalhigh = 0;
-    si.freehigh = 0;
-    si.mem_unit = 1;
-    for (i = 0; i < sizeof(si._f); i++) {
-        si._f[i] = 0;
-    }
-    if (copy_to_user((void __user *)SC_ARG(params, 0), &si, sizeof(si)) != 0) {
+    u.si.loads[0] = avg[0] << (16 - SCHED_LOAD_SHIFT);
+    u.si.loads[1] = avg[1] << (16 - SCHED_LOAD_SHIFT);
+    u.si.loads[2] = avg[2] << (16 - SCHED_LOAD_SHIFT);
+    u.si.totalram = (unsigned long)frame_total_count() * PAGE_SIZE;
+    u.si.freeram = (unsigned long)frame_free_count() * PAGE_SIZE;
+    u.si.sharedram = 0;
+    u.si.bufferram = (unsigned long)bcache_resident() * PAGE_SIZE;
+    u.si.totalswap = 0;
+    u.si.freeswap = 0;
+    u.si.procs = (uint16_t)n;
+    u.si.pad = 0;
+    u.si.totalhigh = 0;
+    u.si.freehigh = 0;
+    u.si.mem_unit = 1;
+    if (copy_to_user((void __user *)SC_ARG(params, 0), &u, sizeof(u)) != 0) {
         return -EFAULT;
     }
     return 0;
@@ -2288,8 +2292,8 @@ long sys_sysinfo(isr_params_t *params)
  * Record the address the caller's thread end clears and return the caller's
  * thread id (set_tid_address(2)).
  *
- * The address, EBX, becomes `clear_child_tid`; with one thread per process the
- * thread id is the process id.
+ * The address, its argument, becomes `clear_child_tid`; with one thread per
+ * process the thread id is the process id.
  */
 long sys_set_tid_address(isr_params_t *params)
 {
@@ -2302,7 +2306,7 @@ long sys_set_tid_address(isr_params_t *params)
 
 /*
  * uname(2): fill the six 65-byte fields of struct utsname (new-style, as musl
- * expects) in user memory. EBX = struct utsname *.
+ * expects) in user memory. Its argument is struct utsname *.
  */
 struct kernel_utsname {
     char sysname[65];
@@ -2423,9 +2427,9 @@ static uint32_t syslog_tail(uint32_t from, uint32_t len)
 }
 
 /**
- * syslog(2), number 103, which glibc calls klogctl: the kernel's ring as
- * BusyBox's klogd and util-linux's dmesg read it. EBX is the action, ECX the
- * buffer and EDX its length. READ waits for records past the shared reader's
+ * syslog, which glibc calls klogctl: the kernel's ring as BusyBox's klogd
+ * and util-linux's dmesg read it. Its arguments are the action, the buffer
+ * and its length. READ waits for records past the shared reader's
  * place and takes them; READ_ALL gives the last records that fit since the
  * last CLEAR, and READ_CLEAR clears after; SIZE_UNREAD and SIZE_BUFFER are
  * the bytes the reader has not taken and the ring's size; CONSOLE_LEVEL sets
@@ -2529,9 +2533,10 @@ long sys_uname(isr_params_t *params)
     return 0;
 }
 
-/* sethostname (74) and setdomainname (121): set the host name (uname's
- * nodename, what gethostname reads back) or the domain name of the
- * caller's UTS namespace, to the EBX string of ECX bytes, at most 64; a
+/* sethostname and setdomainname: set the host name (uname's nodename, what
+ * gethostname reads back) or the domain name of the caller's UTS namespace,
+ * to the string of the first argument, the second's count of bytes, at most
+ * 64; a
  * caller privileged over the namespace's alone, -EPERM for another, as on
  * Linux. */
 static int32_t uts_set_call(isr_params_t *params, void (*set)(const char *, uint32_t))
@@ -2590,37 +2595,25 @@ static uint32_t _enosys_big_num = 0;
 static uint32_t _enosys_big_pid = 0xFFFFFFFFu;
 
 /**
- * Whether call `nr` with the arguments in `params`, which a signal
- * interrupted with EINTR, may be restarted, by a signal no handler takes or
- * by a handler with SA_RESTART. The calls that are not are the ones Linux
- * never restarts after a handler, which wait for a signal or for a deadline,
- * a timed futex wait among them (`futex_restartable`), and the two returns
- * from a handler, whose EAX is the interrupted call's.
+ * Whether the call the handler `fn` answers, with the arguments in `params`,
+ * which a signal interrupted with EINTR, may be restarted, by a signal no
+ * handler takes or by a handler with SA_RESTART. The calls that are not are
+ * the ones Linux never restarts after a handler, which wait for a signal or
+ * for a deadline, a timed futex wait among them (`futex_restartable`), and
+ * the two returns from a handler, whose result register is the interrupted
+ * call's. The handler names the call, whatever its number on this
+ * architecture.
  */
-static int syscall_restartable(uint32_t nr, const isr_params_t *params)
+static int syscall_restartable(syscall_fn_t fn, const isr_params_t *params)
 {
-    switch (nr) {
-    case 29:  /* pause */
-    case 82:  /* select */
-    case 119: /* sigreturn */
-    case 142: /* _newselect */
-    case 162: /* nanosleep */
-    case 168: /* poll */
-    case 173: /* rt_sigreturn */
-    case 177: /* rt_sigtimedwait */
-    case 179: /* rt_sigsuspend */
-    case 256: /* epoll_wait */
-    case 267: /* clock_nanosleep */
-    case 308: /* pselect6 */
-    case 309: /* ppoll */
-    case 319: /* epoll_pwait */
-    case 441: /* epoll_pwait2 */
-        return 0;
-    case 240: /* futex */
+    if (fn == sys_futex) {
         return futex_restartable(params);
-    default:
-        return 1;
     }
+    return fn != sys_pause && fn != sys_select && fn != sys_sigreturn && fn != sys__newselect &&
+           fn != sys_nanosleep && fn != sys_poll && fn != sys_rt_sigreturn &&
+           fn != sys_rt_sigtimedwait && fn != sys_rt_sigsuspend && fn != sys_epoll_wait &&
+           fn != sys_clock_nanosleep && fn != sys_pselect6 && fn != sys_ppoll &&
+           fn != sys_epoll_pwait && fn != sys_epoll_pwait2;
 }
 
 /**
@@ -2654,29 +2647,30 @@ static void syscall_missing(uint32_t syscall_num)
 }
 
 /**
- * The syscall trap handler: dispatch on the number in EAX.
+ * The system call entry's handler: dispatch on the call's number.
  *
- * Looks up _syscall_table[EAX] and calls it, storing the result back in
- * params->eax for popal/iret to return to userspace. Marks the process
- * non-preemptible (in_syscall) around the dispatch and runs the body with
- * interrupts on so the PIT/HDA keep ticking during long syscalls. A switch an
- * interrupt asked for during the call is taken at its exit, with interrupts
- * off again and the trapframe whole, so a process that is always inside a
- * call gives way once per call; a call that does not return does not. The
- * descriptors the call held in a shared table are let go as the body
- * returns, before a tracer's exit stop (`fd_holds_release`).
+ * Looks up the number in _syscall_table and calls the handler, storing the
+ * result in the result register (SC_RET) for the return to user mode. Marks the
+ * process non-preemptible (in_syscall) around the dispatch and runs the body
+ * with interrupts on so the PIT/HDA keep ticking during long syscalls. A switch
+ * an interrupt asked for during the call is taken at its exit, with interrupts
+ * off again and the trapframe whole, so a process that is always inside a call
+ * gives way once per call; a call that does not return does not. The
+ * descriptors the call held in a shared table are let go as the body returns,
+ * before a tracer's exit stop (`fd_holds_release`).
  *
  * A tracer's stop at the entry may change the call through orig_nr, as
  * Linux's `syscall_trace_enter` lets it: the number is read again after the
  * stop, a number of no call answers -ENOSYS, and -1 runs no call, whose
- * result is then what the tracer left in EAX, -ENOSYS unless it set one.
+ * result is then what the tracer left in the result register, -ENOSYS unless
+ * it set one.
  * The thread's seccomp filters then judge the call the tracer left, as
  * Linux runs them after the stop, and may answer it without running it.
  *
  * Whether `deliver_signals` restarts a call a signal interrupted, on this
  * return, is recorded in `restart_nr` before the exit stop, so a tracer
- * there cancels the restart with -1 in orig_nr, and with a result in EAX
- * other than EINTR.
+ * there cancels the restart with -1 in orig_nr, and with a result other
+ * than EINTR.
  */
 static void _syscall_handler(isr_params_t *params)
 {
@@ -2733,7 +2727,9 @@ static void _syscall_handler(isr_params_t *params)
     fd_holds_release();
     if (current_proc) {
         current_proc->restart_nr = 0;
-        if (!skip && ret == -EINTR && syscall_restartable(syscall_num, params)) {
+        if (!skip && ret == -EINTR && syscall_num < SYSCALL_TABLE_SIZE &&
+            _syscall_table[syscall_num] &&
+            syscall_restartable(_syscall_table[syscall_num], params)) {
             current_proc->restart_nr = syscall_num + 1u;
         }
     }

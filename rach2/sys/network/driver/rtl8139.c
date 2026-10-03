@@ -165,8 +165,8 @@ int rtl8139_init(struct netdev *nd, int nth)
 
     /* Clear any stale interrupt status, then unmask the events we handle. */
     pci_io_write16(iobase + RTL_ISR, 0xFFFF);
-    pci_io_write16(iobase + RTL_IMR,
-         RTL_ISR_ROK | RTL_ISR_TOK | RTL_ISR_RER | RTL_ISR_TER | RTL_ISR_RXOVW | RTL_ISR_FOVW);
+    pci_io_write16(iobase + RTL_IMR, RTL_ISR_ROK | RTL_ISR_TOK | RTL_ISR_RER | RTL_ISR_TER |
+                                         RTL_ISR_RXOVW | RTL_ISR_FOVW);
 
     register_isr_handler((uint8_t)IRQ_VECTOR(rtl_pci.irq), rtl8139_irq, "rtl8139");
 

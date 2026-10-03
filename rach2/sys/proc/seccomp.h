@@ -23,13 +23,13 @@ struct seccomp_filter;
 
 /**
  * Judge the call `nr` the current thread is making, whose arguments are in
- * `tf`, by its mode and filters. Returns 1 when the call is to run; 0 when
- * it is not, with its result in `*ret`. A filter's kill does not return,
- * and its trap posts SIGSYS with EAX back at the call's number.
+ * `tf`, by its mode and filters. Returns 1 when the call is to run; 0 when it
+ * is not, with its result in `*ret`. A filter's kill does not return, and its
+ * trap posts SIGSYS with the result register back at the call's number.
  */
 int seccomp_permit(isr_params_t *tf, uint32_t nr, long *ret);
 
-/** seccomp (354): set the strict mode or add a filter, and the two queries. */
+/** seccomp: set the strict mode or add a filter, and the two queries. */
 long sys_seccomp(isr_params_t *params);
 
 /** prctl's PR_SET_SECCOMP: `mode` strict, or filter with the program at the

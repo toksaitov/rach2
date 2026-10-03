@@ -30,7 +30,7 @@ struct sysv_row {
     int64_t t0, t1, t2;
 };
 
-/** ipc(2), number 117: the one call that reaches every object through
+/** ipc: the one call that reaches every object through
  * `call`'s low 16 bits, as the C library calls it on i386. */
 long sys_ipc(struct isr_params *params);
 

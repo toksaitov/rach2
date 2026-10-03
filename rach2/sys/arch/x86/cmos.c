@@ -198,8 +198,7 @@ int rtc_decode(const rtc_snapshot_t *raw, int64_t *seconds, rtc_time_t *out)
     }
 
     year += RTC_CENTURY_BASE;
-    if (second > 59 || minute > 59 || hour > 23 || month < 1 || month > 12 ||
-        year < 1970) {
+    if (second > 59 || minute > 59 || hour > 23 || month < 1 || month > 12 || year < 1970) {
         return -1;
     }
     if (day < 1 || day > rtc_days_in_month(year, month)) {
@@ -338,9 +337,11 @@ void rtc_init(void)
     int64_t seconds = 0;
     uint32_t uptime;
     int disposition;
-    int try;
+    int
+    try
+        ;
 
-    for (try = 0; try < RTC_SAMPLE_TRIES; try++) {
+    for (try = 0; try < RTC_SAMPLE_TRIES; try ++) {
         if (rtc_sample(&first) != 0 || rtc_sample(&second) != 0) {
             break;
         }
@@ -391,9 +392,11 @@ int rtc_read_clock(rtc_time_t *out)
     rtc_snapshot_t second;
     int64_t seconds;
     uint32_t flags;
-    int sampled, try;
+    int sampled,
+    try
+        ;
 
-    for (try = 0; try < RTC_SAMPLE_TRIES; try++) {
+    for (try = 0; try < RTC_SAMPLE_TRIES; try ++) {
         flags = kirq_save();
         sampled = rtc_sample(&first) == 0 && rtc_sample(&second) == 0;
         kirq_restore(flags);

@@ -123,6 +123,7 @@ void sigframe_take_siginfo(const uint8_t *in, struct k_siginfo *info)
     k_memcpy(&info->uid, in + 16, 4);
     k_memcpy(&info->status, in + 20, 4);
     k_memcpy(&info->addr, in + 12, 4);
+    info->value = (uint32_t)info->status;
 }
 
 static void fill_sigcontext(struct lx_sigcontext *sc, const isr_params_t *tf, uint32_t fp_addr,

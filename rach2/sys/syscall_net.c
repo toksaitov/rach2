@@ -755,7 +755,8 @@ static int32_t netlink_addr_to_user(const uint8_t *nl, uintptr_t sa_ptr, uintptr
 /* sendto(2): a stream socket ignores the destination and behaves like send; a
  * datagram socket sends to the sockaddr, binding an ephemeral source port
  * first. */
-static int32_t do_sendto(int fd, uintptr_t buf_ptr, int len, int flags, uintptr_t sa_ptr, int addrlen)
+static int32_t do_sendto(int fd, uintptr_t buf_ptr, int len, int flags, uintptr_t sa_ptr,
+                         int addrlen)
 {
     fd_entry_t *entry;
 
@@ -1909,8 +1910,8 @@ static int32_t do_sendmsg(int fd, uintptr_t msg_ptr, int flags)
         for (i = 0; i < iovlen; i++) {
             struct kernel_iovec one;
 
-            if (copy_from_user(&one, (const void __user *)(iov_user + i * sizeof(one)), sizeof(one)) !=
-                0) {
+            if (copy_from_user(&one, (const void __user *)(iov_user + i * sizeof(one)),
+                               sizeof(one)) != 0) {
                 return total ? (int32_t)total : -EFAULT;
             }
             if (one.iov_len == 0) {
@@ -2067,10 +2068,10 @@ static int32_t mmsg(int call, const unsigned long *args)
 }
 
 /**
- * Multiplexed socket syscall (socketcall, syscall 102).
+ * Multiplexed socket syscall (socketcall).
  *
- * EBX is the SC_* sub-call number, ECX a user pointer to its argument array.
- * Copies the right number of 32-bit args in one fault-checked read, then
+ * Its arguments are the SC_* sub-call number and a user pointer to its argument
+ * array. Copies the right number of 32-bit args in one fault-checked read, then
  * dispatches to the matching do_* helper. Returns its result, or -EINVAL for an
  * unknown sub-call.
  */

@@ -40,8 +40,7 @@ typedef char process_offsets_fit
 
 int arch_context_check(void)
 {
-    return PROC_OFF(regs.esp) != PROC_OFF_REGS_ESP ||
-           PROC_OFF(space_root) != PROC_OFF_SPACE_ROOT ||
+    return PROC_OFF(regs.esp) != PROC_OFF_REGS_ESP || PROC_OFF(space_root) != PROC_OFF_SPACE_ROOT ||
            PROC_OFF(kernel_stack) != PROC_OFF_KERNEL_STACK ||
            PROC_OFF(tls_base) != PROC_OFF_TLS_BASE || PROC_OFF(page_dir) != PROC_OFF_PAGE_DIR;
 }

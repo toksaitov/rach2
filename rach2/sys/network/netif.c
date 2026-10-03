@@ -1,11 +1,11 @@
 /*
  * netif.c: the interface and route ioctls.
  *
- * The contract is in netif.h. What is here is the `struct ifreq` and
- * `struct rtentry` layouts as offsets, because a struct would have to match
- * an ABI this kernel does not otherwise depend on. What an address change
- * costs, everything that recorded the old address being told, is in
- * netconf.c.
+ * The contract is in netif.h. What is here is the `struct ifreq`, `struct
+ * rtentry` and `struct arpreq` layouts: the fields of their sockaddrs as
+ * offsets, and the structures as C declarations whose types give them the
+ * processor's layout. What an address change costs, everything that
+ * recorded the old address being told, is in netconf.c.
  */
 
 #include "netif.h"
@@ -19,28 +19,50 @@
 #include "../proc/process.h"
 #include "../proc/ns.h"
 
-/* struct ifreq: name at 0 (16 bytes), then the union. Inside the union a
- * sockaddr puts its family at 0 and an IPv4 address at 4; the flags are a
- * short at the union's start and the index an int there. */
-#define IFREQ_LEN      32
+/* struct ifreq: name at 0 (16 bytes), then the union, whose widest member is
+ * a struct ifmap of two longs: 32 bytes on i686 and 40 on x86-64. Inside the
+ * union a sockaddr puts its family at 0 and an IPv4 address at 4; the flags
+ * are a short at the union's start and the index an int there. */
+struct ifreq_shape {
+    char name[16];
+    union {
+        uint8_t addr[16];
+        struct {
+            unsigned long mem_start, mem_end;
+            unsigned short base_addr;
+            unsigned char irq, dma, port;
+        } map;
+        uintptr_t data;
+    } u;
+};
+
+#define IFREQ_LEN      sizeof(struct ifreq_shape)
 #define IFREQ_NAME     0
 #define IFREQ_NAMESIZE 16
 #define IFREQ_UNION    16
 #define IFREQ_SA_ADDR  (IFREQ_UNION + 4)
 #define IFREQ_HW_ADDR  (IFREQ_UNION + 2)
 
-/* struct rtentry on i386, with the offset of each field this code reads: a pad
- * word, then three sockaddrs (destination, gateway, mask) of 16 bytes each at
- * 4, 20 and 36, the flags at 52, and a pointer to the interface's name at 68,
- * for 84 bytes in all. The name matters: a route names a device, and a request
- * naming one this machine does not have must not change the one it does. */
-#define RTENTRY_DST     4
-#define RTENTRY_GATEWAY 20
-#define RTENTRY_GENMASK 36
-#define RTENTRY_FLAGS   52
-#define RTENTRY_METRIC  64
-#define RTENTRY_DEV     68
-#define RTENTRY_LEN     84
+/* Linux's struct rtentry: a pad word, three sockaddrs (destination,
+ * gateway, mask), the flags, the metric, and a pointer to the interface's
+ * name, 84 bytes on i686 and 120 on x86-64. The name matters: a route names
+ * a device, and a request naming one this machine does not have must not
+ * change the one it does. */
+struct kernel_rtentry {
+    unsigned long pad1;
+    uint8_t dst[16];
+    uint8_t gateway[16];
+    uint8_t genmask[16];
+    unsigned short flags;
+    short pad2;
+    unsigned long pad3;
+    uintptr_t pad4;
+    short metric;
+    uintptr_t dev;
+    unsigned long mtu;
+    unsigned long window;
+    unsigned short irtt;
+};
 
 /* struct arpreq: the protocol address, a sockaddr with its IPv4 address at
  * 4, the hardware address, a sockaddr with its family at 16 and its bytes at
@@ -354,8 +376,9 @@ static int32_t route_device(uintptr_t dev, uint32_t gw, struct netdev **out)
  */
 static int32_t route_ioctl(uint32_t request, uintptr_t arg)
 {
-    uint8_t rt[RTENTRY_LEN];
-    uint32_t dst, gw, mask, dev, metric, flags;
+    struct kernel_rtentry rt;
+    uint32_t dst, gw, mask, metric, flags;
+    uintptr_t dev;
     struct netdev *nd;
     int32_t rc;
     int gateway_route; /* a default route of no metric, which is the gateway */
@@ -363,17 +386,15 @@ static int32_t route_ioctl(uint32_t request, uintptr_t arg)
     if (!current_proc || !proc_privileged(current_proc)) {
         return -EPERM;
     }
-    if (copy_from_user(rt, (const void __user *)arg, RTENTRY_LEN) != 0) {
+    if (copy_from_user(&rt, (const void __user *)arg, sizeof(rt)) != 0) {
         return -EFAULT;
     }
-    dst = be32(rt + RTENTRY_DST + 4);
-    gw = be32(rt + RTENTRY_GATEWAY + 4);
-    mask = be32(rt + RTENTRY_GENMASK + 4);
-    metric = (uint32_t)rt[RTENTRY_METRIC] | ((uint32_t)rt[RTENTRY_METRIC + 1] << 8);
+    dst = be32(rt.dst + 4);
+    gw = be32(rt.gateway + 4);
+    mask = be32(rt.genmask + 4);
+    metric = (uint16_t)rt.metric;
     metric = metric != 0 ? metric - 1u : 0u;
-
-    dev = (uint32_t)rt[RTENTRY_DEV] | ((uint32_t)rt[RTENTRY_DEV + 1] << 8) |
-          ((uint32_t)rt[RTENTRY_DEV + 2] << 16) | ((uint32_t)rt[RTENTRY_DEV + 3] << 24);
+    dev = rt.dev;
     rc = route_device(dev, gw, &nd);
     if (rc != 0) {
         return rc;

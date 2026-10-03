@@ -5,7 +5,6 @@
 #include "../../lib/kirq.h"
 #include "../../udelay.h"
 
-
 uint32_t pit_reload = 1193182 / 100;
 
 /*

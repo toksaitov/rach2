@@ -74,7 +74,7 @@
 /*
  * Machine type (e_machine)
  */
-#define EM_NONE 0 /* No machine */
+#define EM_NONE   0  /* No machine */
 #define EM_386    3  /* Intel 80386 */
 #define EM_X86_64 62 /* AMD x86-64 */
 
@@ -236,7 +236,7 @@ typedef struct {
     uint32_t phent;       /* AT_PHENT: size in bytes of one program header */
     uint32_t phnum;       /* AT_PHNUM: number of program headers */
     uintptr_t image_end;  /* page-aligned end of all loaded segments (heap base) */
-    int nsegs;           /* number of recorded PT_LOAD segments */
+    int nsegs;            /* number of recorded PT_LOAD segments */
     elf_seg_t segs[ELF_MAX_SEGS];
 } elf_image_t;
 

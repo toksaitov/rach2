@@ -593,8 +593,9 @@ long sys_pipe2(struct isr_params *params)
     return pipe_open(SC_ARG(params, 0), (int)SC_ARG(params, 1));
 }
 
-/* pipe() is pipe2() with no flags. The caller's ECX is no argument of it
- * and comes back as it went, as every register but EAX does. */
+/* pipe() is pipe2() with no flags. The register of a second argument is
+ * not one of its arguments, and comes back as it went, as every register
+ * but the result's does. */
 long sys_pipe(struct isr_params *params)
 {
     return pipe_open(SC_ARG(params, 0), 0);

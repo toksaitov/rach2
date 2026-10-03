@@ -31,8 +31,7 @@ uint32_t core_note_bytes(uint32_t descsz);
 
 /** Put the note `type` named `name` with the `descsz` bytes of `desc` at
  * `*p` and step past it. */
-void core_note_put(uint8_t **p, const char *name, uint32_t type, const void *desc,
-                   uint32_t descsz);
+void core_note_put(uint8_t **p, const char *name, uint32_t type, const void *desc, uint32_t descsz);
 
 /**
  * Write the core file of the current process through `write` with `ctx`,

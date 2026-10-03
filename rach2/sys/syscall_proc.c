@@ -4,6 +4,7 @@
  * by syscall.c; what it shares with the other arms is in syscall_internal.h.
  */
 #include "arch/arch.h"
+#include "arch/uabi.h"
 #include "../kernel.h"
 #include "mm/filecache.h"
 #include "mm/kheap.h"
@@ -589,16 +590,16 @@ int32_t exit_current(int32_t code)
 
     sched_disable();
 
-    /* Reset ESP to a fresh kernel stack and jump to shell_loop. Safe because
-     * we are in kernel mode and init has been torn down. */
+    /* Move to a fresh kernel stack and jump to shell_loop. Safe because we
+     * are in kernel mode and init has been torn down. */
     arch_run_on_stack((uintptr_t)stack + KERNEL_STACK_SIZE_LOCAL, shell_loop);
     exit_schedule_away();
 }
 
 /**
- * exit (1): end the calling thread with the status in EBX; the process ends
- * with its last thread. A thread's return from its start function makes
- * this call through glibc's and musl's thread code; exit(3) and _exit(2)
+ * exit: end the calling thread with the status its argument has; the
+ * process ends with its last thread. A thread's return from its start function
+ * makes this call through glibc's and musl's thread code; exit(3) and _exit(2)
  * make exit_group.
  */
 long sys_exit(isr_params_t *params)
@@ -607,8 +608,8 @@ long sys_exit(isr_params_t *params)
 }
 
 /**
- * exit_group (252): end every thread of the process, the process with the
- * status in EBX.
+ * exit_group: end every thread of the process, the process with the status
+ * its argument has.
  */
 long sys_exit_group(isr_params_t *params)
 {
@@ -1622,25 +1623,24 @@ static void exec_files(struct exec_state *s)
  * the process's other threads; past here execve cannot fail.
  *
  * The thread first releases the robust futexes it holds and clears the word
- * CLONE_CHILD_CLEARTID names, while the old image is still there to hold
- * them, and under its own id, which the words it locked hold; a thread that
- * is not the leader then takes the leader's place and id. Gives a caller
- * that shares its descriptor table one of its own (`exec_files`) and drops
- * the close-on-exec descriptors; takes the new ids, the saved ids becoming
- * the new effective ones, which is the POSIX rule for every exec and what
- * lets an image shed acquired authority and take it back; resets what
- * pointed into the old image: caught signals' handlers (SIG_IGN, the
- * blocked mask and the pending signals are kept, as POSIX says), the
- * alternate signal stack, the TLS base and the floating-point state, and
- * deletes the POSIX timers, as POSIX says. Then
- * it switches to the new address space and puts the old one, which the
+ * CLONE_CHILD_CLEARTID names, while the old image is still there to hold them,
+ * and under its own id, which the words it locked hold; a thread that is not
+ * the leader then takes the leader's place and id. Gives a caller that shares
+ * its descriptor table one of its own (`exec_files`) and drops the
+ * close-on-exec descriptors; takes the new ids, the saved ids becoming the new
+ * effective ones, which is the POSIX rule for every exec and what lets an image
+ * shed acquired authority and take it back; resets what pointed into the old
+ * image: caught signals' handlers (SIG_IGN, the blocked mask and the pending
+ * signals are kept, as POSIX says), the alternate signal stack, the TLS base
+ * and the floating-point state, and deletes the POSIX timers, as POSIX says.
+ * Then it switches to the new address space and puts the old one, which the
  * parent of a vfork child keeps, lets that parent go, and points the return
- * frame at the entry with the stack pointer at argc. A fresh image has no
- * TLS until its libc calls set_thread_area, so the segment registers get
- * the plain user-data selector, as a new process gets it, in place of the
- * old image's TLS one. The general registers are cleared, since the SysV
- * i386 entry has argc on the stack and %edx an atexit hook or zero, and
- * %ebp 0 marks the outermost frame.
+ * frame at the entry with the stack pointer at argc. A fresh image has no TLS
+ * until its libc calls set_thread_area, so the segment registers get the plain
+ * user-data selector, as a new process gets it, in place of the old image's TLS
+ * one. The general registers are cleared, since the System V entry has argc on
+ * the stack, a register that holds an atexit hook or zero, and a frame pointer
+ * of 0 marking the outermost frame (`arch_exec_frame`).
  */
 static void exec_commit(isr_params_t *params, struct exec_state *s)
 {
@@ -1769,15 +1769,15 @@ int32_t proc_fs_unshare(void)
  * Replace the current process image with a new program, in the workspace
  * `s`; the body of `sys_execve`.
  *
- * EBX = path, ECX = argv[], EDX = envp[]. Does not return on success.
- * Makes the new image's address space, resolves the path and checks the
- * execute right, keeping the program's file with the address space, copies
- * the path, argv and envp onto the new stack's pages, resolves a `#!` script
- * to its interpreter, builds the new image, with the dynamic linker it
- * names, in that address space, sets aside the storage of a descriptor table
- * of the caller's own, ends the process's other threads, and only then
- * commits, so every refusal and every failure of the load returns to the
- * caller with its image and its descriptor table intact.
+ * Its arguments are path, argv[] and envp[]. Does not return on success. Makes
+ * the new image's address space, resolves the path and checks the execute
+ * right, keeping the program's file with the address space, copies the path,
+ * argv and envp onto the new stack's pages, resolves a `#!` script to its
+ * interpreter, builds the new image, with the dynamic linker it names, in that
+ * address space, sets aside the storage of a descriptor table of the caller's
+ * own, ends the process's other threads, and only then commits, so every
+ * refusal and every failure of the load returns to the caller with its image
+ * and its descriptor table intact.
  */
 static int32_t exec_run(isr_params_t *params, struct exec_state *s)
 {
@@ -2251,7 +2251,7 @@ long sys_fork(isr_params_t *params)
 }
 
 /**
- * vfork (190): a child that runs on the parent's memory while the parent
+ * vfork: a child that runs on the parent's memory while the parent
  * waits, until the child calls execve or ends. musl's vfork and glibc's call
  * it; the child must do nothing else before one of the two, since every
  * store it makes is the parent's.
@@ -2299,7 +2299,7 @@ static int32_t clone_with(isr_params_t *params, uint32_t flags, uintptr_t newsp,
 }
 
 /**
- * clone (120), in the forms glibc's and musl's fork, posix_spawn and
+ * clone, in the forms glibc's and musl's fork, posix_spawn and
  * pthread_create use: a new process with its own copy of the address space,
  * files and signal handlers, as fork makes one; with the caller's address
  * space itself under CLONE_VM, and with the caller waiting as vfork waits
@@ -2331,13 +2331,13 @@ long sys_clone(isr_params_t *params)
 
 /* clone3's structure, Linux's struct clone_args as the eight 64-bit fields
  * of its first version, on every architecture. */
-#define CA_FLAGS       0
-#define CA_CHILD_TID   2
-#define CA_PARENT_TID  3
-#define CA_EXIT_SIGNAL 4
-#define CA_STACK       5
-#define CA_STACK_SIZE  6
-#define CA_TLS         7
+#define CA_FLAGS          0
+#define CA_CHILD_TID      2
+#define CA_PARENT_TID     3
+#define CA_EXIT_SIGNAL    4
+#define CA_STACK          5
+#define CA_STACK_SIZE     6
+#define CA_TLS            7
 #define CLONE_ARGS_FIELDS 8
 
 /* How much of a larger structure Linux knows, through set_tid, set_tid_size
@@ -2345,7 +2345,7 @@ long sys_clone(isr_params_t *params)
 #define CLONE_ARGS_KNOWN 88
 
 /**
- * clone3 (435): clone with its arguments in a structure, which glibc tries
+ * clone3: clone with its arguments in a structure, which glibc tries
  * before clone for pthread_create, fork and posix_spawn. The flags are
  * clone's, with the exit signal in a field of its own, and the stack is the
  * lowest address of the region with its size, so the child starts at their
@@ -2446,20 +2446,20 @@ long sys_clone3(isr_params_t *params)
 
 #define CLD_CONTINUED 6
 
-/* The i386 struct rusage, 72 bytes: the user and system CPU time as two
- * timevals of 32-bit seconds and microseconds, then fourteen longs, maxrss
- * in kilobytes and then ixrss through nivcsw, which this kernel does not
- * count and reports as zero. */
+/* Linux's struct rusage, eighteen longs: the user and system CPU time as
+ * two timevals of seconds and microseconds, then maxrss in kilobytes and
+ * then ixrss through nivcsw, which this kernel does not count and reports
+ * as zero. 72 bytes on i686. */
 struct kernel_rusage {
-    int32_t utime_sec;
-    int32_t utime_usec;
-    int32_t stime_sec;
-    int32_t stime_usec;
-    int32_t maxrss;
-    int32_t uncounted[13];
+    long utime_sec;
+    long utime_usec;
+    long stime_sec;
+    long stime_usec;
+    long maxrss;
+    long uncounted[13];
 };
 
-#define RUSAGE_BYTES 72
+#define RUSAGE_BYTES sizeof(struct kernel_rusage)
 
 /** Fill `ru` with `user` and `sys` ticks of CPU time and zero the rest. */
 static void rusage_from_ticks(struct kernel_rusage *ru, uint32_t user, uint32_t sys)
@@ -2869,7 +2869,7 @@ static int32_t wait_find(int idtype, uint32_t id, int options, struct wait_repor
 }
 
 /**
- * Shared core of waitpid(7) and wait4(114).
+ * Shared core of waitpid and wait4.
  *
  * `pid` selects as Linux's does: a pid, -1 for every child, 0 for the
  * caller's process group, and less than -1 for the group -pid; the most
@@ -2928,51 +2928,43 @@ static int32_t do_wait(int pid, int __user *status, int options, uintptr_t rusag
 
 /*
  * sys_waitpid - wait for a child to change state.
- * Args: EBX = pid (-1 = any child), ECX = status pointer, EDX = options.
- * Returns the PID of the child reaped, or reported stopped or continued,
- * 0 (WNOHANG, none ready), or -errno.
+ * Its arguments are pid (-1 = any child), status pointer and options.
+ * Returns the PID of the child reaped, or reported stopped or continued, 0
+ * (WNOHANG, none ready), or -errno.
  */
 long sys_waitpid(isr_params_t *params)
 {
-    return do_wait((int)SC_ARG(params, 0), (int __user *)SC_ARG(params, 1), (int)SC_ARG(params, 2), 0);
+    return do_wait((int)SC_ARG(params, 0), (int __user *)SC_ARG(params, 1), (int)SC_ARG(params, 2),
+                   0);
 }
 
 /*
  * sys_wait4 - like waitpid plus an optional rusage out-pointer, which
- * receives the child's CPU time. Args: EBX = pid, ECX = status, EDX =
- * options, ESI = rusage. musl's wait/waitpid are implemented on top of this.
+ * receives the child's CPU time. Its arguments are pid, status, options
+ * and rusage. musl's wait/waitpid are implemented on top of this.
  */
 long sys_wait4(isr_params_t *params)
 {
-    return do_wait((int)SC_ARG(params, 0), (int __user *)SC_ARG(params, 1), (int)SC_ARG(params, 2), SC_ARG(params, 3));
+    return do_wait((int)SC_ARG(params, 0), (int __user *)SC_ARG(params, 1), (int)SC_ARG(params, 2),
+                   SC_ARG(params, 3));
 }
 
-/* The six fields of the SIGCHLD siginfo_t that waitid writes, at the start
- * of the 128-byte i386 structure. */
-struct kernel_chld_info {
-    int32_t signo;
-    int32_t err;
-    int32_t code;
-    int32_t pid;
-    int32_t uid;
-    int32_t status;
-};
-
 /**
- * Wait for a child to change state (waitid(2), syscall 284).
+ * Wait for a child to change state (waitid).
  *
- * EBX = idtype, ECX = id, EDX = siginfo_t *, ESI = options, EDI = struct
- * rusage *, Linux's fifth argument. P_ALL selects every child, P_PID the
- * child with a positive id, and P_PGID the group with a nonnegative id, 0
- * being the caller's. At least one of WEXITED, WSTOPPED and WCONTINUED must
- * be given, beside which WNOHANG, WNOWAIT and Linux's three thread bits are
- * accepted; `wait_find` has what each means.
+ * Its arguments are idtype, id, siginfo_t *, options and struct rusage *,
+ * Linux's fifth argument. P_ALL selects every child, P_PID the child with a
+ * positive id, and P_PGID the group with a nonnegative id, 0 being the
+ * caller's. At least one of WEXITED, WSTOPPED and WCONTINUED must be given,
+ * beside which WNOHANG, WNOWAIT and Linux's three thread bits are accepted;
+ * `wait_find` has what each means.
  *
  * Returns 0 when a child was reported, with the siginfo's si_signo SIGCHLD,
  * si_code, si_pid, si_uid (the child's real uid) and si_status filled and
  * the child's usage in the rusage; and 0 with WNOHANG when no selected child
  * has an event, with those siginfo fields zero and the rusage untouched.
- * Only those six fields are written. -EINVAL for an unknown option or idtype,
+ * Only the bytes through those fields are written, as the architecture's
+ * siginfo_t lays them out. -EINVAL for an unknown option or idtype,
  * no event asked for, or an id that does not suit its idtype; -EBADF for a
  * pidfd, since no descriptor is one; -ECHILD, -EINTR; -EFAULT, found before
  * the wait or after it with the child's event left in place, as `do_wait`
@@ -2985,7 +2977,8 @@ long sys_waitid(isr_params_t *params)
     uintptr_t uinfo = SC_ARG(params, 2);
     int options = (int)SC_ARG(params, 3);
     uintptr_t rusage_ptr = SC_ARG(params, 4);
-    struct kernel_chld_info info;
+    uint8_t info[SIGINFO_SIZE];
+    struct k_siginfo ki;
     struct wait_report r;
     uint32_t id = 0;
     int32_t rc;
@@ -3018,7 +3011,7 @@ long sys_waitid(isr_params_t *params)
     default:
         return -EINVAL;
     }
-    if (uinfo && !user_buffer_ok(uinfo, sizeof(info), 1)) {
+    if (uinfo && !user_buffer_ok(uinfo, SIGINFO_CHLD_BYTES, 1)) {
         return -EFAULT;
     }
     if (rusage_ptr && !user_buffer_ok(rusage_ptr, RUSAGE_BYTES, 1)) {
@@ -3028,17 +3021,18 @@ long sys_waitid(isr_params_t *params)
     if (rc < 0) {
         return rc;
     }
-    k_memset(&info, 0, sizeof(info));
+    k_memset(info, 0, sizeof(info));
     if (rc > 0) {
-        info.signo = SIGCHLD;
-        info.code = r.code;
-        info.pid = (int32_t)pid_seen(r.pid);
-        info.uid = (int32_t)uid_seen(r.uid);
-        info.status = r.info_status;
+        k_memset(&ki, 0, sizeof(ki));
+        ki.code = r.code;
+        ki.pid = pid_seen(r.pid);
+        ki.uid = uid_seen(r.uid);
+        ki.status = r.info_status;
+        sigframe_fill_siginfo(info, SIGCHLD, &ki);
     }
     ok = (rc == 0 || !rusage_ptr ||
           copy_to_user((void __user *)rusage_ptr, &r.ru, RUSAGE_BYTES) == 0) &&
-         (!uinfo || copy_to_user((void __user *)uinfo, &info, sizeof(info)) == 0);
+         (!uinfo || copy_to_user((void __user *)uinfo, info, SIGINFO_CHLD_BYTES) == 0);
     if (rc > 0) {
         wait_done(&r, ok);
     }
@@ -3054,13 +3048,14 @@ long sys_waitid(isr_params_t *params)
 #define RUSAGE_THREAD 1
 
 /**
- * Resource usage (getrusage(2), syscall 77).
+ * Resource usage (getrusage).
  *
- * EBX = who, ECX = the 72-byte i386 struct rusage. `ru_utime` and `ru_stime`
- * are the user and system time of the caller's process, every thread's, for
- * RUSAGE_SELF, the calling thread's for RUSAGE_THREAD, and the totals of the
- * children the process has reaped, each with the children those reaped, for
- * RUSAGE_CHILDREN: the ticks `times` reports, as timevals. `ru_maxrss` is
+ * The first argument is who, the second the struct rusage, of longs.
+ * `ru_utime` and `ru_stime` are the user and system time of the caller's
+ * process, every thread's, for RUSAGE_SELF, the calling thread's for
+ * RUSAGE_THREAD, and the totals of the children the process has reaped,
+ * each with the children those reaped, for RUSAGE_CHILDREN: the ticks
+ * `times` reports, as timevals. `ru_maxrss` is
  * the larger of the present address space's resident size and the most any
  * earlier one had when it ended, in kilobytes, or for RUSAGE_CHILDREN the
  * most a reaped child reported. The other counters, through context
@@ -3611,13 +3606,14 @@ long sys_kill(isr_params_t *params)
     return do_kill((int)SC_ARG(params, 0), (int)SC_ARG(params, 1));
 }
 
-/** tkill (238): EBX=tid, ECX=signal. */
+/** tkill: its arguments are tid and signal. */
 long sys_tkill(isr_params_t *params)
 {
     return do_tkill(0, (int)SC_ARG(params, 0), (int)SC_ARG(params, 1));
 }
 
-/** tgkill (270): EBX=tgid, ECX=tid, EDX=signal; a tgid of 0 is -EINVAL. */
+/** tgkill: its arguments are tgid, tid and signal; a tgid of 0 is
+ * -EINVAL. */
 long sys_tgkill(isr_params_t *params)
 {
     if ((int)SC_ARG(params, 0) <= 0) {
@@ -3635,28 +3631,23 @@ long sys_tgkill(isr_params_t *params)
  */
 static int32_t queued_info(uintptr_t u, int own, struct k_siginfo *info)
 {
-    int32_t w[6]; /* signo, errno, code, pid, uid, value */
+    uint8_t buf[SIGINFO_SIZE];
 
-    if (copy_from_user(w, (const void __user *)u, sizeof(w)) != 0) {
+    if (copy_from_user(buf, (const void __user *)u, sizeof(buf)) != 0) {
         return -EFAULT;
     }
-    if ((w[2] >= 0 || w[2] == SI_TKILL) && !own) {
+    sigframe_take_siginfo(buf, info);
+    if ((info->code >= 0 || info->code == SI_TKILL) && !own) {
         return -EPERM;
     }
-    k_memset(info, 0, sizeof(*info));
-    info->code = w[2];
-    info->pid = (uint32_t)w[3];
-    info->uid = (uint32_t)w[4];
-    info->status = w[5];
     return 0;
 }
 
 /**
- * rt_sigqueueinfo (178), which sigqueue calls: EBX=pid, ECX=signal, EDX=the
- * siginfo, posted to the process with that siginfo, under kill's
+ * rt_sigqueueinfo, which sigqueue calls: its arguments are pid, signal
+ * and the siginfo, posted to the process with that siginfo, under kill's
  * permission. The kernel keeps one pending instance of each signal, so a
- * real-time signal sent again while pending is merged, where Linux queues
- * it.
+ * real-time signal sent again while pending is merged, where Linux queues it.
  */
 long sys_rt_sigqueueinfo(isr_params_t *params)
 {
@@ -3682,8 +3673,8 @@ long sys_rt_sigqueueinfo(isr_params_t *params)
     return rc;
 }
 
-/** rt_tgsigqueueinfo (335): EBX=tgid, ECX=tid, EDX=signal, ESI=the siginfo,
- * posted to the thread alone, as tgkill posts. */
+/** rt_tgsigqueueinfo: its arguments are tgid, tid, signal and the
+ * siginfo, posted to the thread alone, as tgkill posts. */
 long sys_rt_tgsigqueueinfo(isr_params_t *params)
 {
     int tgid = (int)SC_ARG(params, 0);
@@ -3751,11 +3742,11 @@ long sys_pause(isr_params_t *params)
 /**
  * Atomically install a signal mask and wait (rt_sigsuspend(2)).
  *
- * EBX = const sigset_t *mask, ECX = sigsetsize (8). Replaces the blocked mask
- * with *mask, waits for a deliverable signal, and returns -EINTR. The handler
- * the signal runs runs under *mask, and the frame it gets carries the old
- * mask, which its return restores; without a handler the old mask comes back
- * on the return to user mode.
+ * Its arguments are const sigset_t *mask and sigsetsize (8). Replaces the
+ * blocked mask with *mask, waits for a deliverable signal, and returns -EINTR.
+ * The handler the signal runs runs under *mask, and the frame it gets carries
+ * the old mask, which its return restores; without a handler the old mask comes
+ * back on the return to user mode.
  */
 long sys_rt_sigsuspend(isr_params_t *params)
 {
@@ -3780,10 +3771,10 @@ long sys_rt_sigsuspend(isr_params_t *params)
 }
 
 /**
- * Install or query a signal disposition (rt_sigaction, syscall 174).
+ * Install or query a signal disposition (rt_sigaction).
  *
- * EBX=signo, ECX=const struct k_sigaction* act, EDX=struct k_sigaction* old,
- * ESI=sigsetsize. Stores the action per-signal; SIGKILL/SIGSTOP cannot be
+ * Its arguments are signo, const struct k_sigaction* act, struct k_sigaction*
+ * old and sigsetsize. Stores the action per-signal; SIGKILL/SIGSTOP cannot be
  * changed.
  */
 long sys_rt_sigaction(isr_params_t *params)
@@ -3826,12 +3817,11 @@ long sys_rt_sigaction(isr_params_t *params)
 }
 
 /**
- * Examine or change the blocked-signal mask (rt_sigprocmask, syscall 175).
+ * Examine or change the blocked-signal mask (rt_sigprocmask).
  *
- * EBX=how (0 BLOCK/1 UNBLOCK/2 SETMASK), ECX=const set*, EDX=old set*,
- * ESI=sigsetsize. SIGKILL/SIGSTOP can never be blocked, and a signal of the
- * process that the new mask blocks is left to another thread
- * (`signal_set_blocked`).
+ * Its arguments are how (0 BLOCK/1 UNBLOCK/2 SETMASK), const set*, old set* and
+ * sigsetsize. SIGKILL/SIGSTOP can never be blocked, and a signal of the process
+ * that the new mask blocks is left to another thread (`signal_set_blocked`).
  */
 long sys_rt_sigprocmask(isr_params_t *params)
 {
@@ -3881,9 +3871,9 @@ long sys_rt_sigprocmask(isr_params_t *params)
  * The shared body of sigreturn and rt_sigreturn.
  *
  * The frame the handler returned from gives back the registers, the
- * floating-point state and the mask; a frame that cannot be read or that
- * would load a faulting state kills the process with SIGSEGV. Returns the
- * restored EAX, so the dispatcher's store of the result leaves it as it was.
+ * floating-point state and the mask; a frame that cannot be read or that would
+ * load a faulting state kills the process with SIGSEGV. Returns the restored
+ * result register, so the dispatcher's store of the result leaves it as it was.
  */
 static long signal_return(isr_params_t *tf, int rt)
 {
@@ -3901,7 +3891,7 @@ static long signal_return(isr_params_t *tf, int rt)
 }
 
 /*
- * rt_sigreturn (syscall 173): the return of an SA_SIGINFO handler, through a
+ * rt_sigreturn: the return of an SA_SIGINFO handler, through a
  * restorer that issues the call with the stack pointer 4 bytes past the
  * frame's start.
  */
@@ -3911,7 +3901,7 @@ long sys_rt_sigreturn(isr_params_t *tf)
 }
 
 /*
- * sigreturn (syscall 119): the return of a plain handler, through a restorer
+ * sigreturn: the return of a plain handler, through a restorer
  * that pops the signal number first, 8 bytes past the frame's start.
  */
 long sys_sigreturn(isr_params_t *tf)
@@ -3919,11 +3909,11 @@ long sys_sigreturn(isr_params_t *tf)
     return signal_return(tf, 0);
 }
 
-/* The i386 stack_t of sigaltstack. */
+/* Linux's stack_t of sigaltstack. */
 struct k_stack {
-    uint32_t ss_sp;
+    uintptr_t ss_sp;
     int32_t ss_flags;
-    uint32_t ss_size;
+    unsigned long ss_size;
 };
 
 #define SS_ONSTACK    1
@@ -3932,8 +3922,9 @@ struct k_stack {
 #define MINSIGSTKSZ   2048u
 
 /**
- * sigaltstack (186): set or read the alternate stack a handler with
- * SA_ONSTACK runs on. EBX=new stack or NULL, ECX=old stack or NULL.
+ * sigaltstack: set or read the alternate stack a handler with
+ * SA_ONSTACK runs on. Its arguments are new stack or NULL and old stack or
+ * NULL.
  *
  * The old settings are read before the change: SS_DISABLE for none, and
  * SS_ONSTACK while the process runs on the stack, when a change is refused
@@ -3987,8 +3978,8 @@ long sys_sigaltstack(isr_params_t *params)
 }
 
 /**
- * rt_sigpending (176): the signals pending while blocked. EBX=set, ECX=size
- * of the set in bytes, at most 8.
+ * rt_sigpending: the signals pending while blocked. Its arguments are set
+ * and size of the set in bytes, at most 8.
  */
 long sys_rt_sigpending(isr_params_t *params)
 {
@@ -4015,9 +4006,9 @@ long sys_rt_sigpending(isr_params_t *params)
 }
 
 /**
- * sigprocmask (126): the old form of rt_sigprocmask, with signals 1 to 32
- * in one word. EBX=how, ECX=new set or NULL, EDX=old set or NULL. SIG_SETMASK
- * replaces signals 1 to 32 and leaves the rest.
+ * sigprocmask: the old form of rt_sigprocmask, with signals 1 to 32
+ * in one word. Its arguments are how, new set or NULL and old set or NULL.
+ * SIG_SETMASK replaces signals 1 to 32 and leaves the rest.
  */
 long sys_sigprocmask(isr_params_t *params)
 {
@@ -4296,7 +4287,7 @@ void deliver_signals(isr_params_t *tf)
 
         /* A user handler: build the frame and run it. The remaining pending
          * signals deliver after sigreturn returns through this path again. */
-        handler_flags = sa->flags;
+        handler_flags = (uint32_t)sa->flags;
         if (restart_nr != 0 && (handler_flags & SA_RESTART)) {
             restart_syscall(tf, restart_nr);
         }
@@ -4386,23 +4377,22 @@ static int32_t sigwait_set(uint64_t set, int timed, uint32_t deadline, void __us
 }
 
 /**
- * Wait for a signal of a set and take it (rt_sigtimedwait(2), syscall 177),
+ * Wait for a signal of a set and take it (rt_sigtimedwait),
  * which sigwait, sigwaitinfo and sigtimedwait make.
  *
- * EBX = const sigset_t *set, ECX = siginfo_t *info or NULL, EDX = const
- * struct timespec *timeout or NULL, ESI = sigsetsize, which must be 8. A
- * signal of `set` pending for the thread or its process, the lowest of the
- * thread's own or, when it has none of them, the lowest of the process's, is
- * taken off its pending set without its handler running. While the call
- * waits the signals of `set` count as unblocked, as Linux counts them, so a
- * signal sent to the process wakes this thread; when it returns the old mask
- * comes back, and a signal of `set` that it blocks and that is still pending
- * for the process is left to another thread (`signal_set_blocked`). The
- * timeout is rounded up to whole 10 ms ticks and cut to 2147483646 of them,
- * as nanosleep's is, so that with the tick in progress added the deadline
- * stays ahead of the present in the signed comparison of ticks `sigwait_set`
- * makes, which would take a longer one for past; one of zero polls. SIGKILL
- * and SIGSTOP cannot be waited for.
+ * Its arguments are const sigset_t *set, siginfo_t *info or NULL, const struct
+ * timespec *timeout or NULL and sigsetsize, which must be 8. A signal of `set`
+ * pending for the thread or its process, the lowest of the thread's own or,
+ * when it has none of them, the lowest of the process's, is taken off its
+ * pending set without its handler running. While the call waits the signals of
+ * `set` count as unblocked, as Linux counts them, so a signal sent to the
+ * process wakes this thread; when it returns the old mask comes back, and a
+ * signal of `set` that it blocks and that is still pending for the process is
+ * left to another thread (`signal_set_blocked`). The timeout is rounded up to
+ * whole 10 ms ticks and cut to 2147483646 of them, as nanosleep's is, so that
+ * with the tick in progress added the deadline stays ahead of the present in
+ * the signed comparison of ticks `sigwait_set` makes, which would take a longer
+ * one for past; one of zero polls. SIGKILL and SIGSTOP cannot be waited for.
  */
 long sys_rt_sigtimedwait(isr_params_t *params)
 {
@@ -4483,16 +4473,18 @@ static void sigfd_fill(uint8_t *out, int signo, const struct k_siginfo *info)
     if (fault) {
         put_u64(out + 72, info->addr); /* ssi_addr */
     } else if (info->code == SI_TIMER) {
-        put_word(out + 24, info->pid); /* ssi_tid */
-        put_word(out + 32, info->uid); /* ssi_overrun */
-        put_word(out + 44, (uint32_t)info->status);
-        put_word(out + 48, (uint32_t)info->status);
+        put_word(out + 24, info->pid);             /* ssi_tid */
+        put_word(out + 32, info->uid);             /* ssi_overrun */
+        put_word(out + 44, (uint32_t)info->value); /* ssi_int */
+        put_u64(out + 48, info->value);            /* ssi_ptr */
     } else {
         put_word(out + 12, info->pid);
         put_word(out + 16, info->uid);
         put_word(out + 40, (uint32_t)info->status); /* ssi_status */
         put_word(out + 44, (uint32_t)info->status); /* ssi_int */
-        put_word(out + 48, (uint32_t)info->status); /* ssi_ptr */
+        put_u64(out + 48, info->code == SI_QUEUE || info->code == SI_MESGQ
+                              ? info->value
+                              : (uint32_t)info->status);
     }
 }
 
@@ -4563,11 +4555,11 @@ static void sigfd_close(fd_entry_t *e)
 static const struct file_ops sigfd_ops = {sigfd_read, NULL, sigfd_poll, NULL, sigfd_close};
 
 /**
- * signalfd (321) and signalfd4 (327): EBX = -1 for a new signalfd or one to
- * change, ECX = the mask, EDX = its size, which must be 8, and for
- * signalfd4 ESI = SFD_NONBLOCK and SFD_CLOEXEC. SIGKILL and SIGSTOP are left
- * out of the mask, as Linux leaves them. The descriptor, or EBADF for an
- * open descriptor that is not a signalfd, EINVAL.
+ * signalfd and signalfd4: its arguments are -1 for a new signalfd
+ * or one to change, the mask and its size, which must be 8, and for signalfd4
+ * the flags SFD_NONBLOCK and SFD_CLOEXEC. SIGKILL and SIGSTOP are left out of
+ * the mask, as Linux leaves them. The descriptor, or EBADF for an open
+ * descriptor that is not a signalfd, EINVAL.
  */
 static int32_t signalfd_common(isr_params_t *params, uint32_t flags)
 {
@@ -4694,10 +4686,10 @@ long sys_setsid(isr_params_t *params)
 /**
  * Set a process's process group (setpgid(2)).
  *
- * EBX = pid (0 = caller), ECX = pgid (0 = the target's own pid, i.e. make it
- * a group leader). The target must be the caller or a child of the caller,
- * must not be a session leader, and the destination group must live in the
- * target's session. Returns 0 or -errno.
+ * Its arguments are pid (0 = caller) and pgid (0 = the target's own pid, i.e.
+ * make it a group leader). The target must be the caller or a child of the
+ * caller, must not be a session leader, and the destination group must live in
+ * the target's session. Returns 0 or -errno.
  */
 long sys_setpgid(isr_params_t *params)
 {
@@ -4755,7 +4747,7 @@ static process_t *pgrp_target(int pid)
 
 /*
  * sys_getpgid - return a process's process-group id (getpgid(2)).
- * Args: EBX = pid (0 = caller).
+ * Its argument is pid (0 = caller).
  */
 long sys_getpgid(isr_params_t *params)
 {
@@ -4786,7 +4778,7 @@ long sys_getpgrp(isr_params_t *params)
 
 /*
  * sys_getsid - return a process's session id (getsid(2)).
- * Args: EBX = pid (0 = caller).
+ * Its argument is pid (0 = caller).
  */
 long sys_getsid(isr_params_t *params)
 {
@@ -4817,8 +4809,8 @@ long sys_getppid(isr_params_t *params)
 
 /*
  * sys_umask - set the file-creation mask, returning the previous value
- * (umask(2)). Args: EBX = new mask (only the low 9 permission bits are
- * kept).
+ * (umask(2)). Its argument is new mask (only the low 9 permission bits
+ * are kept).
  */
 long sys_umask(isr_params_t *params)
 {
@@ -5217,7 +5209,7 @@ static process_t *rlimit_target(uint32_t pid)
     return p;
 }
 
-/* getrlimit(76)/ugetrlimit(191): 32-bit struct rlimit { u32 rlim_cur,
+/* getrlimit/ugetrlimit: 32-bit struct rlimit { u32 rlim_cur,
  * rlim_max }. */
 long sys_getrlimit(isr_params_t *params)
 {
@@ -5235,7 +5227,7 @@ long sys_getrlimit(isr_params_t *params)
     return 0;
 }
 
-/* setrlimit(75): the 32-bit form of a set. */
+/* setrlimit: the 32-bit form of a set. */
 long sys_setrlimit(isr_params_t *params)
 {
     uint32_t resource = (uint32_t)SC_ARG(params, 0);
@@ -5256,9 +5248,9 @@ static uint32_t rlimit_from64(uint32_t lo, uint32_t hi)
     return hi ? RLIM_INF32 : lo;
 }
 
-/* prlimit64(340): EBX=pid (0/self), ECX=resource, EDX=new (rlimit64* or NULL),
- * ESI=old (rlimit64* or NULL). 64-bit struct rlimit64 { u64 cur, max }. The
- * old limits are read before the new are set, as POSIX's `setrlimit` and
+/* prlimit64: its arguments are pid (0/self), resource, new (rlimit64* or
+ * NULL) and old (rlimit64* or NULL). 64-bit struct rlimit64 { u64 cur, max }.
+ * The old limits are read before the new are set, as POSIX's `setrlimit` and
  * `getrlimit` see them, and written to the caller after: a copy that fails
  * leaves the new limits in place, as it does on Linux. This is the form musl
  * issues for both. */
@@ -5327,15 +5319,15 @@ long sys_prlimit64(isr_params_t *params)
 #define PAGE_UP(v) (((v) + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1))
 
 /*
- * sys_brk - set the program break (heap top). Arg: EBX = requested break.
- * Returns the resulting break: the new value on success, or the unchanged
- * current break if the request is out of range. This is the contract musl's
- * allocator relies on when it issues SYS_brk (it compares the return to its
- * request; musl's public brk() never issues the call). The heap is the
+ * sys_brk - set the program break (heap top). Its argument is requested
+ * break. Returns the resulting break: the new value on success, or the
+ * unchanged current break if the request is out of range. This is the contract
+ * musl's allocator relies on when it issues SYS_brk (it compares the return to
+ * its request; musl's public brk() never issues the call). The heap is the
  * demand-paged range [heap_start, page_up(brk)), which mprotect may have cut
- * into regions of different protection: growing adds a read-write region at
- * the top, which merges with a read-write top piece, and shrinking removes
- * the range above the new top and frees its pages.
+ * into regions of different protection: growing adds a read-write region at the
+ * top, which merges with a read-write top piece, and shrinking removes the
+ * range above the new top and frees its pages.
  */
 long sys_brk(isr_params_t *params)
 {
@@ -5712,18 +5704,18 @@ static long mmap_install(uintptr_t addr, uintptr_t len, uint32_t flags, struct m
 }
 
 /*
- * sys_mmap2 - map memory. Args: EBX=addr, ECX=length, EDX=prot, ESI=flags,
- * EDI=fd, EBP=pgoffset, the offset in the file in pages, which anonymous
- * memory ignores; an offset whose last page would not fit in 32 bits is
- * EOVERFLOW, as in Linux, whatever is mapped. Returns the mapped base
- * address, or -errno. What is mapped is `mmap_backing`'s: anonymous
- * memory, private or shared, or a file, private or shared; where it goes is
- * `mmap_place`'s. The backing is found first, since finding it may sleep,
- * and the place after, so that nothing sleeps between the checks on the
- * range and the insertion: a thread sharing the address space cannot map
- * the range meanwhile, and MAP_FIXED_NOREPLACE cannot replace what it put
- * there. MAP_FIXED replaces whatever the range held. Pages are backed on
- * first touch: zeroed, read from the file, or the shared page itself.
+ * sys_mmap2 - map memory. Its arguments are addr, length, prot, flags, fd
+ * and pgoffset, the offset in the file in pages, which anonymous memory
+ * ignores; an offset whose last page would not fit in 32 bits is EOVERFLOW, as
+ * in Linux, whatever is mapped. Returns the mapped base address, or -errno.
+ * What is mapped is `mmap_backing`'s: anonymous memory, private or shared, or a
+ * file, private or shared; where it goes is `mmap_place`'s. The backing is
+ * found first, since finding it may sleep, and the place after, so that nothing
+ * sleeps between the checks on the range and the insertion: a thread sharing
+ * the address space cannot map the range meanwhile, and MAP_FIXED_NOREPLACE
+ * cannot replace what it put there. MAP_FIXED replaces whatever the range held.
+ * Pages are backed on first touch: zeroed, read from the file, or the shared
+ * page itself.
  */
 long sys_mmap2(isr_params_t *params)
 {
@@ -5766,7 +5758,7 @@ long sys_mmap2(isr_params_t *params)
 }
 
 long mmap_shm(struct open_file *ofd, uintptr_t addr, uintptr_t len, uint32_t access, int place,
-                 char *path)
+              char *path)
 {
     static const uint32_t places[] = {0, MAP_FIXED_NOREPLACE, MAP_FIXED};
     uint32_t prot = PROT_READ | ((access & SHM_MAP_WRITE) ? PROT_WRITE : 0u) |
@@ -5835,10 +5827,10 @@ uint32_t shm_attaches(const struct shmem *sh)
 }
 
 /*
- * sys_munmap - unmap a range. Args: EBX=addr (page-aligned), ECX=length.
- * Returns 0, or -errno. Drops the VMA bookkeeping (trimming or splitting
- * partial overlaps) and frees the backing frames; unmapping never-faulted or
- * never-mapped pages is a no-op, as on Linux.
+ * sys_munmap - unmap a range. Its arguments are addr (page-aligned) and
+ * length. Returns 0, or -errno. Drops the VMA bookkeeping (trimming or
+ * splitting partial overlaps) and frees the backing frames; unmapping
+ * never-faulted or never-mapped pages is a no-op, as on Linux.
  */
 long sys_munmap(isr_params_t *params)
 {
@@ -5888,14 +5880,14 @@ static void protect_resident(uintptr_t start, uintptr_t end, uint32_t prot)
 }
 
 /*
- * sys_mprotect - change the protection of a range. Args: EBX=addr (page
- * aligned), ECX=length, EDX=prot. Returns 0, or -errno: EINVAL for an
+ * sys_mprotect - change the protection of a range. Its arguments are addr
+ * (page aligned), length and prot. Returns 0, or -errno: EINVAL for an
  * unaligned address or an unknown protection bit, ENOMEM when a page of the
- * range is not mapped or a split finds no room for its region, EACCES for
- * write asked of a shared mapping that may never be written (the
- * VM_PROT_NOWRITE `mmap_file` gives), with nothing changed. The regions
- * take the new protection first and the resident pages after, so a fault in
- * between reads the protection the call is setting.
+ * range is not mapped or a split finds no room for its region, EACCES for write
+ * asked of a shared mapping that may never be written (the VM_PROT_NOWRITE
+ * `mmap_file` gives), with nothing changed. The regions take the new protection
+ * first and the resident pages after, so a fault in between reads the
+ * protection the call is setting.
  */
 long sys_mprotect(isr_params_t *params)
 {
@@ -5945,7 +5937,7 @@ long sys_mprotect(isr_params_t *params)
  * long. The file the region maps is held across the move, which removes
  * the old region's hold before the new region takes its own. */
 static long remap_move(vm_space_t *vm, vma_t *r, uintptr_t addr, uintptr_t len, uintptr_t to,
-                          uintptr_t new_len)
+                       uintptr_t new_len)
 {
     struct vm_file *file = r->file;
     uint32_t pgoff = r->pgoff + (uint32_t)((addr - r->start) / PAGE_SIZE);
@@ -5984,7 +5976,7 @@ static long remap_move(vm_space_t *vm, vma_t *r, uintptr_t addr, uintptr_t len, 
  * in its region when the move starts.
  */
 static long remap_fixed(vm_space_t *vm, uintptr_t addr, uintptr_t old_len, uintptr_t to,
-                           uintptr_t new_len)
+                        uintptr_t new_len)
 {
     uint32_t limit = current_proc->rlim[RLIM_AS].cur;
     uintptr_t rest;
@@ -6025,17 +6017,17 @@ static int remap_args_valid(uintptr_t addr, uintptr_t old_len, uintptr_t new_len
 }
 
 /*
- * sys_mremap - resize a mapping, or move it. Args: EBX=old address, ECX=old
- * length, EDX=new length, ESI=flags, EDI=new address with MREMAP_FIXED.
- * The old range must lie in one region. A shrink cuts its end; a growth
- * takes the range after it when that is free, or with MREMAP_MAYMOVE moves
- * the whole mapping, pages and all, to a free range of the new length, or
- * to the new address with MREMAP_FIXED, whatever was there going first
- * (`remap_fixed`). Returns the mapping's address, or -errno: EINVAL for the
- * arguments `remap_args_valid` refuses, and for a mapping of a file whose
- * last page at the new length would not fit in 32 bits; EFAULT for a range
- * not in one region; ENOMEM when it can grow in place and may not move, or
- * when no range is free. MREMAP_DONTUNMAP is not implemented.
+ * sys_mremap - resize a mapping, or move it. Its arguments are old
+ * address, old length, new length, flags and new address with MREMAP_FIXED. The
+ * old range must lie in one region. A shrink cuts its end; a growth takes the
+ * range after it when that is free, or with MREMAP_MAYMOVE moves the whole
+ * mapping, pages and all, to a free range of the new length, or to the new
+ * address with MREMAP_FIXED, whatever was there going first (`remap_fixed`).
+ * Returns the mapping's address, or -errno: EINVAL for the arguments
+ * `remap_args_valid` refuses, and for a mapping of a file whose last page at
+ * the new length would not fit in 32 bits; EFAULT for a range not in one
+ * region; ENOMEM when it can grow in place and may not move, or when no range
+ * is free. MREMAP_DONTUNMAP is not implemented.
  */
 long sys_mremap(isr_params_t *params)
 {
@@ -6110,17 +6102,16 @@ long sys_mremap(isr_params_t *params)
 #define MADV_HWPOISON 100
 
 /*
- * sys_madvise - advice about a range. Args: EBX=address, ECX=length,
- * EDX=advice. MADV_DONTNEED and MADV_FREE let the resident pages go: a
- * private anonymous page reads as zeros again, a private page of a file
- * reads the file again, and a shared page reads what the shared memory
- * holds. The other advice Linux has is accepted and changes nothing, but
- * MADV_REMOVE and MADV_HWPOISON, which are refused with EINVAL, and the two
- * that let pages go over device memory, which has no pages to read again,
- * as Linux refuses them for VM_PFNMAP. A range with a page in no region is
- * ENOMEM, as in Linux. A range that runs past user
- * space is EINVAL, judged by the length as given: a length within a page of
- * 4 GiB rounds up to 0, which would pass for an empty range.
+ * sys_madvise - advice about a range. Its arguments are address, length
+ * and advice. MADV_DONTNEED and MADV_FREE let the resident pages go: a private
+ * anonymous page reads as zeros again, a private page of a file reads the file
+ * again, and a shared page reads what the shared memory holds. The other advice
+ * Linux has is accepted and changes nothing, but MADV_REMOVE and MADV_HWPOISON,
+ * which are refused with EINVAL, and the two that let pages go over device
+ * memory, which has no pages to read again, as Linux refuses them for
+ * VM_PFNMAP. A range with a page in no region is ENOMEM, as in Linux. A range
+ * that runs past user space is EINVAL, judged by the length as given: a length
+ * within a page of 4 GiB rounds up to 0, which would pass for an empty range.
  */
 long sys_madvise(isr_params_t *params)
 {
@@ -6132,7 +6123,8 @@ long sys_madvise(isr_params_t *params)
         return -ESRCH;
     }
     if ((addr & (PAGE_SIZE - 1)) != 0 || addr > USER_ADDR_MAX ||
-        SC_ARG(params, 1) > USER_ADDR_MAX - addr || advice == MADV_REMOVE || advice >= MADV_HWPOISON) {
+        SC_ARG(params, 1) > USER_ADDR_MAX - addr || advice == MADV_REMOVE ||
+        advice >= MADV_HWPOISON) {
         return -EINVAL;
     }
     len = PAGE_UP(SC_ARG(params, 1));
@@ -6188,14 +6180,14 @@ static int32_t msync_range(uintptr_t addr, uintptr_t end, int flush)
 }
 
 /*
- * sys_msync - write a mapping back. Args: EBX=address, ECX=length,
- * EDX=flags. A shared mapping of a disk file has its file's pages written
- * back (`msync_range`), at once with MS_ASYNC too, and with MS_SYNC the
- * file system's fsync after; a shared mapping of a file in memory maps the
- * file's pages themselves, and a private one has nothing to write. Returns
- * 0, EIO for a failed write, ENOMEM for a range with a page in no region, or
- * EINVAL, which a range that runs past user space is too, judged by the
- * length as given, as `sys_madvise` judges it.
+ * sys_msync - write a mapping back. Its arguments are address, length and
+ * flags. A shared mapping of a disk file has its file's pages written back
+ * (`msync_range`), at once with MS_ASYNC too, and with MS_SYNC the file
+ * system's fsync after; a shared mapping of a file in memory maps the file's
+ * pages themselves, and a private one has nothing to write. Returns 0, EIO for
+ * a failed write, ENOMEM for a range with a page in no region, or EINVAL, which
+ * a range that runs past user space is too, judged by the length as given, as
+ * `sys_madvise` judges it.
  */
 long sys_msync(isr_params_t *params)
 {
@@ -6272,11 +6264,11 @@ static uint32_t prio_who(int which, uint32_t who)
 }
 
 /**
- * Read a priority (getpriority(2), syscall 96).
+ * Read a priority (getpriority).
  *
- * EBX = which, ECX = who. Returns the highest priority among the targets,
- * as Linux's raw call returns it, 20 less the nice value, so 1 for nice 19
- * and 40 for nice -20; the C library turns it back into the nice value.
+ * Its arguments are which and who. Returns the highest priority among the
+ * targets, as Linux's raw call returns it, 20 less the nice value, so 1 for
+ * nice 19 and 40 for nice -20; the C library turns it back into the nice value.
  * -EINVAL for an unknown `which`, -ESRCH when nothing matches.
  */
 long sys_getpriority(isr_params_t *params)
@@ -6298,17 +6290,17 @@ long sys_getpriority(isr_params_t *params)
 }
 
 /**
- * Set a priority (setpriority(2), syscall 97).
+ * Set a priority (setpriority).
  *
- * EBX = which, ECX = who, EDX = the nice value, clamped to -20 through 19
- * as Linux clamps it. Each target is changed on Linux's terms: a caller
- * whose effective uid is neither the target's real nor its effective uid
- * gets -EPERM, and one that would lower the target's nice value, raising its
- * priority, gets -EACCES, since `RLIMIT_NICE` is 0; effective uid 0 may do
- * both. The targets that pass are changed whatever the others answer, and the
- * call returns the last refusal, 0 when there was none, or -ESRCH when
- * nothing matched. The value is kept and inherited, and the scheduler does
- * not read it: every ready process takes its turn.
+ * Its arguments are which, who and the nice value, clamped to -20 through 19 as
+ * Linux clamps it. Each target is changed on Linux's terms: a caller whose
+ * effective uid is neither the target's real nor its effective uid gets -EPERM,
+ * and one that would lower the target's nice value, raising its priority, gets
+ * -EACCES, since `RLIMIT_NICE` is 0; effective uid 0 may do both. The targets
+ * that pass are changed whatever the others answer, and the call returns the
+ * last refusal, 0 when there was none, or -ESRCH when nothing matched. The
+ * value is kept and inherited, and the scheduler does not read it: every ready
+ * process takes its turn.
  */
 long sys_setpriority(isr_params_t *params)
 {
@@ -6389,15 +6381,15 @@ static int32_t ioprio_check(uint32_t ioprio)
 }
 
 /**
- * Set an I/O priority (ioprio_set(2), syscall 289).
+ * Set an I/O priority (ioprio_set).
  *
- * EBX = which, ECX = who, EDX = the priority. The targets are those of
- * `setpriority`: a thread, a process group or a real user, `who` 0 being
- * the caller's own. A caller may change a target whose real uid is its own
- * real or effective uid, and a privileged one any. The targets are changed
- * in turn until one refuses, whose error is returned, as Linux stops; 0
- * when every target took it, -ESRCH when nothing matched. The value is kept
- * and inherited, and no disk queue reads it.
+ * Its arguments are which, who and the priority. The targets are those of
+ * `setpriority`: a thread, a process group or a real user, `who` 0 being the
+ * caller's own. A caller may change a target whose real uid is its own real or
+ * effective uid, and a privileged one any. The targets are changed in turn
+ * until one refuses, whose error is returned, as Linux stops; 0 when every
+ * target took it, -ESRCH when nothing matched. The value is kept and inherited,
+ * and no disk queue reads it.
  */
 long sys_ioprio_set(isr_params_t *params)
 {
@@ -6428,12 +6420,12 @@ long sys_ioprio_set(isr_params_t *params)
 }
 
 /**
- * Read an I/O priority (ioprio_get(2), syscall 290).
+ * Read an I/O priority (ioprio_get).
  *
- * EBX = which, ECX = who. Returns the priority of the one target, or the
- * best of a group's or a user's: the lowest value, with a target of no class
- * compared as the normal best-effort level, as Linux's `ioprio_best` does.
- * A process never given one has class none, level 0. -EINVAL for an
+ * Its arguments are which and who. Returns the priority of the one target, or
+ * the best of a group's or a user's: the lowest value, with a target of no
+ * class compared as the normal best-effort level, as Linux's `ioprio_best`
+ * does. A process never given one has class none, level 0. -EINVAL for an
  * unknown `which`, -ESRCH when nothing matches.
  */
 long sys_ioprio_get(isr_params_t *params)
@@ -6515,7 +6507,7 @@ static int sched_may_change(const process_t *p)
 }
 
 /**
- * Give way to the other ready processes (sched_yield(2), syscall 158).
+ * Give way to the other ready processes (sched_yield).
  *
  * The caller is put behind them in the round-robin order and runs again when
  * its turn comes, at once when no other process is ready. Returns 0.
@@ -6529,7 +6521,7 @@ long sys_sched_yield(isr_params_t *params)
 
 /**
  * Change a process's policy and priority (sched_setscheduler(2), syscall
- * 156), or its priority alone (sched_setparam(2), syscall 154, which passes
+ * 156), or its priority alone (sched_setparam, which passes
  * `policy` -1).
  *
  * `uparam` points at a struct sched_param, one int. SCHED_OTHER with priority
@@ -6582,17 +6574,18 @@ static int32_t sched_set(int pid, int policy, const void __user *uparam)
     }
 }
 
-/** sched_setscheduler(2), syscall 156: EBX = pid, ECX = policy, EDX = the
+/** sched_setscheduler: its arguments are pid, policy and the
  * struct sched_param; see `sched_set`. A negative policy is -EINVAL first. */
 long sys_sched_setscheduler(isr_params_t *params)
 {
     if ((int)SC_ARG(params, 1) < 0) {
         return -EINVAL;
     }
-    return sched_set((int)SC_ARG(params, 0), (int)SC_ARG(params, 1), (const void __user *)SC_ARG(params, 2));
+    return sched_set((int)SC_ARG(params, 0), (int)SC_ARG(params, 1),
+                     (const void __user *)SC_ARG(params, 2));
 }
 
-/** sched_setparam(2), syscall 154: EBX = pid, ECX = the struct
+/** sched_setparam: its arguments are pid and the struct
  * sched_param; see `sched_set`. */
 long sys_sched_setparam(isr_params_t *params)
 {
@@ -6600,7 +6593,7 @@ long sys_sched_setparam(isr_params_t *params)
 }
 
 /**
- * A process's policy (sched_getscheduler(2), syscall 157): SCHED_OTHER, the
+ * A process's policy (sched_getscheduler): SCHED_OTHER, the
  * one every process has. -EINVAL for a negative pid, -ESRCH for no process.
  */
 long sys_sched_getscheduler(isr_params_t *params)
@@ -6614,9 +6607,10 @@ long sys_sched_getscheduler(isr_params_t *params)
 }
 
 /**
- * A process's scheduling parameter (sched_getparam(2), syscall 155): the
- * priority 0 of SCHED_OTHER, written to the struct sched_param at ECX.
- * -EINVAL for no parameter or a negative pid, -ESRCH, -EFAULT.
+ * A process's scheduling parameter (sched_getparam): the
+ * priority 0 of SCHED_OTHER, written to the struct sched_param the second
+ * argument points at. -EINVAL for no parameter or a negative pid, -ESRCH,
+ * -EFAULT.
  */
 long sys_sched_getparam(isr_params_t *params)
 {
@@ -6656,20 +6650,20 @@ static int32_t sched_priority_bound(int policy, int max)
     }
 }
 
-/** sched_get_priority_max(2), syscall 159: EBX = policy. */
+/** sched_get_priority_max: its argument is policy. */
 long sys_sched_get_priority_max(isr_params_t *params)
 {
     return sched_priority_bound((int)SC_ARG(params, 0), 1);
 }
 
-/** sched_get_priority_min(2), syscall 160: EBX = policy. */
+/** sched_get_priority_min: its argument is policy. */
 long sys_sched_get_priority_min(isr_params_t *params)
 {
     return sched_priority_bound((int)SC_ARG(params, 0), 0);
 }
 
 /**
- * A process's round-robin time slice (sched_rr_get_interval(2), syscall 161,
+ * A process's round-robin time slice (sched_rr_get_interval,
  * 32-bit timespec): one tick, 10 ms, since the timer takes the processor
  * from every process at each tick. -EINVAL for a negative pid, -ESRCH,
  * -EFAULT.
@@ -6694,13 +6688,13 @@ long sys_sched_rr_get_interval(isr_params_t *params)
 }
 
 /**
- * The CPUs a process may run on (sched_getaffinity(2), syscall 242).
+ * The CPUs a process may run on (sched_getaffinity).
  *
- * EBX = pid, ECX = the bytes of the mask at EDX. The mask has CPU 0 alone,
- * the one processor, and the call writes its four bytes and returns 4, as
- * Linux returns the bytes it wrote; the C library clears the rest of a larger
- * set. -EINVAL for a length that is zero or not a multiple of four bytes,
- * -ESRCH for no process, -EFAULT.
+ * Its arguments are the pid, the size of the mask and the mask. The mask has
+ * CPU 0 alone, the one processor, and the call writes its four bytes and
+ * returns 4, as Linux returns the bytes it wrote; the C library clears the rest
+ * of a larger set. -EINVAL for a length that is zero or not a multiple of four
+ * bytes, -ESRCH for no process, -EFAULT.
  */
 long sys_sched_getaffinity(isr_params_t *params)
 {
@@ -6738,7 +6732,7 @@ static int32_t lock_range(uintptr_t addr, uintptr_t len)
 }
 
 /**
- * mlock (150), munlock (151) and mlock2 (376): lock or unlock the pages of a
+ * mlock, munlock and mlock2: lock or unlock the pages of a
  * range, which must be mapped without a gap. There is no swap, so every page
  * already stays in memory; the calls check the range, and mlock2 its flags,
  * 0 or MLOCK_ONFAULT, and change nothing. RLIMIT_MEMLOCK is not kept.
@@ -6765,7 +6759,7 @@ long sys_mlock2(isr_params_t *params)
 }
 
 /**
- * mlockall (152) and munlockall (153): lock or unlock every page, which the
+ * mlockall and munlockall: lock or unlock every page, which the
  * machine keeps in memory anyway; mlockall's flags must be MCL_CURRENT,
  * MCL_FUTURE and MCL_ONFAULT, not MCL_ONFAULT alone, and not none.
  */
@@ -6786,10 +6780,10 @@ long sys_munlockall(isr_params_t *params)
 }
 
 /**
- * mincore (218): EBX = a page-aligned address, ECX = a length, EDX = a byte
- * for each page, which gets 1 when the page is in memory and 0 when it has
- * not been brought in yet. -EINVAL for an address not page-aligned, -ENOMEM
- * for a range with a gap, -EFAULT.
+ * mincore: its arguments are a page-aligned address, a length and a byte
+ * for each page, which gets 1 when the page is in memory and 0 when it has not
+ * been brought in yet. -EINVAL for an address not page-aligned, -ENOMEM for a
+ * range with a gap, -EFAULT.
  */
 long sys_mincore(isr_params_t *params)
 {
@@ -6820,26 +6814,28 @@ long sys_mincore(isr_params_t *params)
 }
 
 /**
- * The CPU and NUMA node the caller runs on (getcpu(2), syscall 318): 0 and 0,
- * stored where EBX and ECX point unless either is null. EDX, the old cache
- * argument, is ignored, as Linux ignores it. -EFAULT for a word that cannot
- * be written.
+ * The CPU and NUMA node the caller runs on (getcpu): 0 and 0,
+ * stored where the first two arguments point unless either is null. The third,
+ * the old cache argument, is ignored, as Linux ignores it. -EFAULT for a word
+ * that cannot be written.
  */
 long sys_getcpu(isr_params_t *params)
 {
     uint32_t zero = 0;
 
-    if ((SC_ARG(params, 0) && copy_to_user((void __user *)SC_ARG(params, 0), &zero, sizeof(zero)) != 0) ||
-        (SC_ARG(params, 1) && copy_to_user((void __user *)SC_ARG(params, 1), &zero, sizeof(zero)) != 0)) {
+    if ((SC_ARG(params, 0) &&
+         copy_to_user((void __user *)SC_ARG(params, 0), &zero, sizeof(zero)) != 0) ||
+        (SC_ARG(params, 1) &&
+         copy_to_user((void __user *)SC_ARG(params, 1), &zero, sizeof(zero)) != 0)) {
         return -EFAULT;
     }
     return 0;
 }
 
 /**
- * The execution domain (personality(2), syscall 136): EBX is the new value,
- * or 0xFFFFFFFF to read it, and the old value is returned. The domain, the
- * low byte, must be PER_LINUX (0) or PER_LINUX32 (8), the two a Linux i386
+ * The execution domain (personality): its argument is the new
+ * value, or 0xFFFFFFFF to read it, and the old value is returned. The domain,
+ * the low byte, must be PER_LINUX (0) or PER_LINUX32 (8), the two a Linux i386
  * program runs in, else -EINVAL; the flag bits above it are kept and change
  * nothing, since this kernel has no address randomization for
  * ADDR_NO_RANDOMIZE, which GDB sets, to turn off, and no other domain.
@@ -6862,14 +6858,14 @@ long sys_personality(isr_params_t *params)
 }
 
 /**
- * Set the CPUs a process may run on (sched_setaffinity(2), syscall 241).
+ * Set the CPUs a process may run on (sched_setaffinity).
  *
- * EBX = pid, ECX = the bytes of the mask at EDX. At most four bytes are read,
- * as Linux reads no more than its own mask's size, and a shorter mask is
- * zero past its end. A mask with CPU 0 is accepted, since that is where every
- * process runs; one without it names no CPU of this machine and is refused
- * with -EINVAL. -EFAULT, then -ESRCH, then -EPERM for a caller that may not
- * change the target, in Linux's order.
+ * Its arguments are the pid, the size of the mask and the mask. At most four
+ * bytes are read, as Linux reads no more than its own mask's size, and a
+ * shorter mask is zero past its end. A mask with CPU 0 is accepted, since that
+ * is where every process runs; one without it names no CPU of this machine and
+ * is refused with -EINVAL. -EFAULT, then -ESRCH, then -EPERM for a caller that
+ * may not change the target, in Linux's order.
  */
 long sys_sched_setaffinity(isr_params_t *params)
 {
@@ -6916,9 +6912,9 @@ long sys_sched_setaffinity(isr_params_t *params)
 #define PR_GET_NO_NEW_PRIVS 39
 
 /**
- * Operations on the calling process (prctl(2), syscall 172).
+ * Operations on the calling process (prctl).
  *
- * EBX = option, ECX to EDI = its four arguments, each as Linux takes it:
+ * Its arguments are the option and four more, each as Linux takes it:
  *
  * PR_SET_PDEATHSIG sets the signal, 1 to 64 or 0 for none, that this
  * process receives when its parent exits (`reparent_children` posts it), and
@@ -7082,13 +7078,13 @@ static int32_t cap_pid_in(uintptr_t uhdr, int32_t *pid)
 }
 
 /**
- * capget (syscall 184): EBX = header, ECX = the sets' words.
+ * capget: its arguments are header and the sets' words.
  *
  * The sets of the thread the header's pid names, the caller for 0, as
- * `cap_held` gives them; the inheritable set is always empty. A null ECX asks
- * only for the version, and is 0 with an unknown version written back. -ESRCH
- * for a pid that names no thread, -EINVAL for a negative one or an unknown
- * version, -EFAULT for memory that cannot be read or written.
+ * `cap_held` gives them; the inheritable set is always empty. A null second
+ * argument asks only for the version, and is 0 with an unknown version written
+ * back. -ESRCH for a pid that names no thread, -EINVAL for a negative one or an
+ * unknown version, -EFAULT for memory that cannot be read or written.
  */
 long sys_capget(isr_params_t *params)
 {
@@ -7124,7 +7120,7 @@ long sys_capget(isr_params_t *params)
 }
 
 /**
- * capset (syscall 185): EBX = header, ECX = the sets' words.
+ * capset: its arguments are header and the sets' words.
  *
  * The kernel keeps every capability or none, so the calling thread may give
  * up all its capabilities, with every set empty, after which it is not

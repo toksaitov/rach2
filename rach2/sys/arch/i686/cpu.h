@@ -50,16 +50,16 @@ typedef struct cpu_regs cpu_regs_t;
 
 /* Linux i386's system call convention: the number in EAX, the arguments in
  * EBX, ECX, EDX, ESI, EDI and EBP, the result in EAX. */
-#define SC_NR(p)     ((p)->eax)
-#define SC_RET(p)    ((p)->eax)
-#define SC_ARG(p, n) SC_ARG_N(p, n)
+#define SC_NR(p)       ((p)->eax)
+#define SC_RET(p)      ((p)->eax)
+#define SC_ARG(p, n)   SC_ARG_N(p, n)
 #define SC_ARG_N(p, n) SC_ARG_##n(p)
-#define SC_ARG_0(p)  ((unsigned long)(p)->ebx)
-#define SC_ARG_1(p)  ((unsigned long)(p)->ecx)
-#define SC_ARG_2(p)  ((unsigned long)(p)->edx)
-#define SC_ARG_3(p)  ((unsigned long)(p)->esi)
-#define SC_ARG_4(p)  ((unsigned long)(p)->edi)
-#define SC_ARG_5(p)  ((unsigned long)(p)->ebp)
+#define SC_ARG_0(p)    ((unsigned long)(p)->ebx)
+#define SC_ARG_1(p)    ((unsigned long)(p)->ecx)
+#define SC_ARG_2(p)    ((unsigned long)(p)->edx)
+#define SC_ARG_3(p)    ((unsigned long)(p)->esi)
+#define SC_ARG_4(p)    ((unsigned long)(p)->edi)
+#define SC_ARG_5(p)    ((unsigned long)(p)->ebp)
 
 /* The length of the instruction a system call is made by, `int $0x80`'s two
  * bytes, which a restart rewinds the return address over. */
@@ -80,22 +80,22 @@ typedef struct cpu_regs cpu_regs_t;
  */
 typedef uint32_t pte_t;
 #define MMU_TABLE_ENTRIES 1024u
-#define PTE_P       0x001u /* present */
-#define PTE_W       0x002u /* writable */
-#define PTE_U       0x004u /* reachable from user mode */
-#define PTE_NOCACHE 0x018u /* write-through, cache-disabled: PWT and PCD */
-#define PTE_DIRTY   0x040u /* written since the bit was cleared */
+#define PTE_P             0x001u /* present */
+#define PTE_W             0x002u /* writable */
+#define PTE_U             0x004u /* reachable from user mode */
+#define PTE_NOCACHE       0x018u /* write-through, cache-disabled: PWT and PCD */
+#define PTE_DIRTY         0x040u /* written since the bit was cleared */
 /* Bit 9: a page shared copy-on-write. Present, user, read-only and PTE_COW
  * means "shared, copy on the next write"; the fault handler tells a
  * copy-on-write write from a write to a read-only region by this bit. */
-#define PTE_COW 0x200u
+#define PTE_COW           0x200u
 /* Bit 10: a resident page of a PROT_NONE region. The page stays present,
  * with its frame and contents, but supervisor-only and read-only, so any
  * user access faults; fork and teardown own it as a user page by this bit,
  * and mprotect makes it a user page again. */
-#define PTE_NONE    0x400u
-#define PTE_FLAGS   0xFFFu
-#define PTE_ADDR(e) ((e) & ~(pte_t)PTE_FLAGS)
+#define PTE_NONE          0x400u
+#define PTE_FLAGS         0xFFFu
+#define PTE_ADDR(e)       ((e) & ~(pte_t)PTE_FLAGS)
 
 /* Top of the identity-mapped physical window (32 MiB): the kernel image,
  * the boot data, the page tables the boot carves and the DMA buffers that a

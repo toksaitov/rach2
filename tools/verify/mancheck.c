@@ -465,9 +465,8 @@ int main(int argc, char **argv)
     int i, programs = 0, calls = 0;
 
     if (argc < 8) {
-        fprintf(stderr,
-                "usage: mancheck MANDIR SYSNR_H SYSTAB_C[:SYSTAB_C...] APPLETS PROGRAMS_MK "
-                "RECOVERY_MANIFEST MANIFEST...\n");
+        fprintf(stderr, "usage: mancheck MANDIR SYSNR_H SYSTAB_C[:SYSTAB_C...] APPLETS PROGRAMS_MK "
+                        "RECOVERY_MANIFEST MANIFEST...\n");
         return 2;
     }
     read_pages(argv[1]);

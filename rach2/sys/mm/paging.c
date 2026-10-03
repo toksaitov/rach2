@@ -115,9 +115,9 @@ static void _page_fault_handler(isr_params_t *params);
  * The architecture then builds the kernel's directory (`mmu_init`), marking
  * the frames below the break it passes, and every frame below
  * `mem_reserved_ptr` is marked used once more, for the tables carved at
- * frames the architecture had already passed and for those carved after it. The map has the same range reserved, and what the
- * allocator manages and has free is counted from the table and not from the
- * map's arithmetic, so the boot's report compares the two.
+ * frames the architecture had already passed and for those carved after it. The map has the same
+ * range reserved, and what the allocator manages and has free is counted from the table and not
+ * from the map's arithmetic, so the boot's report compares the two.
  */
 void init_paging(struct frame_map *map)
 {
@@ -308,7 +308,7 @@ static int file_fault(page_dir_t *dir, vm_space_t *vm, const vma_t *vma, uintptr
     }
     vm_file_put(f);
     if (rc == 1 && map_user_frame(dir, page, phys,
-                                     PTE_P | PTE_U | ((prot & VM_PROT_WRITE) ? PTE_W : 0)) == 0) {
+                                  PTE_P | PTE_U | ((prot & VM_PROT_WRITE) ? PTE_W : 0)) == 0) {
         return 1;
     }
     free_frame(phys);
@@ -347,7 +347,7 @@ static int shared_fault(page_dir_t *dir, vm_space_t *vm, const vma_t *vma, uintp
         return rc < 0 ? -1 : 0;
     }
     if (rc == 1 && map_user_frame(dir, page, phys,
-                                     PTE_P | PTE_U | ((prot & VM_PROT_WRITE) ? PTE_W : 0)) == 0) {
+                                  PTE_P | PTE_U | ((prot & VM_PROT_WRITE) ? PTE_W : 0)) == 0) {
         return 1;
     }
     free_frame(phys);
@@ -824,8 +824,8 @@ uintptr_t map_mmio(uintptr_t phys_addr, size_t size)
     va = _mmio_next;
     for (i = 0; i < pages; i++) {
         /* Present, writable, cache-disabled: a register is not memory. */
-        *kernel_pte(va + i * PAGE_SIZE) = (pte_t)(start_page + i * PAGE_SIZE) | PTE_P | PTE_W |
-                                          PTE_NOCACHE;
+        *kernel_pte(va + i * PAGE_SIZE) =
+            (pte_t)(start_page + i * PAGE_SIZE) | PTE_P | PTE_W | PTE_NOCACHE;
     }
     _mmio_next += pages * PAGE_SIZE;
 
@@ -1407,8 +1407,7 @@ int paging_fork_copy(struct mm *from, page_dir_t *child_dir)
             }
             continue;
         }
-        for (i = MMU_INDEX(va); i < MMU_TABLE_ENTRIES && va < USER_ADDR_MAX;
-             i++, va += PAGE_SIZE) {
+        for (i = MMU_INDEX(va); i < MMU_TABLE_ENTRIES && va < USER_ADDR_MAX; i++, va += PAGE_SIZE) {
             pte_t pte = table[i];
             uintptr_t parent_phys = PTE_ADDR(pte);
             vma_t *r;

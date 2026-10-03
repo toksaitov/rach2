@@ -15,11 +15,14 @@
 #      the two architectures with headers alone, with the pointer and
 #      declaration errors on: a shared file that uses a register, a port or a
 #      function only an x86 has fails to compile there, and so does one that
-#      holds a pointer in a 32-bit integer.
+#      holds a pointer in a 32-bit integer. On 64-bit ARM an implicit
+#      conversion of a 64-bit value to 32 bits is an error too, so a user
+#      address, a length or an argument word cut to 32 bits is written as a
+#      cast where the cut is meant, and fails the check where it is not.
 #   2. No shared file includes, through any chain, a header under an
-#      architecture's directory but its cpu.h through arch.h, or the header of
-#      a platform's own file: what it calls there would not exist on another
-#      platform.
+#      architecture's directory but its cpu.h through arch.h and its uabi.h
+#      through sys/arch/uabi.h, or the header of a platform's own file: what
+#      it calls there would not exist on another platform.
 #   3. No shared file has inline assembly. The one exception is the compiler
 #      barrier `k_barrier` in lib/kdef.h, which names no instruction.
 
@@ -47,8 +50,10 @@ FLAGS="-ffreestanding -fsyntax-only -ansi -ferror-limit=0 -Wno-everything \
     -Werror=incompatible-pointer-types"
 
 for target in armv7a-none-eabi aarch64-none-elf; do
+    extra=
+    [ "$target" = aarch64-none-elf ] && extra=-Werror=shorten-64-to-32
     # shellcheck disable=SC2086
-    if ! clang --target=$target $FLAGS $shared; then
+    if ! clang --target=$target $FLAGS $extra $shared; then
         echo "archcheck: the shared code does not compile for $target" >&2
         status=1
     fi
@@ -57,7 +62,7 @@ done
 # The headers of the platform's own files: a .c listed by the platform with
 # a .h beside it.
 platform_headers=
-for f in $platform; do
+for f in $(echo $platform | tr ' ' '\n' | sort -u); do
     h="${f%.c}.h"
     [ -f "$h" ] && platform_headers="$platform_headers $h"
 done
@@ -76,18 +81,21 @@ for f in $shared; do
             print s
         }')
         case "$clean" in
-        sys/arch/arch.h | sys/arch/*/cpu.h | sys/arch/*/sysnr.h) ;;
-        sys/arch/*)
-            echo "archcheck: $f: includes $clean, an architecture's own header" >&2
-            status=1
-            ;;
+        sys/arch/arch.h | sys/arch/uabi.h | sys/arch/*/cpu.h | sys/arch/*/uabi.h) continue ;;
         esac
         for h in $platform_headers; do
             if [ "$clean" = "$h" ]; then
                 echo "archcheck: $f: includes $clean, a platform's own header" >&2
                 status=1
+                continue 2
             fi
         done
+        case "$clean" in
+        sys/arch/*)
+            echo "archcheck: $f: includes $clean, an architecture's own header" >&2
+            status=1
+            ;;
+        esac
     done
 done
 

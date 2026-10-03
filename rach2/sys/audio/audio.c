@@ -85,8 +85,8 @@ audio_driver_t speaker_driver = {
  *
  * Each candidate is probed in order of preference and the first whose
  * `init` succeeds becomes the active driver: HD Audio, then the platform's
- * own (on a PC, the Sound Blaster 16), then the speaker. `audio` is left NULL and the boot status reads "No
- * audio" if every probe fails.
+ * own (on a PC, the Sound Blaster 16), then the speaker. `audio` is left NULL and the boot status
+ * reads "No audio" if every probe fails.
  */
 void init_audio(void)
 {

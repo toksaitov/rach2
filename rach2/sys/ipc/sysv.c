@@ -13,6 +13,7 @@
  * it waits on.
  */
 
+#include "../arch/uabi.h"
 #include "sysv.h"
 #include "mqueue.h"
 
@@ -75,15 +76,6 @@ struct sysv_perm {
 /* The namespace of the segments an IPC namespace's end left attached, which
  * no process is in. */
 static struct ipcns ipc_gone;
-
-/* i386's struct ipc64_perm. */
-struct ipc64_perm {
-    int32_t key;
-    uint32_t uid, gid, cuid, cgid;
-    uint16_t mode, pad1;
-    uint16_t seq, pad2;
-    uint32_t unused1, unused2;
-};
 
 static struct sysv_perm *tables[3][SYSV_SLOTS];
 static uint16_t seqs[3];
@@ -324,26 +316,15 @@ struct shm_seg {
     int32_t cpid, lpid;
 };
 
-/* i386's struct shmid64_ds, with the times split into their low and high
- * words. */
-struct shmid64_ds {
-    struct ipc64_perm perm;
-    uint32_t segsz;
-    uint32_t atime, atime_high, dtime, dtime_high, ctime, ctime_high;
-    int32_t cpid, lpid;
-    uint32_t nattch;
-    uint32_t unused4, unused5;
-};
-
 /* IPC_INFO's struct shminfo64 and SHM_INFO's struct shm_info. */
 struct shminfo64 {
-    uint32_t shmmax, shmmin, shmmni, shmseg, shmall;
-    uint32_t unused[4];
+    unsigned long shmmax, shmmin, shmmni, shmseg, shmall;
+    unsigned long unused[4];
 };
 
 struct shm_info {
     int32_t used_ids;
-    uint32_t shm_tot, shm_rss, shm_swp, swap_attempts, swap_successes;
+    unsigned long shm_tot, shm_rss, shm_swp, swap_attempts, swap_successes;
 };
 
 /** The segment's memory's record of sharing, which its mappings have. */
@@ -538,12 +519,9 @@ static void shm_stat_out(struct shm_seg *s, struct shmid64_ds *ds)
     k_memset(ds, 0, sizeof(*ds));
     sysv_perm_out(&s->perm, &ds->perm);
     ds->segsz = s->size;
-    ds->atime = (uint32_t)s->atime;
-    ds->atime_high = (uint32_t)(s->atime >> 32);
-    ds->dtime = (uint32_t)s->dtime;
-    ds->dtime_high = (uint32_t)(s->dtime >> 32);
-    ds->ctime = (uint32_t)s->ctime;
-    ds->ctime_high = (uint32_t)(s->ctime >> 32);
+    IPC_TIME_SET(ds, atime, s->atime);
+    IPC_TIME_SET(ds, dtime, s->dtime);
+    IPC_TIME_SET(ds, ctime, s->ctime);
     ds->cpid = sysv_pid_seen(s->cpid);
     ds->lpid = sysv_pid_seen(s->lpid);
     ds->nattch = shm_attaches(shm_mem(s));
@@ -678,14 +656,6 @@ struct sem_undo {
     int32_t semid;
     uint32_t nsems;
     int16_t *adj;
-};
-
-/* i386's struct semid64_ds and struct seminfo. */
-struct semid64_ds {
-    struct ipc64_perm perm;
-    uint32_t otime, otime_high, ctime, ctime_high;
-    uint32_t nsems;
-    uint32_t unused3, unused4;
 };
 
 struct seminfo {
@@ -999,10 +969,8 @@ static void sem_stat_out(const struct sem_set *set, struct semid64_ds *ds)
 {
     k_memset(ds, 0, sizeof(*ds));
     sysv_perm_out(&set->perm, &ds->perm);
-    ds->otime = (uint32_t)set->otime;
-    ds->otime_high = (uint32_t)(set->otime >> 32);
-    ds->ctime = (uint32_t)set->ctime;
-    ds->ctime_high = (uint32_t)(set->ctime >> 32);
+    IPC_TIME_SET(ds, otime, set->otime);
+    IPC_TIME_SET(ds, ctime, set->ctime);
     ds->nsems = set->nsems;
 }
 
@@ -1246,7 +1214,7 @@ void sysv_exit(struct tgroup *tg)
 
 struct msg {
     struct msg *next;
-    int32_t type;
+    long type;
     uint32_t size;
 };
 
@@ -1258,15 +1226,6 @@ struct msg_queue {
     int32_t lspid, lrpid;
     wait_queue_t wq;
     uint32_t gen;
-};
-
-/* i386's struct msqid64_ds and struct msginfo. */
-struct msqid64_ds {
-    struct ipc64_perm perm;
-    uint32_t stime, stime_high, rtime, rtime_high, ctime, ctime_high;
-    uint32_t cbytes, qnum, qbytes;
-    int32_t lspid, lrpid;
-    uint32_t unused4, unused5;
 };
 
 struct msginfo {
@@ -1348,8 +1307,8 @@ static int32_t msg_snd(int32_t id, const void __user *umsg, uint32_t size, uint3
     if (!m) {
         return -ENOMEM;
     }
-    if (copy_from_user(&m->type, umsg, 4) != 0 ||
-        copy_from_user(m + 1, (const char __user *)umsg + 4, size) != 0) {
+    if (copy_from_user(&m->type, umsg, sizeof(m->type)) != 0 ||
+        copy_from_user(m + 1, (const char __user *)umsg + sizeof(m->type), size) != 0) {
         kfree(m);
         return -EFAULT;
     }
@@ -1388,12 +1347,12 @@ static int32_t msg_snd(int32_t id, const void __user *umsg, uint32_t size, uint3
  * first for 0, the first of `type` or with MSG_EXCEPT not of it for a
  * positive one, and the first of the lowest type up to -`type` for a
  * negative one; NULL for none. */
-static struct msg **msg_pick(struct msg_queue *q, int32_t type, uint32_t flag)
+static struct msg **msg_pick(struct msg_queue *q, long type, uint32_t flag)
 {
     struct msg **link, **best = NULL;
 
     for (link = &q->head; *link; link = &(*link)->next) {
-        int32_t t = (*link)->type;
+        long t = (*link)->type;
 
         if (type == 0 || (type > 0 && ((flag & MSG_EXCEPT) ? t != type : t == type))) {
             return link;
@@ -1411,8 +1370,8 @@ static int32_t msg_copy_out(const struct msg *m, void __user *umsg, uint32_t siz
 {
     uint32_t n = m->size < size ? m->size : size;
 
-    if (copy_to_user(umsg, &m->type, 4) != 0 ||
-        copy_to_user((char __user *)umsg + 4, m + 1, n) != 0) {
+    if (copy_to_user(umsg, &m->type, sizeof(m->type)) != 0 ||
+        copy_to_user((char __user *)umsg + sizeof(m->type), m + 1, n) != 0) {
         return -EFAULT;
     }
     return (int32_t)n;
@@ -1425,7 +1384,7 @@ static int32_t msg_copy_out(const struct msg *m, void __user *umsg, uint32_t siz
  * unless MSG_NOERROR cuts it. MSG_COPY is ENOSYS, as from a Linux built
  * without checkpoint and restore. Returns the bytes of text.
  */
-static int32_t msg_rcv(int32_t id, void __user *umsg, int32_t size, int32_t type, uint32_t flag)
+static int32_t msg_rcv(int32_t id, void __user *umsg, int32_t size, long type, uint32_t flag)
 {
     struct sysv_wait w;
     struct msg_queue *q;
@@ -1476,12 +1435,9 @@ static void msg_stat_out(const struct msg_queue *q, struct msqid64_ds *ds)
 {
     k_memset(ds, 0, sizeof(*ds));
     sysv_perm_out(&q->perm, &ds->perm);
-    ds->stime = (uint32_t)q->stime;
-    ds->stime_high = (uint32_t)(q->stime >> 32);
-    ds->rtime = (uint32_t)q->rtime;
-    ds->rtime_high = (uint32_t)(q->rtime >> 32);
-    ds->ctime = (uint32_t)q->ctime;
-    ds->ctime_high = (uint32_t)(q->ctime >> 32);
+    IPC_TIME_SET(ds, stime, q->stime);
+    IPC_TIME_SET(ds, rtime, q->rtime);
+    IPC_TIME_SET(ds, ctime, q->ctime);
     ds->cbytes = q->cbytes;
     ds->qnum = q->qnum;
     ds->qbytes = q->qbytes;
@@ -1539,7 +1495,7 @@ static int32_t msg_ctl_owner(struct msg_queue *q, int cmd, void __user *buf)
         if (sysv_perm_set(&q->perm, &ds.perm) != 0) {
             return -EINVAL;
         }
-        q->qbytes = ds.qbytes;
+        q->qbytes = USER_LEN32(ds.qbytes);
         q->ctime = sysv_now();
         q->gen++;
         wq_wake_all(&q->wq);
@@ -1644,7 +1600,7 @@ static int32_t shm_at_ipc(int32_t id, uintptr_t addr, uint32_t flag, void __user
 /** ipc's MSGRCV: version 0 has the buffer and the type in a pair at `ptr`,
  * version 1 the buffer at `ptr` and the type in `fifth`. */
 static int32_t msg_rcv_ipc(int version, int32_t id, int32_t size, uint32_t flag, void __user *ptr,
-                           int32_t fifth)
+                           long fifth)
 {
     struct {
         uintptr_t msgp;
@@ -1660,7 +1616,7 @@ static int32_t msg_rcv_ipc(int version, int32_t id, int32_t size, uint32_t flag,
     if (copy_from_user(&kludge, ptr, sizeof(kludge)) != 0) {
         return -EFAULT;
     }
-    return msg_rcv(id, (void __user *)kludge.msgp, size, (int32_t)kludge.msgtyp, flag);
+    return msg_rcv(id, (void __user *)kludge.msgp, size, kludge.msgtyp, flag);
 }
 
 long sys_ipc(struct isr_params *params)
@@ -1676,7 +1632,8 @@ long sys_ipc(struct isr_params *params)
     case SEMOP:
         return sem_timed(first, (const void __user *)ptr, second, NULL);
     case SEMTIMEDOP:
-        return sem_timed(first, (const void __user *)ptr, second, (const void __user *)SC_ARG(params, 5));
+        return sem_timed(first, (const void __user *)ptr, second,
+                         (const void __user *)SC_ARG(params, 5));
     case SEMGET:
         return sem_get(first, (int32_t)second, (uint32_t)third);
     case SEMCTL:
@@ -1691,7 +1648,7 @@ long sys_ipc(struct isr_params *params)
         return msg_snd(first, (const void __user *)ptr, second, (uint32_t)third);
     case MSGRCV:
         return msg_rcv_ipc(version, first, (int32_t)second, (uint32_t)third, (void __user *)ptr,
-                           (int32_t)SC_ARG(params, 5));
+                           (long)SC_ARG(params, 5));
     case MSGGET:
         return msg_get(first, second);
     case MSGCTL:
@@ -1711,22 +1668,26 @@ long sys_ipc(struct isr_params *params)
 
 long sys_semget(struct isr_params *params)
 {
-    return sem_get((int32_t)SC_ARG(params, 0), (int32_t)SC_ARG(params, 1), (uint32_t)SC_ARG(params, 2));
+    return sem_get((int32_t)SC_ARG(params, 0), (int32_t)SC_ARG(params, 1),
+                   (uint32_t)SC_ARG(params, 2));
 }
 
 long sys_semctl(struct isr_params *params)
 {
-    return sem_ctl((int32_t)SC_ARG(params, 0), (int)SC_ARG(params, 1), (int)SC_ARG(params, 2), SC_ARG(params, 3));
+    return sem_ctl((int32_t)SC_ARG(params, 0), (int)SC_ARG(params, 1), (int)SC_ARG(params, 2),
+                   SC_ARG(params, 3));
 }
 
 long sys_shmget(struct isr_params *params)
 {
-    return shm_get((int32_t)SC_ARG(params, 0), USER_LEN32(SC_ARG(params, 1)), (uint32_t)SC_ARG(params, 2));
+    return shm_get((int32_t)SC_ARG(params, 0), USER_LEN32(SC_ARG(params, 1)),
+                   (uint32_t)SC_ARG(params, 2));
 }
 
 long sys_shmctl(struct isr_params *params)
 {
-    return shm_ctl((int32_t)SC_ARG(params, 0), (int)SC_ARG(params, 1), (void __user *)SC_ARG(params, 2));
+    return shm_ctl((int32_t)SC_ARG(params, 0), (int)SC_ARG(params, 1),
+                   (void __user *)SC_ARG(params, 2));
 }
 
 long sys_shmat(struct isr_params *params)
@@ -1750,22 +1711,24 @@ long sys_msgget(struct isr_params *params)
 
 long sys_msgsnd(struct isr_params *params)
 {
-    return msg_snd((int32_t)SC_ARG(params, 0), (const void __user *)SC_ARG(params, 1), USER_LEN32(SC_ARG(params, 2)),
-                   (uint32_t)SC_ARG(params, 3));
+    return msg_snd((int32_t)SC_ARG(params, 0), (const void __user *)SC_ARG(params, 1),
+                   USER_LEN32(SC_ARG(params, 2)), (uint32_t)SC_ARG(params, 3));
 }
 
 long sys_msgrcv(struct isr_params *params)
 {
-    return msg_rcv((int32_t)SC_ARG(params, 0), (void __user *)SC_ARG(params, 1), (int32_t)SC_ARG(params, 2),
-                   (int32_t)SC_ARG(params, 3), (uint32_t)SC_ARG(params, 4));
+    return msg_rcv((int32_t)SC_ARG(params, 0), (void __user *)SC_ARG(params, 1),
+                   (int32_t)SC_ARG(params, 2), (long)SC_ARG(params, 3),
+                   (uint32_t)SC_ARG(params, 4));
 }
 
 long sys_msgctl(struct isr_params *params)
 {
-    return msg_ctl((int32_t)SC_ARG(params, 0), (int)SC_ARG(params, 1), (void __user *)SC_ARG(params, 2));
+    return msg_ctl((int32_t)SC_ARG(params, 0), (int)SC_ARG(params, 1),
+                   (void __user *)SC_ARG(params, 2));
 }
 
-/** semtimedop_time64, number 420: the timeout a 64-bit timespec. */
+/** semtimedop_time64: the timeout a 64-bit timespec. */
 long sys_semtimedop_time64(struct isr_params *params)
 {
     int64_t ts[2];
@@ -1781,8 +1744,8 @@ long sys_semtimedop_time64(struct isr_params *params)
         ticks = (uint32_t)(ts[0] > 21474836 ? 21474836 : ts[0]) * 100u +
                 ((uint32_t)ts[1] + 9999999u) / 10000000u;
     }
-    return sem_op((int32_t)SC_ARG(params, 0), (const void __user *)SC_ARG(params, 1), (uint32_t)SC_ARG(params, 2),
-                  SC_ARG(params, 3) != 0, ticks);
+    return sem_op((int32_t)SC_ARG(params, 0), (const void __user *)SC_ARG(params, 1),
+                  (uint32_t)SC_ARG(params, 2), SC_ARG(params, 3) != 0, ticks);
 }
 
 int sysv_row_at(int kind, int i, struct sysv_row *row)

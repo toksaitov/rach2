@@ -825,7 +825,8 @@ static void ap_memory(struct procfs_text *t, const process_t *p, uintptr_t start
     }
     mm_get(mm);
     while (start < end) {
-        uint32_t n = end - start < sizeof(chunk) ? (uint32_t)(end - start) : (uint32_t)sizeof(chunk);
+        uint32_t n =
+            end - start < sizeof(chunk) ? (uint32_t)(end - start) : (uint32_t)sizeof(chunk);
         uint32_t i;
 
         if (paging_access(mm, start, chunk, n, 0) != 0) {

@@ -181,8 +181,9 @@ long sys_eventfd2(struct isr_params *params)
     return eventfd_open((uint32_t)SC_ARG(params, 0), (uint32_t)SC_ARG(params, 1));
 }
 
-/* eventfd() has no flags. The caller's ECX is no argument of it and comes
- * back as it went, as every register but EAX does. */
+/* eventfd() has no flags. The register of a second argument is not one of
+ * its arguments, and comes back as it went, as every register but the
+ * result's does. */
 long sys_eventfd(struct isr_params *params)
 {
     return eventfd_open((uint32_t)SC_ARG(params, 0), 0);

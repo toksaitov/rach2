@@ -72,7 +72,6 @@
 #define SCM_RIGHTS      1
 #define SCM_CREDENTIALS 2
 
-
 #define POLLIN     0x001
 #define POLLOUT    0x004
 #define POLLERR    0x008
@@ -1479,16 +1478,16 @@ int32_t unix_shutdown(fd_entry_t *e, int how)
     return 0;
 }
 
-/* A time limit of SO_RCVTIMEO or SO_SNDTIMEO in ticks, 0 for none, or
- * 0xFFFFFFFF for a timeval out of range. */
-static uint32_t timeval_ticks(const int32_t tv[2])
+/* A time limit of SO_RCVTIMEO or SO_SNDTIMEO, a struct timeval of two
+ * longs, in ticks, 0 for none, or 0xFFFFFFFF for a timeval out of range. */
+static uint32_t timeval_ticks(const long tv[2])
 {
     uint32_t ticks;
 
     if (tv[0] < 0 || tv[1] < 0 || tv[1] >= 1000000) {
         return 0xFFFFFFFFu;
     }
-    if ((uint32_t)tv[0] > 0x7FFFFFFEu / 100u - 1u) {
+    if ((unsigned long)tv[0] > 0x7FFFFFFEu / 100u - 1u) {
         return 0x7FFFFFFEu;
     }
     ticks = (uint32_t)tv[0] * 100u + ((uint32_t)tv[1] + 9999u) / 10000u;
@@ -1517,7 +1516,7 @@ int32_t unix_setsockopt(fd_entry_t *e, int level, int name, uintptr_t val, uint3
         return -ENOPROTOOPT;
     }
     if (name == SO_RCVTIMEO || name == SO_SNDTIMEO) {
-        int32_t tv[2];
+        long tv[2];
         uint32_t ticks;
 
         if (len < sizeof(tv)) {
@@ -1760,8 +1759,8 @@ static int32_t get_control(uintptr_t control, uint32_t controllen, struct unix_o
             return -EINVAL;
         }
         if (hdr.cmsg_type == SCM_RIGHTS) {
-            rc = get_rights(control + off + CMSG_HDR, (uint32_t)(hdr.cmsg_len - CMSG_HDR) / 4u,
-                            out);
+            rc =
+                get_rights(control + off + CMSG_HDR, (uint32_t)(hdr.cmsg_len - CMSG_HDR) / 4u, out);
         } else if (hdr.cmsg_type == SCM_CREDENTIALS &&
                    hdr.cmsg_len == CMSG_HDR + sizeof(struct unix_cred)) {
             rc = get_cred(control + off + CMSG_HDR, out);
@@ -2346,12 +2345,11 @@ static uint32_t put_control(uintptr_t control, uint32_t controllen, struct unix_
     if (in->nfds == 0) {
         return used;
     }
-    given = put_rights(
-        control + used,
-        (control && controllen > used + CMSG_HDR) ? (uint32_t)(controllen - used - CMSG_HDR) / 4u
-                                                  : 0u,
-        in,
-        flags);
+    given = put_rights(control + used,
+                       (control && controllen > used + CMSG_HDR)
+                           ? (uint32_t)(controllen - used - CMSG_HDR) / 4u
+                           : 0u,
+                       in, flags);
     if (given > 0) {
         hdr.cmsg_len = CMSG_HDR + 4u * given;
         hdr.cmsg_level = SOL_SOCKET;
@@ -2499,8 +2497,7 @@ int32_t unix_recvmsg(fd_entry_t *e, uintptr_t msg, int flags)
         return -EFAULT;
     }
     if (!user_buffer_ok(msg, sizeof(hdr), 1) ||
-        (hdr.msg_control &&
-         !user_buffer_ok(hdr.msg_control, USER_LEN32(hdr.msg_controllen), 1))) {
+        (hdr.msg_control && !user_buffer_ok(hdr.msg_control, USER_LEN32(hdr.msg_controllen), 1))) {
         return -EFAULT;
     }
     rc = get_iov(hdr.msg_iov, hdr.msg_iovlen, &iov, &total);
@@ -2517,8 +2514,7 @@ int32_t unix_recvmsg(fd_entry_t *e, uintptr_t msg, int flags)
         transit_leave(&in);
         return rc;
     }
-    hdr.msg_controllen =
-        put_control(hdr.msg_control, USER_LEN32(hdr.msg_controllen), &in, flags);
+    hdr.msg_controllen = put_control(hdr.msg_control, USER_LEN32(hdr.msg_controllen), &in, flags);
     transit_leave(&in);
     if (hdr.msg_name) {
         uint8_t sa[SUN_PATH_OFF + UNIX_PATH_MAX + 1];

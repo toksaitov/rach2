@@ -23,7 +23,8 @@
  *
  * The CSPRNG core (reseed/u32/bytes, ChaCha) is pure and compiles both
  * freestanding and hosted, so it is unit-tested natively under the
- * sanitizers; only krandom_seed() touches hardware and is i386-only.
+ * sanitizers; only krandom_seed() touches hardware, and the kernel alone
+ * compiles it.
  */
 
 /** Reseed the generator from four explicit words. */

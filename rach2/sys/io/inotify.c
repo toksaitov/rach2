@@ -524,8 +524,9 @@ long sys_inotify_init1(struct isr_params *params)
     return inotify_open((uint32_t)SC_ARG(params, 0));
 }
 
-/* inotify_init() has no arguments, and the caller's EBX, which i386 code
- * keeps its global offset table in, comes back as it went. */
+/* inotify_init() has no arguments, and the register of a first argument,
+ * which i386 code keeps its global offset table in, comes back as it
+ * went. */
 long sys_inotify_init(struct isr_params *params)
 {
     (void)params;

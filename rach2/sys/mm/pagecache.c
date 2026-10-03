@@ -30,7 +30,7 @@ static void pc_platform_map(uintptr_t va, uintptr_t phys, int writable)
     (void)writable;
 }
 
-static void pc_platform_unmap(uint32_t va)
+static void pc_platform_unmap(uintptr_t va)
 {
     (void)va;
 }
@@ -56,7 +56,7 @@ static void pc_platform_map(uintptr_t va, uintptr_t phys, int writable)
     map_kernel_frame(va, phys, writable);
 }
 
-static void pc_platform_unmap(uint32_t va)
+static void pc_platform_unmap(uintptr_t va)
 {
     unmap_kernel_frame(va);
 }
@@ -642,7 +642,7 @@ static uint32_t pc_probe_window_size(void)
        never exceeds it. */
     limit &= ~(uint32_t)(PC_PAGE_SIZE - 1u);
 
-    return limit - PCWIN_BASE;
+    return (uint32_t)(limit - PCWIN_BASE);
 }
 
 void init_pagecache(void)

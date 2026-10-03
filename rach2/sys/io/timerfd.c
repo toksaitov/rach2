@@ -76,7 +76,7 @@ struct ktimer {
     int id;
     int notify; /* SIGEV_SIGNAL, SIGEV_NONE or SIGEV_THREAD_ID */
     int signo;
-    int32_t value;
+    uintptr_t value;
     uint32_t tid;          /* the thread SIGEV_THREAD_ID names */
     uint32_t overrun;      /* the overrun of the last signal posted */
     struct tgroup *cpu_tg; /* held: the process whose time it counts, or NULL */
@@ -584,7 +584,8 @@ static void ptimer_fire(struct ktimer *t)
     info.code = SI_TIMER;
     info.pid = (uint32_t)t->id; /* si_timerid, where a child's pid is */
     info.uid = t->overrun;      /* si_overrun */
-    info.status = t->value;     /* si_value */
+    info.value = t->value;      /* si_value */
+    info.status = (int32_t)t->value;
     if (thread) {
         signal_post_thread(thread, t->signo, &info);
     } else {
@@ -616,29 +617,39 @@ static int32_t ptimer_clock(struct ktimer *t, int clock)
 }
 
 /**
- * timer_create(2): a POSIX timer on the clock in EBX, notified as the
- * `struct sigevent` at ECX says, or by SIGALRM with its id as the value when
- * ECX is 0, whose id is stored at EDX: the lowest the process does not
- * have. The clock is real time, time since boot, or the processor time of
- * a process or of a thread of the caller's. A thread SIGEV_THREAD_ID names
- * must be one of the caller's process. EINVAL for another clock,
- * notification or signal, EAGAIN past PTIMER_MAX.
+ * timer_create(2): a POSIX timer on the clock its first argument names,
+ * notified as the `struct sigevent` at the second says, or by SIGALRM with its
+ * id as the value when the second is 0, whose id is stored at the third: the
+ * lowest the process does not have. The clock is real time, time since boot, or
+ * the processor time of a process or of a thread of the caller's. A thread
+ * SIGEV_THREAD_ID names must be one of the caller's process. EINVAL for another
+ * clock, notification or signal, EAGAIN past PTIMER_MAX.
  */
 long sys_timer_create(struct isr_params *params)
 {
     int clock = (int)SC_ARG(params, 0);
     struct tgroup *tg = current_proc->tg;
     struct ktimer *t, **link = &tg->timers;
-    int32_t ev[4] = {0, SIGALRM, SIGEV_SIGNAL, 0}; /* value, signo, notify, tid */
+    struct {
+        uintptr_t value;
+        int32_t signo;
+        int32_t notify;
+        int32_t tid;
+    } ev; /* the head of Linux's struct sigevent */
     uint32_t irq;
     int id = 0;
 
-    if (SC_ARG(params, 1) && copy_from_user(ev, (const void __user *)SC_ARG(params, 1), sizeof(ev)) != 0) {
+    ev.value = 0;
+    ev.signo = SIGALRM;
+    ev.notify = SIGEV_SIGNAL;
+    ev.tid = 0;
+    if (SC_ARG(params, 1) &&
+        copy_from_user(&ev, (const void __user *)SC_ARG(params, 1), sizeof(ev)) != 0) {
         return -EFAULT;
     }
-    if ((ev[2] != SIGEV_SIGNAL && ev[2] != SIGEV_NONE && ev[2] != SIGEV_THREAD_ID) ||
-        (ev[2] != SIGEV_NONE && (ev[1] < 1 || ev[1] > KSIG_MAX)) ||
-        (ev[2] == SIGEV_THREAD_ID && !thread_of(tg, (uint32_t)ev[3]))) {
+    if ((ev.notify != SIGEV_SIGNAL && ev.notify != SIGEV_NONE && ev.notify != SIGEV_THREAD_ID) ||
+        (ev.notify != SIGEV_NONE && (ev.signo < 1 || ev.signo > KSIG_MAX)) ||
+        (ev.notify == SIGEV_THREAD_ID && !thread_of(tg, (uint32_t)ev.tid))) {
         return -EINVAL;
     }
     t = kzalloc(sizeof(*t));
@@ -663,10 +674,10 @@ long sys_timer_create(struct isr_params *params)
     t->clock = clock;
     t->tg = tg;
     t->id = id;
-    t->notify = ev[2];
-    t->signo = ev[1];
-    t->value = SC_ARG(params, 1) ? ev[0] : id;
-    t->tid = (uint32_t)ev[3];
+    t->notify = ev.notify;
+    t->signo = ev.signo;
+    t->value = SC_ARG(params, 1) ? ev.value : (uintptr_t)id;
+    t->tid = (uint32_t)ev.tid;
     t->in_group = *link;
     *link = t;
     kirq_restore(irq);

@@ -11,8 +11,8 @@
  *
  * select() is layered on poll(): the fd_set bitmaps are translated to/from a
  * pollfd array (pure logic in poll_select.c, host-tested), then the same
- * core runs. The i386 calls select(82), _newselect(142), poll(168),
- * pselect6(308) and ppoll(309) all reach this core, so whichever number musl
+ * core runs. The i386 calls select, _newselect, poll,
+ * pselect6 and ppoll all reach this core, so whichever number musl
  * emits works.
  */
 
@@ -40,16 +40,16 @@
 
 extern volatile uint32_t kernel_ticks;
 
-/* 32-bit timespec as the i386 kernel ABI passes it (ppoll/pselect6). */
+/* The timespec of longs ppoll and pselect6 take, 32 bits each on i686. */
 struct poll_timespec {
-    int32_t tv_sec;
-    int32_t tv_nsec;
+    long tv_sec;
+    long tv_nsec;
 };
 
 /* timeval (select). */
 struct poll_timeval {
-    int32_t tv_sec;
-    int32_t tv_usec;
+    long tv_sec;
+    long tv_usec;
 };
 
 static uint32_t irq_save(void)
@@ -395,7 +395,7 @@ static int tv_to_ms(const struct poll_timeval *tv)
     if (tv->tv_sec > 2147482) {
         return 0x7FFFFFFF;
     }
-    return tv->tv_sec * 1000 + (tv->tv_usec + 999) / 1000;
+    return (int)(tv->tv_sec * 1000 + (tv->tv_usec + 999) / 1000);
 }
 
 /** Convert a timespec to a deadline (NULL == infinite). */
@@ -646,7 +646,7 @@ long sys__newselect(struct isr_params *params)
 
 long sys_select(struct isr_params *params)
 {
-    /* The old i386 select(82) packs its 5 args behind one pointer (ebx). */
+    /* The old i386 select packs its five arguments behind one pointer. */
     uintptr_t argp = SC_ARG(params, 0);
     unsigned long a[5]; /* Linux's sel_arg_struct: n, inp, outp, exp, tvp */
 

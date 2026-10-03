@@ -228,7 +228,7 @@ void ns_exec(process_t *p);
 void ns_caps_fill(process_t *p);
 int ns_caps_held(const process_t *p);
 
-/** unshare (310) and setns (346). */
+/** unshare and setns. */
 long sys_unshare(isr_params_t *params);
 long sys_setns(isr_params_t *params);
 

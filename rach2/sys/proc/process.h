@@ -114,7 +114,7 @@ struct process {
     uint32_t pid;                 /* Process ID */
     proc_state_t state;           /* Current state */
     cpu_regs_t regs;              /* Saved CPU registers */
-    uintptr_t space_root;                 /* Page directory physical address */
+    uintptr_t space_root;         /* Page directory physical address */
     uintptr_t kernel_stack;       /* Top of kernel stack for this process */
     uint32_t parent_pid;          /* Parent process ID */
     int32_t exit_code;            /* Exit status (for zombie) */
@@ -227,8 +227,8 @@ struct process {
     struct k_siginfo sig_info[KSIG_MAX + 1];
     /* The alternate signal stack sigaltstack set: its base and size, and
      * whether one is set. Inherited by fork, cleared by execve. */
-    uint32_t altstack_sp;
-    uint32_t altstack_size;
+    uintptr_t altstack_sp;
+    unsigned long altstack_size;
     uint32_t altstack_on;
     /* The mask rt_sigsuspend, pselect6 or ppoll replaced for its wait, with
      * `sigmask_saved`: the frame of the handler the wait ended for carries

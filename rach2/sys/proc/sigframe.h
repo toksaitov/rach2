@@ -16,15 +16,15 @@
  * Build the frame for a handler of `signo` on the user stack of the current
  * process and point the trapframe `tf` at the handler.
  *
- * `sa` is the handler's action: SA_SIGINFO chooses the rt frame, SA_ONSTACK
- * the alternate stack when one is set and not in use, and SA_RESTORER the
- * address the handler returns to, the frame's own `retcode` without it.
- * `info` fills the rt frame's siginfo, and `oldmask` is the mask the return
- * restores. The handler starts with the initial floating-point state, its
- * signal number in EAX and, for an rt frame, the siginfo and ucontext
- * addresses in EDX and ECX. Returns 0, or -1 when the stack cannot take the
- * frame or the frame would run off the bottom of the alternate stack it goes
- * on, which Linux refuses too, with the process's state unchanged.
+ * `sa` is the handler's action: SA_SIGINFO chooses the rt frame, SA_ONSTACK the
+ * alternate stack when one is set and not in use, and SA_RESTORER the address
+ * the handler returns to, the frame's own `retcode` without it. `info` fills
+ * the rt frame's siginfo, and `oldmask` is the mask the return restores. The
+ * handler starts with the initial floating-point state and its signal number,
+ * and for an rt frame the siginfo and ucontext addresses, in the registers the
+ * architecture's ABI passes them in. Returns 0, or -1 when the stack cannot
+ * take the frame or the frame would run off the bottom of the alternate stack
+ * it goes on, which Linux refuses too, with the process's state unchanged.
  */
 int sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *sa,
                    const struct k_siginfo *info, uint64_t oldmask);

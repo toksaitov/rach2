@@ -69,7 +69,6 @@ static uint8_t tcp_cksum_buf[12 + TCP_HDR_SIZE + 4 + TCP_MSS];
 /* Ephemeral source port for active opens. */
 static uint16_t next_ephemeral = 49152;
 
-
 static uint16_t tcp_checksum(uint32_t src_ip, uint32_t dst_ip, const uint8_t *seg,
                              uint16_t seg_len);
 static int tcp_emit_flags(struct tcb *tcb, uint8_t flags, uint32_t seq);

@@ -72,35 +72,35 @@ struct core_prpsinfo {
  * extended numbering, which Linux's core files use.
  */
 #if ELF_CLASS == ELFCLASS64
-#define EHDR_SIZE   64u
-#define PHDR_SIZE   56u
-#define SHDR_SIZE   64u
-#define E_SHOFF     40u
-#define E_EHSIZE    52u
-#define E_PHOFF     32u
-#define P_FLAGS     4u
-#define P_OFFSET    8u
-#define P_VADDR     16u
-#define P_FILESZ    32u
-#define P_MEMSZ     40u
-#define P_ALIGN     48u
-#define S_SIZE      32u
-#define S_INFO      44u
+#define EHDR_SIZE 64u
+#define PHDR_SIZE 56u
+#define SHDR_SIZE 64u
+#define E_SHOFF   40u
+#define E_EHSIZE  52u
+#define E_PHOFF   32u
+#define P_FLAGS   4u
+#define P_OFFSET  8u
+#define P_VADDR   16u
+#define P_FILESZ  32u
+#define P_MEMSZ   40u
+#define P_ALIGN   48u
+#define S_SIZE    32u
+#define S_INFO    44u
 #else
-#define EHDR_SIZE   52u
-#define PHDR_SIZE   32u
-#define SHDR_SIZE   40u
-#define E_SHOFF     32u
-#define E_EHSIZE    40u
-#define E_PHOFF     28u
-#define P_FLAGS     24u
-#define P_OFFSET    4u
-#define P_VADDR     8u
-#define P_FILESZ    16u
-#define P_MEMSZ     20u
-#define P_ALIGN     28u
-#define S_SIZE      20u
-#define S_INFO      28u
+#define EHDR_SIZE 52u
+#define PHDR_SIZE 32u
+#define SHDR_SIZE 40u
+#define E_SHOFF   32u
+#define E_EHSIZE  40u
+#define E_PHOFF   28u
+#define P_FLAGS   24u
+#define P_OFFSET  4u
+#define P_VADDR   8u
+#define P_FILESZ  16u
+#define P_MEMSZ   20u
+#define P_ALIGN   28u
+#define S_SIZE    20u
+#define S_INFO    28u
 #endif
 #define E_PHENTSIZE (E_EHSIZE + 2u)
 #define E_PHNUM     (E_EHSIZE + 4u)
@@ -178,8 +178,7 @@ uint32_t core_note_bytes(uint32_t descsz)
     return 12u + 8u + ((descsz + 3u) & ~3u);
 }
 
-void core_note_put(uint8_t **p, const char *name, uint32_t type, const void *desc,
-                   uint32_t descsz)
+void core_note_put(uint8_t **p, const char *name, uint32_t type, const void *desc, uint32_t descsz)
 {
     uint8_t *q = *p;
     uint32_t namesz = (uint32_t)k_strlen(name) + 1u;
@@ -321,8 +320,7 @@ uint8_t *core_notes(int signo, uint32_t *size)
  * device memory, which Linux leaves out too. */
 static uint32_t region_file_size(const struct core_region *r)
 {
-    return (r->prot & VM_PROT_READ) && !(r->prot & VM_PROT_IO) ? (uint32_t)(r->end - r->start)
-                                                                 : 0u;
+    return (r->prot & VM_PROT_READ) && !(r->prot & VM_PROT_IO) ? (uint32_t)(r->end - r->start) : 0u;
 }
 
 /**

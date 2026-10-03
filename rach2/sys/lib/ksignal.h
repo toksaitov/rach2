@@ -63,6 +63,8 @@
 /* si_code values (Linux). */
 #define SI_USER       0
 #define SI_KERNEL     0x80
+#define SI_QUEUE      (-1)
+#define SI_MESGQ      (-3)
 #define SI_TKILL      (-6)
 #define SI_TIMER      (-2)
 #define ILL_ILLOPN    2
@@ -88,9 +90,11 @@
 /*
  * What the kernel keeps with a pending signal for the `siginfo_t` its
  * handler receives: `si_code`, the sender's pid and uid, a child's status,
- * a fault's address, and `si_errno`, which only SIGSYS from a seccomp filter
- * sets. One record per signal number, like the pending bit: the first
- * instance's record stays until the signal is delivered.
+ * a fault's address, the word a timer or a queued signal carries
+ * (`si_value`, which on i386 is where a child's status is, and is kept in
+ * `status` as well), and `si_errno`, which only SIGSYS from a seccomp
+ * filter sets. One record per signal number, like the pending bit: the
+ * first instance's record stays until the signal is delivered.
  */
 struct k_siginfo {
     int32_t code;
@@ -98,19 +102,20 @@ struct k_siginfo {
     uint32_t uid;
     int32_t status;
     uintptr_t addr;
+    uintptr_t value;
     int32_t err;
 };
 
 /*
- * The kernel-side sigaction as musl's rt_sigaction(174) passes it on i386:
+ * The kernel-side sigaction as musl's rt_sigaction passes it on i386:
  * handler, flags, the restorer trampoline (musl's __restore_rt then
  * rt_sigreturn), and an 8-byte signal mask (signals 1..64). Byte-identical to
  * musl's `struct k_sigaction`.
  */
 struct k_sigaction {
-    uint32_t handler;
-    uint32_t flags;
-    uint32_t restorer;
+    uintptr_t handler;
+    unsigned long flags;
+    uintptr_t restorer;
     uint32_t mask[2]; /* low = signals 1..32, high = 33..64 */
 };
 

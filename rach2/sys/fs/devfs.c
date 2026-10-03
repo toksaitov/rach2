@@ -176,15 +176,15 @@ static int32_t dev_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
         return dev_getgeo(e, arg);
     }
     if (request == 0x1260u) {
-        uint32_t sectors;
+        unsigned long sectors;
 
         if (!devfs_fd_raw_size(e, &size)) {
             return -ENOTTY;
         }
-        if ((size >> 9) > 0xFFFFFFFFu) {
+        sectors = (unsigned long)(size >> 9);
+        if (sectors != size >> 9) {
             return -EFBIG;
         }
-        sectors = (uint32_t)(size >> 9);
         return copy_to_user((void __user *)arg, &sectors, sizeof(sectors)) != 0 ? -EFAULT : 0;
     }
     return -ENOTTY;
@@ -2382,8 +2382,8 @@ static int32_t dev_getgeo(fd_entry_t *e, uintptr_t arg)
         uint8_t heads;
         uint8_t sectors;
         uint16_t cylinders;
-        uint32_t start;
-    } geo;
+        unsigned long start;
+    } geo; /* Linux's struct hd_geometry */
     struct disk_window *w = e->dev ? raw_window_of(e->dev) : NULL;
     uint64_t sectors;
 
@@ -2395,7 +2395,7 @@ static int32_t dev_getgeo(fd_entry_t *e, uintptr_t arg)
     geo.sectors = 63;
     geo.cylinders =
         (uint16_t)((sectors > 0xFFFFFFFFu ? 0xFFFFFFFFu : (uint32_t)sectors) / (255u * 63u));
-    geo.start = (uint32_t)w->part.start_lba;
+    geo.start = (unsigned long)w->part.start_lba;
     return copy_to_user((void __user *)arg, &geo, sizeof(geo)) != 0 ? -EFAULT : 0;
 }
 

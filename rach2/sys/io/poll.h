@@ -12,8 +12,8 @@
  * the timeout, then re-scans (lost-wakeup-safe).
  *
  * Linux i386 exposes the whole family and musl/busybox may use any of them,
- * so all route to one core: select(82), _newselect(142), poll(168),
- * pselect6(308), ppoll(309). The pselect6/ppoll "p" variants additionally
+ * so all route to one core: select, _newselect, poll,
+ * pselect6, ppoll. The pselect6/ppoll "p" variants additionally
  * carry a signal mask the wait runs under. epoll waits through the same
  * core.
  */
@@ -62,12 +62,12 @@ uint32_t poll_ms_deadline(int timeout_ms, int *has_deadline);
 int32_t poll_mask_set(uintptr_t umask, uint32_t size);
 int32_t poll_mask_done(int32_t ret);
 
-/* poll(168) / ppoll(309). */
+/* poll / ppoll. */
 long sys_poll(struct isr_params *params);
 long sys_ppoll(struct isr_params *params);
 
-/* select(82) old single-arg-struct form, _newselect(142) normal form, and
- * pselect6(308). */
+/* select old single-arg-struct form, _newselect normal form, and
+ * pselect6. */
 long sys_select(struct isr_params *params);
 long sys__newselect(struct isr_params *params);
 long sys_pselect6(struct isr_params *params);

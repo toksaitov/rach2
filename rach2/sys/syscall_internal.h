@@ -66,9 +66,8 @@ struct kernel_cmsghdr {
     int cmsg_type;
 };
 
-#define CMSG_ALIGN(n)                                                          \
-    (((n) + sizeof(unsigned long) - 1u) & ~(sizeof(unsigned long) - 1u))
-#define CMSG_HDR CMSG_ALIGN(sizeof(struct kernel_cmsghdr))
+#define CMSG_ALIGN(n) (((n) + sizeof(unsigned long) - 1u) & ~(sizeof(unsigned long) - 1u))
+#define CMSG_HDR      CMSG_ALIGN(sizeof(struct kernel_cmsghdr))
 
 /* Format: the vectors readv, writev and sendmsg accept, the Linux IOV_MAX. */
 #define IOV_MAX_LOCAL 1024
@@ -301,8 +300,8 @@ long sys_renameat2(isr_params_t *params);
  * Timespec structure for utimensat
  */
 struct kernel_timespec {
-    int32_t tv_sec;
-    int32_t tv_nsec;
+    long tv_sec;
+    long tv_nsec;
 };
 
 /* Global tick counter from kernel.c - incremented at 100 Hz */
@@ -528,7 +527,7 @@ struct shmem;
  * region takes it. Returns the address, or -errno as mmap does.
  */
 long mmap_shm(struct open_file *ofd, uintptr_t addr, uintptr_t len, uint32_t access, int place,
-                 char *path);
+              char *path);
 
 /** Unmap the System V attachment at `addr`: the regions from it on that map
  * the pages `sh` from the segment's start, within `size` bytes. -EINVAL

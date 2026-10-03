@@ -68,14 +68,11 @@ static uint32_t futex_bucket(const void *space, uintptr_t uaddr)
 
 /* Whole 10 ms ticks in `sec` seconds and `nsec` nanoseconds, a partial tick
  * counted as one, clamped so a later signed comparison of ticks stays valid. */
-static uint32_t futex_ticks(int32_t sec, int32_t nsec)
+static uint32_t futex_ticks(long sec, long nsec)
 {
-    uint32_t s = (uint32_t)sec;
+    uint32_t s = (unsigned long)sec > 21474836u ? 21474836u : (uint32_t)sec;
     uint32_t ticks;
 
-    if (s > 21474836u) {
-        s = 21474836u;
-    }
     ticks = s * 100u + ((uint32_t)nsec + 9999999u) / 10000000u;
     return ticks > 0x7FFFFFFEu ? 0x7FFFFFFEu : ticks;
 }
@@ -99,7 +96,7 @@ static uint32_t futex_ticks_until(const struct kernel_timespec *at, int realtime
         kirq_restore(flags);
     }
     dsec = (int64_t)at->tv_sec - sec;
-    dnsec = at->tv_nsec - (int32_t)nsec;
+    dnsec = (int32_t)at->tv_nsec - (int32_t)nsec;
     if (dnsec < 0) {
         dnsec += 1000000000;
         dsec--;
@@ -366,8 +363,7 @@ static void robust_exit(process_t *p)
         entry = next & ~(uintptr_t)1;
     }
     if (pending != 0) {
-        robust_release(pending + (uintptr_t)head.futex_offset, p->pid,
-                       (head.op_pending & 1u) == 0);
+        robust_release(pending + (uintptr_t)head.futex_offset, p->pid, (head.op_pending & 1u) == 0);
     }
 }
 
@@ -398,8 +394,9 @@ long sys_set_robust_list(isr_params_t *params)
 }
 
 /**
- * get_robust_list (312): the head and length of the robust list of thread
- * EBX, the caller for 0, into the words at ECX and EDX.
+ * get_robust_list: the head and length of the robust list of the thread
+ * the first argument names, the caller for 0, into the words the second and
+ * third point at.
  *
  * The head is read from the thread's record before anything is copied out: a
  * copy may sleep to bring the caller's page in, and the thread may end and
@@ -438,7 +435,8 @@ long sys_futex(isr_params_t *params)
     uintptr_t uaddr = SC_ARG(params, 0);
     int op = (int)SC_ARG(params, 1);
     uint32_t val = (uint32_t)SC_ARG(params, 2);
-    const struct kernel_timespec __user *utime = (const struct kernel_timespec __user *)SC_ARG(params, 3);
+    const struct kernel_timespec __user *utime =
+        (const struct kernel_timespec __user *)SC_ARG(params, 3);
     uint32_t val3 = (uint32_t)SC_ARG(params, 5);
     int cmd = op & ~(FUTEX_PRIVATE_FLAG | FUTEX_CLOCK_REALTIME);
 

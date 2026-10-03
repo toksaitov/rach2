@@ -316,7 +316,6 @@ int init_mouse(void)
 
     register_isr_handler(44, mouse_irq_handler, "mouse");
 
-
     __asm__ __volatile__("sti");
 
     return 0;

@@ -4,6 +4,7 @@
  * and directories. Registered by syscall.c; what it shares with the other
  * arms is in syscall_internal.h.
  */
+#include "arch/uabi.h"
 #include "../kernel.h"
 #include "mm/kheap.h"
 #include "klog.h"
@@ -780,7 +781,8 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
             to_copy = gfx_current.size;
         }
 
-        if (copy_from_user((void *)gfx_current.framebuffer, (const void __user *)buf, to_copy) != 0) {
+        if (copy_from_user((void *)gfx_current.framebuffer, (const void __user *)buf, to_copy) !=
+            0) {
             return -EFAULT;
         }
 
@@ -798,9 +800,10 @@ static int size_guarded(struct vfs_mount *mnt, void *node);
  * The descriptor must be a writable file on a mounted file system, and an
  * O_PATH one is -EBADF, as on Linux. A successful shrink or extend clears
  * set-uid, and set-gid where group execute is set, for an unprivileged
- * caller, like a write. `SYS_FTRUNCATE` takes the length in ECX, and
- * `SYS_FTRUNCATE64`, the form musl calls, in ECX and EDX as the low and
- * high halves; the file system answers a length past what it can hold.
+ * caller, like a write. ftruncate takes the length in its second argument,
+ * and i386's ftruncate64, the form musl calls there, in its second and third
+ * as the low and high halves; the file system answers a length past what it
+ * can hold.
  */
 static int32_t truncate_fd(int fd, uint64_t length)
 {
@@ -861,13 +864,15 @@ long sys_ftruncate(isr_params_t *params)
 
 long sys_ftruncate64(isr_params_t *params)
 {
-    return truncate_fd((int)SC_ARG(params, 0), (uint64_t)SC_ARG(params, 1) | ((uint64_t)SC_ARG(params, 2) << 32));
+    return truncate_fd((int)SC_ARG(params, 0),
+                       (uint64_t)SC_ARG(params, 1) | ((uint64_t)SC_ARG(params, 2) << 32));
 }
 
-/* write(2): EBX = fd, ECX = buf, EDX = count. */
+/* write(2): its arguments are fd, buf and count. */
 long sys_write(isr_params_t *params)
 {
-    return write_fd((int)SC_ARG(params, 0), (const char __user *)SC_ARG(params, 1), USER_LEN32(SC_ARG(params, 2)));
+    return write_fd((int)SC_ARG(params, 0), (const char __user *)SC_ARG(params, 1),
+                    USER_LEN32(SC_ARG(params, 2)));
 }
 
 /**
@@ -971,7 +976,7 @@ static int32_t writev_elements(int fd, uintptr_t iov_user, int iovcnt)
 }
 
 /**
- * writev(2): EBX = fd, ECX = the vector, EDX = its count. The elements are
+ * writev(2): its arguments are fd, the vector and its count. The elements are
  * written in order (`writev_elements`); on a tmpfs file the mount's lock is
  * held across them, and a vector a seal refuses whole is refused before the
  * first (`writev_begin`).
@@ -2850,7 +2855,7 @@ static int32_t open_synth_node(const struct vpath *vp, int flags)
 }
 
 /**
- * Open core shared by open(5) and openat(295).
+ * Open core shared by open and openat.
  *
  * `name` is a kernel-space path with any leading '/' already stripped; `flags`
  * are the Linux open flags and `mode` the permission bits to stamp on a file
@@ -3092,7 +3097,7 @@ static int32_t bind_at(uintptr_t source, const char *target, uint32_t flags)
 }
 
 /**
- * mount(2): EBX = source, ECX = target, EDX = type, ESI = flags, EDI = data.
+ * mount(2): its arguments are source, target, type, flags and data.
  *
  * Effective uid 0 is required, or privilege over the caller's mount
  * namespace for proc, sysfs and tmpfs (`mount_privileged`). The strings are
@@ -3169,8 +3174,8 @@ long sys_mount(isr_params_t *params)
 }
 
 /**
- * umount2(2): EBX = target, ECX = flags. Effective uid 0 is required, and
- * the flags must be zero: MNT_FORCE, MNT_DETACH and UMOUNT_NOFOLLOW are
+ * umount2(2): its arguments are target and flags. Effective uid 0 is required,
+ * and the flags must be zero: MNT_FORCE, MNT_DETACH and UMOUNT_NOFOLLOW are
  * promises this kernel cannot keep and answer EINVAL.
  *
  * A target that names a directory by its end must reach one, which the walk
@@ -3348,7 +3353,7 @@ static int32_t open_from_user(int dirfd, const char __user *upath, int flags, ui
     return rc;
 }
 
-/* open(2): EBX = path, ECX = flags, EDX = the O_CREAT mode. */
+/* open(2): its arguments are path, flags and the O_CREAT mode. */
 long sys_open(isr_params_t *params)
 {
     if (!current_proc) {
@@ -3359,19 +3364,19 @@ long sys_open(isr_params_t *params)
 }
 
 /*
- * openat (syscall 295): EBX = dirfd, ECX = path, EDX = flags, ESI = the
- * O_CREAT mode. musl's openat() issues it; its open() and <stdio.h> use the
- * legacy open on i386, which has the number. An absolute path is taken
- * as-is, a relative path resolves against the cwd (AT_FDCWD) or against the
- * directory the dirfd refers to (see copy_path_at).
+ * openat: its arguments are dirfd, path, flags and the O_CREAT
+ * mode. musl's openat() issues it; its open() and <stdio.h> use the legacy open
+ * on i386, which has the number. An absolute path is taken as-is, a relative
+ * path resolves against the cwd (AT_FDCWD) or against the directory the dirfd
+ * refers to (see copy_path_at).
  */
 long sys_openat(isr_params_t *params)
 {
     if (!current_proc) {
         return -EFAULT;
     }
-    return open_from_user((int)SC_ARG(params, 0), (const char __user *)SC_ARG(params, 1), (int)SC_ARG(params, 2),
-                          (uint32_t)SC_ARG(params, 3));
+    return open_from_user((int)SC_ARG(params, 0), (const char __user *)SC_ARG(params, 1),
+                          (int)SC_ARG(params, 2), (uint32_t)SC_ARG(params, 3));
 }
 
 /** Whether a call of a thread other than the caller that shares `table`
@@ -3476,12 +3481,12 @@ void fd_holds_release(void)
 #define CLOSE_RANGE_CLOEXEC 0x4u
 
 /**
- * close_range(2), system call 436: EBX = first, ECX = last, EDX = flags.
+ * close_range: its arguments are first, last and flags.
  * Closes each open descriptor from `first` to `last`, or with
  * CLOSE_RANGE_CLOEXEC marks each close-on-exec instead; CLOSE_RANGE_UNSHARE
- * first gives a caller that shares its table a copy of its own. A number
- * past the table is no descriptor. 0, or -EINVAL for a flag it does not
- * take or `first` past `last`, or -ENOMEM.
+ * first gives a caller that shares its table a copy of its own. A number past
+ * the table is no descriptor. 0, or -EINVAL for a flag it does not take or
+ * `first` past `last`, or -ENOMEM.
  */
 long sys_close_range(isr_params_t *params)
 {
@@ -3508,8 +3513,8 @@ long sys_close_range(isr_params_t *params)
     return 0;
 }
 
-/* close(2): EBX = fd. Returns 0 or -EBADF. Closing 0, 1 or 2 is legal; a
- * shell or daemon closes one and opens again onto the freed (lowest)
+/* close(2): its argument is fd. Returns 0 or -EBADF. Closing 0, 1 or 2 is
+ * legal; a shell or daemon closes one and opens again onto the freed (lowest)
  * number to redirect it. */
 long sys_close(isr_params_t *params)
 {
@@ -3522,17 +3527,15 @@ long sys_close(isr_params_t *params)
 /**
  * Flush a file's data to stable storage (fsync(2); also serves fdatasync).
  *
- * EBX = fd. Validates the descriptor (any open fd but an O_PATH one; the type
- * is not checked).
- * A descriptor on a mounted volume goes to the type's fsync through
- * `vfs_fsync`; any other writes back every dirty page of the disk-backed
- * window via `pc_sync`. That flush is whole-cache, not per-file, a safe
- * superset of the contract. When KRFFS is the RAM module the cache is empty,
- * so the flush is a no-op and the call only validates the fd. Returns 0,
- * -EBADF for a bad
- * descriptor, or -EIO when a disk writeback fails. dropbear writes its host
- * key with the open/write/fsync/rename idiom and treats an fsync error as
- * fatal, so the -EIO is real backpressure.
+ * Its argument is fd. Validates the descriptor (any open fd but an O_PATH one;
+ * the type is not checked). A descriptor on a mounted volume goes to the type's
+ * fsync through `vfs_fsync`; any other writes back every dirty page of the
+ * disk-backed window via `pc_sync`. That flush is whole-cache, not per-file, a
+ * safe superset of the contract. When KRFFS is the RAM module the cache is
+ * empty, so the flush is a no-op and the call only validates the fd. Returns 0,
+ * -EBADF for a bad descriptor, or -EIO when a disk writeback fails. dropbear
+ * writes its host key with the open/write/fsync/rename idiom and treats an
+ * fsync error as fatal, so the -EIO is real backpressure.
  */
 long sys_fsync(isr_params_t *params)
 {
@@ -3593,12 +3596,12 @@ long sys_sync(isr_params_t *params)
 }
 
 /**
- * Flush the file system a descriptor is on (syncfs(2), syscall 344).
+ * Flush the file system a descriptor is on (syncfs).
  *
- * EBX = fd. The kernel keeps no list of a mount's own dirty buffers, so
- * this writes back everything, as sync(2) does, and like it returns 0;
- * GNU `sync -f` and BusyBox's `sync -f` call it. -EBADF for a descriptor
- * that is not open or was opened with O_PATH, as on Linux.
+ * Its argument is fd. The kernel keeps no list of a mount's own dirty buffers,
+ * so this writes back everything, as sync(2) does, and like it returns 0; GNU
+ * `sync -f` and BusyBox's `sync -f` call it. -EBADF for a descriptor that is
+ * not open or was opened with O_PATH, as on Linux.
  */
 long sys_syncfs(isr_params_t *params)
 {
@@ -3615,11 +3618,12 @@ long sys_syncfs(isr_params_t *params)
 }
 
 /**
- * Advise the kernel of reads to come (readahead(2), syscall 225).
+ * Advise the kernel of reads to come (readahead).
  *
- * EBX = fd, ECX:EDX = the offset, ESI = the count. The page cache fills on
- * demand, so there is nothing to start early, and the call returns 0, as
- * Linux does once it has queued the reads. -EBADF for a descriptor not open
+ * Its arguments are the descriptor, the offset and the count, which only
+ * the descriptor matters for here: the page cache fills on demand, so there
+ * is nothing to start early, and the call returns 0, as Linux does once it
+ * has queued the reads. -EBADF for a descriptor not open
  * for reading, and -EINVAL for one that is not a regular file, as on Linux.
  */
 long sys_readahead(isr_params_t *params)
@@ -3663,8 +3667,8 @@ static int32_t fadvise(int fd, uint32_t len_hi, uint32_t advice)
 }
 
 /**
- * fadvise64(250): EBX = fd, ECX:EDX = the offset, ESI = a 32-bit length,
- * EDI = the advice.
+ * i386's fadvise64: the descriptor, the offset in two arguments low
+ * word first, a 32-bit length and the advice.
  */
 long sys_fadvise64(isr_params_t *params)
 {
@@ -3672,19 +3676,23 @@ long sys_fadvise64(isr_params_t *params)
 }
 
 /**
- * fadvise64_64(272), which musl calls: EBX = fd, ECX:EDX = the offset,
- * ESI:EDI = the length, EBP = the advice.
+ * i386's fadvise64_64, which musl calls: the descriptor, the offset
+ * and the length each in two arguments low word first, and the advice.
  */
 long sys_fadvise64_64(isr_params_t *params)
 {
-    return fadvise((int)SC_ARG(params, 0), (uint32_t)SC_ARG(params, 4), (uint32_t)SC_ARG(params, 5));
+    return fadvise((int)SC_ARG(params, 0), (uint32_t)SC_ARG(params, 4),
+                   (uint32_t)SC_ARG(params, 5));
 }
 
-/* The i386 requests of chattr(1) and lsattr(1): _IOR and _IOW of 'f', and
-   _IOR of 'v'. */
-#define FS_IOC_GETFLAGS   0x80046601u
-#define FS_IOC_SETFLAGS   0x40046602u
-#define FS_IOC_GETVERSION 0x80047601u
+/* The requests of chattr(1) and lsattr(1): _IOR and _IOW of 'f', and _IOR
+   of 'v', each of a long, whose size is in the number: 0x80046601 on i686
+   and 0x80086601 on x86-64. The argument is an int all the same, as Linux
+   reads it. */
+#define FS_IOC_LONG       ((uint32_t)sizeof(long) << 16)
+#define FS_IOC_GETFLAGS   (0x80006601u | FS_IOC_LONG)
+#define FS_IOC_SETFLAGS   (0x40006602u | FS_IOC_LONG)
+#define FS_IOC_GETVERSION (0x80007601u | FS_IOC_LONG)
 
 /**
  * FS_IOC_GETFLAGS, FS_IOC_SETFLAGS and FS_IOC_GETVERSION on a descriptor,
@@ -3738,8 +3746,9 @@ int32_t fs_flags_ioctl(fd_entry_t *entry, uint32_t request, uintptr_t arg, int *
 #define XATTR_FD     2 /* a descriptor */
 
 /**
- * An extended attribute call on the file EBX names, as a path or as a
- * descriptor by `how`, which returns `result` once the file is found.
+ * An extended attribute call on the file the first argument names, as a
+ * path or as a descriptor by `how`, which returns `result` once the file is
+ * found.
  *
  * No file system here stores extended attributes, and Linux answers for a
  * file system built without them: get, set and remove fail with
@@ -3779,7 +3788,7 @@ static int32_t xattr_call(isr_params_t *params, int how, int32_t result)
     return result;
 }
 
-/* setxattr(226) to fremovexattr(237), in Linux's order. */
+/* setxattr to fremovexattr, in Linux's order. */
 long sys_setxattr(isr_params_t *params)
 {
     return xattr_call(params, XATTR_FOLLOW, -EOPNOTSUPP);
@@ -4211,10 +4220,10 @@ static int32_t file_read(fd_entry_t *entry, char __user *buf, uint32_t count, co
 /**
  * Read up to `count` bytes from descriptor `fd` (read(2)).
  *
- * EBX = fd, ECX = buf, EDX = count. Returns the bytes read, 0 at end, or
- * -errno. Dispatches by backing kind. A console read (stdin) blocks in the
- * tty line discipline until a cooked line or VMIN raw bytes arrive; in
- * graphics mode it is a non-blocking raw scancode read instead.
+ * Its arguments are fd, buf and count. Returns the bytes read, 0 at end, or
+ * -errno. Dispatches by backing kind. A console read (stdin) blocks in the tty
+ * line discipline until a cooked line or VMIN raw bytes arrive; in graphics
+ * mode it is a non-blocking raw scancode read instead.
  */
 static int32_t read_fd(int fd, char __user *buf, uint32_t count)
 {
@@ -4375,7 +4384,7 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
 }
 
 /**
- * read(2): EBX = fd, ECX = buf, EDX = count.
+ * read(2): its arguments are fd, buf and count.
  *
  * An eventfd and a timerfd read whole eight-byte counts and refuse a
  * shorter read with EINVAL, as Linux does, and a read of zero bytes among
@@ -4389,7 +4398,8 @@ long sys_read(isr_params_t *params)
     if (SC_ARG(params, 2) == 0 && e && e->type == FD_TYPE_ANON && e->ops && e->ops->read) {
         return read_ops(e, (char __user *)SC_ARG(params, 1), 0);
     }
-    return read_fd((int)SC_ARG(params, 0), (char __user *)SC_ARG(params, 1), USER_LEN32(SC_ARG(params, 2)));
+    return read_fd((int)SC_ARG(params, 0), (char __user *)SC_ARG(params, 1),
+                   USER_LEN32(SC_ARG(params, 2)));
 }
 
 /**
@@ -4564,7 +4574,7 @@ int32_t readv_dgram(fd_entry_t *entry, uintptr_t iov_user, int iovcnt, uint32_t 
  * `read` instead, and why busybox's `chpasswd`, which reads its input with
  * `xmalloc_fgetline`, exited without a message before this existed.
  *
- * EBX = fd, ECX = struct iovec[], EDX = iovcnt. Returns the total bytes read
+ * Its arguments are fd, struct iovec[] and iovcnt. Returns the total bytes read
  * across the iovecs, or a negative errno.
  *
  * The whole vector list is checked before a byte is taken, because a read
@@ -4690,9 +4700,9 @@ long sys_readv(isr_params_t *params)
 /**
  * Duplicate a descriptor onto the lowest free fd (dup(2)).
  *
- * EBX = oldfd. Returns the new fd, or -errno. The duplicate SHARES oldfd's
- * open-file description (shared seek offset); a socket gains a reference;
- * the new fd's FD_CLOEXEC is clear.
+ * Its argument is oldfd. Returns the new fd, or -errno. The duplicate SHARES
+ * oldfd's open-file description (shared seek offset); a socket gains a
+ * reference; the new fd's FD_CLOEXEC is clear.
  */
 long sys_dup(isr_params_t *params)
 {
@@ -4759,9 +4769,9 @@ static int32_t dup_clear(int fd)
 }
 
 /**
- * dup2(2): EBX = oldfd, ECX = newfd. Returns newfd or -errno. A `newfd`
- * past the end of the table grows it, and a heap with no room for that is
- * ENOMEM.
+ * dup2(2): its arguments are oldfd and newfd. Returns newfd or -errno. A
+ * `newfd` past the end of the table grows it, and a heap with no room for that
+ * is ENOMEM.
  *
  * The replacement of an open `newfd` may sleep (`dup_clear`), and another
  * thread may close `oldfd` meanwhile. The call holds `oldfd`, so the close
@@ -4996,8 +5006,8 @@ static int32_t do_chdir(char *path)
 /**
  * Change the current working directory (chdir(2)).
  *
- * EBX = path. Returns 0 or -errno. Stores the canonical absolute path of the
- * resolved directory (a KRFFS directory, a directory of another mounted
+ * Its argument is path. Returns 0 or -errno. Stores the canonical absolute path
+ * of the resolved directory (a KRFFS directory, a directory of another mounted
  * file system, or a synthetic /dev or /proc directory); a regular file is
  * -ENOTDIR, a missing path -ENOENT.
  */
@@ -5020,7 +5030,7 @@ long sys_chdir(isr_params_t *params)
 }
 
 /**
- * fchdir(2): EBX = fd. Make the directory `fd` is open on the working
+ * fchdir(2): its argument is fd. Make the directory `fd` is open on the working
  * directory.
  *
  * The working directory's path is the one the descriptor's `*at` calls
@@ -5227,9 +5237,9 @@ static int32_t root_enter(const struct vfs_ref *ref, char *buf)
 }
 
 /**
- * chroot(2): EBX = path. Make the directory `path` names the calling
- * process's root: its absolute paths and the absolute targets of its
- * symbolic links start there, and `..` there stays there (vfs.Readme.md).
+ * chroot(2): its argument is path. Make the directory `path` names the calling
+ * process's root: its absolute paths and the absolute targets of its symbolic
+ * links start there, and `..` there stays there (vfs.Readme.md).
  *
  * The refusals come in Linux's order: the path's own (ENOENT, ENOTDIR,
  * ELOOP, ENAMETOOLONG, EACCES on the way), then `root_check`'s. The working
@@ -5278,8 +5288,8 @@ long sys_chroot(isr_params_t *params)
 }
 
 /**
- * getcwd(2): EBX = buf, ECX = size. Returns the path's length with its NUL,
- * as Linux's system call does, or -errno.
+ * getcwd(2): its arguments are buf and size. Returns the path's length with its
+ * NUL, as Linux's system call does, or -errno.
  *
  * The path is copied into a path page before the copy out, which may sleep
  * on a fault: a thread that shares the working directory (CLONE_FS) may
@@ -5320,56 +5330,6 @@ long sys_getcwd(isr_params_t *params)
     return rc;
 }
 
-/*
- * Linux 32-bit stat structure (used by syscall 106)
- * This is the older structure used by ISH and some programs.
- */
-struct linux_stat {
-    unsigned long st_dev;
-    unsigned long st_ino;
-    unsigned short st_mode;
-    unsigned short st_nlink;
-    unsigned short st_uid;
-    unsigned short st_gid;
-    unsigned long st_rdev;
-    unsigned long st_size;
-    unsigned long st_blksize;
-    unsigned long st_blocks;
-    unsigned long st_atime;
-    unsigned long st_atime_nsec;
-    unsigned long st_mtime;
-    unsigned long st_mtime_nsec;
-    unsigned long st_ctime;
-    unsigned long st_ctime_nsec;
-    unsigned long __unused4;
-    unsigned long __unused5;
-};
-
-/*
- * Linux stat64 structure for 32-bit systems
- */
-struct linux_stat64 {
-    unsigned long long st_dev;
-    unsigned char __pad0[4];
-    unsigned long __st_ino;
-    unsigned int st_mode;
-    unsigned int st_nlink;
-    unsigned long st_uid;
-    unsigned long st_gid;
-    unsigned long long st_rdev;
-    unsigned char __pad3[4];
-    long long st_size;
-    unsigned long st_blksize;
-    unsigned long long st_blocks;
-    unsigned long st_atime;
-    unsigned long st_atime_nsec;
-    unsigned long st_mtime;
-    unsigned long st_mtime_nsec;
-    unsigned long st_ctime;
-    unsigned long st_ctime_nsec;
-    unsigned long long st_ino;
-};
-
 /**
  * Report a node's three times into a stat64.
  *
@@ -5379,7 +5339,7 @@ struct linux_stat64 {
  * (see fs/krffs.c): the file system is a write-back page cache, and stamping an
  * atime on every read would dirty a page on every read.
  */
-static void stat64_node_times(struct linux_stat64 *kst, const krffs_node_t *node)
+static void stat64_node_times(struct user_stat *kst, const krffs_node_t *node)
 {
     kst->st_atime = (unsigned long)node->access_time.seconds;
     kst->st_atime_nsec = (unsigned long)node->access_time.nanoseconds;
@@ -5393,7 +5353,7 @@ static void stat64_node_times(struct linux_stat64 *kst, const krffs_node_t *node
  * Report the boot time into a stat64, for a node with no history of its own: a
  * device, a /proc file, a pipe, a socket.
  */
-static void stat64_boot_times(struct linux_stat64 *kst)
+static void stat64_boot_times(struct user_stat *kst)
 {
     unsigned long boot = (unsigned long)rtc_boot_time();
 
@@ -5406,7 +5366,7 @@ static void stat64_boot_times(struct linux_stat64 *kst)
 }
 
 /** Fill the common identity of a read-only global proc file. */
-static int32_t synth_proc_stat(struct linux_stat64 *kst, uint32_t inode)
+static int32_t synth_proc_stat(struct user_stat *kst, uint32_t inode)
 {
     kst->st_dev = PROCFS_FSID;
     kst->st_mode = S_IFREG | 0444;
@@ -5420,7 +5380,7 @@ static int32_t synth_proc_stat(struct linux_stat64 *kst, uint32_t inode)
  * descriptor open on the node reports after the device has gone. A uevent's
  * size is 4096, as Linux gives every attribute file.
  */
-static void synth_sys_identity(const struct vpath *vp, struct linux_stat64 *kst, int follow)
+static void synth_sys_identity(const struct vpath *vp, struct user_stat *kst, int follow)
 {
     kst->st_dev = SYSFS_FSID;
     if (vp->kind == VNODE_SYS_FILE) {
@@ -5438,7 +5398,7 @@ static void synth_sys_identity(const struct vpath *vp, struct linux_stat64 *kst,
 
 /** The identity of a node of /sys, as `synth_sys_identity` gives it, or
  * -ENOENT for a device that is not there. */
-static int32_t synth_sys_stat(const struct vpath *vp, struct linux_stat64 *kst, int follow)
+static int32_t synth_sys_stat(const struct vpath *vp, struct user_stat *kst, int follow)
 {
     if (SYSFS_KEYED(vp->sysent) && !sysfs_device_exists(vp->sysent, vp->syskey)) {
         return -ENOENT;
@@ -5474,7 +5434,7 @@ static int synth_sys_link(const struct vpath *vp, char *out, int cap)
 
 /** The owner and group of the stat `kst` as the caller's user namespace
  * maps them (`uid_seen`), which every stat gives the caller. */
-static void stat64_seen(struct linux_stat64 *kst)
+static void stat64_seen(struct user_stat *kst)
 {
     kst->st_uid = uid_seen((uint32_t)kst->st_uid);
     kst->st_gid = gid_seen((uint32_t)kst->st_gid);
@@ -5487,7 +5447,7 @@ static void stat64_seen(struct linux_stat64 *kst)
  * reports them like any other directory; a machine with no file system mounted
  * has nothing to report but the boot time.
  */
-static void stat64_root_times(struct linux_stat64 *kst)
+static void stat64_root_times(struct user_stat *kst)
 {
     if (krffs_fs && krffs_fs->node) {
         stat64_node_times(kst, krffs_fs->node);
@@ -5501,7 +5461,7 @@ static void stat64_root_times(struct linux_stat64 *kst)
  * index gives, so a program telling files apart by (st_dev, st_ino) sees
  * two mounts as two devices (`procfs_mount_dev`), and a bind mount as the
  * device of the mount it shows. */
-static int32_t vfs_fill_stat64(struct linux_stat64 *kst, const struct vfs_ref *r)
+static int32_t vfs_fill_stat64(struct user_stat *kst, const struct vfs_ref *r)
 {
     struct vfs_stat st;
     int rc;
@@ -5526,8 +5486,7 @@ static int32_t vfs_fill_stat64(struct linux_stat64 *kst, const struct vfs_ref *r
     kst->st_size = (long long)st.size;
     kst->st_blksize = 4096;
     kst->st_blocks = (long long)(st.blocks_known ? st.blocks : (st.size + 511) / 512);
-    kst->st_ino = st.ino;
-    kst->__st_ino = (unsigned long)st.ino;
+    STAT_SET_INO(kst, st.ino);
     kst->st_atime = (long)st.atime_sec;
     kst->st_atime_nsec = (unsigned long)st.atime_nsec;
     kst->st_mtime = (long)st.mtime_sec;
@@ -5537,7 +5496,7 @@ static int32_t vfs_fill_stat64(struct linux_stat64 *kst, const struct vfs_ref *r
     return 0;
 }
 
-static void krffs_fill_stat64(struct linux_stat64 *kst, krffs_node_t *node)
+static void krffs_fill_stat64(struct user_stat *kst, krffs_node_t *node)
 {
     k_memset(kst, 0, sizeof(*kst));
     if (node == krffs_fs->node) {
@@ -5553,14 +5512,13 @@ static void krffs_fill_stat64(struct linux_stat64 *kst, krffs_node_t *node)
     kst->st_size = (long long)node->data_size;
     kst->st_blksize = 4096;
     kst->st_blocks = (node->data_size + 511) / 512;
-    kst->st_ino = krffs_node_ino(node);
-    kst->__st_ino = (unsigned long)kst->st_ino;
+    STAT_SET_INO(kst, krffs_node_ino(node));
     stat64_node_times(kst, node);
 }
 
 /* Fill a stat64 from an open descriptor (factored from sys_fstat64 so the magic
  * /proc/<pid>/fd/<n> symlinks can stat their target when followed). */
-static int32_t fstat_fill(fd_entry_t *e, struct linux_stat64 *kst);
+static int32_t fstat_fill(fd_entry_t *e, struct user_stat *kst);
 
 /**
  * What a followed /proc/PID/fd/N link reports: the stat of descriptor `fd`
@@ -5570,7 +5528,7 @@ static int32_t fstat_fill(fd_entry_t *e, struct linux_stat64 *kst);
  * process closes the descriptor and its release puts the node. The other
  * kinds are read without a sleep.
  */
-static int32_t synth_fd_stat(int pid, int fd, struct linux_stat64 *kst)
+static int32_t synth_fd_stat(int pid, int fd, struct user_stat *kst)
 {
     process_t *p = get_process((uint32_t)pid);
     fd_entry_t e;
@@ -5604,7 +5562,7 @@ static int32_t synth_fd_stat(int pid, int fd, struct linux_stat64 *kst)
  * `task_dump_owner` does: the process's effective user and group IDs while
  * it is dumpable, and root otherwise (`procfs_oom_owner`). BusyBox's `ps`
  * and `top` read a process's user from its directory's owner. */
-static void synth_pid_owner(int pid, struct linux_stat64 *kst)
+static void synth_pid_owner(int pid, struct user_stat *kst)
 {
     uint32_t uid, gid;
 
@@ -5630,7 +5588,7 @@ static int32_t synth_fd_visible(int rpid, int fd)
     return procfs_may_read(rpid) ? 0 : -EACCES;
 }
 
-static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int follow)
+static int32_t synth_stat(const struct vpath *vp, struct user_stat *kst, int follow)
 {
     uint32_t mode = 0, rdev = 0, ino = 0;
 
@@ -5941,7 +5899,7 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
 static int32_t ref_dir_check(const struct vfs_ref *r, int follow)
 {
     const struct vpath *vp = vfs_synth_vpath(r->mnt, r->node);
-    struct linux_stat64 kst;
+    struct user_stat kst;
     struct vfs_stat vst;
     int32_t rc;
 
@@ -6076,7 +6034,7 @@ static int32_t open_named(const char *name, int flags, uint32_t mode, int end)
 static int32_t synth_open_path(const struct vpath *vp, const char *name, int flags)
 {
     int follow = !(flags & O_NOFOLLOW);
-    struct linux_stat64 kst;
+    struct user_stat kst;
     struct vpath *copy;
     fd_entry_t *e;
     int fd;
@@ -6385,7 +6343,7 @@ long sys_readlinkat(isr_params_t *params)
 /* Whether a synthetic node is one of /proc's links, by its unfollowed mode. */
 static int synth_is_link(const struct vpath *vp)
 {
-    struct linux_stat64 lst;
+    struct user_stat lst;
 
     return synth_stat(vp, &lst, 0) == 0 && (lst.st_mode & 0170000u) == 0120000u;
 }
@@ -6400,9 +6358,9 @@ static int synth_is_link(const struct vpath *vp)
  * move, and a read at the offset the walk found would report whatever the
  * volume put there since.
  */
-static int32_t do_stat64(const char __user *path, struct linux_stat64 __user *st, int follow)
+static int32_t do_stat64(const char __user *path, struct user_stat __user *st, int follow)
 {
-    struct linux_stat64 kst;
+    struct user_stat kst;
     char *pathbuf;
     int dir = 0;
 
@@ -6443,7 +6401,7 @@ static int32_t do_stat64(const char __user *path, struct linux_stat64 __user *st
              * watching a directory sees it. */
             kst.st_mode = S_IFDIR | 0755;
             kst.st_nlink = 1;
-            kst.st_ino = kst.__st_ino = 1;
+            STAT_SET_INO(&kst, 1);
             kst.st_blksize = 4096;
             stat64_root_times(&kst);
         } else {
@@ -6467,7 +6425,7 @@ static int32_t do_stat64(const char __user *path, struct linux_stat64 __user *st
     return 0;
 }
 
-/* stat64(195) follows symlinks; lstat64(196) does not. On i386 musl maps its
+/* stat64 follows symlinks; lstat64 does not. On i386 musl maps its
  * stat()/lstat() onto these (via the statx -> *stat64 fallback), so lstat()
  * only works once 196 exists. The follow flag decides whether a symbolic
  * link at the end, on /proc or on a mounted type, is the result or its
@@ -6476,18 +6434,19 @@ static int32_t do_stat64(const char __user *path, struct linux_stat64 __user *st
  * directory is -ENOTDIR. */
 long sys_stat64(isr_params_t *params)
 {
-    return do_stat64((const char __user *)SC_ARG(params, 0), (struct linux_stat64 __user *)SC_ARG(params, 1),
-                     1);
+    return do_stat64((const char __user *)SC_ARG(params, 0),
+                     (struct user_stat __user *)SC_ARG(params, 1), 1);
 }
 
 long sys_lstat64(isr_params_t *params)
 {
-    return do_stat64((const char __user *)SC_ARG(params, 0), (struct linux_stat64 __user *)SC_ARG(params, 1),
-                     0);
+    return do_stat64((const char __user *)SC_ARG(params, 0),
+                     (struct user_stat __user *)SC_ARG(params, 1), 0);
 }
 
 /*
- * The i386 struct statfs64, as Linux writes it and musl reads it.
+ * The struct statfs a statfs fills, as Linux writes it and musl reads it
+ * (`struct user_statfs`, arch/uabi.h).
  *
  * `f_bsize` is the unit `f_blocks` and `f_bfree` are counted in. KRFFS has no
  * block structure at all, so the unit is chosen rather than found: one byte
@@ -6495,20 +6454,6 @@ long sys_lstat64(isr_params_t *params)
  * is what `df` prints in by default, so the numbers a person reads are the
  * numbers the kernel holds divided by nothing.
  */
-struct linux_statfs64 {
-    uint32_t f_type;
-    uint32_t f_bsize;
-    uint64_t f_blocks;
-    uint64_t f_bfree;
-    uint64_t f_bavail;
-    uint64_t f_files;
-    uint64_t f_ffree;
-    uint32_t f_fsid[2];
-    uint32_t f_namelen;
-    uint32_t f_frsize;
-    uint32_t f_flags;
-    uint32_t f_spare[4];
-};
 
 #define STATFS_BSIZE 1024u
 
@@ -6536,9 +6481,9 @@ struct linux_statfs64 {
  * a 16 MB file system 77 percent full. `f_files` is zero throughout, which says
  * "not counted" rather than claiming an inode budget this format does not keep.
  */
-static int32_t statfs_fill(struct linux_statfs64 __user *out, uint32_t magic)
+static int32_t statfs_fill(struct user_statfs __user *out, uint32_t magic)
 {
-    struct linux_statfs64 st;
+    struct user_statfs st;
     uint32_t total = krffs_total_bytes();
     uint32_t free_bytes = krffs_free_bytes();
     int i;
@@ -6565,9 +6510,9 @@ static int32_t statfs_fill(struct linux_statfs64 __user *out, uint32_t magic)
 }
 
 /** A statfs64 from a mount's own statfs, whichever type answered it. */
-static int32_t statfs_fill_mount(struct linux_statfs64 __user *out, struct vfs_mount *m)
+static int32_t statfs_fill_mount(struct user_statfs __user *out, struct vfs_mount *m)
 {
-    struct linux_statfs64 st;
+    struct user_statfs st;
     struct vfs_statfs vs;
     int rc = vfs_statfs(m, &vs);
 
@@ -6609,10 +6554,11 @@ static uint32_t statfs_magic_for_kind(int kind)
 /**
  * statfs64(2): the file system a path is on.
  *
- * EBX is the path, ECX the caller's sizeof(struct statfs64), EDX the buffer.
- * The size is checked rather than ignored: a caller built against a different
- * layout would otherwise be handed bytes it would read as different fields.
- * A path that names a directory by its end must reach one (`resolve_named`).
+ * Its arguments are the path, the caller's sizeof(struct statfs64) and the
+ * buffer. The size is checked rather than ignored: a caller built against a
+ * different layout would otherwise be handed bytes it would read as different
+ * fields. A path that names a directory by its end must reach one
+ * (`resolve_named`).
  */
 long sys_statfs64(isr_params_t *params)
 {
@@ -6623,7 +6569,7 @@ long sys_statfs64(isr_params_t *params)
     if (!current_proc || !SC_ARG(params, 0) || !SC_ARG(params, 2)) {
         return -EFAULT;
     }
-    if (SC_ARG(params, 1) != sizeof(struct linux_statfs64)) {
+    if (SC_ARG(params, 1) != sizeof(struct user_statfs)) {
         return -EINVAL;
     }
     len = path_from_user_dir(AT_FDCWD, (const char __user *)SC_ARG(params, 0), &pathbuf, &dir);
@@ -6650,10 +6596,10 @@ long sys_statfs64(isr_params_t *params)
             struct vfs_mount *m = ref.mnt;
 
             vfs_ref_release(&ref);
-            return statfs_fill_mount((struct linux_statfs64 __user *)SC_ARG(params, 2), m);
+            return statfs_fill_mount((struct user_statfs __user *)SC_ARG(params, 2), m);
         }
         vfs_ref_release(&ref);
-        return statfs_fill((struct linux_statfs64 __user *)SC_ARG(params, 2), magic);
+        return statfs_fill((struct user_statfs __user *)SC_ARG(params, 2), magic);
     }
 }
 
@@ -6662,13 +6608,13 @@ long sys_statfs64(isr_params_t *params)
  * file's descriptor answers proc's, and a device's or a synthetic
  * directory's, /proc and /proc/PID among them, answers devfs's.
  *
- * EBX is the descriptor, ECX the caller's size, EDX the buffer.
+ * Its arguments are the descriptor, the caller's size and the buffer.
  */
 long sys_fstatfs64(isr_params_t *params)
 {
     fd_entry_t *e;
 
-    if (SC_ARG(params, 1) != sizeof(struct linux_statfs64)) {
+    if (SC_ARG(params, 1) != sizeof(struct user_statfs)) {
         return -EINVAL;
     }
     if (!current_proc || !SC_ARG(params, 2)) {
@@ -6682,12 +6628,12 @@ long sys_fstatfs64(isr_params_t *params)
      * is on no file system at all, and Linux answers `-ENOSYS` for those rather
      * than handing back the root's numbers. */
     if (e->type == FD_TYPE_PROC) {
-        return statfs_fill((struct linux_statfs64 __user *)SC_ARG(params, 2),
+        return statfs_fill((struct user_statfs __user *)SC_ARG(params, 2),
                            procfs_fd_is_sys(e) ? STATFS_MAGIC_SYSFS : STATFS_MAGIC_PROC);
     }
     if (e->type == FD_TYPE_SYNTH_DIR && e->priv &&
         ((const struct synth_dir *)e->priv)->kind == VNODE_SYS_DIR) {
-        return statfs_fill((struct linux_statfs64 __user *)SC_ARG(params, 2), STATFS_MAGIC_SYSFS);
+        return statfs_fill((struct user_statfs __user *)SC_ARG(params, 2), STATFS_MAGIC_SYSFS);
     }
     if (e->type == FD_TYPE_SYNTH_PATH) {
         const struct vpath *vp = (const struct vpath *)e->priv;
@@ -6697,19 +6643,19 @@ long sys_fstatfs64(isr_params_t *params)
         if (synth_is_sys(vp)) {
             magic = STATFS_MAGIC_SYSFS;
         }
-        return statfs_fill((struct linux_statfs64 __user *)SC_ARG(params, 2), magic);
+        return statfs_fill((struct user_statfs __user *)SC_ARG(params, 2), magic);
     }
     if (e->type == FD_TYPE_DEVICE || e->type == FD_TYPE_CONSOLE || e->type == FD_TYPE_PTM ||
         e->type == FD_TYPE_SYNTH_DIR) {
-        return statfs_fill((struct linux_statfs64 __user *)SC_ARG(params, 2), STATFS_MAGIC_DEVFS);
+        return statfs_fill((struct user_statfs __user *)SC_ARG(params, 2), STATFS_MAGIC_DEVFS);
     }
     if (e->type != FD_TYPE_FILE && e->type != FD_TYPE_DIR) {
         return -ENOSYS;
     }
     if (e->ofd && e->ofd->vmnt && !mnt_is_root(e->ofd->vmnt)) {
-        return statfs_fill_mount((struct linux_statfs64 __user *)SC_ARG(params, 2), e->ofd->vmnt);
+        return statfs_fill_mount((struct user_statfs __user *)SC_ARG(params, 2), e->ofd->vmnt);
     }
-    return statfs_fill((struct linux_statfs64 __user *)SC_ARG(params, 2), STATFS_MAGIC_KRFFS);
+    return statfs_fill((struct user_statfs __user *)SC_ARG(params, 2), STATFS_MAGIC_KRFFS);
 }
 
 /**
@@ -6721,7 +6667,7 @@ long sys_fstatfs64(isr_params_t *params)
  * reported here is that identity and is the same number the descriptor's
  * `/proc/<pid>/fd` link carries, so a program reading one can match the other.
  */
-static int32_t fstat_fill(fd_entry_t *entry, struct linux_stat64 *kst)
+static int32_t fstat_fill(fd_entry_t *entry, struct user_stat *kst)
 {
     k_memset(kst, 0, sizeof(*kst));
     stat64_boot_times(kst); /* a node with times of its own overwrites these */
@@ -6735,7 +6681,7 @@ static int32_t fstat_fill(fd_entry_t *entry, struct linux_stat64 *kst)
     }
     if (entry->type == FD_TYPE_DIR && entry->node == NULL) {
         kst->st_mode = S_IFDIR | 0755; /* the root directory */
-        kst->st_ino = kst->__st_ino = 1;
+        STAT_SET_INO(kst, 1);
         kst->st_nlink = 1;
         kst->st_blksize = 4096;
         /* The root has times of its own, so a descriptor on it reports what a
@@ -6769,7 +6715,7 @@ static int32_t fstat_fill(fd_entry_t *entry, struct linux_stat64 *kst)
         kst->st_mode = S_IFREG | 0444;
         kst->st_nlink = 1;
         kst->st_blksize = 4096;
-        kst->st_ino = kst->__st_ino = nsfs_ns(entry)->inum;
+        STAT_SET_INO(kst, nsfs_ns(entry)->inum);
     } else if (entry->type == FD_TYPE_ANON) {
         /* eventfd, epoll, timerfd: Linux's anonymous inode, mode 0600 with
          * no type bits. */
@@ -6886,16 +6832,16 @@ static int32_t fstat_fill(fd_entry_t *entry, struct linux_stat64 *kst)
 }
 
 /*
- * fstat64 (syscall 197): EBX = fd, ECX = stat64 buffer. The descriptor's
- * node is stat'd; a root directory fd (node == NULL) reports the root
- * directory.
+ * fstat64: its arguments are fd and stat64 buffer. The
+ * descriptor's node is stat'd; a root directory fd (node == NULL) reports the
+ * root directory.
  */
 long sys_fstat64(isr_params_t *params)
 {
     int32_t rc;
     int fd = (int)SC_ARG(params, 0);
-    struct linux_stat64 __user *st = (struct linux_stat64 __user *)SC_ARG(params, 1);
-    struct linux_stat64 kst;
+    struct user_stat __user *st = (struct user_stat __user *)SC_ARG(params, 1);
+    struct user_stat kst;
     fd_entry_t *entry;
 
     if (!current_proc || !st) {
@@ -6942,7 +6888,7 @@ static int user_path_empty(const char __user *upath)
  * on until the attributes are read, as `do_stat64`'s does, and for the same
  * reason.
  */
-static int32_t fstatat_path(const char *path, int follow, struct linux_stat64 *kst)
+static int32_t fstatat_path(const char *path, int follow, struct user_stat *kst)
 {
     struct vfs_ref ref;
     const struct vpath *svp;
@@ -6951,7 +6897,7 @@ static int32_t fstatat_path(const char *path, int follow, struct linux_stat64 *k
     k_memset(kst, 0, sizeof(*kst));
     if (names_tree_root(path) && vfs_root_mount()->type == &vfs_krffs_type) {
         kst->st_mode = S_IFDIR | 0755;
-        kst->st_ino = kst->__st_ino = 1;
+        STAT_SET_INO(kst, 1);
         kst->st_nlink = 1;
         kst->st_blksize = 4096;
         stat64_root_times(kst);
@@ -6988,7 +6934,7 @@ static int32_t fstatat_path(const char *path, int follow, struct linux_stat64 *k
  * to, whatever it is, as fstat64 does, or the working directory for
  * AT_FDCWD. Returns 0 or a negative errno.
  */
-static int32_t stat_at(int dirfd, const char __user *upath, int flags, struct linux_stat64 *kst)
+static int32_t stat_at(int dirfd, const char __user *upath, int flags, struct user_stat *kst)
 {
     int follow = !(flags & AT_SYMLINK_NOFOLLOW);
     char *pathbuf;
@@ -7031,8 +6977,8 @@ static int32_t stat_at(int dirfd, const char __user *upath, int flags, struct li
 }
 
 /**
- * fstatat64 (syscall 300): EBX = dirfd, ECX = path, EDX = stat64 buffer, ESI
- * = flags.
+ * fstatat64: its arguments are dirfd, path, stat64 buffer and
+ * flags.
  *
  * The attributes are `stat_at`'s; GNU libc's fstat is this call with
  * AT_EMPTY_PATH when statx is missing. AT_NO_AUTOMOUNT is accepted and
@@ -7040,9 +6986,9 @@ static int32_t stat_at(int dirfd, const char __user *upath, int flags, struct li
  */
 long sys_fstatat64(isr_params_t *params)
 {
-    struct linux_stat64 __user *st = (struct linux_stat64 __user *)SC_ARG(params, 2);
+    struct user_stat __user *st = (struct user_stat __user *)SC_ARG(params, 2);
     int flags = (int)SC_ARG(params, 3);
-    struct linux_stat64 kst;
+    struct user_stat kst;
     int32_t rc;
 
     if (!current_proc || !st) {
@@ -7119,12 +7065,12 @@ static uint32_t dev_minor(uint64_t dev)
  * the device numbers split into their major and minor numbers, and the times
  * as signed 64-bit seconds, which is how musl reads the 32-bit ones.
  */
-static void statx_from_stat64(struct linux_statx *sx, const struct linux_stat64 *st)
+static void statx_from_stat64(struct linux_statx *sx, const struct user_stat *st)
 {
     k_memset(sx, 0, sizeof(*sx));
     sx->stx_mask = STATX_BASIC_STATS;
     sx->stx_blksize = (uint32_t)st->st_blksize;
-    sx->stx_nlink = st->st_nlink;
+    sx->stx_nlink = (uint32_t)st->st_nlink;
     sx->stx_uid = uid_seen((uint32_t)st->st_uid);
     sx->stx_gid = gid_seen((uint32_t)st->st_gid);
     sx->stx_mode = (uint16_t)st->st_mode;
@@ -7144,8 +7090,8 @@ static void statx_from_stat64(struct linux_statx *sx, const struct linux_stat64 
 }
 
 /**
- * statx (syscall 383): EBX = dirfd, ECX = path, EDX = flags, ESI = mask,
- * EDI = struct statx buffer.
+ * statx: its arguments are dirfd, path, flags, mask and struct
+ * statx buffer.
  *
  * The attributes are fstatat64's, found by `stat_at` for the same path and
  * flags, in struct statx: the basic set of STATX_BASIC_STATS whatever `mask`
@@ -7159,7 +7105,7 @@ long sys_statx(isr_params_t *params)
 {
     int flags = (int)SC_ARG(params, 2);
     void __user *out = (void __user *)SC_ARG(params, 4);
-    struct linux_stat64 kst;
+    struct user_stat kst;
     struct linux_statx sx;
     int32_t rc;
 
@@ -7167,7 +7113,8 @@ long sys_statx(isr_params_t *params)
         return -EFAULT;
     }
     if ((flags & ~(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH | AT_NO_AUTOMOUNT | AT_STATX_SYNC_TYPE)) ||
-        (flags & AT_STATX_SYNC_TYPE) == AT_STATX_SYNC_TYPE || (SC_ARG(params, 3) & STATX_RESERVED)) {
+        (flags & AT_STATX_SYNC_TYPE) == AT_STATX_SYNC_TYPE ||
+        (SC_ARG(params, 3) & STATX_RESERVED)) {
         return -EINVAL;
     }
     rc = stat_at((int)SC_ARG(params, 0), (const char __user *)SC_ARG(params, 1), flags, &kst);
@@ -7218,7 +7165,7 @@ static int32_t do_access(const char *name, int mode, int dir)
     }
     vp = vfs_synth_vpath(ref.mnt, ref.node);
     if (vp) {
-        struct linux_stat64 s;
+        struct user_stat s;
 
         rc = synth_stat(vp, &s, 1); /* access follows symlinks */
         vfs_walk_unlock(ref.mnt);
@@ -7265,7 +7212,8 @@ long sys_access(isr_params_t *params)
 }
 
 /**
- * inotify_add_watch(292): EBX the instance, ECX the path, EDX the mask.
+ * inotify_add_watch: its arguments are the instance, the path and the
+ * mask.
  *
  * The path is resolved through a final link unless IN_DONT_FOLLOW, it must
  * name a directory under IN_ONLYDIR, and the caller must be able to read
@@ -7309,7 +7257,7 @@ long sys_inotify_add_watch(isr_params_t *params)
     }
     vp = vfs_synth_vpath(ref.mnt, ref.node);
     if (vp) {
-        struct linux_stat64 s;
+        struct user_stat s;
 
         rc = synth_stat(vp, &s, !(mask & IN_DONT_FOLLOW));
         if (rc == 0) {
@@ -7754,7 +7702,7 @@ long sys_fchmod(isr_params_t *params)
     return current_proc->euid == 0 ? 0 : -EPERM;
 }
 
-/** The path form of chown and lchown: EBX = path, ECX = uid, EDX = gid. */
+/** The path form of chown and lchown: its arguments are path, uid and gid. */
 /**
  * The kernel's ids of the owner `*uid` and group `*gid` a chown names in the
  * caller's user namespace (`uid_named`), -1 left as it is. 0, or -EINVAL
@@ -7800,19 +7748,21 @@ static int32_t chown_path(const char __user *upath, uint32_t uid, uint32_t gid, 
  */
 long sys_chown(isr_params_t *params)
 {
-    return chown_path((const char __user *)SC_ARG(params, 0), (uint32_t)SC_ARG(params, 1), (uint32_t)SC_ARG(params, 2), 1);
+    return chown_path((const char __user *)SC_ARG(params, 0), (uint32_t)SC_ARG(params, 1),
+                      (uint32_t)SC_ARG(params, 2), 1);
 }
 
 /** lchown(2), 16 and 198: a final symbolic link itself, as on Linux. */
 long sys_lchown(isr_params_t *params)
 {
-    return chown_path((const char __user *)SC_ARG(params, 0), (uint32_t)SC_ARG(params, 1), (uint32_t)SC_ARG(params, 2), 0);
+    return chown_path((const char __user *)SC_ARG(params, 0), (uint32_t)SC_ARG(params, 1),
+                      (uint32_t)SC_ARG(params, 2), 0);
 }
 
 static int32_t chown_fd(fd_entry_t *entry, uint32_t uid, uint32_t gid);
 
 /**
- * fchownat(2): EBX = dirfd, ECX = path, EDX = uid, ESI = gid, EDI = flags.
+ * fchownat(2): its arguments are dirfd, path, uid, gid and flags.
  *
  * The flags are Linux's two, checked first: AT_SYMLINK_NOFOLLOW changes a
  * final symbolic link itself, and AT_EMPTY_PATH with an empty path changes
@@ -7977,7 +7927,7 @@ static int32_t truncate_checks(const struct vfs_ref *ref)
     int32_t rc;
 
     if (vp) {
-        struct linux_stat64 kst;
+        struct user_stat kst;
 
         rc = synth_stat(vp, &kst, 1);
         if (rc != 0) {
@@ -8123,15 +8073,17 @@ static int32_t truncate_user(const char __user *upath, long long length)
     return rc;
 }
 
-/** truncate(2): EBX = path, ECX = the length, a signed 32-bit value. */
+/** truncate(2): its arguments are path and the length, a signed 32-bit value.
+ * */
 long sys_truncate(isr_params_t *params)
 {
-    return truncate_user((const char __user *)SC_ARG(params, 0), (long long)(int32_t)SC_ARG(params, 1));
+    return truncate_user((const char __user *)SC_ARG(params, 0),
+                         (long long)(int32_t)SC_ARG(params, 1));
 }
 
 /**
- * truncate64(2): EBX = path, ECX and EDX = the length's low and high words.
- * Musl's and GNU libc's truncate are this call on i386.
+ * i386's truncate64(2): the path, then the length's low and high words. Musl's
+ * and GNU libc's truncate are this call on i386.
  */
 long sys_truncate64(isr_params_t *params)
 {
@@ -8189,7 +8141,7 @@ static int name_present(struct vfs_mount *mnt, void *dir, const char *name)
  */
 static int32_t synth_name_exists(const char *path)
 {
-    struct linux_stat64 kst;
+    struct user_stat kst;
     const struct vpath *vp;
     struct vfs_ref ref;
     int32_t rc = vfs_resolve(0, path, VFS_WALK_NOFOLLOW, &ref, 0, 0);
@@ -8762,8 +8714,8 @@ static void pio_view(fd_entry_t *entry, uint64_t at, fd_entry_t *view, struct op
 }
 
 /**
- * pread64(2): EBX = fd, ECX = buffer, EDX = count, ESI and EDI = the
- * offset's low and high words, the i386 order. Reads at the offset and
+ * pread64 on i386: the descriptor, the buffer, the count, then the
+ * offset's low and high words. Reads at the offset and
  * leaves the descriptor's own where it was; `pio_entry` has what it refuses.
  * A regular file is read at the offset under the description's lock, as
  * read(2) reads it, and a device or a /proc snapshot through `pio_view`.
@@ -8912,6 +8864,27 @@ static int flock_cmd(int cmd, int *wide, int *by_ofd)
     }
 }
 
+/* Linux's struct flock, whose offsets are longs, and struct flock64, whose
+ * offsets are 64 bits: the two are one layout where a long has 64 bits. */
+struct kernel_flock {
+    int16_t type;
+    int16_t whence;
+    long start;
+    long len;
+    int32_t pid;
+};
+
+struct kernel_flock64 {
+    int16_t type;
+    int16_t whence;
+    int64_t start;
+    int64_t len;
+    int32_t pid;
+};
+
+/* Whether an offset fits the long of a struct flock. */
+#define FITS_LONG(v) ((uint64_t)(v) <= (uint64_t)(~0UL >> 1))
+
 /* The fields of a struct flock or struct flock64. */
 struct flock_args {
     int16_t type;
@@ -8928,25 +8901,29 @@ struct flock_args {
  */
 static int32_t flock_read(uintptr_t arg, int wide, struct flock_args *fl)
 {
-    uint8_t raw[24];
-    int32_t s32, l32;
-
-    if (copy_from_user(raw, (const void __user *)arg, wide ? 24u : 16u) != 0) {
-        return -EFAULT;
-    }
-    k_memcpy(&fl->type, raw, 2);
-    k_memcpy(&fl->whence, raw + 2, 2);
     if (wide) {
-        k_memcpy(&fl->start, raw + 4, 8);
-        k_memcpy(&fl->len, raw + 12, 8);
-        k_memcpy(&fl->pid, raw + 20, 4);
-        return 0;
+        struct kernel_flock64 f;
+
+        if (copy_from_user(&f, (const void __user *)arg, sizeof(f)) != 0) {
+            return -EFAULT;
+        }
+        fl->type = f.type;
+        fl->whence = f.whence;
+        fl->start = f.start;
+        fl->len = f.len;
+        fl->pid = f.pid;
+    } else {
+        struct kernel_flock f;
+
+        if (copy_from_user(&f, (const void __user *)arg, sizeof(f)) != 0) {
+            return -EFAULT;
+        }
+        fl->type = f.type;
+        fl->whence = f.whence;
+        fl->start = f.start;
+        fl->len = f.len;
+        fl->pid = f.pid;
     }
-    k_memcpy(&s32, raw + 4, 4);
-    k_memcpy(&l32, raw + 8, 4);
-    k_memcpy(&fl->pid, raw + 12, 4);
-    fl->start = s32;
-    fl->len = l32;
     return 0;
 }
 
@@ -8959,32 +8936,36 @@ static int32_t flock_read(uintptr_t arg, int wide, struct flock_args *fl)
  */
 static int32_t flock_write(uintptr_t arg, int wide, const struct lock_req *req)
 {
-    uint8_t raw[24];
-    int16_t type = (int16_t)req->type, whence = 0;
     int64_t start = (int64_t)req->start;
     int64_t len = req->end == LOCK_EOF ? 0 : (int64_t)(req->end - req->start + 1u);
-    int32_t s32 = (int32_t)start, l32 = (int32_t)len;
     int32_t pid = req->pid > 0 ? (int32_t)pid_seen((uint32_t)req->pid) : req->pid;
-    uint32_t size = wide ? 24u : 16u;
+    int16_t type = (int16_t)req->type;
 
-    k_memcpy(raw, &type, 2);
     if (req->type == F_UNLCK) {
-        size = 2;
-    } else if (!wide &&
-               (req->start > 0x7FFFFFFFu || (req->end != LOCK_EOF && req->end > 0x7FFFFFFFu))) {
-        return -EOVERFLOW;
+        return copy_to_user((void __user *)arg, &type, sizeof(type)) != 0 ? -EFAULT : 0;
     }
-    k_memcpy(raw + 2, &whence, 2);
     if (wide) {
-        k_memcpy(raw + 4, &start, 8);
-        k_memcpy(raw + 12, &len, 8);
-        k_memcpy(raw + 20, &pid, 4);
+        struct kernel_flock64 f;
+
+        k_memset(&f, 0, sizeof(f));
+        f.type = type;
+        f.start = start;
+        f.len = len;
+        f.pid = pid;
+        return copy_to_user((void __user *)arg, &f, sizeof(f)) != 0 ? -EFAULT : 0;
     } else {
-        k_memcpy(raw + 4, &s32, 4);
-        k_memcpy(raw + 8, &l32, 4);
-        k_memcpy(raw + 12, &pid, 4);
+        struct kernel_flock f;
+
+        if (!FITS_LONG(req->start) || (req->end != LOCK_EOF && !FITS_LONG(req->end))) {
+            return -EOVERFLOW;
+        }
+        k_memset(&f, 0, sizeof(f));
+        f.type = type;
+        f.start = (long)start;
+        f.len = (long)len;
+        f.pid = pid;
+        return copy_to_user((void __user *)arg, &f, sizeof(f)) != 0 ? -EFAULT : 0;
     }
-    return copy_to_user((void __user *)arg, raw, size) != 0 ? -EFAULT : 0;
 }
 
 /**
@@ -9090,9 +9071,10 @@ static int32_t fcntl_seals(const fd_entry_t *entry, int cmd, uint32_t arg)
 #define MFD_EXEC          0x10u
 
 /**
- * The descriptor-to-descriptor copies: splice (313) and tee (315), with the
- * descriptors in EBX and EDX and in EBX and ECX, and sendfile (187) and
- * sendfile64 (239), with the output descriptor in EBX and the input in ECX.
+ * The descriptor-to-descriptor copies: splice and tee, with the descriptors
+ * in the first and third arguments and in the first and second, and
+ * sendfile and sendfile64, with the output descriptor first and the input
+ * second.
  *
  * The kernel moves no data between two descriptors itself, so each answers
  * -EINVAL once both descriptors are open, as Linux answers for descriptors it
@@ -9184,8 +9166,8 @@ static uint32_t fallocate_type(fd_entry_t *entry)
 }
 
 /**
- * fallocate (324): EBX = fd, ECX = mode, EDX:ESI = the offset and EDI:EBP the
- * length, each low word first.
+ * fallocate on i386: the descriptor, the mode, then the offset and the
+ * length in two arguments each, low word first.
  *
  * A regular file of a mounted file system goes to its type's operation
  * (vfs_fallocate): tmpfs makes the range's pages or punches a hole, as Linux's
@@ -9245,7 +9227,8 @@ long sys_fallocate(isr_params_t *params)
         return -EFBIG;
     }
     fd_ofd_lock(entry->ofd);
-    rc = vfs_fallocate(entry->ofd->vmnt, entry->ofd->fhandle, (uint32_t)SC_ARG(params, 1), offset, len);
+    rc = vfs_fallocate(entry->ofd->vmnt, entry->ofd->fhandle, (uint32_t)SC_ARG(params, 1), offset,
+                       len);
     fd_ofd_unlock(entry->ofd);
     return rc;
 }
@@ -9254,7 +9237,7 @@ long sys_fallocate(isr_params_t *params)
 #define MFD_NAME_MAX 249
 
 /**
- * memfd_create(2): EBX = name, ECX = flags.
+ * memfd_create(2): its arguments are name and flags.
  *
  * A file in memory that no path names, on the tmpfs `vfs_memfd_mount` has,
  * open for reading and writing on a new descriptor: mode 0777 and the
@@ -9327,7 +9310,7 @@ long sys_memfd_create(isr_params_t *params)
 #define LOCK_MAND 32
 
 /**
- * flock(2): EBX = fd, ECX = operation.
+ * flock(2): its arguments are fd and operation.
  *
  * LOCK_SH, LOCK_EX or LOCK_UN, with LOCK_NB for no wait, over the whole of
  * what `fd` is open on, owned by the open file description, as
@@ -9366,12 +9349,12 @@ long sys_flock(isr_params_t *params)
 }
 
 /**
- * Descriptor control (fcntl64, syscall 221).
+ * Descriptor control (fcntl64).
  *
- * EBX=fd, ECX=cmd, EDX=arg. Supports the descriptor-flag and status-flag
- * round-trips libc needs: F_DUPFD(_CLOEXEC), F_GETFD/F_SETFD (the
- * close-on-exec bit), and F_GETFL/F_SETFL (access + O_NONBLOCK/O_APPEND on
- * the shared open-file description, which the write and socket paths read).
+ * Its arguments are fd, cmd and arg. Supports the descriptor-flag and
+ * status-flag round-trips libc needs: F_DUPFD(_CLOEXEC), F_GETFD/F_SETFD (the
+ * close-on-exec bit), and F_GETFL/F_SETFL (access + O_NONBLOCK/O_APPEND on the
+ * shared open-file description, which the write and socket paths read).
  * F_GETPIPE_SZ gives a pipe's capacity, which bash asks before it writes a
  * here-document into a pipe it reads itself. An O_PATH descriptor takes the
  * commands Linux lets it take, the two duplications, F_GETFD, F_SETFD and
@@ -9507,6 +9490,7 @@ long sys_fcntl64(isr_params_t *params)
     }
 }
 
+#ifdef ARCH_WANT_OLD_STAT
 /**
  * Copy the three times out of a stat64 into the narrower old stat.
  *
@@ -9514,7 +9498,7 @@ long sys_fcntl64(isr_params_t *params)
  * separately; before this kernel had a clock they were all zero and the
  * difference did not show.
  */
-static void stat_times_from_stat64(struct linux_stat *kst, const struct linux_stat64 *s64)
+static void stat_times_from_stat64(struct linux_stat *kst, const struct user_stat *s64)
 {
     kst->st_atime = s64->st_atime;
     kst->st_atime_nsec = s64->st_atime_nsec;
@@ -9527,7 +9511,7 @@ static void stat_times_from_stat64(struct linux_stat *kst, const struct linux_st
 /** The three times of a KRFFS node, into the old stat. */
 static void stat_node_times(struct linux_stat *kst, const krffs_node_t *node)
 {
-    struct linux_stat64 s64;
+    struct user_stat s64;
 
     stat64_node_times(&s64, node);
     stat_times_from_stat64(kst, &s64);
@@ -9551,7 +9535,7 @@ static int32_t old_stat_put(struct linux_stat __user *st, const struct linux_sta
 /** The root directory's three times, into the old stat. */
 static void stat_root_times(struct linux_stat *kst)
 {
-    struct linux_stat64 s64;
+    struct user_stat s64;
 
     stat64_root_times(&s64);
     stat_times_from_stat64(kst, &s64);
@@ -9608,7 +9592,7 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
         }
         svp = vfs_synth_vpath(ref.mnt, ref.node);
         if (svp) {
-            struct linux_stat64 s64;
+            struct user_stat s64;
 
             rc = synth_stat(svp, &s64, follow);
             vfs_walk_unlock(ref.mnt);
@@ -9626,7 +9610,7 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
             return old_stat_put(st, &kst, dir);
         }
         if (!mnt_is_root(ref.mnt)) {
-            struct linux_stat64 s64;
+            struct user_stat s64;
 
             rc = vfs_fill_stat64(&s64, &ref);
             vfs_walk_unlock(ref.mnt);
@@ -9666,23 +9650,24 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
     return old_stat_put(st, &kst, dir);
 }
 
-/* stat(106) follows symlinks; lstat(107) does not. musl maps SYS_stat and
+/* stat follows symlinks; lstat does not. musl maps SYS_stat and
  * SYS_lstat to the 64-bit forms, 195 and 196, so these two serve a caller
  * that issues the old numbers itself. */
 long sys_stat(isr_params_t *params)
 {
-    return do_old_stat((const char __user *)SC_ARG(params, 0), (struct linux_stat __user *)SC_ARG(params, 1),
-                       1);
+    return do_old_stat((const char __user *)SC_ARG(params, 0),
+                       (struct linux_stat __user *)SC_ARG(params, 1), 1);
 }
 
 long sys_lstat(isr_params_t *params)
 {
-    return do_old_stat((const char __user *)SC_ARG(params, 0), (struct linux_stat __user *)SC_ARG(params, 1),
-                       0);
+    return do_old_stat((const char __user *)SC_ARG(params, 0),
+                       (struct linux_stat __user *)SC_ARG(params, 1), 0);
 }
+#endif /* ARCH_WANT_OLD_STAT */
 
 /*
- * creat(2): EBX = path, ECX = mode. Returns an fd open for writing, or
+ * creat(2): its arguments are path and mode. Returns an fd open for writing, or
  * -errno. An existing regular file is truncated to zero by the call; a
  * directory, the root included, is EISDIR.
  */
@@ -9845,7 +9830,7 @@ static int32_t do_unlink(const char *path)
     return unlink_named(path, 0);
 }
 
-/* unlink(2): EBX = path. Returns 0 or -errno. */
+/* unlink(2): its argument is path. Returns 0 or -errno. */
 long sys_unlink(isr_params_t *params)
 {
     const char __user *upath = (const char __user *)SC_ARG(params, 0);
@@ -10044,7 +10029,7 @@ static int32_t do_mkdir(const char *pathbuf, uint32_t mode)
     return rc;
 }
 
-/* mkdir(2): EBX = path, ECX = mode. */
+/* mkdir(2): its arguments are path and mode. */
 long sys_mkdir(isr_params_t *params)
 {
     const char __user *upath = (const char __user *)SC_ARG(params, 0);
@@ -10064,7 +10049,7 @@ long sys_mkdir(isr_params_t *params)
     return rc;
 }
 
-/* mkdirat(2): EBX = dirfd, ECX = path, EDX = mode; a relative path is
+/* mkdirat(2): its arguments are dirfd, path and mode; a relative path is
  * resolved from `dirfd` as openat's is. */
 long sys_mkdirat(isr_params_t *params)
 {
@@ -10166,7 +10151,7 @@ static int32_t do_mknod(const char *path, uint32_t mode, uint32_t dev, int end)
     return rc;
 }
 
-/* mknod(2): EBX = path, ECX = mode, EDX = dev. The kind is checked before
+/* mknod(2): its arguments are path, mode and dev. The kind is checked before
  * the path is read. */
 long sys_mknod(isr_params_t *params)
 {
@@ -10194,8 +10179,8 @@ long sys_mknod(isr_params_t *params)
     return rc;
 }
 
-/* mknodat(2): EBX = dirfd, ECX = path, EDX = mode, ESI = dev; a relative
- * path is resolved from `dirfd` as openat's is, after the kind is checked. */
+/* mknodat(2): its arguments are dirfd, path, mode and dev; a relative path is
+ * resolved from `dirfd` as openat's is, after the kind is checked. */
 long sys_mknodat(isr_params_t *params)
 {
     const char __user *upath = (const char __user *)SC_ARG(params, 1);
@@ -10331,7 +10316,7 @@ static int32_t do_rmdir(const char *pathbuf)
     return rc;
 }
 
-/* rmdir(2): EBX = path. */
+/* rmdir(2): its argument is path. */
 long sys_rmdir(isr_params_t *params)
 {
     const char __user *upath = (const char __user *)SC_ARG(params, 0);
@@ -10355,7 +10340,7 @@ long sys_rmdir(isr_params_t *params)
 #define AT_REMOVEDIR 0x200
 
 /**
- * unlinkat(2): EBX = dirfd, ECX = path, EDX = flags. The name is removed as
+ * unlinkat(2): its arguments are dirfd, path and flags. The name is removed as
  * unlink removes it, or as rmdir does with AT_REMOVEDIR; any other flag is
  * -EINVAL before the path is read. A relative path is resolved from `dirfd`.
  */
@@ -10670,7 +10655,7 @@ static int32_t rename_from_user(int olddirfd, const char __user *uold, int newdi
     return rc;
 }
 
-/* rename(2): EBX = old path, ECX = new path. Returns 0 or -errno. */
+/* rename(2): its arguments are old path and new path. Returns 0 or -errno. */
 long sys_rename(isr_params_t *params)
 {
     const char __user *old_path = (const char __user *)SC_ARG(params, 0);
@@ -10682,8 +10667,8 @@ long sys_rename(isr_params_t *params)
     return rename_from_user(AT_FDCWD, old_path, AT_FDCWD, new_path, 0);
 }
 
-/* renameat(2): EBX = old dirfd, ECX = old path, EDX = new dirfd, ESI = new
- * path; each relative path is resolved from its own descriptor. */
+/* renameat(2): its arguments are old dirfd, old path, new dirfd and new path;
+ * each relative path is resolved from its own descriptor. */
 long sys_renameat(isr_params_t *params)
 {
     const char __user *old_path = (const char __user *)SC_ARG(params, 1);
@@ -10696,7 +10681,7 @@ long sys_renameat(isr_params_t *params)
 }
 
 /**
- * renameat2(2): renameat's arguments and EDI = flags. RENAME_NOREPLACE
+ * renameat2(2): renameat's arguments and the flags. RENAME_NOREPLACE
  * refuses a new name that exists with -EEXIST; RENAME_EXCHANGE,
  * RENAME_WHITEOUT and any other flag are -EINVAL before a path is read, as a
  * Linux file system without them answers them later.
@@ -10713,7 +10698,8 @@ long sys_renameat2(isr_params_t *params)
     if (!current_proc || !old_path || !new_path) {
         return -EFAULT;
     }
-    return rename_from_user((int)SC_ARG(params, 0), old_path, (int)SC_ARG(params, 2), new_path, flags);
+    return rename_from_user((int)SC_ARG(params, 0), old_path, (int)SC_ARG(params, 2), new_path,
+                            flags);
 }
 
 /* Special nsec values */
@@ -10738,7 +10724,7 @@ void get_current_time(int64_t *seconds, int64_t *nanoseconds)
 }
 
 /** Whether `nsec` is a time's nanoseconds, UTIME_NOW or UTIME_OMIT. */
-static int utime_nsec_valid(int32_t nsec)
+static int utime_nsec_valid(long nsec)
 {
     return nsec == UTIME_NOW || nsec == UTIME_OMIT || (nsec >= 0 && nsec <= 999999999);
 }
@@ -10903,15 +10889,14 @@ static int32_t utimes_path(const char *path, int flags, int dir,
 /**
  * Update a file's access and modification timestamps (utimensat(2)).
  *
- * EBX = dirfd, ECX = path, EDX = times, ESI = flags. `times` is the pair
- * [atime, mtime] or NULL, as `utimes_node` takes it, and a pair of
- * UTIME_OMIT changes nothing and returns 0 before anything else is looked at,
- * as on Linux. A NULL path names the file `dirfd` refers to, with no flags
- * (-EINVAL otherwise); with AT_FDCWD it is -EFAULT. Otherwise the path
- * resolves as openat's does, AT_SYMLINK_NOFOLLOW sets a final symbolic link's
- * own times, and with AT_EMPTY_PATH an empty path names the file `dirfd`
- * refers to, or the working directory for AT_FDCWD; `utimes_path` sets the
- * times. Returns 0 or -errno.
+ * Its arguments are dirfd, path, times and flags. `times` is the pair [atime,
+ * mtime] or NULL, as `utimes_node` takes it, and a pair of UTIME_OMIT changes
+ * nothing and returns 0 before anything else is looked at, as on Linux. A NULL
+ * path names the file `dirfd` refers to, with no flags (-EINVAL otherwise);
+ * with AT_FDCWD it is -EFAULT. Otherwise the path resolves as openat's does,
+ * AT_SYMLINK_NOFOLLOW sets a final symbolic link's own times, and with
+ * AT_EMPTY_PATH an empty path names the file `dirfd` refers to, or the working
+ * directory for AT_FDCWD; `utimes_path` sets the times. Returns 0 or -errno.
  */
 long sys_utimensat(isr_params_t *params)
 {
@@ -11470,7 +11455,7 @@ static int synth_dirent_at(const struct synth_dir *sd, int n, char *name, uint64
          * (`synth_classify`), with what lstat reports of them. */
         if (n < 4) {
             static const char *const fdnames[] = {"fd", "stdin", "stdout", "stderr"};
-            struct linux_stat64 fst;
+            struct user_stat fst;
             struct vpath fvp;
 
             k_memset(&fvp, 0, sizeof(fvp));
@@ -11654,7 +11639,7 @@ static int32_t synth_getdents(fd_entry_t *e, char *buf, uint32_t count)
 /**
  * Read directory entries (getdents64(2)).
  *
- * EBX = fd, ECX = dirp buffer, EDX = count. Packs linux_dirent64 records
+ * Its arguments are fd, dirp buffer and count. Packs linux_dirent64 records
  * into the buffer, one per child, and advances the fd's offset cursor. A
  * record's `d_type` is the type the file system gives the child, DT_UNKNOWN
  * where it gives none, and never DT_REG for anything but a regular file.
@@ -11798,7 +11783,7 @@ long sys_getdents64(isr_params_t *params)
     return (int32_t)bytes_written;
 }
 
-/* dup3(330): like dup2 but oldfd == newfd is -EINVAL and a flag can set
+/* dup3: like dup2 but oldfd == newfd is -EINVAL and a flag can set
  * O_CLOEXEC on the new descriptor. */
 long sys_dup3(isr_params_t *params)
 {

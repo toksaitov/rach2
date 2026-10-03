@@ -318,8 +318,7 @@ static int tls_access(uint32_t pid, process_t *t, unsigned long idx, uintptr_t d
     return 0;
 }
 
-long arch_ptrace(process_t *t, uint32_t pid, long request, unsigned long addr,
-                 unsigned long data)
+long arch_ptrace(process_t *t, uint32_t pid, long request, unsigned long addr, unsigned long data)
 {
     unsigned long word;
     unsigned long r[R_COUNT];

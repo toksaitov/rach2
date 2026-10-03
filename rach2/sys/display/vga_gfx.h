@@ -42,5 +42,4 @@
 /** True while the VGA is in graphics mode. */
 extern bool vga_graphics_mode;
 
-
 #endif /* _VGA_GFX_H_ */

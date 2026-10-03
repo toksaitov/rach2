@@ -57,7 +57,6 @@
 #define SIGEV_SIGNAL 0
 #define SIGEV_NONE   1
 #define SIGEV_THREAD 2
-#define SI_MESGQ     (-3)
 
 struct mq_msg {
     struct mq_msg *next;
@@ -81,7 +80,7 @@ struct mqueue {
     uint32_t notify_tgid; /* the process registered by mq_notify, 0 for none */
     int notify_how;
     int notify_signo;
-    int32_t notify_value;
+    uintptr_t notify_value;
 };
 
 /* A descriptor's object: the queue it was opened on. */
@@ -90,10 +89,10 @@ struct mq_file {
     struct mqueue *q;
 };
 
-/* i386's struct mq_attr. */
+/* Linux's struct mq_attr. */
 struct mq_attr {
-    int32_t flags, maxmsg, msgsize, curmsgs;
-    int32_t reserved[4];
+    long flags, maxmsg, msgsize, curmsgs;
+    long reserved[4];
 };
 
 static struct mqueue *queues;
@@ -302,8 +301,8 @@ static int32_t mq_new_attr(const void __user *uattr, int32_t *maxmsg, int32_t *m
         a.msgsize > (priv ? MQ_HARD_MSGSIZEMAX : MQ_MSGSIZE_MAX)) {
         return -EINVAL;
     }
-    *maxmsg = a.maxmsg;
-    *msgsize = a.msgsize;
+    *maxmsg = (int32_t)a.maxmsg;
+    *msgsize = (int32_t)a.msgsize;
     return 0;
 }
 
@@ -408,9 +407,9 @@ static int32_t mq_install(struct mqueue *q, uint32_t oflag)
 }
 
 /**
- * mq_open, number 277: EBX the name without its leading slash, as the C
- * library passes it, ECX the flags, EDX the mode and ESI the attributes of
- * a new queue. An existing queue is EEXIST under O_CREAT|O_EXCL and EACCES
+ * mq_open: its arguments are the name without its leading slash, as the C
+ * library passes it, the flags, the mode and the attributes of a new
+ * queue. An existing queue is EEXIST under O_CREAT|O_EXCL and EACCES
  * for an access its bits do not give; a missing one is ENOENT without
  * O_CREAT. EINVAL for the access mode 3, ENFILE past MQ_QUEUES queues for an
  * unprivileged caller, and the refusals of `mq_name` and `mq_new_attr`.
@@ -441,7 +440,8 @@ long sys_mq_open(struct isr_params *params)
         return -EACCES;
     }
     if (!q) {
-        rc = mq_create(name, (uint32_t)SC_ARG(params, 2), (const void __user *)SC_ARG(params, 3), &q);
+        rc = mq_create(name, (uint32_t)SC_ARG(params, 2), (const void __user *)SC_ARG(params, 3),
+                       &q);
         if (rc != 0) {
             return rc;
         }
@@ -454,7 +454,7 @@ long sys_mq_open(struct isr_params *params)
     return rc;
 }
 
-/** mq_unlink, number 278: take the queue's name away; it lives while a
+/** mq_unlink: take the queue's name away; it lives while a
  * descriptor has it. ENOENT for no such queue, EACCES for a caller that
  * neither owns it nor is privileged, as the sticky directory of Linux's
  * mqueue mount has it. */
@@ -574,7 +574,8 @@ static void mq_notify_now(struct mqueue *q)
         info.code = SI_MESGQ;
         info.pid = pid_seen_by(p, current_proc->tgid);
         info.uid = ns_uid_from_kernel(proc_userns(p), current_proc->ruid);
-        info.status = q->notify_value;
+        info.value = q->notify_value;
+        info.status = (int32_t)q->notify_value;
         signal_post_info(p, q->notify_signo, &info);
     }
     q->notify_tgid = 0;
@@ -705,39 +706,47 @@ static int32_t mq_receive(int fd, void __user *umsg, uint32_t len, void __user *
 
 long sys_mq_timedsend(struct isr_params *params)
 {
-    return mq_send((int)SC_ARG(params, 0), (const void __user *)SC_ARG(params, 1), USER_LEN32(SC_ARG(params, 2)), (uint32_t)SC_ARG(params, 3),
+    return mq_send((int)SC_ARG(params, 0), (const void __user *)SC_ARG(params, 1),
+                   USER_LEN32(SC_ARG(params, 2)), (uint32_t)SC_ARG(params, 3),
                    (const void __user *)SC_ARG(params, 4), 0);
 }
 
 long sys_mq_timedreceive(struct isr_params *params)
 {
-    return mq_receive((int)SC_ARG(params, 0), (void __user *)SC_ARG(params, 1), USER_LEN32(SC_ARG(params, 2)),
-                      (void __user *)SC_ARG(params, 3), (const void __user *)SC_ARG(params, 4), 0);
+    return mq_receive((int)SC_ARG(params, 0), (void __user *)SC_ARG(params, 1),
+                      USER_LEN32(SC_ARG(params, 2)), (void __user *)SC_ARG(params, 3),
+                      (const void __user *)SC_ARG(params, 4), 0);
 }
 
 long sys_mq_timedsend_time64(struct isr_params *params)
 {
-    return mq_send((int)SC_ARG(params, 0), (const void __user *)SC_ARG(params, 1), USER_LEN32(SC_ARG(params, 2)), (uint32_t)SC_ARG(params, 3),
+    return mq_send((int)SC_ARG(params, 0), (const void __user *)SC_ARG(params, 1),
+                   USER_LEN32(SC_ARG(params, 2)), (uint32_t)SC_ARG(params, 3),
                    (const void __user *)SC_ARG(params, 4), 1);
 }
 
 long sys_mq_timedreceive_time64(struct isr_params *params)
 {
-    return mq_receive((int)SC_ARG(params, 0), (void __user *)SC_ARG(params, 1), USER_LEN32(SC_ARG(params, 2)),
-                      (void __user *)SC_ARG(params, 3), (const void __user *)SC_ARG(params, 4), 1);
+    return mq_receive((int)SC_ARG(params, 0), (void __user *)SC_ARG(params, 1),
+                      USER_LEN32(SC_ARG(params, 2)), (void __user *)SC_ARG(params, 3),
+                      (const void __user *)SC_ARG(params, 4), 1);
 }
 
 /**
- * mq_notify, number 281: with ECX NULL, take the caller's registration
+ * mq_notify: with a null second argument, take the caller's registration
  * away; else register the caller for the queue's next message as the
- * `struct sigevent` at ECX says, a signal or nothing. EBUSY when another
+ * `struct sigevent` it points at says, a signal or nothing. EBUSY when another
  * process is registered, EINVAL for SIGEV_THREAD, whose notice Linux sends
  * through a netlink socket this kernel does not have, for another kind or
  * for a signal outside 1 to 64; EBADF for a descriptor not open on a queue.
  */
 long sys_mq_notify(struct isr_params *params)
 {
-    int32_t ev[3];
+    struct {
+        uintptr_t value;
+        int32_t signo;
+        int32_t notify;
+    } ev; /* the head of Linux's struct sigevent */
     fd_entry_t *e;
     struct mqueue *q = mq_of((int)SC_ARG(params, 0), &e);
 
@@ -750,28 +759,28 @@ long sys_mq_notify(struct isr_params *params)
         }
         return 0;
     }
-    if (copy_from_user(ev, (const void __user *)SC_ARG(params, 1), sizeof(ev)) != 0) {
+    if (copy_from_user(&ev, (const void __user *)SC_ARG(params, 1), sizeof(ev)) != 0) {
         return -EFAULT;
     }
-    if ((ev[2] != SIGEV_SIGNAL && ev[2] != SIGEV_NONE) ||
-        (ev[2] == SIGEV_SIGNAL && (ev[1] < 1 || ev[1] > KSIG_MAX))) {
+    if ((ev.notify != SIGEV_SIGNAL && ev.notify != SIGEV_NONE) ||
+        (ev.notify == SIGEV_SIGNAL && (ev.signo < 1 || ev.signo > KSIG_MAX))) {
         return -EINVAL;
     }
     if (q->notify_tgid) {
         return -EBUSY;
     }
     q->notify_tgid = current_proc->tgid;
-    q->notify_how = ev[2];
-    q->notify_signo = ev[1];
-    q->notify_value = ev[0];
+    q->notify_how = ev.notify;
+    q->notify_signo = ev.signo;
+    q->notify_value = ev.value;
     return 0;
 }
 
 /**
- * mq_getsetattr, number 282: the queue's attributes into the `struct
- * mq_attr` at EDX unless NULL, with the description's O_NONBLOCK as the
- * flags; then the flags from the one at ECX unless NULL, of which only
- * O_NONBLOCK may be set, else EINVAL.
+ * mq_getsetattr: the queue's attributes into the `struct mq_attr` the third
+ * argument points at unless it is null, with the description's O_NONBLOCK
+ * as the flags; then the flags from the one the second points at unless it
+ * is null, of which only O_NONBLOCK may be set, else EINVAL.
  */
 long sys_mq_getsetattr(struct isr_params *params)
 {

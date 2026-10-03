@@ -172,7 +172,7 @@ int krandom_is_trusted(void)
     return cc_src == KRANDOM_SRC_RDSEED || cc_src == KRANDOM_SRC_RDRAND;
 }
 
-#if defined(__i386__)
+#if !defined(RACH2_HOSTTEST)
 
 #include "../arch/arch.h"
 #include "../rtc.h"

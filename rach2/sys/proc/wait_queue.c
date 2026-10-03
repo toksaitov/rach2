@@ -4,12 +4,12 @@
 #include "../lib/kerrno.h"
 
 /*
- * Save EFLAGS and disable interrupts; restore puts EFLAGS (hence IF) back. On a
- * single CPU this is all the mutual exclusion a sleeper editing the queue
- * needs against an IRQ-context waker walking it. The pair is this file's own
- * copy of `kirq_save` and `kirq_restore`: under WAIT_QUEUE_HOSTTEST, in the
- * host tests that include this file, there is no interrupt to mask and they
- * are no-ops; the list logic exercised there is identical either way.
+ * Save the interrupt flag and disable interrupts; restore puts it back. On a
+ * single CPU this is all the mutual exclusion a sleeper editing the queue needs
+ * against an IRQ-context waker walking it. The pair is this file's own copy of
+ * `kirq_save` and `kirq_restore`: under WAIT_QUEUE_HOSTTEST, in the host tests
+ * that include this file, there is no interrupt to mask and they are no-ops;
+ * the list logic exercised there is identical either way.
  */
 #ifdef WAIT_QUEUE_HOSTTEST
 static uint32_t irq_save(void)

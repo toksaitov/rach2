@@ -211,12 +211,11 @@ static void pwauth_stop_signals(sigset_t *set)
  * exception never reaches a disposition at all: `_exception_handler`
  * (`rach2/sys/arch/x86/isr.c`) and the page-fault path
  * (`rach2/sys/mm/paging.c`) both call `terminate_current_process`, which
- * zombifies the process directly without consulting `sigacts`. So the only `SIGSEGV` a handler here can ever
- * see is one that was sent, which is an ordinary death from an ordinary
- * `kill`, and one the real uid that launched a setuid writer is allowed to
- * send. Handling them changes nothing about a real fault and closes five more
- * ways to strand the lock. `SIGABRT` and `SIGSYS` are handled for the same
- * reason: the kernel raises neither. A transaction therefore turns an `abort`
+ * zombifies the process directly without consulting `sigacts`. So the only `SIGSEGV` a handler here
+ * can ever see is one that was sent, which is an ordinary death from an ordinary `kill`, and one
+ * the real uid that launched a setuid writer is allowed to send. Handling them changes nothing
+ * about a real fault and closes five more ways to strand the lock. `SIGABRT` and `SIGSYS` are
+ * handled for the same reason: the kernel raises neither. A transaction therefore turns an `abort`
  * into a clean exit; with no transaction held the handler restores the
  * default and re-raises, so an `abort` remains one.
  */

@@ -40,7 +40,8 @@
 /* The events a registration may watch; the rest are how it is reported. */
 #define EPOLL_EVENTS 0x0000FFFFu
 
-/* Format: the i386 struct epoll_event, packed: the events, then the data. */
+/* Format: struct epoll_event, packed on every architecture: the events,
+ * then the data. */
 #define EP_EVENT_SIZE 12u
 
 /* Policy: the events one wait returns at most, as Linux bounds maxevents. */
@@ -102,7 +103,7 @@ struct qlist {
     uint32_t n;
 };
 
-/* An event a wait took: the i386 struct epoll_event it goes out as, the
+/* An event a wait took: the struct epoll_event it goes out as, the
  * events and the data word, and the registration it came from by its id,
  * with what the report changed in it, which a failed copy puts back. */
 struct epoll_out {
@@ -805,8 +806,8 @@ long sys_epoll_wait(struct isr_params *params)
     int has_deadline;
     uint32_t deadline = poll_ms_deadline((int)SC_ARG(params, 3), &has_deadline);
 
-    return epoll_wait_common((int)SC_ARG(params, 0), SC_ARG(params, 1), (int)SC_ARG(params, 2), has_deadline,
-                             deadline);
+    return epoll_wait_common((int)SC_ARG(params, 0), SC_ARG(params, 1), (int)SC_ARG(params, 2),
+                             has_deadline, deadline);
 }
 
 long sys_epoll_pwait(struct isr_params *params)
@@ -818,8 +819,8 @@ long sys_epoll_pwait(struct isr_params *params)
     if (rc != 0) {
         return rc;
     }
-    return poll_mask_done(
-        epoll_wait_common((int)SC_ARG(params, 0), SC_ARG(params, 1), (int)SC_ARG(params, 2), has_deadline, deadline));
+    return poll_mask_done(epoll_wait_common((int)SC_ARG(params, 0), SC_ARG(params, 1),
+                                            (int)SC_ARG(params, 2), has_deadline, deadline));
 }
 
 /**
@@ -860,6 +861,6 @@ long sys_epoll_pwait2(struct isr_params *params)
     if (rc != 0) {
         return rc;
     }
-    return poll_mask_done(
-        epoll_wait_common((int)SC_ARG(params, 0), SC_ARG(params, 1), (int)SC_ARG(params, 2), has_deadline, deadline));
+    return poll_mask_done(epoll_wait_common((int)SC_ARG(params, 0), SC_ARG(params, 1),
+                                            (int)SC_ARG(params, 2), has_deadline, deadline));
 }
