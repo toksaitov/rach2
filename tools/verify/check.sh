@@ -20,7 +20,10 @@
 #      by the version tools/setup/judges records
 #   6. a readelf ABI check on a freshly linked musl binary (entry + load range)
 #   7. the kernel source-list guard (every rach2 .c on disk is in C_SRC), no
-#      product rule under tests/, and every source in a compilation database
+#      product rule under tests/, every source in a compilation database, and
+#      the architecture layer (tools/verify/archcheck.sh): the shared kernel
+#      code compiles for 32- and 64-bit ARM, reaches no architecture's or
+#      platform's own header, and has no assembly
 #   8. text style, in three parts: textcheck.sh for non-ASCII and dashes,
 #      prosecheck for the 80-column comment rule and for the vocabulary a
 #      script can decide (both beside this file).
@@ -105,7 +108,7 @@ fi
 
 hr "preflight: tools present"
 miss=0
-for t in i686-elf-gcc i686-elf-readelf cppcheck shellcheck clang-format; do
+for t in i686-elf-gcc i686-elf-readelf cppcheck shellcheck clang-format clang; do
     command -v "$t" >/dev/null 2>&1 || { echo "  MISSING: $t"; miss=1; }
 done
 if [ "$miss" -eq 0 ]; then echo "  PASS"; else echo "  FAIL"; fail=1; fi
@@ -329,7 +332,7 @@ fi
 
 # 7. kernel source-list guard: every rach2 .c on disk must be listed in C_SRC,
 #    so a newly added kernel source cannot be silently dropped from the build.
-hr "7/22 kernel source list (C_SRC vs disk) and the guest build lists"
+hr "7/22 kernel source list (C_SRC vs disk), the guest build lists and the architecture layer"
 if "$REPO/tools/verify/check_sources.sh" >"$VDIR/verify_sources.log" 2>&1 &&
    "$GUESTCHECK" "$REPO" >>"$VDIR/verify_sources.log" 2>&1; then
     echo "  PASS"
@@ -358,6 +361,11 @@ if sh "$REPO/tools/dev/gen_compile_commands.sh" >"$VDIR/verify_dbcheck.log" 2>&1
     echo "  PASS ($(tail -1 "$VDIR/verify_dbcheck.log"))"
 else
     echo "  FAIL: see $VDIR/verify_dbcheck.log"; fail=1
+fi
+if make -s -C "$REPO/rach2" check-arch >"$VDIR/verify_arch.log" 2>&1; then
+    echo "  PASS ($(tail -1 "$VDIR/verify_arch.log"))"
+else
+    echo "  FAIL: the architecture layer; see $VDIR/verify_arch.log"; fail=1
 fi
 
 # Text style: the mechanical natural-text checks (tools/verify/textcheck.sh). It
