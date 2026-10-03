@@ -60,9 +60,11 @@ host = host.replace('"krffs_hash_vectors.h"', '"' + str(repo / 'tests/host/krffs
 s = (w / 'sys/syscall_fs.c').read_text()
 v = (w / 'sys/fs/vfs.c').read_text()
 vh = (w / 'sys/fs/vfs.h').read_text()
+u = (w / 'sys/arch/i686/uabi.h').read_text()
 parts = ['#define main core_main\n#include "host.c"\n#undef main']
-for name, text in [('linux_stat', s), ('linux_stat64', s), ('vfs_stat', vh)]:
+for name, text in [('linux_stat', u), ('user_stat', u), ('vfs_stat', vh)]:
     parts.append(re.search(r'struct ' + name + r' \{.*?\n\};', text, re.S).group())
+parts.append(re.search(r'#define STAT_SET_INO.*', u).group())
 parts.append('''
 #define __user
 #define EFAULT 14
@@ -99,11 +101,11 @@ static const struct vpath *vfs_synth_vpath(struct vfs_mount *m, void *n)
 { (void)m; (void)n; return 0; }
 static int mnt_is_root(struct vfs_mount *m) { (void)m; return 1; }
 static void vfs_ref_release(struct vfs_ref *r) { (void)r; }
-static int synth_stat(const struct vpath *p, struct linux_stat64 *s, int f)
+static int synth_stat(const struct vpath *p, struct user_stat *s, int f)
 { (void)p; (void)s; (void)f; return -1; }
-static int vfs_fill_stat64(struct linux_stat64 *s, const struct vfs_ref *r)
+static int vfs_fill_stat64(struct user_stat *s, const struct vfs_ref *r)
 { (void)s; (void)r; return -1; }
-static void stat64_boot_times(struct linux_stat64 *s) { (void)s; }
+static void stat64_boot_times(struct user_stat *s) { (void)s; }
 static int names_tree_root(const char *p) { return p[0] == '/' && p[1] == '\\0'; }
 ''')
 for name in ['path_names_dir', 'stat64_node_times', 'stat64_root_times', 'krffs_fill_stat64',
@@ -122,7 +124,7 @@ int main(void)
     check(init_krffs(image, IMAGE_SIZE) == 0 && krffs_mkdir("/tmp") == 0, "root stat fixture");
     for (i = 0; i < 2; i++) {
         struct linux_stat old;
-        struct linux_stat64 wide;
+        struct user_stat wide;
         struct vfs_stat attr;
         check(do_old_stat(paths[i], &old, 1) == 0 && old.st_ino == 1 &&
               (old.st_mode & 0170000) == S_IFDIR, "root old stat inode is 1");
@@ -188,7 +190,7 @@ changes = {
            'return krffs_mix_id(node->parent_id, (const char *)node->name);'),
 'root-node': ('sys/fs/krffs.c', '    if (node->type == KRFFS_ROOT_NODE) {\n        return 1;\n    }\n', ''),
 'root-old': ('sys/syscall_fs.c', '        kst.st_ino = 1;\n', '        kst.st_ino = 0;\n'),
-'root-wide': ('sys/syscall_fs.c', '            kst.st_ino = kst.__st_ino = 1;\n', '            kst.st_ino = 0;\n'),
+'root-wide': ('sys/syscall_fs.c', '            STAT_SET_INO(&kst, 1);\n', '            kst.st_ino = 0;\n'),
 'harness': ('harness.c', '    if (child_poll() >= 0)\n        drain_ready();\n', '')}
 file, old, new = changes[sys.argv[2]]
 p = w / file

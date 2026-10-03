@@ -24,12 +24,16 @@
 #include "lib/kstring.h"
 #include "mm/paging.h"
 #include "mm/usercopy.h"
+#include "arch/i686/mmu.h"
 
 extern int dprintf(int fd, const char *format, ...);
 
 #define POOL 1024u
 #define TOP  0xC0000000u
 #define MIB  (1024u * 1024u)
+
+/* A word of the stack: argc, a pointer, an auxiliary vector entry. */
+#define W ((uint32_t)sizeof(unsigned long))
 
 static uint8_t pool[POOL][PAGE_SIZE];
 static uint8_t taken[POOL];
@@ -131,7 +135,7 @@ static int is_bad(const char *p)
     return p >= bad && p < bad + sizeof(bad);
 }
 
-int copy_from_user(void *dst, const void *src, uint32_t n)
+int copy_from_user(void *dst, const void __user *src, size_t n)
 {
     if (is_bad(src)) {
         return -EFAULT;
@@ -200,10 +204,10 @@ static int frame_str_is(const struct uimage *u, uint32_t va, const char *s)
 }
 
 /** The word at user address `va`, or 0xDEADBEEF when it is not mapped. */
-static uint32_t word(uint32_t va)
+static unsigned long word(uintptr_t va)
 {
-    uint8_t *p = at(va);
-    uint32_t w = 0xDEADBEEFu;
+    uint8_t *p = at((uint32_t)va);
+    unsigned long w = 0xDEADBEEFu;
 
     if (p != 0) {
         k_memcpy(&w, p, sizeof(w));
@@ -212,10 +216,10 @@ static uint32_t word(uint32_t va)
 }
 
 /** Whether the string at user address `va` is `s`. */
-static int str_is(uint32_t va, const char *s)
+static int str_is(unsigned long va, const char *s)
 {
     for (;; va++, s++) {
-        uint8_t *p = at(va);
+        uint8_t *p = at((uint32_t)va);
 
         if (p == 0 || *p != (uint8_t)*s) {
             return 0;
@@ -277,11 +281,11 @@ static void aux_ids(struct uimage_aux *aux, int secure)
 
 /** Check the auxiliary vector at `va` against `img`, `rnd`, `aux` and the
  * program's `path`, in the order the stack has it. */
-static void check_auxv(uint32_t va, const elf_image_t *img, const uint8_t rnd[16],
+static void check_auxv(uintptr_t va, const elf_image_t *img, const uint8_t rnd[16],
                        const struct uimage_aux *aux, const char *path)
 {
-    uint32_t want[15];
-    uint32_t rnd_at = word(va + 60u);
+    unsigned long want[15];
+    unsigned long rnd_at = word(va + 15u * W);
     int secure = aux->secure;
     int i;
 
@@ -298,10 +302,10 @@ static void check_auxv(uint32_t va, const elf_image_t *img, const uint8_t rnd[16
     want[10] = AT_CLKTCK;
     want[11] = 100;
     want[12] = AT_SECURE;
-    want[13] = (uint32_t)secure;
+    want[13] = (unsigned long)secure;
     want[14] = AT_RANDOM;
     for (i = 0; i < 15; i++) {
-        CHECK(word(va + 4u * (uint32_t)i) == want[i],
+        CHECK(word(va + W * (uint32_t)i) == want[i],
               "the auxiliary vector has the entries execve gives");
     }
     want[0] = AT_BASE;
@@ -316,15 +320,15 @@ static void check_auxv(uint32_t va, const elf_image_t *img, const uint8_t rnd[16
     want[9] = aux->egid;
     want[10] = AT_EXECFN;
     for (i = 0; i < 11; i++) {
-        CHECK(word(va + 64u + 4u * (uint32_t)i) == want[i],
+        CHECK(word(va + W * (16u + (uint32_t)i)) == want[i],
               "the auxiliary vector has the interpreter's base and the ids");
     }
-    CHECK(str_is(word(va + 108u), path), "AT_EXECFN points at the program's path");
-    CHECK(word(va + 112u) == AT_NULL && word(va + 116u) == 0,
+    CHECK(str_is(word(va + 27u * W), path), "AT_EXECFN points at the program's path");
+    CHECK(word(va + 28u * W) == AT_NULL && word(va + 29u * W) == 0,
           "the auxiliary vector ends in AT_NULL");
     CHECK((rnd_at & 15u) == 0, "AT_RANDOM is aligned to 16 bytes");
     for (i = 0; i < 16; i++) {
-        uint8_t *p = at(rnd_at + (uint32_t)i);
+        uint8_t *p = at((uint32_t)rnd_at + (uint32_t)i);
 
         CHECK(p != 0 && *p == rnd[i], "AT_RANDOM points at the bytes given");
     }
@@ -355,7 +359,7 @@ static void row_one_page(void)
     elf_image_t img;
     uint8_t rnd[16];
     struct uimage_aux aux;
-    uint32_t esp;
+    uintptr_t sp;
     uint32_t va;
     int zero = 1;
 
@@ -367,26 +371,26 @@ static void row_one_page(void)
     CHECK(uimage_place(&u, 2, 2) == 0, "one page: the information block is placed");
     CHECK(uimage_write(&u, 2, 2, &img, rnd, &aux) == 0, "one page: the stack is written");
     CHECK(uimage_map(&u, &dir) == 0, "one page: the stack is mapped");
-    esp = u.esp;
+    sp = u.sp;
     CHECK(u.nframes == 1 && uimage_bottom(&u) == TOP - PAGE_SIZE,
           "one page: the stack takes one page below the top");
     CHECK(nmaps == 1 && map_va[0] == TOP - PAGE_SIZE && map_flags[0] == 0x7u,
           "one page: the page is mapped user and writable below the top");
-    CHECK((esp & 15u) == 0 && esp >= TOP - PAGE_SIZE,
+    CHECK((sp & 15u) == 0 && sp >= TOP - PAGE_SIZE,
           "one page: the stack pointer is aligned to 16 bytes");
-    CHECK(word(esp) == 2, "one page: argc is 2");
-    CHECK(str_is(word(esp + 4u), "prog") && str_is(word(esp + 8u), "arg one"),
+    CHECK(word(sp) == 2, "one page: argc is 2");
+    CHECK(str_is(word(sp + W), "prog") && str_is(word(sp + 2u * W), "arg one"),
           "one page: argv points at its strings");
-    CHECK(word(esp + 12u) == 0, "one page: argv ends in NULL");
-    CHECK(str_is(word(esp + 16u), "PATH=/bin") && str_is(word(esp + 20u), "HOME=/"),
+    CHECK(word(sp + 3u * W) == 0, "one page: argv ends in NULL");
+    CHECK(str_is(word(sp + 4u * W), "PATH=/bin") && str_is(word(sp + 5u * W), "HOME=/"),
           "one page: envp points at its strings");
-    CHECK(word(esp + 24u) == 0, "one page: envp ends in NULL");
-    check_auxv(esp + 28u, &img, rnd, &aux, "/bin/prog");
+    CHECK(word(sp + 6u * W) == 0, "one page: envp ends in NULL");
+    check_auxv(sp + 7u * W, &img, rnd, &aux, "/bin/prog");
     CHECK(str_is(u.arg_start, "prog") && str_is(u.env_start, "PATH=/bin") &&
               u.env_end == u.execfn && u.auxv[0] == AT_PHDR && u.auxv[27] == u.execfn,
           "one page: the strings' ranges and the auxiliary vector are kept for /proc");
     CHECK(str_is(TOP - 10u, "/bin/prog"), "one page: the path is at the top");
-    for (va = TOP - PAGE_SIZE; va < esp; va++) {
+    for (va = TOP - PAGE_SIZE; va < sp; va++) {
         uint8_t *p = at(va);
 
         zero = zero && p != 0 && *p == 0;
@@ -430,7 +434,7 @@ static void row_many_pages(void)
     CHECK(uimage_place(&u, 3000, 1) == 0, "many pages: the information block is placed");
     CHECK(uimage_write(&u, 3000, 1, &img, rnd, &aux) == 0, "many pages: the stack is written");
     CHECK(uimage_map(&u, &dir) == 0, "many pages: the stack is mapped");
-    CHECK(u.nframes == (TOP - u.esp + PAGE_SIZE - 1u) / PAGE_SIZE && u.nframes > 5,
+    CHECK(u.nframes == (TOP - u.sp + PAGE_SIZE - 1u) / PAGE_SIZE && u.nframes > 5,
           "many pages: the frames cover the stack");
     CHECK(uimage_bottom(&u) == TOP - u.nframes * PAGE_SIZE,
           "many pages: the bottom is the lowest frame's page");
@@ -438,15 +442,15 @@ static void row_many_pages(void)
         right = right && nmaps == u.nframes && map_va[i] == TOP - (i + 1u) * PAGE_SIZE;
     }
     CHECK(right, "many pages: each page is mapped where the stack is");
-    CHECK(word(u.esp) == 3000, "many pages: argc is 3000");
+    CHECK(word(u.sp) == 3000, "many pages: argc is 3000");
     for (i = 0; i < 3000; i++) {
-        right = right && str_is(word(u.esp + 4u + 4u * i), names[i]);
+        right = right && str_is(word(u.sp + W * (1u + i)), names[i]);
     }
     CHECK(right, "many pages: each argv pointer points at its string");
-    CHECK(word(u.esp + 4u * 3001u) == 0 && str_is(word(u.esp + 4u * 3002u), env) &&
-              word(u.esp + 4u * 3003u) == 0,
+    CHECK(word(u.sp + W * 3001u) == 0 && str_is(word(u.sp + W * 3002u), env) &&
+              word(u.sp + W * 3003u) == 0,
           "many pages: envp points at its string and ends in NULL");
-    check_auxv(u.esp + 4u * 3004u, &img, rnd, &aux, "/p");
+    check_auxv(u.sp + W * 3004u, &img, rnd, &aux, "/p");
     uimage_release(&u);
     end_row("many pages: every frame is mapped or given back");
 }
@@ -470,15 +474,15 @@ static void row_pointers(void)
 {
     struct uimage u;
 
-    CHECK(uimage_start(&u, TOP, 0, 32768, 0) == -E2BIG,
+    CHECK(uimage_start(&u, TOP, 0, 131072u / W, 0) == -E2BIG,
           "pointers: pointers that take the whole budget are refused");
     uimage_release(&u);
-    CHECK(uimage_start(&u, TOP, 0, 0, 32767) == -E2BIG,
+    CHECK(uimage_start(&u, TOP, 0, 0, 131072u / W - 1u) == -E2BIG,
           "pointers: an empty argv has a pointer set aside for argv[0]");
     uimage_release(&u);
-    CHECK(uimage_start(&u, TOP, 0, 32767, 0) == 0 && u.room == 4u,
+    CHECK(uimage_start(&u, TOP, 0, 131072u / W - 1u, 0) == 0 && u.room == W,
           "pointers: the budget less one pointer is taken");
-    CHECK(uimage_push(&u, "abc") == 0 && uimage_push(&u, "") == -E2BIG,
+    CHECK(uimage_push(&u, &"abcdefg"[8u - W]) == 0 && uimage_push(&u, "") == -E2BIG,
           "pointers: the strings get what the pointers leave");
     uimage_release(&u);
     end_row("pointers: every frame is given back");
@@ -513,19 +517,19 @@ static void row_string(void)
 /** The strings fill the budget to its last byte, and no further. */
 static void row_budget_edge(void)
 {
-    static char s[131062];
+    static char s[131072];
     struct uimage u;
 
-    k_memset(s, 'b', sizeof(s) - 1u);
-    s[sizeof(s) - 1u] = '\0';
-    CHECK(uimage_start(&u, TOP, 0, 2, 0) == 0 && u.room == 131064u,
+    CHECK(uimage_start(&u, TOP, 0, 2, 0) == 0 && u.room == 131072u - 2u * W,
           "edge: the strings have the budget less the pointers");
+    k_memset(s, 'b', u.room - 3u);
+    s[u.room - 3u] = '\0';
     CHECK(uimage_push_user(&u, "/p") == 0, "edge: the path is taken");
     CHECK(uimage_push_user(&u, s) == -E2BIG, "edge: a string a byte past the budget is refused");
     CHECK(uimage_push_user(&u, s + 1) == 0 && u.used == u.room,
           "edge: the strings may fill the budget to its last byte");
     CHECK(uimage_push_user(&u, "") == -E2BIG, "edge: a string past a full budget is refused");
-    CHECK(uimage_place(&u, 2, 0) == 0 && uimage_bottom(&u) <= u.esp,
+    CHECK(uimage_place(&u, 2, 0) == 0 && uimage_bottom(&u) <= u.sp,
           "edge: the information block below a full budget has frames");
     uimage_release(&u);
     end_row("edge: every frame is given back");
@@ -561,12 +565,12 @@ static void row_script(void)
     CHECK(uimage_place(&u, 4, 1) == 0 && uimage_write(&u, 4, 1, &img, rnd, &aux) == 0 &&
               uimage_map(&u, &dir) == 0,
           "script: the stack is built");
-    CHECK(word(u.esp) == 4 && str_is(word(u.esp + 4u), "/bin/sh") &&
-              str_is(word(u.esp + 8u), "-e") && str_is(word(u.esp + 12u), "/s/script") &&
-              str_is(word(u.esp + 16u), "x") && word(u.esp + 20u) == 0,
+    CHECK(word(u.sp) == 4 && str_is(word(u.sp + W), "/bin/sh") &&
+              str_is(word(u.sp + 2u * W), "-e") && str_is(word(u.sp + 3u * W), "/s/script") &&
+              str_is(word(u.sp + 4u * W), "x") && word(u.sp + 5u * W) == 0,
           "script: argv is the interpreter, its argument, the script and the rest");
-    CHECK(str_is(word(u.esp + 24u), "E=1") && word(u.esp + 28u) == 0, "script: envp is kept");
-    check_auxv(u.esp + 32u, &img, rnd, &aux, "/s/script");
+    CHECK(str_is(word(u.sp + 6u * W), "E=1") && word(u.sp + 7u * W) == 0, "script: envp is kept");
+    check_auxv(u.sp + 8u * W, &img, rnd, &aux, "/s/script");
     uimage_release(&u);
     end_row("script: every frame is mapped or given back");
 }

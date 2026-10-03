@@ -191,7 +191,7 @@ uint32_t poll_ms_deadline(int timeout_ms, int *has_deadline)
     return 0;
 }
 
-int32_t poll_mask_set(uint32_t umask, uint32_t size)
+int32_t poll_mask_set(uintptr_t umask, uint32_t size)
 {
     (void)umask;
     (void)size;
@@ -203,12 +203,12 @@ int32_t poll_mask_done(int32_t ret)
     return ret;
 }
 
-int user_range_ok(uint32_t addr, uint32_t len)
+int user_range_ok(uintptr_t addr, size_t len)
 {
     return addr <= sizeof(arena) && len <= sizeof(arena) - addr;
 }
 
-int copy_from_user(void *dst, const void *src, uint32_t n)
+int copy_from_user(void *dst, const void __user *src, size_t n)
 {
     uint32_t at = (uint32_t)(unsigned long)src;
     uint8_t *d = dst;
@@ -223,7 +223,7 @@ int copy_from_user(void *dst, const void *src, uint32_t n)
     return 0;
 }
 
-int copy_to_user(void *dst, const void *src, uint32_t n)
+int copy_to_user(void __user *dst, const void *src, size_t n)
 {
     uint32_t at = (uint32_t)(unsigned long)dst;
     const uint8_t *s = src;

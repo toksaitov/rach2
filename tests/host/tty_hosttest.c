@@ -147,7 +147,7 @@ int fd_alloc(fd_table_t *table)
 }
 
 /** Host addresses are accepted; copy failures are injected separately. */
-int user_range_ok(uint32_t addr, uint32_t len)
+int user_range_ok(uintptr_t addr, size_t len)
 {
     (void)addr;
     (void)len;
@@ -155,7 +155,7 @@ int user_range_ok(uint32_t addr, uint32_t len)
 }
 
 /** Copy an ordinary chunk or fail the selected copy before transferring it. */
-int copy_from_user(void *dst, const void *src, uint32_t n)
+int copy_from_user(void *dst, const void __user *src, size_t n)
 {
     unsigned char *d = dst;
     const unsigned char *s = src;
@@ -171,7 +171,7 @@ int copy_from_user(void *dst, const void *src, uint32_t n)
 }
 
 /** Return the bytes actually consumed by the production read. */
-int copy_to_user(void *dst, const void *src, uint32_t n)
+int copy_to_user(void __user *dst, const void *src, size_t n)
 {
     unsigned char *d = dst;
     const unsigned char *s = src;

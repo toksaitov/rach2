@@ -89,6 +89,16 @@ void unmap_kernel_frame(uintptr_t va)
     mapped[region_page(va)] = 0;
 }
 
+uint32_t kirq_save(void)
+{
+    return 0;
+}
+
+void kirq_restore(uint32_t flags)
+{
+    (void)flags;
+}
+
 static unsigned klogs;
 
 void klog(int level, const char *subsystem, const char *format, ...)

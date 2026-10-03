@@ -55,6 +55,13 @@ void kirq_restore(uint32_t flags)
     irq_flags = flags;
 }
 
+/** No row waits for an interrupt. */
+void arch_idle(void)
+{}
+
+void arch_idle_masked(void)
+{}
+
 /** Capture the production record exactly as the suite receives it. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
@@ -102,7 +109,7 @@ void fpu_restore(const void *area)
 }
 
 /** No debug register is set in the host switch model. */
-void ptrace_switch_debug(const process_t *old, const process_t *next)
+void arch_debug_switch(const struct process *old, const struct process *next)
 {
     (void)old;
     (void)next;

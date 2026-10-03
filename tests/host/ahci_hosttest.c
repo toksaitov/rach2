@@ -319,7 +319,7 @@ void pci_enable_memory_space(pci_device_t *dev)
    every register access goes through the model. */
 static uint8_t window[REGS];
 
-uintptr_t map_mmio(uintptr_t phys, unsigned int size)
+uintptr_t map_mmio(uintptr_t phys, size_t size)
 {
     (void)phys;
     (void)size;
@@ -329,6 +329,13 @@ uintptr_t map_mmio(uintptr_t phys, unsigned int size)
 void k_udelay(uint32_t us)
 {
     (void)us;
+}
+
+/** The model's tables are in host memory, with no cache to write back. */
+void arch_dma_flush(const volatile void *p, size_t len)
+{
+    (void)p;
+    (void)len;
 }
 
 static int policy_allows = 1;
@@ -421,7 +428,7 @@ void kirq_restore(uint32_t flags)
     interrupts_masked = flags;
 }
 
-int lapic_ready(void)
+int isr_msi_ready(void)
 {
     return 0;
 }

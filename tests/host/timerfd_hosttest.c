@@ -80,7 +80,7 @@ void kirq_restore(uint32_t flags)
  * with `read_in_copy` a second read, as either can while the copy sleeps. A
  * destination of 0 is a buffer that cannot be written.
  */
-int copy_to_user(void *dst, const void *src, uint32_t len)
+int copy_to_user(void __user *dst, const void *src, size_t len)
 {
     if (tick_in_copy) {
         tick_in_copy = 0;
@@ -97,7 +97,7 @@ int copy_to_user(void *dst, const void *src, uint32_t len)
     return 0;
 }
 
-int copy_from_user(void *dst, const void *src, uint32_t len)
+int copy_from_user(void *dst, const void __user *src, size_t len)
 {
     k_memcpy(dst, src, len);
     return 0;

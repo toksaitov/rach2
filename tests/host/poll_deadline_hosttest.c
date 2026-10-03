@@ -25,17 +25,17 @@
  */
 #include "isr.h"
 struct isr_params;
-static int32_t sys_poll(struct isr_params *params);
-static int32_t sys_ppoll(struct isr_params *params);
-static int32_t sys__newselect(struct isr_params *params);
-static int32_t sys_select(struct isr_params *params);
-static int32_t sys_pselect6(struct isr_params *params);
+static long sys_poll(struct isr_params *params);
+static long sys_ppoll(struct isr_params *params);
+static long sys__newselect(struct isr_params *params);
+static long sys_select(struct isr_params *params);
+static long sys_pselect6(struct isr_params *params);
 struct fd_entry;
 struct wait_queue;
 static short poll_fd(struct fd_entry *e, short events, struct wait_queue **wq);
 static int poll_wait(int (*scan)(void *ctx, struct wait_queue **wqs), void *ctx, uint32_t n,
                      int has_deadline, uint32_t deadline);
-static int32_t poll_mask_set(uint32_t umask, uint32_t size);
+static int32_t poll_mask_set(uintptr_t umask, uint32_t size);
 static int32_t poll_mask_done(int32_t ret);
 #include "io/poll.c"
 

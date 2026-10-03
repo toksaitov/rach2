@@ -139,33 +139,13 @@ void klog(int level, const char *subsystem, const char *format, ...)
     (void)format;
 }
 
-/* The port instructions the kernel headers declare. Nothing here uses a port,
-   so these exist only to satisfy the link. */
-uint8_t inb(uint16_t port)
-{
-    (void)port;
-    return 0;
-}
-
-void outb(uint16_t port, uint8_t v)
+/* The driver's reset goes through the card's I/O window, which is what this
+   is. The model supplies its own `wio`, so nothing here is reached; it
+   exists to satisfy the link. */
+void pci_io_write32(uint16_t port, uint32_t v)
 {
     (void)port;
     (void)v;
-}
-
-/* The driver's reset goes through the card's I/O window, which is what these
-   are. The model supplies its own `wio`, so nothing here is reached; they
-   exist to satisfy the link. */
-void outd(uint16_t port, uint32_t v)
-{
-    (void)port;
-    (void)v;
-}
-
-uint32_t ind(uint16_t port)
-{
-    (void)port;
-    return 0;
 }
 
 int pci_find_device_by_id(unsigned short vendor, unsigned short device, pci_device_t *out)
@@ -243,7 +223,7 @@ void pci_enable_interrupts(pci_device_t *dev)
 static int map_refused;
 static unsigned map_size_asked;
 
-unsigned int map_mmio(unsigned int phys, unsigned int size)
+uintptr_t map_mmio(uintptr_t phys, size_t size)
 {
     map_size_asked = size;
     return map_refused ? 0 : phys;

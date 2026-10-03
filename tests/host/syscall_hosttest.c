@@ -18,34 +18,46 @@ static void init_syscall(void);
 static int32_t raw_seek_resolve(uint64_t cur, uint64_t size, long long delta, int whence,
                                 uint64_t *out);
 static int pgrp_in_session(int pgid, int sid);
-static int user_access_ok(uint32_t addr, uint32_t len);
-static int user_buffer_ok(uint32_t addr, uint32_t len, int write);
-static int32_t sys_socketcall(isr_params_t *params);
-static int32_t sys_nanosleep(isr_params_t *params);
-static int32_t sys_clock_getres(isr_params_t *params);
-static int32_t sys_clock_nanosleep(isr_params_t *params);
-static int32_t sys_setitimer(isr_params_t *params);
-static int32_t sys_getitimer(isr_params_t *params);
+static int user_access_ok(uintptr_t addr, size_t len);
+static int user_buffer_ok(uintptr_t addr, size_t len, int write);
+static long sys_reboot(isr_params_t *params);
+static long sys_clock_settime(isr_params_t *params);
+static long sys_clock_settime64(isr_params_t *params);
+static long sys_adjtimex(isr_params_t *params);
+static long sys_clock_adjtime(isr_params_t *params);
+static long sys_clock_adjtime64(isr_params_t *params);
+static long sys_settimeofday(isr_params_t *params);
+static long sys_stime(isr_params_t *params);
+static long sys_getrandom(isr_params_t *params);
+static long sys_ioctl(isr_params_t *params);
+static long sys_sysinfo(isr_params_t *params);
+static long sys_syslog(isr_params_t *params);
+static long sys_socketcall(isr_params_t *params);
+static long sys_nanosleep(isr_params_t *params);
+static long sys_clock_getres(isr_params_t *params);
+static long sys_clock_nanosleep(isr_params_t *params);
+static long sys_setitimer(isr_params_t *params);
+static long sys_getitimer(isr_params_t *params);
 static int32_t dgram_send(struct socket *sock, uint32_t dst_ip, uint16_t dst_port,
                           const uint8_t *buf, uint16_t len);
 static int32_t clock_now(int32_t clk, int64_t *sec, int32_t *nsec);
-static int32_t sys_accept4(isr_params_t *params);
-static int32_t sys_bind(isr_params_t *params);
-static int32_t sys_connect(isr_params_t *params);
-static int32_t sys_getpeername(isr_params_t *params);
-static int32_t sys_getsockname(isr_params_t *params);
-static int32_t sys_getsockopt(isr_params_t *params);
-static int32_t sys_listen(isr_params_t *params);
-static int32_t sys_recvfrom(isr_params_t *params);
-static int32_t sys_recvmmsg(isr_params_t *params);
-static int32_t sys_recvmsg(isr_params_t *params);
-static int32_t sys_sendmmsg(isr_params_t *params);
-static int32_t sys_sendmsg(isr_params_t *params);
-static int32_t sys_sendto(isr_params_t *params);
-static int32_t sys_setsockopt(isr_params_t *params);
-static int32_t sys_shutdown(isr_params_t *params);
-static int32_t sys_socket(isr_params_t *params);
-static int32_t sys_socketpair(isr_params_t *params);
+static long sys_accept4(isr_params_t *params);
+static long sys_bind(isr_params_t *params);
+static long sys_connect(isr_params_t *params);
+static long sys_getpeername(isr_params_t *params);
+static long sys_getsockname(isr_params_t *params);
+static long sys_getsockopt(isr_params_t *params);
+static long sys_listen(isr_params_t *params);
+static long sys_recvfrom(isr_params_t *params);
+static long sys_recvmmsg(isr_params_t *params);
+static long sys_recvmsg(isr_params_t *params);
+static long sys_sendmmsg(isr_params_t *params);
+static long sys_sendmsg(isr_params_t *params);
+static long sys_sendto(isr_params_t *params);
+static long sys_setsockopt(isr_params_t *params);
+static long sys_shutdown(isr_params_t *params);
+static long sys_socket(isr_params_t *params);
+static long sys_socketpair(isr_params_t *params);
 #include "syscall.c"
 #include "syscall_net.c"
 #include "ns_first.h"
@@ -65,7 +77,7 @@ int socket_outside(const struct socket *s)
 volatile uint32_t kernel_ticks;
 volatile uint32_t kernel_uptime_seconds;
 volatile uint32_t kernel_second_ticks;
-bool vga_graphics_mode;
+gfx_info_t gfx_current;
 uint32_t net_ip_addr = 0x0a00020fu;
 static struct socket sock;
 static struct tcb control;
@@ -92,20 +104,20 @@ static int sibling_runs;
     } while (0)
 
 /** Refuse every range outside the model's user memory. */
-int user_range_ok(uint32_t addr, uint32_t len)
+int user_range_ok(uintptr_t addr, size_t len)
 {
     return addr && addr <= sizeof(user) && len <= sizeof(user) - addr;
 }
 
 /** Model mapped user pages after the range check. */
-int vm_prefault_range(uint32_t addr, uint32_t len, int write)
+int vm_prefault_range(uintptr_t addr, uintptr_t len, int write)
 {
     (void)write;
     return user_range_ok(addr, len);
 }
 
 /** Copy the syscall result without truncating a native pointer. */
-int copy_to_user(void *dst, const void *src, uint32_t len)
+int copy_to_user(void __user *dst, const void *src, size_t len)
 {
     uint32_t at = (uint32_t)(unsigned long)dst;
     if (!user_range_ok(at, len))
@@ -115,7 +127,7 @@ int copy_to_user(void *dst, const void *src, uint32_t len)
 }
 
 /** Copy a socket address from the same arena. */
-int copy_from_user(void *dst, const void *src, uint32_t len)
+int copy_from_user(void *dst, const void __user *src, size_t len)
 {
     uint32_t at = (uint32_t)(unsigned long)src;
     if (!user_range_ok(at, len))
@@ -227,22 +239,22 @@ process_t *get_process(uint32_t pid)
 }
 
 /** Record the actual request to enter graphics mode. */
-uint8_t *vga_mode13h_enter(void)
+uint8_t *fb_enter(void)
 {
     enters++;
-    vga_graphics_mode = true;
+    gfx_current.mode = GFX_MODE_VGA_13H;
     return NULL;
 }
 
 /** Record the request that would restore the text display. */
-void vga_mode13h_exit(void)
+void fb_exit(void)
 {
     exits++;
-    vga_graphics_mode = false;
+    gfx_current.mode = GFX_MODE_NONE;
 }
 
 /** Record palette writes without accessing a hardware port. */
-void vga_mode13h_set_palette(const uint8_t *data)
+void fb_set_palette(const uint8_t *data)
 {
     (void)data;
     palettes++;
@@ -331,11 +343,11 @@ static void framebuffer(void)
 {
     proc.pid = proc.tgid = 1;
     CHECK(framebuffer_ioctl(FB_MODE_13H, 0) == 0, "acquire framebuffer");
-    CHECK(enters == 1 && fb_owner_pid == 1 && vga_graphics_mode, "graphics entered");
+    CHECK(enters == 1 && fb_owner_pid == 1 && gfx_is_active(), "graphics entered");
     CHECK(framebuffer_ioctl(FB_MODE_13H, 0) == 0 && enters == 1, "mode request is idempotent");
     CHECK(framebuffer_ioctl(FB_MODE_TEXT, 0) == 0 && !fb_owner_pid, "release framebuffer");
     CHECK(framebuffer_ioctl(FB_MODE_13H, 0) == 0, "reacquire framebuffer");
-    CHECK(enters == 2 && vga_graphics_mode && fb_owner_pid == 1, "graphics reentered");
+    CHECK(enters == 2 && gfx_is_active() && fb_owner_pid == 1, "graphics reentered");
     CHECK(framebuffer_ioctl(FB_MODE_TEXT, 0) == 0, "release before second owner");
     proc.pid = proc.tgid = 2;
     CHECK(framebuffer_ioctl(FB_MODE_13H, 0) == 0, "second owner acquires");
@@ -343,7 +355,7 @@ static void framebuffer(void)
     CHECK(framebuffer_ioctl(FB_MODE_TEXT, 0) == -EBUSY, "stale text request refused");
     CHECK(framebuffer_ioctl(FB_MODE_13H, 0) == -EBUSY, "stale graphics request refused");
     CHECK(framebuffer_ioctl(FB_SETPALETTE, 16) == -EBUSY, "stale palette request refused");
-    CHECK(fb_owner_pid == 2 && vga_graphics_mode && enters == 3 && exits == 2 && !palettes,
+    CHECK(fb_owner_pid == 2 && gfx_is_active() && enters == 3 && exits == 2 && !palettes,
           "second owner's display unchanged");
     proc.pid = proc.tgid = 2;
     CHECK(framebuffer_ioctl(FB_SETPALETTE, 0) == -EFAULT, "null palette refused");
@@ -545,6 +557,9 @@ static void model_at(uint32_t tick)
     current_proc->state = PROC_RUNNING;
     current_proc->wakeup_tick = 0;
 }
+
+/* A word of the 0xA5 bytes a call's buffer is filled with before it runs. */
+#define UNWRITTEN ((long)(~0UL / 0xFFu * 0xA5u))
 
 /** The remainder the last call wrote. */
 static struct kernel_timespec remainder(void)
@@ -1158,7 +1173,7 @@ static void clock_sleeps(void)
     CHECK(clock_sleep_call(&p) == 0 && blocked_until == 1003 && kernel_ticks == 1003,
           "an interval of three ticks from tick 1000 sleeps until 1003");
     rem = remainder();
-    CHECK(rem.tv_sec == (int32_t)0xA5A5A5A5, "an interval that ran its length writes nothing");
+    CHECK(rem.tv_sec == UNWRITTEN, "an interval that ran its length writes nothing");
     ask_clock_sleep(&p, 0, 0, 0, 30000000);
     uptime_at(2000);
     pending = 1;
@@ -1216,7 +1231,7 @@ static void clock_sleeps(void)
     pending = 1;
     CHECK(clock_sleep_call(&p) == -EINTR, "a signal ends an absolute sleep");
     rem = remainder();
-    CHECK(rem.tv_sec == (int32_t)0xA5A5A5A5, "and leaves no remainder");
+    CHECK(rem.tv_sec == UNWRITTEN, "and leaves no remainder");
 
     proc.utime = 250;
     proc.stime = 120;
@@ -1236,7 +1251,7 @@ static void clock_sleeps(void)
     pending = 1;
     CHECK(clock_sleep_call(&p) == -EINTR, "a signal ends a wait for a CPU time not reached");
     rem = remainder();
-    CHECK(rem.tv_sec == (int32_t)0xA5A5A5A5, "and an absolute one leaves no remainder");
+    CHECK(rem.tv_sec == UNWRITTEN, "and an absolute one leaves no remainder");
     cpu_clock_sibling();
 }
 

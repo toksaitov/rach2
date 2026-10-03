@@ -9,6 +9,7 @@
  */
 
 #include "../../rach2/sys/usb/usb.c"
+#include "../../rach2/sys/arch/x86/isr.h"
 
 extern int printf(const char *format, ...);
 
@@ -116,21 +117,27 @@ void usb_stamp_pump(uint32_t entry, uint32_t event, int msi, int took)
     (void)took;
 }
 
-int lapic_ready(void)
+int isr_msi_ready(void)
 {
     return apic_ready;
 }
 
-int lapic_pending(uint8_t vector)
+int isr_vector_pending(int vector)
 {
     vector_queries[vector]++;
     return vector == pending_vector;
 }
 
-int pic_irq_pending(uint8_t irq)
+int isr_line_pending(int line)
 {
-    irq_queries[irq]++;
-    return irq == pending_irq;
+    irq_queries[line]++;
+    return line == pending_irq;
+}
+
+/** The interrupt flag, bit 9 of the modelled flags. */
+int kirq_enabled(void)
+{
+    return (irq_flags & 0x200u) != 0;
 }
 
 int isr_alloc_vector(void)

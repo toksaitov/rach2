@@ -132,6 +132,18 @@ void kirq_restore(uint32_t flags)
     (void)flags;
 }
 
+/** No row switches to a process, so the context is never laid out. */
+void arch_context_init(struct process *proc, void (*entry)(void))
+{
+    (void)proc;
+    (void)entry;
+}
+
+int arch_context_check(void)
+{
+    return 0;
+}
+
 /** No row takes a lock. */
 int lock_any(void)
 {

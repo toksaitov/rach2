@@ -15,6 +15,7 @@
  * registration for output is not told of a write.
  */
 #include "io/eventfd.c"
+#include "lib/kstring.h"
 
 extern int printf(const char *format, ...);
 
@@ -43,7 +44,7 @@ static int nested;
  * counter runs first, as another thread would while the copy sleeps. A
  * destination of 0 is a buffer that cannot be written.
  */
-int copy_to_user(void *dst, const void *src, uint32_t len)
+int copy_to_user(void __user *dst, const void *src, size_t len)
 {
     if (nested) {
         nested = 0;
@@ -57,7 +58,7 @@ int copy_to_user(void *dst, const void *src, uint32_t len)
     return 0;
 }
 
-int copy_from_user(void *dst, const void *src, uint32_t len)
+int copy_from_user(void *dst, const void __user *src, size_t len)
 {
     k_memcpy(dst, src, len);
     return 0;

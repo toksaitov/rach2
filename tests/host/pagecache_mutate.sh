@@ -108,8 +108,8 @@ import sys
 path = Path(sys.argv[1])
 source = path.read_text()
 source, count = re.subn(
-    r"^int32_t sys_sync\(isr_params_t \*params\)\n\{.*?^\}",
-    "int32_t sys_sync(isr_params_t *params)\n{\n"
+    r"^long sys_sync\(isr_params_t \*params\)\n\{.*?^\}",
+    "long sys_sync(isr_params_t *params)\n{\n"
     "    (void)params;\n    vfs_sync_all();\n    pc_sync();\n    return 0;\n}",
     source, flags=re.M | re.S)
 if count != 1:

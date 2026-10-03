@@ -19,6 +19,7 @@
  */
 
 #include "proc/elf.c"
+#include "arch/i686/mmu.h"
 
 static int fails;
 static int alloc_reached;
@@ -51,6 +52,14 @@ uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
     phys = ++frame_count * PAGE_SIZE;
     pt->pages[virt_addr / PAGE_SIZE % 1024] = (uint32_t)phys | 7u;
     return phys;
+}
+
+/** The frame mapped at `addr`, from the tables `alloc_user_page` fills. */
+uintptr_t paging_user_phys(page_dir_t *dir, uintptr_t addr)
+{
+    page_table_t *pt = dir->logical_page_tables[addr / PAGE_SIZE / 1024];
+
+    return pt ? (uintptr_t)(pt->pages[addr / PAGE_SIZE % 1024] & ~0xFFFu) : 0;
 }
 
 void paging_set_writable(page_dir_t *dir, uintptr_t addr, bool writable)
@@ -90,7 +99,7 @@ void vm_init(vm_space_t *vm)
     (void)vm;
 }
 
-int vm_insert(vm_space_t *vm, uint32_t start, uint32_t end, uint32_t prot, vm_type_t type)
+int vm_insert(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot, vm_type_t type)
 {
     (void)vm;
     (void)start;

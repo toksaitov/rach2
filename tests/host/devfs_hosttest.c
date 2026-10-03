@@ -97,7 +97,7 @@ int loop_attach_file(int index, const char *path, int writable, uint32_t flags)
     return -ENXIO;
 }
 
-int32_t loop_ioctl(int index, int privileged, uint32_t request, uint32_t arg)
+int32_t loop_ioctl(int index, int privileged, uint32_t request, uintptr_t arg)
 {
     (void)index;
     (void)privileged;
@@ -106,7 +106,7 @@ int32_t loop_ioctl(int index, int privileged, uint32_t request, uint32_t arg)
     return -ENXIO;
 }
 
-int32_t loop_control_ioctl(uint32_t request, uint32_t arg)
+int32_t loop_control_ioctl(uint32_t request, uintptr_t arg)
 {
     (void)request;
     (void)arg;
@@ -210,7 +210,7 @@ int block_request(block_device_t *dev, int write, uint64_t lba, uint32_t count, 
  * reads a caller through this stub, and a byte the stub leaves unwritten is
  * a byte it reports as read uninitialized, as in the screen log's write.
  */
-int copy_from_user(void *dst, const void *src, uint32_t size)
+int copy_from_user(void *dst, const void __user *src, size_t size)
 {
     uint32_t i;
 
@@ -221,7 +221,7 @@ int copy_from_user(void *dst, const void *src, uint32_t size)
     return unexpected();
 }
 
-int copy_to_user(void *dst, const void *src, uint32_t size)
+int copy_to_user(void __user *dst, const void *src, size_t size)
 {
     return copy_from_user(dst, src, size);
 }
@@ -372,17 +372,9 @@ void suspend_wake(void)
     unexpected();
 }
 
-void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *name)
+void rtc_alarm_attach(isr_handler_t handler)
 {
-    (void)vector;
     (void)handler;
-    (void)name;
-    unexpected();
-}
-
-void pic_unmask_irq(uint8_t irq)
-{
-    (void)irq;
     unexpected();
 }
 

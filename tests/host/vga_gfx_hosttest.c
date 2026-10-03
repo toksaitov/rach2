@@ -140,18 +140,18 @@ static unsigned int row_transition(unsigned int point, uint32_t initial_mask)
     pending = 0;
     inject_at = point;
     expected_mode = 1;
-    CHECK(vga_mode13h_enter() == aperture, "entry returns aperture");
+    CHECK(fb_enter() == aperture, "entry returns aperture");
     CHECK(crtc[9] == 0x41, "entry programs maximum scan line");
     CHECK(masked == initial_mask, "entry restores caller flags");
     total = accesses;
-    vga_mode13h_enter();
+    fb_enter();
     CHECK(accesses == total && masked == initial_mask, "repeated entry restores flags");
     expected_mode = 0;
-    vga_mode13h_exit();
+    fb_exit();
     CHECK(crtc[9] == 0x4F, "exit programs maximum scan line");
     CHECK(masked == initial_mask, "exit restores caller flags");
     total = accesses;
-    vga_mode13h_exit();
+    fb_exit();
     CHECK(accesses == total && masked == initial_mask, "repeated exit restores flags");
     CHECK(unmasked_accesses == 0, "font and mode ports exclude interrupts");
     if (point && point <= total)
@@ -160,7 +160,6 @@ static unsigned int row_transition(unsigned int point, uint32_t initial_mask)
     return total;
 }
 
-/** Try every port boundary, including font mapping and palette restoration. */
 /** The font lands at each glyph's character and reads back. */
 static void row_font(void)
 {
@@ -177,6 +176,7 @@ static void row_font(void)
     font_row = 0;
 }
 
+/** Try every port boundary, including font mapping and palette restoration. */
 int main(void)
 {
     unsigned int point, total;

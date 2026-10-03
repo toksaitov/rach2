@@ -4095,10 +4095,10 @@ probe threadmusl
 file rach2/sys/syscall_fs.c
 expect THREADMUSL FAIL (a thread's palette on the framebuffer it opened
 old
-    vga_mode13h_enter();
+    fb_enter();
     fb_owner_pid = current_proc->tgid;
 new
-    vga_mode13h_enter();
+    fb_enter();
     fb_owner_pid = current_proc->pid;
 end
 

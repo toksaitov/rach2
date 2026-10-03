@@ -95,8 +95,8 @@ if fault == "frames":
     old = "    to_read -= to_read % frame_bytes;"
     new = "    (void)frame_bytes;"
 elif fault in ("gfx-enter", "gfx-exit", "cursor"):
-    name = {"gfx-enter": "uint8_t *vga_mode13h_enter(void)",
-            "gfx-exit": "void vga_mode13h_exit(void)",
+    name = {"gfx-enter": "uint8_t *fb_enter(void)",
+            "gfx-exit": "void fb_exit(void)",
             "cursor": "void vga_text_release(void)"}[fault]
     start = s.index(name + "\n{")
     end = s.index("\n}", start) + 2

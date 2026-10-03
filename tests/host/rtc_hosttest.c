@@ -25,6 +25,7 @@
 
 #include "rtc.h"
 #include "pit.h"
+#include "cmos.h"
 
 static int fails;
 
@@ -101,6 +102,21 @@ int pic_irq_pending(uint8_t irq)
         status = 0x80;
     }
     return pending;
+}
+
+/** No row attaches the alarm's interrupt. */
+void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *name)
+{
+    (void)vector;
+    (void)handler;
+    (void)name;
+    CHECK(0);
+}
+
+void pic_unmask_irq(uint8_t irq)
+{
+    (void)irq;
+    CHECK(0);
 }
 
 void klog(int level, const char *subsystem, const char *format, ...)

@@ -15,14 +15,16 @@
 
 /* The stubs block_probe links against; this test drives only the partition
  * view. */
-int ata_init(void)
-{
-    return -1;
-}
 int ahci_init(void)
 {
     return -1;
 }
+int nvme_init(void)
+{
+    return -1;
+}
+void platform_disks_probe(void)
+{}
 int kcmdline_has(const char *token)
 {
     (void)token;

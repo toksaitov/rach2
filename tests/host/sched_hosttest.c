@@ -45,6 +45,13 @@ void kirq_restore(uint32_t flags)
     irq_flags = flags;
 }
 
+/** No row waits for an interrupt. */
+void arch_idle(void)
+{}
+
+void arch_idle_masked(void)
+{}
+
 /** No process here arms a timer of processor time, which posts a signal. */
 void signal_post(process_t *target, int signo)
 {
@@ -81,7 +88,7 @@ void fpu_restore(const void *area)
 }
 
 /** Check the mask at the debug registers' switch; no row sets any. */
-void ptrace_switch_debug(const process_t *old, const process_t *next)
+void arch_debug_switch(const struct process *old, const struct process *next)
 {
     (void)old;
     (void)next;

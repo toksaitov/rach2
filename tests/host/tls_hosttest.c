@@ -12,9 +12,35 @@
  */
 
 #include "tls.h"
-#include "tables/gdt.h" /* GDT_TLS_ENTRY */
+#include "arch/i686/gdt.h" /* GDT_TLS_ENTRY */
+#include "mm/usercopy.h"
+#include "proc/process.h"
 
 static int fails;
+
+/* The system calls beside the decoding, which no row makes. */
+process_t *current_proc;
+
+int copy_from_user(void *dst, const void __user *src, size_t len)
+{
+    (void)dst;
+    (void)src;
+    (void)len;
+    return -1;
+}
+
+int copy_to_user(void __user *dst, const void *src, size_t len)
+{
+    (void)dst;
+    (void)src;
+    (void)len;
+    return -1;
+}
+
+void gdt_set_tls(uint32_t base)
+{
+    (void)base;
+}
 
 #define CHECK(cond)    \
     do {               \

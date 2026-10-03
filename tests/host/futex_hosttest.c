@@ -80,7 +80,7 @@ static void word_set(uint32_t addr, uint32_t w)
 /** Bring a range in; a fault for a write taken with interrupts on is a
  * sleep in which the waiter on the word at `waiters_at` sets its bit, and
  * one at `slow_at` a sleep of `slow_ticks` ticks. */
-int vm_prefault_range(uint32_t addr, uint32_t len, int write)
+int vm_prefault_range(uintptr_t addr, uintptr_t len, int write)
 {
     if (!in_user(addr, len)) {
         return 0;
@@ -96,7 +96,7 @@ int vm_prefault_range(uint32_t addr, uint32_t len, int write)
     return 1;
 }
 
-int copy_from_user(void *dst, const void __user *src, uint32_t n)
+int copy_from_user(void *dst, const void __user *src, size_t n)
 {
     uint32_t at = (uint32_t)(unsigned long)src;
 
@@ -109,7 +109,7 @@ int copy_from_user(void *dst, const void __user *src, uint32_t n)
 
 /** Copy out, ending the thread `ends_at_copy` first, once, as a sleep for
  * the page could let it end and be reaped. */
-int copy_to_user(void __user *dst, const void *src, uint32_t n)
+int copy_to_user(void __user *dst, const void *src, size_t n)
 {
     uint32_t at = (uint32_t)(unsigned long)dst;
 
@@ -169,14 +169,14 @@ void get_current_time(int64_t *seconds, int64_t *nanoseconds)
     *nanoseconds = 0;
 }
 
-vma_t *vm_find(vm_space_t *vm, uint32_t addr)
+vma_t *vm_find(vm_space_t *vm, uintptr_t addr)
 {
     (void)vm;
     (void)addr;
     return NULL;
 }
 
-uintptr_t paging_user_phys(struct page_dir *dir, uint32_t addr)
+uintptr_t paging_user_phys(page_dir_t *dir, uintptr_t addr)
 {
     (void)dir;
     (void)addr;

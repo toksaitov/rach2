@@ -88,7 +88,7 @@ void *k_memset(void *dst, int c, size_t n)
 }
 
 /** Resolve one page, allowing a peer to run only when allocation is needed. */
-int vm_prefault_range(uint32_t addr, uint32_t len, int write)
+int vm_prefault_range(uintptr_t addr, uintptr_t len, int write)
 {
     uint32_t page;
 

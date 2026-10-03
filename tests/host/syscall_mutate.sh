@@ -104,7 +104,7 @@ changes = {
         'if (fb_owner_pid != current_proc->tgid &&',
         'if (0 && fb_owner_pid != current_proc->tgid &&'),
     'framebuffer-reentry': ('syscall',
-        'if (!vga_graphics_mode) {',
+        'if (!gfx_is_active()) {',
         'if (0) {'),
     'sleep-mask': ('syscall',
         'uint32_t flags = kirq_save();\n'

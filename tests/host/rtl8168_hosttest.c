@@ -260,7 +260,7 @@ static int model_arrive_during_drain; /* frames that arrive while the ring is dr
 static unsigned model_arrive_slot = 1;
 static unsigned model_log_len;
 
-int lapic_ready(void)
+int isr_msi_ready(void)
 {
     return model_lapic;
 }
@@ -397,7 +397,7 @@ void pci_disable_bus_master(pci_device_t *dev)
     pci_master_enabled = 0;
 }
 
-unsigned int map_mmio(unsigned int phys, unsigned int size)
+uintptr_t map_mmio(uintptr_t phys, size_t size)
 {
     (void)size;
     return phys;

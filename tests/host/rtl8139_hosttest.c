@@ -67,13 +67,13 @@ void klog(int level, const char *subsystem, const char *format, ...)
 }
 
 /** Supply only the receiver's empty flag. */
-uint8_t inb(uint16_t port)
+uint8_t pci_io_read8(uint16_t port)
 {
     return port == RTL_CHIPCMD && !occupied ? RTL_CMD_RXEMPTY : 0;
 }
 
 /** Supply the pending sources and the completed frame's end. */
-uint16_t inw(uint16_t port)
+uint16_t pci_io_read16(uint16_t port)
 {
     if (port == RTL_ISR) {
         return pending;
@@ -82,21 +82,21 @@ uint16_t inw(uint16_t port)
 }
 
 /** Discovery is unused, so no station-address register is supplied. */
-uint32_t ind(uint16_t port)
+uint32_t pci_io_read32(uint16_t port)
 {
     (void)port;
     return 0;
 }
 
 /** Accept unused control writes; this model starts with a configured ring. */
-void outb(uint16_t port, uint8_t value)
+void pci_io_write8(uint16_t port, uint8_t value)
 {
     (void)port;
     (void)value;
 }
 
 /** Acknowledge status and release a frame only at its expected read pointer. */
-void outw(uint16_t port, uint16_t value)
+void pci_io_write16(uint16_t port, uint16_t value)
 {
     if (port == RTL_ISR) {
         pending &= (uint16_t)~value;
@@ -109,7 +109,7 @@ void outw(uint16_t port, uint16_t value)
 }
 
 /** Record whether a transmit descriptor starts with interrupts bracketed. */
-void outd(uint16_t port, uint32_t value)
+void pci_io_write32(uint16_t port, uint32_t value)
 {
     (void)value;
     if (port >= RTL_TSD0 && port < RTL_TSD0 + RTL_TX_NUM * 4) {

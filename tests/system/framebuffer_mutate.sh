@@ -124,7 +124,7 @@ path = Path(sys.argv[1])
 old, new = {
     'owner': ('if (fb_owner_pid != current_proc->tgid &&',
               'if (0 && fb_owner_pid != current_proc->tgid &&'),
-    'reentry': ('if (!vga_graphics_mode) {', 'if (0) {'),
+    'reentry': ('if (!gfx_is_active()) {', 'if (0) {'),
 }[sys.argv[2]]
 text = path.read_text()
 if text.count(old) != 1:

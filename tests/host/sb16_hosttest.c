@@ -7,12 +7,7 @@
 #include "audio/audio_debug.h"
 #include "audio/hda.h"
 
-static void test_halt(const char *instruction);
-#define __asm__
-#define __volatile__(instruction) test_halt(instruction)
 #include "audio/audio_debug.c"
-#undef __volatile__
-#undef __asm__
 
 extern int printf(const char *format, ...);
 static int failures;
@@ -243,13 +238,12 @@ static void row_callback(void)
     CHECK(dma_buffer[0] == queued && dma_buffer[1] == 128, "ring refill remains available");
 }
 
-/** Replace HLT with one timer tick and twelve completed DMA blocks. */
-static void test_halt(const char *instruction)
+/** Replace the halt with one timer tick and twelve completed DMA blocks. */
+void arch_halt(void)
 {
     static const uint32_t half_periods[] = {84, 75, 66, 63, 56};
     unsigned int block, note = kernel_ticks / 40;
 
-    CHECK(audio_str_equal(instruction, "hlt"), "only hlt is substituted");
     CHECK(note < 5, "scale finishes within its tick count");
     if (note < 5) {
         CHECK(_tone_half_period == half_periods[note], "scale retunes all five notes");

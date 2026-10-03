@@ -39,10 +39,10 @@ static int fs_node_is_held(const krffs_node_t *node);
 static void fs_node_moved(const krffs_node_t *from, krffs_node_t *to);
 static void fd_release_backing(fd_entry_t *e);
 static void fd_holds_release(void);
-static int32_t sys_ftruncate(isr_params_t *params);
-static int32_t sys_ftruncate64(isr_params_t *params);
-static int32_t sys_write(isr_params_t *params);
-static int32_t sys_writev(isr_params_t *params);
+static long sys_ftruncate(isr_params_t *params);
+static long sys_ftruncate64(isr_params_t *params);
+static long sys_write(isr_params_t *params);
+static long sys_writev(isr_params_t *params);
 static int canonicalize_abs(char *path);
 static int copy_path_cwd(char *pathbuf, uint32_t size, const char __user *upath, int *end);
 static int32_t resolve_named(const char *name, int walk, int dir, struct vfs_ref *ref);
@@ -53,74 +53,74 @@ static void vfs_kill_setid(struct vfs_mount *mnt, void *node);
 static int mnt_is_root(const struct vfs_mount *mnt);
 static int32_t cred_access_ref(const struct vfs_ref *r, int want, int use_real);
 static int32_t cred_access_node(const krffs_node_t *node, int want, int use_real);
-static int32_t sys_mount(isr_params_t *params);
-static int32_t sys_umount2(isr_params_t *params);
-static int32_t sys_open(isr_params_t *params);
-static int32_t sys_openat(isr_params_t *params);
-static int32_t sys_close(isr_params_t *params);
-static int32_t sys_fsync(isr_params_t *params);
-static int32_t sys_sync(isr_params_t *params);
-static int32_t sys_syncfs(isr_params_t *params);
-static int32_t sys_lseek(isr_params_t *params);
+static long sys_mount(isr_params_t *params);
+static long sys_umount2(isr_params_t *params);
+static long sys_open(isr_params_t *params);
+static long sys_openat(isr_params_t *params);
+static long sys_close(isr_params_t *params);
+static long sys_fsync(isr_params_t *params);
+static long sys_sync(isr_params_t *params);
+static long sys_syncfs(isr_params_t *params);
+static long sys_lseek(isr_params_t *params);
 static int sock_is_query(const struct socket *sock);
-static int32_t sys_read(isr_params_t *params);
-static int32_t sys_pread64(isr_params_t *params);
-static int32_t sys_pwrite64(isr_params_t *params);
-static int32_t readv_dgram(fd_entry_t *entry, uint32_t iov_user, int iovcnt, uint32_t *src_ip,
+static long sys_read(isr_params_t *params);
+static long sys_pread64(isr_params_t *params);
+static long sys_pwrite64(isr_params_t *params);
+static int32_t readv_dgram(fd_entry_t *entry, uintptr_t iov_user, int iovcnt, uint32_t *src_ip,
                            uint16_t *src_port, int peek, int32_t *whole);
-static int32_t sys_readv(isr_params_t *params);
-static int32_t sys_dup(isr_params_t *params);
-static int32_t sys_dup2(isr_params_t *params);
-static int32_t sys_chdir(isr_params_t *params);
-static int32_t sys_fchdir(isr_params_t *params);
-static int32_t sys_chroot(isr_params_t *params);
-static int32_t sys_getcwd(isr_params_t *params);
-static int32_t sys_readlink(isr_params_t *params);
-static int32_t sys_readlinkat(isr_params_t *params);
-static int32_t sys_stat64(isr_params_t *params);
-static int32_t sys_lstat64(isr_params_t *params);
-static int32_t sys_statfs64(isr_params_t *params);
-static int32_t sys_fstatfs64(isr_params_t *params);
-static int32_t sys_fstat64(isr_params_t *params);
-static int32_t sys_fstatat64(isr_params_t *params);
-static int32_t sys_access(isr_params_t *params);
-static int32_t sys_faccessat(isr_params_t *params);
-static int32_t sys_chmod(isr_params_t *params);
-static int32_t sys_fchmodat(isr_params_t *params);
-static int32_t sys_fchmod(isr_params_t *params);
-static int32_t sys_chown(isr_params_t *params);
-static int32_t sys_lchown(isr_params_t *params);
-static int32_t sys_fchownat(isr_params_t *params);
-static int32_t sys_fchown(isr_params_t *params);
-static int32_t sys_truncate(isr_params_t *params);
-static int32_t sys_truncate64(isr_params_t *params);
-static int32_t sys_symlink(isr_params_t *params);
-static int32_t sys_symlinkat(isr_params_t *params);
-static int32_t sys_link(isr_params_t *params);
-static int32_t sys_linkat(isr_params_t *params);
-static int32_t sys__llseek(isr_params_t *params);
-static int32_t sys_fcntl64(isr_params_t *params);
-static int32_t sys_stat(isr_params_t *params);
-static int32_t sys_lstat(isr_params_t *params);
-static int32_t sys_creat(isr_params_t *params);
-static int32_t sys_unlink(isr_params_t *params);
-static int32_t sys_mkdir(isr_params_t *params);
-static int32_t sys_mkdirat(isr_params_t *params);
-static int32_t sys_rmdir(isr_params_t *params);
-static int32_t sys_unlinkat(isr_params_t *params);
-static int32_t sys_rename(isr_params_t *params);
-static int32_t sys_renameat(isr_params_t *params);
-static int32_t sys_renameat2(isr_params_t *params);
+static long sys_readv(isr_params_t *params);
+static long sys_dup(isr_params_t *params);
+static long sys_dup2(isr_params_t *params);
+static long sys_chdir(isr_params_t *params);
+static long sys_fchdir(isr_params_t *params);
+static long sys_chroot(isr_params_t *params);
+static long sys_getcwd(isr_params_t *params);
+static long sys_readlink(isr_params_t *params);
+static long sys_readlinkat(isr_params_t *params);
+static long sys_stat64(isr_params_t *params);
+static long sys_lstat64(isr_params_t *params);
+static long sys_statfs64(isr_params_t *params);
+static long sys_fstatfs64(isr_params_t *params);
+static long sys_fstat64(isr_params_t *params);
+static long sys_fstatat64(isr_params_t *params);
+static long sys_access(isr_params_t *params);
+static long sys_faccessat(isr_params_t *params);
+static long sys_chmod(isr_params_t *params);
+static long sys_fchmodat(isr_params_t *params);
+static long sys_fchmod(isr_params_t *params);
+static long sys_chown(isr_params_t *params);
+static long sys_lchown(isr_params_t *params);
+static long sys_fchownat(isr_params_t *params);
+static long sys_fchown(isr_params_t *params);
+static long sys_truncate(isr_params_t *params);
+static long sys_truncate64(isr_params_t *params);
+static long sys_symlink(isr_params_t *params);
+static long sys_symlinkat(isr_params_t *params);
+static long sys_link(isr_params_t *params);
+static long sys_linkat(isr_params_t *params);
+static long sys__llseek(isr_params_t *params);
+static long sys_fcntl64(isr_params_t *params);
+static long sys_stat(isr_params_t *params);
+static long sys_lstat(isr_params_t *params);
+static long sys_creat(isr_params_t *params);
+static long sys_unlink(isr_params_t *params);
+static long sys_mkdir(isr_params_t *params);
+static long sys_mkdirat(isr_params_t *params);
+static long sys_rmdir(isr_params_t *params);
+static long sys_unlinkat(isr_params_t *params);
+static long sys_rename(isr_params_t *params);
+static long sys_renameat(isr_params_t *params);
+static long sys_renameat2(isr_params_t *params);
 static void get_current_time(int64_t *seconds, int64_t *nanoseconds);
-static int32_t sys_utimensat(isr_params_t *params);
-static int32_t sys_getdents64(isr_params_t *params);
-static int32_t sys_dup3(isr_params_t *params);
-static int32_t sys_statx(isr_params_t *params);
-static int32_t sys_memfd_create(isr_params_t *params);
-static int32_t sys_flock(isr_params_t *params);
-static int32_t sys_close_range(isr_params_t *params);
-static int32_t sys_mknod(isr_params_t *params);
-static int32_t sys_mknodat(isr_params_t *params);
+static long sys_utimensat(isr_params_t *params);
+static long sys_getdents64(isr_params_t *params);
+static long sys_dup3(isr_params_t *params);
+static long sys_statx(isr_params_t *params);
+static long sys_memfd_create(isr_params_t *params);
+static long sys_flock(isr_params_t *params);
+static long sys_close_range(isr_params_t *params);
+static long sys_mknod(isr_params_t *params);
+static long sys_mknodat(isr_params_t *params);
 static int32_t fs_socket_bind(const char *path, uint32_t mode, struct vfs_ref *ref, uint32_t *ino);
 static void fs_socket_unbind(struct vfs_ref *ref);
 static int32_t fs_socket_lookup(const char *path, struct vfs_mount **mnt, uint32_t *ino);
@@ -443,7 +443,7 @@ int32_t vfs_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t
 }
 
 /** A user buffer of the model passes the range check, and no row copies one. */
-int user_buffer_ok(uint32_t addr, uint32_t len, int write)
+int user_buffer_ok(uintptr_t addr, size_t len, int write)
 {
     (void)addr;
     (void)len;
@@ -451,7 +451,7 @@ int user_buffer_ok(uint32_t addr, uint32_t len, int write)
     return 1;
 }
 
-int copy_from_user(void *dst, const void __user *src, uint32_t n)
+int copy_from_user(void *dst, const void __user *src, size_t n)
 {
     (void)dst;
     (void)src;
@@ -459,7 +459,7 @@ int copy_from_user(void *dst, const void __user *src, uint32_t n)
     return -1;
 }
 
-int copy_to_user(void __user *dst, const void *src, uint32_t n)
+int copy_to_user(void __user *dst, const void *src, size_t n)
 {
     (void)dst;
     (void)src;
@@ -552,15 +552,15 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 /** The opens of the display, the mouse, /dev and /proc, and the writes of
  * sockets and the console, which no row reaches. */
 volatile uint32_t fb_owner_pid;
-bool vga_graphics_mode;
+gfx_info_t gfx_current;
 struct tty console_tty;
 
-uint8_t *vga_mode13h_enter(void)
+uint8_t *fb_enter(void)
 {
     return NULL;
 }
 
-void vga_mode13h_exit(void)
+void fb_exit(void)
 {}
 
 void kbd_clear_scancodes(void)

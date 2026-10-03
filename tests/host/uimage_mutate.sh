@@ -63,7 +63,7 @@ run_phase()
 echo "uimage-mutation: logs: $work"
 run_phase fixed 0 'uimage-test: pass: every row'
 for mutation in budget-quarter budget-cap budget-floor pointers-argv0 pointers-edge \
-    string-max room-edge room-check nul zero random-align esp-align clktck secure \
+    string-max room-edge room-check nul zero random-align sp-align clktck secure \
     argv-null envp-null drop-clear drop-used map-address map-flags frames-cap \
     release-given release-none fault; do
     python3 - "$work" "$mutation" <<'PY'
@@ -75,8 +75,8 @@ changes = {
                         'uint32_t limit = stack_limit / 2u;')],
     'budget-cap': [('if (limit > UIMAGE_ARGS_MAX) {', 'if (0) {')],
     'budget-floor': [('if (limit < UIMAGE_ARGS_MIN) {', 'if (0) {')],
-    'pointers-argv0': [('pointers = ((argc > 0 ? argc : 1u) + envc) * 4u;',
-                        'pointers = (argc + envc) * 4u;')],
+    'pointers-argv0': [('pointers = ((argc > 0 ? argc : 1u) + envc) * word;',
+                        'pointers = (argc + envc) * word;')],
     'pointers-edge': [('if (pointers >= limit) {', 'if (pointers > limit) {')],
     'string-max': [('int n = strnlen_user(s, UIMAGE_STRING_MAX);',
                     'int n = strnlen_user(s, UIMAGE_STRING_MAX + 1u);'),
@@ -88,10 +88,10 @@ changes = {
     'nul': [("        if (done == len) {\n            dst[chunk - 1u] = '\\0';\n        }\n",
              '')],
     'zero': [('if (paging_zero_frame(frame) != 0) {', 'if (0) {')],
-    'random-align': [('return (u->top - u->used - 16u) & ~15u;',
+    'random-align': [('return (u->top - u->used - 16u) & ~(uintptr_t)15u;',
                       'return u->top - u->used - 16u;')],
-    'esp-align': [('u->esp = (uimage_random_at(u) - words * 4u) & ~15u;',
-                   'u->esp = (uimage_random_at(u) - words * 4u) & ~3u;')],
+    'sp-align': [('u->sp = (uimage_random_at(u) - words * sizeof(unsigned long)) & ~(uintptr_t)15u;',
+                  'u->sp = (uimage_random_at(u) - words * sizeof(unsigned long)) & ~(uintptr_t)3u;')],
     'clktck': [('aux[11] = 100;', 'aux[11] = 1000;')],
     'secure': [('aux[13] = ids->secure ? 1u : 0u;', 'aux[13] = 0;')],
     'argv-null': [('if (i == argc) {', 'if (i == argc + 1u) {')],
@@ -99,10 +99,12 @@ changes = {
                    '    for (i = 0; i < 2u * UIMAGE_AUXV',
                    '    for (i = 0; i < 2u * UIMAGE_AUXV')],
     'drop-clear': [('        *p = 0;\n        addr++;', '        addr++;')],
-    'drop-used': [('u->used = u->top - addr;', 'u->used = u->top - addr + 1u;')],
-    'map-address': [('uint32_t page = u->top - (u->given + 1u) * PAGE_SIZE;',
-                     'uint32_t page = u->top - u->given * PAGE_SIZE;')],
-    'map-flags': [('u->frames[u->given], 0x7u)', 'u->frames[u->given], 0x5u)')],
+    'drop-used': [('u->used = (uint32_t)(u->top - addr);',
+                   'u->used = (uint32_t)(u->top - addr + 1u);')],
+    'map-address': [('uintptr_t page = u->top - (uintptr_t)(u->given + 1u) * PAGE_SIZE;',
+                     'uintptr_t page = u->top - (uintptr_t)u->given * PAGE_SIZE;')],
+    'map-flags': [('u->frames[u->given], PTE_P | PTE_W | PTE_U)',
+                   'u->frames[u->given], PTE_P | PTE_U)')],
     'frames-cap': [('u->cap = limit / PAGE_SIZE + 4u;', 'u->cap = limit / PAGE_SIZE;')],
     'release-given': [('for (i = u->given; i < u->nframes; i++) {',
                        'for (i = 0; i < u->nframes; i++) {')],
@@ -129,7 +131,7 @@ PY
         nul) detail='string: a string that grew after it was measured ends where it was measured' ;;
         zero) detail='one page: the bytes below the stack pointer are zero' ;;
         random-align) detail='AT_RANDOM is aligned to 16 bytes' ;;
-        esp-align) detail='one page: the stack pointer is aligned to 16 bytes' ;;
+        sp-align) detail='one page: the stack pointer is aligned to 16 bytes' ;;
         clktck) detail='the auxiliary vector has the entries execve gives' ;;
         secure) detail='the auxiliary vector has the entries execve gives' ;;
         argv-null) detail='one page: argv ends in NULL' ;;

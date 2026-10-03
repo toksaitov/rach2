@@ -1,25 +1,30 @@
 /**
- * Host test for the two range checks in mm/paging.c, and for the panic of a
- * supervisor fault in a kernel stack's guard page.
+ * Host test for the two range checks of mm/paging.c and arch/i686/mmu.c, and
+ * for the panic of a supervisor fault in a kernel stack's guard page.
  *
  * host-deps: rach2/sys/mm/frame.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
+ * host-cflags: -U__UINTPTR_TYPE__ -D__UINTPTR_TYPE__=unsigned
+ * host-cflags: -U__INTPTR_TYPE__ -D__INTPTR_TYPE__=int
+ * host-cflags: -U__SIZE_TYPE__ -D__SIZE_TYPE__=unsigned
+ * host-cflags: -U__PTRDIFF_TYPE__ -D__PTRDIFF_TYPE__=int
  *
  * `map_mmio` and `premap_kernel_window` each take a range of the 32-bit
  * address space, and each promises in its header to refuse a range that
  * runs past the top of it (entry 140 of milestone 50). Neither is reachable
  * with such a range from the kernel's callers, so only a test can show the
- * refusals. The kernel's `uintptr_t` and `size_t` are 32 bits wide here as
- * on the machine, from lib/kint.h and lib/kdef.h, so every sum in the two
- * functions wraps at 2^32 as it does there.
+ * refusals. lib/kint.h and lib/kdef.h take `uintptr_t` and `size_t` from
+ * the compiler's own names for them, which the flags above make 32 bits
+ * wide, as they are on an i686, so every sum in the two functions wraps at
+ * 2^32 as it does there.
  *
- * paging.c is included whole, which reaches the MMIO region's next free
- * page, and is compiled with RACH2_HOSTTEST, which leaves out its control
- * register, flags and TLB instructions. The page directory is the test's.
- * The heap is a stub that counts the page tables it gives, so a row can say
- * how many tables a window took; the boot allocator must not be reached
- * after the heap exists, and a row that reaches it fails.
+ * paging.c and the i686's mmu.c are included whole, which reaches the MMIO
+ * region's next free page. The processor primitives they call through arch.h,
+ * for the control registers, the flags and the TLB, are the test's, and so is
+ * the page directory. The heap is a stub that counts the page tables it gives,
+ * so a row can say how many tables a window took; the boot allocator must not
+ * be reached after the heap exists, and a row that reaches it fails.
  *
  * The rows: a register page mapped at the MMIO region's start; two spans
  * that begin in the first page and end within the last one, whose rounding
@@ -45,6 +50,7 @@
  */
 
 #include "mm/paging.c"
+#include "arch/i686/mmu.c"
 
 extern int printf(const char *format, ...);
 extern void *calloc(unsigned long count, unsigned long size);
@@ -166,7 +172,7 @@ uint32_t pc_window_size(void)
     return 0;
 }
 
-int pc_fault(uint32_t fault_address, int write)
+int pc_fault(uintptr_t fault_address, int write)
 {
     (void)fault_address;
     (void)write;
@@ -188,7 +194,7 @@ void vm_file_put(struct vm_file *f)
 #define GUARD_PAGE 0xC0104000u
 #define GUARD_PID  7
 
-int kstack_overrun_pid(uint32_t addr)
+int kstack_overrun_pid(uintptr_t addr)
 {
     return addr - GUARD_PAGE < PAGE_SIZE ? GUARD_PID : -1;
 }
@@ -214,14 +220,14 @@ void terminate_current_process(int32_t signo)
     (void)signo;
 }
 
-vma_t *vm_find(vm_space_t *vm, uint32_t addr)
+vma_t *vm_find(vm_space_t *vm, uintptr_t addr)
 {
     (void)vm;
     (void)addr;
     return 0;
 }
 
-int vm_grow_stack(vm_space_t *vm, uint32_t page, uint32_t as_limit)
+int vm_grow_stack(vm_space_t *vm, uintptr_t page, uintptr_t as_limit)
 {
     (void)vm;
     (void)page;
@@ -241,13 +247,39 @@ int mem_may_take(int user_page)
     return 1;
 }
 
-/* The fault address the handler reads in place of CR2, which the fault rows
- * set. */
+/* The fault address the handler reads, which the fault rows set. */
 static uint32_t fault_cr2;
 
-uint32_t paging_hosttest_cr2(void)
+uintptr_t arch_fault_address(void)
 {
     return fault_cr2;
+}
+
+/* The processor's translation root, its cached translations and its
+ * interrupt flag, which the host has none of. */
+uintptr_t arch_space_root(void)
+{
+    return 0;
+}
+
+void arch_space_load(uintptr_t root)
+{
+    (void)root;
+}
+
+void arch_tlb_flush_page(uintptr_t va)
+{
+    (void)va;
+}
+
+uint32_t kirq_save(void)
+{
+    return 0;
+}
+
+void kirq_restore(uint32_t flags)
+{
+    (void)flags;
 }
 
 /* ---- the rows ---- */
@@ -358,7 +390,7 @@ static void fault_row(uint32_t addr, const char *text, const char *what)
     if (pid == 0) {
         k_memset(&params, 0, sizeof(params));
         params.vector = 14;
-        params.error_code = PF_ERR_WRITE;
+        params.error_code = 0x2; /* a write, from supervisor mode */
         params.cs = 0x08;
         fault_cr2 = addr;
         expect_panic = text;

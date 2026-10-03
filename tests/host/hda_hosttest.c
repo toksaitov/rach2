@@ -517,11 +517,10 @@ void klog(int level, const char *subsystem, const char *format, ...)
     (void)subsystem;
     (void)format;
 }
-/** The model's delay port has no side effects. */
-uint8_t inb(uint16_t port)
+/** The model's codec answers at once, so a delay waits for nothing. */
+void k_udelay(uint32_t us)
 {
-    (void)port;
-    return 0;
+    (void)us;
 }
 /** No console is attached to the model. */
 void console_putc(char c)
@@ -599,7 +598,7 @@ int isr_alloc_vector(void)
     return -1;
 }
 /** The model has no APIC. */
-int lapic_ready(void)
+int isr_msi_ready(void)
 {
     return 0;
 }
@@ -643,12 +642,15 @@ void pci_enable_interrupts(pci_device_t *dev)
 {
     (void)dev;
 }
-/** The host does not execute cache instructions. */
-void kcpu_id(uint32_t leaf, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d)
+/** The model's buffers are in host memory, with no cache to write back. */
+void arch_dma_flush(const volatile void *p, size_t len)
 {
-    (void)leaf;
-    *a = *b = *c = *d = 0;
+    (void)p;
+    (void)len;
 }
+
+void arch_dma_flush_all(void)
+{}
 /** Boot banner formatting is outside these rows. */
 size_t k_itoa(int n, char *out, size_t size, int radix, bool sign)
 {

@@ -255,7 +255,7 @@ static void sleep_on(wait_queue_t *wq)
  * lost page is unmapped after it, and so is a missing one when the row needs
  * the sibling parked and it got through.
  */
-int vm_prefault_range(uint32_t addr, uint32_t len, int write)
+int vm_prefault_range(uintptr_t addr, uintptr_t len, int write)
 {
     uint32_t page, last;
 
@@ -287,7 +287,7 @@ int vm_prefault_range(uint32_t addr, uint32_t len, int write)
 
 /** Whether a buffer lies in user memory, as `user_buffer_ok` asks, without
  * bringing it in. */
-int user_buffer_ok(uint32_t addr, uint32_t len, int write)
+int user_buffer_ok(uintptr_t addr, size_t len, int write)
 {
     (void)write;
     return addr >= USER_BASE && addr - USER_BASE <= sizeof(memory) &&
@@ -716,26 +716,38 @@ static int crosses(int from, int to)
            user(AT(5, 128))[0] == 'x';
 }
 
+/** Write a header at `msg` of the one-byte vector at `iov`, which names
+ * `byte`, and of `room` bytes of control buffer at `ctl`. */
+static void set_header(uint32_t msg, uint32_t iov, uint32_t byte, uint32_t ctl, uint32_t room)
+{
+    struct kernel_msghdr m;
+    struct kernel_iovec v;
+
+    k_memset(&m, 0, sizeof(m));
+    m.msg_iov = iov;
+    m.msg_iovlen = 1;
+    m.msg_control = ctl;
+    m.msg_controllen = room;
+    k_memcpy(user(msg), &m, sizeof(m));
+    v.iov_base = byte;
+    v.iov_len = 1;
+    k_memcpy(user(iov), &v, sizeof(v));
+}
+
 /** sendmsg(2) over `fd` of one byte and the descriptors `fds[0..n)` with
  * SCM_RIGHTS, from page 6. */
 static int32_t send_rights(int fd, const int *fds, uint32_t n)
 {
     uint32_t msg = AT(6, 0), iov = AT(6, 64), byte = AT(6, 96), ctl = AT(6, 128);
+    struct kernel_cmsghdr c;
     uint32_t i;
 
-    set_word(msg + 4u * MH_NAME, 0);
-    set_word(msg + 4u * MH_NAMELEN, 0);
-    set_word(msg + 4u * MH_IOV, iov);
-    set_word(msg + 4u * MH_IOVLEN, 1);
-    set_word(msg + 4u * MH_CONTROL, ctl);
-    set_word(msg + 4u * MH_CONTROLLEN, CMSG_HDR + 4u * n);
-    set_word(msg + 4u * MH_FLAGS, 0);
-    set_word(iov, byte);
-    set_word(iov + 4u, 1);
+    set_header(msg, iov, byte, ctl, CMSG_HDR + 4u * n);
     user(byte)[0] = 'F';
-    set_word(ctl, CMSG_HDR + 4u * n);
-    set_word(ctl + 4u, SOL_SOCKET);
-    set_word(ctl + 8u, SCM_RIGHTS);
+    c.cmsg_len = CMSG_HDR + 4u * n;
+    c.cmsg_level = SOL_SOCKET;
+    c.cmsg_type = SCM_RIGHTS;
+    k_memcpy(user(ctl), &c, sizeof(c));
     for (i = 0; i < n; i++) {
         set_word(ctl + CMSG_HDR + 4u * i, (uint32_t)fds[i]);
     }
@@ -746,24 +758,19 @@ static int32_t send_rights(int fd, const int *fds, uint32_t n)
  * `ctl`, or none for 0; the header is on page 7. */
 static int32_t recv_rights(int fd, uint32_t ctl, uint32_t room)
 {
-    uint32_t msg = AT(7, 0), iov = AT(7, 64), byte = AT(7, 96);
+    uint32_t msg = AT(7, 0);
 
-    set_word(msg + 4u * MH_NAME, 0);
-    set_word(msg + 4u * MH_NAMELEN, 0);
-    set_word(msg + 4u * MH_IOV, iov);
-    set_word(msg + 4u * MH_IOVLEN, 1);
-    set_word(msg + 4u * MH_CONTROL, room ? ctl : 0u);
-    set_word(msg + 4u * MH_CONTROLLEN, room);
-    set_word(msg + 4u * MH_FLAGS, 0);
-    set_word(iov, byte);
-    set_word(iov + 4u, 1);
+    set_header(msg, AT(7, 64), AT(7, 96), room ? ctl : 0u, room);
     return unix_recvmsg(fd_at(fd), msg, 0);
 }
 
 /** The flags recvmsg stored in the header on page 7. */
 static uint32_t recv_flags(void)
 {
-    return word(AT(7, 4u * MH_FLAGS));
+    struct kernel_msghdr m;
+
+    k_memcpy(&m, user(AT(7, 0)), sizeof(m));
+    return m.msg_flags;
 }
 
 /** The start of a row: every page present, no sibling armed, no file freed

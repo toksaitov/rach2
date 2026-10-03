@@ -14,26 +14,26 @@
  */
 #include "syscall.h"
 #include "network/socket/socket.h"
-static int32_t sys_socketcall(isr_params_t *params);
+static long sys_socketcall(isr_params_t *params);
 static int32_t dgram_send(struct socket *sock, uint32_t dst_ip, uint16_t dst_port,
                           const uint8_t *buf, uint16_t len);
-static int32_t sys_accept4(isr_params_t *params);
-static int32_t sys_bind(isr_params_t *params);
-static int32_t sys_connect(isr_params_t *params);
-static int32_t sys_getpeername(isr_params_t *params);
-static int32_t sys_getsockname(isr_params_t *params);
-static int32_t sys_getsockopt(isr_params_t *params);
-static int32_t sys_listen(isr_params_t *params);
-static int32_t sys_recvfrom(isr_params_t *params);
-static int32_t sys_recvmmsg(isr_params_t *params);
-static int32_t sys_recvmsg(isr_params_t *params);
-static int32_t sys_sendmmsg(isr_params_t *params);
-static int32_t sys_sendmsg(isr_params_t *params);
-static int32_t sys_sendto(isr_params_t *params);
-static int32_t sys_setsockopt(isr_params_t *params);
-static int32_t sys_shutdown(isr_params_t *params);
-static int32_t sys_socket(isr_params_t *params);
-static int32_t sys_socketpair(isr_params_t *params);
+static long sys_accept4(isr_params_t *params);
+static long sys_bind(isr_params_t *params);
+static long sys_connect(isr_params_t *params);
+static long sys_getpeername(isr_params_t *params);
+static long sys_getsockname(isr_params_t *params);
+static long sys_getsockopt(isr_params_t *params);
+static long sys_listen(isr_params_t *params);
+static long sys_recvfrom(isr_params_t *params);
+static long sys_recvmmsg(isr_params_t *params);
+static long sys_recvmsg(isr_params_t *params);
+static long sys_sendmmsg(isr_params_t *params);
+static long sys_sendmsg(isr_params_t *params);
+static long sys_sendto(isr_params_t *params);
+static long sys_setsockopt(isr_params_t *params);
+static long sys_shutdown(isr_params_t *params);
+static long sys_socket(isr_params_t *params);
+static long sys_socketpair(isr_params_t *params);
 #include "syscall_net.c"
 #include "network/socket/packet.c"
 #include "ns_first.h"
@@ -74,7 +74,7 @@ static int sibling_found = -1;
 /** Copy a simulated user range, refusing null and out-of-arena pointers. A
  * row may arm `copy_sleep`, the call another thread makes while the copy
  * sleeps in a page fault, which runs once before the copy. */
-int copy_from_user(void *dst, const void *src, uint32_t n)
+int copy_from_user(void *dst, const void __user *src, size_t n)
 {
     unsigned long at = (unsigned long)src;
     void (*sleep)(void) = copy_sleep;
@@ -91,7 +91,7 @@ int copy_from_user(void *dst, const void *src, uint32_t n)
 }
 
 /** Copy back into the same simulated user address space. */
-int copy_to_user(void *dst, const void *src, uint32_t n)
+int copy_to_user(void __user *dst, const void *src, size_t n)
 {
     unsigned long at = (unsigned long)dst;
 
@@ -156,7 +156,7 @@ void fd_release_backing(fd_entry_t *e)
 }
 
 /** The user range a receive checks: inside the simulated user memory. */
-int user_buffer_ok(uint32_t addr, uint32_t len, int write)
+int user_buffer_ok(uintptr_t addr, size_t len, int write)
 {
     (void)write;
     return addr && addr <= sizeof(user) && len <= sizeof(user) - addr;

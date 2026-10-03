@@ -73,6 +73,7 @@ static void sysfs_block_name(int key, char *out, int cap);
 static int sysfs_block_whole(int key);
 static int sysfs_block_loop(int key);
 #include "fs/procfs.c"
+#include "arch/i686/mmu.h"
 #include "ns_first.h"
 
 /* The counters /proc/net/snmp reports, which net_core.c defines. */
@@ -173,13 +174,13 @@ process_t *get_process(uint32_t pid)
 /** The whole process's time, its two threads' together. */
 /* The address space's size and pages, which a stat line gives and no check
  * here reads. */
-uint32_t vm_total(const vm_space_t *vm)
+uintptr_t vm_total(const vm_space_t *vm)
 {
     (void)vm;
     return 0;
 }
 
-uintptr_t paging_user_phys(page_dir_t *dir, uint32_t va)
+uintptr_t paging_user_phys(page_dir_t *dir, uintptr_t va)
 {
     (void)dir;
     (void)va;
@@ -286,7 +287,7 @@ void switch_page_directory(page_dir_t *dir)
  * and finds none once no user is left, since the last user's put frees the
  * pages whatever holds keep the record.
  */
-int paging_access(struct mm *mm, uint32_t addr, void *buf, uint32_t len, int write)
+int paging_access(struct mm *mm, uintptr_t addr, void *buf, uint32_t len, int write)
 {
     (void)write;
     if (mm == &space) {
@@ -312,13 +313,13 @@ int paging_access(struct mm *mm, uint32_t addr, void *buf, uint32_t len, int wri
     return 0;
 }
 
-int copy_to_user(void __user *dst, const void *src, uint32_t n)
+int copy_to_user(void __user *dst, const void *src, size_t n)
 {
     k_memcpy((void __force *)dst, src, n);
     return 0;
 }
 
-int copy_from_user(void *dst, const void __user *src, uint32_t n)
+int copy_from_user(void *dst, const void __user *src, size_t n)
 {
     k_memcpy(dst, (const void __force *)src, n);
     return 0;

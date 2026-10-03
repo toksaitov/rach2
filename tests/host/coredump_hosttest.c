@@ -64,15 +64,28 @@ void fpu_save(void *area)
     (void)area;
 }
 
-void fpu_to_linux(const void *area, uint8_t *out)
+/** The rows judge the regions, not the notes: the registers are zeros and
+ * no floating-point note is written. */
+void arch_regs_get(const struct process *t, unsigned long *r)
 {
-    (void)area;
-    k_memset(out, 0, FPU_LINUX_SIZE);
+    (void)t;
+    k_memset(r, 0, ARCH_GREGS * sizeof(unsigned long));
+}
+
+uint32_t arch_core_fp_size(void)
+{
+    return 0;
+}
+
+void arch_core_fp_notes(uint8_t **p, const struct process *t)
+{
+    (void)p;
+    (void)t;
 }
 
 /** The pages the process has: every page of a region but the second page
  * of one that is longer. */
-uintptr_t paging_user_phys(struct page_dir *dir, uint32_t addr)
+uintptr_t paging_user_phys(page_dir_t *dir, uintptr_t addr)
 {
     uint32_t i;
 
@@ -86,7 +99,7 @@ uintptr_t paging_user_phys(struct page_dir *dir, uint32_t addr)
 }
 
 /** A page's bytes are the low byte of its page number. */
-int paging_access(struct mm *mm, uint32_t addr, void *buf, uint32_t len, int write)
+int paging_access(struct mm *mm, uintptr_t addr, void *buf, uint32_t len, int write)
 {
     (void)mm;
     (void)write;

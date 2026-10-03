@@ -1,9 +1,10 @@
 #!/bin/sh
-# Prove the two range checks of rach2/sys/mm/paging.c, entry 140 of
-# milestone 50, and the page fault handler's panic for a kernel stack that
-# ran into its guard page, entry 248. tests/host/paging_hosttest.c is
-# compiled against a private copy of the kernel's sources with each fault
-# put in turn, and its row must fail; the restored copy must pass again.
+# Prove the range checks of rach2/sys/mm/paging.c and
+# rach2/sys/arch/i686/mmu.c, entry 140 of milestone 50, and the page fault
+# handler's panic for a kernel stack that ran into its guard page, entry 248.
+# tests/host/paging_hosttest.c is compiled against a private copy of the
+# kernel's sources with each fault put in turn, and its row must fail; the
+# restored copy must pass again.
 #
 # Usage: paging_mutate.sh [--check]
 # With --check it compiles and runs the unmodified test alone. The faults:
@@ -23,12 +24,12 @@ cd "$repo"
 mkdir -p build/tests
 work=$(mktemp -d "$repo/build/tests/paging-proof.XXXXXX")
 child=
-# paging.c reaches rach2/kernel.h, and that header the vendored Multiboot
-# one, by relative paths, so the private tree has all three.
 mkdir "$work/rach2"
-cp -R rach2/sys rach2/vendor rach2/kernel.h "$work/rach2/"
-source="$work/rach2/sys/mm/paging.c"
-cp "$source" "$work/paging.saved"
+cp -R rach2/sys "$work/rach2/"
+paging="$work/rach2/sys/mm/paging.c"
+mmu="$work/rach2/sys/arch/i686/mmu.c"
+cp "$paging" "$work/paging.saved"
+cp "$mmu" "$work/mmu.saved"
 
 cleanup()
 {
@@ -37,8 +38,9 @@ cleanup()
         wait "$child" 2>/dev/null || :
         child=
     fi
-    cp "$work/paging.saved" "$source"
-    touch "$source"
+    cp "$work/paging.saved" "$paging"
+    cp "$work/mmu.saved" "$mmu"
+    touch "$paging" "$mmu"
 }
 trap cleanup EXIT
 trap 'exit 129' HUP
@@ -62,13 +64,14 @@ run_phase()
     if ! "${CC:-cc}" -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST \
         -fsanitize=address,undefined -fno-sanitize-recover=all -g -O1 \
         -Wno-empty-body -ffreestanding $extra \
-        -I "$work/rach2/sys" -I "$work/rach2/sys/lib" -I "$work/rach2/sys/proc" \
+        -I "$work/rach2/sys" -I "$work/rach2/sys/arch/x86" -I "$work/rach2/sys/arch/i686" \
+        -I "$work/rach2/sys/lib" -I "$work/rach2/sys/proc" \
         -I utils -I krffs -I tests/host/compat \
         -o "$binary" "$test" $deps >"$binary.compile.log" 2>&1; then
         cat "$binary.compile.log" >&2
         exit 1
     fi
-    cksum "$source" "$binary" >"$binary.cksum"
+    cksum "$paging" "$mmu" "$binary" >"$binary.cksum"
     perl -e 'alarm 10; exec @ARGV or die "paging-proof: exec: $!\n"' \
         "$binary" >"$binary.log" 2>&1 &
     child=$!
@@ -84,6 +87,10 @@ echo "paging-proof: logs: $work"
 run_phase fixed 0 'paging-hosttest: result: pass'
 [ "$#" -eq 0 ] || exit 0
 for fault in rounding loop zero guard; do
+    case $fault in
+        loop | zero) source=$mmu ;;
+        *) source=$paging ;;
+    esac
     python3 - "$source" "$fault" <<'PY'
 from pathlib import Path
 import sys
@@ -157,6 +164,7 @@ PY
     run_phase "$fault-mutated" 1 "$message"
     cleanup
     run_phase "$fault-restored" 0 'paging-hosttest: result: pass'
-    cmp "$work/paging.saved" "$source"
+    cmp "$work/paging.saved" "$paging"
+    cmp "$work/mmu.saved" "$mmu"
 done
 echo 'paging-proof: result: pass: the four faults failed their rows and the restored source passed'

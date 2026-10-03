@@ -25,9 +25,9 @@
  * Returns 0 when every row passes, 1 otherwise.
  */
 
-#include "tables/gdt.c"
-#include "tables/tss.c"
-#include "tables/idt.c"
+#include "arch/i686/gdt.c"
+#include "arch/i686/tss.c"
+#include "arch/i686/idt.c"
 
 extern int printf(const char *format, ...);
 

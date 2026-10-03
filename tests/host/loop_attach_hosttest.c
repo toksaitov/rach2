@@ -371,7 +371,7 @@ static void error_rows(void)
 
 /** Exercise relocation, reuse and attachment cleanup. */
 /* The loop ioctls copy a status block; no row here issues one. */
-int copy_from_user(void *dst, const void __user *src, uint32_t n)
+int copy_from_user(void *dst, const void __user *src, size_t n)
 {
     (void)dst;
     (void)src;
@@ -379,7 +379,7 @@ int copy_from_user(void *dst, const void __user *src, uint32_t n)
     return -1;
 }
 
-int copy_to_user(void __user *dst, const void *src, uint32_t n)
+int copy_to_user(void __user *dst, const void *src, size_t n)
 {
     (void)dst;
     (void)src;
