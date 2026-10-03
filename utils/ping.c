@@ -7,7 +7,8 @@
  * or `/hosts` where there is no `/etc/hosts`, and then DNS (see `resolv.c`).
  *
  * Each request is the `SC_PING_DATA` socketcall, a Rach2 operation with no
- * libc wrapper, so it is issued through a direct `socketcall(2)`. The kernel
+ * libc wrapper, so it is issued through a direct system call (`pingcall.h`):
+ * socketcall(2) on i686, and Rach2's own number on x86-64. The kernel
  * sends an echo of `-s` bytes of data, 56 unless asked, with the hop limit of
  * `-t`, 64 unless asked, and sleeps the caller until the reply, for up to four
  * attempts of a second each; a signal ends the wait. It returns the reply's
@@ -25,19 +26,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/syscall.h>
 #include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
 
-#include "netdb.h" /* resolve_host */
+#include "netdb.h"    /* resolve_host */
+#include "pingcall.h" /* SYS_PINGCALL, SC_PING_DATA */
 
-/* Rach2's socketcall for an ICMP echo with a data size and hop limit,
- * numbered clear of the BSD sub-calls. */
-#define SC_PING_DATA 0x1001
 /* The most data one request carries: a datagram of the 1500-byte MTU, since
  * the stack does not fragment. */
-#define DATA_MAX     1472
+#define DATA_MAX 1472
 
 #define USAGE                                                                                    \
     "usage: ping [-nq4] [-c count] [-i interval] [-s size] [-t ttl] [-W timeout] [-w deadline] " \
@@ -215,16 +213,16 @@ static int parse(int argc, char **argv, struct options *o)
 static long long ping_once(unsigned int ip, const struct options *o, long long wait, long *len,
                            int *ttl)
 {
-    unsigned int args[3];
+    unsigned long args[3];
     long long t0, rtt;
 
     alarmed = 0;
     arm(wait);
     args[0] = ip;
-    args[1] = (unsigned int)o->size;
-    args[2] = (unsigned int)o->ttl;
+    args[1] = (unsigned long)o->size;
+    args[2] = (unsigned long)o->ttl;
     t0 = now_us();
-    rtt = syscall(SYS_socketcall, SC_PING_DATA, args);
+    rtt = syscall(SYS_PINGCALL, SC_PING_DATA, args);
     if (rtt >= 0) {
         *len = (long)(rtt & 0xFFFF);
         *ttl = (int)((rtt >> 16) & 0xFF);

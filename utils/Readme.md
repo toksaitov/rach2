@@ -19,7 +19,7 @@ make -C utils
 make -C utils ARCH=x86_64
 ```
 
-The main Makefile builds for the architecture `ARCH` names (`mk/arch.mk`), i686 by default: it compiles with that architecture's `CROSS_CC`, `i686-elf-gcc -m32` or `x86_64-elf-gcc -m64`, and links that architecture's musl startup objects, `libc.a`, the compiler's `libgcc`, and `crtn.o`. The programs land in `build/utils/`, or `build/x86_64/utils/`. On x86-64 every program builds but `ping`, whose `SYS_socketcall` x86-64 does not have. It prunes obsolete files from both output directories before building so an old binary cannot be staged by a later image.
+The main Makefile builds for the architecture `ARCH` names (`mk/arch.mk`), i686 by default: it compiles with that architecture's `CROSS_CC`, `i686-elf-gcc -m32` or `x86_64-elf-gcc -m64`, and links that architecture's musl startup objects, `libc.a`, the compiler's `libgcc`, and `crtn.o`. The programs land in `build/utils/`, or `build/x86_64/utils/`. It prunes obsolete files from both output directories before building so an old binary cannot be staged by a later image.
 
 The native Linux build produces only the portable file utilities `Makefile.linux` lists, under `build/utils/linux/`:
 
@@ -54,7 +54,7 @@ These are small teaching implementations, not complete POSIX commands. Except fo
 
 ## Network programs
 
-* `ping [HOST]` defaults to `10.0.2.2`, sends four requests through the Rach2-specific `SC_PING` socket call, and succeeds if at least one reply arrives. The kernel permits one request in flight for the whole machine; a busy request stops the program with an error.
+* `ping [HOST]` defaults to `10.0.2.2`, sends four requests through the Rach2-specific `SC_PING` socket call, which `pingcall.h` numbers for each architecture (socketcall on i686, Rach2's call 400 on x86-64), and succeeds if at least one reply arrives. The kernel permits one request in flight for the whole machine; a busy request stops the program with an error.
 * `nc HOST PORT` connects over TCP, relays one input chunk, reads one reply chunk, and repeats until EOF or an error. Its current parser accepts a positive decimal prefix and narrows the result to 16 bits, so it does not enforce a strict port argument.
 * `httpd [PORT]` listens on all addresses, on port 80 by default, and serves one connection at a time. It reads one request and always returns a generated HTTP/1.0 status page. It does not serve files. The page escapes reflected request fields and shows the six most recent connections. Its endpoint label remains `10.0.2.15:80` when another port is selected.
 * `dhcpc [-i INTERFACE] [-b] [-l SECONDS]` runs the DHCP lease state machine; `dhcpc -i INTERFACE -k` stops a recorded client. The default interface is `eth0`. The client uses a packet socket before it has an address, validates the whole lease, applies the address, mask, route, and resolver file, renews at T1, rebinds at T2, and removes the address when the lease expires or the server sends DHCPNAK. It ignores leases shorter than 10 seconds and caps longer leases at one week or the lower `-l` value.

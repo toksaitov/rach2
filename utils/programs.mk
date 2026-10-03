@@ -12,7 +12,7 @@ SBIN_PROGS = init-shell init-login init-metal init-recovery login su sudo passwd
              adduser-crash bootctl
 
 SRC_ping = ping.c resolv.c
-HDR_ping = netdb.h
+HDR_ping = netdb.h pingcall.h
 SRC_nc = nc.c resolv.c
 HDR_nc = netdb.h
 SRC_dhcpc = dhcpc.c dhcpmsg.c ipcheck.c

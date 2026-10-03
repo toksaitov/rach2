@@ -51,8 +51,9 @@ Each request uses the kernel's private
 socket operation, described in
 .Xr ping 2 ,
 through a direct
-.Xr socketcall 2 ,
-since musl has no wrapper for it.
+.Xr socketcall 2
+on i686, or Rach2's call 400 on x86-64, which has no socketcall, since musl
+has no wrapper for it.
 The kernel sends an echo of 56 bytes of data, 84 with its headers, as
 iputils sends by default, or the size of
 .Fl s ,

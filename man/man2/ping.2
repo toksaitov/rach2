@@ -9,12 +9,13 @@
 .In unistd.h
 .In sys/syscall.h
 .Bd -literal -offset indent
-unsigned int args[1];
+unsigned long args[1];
 
 args[0] = address;
-syscall(SYS_socketcall, 0x1000, args);
+syscall(SYS_socketcall, 0x1000, args);   /* i686 */
+syscall(400, 0x1000, args);              /* x86-64 */
 
-unsigned int data_args[3];
+unsigned long data_args[3];
 
 data_args[0] = address;
 data_args[1] = size;
@@ -32,6 +33,11 @@ function; the operation is issued through
 .Fn syscall .
 The raw i386 interface uses EAX = 102, EBX = 0x1000, and ECX pointing
 to an array of one 32-bit word.
+x86-64 has no
+.Xr socketcall 2 ;
+there the kernel takes Rach2's at call 400, which Linux x86-64 leaves
+unassigned, and serves only operations 0x1000 and 0x1001: RAX = 400,
+RDI = 0x1000, and RSI pointing to an array of one 64-bit word.
 That word is the destination IPv4 address in host byte order.
 For example, 0x0a000202 denotes 10.0.2.2.
 An address in 127/8 is answered by this machine through the loopback ring.
