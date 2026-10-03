@@ -550,7 +550,7 @@ static int32_t write_ops(fd_entry_t *entry, const char __user *buf, uint32_t cou
  */
 static int32_t fsize_refused(uint64_t end)
 {
-    uint32_t limit = current_proc->rlim[RLIM_FSIZE].cur;
+    unsigned long limit = current_proc->rlim[RLIM_FSIZE].cur;
     struct k_siginfo info;
 
     if (limit == RLIM_INFINITY32 || end <= limit) {
@@ -10020,9 +10020,10 @@ static int32_t core_file_put(void *ctx, const void *buf, uint32_t len)
  * others do, as Linux counts the byte its dump writes there: a file already
  * at the limit stops short, with -EFBIG.
  */
-int32_t fs_core_file(int signo, uint32_t limit)
+int32_t fs_core_file(int signo, unsigned long limit)
 {
     static const char zero;
+    uint32_t most = (uint32_t)limit == limit ? (uint32_t)limit : 0xFFFFFFFFu;
     struct core_file cf;
     fd_entry_t *entry;
     uint32_t notes_size;
@@ -10061,10 +10062,10 @@ out:
         cf.pos = 0;
         cf.end = 0;
         cf.written = 0;
-        rc = core_write(core_file_put, &cf, notes, notes_size, limit);
+        rc = core_write(core_file_put, &cf, notes, notes_size, most);
         if (rc == 0 && cf.end < cf.pos) {
             cf.pos--;
-            rc = cf.written < limit ? core_file_put(&cf, &zero, 1) : -EFBIG;
+            rc = cf.written < most ? core_file_put(&cf, &zero, 1) : -EFBIG;
         }
     }
     kfree(notes);

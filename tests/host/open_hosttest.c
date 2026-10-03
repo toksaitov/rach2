@@ -135,7 +135,7 @@ static long sys_statx(isr_params_t *params);
 static long sys_memfd_create(isr_params_t *params);
 static long sys_flock(isr_params_t *params);
 static long sys_close_range(isr_params_t *params);
-static int32_t fs_core_file(int signo, uint32_t limit);
+static int32_t fs_core_file(int signo, unsigned long limit);
 static long sys_mknod(isr_params_t *params);
 static long sys_mknodat(isr_params_t *params);
 static int32_t fs_socket_bind(const char *path, uint32_t mode, struct vfs_ref *ref, uint32_t *ino);

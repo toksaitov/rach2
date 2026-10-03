@@ -4115,7 +4115,7 @@ probe coremusl
 file rach2/sys/syscall_fs.c
 expect COREMUSL FAIL (a limit of the bytes before the zero at the end took the zero
 old
-            rc = cf.written < limit ? core_file_put(&cf, &zero, 1) : -EFBIG;
+            rc = cf.written < most ? core_file_put(&cf, &zero, 1) : -EFBIG;
 new
             rc = core_file_put(&cf, &zero, 1);
 end

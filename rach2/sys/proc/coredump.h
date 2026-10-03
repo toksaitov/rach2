@@ -57,9 +57,11 @@ int32_t core_write(core_write_fn write, void *ctx, const uint8_t *notes, uint32_
 /**
  * Write the core file of the current process through `core_write` as
  * "core" in its working directory, a new file of mode 0600 less the umask,
- * after unlinking whatever had the name. 0, or a negative errno. Defined in
+ * after unlinking whatever had the name, at most `limit` bytes, the soft
+ * RLIMIT_CORE; `core_write` counts in 32 bits, so a limit past them writes
+ * at most 4 GiB less a byte. 0, or a negative errno. Defined in
  * syscall_fs.c, which opens files.
  */
-int32_t fs_core_file(int signo, uint32_t limit);
+int32_t fs_core_file(int signo, unsigned long limit);
 
 #endif /* _COREDUMP_H_ */
