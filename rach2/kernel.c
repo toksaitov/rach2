@@ -164,7 +164,7 @@ static void map_modules(void)
         for (off = 0; off < last - first; off += PAGE_SIZE) {
             map_kernel_frame(next + off, first + off, 1);
         }
-        mod->start = (uint32_t)(next + (mod->phys - first));
+        mod->start = next + (mod->phys - first);
         mod->end = mod->start + mod->size;
         next += last - first;
     }
@@ -3622,7 +3622,8 @@ void kernel_main(const struct boot_info *boot)
         klog(KLOG_INFO, "modules", "found %d", num_modules);
         set_fore_color(light_grey);
         if (ramdisk) {
-            klog(KLOG_INFO, "modules", "ram disk: 0x%X, %d bytes", ramdisk->start, ramdisk->size);
+            klog(KLOG_INFO, "modules", "ram disk: %p, %d bytes", (void *)ramdisk->start,
+                 ramdisk->size);
         }
     } else {
         set_fore_color(light_brown);
