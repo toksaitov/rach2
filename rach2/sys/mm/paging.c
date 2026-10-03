@@ -38,6 +38,12 @@ static uintptr_t _next_free_frame;
 static uintptr_t _next_free_upper;
 static size_t _free_window_frames; /* free frames below the window */
 #define WINDOW_KEEP 64u
+/* rach2.framehigh, a test switch: the scan for a frame starts at 4 GiB, so
+ * the heap's pages and the buffers a device is given of them lie above it
+ * on a machine that has memory there, and the frames between the window and
+ * 4 GiB are taken once those above are gone. Set while they are left. */
+static int _framehigh_low;
+#define FRAME_HIGH_FIRST (0x100000000ULL / PAGE_SIZE)
 /* rach2.framefail: the allocation that fails on purpose, counted down. */
 static uint32_t _framefail_left;
 static int _framefail_on = -1;
@@ -180,6 +186,11 @@ void init_paging(struct frame_map *map)
     _user_frames_start = mem_reserved_ptr / PAGE_SIZE;
     _next_free_frame = _user_frames_start;
     _next_free_upper = _window_frames;
+    if (_frames_number > FRAME_HIGH_FIRST && kcmdline_has("rach2.framehigh")) {
+        _next_free_upper = (uintptr_t)FRAME_HIGH_FIRST;
+        _framehigh_low = 1;
+        klog(KLOG_INFO, "memory", "rach2.framehigh: frames are taken from 4 GiB up first");
+    }
     if (map->top_frame) {
         frame_map_reserve(map, 0, mem_reserved_ptr);
     }
@@ -959,6 +970,11 @@ static uintptr_t find_free_frame(void)
             _next_free_upper = frame + 1;
             return frame;
         }
+    }
+    if (_framehigh_low) {
+        _framehigh_low = 0;
+        _next_free_upper = _window_frames;
+        return find_free_frame();
     }
     _next_free_upper = _frames_number;
     if (_free_window_frames <= WINDOW_KEEP) {
