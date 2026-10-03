@@ -71,6 +71,7 @@ static int sysfs_block_find(const char *name, int len, int disk);
 static int sysfs_block_devno(const char *name, int len);
 static void sysfs_block_name(int key, char *out, int cap);
 static int sysfs_block_whole(int key);
+static int sysfs_block_loop(int key);
 #include "fs/procfs.c"
 #include "ns_first.h"
 

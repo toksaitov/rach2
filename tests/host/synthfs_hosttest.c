@@ -69,6 +69,12 @@ int sysfs_block_whole(int key)
     return -1;
 }
 
+int sysfs_block_loop(int key)
+{
+    (void)key;
+    return -1;
+}
+
 #define CHECK(cond)    \
     do {               \
         if (!(cond)) { \

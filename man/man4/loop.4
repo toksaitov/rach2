@@ -1,4 +1,4 @@
-.Dd October 2, 2026
+.Dd October 3, 2026
 .Dt LOOP 4
 .Os
 .Sh NAME
@@ -101,8 +101,10 @@ otherwise.
 .El
 .Pp
 An attached device is a disk of
-.Pa /sys/block
-and
+.Pa /sys/block ,
+with its backing file in
+.Pa /sys/block/loopN/loop/backing_file ,
+and of
 .Pa /proc/partitions ,
 as on Linux.
 .Pp

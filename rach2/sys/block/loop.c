@@ -385,6 +385,16 @@ int loop_line(int index, char *buffer, uint32_t cap)
     return (int)at;
 }
 
+const char *loop_backing(int index, int *autoclear)
+{
+    loop_settle();
+    if (index < 0 || index >= LOOP_DEVICES || !loops[index].used || !loops[index].attached) {
+        return NULL;
+    }
+    *autoclear = loops[index].autoclear;
+    return loops[index].path;
+}
+
 /**
  * Resolve the backing path again after acquiring its mount's namespace lock.
  *

@@ -1,4 +1,4 @@
-.Dd October 2, 2026
+.Dd October 3, 2026
 .Dt SYSFS 5
 .Os
 .Sh NAME
@@ -250,6 +250,23 @@ from the drive's identity, and its
 or
 .Ql USB
 for a stick.
+.It Pa /sys/block/loopN/loop
+A loop device's, while a file backs it, as on Linux:
+.Pa backing_file ,
+the path the file was attached by,
+.Pa autoclear ,
+and
+.Pa offset ,
+.Pa sizelimit ,
+.Pa partscan
+and
+.Pa dio ,
+each 0.
+util-linux's
+.Xr losetup 8
+reads them, since the release
+.Xr uname 2
+gives is a Linux one.
 .It Pa /sys/dev/block/MAJOR:MINOR
 A link for each disk node to its directory under
 .Pa /sys/block .

@@ -11205,8 +11205,8 @@ static void synth_put_devno(char *out, uint32_t major, uint32_t minor)
 /**
  * The `n`th entry of a directory of disks: /sys/block, a directory for each
  * disk; /sys/dev/block, a link named MAJOR:MINOR for each disk node; a
- * disk's own, its attributes, `queue`, `device` and its partitions'
- * directories; and the others, their attributes.
+ * disk's own, its attributes, `queue`, `device`, a bound loop device's
+ * `loop` and its partitions' directories; and the others, their attributes.
  */
 static int synth_sys_block_dirent(int node, int key, int n, char *name, uint64_t *ino,
                                   uint8_t *dtype)
@@ -11226,6 +11226,12 @@ static int synth_sys_block_dirent(int node, int key, int n, char *name, uint64_t
         count++;
     }
     n -= count;
+    if (node == SYSFS_BLOCK_DISK && n == 2 && sysfs_block_loop(key) >= 0) {
+        k_strncpy(name, "loop", 31);
+        *ino = sysfs_ino(SYSFS_BLOCK_LOOP, key, 0);
+        *dtype = DT_DIR;
+        return 1;
+    }
     if (node == SYSFS_BLOCK_DISK && (n == 0 || n == 1)) {
         k_strncpy(name, n == 0 ? "queue" : "device", 31);
         *ino = sysfs_ino(n == 0 ? SYSFS_BLOCK_QUEUE : SYSFS_BLOCK_DEV, key, 0);
@@ -11238,7 +11244,7 @@ static int synth_sys_block_dirent(int node, int key, int n, char *name, uint64_t
     i = sysfs_block_nth(node == SYSFS_BLOCK        ? -1
                         : node == SYSFS_BLOCK_DISK ? key
                                                    : -2,
-                        node == SYSFS_BLOCK_DISK ? n - 2 : n);
+                        node == SYSFS_BLOCK_DISK ? n - 2 - (sysfs_block_loop(key) >= 0) : n);
     if (i < 0 || devfs_disk_row(i, &row) != 1) {
         return 0;
     }

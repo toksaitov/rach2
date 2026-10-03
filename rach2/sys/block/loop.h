@@ -76,6 +76,11 @@ void loop_device_gone(block_device_t *device);
 /** One line of /proc/loop for `index`, or 0 when nothing is attached. */
 int loop_line(int index, char *buffer, uint32_t cap);
 
+/** The path the file that backs loop device `index` was attached by, and
+ * in `*autoclear` its autoclear flag, for /sys/block/loopN/loop; NULL when
+ * no file backs it. */
+const char *loop_backing(int index, int *autoclear);
+
 /** The write handler behind /dev/loop-control. */
 /** The longest backing path a control line may name; a line is that plus
     its command word, and a longer write is refused. */

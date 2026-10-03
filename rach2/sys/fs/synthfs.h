@@ -255,6 +255,7 @@ const char *synth_sysvipc_name(int origin);
 #define SYSFS_CPU0        29 /* /sys/devices/system/cpu/cpu0 */
 #define SYSFS_MEMORY      30 /* /sys/devices/system/memory, the memory blocks */
 #define SYSFS_MEMORY0     31 /* /sys/devices/system/memory/memory0 */
+#define SYSFS_BLOCK_LOOP  32 /* /sys/block/loopN/loop, while a file backs it */
 
 /** Whether the /sys directory `node` is one of a device or an interface,
  * which `syskey` says, and which exists only while that does. */
@@ -262,9 +263,10 @@ const char *synth_sysvipc_name(int origin);
     ((node) == SYSFS_PCI_DEVICE || (node) == SYSFS_USB_DEVICE || (node) == SYSFS_NET_IF || \
      (node) == SYSFS_NET_STATS || SYSFS_IS_BLOCK(node))
 
-/** Whether `node` is a directory of a disk node: its own, its queue's or
- * its device's. */
-#define SYSFS_IS_BLOCK(node) ((node) >= SYSFS_BLOCK_DISK && (node) <= SYSFS_BLOCK_DEV)
+/** Whether `node` is a directory of a disk node: its own, its queue's, its
+ * device's or a loop device's `loop`. */
+#define SYSFS_IS_BLOCK(node) \
+    (((node) >= SYSFS_BLOCK_DISK && (node) <= SYSFS_BLOCK_DEV) || (node) == SYSFS_BLOCK_LOOP)
 
 /** The name of the `n`th attribute file of the /sys directory `node`, in the
  * order the directory lists them, or NULL past the last, and for a node
@@ -292,6 +294,11 @@ int sysfs_block_find(const char *name, int len, int disk);
 int sysfs_block_devno(const char *name, int len);
 void sysfs_block_name(int key, char *out, int cap);
 int sysfs_block_whole(int key);
+
+/** The loop device the disk node `key` is while a file backs it, or -1:
+ * the one disk whose directory has `loop`, as Linux gives a bound loop
+ * device. */
+int sysfs_block_loop(int key);
 
 /** Write the name of the device `key` of `node`, SYSFS_PCI_DEVICE or
  * SYSFS_USB_DEVICE, into `out` of `cap` bytes, NUL-terminated. */

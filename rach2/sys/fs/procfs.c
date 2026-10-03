@@ -3654,6 +3654,22 @@ int sysfs_block_whole(int key)
     return devfs_disk_row(key, &row) == 1 ? row.whole : -1;
 }
 
+int sysfs_block_loop(int key)
+{
+    struct devfs_disk_row row;
+    const char *p;
+    int index = 0, autoclear;
+
+    if (devfs_disk_row(key, &row) != 1 || row.partno || row.name[0] != 'l' || row.name[1] != 'o' ||
+        row.name[2] != 'o' || row.name[3] != 'p' || !row.name[4]) {
+        return -1;
+    }
+    for (p = row.name + 4; *p >= '0' && *p <= '9' && index < 1000; p++) {
+        index = index * 10 + (*p - '0');
+    }
+    return !*p && loop_backing(index, &autoclear) ? index : -1;
+}
+
 /** Whether the strings `a` and `b` are the same. */
 static int same_word(const char *a, const char *b)
 {
@@ -3672,6 +3688,22 @@ static int same_word(const char *a, const char *b)
  * removable stick, its uevent, its queue's sizes, a transfer at most 128
  * KiB, no discard and no scheduler, and its model and serial number.
  */
+/** Append an attribute of a bound loop device's `loop` directory: the
+ * backing file's path, its autoclear flag, and 0 for the offset, the size
+ * limit, partition scanning and direct I/O, which this driver does not
+ * have. */
+static void ap_loopattr(struct procfs_text *t, int key, const char *name)
+{
+    int autoclear = 0;
+    const char *path = loop_backing(sysfs_block_loop(key), &autoclear);
+
+    if (same_word(name, "backing_file")) {
+        ap_str(t, path ? path : "");
+    } else {
+        ap_u32(t, same_word(name, "autoclear") ? (uint32_t)autoclear : 0u);
+    }
+}
+
 static int procfs_gen_blockattr(struct procfs_text *t, int node, int key, int attr)
 {
     const char *name = sysfs_attr(node, attr);
@@ -3708,6 +3740,8 @@ static int procfs_gen_blockattr(struct procfs_text *t, int node, int key, int at
                   : same_word(name, "serial") ? row.serial
                   : same_word(name, "vendor") ? (row.removable ? "USB" : "ATA")
                                               : "");
+    } else if (node == SYSFS_BLOCK_LOOP) {
+        ap_loopattr(t, key, name);
     } else {
         static const char *const fixed[][2] = {{"range", "16"},
                                                {"ext_range", "256"},
@@ -3778,7 +3812,8 @@ int sysfs_device_exists(int node, int key)
     struct devfs_disk_row row;
 
     if (SYSFS_IS_BLOCK(node)) {
-        return devfs_disk_row(key, &row) == 1 && (node == SYSFS_BLOCK_PART) == (row.partno != 0);
+        return devfs_disk_row(key, &row) == 1 && (node == SYSFS_BLOCK_PART) == (row.partno != 0) &&
+               (node != SYSFS_BLOCK_LOOP || sysfs_block_loop(key) >= 0);
     }
     if (node == SYSFS_NET_IF || node == SYSFS_NET_STATS) {
         return sysfs_netdev(key) != NULL;

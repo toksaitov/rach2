@@ -677,6 +677,8 @@ const char *sysfs_attr(int node, int n)
                                         "zoned",
                                         0};
     static const char *const device[] = {"model", "rev", "serial", "vendor", 0};
+    static const char *const loop[] = {"autoclear", "backing_file", "dio", "offset",
+                                       "partscan",  "sizelimit",    0};
     const char *const *list = node == SYSFS_NET_IF        ? attrs
                               : node == SYSFS_NET_STATS   ? stats
                               : node == SYSFS_RTC0        ? rtc
@@ -689,6 +691,7 @@ const char *sysfs_attr(int node, int n)
                               : node == SYSFS_BLOCK_PART  ? part
                               : node == SYSFS_BLOCK_QUEUE ? queue
                               : node == SYSFS_BLOCK_DEV   ? device
+                              : node == SYSFS_BLOCK_LOOP  ? loop
                                                           : 0;
     int i;
 
@@ -700,6 +703,16 @@ const char *sysfs_attr(int node, int n)
 int sysfs_attr_writable(int node, int attr)
 {
     return (node == SYSFS_RTC0 && attr == 5) || (node == SYSFS_POWER && attr == 1);
+}
+
+/** The part of a disk node's /sys path below the disk's directory: its
+ * `queue`'s, its `device`'s, a loop device's `loop`'s, or none. */
+static const char *block_subdir(int node)
+{
+    return node == SYSFS_BLOCK_QUEUE  ? "/queue"
+           : node == SYSFS_BLOCK_DEV  ? "/device"
+           : node == SYSFS_BLOCK_LOOP ? "/loop"
+                                      : "";
 }
 
 void synth_sys_path(int node, int key, char *out, int cap)
@@ -733,10 +746,7 @@ void synth_sys_path(int node, int key, char *out, int cap)
                 pos++;
             }
         }
-        synth_put(out, cap, &pos,
-                  node == SYSFS_BLOCK_QUEUE ? "/queue"
-                  : node == SYSFS_BLOCK_DEV ? "/device"
-                                            : "");
+        synth_put(out, cap, &pos, block_subdir(node));
         out[pos] = '\0';
         return;
     }
@@ -940,13 +950,16 @@ static int synth_classify_sys_attr(const struct comp *c, int n, int node, int ke
 
 /** Classify the components `c` of `n` in the directory of the disk node
  * `key`: a partition's attributes, or a whole disk's, its `queue` and
- * `device` and its partitions' directories. */
+ * `device`, a loop device's `loop`, and its partitions' directories. */
 static int synth_classify_block_dir(const struct comp *c, int n, int key, struct vpath *vp)
 {
     int part;
 
     if (sysfs_block_whole(key) != key) {
         return synth_classify_sys_attr(c, n, SYSFS_BLOCK_PART, key, vp);
+    }
+    if (n >= 1 && comp_eq(c[0], "loop") && sysfs_block_loop(key) >= 0) {
+        return synth_classify_sys_attr(c + 1, n - 1, SYSFS_BLOCK_LOOP, key, vp);
     }
     if (n >= 1 && (comp_eq(c[0], "queue") || comp_eq(c[0], "device"))) {
         return synth_classify_sys_attr(
