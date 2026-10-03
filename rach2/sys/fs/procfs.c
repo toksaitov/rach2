@@ -1351,9 +1351,9 @@ static void ap_left(struct procfs_text *t, const char *s, int width)
 }
 
 /* A limit's value in its column: "unlimited", or the number. */
-static void ap_limit(struct procfs_text *t, uint32_t v)
+static void ap_limit(struct procfs_text *t, unsigned long v)
 {
-    char digits[12];
+    char digits[24];
     int i = (int)sizeof(digits) - 1;
 
     if (v == RLIM_INFINITY32) {
