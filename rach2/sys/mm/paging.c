@@ -640,7 +640,7 @@ static int page_private(page_dir_t *dir, uintptr_t addr, int writable)
         }
     }
     *e = (pte_t)new_phys | (pte & PTE_FLAGS & ~(pte_t)PTE_COW);
-    paging_flush_tlb(addr);
+    paging_flush_dir(dir, addr);
     if (new_phys != old_phys) {
         frame_unref(old_phys);
     }
