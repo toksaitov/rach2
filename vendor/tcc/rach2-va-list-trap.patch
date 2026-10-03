@@ -1,0 +1,30 @@
+Stop on an impossible argument class in va_arg with a trap instruction
+instead of abort().
+
+__va_arg, in the x86-64 runtime, calls abort() for a class of argument it
+does not know, which cannot happen. A program has abort() from its C
+library, but a kernel linked against the runtime has no C library, and
+its link fails on the reference. __builtin_trap() needs nothing linked,
+and the runtime is built with GCC.
+
+--- a/lib/va_list.c
++++ b/lib/va_list.c
+@@ -4,7 +4,6 @@
+ 
+ /* Avoid include files, they may not be available when cross compiling */
+ extern void *memset(void *s, int c, __SIZE_TYPE__ n);
+-extern void abort(void);
+ 
+ /* This should be in sync with our include/stdarg.h */
+ enum __va_arg_type {
+@@ -58,8 +57,8 @@ void *__va_arg(__va_list_struct *ap,
+         ap->overflow_arg_area = (char*)((long long)(ap->overflow_arg_area + align - 1) & -align);
+         return ap->overflow_arg_area - size;
+ 
+-    default: /* should never happen */
+-        abort();
++    default: /* should never happen; a trap, since a kernel has no abort */
++        __builtin_trap();
+     }
+ }
+ #endif

@@ -129,8 +129,8 @@ tar xf "$TARBALL" -C "$WORK"
 # output kinds this system cannot run; on x86-64 it links a static executable
 # whose PLT and GOT TinyCC 0.9.27 leaves unfilled; and so that it builds the
 # kernel on the machine, it assembles 16-bit and 32-bit code and the 64-bit
-# system instructions, links by a GNU ld script, and knows GCC's name for
-# offsetof.
+# system instructions, links by a GNU ld script, knows GCC's name for
+# offsetof, and gives the x86-64 runtime's va_arg no call of abort().
 # Patches applied here rather than an edited tree, so the vendored source stays
 # as upstream shipped it and the diff a reader wants is a file in this
 # repository. A patch that does not apply is a build that stops: silently
@@ -139,7 +139,7 @@ tar xf "$TARBALL" -C "$WORK"
 echo "tcc: applying the output policy, the x86-64 static link and the kernel's needs"
 for p in rach2-output-policy.patch rach2-x86_64-static-link.patch \
          rach2-x86-asm.patch rach2-linker-script.patch \
-         rach2-builtin-offsetof.patch; do
+         rach2-builtin-offsetof.patch rach2-va-list-trap.patch; do
     if ! (cd "$SRC" && patch -p1 --batch --forward < "$SCRIPT_DIR/$p" >/dev/null); then
         echo "tcc: $p did not apply to $SRC" >&2
         exit 1
@@ -159,7 +159,8 @@ if ! grep -q "s1->seg_size = 64;" "$SRC/tccasm.c" ||
    ! grep -q "^static void asm_modrm16" "$SRC/i386-asm.c" ||
    ! grep -q "R_X86_64_PC16" "$SRC/x86_64-link.c" ||
    ! grep -q "^static int ld_layout" "$SRC/tccelf.c" ||
-   ! grep -q '"__builtin_offsetof(type, field)"' "$SRC/libtcc.c"; then
+   ! grep -q '"__builtin_offsetof(type, field)"' "$SRC/libtcc.c" ||
+   ! grep -q "__builtin_trap();" "$SRC/lib/va_list.c"; then
     echo "tcc: the kernel's assembler, linker or runtime changes are not in the source it is about to build" >&2
     exit 1
 fi
@@ -264,6 +265,26 @@ LIBGCC="$("${CROSS}gcc" $MFLAG -print-libgcc-file-name)"
     # shellcheck disable=SC2086
     "${CROSS}ar" rcs ../libtcc1.a $LIBGCC_HELPERS
 )
+
+# On x86-64 the kernel links the runtime's va_list.o, whose __va_start and
+# __va_arg every variadic function compiled by tcc calls. A kernel keeps out
+# of the SSE registers, which hold the interrupted program's values, and out of
+# the 128 bytes below the stack pointer, which an interrupt in the kernel
+# overwrites; GCC at -O2 copies __va_start's struct through %xmm0 and may keep
+# a leaf's locals below the stack pointer. So the object is built again without
+# either, the same code for a program and a kernel.
+if [ "$RACH2_ARCH" = x86_64 ]; then
+    echo "tcc: building va_list.o for a kernel as well as a program"
+    (
+        cd "$SRC/lib"
+        "$TOOLS/rach2-gcc" -O2 -mno-sse -mno-red-zone -c -o va_list.o va_list.c
+        "${CROSS}ar" rcs ../libtcc1.a va_list.o
+    )
+    if "${CROSS}objdump" -d "$SRC/lib/va_list.o" | grep -q "xmm"; then
+        echo "tcc: va_list.o uses an SSE register" >&2
+        exit 1
+    fi
+fi
 
 mkdir -p "$STAGE" "$STAGE/include"
 echo "tcc: staging to $STAGE"

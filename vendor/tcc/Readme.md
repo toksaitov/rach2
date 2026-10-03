@@ -2,7 +2,7 @@
 
 Rach2 stages a static TinyCC that runs on the guest and produces objects and executables for it: on i686 Rach2 an i386 compiler, on x86-64 Rach2 an x86-64 one, each the machine's native compiler. TinyCC includes its own assembler and linker, so a guest build needs no GNU binutils.
 
-The tracked integration has nine files: `.gitignore`, this Readme, `build_tcc.sh`, five patches, and `tcc-0.9.27.tar.bz2`. The patches are `rach2-output-policy.patch` and `rach2-x86_64-static-link.patch`, which every program needs, and `rach2-x86-asm.patch`, `rach2-linker-script.patch` and `rach2-builtin-offsetof.patch`, which the kernel's build on the machine needs. The extracted source, generated cross-tool shims, compiler, runtime archive, headers, and stamp are ignored and reproducible.
+The tracked integration has ten files: `.gitignore`, this Readme, `build_tcc.sh`, six patches, and `tcc-0.9.27.tar.bz2`. The patches are `rach2-output-policy.patch` and `rach2-x86_64-static-link.patch`, which every program needs, and `rach2-x86-asm.patch`, `rach2-linker-script.patch`, `rach2-builtin-offsetof.patch` and `rach2-va-list-trap.patch`, which the kernel's build on the machine needs. The extracted source, generated cross-tool shims, compiler, runtime archive, headers, and stamp are ignored and reproducible.
 
 ## Build
 
@@ -20,11 +20,11 @@ The root `make` also builds TinyCC through the same stamp. The stamp depends on 
 The build script:
 
 1. Requires `tcc-0.9.27.tar.bz2` to have SHA-256 `de23af78fca90ce32dff2dd45b3432b2334740bb9bb7b05bf60fdbfc396ceb9c`.
-2. Replaces the extracted tree, applies the five patches in the order above with `patch --batch --forward`, and checks that a line of each is in the source it builds.
+2. Replaces the extracted tree, applies the six patches in the order above with `patch --batch --forward`, and checks that a line of each is in the source it builds.
 3. Creates a `rach2-` cross prefix: `rach2-gcc` invokes the project musl wrapper, while `rach2-ar` and `rach2-strip` invoke the architecture's ELF tools.
 4. Configures an i386 or x86_64 musl target with the guest search paths, then rewrites the generated target OS from the macOS build host to Linux and removes `CONFIG_OSX`.
 5. Builds the compiler without executing it on the host, and builds `libtcc1.a` with the cross GCC through TinyCC's `i386-libtcc1-usegcc=yes` or `x86_64-libtcc1-usegcc=yes` rule.
-6. Adds the required libgcc helper objects to `libtcc1.a`, stages the compiler, runtime, and five compiler headers, and checks their combined link closure.
+6. Adds the required libgcc helper objects to `libtcc1.a`; on x86-64 builds `va_list.o` again without SSE registers or the red zone, and refuses one that names an SSE register; stages the compiler, runtime, and five compiler headers, and checks their combined link closure.
 
 The staged outputs are:
 
@@ -91,13 +91,15 @@ The i386 compiler is built from the same source and is unchanged: both changes a
 
 ## The kernel's build
 
-On Rach2 the staged TinyCC builds the kernel of the machine (`tests/run selfbuild`). Three patches give it what the kernel's sources and its x86-64 link need. Each keeps the output of a build that does not use it: every object of the kernel's sources that the unpatched compiler builds is the same byte for byte under the patched one, on either architecture.
+On Rach2 the staged TinyCC builds the kernel of the machine (`tests/run selfbuild`). Four patches give it what the kernel's sources and its x86-64 link need. Each keeps the output of a build that does not use it: every object of the kernel's sources that the unpatched compiler builds is the same byte for byte under the patched one, on either architecture.
 
 `rach2-x86-asm.patch` makes both assemblers take `.code16` and `.code32`, and the x86-64 one `.code64`, as GNU as does: the x86-64 kernel's entry is 32-bit code, and a processor started by INIT and SIPI runs 16-bit code first. In 16-bit and 32-bit code an instruction gets the operand-size and address-size prefixes its operands need, 16-bit code addresses memory through `%bx`, `%bp`, `%si` and `%di`, and a near jump has a 16-bit displacement there; the x86-64 assembler takes the instructions only those modes have and refuses what needs 64-bit code. The size suffixes GNU as has for `pushf`, `popf`, `pusha`, `popa`, `iret`, `lret`, `ret`, `ljmp`, `lcall` and the descriptor-table loads and stores are taken, and on x86-64 `iretq`, `lretq`, `xsave` and the other XSAVE instructions with their 64-bit forms, `fxsave64`, `xgetbv`, `xsetbv` and `rdtscp`. A label less an earlier label of its section, the first defined after the instruction that uses it, came out short by the bytes ahead of the field it was written in, without a diagnostic; it is now right in a field of 16, 32 or 64 bits, and the linkers apply the 16-bit relocations this takes. The patch's header lists the rest. 16-bit and 32-bit code assembles to what GNU as gives, instruction for instruction, and the x86-64 assembler's 32-bit code to the i386 one's bytes, but for four forms the i386 assembler has always written its own way: `movw` to a segment register with an operand-size prefix, and `sldt`, `smsw`, `str` and `jmp` or `call` through a 16-bit register without one.
 
 `rach2-linker-script.patch` makes the linker lay a static executable out by a GNU ld script, which `-Wl,-T,FILE` names: the x86-64 kernel's `link.ld`, linked at `KVA_IMAGE` plus its physical address from 1 MiB and loaded through the Multiboot header's a.out kludge, which copies the file to memory as it lies. The patch reads `ENTRY`, assignments, `PHDRS` and `SECTIONS` with `AT()`, input section patterns and `/DISCARD/`, and the expressions of that script; anything else in a script is an error. A section the script names nowhere, as TinyCC's `.got`, joins the last output section of its kind, and the sections lie in the file as in memory, a segment starting at a file offset congruent to its address modulo `-Wl,-section-alignment`.
 
 `rach2-builtin-offsetof.patch` defines `__builtin_offsetof`, the name GCC's `stddef.h` gives `offsetof` and the kernel's `sys/lib/kdef.h` uses, as the expression TinyCC's own `stddef.h` has.
+
+`rach2-va-list-trap.patch` makes the x86-64 runtime's `__va_arg` stop on an argument class it does not know with `__builtin_trap()`, where it called `abort()`, which a kernel does not have. The build then compiles `va_list.o` again with `-mno-sse -mno-red-zone`, since a kernel keeps out of the SSE registers and an interrupt overwrites the 128 bytes below its stack pointer; at `-O2` GCC copied `__va_start`'s struct through `%xmm0`.
 
 ## Static link closure
 
