@@ -15,17 +15,20 @@
  *                   contiguously from its first sector
  *
  * On an MBR disk the room is the post-MBR gap: core.img goes at LBA 1, and
- * this aborts if it would run past the gap into a partition. It also
- * refuses a core over 1024 sectors there: the gap is two tail slots of
- * 1023 sectors (utils/grubslot.h) so the machine can replace its own boot
- * loader by writing the slot it is not running from, and an image whose
- * tail ran past LBA 1024 would leave no free slot.
+ * this aborts if it would run past the gap into a partition. On a disk
+ * whose MBR is the protective one of a GUID table, the sectors after the
+ * MBR are the table's, and the room is the BIOS boot partition: the entry
+ * of type 21686148-6449-6E6F-744E-656564454649, read from the primary
+ * header and array after both checksums agree. core.img goes at the
+ * partition's first sector.
  *
- * On a disk whose MBR is the protective one of a GUID table, the sectors
- * after the MBR are the table's, and the room is the BIOS boot partition:
- * the entry of type 21686148-6449-6E6F-744E-656564454649, read from the
- * primary header and array after both checksums agree. core.img goes at
- * the partition's first sector and must fit inside it.
+ * Either room is a window that `grubslot_window` (utils/grubslot.h) lays
+ * out as the machine does, LBA 1 through 2047 on an MBR disk and the whole
+ * partition on a GUID one: the entry sector and two tails, so that the
+ * machine can replace its own boot loader by writing the tail it is not
+ * running from. core.img's first sector is the entry sector and the rest
+ * must fit in one tail, or the disk would boot and could not have its boot
+ * loader replaced.
  *
  * Usage: grubembed <disk.img> <boot.img> <core.img>
  */
@@ -34,9 +37,11 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define SECTOR            512
-#define MAX_IMAGE_SECTORS 1024   /* a core image of 512 KiB, the post-MBR gap */
-#define GPT_ARRAY_MAX     16384u /* 128 entries of 128 bytes */
+#include "../../utils/grubslot.h"
+
+#define SECTOR        512
+#define MBR_WINDOW    2047u  /* the post-MBR gap, LBA 1 through 2047 */
+#define GPT_ARRAY_MAX 16384u /* 128 entries of 128 bytes */
 
 /* The BIOS boot partition's type GUID as the table stores it. */
 static const unsigned char bios_boot[16] = {0x48, 0x61, 0x68, 0x21, 0x49, 0x64, 0x6f, 0x6e,
@@ -168,7 +173,9 @@ int main(int argc, char **argv)
     unsigned char mbr[SECTOR];
     unsigned char *boot, *core;
     size_t boot_len, core_len;
-    unsigned long core_sectors, first_lba = 0, core_lba = 1;
+    unsigned long core_sectors, first_lba = 0, core_lba = 1, room = MBR_WINDOW;
+    struct grubslot_window w;
+    char why[128];
     int i;
     FILE *f;
 
@@ -196,16 +203,7 @@ int main(int argc, char **argv)
     }
 
     if (mbr[0x1be + 4] == 0xEE) {
-        unsigned long room;
-
         if (bios_boot_partition(f, &core_lba, &room) != 0) {
-            return 1;
-        }
-        if (core_sectors > room) {
-            fprintf(stderr,
-                    "grub_embed: core.img needs %lu sectors and the BIOS boot "
-                    "partition has %lu\n",
-                    core_sectors, room);
             return 1;
         }
     } else {
@@ -223,14 +221,18 @@ int main(int argc, char **argv)
                     core_sectors, first_lba, first_lba - 1);
             return 1;
         }
-        if (core_sectors > MAX_IMAGE_SECTORS) {
-            fprintf(stderr,
-                    "grub_embed: core.img is %lu sectors and a tail slot "
-                    "has %d; the disk would boot but could not have its boot "
-                    "loader replaced\n",
-                    core_sectors, MAX_IMAGE_SECTORS - 1);
-            return 1;
-        }
+    }
+    if (grubslot_window(core_lba, room, &w, why, sizeof(why)) != 0) {
+        fprintf(stderr, "grub_embed: %s\n", why);
+        return 1;
+    }
+    if (core_sectors - 1 > w.tail) {
+        fprintf(stderr,
+                "grub_embed: core.img is %lu sectors and a tail slot after "
+                "its entry sector has %lu; the disk would boot but could not "
+                "have its boot loader replaced\n",
+                core_sectors, (unsigned long)w.tail);
+        return 1;
     }
 
     /* boot.img loads core.img's first sector from core_lba; the diskboot

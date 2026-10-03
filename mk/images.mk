@@ -21,7 +21,7 @@ $(MKGPT): tools/image/mkgpt.c
 $(FATCHAINS): tools/image/fatchains.c
 	@mkdir -p $(dir $@)
 	$(HOST_LINK)
-$(GRUBEMBED): tools/image/grubembed.c
+$(GRUBEMBED): tools/image/grubembed.c utils/grubslot.c utils/grubslot.h utils/bootslot.h
 	@mkdir -p $(dir $@)
 	$(HOST_LINK)
 $(STICKCHECK): tools/image/stickcheck.c rach2/sys/block/mbr.c rach2/sys/block/mbr.h
