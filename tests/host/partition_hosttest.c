@@ -11,7 +11,8 @@
  * serves, one with both damaged, a blank disk, an unreadable one, and more
  * entries than the service keeps. The installed disk's GPT layout is read
  * again as the four records of an MBR, which is how the kernel judges its
- * boot partition.
+ * boot partition, and its BIOS boot partition is found as the window of
+ * `/dev/grubcore`, kept off the table's own sectors.
  */
 extern int printf(const char *fmt, ...);
 extern int strcmp(const char *a, const char *b);
@@ -166,6 +167,130 @@ static void gpt_disk(void)
         disk[backup_array * SECTOR + i] = disk[2 * SECTOR + i];
     }
     gpt_header(DISK_SECTORS - 1, 1, backup_array);
+}
+
+/** Give the header at `lba` the usable range `first` to `last`, and its CRC. */
+static void gpt_usable(uint64_t lba, uint64_t first, uint64_t last)
+{
+    unsigned char *h = disk + lba * SECTOR;
+
+    wr64(h + 40, first);
+    wr64(h + 48, last);
+    wr32(h + 16, 0);
+    wr32(h + 16, gpt_crc32(h, 92));
+}
+
+static const unsigned char type_bios[16] = {0x48, 0x61, 0x68, 0x21, 0x49, 0x64, 0x6f, 0x6e,
+                                            0x74, 0x4e, 0x65, 0x65, 0x64, 0x45, 0x46, 0x49};
+
+/**
+ * The installed disk's GPT with its BIOS boot partition at `first` to `last`
+ * as entry 4, and both headers' usable range `low` to `high`.
+ */
+static void bios_disk(uint64_t first, uint64_t last, uint64_t low, uint64_t high)
+{
+    blank();
+    gpt_entry(0, 2048, 2559, "boot");
+    gpt_entry(1, 2560, 3071, "recovery");
+    gpt_entry(2, 3072, 3583, "root");
+    gpt_entry(3, first, last, "BIOS boot");
+    gpt_type(3, type_bios);
+    gpt_disk();
+    gpt_usable(1, low, high);
+    gpt_usable(DISK_SECTORS - 1, low, high);
+}
+
+/**
+ * Where `/dev/grubcore` is on a GPT disk: the one BIOS boot partition, taken
+ * from whichever header served, and never over sector 0, a header or an entry
+ * array, whatever the usable range claims.
+ */
+static void bios_boot_rows(void)
+{
+    static struct part_table t;
+    uint64_t first = 0, count = 0;
+    int number = 0;
+
+    bios_disk(34, 2047, 34, DISK_SECTORS - 34u);
+    CHECK("the installed layout reads", part_scan(&t, read_disk, 0, DISK_SECTORS, work) == 0);
+    CHECK("with the serving header's sectors recorded",
+          t.gpt.header_lba == 1 && t.gpt.alternate_lba == DISK_SECTORS - 1 &&
+              t.gpt.array_lba == 2 && t.gpt.array_sectors == ARRAY_SECS &&
+              t.gpt.first_usable == 34 && t.gpt.last_usable == DISK_SECTORS - 34u);
+    CHECK("its BIOS boot partition is found", part_bios_boot(&t, &first, &count, &number) == 0);
+    CHECK("as entry 4, exactly LBA 34 through 2047", number == 4 && first == 34 && count == 2014);
+
+    /* The primary damaged: the backup serves, and the window is the same. */
+    disk[1 * SECTOR + 20] ^= 0xFF;
+    CHECK("with the primary header damaged",
+          part_scan(&t, read_disk, 0, DISK_SECTORS, work) == 0 && t.backup_used == 1 &&
+              t.gpt.header_lba == DISK_SECTORS - 1 && t.gpt.alternate_lba == 1);
+    first = count = 0;
+    CHECK("the backup gives the same window",
+          part_bios_boot(&t, &first, &count, &number) == 0 && first == 34 && count == 2014);
+
+    /* No such partition, and two of them. */
+    bios_disk(34, 2047, 34, DISK_SECTORS - 34u);
+    gpt_type(3, (const unsigned char *)"0123456789abcdef");
+    gpt_disk();
+    first = 7;
+    CHECK("a table with no BIOS boot partition reads",
+          part_scan(&t, read_disk, 0, DISK_SECTORS, work) == 0 && t.count == 4);
+    CHECK("and has no window", part_bios_boot(&t, &first, &count, &number) == -1 && first == 7);
+    bios_disk(34, 2047, 34, DISK_SECTORS - 34u);
+    gpt_entry(4, 3584, 3839, "second");
+    gpt_type(4, type_bios);
+    gpt_disk();
+    CHECK("a table with two reads", part_scan(&t, read_disk, 0, DISK_SECTORS, work) == 0);
+    CHECK("and has no window, since which one is meant is not known",
+          part_bios_boot(&t, &first, &count, &number) == -1);
+
+    /* A usable range that reaches into the table's own sectors. */
+    bios_disk(2, 2047, 2, DISK_SECTORS - 34u);
+    CHECK("an entry over the primary array reads",
+          part_scan(&t, read_disk, 0, DISK_SECTORS, work) == 0 && t.backup_used == 0);
+    CHECK("an entry over the primary array is no window",
+          part_bios_boot(&t, &first, &count, &number) == -1);
+    disk[1 * SECTOR + 20] ^= 0xFF;
+    CHECK("and read from the backup",
+          part_scan(&t, read_disk, 0, DISK_SECTORS, work) == 0 && t.backup_used == 1);
+    CHECK("the primary array, which the backup did not read, is still kept out",
+          part_bios_boot(&t, &first, &count, &number) == -1);
+    bios_disk(0, 0, 0, DISK_SECTORS - 34u);
+    CHECK("an entry over sector 0 reads",
+          part_scan(&t, read_disk, 0, DISK_SECTORS, work) == 0 && t.count == 4);
+    CHECK("an entry over sector 0 is no window", part_bios_boot(&t, &first, &count, &number) == -1);
+    bios_disk(1, 1, 1, DISK_SECTORS - 34u);
+    CHECK("an entry over the primary header reads",
+          part_scan(&t, read_disk, 0, DISK_SECTORS, work) == 0 && t.count == 4);
+    CHECK("an entry over the primary header is no window",
+          part_bios_boot(&t, &first, &count, &number) == -1);
+    bios_disk(DISK_SECTORS - 33u, DISK_SECTORS - 2u, 34, DISK_SECTORS - 2u);
+    CHECK("an entry over the backup array reads",
+          part_scan(&t, read_disk, 0, DISK_SECTORS, work) == 0 && t.backup_used == 0);
+    CHECK("an entry over the backup array is no window, though the primary never read that array",
+          part_bios_boot(&t, &first, &count, &number) == -1);
+    bios_disk(DISK_SECTORS - 1u, DISK_SECTORS - 1u, 34, DISK_SECTORS - 1u);
+    CHECK("an entry over the backup header reads",
+          part_scan(&t, read_disk, 0, DISK_SECTORS, work) == 0 && t.count == 4);
+    CHECK("an entry over the backup header is no window",
+          part_bios_boot(&t, &first, &count, &number) == -1);
+    bios_disk(34, 2047, 34, DISK_SECTORS - 34u);
+    CHECK("the same table with the partition in place is one",
+          part_scan(&t, read_disk, 0, DISK_SECTORS, work) == 0 &&
+              part_bios_boot(&t, &first, &count, &number) == 0);
+
+    /* A table this kernel builds by hand: past 32 bits of sector address,
+       and an MBR. */
+    t.parts[3].start_lba = 0xFFFFFF00u;
+    t.parts[3].sector_count = 0x100;
+    t.gpt.last_usable = 0x1FFFFFFFFull;
+    CHECK("an entry ending at the last 32-bit sector is a window",
+          part_bios_boot(&t, &first, &count, &number) == 0 && first == 0xFFFFFF00u);
+    t.parts[3].sector_count = 0x101;
+    CHECK("and one sector further is not", part_bios_boot(&t, &first, &count, &number) == -1);
+    t.kind = PART_MBR;
+    CHECK("an MBR table has none", part_bios_boot(&t, &first, &count, &number) == -1);
 }
 
 int main(void)
@@ -327,6 +452,8 @@ int main(void)
         CHECK("an MBR table is not given this way", part_gpt_as_mbr(&t, m) == -1);
         CHECK("and its records are empty", m[1].type == 0 && m[2].sector_count == 0);
     }
+
+    bios_boot_rows();
 
     /* More entries than the service keeps. */
     blank();

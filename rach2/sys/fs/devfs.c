@@ -323,13 +323,14 @@ uint64_t devfs_raw_calls(void)
 static struct disk_window bootpart;
 
 /*
- * /dev/grubcore: the post-MBR gap, LBA 1 through 2047, as a bounded raw
- * window. GRUB's core image lives there, outside every partition, so updating
- * the boot loader needs a device and /dev/bootpart cannot be it: that one is
- * relative to partition 1 and the gap is before it. The range is a constant of
+ * /dev/grubcore: where GRUB's BIOS core lives, as a bounded raw window, so
+ * that updating the boot loader has a device; /dev/bootpart cannot be it,
+ * since that one is relative to partition 1 and the core is not in it. On an
+ * MBR disk the window is the post-MBR gap, LBA 1 through 2047, a constant of
  * the layout instead of anything the partition table says, so a damaged table
- * cannot widen it. Sector 0 is deliberately outside: it has the partition
- * table, and a disk writes whole sectors.
+ * cannot widen it. On a GPT disk those sectors are the table's, and the window
+ * is the BIOS boot partition, as the checked table gives it. Sector 0 is
+ * outside either: it has the partition table, and a disk writes whole sectors.
  */
 static struct disk_window grubcore;
 
@@ -2366,6 +2367,37 @@ void devfs_grubcore_publish(struct block_device *backing)
     block_partition_init(&grubcore.part, backing, MBR_GAP_FIRST_LBA,
                          MBR_GAP_END_LBA - MBR_GAP_FIRST_LBA);
     grubcore.present = 1;
+}
+
+/**
+ * Publish /dev/grubcore over the BIOS boot partition of a GUID table.
+ *
+ * `t` is the table the partition service read from `backing`, from the
+ * primary header or, when that one failed its checks, the backup. The window
+ * is exactly the partition's sectors, and only when `part_bios_boot` finds one
+ * such partition clear of sector 0, the headers and the entry array; a table
+ * with none, or with two, has no window. Sector 0 is outside the window, so
+ * the protective MBR's pointer to the core's first sector stays as the disk
+ * was built.
+ */
+void devfs_grubcore_publish_gpt(struct block_device *backing, const struct part_table *t)
+{
+    uint64_t first, count;
+    int number;
+
+    if (!backing || part_bios_boot(t, &first, &count, &number) != 0) {
+        klog(KLOG_INFO, "devfs",
+             "no one BIOS boot partition clear of the GUID table; /dev/grubcore absent");
+        return;
+    }
+    if (count > backing->sector_count || first > backing->sector_count - count) {
+        klog(KLOG_WARN, "devfs", "the BIOS boot partition is past the disk; /dev/grubcore absent");
+        return;
+    }
+    block_partition_init(&grubcore.part, backing, first, count);
+    grubcore.present = 1;
+    klog(KLOG_INFO, "devfs", "/dev/grubcore: BIOS boot partition %d, %ld sectors at LBA %ld",
+         number, (long)count, (long)first);
 }
 
 /**

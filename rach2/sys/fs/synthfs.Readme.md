@@ -31,7 +31,7 @@ The namespace is fixed. Creation, removal, rename, and timestamp operations on t
 | `/dev/bootpart` | 240:0 | 0600 | Exposes a validated FAT boot partition as a raw sector window when one exists. |
 | `/dev/disk0` | 240:1 | 0400 | Exposes disk 0 after a diagnostic probe, in recovery, or through USB discovery. |
 | `/dev/bootlog` | 240:2 | 0400 | Reads the kernel log's 16 KiB ring from its oldest retained record. |
-| `/dev/grubcore` | 240:3 | 0600 | Exposes LBA 1 through 2047 when the MBR leaves that range unused. |
+| `/dev/grubcore` | 240:3 | 0600 | Exposes LBA 1 through 2047 when the MBR leaves that range unused, or a GPT disk's one BIOS boot partition. |
 | `/dev/disk0p1` to `/dev/disk0p4` | 240:4 to 240:7 | 0400 | One read-only window per nonempty MBR entry, the source `mount(2)` takes. |
 | `/dev/diskN` | 240, the minors [`block/Readme.md`](../block/Readme.md) lists | 0400 | The whole medium of a disk or a stick; a stick's is published by its table scan, from the reading of that table until the record is reclaimed. |
 | `/dev/diskNpM` | 240, the same scheme | 0400 | One window per partition the table describes, the source `mount(2)` takes. |
@@ -66,7 +66,7 @@ Disk discovery reads and validates sector 0 before publishing either boot window
 * its length is less than 2 GiB;
 * it is not the partition later selected as the KRFFS root.
 
-`/dev/grubcore` represents the fixed half-open range `[1, 2048)`. It requires a disk large enough for that range and no nonempty partition overlapping it. Sector 0 is excluded because it contains the partition table. Both devices are considered before root selection, so a RAM-root boot can still repair its disk.
+`/dev/grubcore` is the range that holds GRUB's BIOS core. On an MBR disk it is the fixed half-open range `[1, 2048)`, and it requires a disk large enough for that range and no nonempty partition overlapping it. On a GPT disk those sectors are the table's, and the range is the BIOS boot partition as the partition service read it, from the primary header or the backup (`devfs_grubcore_publish_gpt`, `part_bios_boot`): exactly one such partition, clear of sector 0, the headers and the entry arrays, and on the device; LBA 34 through 2047 on the disks this project builds. Sector 0 is excluded either way because it contains the partition table. `HDIO_GETGEO` gives the range's first sector and `BLKGETSIZE64` its size. Both devices are considered before root selection, so a RAM-root boot can still repair its disk.
 
 Every boot publishes whole-disk windows for registered disks, and `rach2.diskdiag` and recovery builds also probe for a disk the boot did not find. USB discovery also publishes each discovered disk's whole-disk window. Partition windows are published separately after a table scan. An ATA or AHCI whole-disk window covers at most 2^32 sectors, or 2 TiB at 512 bytes per sector. A USB whole-disk window covers the full reported sector count; `/proc/disk` reports both the device size and the window size. An ordinary kernel permits reads but its device write handler returns `EPERM`. Only a kernel built with `RACH2_RECOVERY` has the whole-disk write implementation, and that implementation rechecks effective uid 0 for every write.
 

@@ -1834,7 +1834,8 @@ static block_device_t *choose_boot_disk(void)
  * A disk with a GUID table is judged by the same rules, from its entries 1
  * to 4 as the partition service read them (`part_gpt_as_mbr`). Its gap holds
  * the table itself and GRUB's core is in the BIOS boot partition, so
- * `/dev/grubcore` is never published over it.
+ * `/dev/grubcore` is published over that partition instead, from the same
+ * table (`devfs_grubcore_publish_gpt`).
  *
  * Silent when there is no disk: a machine booting a RAM image on a diskless
  * board is the ordinary case, not a failure.
@@ -1857,7 +1858,7 @@ static void discover_boot_devices(void)
     if (reg && reg->table.kind == PART_GPT) {
         part_gpt_as_mbr(&reg->table, disc_parts);
         disc_table_ok = 1;
-        klog(KLOG_INFO, "block", "a GUID table holds the boot loader's gap; /dev/grubcore absent");
+        devfs_grubcore_publish_gpt(disk, &reg->table);
     } else if (disk->read(disk, 0, 1, mbr) != 0) {
         klog(KLOG_WARN, "block", "MBR read failed; no boot devices");
         return;

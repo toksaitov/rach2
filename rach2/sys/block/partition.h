@@ -52,6 +52,16 @@ struct part_entry {
     char label[PART_LABEL_CHARS + 1]; /* the GPT name as ASCII, '?' elsewhere */
 };
 
+/* Where a GUID table's own sectors are, as the header that served says. */
+struct part_gpt_meta {
+    uint64_t header_lba;    /* the header read: 1, or the disk's last sector */
+    uint64_t alternate_lba; /* the other header */
+    uint64_t array_lba;     /* the entry array the header covers */
+    uint32_t array_sectors;
+    uint64_t first_usable; /* the sectors an entry may cover */
+    uint64_t last_usable;
+};
+
 struct part_table {
     int kind; /* PART_* */
     uint32_t mbr_id;
@@ -60,6 +70,8 @@ struct part_table {
     int refused;     /* entries not taken: past PART_MAX, outside the disk, overlapping */
     int backup_used; /* GPT: the primary was bad and the backup served */
     int volume;      /* no table, and sector 0 is a FAT or exFAT boot sector: one volume */
+    /* GPT only; zero otherwise */
+    struct part_gpt_meta gpt;
     struct part_entry parts[PART_MAX];
 };
 
@@ -91,6 +103,24 @@ int part_scan(struct part_table *t, part_read_fn read, void *ctx, uint64_t disk_
  * with every record empty when `t` is not a GUID table.
  */
 int part_gpt_as_mbr(const struct part_table *t, struct mbr_part parts[MBR_PART_COUNT]);
+
+/**
+ * Find the BIOS boot partition of the GUID table `t`: the entry of type
+ * 21686148-6449-6E6F-744E-656564454649, where GRUB's BIOS core lives on a
+ * GPT disk, since the sectors after the MBR are the table's.
+ *
+ * The table must have exactly one such entry among those taken, and it must
+ * lie inside the usable range the serving header gives, below 2^32 sectors,
+ * and clear of sector 0, the primary header at sector 1, the serving header,
+ * the other header it names, and the entry array it covers. The other copy's
+ * array is not read: the specification puts it outside the usable range, and
+ * the entry must also be clear of the place every partitioning tool gives it,
+ * the same number of sectors beside the other header.
+ *
+ * Returns 0 with the entry's first sector, its length and its number set, or
+ * -1 with nothing set.
+ */
+int part_bios_boot(const struct part_table *t, uint64_t *first, uint64_t *count, int *number);
 
 /** Write `guid` as the 36-character text form into `out`, terminated. */
 void part_guid_text(const uint8_t guid[16], char out[37]);

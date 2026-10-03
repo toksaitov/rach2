@@ -253,6 +253,12 @@ static int scan_gpt_at(struct part_table *t, part_read_fn read, void *ctx, uint6
     for (i = 0; i < 16; i++) {
         t->disk_guid[i] = header[56 + i];
     }
+    t->gpt.header_lba = header_lba;
+    t->gpt.alternate_lba = gpt_alternate_lba(header);
+    t->gpt.array_lba = array_lba;
+    t->gpt.array_sectors = sectors;
+    t->gpt.first_usable = first;
+    t->gpt.last_usable = last;
     for (i = 0; i < count; i++) {
         const uint8_t *entry = work + i * size;
         struct part_entry *e;
@@ -293,6 +299,12 @@ int part_scan(struct part_table *t, part_read_fn read, void *ctx, uint64_t disk_
     t->refused = 0;
     t->backup_used = 0;
     t->volume = 0;
+    t->gpt.header_lba = 0;
+    t->gpt.alternate_lba = 0;
+    t->gpt.array_lba = 0;
+    t->gpt.array_sectors = 0;
+    t->gpt.first_usable = 0;
+    t->gpt.last_usable = 0;
     for (i = 0; i < 16; i++) {
         t->disk_guid[i] = 0;
     }
@@ -323,13 +335,16 @@ int part_scan(struct part_table *t, part_read_fn read, void *ctx, uint64_t disk_
     return 0;
 }
 
-/* The type GUIDs `part_gpt_as_mbr` names, as the table stores them. */
+/* The type GUIDs `part_gpt_as_mbr` and `part_bios_boot` name, as the table
+   stores them. */
 static const uint8_t type_efi_system[16] = {0x28, 0x73, 0x2a, 0xc1, 0x1f, 0xf8, 0xd2, 0x11,
                                             0xba, 0x4b, 0x00, 0xa0, 0xc9, 0x3e, 0xc9, 0x3b};
 static const uint8_t type_basic_data[16] = {0xa2, 0xa0, 0xd0, 0xeb, 0xe5, 0xb9, 0x33, 0x44,
                                             0x87, 0xc0, 0x68, 0xb6, 0xb7, 0x26, 0x99, 0xc7};
 static const uint8_t type_linux[16] = {0xaf, 0x3d, 0xc6, 0x0f, 0x83, 0x84, 0x72, 0x47,
                                        0x8e, 0x79, 0x3d, 0x69, 0xd8, 0x47, 0x7d, 0xe4};
+static const uint8_t type_bios_boot[16] = {0x48, 0x61, 0x68, 0x21, 0x49, 0x64, 0x6f, 0x6e,
+                                           0x74, 0x4e, 0x65, 0x65, 0x64, 0x45, 0x46, 0x49};
 
 int part_gpt_as_mbr(const struct part_table *t, struct mbr_part parts[MBR_PART_COUNT])
 {
@@ -359,6 +374,63 @@ int part_gpt_as_mbr(const struct part_table *t, struct mbr_part parts[MBR_PART_C
         p->start_lba = (uint32_t)e->start_lba;
         p->sector_count = (uint32_t)e->sector_count;
     }
+    return 0;
+}
+
+/** Whether `[a, a + n)` and `[b, b + m)` share a sector; `n`, `m` > 0. */
+static int ranges_meet(uint64_t a, uint64_t n, uint64_t b, uint64_t m)
+{
+    return a <= b + (m - 1) && b <= a + (n - 1);
+}
+
+int part_bios_boot(const struct part_table *t, uint64_t *first, uint64_t *count, int *number)
+{
+    const struct part_entry *found = 0;
+    const struct part_gpt_meta *g = &t->gpt;
+    uint64_t start, n, other_array;
+    int i;
+
+    if (t->kind != PART_GPT) {
+        return -1;
+    }
+    for (i = 0; i < t->count; i++) {
+        if (part_guid_equal(t->parts[i].type_guid, type_bios_boot)) {
+            if (found) {
+                return -1;
+            }
+            found = &t->parts[i];
+        }
+    }
+    if (!found) {
+        return -1;
+    }
+    start = found->start_lba;
+    n = found->sector_count;
+    if (n == 0 || start < 2 || start > 0xFFFFFFFFu || n - 1 > 0xFFFFFFFFu - start) {
+        return -1;
+    }
+    if (start < g->first_usable || start + (n - 1) > g->last_usable) {
+        return -1;
+    }
+    if (g->array_sectors == 0 || ranges_meet(start, n, g->header_lba, 1) ||
+        ranges_meet(start, n, g->alternate_lba, 1) ||
+        ranges_meet(start, n, g->array_lba, g->array_sectors)) {
+        return -1;
+    }
+    /* The unread copy's array, where every tool puts it, beside its header. */
+    if (g->alternate_lba < g->header_lba) {
+        other_array = g->alternate_lba + 1;
+    } else if (g->alternate_lba > g->array_sectors) {
+        other_array = g->alternate_lba - g->array_sectors;
+    } else {
+        other_array = 0;
+    }
+    if (ranges_meet(start, n, other_array, g->array_sectors)) {
+        return -1;
+    }
+    *first = start;
+    *count = n;
+    *number = found->number;
     return 0;
 }
 

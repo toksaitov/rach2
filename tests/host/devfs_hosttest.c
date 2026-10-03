@@ -1,14 +1,20 @@
 /**
- * Check exclusive creation before pty or descriptor allocation, and which
+ * Check exclusive creation before pty or descriptor allocation, which
  * devices' transfers move the description's offset, so that read(2) and
- * write(2) hold the description for them.
+ * write(2) hold the description for them, and where /dev/grubcore is
+ * published: the post-MBR gap of an MBR disk and the BIOS boot partition of a
+ * GPT disk, with the first sector and the size its ioctls report.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: rach2/sys/block/partition.c rach2/sys/block/gpt.c
  */
 #include "fs/devfs.c"
 
 extern int printf(const char *format, ...);
 static int failures, master_calls, descriptor_calls;
+/* Set by the rows that publish a window, which log, cut a partition view and
+   copy an ioctl's answer out; every other row must reach none of those. */
+static int publishing, views_cut;
 static process_t process;
 struct percpu cpu_table[NR_CPUS] = {{&process}};
 struct tty console_tty;
@@ -69,6 +75,145 @@ static void offset_devices(void)
           "a transfer of the boot log or a boot window holds its description");
     check(!moves_offset("null") && !moves_offset("zero") && !moves_offset("urandom"),
           "a device whose transfers ignore the offset holds nothing");
+}
+
+static const uint8_t bios_boot_type[16] = {0x48, 0x61, 0x68, 0x21, 0x49, 0x64, 0x6f, 0x6e,
+                                           0x74, 0x4e, 0x65, 0x65, 0x64, 0x45, 0x46, 0x49};
+
+/**
+ * The installed disk's GUID table as the partition service reads it from the
+ * primary header of a 4096-sector disk: the EFI system partition, recovery and
+ * the root as entries 1 to 3, and entry 4, the BIOS boot partition, from LBA
+ * 34 through 2047.
+ */
+static void installed_table(struct part_table *t)
+{
+    int i;
+
+    k_memset(t, 0, sizeof(*t));
+    t->kind = PART_GPT;
+    t->gpt.header_lba = 1;
+    t->gpt.alternate_lba = 4095;
+    t->gpt.array_lba = 2;
+    t->gpt.array_sectors = 32;
+    t->gpt.first_usable = 34;
+    t->gpt.last_usable = 4062;
+    t->count = 4;
+    for (i = 0; i < 3; i++) {
+        t->parts[i].number = i + 1;
+        t->parts[i].start_lba = 2048 + (uint64_t)i * 512;
+        t->parts[i].sector_count = 512;
+        t->parts[i].type_guid[0] = (uint8_t)(0x10 + i);
+    }
+    t->parts[3].number = 4;
+    t->parts[3].start_lba = 34;
+    t->parts[3].sector_count = 2014;
+    k_memcpy(t->parts[3].type_guid, bios_boot_type, 16);
+}
+
+/** The window's first sector and its size, as `bootctl` asks for them. */
+static int window_reports(uint64_t first, uint64_t bytes)
+{
+    struct {
+        uint8_t heads;
+        uint8_t sectors;
+        uint16_t cylinders;
+        unsigned long start;
+    } geo;
+    uint64_t size = 0;
+    fd_entry_t e;
+    int i;
+
+    k_memset(&e, 0, sizeof(e));
+    e.type = FD_TYPE_DEVICE;
+    for (i = 0; i < DEVFS_NDEV; i++) {
+        if (name_eq(dev_table[i].name, "grubcore")) {
+            e.dev = &dev_table[i];
+        }
+    }
+    geo.start = 0;
+    return e.dev && dev_ioctl(&e, 0x0301u, (uintptr_t)&geo) == 0 &&
+           dev_ioctl(&e, 0x80081272u, (uintptr_t)&size) == 0 && geo.start == first && size == bytes;
+}
+
+/**
+ * Where /dev/grubcore is. On an MBR disk the gap, LBA 1 through 2047, on any
+ * disk that holds it; on a GPT disk exactly the BIOS boot partition, from the
+ * primary header or the backup, and nothing where the table has none or the
+ * partition is past the disk. `HDIO_GETGEO` reports the window's first sector
+ * and `BLKGETSIZE64` its size, which is how `bootctl grub` lays out its tails.
+ */
+static void grubcore_windows(void)
+{
+    static struct part_table t;
+    block_device_t disk;
+
+    publishing = 1;
+    k_memset(&disk, 0, sizeof(disk));
+
+    disk.sector_count = 4096;
+    devfs_grubcore_publish(&disk);
+    check(grubcore.present && grubcore.part.backing == &disk && grubcore.part.start_lba == 1 &&
+              grubcore.part.device.sector_count == 2047,
+          "on an MBR disk /dev/grubcore is LBA 1 through 2047");
+    check(window_reports(1, 2047u * 512u), "and reports its first sector, 1, and its size");
+    devfs_grubcore_withdraw();
+    views_cut = 0;
+    disk.sector_count = 2047;
+    devfs_grubcore_publish(&disk);
+    check(!grubcore.present && views_cut == 0, "a disk smaller than the gap has none");
+
+    disk.sector_count = 4096;
+    installed_table(&t);
+    devfs_grubcore_publish_gpt(&disk, &t);
+    check(grubcore.present && grubcore.part.backing == &disk && grubcore.part.start_lba == 34 &&
+              grubcore.part.device.sector_count == 2014,
+          "on a GPT disk /dev/grubcore is the BIOS boot partition, LBA 34 through 2047");
+    check(window_reports(34, 2014u * 512u), "and reports its first sector, 34, and its size");
+    devfs_grubcore_withdraw();
+
+    installed_table(&t);
+    t.backup_used = 1;
+    t.gpt.header_lba = 4095;
+    t.gpt.alternate_lba = 1;
+    t.gpt.array_lba = 4063;
+    devfs_grubcore_publish_gpt(&disk, &t);
+    check(grubcore.present && grubcore.part.start_lba == 34 &&
+              grubcore.part.device.sector_count == 2014,
+          "a table read from its backup gives the same window");
+    devfs_grubcore_withdraw();
+
+    views_cut = 0;
+    installed_table(&t);
+    t.parts[3].type_guid[0] ^= 0xff;
+    devfs_grubcore_publish_gpt(&disk, &t);
+    check(!grubcore.present && views_cut == 0, "a GPT disk with no BIOS boot partition has none");
+
+    devfs_grubcore_withdraw();
+    views_cut = 0;
+    installed_table(&t);
+    t.parts[3].start_lba = 2;
+    t.parts[3].sector_count = 2046;
+    t.gpt.first_usable = 2;
+    devfs_grubcore_publish_gpt(&disk, &t);
+    check(!grubcore.present && views_cut == 0,
+          "nor one whose BIOS boot partition covers the entry array");
+
+    devfs_grubcore_withdraw();
+    views_cut = 0;
+    installed_table(&t);
+    disk.sector_count = 2000;
+    devfs_grubcore_publish_gpt(&disk, &t);
+    check(!grubcore.present && views_cut == 0, "nor one whose partition runs past the disk");
+
+    devfs_grubcore_withdraw();
+    views_cut = 0;
+    installed_table(&t);
+    t.kind = PART_MBR;
+    disk.sector_count = 4096;
+    devfs_grubcore_publish_gpt(&disk, &t);
+    check(!grubcore.present && views_cut == 0, "and an MBR table never takes this path");
+    publishing = 0;
 }
 
 /** Check errno precedence, absent leaves, ordinary pty dispatch and the
@@ -160,8 +305,10 @@ int main(void)
           "pty directory open allocates nothing");
     check(devfs_open("ptmx", 2) == 7 && master_calls == 1, "ordinary pty open dispatches");
     offset_devices();
+    grubcore_windows();
     if (!failures) {
-        printf("devfs-hosttest: result: pass: exclusive pty creation, offset devices\n");
+        printf("devfs-hosttest: result: pass: exclusive pty creation, offset devices, "
+               "boot loader windows\n");
     }
     return failures != 0;
 }
@@ -179,14 +326,19 @@ uint32_t block_max_sectors(block_device_t *dev)
     return (uint32_t)unexpected();
 }
 
+/** Cut a view as the block layer does, for the rows that publish a window. */
 void block_partition_init(block_partition_t *part, block_device_t *dev, uint64_t first,
                           uint64_t count)
 {
-    (void)part;
-    (void)dev;
-    (void)first;
-    (void)count;
-    unexpected();
+    if (!publishing) {
+        unexpected();
+        return;
+    }
+    views_cut++;
+    k_memset(part, 0, sizeof(*part));
+    part->backing = dev;
+    part->start_lba = first;
+    part->device.sector_count = count;
 }
 
 block_device_t *block_physical(block_device_t *dev)
@@ -223,6 +375,10 @@ int copy_from_user(void *dst, const void __user *src, size_t size)
 
 int copy_to_user(void __user *dst, const void *src, size_t size)
 {
+    if (publishing) {
+        k_memcpy((void *)dst, src, size);
+        return 0;
+    }
     return copy_from_user(dst, src, size);
 }
 
@@ -271,7 +427,9 @@ void klog(int level, const char *subsystem, const char *format, ...)
     (void)level;
     (void)subsystem;
     (void)format;
-    unexpected();
+    if (!publishing) {
+        unexpected();
+    }
 }
 
 uint32_t klog_len(void)

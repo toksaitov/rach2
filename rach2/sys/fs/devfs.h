@@ -63,6 +63,7 @@ uint32_t devfs_fd_mode(struct fd_entry *e);
  * project builds. A larger one is not published.
  */
 struct disk;
+struct part_table;
 /**
  * Make the nodes of a newly registered disk: `/dev/diskN` and one node per
  * partition slot. Each is listed while its window in the disk's record is
@@ -90,6 +91,16 @@ void devfs_bootpart_publish(struct block_device *backing, uint32_t start_lba,
  * Absent when the device is too small to hold the gap.
  */
 void devfs_grubcore_publish(struct block_device *backing);
+
+/**
+ * Publish /dev/grubcore over the BIOS boot partition of the GUID table `t`,
+ * which the partition service read from `backing`.
+ *
+ * The window is that partition's sectors and nothing else; a table without
+ * exactly one BIOS boot partition clear of sector 0, the headers and the
+ * entry array has no window.
+ */
+void devfs_grubcore_publish_gpt(struct block_device *backing, const struct part_table *t);
 
 /**
  * The partition window `path` names (`/dev/bootpart` or `/dev/disk0pN`):
