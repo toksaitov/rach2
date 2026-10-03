@@ -2,13 +2,15 @@
 
 #
 # uefi.sh: the machine booted by UEFI firmware, from its installed disk and
-# from the recovery stick's image.
+# from the recovery stick's image, and the installed disk's BIOS core
+# replaced under either firmware.
 #
 # Every other suite boots through SeaBIOS or with the kernel given to the
 # emulator. This one gives an x86-64 machine QEMU's UEFI firmware, OVMF, and
 # nothing else: the firmware starts GRUB's EFI image from the disk's EFI
 # system partition, or from the stick's EFI boot image, and the image opens
-# the menu the BIOS core opens. Four boots:
+# the menu the BIOS core opens. Four boots by OVMF, then a fifth part that
+# boots the GPT disk by SeaBIOS as well:
 #
 # 1. The installed disk, a GPT disk as the disk builder makes one and an
 #    install writes it: the firmware boots it, the kernel finds its root by
@@ -23,6 +25,16 @@
 #    answers SSH.
 # 4. The recovery ISO as a CD: the firmware boots its second El Torito
 #    entry, and the recovery system answers SSH.
+# 5. The installed disk's BIOS core replaced from the running machine. The
+#    disk boots by SeaBIOS, whose path is the BIOS core in the BIOS boot
+#    partition; `bootctl grub` writes GRUB's GPT core into the partition's
+#    tail not in use, and the entry sector, the partition's first, is left
+#    naming it. With the other tail zeroed on the host, the disk boots by
+#    SeaBIOS again, so the new tail is the one that ran; a second
+#    `bootctl grub` goes back to the first tail and is proved the same way;
+#    and the disk still boots by OVMF, whose path does not use the core. The
+#    table's sectors before the partition and the backup table at the disk's
+#    end are the same bytes after both installs.
 #
 # The kernel is the one ARCH names, i686 unless it is set, and the machine is
 # x86-64 QEMU for either. The row that reads one line of the framebuffer
@@ -125,6 +137,19 @@ key_ssh() { # key_ssh COMMAND
         [ "$tries" -lt 10 ] || { printf '%s\n' "$out"; return 1; }
         sleep 3 # interval: the server starts after the login prompt
     done
+}
+
+# boot_bios LOG QEMU-ARG...: start the machine by SeaBIOS, QEMU's own
+# firmware, which boots the disk through the BIOS core.
+boot_bios() {
+    log=$1
+    shift
+    rm -f "$log" "$KNOWN"
+    qemu-system-x86_64 -m 512 -cpu max -display none \
+        -serial "file:$log" -no-reboot \
+        -netdev "user,id=net0,hostfwd=tcp::$PORT-:22" -device rtl8139,netdev=net0 \
+        "$@" > "$log.qemu" 2>&1 &
+    QPID=$!
 }
 
 # The firmware's own record of what it booted, on the serial line.
@@ -236,8 +261,111 @@ else
 fi
 stop_machine
 
+# ---- 5: the BIOS core replaced, booted by BIOS and then by UEFI ----
+# The window is the BIOS boot partition as the table gives it, and its tails
+# are what `grubslot.h` lays out: T = min((N - 1) / 2, 1023) sectors at W + 1
+# and W + 1 + T for a partition of N sectors from LBA W.
+GDISK="$DIR/grub.img"
+CORE="$DIR/gpt-core.img"
+cp "$DISK" "$GDISK"
+cp "$REPO/vendor/grub/gpt-core.img" "$CORE.new"
+if ! sh "$REPO/vendor/grub/verify_grub.sh" "gpt-core.img=$CORE.new" > /dev/null; then
+    rm -f "$CORE.new"
+    bad "the pinned GPT core did not verify"
+    echo "uefi-test: result: FAIL" >&2
+    exit 1
+fi
+mv "$CORE.new" "$CORE"
+BB=$("$REPO/build/tools/image/mkgpt" --list "$GDISK" | awk '$2 == "bios" { print $3 / 512, $4 / 512 }')
+BB_FIRST=${BB% *}
+BB_SECTORS=${BB#* }
+TAIL=$(((BB_SECTORS - 1) / 2))
+[ "$TAIL" -le 1023 ] || TAIL=1023
+TAIL_A=$((BB_FIRST + 1))
+TAIL_B=$((TAIL_A + TAIL))
+DISK_SECTORS=$(($(wc -c < "$GDISK") / 512))
+note "the BIOS boot partition is LBA $BB_FIRST, $BB_SECTORS sectors: tails at $TAIL_A and $TAIL_B"
+
+# The LBA the entry sector's blocklist names, as GRUB's boot code reads it.
+blocklist() {
+    dd if="$GDISK" bs=512 skip="$BB_FIRST" count=1 2>/dev/null | od -A n -t u4 -j 500 -N 4 |
+        tr -d ' '
+}
+# The table's own sectors: the protective MBR, the primary header and array,
+# and the backup array and header at the end.
+table_sectors() {
+    dd if="$GDISK" bs=512 count="$BB_FIRST" 2>/dev/null
+    dd if="$GDISK" bs=512 skip=$((DISK_SECTORS - 33)) 2>/dev/null
+}
+table_sectors > "$DIR/table.before"
+[ "$(blocklist)" = "$TAIL_A" ] || bad "the disk was not built with its core in tail A"
+
+# swap_core LOG WANT OTHER: on the machine booted into LOG, install the core,
+# which must land in the tail at WANT; stop the machine, check the selector and
+# the table's sectors on the host, zero the tail at OTHER, and boot by SeaBIOS
+# into LOG.next, which only the tail at WANT can bring up. Returns 1 when the
+# machine is not up on LOG.next afterwards. Its names are its own, since
+# boot_bios sets `log`.
+swap_core() {
+    was=$1
+    want=$2
+    other=$3
+    next="$was.next"
+    grep -aq "devfs: /dev/grubcore: BIOS boot partition 4, $BB_SECTORS sectors at LBA $BB_FIRST" \
+        "$was" || bad "the kernel did not publish the BIOS boot partition as /dev/grubcore"
+    if ! key_ssh 'echo up' > /dev/null; then
+        bad "the machine booted by SeaBIOS did not answer SSH"
+        return 1
+    fi
+    OUT=$(ssh -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$KNOWN" \
+        -o "ConnectTimeout=$(scaled 20)" -o BatchMode=yes -o IdentitiesOnly=yes \
+        -o PreferredAuthentications=publickey -o PasswordAuthentication=no \
+        -i "$DEMO_KEY" -p "$PORT" root@localhost \
+        'cat > /tmp/core.img && bootctl grub /tmp/core.img && sync && echo GRUB""DONE' \
+        < "$CORE" 2>&1 || true)
+    case "$OUT" in
+        *"in the tail at LBA $want; the entry sector at LBA $BB_FIRST now points there"*GRUBDONE*)
+            note "bootctl grub writes the tail at LBA $want and selects it: OK" ;;
+        *) bad "bootctl grub on the GPT disk: $OUT" ;;
+    esac
+    stop_machine
+    [ "$(blocklist)" = "$want" ] || bad "the entry sector names LBA $(blocklist), not $want"
+    table_sectors | cmp -s - "$DIR/table.before" ||
+        bad "the install changed a sector of the GUID table"
+    dd if=/dev/zero of="$GDISK" bs=512 seek="$other" count="$TAIL" conv=notrunc 2>/dev/null
+    boot_bios "$next" -drive "file=$GDISK,format=raw,if=ide,index=0,media=disk"
+    if ! "$RUNUTIL" until "$next" "rach2 login:" 240; then
+        bad "the disk did not boot by SeaBIOS through the tail at LBA $want; see $next"
+        return 1
+    fi
+    note "with the tail at LBA $other zeroed, the disk boots by SeaBIOS through LBA $want: OK"
+}
+
+LOG5="$DIR/bios.log"
+boot_bios "$LOG5" -drive "file=$GDISK,format=raw,if=ide,index=0,media=disk"
+if "$RUNUTIL" until "$LOG5" "rach2 login:" 240; then
+    if grep -aq "BdsDxe" "$LOG5"; then
+        bad "the BIOS boot was made by UEFI firmware"
+    fi
+    if swap_core "$LOG5" "$TAIL_B" "$TAIL_A"; then
+        swap_core "$LOG5.next" "$TAIL_A" "$TAIL_B" || true
+    fi
+    stop_machine
+    LOG6="$DIR/after.log"
+    boot_uefi "$LOG6" -drive "file=$GDISK,format=raw,if=ide,index=0,media=disk"
+    if "$RUNUTIL" until "$LOG6" "rach2 login:" 240 && booted_by_uefi "$LOG6" "HARDDISK"; then
+        note "and after both installs the disk still boots by UEFI: OK"
+    else
+        bad "the disk did not boot by UEFI after the core was replaced; see $LOG6"
+    fi
+    stop_machine
+else
+    bad "the installed disk never reached a login by SeaBIOS; see $LOG5"
+fi
+stop_machine
+
 if [ "$fail" -ne 0 ]; then
     echo "uefi-test: result: FAIL" >&2
     exit 1
 fi
-echo "uefi-test: result: the installed disk, its recovery entry, the stick and the CD boot by UEFI"
+echo "uefi-test: result: the installed disk, its recovery entry, the stick and the CD boot by UEFI; the disk's BIOS core is replaced twice and boots by either firmware"

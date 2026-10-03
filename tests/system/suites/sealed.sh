@@ -21,9 +21,9 @@
 # made missing, faulty and dirty in turn under an armed trial and each lands in
 # the recovery system, after which recovery repairs it and the candidate is
 # committed again; a menu is staged and then truncated from the host, which the
-# stub must survive; a boot loader's replacement is refused by name, since the
-# artifact has a GUID table, whose sectors after the MBR are the table's, and
-# `tests/run grub` replaces the loader through `/dev/grubcore` on an MBR disk;
+# stub must survive; the boot loader is replaced in the BIOS boot partition,
+# which the kernel publishes as `/dev/grubcore` on this GUID table, and the
+# machine comes back through the new core with the old one zeroed;
 # and finally the root is destroyed with the machine stopped and rewritten from
 # recovery through an ssh pipe, after which the machine boots from what
 # arrived.
@@ -651,25 +651,31 @@ case "$OUT" in
 esac
 stop_machine
 
-phase "the boot loader, which a GUID table's disk does not replace"
-# The core is in the BIOS boot partition, and the gap that `/dev/grubcore`
-# covers on an MBR disk holds the table here, so the kernel publishes no such
-# window and `bootctl grub` says so before it reads the image.
-sh "$REPO/tools/image/mkgrubcore.sh" A "$CORE" > /dev/null 2>&1 || \
-    fail "the marked core image could not be built"
+phase "the boot loader, replaced in the BIOS boot partition"
+# The core is in the BIOS boot partition, since the sectors after the MBR are
+# the table's, and the kernel publishes that partition as `/dev/grubcore`.
+# `bootctl grub` writes GRUB's GPT core into the tail not in use, LBA 1041, and
+# selects it in the partition's first sector; with the tail it left, LBA 35,
+# zeroed on the host, the machine comes back only through the new one.
+cp "$REPO/vendor/grub/gpt-core.img" "$CORE"
+sh "$REPO/vendor/grub/verify_grub.sh" "gpt-core.img=$CORE" > /dev/null 2>&1 || \
+    fail "the pinned GPT core did not verify"
 cold_boot core
-grep -aq "a GUID table holds the boot loader's gap; /dev/grubcore absent" "$LOG" || \
-    fail "the kernel did not say why the boot loader window is absent"
+grep -aq "devfs: /dev/grubcore: BIOS boot partition 4, 2014 sectors at LBA 34" "$LOG" || \
+    fail "the kernel did not publish the BIOS boot partition as /dev/grubcore"
 machine 'cat > /tmp/core.img' < "$CORE" > /dev/null 2>&1 || fail "the core image did not arrive"
 OUT="$(machine 'bootctl grub /tmp/core.img' 2>&1 || true)"
 case "$OUT" in
-    *"no boot loader window (no /dev/grubcore)"*) ;;
-    *) fail "the boot loader install on a GUID table was not refused by name: $OUT" ;;
+    *"in the tail at LBA 1041; the entry sector at LBA 34 now points there"*) ;;
+    *) fail "the boot loader install in the BIOS boot partition: $OUT" ;;
 esac
+stop_machine
+dd if=/dev/zero of="$WORK" bs=512 seek=35 count=1006 conv=notrunc status=none
+cold_boot core-b
 OUT="$(machine 'bootctl status' || true)"
 case "$OUT" in
     *"booted: candidate"*) ;;
-    *) fail "the refused install left the machine off its candidate: $OUT" ;;
+    *) fail "the machine did not come back on its candidate through the new core: $OUT" ;;
 esac
 stop_machine
 
@@ -792,5 +798,5 @@ esac
 stop_machine
 
 phase ""
-echo "sealed-test: the sealed artifact came up on AHCI on its ext2 root and answered a key login; a kernel sent down that connection was installed, tried and committed; a destroyed candidate was caught by the fallback on the previous kernel and repaired from it; the root made missing, faulty and dirty under an armed trial each landed in recovery, whose init repaired it and the candidate was committed again; a staged menu reached the machine and a torn one left it booting; the boot loader was replaced with a marked core and then with another in the other tail, and the machine booted each; the root was destroyed and rewritten from recovery through one pipe, hashing identically on the platter; and a control copy did all of the ordinary work with no fallback and no recovery anywhere: OK"
+echo "sealed-test: the sealed artifact came up on AHCI on its ext2 root and answered a key login; a kernel sent down that connection was installed, tried and committed; a destroyed candidate was caught by the fallback on the previous kernel and repaired from it; the root made missing, faulty and dirty under an armed trial each landed in recovery, whose init repaired it and the candidate was committed again; a staged menu reached the machine and a torn one left it booting; the boot loader was replaced in the BIOS boot partition's other tail and the machine came back through it with the old one zeroed; the root was destroyed and rewritten from recovery through one pipe, hashing identically on the platter; and a control copy did all of the ordinary work with no fallback and no recovery anywhere: OK"
 echo "sealed-test: PASS"
