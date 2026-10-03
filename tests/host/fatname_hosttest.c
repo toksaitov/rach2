@@ -15,7 +15,7 @@
 #include "../../rach2/sys/fs/fat32name.h"
 #include "../../rach2/sys/lib/kerrno.h"
 #include "../../rach2/sys/proc/wait_queue.h"
-#include "../../rach2/sys/rtc.h"
+#include "../../rach2/sys/arch/x86/rtc.h"
 
 extern int printf(const char *fmt, ...);
 

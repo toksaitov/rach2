@@ -13,7 +13,7 @@
 #include "diskcmd.h"
 #include "../fs/bcache.h"
 #include "../fs/devfs.h"
-#include "../serial.h"
+#include "../arch/x86/serial.h"
 
 static struct diskinfo info;
 

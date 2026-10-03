@@ -62,7 +62,7 @@ unusedStructMember:*tests/musl/callsmusl.c
 # The i386 signal frame, statx, the rusage and the siginfo a wait fills are
 # Linux's layouts, copied to the user whole: a member nothing here reads is
 # the layout, not dead code.
-unusedStructMember:*sys/proc/sigframe.c
+unusedStructMember:*sys/arch/i686/sigframe.c
 unusedStructMember:*sys/syscall_fs.c
 unusedStructMember:*sys/syscall_proc.c
 

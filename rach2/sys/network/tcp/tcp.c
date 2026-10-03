@@ -34,14 +34,14 @@
 #include "../net.h"
 #include "../netconf.h"
 #include "../driver/netdev.h"
-#include "../../serial.h"
+#include "../../arch/x86/serial.h"
 #include "../../lib/kstring.h"
 #include "../../lib/kerrno.h"
 #include "../../lib/krandom.h"
 #include "../../mm/kheap.h"
 #include "../../mm/pressure.h"
 #include "../../mm/paging.h"
-#include "../../pit.h"
+#include "../../arch/x86/pit.h"
 
 /* The live control blocks, listeners included, each allocated from the heap
  * by `listen`, by an active open, or for an incoming SYN on the interrupt

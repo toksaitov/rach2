@@ -58,13 +58,13 @@ printf '#!/bin/sh\necho lease\n' >"$tree/krffs/c.script"
 printf '# the suites\nstyle|shellcheck|full\n' >"$tree/tests/registry"
 printf '# an image\ntext 0644 /motd hello\n' >"$tree/krffs/manifests/x.manifest"
 printf '# the exceptions\nvariableScope\n' >"$tree/tools/verify/cppcheck.suppress"
-printf '.text\n# the entry point\n_start:\n' >"$tree/rach2/loader.s"
+printf '.text\n# the entry point\n_start:\n' >"$tree/rach2/sys/arch/i686/loader.s"
 for f in vendor/busybox/busybox-9.9/v.sh vendor/musl/install/w.sh ports/doom/src/u.sh \
     krffs/vendor/t.sh; do
     printf '#!/bin/sh\necho vendored\n' >"$tree/$f"
 done
 for f in tests/run utils/tool tests/registry krffs/manifests/x.manifest \
-    tools/verify/cppcheck.suppress rach2/loader.s; do
+    tools/verify/cppcheck.suppress rach2/sys/arch/i686/loader.s; do
     mkdir -p "$tree/saved/$(dirname "$f")"
     cp "$tree/$f" "$tree/saved/$f"
 done
@@ -131,7 +131,7 @@ rows()
     printf '# Phase 2 leftovers\n' >"$work/plant"
     planted text-config-diary tools/verify/cppcheck.suppress 3 '[Phase/Part diary tag]'
     printf '# save -- then return\n' >"$work/plant"
-    planted text-code-dash rach2/loader.s 4 '[prose em-dash]'
+    planted text-code-dash rach2/sys/arch/i686/loader.s 4 '[prose em-dash]'
     # The dashes come from a variable, so this line is not the fault it plants.
     dashes=--
     printf 'echo "a %s b"\n' "$dashes" >"$work/plant"

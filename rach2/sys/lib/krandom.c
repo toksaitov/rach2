@@ -179,7 +179,7 @@ extern void outb(uint16_t port, uint8_t val);
 extern uint8_t inb(uint16_t port);
 extern volatile uint32_t kernel_ticks;
 
-#include "kcpu.h"
+#include "../arch/x86/kcpu.h"
 
 /**
  * Draw one true-hardware entropy word with RDSEED.

@@ -3,7 +3,7 @@
 
 #include "../lib/kint.h"
 #include "../lib/ksignal.h"
-#include "../isr.h"
+#include "../arch/x86/isr.h"
 
 /*
  * The Linux i386 signal frames: `struct sigframe` for a plain handler and

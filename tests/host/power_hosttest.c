@@ -1,7 +1,7 @@
 /*
  * power_hosttest.c: which ports a reset writes, and on whose firmware.
  *
- * host-deps: rach2/sys/smbios.c
+ * host-deps: rach2/sys/arch/x86/smbios.c
  *
  * The reset sequence writes to three ports, and the first of them is a
  * command to a firmware's own system-management handler. That command belongs
@@ -17,7 +17,7 @@
 
 extern int printf(const char *fmt, ...);
 
-#include "../../rach2/sys/smbios.h"
+#include "../../rach2/sys/arch/x86/smbios.h"
 
 /* A table above the identity-mapped window is read through a mapping, and
  * `smbios.c` asks for one here. The fixtures below are handed to the reader

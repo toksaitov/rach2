@@ -48,7 +48,7 @@
 #include "../mm/kheap.h"
 #include "../mm/paging.h"
 #include "../panic.h"
-#include "../pit.h"
+#include "../arch/x86/pit.h"
 #include "../proc/process.h"
 #include "../proc/wait_queue.h"
 

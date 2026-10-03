@@ -148,7 +148,7 @@ void block_count_batch(uint32_t sectors)
     (void)sectors;
 }
 
-#include "../../rach2/sys/pci.h"
+#include "../../rach2/sys/arch/x86/pci.h"
 
 bool pci_find_device(uint8_t class_code, uint8_t subclass, pci_device_t *out)
 {
@@ -181,7 +181,7 @@ void pci_enable_bus_master(pci_device_t *dev)
     (void)dev;
 }
 
-#include "../../rach2/sys/isr.h"
+#include "../../rach2/sys/arch/x86/isr.h"
 
 void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *name)
 {

@@ -10,7 +10,7 @@ A user-mode CPU exception is forced as Linux forces it (`signal_force`): a page 
 
 `SIGKILL` and `SIGSTOP` cannot be caught or ignored, and every mask update removes their bits. Installing `SIG_IGN` for another signal also removes an instance already pending.
 
-The main implementation is in `sys/syscall_proc.c`, which the system-call table in `sys/syscall.c` dispatches to; the interval timers' calls, `setitimer`, `getitimer` and `alarm`, are in `sys/syscall.c` itself. Signal numbers, action flags, and the kernel action layout are in `sys/lib/ksignal.h`; the PCB fields are in `sys/proc/process.h`; and both return epilogues in `sys/isr_handler.s` call `deliver_signals` before `iret`.
+The main implementation is in `sys/syscall_proc.c`, which the system-call table in `sys/syscall.c` dispatches to; the interval timers' calls, `setitimer`, `getitimer` and `alarm`, are in `sys/syscall.c` itself. Signal numbers, action flags, and the kernel action layout are in `sys/lib/ksignal.h`; the PCB fields are in `sys/proc/process.h`; and both return epilogues in `sys/arch/i686/isr_handler.s` call `deliver_signals` before `iret`.
 
 ## Posting and permission
 

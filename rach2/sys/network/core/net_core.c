@@ -16,7 +16,7 @@
 #include "../netconf.h"
 #include "../tcp/tcp.h"
 #include "../socket/socket.h"
-#include "../../serial.h"
+#include "../../arch/x86/serial.h"
 
 /* The first interface's hardware address; netdev_probe copies it in. */
 uint8_t net_mac[6] = {0, 0, 0, 0, 0, 0};

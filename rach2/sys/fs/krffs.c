@@ -23,8 +23,8 @@
 #include "../klog.h"
 #include "krffs.h"
 
-#include "../rtc.h"
-#include "../serial.h"
+#include "../arch/x86/rtc.h"
+#include "../arch/x86/serial.h"
 #include "../lib/kerrno.h"
 
 krffs_file_system_t *krffs_fs = NULL;

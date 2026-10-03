@@ -2,7 +2,7 @@
  * Host test for tls_resolve_base (proc/tls.c): the user_desc validation that
  * backs set_thread_area(2).
  *
- * host-deps: rach2/sys/proc/tls.c
+ * host-deps: rach2/sys/arch/i686/tls.c
  *
  * The bit decoding is the fallible part, so it is exercised natively under
  * ASan/UBSan: a musl-style request is accepted and its base returned, while

@@ -12,11 +12,11 @@
 
 #include "tty.h"
 #include "../latency.h"
-#include "../pit.h"
+#include "../arch/x86/pit.h"
 
 #include "../usb/usb.h"
 #include "../io/poll.h"
-#include "../serial.h"
+#include "../arch/x86/serial.h"
 #include "../kio.h"
 #include "../klog.h"
 #include "../lib/kirq.h"

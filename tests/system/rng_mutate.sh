@@ -10,9 +10,9 @@ done
 mkdir -p build/review-proof
 work=$(mktemp -d "$repo/build/review-proof/rng.XXXXXX")
 mkdir -p "$work/rach2/sys/lib" "$work/tests"
-cp rach2/sys/lib/kcpu.c rach2/sys/lib/kcpu.h rach2/sys/lib/kint.h "$work/rach2/sys/lib/"
+cp rach2/sys/arch/x86/kcpu.c rach2/sys/arch/x86/kcpu.h rach2/sys/lib/kint.h "$work/rach2/sys/lib/"
 cp tests/rngprobe.c "$work/tests/"
-source="$work/rach2/sys/lib/kcpu.c"
+source="$work/rach2/sys/arch/x86/kcpu.c"
 cp "$source" "$work/saved.c"
 child=
 restore()

@@ -27,12 +27,12 @@
 #include "e1000.h"
 #include "../net.h"
 #include "../ethernet/ethernet.h"
-#include "../../isr.h"
+#include "../../arch/x86/isr.h"
 #include "../../kio.h"
 #include "../../mm/paging.h"
-#include "../../pci.h"
-#include "../../serial.h"
-#include "../../udelay.h"
+#include "../../arch/x86/pci.h"
+#include "../../arch/x86/serial.h"
+#include "../../arch/x86/udelay.h"
 #include "../../mm/paging.h"
 
 /* Register access, behind an indirection the host test can replace. */

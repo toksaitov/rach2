@@ -4,7 +4,7 @@ LOADER = loader
 KERNEL = kernel
 KERNEL_BIN = $(BUILD)/$(KERNEL)
 
-LINKER_SCRIPT = link
+LINKER_SCRIPT = sys/arch/i686/link
 
 # The kernel source lists (ASM_SRC and C_SRC) live in sources.mk, which guest.mk
 # includes too, so one file describes both builds.

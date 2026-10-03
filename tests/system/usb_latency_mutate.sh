@@ -32,7 +32,7 @@ cp -R rach2 mk "$work/"
 # private tree's has a rule with nothing to do, and ELFCHECK names the built
 # one.
 printf 'build/tools/inspect/elfcheck: ;\n' >"$work/Makefile"
-isr=$work/rach2/sys/isr.c
+isr=$work/rach2/sys/arch/x86/isr.c
 syscall=$work/rach2/sys/syscall.c
 cp "$isr" "$work/isr.c.saved"
 cp "$syscall" "$work/syscall.c.saved"

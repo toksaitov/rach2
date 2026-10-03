@@ -4,35 +4,35 @@
 # matters: the link keeps input order, and the multiboot header in loader.o
 # must stay within the first 8192 bytes of the kernel where loaders search.
 
-ASM_SRC = loader.s \
-          sys/isr_handler.s \
-          sys/tables/gdt_handler.s \
-          sys/tables/idt_handler.s \
-          sys/proc/switch.s
+ASM_SRC = sys/arch/i686/loader.s \
+          sys/arch/i686/isr_handler.s \
+          sys/arch/i686/gdt_handler.s \
+          sys/arch/i686/idt_handler.s \
+          sys/arch/i686/switch.s
 
 C_SRC = kernel.c \
         sys/kio.c \
         sys/klog.c \
-        sys/serial.c \
+        sys/arch/x86/serial.c \
         sys/syscall.c \
         sys/syscall_proc.c \
         sys/syscall_fs.c \
         sys/syscall_net.c \
-        sys/module.c \
+        sys/arch/x86/module.c \
         sys/cmdline.c \
-        sys/isr.c \
-        sys/pic.c \
-        sys/board.c \
-        sys/smbios.c \
+        sys/arch/x86/isr.c \
+        sys/arch/x86/pic.c \
+        sys/arch/x86/board.c \
+        sys/arch/x86/smbios.c \
         sys/input.c \
-        sys/pit.c \
-        sys/rtc.c \
-        sys/kbd.c \
-        sys/mouse.c \
+        sys/arch/x86/pit.c \
+        sys/arch/x86/rtc.c \
+        sys/arch/x86/kbd.c \
+        sys/arch/x86/mouse.c \
         sys/panic.c \
-        sys/speaker.c \
-        sys/pci.c \
-        sys/power.c \
+        sys/arch/x86/speaker.c \
+        sys/arch/x86/pci.c \
+        sys/arch/x86/power.c \
         sys/block/block.c \
         sys/block/chain.c \
         sys/block/loop.c \
@@ -63,9 +63,9 @@ C_SRC = kernel.c \
         sys/audio/dma.c \
         sys/audio/sb16.c \
         sys/audio/hda.c \
-        sys/tables/gdt.c \
-        sys/tables/tss.c \
-        sys/tables/idt.c \
+        sys/arch/i686/gdt.c \
+        sys/arch/i686/tss.c \
+        sys/arch/i686/idt.c \
         sys/mm/heap.c \
         sys/mm/paging.c \
         sys/mm/kheap.c \
@@ -80,18 +80,18 @@ C_SRC = kernel.c \
         sys/mm/frame.c \
         sys/mm/pagecache.c \
         sys/mm/modlayout.c \
-        sys/apicdiag.c \
-    sys/lapic.c \
-    sys/diag.c \
-        sys/udelay.c \
+        sys/arch/x86/apicdiag.c \
+    sys/arch/x86/lapic.c \
+    sys/arch/x86/diag.c \
+        sys/arch/x86/udelay.c \
         sys/proc/process.c \
         sys/proc/exit.c \
-        sys/proc/fpu.c \
+        sys/arch/x86/fpu.c \
         sys/proc/sched.c \
         sys/proc/suspend.c \
         sys/proc/wait_queue.c \
         sys/proc/futex.c \
-        sys/proc/sigframe.c \
+        sys/arch/i686/sigframe.c \
         sys/proc/ptrace.c \
         sys/proc/seccomp.c \
         sys/proc/ns.c \
@@ -112,7 +112,7 @@ C_SRC = kernel.c \
         sys/tty/pty.c \
         sys/proc/elf.c \
         sys/proc/uimage.c \
-        sys/proc/tls.c \
+        sys/arch/i686/tls.c \
         sys/fs/krffs.c \
         sys/fs/krffsmount.c \
         sys/fs/fd.c \
@@ -152,8 +152,8 @@ C_SRC = kernel.c \
         sys/network/socket/raw.c \
         sys/lib/kctypes.c \
         sys/lib/kfmt.c \
-        sys/lib/kirq.c \
+        sys/arch/x86/kirq.c \
         sys/lib/kstd.c \
-        sys/lib/kcpu.c \
+        sys/arch/x86/kcpu.c \
     sys/lib/kstring.c \
         sys/lib/krandom.c

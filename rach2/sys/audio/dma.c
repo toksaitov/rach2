@@ -5,7 +5,7 @@
 #include "../klog.h"
 #include "dma.h"
 #include "../kio.h"
-#include "../serial.h"
+#include "../arch/x86/serial.h"
 
 /*
  * DMA controller 1 ports (channels 0-3, 8-bit)

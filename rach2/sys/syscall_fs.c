@@ -8,21 +8,21 @@
 #include "mm/kheap.h"
 #include "klog.h"
 #include "syscall.h"
-#include "power.h"
-#include "serial.h"
+#include "arch/x86/power.h"
+#include "arch/x86/serial.h"
 #include "panic.h"
 #include "kio.h"
-#include "kbd.h"
+#include "arch/x86/kbd.h"
 #include "input.h"
-#include "mouse.h"
+#include "arch/x86/mouse.h"
 #include "proc/process.h"
 #include "proc/sched.h"
 #include "proc/tgroup.h"
 #include "proc/ns.h"
 #include "proc/elf.h"
 #include "proc/uimage.h"
-#include "proc/tls.h"
-#include "tables/gdt.h"
+#include "arch/i686/tls.h"
+#include "arch/i686/gdt.h"
 #include "lib/krandom.h"
 #include "lib/kerrno.h"
 #include "lib/ksignal.h"
@@ -34,7 +34,7 @@
 #include "io/poll.h"
 #include "tty/tty.h"
 #include "tty/pty.h"
-#include "rtc.h"
+#include "arch/x86/rtc.h"
 #include "block/loop.h"
 #include "fs/krffs.h"
 #include "fs/krffsmount.h"
@@ -55,7 +55,7 @@
 #include "lib/kuser.h"
 #include "lib/kstring.h"
 #include "display/vga_gfx.h"
-#include "speaker.h"
+#include "arch/x86/speaker.h"
 #include "audio/audio.h"
 #include "network/socket/socket.h"
 #include "network/socket/packet.h"
@@ -10728,7 +10728,7 @@ int32_t sys_renameat2(isr_params_t *params)
 /*
  * get_current_time - the current real time, in seconds and nanoseconds
  *
- * Answered by the clock (sys/rtc.c): the second the CMOS reported at boot plus
+ * Answered by the clock (sys/arch/x86/rtc.c): the second the CMOS reported at boot plus
  * the ticks since that read, or time since boot on a machine whose clock could
  * not be read, either way with the PIT's place within the tick added and
  * never earlier than the reading before it (`rtc_realtime`).

@@ -1814,7 +1814,7 @@ end
 
 fault rt-context-unfilled
 probe sigmusl
-file rach2/sys/proc/sigframe.c
+file rach2/sys/arch/i686/sigframe.c
 expect SIGMUSL FAIL: ucontext cs=0x0 esp=0x0 fpregs=0x0
 old
         fill_sigcontext(&frame.rt.uc.mc, tf, fp_addr, oldmask);
@@ -1837,7 +1837,7 @@ end
 
 fault rt-frame-kills-with-sigsegv
 probe waitprobe
-file rach2/sys/proc/sigframe.c
+file rach2/sys/arch/i686/sigframe.c
 expect FAIL: child recvfrom interrupted with -EINTR (no hang)
 old
     if ((sa->flags & SA_ONSTACK) && current_proc->altstack_on && !on_alt) {
@@ -1855,7 +1855,7 @@ end
 
 fault altstack-frame-below
 probe sigframemusl
-file rach2/sys/proc/sigframe.c
+file rach2/sys/arch/i686/sigframe.c
 expect SIGFRAMEMUSL FAIL (a frame written below the alternate stack)
 old
     int on_alt = sigframe_on_altstack(tf->user_esp);
@@ -4930,7 +4930,7 @@ end
 
 fault monotonic-tick-only
 probe clockidmusl
-file rach2/sys/rtc.c
+file rach2/sys/arch/x86/rtc.c
 expect CLOCKIDMUSL FAIL (time since boot does not read within the tick)
 old
     *nanoseconds = (int64_t)ticks * RTC_NANOSECONDS_PER_TICK + phase_ns;
@@ -5862,7 +5862,7 @@ end
 
 fault tsc-gap-counts-its-own-tick
 probe timing
-file rach2/sys/pit.c
+file rach2/sys/arch/x86/pit.c
 expect the clock's arithmetic failed its check on fixed readings
 old
     return q - 1u > PIT_LOST_MAX ? PIT_LOST_MAX : q - 1u;

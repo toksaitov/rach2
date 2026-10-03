@@ -14,7 +14,7 @@
 #include "../../lib/kerrno.h"
 #include "../../lib/kstring.h"
 #include "../../mm/kheap.h"
-#include "../../serial.h"
+#include "../../arch/x86/serial.h"
 #include "../../proc/wait_queue.h"
 
 /* Policy: each socket's queue is eight datagrams of one MTU, twelve

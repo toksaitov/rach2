@@ -17,7 +17,7 @@
 #include "../ip/ip.h"
 #include "../socket/packet.h"
 #include "../netif.h"
-#include "../../serial.h"
+#include "../../arch/x86/serial.h"
 #include "../../lib/kstring.h"
 
 /* TX assembly buffer at file scope: the kernel keeps no large stack frames. */

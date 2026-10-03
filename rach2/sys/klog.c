@@ -28,7 +28,7 @@
 #include "klog.h"
 
 #include "kio.h"
-#include "serial.h"
+#include "arch/x86/serial.h"
 #include "display/vga_text.h"
 #include "lib/kfmt.h"
 #include "lib/kirq.h"

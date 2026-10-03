@@ -11,7 +11,7 @@
 #define _HDA_H_
 
 #include "audio.h"
-#include "../pci.h"
+#include "../arch/x86/pci.h"
 
 /*
  * HDA controller register offsets (from MMIO base)

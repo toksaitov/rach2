@@ -6,7 +6,7 @@
 #include "inotify.h"
 
 #include "anon.h"
-#include "../isr.h"
+#include "../arch/x86/isr.h"
 #include "../fs/fd.h"
 #include "../fs/file.h"
 #include "../fs/vfs.h"

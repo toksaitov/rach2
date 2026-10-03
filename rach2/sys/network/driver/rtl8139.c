@@ -23,9 +23,9 @@
 #include "../net.h"
 #include "../ethernet/ethernet.h"
 #include "../../kio.h"
-#include "../../serial.h"
-#include "../../isr.h"
-#include "../../pci.h"
+#include "../../arch/x86/serial.h"
+#include "../../arch/x86/isr.h"
+#include "../../arch/x86/pci.h"
 #include "../../lib/kstring.h"
 #include "../../mm/heap.h"
 

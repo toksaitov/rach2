@@ -19,7 +19,7 @@ extern int printf(const char *fmt, ...);
 
 /* The stateful half of board.c reaches PCI, the PIC, the command line and the
    serial log. None of it is exercised here; the judgements are pure. */
-#include "../../rach2/sys/board.h"
+#include "../../rach2/sys/arch/x86/board.h"
 
 /* The driver reports what it found through the kernel log, which this test
    has no use for; the records are dropped. */
@@ -213,4 +213,4 @@ int main(void)
     return fails > 255 ? 255 : fails;
 }
 
-#include "../../rach2/sys/board.c"
+#include "../../rach2/sys/arch/x86/board.c"

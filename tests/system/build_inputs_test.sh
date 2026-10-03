@@ -83,7 +83,7 @@ if [ "${1:-all}" != kernel ]; then
     done
 fi
 if [ "${1:-all}" != libraries ]; then
-    cp rach2/link.ld "$WORK/link.ld"
+    cp rach2/sys/arch/i686/link.ld "$WORK/link.ld"
     make --no-print-directory -C rach2 "BUILD=$WORK/kernel" "LINKER_SCRIPT=$WORK/link"
     printf '\nreview_link_marker = 0x1234;\n' >> "$WORK/link.ld"
     touch -t "${future}01010000" "$WORK/kernel/kernel"

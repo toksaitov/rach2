@@ -4,7 +4,7 @@
 
 #include "latency.h"
 
-#include "pit.h"
+#include "arch/x86/pit.h"
 
 static uint32_t worst[LAT_COUNT];
 static uint32_t last_tick_us;

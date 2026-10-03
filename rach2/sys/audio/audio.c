@@ -9,8 +9,8 @@
 #include "audio.h"
 #include "sb16.h"
 #include "hda.h"
-#include "../serial.h"
-#include "../pci.h"
+#include "../arch/x86/serial.h"
+#include "../arch/x86/pci.h"
 
 audio_driver_t *audio = NULL;
 static const char *audio_boot_status = "Not initialized";

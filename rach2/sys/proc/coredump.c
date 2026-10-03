@@ -6,7 +6,7 @@
 #include "coredump.h"
 
 #include "elf.h"
-#include "fpu.h"
+#include "../arch/x86/fpu.h"
 #include "process.h"
 #include "tgroup.h"
 #include "wait_queue.h"

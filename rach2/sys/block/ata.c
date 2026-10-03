@@ -65,14 +65,14 @@
 #include "disk.h"
 
 #include "../kio.h"
-#include "../isr.h"
+#include "../arch/x86/isr.h"
 #include "../lib/kirq.h"
 #include "../lib/kstring.h"
-#include "../pci.h"
+#include "../arch/x86/pci.h"
 #include "../proc/process.h"
 #include "../proc/sched.h"
 #include "../proc/wait_queue.h"
-#include "../serial.h"
+#include "../arch/x86/serial.h"
 
 #include "../lib/kerrno.h"
 #include "../lib/kint.h"

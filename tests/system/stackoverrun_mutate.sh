@@ -118,7 +118,7 @@ fault()
     case $1 in
         guard-mapped) file=rach2/sys/mm/kheap.c ;;
         boot-guard-mapped) file=rach2/kernel.c ;;
-        interrupt-gate) file=rach2/sys/tables/idt.c ;;
+        interrupt-gate) file=rach2/sys/arch/i686/idt.c ;;
     esac
     cp "$work/$file" "$work/saved"
     python3 - "$work/$file" "$1" <<'PY'

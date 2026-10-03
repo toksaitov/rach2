@@ -242,7 +242,7 @@ static const struct ahci_io model_io = {model_r32, model_w32, model_udelay};
 
 /* ---- what the driver reaches for outside itself ---- */
 
-#include "../../rach2/sys/pci.h"
+#include "../../rach2/sys/arch/x86/pci.h"
 
 bool pci_find_device_skip(uint8_t cls, uint8_t sub, pci_device_t *skip, pci_device_t *out)
 {

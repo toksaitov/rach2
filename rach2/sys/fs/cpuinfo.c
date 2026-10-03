@@ -4,7 +4,7 @@
 
 #include "cpuinfo.h"
 
-#include "../lib/kcpu.h"
+#include "../arch/x86/kcpu.h"
 #include "../lib/kstring.h"
 
 /* Linux's names of the feature bits (arch/x86/include/asm/cpufeatures.h),

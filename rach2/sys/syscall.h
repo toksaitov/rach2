@@ -1,7 +1,7 @@
 #ifndef _SYSCALL_H_
 #define _SYSCALL_H_
 
-#include "isr.h"
+#include "arch/x86/isr.h"
 
 /*
  * Syscall vector number (int 0x80)

@@ -24,8 +24,8 @@
 #include "../lib/kstring.h"
 #include "../mm/kheap.h"
 #include "../mm/paging.h"
-#include "../pci.h"
-#include "../udelay.h"
+#include "../arch/x86/pci.h"
+#include "../arch/x86/udelay.h"
 #include "usb.h"
 
 /*

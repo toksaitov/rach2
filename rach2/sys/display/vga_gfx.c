@@ -6,7 +6,7 @@
 #include "vga_text.h"
 #include "vga_font.h"
 #include "../kio.h"
-#include "../serial.h"
+#include "../arch/x86/serial.h"
 #include "../lib/kstring.h"
 #include "../lib/kirq.h"
 

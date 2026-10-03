@@ -4,19 +4,19 @@
 
 #include "ptrace.h"
 
-#include "fpu.h"
+#include "../arch/x86/fpu.h"
 #include "ns.h"
 #include "sched.h"
 #include "sigframe.h"
 #include "tgroup.h"
-#include "tls.h"
+#include "../arch/i686/tls.h"
 #include "../lib/kerrno.h"
 #include "../lib/kirq.h"
 #include "../lib/kstring.h"
 #include "../mm/mm.h"
 #include "../mm/paging.h"
 #include "../mm/usercopy.h"
-#include "../tables/gdt.h"
+#include "../arch/i686/gdt.h"
 
 /* The requests. */
 #define PTRACE_TRACEME         0

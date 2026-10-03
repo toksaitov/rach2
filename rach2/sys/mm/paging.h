@@ -5,7 +5,7 @@
 #include "heap.h"
 
 #include "../panic.h"
-#include "../isr.h"
+#include "../arch/x86/isr.h"
 
 #include "../lib/kdef.h"
 #include "../lib/kint.h"

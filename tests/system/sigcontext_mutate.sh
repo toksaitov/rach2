@@ -9,7 +9,7 @@ cd "$repo"
 }
 mkdir -p build
 work=$(mktemp -d "$repo/build/sigcontext-proof.XXXXXX")
-source=rach2/sys/proc/sigframe.c
+source=rach2/sys/arch/i686/sigframe.c
 cp "$source" "$work/source.saved"
 child=
 changed=
@@ -28,7 +28,7 @@ stop_child()
 
 rebuild()
 {
-    rm -f build/rach2/sys/proc/sigframe.o build/rach2/kernel
+    rm -f build/rach2/sys/arch/i686/sigframe.o build/rach2/kernel
     make -s -C rach2
 }
 

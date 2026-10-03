@@ -6,7 +6,7 @@
 #include "../lib/ksignal.h"
 #include "../fs/fd.h"
 #include "../mm/vm.h"
-#include "fpu.h"
+#include "../arch/x86/fpu.h"
 
 /* Policy: the threads one real user may have, each thread of a process
  * counting, unless `prlimit64` or `/etc/rach2/limits` says otherwise, and

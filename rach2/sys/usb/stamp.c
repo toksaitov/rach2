@@ -2,7 +2,7 @@
 
 #include "../klog.h"
 #include "../lib/kirq.h"
-#include "../pit.h"
+#include "../arch/x86/pit.h"
 
 static int recording;
 static int pump_took;

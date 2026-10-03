@@ -18,7 +18,7 @@
 
 typedef unsigned int size_t;
 
-#include "../rach2/sys/lib/kcpu.c"
+#include "../rach2/sys/arch/x86/kcpu.c"
 
 #define SYS_EXIT      1
 #define SYS_READ      3

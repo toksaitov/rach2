@@ -41,7 +41,7 @@
 #include "ip.h"
 #include "../net.h"
 #include "../core/byteorder.h"
-#include "../../serial.h"
+#include "../../arch/x86/serial.h"
 #include "../../lib/kstring.h"
 #include "../../proc/process.h"
 #include "../../proc/wait_queue.h"

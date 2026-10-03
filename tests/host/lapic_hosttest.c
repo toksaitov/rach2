@@ -2,7 +2,7 @@
  * lapic_hosttest.c: the local APIC driver against a model of the APIC page
  * and of the model-specific register that says where it is.
  *
- * host-deps: rach2/sys/lapic.c
+ * host-deps: rach2/sys/arch/x86/lapic.c
  *
  * No machine can be made to answer `cpuid` differently, to come up in
  * x2APIC mode, or to hand the kernel a firmware that masked `LINT0`; each is
@@ -17,7 +17,7 @@
  * external-interrupt value before the software enable.
  */
 
-#include "../../rach2/sys/lapic.h"
+#include "../../rach2/sys/arch/x86/lapic.h"
 
 extern int printf(const char *fmt, ...);
 extern void exit(int status);

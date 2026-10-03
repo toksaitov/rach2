@@ -14,9 +14,9 @@ esac
 }
 mkdir -p build/clock-proof
 work=$(mktemp -d "$repo/build/clock-proof/mutation.XXXXXX")
-cp rach2/sys/rtc.c "$work/source.saved"
+cp rach2/sys/arch/x86/rtc.c "$work/source.saved"
 source="$work/rtc.c"
-[ "$mode" != --guest ] || source=rach2/sys/rtc.c
+[ "$mode" != --guest ] || source=rach2/sys/arch/x86/rtc.c
 cp "$work/source.saved" "$source"
 child=
 changed=
@@ -62,7 +62,7 @@ run_phase()
     "${CC:-cc}" -std=c99 -g -O1 -ffreestanding \
         -fsanitize=address,undefined -fno-sanitize-recover=all -DRTC_HOST_TEST \
         -I rach2/sys -I rach2/sys/lib -I rach2/sys/proc \
-        tests/host/rtc_hosttest.c "$source" rach2/sys/pit.c -o "$work/$phase.host" \
+        tests/host/rtc_hosttest.c "$source" rach2/sys/arch/x86/pit.c -o "$work/$phase.host" \
         >"$work/$phase.compile.log" 2>&1
     cat "$work/$phase.compile.log"
     status=0

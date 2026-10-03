@@ -13,8 +13,8 @@
 #include "input.h"
 
 #include "display/vga_text.h"
-#include "kbd.h"
-#include "mouse.h"
+#include "arch/x86/kbd.h"
+#include "arch/x86/mouse.h"
 #include "kio.h"
 #include "klog.h"
 #include "proc/wait_queue.h"

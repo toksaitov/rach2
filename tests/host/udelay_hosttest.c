@@ -1,6 +1,6 @@
 /**
  * The microsecond wait, driven on the host against a model of the 8254
- * (sys/udelay.c).
+ * (sys/arch/x86/udelay.c).
  *
  * The file is included whole so the sample the wait takes of the counter is
  * reachable. The model is channel 0 in mode 3: a count that descends by a
@@ -20,7 +20,7 @@
  * takes its full time whatever is armed.
  */
 
-#include "../../rach2/sys/udelay.c"
+#include "../../rach2/sys/arch/x86/udelay.c"
 
 int printf(const char *format, ...);
 

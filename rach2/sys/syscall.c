@@ -9,24 +9,24 @@
 #include "mm/kheap.h"
 #include "klog.h"
 #include "syscall.h"
-#include "power.h"
-#include "serial.h"
+#include "arch/x86/power.h"
+#include "arch/x86/serial.h"
 #include "panic.h"
 #include "kio.h"
-#include "kbd.h"
+#include "arch/x86/kbd.h"
 #include "input.h"
-#include "mouse.h"
+#include "arch/x86/mouse.h"
 #include "proc/process.h"
 #include "proc/sched.h"
 #include "proc/elf.h"
 #include "proc/uimage.h"
-#include "proc/tls.h"
+#include "arch/i686/tls.h"
 #include "proc/futex.h"
 #include "proc/tgroup.h"
 #include "proc/ptrace.h"
 #include "proc/seccomp.h"
 #include "proc/ns.h"
-#include "tables/gdt.h"
+#include "arch/i686/gdt.h"
 #include "lib/krandom.h"
 #include "lib/kerrno.h"
 #include "lib/kirq.h"
@@ -38,7 +38,7 @@
 #include "usb/usb.h"
 #include "tty/tty.h"
 #include "tty/pty.h"
-#include "rtc.h"
+#include "arch/x86/rtc.h"
 #include "block/loop.h"
 #include "fs/krffs.h"
 #include "fs/bcache.h"
@@ -56,7 +56,7 @@
 #include "lib/kuser.h"
 #include "lib/kstring.h"
 #include "display/vga_gfx.h"
-#include "speaker.h"
+#include "arch/x86/speaker.h"
 #include "audio/audio.h"
 #include "network/socket/socket.h"
 #include "network/socket/packet.h"
@@ -323,7 +323,7 @@ struct kernel_timeval {
 
 /*
  * gettimeofday(2): EBX = tv (timeval*), ECX = tz (ignored). Reports real time
- * from the clock anchored at boot (sys/rtc.c), or time since boot when there
+ * from the clock anchored at boot (sys/arch/x86/rtc.c), or time since boot when there
  * was no clock to read. Returns 0 or -errno.
  */
 static int32_t sys_gettimeofday(isr_params_t *params)
@@ -474,7 +474,7 @@ static uint32_t clock_cpu_ticks(const struct kclock *c)
 /**
  * Read clock `c` into `out`.
  *
- * Real time is the clock read at boot (sys/rtc.c) with the PIT's place
+ * Real time is the clock read at boot (sys/arch/x86/rtc.c) with the PIT's place
  * within the tick added; its coarse form stops at the last tick. Time since
  * boot is the uptime seconds and the ticks within the second, with the PIT's
  * place added as well (`rtc_monotonic`), read with interrupts masked, so
