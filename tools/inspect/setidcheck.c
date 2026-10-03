@@ -193,6 +193,50 @@ static const char *base_name(const char *path)
     return slash ? slash + 1 : path;
 }
 
+/* The host path a manifest's `path` is read from: the first FROM=TO pair of
+   RACH2_PATH_MAP whose FROM begins it has its FROM replaced by TO, as the
+   stager reads it (krffs/stageimage.krffs.c, host_path). An x86-64 build maps
+   build/... to build/x86_64/..., so the manifest and the allowlist name one
+   path for either architecture while the files read are the architecture's.
+   The result is in a rotating buffer. */
+static const char *host_path(const char *path)
+{
+    static char buf[4][1024];
+    static int next;
+    const char *map = getenv("RACH2_PATH_MAP");
+    const char *p;
+
+    if (map == NULL)
+        return path;
+    for (p = map; *p != '\0';) {
+        const char *word, *eq;
+        size_t from_len, to_len;
+
+        while (*p == ' ' || *p == '\t')
+            p++;
+        word = p;
+        while (*p != '\0' && *p != ' ' && *p != '\t')
+            p++;
+        eq = memchr(word, '=', (size_t)(p - word));
+        if (eq == NULL)
+            continue;
+        from_len = (size_t)(eq - word);
+        to_len = (size_t)(p - eq - 1);
+        if (from_len > 0 && strncmp(path, word, from_len) == 0) {
+            char *out = buf[next];
+
+            next = (next + 1) % 4;
+            if (snprintf(out, sizeof(buf[0]), "%.*s%s", (int)to_len, eq + 1, path + from_len) >=
+                (int)sizeof(buf[0])) {
+                fprintf(stderr, "check-setid: the mapped path of '%s' is too long\n", path);
+                exit(2);
+            }
+            return out;
+        }
+    }
+    return path;
+}
+
 /* The allowlist key a manifest path names, `krffs/manifests/x.manifest`
    being `x`. The result is a fresh string. */
 static char *manifest_stem(const char *path)
@@ -1051,7 +1095,7 @@ static void check_manifest(const char *path, const struct allow *allow, struct l
 
             if (strncmp(pinned, prefix, plen) != 0 || staged_find(&staged, pinned) != NULL)
                 continue;
-            snprintf(src, sizeof(src), "%s", d->source);
+            snprintf(src, sizeof(src), "%s", host_path(d->source));
             slen = strlen(src);
             while (slen > 0 && src[slen - 1] == '/')
                 src[--slen] = '\0';
@@ -2682,6 +2726,7 @@ static void sysroot_checks(const struct allow *allow, const struct image *im, co
 {
     struct hset wanted = {NULL, 0}, staged = {NULL, 0};
     struct hset dirs = {NULL, 0};
+    const char *headers;
     int i;
 
     for (i = 0; i < allow->sysroot_paths.n; i++) {
@@ -2716,11 +2761,12 @@ static void sysroot_checks(const struct allow *allow, const struct image *im, co
     }
     check_reachable(image_path_look, (void *)im, &allow->sysroot_paths, name, problems);
 
-    if (host_headers(SYSROOT_HEADER_SOURCE, SYSROOT_HEADER_ROOT, &wanted, problems) != 0) {
+    headers = host_path(SYSROOT_HEADER_SOURCE);
+    if (host_headers(headers, SYSROOT_HEADER_ROOT, &wanted, problems) != 0) {
         addf(problems,
              "%s: %s is not there, so the staged headers could "
              "not be compared with it",
-             name, SYSROOT_HEADER_SOURCE);
+             name, headers);
     } else {
         staged_headers(im, &staged, &dirs);
         compare_headers(&staged, &wanted, &dirs, name, problems);
@@ -3326,21 +3372,21 @@ static int run(int argc, char **argv, struct allow *allow)
     }
 
     if (do_applets) {
-        check_applets(allow, applets ? applets : APPLET_TABLE, &problems);
-        check_suid_applets(allow, SUID_APPLET_TABLE, &problems);
-        check_suid_config(allow, SUID_BUSYBOX_CONFIG, &problems);
-        if (access(BUSYBOX_CONFIG, R_OK) != 0)
+        check_applets(allow, applets ? applets : host_path(APPLET_TABLE), &problems);
+        check_suid_applets(allow, host_path(SUID_APPLET_TABLE), &problems);
+        check_suid_config(allow, host_path(SUID_BUSYBOX_CONFIG), &problems);
+        if (access(host_path(BUSYBOX_CONFIG), R_OK) != 0)
             addf(&problems,
                  "%s: the main build staged no resolved config, "
                  "so what its applet table was built from cannot be read",
-                 BUSYBOX_CONFIG);
-        check_inits(allow, INIT_BINARIES, &problems);
+                 host_path(BUSYBOX_CONFIG));
+        check_inits(allow, host_path(INIT_BINARIES), &problems);
         if (problems.n > 0)
             return report(&problems);
         printf("check-setid: OK (%s: no forbidden applet or feature; the "
                "set-id build has only login, passwd, su; the strict init "
                "names no shell)\n",
-               applets ? applets : APPLET_TABLE);
+               applets ? applets : host_path(APPLET_TABLE));
         return 0;
     }
 

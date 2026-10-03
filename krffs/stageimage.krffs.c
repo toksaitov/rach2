@@ -68,6 +68,64 @@ static bool is_valid_guest_path(const char *path)
 }
 
 /**
+ * The host path a manifest's `path` is read from.
+ *
+ * A manifest names its host files by their i686 paths, build/... and
+ * vendor/musl/install/..., so one manifest describes the image of either
+ * architecture. The root Makefile of an x86-64 build sets RACH2_PATH_MAP to
+ * blank-separated `FROM=TO` pairs, and the first FROM that begins `path` is
+ * replaced by its TO: build/utils/cat is then read from
+ * build/x86_64/utils/cat. With no map, or no FROM that matches, the path is
+ * read as it is written. The result is in one of four static buffers, so it
+ * is good until the fourth call after this one.
+ */
+static const char *host_path(const char *path)
+{
+    static char buf[4][1024];
+    static int next;
+    const char *map = getenv("RACH2_PATH_MAP");
+    const char *p;
+
+    if (map == NULL) {
+        return path;
+    }
+    for (p = map; *p != '\0';) {
+        const char *word;
+        const char *eq;
+        size_t from_len;
+        size_t to_len;
+
+        while (*p == ' ' || *p == '\t') {
+            p++;
+        }
+        word = p;
+        while (*p != '\0' && *p != ' ' && *p != '\t') {
+            p++;
+        }
+        eq = memchr(word, '=', (size_t)(p - word));
+        if (eq == NULL) {
+            continue;
+        }
+        from_len = (size_t)(eq - word);
+        to_len = (size_t)(p - eq - 1);
+        if (from_len > 0 && strncmp(path, word, from_len) == 0) {
+            char *out = buf[next];
+
+            next = (next + 1) % 4;
+            if (snprintf(out, sizeof(buf[0]), "%.*s%s", (int)to_len, eq + 1, path + from_len) >=
+                (int)sizeof(buf[0])) {
+                fprintf(stderr, "stageimage: the mapped path of '%s' is too long.\n", path);
+                exit(1);
+            }
+
+            return out;
+        }
+    }
+
+    return path;
+}
+
+/**
  * Record one host input path for the build's dependency tracking.
  *
  * When `STAGEIMAGE_DEPS` names a file, every host path the stager reads or
@@ -1193,7 +1251,7 @@ static bool apply_line(struct krffs_file_system *file_system, char *line)
         return stage_file(file_system, path, mode, uid, gid, text, len);
     }
     if (strcmp(verb, "file") == 0 || strcmp(verb, "optional-file") == 0) {
-        char *hostpath = strtok_r(NULL, " \t", &save);
+        const char *hostpath = strtok_r(NULL, " \t", &save);
         char *data;
         size_t len = 0;
         bool ok;
@@ -1203,6 +1261,7 @@ static bool apply_line(struct krffs_file_system *file_system, char *line)
 
             return false;
         }
+        hostpath = host_path(hostpath);
         /* optional-file skips ONLY a genuinely absent host file. A file that
            exists but cannot be read (a permission error, a short read) is a
            real error for both directives, never a silent skip. The absence
@@ -1231,13 +1290,14 @@ static bool apply_line(struct krffs_file_system *file_system, char *line)
         return ok;
     }
     if (strcmp(verb, "tree") == 0) {
-        char *hostdir = strtok_r(NULL, " \t", &save);
+        const char *hostdir = strtok_r(NULL, " \t", &save);
 
         if (hostdir == NULL) {
             fprintf(stderr, "stageimage: 'tree' needs a host dir.\n");
 
             return false;
         }
+        hostdir = host_path(hostdir);
         /* A set-id mode is refused for `exec-dir`'s reason doubled: the set of
            paths it would privilege is a property of what happens to be in the
            host tree, and a tree is deeper than one directory. */
@@ -1254,13 +1314,14 @@ static bool apply_line(struct krffs_file_system *file_system, char *line)
         return stage_tree(file_system, path, hostdir, mode, uid, gid);
     }
     if (strcmp(verb, "exec-dir") == 0) {
-        char *hostdir = strtok_r(NULL, " \t", &save);
+        const char *hostdir = strtok_r(NULL, " \t", &save);
 
         if (hostdir == NULL) {
             fprintf(stderr, "stageimage: 'exec-dir' needs a host dir.\n");
 
             return false;
         }
+        hostdir = host_path(hostdir);
 
         return stage_exec_dir(file_system, path, hostdir, mode, uid, gid);
     }
