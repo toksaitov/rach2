@@ -507,7 +507,10 @@ void k_font_init(void)
 {
     const uint16_t *map = textcon_load_font();
 
-    if (map != NULL) {
+    if (map != NULL && textcon_on_framebuffer()) {
+        vt_font = map;
+        klog(KLOG_INFO, "console", "font: drawn: code page 437 box drawing with Cyrillic");
+    } else if (map != NULL) {
         vt_font = map;
         klog(KLOG_INFO, "vga", "font: loaded: code page 437 box drawing with Cyrillic");
     } else {

@@ -2,7 +2,7 @@
  * The text console, as the shared kernel draws on it: a grid of character
  * cells with colors, a cursor, scrolling and a scrollback. A platform's
  * console driver defines it: display/vga_text.c on a PC, in the adapter's
- * text mode.
+ * text mode or, through display/fbcon.c, on the loader's framebuffer.
  */
 
 #ifndef _TEXTCON_H_
@@ -92,6 +92,10 @@ uint8_t get_curr_color_attr(void);
  * or NULL when the display keeps its own font.
  */
 const uint16_t *textcon_load_font(void);
+
+/** Whether the console draws its font on a framebuffer rather than in a
+ * text adapter. */
+bool textcon_on_framebuffer(void);
 
 /*
  * The scrollback: the rows that left the top of the screen, which these move

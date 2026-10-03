@@ -38,5 +38,6 @@ PC_C_SRC = sys/arch/x86/boot.c \
     sys/display/vga_text.c \
     sys/display/vga_gfx.c \
     sys/display/vga_font.c \
+    sys/display/fbcon.c \
     sys/audio/dma.c \
     sys/audio/sb16.c

@@ -1,8 +1,14 @@
 /*
  * VGA Graphics Mode driver (Mode 13h, 320x200, 256 colors).
+ *
+ * When the console is on a framebuffer (fbcon.c) the display may be no VGA
+ * at all, as on a machine booted by UEFI, so entering and leaving the mode
+ * and loading its palette leave the hardware alone: the device's state
+ * changes as it always does, and its picture reaches no screen.
  */
 
 #include "../arch/x86/portio.h"
+#include "fbcon.h"
 #include "vga_gfx.h"
 #include "vga_text.h"
 #include "vga_font.h"
@@ -315,12 +321,15 @@ uint8_t *fb_enter(void)
         return (uint8_t *)VGA_GFX_FRAMEBUFFER;
     }
 
-    vga_save_font();
+    if (!fbcon_active) {
+        vga_save_font();
 
-    vga_set_mode(mode13h_misc, mode13h_seq, sizeof(mode13h_seq), mode13h_crtc, sizeof(mode13h_crtc),
-                 mode13h_gc, sizeof(mode13h_gc), mode13h_ac, sizeof(mode13h_ac));
+        vga_set_mode(mode13h_misc, mode13h_seq, sizeof(mode13h_seq), mode13h_crtc,
+                     sizeof(mode13h_crtc), mode13h_gc, sizeof(mode13h_gc), mode13h_ac,
+                     sizeof(mode13h_ac));
 
-    k_memset((void *)VGA_GFX_FRAMEBUFFER, 0, VGA_GFX_SIZE);
+        k_memset((void *)VGA_GFX_FRAMEBUFFER, 0, VGA_GFX_SIZE);
+    }
 
     vga_graphics_mode = true;
 
@@ -405,11 +414,13 @@ void fb_exit(void)
         return;
     }
 
-    vga_set_mode(mode3_misc, mode3_seq, sizeof(mode3_seq), mode3_crtc, sizeof(mode3_crtc), mode3_gc,
-                 sizeof(mode3_gc), mode3_ac, sizeof(mode3_ac));
+    if (!fbcon_active) {
+        vga_set_mode(mode3_misc, mode3_seq, sizeof(mode3_seq), mode3_crtc, sizeof(mode3_crtc),
+                     mode3_gc, sizeof(mode3_gc), mode3_ac, sizeof(mode3_ac));
 
-    vga_restore_text_palette();
-    vga_restore_font();
+        vga_restore_text_palette();
+        vga_restore_font();
+    }
 
     vga_graphics_mode = false;
 
@@ -436,7 +447,7 @@ void fb_set_palette(const uint8_t *data)
 {
     int i;
 
-    if (!data) {
+    if (!data || fbcon_active) {
         return;
     }
 

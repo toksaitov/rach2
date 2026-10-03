@@ -2,14 +2,17 @@
  * boot.c: the C entry of a PC's kernel, which a Multiboot or multiboot2
  * loader reached through the architecture's loader.s. It brings up the
  * serial console first, so that everything after can be logged, reads the
- * loader's information into the boot record (mbinfo.c), and calls the
- * shared boot.
+ * loader's information into the boot record (mbinfo.c), gives the console
+ * the loader's framebuffer when there is one, and calls the shared boot.
  */
 
 #include "../../boot.h"
 #include "../../klog.h"
 #include "../../module.h"
 #include "../../serial.h"
+#include "../../display/fbcon.h"
+#include "../../mm/paging.h"
+#include "../arch.h"
 
 #include "mbinfo.h"
 #if defined(__x86_64__)
@@ -32,6 +35,10 @@
 /* The record and its copies, filled once. */
 static struct boot_info boot;
 static struct boot_store store;
+
+/* The page table root loader.s built, which the x86-64 kernel translates
+ * through until it loads its own. */
+static uintptr_t boot_root;
 
 /** The loader's `len` bytes at `phys`, below the 4 GiB both entries
  * reach. */
@@ -67,11 +74,58 @@ static void boot_report(const char *form, int says_firmware)
     }
 }
 
+/** Whether the kernel's own page tables are in force: paging on, on i686,
+ * where the loader left it off, and on x86-64 a root other than loader.s's. */
+static int kernel_tables(void)
+{
+#if defined(__x86_64__)
+    return arch_space_root() != boot_root;
+#else
+    uint32_t cr0;
+
+    __asm__ __volatile__("mov %%cr0, %0" : "=r"(cr0));
+    return (cr0 & 0x80000000u) != 0;
+#endif
+}
+
+/**
+ * The console's address of the loader's framebuffer: its physical address
+ * through the loader's view of memory until the kernel's page tables are in
+ * force, and from then a mapping of it in the MMIO region, made the first
+ * time the console draws after, uncached as every MMIO mapping is. A
+ * framebuffer past 4 GiB is not reached.
+ */
+volatile uint8_t *fbcon_window(void)
+{
+    static volatile uint8_t *mapped;
+    static int tried;
+    uint64_t size = (uint64_t)boot.fb.pitch * boot.fb.height;
+    uintptr_t va;
+
+    if (mapped != NULL) {
+        return mapped;
+    }
+    if (boot.fb.addr == 0 || boot.fb.addr + size > 0x100000000ULL) {
+        return NULL;
+    }
+    if (!kernel_tables()) {
+        return (volatile uint8_t *)LOADER_PTR(boot.fb.addr);
+    }
+    if (tried) {
+        return NULL;
+    }
+    tried = 1;
+    va = map_mmio((uintptr_t)boot.fb.addr, (size_t)size);
+    mapped = (volatile uint8_t *)va;
+    return mapped;
+}
+
 void k_main(uint32_t magic, const void *info);
 
 /** The entry from loader.s, with the loader's magic and information. */
 void k_main(uint32_t magic, const void *info)
 {
+    boot_root = arch_space_root();
     serial_init();
     klog(KLOG_INFO, "boot", "Rach2 Booting");
 
@@ -94,5 +148,11 @@ void k_main(uint32_t magic, const void *info)
     }
 
     init_modules(&boot);
+    if ((boot.fb.type == BOOT_FB_RGB || boot.fb.type == BOOT_FB_INDEXED) &&
+        fbcon_init(&boot.fb) != 0) {
+        klog(KLOG_WARN, "console",
+             "framebuffer: not one this console draws; the screen stays as "
+             "the loader left it");
+    }
     kernel_main(&boot);
 }

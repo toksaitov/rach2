@@ -60,8 +60,16 @@ void kirq_restore(uint32_t flags)
 bool vga_graphics_mode = false;
 
 #include "display/vga_text.c"
+#include "display/fbcon.c"
 #include "display/vga_font.c"
 #include "kio.c"
+
+/* No framebuffer: the console stays on the adapter, which fbcon_hosttest.c
+   replaces. */
+volatile uint8_t *fbcon_window(void)
+{
+    return NULL;
+}
 
 static int font_reads_back;
 

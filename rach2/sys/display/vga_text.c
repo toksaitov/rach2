@@ -27,12 +27,17 @@
  * since it is the picture's then; leaving graphics mode clears the screen,
  * which sets it again.
  *
+ * On a framebuffer the memory, the start address and the cursor are
+ * fbcon.c's, which draws what they select, and the economy is the same:
+ * a cell drawn is a glyph's pixels stored to the display's memory.
+ *
  * The caller keeps interrupts off around a byte's work here: k_putc does,
  * and a keyboard's echo comes through k_putc from its interrupt.
  */
 
 #include "vga_font.h"
 #include "../arch/x86/portio.h"
+#include "fbcon.h"
 #include "vga_text.h"
 #include "vga_gfx.h"
 #include "../kio.h"
@@ -70,6 +75,9 @@ static bool _cursor_stale = false;
 
 static volatile uint16_t *vga_text_memory(void)
 {
+    if (fbcon_active) {
+        return fbcon_cells;
+    }
     return (volatile uint16_t *)VGA_TEXT_BUFFER;
 }
 
@@ -84,6 +92,9 @@ static void vga_text_store(uint32_t at, uint16_t cell)
 #ifdef VGA_TEXT_HOSTTEST
     vga_text_hosttest_stored();
 #endif
+    if (fbcon_active) {
+        fbcon_stored(at);
+    }
 }
 
 /**
@@ -94,6 +105,11 @@ static void vga_text_store(uint32_t at, uint16_t cell)
  */
 static void vga_text_set_start(uint32_t cell)
 {
+    if (fbcon_active) {
+        fbcon_set_start(cell);
+        _hw_started = true;
+        return;
+    }
     if (vga_graphics_mode) {
         return;
     }
@@ -228,11 +244,15 @@ static void vga_text_update_cursor(void)
         cursor_pos = (uint16_t)(_hw_top + VGA_TEXT_SCREEN_CELLS - 1);
     }
 
+    _cursor_stale = false;
+    if (fbcon_active) {
+        fbcon_set_cursor(cursor_pos);
+        return;
+    }
     outb(0x3D4, 0xE);
     outb(0x3D5, cursor_pos >> 8);
     outb(0x3D4, 0xF);
     outb(0x3D5, cursor_pos);
-    _cursor_stale = false;
 }
 
 /**
@@ -474,5 +494,13 @@ bool k_scrollback_is_active(void)
 
 const uint16_t *textcon_load_font(void)
 {
+    if (fbcon_active) {
+        return vga_font_map;
+    }
     return vga_font_load() ? vga_font_map : NULL;
+}
+
+bool textcon_on_framebuffer(void)
+{
+    return fbcon_active;
 }

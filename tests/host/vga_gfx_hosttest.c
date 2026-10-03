@@ -15,6 +15,9 @@ static uint8_t aperture[VGA_GFX_SIZE];
 #include "display/vga_gfx.c"
 #include "display/vga_font.c"
 
+/* The console on the adapter, not on a framebuffer. */
+bool fbcon_active = false;
+
 extern int printf(const char *format, ...);
 static int failures;
 static uint32_t masked;
