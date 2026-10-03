@@ -35,10 +35,26 @@ LD := $(CROSS_LD)
 # transient debugging.
 WERROR ?= -Werror
 include ../mk/warnings.mk
-CFLAGS  = -m32 -mno-sse -mno-sse2 -g -Wall -Wextra -Wdeclaration-after-statement $(KWARN) $(WERROR) -ansi -nostdlib -nostartfiles -nodefaultlibs $(DEPFLAGS)
+# The flags of the architecture. i686 code uses no SSE. x86-64 code runs in
+# the kernel's top 2 GiB (-mcmodel=kernel), uses no red zone below the stack
+# pointer, which an interrupt in the kernel would overwrite, and touches no
+# MMX or SSE register, which hold the programs' state; its links align
+# segments to 4 KiB pages, not the linker's 2 MiB, so the file follows the
+# memory layout that the a.out kludge copies (sys/arch/x86_64/link.ld), and
+# it writes no unwinding tables.
+ifeq ($(ARCH),x86_64)
+ARCH_AFLAGS   = -m64
+ARCH_KFLAGS   = -m64 -mcmodel=kernel -mno-red-zone -mno-mmx -mno-sse -mno-sse2 -fno-asynchronous-unwind-tables
+ARCH_KLDFLAGS = -m elf_x86_64 -z max-page-size=0x1000
+else
+ARCH_AFLAGS   = -m32
+ARCH_KFLAGS   = -m32 -mno-sse -mno-sse2
+ARCH_KLDFLAGS = -m elf_i386
+endif
+CFLAGS  = $(ARCH_KFLAGS) -g -Wall -Wextra -Wdeclaration-after-statement $(KWARN) $(WERROR) -ansi -nostdlib -nostartfiles -nodefaultlibs $(DEPFLAGS)
 # -z noseparate-code: newer binutils split read-only data into a third
 # PT_LOAD by default; the loader and elfcheck take the two-segment layout.
-LDFLAGS = -m elf_i386 -z noseparate-code -T $(LINKER_SCRIPT).ld $(LDEXTRA)
+LDFLAGS = $(ARCH_KLDFLAGS) -z noseparate-code -T $(LINKER_SCRIPT).ld $(LDEXTRA)
 # Linker flags an analysis adds from the command line (tools/verify/analyze.sh).
 LDEXTRA ?=
 
@@ -83,6 +99,14 @@ all : $(KERNEL_BIN)
 # `nm` read. The rule names this file among its inputs, so a change to how
 # the kernel is made makes it again.
 ELFCHECK = ../build/tools/inspect/elfcheck
+# The checker's kernel profile is the i686's: a 32-bit ELF loaded where its
+# headers say. The x86-64 kernel, loaded through the a.out kludge, waits for
+# a profile of its own.
+ifeq ($(ARCH),x86_64)
+KERNEL_CHECK = :
+else
+KERNEL_CHECK = $(ELFCHECK) --kernel
+endif
 
 $(KERNEL_BIN) : $(ASM_OBJECTS) $(C_OBJECTS) $(LINKER_SCRIPT).ld Makefile
 	@mkdir -p $(dir $@)
@@ -91,7 +115,7 @@ $(KERNEL_BIN) : $(ASM_OBJECTS) $(C_OBJECTS) $(LINKER_SCRIPT).ld Makefile
 	echo '$(LD) $(LDFLAGS) -o $@.debug ...'; \
 	$(LD) $(LDFLAGS) -o "$$tmp.debug" $(ASM_OBJECTS) $(C_OBJECTS) && \
 	$(CROSS_OBJCOPY) --strip-debug "$$tmp.debug" "$$tmp" && \
-	$(ELFCHECK) --kernel "$$tmp" && \
+	$(KERNEL_CHECK) "$$tmp" && \
 	mv "$$tmp.debug" $@.debug && \
 	mv "$$tmp" $@
 
@@ -111,7 +135,7 @@ $(ASM_OBJECTS) $(C_OBJECTS): $(CONFIG)
 
 $(ASM_OBJECTS) : $(BUILD)/%.o : %.s
 	@mkdir -p $(dir $@)
-	$(CC) -m32 -g -c -o $@ $<
+	$(CC) $(ARCH_AFLAGS) -g -c -o $@ $<
 
 $(C_OBJECTS) : $(BUILD)/%.o : %.c
 	@mkdir -p $(dir $@)
