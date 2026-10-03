@@ -10,6 +10,11 @@
 # the test image under /musl by its manifest (so /musl/hello, /musl/mallocqsort,
 # ...). `make musl-programs` runs this.
 #
+# The architecture is RACH2_ARCH's, i686 when it is unset, as mk/arch.sh reads
+# it: the root Makefile sets it from ARCH. An x86-64 build compiles with
+# x86_64-elf-gcc against the x86-64 musl and writes under
+# build/x86_64/tests/musl/.
+#
 # A program that must link a source from elsewhere in the tree names it in a
 # "link-deps:" comment, the convention the host suite parses for the host
 # tests, with the paths written from the repo root:
@@ -39,12 +44,14 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
 REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
-PREFIX="$SCRIPT_DIR/../../vendor/musl/install"
-CC="i686-elf-gcc"
+. "$REPO/mk/arch.sh"
+PREFIX="$MUSL_PREFIX"
+CC="${CROSS}gcc $MFLAG"
+# shellcheck disable=SC2086 # CC is the compiler and its word-size flag
 LIBGCC="$($CC -print-libgcc-file-name)"
 
 # Out of tree, mirroring the source path tests/musl/ (mk/build.mk).
-OUT="$(cd "$SCRIPT_DIR/../.." && pwd)/build/tests/musl"
+OUT="$ARCH_BUILD/tests/musl"
 
 if [ ! -f "$PREFIX/lib/libc.a" ]; then
     echo "error: $PREFIX/lib/libc.a not found; run vendor/musl/build_libc.sh first" >&2
@@ -103,12 +110,12 @@ for src in *.c; do
     # compile nothing: the compilation database generator reads them.
     if [ -n "${MUSL_PRINT_COMMANDS:-}" ]; then
         # shellcheck disable=SC2086
-        echo "$CC -static -nostdlib -nostartfiles -isystem $PREFIX/include -I ../../utils -O2 -o $OUT/$prog $PREFIX/lib/crt1.o $PREFIX/lib/crti.o $src $deps $PREFIX/lib/libc.a $LIBGCC $PREFIX/lib/crtn.o"
+        echo "$CC -static -nostdlib -nostartfiles -isystem $PREFIX/include -I ../../utils -O2 -o $OUT/$prog $PREFIX/lib/crt1.o $PREFIX/lib/crti.o $src $deps $PREFIX/lib/libc.a $LIBGCC $PREFIX/lib/crtn.o $ARCH_LDFLAGS"
         continue
     fi
     # shellcheck disable=SC2086
     stale "$OUT/$prog" "$src" $deps "$PREFIX/lib/libc.a" \
-        "$SCRIPT_DIR/build.sh" || continue
+        "$SCRIPT_DIR/build.sh" "$REPO/mk/arch.sh" || continue
     echo "  CC $prog"
     # shellcheck disable=SC2086
     $CC -static -nostdlib -nostartfiles -isystem "$PREFIX/include" -I ../../utils -O2 \
@@ -116,5 +123,5 @@ for src in *.c; do
         -o "$OUT/$prog" \
         "$PREFIX/lib/crt1.o" "$PREFIX/lib/crti.o" "$src" $deps \
         "$PREFIX/lib/libc.a" "$LIBGCC" "$PREFIX/lib/crtn.o" \
-        -Wl,-z,noexecstack
+        -Wl,-z,noexecstack $ARCH_LDFLAGS
 done

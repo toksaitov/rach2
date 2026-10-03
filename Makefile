@@ -662,15 +662,11 @@ IMAGE_TOOLS = krffs/mkimage.sh $(SETIDCHECK) tools/inspect/setid.allow \
 
 -include $(TEST_IMAGE).d $(OS_SIMPLE_IMAGE).d $(OS_REAL_IMAGE).d
 
-# The musl integration programs (tests/musl/*.c -> build/tests/musl/), built by
-# their own script. They are end-to-end libc tests staged into the test image.
-# The script builds for i686 alone, so an x86-64 test image stops here, named.
+# The musl integration programs (tests/musl/*.c -> build/tests/musl/, or
+# build/x86_64/tests/musl/), built by their own script for the architecture
+# RACH2_ARCH names. They are end-to-end libc tests staged into the test image.
 musl-programs: $(LIBC_STAMP)
-ifeq ($(ARCH_SUFFIX),)
-	sh tests/musl/build.sh
-else
-	@echo "musl-programs: tests/musl/build.sh builds for i686 only, so the $(ARCH) test image has no musl programs" >&2; exit 1
-endif
+	RACH2_ARCH=$(ARCH) sh tests/musl/build.sh
 
 # The test image: the freestanding syscall probes plus the musl integration
 # programs. The default suite boots it and judges each probe by its exit
