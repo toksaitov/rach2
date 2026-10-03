@@ -2444,25 +2444,27 @@ static int32_t dev_getgeo(fd_entry_t *e, uintptr_t arg)
     return copy_to_user((void __user *)arg, &geo, sizeof(geo)) != 0 ? -EFAULT : 0;
 }
 
-/** The sector size of a raw window, 512 bytes, as an int at `arg`. */
 /* BLKROGET, BLKRAGET and BLKBSZGET of a disk or loop node: read-only only for
- * a loop device attached so, 256 sectors of read-ahead and 4096-byte blocks,
- * an int each. */
+ * a loop device attached so, 256 sectors of read-ahead and 4096-byte blocks;
+ * an int each, but the read-ahead, which Linux gives as a long. */
 static int32_t dev_block_info(fd_entry_t *e, uint32_t request, uintptr_t arg)
 {
     uint64_t size;
     const block_device_t *loop =
         e->dev && e->dev->ops == &loop_ops ? loop_attached_at(devfs_loop_index(e->dev)) : 0;
-    int32_t v = request == 0x125Eu   ? (loop && (loop->flags & BLOCK_READ_ONLY) ? 1 : 0)
-                : request == 0x1263u ? 256
-                                     : 4096;
+    int32_t v = request == 0x125Eu ? (loop && (loop->flags & BLOCK_READ_ONLY) ? 1 : 0) : 4096;
+    long readahead = 256;
 
     if (!devfs_fd_raw_size(e, &size) || e->dev->ops == &mem_ops) {
         return -ENOTTY;
     }
+    if (request == 0x1263u) {
+        return copy_to_user((void __user *)arg, &readahead, sizeof(readahead)) != 0 ? -EFAULT : 0;
+    }
     return copy_to_user((void __user *)arg, &v, sizeof(v)) != 0 ? -EFAULT : 0;
 }
 
+/** The sector size of a raw window, 512 bytes, as an int at `arg`. */
 static int32_t dev_sector_size(fd_entry_t *e, uintptr_t arg)
 {
     int32_t sector = 512;
