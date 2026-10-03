@@ -2,7 +2,7 @@
  * runtests: boot the test image once and run every probe, checking each
  * exits 0.
  *
- * Boots qemu-system-i386 headless with the kernel and the test RAM disk,
+ * Boots the architecture's QEMU headless with the kernel and the test RAM disk,
  * waits for the kernel shell, then `exec`s each probe in turn and scores
  * it from the line that hands the shell back: `sys_exit: init process N
  * exited with status M` or `terminate: init process N killed by signal S`.
@@ -176,6 +176,36 @@ static const char *const PROBES[] = {
        at the image root, and removes every one of them again. */
     "stickyprobe"};
 #define N_PROBES (int)(sizeof(PROBES) / sizeof(PROBES[0]))
+
+/* The probes of an interface only i386 has, which tests/Makefile builds for
+   i686 alone: on a boot of another architecture each is reported as not run
+   and counts as no failure. */
+static const char *const I686_ONLY[] = {"tlsprobe"};
+#define N_I686_ONLY (int)(sizeof(I686_ONLY) / sizeof(I686_ONLY[0]))
+
+/** The emulator: RACH2_QEMU, which the suites set to the architecture's
+ * (mk/arch.mk), or qemu-system-i386. */
+static const char *qemu_binary(void)
+{
+    const char *q = getenv("RACH2_QEMU");
+
+    return q != NULL && q[0] != '\0' ? q : "qemu-system-i386";
+}
+
+/** Whether `probe` is one this boot's architecture has no build of: the
+ * i686-only probes, when RACH2_ARCH names another architecture. */
+static int not_built_here(const char *probe)
+{
+    const char *arch = getenv("RACH2_ARCH");
+    int i;
+
+    if (arch == NULL || arch[0] == '\0' || strcmp(arch, "i686") == 0)
+        return 0;
+    for (i = 0; i < N_I686_ONLY; i++)
+        if (strcmp(probe, I686_ONLY[i]) == 0)
+            return 1;
+    return 0;
+}
 
 /* The two markers that hand the debug shell back. Both kernel paths carry
    their own outcome on this line: sys_exit its exit status,
@@ -782,7 +812,7 @@ int main(int argc, char **argv)
        read), so a host configured for a local-time RTC would hand the
        guest a date wrong by its offset, and the clock check below would
        report it as our bug. */
-    qemu[nq++] = (char *)"qemu-system-i386";
+    qemu[nq++] = (char *)qemu_binary();
     qemu[nq++] = (char *)"-cpu";
     qemu[nq++] = (char *)cpu;
     qemu[nq++] = (char *)"-kernel";
@@ -855,6 +885,14 @@ int main(int argc, char **argv)
         char line[256];
         long end;
 
+        if (not_built_here(PROBES[i])) {
+            results[n_results].name = PROBES[i];
+            snprintf(results[n_results].detail, sizeof(results[n_results].detail),
+                     "i686 only, not run");
+            results[n_results].ok = 1;
+            n_results++;
+            continue;
+        }
         snprintf(line, sizeof(line), "exec %s", PROBES[i]);
         /* The window starts where this probe's output will start. Anything
            already buffered came from the shell, not from the probe, and a

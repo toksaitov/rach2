@@ -2,13 +2,13 @@
  * harness: boot one machine under QEMU and drive its serial console, for
  * probe and test runs.
  *
- * Boots qemu-system-i386 headless with the kernel and a KRFFS initrd,
- * attaches QEMU's isa-debug-exit device (iobase 0xF4), and drives the
- * guest with an expect and send script. With a HARNESS=1 kernel build the
- * kernel writes each process exit status to that port (rach2/sys/kio.c,
- * harness_exit), so QEMU stops with ((status << 1) | 1) and this reads a
- * real exit code: a hang or a triple fault then shows up as a timeout, not
- * as a missing serial marker.
+ * Boots the architecture's QEMU, RACH2_QEMU or else qemu-system-i386, headless
+ * with the kernel and a KRFFS initrd, attaches QEMU's isa-debug-exit device
+ * (iobase 0xF4), and drives the guest with an expect and send script. With a
+ * HARNESS=1 kernel build the kernel writes each process exit status to that
+ * port (rach2/sys/kio.c, harness_exit), so QEMU stops with ((status << 1) | 1)
+ * and this reads a real exit code: a hang or a triple fault then shows up as a
+ * timeout, not as a missing serial marker.
  *
  * Usage:
  *   harness --kernel K [--initrd I] [--append LINE] [--net NETVAL]
@@ -184,6 +184,15 @@ static int parse_mouse(const char *text, int *dx, int *dy, int *buttons)
         return -1;
     }
     return 0;
+}
+
+/** The emulator: RACH2_QEMU, which the suites set to the architecture's
+ * (mk/arch.mk), or qemu-system-i386. */
+static const char *qemu_binary(void)
+{
+    const char *q = getenv("RACH2_QEMU");
+
+    return q != NULL && q[0] != '\0' ? q : "qemu-system-i386";
 }
 
 /** Whether any step needs the monitor. */
@@ -1760,7 +1769,7 @@ int main(int argc, char **argv)
         unlink(monitor_path);
     }
 
-    qemu[nq++] = (char *)"qemu-system-i386";
+    qemu[nq++] = (char *)qemu_binary();
     if (!bios) {
         qemu[nq++] = (char *)"-kernel";
         qemu[nq++] = (char *)kernel;
