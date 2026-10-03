@@ -8,6 +8,7 @@
 .Nm clock_settime ,
 .Nm clock_getres ,
 .Nm stime ,
+.Nm time ,
 .Nm times ,
 .Nm utimensat
 .Nd read and set clocks, and set file timestamps
@@ -24,6 +25,8 @@
 .Fn clock_settime "clockid_t clockid" "const struct timespec *tp"
 .Ft int
 .Fn stime "const time_t *t"
+.Ft time_t
+.Fn time "time_t *tloc"
 .Ft int
 .Fn clock_getres "clockid_t clockid" "struct timespec *res"
 .In sys/times.h
@@ -46,6 +49,10 @@ counted in timer ticks with the PIT counter's place within the current tick
 added, to the microsecond.
 If the clock could not be read, the result is time since boot.
 The hardware clock is read once; no service corrects the clock afterward.
+.Fn time
+returns the seconds of the same real time, and stores them at
+.Fa tloc
+as well when it is not null.
 .Pp
 .Fn clock_settime
 of
@@ -302,7 +309,14 @@ it accepts a null
 and returns 0.
 The raw
 .Fn gettimeofday
-system call requires a writable, nonnull timeval.
+system call takes a null
+.Fa tv
+and returns 0, as Linux's does.
+.Nm time
+is system call 13; musl implements
+.Fn time
+through
+.Fn clock_gettime .
 .Pp
 On x86-64 the clock calls take timespecs and timevals of 64-bit fields,
 and there are no time64 forms and no
@@ -311,6 +325,9 @@ and there are no time64 forms and no
 is 96,
 .Nm settimeofday
 164,
+.Nm time
+201, which glibc calls for
+.Fn time ,
 .Nm clock_gettime
 228,
 .Nm clock_settime

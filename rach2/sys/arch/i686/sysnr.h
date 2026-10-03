@@ -123,6 +123,7 @@
 #define SYS_PPOLL                  309
 #define SYS_GETRUSAGE              77
 #define SYS_GETTIMEOFDAY           78
+#define SYS_TIME                   13
 #define SYS_SETTIMEOFDAY           79
 #define SYS_STIME                  25
 #define SYS_STAT                   106

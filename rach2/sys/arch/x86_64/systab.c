@@ -221,6 +221,7 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_LCHOWN] = sys_lchown;
     table[SYS_UMASK] = sys_umask;
     table[SYS_GETTIMEOFDAY] = sys_gettimeofday;
+    table[SYS_TIME] = sys_time;
     table[SYS_GETRLIMIT] = sys_getrlimit;
     table[SYS_GETRUSAGE] = sys_getrusage;
     table[SYS_SYSINFO] = sys_sysinfo;

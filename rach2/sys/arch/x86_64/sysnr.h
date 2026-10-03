@@ -185,6 +185,7 @@
 #define SYS_LREMOVEXATTR           198
 #define SYS_FREMOVEXATTR           199
 #define SYS_TKILL                  200
+#define SYS_TIME                   201
 #define SYS_FUTEX                  202
 #define SYS_SCHED_SETAFFINITY      203
 #define SYS_SCHED_GETAFFINITY      204

@@ -430,6 +430,7 @@ tftp 1 busybox-networking
 tftpd 1 busybox-networking
 tgkill 2 kill
 time 1 busybox-miscutils
+time 2 gettimeofday
 timeout 1 busybox-coreutils
 times 2 gettimeofday
 tkill 2 kill

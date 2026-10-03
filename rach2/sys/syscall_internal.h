@@ -589,6 +589,7 @@ long sys_clock_settime64(isr_params_t *params);
 long sys_getitimer(isr_params_t *params);
 long sys_getrandom(isr_params_t *params);
 long sys_gettimeofday(isr_params_t *params);
+long sys_time(isr_params_t *params);
 long sys_ioctl(isr_params_t *params);
 long sys_nanosleep(isr_params_t *params);
 long sys_reboot(isr_params_t *params);

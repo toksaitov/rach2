@@ -129,6 +129,7 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_NEWSELECT] = sys__newselect;
     table[SYS_PSELECT6] = sys_pselect6;
     table[SYS_GETTIMEOFDAY] = sys_gettimeofday;
+    table[SYS_TIME] = sys_time;
     table[SYS_SETTIMEOFDAY] = sys_settimeofday;
     table[SYS_STIME] = sys_stime;
     table[SYS_STAT] = sys_stat;

@@ -42,7 +42,7 @@ given up its capabilities with
 Linux asks for a capability in each such place, and this kernel keeps
 every capability or none.
 .Ss System call numbers
-On i686 the kernel registers the following 303 calls, the operations of
+On i686 the kernel registers the following 304 calls, the operations of
 .Xr socketcall 2
 among them.
 .Bl -column "Number" "System call" -compact
@@ -71,6 +71,7 @@ among them.
 .It 11 Ta Xr sendto 2
 .It 12 Ta Xr chdir 2
 .It 12 Ta Xr recvfrom 2
+.It 13 Ta Xr time 2
 .It 13 Ta Xr shutdown 2
 .It 14 Ta Xr mknod 2
 .It 14 Ta Xr setsockopt 2
@@ -358,7 +359,7 @@ The following operation numbers select calls through system call 102,
 .It 0x1000 Ta Xr ping 2
 .El
 .Pp
-On x86-64 it registers the following 260 calls.
+On x86-64 it registers the following 261 calls.
 .Bl -column "Number" "System call" -compact
 .It Sy Number Ta Sy System call
 .It 0 Ta Xr read 2
@@ -534,6 +535,7 @@ On x86-64 it registers the following 260 calls.
 .It 198 Ta Xr lremovexattr 2
 .It 199 Ta Xr fremovexattr 2
 .It 200 Ta Xr tkill 2
+.It 201 Ta Xr time 2
 .It 202 Ta Xr futex 2
 .It 203 Ta Xr sched_setaffinity 2
 .It 204 Ta Xr sched_getaffinity 2

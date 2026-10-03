@@ -318,31 +318,46 @@ struct kernel_timeval {
 /*
  * gettimeofday(2) takes tv (timeval*) and tz (ignored). Reports real time from
  * the clock anchored at boot (sys/arch/x86/rtc.c), or time since boot when
- * there was no clock to read. Returns 0 or -errno.
+ * there was no clock to read, in seconds as wide as a long; a null tv asks
+ * for nothing, as on Linux. Returns 0 or -errno.
  */
 long sys_gettimeofday(isr_params_t *params)
 {
     struct kernel_timeval __user *tv = (struct kernel_timeval __user *)SC_ARG(params, 0);
     struct kernel_timeval ktv;
+    int64_t seconds;
+    int64_t nanoseconds;
 
     if (!tv) {
-        return -EFAULT;
+        return 0;
     }
-
-    {
-        int64_t seconds;
-        int64_t nanoseconds;
-
-        get_current_time(&seconds, &nanoseconds);
-        ktv.tv_sec = (int32_t)seconds;
-        ktv.tv_usec = (int32_t)nanoseconds / 1000; /* narrow first: no __divdi3 */
-    }
-
+    get_current_time(&seconds, &nanoseconds);
+    ktv.tv_sec = (long)seconds;
+    ktv.tv_usec = (int32_t)nanoseconds / 1000; /* narrow first: no __divdi3 */
     if (copy_to_user(tv, &ktv, sizeof(ktv)) != 0) {
         return -EFAULT;
     }
-
     return 0;
+}
+
+/*
+ * time(2): real time's seconds, as gettimeofday reads them, also stored at
+ * tloc when it is not null. glibc on x86-64 calls it for time(), where a
+ * vDSO would otherwise answer.
+ */
+long sys_time(isr_params_t *params)
+{
+    long __user *tloc = (long __user *)SC_ARG(params, 0);
+    int64_t seconds;
+    int64_t nanoseconds;
+    long t;
+
+    get_current_time(&seconds, &nanoseconds);
+    t = (long)seconds;
+    if (tloc && copy_to_user(tloc, &t, sizeof(t)) != 0) {
+        return -EFAULT;
+    }
+    return t;
 }
 
 /* The clock ids of clock_gettime(2), clock_getres(2) and clock_nanosleep(2),
