@@ -86,7 +86,8 @@ starts without one unless
 names one with
 .Dv CLONE_CHILD_CLEARTID .
 .Pp
-x86-64 has neither call: a thread's TLS base there is the FS base, which
+The x86-64 kernel registers neither call, which Linux keeps there for
+32-bit programs: a thread's TLS base is the FS base, which
 .Xr arch_prctl 2
 sets and reads, and which
 .Dv CLONE_SETTLS
