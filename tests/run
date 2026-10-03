@@ -834,6 +834,9 @@ set_accel() {
                 RACH2_QEMU_ACCEL=hvf
             else
                 RACH2_QEMU_ACCEL=tcg
+                if [ -e /dev/kvm ]; then
+                    echo "run: accelerator: tcg: /dev/kvm exists but this user cannot read and write it; the bounds were set under KVM" >&2
+                fi
             fi
             ;;
         kvm|hvf|tcg) ;;
