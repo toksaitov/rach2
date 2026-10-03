@@ -1,8 +1,8 @@
 /**
  * Validate and replace GRUB core images using caller-supplied sector I/O.
  *
- * The layout of the post-MBR gap and the contract of each function are in
- * `grubslot.h`.
+ * The layout of the boot loader window and the contract of each function
+ * are in `grubslot.h`.
  */
 
 #include <string.h>
@@ -41,96 +41,6 @@ static void put_le16(uint8_t *p, uint16_t v)
     p[1] = (uint8_t)((v >> 8) & 0xffu);
 }
 
-int grubslot_active(const uint8_t *entry, uint32_t *out)
-{
-    uint64_t lba = le64(entry + GRUBSLOT_BLOCKLIST_LBA_OFF);
-    uint16_t len = le16(entry + GRUBSLOT_BLOCKLIST_LEN_OFF);
-
-    /* Zero names no image; more than a tail means the image spans both. */
-    if (len == 0u || (uint32_t)len > GRUBSLOT_TAIL_SECTORS) {
-        return -1;
-    }
-    /* A second record: the loader lies in extents this code does not read. */
-    if (le16(entry + GRUBSLOT_BLOCKLIST_NEXT_LEN_OFF) != 0u) {
-        return -1;
-    }
-    if (lba == (uint64_t)GRUBSLOT_TAIL_A_LBA) {
-        *out = GRUBSLOT_TAIL_A_LBA;
-        return 0;
-    }
-    if (lba == (uint64_t)GRUBSLOT_TAIL_B_LBA) {
-        *out = GRUBSLOT_TAIL_B_LBA;
-        return 0;
-    }
-    return -1;
-}
-
-uint32_t grubslot_other(uint32_t active)
-{
-    if (active == GRUBSLOT_TAIL_A_LBA) {
-        return GRUBSLOT_TAIL_B_LBA;
-    }
-    if (active == GRUBSLOT_TAIL_B_LBA) {
-        return GRUBSLOT_TAIL_A_LBA;
-    }
-    return 0;
-}
-
-int grubslot_patch(uint8_t *image, uint32_t sectors, uint32_t tail_lba, char *err, size_t errlen)
-{
-    if (sectors < 2u) {
-        if (err && errlen) {
-            strncpy(err, "a core image is at least two sectors", errlen - 1);
-            err[errlen - 1] = '\0';
-        }
-        return -1;
-    }
-    if (sectors > GRUBSLOT_MAX_IMAGE_SECTORS) {
-        if (err && errlen) {
-            strncpy(err, "the core image does not fit a tail slot", errlen - 1);
-            err[errlen - 1] = '\0';
-        }
-        return -1;
-    }
-    if (tail_lba != GRUBSLOT_TAIL_A_LBA && tail_lba != GRUBSLOT_TAIL_B_LBA) {
-        if (err && errlen) {
-            strncpy(err, "that is not a tail slot", errlen - 1);
-            err[errlen - 1] = '\0';
-        }
-        return -1;
-    }
-    if (le16(image + GRUBSLOT_BLOCKLIST_SEG_OFF) != GRUBSLOT_BLOCKLIST_SEG) {
-        if (err && errlen) {
-            strncpy(err, "that file is not a GRUB core image for this platform", errlen - 1);
-            err[errlen - 1] = '\0';
-        }
-        return -1;
-    }
-    /* GRUB reads records to a zero count; a second names unwritten sectors. */
-    if (le16(image + GRUBSLOT_BLOCKLIST_NEXT_LEN_OFF) != 0u) {
-        if (err && errlen) {
-            strncpy(err, "that core image is read through more than one extent", errlen - 1);
-            err[errlen - 1] = '\0';
-        }
-        return -1;
-    }
-    /* A tail length unlike the file's means a truncated or foreign file. */
-    if ((uint32_t)le16(image + GRUBSLOT_BLOCKLIST_LEN_OFF) != sectors - 1u) {
-        if (err && errlen) {
-            strncpy(err,
-                    "that core image is not the length it declares; it is truncated or "
-                    "is not a core image",
-                    errlen - 1);
-            err[errlen - 1] = '\0';
-        }
-        return -1;
-    }
-
-    put_le64(image + GRUBSLOT_BLOCKLIST_LBA_OFF, (uint64_t)tail_lba);
-    put_le16(image + GRUBSLOT_BLOCKLIST_LEN_OFF, (uint16_t)(sectors - 1u));
-    return 0;
-}
-
 /** Copy `what` into `err`, cut to fit and terminated, and return -1. */
 static int say(char *err, size_t errlen, const char *what)
 {
@@ -139,6 +49,97 @@ static int say(char *err, size_t errlen, const char *what)
         err[errlen - 1] = '\0';
     }
     return -1;
+}
+
+int grubslot_window(uint64_t first, uint64_t sectors, struct grubslot_window *w, char *err,
+                    size_t errlen)
+{
+    uint32_t tail;
+
+    if (first == 0u) {
+        return say(err, errlen, "the boot loader window includes sector 0");
+    }
+    if (sectors < 3u) {
+        return say(err, errlen, "the boot loader window has no room for two tails");
+    }
+    if (first > 0xffffffffu || sectors > 0x100000000ull - first) {
+        return say(err, errlen, "the boot loader window reaches past 2^32 sectors");
+    }
+    tail = (uint32_t)((sectors - 1u) / 2u);
+    if (tail > GRUBSLOT_TAIL_SECTORS) {
+        tail = GRUBSLOT_TAIL_SECTORS;
+    }
+    w->entry = (uint32_t)first;
+    w->tail_a = w->entry + 1u;
+    w->tail_b = w->tail_a + tail;
+    w->tail = tail;
+    return 0;
+}
+
+int grubslot_active(const struct grubslot_window *w, const uint8_t *entry, uint32_t *out)
+{
+    uint64_t lba = le64(entry + GRUBSLOT_BLOCKLIST_LBA_OFF);
+    uint16_t len = le16(entry + GRUBSLOT_BLOCKLIST_LEN_OFF);
+
+    /* Zero names no image; more than a tail means the image spans both. */
+    if (len == 0u || (uint32_t)len > w->tail) {
+        return -1;
+    }
+    /* A second record: the loader lies in extents this code does not read. */
+    if (le16(entry + GRUBSLOT_BLOCKLIST_NEXT_LEN_OFF) != 0u) {
+        return -1;
+    }
+    if (lba == (uint64_t)w->tail_a) {
+        *out = w->tail_a;
+        return 0;
+    }
+    if (lba == (uint64_t)w->tail_b) {
+        *out = w->tail_b;
+        return 0;
+    }
+    return -1;
+}
+
+uint32_t grubslot_other(const struct grubslot_window *w, uint32_t active)
+{
+    if (active == w->tail_a) {
+        return w->tail_b;
+    }
+    if (active == w->tail_b) {
+        return w->tail_a;
+    }
+    return 0;
+}
+
+int grubslot_patch(const struct grubslot_window *w, uint8_t *image, uint32_t sectors,
+                   uint32_t tail_lba, char *err, size_t errlen)
+{
+    if (sectors < 2u) {
+        return say(err, errlen, "a core image is at least two sectors");
+    }
+    if (sectors - 1u > w->tail) {
+        return say(err, errlen, "the core image does not fit a tail slot");
+    }
+    if (tail_lba != w->tail_a && tail_lba != w->tail_b) {
+        return say(err, errlen, "that is not a tail slot");
+    }
+    if (le16(image + GRUBSLOT_BLOCKLIST_SEG_OFF) != GRUBSLOT_BLOCKLIST_SEG) {
+        return say(err, errlen, "that file is not a GRUB core image for this platform");
+    }
+    /* GRUB reads records to a zero count; a second names unwritten sectors. */
+    if (le16(image + GRUBSLOT_BLOCKLIST_NEXT_LEN_OFF) != 0u) {
+        return say(err, errlen, "that core image is read through more than one extent");
+    }
+    /* A tail length unlike the file's means a truncated or foreign file. */
+    if ((uint32_t)le16(image + GRUBSLOT_BLOCKLIST_LEN_OFF) != sectors - 1u) {
+        return say(err, errlen,
+                   "that core image is not the length it declares; it is truncated or "
+                   "is not a core image");
+    }
+
+    put_le64(image + GRUBSLOT_BLOCKLIST_LBA_OFF, (uint64_t)tail_lba);
+    put_le16(image + GRUBSLOT_BLOCKLIST_LEN_OFF, (uint16_t)(sectors - 1u));
+    return 0;
 }
 
 int grubslot_prepare(uint8_t *image, uint32_t capacity, uint32_t bytes, uint32_t *sectors,
@@ -162,26 +163,27 @@ int grubslot_prepare(uint8_t *image, uint32_t capacity, uint32_t bytes, uint32_t
     return 0;
 }
 
-int grubslot_install(void *ctx, grubslot_io_fn io, uint8_t *image, uint32_t sectors,
-                     uint8_t *scratch, uint32_t *out_target, char *err, size_t errlen)
+int grubslot_install(const struct grubslot_window *w, void *ctx, grubslot_io_fn io, uint8_t *image,
+                     uint32_t sectors, uint8_t *scratch, uint32_t *out_target, char *err,
+                     size_t errlen)
 {
     uint32_t active, target, n, i;
 
-    if (io(ctx, 1u, scratch, 0) != 0) {
+    if (io(ctx, w->entry, scratch, 0) != 0) {
         return say(err, errlen, "the entry sector did not read");
     }
-    if (grubslot_active(scratch, &active) != 0) {
+    if (grubslot_active(w, scratch, &active) != 0) {
         return say(err, errlen,
                    "the entry sector's blocklist names neither tail slot, or is "
                    "longer than one; this disk does not have the layout an "
                    "install needs");
     }
-    target = grubslot_other(active);
-    if (grubslot_patch(image, sectors, target, err, errlen) != 0) {
+    target = grubslot_other(w, active);
+    if (grubslot_patch(w, image, sectors, target, err, errlen) != 0) {
         return -1;
     }
 
-    for (n = 0; n < GRUBSLOT_TAIL_SECTORS; n++) {
+    for (n = 0; n < w->tail; n++) {
         if (n + 1u < sectors) {
             memcpy(scratch, image + (n + 1u) * BOOTSLOT_SECTOR, BOOTSLOT_SECTOR);
         } else {
@@ -191,7 +193,7 @@ int grubslot_install(void *ctx, grubslot_io_fn io, uint8_t *image, uint32_t sect
             return say(err, errlen, "the tail slot did not write");
         }
     }
-    for (n = 0; n < GRUBSLOT_TAIL_SECTORS; n++) {
+    for (n = 0; n < w->tail; n++) {
         if (io(ctx, target + n, scratch, 0) != 0) {
             return say(err, errlen, "the tail slot did not read back");
         }
@@ -212,10 +214,10 @@ int grubslot_install(void *ctx, grubslot_io_fn io, uint8_t *image, uint32_t sect
         }
     }
 
-    if (io(ctx, 1u, image, 1) != 0) {
+    if (io(ctx, w->entry, image, 1) != 0) {
         return say(err, errlen, "the entry sector did not write; this disk may not boot");
     }
-    if (io(ctx, 1u, scratch, 0) != 0 || memcmp(scratch, image, BOOTSLOT_SECTOR) != 0) {
+    if (io(ctx, w->entry, scratch, 0) != 0 || memcmp(scratch, image, BOOTSLOT_SECTOR) != 0) {
         return say(err, errlen, "the entry sector did not read back; this disk may not boot");
     }
     *out_target = target;

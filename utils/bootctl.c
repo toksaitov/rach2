@@ -9,7 +9,7 @@
  *     bootctl status         what is installed, committed, and booting next
  *     bootctl kernel FILE    stage a kernel into the candidate slot
  *     bootctl config FILE    stage a boot menu into the rewritable slot
- *     bootctl grub FILE      write a boot loader into the unused gap slot
+ *     bootctl grub FILE      write a boot loader into the unused tail slot
  *     bootctl commit         make the booted trial the saved default
  *     bootctl trial ID       boot one entry once, on the next boot only
  *     bootctl cancel         clear an armed trial
@@ -47,6 +47,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <unistd.h>
 
 #include "bootslot.h"
@@ -601,58 +602,98 @@ static int cmd_cancel(void)
     return 0;
 }
 
-/* The gap device's window starts at LBA 1, so a gap LBA is this many sectors
- * into it. Sector 0 is outside the window on purpose: it has the partition
- * table, and a disk writes whole sectors. */
-#define GAP_OFF(lba) (((off_t)((lba) - 1u)) * BOOTSLOT_SECTOR)
+#ifndef BLKGETSIZE64
+#define BLKGETSIZE64 _IOR(0x12, 114, size_t)
+#endif
+/* Linux's HDIO_GETGEO and its `struct hd_geometry`, which musl does not
+ * declare. Its `start` is the node's first sector on the disk. */
+#define HDIO_GETGEO 0x0301
+struct hd_geometry {
+    unsigned char heads;
+    unsigned char sectors;
+    unsigned short cylinders;
+    unsigned long start;
+};
 
 static uint8_t core[GRUBSLOT_MAX_IMAGE_SECTORS * BOOTSLOT_SECTOR];
 static uint8_t back[BOOTSLOT_SECTOR];
 
-/** Read or write one whole sector of /dev/grubcore at a gap LBA. */
-static int gap_io(int fd, uint32_t lba, uint8_t *buf, int writing)
+/* An open `/dev/grubcore` and the disk LBA its byte 0 is at. */
+struct grubcore {
+    int fd;
+    uint32_t first;
+};
+
+/**
+ * Lay out the window an open `/dev/grubcore` covers, from what the kernel
+ * says of it: its first sector on the disk by `HDIO_GETGEO`, as `fdisk` reads a
+ * partition's, and its length by `BLKGETSIZE64`. The entry sector's blocklist
+ * is not consulted; it is what the window is used to judge.
+ */
+static int grubcore_window(int fd, struct grubslot_window *w)
 {
-    if (lseek(fd, GAP_OFF(lba), SEEK_SET) < 0) {
+    struct hd_geometry geo;
+    uint64_t bytes = 0;
+
+    if (ioctl(fd, HDIO_GETGEO, &geo) != 0 || ioctl(fd, BLKGETSIZE64, &bytes) != 0) {
+        fprintf(stderr, "bootctl: the kernel did not say where /dev/grubcore is: %s\n",
+                strerror(errno));
         return -1;
     }
-    if (writing) {
-        return write(fd, buf, BOOTSLOT_SECTOR) == BOOTSLOT_SECTOR ? 0 : -1;
+    if (grubslot_window((uint64_t)geo.start, bytes / BOOTSLOT_SECTOR, w, errbuf, sizeof(errbuf)) !=
+        0) {
+        fprintf(stderr, "bootctl: %s\n", errbuf);
+        return -1;
     }
-    return read(fd, buf, BOOTSLOT_SECTOR) == BOOTSLOT_SECTOR ? 0 : -1;
+    return 0;
 }
 
 /**
- * Read or write one gap sector through an open `/dev/grubcore`.
+ * Read or write one sector of an open `/dev/grubcore` at a disk LBA.
  *
- * The callback receives disk LBAs; `gap_io` converts them to byte offsets
- * relative to the window beginning at LBA 1.
+ * `grubslot_install` names sectors by their LBA on the disk, as the blocklist
+ * does; the window's byte 0 is its first sector, so an LBA before that one is
+ * outside it and refused here, and one past its end is refused by the kernel.
  */
-static int grubcore_io(void *ctx, uint32_t lba, uint8_t *buf, int write)
+static int grubcore_io(void *ctx, uint32_t lba, uint8_t *buf, int writing)
 {
-    return gap_io(*(int *)ctx, lba, buf, write);
+    const struct grubcore *g = (const struct grubcore *)ctx;
+
+    if (lba < g->first || lseek(g->fd, (off_t)(lba - g->first) * BOOTSLOT_SECTOR, SEEK_SET) < 0) {
+        return -1;
+    }
+    if (writing) {
+        return write(g->fd, buf, BOOTSLOT_SECTOR) == BOOTSLOT_SECTOR ? 0 : -1;
+    }
+    return read(g->fd, buf, BOOTSLOT_SECTOR) == BOOTSLOT_SECTOR ? 0 : -1;
 }
 
 /**
  * Replace GRUB's core image, writing the tail that is not in use.
  *
- * The order is what makes it safe. The image goes into the inactive tail, the
- * whole tail is read back and compared, and only then is LBA 1 rewritten to
- * point at it. A failure anywhere before that last sector leaves the old entry
- * sector and the old tail selected, and the machine boots as it did. Sector 0
- * is never written, so the partition table is never at risk.
+ * The window is where the kernel publishes `/dev/grubcore`: the post-MBR gap of
+ * an MBR disk, the BIOS boot partition of a GPT disk. The order is what makes
+ * the replacement safe. The image goes into the inactive tail, the whole tail
+ * is read back and compared, and only then is the window's first sector, the
+ * entry sector, rewritten to point at it. A failure anywhere before that last
+ * sector leaves the old entry sector and the old tail selected, and the machine
+ * boots as it did. Sector 0 is outside the window, so neither the partition
+ * table nor the boot code's pointer to the entry sector is ever written.
  *
- * What remains is one sector. A torn or bad write to LBA 1 makes GRUB
- * unreachable, and recovery cannot help because GRUB is what loads it. Nothing
- * here defends against that: the exposure is a single sector written after
- * the replacement has been verified, and removing it would take something
- * below GRUB that this machine does not have.
+ * What remains is one sector. A torn or bad write to the entry sector makes
+ * GRUB unreachable, and recovery cannot help because GRUB is what loads it.
+ * Nothing here defends against that: the exposure is a single sector written
+ * after the replacement has been verified, and removing it would take
+ * something below GRUB that this machine does not have.
  */
 static int cmd_grub(const char *path)
 {
     FILE *f;
     size_t size;
     uint32_t sectors, target;
-    int fd, rc;
+    struct grubslot_window w;
+    struct grubcore g;
+    int rc;
 
     f = fopen(path, "rb");
     if (!f) {
@@ -677,20 +718,34 @@ static int cmd_grub(const char *path)
         return 1;
     }
 
-    fd = open("/dev/grubcore", O_RDWR);
-    if (fd < 0) {
+    g.fd = open("/dev/grubcore", O_RDWR);
+    if (g.fd < 0) {
         fprintf(stderr, "bootctl: this machine has no boot loader window (no /dev/grubcore)\n");
         return 1;
     }
-    rc = grubslot_install(&fd, grubcore_io, core, sectors, back, &target, errbuf, sizeof(errbuf));
-    close(fd);
+    if (grubcore_window(g.fd, &w) != 0) {
+        close(g.fd);
+        return 1;
+    }
+    if (sectors - 1u > w.tail) {
+        close(g.fd);
+        fprintf(stderr,
+                "bootctl: '%s' is %u sectors and a tail slot of this window holds %u "
+                "after the entry sector: the core image does not fit a tail slot\n",
+                path, (unsigned)sectors, (unsigned)w.tail);
+        return 1;
+    }
+    g.first = w.entry;
+    rc =
+        grubslot_install(&w, &g, grubcore_io, core, sectors, back, &target, errbuf, sizeof(errbuf));
+    close(g.fd);
     if (rc != 0) {
         fprintf(stderr, "bootctl: %s\n", errbuf);
         return 1;
     }
     printf("bootctl: installed: %u sectors of boot loader in the tail at LBA %u; "
-           "the entry sector now points there\n",
-           (unsigned)sectors, (unsigned)target);
+           "the entry sector at LBA %u now points there\n",
+           (unsigned)sectors, (unsigned)target, (unsigned)w.entry);
     return 0;
 }
 
@@ -720,9 +775,9 @@ static void usage(void)
  * identity-selected root, otherwise from disk 0. `--target` selects another
  * boot partition for this invocation; `grub` and `commit` do not accept it,
  * since both act on the booted disk: `grub` writes through `/dev/grubcore`,
- * the booted disk's gap, and `commit` accepts the running kernel, which came
- * from the booted disk. Either would act on one disk while reporting the
- * other.
+ * the booted disk's boot loader window, and `commit` accepts the running
+ * kernel, which came from the booted disk. Either would act on one disk while
+ * reporting the other.
  */
 int main(int argc, char **argv)
 {

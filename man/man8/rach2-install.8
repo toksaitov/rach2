@@ -32,6 +32,15 @@ beside the kernels, the menu and its environment block; partition 2 is
 the recovery partition, partition 3 the ext2 root, and partition 4 the
 BIOS boot partition, which holds GRUB's BIOS core.
 The disk boots by BIOS and by UEFI.
+On the installed machine,
+.Ql bootctl grub
+replaces the BIOS core in the BIOS boot partition; on a disk installed
+with an MBR, which
+.Fl -update
+keeps, it replaces the core in the gap after the master boot record.
+Either way it writes the one of two tails the running core does not use
+and then selects it, and sector 0 is never written; see
+.Xr bootctl 8 .
 UEFI firmware must have Secure Boot turned off, since the pinned GRUB
 image is not signed.
 The manifest identifies the stick, regardless of its position among

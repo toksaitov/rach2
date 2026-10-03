@@ -180,13 +180,38 @@ slot is refused.
 .It Cm grub Ar FILE
 Replace the i386-pc GRUB core image through
 .Pa /dev/grubcore ,
-which the kernel publishes on an MBR disk only.
-A disk with a GUID table keeps the core in its BIOS boot partition, and
-the command is refused there with the message below.
-The image must be 2 through 1024 sectors long.
-The unused part of the core-image area after the master boot record is
-written and verified, then sector 1 is updated to refer to it.
-Sector 0 is never written.
+the window over the sectors that hold GRUB's BIOS core.
+On an MBR disk the window is the gap after the master boot record,
+sectors 1 through 2047, and the kernel publishes it only when no partition
+overlaps those sectors.
+On a disk with a GUID table it is the BIOS boot partition, sectors 34
+through 2047 on a disk this system installs, and the kernel publishes it
+only when the table has exactly one such partition, clear of the table's
+own sectors.
+The command reads the window's first sector and size from the kernel with
+.Dv HDIO_GETGEO
+and
+.Dv BLKGETSIZE64 .
+.Pp
+The window's first sector is the entry sector, which the boot code in
+sector 0 loads, and the rest holds two tails of equal length, each at most
+1023 sectors: 1023 at sectors 2 and 1025 on an MBR disk, 1006 at sectors 35
+and 1041 in the BIOS boot partition.
+The image must be at least 2 sectors and at most one sector longer than a
+tail: 1024 sectors on an MBR disk, 1007 in the BIOS boot partition.
+It is written to the tail the entry sector does not name, the whole tail
+is read back, and only then is the entry sector rewritten to name it.
+A failure before that write leaves the old core selected.
+No sector outside the window is written, so sector 0, the partition table
+and the boot code's pointer to the entry sector stay as the disk was
+built.
+The command does not check that the image has the modules the disk needs:
+.Ql part_gpt
+for a GUID table,
+.Ql part_msdos
+for an MBR.
+On success it reports:
+.Dl bootctl: installed: N sectors of boot loader in the tail at LBA N; the entry sector at LBA N now points there
 .It Cm env Ar KEY Op Ar VALUE
 Read or set
 .Ql saved_entry
@@ -238,6 +263,8 @@ and
 .Ql bootctl: this disk has no menu slot; it was built before one existed .
 An unavailable GRUB window is reported as:
 .Dl bootctl: this machine has no boot loader window (no /dev/grubcore)
+A core image longer than the window's tails is reported as:
+.Dl bootctl: 'FILE' is N sectors and a tail slot of this window holds N after the entry sector: the core image does not fit a tail slot
 .Pp
 A partition that cannot be read as a boot partition is reported with
 its path and the reason, for example that its first sector could not be
