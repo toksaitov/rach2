@@ -390,6 +390,11 @@ static fd_table_t *files_copy(const fd_table_t *src)
  * file's release, and is waited for until it is a zombie, and reaped; it
  * is sent no signal, since it does not return to user mode. A record a
  * reaper has taken off the zombies is that reaper's to give back.
+ *
+ * Each turn waits for an interrupt after the switch, with the big lock let
+ * go: a leftover running on another processor takes its signal in that
+ * processor's interrupt, which needs the lock, and `schedule` returns at
+ * once, the lock held, when this processor has nothing else to run.
  */
 static void proc_end_others(void)
 {
@@ -424,6 +429,7 @@ static void proc_end_others(void)
             return;
         }
         schedule();
+        idle_wait_irq_on();
     }
 }
 
