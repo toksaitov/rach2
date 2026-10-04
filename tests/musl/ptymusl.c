@@ -7,16 +7,20 @@
  * forks: the child confirms `ttyname(slave)` resolves to `/dev/pts/N` (the
  * `isatty` plus `/proc/self/fd` readlink plus `stat`/`fstat` identity match),
  * reads the cooked line off the slave, and replies on it; the parent drives the
- * master and checks the echo and reply it reads back.
+ * master and checks the echo and reply it reads back. On x86-64 a TCFLSH of
+ * the master whose selector passes 32 bits is EINVAL, as Linux's is.
  *
  * Prints "PTYMUSL OK" on success and "PTYMUSL FAIL" otherwise. Linked against
  * the ported musl.
  */
 
+#include <errno.h>
 #include <pty.h>
 #include <unistd.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/ioctl.h>
+#include <sys/syscall.h>
 #include <sys/wait.h>
 
 int main(void)
@@ -31,6 +35,12 @@ int main(void)
         printf("PTYMUSL FAIL (openpty)\n");
         return 1;
     }
+#if defined __x86_64__
+    if (syscall(SYS_ioctl, master, TCFLSH, 0x100000000UL) != -1 || errno != EINVAL) {
+        printf("PTYMUSL FAIL (TCFLSH of a selector past 32 bits is not EINVAL)\n");
+        return 1;
+    }
+#endif
 
     pid = fork();
     if (pid < 0) {

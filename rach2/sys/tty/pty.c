@@ -367,7 +367,7 @@ static short ptm_poll(fd_entry_t *e, short events, struct wait_queue **wq)
  * the slave's input: `which` 0 drops the first, 1 the second, 2 both, as on
  * Linux; anything else is -EINVAL.
  */
-static int32_t ptm_flush(struct pty *p, uint32_t which)
+static int32_t ptm_flush(struct pty *p, unsigned long which)
 {
     uint32_t flags;
 
@@ -440,7 +440,7 @@ static int32_t ptm_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
     case TIOCGPKT:
         return ptm_packet(p, request, arg);
     case TCFLSH:
-        return ptm_flush(p, (uint32_t)arg);
+        return ptm_flush(p, arg);
     case FIONREAD: {
         int n = (int)pty_m_avail(p);
         if (copy_to_user((void __user *)arg, &n, sizeof(n)) != 0) {
