@@ -671,6 +671,9 @@ The first four columns are user, nice, system, and idle ticks: those that
 found the processor in user mode, none for nice, those that found it in
 the kernel, an interrupt handler's included, and those that found it in an
 idle wait.
+A processor counts every tick of the uptime since it started: a tick lost
+while its interrupts were held off is counted with the next, as what that
+one found.
 The
 .Li cpu
 line is the processors' sums.

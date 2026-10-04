@@ -17,6 +17,7 @@ extern int dprintf(int fd, const char *format, ...);
 process_t *proc_list;
 struct percpu cpu_table[NR_CPUS];
 process_t *proc_idle;
+volatile uint32_t kernel_ticks;
 static process_t procs[7];
 /* Each process's floating-point area, which the stand-ins tell apart. */
 static uint8_t areas[7][16];
@@ -333,16 +334,45 @@ static void lifecycle(void)
 }
 
 /** Run the bounded scheduling rows with the production selection code. */
+/**
+ * A processor's tick counts the global ticks it has not counted yet: three
+ * after two were lost, none when its own tick comes before the next global
+ * one, and one, charged as user time, when the processor runs ring 3.
+ */
+static void accounting(void)
+{
+    struct percpu *cpu = this_cpu();
+    process_t *saved = cpu->current;
+    uint32_t idle = cpu->idle_ticks, busy = cpu->busy_ticks, user = cpu->user_ticks;
+
+    cpu->current = NULL;
+    cpu->idle_wait = 1;
+    kernel_ticks = cpu->accounted_tick + 3;
+    sched_account_tick(0);
+    CHECK(cpu->idle_ticks == idle + 3 && cpu->busy_ticks == busy,
+          "three global ticks since the processor's last count are three idle ticks");
+    sched_account_tick(0);
+    CHECK(cpu->idle_ticks == idle + 3, "a tick before the next global tick counts none");
+    cpu->idle_wait = 0;
+    kernel_ticks++;
+    sched_account_tick(1);
+    CHECK(cpu->busy_ticks == busy + 1 && cpu->user_ticks == user + 1 &&
+              cpu->idle_ticks == idle + 3,
+          "the next global tick in ring 3 is one busy tick of user time");
+    cpu->current = saved;
+}
+
 int main(void)
 {
     priority();
     fairness();
     states();
     lifecycle();
+    accounting();
     if (failures) {
         return 1;
     }
-    dprintf(1, "sched-hosttest: result: pass: priority, fairness, states, lifecycle\n");
+    dprintf(1, "sched-hosttest: result: pass: priority, fairness, states, lifecycle, accounting\n");
     return 0;
 }
 

@@ -53,6 +53,7 @@ struct percpu {
     volatile uint32_t idle_ticks;               /* ticks that found it in an idle wait */
     volatile uint32_t busy_ticks;               /* ticks that found it running code */
     volatile uint32_t user_ticks;               /* of those, ticks that found it in user mode */
+    uint32_t accounted_tick;                    /* the global tick its counts reach */
 };
 
 extern struct percpu cpu_table[NR_CPUS];

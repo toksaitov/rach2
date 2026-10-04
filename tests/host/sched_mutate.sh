@@ -52,7 +52,7 @@ run_phase()
 
 echo "sched-mutation: logs: $work"
 run_phase fixed 0 'sched-hosttest: result: pass:'
-for fault in preference bound cursor; do
+for fault in preference bound cursor catchup; do
     python3 - "$work/sys/proc/sched.c" "$fault" <<'PY'
 import pathlib
 import sys
@@ -63,6 +63,8 @@ changes = {
     "preference": ("next = sched_find(me, 1);", "next = NULL;"),
     "bound": ("_wake_turn[me] = 0;", "_wake_turn[me] = 1;"),
     "cursor": ("_wake_turn[me] = 0;", "_last_sched[me] = next;\n        _wake_turn[me] = 0;"),
+    "catchup": ("    while (ticks-- > 0) {\n        sched_account_one(cpu, user);\n    }",
+                "    (void)ticks;\n    sched_account_one(cpu, user);"),
 }
 old, new = changes[sys.argv[2]]
 if source.count(old) != 1:
@@ -73,6 +75,7 @@ PY
         preference) message='woken sleeper precedes spinner' ;;
         bound) message='spinner missed fourteen dispatches' ;;
         cursor) message='ordinary turn follows preferred wake' ;;
+        catchup) message='three global ticks since the processor' ;;
     esac
     run_phase "$fault-mutated" 1 "$message"
     cleanup

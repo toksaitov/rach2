@@ -4,6 +4,7 @@
 #include "suspend.h"
 #include "tgroup.h"
 #include "../io/timerfd.h"
+#include "../timer.h"
 #include "../lib/ksignal.h"
 
 #include "../lib/kirq.h"
@@ -515,9 +516,9 @@ static void cpu_timer_tick(process_t *p, int k, int counts, int signo)
 }
 
 /**
- * Count one delivered tick as idle or busy, and charge a busy one to the
- * process it interrupted, to its process's virtual and profiling timers,
- * and to the POSIX timers that count its processor time.
+ * Count one tick of processor `cpu` as idle or busy, and charge a busy one
+ * to the process it interrupted, to its process's virtual and profiling
+ * timers, and to the POSIX timers that count its processor time.
  *
  * The process charged is `current_proc`, whose code, system call or
  * interrupt handler the tick interrupted, and `user` says whether the
@@ -526,10 +527,8 @@ static void cpu_timer_tick(process_t *p, int k, int counts, int signo)
  * wait is charged to no one, although the process whose call is waiting is
  * still current.
  */
-void sched_account_tick(int user)
+static void sched_account_one(struct percpu *cpu, int user)
 {
-    struct percpu *cpu = this_cpu();
-
     if (cpu->idle_wait) {
         ++cpu->idle_ticks;
         return;
@@ -549,6 +548,30 @@ void sched_account_tick(int user)
             cpu_timer_tick(current_proc, 1, 1, SIGPROF);
             ptimer_cpu_tick(current_proc, user);
         }
+    }
+}
+
+/**
+ * Count the global ticks this processor has not counted yet, each as
+ * `sched_account_one` counts a tick, so that every processor's idle and busy
+ * ticks add up to the uptime since it started.
+ *
+ * The boot processor calls this after it has counted its tick and any the
+ * clock found lost, and so charges all of them. Another processor's tick is
+ * out of step with the boot processor's and charges the global ticks since
+ * its last, none or more than one. A tick lost while an interrupt was held
+ * off, which the big lock can hold for longer than a tick, is charged to
+ * what the processor was doing when the next one came.
+ */
+void sched_account_tick(int user)
+{
+    struct percpu *cpu = this_cpu();
+    uint32_t now = kernel_ticks;
+    uint32_t ticks = now - cpu->accounted_tick;
+
+    cpu->accounted_tick = now;
+    while (ticks-- > 0) {
+        sched_account_one(cpu, user);
     }
 }
 

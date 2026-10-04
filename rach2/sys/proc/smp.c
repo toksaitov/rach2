@@ -12,6 +12,7 @@
 #include "../panic.h"
 #include "../platform.h"
 #include "../lib/kirq.h"
+#include "../timer.h"
 #include "../udelay.h"
 #include "../lib/kstring.h"
 #include "../mm/kheap.h"
@@ -312,6 +313,7 @@ static void smp_cpu_main(int cpu)
     if (arch_atomic_cmpxchg(&self->admit, CPU_STARTING, CPU_ADMITTED) != CPU_STARTING) {
         arch_stop();
     }
+    self->accounted_tick = kernel_ticks;
     self->online = 1;
     bkl_take(1);
     sched_idle_loop();
