@@ -2,10 +2,11 @@
 
 #
 # mkdisk_grub.sh: build a disk image with kernel slots that boots by BIOS
-# and by UEFI.
+# and, on a GUID table, by UEFI.
 #
 # The disk has a GUID partition table, or an MBR when RACH2_DISK_TABLE is
-# `mbr`, and three partitions in the same roles on either. Partition 1 is a
+# `mbr`, which boots by BIOS alone, since it has no EFI image, and three
+# partitions in the same roles on either. Partition 1 is a
 # FAT32 boot file system holding GRUB's menu, its environment block and two
 # kernel slots. Partition 2 is a FAT32 volume for the recovery kernel and its
 # RAM image, in a file system of its own so that a boot partition damaged by
