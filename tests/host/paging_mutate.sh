@@ -9,8 +9,8 @@
 #
 # Usage: paging_mutate.sh [--check]
 # With --check it compiles and runs the unmodified test alone. The faults:
-# map_mmio's page count rounded up by `+ PAGE_SIZE - 1`, which wraps for a
-# span that begins in the first page and ends in the last; the loop of
+# map_mmio_typed's page count rounded up by `+ PAGE_SIZE - 1`, which wraps
+# for a span that begins in the first page and ends in the last; the loop of
 # premap_kernel_window bounded by `va_start + size`, which wraps below the
 # start for a window that runs past the top; the refusal without its
 # exception for address 0, the regression a868ba10 fixed; the handler
@@ -104,7 +104,7 @@ path = Path(sys.argv[1])
 source = path.read_text()
 fault = sys.argv[2]
 function = {
-    'rounding': 'uintptr_t map_mmio(uintptr_t phys_addr, size_t size)\n{',
+    'rounding': 'uintptr_t map_mmio_typed(uintptr_t phys_addr, size_t size, pte_t cache)\n{',
     'loop': 'int premap_kernel_window(uintptr_t va_start, size_t size)\n{',
     'zero': 'int premap_kernel_window(uintptr_t va_start, size_t size)\n{',
     'guard': 'static void _page_fault_handler(isr_params_t *params)\n{',
