@@ -79,12 +79,23 @@ S="$WORK/sources"
 mkdir -p "$S/tools/verify" "$S/rach2"
 cp tools/verify/check_sources.sh "$S/tools/verify/"
 cp rach2/Makefile rach2/sources.mk "$S/rach2/"
+# An architecture is a directory with a cpu.h and a sources.mk.
+for f in rach2/sys/arch/*/sources.mk rach2/sys/arch/*/cpu.h; do
+    mkdir -p "$S/$(dirname "$f")"
+    cp "$f" "$S/$f"
+done
 cp -R mk "$S/mk"
 listed=$(MAKEFLAGS='' MFLAGS='' make --no-print-directory -C "$S/rach2" print-c-src) || {
     echo 'build-rules-test: the kernel makefile would not print its sources' >&2
     exit 1
 }
-for f in $listed; do
+# The guard reads every architecture's list, so each has its files.
+listed64=$(MAKEFLAGS='' MFLAGS='' make --no-print-directory -C "$S/rach2" ARCH=x86_64 CROSS_CC=true \
+    print-c-src) || {
+    echo 'build-rules-test: the kernel makefile would not print the x86-64 sources' >&2
+    exit 1
+}
+for f in $listed $listed64; do
     mkdir -p "$S/rach2/$(dirname "$f")"
     : >"$S/rach2/$f"
 done
@@ -95,7 +106,7 @@ last=${listed##* }
 C="$WORK/clean"
 for f in Makefile tests/registry tests/Makefile tests/system/suites.mk krffs/Makefile \
     krffs/manifest_deps.sh rach2/Makefile rach2/sources.mk ish/Makefile ish/sources.mk \
-    utils/Makefile utils/programs.mk ports/doom/Makefile; do
+    utils/Makefile utils/programs.mk ports/doom/Makefile rach2/sys/arch/*/sources.mk; do
     mkdir -p "$C/$(dirname "$f")"
     cp "$f" "$C/$f"
 done
