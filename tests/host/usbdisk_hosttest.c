@@ -451,6 +451,61 @@ static void plug(int slot, int lun)
     usbdisk_arrived(slot, lun);
 }
 
+/**
+ * Check a device with two units: each is a disk of its own with its table,
+ * and the device's pull takes both.
+ */
+static void two_unit_rows(void)
+{
+    mbr_medium(0);
+    mbr_medium(1);
+    plug(0, 0);
+    plug(0, 1);
+    passes(80);
+    CHECK("two units are two disks", disk_at(0) != 0 && disk_at(1) != 0 &&
+                                         disk_at(0)->location == 0 && disk_at(1)->location == 1);
+    CHECK("each with its table", disk_at(0)->table.count == 2 && disk_at(1)->table.count == 2);
+    usbdisk_left(0);
+    passes(8);
+    CHECK("the device's pull takes both",
+          usbdisk_free() == USBDISK_MAX && disk_at(0) == 0 && disk_at(1) == 0);
+}
+
+/**
+ * Check where a stick is registered from: the pump's settle waits for a
+ * syscall to end, and the syscall entry's does not.
+ */
+static void settle_rows(void)
+{
+    mbr_medium(0);
+    plug(0, 0);
+    in_syscall = 1;
+    usbdisk_step();
+    CHECK("the pump leaves a syscall alone", pending && disk_at(0) == 0);
+    usbdisk_service();
+    CHECK("the syscall entry registers the stick", disk_at(0) != 0);
+    in_syscall = 0;
+    passes(40);
+    CHECK("and the pump reads its table", disk_at(0)->table.count == 2);
+}
+
+/**
+ * Check the registry's size limit: a device whose bytes 64 bits cannot count
+ * is refused, and one sector fewer is not.
+ */
+static void size_rows(void)
+{
+    static block_device_t huge;
+    int n = disk_count();
+
+    huge.sector_size = 512;
+    huge.sector_count = 1ull << 55;
+    CHECK("a device of 2^55 sectors is refused",
+          disk_register(&huge, "nvme", 0, 0) == 0 && disk_count() == n);
+    huge.sector_count = (1ull << 55) - 1;
+    CHECK("and one of 2^55 - 1 is registered", disk_register(&huge, "nvme", 0, 0) != 0);
+}
+
 int main(void)
 {
     struct disk *d;
@@ -528,45 +583,9 @@ int main(void)
     CHECK("a stick pulled mid-scan is reclaimed", releases == 13 && usbdisk_free() == USBDISK_MAX);
     CHECK("and nothing was published for it", published == 0);
 
-    /* Two units of one device are two disks. */
-    mbr_medium(0);
-    mbr_medium(1);
-    plug(0, 0);
-    plug(0, 1);
-    passes(80);
-    CHECK("two units are two disks", disk_at(0) != 0 && disk_at(1) != 0 &&
-                                         disk_at(0)->location == 0 && disk_at(1)->location == 1);
-    CHECK("each with its table", disk_at(0)->table.count == 2 && disk_at(1)->table.count == 2);
-    usbdisk_left(0);
-    passes(8);
-    CHECK("the device's pull takes both",
-          usbdisk_free() == USBDISK_MAX && disk_at(0) == 0 && disk_at(1) == 0);
-
-    /* The pump's settle waits for a syscall to end; the entry's does not. */
-    mbr_medium(0);
-    plug(0, 0);
-    in_syscall = 1;
-    usbdisk_step();
-    CHECK("the pump leaves a syscall alone", pending && disk_at(0) == 0);
-    usbdisk_service();
-    CHECK("the syscall entry registers the stick", disk_at(0) != 0);
-    in_syscall = 0;
-    passes(40);
-    CHECK("and the pump reads its table", disk_at(0)->table.count == 2);
-
-    /* A device whose bytes 64 bits cannot count is refused; one sector
-     * fewer is not. */
-    {
-        static block_device_t huge;
-        int n = disk_count();
-
-        huge.sector_size = 512;
-        huge.sector_count = 1ull << 55;
-        CHECK("a device of 2^55 sectors is refused",
-              disk_register(&huge, "nvme", 0, 0) == 0 && disk_count() == n);
-        huge.sector_count = (1ull << 55) - 1;
-        CHECK("and one of 2^55 - 1 is registered", disk_register(&huge, "nvme", 0, 0) != 0);
-    }
+    two_unit_rows();
+    settle_rows();
+    size_rows();
 
     if (fails == 0) {
         printf("usbdisk_hosttest: PASS\n");
