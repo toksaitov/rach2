@@ -42,8 +42,9 @@ the backup is moved there in the same write if it is elsewhere, as
 moves it.
 Another used entry that starts inside the partition and ends past it lies
 in the space the growth would take, and stops the growth: the kernel
-publishes neither of two overlapping entries, so nothing else would keep
-the file system from growing over it.
+publishes only the first of two overlapping entries in table order and
+refuses the other, so nothing else would keep the file system from
+growing over it.
 An entry already at that size, on a table whose backup is already at the
 disk's end, is left unchanged.
 Nothing is moved and no other partition is changed.
