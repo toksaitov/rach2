@@ -76,17 +76,21 @@ PY
 }
 
 # The two frame host tests, compiled as tests/system/suites/host.sh compiles
-# them; 0 when both pass.
+# them; 0 when both pass. The caller's `||` turns errexit off in here, so a
+# compile that fails stops the proof itself, and the last phase's binary is
+# removed first, so that it cannot run in this one's place.
 host_tests()
 {
     failed=0
     for t in fpuframe_hosttest fpuframe64_hosttest; do
+        rm -f "$work/$t"
         ${CC:-cc} -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST \
             -fsanitize=address,undefined -fno-sanitize-recover=all -g -O1 \
             -Wno-empty-body -ffreestanding -I rach2/sys -I rach2/sys/arch/x86 \
             -I rach2/sys/arch/i686 -I rach2/sys/lib -I rach2/sys/proc \
             -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast -o "$work/$t" \
-            "tests/host/$t.c" rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+            "tests/host/$t.c" rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c ||
+            { echo "xsave-mutation: $t did not compile in phase $phase" >&2; exit 1; }
         "$work/$t" >"$work/$phase.$t.log" 2>&1 || failed=1
         cat "$work/$phase.$t.log"
     done
