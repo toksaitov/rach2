@@ -91,9 +91,10 @@ void mmio_write32(uintptr_t a, uint32_t v);
 #define KVA_MODULES      (KVA_BASE + 0x38400000u)
 #define KVA_MODULES_SIZE 0x04000000u
 
-/* The page fault: the exception's number and what its syndrome says. */
+/* The page fault: the exception's number and what its syndrome says, the
+ * data fault status register, whose bit 11 (WnR) marks a write. */
 #define PAGE_FAULT_VECTOR 3
-#define FAULT_WRITE(p)    (((p)->error_code & 0x40u) != 0)
+#define FAULT_WRITE(p)    (((p)->error_code & 0x800u) != 0)
 #define FAULT_USER(p)     FRAME_USER(p)
 /* A fetch is a prefetch abort, an exception of its own, which a port's
  * entry tells apart; the data abort above is never one. */
