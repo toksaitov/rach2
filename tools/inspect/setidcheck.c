@@ -1089,19 +1089,20 @@ static void check_manifest(const char *path, const struct allow *allow, struct l
         prefix[plen] = '\0';
         for (j = 0; j < e->n_trusted; j++) {
             const char *pinned = e->trusted[j].path;
-            char host[1024], src[512];
+            char host[1024], declared[1024], src[512];
             size_t slen;
             struct stat st;
 
             if (strncmp(pinned, prefix, plen) != 0 || staged_find(&staged, pinned) != NULL)
                 continue;
-            snprintf(src, sizeof(src), "%s", host_path(d->source));
+            snprintf(src, sizeof(src), "%s", d->source);
             slen = strlen(src);
             while (slen > 0 && src[slen - 1] == '/')
                 src[--slen] = '\0';
-            snprintf(host, sizeof(host), "%s/%s", src, pinned + plen);
+            snprintf(declared, sizeof(declared), "%s/%s", src, pinned + plen);
+            snprintf(host, sizeof(host), "%s", host_path(declared));
             if (stat(host, &st) == 0 && S_ISREG(st.st_mode))
-                staged_add(&staged, pinned, d->lineno, d->mode, d->uid, d->gid, host, NULL);
+                staged_add(&staged, pinned, d->lineno, d->mode, d->uid, d->gid, declared, NULL);
         }
     }
 
