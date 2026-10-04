@@ -2179,6 +2179,9 @@ static int32_t socket_dispatch(int call, unsigned long *args)
         if (args[2] < 1 || args[2] > 255) {
             return -EINVAL;
         }
+        if (args[1] != (uint32_t)args[1]) {
+            return -EMSGSIZE;
+        }
         rc = icmp_ping_data((uint32_t)args[0], (uint32_t)args[1], (uint8_t)args[2], &got, &got_ttl);
         return rc < 0 ? rc : (int32_t)((uint32_t)got | (uint32_t)got_ttl << 16);
     }

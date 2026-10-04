@@ -29,6 +29,10 @@
  * non-negative round-trip time, which proves the slot came back and is the
  * loopback echo's one end-to-end assertion.
  *
+ * Last, the data ping (SC_PING_DATA) must refuse 1473 bytes of data with
+ * EMSGSIZE, and on x86-64 a size past 32 bits too, which cut to its low word
+ * would be a size it takes.
+ *
  * Prints "PINGTEST OK" on a clean run, which is what `tests/run ping` matches.
  *
  * Freestanding; direct system calls (probe.h).
@@ -37,6 +41,8 @@
 #include "probe.h"
 
 typedef unsigned int uint32_t;
+
+#define EMSGSIZE 90
 
 #define STDOUT_FILENO 1
 
@@ -349,6 +355,33 @@ PROBE_START void _start(void)
                 puts(why);
                 failed++;
             }
+        }
+    }
+
+    /* Test 4: a data ping past its 1472 bytes is refused before it is sent. */
+    print("Test 4: a data ping past 1472 bytes is refused... ");
+    {
+        unsigned long args[3];
+        int r1, r2 = -EMSGSIZE;
+
+        args[0] = GATEWAY_IP;
+        args[1] = 1473;
+        args[2] = 64;
+        r1 = socketcall(SC_PING_DATA, args);
+#if defined __x86_64__
+        args[1] = 0x100000001UL;
+        r2 = socketcall(SC_PING_DATA, args);
+#endif
+        if (r1 == -EMSGSIZE && r2 == -EMSGSIZE) {
+            puts("OK");
+            passed++;
+        } else {
+            print("FAILED (");
+            print_num(r1);
+            print(", ");
+            print_num(r2);
+            puts(")");
+            failed++;
         }
     }
 
