@@ -11,11 +11,16 @@ status=0
 trap 'status=$?; rm -rf "$WORK"; [ -n "$finished" ] || [ "$status" -ne 0 ] || status=1; exit "$status"' 0
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
-make -s --no-print-directory -C "$REPO/tests" -f Makefile -f - probecheck-list > "$WORK/built" <<'MK'
+# The programs of both architectures, each named on the make's command line,
+# since the assignments cover both and a run's own ARCH would leave out the
+# probes of an interface the other alone has.
+for arch in i686 x86_64; do
+    make -s --no-print-directory -C "$REPO/tests" -f Makefile -f - ARCH=$arch probecheck-list <<'MK'
 .PHONY: probecheck-list
 probecheck-list:
 	@printf '%s\n' $(PROGS)
 MK
+done | sort -u > "$WORK/built"
 for source in "$REPO"/tests/musl/*.c; do
     [ -f "$source" ] || continue
     printf 'musl/%s\n' "$(basename "$source" .c)" >> "$WORK/built"
