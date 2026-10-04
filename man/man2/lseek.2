@@ -107,7 +107,9 @@ removed since.
 .Pp
 A
 .Pa /proc
-file seeks the same way, to any place through 4294967295.
+file seeks the same way, to any place through 4294967295, except
+.Pa /proc/ Ns Ar pid Ns Pa /mem ,
+which seeks to any address, through the last on x86-64.
 Its offset is a byte of its text, or for
 .Pa /proc/ Ns Ar pid Ns Pa /mem
 an address.
@@ -193,7 +195,8 @@ on a directory or a
 file, the position is not a place in a directory's listing, or it is
 past 4294967295 on a
 .Pa /proc
-file.
+file other than
+.Pa /proc/ Ns Ar pid Ns Pa /mem .
 The devices that always seek to zero do not check the origin.
 .It Bq Er EIO
 The file's metadata could not be read or its device was removed.

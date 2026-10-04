@@ -120,8 +120,8 @@ with
 makes no queue there, and a queue's mode and owner do not change through
 its file.
 .Ss System call interface
-The numbers are 277 to 282 in the order above, with the timeouts as
-32-bit timespecs, and 418
+On i386 the numbers are 277 to 282 in the order above, with the timeouts
+as 32-bit timespecs, and 418
 .Pq Fn mq_timedsend_time64
 and 419
 .Pq Fn mq_timedreceive_time64
@@ -133,7 +133,8 @@ or 0, then takes
 .Dv O_NONBLOCK
 alone from the new ones.
 .Pp
-On x86-64 the timed calls take timespecs of 64-bit fields, and there are
+On x86-64 the numbers are 240 to 245 in the same order, the timed calls
+take timespecs of 64-bit fields, and there are
 no time64 forms.
 .Sh RETURN VALUES
 .Fn mq_open

@@ -95,8 +95,10 @@ The bytes of the stack.
 .Xr execve 2
 gives the new image a stack that may grow until it is the soft limit's
 size in whole pages, and no further than
-.Ad 0xB0000000 ,
-below which anonymous mappings are placed; a fault past that is
+.Ad 0xB0000000
+on i686 and
+.Ad 0x00007F0000000000
+on x86-64, below which anonymous mappings are placed; a fault past that is
 .Dv SIGSEGV .
 The stack always reaches as far as the pages its arguments took.
 A quarter of the soft limit, between 128 KiB and 6 MiB, is what
