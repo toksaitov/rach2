@@ -82,6 +82,7 @@
 #define NVME_NAMESPACES  4
 #define NVME_CONTROLLERS 4
 #define NVME_LIST_MAX    16
+#define NVME_EXAMINE_MAX 1024u
 #define NVME_PRP_ENTRIES (PAGE_SIZE / 8u)
 #define NVME_MAP_SIZE    0x2000u
 
@@ -142,6 +143,10 @@ struct nvme_ns {
     uint32_t nsid;
     block_device_t dev;
     struct block_request *queue_head, *queue_tail;
+    /* The writes answered without a flush, counted, so that a flush clears
+     * the disk's `unflushed` mark only when none was answered after it was
+     * issued (`nvme_flushed`). */
+    uint32_t wseq;
 };
 
 /**
@@ -151,6 +156,8 @@ struct nvme_ns {
  */
 struct nvme_slot {
     int busy;
+    int flushing;  /* the flush half of a write the request wants durable */
+    uint32_t fseq; /* the namespace's `wseq` when this flush was issued */
     uint16_t cid;
     uint8_t opcode;
     struct nvme_ns *ns;
@@ -346,21 +353,29 @@ static void nvme_queue_reset(struct nvme_queue *q)
     }
 }
 
+static int nvme_disable(struct nvme_ctrl *c);
+
 /**
  * Run one admin command by polling.
  *
  * Returns 0 with the completion's first dword in `*result`, the status the
  * controller answered when it is not success, or -1 when it did not answer
- * within the wait. Admin commands run one at a time, at bring-up and in
- * recovery, so a completion for another identifier is an old one and is
- * passed over.
+ * within the wait, which leaves the controller stopped and out of use, or
+ * when it was out of use already. Admin commands run one at a time, at
+ * bring-up and in recovery, so a completion for another identifier is an
+ * old one and is passed over.
  */
+
 static int nvme_admin(struct nvme_ctrl *c, struct nvme_sqe *cmd, uint32_t *result)
 {
     struct nvme_cqe e;
     uint32_t steps = nvme_cmd_steps();
-    uint16_t cid = c->admin_cid++;
+    uint16_t cid;
 
+    if (c->dead) {
+        return -1;
+    }
+    cid = c->admin_cid++;
     cmd->cdw0 = (cmd->cdw0 & 0xFFFFu) | ((uint32_t)cid << 16);
     nvme_push(c, &c->admin, cmd);
     while (steps-- > 0) {
@@ -379,6 +394,13 @@ static int nvme_admin(struct nvme_ctrl *c, struct nvme_sqe *cmd, uint32_t *resul
         }
         nvme_io->udelay(NVME_POLL_US);
     }
+    /* The command may still write into the page it was given, the identify
+     * page among them, after this: the controller is stopped and out of
+     * use, so that no later command reads a page it may still write. */
+    klog(KLOG_WARN, "nvme", "%d: an admin command was not answered; the controller is out of use",
+         c->number);
+    c->dead = 1;
+    (void)nvme_disable(c);
     return -1;
 }
 
@@ -799,27 +821,40 @@ static void nvme_take_namespace(struct nvme_ctrl *c, uint32_t nsid)
 /**
  * Take the controller's namespaces: those in its active list, or, from a
  * controller that has no such list, every identifier up to its count, the
- * inactive ones answering a size of zero. The identifiers are copied out
- * first, since each Identify after the list writes the same page.
+ * inactive ones answering a size of zero. They are taken sixteen at a time,
+ * the list asked again for the identifiers past the last of them, since
+ * each Identify after the list writes the same page, until the list or the
+ * count ends, NVME_EXAMINE_MAX have been examined, or the controller is
+ * out of use.
  */
 static void nvme_scan_namespaces(struct nvme_ctrl *c)
 {
     uint32_t ids[NVME_LIST_MAX];
-    uint32_t n = 0, i;
+    uint32_t n, i, examined = 0, after = 0;
+    int list = 1;
 
     c->nns = 0;
-    if (nvme_identify(c, NVME_CNS_ACTIVE, 0) == 0) {
-        while (n < NVME_LIST_MAX && (ids[n] = nvme_le32(c->identify + 4u * n)) != 0) {
-            n++;
+    while (examined < NVME_EXAMINE_MAX && !c->dead) {
+        n = 0;
+        if (list && nvme_identify(c, NVME_CNS_ACTIVE, after) == 0) {
+            while (n < NVME_LIST_MAX && (ids[n] = nvme_le32(c->identify + 4u * n)) != 0) {
+                n++;
+            }
+        } else if (!c->dead) {
+            list = 0;
+            while (n < NVME_LIST_MAX && after + n < c->nn) {
+                ids[n] = after + n + 1u;
+                n++;
+            }
         }
-    } else {
-        while (n < NVME_LIST_MAX && n < c->nn) {
-            ids[n] = n + 1u;
-            n++;
+        if (n == 0) {
+            break;
         }
-    }
-    for (i = 0; i < n; i++) {
-        nvme_take_namespace(c, ids[i]);
+        for (i = 0; i < n && !c->dead; i++) {
+            nvme_take_namespace(c, ids[i]);
+        }
+        examined += n;
+        after = ids[n - 1];
     }
     if (c->nns == 0) {
         klog(KLOG_WARN, "nvme", "%d: no namespace this driver can use", c->number);
@@ -1062,11 +1097,67 @@ static struct nvme_slot *nvme_slot_take(struct nvme_ctrl *c)
     return 0;
 }
 
+/** A write of `ns` was answered without a flush: the disk is marked, and
+ * the count of such writes moves on. */
+static void nvme_unflushed(struct nvme_ns *ns)
+{
+    ns->wseq++;
+    ns->dev.unflushed = 1;
+}
+
+/**
+ * A flush of `ns` issued when its count of unflushed writes was `fseq` has
+ * finished well. It covers every write answered before it was issued
+ * (NVMe 1.4, 6.8), and so clears the mark unless a write was answered
+ * unflushed while it ran. The mark is cleared here and not at the issue,
+ * so that a second caller's flush finds it set until this one has finished
+ * and waits on a flush of its own instead of reporting what is not yet on
+ * the medium.
+ */
+static void nvme_flushed(struct nvme_ns *ns, uint32_t fseq)
+{
+    if (ns->wseq == fseq) {
+        ns->dev.unflushed = 0;
+    }
+}
+
+/**
+ * Issue a flush of `ns` as the second half of the write in slot `s`, which
+ * the controller has answered: FUA made that write's own blocks durable and
+ * no others (NVMe 1.4, Figure 406), and a write the request wants durable
+ * must leave every write answered before it on the medium too, as the
+ * buffer cache's write after an unflushed one expects. Returns 0, or -1
+ * when the flush cannot be built. Called with interrupts masked.
+ */
+static int nvme_flush_half(struct nvme_ctrl *c, struct nvme_slot *s, struct nvme_ns *ns)
+{
+    struct nvme_xfer xf;
+    struct nvme_sqe cmd;
+
+    xf.ns = ns;
+    xf.opcode = NVME_CMD_FLUSH;
+    xf.lba = 0;
+    xf.count = 0;
+    xf.buf = 0;
+    xf.out = 0;
+    xf.control = 0;
+    if (nvme_build(c, s, &xf, &cmd) != 0) {
+        return -1;
+    }
+    s->flushing = 1;
+    s->fseq = ns->wseq;
+    block_count_flush();
+    nvme_push(c, &c->io, &cmd);
+    return 0;
+}
+
 /**
  * The controller has answered the command `e` identifies. A request is
  * completed and its slot freed; a polled command is marked done for its
  * caller, who frees the slot. A write the request let go unflushed marks
- * the disk, and a failed flush marks it again. A completion whose
+ * the disk; a write it wants durable, answered while the disk is marked,
+ * has a flush issued in its slot before it is completed; a flush that
+ * finishes well clears the mark (`nvme_flushed`). A completion whose
  * identifier matches no command in flight is dropped with a record.
  */
 static void nvme_complete(struct nvme_ctrl *c, const struct nvme_cqe *e)
@@ -1091,11 +1182,16 @@ static void nvme_complete(struct nvme_ctrl *c, const struct nvme_cqe *e)
         return;
     }
     if (rc == 0 && s->opcode == NVME_CMD_WRITE && (r->flags & BLOCK_REQ_NOFLUSH)) {
-        s->ns->dev.unflushed = 1;
+        nvme_unflushed(s->ns);
+    } else if (rc == 0 && s->opcode == NVME_CMD_WRITE && s->ns->dev.unflushed) {
+        if (nvme_flush_half(c, s, s->ns) == 0) {
+            return;
+        }
+        rc = -EIO;
+    } else if (rc == 0 && s->opcode == NVME_CMD_FLUSH) {
+        nvme_flushed(s->ns, s->fseq);
     }
-    if (rc != 0 && s->opcode == NVME_CMD_FLUSH) {
-        s->ns->dev.unflushed = 1;
-    }
+    s->flushing = 0;
     s->request = 0;
     s->busy = 0;
     latency_span(LAT_DISK, r->taken_us, timer_now_us());
@@ -1133,8 +1229,8 @@ static struct nvme_ns *nvme_next_waiting(struct nvme_ctrl *c)
 /**
  * Issue request `r` of `ns` in slot `s`: a read, a write that is on the
  * medium when it is answered unless the request lets it stay in the disk's
- * cache, or a flush, which takes the disk's unflushed mark before it is
- * issued, since a write answered while it runs may not be covered by it.
+ * cache, or a flush, which notes the count of unflushed writes it covers
+ * (`nvme_flushed`).
  */
 static int nvme_issue(struct nvme_ctrl *c, struct nvme_slot *s, struct nvme_ns *ns,
                       struct block_request *r)
@@ -1159,8 +1255,9 @@ static int nvme_issue(struct nvme_ctrl *c, struct nvme_slot *s, struct nvme_ns *
     if (nvme_build(c, s, &xf, &cmd) != 0) {
         return -1;
     }
+    s->flushing = 0;
     if (xf.opcode == NVME_CMD_FLUSH) {
-        ns->dev.unflushed = 0;
+        s->fseq = ns->wseq;
         block_count_flush();
     }
     s->request = r;
@@ -1405,12 +1502,16 @@ static int nvme_polled_rw(struct nvme_xfer *xf)
     return 0;
 }
 
+static int nvme_flush_polled(struct nvme_ns *ns);
+
 /** A polled transfer of `count` sectors at `lba` of the device's namespace,
  * from `src` for a write or into `dst` for a read. A write is on the medium
- * when it is answered: it is sent with FUA. */
+ * when it is answered: it is sent with FUA, and followed by a flush while
+ * the disk has writes answered unflushed, which FUA does not cover. */
 static int nvme_rw(block_device_t *device, uint64_t lba, uint32_t count, const void *src, void *dst)
 {
     struct nvme_xfer xf;
+    int rc;
 
     if (count == 0 || lba > device->sector_count || count > device->sector_count - lba) {
         return -EIO;
@@ -1422,7 +1523,11 @@ static int nvme_rw(block_device_t *device, uint64_t lba, uint32_t count, const v
     xf.buf = dst ? (const uint8_t *)dst : (const uint8_t *)src;
     xf.out = (uint8_t *)dst;
     xf.control = dst ? 0 : NVME_RW_FUA;
-    return nvme_polled_rw(&xf);
+    rc = nvme_polled_rw(&xf);
+    if (rc == 0 && !dst && device->unflushed) {
+        rc = nvme_flush_polled(xf.ns);
+    }
+    return rc;
 }
 
 /** The device's read, polled. */
@@ -1437,11 +1542,12 @@ static int nvme_write(block_device_t *device, uint64_t lba, uint32_t count, cons
     return nvme_rw(device, lba, count, buffer, 0);
 }
 
-/** Flush the disk's cache by polling. The unflushed mark is taken before
- * the command, as a queued flush takes it, and put back if it fails. */
+/** Flush the disk's cache by polling, clearing the unflushed mark as a
+ * queued flush clears it (`nvme_flushed`). */
 static int nvme_flush_polled(struct nvme_ns *ns)
 {
     struct nvme_xfer xf;
+    uint32_t fseq = ns->wseq;
     int rc;
 
     xf.ns = ns;
@@ -1451,11 +1557,10 @@ static int nvme_flush_polled(struct nvme_ns *ns)
     xf.buf = 0;
     xf.out = 0;
     xf.control = 0;
-    ns->dev.unflushed = 0;
     block_count_flush();
     rc = nvme_polled(ns->ctrl, &xf);
-    if (rc != 0) {
-        ns->dev.unflushed = 1;
+    if (rc == 0) {
+        nvme_flushed(ns, fseq);
     }
     return rc;
 }

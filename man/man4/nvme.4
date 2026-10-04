@@ -1,4 +1,4 @@
-.Dd October 3, 2026
+.Dd October 4, 2026
 .Dt NVME 4
 .Os
 .Sh NAME
@@ -49,7 +49,8 @@ when the local APIC is not in use, when no vector is free, and when the
 controller has neither MSI-X nor MSI.
 .Pp
 A write is sent with force unit access, so it is on the medium when it
-returns.
+returns, and when writes sent without it came before, a Flush command
+follows it, since force unit access covers its own blocks alone.
 A file system that writes several blocks and flushes once after them
 sends them without it, and its flush is the controller's Flush command.
 .Pp

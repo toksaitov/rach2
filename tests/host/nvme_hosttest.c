@@ -144,8 +144,10 @@ static struct {
     uint32_t mdts;    /* Identify Controller byte 77 */
     uint32_t lbads;   /* the namespace's block size, a power of two */
     uint32_t ms;      /* its metadata bytes */
-    uint32_t nn;      /* namespaces */
-    uint64_t nsze[4]; /* each namespace's size, 0 for an inactive one */
+    uint32_t nn;           /* namespaces */
+    uint64_t nsze[32];     /* each namespace's size, 0 for an inactive one */
+    uint32_t lbads_ns[32]; /* a namespace's block size, 0 for `lbads` */
+    uint32_t drop_ident;   /* Identify of this namespace is taken, never answered */
     uint32_t cap_hi;  /* CAP's high half */
     uint32_t mqes;    /* CAP.MQES */
 } m;
@@ -258,7 +260,7 @@ static uint16_t model_identify(uint8_t *page, uint32_t cns, uint32_t nsid)
     page[25] = 1; /* two formats */
     page[26] = 1; /* the second is in use */
     put32(page + 128, 9u << 16);
-    put32(page + 132, m.ms | (m.lbads << 16));
+    put32(page + 132, m.ms | ((m.lbads_ns[nsid - 1] ? m.lbads_ns[nsid - 1] : m.lbads) << 16));
     return 0;
 }
 
@@ -302,6 +304,9 @@ static void model_admin(const uint8_t *e)
 
     switch (opcode) {
     case 0x06:
+        if ((get32(e + 40) & 0xFFu) == 0 && m.drop_ident != 0 && get32(e + 4) == m.drop_ident) {
+            break;
+        }
         page = host_of(get64(e + 24), 4096);
         model_post(0, cid, page ? model_identify(page, get32(e + 40) & 0xFFu, get32(e + 4)) : 0x06,
                    0);
@@ -1247,8 +1252,14 @@ static void row_queued(void)
     CHECK("with nothing out of place", model_faults == 0 && overflows == 0 && prp_faults == 0);
 }
 
-/** Writes that leave the disk's cache unflushed, the flush that takes the
- * mark, and a failed flush that puts it back. */
+/**
+ * Writes that leave the disk's cache unflushed, and what clears the mark:
+ * a write that must be on the medium has a flush after it while the mark
+ * is set, since FUA covers its own blocks alone; a flush clears the mark
+ * when it finishes, not when it is issued, and not when a write was
+ * answered unflushed while it ran; a failed flush, and one a recovery
+ * fails, leave it set.
+ */
 static void row_flushes(void)
 {
     block_device_t *dev;
@@ -1267,21 +1278,117 @@ static void row_flushes(void)
                                                          medium[300 * 512] == 0xA1);
     CHECK("a write that must be on the medium is sent with FUA",
           dev->submit(dev, &reqs[1]) == 0 && fua_writes == 1);
+    m.defer = 1;
     handler(0);
-    CHECK("and leaves the mark for the flush", dev->unflushed == 1);
+    CHECK("and, with the disk marked, has a flush issued in its slot, not yet answered",
+          flushes == 1 && ndone == 1 && dev->unflushed == 1);
+    model_release();
+    handler(0);
+    CHECK("whose end completes the write and clears the mark",
+          ndone == 2 && done[1].status == 0 && dev->unflushed == 0);
+    m.defer = 0;
+    CHECK("a write that must be on the medium on an unmarked disk is FUA alone",
+          dev->submit(dev, &reqs[1]) == 0 && fua_writes == 2);
+    handler(0);
+    CHECK("with no flush", ndone == 3 && flushes == 1);
+
+    make_requests(2, 310, 1, BLOCK_REQ_NOFLUSH);
+    CHECK("an unflushed write marks the disk again",
+          dev->submit(dev, &reqs[0]) == 0 && (handler(0), dev->unflushed == 1));
+    m.defer = 1;
     make_requests(1, 0, 1, 0);
-    CHECK("a flush is taken", dev->flush(dev, &reqs[0]) == 0 && flushes == 1);
-    CHECK("and takes the mark when it is issued", dev->unflushed == 0);
+    CHECK("a flush is taken", dev->flush(dev, &reqs[0]) == 0 && flushes == 2);
+    CHECK("and the mark stays while it runs, so that a second caller flushes too",
+          dev->unflushed == 1);
+    model_release();
     handler(0);
-    CHECK("and completes", ndone == 3 && done[2].status == 0);
-    dev->unflushed = 1;
+    CHECK("and is cleared when it finishes", ndone == 5 && done[4].status == 0 &&
+                                                 dev->unflushed == 0);
+    m.defer = 0;
+
+    make_requests(2, 320, 1, BLOCK_REQ_NOFLUSH);
+    CHECK("another unflushed write marks the disk",
+          dev->submit(dev, &reqs[0]) == 0 && (handler(0), dev->unflushed == 1));
+    m.defer = 1;
+    make_requests(1, 0, 1, 0);
+    CHECK("a flush is issued", dev->flush(dev, &reqs[0]) == 0 && flushes == 3);
+    m.defer = 0;
+    make_requests(1, 330, 1, BLOCK_REQ_NOFLUSH);
+    reqs[0].generation = 300;
+    CHECK("a write answered unflushed while it runs",
+          dev->submit(dev, &reqs[0]) == 0 && (handler(0), ndone == 7));
+    model_release();
+    handler(0);
+    CHECK("keeps the mark when the flush finishes", ndone == 8 && dev->unflushed == 1);
+
+    make_requests(1, 0, 1, 0);
     m.fail_io = 1;
     CHECK("a flush the controller fails is taken", dev->flush(dev, &reqs[0]) == 0);
     handler(0);
-    CHECK("completes with EIO and puts the mark back",
-          ndone == 4 && done[3].status == -EIO && dev->unflushed == 1);
-    CHECK("a flush by polling works and takes the mark",
-          dev->flush(dev, 0) == 0 && dev->unflushed == 0 && flushes == 2);
+    CHECK("completes with EIO and leaves the mark",
+          ndone == 9 && done[8].status == -EIO && dev->unflushed == 1);
+    CHECK("a flush by polling works and clears the mark",
+          dev->flush(dev, 0) == 0 && dev->unflushed == 0 && flushes == 4);
+
+    make_requests(1, 335, 1, BLOCK_REQ_NOFLUSH);
+    CHECK("an unflushed write marks the disk once more",
+          dev->submit(dev, &reqs[0]) == 0 && (handler(0), dev->unflushed == 1));
+    CHECK("and a polled write has a flush after it, which clears the mark",
+          dev->write(dev, 336, 1, big) == 0 && flushes == 5 && dev->unflushed == 0);
+
+    make_requests(1, 340, 1, BLOCK_REQ_NOFLUSH);
+    CHECK("a last unflushed write marks the disk",
+          dev->submit(dev, &reqs[0]) == 0 && (handler(0), dev->unflushed == 1));
+    m.drop_io = 1;
+    make_requests(1, 0, 1, 0);
+    CHECK("a flush nobody answers is issued", dev->flush(dev, &reqs[0]) == 0);
+    CHECK("and a polled read nobody answers resets the controller",
+          dev->read(dev, 0, 1, big) == -EIO && disables >= 1);
+    CHECK("which fails the flush and leaves the mark",
+          done[ndone - 1].status == -EIO && dev->unflushed == 1);
+    m.drop_io = 0;
+}
+
+/** Namespaces past the sixteen one list page gives at a time: sixteen of
+ * 4096-byte blocks, refused, and a seventeenth of 512-byte blocks, taken. */
+static void row_scan(void)
+{
+    uint32_t i;
+
+    model_reset();
+    m.nn = 17;
+    for (i = 0; i < 17; i++) {
+        m.nsze[i] = MEDIUM;
+        m.lbads_ns[i] = i < 16 ? 12u : 9u;
+    }
+    CHECK("a controller of seventeen namespaces comes up", nvme_init() == 0);
+    CHECK("and publishes the seventeenth, past the first list's sixteen",
+          nvme_ctrls[0].nns == 1 && ns0()->nsid == 17 && registered == 1);
+    model_reset();
+    m.nn = 17;
+    m.no_active = 1;
+    for (i = 0; i < 17; i++) {
+        m.nsze[i] = MEDIUM;
+        m.lbads_ns[i] = i < 16 ? 12u : 9u;
+    }
+    CHECK("so does one without the active list, counting to its seventeen",
+          nvme_init() == 0 && nvme_ctrls[0].nns == 1 && ns0()->nsid == 17);
+}
+
+/** An Identify of a namespace the controller never answers: its page may
+ * still be written, so the controller is stopped, out of use, and the scan
+ * ends there. */
+static void row_identify_timeout(void)
+{
+    model_reset();
+    m.nn = 2;
+    m.nsze[1] = MEDIUM;
+    m.drop_ident = 1;
+    CHECK("a controller whose Identify of namespace 1 is never answered is not used",
+          nvme_init() != 0 || nvme_ctrls[0].nns == 0);
+    CHECK("it is stopped and out of use, and namespace 2 is not asked",
+          nvme_ctrls[0].dead && disables >= 1 && registered == 0 &&
+              was_logged("an admin command was not answered"));
 }
 
 /** A polled command beside queued ones: it takes a slot of its own and does
@@ -1379,6 +1486,8 @@ int main(void)
     row_stuck();
     row_queued();
     row_flushes();
+    row_scan();
+    row_identify_timeout();
     row_polled_beside_queued();
     row_fallbacks();
     if (fails == 0) {
