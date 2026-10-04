@@ -399,6 +399,33 @@ pte_t *mmu_user_table(page_dir_t *dir, uintptr_t va, int create)
     return table_for(dir->entries, va, 1, create, PTE_W | PTE_U);
 }
 
+/**
+ * The first user address at or after `va` whose page table `dir` may have,
+ * as ../../mm/paging.h describes: the end of the span an absent entry of
+ * the PML4, a page directory pointer table or a page directory covers,
+ * 512 GiB, 1 GiB or 2 MiB, or `va` when the walk reaches a page table.
+ */
+uintptr_t mmu_user_skip(page_dir_t *dir, uintptr_t va)
+{
+    pte_t *table = dir->entries;
+    int l;
+
+    if (va >= USER_ADDR_MAX) {
+        return va;
+    }
+    for (l = 4; l > 1; l--) {
+        pte_t e = table[LEVEL_INDEX(va, l)];
+
+        if (!(e & PTE_P) || (e & PTE_PS)) {
+            uintptr_t span = (uintptr_t)1 << (3 + 9 * l);
+
+            return (va & ~(span - 1)) + span;
+        }
+        table = MMU_VIRT(PTE_ADDR(e));
+    }
+    return va;
+}
+
 pte_t *mmu_kernel_table(uintptr_t va)
 {
     if (va < KVA_BASE) {

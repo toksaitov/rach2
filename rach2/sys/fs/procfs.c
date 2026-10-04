@@ -1027,12 +1027,15 @@ static int procfs_gen_maps(struct procfs_text *t, int pid)
 }
 
 /** Append one field of /proc/<pid>/smaps: `name` padded to 16 places, then
- * the kilobytes of `pages` in eight and " kB", as Linux writes them. */
-static void ap_smaps_kb(struct procfs_text *t, const char *name, uint32_t pages)
+ * the kilobytes of `pages` in eight and " kB", as Linux writes them. The
+ * count is a long, which holds the kilobytes of any user range: 3 GiB's on
+ * i686, and on x86-64 a region past 4 TiB, whose pages times four pass 32
+ * bits. */
+static void ap_smaps_kb(struct procfs_text *t, const char *name, unsigned long pages)
 {
-    uint32_t kb = pages * (PAGE_SIZE / 1024u);
-    uint32_t w = 1;
-    uint32_t v;
+    unsigned long kb = pages * (PAGE_SIZE / 1024u);
+    unsigned long w = 1;
+    unsigned long v;
     int start = t->len;
 
     ap_str(t, name);
@@ -1045,14 +1048,15 @@ static void ap_smaps_kb(struct procfs_text *t, const char *name, uint32_t pages)
     while (w++ < 8u) {
         ap_ch(t, ' ');
     }
-    ap_u32(t, kb);
+    ap_ulong(t, kb);
     ap_str(t, " kB\n");
 }
 
 /**
  * /proc/<pid>/smaps: each region's maps line and Linux's fields for it, which
  * BusyBox's pmap and smemcap read. The pages in memory are the present pages
- * of the region's page tables, clean or dirty by the entry's dirty bit, and
+ * of the region's page tables, counted past the tables it lacks
+ * (`paging_user_count`), clean or dirty by the entry's dirty bit, and
  * shared or private by the region's type. A private region read from a file,
  * a mapping or a segment of the image, has as anonymous memory the pages
  * written since, the ones Linux has copied from the file; gdb's gcore leaves
@@ -1077,19 +1081,14 @@ static int procfs_gen_smaps(struct procfs_text *t, int pid)
     mm = p->mm;
     for (i = 0; mm && i < mm->vm.count; i++) {
         const vma_t *r = &mm->vm.vmas[i];
-        uint32_t clean = 0, dirty = 0;
-        uintptr_t a;
+        unsigned long present, clean, dirty;
         int shared = r->type == VM_SHARED;
         int of_file = r->file || r->type == VM_CODE || r->type == VM_DATA;
 
-        for (a = r->start; a < r->end; a += PAGE_SIZE) {
-            int state = paging_user_state(mm->dir, a);
-
-            clean += state == 1;
-            dirty += state == 2;
-        }
+        paging_user_count(mm->dir, r->start, r->end, &present, &dirty);
+        clean = present - dirty;
         ap_maps_line(t, mm, r);
-        ap_smaps_kb(t, "Size:", (uint32_t)((r->end - r->start) / PAGE_SIZE));
+        ap_smaps_kb(t, "Size:", (r->end - r->start) / PAGE_SIZE);
         ap_smaps_kb(t, "KernelPageSize:", 1);
         ap_smaps_kb(t, "MMUPageSize:", 1);
         ap_smaps_kb(t, "Rss:", clean + dirty);

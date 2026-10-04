@@ -359,6 +359,19 @@ void switch_page_directory(page_dir_t *dir)
 }
 
 /**
+ * The first user address at or after `va` whose page table `dir` may have
+ * of its own, as ../../mm/paging.h describes: `va`, or the next 4 MiB
+ * boundary where the directory has no table of the process's own.
+ */
+uintptr_t mmu_user_skip(page_dir_t *dir, uintptr_t va)
+{
+    if (mmu_user_table(dir, va, 0)) {
+        return va;
+    }
+    return (va & ~(MMU_TABLE_SPAN - 1)) + MMU_TABLE_SPAN;
+}
+
+/**
  * The leaf table of `dir` for the user address `va`, as ../../mm/paging.h
  * describes. A table `clone_page_directory` shares with the kernel
  * directory is never one of a process's own: with `create` it is copied,

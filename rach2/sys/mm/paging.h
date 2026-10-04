@@ -36,6 +36,15 @@ typedef struct page_dir page_dir_t;
  */
 pte_t *mmu_user_table(page_dir_t *dir, uintptr_t va, int create);
 
+/*
+ * The first user address at or after `va` whose leaf table `dir` may have
+ * of its own: `va` when it has one there, and otherwise the end of the
+ * largest span around `va` whose tables it lacks, so that a walk over a
+ * sparse region passes an absent upper level in one step. The architecture
+ * defines it (arch/i686/mmu.c).
+ */
+uintptr_t mmu_user_skip(page_dir_t *dir, uintptr_t va);
+
 /* The kernel directory's leaf table that covers the kernel address `va`,
  * which every directory shares, or NULL where there is none. */
 pte_t *mmu_kernel_table(uintptr_t va);
@@ -286,9 +295,12 @@ uintptr_t paging_virt_to_phys(uintptr_t va);
  * page is not present. */
 uintptr_t paging_user_phys(page_dir_t *dir, uintptr_t va);
 
-/** Whether `dir` has the user page at `va`: 0 when it is not present, 1 when
- * it is and has not been written since it was mapped, 2 when it has. */
-int paging_user_state(page_dir_t *dir, uintptr_t va);
+/* The present pages of the user range [start, end) of `dir`, and of them
+ * those the processor marked dirty, a span of absent tables passed in one
+ * step (`mmu_user_skip`), so that a large region with few pages costs few
+ * steps. */
+void paging_user_count(page_dir_t *dir, uintptr_t start, uintptr_t end, unsigned long *present,
+                       unsigned long *dirty);
 
 struct mm;
 

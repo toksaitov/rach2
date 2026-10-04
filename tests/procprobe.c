@@ -866,6 +866,29 @@ static void smaps_rows(void)
 }
 
 /* The names a listing of directory `dir` gives, by getdents64, in its order
+#if defined __x86_64__
+/* A reserved region of 64 TiB with no page in it: smaps passes the page
+   tables it lacks in a few steps, where a walk of its 2^34 pages would take
+   minutes and run past the probe's limit, and gives its whole size, whose
+   kilobytes pass 32 bits. */
+static void smaps_large_rows(void)
+{
+    static char text[65536];
+    long len = 64L << 40;
+    long at = probe_mmap(0, len, 0, 0x22 | 0x4000, -1, 0);
+    int n;
+
+    if (sys_failed(at)) {
+        check(0, "a region of 64 TiB is reserved");
+        return;
+    }
+    n = slurp("/proc/self/smaps", text, (int)sizeof(text));
+    check(contains(text, n, "Size:           68719476736 kB"),
+          "smaps gives a region of 64 TiB its 68719476736 kB");
+    check(!sys_failed(syscall2(SYS_MUNMAP, at, len)), "and the region is unmapped");
+}
+#endif
+
    and but for . and .., each followed by a space, in `out`; 0, or -1 when the
    directory does not open, a read fails, or the names do not fit. */
 static int listing(const char *dir, char *out, int cap)
@@ -1673,6 +1696,9 @@ void probe_main(unsigned long *sp)
     rtc_rows();
     smaps_rows();
     anonymous_rows();
+#if defined __x86_64__
+    smaps_large_rows();
+#endif
     pid_dir_rows();
 
     /* Capacity. The pool is filled to its last block, half in a child and half

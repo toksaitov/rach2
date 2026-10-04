@@ -1106,14 +1106,30 @@ uintptr_t paging_user_phys(page_dir_t *dir, uintptr_t va)
     return PTE_ADDR(*e) | (va & (PAGE_SIZE - 1));
 }
 
-int paging_user_state(page_dir_t *dir, uintptr_t va)
+void paging_user_count(page_dir_t *dir, uintptr_t start, uintptr_t end, unsigned long *present,
+                       unsigned long *dirty)
 {
-    pte_t *e = user_pte(dir, va);
+    uintptr_t va = start;
 
-    if (!e || !(*e & PTE_P)) {
-        return 0;
+    *present = *dirty = 0;
+    while (va < end) {
+        pte_t *table = mmu_user_table(dir, va, 0);
+        uintptr_t next =
+            table ? (va & ~(MMU_TABLE_SPAN - 1)) + MMU_TABLE_SPAN : mmu_user_skip(dir, va);
+
+        if (next > end || next <= va) {
+            next = end;
+        }
+        for (; table && va < next; va += PAGE_SIZE) {
+            pte_t e = table[MMU_INDEX(va)];
+
+            if (e & PTE_P) {
+                (*present)++;
+                *dirty += (e & PTE_DIRTY) != 0;
+            }
+        }
+        va = next;
     }
-    return (*e & PTE_DIRTY) ? 2 : 1;
 }
 
 /**
@@ -1599,10 +1615,11 @@ int paging_fork_copy(struct mm *from, page_dir_t *child_dir)
         uintptr_t va = region->start;
 
         while (va < region->end) {
-            uintptr_t next = (va & ~(MMU_TABLE_SPAN - 1)) + MMU_TABLE_SPAN;
             pte_t *table = mmu_user_table(parent_dir, va, 0);
+            uintptr_t next = table ? (va & ~(MMU_TABLE_SPAN - 1)) + MMU_TABLE_SPAN
+                                   : mmu_user_skip(parent_dir, va);
 
-            if (next > region->end || next < va) {
+            if (next > region->end || next <= va) {
                 next = region->end;
             }
             for (; table && va < next; va += PAGE_SIZE) {
