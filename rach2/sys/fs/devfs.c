@@ -2436,6 +2436,9 @@ static int32_t dev_getgeo(fd_entry_t *e, uintptr_t arg)
         return -ENOTTY;
     }
     sectors = w->part.device.sector_count;
+    /* The padding after `cylinders`, four bytes on x86-64, is copied out
+     * with the fields. */
+    k_memset(&geo, 0, sizeof(geo));
     geo.heads = 255;
     geo.sectors = 63;
     geo.cylinders =
