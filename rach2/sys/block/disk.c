@@ -32,6 +32,14 @@ struct disk *disk_register(block_device_t *dev, const char *transport, int locat
     if (!dev) {
         return 0;
     }
+    /* Every byte of a disk is counted in 64 bits, from its raw window's size
+     * to the offsets of its reads: a namespace that says more sectors than
+     * that can count is not published, where its size would wrap to 0. */
+    if (dev->sector_count > ~(uint64_t)0 / BLOCK_SECTOR_SIZE) {
+        klog(KLOG_WARN, "disk", "%s %d: not registered: more sectors than 64 bits of bytes count",
+             transport, location);
+        return 0;
+    }
     /* A driver brought up again from the debug shell registers the same
      * device records; the disk keeps its number and its nodes. */
     for (i = 0; i < ndisks; i++) {

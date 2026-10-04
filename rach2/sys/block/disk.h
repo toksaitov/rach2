@@ -66,7 +66,8 @@ struct disk {
  *
  * `identify` is the 256-word IDENTIFY answer, or NULL for a device that
  * gave none, whose strings are then empty. Returns the record, or NULL when
- * the registry is full; the driver keeps its device either way.
+ * the registry is full or the device has more sectors than 64 bits count in
+ * bytes; the driver keeps its device either way.
  */
 struct disk *disk_register(block_device_t *dev, const char *transport, int location,
                            const volatile uint16_t *identify);

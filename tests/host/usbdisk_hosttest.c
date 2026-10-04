@@ -554,6 +554,20 @@ int main(void)
     passes(40);
     CHECK("and the pump reads its table", disk_at(0)->table.count == 2);
 
+    /* A device whose bytes 64 bits cannot count is refused; one sector
+     * fewer is not. */
+    {
+        static block_device_t huge;
+        int n = disk_count();
+
+        huge.sector_size = 512;
+        huge.sector_count = 1ull << 55;
+        CHECK("a device of 2^55 sectors is refused",
+              disk_register(&huge, "nvme", 0, 0) == 0 && disk_count() == n);
+        huge.sector_count = (1ull << 55) - 1;
+        CHECK("and one of 2^55 - 1 is registered", disk_register(&huge, "nvme", 0, 0) != 0);
+    }
+
     if (fails == 0) {
         printf("usbdisk_hosttest: PASS\n");
         return 0;
