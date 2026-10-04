@@ -177,6 +177,25 @@ boot_watch() {
     cleanup_boot
 }
 
+# Wait until the recovery machine answers a key login with the lease its
+# service log records: its console says the image booted before its server
+# listens, and a connection then is reset at the key exchange. 1 when it never
+# answers.
+reachable() {
+    i=0
+    while :; do
+        case "$(machine 'cat /var/log/services' || true)" in
+            *"lease of"*) return 0 ;;
+        esac
+        i=$((i + 1))
+        if [ "$i" -ge "$(scaled 30)" ]; then
+            return 1
+        fi
+        # interval: the service log is read every three seconds for the lease
+        sleep 3
+    done
+}
+
 # ssh into the machine as root by key, with nothing of the runner's own offered.
 machine() {
     ssh -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$KNOWN" \
@@ -342,18 +361,7 @@ wait_count "recovery image" 1 200 || fail "the recovery entry never came up"
 # the machine, since init gives what it starts `/var/log/services` rather than
 # the console; answering at all is the other half of the proof, because this
 # connection runs over the address that lease gave.
-i=0
-while :; do
-    case "$(machine 'cat /var/log/services' || true)" in
-        *"lease of"*) break ;;
-    esac
-    i=$((i + 1))
-    if [ "$i" -ge "$(scaled 30)" ]; then
-        fail "recovery never took an address"
-    fi
-    # interval: the service log is read every three seconds for the lease
-    sleep 3
-done
+reachable || fail "recovery never took an address"
 
 OUT="$(machine 'test -b /dev/disk0 && echo DISK""NODE' || true)"
 case "$OUT" in
@@ -438,6 +446,7 @@ LOG="$DISK.log.latched"
 : > "$STEPS"
 boot_feed net
 wait_count "recovery image" 1 200 || fail "the saved recovery default did not boot recovery"
+reachable || fail "the recovery that came back never answered a key login"
 OUT="$(machine 'test -b /dev/disk0 && echo STILL""RECOVERY' || true)"
 case "$OUT" in
     *STILLRECOVERY*) ;;
