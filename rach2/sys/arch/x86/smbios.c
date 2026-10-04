@@ -30,7 +30,7 @@
 
 #include "../../lib/kint.h"
 #include "../../mm/paging.h"
-#if defined(__x86_64__)
+#if defined(__x86_64__) && !defined(RACH2_HOSTTEST)
 #include "../x86_64/mmu.h"
 #endif
 
