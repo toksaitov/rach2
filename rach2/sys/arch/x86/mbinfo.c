@@ -94,7 +94,8 @@ static void reset(struct boot_info *boot, struct boot_store *st)
  * Append a range to the map, as one entry of Multiboot's form, or as more of
  * the last entry when it has the same type and ends where this one begins:
  * the EFI map gives a range for every allocation, and the record keeps a
- * range for every kind of memory.
+ * range for every kind of memory. A merge whose length would pass 2^64 is
+ * not made, so that no reserved range wraps to a length of zero.
  */
 static void map_add(struct boot_info *boot, struct boot_store *st, uint64_t base, uint64_t len,
                     uint32_t type)
@@ -105,9 +106,14 @@ static void map_add(struct boot_info *boot, struct boot_store *st, uint64_t base
         return;
     }
     if (st->mmap_entries > 0) {
+        uint64_t ebase, elen;
+
         e = st->mmap + (st->mmap_entries - 1) * BOOT_MMAP_ENTRY;
-        if (le32(e + 20) == type && le64(e + 4) + le64(e + 12) == base) {
-            put64(e + 12, le64(e + 12) + len);
+        ebase = le64(e + 4);
+        elen = le64(e + 12);
+        if (le32(e + 20) == type && elen <= ~(uint64_t)0 - ebase && ebase + elen == base &&
+            len <= ~(uint64_t)0 - elen) {
+            put64(e + 12, elen + len);
             return;
         }
     }
@@ -329,7 +335,7 @@ static void mb2_tag(const uint8_t *t, uint32_t size, struct boot_info *boot, str
             break;
         }
         map_clear(boot, st);
-        for (i = 16; i + step <= size; i += step) {
+        for (i = 16; step <= size - i; i += step) {
             map_add(boot, st, le64(t + i), le64(t + i + 8), le32(t + i + 16));
         }
         break;
@@ -341,7 +347,7 @@ static void mb2_tag(const uint8_t *t, uint32_t size, struct boot_info *boot, str
         map_clear(boot, st);
         st->mmap_efi = 1;
         boot->uefi = 1;
-        for (i = 16; i + step <= size; i += step) {
+        for (i = 16; step <= size - i; i += step) {
             uint64_t pages = le64(t + i + 24);
 
             if (pages > 0x000FFFFFFFFFFFFFULL) {
@@ -396,11 +402,11 @@ int mb2_read(const void *mbi, struct boot_info *boot, struct boot_store *st)
     }
     for (off = 8; off + 8 <= total; off += (size + 7) & ~7u) {
         size = le32(p + off + 4);
-        if (le32(p + off) == MB2_TAG_END) {
-            return size >= 8 ? 0 : -1;
-        }
         if (size < 8 || size > total - off) {
             return -1;
+        }
+        if (le32(p + off) == MB2_TAG_END) {
+            return 0;
         }
         mb2_tag(p + off, size, boot, st);
     }

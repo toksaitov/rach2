@@ -276,6 +276,39 @@ static void row_mmap(void)
     list_end();
     CHECK(mb2_read(mbi, &boot, &store) == 0 && boot.mmap == NULL,
           "entries of 16 bytes are refused");
+
+    /* A step that wraps past 2^32 from the tag's end reads no entry. */
+    list_begin();
+    tag_begin(6);
+    put32(0xFFFFFFF0u);
+    put32(0);
+    tag_end();
+    list_end();
+    CHECK(mb2_read(mbi, &boot, &store) == 0 && boot.mmap == NULL,
+          "an entry size that wraps the tag's offset reads nothing");
+
+    /* Two reserved ranges whose merged length would pass 2^64 stay two. */
+    list_begin();
+    tag_begin(6);
+    put32(24);
+    put32(0);
+    put64(0x100000);
+    put64(0x1000000);
+    put32(1);
+    put32(0);
+    put64(0x200000);
+    put64(0x1000);
+    put32(2);
+    put32(0);
+    put64(0x201000);
+    put64(0xFFFFFFFFFFFFF000ull);
+    put32(2);
+    put32(0);
+    tag_end();
+    list_end();
+    CHECK(mb2_read(mbi, &boot, &store) == 0 && boot.mmap_len == 3 * BOOT_MMAP_ENTRY &&
+              map_is(1, 0x200000, 0x1000, 2) && map_is(2, 0x201000, 0xFFFFFFFFFFFFF000ull, 2),
+          "a merge that would wrap the length is not made");
 }
 
 /* One EFI memory descriptor of 48 bytes, the size OVMF gives. */
@@ -388,6 +421,26 @@ static void row_efi_mmap(void)
                   boot.mmap_len == BOOT_MMAP_MAX * BOOT_MMAP_ENTRY && store.mmap_cut == 5,
               "a map past the record's entries is cut and counted");
     }
+
+    /* A descriptor size that wraps past 2^32 from the tag's end reads no
+       descriptor: not the two tags after it, whose bytes a read past the
+       tag would take for one of a page. */
+    list_begin();
+    tag_begin(17);
+    put32(0xFFFFFFF0u);
+    put32(1);
+    tag_end();
+    tag_begin(4);
+    put32(0x280);
+    put32(0x7FC00);
+    tag_end();
+    tag_begin(1);
+    put8(1);
+    put8(0);
+    tag_end();
+    list_end();
+    CHECK(mb2_read(mbi, &boot, &store) == 0 && boot.mmap == NULL,
+          "an EFI descriptor size that wraps the tag's offset reads nothing");
 }
 
 static void row_framebuffers(void)
@@ -703,6 +756,13 @@ static void row_cut_short(void)
     put32(0);
     set32(0, at);
     CHECK(mb2_read(mbi, &boot, &store) == -1, "an end tag under 8 bytes");
+
+    /* An end tag that says it runs past the list is not an end. */
+    list_begin();
+    tag_begin(0);
+    set32(tag_start + 4, 0xFFFFFFFFu);
+    set32(0, 16);
+    CHECK(mb2_read(mbi, &boot, &store) == -1, "an end tag past the list");
 }
 
 /* ---- Multiboot ---- */
