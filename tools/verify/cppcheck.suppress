@@ -59,12 +59,32 @@ unusedStructMember:*tests/musl/callsmusl.c
 
 # The kernel's copies of Linux's structures.
 
-# The i386 signal frame, statx, the rusage and the siginfo a wait fills are
-# Linux's layouts, copied to the user whole: a member nothing here reads is
-# the layout, not dead code.
+# The i386 and x86-64 signal frames, statx, the rusage, the siginfo a wait
+# fills, sysinfo's record, the ifreq and rtentry the interface calls take and
+# the notes of a core file are Linux's layouts, copied to or from the user
+# whole: a member nothing here reads is the layout, not dead code.
 unusedStructMember:*sys/arch/i686/sigframe.c
+unusedStructMember:*sys/arch/x86_64/sigframe.c
+unusedStructMember:*sys/syscall.c
 unusedStructMember:*sys/syscall_fs.c
 unusedStructMember:*sys/syscall_proc.c
+unusedStructMember:*sys/network/netif.c
+unusedStructMember:*sys/proc/coredump.c
+
+# k_itoa gives a base other than ten the int's 32 bits as unsigned: on
+# x86-64 that is a different long, and on i686, where a long is an int's
+# width, the same one, which cppcheck reports as a redundant assignment.
+redundantAssignment:*sys/lib/kstd.c
+
+# The i686 signal frame's room is the larger of the two frames, a test of two
+# sizes the compiler knows, which cppcheck calls constant.
+knownConditionTrueFalse:*sys/arch/i686/sigframe.c
+
+# A user page's entry is composed with PTE_NOEXEC, which is 0 on i686, whose
+# tables without PAE have no execute bit; x86-64's TSS descriptor is composed
+# field by field, and the limit's high bits are 0 for a TSS of this size.
+badBitmaskCheck:*sys/mm/paging.c
+badBitmaskCheck:*sys/arch/x86_64/percpu.c
 
 # System V IPC's 64-bit records and POSIX queues' struct mq_attr, copied to
 # and from the user whole: the padding and the members kept for the layout
@@ -127,6 +147,15 @@ unassignedVariable:*tests/devprobe.c
 unassignedVariable:*tests/loopprobe.c
 unassignedVariable:*tests/procprobe.c
 unassignedVariable:*tests/sigprobe.c
+
+# The limit and pty probes give the kernel Linux's struct sigaction, whose
+# members the probes set in an initializer and the kernel reads.
+unusedStructMember:*tests/limitprobe.c
+unusedStructMember:*tests/ptyprobe.c
+
+# The XSAVE probe's cpuid writes its four registers into its array through
+# inline assembly, which cppcheck does not follow.
+constParameter:*tests/xsaveprobe.c
 
 # The interface probe reads a length the kernel writes through a pointer it
 # passes as an integer in the socketcall argument block, so cppcheck sees only

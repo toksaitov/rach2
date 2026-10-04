@@ -10,7 +10,8 @@
 #   0. a tool-presence check (a missing tool is a hard FAILURE, never a silent
 #   skip) 1. the kernel build with -Werror (the zero-warning policy, enforced)
 #   2. cppcheck (c89; warning, style, performance, portability) with
-#      tools/verify/cppcheck.suppress, and the host programs (tools/,
+#      tools/verify/cppcheck.suppress, the kernel once as i686's 32-bit code
+#      and once as x86-64's 64-bit code, and the host programs (tools/,
 #      tests/system/, krffs/) at c99
 #      (--error-exitcode; a differing cppcheck version reports its findings and
 #      decides nothing, but a cppcheck that fails to run fails the step)
@@ -136,10 +137,18 @@ cpp_found=$(cppcheck --version 2>/dev/null | head -1)
 . "$REPO/tools/verify/srclists.sh"
 srclists "$REPO" "$VDIR" _
 cpp_rc=0
-cppcheck --std=c89 --platform=unix32 --enable=warning,style,performance,portability --error-exitcode=2 \
-      --suppress=missingInclude --suppress=missingIncludeSystem \
+cppcheck --std=c89 --platform=unix32 -D__i386__ --enable=warning,style,performance,portability \
+      --error-exitcode=2 --suppress=missingInclude --suppress=missingIncludeSystem \
       --suppressions-list="$REPO/tools/verify/cppcheck.suppress" \
       --file-list="$VDIR/_srcs.txt" >"$VDIR/verify_cppcheck.log" 2>&1 || cpp_rc=$?
+# The x86-64 build's kernel sources, as the 64-bit code they are there: its
+# longs and pointers are 64 bits, which the 32-bit pass would judge wrongly.
+cpp64_rc=0
+cppcheck --std=c89 --platform=unix64 -D__x86_64__ --enable=warning,style,performance,portability \
+      --error-exitcode=2 --suppress=missingInclude --suppress=missingIncludeSystem \
+      --suppressions-list="$REPO/tools/verify/cppcheck.suppress" \
+      --file-list="$VDIR/_srcs64.txt" >>"$VDIR/verify_cppcheck.log" 2>&1 || cpp64_rc=$?
+[ "$cpp_rc" -ne 0 ] || cpp_rc=$cpp64_rc
 if [ "$cpp_rc" -eq 0 ]; then
     echo "  PASS (0 findings)"
 elif [ "$cpp_rc" -ne 2 ]; then

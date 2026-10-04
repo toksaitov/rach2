@@ -65,11 +65,16 @@ if [ "$fast" -eq 1 ]; then
 else
     . "$REPO/tools/verify/srclists.sh"
     srclists "$REPO" "$VDIR" _a
-    if cppcheck --std=c89 --platform=unix32 --enable=warning,style,performance,portability \
+    if cppcheck --std=c89 --platform=unix32 -D__i386__ --enable=warning,style,performance,portability \
           --check-level=exhaustive --error-exitcode=2 \
           --suppress=missingInclude --suppress=missingIncludeSystem \
           --suppressions-list="$REPO/tools/verify/cppcheck.suppress" \
           --file-list="$VDIR/_asrcs.txt" >"$VDIR/analyze_cppcheck.log" 2>&1 &&
+       cppcheck --std=c89 --platform=unix64 -D__x86_64__ --enable=warning,style,performance,portability \
+          --check-level=exhaustive --error-exitcode=2 \
+          --suppress=missingInclude --suppress=missingIncludeSystem \
+          --suppressions-list="$REPO/tools/verify/cppcheck.suppress" \
+          --file-list="$VDIR/_asrcs64.txt" >>"$VDIR/analyze_cppcheck.log" 2>&1 &&
        cppcheck --std=c99 --platform=unix64 --enable=warning,style,performance,portability \
           --check-level=exhaustive --error-exitcode=2 \
           --suppress=missingInclude --suppress=missingIncludeSystem \

@@ -6,15 +6,19 @@
 # here so the two runs cannot come to check different files.
 #
 # Sourced, not run: srclists REPO OUTDIR PREFIX writes OUTDIR/PREFIXsrcs.txt,
-# the freestanding kernel sources and the guest programs that share its
-# headers, and OUTDIR/PREFIXhostsrcs.txt, the programs built for the host.
+# the freestanding kernel sources of the i686 build and the guest programs
+# that share its headers, OUTDIR/PREFIXsrcs64.txt, the kernel sources of the
+# x86-64 build, which are checked again as 64-bit code, and
+# OUTDIR/PREFIXhostsrcs.txt, the programs built for the host.
 srclists() {
     _sl_repo="$1"
     _sl_out="$2"
     _sl_pre="$3"
 
-    find "$_sl_repo/rach2/sys" -name '*.c' >"$_sl_out/${_sl_pre}srcs.txt"
+    find "$_sl_repo/rach2/sys" -name '*.c' ! -path '*/arch/x86_64/*' >"$_sl_out/${_sl_pre}srcs.txt"
     echo "$_sl_repo/rach2/kernel.c" >>"$_sl_out/${_sl_pre}srcs.txt"
+    find "$_sl_repo/rach2/sys" -name '*.c' ! -path '*/arch/i686/*' >"$_sl_out/${_sl_pre}srcs64.txt"
+    echo "$_sl_repo/rach2/kernel.c" >>"$_sl_out/${_sl_pre}srcs64.txt"
     ls "$_sl_repo"/tests/*probe.c >>"$_sl_out/${_sl_pre}srcs.txt" 2>/dev/null || true
     ls "$_sl_repo"/tests/fdstale.c "$_sl_repo"/tests/idreport.c \
         >>"$_sl_out/${_sl_pre}srcs.txt" 2>/dev/null || true
