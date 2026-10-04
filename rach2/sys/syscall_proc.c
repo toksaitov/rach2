@@ -3928,7 +3928,9 @@ struct k_stack {
  * The old settings are read before the change: SS_DISABLE for none, and
  * SS_ONSTACK while the process runs on the stack, when a change is refused
  * with EPERM. SS_AUTODISARM is accepted and has no effect. A stack smaller
- * than MINSIGSTKSZ is refused with ENOMEM.
+ * than MINSIGSTKSZ is refused with ENOMEM. The old settings are zeroed
+ * first, so that the padding after x86-64's int flags gives no byte of the
+ * kernel's stack.
  */
 long sys_sigaltstack(isr_params_t *params)
 {
@@ -3943,6 +3945,7 @@ long sys_sigaltstack(isr_params_t *params)
         return -ESRCH;
     }
     on = sigframe_on_altstack(FRAME_SP(params));
+    k_memset(&cur, 0, sizeof(cur));
     cur.ss_sp = current_proc->altstack_sp;
     cur.ss_size = current_proc->altstack_size;
     cur.ss_flags = !current_proc->altstack_on ? SS_DISABLE : (on ? SS_ONSTACK : 0);
