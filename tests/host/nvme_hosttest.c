@@ -533,9 +533,13 @@ static void model_w32(uintptr_t base, uint32_t off, uint32_t v)
     }
 }
 
+/* The microseconds the driver has waited, which the timeout rows judge
+ * against the thirty and five seconds it promises. */
+static uint64_t waited_us;
+
 static void model_udelay(uint32_t us)
 {
-    (void)us;
+    waited_us += us;
 }
 
 static const struct nvme_io model_io_ops = {model_r32, model_w32, model_udelay};
@@ -1021,14 +1025,14 @@ static void row_transfers(void)
 
     ok = 1;
     for (i = 0; i < 40 * 512; i++) {
-        *at_phys(start + i) = (uint8_t)(i * 13u + 5u);
+        *at_phys(start + i) = (uint8_t)(i * 13u + (i >> 9) * 7u + 5u);
     }
     CHECK("a write of forty sectors from mid-page succeeds",
           dev->write(dev, 1000, 40, big + start) == 0);
     for (i = 0; i < 40 * 512; i++) {
-        ok = ok && medium[1000 * 512 + i] == (uint8_t)(i * 13u + 5u);
+        ok = ok && medium[1000 * 512 + i] == (uint8_t)(i * 13u + (i >> 9) * 7u + 5u);
     }
-    CHECK("and puts every scattered page on the medium in order", ok);
+    CHECK("and puts every scattered page on the medium in order, each sector's bytes its own", ok);
     CHECK("through a list of the pages past the first", list_entries == 5 && prp_faults == 0);
     CHECK("as one write, with FUA", writes == 1 && fua_writes == 1);
     CHECK("a read that runs past the namespace is refused",
@@ -1113,8 +1117,10 @@ static void row_timeout(void)
     dev = &ns0()->dev;
     m.drop_io = 1;
     polls = 0;
+    waited_us = 0;
     CHECK("a read nobody answers returns EIO", dev->read(dev, 0, 1, big) == -EIO);
-    CHECK("after thirty seconds of polls", polls >= NVME_CMD_STEPS);
+    CHECK("after thirty seconds of polls",
+          polls >= NVME_CMD_STEPS && waited_us >= 30000000u && waited_us < 31000000u);
     CHECK("logged as such", was_logged("command 0x2 failed: no answer in thirty seconds"));
     CHECK("the controller is reset and its queues made again",
           disables == 1 && enables == 2 && created_sq == 2 && set_queues == 2);
@@ -1125,9 +1131,10 @@ static void row_timeout(void)
     m.drop_io = 1;
     masked = 1;
     polls = 0;
-    CHECK("with interrupts off the wait is shorter", dev->read(dev, 0, 1, big) == -EIO &&
-                                                         polls >= NVME_CMD_STEPS_MASKED &&
-                                                         polls < NVME_CMD_STEPS);
+    waited_us = 0;
+    CHECK("with interrupts off the wait is five seconds",
+          dev->read(dev, 0, 1, big) == -EIO && polls >= NVME_CMD_STEPS_MASKED &&
+              polls < NVME_CMD_STEPS && waited_us >= 5000000u && waited_us < 6000000u);
     CHECK("and the log says so", was_logged("no answer in five seconds with interrupts off"));
     masked = 0;
 
