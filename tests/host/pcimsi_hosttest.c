@@ -32,6 +32,13 @@ static unsigned int writes[64];
 static unsigned int written[64];
 static int nwrites;
 
+/* The MSI-X table of the row that has one, whose entry 0's address each
+   configuration write records beside itself: a store to the table is a
+   store to memory the model cannot see, but where it falls among the
+   configuration writes it can. */
+static volatile unsigned int *msix_table;
+static unsigned int table_at[64];
+
 /* One device: a capability list whose contents each row lays out. */
 static void model_reset(void)
 {
@@ -82,6 +89,7 @@ void outd(unsigned short port, unsigned int value)
             if (nwrites < 64) {
                 writes[nwrites] = off;
                 written[nwrites] = value;
+                table_at[nwrites] = msix_table ? msix_table[0] : 0;
                 nwrites++;
             }
             return;
@@ -92,6 +100,7 @@ void outd(unsigned short port, unsigned int value)
         if (nwrites < 64) {
             writes[nwrites] = off;
             written[nwrites] = value;
+            table_at[nwrites] = msix_table ? msix_table[0] : 0;
             nwrites++;
         }
     }
@@ -137,6 +146,7 @@ void outw(unsigned short port, unsigned short value)
     if (nwrites < 64) {
         writes[nwrites] = address_port & 0xFC;
         written[nwrites] = (unsigned int)value << (8 * (unsigned int)(port - 0xCFC));
+        table_at[nwrites] = msix_table ? msix_table[0] : 0;
         nwrites++;
     }
 }
@@ -267,6 +277,7 @@ static void msix_rows(const pci_device_t *dev)
     }
     table[3] = 1; /* entry 0 masked */
     the_apic_id = 2;
+    msix_table = table;
     check(pci_msix_table(dev, &bar, &offset, &entries) == 0, "the MSI-X table is found");
     check(bar == 4 && offset == 0x3000 && entries == 2,
           "at the BAR, offset and size the capability gives");
@@ -292,7 +303,11 @@ static void msix_rows(const pci_device_t *dev)
               "MSI goes down before MSI-X is enabled");
         check(masked >= 0 && last > masked && ((written[last] >> 16) & 0x4000u) == 0,
               "MSI-X is enabled masked first and unmasked by the last write");
+        check(masked >= 0 && last > masked && table_at[masked] == 0xDEADBEEFu &&
+                  table_at[last] == (PCI_MSI_ADDRESS_BASE | (2u << 12)),
+              "the table is written after MSI-X is enabled masked and before it is unmasked");
     }
+    msix_table = 0;
 
     model_reset();
     model_cap(0x60, PCI_CAP_ID_MSI, 0x34);
