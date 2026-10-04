@@ -18,6 +18,7 @@
 #include "mqueue.h"
 
 #include "../irq.h"
+#include "../rtc.h"
 #include "../proc/process.h"
 #include "../proc/tgroup.h"
 #include "../proc/ns.h"
@@ -966,7 +967,7 @@ static int32_t sem_op(int32_t id, const void __user *uops, uint32_t n, int timed
         w.perm = &set->perm;
         w.gen = &set->gen;
         w.timed = timed;
-        w.target = kernel_ticks + ticks + 1u;
+        w.target = rtc_ticks_now() + ticks + 1u;
         rc = sem_wait_apply(set, ops, n, u, &w);
         sem_put(set);
     }

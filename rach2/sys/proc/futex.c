@@ -10,6 +10,7 @@
 #include "../mm/paging.h"
 #include "../mm/usercopy.h"
 #include "../syscall_internal.h"
+#include "../rtc.h"
 #include "../timer.h"
 
 #define FUTEX_WAIT           0
@@ -188,7 +189,7 @@ static int32_t futex_wait(uintptr_t uaddr, uint32_t val, const struct kernel_tim
                          : futex_ticks(ts.tv_sec, ts.tv_nsec);
         q.timed = 1;
     }
-    q.target = kernel_ticks + ticks + 1u;
+    q.target = rtc_ticks_now() + ticks + 1u;
     if (!vm_prefault_range(uaddr, sizeof(uint32_t), 0)) {
         return -EFAULT;
     }

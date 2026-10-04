@@ -286,6 +286,14 @@ void rtc_tick_phase(uint32_t *ticks, uint32_t *phase_ns)
     kirq_restore(flags);
 }
 
+uint32_t rtc_ticks_now(void)
+{
+    uint32_t ticks, phase_ns;
+
+    rtc_tick_phase(&ticks, &phase_ns);
+    return ticks;
+}
+
 /* The time the anchor keeps now, with the PIT position added to the
  * delivered ticks; the caller has interrupts off. */
 static void rtc_kept_time(int64_t *seconds, int64_t *nanoseconds)

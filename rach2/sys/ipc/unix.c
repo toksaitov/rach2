@@ -18,6 +18,7 @@
 #include "../lib/ksignal.h"
 #include "../lib/kstring.h"
 #include "../network/socket/socket.h"
+#include "../rtc.h"
 #include "../timer.h"
 #include "../syscall_internal.h"
 
@@ -725,7 +726,7 @@ static int unix_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg, uint32_t time
     t.cond = cond;
     t.arg = arg;
     t.timed = timeo != 0;
-    t.deadline = kernel_ticks + timeo + 1u;
+    t.deadline = rtc_ticks_now() + timeo + 1u;
     if (t.timed) {
         current_proc->wakeup_tick = t.deadline;
     }

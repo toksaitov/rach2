@@ -7,6 +7,7 @@
 
 #include "anon.h"
 #include "../irq.h"
+#include "../rtc.h"
 #include "../fs/fd.h"
 #include "../fs/file.h"
 #include "../proc/process.h"
@@ -365,7 +366,7 @@ static void current_setting(const struct ktimer *t, struct setting *s)
         s->isec = t->isec;
         s->insec = (int32_t)t->isub * NS_PER_TICK;
     } else if (t->armed) {
-        int32_t left = (int32_t)(t->due - kernel_ticks);
+        int32_t left = (int32_t)(t->due - rtc_ticks_now());
 
         s->vsec = (int64_t)t->spans * SPAN_SEC;
         if (left > 0) {
@@ -421,7 +422,7 @@ static int32_t arm(struct ktimer *t, int flags, const struct setting *s)
         t->next = cpu_armed;
         cpu_armed = t;
     } else if (on) {
-        wait_from(t, kernel_ticks + 1u, sec, sub);
+        wait_from(t, rtc_ticks_now() + 1u, sec, sub);
         t->isec = isec;
         t->isub = isub;
         t->armed = 1;

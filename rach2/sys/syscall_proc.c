@@ -4435,7 +4435,7 @@ long sys_rt_sigtimedwait(isr_params_t *params)
         if (ticks > 0x7FFFFFFEu) {
             ticks = 0x7FFFFFFEu;
         }
-        deadline = kernel_ticks + ticks + (ticks != 0 ? 1u : 0u);
+        deadline = rtc_ticks_now() + ticks + (ticks != 0 ? 1u : 0u);
         timed = 1;
     }
     set &= ~(uint64_t)KSIG_UNCATCHABLE;

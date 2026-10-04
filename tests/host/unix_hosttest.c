@@ -94,6 +94,12 @@ struct sockfile {
 static process_t self;
 struct percpu cpu_table[NR_CPUS] = {{.current = &self}};
 volatile uint32_t kernel_ticks;
+
+/** The tick count as the clocks count it, with no tick pending here. */
+uint32_t rtc_ticks_now(void)
+{
+    return kernel_ticks;
+}
 static struct fs_struct dirs;
 static fd_table_t shared;
 static fd_entry_t slots[SLOTS];

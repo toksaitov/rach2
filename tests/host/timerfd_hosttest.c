@@ -23,6 +23,16 @@
 extern int printf(const char *format, ...);
 
 volatile uint32_t kernel_ticks;
+/* A tick the timer has raised and the boot processor has not yet counted,
+ * which the pending row sets. */
+static uint32_t tick_pending;
+
+/** The tick count as the clocks count it: `kernel_ticks` and a pending
+ * tick. */
+uint32_t rtc_ticks_now(void)
+{
+    return kernel_ticks + tick_pending;
+}
 static struct ktimer timer;
 static fd_entry_t entry;
 static struct open_file description;
@@ -227,6 +237,32 @@ static void reset(void)
     kernel_ticks = 1000;
 }
 
+/** A timer of a tick armed at tick 1000 while tick 1001 is pending, which
+ * the clocks already count: it expires a tick after 1001, at 1003, and not
+ * at 1002, which comes less than a tick after the clock's reading at the
+ * arm. */
+static void pending_rows(void)
+{
+    struct setting tick = {0, 0, 0, NS_PER_TICK};
+    struct setting got;
+
+    reset();
+    tick_pending = 1;
+    CHECK(arm(&timer, 0, &tick) == 0, "a timer of a tick arms while a tick is pending");
+    current_setting(&timer, &got);
+    CHECK(got.vsec == 0 && got.vnsec == 2 * NS_PER_TICK,
+          "it reports the tick it waits and the tick in progress");
+    tick_pending = 0;
+    kernel_ticks = 1001;
+    timerfd_tick(1001);
+    kernel_ticks = 1002;
+    timerfd_tick(1002);
+    CHECK(timer.count == 0, "it does not expire at 1002, less than a tick after the arm");
+    kernel_ticks = 1003;
+    timerfd_tick(1003);
+    CHECK(timer.count == 1, "it expires at 1003");
+}
+
 /** A timer of 200 days, past the most one wait of ticks can span, and one
  * past the most seconds a setting keeps. */
 static void long_rows(void)
@@ -280,6 +316,7 @@ int main(void)
     CHECK(timerfd_read(&entry, NULL, 8) == -EFAULT, "a read into memory it cannot write");
     CHECK(timer.count == 0, "a failed copy loses the count it took");
     CHECK(timerfd_read(&entry, (char *)user, 7) == -EINVAL, "a read shorter than eight bytes");
+    pending_rows();
     long_rows();
     CHECK(masked == 0, "every interrupt mask is taken back");
 

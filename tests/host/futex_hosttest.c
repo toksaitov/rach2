@@ -45,6 +45,17 @@ volatile uint32_t kernel_uptime_seconds;
 volatile uint32_t kernel_second_ticks;
 static uint8_t user[1024];
 
+/* A tick the timer has raised and the boot processor has not yet counted,
+ * which the pending row sets. */
+static uint32_t tick_pending;
+
+/** The tick count as the clocks count it: `kernel_ticks` and a pending
+ * tick. */
+uint32_t rtc_ticks_now(void)
+{
+    return kernel_ticks + tick_pending;
+}
+
 /** The tick's counts as one reading, with interrupts off as the kernel's
  * reads them, which on the host's one thread is all one reading needs. */
 void tick_now(uint32_t *seconds, uint32_t *second_ticks, uint32_t *ticks)
@@ -428,6 +439,11 @@ static void deadline_fixed(void)
           "a deadline a fault outlasted ends the wait without a sleep");
     CHECK(timed_wait(2000, 1, 0, 50) == -ETIMEDOUT && waits == 1 && armed == 2101,
           "a wait of a second from tick 2000 sleeps until 2101");
+    tick_pending = 1;
+    CHECK(timed_wait(2000, 1, 0, 0) == -ETIMEDOUT && waits == 1 && armed == 2102,
+          "a wait of a second begun while tick 2001 is pending sleeps until 2102, a second "
+          "and a tick past the clock's 2001");
+    tick_pending = 0;
 }
 
 /** Which futex calls a signal interrupted are restarted: a wait with no

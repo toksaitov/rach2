@@ -69,8 +69,9 @@ names it
 .Dq anon_inode:[timerfd] .
 .Pp
 The kernel keeps time in 10 ms ticks: an expiration and an interval are
-rounded up to whole ticks, and the tick in progress is not counted, so a
-timer never expires early.
+rounded up to whole ticks, counted from the tick the monotonic clock is
+in, a tick whose interrupt has not yet been taken included, and the tick in
+progress is not counted, so a timer never expires early by that clock.
 A time of any length up to 4294967295 seconds, about 136 years, is kept
 whole, and
 .Fn timerfd_gettime
