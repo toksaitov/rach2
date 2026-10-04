@@ -4369,6 +4369,9 @@ static int32_t procfs_mem_access(fd_entry_t *e, char __user *ubuf, uint32_t coun
     if (!mm) {
         return 0;
     }
+    if ((uint64_t)addr != e->ofd->offset) {
+        return -EIO;
+    }
     while (done < count) {
         uint32_t n = count - done < sizeof(buf) ? count - done : (uint32_t)sizeof(buf);
 
@@ -4410,6 +4413,12 @@ static int32_t procfs_mem_write(fd_entry_t *e, const char __user *buf, uint32_t 
 
 static const struct file_ops procfs_mem_ops = {procfs_mem_read, procfs_mem_write, procfs_poll,
                                                procfs_ioctl, procfs_close};
+
+int procfs_is_mem(const fd_entry_t *e)
+{
+    return e->type == FD_TYPE_PROC && e->priv &&
+           ((const struct procfs_file *)e->priv)->origin_file == SYNTH_PROC_MEM;
+}
 
 /**
  * Open /proc/<pid>/mem for reading, writing or both: the caller needs
@@ -4932,7 +4941,7 @@ static void procfs_sysctl_text(struct procfs_text *t, int entry)
 static int32_t procfs_sysctl_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
     struct procfs_file *f = (struct procfs_file *)e->priv;
-    uint32_t off = (uint32_t)e->ofd->offset;
+    uint32_t off = e->ofd->offset > 0xFFFFFFFFu ? 0xFFFFFFFFu : (uint32_t)e->ofd->offset;
     struct procfs_text t;
     uint32_t n = 0;
 
@@ -5004,7 +5013,7 @@ static const struct file_ops procfs_sysctl_ops = {procfs_sysctl_read, procfs_sys
 static int32_t procfs_sysattr_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
     struct procfs_file *f = (struct procfs_file *)e->priv;
-    uint32_t off = (uint32_t)e->ofd->offset;
+    uint32_t off = e->ofd->offset > 0xFFFFFFFFu ? 0xFFFFFFFFu : (uint32_t)e->ofd->offset;
     struct procfs_text t;
     uint32_t n = 0;
     int len;

@@ -6,13 +6,16 @@
  * The rows read and write a file at offsets and require the descriptor's own
  * offset to stay where lseek left it, a write past the end to leave a hole of
  * zeros, and O_APPEND to write at the end whatever offset is asked for, as
- * Linux does. A /proc snapshot and /dev/zero are read at offsets without
- * moving theirs, and a position past 4 GiB in a snapshot is its end. A
- * /proc snapshot and /proc/self/mem seek with SEEK_SET and SEEK_CUR, by
- * _llseek and by the old call 19 (both lseek, call 8, on x86-64), and not with
- * SEEK_END. Then each refusal, in Linux's order: a negative offset before the
- * descriptor, a pipe, a socket and the terminal that cannot seek, a descriptor
- * open for the other direction, an end past the signed range, and a directory.
+ * Linux does. A /proc snapshot and /dev/zero are read at offsets without moving
+ * theirs, and a position past 4 GiB in a snapshot is its end. A /proc snapshot
+ * and /proc/self/mem seek with SEEK_SET and SEEK_CUR, by _llseek and by the old
+ * call 19 (both lseek, call 8, on x86-64), and not with SEEK_END;
+ * /proc/self/mem seeks to an address of the stack, above 4 GiB on x86-64, and
+ * on i686 a write of it 4 GiB past an address is EIO; a writable /proc/sys file
+ * reads nothing at 4 GiB. Then each refusal, in Linux's order: a negative
+ * offset before the descriptor, a pipe, a socket and the terminal that cannot
+ * seek, a descriptor open for the other direction, an end past the signed
+ * range, and a directory.
  *
  * Prints "PREADMUSL OK" on success and "PREADMUSL FAIL (detail)" otherwise.
  */
@@ -190,6 +193,40 @@ static int proc_seek_rows(void)
     return 0;
 }
 
+/**
+ * Offsets past 32 bits of the /proc files a write can open: /proc/self/mem
+ * seeks to an address of the stack, above 4 GiB on x86-64, and reads what
+ * the probe has there; on i686, where no address passes 32 bits, a write at
+ * 4 GiB past a variable's address is EIO and leaves the variable; and
+ * /proc/sys/kernel/hostname, open for writing too, reads nothing at 4 GiB.
+ */
+static int wide_proc_rows(void)
+{
+    char stack_mark[8], part[8];
+    off_t at = (off_t)(uintptr_t)stack_mark;
+    int fd, ok;
+
+    memcpy(stack_mark, "stackmem", 8);
+    fd = open("/proc/self/mem", O_RDWR);
+    ok = fd >= 0 && lseek(fd, at, SEEK_SET) == at && read(fd, part, 8) == 8 &&
+         memcmp(part, stack_mark, 8) == 0;
+#if !defined __x86_64__
+    ok = ok && refused(pwrite(fd, "x", 1, ((off_t)1 << 32) + at), EIO) &&
+         memcmp(stack_mark, "stackmem", 8) == 0;
+#endif
+    close(fd);
+    if (!ok) {
+        return fail("/proc/self/mem at an address of the stack, or past 32 bits");
+    }
+    fd = open("/proc/sys/kernel/hostname", O_RDWR);
+    ok = fd >= 0 && pread(fd, part, sizeof(part), (off_t)1 << 32) == 0;
+    close(fd);
+    if (!ok) {
+        return fail("a writable /proc/sys file read at 4 GiB is not at its end");
+    }
+    return 0;
+}
+
 /** Each refusal, in the order Linux makes them. */
 static int refusal_rows(void)
 {
@@ -251,7 +288,8 @@ static int refusal_rows(void)
 
 int main(void)
 {
-    if (file_rows() != 0 || device_rows() != 0 || proc_seek_rows() != 0 || refusal_rows() != 0) {
+    if (file_rows() != 0 || device_rows() != 0 || proc_seek_rows() != 0 || wide_proc_rows() != 0 ||
+        refusal_rows() != 0) {
         unlink(FILE_PATH);
         return 1;
     }

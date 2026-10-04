@@ -350,6 +350,13 @@ struct vfs_mount *vfs_mount_at(int idx)
     return idx == 0 ? &mount : 0;
 }
 
+/* No row opens a /proc/PID/mem. */
+int procfs_is_mem(const struct fd_entry *e)
+{
+    (void)e;
+    return 0;
+}
+
 /** The device a stat reports for mount `i`: its index past the fixed ids,
  * as procfs gives a mount of no node of /dev. */
 uint32_t procfs_mount_dev(int i, const struct vfs_mount *m)

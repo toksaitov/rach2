@@ -43,6 +43,10 @@ uint32_t procfs_task_links(int pid);
 /** Open a /proc/<pid>/{stat,cmdline} file; returns the fd or -errno. */
 int procfs_open(const struct vpath *vp, int flags);
 
+/** Whether `e` is a descriptor of a /proc/PID/mem, whose offset is an
+ * address. */
+int procfs_is_mem(const struct fd_entry *e);
+
 /** Render the /proc/<pid>/fd/<fd> symlink target into buf (NOT NUL-terminated);
  *  returns the byte length or -errno. */
 int procfs_readlink_fd(int pid, int fd, char *buf, int cap);

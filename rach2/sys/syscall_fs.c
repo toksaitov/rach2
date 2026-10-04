@@ -3942,9 +3942,9 @@ static int dir_cursor_valid(fd_entry_t *entry, uint32_t target)
  * SEEK_SET and SEEK_CUR move the offset; SEEK_END is -EINVAL, as Linux's
  * /proc files and tmpfs directories answer, since neither has a size to
  * seek from. A /proc file's offset is a byte of its text, the snapshot its
- * open took or the text a read of oom_score_adj makes, or, for
- * /proc/PID/mem, an address, so it takes any place through 0xFFFFFFFF, the
- * last address. A directory's offset is the cursor of its listing, which
+ * open took or the text a read of oom_score_adj makes, through 0xFFFFFFFF,
+ * or, for /proc/PID/mem, an address, so it takes any place through the last
+ * address, 0xFFFFFFFF on i686. A directory's offset is the cursor of its listing, which
  * getdents64 reports after each entry as the entry's d_off: a directory of
  * /dev or /proc takes the index of any entry through 0x7FFFFFFF, and one of
  * a file system the places `dir_cursor_valid` finds, so rewinddir, and
@@ -3958,6 +3958,10 @@ static int seek_listing(fd_entry_t *entry, long long off, int whence, uint64_t l
     uint64_t most = entry->type == FD_TYPE_SYNTH_DIR ? 0x7FFFFFFFull : 0xFFFFFFFFull;
     long long at = off;
     int rc = 0;
+
+    if (procfs_is_mem(entry)) {
+        most = (uint64_t)(uintptr_t)-1;
+    }
 
     if (!entry->ofd || (entry->type == FD_TYPE_DIR && !entry->ofd->vmnt)) {
         return -EBADF;
