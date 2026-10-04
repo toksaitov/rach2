@@ -157,18 +157,24 @@ The i386 system call numbers are 154 for
 241 for
 .Fn sched_setaffinity ,
 and 242 for
-.Fn sched_getaffinity .
+.Fn sched_getaffinity ;
+on x86-64 they are 142 to 148 in the same order but for
+.Fn sched_yield ,
+which is 24, and 203 and 204.
 The raw
 .Fn sched_getaffinity
-returns the bytes of the mask it wrote, four, and fails with
+returns the bytes of the mask it wrote, a long for each long's bits of
+processors up to the highest started: four on i386 with 32 processors or
+fewer, and eight with more and on x86-64.
+It fails with
 .Er EINVAL
 for a
 .Fa cpusetsize
-that is zero or not a multiple of four; the C library clears the rest of
-a larger set and returns 0.
+shorter than that or not a multiple of a long; the C library clears the
+rest of a larger set and returns 0.
 The raw
 .Fn sched_setaffinity
-reads at most four bytes of the mask.
+reads at most that many bytes of the mask.
 .Fn sched_rr_get_interval
 writes a 32-bit timespec.
 .Pp

@@ -177,7 +177,7 @@ and
 are among them, which Linux reads.
 A descriptor not open for reading returns
 .Er EBADF ,
-a count past 2147483647 or an end past the signed 64-bit range
+an end past the signed 64-bit range
 .Er EINVAL ,
 and a directory
 .Er EISDIR .
@@ -287,8 +287,7 @@ A signal interrupted a wait, or a background terminal read posted
 The vector count is outside 0 through 1024, the total vector length
 exceeds 2147483647, a file system has no read operation, or
 .Fn pread
-was given a negative offset, a count past 2147483647 or an end past
-the signed 64-bit range.
+was given a negative offset or an end past the signed 64-bit range.
 A boot window,
 .Pa /dev/bootpart
 or
