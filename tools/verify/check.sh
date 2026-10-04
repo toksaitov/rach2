@@ -148,7 +148,11 @@ cppcheck --std=c89 --platform=unix64 -D__x86_64__ --enable=warning,style,perform
       --error-exitcode=2 --suppress=missingInclude --suppress=missingIncludeSystem \
       --suppressions-list="$REPO/tools/verify/cppcheck.suppress" \
       --file-list="$VDIR/_srcs64.txt" >>"$VDIR/verify_cppcheck.log" 2>&1 || cpp64_rc=$?
-[ "$cpp_rc" -ne 0 ] || cpp_rc=$cpp64_rc
+# A pass that failed to run decides the step whatever the other found, so a
+# finding of one cannot hide the other's crash.
+if [ "$cpp_rc" -eq 0 ] || { [ "$cpp64_rc" -ne 0 ] && [ "$cpp64_rc" -ne 2 ]; }; then
+    cpp_rc=$cpp64_rc
+fi
 if [ "$cpp_rc" -eq 0 ]; then
     echo "  PASS (0 findings)"
 elif [ "$cpp_rc" -ne 2 ]; then
