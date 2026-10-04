@@ -9,7 +9,8 @@
  * joins again. The objects are a regular file, a directory, a FIFO,
  * /dev/null (major 1, minor 3), /proc/self followed and not, a pipe named by
  * its descriptor with AT_EMPTY_PATH, and the working directory named by
- * AT_FDCWD and an empty path. The mask reports the basic set. Then the
+ * AT_FDCWD and an empty path, and on x86-64 a file whose times are 2^31
+ * seconds, which statx reports whole. The mask reports the basic set. Then the
  * refusals: a flag statx does not take, both sync flags at once, the
  * reserved mask bit, a missing file, and an empty path without
  * AT_EMPTY_PATH.
@@ -152,6 +153,17 @@ static int kinds(void)
         sx.stx_size != 5 || (sx.stx_mode & 07777) != 0640) {
         return fail("a regular file's attributes");
     }
+#if defined __x86_64__
+    {
+        struct timespec past[2] = {{(time_t)1 << 31, 0}, {(time_t)1 << 31, 0}};
+
+        if (utimensat(AT_FDCWD, FILE_PATH, past, 0) != 0 ||
+            agree(AT_FDCWD, FILE_PATH, 0, &sx, "a file of times past 2^31") ||
+            sx.stx_mtime.tv_sec != (int64_t)1 << 31) {
+            return fail("statx of a time past 2^31 seconds");
+        }
+    }
+#endif
     if (agree(AT_FDCWD, "/tmp", 0, &tmp, "a directory") || !S_ISDIR(tmp.stx_mode)) {
         return fail("a directory's type");
     }

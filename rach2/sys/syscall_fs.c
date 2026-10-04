@@ -7092,7 +7092,8 @@ static uint32_t dev_minor(uint64_t dev)
 /**
  * Put the attributes of `st` into `sx` as statx reports them: the basic set,
  * the device numbers split into their major and minor numbers, and the times
- * as signed 64-bit seconds, which is how musl reads the 32-bit ones.
+ * as signed 64-bit seconds: a long's, which is how musl reads i386's 32-bit
+ * ones, and all of x86-64's.
  */
 static void statx_from_stat64(struct linux_statx *sx, const struct user_stat *st)
 {
@@ -7106,11 +7107,11 @@ static void statx_from_stat64(struct linux_statx *sx, const struct user_stat *st
     sx->stx_ino = st->st_ino;
     sx->stx_size = (uint64_t)st->st_size;
     sx->stx_blocks = st->st_blocks;
-    sx->stx_atime.tv_sec = (int32_t)st->st_atime;
+    sx->stx_atime.tv_sec = (long)st->st_atime;
     sx->stx_atime.tv_nsec = (uint32_t)st->st_atime_nsec;
-    sx->stx_ctime.tv_sec = (int32_t)st->st_ctime;
+    sx->stx_ctime.tv_sec = (long)st->st_ctime;
     sx->stx_ctime.tv_nsec = (uint32_t)st->st_ctime_nsec;
-    sx->stx_mtime.tv_sec = (int32_t)st->st_mtime;
+    sx->stx_mtime.tv_sec = (long)st->st_mtime;
     sx->stx_mtime.tv_nsec = (uint32_t)st->st_mtime_nsec;
     sx->stx_rdev_major = dev_major(st->st_rdev);
     sx->stx_rdev_minor = dev_minor(st->st_rdev);
