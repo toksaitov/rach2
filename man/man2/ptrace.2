@@ -10,7 +10,7 @@
 .Fn ptrace "int request" "pid_t pid" "void *addr" "void *data"
 .Sh DESCRIPTION
 .Nm ,
-number 26, lets one process, the tracer, stop the threads of another, its
+number 26 on i386 and 101 on x86-64, lets one process, the tracer, stop the threads of another, its
 tracees, read and change their memory and registers, and resume them, as
 GDB and strace do.
 .Fa pid
@@ -204,10 +204,11 @@ from 0, the debug registers
 .Va u_debugreg
 from 252; the floating-point valid mark reads 1 and the other fields 0.
 .It Dv PTRACE_GETREGS , PTRACE_SETREGS
-The 68-byte
+The
 .Vt user_regs_struct
 at
-.Fa data .
+.Fa data ,
+68 bytes on i386 and 216 on x86-64.
 A tracer changes only the flags a program may change; the data segment
 registers take a null selector, the user data selector or the TLS entry's,
 and CS and SS only the ones they have.
@@ -216,8 +217,13 @@ set at its exit stop or at the signal-delivery stop that follows; at the
 exit stop so does a result in EAX other than
 .Er -EINTR .
 .It Dv PTRACE_GETFPREGS , PTRACE_SETFPREGS
-The 108-byte
-.Vt user_i387_struct .
+The
+.Vt user_i387_struct :
+on i386 108 bytes in the
+.Ic fnsave
+layout, and on x86-64 the 512-byte
+.Ic fxsave
+image.
 .It Dv PTRACE_GETFPXREGS , PTRACE_SETFPXREGS
 The 512-byte
 .Ic fxsave
@@ -320,8 +326,11 @@ fails with
 .Er EINTR ,
 where Linux restarts it.
 .It Dv PTRACE_LISTEN
-For a seized tracee in a group stop's
-.Dv PTRACE_EVENT_STOP :
+For a seized tracee in a
+.Dv PTRACE_EVENT_STOP ,
+a group stop's or, as Linux checks only the event, one
+.Dv PTRACE_INTERRUPT
+made outside a group stop:
 the tracee stays stopped, as a stopped process does, until its process's
 stop ends with
 .Dv SIGCONT
@@ -450,7 +459,7 @@ or
 .Dv PTRACE_LISTEN
 for a tracee that was not seized, and
 .Dv PTRACE_LISTEN
-for one in any stop but a group stop's
+for one in any stop but a
 .Dv PTRACE_EVENT_STOP .
 .It Bq Er ENODEV
 A register set the processor lacks:
