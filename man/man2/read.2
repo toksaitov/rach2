@@ -1,4 +1,4 @@
-.Dd October 3, 2026
+.Dd October 4, 2026
 .Dt READ 2
 .Os
 .Sh NAME
@@ -27,7 +27,10 @@ bytes from
 .Fa fd
 into
 .Fa buf .
-A successful call may return fewer bytes than requested.
+A successful call may return fewer bytes than requested; a count past
+0x7ffff000, Linux's
+.Dv MAX_RW_COUNT ,
+reads at most that many, so that the count returned is never negative.
 A zero-length read checks that the descriptor exists, then returns zero
 without inspecting the buffer or checking the descriptor's read mode;
 an eventfd and a timerfd, which read whole eight-byte counts, refuse it

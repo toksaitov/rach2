@@ -1,4 +1,4 @@
-.Dd October 3, 2026
+.Dd October 4, 2026
 .Dt WRITE 2
 .Os
 .Sh NAME
@@ -27,7 +27,10 @@ bytes from
 .Fa buf
 to
 .Fa fd .
-A successful call may write fewer bytes than requested.
+A successful call may write fewer bytes than requested; a count past
+0x7ffff000, Linux's
+.Dv MAX_RW_COUNT ,
+writes at most that many, so that the count returned is never negative.
 The operation depends on the descriptor's backing object.
 .Ss Regular files
 A regular file is written through its mounted file system at the

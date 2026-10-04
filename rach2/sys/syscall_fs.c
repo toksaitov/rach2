@@ -868,7 +868,7 @@ long sys_ftruncate(isr_params_t *params)
 long sys_write(isr_params_t *params)
 {
     return write_fd((int)SC_ARG(params, 0), (const char __user *)SC_ARG(params, 1),
-                    USER_LEN32(SC_ARG(params, 2)));
+                    USER_RW_LEN(SC_ARG(params, 2)));
 }
 
 /**
@@ -4396,7 +4396,7 @@ long sys_read(isr_params_t *params)
         return read_ops(e, (char __user *)SC_ARG(params, 1), 0);
     }
     return read_fd((int)SC_ARG(params, 0), (char __user *)SC_ARG(params, 1),
-                   USER_LEN32(SC_ARG(params, 2)));
+                   USER_RW_LEN(SC_ARG(params, 2)));
 }
 
 /**
@@ -8794,14 +8794,14 @@ long ksys_pwrite64(int fd, const char __user *buf, uint32_t count, long long pos
 long sys_pread64(isr_params_t *params)
 {
     return ksys_pread64((int)SC_ARG(params, 0), (char __user *)SC_ARG(params, 1),
-                        USER_LEN32(SC_ARG(params, 2)), SC_SIGNED(params, 3));
+                        USER_RW_LEN(SC_ARG(params, 2)), SC_SIGNED(params, 3));
 }
 
 /** pwrite64(2) as a 64-bit architecture has it, pread64's arguments. */
 long sys_pwrite64(isr_params_t *params)
 {
     return ksys_pwrite64((int)SC_ARG(params, 0), (const char __user *)SC_ARG(params, 1),
-                         USER_LEN32(SC_ARG(params, 2)), SC_SIGNED(params, 3));
+                         USER_RW_LEN(SC_ARG(params, 2)), SC_SIGNED(params, 3));
 }
 
 /* The position preadv(2) and pwritev(2) take as two registers, low first:

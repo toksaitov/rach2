@@ -42,7 +42,7 @@ long sys_ia32_ftruncate64(isr_params_t *params)
 long sys_ia32_pread64(isr_params_t *params)
 {
     return ksys_pread64((int)SC_ARG(params, 0), (char __user *)SC_ARG(params, 1),
-                        USER_LEN32(SC_ARG(params, 2)),
+                        USER_RW_LEN(SC_ARG(params, 2)),
                         (long long)ia32_join(SC_ARG(params, 3), SC_ARG(params, 4)));
 }
 
@@ -50,7 +50,7 @@ long sys_ia32_pread64(isr_params_t *params)
 long sys_ia32_pwrite64(isr_params_t *params)
 {
     return ksys_pwrite64((int)SC_ARG(params, 0), (const char __user *)SC_ARG(params, 1),
-                         USER_LEN32(SC_ARG(params, 2)),
+                         USER_RW_LEN(SC_ARG(params, 2)),
                          (long long)ia32_join(SC_ARG(params, 3), SC_ARG(params, 4)));
 }
 

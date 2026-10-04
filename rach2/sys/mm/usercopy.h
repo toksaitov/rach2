@@ -23,6 +23,13 @@
  * a length past 4 GiB taken as the most that fits. */
 #define USER_LEN32(n) ((n) == (uint32_t)(n) ? (uint32_t)(n) : 0xFFFFFFFFu)
 
+/* The count of one read or write, at most Linux's MAX_RW_COUNT, the largest
+ * int rounded down to a page, so that the bytes it moves fit the signed
+ * 32-bit result the calls return: a larger count moves that many, as on
+ * Linux, and never reads as an error. */
+#define USER_RW_MAX    0x7FFFF000u
+#define USER_RW_LEN(n) ((n) > USER_RW_MAX ? USER_RW_MAX : (uint32_t)(n))
+
 /* Whether `v`, a result that is either a user address or a negative errno,
  * is the errno: one of the last 4095 values, as Linux's IS_ERR_VALUE has it.
  * A sign test is wrong, since on i686 an address above 2 GiB is negative as

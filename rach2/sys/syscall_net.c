@@ -1917,7 +1917,7 @@ static int32_t do_sendmsg(int fd, uintptr_t msg_ptr, int flags)
             if (one.iov_len == 0) {
                 continue;
             }
-            rc = do_sendto(fd, one.iov_base, (int)one.iov_len, flags, 0, 0);
+            rc = do_sendto(fd, one.iov_base, (int)USER_RW_LEN(one.iov_len), flags, 0, 0);
             if (rc < 0) {
                 return total ? (int32_t)total : rc;
             }
@@ -1939,8 +1939,9 @@ static int32_t do_sendmsg(int fd, uintptr_t msg_ptr, int flags)
         if (iovlen > 1) {
             return -EOPNOTSUPP;
         }
-        return do_sendto(fd, iovlen ? iov[0].iov_base : 0u, iovlen ? (int)iov[0].iov_len : 0, flags,
-                         name_ptr, (int)namelen);
+        return do_sendto(fd, iovlen ? iov[0].iov_base : 0u,
+                         iovlen ? (int)USER_RW_LEN(iov[0].iov_len) : 0, flags, name_ptr,
+                         (int)namelen);
     }
     for (i = 0; i < iovlen; i++) {
         uint32_t most = entry->sock->family == AF_NETLINK ? NETLINK_SEND_MAX : 1500u;
@@ -1991,14 +1992,14 @@ static int32_t unix_call(int call, fd_entry_t *e, const unsigned long *args)
     case SC_GETPEERNAME:
         return unix_getname(e, args[1], args[2], 1);
     case SC_SEND:
-        return unix_sendto(e, args[1], USER_LEN32(args[2]), (int)args[3], 0, 0);
+        return unix_sendto(e, args[1], USER_RW_LEN(args[2]), (int)args[3], 0, 0);
     case SC_RECV:
-        return unix_recvfrom(e, args[1], USER_LEN32(args[2]), (int)args[3], 0, 0);
+        return unix_recvfrom(e, args[1], USER_RW_LEN(args[2]), (int)args[3], 0, 0);
     case SC_SENDTO:
-        return unix_sendto(e, args[1], USER_LEN32(args[2]), (int)args[3], args[4],
+        return unix_sendto(e, args[1], USER_RW_LEN(args[2]), (int)args[3], args[4],
                            (uint32_t)args[5]);
     case SC_RECVFROM:
-        return unix_recvfrom(e, args[1], USER_LEN32(args[2]), (int)args[3], args[4], args[5]);
+        return unix_recvfrom(e, args[1], USER_RW_LEN(args[2]), (int)args[3], args[4], args[5]);
     case SC_SHUTDOWN:
         return unix_shutdown(e, (int)args[1]);
     case SC_SETSOCKOPT:
@@ -2163,9 +2164,11 @@ static int32_t socket_dispatch(int call, unsigned long *args)
     case SC_BIND:
         return do_bind((int)args[0], args[1], (int)args[2]);
     case SC_SENDTO:
-        return do_sendto((int)args[0], args[1], (int)args[2], (int)args[3], args[4], (int)args[5]);
+        return do_sendto((int)args[0], args[1], (int)USER_RW_LEN(args[2]), (int)args[3], args[4],
+                         (int)args[5]);
     case SC_RECVFROM:
-        return do_recvfrom((int)args[0], args[1], (int)args[2], (int)args[3], args[4], args[5]);
+        return do_recvfrom((int)args[0], args[1], (int)USER_RW_LEN(args[2]), (int)args[3], args[4],
+                           args[5]);
     case SC_PING:
         return do_ping((uint32_t)args[0]);
     case SC_PING_DATA: {
@@ -2198,9 +2201,9 @@ static int32_t socket_dispatch(int call, unsigned long *args)
     case SC_GETSOCKOPT:
         return do_getsockopt((int)args[0], (int)args[1], (int)args[2], args[3], args[4]);
     case SC_SEND:
-        return do_send((int)args[0], args[1], (int)args[2], (int)args[3]);
+        return do_send((int)args[0], args[1], (int)USER_RW_LEN(args[2]), (int)args[3]);
     case SC_RECV:
-        return do_recv((int)args[0], args[1], (int)args[2], (int)args[3]);
+        return do_recv((int)args[0], args[1], (int)USER_RW_LEN(args[2]), (int)args[3]);
     case SC_RECVMSG:
         return do_recvmsg((int)args[0], args[1], (int)args[2]);
     case SC_SENDMSG:
