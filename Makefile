@@ -624,18 +624,18 @@ krffs/recovery_authorized_keys: | krffs/authorized_keys
 # not make one stale; and an image built before this name existed, or built in
 # the same command that minted the key, carries a key under the plain name.
 # One left behind would be written to a stick by a later command that named it.
+# The key is one for both architectures, so the images of both go.
 .PHONY: no-recovery-key
 no-recovery-key:
 	rm -f krffs/recovery_authorized_keys
-	rm -f $(IMAGES_DIR)/rach2-recovery-with-key.krffs \
-	      $(IMAGES_DIR)/rach2-recovery-with-key.iso \
-	      $(IMAGES_DIR)/rach2-install-stick-with-key.img \
-	      $(IMAGES_DIR)/rach2-sealed-with-key.disk \
-	      $(IMAGES_DIR)/os-real-grub-with-key.disk \
-	      $(IMAGES_DIR)/rach2-recovery.krffs $(IMAGES_DIR)/rach2-recovery.iso \
-	      $(IMAGES_DIR)/rach2-install-stick.img \
-	      $(IMAGES_DIR)/install-test-stick.img \
-	      $(IMAGES_DIR)/rach2-sealed.disk $(IMAGES_DIR)/os-real-grub.disk
+	for d in $(addsuffix /images,$(ARCH_BUILDS)); do \
+	    rm -f $$d/rach2-recovery-with-key.krffs $$d/rach2-recovery-with-key.iso \
+	          $$d/rach2-install-stick-with-key.img $$d/rach2-sealed-with-key.disk \
+	          $$d/os-real-grub-with-key.disk \
+	          $$d/rach2-recovery.krffs $$d/rach2-recovery.iso \
+	          $$d/rach2-install-stick.img $$d/install-test-stick.img \
+	          $$d/rach2-sealed.disk $$d/os-real-grub.disk; \
+	done
 	@echo "no-recovery-key: the recovery system will answer nobody"
 
 # `make release`: the artifacts a person hands to somebody else, the install

@@ -51,4 +51,8 @@ endif
 # The build tree of this architecture, relative to the repository root, and
 # the install directory of the ported musl the guest programs link against.
 ARCH_BUILD  = build$(ARCH_SUFFIX)
+
+# The build trees of every architecture, for what spans them, as the one
+# recovery key does.
+ARCH_BUILDS = build build/x86_64
 ARCH_MUSL   = $(ARCH_VENDOR)/musl/install
