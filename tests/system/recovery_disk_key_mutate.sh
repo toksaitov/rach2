@@ -151,11 +151,11 @@ cmp "$work/fixed.init" "$work/installer-restored.init"
 
 # The recovery init starts the server with no key to let in, and then one turn
 # of its loop late, after its first test for a key.
-mutate "$init_source" 'if (sshd < 0 && anyone_to_let_in()) {' 'if (sshd < 0) {'
+mutate "$init_source" 'if (s->sshd.pid < 0 && anyone_to_let_in()) {' 'if (s->sshd.pid < 0) {'
 run_phase server-always 1 'FAIL: row 6c: init started an SSH server on a recovery system with no key'
 restore
-mutate "$init_source" 'if (sshd < 0 && anyone_to_let_in()) {' \
-    'if (sshd < 0 && (anyone_to_let_in() || turns > 0)) {'
+mutate "$init_source" 'if (s->sshd.pid < 0 && anyone_to_let_in()) {' \
+    'if (s->sshd.pid < 0 && (anyone_to_let_in() || s->sshd.spawned++ > 0)) {'
 run_phase server-late 1 'FAIL: row 6c: init started an SSH server on a recovery system with no key'
 restore
 run_phase server-restored 0 "$passed"
