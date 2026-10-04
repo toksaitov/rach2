@@ -99,15 +99,18 @@ static uint32_t crc32_of(const unsigned char *data, size_t length)
 
 /**
  * Find the BIOS boot partition of the GUID table on `f`: its first sector
- * in `*first` and its length in `*count`. Returns 0, or 1 having said why
- * not.
+ * in `*first` and its length in `*count`. The partition must lie in the
+ * table's usable sectors and after its primary entry array, since the core
+ * is written over the whole partition: a table whose checksums match can
+ * still name a partition over its own array. Returns 0, or 1 having said
+ * why not.
  */
 static int bios_boot_partition(FILE *f, unsigned long *first, unsigned long *count)
 {
     static unsigned char array[GPT_ARRAY_MAX];
     unsigned char header[SECTOR];
     uint32_t entries, size, header_size, crc;
-    uint64_t start, last;
+    uint64_t start, last, first_usable, last_usable, array_end;
     uint32_t i;
 
     if (fseek(f, SECTOR, SEEK_SET) != 0 || fread(header, 1, SECTOR, f) != SECTOR ||
@@ -135,6 +138,9 @@ static int bios_boot_partition(FILE *f, unsigned long *first, unsigned long *cou
         fprintf(stderr, "grub_embed: the GUID entry array does not read or check\n");
         return 1;
     }
+    first_usable = r64(header + 40);
+    last_usable = r64(header + 48);
+    array_end = r64(header + 72) + ((uint64_t)entries * size + SECTOR - 1) / SECTOR;
     for (i = 0; i < entries; i++) {
         const unsigned char *e = array + (size_t)i * size;
 
@@ -143,7 +149,8 @@ static int bios_boot_partition(FILE *f, unsigned long *first, unsigned long *cou
         }
         start = r64(e + 32);
         last = r64(e + 40);
-        if (start < 2 || last < start || last - start + 1 > 0xFFFFFFFFu) {
+        if (start < 2 || start < first_usable || start < array_end || last < start ||
+            last > last_usable || last - start + 1 > 0xFFFFFFFFu) {
             fprintf(stderr, "grub_embed: the BIOS boot partition's range is not one this "
                             "writes\n");
             return 1;
