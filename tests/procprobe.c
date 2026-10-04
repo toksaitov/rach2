@@ -80,6 +80,24 @@ static void puts(const char *s)
 
 static int fails = 0;
 
+/** Write `label` and `v` in decimal, with no newline. */
+static void say_number(const char *label, long v)
+{
+    char digits[24];
+    int i = (int)sizeof(digits);
+    unsigned long u = v < 0 ? 0ul - (unsigned long)v : (unsigned long)v;
+
+    do {
+        digits[--i] = (char)('0' + u % 10u);
+        u /= 10u;
+    } while (u != 0 && i > 1);
+    if (v < 0) {
+        digits[--i] = '-';
+    }
+    syscall3(SYS_WRITE, STDOUT_FILENO, (long)label, (int)strlen(label));
+    syscall3(SYS_WRITE, STDOUT_FILENO, (long)(digits + i), (int)sizeof(digits) - i);
+}
+
 static void check(int cond, const char *msg)
 {
     if (!cond) {
@@ -331,6 +349,21 @@ static void spin(long ms)
         syscall3(SYS_CLOCK_GETTIME, CLOCK_MONOTONIC, (long)&now, 0);
         elapsed = (now.tv_sec - start.tv_sec) * 1000 + (now.tv_nsec - start.tv_nsec) / 1000000L;
     }
+}
+
+/** The processors /proc/stat has a line for, `cpu0` and on, or 0. */
+static int processors(void)
+{
+    static char t[16384];
+    int n = slurp("/proc/stat", t, (int)sizeof(t)), i, count = 0;
+
+    for (i = 0; i + 3 < n; i++) {
+        if ((i == 0 || t[i - 1] == '\n') && t[i] == 'c' && t[i + 1] == 'p' && t[i + 2] == 'u' &&
+            t[i + 3] >= '0' && t[i + 3] <= '9') {
+            count++;
+        }
+    }
+    return count;
 }
 
 /**
@@ -1461,9 +1494,27 @@ void probe_main(unsigned long *sp)
               contains(buf, n, "\npswpout 0\n"),
           "/proc/vmstat has the free pages and the kilobytes read from the disks, as vmstat reads "
           "it");
-    n = slurp("/sys/devices/system/cpu/online", buf, (int)sizeof(buf));
-    check(n == 2 && buf[0] == '0' && slurp("/sys/devices/system/cpu/offline", buf, 8) == 1,
-          "/sys/devices/system/cpu has processor 0 online and none offline");
+    {
+        int cpus = processors(), last = cpus - 1;
+        char want[8];
+        int w = 0;
+
+        want[w++] = '0';
+        if (last > 0) {
+            want[w++] = '-';
+            if (last >= 10) {
+                want[w++] = (char)('0' + last / 10);
+            }
+            want[w++] = (char)('0' + last % 10);
+        }
+        want[w++] = '\n';
+        want[w] = '\0';
+        n = slurp("/sys/devices/system/cpu/online", buf, (int)sizeof(buf));
+        check(cpus >= 1 && n == w && contains(buf, n, want) &&
+                  slurp("/sys/devices/system/cpu/offline", buf, 8) == 1,
+              "/sys/devices/system/cpu has the processors /proc/stat lists online, as 0 or "
+              "0-N, and none offline");
+    }
 
     mounts_rows(buf, (int)sizeof(buf));
 
@@ -1486,9 +1537,11 @@ void probe_main(unsigned long *sp)
     }
 
     /* Idle against busy, over two intervals of the same length. Sleeping parks
-     * the processor and running does not, so the halves must move in opposite
+     * the processors and running does not, so the halves must move in opposite
      * directions; and the two together must account for every tick the timer
-     * delivered.
+     * delivered, which is the boot processor's count in /proc/uptime for each
+     * processor. A spinner runs on every processor, so that busy is ahead of
+     * idle however many there are.
      *
      * Busy is read from /proc/stat's own columns, user and system, rather than
      * worked out as the total less the idle: defined that way the sum is an
@@ -1499,15 +1552,25 @@ void probe_main(unsigned long *sp)
         int t0, i0, t1, i1, t2, i2;
         int b0, b1, b2;
         int idle_slept, busy_slept, idle_spun, busy_spun;
+        int cpus = processors(), k;
 
         ticks_now(&t0, &i0);
         b0 = busy_ticks_now();
         nap(600);
         ticks_now(&t1, &i1);
         b1 = busy_ticks_now();
+        for (k = 1; k < cpus; k++) {
+            if (syscall1(SYS_FORK, 0) == 0) {
+                spin(600);
+                sys_exit(0);
+            }
+        }
         spin(600);
         ticks_now(&t2, &i2);
         b2 = busy_ticks_now();
+        for (k = 1; k < cpus; k++) {
+            syscall3(SYS_WAITPID, -1, 0, 0);
+        }
 
         check(t0 >= 0 && i0 >= 0 && t1 >= 0 && i1 >= 0 && t2 >= 0 && i2 >= 0,
               "/proc/uptime parses on every read");
@@ -1529,12 +1592,21 @@ void probe_main(unsigned long *sp)
              * this sum's, and each read is a system call, so the slack is the
              * ticks those calls can span on a loaded machine and not a
              * measurement of anything. */
-            int drift = (t2 - t0) - ((i2 - i0) + (b2 - b0));
+            int drift = (t2 - t0) * cpus - ((i2 - i0) + (b2 - b0));
 
             if (drift < 0) {
                 drift = -drift;
             }
-            check(drift <= 4, "every delivered tick was counted once, as idle or as busy");
+            check(drift <= 4 * cpus, "every delivered tick was counted once, as idle or as busy");
+            if (drift > 4 * cpus) {
+                say_number("  ticks: uptime ", t2 - t0);
+                say_number(", processors ", cpus);
+                say_number(", idle ", i2 - i0);
+                say_number(", busy ", b2 - b0);
+                puts("; /proc/stat now:");
+                n = slurp("/proc/stat", buf, (int)sizeof(buf));
+                syscall3(SYS_WRITE, STDOUT_FILENO, (long)buf, n > 0 ? n : 0);
+            }
         }
     }
 
