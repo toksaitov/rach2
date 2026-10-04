@@ -103,14 +103,17 @@ probe 4 "" 4
 probe 4 "maxcpus=2" 2
 
 # The debug shell's preemption test with two processors: two kernel threads
-# that print by turns, each begun by its first switch holding the big lock
-# once, so that the tick that preempts it can take the lock again.
+# that print by turns on the shell's processor, which the test binds them and
+# the shell to, each begun by its first switch holding the big lock once, so
+# that the tick that preempts it can take the lock again. Each of
+# these three rows waits for its token as a step: the harness reads only three
+# seconds past the last step, and --ok judges what it read.
 "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
     --qemu-arg=-cpu --qemu-arg=max --qemu-arg=-smp --qemu-arg=2 \
     --append "rach2.rescue" --timeout "$(scaled 120)" --steptmo "$(scaled 90)" \
     --ok "Preemptive scheduling test passed!" --never "test FAILED" \
     --log "$DISK.preempt.log" \
-    "expect=Type 'help'" "send=preempt" ||
+    "expect=Type 'help'" "send=preempt" "expect=Preemptive scheduling test passed!" ||
     fail "the debug shell's preemption test did not pass with two processors; see $DISK.preempt.log"
 echo "smp-test: ok: the debug shell's two threads were preempted by turns"
 
@@ -122,7 +125,8 @@ echo "smp-test: ok: the debug shell's two threads were preempted by turns"
     --append "rach2.rescue" --timeout "$(scaled 120)" --steptmo "$(scaled 90)" \
     --ok "exited with status 0, returning to kernel shell" \
     --log "$DISK.usermode.log" \
-    "expect=Type 'help'" "send=usermode" "expect=Hello from ring 3!" ||
+    "expect=Type 'help'" "send=usermode" "expect=Hello from ring 3!" \
+    "expect=exited with status 0, returning to kernel shell" ||
     fail "the debug shell's usermode payload did not write and exit; see $DISK.usermode.log"
 echo "smp-test: ok: the usermode payload wrote from ring 3 and exited to the shell"
 
@@ -134,7 +138,8 @@ echo "smp-test: ok: the usermode payload wrote from ring 3 and exited to the she
     --append "rach2.rescue" --timeout "$(scaled 120)" --steptmo "$(scaled 90)" \
     --ok "panic: stopped: the machine reported a fault" \
     --log "$DISK.nmi.log" \
-    "expect=Type 'help'" "nmi" "expect=isr: hardware fault: non-maskable interrupt" ||
+    "expect=Type 'help'" "nmi" "expect=isr: hardware fault: non-maskable interrupt" \
+    "expect=panic: stopped: the machine reported a fault" ||
     fail "an NMI on two processors did not stop the machine as a fault of the machine; see $DISK.nmi.log"
 echo "smp-test: ok: an NMI stopped the machine as a fault of the machine"
 
@@ -160,7 +165,7 @@ drive_expect 'NPROC_OK' "$(scaled 30)" || fail "nproc does not count four proces
 # shellcheck disable=SC2016 # the guest's shell expands these, not this one
 drive_type 'cd && rm -rf smpbuild && mkdir smpbuild && cd smpbuild && cat /proc/stat > before && for i in 1 2 3 4; do for f in ish ish_cstring_utilities ish_shell_utilities ish_syscalls; do /bin/cc -c -o $i-$f.o /src/ish/$f.c & done; done; wait; cat /proc/stat > after; ls *.o | wc -l | grep -qx 16 && echo BUILD_""DONE'
 drive_expect 'BUILD_DONE' "$(scaled 600)" || fail "the parallel build did not make its sixteen objects"
-drive_type "awk '/^cpu[0-9]/ { if (FILENAME == \"before\") u[\$1] = \$2; else if (\$2 > u[\$1]) grew++; else stalled++ } END { exit !(grew == 4 && !stalled) }' before after && echo USER_TIME_""GREW"
+drive_type "awk '/^cpu[0-9]/ { if (FILENAME == \"before\") u[\$1] = \$2; else if (\$2 > u[\$1]) grew++; else stalled++ } END { exit !(grew == 4 && !stalled) }' before after && echo USER_TIME_\"\"GREW"
 drive_expect 'USER_TIME_GREW' "$(scaled 30)" || fail "a processor's user ticks did not grow during the parallel build"
 echo "smp-test: ok: a parallel build ran on every one of four processors"
 
