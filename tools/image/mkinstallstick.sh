@@ -91,31 +91,39 @@ EFISUM="$OUT.$$.bootx64.efi.sha256"
 trap 'rm -f "$NEW" "$VOL" "$MAN" "$EFI" "$EFISUM"' EXIT
 rm -f "$NEW"
 
+# The SHA-256 of FILE, named WHAT in a diagnostic, with the hash's own status
+# checked: `shasum | cut` under `set -e` reports the status of `cut`, so a
+# hash that was never taken would be written as an empty field and the stick
+# would carry a digest nothing can match.
+sha256_of() { # sha256_of FILE WHAT
+    sum_line=$(shasum -a 256 "$1") || {
+        echo "mkinstallstick: $2's hash could not be taken" >&2
+        return 1
+    }
+    sum=${sum_line%% *}
+    case "$sum" in
+        "" | *[!0-9a-f]*)
+            echo "mkinstallstick: $2's hash is '$sum', not hexadecimal digits" >&2
+            return 1
+            ;;
+    esac
+    [ "${#sum}" = 64 ] || {
+        echo "mkinstallstick: $2's hash is $sum, not 64 hexadecimal digits" >&2
+        return 1
+    }
+    printf '%s\n' "$sum"
+}
+
 # The pinned EFI image, copied and the copy verified, as every consumer of a
 # pinned GRUB image does.
 cp "$REPO/vendor/grub/bootx64.efi" "$EFI"
 sh "$REPO/vendor/grub/verify_grub.sh" "bootx64.efi=$EFI"
-efi_sum=$(shasum -a 256 "$EFI" | cut -d' ' -f1)
+efi_sum=$(sha256_of "$EFI" bootx64.efi) || exit 1
 echo "$efi_sum  bootx64.efi" > "$EFISUM"
 
 # The manifest the installer reads: the image's name, its length in bytes and
 # its SHA-256, one field a line so a shell reads it with `read`.
-# The hash's own status is checked: `shasum | cut` under `set -e` reports the
-# status of `cut`, so a hash that was never taken would be written as an empty
-# field and the stick would carry a manifest nothing can match.
-sum_line=$(shasum -a 256 "$DISK")
-sum=$(printf '%s' "$sum_line" | cut -d' ' -f1)
-case "$sum" in
-    [0-9a-f][0-9a-f]*) ;;
-    *)
-        echo "mkinstallstick: the image's hash could not be taken" >&2
-        exit 1
-        ;;
-esac
-[ "${#sum}" = 64 ] || {
-    echo "mkinstallstick: the image's hash is $sum, not 64 hexadecimal digits" >&2
-    exit 1
-}
+sum=$(sha256_of "$DISK" "the image") || exit 1
 {
     echo "image $name"
     echo "bytes $disk_bytes"
