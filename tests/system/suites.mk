@@ -1787,7 +1787,7 @@ PROCFILES_DISK = $(IMAGES_DIR)/procfiles-test.disk
 run-procfiles: $(DEMO_CREDS) rach2 tests utils krffs busybox os-real-image test-image $(HOSTPEER) $(RUNUTIL)
 	$(MKDISK) krffs/manifests/disk-test.manifest $(PROCFILES_DISK) 64 48
 	sh tests/system/suites/procfiles.sh $(BOOT_KERNEL) $(TEST_IMAGE) \
-	    $(PROCFILES_DISK) $(OS_REAL_IMAGE) root "`cat krffs/rach2_demo_password`" 18 \
+	    $(PROCFILES_DISK) $(OS_REAL_IMAGE) root "`cat krffs/rach2_demo_password`" $(OS_REAL_MIB) \
 	    $(PROCFILES_PORT)
 # `tests/run exitline`: the plain process-exit line is printed under the debug
 # shell and nowhere else. Four boots: an init image that must stay quiet while a
