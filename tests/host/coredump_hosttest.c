@@ -14,11 +14,12 @@
  * headers must still describe the regions as they were taken, each once,
  * and nothing may be read from the freed array, which AddressSanitizer
  * judges. The wait for the other threads is a model that parks them: the
- * notes must be built after it, with a status for the parked thread, and the
+ * notes must be built after it, with a status for the parked thread whose
+ * registers are read only once it has parked, and the
  * regions it leaves are the ones the file written after records; an execve
  * waiting for the dumping thread ends it at once. A thread that parks saves
  * its floating-point state, marks itself parked and wakes the dumping thread
- * before it waits, and the wait ends when the core is written.
+ * before it waits, and the wait goes on until the core is written.
  *
  * A page of a mapped file the process never touched is read for the file,
  * where one of anonymous memory is a hole.
@@ -76,10 +77,13 @@ void wq_wake_all(wait_queue_t *wq)
 }
 
 /** The rows judge the regions, not the notes: the registers are zeros and
- * no floating-point note is written. */
+ * no floating-point note is written. Another thread's are read only while
+ * it is parked, or waits in an execve for the dumping thread, when its
+ * saved state does not change. */
 void arch_regs_get(const struct process *t, unsigned long *r)
 {
-    (void)t;
+    CHECK(t != &sibling || sibling.core_parked || group.exec_task == &sibling,
+          "another thread's registers are read only once it has parked");
     k_memset(r, 0, ARCH_GREGS * sizeof(unsigned long));
 }
 
@@ -205,6 +209,7 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     }
     CHECK(cond == core_done && self.core_parked && fpu_saves == 1 && wakes == 1,
           "a parked thread has saved its state and woken the dumping thread");
+    CHECK(!cond(arg), "its wait goes on while the core is being written");
     group.core_dumping = 0;
     CHECK(cond(arg), "its wait ends when the core is written");
     return 0;
