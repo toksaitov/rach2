@@ -401,10 +401,10 @@ path enters a mount being mounted or unmounted.
 .It Bq Er EFAULT
 A required buffer cannot be read or written.
 The raw
-.Fn gettimeofday
-timeval or
 .Fn clock_gettime
-timespec is null, or a nonnull
+timespec is null, a nonnull
+.Fn gettimeofday
+timeval cannot be written, or a nonnull
 .Fn clock_getres
 timespec cannot be written.
 For
