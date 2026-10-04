@@ -81,7 +81,11 @@ void smp_kernel_mapping_changed(void);
  */
 void smp_space_release(const struct page_dir *dir);
 
-/** Stop every other processor for good: for a panic and a power off. */
+/**
+ * Stop every other processor for good, for a panic and a power off, and
+ * wait, a second at most for each, until each has taken the stop, so that
+ * none is still writing the log or the screen when the caller does.
+ */
 void smp_stop_others(void);
 
 /** Make the boot processor's idle task and start the others the firmware

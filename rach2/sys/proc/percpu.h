@@ -39,6 +39,7 @@ struct percpu {
     volatile unsigned int tlb_request;          /* drop `tlb_page`'s translation */
     volatile uintptr_t tlb_page;                /* a user page, or CPU_TLB_ALL */
     volatile unsigned int stop_request;         /* stop for good */
+    volatile unsigned int stopped;              /* it took the stop: no more writes */
     const struct page_dir *volatile space_drop; /* a `space` to give up for the kernel's */
     volatile int space_stale;                   /* a shootdown passed `space` by */
     uint32_t kernel_gen;                        /* the kernel mappings it last flushed for */

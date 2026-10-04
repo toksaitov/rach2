@@ -11,8 +11,10 @@
 # With --check it compiles and runs the unmodified test alone. The faults:
 # a shootdown that interrupts idle processors too, as before lazy TLB; one
 # that passes every processor by, which leaves a running thread with a
-# translation of a freed page; and a release that interrupts none, which
-# leaves an idle processor on a freed directory.
+# translation of a freed page; a release that interrupts none, which
+# leaves an idle processor on a freed directory; and a stop that does not
+# wait for the processors it asks, which leaves one writing the log under
+# the panic's record.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
@@ -82,7 +84,7 @@ run_phase()
 echo "smp-proof: logs: $work"
 run_phase fixed 0 'smp-hosttest: result: pass'
 [ "$#" -eq 0 ] || exit 0
-for fault in no-skip skip-all no-release; do
+for fault in no-skip skip-all no-release no-stop-wait; do
     python3 - "$smp" "$fault" <<'PY'
 from pathlib import Path
 import sys
@@ -94,6 +96,7 @@ function = {
     'no-skip': 'void smp_tlb_shootdown(const struct page_dir *dir, uintptr_t va)\n{',
     'skip-all': 'void smp_tlb_shootdown(const struct page_dir *dir, uintptr_t va)\n{',
     'no-release': 'void smp_space_release(const struct page_dir *dir)\n{',
+    'no-stop-wait': 'void smp_stop_others(void)\n{',
 }[fault]
 changes = {
     'no-skip': (
@@ -105,6 +108,9 @@ changes = {
     'no-release': (
         '    if (cpus_online < 2) {\n',
         '    if (cpus_online > 0) {\n'),
+    'no-stop-wait': (
+        '        for (waited = 0; asked[c] && ',
+        '        for (waited = 0; 0 && asked[c] && '),
 }
 old, new = changes[fault]
 if source.count(function) != 1:
@@ -127,10 +133,13 @@ PY
         no-release)
             message="smp-hosttest: fail: before a directory is freed, an idle processor that kept it gives it up for the kernel's"
             ;;
+        no-stop-wait)
+            message='smp-hosttest: fail: and waits a second for the one that does not take it, none for those that do'
+            ;;
     esac
     run_phase "$fault-mutated" 1 "$message"
     cleanup
     run_phase "$fault-restored" 0 'smp-hosttest: result: pass'
     cmp "$work/smp.saved" "$smp"
 done
-echo 'smp-proof: result: pass: the three faults failed their rows and the restored source passed'
+echo 'smp-proof: result: pass: the four faults failed their rows and the restored source passed'

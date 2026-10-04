@@ -42,16 +42,22 @@ struct percpu cpu_table[NR_CPUS];
 process_t *proc_idle;
 page_dir_t *_kernel_dir;
 
-/* The interrupts each processor was sent, and the page of its last TLB
- * request. */
+/* The interrupts each processor was sent, the page of its last TLB
+ * request, whether it takes a stop it is asked for, and the microseconds
+ * waited. */
 static int ipis[NR_CPUS];
 static uintptr_t ipi_page[NR_CPUS];
+static int takes_stop[NR_CPUS];
+static unsigned long waited_us;
 
 void platform_cpu_ipi(int cpu)
 {
     struct percpu *c = &cpu_table[cpu];
 
     ipis[cpu]++;
+    if (c->stop_request && takes_stop[cpu]) {
+        c->stopped = 1;
+    }
     if (c->tlb_request) {
         ipi_page[cpu] = c->tlb_page;
         c->tlb_request = 0;
@@ -114,7 +120,7 @@ void sched_idle_loop(void)
 
 void k_udelay(uint32_t usec)
 {
-    (void)usec;
+    waited_us += usec;
 }
 
 void klog(int level, const char *subsystem, const char *format, ...)
@@ -232,6 +238,15 @@ int main(void)
         "before a directory is freed, an idle processor that kept it gives it up for the kernel's");
     check(ipis[1] == 0 && ipis[3] == 0 && cpu_table[1].space == DIR_B,
           "a release leaves processors in other directories alone");
+
+    takes_stop[1] = takes_stop[3] = 1;
+    waited_us = 0;
+    smp_stop_others();
+    check(cpu_table[1].stop_request && cpu_table[2].stop_request && cpu_table[3].stop_request &&
+              !cpu_table[0].stop_request,
+          "a stop asks every other processor");
+    check(waited_us == 1000000ul,
+          "and waits a second for the one that does not take it, none for those that do");
 
     if (fails) {
         printf("smp-hosttest: result: fail: %d rows\n", fails);

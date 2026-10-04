@@ -115,6 +115,7 @@ void smp_service(void)
 
     if (cpu->stop_request) {
         cpu->online = 0;
+        cpu->stopped = 1;
         arch_stop();
     }
     if (cpu->tlb_request) {
@@ -220,16 +221,30 @@ void smp_kernel_mapping_changed(void)
     this_cpu()->kernel_gen = ++kernel_gen;
 }
 
+/* How long a stop waits for each processor asked to take it: one with its
+ * interrupts off takes it when it next turns them on or spins in a lock,
+ * and one that never does, a processor stuck, is left after a second, as
+ * Linux's panic leaves one. */
+#define STOP_WAIT_US 1000000u
+
 void smp_stop_others(void)
 {
     int me = (int)arch_cpu_id();
-    int c;
+    int c, asked[NR_CPUS];
+    uint32_t waited;
 
     for (c = 0; c < NR_CPUS; c++) {
-        if (c != me && cpu_table[c].online) {
+        asked[c] = c != me && cpu_table[c].online;
+        if (asked[c]) {
             cpu_table[c].stop_request = 1;
             cpu_table[c].online = 0;
             platform_cpu_ipi(c);
+        }
+    }
+    for (c = 0; c < NR_CPUS; c++) {
+        for (waited = 0; asked[c] && !cpu_table[c].stopped && waited < STOP_WAIT_US;
+             waited += 10u) {
+            k_udelay(10);
         }
     }
 }
