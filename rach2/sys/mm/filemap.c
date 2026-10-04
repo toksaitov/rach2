@@ -541,7 +541,7 @@ void filemap_shmem_cut(struct shmem *sh, uint32_t first)
 
         for (i = 0; vm && i < vm->count; i++) {
             const vma_t *r = &vm->vmas[i];
-            uint32_t pages = (uint32_t)((r->end - r->start) / PAGE_SIZE);
+            uintptr_t pages = (r->end - r->start) / PAGE_SIZE;
             uintptr_t from;
 
             if (r->type != VM_SHARED || !r->file ||
@@ -550,7 +550,7 @@ void filemap_shmem_cut(struct shmem *sh, uint32_t first)
                 (r->pgoff < first && pages <= first - r->pgoff)) {
                 continue;
             }
-            from = r->pgoff < first ? r->start + (first - r->pgoff) * PAGE_SIZE : r->start;
+            from = r->pgoff < first ? r->start + (uintptr_t)(first - r->pgoff) * PAGE_SIZE : r->start;
             unmap_user_range(p->mm->dir, from, r->end);
         }
     }

@@ -1,33 +1,34 @@
 /**
  * File mappings, shared mappings, mremap and madvise.
  *
- * A private mapping of a file reads the file's bytes, including a second
- * page and zeros past the end; a store changes the mapping and not the file;
- * the mapping outlives the descriptor it was made from; a child after fork
- * sees the parent's bytes and its own stores stay its own. A shared
- * anonymous mapping and a shared mapping of a file in /dev/shm carry a
- * child's store to the parent, and a store through the mapping of the file
- * reaches read(2), and after a truncation and a growth a write to the file
- * is seen through the mapping. mprotect will not make a shared mapping of a
- * file opened read-only writable, and will a private one. Shared anonymous
- * memory ignores a raw mmap2's page offset (mmap's, in bytes, on x86-64), a
- * file's offset whose last page would not fit in 32 bits is EOVERFLOW, and a
- * page of a file in memory past its end is never backed. mremap without
- * MREMAP_MAYMOVE does not grow a mapping into the one after it, and with the
- * flag moves the mapping with its bytes. A shrink in place keeps the bytes of
- * the page it keeps and frees the two pages it cuts: MAP_FIXED_NOREPLACE maps
- * them again, and the byte stored in them before reads as zero. mremap refuses
- * an old length that would wrap past the end of memory, leaving the mapping; a
- * fixed mremap that shrinks a mapping is held to RLIMIT_AS by what it leaves;
- * madvise(MADV_DONTNEED) gives a private anonymous mapping zero pages
- * again, and madvise and msync refuse a length that would round up to 0. A
- * write through /proc/self/mem to a read-only page a fork shared leaves the
- * page read-only. On an ext2 root, a shared mapping of a file carries a
- * child's store to the parent, a store to read(2), a write(2) to the
- * mapping without losing a store beside it, and its stores to the file
- * after munmap and after a mapper's exit; on the KRFFS root, one that may be
- * written is ENODEV, and a read-only one through a descriptor open for
- * writing may not be made writable.
+ * A private mapping of a file reads the file's bytes, including a second page
+ * and zeros past the end; a store changes the mapping and not the file; the
+ * mapping outlives the descriptor it was made from; a child after fork sees the
+ * parent's bytes and its own stores stay its own. A shared anonymous mapping
+ * and a shared mapping of a file in /dev/shm carry a child's store to the
+ * parent, and a store through the mapping of the file reaches read(2), and
+ * after a truncation and a growth a write to the file is seen through the
+ * mapping. On x86-64 a truncation takes out of a mapping of a file of 4 GiB and
+ * a page, cut to 4 GiB, the last page alone. mprotect will not make a shared
+ * mapping of a file opened read-only writable, and will a private one. Shared
+ * anonymous memory ignores a raw mmap2's page offset (mmap's, in bytes, on
+ * x86-64), a file's offset whose last page would not fit in 32 bits is
+ * EOVERFLOW, and a page of a file in memory past its end is never backed.
+ * mremap without MREMAP_MAYMOVE does not grow a mapping into the one after it,
+ * and with the flag moves the mapping with its bytes. A shrink in place keeps
+ * the bytes of the page it keeps and frees the two pages it cuts:
+ * MAP_FIXED_NOREPLACE maps them again, and the byte stored in them before reads
+ * as zero. mremap refuses an old length that would wrap past the end of memory,
+ * leaving the mapping; a fixed mremap that shrinks a mapping is held to
+ * RLIMIT_AS by what it leaves; madvise(MADV_DONTNEED) gives a private anonymous
+ * mapping zero pages again, and madvise and msync refuse a length that would
+ * round up to 0. A write through /proc/self/mem to a read-only page a fork
+ * shared leaves the page read-only. On an ext2 root, a shared mapping of a file
+ * carries a child's store to the parent, a store to read(2), a write(2) to the
+ * mapping without losing a store beside it, and its stores to the file after
+ * munmap and after a mapper's exit; on the KRFFS root, one that may be written
+ * is ENODEV, and a read-only one through a descriptor open for writing may not
+ * be made writable.
  *
  * Prints "MAPMUSL OK" on success and "MAPMUSL FAIL (detail)" otherwise.
  */
@@ -200,6 +201,41 @@ static int truncated_shared(void)
     unlink(SHM_PATH);
     return 0;
 }
+
+#if defined __x86_64__
+/* A truncation's cut at x86-64's widths. Of a file of 4 GiB and a page,
+   truncated to 4 GiB, whose offset in bytes passes 32 bits, only the last
+   page is taken out, and the first stays in memory, as mincore reports. */
+static int truncated_wide(void)
+{
+    const size_t four = (size_t)1 << 32;
+    unsigned char in = 0;
+    char *m;
+    int fd = open(SHM_PATH, O_RDWR | O_CREAT | O_TRUNC, 0600);
+
+    if (fd < 0 || ftruncate(fd, (off_t)(four + PAGE)) != 0) {
+        return fail("a file in /dev/shm of 4 GiB and a page");
+    }
+    m = mmap(NULL, four + PAGE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (m == MAP_FAILED) {
+        return fail("mmap of a file in /dev/shm of 4 GiB and a page");
+    }
+    m[0] = 'a';
+    m[four] = 'b';
+    if (ftruncate(fd, (off_t)four) != 0 || mincore(m, PAGE, &in) != 0 || !(in & 1)) {
+        return fail("a truncation to 4 GiB took the mapping's first page out");
+    }
+    munmap(m, four + PAGE);
+    close(fd);
+    unlink(SHM_PATH);
+    return 0;
+}
+#else
+static int truncated_wide(void)
+{
+    return 0;
+}
+#endif
 
 /* A shared mapping of a file opened read-only may never be written:
    mprotect refuses write with EACCES, since stores through the mapping
@@ -526,8 +562,8 @@ static int root_shared(void)
 
 int main(void)
 {
-    if (private_file() || shared() || root_shared() || truncated_shared() || readonly_shared() ||
-        offsets() || remaps() || forced_write() || remap_limit()) {
+    if (private_file() || shared() || root_shared() || truncated_shared() || truncated_wide() ||
+        readonly_shared() || offsets() || remaps() || forced_write() || remap_limit()) {
         return 1;
     }
     printf("MAPMUSL OK\n");
