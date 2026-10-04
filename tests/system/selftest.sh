@@ -21,8 +21,9 @@ RACH2_KERNEL=""
 export RACH2_KERNEL
 unset RACH2_TIMEOUT_FACTOR RACH2_IDLE_TIMEOUT RACH2_STOP_ON_FAIL
 # The stand-in machines are named qemu-system-i386, the emulator the harness
-# and the runner use when no architecture is set, so a caller's is dropped.
-unset ARCH RACH2_ARCH RACH2_QEMU RACH2_CPUS
+# and the runner use when no architecture is set, so a caller's is dropped,
+# with the make flags tests/run gives it.
+unset ARCH RACH2_ARCH RACH2_QEMU RACH2_CPUS MAKEFLAGS MFLAGS
 
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/rach2-selftest.XXXXXX")

@@ -1,9 +1,10 @@
 #!/bin/sh
 # Build real targets with private link inputs and check each incremental link.
 # The fixture is i686's, its compiler, linker script and musl, whatever ARCH
-# the run that starts it is for.
+# the run that starts it is for, in the environment or in the flags of the
+# make that runs a suite, which tests/run gives ARCH.
 set -eu
-unset ARCH
+unset ARCH MAKEFLAGS MFLAGS
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$REPO"
 mkdir -p build

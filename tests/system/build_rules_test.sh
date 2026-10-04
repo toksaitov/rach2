@@ -47,8 +47,9 @@
 #
 set -eu
 # The fixture lists i686 and x86-64 sources by naming each architecture, so
-# none comes from the environment of the run that starts it.
-unset ARCH
+# none comes from the environment of the run that starts it, nor from the
+# flags of the make that runs a suite, which tests/run gives ARCH.
+unset ARCH MAKEFLAGS MFLAGS
 
 case ${1:-} in
     '') mutate=0 ;;

@@ -1,9 +1,10 @@
 #!/bin/sh
 # Exercise the root image rule with a compiled probe in a private tree, the
 # i686 one whatever ARCH the run that starts it is for: neither the
-# architecture nor the path map an x86-64 make exports reaches the tree.
+# architecture, in the environment or in the make flags tests/run gives it,
+# nor the path map an x86-64 make exports reaches the tree.
 set -eu
-unset ARCH RACH2_ARCH RACH2_PATH_MAP
+unset ARCH RACH2_ARCH RACH2_PATH_MAP MAKEFLAGS MFLAGS
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
