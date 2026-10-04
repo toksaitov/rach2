@@ -18,14 +18,12 @@
 extern int printf(const char *fmt, ...);
 
 #include "../../rach2/sys/arch/x86/smbios.h"
+#include "../../rach2/sys/mm/paging.h"
 
 /* A table above the identity-mapped window is read through a mapping, and
  * `smbios.c` asks for one here. The fixtures below are handed to the reader
- * directly, so this is never called; the types are the kernel's `uintptr_t`
- * and `size_t`, both `unsigned int`. */
-unsigned int map_mmio(unsigned int phys_addr, unsigned int size);
-
-unsigned int map_mmio(unsigned int phys_addr, unsigned int size)
+ * directly, so this is never called. */
+uintptr_t map_mmio(uintptr_t phys_addr, size_t size)
 {
     (void)phys_addr;
     (void)size;

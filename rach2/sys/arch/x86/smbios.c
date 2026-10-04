@@ -236,7 +236,7 @@ static int table_of(const uint8_t *anchor, uint64_t *at, uint32_t *len)
  */
 static const uint8_t *table_at(uint64_t at, uint32_t len)
 {
-#if defined(__x86_64__)
+#if defined(__x86_64__) && !defined(RACH2_HOSTTEST)
     (void)len;
     return (const uint8_t *)MMU_VIRT(at);
 #else
