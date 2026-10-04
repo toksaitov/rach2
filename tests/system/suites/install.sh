@@ -209,7 +209,7 @@ run_pass() {
     step "rach2 login:" 1 "root"
     step "Password:" 1 "$ROOTPASSWORD"
     step "Password:" 1 "busybox grep -o 'rach2.slot=[a-z]*' /proc/cmdline | busybox sed s/slot/slotA${P}/"
-    step "rach2.slotA${P}=candidate" 1 "cd /src/rach2 && busybox sed -i 's/${OLDMARK}/${MARK}/' kernel.c && busybox grep -c '${MARK}' kernel.c | busybox sed s/^/SED${P}N/"
+    step "rach2.slotA${P}=candidate" 1 "cd /src/rach2 && busybox sed -i 's/${OLDMARK}/${MARK}/' sys/arch/x86/boot.c && busybox grep -c '${MARK}' sys/arch/x86/boot.c | busybox sed s/^/SED${P}N/"
     step "SED${P}N1" 1 "make -f guest.mk > /tmp/ik.out 2>&1; echo BUILD${P}RC=\$?"
     step "BUILD${P}RC=0" 1 "bootctl kernel kernel && echo INST\"\"${P}A"
     step "INST${P}A" 1 "bootctl commit > /dev/null 2>&1; echo ARMED${P}RC=\$?"
