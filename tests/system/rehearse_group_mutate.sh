@@ -78,10 +78,11 @@ blocks_per_group()
 }
 
 # The rehearsal's own save-set computation on a root, with the small form's
-# disk of 524288 sectors and the installer disk's root offset.
+# disk of 524288 sectors, whose last 33 hold the GUID table's backup, and the
+# installer disk's root offset.
 save_set()
 {
-    "$growset" --lba "$root_start" "$1" $((524288 - root_start)) >"$2" 2>&1
+    "$growset" --lba "$root_start" "$1" $((524288 - 33 - root_start)) >"$2" 2>&1
 }
 
 build_root()
@@ -98,7 +99,15 @@ build_root()
         "blocks per group $(blocks_per_group "$work/$phase.ext2")"
 }
 
-root_start=$(od -A n -t u4 -j $((446 + 2 * 16 + 8)) -N 4 "$disk" | tr -d ' ')
+# The root's first sector, the disk's third entry, read as the installer
+# suite reads it: a GUID table by mkgpt, which the protective MBR's type 0xEE
+# says the disk has, and an MBR by mkmbr; both list the extent in bytes.
+if [ "$(od -An -tx1 -j 450 -N 1 "$disk" | tr -d ' ')" = ee ]; then
+    "$repo/build/tools/image/mkgpt" --list "$disk"
+else
+    "$repo/build/tools/image/mkmbr" --list "$disk"
+fi > "$work/entries" 2>&1
+root_start=$(awk '$1 == 3 { printf "%d\n", $3 / 512; exit }' "$work/entries")
 case "$root_start" in
     '' | 0 | *[!0-9]*) echo 'rehearse-group-mutation: the installer disk has no third entry' >&2; exit 1 ;;
 esac
