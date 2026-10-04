@@ -807,10 +807,12 @@ static void dma32_rows(void)
         return;
     }
     for (i = 0, same = 1; i < 2048; i++) {
-        same &= d->bounce->page[0][i] == out[2048 + i] && d->bounce->page[1][i] == out[4096 + i] &&
-                d->bounce->page[2][i] == out[8192 + i];
+        same &= d->bounce->page[0][i] == out[2048 + i] && d->bounce->page[2][i] == out[8192 + i];
     }
-    CHECK("holding the bytes written", same);
+    for (i = 0; i < 4096; i++) {
+        same &= d->bounce->page[1][i] == out[4096 + i];
+    }
+    CHECK("holding the bytes written, the whole page of the middle piece", same);
 
     for (n = 0; n < 3; n++) {
         for (i = 0; i < 4096; i++) {
