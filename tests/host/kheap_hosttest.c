@@ -1,6 +1,7 @@
 /*
  * kheap_hosttest.c: the heap's size, its page runs, the reserve for large
- * ones, and the guarded runs kernel stacks come from.
+ * ones, the guarded runs kernel stacks come from, and the two ends the
+ * cache's pages and the rest are taken from.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/spinlock_host.c
@@ -184,6 +185,55 @@ static void give_singles(unsigned n)
             singles[n] = 0;
         }
     }
+}
+
+/**
+ * The two ends of the region. A cache that takes its pages a page at a time
+ * between the single pages of everything else, until the region is full,
+ * holds the top of it and the rest the bottom; when the rest gives its
+ * pages back, as pipes and sockets do when they close, they form one run,
+ * so a pipe's buffer of 17 pages is found among the cache's pages. A page
+ * the cache gives back is the next page it takes.
+ */
+static void ends_rows(void)
+{
+    static void *cache[REGION_PAGES];
+    unsigned c = 0, n = 0, i, below = 1;
+    void *run, *again;
+
+    kheap_init(SMALL_REGION);
+    for (;;) {
+        cache[c] = kalloc_cache_page();
+        if (!cache[c]) {
+            break;
+        }
+        c++;
+        singles[n] = kalloc_pages(1, 0);
+        if (!singles[n]) {
+            break;
+        }
+        n++;
+    }
+    CHECK(c + n == REGION_PAGES - RESERVE_PAGES,
+          "cache pages and single pages taken in turn fill the region up to the reserve");
+    give_singles(n);
+    run = kalloc_pages(17, 0);
+    for (i = 0; i < c; i++) {
+        below = below && (uintptr_t)run < (uintptr_t)cache[i];
+    }
+    CHECK(run != 0 && below,
+          "with the single pages given back, a run of 17 lies below every cache page");
+    kfree_pages(cache[c / 2], 1);
+    again = kalloc_cache_page();
+    CHECK(again == cache[c / 2], "a page the cache gives back is the next cache page");
+    cache[c / 2] = again;
+    if (run) {
+        kfree_pages(run, 17);
+    }
+    for (i = 0; i < c; i++) {
+        kfree_pages(cache[i], 1);
+    }
+    CHECK(frames_out == 0, "and every frame went back after the two ends");
 }
 
 /**
@@ -449,6 +499,7 @@ int main(void)
     give_singles(n);
     CHECK(frames_out == 0, "and every frame went back after the shortage");
     guard_rows();
+    ends_rows();
     size_rows();
     region_rows();
     if (fails == 0) {

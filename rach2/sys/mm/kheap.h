@@ -98,7 +98,19 @@ void *kalloc_pages(uint32_t count, uintptr_t *phys);
  */
 void *kalloc_pages_try(uint32_t count, uintptr_t *phys);
 
-/** Give back what `kalloc_pages` returned. */
+/**
+ * One page for the buffer cache, as `kalloc_pages(1, 0)` gives it, or NULL
+ * with a record. The cache's pages are taken from the top of the region
+ * down and every other allocation from the bottom up, as Linux keeps
+ * reclaimable pages apart from the rest: the cache, which holds up to half
+ * the region a page at a time and gives its pages back in any order, then
+ * leaves holes among its own pages and not among the runs the rest needs,
+ * so a pipe's buffer or a socket's ring of 17 pages is still found after
+ * the cache has filled. Freed with `kfree_pages`.
+ */
+void *kalloc_cache_page(void);
+
+/** Give back what `kalloc_pages` or `kalloc_cache_page` returned. */
 void kfree_pages(void *p, uint32_t count);
 
 /**

@@ -50,6 +50,11 @@ void *kalloc_pages_try(uint32_t count, uintptr_t *phys)
     return kalloc_pages(count, phys);
 }
 
+void *kalloc_cache_page(void)
+{
+    return kalloc_pages(1, 0);
+}
+
 void kfree_pages(void *p, uint32_t count)
 {
     (void)count;

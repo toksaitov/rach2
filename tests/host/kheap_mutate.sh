@@ -1,13 +1,16 @@
 #!/bin/sh
-# Prove the rows of tests/host/kheap_hosttest.c that size the heap and give
-# it a region past the floor, with four faults in a private copy of
-# mm/kheap.c, each of which must fail the checks named for it and no other:
+# Prove the rows of tests/host/kheap_hosttest.c that size the heap, give
+# it a region past the floor and keep the cache's pages at the region's top,
+# with five faults in a private copy of mm/kheap.c, each of which must fail
+# the checks named for it and no other:
 #
 #   no-floor   gives a small machine an eighth of its memory, under 256 MiB.
 #   a-quarter  gives the heap a quarter of the memory instead of an eighth.
 #   no-cap     lets the heap pass the region the layout has.
 #   short-map  sizes the page map of a large region for a quarter of its
 #              pages, so the map's last pages are given out as the heap's.
+#   one-end    takes the cache's pages from the bottom with the rest, as
+#              the heap did before, so their holes break every run.
 #
 # Usage: kheap_mutate.sh [--check]
 # With --check it compiles and runs the unmodified test alone.
@@ -138,6 +141,10 @@ fault short-map 'of three pages, a frame each, for 66560 pages' 'and taken' \
     'and held by the heap, with nothing in use' 'the first page given is after the map' \
     "every page below the reserve but the map's is one run" \
     "and every frame but the map's went back"
+
+mutate '    uint32_t page = find_page_high();' '    uint32_t page = find_run(1);'
+fault one-end 'with the single pages given back, a run of 17 lies below every cache page' \
+    'a page the cache gives back is the next cache page'
 
 run_phase restored
 [ "$status" -eq 0 ] && grep -q '^kheap_hosttest: PASS$' "$work/restored.log" || exit 1

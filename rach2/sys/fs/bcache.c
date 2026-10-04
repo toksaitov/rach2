@@ -97,7 +97,7 @@ static struct bbuf *buffer_new(void)
     if (!b) {
         return 0;
     }
-    b->data = kalloc_pages(1, 0);
+    b->data = kalloc_cache_page();
     if (!b->data) {
         kfree(b);
         return 0;

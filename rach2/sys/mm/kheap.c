@@ -55,7 +55,12 @@ static void *free_list[KHEAP_CLASSES];
  * for a larger one. */
 static uint32_t floor_bits[KHEAP_FLOOR / PAGE_SIZE / 32];
 static uint32_t *page_bits;
-static uint32_t next_page;
+/* The two ends of the ordinary region's search: every page below `low_free`
+ * is taken, and so is every page above `high_free` up to the reserve. The
+ * buffer cache's pages are taken from the top down and every other
+ * allocation from the bottom up (`kalloc_cache_page`). */
+static uint32_t low_free;
+static uint32_t high_free;
 static uint32_t pages_held;
 static size_t bytes_used;
 static uint32_t class_pages[KHEAP_CLASSES]; /* pages carved into each class */
@@ -81,28 +86,45 @@ static uintptr_t heap_end(void)
     return KVA_HEAP + (uintptr_t)heap_pages * PAGE_SIZE;
 }
 
-/* Interrupts off. `count` free pages in a row, next fit from where the
- * last run ended and round once through the region, a word of the map at a
- * time where all of its pages are taken; `heap_pages` when the region has
- * no such run. */
+/* Interrupts off. `count` free pages in a row, the lowest such run, a word
+ * of the map at a time where all of its pages are taken; `heap_pages` when
+ * the region has no such run. The first free page the search passes
+ * becomes `low_free`. */
 static uint32_t find_run(uint32_t count)
 {
-    uint32_t run = 0, i, n;
+    uint32_t run = 0, i, first = heap_pages;
 
-    i = next_page;
-    for (n = 0; n < 2 * heap_pages; n++, i++) {
-        if (i >= heap_pages) {
-            i = 0;
-            run = 0;
-        }
+    for (i = low_free; i < heap_pages; i++) {
         if (i % 32u == 0 && page_bits[i / 32] == 0xFFFFFFFFu) {
             run = 0;
-            n += 31;
             i += 31;
         } else if (page_taken(i)) {
             run = 0;
-        } else if (++run == count) {
-            return i + 1 - count;
+        } else {
+            if (first == heap_pages) {
+                first = i;
+                low_free = i;
+            }
+            if (++run == count) {
+                return i + 1 - count;
+            }
+        }
+    }
+    return heap_pages;
+}
+
+/* Interrupts off. The highest free page below the reserve, which becomes
+ * `high_free`, or `heap_pages` when there is none. */
+static uint32_t find_page_high(void)
+{
+    uint32_t i = high_free + 1u;
+
+    while (i-- > 0) {
+        if (i % 32u == 31u && page_bits[i / 32] == 0xFFFFFFFFu) {
+            i -= 31;
+        } else if (!page_taken(i)) {
+            high_free = i;
+            return i;
         }
     }
     return heap_pages;
@@ -131,7 +153,6 @@ static int map_run(uint32_t page, uint32_t count)
         page_set(page + i, 1);
     }
     pages_held += count;
-    next_page = page + count;
     return 0;
 }
 
@@ -189,7 +210,8 @@ void kheap_init(size_t bytes)
     for (i = 0; i < map_pages; i++) {
         page_set(i, 1);
     }
-    next_page = map_pages;
+    low_free = map_pages;
+    high_free = reserve_first - 1u;
     pages_held = map_pages;
     bytes_used = 0;
     /* The reserve's pages read as taken to the ordinary search from the
@@ -238,11 +260,27 @@ static void reserve_close(uint32_t page, uint32_t count, int release)
     }
 }
 
+/* Interrupts off. Pages `first` through `last`, below the reserve, are
+ * free again: the searches from both ends start at them if they lie
+ * beyond where each would start. */
+static void ends_widen(uint32_t first, uint32_t last)
+{
+    if (first < low_free) {
+        low_free = first;
+    }
+    if (last > high_free) {
+        high_free = last;
+    }
+}
+
 /* Interrupts off. Unmap a run and, when it lies in the reserve, give the
  * run back: the one way pages leave the heap, whoever allocated them. */
 static void release_run(uint32_t page, uint32_t count)
 {
     unmap_run(page, count);
+    if (page < reserve_first) {
+        ends_widen(page, page + count - 1u);
+    }
     if (page >= reserve_first) {
         reserve_close(page, count, 1);
     }
@@ -306,6 +344,20 @@ void *kalloc_pages_try(uint32_t count, uintptr_t *phys)
     return pages_or_null(count, phys, 1);
 }
 
+void *kalloc_cache_page(void)
+{
+    uint32_t flags = spin_lock_irqsave(&heap_lock);
+    uint32_t page = find_page_high();
+
+    if (page >= heap_pages || map_run(page, 1) != 0) {
+        spin_unlock_irqrestore(&heap_lock, flags);
+        klog(KLOG_ERR, "kheap", "a cache page: no room or no frame");
+        return NULL;
+    }
+    spin_unlock_irqrestore(&heap_lock, flags);
+    return (void *)(KVA_HEAP + (uintptr_t)page * PAGE_SIZE);
+}
+
 void kfree_pages(void *p, uint32_t count)
 {
     uintptr_t va = (uintptr_t)p;
@@ -365,6 +417,7 @@ void kfree_guarded(void *p, uint32_t count)
     }
     release_run(page, count);
     page_set(page - 1, 0);
+    ends_widen(page - 1, page - 1);
     spin_unlock_irqrestore(&heap_lock, flags);
 }
 
