@@ -186,7 +186,7 @@ int fbcon_init(const struct boot_framebuffer *fb)
         fb_scale--;
     }
     if (VGA_TEXT_COLS * GLYPH_WIDTH > fb->width || VGA_TEXT_ROWS * GLYPH_HEIGHT > fb->height ||
-        fb->pitch < fb->width * fb_bytes) {
+        fb->width > fb->pitch / fb_bytes) {
         return -1;
     }
     fb_pitch = fb->pitch;

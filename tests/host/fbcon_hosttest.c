@@ -48,6 +48,12 @@ bool vga_graphics_mode = false;
 #include "display/vga_font.c"
 #include "kio.c"
 
+/* No processor here has begun a panic, so the console takes its lock. */
+int k_panicking(void)
+{
+    return 0;
+}
+
 int vga_font_load(void)
 {
     return 0;
@@ -219,6 +225,10 @@ static void row_init(void)
     fb.height = 800;
     fb.pitch = 1280 * 4 - 4;
     CHECK(fbcon_init(&fb) == -1, "a pitch under a line's pixels is refused");
+    fb.width = 0x40000280u;
+    fb.pitch = 2560;
+    CHECK(fbcon_init(&fb) == -1, "a width whose bytes wrap 32 bits to the pitch is refused");
+    fb.width = 1280;
     fb.pitch = 1280 * 4;
     fb.type = BOOT_FB_INDEXED;
     fb.bpp = 16;
