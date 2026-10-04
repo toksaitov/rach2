@@ -1,4 +1,4 @@
-.Dd October 3, 2026
+.Dd October 4, 2026
 .Dt RACH2-INSTALL 8
 .Os
 .Sh NAME
@@ -53,6 +53,8 @@ All questions precede the first write.
 The final question confirms the disk to overwrite.
 Invalid disk, password, account name, key-file and recovery-key answers
 are explained and requested again.
+Standard input that ends before the last answer stops the run, and
+nothing is written.
 The questions are:
 .Bl -tag -width Ds
 .It Which disk

@@ -1036,6 +1036,13 @@ fi
 # confirmation, so a person who changes their mind has not left a disk half
 # written.
 
+# The end of the answers before the last question. Nothing is written yet,
+# and a question asked again would only meet the end again. The read before
+# it may have taken a last line with no newline, which is still an answer.
+no_answer() {
+    die "the answers ended before the questions did; nothing was written"
+}
+
 # A password, twice, with the terminal's echo off. `stty` is put back however
 # this ends, since a shell left with no echo is a shell nobody can use.
 ask_password() { # ask_password PROMPT
@@ -1043,9 +1050,9 @@ ask_password() { # ask_password PROMPT
         echo_off=yes
         stty -echo 2>/dev/null
         printf '%s: ' "$1"
-        read -r pw1
+        read -r pw1 || [ -n "$pw1" ] || no_answer
         printf '\n%s again: ' "$1"
-        read -r pw2
+        read -r pw2 || [ -n "$pw2" ] || no_answer
         stty echo 2>/dev/null
         echo_off=""
         printf '\n'
@@ -1100,7 +1107,7 @@ name_fault() { # name_fault NAME
 target=""
 while :; do
     printf 'Which disk shall Rach2 be written to? A number above, or its name: '
-    read -r answer
+    read -r answer || [ -n "$answer" ] || no_answer
     i=0
     for n in $candidates; do
         i=$((i + 1))
@@ -1120,7 +1127,7 @@ ask_password "the password for root"
 root_password=$password
 while :; do
     printf 'The name of the first account: '
-    read -r user_name
+    read -r user_name || [ -n "$user_name" ] || no_answer
     check_name "$user_name" && break
     tell "$(name_fault "$user_name"). Try another."
 done
@@ -1159,7 +1166,7 @@ while :; do
         tell "A file of authorized keys for $user_name:"
         printf 'A path, or nothing: '
     fi
-    read -r user_keys
+    read -r user_keys || [ -n "$user_keys" ] || no_answer
     [ -z "$user_keys" ] && break
     case "$user_keys" in
         *[!0-9]*) ;;
@@ -1208,7 +1215,7 @@ while :; do
     else
         printf 'A path, or nothing: '
     fi
-    read -r recovery_keys
+    read -r recovery_keys || [ -n "$recovery_keys" ] || no_answer
     [ -z "$recovery_keys" ] && break
     case "$recovery_keys" in
         *[!0-9]*) ;;
@@ -1245,7 +1252,7 @@ while :; do
     tell "$recovery_keys $fault. Try again, or type nothing for no key."
 done
 printf 'Grow the root into the whole disk? [yes] '
-read -r grow_answer
+read -r grow_answer || [ -n "$grow_answer" ] || no_answer
 case "$grow_answer" in
     "" | y | yes) grow=yes ;;
     *) grow=no ;;
@@ -1294,7 +1301,7 @@ tell "Everything on /dev/disk$target is erased."
 # not the disk's name.
 while :; do
     printf 'Type /dev/disk%s to go on, or stop to stop: ' "$target"
-    read -r confirm
+    read -r confirm || [ -n "$confirm" ] || no_answer
     [ "$confirm" = "/dev/disk$target" ] && break
     case "$confirm" in
         stop | STOP | Stop | quit | q) die "nothing was written" ;;

@@ -477,8 +477,8 @@ mark "row 2"
 # ---- 3: the installer, on a machine with two blank disks. It must name both
 #         as candidates and the stick as the source, refuse an answer that is
 #         not one of them, refuse a confirmation that is not the disk's own
-#         name, and then write the one it was told to and leave the other as it
-#         was. ----
+#         name, stop when its answers end before its questions do, and then
+#         write the one it was told to and leave the other as it was. ----
 NEWPASS=an-installed-machine
 USERNAME=alice
 USERPASS=alices-own-password
@@ -547,6 +547,8 @@ if "$HARNESS" --bios \
     "expect=That is not /dev/disk1" \
     "expect=to go on, or stop to stop" "send=stop" \
     "expect=nothing was written" \
+    "expect=# " "send=printf '/dev/disk1\\n' | rach2-install" \
+    "expect=the answers ended before the questions did; nothing was written" \
     "expect=# " "send=rach2-install" \
     "expect=disk shall Rach2 be written to" "send=/dev/disk1" \
     "expect=the password for root" "send=$NEWPASS" \
@@ -566,7 +568,7 @@ if "$HARNESS" --bios \
     "expect=growing the root into the rest of the disk" \
     "expect=installed:" "send=echo INSTALL\"\"DONE" \
     "expect=INSTALLDONE" > "$LOG3.harness" 2>&1; then
-    note "the installer says what is wrong and asks again, stops when told to, and writes the disk it was told: OK"
+    note "the installer says what is wrong and asks again, stops when told to or when its answers end, and writes the disk it was told: OK"
 else
     sed -n 's/^HARNESS: /installer-test: /p' "$LOG3.harness" >&2
     bad "the install onto the second of two disks"
