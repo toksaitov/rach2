@@ -103,9 +103,10 @@ static void header(uint64_t lba, uint64_t other, uint64_t array)
 
 /**
  * Rewrite the table on `fd`, read from its backup when `from_backup` (its
- * primary header zeroed first), with entry 3 grown, and stop the writes
- * after each count of calls in turn: whatever the count, a copy must read,
- * since the old copy that checks is written last.
+ * primary header zeroed first) and from its primary otherwise (its backup
+ * header zeroed first), with entry 3 grown, and stop the writes after each
+ * count of calls in turn: whatever the count, a copy must read, since the
+ * one copy that checks, the one the rewrite started from, is written last.
  */
 static void check_prefixes(int fd, int from_backup)
 {
@@ -122,7 +123,9 @@ static void check_prefixes(int fd, int from_backup)
     }
     for (stop = 0; stop < 5; stop++) {
         if (pwrite(fd, saved, sizeof(saved), 0) != (ssize_t)sizeof(saved) ||
-            (from_backup && pwrite(fd, zero, SECTOR, SECTOR) != SECTOR) ||
+            pwrite(fd, zero, SECTOR,
+                   from_backup ? SECTOR : (off_t)(gptdisk_le64(saved + SECTOR + 32) * SECTOR)) !=
+                SECTOR ||
             gptdisk_read(fd, DISK, &g) != 1 || g.from_backup != from_backup) {
             CHECK("the disk is put back for a stopped rewrite", 0);
             break;
@@ -183,11 +186,14 @@ int main(void)
     unsigned char guid[16];
     char text[37];
     uint64_t backup_array = IMAGE - 1 - ARRAY_SECS;
-    int fd;
+    int fd, i;
 
     CHECK("the CRC32 of the check string",
           gptdisk_crc32((const unsigned char *)"123456789", 9) == 0xCBF43926u);
 
+    for (i = 0; i < 446; i++) {
+        image[i] = (unsigned char)(i * 7 + 1);
+    }
     image[446 + 4] = 0xEE;
     put32(image + 446 + 8, 1);
     put32(image + 446 + 12, IMAGE - 1);
@@ -220,7 +226,8 @@ int main(void)
     CHECK("and the space before it usable", gptdisk_le64(g.header + 48) == DISK - 2 - ARRAY_SECS);
     CHECK("the protective entry covers the disk",
           pread(fd, sector, SECTOR, 0) == SECTOR && get32(sector + 446 + 12) == DISK - 1);
-    CHECK("and the boot code around it is kept", sector[510] == 0x55 && sector[446 + 4] == 0xEE);
+    CHECK("and the boot code around it is kept",
+          sector[510] == 0x55 && sector[446 + 4] == 0xEE && memcmp(sector, image, 446) == 0);
 
     memset(sector, 0, SECTOR);
     CHECK("the primary header is damaged", pwrite(fd, sector, SECTOR, SECTOR) == SECTOR);
