@@ -169,7 +169,8 @@ struct acpi_info {
     struct acpi_gas sleep_control; /* a hardware-reduced machine's PM1 */
     uint16_t boot_flags;
     uint8_t century; /* the CMOS register of the century, 0 for none */
-    uint64_t dsdt;
+    uint64_t dsdt;   /* X_DSDT where it is given, else DSDT */
+    uint64_t dsdt32; /* the DSDT field, read when X_DSDT cannot be */
 
     int s5;
     uint8_t slp_typa, slp_typb;

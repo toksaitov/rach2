@@ -154,7 +154,7 @@ uintptr_t map_mmio(uintptr_t phys, size_t size)
 /* ---- the ports and configuration space a register may be in ---- */
 
 static uint32_t last_port, last_port_value, last_port_width;
-static uint32_t last_cfg_dev, last_cfg_fn, last_cfg_off, last_cfg_value;
+static uint32_t last_cfg_dev, last_cfg_fn, last_cfg_off, last_cfg_value, last_cfg_width;
 
 static void port_write(uint16_t port, uint32_t value, uint32_t width)
 {
@@ -199,14 +199,35 @@ uint32_t pci_read_config32(uint8_t bus, uint8_t device, uint8_t function, uint8_
     return 0xA0000000u | ((uint32_t)device << 16) | ((uint32_t)function << 8) | offset;
 }
 
-void pci_write_config32(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset,
-                        uint32_t value)
+static void cfg_write(uint8_t device, uint8_t function, uint8_t offset, uint32_t value,
+                      uint32_t width)
 {
-    (void)bus;
     last_cfg_dev = device;
     last_cfg_fn = function;
     last_cfg_off = offset;
     last_cfg_value = value;
+    last_cfg_width = width;
+}
+
+void pci_write_config32(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset,
+                        uint32_t value)
+{
+    (void)bus;
+    cfg_write(device, function, offset, value, 32);
+}
+
+void pci_write_config16(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset,
+                        uint16_t value)
+{
+    (void)bus;
+    cfg_write(device, function, offset, value, 16);
+}
+
+void pci_write_config8(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset,
+                       uint8_t value)
+{
+    (void)bus;
+    cfg_write(device, function, offset, value, 8);
 }
 
 /* ---- tables made here ---- */
@@ -318,7 +339,7 @@ static void rsdp_make(unsigned char *bios, uint32_t at, uint8_t rev, uint32_t rs
 }
 
 /* An MADT body: the local APIC address and flags, then the entries. */
-static unsigned char madt_body[256];
+static unsigned char madt_body[1024];
 static uint32_t madt_len;
 
 static void madt_start(void)
@@ -657,6 +678,40 @@ static void madt_rows(void)
     CHECK(acpi_isa_route(&a, 12, 0, &r) == 0 && r.gsi == 12, "a line no override mentions");
 }
 
+/** A MADT with more processors than the kernel's 64 places: an enabled one
+ * takes the place of a disabled one, and a disabled one past the end is
+ * left out. */
+static void madt_full_rows(void)
+{
+    struct acpi_info a;
+    unsigned char *bios, e[8] = {0, 8, 0, 0, 0, 0, 0, 0};
+    uint64_t t[1];
+    int i, enabled = 0, seen = 0;
+
+    printf("madt, full\n");
+    model_reset();
+    bios = bios_area();
+    made_reset();
+    madt_start();
+    for (i = 0; i < 66; i++) {
+        e[2] = (unsigned char)i;
+        e[3] = (unsigned char)i;
+        e[4] = (unsigned char)(i == 0 || i == 64 ? ACPI_CPU_ENABLED : 0);
+        madt_entry(e, sizeof(e));
+    }
+    t[0] = table_make("APIC", 4, madt_body, madt_len);
+    rsdp_make(bios, 0xE0000u, 0, (uint32_t)root_make(0, t, 1), 0);
+    CHECK(acpi_parse(model_map, 0xE0000u, &a) == 0 && a.madt, "the MADT of 66 processors is read");
+    for (i = 0; i < a.ncpus; i++) {
+        if (a.cpus[i].flags & ACPI_CPU_ENABLED) {
+            enabled++;
+            seen |= a.cpus[i].apic_id == 64;
+        }
+    }
+    CHECK(a.ncpus == 64 && enabled == 2 && seen && a.madt_dropped == 2,
+          "processor 64, enabled, displaces a disabled one; the last disabled one is left out");
+}
+
 /** The FADT's 64-bit register forms win over its 32-bit block fields from
  * revision 3, and the DSDT's address with them. */
 static void fadt_rows(void)
@@ -701,8 +756,9 @@ static void fadt_rows(void)
     CHECK(a.boot_flags == ACPI_BOOT_8042, "the boot flags of a later FADT");
 
     CHECK(acpi_gas_write(&a.reset_reg, a.reset_value) == 0 && last_cfg_dev == 0x1F &&
-              last_cfg_fn == 3 && last_cfg_off == 0x44 && (last_cfg_value & 0xFF) == 6,
-          "the reset value is written to device 31, function 3, offset 0x44");
+              last_cfg_fn == 3 && last_cfg_off == 0x44 && last_cfg_value == 6 &&
+              last_cfg_width == 8,
+          "the reset value is one byte written to device 31, function 3, offset 0x44");
     CHECK(acpi_gas_write(&a.pm1a_cnt, 0x3C01) == 0 && made[0x7000] == 0x01 && made[0x7001] == 0x3C,
           "a PM1 control register in memory takes sixteen bits");
     {
@@ -716,6 +772,47 @@ static void fadt_rows(void)
         g.address = 0x10000;
         CHECK(acpi_gas_write(&g, 1) == -1, "a port past 0xffff is refused");
     }
+
+    model_reset();
+    bios = bios_area();
+    made_reset();
+    d = table_make("DSDT", 2, dsdt, sizeof(dsdt));
+    put32(body + 40 - 36, (uint32_t)d);
+    put64(body + 140 - 36, 0x500000000ull); /* an X_DSDT nothing answers at */
+    t[0] = table_make("FACP", 5, body, sizeof(body));
+    rsdp_make(bios, 0xE0000u, 0, (uint32_t)root_make(0, t, 1), 0);
+    CHECK(acpi_parse(model_map, 0xE0000u, &a) == 0 && a.dsdt == d && a.s5 && a.slp_typa == 5,
+          "an X_DSDT that cannot be read leaves the DSDT, and its \\_S5 is read");
+    CHECK(logged("X_DSDT 0x500000000 unreadable"), "the unreadable X_DSDT is named");
+}
+
+/** The kernel's windows on physical memory: once all are made, a register
+ * outside them is refused and maps nothing, however often it is read, and
+ * one inside them is still read. */
+static void window_rows(void)
+{
+    struct acpi_gas g = {ACPI_SPACE_MEMORY, 32, 0, 3, 0};
+    uint32_t v, page, calls;
+    int refused = 0;
+
+    printf("windows\n");
+    model_reset();
+    region_add(0x300000u, REGION_MAX);
+    region_add(0x400000u, REGION_MAX);
+    region_add(0x500000u, REGION_MAX);
+    for (page = 0; page < 99 && !refused; page++) {
+        g.address = 0x300000u + 0x100000u * (page / 33u) + 0x1000u * (page % 33u);
+        refused = acpi_gas_read(&g, &v) != 0;
+    }
+    CHECK(refused, "the windows run out before 99 pages");
+    calls = (uint32_t)mmio_calls;
+    CHECK(acpi_gas_read(&g, &v) != 0 && acpi_gas_read(&g, &v) != 0 &&
+              (uint32_t)mmio_calls == calls,
+          "a register past the windows is refused and maps nothing");
+    CHECK(logged("windows: all 64 made"), "the full windows are named once");
+    g.address = 0x300000u;
+    CHECK(acpi_gas_read(&g, &v) == 0 && (uint32_t)mmio_calls == calls,
+          "a register inside a window is read from it");
 }
 
 /* ---- \_S5 ---- */
@@ -776,7 +873,9 @@ int main(void)
     xsdt_rows();
     bad_table_rows();
     madt_rows();
+    madt_full_rows();
     fadt_rows();
+    window_rows();
     s5_rows();
     if (fails) {
         printf("acpi_hosttest: %d check(s) failed\n", fails);

@@ -221,7 +221,8 @@ static void gas_extended(const uint8_t *t, uint32_t len, uint32_t off, struct ac
         return;
     }
     gas_read(t + off, &ext);
-    if (ext.address != 0) {
+    if (ext.address != 0 &&
+        (ext.space != ACPI_SPACE_MEMORY || ext.address <= (uint64_t)(uintptr_t)-1)) {
         if (ext.bit_width == 0) {
             ext.bit_width = g->bit_width;
         }
@@ -238,14 +239,23 @@ static void add_cpu(struct acpi_info *a, uint32_t apic_id, uint32_t uid, uint32_
             return; /* listed as both an xAPIC and an x2APIC entry */
         }
     }
-    if (a->ncpus >= ACPI_MAX_CPUS) {
+    i = a->ncpus;
+    if (i >= ACPI_MAX_CPUS) {
         a->madt_dropped++;
-        return;
+        if (!(flags & ACPI_CPU_ENABLED)) {
+            return;
+        }
+        for (i = 0; i < a->ncpus && (a->cpus[i].flags & ACPI_CPU_ENABLED); i++) {
+        }
+        if (i == a->ncpus) {
+            return;
+        }
+    } else {
+        a->ncpus++;
     }
-    a->cpus[a->ncpus].apic_id = apic_id;
-    a->cpus[a->ncpus].uid = uid;
-    a->cpus[a->ncpus].flags = flags;
-    a->ncpus++;
+    a->cpus[i].apic_id = apic_id;
+    a->cpus[i].uid = uid;
+    a->cpus[i].flags = flags;
 }
 
 static void add_nmi(struct acpi_info *a, uint32_t uid, uint16_t flags, uint8_t lint)
@@ -399,6 +409,7 @@ static void fadt_parse(struct acpi_info *a, const uint8_t *t, uint32_t len)
     a->fadt = 1;
     a->fadt_revision = t[8];
     a->dsdt = get32(t + FADT_DSDT);
+    a->dsdt32 = a->dsdt;
     a->sci_irq = (uint16_t)get16(t + FADT_SCI_INT);
     a->smi_cmd = get32(t + FADT_SMI_CMD);
     a->acpi_enable = t[FADT_ACPI_ENABLE];
@@ -586,6 +597,12 @@ int acpi_parse(acpi_map_fn map, uint64_t rsdp, struct acpi_info *a)
         uint32_t len = 0;
         const uint8_t *d = table_read(map, a->dsdt, "DSDT", ACPI_HEADER_LEN, &len);
 
+        if (!d && a->dsdt32 != 0 && a->dsdt32 != a->dsdt) {
+            klog(KLOG_WARN, "acpi", "dsdt: X_DSDT 0x%x%08x unreadable; the 32-bit DSDT is read",
+                 (unsigned)(a->dsdt >> 32), (unsigned)a->dsdt);
+            a->dsdt = a->dsdt32;
+            d = table_read(map, a->dsdt, "DSDT", ACPI_HEADER_LEN, &len);
+        }
         table_note(a, (const uint8_t *)"DSDT", a->dsdt, len, d != 0);
         if (d && acpi_s5_find(d + ACPI_HEADER_LEN, len - ACPI_HEADER_LEN, &a->slp_typa,
                               &a->slp_typb) == 0) {
@@ -739,16 +756,19 @@ static struct acpi_info info;
  * The mappings made so far. A table's header and the table are usually in
  * one page, and the tables of one firmware in a few, so a request inside a
  * window already mapped is answered from it: `map_mmio` maps for the life
- * of the kernel and has no unmap.
+ * of the kernel and has no unmap. A request outside them once all are made
+ * is refused, since a mapping not recorded would be made again at the next
+ * read of the same register, and each would keep its part of the MMIO
+ * region for good.
  */
-#define ACPI_WINDOWS 24
+#define ACPI_WINDOWS 64
 
 static struct {
     uint64_t phys;
     uint32_t len;
     uintptr_t va;
 } windows[ACPI_WINDOWS];
-static int nwindows;
+static int nwindows, windows_full;
 
 static const uint8_t *kernel_map(uint64_t phys, uint32_t len)
 {
@@ -769,16 +789,22 @@ static const uint8_t *kernel_map(uint64_t phys, uint32_t len)
     if (sizeof(uintptr_t) < 8 && end - 1 > (uint64_t)0xFFFFFFFFu) {
         return 0;
     }
+    if (nwindows == ACPI_WINDOWS) {
+        if (!windows_full) {
+            windows_full = 1;
+            klog(KLOG_WARN, "acpi", "windows: all %d made; 0x%x%08x not mapped", ACPI_WINDOWS,
+                 (unsigned)(phys >> 32), (unsigned)phys);
+        }
+        return 0;
+    }
     va = map_mmio((uintptr_t)start, (size_t)(end - start));
     if (va == 0) {
         return 0;
     }
-    if (nwindows < ACPI_WINDOWS) {
-        windows[nwindows].phys = start;
-        windows[nwindows].len = (uint32_t)(end - start);
-        windows[nwindows].va = va;
-        nwindows++;
-    }
+    windows[nwindows].phys = start;
+    windows[nwindows].len = (uint32_t)(end - start);
+    windows[nwindows].va = va;
+    nwindows++;
     return (const uint8_t *)(va + (uintptr_t)(phys - start));
 }
 
@@ -965,23 +991,20 @@ int acpi_gas_write(const struct acpi_gas *g, uint32_t value)
             *(volatile uint8_t *)m = (uint8_t)value;
         }
         return 0;
-    case ACPI_SPACE_PCI:
-        if (bytes != 1 && bytes != 2) {
-            pci_write_config32(0, (uint8_t)((g->address >> 32) & 0x1Fu),
-                               (uint8_t)((g->address >> 16) & 0x7u), (uint8_t)(g->address & 0xFCu),
-                               value);
-        } else {
-            uint8_t dev = (uint8_t)((g->address >> 32) & 0x1Fu);
-            uint8_t fn = (uint8_t)((g->address >> 16) & 0x7u);
-            uint8_t off = (uint8_t)(g->address & 0xFFu);
-            uint32_t shift = 8u * (uint32_t)(off & 3u);
-            uint32_t mask = (bytes == 1 ? 0xFFu : 0xFFFFu) << shift;
-            uint32_t old = pci_read_config32(0, dev, fn, (uint8_t)(off & 0xFCu));
+    case ACPI_SPACE_PCI: {
+        uint8_t dev = (uint8_t)((g->address >> 32) & 0x1Fu);
+        uint8_t fn = (uint8_t)((g->address >> 16) & 0x7u);
+        uint8_t off = (uint8_t)(g->address & 0xFFu);
 
-            pci_write_config32(0, dev, fn, (uint8_t)(off & 0xFCu),
-                               (old & ~mask) | ((value << shift) & mask));
+        if (bytes == 1) {
+            pci_write_config8(0, dev, fn, off, (uint8_t)value);
+        } else if (bytes == 2) {
+            pci_write_config16(0, dev, fn, (uint8_t)(off & 0xFEu), (uint16_t)value);
+        } else {
+            pci_write_config32(0, dev, fn, (uint8_t)(off & 0xFCu), value);
         }
         return 0;
+    }
     default:
         return -1;
     }

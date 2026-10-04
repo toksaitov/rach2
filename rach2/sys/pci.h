@@ -94,6 +94,10 @@ void pci_write_config32(uint8_t bus, uint8_t device, uint8_t function, uint8_t o
 void pci_write_config16(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset,
                         uint16_t value);
 
+/** Write an 8-bit byte to PCI configuration space. */
+void pci_write_config8(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset,
+                       uint8_t value);
+
 /*
  * The bus's I/O space, where a device's I/O base address register points:
  * the architecture's (arch/x86/pciconf.c: the processor's own ports).

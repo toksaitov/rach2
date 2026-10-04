@@ -137,6 +137,27 @@ void pci_write_config16(uint8_t bus, uint8_t device, uint8_t function, uint8_t o
     kirq_restore(flags);
 }
 
+/**
+ * Write an 8-bit byte to configuration space: one `outb` at the data port's
+ * byte the offset selects, for the reason `pci_write_config16` gives.
+ */
+void pci_write_config8(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset,
+                       uint8_t value)
+{
+    uintptr_t e = ecam_at(bus, device, function, offset);
+    uint32_t addr = pci_config_address(bus, device, function, offset & ~3);
+    uint32_t flags;
+
+    if (e) {
+        *(volatile uint8_t *)e = value;
+        return;
+    }
+    flags = kirq_save();
+    outl(PCI_CONFIG_ADDRESS, addr);
+    outb((uint16_t)(PCI_CONFIG_DATA + (offset & 3)), value);
+    kirq_restore(flags);
+}
+
 uint32_t pci_read_config32_ext(uint8_t bus, uint8_t device, uint8_t function, uint16_t offset)
 {
     uintptr_t e = ecam_at(bus, device, function, offset & 0xFFCu);
