@@ -472,6 +472,11 @@ static int frame_put_legacy(uintptr_t fp, const void *area)
     return copy_to_user((void __user *)fp, img, sizeof(img)) == 0 ? 0 : -1;
 }
 
+uint32_t fpu_frame_uc_flags(void)
+{
+    return use_xsave ? UC_FP_XSTATE : 0u;
+}
+
 int fpu_frame_put(uintptr_t fp, const void *area)
 {
     const uint8_t *a = area;

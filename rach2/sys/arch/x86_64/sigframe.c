@@ -243,7 +243,7 @@ int sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *sa,
 
     k_memset(&frame, 0, sizeof(frame));
     frame.pretcode = (uintptr_t)sa->restorer;
-    frame.uc.uc_flags = UC_SIGCONTEXT_SS | UC_STRICT_RESTORE_SS;
+    frame.uc.uc_flags = UC_SIGCONTEXT_SS | UC_STRICT_RESTORE_SS | fpu_frame_uc_flags();
     frame.uc.uc_stack.ss_sp = (uintptr_t)current_proc->altstack_sp;
     frame.uc.uc_stack.ss_size = (uintptr_t)current_proc->altstack_size;
     frame.uc.uc_stack.ss_flags =

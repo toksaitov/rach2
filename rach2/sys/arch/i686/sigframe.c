@@ -198,6 +198,7 @@ int sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *sa,
         frame.rt.pinfo = frame_addr + (uint32_t)((char *)frame.rt.info - (char *)&frame.rt);
         frame.rt.puc = frame_addr + (uint32_t)((char *)&frame.rt.uc - (char *)&frame.rt);
         sigframe_fill_siginfo(frame.rt.info, signo, info);
+        frame.rt.uc.uc_flags = fpu_frame_uc_flags();
         frame.rt.uc.ss_sp = current_proc->altstack_sp;
         frame.rt.uc.ss_size = current_proc->altstack_size;
         frame.rt.uc.ss_flags = !current_proc->altstack_on ? SS_DISABLE : (on_alt ? SS_ONSTACK : 0u);

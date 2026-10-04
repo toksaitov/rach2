@@ -152,6 +152,14 @@ void fpu_env_set(void *area, const uint8_t *env);
  * announced.
  */
 
+/** The flag of a `ucontext_t`'s `uc_flags` that announces an XSAVE image
+ * at its `fpstate`. */
+#define UC_FP_XSTATE 0x1u
+
+/** The `uc_flags` bits the state of `fpu_frame_put` gives an rt frame:
+ * UC_FP_XSTATE with XSAVE, as Linux sets it, and none without. */
+uint32_t fpu_frame_uc_flags(void);
+
 /** The address of the floating-point state in a frame below the stack
  * pointer `sp`, aligned as Linux aligns it. */
 uintptr_t fpu_frame_place(uintptr_t sp);

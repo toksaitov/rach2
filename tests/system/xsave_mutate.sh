@@ -157,6 +157,10 @@ mutate '    put32(sw, FP_XSTATE_MAGIC1);' '    put32(sw, 0);'
 run_phase magic1 fail 'lack FP_XSTATE_MAGIC1' fail 'FP_XSTATE_MAGIC1'
 restore
 
+mutate '    return use_xsave ? UC_FP_XSTATE : 0u;' '    return 0u;'
+run_phase ucflags fail 'lack UC_FP_XSTATE' pass ''
+restore
+
 mutate '        bv = get64(a + XSAVE_HDR) & rfbm;' \
     '        bv = get64(a + XSAVE_HDR) & rfbm & ~(uint64_t)XFEATURE_YMM;'
 run_phase sigreturn fail 'clobbered the registers: ymm0: the upper half' fail 'XSTATE_BV comes back'
