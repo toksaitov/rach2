@@ -235,10 +235,8 @@ changes = {
         '    if (ticks > 0x7FFFFFFFu) {\n'
         '        ticks = 0x7FFFFFFFu; /* keep the signed (target-now) delta valid */'),
     'sleep-sec-clamp': ('syscall',
-        '    if (sec > 21474836u) {\n'
-        '        sec = 21474836u; /* keeps the intermediate sec*100 below 2^31 */\n'
-        '    }\n',
-        ''),
+        '    uint32_t sec = req->tv_sec > 21474836L ? 21474836u : (uint32_t)req->tv_sec;',
+        '    uint32_t sec = (uint32_t)req->tv_sec;'),
     'sleep-unmask': ('syscall',
         '        if (left <= 0) {\n'
         '            kirq_restore(flags);\n'
@@ -342,10 +340,10 @@ changes = {
         '    if ((seconds == 0 && usec != 0) || usec >= 500000u) {',
         '    if ((seconds == 0 && usec != 0) || usec != 0) {'),
     'clock': ('syscall',
-        'out->tv_sec = (int32_t)kernel_uptime_seconds;\n'
-        '        out->tv_nsec = (int32_t)(kernel_second_ticks * 10000000);',
-        'out->tv_sec = (int32_t)(kernel_ticks / 100);\n'
-        '        out->tv_nsec = (int32_t)((kernel_ticks % 100) * 10000000);'),
+        '        out->tv_sec = seconds32;\n'
+        '        out->tv_nsec = ticks32 * 10000000u;',
+        '        out->tv_sec = total32 / 100u;\n'
+        '        out->tv_nsec = (total32 % 100u) * 10000000u;'),
     'clock-coarse': ('syscall',
         '        rtc_coarse_realtime(&seconds, &nanoseconds);',
         '        get_current_time(&seconds, &nanoseconds);'),
