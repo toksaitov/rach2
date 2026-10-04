@@ -299,7 +299,7 @@ void platform_timer_start(isr_handler_t tick)
 {
     const struct acpi_info *a = acpi_get();
     const char *against = "";
-    uint32_t counts = 0;
+    uint32_t counts;
     int apic;
 
     arch_irq_disable();

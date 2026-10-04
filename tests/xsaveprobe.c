@@ -672,7 +672,7 @@ static void run_exec(void)
 /* What a fresh image sees: every YMM register zero. */
 static void run_reset(void)
 {
-    static struct ymm zero[NYMM];
+    static const struct ymm zero[NYMM];
 
     sys_exit(ymm_check(zero) ? 3 : 0);
 }

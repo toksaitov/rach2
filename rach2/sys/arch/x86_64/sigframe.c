@@ -262,8 +262,8 @@ int sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *sa,
     tf->rsp = frame_addr;
     tf->rip = (uintptr_t)sa->handler;
     tf->rdi = (uint64_t)signo;
-    tf->rsi = frame_addr + (uintptr_t)((char *)frame.info - (char *)&frame);
-    tf->rdx = frame_addr + (uintptr_t)((char *)&frame.uc - (char *)&frame);
+    tf->rsi = frame_addr + offsetof(struct lx_rt_sigframe, info);
+    tf->rdx = frame_addr + offsetof(struct lx_rt_sigframe, uc);
     tf->rax = 0;
     tf->cs = GDT_USER_CODE;
     tf->ss = GDT_USER_DATA;

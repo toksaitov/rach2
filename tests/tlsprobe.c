@@ -75,8 +75,7 @@ static int sys_waitpid(int pid, int *status, int options)
 /** A cheap, side-effect-free syscall used to exercise the int 0x80 path. */
 static void sys_gettimeofday(long *tv2)
 {
-    int r;
-    r = syscall1(SYS_GETTIMEOFDAY, (long)tv2);
+    (void)syscall1(SYS_GETTIMEOFDAY, (long)tv2);
 }
 
 /**

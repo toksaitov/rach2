@@ -588,7 +588,6 @@ int32_t exit_current(int32_t code)
     /* Move to a fresh kernel stack and jump to shell_loop. Safe because we
      * are in kernel mode and init has been torn down. */
     arch_run_on_stack((uintptr_t)stack + KERNEL_STACK_SIZE, shell_loop);
-    exit_schedule_away();
 }
 
 /**

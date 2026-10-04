@@ -381,7 +381,7 @@ static void power_reset(void)
         }
     }
 
-    if (method++ >= skip) {
+    if (method >= skip) {
         power_io->outb(RESET_CONTROL_PORT, RESET_CONTROL_ARM);
         power_io->outb(RESET_CONTROL_PORT, RESET_CONTROL_FIRE);
         power_io->settle();

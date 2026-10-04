@@ -91,11 +91,10 @@ struct timespec_probe {
 static void nap(long ms)
 {
     struct timespec_probe ts;
-    int r;
 
     ts.tv_sec = ms / 1000;
     ts.tv_nsec = (ms % 1000) * 1000000L;
-    r = syscall2(SYS_NANOSLEEP, (long)(&ts), (long)0);
+    (void)syscall2(SYS_NANOSLEEP, (long)(&ts), (long)0);
 }
 
 static int sys_fork(void)

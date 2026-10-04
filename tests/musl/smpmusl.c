@@ -55,6 +55,8 @@
 #define CHILD_STATUS 7
 
 static int cpus;
+/* What a thread returns when it could not be bound to its processor. */
+static char unbound;
 static const char *self;
 
 /** Report one failed check and return 1, the probe's failure status. */
@@ -274,7 +276,7 @@ static void *futex_last(void *arg)
 {
     (void)arg;
     if (bind_to(cpus - 1) != 0) {
-        return (void *)1;
+        return &unbound;
     }
     futex_turns(1);
     return NULL;
@@ -325,7 +327,7 @@ static void *reader(void *arg)
 
     (void)arg;
     if (bind_to(0) != 0) {
-        return (void *)1;
+        return &unbound;
     }
     if (sigsetjmp(reader_env, 1) != 0) {
         return NULL;
@@ -372,7 +374,7 @@ static int unmaps(void)
         return fail("munmap");
     }
     unmapped = 1;
-    if (pthread_join(t, &rc) != 0 || rc == (void *)1) {
+    if (pthread_join(t, &rc) != 0 || rc == &unbound) {
         return fail("the reader's thread");
     }
     if (!faulted) {
