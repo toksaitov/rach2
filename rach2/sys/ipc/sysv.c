@@ -1719,11 +1719,18 @@ long sys_msgsnd(struct isr_params *params)
                    USER_LEN32(SC_ARG(params, 2)), (uint32_t)SC_ARG(params, 3));
 }
 
+/* msgrcv's `size_t` capacity as msg_rcv takes it: a value whose long is
+ * negative is EINVAL, as Linux has it, and one past the int's range is the
+ * most an int holds, since no message is that long. */
 long sys_msgrcv(struct isr_params *params)
 {
+    long size = (long)SC_ARG(params, 2);
+
     return msg_rcv((int32_t)SC_ARG(params, 0), (void __user *)SC_ARG(params, 1),
-                   (int32_t)SC_ARG(params, 2), (long)SC_ARG(params, 3),
-                   (uint32_t)SC_ARG(params, 4));
+                   size < 0             ? -1
+                   : size > 0x7FFFFFFFL ? 0x7FFFFFFF
+                                        : (int32_t)size,
+                   (long)SC_ARG(params, 3), (uint32_t)SC_ARG(params, 4));
 }
 
 long sys_msgctl(struct isr_params *params)
@@ -1748,8 +1755,9 @@ long sys_semtimedop_time64(struct isr_params *params)
         ticks = (uint32_t)(ts[0] > 21474836 ? 21474836 : ts[0]) * 100u +
                 ((uint32_t)ts[1] + 9999999u) / 10000000u;
     }
+    /* A count past 32 bits saturates, past SEMOPM as it is, and is E2BIG. */
     return sem_op((int32_t)SC_ARG(params, 0), (const void __user *)SC_ARG(params, 1),
-                  (uint32_t)SC_ARG(params, 2), SC_ARG(params, 3) != 0, ticks);
+                  USER_LEN32(SC_ARG(params, 2)), SC_ARG(params, 3) != 0, ticks);
 }
 
 int sysv_row_at(int kind, int i, struct sysv_row *row)

@@ -21,7 +21,9 @@
  *
  * A queue takes messages of types 2, 1 and 1: a negative type receives the
  * lowest, type 0 the first; a longer message is E2BIG unless MSG_NOERROR
- * cuts it, an empty queue with IPC_NOWAIT ENOMSG.
+ * cuts it, an empty queue with IPC_NOWAIT ENOMSG. On x86-64 a capacity past
+ * 32 bits is taken whole and a count of semaphore operations past it is
+ * E2BIG, neither cut to its low word.
  *
  * A POSIX queue of four messages of 64 bytes gives the higher priority
  * first; a full queue with O_NONBLOCK is EAGAIN; an empty one with a
@@ -169,6 +171,12 @@ static int sem_rows(void)
     if (semop(id, &take, 1) != -1 || errno != EAGAIN) {
         return fail("a decrement past 0 with IPC_NOWAIT is EAGAIN");
     }
+#if defined __x86_64__
+    if (syscall(SYS_semop, id, &give, 0x100000001UL) != -1 || errno != E2BIG ||
+        semctl(id, 0, GETVAL) != 0) {
+        return fail("a count of operations past 32 bits is not E2BIG, or ran");
+    }
+#endif
     take.sem_flg = 0;
     if (semtimedop(id, &take, 1, &ts) != -1 || errno != EAGAIN) {
         return fail("one with a timeout is EAGAIN after it");
@@ -223,6 +231,14 @@ static int msg_rows(void)
         memcmp(m.text, "firs", 4) != 0) {
         return fail("a longer message is E2BIG unless MSG_NOERROR cuts it");
     }
+#if defined __x86_64__
+    m.type = 3;
+    strcpy(m.text, "eight b");
+    if (msgsnd(id, &m, 8, 0) != 0 || msgrcv(id, &m, 0x100000001UL, 3, MSG_NOERROR) != 8 ||
+        strcmp(m.text, "eight b") != 0) {
+        return fail("a capacity past 32 bits is not cut to its low word");
+    }
+#endif
     if (msgrcv(id, &m, sizeof(m.text), 0, IPC_NOWAIT) != -1 || errno != ENOMSG ||
         msgctl(id, IPC_RMID, NULL) != 0) {
         return fail("an empty queue with IPC_NOWAIT is ENOMSG");
