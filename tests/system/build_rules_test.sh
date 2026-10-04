@@ -45,6 +45,9 @@
 #     sh tests/system/build_rules_test.sh [--mutate]
 #
 set -eu
+# The fixture lists i686 and x86-64 sources by naming each architecture, so
+# none comes from the environment of the run that starts it.
+unset ARCH
 
 case ${1:-} in
     '') mutate=0 ;;
