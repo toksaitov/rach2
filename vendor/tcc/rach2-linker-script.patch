@@ -11,12 +11,14 @@ reads the part of the script language such a layout has, and lays a
 static executable out by it:
 
   * ENTRY; symbol assignments, at the top and in SECTIONS, with `.` among
-    them; PHDRS with PT_LOAD, FILEHDR, PHDRS and FLAGS; output sections
-    with an address, AT(), a list of input section patterns and
+    them, one at the top after SECTIONS taken once the sections before it
+    are laid out; PHDRS with PT_LOAD, FILEHDR, PHDRS and FLAGS; output
+    sections with an address, AT(), a list of input section patterns and
     assignments, and :phdr; and /DISCARD/.
   * Expressions of numbers, with K or M after them, symbols the script
     assigned before, `.`, the operators of C from unary minus and ~ to |,
-    and ALIGN, ADDR, LOADADDR, SIZEOF and SIZEOF_HEADERS.
+    and ALIGN, ADDR, LOADADDR, SIZEOF and SIZEOF_HEADERS, the last counted
+    from PHDRS, anywhere after it.
 
 An allocated section the script names nowhere, as TinyCC's own .got,
 joins the end of the last output section of its kind, code, read-only
@@ -24,11 +26,18 @@ data, data or .bss. A section lies in the file as far from its segment's
 start as it lies in memory, and a segment starts at the first file offset
 past the one before that is congruent to its address modulo the section
 alignment, -Wl,-section-alignment, as GNU ld lays one out with its
-maximum page size. Where the script's sections follow one another in
+maximum page size; the first, with the headers at file offset 0, at the
+address its first section's less the headers' size rounds down to, so
+that the first section may lie past the headers by what its alignment
+asks. What an output section reserves after its last section, by
+advancing `.`, is memory of its segment. Where the script's sections follow one another in
 memory, the file then holds them as memory does, which the a.out kludge
 of a Multiboot header needs: its loader copies the file to memory whole.
 The script's symbols are absolute, and take the place of any other
-definition, TinyCC's own _etext and _end among them.
+definition, TinyCC's own _etext and _end among them. They are in the
+symbol table before the GOT is built and the table's size is fixed, so a
+reference to one, a PC-relative one among them, reaches it and no PLT
+entry, and a link with -g writes them.
 
 Anything else in a script is an error, not something passed over. A link
 without a script is unchanged.
@@ -67,7 +76,7 @@ without a script is unchanged.
      /* output type, see TCC_OUTPUT_XXX */
 --- a/tccelf.c
 +++ b/tccelf.c
-@@ -1911,7 +1911,7 @@ static void tcc_output_elf(TCCState *s1, FILE *f, int phnum, ElfW(Phdr) *phdr,
+@@ -1913,7 +1913,7 @@ static void tcc_output_elf(TCCState *s1, FILE *f, int phnum, ElfW(Phdr) *phdr,
      default:
      case TCC_OUTPUT_EXE:
          ehdr.e_type = ET_EXEC;
@@ -76,7 +85,7 @@ without a script is unchanged.
          break;
      case TCC_OUTPUT_DLL:
          ehdr.e_type = ET_DYN;
-@@ -2057,6 +2057,795 @@ static void tidy_section_headers(TCCState *s1, int *sec_order)
+@@ -2059,6 +2059,845 @@ static void tidy_section_headers(TCCState *s1, int *sec_order)
      tcc_free(backmap);
  }
  
@@ -266,8 +275,11 @@ without a script is unchanged.
 +        *pp = p + 1;
 +        return ls->dot;
 +    }
-+    if (ld_word(ls, pp, "SIZEOF_HEADERS"))
-+        return ls->headers;
++    if (ld_word(ls, pp, "SIZEOF_HEADERS")) {
++        if (ls->nphdr == 0)
++            ld_error(ls, *pp, "SIZEOF_HEADERS comes after PHDRS");
++        return sizeof(ElfW(Ehdr)) + ls->nphdr * sizeof(ElfW(Phdr));
++    }
 +    if (ld_word(ls, pp, "ALIGN")) {
 +        ld_need(ls, pp, '(');
 +        v = ld_expr(ls, pp, eval);
@@ -485,6 +497,7 @@ without a script is unchanged.
 +    const char *p;
 +    char *name;
 +    LdItem it;
++    int sections = 0;
 +
 +    ls = tcc_mallocz(sizeof *ls);
 +    ls->file = file;
@@ -533,6 +546,7 @@ without a script is unchanged.
 +                ls->phdr[ls->nphdr++] = ph;
 +            }
 +        } else if (ld_word(ls, &p, "SECTIONS")) {
++            sections = 1;
 +            ld_need(ls, &p, '{');
 +            while (!ld_char(ls, &p, '}')) {
 +                name = ld_name(ls, &p, 0);
@@ -550,9 +564,20 @@ without a script is unchanged.
 +        } else {
 +            const char *e;
 +            name = ld_name(ls, &p, 1);
-+            e = ld_parse_assign(ls, &p);
-+            ld_assign(ls, name, ld_expr(ls, &e, 1));
-+            tcc_free(name);
++            if (!strcmp(name, "."))
++                ld_error(ls, p, "the location counter is set only in SECTIONS");
++            if (sections) {
++                /* evaluated where the sections before it are laid out */
++                memset(&it, 0, sizeof it);
++                it.kind = LD_ASSIGN;
++                it.name = name;
++                it.expr = ld_parse_assign(ls, &p);
++                ld_add_item(&ls->stmt, &ls->nstmt, &it);
++            } else {
++                e = ld_parse_assign(ls, &p);
++                ld_assign(ls, name, ld_expr(ls, &e, 1));
++                tcc_free(name);
++            }
 +        }
 +    }
 +    if (ls->nphdr == 0)
@@ -735,8 +760,11 @@ without a script is unchanged.
 +                    if (k != 0 || seg_vaddr < ls->headers)
 +                        tcc_error("%s: FILEHDR belongs to the first program "
 +                                  "header, before its first section", ls->file);
-+                    seg_vaddr -= ls->headers;
-+                    ph->p_paddr -= ls->headers;
++                    /* the headers at the segment's start, file offset 0,
++                       and the first section as far past them as alignment
++                       puts its address past theirs */
++                    seg_vaddr = (seg_vaddr - ls->headers) & -(addr_t)s_align;
++                    ph->p_paddr = o->lma - (o->vaddr - seg_vaddr);
 +                    seg_off = 0;
 +                } else {
 +                    seg_off = file_offset +
@@ -772,6 +800,13 @@ without a script is unchanged.
 +        if (first)
 +            tcc_error("%s: program header %s has no sections", ls->file,
 +                      ls->phdr[k].name);
++        /* what an output section reserves after its last section, by
++           advancing `.`, is memory of its segment too */
++        for (n = 0; n < ls->nout; n++) {
++            o = &ls->out[n];
++            if (o->laid && !o->discard && o->phdr == k && o->vaddr + o->size > mem_end)
++                mem_end = o->vaddr + o->size;
++        }
 +        ph->p_type = PT_LOAD;
 +        ph->p_flags = ls->phdr[k].flags >= 0 ? ls->phdr[k].flags : flags;
 +        ph->p_filesz = file_end - seg_vaddr;
@@ -811,31 +846,55 @@ without a script is unchanged.
 +    return file_offset;
 +}
 +
-+/* The script's symbols in the symbol table, absolute, each in place of any
-+   other definition, as GNU ld assigns them. */
-+static void ld_define_symbols(TCCState *s1, LdScript *ls)
++/* The script's symbol `name` in the symbol table, absolute and of `value`,
++   in place of any other definition, as GNU ld assigns it. */
++static void ld_set_symbol(const char *name, addr_t value)
 +{
-+    int i, j, idx;
++    int idx = find_elf_sym(symtab_section, name);
 +    ElfW(Sym) *esym;
++
++    if (!idx) {
++        set_elf_sym(symtab_section, value, 0, ELFW(ST_INFO)(STB_GLOBAL, STT_NOTYPE), 0,
++                    SHN_ABS, name);
++        return;
++    }
++    esym = &((ElfW(Sym) *)symtab_section->data)[idx];
++    esym->st_value = value;
++    esym->st_shndx = SHN_ABS;
++    esym->st_info = ELFW(ST_INFO)(STB_GLOBAL, STT_NOTYPE);
++    esym->st_size = 0;
++}
++
++/* Every symbol the script assigns, in the symbol table before the GOT is
++   built and the table's size is fixed: a reference to one is then to a
++   defined symbol, which no PLT entry takes the place of, and the symbol is
++   among those written. Its value comes after the layout. */
++static void ld_declare_symbols(LdScript *ls)
++{
++    int i, j;
++
++    for (i = 0; i < ls->nsym; i++)
++        ld_set_symbol(ls->sym[i].name, 0);
++    for (i = 0; i < ls->nstmt; i++)
++        if (ls->stmt[i].kind == LD_ASSIGN && strcmp(ls->stmt[i].name, "."))
++            ld_set_symbol(ls->stmt[i].name, 0);
++    for (i = 0; i < ls->nout; i++)
++        for (j = 0; j < ls->out[i].nitem; j++)
++            if (ls->out[i].item[j].kind == LD_ASSIGN && strcmp(ls->out[i].item[j].name, "."))
++                ld_set_symbol(ls->out[i].item[j].name, 0);
++}
++
++/* The script's symbols their values, the last assignment's of each. */
++static void ld_define_symbols(LdScript *ls)
++{
++    int i, j;
 +
 +    for (i = 0; i < ls->nsym; i++) {
 +        for (j = i + 1; j < ls->nsym; j++)
 +            if (!strcmp(ls->sym[j].name, ls->sym[i].name))
 +                break;
-+        if (j < ls->nsym)
-+            continue; /* a later assignment has the value */
-+        idx = find_elf_sym(symtab_section, ls->sym[i].name);
-+        if (!idx) {
-+            set_elf_sym(symtab_section, ls->sym[i].value, 0,
-+                        ELFW(ST_INFO)(STB_GLOBAL, STT_NOTYPE), 0, SHN_ABS,
-+                        ls->sym[i].name);
-+            continue;
-+        }
-+        esym = &((ElfW(Sym) *)symtab_section->data)[idx];
-+        esym->st_value = ls->sym[i].value;
-+        esym->st_shndx = SHN_ABS;
-+        esym->st_info = ELFW(ST_INFO)(STB_GLOBAL, STT_NOTYPE);
-+        esym->st_size = 0;
++        if (j == ls->nsym)
++            ld_set_symbol(ls->sym[i].name, ls->sym[i].value);
 +    }
 +}
 +
@@ -872,7 +931,7 @@ without a script is unchanged.
  /* Output an elf, coff or binary file */
  /* XXX: suppress unneeded sections */
  static int elf_output_file(TCCState *s1, const char *filename)
-@@ -2067,6 +2856,7 @@ static int elf_output_file(TCCState *s1, const char *filename)
+@@ -2069,6 +2908,7 @@ static int elf_output_file(TCCState *s1, const char *filename)
      ElfW(Sym) *sym;
      Section *strsec, *interp, *dynamic, *dynstr;
      int textrel;
@@ -880,21 +939,27 @@ without a script is unchanged.
  
      file_type = s1->output_type;
      s1->nb_errors = 0;
-@@ -2162,8 +2952,21 @@ static int elf_output_file(TCCState *s1, const char *filename)
-         dynstr->sh_size = dynstr->data_offset;
+@@ -2121,6 +2961,17 @@ static int elf_output_file(TCCState *s1, const char *filename)
+                 export_global_syms(s1);
+             }
+         }
++        if (s1->linker_script && file_type == TCC_OUTPUT_EXE) {
++            if (!s1->static_link || s1->has_text_addr)
++                tcc_error("a linker script lays out a static executable, "
++                          "without -Ttext");
++            ls = ld_parse(s1->linker_script);
++            if (ls->entry) {
++                tcc_free(s1->elf_entry);
++                s1->elf_entry = tcc_strdup(ls->entry);
++            }
++            ld_declare_symbols(ls);
++        }
+         build_got_entries(s1);
      }
  
-+    if (s1->linker_script && file_type == TCC_OUTPUT_EXE) {
-+        if (!s1->static_link || s1->has_text_addr)
-+            tcc_error("a linker script lays out a static executable, "
-+                      "without -Ttext");
-+        ls = ld_parse(s1->linker_script);
-+        if (ls->entry) {
-+            tcc_free(s1->elf_entry);
-+            s1->elf_entry = tcc_strdup(ls->entry);
-+        }
-+    }
-+
+@@ -2165,7 +3016,9 @@ static int elf_output_file(TCCState *s1, const char *filename)
+     }
+ 
      /* compute number of program headers */
 -    if (file_type == TCC_OUTPUT_OBJ)
 +    if (ls)
@@ -903,7 +968,7 @@ without a script is unchanged.
          phnum = 0;
      else if (file_type == TCC_OUTPUT_DLL)
          phnum = 3;
-@@ -2183,8 +2986,13 @@ static int elf_output_file(TCCState *s1, const char *filename)
+@@ -2185,8 +3038,13 @@ static int elf_output_file(TCCState *s1, const char *filename)
      sec_order[0] = 0;
  
      /* compute section to program header mapping */
@@ -911,7 +976,7 @@ without a script is unchanged.
 -                                  sec_order);
 +    if (ls) {
 +        file_offset = ld_layout(s1, ls, phdr, phnum, sec_order);
-+        ld_define_symbols(s1, ls);
++        ld_define_symbols(ls);
 +        ld_free(ls);
 +    } else
 +        file_offset = layout_sections(s1, phdr, phnum, interp, strsec, &dyninf,
