@@ -151,10 +151,10 @@ elif fault in ('raw-read', 'raw-write'):
         held, 'struct open_file *held = devfs_fd_is_raw(entry) ? NULL : ops_offset_held(entry);', 1)
 elif fault in ('lseek', 'llseek'):
     if fault == 'lseek':
-        start = text.index('static int32_t raw_lseek(')
+        start = text.index('static long raw_lseek(')
         end = text.index('\n}\n', start) + 3
     else:
-        start = text.index('if (devfs_fd_is_raw(entry)) {', text.index('int32_t sys__llseek('))
+        start = text.index('if (devfs_fd_is_raw(entry)) {', text.index('long sys__llseek('))
         end = text.index('if (devfs_fd_log_size(', start)
     branch = text[start:end]
     assert branch.count('fd_ofd_lock(entry->ofd);') == 1
