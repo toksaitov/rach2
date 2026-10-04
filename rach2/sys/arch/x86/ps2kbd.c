@@ -13,11 +13,19 @@
 #include "../../input.h"
 #include "../../mm/paging.h"
 
-/* The 8042's data port, where a byte from the keyboard waits. */
-#define PS2_DATA_PORT 0x60
+/* The 8042's data port, where a byte from the keyboard waits, and its status
+ * port, whose bit 0 says one does. */
+#define PS2_DATA_PORT          0x60
+#define PS2_STATUS_PORT        0x64
+#define PS2_STATUS_OUTPUT_FULL 0x01
 
 /**
- * Handle the PS/2 keyboard interrupt: read the port and hand on the code.
+ * Handle the PS/2 keyboard interrupt: read the port and hand on the code,
+ * when the controller has one waiting. A second interrupt for one byte,
+ * which the vector raised for a byte waiting at the switch to the I/O APIC
+ * and the line's own message can make (`ps2_waiting` in platform.c), finds
+ * the output buffer empty and reads nothing: the data port would give the
+ * last byte again.
  *
  * Runs in interrupt context with an arbitrary process's page directory
  * loaded, so it translates through the kernel's own directory around the
@@ -30,6 +38,9 @@ static void kbd_irq(isr_params_t *params)
 
     (void)params;
 
+    if (!(inb(PS2_STATUS_PORT) & PS2_STATUS_OUTPUT_FULL)) {
+        return;
+    }
     scancode = inb(PS2_DATA_PORT);
     saved = paging_enter_kernel();
     input_key(scancode);
