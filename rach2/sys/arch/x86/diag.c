@@ -228,17 +228,27 @@ static void diag_summary(void)
  * machine waits. The wait is a polled read of the 8042 instead of anything
  * interrupt-driven, so it holds whatever else is or is not working. A byte on
  * the serial line releases it too, since that is how this project's harnesses
- * type at a machine.
+ * type at a machine. A machine without an 8042, whose port 0x64 reads 0xff
+ * as an empty bus does, has a byte waiting after every read; one that still
+ * has one after the sixteen bytes of Linux's flush (`i8042_flush`) has no
+ * controller, and the serial line alone releases the hold.
  */
 void boot_diag_hold(void)
 {
+    int kbc = 1, n;
+
     boot_diag_report();
     diag_summary();
     klog(KLOG_INFO, "diag", "holding for a keypress");
 
     /* Drain whatever is already buffered, so a keystroke from earlier in the
      * boot does not consume the hold before anyone has read the screen. */
-    while ((inb(0x64) & 0x01u) != 0) {
+    for (n = 0; (inb(0x64) & 0x01u) != 0; n++) {
+        if (n == 16) {
+            kbc = 0;
+            klog(KLOG_INFO, "diag", "no 8042: the serial line releases the hold");
+            break;
+        }
         (void)inb(0x60);
     }
     while (serial_data_available()) {
@@ -249,7 +259,7 @@ void boot_diag_hold(void)
      * what the laptop has, or a byte on the serial line, which is how every
      * harness in this project drives a machine. */
     for (;;) {
-        if ((inb(0x64) & 0x01u) != 0) {
+        if (kbc && (inb(0x64) & 0x01u) != 0) {
             (void)inb(0x60);
             return;
         }
@@ -273,10 +283,10 @@ void boot_diag_report(void)
     diag_say("");
     diag_say("======= Boot diagnostics (rach2.diag) =======");
 
-    klog(KLOG_INFO, "diag", "kernel ends 0x%X, reservation break 0x%X", (uint32_t)(uintptr_t)&_end,
-         (uint32_t)mem_reserved_ptr);
-    klog(KLOG_INFO, "diag", "direct map ends 0x%X, %lu frames free after all reservations",
-         (uint32_t)HARD_MEMORY_LIMIT, (unsigned long)frame_free_count());
+    klog(KLOG_INFO, "diag", "kernel ends 0x%lx, reservation break 0x%lx",
+         (unsigned long)(uintptr_t)&_end, (unsigned long)mem_reserved_ptr);
+    klog(KLOG_INFO, "diag", "direct map ends 0x%lx, %lu frames free after all reservations",
+         (unsigned long)HARD_MEMORY_LIMIT, (unsigned long)frame_free_count());
 
     if (module_count == 0) {
         diag_say("  modules: none (the kernel booted alone)");
