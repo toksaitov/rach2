@@ -106,6 +106,7 @@ SCREENTEXT      = build/tests/system/screentext
 # the root Makefile and mk/images.mk.
 GROWSET         = build/tools/inspect/growset
 INSTALL_TEST_STICK = $(IMAGES_DIR)/install-test-stick.img
+INSTALLER_MBR_DISK = $(IMAGES_DIR)/installer-test-mbr.disk
 # The deadline tool: the suites' wall-clock limit with process-group kill,
 # replacing coreutils' gtimeout. Built with the host compiler like the KRFFS
 # tools.
@@ -1546,8 +1547,8 @@ $(INSTALLER_DISK): $(DEMO_CREDS) $(INSTALLER_EXT2) $(RECOVERY_IMAGE) tools/image
 # boot and recovery partitions at the notebook's offsets that the sealed disk
 # had then, the boot partition at eight sectors to a cluster, which UEFI
 # firmware does not read. installer-repair's conversion row updates it, and
-# the grow suite takes its first 130 MiB for the notebook's fixture.
-INSTALLER_MBR_DISK = $(IMAGES_DIR)/installer-test-mbr.disk
+# the grow suite takes its first 130 MiB for the notebook's fixture. Its name
+# is set with the test sticks', since prepare-images lists it.
 $(INSTALLER_MBR_DISK): $(DEMO_CREDS) $(INSTALLER_EXT2) $(RECOVERY_IMAGE) tools/image/mkdisk_grub.sh $(DISK_TOOLS) \
                        | rach2 rach2-recovery utils krffs
 	@mkdir -p $(IMAGES_DIR)
