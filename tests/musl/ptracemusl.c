@@ -244,7 +244,8 @@ static long debug_set(pid_t pid, int n, unsigned long v)
  * DR7 enables a breakpoint only on user addresses: an execute breakpoint
  * at 0x1000 in DR0, which is not a user address, is refused, and a 4-byte
  * write breakpoint whose last byte is the last user address is taken; DR7
- * is then cleared again.
+ * is then cleared again. A reserved bit, 12 or on x86-64 32, is refused,
+ * since the processor faults on the second when the switch loads it.
  */
 static int debug_bounds(pid_t pid)
 {
@@ -255,6 +256,14 @@ static int debug_bounds(pid_t pid)
         debug_set(pid, 7, 0x1 | 0x1UL << 16 | 0x3UL << 18) != 0 || debug_set(pid, 7, 0) != 0) {
         return fail("a breakpoint ending at the last user address was refused");
     }
+    if (debug_set(pid, 7, 0x1000) != -1 || errno != EINVAL) {
+        return fail("DR7 with reserved bit 12 was not refused");
+    }
+#if defined __x86_64__
+    if (debug_set(pid, 7, 0x1UL << 32) != -1 || errno != EINVAL) {
+        return fail("DR7 with reserved bit 32 was not refused");
+    }
+#endif
     return 0;
 }
 

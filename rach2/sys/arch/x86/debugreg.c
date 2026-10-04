@@ -9,10 +9,12 @@
 #include "../../lib/kerrno.h"
 #include "../../lib/ksignal.h"
 
-/* DR7: the enable bits of the four breakpoints, and GD, which a tracer may
- * not set. */
-#define DR7_ENABLES 0x000000FFu
-#define DR7_GD      0x00002000u
+/* DR7: the enable bits of the four breakpoints, and the bits a tracer may
+ * write: those, LE and GE, bit 10, which reads as one, and the conditions
+ * and lengths. The rest are GD and reserved bits; on x86-64 a one in bits
+ * 32 to 63 makes the write to DR7 fault. */
+#define DR7_ENABLES  0x000000FFu
+#define DR7_WRITABLE 0xFFFF07FFul
 
 /* DR6: the four breakpoints' bits and the single-step bit. */
 #define DR6_HITS 0x0000000Fu
@@ -72,7 +74,8 @@ int32_t debugreg_status(void)
 
 /**
  * Whether the DR7 value `v` sets what a tracer may set with the addresses
- * `t` has in DR0 to DR3: no general-detect bit, and for each breakpoint it
+ * `t` has in DR0 to DR3: no general-detect or reserved bit, and for each
+ * breakpoint it
  * enables an address aligned to its length whose bytes are all user
  * addresses, from USER_ADDR_MIN to the last below USER_ADDR_MAX, a length of
  * 1, 2 or 4 bytes (or 8 on x86-64), and an execute breakpoint of length 1;
@@ -85,7 +88,7 @@ static int dr7_valid(const process_t *t, unsigned long v)
 {
     int i;
 
-    if (v & DR7_GD) {
+    if ((v & ~DR7_WRITABLE) != 0) {
         return 0;
     }
     for (i = 0; i < 4; i++) {
