@@ -833,9 +833,10 @@ static void check_arch_flags(const char *text)
         if (!has(&cf, "-mno-sse"))
             fail("ARCH_TCC_CFLAGS of x86_64 does not keep the kernel out of "
                  "the SSE registers, as the host's compile does");
-    } else if (strncmp(ld.item[0], "-Wl,-Ttext=", strlen("-Wl,-Ttext=")) != 0) {
-        fail("sys/arch/%s/sources.mk gives no ARCH_TCC_LDFLAGS with the "
-             "kernel's text address",
+    } else if (ld.n != 1 || strcmp(ld.item[0], "-Wl,-Ttext=0x100074") != 0) {
+        fail("ARCH_TCC_LDFLAGS of %s is not -Wl,-Ttext=0x100074, the "
+             "kernel's text address in TinyCC's layout: 1 MiB, where the "
+             "first load starts, past the ELF header and two program headers",
              guest_arch);
     }
     /* The suffix rule, which rules_of passes over, and its one recipe line. */
