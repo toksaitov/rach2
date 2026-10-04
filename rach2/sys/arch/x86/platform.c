@@ -26,6 +26,7 @@
 #include "ps2mouse.h"
 #include "pit.h"
 #include "refclock.h"
+#include "smbios.h"
 #include "smpboot.h"
 
 #include "../arch.h"
@@ -211,6 +212,7 @@ void platform_firmware_init(const struct boot_info *boot)
     const struct acpi_info *a;
 
     acpi_init(boot->acpi_rsdp);
+    smbios_init(boot->efi_systab, boot->efi_systab_64);
     a = acpi_get();
     ecam_init(a);
     (void)refclock_init(a);

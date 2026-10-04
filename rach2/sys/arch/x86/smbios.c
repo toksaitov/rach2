@@ -1,10 +1,13 @@
 /*
  * smbios.c: find the firmware's table and read the BIOS vendor out of it.
  *
- * The anchor is "_SM_" on a sixteen-byte boundary between 0xF0000 and
- * 0xFFFFF, with a checksum over its own length; the newer "_SM3_" anchor is
- * read too, since a machine that publishes only that one is otherwise a
- * machine with no table. The anchor gives the address and length of the
+ * The anchor is the entry point UEFI's configuration table names, under
+ * SMBIOS 3's GUID or the older one's, when the loader passed the firmware's
+ * system table (SMBIOS 3.0, 5.2.1 and 5.2.2); and otherwise "_SM_" on a
+ * sixteen-byte boundary between 0xF0000 and 0xFFFFF, with a checksum over
+ * its own length, where a UEFI firmware need not put one. The newer "_SM3_"
+ * anchor is read too, since a machine that publishes only that one is
+ * otherwise a machine with no table. The anchor gives the address and length of the
  * structure table, which is a run of structures each with a four-byte header
  * followed by its formatted area and then its strings, one after another,
  * ending with an empty one.
@@ -12,10 +15,10 @@
  * Only the first structure of type 0, BIOS Information, is wanted, and out of
  * it the string its vendor field names. Everything else is stepped over.
  *
- * The anchor is in the read-only region below a megabyte, which is inside the
- * identity-mapped window. The structures it points at need not be: a machine
- * with more than 32 MiB usually publishes them near the top of its memory, so
- * a table above the window is mapped before it is read.
+ * The region below a megabyte is inside the identity-mapped window. What
+ * UEFI's tables and the anchors point at need not be: a machine with more
+ * than 32 MiB usually publishes them near the top of its memory, so each is
+ * reached through `table_at`, which maps what lies above the window.
  *
  * A firmware's table is data this kernel did not write, and every field read
  * out of it is bounded by the length the anchor gave. A structure that claims
@@ -47,10 +50,33 @@
 #define SMBIOS_EP32_LEN 0x1F
 #define SMBIOS_EP64_LEN 0x18
 
+/* UEFI's system table: its signature, "IBI SYST", and where the count and
+ * the address of the configuration table are in the 64-bit and the 32-bit
+ * layouts, whose entries are a GUID and an address of 8 or 4 bytes. A
+ * firmware lists a few dozen tables; more than this is not a table. */
+#define EFI_SYSTAB_SIGNATURE 0x5453595320494249ULL
+#define EFI_CFG_COUNT_64     104
+#define EFI_CFG_TABLE_64     112
+#define EFI_CFG_COUNT_32     64
+#define EFI_CFG_TABLE_32     68
+#define EFI_CFG_MAX          256u
+
+/* The GUIDs of the SMBIOS 3 and the SMBIOS entry points, in the order of
+ * their bytes in memory. */
+static const uint8_t smbios3_guid[16] = {0x44, 0x15, 0xFD, 0xF2, 0x94, 0x97, 0x2C, 0x4A,
+                                         0x99, 0x2E, 0xE5, 0xBB, 0xCF, 0x20, 0xE3, 0x94};
+static const uint8_t smbios_guid[16] = {0x31, 0x2D, 0x9D, 0xEB, 0x88, 0x2D, 0xD3, 0x11,
+                                        0x9A, 0x16, 0x00, 0x90, 0x27, 0x3F, 0xC1, 0x4D};
+
 static char vendor[SMBIOS_VENDOR_MAX];
 static int vendor_read;
 static const uint8_t *forced_table;
 static uint32_t forced_len;
+static uint64_t efi_systab;
+static int efi_64;
+
+static const uint8_t *table_at(uint64_t at, uint32_t len);
+static const uint8_t *(*phys_at)(uint64_t at, uint32_t len) = table_at;
 
 /** The sum of `len` bytes at `p`, which a valid anchor makes zero. */
 static uint8_t sum_of(const uint8_t *p, uint32_t len)
@@ -71,35 +97,95 @@ static int four_are(const uint8_t *p, const char *s)
            p[3] == (uint8_t)s[3];
 }
 
+/** The little-endian value of `n` bytes at `p`. */
+static uint64_t le(const uint8_t *p, int n)
+{
+    uint64_t v = 0;
+
+    while (n-- > 0) {
+        v = v << 8 | p[n];
+    }
+    return v;
+}
+
 /**
- * The anchor, or NULL.
- *
- * A test may present one instead of the region being scanned, which is the
- * only way to put a firmware's table in front of this code on a machine whose
- * firmware is not that one.
+ * Whether the 32 bytes at `p` begin an entry point: the 32-bit one, with a
+ * second anchor inside it and a checksum of its own over the fifteen bytes
+ * that hold the table's address and length, both required, since a
+ * candidate whose length field is short passes the outer checksum over
+ * bytes that do not include the address; or the 64-bit one.
+ */
+static int anchor_ok(const uint8_t *p)
+{
+    if (four_are(p, "_SM_")) {
+        return p[5] >= SMBIOS_EP32_LEN && p[5] <= 32 && sum_of(p, p[5]) == 0 &&
+               four_are(p + 0x10, "_DMI") && p[0x14] == '_' && sum_of(p + 0x10, 15) == 0;
+    }
+    return four_are(p, "_SM3") && p[4] == '_' && p[6] >= SMBIOS_EP64_LEN && p[6] <= 32 &&
+           sum_of(p, p[6]) == 0;
+}
+
+/** Whether the 16 bytes at `p` are the GUID `guid`. */
+static int guid_is(const uint8_t *p, const uint8_t *guid)
+{
+    int i;
+
+    for (i = 0; i < 16 && p[i] == guid[i]; i++) {
+    }
+    return i == 16;
+}
+
+/**
+ * The entry point UEFI's configuration table names under `guid`, or NULL:
+ * the system table's signature checked, its count of tables bounded, and
+ * the entry point's bytes checked as the scan checks them.
+ */
+static const uint8_t *efi_anchor(const uint8_t *guid)
+{
+    const uint8_t *st, *cfg, *e, *p;
+    uint32_t n, size = efi_64 ? 24u : 20u, i;
+    uint64_t at;
+
+    st = phys_at(efi_systab, efi_64 ? EFI_CFG_TABLE_64 + 8 : EFI_CFG_TABLE_32 + 4);
+    if (!st || le(st, 8) != EFI_SYSTAB_SIGNATURE) {
+        return 0;
+    }
+    n = (uint32_t)(efi_64 ? le(st + EFI_CFG_COUNT_64, 8) : le(st + EFI_CFG_COUNT_32, 4));
+    at = efi_64 ? le(st + EFI_CFG_TABLE_64, 8) : le(st + EFI_CFG_TABLE_32, 4);
+    if (n == 0 || n > EFI_CFG_MAX || (cfg = phys_at(at, n * size)) == 0) {
+        return 0;
+    }
+    for (i = 0; i < n; i++) {
+        e = cfg + i * size;
+        if (guid_is(e, guid)) {
+            p = phys_at(le(e + 16, efi_64 ? 8 : 4), 32);
+            return p && anchor_ok(p) ? p : 0;
+        }
+    }
+    return 0;
+}
+
+/**
+ * The anchor, or NULL: UEFI's SMBIOS 3 entry point, then its SMBIOS one,
+ * then the scan of the region below a megabyte.
  */
 static const uint8_t *find_anchor(void)
 {
+    const uint8_t *region, *p;
     uint32_t at;
 
-    for (at = SMBIOS_SCAN_START; at + 32u <= SMBIOS_SCAN_END; at += SMBIOS_SCAN_STEP) {
-#if defined(__x86_64__)
-        const uint8_t *p = (const uint8_t *)MMU_VIRT(at);
-#else
-        const uint8_t *p = (const uint8_t *)at;
-#endif
-
-        if (four_are(p, "_SM_") && p[5] >= SMBIOS_EP32_LEN && sum_of(p, p[5]) == 0 &&
-            four_are(p + 0x10, "_DMI") && p[0x14] == '_' && sum_of(p + 0x10, 15) == 0) {
-            /* The 32-bit entry point has a second anchor inside it, with a
-             * checksum of its own over the fifteen bytes that hold the table's
-             * address and length. Both are required: a candidate whose length
-             * field is short passes the outer checksum over bytes that do not
-             * include the address. */
+    if (efi_systab != 0) {
+        if ((p = efi_anchor(smbios3_guid)) != 0 || (p = efi_anchor(smbios_guid)) != 0) {
             return p;
         }
-        if (four_are(p, "_SM3") && p[4] == '_' && p[6] >= SMBIOS_EP64_LEN && sum_of(p, p[6]) == 0) {
-            return p;
+    }
+    region = phys_at(SMBIOS_SCAN_START, SMBIOS_SCAN_END - SMBIOS_SCAN_START);
+    if (!region) {
+        return 0;
+    }
+    for (at = 0; at + 32u <= SMBIOS_SCAN_END - SMBIOS_SCAN_START; at += SMBIOS_SCAN_STEP) {
+        if (anchor_ok(region + at)) {
+            return region + at;
         }
     }
     return 0;
@@ -111,28 +197,19 @@ static const uint8_t *find_anchor(void)
  * @return 1 with `*at` and `*len` filled, 0 when the anchor is one this does
  *         not read or names a region that does not fit an address.
  */
-static int table_of(const uint8_t *anchor, uint32_t *at, uint32_t *len)
+static int table_of(const uint8_t *anchor, uint64_t *at, uint32_t *len)
 {
     if (four_are(anchor, "_SM_")) {
         /* The 32-bit entry point: the length is two bytes at 0x16 and the
          * address four at 0x18. */
-        *len = (uint32_t)anchor[0x16] | ((uint32_t)anchor[0x17] << 8);
-        *at = (uint32_t)anchor[0x18] | ((uint32_t)anchor[0x19] << 8) |
-              ((uint32_t)anchor[0x1A] << 16) | ((uint32_t)anchor[0x1B] << 24);
+        *len = (uint32_t)le(anchor + 0x16, 2);
+        *at = le(anchor + 0x18, 4);
     } else if (four_are(anchor, "_SM3") && anchor[4] == '_') {
         /* The 64-bit entry point: the maximum length is four bytes at 0x0C
-         * and the address eight at 0x10, whose upper half must be zero on a
-         * machine this kernel addresses. */
-        uint32_t hi = (uint32_t)anchor[0x14] | ((uint32_t)anchor[0x15] << 8) |
-                      ((uint32_t)anchor[0x16] << 16) | ((uint32_t)anchor[0x17] << 24);
-
-        if (hi != 0) {
-            return 0;
-        }
-        *len = (uint32_t)anchor[0x0C] | ((uint32_t)anchor[0x0D] << 8) |
-               ((uint32_t)anchor[0x0E] << 16) | ((uint32_t)anchor[0x0F] << 24);
-        *at = (uint32_t)anchor[0x10] | ((uint32_t)anchor[0x11] << 8) |
-              ((uint32_t)anchor[0x12] << 16) | ((uint32_t)anchor[0x13] << 24);
+         * and the address eight at 0x10, which `table_at` refuses past 4 GiB
+         * on i686. */
+        *len = (uint32_t)le(anchor + 0x0C, 4);
+        *at = le(anchor + 0x10, 8);
     } else {
         return 0;
     }
@@ -152,11 +229,12 @@ static int table_of(const uint8_t *anchor, uint32_t *at, uint32_t *len)
  * publishes its table near the top of memory, and reading that through its
  * physical address would fault. The mapping lasts for the life of the kernel,
  * which costs a few pages once, since the vendor is read once. On x86-64 the
- * direct map has every table already.
+ * direct map has every table already. On i686 a table past 4 GiB is not
+ * reached.
  *
  * @return the address, or 0 when the table cannot be reached.
  */
-static const uint8_t *table_at(uint32_t at, uint32_t len)
+static const uint8_t *table_at(uint64_t at, uint32_t len)
 {
 #if defined(__x86_64__)
     (void)len;
@@ -164,8 +242,11 @@ static const uint8_t *table_at(uint32_t at, uint32_t len)
 #else
     uintptr_t mapped;
 
+    if (at + len < at || at + len > 0x100000000ULL) {
+        return 0;
+    }
     if (at + len <= (uint32_t)HARD_MEMORY_LIMIT) {
-        return (const uint8_t *)at;
+        return (const uint8_t *)(uintptr_t)at;
     }
     mapped = map_mmio((uintptr_t)at, (size_t)len);
     return (const uint8_t *)mapped;
@@ -218,7 +299,7 @@ static void read_vendor(void)
 {
     const uint8_t *anchor;
     const uint8_t *p;
-    uint32_t at = 0;
+    uint64_t at = 0;
     uint32_t len = 0;
     const uint8_t *end;
 
@@ -233,7 +314,7 @@ static void read_vendor(void)
         if (!anchor || !table_of(anchor, &at, &len)) {
             return;
         }
-        p = table_at(at, len);
+        p = phys_at(at, len);
         if (!p) {
             return;
         }
@@ -291,6 +372,19 @@ int smbios_vendor_is(const char *prefix)
         }
     }
     return i > 0;
+}
+
+void smbios_init(uint64_t systab, int wide)
+{
+    efi_systab = systab;
+    efi_64 = wide;
+    vendor_read = 0;
+}
+
+void smbios_set_memory(const uint8_t *(*read)(uint64_t at, uint32_t len))
+{
+    phys_at = read ? read : table_at;
+    vendor_read = 0;
 }
 
 void smbios_set_table(const void *at, unsigned int len)

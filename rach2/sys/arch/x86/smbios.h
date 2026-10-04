@@ -1,11 +1,14 @@
 #ifndef _SMBIOS_H_
 #define _SMBIOS_H_
 
+#include "../../lib/kint.h"
+
 /*
  * smbios: what the firmware says about itself.
  *
- * The firmware publishes a table in the read-only region below a megabyte,
- * found by an anchor this scans for. Only one thing is read out of it: the
+ * The firmware publishes a table, found by the entry point UEFI's
+ * configuration table names or by an anchor this scans the read-only region
+ * below a megabyte for. Only one thing is read out of it: the
  * vendor of the BIOS, which is what decides whether a reset command meant for
  * one firmware's system-management handler is sent at all. A machine whose
  * firmware is not the one that command belongs to must not be sent it: the
@@ -25,6 +28,11 @@
  */
 const char *smbios_bios_vendor(void);
 
+/** The UEFI system table the loader passed, at physical `systab`, or 0, and
+ * whether its pointers are 64 bits wide (`wide`), in which the firmware's
+ * configuration table names the entry point. */
+void smbios_init(uint64_t systab, int wide);
+
 /**
  * Whether the BIOS vendor's name begins with `prefix`, case-sensitively.
  *
@@ -38,12 +46,17 @@ int smbios_vendor_is(const char *prefix);
  * Read the structures at `at`, `len` bytes of them, rather than scanning for
  * an anchor; for a host test.
  *
- * The structures are what an anchor yields, so this is where the reader is
- * put under test. The anchor's own walk is not: its address field is thirty-
- * two bits, and a test on a sixty-four bit host cannot put a table where such
- * a field can point at it. NULL restores the scan, and the cached answer is
- * dropped either way, so a test may present one table after another.
+ * The structures are what an anchor yields, so this is where the reader of
+ * the structures is put under test; the search for the anchor is put under
+ * test through `smbios_set_memory`. NULL restores the search, and the cached
+ * answer is dropped either way, so a test may present one table after
+ * another.
  */
 void smbios_set_table(const void *at, unsigned int len);
+
+/** For a host test: read physical memory through `read`, which gives the
+ * address of `len` bytes at physical `at` or NULL, in place of the kernel's
+ * mappings; NULL restores them. The cached answer is dropped. */
+void smbios_set_memory(const uint8_t *(*read)(uint64_t at, uint32_t len));
 
 #endif /* _SMBIOS_H_ */

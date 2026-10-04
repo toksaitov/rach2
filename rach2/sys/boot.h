@@ -80,6 +80,12 @@ struct boot_info {
      * firmware's own or the kernel's copy of the one a loader passed, or 0,
      * and the platform then searches the BIOS area for it. */
     uint64_t acpi_rsdp;
+    /* The physical address of the UEFI system table a loader passed, or 0,
+     * and whether its pointers are 64 bits wide: the firmware's
+     * configuration table, which names SMBIOS's entry point, is found
+     * through it. */
+    uint64_t efi_systab;
+    int efi_systab_64;
     /* The screen. */
     struct boot_framebuffer fb;
     /* Whether the machine booted by UEFI, which the loader says by passing

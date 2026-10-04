@@ -370,8 +370,18 @@ static void mb2_tag(const uint8_t *t, uint32_t size, struct boot_info *boot, str
         set_framebuffer(&boot->fb, t + 8, t + 32, size - 32, t + 34, n);
         break;
     case MB2_TAG_EFI32:
+        boot->uefi = 1;
+        if (size >= 12) {
+            boot->efi_systab = le32(t + 8);
+            boot->efi_systab_64 = 0;
+        }
+        break;
     case MB2_TAG_EFI64:
         boot->uefi = 1;
+        if (size >= 16) {
+            boot->efi_systab = le64(t + 8);
+            boot->efi_systab_64 = 1;
+        }
         break;
     case MB2_TAG_ACPI_OLD:
         if (size >= 8 + 20 && st->rsdp_len == 0) {

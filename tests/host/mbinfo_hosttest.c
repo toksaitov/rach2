@@ -360,6 +360,8 @@ static void row_efi_mmap(void)
     list_end();
     CHECK(mb2_read(mbi, &boot, &store) == 0, "a UEFI list reads");
     CHECK(boot.uefi && store.mmap_efi, "the EFI tags say UEFI");
+    CHECK(boot.efi_systab == 0x7FB9E018ull && boot.efi_systab_64,
+          "the 64-bit system table's address is kept");
     CHECK(map_is(0, 0, 0xA0000, 1), "boot services code and conventional memory join");
     CHECK(map_is(1, 0xA0000, 0x60000, 2), "the hole is reserved");
     CHECK(map_is(2, 0x100000, 0x6800000, 1),
@@ -421,6 +423,16 @@ static void row_efi_mmap(void)
                   boot.mmap_len == BOOT_MMAP_MAX * BOOT_MMAP_ENTRY && store.mmap_cut == 5,
               "a map past the record's entries is cut and counted");
     }
+
+    /* The 32-bit system table's tag. */
+    list_begin();
+    tag_begin(11);
+    put32(0x7F000010u);
+    tag_end();
+    list_end();
+    CHECK(mb2_read(mbi, &boot, &store) == 0 && boot.uefi && boot.efi_systab == 0x7F000010u &&
+              !boot.efi_systab_64,
+          "the 32-bit system table's address is kept");
 
     /* A descriptor size that wraps past 2^32 from the tag's end reads no
        descriptor: not the two tags after it, whose bytes a read past the
