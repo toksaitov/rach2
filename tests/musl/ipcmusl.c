@@ -11,7 +11,9 @@
  * writable with mprotect. The direct shmget, shmat and shmdt do the same as
  * ipc's.
  *
- * A set of two semaphores takes SETVAL and GETALL; a decrement past 0 with
+ * A set of two semaphores takes SETVAL and GETALL, and IPC_STAT gives its
+ * count and the time it changed, each where Linux's struct has it; a
+ * decrement past 0 with
  * IPC_NOWAIT is EAGAIN, one with a timeout EAGAIN after it, and one that
  * waits is let through by the parent's increment; a child's SEM_UNDO
  * decrement is undone at its exit; removing the set wakes a waiter with
@@ -150,13 +152,19 @@ static int sem_rows(void)
 {
     struct sembuf take = {0, -1, IPC_NOWAIT}, give = {0, 1, 0}, wait0 = {0, -1, 0};
     struct timespec ts = {0, 100000000};
+    struct semid_ds ds;
     unsigned short all[2];
     int id = semget(IPC_PRIVATE, 2, IPC_CREAT | 0600);
+    time_t now = time(NULL);
     pid_t child;
 
     if (id < 0 || semctl(id, 1, SETVAL, 1) != 0 || semctl(id, 0, GETALL, all) != 0 || all[0] != 0 ||
         all[1] != 1) {
         return fail("semget, SETVAL and GETALL");
+    }
+    if (semctl(id, 0, IPC_STAT, &ds) != 0 || ds.sem_nsems != 2 || ds.sem_ctime < now - 60 ||
+        ds.sem_ctime > now + 60) {
+        return fail("IPC_STAT of a set of two did not give its count and its change time");
     }
     if (semop(id, &take, 1) != -1 || errno != EAGAIN) {
         return fail("a decrement past 0 with IPC_NOWAIT is EAGAIN");
