@@ -408,10 +408,9 @@ static uint32_t ts_deadline(const struct poll_timespec *ts, int *has_deadline)
         return 0;
     }
     *has_deadline = 1;
-    sec = (uint32_t)ts->tv_sec;
-    if (sec > 21474836u) {
-        sec = 21474836u;
-    }
+    /* The seconds are compared at their own width, a long, before they are
+     * narrowed: on x86-64 a timeout of 2^32 seconds would read as 0. */
+    sec = (unsigned long)ts->tv_sec > 21474836ul ? 21474836u : (uint32_t)ts->tv_sec;
     ticks = sec * 100u + (uint32_t)ts->tv_nsec / 10000000u;
     if (ticks > 0x7FFFFFFEu) {
         ticks = 0x7FFFFFFEu;

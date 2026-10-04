@@ -14,7 +14,10 @@
  *   (f) fd contract: a wide nfds with only in-range bits works; a bit naming
  *       a closed fd, past the table or not, is -EBADF; nfds past the fd_set
  *       width is -EINVAL (never a silent truncation);
- *   (g) bad timeout: an out-of-range timeval (tv_usec >= 1e6) is -EINVAL.
+ *   (g) bad timeout: an out-of-range timeval (tv_usec >= 1e6) is -EINVAL;
+ *   (h) on x86-64, a ppoll whose timeout is 2^32 seconds waits for its pipe,
+ *       which a child writes after 50 ms, and does not end at once, as a
+ *       timeout narrowed to 32 bits would.
  *
  * Prints "POLLPROBE OK". Freestanding; direct system calls (probe.h).
  */
@@ -224,6 +227,30 @@ PROBE_START void _start(void)
         check(syscall5(SYS_SELECT, 0, 0, 0, 0, (long)tv) == -EINVAL,
               "select with tv_usec >= 1e6 -> -EINVAL");
     }
+
+#if defined __x86_64__
+    /* (h) a ppoll timeout past 32 bits of seconds. */
+    {
+        long ts[2] = {4294967296L, 0};
+        int c[2];
+
+        check(do_pipe(c) == 0, "pipe for the ppoll row");
+        pid = syscall0(SYS_FORK);
+        if (pid == 0) {
+            msleep(50);
+            syscall3(SYS_WRITE, c[1], (long)"x", 1);
+            sys_exit(0);
+        }
+        pfd[0].fd = c[0];
+        pfd[0].events = POLLIN;
+        pfd[0].revents = 0;
+        check(syscall5(SYS_PPOLL, (long)pfd, 1, (long)ts, 0, 8) == 1 && (pfd[0].revents & POLLIN),
+              "ppoll with a timeout of 2^32 seconds waits for its pipe");
+        syscall3(SYS_WAITPID, pid, (long)&status, 0);
+        syscall1(SYS_CLOSE, c[0]);
+        syscall1(SYS_CLOSE, c[1]);
+    }
+#endif
 
     if (fails == 0) {
         puts("POLLPROBE OK");
