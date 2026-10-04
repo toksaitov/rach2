@@ -83,7 +83,8 @@ static int waitpid(int pid, int *st, int opt)
 {
     return syscall3(SYS_WAITPID, pid, (long)st, opt);
 }
-static int times(void *tms)
+/* times' result and fields are clock_t, a long: 64 bits on x86-64. */
+static long times(void *tms)
 {
     return syscall1(SYS_TIMES, (long)tms);
 }
@@ -107,8 +108,9 @@ static void puts(const char *s)
 }
 
 /** Whether a + b is at most t, for t > 0 and a and b not negative, by a
- * subtraction that cannot overflow where the sum could. */
-static int sum_within(int a, int b, int t)
+ * subtraction that cannot overflow where the sum could, at the width of a
+ * clock_t, so that no field is cut before it is compared. */
+static int sum_within(long a, long b, long t)
 {
     return t > 0 && a >= 0 && b >= 0 && a <= t && b <= t - a;
 }
@@ -150,13 +152,13 @@ PROBE_START void _start(void)
        tms is negative or more than the ticks since boot. */
     {
         long tms[4];
-        int t;
+        long t;
         tms[0] = tms[1] = tms[2] = tms[3] = -1;
         t = times(tms);
         check(t > 0, "times() returns a positive tick count");
         check(tms[0] >= 0 && tms[1] >= 0 && tms[2] >= 0 && tms[3] >= 0,
               "times() fills the tms fields");
-        check(sum_within((int)tms[0], (int)tms[1], t) && sum_within((int)tms[2], (int)tms[3], t),
+        check(sum_within(tms[0], tms[1], t) && sum_within(tms[2], tms[3], t),
               "times() reports no more CPU time than the ticks since boot");
     }
 
