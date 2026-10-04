@@ -230,6 +230,16 @@ static void check_multiboot2(void)
     check(bootslot_validate_kernel(kernel, whole, whole, err, sizeof(err)) == -1 &&
               strstr(err, "no multiboot2 header") != NULL,
           "an i386 kernel without a multiboot2 header is refused");
+    make_kernel();
+    put32(kernel + 120, 25);
+    put32(kernel + 124, 0u - (0xE85250D6u + 25u));
+    put32(kernel + 128, 4);
+    put32(kernel + 132, 9);
+    put32(kernel + 144, 0);
+    put32(kernel + 148, 8);
+    check(bootslot_validate_kernel(kernel, whole, whole, err, sizeof(err)) == -1 &&
+              strstr(err, "no end tag") != NULL,
+          "a multiboot2 tag padded past the header's end is refused");
     make_kernel64();
     put32(kernel + 0x1020, 0);
     check(bootslot_validate_kernel(kernel, whole, whole, err, sizeof(err)) == -1 &&

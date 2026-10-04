@@ -56,7 +56,7 @@ run_phase()
 
 echo "bootslot-mutation: logs: $work"
 run_phase fixed 0 'bootslot-hosttest: result: pass:'
-for fault in order bound policy mb2 padded search chain tags x86tags pair; do
+for fault in order bound policy mb2 padded search chain tags tagend x86tags pair; do
     python3 - "$work/bootslot.c" "$fault" <<'PY'
 import pathlib
 import sys
@@ -95,6 +95,7 @@ else:
                   'return size <= len * cluster_bytes && len * cluster_bytes - size < cluster_bytes;'),
         "tags": ('} else if (type != 4 && type != 5 && (le16(h + at + 2) & 1u) == 0) {',
                  '} else if (0) {'),
+        "tagend": ('if (at > len || len - at < 8) {', 'if (len - at < 8) {'),
         "x86tags": ('if (x86_64 && address == 0) {', 'if (x86_64 < 0 && address == 0) {'),
         "pair": ('if ((address != 0) != (entry != 0)) {', 'if (0) {'),
     }[sys.argv[2]]
@@ -111,6 +112,7 @@ PY
         search) message='ends past the 8192 bytes the slot checks read is refused' ;;
         chain) message='a chain of 4 GiB and 64 KiB does not fit a file of 64 KiB' ;;
         tags) message='the check does not know is refused' ;;
+        tagend) message="a multiboot2 tag padded past the header's end is refused" ;;
         x86tags) message='without its address and entry tags is refused' ;;
         pair) message='a multiboot2 address tag without an entry tag is refused' ;;
     esac

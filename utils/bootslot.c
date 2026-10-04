@@ -679,7 +679,7 @@ static int multiboot2_tags(const uint8_t *image, uint32_t off, uint32_t size, in
     for (;;) {
         uint32_t type, tag_size;
 
-        if (len - at < 8) {
+        if (at > len || len - at < 8) {
             return fail(err, errlen, "the multiboot2 tags have no end tag");
         }
         type = le16(h + at);
