@@ -156,6 +156,18 @@ static void alarm_in(long usec)
     setitimer(ITIMER_REAL, &it, NULL);
 }
 
+/** Send SIGALRM every `usec` microseconds until `alarm_in(0)`: a sleep
+ * begun after one alarm, by a process descheduled between the arming and
+ * the call, is still ended by the next. */
+static void alarm_every(long usec)
+{
+    struct itimerval it;
+
+    it.it_value.tv_sec = it.it_interval.tv_sec = usec / 1000000;
+    it.it_value.tv_usec = it.it_interval.tv_usec = usec % 1000000;
+    setitimer(ITIMER_REAL, &it, NULL);
+}
+
 /** The eight clocks, their resolutions, and the CPU clocks by id. */
 static int clocks(void)
 {
@@ -533,6 +545,7 @@ static int wide_times(void)
     {
         struct sigaction sa;
         struct kts req;
+        long r;
 
         memset(&sa, 0, sizeof(sa));
         sa.sa_handler = on_alarm;
@@ -540,15 +553,18 @@ static int wide_times(void)
         req.sec = 1L << 32;
         req.nsec = 0;
         alarms = 0;
-        alarm_in(100000);
-        if (syscall(SYS_nanosleep, &req, NULL) != -1 || errno != EINTR || alarms != 1) {
+        alarm_every(100000);
+        r = syscall(SYS_nanosleep, &req, NULL);
+        alarm_in(0);
+        if (r != -1 || errno != EINTR || alarms < 1) {
             return fail("a sleep of 2^32 seconds did not wait for the signal");
         }
         req.sec = 1L << 62;
         alarms = 0;
-        alarm_in(100000);
-        if (sleep_raw(CLOCK_MONOTONIC, TIMER_ABSTIME, &req, NULL) != -1 || errno != EINTR ||
-            alarms != 1) {
+        alarm_every(100000);
+        r = sleep_raw(CLOCK_MONOTONIC, TIMER_ABSTIME, &req, NULL);
+        alarm_in(0);
+        if (r != -1 || errno != EINTR || alarms < 1) {
             return fail("an absolute sleep to 2^62 seconds did not wait for the signal");
         }
     }

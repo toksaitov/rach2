@@ -733,7 +733,7 @@ static int messages(void)
 static int clocks(void)
 {
     int64_t t[2] = {-1, -1};
-    struct timespec now;
+    struct timespec before, after;
     long stored = -1, got;
 
     if (syscall(SYS_CLOCK_GETTIME64, CLOCK_MONOTONIC, t) != 0 || t[0] < 0 || t[1] < 0 ||
@@ -741,10 +741,16 @@ static int clocks(void)
         return fail("clock_gettime64");
     }
     /* The raw time call, which glibc makes on x86-64, gives real time's
-       seconds and stores them as well. */
-    clock_gettime(CLOCK_REALTIME, &now);
+       seconds, between two readings of the clock taken around it whatever
+       the process waited, and stores them as well. */
+    if (clock_gettime(CLOCK_REALTIME, &before) != 0) {
+        return fail("clock_gettime before time");
+    }
     got = syscall(SYS_time, &stored);
-    if (got < (long)now.tv_sec || got > (long)now.tv_sec + 1 || stored != got) {
+    if (clock_gettime(CLOCK_REALTIME, &after) != 0) {
+        return fail("clock_gettime after time");
+    }
+    if (got < (long)before.tv_sec || got > (long)after.tv_sec || stored != got) {
         return fail("time");
     }
     return 0;

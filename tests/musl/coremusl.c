@@ -75,6 +75,10 @@ typedef Elf64_Nhdr Nhdr;
 #define PRPSINFO_SIZE 136
 #define PR_FNAME      40
 #define STACK_TOP     0x00007FFFFFFFF000ul
+/* r12, the fourth register of pr_reg, which starts at 112. */
+#define PR_SPIN_REG   136
+#define SPIN_LOOP     "xorl %%r12d, %%r12d\n1:\tincq %%r12\n\tmovq %%r12, %0\n\tjmp 1b"
+#define SPIN_REG_NAME "r12"
 #else
 typedef Elf32_Ehdr Ehdr;
 typedef Elf32_Phdr Phdr;
@@ -86,6 +90,10 @@ typedef Elf32_Nhdr Nhdr;
 #define PRPSINFO_SIZE 124
 #define PR_FNAME      28
 #define STACK_TOP     0xC0000000u
+/* esi, the fourth register of pr_reg, which starts at 72. */
+#define PR_SPIN_REG   84
+#define SPIN_LOOP     "xorl %%esi, %%esi\n1:\tincl %%esi\n\tmovl %%esi, %0\n\tjmp 1b"
+#define SPIN_REG_NAME "esi"
 #endif
 #define PR_CURSIG 12
 
@@ -514,28 +522,34 @@ static int hole_row(void)
 }
 
 /* The thread id of the thread `spin_thread` runs, which it stores before it
- * spins. */
+ * spins, and the count it keeps in memory. */
 static volatile pid_t spinner;
+static volatile unsigned long spin_count;
 
-/** Store the thread's id and spin in user mode for ever. */
+/** Store the thread's id and spin in user mode for ever, counting in a
+ * register and storing each count in `spin_count`. */
 static void *spin_thread(void *arg)
 {
     (void)arg;
     spinner = (pid_t)syscall(SYS_gettid);
-    for (;;) {
-    }
+    __asm__ __volatile__(SPIN_LOOP : "=m"(spin_count) : : SPIN_REG_NAME, "memory");
     return NULL;
 }
 
 /** The pids of the NT_PRSTATUS notes of the core file at CORE_PATH, at most
- * `most` of them into `pids`; their count, or -1 when it cannot be read. */
-static int status_pids(pid_t *pids, int most)
+ * `most` of them into `pids`; their count, or -1 when it cannot be read. The
+ * last note's counting register goes into `*reg` and the word of its memory
+ * at the address of `spin_count` into `*mem`, each 0 when not found. */
+static int status_pids(pid_t *pids, int most, unsigned long *reg, unsigned long *mem)
 {
     size_t size;
     unsigned char *core = slurp(CORE_PATH, &size);
     const Ehdr *eh = (const Ehdr *)core;
     int i, count = 0;
 
+    uintptr_t at = (uintptr_t)&spin_count;
+
+    *reg = *mem = 0;
     if (!core || size < sizeof(*eh) || eh->e_phoff + (size_t)eh->e_phnum * sizeof(Phdr) > size) {
         free(core);
         return -1;
@@ -545,7 +559,14 @@ static int status_pids(pid_t *pids, int most)
         const unsigned char *p = core + ph->p_offset;
         const unsigned char *end = p + ph->p_filesz;
 
-        if (ph->p_type != PT_NOTE || (size_t)ph->p_offset + ph->p_filesz > size) {
+        if ((size_t)ph->p_offset + ph->p_filesz > size) {
+            continue;
+        }
+        if (ph->p_type == PT_LOAD && at >= ph->p_vaddr &&
+            at - ph->p_vaddr + sizeof(*mem) <= ph->p_filesz) {
+            memcpy(mem, p + (at - ph->p_vaddr), sizeof(*mem));
+        }
+        if (ph->p_type != PT_NOTE) {
             continue;
         }
         while (p + 12 <= end) {
@@ -556,6 +577,7 @@ static int status_pids(pid_t *pids, int most)
                 int32_t pid;
 
                 memcpy(&pid, desc + PR_PID, sizeof(pid));
+                memcpy(reg, desc + PR_SPIN_REG, sizeof(*reg));
                 pids[count++] = pid;
             }
             p = desc + ((n->n_descsz + 3) & ~3u);
@@ -568,10 +590,15 @@ static int status_pids(pid_t *pids, int most)
 /** A child of two threads whose main thread aborts while the other spins in
  * user mode, on another processor where there is one: the wait reports
  * WCOREDUMP, and the core has a status for each thread, the aborting one's
- * first, so the spinning thread parked for the dump and ended after it. */
+ * first, so the spinning thread parked for the dump and ended after it. The
+ * spinning thread's count in its register, in the core, is the count in
+ * memory or one ahead of it: the thread stopped before its memory was
+ * copied. A frame left from before, of a thread still running while its
+ * memory was copied, is far behind the memory. */
 static int threads_row(void)
 {
     pid_t pids[4];
+    unsigned long reg, mem;
     int status;
     pid_t child = fork();
 
@@ -596,8 +623,13 @@ static int threads_row(void)
         return fail("a process of two threads left no core");
     }
     errno = 0;
-    if (status_pids(pids, 4) != 2 || pids[0] != child || pids[1] <= 0 || pids[1] == child) {
+    if (status_pids(pids, 4, &reg, &mem) != 2 || pids[0] != child || pids[1] <= 0 ||
+        pids[1] == child) {
         return fail("the core of two threads has no status for each");
+    }
+    if (reg - mem > 1) {
+        return fail("the spinning thread's registers in the core are not the ones it stopped "
+                    "with before its memory was copied");
     }
     return 0;
 }
