@@ -280,6 +280,10 @@ static int pipes(void)
 
 static int futex_word;
 
+/* The waits that slept until a wake, and the calls that failed otherwise than
+ * a wait does when the word has changed or a signal came. */
+static int futex_slept, futex_errors;
+
 static void futex_turns(int parity)
 {
     int i;
@@ -288,10 +292,16 @@ static void futex_turns(int parity)
         int v;
 
         while (((v = __atomic_load_n(&futex_word, __ATOMIC_SEQ_CST)) & 1) != parity) {
-            syscall(SYS_futex, &futex_word, FUTEX_WAIT, v, NULL, NULL, 0);
+            if (syscall(SYS_futex, &futex_word, FUTEX_WAIT, v, NULL, NULL, 0) == 0) {
+                __atomic_add_fetch(&futex_slept, 1, __ATOMIC_SEQ_CST);
+            } else if (errno != EAGAIN && errno != EINTR) {
+                __atomic_add_fetch(&futex_errors, 1, __ATOMIC_SEQ_CST);
+            }
         }
         __atomic_add_fetch(&futex_word, 1, __ATOMIC_SEQ_CST);
-        syscall(SYS_futex, &futex_word, FUTEX_WAKE, 1, NULL, NULL, 0);
+        if (syscall(SYS_futex, &futex_word, FUTEX_WAKE, 1, NULL, NULL, 0) < 0) {
+            __atomic_add_fetch(&futex_errors, 1, __ATOMIC_SEQ_CST);
+        }
     }
 }
 
@@ -306,13 +316,15 @@ static void *futex_last(void *arg)
 }
 
 /** Two threads on the first and the last processor taking turns through a
- * futex word, which ends at twice the turns. */
+ * futex word, which ends at twice the turns, with no call failed and some of
+ * the waits asleep until the other's wake: threads that only polled the word
+ * would end it there too. */
 static int futexes(void)
 {
     pthread_t t;
     void *rc;
 
-    futex_word = 0;
+    futex_word = futex_slept = futex_errors = 0;
     if (pthread_create(&t, NULL, futex_last, NULL) != 0) {
         return fail("pthread_create");
     }
@@ -325,6 +337,9 @@ static int futexes(void)
     }
     if (futex_word != 2 * FUTEX_TURNS) {
         return fail("the futex word is not twice the turns");
+    }
+    if (futex_errors != 0 || futex_slept == 0) {
+        return fail("a futex call failed, or no wait slept until a wake");
     }
     return 0;
 }
@@ -427,6 +442,31 @@ static long long mono_ns(void)
     return (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
 }
 
+/**
+ * The clock's time with the counter at the same moment, in `*t`: of sixteen
+ * readings of the clock between two of the counter, the one whose two are
+ * closest, at their midpoint, so that a preemption between a counter's
+ * reading and the clock's skews no rate made from it.
+ */
+static long long clock_with_tsc(unsigned long long *t)
+{
+    unsigned long long a, b, best = ~0ull;
+    long long c, clock = 0;
+    int i;
+
+    for (i = 0; i < 16; i++) {
+        a = tsc();
+        c = mono_ns();
+        b = tsc();
+        if (b - a < best) {
+            best = b - a;
+            clock = c;
+            *t = a + (b - a) / 2u;
+        }
+    }
+    return clock;
+}
+
 /*
  * The counter's rate, from the clock on the first processor over 200 ms;
  * then on the last, sleeps of 1 to 16 ms, each timed by the counter and
@@ -445,11 +485,9 @@ static int sleeps(void)
     }
     req.tv_sec = 0;
     req.tv_nsec = (long)MEASURE_NS;
-    t0 = tsc();
-    c0 = mono_ns();
+    c0 = clock_with_tsc(&t0);
     nanosleep(&req, NULL);
-    t1 = tsc();
-    c1 = mono_ns();
+    c1 = clock_with_tsc(&t1);
     if (c1 <= c0 || t1 <= t0) {
         return fail("the counter or the clock did not move");
     }
