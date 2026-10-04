@@ -6,6 +6,7 @@
 #        testing.sh run COMMAND...
 #        testing.sh get PATH...
 #        testing.sh sh
+#        testing.sh wait NAME [SEEN]
 #
 # `sync` replaces the tracked files of the copy on the testing host with the
 # tree here. Whatever `.gitignore` names, `build/`, the extracted vendor trees
@@ -22,6 +23,17 @@
 # of zeros are written as holes, which the Mac's APFS keeps only for a long
 # run, so an image that is sparse on the host is not sparse here. `sh` opens
 # an interactive shell in the copy.
+#
+# `wait` watches a run started on the host as `/home/testing/NAME.sh`, which
+# writes its results as lines beginning `NAME: ` to `/home/testing/NAME.out`
+# and its work under `/home/testing/NAME/`, and returns as soon as there is
+# something to act on: more than SEEN result lines (0 unless given), the run
+# ended, nothing under its work directory changed for 15 minutes, which is a
+# step stuck, or 100 minutes gone, which is before the two hours a background
+# command of an agent may last. It prints the new lines and the reason, so
+# that the caller reads each result when it lands and waits again with the
+# new count; a watch that woke only at a run's end left results unread for
+# hours behind its slower phases.
 #
 # The host is reached as `ssh testing`. Its ssh server answers in an MSYS
 # shell on Windows; the copy lives in the WSL distribution, so the receiving
@@ -101,8 +113,38 @@ case "${1:-}" in
     sh)
         ssh -t "$HOST" "wsl.exe -- bash -lc 'cd $DEST && exec bash'"
         ;;
+    wait)
+        name=${2:-}
+        seen=${3:-0}
+        case "$name" in
+            ''|*[!A-Za-z0-9_-]*) echo "testing: wait needs a run's name" >&2; exit 2 ;;
+        esac
+        end=$(( $(date +%s) + 6000 ))
+        while :; do
+            out=$(printf 'pgrep -f /home/testing/%s.sh > /dev/null || pgrep -f "sh %s.sh" > /dev/null && echo RUNNING; find /home/testing/%s -type f -mmin -15 2>/dev/null | head -1 | grep -q . && echo FRESH; cat /home/testing/%s.out 2>/dev/null\n' \
+                "$name" "$name" "$name" "$name" | "$0" sh 2>/dev/null) || out=
+            lines=$(printf '%s\n' "$out" | grep -c "^$name: ")
+            new=$(printf '%s\n' "$out" | grep "^$name: " | tail -n +$((seen + 1)))
+            case "$out" in
+                *RUNNING*) ;;
+                *) printf '%s\n' "$new"; echo "testing: $name: ended, $lines lines"; exit 0 ;;
+            esac
+            if [ "$lines" -gt "$seen" ]; then
+                printf '%s\n' "$new"; echo "testing: $name: running, $lines lines"; exit 0
+            fi
+            case "$out" in
+                *FRESH*) ;;
+                *) echo "testing: $name: stalled, nothing under /home/testing/$name changed for 15 minutes, $lines lines"; exit 0 ;;
+            esac
+            if [ "$(date +%s)" -ge "$end" ]; then
+                echo "testing: $name: still running after 100 minutes, $lines lines; wait again"
+                exit 0
+            fi
+            sleep 60
+        done
+        ;;
     *)
-        echo "usage: testing.sh sync | run COMMAND... | get PATH... | sh" >&2
+        echo "usage: testing.sh sync | run COMMAND... | get PATH... | sh | wait NAME [SEEN]" >&2
         exit 2
         ;;
 esac
