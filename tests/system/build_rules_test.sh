@@ -30,7 +30,8 @@
 #   * key-names: in a tree with a recovery key the sealed disk and the GRUB
 #     disk are made under `-with-key` names, as the recovery image, the ISO
 #     and the stick are, and not under the plain ones; and `make
-#     no-recovery-key` removes both names of both disks.
+#     no-recovery-key` removes both names of both disks in both
+#     architectures' image directories.
 #   * release-guard: in a tree with a recovery key, `make release` and a
 #     build with RELEASE=1 are refused before anything is built, while a
 #     development build is not; in a tree without one RELEASE=1 is not
@@ -121,6 +122,7 @@ cp "$S/tools/verify/check_sources.sh" "$WORK/check_sources.saved"
 cp "$C/mk/toolchain.mk" "$WORK/toolchain.saved"
 cp "$C/Makefile" "$WORK/Makefile.saved"
 cp "$C/mk/images.mk" "$WORK/images.saved"
+cp "$C/mk/arch.mk" "$WORK/arch.saved"
 
 # The PATH with each directory that holds a cross compiler replaced by one of
 # links to everything else in it: make, the shell and the utilities are still
@@ -331,7 +333,17 @@ key_names_row()
     : >"$C/krffs/recovery_authorized_keys"
     database keyed.db
     keyed_rc=$rc
-    build_make keyed.remove -n no-recovery-key
+    # The removal runs for real, in the private tree, over files planted in
+    # both architectures' image directories: its recipe is a loop over them,
+    # whose names a dry run prints only through the loop's variable.
+    for d in build/images build/x86_64/images; do
+        mkdir -p "$C/$d"
+        for p in rach2-sealed.disk rach2-sealed-with-key.disk os-real-grub.disk \
+            os-real-grub-with-key.disk; do
+            : >"$C/$d/$p"
+        done
+    done
+    build_make keyed.remove no-recovery-key
     remove_rc=$rc
     rm -f "$C/krffs/recovery_authorized_keys"
     db="$WORK/keyed.db"
@@ -353,11 +365,13 @@ key_names_row()
     need=$(prereqs "$db" build/images/rach2-install-stick-with-key.img) || need=
     has "$need" build/images/rach2-sealed-with-key.disk ||
         { fail key-names "the keyed stick does not carry the keyed sealed disk"; return; }
-    [ "$remove_rc" -eq 0 ] || { fail key-names "make -n no-recovery-key: status $remove_rc"; return; }
-    for p in rach2-sealed.disk rach2-sealed-with-key.disk os-real-grub.disk \
-        os-real-grub-with-key.disk; do
-        grep -Eq "build/images/$p([^-a-z]|\$)" "$WORK/keyed.remove" ||
-            { fail key-names "make no-recovery-key does not remove $p"; return; }
+    [ "$remove_rc" -eq 0 ] || { fail key-names "make no-recovery-key: status $remove_rc"; return; }
+    for d in build/images build/x86_64/images; do
+        for p in rach2-sealed.disk rach2-sealed-with-key.disk os-real-grub.disk \
+            os-real-grub-with-key.disk; do
+            [ ! -e "$C/$d/$p" ] ||
+                { fail key-names "make no-recovery-key does not remove $d/$p"; return; }
+        done
     done
     pass key-names
 }
@@ -465,7 +479,8 @@ rows
 # the tools' names defined in mk/images.mk after the disk rules that name
 # them, and the fragment included before the names its own rules take (114).
 # shellcheck disable=SC2016
-for fault in unlisted missing clean grub-target tools-late include-early plain-sealed release; do
+for fault in unlisted missing clean grub-target tools-late include-early plain-sealed one-arch \
+    release; do
     case $fault in
         unlisted)
             copies="$S/tools/verify/check_sources.sh=$WORK/check_sources.saved"
@@ -496,6 +511,10 @@ for fault in unlisted missing clean grub-target tools-late include-early plain-s
             copies="$C/Makefile=$WORK/Makefile.saved"
             mutate "$C/Makefile" 'SEALED_DISK = $(IMAGES_DIR)/rach2-sealed$(RECOVERY_KEY_TAG).disk' \
                 'SEALED_DISK = $(IMAGES_DIR)/rach2-sealed.disk'
+            row='key-names' ;;
+        one-arch)
+            copies="$C/mk/arch.mk=$WORK/arch.saved"
+            mutate "$C/mk/arch.mk" 'ARCH_BUILDS = build build/x86_64' 'ARCH_BUILDS = build'
             row='key-names' ;;
         release)
             copies="$C/Makefile=$WORK/Makefile.saved"
