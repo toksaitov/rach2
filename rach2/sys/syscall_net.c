@@ -2045,7 +2045,7 @@ static int32_t socket_dispatch(int call, unsigned long *args);
 static int32_t mmsg(int call, const unsigned long *args)
 {
     unsigned long sub[3];
-    uint32_t vlen = args[2] > MMSG_MAX ? MMSG_MAX : (uint32_t)args[2];
+    uint32_t vlen = (uint32_t)args[2] > MMSG_MAX ? MMSG_MAX : (uint32_t)args[2];
     uint32_t i;
     int32_t rc = 0;
 
@@ -2142,7 +2142,7 @@ static int32_t socket_dispatch(int call, unsigned long *args)
 {
     fd_entry_t *e;
 
-    if ((call == SC_SOCKET || call == SC_SOCKETPAIR) && args[0] == AF_UNIX) {
+    if ((call == SC_SOCKET || call == SC_SOCKETPAIR) && (uint32_t)args[0] == AF_UNIX) {
         return unix_make(call, args);
     }
     if (call == SC_SOCKETPAIR) {

@@ -39,7 +39,9 @@
  * getcpu reports a processor of the caller's affinity and node 0, and
  * personality keeps and returns its value.
  * sendmmsg sends two datagrams in one call over an AF_UNIX pair and
- * recvmmsg receives both, each with its count. clock_gettime64 reads the
+ * recvmmsg receives both, each with its count; on x86-64 a count of 2^32 + 1
+ * receives one, and socket and socketpair of the domain 2^32 + 1 make AF_UNIX
+ * sockets, since each takes an int. clock_gettime64 reads the
  * monotonic clock with 64-bit fields (clock_gettime on x86-64). close_range
  * marks a range of descriptors close-on-exec and closes it, reaches past the
  * table's end, and refuses a flag it does not take and a backward range. splice
@@ -681,6 +683,27 @@ static int messages(void)
         in[1].msg_len != sizeof(b) || strcmp(ra, a) != 0 || strcmp(rb, b) != 0) {
         return fail("recvmmsg");
     }
+#if defined __x86_64__
+    {
+        int pair[2];
+        long fd;
+
+        in[0].msg_len = in[1].msg_len = 0;
+        if (sendmmsg(sv[0], out, 2, 0) != 2 ||
+            syscall(SYS_recvmmsg, sv[1], in, 0x100000001UL, 0, NULL) != 1 ||
+            in[0].msg_len != sizeof(a) || in[1].msg_len != 0 ||
+            recv(sv[1], rb, sizeof(rb), 0) != sizeof(b)) {
+            return fail("recvmmsg of a count past 32 bits did not take its low word");
+        }
+        fd = syscall(SYS_socket, 0x100000001UL, SOCK_STREAM, 0);
+        if (fd < 0 || syscall(SYS_socketpair, 0x100000001UL, SOCK_STREAM, 0, pair) != 0) {
+            return fail("a domain past 32 bits did not take its low word");
+        }
+        close((int)fd);
+        close(pair[0]);
+        close(pair[1]);
+    }
+#endif
     close(sv[0]);
     close(sv[1]);
     return 0;
