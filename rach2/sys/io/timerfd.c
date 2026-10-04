@@ -687,7 +687,8 @@ long sys_timer_create(struct isr_params *params)
      * the copy sleeps has the next free one tried. */
     for (;;) {
         irq = spin_lock_irqsave(&timer_lock);
-        for (link = &tg->timers, id = 0; *link && (*link)->id == id; link = &(*link)->in_group) {
+        id = 0;
+        for (link = &tg->timers; *link && (*link)->id == id; link = &(*link)->in_group) {
             id++;
         }
         spin_unlock_irqrestore(&timer_lock, irq);

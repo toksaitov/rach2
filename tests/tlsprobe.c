@@ -72,11 +72,6 @@ static int sys_read(int fd, void *buf, u32 n)
     return syscall3(SYS_READ, (long)fd, (long)buf, (long)n);
 }
 
-static int sys_pipe(int fds[2])
-{
-    return syscall1(SYS_PIPE, (long)fds);
-}
-
 static void sys_close(int fd)
 {
     (void)syscall1(SYS_CLOSE, (long)fd);
@@ -278,7 +273,7 @@ void probe_main(unsigned long *sp)
         puts_("FAIL: the probe could not be bound to processor 0\n");
         sys_exit(1);
     }
-    if (sys_pipe(to_child) != 0 || sys_pipe(to_parent) != 0) {
+    if (syscall1(SYS_PIPE, (long)to_child) != 0 || syscall1(SYS_PIPE, (long)to_parent) != 0) {
         puts_("FAIL: pipe\n");
         sys_exit(1);
     }

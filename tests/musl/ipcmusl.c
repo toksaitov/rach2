@@ -141,6 +141,7 @@ static int shm_rows(void)
     return 0;
 }
 
+#if defined(__x86_64__)
 /** The bytes of the kernel's heap in use, from /proc/meminfo; 0 if absent. */
 static unsigned long heap_used(void)
 {
@@ -162,7 +163,6 @@ static unsigned long heap_used(void)
 /** On x86-64, segments too large for tmpfs, refused without a trace. */
 static int oversized_rows(void)
 {
-#if defined(__x86_64__)
     unsigned long before = heap_used(), after;
     int i;
 
@@ -175,9 +175,9 @@ static int oversized_rows(void)
     if (before == 0 || after > before + 4096) {
         return fail("a thousand refused segments leave the kernel's heap as it was");
     }
-#endif
     return 0;
 }
+#endif
 
 /** A child's view: a wait for the semaphore, which the parent lets through,
  * then a SEM_UNDO decrement undone at its exit. */
@@ -405,9 +405,14 @@ static int mq_rows(void)
 
 int main(void)
 {
-    if (shm_rows() || oversized_rows() || sem_rows() || msg_rows() || mq_rows() || mq_files()) {
+    if (shm_rows() || sem_rows() || msg_rows() || mq_rows() || mq_files()) {
         return 1;
     }
+#if defined(__x86_64__)
+    if (oversized_rows()) {
+        return 1;
+    }
+#endif
     printf("IPCMUSL OK\n");
     return 0;
 }

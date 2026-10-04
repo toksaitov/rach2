@@ -259,11 +259,11 @@ static int pointers(void)
     return 0;
 }
 
+#if defined __x86_64__
 /** On x86-64, an argument and a variable whose addresses are 4 GiB and 8 GiB,
  * zero in their low 32 bits, are delivered and do not end their vectors. */
 static int wide_pointers(void)
 {
-#if defined __x86_64__
     char *arg = mmap((void *)0x100000000UL, 4096, PROT_READ | PROT_WRITE,
                      MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
     char *var = mmap((void *)0x200000000UL, 4096, PROT_READ | PROT_WRITE,
@@ -283,9 +283,9 @@ static int wide_pointers(void)
     }
     munmap(arg, 4096);
     munmap(var, 4096);
-#endif
     return 0;
 }
+#endif
 
 int main(int argc, char *argv[])
 {
@@ -297,10 +297,14 @@ int main(int argc, char *argv[])
     if (argc != 1 || getenv("EXECARG_EMPTY") != NULL) {
         return child(argc, argv);
     }
-    if (many() != 0 || one_string() != 0 || budget() != 0 || pointers() != 0 ||
-        wide_pointers() != 0) {
+    if (many() != 0 || one_string() != 0 || budget() != 0 || pointers() != 0) {
         return 1;
     }
+#if defined __x86_64__
+    if (wide_pointers() != 0) {
+        return 1;
+    }
+#endif
 
     printf("EXECARGMUSL OK\n");
 
