@@ -17,7 +17,11 @@
 #                 differences of labels, most of them later in the file:
 #                 linked at one address, the TinyCC object and the GNU one
 #                 must be equal byte for byte, linked by GNU ld or by TinyCC;
-#                 its 16-bit and 32-bit half the same for i386.
+#                 its 16-bit and 32-bit half the same for i386;
+#   pcrel.s       16-bit, 32-bit and 64-bit fields of a constant less a
+#                 label, relocations against no symbol, the same against
+#                 GNU's linked by GNU ld, by TinyCC from the object, and by
+#                 TinyCC in the run that assembles them.
 #
 # The 32-bit pass leaves out four forms with a 16-bit register that the i386
 # TinyCC has always encoded its own way (movw to a segment register with the
@@ -113,6 +117,25 @@ if cmp -s tramp.gnu.bin tramp.tcc.bin && cmp -s tramp.gnu.bin tramp.tcclink.bin;
     echo "check-asm: trampoline: the same $(wc -c < tramp.gnu.bin | tr -d ' ') bytes as GNU as's, linked by GNU ld and by TinyCC"
 else
     fail "trampoline: TinyCC's linked bytes differ from GNU's"
+fi
+
+# pcrel: fields of a constant less a label, relocations against no symbol,
+# linked by GNU ld, by TinyCC from the object, and by TinyCC in the run that
+# assembles them, where its linker adds to what the field holds.
+"$T64" -c -o pcrel.tcc.o "$TEST/pcrel.s"
+x86_64-elf-as -o pcrel.gnu.o "$TEST/pcrel.s"
+x86_64-elf-ld -o pcrel.gnu.elf -Ttext=0x100000 -e pcrel_start pcrel.gnu.o
+x86_64-elf-ld -o pcrel.tcc.elf -Ttext=0x100000 -e pcrel_start pcrel.tcc.o
+"$T64" -nostdlib -static -Wl,-Ttext=0x100000 -o pcrel.tcclink.elf pcrel.tcc.o start64.o
+"$T64" -nostdlib -static -Wl,-Ttext=0x100000 -o pcrel.tccrun.elf "$TEST/pcrel.s" start.s
+for e in gnu tcc tcclink tccrun; do
+    x86_64-elf-objcopy -O binary -j .text "pcrel.$e.elf" "pcrel.$e.bin"
+done
+if cmp -s pcrel.gnu.bin pcrel.tcc.bin && cmp -s pcrel.gnu.bin pcrel.tcclink.bin &&
+    cmp -s pcrel.gnu.bin pcrel.tccrun.bin; then
+    echo "check-asm: pcrel: the same $(wc -c < pcrel.gnu.bin | tr -d ' ') bytes as GNU as's, linked by GNU ld and by TinyCC"
+else
+    fail "pcrel: TinyCC's fields of a constant less a label differ from GNU's"
 fi
 
 # The 16-bit and 32-bit half for i386, which has no 64-bit field.
