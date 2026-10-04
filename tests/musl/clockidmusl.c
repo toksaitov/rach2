@@ -4,33 +4,33 @@
  * Every row judges what the kernel counts. Time since boot is read within the
  * tick: two readings of `CLOCK_MONOTONIC` differ by less than a tick, raw and
  * boot time are the same clock, so a reading of either taken between two of
- * `CLOCK_MONOTONIC` lies between them, and the coarse clocks are no later
- * than their fine ones and no more than two ticks earlier, one for the tick
- * in progress and one for a tick the fine clock counts before its interrupt
- * is taken; the CPU
- * clocks advance while this process spins and agree with
- * what `times` reports; a CPU clock by process id, the form
- * `clock_getcpuclockid` returns, reads that process's time, and an id of no
- * process is refused. A child blocked after reporting its own CPU time has a
- * clock by id that reads what it reported, or one tick more, and that
- * advances by the three ticks it spins between two reports. Real time and
- * time since boot resolve to the microsecond, and the coarse and CPU clocks
- * to the 10 ms tick, and on i686 the 64-bit call answers as the 32-bit one.
+ * `CLOCK_MONOTONIC` lies between them, and the coarse clocks are no later than
+ * their fine ones and no more than two ticks earlier, one for the tick in
+ * progress and one for a tick the fine clock counts before its interrupt is
+ * taken; the CPU clocks advance while this process spins and agree with what
+ * `times` reports; a CPU clock by process id, the form `clock_getcpuclockid`
+ * returns, reads that process's time, and an id of no process is refused. A
+ * child blocked after reporting its own CPU time has a clock by id that reads
+ * what it reported, or one tick more, and that advances by the three ticks it
+ * spins between two reports. Real time and time since boot resolve to the
+ * microsecond, and the coarse and CPU clocks to the 10 ms tick, and on i686 the
+ * 64-bit call answers as the 32-bit one.
  *
- * `clock_nanosleep` is called through `syscall`, since musl answers some
- * clocks itself and uses `nanosleep` for a relative sleep of real time. An
- * absolute sleep must return with its clock at or past the time asked for, of
- * time since boot, boot time and real time alike; a relative one must take at
- * least its interval of time since boot; a time already past returns without
- * waiting. A signal ends a relative sleep with a remainder no greater than the
- * interval, and an absolute one with none written. The raw and coarse clocks
- * and the thread CPU clock cannot be slept on, and a bad clock or request is
- * refused. The caller's CPU clock returns at once for a time it has reached,
- * and a sleep on it for an interval ends once another thread of the
- * process, spinning, has advanced it that far.
+ * `clock_nanosleep` is called through `syscall`, since musl answers some clocks
+ * itself and uses `nanosleep` for a relative sleep of real time. An absolute
+ * sleep must return with its clock at or past the time asked for, of time since
+ * boot, boot time and real time alike; a relative one must take at least its
+ * interval of time since boot; a time already past returns without waiting. A
+ * signal ends a relative sleep with a remainder no greater than the interval,
+ * and an absolute one with none written. The raw and coarse clocks and the
+ * thread CPU clock cannot be slept on, and a bad clock or request is refused.
+ * Real time set past 2^31 seconds reads back whole, fine and coarse; on x86-64
+ * a relative sleep of 2^32 seconds and an absolute one to 2^62 seconds wait
+ * until a signal ends them. The caller's CPU clock returns at once for a time
+ * it has reached, and a sleep on it for an interval ends once another thread of
+ * the process, spinning, has advanced it that far.
  *
- * Prints "CLOCKIDMUSL OK" on success and "CLOCKIDMUSL FAIL (detail)"
- * otherwise.
+ * Prints "CLOCKIDMUSL OK" on success and "CLOCKIDMUSL FAIL (detail)" otherwise.
  */
 
 #define _GNU_SOURCE
@@ -471,9 +471,95 @@ static int cpu_sleep_sibling(void)
     return 0;
 }
 
+/** Set real time to `t` and then on by the time since boot from `mono0`. */
+static void real_set_back(struct timespec t, const struct timespec *mono0)
+{
+    struct timespec mono1;
+
+    clock_gettime(CLOCK_MONOTONIC, &mono1);
+    t.tv_sec += mono1.tv_sec - mono0->tv_sec;
+    t.tv_nsec += mono1.tv_nsec - mono0->tv_nsec;
+    if (t.tv_nsec < 0) {
+        t.tv_nsec += 1000000000L;
+        t.tv_sec--;
+    } else if (t.tv_nsec >= 1000000000L) {
+        t.tv_nsec -= 1000000000L;
+        t.tv_sec++;
+    }
+    clock_settime(CLOCK_REALTIME, &t);
+}
+
+/* The real time the wide row sets: ten seconds past 2^31, early 2038. */
+#define PAST_2038 (((time_t)1 << 31) + 10)
+
+/** Whether `clk` reads from `least` seconds to a minute past PAST_2038. */
+static int reads_past_2038(clockid_t clk, time_t least)
+{
+    struct timespec t;
+
+    return clock_gettime(clk, &t) == 0 && t.tv_sec >= least && t.tv_sec <= PAST_2038 + 60;
+}
+
+/*
+ * Times past 32 bits. Real time set to ten seconds past 2^31 reads back
+ * whole, fine and coarse, the coarse clock as much as two ticks earlier, and
+ * is set back after. On x86-64, whose raw calls
+ * take a long, a relative sleep of 2^32 seconds and an absolute sleep to 2^62
+ * seconds of time since boot each wait until a signal ends them.
+ */
+static int wide_times(void)
+{
+    struct timespec saved, mono0, past;
+    int fine, coarse;
+
+    if (clock_gettime(CLOCK_REALTIME, &saved) != 0 || clock_gettime(CLOCK_MONOTONIC, &mono0) != 0) {
+        return fail("reading real time and time since boot");
+    }
+    past.tv_sec = PAST_2038;
+    past.tv_nsec = 0;
+    if (clock_settime(CLOCK_REALTIME, &past) != 0) {
+        return fail("setting real time past 2^31 seconds");
+    }
+    fine = reads_past_2038(CLOCK_REALTIME, PAST_2038);
+    coarse = reads_past_2038(CLOCK_REALTIME_COARSE, PAST_2038 - 1);
+    real_set_back(saved, &mono0);
+    if (!fine) {
+        return fail("real time set past 2^31 seconds does not read back whole");
+    }
+    if (!coarse) {
+        return fail("coarse real time set past 2^31 seconds does not read back whole");
+    }
+#if defined __x86_64__
+    {
+        struct sigaction sa;
+        struct kts req;
+
+        memset(&sa, 0, sizeof(sa));
+        sa.sa_handler = on_alarm;
+        sigaction(SIGALRM, &sa, NULL);
+        req.sec = 1L << 32;
+        req.nsec = 0;
+        alarms = 0;
+        alarm_in(100000);
+        if (syscall(SYS_nanosleep, &req, NULL) != -1 || errno != EINTR || alarms != 1) {
+            return fail("a sleep of 2^32 seconds did not wait for the signal");
+        }
+        req.sec = 1L << 62;
+        alarms = 0;
+        alarm_in(100000);
+        if (sleep_raw(CLOCK_MONOTONIC, TIMER_ABSTIME, &req, NULL) != -1 || errno != EINTR ||
+            alarms != 1) {
+            return fail("an absolute sleep to 2^62 seconds did not wait for the signal");
+        }
+    }
+#endif
+    return 0;
+}
+
 int main(void)
 {
-    if (clocks() != 0 || child_clock() != 0 || sleeps() != 0 || cpu_sleep_sibling() != 0) {
+    if (clocks() != 0 || child_clock() != 0 || sleeps() != 0 || cpu_sleep_sibling() != 0 ||
+        wide_times() != 0) {
         return 1;
     }
     printf("CLOCKIDMUSL OK\n");

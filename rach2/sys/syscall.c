@@ -478,6 +478,12 @@ static uint32_t clock_cpu_ticks(const struct kclock *c)
     return c->user_only ? user : user + sys;
 }
 
+/* The timespec of the time64 calls: seconds and nanoseconds of 64 bits. */
+struct kernel_timespec64 {
+    int64_t tv_sec;
+    int64_t tv_nsec;
+};
+
 /**
  * Read clock `c` into `out`.
  *
@@ -490,10 +496,11 @@ static uint32_t clock_cpu_ticks(const struct kclock *c)
  * disciplined by anything:
  * the machine reads the CMOS once and then keeps its own time, and it is never
  * suspended, which is why the four clocks of time since boot read the same.
- * A CPU clock is the ticks the timer charged. The signed seconds field ends in
- * 2038 for real time and after about 68 years for the rest.
+ * A CPU clock is the ticks the timer charged. The seconds are 64 bits; the
+ * 32-bit timespec of i386's clock_gettime cuts them, which ends in 2038 for
+ * real time, as Linux's does.
  */
-static void clock_read(const struct kclock *c, struct kernel_timespec *out)
+static void clock_read(const struct kclock *c, struct kernel_timespec64 *out)
 {
     int64_t seconds;
     int64_t nanoseconds;
@@ -503,29 +510,29 @@ static void clock_read(const struct kclock *c, struct kernel_timespec *out)
     switch (c->kind) {
     case KCLOCK_REAL:
         get_current_time(&seconds, &nanoseconds);
-        out->tv_sec = (int32_t)seconds;
-        out->tv_nsec = (int32_t)nanoseconds;
+        out->tv_sec = seconds;
+        out->tv_nsec = nanoseconds;
         break;
     case KCLOCK_REAL_COARSE:
         rtc_coarse_realtime(&seconds, &nanoseconds);
-        out->tv_sec = (int32_t)seconds;
-        out->tv_nsec = (int32_t)nanoseconds;
+        out->tv_sec = seconds;
+        out->tv_nsec = nanoseconds;
         break;
     case KCLOCK_MONO:
         rtc_monotonic(&seconds, &nanoseconds);
-        out->tv_sec = (int32_t)seconds;
-        out->tv_nsec = (int32_t)nanoseconds;
+        out->tv_sec = seconds;
+        out->tv_nsec = nanoseconds;
         break;
     case KCLOCK_MONO_COARSE:
         tick_now(&seconds32, &ticks32, &total32);
-        out->tv_sec = (int32_t)seconds32;
-        out->tv_nsec = (int32_t)(ticks32 * 10000000);
+        out->tv_sec = seconds32;
+        out->tv_nsec = ticks32 * 10000000u;
         break;
     case KCLOCK_CPU:
     default:
         ticks = clock_cpu_ticks(c);
-        out->tv_sec = (int32_t)(ticks / 100u);
-        out->tv_nsec = (int32_t)((ticks % 100u) * 10000000u);
+        out->tv_sec = ticks / 100u;
+        out->tv_nsec = (ticks % 100u) * 10000000u;
         break;
     }
 }
@@ -554,7 +561,7 @@ int32_t clock_cpu_target(int32_t clk, struct tgroup **tg, uint32_t *tid, int *us
 int32_t clock_now(int32_t clk, int64_t *sec, int32_t *nsec)
 {
     struct kclock c;
-    struct kernel_timespec ts;
+    struct kernel_timespec64 ts;
     int32_t rc = clock_resolve(clk, &c);
 
     if (rc != 0) {
@@ -578,29 +585,26 @@ long sys_clock_gettime(isr_params_t *params)
 {
     struct kernel_timespec __user *ts = (struct kernel_timespec __user *)SC_ARG(params, 1);
     struct kernel_timespec kts;
+    struct kernel_timespec64 now;
     struct kclock c;
     int32_t rc = clock_resolve((int32_t)SC_ARG(params, 0), &c);
 
     if (rc != 0) {
         return rc;
     }
-    clock_read(&c, &kts);
+    clock_read(&c, &now);
+    kts.tv_sec = (long)now.tv_sec;
+    kts.tv_nsec = (long)now.tv_nsec;
     if (copy_to_user(ts, &kts, sizeof(kts)) != 0) {
         return -EFAULT;
     }
     return 0;
 }
 
-/* The timespec of the time64 calls: seconds and nanoseconds of 64 bits. */
-struct kernel_timespec64 {
-    int64_t tv_sec;
-    int64_t tv_nsec;
-};
-
 /**
  * clock_gettime64: clock_gettime with the 64-bit timespec GNU libc and
  * musl try first, so a clock read is one call and not a refused call and a
- * second. The seconds are the ones the 32-bit call reports.
+ * second, with all 64 bits of the seconds.
  */
 long sys_clock_gettime64(isr_params_t *params)
 {
@@ -1131,19 +1135,17 @@ static int32_t sleep_until(uint32_t target, struct kernel_timespec __user *urem)
  *
  * Converted without 64-bit division, which the freestanding kernel has no
  * libgcc `__udivdi3` for: 1 s is 100 ticks, plus the ceiling of the
- * sub-second nanoseconds. Absurd intervals are clamped so sec*100 cannot
- * overflow and the signed tick comparison in `sleep_until` stays valid with
- * the tick in progress added.
+ * sub-second nanoseconds. Absurd intervals are clamped, at the seconds'
+ * full width before they are narrowed, so sec*100 cannot overflow and the
+ * signed tick comparison in `sleep_until` stays valid with the tick in
+ * progress added.
  */
 static uint32_t timespec_ticks(const struct kernel_timespec *req)
 {
-    uint32_t sec = (uint32_t)req->tv_sec;
+    uint32_t sec = req->tv_sec > 21474836L ? 21474836u : (uint32_t)req->tv_sec;
     uint32_t nsec_ticks = ((uint32_t)req->tv_nsec + 9999999u) / 10000000u;
     uint32_t ticks;
 
-    if (sec > 21474836u) {
-        sec = 21474836u; /* keeps the intermediate sec*100 below 2^31 */
-    }
     ticks = sec * 100u + nsec_ticks;
     if (ticks > 0x7FFFFFFEu) {
         ticks = 0x7FFFFFFEu; /* keep the signed (target-now) delta valid */
@@ -1239,6 +1241,11 @@ static int time_reached(enum kclock_kind kind, const struct kernel_timespec *whe
     return sec > when->tv_sec || (sec == when->tv_sec && nsec >= when->tv_nsec);
 }
 
+/* The latest deadline an absolute sleep counts to, 2^40 seconds, some
+ * 34000 years, which sleeps as long as any later one, and whose ticks a
+ * 64-bit product holds. */
+#define SLEEP_SECONDS_MOST ((int64_t)1 << 40)
+
 /**
  * Sleep until real time or time since boot, `kind`, reads `when` or later.
  *
@@ -1274,6 +1281,9 @@ static int32_t sleep_until_time(enum kclock_kind kind, const struct kernel_times
         }
         if (sec < 0) {
             return 0;
+        }
+        if (sec > SLEEP_SECONDS_MOST) {
+            sec = SLEEP_SECONDS_MOST;
         }
         due = (uint64_t)sec * 100u + ((uint32_t)when->tv_nsec + 9999999u) / 10000000u;
         if (due <= now) {
