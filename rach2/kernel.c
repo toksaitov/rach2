@@ -217,6 +217,7 @@ static bool test_usermode(void);
 static void test_switch(void);
 static void test_preempt(void);
 static void exec_program(int argc, char *argv[]);
+static void enter_program(struct mm *mm, const char *name, uintptr_t entry, uintptr_t sp);
 
 /**
  * Service a processor's 100 Hz tick and preempt its current process.
@@ -712,53 +713,42 @@ static bool test_clock(uint32_t *measured_us, const char **why, uint32_t *walk_c
 }
 
 /**
- * Prove ring 3 works by entering user mode and running user_test_entry.
- *
- * Takes a user stack from the heap, whose pages are mapped one by one on
- * every architecture so that one can be made user-accessible alone, marks
- * the code, message, and stack pages user-accessible, then enters ring 3 at
- * the architecture's test payload, which writes "Hello from ring 3!" through
- * a system call. The entry does not return, so the trailing `return false`
- * is unreachable.
+ * Prove ring 3 works: run the architecture's payload as a process of its
+ * own, in an address space with two pages, the payload's at the lowest
+ * user address, read-only and executable, and a stack's two pages above
+ * it. The payload writes "Hello from ring 3!" through a system call and
+ * exits, and the shell comes back as it does after `exec`
+ * (`enter_program`). Returns only when the process cannot be made.
  */
 static bool test_usermode(void)
 {
-    uintptr_t func_addr = (uintptr_t)arch_user_test_entry;
-    uintptr_t msg_addr = (uintptr_t)arch_user_test_msg;
-    void *user_stack;
-    uintptr_t user_stack_addr;
-    uintptr_t page;
-    uint32_t i;
+    uintptr_t code = USER_ADDR_MIN, stack_top = USER_ADDR_MIN + 3 * PAGE_SIZE;
+    uintptr_t code_frame, stack_frame;
+    struct mm *mm = mm_new();
+    uint8_t *page;
 
-    console_printf("  Usermode test: func=0x%X msg=0x%X\n", func_addr, msg_addr);
-
-    user_stack = kalloc_pages(USER_STACK_SIZE / PAGE_SIZE, NULL);
-    user_stack_addr = (uintptr_t)user_stack;
-    console_printf("  Usermode test: stack=0x%X\n", user_stack_addr);
-
-    /* The function code may span two pages. */
-    for (page = func_addr & ~0xFFF; page <= ((func_addr + 256) & ~0xFFF); page += PAGE_SIZE) {
-        paging_set_user(page, true);
+    if (!mm) {
+        console_puts("  Usermode test: no address space");
+        return false;
     }
-
-    paging_set_user(msg_addr, true);
-
-    for (page = user_stack_addr; page < user_stack_addr + USER_STACK_SIZE; page += PAGE_SIZE) {
-        paging_set_user(page, true);
+    code_frame = alloc_user_page(mm->dir, code);
+    stack_frame = alloc_user_page(mm->dir, stack_top - PAGE_SIZE);
+    if (code_frame == 0 || stack_frame == 0 || paging_zero_frame(code_frame) != 0 ||
+        paging_zero_frame(stack_frame) != 0 ||
+        vm_insert(&mm->vm, code, code + PAGE_SIZE, VM_PROT_READ | VM_PROT_EXEC, VM_CODE) != 0 ||
+        vm_insert(&mm->vm, stack_top - PAGE_SIZE, stack_top, VM_PROT_READ | VM_PROT_WRITE,
+                  VM_STACK) != 0) {
+        mm_put(mm);
+        console_puts("  Usermode test: the payload's pages could not be had");
+        return false;
     }
-
-    console_printf("  Usermode test: pages marked user-accessible\n");
-
-    for (i = 0; i < 3; i++) {
-        idle_wait_irq_on();
-    }
-
-    console_printf("  Usermode test: entering ring 3...\n");
-
-    arch_irq_disable();
-    (void)bkl_drop();
-    arch_enter_user(func_addr, user_stack_addr + USER_STACK_SIZE);
-
+    page = (uint8_t *)kmap_temp(code_frame);
+    k_memcpy(page, arch_user_test_code, arch_user_test_size);
+    kunmap_temp(page);
+    paging_set_writable(mm->dir, code, false);
+    console_printf("  Usermode test: payload at 0x%lx, stack below 0x%lx; entering ring 3...\n",
+                   (unsigned long)code, (unsigned long)stack_top);
+    enter_program(mm, "usermode", code, stack_top);
     return false;
 }
 
@@ -1171,6 +1161,89 @@ static uintptr_t boot_stack(struct mm *mm, int argc, char *argv[], char *envp[],
 }
 
 /**
+ * Run the address space `mm`, its regions made, as a new process named
+ * `name`, entering ring 3 at `entry` with the stack pointer `sp`: the
+ * process is allocated, made current and, when none is yet, init, and is
+ * given the console's foreground unless it is a real `/sbin/init`. Does not
+ * return, but when no process record can be had, which puts `mm` and is
+ * said on the console.
+ */
+static void enter_program(struct mm *mm, const char *name, uintptr_t entry, uintptr_t sp)
+{
+    process_t *user_proc;
+    int init_is_starting;
+
+    user_proc = alloc_process();
+    if (!user_proc) {
+        mm_put(mm);
+        console_puts("exec: Failed to allocate process");
+        return;
+    }
+
+    user_proc->state = PROC_RUNNING;
+    user_proc->mm = mm;
+    user_proc->space_root = mm->space_root;
+    user_proc->page_dir = mm->dir;
+    user_proc->kernel_stack = (uintptr_t)stack + KERNEL_STACK_SIZE;
+    user_proc->parent_pid = current_proc ? current_proc->tgid : 0;
+    proc_set_comm(user_proc, name); /* program name for /proc/<pid>/stat and ps */
+    current_proc = user_proc;
+    /* Entered without a switch, so the registers are loaded here: the
+     * program before it may have left its own state in them. */
+    fpu_restore(user_proc->fpu);
+
+    /* The first user process of a normal boot is the persistent /sbin/init.
+     * Capture that before claiming init_pid, because a real init must NOT own
+     * the console (see the gated publish below). */
+    init_is_starting = (init_pid == 0 && !debug_shell_is_home);
+
+    if (init_pid == 0) {
+        init_pid = user_proc->pid;
+    }
+
+    /*
+     * Make this program the console's controlling-terminal foreground group. A
+     * job-control shell (busybox ash) checks tcgetpgrp() against its own group
+     * at startup and SIGTTIN-stops itself if it is not the foreground, so a
+     * shell launched here must already own the terminal; the kernel debug shell
+     * hands the terminal over for the program's lifetime. tty_set_session is
+     * one interrupts-off update so the timer-IRQ serial drain never sees sid
+     * set while fg_pgid is still the stale 0, which would route a serial ^C/^Z
+     * to group 0 and drop it.
+     *
+     * The exception is a real /sbin/init: it must not own the console, so
+     * that each login shell it spawns can `setsid` and claim the (still
+     * leaderless) console itself, the way getty hands a terminal to a login
+     * session. Skip the publish for init; every other program (including the
+     * debug shell's own `exec`) still gets it.
+     */
+    if (!init_is_starting) {
+        tty_set_session(&console_tty, (int)user_proc->sid, (int)user_proc->pgid);
+    }
+
+    switch_page_directory(mm->dir);
+
+    /* fork/waitpid need the scheduler running. */
+    sched_enable();
+
+    kernel_shell_active = false;
+
+    /* Load the thread pointer before ring 3. This first-entry path bypasses
+     * switch_context, which otherwise loads it per process, so without this a
+     * fresh program could observe a previous process's TLS base before it set
+     * its own. A new process has tls_base == 0. */
+    arch_tls_set(user_proc->tls_base);
+
+    /* The program runs in user mode, where no processor holds the big lock
+     * for it; the boot, and the debug shell, held it until here. */
+    arch_irq_disable();
+    (void)bkl_drop();
+    arch_enter_user(entry, sp);
+
+    console_puts("exec: returned from user mode");
+}
+
+/**
  * Load and run an ELF program, entering ring 3 at its entry point.
  *
  * The program comes from the KRFFS root, or through the mounted root's file
@@ -1186,9 +1259,8 @@ static uintptr_t boot_stack(struct mm *mm, int argc, char *argv[], char *envp[],
  * itself on startup; init is left without the console for the login sessions
  * it spawns to claim.
  *
- * Enters user mode and does not return. A setup failure prints a diagnostic
- * and returns to the caller, except that a failure to set up the first
- * process's memory regions panics, since there is no caller left to tell.
+ * Enters user mode through `enter_program` and does not return. A setup
+ * failure prints a diagnostic and returns to the caller.
  */
 static void exec_program(int argc, char *argv[])
 {
@@ -1196,10 +1268,8 @@ static void exec_program(int argc, char *argv[])
     uintptr_t entry_point;
     elf_image_t img;
     struct mm *mm;
-    process_t *user_proc;
     uintptr_t user_sp;
     uintptr_t stack_bottom = USER_STACK_BASE;
-    int init_is_starting;
     struct exec_krffs_ctx kctx;
     static char env_path[] = "PATH=/bin:/usr/bin:/";
     static char env_home[] = "HOME=/";
@@ -1266,82 +1336,16 @@ static void exec_program(int argc, char *argv[])
         return;
     }
 
-    user_proc = alloc_process();
-    if (!user_proc) {
-        mm_put(mm);
-        console_puts("exec: Failed to allocate process");
-        return;
-    }
-
-    user_proc->state = PROC_RUNNING;
-    mm_set_exe(mm, path);
-    user_proc->mm = mm;
-    user_proc->space_root = mm->space_root;
-    user_proc->page_dir = mm->dir;
-    user_proc->kernel_stack = (uintptr_t)stack + KERNEL_STACK_SIZE;
-    user_proc->parent_pid = current_proc ? current_proc->tgid : 0;
-    proc_set_comm(user_proc, path); /* program name for /proc/<pid>/stat and ps */
-    current_proc = user_proc;
-    /* Entered without a switch, so the registers are loaded here: the
-     * program before it may have left its own state in them. */
-    fpu_restore(user_proc->fpu);
-
     /* The ELF segments are loaded eagerly above; these VMAs let the
      * demand-paging fault handler resolve later heap/stack/mmap faults. */
     if (elf_setup_vmas(&mm->vm, &img, USER_STACK_BASE, VM_STACK_MAX_GROWTH) != 0 ||
         (stack_bottom < USER_STACK_BASE && !vm_grow_stack(&mm->vm, stack_bottom, RLIM_INFINITY))) {
-        k_panic("boot: no memory for the first process's regions");
+        mm_put(mm);
+        console_puts("exec: no memory for the program's regions");
+        return;
     }
-
-    /* The first user process of a normal boot is the persistent /sbin/init.
-     * Capture that before claiming init_pid, because a real init must NOT own
-     * the console (see the gated publish below). */
-    init_is_starting = (init_pid == 0 && !debug_shell_is_home);
-
-    if (init_pid == 0) {
-        init_pid = user_proc->pid;
-    }
-
-    /*
-     * Make this program the console's controlling-terminal foreground group. A
-     * job-control shell (busybox ash) checks tcgetpgrp() against its own group
-     * at startup and SIGTTIN-stops itself if it is not the foreground, so a
-     * shell launched here must already own the terminal; the kernel debug shell
-     * hands the terminal over for the program's lifetime. tty_set_session is
-     * one interrupts-off update so the timer-IRQ serial drain never sees sid
-     * set while fg_pgid is still the stale 0, which would route a serial ^C/^Z
-     * to group 0 and drop it.
-     *
-     * The exception is a real /sbin/init: it must not own the console, so
-     * that each login shell it spawns can `setsid` and claim the (still
-     * leaderless) console itself, the way getty hands a terminal to a login
-     * session. Skip the publish for init; every other program (including the
-     * debug shell's own `exec`) still gets it.
-     */
-    if (!init_is_starting) {
-        tty_set_session(&console_tty, (int)user_proc->sid, (int)user_proc->pgid);
-    }
-
-    switch_page_directory(mm->dir);
-
-    /* fork/waitpid need the scheduler running. */
-    sched_enable();
-
-    kernel_shell_active = false;
-
-    /* Load the thread pointer before ring 3. This first-entry path bypasses
-     * switch_context, which otherwise loads it per process, so without this a
-     * fresh program could observe a previous process's TLS base before it set
-     * its own. A new process has tls_base == 0. */
-    arch_tls_set(user_proc->tls_base);
-
-    /* The program runs in user mode, where no processor holds the big lock
-     * for it; the boot, and the debug shell, held it until here. */
-    arch_irq_disable();
-    (void)bkl_drop();
-    arch_enter_user(entry_point, user_sp);
-
-    console_puts("exec: returned from user mode");
+    mm_set_exe(mm, path);
+    enter_program(mm, path, entry_point, user_sp);
 }
 
 /**
@@ -3275,7 +3279,7 @@ static void process_command(const char *cmd)
         kernel_shutdown(POWER_RESTART);
     } else if (str_equal(cmd, "usermode")) {
         console_puts("Testing user mode (ring 3) transition...");
-        console_puts("Expected: 'Hello from ring 3!' followed by infinite loop.");
+        console_puts("Expected: the payload's greeting, then this shell again.");
         test_usermode();
     } else if (cmd[0] != '\0') {
         console_printf("Unknown command: '%s'\n", cmd);

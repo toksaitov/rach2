@@ -1693,7 +1693,7 @@ run-tcc: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdpmake c
 # `tests/run smp`: the kernel on one processor, on four and on two of four,
 # each finding its processors and passing a stress of fork, exec, pipes,
 # futexes and munmap across them and sleeps on the last, the debug shell's
-# preemption test on two,
+# preemption test and its ring-3 payload on two,
 # an NMI on two that must stop the machine as a fault of the machine, and a
 # parallel build on the installed system that runs on every one of four (see
 # tests/system/suites/smp.sh).

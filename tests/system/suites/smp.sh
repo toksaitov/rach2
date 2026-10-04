@@ -14,8 +14,10 @@
 # the runner's shim keeps, so the suite's counts are its own whatever
 # RACH2_CPUS says. A fourth boot, with two processors, runs the debug shell's
 # preemption test, whose two kernel threads must each be preempted by the
-# tick and run again, and a fifth raises an NMI on both of two processors,
-# which must stop the machine with a report of a fault of the machine.
+# tick and run again; a fifth runs its `usermode` payload, which must write
+# from ring 3 and exit back to the shell; and a sixth raises an NMI on both
+# of two processors, which must stop the machine with a report of a fault
+# of the machine.
 #
 # Then the installed system boots from its disk with four processors, as
 # the unprivileged test account, compiles the staged ish sources four times
@@ -111,6 +113,18 @@ probe 4 "maxcpus=2" 2
     "expect=Type 'help'" "send=preempt" ||
     fail "the debug shell's preemption test did not pass with two processors; see $DISK.preempt.log"
 echo "smp-test: ok: the debug shell's two threads were preempted by turns"
+
+# The debug shell's ring-3 exercise on the same two processors: a payload
+# copied into a user page writes its message through a system call and
+# exits, and the shell comes back.
+"$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
+    --qemu-arg=-cpu --qemu-arg=max --qemu-arg=-smp --qemu-arg=2 \
+    --append "rach2.rescue" --timeout "$(scaled 120)" --steptmo "$(scaled 90)" \
+    --ok "exited with status 0, returning to kernel shell" \
+    --log "$DISK.usermode.log" \
+    "expect=Type 'help'" "send=usermode" "expect=Hello from ring 3!" ||
+    fail "the debug shell's usermode payload did not write and exit; see $DISK.usermode.log"
+echo "smp-test: ok: the usermode payload wrote from ring 3 and exited to the shell"
 
 # An NMI on both of two processors at the debug shell: the kernel must name
 # it a fault of the machine and stop, which the processors do without the

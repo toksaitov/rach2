@@ -221,11 +221,12 @@ uint32_t arch_core_fp_size(void);
  * `core_note_put`, and step past them. */
 void arch_core_fp_notes(uint8_t **p, const struct process *t);
 
-/* The debug shell's ring-3 exercise: a payload that writes this message
- * through a system call, then spins, and the message, both in pages the
- * exercise makes user-accessible. */
-extern const char arch_user_test_msg[];
-void arch_user_test_entry(void);
+/* The debug shell's ring-3 exercise: `arch_user_test_size` bytes of
+ * position-independent machine code with its message after it, which
+ * writes the message to descriptor 1 and exits with status 0; the shell
+ * copies them into a user page and runs them as a process. */
+extern const unsigned char arch_user_test_code[];
+extern const unsigned int arch_user_test_size;
 
 /** The physical address of the page table root the processor translates
  * through now. */
