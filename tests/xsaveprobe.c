@@ -809,7 +809,10 @@ static int read_at(int fd, unsigned long off, unsigned char *buf, unsigned long 
 /**
  * The core file's NT_X86_XSTATE note, read into `notes`: its description,
  * or NULL, with its size in `*size`. The notes are the file's first program
- * header, PT_NOTE, in the ELF class of the probe.
+ * header, PT_NOTE, in the ELF class of the probe. A note whose name or
+ * description runs past the segment fails the probe, since a size that wraps
+ * the offset would otherwise walk the notes forever, and the note taken is
+ * the one whose owner is the whole of "LINUX", as Linux writes it.
  */
 static const unsigned char *core_xstate(unsigned char *notes, unsigned long cap, unsigned *size)
 {
@@ -847,15 +850,22 @@ static const unsigned char *core_xstate(unsigned char *notes, unsigned long cap,
     }
     syscall1(SYS_CLOSE, fd);
     for (at = 0; at + 12 <= len;) {
-        unsigned namesz = get32(notes + at), descsz = get32(notes + at + 4);
-        unsigned long desc = at + 12 + ((namesz + 3u) & ~3u);
+        unsigned long namesz = get32(notes + at), descsz = get32(notes + at + 4), desc;
 
+        if (namesz > len - at - 12) {
+            fail("a core file note's name runs past its notes");
+        }
+        desc = at + 12 + ((namesz + 3u) & ~3ul);
+        if (desc > len || descsz > len - desc) {
+            fail("a core file note's description runs past its notes");
+        }
         if (get32(notes + at + 8) == NT_X86_XSTATE && namesz == 6 && notes[at + 12] == 'L' &&
-            notes[at + 16] == 'X') {
-            *size = descsz;
+            notes[at + 13] == 'I' && notes[at + 14] == 'N' && notes[at + 15] == 'U' &&
+            notes[at + 16] == 'X' && notes[at + 17] == '\0') {
+            *size = (unsigned)descsz;
             return notes + desc;
         }
-        at = desc + ((descsz + 3u) & ~3u);
+        at = desc + ((descsz + 3u) & ~3ul);
     }
     return 0;
 }
@@ -903,6 +913,9 @@ static void run_core(void)
     }
     if (get32(img + X_SW) != xcr0_lo || get32(img + X_SW + 4) != xcr0_hi) {
         fail("the core file's NT_X86_XSTATE does not have XCR0 at byte 464");
+    }
+    if ((get32(img + X_BV) & 4u) == 0) {
+        fail("the core file's NT_X86_XSTATE does not mark AVX in use");
     }
     make_values(expect, 0x9999u);
     why = image_check(img, expect);
