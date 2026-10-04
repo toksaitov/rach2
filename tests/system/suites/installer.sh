@@ -484,7 +484,9 @@ USERNAME=alice
 USERPASS=alices-own-password
 # The disks are filled with a pattern and not with zeros: a stray write of
 # zeros into a zeroed disk leaves no trace, and every check below that says a
-# disk was untouched is a comparison of the whole of it.
+# disk was untouched is a comparison of the whole of it. Both are compared
+# inside the machine after the refusals too, before the install that follows
+# them writes the second and would cover what a refusal had written there.
 rm -f "$DIR/one.img" "$DIR/two.img" "$DIR/pattern"
 awk 'BEGIN { for (i = 0; i < 65536; i++) printf "%016d", i }' > "$DIR/pattern"
 : > "$DIR/one.img"
@@ -505,7 +507,7 @@ if "$HARNESS" --bios \
     --qemu-arg=-device --qemu-arg=usb-storage,bus=xhci.0,drive=stick,bootindex=0 \
     --qemu-arg=-drive --qemu-arg="file=$DIR/one.img,format=raw,if=ide,index=0,media=disk" \
     --qemu-arg=-drive --qemu-arg="file=$DIR/two.img,format=raw,if=ide,index=1,media=disk" \
-    --timeout 3600 --steptmo 1800 --ok "INSTALLDONE" --log "$LOG3" \
+    --timeout 3600 --steptmo 1800 --ok "INSTALLDONE" --never "BOTHCHANGED" --log "$LOG3" \
     "expect=recovery image" \
     "expect=# " "send=echo '-----BEGIN OPENSSH PRIVATE KEY-----' > /tmp/private.key; printf '\\043 a comment\\n' > /tmp/comments.key" \
     "expect=# " "send=rach2-install" \
@@ -549,6 +551,8 @@ if "$HARNESS" --bios \
     "expect=nothing was written" \
     "expect=# " "send=printf '/dev/disk1\\n' | rach2-install" \
     "expect=the answers ended before the questions did; nothing was written" \
+    "expect=# " "send=a=\$(sha256sum < /dev/disk0); b=\$(sha256sum < /dev/disk1); [ \"\$a\" = \"\$b\" ] && [ \"\${a%% *}\" = $BLANK ] && echo BOTH\"\"BLANK || echo BOTH\"\"CHANGED" \
+    "expect=BOTHBLANK" \
     "expect=# " "send=rach2-install" \
     "expect=disk shall Rach2 be written to" "send=/dev/disk1" \
     "expect=the password for root" "send=$NEWPASS" \
@@ -1638,13 +1642,17 @@ dd if="$DISK" of="$R/head.vol" bs=512 skip="$ROOT_START" count=$((128 * 2048)) 2
 # The ranges to save, `START COUNT` in sectors: the image's extent, then the
 # grow's ranges beyond it; a range inside the extent is saved with it. The
 # image's GUID table has its backup in the disk's last 33 sectors once the
-# install has moved it there, and the grow writes it there again, so those
-# sectors are a range of their own.
+# install has moved it there, and the grow writes it there again, so the end
+# of the disk is a range of its own. It starts at the eight-sector boundary
+# at or below the backup, since the overlay's map reports a write in clusters
+# of eight sectors and the checks below accept a written extent only inside
+# the saved ranges.
+BACKUP_FROM=$(( (LENOVO - 33) / 8 * 8 ))
 {
     echo "0 $IMAGE_SECTORS"
-    awk -v n="$IMAGE_SECTORS" -v b=$((LENOVO - 33)) '$1 == "range" && $2 + $3 > n {
+    awk -v n="$IMAGE_SECTORS" -v b="$BACKUP_FROM" '$1 == "range" && $2 + $3 > n {
         s = $2 < n ? n : $2; e = $2 + $3 < b ? $2 + $3 : b; if (e > s) print s, e - s }' "$R/save.set"
-    echo "$((LENOVO - 33)) 33"
+    echo "$BACKUP_FROM $((LENOVO - BACKUP_FROM))"
 } > "$R/ranges"
 NRANGES=$(grep -c . "$R/ranges")
 note "rehearsal: the save set is the image's $IMAGE_SECTORS sectors, $((NRANGES - 2)) ranges of the grow beyond it and the GUID table's backup"
@@ -1761,15 +1769,21 @@ else
 fi
 # Every sector the install wrote lies in the save set: growset judges its
 # own ranges from the overlay's map, and an extent it calls outside must lie
-# inside the image's extent, which the install writes whole, or in the
-# overlay's clusters that hold the GUID table's backup at the disk's end.
-BACKUP_FROM=$(( (LENOVO - 33) / 8 * 8 ))
+# inside the ranges saved, the image's extent and the disk's end among them.
+# covered RANGES CHECK: status 1 when an outside extent of CHECK has a sector
+# that no range of RANGES, which are in ascending order, covers.
+covered() {
+    awk 'NR == FNR { s[NR] = $1; e[NR] = $1 + $2; n = NR; next }
+        $1 == "outside" { x = $2; for (i = 1; i <= n; i++) if (s[i] <= x && x < e[i]) x = e[i]
+            if (x < $2 + $3) bad = 1 }
+        END { exit bad }' "$1" "$2"
+}
 qemu-img map --output=json "$R/disk.qcow2" > "$R/after-install.json" || bad "the overlay's map"
 grep -q '"start"' "$R/after-install.json" || bad "the overlay's map lists no extent, and the install wrote"
 growset_rc=0
 "$GROWSET" --lba "$ROOT_START" --map "$R/after-install.json" "$R/head.vol" $((LENOVO - 33 - ROOT_START)) > "$R/after-install.check" 2>&1 || growset_rc=$?
 [ "$growset_rc" -eq 0 ] || grep -q '^outside' "$R/after-install.check" || bad "growset failed on the install's map: $(head -1 "$R/after-install.check")"
-if awk -v n="$IMAGE_SECTORS" -v b="$BACKUP_FROM" '$1 == "outside" && $2 + $3 > n && $2 < b { bad = 1 } END { exit bad }' "$R/after-install.check"; then
+if covered "$R/ranges" "$R/after-install.check"; then
     note "rehearsal: every sector the install and the grow wrote lies in the save set: OK"
 else
     grep '^outside' "$R/after-install.check" | head -5 >&2
@@ -1819,7 +1833,7 @@ qemu-img map --output=json "$R/disk.qcow2" > "$R/after-restore.json" || bad "the
 growset_rc=0
 "$GROWSET" --lba "$ROOT_START" --map "$R/after-restore.json" "$R/head.vol" $((LENOVO - 33 - ROOT_START)) > "$R/after-restore.check" 2>&1 || growset_rc=$?
 [ "$growset_rc" -eq 0 ] || grep -q '^outside' "$R/after-restore.check" || bad "growset failed on the restore's map: $(head -1 "$R/after-restore.check")"
-if awk -v n="$IMAGE_SECTORS" -v b="$BACKUP_FROM" '$1 == "outside" && $2 + $3 > n && $2 < b { bad = 1 } END { exit bad }' "$R/after-restore.check"; then
+if covered "$R/ranges" "$R/after-restore.check"; then
     note "rehearsal: the restore wrote nothing outside the save set either: OK"
 else
     bad "the restore wrote outside the save set"
