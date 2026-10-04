@@ -123,8 +123,9 @@ static uint32_t le32_of(const unsigned char *p)
 }
 
 /* A minimal valid image: ELF32 ET_EXEC EM_386 with one PT_LOAD covering
-   the file at 0x100000, the entry at its start, and the multiboot header
-   at offset 96. `phnum` 0 crafts the no-loadable-segment shape. */
+   the file at 0x100000, the entry at its start, the multiboot header at
+   offset 96 and the multiboot2 header, with only its end tag, at 112.
+   `phnum` 0 crafts the no-loadable-segment shape. */
 static void minimal_kernel(unsigned char *out, size_t size, int phnum)
 {
     uint32_t magic = 0x1BADB002u, flags = 0x3u;
@@ -158,6 +159,12 @@ static void minimal_kernel(unsigned char *out, size_t size, int phnum)
     w32(out + 104, (uint32_t)(0 - (magic + flags)));
     for (i = 128; i < size; i++)
         out[i] = (unsigned char)((i * 31) & 0xFF);
+    w32(out + 112, 0xE85250D6u);
+    w32(out + 116, 0);
+    w32(out + 120, 24);
+    w32(out + 124, (uint32_t)(0 - (0xE85250D6u + 24u)));
+    w32(out + 128, 0);
+    w32(out + 132, 8);
 }
 
 static void dirent_at(unsigned char *p, const char *name11, unsigned attr, unsigned long cluster,

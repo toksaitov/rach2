@@ -1,18 +1,19 @@
 /**
- * Check kernel address bounds, an x86-64 kernel's a.out kludge, and fallback
- * copy failures over resolved files.
- *
- * host-deps: utils/bootslot.c
+ * Check kernel address bounds, an x86-64 kernel's a.out kludge, the
+ * multiboot2 header, a chain's cluster count, and fallback copy failures
+ * over resolved files.
  *
  * The sector model starts after FAT discovery. It drops a payload write
  * beyond the 8192-byte header prefix, fails a payload read, and drops or
- * tears the final header write. The FAT fixture test covers discovery.
+ * tears the final header write. The FAT fixture test covers discovery. The
+ * source is included, so that the count a chain must have is checked at a
+ * size no fixture reaches: a chain past 4 GiB.
  */
 
 #include <stdio.h>
 #include <string.h>
 
-#include "bootslot.h"
+#include "bootslot.c"
 
 #define SLOT_SECTORS 32
 #define SLOT_BYTES   (SLOT_SECTORS * BOOTSLOT_SECTOR)
@@ -100,6 +101,14 @@ static void make_kernel(void)
     for (i = 128; i < sizeof(kernel); i++) {
         kernel[i] = (uint8_t)(i * 7);
     }
+    /* The multiboot2 header the GPT menu loads by: the header at 112 and
+       its end tag. */
+    put32(kernel + 112, 0xE85250D6u);
+    put32(kernel + 116, 0);
+    put32(kernel + 120, 24);
+    put32(kernel + 124, 0u - (0xE85250D6u + 24u));
+    put32(kernel + 128, 0);
+    put32(kernel + 132, 8);
     /* The banner a real kernel carries: an image without it names no policy
        and the validator refuses it. */
     memcpy(kernel + 200, "rach2: disk policy: read-write", 31);
@@ -109,12 +118,13 @@ static void make_kernel(void)
  * Build an x86-64 kernel as the x86-64 link lays one out: an ELF64 header
  * and a Multiboot header at 0x1000 whose a.out kludge copies the file from
  * the header on to 1 MiB, the bytes up to 0x3000 past it, and zeroes the
- * memory to 0x5000 past it.
+ * memory to 0x5000 past it; then the multiboot2 header at 0x1020, whose
+ * address and entry tags give the same load.
  */
 static void make_kernel64(void)
 {
     make_kernel();
-    memset(kernel, 0, 128);
+    memset(kernel, 0, 136);
     memcpy(kernel, "\177ELF\2\1", 6);
     kernel[16] = 2;
     kernel[18] = 62;
@@ -126,6 +136,22 @@ static void make_kernel64(void)
     put32(kernel + 0x1014, 0x103000u);
     put32(kernel + 0x1018, 0x105000u);
     put32(kernel + 0x101C, 0x100020u);
+    put32(kernel + 0x1020, 0xE85250D6u);
+    put32(kernel + 0x1024, 0);
+    put32(kernel + 0x1028, 0x40u);
+    put32(kernel + 0x102C, 0u - (0xE85250D6u + 0x40u));
+    put32(kernel + 0x1030, 2);
+    put32(kernel + 0x1034, 24);
+    put32(kernel + 0x1038, 0x100020u);
+    put32(kernel + 0x103C, 0x100000u);
+    put32(kernel + 0x1040, 0x103000u);
+    put32(kernel + 0x1044, 0x105000u);
+    put32(kernel + 0x1048, 3);
+    put32(kernel + 0x104C, 12);
+    put32(kernel + 0x1050, 0x100020u);
+    put32(kernel + 0x1054, 0);
+    put32(kernel + 0x1058, 0);
+    put32(kernel + 0x105C, 8);
 }
 
 /** Check that an x86-64 kernel's load is judged by its a.out kludge. */
@@ -175,12 +201,90 @@ static void check_kludge(void)
           "an entry past the copied bytes is refused");
     make_kernel64();
     put32(kernel + 0x1014, 0);
-    check(bootslot_validate_kernel(kernel, whole, whole, err, sizeof(err)) == 0,
-          "a load to the end of the file is taken");
-    put32(kernel + 0x101C, 0x100000u + whole - 0x1000u);
+    check(bootslot_validate_kernel(kernel, whole, whole, err, sizeof(err)) == -1 &&
+              strstr(err, "which the slot pads") != NULL,
+          "a load to the end of the file, which the slot pads, is refused");
+    make_kernel64();
+    memset(kernel + 0x1000, 0, 32);
+    put32(kernel + 0x1FF0, 0x1BADB002u);
+    put32(kernel + 0x1FF4, 0x10003u);
+    put32(kernel + 0x1FF8, 0u - (0x1BADB002u + 0x10003u));
+    put32(kernel + 0x1FFC, 0x100FF0u);
+    put32(kernel + 0x2000, 0x100000u);
+    put32(kernel + 0x2004, 0x103000u);
+    put32(kernel + 0x2008, 0x105000u);
+    put32(kernel + 0x200C, 0x100020u);
+    check(bootslot_validate_kernel(kernel, whole, whole, err, sizeof(err)) == -1 &&
+              strstr(err, "first 8192 bytes") != NULL,
+          "a Multiboot header that ends past the 8192 bytes the slot checks read is refused");
+}
+
+/** Check that the multiboot2 header the GPT menu loads by is required and
+ * judged: its tags, and an x86-64 kernel's load from them. */
+static void check_multiboot2(void)
+{
+    uint32_t whole = sizeof(kernel);
+
+    make_kernel();
+    put32(kernel + 112, 0);
+    check(bootslot_validate_kernel(kernel, whole, whole, err, sizeof(err)) == -1 &&
+              strstr(err, "no multiboot2 header") != NULL,
+          "an i386 kernel without a multiboot2 header is refused");
+    make_kernel64();
+    put32(kernel + 0x1020, 0);
+    check(bootslot_validate_kernel(kernel, whole, whole, err, sizeof(err)) == -1 &&
+              strstr(err, "no multiboot2 header") != NULL,
+          "an x86-64 kernel without a multiboot2 header is refused");
+    make_kernel64();
+    put32(kernel + 0x1030, 0x10005u);
+    put32(kernel + 0x1048, 0x10004u);
+    check(bootslot_validate_kernel(kernel, whole, whole, err, sizeof(err)) == -1 &&
+              strstr(err, "lacks the address tag") != NULL,
+          "an x86-64 multiboot2 header without its address and entry tags is refused");
+    make_kernel64();
+    put32(kernel + 0x1048, 0x10004u);
+    check(bootslot_validate_kernel(kernel, whole, whole, err, sizeof(err)) == -1 &&
+              strstr(err, "one of its address and entry tags") != NULL,
+          "a multiboot2 address tag without an entry tag is refused");
+    make_kernel64();
+    put32(kernel + 0x1030, 6);
+    check(bootslot_validate_kernel(kernel, whole, whole, err, sizeof(err)) == -1 &&
+              strstr(err, "changes how the loader reads") != NULL,
+          "a multiboot2 tag the loader must honour and the check does not know is refused");
+    make_kernel64();
+    put32(kernel + 0x105C, 0x10u);
+    check(bootslot_validate_kernel(kernel, whole, whole, err, sizeof(err)) == -1 &&
+              strstr(err, "leaves its header") != NULL,
+          "a multiboot2 tag past its header is refused");
+    make_kernel64();
+    put32(kernel + 0x1040, 0x100000u + whole);
+    check(bootslot_validate_kernel(kernel, whole, whole, err, sizeof(err)) == -1 &&
+              strstr(err, "leaves the file") != NULL,
+          "a multiboot2 load past the file is refused");
+    make_kernel64();
+    put32(kernel + 0x1040, 0);
+    check(bootslot_validate_kernel(kernel, whole, whole, err, sizeof(err)) == -1 &&
+              strstr(err, "which the slot pads") != NULL,
+          "a multiboot2 load to the end of the file is refused");
+    make_kernel64();
+    put32(kernel + 0x1050, 0x103000u);
     check(bootslot_validate_kernel(kernel, whole, whole, err, sizeof(err)) == -1 &&
               strstr(err, "outside the load") != NULL,
-          "an entry past the end of the file is refused");
+          "a multiboot2 entry past the copied bytes is refused");
+}
+
+/** Check a chain's cluster count against its file's size at clusters of
+ * 64 KiB, where the chain's bytes pass 32 bits. */
+static void check_chain(void)
+{
+    memset(&bs, 0, sizeof(bs));
+    bs.cluster_sectors = 128;
+    check(chain_fits(&bs, 1, 65536) && chain_fits(&bs, 2, 65537) && chain_fits(&bs, 0, 0),
+          "a chain of as many clusters as its file fills fits");
+    check(!chain_fits(&bs, 1, 0) && !chain_fits(&bs, 2, 65536),
+          "a chain longer than its file fills does not fit");
+    check(!chain_fits(&bs, 65537, 65536),
+          "a chain of 4 GiB and 64 KiB does not fit a file of 64 KiB");
 }
 
 /** Initialize two resolved slots and an environment that permits copying. */
@@ -317,6 +421,8 @@ int main(void)
     check_bounds();
     check_policy();
     check_kludge();
+    check_multiboot2();
+    check_chain();
     printf("bootslot-hosttest: result: %s: %d failures\n", fails ? "fail" : "pass", fails);
     return fails != 0;
 }

@@ -114,6 +114,15 @@ The file must be a kernel of the architecture
 was built for: an ELF32 i386 kernel on i686, whose program headers the
 Multiboot loader follows, or an ELF64 x86-64 kernel on x86-64, whose
 Multiboot header gives the load's addresses through the a.out kludge.
+It must also have a multiboot2 header, which GRUB's menu on a GUID table
+loads by: its tags must end with an end tag inside the header, a tag GRUB
+must honour must be an address, entry, console or framebuffer tag, and an
+address tag comes with an entry tag and gives a load judged as the kludge's.
+An x86-64 kernel's multiboot2 header must have them.
+Both headers must lie in the first 8192 bytes, the bytes the slot checks
+read back.
+A load given by addresses must name its end: a load to the end of the file
+would run to the end of the slot, which pads the file.
 Load file ranges must fit the file size.
 Load memory ranges must start at or above 1 MiB and have a representable
 32-bit exclusive end.

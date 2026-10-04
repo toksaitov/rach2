@@ -152,6 +152,14 @@ static void make_kernel(uint8_t *out, uint32_t size)
     for (i = 128; i < size; i++) {
         out[i] = (uint8_t)(i * 7);
     }
+    /* The multiboot2 header the GPT menu loads by: the header at 112 and
+       its end tag. */
+    put32(out + 112, 0xE85250D6u);
+    put32(out + 116, 0);
+    put32(out + 120, 24);
+    put32(out + 124, (uint32_t)(0u - (0xE85250D6u + 24u)));
+    put32(out + 128, 0);
+    put32(out + 132, 8);
     /* The banner a real kernel carries: an image without it names no policy
        and the validator refuses it. */
     if (size >= 231) {
@@ -213,7 +221,7 @@ static void check_policy(void)
        there: this is the readback a slot's own check makes. */
     make_kernel(kernel, 5000);
     memset(kernel + 200, 0, 31);
-    CHECK(bootslot_validate_kernel(kernel, 128, 5000, err, sizeof(err)) == 0,
+    CHECK(bootslot_validate_kernel(kernel, 136, 5000, err, sizeof(err)) == 0,
           "a header prefix is judged without the policy");
 }
 

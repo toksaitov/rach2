@@ -26,6 +26,7 @@
 #define ENV_BYTES        BOOTSLOT_ENV_BYTES
 #define ENV_HEADER       "# GRUB Environment Block\n"
 #define MULTIBOOT_MAGIC  0x1BADB002u
+#define MULTIBOOT2_MAGIC 0xE85250D6u
 #define MULTIBOOT_SEARCH 8192
 #define DIR_DEPTH_MAX    4
 
@@ -193,6 +194,19 @@ struct scan_state {
 };
 
 /**
+ * Whether a chain of `len` clusters is the one a file of `size` bytes has:
+ * as many clusters as the bytes fill, the last one partly. The count is
+ * compared, not the chain's bytes, which a cluster limit of 131072 and a
+ * cluster of 64 KiB would carry past 32 bits.
+ */
+static int chain_fits(const struct bootslot *bs, uint32_t len, uint32_t size)
+{
+    uint32_t cluster_bytes = bs->cluster_sectors * BOOTSLOT_SECTOR;
+
+    return len == size / cluster_bytes + (size % cluster_bytes != 0 ? 1u : 0u);
+}
+
+/**
  * Scan one directory chain: mark every child chain visited (so disjointness
  * is proved across the whole reachable namespace), remember the named files
  * when this directory is their parent, and recurse into subdirectories.
@@ -280,13 +294,12 @@ static int scan_dir(struct bootslot *bs, uint32_t first_cluster, int path, int d
                     return -1;
                 }
             } else {
-                uint32_t len, cap;
+                uint32_t len;
 
                 if (walk_chain(bs, cluster, NULL, &len, err, errlen) != 0) {
                     return -1;
                 }
-                cap = len * bs->cluster_sectors * BOOTSLOT_SECTOR;
-                if (size > cap || cap - size >= bs->cluster_sectors * BOOTSLOT_SECTOR) {
+                if (!chain_fits(bs, len, size)) {
                     return fail(err, errlen, "a file's size does not match its chain");
                 }
             }
@@ -301,14 +314,11 @@ static int scan_dir(struct bootslot *bs, uint32_t first_cluster, int path, int d
 static int resolve_file(struct bootslot *bs, uint32_t first, uint32_t size,
                         struct bootslot_file *file, const char *what, char *err, size_t errlen)
 {
-    uint32_t capacity;
-
     if (walk_chain(bs, first, file, NULL, err, errlen) != 0) {
         return -1;
     }
     file->size = size;
-    capacity = file->chain_len * bs->cluster_sectors * BOOTSLOT_SECTOR;
-    if (size > capacity || capacity - size >= bs->cluster_sectors * BOOTSLOT_SECTOR) {
+    if (!chain_fits(bs, file->chain_len, size)) {
         (void)what;
         return fail(err, errlen, "a file's size does not match its chain");
     }
@@ -574,24 +584,24 @@ static int elf32_loads(const uint8_t *image, uint32_t present, uint32_t size, ch
 }
 
 /**
- * Judge the load an x86-64 kernel's Multiboot header at `off` describes
- * with the a.out kludge, whose addresses a loader follows in place of the
- * program headers: the file from the header's offset less the distance from
- * `load_addr` to `header_addr` is copied to `load_addr`, up to
- * `load_end_addr`, or to the end of the file when that is 0, the memory up
- * to `bss_end_addr` is zeroed, and the loader jumps to `entry_addr`. The
- * copy must start at or above 1 MiB and lie in the file's `size` bytes, the
- * zeroed memory must not end below the copy, and the entry must lie in the
- * copied bytes. Every address is 32 bits wide, so every end is
- * representable.
+ * Judge a load given by addresses in place of program headers, as the a.out
+ * kludge of a Multiboot header and the address and entry tags of a
+ * multiboot2 one give it: the file from the header's offset `off` less the
+ * distance from `load_addr` to `header_addr` is copied to `load_addr`, up
+ * to `load_end`, the memory up to `bss_end` is zeroed, and the loader jumps
+ * to `entry`. The copy must start at or above 1 MiB and lie in the file's
+ * `size` bytes, the zeroed memory must not end below the copy, and the
+ * entry must lie in the copied bytes. Every address is 32 bits wide, so
+ * every end is representable.
+ *
+ * A `load_end` of 0 copies to the end of the file, which the slot pads to
+ * its own size, so the copy would be judged against one length and loaded
+ * at another; such a load is refused.
  */
-static int kludge_load(const uint8_t *image, uint32_t off, uint32_t size, char *err, size_t errlen)
+static int address_load(uint32_t off, uint32_t size, uint32_t header_addr, uint32_t load_addr,
+                        uint32_t load_end, uint32_t bss_end, uint32_t entry, char *err,
+                        size_t errlen)
 {
-    uint32_t header_addr = le32(image + off + 12);
-    uint32_t load_addr = le32(image + off + 16);
-    uint32_t load_end = le32(image + off + 20);
-    uint32_t bss_end = le32(image + off + 24);
-    uint32_t entry = le32(image + off + 28);
     uint32_t file_start, copied;
 
     if (load_addr < 0x100000u) {
@@ -602,15 +612,12 @@ static int kludge_load(const uint8_t *image, uint32_t off, uint32_t size, char *
     }
     file_start = off - (header_addr - load_addr);
     if (load_end == 0) {
-        copied = size - file_start;
-    } else if (load_end <= load_addr || load_end - load_addr > size - file_start) {
+        return fail(err, errlen, "the load runs to the end of the file, which the slot pads");
+    }
+    if (load_end <= load_addr || load_end - load_addr > size - file_start) {
         return fail(err, errlen, "the load leaves the file");
-    } else {
-        copied = load_end - load_addr;
     }
-    if (copied > 0xFFFFFFFFu - load_addr) {
-        return fail(err, errlen, "the load leaves the 32-bit address space");
-    }
+    copied = load_end - load_addr;
     if (bss_end != 0 && bss_end < load_addr + copied) {
         return fail(err, errlen, "the zeroed memory ends inside the load");
     }
@@ -620,6 +627,93 @@ static int kludge_load(const uint8_t *image, uint32_t off, uint32_t size, char *
     return 0;
 }
 
+/** Judge the load an x86-64 kernel's Multiboot header at `off` describes
+ * with the a.out kludge (`address_load`). */
+static int kludge_load(const uint8_t *image, uint32_t off, uint32_t size, char *err, size_t errlen)
+{
+    return address_load(off, size, le32(image + off + 12), le32(image + off + 16),
+                        le32(image + off + 20), le32(image + off + 24), le32(image + off + 28), err,
+                        errlen);
+}
+
+/**
+ * The offset of the multiboot2 header in the first `present` bytes, at most
+ * MULTIBOOT_SEARCH, or -1: the magic on an 8-byte boundary, architecture 0
+ * (i386 protected mode), a length that holds the 16-byte header and ends
+ * in those bytes, and a checksum that makes the four words sum to zero.
+ */
+static long multiboot2_header(const uint8_t *image, uint32_t present)
+{
+    uint32_t limit = present < MULTIBOOT_SEARCH ? present : MULTIBOOT_SEARCH;
+    uint32_t off;
+
+    for (off = 0; off + 16 <= limit; off += 8) {
+        uint32_t len = le32(image + off + 8);
+
+        if (le32(image + off) == MULTIBOOT2_MAGIC && le32(image + off + 4) == 0 && len >= 16 &&
+            len <= limit - off &&
+            le32(image + off) + le32(image + off + 4) + len + le32(image + off + 12) == 0) {
+            return (long)off;
+        }
+    }
+    return -1;
+}
+
+/**
+ * Judge the tags of the multiboot2 header at `off`, which GRUB's multiboot2
+ * command reads: each starts on an 8-byte boundary, has at least 8 bytes
+ * and ends inside the header, up to the end tag (type 0). An address tag
+ * (type 2) places the file as the a.out kludge does, judged by
+ * `address_load`, and needs an entry tag (type 3) with it; an x86-64 kernel
+ * needs both, since its ELF entry is an address in the top 2 GiB, which the
+ * loader refuses. The console (4) and framebuffer (5) tags change only the
+ * display the loader sets up; another tag the loader must honour (flags bit
+ * 0 clear) changes what it does with the image and is refused.
+ */
+static int multiboot2_tags(const uint8_t *image, uint32_t off, uint32_t size, int x86_64, char *err,
+                           size_t errlen)
+{
+    const uint8_t *h = image + off;
+    uint32_t len = le32(h + 8), at = 16, address = 0, entry = 0;
+
+    for (;;) {
+        uint32_t type, tag_size;
+
+        if (len - at < 8) {
+            return fail(err, errlen, "the multiboot2 tags have no end tag");
+        }
+        type = le16(h + at);
+        tag_size = le32(h + at + 4);
+        if (tag_size < 8 || tag_size > len - at) {
+            return fail(err, errlen, "a multiboot2 tag leaves its header");
+        }
+        if (type == 0) {
+            break;
+        }
+        if (type == 2 && tag_size >= 24) {
+            address = at;
+        } else if (type == 3 && tag_size >= 12) {
+            entry = at;
+        } else if (type != 4 && type != 5 && (le16(h + at + 2) & 1u) == 0) {
+            return fail(err, errlen, "a multiboot2 tag changes how the loader reads the image");
+        }
+        at += (tag_size + 7u) & ~7u;
+    }
+    if ((address != 0) != (entry != 0)) {
+        return fail(err, errlen, "the multiboot2 header has one of its address and entry tags");
+    }
+    if (x86_64 && address == 0) {
+        return fail(err, errlen,
+                    "the multiboot2 header lacks the address tag an x86-64 kernel needs");
+    }
+    if (address == 0) {
+        return 0;
+    }
+    return address_load(off, size, le32(h + address + 8), le32(h + address + 12),
+                        le32(h + address + 16), le32(h + address + 20), le32(h + entry + 8), err,
+                        errlen);
+}
+
 /**
  * Validate the in-memory headers of a kernel a Multiboot loader can load:
  * an ELF32 i386 kernel, whose program headers the loader follows, or an
@@ -627,19 +721,22 @@ static int kludge_load(const uint8_t *image, uint32_t off, uint32_t size, char *
  * through the a.out kludge.
  *
  * `present` gives the available prefix; the ELF header, an i386 kernel's
- * program headers and the Multiboot header must fit it, and the Multiboot
- * header must be in the first 8192 bytes. Its flags must be ALIGN|MEMINFO
- * for an i386 kernel and ALIGN|MEMINFO with the a.out kludge for an x86-64
- * one; other flags change how the loader reads the image. Load file ranges
- * must fit `size`, load memory ranges the 32-bit address space at or above
- * 1 MiB, and the entry point a load's file-backed bytes. An i386 load's
- * physical address must equal its virtual one. A whole image must name the
- * read-write disk policy (`policy_judged`).
+ * program headers and both Multiboot headers must fit it, and the headers
+ * must be in the first 8192 bytes, which are what the slot checks read.
+ * The Multiboot header is QEMU's and an MBR menu's, and its flags must be
+ * ALIGN|MEMINFO for an i386 kernel and ALIGN|MEMINFO with the a.out kludge
+ * for an x86-64 one; other flags change how the loader reads the image.
+ * The multiboot2 header is the GPT menu's, judged by `multiboot2_tags`.
+ * Load file ranges must fit `size`, load memory ranges the 32-bit address
+ * space at or above 1 MiB, and the entry point a load's file-backed bytes.
+ * An i386 load's physical address must equal its virtual one. A whole image
+ * must name the read-write disk policy (`policy_judged`).
  */
 int bootslot_validate_kernel(const uint8_t *image, uint32_t present, uint32_t size, char *err,
                              size_t errlen)
 {
-    long off;
+    long off, off2;
+    uint32_t search;
     int x86_64;
 
     if (present > size) {
@@ -663,8 +760,9 @@ int bootslot_validate_kernel(const uint8_t *image, uint32_t present, uint32_t si
                     x86_64 ? "the image is not an x86-64 executable"
                            : "the image is not an i386 executable");
     }
+    search = present < MULTIBOOT_SEARCH ? present : MULTIBOOT_SEARCH;
     off = multiboot_header(image, present);
-    if (off < 0 || (x86_64 && (uint32_t)off + 32 > present)) {
+    if (off < 0 || (x86_64 && (uint32_t)off + 32 > search)) {
         return fail(err, errlen, "no multiboot header in the first 8192 bytes");
     }
     if (le32(image + off + 4) != (x86_64 ? 0x10003u : 3u)) {
@@ -674,6 +772,13 @@ int bootslot_validate_kernel(const uint8_t *image, uint32_t present, uint32_t si
     }
     if ((x86_64 ? kludge_load(image, (uint32_t)off, size, err, errlen)
                 : elf32_loads(image, present, size, err, errlen)) != 0) {
+        return -1;
+    }
+    off2 = multiboot2_header(image, present);
+    if (off2 < 0) {
+        return fail(err, errlen, "no multiboot2 header in the first 8192 bytes");
+    }
+    if (multiboot2_tags(image, (uint32_t)off2, size, x86_64, err, errlen) != 0) {
         return -1;
     }
     return policy_judged(image, present, size, err, errlen);

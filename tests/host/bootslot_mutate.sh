@@ -1,5 +1,7 @@
 #!/bin/sh
 # Compile fixed, faulty and restored boot-slot sources in a private directory.
+# The test includes bootslot.c, so the private copy comes first on the
+# include path.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -33,8 +35,8 @@ run_phase()
     binary="$work/$phase"
     if ! "${CC:-cc}" -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 \
         -DRACH2_HOSTTEST -g -O1 -ffreestanding -Wall -Wextra -Werror \
-        -fsanitize=address,undefined -fno-sanitize-recover=all -I utils \
-        tests/host/bootslot_hosttest.c "$work/bootslot.c" -o "$binary" \
+        -fsanitize=address,undefined -fno-sanitize-recover=all -I "$work" \
+        -I utils tests/host/bootslot_hosttest.c -o "$binary" \
         >"$binary.compile.log" 2>&1; then
         cat "$binary.compile.log" >&2
         exit 1
@@ -54,7 +56,7 @@ run_phase()
 
 echo "bootslot-mutation: logs: $work"
 run_phase fixed 0 'bootslot-hosttest: result: pass:'
-for fault in order bound policy; do
+for fault in order bound policy mb2 padded search chain tags x86tags pair; do
     python3 - "$work/bootslot.c" "$fault" <<'PY'
 import pathlib
 import sys
@@ -75,12 +77,27 @@ elif sys.argv[2] == "policy":
     }
 '''
     after = ''
-else:
+elif sys.argv[2] == "bound":
     before = '''        if (p_memsz > 0xFFFFFFFFu - p_vaddr) {
             return fail(err, errlen, "a load leaves the 32-bit address space");
         }
 '''
     after = ''
+else:
+    before, after = {
+        "mb2": ('return fail(err, errlen, "no multiboot2 header in the first 8192 bytes");',
+                'return policy_judged(image, present, size, err, errlen);'),
+        "padded": ('return fail(err, errlen, "the load runs to the end of the file, which the slot pads");',
+                   'load_end = load_addr + (size - file_start);'),
+        "search": ('search = present < MULTIBOOT_SEARCH ? present : MULTIBOOT_SEARCH;',
+                   'search = present;'),
+        "chain": ('return len == size / cluster_bytes + (size % cluster_bytes != 0 ? 1u : 0u);',
+                  'return size <= len * cluster_bytes && len * cluster_bytes - size < cluster_bytes;'),
+        "tags": ('} else if (type != 4 && type != 5 && (le16(h + at + 2) & 1u) == 0) {',
+                 '} else if (0) {'),
+        "x86tags": ('if (x86_64 && address == 0) {', 'if (x86_64 < 0 && address == 0) {'),
+        "pair": ('if ((address != 0) != (entry != 0)) {', 'if (0) {'),
+    }[sys.argv[2]]
 if source.count(before) != 1:
     raise SystemExit("bootslot-mutation: source pattern is not unique")
 path.write_text(source.replace(before, after))
@@ -89,6 +106,13 @@ PY
         order) message='install refuses the unverified fallback' ;;
         bound) message='load crossing 4 GiB is refused' ;;
         policy) message="the read-only build is refused as a machine's kernel" ;;
+        mb2) message='an i386 kernel without a multiboot2 header is refused' ;;
+        padded) message='which the slot pads, is refused' ;;
+        search) message='ends past the 8192 bytes the slot checks read is refused' ;;
+        chain) message='a chain of 4 GiB and 64 KiB does not fit a file of 64 KiB' ;;
+        tags) message='the check does not know is refused' ;;
+        x86tags) message='without its address and entry tags is refused' ;;
+        pair) message='a multiboot2 address tag without an entry tag is refused' ;;
     esac
     run_phase "$fault-mutated" 1 "$message"
     cleanup
