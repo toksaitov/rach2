@@ -4755,9 +4755,9 @@ probe procprobe
 file rach2/sys/fs/procfs.c
 expect FAIL: /proc/self/stat gives a start time, a size and resident pages
 old
-    ap_u32(t, mm ? mm_resident(mm) : 0);
+    ap_ulong(t, mm ? mm_resident(mm) : 0);
 new
-    ap_u32(t, mm ? mm_resident(mm) * 0 : 0);
+    ap_ulong(t, mm ? mm_resident(mm) * 0 : 0);
 end
 
 # syncfs.

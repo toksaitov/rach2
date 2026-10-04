@@ -50,11 +50,13 @@ static int exe_locks, held_at_lock[4];
     } while (0)
 
 /* The page tables the resident count walks, which this model has none of. */
-uintptr_t paging_user_phys(page_dir_t *dir, uintptr_t va)
+void paging_user_count(page_dir_t *dir, uintptr_t start, uintptr_t end, unsigned long *present,
+                       unsigned long *dirty)
 {
     (void)dir;
-    (void)va;
-    return 0;
+    (void)start;
+    (void)end;
+    *present = *dirty = 0;
 }
 
 void *kmalloc(size_t size)

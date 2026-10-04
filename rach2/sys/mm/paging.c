@@ -1106,20 +1106,33 @@ uintptr_t paging_user_phys(page_dir_t *dir, uintptr_t va)
     return PTE_ADDR(*e) | (va & (PAGE_SIZE - 1));
 }
 
+/**
+ * The leaf table of `dir` for the user address `va`, with the end of the span
+ * it covers in `*next`; or NULL, with the end of the span around `va` whose
+ * tables `dir` lacks (`mmu_user_skip`). `*next` is clipped to `end`. A walk
+ * over a user range steps from span to span, and visits only the tables the
+ * range has, so that a region of terabytes with few pages costs few steps.
+ */
+static pte_t *user_span(page_dir_t *dir, uintptr_t va, uintptr_t end, uintptr_t *next)
+{
+    pte_t *table = mmu_user_table(dir, va, 0);
+
+    *next = table ? (va & ~(MMU_TABLE_SPAN - 1)) + MMU_TABLE_SPAN : mmu_user_skip(dir, va);
+    if (*next > end || *next <= va) {
+        *next = end;
+    }
+    return table;
+}
+
 void paging_user_count(page_dir_t *dir, uintptr_t start, uintptr_t end, unsigned long *present,
                        unsigned long *dirty)
 {
-    uintptr_t va = start;
+    uintptr_t va, next;
 
     *present = *dirty = 0;
-    while (va < end) {
-        pte_t *table = mmu_user_table(dir, va, 0);
-        uintptr_t next =
-            table ? (va & ~(MMU_TABLE_SPAN - 1)) + MMU_TABLE_SPAN : mmu_user_skip(dir, va);
+    for (va = start; va < end; va = next) {
+        pte_t *table = user_span(dir, va, end, &next);
 
-        if (next > end || next <= va) {
-            next = end;
-        }
         for (; table && va < next; va += PAGE_SIZE) {
             pte_t e = table[MMU_INDEX(va)];
 
@@ -1128,7 +1141,6 @@ void paging_user_count(page_dir_t *dir, uintptr_t start, uintptr_t end, unsigned
                 *dirty += (e & PTE_DIRTY) != 0;
             }
         }
-        va = next;
     }
 }
 
@@ -1453,94 +1465,95 @@ uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
 
 void unmap_user_range(page_dir_t *dir, uintptr_t start, uintptr_t end)
 {
-    uintptr_t addr;
+    uintptr_t addr, next;
 
     if (!dir) {
         return;
     }
+    for (addr = start; addr < end; addr = next) {
+        pte_t *table = user_span(dir, addr, end, &next);
 
-    for (addr = start; addr < end; addr += PAGE_SIZE) {
-        /* A table shared with the kernel directory is never touched. */
-        pte_t *e = user_pte(dir, addr);
-        pte_t pte;
+        for (; table && addr < next; addr += PAGE_SIZE) {
+            pte_t *e = &table[MMU_INDEX(addr)];
 
-        if (!e) {
-            continue;
+            if (*e & PTE_P) {
+                frame_unref(PTE_ADDR(*e));
+                *e = 0;
+                paging_flush_dir(dir, addr);
+            }
         }
-        pte = *e;
-        if (!(pte & PTE_P)) {
-            continue; /* not present: a never-faulted lazy page, nothing to free */
-        }
-
-        /* Drop the mapping's reference (frees the frame on the last
-         * reference). */
-        frame_unref(PTE_ADDR(pte));
-        *e = 0;
-        paging_flush_dir(dir, addr);
     }
 }
 
 int paging_move_range(page_dir_t *dir, uintptr_t from, uintptr_t to, uintptr_t len)
 {
-    uintptr_t off;
+    uintptr_t addr, next, end = from + len;
+    pte_t *table;
 
     /* The tables first, so the move cannot stop half way. */
-    for (off = 0; off < len; off += PAGE_SIZE) {
-        pte_t *e = user_pte(dir, from + off);
-
-        if (e && *e && !mmu_user_table(dir, to + off, 1)) {
-            return -1;
+    for (addr = from; addr < end; addr = next) {
+        for (table = user_span(dir, addr, end, &next); table && addr < next; addr += PAGE_SIZE) {
+            if (table[MMU_INDEX(addr)] && !mmu_user_table(dir, to + (addr - from), 1)) {
+                return -1;
+            }
         }
     }
-    for (off = 0; off < len; off += PAGE_SIZE) {
-        pte_t *e = user_pte(dir, from + off);
+    for (addr = from; addr < end; addr = next) {
+        for (table = user_span(dir, addr, end, &next); table && addr < next; addr += PAGE_SIZE) {
+            pte_t *e = &table[MMU_INDEX(addr)];
 
-        if (!e || !*e) {
-            continue;
+            if (*e) {
+                *user_pte(dir, to + (addr - from)) = *e;
+                *e = 0;
+                paging_flush_dir(dir, addr);
+                paging_flush_dir(dir, to + (addr - from));
+            }
         }
-        *user_pte(dir, to + off) = *e;
-        *e = 0;
-        paging_flush_dir(dir, from + off);
-        paging_flush_dir(dir, to + off);
     }
     return 0;
 }
 
+/** Give the present user page `addr`, whose entry in `dir` is `e`, the
+ * protection `prot`, for `paging_protect_range`; a page not present is left
+ * alone, since its fault reads the region's protection. */
+static void protect_page(page_dir_t *dir, pte_t *e, uintptr_t addr, uint32_t prot)
+{
+    pte_t pte = *e;
+    uintptr_t frame;
+
+    if (!(pte & PTE_P)) {
+        return;
+    }
+    if (!(prot & (VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXEC))) {
+        pte = (pte & ~(pte_t)(PTE_W | PTE_U)) | PTE_NONE;
+    } else {
+        pte = (pte & ~(pte_t)(PTE_NONE | PTE_NOEXEC)) | PTE_U | paging_noexec(prot);
+        frame = PTE_ADDR(pte) / PAGE_SIZE;
+        if (!(prot & VM_PROT_WRITE)) {
+            pte &= ~(pte_t)PTE_W;
+        } else if (prot & VM_PROT_SHARED) {
+            pte |= PTE_W;
+        } else if (pte & PTE_COW) {
+            /* Still shared: the first write copies or takes it. */
+        } else if (frame < _frames_number && _frames[frame] > 1) {
+            pte = (pte & ~(pte_t)PTE_W) | PTE_COW;
+        } else {
+            pte |= PTE_W;
+        }
+    }
+    *e = pte;
+    paging_flush_dir(dir, addr);
+}
+
 void paging_protect_range(page_dir_t *dir, uintptr_t start, uintptr_t end, uint32_t prot)
 {
-    uintptr_t addr;
+    uintptr_t addr, next;
+    pte_t *table;
 
-    for (addr = start; addr < end; addr += PAGE_SIZE) {
-        pte_t *e = user_pte(dir, addr);
-        pte_t pte;
-        uintptr_t frame;
-
-        if (!e) {
-            continue;
+    for (addr = start; addr < end; addr = next) {
+        for (table = user_span(dir, addr, end, &next); table && addr < next; addr += PAGE_SIZE) {
+            protect_page(dir, &table[MMU_INDEX(addr)], addr, prot);
         }
-        pte = *e;
-        if (!(pte & PTE_P)) {
-            continue; /* not resident: the fault reads the region's protection */
-        }
-        if (!(prot & (VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXEC))) {
-            pte = (pte & ~(pte_t)(PTE_W | PTE_U)) | PTE_NONE;
-        } else {
-            pte = (pte & ~(pte_t)(PTE_NONE | PTE_NOEXEC)) | PTE_U | paging_noexec(prot);
-            frame = PTE_ADDR(pte) / PAGE_SIZE;
-            if (!(prot & VM_PROT_WRITE)) {
-                pte &= ~(pte_t)PTE_W;
-            } else if (prot & VM_PROT_SHARED) {
-                pte |= PTE_W;
-            } else if (pte & PTE_COW) {
-                /* Still shared: the first write copies or takes it. */
-            } else if (frame < _frames_number && _frames[frame] > 1) {
-                pte = (pte & ~(pte_t)PTE_W) | PTE_COW;
-            } else {
-                pte |= PTE_W;
-            }
-        }
-        *e = pte;
-        paging_flush_dir(dir, addr);
     }
 }
 
@@ -1612,22 +1625,16 @@ int paging_fork_copy(struct mm *from, page_dir_t *child_dir)
 
     for (r = 0; r < from->vm.count; r++) {
         const vma_t *region = &from->vm.vmas[r];
-        uintptr_t va = region->start;
+        uintptr_t va, next;
 
-        while (va < region->end) {
-            pte_t *table = mmu_user_table(parent_dir, va, 0);
-            uintptr_t next = table ? (va & ~(MMU_TABLE_SPAN - 1)) + MMU_TABLE_SPAN
-                                   : mmu_user_skip(parent_dir, va);
+        for (va = region->start; va < region->end; va = next) {
+            pte_t *table = user_span(parent_dir, va, region->end, &next);
 
-            if (next > region->end || next <= va) {
-                next = region->end;
-            }
             for (; table && va < next; va += PAGE_SIZE) {
                 if (fork_copy_page(child_dir, &table[MMU_INDEX(va)], va, region->type) != 0) {
                     return -1;
                 }
             }
-            va = next;
         }
     }
     return 0;

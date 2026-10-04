@@ -48,8 +48,8 @@ struct tgroup {
      * most any reaped child reports, which getrusage and wait4 give as
      * `ru_maxrss`: Linux keeps the high-water mark at every fault, and this
      * kernel samples the resident pages where an address space ends. */
-    uint32_t maxrss_kb;
-    uint32_t cmaxrss_kb;
+    unsigned long maxrss_kb;
+    unsigned long cmaxrss_kb;
     /* The interval timers of the process's processor time, setitimer's
      * ITIMER_VIRTUAL and ITIMER_PROF, at 0 and 1: the ticks left before
      * SIGVTALRM, counted in user mode, or SIGPROF, counted in both modes,

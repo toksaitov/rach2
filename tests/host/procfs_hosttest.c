@@ -187,7 +187,7 @@ uintptr_t paging_user_phys(page_dir_t *dir, uintptr_t va)
 }
 
 /* The resident pages of an address space, which mm.c counts; none here. */
-uint32_t mm_resident(const struct mm *mm)
+unsigned long mm_resident(const struct mm *mm)
 {
     (void)mm;
     return 0;

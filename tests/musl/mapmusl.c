@@ -9,26 +9,27 @@
  * parent, and a store through the mapping of the file reaches read(2), and
  * after a truncation and a growth a write to the file is seen through the
  * mapping. On x86-64 a truncation takes out of a mapping of a file of 4 GiB and
- * a page, cut to 4 GiB, the last page alone. mprotect will not make a shared
- * mapping of a file opened read-only writable, and will a private one. Shared
- * anonymous memory ignores a raw mmap2's page offset (mmap's, in bytes, on
- * x86-64), a file's offset whose last page would not fit in 32 bits is
- * EOVERFLOW, and a page of a file in memory past its end is never backed.
- * mremap without MREMAP_MAYMOVE does not grow a mapping into the one after it,
- * and with the flag moves the mapping with its bytes. A shrink in place keeps
- * the bytes of the page it keeps and frees the two pages it cuts:
- * MAP_FIXED_NOREPLACE maps them again, and the byte stored in them before reads
- * as zero. mremap refuses an old length that would wrap past the end of memory,
- * leaving the mapping; a fixed mremap that shrinks a mapping is held to
- * RLIMIT_AS by what it leaves; madvise(MADV_DONTNEED) gives a private anonymous
- * mapping zero pages again, and madvise and msync refuse a length that would
- * round up to 0. A write through /proc/self/mem to a read-only page a fork
- * shared leaves the page read-only. On an ext2 root, a shared mapping of a file
- * carries a child's store to the parent, a store to read(2), a write(2) to the
- * mapping without losing a store beside it, and its stores to the file after
- * munmap and after a mapper's exit; on the KRFFS root, one that may be written
- * is ENODEV, and a read-only one through a descriptor open for writing may not
- * be made writable.
+ * a page, cut to 4 GiB, the last page alone; mprotect, getrusage, a shrink and
+ * a move each pass terabytes without pages in the run's time and reach the page
+ * beyond them. mprotect will not make a shared mapping of a file opened
+ * read-only writable, and will a private one. Shared anonymous memory ignores a
+ * raw mmap2's page offset (mmap's, in bytes, on x86-64), a file's offset whose
+ * last page would not fit in 32 bits is EOVERFLOW, and a page of a file in
+ * memory past its end is never backed. mremap without MREMAP_MAYMOVE does not
+ * grow a mapping into the one after it, and with the flag moves the mapping
+ * with its bytes. A shrink in place keeps the bytes of the page it keeps and
+ * frees the two pages it cuts: MAP_FIXED_NOREPLACE maps them again, and the
+ * byte stored in them before reads as zero. mremap refuses an old length that
+ * would wrap past the end of memory, leaving the mapping; a fixed mremap that
+ * shrinks a mapping is held to RLIMIT_AS by what it leaves;
+ * madvise(MADV_DONTNEED) gives a private anonymous mapping zero pages again,
+ * and madvise and msync refuse a length that would round up to 0. A write
+ * through /proc/self/mem to a read-only page a fork shared leaves the page
+ * read-only. On an ext2 root, a shared mapping of a file carries a child's
+ * store to the parent, a store to read(2), a write(2) to the mapping without
+ * losing a store beside it, and its stores to the file after munmap and after a
+ * mapper's exit; on the KRFFS root, one that may be written is ENODEV, and a
+ * read-only one through a descriptor open for writing may not be made writable.
  *
  * Prints "MAPMUSL OK" on success and "MAPMUSL FAIL (detail)" otherwise.
  */
@@ -230,8 +231,80 @@ static int truncated_wide(void)
     unlink(SHM_PATH);
     return 0;
 }
+
+/* 1 if a child that reads (or writes, for `write`) the byte at `p` dies of
+   SIGSEGV. */
+static int segv_at(volatile char *p, int write)
+{
+    int status;
+    pid_t pid = fork();
+
+    if (pid == 0) {
+        if (write) {
+            *p = 'w';
+        } else {
+            (void)*p;
+        }
+        _exit(0);
+    }
+    return pid > 0 && waitpid(pid, &status, 0) == pid && WIFSIGNALED(status) &&
+           WTERMSIG(status) == SIGSEGV;
+}
+
+/* Walks over terabytes with a page at the far end. Each walk steps past the
+   page tables a range lacks, so it finishes inside the run's bound, where a
+   step for every page of 64 TiB would take minutes, and it reaches the page
+   beyond them: mprotect of 64 TiB makes it read-only, getrusage finishes,
+   a shrink to half takes it out, and a move of 32 TiB carries the page a
+   read brought in, which mincore finds in memory at its new place. */
+static int huge_walks(void)
+{
+    const size_t big = (size_t)1 << 46, half = big / 2;
+    unsigned char in = 0;
+    struct rusage ru;
+    char *m, *far, *moved;
+
+    m = mmap(NULL, big, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+    if (m == MAP_FAILED) {
+        return fail("mmap of 64 TiB");
+    }
+    far = m + big - PAGE;
+    if (mprotect(far, PAGE, PROT_READ | PROT_WRITE) != 0) {
+        return fail("mprotect of the last page of 64 TiB");
+    }
+    *far = 'z';
+    if (mprotect(m, big, PROT_READ) != 0 || *far != 'z' || !segv_at(far, 1)) {
+        return fail("mprotect of 64 TiB did not reach its last page");
+    }
+    if (getrusage(RUSAGE_SELF, &ru) != 0 || ru.ru_maxrss <= 0) {
+        return fail("getrusage with 64 TiB mapped");
+    }
+    if (mremap(m, big, big / 2, 0) != m || !segv_at(far, 0)) {
+        return fail("a shrink of 64 TiB to half kept its last page");
+    }
+    if (munmap(m, big / 2) != 0) {
+        return fail("munmap of 32 TiB");
+    }
+    m = mmap(NULL, 2 * half, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+    if (m == MAP_FAILED || m[half - PAGE] != 0) {
+        return fail("mmap of 64 TiB to move half of");
+    }
+    moved = mremap(m, half, half, MREMAP_MAYMOVE | MREMAP_FIXED, m + half);
+    if (moved != m + half || mincore(moved + half - PAGE, PAGE, &in) != 0 || !(in & 1)) {
+        return fail("a move of 32 TiB did not carry its last page");
+    }
+    if (munmap(m + half, half) != 0) {
+        return fail("munmap of the 32 TiB moved");
+    }
+    return 0;
+}
 #else
 static int truncated_wide(void)
+{
+    return 0;
+}
+
+static int huge_walks(void)
 {
     return 0;
 }
@@ -563,7 +636,8 @@ static int root_shared(void)
 int main(void)
 {
     if (private_file() || shared() || root_shared() || truncated_shared() || truncated_wide() ||
-        readonly_shared() || offsets() || remaps() || forced_write() || remap_limit()) {
+        huge_walks() || readonly_shared() || offsets() || remaps() || forced_write() ||
+        remap_limit()) {
         return 1;
     }
     printf("MAPMUSL OK\n");

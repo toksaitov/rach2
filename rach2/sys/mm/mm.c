@@ -184,19 +184,14 @@ void mm_copy_info(struct mm *to, const struct mm *from)
     to->dumpable = from->dumpable;
 }
 
-uint32_t mm_resident(const struct mm *mm)
+unsigned long mm_resident(const struct mm *mm)
 {
-    uint32_t n = 0;
+    unsigned long n = 0, present, dirty;
     uint32_t i;
 
     for (i = 0; i < mm->vm.count; i++) {
-        uintptr_t a;
-
-        for (a = mm->vm.vmas[i].start; a < mm->vm.vmas[i].end; a += PAGE_SIZE) {
-            if (paging_user_phys(mm->dir, a) != 0) {
-                n++;
-            }
-        }
+        paging_user_count(mm->dir, mm->vm.vmas[i].start, mm->vm.vmas[i].end, &present, &dirty);
+        n += present;
     }
     return n;
 }
@@ -209,7 +204,7 @@ void mm_drop(struct process *p)
         return;
     }
     if (mm->users == 1 && p->tg) {
-        uint32_t kb = mm_resident(mm) * (PAGE_SIZE / 1024u);
+        unsigned long kb = mm_resident(mm) * (PAGE_SIZE / 1024u);
 
         if (kb > p->tg->maxrss_kb) {
             p->tg->maxrss_kb = kb;

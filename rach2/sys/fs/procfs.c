@@ -579,7 +579,7 @@ static int procfs_gen_stat(struct procfs_text *t, int pid, int whole)
     mm = p->mm;
     ap_ulong(t, mm ? vm_total(&mm->vm) : 0);
     ap_ch(t, ' ');
-    ap_u32(t, mm ? mm_resident(mm) : 0);
+    ap_ulong(t, mm ? mm_resident(mm) : 0);
     ap_ch(t, '\n');
     if (!t->nomem) {
         t->buf[t->len] = '\0';
@@ -1272,7 +1272,7 @@ static int procfs_gen_status(struct procfs_text *t, int pid)
     ap_ch(t, '\n');
     if (mm) {
         unsigned long size = vm_total(&mm->vm);
-        unsigned long rss = (unsigned long)mm_resident(mm) * PAGE_SIZE;
+        unsigned long rss = mm_resident(mm) * PAGE_SIZE;
 
         ap_kb(t, "VmPeak", size);
         ap_kb(t, "VmSize", size);
@@ -1327,7 +1327,7 @@ static int procfs_gen_statm(struct procfs_text *t, int pid)
     }
     ap_ulong(t, vm_total(&mm->vm) / PAGE_SIZE);
     ap_ch(t, ' ');
-    ap_u32(t, mm_resident(mm));
+    ap_ulong(t, mm_resident(mm));
     ap_str(t, " 0 ");
     ap_ulong(t, mm_bytes(mm, VM_CODE) / PAGE_SIZE);
     ap_str(t, " 0 ");

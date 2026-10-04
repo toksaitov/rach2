@@ -149,8 +149,9 @@ struct process;
  * `maxrss_kb` when it is the largest yet, for `ru_maxrss`. */
 void mm_drop(struct process *p);
 
-/** The pages of `mm` in memory: the present user pages of its page tables. */
-uint32_t mm_resident(const struct mm *mm);
+/** The pages of `mm` in memory: the present user pages of its page tables,
+ * counted past the tables its regions lack (`paging_user_count`). */
+unsigned long mm_resident(const struct mm *mm);
 
 /*
  * The file system's part, in syscall_fs.c: a description of the file at
