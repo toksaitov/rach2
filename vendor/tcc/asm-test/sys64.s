@@ -6,6 +6,9 @@
     lretq
     lretl
     lretw
+    lretq $16
+    lretl $8
+    lretw $6
     sysretq
     syscall
     swapgs
@@ -60,6 +63,8 @@
     retq
     retw
     ret $16
+    retq $16
+    retw $4
     cqto
     cwtl
     cbtw

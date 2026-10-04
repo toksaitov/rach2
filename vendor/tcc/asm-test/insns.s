@@ -146,8 +146,13 @@
     lret
     lretl
     lretw
+    lret $8
+    lretl $8
+    lretw $6
     ret
     retl
+    retl $4
+    retw $4
     retw
     ret $4
     lret $8

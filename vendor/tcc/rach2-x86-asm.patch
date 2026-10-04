@@ -25,8 +25,9 @@ file starts in its target's own:
     there what needs a REX prefix or 64-bit code.
   * The suffixes GNU as gives an instruction whose operand is implicit or
     a pointer in memory: w, l or q on pushf, popf, iret, lret and ret, as
-    the code size allows; w or l on pusha, popa, ljmp and lcall, and on
-    lgdt, lidt, sgdt and sidt. lss, lfs and lgs take a 16-bit register.
+    the code size allows, lret and ret with the count of bytes they take
+    off the stack or without it; w or l on pusha, popa, ljmp and lcall, and
+    on lgdt, lidt, sgdt and sidt. lss, lfs and lgs take a 16-bit register.
 
 The difference of two labels whose first comes later in the file, as
 `lgdtl gdt_ptr - start + BASE` in a trampoline copied to BASE, became a
@@ -689,20 +690,23 @@ in the file are still an error, and jmp and jcc to one take the long form.
  
  ALT(DEF_ASM_OP1(int, 0xcd, 0, 0, OPT_IM8))
  ALT(DEF_ASM_OP1(seto, 0x0f90, 0, OPC_MODRM | OPC_TEST, OPT_REG8 | OPT_EA))
-@@ -217,9 +239,12 @@ ALT(DEF_ASM_OP1(setob, 0x0f90, 0, OPC_MODRM | OPC_TEST, OPT_REG8 | OPT_EA))
+@@ -217,9 +239,15 @@ ALT(DEF_ASM_OP1(setob, 0x0f90, 0, OPC_MODRM | OPC_TEST, OPT_REG8 | OPT_EA))
      DEF_ASM_OP0(ret, 0xc3)
      DEF_ASM_OP0(retl,0xc3)
  ALT(DEF_ASM_OP1(retl,0xc2, 0, 0, OPT_IM16))
 +    DEF_ASM_OP0(retw, 0xc3)
++ALT(DEF_ASM_OP1(retw, 0xc2, 0, 0, OPT_IM16))
  ALT(DEF_ASM_OP1(ret, 0xc2, 0, 0, OPT_IM16))
      DEF_ASM_OP0(lret, 0xcb)
  ALT(DEF_ASM_OP1(lret, 0xca, 0, 0, OPT_IM16))
 +    DEF_ASM_OP0(lretw, 0xcb)
++ALT(DEF_ASM_OP1(lretw, 0xca, 0, 0, OPT_IM16))
 +    DEF_ASM_OP0(lretl, 0xcb)
++ALT(DEF_ASM_OP1(lretl, 0xca, 0, 0, OPT_IM16))
  
  ALT(DEF_ASM_OP1(jo, 0x70, 0, OPC_TEST, OPT_DISP8))
      DEF_ASM_OP1(loopne, 0xe0, 0, 0, OPT_DISP8)
-@@ -337,22 +362,35 @@ ALT(DEF_ASM_OP1(fstsw, 0xdd, 7, OPC_MODRM | OPC_FWAIT, OPT_EA ))
+@@ -337,22 +365,35 @@ ALT(DEF_ASM_OP1(fstsw, 0xdd, 7, OPC_MODRM | OPC_FWAIT, OPT_EA ))
      DEF_ASM_OP1(ffree, 0xddc0, 4, OPC_REG, OPT_ST )
      DEF_ASM_OP1(ffreep, 0xdfc0, 4, OPC_REG, OPT_ST )
      DEF_ASM_OP1(fxsave, 0x0fae, 0, OPC_MODRM, OPT_EA )
@@ -1003,23 +1007,28 @@ in the file are still an error, and jmp and jcc to one take the long form.
  
  ALT(DEF_ASM_OP1(int, 0xcd, 0, 0, OPT_IM8))
  ALT(DEF_ASM_OP1(seto, 0x0f90, 0, OPC_MODRM | OPC_TEST, OPT_REG8 | OPT_EA))
-@@ -227,10 +266,15 @@ ALT(DEF_ASM_OP1(setob, 0x0f90, 0, OPC_MODRM | OPC_TEST, OPT_REG8 | OPT_EA))
+@@ -227,10 +266,20 @@ ALT(DEF_ASM_OP1(setob, 0x0f90, 0, OPC_MODRM | OPC_TEST, OPT_REG8 | OPT_EA))
      DEF_ASM_OP0(leave, 0xc9)
      DEF_ASM_OP0(ret, 0xc3)
      DEF_ASM_OP0(retq, 0xc3)
 +    DEF_ASM_OP0(retw, 0xc3)
++ALT(DEF_ASM_OP1(retw, 0xc2, 0, 0, OPT_IM16))
 +    DEF_ASM_OP0(retl, 0xc3)
++ALT(DEF_ASM_OP1(retl, 0xc2, 0, 0, OPT_IM16))
  ALT(DEF_ASM_OP1(retq, 0xc2, 0, 0, OPT_IM16))
  ALT(DEF_ASM_OP1(ret, 0xc2, 0, 0, OPT_IM16))
      DEF_ASM_OP0(lret, 0xcb)
  ALT(DEF_ASM_OP1(lret, 0xca, 0, 0, OPT_IM16))
 +    DEF_ASM_OP0(lretw, 0xcb)
++ALT(DEF_ASM_OP1(lretw, 0xca, 0, 0, OPT_IM16))
 +    DEF_ASM_OP0(lretl, 0xcb)
++ALT(DEF_ASM_OP1(lretl, 0xca, 0, 0, OPT_IM16))
 +    DEF_ASM_OP0(lretq, 0xcb)
++ALT(DEF_ASM_OP1(lretq, 0xca, 0, 0, OPT_IM16))
  
  ALT(DEF_ASM_OP1(jo, 0x70, 0, OPC_TEST, OPT_DISP8))
      DEF_ASM_OP1(loopne, 0xe0, 0, 0, OPT_DISP8)
-@@ -356,22 +400,40 @@ ALT(DEF_ASM_OP1(fstsw, 0xdd, 7, OPC_MODRM | OPC_FWAIT, OPT_EA ))
+@@ -356,22 +405,40 @@ ALT(DEF_ASM_OP1(fstsw, 0xdd, 7, OPC_MODRM | OPC_FWAIT, OPT_EA ))
         problem with TCC, we don't use extended registers.  */
      DEF_ASM_OP1(fxsaveq, 0x0fae, 0, OPC_MODRM | OPC_48, OPT_EA )
      DEF_ASM_OP1(fxrstorq, 0x0fae, 1, OPC_MODRM | OPC_48, OPT_EA )
