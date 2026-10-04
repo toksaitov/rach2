@@ -180,6 +180,38 @@ static void reset_model(unsigned int lint0)
     wrmsr_calls = 0;
 }
 
+/**
+ * Check `lapic_pending`, which tells the USB stack whether a vector is waiting
+ * at the processor before it counts an edge as lost.
+ *
+ * Vector 48 is bit 16 of the word at 0x210, and the registers are sixteen
+ * bytes apart. The rows start from a fresh model, and the last one refuses
+ * the APIC to show that a refused driver answers without reading its page.
+ */
+static void rows_pending(void)
+{
+    reset_model(0x8700);
+    (void)lapic_init();
+    apic_page[0x210 / 4] = 0;
+    apic_page[0x110 / 4] = 0;
+    check(!lapic_pending(48), "a vector nothing has raised is not waiting");
+    apic_page[0x210 / 4] = 1u << 16;
+    check(lapic_pending(48), "a vector in the request register is waiting");
+    check(!lapic_pending(49), "and its neighbour is not");
+    apic_page[0x210 / 4] = 0;
+    apic_page[0x110 / 4] = 1u << 16;
+    check(lapic_pending(48), "a vector being handled counts as waiting too");
+    apic_page[0x110 / 4] = 0;
+    apic_page[0x200 / 4] = 0xFFFFFFFFu; /* vectors 0 to 31, a different word */
+    check(!lapic_pending(48), "a vector in another word is not this one");
+    apic_page[0x200 / 4] = 0;
+    reset_model(0x8700);
+    has_apic = 0;
+    (void)lapic_init();
+    apic_page[0x210 / 4] = 1u << 16;
+    check(!lapic_pending(48), "and a refused APIC answers no rather than reading its page");
+}
+
 int main(void)
 {
     /* A machine as QEMU leaves it: LINT0 already an unmasked external
@@ -270,29 +302,7 @@ int main(void)
     check(apic_page[0xB0 / 4] == 0x1234,
           "and an end-of-interrupt on a refused APIC writes nothing");
 
-    /* Whether a vector is waiting at the processor, which is the question the
-       USB stack puts before it counts an edge as lost. Vector 48 is bit 16 of
-       the word at 0x210, and the registers are sixteen bytes apart. */
-    reset_model(0x8700);
-    (void)lapic_init();
-    apic_page[0x210 / 4] = 0;
-    apic_page[0x110 / 4] = 0;
-    check(!lapic_pending(48), "a vector nothing has raised is not waiting");
-    apic_page[0x210 / 4] = 1u << 16;
-    check(lapic_pending(48), "a vector in the request register is waiting");
-    check(!lapic_pending(49), "and its neighbour is not");
-    apic_page[0x210 / 4] = 0;
-    apic_page[0x110 / 4] = 1u << 16;
-    check(lapic_pending(48), "a vector being handled counts as waiting too");
-    apic_page[0x110 / 4] = 0;
-    apic_page[0x200 / 4] = 0xFFFFFFFFu; /* vectors 0 to 31, a different word */
-    check(!lapic_pending(48), "a vector in another word is not this one");
-    apic_page[0x200 / 4] = 0;
-    reset_model(0x8700);
-    has_apic = 0;
-    (void)lapic_init();
-    apic_page[0x210 / 4] = 1u << 16;
-    check(!lapic_pending(48), "and a refused APIC answers no rather than reading its page");
+    rows_pending();
 
     /* The order: the software enable first, and the local-vector entries
        after it, because the processor ignores an unmask before it. */
