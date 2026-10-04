@@ -73,6 +73,6 @@ if [ -n "$missing" ]; then
 fi
 
 if [ "$rc" -eq 0 ]; then
-    echo "check-sources: OK ($(grep -c . "$lf") kernel sources listed and present, for" $arches")"
+    echo "check-sources: OK ($(grep -c . "$lf") kernel sources listed and present, for $arches)"
 fi
 exit "$rc"

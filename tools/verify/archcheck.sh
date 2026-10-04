@@ -62,14 +62,15 @@ done
 # The headers of the platform's own files: a .c listed by the platform with
 # a .h beside it.
 platform_headers=
-for f in $(echo $platform | tr ' ' '\n' | sort -u); do
+# shellcheck disable=SC2086 # the list is one path a word
+for f in $(printf '%s\n' $platform | sort -u); do
     h="${f%.c}.h"
     [ -f "$h" ] && platform_headers="$platform_headers $h"
 done
 
 for f in $shared; do
     deps=$(clang --target=aarch64-none-elf -ffreestanding -ansi -MM "$f" 2>/dev/null |
-        tr ' \\' '\n\n' | sed -n 's|^\(\./\)*||p' | sort -u)
+        sed 's/\\$//' | tr ' ' '\n' | sed -n 's|^\(\./\)*||p' | sort -u)
     for d in $deps; do
         clean=$(echo "$d" | awk -F/ '{
             n = 0
@@ -109,7 +110,8 @@ for f in $shared $shared_headers; do
 done
 
 if [ "$status" = 0 ]; then
-    n=$(echo $shared | wc -w | tr -d ' ')
+    # shellcheck disable=SC2086 # the list is one path a word
+    n=$(printf '%s\n' $shared | grep -c .)
     echo "archcheck: ok: $n shared files compile for arm and arm64, reach no architecture's or platform's header, and have no assembly"
 fi
 exit $status

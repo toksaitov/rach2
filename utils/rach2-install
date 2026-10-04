@@ -558,8 +558,9 @@ keep_serial() { # keep_serial SAVED NODE SCRATCH
 remake_boot_partition() { # remake_boot_partition BOOT
     boot_keep=/tmp/rach2-update-boot
     [ -d /dev/shm ] && boot_keep=/dev/shm/rach2-update-boot
-    rm -rf "$boot_keep" && mkdir -p "$boot_keep/files" ||
+    if ! rm -rf "$boot_keep" || ! mkdir -p "$boot_keep/files"; then
         die "there is nowhere to keep the boot partition's files; nothing was written"
+    fi
     dd if="$1" of="$boot_keep/sector" bs=512 count=1 2>/dev/null ||
         die "$1's first sector did not read; nothing was written"
     mkdir -p "$BOOT_MNT" 2>/dev/null
