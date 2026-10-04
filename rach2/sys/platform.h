@@ -16,7 +16,9 @@
  * Make the processor ready to take interrupts and exceptions: on a PC the
  * descriptor tables, the task state segment, whose stack an entry from user
  * mode switches to, with the boot stack ending at `boot_stack_top`, and the
- * interrupt table's handlers.
+ * interrupt table's handlers. On a PC it first sets up the page attribute
+ * table, which gives the framebuffer's mapping write-combining
+ * (arch/x86/pat.h).
  */
 void platform_cpu_init(uintptr_t boot_stack_top);
 

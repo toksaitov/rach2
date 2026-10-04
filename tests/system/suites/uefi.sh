@@ -243,6 +243,11 @@ if "$RUNUTIL" until "$LOG1" "rach2 login:" 240; then
     fi
     OUT=$(key_ssh 'id -u; bootctl status; echo UEFI""LOGIN' || true)
     case "$OUT" in
+    if grep -aq "cpu: page attributes: 0x0007040600070106; the framebuffer is mapped write-combining" "$LOG1"; then
+        note "and the page attribute table reads back with the framebuffer's entry write-combining: OK"
+    else
+        bad "the kernel did not make the framebuffer write-combining; see $LOG1"
+    fi
         *UEFILOGIN*) note "and root logs in over SSH: OK" ;;
         *) bad "root's SSH login to the disk booted by UEFI: $OUT" ;;
     esac

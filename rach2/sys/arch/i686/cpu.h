@@ -84,6 +84,7 @@ typedef uint32_t pte_t;
 #define PTE_W             0x002u /* writable */
 #define PTE_U             0x004u /* reachable from user mode */
 #define PTE_NOCACHE       0x018u /* write-through, cache-disabled: PWT and PCD */
+#define PTE_WC            0x008u /* PWT alone: PAT entry 1 (arch/x86/pat.c) */
 #define PTE_DIRTY         0x040u /* written since the bit was cleared */
 /* Bit 9: a page shared copy-on-write. Present, user, read-only and PTE_COW
  * means "shared, copy on the next write"; the fault handler tells a

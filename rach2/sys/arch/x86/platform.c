@@ -20,6 +20,7 @@
 #include "ioapic.h"
 #include "ps2kbd.h"
 #include "lapic.h"
+#include "pat.h"
 #include "pciconf.h"
 #include "pic.h"
 #include "portio.h"
@@ -73,6 +74,7 @@ uint32_t x86_tick_counts(void)
 
 void platform_cpu_init(uintptr_t boot_stack_top)
 {
+    pat_setup();
     init_gdt();
     klog(KLOG_DEBUG, "boot", "gdt: ready");
 

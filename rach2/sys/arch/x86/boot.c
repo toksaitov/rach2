@@ -15,6 +15,7 @@
 #include "../arch.h"
 
 #include "mbinfo.h"
+#include "pat.h"
 #if defined(__x86_64__)
 #include "../x86_64/mmu.h"
 #endif
@@ -92,8 +93,12 @@ static int kernel_tables(void)
  * The console's address of the loader's framebuffer: its physical address
  * through the loader's view of memory until the kernel's page tables are in
  * force, and from then a mapping of it in the MMIO region, made the first
- * time the console draws after, uncached as every MMIO mapping is. A
- * framebuffer past 4 GiB is not reached.
+ * time the console draws after. The mapping is write-combining where the
+ * processor setup made `PTE_WC` so (`pat_setup`), since the console
+ * and the /fb picture only write the framebuffer, and uncached writes cost
+ * a bus transaction each: on the Lenovo a 960x600 picture of uncached
+ * writes held Doom to 28 frames a second. A framebuffer past 4 GiB is not
+ * reached.
  */
 volatile uint8_t *fbcon_window(void)
 {
@@ -116,7 +121,8 @@ volatile uint8_t *fbcon_window(void)
         return NULL;
     }
     tried = 1;
-    va = map_mmio((uintptr_t)boot.fb.addr, (size_t)size);
+    va = map_mmio_typed((uintptr_t)boot.fb.addr, (size_t)size,
+                        pat_write_combining() ? PTE_WC : PTE_NOCACHE);
     mapped = (volatile uint8_t *)va;
     return mapped;
 }

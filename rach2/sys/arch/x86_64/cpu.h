@@ -79,6 +79,7 @@ typedef uint64_t pte_t;
 #define PTE_W             0x002UL /* writable */
 #define PTE_U             0x004UL /* reachable from user mode */
 #define PTE_NOCACHE       0x018UL /* write-through, cache-disabled: PWT and PCD */
+#define PTE_WC            0x008UL /* PWT alone: PAT entry 1 (arch/x86/pat.c) */
 #define PTE_DIRTY         0x040UL /* written since the bit was cleared */
 #define PTE_PS            0x080UL /* in a PDPT or directory entry: a 1 GiB or 2 MiB page */
 /* Bit 9: a page shared copy-on-write, as on i686. */

@@ -816,8 +816,15 @@ static void _page_fault_handler(isr_params_t *params)
  * Map a physical MMIO region into the kernel's MMIO region and return the
  * virtual address it was given, or 0 when the region has no room or the
  * range is empty or wraps. The entries are cache-disabled (PCD|PWT) so a
- * device-register read is never stale, whatever the region's address. The
- * page tables of the kernel's gigabyte exist at boot and are shared by
+ * device-register read is never stale, whatever the region's address.
+ */
+uintptr_t map_mmio(uintptr_t phys_addr, size_t size)
+{
+    return map_mmio_typed(phys_addr, size, PTE_NOCACHE);
+}
+
+/**
+ * The page tables of the kernel's gigabyte exist at boot and are shared by
  * every directory, so a mapping made here at any time is seen by every
  * process.
  *
@@ -825,7 +832,7 @@ static void _page_fault_handler(isr_params_t *params)
  * one: a region reaching the top of the address space would wrap that sum to
  * a few bytes, ask for no pages, map nothing and still return an address.
  */
-uintptr_t map_mmio(uintptr_t phys_addr, size_t size)
+uintptr_t map_mmio_typed(uintptr_t phys_addr, size_t size, pte_t cache)
 {
     uintptr_t start_page = phys_addr & ~(PAGE_SIZE - 1);
     uintptr_t end_addr = phys_addr + size;
@@ -843,9 +850,7 @@ uintptr_t map_mmio(uintptr_t phys_addr, size_t size)
     }
     va = _mmio_next;
     for (i = 0; i < pages; i++) {
-        /* Present, writable, cache-disabled: a register is not memory. */
-        *kernel_pte(va + i * PAGE_SIZE) =
-            (pte_t)(start_page + i * PAGE_SIZE) | PTE_P | PTE_W | PTE_NOCACHE;
+        *kernel_pte(va + i * PAGE_SIZE) = (pte_t)(start_page + i * PAGE_SIZE) | PTE_P | PTE_W | cache;
     }
     _mmio_next += pages * PAGE_SIZE;
 

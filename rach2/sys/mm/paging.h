@@ -243,6 +243,14 @@ void free_page_directory(page_dir_t *dir);
 uintptr_t map_mmio(uintptr_t phys_addr, size_t size);
 
 /**
+ * Map an MMIO region as `map_mmio` does, with the entries' cache bits
+ * `cache` in place of PTE_NOCACHE: PTE_WC for a framebuffer, whose writes
+ * then merge into bursts, where the architecture made that entry
+ * write-combining.
+ */
+uintptr_t map_mmio_typed(uintptr_t phys_addr, size_t size, pte_t cache);
+
+/**
  * Map the frame at physical `phys` at a temporary kernel address and return
  * it, or 0 when every slot is taken. The mapping lasts until `kunmap_temp`;
  * a caller may sleep while it holds one, since a slot is its own. The paths

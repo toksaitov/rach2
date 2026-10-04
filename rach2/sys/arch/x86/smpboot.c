@@ -10,6 +10,7 @@
 #include "fpu.h"
 #include "kcpu.h"
 #include "lapic.h"
+#include "pat.h"
 #include "refclock.h"
 
 #include "../arch.h"
@@ -250,7 +251,8 @@ int platform_cpu_start(int cpu, uintptr_t stack_top, void (*entry)(int cpu))
 
 /**
  * The started processor's first C, from the trampoline, with interrupts
- * off and the boot processor waiting for `ap_alive`: its own tables, the
+ * off and the boot processor waiting for `ap_alive`: the boot processor's
+ * page attribute table (`pat_setup`), its own tables, the
  * floating-point format the boot processor chose (`fpu_cpu_setup`), its
  * APIC with the MADT's NMI inputs and the boot processor's tick,
  * and then the shared start (`smp_cpu_main`), which does not return. The
@@ -259,6 +261,7 @@ int platform_cpu_start(int cpu, uintptr_t stack_top, void (*entry)(int cpu))
  */
 void x86_ap_entry(int cpu)
 {
+    pat_setup();
     arch_ap_tables(cpu, ap_stack);
     fpu_cpu_setup();
     lapic_init_ap();
