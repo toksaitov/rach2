@@ -35,9 +35,12 @@ machine's own; 16-bit code addresses memory through
 .Li %si
 and
 .Li %di .
-A label less an earlier label of its section is right in any field, the
-first defined before the difference or after it; the earlier label less a
-later one is an error until the later is defined.
+A label less an earlier label of its section is right in a field of two,
+four or eight bytes, the first defined before the difference or after it,
+and in a byte only when both are defined before it; the earlier label less
+a later one is an error until the later is defined.
+The i386 compiler takes a number alone in an eight-byte field, and no
+difference there.
 Neither a forward
 .Ic loop
 or
@@ -319,8 +322,14 @@ or
 floating-point ABI on the ARM target.
 .It Fl mno-sse
 On x86-64, keep the SSE registers out of the calling convention: a
-variadic function saves none in its prologue, and a floating-point
-argument is an error.
+variadic function saves none in its prologue, and a
+.Vt float
+or
+.Vt double
+argument, which would be passed in one, is an error.
+A
+.Vt long double
+goes on the stack and is taken.
 The kernel is compiled so on x86-64 Rach2.
 The i386 compiler ignores the option.
 .It Fl m32 , Fl m64

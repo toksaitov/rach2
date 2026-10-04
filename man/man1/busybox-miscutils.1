@@ -198,6 +198,8 @@ Rach2 has no tape devices and does not implement their requests.
 .It Nm readahead
 Preload files into the page cache, through
 .Xr readahead 2 .
+Rach2's page cache fills a page when a read first asks for it, so the call
+starts no reads: the applet succeeds and preloads nothing.
 .It Nm runlevel
 Find the previous and current system runlevels.
 Print
@@ -210,6 +212,9 @@ Set or remove extended file attributes, through
 .Xr setxattr 2
 and
 .Xr removexattr 2 .
+No file system of Rach2 stores extended attributes, so both calls fail with
+.Er EOPNOTSUPP
+on an existing file and the applet fails.
 .It Nm setserial
 Print or set serial port parameters.
 Rach2 does not implement the serial configuration requests.
