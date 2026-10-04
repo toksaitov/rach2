@@ -8,7 +8,12 @@
 # mount: stageimage writes the whole tree (directories and files) directly as v2
 # nodes, so this works the same on macOS and Linux without a FUSE driver.
 #
-# Usage: ./mkimage.sh <manifest> <output.krffs> [size_in_megabytes]
+# Usage: ./mkimage.sh <manifest> <output.krffs> [size_in_megabytes [min_free_kib]]
+#
+# With MIN_FREE_KIB the image must keep at least that many kibibytes free once
+# staged, or the build fails: an image a running system writes to, the
+# recovery system's among them, needs the room, and contents that grow past
+# it would otherwise be found only when a write fails on the machine.
 #
 # Run from anywhere; the manifest's `build/...` host paths resolve because this
 # cd's to the repo root first. The KRFFS host tools come from build/krffs (built
@@ -24,6 +29,7 @@ TOOLS="$REPO/build/krffs"
 MANIFEST="$1"
 OUT="$2"
 SIZE="${3:-10}"
+MIN_FREE_KIB="${4:-0}"
 
 if [ -z "$MANIFEST" ] || [ -z "$OUT" ]; then
     echo "usage: mkimage.sh <manifest> <output.krffs> [size_mb]" >&2
@@ -51,7 +57,13 @@ DEPS_TMP="$OUT.d.new.$$"
 trap 'rm -f "$TMP" "$DEPS_TMP" "$OUT.d.list.$$" "$OUT.d.$$"' EXIT INT TERM
 dd if=/dev/zero of="$TMP" bs=1048576 count="$SIZE" 2>/dev/null
 "$TOOLS/mkfs.krffs" "$TMP" >/dev/null
-STAGEIMAGE_DEPS="$DEPS_TMP" "$TOOLS/stageimage.krffs" "$MANIFEST" "$TMP"
+STAGED=$(STAGEIMAGE_DEPS="$DEPS_TMP" "$TOOLS/stageimage.krffs" "$MANIFEST" "$TMP")
+printf '%s\n' "$STAGED"
+FREE=$(printf '%s\n' "$STAGED" | sed -n 's/.* bytes used, \([0-9]*\) free).*/\1/p' | tail -1)
+if [ "$MIN_FREE_KIB" -gt 0 ] && { [ -z "$FREE" ] || [ "$FREE" -lt $((MIN_FREE_KIB * 1024)) ]; }; then
+    echo "mkimage: $OUT: ${FREE:-an unknown number of} bytes free, under the $MIN_FREE_KIB KiB it must keep" >&2
+    exit 1
+fi
 
 # Both halves of the set-id guard, before the rename, so a failing image is
 # never moved into place. The sweep reads the manifest, which is where a

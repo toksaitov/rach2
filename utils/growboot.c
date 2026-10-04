@@ -6,7 +6,7 @@
  * partition. ENV.IMG must not exist. The boot-slot editor runs against a
  * two-sector memory overlay, so no write reaches BOOT.IMG. The output is the
  * 1024-byte environment and stdout reports its partition-relative sector.
- * Recovery has a 4 MiB RAM file system. Copying the complete boot image
+ * Recovery has a 5 MiB RAM file system. Copying the complete boot image
  * there would fail even on a machine with ample RAM.
  */
 #define _POSIX_C_SOURCE 200809L

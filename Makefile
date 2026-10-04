@@ -780,9 +780,13 @@ RECOVERY_KEY_TAG = -with-key
 endif
 RECOVERY_IMAGE = $(IMAGES_DIR)/$(RECOVERY_NAME).krffs
 RECOVERY_ISO = $(IMAGES_DIR)/$(RECOVERY_NAME).iso
+# The recovery system's root is 5 MiB of RAM: its programs take a little over
+# 4, and the rest is where the system writes, the plan of a machine's grow in
+# /tmp among it, so the build refuses an image with less than 512 KiB free.
+# The installer test disk's 8 MiB recovery partition holds it and its kernel.
 $(RECOVERY_IMAGE): $(DEMO_CREDS) krffs/manifests/rach2-recovery.manifest $(MANIFEST_DEPS_rach2_recovery) $(IMAGE_TOOLS) tools/image/keyname.sh | preflight krffs rach2 rach2-recovery utils check-busybox check-setid check-dropbearmulti check-e2fsck
 	@sh tools/image/keyname.sh $@
-	$(MKIMAGE) krffs/manifests/rach2-recovery.manifest $@ 4
+	$(MKIMAGE) krffs/manifests/rach2-recovery.manifest $@ 5 512
 
 rach2-recovery-image: $(RECOVERY_IMAGE)
 
