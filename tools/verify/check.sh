@@ -20,6 +20,7 @@
 #   5. clang-format on every in-house file and any named as arguments, judged
 #      by the version tools/setup/judges records
 #   6. a readelf ABI check on a freshly linked musl binary (entry + load range)
+#      of the architecture ARCH names, i686 unless set
 #   7. the kernel source-list guard (every rach2 .c on disk is in C_SRC), no
 #      product rule under tests/, every source in a compilation database, and
 #      the architecture layer (tools/verify/archcheck.sh): the shared kernel
@@ -81,7 +82,28 @@ VDIR=$(umask 077; mktemp -d "${TMPDIR:-/tmp}/rach2_verify.XXXXXX") || {
     exit 1
 }
 printf 'verify-style: logs: %s\n' "$VDIR"
-LIBC="$REPO/vendor/musl/install"
+# The ABI check links for the architecture the run is for, ARCH, i686 unless
+# set, against that architecture's musl, as the build lays them out
+# (mk/arch.mk): an ELF32 i386 program at 0x08048000 or an ELF64 x86-64 one at
+# 0x400000.
+case "${ARCH:-i686}" in
+    x86_64)
+        LIBC="$REPO/build/x86_64/vendor-work/musl/install"
+        ABI_CROSS=x86_64-elf-
+        ABI_CLASS=ELF64
+        ABI_MACHINE='X86-64'
+        ABI_TEXT=0x400000
+        ABI_ENTRY='0x40[0-9a-f]*'
+        ;;
+    *)
+        LIBC="$REPO/vendor/musl/install"
+        ABI_CROSS=i686-elf-
+        ABI_CLASS=ELF32
+        ABI_MACHINE='Intel 80386'
+        ABI_TEXT=0x08048000
+        ABI_ENTRY='0x804[0-9a-f]*'
+        ;;
+esac
 fail=0
 
 hr() { printf -- '---- %s ----\n' "$*"; }
@@ -324,20 +346,21 @@ fi
 hr "6/22 readelf ABI (fresh musl link)"
 if [ -f "$LIBC/lib/libc.a" ]; then
     printf 'int main(void){return 0;}\n' >"$VDIR/_abi.c"
-    if i686-elf-gcc -static -nostdlib -nostartfiles -isystem "$LIBC/include" \
+    if "${ABI_CROSS}gcc" -static -nostdlib -nostartfiles -isystem "$LIBC/include" \
          -o "$VDIR/_abi" "$LIBC/lib/crt1.o" "$LIBC/lib/crti.o" "$VDIR/_abi.c" \
-         "$LIBC/lib/libc.a" "$(i686-elf-gcc -print-libgcc-file-name)" \
+         "$LIBC/lib/libc.a" "$("${ABI_CROSS}gcc" -print-libgcc-file-name)" \
          "$LIBC/lib/crtn.o" -Wl,-z,noexecstack 2>"$VDIR/_abi.log"; then
-        h=$(i686-elf-readelf -h "$VDIR/_abi" 2>/dev/null)
-        l=$(i686-elf-readelf -l "$VDIR/_abi" 2>/dev/null)
+        h=$("${ABI_CROSS}readelf" -h "$VDIR/_abi" 2>/dev/null)
+        l=$("${ABI_CROSS}readelf" -lW "$VDIR/_abi" 2>/dev/null)
         entry=$(echo "$h" | sed -n 's/.*Entry point address: *//p')
-        if echo "$h" | grep -q 'ELF32' \
+        # shellcheck disable=SC2254 # the pattern is the architecture's
+        if echo "$h" | grep -q "$ABI_CLASS" \
            && echo "$h" | grep -qE 'Type: *EXEC' \
-           && echo "$h" | grep -q 'Intel 80386' \
+           && echo "$h" | grep -q "$ABI_MACHINE" \
            && ! echo "$l" | grep -q 'INTERP' \
-           && echo "$l" | grep -qE 'LOAD +0x[0-9a-f]+ +0x08048000' \
-           && case "$entry" in 0x804[0-9a-f]*) true ;; *) false ;; esac; then
-            echo "  PASS (ELF32 EXEC i386, static, LOAD@0x08048000, entry $entry)"
+           && echo "$l" | grep -qE "LOAD +0x[0-9a-f]+ +0x0*${ABI_TEXT#0x}" \
+           && case "$entry" in $ABI_ENTRY) true ;; *) false ;; esac; then
+            echo "  PASS ($ABI_CLASS EXEC $ABI_MACHINE, static, LOAD@$ABI_TEXT, entry $entry)"
         else
             echo "  FAIL: off-ABI (entry=$entry); see $VDIR/_abi.log"; fail=1
         fi

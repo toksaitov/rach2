@@ -1965,7 +1965,7 @@ run-stress-ahci: rach2 tests krffs $(HARNESS)
 # `tests/run style`: the source checks over the tree, tools/verify/check.sh,
 # booting nothing.
 run-style:
-	@./tools/verify/check.sh
+	@ARCH=$(ARCH) ./tools/verify/check.sh
 # The host suite (see tests/system/suites/host.sh): pure kernel logic compiled
 # and run natively under AddressSanitizer + UndefinedBehaviorSanitizer. It waits
 # on the vendored musl for the same reason krffs does: mkhash_hosttest names the
