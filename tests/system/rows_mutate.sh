@@ -28,7 +28,7 @@ cd "$repo"
 }
 mkdir -p build/tests
 work=$(mktemp -d "$repo/build/tests/rows-mutation.XXXXXX")
-sources="tests/run rach2/sys/fs/devfs.c rach2/sys/syscall_proc.c rach2/sys/fs/synthfs.h
+sources="tests/run rach2/sys/fs/devfs.c rach2/sys/syscall_proc.c rach2/sys/fs/procfs.c
 krffs/manifests/rach2-metal-disk.manifest tests/system/suites.mk"
 for f in $sources; do
     mkdir -p "$work/saved/$(dirname "$f")"
