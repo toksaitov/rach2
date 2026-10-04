@@ -55,6 +55,27 @@ addresses; physical frames are allocated and zeroed on first access.
 Success does not guarantee that a later fault can obtain a frame.
 An unresolved user-mode fault terminates the process with
 .Dv SIGSEGV .
+.Pp
+The call numbers and registers given below are i386's.
+On x86-64 the calls have Linux's numbers for that architecture,
+.Fn mprotect
+10,
+.Fn munmap
+11,
+.Fn brk
+12,
+.Fn mremap
+25,
+.Fn msync
+26,
+.Fn mincore
+27,
+.Fn madvise
+28,
+.Fn mlockall
+151 and
+.Fn munlockall
+152, and take their arguments in RDI, RSI, RDX, R10, R8 and R9.
 .Ss Program break
 The raw
 .Fn brk
@@ -242,8 +263,14 @@ and
 Write permission also grants read permission, since an x86 page table has no write-only page.
 .Dv PROT_NONE
 (zero) denies access.
-Execute permission also grants read permission and is not checked
-separately from it on a fault.
+Execute permission also grants read permission.
+On i686, whose page tables have no execute bit, it is not checked
+separately from read on a fault; on x86-64 a page mapped without
+.Dv PROT_EXEC
+is not executable, and an instruction fetched from it ends the process
+with
+.Dv SIGSEGV
+although the page reads.
 Other protection bits are refused.
 .Ss Unmapping
 .Fn munmap ,
@@ -393,9 +420,14 @@ The offset and the length in pages must sum to less than 2^32 for a file
 or for shared memory, whose pages the kernel numbers in 32 bits, or the
 call fails with
 .Er EOVERFLOW ;
-private anonymous memory has no such bound, since Linux bounds the sum in
-64 bits there, and a reservation may take any part of the 128 TiB of user
-addresses.
+a private mapping with
+.Dv MAP_ANONYMOUS
+has no such bound, since Linux bounds the sum in 64 bits there, and a
+reservation may take any part of the 128 TiB of user addresses.
+A private mapping of
+.Pa /dev/zero ,
+anonymous memory otherwise, is bounded as a file's is, where Linux does not
+bound it.
 .Sh RETURN VALUES
 The raw
 .Fn brk
