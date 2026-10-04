@@ -178,7 +178,7 @@ echo "grow-test: a grow interrupted between the entry and the resize is finished
 # from `/proc/meminfo` decides nothing. A host that has that file and one
 # that does not both take this path.
 cc -DGROWROOT_MEMORY_MIB=1048576u -o "$DIR/growroot-host" "$REPO/utils/growroot.c" \
-    > "$DIR/growroot-host.log" 2>&1 || fail "growroot on the host"
+    "$REPO/utils/gptdisk.c" > "$DIR/growroot-host.log" 2>&1 || fail "growroot on the host"
 "$DIR/growroot-host" MBRID=$ID,1 > "$DIR/four.log" 2>&1; rc=$?
 [ "$rc" -eq 1 ] || fail "the refusal's status ($rc)"
 grep -q '^growroot: refused: [0-9]* MiB of memory; growing a root needs 1048576 MiB$' "$DIR/four.log" \
