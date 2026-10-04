@@ -728,8 +728,10 @@ the idle ticks of every processor, as the
 .Li cpu
 lines of
 .Pa /proc/stat
-count them, so a tick lost while interrupts were held off is counted with
-the next.
+count them, and both include the ticks the timer interrupt missed while
+interrupts were held off, which the boot processor measures by its
+time-stamp counter and adds back when that counter runs at one rate and
+no hypervisor runs the machine.
 The idle sum is kept in 64 bits.
 .It Pa /proc/usb
 One line per configured USB device:
