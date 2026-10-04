@@ -85,9 +85,13 @@ printf 'verify-style: logs: %s\n' "$VDIR"
 # The ABI check links for the architecture the run is for, ARCH, i686 unless
 # set, against that architecture's musl, as the build lays them out
 # (mk/arch.mk): an ELF32 i386 program at 0x08048000 or an ELF64 x86-64 one at
-# 0x400000.
+# 0x400000. The kernel's second front ends, clang and sparse, read the
+# kernel sources of that architecture as its compiler does (KCHECK_TARGET
+# and KCHECK_WIDTH).
 case "${ARCH:-i686}" in
     x86_64)
+        KCHECK_TARGET=x86_64-elf
+        KCHECK_WIDTH=-m64
         LIBC="$REPO/build/x86_64/vendor-work/musl/install"
         ABI_CROSS=x86_64-elf-
         ABI_CLASS=ELF64
@@ -96,6 +100,8 @@ case "${ARCH:-i686}" in
         ABI_ENTRY='0x40[0-9a-f]*'
         ;;
     *)
+        KCHECK_TARGET=i686-elf
+        KCHECK_WIDTH=-m32
         LIBC="$REPO/vendor/musl/install"
         ABI_CROSS=i686-elf-
         ABI_CLASS=ELF32
@@ -687,7 +693,7 @@ res=$(clang -print-resource-dir 2>/dev/null)
 clang_bad=0
 for f in $(make -s -C "$REPO/rach2" print-c-src); do
     # shellcheck disable=SC2086
-    (cd "$REPO/rach2" && clang --target=i686-elf -m32 -ansi -ffreestanding -nostdinc -isystem "$res/include" \
+    (cd "$REPO/rach2" && clang --target="$KCHECK_TARGET" "$KCHECK_WIDTH" -ansi -ffreestanding -nostdinc -isystem "$res/include" \
         -fsyntax-only $CLANG_WARN "$f") >>"$VDIR/verify_clang.log" 2>&1 || clang_bad=$((clang_bad + 1))
 done
 clang_warnings=$(grep -c "warning:" "$VDIR/verify_clang.log")
@@ -707,11 +713,11 @@ hr "20/22 sparse over the kernel's address spaces"
 if ! command -v sparse >/dev/null 2>&1; then
     echo "  SKIP (sparse is absent here; the testing host judges)"
 else
-    gccinc=$(i686-elf-gcc -print-file-name=include)
+    gccinc=$("${ABI_CROSS}gcc" -print-file-name=include)
     : >"$VDIR/verify_sparse.log"
     sparse_bad=0
     for f in $(make -s -C "$REPO/rach2" print-c-src); do
-        (cd "$REPO/rach2" && sparse -D__CHECKER__ -m32 -ansi -ffreestanding -nostdinc -I"$gccinc" \
+        (cd "$REPO/rach2" && sparse -D__CHECKER__ "$KCHECK_WIDTH" -ansi -ffreestanding -nostdinc -I"$gccinc" \
             -Wno-decl -Wno-non-pointer-null "$f") >>"$VDIR/verify_sparse.log" 2>&1 ||
             sparse_bad=$((sparse_bad + 1))
     done
