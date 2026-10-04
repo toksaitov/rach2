@@ -742,9 +742,9 @@ static void _page_fault_handler(isr_params_t *params)
     have_user_proc = (current_proc != NULL && current_proc->mm != NULL);
     in_user_range = (fault_address >= USER_ADDR_MIN && fault_address < USER_ADDR_MAX);
 
-    if (have_user_proc && in_user_range && !fetch_refused(fault_address, params)) {
+    if (have_user_proc && in_user_range) {
         current_proc->frame_refused = 0;
-        if (vm_resolve(fault_address, write)) {
+        if (!fetch_refused(fault_address, params) && vm_resolve(fault_address, write)) {
             return; /* page mapped; iret retries the faulting instruction */
         }
     }
