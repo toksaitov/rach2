@@ -169,12 +169,13 @@ if [ -n "$GROUP_BLOCKS" ] && [ "$(sb 32)" != "$GROUP_BLOCKS" ]; then
     echo "mkext2: blocks per group $(sb 32), expected $GROUP_BLOCKS" >&2
     exit 1
 fi
-# mke2fs rounds each group's inodes up to whole blocks of the table, 32
-# inodes of 128 bytes to a 4 KiB block, so the count may pass the ratio's by
-# less than a block's worth a group.
+# mke2fs divides the bytes by the ratio, dropping the remainder, and rounds
+# each group's inodes up to whole blocks of the table, 32 inodes of 128 bytes
+# to a 4 KiB block, so the count may pass the quotient by less than a block's
+# worth a group.
 if [ -n "$INODE_BYTES" ] && ! awk -v inodes="$(sb 0)" -v blocks="$(sb 4)" -v bpg="$(sb 32)" \
     -v ratio="$INODE_BYTES" 'BEGIN {
-        want = blocks * 4096 / ratio
+        want = int(blocks * 4096 / ratio)
         groups = int((blocks + bpg - 1) / bpg)
         exit !(inodes >= want && inodes < want + groups * 32)
     }'; then
