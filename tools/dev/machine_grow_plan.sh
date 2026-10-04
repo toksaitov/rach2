@@ -11,6 +11,12 @@ serial=$3
 disk_id=$4
 directory=$5
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
+# The recovery programs are the architecture's, from ARCH as the build takes
+# it (mk/arch.sh): build/ for i686, build/x86_64/ for x86-64.
+RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
+REPO=$repo
+# shellcheck source=mk/arch.sh
+. "$repo/mk/arch.sh"
 case "$sectors" in ''|*[!0-9]*|0*) fail 'invalid disk size' ;; esac
 [ "${#sectors}" -le 10 ] && [ "$sectors" -le 4294967295 ] || fail 'disk size too large'
 case "$serial" in ''|*[!A-Za-z0-9_-]*) fail 'invalid serial' ;; esac
@@ -40,7 +46,7 @@ printf '%s  seed.ext2\n' "$seed_hash" > "$directory/seed.sha256"
 for pair in utils/growboot:/bin/growboot utils/growset:/bin/growset utils/growroot:/bin/growroot utils/reflash:/bin/reflash \
     utils/diskctl:/bin/diskctl utils/sbin/bootctl:/bin/bootctl \
     vendor/e2fsprogs/e2fsck:/sbin/e2fsck vendor/e2fsprogs/resize2fs:/sbin/resize2fs; do
-    sum_line=$(shasum -a 256 "$repo/build/${pair%%:*}") || fail 'recovery program checksum'
+    sum_line=$(shasum -a 256 "$ARCH_BUILD/${pair%%:*}") || fail 'recovery program checksum'
     printf '%s  %s\n' "${sum_line%% *}" "${pair#*:}"
 done > "$directory/programs.sha256"
 awk '{total += $2} END {printf "machine-grow-plan: result: %.0f sectors, %.0f bytes plus the boot partition\n", total, total * 512}' \
