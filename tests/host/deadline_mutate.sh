@@ -234,12 +234,8 @@ prove tick-nearest poll_deadline_hosttest io/poll.c \
     '    ticks += (phase_ns / 1000u + us + 5000u) / 10000u;' \
     'a poll of 21 ms rounds up to three ticks|a ppoll of 1 s and 11 ms from tick 1000 ends at 1102'
 prove ppoll-sec-clamp poll_deadline_hosttest io/poll.c \
-    '    if (sec > 21474836u) {
-        sec = 21474836u;
-    }' \
-    '    if (sec > 42949672u) {
-        sec = 42949672u;
-    }' \
+    '    sec = (unsigned long)ts->tv_sec > 21474836ul ? 21474836u : (uint32_t)ts->tv_sec;' \
+    '    sec = (unsigned long)ts->tv_sec > 42949672ul ? 42949672u : (uint32_t)ts->tv_sec;' \
     'the longest ppoll timeout ends 0x7FFFFFFF ticks ahead across the wrap'
 prove tick-round-one poll_deadline_hosttest io/poll.c \
     '    ticks += (phase_ns / 1000u + us + 9999u) / 10000u;' \
