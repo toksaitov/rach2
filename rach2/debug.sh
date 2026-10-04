@@ -3,9 +3,10 @@
 # Start QEMU with GDB server (-s) paused at first instruction (-S).
 # Audio and networking devices are attached so their drivers can be debugged.
 # NIC=e1000 selects the other card; see qemu_devices.sh.
-# GDB reads rach2/.gdbinit through -x with the automatic load of a local
-# .gdbinit turned off, so the file is read once whatever GDB's auto-load safe
-# path allows. Run the script from rach2/.
+# GDB loads the symbols of the kernel it debugs, the architecture's
+# kernel.debug, and reads rach2/.gdbinit through -x with the automatic load
+# of a local .gdbinit turned off, so the file is read once whatever GDB's
+# auto-load safe path allows. Run the script from rach2/.
 #
 # Usage: ./debug.sh [audio_device]
 #   audio_device: sb16, hda, or speaker (default: speaker)
@@ -34,4 +35,4 @@ else
     echo "debug: install a GDB that can debug x86 binaries (try x86_64-elf-gdb)" >&2
     exit 1
 fi
-"$GDB" -iex 'set auto-load local-gdbinit off' -x .gdbinit
+"$GDB" -iex 'set auto-load local-gdbinit off' -ex "file $BUILD_DIR/rach2/kernel.debug" -x .gdbinit
