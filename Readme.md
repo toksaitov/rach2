@@ -78,7 +78,7 @@ What the hardware showed that the emulator had not is in the milestone records a
 
 ## What a fresh disk holds
 
-`make rach2-sealed-disk` builds a disk image with a GUID partition table and three partitions, each with a file reading `hello, world`, `/hello.txt` on the two FAT partitions and `/demo/hello.txt` on the root, so that every partition has something to read after a mount. The disk boots by BIOS and by UEFI, with Secure Boot turned off. What each partition is:
+`make rach2-sealed-disk` builds a disk image with a GUID partition table and four partitions. The three with file systems each have a file reading `hello, world`, `/hello.txt` on the two FAT partitions and `/demo/hello.txt` on the root, so that each has something to read after a mount; the fourth holds GRUB's BIOS core and no file system. The disk boots by BIOS and by UEFI, with Secure Boot turned off. What each partition is:
 
 | Device | What it is | Type |
 | --- | --- | --- |
