@@ -2320,7 +2320,9 @@ static uint32_t put_rights(uintptr_t at, uint32_t room, struct unix_in *in, int 
 /**
  * Write the control messages of a receive to the caller's buffer: the
  * credentials, and the descriptors, each installed as a new descriptor.
- * Returns the bytes of the buffer used.
+ * Returns the bytes of the buffer used, a message's padding to the next
+ * alignment counted only as far as the buffer goes, as Linux's `put_cmsg`
+ * counts it, so that a header given back again names no byte past it.
  */
 static uint32_t put_control(uintptr_t control, uint32_t controllen, struct unix_in *in, int flags)
 {
@@ -2341,6 +2343,7 @@ static uint32_t put_control(uintptr_t control, uint32_t controllen, struct unix_
             in->flags |= MSG_CTRUNC;
         } else {
             used = (uint32_t)CMSG_ALIGN(hdr.cmsg_len);
+            used = used > controllen ? controllen : used;
         }
     }
     if (in->nfds == 0) {
@@ -2357,6 +2360,7 @@ static uint32_t put_control(uintptr_t control, uint32_t controllen, struct unix_
         hdr.cmsg_type = SCM_RIGHTS;
         if (copy_to_user((void __user *)(control + used), &hdr, sizeof(hdr)) == 0) {
             used += (uint32_t)CMSG_ALIGN(hdr.cmsg_len);
+            used = used > controllen ? controllen : used;
         }
     }
     return used;

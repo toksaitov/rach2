@@ -6,31 +6,34 @@
  * peer's input only. A datagram pair and a sequenced-packet pair keep the
  * boundaries of messages, and a datagram too long for the buffer is cut with
  * MSG_TRUNC. A descriptor sent with SCM_RIGHTS reaches a child that has closed
- * its own ends of the pipe, and the child writes through it. A child that
- * becomes user and group 1000 reads the pair's creator from SO_PEERCRED, and
- * the byte it writes reaches the creator's end, which has SO_PASSCRED, with the
- * child's pid, uid and gid; an unprivileged thread that is not the leader may
- * name its process's id in SCM_CREDENTIALS. A listener bound to a path makes a
- * socket file, accepts a connection queued before the accept, and both ends
- * report the names; a second bind of the path fails with EADDRINUSE, and a
- * connect to the file after the listener is gone fails with ECONNREFUSED. An
- * abstract name works without a file. A datagram sent to a name arrives with
- * the sender's name. A nonblocking receive on an empty socket fails with
- * EAGAIN, and poll reports the socket readable once a byte arrives. An accept
- * given an address and no length pointer fails with EFAULT. A listener shut
- * down for reading gives up the connection queued before, then fails an accept
- * with EINVAL and refuses a connect. A connect waiting for room in a full queue
- * finishes when listen makes the backlog larger. A datagram socket refuses a
- * connect with EPERM while it is connected to another; one that connects
- * elsewhere or disconnects drops its queued messages, and the peer it left gets
- * ECONNRESET. A chain of a thousand datagram pairs, each queued in the pair
- * before, closes from its head. A datagram send waiting for room fails with
- * EPIPE when the receiver shuts down reading. A stream whose peer's queue is
- * full polls writable once it is shut down for writing, and the write then
- * fails with EPIPE. A recvfrom given an address and no length pointer fails
- * with EFAULT and leaves the message for the next receive. A descriptor of a
- * KRFFS file in /tmp, sent before a write moves the file and received after
- * the sender's close and the unlink, has the file's size and reads its bytes.
+ * its own ends of the pipe, and the child writes through it; a descriptor or
+ * credentials received into a control buffer of the message's length alone,
+ * without the padding to the next alignment, come with a control length no
+ * longer than that. A child that becomes user and group 1000 reads the pair's
+ * creator from SO_PEERCRED, and the byte it writes reaches the creator's end,
+ * which has SO_PASSCRED, with the child's pid, uid and gid; an unprivileged
+ * thread that is not the leader may name its process's id in SCM_CREDENTIALS. A
+ * listener bound to a path makes a socket file, accepts a connection queued
+ * before the accept, and both ends report the names; a second bind of the path
+ * fails with EADDRINUSE, and a connect to the file after the listener is gone
+ * fails with ECONNREFUSED. An abstract name works without a file. A datagram
+ * sent to a name arrives with the sender's name. A nonblocking receive on an
+ * empty socket fails with EAGAIN, and poll reports the socket readable once a
+ * byte arrives. An accept given an address and no length pointer fails with
+ * EFAULT. A listener shut down for reading gives up the connection queued
+ * before, then fails an accept with EINVAL and refuses a connect. A connect
+ * waiting for room in a full queue finishes when listen makes the backlog
+ * larger. A datagram socket refuses a connect with EPERM while it is connected
+ * to another; one that connects elsewhere or disconnects drops its queued
+ * messages, and the peer it left gets ECONNRESET. A chain of a thousand
+ * datagram pairs, each queued in the pair before, closes from its head. A
+ * datagram send waiting for room fails with EPIPE when the receiver shuts down
+ * reading. A stream whose peer's queue is full polls writable once it is shut
+ * down for writing, and the write then fails with EPIPE. A recvfrom given an
+ * address and no length pointer fails with EFAULT and leaves the message for
+ * the next receive. A descriptor of a KRFFS file in /tmp, sent before a write
+ * moves the file and received after the sender's close and the unlink, has the
+ * file's size and reads its bytes.
  *
  * Prints "UNIXMUSL OK" on success and "UNIXMUSL FAIL (detail)" otherwise.
  */
@@ -937,13 +940,61 @@ static int moved_in_flight(void)
     return 0;
 }
 
+/* SCM_RIGHTS, and then SCM_CREDENTIALS, each into a control buffer of
+ * CMSG_LEN, short of CMSG_SPACE on x86-64: the length the receive reports
+ * stays inside the buffer. */
+static int short_control(void)
+{
+    union {
+        struct cmsghdr h;
+        char buf[CMSG_LEN(sizeof(int))];
+    } ctl;
+    union {
+        struct cmsghdr h;
+        char buf[CMSG_LEN(sizeof(struct ucred))];
+    } cred;
+    struct msghdr msg;
+    struct iovec iov;
+    char byte = 'c';
+    int sv[2], fd, on = 1;
+
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0 || send_fd(sv[0], 1) != 0) {
+        return fail("setup for a short control buffer");
+    }
+    memset(&msg, 0, sizeof(msg));
+    iov.iov_base = &byte;
+    iov.iov_len = 1;
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = ctl.buf;
+    msg.msg_controllen = sizeof(ctl.buf);
+    if (recvmsg(sv[1], &msg, 0) != 1 || msg.msg_controllen > sizeof(ctl.buf)) {
+        return fail("a control length past the buffer it came in");
+    }
+    memcpy(&fd, CMSG_DATA(&ctl.h), sizeof(int));
+    close(fd);
+    if (setsockopt(sv[1], SOL_SOCKET, SO_PASSCRED, &on, sizeof(on)) != 0 ||
+        write(sv[0], &byte, 1) != 1) {
+        return fail("setup for a short credentials buffer");
+    }
+    msg.msg_control = cred.buf;
+    msg.msg_controllen = sizeof(cred.buf);
+    if (recvmsg(sv[1], &msg, 0) != 1 || cred.h.cmsg_type != SCM_CREDENTIALS ||
+        msg.msg_controllen > sizeof(cred.buf)) {
+        return fail("a credentials length past the buffer it came in");
+    }
+    close(sv[0]);
+    close(sv[1]);
+    return 0;
+}
+
 int main(void)
 {
     signal(SIGPIPE, SIG_IGN);
     if (stream_pair() || message_pairs() || rights_and_creds() || thread_creds() || named() ||
         listening() || backlog_growth() || datagram_peers() || full_receiver_shut() ||
         chain_close() || datagram_names() || waiting() || shut_writable() || recvfrom_no_length() ||
-        moved_in_flight()) {
+        moved_in_flight() || short_control()) {
         return 1;
     }
     printf("UNIXMUSL OK\n");
