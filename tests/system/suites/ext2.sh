@@ -197,11 +197,18 @@ echo "ext2-test: getdents64 reports each entry's type, a link as DT_LNK: OK"
 
 # ---- 2e: signal teardown beside a writer on an ext2 root. This stress row
 # does not force lock contention; exit_hosttest proves the cleanup ordering.
-boot_root "$ROOT.zombie.log" --ok "ZOMBIESYNCED" \
+# The boot ends with a poweroff and not a kill: the probe reports before the
+# last of its killed processes has given back the files it held unlinked,
+# and a kill then would leave their inodes orphaned for the next boot's check,
+# where row 3 needs a root the kill of 2f alone left dirty. The poweroff waits
+# for every teardown and unmounts the root clean.
+boot_root "$ROOT.zombie.log" --ok "Goodbye" \
     "send=cd /tmp && /zombieprobe" "expect=ZOMBIEPROBE OK" \
-    "send=sync; echo ZOMBIE\"\"SYNCED" "expect=ZOMBIESYNCED" \
+    "send=cd / && poweroff" "expect=Goodbye" \
     || fail "a process killed while its teardown waits"
-echo "ext2-test: forty processes killed beside a writer, and the machine goes on: OK"
+grep -aq 'shutdown: root: unmounted' "$ROOT.zombie.log" \
+    || fail "the root unmounted after the killed processes"
+echo "ext2-test: forty processes killed beside a writer, and the machine goes on and unmounts its root: OK"
 ROOT_LINE=$(grep -an 'ext2: root: /dev/disk0p1' "$ROOT.first.log" | head -1 | cut -d: -f1)
 USB_LINE=$(grep -an 'usb: started' "$ROOT.first.log" | head -1 | cut -d: -f1)
 [ -n "$ROOT_LINE" ] && [ -n "$USB_LINE" ] && [ "$ROOT_LINE" -lt "$USB_LINE" ] \
