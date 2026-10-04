@@ -35,7 +35,7 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 tree=$work/tree
-for d in rach2 krffs/manifests krffs/vendor utils ish tests/host tests/system/fixtures \
+for d in rach2/sys/arch/i686 krffs/manifests krffs/vendor utils ish tests/host tests/system/fixtures \
     tools/verify tools/setup mk man ports/doom/src vendor/busybox/busybox-9.9 \
     vendor/musl/install build/tools/verify saved; do
     mkdir -p "$tree/$d"
