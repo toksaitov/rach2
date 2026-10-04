@@ -56,8 +56,7 @@ static void rows_describe(void)
     char msg[128];
     char tiny[8];
 
-    modlayout_describe(MODLAYOUT_OVERLAP, 2, 0x00300000u, 0x00400000u, msg,
-                       (uint32_t)sizeof(msg));
+    modlayout_describe(MODLAYOUT_OVERLAP, 2, 0x00300000u, 0x00400000u, msg, (uint32_t)sizeof(msg));
     CHECK(streq(msg, wide ? "two boot modules overlap: module 2 spans 0x0000000000300000 - "
                             "0x0000000000400000"
                           : "two boot modules overlap: module 2 spans 0x00300000 - 0x00400000"),

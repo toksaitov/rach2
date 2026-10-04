@@ -550,7 +550,8 @@ void filemap_shmem_cut(struct shmem *sh, uint32_t first)
                 (r->pgoff < first && pages <= first - r->pgoff)) {
                 continue;
             }
-            from = r->pgoff < first ? r->start + (uintptr_t)(first - r->pgoff) * PAGE_SIZE : r->start;
+            from =
+                r->pgoff < first ? r->start + (uintptr_t)(first - r->pgoff) * PAGE_SIZE : r->start;
             unmap_user_range(p->mm->dir, from, r->end);
         }
     }

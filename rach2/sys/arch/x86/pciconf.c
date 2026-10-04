@@ -141,8 +141,7 @@ void pci_write_config16(uint8_t bus, uint8_t device, uint8_t function, uint8_t o
  * Write an 8-bit byte to configuration space: one `outb` at the data port's
  * byte the offset selects, for the reason `pci_write_config16` gives.
  */
-void pci_write_config8(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset,
-                       uint8_t value)
+void pci_write_config8(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset, uint8_t value)
 {
     uintptr_t e = ecam_at(bus, device, function, offset);
     uint32_t addr = pci_config_address(bus, device, function, offset & ~3);

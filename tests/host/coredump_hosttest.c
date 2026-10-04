@@ -312,8 +312,8 @@ static void file_pages_read(void)
 static void threads_park_first(void)
 {
     uint32_t one = core_note_bytes(sizeof(struct core_prstatus));
-    uint32_t rest = core_note_bytes(sizeof(struct core_prpsinfo)) +
-                    core_note_bytes(sizeof(space.auxv));
+    uint32_t rest =
+        core_note_bytes(sizeof(struct core_prpsinfo)) + core_note_bytes(sizeof(space.auxv));
     uint8_t *notes;
     uint32_t size = 0;
 

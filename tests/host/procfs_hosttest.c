@@ -498,7 +498,8 @@ static void uptime_rows(void)
     cpu_table[0].busy_ticks = 50;
     idle_sum = 8589934560ull;
     procfs_text_init(&text);
-    check(procfs_gen_uptime(&text) == 17 && __builtin_memcmp(text.buf, "1.50 85899345.60\n", 17) == 0,
+    check(procfs_gen_uptime(&text) == 17 &&
+              __builtin_memcmp(text.buf, "1.50 85899345.60\n", 17) == 0,
           "the idle seconds past 32 bits of ticks are whole");
     kfree(text.buf);
     idle_sum = 7;

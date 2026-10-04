@@ -1404,8 +1404,7 @@ static void connection_owner_rows(void)
     args[0] = (unsigned int)cfd;
     args[1] = (unsigned long)sa;
     args[2] = 16;
-    check(sock_call(SC_CONNECT, args) == 0,
-          "root connects to the child's listener over loopback");
+    check(sock_call(SC_CONNECT, args) == 0, "root connects to the child's listener over loopback");
 
     n = slurp("/proc/net/tcp", buf, (int)sizeof(buf));
     check(n > 0, "/proc/net/tcp reads with connections live");

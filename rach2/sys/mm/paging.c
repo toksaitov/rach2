@@ -850,7 +850,8 @@ uintptr_t map_mmio_typed(uintptr_t phys_addr, size_t size, pte_t cache)
     }
     va = _mmio_next;
     for (i = 0; i < pages; i++) {
-        *kernel_pte(va + i * PAGE_SIZE) = (pte_t)(start_page + i * PAGE_SIZE) | PTE_P | PTE_W | cache;
+        *kernel_pte(va + i * PAGE_SIZE) =
+            (pte_t)(start_page + i * PAGE_SIZE) | PTE_P | PTE_W | cache;
     }
     _mmio_next += pages * PAGE_SIZE;
 

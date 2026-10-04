@@ -365,7 +365,7 @@ void fbcon_gfx_begin(void)
         return;
     }
     gfx_scale = fb_width / GFX_WIDTH < fb_height / GFX_HEIGHT ? fb_width / GFX_WIDTH
-                                                               : fb_height / GFX_HEIGHT;
+                                                              : fb_height / GFX_HEIGHT;
     while (gfx_scale > 1 && GFX_WIDTH * gfx_scale * fb_bytes > GFX_LINE_BYTES) {
         gfx_scale--;
     }
@@ -397,7 +397,8 @@ void fbcon_gfx_frame(const uint8_t *pixels)
     }
     for (line = 0; line < GFX_HEIGHT; line++) {
         uint8_t *q = gfx_line;
-        volatile uint8_t *row = base + (gfx_top + line * gfx_scale) * fb_pitch + gfx_left * fb_bytes;
+        volatile uint8_t *row =
+            base + (gfx_top + line * gfx_scale) * fb_pitch + gfx_left * fb_bytes;
 
         for (col = 0; col < GFX_WIDTH; col++) {
             uint32_t v = gfx_pixel[pixels[line * GFX_WIDTH + col]];

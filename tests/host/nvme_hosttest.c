@@ -133,23 +133,23 @@ static void put32(uint8_t *p, uint32_t v)
 
 /* What this run's controller does, set before each row. */
 static struct {
-    int never_ready;  /* EN set, RDY never follows */
-    int fatal;        /* EN set, CFS instead of RDY */
-    int stuck;        /* EN cleared, RDY stays */
-    int ready_again;  /* a second enable comes up; 0 makes recovery fail */
-    int no_active;    /* Identify CNS 2 is refused */
-    int drop_io;      /* I/O commands are taken and never answered */
-    int fail_io;      /* the next N I/O commands answer LBA out of range */
-    int defer;        /* I/O completions wait for model_release */
-    uint32_t mdts;    /* Identify Controller byte 77 */
-    uint32_t lbads;   /* the namespace's block size, a power of two */
-    uint32_t ms;      /* its metadata bytes */
+    int never_ready;       /* EN set, RDY never follows */
+    int fatal;             /* EN set, CFS instead of RDY */
+    int stuck;             /* EN cleared, RDY stays */
+    int ready_again;       /* a second enable comes up; 0 makes recovery fail */
+    int no_active;         /* Identify CNS 2 is refused */
+    int drop_io;           /* I/O commands are taken and never answered */
+    int fail_io;           /* the next N I/O commands answer LBA out of range */
+    int defer;             /* I/O completions wait for model_release */
+    uint32_t mdts;         /* Identify Controller byte 77 */
+    uint32_t lbads;        /* the namespace's block size, a power of two */
+    uint32_t ms;           /* its metadata bytes */
     uint32_t nn;           /* namespaces */
     uint64_t nsze[32];     /* each namespace's size, 0 for an inactive one */
     uint32_t lbads_ns[32]; /* a namespace's block size, 0 for `lbads` */
     uint32_t drop_ident;   /* Identify of this namespace is taken, never answered */
-    uint32_t cap_hi;  /* CAP's high half */
-    uint32_t mqes;    /* CAP.MQES */
+    uint32_t cap_hi;       /* CAP's high half */
+    uint32_t mqes;         /* CAP.MQES */
 } m;
 
 static uint32_t cc, csts, aqa;
@@ -1276,8 +1276,8 @@ static void flush_rows_mark(block_device_t *dev)
           dev->unflushed == 1);
     model_release();
     handler(0);
-    CHECK("and is cleared when it finishes", ndone == 5 && done[4].status == 0 &&
-                                                 dev->unflushed == 0);
+    CHECK("and is cleared when it finishes",
+          ndone == 5 && done[4].status == 0 && dev->unflushed == 0);
     m.defer = 0;
 
     make_requests(2, 320, 1, BLOCK_REQ_NOFLUSH);

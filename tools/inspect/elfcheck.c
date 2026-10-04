@@ -1172,8 +1172,7 @@ static void st_kernel64(void)
                 kfail);
         st_bad++;
     }
-    st_expect_kernel(m64, k64n, 0, "an x86-64 kernel without a symbol table",
-                     "no symbol table");
+    st_expect_kernel(m64, k64n, 0, "an x86-64 kernel without a symbol table", "no symbol table");
     memcpy(m64, k64, k64n);
     w32(m64 + mb64 + 4, MULTIBOOT_FLAGS);
     w32(m64 + mb64 + 8, (uint32_t)(0 - (MULTIBOOT_MAGIC + MULTIBOOT_FLAGS)));
@@ -1184,8 +1183,7 @@ static void st_kernel64(void)
                      "not where the copy");
     memcpy(m64, k64, k64n);
     w32(m64 + mb64 + 20, r32(k64 + mb64 + 20) - 4);
-    st_expect_kernel(m64, k64n, 0, "an x86-64 copy that stops short of the data",
-                     "load_end_addr");
+    st_expect_kernel(m64, k64n, 0, "an x86-64 copy that stops short of the data", "load_end_addr");
     memcpy(m64, k64, k64n);
     w32(m64 + mb64 + 24, r32(k64 + mb64 + 24) + 0x1000);
     st_expect_kernel(m64, k64n, 0, "an x86-64 .bss end past the image", "bss_end_addr");
@@ -1204,12 +1202,10 @@ static void st_kernel64(void)
                      "outside the copy");
     memcpy(m64, k64, k64n);
     w32(m64 + mb64 + 28, r32(k64 + mb64 + 28) + 1);
-    st_expect_kernel(m64, k64n, 0, "an x86-64 entry_addr that is not the entry's",
-                     "entry_addr");
+    st_expect_kernel(m64, k64n, 0, "an x86-64 entry_addr that is not the entry's", "entry_addr");
     memcpy(m64, k64, k64n);
     w64(m64 + 64 + 16, LOAD_FLOOR);
-    st_expect_kernel(m64, k64n, 0, "an x86-64 load linked at its physical address",
-                     "KVA_IMAGE");
+    st_expect_kernel(m64, k64n, 0, "an x86-64 load linked at its physical address", "KVA_IMAGE");
     memcpy(m64, k64, k64n);
     w64(m64 + 0x1000 + 8 + 48 + 8, r64(k64 + 0x1000 + 8 + 48 + 8) - 1);
     st_expect_kernel(m64, k64n, 0, "an x86-64 _end that is not the image end",

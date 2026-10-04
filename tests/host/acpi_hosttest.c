@@ -223,8 +223,7 @@ void pci_write_config16(uint8_t bus, uint8_t device, uint8_t function, uint8_t o
     cfg_write(device, function, offset, value, 16);
 }
 
-void pci_write_config8(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset,
-                       uint8_t value)
+void pci_write_config8(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset, uint8_t value)
 {
     (void)bus;
     cfg_write(device, function, offset, value, 8);
@@ -819,8 +818,7 @@ static void window_rows(void)
     }
     CHECK(refused, "the windows run out before 99 pages");
     calls = (uint32_t)mmio_calls;
-    CHECK(acpi_gas_read(&g, &v) != 0 && acpi_gas_read(&g, &v) != 0 &&
-              (uint32_t)mmio_calls == calls,
+    CHECK(acpi_gas_read(&g, &v) != 0 && acpi_gas_read(&g, &v) != 0 && (uint32_t)mmio_calls == calls,
           "a register past the windows is refused and maps nothing");
     CHECK(logged("windows: all 64 made"), "the full windows are named once");
     g.address = 0x300000u;

@@ -334,14 +334,11 @@ static void row_double(void)
     CHECK(use_rgb(2560, 1600, 32) == 0 && fb_scale == 4 && textcon_cols == 80 &&
               textcon_rows == 25 && grid_left == 0 && grid_top == 0,
           "2560x1600 holds 80x25 at four times the size");
-    CHECK(use_rgb(2048, 768, 32) == 0 && fb_scale == 2 && textcon_cols == 128 &&
-              textcon_rows == 24,
+    CHECK(use_rgb(2048, 768, 32) == 0 && fb_scale == 2 && textcon_cols == 128 && textcon_rows == 24,
           "a screen wide but low takes twice the size, which still gives 24 rows");
-    CHECK(use_rgb(1024, 768, 32) == 0 && fb_scale == 1 && textcon_cols == 128 &&
-              textcon_rows == 48,
+    CHECK(use_rgb(1024, 768, 32) == 0 && fb_scale == 1 && textcon_cols == 128 && textcon_rows == 48,
           "1024x768 keeps the font's size, since twice gives 64 columns");
-    CHECK(use_rgb(2560, 384, 32) == 0 && fb_scale == 1 && textcon_cols == 240 &&
-              grid_left == 320,
+    CHECK(use_rgb(2560, 384, 32) == 0 && fb_scale == 1 && textcon_cols == 240 && grid_left == 320,
           "a screen of more than 240 columns gives 240, centered");
     CHECK(use_rgb(640, 1600, 32) == 0 && fb_scale == 1 && textcon_rows == 64 && grid_top == 288,
           "and one of more than 64 rows gives 64");
@@ -464,7 +461,8 @@ static void row_picture(void)
                      pixel_at(203 + 957 + c, 84 + 597 + r) == 0x102030u;
         }
     }
-    CHECK(square, "the picture's corner pixels are squares of three at (203, 84) and its far corner");
+    CHECK(square,
+          "the picture's corner pixels are squares of three at (203, 84) and its far corner");
     CHECK(pixel_at(206, 84) == BLACK && pixel_at(202, 84) == BLACK && pixel_at(203, 83) == BLACK &&
               pixel_at(0, 0) == BLACK && pixel_at(1365, 767) == BLACK,
           "the picture's next pixel and the screen around it are black");

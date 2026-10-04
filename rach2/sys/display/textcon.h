@@ -19,10 +19,10 @@
  * of the adapter's memory the console scrolls through. */
 extern unsigned int textcon_cols;
 extern unsigned int textcon_rows;
-#define TEXTCON_COLS_MAX 240u
-#define TEXTCON_ROWS_MAX 64u
-#define DEFAULT_FORECOLOR        0x07 /* Light grey */
-#define DEFAULT_BACKCOLOR        0x00 /* Black */
+#define TEXTCON_COLS_MAX  240u
+#define TEXTCON_ROWS_MAX  64u
+#define DEFAULT_FORECOLOR 0x07 /* Light grey */
+#define DEFAULT_BACKCOLOR 0x00 /* Black */
 
 /*
  * The sixteen colors of a cell, a VGA attribute's four-bit values, which the

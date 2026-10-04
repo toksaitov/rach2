@@ -411,8 +411,7 @@ static int scheduling(void)
     struct timespec slice;
     cpu_set_t set;
 
-    if (policy_calls() != 0 || policy_refusals() != 0 || ranges() != 0 ||
-        affinity() != 0) {
+    if (policy_calls() != 0 || policy_refusals() != 0 || ranges() != 0 || affinity() != 0) {
         return 1;
     }
     if (in_child(not_root) != 0) {

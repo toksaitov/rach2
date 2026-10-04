@@ -184,8 +184,7 @@ static void select_contract(int closed)
           "select bit for a closed fd -> -EBADF");
 
     /* nfds beyond the fd_set width (FD_SETSIZE) is -EINVAL. */
-    check(syscall5(SYS_SELECT, 2000, 0, 0, 0, 0) == -EINVAL,
-          "select nfds > FD_SETSIZE -> -EINVAL");
+    check(syscall5(SYS_SELECT, 2000, 0, 0, 0, 0) == -EINVAL, "select nfds > FD_SETSIZE -> -EINVAL");
 }
 
 #if defined __x86_64__

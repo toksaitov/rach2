@@ -57,7 +57,10 @@ unsigned int arch_atomic_xchg(volatile unsigned int *p, unsigned int value)
  * leaves what was there in EAX; the lock prefix makes it one step. */
 unsigned int arch_atomic_cmpxchg(volatile unsigned int *p, unsigned int old, unsigned int value)
 {
-    __asm__ __volatile__("lock; cmpxchgl %2, %1" : "+a"(old), "+m"(*p) : "r"(value) : "memory", "cc");
+    __asm__ __volatile__("lock; cmpxchgl %2, %1"
+                         : "+a"(old), "+m"(*p)
+                         : "r"(value)
+                         : "memory", "cc");
     return old;
 }
 

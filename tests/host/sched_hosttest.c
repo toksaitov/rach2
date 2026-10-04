@@ -356,8 +356,7 @@ static void accounting(void)
     cpu->idle_wait = 0;
     kernel_ticks++;
     sched_account_tick(1);
-    CHECK(cpu->busy_ticks == busy + 1 && cpu->user_ticks == user + 1 &&
-              cpu->idle_ticks == idle + 3,
+    CHECK(cpu->busy_ticks == busy + 1 && cpu->user_ticks == user + 1 && cpu->idle_ticks == idle + 3,
           "the next global tick in ring 3 is one busy tick of user time");
     cpu->current = saved;
 }

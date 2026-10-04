@@ -121,8 +121,8 @@ static int child_many(int argc, char *argv[])
 /** The "budget" mode: 0 when its one argument and one variable came whole. */
 static int child_budget(int argc, char *argv[])
 {
-    return argc == 3 && all_of(argv[2], LONGEST, 'y') && environ[0] != NULL &&
-                   environ[1] == NULL && strncmp(environ[0], "E=", 2) == 0 &&
+    return argc == 3 && all_of(argv[2], LONGEST, 'y') && environ[0] != NULL && environ[1] == NULL &&
+                   strncmp(environ[0], "E=", 2) == 0 &&
                    all_of(environ[0] + 2, budget_env_len() - 2, 'z')
                ? 0
                : 1;
