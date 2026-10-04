@@ -3097,31 +3097,32 @@ long sys_getrusage(isr_params_t *params)
 /*
  * Identity (the i386 *32 variants, 199-202): the four getters read the PCB
  * credentials, all zero (root) until a login server drops them, as the
- * caller's user namespace maps them (`uid_seen`). The setters and the group
+ * caller's user namespace maps them (`uid_seen`), unsigned, so that an id
+ * past 2^31 is not an error on x86-64. The setters and the group
  * list live with the rest of the id family near do_chown.
  */
 long sys_getuid(isr_params_t *params)
 {
     (void)params;
-    return (int32_t)uid_seen(current_proc->ruid);
+    return (long)uid_seen(current_proc->ruid);
 }
 
 long sys_geteuid(isr_params_t *params)
 {
     (void)params;
-    return (int32_t)uid_seen(current_proc->euid);
+    return (long)uid_seen(current_proc->euid);
 }
 
 long sys_getgid(isr_params_t *params)
 {
     (void)params;
-    return (int32_t)gid_seen(current_proc->rgid);
+    return (long)gid_seen(current_proc->rgid);
 }
 
 long sys_getegid(isr_params_t *params)
 {
     (void)params;
-    return (int32_t)gid_seen(current_proc->egid);
+    return (long)gid_seen(current_proc->egid);
 }
 
 /* The default action for a signal whose disposition is SIG_DFL. */

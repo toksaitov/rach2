@@ -37,7 +37,8 @@
  * mlock, munlock, mlockall and munlockall accept a mapped range and refuse a
  * gap with ENOMEM; mincore reports a touched page resident.
  * getcpu reports a processor of the caller's affinity and node 0, and
- * personality keeps and returns its value.
+ * personality keeps and returns its value. On x86-64 the ids 0xfffffffe read
+ * back from getuid, geteuid, getgid and getegid unsigned, not as an error.
  * sendmmsg sends two datagrams in one call over an AF_UNIX pair and
  * recvmmsg receives both, each with its count; on x86-64 a count of 2^32 + 1
  * receives one, and socket and socketpair of the domain 2^32 + 1 make AF_UNIX
@@ -644,6 +645,26 @@ static int identity(void)
         syscall(SYS_personality, (unsigned long)old) != 0x0040000L) {
         return fail("personality");
     }
+#if defined __x86_64__
+    {
+        int status;
+        pid_t pid = fork();
+
+        if (pid == 0) {
+            _exit(setresgid(0xfffffffeU, 0xfffffffeU, 0xfffffffeU) != 0 ||
+                          setresuid(0xfffffffeU, 0xfffffffeU, 0xfffffffeU) != 0 ||
+                          syscall(SYS_getuid) != 0xfffffffeL ||
+                          syscall(SYS_geteuid) != 0xfffffffeL ||
+                          syscall(SYS_getgid) != 0xfffffffeL || syscall(SYS_getegid) != 0xfffffffeL
+                      ? 1
+                      : 0);
+        }
+        if (pid < 0 || waitpid(pid, &status, 0) != pid || !WIFEXITED(status) ||
+            WEXITSTATUS(status) != 0) {
+            return fail("an id past 2^31 read back signed");
+        }
+    }
+#endif
     return 0;
 }
 
