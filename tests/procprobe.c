@@ -336,15 +336,16 @@ static void spin(long ms)
 /**
  * Busy ticks, read out of /proc/stat's cpu line.
  *
- * The line is `cpu user nice system idle ...` and this kernel puts its one busy
- * figure in the system column, so the third number is what is wanted. Read from
- * a different file than the idle count on purpose: the two must agree, and they
- * cannot be checked against each other if one is derived from the other.
+ * The line is `cpu user nice system idle ...`, and a busy tick is charged to
+ * user or to system, so the busy figure is the sum of the first three numbers.
+ * Read from a different file than the idle count on purpose: the two must
+ * agree, and they cannot be checked against each other if one is derived from
+ * the other.
  */
 static int busy_ticks_now(void)
 {
     char t[320];
-    int n, i, seen = 0, v;
+    int n, i, seen = 0, v, sum = 0;
 
     n = slurp("/proc/stat", t, (int)sizeof(t));
     if (n <= 0) {
@@ -357,9 +358,9 @@ static int busy_ticks_now(void)
                 v = v * 10 + (t[i] - '0');
                 i++;
             }
-            seen++;
-            if (seen == 3) {
-                return v;
+            sum += v;
+            if (++seen == 3) {
+                return sum;
             }
         }
     }
@@ -704,7 +705,7 @@ static int listen_on(int fd, int port, unsigned char *sa, unsigned long *args)
     sa[2] = (unsigned char)((port >> 8) & 0xff);
     sa[3] = (unsigned char)(port & 0xff);
     args[0] = (unsigned int)fd;
-    args[1] = (unsigned int)(size_t)sa;
+    args[1] = (unsigned long)sa;
     args[2] = 16;
     if (sock_call(SC_BIND, args) != 0) {
         return -1;
@@ -865,7 +866,6 @@ static void smaps_rows(void)
           "and gives its sizes and flags");
 }
 
-/* The names a listing of directory `dir` gives, by getdents64, in its order
 #if defined __x86_64__
 /* A reserved region of 64 TiB with no page in it: smaps passes the page
    tables it lacks in a few steps, where a walk of its 2^34 pages would take
@@ -889,6 +889,7 @@ static void smaps_large_rows(void)
 }
 #endif
 
+/* The names a listing of directory `dir` gives, by getdents64, in its order
    and but for . and .., each followed by a space, in `out`; 0, or -1 when the
    directory does not open, a read fails, or the names do not fit. */
 static int listing(const char *dir, char *out, int cap)
@@ -901,7 +902,7 @@ static int listing(const char *dir, char *out, int cap)
     if (fd < 0) {
         return -1;
     }
-    while ((n = syscall3(220, fd, (long)d, (int)sizeof(d))) > 0) {
+    while ((n = syscall3(SYS_GETDENTS64, fd, (long)d, (int)sizeof(d))) > 0) {
         for (at = 0; at < n; at += *(unsigned short *)(d + at + 16)) {
             const char *name = d + at + 19;
 
@@ -1143,7 +1144,7 @@ static void count_rows(void)
     sa[4] = 127;
     sa[7] = 1;
     args[0] = (unsigned int)fd;
-    args[1] = (unsigned int)(size_t)sa;
+    args[1] = (unsigned long)sa;
     args[2] = 16;
     check(fd >= 0 && sock_call(SC_CONNECT, args) == -ECONNREFUSED,
           "a connect to a closed local port is refused");
@@ -1180,7 +1181,7 @@ static void dgram_and_local_rows(void)
     sa[2] = 0x1F; /* port 8081, big-endian */
     sa[3] = 0x91;
     args[0] = (unsigned int)ufd;
-    args[1] = (unsigned int)(size_t)sa;
+    args[1] = (unsigned long)sa;
     args[2] = 16;
     check(ufd >= 0 && sock_call(SC_BIND, args) == 0, "a datagram socket opens and binds");
     n = slurp("/proc/net/udp", buf, (int)sizeof(buf));
@@ -1200,7 +1201,7 @@ static void dgram_and_local_rows(void)
         sa[3 + i] = (unsigned char)"procprobe"[i];
     }
     args[0] = (unsigned int)xfd;
-    args[1] = (unsigned int)(size_t)sa;
+    args[1] = (unsigned long)sa;
     args[2] = 12;
     check(xfd >= 0 && sock_call(SC_BIND, args) == 0,
           "a local socket opens and binds to an abstract name");
@@ -1489,9 +1490,9 @@ void probe_main(unsigned long *sp)
      * directions; and the two together must account for every tick the timer
      * delivered.
      *
-     * Busy is read from /proc/stat's own column rather than worked out as the
-     * total less the idle, which is what an earlier version did: defined that
-     * way the sum is an identity and holds however wrong both counters are.
+     * Busy is read from /proc/stat's own columns, user and system, rather than
+     * worked out as the total less the idle: defined that way the sum is an
+     * identity and holds however wrong both counters are.
      * Read from the two files the two generators fill, it is a real check that
      * they agree. */
     {
@@ -1510,7 +1511,7 @@ void probe_main(unsigned long *sp)
 
         check(t0 >= 0 && i0 >= 0 && t1 >= 0 && i1 >= 0 && t2 >= 0 && i2 >= 0,
               "/proc/uptime parses on every read");
-        check(b0 >= 0 && b1 >= 0 && b2 >= 0, "/proc/stat's busy column parses");
+        check(b0 >= 0 && b1 >= 0 && b2 >= 0, "/proc/stat's busy columns parse");
         idle_slept = i1 - i0;
         busy_slept = b1 - b0;
         idle_spun = i2 - i1;
@@ -1522,7 +1523,7 @@ void probe_main(unsigned long *sp)
               "a machine running user code spends more ticks busy than idle");
         check(busy_spun >= 20, "and enough of them to be a measurement");
         {
-            /* The total comes from /proc/uptime and the busy column from
+            /* The total comes from /proc/uptime and the busy columns from
              * /proc/stat, which are two reads: a tick that lands between them
              * belongs to one sample and not the other. Two such reads bound
              * this sum's, and each read is a system call, so the slack is the
@@ -1587,7 +1588,7 @@ void probe_main(unsigned long *sp)
         sa[2] = 0x1F; /* port 8080, big-endian */
         sa[3] = 0x90;
         args[0] = (unsigned int)sfd;
-        args[1] = (unsigned int)(size_t)sa;
+        args[1] = (unsigned long)sa;
         args[2] = 16;
         check(sock_call(SC_BIND, args) == 0, "and binds");
         args[1] = 4;
@@ -1695,10 +1696,10 @@ void probe_main(unsigned long *sp)
     sysctl_rows();
     rtc_rows();
     smaps_rows();
-    anonymous_rows();
 #if defined __x86_64__
     smaps_large_rows();
 #endif
+    anonymous_rows();
     pid_dir_rows();
 
     /* Capacity. The pool is filled to its last block, half in a child and half
@@ -1778,7 +1779,7 @@ void probe_main(unsigned long *sp)
             sa[2] = 0x1F;
             sa[3] = 0x91; /* port 8081 */
             args[0] = (unsigned int)lfd;
-            args[1] = (unsigned int)(size_t)sa;
+            args[1] = (unsigned long)sa;
             args[2] = 16;
             if (sock_call(SC_BIND, args) != 0) {
                 sys_exit(23);
@@ -1806,7 +1807,7 @@ void probe_main(unsigned long *sp)
         sa[4] = 127;
         sa[7] = 1; /* 127.0.0.1 */
         args[0] = (unsigned int)cfd;
-        args[1] = (unsigned int)(size_t)sa;
+        args[1] = (unsigned long)sa;
         args[2] = 16;
         check(sock_call(SC_CONNECT, args) == 0,
               "root connects to the child's listener over loopback");
