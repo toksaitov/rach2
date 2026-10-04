@@ -70,6 +70,8 @@
  *                    naming that drive; pulling the device leaves the
  *                    medium, so a replug is a usb=add: alone
  *     drive=del:ID   remove the medium with that id
+ *     nmi            raise a non-maskable interrupt on every processor, as
+ *                    QEMU's `nmi` does
  *     barrier=FILE   wait until FILE exists: the calibration barrier, which
  *                    the runner makes when every machine of the width has
  *                    reached it, so the measured work starts together. A
@@ -155,9 +157,9 @@
  * QEMU's own command channel, on a unix socket beside the serial line. The
  * serial line is where the guest talks; this is where the machine is told what
  * a person at it would have done: a key pressed, the mouse moved, a device
- * plugged in or pulled out. Nothing else can produce those events, because
- * they come from the emulated hardware rather than from anything the guest
- * could be asked to do.
+ * plugged in or pulled out, the NMI button pressed. Nothing else can produce
+ * those events, because they come from the emulated hardware rather than
+ * from anything the guest could be asked to do.
  *
  * The socket is made only for a run whose steps need it, so a run with no
  * such step starts QEMU with no -monitor at all.
@@ -202,7 +204,8 @@ static int steps_need_monitor(int argc, char **argv)
 
     for (i = 1; i < argc; i++) {
         if (strncmp(argv[i], "key=", 4) == 0 || strncmp(argv[i], "mouse=", 6) == 0 ||
-            strncmp(argv[i], "usb=", 4) == 0 || strncmp(argv[i], "drive=", 6) == 0) {
+            strncmp(argv[i], "usb=", 4) == 0 || strncmp(argv[i], "drive=", 6) == 0 ||
+            strcmp(argv[i], "nmi") == 0) {
             return 1;
         }
     }
@@ -1981,6 +1984,10 @@ int main(int argc, char **argv)
 
             snprintf(command, sizeof(command), "drive_del %s", step + 10);
             if (monitor_send(command) != 0) {
+                step_failures++;
+            }
+        } else if (strcmp(step, "nmi") == 0) {
+            if (monitor_send("nmi") != 0) {
                 step_failures++;
             }
         } else if (strncmp(step, "barrier=", 8) == 0) {

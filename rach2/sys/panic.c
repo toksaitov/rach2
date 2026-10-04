@@ -1,5 +1,6 @@
 #include "panic.h"
 
+#include "arch/arch.h"
 #include "klog.h"
 #include "proc/smp.h"
 
@@ -91,6 +92,9 @@ display_color_t _fail_image[] = {
 
 extern void k_stop(void) K_NORETURN;
 
+/* Set by the first processor to panic. */
+static volatile unsigned int panicking;
+
 /**
  * Report what stopped the machine, then stop it.
  *
@@ -102,12 +106,20 @@ extern void k_stop(void) K_NORETURN;
  * are bounded, which is why a panic can afford to use them at all. The
  * other processors are stopped first, with interrupts off here, so that
  * nothing changes the screen or the state the record describes.
+ *
+ * Only the first processor to panic reports. A second, which an NMI sent to
+ * every processor at once can make, or a panic the stop request did not
+ * reach in time, stops without a word, as Linux's does: two records would
+ * be printed over each other, and neither holds a lock.
  */
 void k_panic(const char *str)
 {
     int i;
 
     arch_irq_disable();
+    if (arch_atomic_xchg(&panicking, 1u) != 0) {
+        k_stop();
+    }
     smp_stop_others();
     k_cls();
     for (i = 0; i < 2000; ++i) {

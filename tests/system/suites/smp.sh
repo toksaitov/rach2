@@ -13,7 +13,8 @@
 # the runner's shim keeps, so the suite's counts are its own whatever
 # RACH2_CPUS says. A fourth boot, with two processors, runs the debug shell's
 # preemption test, whose two kernel threads must each be preempted by the
-# tick and run again.
+# tick and run again, and a fifth raises an NMI on both of two processors,
+# which must stop the machine with a report of a fault of the machine.
 #
 # Then the installed system boots from its disk with four processors, as
 # the unprivileged test account, compiles the staged ish sources four times
@@ -109,6 +110,18 @@ probe 4 "maxcpus=2" 2
     "expect=Type 'help'" "send=preempt" ||
     fail "the debug shell's preemption test did not pass with two processors; see $DISK.preempt.log"
 echo "smp-test: ok: the debug shell's two threads were preempted by turns"
+
+# An NMI on both of two processors at the debug shell: the kernel must name
+# it a fault of the machine and stop, which the processors do without the
+# big lock, and with one panic's record.
+"$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
+    --qemu-arg=-cpu --qemu-arg=max --qemu-arg=-smp --qemu-arg=2 \
+    --append "rach2.rescue" --timeout "$(scaled 120)" --steptmo "$(scaled 90)" \
+    --ok "panic: stopped: the machine reported a fault" \
+    --log "$DISK.nmi.log" \
+    "expect=Type 'help'" "nmi" "expect=isr: hardware fault: non-maskable interrupt" ||
+    fail "an NMI on two processors did not stop the machine as a fault of the machine; see $DISK.nmi.log"
+echo "smp-test: ok: an NMI stopped the machine as a fault of the machine"
 
 # The installed system with four processors, at its console.
 rm -f "$FEED"

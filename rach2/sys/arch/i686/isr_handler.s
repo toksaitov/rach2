@@ -19,6 +19,9 @@
 #
 # Vector 8 (#DF), the double fault, has no stub: its gate is a task gate,
 # and the processor starts isr_double_fault (isr.c) on a stack of its own.
+# Vectors 2 (NMI) and 18 (#MC) take isr_paranoid_handler, which enters the
+# kernel without the big lock: they arrive at any instruction, even between
+# the exchange that takes the lock and the count of its depth.
 
 .text
 
@@ -43,7 +46,7 @@ isr2:
     cli
     pushl $0
     pushl $2
-    jmp isr_common_handler
+    jmp isr_paranoid_handler
 
 .globl isr3
 isr3:
@@ -148,7 +151,7 @@ isr18:
     cli
     pushl $0
     pushl $18
-    jmp isr_common_handler
+    jmp isr_paranoid_handler
 
 .globl isr19
 isr19:
@@ -593,6 +596,7 @@ local_common_handler:
     call isr_local_router
     addl $4, %esp
 
+local_return:
     popl %eax
     movw %ax, %gs
     popl %eax
@@ -605,6 +609,31 @@ local_common_handler:
     popa
     addl $8, %esp
     iret
+
+# The NMI's and the machine check's entry: the same frame, the paranoid
+# router (isr.c), which takes no lock, and the same return.
+isr_paranoid_handler:
+    pusha
+    movw %ds, %ax
+    pushl %eax
+    movw %es, %ax
+    pushl %eax
+    movw %fs, %ax
+    pushl %eax
+    movw %gs, %ax
+    pushl %eax
+
+    movw $0x10, %ax
+    movw %ax, %ds
+    movw %ax, %es
+    movw %ax, %gs
+    movw $0x40, %ax
+    movw %ax, %fs
+
+    pushl %esp
+    call isr_paranoid_router
+    addl $4, %esp
+    jmp local_return
 
 # Common IRQ handler
 .globl irq_common_handler

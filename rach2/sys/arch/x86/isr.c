@@ -84,9 +84,7 @@ void isr_local_router(isr_params_t *params);
 
 void isr_leave(isr_params_t *params);
 
-#if defined(__x86_64__)
 void isr_paranoid_router(isr_params_t *params);
-#endif
 
 /*
  * The architecturally-defined exception mnemonics, indexed by vector, for the
@@ -271,6 +269,20 @@ static void _exception_handler(isr_params_t *params)
     k_panic("unrecoverable CPU exception in kernel mode");
 }
 
+/**
+ * The NMI, vector 2, or the machine check, vector 18, which report a fault
+ * of the machine and not of what was running: print it and stop, in user
+ * mode as in kernel mode. The paranoid router holds no lock, so no signal
+ * may be posted here; `k_panic` takes none.
+ */
+static void _hardware_fault_handler(isr_params_t *params)
+{
+    klog_deliver_directly();
+    klog(KLOG_CRIT, "isr", "hardware fault: %s (vector %d, pc 0x%lx)",
+         _exception_names[params->vector], (int)params->vector, (unsigned long)FRAME_PC(params));
+    k_panic("the machine reported a fault");
+}
+
 #if defined(__x86_64__)
 /**
  * The double fault, vector 8, on the interrupt stack its gate names
@@ -352,14 +364,15 @@ void isr_double_fault(void)
  * Clear the handler table, install the default exception handler, and enable
  * interrupts.
  *
- * Every CPU exception but two gets the shared default, so a fault yields a
+ * Every CPU exception but four gets the shared default, so a fault yields a
  * diagnostic and a contained kill or panic, not a silent triple-fault reset.
  * The page fault, vector 14, has its handler from `init_paging`, and the
  * double fault, vector 8, is taken onto a stack of its own, by a task gate
  * to `isr_double_fault` on i686 and by an interrupt stack to
  * `_double_fault_handler` on x86-64, which reports it and panics: a kernel
  * stack that runs into its guard page raises one, since the page fault's
- * frame cannot be pushed there.
+ * frame cannot be pushed there. The NMI and the machine check, vectors 2
+ * and 18, report a fault of the machine and stop it, whatever was running.
  */
 void init_isr(void)
 {
@@ -368,10 +381,12 @@ void init_isr(void)
     k_memset(&_isr_handlers, 0, sizeof(_isr_handlers));
 
     for (vector = 0; vector < 32; vector++) {
-        if (vector != 8 && vector != 14) {
+        if (vector != 2 && vector != 8 && vector != 14 && vector != 18) {
             register_isr_handler((uint8_t)vector, &_exception_handler, "exception");
         }
     }
+    register_isr_handler(2, &_hardware_fault_handler, "nmi");
+    register_isr_handler(18, &_hardware_fault_handler, "machine check");
 #if defined(__x86_64__)
     register_isr_handler(8, &_double_fault_handler, "double fault");
 #endif
@@ -530,18 +545,19 @@ void _isr_router(isr_params_t *params)
     _dispatch(params);
 }
 
-#if defined(__x86_64__)
 /**
- * Dispatch the NMI, the double fault or the machine check, which arrive on
- * interrupt stacks of their own, at any instruction, without the big lock:
- * their handlers report and stop, and a processor that holds the lock may be
- * the one they interrupted, or one spinning for it.
+ * Dispatch the NMI, the double fault or the machine check, which arrive at
+ * any instruction, without the big lock: their handlers report and stop,
+ * and the processor they interrupted may hold the lock, spin for it, or be
+ * between the exchange that takes it and the count of its depth. On x86-64
+ * each arrives on an interrupt stack of its own. On i686 the NMI and the
+ * machine check arrive on the stack in use, and the double fault starts a
+ * task of its own (`isr_double_fault`), which does not come here.
  */
 void isr_paranoid_router(isr_params_t *params)
 {
     _dispatch(params);
 }
-#endif
 
 /**
  * The return to the interrupted code, after its router: deliver a signal
