@@ -93,6 +93,9 @@ int copy_to_user(void __user *dst, const void *src, size_t n)
  * end. Each page is backed as the copy reaches it, not the whole `n` at once,
  * since `n` is only a cap: the string may end before a page that is
  * legitimately unmapped, and backing that page would reject a valid string.
+ * Each byte is read from user memory once and tested in `dst`, so a thread
+ * on another processor that stores into the string meanwhile cannot make
+ * the copy end without its NUL.
  *
  * On success returns the string length not counting the NUL, which is also
  * copied. Returns -EINVAL for `n` of 0, -EFAULT if a byte lies outside user
@@ -117,8 +120,8 @@ int strncpy_from_user(char *dst, const char __user *src, uint32_t n)
         if ((i == 0 || (a & (PAGE_SIZE - 1)) == 0) && !vm_prefault_range(a, 1, 0)) {
             return -EFAULT;
         }
-        dst[i] = s[i];
-        if (s[i] == '\0') {
+        dst[i] = *(const volatile char *)&s[i];
+        if (dst[i] == '\0') {
             return (int)i;
         }
     }
