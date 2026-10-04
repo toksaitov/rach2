@@ -105,7 +105,8 @@ volatile uint8_t *fbcon_window(void)
     if (mapped != NULL) {
         return mapped;
     }
-    if (boot.fb.addr == 0 || boot.fb.addr + size > 0x100000000ULL) {
+    if (boot.fb.addr == 0 || boot.fb.addr >= 0x100000000ULL ||
+        size > 0x100000000ULL - boot.fb.addr) {
         return NULL;
     }
     if (!kernel_tables()) {
