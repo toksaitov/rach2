@@ -305,7 +305,8 @@ ifeq ($(ARCH),i686)
 endif
 # `tests/run bigmem`: all of an x86-64 machine's eight gigabytes is counted,
 # and a program's pages fill memory past what lies below 4 GiB and read back
-# as written (see tests/system/suites/bigmem.sh).
+# as written; without 1 GiB pages, 72 GiB is counted to the direct map's
+# 64 GiB (see tests/system/suites/bigmem.sh).
 run-bigmem: rach2 tests krffs test-image $(HARNESS)
 	sh tests/system/suites/bigmem.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS)
 # `tests/run memory`: the kernel's account of physical memory at five sizes

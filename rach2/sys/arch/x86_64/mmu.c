@@ -155,14 +155,31 @@ static void map_image(uintptr_t from, uintptr_t to, pte_t flags)
     }
 }
 
+/* The direct map's reach on a processor without 1 GiB pages, where each GiB
+ * takes a page directory of 2 MiB pages, carved in the boot's window below
+ * 32 MiB: 64 GiB take 256 KiB of it. */
+#define DIRECT_2M_REACH (64UL * GIB)
+
+/** Whether the processor has 1 GiB pages (CPUID 0x80000001, EDX bit 26). */
+static int has_gib_pages(void)
+{
+    uint32_t max_ext = 0, edx = 0;
+
+    kcpu_id(0x80000000u, &max_ext, NULL, NULL, NULL);
+    if (max_ext >= 0x80000001u) {
+        kcpu_id(0x80000001u, NULL, NULL, NULL, &edx);
+    }
+    return (edx & (1u << 26)) != 0;
+}
+
 /**
  * Build the kernel's PML4 with the direct map and the image.
  *
  * The direct map covers physical memory to the top of the frame table and
  * at least the first 4 GiB, where the firmware's tables and the devices'
- * registers are, in 1 GiB pages where CPUID says the processor has them
- * (leaf 0x80000001, EDX bit 26) and in 2 MiB pages where it does not. Its
- * pages are writable and never executable. The image is mapped in 4 KiB
+ * registers are, up to the reach (`mmu_phys_reach`), in 1 GiB pages where
+ * the processor has them (`has_gib_pages`) and in 2 MiB pages where it does
+ * not. Its pages are writable and never executable. The image is mapped in 4 KiB
  * pages: its text read-only, its read-only data read-only and not
  * executable, its data and .bss writable and not executable.
  *
@@ -171,18 +188,12 @@ static void map_image(uintptr_t from, uintptr_t to, pte_t flags)
  */
 static void map_direct_and_image(void)
 {
-    uint32_t max_ext = 0, edx = 0;
     uintptr_t top, at, i;
-    int gib_pages;
+    int gib_pages = has_gib_pages();
 
     if (msr_read(MSR_EFER) & EFER_NXE) {
         mmu_nx = PTE_NX;
     }
-    kcpu_id(0x80000000u, &max_ext, NULL, NULL, NULL);
-    if (max_ext >= 0x80000001u) {
-        kcpu_id(0x80000001u, NULL, NULL, NULL, &edx);
-    }
-    gib_pages = (edx & (1u << 26)) != 0;
 
     at = table_alloc();
     if (at == 0) {
@@ -196,8 +207,8 @@ static void map_direct_and_image(void)
         top = 4 * GIB;
     }
     top = (top + GIB - 1) & ~(GIB - 1);
-    if (top > KVA_DIRECT_SIZE) {
-        top = KVA_DIRECT_SIZE;
+    if (top > mmu_phys_reach()) {
+        top = mmu_phys_reach();
     }
     for (at = 0; at < top; at += GIB) {
         pte_t *pdpt = table_for(_kernel_dir->entries, KVA_DIRECT + at, 3, 1, PTE_W);
@@ -228,10 +239,11 @@ static void map_direct_and_image(void)
 }
 
 /** The direct map's end: every physical address below it has a kernel
- * address, and none above it does. */
+ * address, and none above it does. It is the region's 64 TiB in 1 GiB pages,
+ * and DIRECT_2M_REACH without them. */
 uint64_t mmu_phys_reach(void)
 {
-    return KVA_DIRECT_SIZE;
+    return has_gib_pages() ? KVA_DIRECT_SIZE : DIRECT_2M_REACH;
 }
 
 /**

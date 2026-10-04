@@ -10,7 +10,9 @@ passes, Multiboot's or multiboot2's, or under UEFI the firmware's EFI
 memory map, using 64-bit arithmetic.
 It manages the usable memory below its reach: 4 GiB on i686, whose
 physical addresses are 32 bits, and on x86-64 all of the memory, up to the
-64 TiB its direct map covers.
+64 TiB its direct map covers, or 64 GiB on a processor without 1 GiB pages,
+whose direct map is built of 2 MiB pages in tables the boot carves below
+32 MiB.
 On i686 its virtual address space occupies the gigabyte starting at
 .Li 0xC0000000 ,
 with 256 page tables shared by every page directory; on x86-64 it is the
@@ -92,7 +94,7 @@ memory: usable N KiB, unreachable N KiB, reserved N KiB, managed N KiB
 .Pp
 Usable is the available memory below the reach and unreachable the
 available memory at or above it, so on x86-64 unreachable is 0 on any
-machine of less than 64 TiB; reserved is what the boot took of the usable
+machine of less than 64 TiB, or 64 GiB without 1 GiB pages; reserved is what the boot took of the usable
 memory, and managed what the frame allocator offers.
 .Pp
 A kernel stack that runs out stops the machine with a record that says

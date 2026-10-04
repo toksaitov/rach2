@@ -15,6 +15,13 @@
 # image that must find its pages zeroed, and frees it, as the memory suite's
 # smaller rows do.
 #
+# Last the kernel boots with 72 GiB on a processor without 1 GiB pages, whose
+# direct map stops at 64 GiB, since each of its GiB is a page directory the
+# boot carves below 32 MiB. QEMU's RAM is the first 3 GiB and 69 GiB from
+# 4 GiB, so the report must count 63 GiB less the holes usable and the
+# 9 GiB past 64 GiB unreachable, and the boot, whose frame table lies at the
+# top of the usable memory, must reach the shell through 2 MiB pages.
+#
 # Usage: bigmem.sh KERNEL IMAGE HARNESS
 set -u
 KERNEL=$1; IMAGE=$2; HARNESS=$3
@@ -56,4 +63,21 @@ LOG="$OUT.memprobe.log"
     "expect=Type 'help'" "send=exec /memprobe $MAP" "expect=MEMPROBE" > /dev/null 2>&1 \
     || fail "memprobe $MAP at $MIB MiB: $(grep -a 'MEMPROBE\|vm: fault\|panic' "$LOG" | head -2 | tr -d '\r' | tr '\n' ' ')"
 echo "bigmem-test: $MAP MiB, past what lies below 4 GiB, mapped, patterned, forked over, execed and freed: OK"
+
+MIB=73728
+LOG="$OUT.nogib.log"
+"$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" --qemu-arg=-cpu --qemu-arg=max,pdpe1gb=off \
+    --qemu-arg=-m --qemu-arg="$MIB" --append "rach2.rescue" \
+    --timeout 120 --steptmo 60 --ok "MEMPROBE MemTotal" --never "MEMPROBE FAIL" --log "$LOG" \
+    "expect=Type 'help'" "send=exec /memprobe total" "expect=MEMPROBE MemTotal" > /dev/null 2>&1 \
+    || fail "the boot at $MIB MiB without 1 GiB pages"
+line=$(grep -a 'memory: usable' "$LOG" | head -1 | tr -d '\r')
+usable=$(echo "$line" | sed -n 's/.*usable \([0-9]*\) KiB.*/\1/p')
+unreachable=$(echo "$line" | sed -n 's/.*unreachable \([0-9]*\) KiB.*/\1/p')
+[ -n "$usable" ] && [ -n "$unreachable" ] || fail "no memory report at $MIB MiB without 1 GiB pages"
+[ "$unreachable" -eq $((9 * 1024 * 1024)) ] \
+    || fail "$unreachable KiB of $MIB MiB is unreachable without 1 GiB pages, not the 9 GiB past 64 GiB"
+[ "$((usable + 513))" -eq $((63 * 1024 * 1024)) ] \
+    || fail "usable $usable KiB and the holes are not the 63 GiB below 64 GiB"
+echo "bigmem-test: $MIB MiB without 1 GiB pages: usable $usable, unreachable $unreachable KiB, past 64 GiB: OK"
 echo "bigmem-test: PASS"

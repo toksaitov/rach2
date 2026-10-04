@@ -18,11 +18,12 @@
  *
  * The kernel addresses physical memory below a bound its architecture
  * gives, the reach (`mmu_phys_reach`): 4 GiB on i686, whose physical
- * addresses are 32 bits, and the 64 TiB of the direct map on x86-64. The
- * four numbers the boot reports come from here and from nothing else:
- * usable is the available ranges below the reach; unreachable is the
- * available ranges at or above it; reserved is what the boot occupies of
- * the usable ranges; managed is usable less reserved. The map gives no
+ * addresses are 32 bits, and on x86-64 the direct map's 64 TiB, or 64 GiB
+ * on a processor without 1 GiB pages. The four numbers the boot reports
+ * come from here and from nothing else: usable is the available ranges
+ * below the reach; unreachable is the available ranges at or above it;
+ * reserved is what the boot occupies of the usable ranges; managed is
+ * usable less reserved. The map gives no
  * installed figure, and none is invented from it.
  *
  * Pure: no kernel service is called, so tests/host/frame_hosttest.c drives
