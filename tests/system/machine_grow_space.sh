@@ -16,11 +16,13 @@ if [ "$#" -le 1 ]; then
     [ "$#" = 0 ] || { [ "$1" = --mutate ] && mode=space-mutate; } \
         || { echo 'grow-space: usage: machine_grow_space.sh [--mutate]' >&2; exit 1; }
     # Image targets are deliberately not built here. tests/run grow supplies
-    # them; a direct proof runs against the same prepared artifacts.
+    # them; a direct proof runs against the same prepared artifacts, the MBR
+    # disk among them, whose boot partition the legacy grow saves as the
+    # suite does.
     if [ -f krffs/recovery_authorized_keys ]; then tag=-with-key; else tag=; fi
     exec sh tests/system/grow_machine.sh build/tests/system/harness \
         "$ARCH_BUILD/images/rach2-recovery$tag.iso" "$ARCH_BUILD"/images/installer-test.disk \
-        "$ARCH_BUILD/images/rach2-sealed$tag.disk" "$ARCH_BUILD"/images/grow "$mode"
+        "$ARCH_BUILD"/images/installer-test-mbr.disk "$ARCH_BUILD"/images/grow "$mode"
 fi
 [ "$#" = 3 ] || exit 2
 harness=$1
@@ -112,7 +114,7 @@ start()
     command_ok 'mkdir -p /mnt/grow /tmp/grow-plan && mount -n -t exfat /dev/disk1p1 /mnt/grow && tar -C /tmp/grow-plan -xf /mnt/grow/grow-tools.tar && tar -C /tmp/grow-plan -xf /mnt/grow/space-tools.tar' 'preparing the guest'
     # Allocate until the RAM file system itself refuses. This is distinct
     # from starving heap memory and does not change the shipped image.
-    command_ok 'df -k / > /mnt/grow/root.before && awk "NR == 2 {exit !(\$2 <= 4096 && \$2 >= 3900)}" /mnt/grow/root.before' 'the 4 MiB root'
+    command_ok 'df -k / > /mnt/grow/root.before && awk "NR == 2 {exit !(\$2 <= 5120 && \$2 >= 4900)}" /mnt/grow/root.before' 'the 5 MiB root'
     command_ok 'dd if=/dev/zero of=/tmp/occupied bs=4096 2>/mnt/grow/fill.log; test "$?" != 0' 'filling RAM scratch'
     command_ok 'dd if=/dev/zero bs=512 2>/mnt/grow/fill-tail.log >> /tmp/occupied; test "$?" != 0' 'filling the last RAM fragments'
     command_ok 'i=0; while [ "$i" -lt 1024 ] && touch "/tmp/empty.$i" 2>/mnt/grow/fill-names.log; do i=$((i+1)); done; test "$i" -lt 1024' 'consuming the remaining name records'
@@ -172,7 +174,7 @@ round_trip()
     stop
     check_target
     boot_target
-    echo "grow-space: $phase: same 4 MiB root, accumulated work, guest logs, original bytes and boot passed"
+    echo "grow-space: $phase: same 5 MiB root, accumulated work, guest logs, original bytes and boot passed"
 }
 round_trip fixed
 round_trip full-log
