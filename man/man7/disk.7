@@ -32,11 +32,14 @@ Logical partitions are numbered from 5 in extended-chain order;
 the extended entry itself has no node.
 GPT partitions use their array positions, counted from 1.
 .It Pa /dev/bootpart
-MBR entry 1 when it is a FAT32 partition starting at or after LBA 2048,
-smaller than 2 GiB and overlapping no other partition.
+Entry 1 of the boot disk's table, MBR or GUID, when it is a FAT32
+partition starting at or after LBA 2048, smaller than 2 GiB and
+overlapping no other partition.
 The node has mode 0600.
 .It Pa /dev/grubcore
-The range from LBA 1 through 2047, published when no partition overlaps it.
+On an MBR disk, the range from LBA 1 through 2047, published when no
+partition overlaps it; on a GUID disk, its one BIOS boot partition, clear
+of sector zero, the headers and the entry array.
 The node has mode 0600.
 .El
 .Pp
@@ -84,10 +87,10 @@ passes the boot-window checks; otherwise neither boot device is
 published.
 The boot partition's type must be FAT, 0x0B or 0x0C, or the EFI system
 partition's, 0xEF on an MBR and its type GUID on a GUID table.
-A disk with a GUID table has no
-.Pa /dev/grubcore ,
-since the table is in the sectors that window covers on an MBR disk and
-GRUB's BIOS core is in the BIOS boot partition.
+On a disk with a GUID table,
+.Pa /dev/grubcore
+is the BIOS boot partition, where GRUB's BIOS core is, since the table
+itself is in the sectors that window covers on an MBR disk.
 .Xr growroot 8
 uses the
 .Ql MBRID=XXXXXXXX,M
@@ -142,18 +145,19 @@ line for its serial and a
 .Ql part N ...
 line for each partition.
 .Ss Sealed disk
-The sealed disk has three partitions:
+The sealed disk has a GUID partition table and four partitions:
 .Bl -enum
 .It
-The FAT32 boot partition: GRUB, the kernel slots, the menu and the
-environment block.
+The FAT32 EFI system partition: GRUB's EFI image, the kernel slots, the
+menu and the environment block.
 .It
-The recovery system's image.
+The recovery system, a FAT32 partition.
 .It
 The ext2 root.
+.It
+The BIOS boot partition, LBA 34 through 2047, with GRUB's BIOS core and
+no file system.
 .El
-.Pp
-The GRUB core image occupies the gap before partition 1.
 .Ss Loop devices
 .Pa /dev/loop0
 through
