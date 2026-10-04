@@ -2,8 +2,8 @@
  * Host test for the CMOS clock arithmetic and PIT interpolation.
  *
  * host-deps: rach2/sys/arch/x86/cmos.c rach2/sys/clock.c
- * host-deps: rach2/sys/arch/x86/pit.c
- * host-cflags: -DRTC_HOST_TEST
+ * host-deps: rach2/sys/arch/x86/pit.c tests/host/compat/spinlock_host.c
+ * host-cflags: -DRTC_HOST_TEST -DRACH2_HOST_CPU
  *
  * `rtc_decode`, `rtc_snapshots_agree` and `rtc_time_from_anchor` are the whole
  * of the clock's arithmetic and they touch no hardware, so they run natively
@@ -18,7 +18,9 @@
  * hand-worked instants.
  *
  * Port stubs also drive the real-time reader across pending interrupts and
- * counter wraps, including one during its latch, without executing I/O.
+ * counter wraps, including one during its latch, without executing I/O, and
+ * the microsecond clock on the boot processor and on another, which reads a
+ * reference counter the test keeps.
  *
  * Returns the failed-check count (0 == all passed), capped so it cannot wrap
  * to a false 0.
@@ -127,30 +129,35 @@ void klog(int level, const char *subsystem, const char *format, ...)
     (void)format;
 }
 
-/* No reference counter and one processor: the host is the boot processor,
- * which reads the counter under its tick, and never waits on the tick's
- * sequence count. */
+/* The processor the host runs as (arch/i686/cpu.h): the boot processor,
+ * which reads the counter under its tick, but in the row of another
+ * processor's clock; and the reference counter of 1 MHz at `ref_now`, which
+ * only that row turns on. No row waits on the tick's sequence count. */
+unsigned int host_cpu;
+static int ref_on;
+static uint32_t ref_now;
+
 const char *refclock_name(void)
 {
-    return 0;
+    return ref_on ? "test" : 0;
 }
 
 uint32_t refclock_read(void)
 {
-    CHECK(0);
-    return 0;
+    CHECK(ref_on);
+    return ref_now;
 }
 
 uint32_t refclock_hz(void)
 {
-    CHECK(0);
-    return 1;
+    CHECK(ref_on);
+    return 1000000u;
 }
 
 uint32_t refclock_mask(void)
 {
-    CHECK(0);
-    return 0;
+    CHECK(ref_on);
+    return 0xFFFFFFFFu;
 }
 
 uint32_t refclock_scale(uint32_t a, uint32_t b, uint32_t c)
@@ -312,6 +319,44 @@ static void monotonic_rows(void)
     rtc_monotonic(&sec, &ns);
     CHECK(sec == 51 && ns == 10041000);
     CHECK(!irq_disabled);
+}
+
+/*
+ * The microsecond clock on two processors around a tick of the boot
+ * processor's at 41 us into its period. Another processor two and a half
+ * periods on reads a microsecond short of the period after the tick, since
+ * the boot processor has counted no period since; the boot processor, which
+ * then reads half a period and 41 us into that period by its counter, gives
+ * the other's reading again, never an earlier one; and once its counter has
+ * wrapped it reads 41 us into the next period.
+ */
+static void cross_cpu_rows(void)
+{
+    uint32_t period = pit_period_us();
+    uint32_t base, other, late, wrapped;
+
+    ref_on = 1;
+    ref_now = 5000000u;
+    pending = 0;
+    wrap_on_pending = 0;
+    status = 0x80;
+    count = pit_reload - 100u;
+    timer_tick_clock();
+    base = timer_now_us() - 41u;
+    host_cpu = 1;
+    ref_now += 5u * period / 2u;
+    other = timer_now_us();
+    host_cpu = 0;
+    status = 0;
+    late = timer_now_us();
+    status = 0x80;
+    count = pit_reload - 100u;
+    wrapped = timer_now_us();
+    CHECK(other == base + period - 1u);
+    CHECK(late == other);
+    CHECK(wrapped == base + period + 41u);
+    CHECK(!irq_disabled);
+    ref_on = 0;
 }
 
 /** A BCD byte from a two-digit value, the way the CMOS has one. */
@@ -623,5 +668,6 @@ int main(void)
     set_rows();
     monotonic_rows();
     clock_write_rows();
+    cross_cpu_rows();
     return fails > 100 ? 100 : fails;
 }

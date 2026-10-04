@@ -5,6 +5,7 @@
 #include "kcpu.h"
 #include "../arch.h"
 #include "../../lib/kirq.h"
+#include "../../lib/spinlock.h"
 #include "../../udelay.h"
 
 uint32_t pit_reload = 1193182 / 100;
@@ -78,6 +79,17 @@ static struct pit_clock clock;
 static volatile uint32_t edge_ref;
 static volatile uint32_t edge_periods;
 static volatile int edge_set;
+
+/*
+ * The latest reading `timer_now_us` has given on any processor, below which
+ * no later reading goes, and the lock it is read and raised under. The boot
+ * processor reads channel 0 and the others the reference counter, and the
+ * two disagree by the rounding of their scales and the time between the
+ * reads; a TCP round trip timed from one processor's send to another's
+ * acknowledgement must not come out negative.
+ */
+static struct spinlock now_lock;
+static uint32_t now_floor;
 
 static uint32_t pit_phase_from(uint32_t count, uint8_t status);
 static int pit_pending(void);
@@ -377,22 +389,40 @@ static void edge_phase(uint32_t ns, uint32_t period_ns, int *pending, uint32_t *
  * such periods up from the TSC where `timer_calibrate` found one at one
  * rate; this clock does not.
  *
+ * Another processor reads the reference counter's time since the boot
+ * processor's tick began, short of a period however long the boot processor
+ * has not counted one, since the boot processor counts at most one period
+ * past its last tick; and no reading is earlier than one given before on any
+ * processor (`now_floor`), so the clock never runs back from one processor
+ * to another.
+ *
  * It wraps after about 71 minutes, which is a diagnostic clock's bound and
  * not a wall clock's; `rtc.c` is where the time of day lives.
  */
 uint32_t timer_now_us(void)
 {
     uint32_t flags = kirq_save();
-    uint32_t now, seq;
+    uint32_t now, seq, ns, period_us = counter->period_us();
 
     if (arch_cpu_id() != 0 && edge_set) {
         do {
             seq = tick_read_begin();
-            now = edge_periods * counter->period_us() + edge_elapsed_ns() / 1000u;
+            ns = edge_elapsed_ns();
+            if (ns >= period_us * 1000u) {
+                ns = (period_us - 1u) * 1000u;
+            }
+            now = edge_periods * period_us + ns / 1000u;
         } while (tick_read_retry(seq));
     } else {
-        now = pit_clock_read(&clock, counter->phase_us(), counter->period_us());
+        now = pit_clock_read(&clock, counter->phase_us(), period_us);
     }
+    spin_lock(&now_lock);
+    if ((int32_t)(now - now_floor) < 0) {
+        now = now_floor;
+    } else {
+        now_floor = now;
+    }
+    spin_unlock(&now_lock);
     kirq_restore(flags);
     return now;
 }

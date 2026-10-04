@@ -210,8 +210,12 @@ typedef unsigned short core_uid_t;
 /* The running processor's index in the per-processor table
  * (proc/percpu.h): the first word of the processor's own segment, which the
  * loader puts in %fs before the first C code and every entry to the kernel
- * loads again (gdt.h). A host test runs as one processor. */
-#if defined(RACH2_HOSTTEST)
+ * loads again (gdt.h). A host test runs as processor 0, or, built with
+ * RACH2_HOST_CPU, as the processor its own `host_cpu` names. */
+#if defined(RACH2_HOSTTEST) && defined(RACH2_HOST_CPU)
+extern unsigned int host_cpu;
+#define arch_cpu_id() host_cpu
+#elif defined(RACH2_HOSTTEST)
 #define arch_cpu_id() 0u
 #else
 static __inline__ unsigned int arch_cpu_id(void)
