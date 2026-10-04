@@ -113,10 +113,11 @@ void arch_regs_get(const process_t *t, unsigned long *r)
  * Set the user register `i` of the stopped thread `t` to `v`, as Linux's
  * `putreg` does: the flags only where a program may change them, a base
  * only to a user address, and CS and SS only to the ones they have, since a
- * return to user mode with any other would fault in the kernel. The data
- * segment registers are null in a 64-bit program and stay so; a tracer may
- * write back the null it read, or the user data selector. An orig_rax of
- * -1 stops an interrupted system call from being restarted. 0, or -EIO.
+ * return to user mode with any other would fault in the kernel. The kernel
+ * keeps no data segment selectors for a 64-bit thread, which read as null,
+ * so a tracer may write back the null it read and nothing else. An orig_rax
+ * of -1 stops an interrupted system call from being restarted; it is kept
+ * in 32 bits, as the system call number is. 0, or -EIO.
  */
 static int regs_set(process_t *t, int i, unsigned long v)
 {
@@ -208,8 +209,7 @@ static int regs_set(process_t *t, int i, unsigned long v)
     case R_ES:
     case R_FS:
     case R_GS:
-        v &= 0xFFFFu;
-        if (v != 0 && v != GDT_USER_DATA) {
+        if ((v & 0xFFFFu) != 0) {
             return -EIO;
         }
         break;

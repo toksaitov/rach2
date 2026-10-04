@@ -210,8 +210,14 @@ at
 .Fa data ,
 68 bytes on i386 and 216 on x86-64.
 A tracer changes only the flags a program may change; the data segment
-registers take a null selector, the user data selector or the TLS entry's,
-and CS and SS only the ones they have.
+registers take a null selector, the user data selector or the TLS entry's
+on i386, and CS and SS only the ones they have.
+On x86-64 the kernel keeps no data segment selectors for a thread, so DS,
+ES, FS and GS read 0 whatever the thread loaded and a write of anything
+else fails with
+.Er EIO ,
+where Linux keeps and returns them; orig_rax is kept in 32 bits and reads
+back sign-extended, where Linux keeps all 64.
 An orig_eax of -1 keeps an interrupted system call from being restarted,
 set at its exit stop or at the signal-delivery stop that follows; at the
 exit stop so does a result in EAX other than

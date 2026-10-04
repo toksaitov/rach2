@@ -348,7 +348,8 @@ static int syscall_entry(pid_t pid, long nr, struct user_regs_struct *regs)
  * At a system call's entry stop the tracer may change the call through
  * orig_eax: getpid made getppid returns the parent's id, and a write made -1
  * is not run and returns what the tracer left in eax, so the pipe stays
- * empty.
+ * empty. On x86-64 a data segment selector other than the null one the
+ * kernel keeps is refused with EIO, and not taken without being kept.
  */
 static int syscall_changes(void)
 {
@@ -375,6 +376,13 @@ static int syscall_changes(void)
     if (!stopped_by(pid, SIGSTOP) || syscall_entry(pid, SYS_getpid, &regs) != 0) {
         return fail("the entry stop of getpid");
     }
+#if defined __x86_64__
+    regs.ds = 0x2b;
+    if (ptrace(PTRACE_SETREGS, pid, NULL, &regs) != -1 || errno != EIO) {
+        return fail("a data segment selector the kernel does not keep was taken");
+    }
+    regs.ds = 0;
+#endif
     R_NR(regs) = SYS_getppid;
     if (ptrace(PTRACE_SETREGS, pid, NULL, &regs) != 0 ||
         syscall_entry(pid, SYS_write, &regs) != 0) {
