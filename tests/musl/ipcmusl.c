@@ -188,39 +188,27 @@ static int sem_child(int id)
     return semop(id, &take, 1) == 0 && semop(id, &undo, 1) == 0 ? 0 : 1;
 }
 
-/** A set of two: values, refusals, a timeout, a waiter let through, an
- * undo, and a waiter woken by the set's removal. */
-static int sem_rows(void)
-{
-    struct sembuf take = {0, -1, IPC_NOWAIT}, give = {0, 1, 0}, wait0 = {0, -1, 0};
-    struct timespec ts = {0, 100000000};
-    struct semid_ds ds;
-    unsigned short all[2];
-    int id = semget(IPC_PRIVATE, 2, IPC_CREAT | 0600);
-    time_t now = time(NULL);
-    pid_t child;
-
-    if (id < 0 || semctl(id, 1, SETVAL, 1) != 0 || semctl(id, 0, GETALL, all) != 0 || all[0] != 0 ||
-        all[1] != 1) {
-        return fail("semget, SETVAL and GETALL");
-    }
-    if (semctl(id, 0, IPC_STAT, &ds) != 0 || ds.sem_nsems != 2 || ds.sem_ctime < now - 60 ||
-        ds.sem_ctime > now + 60) {
-        return fail("IPC_STAT of a set of two did not give its count and its change time");
-    }
-    if (semop(id, &take, 1) != -1 || errno != EAGAIN) {
-        return fail("a decrement past 0 with IPC_NOWAIT is EAGAIN");
-    }
 #if defined __x86_64__
+/** On x86-64, a count of operations past 32 bits is E2BIG and runs none. */
+static int sem_wide_count(int id)
+{
+    struct sembuf give = {0, 1, 0};
+
     if (syscall(SYS_semop, id, &give, 0x100000001UL) != -1 || errno != E2BIG ||
         semctl(id, 0, GETVAL) != 0) {
         return fail("a count of operations past 32 bits is not E2BIG, or ran");
     }
+    return 0;
+}
 #endif
-    take.sem_flg = 0;
-    if (semtimedop(id, &take, 1, &ts) != -1 || errno != EAGAIN) {
-        return fail("one with a timeout is EAGAIN after it");
-    }
+
+/** The set's waiters: one the parent lets through, whose SEM_UNDO
+ * decrement is undone at its exit, and one the set's removal wakes. */
+static int sem_waiters(int id)
+{
+    struct sembuf give = {0, 1, 0}, wait0 = {0, -1, 0};
+    pid_t child;
+
     child = fork();
     if (child == 0) {
         _exit(sem_child(id));
@@ -242,6 +230,40 @@ static int sem_rows(void)
         return fail("removing the set wakes its waiter with EIDRM");
     }
     return 0;
+}
+
+/** A set of two: values, refusals, a timeout, a waiter let through, an
+ * undo, and a waiter woken by the set's removal. */
+static int sem_rows(void)
+{
+    struct sembuf take = {0, -1, IPC_NOWAIT};
+    struct timespec ts = {0, 100000000};
+    struct semid_ds ds;
+    unsigned short all[2];
+    int id = semget(IPC_PRIVATE, 2, IPC_CREAT | 0600);
+    time_t now = time(NULL);
+
+    if (id < 0 || semctl(id, 1, SETVAL, 1) != 0 || semctl(id, 0, GETALL, all) != 0 || all[0] != 0 ||
+        all[1] != 1) {
+        return fail("semget, SETVAL and GETALL");
+    }
+    if (semctl(id, 0, IPC_STAT, &ds) != 0 || ds.sem_nsems != 2 || ds.sem_ctime < now - 60 ||
+        ds.sem_ctime > now + 60) {
+        return fail("IPC_STAT of a set of two did not give its count and its change time");
+    }
+    if (semop(id, &take, 1) != -1 || errno != EAGAIN) {
+        return fail("a decrement past 0 with IPC_NOWAIT is EAGAIN");
+    }
+#if defined __x86_64__
+    if (sem_wide_count(id) != 0) {
+        return 1;
+    }
+#endif
+    take.sem_flg = 0;
+    if (semtimedop(id, &take, 1, &ts) != -1 || errno != EAGAIN) {
+        return fail("one with a timeout is EAGAIN after it");
+    }
+    return sem_waiters(id);
 }
 
 /** A queue's order by type, a cut message, and an empty queue. */
