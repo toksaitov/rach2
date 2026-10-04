@@ -34,9 +34,10 @@ static uint32_t limit_set;        /* a limit given by `bcache_set_limit`, or 0 *
 static uint32_t clock_stamp;
 static uint64_t stat_hits, stat_fills, stat_waits;
 /* Every buffer a walk of the cache's lists reads: the whole list, the release
- * order, the empties, a bucket of the index and a process's holds. It is what
- * a get, a victim's choice and a sync cost in bookkeeping, and a host test
- * holds it under a bound. */
+ * order, the empties, a bucket of the index and a process's holds; and each
+ * step a sync takes to put a block in its batch. It is what a get, a victim's
+ * choice and a sync cost in bookkeeping, and a host test holds it under a
+ * bound. */
 static uint64_t stat_visits;
 
 /* The most buffers the cache makes: half of what the caches together may
@@ -936,43 +937,101 @@ static struct bbuf *first_dirty(const block_device_t *dev)
     return 0;
 }
 
-/* The most dirty blocks one scan of the cache gathers for a sync: a scan
- * per run written would read every buffer for every run. The batch is on
- * the stack, since a write through a loop device syncs the device under it
- * from inside this call. */
-#define SYNC_BATCH 128
+/* The dirty blocks one walk of the dirty buffers gathers for a sync when
+ * the heap has no room for a batch of all of them: a walk per run written
+ * would read every dirty buffer for every run. This batch is on the stack,
+ * and a larger one is the sync's own, since a write through a loop device
+ * syncs the device under it from inside the sync. */
+#define SYNC_BATCH       128
+/* The most pages a sync asks of the heap for its batch: a reserve run of
+ * the heap, which holds 131072 blocks. */
+#define SYNC_BATCH_PAGES 256u
 
 /**
- * The lowest `SYNC_BATCH` dirty blocks of `dev` above block `after` (all of
- * them when `started` is 0), the `first` ones alone in pass 0, in ascending
- * order in `out`. Returns how many. Block numbers and not buffers: a write
- * of the batch sleeps, and a buffer let go of meanwhile can be given to
- * another block or to the heap.
+ * Move the entry at `at` of the max-heap `heap` of `n` blocks down to its
+ * place. Each level is a step of a sync's bookkeeping, counted as a visit.
  */
-static int gather_dirty(block_device_t *dev, int pass, int started, uint64_t after, uint64_t *out)
+static void batch_sift_down(uint64_t *heap, int n, int at)
+{
+    for (;;) {
+        int child = 2 * at + 1;
+        uint64_t moved;
+
+        stat_visits++;
+        if (child >= n) {
+            return;
+        }
+        if (child + 1 < n && heap[child + 1] > heap[child]) {
+            child++;
+        }
+        if (heap[at] >= heap[child]) {
+            return;
+        }
+        moved = heap[at];
+        heap[at] = heap[child];
+        heap[child] = moved;
+        at = child;
+    }
+}
+
+/** Move the entry at `at` of the max-heap `heap` up to its place. */
+static void batch_sift_up(uint64_t *heap, int at)
+{
+    while (at > 0) {
+        int parent = (at - 1) / 2;
+        uint64_t moved;
+
+        stat_visits++;
+        if (heap[parent] >= heap[at]) {
+            return;
+        }
+        moved = heap[at];
+        heap[at] = heap[parent];
+        heap[parent] = moved;
+        at = parent;
+    }
+}
+
+/**
+ * The lowest `cap` dirty blocks of `dev` above block `after` (all of them
+ * when `started` is 0), the `first` ones alone in pass 0, in ascending order
+ * in `out`. Returns how many. Block numbers and not buffers: a write of the
+ * batch sleeps, and a buffer let go of meanwhile can be given to another
+ * block or to the heap.
+ *
+ * The batch is gathered in a max-heap, its highest block at `out[0]`, so a
+ * block below that one takes its place in at most log2(cap) steps and a
+ * block above it costs one comparison. The dirty list has its newest buffer
+ * first, so a file written in order lists its blocks in descending order,
+ * and an insertion sort shifted the whole batch for each of them.
+ */
+static int gather_dirty(block_device_t *dev, int pass, int started, uint64_t after, uint64_t *out,
+                        int cap)
 {
     const struct bbuf *b;
-    int n = 0;
+    int n = 0, i;
 
     for (b = dirties; b; b = b->dirty_next) {
-        int i;
-
         stat_visits++;
         if (b->dev != dev || !b->dirty || (pass == 0 && b->order != BCACHE_ORDER_FIRST) ||
             (started && b->blk <= after)) {
             continue;
         }
-        if (n == SYNC_BATCH) {
-            if (b->blk >= out[n - 1]) {
-                continue;
-            }
-            n--;
+        if (n < cap) {
+            out[n] = b->blk;
+            batch_sift_up(out, n);
+            n++;
+        } else if (b->blk < out[0]) {
+            out[0] = b->blk;
+            batch_sift_down(out, n, 0);
         }
-        for (i = n; i > 0 && out[i - 1] > b->blk; i--) {
-            out[i] = out[i - 1];
-        }
-        out[i] = b->blk;
-        n++;
+    }
+    for (i = n - 1; i > 0; i--) {
+        uint64_t highest = out[0];
+
+        out[0] = out[i];
+        out[i] = highest;
+        batch_sift_down(out, i, 0);
     }
     return n;
 }
@@ -980,21 +1039,19 @@ static int gather_dirty(block_device_t *dev, int pass, int started, uint64_t aft
 static int sync_device(block_device_t *dev, int durable);
 
 /*
- * One pass of `bcache_sync`: the `first` buffers of `dev` in pass 0 and every
- * dirty one in pass 1, written with the request `flags`, except that a run of
- * `first` buffers is written with `first_flags`. Returns 0 or the first
- * failure's -errno.
+ * The writes of one pass of `bcache_sync`, from batches of `cap` blocks in
+ * `batch`, as `sync_pass` describes.
  */
-static int sync_pass(block_device_t *dev, int pass, uint32_t flags, uint32_t first_flags)
+static int sync_batches(block_device_t *dev, int pass, uint32_t flags, uint32_t first_flags,
+                        uint64_t *batch, int cap)
 {
-    uint64_t batch[SYNC_BATCH];
     uint64_t last = 0;
     int started = 0;
 
     for (;;) {
         int n, i;
 
-        n = gather_dirty(dev, pass, started, last, batch);
+        n = gather_dirty(dev, pass, started, last, batch, cap);
         if (n == 0) {
             if (!started) {
                 return 0; /* a scan from the start found nothing */
@@ -1049,6 +1106,40 @@ static int sync_pass(block_device_t *dev, int pass, uint32_t flags, uint32_t fir
             started = 1;
         }
     }
+}
+
+/*
+ * One pass of `bcache_sync`: the `first` buffers of `dev` in pass 0 and every
+ * dirty one in pass 1, written with the request `flags`, except that a run of
+ * `first` buffers is written with `first_flags`. Returns 0 or the first
+ * failure's -errno.
+ *
+ * The pass gathers every dirty block in one walk when the heap gives a batch
+ * that holds them, since a run writes as many as 256 blocks and a batch of
+ * 128 contiguous ones is spent by one run: with tens of thousands dirty, a
+ * walk for each run was most of what a write-back cost. Without the room it
+ * gathers `SYNC_BATCH` blocks a walk.
+ */
+static int sync_pass(block_device_t *dev, int pass, uint32_t flags, uint32_t first_flags)
+{
+    uint64_t small[SYNC_BATCH];
+    uint64_t *batch = 0;
+    uint32_t pages = 0;
+    int rc;
+
+    if (ndirty > SYNC_BATCH) {
+        pages = (ndirty + PAGE_SIZE / 8u - 1u) / (PAGE_SIZE / 8u);
+        if (pages > SYNC_BATCH_PAGES) {
+            pages = SYNC_BATCH_PAGES;
+        }
+        batch = kalloc_pages_try(pages, 0);
+    }
+    if (!batch) {
+        return sync_batches(dev, pass, flags, first_flags, small, SYNC_BATCH);
+    }
+    rc = sync_batches(dev, pass, flags, first_flags, batch, (int)(pages * (PAGE_SIZE / 8u)));
+    kfree_pages(batch, pages);
+    return rc;
 }
 
 /**

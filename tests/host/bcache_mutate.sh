@@ -3,13 +3,15 @@
 # were written for, entries 25 and 40 of milestone 50: the hold rules walking
 # every buffer of the cache on every get, the victim chosen by a walk of every
 # buffer, a sync walking the cache again for every run it writes, and the
-# cache's cap at half the kernel heap's pages taken out; against the cap held
-# at half of i686's region, as it was before the boot sized the region from
-# the memory on x86-64; and against a visit counter that answers 0, which
-# only the rows' lower bounds can see. Each
-# fault is compiled into a private copy of rach2/sys/fs/bcache.c, one at a
-# time, and must fail each row its case names; the copy restored, touched and
-# rebuilt must pass.
+# cache's cap at half the kernel heap's pages taken out; against a sync's
+# batch kept by insertion sort, which shifted the whole batch for each block
+# of a file written in order, and a sync that gathers 128 blocks a walk with
+# room for all of them; against the cap held at half of i686's region,
+# as it was before the boot sized the region from the memory on x86-64; and
+# against a visit counter that answers 0, which only the rows' lower bounds
+# can see. Each fault is compiled into a private copy of
+# rach2/sys/fs/bcache.c, one at a time, and must fail each row its case names;
+# the copy restored, touched and rebuilt must pass.
 # The test is compiled as tests/system/suites/host.sh compiles it, in a
 # private tree laid out as the repository is, so its host-deps lines and its
 # relative includes resolve to the private copy.
@@ -94,7 +96,7 @@ EOF
 
 echo "bcache-proof: logs: $work"
 run_phase fixed pass 'bcache_cost_hosttest: result: pass:'
-for fault in hold-walk victim-walk sync-rescan cap fixed-cap uncounted; do
+for fault in hold-walk victim-walk sync-rescan insertion-sort small-batch cap fixed-cap uncounted; do
     python3 - "$source" "$fault" <<'PY'
 import pathlib
 import sys
@@ -105,8 +107,10 @@ text = path.read_text()
 # Each fault but the last puts back the code as it stood before its fix, in
 # the one function it lived in; the sync's is its batch cut to one block,
 # which walks the cache once for every run written, as the sync did before it
-# gathered batches. The counting line in each walk stays where it is. The
-# last leaves every walk as it is and makes the counter answer 0.
+# gathered batches; the insertion sort counts each shift as the heap counts
+# each step; and the small batch is the stack's 128 whatever room the heap
+# has. The counting line in each walk stays where it is. The last leaves
+# every walk as it is and makes the counter answer 0.
 faults = {
     'hold-walk': ('static void check_hold_rules(block_device_t *dev, uint64_t blk)\n{', [
         ('    for (b = *held_list(); b; b = b->hold_next) {\n'
@@ -126,7 +130,43 @@ faults = {
         ('                victim = b;\n                break;\n',
          '                if (!victim || (int32_t)(b->stamp - victim->stamp) < 0) {\n'
          '                    victim = b;\n                }\n')]),
-    'sync-rescan': (None, [('#define SYNC_BATCH 128\n', '#define SYNC_BATCH 1\n')]),
+    'sync-rescan': (None, [
+        ('#define SYNC_BATCH       128\n', '#define SYNC_BATCH       1\n'),
+        ('batch, (int)(pages * (PAGE_SIZE / 8u)));\n', 'batch, 1);\n')]),
+    'small-batch': ('static int sync_pass(block_device_t *dev, int pass, uint32_t flags, '
+                    'uint32_t first_flags)\n{', [
+        ('    if (ndirty > SYNC_BATCH) {\n', '    if (0) {\n')]),
+    'insertion-sort': ('static int gather_dirty(block_device_t *dev, int pass, int started, '
+                       'uint64_t after, uint64_t *out,\n                        int cap)\n{', [
+        ('        if (n < cap) {\n'
+         '            out[n] = b->blk;\n'
+         '            batch_sift_up(out, n);\n'
+         '            n++;\n'
+         '        } else if (b->blk < out[0]) {\n'
+         '            out[0] = b->blk;\n'
+         '            batch_sift_down(out, n, 0);\n'
+         '        }\n'
+         '    }\n'
+         '    for (i = n - 1; i > 0; i--) {\n'
+         '        uint64_t highest = out[0];\n'
+         '\n'
+         '        out[0] = out[i];\n'
+         '        out[i] = highest;\n'
+         '        batch_sift_down(out, i, 0);\n'
+         '    }\n',
+         '        if (n == cap) {\n'
+         '            if (b->blk >= out[n - 1]) {\n'
+         '                continue;\n'
+         '            }\n'
+         '            n--;\n'
+         '        }\n'
+         '        for (i = n; i > 0 && out[i - 1] > b->blk; i--) {\n'
+         '            stat_visits++;\n'
+         '            out[i] = out[i - 1];\n'
+         '        }\n'
+         '        out[i] = b->blk;\n'
+         '        n++;\n'
+         '    }\n')]),
     'cap': ('static uint32_t bcache_limit(void)\n{', [
         ('    uint32_t n = share > most ? most : (uint32_t)share;\n',
          '    uint32_t n = (uint32_t)share;\n')]),
@@ -158,12 +198,16 @@ PY
     case $fault in
         hold-walk) message='a hit with three buffers held reads its holds and its own buffer, not the cache' ;;
         victim-walk) message='a miss on a full cache reads the head of the release order, not the cache' ;;
-        sync-rescan) message='a sync reads the cache once for each 128 dirty blocks, not once for each run' ;;
+        sync-rescan | insertion-sort)
+            message="a sync gathers its dirty blocks in one walk and sorts them in a heap
+without room for one batch, a sync reads the cache once for each 128 dirty blocks, not once for each run, and sorts each batch in a heap" ;;
+        small-batch) message='a sync gathers its dirty blocks in one walk and sorts them in a heap' ;;
         cap) message="a machine whose memory share passes the kernel heap has a cache of half the heap's pages
 a heap of another size has a cache of half its own pages" ;;
         fixed-cap) message='a heap of another size has a cache of half its own pages' ;;
         uncounted) message="the counter counts the buffers a hit and its release read
 the counter counts the buffers each miss and its release read
+the counter counts the sync's four walks of the cache
 the counter counts the sync's eleven walks of the cache" ;;
     esac
     run_phase "$fault-mutated" fail "$message"
