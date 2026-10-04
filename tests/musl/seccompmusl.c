@@ -17,8 +17,8 @@
  * the calls are getuid and getgid, the architecture AUDIT_ARCH_X86_64 and the
  * register RAX. TSYNC gives
  * a waiting thread the caller's new filter, and an exec keeps the four.
- * The strict mode lets write through and kills the process with SIGKILL at
- * getpid.
+ * The strict mode lets write, read and exit through, by the architecture's
+ * numbers, and kills the process with SIGKILL at getpid and at close.
  *
  * Prints "SECCOMPMUSL OK" on success and "SECCOMPMUSL FAIL (detail)"
  * otherwise.
@@ -255,24 +255,52 @@ static int after_exec(void)
     return 0;
 }
 
-/** The strict mode, in a child: write runs, getpid kills. */
-static int strict(void)
+/** A child in the strict mode that writes, reads a byte from a pipe, makes
+ * the call `nr` unless it is 0, and exits; its wait status, or -1. */
+static int strict_child(long nr)
 {
-    pid_t pid = fork();
-    int status;
+    int fds[2], status;
+    pid_t pid;
+    char c;
 
+    if (pipe(fds) != 0 || write(fds[1], "s", 1) != 1) {
+        return -1;
+    }
+    pid = fork();
     if (pid == 0) {
         if (syscall(NR_SECCOMP, SET_MODE_STRICT, 0, NULL) != 0) {
-            _exit(5);
+            syscall(SYS_exit, 5);
         }
-        if (write(1, "", 0) != 0) {
+        if (write(1, "", 0) != 0 || read(fds[0], &c, 1) != 1 || c != 's') {
             syscall(SYS_exit, 6);
         }
-        syscall(SYS_getpid);
-        syscall(SYS_exit, 7);
+        if (nr != 0) {
+            syscall(nr, fds[0]);
+        }
+        syscall(SYS_exit, 0);
     }
-    if (waitpid(pid, &status, 0) != pid || !WIFSIGNALED(status) || WTERMSIG(status) != SIGKILL) {
+    close(fds[0]);
+    close(fds[1]);
+    return pid > 0 && waitpid(pid, &status, 0) == pid ? status : -1;
+}
+
+/** The strict mode, in children: write, read and exit run, by the
+ * architecture's numbers, and getpid and close kill, whose x86-64 numbers
+ * are i386's read and stat. */
+static int strict(void)
+{
+    int status = strict_child(0);
+
+    if (status == -1 || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        return fail("the strict mode lets write, read and exit run");
+    }
+    status = strict_child(SYS_getpid);
+    if (status == -1 || !WIFSIGNALED(status) || WTERMSIG(status) != SIGKILL) {
         return fail("the strict mode kills at getpid");
+    }
+    status = strict_child(SYS_close);
+    if (status == -1 || !WIFSIGNALED(status) || WTERMSIG(status) != SIGKILL) {
+        return fail("the strict mode kills at close");
     }
     return 0;
 }

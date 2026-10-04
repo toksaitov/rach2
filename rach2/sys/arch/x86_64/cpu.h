@@ -189,6 +189,13 @@ phys_addr_t mmu_virt_to_phys(const volatile void *v);
 #define AUDIT_ARCH  0xC000003Eu /* AUDIT_ARCH_X86_64 */
 #define ARCH_NAME   "x86_64"
 
+/* The calls seccomp's strict mode allows, by this ABI's numbers: read,
+ * write, exit and rt_sigreturn, as Linux's `mode1_syscalls` has them. */
+#define SECCOMP_NR_READ      0u
+#define SECCOMP_NR_WRITE     1u
+#define SECCOMP_NR_EXIT      60u
+#define SECCOMP_NR_SIGRETURN 15u
+
 /* The words of x86-64's `user_regs_struct`, which ptrace(2)'s register
  * set and a core file's NT_PRSTATUS note have, and the type of the user
  * and group ids in the core file's NT_PRPSINFO note, Linux's

@@ -187,6 +187,13 @@ typedef uint32_t pte_t;
 #define AUDIT_ARCH  0x40000003u /* AUDIT_ARCH_I386 */
 #define ARCH_NAME   "i686"
 
+/* The calls seccomp's strict mode allows, by this ABI's numbers: read,
+ * write, exit and sigreturn, as Linux's `mode1_syscalls` has them. */
+#define SECCOMP_NR_READ      3u
+#define SECCOMP_NR_WRITE     4u
+#define SECCOMP_NR_EXIT      1u
+#define SECCOMP_NR_SIGRETURN 119u
+
 /* The words of i386's `user_regs_struct`, which ptrace(2)'s register
  * set and a core file's NT_PRSTATUS note have, and the type of the user
  * and group ids in the core file's NT_PRPSINFO note, Linux's

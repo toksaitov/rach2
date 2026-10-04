@@ -48,9 +48,10 @@
     (SECCOMP_FILTER_FLAG_TSYNC | SECCOMP_FILTER_FLAG_LOG | SECCOMP_FILTER_FLAG_SPEC_ALLOW | \
      SECCOMP_FILTER_FLAG_TSYNC_ESRCH)
 
-/* The architecture the filters see is AUDIT_ARCH, from the architecture's
- * cpu.h; SIGSYS's code for a call a filter trapped is ksignal.h's
- * SIGSYS_SECCOMP. */
+/* The architecture the filters see is AUDIT_ARCH, and the calls the strict
+ * mode allows SECCOMP_NR_READ, SECCOMP_NR_WRITE, SECCOMP_NR_EXIT and
+ * SECCOMP_NR_SIGRETURN, from the architecture's cpu.h; SIGSYS's code for a
+ * call a filter trapped is ksignal.h's SIGSYS_SECCOMP. */
 
 /* Linux's limits: instructions in one program, and in a chain, each filter
  * counted with four more. */
@@ -100,12 +101,6 @@
 #define BPF_JSET     0x40u
 #define BPF_TAX      0x00u
 #define BPF_TXA      0x80u
-
-/* The calls the strict mode allows: read, write, exit and sigreturn. */
-#define NR_EXIT      1u
-#define NR_READ      3u
-#define NR_WRITE     4u
-#define NR_SIGRETURN 119u
 
 /* One instruction, as `struct sock_filter` has it. */
 struct sock_filter {
@@ -412,7 +407,8 @@ int seccomp_permit(isr_params_t *tf, uint32_t nr, long *ret)
     uint32_t action, data;
 
     if (self->seccomp_mode == SECCOMP_MODE_STRICT) {
-        if (nr == NR_READ || nr == NR_WRITE || nr == NR_EXIT || nr == NR_SIGRETURN) {
+        if (nr == SECCOMP_NR_READ || nr == SECCOMP_NR_WRITE || nr == SECCOMP_NR_EXIT ||
+            nr == SECCOMP_NR_SIGRETURN) {
             return 1;
         }
         klog(KLOG_INFO, "seccomp", "pid %d: call %d outside the strict mode", (int)self->pid,
