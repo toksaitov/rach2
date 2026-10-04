@@ -1164,7 +1164,9 @@ void D_DoomMain (void)
 {
     int p;
     char file[256];
-    char demolumpname[9];
+    // static: doomgeneric returns from D_DoomMain before the demo it names
+    // is played, and the game keeps a pointer to the name until it ends.
+    static char demolumpname[9];
 #if ORIGCODE
     int numiwadlumps;
 #endif
