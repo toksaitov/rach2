@@ -54,7 +54,8 @@ static unsigned long colour(unsigned long x, unsigned long y)
 }
 
 /* The next number of a PPM header, past white space and comments; 0 on a
- * malformed header. */
+ * malformed header, one whose number passes the digits the dimension check
+ * after it can judge among them. */
 static int header_number(FILE *f, unsigned long *out)
 {
     int c = fgetc(f);
@@ -75,6 +76,9 @@ static int header_number(FILE *f, unsigned long *out)
     }
     *out = 0;
     while (c >= '0' && c <= '9') {
+        if (*out > 1000000u) {
+            return 0;
+        }
         *out = *out * 10u + (unsigned long)(c - '0');
         c = fgetc(f);
     }
@@ -122,7 +126,8 @@ static char cell_char(unsigned long left, unsigned long top, unsigned long scale
     return '?';
 }
 
-/** The number of colours among the screen's pixels. */
+/** The number of colours among the screen's pixels, or 0 when the map of
+ * the colours seen cannot be had. */
 static unsigned long colours(void)
 {
     unsigned char *seen = calloc(1u << 21, 1);
@@ -132,8 +137,8 @@ static unsigned long colours(void)
         return 0;
     }
     for (i = 0; i < width * height; i++) {
-        unsigned long c = (unsigned long)pixels[3 * i] << 16 | pixels[3 * i + 1] << 8 |
-                          pixels[3 * i + 2];
+        unsigned long c =
+            (unsigned long)pixels[3 * i] << 16 | pixels[3 * i + 1] << 8 | pixels[3 * i + 2];
 
         if (!(seen[c >> 3] & (1u << (c & 7)))) {
             seen[c >> 3] |= (unsigned char)(1u << (c & 7));
@@ -176,13 +181,19 @@ int main(int argc, char **argv)
     }
     fclose(f);
     if (count) {
-        printf("%lu\n", colours());
+        unsigned long n = colours();
+
         free(pixels);
+        if (n == 0) {
+            fprintf(stderr, "screentext: %s: no memory to count the colours\n", path);
+            return 1;
+        }
+        printf("%lu\n", n);
         return 0;
     }
     if (width / GLYPH_WIDTH < MIN_COLS || height / GLYPH_HEIGHT < MIN_ROWS) {
-        fprintf(stderr, "screentext: %s: %lux%lu is smaller than the console's grid\n", path,
-                width, height);
+        fprintf(stderr, "screentext: %s: %lux%lu is smaller than the console's grid\n", path, width,
+                height);
         return 1;
     }
     for (scale = 1; width / (GLYPH_WIDTH * (scale + 1)) >= MIN_COLS &&
