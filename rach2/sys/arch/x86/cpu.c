@@ -53,6 +53,14 @@ unsigned int arch_atomic_xchg(volatile unsigned int *p, unsigned int value)
     return value;
 }
 
+/* `cmpxchg` compares `*p` with EAX, stores `value` when they are equal, and
+ * leaves what was there in EAX; the lock prefix makes it one step. */
+unsigned int arch_atomic_cmpxchg(volatile unsigned int *p, unsigned int old, unsigned int value)
+{
+    __asm__ __volatile__("lock; cmpxchgl %2, %1" : "+a"(old), "+m"(*p) : "r"(value) : "memory", "cc");
+    return old;
+}
+
 void arch_run_on_stack(uintptr_t sp, void (*fn)(void))
 {
 #if defined(__x86_64__)

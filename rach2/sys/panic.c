@@ -92,9 +92,10 @@ display_color_t _fail_image[] = {
 
 extern void k_stop(void) K_NORETURN;
 
-/* Set by the first processor to panic, and that processor. */
-static volatile unsigned int panicking;
-static volatile int panic_cpu = -1;
+/* The first processor to panic, as its number plus one, 0 before any has;
+ * and whether it has stopped the others. */
+static volatile unsigned int panic_owner;
+static volatile int others_stopped;
 
 /*
  * Only the first processor to panic reports. A second, which an NMI sent to
@@ -104,23 +105,31 @@ static volatile int panic_cpu = -1;
  * reports writes the console without its lock (`console_lock`), which the
  * code it interrupted may hold, or be between taking and marking as its
  * own.
+ *
+ * The owner is claimed with its number in one compare-and-exchange, since an
+ * NMI that no masking keeps out can panic the owner again between any two of
+ * its steps: the nested panic finds itself the owner, and stops the others
+ * if the first has not yet.
  */
 void k_panic_begin(void)
 {
+    unsigned int me = arch_cpu_id() + 1u;
+    unsigned int owner;
+
     arch_irq_disable();
-    if (panic_cpu == (int)arch_cpu_id()) {
-        return;
-    }
-    if (arch_atomic_xchg(&panicking, 1u) != 0) {
+    owner = arch_atomic_cmpxchg(&panic_owner, 0u, me);
+    if (owner != 0u && owner != me) {
         k_stop();
     }
-    panic_cpu = (int)arch_cpu_id();
-    smp_stop_others();
+    if (!others_stopped) {
+        smp_stop_others();
+        others_stopped = 1;
+    }
 }
 
 int k_panicking(void)
 {
-    return panic_cpu == (int)arch_cpu_id();
+    return panic_owner == arch_cpu_id() + 1u;
 }
 
 /**

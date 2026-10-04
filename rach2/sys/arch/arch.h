@@ -107,6 +107,10 @@ void arch_relax(void);
  * of this processor's moves across it. */
 unsigned int arch_atomic_xchg(volatile unsigned int *p, unsigned int value);
 
+/** Store `value` at `*p` if `*p` is `old`, and return what was there, as one
+ * step no other processor's access comes between, and as a full barrier. */
+unsigned int arch_atomic_cmpxchg(volatile unsigned int *p, unsigned int old, unsigned int value);
+
 /**
  * Leave the current stack for the one ending at `sp`, allow interrupts, and
  * run `fn`, which does not return: how a process that ends hands its
