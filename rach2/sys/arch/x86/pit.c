@@ -229,36 +229,38 @@ uint32_t timer_lost_ticks(void)
 }
 
 /**
- * The clock's arithmetic on fixed inputs, as `pit.h` describes.
- *
- * The rows: the period of two sweeps agrees with the reload and the
- * crystal to a hundredth; a count at the reload is the start of the period
- * and, with OUT low, the start of the second sweep; a count a quarter in
- * reads a quarter of a sweep; a count above the reload reads as the start;
- * two readings inside one period add no period; a tick with no reading
- * ahead of it adds one; a reading behind the last one counts the wrap and
- * the tick after it adds nothing; and the next tick, with no wrap read
- * before it, adds its period. The ticks the TSC finds missed: none in a gap
- * of one tick or a little more, eight in one of nine and a half, none
- * without a calibration, and the bound for a gap whose quotient is past 32
- * bits. Another processor's place in the boot processor's tick: inside the
- * period, none pending; a period and more gone, one pending and the rest;
- * three periods gone, one pending and the place short of a period.
+ * The phase rows of `timer_clock_check`: the period of two sweeps agrees
+ * with the reload and the crystal to a hundredth; a count at the reload is
+ * the start of the period and, with OUT low, the start of the second sweep;
+ * a count a quarter in reads a quarter of a sweep; and a count above the
+ * reload reads as the start.
  */
-int timer_clock_check(void)
+static int timer_phase_rows(uint32_t p)
 {
-    uint32_t p = 2u * sweep_us();
     uint32_t want = pit_reload * 8381u / 10000u; /* 1193182 counts a second */
     uint32_t quarter = pit_phase_from(pit_reload - pit_reload / 4u, 0x80);
-    struct pit_clock c;
-    uint32_t phase;
-    int ok = 1, due;
+    int ok = 1;
 
     ok = ok && p >= want - want / 100u && p <= want + want / 100u;
     ok = ok && pit_phase_from(pit_reload, 0x80) == 0u;
     ok = ok && pit_phase_from(pit_reload, 0x00) == sweep_us();
     ok = ok && quarter + 2u >= sweep_us() / 4u && quarter <= sweep_us() / 4u + 2u;
     ok = ok && pit_phase_from(pit_reload + 5u, 0x80) == 0u;
+    return ok;
+}
+
+/**
+ * The clock rows of `timer_clock_check`, for a period of `p` microseconds:
+ * two readings inside one period add no period; a tick with no reading
+ * ahead of it adds one; a reading behind the last one counts the wrap and
+ * the tick after it adds nothing; and the next tick, with no wrap read
+ * before it, adds its period.
+ */
+static int timer_count_rows(uint32_t p)
+{
+    struct pit_clock c;
+    int ok = 1;
+
     c.periods = 0;
     c.last_phase = 0;
     c.wrapped = 0;
@@ -271,6 +273,23 @@ int timer_clock_check(void)
     ok = ok && pit_clock_read(&c, 900u, p) == 2u * p + 900u;
     pit_clock_tick(&c, 30u);
     ok = ok && pit_clock_read(&c, 40u, p) == 3u * p + 40u;
+    return ok;
+}
+
+/**
+ * The rows of `timer_clock_check` for the ticks the TSC finds missed: none
+ * in a gap of one tick or a little more, eight in one of nine and a half,
+ * none without a calibration, and the bound for a gap whose quotient is
+ * past 32 bits. Then another processor's place in the boot processor's
+ * tick: inside the period, none pending; a period and more gone, one
+ * pending and the rest; three periods gone, one pending and the place short
+ * of a period.
+ */
+static int timer_missed_rows(void)
+{
+    uint32_t phase;
+    int ok = 1, due;
+
     ok = ok && pit_ticks_missed(1000u, 0u, 1000u) == 0u;
     ok = ok && pit_ticks_missed(1900u, 0u, 1000u) == 0u;
     ok = ok && pit_ticks_missed(9500u, 0u, 1000u) == 8u;
@@ -284,6 +303,17 @@ int timer_clock_check(void)
     edge_phase(30000000u, 10000000u, &due, &phase);
     ok = ok && due && phase == 9999999u;
     return ok;
+}
+
+/**
+ * The clock's arithmetic on fixed inputs, as `pit.h` describes: the phase
+ * rows, the clock rows and the missed-tick rows, each in its own function.
+ */
+int timer_clock_check(void)
+{
+    uint32_t p = 2u * sweep_us();
+
+    return timer_phase_rows(p) && timer_count_rows(p) && timer_missed_rows();
 }
 
 /**
