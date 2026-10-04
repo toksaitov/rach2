@@ -10,15 +10,21 @@
 #
 # The kernels are built from a private copy of rach2/ and mk/, so no kernel
 # under build/ is replaced; the test image, the harness and the runner helper
-# are the ones `tests/run usb` built, and must be current.
+# are the ones `tests/run usb` built, and must be current. ARCH chooses the
+# architecture, as it does for `tests/run`.
 #
 # Usage: sh tests/system/usb_latency_mutate.sh
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
+REPO=$repo
+. "$repo/mk/arch.sh"
+RACH2_QEMU=$ARCH_QEMU
+export RACH2_QEMU
 harness=$repo/build/tests/system/harness
 runner=$repo/build/tests/system/runutil
-image=$repo/build/images/test.krffs
+image=$repo/build$ARCH_SUFFIX/images/test.krffs
 checker=$repo/build/tools/inspect/elfcheck
 for artifact in "$harness" "$runner" "$image" "$checker"; do
     if [ ! -f "$artifact" ]; then
@@ -69,14 +75,14 @@ build()
 {
     phase=$1
     # A source changed within the object's timestamp unit must still compile.
-    rm -f "$work/build/rach2-harness/sys/isr.o" "$work/build/rach2-harness/sys/syscall.o" \
-        "$work/build/rach2-harness/kernel"
-    if ! make -s -C "$work/rach2" -j4 COMPONENT=rach2-harness HARNESS=1 "ELFCHECK=$checker" \
-        >"$work/$phase.build.log" 2>&1; then
+    objects=$work/build$ARCH_SUFFIX/rach2-harness
+    rm -f "$objects/sys/arch/x86/isr.o" "$objects/sys/syscall.o" "$objects/kernel"
+    if ! make -s -C "$work/rach2" -j4 "ARCH=$RACH2_ARCH" COMPONENT=rach2-harness HARNESS=1 \
+        "ELFCHECK=$checker" >"$work/$phase.build.log" 2>&1; then
         cat "$work/$phase.build.log" >&2
         exit 1
     fi
-    cp "$work/build/rach2-harness/kernel" "$work/$phase.kernel"
+    cp "$objects/kernel" "$work/$phase.kernel"
     cksum "$isr" "$syscall" "$work/$phase.kernel" >"$work/$phase.cksum"
 }
 
@@ -113,7 +119,7 @@ import sys
 
 root = pathlib.Path(sys.argv[1])
 changes = {
-    'preempt': ('isr.c', [
+    'preempt': ('arch/x86/isr.c', [
         ('        sched_preempt(); /* a woken reader runs now, or at the call\'s exit */\n', ''),
         ('    if (params->vector != 32) {\n        sched_preempt();\n    }\n', '')]),
     'service': ('syscall.c', [
