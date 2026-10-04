@@ -205,6 +205,9 @@ void arch_tlb_flush_page(uintptr_t va)
     (void)va;
 }
 
+/* The global tick a started processor's accounting begins from. */
+volatile uint32_t kernel_ticks;
+
 uint32_t kirq_save(void)
 {
     return 0;
