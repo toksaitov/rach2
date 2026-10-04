@@ -1,16 +1,15 @@
 /*
  * smbios.c: find the firmware's table and read the BIOS vendor out of it.
  *
- * The anchor is the entry point UEFI's configuration table names, under
- * SMBIOS 3's GUID or the older one's, when the loader passed the firmware's
- * system table (SMBIOS 3.0, 5.2.1 and 5.2.2); and otherwise "_SM_" on a
- * sixteen-byte boundary between 0xF0000 and 0xFFFFF, with a checksum over
- * its own length, where a UEFI firmware need not put one. The newer "_SM3_"
- * anchor is read too, since a machine that publishes only that one is
- * otherwise a machine with no table. The anchor gives the address and length of the
- * structure table, which is a run of structures each with a four-byte header
- * followed by its formatted area and then its strings, one after another,
- * ending with an empty one.
+ * The anchor is the entry point UEFI's configuration table names, under SMBIOS
+ * 3's GUID or the older one's, when the loader passed the firmware's system
+ * table (SMBIOS 3.0, 5.2.1 and 5.2.2); and otherwise "_SM_" on a sixteen-byte
+ * boundary between 0xF0000 and 0xFFFFF, with a checksum over its own length,
+ * where a UEFI firmware need not put one. The newer "_SM3_" anchor is read too,
+ * since a machine that publishes only that one is otherwise a machine with no
+ * table. The anchor gives the address and length of the structure table, which
+ * is a run of structures each with a four-byte header followed by its formatted
+ * area and then its strings, one after another, ending with an empty one.
  *
  * Only the first structure of type 0, BIOS Information, is wanted, and out of
  * it the string its vendor field names. Everything else is stepped over.

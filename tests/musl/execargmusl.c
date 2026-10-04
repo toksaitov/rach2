@@ -10,11 +10,12 @@
  * to see it: each exec here runs in a forked child, which exits 7 when
  * `execve` returns E2BIG and 9 when it returns anything else.
  *
- * Every limit is tested at its edge: the largest vector that must work and
- * the smallest that must not. On x86-64 an argument and a variable at 4 GiB
- * and 8 GiB, whose addresses have zero low words, are delivered. The child half asserts, not reports: it exits
- * nonzero unless it was handed exactly what the parent sent, so a vector
- * delivered short is a failure and not a line in a log.
+ * Every limit is tested at its edge: the largest vector that must work and the
+ * smallest that must not. On x86-64 an argument and a variable at 4 GiB and 8
+ * GiB, whose addresses have zero low words, are delivered. The child half
+ * asserts, not reports: it exits nonzero unless it was handed exactly what the
+ * parent sent, so a vector delivered short is a failure and not a line in a
+ * log.
  *
  * Prints "EXECARGMUSL OK" on success and "EXECARGMUSL FAIL (detail)" otherwise.
  */

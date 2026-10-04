@@ -354,29 +354,28 @@ static void init_end_line(uint32_t pid, int32_t status)
 /**
  * Terminate the current user process by signal and give up its CPU.
  *
- * Shared teardown for every death by signal: a signal whose default action
- * ends the process, and a signal frame that cannot be built or read back. The
+ * Shared teardown for every death by signal: a signal whose default action ends
+ * the process, and a signal frame that cannot be built or read back. The
  * process dies by signal `signo`; the exit code stores the Linux wait-status
- * encoding of a signal death (low 7 bits = the signal), so the parent's
- * waitpid sees WIFSIGNALED/WTERMSIG. With WCOREFLAG in `signo` the process
- * leaves a core file first (`terminate_core`) when it is dumpable and its
- * soft RLIMIT_CORE allows a page, unless another thread has begun to end it:
- * the other threads are sent SIGKILL with the group's `core_dumping` set,
- * each parks before it releases anything (`core_park`), the file is written
- * once all have parked (`core_notes` waits for them) and before this thread
- * releases anything, and they go on to their end after, as Linux's
- * `do_coredump` and `coredump_wait` have it. The teardown runs as a system call does,
- * with `in_syscall` set and interrupts on, also when the signal is acted on
- * at an interrupt's return, which comes here with them off: what it
- * releases and writes may sleep in a disk that answers only by interrupt,
- * and the timer must not switch away in the middle. Interrupts go off again
- * once the process's end is published, before its record can be freed or
- * the processor given up. The whole process dies:
- * its other threads are sent SIGKILL, and the last thread to end publishes
- * the death. This thread releases the descriptor table and its reference to
- * the address space, switching off it before its page directory can be
- * freed; the last thread then posts SIGCHLD and wakes a parent blocked in
- * waitpid. A dying init panics through panic_init_died, unless the debug
+ * encoding of a signal death (low 7 bits = the signal), so the parent's waitpid
+ * sees WIFSIGNALED/WTERMSIG. With WCOREFLAG in `signo` the process leaves a
+ * core file first (`terminate_core`) when it is dumpable and its soft
+ * RLIMIT_CORE allows a page, unless another thread has begun to end it: the
+ * other threads are sent SIGKILL with the group's `core_dumping` set, each
+ * parks before it releases anything (`core_park`), the file is written once all
+ * have parked (`core_notes` waits for them) and before this thread releases
+ * anything, and they go on to their end after, as Linux's `do_coredump` and
+ * `coredump_wait` have it. The teardown runs as a system call does, with
+ * `in_syscall` set and interrupts on, also when the signal is acted on at an
+ * interrupt's return, which comes here with them off: what it releases and
+ * writes may sleep in a disk that answers only by interrupt, and the timer must
+ * not switch away in the middle. Interrupts go off again once the process's end
+ * is published, before its record can be freed or the processor given up. The
+ * whole process dies: its other threads are sent SIGKILL, and the last thread
+ * to end publishes the death. This thread releases the descriptor table and its
+ * reference to the address space, switching off it before its page directory
+ * can be freed; the last thread then posts SIGCHLD and wakes a parent blocked
+ * in waitpid. A dying init panics through panic_init_died, unless the debug
  * shell is the supervisor, in which case the shell's input state is reset and
  * this jumps back into shell_loop on a fresh kernel stack. Any other process
  * stays a zombie for the parent's waitpid to collect, and the now-READY parent

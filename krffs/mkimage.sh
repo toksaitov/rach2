@@ -8,12 +8,13 @@
 # mount: stageimage writes the whole tree (directories and files) directly as v2
 # nodes, so this works the same on macOS and Linux without a FUSE driver.
 #
-# Usage: ./mkimage.sh <manifest> <output.krffs> [size_in_megabytes [min_free_kib]]
+# Usage: ./mkimage.sh <manifest> <output.krffs> [size_mib [min_free_kib]]
 #
-# With MIN_FREE_KIB the image must keep at least that many kibibytes free once
-# staged, or the build fails: an image a running system writes to, the
-# recovery system's among them, needs the room, and contents that grow past
-# it would otherwise be found only when a write fails on the machine.
+# SIZE_MIB is the image's size in mebibytes. With MIN_FREE_KIB the image must
+# keep at least that many kibibytes free once staged, or the build fails: an
+# image a running system writes to, the recovery system's among them, needs the
+# room, and contents that grow past it would otherwise be found only when a
+# write fails on the machine.
 #
 # Run from anywhere; the manifest's `build/...` host paths resolve because this
 # cd's to the repo root first. The KRFFS host tools come from build/krffs (built

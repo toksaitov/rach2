@@ -175,13 +175,13 @@ static int has_gib_pages(void)
 /**
  * Build the kernel's PML4 with the direct map and the image.
  *
- * The direct map covers physical memory to the top of the frame table and
- * at least the first 4 GiB, where the firmware's tables and the devices'
- * registers are, up to the reach (`mmu_phys_reach`), in 1 GiB pages where
- * the processor has them (`has_gib_pages`) and in 2 MiB pages where it does
- * not. Its pages are writable and never executable. The image is mapped in 4 KiB
- * pages: its text read-only, its read-only data read-only and not
- * executable, its data and .bss writable and not executable.
+ * The direct map covers physical memory to the top of the frame table and at
+ * least the first 4 GiB, where the firmware's tables and the devices' registers
+ * are, up to the reach (`mmu_phys_reach`), in 1 GiB pages where the processor
+ * has them (`has_gib_pages`) and in 2 MiB pages where it does not. Its pages
+ * are writable and never executable. The image is mapped in 4 KiB pages: its
+ * text read-only, its read-only data read-only and not executable, its data and
+ * .bss writable and not executable.
  *
  * This PML4 has nothing in the lower half: the loader's tables, which map
  * the first 4 GiB at 0 too, are left once it is loaded.
