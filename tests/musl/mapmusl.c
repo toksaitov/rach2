@@ -209,7 +209,7 @@ static int truncated_shared(void)
 /* A truncation's cut and the bound on a mapping's pages at x86-64's widths.
    Of a file of 4 GiB and a page, truncated to 4 GiB, whose offset in bytes
    passes 32 bits, only the last page is taken out, and the first stays in
-   memory, as mincore reports. The kernel numbers the pages of a file or of
+   memory, as mincore reports of each. The kernel numbers the pages of a file or of
    shared memory in 32 bits, so a mapping of either is EOVERFLOW at 2^32
    pages, 16 TiB, as Linux's sum of the offset and the pages is at 32 bits,
    and is made at a page less. */
@@ -232,6 +232,9 @@ static int truncated_wide(void)
     if (ftruncate(fd, (off_t)four) != 0 || mincore(m, PAGE, &in) != 0 || !(in & 1)) {
         return fail("a truncation to 4 GiB took the mapping's first page out");
     }
+    if (mincore(m + four, PAGE, &in) != 0 || (in & 1)) {
+        return fail("a truncation to 4 GiB left the page past it in the mapping");
+    }
     munmap(m, four + PAGE);
     if (mmap(NULL, huge, PROT_READ, MAP_PRIVATE, fd, 0) != MAP_FAILED || errno != EOVERFLOW ||
         mmap(NULL, huge, PROT_READ, MAP_SHARED | MAP_ANONYMOUS, -1, 0) != MAP_FAILED ||
@@ -247,21 +250,11 @@ static int truncated_wide(void)
     return 0;
 }
 
-/* 1 if a child that reads (or writes, for `write`) the byte at `p` dies of
-   SIGSEGV. */
-static int segv_at(volatile char *p, int write)
+/* 1 if the child `pid` died of SIGSEGV. */
+static int died_of_segv(pid_t pid)
 {
     int status;
-    pid_t pid = fork();
 
-    if (pid == 0) {
-        if (write) {
-            *p = 'w';
-        } else {
-            (void)*p;
-        }
-        _exit(0);
-    }
     return pid > 0 && waitpid(pid, &status, 0) == pid && WIFSIGNALED(status) &&
            WTERMSIG(status) == SIGSEGV;
 }
@@ -271,13 +264,20 @@ static int segv_at(volatile char *p, int write)
    step for every page of 64 TiB would take minutes, and it reaches the page
    beyond them: mprotect of 64 TiB makes it read-only, getrusage finishes,
    a shrink to half takes it out, and a move of 32 TiB carries the page a
-   read brought in, which mincore finds in memory at its new place. */
+   read brought in, which mincore finds in memory at its new place. The
+   mprotect and the shrink each run in a child of their own, which has the
+   page in its tables before the call and touches it after with no fork
+   between: a fork would write-protect the page for copying, or leave out one
+   outside the regions, and hide a walk that missed it. The mprotect's child
+   writes the page first, so that it is its own and writable. */
 static int huge_walks(void)
 {
     const size_t big = (size_t)1 << 46, half = big / 2;
     unsigned char in = 0;
     struct rusage ru;
     char *m, *far, *moved;
+    pid_t pid;
+    int status;
 
     m = mmap(NULL, big, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
     if (m == MAP_FAILED) {
@@ -288,17 +288,44 @@ static int huge_walks(void)
         return fail("mprotect of the last page of 64 TiB");
     }
     *far = 'z';
-    if (mprotect(m, big, PROT_READ) != 0 || *far != 'z' || !segv_at(far, 1)) {
+    pid = fork();
+    if (pid == 0) {
+        *far = 'y';
+        if (mprotect(m, big, PROT_READ) != 0 || *far != 'y') {
+            _exit(1);
+        }
+        *far = 'w';
+        _exit(0);
+    }
+    if (!died_of_segv(pid)) {
         return fail("mprotect of 64 TiB did not reach its last page");
+    }
+    if (mprotect(m, big, PROT_READ) != 0) {
+        return fail("mprotect of 64 TiB to one region");
     }
     if (getrusage(RUSAGE_SELF, &ru) != 0 || ru.ru_maxrss <= 0) {
         return fail("getrusage with 64 TiB mapped");
     }
-    if (mremap(m, big, big / 2, 0) != m || !segv_at(far, 0)) {
+    pid = fork();
+    if (pid == 0) {
+        (void)*(volatile char *)far;
+        if (mremap(m, big, big / 2, 0) != m) {
+            _exit(2);
+        }
+        (void)*(volatile char *)far;
+        _exit(0);
+    }
+    if (pid < 0 || waitpid(pid, &status, 0) != pid) {
+        return fail("the child that shrinks 64 TiB");
+    }
+    if (WIFEXITED(status) && WEXITSTATUS(status) == 2) {
+        return fail("a shrink of 64 TiB to half was refused");
+    }
+    if (!WIFSIGNALED(status) || WTERMSIG(status) != SIGSEGV) {
         return fail("a shrink of 64 TiB to half kept its last page");
     }
-    if (munmap(m, big / 2) != 0) {
-        return fail("munmap of 32 TiB");
+    if (munmap(m, big) != 0) {
+        return fail("munmap of 64 TiB");
     }
     m = mmap(NULL, 2 * half, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
     if (m == MAP_FAILED || m[half - PAGE] != 0) {
