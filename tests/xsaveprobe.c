@@ -12,10 +12,10 @@
  *   keep their own across 300 ms of yields, sleeps and preemption;
  * * a signal handler starts with every YMM register zero and finds the
  *   interrupted values in its frame, in Linux's layout: UC_FP_XSTATE in
- *   the ucontext's flags, the image 64-byte aligned, its software bytes FP_XSTATE_MAGIC1, the sizes and XCR0,
- *   FP_XSTATE_MAGIC2 after the image, and XSTATE_BV marking x87, SSE and
- *   AVX in use; it clobbers every register, and the interrupted code finds
- *   its values intact;
+ *   the ucontext's flags, the image 64-byte aligned, its software bytes
+ *   FP_XSTATE_MAGIC1, the sizes and XCR0, FP_XSTATE_MAGIC2 after the
+ *   image, and XSTATE_BV marking x87, SSE and AVX in use; it clobbers
+ *   every register, and the interrupted code finds its values intact;
  * * a value a handler writes into the frame's AVX part is the register's
  *   after sigreturn;
  * * a frame whose FP_XSTATE_MAGIC1 a handler cleared gives the XMM halves
@@ -76,10 +76,10 @@
 
 /* Linux's marks of an XSAVE image in a signal frame. */
 #define FP_XSTATE_MAGIC1 0x46505853u
+#define FP_XSTATE_MAGIC2 0x46505845u
 
 /* The ucontext's flag that announces an XSAVE image at `fpstate`. */
 #define UC_FP_XSTATE 0x1ul
-#define FP_XSTATE_MAGIC2 0x46505845u
 
 /* Offsets in the XSAVE image: the XMM registers, the software bytes,
  * XSTATE_BV and XCOMP_BV. */
