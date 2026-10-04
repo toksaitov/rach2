@@ -410,9 +410,11 @@ check_images() { # check_images NAMES: 0 when every file made that is not a
     # is what proves. Only what no product covers is asked about below.
     if [ -f "$WORK/inventory.products" ]; then
         { sed -n "s|^$ARCH_BUILD/images/||p" "$WORK/inventory.products"
-          # and the dependency file make wrote beside each, which is not a
-          # target of its own and so is in no closure
+          # and the dependency file mkimage.sh wrote beside each, and the
+          # record of its programs that file names, which are not targets of
+          # their own and so are in no closure
           sed -n "s|^$ARCH_BUILD/images/||p" "$WORK/inventory.products" | sed 's/$/.d/'
+          sed -n "s|^$ARCH_BUILD/images/||p" "$WORK/inventory.products" | sed 's/$/.programs/'
         } | sort -u > "$WORK/images.products"
         comm -23 "$WORK/images.made" "$WORK/images.products" > "$WORK/images.made.new"
         mv "$WORK/images.made.new" "$WORK/images.made"
