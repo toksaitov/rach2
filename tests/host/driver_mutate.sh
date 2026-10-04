@@ -30,16 +30,15 @@ run_phase()
 {
     phase=$1
     binary="$work/$fault-$phase"
-    extra=
-    if [ "$test" = vga_text ]; then
-        extra="$work/sys/lib/kfmt.c $work/sys/lib/kstd.c"
-    fi
+    # The test's own host-deps lines, as the host suite reads them, with the
+    # kernel's sources taken from the private copy.
+    deps=$(sed -n 's/^ \* host-deps://p' "tests/host/${test}_hosttest.c" |
+        sed "s|rach2/sys/|$work/sys/|g")
     # shellcheck disable=SC2086
     if ! "${CC:-cc}" -std=c99 -DRACH2_HOSTTEST -g -O1 -ffreestanding \
         -fsanitize=address,undefined -fno-sanitize-recover=all \
         -I "$work/sys" -I "$work/sys/arch/x86" -I "$work/sys/arch/i686" -I "$work/sys/lib" \
-        "tests/host/${test}_hosttest.c" "$work/sys/lib/kstring.c" \
-        "$work/sys/lib/kctypes.c" $extra -o "$binary" \
+        "tests/host/${test}_hosttest.c" $deps -o "$binary" \
         >"$binary.compile.log" 2>&1; then
         cat "$binary.compile.log" >&2
         exit 1
