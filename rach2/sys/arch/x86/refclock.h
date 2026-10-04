@@ -13,7 +13,7 @@
  *
  * Neither interrupts anything; both are read. The HPET is enabled here,
  * with its legacy replacement left off, so the 8254 and the RTC keep their
- * lines.
+ * lines, and with every comparator's interrupt off.
  */
 
 /** Find the counter: 0 when one is ready, -1 when the machine has neither. */
@@ -29,8 +29,21 @@ uint32_t refclock_hz(void);
 uint32_t refclock_read(void);
 uint32_t refclock_mask(void);
 
-/** Wait `usec` microseconds by the counter. */
+/**
+ * The counts that cover `usec` microseconds at least, whatever fraction of a
+ * count had gone when the first was read: the quotient rounded up, and one
+ * more.
+ */
+uint32_t refclock_counts_at_least(uint32_t usec);
+
+/** Wait at least `usec` microseconds by the counter; a counter that stops
+ * ends the wait. */
 void refclock_wait_us(uint32_t usec);
+
+/** For a host test: the HPET's registers at `regs`, which `map_mmio`
+ * cannot give a host program, in place of the table's address; NULL maps
+ * the table's again. */
+void refclock_set_registers(volatile uint32_t *regs);
 
 /** `a` times `b` divided by `c`, through a 64-bit product, for a quotient
  * the caller knows fits in 32 bits. */
