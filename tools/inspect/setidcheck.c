@@ -1044,6 +1044,52 @@ static const char *first_verb(const struct manifest *m, const char *guest)
     return NULL;
 }
 
+/**
+ * Stage the trusted paths of `e` that lie inside a `tree` directive of `m`.
+ *
+ * `tree` copies every regular file under its host directory, so a pinned
+ * path under a tree's guest directory resolves to the host file the walk
+ * will copy, with the tree's mode and owner. A path already staged, or one
+ * whose host file is missing or not regular, is left alone.
+ */
+static void stage_tree_pins(const struct manifest *m, const struct entry *e,
+                            struct staged_map *staged)
+{
+    int i, j;
+
+    for (i = 0; i < m->n; i++) {
+        const struct directive *d = &m->d[i];
+        char prefix[512];
+        size_t plen;
+
+        if (strcmp(d->verb, "tree") != 0)
+            continue;
+        snprintf(prefix, sizeof(prefix), "%s", d->guest);
+        plen = strlen(prefix);
+        while (plen > 0 && prefix[plen - 1] == '/')
+            prefix[--plen] = '\0';
+        prefix[plen++] = '/';
+        prefix[plen] = '\0';
+        for (j = 0; j < e->n_trusted; j++) {
+            const char *pinned = e->trusted[j].path;
+            char host[1024], declared[1024], src[512];
+            size_t slen;
+            struct stat st;
+
+            if (strncmp(pinned, prefix, plen) != 0 || staged_find(staged, pinned) != NULL)
+                continue;
+            snprintf(src, sizeof(src), "%s", d->source);
+            slen = strlen(src);
+            while (slen > 0 && src[slen - 1] == '/')
+                src[--slen] = '\0';
+            snprintf(declared, sizeof(declared), "%s/%s", src, pinned + plen);
+            snprintf(host, sizeof(host), "%s", host_path(declared));
+            if (stat(host, &st) == 0 && S_ISREG(st.st_mode))
+                staged_add(staged, pinned, d->lineno, d->mode, d->uid, d->gid, declared, NULL);
+        }
+    }
+}
+
 /* Check one manifest against the allowlist. */
 static void check_manifest(const char *path, const struct allow *allow, struct list *problems)
 {
@@ -1070,41 +1116,7 @@ static void check_manifest(const char *path, const struct allow *allow, struct l
         return;
     }
 
-    /* A trusted path may sit inside a staged source tree: `tree` copies
-       every regular file under its host directory, so a pinned path under
-       a tree's guest directory resolves to the host file the walk will
-       copy, carrying the tree's mode and owner. */
-    for (i = 0; i < m.n; i++) {
-        const struct directive *d = &m.d[i];
-        char prefix[512];
-        size_t plen;
-
-        if (strcmp(d->verb, "tree") != 0)
-            continue;
-        snprintf(prefix, sizeof(prefix), "%s", d->guest);
-        plen = strlen(prefix);
-        while (plen > 0 && prefix[plen - 1] == '/')
-            prefix[--plen] = '\0';
-        prefix[plen++] = '/';
-        prefix[plen] = '\0';
-        for (j = 0; j < e->n_trusted; j++) {
-            const char *pinned = e->trusted[j].path;
-            char host[1024], declared[1024], src[512];
-            size_t slen;
-            struct stat st;
-
-            if (strncmp(pinned, prefix, plen) != 0 || staged_find(&staged, pinned) != NULL)
-                continue;
-            snprintf(src, sizeof(src), "%s", d->source);
-            slen = strlen(src);
-            while (slen > 0 && src[slen - 1] == '/')
-                src[--slen] = '\0';
-            snprintf(declared, sizeof(declared), "%s/%s", src, pinned + plen);
-            snprintf(host, sizeof(host), "%s", host_path(declared));
-            if (stat(host, &st) == 0 && S_ISREG(st.st_mode))
-                staged_add(&staged, pinned, d->lineno, d->mode, d->uid, d->gid, declared, NULL);
-        }
-    }
+    stage_tree_pins(&m, e, &staged);
 
     check_init_line(name, &m, e->init, problems);
 
