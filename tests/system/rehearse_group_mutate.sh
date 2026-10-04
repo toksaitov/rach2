@@ -2,13 +2,13 @@
 # Prove the rehearsal's first ext2 group (entry 91 of the shortcomings plan).
 # The installer root the rehearsal saves from is built with 16384-block
 # groups, so its 64 MiB are one whole group, which growset requires. With the
-# group size taken off the recipe, mke2fs's default of 32768 blocks leaves the
-# first group partial, and the rehearsal's setup must fail on growset before
-# it writes the base disk, the overlay or a stick.
+# recipe's group size set to mke2fs's default of 32768 blocks, the first group
+# is partial, and the rehearsal's setup must fail on growset before it writes
+# the base disk, the overlay or a stick.
 #
 # The root is built three times from the arguments of the recipe in
 # tests/system/suites.mk: as written, where it must equal the artifact the
-# rehearsal ran and growset must take it; with the group size removed, where
+# rehearsal ran and growset must take it; with the default group size, where
 # tests/system/suites/installer.sh must stop at its setup; and restored,
 # which must equal the first byte for byte. Nothing under build/ is written:
 # the mutated root goes into a private copy of the installer disk.
@@ -129,10 +129,10 @@ import sys
 
 path = pathlib.Path(sys.argv[1])
 text = path.read_text()
-old = 'mkext2.sh krffs/manifests/rach2-metal-disk.manifest $@ 64 16384\n'
+old = 'mkext2.sh krffs/manifests/rach2-metal-disk.manifest $@ 64 16384 32768\n'
 if text.count(old) != 1:
     raise SystemExit('rehearse-group-mutation: the recipe pattern is not unique')
-path.write_text(text.replace(old, 'mkext2.sh krffs/manifests/rach2-metal-disk.manifest $@ 64\n'))
+path.write_text(text.replace(old, 'mkext2.sh krffs/manifests/rach2-metal-disk.manifest $@ 64 32768 32768\n'))
 PY
 build_root mutated
 [ "$(blocks_per_group "$work/mutated.ext2")" = 32768 ]
