@@ -1,6 +1,9 @@
 #!/bin/sh
 # Prove sigmusl catches a signal frame whose ucontext lacks the saved registers.
+# The fault and the paths are i686's, whatever ARCH the run that starts it is
+# for.
 set -eu
+unset ARCH
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"

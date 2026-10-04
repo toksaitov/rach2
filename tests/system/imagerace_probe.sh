@@ -1,6 +1,8 @@
 #!/bin/sh
-# Exercise the root image rule with a compiled probe in a private tree.
+# Exercise the root image rule with a compiled probe in a private tree, the
+# i686 one whatever ARCH the run that starts it is for.
 set -eu
+unset ARCH
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
