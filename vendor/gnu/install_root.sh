@@ -192,9 +192,9 @@ ln -s var/run "$TREE/run"
 # no file in /usr/bin, /bin, /usr/sbin or /sbin answers for, as ps, mount
 # and which, is linked to /bin/busybox where BusyBox's own install puts it.
 # The build host runs the BusyBox the manifest stages, which is static, for
-# the list, from the build: the stager writes the tree's files without their
-# modes, which mkext2.sh gives the volume afterwards.
-"$REPO/build/vendor/busybox/busybox" --list-full > "$WORK/applets"
+# the list, from the architecture's build: the stager writes the tree's files
+# without their modes, which mkext2.sh gives the volume afterwards.
+"$REPO/build$ARCH_SUFFIX/vendor/busybox/busybox" --list-full > "$WORK/applets"
 applets=0
 while IFS= read -r applet; do
     name=${applet##*/}
