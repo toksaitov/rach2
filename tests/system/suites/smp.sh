@@ -11,7 +11,9 @@
 # munmap across them, which a page unmapped on one processor and read on
 # another ends (tests/musl/smpmusl.c). Each boot names its own count, which
 # the runner's shim keeps, so the suite's counts are its own whatever
-# RACH2_CPUS says.
+# RACH2_CPUS says. A fourth boot, with two processors, runs the debug shell's
+# preemption test, whose two kernel threads must each be preempted by the
+# tick and run again.
 #
 # Then the installed system boots from its disk with four processors, as
 # the unprivileged test account, compiles the staged ish sources four times
@@ -95,6 +97,18 @@ probe() {
 probe 1 "" 1
 probe 4 "" 4
 probe 4 "maxcpus=2" 2
+
+# The debug shell's preemption test with two processors: two kernel threads
+# that print by turns, each begun by its first switch holding the big lock
+# once, so that the tick that preempts it can take the lock again.
+"$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
+    --qemu-arg=-cpu --qemu-arg=max --qemu-arg=-smp --qemu-arg=2 \
+    --append "rach2.rescue" --timeout "$(scaled 120)" --steptmo "$(scaled 90)" \
+    --ok "Preemptive scheduling test passed!" --never "test FAILED" \
+    --log "$DISK.preempt.log" \
+    "expect=Type 'help'" "send=preempt" ||
+    fail "the debug shell's preemption test did not pass with two processors; see $DISK.preempt.log"
+echo "smp-test: ok: the debug shell's two threads were preempted by turns"
 
 # The installed system with four processors, at its console.
 rm -f "$FEED"

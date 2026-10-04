@@ -417,9 +417,15 @@ void proc_set_comm(process_t *p, const char *path)
  * Prime a new process's kernel stack for its first context switch, which
  * returns into `entry_point`: the architecture lays the stack out as its
  * `switch_context` expects to find it (`arch_context_init`).
+ *
+ * The switch passes the big lock to the thread it enters, and `schedule`
+ * gives the processor that thread's depth, so the thread begins holding the
+ * lock once, as a forked child and an idle task do; with a depth of 0 its
+ * first interrupt would wait for the lock its own processor holds.
  */
 void setup_process_stack(process_t *proc, void (*entry_point)(void))
 {
+    proc->bkl_depth = 1;
     arch_context_init(proc, entry_point);
 }
 

@@ -1692,8 +1692,9 @@ run-tcc: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdpmake c
 	    "`cat krffs/rach2_demo_password`" "`cat krffs/rach2_test_password`"
 # `tests/run smp`: the kernel on one processor, on four and on two of four,
 # each finding its processors and passing a stress of fork, exec, pipes,
-# futexes and munmap across them, and a parallel build on the installed
-# system that runs on every one of four (see tests/system/suites/smp.sh).
+# futexes and munmap across them, the debug shell's preemption test on two,
+# and a parallel build on the installed system that runs on every one of four
+# (see tests/system/suites/smp.sh).
 SMP_TEST_DISK = $(IMAGES_DIR)/smp-test.disk
 run-smp: $(DEMO_CREDS) rach2 utils tests krffs test-image check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(HARNESS)
 	@mkdir -p $(IMAGES_DIR)
