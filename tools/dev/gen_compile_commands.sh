@@ -29,6 +29,9 @@
 # regenerable; rerun this after adding/removing a source or changing flags.
 #
 set -u
+# The units are i686's but rach2-x86_64, which names its architecture; an
+# architecture taken from the environment would make every unit x86-64's.
+unset ARCH RACH2_ARCH
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 OUT="$REPO/compile_commands.json"
