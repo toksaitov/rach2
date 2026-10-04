@@ -100,6 +100,14 @@ x86-64 has no
 each operation is a call of its own, numbered in
 .Xr syscalls 2 ,
 with its arguments in the x86-64 registers in the order above;
+.Nm send
+and
+.Nm recv
+have none, and are
+.Nm sendto
+(44) and
+.Nm recvfrom
+(45) with a null address and a zero length,
 .Nm accept
 (43) is
 .Nm accept4
