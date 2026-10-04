@@ -2595,6 +2595,19 @@ static int mount_permanent(const struct vfs_mount *m)
     return 0;
 }
 
+/**
+ * Drop what a refused mount read of device `dev` from the cache, as an
+ * unmount does. The disk's nodes read and write the device itself, past the
+ * cache, so a block the refused constructor left there would be stale once a
+ * program wrote the device, as mkfs does, and the next mount would read it.
+ */
+static void mount_refused(block_device_t *dev)
+{
+    if (dev) {
+        (void)bcache_invalidate(dev);
+    }
+}
+
 /** Construct permanent mount `idx` of `type` at `path`; a failure panics. */
 static void install(int idx, const struct vfs_type *type, const char *path,
                     struct vfs_mount *parent, const char *options)
@@ -2716,6 +2729,7 @@ int vfs_init_root(const struct vfs_type *type, struct block_device *dev, const c
     rc = type->mount(m, dev, 0, 0);
     if (rc != 0) {
         k_memset(m, 0, sizeof(*m));
+        mount_refused(dev);
         return rc;
     }
     m->state = VFS_ACTIVE;
@@ -3022,6 +3036,7 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
         m->parent->refs--;
         devfs_release_claim(claim);
         mount_release(m);
+        mount_refused(dev);
         return rc;
     }
     m->state = VFS_ACTIVE;
