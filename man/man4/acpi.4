@@ -158,4 +158,7 @@ A device without MSI is served on the ISA line its interrupt line
 register gives; one whose interrupt reaches only the I/O APIC's inputs
 above 15 takes no interrupts, and only its driver's polling serves it.
 .Pp
-Only the processor the kernel booted on is used.
+The other processors the MADT lists enabled are started and take work, up
+to the kernel's 64 and the
+.Ql maxcpus
+the boot line gives.

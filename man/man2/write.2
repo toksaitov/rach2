@@ -291,8 +291,7 @@ A signal interrupted a wait, or a background terminal write posted
 The vector count is outside 0 through 1024, a vector length exceeds
 2147483647, or the next length would overflow the running byte total.
 .Fn pwrite
-was given a negative offset, a count past 2147483647 or an end past the
-signed 64-bit range.
+was given a negative offset or an end past the signed 64-bit range.
 A raw write has an offset or length not divisible by 512.
 A device control write has an invalid argument or command.
 .It Er EIO

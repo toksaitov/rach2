@@ -52,12 +52,15 @@ USB raw writes issue ordinary SCSI writes without a device-cache flush;
 success does not guarantee that the data is durable.
 .Ss Boot devices
 .Pa /dev/bootpart
-accesses MBR entry 1 of the selected boot disk.
+accesses entry 1 of the selected boot disk's table, MBR or GUID.
 The entry must describe a FAT32 partition starting at or after LBA 2048,
 smaller than 2 GiB, and overlapping no other partition.
 .Pa /dev/grubcore
-accesses LBA 1 through 2047 when no partition overlaps that range.
-It does not include sector zero.
+accesses, on an MBR disk, LBA 1 through 2047 when no partition overlaps
+that range, and on a GUID disk the sectors of its one BIOS boot partition,
+clear of sector zero, the headers and the entry array; offset zero is the
+partition's first sector, LBA 34 on the disks this system builds.
+Neither includes sector zero.
 .Pp
 Both boot devices are character devices with mode 0600.
 Their reads and writes require sector-aligned offsets and lengths.
