@@ -16,9 +16,10 @@ ln -s "$WORK/victim" "$WORK/rach2_verify/verify_build.log"
 # Redirect the old fixed /tmp name into this test's private directory. The
 # setup is the lines from VDIR= to the one that prints the directory; without
 # both, the copy would run the rest of check.sh, this test's call included.
-grep -q '^VDIR=' "$REPO/tools/verify/check.sh" &&
-    grep -q "^printf 'verify-style: logs" "$REPO/tools/verify/check.sh" ||
+if ! grep -q '^VDIR=' "$REPO/tools/verify/check.sh" ||
+    ! grep -q "^printf 'verify-style: logs" "$REPO/tools/verify/check.sh"; then
     fail "check.sh has no VDIR= line or no line that prints the logs directory"
+fi
 printf 'make() { :; }\n' > "$WORK/setup.sh"
 awk '
     /^VDIR=/ { setup = 1 }

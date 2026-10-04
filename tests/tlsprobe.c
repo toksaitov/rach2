@@ -248,7 +248,7 @@ static int solo_phase(int fails)
  * it inherited did not read the parent's sentinels, 7 when it could not
  * set its own, and 1 on a mismatch. Does not return.
  */
-static void iso_child(int to_child[2], int to_parent[2])
+static void iso_child(const int to_child[2], const int to_parent[2])
 {
     long tv2[2];
     char token;
@@ -300,7 +300,7 @@ static void iso_child(int to_child[2], int to_parent[2])
  * round of the byte it sends the child and gets back. `fails` is the count
  * of failures so far, and the new count is returned.
  */
-static int iso_switches(int to_child[2], int to_parent[2], int fails)
+static int iso_switches(const int to_child[2], const int to_parent[2], int fails)
 {
     long tv2[2];
     char token;
@@ -343,7 +343,7 @@ static int iso_switches(int to_child[2], int to_parent[2], int fails)
  * with end of file. `fails` is the count of failures so far, and the new
  * count is returned.
  */
-static int iso_parent(int pid, int to_child[2], int to_parent[2], int fails)
+static int iso_parent(int pid, const int to_child[2], const int to_parent[2], int fails)
 {
     int status = -1;
     int got;
