@@ -9,8 +9,14 @@ cd "$repo"
 mkdir -p build
 work=$(mktemp -d "$repo/build/install-keys-proof.XXXXXX")
 echo "install-keys-mutation: logs: $work"
+# The tree with its built programs, so nothing is built again, and without
+# the images, which the rows make, the GNU layers, the failed runs' logs and
+# the other proofs' work, a hundred gigabytes on a host that has built the
+# GNU system.
 rsync -a --exclude=/.git --exclude=/build/.run.lock --exclude=/build/images \
-    --exclude='/build/install-keys-proof.*' "$repo/" "$work/tree/"
+    --exclude='/build/*/images' --exclude=/build/vendor/gnu --exclude='/build/*/vendor/gnu' \
+    --exclude=/build/tests/failed --exclude='/build/machine-*' --exclude='/build/*-proof.*' \
+    "$repo/" "$work/tree/"
 cd "$work/tree"
 source="$work/tree/utils/rach2-install"
 cp "$source" "$work/installer.saved"

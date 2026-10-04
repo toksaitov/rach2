@@ -29,8 +29,13 @@ cd "$repo"
 mkdir -p build
 work=$(mktemp -d "$repo/build/recovery-disk-key-proof.XXXXXX")
 echo "recovery-disk-key-mutation: logs: $work"
+# The tree with its built programs, so nothing is built again, and without
+# the images, which the rows make, the GNU layers and the failed runs' logs,
+# a hundred gigabytes on a host that has built the GNU system.
 rsync -a --exclude=/.git --exclude=/build/.run.lock --exclude=/build/images \
-    --exclude='/build/machine-*' --exclude='/build/*-proof.*' "$repo/" "$work/tree/"
+    --exclude='/build/*/images' --exclude=/build/vendor/gnu --exclude='/build/*/vendor/gnu' \
+    --exclude=/build/tests/failed --exclude='/build/machine-*' --exclude='/build/*-proof.*' \
+    "$repo/" "$work/tree/"
 cd "$work/tree"
 init_source="$work/tree/utils/init.c"
 installer_source="$work/tree/utils/rach2-install"
