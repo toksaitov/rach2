@@ -4,6 +4,15 @@ set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+# The architecture, from ARCH as mk/arch.sh reads it: its build tree and its
+# emulator.
+RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
+REPO=$repo
+. "$repo/mk/arch.sh"
+RACH2_QEMU=$ARCH_QEMU
+export RACH2_QEMU
+kernel=build$ARCH_SUFFIX/rach2/kernel
+probe=build$ARCH_SUFFIX/tests/ext2probe
 [ ! -d build/.run.lock ] || {
     echo "ext2-batch-mutation: another suite owns this tree" >&2; exit 1;
 }
@@ -29,8 +38,8 @@ stop_child()
 
 rebuild()
 {
-    rm -f build/rach2/sys/fs/ext2.o build/rach2/kernel
-    make -s rach2
+    rm -f "build$ARCH_SUFFIX/rach2/sys/fs/ext2.o" "$kernel"
+    make -s rach2 "ARCH=$RACH2_ARCH"
 }
 
 restore()
@@ -86,9 +95,9 @@ run_phase()
     failure=${4:-rewrite}
     rebuild >"$work/$phase.build.log" 2>&1
     cat "$work/$phase.build.log"
-    cp build/rach2/kernel "$work/$phase.kernel"
+    cp "$kernel" "$work/$phase.kernel"
     cp "$work/base.disk" "$work/$phase.disk"
-    cksum "$source" "$work/$phase.kernel" "$work/probe.krffs" build/tests/ext2probe \
+    cksum "$source" "$work/$phase.kernel" "$work/probe.krffs" "$probe" \
         >"$work/$phase.artifacts"
     build/tests/system/runutil group build/tests/system/harness \
         --kernel "$work/$phase.kernel" --initrd "$work/probe.krffs" \
@@ -123,10 +132,10 @@ run_phase()
 echo "ext2-batch-mutation: logs: $work"
 make -s krffs build/tests/system/harness build/tests/system/runutil \
     build/tools/image/mkmbr >"$work/build.log" 2>&1
-make -s -C tests ../build/tests/ext2probe >>"$work/build.log" 2>&1
+make -s -C tests "../$probe" "ARCH=$RACH2_ARCH" >>"$work/build.log" 2>&1
 cat "$work/build.log"
-cat >"$work/probe.manifest" <<'EOF'
-file 0755 /ext2probe build/tests/ext2probe
+cat >"$work/probe.manifest" <<EOF
+file 0755 /ext2probe $probe
 EOF
 dd if=/dev/zero of="$work/probe.krffs" bs=1048576 count=2 2>"$work/image.log"
 build/krffs/mkfs.krffs "$work/probe.krffs" >>"$work/image.log" 2>&1
@@ -134,7 +143,7 @@ build/krffs/stageimage.krffs "$work/probe.manifest" "$work/probe.krffs" \
     >>"$work/image.log" 2>&1
 cat "$work/image.log"
 build/krffs/readfile.krffs "$work/probe.krffs" /ext2probe "$work/probe.staged"
-cmp build/tests/ext2probe "$work/probe.staged"
+cmp "$probe" "$work/probe.staged"
 . tools/setup/e2fsprogs_path.sh
 sh tests/system/mkext2fixture.sh "$work/base.disk" build/tools/image/mkmbr \
     >"$work/fixture.log" 2>&1
