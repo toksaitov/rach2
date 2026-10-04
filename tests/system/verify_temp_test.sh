@@ -13,12 +13,17 @@ printf 'keep this file\n' > "$WORK/victim"
 cp "$WORK/victim" "$WORK/expected"
 ln -s "$WORK/victim" "$WORK/rach2_verify/_abi.c"
 ln -s "$WORK/victim" "$WORK/rach2_verify/verify_build.log"
-# Redirect the old fixed /tmp name into this test's private directory.
+# Redirect the old fixed /tmp name into this test's private directory. The
+# setup is the lines from VDIR= to the one that prints the directory; without
+# both, the copy would run the rest of check.sh, this test's call included.
+grep -q '^VDIR=' "$REPO/tools/verify/check.sh" &&
+    grep -q "^printf 'verify-style: logs" "$REPO/tools/verify/check.sh" ||
+    fail "check.sh has no VDIR= line or no line that prints the logs directory"
 printf 'make() { :; }\n' > "$WORK/setup.sh"
 awk '
     /^VDIR=/ { setup = 1 }
-    /^LIBC=/ { setup = 0 }
     setup { gsub("/tmp/rach2_verify", "${TMPDIR}/rach2_verify"); print }
+    /^printf .verify-style: logs/ { setup = 0 }
     /^if make -C rach2 / { print; print "    :; fi" }
     /printf.*int main\(void\).*VDIR/ { print }
 ' "$REPO/tools/verify/check.sh" >> "$WORK/setup.sh"
