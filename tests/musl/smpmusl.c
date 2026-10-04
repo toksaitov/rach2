@@ -25,7 +25,8 @@
  * time-stamp counter, measured against the clock on the first processor,
  * since a clock read wrong on the last processor would time its own sleeps
  * wrong too, and must last its request less the slack of the clock's
- * reading.
+ * reading. A sleep ends at a tick, so each begins after a spin of its own
+ * length, at a different place in the tick.
  *
  * Prints "SMPMUSL OK (N processors)" on success and "SMPMUSL FAIL (detail)"
  * otherwise.
@@ -421,7 +422,8 @@ static long long mono_ns(void)
 
 /*
  * The counter's rate, from the clock on the first processor over 200 ms;
- * then on the last, sleeps of 1 to 16 ms, each timed by the counter.
+ * then on the last, sleeps of 1 to 16 ms, each timed by the counter and
+ * begun after a spin of 0 to 10 ms.
  */
 static int sleeps(void)
 {
@@ -451,6 +453,9 @@ static int sleeps(void)
     for (i = 0; i < SLEEPS; i++) {
         want = 1000000LL + (i * 2770000LL) % 15000000LL;
         req.tv_nsec = (long)want;
+        t0 = tsc() + (unsigned long long)((double)((i * 3700000LL) % 10000000LL) * per_ns);
+        while (tsc() < t0) {
+        }
         t0 = tsc();
         nanosleep(&req, NULL);
         t1 = tsc();
