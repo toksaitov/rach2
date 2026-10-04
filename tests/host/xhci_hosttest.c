@@ -1631,8 +1631,9 @@ static void dma32_pool_rows(void)
     model_reset();
     reg[R_HCCPARAMS1] &= ~1u;
     CHECK("a controller without AC64 is read", xhci_read_caps(hc) == 0 && !hc->dma64);
-    CHECK("its context array from the DMA pool", in_pool(hc->dcbaa) && pool_out == 1 &&
-                                                    hc->dcbaa_phys == (uintptr_t)virt_to_phys(hc->dcbaa));
+    CHECK("its context array from the DMA pool",
+          in_pool(hc->dcbaa) && pool_out == 1 &&
+              hc->dcbaa_phys == (uintptr_t)virt_to_phys(hc->dcbaa));
     CHECK("it starts", xhci_halt_reset(hc) == 0 && xhci_start(hc) == 0);
     reg[M_PORTSC(0)] |= M_PORTSC_CCS | (3u << 10);
     xhci_device_open(hc, &where, USB_SPEED_HIGH);

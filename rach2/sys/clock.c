@@ -202,9 +202,9 @@ static void rtc_add_step(int64_t *seconds, int64_t *nanoseconds)
  * Time since boot now: the uptime seconds, the ticks of this second and the
  * timer's place within the tick; the caller has interrupts off.
  *
- * The tick's interrupt can be pending after the counter wraps. Read its pending bit on both
- * sides of the latch; if it changed, latch again. A pending tick belongs to
- * the new period even before the handler counts it.
+ * The tick's interrupt can be pending after the counter wraps. Read its pending
+ * bit on both sides of the latch; if it changed, latch again. A pending tick
+ * belongs to the new period even before the handler counts it.
  */
 static void rtc_since_boot(uint32_t *uptime, uint32_t *ticks, uint32_t *phase_ns)
 {

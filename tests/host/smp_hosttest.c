@@ -221,13 +221,15 @@ int main(void)
           "a processor that runs a thread of the directory is interrupted to drop the page");
     check(ipis[2] == 0 && cpu_table[2].space_stale,
           "an idle processor that kept the directory is not interrupted and has it marked stale");
-    check(ipis[3] == 0 && !cpu_table[3].space_stale, "a processor in another directory is left alone");
+    check(ipis[3] == 0 && !cpu_table[3].space_stale,
+          "a processor in another directory is left alone");
     check(ipis[0] == 0, "the caller does not interrupt itself");
 
     place(1, DIR_B, &user_b);
     smp_space_release(DIR_A);
-    check(ipis[2] == 1 && cpu_table[2].space == KERNEL_DIR,
-          "before a directory is freed, an idle processor that kept it gives it up for the kernel's");
+    check(
+        ipis[2] == 1 && cpu_table[2].space == KERNEL_DIR,
+        "before a directory is freed, an idle processor that kept it gives it up for the kernel's");
     check(ipis[1] == 0 && ipis[3] == 0 && cpu_table[1].space == DIR_B,
           "a release leaves processors in other directories alone");
 

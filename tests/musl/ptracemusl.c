@@ -1026,7 +1026,8 @@ static int listen_and_continue(void)
     if (ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 ||
         expect_stop(pid, SIGSTOP, "the second SIGSTOP made no signal-delivery stop") ||
         ptrace(PTRACE_CONT, pid, NULL, (void *)(long)SIGSTOP) != 0 ||
-        expect_stop(pid, SIGSTOP | (PTRACE_EVENT_STOP << 8), "the second stop was not a group stop") ||
+        expect_stop(pid, SIGSTOP | (PTRACE_EVENT_STOP << 8),
+                    "the second stop was not a group stop") ||
         ptrace(PTRACE_LISTEN, pid, NULL, NULL) != 0 || kill(pid, SIGCONT) != 0 ||
         expect_stop(pid, SIGTRAP | (PTRACE_EVENT_STOP << 8),
                     "the stop's end during PTRACE_LISTEN made no new event stop") ||
@@ -1187,8 +1188,8 @@ int main(void)
 {
     if (memory_and_registers() || mem_after_end() || syscalls_and_exec() || syscall_changes() ||
         killed_at_entry() || restart_cancelled() || attach() || attach_stopped() ||
-        listen_and_continue() || interrupt_read() || seized_fork() || stopped_leader() || traced_thread_usage() ||
-        tracer_first() || killed_tracee()) {
+        listen_and_continue() || interrupt_read() || seized_fork() || stopped_leader() ||
+        traced_thread_usage() || tracer_first() || killed_tracee()) {
         return 1;
     }
     printf("PTRACEMUSL OK\n");

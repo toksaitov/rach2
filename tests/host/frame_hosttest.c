@@ -431,16 +431,15 @@ static uint64_t uefi_group(uint32_t k)
 }
 
 /**
- * A map shaped as a UEFI firmware gives one, through GRUB's conversion of
- * its types, with the record's whole BOOT_MMAP_MAX entries: the first
- * 640 KiB, then UEFI_GROUPS runs of 16 MiB each listed as two usable
- * entries and closed by 64 KiB of runtime, ACPI or NVS memory, the
- * platform's ranges below 4 GiB, and 12 GiB above it with a hole, its last
- * range in as many adjacent pieces as fill the record. With x86-64's reach all of
- * it is usable; with i686's the 12 GiB less the hole is unreachable. The
- * boot's reservations on it, the kernel, eight modules each inside a run
- * and the break, and the frame table at the top, all fit the ranges the
- * map keeps.
+ * A map shaped as a UEFI firmware gives one, through GRUB's conversion of its
+ * types, with the record's whole BOOT_MMAP_MAX entries: the first 640 KiB, then
+ * UEFI_GROUPS runs of 16 MiB each listed as two usable entries and closed by 64
+ * KiB of runtime, ACPI or NVS memory, the platform's ranges below 4 GiB, and 12
+ * GiB above it with a hole, its last range in as many adjacent pieces as fill
+ * the record. With x86-64's reach all of it is usable; with i686's the 12 GiB
+ * less the hole is unreachable. The boot's reservations on it, the kernel,
+ * eight modules each inside a run and the break, and the frame table at the
+ * top, all fit the ranges the map keeps.
  */
 static void uefi(void)
 {

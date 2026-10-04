@@ -6,12 +6,13 @@
 # suite that needs one of these names it as a prerequisite.
 # tools/verify/check.sh refuses a rule under tests/ that makes a product.
 #
-# The tools the disk and stick scripts run are named in the root Makefile,
-# which needs them before this point: the MBR and GUID table writers, which
-# krffs/mkdisk.sh and tools/image/mkdisk_grub.sh build on demand as well; the stick image's judge, linked with the kernel's
-# own MBR reader so the rules it applies are the kernel's; and the exFAT
-# builder and reader, which the exfat suite uses too and which the sticks'
-# volume is written with. What builds them is here.
+# The tools the disk and stick scripts run are named in the root Makefile, which
+# needs them before this point: the MBR and GUID table writers, which
+# krffs/mkdisk.sh and tools/image/mkdisk_grub.sh build on demand as well; the
+# stick image's judge, linked with the kernel's own MBR reader so the rules it
+# applies are the kernel's; and the exFAT builder and reader, which the exfat
+# suite uses too and which the sticks' volume is written with. What builds them
+# is here.
 $(MKMBR): tools/image/mkmbr.c
 	@mkdir -p $(dir $@)
 	$(HOST_LINK)

@@ -36,15 +36,15 @@
 #    table's sectors before the partition and the backup table at the disk's
 #    end are the same bytes after both installs.
 # 6. An install onto a 4 TiB NVMe disk, past the 2 TiB an MBR addresses. The
-#    stick boots by OVMF beside the disk, `rach2-install` is answered over
-#    SSH and grows the root into the whole disk, and the disk then boots by
-#    OVMF alone; on i686 both boots are by SeaBIOS, since OVMF gives the
-#    controller's 64-bit BAR an address above 4 GiB, which the i686 kernel
-#    does not reach, and SeaBIOS one below it. Then the first account logs
-#    in with the demonstration key the install took as its authorized key,
-#    and `df` finds the root on the NVMe disk and larger than 2 TiB. The disk is a sparse file, and QEMU turns
-#    the zeroed blocks the grow writes, its new groups' inode tables, back
-#    into holes.
+#    stick boots by OVMF beside the disk, `rach2-install` is answered over SSH
+#    and grows the root into the whole disk, and the disk then boots by OVMF
+#    alone; on i686 both boots are by SeaBIOS, since OVMF gives the controller's
+#    64-bit BAR an address above 4 GiB, which the i686 kernel does not reach,
+#    and SeaBIOS one below it. Then the first account logs in with the
+#    demonstration key the install took as its authorized key, and `df` finds
+#    the root on the NVMe disk and larger than 2 TiB. The disk is a sparse file,
+#    and QEMU turns the zeroed blocks the grow writes, its new groups' inode
+#    tables, back into holes.
 # 7. A GPT disk whose primary header does not check, which GRUB's BIOS core
 #    cannot boot: it reads no backup table. The stick boots by SeaBIOS beside
 #    it, since OVMF, as EDK2's firmware does, writes such a primary again from

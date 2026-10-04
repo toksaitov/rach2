@@ -14,16 +14,16 @@
  *
  * `sched_yield` returns 0. Every process has SCHED_OTHER with priority 0, and
  * asking for it, with SCHED_RESET_ON_FORK or not, succeeds; SCHED_FIFO and
- * SCHED_RR are refused with EPERM, and the other policies, a priority that
- * does not suit its policy, and an unknown policy with EINVAL. The priority
- * ranges are Linux's, and the time slice is one 10 ms tick. The affinity is
- * every processor /proc/cpuinfo lists, read raw as the bytes of a long
- * written, four on i386 and eight on x86-64, on a machine of fewer than 32
- * processors; a mask of the last processor alone is accepted, kept, and
- * moves the caller there, as getcpu then says, and one of a processor past
- * the last is refused. A caller of another user may not change root's
- * process, and a pid of no process is refused with ESRCH. musl answers the policy and parameter
- * calls with ENOSYS itself, so those rows call the kernel through `syscall`.
+ * SCHED_RR are refused with EPERM, and the other policies, a priority that does
+ * not suit its policy, and an unknown policy with EINVAL. The priority ranges
+ * are Linux's, and the time slice is one 10 ms tick. The affinity is every
+ * processor /proc/cpuinfo lists, read raw as the bytes of a long written, four
+ * on i386 and eight on x86-64, on a machine of fewer than 32 processors; a mask
+ * of the last processor alone is accepted, kept, and moves the caller there, as
+ * getcpu then says, and one of a processor past the last is refused. A caller
+ * of another user may not change root's process, and a pid of no process is
+ * refused with ESRCH. musl answers the policy and parameter calls with ENOSYS
+ * itself, so those rows call the kernel through `syscall`.
  *
  * /proc/self/oom_score_adj reads 0 at first and is root's, mode 0644, while
  * the process is dumpable; a write, opened as a shell's redirection opens

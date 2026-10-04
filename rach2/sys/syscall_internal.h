@@ -42,7 +42,7 @@ long sys_ftruncate(isr_params_t *params);
  * register's width, and the largest such value: 32 bits on i686 and 64 on
  * x86-64, by the width of the frame's own registers, so a host test of the
  * i686 kernel reads them as the kernel does whatever `long` is there. */
-#define SC_SIGNED(p, n)                                                    \
+#define SC_SIGNED(p, n) \
     (sizeof(SC_RET(p)) == 4 ? (long long)(int32_t)SC_ARG(p, n) : (long long)SC_ARG(p, n))
 #define SC_SIGNED_MAX(p) (~(uint64_t)0 >> (65 - 8 * sizeof(SC_RET(p))))
 

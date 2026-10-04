@@ -20,9 +20,9 @@
 # the file is sparse on the host. The group size and the inode ratio are
 # mke2fs's for the size unless given. A grow keeps the number of inodes in a
 # group and writes a zeroed inode table for every group it adds, so the ratio
-# sets what a grow to a large disk writes. Run from anywhere; the manifest's `build/...`
-# host paths resolve because this cd's to the repo root first, and so does
-# PROGRAM's.
+# sets what a grow to a large disk writes. Run from anywhere; the manifest's
+# `build/...` host paths resolve because this cd's to the repo root first, and
+# so does PROGRAM's.
 #
 # --overlay runs PROGRAM with the staged directory as its one argument, after
 # the manifest is staged and before the volume is written, for a system that

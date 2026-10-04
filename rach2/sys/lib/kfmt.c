@@ -109,17 +109,16 @@ void k_vprintf(putc_fn_t putc_fn, const char *format, va_list ap)
                 if (!str)
                     str = "(null)";
 
-            string:
-                {
-                    size_t len = 0;
+            string: {
+                size_t len = 0;
 
-                    while (str[len])
-                        len++;
-                    while ((int)len < width) {
-                        putc_fn(fill);
-                        width--;
-                    }
+                while (str[len])
+                    len++;
+                while ((int)len < width) {
+                    putc_fn(fill);
+                    width--;
                 }
+            }
                 while (*str)
                     putc_fn(*str++);
                 break;

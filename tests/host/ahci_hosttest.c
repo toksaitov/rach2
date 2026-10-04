@@ -807,8 +807,8 @@ static void dma32_rows(void)
         return;
     }
     for (i = 0, same = 1; i < 2048; i++) {
-        same &= d->bounce->page[0][i] == out[2048 + i] &&
-                d->bounce->page[1][i] == out[4096 + i] && d->bounce->page[2][i] == out[8192 + i];
+        same &= d->bounce->page[0][i] == out[2048 + i] && d->bounce->page[1][i] == out[4096 + i] &&
+                d->bounce->page[2][i] == out[8192 + i];
     }
     CHECK("holding the bytes written", same);
 
@@ -823,8 +823,7 @@ static void dma32_rows(void)
     CHECK("a read into a buffer above 4 GiB is given",
           ahci_run_command(d, ATA_READ_DMA_EXT, 0, 16, back + 2048, 2 * 4096, 0) == 0);
     for (i = 0, same = 1; i < 2048; i++) {
-        same &= back[2048 + i] == (uint8_t)(i * 3u) &&
-                back[4096 + i] == (uint8_t)(31u + i * 3u) &&
+        same &= back[2048 + i] == (uint8_t)(i * 3u) && back[4096 + i] == (uint8_t)(31u + i * 3u) &&
                 back[6144 + i] == (uint8_t)(31u + (i + 2048) * 3u) &&
                 back[8192 + i] == (uint8_t)(62u + i * 3u);
     }

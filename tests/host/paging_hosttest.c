@@ -51,11 +51,11 @@
  * stack's lowest byte, above the guard, with the handler's general panic.
  * Each runs in a forked child, whose exit status says which panic came.
  *
- * tests/host/paging_mutate.sh compiles the old rounding, the old loop
- * bounded by `va_start + size`, the refusal without its exception for
- * address 0, the handler without its test of the guard page, and four
- * faults of the temporary mappings, and requires each to fail its row. Returns 0 when every row passes, 1
- * otherwise.
+ * tests/host/paging_mutate.sh compiles the old rounding, the old loop bounded
+ * by `va_start + size`, the refusal without its exception for address 0, the
+ * handler without its test of the guard page, and four faults of the temporary
+ * mappings, and requires each to fail its row. Returns 0 when every row passes,
+ * 1 otherwise.
  */
 
 #include "mm/paging.c"
@@ -468,7 +468,8 @@ static void temp_rows(void)
         held[i] = kmap_temp(0x9000000u);
         wrong |= held[i] == 0;
     }
-    check(!wrong && kmap_temp(0xA000000u) == 0, "with every temporary slot held, a mapping is refused");
+    check(!wrong && kmap_temp(0xA000000u) == 0,
+          "with every temporary slot held, a mapping is refused");
     for (i = 0; i < KVA_TEMP_SLOTS; i++) {
         kunmap_temp(held[i]);
     }

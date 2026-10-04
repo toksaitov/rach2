@@ -318,12 +318,13 @@ static int parse_count(const char *text, int cap)
 /**
  * Make the idle tasks and start the processors.
  *
- * The boot processor's idle task is made first, since scheduling needs one
- * on every processor: a process that blocks or ends leaves for it when
- * nothing else is ready. Its stack is laid out for a first switch into
- * `sched_idle_loop`; a started processor runs its own from its start. `maxcpus=N` limits the
- * processors to N, the boot one counted, as Linux's does; 0 and 1 both leave it alone. A processor
- * that does not answer is reported, and the next is still tried.
+ * The boot processor's idle task is made first, since scheduling needs one on
+ * every processor: a process that blocks or ends leaves for it when nothing
+ * else is ready. Its stack is laid out for a first switch into
+ * `sched_idle_loop`; a started processor runs its own from its start.
+ * `maxcpus=N` limits the processors to N, the boot one counted, as Linux's
+ * does; 0 and 1 both leave it alone. A processor that does not answer is
+ * reported, and the next is still tried.
  */
 void smp_start(void)
 {

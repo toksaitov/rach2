@@ -61,34 +61,34 @@
 #define SA_RESETHAND 0x80000000u
 
 /* si_code values (Linux). */
-#define SI_USER       0
-#define SI_KERNEL     0x80
+#define SI_USER        0
+#define SI_KERNEL      0x80
 /* SIGSYS's code for a call a seccomp filter trapped, Linux's SYS_SECCOMP,
  * a name the system call numbers have here. */
 #define SIGSYS_SECCOMP 1
-#define SI_QUEUE      (-1)
-#define SI_MESGQ      (-3)
-#define SI_TKILL      (-6)
-#define SI_TIMER      (-2)
-#define ILL_ILLOPN    2
-#define FPE_INTDIV    1
-#define FPE_FLTDIV    3
-#define FPE_FLTOVF    4
-#define FPE_FLTUND    5
-#define FPE_FLTRES    6
-#define FPE_FLTINV    7
-#define SEGV_MAPERR   1
-#define SEGV_ACCERR   2
-#define BUS_ADRALN    1
-#define TRAP_BRKPT    1
-#define TRAP_TRACE    2
-#define TRAP_HWBKPT   4
-#define CLD_EXITED    1
-#define CLD_KILLED    2
-#define CLD_DUMPED    3
-#define CLD_TRAPPED   4
-#define CLD_STOPPED   5
-#define CLD_CONTINUED 6
+#define SI_QUEUE       (-1)
+#define SI_MESGQ       (-3)
+#define SI_TKILL       (-6)
+#define SI_TIMER       (-2)
+#define ILL_ILLOPN     2
+#define FPE_INTDIV     1
+#define FPE_FLTDIV     3
+#define FPE_FLTOVF     4
+#define FPE_FLTUND     5
+#define FPE_FLTRES     6
+#define FPE_FLTINV     7
+#define SEGV_MAPERR    1
+#define SEGV_ACCERR    2
+#define BUS_ADRALN     1
+#define TRAP_BRKPT     1
+#define TRAP_TRACE     2
+#define TRAP_HWBKPT    4
+#define CLD_EXITED     1
+#define CLD_KILLED     2
+#define CLD_DUMPED     3
+#define CLD_TRAPPED    4
+#define CLD_STOPPED    5
+#define CLD_CONTINUED  6
 
 /*
  * What the kernel keeps with a pending signal for the `siginfo_t` its

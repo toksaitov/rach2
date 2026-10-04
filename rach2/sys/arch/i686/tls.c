@@ -70,12 +70,11 @@ void arch_tls_set(uintptr_t base)
 /**
  * Set up thread-local storage (set_thread_area(2), Linux i386).
  *
- * The argument points at a struct user_desc. Validates it, programs the shared TLS
- * GDT descriptor (entry GDT_TLS_ENTRY) and this process's PCB base, then
- * writes the chosen entry number back so the C library can load
- * (entry_number << 3) | 3 into %gs. The base is reapplied to the GDT on
- * every context switch (switch.s). Returns 0 or a negative errno on a bad
- * pointer/request.
+ * The argument points at a struct user_desc. Validates it, programs the shared
+ * TLS GDT descriptor (entry GDT_TLS_ENTRY) and this process's PCB base, then
+ * writes the chosen entry number back so the C library can load (entry_number
+ * << 3) | 3 into %gs. The base is reapplied to the GDT on every context switch
+ * (switch.s). Returns 0 or a negative errno on a bad pointer/request.
  */
 long sys_set_thread_area(isr_params_t *params)
 {

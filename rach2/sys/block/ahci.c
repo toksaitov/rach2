@@ -1551,7 +1551,8 @@ int ahci_init(void)
     }
     ahci_dma64 = (ahci_read32(AHCI_CAP) & AHCI_CAP_S64A) != 0 && !kcmdline_has("rach2.dma32");
     if (!ahci_dma64) {
-        klog(KLOG_INFO, "ahci", "32-bit addresses: a buffer above 4 GiB moves through the DMA pool");
+        klog(KLOG_INFO, "ahci",
+             "32-bit addresses: a buffer above 4 GiB moves through the DMA pool");
     }
     if (ahci_hba_own() != 0 || ahci_quiesce_ports() != 0 || ahci_select_port() != 0) {
         klog(KLOG_ERR, "ahci", "unusable: %s", ahci_err);

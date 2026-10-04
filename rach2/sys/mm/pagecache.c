@@ -671,7 +671,8 @@ void init_pagecache(void)
     }
     /* Half of what the caches together may hold under pressure, and never
        more slots than there are. */
-    pc_capacity = mem_cache_target() / 2u > PC_SLOTS ? PC_SLOTS : (uint32_t)(mem_cache_target() / 2u);
+    pc_capacity =
+        mem_cache_target() / 2u > PC_SLOTS ? PC_SLOTS : (uint32_t)(mem_cache_target() / 2u);
     if (pc_capacity < 1u) {
         pc_capacity = 1u;
     }

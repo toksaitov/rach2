@@ -323,16 +323,16 @@ static int uimage_next(struct uwin *w, uintptr_t *str)
 }
 
 /**
- * Write the information block `uimage_place` placed: AT_RANDOM's bytes,
- * argc, the pointers to the `argc` strings of argv and then the `envc` of
- * the environment, each array ending in NULL, and the auxiliary vector
- * (AT_PHDR, AT_PHENT, AT_PHNUM, AT_ENTRY, AT_PAGESZ, AT_CLKTCK 100,
- * AT_SECURE, AT_RANDOM, AT_BASE, AT_UID, AT_EUID, AT_GID, AT_EGID, AT_EXECFN,
- * AT_MINSIGSTKSZ and AT_NULL), which a dynamic linker reads to find itself and the program
- * it loads. The pointers are found by walking the
- * strings from the lowest, which is argv[0], as Linux's `create_elf_tables`
- * finds them; the walk stops before any string above the environment, such
- * as the program's path. 0, or -1 when no temporary mapping was free.
+ * Write the information block `uimage_place` placed: AT_RANDOM's bytes, argc,
+ * the pointers to the `argc` strings of argv and then the `envc` of the
+ * environment, each array ending in NULL, and the auxiliary vector (AT_PHDR,
+ * AT_PHENT, AT_PHNUM, AT_ENTRY, AT_PAGESZ, AT_CLKTCK 100, AT_SECURE, AT_RANDOM,
+ * AT_BASE, AT_UID, AT_EUID, AT_GID, AT_EGID, AT_EXECFN, AT_MINSIGSTKSZ and
+ * AT_NULL), which a dynamic linker reads to find itself and the program it
+ * loads. The pointers are found by walking the strings from the lowest, which
+ * is argv[0], as Linux's `create_elf_tables` finds them; the walk stops before
+ * any string above the environment, such as the program's path. 0, or -1 when
+ * no temporary mapping was free.
  */
 int uimage_write(struct uimage *u, uint32_t argc, uint32_t envc, const elf_image_t *img,
                  const uint8_t random16[16], const struct uimage_aux *ids)

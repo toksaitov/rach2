@@ -36,14 +36,14 @@ struct proc_rlimit {
     unsigned long cur;
     unsigned long max;
 };
-#define RLIM_NPROC      0
-#define RLIM_NOFILE     1
-#define RLIM_AS         2
-#define RLIM_STACK      3
-#define RLIM_CORE       4
-#define RLIM_FSIZE      5
-#define RLIM_COUNT      6
-#define RLIM_INFINITY   (~0UL)
+#define RLIM_NPROC    0
+#define RLIM_NOFILE   1
+#define RLIM_AS       2
+#define RLIM_STACK    3
+#define RLIM_CORE     4
+#define RLIM_FSIZE    5
+#define RLIM_COUNT    6
+#define RLIM_INFINITY (~0UL)
 
 /* The soft RLIMIT_STACK a process starts with, 8 MiB, which is Linux's;
  * an exec that runs with ids its caller lacks lowers a larger one to it. */

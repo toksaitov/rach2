@@ -1,7 +1,8 @@
 /**
  * Host test for the CMOS clock arithmetic and PIT interpolation.
  *
- * host-deps: rach2/sys/arch/x86/cmos.c rach2/sys/clock.c rach2/sys/arch/x86/pit.c
+ * host-deps: rach2/sys/arch/x86/cmos.c rach2/sys/clock.c
+ * host-deps: rach2/sys/arch/x86/pit.c
  * host-cflags: -DRTC_HOST_TEST
  *
  * `rtc_decode`, `rtc_snapshots_agree` and `rtc_time_from_anchor` are the whole

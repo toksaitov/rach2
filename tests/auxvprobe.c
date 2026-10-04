@@ -19,15 +19,15 @@ typedef unsigned char u8;
 
 #define STDOUT 1
 
-#define AT_NULL   0
-#define AT_PHDR   3
-#define AT_PHENT  4
-#define AT_PHNUM  5
-#define AT_PAGESZ 6
-#define AT_ENTRY  9
-#define AT_CLKTCK 17
-#define AT_SECURE 23
-#define AT_RANDOM 25
+#define AT_NULL        0
+#define AT_PHDR        3
+#define AT_PHENT       4
+#define AT_PHNUM       5
+#define AT_PAGESZ      6
+#define AT_ENTRY       9
+#define AT_CLKTCK      17
+#define AT_SECURE      23
+#define AT_RANDOM      25
 #define AT_MINSIGSTKSZ 51
 
 /* The size of a program header, which AT_PHENT reports: ELF32's on i386 and

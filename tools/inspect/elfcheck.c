@@ -1166,8 +1166,10 @@ static int selftest(void)
             st_bad++;
         }
         if (kernel_check(k64, k64n, 1, detail, sizeof(detail)) != 0) {
-            fprintf(stderr, "elfcheck: selftest: the x86-64 fixture was refused under the tcc "
-                            "profile: %s\n", kfail);
+            fprintf(stderr,
+                    "elfcheck: selftest: the x86-64 fixture was refused under the tcc "
+                    "profile: %s\n",
+                    kfail);
             st_bad++;
         }
         /* Without section headers, as TinyCC writes it: the tcc profile
@@ -1176,8 +1178,10 @@ static int selftest(void)
         w64(m64 + 40, 0);
         w16(m64 + 60, 0);
         if (kernel_check(m64, k64n, 1, detail, sizeof(detail)) != 0) {
-            fprintf(stderr, "elfcheck: selftest: the x86-64 fixture without a symbol table was "
-                            "refused under the tcc profile: %s\n", kfail);
+            fprintf(stderr,
+                    "elfcheck: selftest: the x86-64 fixture without a symbol table was "
+                    "refused under the tcc profile: %s\n",
+                    kfail);
             st_bad++;
         }
         st_expect_kernel(m64, k64n, 0, "an x86-64 kernel without a symbol table",

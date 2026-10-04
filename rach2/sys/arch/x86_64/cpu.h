@@ -145,8 +145,8 @@ extern pte_t mmu_nx;
  * has one, so a frame is reached there and never through a temporary
  * mapping (`kmap_temp`, mm/paging.c). */
 #define ARCH_DIRECT_MAP_ALL 1
-#define phys_to_virt(p) ((void *)(KVA_DIRECT + (uintptr_t)(p)))
-#define virt_to_phys(v) mmu_virt_to_phys(v)
+#define phys_to_virt(p)     ((void *)(KVA_DIRECT + (uintptr_t)(p)))
+#define virt_to_phys(v)     mmu_virt_to_phys(v)
 phys_addr_t mmu_virt_to_phys(const volatile void *v);
 
 /* A device's register at the kernel address `a` (map_mmio's): a read or a

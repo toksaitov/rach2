@@ -5,8 +5,8 @@
 #
 # Usage: ./run.sh [image] [audio_device]
 #   image:        test | os-simple | os-real  (boots build/images/<image>.krffs
-# as the RAM disk, or build/x86_64/images/<image>.krffs under the x86-64
-# kernel when ARCH=x86_64). Omit it to boot the kernel alone, into the kernel debug
+# as the RAM disk, or build/x86_64/images/<image>.krffs under the x86-64 kernel
+# when ARCH=x86_64). Omit it to boot the kernel alone, into the kernel debug
 # shell. audio_device: sb16, hda, or speaker (default: speaker) Audio and
 # networking devices are attached (see qemu_devices.sh).
 #
