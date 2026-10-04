@@ -67,13 +67,19 @@ REGISTRY="$REPO/tests/registry"
 
 # How many suites run at once. A suite spends most of its life waiting for an
 # emulated machine rather than computing, so the useful count is above the
-# core count: on a ten-core machine the full run takes 1286s at four workers,
-# 728 at eight, 587 at twelve, 527 at sixteen and 499 at twenty, and stops
-# improving there. Twice the processors lands on that knee.
+# core count: on a ten-core machine the full run of one-processor machines
+# takes 1286s at four workers, 728 at eight, 587 at twelve, 527 at sixteen
+# and 499 at twenty, and stops improving there. Twice the processors lands
+# on that knee, counted in the machines' processors, each machine having
+# RACH2_CPUS (set_cpus): with two, twice the processors in suites gave the
+# testing host's 32 threads 128 processors to run, and boots ran past their
+# steps' time limits.
 workers_default() {
     n=$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
     case "$n" in ''|*[!0-9]*) n=4 ;; esac
-    n=$((n * 2))
+    c=${RACH2_CPUS:-2}
+    case "$c" in ''|*[!0-9]*|0*) c=2 ;; esac
+    n=$((n * 2 / c))
     [ "$n" -lt 4 ] && n=4
     echo "$n"
 }
