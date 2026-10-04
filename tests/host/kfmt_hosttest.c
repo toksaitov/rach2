@@ -43,7 +43,8 @@ static void sink(char c)
     }
 }
 
-/** Format with the argument words given, and compare the whole result. */
+/** Format with the arguments given, each of the type its conversion reads,
+ * and compare the whole result. */
 static void row(const char *want, const char *format, int n, ...)
 {
     va_list ap;
@@ -64,40 +65,39 @@ static void row(const char *want, const char *format, int n, ...)
 int main(void)
 {
     /* The conversions that always worked. */
-    row("42", "%d", 1, (char *)42);
-    row("-7", "%d", 1, (char *)-7);
-    row("ff", "%x", 1, (char *)255);
-    row("FF", "%X", 1, (char *)255);
-    row("777", "%o", 1, (char *)511);
-    row("1010", "%b", 1, (char *)10);
+    row("42", "%d", 1, 42);
+    row("-7", "%d", 1, -7);
+    row("ff", "%x", 1, 255);
+    row("FF", "%X", 1, 255);
+    row("777", "%o", 1, 511);
+    row("1010", "%b", 1, 10);
     row("hi", "%s", 1, (char *)"hi");
     row("(null)", "%s", 1, (char *)0);
-    row("A", "%c", 1, (char *)'A');
+    row("A", "%c", 1, 'A');
     row("100%", "100%%", 0);
 
     /* Unsigned decimal, at an int's width and a long's: a count past the
        largest int prints as itself, not as a negative number. */
-    row("4000000000", "%u", 1, (char *)(unsigned long)4000000000u);
-    row("0", "%u", 1, (char *)0);
-    row("4294967295", "%lu", 1, (char *)(unsigned long)4294967295ul);
-    row("  9", "%3u", 1, (char *)9);
+    row("4000000000", "%u", 1, 4000000000u);
+    row("0", "%u", 1, 0u);
+    row("4294967295", "%lu", 1, 4294967295ul);
+    row("  9", "%3u", 1, 9u);
 
     /* The `0` flag and the width, which is what a PCI address asks for and
        what the machine could not print. */
-    row("0f", "%02x", 1, (char *)15);
-    row("00", "%02x", 1, (char *)0);
-    row("ff", "%02x", 1, (char *)255);
-    row("1ff", "%02x", 1, (char *)511); /* wider than the width: not cut */
-    row("  7", "%3d", 1, (char *)7);
-    row("007", "%03d", 1, (char *)7);
-    row("0000ff", "%06x", 1, (char *)255);
+    row("0f", "%02x", 1, 15);
+    row("00", "%02x", 1, 0);
+    row("ff", "%02x", 1, 255);
+    row("1ff", "%02x", 1, 511); /* wider than the width: not cut */
+    row("  7", "%3d", 1, 7);
+    row("007", "%03d", 1, 7);
+    row("0000ff", "%06x", 1, 255);
 
     /* The whole message the machine got wrong, with every field in place. */
-    row("8086:a0c at 00:1f.3", "%x:%x at %02x:%02x.%d", 5, (char *)0x8086, (char *)0xa0c, (char *)0,
-        (char *)0x1f, (char *)3);
+    row("8086:a0c at 00:1f.3", "%x:%x at %02x:%02x.%d", 5, 0x8086, 0xa0c, 0, 0x1f, 3);
 
     /* A width does not disturb the argument after it. */
-    row("00:1f x", "%02x:%02x %s", 3, (char *)0, (char *)0x1f, (char *)"x");
+    row("00:1f x", "%02x:%02x %s", 3, 0, 0x1f, (char *)"x");
 
     /* The format that stops on its percent writes the sign and stops. */
     row("a%", "a%", 0);
