@@ -102,11 +102,60 @@ static size_t budget_env_len(void)
     return 256 * KIB - fixed - (LONGEST + 1) - 1;
 }
 
-/** The child half: 0 when this image was handed what its mode says. */
-static int child(int argc, char *argv[])
+/** The "many" mode: 0 when argv after the mode is the five thousand names. */
+static int child_many(int argc, char *argv[])
 {
     int i;
 
+    if (argc != MANY + 2) {
+        return 1;
+    }
+    for (i = 0; i < MANY; i++) {
+        if (strcmp(argv[i + 2], names[i]) != 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/** The "budget" mode: 0 when its one argument and one variable came whole. */
+static int child_budget(int argc, char *argv[])
+{
+    return argc == 3 && all_of(argv[2], LONGEST, 'y') && environ[0] != NULL &&
+                   environ[1] == NULL && strncmp(environ[0], "E=", 2) == 0 &&
+                   all_of(environ[0] + 2, budget_env_len() - 2, 'z')
+               ? 0
+               : 1;
+}
+
+/** The "wide" mode: 0 when the argument and the variable it was sent came. */
+static int child_wide(int argc, char *argv[])
+{
+    return argc == 3 && strcmp(argv[2], "wide") == 0 && environ[0] != NULL &&
+                   strcmp(environ[0], "W=wide") == 0 && environ[1] == NULL
+               ? 0
+               : 1;
+}
+
+/** The "env" mode: 0 when the environment is the five thousand variables. */
+static int child_env(void)
+{
+    char want[8];
+    int i;
+
+    for (i = 0; environ[i] != NULL; i++) {
+        snprintf(want, sizeof(want), "E%04d", i);
+        memcpy(want + 5, "=v", 3);
+        if (i >= MANY || strcmp(environ[i], want) != 0) {
+            return 1;
+        }
+    }
+    return i == MANY ? 0 : 1;
+}
+
+/** The child half: 0 when this image was handed what its mode says. */
+static int child(int argc, char *argv[])
+{
     if (getenv("EXECARG_EMPTY") != NULL) {
         return argc == 1 && argv[0] != NULL && argv[0][0] == '\0' && argv[1] == NULL ? 0 : 1;
     }
@@ -114,43 +163,19 @@ static int child(int argc, char *argv[])
         return 1;
     }
     if (strcmp(argv[1], "many") == 0) {
-        if (argc != MANY + 2) {
-            return 1;
-        }
-        for (i = 0; i < MANY; i++) {
-            if (strcmp(argv[i + 2], names[i]) != 0) {
-                return 1;
-            }
-        }
-        return 0;
+        return child_many(argc, argv);
     }
     if (strcmp(argv[1], "long") == 0) {
         return argc == 3 && all_of(argv[2], LONGEST, 'x') ? 0 : 1;
     }
     if (strcmp(argv[1], "budget") == 0) {
-        return argc == 3 && all_of(argv[2], LONGEST, 'y') && environ[0] != NULL &&
-                       environ[1] == NULL && strncmp(environ[0], "E=", 2) == 0 &&
-                       all_of(environ[0] + 2, budget_env_len() - 2, 'z')
-                   ? 0
-                   : 1;
+        return child_budget(argc, argv);
     }
     if (strcmp(argv[1], "wide") == 0) {
-        return argc == 3 && strcmp(argv[2], "wide") == 0 && environ[0] != NULL &&
-                       strcmp(environ[0], "W=wide") == 0 && environ[1] == NULL
-                   ? 0
-                   : 1;
+        return child_wide(argc, argv);
     }
     if (strcmp(argv[1], "env") == 0) {
-        char want[8];
-
-        for (i = 0; environ[i] != NULL; i++) {
-            snprintf(want, sizeof(want), "E%04d", i);
-            memcpy(want + 5, "=v", 3);
-            if (i >= MANY || strcmp(environ[i], want) != 0) {
-                return 1;
-            }
-        }
-        return i == MANY ? 0 : 1;
+        return child_env();
     }
     return 1;
 }

@@ -587,8 +587,6 @@ tests/musl/direntmusl.c:main complexity 34 a test's rows, each a case, read as o
 tests/musl/epollmusl.c:nested_forked complexity 29 a probe, one sequence of steps in the order the log records them
 tests/musl/epollmusl.c:sets complexity 49 a test's rows, each a case, read as one table
 
-tests/musl/execargmusl.c:child complexity 26 a test's rows, each a case, read as one table
-
 tests/musl/fifomusl.c:main complexity 29 a test's rows, each a case, read as one table
 
 tests/musl/ipcmusl.c:mq_rows complexity 26 a probe, one sequence of steps in the order the log records them
