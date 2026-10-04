@@ -8,7 +8,9 @@
  * program sets with arch_prctl(ARCH_SET_FS) or gets from clone's
  * CLONE_SETTLS, and GS's base is the program's to use as it likes, through
  * ARCH_SET_GS. Both live in the process record (`tls_base` and
- * `regs.gs_base`) and are loaded at every switch (context.c).
+ * `regs.gs_base`), read back from their MSRs when the thread switches away
+ * and loaded when it switches in (context.c): a selector the program loads
+ * into FS or GS changes the base too, to the descriptor's 0.
  */
 
 /* arch_prctl's codes, as Linux numbers them. */

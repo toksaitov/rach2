@@ -1,4 +1,4 @@
-.Dd October 3, 2026
+.Dd October 4, 2026
 .Dt ARCH_PRCTL 2
 .Os
 .Sh NAME
@@ -28,12 +28,18 @@ issues the call itself, with
 .Dv ARCH_SET_FS ,
 to install the thread-local storage of the first thread.
 .Pp
-Each thread has two bases of its own, kept in its process record and
-loaded at every switch to it;
+Each thread has two bases of its own, kept in its process record, saved
+when it switches away and loaded when it switches back;
 .Xr fork 2
-gives the child its parent's, and
+gives the child its parent's as they are at the fork, and
 .Xr execve 2
 sets both to 0.
+A selector the program loads into FS or GS sets that base to the
+descriptor's, 0, as on Linux, and
+.Dv ARCH_GET_FS
+and
+.Dv ARCH_GET_GS
+then read 0.
 FS's base is the thread pointer, where the thread's thread-local storage
 begins; GS's base is the program's to use as it likes.
 .Fa code

@@ -34,7 +34,7 @@ MUSL_POST    = $(MUSL_PREFIX)/lib/libc.a $(MUSL_LIBGCC) $(MUSL_PREFIX)/lib/crtn.
 PROGS = hello filetest forktest shelltest dirtest stattest usbprobe mouseprobe intrprobe keylatprobe \
         touchtest rmtest mvtest lstest stdintest dup2test \
         pingtest packetprobe rawprobe netifprobe dgramprobe udptest tcptest sockettest dnstest auxvprobe \
-        tlsprobe errnoprobe vmprobe vmfault vmro forkro cowprobe cowregrant \
+        tlsprobe fsbaseprobe errnoprobe vmprobe vmfault vmro forkro cowprobe cowregrant \
         usercopyfault forkleak fdstale dirgrow dirprobe unlinkdirprobe pathcanon timeprobe sigprobe credprobe ownprobe permprobe trapprobe ofdprobe \
         waitprobe exitprobe pipeprobe pollprobe devprobe ttyprobe jobprobe miscprobe \
         ptyprobe rngprobe orphanprobe loopprobe zombieprobe survivorprobe procprobe suidprobe suidhelper sudoprobe modeprobe searchprobe stickyprobe blockprobe bootprobe persistprobe stressprobe winprobe dirtyprobe rebootprobe lagprobe fpuprobe xsaveprobe memprobe poolprobe vfsprobe mountprobe fatwriteprobe usbdiskprobe calibprobe placeprobe ext2probe krffsprobe loopdevprobe \

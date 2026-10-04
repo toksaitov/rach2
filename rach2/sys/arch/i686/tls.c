@@ -67,6 +67,11 @@ void arch_tls_set(uintptr_t base)
     gdt_set_tls((uint32_t)base);
 }
 
+uintptr_t arch_tls_get(void)
+{
+    return current_proc ? current_proc->tls_base : 0;
+}
+
 /**
  * Set up thread-local storage (set_thread_area(2), Linux i386).
  *

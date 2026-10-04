@@ -27,7 +27,8 @@
  * has no waitpid. The calls only i386 has, and the narrower calls of the old
  * names, have names of their own (SYS_OLDSTAT, SYS_LLSEEK, SYS_MMAP2,
  * SYS_SOCKETCALL, SYS_SET_THREAD_AREA and the like) defined for i386 alone,
- * so a probe or a row that makes one is built for i686 alone.
+ * so a probe or a row that makes one is built for i686 alone; arch_prctl,
+ * which x86-64 alone has, is SYS_ARCH_PRCTL, defined for it alone.
  *
  * A probe that reads a struct the kernel writes reads it by the offsets
  * below, which are Linux's for the architecture: KSTAT_ for the stat that
@@ -148,6 +149,7 @@ typedef __SIZE_TYPE__ size_t;
 #define SYS_MKNOD           133
 #define SYS_STATFS          137
 #define SYS_FSTATFS         138
+#define SYS_ARCH_PRCTL      158
 #define SYS_SETRLIMIT       160
 #define SYS_CHROOT          161
 #define SYS_SYNC            162

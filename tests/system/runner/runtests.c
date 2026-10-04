@@ -52,7 +52,7 @@
    have a suite of their own. */
 static const char *const PROBES[] = {
     "hello", "filetest", "forktest", "shelltest", "dirtest", "stattest", "touchtest", "rmtest",
-    "mvtest", "lstest", "dup2test", "auxvprobe", "tlsprobe", "errnoprobe", "vmprobe", "forkro",
+    "mvtest", "lstest", "dup2test", "auxvprobe", "tlsprobe", "fsbaseprobe", "errnoprobe", "vmprobe", "forkro",
     "cowprobe", "cowregrant", "usercopyfault", "forkleak", "fdstale", "dirgrow", "dirprobe",
     "unlinkdirprobe", "pathcanon", "vfsprobe", "timeprobe", "sigprobe", "credprobe", "ownprobe",
     "permprobe", "sockettest",

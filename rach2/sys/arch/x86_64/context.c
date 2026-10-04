@@ -60,17 +60,26 @@ int arch_context_check(void)
  * directory's, so a process that blocks and wakes again here finds its
  * directory still loaded (`smp_space_release` takes it back before it is
  * freed, and `smp_tlb_shootdown` marks it stale meanwhile). Then the stacks
- * change. The record is the truth about both bases:
- * a program changes them only through arch_prctl and clone, which write the
- * record, so nothing is read back here. The directory is compared with the
- * one this processor has loaded, never with the outgoing record's: a thread
- * that gave up its address space at its end still runs in it until it
- * switches away, and the directory may be freed once it has.
+ * change. The outgoing thread's bases are read back into its record first
+ * (`arch_bases_save`): a program changes them through arch_prctl and clone,
+ * which write the record, and also by loading a selector into FS or GS,
+ * which sets the base to the descriptor's, 0, and writes nothing. The
+ * directory is compared with the one this processor has loaded, never with
+ * the outgoing record's: a thread that gave up its address space at its end
+ * still runs in it until it switches away, and the directory may be freed
+ * once it has.
  */
+static void arch_bases_save(process_t *p)
+{
+    p->tls_base = msr_read(MSR_FS_BASE);
+    p->regs.gs_base = msr_read(MSR_KERNEL_GS_BASE);
+}
+
 void switch_context(process_t *old, process_t *new_proc)
 {
     struct percpu *cpu = this_cpu();
 
+    arch_bases_save(old);
     cpu_set_kernel_stack(new_proc->kernel_stack);
     msr_write(MSR_FS_BASE, new_proc->tls_base);
     msr_write(MSR_KERNEL_GS_BASE, new_proc->regs.gs_base);
@@ -110,7 +119,8 @@ void arch_context_init(process_t *proc, void (*entry_point)(void))
  * pointer `newsp` a clone asks for, when it asks; under it `isr_return` and
  * the six registers x86_64_switch pops. The child returns to user mode
  * through `iretq`, with RCX and R11 as the parent's `syscall` left them.
- * Its GS base is the parent's, as its FS base is.
+ * Its GS base is the parent's as it is now, read from the MSR, as its FS
+ * base is (`arch_tls_get`).
  */
 void arch_fork_frame(process_t *child, const isr_params_t *params, uintptr_t newsp)
 {
@@ -130,7 +140,7 @@ void arch_fork_frame(process_t *child, const isr_params_t *params, uintptr_t new
         *--sp = 0;
     }
     child->regs.rsp = (uint64_t)(uintptr_t)sp;
-    child->regs.gs_base = current_proc ? current_proc->regs.gs_base : 0;
+    child->regs.gs_base = current_proc ? msr_read(MSR_KERNEL_GS_BASE) : 0;
 }
 
 /**

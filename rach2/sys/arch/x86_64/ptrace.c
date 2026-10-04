@@ -98,8 +98,11 @@ void arch_regs_get(const process_t *t, unsigned long *r)
     r[R_EFLAGS] = tf->rflags;
     r[R_RSP] = tf->rsp;
     r[R_SS] = tf->ss & 0xFFFFu;
-    r[R_FS_BASE] = t->tls_base;
-    r[R_GS_BASE] = t->regs.gs_base;
+    /* The running thread's bases are its MSRs, which a selector it loaded
+     * may have changed since its record was written; a stopped thread's
+     * were saved when it switched away. */
+    r[R_FS_BASE] = t == current_proc ? msr_read(MSR_FS_BASE) : t->tls_base;
+    r[R_GS_BASE] = t == current_proc ? msr_read(MSR_KERNEL_GS_BASE) : t->regs.gs_base;
     r[R_DS] = 0;
     r[R_ES] = 0;
     r[R_FS] = 0;

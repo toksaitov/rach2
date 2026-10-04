@@ -2191,7 +2191,7 @@ static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
     if (rc != 0) {
         goto fail_built;
     }
-    child->tls_base = (req->flags & CLONE_SETTLS) ? req->tls : parent->tls_base;
+    child->tls_base = (req->flags & CLONE_SETTLS) ? req->tls : arch_tls_get();
     fpu_save(child->fpu);
 
     rc = fork_shares(child, parent, req->flags);

@@ -125,6 +125,12 @@ void arch_enter_user(uintptr_t pc, uintptr_t sp) K_NORETURN;
  * where its TLS block starts (on i686, the base of the GDT's TLS entry). */
 void arch_tls_set(uintptr_t base);
 
+/** The running thread's thread pointer as it is now, which a fork gives its
+ * child: on x86-64 FS's base, which a selector the program loaded into FS
+ * changes without the kernel's knowing; on i686 the record's, which only
+ * set_thread_area changes. */
+uintptr_t arch_tls_get(void);
+
 /** Read clone's CLONE_SETTLS argument `arg` into the thread pointer it
  * gives the new thread: 0, or -EFAULT or -EINVAL. On i686 the argument
  * points at a struct user_desc; elsewhere it is the pointer itself. */
