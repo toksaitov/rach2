@@ -28,7 +28,7 @@ Command logs and `result.status` stay in the printed work directory on the store
 
 ## Machine setup
 
-To build and boot Rach2 a machine needs GNU Make, a host C compiler, the `i686-elf` and `x86_64-elf` freestanding cross toolchains, QEMU with OVMF, its UEFI firmware for x86-64, which `tools/setup/ovmf_path.sh` finds and the suites that boot by UEFI need, `ssh-keygen`, e2fsprogs 1.43 or later, mandoc, which renders the manual pages the images stage, and the POSIX text utilities. The build finds `mke2fs`, `debugfs` and `e2fsck` on the path, under the Homebrew keg, which is never linked, or under `/sbin` and `/usr/sbin`, where Debian keeps them. To pass `tests/run style` it also needs cppcheck, ShellCheck, and clang-format. The suites that build a GRUB disk or a FAT volume need mtools, which `tests/registry` names for each of them; a plain `make` builds the three RAM images and reaches none of it. Nothing is fetched during a build: the six vendored projects are pinned tarballs already in the tree. `make` builds for i686 and needs only the `i686-elf` toolchain; `make ARCH=x86_64` builds for x86-64 and needs only the `x86_64-elf` one. `tests/run all` runs one architecture's suites, i686's unless `ARCH=x86_64` names the other, so a check of both runs it once for each.
+To build and boot Rach2 a machine needs GNU Make, a host C compiler, the `i686-elf` and `x86_64-elf` freestanding cross toolchains, QEMU with OVMF, its UEFI firmware for x86-64, which `tools/setup/ovmf_path.sh` finds and the suites that boot by UEFI need, `ssh-keygen`, e2fsprogs 1.43 or later, mandoc, which renders the manual pages the images stage, and the POSIX text utilities. The build finds `mke2fs`, `debugfs` and `e2fsck` on the path, under the Homebrew keg, which is never linked, or under `/sbin` and `/usr/sbin`, where Debian keeps them. To pass `tests/run style` it also needs cppcheck, ShellCheck, clang, whose front end the architecture check runs for the ARM targets, and clang-format. The suites that build a GRUB disk or a FAT volume need mtools, which `tests/registry` names for each of them; a plain `make` builds the three RAM images and reaches none of it. Nothing is fetched during a build: the six vendored projects are pinned tarballs already in the tree. `make` builds for i686 and needs only the `i686-elf` toolchain; `make ARCH=x86_64` builds for x86-64 and needs only the `x86_64-elf` one. `tests/run all` runs one architecture's suites, i686's unless `ARCH=x86_64` names the other, so a check of both runs it once for each.
 
 Install those, then run `sh tools/setup/doctor.sh`. It reports every tool in five groups and prints the install command for whatever is missing.
 
@@ -53,7 +53,7 @@ QEMU's formula ships OVMF as `share/qemu/edk2-x86_64-code.fd`, with the variable
 The archive has everything except the cross toolchains.
 
     sudo apt install build-essential curl qemu-system-x86 ovmf mtools e2fsprogs \
-                     mandoc openssh-client cppcheck shellcheck clang-format
+                     mandoc openssh-client cppcheck shellcheck clang clang-format
 
 The `ovmf` package installs the firmware as `/usr/share/OVMF/OVMF_CODE_4M.fd` with `OVMF_VARS_4M.fd`, or, in older releases, `OVMF_CODE.fd` with `OVMF_VARS.fd`.
 

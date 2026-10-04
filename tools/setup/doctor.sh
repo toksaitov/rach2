@@ -35,6 +35,7 @@ hint() {
                              || echo "apt install ovmf" ;;
     pkgconf)  [ "$MAC" = 1 ] && echo "brew install pkg-config" || echo "apt install pkg-config" ;;
     make)     [ "$MAC" = 1 ] && echo "xcode-select --install" || echo "apt install make" ;;
+    clang)    [ "$MAC" = 1 ] && echo "xcode-select --install" || echo "apt install clang" ;;
     cc)       [ "$MAC" = 1 ] && echo "xcode-select --install" || echo "apt install build-essential" ;;
     fuse)     [ "$MAC" = 1 ] && echo "brew install --cask fuse-t (or --cask macfuse)" \
                              || echo "apt install libfuse-dev" ;;
@@ -191,6 +192,7 @@ fi
 reqx mandoc mandoc -T ascii
 req cppcheck     cppcheck
 req shellcheck   shellcheck
+req clang        clang
 req clang-format clang-format
 
 echo
