@@ -53,7 +53,8 @@ decided.
 Rewrite the partition entry with the new sector count.
 On a GUID table, write the backup entry array and header at the disk's
 end and then the primary array and header, each with its CRC32, so that
-after any part of the writes one copy passes its checksums.
+after any part of the writes one copy passes its checksums; when only the
+backup passed, the primary is written first, for the same reason.
 Writing a whole-disk node requires the recovery kernel.
 .It
 Ask the kernel to read the table again with

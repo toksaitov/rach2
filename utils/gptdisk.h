@@ -61,12 +61,15 @@ void gptdisk_put64(unsigned char *p, uint64_t v);
 
 /**
  * Write the table in `g` back to the disk open on `fd`: the backup array and
- * header in the disk's last sectors, then the primary array and header after
- * sector 0, each with its CRC32, and the protective MBR's entry over the
+ * header in the disk's last sectors and the primary array and header after
+ * sector 0, each with its CRC32, then the protective MBR's entry over the
  * whole disk. The last usable sector becomes the one before the backup
  * array. The order leaves one copy that checks after any prefix of the
- * writes: the old primary until the new backup is whole, and the new backup
- * while the primary is rewritten. Returns 0, or -1 with `why` set.
+ * writes. A table read from its primary has the backup written first: the
+ * old primary checks until the new backup is whole, and the new backup while
+ * the primary is rewritten. A table read from its backup, whose primary does
+ * not check, has the primary written first, for the same reason the other
+ * way round. Returns 0, or -1 with `why` set.
  */
 int gptdisk_write(int fd, struct gptdisk *g, const char **why);
 

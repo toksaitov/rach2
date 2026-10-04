@@ -150,7 +150,7 @@ static int take_header(int fd, struct gptdisk *g, uint64_t lba)
     first = gptdisk_le64(g->header + 40);
     last = gptdisk_le64(g->header + 48);
     array_lba = gptdisk_le64(g->header + 72);
-    if (g->entry_size < ENTRY_MIN || g->entry_size % 8 != 0 || g->entries == 0 ||
+    if (g->entry_size < ENTRY_MIN || g->entry_size % ENTRY_MIN != 0 || g->entries == 0 ||
         g->entries > GPTDISK_ARRAY_MAX / g->entry_size || first > last || last >= g->sectors ||
         array_lba < 1 || array_lba >= g->sectors || array_sectors(g) > g->sectors - array_lba) {
         return -1;
@@ -274,15 +274,28 @@ int gptdisk_write(int fd, struct gptdisk *g, const char **why)
     }
     make_header(g, backup, g->sectors - 1, 1, backup_array, last_usable);
     make_header(g, primary, 1, g->sectors - 1, primary_array, last_usable);
-    if (write_at(fd, backup_array, g->array, array_sectors(g)) != 0 ||
-        write_at(fd, g->sectors - 1, backup, 1) != 0) {
-        *why = "the backup table was not written";
-        return -1;
-    }
-    if (write_at(fd, primary_array, g->array, array_sectors(g)) != 0 ||
-        write_at(fd, 1, primary, 1) != 0) {
-        *why = "the primary table was not written; the backup at the disk's end serves";
-        return -1;
+    if (g->from_backup) {
+        if (write_at(fd, primary_array, g->array, array_sectors(g)) != 0 ||
+            write_at(fd, 1, primary, 1) != 0) {
+            *why = "the primary table was not written; the old backup serves";
+            return -1;
+        }
+        if (write_at(fd, backup_array, g->array, array_sectors(g)) != 0 ||
+            write_at(fd, g->sectors - 1, backup, 1) != 0) {
+            *why = "the backup table was not written; the primary serves";
+            return -1;
+        }
+    } else {
+        if (write_at(fd, backup_array, g->array, array_sectors(g)) != 0 ||
+            write_at(fd, g->sectors - 1, backup, 1) != 0) {
+            *why = "the backup table was not written";
+            return -1;
+        }
+        if (write_at(fd, primary_array, g->array, array_sectors(g)) != 0 ||
+            write_at(fd, 1, primary, 1) != 0) {
+            *why = "the primary table was not written; the backup at the disk's end serves";
+            return -1;
+        }
     }
     put32(g->mbr + 446 + 12,
           g->sectors - 1 > 0xFFFFFFFFu ? 0xFFFFFFFFu : (uint32_t)(g->sectors - 1));

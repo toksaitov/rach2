@@ -61,7 +61,10 @@ the protective MBR's entry is made to cover the disk, with the boot code
 around it kept.
 The backup array and header are written first and the primary array and
 header after them, so that after any part of the writes one copy passes
-its checksums.
+its checksums; when only the backup passed, the primary is written first,
+for the same reason.
+A table whose entry size is not a multiple of 128 bytes, which the kernel
+refuses, is not read from that copy.
 The kernel then reads the table again as
 .Cm reread
 does.

@@ -1,8 +1,6 @@
 /*
  * gptdisk_hosttest.c: the user-space GUID table over an image file.
  *
- * host-deps: utils/gptdisk.c
- *
  * An installed disk is an image written to a disk larger than itself, which
  * leaves the table's backup where the image ended. The image here is a file
  * of 2048 sectors with a table built byte by byte, made 4096 sectors long
@@ -10,6 +8,12 @@
  * with the backup in the last sectors, read again from that backup alone,
  * and grown into the space, and a partition that would lie under the backup
  * is refused. The identity's text form is checked both ways.
+ *
+ * The source is included with its `write` counted, so that a write can be
+ * stopped after any number of sectors' worth of calls: after every prefix of
+ * a rewrite, from either copy, one copy must still read. A copy whose entry
+ * size is a multiple of 8 and not of 128, which the kernel refuses, must not
+ * be the one read.
  */
 #define _POSIX_C_SOURCE 200809L
 #include <fcntl.h>
@@ -18,7 +22,23 @@
 #include <string.h>
 #include <unistd.h>
 
-#include "gptdisk.h"
+static int writes_left = -1;
+
+/** `write`, refused once `writes_left` calls have been allowed. */
+static ssize_t counted_write(int fd, const void *buf, size_t n)
+{
+    if (writes_left == 0) {
+        return -1;
+    }
+    if (writes_left > 0) {
+        writes_left--;
+    }
+    return write(fd, buf, n);
+}
+
+#define write counted_write
+#include "gptdisk.c"
+#undef write
 
 static int fails;
 
@@ -37,14 +57,6 @@ static int fails;
 #define ARRAY_SECS  (ARRAY_BYTES / SECTOR)
 
 static unsigned char image[IMAGE * SECTOR];
-
-static void put32(unsigned char *p, uint32_t v)
-{
-    p[0] = (unsigned char)v;
-    p[1] = (unsigned char)(v >> 8);
-    p[2] = (unsigned char)(v >> 16);
-    p[3] = (unsigned char)(v >> 24);
-}
 
 static uint32_t get32(const unsigned char *p)
 {
@@ -89,6 +101,79 @@ static void header(uint64_t lba, uint64_t other, uint64_t array)
     put32(h + 16, gptdisk_crc32(h, 92));
 }
 
+/**
+ * Rewrite the table on `fd`, read from its backup when `from_backup` (its
+ * primary header zeroed first), with entry 3 grown, and stop the writes
+ * after each count of calls in turn: whatever the count, a copy must read,
+ * since the old copy that checks is written last.
+ */
+static void check_prefixes(int fd, int from_backup)
+{
+    static unsigned char saved[DISK * SECTOR];
+    static struct gptdisk g;
+    unsigned char zero[SECTOR];
+    const char *why = "";
+    int stop, readable = 1, stopped = 0;
+
+    memset(zero, 0, SECTOR);
+    if (pread(fd, saved, sizeof(saved), 0) != (ssize_t)sizeof(saved)) {
+        CHECK("the disk is saved", 0);
+        return;
+    }
+    for (stop = 0; stop < 5; stop++) {
+        if (pwrite(fd, saved, sizeof(saved), 0) != (ssize_t)sizeof(saved) ||
+            (from_backup && pwrite(fd, zero, SECTOR, SECTOR) != SECTOR) ||
+            gptdisk_read(fd, DISK, &g) != 1 || g.from_backup != from_backup) {
+            CHECK("the disk is put back for a stopped rewrite", 0);
+            break;
+        }
+        gptdisk_put64(gptdisk_entry(&g, 3) + 40, gptdisk_le64(gptdisk_entry(&g, 3) + 40) - 1);
+        writes_left = stop;
+        stopped += gptdisk_write(fd, &g, &why) != 0;
+        writes_left = -1;
+        if (gptdisk_read(fd, DISK, &g) != 1) {
+            readable = 0;
+        }
+    }
+    CHECK(from_backup ? "a rewrite from the backup is stopped after each of its writes"
+                      : "a rewrite from the primary is stopped after each of its writes",
+          stopped == 5);
+    CHECK(from_backup ? "and a copy reads after each, the backup until the primary is whole"
+                      : "and a copy reads after each, the primary until the backup is whole",
+          readable);
+    if (pwrite(fd, saved, sizeof(saved), 0) != (ssize_t)sizeof(saved)) {
+        CHECK("the disk is put back", 0);
+    }
+}
+
+/**
+ * Give the primary of the table on `fd` 120 entries of 136 bytes with valid
+ * checksums, the backup left at 128: the kernel refuses an entry size that is
+ * not a multiple of 128, so the reader must take the backup.
+ */
+static void check_entry_size(int fd)
+{
+    static struct gptdisk g;
+    unsigned char h[SECTOR];
+
+    if (pread(fd, h, SECTOR, SECTOR) != SECTOR) {
+        CHECK("the primary header reads", 0);
+        return;
+    }
+    put32(h + 80, 120);
+    put32(h + 84, 136);
+    if (pread(fd, image, ARRAY_BYTES, 2 * SECTOR) != (ssize_t)ARRAY_BYTES) {
+        CHECK("the primary array reads", 0);
+        return;
+    }
+    put32(h + 88, gptdisk_crc32(image, 120 * 136));
+    put32(h + 16, 0);
+    put32(h + 16, gptdisk_crc32(h, 92));
+    CHECK("a primary of 136-byte entries is written", pwrite(fd, h, SECTOR, SECTOR) == SECTOR);
+    CHECK("and the table is read from its backup of 128-byte entries",
+          gptdisk_read(fd, DISK, &g) == 1 && g.from_backup && g.entry_size == 128);
+}
+
 int main(void)
 {
     static struct gptdisk g;
@@ -116,7 +201,7 @@ int main(void)
     header(IMAGE - 1, 1, backup_array);
 
     fd = mkstemp(path);
-    if (fd < 0 || write(fd, image, sizeof(image)) != (ssize_t)sizeof(image) ||
+    if (fd < 0 || pwrite(fd, image, sizeof(image), 0) != (ssize_t)sizeof(image) ||
         ftruncate(fd, (off_t)DISK * SECTOR) != 0) {
         printf("gptdisk_hosttest: the image file could not be made\n");
         return 2;
@@ -155,6 +240,10 @@ int main(void)
     CHECK("and a disk larger than the file is refused", gptdisk_read(fd, DISK, &g) == 1 &&
                                                             (g.sectors = DISK + 1, 1) &&
                                                             gptdisk_write(fd, &g, &why) == -1);
+
+    check_prefixes(fd, 0);
+    check_prefixes(fd, 1);
+    check_entry_size(fd);
 
     gptdisk_guid_text(g.header + 56, text);
     CHECK("the disk GUID's text", strcmp(text, "13121110-1514-1716-1819-1a1b1c1d1e1f") == 0);
