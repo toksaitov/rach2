@@ -1977,7 +1977,9 @@ static int ext2_root_mount(block_device_t *disk, uint64_t start, uint64_t count,
 
 static int init_ext2_root(void)
 {
-    int i;
+    block_device_t *disk;
+    struct disk *reg;
+    int number;
 
     if (block_ready() != 0 || !block0 || !disc_table_ok) {
         klog(KLOG_ERR, "ext2", "root: no boot disk with a partition table");
@@ -1985,29 +1987,29 @@ static int init_ext2_root(void)
     }
     /* The entries are the boot disk's, so the reads must go to that disk
      * and not to the first one the layer published; `rach2.boot=` can name
-     * another. */
-    for (i = 0; i < MBR_PART_COUNT; i++) {
-        block_device_t *disk = boot_disk_device ? boot_disk_device : block0;
-        struct disk *reg = disk_of(disk);
+     * another. They are read from the disk's registry, whose GUID table
+     * entries keep their 64-bit extents, so a root past 2 TiB is found. */
+    disk = boot_disk_device ? boot_disk_device : block0;
+    reg = disk_of(disk);
+    for (number = 1; reg && number <= MBR_PART_COUNT; number++) {
         char path[24];
-        int at = ext2_root_at(disk, disc_parts[i].start_lba, disc_parts[i].sector_count);
-        int slot;
+        int slot, found = -1, at;
 
+        for (slot = 0; slot < reg->table.count; slot++) {
+            if (reg->table.parts[slot].number == number) {
+                found = slot;
+            }
+        }
+        if (found < 0) {
+            continue;
+        }
         /* The node is the one this entry has in the registry, since the
          * disk read here is the boot disk and need not be disk 0; naming
          * another disk's partition would claim it and leave this one free
          * to be mounted a second time. */
-        path[0] = '\0';
-        if (reg) {
-            for (slot = 0; slot < reg->table.count; slot++) {
-                if (reg->table.parts[slot].start_lba == disc_parts[i].start_lba) {
-                    part_node_path(path, reg, slot);
-                }
-            }
-        }
-        if (path[0] == '\0') {
-            continue;
-        }
+        part_node_path(path, reg, found);
+        at = ext2_root_at(disk, reg->table.parts[found].start_lba,
+                          reg->table.parts[found].sector_count);
         if (at == 0) {
             continue;
         }
@@ -2018,7 +2020,8 @@ static int init_ext2_root(void)
                  path);
             continue;
         }
-        return ext2_root_mount(disk, disc_parts[i].start_lba, disc_parts[i].sector_count, path);
+        return ext2_root_mount(disk, reg->table.parts[found].start_lba,
+                               reg->table.parts[found].sector_count, path);
     }
     klog(KLOG_ERR, "ext2", "root: no ext2 partition on the disk");
     return -1;

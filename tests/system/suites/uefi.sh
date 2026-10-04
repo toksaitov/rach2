@@ -42,9 +42,11 @@
 #    64-bit BAR an address above 4 GiB, which the i686 kernel does not reach,
 #    and SeaBIOS one below it. Then the first account logs in with the
 #    demonstration key the install took as its authorized key, and `df` finds
-#    the root on the NVMe disk and larger than 2 TiB. The disk is a sparse file,
-#    and QEMU turns the zeroed blocks the grow writes, its new groups' inode
-#    tables, back into holes.
+#    the root on the NVMe disk and larger than 2 TiB. Booted once more with
+#    the kernel on QEMU's command line and rach2.root=ext2, the kernel's scan
+#    of the table's first four entries finds that root, whose entry runs past
+#    2 TiB. The disk is a sparse file, and QEMU turns the zeroed blocks the
+#    grow writes, its new groups' inode tables, back into holes.
 # 7. A GPT disk whose primary header does not check, which GRUB's BIOS core
 #    cannot boot: it reads no backup table. The stick boots by SeaBIOS beside
 #    it, since OVMF, as EDK2's firmware does, writes such a primary again from
@@ -99,6 +101,8 @@ if [ -z "$OVMF_ARGS" ]; then
 fi
 mkdir -p "$DIR"
 KNOWN="$DIR/known_hosts"
+KERNEL_FILE="$REPO/build/rach2/kernel"
+[ "$ARCH" = i686 ] || KERNEL_FILE="$REPO/build/$ARCH/rach2/kernel"
 
 fail=0
 note() { echo "uefi-test: $1"; }
@@ -498,6 +502,18 @@ if "$RUNUTIL" until "$LOG8" "rach2 login:" 240; then
     note "the disk's file holds $(du -k "$BIG" | cut -f1) KiB on the host"
 else
     bad "the 4 TiB disk never reached a login; see $LOG8"
+fi
+stop_machine
+# The same disk with the kernel given on QEMU's command line and the root
+# named only as rach2.root=ext2, the scan of the table's first four entries,
+# which must find the root whose entry runs past 2 TiB.
+LOG9="$DIR/big-scan.log"
+boot_bios "$LOG9" -kernel "$KERNEL_FILE" -append "rach2.root=ext2" \
+    -drive "$BIG_DRIVE" -device nvme,drive=big,serial=rach2big
+if "$RUNUTIL" until "$LOG9" "ext2: root: " 240 && grep -aq "ext2: root: /dev/disk0p3" "$LOG9"; then
+    note "and rach2.root=ext2 finds the root whose entry runs past 2 TiB: OK"
+else
+    bad "rach2.root=ext2 did not find the 4 TiB disk's root; see $LOG9"
 fi
 stop_machine
 rm -f "$BIG"
