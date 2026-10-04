@@ -78,7 +78,7 @@ mutate()
         runner) changed=tests/run ;;
         devprobe) changed=rach2/sys/fs/devfs.c ;;
         sigprobe) changed=rach2/sys/syscall_proc.c ;;
-        procprobe) changed=rach2/sys/fs/synthfs.h ;;
+        procprobe) changed=rach2/sys/fs/procfs.c ;;
         sealed) changed=krffs/manifests/rach2-metal-disk.manifest ;;
         arping) changed=tests/system/suites.mk ;;
     esac
@@ -97,9 +97,9 @@ changes = {
     '        if (handler_flags & SA_RESETHAND) {\n'
     '            sa->handler = KSIG_DFL;\n        }\n'
     '        if (sigframe_setup(tf, signo, sa, &info, oldmask) != 0) {\n'),
-'procprobe': ('rach2/sys/fs/synthfs.h',
-    '#define SYNTH_PROC_INTERRUPTS  16\n',
-    '#define SYNTH_PROC_INTERRUPTS  15\n'),
+'procprobe': ('rach2/sys/fs/procfs.c',
+    '        f->origin_file = SYNTH_PROC_INTERRUPTS;\n',
+    '        f->origin_file = SYNTH_PROC_LOOP;\n'),
 'sealed': ('krffs/manifests/rach2-metal-disk.manifest',
     'file 0755 /bin/update build/utils/update\n', ''),
 'arping': ('tests/system/suites.mk',
