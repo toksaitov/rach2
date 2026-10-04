@@ -363,7 +363,12 @@ static void shm_reap(void)
     }
 }
 
-/** A new segment of `size` bytes in a tmpfs file; NULL with no memory. */
+/**
+ * A new segment of `size` bytes in a tmpfs file; NULL with no memory, or
+ * for a size tmpfs refuses. The open file takes the node and its open once
+ * the node is opened, so that a size refused after that gives both back
+ * through the open file's release, and a node not opened is put alone.
+ */
 static struct shm_seg *shm_new(size_t size)
 {
     struct shm_seg *s = kzalloc(sizeof(*s));
@@ -376,22 +381,23 @@ static struct shm_seg *shm_new(size_t size)
         return NULL;
     }
     s->ofd = fd_ofd_new();
-    k_memset(&st, 0, sizeof(st));
-    st.size = size;
-    if (!s->ofd || vfs_open_node(mnt, node, 2, &s->ofd->fhandle) != 0 ||
-        vfs_setattr(mnt, node, VFS_SET_SIZE, &st) != 0) {
-        if (s->ofd) {
-            fd_ofd_unref(s->ofd);
-        } else {
-            mnt->type->ops->put(mnt, node);
-        }
+    if (!s->ofd || vfs_open_node(mnt, node, 2, &s->ofd->fhandle) != 0) {
+        fd_ofd_unref(s->ofd);
+        mnt->type->ops->put(mnt, node);
         kfree(s);
         return NULL;
     }
     s->ofd->vmnt = mnt;
     s->ofd->vnode = node;
-    s->ofd->ino = vfs_getattr(mnt, node, &st) == 0 ? st.ino : 0;
     vfs_desc_open(mnt);
+    k_memset(&st, 0, sizeof(st));
+    st.size = size;
+    if (vfs_setattr(mnt, node, VFS_SET_SIZE, &st) != 0) {
+        fd_ofd_unref(s->ofd);
+        kfree(s);
+        return NULL;
+    }
+    s->ofd->ino = vfs_getattr(mnt, node, &st) == 0 ? st.ino : 0;
     s->size = size;
     s->cpid = (int32_t)current_proc->tgid;
     s->ctime = sysv_now();

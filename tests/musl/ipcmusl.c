@@ -23,7 +23,9 @@
  * lowest, type 0 the first; a longer message is E2BIG unless MSG_NOERROR
  * cuts it, an empty queue with IPC_NOWAIT ENOMSG. On x86-64 a capacity past
  * 32 bits is taken whole and a count of semaphore operations past it is
- * E2BIG, neither cut to its low word.
+ * E2BIG, neither cut to its low word; and a thousand segments of 16 TiB,
+ * which tmpfs refuses, are each ENOMEM and leave the kernel's heap as it
+ * was, so that a refused one gives back its file's node.
  *
  * A POSIX queue of four messages of 64 bytes gives the higher priority
  * first; a full queue with O_NONBLOCK is EAGAIN; an empty one with a
@@ -136,6 +138,44 @@ static int shm_rows(void)
         syscall(SYS_shmdt, ro) != 0 || shmctl(id, IPC_RMID, NULL) != 0) {
         return fail("the direct calls, and a read-only attachment mprotect cannot make writable");
     }
+    return 0;
+}
+
+/** The bytes of the kernel's heap in use, from /proc/meminfo; 0 if absent. */
+static unsigned long heap_used(void)
+{
+    FILE *f = fopen("/proc/meminfo", "r");
+    char line[128];
+    unsigned long v = 0;
+
+    while (f && fgets(line, sizeof(line), f)) {
+        if (sscanf(line, "HeapUsed: %lu", &v) == 1) {
+            break;
+        }
+    }
+    if (f) {
+        fclose(f);
+    }
+    return v;
+}
+
+/** On x86-64, segments too large for tmpfs, refused without a trace. */
+static int oversized_rows(void)
+{
+#if defined(__x86_64__)
+    unsigned long before = heap_used(), after;
+    int i;
+
+    for (i = 0; i < 1000; i++) {
+        if (shmget(IPC_PRIVATE, (size_t)1 << 44, IPC_CREAT | 0600) != -1 || errno != ENOMEM) {
+            return fail("a segment of 16 TiB is refused with ENOMEM");
+        }
+    }
+    after = heap_used();
+    if (before == 0 || after > before + 4096) {
+        return fail("a thousand refused segments leave the kernel's heap as it was");
+    }
+#endif
     return 0;
 }
 
@@ -365,7 +405,7 @@ static int mq_rows(void)
 
 int main(void)
 {
-    if (shm_rows() || sem_rows() || msg_rows() || mq_rows() || mq_files()) {
+    if (shm_rows() || oversized_rows() || sem_rows() || msg_rows() || mq_rows() || mq_files()) {
         return 1;
     }
     printf("IPCMUSL OK\n");
