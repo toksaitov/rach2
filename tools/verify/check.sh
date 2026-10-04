@@ -214,19 +214,26 @@ for h in $(inhouse_ch | grep '\.h$'); do
       || { echo "  no header guard: $h"; cv=1; }
 done
 # An idle wait, a halt with interrupts on that expects to resume, goes through
-# the helper in sys/proc/sched.c, which is what lets the timer tell an idle
-# tick from a busy one: there is no idle task, so a blocked process stays
-# current and nothing else says which was which. A wait written as `sti; hlt`
-# somewhere else would report its idle time as busy and no test would notice,
-# so that spelling is refused outside the helper. A `cli; hlt` that stops the
-# machine for good and a halt in early boot, before the scheduler accounts
-# anything, are not idle waits and are left alone. Comments and the header
-# naming the helper are not code; the asm statement is what is looked for.
-idle_bad=$(inhouse_ch | grep -vE 'sys/proc/sched\.c$' \
+# the helpers in sys/proc/sched.c, which mark the processor idle, so that the
+# timer tells an idle tick from a busy one, and let the big lock go for the
+# halt. A process that waits in the kernel this way stays current, so nothing
+# else says which tick was which. The halt itself is the architecture's
+# `arch_idle` and `arch_idle_masked`, in sys/arch/*/cpu.c. A `sti; hlt`
+# written anywhere else, or a call of either outside the helpers, would count
+# its idle time as busy and hold the big lock through the halt, and no test
+# would notice, so both are refused. A `cli; hlt` that stops the machine for
+# good and a halt in early boot, before the scheduler accounts anything, are
+# not idle waits and are left alone. Comments are not code; the asm statement
+# and the kernel's calls are what is looked for, and a host test's stubs of
+# the two are not the kernel's.
+idle_bad=$(inhouse_ch | grep -vE 'sys/arch/[^/]+/cpu\.c$' \
     | xargs grep -nE '__asm__[^;]*"[^"]*sti;[[:space:]]*hlt' 2>/dev/null || true)
-if [ -n "$idle_bad" ]; then
-    echo "  bare sti;hlt outside idle_wait_irq_off/on:"
-    echo "$idle_bad" | head -3 | sed 's/^/    /'
+idle_call=$(inhouse_ch | grep -E '^rach2/' | grep -vE 'sys/proc/sched\.c$|sys/arch/[^/]+/cpu\.c$' \
+    | xargs grep -nE '(^|[^_[:alnum:]])arch_idle(_masked)?[[:space:]]*\(' 2>/dev/null \
+    | grep -vE '^[^:]+\.h:' || true)
+if [ -n "$idle_bad$idle_call" ]; then
+    echo "  idle wait outside idle_wait_irq_off/on:"
+    printf '%s\n%s\n' "$idle_bad" "$idle_call" | grep . | head -3 | sed 's/^/    /'
     cv=1
 fi
 # dash, the testing host's /bin/sh, refuses `--` in its kill builtin with
