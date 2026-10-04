@@ -2,7 +2,7 @@
 
 Rach2 stages a static TinyCC that runs on the guest and produces objects and executables for it: on i686 Rach2 an i386 compiler, on x86-64 Rach2 an x86-64 one, each the machine's native compiler. TinyCC includes its own assembler and linker, so a guest build needs no GNU binutils.
 
-The tracked integration has thirteen files: `.gitignore`, this Readme, `build_tcc.sh`, `check_asm.sh` and its three files under `asm-test/`, six patches, and `tcc-0.9.27.tar.bz2`. The patches are `rach2-output-policy.patch` and `rach2-x86_64-static-link.patch`, which every program needs, and `rach2-x86-asm.patch`, `rach2-linker-script.patch`, `rach2-builtin-offsetof.patch` and `rach2-va-list-trap.patch`, which the kernel's build on the machine needs. The extracted source, generated cross-tool shims, compiler, runtime archive, headers, and stamp are ignored and reproducible.
+The tracked integration has fifteen files: `.gitignore`, this Readme, `build_tcc.sh`, `check_asm.sh` and its four files under `asm-test/`, six patches, and `tcc-0.9.27.tar.bz2`. The patches are `rach2-output-policy.patch` and `rach2-x86_64-static-link.patch`, which every program needs, and `rach2-x86-asm.patch`, `rach2-linker-script.patch`, `rach2-builtin-offsetof.patch` and `rach2-va-list-trap.patch`, which the kernel's build on the machine needs. The extracted source, generated cross-tool shims, compiler, runtime archive, headers, and stamp are ignored and reproducible.
 
 ## Build
 
