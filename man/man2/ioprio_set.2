@@ -73,6 +73,8 @@ ECX
 .Fa who ,
 and EDX
 .Fa ioprio .
+On x86-64 the numbers are 251 and 252, with the same arguments in RDI, RSI
+and RDX.
 musl and glibc have no wrapper of their own.
 .Sh RETURN VALUES
 .Fn ioprio_set

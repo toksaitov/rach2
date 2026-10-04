@@ -198,7 +198,8 @@ A remount takes a new
 and one smaller than the pages the files hold fails with
 .Er EINVAL ,
 as on Linux.
-A file in memory reaches 16 TiB less a page, as on Linux on i386.
+A file in memory reaches 16 TiB less a page on both architectures, as on
+Linux on i386; Linux on x86-64 allows more.
 For every other type, the source must name a published block device
 under
 .Pa /dev :
@@ -399,6 +400,8 @@ and data in EDI.
 The number for
 .Fn umount2
 is 52, with target in EBX and flags in ECX.
+On x86-64 the numbers are 165 and 166, with the same arguments in RDI,
+RSI, RDX, R10 and R8.
 .Sh RETURN VALUES
 These functions return 0 on success, or -1 on failure and set
 .Va errno .

@@ -87,6 +87,8 @@ The i386 system call numbers are 36 for
 and 148 for
 .Fn fdatasync .
 The descriptor is passed in EBX.
+On x86-64 the numbers are 162, 306, 74 and 75, and the descriptor is
+passed in RDI.
 .Sh RETURN VALUES
 .Fn sync
 has no return value; its kernel call always returns 0.

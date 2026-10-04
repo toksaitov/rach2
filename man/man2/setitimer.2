@@ -152,8 +152,10 @@ EBX holds
 or the seconds for
 .Fn alarm ;
 ECX points to the new or current value and EDX to the old one.
-The kernel's itimerval is four signed 32-bit fields: the interval's
-seconds and microseconds, then the value's.
+On x86-64 the numbers are 38, 36 and 37, with the same arguments in RDI,
+RSI and RDX.
+The kernel's itimerval is four signed fields, of 32 bits on i386 and 64 on
+x86-64: the interval's seconds and microseconds, then the value's.
 The kernel limits each seconds field to 21474836, as
 .Xr nanosleep 2
 does, keeps its microseconds, rounds each time up to whole ticks, and

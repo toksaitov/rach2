@@ -162,6 +162,8 @@ the mode in ECX;
 .Fn mkdirat
 takes the directory descriptor, the path and the mode in EBX, ECX and
 EDX.
+On x86-64 the numbers are 83, 258 and 84, with the same arguments in RDI,
+RSI and RDX.
 .Sh RETURN VALUES
 These functions return 0 on success, or -1 on failure and set
 .Va errno .

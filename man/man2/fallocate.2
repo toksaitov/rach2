@@ -53,6 +53,8 @@ returns the error.
 The i386 system call number is 324, with the descriptor in EBX, the mode in
 ECX, the offset in EDX and ESI and the length in EDI and EBP, each low word
 first.
+On x86-64 the number is 285, with the descriptor, the mode, the offset and
+the length in RDI, RSI, RDX and R10.
 .Sh RETURN VALUES
 The call returns -1 with
 .Va errno

@@ -82,6 +82,8 @@ EBX is the thread ID and ECX the signal.
 For
 .Nm tgkill ,
 EBX is the thread group ID, ECX the thread ID, and EDX the signal.
+On x86-64 the numbers are 62, 200 and 234, with the same arguments in RDI,
+RSI and RDX.
 Musl declares neither function; a direct
 .Fn syscall
 is needed to issue either.

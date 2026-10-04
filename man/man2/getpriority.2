@@ -72,6 +72,8 @@ EBX contains
 ECX
 .Fa who ,
 and EDX the nice value.
+On x86-64 the numbers are 140 and 141, with the same arguments in RDI, RSI
+and RDX.
 As on Linux, the raw
 .Fn getpriority
 returns 20 less the nice value, 40 for -20 through 1 for 19, so that no

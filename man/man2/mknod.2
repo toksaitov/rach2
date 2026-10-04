@@ -137,6 +137,8 @@ takes the path, the mode and the device number in EBX, ECX and EDX;
 .Fn mknodat
 takes the directory descriptor, the path, the mode and the device
 number in EBX, ECX, EDX and ESI.
+On x86-64 the numbers are 133 and 259, with the same arguments in RDI, RSI,
+RDX and R10.
 .Sh RETURN VALUES
 These functions return 0 on success, or -1 on failure and set
 .Va errno .

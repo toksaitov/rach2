@@ -96,6 +96,8 @@ and 331 for
 EBX points to the two-element descriptor array;
 .Fn pipe2
 takes its flags in ECX.
+On x86-64 the numbers are 22 and 293, with the array in RDI and the flags
+in RSI.
 .Sh RETURN VALUES
 These functions return 0 on success, or -1 on failure and set
 .Va errno .

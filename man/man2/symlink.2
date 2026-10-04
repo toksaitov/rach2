@@ -155,6 +155,15 @@ EBX is the path pointer, ECX the buffer, and EDX its size.
 EBX is the directory descriptor, ECX the path pointer, EDX the buffer,
 and ESI its size.
 .El
+On x86-64 the numbers are 88 for
+.Nm symlink ,
+266 for
+.Nm symlinkat ,
+89 for
+.Nm readlink
+and 267 for
+.Nm readlinkat ,
+with the same arguments in RDI, RSI, RDX and R10.
 .Sh RETURN VALUES
 .Fn symlink
 and
