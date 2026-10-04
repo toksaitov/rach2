@@ -92,8 +92,36 @@ display_color_t _fail_image[] = {
 
 extern void k_stop(void) K_NORETURN;
 
-/* Set by the first processor to panic. */
+/* Set by the first processor to panic, and that processor. */
 static volatile unsigned int panicking;
+static volatile int panic_cpu = -1;
+
+/*
+ * Only the first processor to panic reports. A second, which an NMI sent to
+ * every processor at once can make, or a panic the stop request did not
+ * reach in time, stops without a word, as Linux's does: two records would
+ * be printed over each other, and neither holds a lock. The one that
+ * reports writes the console without its lock (`console_lock`), which the
+ * code it interrupted may hold, or be between taking and marking as its
+ * own.
+ */
+void k_panic_begin(void)
+{
+    arch_irq_disable();
+    if (panic_cpu == (int)arch_cpu_id()) {
+        return;
+    }
+    if (arch_atomic_xchg(&panicking, 1u) != 0) {
+        k_stop();
+    }
+    panic_cpu = (int)arch_cpu_id();
+    smp_stop_others();
+}
+
+int k_panicking(void)
+{
+    return panic_cpu == (int)arch_cpu_id();
+}
 
 /**
  * Report what stopped the machine, then stop it.
@@ -105,22 +133,14 @@ static volatile unsigned int panicking;
  * came up cannot take the machine's last words with it. Both of those paths
  * are bounded, which is why a panic can afford to use them at all. The
  * other processors are stopped first, with interrupts off here, so that
- * nothing changes the screen or the state the record describes.
- *
- * Only the first processor to panic reports. A second, which an NMI sent to
- * every processor at once can make, or a panic the stop request did not
- * reach in time, stops without a word, as Linux's does: two records would
- * be printed over each other, and neither holds a lock.
+ * nothing changes the screen or the state the record describes
+ * (`k_panic_begin`).
  */
 void k_panic(const char *str)
 {
     int i;
 
-    arch_irq_disable();
-    if (arch_atomic_xchg(&panicking, 1u) != 0) {
-        k_stop();
-    }
-    smp_stop_others();
+    k_panic_begin();
     k_cls();
     for (i = 0; i < 2000; ++i) {
         set_back_color(_fail_image[i]);

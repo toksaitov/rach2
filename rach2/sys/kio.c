@@ -1,5 +1,6 @@
 #include "kio.h"
 #include "klog.h"
+#include "panic.h"
 #include "arch/arch.h"
 #include "lib/kirq.h"
 #include "lib/spinlock.h"
@@ -333,7 +334,8 @@ static void vt_answer_query(char c)
 }
 
 /* The console's lock (`console_lock`), the processor that holds it, -1 for
- * none, and how many times that processor has taken it. */
+ * none, and how many times that processor has taken it. A processor that
+ * has begun a panic takes none (`k_panic_begin`). */
 static struct spinlock console_spin = SPINLOCK_INIT;
 static volatile int console_owner = -1;
 static int console_depth;
@@ -343,6 +345,9 @@ uint32_t console_lock(void)
     uint32_t flags = kirq_save();
     int me = (int)arch_cpu_id();
 
+    if (k_panicking()) {
+        return flags;
+    }
     if (console_owner != me) {
         spin_lock(&console_spin);
         console_owner = me;
@@ -353,6 +358,10 @@ uint32_t console_lock(void)
 
 void console_unlock(uint32_t flags)
 {
+    if (k_panicking()) {
+        kirq_restore(flags);
+        return;
+    }
     if (--console_depth == 0) {
         console_owner = -1;
         spin_unlock(&console_spin);

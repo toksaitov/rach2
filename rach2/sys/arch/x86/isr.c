@@ -273,10 +273,13 @@ static void _exception_handler(isr_params_t *params)
  * The NMI, vector 2, or the machine check, vector 18, which report a fault
  * of the machine and not of what was running: print it and stop, in user
  * mode as in kernel mode. The paranoid router holds no lock, so no signal
- * may be posted here; `k_panic` takes none.
+ * may be posted here, and the panic begins before the record is written,
+ * so that the console's lock, which the interrupted code may hold, is not
+ * taken (`k_panic_begin`).
  */
 static void _hardware_fault_handler(isr_params_t *params)
 {
+    k_panic_begin();
     klog_deliver_directly();
     klog(KLOG_CRIT, "isr", "hardware fault: %s (vector %d, pc 0x%lx)",
          _exception_names[params->vector], (int)params->vector, (unsigned long)FRAME_PC(params));
@@ -304,6 +307,7 @@ static void _double_fault_handler(isr_params_t *params)
     uintptr_t cr2 = arch_fault_address();
     int pid;
 
+    k_panic_begin();
     klog_deliver_directly();
     pid = kstack_overrun_pid(cr2);
     if (pid >= 0) {
@@ -344,6 +348,7 @@ void isr_double_fault(void)
     int pid;
 
     __asm__ __volatile__("mov %%cr2, %0" : "=r"(cr2));
+    k_panic_begin();
     klog_deliver_directly();
     pid = kstack_overrun_pid(cr2);
     if (pid >= 0) {
