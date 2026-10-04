@@ -9,6 +9,12 @@ struct page_dir;
 /* The most processors the kernel runs on. */
 #define NR_CPUS 64
 
+/* A started processor's `admit`: still starting, admitted by its own first
+ * C, or refused by the boot, which gave up waiting for it (`smp_start`). */
+#define CPU_STARTING 0u
+#define CPU_ADMITTED 1u
+#define CPU_REFUSED  2u
+
 /* A TLB request's page that asks for every translation of user addresses
  * to be dropped. */
 #define CPU_TLB_ALL ((uintptr_t)-1)
@@ -35,6 +41,7 @@ struct percpu {
     struct page_dir *space;                     /* the page directory it translates through */
     int bkl_depth;                              /* entries the big lock covers; >0: it holds it */
     volatile int online;                        /* started, and taking work */
+    volatile unsigned int admit;                /* CPU_STARTING, ADMITTED or REFUSED */
     volatile int idle_wait;                     /* halted in an idle wait, for a tick to see */
     volatile unsigned int tlb_request;          /* drop `tlb_page`'s translation */
     volatile uintptr_t tlb_page;                /* a user page, or CPU_TLB_ALL */

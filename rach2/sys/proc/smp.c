@@ -299,7 +299,9 @@ static process_t *smp_idle_task(int cpu)
  * A started processor's first C, on its idle task's stack with interrupts
  * off: it is online at once, so that the boot processor goes on to the next,
  * and takes work once it has the big lock, which the boot holds until it
- * enters the first program.
+ * enters the first program. One that comes after the boot gave up waiting
+ * for it finds itself refused (`smp_start`) and stops, uncounted, since the
+ * shootdowns would pass it by.
  */
 static void smp_cpu_main(int cpu)
 {
@@ -307,6 +309,9 @@ static void smp_cpu_main(int cpu)
 
     self->current = self->idle;
     self->space = _kernel_dir;
+    if (arch_atomic_cmpxchg(&self->admit, CPU_STARTING, CPU_ADMITTED) != CPU_STARTING) {
+        arch_stop();
+    }
     self->online = 1;
     bkl_take(1);
     sched_idle_loop();
@@ -339,7 +344,10 @@ static int parse_count(const char *text, int cap)
  * `sched_idle_loop`; a started processor runs its own from its start.
  * `maxcpus=N` limits the processors to N, the boot one counted, as Linux's
  * does; 0 and 1 both leave it alone. A processor that does not answer is
- * reported, and the next is still tried.
+ * reported, and the next is still tried. The boot admits a processor or
+ * refuses it in one compare-and-exchange of its `admit`, which the
+ * processor makes too as it comes online, so that one coming as the wait
+ * ends is either counted or stopped, never online and uncounted.
  */
 void smp_start(void)
 {
@@ -372,10 +380,10 @@ void smp_start(void)
             klog(KLOG_WARN, "smp", "cpu%d: did not start", cpu);
             continue;
         }
-        for (waited = 0; !c->online && waited < CPU_ONLINE_WAIT_US; waited += 10) {
+        for (waited = 0; c->admit == CPU_STARTING && waited < CPU_ONLINE_WAIT_US; waited += 10) {
             k_udelay(10);
         }
-        if (!c->online) {
+        if (arch_atomic_cmpxchg(&c->admit, CPU_STARTING, CPU_REFUSED) != CPU_ADMITTED) {
             klog(KLOG_WARN, "smp", "cpu%d: started, never online", cpu);
             continue;
         }

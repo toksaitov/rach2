@@ -24,7 +24,11 @@
 
 #include "proc/smp.c"
 
+#include <setjmp.h>
+
 extern int printf(const char *format, ...);
+extern void *calloc(unsigned long count, unsigned long size);
+extern void free(void *ptr);
 
 static int fails;
 
@@ -70,35 +74,38 @@ void platform_cpu_ipi(int cpu)
     }
 }
 
+/* The processors the platform has, and the entry of the one the late row
+ * starts, which reaches its first C only after the boot's wait. */
+static int cpu_count = 1;
+static void (*late_entry)(int cpu);
+
 int platform_cpu_count(int limit)
 {
     (void)limit;
-    return 1;
+    return cpu_count;
 }
 
 int platform_cpu_start(int cpu, uintptr_t stack_top, void (*entry)(int cpu))
 {
     (void)cpu;
     (void)stack_top;
-    (void)entry;
-    return -1;
+    late_entry = entry;
+    return 0;
 }
 
 void *kzalloc(size_t size)
 {
-    (void)size;
-    return 0;
+    return calloc(1, size);
 }
 
 void kfree(void *p)
 {
-    (void)p;
+    free(p);
 }
 
 void *kalloc_guarded(uint32_t count)
 {
-    (void)count;
-    return 0;
+    return calloc(count, PAGE_SIZE);
 }
 
 int kcmdline_value(const char *key, char *out, unsigned int outlen)
@@ -154,10 +161,22 @@ unsigned int arch_atomic_xchg(volatile unsigned int *p, unsigned int value)
 void arch_relax(void)
 {}
 
+/* Where a processor that stops goes on the host: back to the row. */
+static jmp_buf stopped;
+
 void arch_stop(void)
 {
-    for (;;) {
+    longjmp(stopped, 1);
+}
+
+unsigned int arch_atomic_cmpxchg(volatile unsigned int *p, unsigned int old, unsigned int value)
+{
+    unsigned int was = *p;
+
+    if (was == old) {
+        *p = value;
     }
+    return was;
 }
 
 uintptr_t arch_space_root(void)
@@ -247,6 +266,19 @@ int main(void)
           "a stop asks every other processor");
     check(waited_us == 1000000ul,
           "and waits a second for the one that does not take it, none for those that do");
+
+    k_memset(cpu_table, 0, sizeof(cpu_table));
+    cpus_online = 1;
+    cpu_count = 2;
+    waited_us = 0;
+    smp_start();
+    check(waited_us == CPU_ONLINE_WAIT_US && cpus_online == 1 && late_entry,
+          "the boot waits for a started processor and counts none that did not come");
+    if (late_entry && setjmp(stopped) == 0) {
+        late_entry(1);
+    }
+    check(!cpu_table[1].online && cpu_table[1].admit == CPU_REFUSED && cpus_online == 1,
+          "and one that comes after the wait stops, neither online nor counted");
 
     if (fails) {
         printf("smp-hosttest: result: fail: %d rows\n", fails);

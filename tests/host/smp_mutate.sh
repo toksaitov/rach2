@@ -14,7 +14,8 @@
 # translation of a freed page; a release that interrupts none, which
 # leaves an idle processor on a freed directory; and a stop that does not
 # wait for the processors it asks, which leaves one writing the log under
-# the panic's record.
+# the panic's record; and a started processor that comes online whatever
+# the boot decided, which leaves one online and uncounted.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
@@ -84,7 +85,7 @@ run_phase()
 echo "smp-proof: logs: $work"
 run_phase fixed 0 'smp-hosttest: result: pass'
 [ "$#" -eq 0 ] || exit 0
-for fault in no-skip skip-all no-release no-stop-wait; do
+for fault in no-skip skip-all no-release no-stop-wait late-admit; do
     python3 - "$smp" "$fault" <<'PY'
 from pathlib import Path
 import sys
@@ -97,6 +98,7 @@ function = {
     'skip-all': 'void smp_tlb_shootdown(const struct page_dir *dir, uintptr_t va)\n{',
     'no-release': 'void smp_space_release(const struct page_dir *dir)\n{',
     'no-stop-wait': 'void smp_stop_others(void)\n{',
+    'late-admit': 'static void smp_cpu_main(int cpu)\n{',
 }[fault]
 changes = {
     'no-skip': (
@@ -111,6 +113,9 @@ changes = {
     'no-stop-wait': (
         '        for (waited = 0; asked[c] && ',
         '        for (waited = 0; 0 && asked[c] && '),
+    'late-admit': (
+        '    if (arch_atomic_cmpxchg(&self->admit, CPU_STARTING, CPU_ADMITTED) != CPU_STARTING) {\n',
+        '    if (0 && arch_atomic_cmpxchg(&self->admit, CPU_STARTING, CPU_ADMITTED) != CPU_STARTING) {\n'),
 }
 old, new = changes[fault]
 if source.count(function) != 1:
@@ -136,10 +141,13 @@ PY
         no-stop-wait)
             message='smp-hosttest: fail: and waits a second for the one that does not take it, none for those that do'
             ;;
+        late-admit)
+            message='smp-hosttest: fail: and one that comes after the wait stops, neither online nor counted'
+            ;;
     esac
     run_phase "$fault-mutated" 1 "$message"
     cleanup
     run_phase "$fault-restored" 0 'smp-hosttest: result: pass'
     cmp "$work/smp.saved" "$smp"
 done
-echo 'smp-proof: result: pass: the four faults failed their rows and the restored source passed'
+echo 'smp-proof: result: pass: the five faults failed their rows and the restored source passed'
