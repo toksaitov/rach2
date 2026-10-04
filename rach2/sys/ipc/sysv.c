@@ -31,6 +31,7 @@
 #include "../mm/usercopy.h"
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
+#include "../timer.h"
 #include "../syscall_internal.h"
 
 /* The flags of every get and control call, and the bit the C library adds

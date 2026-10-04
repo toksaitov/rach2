@@ -35,6 +35,7 @@
 #include "../lib/kerrno.h"
 #include "../lib/ksignal.h"
 #include "../lib/kstring.h"
+#include "../timer.h"
 #include "../syscall_internal.h"
 
 #define MQ_NAME_MAX 255

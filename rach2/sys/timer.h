@@ -7,6 +7,34 @@
 extern volatile uint32_t kernel_ticks;
 
 /*
+ * The boot processor's tick changes `kernel_ticks`, the uptime's seconds and
+ * ticks, and the clock's record of where the tick began between two
+ * increments of `kernel_tick_seq`, which is odd meanwhile. Another processor
+ * reads them as one reading by reading them again when the count was odd or
+ * has moved (`tick_read_begin`, `tick_read_retry`); every variable they
+ * cover is volatile, so the compiler keeps the order of the accesses, and
+ * the x86 keeps the order of stores and of loads. The boot processor reads
+ * them with interrupts off and needs no second reading: the count is never
+ * odd for it but under an NMI, which must not wait for it.
+ */
+extern volatile uint32_t kernel_tick_seq;
+
+/** Open and close the boot processor's change of the tick (kernel.c). */
+void tick_write_begin(void);
+void tick_write_end(void);
+
+/** The count to give `tick_read_retry` after reading what it covers. */
+uint32_t tick_read_begin(void);
+
+/** Whether what was read since `tick_read_begin` gave `seq` must be read
+ * again. */
+int tick_read_retry(uint32_t seq);
+
+/** The uptime's seconds, the ticks of this second and `kernel_ticks`, as
+ * one reading. */
+void tick_now(uint32_t *seconds, uint32_t *second_ticks, uint32_t *ticks);
+
+/*
  * The clock under the tick: microseconds since the boot, the place within
  * the tick, and the ticks the timer did not deliver. The platform's timer
  * defines it (arch/x86/pit.c, from the counter of the timer that ticks, the
@@ -22,15 +50,22 @@ extern volatile uint32_t kernel_ticks;
  */
 uint32_t timer_now_us(void);
 
-/** Whether the tick's interrupt has been raised and not yet taken: the
- * counter has wrapped into a tick the handler has not counted. */
-int timer_tick_pending(void);
-
-/** Nanoseconds within this tick. The caller must disable interrupts. */
-uint32_t timer_subtick_ns(void);
+/**
+ * Where the clock is within the tick, with interrupts off: `*pending` is
+ * nonzero when the tick's interrupt has been raised and not yet counted,
+ * the counter having wrapped into a tick the handler has not seen, and
+ * `*phase_ns` is the nanoseconds into the tick in progress. On the boot
+ * processor these come from the counter under its tick; on any other, whose
+ * own timer does not run in step with it, from the platform's reference
+ * counter since the boot processor's last tick began, which the caller
+ * reads within `tick_read_begin` and `tick_read_retry`.
+ */
+void timer_phase(int *pending, uint32_t *phase_ns);
 
 /**
- * Count one period of the counter, from the timer handler and nowhere else.
+ * Count one period of the counter, from the boot processor's timer handler
+ * and nowhere else, and record where the tick began by the reference
+ * counter, for the other processors' readings.
  *
  * `timer_now_us` takes its periods from the tick, because two readings a whole
  * period apart are at the same place in the counter's sweep and the wrap

@@ -10,9 +10,7 @@
 #include "../mm/paging.h"
 #include "../mm/usercopy.h"
 #include "../syscall_internal.h"
-
-extern volatile uint32_t kernel_uptime_seconds;
-extern volatile uint32_t kernel_second_ticks;
+#include "../timer.h"
 
 #define FUTEX_WAIT           0
 #define FUTEX_WAKE           1
@@ -85,15 +83,14 @@ static uint32_t futex_ticks_until(const struct kernel_timespec *at, int realtime
     int64_t nsec;
     int64_t dsec;
     int32_t dnsec;
-    uint32_t flags;
+    uint32_t seconds32, ticks32, total32;
 
     if (realtime) {
         get_current_time(&sec, &nsec);
     } else {
-        flags = kirq_save();
-        sec = kernel_uptime_seconds;
-        nsec = (int64_t)kernel_second_ticks * 10000000;
-        kirq_restore(flags);
+        tick_now(&seconds32, &ticks32, &total32);
+        sec = seconds32;
+        nsec = (int64_t)ticks32 * 10000000;
     }
     dsec = (int64_t)at->tv_sec - sec;
     dnsec = (int32_t)at->tv_nsec - (int32_t)nsec;

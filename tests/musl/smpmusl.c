@@ -20,6 +20,13 @@
  * a count of reads after the unmap returned. On one processor the two of
  * each pair share it, and each row still runs.
  *
+ * Last, sleeps on the last processor, whose own timer runs out of step with
+ * the boot processor's tick, must not end early: each is timed by the
+ * time-stamp counter, measured against the clock on the first processor,
+ * since a clock read wrong on the last processor would time its own sleeps
+ * wrong too, and must last its request less the slack of the clock's
+ * reading.
+ *
  * Prints "SMPMUSL OK (N processors)" on success and "SMPMUSL FAIL (detail)"
  * otherwise.
  */
@@ -37,6 +44,7 @@
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 /* The futex operations, which musl's headers do not name. */
@@ -53,6 +61,13 @@
 
 /* The status an exec of this program with "child" exits with. */
 #define CHILD_STATUS 7
+
+/* The sleeps row: how many, how long the counter is measured for, and how
+ * much shorter than its request a sleep may seem, for the clock's reading
+ * and the measurement's own. */
+#define SLEEPS      60
+#define MEASURE_NS  200000000LL
+#define SLEEP_SLACK 100000LL
 
 static int cpus;
 /* What a thread returns when it could not be bound to its processor. */
@@ -386,6 +401,69 @@ static int unmaps(void)
     return 0;
 }
 
+/** The time-stamp counter. */
+static unsigned long long tsc(void)
+{
+    unsigned lo, hi;
+
+    __asm__ __volatile__("rdtsc" : "=a"(lo), "=d"(hi));
+    return ((unsigned long long)hi << 32) | lo;
+}
+
+/** CLOCK_MONOTONIC in nanoseconds. */
+static long long mono_ns(void)
+{
+    struct timespec ts;
+
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+}
+
+/*
+ * The counter's rate, from the clock on the first processor over 200 ms;
+ * then on the last, sleeps of 1 to 16 ms, each timed by the counter.
+ */
+static int sleeps(void)
+{
+    struct timespec req;
+    unsigned long long t0, t1;
+    long long c0, c1, want, took;
+    double per_ns;
+    int i;
+
+    if (bind_to(0) != 0) {
+        return fail("bind to the first processor");
+    }
+    req.tv_sec = 0;
+    req.tv_nsec = (long)MEASURE_NS;
+    t0 = tsc();
+    c0 = mono_ns();
+    nanosleep(&req, NULL);
+    t1 = tsc();
+    c1 = mono_ns();
+    if (c1 <= c0 || t1 <= t0) {
+        return fail("the counter or the clock did not move");
+    }
+    per_ns = (double)(t1 - t0) / (double)(c1 - c0);
+    if (bind_to(cpus - 1) != 0) {
+        return fail("bind to the last processor");
+    }
+    for (i = 0; i < SLEEPS; i++) {
+        want = 1000000LL + (i * 2770000LL) % 15000000LL;
+        req.tv_nsec = (long)want;
+        t0 = tsc();
+        nanosleep(&req, NULL);
+        t1 = tsc();
+        took = (long long)((double)(t1 - t0) / per_ns);
+        if (took + SLEEP_SLACK < want) {
+            printf("SMPMUSL FAIL (a sleep of %lld us on the last processor took %lld us)\n",
+                   want / 1000, took / 1000);
+            return 1;
+        }
+    }
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     if (argc == 2 && strcmp(argv[1], "child") == 0) {
@@ -397,7 +475,7 @@ int main(int argc, char **argv)
     }
     cpus = atoi(argv[1]);
     self = argv[0];
-    if (counts() || execs() || pipes() || futexes() || unmaps()) {
+    if (counts() || execs() || pipes() || futexes() || unmaps() || sleeps()) {
         return 1;
     }
     printf("SMPMUSL OK (%d processor%s)\n", cpus, cpus == 1 ? "" : "s");

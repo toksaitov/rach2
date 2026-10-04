@@ -1,7 +1,9 @@
 #include "portio.h"
 #include "pit.h"
+#include "refclock.h"
 
 #include "kcpu.h"
+#include "../arch.h"
 #include "../../lib/kirq.h"
 #include "../../udelay.h"
 
@@ -63,8 +65,23 @@ struct pit_clock {
 
 static struct pit_clock clock;
 
+/*
+ * Where the boot processor's last tick began, for the other processors: the
+ * reference counter (refclock.h) then, and the clock's periods. Another
+ * processor's own timer starts when that processor does and runs out of
+ * step with the boot processor's, so its count says nothing about where the
+ * boot processor's tick is; the reference counter is one counter every
+ * processor reads. Written by `timer_tick_clock` within the tick's sequence
+ * count (../../timer.h); `edge_set` is zero until the first tick with a
+ * reference counter.
+ */
+static volatile uint32_t edge_ref;
+static volatile uint32_t edge_periods;
+static volatile int edge_set;
+
 static uint32_t pit_phase_from(uint32_t count, uint8_t status);
 static int pit_pending(void);
+static void edge_phase(uint32_t ns, uint32_t period_ns, int *pending, uint32_t *phase_ns);
 
 static const struct tick_counter pit_counter = {pit_phase_us, pit_phase_ns, pit_period_us,
                                                 pit_pending};
@@ -212,7 +229,9 @@ uint32_t timer_lost_ticks(void)
  * before it, adds its period. The ticks the TSC finds missed: none in a gap
  * of one tick or a little more, eight in one of nine and a half, none
  * without a calibration, and the bound for a gap whose quotient is past 32
- * bits.
+ * bits. Another processor's place in the boot processor's tick: inside the
+ * period, none pending; a period and more gone, one pending and the rest;
+ * three periods gone, one pending and the place short of a period.
  */
 int timer_clock_check(void)
 {
@@ -220,7 +239,8 @@ int timer_clock_check(void)
     uint32_t want = pit_reload * 8381u / 10000u; /* 1193182 counts a second */
     uint32_t quarter = pit_phase_from(pit_reload - pit_reload / 4u, 0x80);
     struct pit_clock c;
-    int ok = 1;
+    uint32_t phase;
+    int ok = 1, due;
 
     ok = ok && p >= want - want / 100u && p <= want + want / 100u;
     ok = ok && pit_phase_from(pit_reload, 0x80) == 0u;
@@ -245,6 +265,12 @@ int timer_clock_check(void)
     ok = ok && pit_ticks_missed(9500u, 0u, 0u) == 0u;
     ok = ok && pit_ticks_missed(0u, 5000u, 1000u) == PIT_LOST_MAX;
     ok = ok && pit_ticks_missed(0u, 1u, 1000u) == PIT_LOST_MAX;
+    edge_phase(4000000u, 10000000u, &due, &phase);
+    ok = ok && !due && phase == 4000000u;
+    edge_phase(12500000u, 10000000u, &due, &phase);
+    ok = ok && due && phase == 2500000u;
+    edge_phase(30000000u, 10000000u, &due, &phase);
+    ok = ok && due && phase == 9999999u;
     return ok;
 }
 
@@ -281,7 +307,9 @@ uint32_t pit_phase_us(void)
 }
 
 /**
- * Count one period, from the timer handler and nowhere else.
+ * Count one period, from the boot processor's timer handler and nowhere
+ * else, and record where its tick began by the reference counter: the
+ * counter now less the counts of the place within the tick, read together.
  *
  * The tick counts the period unless a reading has already counted it, which
  * is what `clock_wrapped` says. Both counting it would put the clock ten
@@ -290,9 +318,47 @@ uint32_t pit_phase_us(void)
 void timer_tick_clock(void)
 {
     uint32_t flags = kirq_save();
+    uint32_t phase_ns = counter->phase_ns();
 
-    pit_clock_tick(&clock, counter->phase_us());
+    pit_clock_tick(&clock, phase_ns / 1000u);
+    if (refclock_name()) {
+        edge_ref = (refclock_read() - refclock_scale(phase_ns, refclock_hz(), 1000000000u)) &
+                   refclock_mask();
+        edge_periods = clock.periods;
+        edge_set = 1;
+    }
     kirq_restore(flags);
+}
+
+/** Nanoseconds since the boot processor's last tick began, by the
+ * reference counter, at most two periods'. */
+static uint32_t edge_elapsed_ns(void)
+{
+    uint32_t counts = (refclock_read() - edge_ref) & refclock_mask();
+    uint32_t most = refclock_scale(2u * counter->period_us(), refclock_hz(), 1000000u);
+
+    if (counts > most) {
+        counts = most;
+    }
+    return refclock_scale(counts, 1000000000u, refclock_hz());
+}
+
+/**
+ * The place in the tick `ns` nanoseconds after a tick of `period_ns` began:
+ * a tick pending when a whole period has gone, and the nanoseconds into the
+ * next, short of a period however long the boot processor has not counted
+ * one.
+ */
+static void edge_phase(uint32_t ns, uint32_t period_ns, int *pending, uint32_t *phase_ns)
+{
+    *pending = ns >= period_ns;
+    if (*pending) {
+        ns -= period_ns;
+        if (ns >= period_ns) {
+            ns = period_ns - 1u;
+        }
+    }
+    *phase_ns = ns;
 }
 
 /**
@@ -317,8 +383,16 @@ void timer_tick_clock(void)
 uint32_t timer_now_us(void)
 {
     uint32_t flags = kirq_save();
-    uint32_t now = pit_clock_read(&clock, counter->phase_us(), counter->period_us());
+    uint32_t now, seq;
 
+    if (arch_cpu_id() != 0 && edge_set) {
+        do {
+            seq = tick_read_begin();
+            now = edge_periods * counter->period_us() + edge_elapsed_ns() / 1000u;
+        } while (tick_read_retry(seq));
+    } else {
+        now = pit_clock_read(&clock, counter->phase_us(), counter->period_us());
+    }
     kirq_restore(flags);
     return now;
 }
@@ -335,27 +409,30 @@ uint32_t pit_phase_ns(void)
     return pit_phase_us() * 1000u;
 }
 
-/**
- * Nanoseconds within the current tick, with interrupts already disabled.
- *
- * The status and count must describe the same instant or a half-period wrap
- * can combine the old OUT bit with the new count. Use the same latched phase
- * as the diagnostic clock; its microsecond resolution fits in 32 bits.
- */
-uint32_t timer_subtick_ns(void)
-{
-    return counter->phase_ns();
-}
-
 /** The tick's interrupt, IRQ 0, raised at the 8259 and not yet taken. */
 static int pit_pending(void)
 {
     return pic_irq_pending(0);
 }
 
-int timer_tick_pending(void)
+/**
+ * On the boot processor, the counter's pending bit read on both sides of the
+ * latch of its place, and the latch again when the bit changed between, so
+ * that the place belongs to the tick the bit says. On another processor, the
+ * reference counter's time since the boot processor's tick began.
+ */
+void timer_phase(int *pending, uint32_t *phase_ns)
 {
-    return counter->pending();
+    if (arch_cpu_id() != 0 && edge_set) {
+        edge_phase(edge_elapsed_ns(), counter->period_us() * 1000u, pending, phase_ns);
+        return;
+    }
+    *pending = counter->pending();
+    *phase_ns = counter->phase_ns();
+    if (*pending != counter->pending()) {
+        *pending = 1;
+        *phase_ns = counter->phase_ns();
+    }
 }
 
 /**

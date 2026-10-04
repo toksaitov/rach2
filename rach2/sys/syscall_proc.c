@@ -77,6 +77,7 @@
 #include "mm/mm.h"
 #include "fs/tmpfs.h"
 #include "fs/devfs.h"
+#include "timer.h"
 #include "syscall_internal.h"
 
 /**

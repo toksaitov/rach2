@@ -189,6 +189,18 @@ int64_t rtc_boot_epoch(void)
     return 1000000;
 }
 
+/** The tick's counts as one reading, with interrupts off as the kernel's
+ * reads them, which on the host's one thread is all one reading needs. */
+void tick_now(uint32_t *seconds, uint32_t *second_ticks, uint32_t *ticks)
+{
+    uint32_t flags = kirq_save();
+
+    *seconds = kernel_uptime_seconds;
+    *second_ticks = kernel_second_ticks;
+    *ticks = kernel_ticks;
+    kirq_restore(flags);
+}
+
 /** Coarse real time as the clock keeps it: the boot's epoch plus the uptime
  * at the tick. */
 void rtc_coarse_realtime(int64_t *seconds, int64_t *nanoseconds)

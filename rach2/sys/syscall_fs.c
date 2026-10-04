@@ -72,6 +72,7 @@
 #include "mm/filemap.h"
 #include "mm/mm.h"
 #include "proc/coredump.h"
+#include "timer.h"
 #include "syscall_internal.h"
 
 /* The pool backing FD_TYPE_SYNTH_DIR descriptors. A 32-bit pid does not fit

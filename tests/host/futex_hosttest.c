@@ -41,6 +41,18 @@ volatile uint32_t kernel_ticks;
 volatile uint32_t kernel_uptime_seconds;
 volatile uint32_t kernel_second_ticks;
 static uint8_t user[1024];
+
+/** The tick's counts as one reading, with interrupts off as the kernel's
+ * reads them, which on the host's one thread is all one reading needs. */
+void tick_now(uint32_t *seconds, uint32_t *second_ticks, uint32_t *ticks)
+{
+    uint32_t flags = kirq_save();
+
+    *seconds = kernel_uptime_seconds;
+    *second_ticks = kernel_second_ticks;
+    *ticks = kernel_ticks;
+    kirq_restore(flags);
+}
 static process_t *named;
 static process_t *ends_at_copy;
 static uint32_t waiters_at;

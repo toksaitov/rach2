@@ -7,9 +7,10 @@
 # The test image boots three times under the harness, with one processor,
 # with four, and with four and `maxcpus=2`, and each boot runs musl/smpmusl
 # with the number of processors it should have: the processors every way a
-# program asks for them, and a stress of fork, exec, pipes, futexes and
-# munmap across them, which a page unmapped on one processor and read on
-# another ends (tests/musl/smpmusl.c). Each boot names its own count, which
+# program asks for them, a stress of fork, exec, pipes, futexes and munmap
+# across them, which a page unmapped on one processor and read on another
+# ends, and sleeps on the last processor that must not end early
+# (tests/musl/smpmusl.c). Each boot names its own count, which
 # the runner's shim keeps, so the suite's counts are its own whatever
 # RACH2_CPUS says. A fourth boot, with two processors, runs the debug shell's
 # preemption test, whose two kernel threads must each be preempted by the

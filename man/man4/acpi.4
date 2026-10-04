@@ -1,4 +1,4 @@
-.Dd October 3, 2026
+.Dd October 4, 2026
 .Dt ACPI 4
 .Os
 .Sh NAME
@@ -50,11 +50,15 @@ Before the first program it starts each through its local APIC, with INIT
 and two startup messages, from code it copies to the page at 0x8000; each
 takes its own tick from its local APIC, at the boot processor's measured
 rate.
+That tick runs out of step with the boot processor's, which alone keeps
+time, so another processor reads the place within the boot processor's tick
+from the HPET or the PM timer, as the time since that tick began.
 .Ql maxcpus=N
 limits the processors to N, the boot processor counted; 0 and 1 leave the
 kernel on the boot processor.
-A machine whose local APIC does not tick, whose memory map does not give
-the pages at 0x8000 as free memory, or whose MADT gives a processor an
+A machine whose local APIC does not tick, that has neither an HPET nor a
+PM timer, whose memory map does not give the pages at 0x8000 as free
+memory, or whose MADT gives a processor an
 APIC ID of 255 or more, which the xAPIC's messages cannot address, runs on
 the processors it can start, and the log says why.
 The log ends the start with

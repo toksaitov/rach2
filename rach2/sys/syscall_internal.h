@@ -336,9 +336,6 @@ struct kernel_timespec {
     long tv_nsec;
 };
 
-/* Global tick counter from kernel.c - incremented at 100 Hz */
-extern volatile uint32_t kernel_ticks;
-
 void get_current_time(int64_t *seconds, int64_t *nanoseconds);
 
 long sys_utimensat(isr_params_t *params);

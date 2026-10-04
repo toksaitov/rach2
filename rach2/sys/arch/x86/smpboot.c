@@ -10,6 +10,7 @@
 #include "fpu.h"
 #include "kcpu.h"
 #include "lapic.h"
+#include "refclock.h"
 
 #include "../arch.h"
 
@@ -165,6 +166,11 @@ int platform_cpu_count(int limit)
     }
     if (x86_tick_counts() == 0) {
         klog(KLOG_WARN, "smp", "one processor: the local apic does not tick");
+        return 1;
+    }
+    if (!refclock_name()) {
+        klog(KLOG_WARN, "smp",
+             "one processor: no hpet or pm timer to read the clock by on the others");
         return 1;
     }
     if (!trampoline_free) {

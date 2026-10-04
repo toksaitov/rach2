@@ -30,6 +30,7 @@
 #include "lib/kerrno.h"
 #include "lib/kirq.h"
 #include "lib/ksignal.h"
+#include "timer.h"
 #include "fs/fd.h"
 #include "fs/file.h"
 #include "ipc/pipe.h"
@@ -83,9 +84,6 @@
  * shared description leaves the mode as it is, since the description is still
  * open. */
 volatile uint32_t fb_owner_pid = 0;
-
-extern volatile uint32_t kernel_uptime_seconds;
-extern volatile uint32_t kernel_second_ticks;
 
 /*
  * ioctl request codes (Linux compatible subset)
@@ -499,7 +497,7 @@ static void clock_read(const struct kclock *c, struct kernel_timespec *out)
 {
     int64_t seconds;
     int64_t nanoseconds;
-    uint32_t flags;
+    uint32_t seconds32, ticks32, total32;
     uint32_t ticks;
 
     switch (c->kind) {
@@ -519,10 +517,9 @@ static void clock_read(const struct kclock *c, struct kernel_timespec *out)
         out->tv_nsec = (int32_t)nanoseconds;
         break;
     case KCLOCK_MONO_COARSE:
-        flags = kirq_save();
-        out->tv_sec = (int32_t)kernel_uptime_seconds;
-        out->tv_nsec = (int32_t)(kernel_second_ticks * 10000000);
-        kirq_restore(flags);
+        tick_now(&seconds32, &ticks32, &total32);
+        out->tv_sec = (int32_t)seconds32;
+        out->tv_nsec = (int32_t)(ticks32 * 10000000);
         break;
     case KCLOCK_CPU:
     default:
@@ -1252,15 +1249,15 @@ static int time_reached(enum kclock_kind kind, const struct kernel_timespec *whe
  * then reads `when` or later. Both are read to the microsecond, within the
  * tick, so a time the clock has reached returns at once, before the deadline
  * is rounded up to a tick. The tick count and the time since boot are read
- * in one masked step, since the tick changes both. A deadline further than
- * `sleep_until` can wait for, about 248 days, is waited for in pieces, and
- * the clock read again after each. Returns 0, or -EINTR when a signal the
- * process acts on comes first.
+ * as one reading (`tick_now`), since the tick changes both. A deadline
+ * further than `sleep_until` can wait for, about 248 days, is waited for in
+ * pieces, and the clock read again after each. Returns 0, or -EINTR when a
+ * signal the process acts on comes first.
  */
 static int32_t sleep_until_time(enum kclock_kind kind, const struct kernel_timespec *when)
 {
     for (;;) {
-        uint32_t flags;
+        uint32_t seconds32, ticks32;
         uint64_t now;
         uint32_t base;
         int64_t sec = when->tv_sec;
@@ -1270,10 +1267,8 @@ static int32_t sleep_until_time(enum kclock_kind kind, const struct kernel_times
         if (time_reached(kind, when)) {
             return 0;
         }
-        flags = kirq_save();
-        now = (uint64_t)kernel_uptime_seconds * 100u + kernel_second_ticks;
-        base = kernel_ticks;
-        kirq_restore(flags);
+        tick_now(&seconds32, &ticks32, &base);
+        now = (uint64_t)seconds32 * 100u + ticks32;
         if (kind == KCLOCK_REAL) {
             sec -= rtc_boot_epoch();
         }

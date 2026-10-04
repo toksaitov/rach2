@@ -18,6 +18,7 @@
 #include "../lib/ksignal.h"
 #include "../lib/kstring.h"
 #include "../network/socket/socket.h"
+#include "../timer.h"
 #include "../syscall_internal.h"
 
 #define SOCK_CLOEXEC  02000000

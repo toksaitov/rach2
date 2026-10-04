@@ -8,11 +8,58 @@
 #include "rtc.h"
 #include "timer.h"
 
+#include "arch/arch.h"
 #include "lib/kirq.h"
+#include "proc/smp.h"
 
 /* The uptime the timer handler keeps (kernel.c). */
 extern volatile uint32_t kernel_uptime_seconds;
 extern volatile uint32_t kernel_second_ticks;
+
+volatile uint32_t kernel_tick_seq;
+
+void tick_write_begin(void)
+{
+    kernel_tick_seq++;
+}
+
+void tick_write_end(void)
+{
+    kernel_tick_seq++;
+}
+
+uint32_t tick_read_begin(void)
+{
+    uint32_t seq;
+
+    if (arch_cpu_id() == 0) {
+        return 0;
+    }
+    while ((seq = kernel_tick_seq) & 1u) {
+        smp_service();
+        arch_relax();
+    }
+    return seq;
+}
+
+int tick_read_retry(uint32_t seq)
+{
+    return arch_cpu_id() != 0 && kernel_tick_seq != seq;
+}
+
+void tick_now(uint32_t *seconds, uint32_t *second_ticks, uint32_t *ticks)
+{
+    uint32_t flags = kirq_save();
+    uint32_t seq;
+
+    do {
+        seq = tick_read_begin();
+        *seconds = kernel_uptime_seconds;
+        *second_ticks = kernel_second_ticks;
+        *ticks = kernel_ticks;
+    } while (tick_read_retry(seq));
+    kirq_restore(flags);
+}
 
 #define RTC_SECONDS_PER_DAY    86400
 #define RTC_SECONDS_PER_HOUR   3600
@@ -202,22 +249,21 @@ static void rtc_add_step(int64_t *seconds, int64_t *nanoseconds)
  * Time since boot now: the uptime seconds, the ticks of this second and the
  * timer's place within the tick; the caller has interrupts off.
  *
- * The tick's interrupt can be pending after the counter wraps. Read its pending
- * bit on both sides of the latch; if it changed, latch again. A pending tick
- * belongs to the new period even before the handler counts it.
+ * The tick's interrupt can be pending after the counter wraps, and a pending
+ * tick belongs to the new period even before the handler counts it
+ * (`timer_phase`).
  */
 static void rtc_since_boot(uint32_t *uptime, uint32_t *ticks, uint32_t *phase_ns)
 {
+    uint32_t seq;
     int pending;
 
-    *uptime = kernel_uptime_seconds;
-    *ticks = kernel_second_ticks;
-    pending = timer_tick_pending();
-    *phase_ns = timer_subtick_ns();
-    if (pending != timer_tick_pending()) {
-        pending = 1;
-        *phase_ns = timer_subtick_ns();
-    }
+    do {
+        seq = tick_read_begin();
+        *uptime = kernel_uptime_seconds;
+        *ticks = kernel_second_ticks;
+        timer_phase(&pending, phase_ns);
+    } while (tick_read_retry(seq));
     *ticks += (uint32_t)pending;
     if (*ticks >= RTC_TICKS_PER_SECOND) {
         *ticks -= RTC_TICKS_PER_SECOND;
@@ -228,14 +274,15 @@ static void rtc_since_boot(uint32_t *uptime, uint32_t *ticks, uint32_t *phase_ns
 void rtc_tick_phase(uint32_t *ticks, uint32_t *phase_ns)
 {
     uint32_t flags = kirq_save();
-    int pending = timer_tick_pending();
+    uint32_t seq;
+    int pending;
 
-    *phase_ns = timer_subtick_ns();
-    if (pending != timer_tick_pending()) {
-        pending = 1;
-        *phase_ns = timer_subtick_ns();
-    }
-    *ticks = kernel_ticks + (uint32_t)pending;
+    do {
+        seq = tick_read_begin();
+        *ticks = kernel_ticks;
+        timer_phase(&pending, phase_ns);
+    } while (tick_read_retry(seq));
+    *ticks += (uint32_t)pending;
     kirq_restore(flags);
 }
 
@@ -308,9 +355,11 @@ void rtc_monotonic(int64_t *seconds, int64_t *nanoseconds)
 void rtc_coarse_realtime(int64_t *seconds, int64_t *nanoseconds)
 {
     uint32_t flags = kirq_save();
+    uint32_t uptime, ticks, total;
 
-    rtc_time_from_anchor(rtc_anchor_seconds, rtc_anchor_uptime, kernel_uptime_seconds,
-                         kernel_second_ticks, seconds, nanoseconds);
+    tick_now(&uptime, &ticks, &total);
+    rtc_time_from_anchor(rtc_anchor_seconds, rtc_anchor_uptime, uptime, ticks, seconds,
+                         nanoseconds);
     rtc_add_step(seconds, nanoseconds);
     kirq_restore(flags);
 }

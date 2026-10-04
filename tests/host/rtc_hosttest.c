@@ -127,6 +127,47 @@ void klog(int level, const char *subsystem, const char *format, ...)
     (void)format;
 }
 
+/* No reference counter and one processor: the host is the boot processor,
+ * which reads the counter under its tick, and never waits on the tick's
+ * sequence count. */
+const char *refclock_name(void)
+{
+    return 0;
+}
+
+uint32_t refclock_read(void)
+{
+    CHECK(0);
+    return 0;
+}
+
+uint32_t refclock_hz(void)
+{
+    CHECK(0);
+    return 1;
+}
+
+uint32_t refclock_mask(void)
+{
+    CHECK(0);
+    return 0;
+}
+
+uint32_t refclock_scale(uint32_t a, uint32_t b, uint32_t c)
+{
+    return (uint32_t)((uint64_t)a * b / c);
+}
+
+void smp_service(void)
+{
+    CHECK(0);
+}
+
+void arch_relax(void)
+{
+    CHECK(0);
+}
+
 /**
  * Literal answers exercise the same latch and real-time path as file writes.
  * A pending wrap must count once, including at the end of a second; dropping
@@ -340,6 +381,9 @@ int main(void)
     rtc_time_of_seconds(4102444799u, &when);
     CHECK(when.year == 2099 && when.month == 12 && when.day == 31 && when.hour == 23 &&
           when.minute == 59 && when.second == 59);
+
+    /* The clock's own fixed readings, the boot's self-check. */
+    CHECK(timer_clock_check());
 
     /* The epoch itself, in the century this driver assumes: 2000-01-01 is
      * 10957 days after 1970-01-01, and 10957 * 86400 is 946684800. */

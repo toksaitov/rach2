@@ -249,11 +249,11 @@ static void timer_handler(isr_params_t *params)
         return;
     }
     lost = timer_lost_ticks();
+    tick_write_begin();
     ++kernel_ticks;
     /* The microsecond clock's periods are this tick's to count; see
        `timer_now_us`. */
     timer_tick_clock();
-    latency_tick();
     if (++kernel_second_ticks >= 100) {
         kernel_second_ticks = 0;
         ++kernel_uptime_seconds;
@@ -265,6 +265,8 @@ static void timer_handler(isr_params_t *params)
             ++kernel_uptime_seconds;
         }
     }
+    tick_write_end();
+    latency_tick();
 
     sched_account_tick(FRAME_USER(params) != 0);
     sched_load_tick();
