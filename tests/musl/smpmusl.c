@@ -4,9 +4,9 @@
  * The argument is the number of processors the boot should have. That many
  * are listed by /proc/cpuinfo, are in the caller's affinity, are counted by
  * `sysconf(_SC_NPROCESSORS_ONLN)`, are in /sys/devices/system/cpu/online as
- * `0` or `0-N`, have a `cpuN` directory there and a `cpuN` line in
- * /proc/stat, and none past the last has either. A process bound to each
- * processor in turn runs there, as `getcpu` says.
+ * `0` or `0-N`, have a `cpuN` directory there, each of its own inode, and a
+ * `cpuN` line in /proc/stat, and none past the last has either. A process
+ * bound to each processor in turn runs there, as `getcpu` says.
  *
  * Then each part of a stress across the processors is counted. On each
  * processor a child bound there forks and execs this program twenty times,
@@ -132,10 +132,11 @@ static int stat_has(const char *name)
 static int counts(void)
 {
     char want[16], got[32], name[64];
+    ino_t inos[65];
     cpu_set_t set;
     struct stat st;
     FILE *f;
-    int c;
+    int c, k;
 
     if (count_lines("/proc/cpuinfo", "processor\t:") != cpus) {
         return fail("/proc/cpuinfo does not list the processors");
@@ -161,6 +162,12 @@ static int counts(void)
         if ((stat(name, &st) == 0 && S_ISDIR(st.st_mode)) != (c < cpus)) {
             return fail("a cpuN directory is missing, or one past the last is there");
         }
+        for (k = 0; c < cpus && k < c; k++) {
+            if (inos[k] == st.st_ino) {
+                return fail("two cpuN directories have one inode");
+            }
+        }
+        inos[c] = st.st_ino;
         snprintf(name, sizeof(name), "cpu%d", c);
         if (stat_has(name) != (c < cpus)) {
             return fail("a cpuN line of /proc/stat is missing, or one past the last is there");

@@ -113,6 +113,7 @@
 #define SYSFS_INO_PCI_LINK  0x02000000u
 #define SYSFS_INO_NET       0x03000000u
 #define SYSFS_INO_BLOCK     0x04000000u
+#define SYSFS_INO_CPU       0x05000000u
 #define SYSFS_INO_USB       0x80000000u
 #define SYSFS_INO_FILE      0x40000000u
 #define PROCFS_INO_SYS      0x140u /* and the entries of /proc/sys after it */
@@ -3586,6 +3587,9 @@ uint32_t sysfs_ino(int node, int key, int file)
     }
     if (node == SYSFS_USB_DEVICE) {
         return SYSFS_INO_USB | (file ? SYSFS_INO_FILE : 0u) | (uint32_t)key;
+    if (node == SYSFS_CPUN) {
+        return SYSFS_INO_CPU | ((uint32_t)key & 0xFFFFu) << 8 | ((uint32_t)file & 0xFFu);
+    }
     }
     return SYSFS_INO_FIXED + (uint32_t)node + ((uint32_t)file << 8);
 }
