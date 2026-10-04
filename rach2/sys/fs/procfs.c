@@ -2288,16 +2288,27 @@ static int procfs_gen_cpuinfo(struct procfs_text *t)
     return t->len;
 }
 
+/** Append `v` in decimal, all 64 bits of it. */
+static void ap_u64(struct procfs_text *t, uint64_t v)
+{
+    char tmp[24];
+
+    (void)diskinfo_u64_dec(tmp, (int)sizeof(tmp), v);
+    ap_str(t, tmp);
+}
+
 /** Append a /proc/stat processor line's columns after its name: `user`,
- * no nice, `busy` less `user` as system, and `idle`. */
-static void ap_cpu_ticks(struct procfs_text *t, uint32_t user, uint32_t busy, uint32_t idle)
+ * no nice, `busy` less `user` as system, and `idle`. The columns are 64
+ * bits for the `cpu` line's sums: one processor's ticks, each a word, wrap
+ * after 497 days at 100 Hz, but their sum over 64 processors after eight. */
+static void ap_cpu_ticks(struct procfs_text *t, uint64_t user, uint64_t busy, uint64_t idle)
 {
     ap_str(t, " ");
-    ap_u32(t, user);
+    ap_u64(t, user);
     ap_str(t, " 0 ");
-    ap_u32(t, busy - user);
+    ap_u64(t, busy - user);
     ap_ch(t, ' ');
-    ap_u32(t, idle);
+    ap_u64(t, idle);
     ap_str(t, " 0 0 0 0 0 0\n");
 }
 
@@ -2326,7 +2337,7 @@ static void ap_cpu_ticks(struct procfs_text *t, uint32_t user, uint32_t busy, ui
  */
 static int procfs_gen_statsys(struct procfs_text *t)
 {
-    uint32_t user = 0, busy = 0, idle = 0;
+    uint64_t user = 0, busy = 0, idle = 0;
     const process_t *p;
     uint32_t running = 0;
     uint32_t blocked = 0;
@@ -3576,6 +3587,9 @@ uint32_t sysfs_ino(int node, int key, int file)
         return SYSFS_INO_NET | (node == SYSFS_NET_STATS ? 0x800000u : 0u) |
                ((uint32_t)key & 0xFFFFu) << 8 | (uint32_t)file;
     }
+    if (node == SYSFS_CPUN) {
+        return SYSFS_INO_CPU | ((uint32_t)key & 0xFFFFu) << 8 | ((uint32_t)file & 0xFFu);
+    }
     if (node == SYSFS_PCI_DEVICE && file == 2) {
         return SYSFS_INO_PCI_LINK + (uint32_t)key;
     }
@@ -3587,9 +3601,6 @@ uint32_t sysfs_ino(int node, int key, int file)
     }
     if (node == SYSFS_USB_DEVICE) {
         return SYSFS_INO_USB | (file ? SYSFS_INO_FILE : 0u) | (uint32_t)key;
-    if (node == SYSFS_CPUN) {
-        return SYSFS_INO_CPU | ((uint32_t)key & 0xFFFFu) << 8 | ((uint32_t)file & 0xFFu);
-    }
     }
     return SYSFS_INO_FIXED + (uint32_t)node + ((uint32_t)file << 8);
 }
