@@ -15,6 +15,18 @@
 #include "ipc/pipe_ring.c"
 #include "mm/usercopy.c"
 
+/* The compare-and-exchange `cmpxchg_user_u32` makes, which no row reaches,
+ * on the host's one thread. */
+unsigned int arch_atomic_cmpxchg(volatile unsigned int *p, unsigned int old, unsigned int value)
+{
+    unsigned int was = *p;
+
+    if (was == old) {
+        *p = value;
+    }
+    return was;
+}
+
 extern int printf(const char *format, ...);
 
 #define USER_BASE  0x04000000u

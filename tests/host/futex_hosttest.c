@@ -17,7 +17,10 @@
  * for a sleep in which a waiter runs: with interrupts on, it sets
  * FUTEX_WAITERS in the word a row names, as that waiter would before it
  * sleeps. A thread that ends holding that robust futex must leave the word
- * with FUTEX_WAITERS and FUTEX_OWNER_DIED, and wake the waiter. Of the futex
+ * with FUTEX_WAITERS and FUTEX_OWNER_DIED, and wake the waiter; so must one
+ * whose word a thread on another processor changes between the release's
+ * load and its compare-and-exchange, which the model's exchange can do with
+ * interrupts off, so that the release reads the word again. Of the futex
  * it was taking or giving back, one with no owner must have a waiter woken
  * and be left 0, unless it is a priority-inheritance futex.
  *
@@ -58,7 +61,10 @@ static process_t *ends_at_copy;
 static uint32_t waiters_at;
 static uint32_t slow_at, slow_ticks, armed;
 static struct futex_q waiter;
-static int masked, failures, wakes, waits;
+static int masked, failures, wakes, waits, cmpxchgs;
+/* The word a thread on another processor sets FUTEX_WAITERS in, once, between
+ * a load and the compare-and-exchange after it, whatever the interrupts. */
+static uint32_t raced_at;
 
 #define CHECK(c, detail)                              \
     do {                                              \
@@ -142,6 +148,35 @@ int copy_to_user(void __user *dst, const void *src, size_t n)
         return -EFAULT;
     }
     k_memcpy(user + at, src, n);
+    return 0;
+}
+
+/** The word at `src`, as one load reads it, through the model's prefault. */
+int get_user_u32(uint32_t *val, uintptr_t src)
+{
+    if ((src & 3u) != 0 || !vm_prefault_range(src, 4, 0)) {
+        return -EFAULT;
+    }
+    *val = word_at((uint32_t)src);
+    return 0;
+}
+
+/** The word at `dst` exchanged when it holds `old`, through the model's
+ * prefault for a write, as one compare-and-exchange; counted. */
+int cmpxchg_user_u32(uintptr_t dst, uint32_t old, uint32_t value, uint32_t *prev)
+{
+    if ((dst & 3u) != 0 || !vm_prefault_range(dst, 4, 1)) {
+        return -EFAULT;
+    }
+    cmpxchgs++;
+    if (raced_at != 0 && raced_at == dst) {
+        word_set((uint32_t)dst, word_at((uint32_t)dst) | FUTEX_WAITERS);
+        raced_at = 0;
+    }
+    *prev = word_at((uint32_t)dst);
+    if (*prev == old) {
+        word_set((uint32_t)dst, value);
+    }
     return 0;
 }
 
@@ -261,6 +296,30 @@ static void owner_released(void)
         waiter_unfile();
     }
     waiters_at = 0;
+}
+
+/**
+ * A thread that ends holding a robust futex on its list, while a thread on
+ * another processor sets FUTEX_WAITERS between the release's load of the
+ * word and its write, with interrupts off: the compare-and-exchange finds
+ * the word changed, the release reads it again, and the word ends with the
+ * waiters bit and FUTEX_OWNER_DIED, and the waiter is woken.
+ */
+static void owner_raced(void)
+{
+    robust_list_set(1, 0, 0);
+    word_set(272, 42u);
+    raced_at = 272;
+    cmpxchgs = 0;
+    waiter_file(272);
+    proc_thread_gone(&self);
+    CHECK(word_at(272) == (FUTEX_WAITERS | FUTEX_OWNER_DIED) && cmpxchgs == 2,
+          "a release that a store from another processor raced reads the word again");
+    CHECK(waiter.woken && wakes == 1, "and wakes the waiter whose bit it kept");
+    if (!waiter.woken) {
+        waiter_unfile();
+    }
+    raced_at = 0;
 }
 
 /**
@@ -427,6 +486,7 @@ int main(void)
     self.state = PROC_RUNNING;
     robust_head_read();
     owner_released();
+    owner_raced();
     pending_released();
     child_tid_cleared();
     deadline_fixed();

@@ -48,6 +48,23 @@ int copy_from_user(void *dst, const void __user *src, size_t n);
  * bad range. */
 int copy_to_user(void __user *dst, const void *src, size_t n);
 
+/**
+ * Read the aligned 32-bit user word at `src` into `*val` in one load, which a
+ * store from another processor cannot tear, after the checks and the backing
+ * `copy_from_user` makes; 0, or -EFAULT for an address that is not aligned
+ * or that `copy_from_user` refuses.
+ */
+int get_user_u32(uint32_t *val, uintptr_t src);
+
+/**
+ * Store `value` in the aligned 32-bit user word at `dst` if it holds `old`,
+ * in one compare-and-exchange no other processor's access comes between,
+ * after the checks and the backing `copy_to_user` makes; what the word held
+ * goes to `*prev`. 0, or -EFAULT for an address that is not aligned or that
+ * `copy_to_user` refuses.
+ */
+int cmpxchg_user_u32(uintptr_t dst, uint32_t old, uint32_t value, uint32_t *prev);
+
 /** Copy a NUL-terminated string from user space into dst, at most n bytes;
  * returns its length, or a negative errno. */
 int strncpy_from_user(char *dst, const char __user *src, uint32_t n);

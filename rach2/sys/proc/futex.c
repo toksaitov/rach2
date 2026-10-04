@@ -200,7 +200,7 @@ static int32_t futex_wait(uintptr_t uaddr, uint32_t val, const struct kernel_tim
     bucket = futex_bucket(q.space, q.uaddr);
 
     flags = kirq_save();
-    if (copy_from_user(&cur, (const void __user *)uaddr, sizeof(cur)) != 0) {
+    if (get_user_u32(&cur, uaddr) != 0) {
         kirq_restore(flags);
         return -EFAULT;
     }
@@ -300,11 +300,15 @@ int futex_restartable(const isr_params_t *params)
  * The word's page is made present and writable first, and the word is then
  * read, compared and written with interrupts off, so no fault sleeps between
  * the read and the write. A waiter that set FUTEX_WAITERS during such a
- * sleep would have its bit written over and would not be woken.
+ * sleep would have its bit written over and would not be woken. The word is
+ * read in one load and written in one compare-and-exchange, read again when
+ * it changed meanwhile, as Linux's does: a thread on another processor may
+ * take the lock or set FUTEX_WAITERS between the two, and a write of its
+ * bytes one at a time would let it see a word that is neither.
  */
 static void robust_release(uintptr_t uaddr, uint32_t tid, int pending)
 {
-    uint32_t word;
+    uint32_t word, died, seen;
     uint32_t flags;
     int wake = 0;
 
@@ -312,13 +316,21 @@ static void robust_release(uintptr_t uaddr, uint32_t tid, int pending)
         return;
     }
     flags = kirq_save();
-    if (copy_from_user(&word, (const void __user *)uaddr, sizeof(word)) == 0) {
+    while (get_user_u32(&word, uaddr) == 0) {
         if (pending && (word & FUTEX_TID_MASK) == 0) {
             wake = 1;
-        } else if ((word & FUTEX_TID_MASK) == tid) {
-            word = (word & FUTEX_WAITERS) | FUTEX_OWNER_DIED;
-            wake = copy_to_user((void __user *)uaddr, &word, sizeof(word)) == 0 &&
-                   (word & FUTEX_WAITERS) != 0;
+            break;
+        }
+        if ((word & FUTEX_TID_MASK) != tid) {
+            break;
+        }
+        died = (word & FUTEX_WAITERS) | FUTEX_OWNER_DIED;
+        if (cmpxchg_user_u32(uaddr, word, died, &seen) != 0) {
+            break;
+        }
+        if (seen == word) {
+            wake = (died & FUTEX_WAITERS) != 0;
+            break;
         }
     }
     kirq_restore(flags);

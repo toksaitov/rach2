@@ -1,5 +1,6 @@
 #include "usercopy.h"
 #include "paging.h"
+#include "../arch/arch.h"
 
 #include "../lib/kstring.h"
 #include "../lib/kerrno.h"
@@ -82,6 +83,24 @@ int copy_to_user(void __user *dst, const void *src, size_t n)
         return -EFAULT;
     }
     k_memcpy((void __force *)dst, src, n);
+    return 0;
+}
+
+int get_user_u32(uint32_t *val, uintptr_t src)
+{
+    if ((src & 3u) != 0 || !user_range_ok(src, 4) || !vm_prefault_range(src, 4, 0)) {
+        return -EFAULT;
+    }
+    *val = *(const volatile uint32_t *)src;
+    return 0;
+}
+
+int cmpxchg_user_u32(uintptr_t dst, uint32_t old, uint32_t value, uint32_t *prev)
+{
+    if ((dst & 3u) != 0 || !user_range_ok(dst, 4) || !vm_prefault_range(dst, 4, 1)) {
+        return -EFAULT;
+    }
+    *prev = arch_atomic_cmpxchg((volatile unsigned int *)dst, old, value);
     return 0;
 }
 
