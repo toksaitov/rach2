@@ -210,10 +210,18 @@ static int frame_str_is(const struct uimage *u, uint32_t va, const char *s)
     }
 }
 
+/** The model's byte at user address `va`, which is 32 bits wide, or NULL
+ * when it is not mapped: an address past 4 GiB is no address of the model's,
+ * and is not cut to one. */
+static uint8_t *at_wide(unsigned long va)
+{
+    return va > 0xFFFFFFFFul ? 0 : at((uint32_t)va);
+}
+
 /** The word at user address `va`, or 0xDEADBEEF when it is not mapped. */
 static unsigned long word(uintptr_t va)
 {
-    uint8_t *p = at((uint32_t)va);
+    uint8_t *p = at_wide(va);
     unsigned long w = 0xDEADBEEFu;
 
     if (p != 0) {
@@ -226,7 +234,7 @@ static unsigned long word(uintptr_t va)
 static int str_is(unsigned long va, const char *s)
 {
     for (;; va++, s++) {
-        uint8_t *p = at((uint32_t)va);
+        uint8_t *p = at_wide(va);
 
         if (p == 0 || *p != (uint8_t)*s) {
             return 0;
