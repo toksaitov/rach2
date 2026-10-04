@@ -48,10 +48,11 @@ shares the descriptor table cannot use it.
 .Pp
 The other threads of the process are sent
 .Dv SIGKILL ,
-and the file is written once they have ended, each after the system call
-it was in, so none of them changes the memory the file records; the
-registers the file has of them are the ones they had when the signal came.
-The process ends with the signal after the file.
+and the file is written once each has stopped, after the system call it
+was in and before it releases anything, so none of them changes the memory
+the file records; the registers the file has of them are the ones they had
+when the signal came.
+They end after the file is written, and the process ends with the signal.
 A process that shares the address space without being a thread of this
 one, as a
 .Xr vfork 2
@@ -81,14 +82,14 @@ mapping the process never wrote, and writes a core file for a process
 that is not dumpable when
 .Pa /proc/sys/fs/suid_dumpable
 permits it; this kernel does none of these.
-Linux holds the other threads before they release anything; here they
-end first, so the file has the robust futexes they held already given
-.Dv FUTEX_OWNER_DIED ,
-as
-.Xr futex 2
-describes, and the words their
+As on Linux, the other threads are held before they release anything, so
+the file has the robust futexes they held still without
+.Dv FUTEX_OWNER_DIED
+and the words their
 .Dv CLONE_CHILD_CLEARTID
-named already cleared.
+named not yet cleared; both change after the file, as
+.Xr futex 2
+describes.
 .Ss Format
 On i686 the file is an ELF32 file of type
 .Dv ET_CORE
