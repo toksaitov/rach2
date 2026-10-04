@@ -5711,9 +5711,12 @@ static long mmap_install(uintptr_t addr, uintptr_t len, uint32_t flags, struct m
 /*
  * The core of mmap(2) and mmap2(2): map memory. Its arguments are addr,
  * length, prot, flags, fd and pgoff, the offset in the file in pages, which
- * anonymous memory ignores; an offset whose last page would not fit in 32
- * bits is EOVERFLOW, as in Linux, whatever is mapped. Returns the mapped base
- * address, or -errno.
+ * anonymous memory ignores. The offset and the length in pages must sum to a
+ * value an unsigned long holds, as Linux has it, whatever is mapped, and for
+ * a file or shared memory, whose pages the kernel numbers in 32 bits, to less
+ * than 2^32, which on i686 is the same bound; else EOVERFLOW. Private
+ * anonymous memory on x86-64 has only the first bound. Returns the mapped
+ * base address, or -errno.
  * What is mapped is `mmap_backing`'s: anonymous memory, private or shared, or a
  * file, private or shared; where it goes is `mmap_place`'s. The backing is
  * found first, since finding it may sleep, and the place after, so that nothing
@@ -5747,7 +5750,9 @@ long ksys_mmap_pgoff(uintptr_t addr, uintptr_t length, uint32_t prot, uint32_t f
     if ((flags & (MAP_FIXED | MAP_FIXED_NOREPLACE)) && (addr & (PAGE_SIZE - 1)) != 0) {
         return -EINVAL;
     }
-    if (pgoff > 0xFFFFFFFFu - len / PAGE_SIZE) {
+    if (pgoff + len / PAGE_SIZE < pgoff ||
+        (((flags & MAP_TYPE) != MAP_PRIVATE || !(flags & MAP_ANONYMOUS)) &&
+         pgoff + len / PAGE_SIZE > 0xFFFFFFFFul)) {
         return -EOVERFLOW;
     }
     mem_balance();

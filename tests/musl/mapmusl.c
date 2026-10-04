@@ -9,27 +9,29 @@
  * parent, and a store through the mapping of the file reaches read(2), and
  * after a truncation and a growth a write to the file is seen through the
  * mapping. On x86-64 a truncation takes out of a mapping of a file of 4 GiB and
- * a page, cut to 4 GiB, the last page alone; mprotect, getrusage, a shrink and
- * a move each pass terabytes without pages in the run's time and reach the page
- * beyond them. mprotect will not make a shared mapping of a file opened
- * read-only writable, and will a private one. Shared anonymous memory ignores a
- * raw mmap2's page offset (mmap's, in bytes, on x86-64), a file's offset whose
- * last page would not fit in 32 bits is EOVERFLOW, and a page of a file in
- * memory past its end is never backed. mremap without MREMAP_MAYMOVE does not
- * grow a mapping into the one after it, and with the flag moves the mapping
- * with its bytes. A shrink in place keeps the bytes of the page it keeps and
- * frees the two pages it cuts: MAP_FIXED_NOREPLACE maps them again, and the
- * byte stored in them before reads as zero. mremap refuses an old length that
- * would wrap past the end of memory, leaving the mapping; a fixed mremap that
- * shrinks a mapping is held to RLIMIT_AS by what it leaves;
- * madvise(MADV_DONTNEED) gives a private anonymous mapping zero pages again,
- * and madvise and msync refuse a length that would round up to 0. A write
- * through /proc/self/mem to a read-only page a fork shared leaves the page
- * read-only. On an ext2 root, a shared mapping of a file carries a child's
- * store to the parent, a store to read(2), a write(2) to the mapping without
- * losing a store beside it, and its stores to the file after munmap and after a
- * mapper's exit; on the KRFFS root, one that may be written is ENODEV, and a
- * read-only one through a descriptor open for writing may not be made writable.
+ * a page, cut to 4 GiB, the last page alone, and a mapping of a file or of
+ * shared memory of 16 TiB is EOVERFLOW and one of a page less is made;
+ * mprotect, getrusage, a shrink and a move each pass terabytes without pages in
+ * the run's time and reach the page beyond them. mprotect will not make a
+ * shared mapping of a file opened read-only writable, and will a private one.
+ * Shared anonymous memory ignores a raw mmap2's page offset (mmap's, in bytes,
+ * on x86-64), a file's offset whose last page would not fit in 32 bits is
+ * EOVERFLOW, and a page of a file in memory past its end is never backed.
+ * mremap without MREMAP_MAYMOVE does not grow a mapping into the one after it,
+ * and with the flag moves the mapping with its bytes. A shrink in place keeps
+ * the bytes of the page it keeps and frees the two pages it cuts:
+ * MAP_FIXED_NOREPLACE maps them again, and the byte stored in them before reads
+ * as zero. mremap refuses an old length that would wrap past the end of memory,
+ * leaving the mapping; a fixed mremap that shrinks a mapping is held to
+ * RLIMIT_AS by what it leaves; madvise(MADV_DONTNEED) gives a private anonymous
+ * mapping zero pages again, and madvise and msync refuse a length that would
+ * round up to 0. A write through /proc/self/mem to a read-only page a fork
+ * shared leaves the page read-only. On an ext2 root, a shared mapping of a file
+ * carries a child's store to the parent, a store to read(2), a write(2) to the
+ * mapping without losing a store beside it, and its stores to the file after
+ * munmap and after a mapper's exit; on the KRFFS root, one that may be written
+ * is ENODEV, and a read-only one through a descriptor open for writing may not
+ * be made writable.
  *
  * Prints "MAPMUSL OK" on success and "MAPMUSL FAIL (detail)" otherwise.
  */
@@ -204,12 +206,16 @@ static int truncated_shared(void)
 }
 
 #if defined __x86_64__
-/* A truncation's cut at x86-64's widths. Of a file of 4 GiB and a page,
-   truncated to 4 GiB, whose offset in bytes passes 32 bits, only the last
-   page is taken out, and the first stays in memory, as mincore reports. */
+/* A truncation's cut and the bound on a mapping's pages at x86-64's widths.
+   Of a file of 4 GiB and a page, truncated to 4 GiB, whose offset in bytes
+   passes 32 bits, only the last page is taken out, and the first stays in
+   memory, as mincore reports. The kernel numbers the pages of a file or of
+   shared memory in 32 bits, so a mapping of either is EOVERFLOW at 2^32
+   pages, 16 TiB, as Linux's sum of the offset and the pages is at 32 bits,
+   and is made at a page less. */
 static int truncated_wide(void)
 {
-    const size_t four = (size_t)1 << 32;
+    const size_t four = (size_t)1 << 32, huge = (size_t)1 << 44;
     unsigned char in = 0;
     char *m;
     int fd = open(SHM_PATH, O_RDWR | O_CREAT | O_TRUNC, 0600);
@@ -227,6 +233,15 @@ static int truncated_wide(void)
         return fail("a truncation to 4 GiB took the mapping's first page out");
     }
     munmap(m, four + PAGE);
+    if (mmap(NULL, huge, PROT_READ, MAP_PRIVATE, fd, 0) != MAP_FAILED || errno != EOVERFLOW ||
+        mmap(NULL, huge, PROT_READ, MAP_SHARED | MAP_ANONYMOUS, -1, 0) != MAP_FAILED ||
+        errno != EOVERFLOW) {
+        return fail("a mapping of a file or of shared memory of 2^32 pages is not EOVERFLOW");
+    }
+    m = mmap(NULL, huge - PAGE, PROT_READ, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (m == MAP_FAILED || munmap(m, huge - PAGE) != 0) {
+        return fail("a mapping of shared memory of 2^32 pages less one");
+    }
     close(fd);
     unlink(SHM_PATH);
     return 0;

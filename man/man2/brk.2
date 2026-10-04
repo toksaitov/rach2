@@ -389,7 +389,13 @@ in bytes, which must be a multiple of 4096 or the call fails with
 .Er EINVAL ;
 there is no
 .Nm mmap2 .
-The bound on the offset's last page is the same.
+The offset and the length in pages must sum to less than 2^32 for a file
+or for shared memory, whose pages the kernel numbers in 32 bits, or the
+call fails with
+.Er EOVERFLOW ;
+private anonymous memory has no such bound, since Linux bounds the sum in
+64 bits there, and a reservation may take any part of the 128 TiB of user
+addresses.
 .Sh RETURN VALUES
 The raw
 .Fn brk
@@ -544,7 +550,9 @@ request.
 .It Er EOVERFLOW
 The page offset of an
 .Nm mmap2
-call and its length together pass the last page 32 bits can count.
+call and its length together pass the last page 32 bits can count; on
+x86-64, the page offset and the length of a mapping of a file or of shared
+memory do.
 .It Er ESRCH
 The kernel has no current process.
 .El
