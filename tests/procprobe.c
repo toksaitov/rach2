@@ -1291,6 +1291,145 @@ static void memory_file_rows(void)
           "/proc/swaps has Linux's header and no swap area");
 }
 
+/**
+ * Capacity. The pool is filled to its last block, half in a child and half
+ * here, because one process cannot hold that many descriptors, and the file
+ * must then come back with every row and nothing cut: this is what the
+ * declared bound is for, and three rows never reached it.
+ */
+static void pool_full_rows(void)
+{
+    unsigned long args[6];
+    unsigned char sa[16];
+    int fds[FILL_HERE];
+    int i, n, filler_pid, child_status;
+
+    filler_pid = syscall1(SYS_FORK, 0);
+    check(filler_pid >= 0, "fork for the second half of the pool");
+    if (filler_pid == 0) {
+        for (i = 0; i < FILL_CHILD; i++) {
+            int lfd = new_socket(args);
+            if (lfd < 0 || listen_on(lfd, 9000 + i, sa, args) != 0) {
+                sys_exit(31);
+            }
+        }
+        nap(3000); /* hold them while the parent reads the table */
+        sys_exit(0);
+    }
+    nap(500);
+    for (i = 0; i < FILL_HERE; i++) {
+        fds[i] = new_socket(args);
+        check(fds[i] >= 0 && listen_on(fds[i], 9100 + i, sa, args) == 0,
+              "a listening socket for the parent's half of the pool");
+    }
+
+    n = slurp("/proc/net/tcp", buf, (int)sizeof(buf));
+    check(n > 0, "/proc/net/tcp reads with the pool full");
+    check(n < (int)sizeof(buf) - 1, "and the whole file fit in one read, so nothing was cut");
+    check(lines_in(buf, n) == MAX_TCP_ROWS + 1,
+          "a full pool prints a header and one row for every block");
+    check(ends_with(buf, n, "\n") && contains(buf, n, " 100 0 0 10 0 wnd="),
+          "and the last of them is a whole row");
+
+    for (i = 0; i < FILL_HERE; i++) {
+        syscall1(SYS_CLOSE, fds[i]);
+    }
+    syscall3(SYS_WAITPID, filler_pid, (long)&child_status, 0);
+    check(child_status == 0, "the child that held the other half exited cleanly");
+}
+
+/**
+ * Whose connection it is, and whether the row still says so once the
+ * descriptor has gone. A listener owned by an ordinary account is made in a
+ * child, and root connects to it: the accepted connection is allocated in
+ * receive context, where no process is calling, so an implementation taking
+ * the current process's uid would report root and pass a test whose two
+ * sides had the same owner.
+ */
+static void connection_owner_rows(void)
+{
+    unsigned long args[6];
+    unsigned char sa[16];
+    int lfd, cfd, child_status, listener_pid, i, n;
+    int owner_rows = 0, root_rows = 0;
+
+    listener_pid = syscall1(SYS_FORK, 0);
+    check(listener_pid >= 0, "fork for the listener");
+    if (listener_pid == 0) {
+        /* The child owns the listener, at a uid the parent lacks. */
+        if (syscall3(SYS_SETRESUID, 1000, 1000, 1000) != 0) {
+            sys_exit(21);
+        }
+        args[0] = AF_INET;
+        args[1] = SOCK_STREAM;
+        args[2] = 0;
+        lfd = sock_call(SC_SOCKET, args);
+        if (lfd < 0) {
+            sys_exit(22);
+        }
+        for (i = 0; i < 16; i++) {
+            sa[i] = 0;
+        }
+        sa[0] = AF_INET;
+        sa[2] = 0x1F;
+        sa[3] = 0x91; /* port 8081 */
+        args[0] = (unsigned int)lfd;
+        args[1] = (unsigned long)sa;
+        args[2] = 16;
+        if (sock_call(SC_BIND, args) != 0) {
+            sys_exit(23);
+        }
+        args[1] = 4;
+        if (sock_call(SC_LISTEN, args) != 0) {
+            sys_exit(24);
+        }
+        /* Hold it open while the parent connects and reads the table. */
+        nap(2500);
+        sys_exit(0);
+    }
+    nap(400);
+    args[0] = AF_INET;
+    args[1] = SOCK_STREAM;
+    args[2] = 0;
+    cfd = sock_call(SC_SOCKET, args);
+    check(cfd >= 0, "root opens a connecting socket");
+    for (i = 0; i < 16; i++) {
+        sa[i] = 0;
+    }
+    sa[0] = AF_INET;
+    sa[2] = 0x1F;
+    sa[3] = 0x91;
+    sa[4] = 127;
+    sa[7] = 1; /* 127.0.0.1 */
+    args[0] = (unsigned int)cfd;
+    args[1] = (unsigned long)sa;
+    args[2] = 16;
+    check(sock_call(SC_CONNECT, args) == 0,
+          "root connects to the child's listener over loopback");
+
+    n = slurp("/proc/net/tcp", buf, (int)sizeof(buf));
+    check(n > 0, "/proc/net/tcp reads with connections live");
+    count_row_owners(buf, n, 1000, &owner_rows, &root_rows);
+    check(owner_rows >= 2, "the listener and the connection it accepted both belong to the "
+                           "account that listened, not to whoever was running");
+    check(root_rows >= 1, "and root's own connecting socket belongs to root");
+
+    /* Capacity: the table must come back whole however many rows it has,
+     * which is what the bound is for. */
+    check(ends_with(buf, n, "\n") && contains(buf, n, " 100 0 0 10 0 wnd="),
+          "a table with several rows still ends with a whole row");
+
+    syscall1(SYS_CLOSE, cfd);
+    /* A closed connection stays in the pool while it finishes closing, and
+     * its socket is detached the moment the descriptor goes. The row must
+     * still name its owner and its inode, which reading them through the
+     * socket could not do. */
+    n = slurp("/proc/net/tcp", buf, (int)sizeof(buf));
+    check(n > 0 && no_row_has_zero_inode(buf, n),
+          "a row whose socket is detached still reports its inode");
+    syscall3(SYS_WAITPID, listener_pid, (long)&child_status, 0);
+}
+
 void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
@@ -1773,139 +1912,8 @@ void probe_main(unsigned long *sp)
 #endif
     anonymous_rows();
     pid_dir_rows();
-
-    /* Capacity. The pool is filled to its last block, half in a child and half
-     * here, because one process cannot hold that many descriptors, and the file
-     * must then come back with every row and nothing cut: this is what the
-     * declared bound is for, and three rows never reached it. */
-    {
-        unsigned long args[6];
-        unsigned char sa[16];
-        int fds[FILL_HERE];
-        int i, filler_pid, child_status;
-
-        filler_pid = syscall1(SYS_FORK, 0);
-        check(filler_pid >= 0, "fork for the second half of the pool");
-        if (filler_pid == 0) {
-            for (i = 0; i < FILL_CHILD; i++) {
-                int lfd = new_socket(args);
-                if (lfd < 0 || listen_on(lfd, 9000 + i, sa, args) != 0) {
-                    sys_exit(31);
-                }
-            }
-            nap(3000); /* hold them while the parent reads the table */
-            sys_exit(0);
-        }
-        nap(500);
-        for (i = 0; i < FILL_HERE; i++) {
-            fds[i] = new_socket(args);
-            check(fds[i] >= 0 && listen_on(fds[i], 9100 + i, sa, args) == 0,
-                  "a listening socket for the parent's half of the pool");
-        }
-
-        n = slurp("/proc/net/tcp", buf, (int)sizeof(buf));
-        check(n > 0, "/proc/net/tcp reads with the pool full");
-        check(n < (int)sizeof(buf) - 1, "and the whole file fit in one read, so nothing was cut");
-        check(lines_in(buf, n) == MAX_TCP_ROWS + 1,
-              "a full pool prints a header and one row for every block");
-        check(ends_with(buf, n, "\n") && contains(buf, n, " 100 0 0 10 0 wnd="),
-              "and the last of them is a whole row");
-
-        for (i = 0; i < FILL_HERE; i++) {
-            syscall1(SYS_CLOSE, fds[i]);
-        }
-        syscall3(SYS_WAITPID, filler_pid, (long)&child_status, 0);
-        check(child_status == 0, "the child that held the other half exited cleanly");
-    }
-
-    /* Whose connection it is, and whether the row still says so once the
-     * descriptor has gone. A listener owned by an ordinary account is made in a
-     * child, and root connects to it: the accepted connection is allocated in
-     * receive context, where no process is calling, so an implementation
-     * taking the current process's uid would report root and pass a test whose
-     * two sides had the same owner. */
-    {
-        unsigned long args[6];
-        unsigned char sa[16];
-        int lfd, cfd, child_status, listener_pid, i;
-        int owner_rows = 0, root_rows = 0;
-
-        listener_pid = syscall1(SYS_FORK, 0);
-        check(listener_pid >= 0, "fork for the listener");
-        if (listener_pid == 0) {
-            /* The child owns the listener, at a uid the parent lacks. */
-            if (syscall3(SYS_SETRESUID, 1000, 1000, 1000) != 0) {
-                sys_exit(21);
-            }
-            args[0] = AF_INET;
-            args[1] = SOCK_STREAM;
-            args[2] = 0;
-            lfd = sock_call(SC_SOCKET, args);
-            if (lfd < 0) {
-                sys_exit(22);
-            }
-            for (i = 0; i < 16; i++) {
-                sa[i] = 0;
-            }
-            sa[0] = AF_INET;
-            sa[2] = 0x1F;
-            sa[3] = 0x91; /* port 8081 */
-            args[0] = (unsigned int)lfd;
-            args[1] = (unsigned long)sa;
-            args[2] = 16;
-            if (sock_call(SC_BIND, args) != 0) {
-                sys_exit(23);
-            }
-            args[1] = 4;
-            if (sock_call(SC_LISTEN, args) != 0) {
-                sys_exit(24);
-            }
-            /* Hold it open while the parent connects and reads the table. */
-            nap(2500);
-            sys_exit(0);
-        }
-        nap(400);
-        args[0] = AF_INET;
-        args[1] = SOCK_STREAM;
-        args[2] = 0;
-        cfd = sock_call(SC_SOCKET, args);
-        check(cfd >= 0, "root opens a connecting socket");
-        for (i = 0; i < 16; i++) {
-            sa[i] = 0;
-        }
-        sa[0] = AF_INET;
-        sa[2] = 0x1F;
-        sa[3] = 0x91;
-        sa[4] = 127;
-        sa[7] = 1; /* 127.0.0.1 */
-        args[0] = (unsigned int)cfd;
-        args[1] = (unsigned long)sa;
-        args[2] = 16;
-        check(sock_call(SC_CONNECT, args) == 0,
-              "root connects to the child's listener over loopback");
-
-        n = slurp("/proc/net/tcp", buf, (int)sizeof(buf));
-        check(n > 0, "/proc/net/tcp reads with connections live");
-        count_row_owners(buf, n, 1000, &owner_rows, &root_rows);
-        check(owner_rows >= 2, "the listener and the connection it accepted both belong to the "
-                               "account that listened, not to whoever was running");
-        check(root_rows >= 1, "and root's own connecting socket belongs to root");
-
-        /* Capacity: the table must come back whole however many rows it has,
-         * which is what the bound is for. */
-        check(ends_with(buf, n, "\n") && contains(buf, n, " 100 0 0 10 0 wnd="),
-              "a table with several rows still ends with a whole row");
-
-        syscall1(SYS_CLOSE, cfd);
-        /* A closed connection stays in the pool while it finishes closing, and
-         * its socket is detached the moment the descriptor goes. The row must
-         * still name its owner and its inode, which reading them through the
-         * socket could not do. */
-        n = slurp("/proc/net/tcp", buf, (int)sizeof(buf));
-        check(n > 0 && no_row_has_zero_inode(buf, n),
-              "a row whose socket is detached still reports its inode");
-        syscall3(SYS_WAITPID, listener_pid, (long)&child_status, 0);
-    }
+    pool_full_rows();
+    connection_owner_rows();
 
     done();
 }
