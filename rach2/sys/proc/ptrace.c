@@ -607,7 +607,9 @@ static int siginfo_access(uint32_t pid, process_t *t, uintptr_t data, int set)
  * as Linux's `ptrace_regset` moves it. The length must be a multiple of the
  * set's unit; it is cut to the set's size, and the iovec's length becomes
  * the bytes moved. The set goes through the heap, since an XSAVE image is
- * larger than a frame of the kernel's stack should be.
+ * larger than a frame of the kernel's stack should be. The copy of the iovec
+ * may sleep, and the thread may be reaped meanwhile, so both directions find
+ * it again after their copies from the caller (`ptrace_tracee`).
  */
 static long regset_access(uint32_t pid, process_t *t, unsigned long type, uintptr_t data, int set)
 {
@@ -634,9 +636,14 @@ static long regset_access(uint32_t pid, process_t *t, unsigned long type, uintpt
         return -ENOMEM;
     }
     if (!set) {
-        arch_regset_get(t, type, buf);
-        if (copy_to_user((void __user *)iov.iov_base, buf, len) != 0) {
-            rc = -EFAULT;
+        t = ptrace_tracee(pid);
+        if (!t) {
+            rc = -ESRCH;
+        } else {
+            arch_regset_get(t, type, buf);
+            if (copy_to_user((void __user *)iov.iov_base, buf, len) != 0) {
+                rc = -EFAULT;
+            }
         }
     } else if (copy_from_user(buf, (const void __user *)iov.iov_base, len) != 0) {
         rc = -EFAULT;
