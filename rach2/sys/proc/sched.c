@@ -478,11 +478,12 @@ void sched_service_point(void)
  * counters are 32-bit, one aligned store, so a reader never sees half of
  * one; at 100 Hz they wrap after about 497 days, the bound `kernel_ticks`
  * already has. The totals are summed over every record, of which those of
- * processors never started are zero.
+ * processors never started are zero, in 64 bits, since the sum over 64
+ * processors would wrap in under eight days.
  */
-uint32_t sched_idle_ticks(void)
+uint64_t sched_idle_ticks(void)
 {
-    uint32_t sum = 0;
+    uint64_t sum = 0;
     int i;
 
     for (i = 0; i < NR_CPUS; i++) {
@@ -491,9 +492,9 @@ uint32_t sched_idle_ticks(void)
     return sum;
 }
 
-uint32_t sched_busy_ticks(void)
+uint64_t sched_busy_ticks(void)
 {
-    uint32_t sum = 0;
+    uint64_t sum = 0;
     int i;
 
     for (i = 0; i < NR_CPUS; i++) {

@@ -2213,6 +2213,26 @@ static void ap_ticks_as_seconds(struct procfs_text *t, uint32_t ticks)
     ap_ch(t, (char)('0' + ticks % 10u));
 }
 
+/** Append a 64-bit count of 100 Hz ticks as seconds with two decimals, by
+ * its decimal digits split before the last two, since i686 has no 64-bit
+ * division here. */
+static void ap_ticks64_as_seconds(struct procfs_text *t, uint64_t ticks)
+{
+    char digits[24];
+    int n = diskinfo_u64_dec(digits, (int)sizeof(digits), ticks);
+    int i;
+
+    for (i = 0; i < n - 2; i++) {
+        ap_ch(t, digits[i]);
+    }
+    if (n < 3) {
+        ap_ch(t, '0');
+    }
+    ap_ch(t, '.');
+    ap_ch(t, n < 2 ? '0' : digits[n - 2]);
+    ap_ch(t, digits[n - 1]);
+}
+
 /**
  * Render /proc/uptime: seconds since boot, and the seconds the processors
  * idled, summed over them as Linux sums them.
@@ -2228,11 +2248,11 @@ static void ap_ticks_as_seconds(struct procfs_text *t, uint32_t ticks)
 static int procfs_gen_uptime(struct procfs_text *t)
 {
     uint32_t up = cpu_table[0].idle_ticks + cpu_table[0].busy_ticks;
-    uint32_t idle = sched_idle_ticks();
+    uint64_t idle = sched_idle_ticks();
 
     ap_ticks_as_seconds(t, up);
     ap_ch(t, ' ');
-    ap_ticks_as_seconds(t, idle);
+    ap_ticks64_as_seconds(t, idle);
     ap_ch(t, '\n');
     return t->len;
 }

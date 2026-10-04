@@ -723,9 +723,14 @@ as Linux counts them.
 .It Pa /proc/uptime
 Seconds since boot and the seconds the processors spent idle, summed over
 them, separated by a space, each with two decimal places.
-Both derive from delivered 100 Hz timer ticks, the first from the boot
-processor's.
-Ticks lost while interrupts are disabled are not counted.
+Both count 100 Hz timer ticks: the first the boot processor's, the second
+the idle ticks of every processor, as the
+.Li cpu
+lines of
+.Pa /proc/stat
+count them, so a tick lost while interrupts were held off is counted with
+the next.
+The idle sum is kept in 64 bits.
 .It Pa /proc/usb
 One line per configured USB device:
 .Dl port PATH SPEED VENDOR:PRODUCT class CLASS protocol PROTOCOL

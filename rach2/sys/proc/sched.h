@@ -66,13 +66,13 @@ void sched_forget(process_t *p);
 void idle_wait_irq_off(void); /* sti; hlt; cli */
 void idle_wait_irq_on(void);  /* sti; hlt */
 
-/** Ticks delivered while a processor was parked in an idle wait, and while
- * it was not, summed over the processors; each processor's own are in its
- * record (percpu.h). Counted rather than timed:
- * interrupts are off in several paths and a tick can be lost, so these are
- * what the timer actually delivered. */
-uint32_t sched_idle_ticks(void);
-uint32_t sched_busy_ticks(void);
+/** Ticks that found a processor parked in an idle wait, and those that did
+ * not, summed over the processors in 64 bits; each processor's own are in
+ * its record (percpu.h). Counted rather than timed: each processor counts
+ * every global tick since it started, a lost one with the next
+ * (`sched_account_tick`). */
+uint64_t sched_idle_ticks(void);
+uint64_t sched_busy_ticks(void);
 
 /** Count the global ticks this processor has not counted yet as idle or
  * busy, and charge each busy one to the current process as user time when

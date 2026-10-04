@@ -460,6 +460,56 @@ static int stat_times(const char *line, unsigned user, unsigned sys)
            u == user && s == sys;
 }
 
+/* The processors' idle ticks summed, which the uptime row sets. */
+static uint64_t idle_sum;
+
+uint64_t sched_idle_ticks(void)
+{
+    return idle_sum;
+}
+
+/* diskinfo_u64_dec, which diskinfo_hosttest tests, by the host's divide. */
+int diskinfo_u64_dec(char *out, int cap, uint64_t v)
+{
+    char tmp[24];
+    int n = 0, i;
+
+    do {
+        tmp[n++] = (char)('0' + v % 10u);
+        v /= 10u;
+    } while (v != 0);
+    if (n + 1 > cap) {
+        return 0;
+    }
+    for (i = 0; i < n; i++) {
+        out[i] = tmp[n - 1 - i];
+    }
+    out[n] = '\0';
+    return n;
+}
+
+/** /proc/uptime gives the idle sum in seconds at its full 64 bits, and a
+ * sum under a second with its leading zero. */
+static void uptime_rows(void)
+{
+    struct procfs_text text;
+
+    cpu_table[0].idle_ticks = 100;
+    cpu_table[0].busy_ticks = 50;
+    idle_sum = 8589934560ull;
+    procfs_text_init(&text);
+    check(procfs_gen_uptime(&text) == 17 && __builtin_memcmp(text.buf, "1.50 85899345.60\n", 17) == 0,
+          "the idle seconds past 32 bits of ticks are whole");
+    kfree(text.buf);
+    idle_sum = 7;
+    procfs_text_init(&text);
+    check(procfs_gen_uptime(&text) == 10 && __builtin_memcmp(text.buf, "1.50 0.07\n", 10) == 0,
+          "and a sum under a second has its leading zero");
+    kfree(text.buf);
+    cpu_table[0].idle_ticks = 0;
+    cpu_table[0].busy_ticks = 0;
+}
+
 /** A process's stat has the time of all its threads, and a thread's under
  * the process's task directory has its own. */
 static void thread_times(void)
@@ -825,6 +875,7 @@ int main(void)
     check(__builtin_memcmp(text.buf, "7 (test) R ", 11) == 0, "stat fields retain their order");
     kfree(text.buf);
     thread_times();
+    uptime_rows();
     descriptor_links();
     task_ids();
     mem_descriptor();
@@ -837,7 +888,8 @@ int main(void)
     if (!failures) {
         printf("procfs-hosttest: result: pass: stat allocation failure and times, descriptor "
                "links, task ids, the mem descriptor's counts, the exe link, a read of a reaped "
-               "process's arguments, oom_score_adj and the paths of the maps\n");
+               "process's arguments, oom_score_adj, the paths of the maps and the uptime idle "
+               "sum\n");
     }
     return failures != 0;
 }
