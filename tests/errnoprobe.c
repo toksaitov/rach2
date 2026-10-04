@@ -48,19 +48,21 @@ static void puts_(const char *s)
     syscall3(SYS_WRITE, STDOUT, (long)s, (int)slen(s));
 }
 
-static void put_int(int v)
+/** Write `v` in decimal: a system call's result is a long, whose width is
+ * the architecture's. */
+static void put_long(long v)
 {
-    char buf[12];
-    int i = 11;
+    char buf[24];
+    int i = 23;
     int neg = 0;
-    u32 u;
+    unsigned long u;
 
     buf[i--] = '\0';
     if (v < 0) {
         neg = 1;
-        u = (u32)(-v);
+        u = 0ul - (unsigned long)v;
     } else {
-        u = (u32)v;
+        u = (unsigned long)v;
     }
     if (u == 0) {
         buf[i--] = '0';
@@ -77,16 +79,20 @@ static void put_int(int v)
 
 static int fails;
 
-/** Check that syscall result `got` equals the expected negative errno. */
-static void expect(int got, int want_errno, const char *label)
+/**
+ * Check that syscall result `got` equals the expected negative errno, at the
+ * result's whole width: an error the kernel zero-extended on x86-64, such as
+ * 0x00000000ffffffda for -ENOSYS, is a success to musl and must fail here.
+ */
+static void expect(long got, int want_errno, const char *label)
 {
-    if (got != -want_errno) {
+    if (got != -(long)want_errno) {
         puts_("FAIL: ");
         puts_(label);
         puts_(" expected -");
-        put_int(want_errno);
+        put_long(want_errno);
         puts_(" got ");
-        put_int(got);
+        put_long(got);
         puts_("\n");
         fails++;
     }
