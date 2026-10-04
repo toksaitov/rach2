@@ -58,8 +58,10 @@ extern char _text[], _etext[], _rodata[], _data[];
 
 /**
  * A zeroed page for a table, by physical address; 0 when there is none.
- * A page the boot carves past the memory the map offers refuses the machine
- * by name, as `init_paging` refuses one too small for the frame table.
+ * The boot carves its pages at the break, and passes over a page the map
+ * does not offer, a firmware's hole below the window's end; a page past the
+ * memory the map offers refuses the machine by name, as `init_paging`
+ * refuses one too small for the frame table.
  */
 static uintptr_t table_alloc(void)
 {
@@ -68,7 +70,11 @@ static uintptr_t table_alloc(void)
     if (_heap_ready) {
         phys = alloc_frame();
     } else {
-        phys = mem_reserve(PAGE_SIZE, true);
+        do {
+            phys = mem_reserve(PAGE_SIZE, true);
+        } while (phys && _boot_map && _boot_map->top_frame &&
+                 phys / PAGE_SIZE < _boot_map->top_frame &&
+                 !frame_map_usable(_boot_map, phys / PAGE_SIZE));
         if (phys && _boot_map && _boot_map->top_frame &&
             !frame_map_usable(_boot_map, phys / PAGE_SIZE)) {
             klog(KLOG_ERR, "memory",
