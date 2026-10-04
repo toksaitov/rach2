@@ -1464,10 +1464,10 @@ if "$HARNESS" --bios \
     "expect=recovery image" \
     "expect=# " "send=mkdir -p /m && mount -t exfat /dev/disk1p2 /m && echo MOUNT\"\"ED" \
     "expect=MOUNTED" \
-    "send=mkdir -p /r; mount -t vfat /dev/disk0p2 /r; cp -R /r/rach2-config /tmp/legacy-before; umount /r" \
-    "send=sed 's|^    mkdir -p \"\$next_archive/etc/rach2\" |    sync; exit 99; mkdir -p \"\$next_archive/etc/rach2\" |' /bin/rach2-install > /tmp/stop-install" \
-    "send=sh /tmp/stop-install --update /m/$(basename "$INSTALLER_EXT2") /dev/disk0; echo STOP_STATUS=\$?" "expect=STOP_STATUS=99" \
-    "send=mount -t vfat /dev/disk0p2 /r; diff -r /tmp/legacy-before /r/rach2-config && test ! -e /r/rach2-config/generation && echo CHOSEN\"\"WHOLE; umount /r; echo CHOSEN\"\"CHECKED" "expect=CHOSENCHECKED" \
+    "send=mkdir -p /r; mount -t vfat /dev/disk0p2 /r; cp -R /r/rach2-config /dev/shm/legacy-before; umount /r" \
+    "send=sed 's|^    mkdir -p \"\$next_archive/etc/rach2\" |    sync; exit 99; mkdir -p \"\$next_archive/etc/rach2\" |' /bin/rach2-install > /dev/shm/stop-install" \
+    "send=sh /dev/shm/stop-install --update /m/$(basename "$INSTALLER_EXT2") /dev/disk0; echo STOP_STATUS=\$?" "expect=STOP_STATUS=99" \
+    "send=mount -t vfat /dev/disk0p2 /r; diff -r /dev/shm/legacy-before /r/rach2-config && test ! -e /r/rach2-config/generation && echo CHOSEN\"\"WHOLE; umount /r; echo CHOSEN\"\"CHECKED" "expect=CHOSENCHECKED" \
     "send=rach2-install --update /m/$(basename "$INSTALLER_EXT2") /dev/disk0" \
     "expect=before the root is written" \
     "expect=what reached the root is the image" \
@@ -1508,6 +1508,9 @@ if "$HARNESS" --bios \
     --qemu-arg=-drive --qemu-arg="file=$DIR/one.img,format=raw,if=ide,index=0,media=disk" \
     --timeout 3600 --steptmo 1800 --ok "STOPPEDDONE" --log "$LOG16" \
     "expect=recovery image" \
+# The copies the row makes go in /dev/shm, as rach2-install's own do, and not
+# in the recovery system's RAM root, whose free space is the room the system
+# itself works in.
     "expect=# " "send=mkdir -p /m && mount -t exfat /dev/disk1p2 /m && echo MOUNT\"\"ED" \
     "expect=MOUNTED" \
     "send=rach2-install --update /m/$(basename "$INSTALLER_EXT2") /dev/disk0" \
