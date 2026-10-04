@@ -18,6 +18,30 @@ static uint8_t aperture[VGA_GFX_SIZE];
 /* The console on the adapter, not on a framebuffer. */
 bool fbcon_active = false;
 
+/* The framebuffer console's side of the picture, which the rows count. */
+static int gfx_begins, gfx_ends;
+static const uint8_t *gfx_palette_seen, *gfx_frame_seen;
+
+void fbcon_gfx_begin(void)
+{
+    gfx_begins++;
+}
+
+void fbcon_gfx_end(void)
+{
+    gfx_ends++;
+}
+
+void fbcon_gfx_palette(const uint8_t *rgb)
+{
+    gfx_palette_seen = rgb;
+}
+
+void fbcon_gfx_frame(const uint8_t *pixels)
+{
+    gfx_frame_seen = pixels;
+}
+
 extern int printf(const char *format, ...);
 static int failures;
 static uint32_t masked;
@@ -180,9 +204,12 @@ static void row_font(void)
 }
 
 /** On a framebuffer console mode 13h programs no port and its picture is
- * memory, not the aperture, which may alias the screen the console draws. */
+ * memory, not the aperture, which may alias the screen the console draws;
+ * the console takes the screen at the entry, the palette whole, a frame at
+ * each present, and gives the screen back at the exit. */
 static void row_fbcon(void)
 {
+    static const uint8_t palette[768] = {1, 2, 3};
     uint8_t *pixels;
 
     font_row = 1; /* no font is saved or restored here */
@@ -197,10 +224,15 @@ static void row_fbcon(void)
           "the picture on a framebuffer console is memory of its own");
     pixels[0] = 0xEE;
     pixels[VGA_GFX_SIZE - 1] = 0xEE;
+    fb_set_palette(palette);
+    fb_present();
     CHECK(accesses == 0 && aperture[0] == 0x5A, "and no port nor the aperture is touched");
+    CHECK(gfx_begins == 1 && gfx_palette_seen == palette && gfx_frame_seen == pixels,
+          "the console takes the screen, the palette whole and the frame");
     expected_mode = 0;
     fb_exit();
     CHECK(accesses == 0 && gfx_current.framebuffer == 0, "nor by the way back");
+    CHECK(gfx_ends == 1, "and gives the screen back");
     fbcon_active = false;
     font_row = 0;
 }

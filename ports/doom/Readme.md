@@ -36,7 +36,7 @@ The local runtime wraps `exit`, `read`, `write`, `open`, `close`, `lseek`, `ioct
 
 ### Graphics and input
 
-The framebuffer path is `/fb`, independent of the working directory. Opening it selects VGA mode 13h. Each frame is 64,000 palette indices. Palette updates pass 768 RGB bytes to the kernel.
+The framebuffer path is `/fb`, independent of the working directory. Opening it selects VGA mode 13h. Each frame is 64,000 palette indices. Palette updates pass 768 RGB bytes to the kernel. On a machine booted by UEFI, which has no VGA, the kernel draws each frame on the framebuffer at the largest whole scale that fits, three on a 1366x768 screen, in the middle (`fbcon_gfx_frame` in `rach2/sys/display/fbcon.c`).
 
 Keyboard input arrives as PS/2 set 1 scan codes on standard input. The platform layer maps letters, digits, arrows, modifiers, function keys, Enter, Escape, Tab, and the usual Doom action keys. Its queue can contain at most 31 unread transitions.
 

@@ -25,6 +25,8 @@ tests/system/suites/ssh.sh: the next reading, while the released connections clo
 tests/system/suites/uefi.sh: the server starts after the login prompt
 tests/system/suites/uefi.sh: the dump is written whole by then, or still growing
 tests/system/suites/uefi.sh: the monitor takes the command between the guest's work
+tests/system/suites/uefi.sh: the game draws its title within the eight seconds
+tests/system/suites/uefi.sh: the game has ended and the console drawn within two seconds
 tests/system/suites/drill.sh: a holder keeps the console's feed open while the machine runs
 tests/system/suites/grub.sh: a holder keeps the console's feed open while the machine runs
 tests/system/suites/install.sh: a holder keeps the console's feed open while the machine runs

@@ -13,7 +13,9 @@
  * must draw the lines that moved and leave a blank cell under a blank one
  * alone, which a pixel marked in such a cell shows; a clear must take the
  * cursor's lines from the cell it left; and the scrollback must draw the lines
- * it shows. The text console's driver, the console and the framebuffer's
+ * it shows. The 320x200 picture of Mode 13h must be drawn at the largest whole
+ * scale that fits, in the middle, with no cell over it until the console takes
+ * the screen back. The text console's driver, the console and the framebuffer's
  * drawing are included whole, as vga_text_hosttest.c includes them.
  */
 #include "lib/kint.h"
@@ -432,6 +434,48 @@ static void row_panic_colors(void)
     set_back_color(black);
 }
 
+/**
+ * The 320x200 picture of Mode 13h on a 1366x768 screen of 32 bits: drawn at
+ * three pixels to one, the largest whole number that fits, in the middle,
+ * 960x600 from (203, 84), each of its pixels a square of its palette color;
+ * the screen around it black; no cell drawn while it has the screen, and the
+ * cells, those written meanwhile among them, drawn again on a black screen
+ * once it gives the screen back.
+ */
+static void row_picture(void)
+{
+    static uint8_t rgb[768], picture[320 * 200];
+    uint32_t r, c, square = 1;
+
+    use_rgb(1366, 768, 32);
+    put("text");
+    rgb[5 * 3 + 0] = 0x10;
+    rgb[5 * 3 + 1] = 0x20;
+    rgb[5 * 3 + 2] = 0x30;
+    picture[0] = 5;
+    picture[320 * 200 - 1] = 5;
+    fbcon_gfx_begin();
+    fbcon_gfx_palette(rgb);
+    fbcon_gfx_frame(picture);
+    for (r = 0; r < 3; r++) {
+        for (c = 0; c < 3; c++) {
+            square = square && pixel_at(203 + c, 84 + r) == 0x102030u &&
+                     pixel_at(203 + 957 + c, 84 + 597 + r) == 0x102030u;
+        }
+    }
+    CHECK(square, "the picture's corner pixels are squares of three at (203, 84) and its far corner");
+    CHECK(pixel_at(206, 84) == BLACK && pixel_at(202, 84) == BLACK && pixel_at(203, 83) == BLACK &&
+              pixel_at(0, 0) == BLACK && pixel_at(1365, 767) == BLACK,
+          "the picture's next pixel and the screen around it are black");
+    put("more");
+    CHECK(pixel_at(203, 84) == 0x102030u && !cell_shows(4, 0, 'm', GREY, BLACK, 0),
+          "no cell is drawn while the picture has the screen");
+    fbcon_gfx_end();
+    CHECK(pixel_at(203, 84) == BLACK, "the screen is black once the picture gives it back");
+    CHECK(cell_shows(0, 0, 't', GREY, BLACK, 0) && cell_shows(4, 0, 'm', GREY, BLACK, 0),
+          "and the cells are drawn again, one written while the picture had the screen too");
+}
+
 int main(void)
 {
     row_init();
@@ -441,6 +485,7 @@ int main(void)
     row_scroll();
     row_cursor_redraw();
     row_panic_colors();
+    row_picture();
     if (failures) {
         printf("fbcon-test: %d failure(s)\n", failures);
         return 1;

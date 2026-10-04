@@ -2004,12 +2004,15 @@ static int32_t framebuffer_ioctl(uint32_t request, uintptr_t arg)
         fb_exit();
         fb_owner_pid = 0;
         return 0;
-    default:
-        if (!arg || !user_buffer_ok(arg, 768, 0)) {
+    default: {
+        static uint8_t palette[768];
+
+        if (!arg || copy_from_user(palette, (const void __user *)arg, sizeof(palette)) != 0) {
             return -EFAULT;
         }
-        fb_set_palette((const uint8_t *)arg);
+        fb_set_palette(palette);
         return 0;
+    }
     }
 }
 

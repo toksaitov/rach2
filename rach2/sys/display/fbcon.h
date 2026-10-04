@@ -54,6 +54,27 @@ void fbcon_set_start(uint32_t cell);
 void fbcon_set_cursor(uint32_t cell);
 
 /**
+ * Give the screen to the 320x200 picture of Mode 13h a program draws
+ * through /fb (vga_gfx.c), the screen painted black: the cells are not drawn
+ * while the picture has it. The picture is drawn at the largest whole
+ * number of the screen's pixels to one of its own that fits, three on a
+ * 1366x768 screen, in the middle, so that each of its pixels is a sharp
+ * square; its colors are the VGA's sixteen until `fbcon_gfx_palette`.
+ */
+void fbcon_gfx_begin(void);
+
+/** Take the 256 colors `rgb`, 8-bit red, green and blue each, as the
+ * picture's palette, for the frames drawn after. */
+void fbcon_gfx_palette(const uint8_t *rgb);
+
+/** Draw the picture `pixels`, 320x200 palette indices, on the screen. */
+void fbcon_gfx_frame(const uint8_t *pixels);
+
+/** Give the screen back to the cells: painted black, and every cell drawn
+ * again, those written while the picture had the screen among them. */
+void fbcon_gfx_end(void);
+
+/**
  * The kernel's address of the framebuffer's first byte now, or NULL when
  * the framebuffer cannot be reached. The platform defines it (x86/boot.c),
  * since the address changes when the kernel turns its own page tables on.

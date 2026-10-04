@@ -17,6 +17,7 @@
 #include "vga_font.h"
 #include "vga_text.h"
 #include "../klog.h"
+#include "../lib/kstring.h"
 
 #define SCREEN_CELLS (textcon_cols * textcon_rows)
 #define GLYPH_WIDTH  8
@@ -60,6 +61,27 @@ static uint32_t start;
 static uint32_t cursor;
 static uint16_t drawn[TEXTCON_COLS_MAX * TEXTCON_ROWS_MAX];
 static uint32_t drawn_cursor = NO_CELL;
+
+/* The loader's description of the screen, kept for the colors of a
+ * picture's palette. */
+static struct boot_framebuffer fb_desc;
+
+/*
+ * The 320x200 picture of the program that holds /fb (vga_gfx.c), which has
+ * the screen to itself while `gfx_on`: each of its 256 colors as one of the
+ * screen's pixels, the whole number its pixels are drawn at, the place of
+ * its top left corner, and one of its lines drawn at that size, which is
+ * copied to the screen as many times as the size.
+ */
+#define GFX_WIDTH      320u
+#define GFX_HEIGHT     200u
+#define GFX_LINE_BYTES 16384u
+static int gfx_on;
+static uint32_t gfx_pixel[256];
+static uint32_t gfx_scale;
+static uint32_t gfx_left;
+static uint32_t gfx_top;
+static uint8_t gfx_line[GFX_LINE_BYTES];
 
 /** Color `v`, from 0 to 255, in a field of `bits` bits at bit `shift`. */
 static uint32_t color_field(uint32_t v, uint32_t shift, uint32_t bits)
@@ -201,6 +223,7 @@ int fbcon_init(const struct boot_framebuffer *fb)
     if (textcon_rows > TEXTCON_ROWS_MAX) {
         textcon_rows = TEXTCON_ROWS_MAX;
     }
+    fb_desc = *fb;
     fb_pitch = fb->pitch;
     fb_width = fb->width;
     fb_height = fb->height;
@@ -247,7 +270,7 @@ void fbcon_stored(uint32_t at)
 {
     volatile uint8_t *base;
 
-    if (!fbcon_active || at < start || at >= start + SCREEN_CELLS) {
+    if (!fbcon_active || gfx_on || at < start || at >= start + SCREEN_CELLS) {
         return;
     }
     base = fbcon_window();
@@ -263,7 +286,7 @@ void fbcon_set_start(uint32_t cell)
 
     start = cell;
     base = fbcon_window();
-    if (!fbcon_active || base == NULL) {
+    if (!fbcon_active || gfx_on || base == NULL) {
         return;
     }
     for (i = 0; i < SCREEN_CELLS; i++) {
@@ -278,7 +301,7 @@ void fbcon_set_cursor(uint32_t cell)
 
     cursor = cell;
     base = fbcon_window();
-    if (!fbcon_active || base == NULL) {
+    if (!fbcon_active || gfx_on || base == NULL) {
         return;
     }
     if (was != NO_CELL) {
@@ -286,5 +309,122 @@ void fbcon_set_cursor(uint32_t cell)
     }
     if (cell >= start && cell < start + SCREEN_CELLS) {
         refresh(base, cell - start);
+    }
+}
+
+/** Paint the whole screen color 0, black, and mark every cell drawn blank,
+ * which a blank cell on black is. */
+static void clear_screen(volatile uint8_t *base)
+{
+    uint32_t row, col, i;
+
+    for (row = 0; row < fb_height; row++) {
+        volatile uint8_t *p = base + row * fb_pitch;
+
+        for (col = 0; col < fb_width; col++, p += fb_bytes) {
+            put_pixel(p, pixel[0]);
+        }
+    }
+    for (i = 0; i < SCREEN_CELLS; i++) {
+        drawn[i] = BLANK_CELL;
+    }
+    drawn_cursor = NO_CELL;
+}
+
+/** The pixel of the 8-bit red, green and blue `rgb` on this screen: its
+ * fields, or the nearest entry of an indexed screen's palette. */
+static uint32_t rgb_pixel(const uint8_t *rgb)
+{
+    uint32_t i, best = 0, best_d = 0xFFFFFFFFu;
+
+    if (fb_desc.type == BOOT_FB_RGB) {
+        return color_field(rgb[0], fb_desc.red_shift, fb_desc.red_bits) |
+               color_field(rgb[1], fb_desc.green_shift, fb_desc.green_bits) |
+               color_field(rgb[2], fb_desc.blue_shift, fb_desc.blue_bits);
+    }
+    for (i = 0; i < fb_desc.colors; i++) {
+        int dr = (int)fb_desc.palette[i][0] - rgb[0];
+        int dg = (int)fb_desc.palette[i][1] - rgb[1];
+        int db = (int)fb_desc.palette[i][2] - rgb[2];
+        uint32_t d = (uint32_t)(dr * dr + dg * dg + db * db);
+
+        if (d < best_d) {
+            best_d = d;
+            best = i;
+        }
+    }
+    return best;
+}
+
+void fbcon_gfx_begin(void)
+{
+    volatile uint8_t *base = fbcon_window();
+    uint32_t i;
+
+    if (!fbcon_active || base == NULL) {
+        return;
+    }
+    gfx_scale = fb_width / GFX_WIDTH < fb_height / GFX_HEIGHT ? fb_width / GFX_WIDTH
+                                                               : fb_height / GFX_HEIGHT;
+    while (gfx_scale > 1 && GFX_WIDTH * gfx_scale * fb_bytes > GFX_LINE_BYTES) {
+        gfx_scale--;
+    }
+    gfx_left = (fb_width - GFX_WIDTH * gfx_scale) / 2;
+    gfx_top = (fb_height - GFX_HEIGHT * gfx_scale) / 2;
+    for (i = 0; i < 256; i++) {
+        gfx_pixel[i] = pixel[i < 16 ? i : 0];
+    }
+    gfx_on = 1;
+    clear_screen(base);
+}
+
+void fbcon_gfx_palette(const uint8_t *rgb)
+{
+    uint32_t i;
+
+    for (i = 0; i < 256; i++) {
+        gfx_pixel[i] = rgb_pixel(rgb + 3 * i);
+    }
+}
+
+void fbcon_gfx_frame(const uint8_t *pixels)
+{
+    volatile uint8_t *base = fbcon_window();
+    uint32_t line, col, t, n = GFX_WIDTH * gfx_scale * fb_bytes;
+
+    if (!gfx_on || base == NULL) {
+        return;
+    }
+    for (line = 0; line < GFX_HEIGHT; line++) {
+        uint8_t *q = gfx_line;
+        volatile uint8_t *row = base + (gfx_top + line * gfx_scale) * fb_pitch + gfx_left * fb_bytes;
+
+        for (col = 0; col < GFX_WIDTH; col++) {
+            uint32_t v = gfx_pixel[pixels[line * GFX_WIDTH + col]];
+
+            for (t = 0; t < gfx_scale; t++, q += fb_bytes) {
+                put_pixel(q, v);
+            }
+        }
+        for (t = 0; t < gfx_scale; t++, row += fb_pitch) {
+            k_memcpy((void *)(uintptr_t)row, gfx_line, n);
+        }
+    }
+}
+
+void fbcon_gfx_end(void)
+{
+    volatile uint8_t *base = fbcon_window();
+    uint32_t i;
+
+    if (!gfx_on) {
+        return;
+    }
+    gfx_on = 0;
+    if (base != NULL) {
+        clear_screen(base);
+        for (i = 0; i < SCREEN_CELLS; i++) {
+            refresh(base, i);
+        }
     }
 }

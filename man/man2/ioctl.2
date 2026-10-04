@@ -277,6 +277,15 @@ Read 768 bytes from
 .Fa arg
 as 256 RGB triples and set the palette.
 .El
+.Pp
+On a machine whose console is on a framebuffer, as one booted by UEFI is,
+there is no VGA to put in mode 13h.
+The kernel keeps the 320 by 200 picture in memory and draws each frame
+written to the descriptor on the framebuffer, at the largest whole number
+of the screen's pixels to one of its own that fits, three on a 1366 by 768
+screen, in the middle on black, with the palette's colors.
+The console draws nothing while the picture has the screen, and draws its
+text again when the mode returns to text.
 .Ss Console sound requests
 These requests require a console descriptor.
 They are not selected merely by descriptor number 1 or 2.

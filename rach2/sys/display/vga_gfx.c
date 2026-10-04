@@ -3,8 +3,9 @@
  *
  * When the console is on a framebuffer (fbcon.c) the display may be no VGA
  * at all, as on a machine booted by UEFI, so entering and leaving the mode
- * and loading its palette leave the hardware alone: the device's state
- * changes as it always does, and its picture reaches no screen.
+ * and loading its palette leave the hardware alone: the picture is kept in
+ * memory (`gfx_shadow`), and the console draws it on the framebuffer, scaled
+ * by a whole number, with the palette loaded (`fbcon_gfx_frame`).
  */
 
 #include "../arch/arch.h"
@@ -337,6 +338,9 @@ uint8_t *fb_enter(void)
                      sizeof(mode13h_ac));
 
         k_memset((void *)VGA_GFX_FRAMEBUFFER, 0, VGA_GFX_SIZE);
+    } else {
+        k_memset(gfx_shadow, 0, VGA_GFX_SIZE);
+        fbcon_gfx_begin();
     }
 
     vga_graphics_mode = true;
@@ -428,6 +432,8 @@ void fb_exit(void)
 
         vga_restore_text_palette();
         vga_restore_font();
+    } else {
+        fbcon_gfx_end();
     }
 
     vga_graphics_mode = false;
@@ -447,15 +453,20 @@ void fb_exit(void)
 /**
  * Load a 256-entry RGB palette into the DAC.
  *
- * @param data 768 bytes, 256 entries of 8-bit R, G, B. Each component is
- *   shifted right by 2 because the VGA DAC has 6-bit values (0-63).
- *   Ignored if NULL.
+ * @param data 768 bytes, 256 entries of 8-bit R, G, B, in the kernel's
+ *   memory. Each component is shifted right by 2 because the VGA DAC has
+ *   6-bit values (0-63); a framebuffer console takes them whole. Ignored if
+ *   NULL.
  */
 void fb_set_palette(const uint8_t *data)
 {
     int i;
 
-    if (!data || fbcon_active) {
+    if (!data) {
+        return;
+    }
+    if (fbcon_active) {
+        fbcon_gfx_palette(data);
         return;
     }
 
@@ -463,5 +474,12 @@ void fb_set_palette(const uint8_t *data)
 
     for (i = 0; i < 768; i++) {
         outb(VGA_DAC_DATA, data[i] >> 2);
+    }
+}
+
+void fb_present(void)
+{
+    if (fbcon_active && vga_graphics_mode) {
+        fbcon_gfx_frame(gfx_shadow);
     }
 }

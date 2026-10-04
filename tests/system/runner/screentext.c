@@ -2,6 +2,7 @@
  * screentext: the text a framebuffer console shows, read off a screen dump.
  *
  * Usage: screentext DUMP
+ *        screentext --colors DUMP
  *
  * DUMP is QEMU's screen dump, a binary PPM (P6, 255 levels). The console's
  * grid is found as the kernel's fbcon.c lays it out: the 8 by 16 font at the
@@ -14,8 +15,10 @@
  * underline rows left out when a cell has them all set, so that the cursor
  * on a blank cell is a space; a cell no glyph matches is printed as '?', and
  * the glyph of a code outside printable ASCII as '#'. Trailing spaces are
- * left off each line. Exits 0, or 1 with a diagnostic for a file that is no
- * such dump or is too small for the grid.
+ * left off each line. With --colors it prints instead how many colours the
+ * screen has, which tells a picture from the console's sixteen. Exits 0, or
+ * 1 with a diagnostic for a file that is no such dump or is too small for
+ * the grid.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -119,38 +122,66 @@ static char cell_char(unsigned long left, unsigned long top, unsigned long scale
     return '?';
 }
 
+/** The number of colours among the screen's pixels. */
+static unsigned long colours(void)
+{
+    unsigned char *seen = calloc(1u << 21, 1);
+    unsigned long i, n = 0;
+
+    if (!seen) {
+        return 0;
+    }
+    for (i = 0; i < width * height; i++) {
+        unsigned long c = (unsigned long)pixels[3 * i] << 16 | pixels[3 * i + 1] << 8 |
+                          pixels[3 * i + 2];
+
+        if (!(seen[c >> 3] & (1u << (c & 7)))) {
+            seen[c >> 3] |= (unsigned char)(1u << (c & 7));
+            n++;
+        }
+    }
+    free(seen);
+    return n;
+}
+
 int main(int argc, char **argv)
 {
     unsigned long maxval, scale, left, top, cols, rows;
     FILE *f;
     char line[MAX_COLS + 1];
-    int row, col, end;
+    int row, col, end, count = argc == 3 && strcmp(argv[1], "--colors") == 0;
+    const char *path = argv[argc - 1];
 
-    if (argc != 2) {
-        fprintf(stderr, "usage: screentext DUMP\n");
+    if (argc != 2 && !count) {
+        fprintf(stderr, "usage: screentext [--colors] DUMP\n");
         return 1;
     }
-    f = fopen(argv[1], "rb");
+    f = fopen(path, "rb");
     if (!f) {
-        fprintf(stderr, "screentext: %s: cannot open\n", argv[1]);
+        fprintf(stderr, "screentext: %s: cannot open\n", path);
         return 1;
     }
     if (fgetc(f) != 'P' || fgetc(f) != '6' || !header_number(f, &width) ||
         !header_number(f, &height) || !header_number(f, &maxval) || maxval != 255 || width == 0 ||
         height == 0 || width > 16384 || height > 16384) {
-        fprintf(stderr, "screentext: %s: not a binary PPM of 255 levels\n", argv[1]);
+        fprintf(stderr, "screentext: %s: not a binary PPM of 255 levels\n", path);
         fclose(f);
         return 1;
     }
     pixels = malloc(width * height * 3u);
     if (!pixels || fread(pixels, 3u, width * height, f) != width * height) {
-        fprintf(stderr, "screentext: %s: short of its pixels\n", argv[1]);
+        fprintf(stderr, "screentext: %s: short of its pixels\n", path);
         fclose(f);
         return 1;
     }
     fclose(f);
+    if (count) {
+        printf("%lu\n", colours());
+        free(pixels);
+        return 0;
+    }
     if (width / GLYPH_WIDTH < MIN_COLS || height / GLYPH_HEIGHT < MIN_ROWS) {
-        fprintf(stderr, "screentext: %s: %lux%lu is smaller than the console's grid\n", argv[1],
+        fprintf(stderr, "screentext: %s: %lux%lu is smaller than the console's grid\n", path,
                 width, height);
         return 1;
     }

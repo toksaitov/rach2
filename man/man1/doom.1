@@ -18,6 +18,10 @@ uses its own small runtime over nine system calls and does not link musl.
 .Pp
 Graphics use VGA mode 13h through the framebuffer device.
 Frames are 320 by 200 palette indices.
+On a machine booted by UEFI, which has no VGA, the kernel draws each frame
+on the framebuffer at the largest whole scale that fits, three on a 1366 by
+768 screen, in the middle; see
+.Xr ioctl 2 .
 The 256-entry palette is set through
 .Dv FB_SETPALETTE .
 .Pp

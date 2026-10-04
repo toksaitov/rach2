@@ -786,6 +786,7 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
             0) {
             return -EFAULT;
         }
+        fb_present();
 
         return (int32_t)to_copy;
     }

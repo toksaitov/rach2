@@ -47,7 +47,12 @@ uint8_t *fb_enter(void);
 /** Leave the graphics mode and return to the text console. */
 void fb_exit(void);
 
-/** Load a palette of 256 RGB entries, three bytes each. */
+/** Load a palette of 256 RGB entries, three bytes each, from the kernel's
+ * memory. */
 void fb_set_palette(const uint8_t *data);
+
+/** Show the picture written to the framebuffer, on a framebuffer console,
+ * where the VGA's memory reaches no screen; nothing on a VGA. */
+void fb_present(void);
 
 #endif /* _FB_H_ */
