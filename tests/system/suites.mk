@@ -2008,7 +2008,7 @@ run-krffscheck: krffs
 
 IMAGERACE_IMAGE = $(IMAGES_DIR)/imagerace-test.krffs
 run-imagerace: $(TEST_IMAGE) $(OS_REAL_IMAGE) $(DEMO_CREDS) krffs rach2 tests utils musl-programs $(IMAGE_TOOLS)
-	sh tests/system/imagerace.sh krffs/manifests/test.manifest $(IMAGERACE_IMAGE) 10 \
+	sh tests/system/imagerace.sh krffs/manifests/test.manifest $(IMAGERACE_IMAGE) 12 \
 	    $(TEST_IMAGE) $(OS_REAL_IMAGE)
 
 # The eight network suites again on the second card. Each is the first-card
