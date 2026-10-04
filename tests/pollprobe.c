@@ -146,6 +146,82 @@ static char state_of(int pid)
 }
 #endif
 
+/**
+ * Case (f), the select fd contract, which is never a silent truncation: a
+ * wide nfds with only an in-range bit works, a bit for a closed descriptor
+ * is -EBADF whether past the table or not, and an nfds past FD_SETSIZE is
+ * -EINVAL. `closed` is a descriptor in the table's range that was closed.
+ */
+static void select_contract(int closed)
+{
+    unsigned int set[32];
+    int i, n;
+
+    /* A large nfds is allowed when no bit names an out-of-range fd: fd 1
+     * (stdout) is writable, so a wide select that includes it returns it. */
+    for (i = 0; i < 32; i++) {
+        set[i] = 0;
+    }
+    set[1u / 32] = 1u << (1u % 32);
+    n = syscall5(SYS_SELECT, 64, 0, (long)set, 0, 0);
+    check(n == 1 && (set[0] & (1u << 1)) != 0, "wide select with an in-range bit works");
+
+    /* A bit for an fd past the table's sixteen, which nothing has opened,
+     * is a closed descriptor -> -EBADF. */
+    for (i = 0; i < 32; i++) {
+        set[i] = 0;
+    }
+    set[17u / 32] = 1u << (17u % 32);
+    check(syscall5(SYS_SELECT, 18, (long)set, 0, 0, 0) == -EBADF,
+          "select bit past the table -> -EBADF");
+
+    /* A bit for a closed in-range fd is also -EBADF, not ignored. */
+    for (i = 0; i < 32; i++) {
+        set[i] = 0;
+    }
+    set[(unsigned)closed / 32] = 1u << ((unsigned)closed % 32);
+    check(syscall5(SYS_SELECT, closed + 1, (long)set, 0, 0, 0) == -EBADF,
+          "select bit for a closed fd -> -EBADF");
+
+    /* nfds beyond the fd_set width (FD_SETSIZE) is -EINVAL. */
+    check(syscall5(SYS_SELECT, 2000, 0, 0, 0, 0) == -EINVAL,
+          "select nfds > FD_SETSIZE -> -EINVAL");
+}
+
+#if defined __x86_64__
+/**
+ * Case (h), a ppoll timeout past 32 bits of seconds. The child writes only
+ * once the parent is asleep, in the call: a timeout cut to zero would return
+ * at once and never sleep, and the child writes after two seconds anyway, so
+ * that such a parent is not left waiting for it.
+ */
+static void wide_ppoll(void)
+{
+    long ts[2] = {4294967296L, 0};
+    struct pollfd pfd[1];
+    int c[2], parent, pid, status, tries;
+
+    check(do_pipe(c) == 0, "pipe for the ppoll row");
+    pid = syscall0(SYS_FORK);
+    if (pid == 0) {
+        parent = (int)syscall0(SYS_GETPPID);
+        for (tries = 0; tries < 200 && state_of(parent) != 'S'; tries++) {
+            msleep(10);
+        }
+        syscall3(SYS_WRITE, c[1], (long)"x", 1);
+        sys_exit(0);
+    }
+    pfd[0].fd = c[0];
+    pfd[0].events = POLLIN;
+    pfd[0].revents = 0;
+    check(syscall5(SYS_PPOLL, (long)pfd, 1, (long)ts, 0, 8) == 1 && (pfd[0].revents & POLLIN),
+          "ppoll with a timeout of 2^32 seconds waits for its pipe");
+    syscall3(SYS_WAITPID, pid, (long)&status, 0);
+    syscall1(SYS_CLOSE, c[0]);
+    syscall1(SYS_CLOSE, c[1]);
+}
+#endif
+
 PROBE_START void _start(void)
 {
     int a[2], b[2];
@@ -224,43 +300,7 @@ PROBE_START void _start(void)
     syscall1(SYS_CLOSE, a[0]);
     syscall1(SYS_CLOSE, a[1]);
 
-    /* (f) the select fd contract: never a silent truncation. */
-    {
-        unsigned int set[32];
-        int i;
-
-        /* A large nfds is allowed when no bit names an out-of-range fd: fd 1
-         * (stdout) is writable, so a wide select that includes it returns
-         * it. */
-        for (i = 0; i < 32; i++) {
-            set[i] = 0;
-        }
-        set[1u / 32] = 1u << (1u % 32);
-        n = syscall5(SYS_SELECT, 64, 0, (long)set, 0, 0);
-        check(n == 1 && (set[0] & (1u << 1)) != 0, "wide select with an in-range bit works");
-
-        /* A bit for an fd past the table's sixteen, which nothing has
-         * opened, is a closed descriptor -> -EBADF. */
-        for (i = 0; i < 32; i++) {
-            set[i] = 0;
-        }
-        set[17u / 32] = 1u << (17u % 32);
-        check(syscall5(SYS_SELECT, 18, (long)set, 0, 0, 0) == -EBADF,
-              "select bit past the table -> -EBADF");
-
-        /* A bit for a closed in-range fd is also -EBADF, not ignored: a[0] was
-         * closed above. */
-        for (i = 0; i < 32; i++) {
-            set[i] = 0;
-        }
-        set[(unsigned)a[0] / 32] = 1u << ((unsigned)a[0] % 32);
-        check(syscall5(SYS_SELECT, a[0] + 1, (long)set, 0, 0, 0) == -EBADF,
-              "select bit for a closed fd -> -EBADF");
-
-        /* nfds beyond the fd_set width (FD_SETSIZE) is -EINVAL. */
-        check(syscall5(SYS_SELECT, 2000, 0, 0, 0, 0) == -EINVAL,
-              "select nfds > FD_SETSIZE -> -EINVAL");
-    }
+    select_contract(a[0]);
 
     /* (g) an out-of-range timeout is rejected, not silently clamped. */
     {
@@ -272,33 +312,7 @@ PROBE_START void _start(void)
     }
 
 #if defined __x86_64__
-    /* (h) a ppoll timeout past 32 bits of seconds. The child writes only once
-     * the parent is asleep, in the call: a timeout cut to zero would return
-     * at once and never sleep, and the child writes after two seconds
-     * anyway, so that such a parent is not left waiting for it. */
-    {
-        long ts[2] = {4294967296L, 0};
-        int c[2], parent, tries;
-
-        check(do_pipe(c) == 0, "pipe for the ppoll row");
-        pid = syscall0(SYS_FORK);
-        if (pid == 0) {
-            parent = (int)syscall0(SYS_GETPPID);
-            for (tries = 0; tries < 200 && state_of(parent) != 'S'; tries++) {
-                msleep(10);
-            }
-            syscall3(SYS_WRITE, c[1], (long)"x", 1);
-            sys_exit(0);
-        }
-        pfd[0].fd = c[0];
-        pfd[0].events = POLLIN;
-        pfd[0].revents = 0;
-        check(syscall5(SYS_PPOLL, (long)pfd, 1, (long)ts, 0, 8) == 1 && (pfd[0].revents & POLLIN),
-              "ppoll with a timeout of 2^32 seconds waits for its pipe");
-        syscall3(SYS_WAITPID, pid, (long)&status, 0);
-        syscall1(SYS_CLOSE, c[0]);
-        syscall1(SYS_CLOSE, c[1]);
-    }
+    wide_ppoll();
 #endif
 
     if (fails == 0) {
