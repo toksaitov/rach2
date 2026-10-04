@@ -8,8 +8,9 @@
 # mode), wrapped recipe lines are joined back into one command each, and every
 # joined command whose first word is the unit's compiler becomes one entry per
 # C source operand (directory + file + the complete command). There is one
-# database per unit under build/compile_commands/: the four kernel variants
-# (rach2, rach2-recovery, rach2-metal, rach2-harness), the guest programs
+# database per unit under build/compile_commands/: the four i686 kernel
+# variants (rach2, rach2-recovery, rach2-metal, rach2-harness) and the x86-64
+# kernel (rach2-x86_64), the guest programs
 # (tests, ish, utils, musl-programs, doom), the host programs (krffs, tools,
 # host-tests). The union is compile_commands.json at the root, for clangd.
 # tools/verify/dbcheck.sh requires every in-house C source to be in one of
@@ -67,11 +68,11 @@ join_continuations() {
 
 # Read joined commands from $1 and print one database entry per C source
 # operand of each compile command, with $2 as the escaped directory and $3
-# the compiler the unit uses: `cross` selects the i686-elf GCC, `host` the
-# host compiler, cc or what CC names. Selection keys on the FIRST word of the
-# command: Homebrew installs libgcc under a path containing `i686-elf-gcc`,
-# so matching the whole line would select linker lines and continuation
-# fragments through that path.
+# the compiler the unit uses: `cross` selects either architecture's elf GCC,
+# i686's or x86-64's, `host` the host compiler, cc or what CC names.
+# Selection keys on the FIRST word of the command: Homebrew installs libgcc
+# under a path containing `i686-elf-gcc`, so matching the whole line would
+# select linker lines and continuation fragments through that path.
 emit_entries() {
     dump_file=$1
     dir_json=$2
@@ -82,7 +83,7 @@ emit_entries() {
         set -- $line
         set +f
         case "$which:${1-}" in
-            cross:*i686-elf-*gcc) ;;
+            cross:*i686-elf-*gcc | cross:*x86_64-elf-*gcc) ;;
             host:cc|host:gcc|host:clang|host:"${CC:-cc}") ;;
             *) continue ;;
         esac
@@ -273,6 +274,7 @@ unit rach2 "$REPO/rach2" cross make -Bn
 unit rach2-recovery "$REPO/rach2" cross make -Bn COMPONENT=rach2-recovery KEXTRA=-DRACH2_RECOVERY
 unit rach2-metal "$REPO/rach2" cross make -Bn COMPONENT=rach2-metal KEXTRA=-DRACH2_DISK_READONLY
 unit rach2-harness "$REPO/rach2" cross make -Bn COMPONENT=rach2-harness HARNESS=1
+unit rach2-x86_64 "$REPO/rach2" cross make -Bn ARCH=x86_64
 unit tests "$REPO/tests" cross make -Bn
 unit ish "$REPO/ish" cross make -Bn
 unit utils "$REPO/utils" cross make -Bn
