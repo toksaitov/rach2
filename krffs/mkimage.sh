@@ -84,8 +84,10 @@ fi
 "$SETIDCHECK" --image "$TMP" --manifest "$MANIFEST"
 
 # The programs staged from each `exec-dir` directory, which the dependency
-# file names in place of the directory (krffs/programs.sh). They are written
-# before the image is moved into place, so the image is the newer of the two.
+# file names in place of the directory (krffs/programs.sh). The image is
+# touched after them, so that it is the newer of the two: the move keeps the
+# time the stager last wrote it, which is before them, and a make that keeps
+# times to the nanosecond would find the image out of date at once.
 EXEC_DIRS=$(sed -n 's/^exec-dir	//p' "$DEPS_TMP" | sort -u | while IFS= read -r d; do
     case "$d" in
         (/*) printf '%s\n' "$d" ;;
@@ -99,6 +101,7 @@ if [ -n "$EXEC_DIRS" ]; then
 else
     rm -f "$OUT.programs"
 fi
+touch "$TMP"
 
 mv "$TMP" "$OUT"
 
