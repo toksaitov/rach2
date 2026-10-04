@@ -78,6 +78,8 @@ from on an MBR disk, and read the table again as
 does.
 The entry must have a FAT type already, 0x0B or 0x0C, or have 0xEF, which
 is left as it is; a GUID table's protective MBR is refused.
+The table is read again in either case, so that a run whose reread was
+refused, after it wrote the type, is finished by the next one.
 This is the last step of
 .Ql rach2-install --update
 converting an MBR disk to boot by UEFI as well, after it has made the

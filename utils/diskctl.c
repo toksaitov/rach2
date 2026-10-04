@@ -30,7 +30,9 @@
  *
  * `esp` gives entry 1 of an MBR the EFI system partition's type, 0xEF, which
  * UEFI firmware boots from on an MBR disk, and asks the kernel to read the
- * table again. The entry must be a FAT one already, 0x0B or 0x0C: this is the
+ * table again, which it does when the entry has the type already too, since
+ * a run before may have written it and failed to have it read. The entry
+ * must be a FAT one already, 0x0B, 0x0C or 0xEF: this is the
  * last step of converting an installed MBR disk's boot partition, whose file
  * system the installer has made one UEFI firmware reads.
  */
@@ -193,9 +195,9 @@ static int make_esp(int fd, const char *path)
             fprintf(stderr, "diskctl: %s: the table was not written: %s\n", path, strerror(errno));
             return 1;
         }
-        if (reread(fd, path) != 0) {
-            return 1;
-        }
+    }
+    if (reread(fd, path) != 0) {
+        return 1;
     }
     printf("diskctl: result: %s: entry 1 is the EFI system partition, type 0xef\n", path);
     return 0;
