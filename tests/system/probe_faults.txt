@@ -296,7 +296,9 @@ probe mapmusl
 file rach2/sys/syscall_proc.c
 expect MAPMUSL FAIL (mmap2 of a file whose last page is past 32 bits
 old
-    if (pgoff > 0xFFFFFFFFu - len / PAGE_SIZE) {
+    if (pgoff + len / PAGE_SIZE < pgoff ||
+        (((flags & MAP_TYPE) != MAP_PRIVATE || !(flags & MAP_ANONYMOUS)) &&
+         pgoff + len / PAGE_SIZE > 0xFFFFFFFFul)) {
         return -EOVERFLOW;
     }
     mem_balance();
@@ -1856,7 +1858,7 @@ probe sigframemusl
 file rach2/sys/arch/i686/sigframe.c
 expect SIGFRAMEMUSL FAIL (a frame written below the alternate stack)
 old
-    int on_alt = sigframe_on_altstack(tf->user_esp);
+    int on_alt = sigframe_on_altstack(tf->user_esp), was_on = on_alt;
     uint32_t sp = tf->user_esp;
     uint32_t fp_addr, frame_addr, size, restorer;
 
@@ -1875,7 +1877,8 @@ old
     }
 new
     int on_alt = current_proc->altstack_on && tf->user_esp + 4096u - current_proc->altstack_sp <
-                                                  current_proc->altstack_size + 4096u;
+                                                  current_proc->altstack_size + 4096u,
+        was_on = on_alt;
     uint32_t sp = tf->user_esp;
     uint32_t fp_addr, frame_addr, size, restorer;
 
