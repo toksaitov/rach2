@@ -7,7 +7,12 @@
 # started in the background, its zone line read after ten seconds with the
 # game still running, and the disk commands it cost recorded. The zone is
 # sized from MemFree less 8 MiB and capped at 16, so a 32 MiB machine reports
-# 12 MiB (0xc00000); the fixed heap this replaced held 6.
+# 12 MiB (0xc00000); the fixed heap this replaced held 6. Last, with that game
+# killed, the first demo is played to its end, where the engine quits as a
+# menu's Quit does and must exit with status 0; then a demo is recorded with
+# a buffer of 1 KiB, which fills in seconds and is written through the port's
+# fopen before the engine's error ends the game: the file must have mode
+# 644, the 0666 fopen passes less the shell's umask.
 #
 # Usage: doom.sh KERNEL DISK HARNESS PASSWORD
 set -u
@@ -18,14 +23,18 @@ LOG="$DISK.doom.log"
 if "$HARNESS" --kernel "$KERNEL" --append "rach2.fsdisk rach2.diskdiag" \
     --qemu-arg=-cpu --qemu-arg=max \
     --drive "file=$DISK,format=raw,if=ide,index=0,media=disk" \
-    --timeout 120 --steptmo 60 --ok "DOOMDONE" --log "$LOG" \
+    --timeout 420 --steptmo 300 --ok "DEMODONE" --log "$LOG" \
     "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" \
     "expect=# " "send=mv /demo/doom1.wad /demo/doom1.off && { doom > /tmp/nowad.txt 2>&1; echo DOOMNOWAD=\$?; mv /demo/doom1.off /demo/doom1.wad; }; echo DOOMNOWADMSG=\$(grep -c 'doom1.wad. not found' /tmp/nowad.txt); echo NOWAD\"\"DONE" \
     "expect=NOWADDONE" \
     "send=cd /root && A=\$(sed -n 's/^disk-commands //p' /proc/disk) && (doom > /tmp/doom.txt 2>&1 &) && sleep 10 && B=\$(sed -n 's/^disk-commands //p' /proc/disk) && echo RAN\"\"DOOM" \
     "expect=RANDOOM" "send=echo DOOMRUNNING=\$(ps | grep -c '[d]oom') && echo DOOMCOMMANDS=\$((B-A)) && grep -a 'zone memory' /tmp/doom.txt | sed 's/^/DOOM/'; echo REPORT\"\"ONE" \
     "expect=REPORTONE" "send=echo DOOMFB=\$(grep -ac 'framebuffer: x_res' /tmp/doom.txt); echo DOOMFBFAIL=\$(grep -ac 'Failed to open framebuffer' /tmp/doom.txt); echo DOOM\"\"DONE" \
-    "expect=DOOMDONE" > /dev/null 2>&1; then
+    "expect=DOOMDONE" \
+    "send=killall doom; while ps | grep -q '[d]oom'; do :; done; cd /tmp && doom -playdemo demo1 > /tmp/demo.txt 2>&1; echo DEMOEXIT=\$?; echo PLAYED\"\"DEMO" \
+    "expect=PLAYEDDEMO" \
+    "send=rm -f /tmp/rec.lmp; doom -record /tmp/rec -maxdemo 1 > /tmp/rec.txt 2>&1; echo RECMODE=\$(stat -c %a /tmp/rec.lmp 2>/dev/null || echo none); echo DEMO\"\"DONE" \
+    "expect=DEMODONE" > /dev/null 2>&1; then
     :
 else
     fail "the boot"
@@ -50,4 +59,11 @@ if [ "$((0x$ZONE))" -ge "$((10 * 1024 * 1024))" ]; then
 else
     fail "the zone is 0x$ZONE bytes; the heap did not grow past the fixed 8 MiB"
 fi
+DEMOEXIT="$(grep -a '^DEMOEXIT=' "$LOG" | tail -1 | tr -d '\r' | cut -d= -f2)"
+RECMODE="$(grep -a '^RECMODE=' "$LOG" | tail -1 | tr -d '\r' | cut -d= -f2)"
+[ "$DEMOEXIT" = 0 ] || fail "the demo played to its end exited with status ${DEMOEXIT:-unknown}; 0 was required"
+echo "doom-test: a demo played to its end quits with status 0: OK"
+[ "$RECMODE" = 644 ] ||
+    fail "the demo the game recorded through fopen has mode ${RECMODE:-unknown}; 644 was required"
+echo "doom-test: a demo recorded until its buffer fills is written through fopen with mode 644: OK"
 echo "doom-test: PASS"
