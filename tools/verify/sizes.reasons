@@ -619,9 +619,6 @@ tests/musl/pwauthmusl.c:check_prompt lines 109 a test's rows, each a case, read 
 
 tests/musl/readvmusl.c:check_datagram lines 128 a test's rows, each a case, read as one table
 
-tests/musl/schedmusl.c:scheduling complexity 62 a test's rows, each a case, read as one table
-tests/musl/schedmusl.c:scheduling lines 104 a test's rows, each a case, read as one table
-
 tests/musl/sigframemusl.c:main complexity 30 a test's rows, each a case, read as one table
 
 tests/musl/sockflagmusl.c:main complexity 26 a probe, one sequence of steps in the order the log records them

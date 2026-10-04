@@ -267,17 +267,11 @@ static int not_root(void)
     return 0;
 }
 
-/** Yielding, the policy calls, the ranges, the time slice and the
- * affinity. */
-static int scheduling(void)
+/** Yielding, and the policy and parameter calls that ask for what every
+ * process has: SCHED_OTHER at priority 0. */
+static int policy_calls(void)
 {
-    static const int refused[] = {SCHED_BATCH, SCHED_IDLE, SCHED_DEADLINE, 4, 42};
     struct sched_param sp;
-    struct timespec slice;
-    cpu_set_t set, online;
-    unsigned int i, cpu = 99;
-    int cpus, id, last = -1, offline = -1;
-    long mask_bytes;
 
     if (sched_yield() != 0) {
         return fail("sched_yield did not return 0");
@@ -297,6 +291,17 @@ static int scheduling(void)
     if (syscall(SYS_sched_setparam, 0L, &sp) != 0) {
         return fail("sched_setparam of priority 0 was refused");
     }
+    return 0;
+}
+
+/** The policies and priorities this kernel does not run, each refused with
+ * EPERM or EINVAL. */
+static int policy_refusals(void)
+{
+    static const int refused[] = {SCHED_BATCH, SCHED_IDLE, SCHED_DEADLINE, 4, 42};
+    struct sched_param sp;
+    unsigned int i;
+
     if (set_policy(0, SCHED_FIFO, 10) != -1 || errno != EPERM ||
         set_policy(0, SCHED_RR, 99) != -1 || errno != EPERM) {
         return fail("a real-time policy was not refused with EPERM");
@@ -315,6 +320,14 @@ static int scheduling(void)
     if (syscall(SYS_sched_setparam, 0L, &sp) != -1 || errno != EINVAL) {
         return fail("sched_setparam of priority 5 was not refused with EINVAL");
     }
+    return 0;
+}
+
+/** The priority ranges, which are Linux's, and the time slice, one tick. */
+static int ranges(void)
+{
+    struct timespec slice;
+
     if (sched_get_priority_max(SCHED_FIFO) != 99 || sched_get_priority_min(SCHED_FIFO) != 1 ||
         sched_get_priority_max(SCHED_RR) != 99 || sched_get_priority_min(SCHED_RR) != 1 ||
         sched_get_priority_max(SCHED_OTHER) != 0 || sched_get_priority_min(SCHED_OTHER) != 0 ||
@@ -327,6 +340,19 @@ static int scheduling(void)
     if (sched_rr_get_interval(0, &slice) != 0 || slice.tv_sec != 0 || slice.tv_nsec != 10000000L) {
         return fail("the time slice is not one 10 ms tick");
     }
+    return 0;
+}
+
+/** The affinity: the processors /proc/cpuinfo lists, its raw size, a mask
+ * of the last processor alone, which moves the caller there, and one of a
+ * processor not started. */
+static int affinity(void)
+{
+    cpu_set_t set, online;
+    unsigned int cpu = 99;
+    int cpus, id, last = -1, offline = -1;
+    long mask_bytes;
+
     cpus = cpuinfo_ids(&online);
     for (id = 0; id < 64; id++) {
         if (CPU_ISSET(id, &online)) {
@@ -373,6 +399,21 @@ static int scheduling(void)
     memset(&set, 0xFF, sizeof(set));
     if (sched_setaffinity(0, sizeof(set), &set) != 0) {
         return fail("an affinity of every processor was refused");
+    }
+    return 0;
+}
+
+/** Yielding, the policy calls, the ranges, the time slice and the
+ * affinity, then the refusals for root's process, for a pid of no process
+ * and for a negative pid. */
+static int scheduling(void)
+{
+    struct timespec slice;
+    cpu_set_t set;
+
+    if (policy_calls() != 0 || policy_refusals() != 0 || ranges() != 0 ||
+        affinity() != 0) {
+        return 1;
     }
     if (in_child(not_root) != 0) {
         return fail("user 1000 changed the scheduling of root's process");
