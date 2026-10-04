@@ -10,8 +10,11 @@
  * hard-link rows a read-only volume can answer: the count in `stat` and
  * `EPERM` for a directory.
  *
- * `ext2probe cost` mounts the same fixture for writing and counts commands
- * and cache flushes for repeated rewrites and appends through `/proc/disk`.
+ * `ext2probe cost` mounts the same fixture for writing with `MS_SYNCHRONOUS`
+ * and counts commands and cache flushes for repeated rewrites and appends
+ * through `/proc/disk`. A mount without `sync` writes back, so its writes cost
+ * no commands before fsync whether or not ext2 batches them; the ordered
+ * write-through of a `sync` mount is what the batching saves commands on.
  * Both counts include fsync, and both files are reopened and checked.
  *
  * Prints "EXT2PROBE OK (mode)" or "EXT2PROBE FAIL: reason". Freestanding;
@@ -31,7 +34,8 @@
 #define O_EXCL     0200
 #define O_NOFOLLOW 0400000
 
-#define MS_RDONLY 1
+#define MS_RDONLY      1
+#define MS_SYNCHRONOUS 16
 
 #define EPERM  1
 #define ENOENT 2
@@ -535,7 +539,7 @@ void probe_main(unsigned long *sp)
 
     syscall2(SYS_MKDIR, (long)"/e2", 0755);
     if (syscall5(SYS_MOUNT, (long)"/dev/disk0p1", (long)"/e2", (long)"ext2",
-                 writable ? 0 : MS_RDONLY, 0) != 0) {
+                 writable ? MS_SYNCHRONOUS : MS_RDONLY, 0) != 0) {
         fail("mounting the fixture");
     }
     if (streq(mode, "links")) {
