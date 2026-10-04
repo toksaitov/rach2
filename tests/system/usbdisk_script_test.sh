@@ -6,6 +6,10 @@ repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 root=$(mktemp -d "${TMPDIR:-/tmp}/rach2-usbdisk-script.XXXXXX")
 echo "usbdisk-script: logs: $root"
 [ "$#" -eq 0 ] || [ "$*" = --mutate ] || exit 2
+# The architecture, from ARCH as usbdisk_mutate.sh takes it, for the
+# mk/arch.sh the extracted builder sources, which reads RACH2_ARCH alone.
+RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
+export RACH2_ARCH
 cp "$repo/tests/system/usbdisk_mutate.sh" "$root/saved.sh"
 cp "$root/saved.sh" "$root/source.sh"
 "${CC:-cc}" -O2 -Wall -Wextra -Werror -o "$root/runutil" "$repo/tests/system/runner/runutil.c"
