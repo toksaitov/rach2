@@ -133,15 +133,15 @@ static void vga_putc_raw(char c)
                 --x;
             else if (y) {
                 --y;
-                x = SCREEN_NUMBER_OF_COLUMNS - 1;
+                x = textcon_cols - 1;
             }
 
             break;
 
         case CHAR_HT:
             x = x - x % TAB_SIZE + TAB_SIZE;
-            if (x >= SCREEN_NUMBER_OF_COLUMNS)
-                x = SCREEN_NUMBER_OF_COLUMNS - 1;
+            if (x >= textcon_cols)
+                x = textcon_cols - 1;
             break;
 
         case CHAR_LF:
@@ -167,13 +167,13 @@ static void vga_putc_raw(char c)
         ++x;
     }
 
-    if (x >= SCREEN_NUMBER_OF_COLUMNS) {
+    if (x >= textcon_cols) {
         x = 0;
         ++y;
     }
-    if (y >= SCREEN_NUMBER_OF_ROWS) {
+    if (y >= textcon_rows) {
         k_scroll_down();
-        y = SCREEN_NUMBER_OF_ROWS - 1;
+        y = textcon_rows - 1;
     }
 }
 
@@ -183,11 +183,11 @@ static void vt_erase_row(unsigned int row, unsigned int c0, unsigned int c1)
     uint8_t attr;
     unsigned int c;
 
-    if (row >= SCREEN_NUMBER_OF_ROWS)
+    if (row >= textcon_rows)
         return;
 
     attr = get_curr_color_attr();
-    for (c = c0; c <= c1 && c < SCREEN_NUMBER_OF_COLUMNS; ++c) {
+    for (c = c0; c <= c1 && c < textcon_cols; ++c) {
         textcon_write_cell(c, row, ' ', attr);
     }
 }
@@ -201,16 +201,16 @@ static void vt_erase_display(unsigned int n)
     unsigned int r;
 
     if (n == 0) {
-        vt_erase_row(y, x, SCREEN_NUMBER_OF_COLUMNS - 1);
-        for (r = y + 1; r < SCREEN_NUMBER_OF_ROWS; ++r)
-            vt_erase_row(r, 0, SCREEN_NUMBER_OF_COLUMNS - 1);
+        vt_erase_row(y, x, textcon_cols - 1);
+        for (r = y + 1; r < textcon_rows; ++r)
+            vt_erase_row(r, 0, textcon_cols - 1);
     } else if (n == 1) {
         for (r = 0; r < y; ++r)
-            vt_erase_row(r, 0, SCREEN_NUMBER_OF_COLUMNS - 1);
+            vt_erase_row(r, 0, textcon_cols - 1);
         vt_erase_row(y, 0, x);
     } else if (n == 2) {
-        for (r = 0; r < SCREEN_NUMBER_OF_ROWS; ++r)
-            vt_erase_row(r, 0, SCREEN_NUMBER_OF_COLUMNS - 1);
+        for (r = 0; r < textcon_rows; ++r)
+            vt_erase_row(r, 0, textcon_cols - 1);
     }
 }
 
@@ -406,14 +406,14 @@ static void vt_dispatch_csi(char c)
     case 'B':
         n = vt_arg(0, 1);
         y += n;
-        if (y >= SCREEN_NUMBER_OF_ROWS)
-            y = SCREEN_NUMBER_OF_ROWS - 1;
+        if (y >= textcon_rows)
+            y = textcon_rows - 1;
         break;
     case 'C':
         n = vt_arg(0, 1);
         x += n;
-        if (x >= SCREEN_NUMBER_OF_COLUMNS)
-            x = SCREEN_NUMBER_OF_COLUMNS - 1;
+        if (x >= textcon_cols)
+            x = textcon_cols - 1;
         break;
     case 'D':
         n = vt_arg(0, 1);
@@ -422,8 +422,8 @@ static void vt_dispatch_csi(char c)
     case 'E':
         n = vt_arg(0, 1);
         y += n;
-        if (y >= SCREEN_NUMBER_OF_ROWS)
-            y = SCREEN_NUMBER_OF_ROWS - 1;
+        if (y >= textcon_rows)
+            y = textcon_rows - 1;
         x = 0;
         break;
     case 'F':
@@ -436,14 +436,14 @@ static void vt_dispatch_csi(char c)
     case '`':
         col = vt_arg(0, 1);
         x = col - 1;
-        if (x >= SCREEN_NUMBER_OF_COLUMNS)
-            x = SCREEN_NUMBER_OF_COLUMNS - 1;
+        if (x >= textcon_cols)
+            x = textcon_cols - 1;
         break;
     case 'd':
         row = vt_arg(0, 1);
         y = row - 1;
-        if (y >= SCREEN_NUMBER_OF_ROWS)
-            y = SCREEN_NUMBER_OF_ROWS - 1;
+        if (y >= textcon_rows)
+            y = textcon_rows - 1;
         break;
     case 'H':
     case 'f':
@@ -451,10 +451,10 @@ static void vt_dispatch_csi(char c)
         col = vt_arg(1, 1);
         y = row - 1;
         x = col - 1;
-        if (y >= SCREEN_NUMBER_OF_ROWS)
-            y = SCREEN_NUMBER_OF_ROWS - 1;
-        if (x >= SCREEN_NUMBER_OF_COLUMNS)
-            x = SCREEN_NUMBER_OF_COLUMNS - 1;
+        if (y >= textcon_rows)
+            y = textcon_rows - 1;
+        if (x >= textcon_cols)
+            x = textcon_cols - 1;
         break;
 
     case 'J':
@@ -463,11 +463,11 @@ static void vt_dispatch_csi(char c)
     case 'K':
         n = vt_arg(0, 0);
         if (n == 0)
-            vt_erase_row(y, x, SCREEN_NUMBER_OF_COLUMNS - 1);
+            vt_erase_row(y, x, textcon_cols - 1);
         else if (n == 1)
             vt_erase_row(y, 0, x);
         else if (n == 2)
-            vt_erase_row(y, 0, SCREEN_NUMBER_OF_COLUMNS - 1);
+            vt_erase_row(y, 0, textcon_cols - 1);
         break;
     case 'X':
         n = vt_arg(0, 1);
@@ -686,6 +686,12 @@ static void vt_csi_byte(char c)
         vt_state = VT_NORMAL;
         vga_putc_raw(c);
     }
+}
+
+void k_console_size(unsigned int *cols, unsigned int *rows)
+{
+    *cols = textcon_cols;
+    *rows = textcon_rows;
 }
 
 /**

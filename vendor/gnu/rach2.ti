@@ -1,7 +1,10 @@
 # rach2.ti: the terminfo entry of the Rach2 console, TERM=rach2.
 #
-# The kernel's VGA text console, 80 columns by 25 rows, interprets the subset
-# of ANSI escapes that rach2/sys/kio.c lists, and this entry lists only those.
+# The kernel's console interprets the subset of ANSI escapes that
+# rach2/sys/kio.c lists, and this entry lists only those. It gives no size,
+# as Linux's console entry gives none: the console is 80 columns by 25 rows
+# on the VGA's text mode and as many as a framebuffer's screen holds, and a
+# program reads the size from the terminal's window size.
 # A line feed also returns the carriage, so the entry moves down with CSI B
 # and has no index; the console has no scroll region and no line or character
 # insertion, so a program redraws where a terminal would scroll. A character
@@ -12,7 +15,7 @@
 # from code page 437. install_root.sh compiles the entry into the GNU root.
 rach2|Rach2 VGA text console,
 	am, bw, msgr,
-	colors#8, cols#80, it#8, lines#25, pairs#64,
+	colors#8, it#8, pairs#64,
 	bold=\E[1m, clear=\E[H\E[2J, cr=\r, cub=\E[%p1%dD, cub1=^H,
 	cud=\E[%p1%dB, cud1=\E[B, cuf=\E[%p1%dC, cuf1=\E[C,
 	cup=\E[%i%p1%d;%p2%dH, cuu=\E[%p1%dA, cuu1=\E[A,

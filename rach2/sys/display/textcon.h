@@ -13,8 +13,14 @@
 
 /* The screen's size in character cells, and the colors a cleared cell and
  * new text take. */
-#define SCREEN_NUMBER_OF_COLUMNS 80
-#define SCREEN_NUMBER_OF_ROWS    25
+/* The console's columns and rows: the VGA's 80 by 25 in text mode, and on a
+ * framebuffer as many as its screen holds at the font's scale (fbcon.c),
+ * within the bounds below, whose cells and a line more fit the 16384 cells
+ * of the adapter's memory the console scrolls through. */
+extern unsigned int textcon_cols;
+extern unsigned int textcon_rows;
+#define TEXTCON_COLS_MAX 240u
+#define TEXTCON_ROWS_MAX 64u
 #define DEFAULT_FORECOLOR        0x07 /* Light grey */
 #define DEFAULT_BACKCOLOR        0x00 /* Black */
 

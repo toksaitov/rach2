@@ -4,17 +4,17 @@
  * host-deps: rach2/sys/lib/kfmt.c rach2/sys/lib/kstd.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  *
- * The framebuffer is an array here, which `fbcon_window` hands the console
- * as the loader's framebuffer, and the rows read its pixels back against
- * the font: a glyph drawn in its colors, the cursor's two lines, a Cyrillic
- * letter reached through UTF-8, the glyphs at twice their size on a screen
- * 2000 pixels wide, pixels of 32, 24, 16 and 8 bits, and the 80x25 cells
- * centered. A scroll must draw the lines that moved and leave a blank cell
- * under a blank one alone, which a pixel marked in such a cell shows; a
- * clear must take the cursor's lines from the cell it left; and the
- * scrollback must draw the lines it shows. The text console's driver, the
- * console and the framebuffer's drawing are included whole, as
- * vga_text_hosttest.c includes them.
+ * The framebuffer is an array here, which `fbcon_window` hands the console as
+ * the loader's framebuffer, and the rows read its pixels back against the font:
+ * a glyph drawn in its colors, the cursor's two lines, a Cyrillic letter
+ * reached through UTF-8, the font at the largest whole scale at which the
+ * screen still holds 80 columns and 24 rows with as many cells as fit, within
+ * 240 by 64, pixels of 32, 24, 16 and 8 bits, and the cells centered. A scroll
+ * must draw the lines that moved and leave a blank cell under a blank one
+ * alone, which a pixel marked in such a cell shows; a clear must take the
+ * cursor's lines from the cell it left; and the scrollback must draw the lines
+ * it shows. The text console's driver, the console and the framebuffer's
+ * drawing are included whole, as vga_text_hosttest.c includes them.
  */
 #include "lib/kint.h"
 
@@ -200,11 +200,12 @@ static void row_init(void)
 
     CHECK(use_rgb(1280, 800, 32) == 0, "a 1280x800 framebuffer is taken");
     CHECK(fbcon_active && textcon_on_framebuffer(), "the console is on the framebuffer");
-    CHECK(fb_scale == 1 && grid_left == 320 && grid_top == 200,
-          "the cells are centered at their own size");
+    CHECK(fb_scale == 2 && textcon_cols == 80 && textcon_rows == 25 && grid_left == 0 &&
+              grid_top == 0,
+          "the cells are 80x25 at twice the font's size, filling the screen");
     for (py = 0; py < 800 && clear; py++) {
         for (px = 0; px < 1280; px++) {
-            int in_first_cell = px >= 320 && px < 328 && py >= 200 && py < 216;
+            int in_first_cell = px < 16 && py < 32;
 
             if (!in_first_cell && pixel_at(px, py) != BLACK) {
                 clear = 0;
@@ -220,8 +221,8 @@ static void row_init(void)
     fb.width = 600;
     CHECK(fbcon_init(&fb) == -1, "a framebuffer narrower than 640 pixels is refused");
     fb.width = 1280;
-    fb.height = 399;
-    CHECK(fbcon_init(&fb) == -1, "one shorter than 400 pixels is refused");
+    fb.height = 383;
+    CHECK(fbcon_init(&fb) == -1, "one shorter than 384 pixels, 24 rows, is refused");
     fb.height = 800;
     fb.pitch = 1280 * 4 - 4;
     CHECK(fbcon_init(&fb) == -1, "a pitch under a line's pixels is refused");
@@ -271,7 +272,9 @@ static void row_pixel_sizes(void)
           "light green at five, six and five bits");
 
     CHECK(use_rgb(800, 600, 24) == 0, "a 24-bit framebuffer is taken");
-    CHECK(grid_left == 80 && grid_top == 100, "the cells centered on 800x600");
+    CHECK(fb_scale == 1 && textcon_cols == 100 && textcon_rows == 37 && grid_left == 0 &&
+              grid_top == 4,
+          "800x600 holds 100x37 cells at the font's size, centered");
     put("\033[0m\033[45mM");
     CHECK(cell_shows(0, 0, 'M', GREY, 0xAA00AAu, 0), "magenta in three bytes a pixel");
 
@@ -310,21 +313,35 @@ static void row_pixel_sizes(void)
     }
 }
 
+/**
+ * The font's scale is the largest whole number at which the screen still
+ * holds 80 columns and 24 rows, and the cells are as many as fit at it,
+ * centered, within 240 columns and 64 rows.
+ */
 static void row_double(void)
 {
-    CHECK(use_rgb(2560, 1600, 32) == 0, "a 2560x1600 framebuffer is taken");
-    CHECK(fb_scale == 2 && grid_left == 640 && grid_top == 400,
-          "on a screen 2000 pixels wide the glyphs are twice their size, centered");
+    CHECK(use_rgb(1366, 768, 32) == 0 && fb_scale == 2 && textcon_cols == 85 &&
+              textcon_rows == 24 && grid_left == 3 && grid_top == 0,
+          "1366x768 holds 85x24 cells at twice the font's size");
     put("\xD0\xAF");
-    CHECK(cell_shows(0, 0, 0x9F, GREY, BLACK, 0), "Ya in blocks of four pixels");
+    CHECK(cell_shows(0, 0, 0x9F, GREY, BLACK, 0), "Ya in squares of four pixels");
     textcon_place_cursor();
     CHECK(cell_shows(1, 0, ' ', GREY, BLACK, 1), "the cursor's two lines are four");
 
-    CHECK(use_rgb(2048, 768, 32) == 0, "a screen wide but low is taken");
-    CHECK(fb_scale == 1, "and keeps the glyphs at their size, since twice is 800 lines");
-    CHECK(use_rgb(2000, 1200, 32) == 0 && fb_scale == 2 && grid_left == 360 && grid_top == 200,
-          "2000 pixels wide is twice the size");
-    CHECK(use_rgb(1999, 1200, 32) == 0 && fb_scale == 1, "1999 pixels wide is not 2000");
+    CHECK(use_rgb(2560, 1600, 32) == 0 && fb_scale == 4 && textcon_cols == 80 &&
+              textcon_rows == 25 && grid_left == 0 && grid_top == 0,
+          "2560x1600 holds 80x25 at four times the size");
+    CHECK(use_rgb(2048, 768, 32) == 0 && fb_scale == 2 && textcon_cols == 128 &&
+              textcon_rows == 24,
+          "a screen wide but low takes twice the size, which still gives 24 rows");
+    CHECK(use_rgb(1024, 768, 32) == 0 && fb_scale == 1 && textcon_cols == 128 &&
+              textcon_rows == 48,
+          "1024x768 keeps the font's size, since twice gives 64 columns");
+    CHECK(use_rgb(2560, 384, 32) == 0 && fb_scale == 1 && textcon_cols == 240 &&
+              grid_left == 320,
+          "a screen of more than 240 columns gives 240, centered");
+    CHECK(use_rgb(640, 1600, 32) == 0 && fb_scale == 1 && textcon_rows == 64 && grid_top == 288,
+          "and one of more than 64 rows gives 64");
 }
 
 static void row_scroll(void)

@@ -4,28 +4,29 @@
  * Usage: screentext DUMP
  *
  * DUMP is QEMU's screen dump, a binary PPM (P6, 255 levels). The console's
- * grid is found as the kernel's fbcon.c lays it out: 80 by 25 cells of the
- * 8 by 16 font, at twice its size on a screen 2000 pixels wide or more that
- * holds it so, centred on the screen. Each row of cells is printed as a
- * line of text. A cell whose pixels are all of one colour is a space; any
- * other is the glyph of the kernel's own font (rach2/sys/display/vga_font.c)
- * whose set pixels are those of a colour other than the cell's top-left
- * one, compared with the cursor's two underline rows left out when a cell
- * has them all set, so that the cursor on a blank cell is a space; a cell
- * no glyph matches is printed as '?', and the glyph of a code outside
- * printable ASCII as '#'. Trailing spaces are left
- * off each line. Exits 0, or 1 with a diagnostic for a file that is no such
- * dump or is too small for the grid.
+ * grid is found as the kernel's fbcon.c lays it out: the 8 by 16 font at the
+ * largest whole scale at which the screen still holds 80 columns and 24
+ * rows, as many cells as fit at it, within 240 by 64, centred on the screen.
+ * Each row of cells is printed as a line of text. A cell whose pixels are
+ * all of one colour is a space; any other is the glyph of the kernel's own
+ * font (rach2/sys/display/vga_font.c) whose set pixels are those of a colour
+ * other than the cell's top-left one, compared with the cursor's two
+ * underline rows left out when a cell has them all set, so that the cursor
+ * on a blank cell is a space; a cell no glyph matches is printed as '?', and
+ * the glyph of a code outside printable ASCII as '#'. Trailing spaces are
+ * left off each line. Exits 0, or 1 with a diagnostic for a file that is no
+ * such dump or is too small for the grid.
  */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#define COLS         80
-#define ROWS         25
+#define MIN_COLS     80
+#define MIN_ROWS     24
+#define MAX_COLS     240
+#define MAX_ROWS     64
 #define GLYPH_WIDTH  8
 #define GLYPH_HEIGHT 16
-#define DOUBLE_WIDTH 2000
 #define CURSOR_FIRST 13
 #define CURSOR_LAST  14
 
@@ -120,9 +121,9 @@ static char cell_char(unsigned long left, unsigned long top, unsigned long scale
 
 int main(int argc, char **argv)
 {
-    unsigned long maxval, scale, left, top;
+    unsigned long maxval, scale, left, top, cols, rows;
     FILE *f;
-    char line[COLS + 1];
+    char line[MAX_COLS + 1];
     int row, col, end;
 
     if (argc != 2) {
@@ -148,23 +149,26 @@ int main(int argc, char **argv)
         return 1;
     }
     fclose(f);
-    scale = width >= DOUBLE_WIDTH ? 2u : 1u;
-    while (scale > 1 &&
-           (COLS * GLYPH_WIDTH * scale > width || ROWS * GLYPH_HEIGHT * scale > height)) {
-        scale--;
-    }
-    if (COLS * GLYPH_WIDTH > width || ROWS * GLYPH_HEIGHT > height) {
+    if (width / GLYPH_WIDTH < MIN_COLS || height / GLYPH_HEIGHT < MIN_ROWS) {
         fprintf(stderr, "screentext: %s: %lux%lu is smaller than the console's grid\n", argv[1],
                 width, height);
         return 1;
     }
-    left = (width - COLS * GLYPH_WIDTH * scale) / 2u;
-    top = (height - ROWS * GLYPH_HEIGHT * scale) / 2u;
-    for (row = 0; row < ROWS; row++) {
-        for (col = 0; col < COLS; col++) {
+    for (scale = 1; width / (GLYPH_WIDTH * (scale + 1)) >= MIN_COLS &&
+                    height / (GLYPH_HEIGHT * (scale + 1)) >= MIN_ROWS;
+         scale++) {
+    }
+    cols = width / (GLYPH_WIDTH * scale);
+    rows = height / (GLYPH_HEIGHT * scale);
+    cols = cols > MAX_COLS ? MAX_COLS : cols;
+    rows = rows > MAX_ROWS ? MAX_ROWS : rows;
+    left = (width - cols * GLYPH_WIDTH * scale) / 2u;
+    top = (height - rows * GLYPH_HEIGHT * scale) / 2u;
+    for (row = 0; row < (int)rows; row++) {
+        for (col = 0; col < (int)cols; col++) {
             line[col] = cell_char(left, top, scale, col, row);
         }
-        for (end = COLS; end > 0 && line[end - 1] == ' '; end--) {
+        for (end = (int)cols; end > 0 && line[end - 1] == ' '; end--) {
         }
         line[end] = '\0';
         printf("%s\n", line);

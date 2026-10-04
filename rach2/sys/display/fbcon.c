@@ -1,7 +1,9 @@
 /*
  * fbcon.c: the text console on a framebuffer, as fbcon.h describes it.
  *
- * The screen is the console's 80x25 cells; the window of the memory they
+ * The screen is the console's cells, as many as it holds of the font at the
+ * largest whole scale that still gives 80 columns and 24 rows, which
+ * `textcon_cols` and `textcon_rows` record; the window of the memory they
  * come from begins at `start`. `drawn` is what each of the screen's cells
  * shows, and a cell is drawn only when the memory's cell differs from it or
  * the cursor came or went. A scroll moves `start` down a line and so draws
@@ -16,12 +18,15 @@
 #include "vga_text.h"
 #include "../klog.h"
 
-#define SCREEN_CELLS (VGA_TEXT_COLS * VGA_TEXT_ROWS)
+#define SCREEN_CELLS (textcon_cols * textcon_rows)
 #define GLYPH_WIDTH  8
 #define GLYPH_HEIGHT 16
 
-/* The screens that take the glyphs at twice their size. */
-#define FBCON_DOUBLE_WIDTH 2000
+/* The fewest columns and rows a screen gives the console, and a cursor on
+ * no cell. */
+#define MIN_COLS 80u
+#define MIN_ROWS 24u
+#define NO_CELL  0xFFFFFFFFu
 
 /* The cursor: the two lines the VGA's text mode underlines a cell with. */
 #define CURSOR_FIRST_LINE 13
@@ -53,8 +58,8 @@ static uint32_t pixel[16];
 
 static uint32_t start;
 static uint32_t cursor;
-static uint16_t drawn[SCREEN_CELLS];
-static uint32_t drawn_cursor = SCREEN_CELLS;
+static uint16_t drawn[TEXTCON_COLS_MAX * TEXTCON_ROWS_MAX];
+static uint32_t drawn_cursor = NO_CELL;
 
 /** Color `v`, from 0 to 255, in a field of `bits` bits at bit `shift`. */
 static uint32_t color_field(uint32_t v, uint32_t shift, uint32_t bits)
@@ -112,8 +117,8 @@ static void draw_cell(volatile uint8_t *base, uint32_t i, uint16_t cell, int wit
     const uint8_t *rows = vga_font_all[cell & 0xFF].rows;
     uint32_t fg = pixel[(cell >> 8) & 0xF];
     uint32_t bg = pixel[(cell >> 12) & 0xF];
-    uint32_t left = grid_left + (i % VGA_TEXT_COLS) * GLYPH_WIDTH * fb_scale;
-    uint32_t top = grid_top + (i / VGA_TEXT_COLS) * GLYPH_HEIGHT * fb_scale;
+    uint32_t left = grid_left + (i % textcon_cols) * GLYPH_WIDTH * fb_scale;
+    uint32_t top = grid_top + (i / textcon_cols) * GLYPH_HEIGHT * fb_scale;
     volatile uint8_t *line = base + top * fb_pitch + left * fb_bytes;
     uint32_t r, s, c, t;
 
@@ -153,9 +158,9 @@ static void refresh(volatile uint8_t *base, uint32_t i)
     if (drawn[i] == cell && (drawn_cursor == i) == want_cursor) {
         return;
     }
-    if (want_cursor && drawn_cursor != i && drawn_cursor < SCREEN_CELLS) {
+    if (want_cursor && drawn_cursor != i && drawn_cursor != NO_CELL) {
         was = drawn_cursor;
-        drawn_cursor = SCREEN_CELLS;
+        drawn_cursor = NO_CELL;
         draw_cell(base, was, drawn[was], 0);
     }
     draw_cell(base, i, cell, want_cursor);
@@ -163,7 +168,7 @@ static void refresh(volatile uint8_t *base, uint32_t i)
     if (want_cursor) {
         drawn_cursor = i;
     } else if (drawn_cursor == i) {
-        drawn_cursor = SCREEN_CELLS;
+        drawn_cursor = NO_CELL;
     }
 }
 
@@ -180,20 +185,27 @@ int fbcon_init(const struct boot_framebuffer *fb)
         return -1;
     }
     fb_bytes = (fb->bpp + 7) / 8;
-    fb_scale = fb->width >= FBCON_DOUBLE_WIDTH ? 2 : 1;
-    while (fb_scale > 1 && (VGA_TEXT_COLS * GLYPH_WIDTH * fb_scale > fb->width ||
-                            VGA_TEXT_ROWS * GLYPH_HEIGHT * fb_scale > fb->height)) {
-        fb_scale--;
-    }
-    if (VGA_TEXT_COLS * GLYPH_WIDTH > fb->width || VGA_TEXT_ROWS * GLYPH_HEIGHT > fb->height ||
+    if (fb->width / GLYPH_WIDTH < MIN_COLS || fb->height / GLYPH_HEIGHT < MIN_ROWS ||
         fb->width > fb->pitch / fb_bytes) {
         return -1;
+    }
+    for (fb_scale = 1; fb->width / (GLYPH_WIDTH * (fb_scale + 1)) >= MIN_COLS &&
+                       fb->height / (GLYPH_HEIGHT * (fb_scale + 1)) >= MIN_ROWS;
+         fb_scale++) {
+    }
+    textcon_cols = fb->width / (GLYPH_WIDTH * fb_scale);
+    textcon_rows = fb->height / (GLYPH_HEIGHT * fb_scale);
+    if (textcon_cols > TEXTCON_COLS_MAX) {
+        textcon_cols = TEXTCON_COLS_MAX;
+    }
+    if (textcon_rows > TEXTCON_ROWS_MAX) {
+        textcon_rows = TEXTCON_ROWS_MAX;
     }
     fb_pitch = fb->pitch;
     fb_width = fb->width;
     fb_height = fb->height;
-    grid_left = (fb_width - VGA_TEXT_COLS * GLYPH_WIDTH * fb_scale) / 2;
-    grid_top = (fb_height - VGA_TEXT_ROWS * GLYPH_HEIGHT * fb_scale) / 2;
+    grid_left = (fb_width - textcon_cols * GLYPH_WIDTH * fb_scale) / 2;
+    grid_top = (fb_height - textcon_rows * GLYPH_HEIGHT * fb_scale) / 2;
     for (i = 0; i < 16; i++) {
         if (fb->type == BOOT_FB_RGB) {
             pixel[i] = color_field(vga_rgb[i][0], fb->red_shift, fb->red_bits) |
@@ -223,10 +235,11 @@ int fbcon_init(const struct boot_framebuffer *fb)
     }
     start = 0;
     cursor = 0;
-    drawn_cursor = SCREEN_CELLS;
+    drawn_cursor = NO_CELL;
     fbcon_active = true;
-    klog(KLOG_INFO, "console", "framebuffer: %dx%d, %d bits a pixel; the font at %dx",
-         (int)fb_width, (int)fb_height, (int)fb->bpp, (int)fb_scale);
+    klog(KLOG_INFO, "console", "framebuffer: %dx%d, %d bits a pixel; the font at %dx, %dx%d cells",
+         (int)fb_width, (int)fb_height, (int)fb->bpp, (int)fb_scale, (int)textcon_cols,
+         (int)textcon_rows);
     return 0;
 }
 
@@ -268,7 +281,7 @@ void fbcon_set_cursor(uint32_t cell)
     if (!fbcon_active || base == NULL) {
         return;
     }
-    if (was < SCREEN_CELLS) {
+    if (was != NO_CELL) {
         refresh(base, was);
     }
     if (cell >= start && cell < start + SCREEN_CELLS) {

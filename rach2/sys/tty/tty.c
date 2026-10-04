@@ -545,7 +545,12 @@ static void console_rx_notify(void)
 
 void tty_console_init(void)
 {
+    unsigned int cols, rows;
+
     tty_init(&console_tty, console_sink, NULL);
+    k_console_size(&cols, &rows);
+    console_tty.winsize.ws_col = (uint16_t)cols;
+    console_tty.winsize.ws_row = (uint16_t)rows;
     console_tty.pump = console_pump;
     serial_set_rx_notify(console_rx_notify);
 }

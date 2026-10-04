@@ -37,6 +37,11 @@
 /** Write one character to the screen. */
 void k_putc(char c);
 
+/** The console's columns and rows, which its terminal reports as its window
+ * size: 80 by 25 on the VGA's text mode, and on a framebuffer what the
+ * screen holds. */
+void k_console_size(unsigned int *cols, unsigned int *rows);
+
 /**
  * The console's lock, over the screen's writer and the serial port's
  * receive ring: interrupts off, and the lock taken unless this processor

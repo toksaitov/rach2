@@ -85,10 +85,12 @@ is set.
 If the applicable signal is blocked or ignored, the operation fails with
 .Er EIO .
 .Ss Screen
-The screen is a terminal of 80 columns and 25 rows whose escape
-sequences the terminfo entry
+The screen is a terminal whose escape sequences the terminfo entry
 .Ql rach2
-lists.
+lists, of 80 columns and 25 rows on the VGA's text mode, and on a
+framebuffer of as many as the screen holds; its window size, which
+.Dv TIOCGWINSZ
+reports, is the screen's.
 Text other than ASCII is read as UTF-8 and drawn from the console's
 font.
 At boot the kernel loads into the adapter a font that keeps code page
@@ -97,10 +99,14 @@ Russian, Kyrgyz, Kazakh, Ukrainian and Belarusian, from GNU Unifont, and
 uses it when the adapter reads it back; otherwise the adapter's own font,
 code page 437, stays.
 When the loader leaves a framebuffer, as GRUB does under UEFI and by BIOS
-when its menu asks for one, the kernel draws the same 80 columns and 25
-rows on it, centered, in that font with code page 437's ASCII and box
-drawing, each character 8 pixels by 16, or 16 by 32 on a screen 2000
-pixels wide or more, and the cursor as two lines at the foot of its cell.
+when its menu asks for one, the kernel draws the console on it in the
+screen's own mode, in that font with code page 437's ASCII and box
+drawing, each character 8 pixels by 16 times the largest whole number at
+which the screen still holds 80 columns and 24 rows, so that each pixel of
+the font is a sharp square, and as many characters as fit: 85 columns and
+24 rows at 16 pixels by 32 on a 1366 by 768 screen, and 80 by 25 at that
+size on a 1280 by 800 one.
+The cursor is two lines at the foot of its cell.
 A Latin letter with an accent that the font lacks is drawn without it,
 punctuation as its ASCII likeness, and any other character the font lacks
 as one

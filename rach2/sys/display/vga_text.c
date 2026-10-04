@@ -1,38 +1,38 @@
 /*
  * VGA text mode (Mode 3) driver.
  *
- * The visible screen is a window onto a ring of scrollback lines. Each line
- * is VGA_TEXT_COLS cells, a cell is a character byte plus an attribute byte.
- * Lines are numbered by a monotonic logical index; `_history` indexes that
- * number modulo VGA_TEXT_SCROLLBACK_LINES, so the oldest line is overwritten
- * once the ring fills. `_live_top_line` is the logical line at the top of the
- * live (bottom) area where new text lands; `_viewport_top_line` is the line at
- * the top of what is currently displayed. They differ while the user scrolls
- * back through history; `_follow_live` is true when the viewport tracks live
- * output.
+ * The visible screen is a window onto a ring of scrollback lines. Each line is
+ * `textcon_cols` cells, a cell is a character byte plus an attribute byte; the
+ * screen is `textcon_rows` lines, 80 by 25 on the VGA and what fbcon.c finds
+ * the screen holds on a framebuffer. Lines are numbered by a monotonic logical
+ * index; `_history` indexes that number modulo VGA_TEXT_SCROLLBACK_LINES, so
+ * the oldest line is overwritten once the ring fills. `_live_top_line` is the
+ * logical line at the top of the live (bottom) area where new text lands;
+ * `_viewport_top_line` is the line at the top of what is currently displayed.
+ * They differ while the user scrolls back through history; `_follow_live` is
+ * true when the viewport tracks live output.
  *
  * The adapter's memory is slow: every cell written to it is an uncached bus
- * cycle on hardware and a trapped access under a hypervisor, microseconds
- * where a store to memory is nanoseconds, and a screen is two thousand
- * cells. So the driver writes each cell once. A byte of live output
- * goes to its one cell, and a scroll moves the display's start address
- * through the 32 KiB the adapter maps at VGA_TEXT_BUFFER, which holds eight
- * screens, and writes only the new blank line; the rows that stay are
- * copied to the front of that memory once every 180 scrolls, when the
- * window would pass its end. `_hw_top` is the cell the display starts at.
- * Only a viewport that moves, a scroll back through history or a clear, is
- * blitted whole by textcon_sync(). Placing the cursor takes four port
- * writes, so a write of many bytes holds it and places it once at the end.
- * While the adapter is in a graphics mode the start address is left alone,
- * since it is the picture's then; leaving graphics mode clears the screen,
- * which sets it again.
+ * cycle on hardware and a trapped access under a hypervisor, microseconds where
+ * a store to memory is nanoseconds, and a screen of the VGA's is two thousand
+ * cells. So the driver writes each cell once. A byte of live output goes to its
+ * one cell, and a scroll moves the display's start address through the 32 KiB
+ * the adapter maps at VGA_TEXT_BUFFER, which holds eight of the VGA's screens,
+ * and writes only the new blank line; the rows that stay are copied to the
+ * front of that memory when the window would pass its end, once every 180
+ * scrolls on the VGA. `_hw_top` is the cell the display starts at. Only a
+ * viewport that moves, a scroll back through history or a clear, is blitted
+ * whole by textcon_sync(). Placing the cursor takes four port writes, so a
+ * write of many bytes holds it and places it once at the end. While the adapter
+ * is in a graphics mode the start address is left alone, since it is the
+ * picture's then; leaving graphics mode clears the screen, which sets it again.
  *
- * On a framebuffer the memory, the start address and the cursor are
- * fbcon.c's, which draws what they select, and the economy is the same:
- * a cell drawn is a glyph's pixels stored to the display's memory.
+ * On a framebuffer the memory, the start address and the cursor are fbcon.c's,
+ * which draws what they select, and the economy is the same: a cell drawn is a
+ * glyph's pixels stored to the display's memory.
  *
- * The caller keeps interrupts off around a byte's work here: k_putc does,
- * and a keyboard's echo comes through k_putc from its interrupt.
+ * The caller keeps interrupts off around a byte's work here: k_putc does, and a
+ * keyboard's echo comes through k_putc from its interrupt.
  */
 
 #include "vga_font.h"
@@ -50,15 +50,17 @@
 /* The cells the adapter maps at VGA_TEXT_BUFFER, 32 KiB of two-byte cells,
  * and the cells of one screen. */
 #define VGA_TEXT_CELLS        16384u
-#define VGA_TEXT_SCREEN_CELLS (VGA_TEXT_ROWS * VGA_TEXT_COLS)
+#define VGA_TEXT_SCREEN_CELLS (textcon_rows * textcon_cols)
 
 unsigned int x;
 unsigned int y;
+unsigned int textcon_cols = VGA_TEXT_COLS;
+unsigned int textcon_rows = VGA_TEXT_ROWS;
 
 static display_color_t _fore_color = VGA_TEXT_DEFAULT_FG;
 static display_color_t _back_color = VGA_TEXT_DEFAULT_BG;
 
-static uint16_t _history[VGA_TEXT_SCROLLBACK_LINES][VGA_TEXT_COLS];
+static uint16_t _history[VGA_TEXT_SCROLLBACK_LINES][TEXTCON_COLS_MAX];
 static uint32_t _history_start_line = 0;
 static uint32_t _history_line_count = 0;
 static uint32_t _live_top_line = 0;
@@ -173,7 +175,7 @@ static void vga_text_clear_line(uint32_t line)
     }
 
     blank = vga_text_blank_cell();
-    for (col = 0; col < VGA_TEXT_COLS; ++col) {
+    for (col = 0; col < textcon_cols; ++col) {
         cells[col] = blank;
     }
 }
@@ -215,7 +217,7 @@ static void vga_text_reset_history(void)
     _viewport_top_line = 0;
     _follow_live = true;
 
-    for (i = 0; i < VGA_TEXT_ROWS; ++i) {
+    for (i = 0; i < textcon_rows; ++i) {
         vga_text_append_blank_line();
     }
 }
@@ -237,10 +239,10 @@ static void vga_text_update_cursor(void)
     uint16_t cursor_pos;
 
     if (_follow_live) {
-        cursor_pos = (uint16_t)(_hw_top + y * VGA_TEXT_COLS + x);
+        cursor_pos = (uint16_t)(_hw_top + y * textcon_cols + x);
     } else if (cursor_line >= _viewport_top_line &&
-               cursor_line < _viewport_top_line + VGA_TEXT_ROWS) {
-        cursor_pos = (uint16_t)(_hw_top + (cursor_line - _viewport_top_line) * VGA_TEXT_COLS + x);
+               cursor_line < _viewport_top_line + textcon_rows) {
+        cursor_pos = (uint16_t)(_hw_top + (cursor_line - _viewport_top_line) * textcon_cols + x);
     } else {
         cursor_pos = (uint16_t)(_hw_top + VGA_TEXT_SCREEN_CELLS - 1);
     }
@@ -305,9 +307,9 @@ void textcon_release(void)
  * Each on-screen row is filled from its scrollback line; rows mapping to lines
  * that do not exist (above the start of history) are filled with blanks. The
  * rows go to the window at `_hw_top`, which the display is then pointed at.
- * This is the whole screen, two thousand cells, so it is for a viewport that
- * moved: a scroll back through history, or a clear. Live output does not
- * come here.
+ * This is the whole screen, two thousand cells on the VGA, so it is for a
+ * viewport that moved: a scroll back through history, or a clear. Live output
+ * does not come here.
  */
 void textcon_sync(void)
 {
@@ -316,17 +318,17 @@ void textcon_sync(void)
     unsigned int col;
     uint16_t *cells;
 
-    for (row = 0; row < VGA_TEXT_ROWS; ++row) {
+    for (row = 0; row < textcon_rows; ++row) {
         line = _viewport_top_line + row;
         cells = vga_text_line_ptr(line);
         if (cells != NULL) {
-            for (col = 0; col < VGA_TEXT_COLS; ++col) {
-                vga_text_store(_hw_top + row * VGA_TEXT_COLS + col, cells[col]);
+            for (col = 0; col < textcon_cols; ++col) {
+                vga_text_store(_hw_top + row * textcon_cols + col, cells[col]);
             }
         } else {
             uint16_t blank = vga_text_blank_cell();
-            for (col = 0; col < VGA_TEXT_COLS; ++col) {
-                vga_text_store(_hw_top + row * VGA_TEXT_COLS + col, blank);
+            for (col = 0; col < textcon_cols; ++col) {
+                vga_text_store(_hw_top + row * textcon_cols + col, blank);
             }
         }
     }
@@ -340,10 +342,10 @@ void textcon_sync(void)
  *
  * The start address moves down a line, and the line that comes into view at
  * the bottom is written blank. When the window would pass the end of the
- * adapter's memory, the twenty-four rows that stay are copied to its front
- * first; that copy is the one whole-screen cost, and it comes once every
- * 180 scrolls, since the window moves 179 times before it would pass the
- * end. The source of the copy begins past the destination's end, so a
+ * adapter's memory, the rows that stay are copied to its front first; that
+ * copy is the one whole-screen cost, and on the VGA's 80 by 25 it comes once
+ * every 180 scrolls, since the window moves 179 times before it would pass
+ * the end. The source of the copy begins past the destination's end, so a
  * forward copy is safe.
  */
 static void vga_text_scroll_hardware(void)
@@ -352,16 +354,16 @@ static void vga_text_scroll_hardware(void)
     uint16_t blank = vga_text_blank_cell();
     uint32_t i;
 
-    if (_hw_top + VGA_TEXT_SCREEN_CELLS + VGA_TEXT_COLS > VGA_TEXT_CELLS) {
-        for (i = 0; i < VGA_TEXT_SCREEN_CELLS - VGA_TEXT_COLS; i++) {
-            vga_text_store(i, video_memory[_hw_top + VGA_TEXT_COLS + i]);
+    if (_hw_top + VGA_TEXT_SCREEN_CELLS + textcon_cols > VGA_TEXT_CELLS) {
+        for (i = 0; i < VGA_TEXT_SCREEN_CELLS - textcon_cols; i++) {
+            vga_text_store(i, video_memory[_hw_top + textcon_cols + i]);
         }
         _hw_top = 0;
     } else {
-        _hw_top += VGA_TEXT_COLS;
+        _hw_top += textcon_cols;
     }
-    for (i = 0; i < VGA_TEXT_COLS; i++) {
-        vga_text_store(_hw_top + VGA_TEXT_SCREEN_CELLS - VGA_TEXT_COLS + i, blank);
+    for (i = 0; i < textcon_cols; i++) {
+        vga_text_store(_hw_top + VGA_TEXT_SCREEN_CELLS - textcon_cols + i, blank);
     }
     vga_text_set_start(_hw_top);
 }
@@ -415,7 +417,7 @@ void textcon_write_cell(unsigned int col, unsigned int row, char c, uint8_t attr
     uint16_t *cells;
     uint16_t cell;
 
-    if (col >= VGA_TEXT_COLS || row >= VGA_TEXT_ROWS) {
+    if (col >= textcon_cols || row >= textcon_rows) {
         return;
     }
 
@@ -430,7 +432,7 @@ void textcon_write_cell(unsigned int col, unsigned int row, char c, uint8_t attr
         if (!_hw_started) {
             vga_text_set_start(_hw_top);
         }
-        vga_text_store(_hw_top + row * VGA_TEXT_COLS + col, cell);
+        vga_text_store(_hw_top + row * textcon_cols + col, cell);
     }
 }
 
@@ -451,8 +453,8 @@ uint8_t get_curr_color_attr(void)
 
 void k_scrollback_page_up(void)
 {
-    if (_viewport_top_line > _history_start_line + VGA_TEXT_ROWS) {
-        _viewport_top_line -= VGA_TEXT_ROWS;
+    if (_viewport_top_line > _history_start_line + textcon_rows) {
+        _viewport_top_line -= textcon_rows;
     } else {
         _viewport_top_line = _history_start_line;
     }
@@ -463,8 +465,8 @@ void k_scrollback_page_up(void)
 
 void k_scrollback_page_down(void)
 {
-    if (_viewport_top_line + VGA_TEXT_ROWS < _live_top_line) {
-        _viewport_top_line += VGA_TEXT_ROWS;
+    if (_viewport_top_line + textcon_rows < _live_top_line) {
+        _viewport_top_line += textcon_rows;
         _follow_live = false;
     } else {
         _viewport_top_line = _live_top_line;

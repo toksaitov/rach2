@@ -32,9 +32,12 @@ extern bool fbcon_active;
 extern uint16_t fbcon_cells[FBCON_CELLS];
 
 /**
- * Take the loader's framebuffer `fb` as the console's screen and clear it.
- * Returns 0, or -1 when it is a kind this console cannot draw or too small
- * for the 80x25 cells, and the console stays on the text adapter.
+ * Take the loader's framebuffer `fb` as the console's screen and clear it,
+ * with as many cells as it holds of the font at the largest whole scale that
+ * still gives 80 columns and 24 rows, `textcon_cols` and `textcon_rows`:
+ * 85x24 at twice the font's size on a 1366x768 screen. Returns 0, or -1 when
+ * it is a kind this console cannot draw or holds fewer than 80 columns and 24
+ * rows, and the console stays on the text adapter.
  */
 int fbcon_init(const struct boot_framebuffer *fb);
 
