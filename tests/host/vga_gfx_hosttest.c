@@ -179,12 +179,39 @@ static void row_font(void)
     font_row = 0;
 }
 
+/** On a framebuffer console mode 13h programs no port and its picture is
+ * memory, not the aperture, which may alias the screen the console draws. */
+static void row_fbcon(void)
+{
+    uint8_t *pixels;
+
+    font_row = 1; /* no font is saved or restored here */
+    fbcon_active = true;
+    vga_graphics_mode = false;
+    accesses = 0;
+    k_memset(aperture, 0x5A, sizeof(aperture));
+    expected_mode = 1;
+    pixels = fb_enter();
+    CHECK(pixels != 0 && pixels != aperture && gfx_current.framebuffer == pixels &&
+              gfx_current.size == VGA_GFX_SIZE,
+          "the picture on a framebuffer console is memory of its own");
+    pixels[0] = 0xEE;
+    pixels[VGA_GFX_SIZE - 1] = 0xEE;
+    CHECK(accesses == 0 && aperture[0] == 0x5A, "and no port nor the aperture is touched");
+    expected_mode = 0;
+    fb_exit();
+    CHECK(accesses == 0 && gfx_current.framebuffer == 0, "nor by the way back");
+    fbcon_active = false;
+    font_row = 0;
+}
+
 /** Try every port boundary, including font mapping and palette restoration. */
 int main(void)
 {
     unsigned int point, total;
 
     row_font();
+    row_fbcon();
 
     row_transition(INJECT_ENTRY, 0);
     row_transition(INJECT_EXIT, 0);

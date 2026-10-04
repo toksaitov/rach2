@@ -304,8 +304,14 @@ int vga_font_load(void)
     return same;
 }
 
+/* Mode 13h's picture on a framebuffer console, where the VGA's aperture may
+ * alias the screen the console draws on: memory, which reaches no screen. */
+static uint8_t gfx_shadow[VGA_GFX_SIZE];
+
 /**
- * Switch to Mode 13h and return the linear framebuffer at A0000.
+ * Switch to Mode 13h and return the linear framebuffer at A0000, or on a
+ * framebuffer console the memory that stands for it (`gfx_shadow`), so that
+ * the hardware is left alone.
  *
  * Saves the text font first so fb_exit can restore it, clears the
  * framebuffer to color 0, and publishes gfx_current, all with interrupts off.
@@ -316,10 +322,11 @@ int vga_font_load(void)
 uint8_t *fb_enter(void)
 {
     uint32_t flags = kirq_save();
+    uint8_t *pixels = fbcon_active ? gfx_shadow : (uint8_t *)VGA_GFX_FRAMEBUFFER;
 
     if (vga_graphics_mode) {
         kirq_restore(flags);
-        return (uint8_t *)VGA_GFX_FRAMEBUFFER;
+        return pixels;
     }
 
     if (!fbcon_active) {
@@ -339,11 +346,11 @@ uint8_t *fb_enter(void)
     gfx_current.height = VGA_GFX_HEIGHT;
     gfx_current.bpp = VGA_GFX_BPP;
     gfx_current.pitch = VGA_GFX_WIDTH;
-    gfx_current.framebuffer = (uint8_t *)VGA_GFX_FRAMEBUFFER;
+    gfx_current.framebuffer = pixels;
     gfx_current.size = VGA_GFX_SIZE;
 
     kirq_restore(flags);
-    return (uint8_t *)VGA_GFX_FRAMEBUFFER;
+    return pixels;
 }
 
 /**
