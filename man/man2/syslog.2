@@ -11,7 +11,7 @@
 .Fn klogctl "int type" "char *buf" "int len"
 .Sh DESCRIPTION
 .Fn syslog ,
-number 103, which glibc and musl call
+number 103 on both i386 and x86-64, which glibc and musl call
 .Fn klogctl ,
 reads the kernel's log ring, the records
 .Pa /dev/bootlog

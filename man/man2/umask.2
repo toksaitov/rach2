@@ -36,6 +36,7 @@ determine their permissions.
 .Pp
 The i386 system call number is 60.
 EBX contains the new mask.
+On x86-64 the number is 95, and the mask is in RDI.
 .Sh RETURN VALUES
 .Fn umask
 returns the previous mask.

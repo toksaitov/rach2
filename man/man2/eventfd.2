@@ -15,10 +15,10 @@ returns a new descriptor over a 64-bit counter that starts at
 .Fa initval .
 The C library calls
 .Nm eventfd2 ,
-number 328, with
+number 328 on i386 and 290 on x86-64, with
 .Fa flags ;
 .Nm eventfd ,
-number 323, is the same call with no flags.
+number 323 on i386 and 284 on x86-64, is the same call with no flags.
 The flags are
 .Dv EFD_CLOEXEC ,
 .Dv EFD_NONBLOCK

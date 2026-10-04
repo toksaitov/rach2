@@ -19,6 +19,7 @@ The third argument, called
 below, is a pointer or an integer as the request requires.
 The i386 system call number is 54: EBX is the descriptor, ECX the request,
 and EDX the argument.
+On x86-64 the number is 16, with the three in RDI, RSI and RDX.
 .Pp
 The descriptor is checked before the request.
 Every descriptor not opened with
@@ -48,7 +49,8 @@ The console and pseudo-terminal slaves accept:
 .It Dv TCGETS
 Copy the 36-byte kernel termios to
 .Fa arg .
-This is the i386 kernel layout with 19 control characters, not musl's
+This is the kernel layout, the same on i386 and x86-64, with 19 control
+characters, not musl's
 larger termios structure with 32 control characters and speed fields.
 A new terminal has Linux's control flags,
 .Dv B38400 | CS8 | CREAD | HUPCL .
@@ -335,8 +337,9 @@ A socket descriptor of any family, an
 .Dv AF_UNIX
 one included, as glibc's
 .Xr if_nametoindex 3
-opens, accepts interface queries using a 32-byte i386
-.Vt "struct ifreq" .
+opens, accepts interface queries using a
+.Vt "struct ifreq"
+in the processor's layout, 32 bytes on i386 and 40 on x86-64.
 .Dv SIOCGIFCONF
 fills the buffer of a
 .Vt "struct ifconf"
@@ -390,8 +393,9 @@ longer on the interface's subnet.
 .Dv SIOCADDRT
 and
 .Dv SIOCDELRT
-take an 84-byte i386
+take a
 .Vt "struct rtentry"
+in the processor's layout, 84 bytes on i386 and 120 on x86-64,
 and require effective user ID 0.
 A default route of no metric sets or removes the selected interface's
 default gateway; any other route is added to or removed from the table

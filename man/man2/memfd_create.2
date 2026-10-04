@@ -98,6 +98,7 @@ a file of any other type answers them with
 .Pp
 The i386 system call number is 356.
 The kernel takes the name in EBX and the flags in ECX.
+On x86-64 the number is 319, with the name in RDI and the flags in RSI.
 .Sh RETURN VALUES
 .Fn memfd_create
 returns the new descriptor, or -1 on failure and sets

@@ -12,7 +12,7 @@
 .Fn rt_tgsigqueueinfo "pid_t tgid" "pid_t tid" "int sig" "siginfo_t *info"
 .Sh DESCRIPTION
 .Fn rt_sigqueueinfo ,
-number 178, which the C libraries'
+number 178 on i386 and 129 on x86-64, which the C libraries'
 .Fn sigqueue
 calls, sends
 .Fa sig
@@ -25,7 +25,7 @@ which a handler and
 .Xr sigtimedwait 2
 are given.
 .Fn rt_tgsigqueueinfo ,
-number 335, sends it to the thread
+number 335 on i386 and 297 on x86-64, sends it to the thread
 .Fa tid
 of the process
 .Fa tgid

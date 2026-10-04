@@ -71,6 +71,8 @@ which Linux accepts and ignores, is accepted and ignored.
 .Pp
 The i386 system call number is 143.
 The kernel takes the descriptor in EBX and the operation in ECX.
+On x86-64 the number is 73, with the descriptor in RDI and the operation
+in RSI.
 .Sh RETURN VALUES
 .Fn flock
 returns 0 on success, or -1 on failure and sets

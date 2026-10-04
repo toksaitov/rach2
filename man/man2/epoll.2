@@ -25,19 +25,19 @@ watches, so that a wait names them once rather than in every call, as
 .Xr poll 2
 does.
 .Fn epoll_create1 ,
-number 329, makes one;
+number 329 on i386 and 291 on x86-64, makes one;
 .Fa flags
 is 0 or
 .Dv EPOLL_CLOEXEC .
 .Fn epoll_create ,
-number 254, is the older form, whose argument must be positive and is
+number 254 on i386 and 213 on x86-64, is the older form, whose argument must be positive and is
 otherwise ignored.
 .Pa /proc/ Ns Ar pid Ns Pa /fd
 names the set
 .Dq anon_inode:[eventpoll] .
 .Pp
 .Fn epoll_ctl ,
-number 255, changes the set:
+number 255 on i386 and 233 on x86-64, changes the set:
 .Dv EPOLL_CTL_ADD
 adds
 .Fa fd
@@ -97,7 +97,7 @@ is accepted at
 and changes nothing, since each wait here wakes its own process.
 .Pp
 .Fn epoll_wait ,
-number 256, waits until a descriptor of the set is ready, a signal
+number 256 on i386 and 232 on x86-64, waits until a descriptor of the set is ready, a signal
 arrives, or
 .Fa timeout
 milliseconds pass, a negative
@@ -109,13 +109,13 @@ events and their data in
 with more ready than that, the next waits report the others first, so
 each ready descriptor is reported in turn, as in Linux.
 .Fn epoll_pwait ,
-number 319, waits with the signal mask
+number 319 on i386 and 281 on x86-64, waits with the signal mask
 .Fa sigmask
 in place, as
 .Xr ppoll 2
 does.
 .Fn epoll_pwait2 ,
-number 441, takes its timeout as a
+number 441 on both, takes its timeout as a
 .Vt struct timespec
 of 64-bit seconds and nanoseconds; negative seconds are
 .Er EINVAL ,

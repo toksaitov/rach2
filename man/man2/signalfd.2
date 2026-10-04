@@ -13,9 +13,9 @@
 .Fn signalfd ,
 whose C library function calls
 .Fn signalfd4 ,
-number 327, or with no flags
+number 327 on i386 and 289 on x86-64, or with no flags
 .Fn signalfd ,
-number 321, makes a descriptor that reads the signals of
+number 321 on i386 and 282 on x86-64, makes a descriptor that reads the signals of
 .Fa mask ,
 or with
 .Fa fd

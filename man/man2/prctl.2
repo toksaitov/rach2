@@ -85,7 +85,7 @@ describes, and whether the process may leave a core file, as
 describes.
 .Ss personality
 .Fn personality ,
-number 136, sets the caller's execution domain to
+number 136 on i386 and 135 on x86-64, sets the caller's execution domain to
 .Fa persona
 and returns the old value, or with
 .Fa persona
@@ -106,7 +106,8 @@ inherits the value, and
 .Xr execve 2
 keeps it.
 .Ss System call interface
-The i386 system call number is 172.
+The i386 system call number is 172, and the x86-64 one 157, where the five
+arguments are in RDI, RSI, RDX, R10 and R8.
 EBX contains
 .Fa option
 and ECX through EDI the second through fifth arguments.

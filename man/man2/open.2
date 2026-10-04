@@ -538,6 +538,8 @@ and ESI.
 takes path and mode in EBX and ECX;
 .Fn close
 takes the descriptor in EBX.
+The x86-64 numbers are 2, 257, 85, 3 and 436, and each call takes the same
+arguments in RDI, RSI, RDX and R10.
 .Pp
 The i386 musl implementation uses the legacy open system call for
 .Fn open

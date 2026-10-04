@@ -38,7 +38,8 @@ The three stop commands perform the kernel shutdown procedure and do
 not return.
 A restart that fails to reset the platform also ends in a halt.
 .Pp
-The i386 system call number is 88.
+The i386 system call number is 88, and the x86-64 one 169, where the three
+arguments are in RDI, RSI and RDX.
 Its arguments are a first magic number in EBX, a second magic number
 in ECX, and the command in EDX.
 The first magic must be

@@ -19,7 +19,7 @@
 .Fn inotify_rm_watch "int fd" "int wd"
 .Sh DESCRIPTION
 .Fn inotify_init1 ,
-number 332, returns a new inotify instance: a descriptor on which the
+number 332 on i386 and 294 on x86-64, returns a new inotify instance: a descriptor on which the
 kernel queues an event when a watched file changes.
 .Fa flags
 may have
@@ -27,10 +27,10 @@ may have
 and
 .Dv IN_CLOEXEC .
 .Fn inotify_init ,
-number 291, is the same call with no flags.
+number 291 on i386 and 253 on x86-64, is the same call with no flags.
 .Pp
 .Fn inotify_add_watch ,
-number 292, watches the file
+number 292 on i386 and 254 on x86-64, watches the file
 .Fa path
 names for the events of
 .Fa mask
@@ -55,7 +55,7 @@ goes after its first event.
 is accepted and changes nothing.
 Descriptors count up from 1.
 .Fn inotify_rm_watch ,
-number 293, removes the watch
+number 293 on i386 and 255 on x86-64, removes the watch
 .Fa wd .
 .Pp
 A watch of a file reports these events of the file itself:

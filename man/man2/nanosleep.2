@@ -120,8 +120,10 @@ with EBX pointing to the request and ECX to the optional remainder, and
 .Fn clock_nanosleep ,
 with the clock in EBX, the flags in ECX, the request in EDX and the
 remainder in ESI.
-The kernel timespec consists of two signed 32-bit fields: seconds,
-then nanoseconds.
+On x86-64 the numbers are 35 and 230, with the same arguments in RDI, RSI,
+RDX and R10.
+The kernel timespec consists of two signed fields, seconds, then
+nanoseconds, of 32 bits on i386 and 64 on x86-64.
 The kernel limits the seconds field to 21474836, keeps the nanoseconds,
 rounds the interval up to whole ticks, and limits the result to
 2147483646 ticks, about 248.55 days.
@@ -148,9 +150,13 @@ is unchanged.
 .Pp
 musl's
 .Fn clock_nanosleep
-calls system call 162 for an interval of
+calls
+.Fn nanosleep
+for an interval of
 .Dv CLOCK_REALTIME
-and 267 for everything else, and answers
+and
+.Fn clock_nanosleep
+for everything else, and answers
 .Er EINVAL
 for
 .Dv CLOCK_THREAD_CPUTIME_ID
@@ -164,7 +170,7 @@ are
 .Fn clock_nanosleep
 on
 .Dv CLOCK_REALTIME .
-Both first try system call 407, the 64-bit
+On i386 both first try system call 407, the 64-bit
 .Fn clock_nanosleep ,
 for a time past the 32-bit range, and the kernel answers
 .Er ENOSYS .
@@ -180,7 +186,9 @@ The raw kernel calls return a negative error number on failure.
 .Sh EXAMPLES
 The default suite's
 .Pa tests/timeprobe.c
-requests a 150 ms sleep through system call 162 after forking a child.
+requests a 150 ms sleep through
+.Fn nanosleep ,
+system call 162 on i386 and 35 on x86-64, after forking a child.
 It checks the elapsed interval and that the child made progress while
 the parent slept.
 .Pa tests/musl/clockidmusl.c
