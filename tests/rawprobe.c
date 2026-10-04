@@ -209,7 +209,7 @@ static int raw_socket(unsigned long *args)
 static int raw_take(unsigned long *args, int fd, uint8_t *buf, int cap)
 {
     args[0] = (uint32_t)fd;
-    args[1] = (uint32_t)(size_t)buf;
+    args[1] = (unsigned long)buf;
     args[2] = (uint32_t)cap;
     args[3] = MSG_DONTWAIT;
     args[4] = 0;
@@ -461,10 +461,10 @@ PROBE_START void _start(void)
         }
         icmp[0] = ICMP_ECHO_REQUEST;
         args[0] = (uint32_t)fd_r;
-        args[1] = (uint32_t)(size_t)icmp;
+        args[1] = (unsigned long)icmp;
         args[2] = 8;
         args[3] = 0;
-        args[4] = (uint32_t)(size_t)sa;
+        args[4] = (unsigned long)sa;
         args[5] = 16;
         check(socketcall(SC_SENDTO, args) == -ENETUNREACH, "a raw send with no route says so");
 
@@ -475,10 +475,10 @@ PROBE_START void _start(void)
         check_n(udp_fd >= 0, "a datagram socket opens", udp_fd);
         sockaddr_for(sa, OFFSUBNET, 9);
         args[0] = (uint32_t)udp_fd;
-        args[1] = (uint32_t)(size_t)icmp;
+        args[1] = (unsigned long)icmp;
         args[2] = 4;
         args[3] = 0;
-        args[4] = (uint32_t)(size_t)sa;
+        args[4] = (unsigned long)sa;
         args[5] = 16;
         check(socketcall(SC_SENDTO, args) == -ENETUNREACH,
               "and so does a datagram send, which is the same route");
@@ -549,7 +549,7 @@ PROBE_START void _start(void)
         args[0] = (uint32_t)udp_fd;
         args[1] = SOL_IP;
         args[2] = IP_TTL;
-        args[3] = (uint32_t)(size_t)&val;
+        args[3] = (unsigned long)&val;
         args[4] = sizeof(int);
         check(socketcall(SC_SETSOCKOPT, args) == 0, "IP_TTL is accepted");
 
@@ -560,17 +560,17 @@ PROBE_START void _start(void)
         args[0] = (uint32_t)udp_fd;
         args[1] = SOL_IP;
         args[2] = IP_TTL;
-        args[3] = (uint32_t)(size_t)&got_ttl;
-        args[4] = (uint32_t)(size_t)&n;
+        args[3] = (unsigned long)&got_ttl;
+        args[4] = (unsigned long)&n;
         check(socketcall(SC_GETSOCKOPT, args) == 0 && got_ttl == 1,
               "and reported back, so it is kept and not swallowed");
 
         sockaddr_for(sa, OFFSUBNET, 33434);
         args[0] = (uint32_t)udp_fd;
-        args[1] = (uint32_t)(size_t)icmp;
+        args[1] = (unsigned long)icmp;
         args[2] = 4;
         args[3] = 0;
-        args[4] = (uint32_t)(size_t)sa;
+        args[4] = (unsigned long)sa;
         args[5] = 16;
         check(socketcall(SC_SENDTO, args) == 4, "a probe leaves with that hop limit");
 
@@ -588,7 +588,7 @@ PROBE_START void _start(void)
     args[0] = (uint32_t)fd_a;
     args[1] = SOL_IP;
     args[2] = IP_HDRINCL;
-    args[3] = (uint32_t)(size_t)&val;
+    args[3] = (unsigned long)&val;
     args[4] = sizeof(int);
     check(socketcall(SC_SETSOCKOPT, args) == -ENOPROTOOPT, "IP_HDRINCL is refused");
 
@@ -596,10 +596,10 @@ PROBE_START void _start(void)
        this call would have reported it sent. */
     sockaddr_for(sa, GATEWAY_IP, 0);
     args[0] = (uint32_t)fd_a;
-    args[1] = (uint32_t)(size_t)icmp;
+    args[1] = (unsigned long)icmp;
     args[2] = 1501;
     args[3] = 0;
-    args[4] = (uint32_t)(size_t)sa;
+    args[4] = (unsigned long)sa;
     args[5] = 16;
     check(socketcall(SC_SENDTO, args) == -EMSGSIZE, "a message past the MTU is refused");
 
@@ -621,10 +621,10 @@ PROBE_START void _start(void)
     }
     sockaddr_for(sa, UNRESOLVED, 0);
     args[0] = (uint32_t)fd_a;
-    args[1] = (uint32_t)(size_t)icmp;
+    args[1] = (unsigned long)icmp;
     args[2] = 8;
     args[3] = 0;
-    args[4] = (uint32_t)(size_t)sa;
+    args[4] = (unsigned long)sa;
     args[5] = 16;
     check(socketcall(SC_SENDTO, args) == 8, "a send to an unresolved neighbour is not an error");
 
@@ -655,10 +655,10 @@ PROBE_START void _start(void)
             icmp[3] = (uint8_t)(csum & 0xff);
             sockaddr_for(sa, GATEWAY_IP, 0);
             args[0] = (uint32_t)fd_a;
-            args[1] = (uint32_t)(size_t)icmp;
+            args[1] = (unsigned long)icmp;
             args[2] = 8;
             args[3] = 0;
-            args[4] = (uint32_t)(size_t)sa;
+            args[4] = (unsigned long)sa;
             args[5] = 16;
             check(socketcall(SC_SENDTO, args) == 8, "an echo request leaves");
             nap_ms(30);
@@ -690,7 +690,7 @@ PROBE_START void _start(void)
             args[0] = (uint32_t)fd_a;
             args[1] = SOL_IP;
             args[2] = IP_TTL;
-            args[3] = (uint32_t)(size_t)&val;
+            args[3] = (unsigned long)&val;
             args[4] = sizeof(int);
             check(socketcall(SC_SETSOCKOPT, args) == 0, "the raw socket takes a hop limit");
             for (n = 0; n < 8; n++) {
@@ -706,10 +706,10 @@ PROBE_START void _start(void)
             icmp[3] = (uint8_t)(csum & 0xff);
             sockaddr_for(sa, GATEWAY_IP, 0);
             args[0] = (uint32_t)fd_a;
-            args[1] = (uint32_t)(size_t)icmp;
+            args[1] = (unsigned long)icmp;
             args[2] = 8;
             args[3] = 0;
-            args[4] = (uint32_t)(size_t)sa;
+            args[4] = (unsigned long)sa;
             args[5] = 16;
             check(socketcall(SC_SENDTO, args) == 8, "and sends with it");
             nap_ms(50);
@@ -726,10 +726,10 @@ PROBE_START void _start(void)
         icmp[5] = 0x54;
         icmp[7] = 9;
         args[0] = (uint32_t)fd_a;
-        args[1] = (uint32_t)(size_t)icmp;
+        args[1] = (unsigned long)icmp;
         args[2] = 8;
         args[3] = 0;
-        args[4] = (uint32_t)(size_t)sa;
+        args[4] = (unsigned long)sa;
         args[5] = 16;
         check(socketcall(SC_SENDTO, args) == 8, "a message with a wrong checksum sends");
         nap_ms(50);
@@ -744,15 +744,15 @@ PROBE_START void _start(void)
             args[0] = (uint32_t)udp_fd;
             args[1] = SOL_IP;
             args[2] = IP_TTL;
-            args[3] = (uint32_t)(size_t)&val;
+            args[3] = (unsigned long)&val;
             args[4] = sizeof(int);
             check(socketcall(SC_SETSOCKOPT, args) == 0, "the datagram socket takes one");
             sockaddr_for(sa, GATEWAY_IP, (uint16_t)(40000 + ttl));
             args[0] = (uint32_t)udp_fd;
-            args[1] = (uint32_t)(size_t)icmp;
+            args[1] = (unsigned long)icmp;
             args[2] = 4;
             args[3] = 0;
-            args[4] = (uint32_t)(size_t)sa;
+            args[4] = (unsigned long)sa;
             args[5] = 16;
             check(socketcall(SC_SENDTO, args) == 4, "and sends with it");
             nap_ms(50);
@@ -765,7 +765,7 @@ PROBE_START void _start(void)
         args[0] = (uint32_t)fd_a;
         args[1] = SOL_IP;
         args[2] = IP_TTL;
-        args[3] = (uint32_t)(size_t)&val;
+        args[3] = (unsigned long)&val;
         args[4] = sizeof(int);
         socketcall(SC_SETSOCKOPT, args);
     }
