@@ -64,6 +64,12 @@ bool vga_graphics_mode = false;
 #include "display/vga_font.c"
 #include "kio.c"
 
+/* No processor here has begun a panic, so the console takes its lock. */
+int k_panicking(void)
+{
+    return 0;
+}
+
 /* No framebuffer: the console stays on the adapter, which fbcon_hosttest.c
    replaces. */
 volatile uint8_t *fbcon_window(void)
