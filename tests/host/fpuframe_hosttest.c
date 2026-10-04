@@ -42,6 +42,58 @@
  */
 #include "arch/x86/fpu.c"
 
+/* The layouts the rows check, written here from the ABI and not taken from
+ * fpu.c, whose functions above were compiled with its own: the `fxsave`
+ * image and the XSAVE header from the SDM, Linux's marks and frame prefix
+ * from its `sigcontext.h`, and the i386 `fnsave` environment. A constant of
+ * fpu.c that is wrong then moves what the code writes and not what the rows
+ * expect. */
+#undef FX_CWD
+#undef FX_SWD
+#undef FX_TWD
+#undef FX_FCS
+#undef FX_FOS
+#undef FX_MXCSR
+#undef FX_ST
+#undef FX_XMM
+#undef FX_PAD
+#undef FX_SW
+#undef FX_SIZE
+#undef XSAVE_HDR
+#undef XSAVE_EXT
+#undef FP_XSTATE_MAGIC1
+#undef FP_XSTATE_MAGIC2
+#undef FRAME_PREFIX
+#undef FPU_LINUX_SIZE
+#undef FPU_ENV_SIZE
+#define FX_CWD           0
+#define FX_SWD           2
+#define FX_TWD           4
+#define FX_FCS           12
+#define FX_FOS           20
+#define FX_MXCSR         24
+#define FX_ST            32
+#define FX_XMM           160
+#define FX_PAD           416
+#define FX_SW            464
+#define FX_SIZE          512u
+#define XSAVE_HDR        512
+#define XSAVE_EXT        576
+#define FP_XSTATE_MAGIC1 0x46505853u
+#define FP_XSTATE_MAGIC2 0x46505845u
+#define FPU_ENV_SIZE     108u
+#if defined(FPU_X86_64)
+#define FRAME_PREFIX   0u
+#define FPU_LINUX_SIZE 512
+#else
+#undef LX_STATUS
+#undef LX_MAGIC
+#define FRAME_PREFIX   112u
+#define FPU_LINUX_SIZE 624
+#define LX_STATUS      108
+#define LX_MAGIC       110
+#endif
+
 extern void *calloc(unsigned long count, unsigned long size);
 extern void free(void *ptr);
 extern int printf(const char *format, ...);
