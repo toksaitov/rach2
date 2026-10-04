@@ -10,8 +10,11 @@
  * has the word the child stored there. A child whose soft limit is two pages
  * leaves no WCOREDUMP and a file of its own, with the child's notes, that stops
  * before its last segment ends and has no more than two pages of bytes that are
- * not zero, since only a hole reads as zeros without being written. One whose
- * limit is 0, and one that is not dumpable, leave no file and no WCOREDUMP.
+ * not zero, since only a hole reads as zeros without being written. A child of
+ * two threads whose main thread aborts while the other spins in user mode
+ * leaves WCOREDUMP and a core with a status for each thread, the aborting
+ * one's first. One whose limit is 0, and one that is not dumpable, leave no
+ * file and no WCOREDUMP.
  *
  * A dump whose last readable region ends in a page never touched is given
  * a zero at its last byte, so the file has its whole length, and that zero
@@ -34,6 +37,8 @@
 #include <elf.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <pthread.h>
+#include <sched.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -43,6 +48,7 @@
 #include <sys/prctl.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -507,6 +513,95 @@ static int hole_row(void)
     return 0;
 }
 
+/* The thread id of the thread `spin_thread` runs, which it stores before it
+ * spins. */
+static volatile pid_t spinner;
+
+/** Store the thread's id and spin in user mode for ever. */
+static void *spin_thread(void *arg)
+{
+    (void)arg;
+    spinner = (pid_t)syscall(SYS_gettid);
+    for (;;) {
+    }
+    return NULL;
+}
+
+/** The pids of the NT_PRSTATUS notes of the core file at CORE_PATH, at most
+ * `most` of them into `pids`; their count, or -1 when it cannot be read. */
+static int status_pids(pid_t *pids, int most)
+{
+    size_t size;
+    unsigned char *core = slurp(CORE_PATH, &size);
+    const Ehdr *eh = (const Ehdr *)core;
+    int i, count = 0;
+
+    if (!core || size < sizeof(*eh) || eh->e_phoff + (size_t)eh->e_phnum * sizeof(Phdr) > size) {
+        free(core);
+        return -1;
+    }
+    for (i = 0; i < eh->e_phnum; i++) {
+        const Phdr *ph = (const Phdr *)(core + eh->e_phoff) + i;
+        const unsigned char *p = core + ph->p_offset;
+        const unsigned char *end = p + ph->p_filesz;
+
+        if (ph->p_type != PT_NOTE || (size_t)ph->p_offset + ph->p_filesz > size) {
+            continue;
+        }
+        while (p + 12 <= end) {
+            const Nhdr *n = (const Nhdr *)p;
+            const unsigned char *desc = p + 12 + ((n->n_namesz + 3) & ~3u);
+
+            if (n->n_type == NT_PRSTATUS && n->n_descsz == PRSTATUS_SIZE && count < most) {
+                int32_t pid;
+
+                memcpy(&pid, desc + PR_PID, sizeof(pid));
+                pids[count++] = pid;
+            }
+            p = desc + ((n->n_descsz + 3) & ~3u);
+        }
+    }
+    free(core);
+    return count;
+}
+
+/** A child of two threads whose main thread aborts while the other spins in
+ * user mode, on another processor where there is one: the wait reports
+ * WCOREDUMP, and the core has a status for each thread, the aborting one's
+ * first, so the spinning thread parked for the dump and ended after it. */
+static int threads_row(void)
+{
+    pid_t pids[4];
+    int status;
+    pid_t child = fork();
+
+    if (child == 0) {
+        struct rlimit rl;
+        pthread_t t;
+
+        if (chdir(DIR_PATH) != 0 || getrlimit(RLIMIT_CORE, &rl) != 0) {
+            _exit(2);
+        }
+        rl.rlim_cur = RLIM_INFINITY;
+        if (setrlimit(RLIMIT_CORE, &rl) != 0 || pthread_create(&t, NULL, spin_thread, NULL) != 0) {
+            _exit(3);
+        }
+        while (!spinner) {
+            sched_yield();
+        }
+        abort();
+    }
+    if (child < 0 || waitpid(child, &status, 0) != child || !WIFSIGNALED(status) ||
+        WTERMSIG(status) != SIGABRT || !WCOREDUMP(status)) {
+        return fail("a process of two threads left no core");
+    }
+    errno = 0;
+    if (status_pids(pids, 4) != 2 || pids[0] != child || pids[1] <= 0 || pids[1] == child) {
+        return fail("the core of two threads has no status for each");
+    }
+    return 0;
+}
+
 /** The children that leave no core file: one whose limit is 0 and one that
  * is not dumpable. */
 static int no_core_rows(void)
@@ -555,6 +650,10 @@ int main(int argc, char **argv)
         return fail("a core past a two-page limit");
     }
     if (short_check(child, 8192) != 0) {
+        return 1;
+    }
+    unlink(CORE_PATH);
+    if (threads_row() != 0) {
         return 1;
     }
     unlink(CORE_PATH);

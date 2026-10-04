@@ -1,7 +1,8 @@
 /**
  * Check the core file's layout against an address space that changes while
- * the file is written, the wait for the process's other threads, and the
- * count of program headers past what the ELF header's field holds.
+ * the file is written, the wait for the process's other threads to park, a
+ * thread's parking, and the count of program headers past what the ELF
+ * header's field holds.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-cflags: -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast
@@ -12,9 +13,12 @@
  * the address space can with an mmap while the writer sleeps: the program
  * headers must still describe the regions as they were taken, each once,
  * and nothing may be read from the freed array, which AddressSanitizer
- * judges. The wait for the other threads is a model that ends them: it must
- * come before anything is written, and the regions it leaves are the ones
- * the file records; an execve waiting for the dumping thread ends it at once.
+ * judges. The wait for the other threads is a model that parks them: the
+ * notes must be built after it, with a status for the parked thread, and the
+ * regions it leaves are the ones the file written after records; an execve
+ * waiting for the dumping thread ends it at once. A thread that parks saves
+ * its floating-point state, marks itself parked and wakes the dumping thread
+ * before it waits, and the wait ends when the core is written.
  *
  * A page of a mapped file the process never touched is read for the file,
  * where one of anonymous memory is a hole.
@@ -39,7 +43,7 @@ struct percpu cpu_table[NR_CPUS] = {{.current = &self}};
 process_t *proc_list = &self;
 static uint8_t *file;
 static uint32_t file_len, file_cap;
-static int writes, grow_at, waits, writes_at_wait, grows_at_wait, failures;
+static int writes, grow_at, waits, wakes, fpu_saves, failures;
 
 #define CHECK(c, detail)                                 \
     do {                                                 \
@@ -62,6 +66,13 @@ void kfree(void *p)
 void fpu_save(void *area)
 {
     (void)area;
+    fpu_saves++;
+}
+
+void wq_wake_all(wait_queue_t *wq)
+{
+    CHECK(wq == &group.gone, "a wake of the core is on its process's queue");
+    wakes++;
 }
 
 /** The rows judge the regions, not the notes: the registers are zeros and
@@ -177,19 +188,25 @@ static int32_t put(void *ctx, const void *buf, uint32_t len)
     return 0;
 }
 
-/** The wait for the other threads: note that it came and when, and end
- * them, one of which finished an mmap first. */
+/** The waits of the core: the dumping thread's for the other threads, which
+ * the model parks, the one that finishes an mmap first; and a parked
+ * thread's for the core, which the model writes. */
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
-    CHECK(wq == &group.gone, "the dumping thread waits on its process's queue of ends");
+    CHECK(wq == &group.gone, "a wait of the core is on its process's queue");
     waits++;
-    writes_at_wait = writes;
-    grows_at_wait = cond(arg);
-    if (!cond(arg)) {
-        regions_grow();
-        group.live = 1;
+    if (cond == core_parked_all) {
+        if (!cond(arg)) {
+            regions_grow();
+            sibling.core_parked = 1;
+        }
+        CHECK(cond(arg), "the wait ends when the other threads have parked");
+        return 0;
     }
-    CHECK(cond(arg), "the wait ends when the other threads have");
+    CHECK(cond == core_done && self.core_parked && fpu_saves == 1 && wakes == 1,
+          "a parked thread has saved its state and woken the dumping thread");
+    group.core_dumping = 0;
+    CHECK(cond(arg), "its wait ends when the core is written");
     return 0;
 }
 
@@ -209,20 +226,23 @@ static uint32_t get32(uint32_t off)
     return v;
 }
 
-/** Write a core file of the model with `live` threads and an execve
- * waiting when `exec`, the regions growing at write `grow`; its result. */
-static int32_t dump(uint32_t live, int exec, int grow)
+/** Empty the file and grow the regions at write `grow`. */
+static void file_reset(int grow)
 {
-    static const uint8_t notes[20] = {5};
-
     free(file);
     file = NULL;
     file_len = file_cap = 0;
-    writes = waits = 0;
-    writes_at_wait = -1;
+    writes = 0;
     grow_at = grow;
-    group.live = live;
-    group.exec_task = exec ? &sibling : NULL;
+}
+
+/** Write a core file of the model with notes of 20 bytes, the regions
+ * growing at write `grow`; its result. */
+static int32_t dump(int grow)
+{
+    static const uint8_t notes[20] = {5};
+
+    file_reset(grow);
     return core_write(put, NULL, notes, sizeof(notes), 0xFFFFFFFFu);
 }
 
@@ -254,7 +274,7 @@ static void regions_taken_once(void)
     uint32_t i;
 
     regions_set(4);
-    CHECK(dump(1, 0, 3) == 0, "the file is written while the regions grow");
+    CHECK(dump(3) == 0, "the file is written while the regions grow");
     CHECK(get16(44) == 5, "the header counts the note and the four regions taken");
     for (i = 0; i < 4; i++) {
         CHECK(load_is(i + 1u, i, &off), "each load describes its region as it was taken");
@@ -273,25 +293,65 @@ static void file_pages_read(void)
 
     regions_set(4);
     space.vm.vmas[2].file = &mapped;
-    CHECK(dump(1, 0, 0) == 0, "the file of a region of a mapped file is written");
+    CHECK(dump(0) == 0, "the file of a region of a mapped file is written");
     CHECK(file[16384] == 0x4D && file[20479] == 0x4D,
           "a page of a mapped file the process never touched is read from the file");
 }
 
 /**
- * The file is written after the other threads end: none is written before
- * the wait, and a region one of them mapped before it ended is in the file.
- * An execve waiting for the dumping thread ends the wait at once.
+ * The notes are built after the other threads park: the wait comes first,
+ * the notes have a status for the parked thread, and a region it mapped
+ * before it parked is in the file written after. An execve waiting for the
+ * dumping thread ends the wait at once.
  */
-static void threads_end_first(void)
+static void threads_park_first(void)
 {
+    uint32_t one = core_note_bytes(sizeof(struct core_prstatus));
+    uint32_t rest = core_note_bytes(sizeof(struct core_prpsinfo)) +
+                    core_note_bytes(sizeof(space.auxv));
+    uint8_t *notes;
+    uint32_t size = 0;
+
     regions_set(4);
-    CHECK(dump(2, 0, 0) == 0 && waits == 1, "the dumping thread waits for the other threads");
-    CHECK(writes_at_wait == 0 && !grows_at_wait, "before anything is written");
-    CHECK(get16(44) == 6, "and the file has the region a thread mapped before it ended");
+    self.next = &sibling;
+    sibling.state = PROC_BLOCKED;
+    sibling.kernel_stack = 0x1000u;
+    sibling.core_parked = 0;
+    group.exec_task = NULL;
+    waits = 0;
+    notes = core_notes(SIGABRT, &size);
+    CHECK(notes && waits == 1 && sibling.core_parked,
+          "the dumping thread waits for the other threads to park");
+    CHECK(size == 2u * one + rest, "and the notes have a status for each thread");
+    file_reset(0);
+    CHECK(notes && core_write(put, NULL, notes, size, 0xFFFFFFFFu) == 0 && get16(44) == 6,
+          "the file has the region a thread mapped before it parked");
+    kfree(notes);
     regions_set(4);
-    CHECK(dump(2, 1, 0) == 0 && waits == 1 && group.live == 2 && get16(44) == 5,
+    sibling.core_parked = 0;
+    group.exec_task = &sibling;
+    waits = 0;
+    notes = core_notes(SIGABRT, &size);
+    CHECK(notes && waits == 1 && !sibling.core_parked && space.vm.count == 4,
           "an execve waiting for the dumping thread ends the wait at once");
+    kfree(notes);
+    self.next = NULL;
+    group.exec_task = NULL;
+}
+
+/** A thread parks for the core and goes on once it is written, and a release
+ * lets the parked threads go. */
+static void thread_parks(void)
+{
+    group.core_dumping = 1;
+    fpu_saves = wakes = waits = 0;
+    core_park();
+    CHECK(waits == 1 && !self.core_parked && !group.core_dumping,
+          "a parked thread is no longer parked once the core is written");
+    group.core_dumping = 1;
+    wakes = 0;
+    core_release();
+    CHECK(!group.core_dumping && wakes == 1, "a release clears the dump and wakes the threads");
 }
 
 /** Put `count` inaccessible regions of a page each, a page apart, in the
@@ -324,7 +384,7 @@ static void numbering(uint32_t count)
     int ext = phnum >= 0xFFFFu;
 
     regions_none(count);
-    CHECK(dump(1, 0, 0) == 0, "a process of many regions leaves its file");
+    CHECK(dump(0) == 0, "a process of many regions leaves its file");
     CHECK(get16(44) == (ext ? 0xFFFFu : phnum), "the header's count of program headers");
     CHECK(get32(32) == (ext ? data : 0u) && get16(46) == (ext ? 40u : 0u) &&
               get16(48) == (ext ? 1u : 0u),
@@ -342,11 +402,13 @@ int main(void)
     self.tg = &group;
     self.mm = &space;
     self.state = PROC_RUNNING;
+    self.kernel_stack = 0x2000u;
     group.leader = &self;
     sibling.tg = &group;
     regions_taken_once();
     file_pages_read();
-    threads_end_first();
+    threads_park_first();
+    thread_parks();
     numbering(65533);
     numbering(65534);
     numbering(65535);
@@ -356,6 +418,6 @@ int main(void)
         return 1;
     }
     printf("coredump-test: pass: the regions taken once, the pages of a mapped file, the wait "
-           "for the threads and the extended numbering\n");
+           "for the threads to park, a thread's parking and the extended numbering\n");
     return 0;
 }

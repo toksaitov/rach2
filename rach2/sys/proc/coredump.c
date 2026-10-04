@@ -269,11 +269,52 @@ static int core_thread(const process_t *t)
            (t->state != PROC_ZOMBIE || t == current_proc) && t->kernel_stack != 0;
 }
 
+/** Whether every other thread of the process `arg` the core describes has
+ * parked, or an execve of one of them waits for the rest to end. */
+static int core_parked_all(void *arg)
+{
+    const struct tgroup *tg = (const struct tgroup *)arg;
+    const process_t *t;
+
+    if (tg->exec_task) {
+        return 1;
+    }
+    for (t = proc_list; t; t = t->next) {
+        if (t != current_proc && core_thread(t) && !t->core_parked) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/** Whether the process `arg` has written or given up its core. */
+static int core_done(void *arg)
+{
+    return !((const struct tgroup *)arg)->core_dumping;
+}
+
+void core_park(void)
+{
+    struct tgroup *tg = current_proc->tg;
+
+    fpu_save(current_proc->fpu);
+    current_proc->core_parked = 1;
+    wq_wake_all(&tg->gone);
+    (void)wq_wait_event_nointr(&tg->gone, core_done, tg);
+    current_proc->core_parked = 0;
+}
+
+void core_release(void)
+{
+    current_proc->tg->core_dumping = 0;
+    wq_wake_all(&current_proc->tg->gone);
+}
+
 /* The notes are in Linux's order: the dumping thread's status, the
  * process's information, the auxiliary vector and the thread's
  * floating-point state, which is in the unit's registers until it is saved
- * here, then each other thread's status and the floating-point state its
- * last switch saved. */
+ * here, then each other thread's status and the floating-point state it
+ * saved when it parked. */
 uint8_t *core_notes(int signo, uint32_t *size)
 {
     struct core_prstatus status;
@@ -285,6 +326,7 @@ uint8_t *core_notes(int signo, uint32_t *size)
     uint8_t *p;
     process_t *t;
 
+    (void)wq_wait_event_nointr(&current_proc->tg->gone, core_parked_all, current_proc->tg);
     for (t = proc_list; t; t = t->next) {
         if (core_thread(t)) {
             threads++;
@@ -351,15 +393,6 @@ static void region_write(struct core_out *o, struct mm *mm, const struct core_re
         }
     }
     kfree(page);
-}
-
-/** Whether the core file of the process `arg` may be written: its other
- * threads have ended, or an execve of one of them waits for the rest to. */
-static int core_quiet(void *arg)
-{
-    const struct tgroup *tg = (const struct tgroup *)arg;
-
-    return tg->live == 1 || tg->exec_task != NULL;
 }
 
 /** The regions of `vm` as the file records them, from the heap, `*count`
@@ -468,7 +501,6 @@ int32_t core_write(core_write_fn write, void *ctx, const uint8_t *notes, uint32_
     uintptr_t off;
     uint32_t i;
 
-    (void)wq_wait_event_nointr(&current_proc->tg->gone, core_quiet, current_proc->tg);
     regions = regions_take(&mm->vm, &count);
     if (!regions) {
         return -ENOMEM;

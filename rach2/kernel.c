@@ -301,23 +301,22 @@ static void timer_handler(isr_params_t *params)
 
 /**
  * Leave the core file of the current process, which the signal `signo`
- * ends, when it is dumpable and its soft RLIMIT_CORE allows a page: the
- * status it ends with, which has WCOREFLAG, as WCOREDUMP reads it, only when
- * the whole file was written. The caller has set `in_syscall` and enabled
- * interrupts, as a system call writing the file would: the timer does not
- * switch away in the middle of the file system's work, and a disk that
- * answers only by interrupt, as a USB stick does, can be waited for.
+ * ends, and let the threads that parked for it go: the status it ends with,
+ * which has WCOREFLAG, as WCOREDUMP reads it, only when the whole file was
+ * written. The caller has set `in_syscall` and enabled interrupts, as a
+ * system call writing the file would: the timer does not switch away in the
+ * middle of the file system's work, and a disk that answers only by
+ * interrupt, as a USB stick does, can be waited for.
  */
 static int32_t terminate_core(int32_t signo)
 {
-    if (!current_proc->mm->dumpable || current_proc->rlim[RLIM_CORE].cur < PAGE_SIZE) {
-        return signo;
+    int32_t rc = fs_core_file(signo, current_proc->rlim[RLIM_CORE].cur);
+
+    if (rc == 0) {
+        current_proc->tg->exit_code = signo | WCOREFLAG;
     }
-    if (fs_core_file(signo, current_proc->rlim[RLIM_CORE].cur) != 0) {
-        return signo;
-    }
-    current_proc->tg->exit_code = signo | WCOREFLAG;
-    return signo | WCOREFLAG;
+    core_release();
+    return rc == 0 ? signo | WCOREFLAG : signo;
 }
 
 /**
@@ -360,10 +359,13 @@ static void init_end_line(uint32_t pid, int32_t status)
  * process dies by signal `signo`; the exit code stores the Linux wait-status
  * encoding of a signal death (low 7 bits = the signal), so the parent's
  * waitpid sees WIFSIGNALED/WTERMSIG. With WCOREFLAG in `signo` the process
- * leaves a core file first (`terminate_core`), unless another thread has
- * begun to end it, after the other threads are sent SIGKILL and have ended
- * (`core_write` waits for them) and before this thread releases anything,
- * as Linux's `do_coredump` does. The teardown runs as a system call does,
+ * leaves a core file first (`terminate_core`) when it is dumpable and its
+ * soft RLIMIT_CORE allows a page, unless another thread has begun to end it:
+ * the other threads are sent SIGKILL with the group's `core_dumping` set,
+ * each parks before it releases anything (`core_park`), the file is written
+ * once all have parked (`core_notes` waits for them) and before this thread
+ * releases anything, and they go on to their end after, as Linux's
+ * `do_coredump` and `coredump_wait` have it. The teardown runs as a system call does,
  * with `in_syscall` set and interrupts on, also when the signal is acted on
  * at an interrupt's return, which comes here with them off: what it
  * releases and writes may sleep in a disk that answers only by interrupt,
@@ -402,11 +404,17 @@ void terminate_current_process(int32_t signo)
 
     /* The signal ends the whole process: the other threads are sent SIGKILL,
      * and the process ends with this signal whichever thread ends last. */
-    core = (signo & WCOREFLAG) && !current_proc->tg->exiting && !current_proc->tg->exec_task;
+    core = (signo & WCOREFLAG) && !current_proc->tg->exiting && !current_proc->tg->exec_task &&
+           current_proc->mm->dumpable && current_proc->rlim[RLIM_CORE].cur >= PAGE_SIZE;
     signo &= 0x7F;
+    if (core) {
+        current_proc->tg->core_dumping = 1;
+    }
     proc_group_exit(signo);
     if (core) {
         signo = terminate_core(signo);
+    } else if (current_proc->tg->core_dumping) {
+        core_park();
     }
     alone = current_proc->tg->live == 1;
 

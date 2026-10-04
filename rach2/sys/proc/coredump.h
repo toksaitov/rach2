@@ -18,12 +18,29 @@ typedef int32_t (*core_write_fn)(void *ctx, const void *buf, uint32_t len);
 
 /**
  * Build the PT_NOTE segment of the current process's core file in the heap,
- * with `signo` the signal that ends it: the threads' registers as they are
- * now, which is why it is built before the file is opened, since the other
- * threads may run and end while the file system waits, and an ended thread's
- * record is freed. `*size` gets its bytes; NULL when the heap has no room.
+ * with `signo` the signal that ends it: the threads' registers and
+ * floating-point state. It first waits until every other thread of the
+ * process, which the caller has sent SIGKILL with the group's `core_dumping`
+ * set, has parked (`core_park`) or ended, as Linux's `coredump_wait` waits
+ * for them, so that none runs in user mode on another processor while its
+ * registers are copied or its memory written; an execve of one of them that
+ * waits for this thread to end ends the wait instead. `*size` gets its
+ * bytes; NULL when the heap has no room.
  */
 uint8_t *core_notes(int signo, uint32_t *size);
+
+/**
+ * Park the current thread, which a SIGKILL ends while another thread of its
+ * process writes the core: its floating-point state saved to its record and
+ * its user registers on its kernel stack, where `core_notes` reads them, until
+ * `core_release`. The caller has released nothing yet, so its memory and
+ * descriptors are as the dump finds them.
+ */
+void core_park(void);
+
+/** Let the parked threads of the current process go on to their end, once
+ * its core is written or given up. */
+void core_release(void);
 
 /** The bytes a note of `descsz` bytes takes, its name "CORE" or "LINUX"
  * padded to eight bytes and its description to a word. */
@@ -42,14 +59,10 @@ void core_note_put(uint8_t **p, const char *name, uint32_t type, const void *des
  * count toward the limit. 0, or a negative errno: -EFBIG at the limit,
  * -ENOMEM, or the writer's.
  *
- * It first waits until the process's other threads, which the caller has
- * sent SIGKILL, have ended, as Linux's `coredump_wait` waits for them, so
- * none of them is left in a call that changes the memory while it is
- * written; an execve of one of them that waits for this thread to end ends
- * the wait instead. The regions are then taken once, and the program
- * headers and the pages follow that list, since another process that shares
- * the address space, as a vfork child does, may still change its regions
- * while the writer sleeps.
+ * The other threads are parked or ended, since `core_notes` waited for them.
+ * The regions are taken once, and the program headers and the pages follow
+ * that list, since another process that shares the address space, as a vfork
+ * child does, may still change its regions while the writer sleeps.
  */
 int32_t core_write(core_write_fn write, void *ctx, const uint8_t *notes, uint32_t notes_size,
                    uint64_t limit);

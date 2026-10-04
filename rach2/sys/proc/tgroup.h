@@ -31,12 +31,13 @@ struct tgroup {
     struct k_siginfo info[KSIG_MAX + 1];
     uint32_t stop;             /* the signal of a stop in effect, 0 for none */
     uint32_t exiting;          /* exit_group or a fatal signal ends every thread */
+    uint32_t core_dumping;     /* its core is being written; the others park */
     int32_t exit_code;         /* the wait status the process ends with then */
     struct process *exec_task; /* the thread whose execve ends the others */
     uint32_t utime;            /* the CPU time of the threads that ended */
     uint32_t stime;
     wait_queue_t chld; /* threads waiting for a child to change state */
-    wait_queue_t gone; /* an execve waiting for the other threads to end */
+    wait_queue_t gone; /* an execve or a core waiting on the other threads */
     /* The CPU time of the children the process has reaped, each with the
      * children it reaped, which a reap adds and wait4, times and getrusage
      * report. The group keeps it, not the leader, since a traced thread's
