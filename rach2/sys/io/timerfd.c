@@ -640,9 +640,10 @@ static int32_t ptimer_clock(struct ktimer *t, int clock)
  * the processor time of a process or of a thread of the caller's. A thread
  * SIGEV_THREAD_ID names must be one of the caller's process. EINVAL for another
  * clock, notification or signal, EAGAIN past PTIMER_MAX. The id is stored
- * once the timer is on the process's list, since the store can sleep in a
- * page fault, which the timers' lock cannot be held across; a store that
- * fails takes the timer off again, unarmed, and is EFAULT.
+ * before the timer is on the process's list, since the store can sleep in a
+ * page fault, which the timers' lock cannot be held across, and a timer
+ * already listed could be deleted by another thread meanwhile; a store that
+ * fails is EFAULT with nothing listed.
  */
 long sys_timer_create(struct isr_params *params)
 {
@@ -679,16 +680,29 @@ long sys_timer_create(struct isr_params *params)
         kfree(t);
         return -EINVAL;
     }
-    irq = spin_lock_irqsave(&timer_lock);
-    while (*link && (*link)->id == id) {
-        link = &(*link)->in_group;
-        id++;
-    }
-    if (id >= PTIMER_MAX) {
+    /* The identifier goes to the caller before the timer is published: a
+     * copy that sleeps in a fault would leave a published timer for another
+     * thread to delete under it. A thread that takes the identifier while
+     * the copy sleeps has the next free one tried. */
+    for (;;) {
+        irq = spin_lock_irqsave(&timer_lock);
+        for (link = &tg->timers, id = 0; *link && (*link)->id == id; link = &(*link)->in_group) {
+            id++;
+        }
         spin_unlock_irqrestore(&timer_lock, irq);
-        tgroup_put(t->cpu_tg);
-        kfree(t);
-        return -EAGAIN;
+        if (id >= PTIMER_MAX ||
+            copy_to_user((void __user *)SC_ARG(params, 2), &id, sizeof(id)) != 0) {
+            tgroup_put(t->cpu_tg);
+            kfree(t);
+            return id >= PTIMER_MAX ? -EAGAIN : -EFAULT;
+        }
+        irq = spin_lock_irqsave(&timer_lock);
+        for (link = &tg->timers; *link && (*link)->id < id; link = &(*link)->in_group) {
+        }
+        if (!*link || (*link)->id != id) {
+            break;
+        }
+        spin_unlock_irqrestore(&timer_lock, irq);
     }
     t->clock = clock;
     t->tg = tg;
@@ -700,12 +714,6 @@ long sys_timer_create(struct isr_params *params)
     t->in_group = *link;
     *link = t;
     spin_unlock_irqrestore(&timer_lock, irq);
-    if (copy_to_user((void __user *)SC_ARG(params, 2), &id, sizeof(id)) != 0) {
-        for (link = &tg->timers; *link != t; link = &(*link)->in_group) {
-        }
-        ptimer_free(link);
-        return -EFAULT;
-    }
     return 0;
 }
 
