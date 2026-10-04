@@ -32,7 +32,7 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `default` (core tier; needs qemu; 128 MiB): the probe suite, every guest probe booted on the test image in one machine and scored by the runner.
 * `stress` (full tier; needs qemu; 128 MiB): prove an on-disk KRFFS larger than physical RAM works.
 * `procfiles` (full tier; needs qemu; 128 MiB): the machine's own /proc files, on the boots that differ and through the programs that read them.
-* `bigmem` (full tier; needs qemu; 8192 MiB; x86_64 only): all of an x86-64 machine's eight gigabytes is counted, and a program's pages fill memory past what lies below 4 GiB and read back as written (see tests/system/suites/bigmem.sh).
+* `bigmem` (full tier; needs qemu; 73728 MiB; x86_64 only): all of an x86-64 machine's eight gigabytes is counted, and a program's pages fill memory past what lies below 4 GiB and read back as written; without 1 GiB pages, 72 GiB is counted to the direct map's 64 GiB (see tests/system/suites/bigmem.sh).
 * `memory` (core tier; needs qemu; 4096 MiB): the kernel's account of physical memory at five sizes (see tests/system/suites/memory.sh).
 * `parts` (core tier; needs qemu, mformat, mtype; 128 MiB): four tables on four AHCI disks (an MBR with logical partitions, a GPT, a GPT read from its backup, a blank disk), the nodes as the tables number them, the table read again, and the root chosen by identity: found when the disks are swapped, refused when two disks have it.
 * `bootpart` (full tier; needs qemu; 128 MiB): /proc/cmdline and the level-one disk devices.
