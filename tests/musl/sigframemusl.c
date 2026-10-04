@@ -339,15 +339,11 @@ static int interrupted_read(int restart)
     return 0;
 }
 
-int main(void)
+/** A write to a read-only page is handled as SEGV_ACCERR at its address
+ * and run again; a read of an unmapped page is SEGV_MAPERR at its own. */
+static int fault_rows(void)
 {
-    struct sigaction sa;
-    sigset_t block, pending, now;
-    stack_t st;
     volatile char *unmapped = (volatile char *)0x00001000;
-    word_mask_t old = 0;
-    word_mask_t set;
-    pid_t pid;
 
     page = mmap(NULL, 4096, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (page == MAP_FAILED || install(SIGSEGV, on_segv, 0) != 0) {
@@ -367,10 +363,15 @@ int main(void)
     if (got_code != SEGV_MAPERR || got_addr != (uintptr_t)unmapped) {
         return fail("SEGV_MAPERR or its address");
     }
+    return 0;
+}
 
-    if (interrupted_read(1) != 0 || interrupted_read(0) != 0) {
-        return 1;
-    }
+/** A handler installed with SA_ONSTACK runs on the alternate stack, and its
+ * frame saves the flags of the stack the signal came on. */
+static int alt_stack_row(void)
+{
+    struct sigaction sa;
+    stack_t st;
 
     st.ss_sp = altstack;
     st.ss_size = sizeof(altstack);
@@ -389,6 +390,20 @@ int main(void)
     }
     if (saved_ss_flags != 0) {
         return fail("the frame saved SS_ONSTACK for a signal that came on the normal stack");
+    }
+    return 0;
+}
+
+int main(void)
+{
+    sigset_t block, pending, now;
+    word_mask_t old = 0;
+    word_mask_t set;
+    pid_t pid;
+
+    if (fault_rows() != 0 || interrupted_read(1) != 0 || interrupted_read(0) != 0 ||
+        alt_stack_row() != 0) {
+        return 1;
     }
 
     if (install(SIGTRAP, on_trap, 0) != 0) {
