@@ -155,7 +155,8 @@ static void overrun_rows(void)
     check(kstack_overrun_pid(0xC0100FFFu) == -1 && kstack_overrun_pid(0xC0106000u) == -1,
           "an address below the guard or above the stack gives none");
     current_proc = &unstarted;
-    check(kstack_overrun_pid(0xFFFFB000u) == -1, "a thread with no stack gives none");
+    check(kstack_overrun_pid((uintptr_t)0 - KERNEL_STACK_SIZE - PAGE_SIZE) == -1,
+          "a thread with no stack gives none, even at the guard its zero top would wrap to");
     current_proc = NULL;
     check(kstack_overrun_pid(0xC0101000u) == -1, "no running thread gives none");
 }

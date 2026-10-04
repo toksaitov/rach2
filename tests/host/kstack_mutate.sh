@@ -15,8 +15,9 @@
 # row to fail, and requires the restored source to pass again. The faults
 # are the clearing removed; the clearing of the top page alone, the part
 # fork writes anyway; the stack taken from the heap without a guard; the
-# guard looked for in the stack's own lowest page; and the boot stack given
-# back like any other.
+# guard looked for in the stack's own lowest page; a thread with no stack
+# looked at like any other, its guard wrapped below zero; and the boot stack
+# given back like any other.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
@@ -118,7 +119,7 @@ PY
 echo "kstack-proof: logs: $work"
 run_phase fixed 0 'kstack-proof: result: pass:'
 [ "$#" -eq 0 ] || exit 0
-for fault in none top unguarded guard-in-stack boot-freed; do
+for fault in none top unguarded guard-in-stack empty boot-freed; do
     python3 - "$work/syscall_proc.c" "$fault" <<'PY'
 from pathlib import Path
 import sys
@@ -136,6 +137,9 @@ changes = {
     'guard-in-stack': ('int kstack_overrun_pid(uintptr_t addr)\n{',
                        '    guard = current_proc->kernel_stack - KERNEL_STACK_SIZE - PAGE_SIZE;\n',
                        '    guard = current_proc->kernel_stack - KERNEL_STACK_SIZE;\n'),
+    'empty': ('int kstack_overrun_pid(uintptr_t addr)\n{',
+              '    if (!current_proc || current_proc->kernel_stack < KERNEL_STACK_SIZE + PAGE_SIZE) {\n',
+              '    if (!current_proc) {\n'),
     'boot-freed': ('static void kstack_free(uintptr_t top)\n{',
                    '    if (top != 0 && top != (uintptr_t)stack + KERNEL_STACK_SIZE) {\n',
                    '    if (top != 0) {\n'),
@@ -159,6 +163,9 @@ PY
         guard-in-stack)
             message='kstack-proof: fail: an address in the guard page below the running thread'"'"'s stack gives its pid'
             ;;
+        empty)
+            message='kstack-proof: fail: a thread with no stack gives none'
+            ;;
         boot-freed)
             message='kstack-proof: fail: the boot stack'"'"'s top gives nothing back'
             ;;
@@ -168,4 +175,4 @@ PY
     run_phase "$fault-restored" 0 'kstack-proof: result: pass:'
     cmp "$work/syscall_proc.saved" "$work/syscall_proc.c"
 done
-echo 'kstack-proof: result: pass: the five faults failed their rows and the restored source passed'
+echo 'kstack-proof: result: pass: the six faults failed their rows and the restored source passed'
