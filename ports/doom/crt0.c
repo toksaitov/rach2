@@ -93,7 +93,15 @@ int write(int fd, const void *buf, size_t count)
 
 int open(const char *path, int flags, ...)
 {
-    return (int)syscall3(SYS_OPEN, (long)path, flags, 0);
+    va_list ap;
+    int mode = 0;
+
+    if (flags & O_CREAT) {
+        va_start(ap, flags);
+        mode = va_arg(ap, int);
+        va_end(ap);
+    }
+    return (int)syscall3(SYS_OPEN, (long)path, flags, mode);
 }
 
 int close(int fd)
@@ -118,9 +126,9 @@ int gettimeofday(struct timeval *tv, void *tz)
     return (int)syscall3(SYS_GETTIMEOFDAY, (long)tv, (long)tz, 0);
 }
 
-int lseek(int fd, int offset, int whence)
+long lseek(int fd, long offset, int whence)
 {
-    return (int)syscall3(SYS_LSEEK, fd, offset, whence);
+    return syscall3(SYS_LSEEK, fd, offset, whence);
 }
 #else
 void _exit(int status)
@@ -157,11 +165,19 @@ int write(int fd, const void *buf, size_t count)
 
 int open(const char *path, int flags, ...)
 {
+    va_list ap;
+    int mode = 0;
     int ret;
+
+    if (flags & O_CREAT) {
+        va_start(ap, flags);
+        mode = va_arg(ap, int);
+        va_end(ap);
+    }
     __asm__ __volatile__ (
         "int $0x80"
         : "=a"(ret)
-        : "a"(SYS_OPEN), "b"(path), "c"(flags)
+        : "a"(SYS_OPEN), "b"(path), "c"(flags), "d"(mode)
     );
     return ret;
 }
@@ -206,9 +222,9 @@ int gettimeofday(struct timeval *tv, void *tz)
     return ret;
 }
 
-int lseek(int fd, int offset, int whence)
+long lseek(int fd, long offset, int whence)
 {
-    int ret;
+    long ret;
     __asm__ __volatile__ (
         "int $0x80"
         : "=a"(ret)
@@ -991,7 +1007,7 @@ FILE *fopen(const char *path, const char *mode)
     else if (mode[0] == 'a') flags = O_WRONLY | O_CREAT;
     else if (mode[0] == 'r' && mode[1] == '+') flags = O_RDWR;
 
-    fd = open(path, flags);
+    fd = open(path, flags, 0666);
     if (fd < 0) return NULL;
 
     f = malloc(sizeof(FILE));
@@ -1047,9 +1063,9 @@ size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *f)
 
 int fseek(FILE *f, long offset, int whence)
 {
-    int ret;
+    long ret;
     if (!f) return -1;
-    ret = lseek(f->fd, (int)offset, whence);
+    ret = lseek(f->fd, offset, whence);
     if (ret < 0) return -1;
     f->eof = 0;  /* Clear EOF on successful seek */
     return 0;
@@ -1059,7 +1075,7 @@ long ftell(FILE *f)
 {
     if (!f) return -1;
     /* Get current position by seeking 0 from current position */
-    return (long)lseek(f->fd, 0, 1);  /* SEEK_CUR = 1 */
+    return lseek(f->fd, 0, 1);  /* SEEK_CUR = 1 */
 }
 
 int feof(FILE *f)

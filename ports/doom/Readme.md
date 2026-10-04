@@ -98,7 +98,7 @@ doom
 
 The port prints one line every ten seconds and once more on normal quit, after the text screen returns: `doom: N frames in M ms, the longest L ms; music emulator E ms in C calls for S samples after V events, mixer X ms; zone Z MiB`. The zone field reports the allocated size. Confirming Quit in the menu runs the engine's exit callbacks, restores text mode, prints the report and exits with status zero.
 
-The port forwards command-line arguments to the engine and appends `-iwad /demo/doom1.wad` as the default. An explicit `-iwad PATH` takes precedence; a relative PATH is resolved from the current directory. For example, `doom -mb 10` requests a 10 MiB zone with the staged WAD.
+The port forwards command-line arguments to the engine and appends `-iwad /demo/doom1.wad` as the default. An explicit `-iwad PATH` takes precedence; a relative PATH is resolved from the current directory. For example, `doom -mb 10` requests a 10 MiB zone with the staged WAD, and `doom -playdemo demo1` plays the first demo and quits when it ends. doomgeneric saves no configuration; the files the game writes are a recorded demo, a statistics dump and saved games, through the port's `fopen`, which creates a file with mode 0666 less the umask.
 
 The same binary can use the kernel HDA driver on supported hardware. Hardware boot and disk-image procedures are described in the root and kernel Readmes.
 
