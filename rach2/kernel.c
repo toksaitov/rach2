@@ -885,11 +885,20 @@ static void preempt_proc_b(void)
     }
 }
 
+/*
+ * The test is one processor's: the shell and both threads are bound to the
+ * processor the shell runs on until it ends. A thread spinning in the kernel
+ * holds the big lock, so on a second processor it would keep the first from
+ * taking its own tick, which the round-robin turns are counted by, and the
+ * shell would free a thread still running there.
+ */
 static void test_preempt(void)
 {
     process_t *proc_a;
     process_t *proc_b;
     uintptr_t stack_a, stack_b;
+    uint64_t shell_affinity = current_proc->affinity;
+    uint64_t here = (uint64_t)1 << arch_cpu_id();
 
     console_puts("Testing preemptive round-robin scheduling...");
     console_puts("Two processes will print A and B, preempted by timer.");
@@ -900,12 +909,15 @@ static void test_preempt(void)
     preempt_done = 0;
     preempt_count_a = 0;
     preempt_count_b = 0;
+    sched_set_affinity(current_proc, here);
 
     proc_a = alloc_process();
     if (!proc_a) {
+        sched_set_affinity(current_proc, shell_affinity);
         console_puts("Failed to allocate process A");
         return;
     }
+    proc_a->affinity = here;
     stack_a = (uintptr_t)phys_to_virt(mem_reserve(KERNEL_STACK_SIZE, true));
     proc_a->kernel_stack = stack_a + KERNEL_STACK_SIZE;
     proc_a->space_root = 0;
@@ -915,9 +927,11 @@ static void test_preempt(void)
     proc_b = alloc_process();
     if (!proc_b) {
         free_process(proc_a);
+        sched_set_affinity(current_proc, shell_affinity);
         console_puts("Failed to allocate process B");
         return;
     }
+    proc_b->affinity = here;
     stack_b = (uintptr_t)phys_to_virt(mem_reserve(KERNEL_STACK_SIZE, true));
     proc_b->kernel_stack = stack_b + KERNEL_STACK_SIZE;
     proc_b->space_root = 0;
@@ -939,6 +953,7 @@ static void test_preempt(void)
 
     free_process(proc_a);
     free_process(proc_b);
+    sched_set_affinity(current_proc, shell_affinity);
 
     if (preempt_count_a > 0 && preempt_count_b > 0) {
         set_fore_color(light_green);
