@@ -20,7 +20,8 @@
  * A POSIX timer's signal comes with SI_TIMER and its value, a periodic
  * timer's signal blocked through several periods comes once with the others
  * as its overrun, and a deleted timer's id is EINVAL. sigqueue gives its
- * value and SI_QUEUE to the signal it sends. A writer to a raw
+ * value and SI_QUEUE to the signal it sends, and rt_sigqueueinfo its errno
+ * and value. A writer to a raw
  * pseudo-terminal slave whose master has not read waits for room, so the
  * master reads every byte of 64 KiB, and a non-blocking one takes EAGAIN;
  * two writers' lines reach the master each whole.
@@ -254,6 +255,21 @@ static int queues(void)
     if (sigtimedwait(&set, &si, &wait) != SIGUSR2 || si.si_code != SI_QUEUE ||
         si.si_value.sival_int != 4242 || si.si_pid != getpid()) {
         return fail("sigqueue's signal did not come with SI_QUEUE, its value and its sender");
+    }
+    memset(&si, 0, sizeof(si));
+    si.si_signo = SIGUSR2;
+    si.si_errno = 77;
+    si.si_code = SI_QUEUE;
+    si.si_pid = getpid();
+    si.si_uid = getuid();
+    si.si_value.sival_int = 4343;
+    if (syscall(SYS_rt_sigqueueinfo, getpid(), SIGUSR2, &si) != 0) {
+        return fail("rt_sigqueueinfo to the caller's own process");
+    }
+    memset(&si, 0, sizeof(si));
+    if (sigtimedwait(&set, &si, &wait) != SIGUSR2 || si.si_errno != 77 ||
+        si.si_value.sival_int != 4343) {
+        return fail("rt_sigqueueinfo's signal did not come with its errno and value");
     }
     return 0;
 }

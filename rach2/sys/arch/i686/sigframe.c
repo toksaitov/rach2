@@ -117,6 +117,7 @@ void sigframe_take_siginfo(const uint8_t *in, struct k_siginfo *info)
     int32_t code;
 
     k_memset(info, 0, sizeof(*info));
+    k_memcpy(&info->err, in + 4, 4);
     k_memcpy(&code, in + 8, 4);
     info->code = code;
     k_memcpy(&info->pid, in + 12, 4);
@@ -168,7 +169,7 @@ int sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *sa,
         struct lx_sigframe plain;
     } frame;
     int rt = (sa->flags & SA_SIGINFO) != 0;
-    int on_alt = sigframe_on_altstack(tf->user_esp);
+    int on_alt = sigframe_on_altstack(tf->user_esp), was_on = on_alt;
     uint32_t sp = tf->user_esp;
     uint32_t fp_addr, frame_addr, size, restorer;
 
@@ -201,7 +202,8 @@ int sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *sa,
         frame.rt.uc.uc_flags = fpu_frame_uc_flags();
         frame.rt.uc.ss_sp = current_proc->altstack_sp;
         frame.rt.uc.ss_size = current_proc->altstack_size;
-        frame.rt.uc.ss_flags = !current_proc->altstack_on ? SS_DISABLE : (on_alt ? SS_ONSTACK : 0u);
+        /* The flags where the signal arrived, which a sigreturn restores. */
+        frame.rt.uc.ss_flags = !current_proc->altstack_on ? SS_DISABLE : (was_on ? SS_ONSTACK : 0u);
         fill_sigcontext(&frame.rt.uc.mc, tf, fp_addr, oldmask);
         frame.rt.uc.sigmask[0] = (uint32_t)oldmask;
         frame.rt.uc.sigmask[1] = (uint32_t)(oldmask >> 32);

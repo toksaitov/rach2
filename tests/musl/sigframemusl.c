@@ -9,7 +9,8 @@
  * SA_RESTART and ends with EINTR after one without. Each handler runs once
  * and answers the child, which writes the byte the restarted read returns
  * only after the answer. A handler with SA_ONSTACK runs on the alternate
- * stack, where sigaltstack reports SS_ONSTACK. `int3` reaches a SIGTRAP
+ * stack, where sigaltstack reports SS_ONSTACK, and its frame saves the
+ * flags of the normal stack the signal came on, 0. `int3` reaches a SIGTRAP
  * handler and the program goes on after it. rt_sigpending reports a blocked
  * signal, and the old sigprocmask call blocks one, or on x86-64, which has no
  * old call, rt_sigprocmask of one word. sigsuspend returns -1 with EINTR once
@@ -29,6 +30,7 @@
 #include <poll.h>
 #include <setjmp.h>
 #include <signal.h>
+#include <ucontext.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -55,6 +57,7 @@ static int usr1_answer = -1;
 static volatile sig_atomic_t got_code;
 static volatile uintptr_t got_addr;
 static volatile sig_atomic_t on_alt;
+static volatile int saved_ss_flags;
 static volatile sig_atomic_t trapped;
 static volatile sig_atomic_t handler_mask_had_usr1;
 static volatile sig_atomic_t chld_code;
@@ -97,14 +100,16 @@ static void on_usr1(int sig)
     errno = saved;
 }
 
-static void on_alt_handler(int sig)
+static void on_alt_handler(int sig, siginfo_t *info, void *ctx)
 {
     stack_t st;
     char here;
 
     (void)sig;
+    (void)info;
     on_alt = (uintptr_t)&here - (uintptr_t)altstack < sizeof(altstack) &&
              sigaltstack(NULL, &st) == 0 && (st.ss_flags & SS_ONSTACK);
+    saved_ss_flags = ((ucontext_t *)ctx)->uc_stack.ss_flags;
 }
 
 static void on_trap(int sig, siginfo_t *info, void *uc)
@@ -371,15 +376,19 @@ int main(void)
     st.ss_size = sizeof(altstack);
     st.ss_flags = 0;
     memset(&sa, 0, sizeof(sa));
-    sa.sa_handler = on_alt_handler;
-    sa.sa_flags = SA_ONSTACK;
+    sa.sa_sigaction = on_alt_handler;
+    sa.sa_flags = SA_ONSTACK | SA_SIGINFO;
     sigemptyset(&sa.sa_mask);
     if (sigaltstack(&st, NULL) != 0 || sigaction(SIGUSR1, &sa, NULL) != 0) {
         return fail("sigaltstack");
     }
+    saved_ss_flags = -1;
     raise(SIGUSR1);
     if (!on_alt) {
         return fail("the SA_ONSTACK handler was not on the alternate stack");
+    }
+    if (saved_ss_flags != 0) {
+        return fail("the frame saved SS_ONSTACK for a signal that came on the normal stack");
     }
 
     if (install(SIGTRAP, on_trap, 0) != 0) {

@@ -163,6 +163,7 @@ void sigframe_take_siginfo(const uint8_t *in, struct k_siginfo *info)
     int32_t code = (int32_t)get32(in + 8);
 
     k_memset(info, 0, sizeof(*info));
+    info->err = (int32_t)get32(in + 4);
     info->code = code;
     info->addr = get64(in + 16);
     if (is_sigsys((int)get32(in), code)) {
@@ -216,14 +217,14 @@ int sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *sa,
                    const struct k_siginfo *info, uint64_t oldmask)
 {
     struct lx_rt_sigframe frame;
-    int on_alt;
+    int on_alt, was_on;
     uintptr_t sp = tf->rsp - RED_ZONE;
     uintptr_t fp_addr, frame_addr;
 
     if (!(sa->flags & SA_RESTORER)) {
         return -1;
     }
-    on_alt = sigframe_on_altstack(tf->rsp);
+    on_alt = was_on = sigframe_on_altstack(tf->rsp);
     if ((sa->flags & SA_ONSTACK) && current_proc->altstack_on && !on_alt) {
         sp = (uintptr_t)current_proc->altstack_sp + (uintptr_t)current_proc->altstack_size;
         on_alt = 1;
@@ -246,8 +247,11 @@ int sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *sa,
     frame.uc.uc_flags = UC_SIGCONTEXT_SS | UC_STRICT_RESTORE_SS | fpu_frame_uc_flags();
     frame.uc.uc_stack.ss_sp = (uintptr_t)current_proc->altstack_sp;
     frame.uc.uc_stack.ss_size = (uintptr_t)current_proc->altstack_size;
+    /* The flags as sigaltstack read them where the signal arrived, which a
+     * sigreturn restores, as Linux saves them: SS_ONSTACK only for a signal
+     * that came while the thread was already on the alternate stack. */
     frame.uc.uc_stack.ss_flags =
-        (int32_t)(!current_proc->altstack_on ? SS_DISABLE : (on_alt ? SS_ONSTACK : 0u));
+        (int32_t)(!current_proc->altstack_on ? SS_DISABLE : (was_on ? SS_ONSTACK : 0u));
     fill_sigcontext(&frame.uc.mc, tf, fp_addr, oldmask);
     frame.uc.sigmask = oldmask;
     sigframe_fill_siginfo(frame.info, signo, info);
