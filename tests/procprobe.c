@@ -844,15 +844,19 @@ static void sysctl_rows(void)
           "/proc/sys/net/ipv4/ip_forward takes 0 and refuses 1 with EINVAL");
 }
 
-/* /dev/rtc0: the CMOS clock as hwclock reads it, the hour and minute of
-   RTC_RD_TIME those of the real time, give or take the minute's turn between
-   the two readings. */
+/* /dev/rtc0: the CMOS clock as hwclock reads it, the time of day of
+   RTC_RD_TIME the real time's within two minutes either way. The real time
+   runs from the clock read at boot by the ticks counted since, and under a
+   hypervisor a tick the timer misses is not made up (proc(5)), so on a loaded
+   host it falls tens of seconds behind the clock; an hour, or a time zone,
+   wrong is what this row is for. */
 static void rtc_rows(void)
 {
     int tm[9];
     struct timespec_probe now;
     int fd = syscall3(SYS_OPEN, (long)"/dev/rtc0", O_RDONLY, 0);
-    int i, rc, clock_minute, time_minute;
+    int i, rc;
+    long apart;
 
     for (i = 0; i < 9; i++) {
         tm[i] = -1;
@@ -861,10 +865,9 @@ static void rtc_rows(void)
     rc = syscall3(SYS_IOCTL, fd, (int)0x80247009u, (long)tm);
     syscall3(SYS_CLOCK_GETTIME, CLOCK_REALTIME, (long)&now, 0);
     check(rc == 0, "and RTC_RD_TIME reads the clock");
-    clock_minute = tm[2] * 60 + tm[1];
-    time_minute = (int)((now.tv_sec / 60) % 1440);
-    check(time_minute == clock_minute || time_minute == (clock_minute + 1) % 1440,
-          "and its hour and minute are the time's");
+    apart = (now.tv_sec % 86400 - (tm[2] * 3600L + tm[1] * 60L + tm[0]) + 86400 + 43200) % 86400 -
+            43200;
+    check(apart >= -120 && apart <= 120, "and its time of day is the time's, within two minutes");
     check(tm[4] >= 0 && tm[4] <= 11 && tm[5] >= 100, "and its month is from 0, its year from 1900");
     syscall1(SYS_CLOSE, fd);
 }

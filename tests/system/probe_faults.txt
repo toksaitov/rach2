@@ -5013,14 +5013,14 @@ end
 
 # /dev/rtc0, which hwclock reads.
 
-fault rtc-hour-for-minute
+fault rtc-hour-off-by-one
 probe procprobe
 file rach2/sys/fs/devfs.c
-expect FAIL: and its hour and minute are the time's
+expect FAIL: and its time of day is the time's, within two minutes
 old
-    tm[1] = t->minute;
+    tm[2] = t->hour;
 new
-    tm[1] = t->hour;
+    tm[2] = (t->hour + 1) % 24;
 end
 
 # fallocate, which answers EOPNOTSUPP for a regular file.
