@@ -61,6 +61,7 @@
 #define LVT_DELIVERY_MASK   (7u << 8)
 #define LVT_DELIVERY_EXTINT (7u << 8)
 #define SVR_SOFTWARE_ENABLE 0x100u
+#define SVR_EOI_SUPPRESS    0x1000u
 #define SPURIOUS_VECTOR     0xFFu
 #define TIMER_PERIODIC      (1u << 17)
 #define DIVIDE_BY_16        0x3u
@@ -120,6 +121,19 @@ static int refuse(const char *why)
  * that would unmask one. The task priority and `LINT0` are written after it.
  * 0 when the APIC is ready to receive messages, -1 when it is not.
  */
+/**
+ * The spurious register `svr` with the software enable and the spurious
+ * vector, and with whatever else the firmware set there kept but bit 12. A
+ * firmware that set it suppresses the end-of-interrupt the local APIC
+ * broadcasts to the I/O APICs, which clears a level-triggered line's remote
+ * IRR; the kernel sends no directed one, so the line's first interrupt
+ * would be its last.
+ */
+static uint32_t lapic_svr(uint32_t svr)
+{
+    return (svr & ~(0xFFu | SVR_EOI_SUPPRESS)) | SVR_SOFTWARE_ENABLE | SPURIOUS_VECTOR;
+}
+
 int lapic_init(void)
 {
     uint32_t lo = 0, hi = 0, base, lint0;
@@ -168,10 +182,10 @@ int lapic_init(void)
      * (SDM, the local APIC's state after it has been software disabled), so
      * an unmasked `LINT0` written before this line would be dropped and the
      * 8259's interrupts would stop at the processor the moment the APIC came
-     * up. The vector and the enable are written into the register as read, so
-     * that whatever else the firmware set there is kept.
+     * up. The register is written as read, with the vector and the enable
+     * (`lapic_svr`).
      */
-    apic_write(LAPIC_SVR, (apic_read(LAPIC_SVR) & ~0xFFu) | SVR_SOFTWARE_ENABLE | SPURIOUS_VECTOR);
+    apic_write(LAPIC_SVR, lapic_svr(apic_read(LAPIC_SVR)));
     apic_write(LAPIC_TPR, 0);
     lint0 = apic_read(LAPIC_LINT0);
     if ((lint0 & LVT_MASKED) != 0 || (lint0 & LVT_DELIVERY_MASK) != LVT_DELIVERY_EXTINT) {
@@ -306,7 +320,7 @@ void lapic_init_ap(void)
     if (!ready) {
         return;
     }
-    apic_write(LAPIC_SVR, (apic_read(LAPIC_SVR) & ~0xFFu) | SVR_SOFTWARE_ENABLE | SPURIOUS_VECTOR);
+    apic_write(LAPIC_SVR, lapic_svr(apic_read(LAPIC_SVR)));
     apic_write(LAPIC_TPR, 0);
 }
 

@@ -212,6 +212,13 @@ int main(void)
 
     /* A firmware that masked LINT0: the driver must write the unmasked
        external-interrupt entry, or the 8259's interrupts stop here. */
+    /* A firmware that suppressed the broadcast end-of-interrupt: the bit
+       is cleared, the other bits it set are kept. */
+    reset_model(0x8700);
+    apic_page[0xF0 / 4] = 0x100Fu | 0x200u;
+    check(lapic_init() == 0 && apic_page[0xF0 / 4] == (0x300u | 0xFFu),
+          "the spurious register loses the end-of-interrupt suppression and keeps the rest");
+
     reset_model(0x10700);
     check(lapic_init() == 0, "an APIC with LINT0 masked is enabled");
     check(apic_page[0x350 / 4] == (7u << 8), "with LINT0 set to an unmasked external interrupt");
