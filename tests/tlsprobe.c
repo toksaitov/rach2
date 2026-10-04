@@ -209,20 +209,176 @@ static void busy(u32 spins)
     }
 }
 
+/**
+ * The solo phase: the sentinels written through %gs survive thousands of
+ * system calls and the timer interrupts of busy waits. `fails` is the count
+ * of failures so far, and the new count is returned.
+ */
+static int solo_phase(int fails)
+{
+    long tv2[2];
+    int i;
+
+    tls_fill(0xA5A50000u);
+    for (i = 0; i < SOLO_ITERS; i++) {
+        sys_gettimeofday(tv2); /* int 0x80: tests syscall %gs save */
+        if ((i & 0x3FF) == 0) {
+            busy(BUSY_SPIN); /* span several timer IRQs */
+        }
+        if (tls_check(0xA5A50000u) != 0) {
+            fails++;
+            if (fails <= 3) {
+                puts_("FAIL: solo sentinel clobbered at i=");
+                put_u32((u32)i);
+                puts_("\n");
+            }
+            break;
+        }
+    }
+    if (fails == 0) {
+        puts_("solo phase OK\n");
+    }
+    return fails;
+}
+
+/**
+ * The child of the isolation phase: it switches to its own TCB and checks
+ * only its own sentinels, across switches and across each round of the byte
+ * passed over the pipes. It exits 0 when all were intact, 8 when the base
+ * it inherited did not read the parent's sentinels, 7 when it could not
+ * set its own, and 1 on a mismatch. Does not return.
+ */
+static void iso_child(int to_child[2], int to_parent[2])
+{
+    long tv2[2];
+    char token;
+    int centry;
+    int cbad = 0;
+    int i;
+
+    sys_close(to_child[1]);
+    sys_close(to_parent[0]);
+
+    /* Before re-arming TLS, the child must still see the base it INHERITED
+     * from the parent across fork (fork copies tls_base and the trapframe
+     * %gs). Its own copy of tcb_parent holds the parent's sentinels, so a
+     * read through the inherited %gs must return them. If fork dropped
+     * tls_base the switch would reprogram base 0 and this would
+     * mismatch. */
+    if (tls_check(0xA5A50000u) != 0) {
+        sys_exit(8);
+    }
+
+    centry = set_thread_area(tcb_child);
+    if (centry < 0) {
+        sys_exit(7);
+    }
+    load_gs(centry);
+    tls_fill(0x5A5A0000u);
+
+    for (i = 0; i < ISO_ITERS; i++) {
+        sys_gettimeofday(tv2);
+        busy(BUSY_SPIN);
+        if (tls_check(0x5A5A0000u) != 0) {
+            cbad++;
+            break;
+        }
+    }
+    for (i = 0; i < PING_ROUNDS && cbad == 0; i++) {
+        if (sys_read(to_child[0], &token, 1) != 1 || tls_check(0x5A5A0000u) != 0 ||
+            sys_write(to_parent[1], &token, 1) != 1) {
+            cbad++;
+        }
+    }
+    /* Exit status has the child verdict to the parent (0 == clean). */
+    sys_exit(cbad == 0 ? 0 : 1);
+}
+
+/**
+ * The parent's switches of the isolation phase: it keeps tcb_parent and
+ * checks its sentinels across switches to the child, then across each
+ * round of the byte it sends the child and gets back. `fails` is the count
+ * of failures so far, and the new count is returned.
+ */
+static int iso_switches(int to_child[2], int to_parent[2], int fails)
+{
+    long tv2[2];
+    char token;
+    int i;
+
+    for (i = 0; i < ISO_ITERS; i++) {
+        sys_gettimeofday(tv2);
+        busy(BUSY_SPIN);
+        if (tls_check(0xA5A50000u) != 0) {
+            fails++;
+            if (fails <= 3) {
+                puts_("FAIL: parent sentinel clobbered after switch at i=");
+                put_u32((u32)i);
+                puts_("\n");
+            }
+            break;
+        }
+    }
+    token = 'x';
+    for (i = 0; i < PING_ROUNDS && fails == 0; i++) {
+        if (sys_write(to_child[1], &token, 1) != 1 || sys_read(to_parent[0], &token, 1) != 1) {
+            puts_("FAIL: the byte did not come back from the child at round ");
+            put_u32((u32)i);
+            puts_("\n");
+            fails++;
+        } else if (tls_check(0xA5A50000u) != 0) {
+            puts_("FAIL: parent sentinel clobbered after the child ran, at round ");
+            put_u32((u32)i);
+            puts_("\n");
+            fails++;
+        }
+    }
+    return fails;
+}
+
+/**
+ * The parent of the isolation phase: its own checks across the switches,
+ * then the child's verdict from its exit status. Each side closes the ends
+ * it does not use, so that a side that stops early ends the other's read
+ * with end of file. `fails` is the count of failures so far, and the new
+ * count is returned.
+ */
+static int iso_parent(int pid, int to_child[2], int to_parent[2], int fails)
+{
+    int status = -1;
+    int got;
+
+    sys_close(to_child[0]);
+    sys_close(to_parent[1]);
+    fails = iso_switches(to_child, to_parent, fails);
+    sys_close(to_child[1]);
+    got = sys_waitpid(pid, &status, 0);
+    if (got != pid) {
+        puts_("FAIL: waitpid\n");
+        fails++;
+    } else if (status != 0) {
+        puts_("FAIL: child reported a TLS mismatch (isolation broken)\n");
+        fails++;
+    }
+    if (fails == 0) {
+        puts_("isolation phase OK\n");
+    }
+    return fails;
+}
+
 void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
 
+/** Set up the TLS, check that %gs aliases the TCB, then run the solo and
+ * isolation phases and print the verdict. */
 void probe_main(unsigned long *sp)
 {
     static const unsigned long processor0 = 1;
     int entry;
     int pid;
-    int i;
     int fails = 0;
     int to_child[2], to_parent[2];
-    char token;
-    long tv2[2];
 
     (void)sp;
 
@@ -246,26 +402,7 @@ void probe_main(unsigned long *sp)
         fails++;
     }
 
-    /* Solo phase: sentinels survive syscalls + timer IRQs. */
-    tls_fill(0xA5A50000u);
-    for (i = 0; i < SOLO_ITERS; i++) {
-        sys_gettimeofday(tv2); /* int 0x80: tests syscall %gs save */
-        if ((i & 0x3FF) == 0) {
-            busy(BUSY_SPIN); /* span several timer IRQs */
-        }
-        if (tls_check(0xA5A50000u) != 0) {
-            fails++;
-            if (fails <= 3) {
-                puts_("FAIL: solo sentinel clobbered at i=");
-                put_u32((u32)i);
-                puts_("\n");
-            }
-            break;
-        }
-    }
-    if (fails == 0) {
-        puts_("solo phase OK\n");
-    }
+    fails = solo_phase(fails);
 
     /* Isolation phase: a second process with a DIFFERENT TCB, on the
      * processor this one is bound to, which the child inherits. */
@@ -282,99 +419,10 @@ void probe_main(unsigned long *sp)
         puts_("FAIL: fork\n");
         sys_exit(1);
     }
-
     if (pid == 0) {
-        /* Child: switch to its own TCB and verify only its own sentinels. */
-        int centry;
-        int cbad = 0;
-
-        sys_close(to_child[1]);
-        sys_close(to_parent[0]);
-
-        /* Before re-arming TLS, the child must still see the base it INHERITED
-         * from the parent across fork (fork copies tls_base and the trapframe
-         * %gs). Its own copy of tcb_parent holds the parent's sentinels, so a
-         * read through the inherited %gs must return them. If fork dropped
-         * tls_base the switch would reprogram base 0 and this would
-         * mismatch. */
-        if (tls_check(0xA5A50000u) != 0) {
-            sys_exit(8);
-        }
-
-        centry = set_thread_area(tcb_child);
-        if (centry < 0) {
-            sys_exit(7);
-        }
-        load_gs(centry);
-        tls_fill(0x5A5A0000u);
-
-        for (i = 0; i < ISO_ITERS; i++) {
-            sys_gettimeofday(tv2);
-            busy(BUSY_SPIN);
-            if (tls_check(0x5A5A0000u) != 0) {
-                cbad++;
-                break;
-            }
-        }
-        for (i = 0; i < PING_ROUNDS && cbad == 0; i++) {
-            if (sys_read(to_child[0], &token, 1) != 1 || tls_check(0x5A5A0000u) != 0 ||
-                sys_write(to_parent[1], &token, 1) != 1) {
-                cbad++;
-            }
-        }
-        /* Exit status has the child verdict to the parent (0 == clean). */
-        sys_exit(cbad == 0 ? 0 : 1);
-    } else {
-        /* Parent: keep tcb_parent and verify its sentinels across switches.
-         * Each side closes the ends it does not use, so that a side that
-         * stops early ends the other's read with end of file. */
-        int status = -1;
-        int got;
-
-        sys_close(to_child[0]);
-        sys_close(to_parent[1]);
-
-        for (i = 0; i < ISO_ITERS; i++) {
-            sys_gettimeofday(tv2);
-            busy(BUSY_SPIN);
-            if (tls_check(0xA5A50000u) != 0) {
-                fails++;
-                if (fails <= 3) {
-                    puts_("FAIL: parent sentinel clobbered after switch at i=");
-                    put_u32((u32)i);
-                    puts_("\n");
-                }
-                break;
-            }
-        }
-        token = 'x';
-        for (i = 0; i < PING_ROUNDS && fails == 0; i++) {
-            if (sys_write(to_child[1], &token, 1) != 1 || sys_read(to_parent[0], &token, 1) != 1) {
-                puts_("FAIL: the byte did not come back from the child at round ");
-                put_u32((u32)i);
-                puts_("\n");
-                fails++;
-            } else if (tls_check(0xA5A50000u) != 0) {
-                puts_("FAIL: parent sentinel clobbered after the child ran, at round ");
-                put_u32((u32)i);
-                puts_("\n");
-                fails++;
-            }
-        }
-
-        sys_close(to_child[1]);
-        got = sys_waitpid(pid, &status, 0);
-        if (got != pid) {
-            puts_("FAIL: waitpid\n");
-            fails++;
-        } else if (status != 0) {
-            puts_("FAIL: child reported a TLS mismatch (isolation broken)\n");
-            fails++;
-        }
-        if (fails == 0) {
-            puts_("isolation phase OK\n");
-        }
+        iso_child(to_child, to_parent);
     }
+    fails = iso_parent(pid, to_child, to_parent, fails);
 
     if (fails == 0) {
         puts_("All TLS checks passed!\n");
