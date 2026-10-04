@@ -123,8 +123,8 @@ case "${1:-}" in
         while :; do
             out=$(printf 'pgrep -f /home/testing/%s.sh > /dev/null || pgrep -f "sh %s.sh" > /dev/null && echo RUNNING; find /home/testing/%s -type f -mmin -15 2>/dev/null | head -1 | grep -q . && echo FRESH; cat /home/testing/%s.out 2>/dev/null\n' \
                 "$name" "$name" "$name" "$name" | "$0" sh 2>/dev/null) || out=
-            lines=$(printf '%s\n' "$out" | grep -c "^$name: ")
-            new=$(printf '%s\n' "$out" | grep "^$name: " | tail -n +$((seen + 1)))
+            lines=$(printf '%s\n' "$out" | grep -c "^$name: " || true)
+            new=$(printf '%s\n' "$out" | grep "^$name: " | tail -n +$((seen + 1)) || true)
             case "$out" in
                 *RUNNING*) ;;
                 *) printf '%s\n' "$new"; echo "testing: $name: ended, $lines lines"; exit 0 ;;
