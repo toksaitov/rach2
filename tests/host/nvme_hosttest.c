@@ -1260,6 +1260,78 @@ static void row_queued(void)
 }
 
 /**
+ * Check how the mark comes back and goes: an unflushed write marks the disk,
+ * a flush keeps the mark while it runs and clears it when it ends, and a
+ * write answered unflushed while a flush runs keeps the mark after it.
+ */
+static void flush_rows_mark(block_device_t *dev)
+{
+    make_requests(2, 310, 1, BLOCK_REQ_NOFLUSH);
+    CHECK("an unflushed write marks the disk again",
+          dev->submit(dev, &reqs[0]) == 0 && (handler(0), dev->unflushed == 1));
+    m.defer = 1;
+    make_requests(1, 0, 1, 0);
+    CHECK("a flush is taken", dev->flush(dev, &reqs[0]) == 0 && flushes == 2);
+    CHECK("and the mark stays while it runs, so that a second caller flushes too",
+          dev->unflushed == 1);
+    model_release();
+    handler(0);
+    CHECK("and is cleared when it finishes", ndone == 5 && done[4].status == 0 &&
+                                                 dev->unflushed == 0);
+    m.defer = 0;
+
+    make_requests(2, 320, 1, BLOCK_REQ_NOFLUSH);
+    CHECK("another unflushed write marks the disk",
+          dev->submit(dev, &reqs[0]) == 0 && (handler(0), dev->unflushed == 1));
+    m.defer = 1;
+    make_requests(1, 0, 1, 0);
+    CHECK("a flush is issued", dev->flush(dev, &reqs[0]) == 0 && flushes == 3);
+    m.defer = 0;
+    make_requests(1, 330, 1, BLOCK_REQ_NOFLUSH);
+    reqs[0].generation = 300;
+    CHECK("a write answered unflushed while it runs",
+          dev->submit(dev, &reqs[0]) == 0 && (handler(0), ndone == 7));
+    model_release();
+    handler(0);
+    CHECK("keeps the mark when the flush finishes", ndone == 8 && dev->unflushed == 1);
+}
+
+/**
+ * Check the flushes that leave the mark: one the controller fails and one a
+ * recovery fails, and between them a flush by polling and a polled write,
+ * which each clear it.
+ */
+static void flush_rows_failures(block_device_t *dev)
+{
+    make_requests(1, 0, 1, 0);
+    m.fail_io = 1;
+    CHECK("a flush the controller fails is taken", dev->flush(dev, &reqs[0]) == 0);
+    handler(0);
+    CHECK("completes with EIO and leaves the mark",
+          ndone == 9 && done[8].status == -EIO && dev->unflushed == 1);
+    CHECK("a flush by polling works and clears the mark",
+          dev->flush(dev, 0) == 0 && dev->unflushed == 0 && flushes == 4);
+
+    make_requests(1, 335, 1, BLOCK_REQ_NOFLUSH);
+    CHECK("an unflushed write marks the disk once more",
+          dev->submit(dev, &reqs[0]) == 0 && (handler(0), dev->unflushed == 1));
+    CHECK("and a polled write has a flush after it, which clears the mark",
+          dev->write(dev, 336, 1, big) == 0 && flushes == 5 && dev->unflushed == 0);
+
+    make_requests(1, 340, 1, BLOCK_REQ_NOFLUSH);
+    CHECK("a last unflushed write marks the disk",
+          dev->submit(dev, &reqs[0]) == 0 && (handler(0), dev->unflushed == 1));
+    m.drop_io = 1;
+    make_requests(1, 0, 1, 0);
+    CHECK("a flush nobody answers is issued", dev->flush(dev, &reqs[0]) == 0);
+    CHECK("and a polled read nobody answers resets the controller",
+          dev->read(dev, 0, 1, big) == -EIO && disables >= 1);
+    CHECK("which fails the flush and leaves the mark",
+          done[ndone - 1].status == -EIO && dev->unflushed == 1);
+    m.drop_io = 0;
+}
+
+/**
  * Writes that leave the disk's cache unflushed, and what clears the mark:
  * a write that must be on the medium has a flush after it while the mark
  * is set, since FUA covers its own blocks alone; a flush clears the mark
@@ -1299,61 +1371,8 @@ static void row_flushes(void)
     handler(0);
     CHECK("with no flush", ndone == 3 && flushes == 1);
 
-    make_requests(2, 310, 1, BLOCK_REQ_NOFLUSH);
-    CHECK("an unflushed write marks the disk again",
-          dev->submit(dev, &reqs[0]) == 0 && (handler(0), dev->unflushed == 1));
-    m.defer = 1;
-    make_requests(1, 0, 1, 0);
-    CHECK("a flush is taken", dev->flush(dev, &reqs[0]) == 0 && flushes == 2);
-    CHECK("and the mark stays while it runs, so that a second caller flushes too",
-          dev->unflushed == 1);
-    model_release();
-    handler(0);
-    CHECK("and is cleared when it finishes", ndone == 5 && done[4].status == 0 &&
-                                                 dev->unflushed == 0);
-    m.defer = 0;
-
-    make_requests(2, 320, 1, BLOCK_REQ_NOFLUSH);
-    CHECK("another unflushed write marks the disk",
-          dev->submit(dev, &reqs[0]) == 0 && (handler(0), dev->unflushed == 1));
-    m.defer = 1;
-    make_requests(1, 0, 1, 0);
-    CHECK("a flush is issued", dev->flush(dev, &reqs[0]) == 0 && flushes == 3);
-    m.defer = 0;
-    make_requests(1, 330, 1, BLOCK_REQ_NOFLUSH);
-    reqs[0].generation = 300;
-    CHECK("a write answered unflushed while it runs",
-          dev->submit(dev, &reqs[0]) == 0 && (handler(0), ndone == 7));
-    model_release();
-    handler(0);
-    CHECK("keeps the mark when the flush finishes", ndone == 8 && dev->unflushed == 1);
-
-    make_requests(1, 0, 1, 0);
-    m.fail_io = 1;
-    CHECK("a flush the controller fails is taken", dev->flush(dev, &reqs[0]) == 0);
-    handler(0);
-    CHECK("completes with EIO and leaves the mark",
-          ndone == 9 && done[8].status == -EIO && dev->unflushed == 1);
-    CHECK("a flush by polling works and clears the mark",
-          dev->flush(dev, 0) == 0 && dev->unflushed == 0 && flushes == 4);
-
-    make_requests(1, 335, 1, BLOCK_REQ_NOFLUSH);
-    CHECK("an unflushed write marks the disk once more",
-          dev->submit(dev, &reqs[0]) == 0 && (handler(0), dev->unflushed == 1));
-    CHECK("and a polled write has a flush after it, which clears the mark",
-          dev->write(dev, 336, 1, big) == 0 && flushes == 5 && dev->unflushed == 0);
-
-    make_requests(1, 340, 1, BLOCK_REQ_NOFLUSH);
-    CHECK("a last unflushed write marks the disk",
-          dev->submit(dev, &reqs[0]) == 0 && (handler(0), dev->unflushed == 1));
-    m.drop_io = 1;
-    make_requests(1, 0, 1, 0);
-    CHECK("a flush nobody answers is issued", dev->flush(dev, &reqs[0]) == 0);
-    CHECK("and a polled read nobody answers resets the controller",
-          dev->read(dev, 0, 1, big) == -EIO && disables >= 1);
-    CHECK("which fails the flush and leaves the mark",
-          done[ndone - 1].status == -EIO && dev->unflushed == 1);
-    m.drop_io = 0;
+    flush_rows_mark(dev);
+    flush_rows_failures(dev);
 }
 
 /** Namespaces past the sixteen one list page gives at a time: sixteen of
