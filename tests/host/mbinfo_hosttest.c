@@ -204,6 +204,10 @@ static void row_strings_and_meminfo(void)
     }
 }
 
+/**
+ * Check a multiboot2 memory map of the specification's 24-byte entries, and
+ * one of 32-byte entries read by the size the tag gives.
+ */
 static void row_mmap(void)
 {
     list_begin();
@@ -264,7 +268,15 @@ static void row_mmap(void)
     CHECK(mb2_read(mbi, &boot, &store) == 0 && boot.mmap_len == 2 * BOOT_MMAP_ENTRY &&
               map_is(0, 0x100000, 0x100000, 1) && map_is(1, 0x200000, 0x100000, 2),
           "entries of 32 bytes are read by their size");
+}
 
+/**
+ * Check the multiboot2 maps the reader must refuse or keep apart: entries too
+ * short to be a map, an entry size that wraps the tag's offset past 2^32, and
+ * two reserved ranges whose merged length would pass 2^64.
+ */
+static void row_mmap_refused(void)
+{
     /* An entry size under 24 bytes is not a map. */
     list_begin();
     tag_begin(6);
@@ -323,6 +335,11 @@ static void efi_desc(uint32_t type, uint64_t phys, uint64_t pages)
     put64(0);
 }
 
+/**
+ * Check an EFI map of OVMF's 48-byte descriptors, with each kind of memory
+ * kept as its own, and that it takes the place of the multiboot2 map whether
+ * that comes before it or after.
+ */
 static void row_efi_mmap(void)
 {
     list_begin();
@@ -394,7 +411,15 @@ static void row_efi_mmap(void)
     CHECK(mb2_read(mbi, &boot, &store) == 0 && boot.mmap_len == BOOT_MMAP_ENTRY &&
               map_is(0, 0x100000, 0x100000, 1),
           "a later multiboot2 map does not replace the EFI one");
+}
 
+/**
+ * Check the EFI maps at the reader's limits: descriptors too short, a map past
+ * the record's entries cut and counted, the 32-bit system table's tag, and a
+ * descriptor size that wraps the tag's offset past 2^32.
+ */
+static void row_efi_mmap_limits(void)
+{
     /* A descriptor size under EFI's 40 bytes refuses the map. */
     list_begin();
     tag_begin(17);
@@ -930,7 +955,9 @@ int main(void)
 {
     row_strings_and_meminfo();
     row_mmap();
+    row_mmap_refused();
     row_efi_mmap();
+    row_efi_mmap_limits();
     row_framebuffers();
     row_rsdp();
     row_modules();
