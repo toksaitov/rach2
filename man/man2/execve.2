@@ -90,8 +90,8 @@ as Linux gives it.
 The limits are Linux's.
 The strings of both vectors, the
 .Fa path
-string as passed, and a 4-byte pointer for each vector entry may take a
-quarter of the soft
+string as passed, and a pointer for each vector entry, of 4 bytes on i686
+and 8 on x86-64, may take a quarter of the soft
 .Dv RLIMIT_STACK
 limit, but no more than 6 MiB and no less than 128 KiB.
 An empty
@@ -104,9 +104,11 @@ longer is refused there; Linux reads a vector to its end first, and
 reports
 .Er EFAULT
 for a pointer it cannot read past the budget.
-The initial stack spans as many pages below
+The initial stack spans as many pages below the top of user space,
 .Ad 0xC0000000
-as the strings and the pointers need.
+on i686 and
+.Ad 0x00007FFFFFFFF000
+on x86-64, as the strings and the pointers need.
 The copied path, including any current-directory prefix and its null
 terminator, must fit 4096 bytes.
 .Pp
@@ -407,12 +409,16 @@ path does not exist.
 The executable header is invalid and no valid interpreter line is present,
 the interpreter path is empty or relative, the first line fills the
 128-byte buffer without a newline, the script's interpreter is not a valid
-ELF executable, or a segment is malformed or lies outside the addresses
-from
+ELF executable, or a segment is malformed or lies outside the addresses a
+user image may take: from
 .Ad 0x02000000
 to
 .Ad 0xBFFFF000
-a user image may take.
+on i686, and from
+.Ad 0x00010000
+to
+.Ad 0x00007FFFFFFFE000
+on x86-64.
 .It Bq Er ENOMEM
 The exec workspace, the new address space, a page of the new image or its
 stack, a region record, the copy of a shared descriptor table, or storage

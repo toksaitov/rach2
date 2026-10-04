@@ -18,7 +18,8 @@
 .Fn syscall "SYS_get_robust_list" "int tid" "struct robust_list_head **head" "size_t *len"
 .Sh DESCRIPTION
 .Nm ,
-number 240, lets a process sleep until the 32-bit word at
+number 240 on i386 and 202 on x86-64, lets a process sleep until the
+32-bit word at
 .Fa uaddr
 changes, without spinning, and lets another wake it.
 C libraries build their locks, condition variables and one-time
@@ -90,15 +91,16 @@ where Linux restarts it with its first deadline.
 .Fa uaddr2
 is ignored.
 The requeue, wake-and-modify and priority-inheritance operations, and
-the time64 form, number 422, are not implemented.
+i386's time64 form, number 422, are not implemented; x86-64 has no such
+form.
 .Ss Robust lists
 .Nm set_robust_list ,
-number 311, records
+number 311 on i386 and 273 on x86-64, records
 .Fa head
 as the calling thread's robust list, the list of robust mutexes it holds
 that GNU libc keeps;
 .Fa len
-must be 12, the size of the head on i386.
+must be the size of the head, 12 on i386 and 24 on x86-64.
 The head has the first entry, the offset from an entry to its futex word,
 and the entry being taken or released at the moment, if any.
 When the thread ends, and when it calls
@@ -125,7 +127,8 @@ the thread takes the process ID, so the ID it looks for is the one the
 thread locked the words with; Linux walks it after, and looks for the
 process ID.
 .Nm get_robust_list ,
-number 312, stores the list's head and 12 for the thread
+number 312 on i386 and 274 on x86-64, stores the list's head and the
+head's size for the thread
 .Fa tid ,
 0 for the caller.
 Another thread's needs a thread of the caller's process, a privileged
@@ -183,7 +186,7 @@ is not aligned, a bitset operation was given a zero
 .Fa timeout
 has a negative field or nanoseconds past 999999999, or
 .Nm set_robust_list
-was given a length other than 12.
+was given a length other than the head's size.
 .It Er EPERM
 .Nm get_robust_list
 named a thread of another user, or a privileged thread of another

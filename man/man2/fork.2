@@ -71,7 +71,7 @@ musl's and GNU libc's
 make this call.
 .Pp
 .Fn clone ,
-number 120, creates a child the way
+number 120 on i386 and 56 on x86-64, creates a child the way
 .Fn fork
 does, in the forms GNU libc's
 .Fn fork
@@ -271,8 +271,9 @@ refuses.
 .Fn clone3
 was given a
 .Fa size
-below 64, a field of a later version that is not zero, a flag or field
-with bits past 32, an exit signal in the flags or above 64, a stack
+below 64, a field of a later version that is not zero, a flag with bits
+past 32, a field wider than an address, which is 32 bits on i686, an exit
+signal in the flags or above 64, a stack
 without a size or a size without a stack, or
 .Dv CLONE_PIDFD ,
 since no descriptor names a process here.
