@@ -11,7 +11,8 @@
  * `execve` returns E2BIG and 9 when it returns anything else.
  *
  * Every limit is tested at its edge: the largest vector that must work and
- * the smallest that must not. The child half asserts, not reports: it exits
+ * the smallest that must not. On x86-64 an argument and a variable at 4 GiB
+ * and 8 GiB, whose addresses have zero low words, are delivered. The child half asserts, not reports: it exits
  * nonzero unless it was handed exactly what the parent sent, so a vector
  * delivered short is a failure and not a line in a log.
  *
@@ -23,6 +24,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -128,6 +130,12 @@ static int child(int argc, char *argv[])
         return argc == 3 && all_of(argv[2], LONGEST, 'y') && environ[0] != NULL &&
                        environ[1] == NULL && strncmp(environ[0], "E=", 2) == 0 &&
                        all_of(environ[0] + 2, budget_env_len() - 2, 'z')
+                   ? 0
+                   : 1;
+    }
+    if (strcmp(argv[1], "wide") == 0) {
+        return argc == 3 && strcmp(argv[2], "wide") == 0 && environ[0] != NULL &&
+                       strcmp(environ[0], "W=wide") == 0 && environ[1] == NULL
                    ? 0
                    : 1;
     }
@@ -250,6 +258,34 @@ static int pointers(void)
     return 0;
 }
 
+/** On x86-64, an argument and a variable whose addresses are 4 GiB and 8 GiB,
+ * zero in their low 32 bits, are delivered and do not end their vectors. */
+static int wide_pointers(void)
+{
+#if defined __x86_64__
+    char *arg = mmap((void *)0x100000000UL, 4096, PROT_READ | PROT_WRITE,
+                     MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+    char *var = mmap((void *)0x200000000UL, 4096, PROT_READ | PROT_WRITE,
+                     MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+    char *argv[4] = {(char *)SELF, (char *)"wide", NULL, NULL};
+    char *envp[2] = {NULL, NULL};
+
+    if (arg != (char *)0x100000000UL || var != (char *)0x200000000UL) {
+        return fail("mapping pages at 4 GiB and 8 GiB");
+    }
+    strcpy(arg, "wide");
+    strcpy(var, "W=wide");
+    argv[2] = arg;
+    envp[0] = var;
+    if (run(argv, envp, 8 * MIB) != 0) {
+        return fail("an argument or variable at an address of zero low bits was lost");
+    }
+    munmap(arg, 4096);
+    munmap(var, 4096);
+#endif
+    return 0;
+}
+
 int main(int argc, char *argv[])
 {
     int i;
@@ -260,7 +296,8 @@ int main(int argc, char *argv[])
     if (argc != 1 || getenv("EXECARG_EMPTY") != NULL) {
         return child(argc, argv);
     }
-    if (many() != 0 || one_string() != 0 || budget() != 0 || pointers() != 0) {
+    if (many() != 0 || one_string() != 0 || budget() != 0 || pointers() != 0 ||
+        wide_pointers() != 0) {
         return 1;
     }
 

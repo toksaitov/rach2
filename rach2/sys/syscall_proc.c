@@ -1063,7 +1063,7 @@ static int32_t exec_count(char *const __user *vec, uint32_t max, uint32_t *n)
         return 0;
     }
     for (i = 0;; i++) {
-        uint32_t ptr;
+        uintptr_t ptr;
 
         if (copy_from_user(&ptr, (const void __user *)&vec[i], sizeof(ptr)) != 0) {
             return -EFAULT;
