@@ -1,7 +1,7 @@
 #!/bin/sh
 # Prove the rows of tests/host/ahci_hosttest.c and tests/host/xhci_hosttest.c
 # that give a controller addresses above 4 GiB, whole, or, when it takes only
-# 32-bit ones, move a buffer's pieces above 4 GiB through the DMA pool. Six
+# 32-bit ones, move a buffer's pieces above 4 GiB through the DMA pool. Seven
 # faults go into a private copy of the two drivers, one at a time, and each
 # must fail the rows named for it and no other:
 #
@@ -11,6 +11,7 @@
 #   xhci-heap      xHCI takes its pages from the heap, AC64 or not.
 #   xhci-direct    xHCI gives every piece of a transfer as it is.
 #   xhci-no-back   xHCI does not copy an IN transfer back from the pages.
+#   xhci-copy      xHCI copies each OUT piece from the buffer's start.
 #
 # Usage: dma32_mutate.sh [--check]
 # With --check it compiles and runs the two unmodified tests alone.
@@ -148,10 +149,17 @@ fault xhci-heap xhci_hosttest.c 'its context array from the DMA pool' \
     'the pages go back with the records'
 
 mutate "$xhci" '        need |= (uint64_t)phys[i] + len[i] > XHCI_FOUR_GIB;' '        need |= 0;'
-fault xhci-direct xhci_hosttest.c 'its pieces above 4 GiB have pages'
+fault xhci-direct xhci_hosttest.c 'its pieces above 4 GiB have pages' \
+    "and the medium holds the buffer's bytes, moved through the pool" \
+    "and the medium's bytes land in the buffer, back from the pool"
 
 mutate "$xhci" '            b->to[i][j] = b->page[i][j];' '            b->to[i][j] = 0;'
-fault xhci-no-back xhci_hosttest.c 'its bytes come back up to the bytes moved'
+fault xhci-no-back xhci_hosttest.c 'its bytes come back up to the bytes moved' \
+    "and the medium's bytes land in the buffer, back from the pool"
+
+mutate "$xhci" '                b->page[i][j] = at[j];' '                b->page[i][j] = transfer->buffer[j];'
+fault xhci-copy xhci_hosttest.c 'holding its bytes' \
+    "and the medium holds the buffer's bytes, moved through the pool"
 
 for t in ahci_hosttest.c xhci_hosttest.c; do
     run_phase "restored-${t%.c}" "$t"

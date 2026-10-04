@@ -884,13 +884,23 @@ static int command_answer_code;
 static const uint32_t *model_fetched[64];
 static unsigned model_fetched_n;
 
+/* A transfer event names its block by the physical address the driver
+   recorded for the ring, as a controller knows only that one: a ring from
+   the DMA pool has a physical address that is not its host address here. */
 static void post_transfer(uint32_t code, uint32_t residual, uint32_t slot, uint32_t dci,
                           const uint32_t *t)
 {
     uint32_t *event = &hc->event_ring[model_event_write * TRB_WORDS];
+    uint64_t at = (uint64_t)(uintptr_t)t;
 
-    event[0] = (uint32_t)(uintptr_t)t;
-    event[1] = (uint32_t)((uint64_t)(uintptr_t)t >> 32);
+    if (slot >= 1 && slot <= XHCI_SLOTS && dci < XHCI_MAX_DCI && hc->slots[slot].ring[dci] &&
+        t >= hc->slots[slot].ring[dci] &&
+        t < hc->slots[slot].ring[dci] + XHCI_EP_RING_TRBS * TRB_WORDS) {
+        at = (uint64_t)hc->slots[slot].ring_phys[dci] +
+             (uint64_t)((const uint8_t *)t - (const uint8_t *)hc->slots[slot].ring[dci]);
+    }
+    event[0] = (uint32_t)at;
+    event[1] = (uint32_t)(at >> 32);
     event[2] = residual | (code << TRB_COMPLETION_SHIFT);
     event[3] = (TRB_TYPE_TRANSFER_EVENT << TRB_TYPE_SHIFT) | (slot << TRB_SLOT_SHIFT) |
                (dci << 16) | model_event_cycle;
@@ -1659,7 +1669,7 @@ static void dma32_bounce_rows(void)
 
     k_memset(r, 0, sizeof(r));
     for (i = 0; i < sizeof(buf); i++) {
-        buf[i] = (uint8_t)(i * 7u + 1u);
+        buf[i] = (uint8_t)(i * 7u + 1u + (i >> 12) * 37u); /* no two pages alike */
     }
     tr.setup = 0;
     tr.buffer = buf;
@@ -1717,10 +1727,81 @@ static void dma32_bounce_rows(void)
     ctrl_free_tables(hc);
 }
 
+/* The controller's address of a byte of `big` past 4 GiB: the map's page
+   with bit 32 set, so that a controller without AC64 takes every piece
+   through the pool whatever host addresses the test runs at. */
+static uintptr_t high_map(uintptr_t va)
+{
+    uintptr_t p = permuted_map(va);
+
+    return p == va ? va : (uintptr_t)((uint64_t)p | 0x100000000ULL);
+}
+
+/**
+ * A controller without AC64, its rings from the DMA pool, moves the pieces
+ * of a transfer that lie past 4 GiB through pages of the pool, submitted and
+ * completed as any transfer is: an OUT of 8 KiB from mid-page reaches the
+ * medium from the buffer's bytes, and an IN lands in the buffer. The model
+ * finds the pool's pages by the addresses the blocks carry, and the
+ * buffer's own pages are none it can reach.
+ */
+static void dma32_transfer_rows(void)
+{
+    struct usb_transfer transfer;
+    struct usb_completion completion;
+    uint32_t i;
+    int same;
+
+    xhci_dma32 = 1;
+    bulk_pair_up();
+    model_pages_n = 0;
+    for (i = 0; i < POOL_PAGES; i++) {
+        model_page_register(pool[i]);
+    }
+    virt_map = high_map;
+    CHECK("a controller treated as without AC64 is driven so", !hc->dma64);
+    for (i = 0; i < 8192; i++) {
+        big[2048 + i] = (uint8_t)(i * 13u + 5u + (i >> 12) * 37u);
+    }
+    medium_at = 0;
+    transfer.setup = 0;
+    transfer.buffer = big + 2048;
+    transfer.length = 8192;
+    transfer.direction = USB_DIR_OUT;
+    transfer.generation = 0x500;
+    CHECK("an OUT transfer of 8 KiB past 4 GiB is queued", xhci_submit(hc, 1, 4, &transfer) == 0);
+    xhci_events(hc);
+    CHECK("it is reported whole", xhci_poll(hc, &completion) == 1 &&
+                                      completion.status == USB_XFER_OK &&
+                                      completion.length == 8192);
+    for (i = 0, same = 1; i < 8192; i++) {
+        same = same && medium[i] == big[2048 + i];
+    }
+    CHECK("and the medium holds the buffer's bytes, moved through the pool", same);
+
+    for (i = 0; i < 8192; i++) {
+        big[2048 + i] = 0;
+    }
+    transfer.direction = USB_DIR_IN;
+    transfer.generation = 0x501;
+    CHECK("an IN transfer of 8 KiB past 4 GiB is queued", xhci_submit(hc, 1, 3, &transfer) == 0);
+    xhci_events(hc);
+    CHECK("it is reported whole", xhci_poll(hc, &completion) == 1 &&
+                                      completion.status == USB_XFER_OK &&
+                                      completion.length == 8192);
+    for (i = 0, same = 1; i < 8192; i++) {
+        same = same && big[2048 + i] == medium[8192 + i];
+    }
+    CHECK("and the medium's bytes land in the buffer, back from the pool", same);
+    virt_map = 0;
+    xhci_dma32 = 0;
+}
+
 static void dma32_rows(void)
 {
     dma32_pool_rows();
     dma32_bounce_rows();
+    dma32_transfer_rows();
 }
 
 int main(void)
