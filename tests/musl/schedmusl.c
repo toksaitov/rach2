@@ -16,11 +16,12 @@
  * asking for it, with SCHED_RESET_ON_FORK or not, succeeds; SCHED_FIFO and
  * SCHED_RR are refused with EPERM, and the other policies, a priority that does
  * not suit its policy, and an unknown policy with EINVAL. The priority ranges
- * are Linux's, and the time slice is one 10 ms tick. The affinity is every
- * processor /proc/cpuinfo lists, read raw as the bytes of a long written, four
- * on i386 and eight on x86-64, on a machine of fewer than 32 processors; a mask
- * of the last processor alone is accepted, kept, and moves the caller there, as
- * getcpu then says, and one of a processor past the last is refused. A caller
+ * are Linux's, and the time slice is one 10 ms tick. The affinity is the
+ * processors /proc/cpuinfo lists, by their ids, which need not run without a
+ * gap, read raw as the bytes of the longs the highest takes, four on i386 to
+ * 32 processors and eight past them and on x86-64; a mask of the last
+ * processor alone is accepted, kept, and moves the caller there, as getcpu
+ * then says, and one of a processor not started is refused. A caller
  * of another user may not change root's process, and a pid of no process is
  * refused with ESRCH. musl answers the policy and parameter calls with ENOSYS
  * itself, so those rows call the kernel through `syscall`.
@@ -58,26 +59,23 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-/* The bytes the kernel's affinity mask has, a long's, as Linux rounds the
- * mask to longs: four on i386 and eight on x86-64. */
-#if defined __x86_64__
-#define MASK_BYTES "eight"
-#else
-#define MASK_BYTES "four"
-#endif
-
-/** The processors /proc/cpuinfo lists, by its "processor" lines, or 0. */
-static int cpuinfo_count(void)
+/** The processors /proc/cpuinfo lists by their "processor" lines, each id
+ * set in `*set`; their count, or 0. The ids need not run from 0 without a
+ * gap, since the kernel goes on starting processors past one that does not
+ * start. */
+static int cpuinfo_ids(cpu_set_t *set)
 {
     char line[256];
-    int n = 0;
+    int n = 0, id;
     FILE *f = fopen("/proc/cpuinfo", "r");
 
+    CPU_ZERO(set);
     if (!f) {
         return 0;
     }
     while (fgets(line, sizeof(line), f)) {
-        if (strncmp(line, "processor\t:", 11) == 0) {
+        if (sscanf(line, "processor\t: %d", &id) == 1 && id >= 0 && id < CPU_SETSIZE) {
+            CPU_SET(id, set);
             n++;
         }
     }
@@ -276,9 +274,10 @@ static int scheduling(void)
     static const int refused[] = {SCHED_BATCH, SCHED_IDLE, SCHED_DEADLINE, 4, 42};
     struct sched_param sp;
     struct timespec slice;
-    cpu_set_t set;
+    cpu_set_t set, online;
     unsigned int i, cpu = 99;
-    int cpus;
+    int cpus, id, last = -1, offline = -1;
+    long mask_bytes;
 
     if (sched_yield() != 0) {
         return fail("sched_yield did not return 0");
@@ -328,38 +327,48 @@ static int scheduling(void)
     if (sched_rr_get_interval(0, &slice) != 0 || slice.tv_sec != 0 || slice.tv_nsec != 10000000L) {
         return fail("the time slice is not one 10 ms tick");
     }
-    cpus = cpuinfo_count();
-    if (cpus < 1 || cpus >= 32) {
-        return fail("/proc/cpuinfo lists no processor, or 32 or more");
+    cpus = cpuinfo_ids(&online);
+    for (id = 0; id < 64; id++) {
+        if (CPU_ISSET(id, &online)) {
+            last = id;
+        } else if (offline < 0) {
+            offline = id;
+        }
     }
+    if (cpus < 1 || cpus > 64 || last >= 64) {
+        return fail("/proc/cpuinfo lists no processor, or one past the 64 the kernel has");
+    }
+    /* The mask's bytes as Linux rounds them, to longs enough for the
+       highest processor: four on i386 up to 32 processors and eight past
+       them, and eight on x86-64. */
+    mask_bytes = (long)((unsigned)last / (8u * sizeof(long)) + 1u) * (long)sizeof(long);
     memset(&set, 0xFF, sizeof(set));
-    if (sched_getaffinity(0, sizeof(set), &set) != 0 || CPU_COUNT(&set) != cpus ||
-        !CPU_ISSET(cpus - 1, &set)) {
-        return fail("the affinity is not every processor /proc/cpuinfo lists");
+    if (sched_getaffinity(0, sizeof(set), &set) != 0 || !CPU_EQUAL(&set, &online)) {
+        return fail("the affinity is not the processors /proc/cpuinfo lists");
     }
-    if (syscall(SYS_sched_getaffinity, 0L, (long)sizeof(set), &set) != (long)sizeof(long)) {
-        return fail("the raw sched_getaffinity did not return the " MASK_BYTES " bytes it wrote");
+    if (syscall(SYS_sched_getaffinity, 0L, (long)sizeof(set), &set) != mask_bytes) {
+        return fail("the raw sched_getaffinity did not return the bytes its mask takes");
     }
     if (syscall(SYS_sched_getaffinity, 0L, 3L, &set) != -1 || errno != EINVAL) {
         return fail("an affinity of three bytes was not refused with EINVAL");
     }
     CPU_ZERO(&set);
-    CPU_SET(cpus - 1, &set);
+    CPU_SET(last, &set);
     if (sched_setaffinity(0, sizeof(set), &set) != 0) {
         return fail("an affinity of the last processor was refused");
     }
     memset(&set, 0xFF, sizeof(set));
     if (sched_getaffinity(0, sizeof(set), &set) != 0 || CPU_COUNT(&set) != 1 ||
-        !CPU_ISSET(cpus - 1, &set)) {
+        !CPU_ISSET(last, &set)) {
         return fail("the affinity set is not the one read back");
     }
-    if (syscall(SYS_getcpu, &cpu, NULL, NULL) != 0 || cpu != (unsigned)(cpus - 1)) {
+    if (syscall(SYS_getcpu, &cpu, NULL, NULL) != 0 || cpu != (unsigned)last) {
         return fail("the caller did not move to the one processor of its affinity");
     }
     CPU_ZERO(&set);
-    CPU_SET(cpus, &set);
+    CPU_SET(offline < 0 ? 64 : offline, &set);
     if (sched_setaffinity(0, sizeof(set), &set) != -1 || errno != EINVAL) {
-        return fail("an affinity of a processor past the last was not refused with EINVAL");
+        return fail("an affinity of a processor that is not started was not refused with EINVAL");
     }
     memset(&set, 0xFF, sizeof(set));
     if (sched_setaffinity(0, sizeof(set), &set) != 0) {
