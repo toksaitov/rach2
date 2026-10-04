@@ -631,8 +631,47 @@ static int handler_mask(void)
     return usr1_by != 0 && usr2_by != 0 && usr1_by != usr2_by ? 0 : 1;
 }
 
+/** Print each thread of the process `pid` as /proc gives it: its state, the
+ * signals pending for it and for its process, and its blocked mask, so that
+ * a failed row says where a signal waits. */
+static void say_threads(pid_t pid)
+{
+    char path[64], line[128];
+    struct dirent *d;
+    DIR *dir;
+    FILE *f;
+
+    snprintf(path, sizeof(path), "/proc/%d/task", (int)pid);
+    dir = opendir(path);
+    if (!dir) {
+        return;
+    }
+    while ((d = readdir(dir)) != NULL) {
+        if (d->d_name[0] == '.') {
+            continue;
+        }
+        snprintf(path, sizeof(path), "/proc/%d/task/%s/status", (int)pid, d->d_name);
+        f = fopen(path, "r");
+        if (!f) {
+            continue;
+        }
+        printf("THREADMUSL THREAD %s:", d->d_name);
+        while (fgets(line, sizeof(line), f)) {
+            if (!strncmp(line, "State:", 6) || !strncmp(line, "SigPnd:", 7) ||
+                !strncmp(line, "ShdPnd:", 7) || !strncmp(line, "SigBlk:", 7)) {
+                line[strcspn(line, "\n")] = '\0';
+                printf(" %s", line);
+            }
+        }
+        printf("\n");
+        fclose(f);
+    }
+    closedir(dir);
+}
+
 /** `handler_mask` in a child, where no other thread of the probe can take
- * the two signals, judged by the child's status. */
+ * the two signals, judged by the child's status; a child that does not end
+ * has its threads printed (`say_threads`) before it is killed. */
 static int handler_mask_row(void)
 {
     int i, status = 0;
@@ -645,6 +684,7 @@ static int handler_mask_row(void)
         usleep(10000);
     }
     if (i == 2000) {
+        say_threads(pid);
         kill(pid, SIGKILL);
         waitpid(pid, &status, 0);
         return fail("a signal a handler's mask blocked did not wake the other thread");
