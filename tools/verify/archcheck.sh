@@ -22,7 +22,10 @@
 #   2. No shared file includes, through any chain, a header under an
 #      architecture's directory but its cpu.h through arch.h and its uabi.h
 #      through sys/arch/uabi.h, or the header of a platform's own file: what
-#      it calls there would not exist on another platform.
+#      it calls there would not exist on another platform. The chains are
+#      followed as each of the four architectures preprocesses them, i686,
+#      x86-64 and the two ARM ones, so that an include under `#if` for one
+#      processor is seen.
 #   3. No shared file has inline assembly. The one exception is the compiler
 #      barrier `k_barrier` in lib/kdef.h, which names no instruction.
 
@@ -69,8 +72,9 @@ for f in $(printf '%s\n' $platform | sort -u); do
 done
 
 for f in $shared; do
-    deps=$(clang --target=aarch64-none-elf -ffreestanding -ansi -MM "$f" 2>/dev/null |
-        sed 's/\\$//' | tr ' ' '\n' | sed -n 's|^\(\./\)*||p' | sort -u)
+    deps=$(for target in i686-none-elf x86_64-none-elf armv7a-none-eabi aarch64-none-elf; do
+        clang --target=$target -ffreestanding -ansi -MM "$f" 2>/dev/null
+    done | sed 's/\\$//' | tr ' ' '\n' | sed -n 's|^\(\./\)*||p' | sort -u)
     for d in $deps; do
         clean=$(echo "$d" | awk -F/ '{
             n = 0
