@@ -23,6 +23,9 @@
 # Usage: imagerace.sh MANIFEST OUT SIZE_MB TEST_IMAGE OS_REAL_IMAGE
 set -u
 MANIFEST=$1; OUT=$2; SIZE=$3; TESTIMG=$4; REALIMG=$5
+# The architecture's build tree, build or build/x86_64, the one the images
+# are in.
+BUILD=${TESTIMG%/images/*}
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$REPO" || exit 1
 fails=0
@@ -81,14 +84,15 @@ say "an image just built is not out of date: OK"
 # The shape of the fault of 2026-09-09: a suite writes a fixture below a staged
 # `exec-dir` while the set runs. The stager takes the executables of that one
 # directory and nothing beneath it, so a file in a directory below it may not
-# put the image out of date. The directory itself stays a prerequisite through
-# the image's `.d` file, since a program that appears in it is staged, so the
-# marker goes one level down and not beside the programs.
-mkdir -p build/tests/system/imagerace.d
-: > build/tests/system/imagerace.d/marker
+# put the image out of date. A file or a directory made beside the programs
+# may not either, since the image depends on the programs the directory
+# holds and not on its time (krffs/programs.sh); the tree below has those
+# rows, so that this suite does not put the shared image out of date.
+mkdir -p "$BUILD/tests/system/imagerace.d"
+: > "$BUILD/tests/system/imagerace.d/marker"
 stale=$(MAKEFLAGS='' make --no-print-directory -n "$TESTIMG" 2>&1 |
         grep -E "mkimage\.sh" | grep -c "$TESTIMG")
-rm -rf build/tests/system/imagerace.d
+rm -rf "$BUILD/tests/system/imagerace.d"
 [ "$stale" = 0 ] || bad "$TESTIMG went out of date for a file written below a staged directory"
 [ "$fails" = 0 ] || exit 1
 say "a file written below a staged directory does not put the image out of date: OK"
@@ -105,9 +109,9 @@ say "a file written below a staged directory does not put the image out of date:
 # one `make`, is proved with a real build against a copy of these makefiles
 # by imagerace_probe.sh at the end of this suite.
 db=$(MAKEFLAGS='' make --no-print-directory -p -n "$TESTIMG" 2>/dev/null)
-printf '%s\n' "$db" | grep -q "^build/tests/vmprobe: tests\$" ||
+printf '%s\n' "$db" | grep -q "^$BUILD/tests/vmprobe: tests\$" ||
     bad "a staged program does not wait for the component that builds it"
-printf '%s\n' "$db" | grep -q "^$TESTIMG:.* build/tests/vmprobe " ||
+printf '%s\n' "$db" | grep -q "^$TESTIMG:.* $BUILD/tests/vmprobe " ||
     bad "$TESTIMG does not name a program it stages among its prerequisites"
 [ "$fails" = 0 ] || exit 1
 say "an image names the programs it stages, and each waits for its component: OK"
@@ -130,6 +134,7 @@ cat > "$TREE/prog.c" <<'EOP'
 int main(void) { return 0; }
 const char words[] = "IMAGERACE FIRST WORDS";
 EOP
+mkdir -p "$TREE/bin"
 # The image tools run from the repository's root, as the Makefile does, so
 # the tree's makefile is run from there with the tree's paths under build/.
 # The program's rule is in a makefile of its own, as a component's is, so
@@ -139,12 +144,13 @@ IMG = $(TREE)/tree.krffs
 $(IMG): $(MANIFEST) $(shell sh krffs/manifest_deps.sh $(MANIFEST)) | prog
 	sh krffs/mkimage.sh $(MANIFEST) $@ 2
 -include $(IMG).d
+_ := $(shell sh krffs/programs.sh check $(wildcard $(IMG).programs))
 prog:
-	$(MAKE) --no-print-directory -f $(TREE)/prog.mk TREE=$(TREE) $(TREE)/prog
+	$(MAKE) --no-print-directory -f $(TREE)/prog.mk TREE=$(TREE) $(TREE)/bin/prog
 .PHONY: prog
 EOP
 cat > "$TREE/prog.mk" <<'EOP'
-$(TREE)/prog: $(TREE)/prog.c
+$(TREE)/bin/prog: $(TREE)/prog.c
 	cc -o $@ $(TREE)/prog.c
 EOP
 treemake() { MAKEFLAGS='' make --no-print-directory -f "$TREE/Makefile" TREE="$TREE" MANIFEST="$MANIFEST" "$@" > "$TREE/make.log" 2>&1; }
@@ -159,5 +165,25 @@ treemake "$TREE/tree.krffs" || bad "the tree's third build failed"
 grep -q "mkimage.sh" "$TREE/make.log" && bad "the image was rebuilt with nothing changed"
 [ "$fails" = 0 ] || exit 1
 say "a changed source reaches the image through exactly its target, and an unchanged one does not rebuild it: OK"
+
+# The staged directory judged by its programs: a proof's work directory and a
+# log made beside the program, which the stager does not take, leave the
+# image as it was; a second program made there restages it, and so does its
+# removal, once.
+sleep 1
+mkdir "$TREE/bin/work.proof"
+: > "$TREE/bin/notes.log"
+treemake "$TREE/tree.krffs" || bad "the build beside a work directory failed"
+grep -q "mkimage.sh" "$TREE/make.log" && bad "a work directory and a log beside the program rebuilt the image"
+cp "$TREE/bin/prog" "$TREE/bin/prog2"
+treemake "$TREE/tree.krffs" || bad "the build with a second program failed"
+grep -q "mkimage.sh" "$TREE/make.log" || bad "a second program beside the first did not rebuild the image"
+rm -f "$TREE/bin/prog2"
+treemake "$TREE/tree.krffs" || bad "the build after the second program went failed"
+grep -q "mkimage.sh" "$TREE/make.log" || bad "the second program's removal did not rebuild the image"
+treemake "$TREE/tree.krffs" || bad "the build after that failed"
+grep -q "mkimage.sh" "$TREE/make.log" && bad "the image was rebuilt again with nothing changed"
+[ "$fails" = 0 ] || exit 1
+say "a staged directory is judged by its programs: a work directory beside them does not rebuild the image, a program made or removed does: OK"
 sh tests/system/imagerace_probe.sh || exit 1
 say "PASS"

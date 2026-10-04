@@ -126,6 +126,26 @@ static const char *host_path(const char *path)
 }
 
 /**
+ * The file `STAGEIMAGE_DEPS` names, opened on the first call, or NULL when it
+ * names none.
+ */
+static FILE *deps_file(void)
+{
+    static FILE *file;
+    static int tried;
+
+    if (!tried) {
+        const char *name = getenv("STAGEIMAGE_DEPS");
+
+        tried = 1;
+        if (name != NULL && *name != '\0') {
+            file = fopen(name, "w");
+        }
+    }
+    return file;
+}
+
+/**
  * Record one host input path for the build's dependency tracking.
  *
  * When `STAGEIMAGE_DEPS` names a file, every host path the stager reads or
@@ -135,19 +155,21 @@ static const char *host_path(const char *path)
  */
 static void record_input(const char *path)
 {
-    static FILE *deps_file;
-    static int deps_tried;
-
-    if (!deps_tried) {
-        const char *name = getenv("STAGEIMAGE_DEPS");
-
-        deps_tried = 1;
-        if (name != NULL && *name != '\0') {
-            deps_file = fopen(name, "w");
-        }
+    if (deps_file() != NULL) {
+        fprintf(deps_file(), "%s\n", path);
     }
-    if (deps_file != NULL) {
-        fprintf(deps_file, "%s\n", path);
+}
+
+/**
+ * Record a directory `exec-dir` stages from, as a line of `exec-dir`, a tab
+ * and the path. The build judges such a directory by the programs in it
+ * (krffs/programs.sh) and not by its own time, which every file made beside
+ * the programs moves.
+ */
+static void record_exec_dir(const char *path)
+{
+    if (deps_file() != NULL) {
+        fprintf(deps_file(), "exec-dir\t%s\n", path);
     }
 }
 
@@ -880,7 +902,7 @@ static bool stage_exec_dir(struct krffs_file_system *file_system, const char *gu
     size_t i;
     bool ok = true;
 
-    record_input(hostdir);
+    record_exec_dir(hostdir);
     d = opendir(hostdir);
     if (d == NULL) {
         fprintf(stderr, "stageimage: cannot open host dir '%s'.\n", hostdir);

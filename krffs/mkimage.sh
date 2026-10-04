@@ -55,7 +55,7 @@ mkdir -p "$(dirname "$OUT")"
 # the rename is atomic.
 TMP="$OUT.new.$$"
 DEPS_TMP="$OUT.d.new.$$"
-trap 'rm -f "$TMP" "$DEPS_TMP" "$OUT.d.list.$$" "$OUT.d.$$"' EXIT INT TERM
+trap 'rm -f "$TMP" "$DEPS_TMP" "$OUT.d.list.$$" "$OUT.d.$$" "$OUT.programs.$$"' EXIT INT TERM
 dd if=/dev/zero of="$TMP" bs=1048576 count="$SIZE" 2>/dev/null
 "$TOOLS/mkfs.krffs" "$TMP" >/dev/null
 STAGED=$(STAGEIMAGE_DEPS="$DEPS_TMP" "$TOOLS/stageimage.krffs" "$MANIFEST" "$TMP")
@@ -83,6 +83,23 @@ fi
 "$SETIDCHECK" "$MANIFEST"
 "$SETIDCHECK" --image "$TMP" --manifest "$MANIFEST"
 
+# The programs staged from each `exec-dir` directory, which the dependency
+# file names in place of the directory (krffs/programs.sh). They are written
+# before the image is moved into place, so the image is the newer of the two.
+EXEC_DIRS=$(sed -n 's/^exec-dir	//p' "$DEPS_TMP" | sort -u | while IFS= read -r d; do
+    case "$d" in
+        (/*) printf '%s\n' "$d" ;;
+        (*) printf '%s\n' "$REPO/$d" ;;
+    esac
+done)
+if [ -n "$EXEC_DIRS" ]; then
+    # shellcheck disable=SC2086 # the directories, one word each
+    sh "$REPO/krffs/programs.sh" snapshot $EXEC_DIRS > "$OUT.programs.$$"
+    mv "$OUT.programs.$$" "$OUT.programs"
+else
+    rm -f "$OUT.programs"
+fi
+
 mv "$TMP" "$OUT"
 
 # Publish the staged inputs as a make dependency file beside the image, after
@@ -99,7 +116,7 @@ if [ -s "$DEPS_TMP" ]; then
     # such as `rach2` names the root Makefile's phony component target, and a
     # phony prerequisite is considered remade on every run, which would
     # restage the image forever.
-    sort -u "$DEPS_TMP" | while IFS= read -r p; do
+    grep -v '^exec-dir	' "$DEPS_TMP" | sort -u | while IFS= read -r p; do
         case "$p" in
             /*) ;;
             *) p="$REPO/$p" ;;
@@ -112,6 +129,7 @@ if [ -s "$DEPS_TMP" ]; then
             printf '%s\n' "$d"
         fi
     done | sort -u > "$DEPS_LIST"
+    [ -z "$EXEC_DIRS" ] || printf '%s\n' "$REPO/$OUT.programs" >> "$DEPS_LIST"
     {
         printf '%s:' "$OUT"
         while IFS= read -r p; do printf ' %s' "$p"; done < "$DEPS_LIST"

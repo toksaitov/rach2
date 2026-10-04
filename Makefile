@@ -661,10 +661,15 @@ release: $(RELEASE_GOALS)
 
 DEMO_CREDS = krffs/authorized_keys krffs/shadow
 
-IMAGE_TOOLS = krffs/mkimage.sh $(SETIDCHECK) tools/inspect/setid.allow \
+IMAGE_TOOLS = krffs/mkimage.sh krffs/programs.sh $(SETIDCHECK) tools/inspect/setid.allow \
               build/krffs/mkfs.krffs build/krffs/stageimage.krffs
 
 -include $(TEST_IMAGE).d $(OS_SIMPLE_IMAGE).d $(OS_REAL_IMAGE).d
+# An image's `exec-dir` directories are judged by the programs in them, which
+# IMAGE.programs records, and not by their own times, which a proof's work
+# directory made beside the programs moves (krffs/programs.sh). The record is
+# written again here, before make compares times, when the set has changed.
+_ := $(shell sh krffs/programs.sh check $(wildcard $(IMAGES_DIR)/*.programs))
 
 # The musl integration programs (tests/musl/*.c -> build/tests/musl/, or
 # build/x86_64/tests/musl/), built by their own script for the architecture
