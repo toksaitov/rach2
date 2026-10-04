@@ -22,6 +22,9 @@ tests/system/suites/ssh.sh: a holder keeps a flood writer open until the flood i
 tests/system/suites/ssh.sh: the forty connections are counted once the guest has taken them
 tests/system/suites/ssh.sh: the next reading of a count that only the guest advances
 tests/system/suites/ssh.sh: the next reading, while the released connections close
+tests/system/suites/uefi.sh: the server starts after the login prompt
+tests/system/suites/uefi.sh: the dump is written whole by then, or still growing
+tests/system/suites/uefi.sh: the monitor takes the command between the guest's work
 tests/system/suites/drill.sh: a holder keeps the console's feed open while the machine runs
 tests/system/suites/grub.sh: a holder keeps the console's feed open while the machine runs
 tests/system/suites/install.sh: a holder keeps the console's feed open while the machine runs
