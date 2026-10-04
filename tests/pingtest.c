@@ -191,31 +191,90 @@ static int ping(uint32_t ip)
     return socketcall(SC_PING, args);
 }
 
+/** Test 1: three pings to the gateway all get replies. Prints the verdict
+ * and returns 1 when the test passed. */
+static int gateway_replies(void)
+{
+    int i;
+
+    for (i = 0; i < 3; i++) {
+        if (ping(GATEWAY_IP) < 0) {
+            puts("FAILED (no reply)");
+            return 0;
+        }
+    }
+    puts("OK");
+    return 1;
+}
+
+/**
+ * The child of test 3: ping an address nobody answers, send the length of
+ * the call through `ready`, and exit 0 only when the ping returned exactly
+ * -ETIMEDOUT. Does not return.
+ */
+static void dead_ping_child(int ready[2])
+{
+    long began, ms;
+    int rtt;
+
+    sys_close(ready[0]);
+    /* The byte goes out immediately before the call, so what the parent
+     * waits on is the child being about to be inside it. */
+    sys_write(ready[1], "p", 1);
+    began = now_ms();
+    rtt = ping(UNREACHABLE_IP);
+    ms = now_ms() - began;
+    /* The call's own length goes back through the pipe, since a status
+     * carries eight bits and the parent's clock starts after the child is
+     * already inside the call. */
+    sys_write(ready[1], &ms, sizeof(ms));
+    sys_close(ready[1]);
+    /* Exactly the timeout, not merely a failure: a wrong errno here would
+     * otherwise be scored as a pass. */
+    sys_exit(rtt == PING_ETIMEDOUT ? 0 : 3);
+}
+
+/** Test 4: a data ping of 1473 bytes, and on x86-64 one of a size past 32
+ * bits, is refused with EMSGSIZE. Prints the verdict and returns 1 when the
+ * test passed. */
+static int data_ping_refused(void)
+{
+    unsigned long args[3];
+    int r1, r2 = -EMSGSIZE;
+
+    args[0] = GATEWAY_IP;
+    args[1] = 1473;
+    args[2] = 64;
+    r1 = socketcall(SC_PING_DATA, args);
+#if defined __x86_64__
+    args[1] = 0x100000001UL;
+    r2 = socketcall(SC_PING_DATA, args);
+#endif
+    if (r1 == -EMSGSIZE && r2 == -EMSGSIZE) {
+        puts("OK");
+        return 1;
+    }
+    print("FAILED (");
+    print_num(r1);
+    print(", ");
+    print_num(r2);
+    puts(")");
+    return 0;
+}
+
 PROBE_START void _start(void)
 {
-    int passed = 0, failed = 0, i, rtt;
+    int passed = 0, failed = 0, rtt;
 
     puts("ICMP ping test starting...");
     puts("");
 
     /* Test 1: three pings to the gateway should all get replies. */
     print("Test 1: ping 10.0.2.2 x3... ");
-    {
-        int ok = 1;
-        for (i = 0; i < 3; i++) {
-            rtt = ping(GATEWAY_IP);
-            if (rtt < 0) {
-                ok = 0;
-                break;
-            }
-        }
-        if (ok) {
-            puts("OK");
-            passed++;
-        } else {
-            puts("FAILED (no reply)");
-            failed++;
-        }
+    if (gateway_replies()) {
+        passed++;
+    } else {
+        failed++;
     }
 
     /* Test 2: an unreachable host must time out cleanly, not hang. */
@@ -241,7 +300,7 @@ PROBE_START void _start(void)
         int reaped;
         int busy;
         long began, ended, live_span = 0, last_live = 0;
-        long child_began, child_ms = 0;
+        long child_ms = 0;
         char token = 0;
         int ok = 1;
         const char *why = "";
@@ -252,21 +311,7 @@ PROBE_START void _start(void)
         } else {
             child = sys_fork();
             if (child == 0) {
-                sys_close(ready[0]);
-                /* The byte goes out immediately before the call, so what the
-                 * parent waits on is the child being about to be inside it. */
-                sys_write(ready[1], "p", 1);
-                child_began = now_ms();
-                rtt = ping(UNREACHABLE_IP);
-                child_ms = now_ms() - child_began;
-                /* The call's own length goes back through the pipe, since
-                 * a status carries eight bits and the parent's clock
-                 * starts after the child is already inside the call. */
-                sys_write(ready[1], &child_ms, sizeof(child_ms));
-                sys_close(ready[1]);
-                /* Exactly the timeout, not merely a failure: a wrong errno
-                 * here would otherwise be scored as a pass. */
-                sys_exit(rtt == PING_ETIMEDOUT ? 0 : 3);
+                dead_ping_child(ready);
             }
             sys_close(ready[1]);
             if (child < 0) {
@@ -360,29 +405,10 @@ PROBE_START void _start(void)
 
     /* Test 4: a data ping past its 1472 bytes is refused before it is sent. */
     print("Test 4: a data ping past 1472 bytes is refused... ");
-    {
-        unsigned long args[3];
-        int r1, r2 = -EMSGSIZE;
-
-        args[0] = GATEWAY_IP;
-        args[1] = 1473;
-        args[2] = 64;
-        r1 = socketcall(SC_PING_DATA, args);
-#if defined __x86_64__
-        args[1] = 0x100000001UL;
-        r2 = socketcall(SC_PING_DATA, args);
-#endif
-        if (r1 == -EMSGSIZE && r2 == -EMSGSIZE) {
-            puts("OK");
-            passed++;
-        } else {
-            print("FAILED (");
-            print_num(r1);
-            print(", ");
-            print_num(r2);
-            puts(")");
-            failed++;
-        }
+    if (data_ping_refused()) {
+        passed++;
+    } else {
+        failed++;
     }
 
     puts("");
