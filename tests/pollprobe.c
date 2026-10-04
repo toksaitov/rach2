@@ -103,6 +103,49 @@ static void msleep(int ms)
     syscall2(SYS_NANOSLEEP, (long)&ts, 0);
 }
 
+#if defined __x86_64__
+/* The state letter of process `pid`, from the field after the name in
+   /proc/<pid>/stat, or 0 when it cannot be read. */
+static char state_of(int pid)
+{
+    static char path[32], text[256];
+    char digits[12];
+    int n = 0, i = 0, fd, len;
+
+    do {
+        digits[n++] = (char)('0' + pid % 10);
+        pid /= 10;
+    } while (pid > 0 && n < 11);
+    path[i++] = '/';
+    path[i++] = 'p';
+    path[i++] = 'r';
+    path[i++] = 'o';
+    path[i++] = 'c';
+    path[i++] = '/';
+    while (n > 0) {
+        path[i++] = digits[--n];
+    }
+    path[i++] = '/';
+    path[i++] = 's';
+    path[i++] = 't';
+    path[i++] = 'a';
+    path[i++] = 't';
+    path[i] = '\0';
+    fd = (int)syscall3(SYS_OPEN, (long)path, 0, 0);
+    if (fd < 0) {
+        return 0;
+    }
+    len = (int)syscall3(SYS_READ, fd, (long)text, (int)sizeof(text));
+    syscall1(SYS_CLOSE, fd);
+    for (i = 0; i + 2 < len; i++) {
+        if (text[i] == ')' && text[i + 1] == ' ') {
+            return text[i + 2];
+        }
+    }
+    return 0;
+}
+#endif
+
 PROBE_START void _start(void)
 {
     int a[2], b[2];
@@ -229,15 +272,21 @@ PROBE_START void _start(void)
     }
 
 #if defined __x86_64__
-    /* (h) a ppoll timeout past 32 bits of seconds. */
+    /* (h) a ppoll timeout past 32 bits of seconds. The child writes only once
+     * the parent is asleep, in the call: a timeout cut to zero would return
+     * at once and never sleep, and the child writes after two seconds
+     * anyway, so that such a parent is not left waiting for it. */
     {
         long ts[2] = {4294967296L, 0};
-        int c[2];
+        int c[2], parent, tries;
 
         check(do_pipe(c) == 0, "pipe for the ppoll row");
         pid = syscall0(SYS_FORK);
         if (pid == 0) {
-            msleep(50);
+            parent = (int)syscall0(SYS_GETPPID);
+            for (tries = 0; tries < 200 && state_of(parent) != 'S'; tries++) {
+                msleep(10);
+            }
             syscall3(SYS_WRITE, c[1], (long)"x", 1);
             sys_exit(0);
         }
