@@ -125,8 +125,10 @@ static void power_reset_settle(void)
  * in legacy mode, SCI_EN clear, is asked into ACPI mode first through the
  * FADT's SMI command, which some chipsets want before they honour SLP_EN;
  * the wait for it is bounded, since a firmware that does not answer must not
- * stop the power off. A hardware-reduced machine has no PM1 registers and
- * takes the sleep type and its enable in its sleep control register.
+ * stop the power off, and interrupts are off (`power_stop`), so the SCI the
+ * change may raise is not taken. A hardware-reduced machine has no PM1
+ * registers and takes the sleep type and its enable in its sleep control
+ * register.
  */
 static void power_acpi_s5(void)
 {
@@ -404,8 +406,13 @@ void power_stop(int how)
      * the hardware refuses and the person is looking at a laptop that is still
      * on with no way left to ask why. There is no log to read afterwards. */
     klog_set_screen_level(KLOG_INFO);
-    /* One processor stops the machine; the others stop first, so that none
-     * goes on writing to a disk or a device the stop leaves behind. */
+    /* Interrupts stay off from here, as Linux's `acpi_power_off` has them:
+     * entering ACPI mode can raise the SCI, whose source no handler here
+     * clears, and a level-triggered line it shares with a device would
+     * interrupt the processor for good before it reached SLP_EN. One
+     * processor stops the machine; the others stop first, so that none goes
+     * on writing to a disk or a device the stop leaves behind. */
+    arch_irq_disable();
     smp_stop_others();
 
     if (how == POWER_OFF) {
