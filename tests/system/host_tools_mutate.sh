@@ -147,7 +147,7 @@ if kind == 'ring':
             'if (file_system.node->magic != KRFFS_File_System_Magic)')
 elif kind == 'temporary':
     start = s.index('VDIR=')
-    end = s.index('LIBC=', start)
+    end = s.index("printf 'verify-style: logs", start)
     s = s[:start] + 'VDIR=/tmp/rach2_verify\nmkdir -p "$VDIR"\n' + s[end:]
 elif kind in ('gap-growth', 'gap-slack'):
     start = s.index('int krffs_write(')
