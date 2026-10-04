@@ -11,7 +11,9 @@
 # host suite does; without, it also compiles each fault in, requires its row
 # to fail, and requires the restored source to pass again. The faults are
 # every record without an address space passed by, as a kernel thread is;
-# the record another reaper has waited for; and the kernel thread waited for.
+# the record another reaper has waited for; the kernel thread waited for;
+# and the wait for an interrupt with the big lock let go taken out, which
+# leaves a process running on another processor running.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
@@ -99,7 +101,7 @@ PY
 echo "endothers-proof: logs: $work"
 run_phase fixed 0 'endothers-proof: result: pass:'
 [ "$#" -eq 0 ] || exit 0
-for fault in ending-passed unused-waited kthread-waited; do
+for fault in ending-passed unused-waited kthread-waited held; do
     python3 - "$work/syscall_proc.c" "$fault" <<'PY'
 from pathlib import Path
 import sys
@@ -112,6 +114,8 @@ changes = {
     'unused-waited': '                alive += p->in_syscall != 0;\n',
     'kthread-waited': '                alive += p->state != PROC_UNUSED;\n',
 }
+if sys.argv[2] == 'held':
+    count, changes['held'] = '        idle_wait_irq_on();\n', '        if (0) {\n            idle_wait_irq_on();\n        }\n'
 start = text.index('static void proc_end_others(void)\n{')
 end = text.index('\n}\n', start)
 body = text[start:end]
@@ -124,7 +128,7 @@ PY
         ending-passed)
             message='endothers-proof: fail: a process in the call that ends it is waited for until it is a zombie and reaped'
             ;;
-        unused-waited | kthread-waited)
+        unused-waited | kthread-waited | held)
             message='endothers-proof: fail: the walk waits for a record that never ends'
             ;;
     esac
@@ -133,4 +137,4 @@ PY
     run_phase "$fault-restored" 0 'endothers-proof: result: pass:'
     cmp "$work/syscall_proc.saved" "$work/syscall_proc.c"
 done
-echo 'endothers-proof: result: pass: the three faults failed their rows and the restored source passed'
+echo 'endothers-proof: result: pass: the four faults failed their rows and the restored source passed'

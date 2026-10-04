@@ -101,6 +101,21 @@ static void schedule(void)
     }
 }
 
+/** Wait for an interrupt with the big lock let go: a process sent SIGKILL
+ * while it runs on another processor takes the signal there, in an
+ * interrupt that needs the lock, and ends. */
+static void idle_wait_irq_on(void)
+{
+    process_t *p;
+
+    for (p = proc_list; p; p = p->next) {
+        if (p != current_proc && p->state == PROC_RUNNING && p->signalled == SIGKILL) {
+            p->state = PROC_ZOMBIE;
+            p->space_root = 0;
+        }
+    }
+}
+
 #include "endothers.inc"
 
 static struct thread_group groups[5];
@@ -161,6 +176,14 @@ int main(void)
     proc_end_others();
     check(running.signalled == SIGKILL && running.released == 1,
           "a process that runs in its address space is sent SIGKILL and reaped");
+    kept();
+
+    begin();
+    add(&running, 3, 8, 0x2000, 0, PROC_RUNNING);
+    proc_end_others();
+    check(running.signalled == SIGKILL && running.released == 1,
+          "a process running on another processor takes its SIGKILL while init waits with the "
+          "big lock let go, and is reaped");
     kept();
 
     if (!fails) {
