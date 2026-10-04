@@ -406,6 +406,49 @@ static void bcd_sample(rtc_snapshot_t *raw, int year, int month, int day, int ho
     raw->status_d = RTC_STATUS_D_VALID;
 }
 
+/**
+ * Check `rtc_time_from_anchor`, which measures real time from the clock's
+ * reading at boot.
+ *
+ * A clock read at tick 500 saying 1000, asked again at tick 700, is 1002: two
+ * seconds later, not seven. Adding every tick since boot would answer 1007
+ * here, and on a real boot that error is under a second, which is why it is
+ * stated as arithmetic, not left to a tolerance.
+ */
+static void anchor_rows(void)
+{
+    long long sec = 0;
+    long long nsec = 0;
+
+    rtc_time_from_anchor(1000LL, 5u, 7u, 0u, &sec, &nsec);
+    CHECK(sec == 1002LL);
+    CHECK(nsec == 0LL);
+
+    /* Part of a second survives as nanoseconds: 55 ticks is 550 ms. */
+    rtc_time_from_anchor(1000LL, 5u, 7u, 55u, &sec, &nsec);
+    CHECK(sec == 1002LL);
+    CHECK(nsec == 550000000LL);
+
+    /* No anchor at all is time since boot, which is what a machine with no
+     * readable clock reports and what this system reported before. */
+    rtc_time_from_anchor(0LL, 0u, 2u, 50u, &sec, &nsec);
+    CHECK(sec == 2LL);
+    CHECK(nsec == 500000000LL);
+
+    /* An uptime of a whole tick cycle. This is the case that made the
+     * anchor count seconds, not ticks: 2^32 ticks after the anchor,
+     * a difference of TICKS is zero again and real time jumps back 497
+     * days. Counted in seconds, 42949672 seconds later is 42949672 seconds
+     * later. */
+    rtc_time_from_anchor(1000LL, 0u, 42949672u, 0u, &sec, &nsec);
+    CHECK(sec == 1000LL + 42949672LL);
+
+    /* And the seconds counter's own wrap, 136 years out, still reads as
+     * elapsed time, not as a jump backwards. */
+    rtc_time_from_anchor(1000LL, 0xFFFFFFF0u, 0x00000009u, 0u, &sec, &nsec);
+    CHECK(sec == 1000LL + 25LL);
+}
+
 int main(void)
 {
     rtc_snapshot_t raw;
@@ -536,43 +579,7 @@ int main(void)
     raw.status_a = 0; /* the divider is not the running one */
     CHECK(rtc_decode(&raw, &seconds, &when) != 0);
 
-    /* The anchor. A clock read at tick 500 saying 1000, asked again at tick
-     * 700, is 1002: two seconds later, not seven. Adding every tick since boot
-     * would answer 1007 here, and on a real boot that error is under a second,
-     * which is why it is stated as arithmetic, not left to a tolerance.
-     */
-    {
-        long long sec = 0;
-        long long nsec = 0;
-
-        rtc_time_from_anchor(1000LL, 5u, 7u, 0u, &sec, &nsec);
-        CHECK(sec == 1002LL);
-        CHECK(nsec == 0LL);
-
-        /* Part of a second survives as nanoseconds: 55 ticks is 550 ms. */
-        rtc_time_from_anchor(1000LL, 5u, 7u, 55u, &sec, &nsec);
-        CHECK(sec == 1002LL);
-        CHECK(nsec == 550000000LL);
-
-        /* No anchor at all is time since boot, which is what a machine with no
-         * readable clock reports and what this system reported before. */
-        rtc_time_from_anchor(0LL, 0u, 2u, 50u, &sec, &nsec);
-        CHECK(sec == 2LL);
-        CHECK(nsec == 500000000LL);
-
-        /* An uptime of a whole tick cycle. This is the case that made the
-         * anchor count seconds, not ticks: 2^32 ticks after the anchor,
-         * a difference of TICKS is zero again and real time jumps back 497
-         * days. Counted in seconds, 42949672 seconds later is 42949672 seconds
-         * later. */
-        rtc_time_from_anchor(1000LL, 0u, 42949672u, 0u, &sec, &nsec);
-        CHECK(sec == 1000LL + 42949672LL);
-
-        /* And the seconds counter's own wrap, 136 years out, still reads as
-         * elapsed time, not as a jump backwards. */
-        rtc_time_from_anchor(1000LL, 0xFFFFFFF0u, 0x00000009u, 0u, &sec, &nsec);
-        CHECK(sec == 1000LL + 25LL);
-    }
+    anchor_rows();
 
     /* Two samples of one clock, which is what the boot read takes before it
      * decodes either. The registers advance while they are being read, so a
