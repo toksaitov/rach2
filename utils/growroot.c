@@ -432,6 +432,38 @@ static int grow_mbr(int disk, int entry, unsigned long want_id, const struct par
 }
 
 /**
+ * The first sector the growth of entry `entry` of `t`, which ends before
+ * `end`, may not reach: the start of the next used entry after it, or else
+ * the backup array of a table at the disk's end, into `*limit`. Returns 0,
+ * or the number of another used entry that starts before `end` and ends at
+ * or after it, which lies in the space the growth would take: the kernel
+ * publishes neither of two entries that overlap, so nothing else stops the
+ * file system's growth from writing over it.
+ */
+static int gpt_limit(struct gptdisk *t, int entry, unsigned long long end,
+                     unsigned long long *limit)
+{
+    int n;
+
+    *limit = t->sectors - 1 - (t->entries * t->entry_size + GPTDISK_SECTOR - 1) / GPTDISK_SECTOR;
+    for (n = 1; n <= (int)t->entries; n++) {
+        const unsigned char *o = gptdisk_entry(t, n);
+
+        if (n == entry || !gptdisk_used(o)) {
+            continue;
+        }
+        if (gptdisk_le64(o + 32) < end) {
+            if (gptdisk_le64(o + 40) >= end) {
+                return n;
+            }
+        } else if (gptdisk_le64(o + 32) < *limit) {
+            *limit = gptdisk_le64(o + 32);
+        }
+    }
+    return 0;
+}
+
+/**
  * Rewrite entry `entry` of the GUID table of `disk` to reach the next
  * partition or the sector before the backup table, with the backup moved to
  * the disk's last sectors. The table is read again through the writer's
@@ -446,8 +478,8 @@ static int grow_gpt(int disk, int entry, const unsigned char *want_guid, const s
     unsigned long long limit;
     const char *why = "";
     unsigned char *e;
-    char dev[32], part_node[32];
-    int fd, n;
+    char dev[32], part_node[32], detail[80];
+    int fd, over;
 
     snprintf(dev, sizeof(dev), "/dev/disk%d", disk);
     snprintf(part_node, sizeof(part_node), "/dev/disk%dp%d", disk, entry);
@@ -466,15 +498,12 @@ static int grow_gpt(int disk, int entry, const unsigned char *want_guid, const s
         close(fd);
         return fail(part_node, "not a Linux file system's entry");
     }
-    limit = disk_sectors[disk] - 1 -
-            (gpt_table.entries * gpt_table.entry_size + GPTDISK_SECTOR - 1) / GPTDISK_SECTOR;
-    for (n = 1; n <= (int)gpt_table.entries; n++) {
-        const unsigned char *o = gptdisk_entry(&gpt_table, n);
-
-        if (n != entry && gptdisk_used(o) && gptdisk_le64(o + 32) >= end &&
-            gptdisk_le64(o + 32) < limit) {
-            limit = gptdisk_le64(o + 32);
-        }
+    over = gpt_limit(&gpt_table, entry, end, &limit);
+    if (over != 0) {
+        close(fd);
+        snprintf(detail, sizeof(detail),
+                 "entry %d reaches into the space after it; nothing written", over);
+        return fail(part_node, detail);
     }
     if (limit < end) {
         close(fd);

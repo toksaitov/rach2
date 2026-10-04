@@ -40,6 +40,10 @@ sector before the backup table, placed at the disk's last 33 sectors, and
 the backup is moved there in the same write if it is elsewhere, as
 .Ql diskctl relocate
 moves it.
+Another used entry that starts inside the partition and ends past it lies
+in the space the growth would take, and stops the growth: the kernel
+publishes neither of two overlapping entries, so nothing else would keep
+the file system from growing over it.
 An entry already at that size, on a table whose backup is already at the
 disk's end, is left unchanged.
 Nothing is moved and no other partition is changed.
@@ -140,6 +144,9 @@ The GUID table's entry has another type.
 .It Ql the table changed while this was deciding; nothing written
 The table read through the writer's descriptor differs from the one the
 decision was made on.
+.It Ql entry N reaches into the space after it; nothing written
+Another used entry of the GUID table starts inside the partition and ends
+past it.
 .It Ql a partition reaches past where the backup table would go
 A GUID table's partition lies in the disk's last 33 sectors.
 .It Ql the whole-disk node does not reach the disk's last sector

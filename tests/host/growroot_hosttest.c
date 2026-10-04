@@ -303,6 +303,47 @@ static void measured_run(void)
     fclose(output);
 }
 
+/** Put entry `n` of `t` over sectors `first` to `last`, used, or clear it. */
+static void gpt_entry(struct gptdisk *t, int n, unsigned long long first, unsigned long long last)
+{
+    unsigned char *e = gptdisk_entry(t, n);
+
+    memset(e, 0, 128);
+    if (last >= first) {
+        memset(e, 0xAF, 16);
+        gptdisk_put64(e + 32, first);
+        gptdisk_put64(e + 40, last);
+    }
+}
+
+/**
+ * Bound a GUID table's root, entry 3 over sectors 2048 to 18431 of 131072,
+ * by the entries beside it: one starting in the root and ending past it lies
+ * in the growth and stops the grow; one after it bounds the growth; with
+ * neither, the growth reaches the backup array at the disk's end.
+ */
+static void gpt_bounds(void)
+{
+    static struct gptdisk t;
+    unsigned long long limit = 0;
+
+    memset(&t, 0, sizeof(t));
+    t.sectors = 131072;
+    t.entries = 128;
+    t.entry_size = 128;
+    gpt_entry(&t, 1, 34, 2047);
+    gpt_entry(&t, 3, 2048, 18431);
+    gpt_entry(&t, 4, 18000, 32767);
+    CHECK(gpt_limit(&t, 3, 18432, &limit) == 4,
+          "an entry from inside the root into the space after it stops the grow");
+    gpt_entry(&t, 4, 18432, 32767);
+    CHECK(gpt_limit(&t, 3, 18432, &limit) == 0 && limit == 18432,
+          "an entry right after the root bounds the growth");
+    gpt_entry(&t, 4, 1, 0);
+    CHECK(gpt_limit(&t, 3, 18432, &limit) == 0 && limit == 131072 - 1 - 32,
+          "with none after it, the growth reaches the backup array");
+}
+
 /** Cover successful publication, read failures and each checked table field. */
 int main(void)
 {
@@ -362,11 +403,13 @@ int main(void)
     put32(current + 462 + 12, 4096);
     refused("an extended partition in the grow space makes no write");
     measured_run();
+    gpt_bounds();
     munmap(meter, sizeof(*meter));
     fclose(shared);
     if (failures) {
         return 1;
     }
-    puts("growroot-test: result: ten table cases and four measured phases passed");
+    puts("growroot-test: result: ten table cases, three GUID table bounds and four measured "
+         "phases passed");
     return 0;
 }
