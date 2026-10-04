@@ -35,6 +35,7 @@
 #include "../../lib/kirq.h"
 #include "kcpu.h"
 #include "../../mm/paging.h"
+#include "../../proc/percpu.h"
 
 #define IA32_APIC_BASE   0x1B
 #define APIC_BASE_ENABLE (1u << 11)
@@ -76,7 +77,10 @@ static volatile uint32_t *apic;
 static const struct lapic_io *io;
 static uint32_t apic_id;
 static int ready;
-static uint32_t spurious_count;
+
+/* The spurious vectors each processor took, in a word of its own, since the
+ * handler runs without a lock on every processor. */
+static uint32_t spurious_count[NR_CPUS];
 
 void lapic_set_io(const struct lapic_io *ops)
 {
@@ -242,12 +246,18 @@ void lapic_eoi(void)
  */
 void lapic_spurious(void)
 {
-    spurious_count++;
+    spurious_count[arch_cpu_id()]++;
 }
 
 uint32_t lapic_spurious_count(void)
 {
-    return spurious_count;
+    uint32_t sum = 0;
+    int i;
+
+    for (i = 0; i < NR_CPUS; i++) {
+        sum += spurious_count[i];
+    }
+    return sum;
 }
 
 /**
