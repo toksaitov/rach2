@@ -719,21 +719,28 @@ static void tcp_loop(void)
 #define LOOP_RING_SLOTS 48u
 #define LOOP_PEAK_FLOOR 8u
 
-/* One unsigned counter of /proc/stat, by name. */
+/* One unsigned counter of /proc/stat, by name. The file is read to its end,
+ * since it has a line for each processor before the network's counters: 64
+ * of them pass 2 KiB. */
 static uint32_t proc_stat_u32(const char *key, int keylen)
 {
     int fd = sys_open("/proc/stat", O_RDONLY, 0);
-    static char buf[2048];
+    static char buf[32768];
     uint32_t v = 0;
-    int n, i;
+    int n = 0, got, i;
 
     if (fd < 0) {
         fail("opening /proc/stat");
     }
-    n = sys_read(fd, buf, (int)sizeof(buf) - 1);
+    while ((got = sys_read(fd, buf + n, (int)sizeof(buf) - 1 - n)) > 0) {
+        n += got;
+    }
     sys_close(fd);
-    if (n <= 0) {
+    if (got < 0 || n <= 0) {
         fail("reading /proc/stat");
+    }
+    if (n == (int)sizeof(buf) - 1) {
+        fail("/proc/stat is longer than the probe's buffer");
     }
     buf[n] = 0;
     for (i = 0; i + keylen < n; i++) {

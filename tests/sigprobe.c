@@ -186,19 +186,23 @@ static int number_after(const char *text, int len, const char *key)
     return -1;
 }
 
-/** The kernel's count of the sleeps a signal cut short, or -1. */
+/** The kernel's count of the sleeps a signal cut short, or -1. /proc/stat is
+ * read to its end, since it has a line for each processor before the
+ * count: 64 of them pass 2 KiB. */
 static int sleeps_cut_short(void)
 {
-    static char text[2048];
+    static char text[32768];
     int fd = syscall3(SYS_OPEN, (long)"/proc/stat", O_RDONLY, 0);
-    int n;
+    int n = 0, got;
 
     if (fd < 0) {
         return -1;
     }
-    n = syscall3(SYS_READ, fd, (long)text, (int)sizeof(text));
+    while ((got = syscall3(SYS_READ, fd, (long)(text + n), (int)sizeof(text) - n)) > 0) {
+        n += got;
+    }
     syscall1(SYS_CLOSE, fd);
-    if (n <= 0) {
+    if (got < 0 || n <= 0 || n == (int)sizeof(text)) {
         return -1;
     }
     return number_after(text, n, "sleeps_interrupted ");

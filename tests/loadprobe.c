@@ -142,19 +142,22 @@ static void reader(int report)
     }
 }
 
-/* A field of /proc/stat, or 0xFFFFFFFF when absent. */
+/* A field of /proc/stat, or 0xFFFFFFFF when absent, the file read to its
+   end past a line for each processor. */
 static unsigned file_field(const char *path, const char *key)
 {
-    static char text[4096];
+    static char text[32768];
     int fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
-    int n, i;
+    int n = 0, got, i;
 
     if (fd < 0) {
         return 0xFFFFFFFFu;
     }
-    n = syscall3(SYS_READ, fd, (long)text, (int)sizeof(text) - 1);
+    while ((got = syscall3(SYS_READ, fd, (long)(text + n), (int)sizeof(text) - 1 - n)) > 0) {
+        n += got;
+    }
     syscall1(SYS_CLOSE, fd);
-    if (n <= 0) {
+    if (got < 0 || n <= 0 || n == (int)sizeof(text) - 1) {
         return 0xFFFFFFFFu;
     }
     text[n] = 0;
