@@ -584,6 +584,15 @@ static int elf32_loads(const uint8_t *image, uint32_t present, uint32_t size, ch
 }
 
 /**
+ * The addresses of a load given in place of program headers: where the
+ * multiboot header is to be loaded, where the copy starts and ends, where
+ * the zeroed memory ends, and the entry point, all physical.
+ */
+struct load_addresses {
+    uint32_t header_addr, load_addr, load_end, bss_end, entry;
+};
+
+/**
  * Judge a load given by addresses in place of program headers, as the a.out
  * kludge of a Multiboot header and the address and entry tags of a
  * multiboot2 one give it: the file from the header's offset `off` less the
@@ -598,19 +607,19 @@ static int elf32_loads(const uint8_t *image, uint32_t present, uint32_t size, ch
  * its own size, so the copy would be judged against one length and loaded
  * at another; such a load is refused.
  */
-static int address_load(uint32_t off, uint32_t size, uint32_t header_addr, uint32_t load_addr,
-                        uint32_t load_end, uint32_t bss_end, uint32_t entry, char *err,
+static int address_load(const struct load_addresses *a, uint32_t off, uint32_t size, char *err,
                         size_t errlen)
 {
+    uint32_t load_addr = a->load_addr, load_end = a->load_end;
     uint32_t file_start, copied;
 
     if (load_addr < 0x100000u) {
         return fail(err, errlen, "the load sits below the megabyte");
     }
-    if (header_addr < load_addr || header_addr - load_addr > off) {
+    if (a->header_addr < load_addr || a->header_addr - load_addr > off) {
         return fail(err, errlen, "the multiboot header lies outside its load");
     }
-    file_start = off - (header_addr - load_addr);
+    file_start = off - (a->header_addr - load_addr);
     if (load_end == 0) {
         return fail(err, errlen, "the load runs to the end of the file, which the slot pads");
     }
@@ -618,10 +627,10 @@ static int address_load(uint32_t off, uint32_t size, uint32_t header_addr, uint3
         return fail(err, errlen, "the load leaves the file");
     }
     copied = load_end - load_addr;
-    if (bss_end != 0 && bss_end < load_addr + copied) {
+    if (a->bss_end != 0 && a->bss_end < load_addr + copied) {
         return fail(err, errlen, "the zeroed memory ends inside the load");
     }
-    if (entry < load_addr || entry - load_addr >= copied) {
+    if (a->entry < load_addr || a->entry - load_addr >= copied) {
         return fail(err, errlen, "the entry point is outside the load");
     }
     return 0;
@@ -631,9 +640,14 @@ static int address_load(uint32_t off, uint32_t size, uint32_t header_addr, uint3
  * with the a.out kludge (`address_load`). */
 static int kludge_load(const uint8_t *image, uint32_t off, uint32_t size, char *err, size_t errlen)
 {
-    return address_load(off, size, le32(image + off + 12), le32(image + off + 16),
-                        le32(image + off + 20), le32(image + off + 24), le32(image + off + 28), err,
-                        errlen);
+    struct load_addresses a;
+
+    a.header_addr = le32(image + off + 12);
+    a.load_addr = le32(image + off + 16);
+    a.load_end = le32(image + off + 20);
+    a.bss_end = le32(image + off + 24);
+    a.entry = le32(image + off + 28);
+    return address_load(&a, off, size, err, errlen);
 }
 
 /**
@@ -675,6 +689,7 @@ static int multiboot2_tags(const uint8_t *image, uint32_t off, uint32_t size, in
 {
     const uint8_t *h = image + off;
     uint32_t len = le32(h + 8), at = 16, address = 0, entry = 0;
+    struct load_addresses a;
 
     for (;;) {
         uint32_t type, tag_size;
@@ -709,9 +724,43 @@ static int multiboot2_tags(const uint8_t *image, uint32_t off, uint32_t size, in
     if (address == 0) {
         return 0;
     }
-    return address_load(off, size, le32(h + address + 8), le32(h + address + 12),
-                        le32(h + address + 16), le32(h + address + 20), le32(h + entry + 8), err,
-                        errlen);
+    a.header_addr = le32(h + address + 8);
+    a.load_addr = le32(h + address + 12);
+    a.load_end = le32(h + address + 16);
+    a.bss_end = le32(h + address + 20);
+    a.entry = le32(h + entry + 8);
+    return address_load(&a, off, size, err, errlen);
+}
+
+/**
+ * Judge the ELF header of a kernel in the first `present` bytes: the
+ * signature, class and byte order, and an executable for the machine its
+ * class implies. Returns 1 for an ELF64 x86-64 kernel, 0 for an ELF32 i386
+ * one, or -1 with `err` set.
+ */
+static int kernel_elf_class(const uint8_t *image, uint32_t present, char *err, size_t errlen)
+{
+    int x86_64;
+
+    if (present < 52) {
+        return fail(err, errlen, "the image is smaller than an ELF header");
+    }
+    if (image[0] != 0x7F || image[1] != 'E' || image[2] != 'L' || image[3] != 'F') {
+        return fail(err, errlen, "the image is not an ELF");
+    }
+    x86_64 = image[4] == 2;
+    if ((image[4] != 1 && !x86_64) || image[5] != 1) {
+        return fail(err, errlen, "the image is not a little-endian ELF32 or ELF64");
+    }
+    if (x86_64 && present < 64) {
+        return fail(err, errlen, "the image is smaller than an ELF header");
+    }
+    if (le16(image + 16) != 2 || le16(image + 18) != (x86_64 ? 62u : 3u)) {
+        return fail(err, errlen,
+                    x86_64 ? "the image is not an x86-64 executable"
+                           : "the image is not an i386 executable");
+    }
+    return x86_64;
 }
 
 /**
@@ -742,23 +791,9 @@ int bootslot_validate_kernel(const uint8_t *image, uint32_t present, uint32_t si
     if (present > size) {
         present = size;
     }
-    if (present < 52) {
-        return fail(err, errlen, "the image is smaller than an ELF header");
-    }
-    if (image[0] != 0x7F || image[1] != 'E' || image[2] != 'L' || image[3] != 'F') {
-        return fail(err, errlen, "the image is not an ELF");
-    }
-    x86_64 = image[4] == 2;
-    if ((image[4] != 1 && !x86_64) || image[5] != 1) {
-        return fail(err, errlen, "the image is not a little-endian ELF32 or ELF64");
-    }
-    if (x86_64 && present < 64) {
-        return fail(err, errlen, "the image is smaller than an ELF header");
-    }
-    if (le16(image + 16) != 2 || le16(image + 18) != (x86_64 ? 62u : 3u)) {
-        return fail(err, errlen,
-                    x86_64 ? "the image is not an x86-64 executable"
-                           : "the image is not an i386 executable");
+    x86_64 = kernel_elf_class(image, present, err, errlen);
+    if (x86_64 < 0) {
+        return -1;
     }
     search = present < MULTIBOOT_SEARCH ? present : MULTIBOOT_SEARCH;
     off = multiboot_header(image, present);
