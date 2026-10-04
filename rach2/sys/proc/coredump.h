@@ -25,7 +25,7 @@ typedef int32_t (*core_write_fn)(void *ctx, const void *buf, uint32_t len);
  * for them, so that none runs in user mode on another processor while its
  * registers are copied or its memory written; an execve of one of them that
  * waits for this thread to end ends the wait instead. `*size` gets its
- * bytes; NULL when the heap has no room.
+ * bytes; NULL when the heap has no room or the size would not fit in 32 bits.
  */
 uint8_t *core_notes(int signo, uint32_t *size);
 

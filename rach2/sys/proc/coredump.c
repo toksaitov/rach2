@@ -322,6 +322,7 @@ uint8_t *core_notes(int signo, uint32_t *size)
     uint32_t auxv_size = (uint32_t)sizeof(current_proc->mm->auxv);
     uint32_t threads = 0;
     uint32_t each = core_note_bytes(sizeof(status)) + arch_core_fp_size();
+    uint32_t fixed = core_note_bytes(sizeof(info)) + core_note_bytes(auxv_size);
     uint8_t *buf;
     uint8_t *p;
     process_t *t;
@@ -332,7 +333,10 @@ uint8_t *core_notes(int signo, uint32_t *size)
             threads++;
         }
     }
-    *size = threads * each + core_note_bytes(sizeof(info)) + core_note_bytes(auxv_size);
+    if (threads > (0xFFFFFFFFu - fixed) / each) {
+        return NULL;
+    }
+    *size = threads * each + fixed;
     buf = kmalloc(*size);
     if (!buf) {
         return NULL;
