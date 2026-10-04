@@ -41,6 +41,56 @@ static int streq(const char *a, const char *b)
 #define KEND  0x00200000u
 #define LIMIT 0x02000000u
 
+/**
+ * Check the panic text `modlayout_describe` writes, which has the rule, the
+ * index and the range.
+ *
+ * The target laptop has no serial port and `k_panic` clears the screen, so
+ * what is not in this string is not seen on that machine. An address has as
+ * many digits as its width, sixteen on a 64-bit host as on x86-64. The rows
+ * also cut the text to a short buffer and to none.
+ */
+static void rows_describe(void)
+{
+    int wide = sizeof(uintptr_t) == 8;
+    char msg[128];
+    char tiny[8];
+
+    modlayout_describe(MODLAYOUT_OVERLAP, 2, 0x00300000u, 0x00400000u, msg,
+                       (uint32_t)sizeof(msg));
+    CHECK(streq(msg, wide ? "two boot modules overlap: module 2 spans 0x0000000000300000 - "
+                            "0x0000000000400000"
+                          : "two boot modules overlap: module 2 spans 0x00300000 - 0x00400000"),
+          "the overlap description");
+
+    modlayout_describe(MODLAYOUT_PAST_LIMIT, 0, 0x00197000u, 0x02997000u, msg,
+                       (uint32_t)sizeof(msg));
+    CHECK(streq(msg, wide ? "a boot module ends past addressable memory: module 0 "
+                            "spans 0x0000000000197000 - 0x0000000002997000"
+                          : "a boot module ends past addressable memory: module 0 "
+                            "spans 0x00197000 - 0x02997000"),
+          "the past-limit description");
+
+    /* A buffer too small truncates and still terminates: a panic screen
+       with a short message beats a kernel that ran off a buffer. */
+    modlayout_describe(MODLAYOUT_OVERLAP, 1, 1u, 2u, tiny, (uint32_t)sizeof(tiny));
+    CHECK(tiny[sizeof(tiny) - 1] == '\0', "the truncated description terminates");
+    CHECK(streq(tiny, "two boo"), "the truncated description keeps its head");
+
+    /* A zero-length buffer is not written at all. */
+    tiny[0] = 'x';
+    modlayout_describe(MODLAYOUT_OVERLAP, 1, 1u, 2u, tiny, 0);
+    CHECK(tiny[0] == 'x', "a zero-length buffer is untouched");
+
+    /* Decimal indices past one digit, and the zero case. */
+    modlayout_describe(MODLAYOUT_EMPTY, 10, 0u, 0u, msg, (uint32_t)sizeof(msg));
+    CHECK(streq(msg, wide ? "a boot module is empty or ends before it starts: module 10 "
+                            "spans 0x0000000000000000 - 0x0000000000000000"
+                          : "a boot module is empty or ends before it starts: module 10 "
+                            "spans 0x00000000 - 0x00000000"),
+          "a two-digit index and zero addresses");
+}
+
 int main(void)
 {
     struct modlayout_range m[3];
@@ -152,49 +202,7 @@ int main(void)
     /* No modules at all is a legal boot (the kernel-only case). */
     CHECK(modlayout_check(m, 0, KEND, LIMIT, &bad) == MODLAYOUT_OK, "no modules");
 
-    /* The panic text has the rule, the index and the range, because the
-       target laptop has no serial port and k_panic clears the screen: what is
-       not in this string is not seen on that machine. An address has as many
-       digits as its width, sixteen on a 64-bit host as on x86-64. */
-    {
-        int wide = sizeof(uintptr_t) == 8;
-        char msg[128];
-        char tiny[8];
-
-        modlayout_describe(MODLAYOUT_OVERLAP, 2, 0x00300000u, 0x00400000u, msg,
-                           (uint32_t)sizeof(msg));
-        CHECK(streq(msg, wide ? "two boot modules overlap: module 2 spans 0x0000000000300000 - "
-                                "0x0000000000400000"
-                              : "two boot modules overlap: module 2 spans 0x00300000 - 0x00400000"),
-              "the overlap description");
-
-        modlayout_describe(MODLAYOUT_PAST_LIMIT, 0, 0x00197000u, 0x02997000u, msg,
-                           (uint32_t)sizeof(msg));
-        CHECK(streq(msg, wide ? "a boot module ends past addressable memory: module 0 "
-                                "spans 0x0000000000197000 - 0x0000000002997000"
-                              : "a boot module ends past addressable memory: module 0 "
-                                "spans 0x00197000 - 0x02997000"),
-              "the past-limit description");
-
-        /* A buffer too small truncates and still terminates: a panic screen
-           with a short message beats a kernel that ran off a buffer. */
-        modlayout_describe(MODLAYOUT_OVERLAP, 1, 1u, 2u, tiny, (uint32_t)sizeof(tiny));
-        CHECK(tiny[sizeof(tiny) - 1] == '\0', "the truncated description terminates");
-        CHECK(streq(tiny, "two boo"), "the truncated description keeps its head");
-
-        /* A zero-length buffer is not written at all. */
-        tiny[0] = 'x';
-        modlayout_describe(MODLAYOUT_OVERLAP, 1, 1u, 2u, tiny, 0);
-        CHECK(tiny[0] == 'x', "a zero-length buffer is untouched");
-
-        /* Decimal indices past one digit, and the zero case. */
-        modlayout_describe(MODLAYOUT_EMPTY, 10, 0u, 0u, msg, (uint32_t)sizeof(msg));
-        CHECK(streq(msg, wide ? "a boot module is empty or ends before it starts: module 10 "
-                                "spans 0x0000000000000000 - 0x0000000000000000"
-                              : "a boot module is empty or ends before it starts: module 10 "
-                                "spans 0x00000000 - 0x00000000"),
-              "a two-digit index and zero addresses");
-    }
+    rows_describe();
 
     /* Every code names itself, and an unknown code still returns a string. */
     CHECK(modlayout_reason(MODLAYOUT_OK) != 0, "OK has a reason");
