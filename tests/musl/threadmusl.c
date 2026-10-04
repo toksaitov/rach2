@@ -575,24 +575,27 @@ static void on_usr2(int sig)
 }
 
 /** A thread of `handler_mask`, which sleeps with both signals unblocked
- * until the two handlers have run. */
+ * until the two handlers have run. It keeps the two blocked, as it was
+ * created, between its look at the handlers and its sleep, and sigsuspend
+ * unblocks them and sleeps in one step: a pause after the look would sleep
+ * for good when this thread's handler ran between the two, before the other
+ * thread's. */
 static void *take_signals(void *arg)
 {
     sigset_t none;
 
     takers[*(const int *)arg] = tid();
     sigemptyset(&none);
-    pthread_sigmask(SIG_SETMASK, &none, NULL);
     while (!usr1_by || !usr2_by) {
-        pause();
+        sigsuspend(&none);
     }
     return NULL;
 }
 
 /**
- * Two threads asleep in pause with SIGUSR1 and SIGUSR2 unblocked, while the
- * first thread blocks both, and the two signals sent to the process one after
- * the other, so that the first sleeper may be woken for both. SIGUSR1's
+ * Two threads asleep in sigsuspend with SIGUSR1 and SIGUSR2 unblocked, while
+ * the first thread blocks both, and the two signals sent to the process one
+ * after the other, so that the first sleeper may be woken for both. SIGUSR1's
  * handler blocks SIGUSR2 and waits for SIGUSR2's handler, which the other
  * sleeper must be woken to run. Returns 0 when each thread ran one handler.
  */
