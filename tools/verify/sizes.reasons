@@ -631,8 +631,6 @@ tests/musl/stampmusl.c:main lines 355 a test's rows, each a case, read as one ta
 tests/musl/statmusl.c:main complexity 42 a test's rows, each a case, read as one table
 tests/musl/statmusl.c:main lines 168 a test's rows, each a case, read as one table
 
-tests/musl/statxmusl.c:kinds complexity 29 a test's rows, each a case, read as one table
-
 tests/musl/threadmusl.c:main complexity 37 a test's rows, each a case, read as one table
 tests/musl/threadmusl.c:sharing complexity 36 a test's rows, each a case, read as one table
 

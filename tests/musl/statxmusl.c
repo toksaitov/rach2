@@ -139,10 +139,11 @@ static int refused(const char *path, int flags, unsigned mask, int err)
     return raw_statx(AT_FDCWD, path, flags, mask, &sx) == -1 && errno == err;
 }
 
-static int kinds(void)
+/** A regular file just written agrees in both calls on its type, size and
+ * mode, and on x86-64 on a time past 2^31 seconds. */
+static int regular_file(void)
 {
-    struct statx sx, tmp;
-    int fds[2];
+    struct statx sx;
     int fd;
 
     fd = open(FILE_PATH, O_WRONLY | O_CREAT | O_TRUNC, 0640);
@@ -164,6 +165,21 @@ static int kinds(void)
         }
     }
 #endif
+    return 0;
+}
+
+/** The kinds of file, each asked of both calls: a regular file, a
+ * directory, a FIFO, a device, a symbolic link followed and not, a pipe and
+ * the working directory by an empty path, and a relative path with a sync
+ * flag. */
+static int kinds(void)
+{
+    struct statx sx, tmp;
+    int fds[2];
+
+    if (regular_file() != 0) {
+        return 1;
+    }
     if (agree(AT_FDCWD, "/tmp", 0, &tmp, "a directory") || !S_ISDIR(tmp.stx_mode)) {
         return fail("a directory's type");
     }
