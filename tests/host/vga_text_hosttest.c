@@ -3,6 +3,7 @@
  *
  * host-deps: rach2/sys/lib/kfmt.c rach2/sys/lib/kstd.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: tests/host/compat/spinlock_host.c
  *
  * The adapter's memory is an array here, every store to it is counted, and
  * its ports are recorded, so the rows count what each operation costs. A

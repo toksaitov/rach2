@@ -3,6 +3,7 @@
  *
  * host-deps: rach2/sys/lib/kfmt.c rach2/sys/lib/kstd.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: tests/host/compat/spinlock_host.c
  *
  * The framebuffer is an array here, which `fbcon_window` hands the console as
  * the loader's framebuffer, and the rows read its pixels back against the font:
