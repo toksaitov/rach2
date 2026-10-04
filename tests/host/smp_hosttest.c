@@ -103,9 +103,20 @@ void kfree(void *p)
     free(p);
 }
 
+/* The idle tasks' stacks, which the kernel keeps for good and records only
+ * by their tops, one past the end; kept here so that the test can give them
+ * back at its end and LeakSanitizer does not take them for lost. */
+static void *guarded[NR_CPUS * 2];
+static int nguarded;
+
 void *kalloc_guarded(uint32_t count)
 {
-    return calloc(count, PAGE_SIZE);
+    void *p = calloc(count, PAGE_SIZE);
+
+    if (p && nguarded < (int)(sizeof(guarded) / sizeof(guarded[0]))) {
+        guarded[nguarded++] = p;
+    }
+    return p;
 }
 
 int kcmdline_value(const char *key, char *out, unsigned int outlen)
@@ -280,6 +291,9 @@ int main(void)
     check(!cpu_table[1].online && cpu_table[1].admit == CPU_REFUSED && cpus_online == 1,
           "and one that comes after the wait stops, neither online nor counted");
 
+    while (nguarded > 0) {
+        free(guarded[--nguarded]);
+    }
     if (fails) {
         printf("smp-hosttest: result: fail: %d rows\n", fails);
         return 1;
