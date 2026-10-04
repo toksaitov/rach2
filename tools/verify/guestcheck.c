@@ -755,7 +755,10 @@ static void rules_free(struct rules *r)
 
 /* One `make -s -C rach2 TARGET` list: the host build's own answer for the
    shared source manifest, asked of make so this guard cannot disagree with
-   it by reading the file differently. */
+   it by reading the file differently. Printing a list compiles nothing, so
+   CROSS_CC names a command that is always there, as check_sources.sh does,
+   and a machine with one architecture's cross compiler lists the other's
+   sources too. */
 static void make_list(const char *target, struct list *out)
 {
     char cmd[1200];
@@ -763,8 +766,8 @@ static void make_list(const char *target, struct list *out)
     FILE *pipe;
     size_t n;
 
-    snprintf(cmd, sizeof(cmd), "make -s -C '%s/rach2' ARCH=%s %s 2>/dev/null", repo, guest_arch,
-             target);
+    snprintf(cmd, sizeof(cmd), "make -s -C '%s/rach2' ARCH=%s CROSS_CC=true %s 2>/dev/null", repo,
+             guest_arch, target);
     pipe = popen(cmd, "r");
     if (pipe == NULL)
         fail("cannot run make %s", target);
