@@ -16,7 +16,10 @@
  * suite types on the kernel's line, so the key finds a parked reader and
  * not one still printing. With the child on the processor, a wake that does not
  * reschedule leaves the reader waiting for the next tick, and the record says
- * so.
+ * so. Both are bound to processor 0 first: the controller's interrupts go to
+ * the processor that programmed its message address, the boot processor,
+ * before the others start, and a reader woken on an idle processor would run
+ * there without taking anything from the child.
  *
  * With the argument `random` the child is inside a large `getrandom`
  * instead of spinning, which is the loop inside one system call that the
@@ -68,10 +71,15 @@ void probe_main(unsigned long *sp)
     int argc = (int)sp[0];
     char **argv = (char **)(sp + 1);
     int random_mode = argc > 1 && argv[1][0] == 'r';
+    static const unsigned long processor0 = 1;
     int child;
     int n;
     unsigned off;
 
+    if (syscall3(SYS_SCHED_SETAFFINITY, 0, (long)sizeof(processor0), (long)&processor0) != 0) {
+        puts("KEYLAT FAIL: the probe could not be bound to processor 0\n");
+        sys_exit(1);
+    }
     child = syscall3(SYS_FORK, 0, 0, 0);
     if (child < 0) {
         /* Without the child there is nothing on the processor to be taken off

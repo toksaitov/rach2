@@ -159,6 +159,7 @@ typedef __SIZE_TYPE__ size_t;
 #define SYS_GETTID          186
 #define SYS_TKILL           200
 #define SYS_FUTEX           202
+#define SYS_SCHED_SETAFFINITY 203
 #define SYS_GETDENTS64      217
 #define SYS_CLOCK_GETTIME   228
 #define SYS_CLOCK_NANOSLEEP 230
@@ -378,6 +379,7 @@ static __inline__ long syscall0(long n)
 #define SYS_GETTID          224
 #define SYS_TKILL           238
 #define SYS_FUTEX           240
+#define SYS_SCHED_SETAFFINITY 241
 #define SYS_EXIT_GROUP      252
 #define SYS_CLOCK_GETTIME   265
 #define SYS_CLOCK_NANOSLEEP 267
