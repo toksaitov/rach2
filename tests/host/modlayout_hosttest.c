@@ -154,20 +154,26 @@ int main(void)
 
     /* The panic text has the rule, the index and the range, because the
        target laptop has no serial port and k_panic clears the screen: what is
-       not in this string is not seen on that machine. */
+       not in this string is not seen on that machine. An address has as many
+       digits as its width, sixteen on a 64-bit host as on x86-64. */
     {
+        int wide = sizeof(uintptr_t) == 8;
         char msg[128];
         char tiny[8];
 
         modlayout_describe(MODLAYOUT_OVERLAP, 2, 0x00300000u, 0x00400000u, msg,
                            (uint32_t)sizeof(msg));
-        CHECK(streq(msg, "two boot modules overlap: module 2 spans 0x00300000 - 0x00400000"),
+        CHECK(streq(msg, wide ? "two boot modules overlap: module 2 spans 0x0000000000300000 - "
+                                "0x0000000000400000"
+                              : "two boot modules overlap: module 2 spans 0x00300000 - 0x00400000"),
               "the overlap description");
 
         modlayout_describe(MODLAYOUT_PAST_LIMIT, 0, 0x00197000u, 0x02997000u, msg,
                            (uint32_t)sizeof(msg));
-        CHECK(streq(msg, "a boot module ends past addressable memory: module 0 "
-                         "spans 0x00197000 - 0x02997000"),
+        CHECK(streq(msg, wide ? "a boot module ends past addressable memory: module 0 "
+                                "spans 0x0000000000197000 - 0x0000000002997000"
+                              : "a boot module ends past addressable memory: module 0 "
+                                "spans 0x00197000 - 0x02997000"),
               "the past-limit description");
 
         /* A buffer too small truncates and still terminates: a panic screen
@@ -183,8 +189,10 @@ int main(void)
 
         /* Decimal indices past one digit, and the zero case. */
         modlayout_describe(MODLAYOUT_EMPTY, 10, 0u, 0u, msg, (uint32_t)sizeof(msg));
-        CHECK(streq(msg, "a boot module is empty or ends before it starts: module 10 "
-                         "spans 0x00000000 - 0x00000000"),
+        CHECK(streq(msg, wide ? "a boot module is empty or ends before it starts: module 10 "
+                                "spans 0x0000000000000000 - 0x0000000000000000"
+                              : "a boot module is empty or ends before it starts: module 10 "
+                                "spans 0x00000000 - 0x00000000"),
               "a two-digit index and zero addresses");
     }
 

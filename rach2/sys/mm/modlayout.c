@@ -75,7 +75,8 @@ static void ml_put(char *buf, uint32_t buflen, uint32_t *pos, const char *src)
     }
 }
 
-/** Append `v` as eight hexadecimal digits with the 0x prefix. */
+/** Append `v` in hexadecimal with the 0x prefix, in as many digits as an
+ * address has: eight on i686, sixteen on x86-64. */
 static void ml_put_hex(char *buf, uint32_t buflen, uint32_t *pos, uintptr_t v)
 {
     static const char digits[] = "0123456789ABCDEF";
