@@ -914,7 +914,8 @@ int ns_caps_held(const process_t *p)
  * CLONE_FILES and CLONE_FS give it a descriptor table and directories of its
  * own, CLONE_NEWNS and CLONE_NEWUSER the second with it, and CLONE_SYSVSEM,
  * CLONE_THREAD, CLONE_SIGHAND and CLONE_VM are taken for a process of one
- * thread. Cgroup and time namespaces are refused.
+ * thread. Cgroup and time namespaces are refused, and so is a flag outside
+ * these, in the upper half of an x86-64 long too.
  */
 long sys_unshare(isr_params_t *params)
 {
@@ -924,8 +925,9 @@ long sys_unshare(isr_params_t *params)
     struct nsset *set = NULL;
     int32_t err = 0;
 
-    if (flags & ~(CLONE_NEW_ANY | CLONE_SYSVSEM | CLONE_FILES | CLONE_FS | CLONE_THREAD |
-                  CLONE_SIGHAND | CLONE_VM)) {
+    if (SC_ARG(params, 0) != flags ||
+        (flags & ~(CLONE_NEW_ANY | CLONE_SYSVSEM | CLONE_FILES | CLONE_FS | CLONE_THREAD |
+                   CLONE_SIGHAND | CLONE_VM))) {
         return -EINVAL;
     }
     if ((flags & (CLONE_NEWUSER | CLONE_THREAD | CLONE_SIGHAND | CLONE_VM)) && self->tg->live > 1) {

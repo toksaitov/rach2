@@ -22,7 +22,7 @@
  * browser's sandbox has one do, and the process is left with a root that
  * holds nothing, while a descriptor of /proc it opened before still reaches
  * /proc/self/fd. A file of /proc/self/fdinfo has a descriptor's offset and
- * flags.
+ * flags. On x86-64 an unshare of a flag past 32 bits is EINVAL.
  *
  * Prints "NSMUSL OK" on success and "NSMUSL FAIL (detail)" otherwise.
  */
@@ -412,6 +412,18 @@ static int empty_root(void)
     return 0;
 }
 
+/* On x86-64, where unshare takes a long, a flag in its upper half is EINVAL
+ * and unshares nothing. */
+static int wide_flags(void)
+{
+#if defined __x86_64__
+    if (syscall(SYS_unshare, 1UL << 32) != -1 || errno != EINVAL) {
+        return fail("unshare of a flag past 32 bits is not EINVAL");
+    }
+#endif
+    return 0;
+}
+
 int main(void)
 {
     int id = shmget(SHM_KEY, 4096, IPC_CREAT | 0600);
@@ -420,8 +432,8 @@ int main(void)
     if (id < 0) {
         return fail("shmget");
     }
-    rc = in_child(uts) || in_child(pid_ns) || in_child(net) || in_child(ipc) || mnt() ||
-         in_child(sandbox) || in_child(user) || in_child(setid) || in_child(empty_root);
+    rc = wide_flags() || in_child(uts) || in_child(pid_ns) || in_child(net) || in_child(ipc) ||
+         mnt() || in_child(sandbox) || in_child(user) || in_child(setid) || in_child(empty_root);
     shmctl(id, IPC_RMID, NULL);
     if (rc) {
         return 1;
