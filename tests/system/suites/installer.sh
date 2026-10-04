@@ -1193,7 +1193,9 @@ mark "row 14"
 #          a cluster with its files and its serial, puts GRUB's EFI image in
 #          it beside the kernels and gives its entry the type 0xEF, and the
 #          disk keeps its MBR. The disk then boots by UEFI to a login, with
-#          the root it names by its MBR identity, and by BIOS as before. ----
+#          the root it names by its MBR identity, and by BIOS as before. A
+#          second update of the converted disk, which keeps its MBR, leaves
+#          GRUB's EFI image alone. ----
 if [ -n "$MBR_DISK" ]; then
 # shellcheck source=tools/setup/ovmf_path.sh
 . "$REPO/tools/setup/ovmf_path.sh"
@@ -1222,9 +1224,11 @@ if "$HARNESS" --bios \
     "expect=converted: /dev/disk0 keeps its MBR and boots by UEFI as well" \
     "expect=what reached the root is the image" \
     "expect=armed for one trial boot" \
+    "expect=updated:" "send=rach2-install --update /m/$(basename "$INSTALLER_EXT2") /dev/disk0" \
+    "expect=GRUB's EFI image on /dev/disk0p1 is already this one" \
     "expect=updated:" "send=bootctl --target /dev/disk0p1 status; umount /m; echo CONVERT\"\"DONE" \
     "expect=CONVERTDONE" > "$LOG18.harness" 2>&1; then
-    note "row 18: an MBR disk is updated and converted to boot by UEFI as well: OK"
+    note "row 18: an MBR disk is updated and converted to boot by UEFI as well, and a second update leaves GRUB's EFI image alone: OK"
 else
     sed -n 's/^HARNESS: /installer-test: /p' "$LOG18.harness" >&2
     bad "row 18: the update that converts an MBR disk"
@@ -1271,6 +1275,57 @@ if "$HARNESS" --bios --qemu-arg=-cpu --qemu-arg=max \
     note "row 18: and it still boots by BIOS, into its saved default until a commit: OK"
 else
     bad "row 18: the converted disk no longer boots by BIOS"
+fi
+
+# ---- 18b: the same conversion stopped after the boot partition's files were
+#           kept on the recovery partition and before its new file system
+#           had them: the copy is planted there, marked whole, and the boot
+#           partition's first sectors are zeroed. The update run again must
+#           make the file system from the copy, convert the disk, remove the
+#           copy and leave the volume the conversion makes. ----
+cp "$MBR_DISK" "$DIR/stopped.img"
+STOP_REC=$(recovery_start "$DIR/stopped.img")
+rm -rf "$DIR/boot-keep"
+mkdir -p "$DIR/boot-keep/files"
+dd if="$DIR/stopped.img" of="$DIR/boot-keep/sector" bs=512 skip="$ESP_AT" count=1 2>/dev/null
+echo whole > "$DIR/boot-keep/complete"
+if mcopy -s -n -i "$DIR/stopped.img@@$((ESP_AT * 512))" "::*" "$DIR/boot-keep/files/" &&
+    mcopy -s -i "$DIR/stopped.img@@$((STOP_REC * 512))" "$DIR/boot-keep" ::/rach2-boot-keep &&
+    dd if=/dev/zero of="$DIR/stopped.img" bs=512 seek="$ESP_AT" count=64 conv=notrunc 2>/dev/null; then
+    note "row 18b: the boot partition's files are planted on the recovery partition and its file system zeroed: OK"
+else
+    bad "row 18b: the stopped conversion could not be planted"
+fi
+LOG18S="$DIR/convert-stopped.log"
+if "$HARNESS" --bios \
+    --qemu-arg=-cpu --qemu-arg=max \
+    --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
+    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0 \
+    --drive "if=none,id=stick,format=raw,file=$DIR/test-stick.img" \
+    --qemu-arg=-device --qemu-arg=usb-storage,bus=xhci.0,drive=stick,bootindex=0 \
+    --qemu-arg=-drive --qemu-arg="file=$DIR/stopped.img,format=raw,if=ide,index=0,media=disk" \
+    --timeout 3600 --steptmo 1800 --ok "RESUMEDONE" --log "$LOG18S" \
+    "expect=recovery image" \
+    "expect=# " "send=mkdir -p /m && mount -t exfat /dev/disk1p2 /m && echo MOUNT\"\"ED" \
+    "expect=MOUNTED" \
+    "send=rach2-install --update /m/$(basename "$INSTALLER_EXT2") /dev/disk0" \
+    "expect=the conversion of /dev/disk0p1 was stopped part way; its files are on the recovery partition" \
+    "expect=making /dev/disk0p1's file system again" \
+    "expect=converted: /dev/disk0 keeps its MBR and boots by UEFI as well" \
+    "expect=updated:" "send=umount /m; echo RESUME\"\"DONE" \
+    "expect=RESUMEDONE" > "$LOG18S.harness" 2>&1; then
+    note "row 18b: the update run again finishes the stopped conversion from the kept files: OK"
+else
+    sed -n 's/^HARNESS: /installer-test: /p' "$LOG18S.harness" >&2
+    bad "row 18b: the update after a stopped conversion"
+fi
+if ! mdir -i "$DIR/stopped.img@@$((STOP_REC * 512))" ::/rach2-boot-keep > /dev/null 2>&1 &&
+    minfo -i "$DIR/stopped.img@@$((ESP_AT * 512))" :: 2>/dev/null | grep -q '^cluster size: 1 sectors' &&
+    minfo -i "$DIR/stopped.img@@$((ESP_AT * 512))" :: 2>/dev/null | grep -q '^serial number: 1ACEF00D' &&
+    mtype -i "$DIR/stopped.img@@$((ESP_AT * 512))" ::/boot/grub/grub.cfg 2>/dev/null | grep -q 'MBRID=1acef00d,3'; then
+    note "row 18b: the copy is gone and the volume is the converted one, its serial and its menu kept: OK"
+else
+    bad "row 18b: the copy on the recovery partition, or the volume made from it"
 fi
 mark "row 18"
 fi
@@ -1453,6 +1508,9 @@ for account_file in passwd group shadow; do
 done
 mcopy -i "$DIR/one.img@@$((REC_START * 512))" "$DIR/update-in-progress" ::rach2-config-a/update-in-progress
 LOGSTOP="$DIR/archive-stop.log"
+# The copies the row makes go in /dev/shm, as rach2-install's own do, and not
+# in the recovery system's RAM root, whose free space is the room the system
+# itself works in.
 if "$HARNESS" --bios \
     --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
@@ -1508,9 +1566,6 @@ if "$HARNESS" --bios \
     --qemu-arg=-drive --qemu-arg="file=$DIR/one.img,format=raw,if=ide,index=0,media=disk" \
     --timeout 3600 --steptmo 1800 --ok "STOPPEDDONE" --log "$LOG16" \
     "expect=recovery image" \
-# The copies the row makes go in /dev/shm, as rach2-install's own do, and not
-# in the recovery system's RAM root, whose free space is the room the system
-# itself works in.
     "expect=# " "send=mkdir -p /m && mount -t exfat /dev/disk1p2 /m && echo MOUNT\"\"ED" \
     "expect=MOUNTED" \
     "send=rach2-install --update /m/$(basename "$INSTALLER_EXT2") /dev/disk0" \

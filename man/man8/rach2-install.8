@@ -310,27 +310,37 @@ If
 is there, the EFI image's SHA-256 must match it.
 UEFI firmware reads a FAT32 volume only when it has 65525 clusters or more,
 and the 64 MiB boot partition such a disk has, at eight sectors to a
-cluster, has 16348; its files are copied to
-.Pa /dev/shm ,
-its file system is made again with
+cluster, has 16348; its first sector and its files are copied to
+.Pa rach2-boot-keep
+on the recovery partition, marked whole by a file
+.Pa complete
+written last, its file system is made again with
 .Ql mkfs.vfat ,
 which takes one sector to a cluster, its serial, by which the menu finds
 it, is written back into the new boot sector and its backup, and the
 files are copied back, after which
 .Xr bootctl 8
-must read the volume.
+must read the volume and the copy is removed.
 A boot partition of less than 33 MiB holds no such volume, and its disk is
 left to boot by BIOS alone, as one is when
 .Pa bootx64.efi
-is not beside the image.
+is not beside the image, when the disk has no recovery partition, or when
+the recovery partition has no room for the copy.
 GRUB's EFI image is copied to the boot partition as
-.Pa \eEFI\eBOOT\eBOOTX64.EFI ,
-where its prefix opens the menu the BIOS core opens, and
+.Pa \eEFI\eBOOT\eBOOTX64.NEW
+and renamed
+.Pa BOOTX64.EFI
+once it is on the disk, so that a stop leaves the old one; the rename's few
+writes are the only time the partition has none.
+The image is left alone when the partition has it already, as it does at
+every update after the first, since the disk keeps its MBR.
+Its prefix opens the menu the BIOS core opens, and
 .Ql diskctl esp
 gives the partition the EFI system partition's type, 0xEF.
 A stop while the file system is made again leaves a boot partition the
 BIOS core reads no menu from; it then starts the recovery system from
-partition 2, where the update can be run again.
+partition 2, and the update run again there finds the copy marked whole,
+makes the file system again from it and goes on.
 The kernels in the disk's slots must be of this version or later for
 .Ql bootctl commit
 to work after the conversion, since an older kernel publishes no

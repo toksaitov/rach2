@@ -518,9 +518,11 @@ restore_archive_keys() (
 # 64 MiB boot partition the disks installed before have, at eight sectors to a
 # cluster, has 16348. Its file system is made again at one sector to a
 # cluster, with every file it held put back and its serial kept, since the
-# menu finds the kernels' partition by that serial. A boot partition of less
-# than 33 MiB holds no FAT32 volume of that many clusters, and its disk is
-# left to boot by BIOS alone, as one is when the image is not there.
+# menu finds the kernels' partition by that serial; the files are kept on the
+# recovery partition meanwhile, where an update run again after a stop finds
+# them. A boot partition of less than 33 MiB holds no FAT32 volume of that
+# many clusters, and its disk is left to boot by BIOS alone, as one is when
+# the image is not there or the recovery partition cannot keep the files.
 
 # The clusters of the FAT volume on NODE, as a FAT driver counts them from the
 # boot sector: the data sectors after the reserved ones and the FATs, by the
@@ -552,41 +554,69 @@ keep_serial() { # keep_serial SAVED NODE SCRATCH
 }
 
 # Make the file system of the boot partition BOOT again, one UEFI firmware
-# reads, with what it held put back. A stop part way leaves a boot partition
-# the BIOS core reads no menu from, and it starts the recovery system from
-# partition 2 by its label instead.
+# reads, with what it held put back. Its first sector and its files are kept
+# on the recovery partition first, mounted at $RECOVERY_MNT, and marked whole
+# by the file `complete`, written last. A stop part way leaves a boot
+# partition the BIOS core reads no menu from, and it starts the recovery
+# system from partition 2 by its label instead; the update run again there
+# finds the files and finishes the job (`resume_boot_partition`). Returns 1,
+# with nothing written, when the recovery partition has no room for them.
 remake_boot_partition() { # remake_boot_partition BOOT
-    boot_keep=/tmp/rach2-update-boot
-    [ -d /dev/shm ] && boot_keep=/dev/shm/rach2-update-boot
-    if ! rm -rf "$boot_keep" || ! mkdir -p "$boot_keep/files"; then
-        die "there is nowhere to keep the boot partition's files; nothing was written"
-    fi
-    dd if="$1" of="$boot_keep/sector" bs=512 count=1 2>/dev/null ||
-        die "$1's first sector did not read; nothing was written"
+    boot_keep="$RECOVERY_MNT/rach2-boot-keep"
+    rm -rf "$boot_keep" || die "an old copy of $1's files could not be removed; nothing was written"
     mkdir -p "$BOOT_MNT" 2>/dev/null
     mount -t vfat -o ro "$1" "$BOOT_MNT" || die "$1 would not mount; nothing was written"
     mounted_boot=$BOOT_MNT
-    cp -R "$BOOT_MNT/." "$boot_keep/files/" ||
-        die "$1's files could not be kept; nothing was written"
+    if ! { mkdir -p "$boot_keep/files" &&
+        dd if="$1" of="$boot_keep/sector" bs=512 count=1 2>/dev/null &&
+        cp -R "$BOOT_MNT/." "$boot_keep/files/" && sync &&
+        echo whole > "$boot_keep/complete" && sync; }; then
+        rm -rf "$boot_keep"
+        umount "$BOOT_MNT" || die "$1 would not unmount; nothing was written"
+        mounted_boot=""
+        return 1
+    fi
     umount "$BOOT_MNT" || die "$1 would not unmount; nothing was written"
     mounted_boot=""
-    boot_kept="its files are in $boot_keep until this system stops, and the disk starts \
-its recovery system until they are back"
+    rebuild_boot_partition "$1" "$boot_keep"
+}
+
+# Make the file system of BOOT again from the first sector and the files kept
+# in KEEP, and drop KEEP once `bootctl` reads what was made.
+rebuild_boot_partition() { # rebuild_boot_partition BOOT KEEP
+    boot_kept="its files are kept on the recovery partition, and this update run again \
+from the recovery system puts them back"
     say "making $1's file system again, at one sector to a cluster, for UEFI firmware"
     mkfs.vfat -n RACH2BOOT "$1" > /dev/null || die "$1's file system was not made; $boot_kept"
-    keep_serial "$boot_keep/sector" "$1" "$boot_keep/new" ||
-        die "$1's serial was not kept; $boot_kept"
+    keep_serial "$2/sector" "$1" "$2/new" || die "$1's serial was not kept; $boot_kept"
     [ "$(fat_clusters "$1")" -ge 65525 ] ||
         die "$1's new file system has fewer clusters than UEFI firmware reads; $boot_kept"
+    mkdir -p "$BOOT_MNT" 2>/dev/null
     mount -t vfat "$1" "$BOOT_MNT" || die "$1's new file system would not mount; $boot_kept"
     mounted_boot=$BOOT_MNT
-    cp -R "$boot_keep/files/." "$BOOT_MNT/" || die "$1's files were not put back; $boot_kept"
+    cp -R "$2/files/." "$BOOT_MNT/" || die "$1's files were not put back; $boot_kept"
     sync
     umount "$BOOT_MNT" || die "$1 would not unmount; $boot_kept"
     mounted_boot=""
     bootctl --target "$1" status > /dev/null ||
         die "$1, made again, is not a boot partition bootctl reads; $boot_kept"
-    rm -rf "$boot_keep"
+    { rm -f "$2/complete" && sync && rm -rf "$2"; } ||
+        say "the copy of $1's files on the recovery partition could not be removed"
+}
+
+# Finish the remake of BOOT that a stop cut short: its files are on the
+# recovery partition of the disk being updated, marked whole, and BOOT holds
+# no file system, an empty one or a part of its files. A copy not marked
+# whole was cut short before BOOT was touched, and the next remake removes it.
+resume_boot_partition() { # resume_boot_partition BOOT
+    find_recovery "$target" || return 0
+    mounted_recovery=$RECOVERY_MNT
+    if [ -f "$RECOVERY_MNT/rach2-boot-keep/complete" ]; then
+        say "the conversion of $1 was stopped part way; its files are on the recovery partition"
+        rebuild_boot_partition "$1" "$RECOVERY_MNT/rach2-boot-keep"
+    fi
+    umount "$RECOVERY_MNT" || die "the recovery partition would not unmount"
+    mounted_recovery=""
 }
 
 # Convert the MBR disk being updated, $update_disk, to boot by UEFI as well.
@@ -611,13 +641,37 @@ convert_mbr_disk() {
 $update_disk boots by BIOS alone"
             return 0
         fi
-        remake_boot_partition "$boot"
+        if ! find_recovery "$target"; then
+            say "$update_disk has no recovery partition to keep $boot's files on while its file \
+system is made again, so it boots by BIOS alone"
+            return 0
+        fi
+        mounted_recovery=$RECOVERY_MNT
+        if ! remake_boot_partition "$boot"; then
+            umount "$RECOVERY_MNT" || die "the recovery partition would not unmount"
+            mounted_recovery=""
+            say "the recovery partition has no room for $boot's files, so $update_disk boots by BIOS alone"
+            return 0
+        fi
+        umount "$RECOVERY_MNT" || die "the recovery partition would not unmount"
+        mounted_recovery=""
     fi
     mkdir -p "$BOOT_MNT" 2>/dev/null
     mount -t vfat "$boot" "$BOOT_MNT" || die "$boot would not mount; the root is not written"
     mounted_boot=$BOOT_MNT
-    { mkdir -p "$BOOT_MNT/EFI/BOOT" && cp "$efi_image" "$BOOT_MNT/EFI/BOOT/BOOTX64.EFI" && sync; } ||
-        die "GRUB's EFI image was not put on $boot; the root is not written"
+    # A new loader is written beside the old one and takes its name only once
+    # it is whole on the disk, so that a stop part way leaves the old one;
+    # UEFI firmware knows the loader by that one name, and the rename's few
+    # writes are the only time the disk has none. The same loader is left.
+    efi_dir="$BOOT_MNT/EFI/BOOT"
+    if cmp -s "$efi_image" "$efi_dir/BOOTX64.EFI"; then
+        say "GRUB's EFI image on $boot is already this one"
+    else
+        { mkdir -p "$efi_dir" && rm -f "$efi_dir/BOOTX64.NEW" &&
+            cp "$efi_image" "$efi_dir/BOOTX64.NEW" && sync &&
+            mv -f "$efi_dir/BOOTX64.NEW" "$efi_dir/BOOTX64.EFI" && sync; } ||
+            die "GRUB's EFI image was not put on $boot; the root is not written"
+    fi
     umount "$BOOT_MNT" || die "$boot would not unmount; the root is not written"
     mounted_boot=""
     diskctl esp "$update_disk" > /dev/null ||
@@ -644,6 +698,7 @@ if [ -n "$update_image" ]; then
     esac
     [ -e "$update_disk" ] || die "$update_disk is not there"
     target=${update_disk#/dev/disk}
+    resume_boot_partition "${update_disk}p1"
 
     # The disk must be one this system installed, and not another system's that
     # happens to have an ext2 partition with an `/etc/passwd` in it: the write
@@ -671,7 +726,8 @@ $update_disk was not installed from here"
     done
     # The copy of what the old root keeps, the home directories among it, goes
     # in /dev/shm, the tmpfs of half the machine's memory, where there is one,
-    # and not in the recovery system's root, which has a few hundred kilobytes.
+    # and not in the recovery system's root, which the build leaves half a
+    # mebibyte free at the least.
     keep=/tmp/rach2-update-keep
     [ -d /dev/shm ] && keep=/dev/shm/rach2-update-keep
     rm -rf "$keep" || die "an old copy of the configuration could not be removed"
