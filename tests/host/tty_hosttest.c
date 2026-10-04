@@ -246,6 +246,14 @@ void console_write_begin(void)
 void console_write_end(void)
 {}
 
+/** The console's cells: 85 by 24, as a 1366x768 screen at twice the font
+ * has them, and not the 80 by 25 a terminal would take by default. */
+void k_console_size(unsigned int *cols, unsigned int *rows)
+{
+    *cols = 85;
+    *rows = 24;
+}
+
 /** Check the interrupt lock at the first operation of each console pump. */
 uint32_t serial_rx_pending(void)
 {
@@ -460,6 +468,8 @@ static void latency_read(void)
 
     setup_pair();
     tty_console_init();
+    CHECK(console_tty.winsize.ws_col == 85 && console_tty.winsize.ws_row == 24,
+          "the console's window is the console's cells");
     tty_set_session(&console_tty, 1, 1);
     recording = 1;
     recorded_waits = read_stamps = serial_pos = serial_len = 0;
