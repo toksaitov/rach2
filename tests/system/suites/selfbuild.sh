@@ -247,8 +247,11 @@ step "SMOKEYES" "./yes | busybox head -n 1 | busybox grep -qx y && echo SMOKE\"\
 step "SMOKEPING" "./ping -c 1 127.0.0.1 > /dev/null 2>&1 && echo SMOKE\"\"PING"
 # Port 8080 and not 80: these steps run as an ordinary user, and a port below
 # 1024 is root's, so the self-built server is asked for one this user may have.
+# Two steps and not one, since the console keeps 255 bytes of a line typed
+# while the shell has not yet taken the terminal back from the command before.
 # interval: the self-built server is asked every second until it answers
-step "SMOKEWEB" "./httpd 8080 > /dev/null 2>&1 & i=0; until printf 'GET / HTTP/1.0\r\n\r\n' | ./nc 127.0.0.1 8080 2>/dev/null | busybox grep -q 200 || [ \$i -ge 30 ]; do i=\$((i + 1)); sleep 1; done; printf 'GET / HTTP/1.0\r\n\r\n' | ./nc 127.0.0.1 8080 | busybox grep -q HTTP/ && echo SMOKE\"\"WEB; kill %% 2>/dev/null"
+step "WEBUP" "./httpd 8080 > /dev/null 2>&1 & i=0; until printf 'GET / HTTP/1.0\r\n\r\n' | ./nc 127.0.0.1 8080 2>/dev/null | busybox grep -q 200 || [ \$i -ge 30 ]; do i=\$((i + 1)); sleep 1; done; echo WEB\"\"UP"
+step "SMOKEWEB" "printf 'GET / HTTP/1.0\r\n\r\n' | ./nc 127.0.0.1 8080 | busybox grep -q HTTP/ && echo SMOKE\"\"WEB; kill %% 2>/dev/null"
 # The refusal statuses above are exact (1 for each credential refusal, and
 # sudo run against its permission check, not only its usage line), so an exec
 # failure (126, 127) or a crash (128 plus a signal) cannot pass as a refusal.
