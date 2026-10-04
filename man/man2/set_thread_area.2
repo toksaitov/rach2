@@ -86,12 +86,17 @@ starts without one unless
 names one with
 .Dv CLONE_CHILD_CLEARTID .
 .Pp
-The x86-64 kernel registers neither call, which Linux keeps there for
-32-bit programs: a thread's TLS base is the FS base, which
+The x86-64 kernel registers no
+.Nm set_thread_area ,
+which Linux keeps there for 32-bit programs: a thread's TLS base is the FS
+base, which
 .Xr arch_prctl 2
 sets and reads, and which
 .Dv CLONE_SETTLS
 gives a new thread.
+.Nm set_tid_address
+is call 218 there, with the address in RDI, and does what it does on
+i386.
 .Sh RETURN VALUES
 .Nm set_thread_area
 returns zero on success.
