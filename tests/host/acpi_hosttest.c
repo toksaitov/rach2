@@ -523,14 +523,20 @@ static void search_rows(void)
     CHECK(acpi_rsdp_search(model_map) == 0, "none at all");
 }
 
+/* Where the XSDT row puts its HPET table: past 4 GiB, with a low word at
+ * which there is no table, so that an entry cut to 32 bits, or read as two
+ * entries of 32, finds none. */
+#define HIGH_AT 0x100300000ull
+
 /** A revision 2 RSDP whose RSDT field is zero: the XSDT is read, its
- * entries 64 bits wide. A bad XSDT falls back to the RSDT; a bad extended
- * checksum refuses the RSDP. */
+ * entries 64 bits wide, one of them a table past 4 GiB. A bad XSDT falls
+ * back to the RSDT; a bad extended checksum refuses the RSDP. */
 static void xsdt_rows(void)
 {
     struct acpi_info a;
-    unsigned char *bios, hpet[20] = {0};
+    unsigned char *bios, *high, hpet[20] = {0};
     uint64_t t[2], xsdt, rsdt;
+    uint32_t i;
 
     printf("xsdt\n");
     model_reset();
@@ -541,12 +547,19 @@ static void xsdt_rows(void)
     hpet[4] = 0; /* memory space */
     put64(hpet + 8, 0xFED00000u);
     t[1] = table_make("HPET", 1, hpet, sizeof(hpet));
+    high = region_add(HIGH_AT, 36 + sizeof(hpet));
+    for (i = 0; i < 36 + sizeof(hpet); i++) {
+        high[i] = made[t[1] - MADE_AT + i];
+        made[t[1] - MADE_AT + i] = 0;
+    }
+    t[1] = HIGH_AT;
     xsdt = root_make(1, t, 2);
     rsdp_make(bios, 0xE0100u, 2, 0, xsdt);
     log_clear();
     CHECK(acpi_parse(model_map, 0xE0100u, &a) == 0 && a.xsdt && a.root == xsdt,
           "an XSDT-only RSDP leads to the XSDT");
-    CHECK(a.madt && a.hpet && a.hpet_address == 0xFED00000u, "the XSDT's 64-bit entries are read");
+    CHECK(a.madt && a.hpet && a.hpet_address == 0xFED00000u,
+          "the XSDT's 64-bit entries are read, the HPET's past 4 GiB");
     CHECK(a.ntables == 2 && log_len == 0, "and nothing else is taken for an entry");
 
     rsdt = root_make(0, t, 1);
