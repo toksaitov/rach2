@@ -14,9 +14,13 @@
  *
  *   2. Isolation phase: fork a child that points its OWN TLS descriptor at a
  *      DIFFERENT TCB with different sentinels. Parent and child then spin so
- *      the round-robin scheduler switches between them hundreds of times; each
- *      must always read back its own sentinels. This only holds if the context
- *      switch reprograms the shared TLS GDT descriptor per process.
+ *      the round-robin scheduler switches between them hundreds of times, and
+ *      then hand a byte back and forth over two pipes, so that each round
+ *      takes one switch to the child and one back; each must always read back
+ *      its own sentinels. This only holds if the context switch reprograms
+ *      the shared TLS GDT descriptor per process. Both are bound to processor
+ *      0 first: on two processors each could keep one to itself, and no
+ *      switch would go from one to the other.
  *
  * Prints "All TLS checks passed!" and exits 0 only if every check passes.
  *
@@ -47,9 +51,10 @@ typedef unsigned char u8;
 #define NUM_SLOTS 8
 
 /* Iteration counts: thousands of syscalls solo, hundreds of switches in iso. */
-#define SOLO_ITERS 40000
-#define ISO_ITERS  3000
-#define BUSY_SPIN  60000
+#define SOLO_ITERS  40000
+#define ISO_ITERS   3000
+#define BUSY_SPIN   60000
+#define PING_ROUNDS 200
 
 static int sys_write(int fd, const void *buf, u32 n)
 {
@@ -60,6 +65,21 @@ static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
+}
+
+static int sys_read(int fd, void *buf, u32 n)
+{
+    return syscall3(SYS_READ, (long)fd, (long)buf, (long)n);
+}
+
+static int sys_pipe(int fds[2])
+{
+    return syscall1(SYS_PIPE, (long)fds);
+}
+
+static void sys_close(int fd)
+{
+    (void)syscall1(SYS_CLOSE, (long)fd);
 }
 
 static int sys_fork(void)
@@ -200,10 +220,13 @@ PROBE_SP_ENTRY;
 
 void probe_main(unsigned long *sp)
 {
+    static const unsigned long processor0 = 1;
     int entry;
     int pid;
     int i;
     int fails = 0;
+    int to_child[2], to_parent[2];
+    char token;
     long tv2[2];
 
     (void)sp;
@@ -249,7 +272,16 @@ void probe_main(unsigned long *sp)
         puts_("solo phase OK\n");
     }
 
-    /* Isolation phase: a second process with a DIFFERENT TCB. */
+    /* Isolation phase: a second process with a DIFFERENT TCB, on the
+     * processor this one is bound to, which the child inherits. */
+    if (syscall3(SYS_SCHED_SETAFFINITY, 0, (long)sizeof(processor0), (long)&processor0) != 0) {
+        puts_("FAIL: the probe could not be bound to processor 0\n");
+        sys_exit(1);
+    }
+    if (sys_pipe(to_child) != 0 || sys_pipe(to_parent) != 0) {
+        puts_("FAIL: pipe\n");
+        sys_exit(1);
+    }
     pid = sys_fork();
     if (pid < 0) {
         puts_("FAIL: fork\n");
@@ -260,6 +292,9 @@ void probe_main(unsigned long *sp)
         /* Child: switch to its own TCB and verify only its own sentinels. */
         int centry;
         int cbad = 0;
+
+        sys_close(to_child[1]);
+        sys_close(to_parent[0]);
 
         /* Before re-arming TLS, the child must still see the base it INHERITED
          * from the parent across fork (fork copies tls_base and the trapframe
@@ -286,12 +321,23 @@ void probe_main(unsigned long *sp)
                 break;
             }
         }
+        for (i = 0; i < PING_ROUNDS && cbad == 0; i++) {
+            if (sys_read(to_child[0], &token, 1) != 1 || tls_check(0x5A5A0000u) != 0 ||
+                sys_write(to_parent[1], &token, 1) != 1) {
+                cbad++;
+            }
+        }
         /* Exit status has the child verdict to the parent (0 == clean). */
         sys_exit(cbad == 0 ? 0 : 1);
     } else {
-        /* Parent: keep tcb_parent and verify its sentinels across switches. */
+        /* Parent: keep tcb_parent and verify its sentinels across switches.
+         * Each side closes the ends it does not use, so that a side that
+         * stops early ends the other's read with end of file. */
         int status = -1;
         int got;
+
+        sys_close(to_child[0]);
+        sys_close(to_parent[1]);
 
         for (i = 0; i < ISO_ITERS; i++) {
             sys_gettimeofday(tv2);
@@ -306,7 +352,22 @@ void probe_main(unsigned long *sp)
                 break;
             }
         }
+        token = 'x';
+        for (i = 0; i < PING_ROUNDS && fails == 0; i++) {
+            if (sys_write(to_child[1], &token, 1) != 1 || sys_read(to_parent[0], &token, 1) != 1) {
+                puts_("FAIL: the byte did not come back from the child at round ");
+                put_u32((u32)i);
+                puts_("\n");
+                fails++;
+            } else if (tls_check(0xA5A50000u) != 0) {
+                puts_("FAIL: parent sentinel clobbered after the child ran, at round ");
+                put_u32((u32)i);
+                puts_("\n");
+                fails++;
+            }
+        }
 
+        sys_close(to_child[1]);
         got = sys_waitpid(pid, &status, 0);
         if (got != pid) {
             puts_("FAIL: waitpid\n");
