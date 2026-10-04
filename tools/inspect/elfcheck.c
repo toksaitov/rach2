@@ -9,8 +9,8 @@
  * loader for a dynamic program, and exec refuses one whose loader it cannot
  * find. ARCH is `i686`, the default, for ELF32 i386 programs and the window
  * the i686 kernel loads into, or `x86_64` for ELF64 x86-64 programs and the
- * x86-64 user window of milestone 57's plan, [64 KiB, 0x00007FFFFFFFF000),
- * which the x86-64 loader is to have. `elfcheck
+ * x86-64 window, [64 KiB, 0x00007FFFFFFFE000), below the stack's base, with
+ * file offsets held to 32 bits, as the x86-64 loader reads them. `elfcheck
  * --kernel [--tcc] FILE` checks a kernel against what the multiboot loaders
  * (QEMU's -kernel and GRUB) read: the first checksum-valid multiboot header
  * in the search window with exactly the declared flags, exactly two
@@ -83,12 +83,16 @@ struct user_arch {
 
 static const struct user_arch user_arches[] = {
     {"i686", 1, 32, EM_386, "EM_386", 52, 32, 0x02000000u, 0xBFFFF000u},
-    {"x86_64", 2, 64, EM_X86_64, "EM_X86_64", 64, 56, 0x10000u, 0x00007FFFFFFFF000ull},
+    {"x86_64", 2, 64, EM_X86_64, "EM_X86_64", 64, 56, 0x10000u, 0x00007FFFFFFFE000ull},
 };
 static const struct user_arch *const arch_i686 = &user_arches[0];
 static const struct user_arch *const arch_x86_64 = &user_arches[1];
 
 static int user_problems;
+
+/* The findings of the last check, which the selftest matches a case
+   against. */
+static char problem_log[1024];
 
 static void problem(const char *name, const char *fmt, ...)
 {
@@ -97,6 +101,10 @@ static void problem(const char *name, const char *fmt, ...)
     fprintf(stderr, "  - %s: ", name);
     va_start(ap, fmt);
     vfprintf(stderr, fmt, ap);
+    va_end(ap);
+    va_start(ap, fmt);
+    vsnprintf(problem_log + strlen(problem_log), sizeof(problem_log) - strlen(problem_log), fmt,
+              ap);
     va_end(ap);
     fputc('\n', stderr);
     user_problems++;
@@ -115,6 +123,7 @@ static int user_check(const struct user_arch *a, const char *name, const unsigne
     int before = user_problems;
     FILE *hold = NULL;
 
+    problem_log[0] = '\0';
     if (quiet) {
         FILE *sink = fopen("/dev/null", "w");
 
@@ -166,6 +175,10 @@ static int user_check(const struct user_arch *a, const char *name, const unsigne
                 "%u program headers, more than the %u this kernel "
                 "reads",
                 e_phnum, ELF_MAX_PHNUM);
+    if (wide && e_phoff > 0xFFFFFFFFu) {
+        problem(name, "the program header table's offset passes 32 bits, which exec does not read");
+        goto out;
+    }
     if (e_phoff > n || (uint64_t)e_phnum * a->phentsize > n - e_phoff) {
         problem(name, "the program header table runs past the file");
         goto out;
@@ -202,6 +215,10 @@ static int user_check(const struct user_arch *a, const char *name, const unsigne
             problem(name, "a segment's file size exceeds its memory size");
         if (p_offset > wrap - p_filesz || p_vaddr > wrap - p_memsz) {
             problem(name, "a segment wraps the %u-bit address space", a->bits);
+            continue;
+        }
+        if (wide && p_offset + p_filesz > 0xFFFFFFFFu) {
+            problem(name, "a segment's file bytes end past 4 GiB, which exec does not read");
             continue;
         }
         if (p_offset + p_filesz > n)
@@ -628,6 +645,13 @@ static int kernel_check64(const unsigned char *d, size_t n, int tcc, char *detai
                       "at physical 0x%llx",
                       load_end, (unsigned long long)l->paddr);
     }
+    if (entry_addr < load_addr || entry_addr >= load_end)
+        return kf("a.out kludge: entry_addr 0x%x is outside the copy, 0x%x to load_end_addr 0x%x",
+                  entry_addr, load_addr, load_end);
+    if (load_end > loads[1].paddr + loads[1].filesz)
+        return kf("a.out kludge: load_end_addr 0x%x passes the file bytes of the last load, into "
+                  "memory the loader must zero",
+                  load_end);
     if (bss_end != image_end)
         return kf("a.out kludge: bss_end_addr 0x%x is not the image end 0x%llx", bss_end,
                   (unsigned long long)image_end);
@@ -1004,11 +1028,11 @@ static int selftest(void)
         uint64_t entry, vaddr, memsz;
         int want_ok;
     } cases64[] = {
-        {"x86_64: a segment ending at the ceiling", 0x400000, 0x7FFFFFFFE000ull, 0x1000, 1},
-        {"x86_64: a segment ending a byte past it", 0x400000, 0x7FFFFFFFE000ull, 0x1001, 0},
-        {"x86_64: a segment in the page exec leaves out", 0x400000, 0x7FFFFFFFF000ull, 0x1000, 0},
-        {"x86_64: an entry point at the ceiling", 0x7FFFFFFFF000ull, 0x400000, 0x1000, 0},
-        {"x86_64: an entry point one byte below it", 0x7FFFFFFFEFFFull, 0x400000, 0x1000, 1},
+        {"x86_64: a segment ending at the ceiling", 0x400000, 0x7FFFFFFFD000ull, 0x1000, 1},
+        {"x86_64: a segment ending a byte past it", 0x400000, 0x7FFFFFFFD000ull, 0x1001, 0},
+        {"x86_64: a segment in the page exec leaves out", 0x400000, 0x7FFFFFFFE000ull, 0x1000, 0},
+        {"x86_64: an entry point at the ceiling", 0x7FFFFFFFE000ull, 0x400000, 0x1000, 0},
+        {"x86_64: an entry point one byte below it", 0x7FFFFFFFDFFFull, 0x400000, 0x1000, 1},
         {"x86_64: a segment starting below the floor", 0x400000, 0xF000, 0x1000, 0},
         {"x86_64: a segment starting exactly at the floor", 0x10000, 0x10000, 0x1000, 1},
         {"x86_64: a segment wrapping the address space", 0x400000, ~0xFFFull, 0x2000, 0},
@@ -1052,6 +1076,23 @@ static int selftest(void)
                     cases64[i].name);
             st_bad++;
         }
+    }
+    n64 = craft_user64(user, 0x400000, 0x400000, 0x1000);
+    w64(user + 64 + 8, 0x100000000ull);
+    w64(user + 64 + 32, 1);
+    if (user_check(arch_x86_64, "case", user, n64, 1) == 0 ||
+        strstr(problem_log, "past 4 GiB") == NULL) {
+        fprintf(stderr,
+                "elfcheck: selftest: a segment at file offset 4 GiB was not refused for it\n");
+        st_bad++;
+    }
+    n64 = craft_user64(user, 0x400000, 0x400000, 0x1000);
+    w64(user + 32, 0x100000040ull);
+    if (user_check(arch_x86_64, "case", user, n64, 1) == 0 ||
+        strstr(problem_log, "passes 32 bits") == NULL) {
+        fprintf(stderr,
+                "elfcheck: selftest: a program header table past 4 GiB was not refused for it\n");
+        st_bad++;
     }
     n64 = craft_user64(user, 0x400000, 0x400000, 0x1000);
     if (user_check(arch_i686, "case", user, n64, 1) == 0) {
@@ -1202,6 +1243,19 @@ static int selftest(void)
         w32(m64 + mb64 + 24, r32(k64 + mb64 + 24) + 0x1000);
         st_expect_kernel(m64, k64n, 0, "an x86-64 .bss end past the image", "bss_end_addr");
         memcpy(m64, k64, k64n);
+        w32(m64 + mb64 + 20, r32(k64 + mb64 + 24));
+        st_expect_kernel(m64, k64n, 0, "an x86-64 copy that runs over .bss",
+                         "memory the loader must zero");
+        /* The header moved past the entry, with load_addr at it: the copy
+           starts after `_start`, which it then never loads. */
+        memcpy(m64, k64, k64n);
+        memset(m64 + mb64, 0, 32);
+        memcpy(m64 + mb64 + 40, k64 + mb64, 32);
+        w32(m64 + mb64 + 40 + 12, r32(k64 + mb64 + 12) + 40);
+        w32(m64 + mb64 + 40 + 16, r32(k64 + mb64 + 16) + 40);
+        st_expect_kernel(m64, k64n, 0, "an x86-64 copy that starts after the entry",
+                         "outside the copy");
+        memcpy(m64, k64, k64n);
         w32(m64 + mb64 + 28, r32(k64 + mb64 + 28) + 1);
         st_expect_kernel(m64, k64n, 0, "an x86-64 entry_addr that is not the entry's",
                          "entry_addr");
@@ -1219,8 +1273,8 @@ static int selftest(void)
         fprintf(stderr, "elfcheck: selftest: %d case(s) failed\n", st_bad);
         return 1;
     }
-    printf("elfcheck: selftest: ok: 10 i686 and 10 x86_64 window cases, 8 accepted kernels, "
-           "21 refused, each for its own rule\n");
+    printf("elfcheck: selftest: ok: 10 i686 and 10 x86_64 window cases, 2 x86_64 offset cases, "
+           "8 accepted kernels, 23 refused, each for its own rule\n");
     return 0;
 }
 
