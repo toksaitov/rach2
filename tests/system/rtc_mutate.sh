@@ -1,6 +1,9 @@
 #!/bin/sh
 # Usage: sh tests/system/rtc_mutate.sh [--host|--guest]
-# The guest proof runs STATTIME on the KRFFS test root in all three phases.
+# The fault takes the PIT's position out of the time between ticks, in
+# rach2/sys/clock.c: the host proof compiles rtc_hosttest.c with a private
+# copy of it, as tests/run host compiles the test, and the guest proof runs
+# STATTIME on the KRFFS test root in all three phases.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
@@ -14,9 +17,9 @@ esac
 }
 mkdir -p build/clock-proof
 work=$(mktemp -d "$repo/build/clock-proof/mutation.XXXXXX")
-cp rach2/sys/arch/x86/cmos.c "$work/source.saved"
-source="$work/rtc.c"
-[ "$mode" != --guest ] || source=rach2/sys/arch/x86/cmos.c
+cp rach2/sys/clock.c "$work/source.saved"
+source="$work/clock.c"
+[ "$mode" != --guest ] || source=rach2/sys/clock.c
 cp "$work/source.saved" "$source"
 child=
 changed=
@@ -59,11 +62,12 @@ run_phase()
 {
     phase=$1
     expected=$2
-    "${CC:-cc}" -std=c99 -g -O1 -ffreestanding \
-        -fsanitize=address,undefined -fno-sanitize-recover=all -DRTC_HOST_TEST \
-        -I rach2/sys -I rach2/sys/lib -I rach2/sys/proc \
-        tests/host/rtc_hosttest.c "$source" rach2/sys/arch/x86/pit.c -o "$work/$phase.host" \
-        >"$work/$phase.compile.log" 2>&1
+    "${CC:-cc}" -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST -g -O1 \
+        -ffreestanding -Wno-empty-body -fsanitize=address,undefined -fno-sanitize-recover=all \
+        -DRTC_HOST_TEST -DRACH2_HOST_CPU -I rach2/sys -I rach2/sys/arch/x86 \
+        -I rach2/sys/arch/i686 -I rach2/sys/lib -I rach2/sys/proc -I tests/host/compat \
+        tests/host/rtc_hosttest.c "$source" rach2/sys/arch/x86/cmos.c rach2/sys/arch/x86/pit.c \
+        tests/host/compat/spinlock_host.c -o "$work/$phase.host" >"$work/$phase.compile.log" 2>&1
     cat "$work/$phase.compile.log"
     status=0
     "$work/$phase.host" >"$work/$phase.host.log" 2>&1 || status=$?
