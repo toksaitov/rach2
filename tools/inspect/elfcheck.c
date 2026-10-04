@@ -110,6 +110,63 @@ static void problem(const char *name, const char *fmt, ...)
     user_problems++;
 }
 
+/**
+ * Reports the faults of the program header table of `d`, read at the
+ * offsets of `a`'s ELF class, and returns nonzero when the table cannot be
+ * walked: it is missing, its entries have the wrong size, its offset passes
+ * 32 bits, or it runs past the file. Too many entries is a finding that
+ * still lets the walk go on.
+ */
+static int user_phdr_unusable(const struct user_arch *a, const char *name, const unsigned char *d,
+                              size_t n)
+{
+    int wide = a->elf_class == 2;
+    uint64_t e_phoff = wide ? r64(d + 32) : r32(d + 28);
+    uint32_t e_phentsize = r16(d + (wide ? 54 : 42));
+    uint32_t e_phnum = r16(d + (wide ? 56 : 44));
+
+    if (e_phoff == 0 || e_phnum == 0) {
+        problem(name, "no program header table");
+        return 1;
+    }
+    if (e_phentsize != a->phentsize) {
+        problem(name, "e_phentsize is %u, not %u", e_phentsize, a->phentsize);
+        return 1;
+    }
+    if (e_phnum > ELF_MAX_PHNUM)
+        problem(name,
+                "%u program headers, more than the %u this kernel "
+                "reads",
+                e_phnum, ELF_MAX_PHNUM);
+    if (wide && e_phoff > 0xFFFFFFFFu) {
+        problem(name, "the program header table's offset passes 32 bits, which exec does not read");
+        return 1;
+    }
+    if (e_phoff > n || (uint64_t)e_phnum * a->phentsize > n - e_phoff) {
+        problem(name, "the program header table runs past the file");
+        return 1;
+    }
+    return 0;
+}
+
+/**
+ * Reports a segment outside the window `a` loads into, printing the bounds
+ * at the width of `a`'s addresses.
+ */
+static void user_window_problem(const struct user_arch *a, const char *name)
+{
+    if (a->elf_class == 2)
+        problem(name,
+                "a segment lies outside the window exec loads "
+                "into, [0x%llx, 0x%llx)",
+                (unsigned long long)a->user_min, (unsigned long long)a->user_max);
+    else
+        problem(name,
+                "a segment lies outside the window exec loads "
+                "into, [0x%08x, 0x%08x)",
+                (uint32_t)a->user_min, (uint32_t)a->user_max);
+}
+
 /* Returns the number of findings; `quiet` suppresses the report so the
    selftest can count without printing. The fields are read at the offsets of
    `a`'s ELF class, so one walk serves both. */
@@ -117,7 +174,7 @@ static int user_check(const struct user_arch *a, const char *name, const unsigne
                       int quiet)
 {
     uint64_t e_entry, e_phoff, end, wrap;
-    uint32_t e_type, e_machine, e_phentsize, e_phnum;
+    uint32_t e_type, e_machine, e_phnum;
     uint32_t i, loads, phdr_covered;
     int wide = a->elf_class == 2;
     int before = user_problems;
@@ -153,7 +210,6 @@ static int user_check(const struct user_arch *a, const char *name, const unsigne
     e_machine = r16(d + 18);
     e_entry = wide ? r64(d + 24) : r32(d + 24);
     e_phoff = wide ? r64(d + 32) : r32(d + 28);
-    e_phentsize = r16(d + (wide ? 54 : 42));
     e_phnum = r16(d + (wide ? 56 : 44));
     if (e_type != ET_EXEC)
         problem(name,
@@ -162,27 +218,8 @@ static int user_check(const struct user_arch *a, const char *name, const unsigne
                 e_type);
     if (e_machine != a->machine)
         problem(name, "e_machine is %u, not %s", e_machine, a->machine_name);
-    if (e_phoff == 0 || e_phnum == 0) {
-        problem(name, "no program header table");
+    if (user_phdr_unusable(a, name, d, n))
         goto out;
-    }
-    if (e_phentsize != a->phentsize) {
-        problem(name, "e_phentsize is %u, not %u", e_phentsize, a->phentsize);
-        goto out;
-    }
-    if (e_phnum > ELF_MAX_PHNUM)
-        problem(name,
-                "%u program headers, more than the %u this kernel "
-                "reads",
-                e_phnum, ELF_MAX_PHNUM);
-    if (wide && e_phoff > 0xFFFFFFFFu) {
-        problem(name, "the program header table's offset passes 32 bits, which exec does not read");
-        goto out;
-    }
-    if (e_phoff > n || (uint64_t)e_phnum * a->phentsize > n - e_phoff) {
-        problem(name, "the program header table runs past the file");
-        goto out;
-    }
 
     /* The address space a segment must not wrap: 32 bits for ELF32, and
        for ELF64 the 64 bits a sum of two fields can overflow. */
@@ -223,18 +260,8 @@ static int user_check(const struct user_arch *a, const char *name, const unsigne
         }
         if (p_offset + p_filesz > n)
             problem(name, "a segment runs past the file");
-        if (p_vaddr < a->user_min || p_vaddr + p_memsz > a->user_max) {
-            if (wide)
-                problem(name,
-                        "a segment lies outside the window exec loads "
-                        "into, [0x%llx, 0x%llx)",
-                        (unsigned long long)a->user_min, (unsigned long long)a->user_max);
-            else
-                problem(name,
-                        "a segment lies outside the window exec loads "
-                        "into, [0x%08x, 0x%08x)",
-                        (uint32_t)a->user_min, (uint32_t)a->user_max);
-        }
+        if (p_vaddr < a->user_min || p_vaddr + p_memsz > a->user_max)
+            user_window_problem(a, name);
         page_start = p_vaddr & ~(uint64_t)(PAGE - 1);
         if (page_start < end)
             problem(name, "the PT_LOAD segments are not ascending and "
@@ -302,6 +329,30 @@ static int name_is(const unsigned char *d, size_t n, uint64_t off, const char *w
             return 0;
     }
     return off + k < n && d[off + k] == '\0';
+}
+
+/**
+ * Finds the first multiboot header with a valid checksum in the loader's
+ * search window, at a 4-byte boundary with `room` bytes of header inside
+ * the file. Returns 1 and sets `*off` and `*flags`, or 0 if there is none.
+ */
+static int multiboot_find(const unsigned char *d, size_t n, uint32_t room, uint32_t *off,
+                          uint32_t *flags)
+{
+    uint32_t i;
+
+    for (i = 0; i + room <= n && i < SEARCH_END; i += 4) {
+        if (r32(d + i) == MULTIBOOT_MAGIC) {
+            uint32_t f = r32(d + i + 4), sum = r32(d + i + 8);
+
+            if (((MULTIBOOT_MAGIC + f + sum) & 0xFFFFFFFFu) == 0) {
+                *off = i;
+                *flags = f;
+                return 1;
+            }
+        }
+    }
+    return 0;
 }
 
 static int kernel_check64(const unsigned char *d, size_t n, int tcc, char *detail,
@@ -400,18 +451,7 @@ static int kernel_check(const unsigned char *d, size_t n, int tcc, char *detail,
     if (loads[1].vaddr < loads[0].vaddr + loads[0].memsz)
         return kf("loads overlap: 0x%x < 0x%x", loads[1].vaddr, loads[0].vaddr + loads[0].memsz);
 
-    for (i = 0; i + 12 <= n && i < SEARCH_END; i += 4) {
-        if (r32(d + i) == MULTIBOOT_MAGIC) {
-            uint32_t flags = r32(d + i + 4), sum = r32(d + i + 8);
-
-            if (((MULTIBOOT_MAGIC + flags + sum) & 0xFFFFFFFFu) == 0) {
-                mb_found = 1;
-                mb_off = i;
-                mb_flags = flags;
-                break;
-            }
-        }
-    }
+    mb_found = multiboot_find(d, n, 12, &mb_off, &mb_flags);
     if (!mb_found)
         return kf("no multiboot header with a valid checksum in the "
                   "loader's search window");
@@ -604,18 +644,7 @@ static int kernel_check64(const unsigned char *d, size_t n, int tcc, char *detai
         return kf("loads overlap");
     image_end = loads[1].paddr + loads[1].memsz;
 
-    for (i = 0; i + 32 <= n && i < SEARCH_END; i += 4) {
-        if (r32(d + i) == MULTIBOOT_MAGIC) {
-            uint32_t flags = r32(d + i + 4), sum = r32(d + i + 8);
-
-            if (((MULTIBOOT_MAGIC + flags + sum) & 0xFFFFFFFFu) == 0) {
-                mb_found = 1;
-                mb_off = i;
-                mb_flags = flags;
-                break;
-            }
-        }
-    }
+    mb_found = multiboot_find(d, n, 32, &mb_off, &mb_flags);
     if (!mb_found)
         return kf("no multiboot header with a valid checksum in the loader's search window");
     if (mb_flags != MULTIBOOT_FLAGS64)
@@ -1005,7 +1034,12 @@ static void st_expect_kernel(const unsigned char *d, size_t n, int tcc, const ch
     }
 }
 
-static int selftest(void)
+/**
+ * The user-program rows of the selftest: the window cases of each
+ * architecture, the two x86_64 offsets past 4 GiB, and a program of each
+ * class checked as the other.
+ */
+static void st_user(void)
 {
     static const struct {
         const char *name;
@@ -1040,13 +1074,9 @@ static int selftest(void)
         {"x86_64: an entry point one byte below the floor", 0xFFFF, 0x10000, 0x1000, 0},
     };
     unsigned char user[128];
-    unsigned char good[16384], gnu[16384], mut[16384], big[32768];
-    size_t goodn, gnun, bign, n32, n64;
-    char detail[160];
+    size_t n32, n64;
     unsigned i;
-    uint32_t hdr = 52 + 64, mb = 52 + 64 + 16, last;
 
-    st_bad = 0;
     for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
         size_t n = craft_user(user, cases[i].entry, cases[i].vaddr, cases[i].memsz);
         int got = user_check(arch_i686, "case", user, n, 1);
@@ -1104,6 +1134,97 @@ static int selftest(void)
         fprintf(stderr, "elfcheck: selftest: an i686 program passed for x86_64\n");
         st_bad++;
     }
+}
+
+/**
+ * The x86-64 kernel rows of the selftest: the fixture accepted under both
+ * profiles and without its symbol table under the tcc one, and each fault
+ * of the a.out copy, the link address and the symbols refused for its own
+ * rule.
+ */
+static void st_kernel64(void)
+{
+    unsigned char k64[8192], m64[8192];
+    size_t k64n = craft_kernel64(k64);
+    uint32_t mb64 = 64 + 2 * 56;
+    char detail[160];
+
+    if (kernel_check(k64, k64n, 0, detail, sizeof(detail)) != 0) {
+        fprintf(stderr, "elfcheck: selftest: the x86-64 fixture was refused: %s\n", kfail);
+        st_bad++;
+    }
+    if (kernel_check(k64, k64n, 1, detail, sizeof(detail)) != 0) {
+        fprintf(stderr,
+                "elfcheck: selftest: the x86-64 fixture was refused under the tcc "
+                "profile: %s\n",
+                kfail);
+        st_bad++;
+    }
+    /* Without section headers, as TinyCC writes it: the tcc profile
+       takes it, and the common one wants the symbol table. */
+    memcpy(m64, k64, k64n);
+    w64(m64 + 40, 0);
+    w16(m64 + 60, 0);
+    if (kernel_check(m64, k64n, 1, detail, sizeof(detail)) != 0) {
+        fprintf(stderr,
+                "elfcheck: selftest: the x86-64 fixture without a symbol table was "
+                "refused under the tcc profile: %s\n",
+                kfail);
+        st_bad++;
+    }
+    st_expect_kernel(m64, k64n, 0, "an x86-64 kernel without a symbol table",
+                     "no symbol table");
+    memcpy(m64, k64, k64n);
+    w32(m64 + mb64 + 4, MULTIBOOT_FLAGS);
+    w32(m64 + mb64 + 8, (uint32_t)(0 - (MULTIBOOT_MAGIC + MULTIBOOT_FLAGS)));
+    st_expect_kernel(m64, k64n, 0, "an x86-64 header without the a.out kludge", "flags");
+    memcpy(m64, k64, k64n);
+    w64(m64 + 120 + 8, r64(k64 + 120 + 8) + 8);
+    st_expect_kernel(m64, k64n, 0, "an x86-64 data load the a.out copy misplaces",
+                     "not where the copy");
+    memcpy(m64, k64, k64n);
+    w32(m64 + mb64 + 20, r32(k64 + mb64 + 20) - 4);
+    st_expect_kernel(m64, k64n, 0, "an x86-64 copy that stops short of the data",
+                     "load_end_addr");
+    memcpy(m64, k64, k64n);
+    w32(m64 + mb64 + 24, r32(k64 + mb64 + 24) + 0x1000);
+    st_expect_kernel(m64, k64n, 0, "an x86-64 .bss end past the image", "bss_end_addr");
+    memcpy(m64, k64, k64n);
+    w32(m64 + mb64 + 20, r32(k64 + mb64 + 24));
+    st_expect_kernel(m64, k64n, 0, "an x86-64 copy that runs over .bss",
+                     "memory the loader must zero");
+    /* The header moved past the entry, with load_addr at it: the copy
+       starts after `_start`, which it then never loads. */
+    memcpy(m64, k64, k64n);
+    memset(m64 + mb64, 0, 32);
+    memcpy(m64 + mb64 + 40, k64 + mb64, 32);
+    w32(m64 + mb64 + 40 + 12, r32(k64 + mb64 + 12) + 40);
+    w32(m64 + mb64 + 40 + 16, r32(k64 + mb64 + 16) + 40);
+    st_expect_kernel(m64, k64n, 0, "an x86-64 copy that starts after the entry",
+                     "outside the copy");
+    memcpy(m64, k64, k64n);
+    w32(m64 + mb64 + 28, r32(k64 + mb64 + 28) + 1);
+    st_expect_kernel(m64, k64n, 0, "an x86-64 entry_addr that is not the entry's",
+                     "entry_addr");
+    memcpy(m64, k64, k64n);
+    w64(m64 + 64 + 16, LOAD_FLOOR);
+    st_expect_kernel(m64, k64n, 0, "an x86-64 load linked at its physical address",
+                     "KVA_IMAGE");
+    memcpy(m64, k64, k64n);
+    w64(m64 + 0x1000 + 8 + 48 + 8, r64(k64 + 0x1000 + 8 + 48 + 8) - 1);
+    st_expect_kernel(m64, k64n, 0, "an x86-64 _end that is not the image end",
+                     "is not the image end");
+}
+
+static int selftest(void)
+{
+    unsigned char good[16384], gnu[16384], mut[16384], big[32768];
+    size_t goodn, gnun, bign;
+    char detail[160];
+    uint32_t hdr = 52 + 64, mb = 52 + 64 + 16, last;
+
+    st_bad = 0;
+    st_user();
 
     goodn = craft_kernel(good, 0, 16, 0x100);
     if (kernel_check(good, goodn, 1, detail, sizeof(detail)) != 0 ||
@@ -1197,77 +1318,7 @@ static int selftest(void)
                          "no _start symbol");
     }
 
-    {
-        unsigned char k64[8192], m64[8192];
-        size_t k64n = craft_kernel64(k64);
-        uint32_t mb64 = 64 + 2 * 56;
-
-        if (kernel_check(k64, k64n, 0, detail, sizeof(detail)) != 0) {
-            fprintf(stderr, "elfcheck: selftest: the x86-64 fixture was refused: %s\n", kfail);
-            st_bad++;
-        }
-        if (kernel_check(k64, k64n, 1, detail, sizeof(detail)) != 0) {
-            fprintf(stderr,
-                    "elfcheck: selftest: the x86-64 fixture was refused under the tcc "
-                    "profile: %s\n",
-                    kfail);
-            st_bad++;
-        }
-        /* Without section headers, as TinyCC writes it: the tcc profile
-           takes it, and the common one wants the symbol table. */
-        memcpy(m64, k64, k64n);
-        w64(m64 + 40, 0);
-        w16(m64 + 60, 0);
-        if (kernel_check(m64, k64n, 1, detail, sizeof(detail)) != 0) {
-            fprintf(stderr,
-                    "elfcheck: selftest: the x86-64 fixture without a symbol table was "
-                    "refused under the tcc profile: %s\n",
-                    kfail);
-            st_bad++;
-        }
-        st_expect_kernel(m64, k64n, 0, "an x86-64 kernel without a symbol table",
-                         "no symbol table");
-        memcpy(m64, k64, k64n);
-        w32(m64 + mb64 + 4, MULTIBOOT_FLAGS);
-        w32(m64 + mb64 + 8, (uint32_t)(0 - (MULTIBOOT_MAGIC + MULTIBOOT_FLAGS)));
-        st_expect_kernel(m64, k64n, 0, "an x86-64 header without the a.out kludge", "flags");
-        memcpy(m64, k64, k64n);
-        w64(m64 + 120 + 8, r64(k64 + 120 + 8) + 8);
-        st_expect_kernel(m64, k64n, 0, "an x86-64 data load the a.out copy misplaces",
-                         "not where the copy");
-        memcpy(m64, k64, k64n);
-        w32(m64 + mb64 + 20, r32(k64 + mb64 + 20) - 4);
-        st_expect_kernel(m64, k64n, 0, "an x86-64 copy that stops short of the data",
-                         "load_end_addr");
-        memcpy(m64, k64, k64n);
-        w32(m64 + mb64 + 24, r32(k64 + mb64 + 24) + 0x1000);
-        st_expect_kernel(m64, k64n, 0, "an x86-64 .bss end past the image", "bss_end_addr");
-        memcpy(m64, k64, k64n);
-        w32(m64 + mb64 + 20, r32(k64 + mb64 + 24));
-        st_expect_kernel(m64, k64n, 0, "an x86-64 copy that runs over .bss",
-                         "memory the loader must zero");
-        /* The header moved past the entry, with load_addr at it: the copy
-           starts after `_start`, which it then never loads. */
-        memcpy(m64, k64, k64n);
-        memset(m64 + mb64, 0, 32);
-        memcpy(m64 + mb64 + 40, k64 + mb64, 32);
-        w32(m64 + mb64 + 40 + 12, r32(k64 + mb64 + 12) + 40);
-        w32(m64 + mb64 + 40 + 16, r32(k64 + mb64 + 16) + 40);
-        st_expect_kernel(m64, k64n, 0, "an x86-64 copy that starts after the entry",
-                         "outside the copy");
-        memcpy(m64, k64, k64n);
-        w32(m64 + mb64 + 28, r32(k64 + mb64 + 28) + 1);
-        st_expect_kernel(m64, k64n, 0, "an x86-64 entry_addr that is not the entry's",
-                         "entry_addr");
-        memcpy(m64, k64, k64n);
-        w64(m64 + 64 + 16, LOAD_FLOOR);
-        st_expect_kernel(m64, k64n, 0, "an x86-64 load linked at its physical address",
-                         "KVA_IMAGE");
-        memcpy(m64, k64, k64n);
-        w64(m64 + 0x1000 + 8 + 48 + 8, r64(k64 + 0x1000 + 8 + 48 + 8) - 1);
-        st_expect_kernel(m64, k64n, 0, "an x86-64 _end that is not the image end",
-                         "is not the image end");
-    }
+    st_kernel64();
 
     if (st_bad) {
         fprintf(stderr, "elfcheck: selftest: %d case(s) failed\n", st_bad);
