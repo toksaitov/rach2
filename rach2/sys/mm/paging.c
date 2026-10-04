@@ -279,26 +279,6 @@ static int pte_present(page_dir_t *dir, uintptr_t addr)
     return e && (*e & PTE_P) != 0;
 }
 
-/* Take back the page `alloc_user_page` mapped at `addr` in `dir`: the
- * entry cleared and the frame given back. For a page that could not be
- * made ready. */
-static void unmap_user_page_frame(page_dir_t *dir, uintptr_t addr)
-{
-    pte_t *e = user_pte(dir, addr);
-    pte_t pte;
-
-    if (!e) {
-        return;
-    }
-    pte = *e;
-    if (!(pte & PTE_P)) {
-        return;
-    }
-    *e = 0;
-    paging_flush_dir(dir, addr);
-    frame_unref(PTE_ADDR(pte));
-}
-
 /**
  * Back a page of a region that maps a file: a frame filled from the file and
  * mapped once it is full, writable when the region is. The mapping is
@@ -406,6 +386,7 @@ static int vm_resolve_once(struct mm *mm, uintptr_t addr, int write, uintptr_t a
     vm_space_t *vm = &mm->vm;
     vma_t *vma = vm_find(vm, addr);
     uintptr_t phys;
+    uint32_t prot;
 
     if (vma && region_allows(vma, write) && pte_present(dir, addr) &&
         (!write || pte_writable(dir, addr))) {
@@ -434,22 +415,18 @@ static int vm_resolve_once(struct mm *mm, uintptr_t addr, int write, uintptr_t a
         }
     }
 
-    phys = alloc_user_page(dir, addr);
+    /* A grown stack page is the stack's: writable, never executable. */
+    prot = vma ? vma->prot : VM_PROT_READ | VM_PROT_WRITE;
+    phys = alloc_user_frame();
     if (phys == 0) {
-        return 0; /* out of frames */
-    }
-
-    if (paging_zero_frame(phys) != 0) {
-        unmap_user_page_frame(dir, addr);
         return 0;
     }
-
-    if (vma && !(vma->prot & VM_PROT_WRITE)) {
-        paging_set_writable(dir, addr, false);
-    }
-    /* A grown stack page is the stack's, which has no VM_PROT_EXEC. */
-    if (!vma || !(vma->prot & VM_PROT_EXEC)) {
-        paging_set_exec(dir, addr, false);
+    if (paging_zero_frame(phys) != 0 ||
+        map_user_frame(dir, addr, phys,
+                       PTE_P | PTE_U | ((prot & VM_PROT_WRITE) ? PTE_W : 0) |
+                           paging_noexec(prot)) != 0) {
+        free_frame(phys);
+        return 0;
     }
     return 1;
 }
@@ -588,21 +565,16 @@ static int cow_fault(page_dir_t *dir, uintptr_t addr)
         return 1;
     }
 
-    new_phys = alloc_user_page(dir, addr);
+    new_phys = alloc_user_frame();
     if (new_phys == 0) {
-        return 0; /* out of frames -> caller segfaults the process */
-    }
-    if (pte & PTE_NOEXEC) {
-        paging_set_exec(dir, addr, false);
-    }
-    if (paging_copy_frame(new_phys, old_phys) != 0) {
-        /* Nothing was copied: the shared page is put back as it was, the
-         * fresh frame goes back, and the fault is unresolved. */
-        *user_pte(dir, addr) = pte;
-        paging_flush_dir(dir, addr);
-        frame_unref(new_phys);
         return 0;
     }
+    if (paging_copy_frame(new_phys, old_phys) != 0) {
+        free_frame(new_phys);
+        return 0;
+    }
+    *e = (pte_t)new_phys | PTE_P | PTE_W | PTE_U | (pte & PTE_NOEXEC);
+    paging_flush_dir(dir, addr);
     frame_unref(old_phys);
     return 1;
 }
