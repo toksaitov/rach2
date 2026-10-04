@@ -41,3 +41,4 @@ ahciprobe queue
 bigfileprobe large
 musl/creddisk cred-persist
 musl/saltnoent noentropy
+musl/smpmusl smp
