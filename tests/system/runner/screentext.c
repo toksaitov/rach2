@@ -149,19 +149,14 @@ static unsigned long colours(void)
     return n;
 }
 
-int main(int argc, char **argv)
+/** Read the screen dump at `path` into `pixels`, `width` and `height`.
+ * Returns 0, or 1 with a diagnostic for a file that cannot be opened, is no
+ * binary PPM of 255 levels, or is short of its pixels. */
+static int read_dump(const char *path)
 {
-    unsigned long maxval, scale, left, top, cols, rows;
-    FILE *f;
-    char line[MAX_COLS + 1];
-    int row, col, end, count = argc == 3 && strcmp(argv[1], "--colors") == 0;
-    const char *path = argv[argc - 1];
+    unsigned long maxval;
+    FILE *f = fopen(path, "rb");
 
-    if (argc != 2 && !count) {
-        fprintf(stderr, "usage: screentext [--colors] DUMP\n");
-        return 1;
-    }
-    f = fopen(path, "rb");
     if (!f) {
         fprintf(stderr, "screentext: %s: cannot open\n", path);
         return 1;
@@ -180,6 +175,23 @@ int main(int argc, char **argv)
         return 1;
     }
     fclose(f);
+    return 0;
+}
+
+int main(int argc, char **argv)
+{
+    unsigned long scale, left, top, cols, rows;
+    char line[MAX_COLS + 1];
+    int row, col, end, count = argc == 3 && strcmp(argv[1], "--colors") == 0;
+    const char *path = argv[argc - 1];
+
+    if (argc != 2 && !count) {
+        fprintf(stderr, "usage: screentext [--colors] DUMP\n");
+        return 1;
+    }
+    if (read_dump(path) != 0) {
+        return 1;
+    }
     if (count) {
         unsigned long n = colours();
 
