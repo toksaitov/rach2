@@ -15,7 +15,8 @@
 # guard page below a stack like the pages above it, breaks the fork row;
 # `boot-guard-mapped`, guard_boot_stack leaving the page below the boot stack
 # mapped, breaks the boot row; and `interrupt-gate`, vector 8 given an
-# interrupt gate that runs on the stack in use, breaks both, since the double
+# interrupt gate that runs on the stack in use (on x86-64, its gate without
+# the double fault's interrupt stack), breaks both, since the double
 # fault then faults a third time and QEMU, started with -no-reboot, ends. A
 # fault that does not change the kernel stops the proof. After each fault the
 # copy is restored and rebuilt, both rows must pass, and the kernel must be
@@ -109,7 +110,7 @@ build()
 {
     rm -f "$work/build$ARCH_SUFFIX/rach2/kernel"
     if [ -n "$file" ]; then
-        rm -f "$work/build/${file%.c}.o"
+        rm -f "$work/build$ARCH_SUFFIX/${file%.c}.o"
     fi
     if ! make -C "$work/rach2" "ARCH=$RACH2_ARCH" >"$work/$1.build.log" 2>&1; then
         cat "$work/$1.build.log" >&2
@@ -127,8 +128,13 @@ fault()
         boot-guard-mapped) file=rach2/kernel.c ;;
         interrupt-gate) file=rach2/sys/arch/i686/idt.c ;;
     esac
+    variant=$1
+    if [ "$1" = interrupt-gate ] && [ -n "$ARCH_SUFFIX" ]; then
+        file=rach2/sys/arch/x86_64/idt.c
+        variant=interrupt-gate-x86_64
+    fi
     cp "$work/$file" "$work/saved"
-    python3 - "$work/$file" "$1" <<'PY'
+    python3 - "$work/$file" "$variant" <<'PY'
 from pathlib import Path
 import sys
 
@@ -144,6 +150,9 @@ old, new = {
     'interrupt-gate': (
         '    _idt_set_desciptor(8, 0, DOUBLE_FAULT_TSS_SELECTOR, 0x85);\n',
         '    _idt_set_desciptor(8, (uintptr_t)&isr10, 0x08, 0x8E);\n'),
+    'interrupt-gate-x86_64': (
+        '    set_gate(8, isr8, GATE_KERNEL, IST_DOUBLE_FAULT);\n',
+        '    set_gate(8, isr8, GATE_KERNEL, 0);\n'),
 }[sys.argv[2]]
 if text.count(old) != 1:
     raise SystemExit('stackoverrun-proof: the lines to change are not unique: ' + sys.argv[2])
