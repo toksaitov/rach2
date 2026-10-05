@@ -1,16 +1,22 @@
 #!/bin/sh
-# Prove one native ptrace test against faults in a private source copy.
-# Usage: ptrace_mutate.sh ptrace|debugreg [--check]
+# Prove native ptrace tests against faults in private source copies.
+# Usage: ptrace_mutate.sh [ptrace|debugreg [--check]]
+# With no argument, run both tests and their faults.
 # --check compiles and runs the unmodified test alone. Every fault must
 # fail its named row; a restored, touched and rebuilt source must pass.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+if [ "$#" -eq 0 ]; then
+    sh "$0" ptrace
+    sh "$0" debugreg
+    exit 0
+fi
 kind=${1:-}
 case "$kind" in
-    ptrace) source=proc/ptrace.c; faults='regset listen options seize step' ;;
-    debugreg) source=arch/x86/debugreg.c; faults='switch stale migration delivery kernel-step' ;;
-    *) echo 'ptrace-proof: usage: ptrace_mutate.sh ptrace|debugreg [--check]' >&2; exit 2 ;;
+    ptrace) source=proc/ptrace.c; faults='regset listen return-stops return-kill options seize step' ;;
+    debugreg) source=arch/x86/debugreg.c; faults='switch stale migration delivery kernel-step pending pending-saved pending-stale pending-step' ;;
+    *) echo 'ptrace-proof: usage: ptrace_mutate.sh [ptrace|debugreg [--check]]' >&2; exit 2 ;;
 esac
 shift
 [ "$#" -eq 0 ] || [ "$*" = --check ] || exit 2
@@ -84,6 +90,11 @@ changes = {
                '    if (!set) {\n', 'regset revalidates after sleeping copy'),
     'listen': ('        } else if (t->ptrace & PT_LISTEN) {\n            ptrace_restop(t);\n',
                '', 'interrupt releases listening tracee'),
+    'return-stops': ('    while ((self->ptrace & PT_TRACED) && (self->ptrace & (PT_START | PT_INTERRUPT)) &&',
+                     '    if ((self->ptrace & PT_TRACED) && (self->ptrace & (PT_START | PT_INTERRUPT)) &&',
+                     'listening interrupts stop before user return'),
+    'return-kill': ('           !kill_pending()) {',
+                    '           1) {', 'kill ends return stop sequence'),
     'options': ('        if (data & ~(unsigned long)PTRACE_O_MASK) {',
                 '        if (data & ~PTRACE_O_MASK) {', 'setoptions refuses upper bits'),
     'seize': ('static int ptrace_attach(process_t *t, int seize, unsigned long opts)',
@@ -103,6 +114,16 @@ changes = {
                     'kernel single step does not duplicate syscall exit stop'),
     'delivery': ('        signal_post_thread(current_proc, SIGTRAP, &info);',
                  '        (void)info;', 'deferred trap follows thread'),
+    'pending': ('    return ((deferred[arch_cpu_id()] | current_proc->debug_pending) & DR6_HITS) != 0;',
+                '    return 0;', 'deferred hit is pending before a wait'),
+    'pending-saved': ('    return ((deferred[arch_cpu_id()] | current_proc->debug_pending) & DR6_HITS) != 0;',
+                      '    return (deferred[arch_cpu_id()] & DR6_HITS) != 0;',
+                      'saved hit is pending after migration'),
+    'pending-stale': ('    if (!current_proc || !(current_proc->debugreg[7] & DR7_ENABLES)) {',
+                      '    if (!current_proc) {', 'detached hit does not interrupt a wait'),
+    'pending-step': ('    return ((deferred[arch_cpu_id()] | current_proc->debug_pending) & DR6_HITS) != 0;',
+                     '    return ((deferred[arch_cpu_id()] | current_proc->debug_pending) & (DR6_HITS | DR6_BS)) != 0;',
+                     'kernel step does not interrupt a wait'),
 }
 old, new, message = changes[fault]
 s = path.read_text()

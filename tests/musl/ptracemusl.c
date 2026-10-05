@@ -46,6 +46,7 @@
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stddef.h>
@@ -1308,6 +1309,58 @@ static void finish_register_child(pid_t pid)
     wait_within(pid, &status);
 }
 
+/** Each interrupt of a listening tracee stops before its next instruction.
+ * The chosen instruction increments BX; a late stop changes BX or IP. */
+static int interrupt_listening(pid_t pid)
+{
+    struct user_regs_struct regs;
+    int i;
+
+    if (ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0) {
+        return abandon(pid, "registers before listening interrupt");
+    }
+    R_IP(regs) = (unsigned long)step_return;
+    R_BX(regs) = 41;
+    R_NR(regs) = -1;
+    if (ptrace(PTRACE_SETREGS, pid, NULL, &regs) != 0) {
+        return abandon(pid, "setting the instruction after the listening stop");
+    }
+    for (i = 0; i < 2; i++) {
+        if (ptrace(PTRACE_LISTEN, pid, NULL, NULL) != 0 ||
+            ptrace(PTRACE_INTERRUPT, pid, NULL, NULL) != 0 ||
+            expect_stop(pid, SIGTRAP | (PTRACE_EVENT_STOP << 8),
+                        "listening interrupt made no new event stop") ||
+            ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0 ||
+            (unsigned long)R_IP(regs) != (unsigned long)step_return || R_BX(regs) != 41) {
+            return abandon(pid, "listening interrupt ran a user instruction before stopping");
+        }
+    }
+    finish_register_child(pid);
+    return 0;
+}
+
+/** Listen at an interrupt stop outside a group stop, then interrupt again. */
+static int listen_user_return(void)
+{
+    pid_t pid = fork();
+
+    if (pid == 0) {
+        for (;;) {
+            pause();
+        }
+    }
+    if (pid < 0) {
+        return fail("fork for listening interrupt");
+    }
+    if (ptrace(PTRACE_SEIZE, pid, NULL, NULL) != 0 ||
+        ptrace(PTRACE_INTERRUPT, pid, NULL, NULL) != 0 ||
+        expect_stop(pid, SIGTRAP | (PTRACE_EVENT_STOP << 8),
+                    "initial interrupt made no event stop")) {
+        return abandon(pid, "seizing the child for a listening interrupt");
+    }
+    return interrupt_listening(pid);
+}
+
 /** A syscall step stops at its return, before the next user instruction. */
 static int step_system_call(void)
 {
@@ -1446,16 +1499,47 @@ static int watched_copy(void)
     return 0;
 }
 
+/** A kernel read of watched memory interrupts an otherwise endless poll.
+ * The negative descriptor never becomes ready, and there is no timeout or
+ * other signal. The stop must report the watchpoint and the EINTR result. */
+static int watched_poll(void)
+{
+    static struct pollfd pfd = {-1, POLLIN, 0};
+    struct user_regs_struct regs;
+    siginfo_t info;
+    int status;
+    pid_t pid = fork();
+
+    if (pid == 0) {
+        ptrace(PTRACE_TRACEME, 0, NULL, NULL);
+        raise(SIGSTOP);
+        _exit(syscall(SYS_poll, &pfd, 1, -1) == -1 && errno == EINTR ? 0 : 1);
+    }
+    if (pid < 0 || expect_stop(pid, SIGSTOP, "watched poll child did not stop")) {
+        return fail("fork for watched poll");
+    }
+    if (debug_set(pid, 0, (unsigned long)&pfd.fd) != 0 || debug_set(pid, 7, 0xf0001) != 0 ||
+        ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 ||
+        expect_stop(pid, SIGTRAP, "watched infinite poll did not trap") ||
+        ptrace(PTRACE_GETSIGINFO, pid, NULL, &info) != 0 || info.si_code != TRAP_HWBKPT ||
+        ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0 || (long)R_RET(regs) != -EINTR) {
+        return abandon(pid, "watched poll lost its trap or EINTR result");
+    }
+    if (debug_set(pid, 7, 0) != 0 || ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 ||
+        wait_within(pid, &status) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        return abandon(pid, "watched poll did not return EINTR");
+    }
+    return 0;
+}
+
 /** Run the ordinary suite, or one debug row for a compiled fault proof. */
 /* The rows a suite may run alone, by the name it passes. */
 static const struct {
     const char *name;
     int (*row)(void);
 } named_rows[] = {
-    {"step", step_system_call},
-    {"entry", entry_system_call},
-    {"delayed", delayed_debug},
-    {"copy", watched_copy},
+    {"step", step_system_call}, {"entry", entry_system_call}, {"delayed", delayed_debug},
+    {"copy", watched_copy},     {"poll", watched_poll},       {"listen", listen_user_return},
 };
 
 /* The rows of memory, system calls and attaching; 0, or 1. */
@@ -1472,7 +1556,7 @@ static int second_rows(void)
 {
     return seized_fork() || stopped_leader() || traced_thread_usage() || tracer_first() ||
            killed_tracee() || step_system_call() || entry_system_call() || delayed_debug() ||
-           watched_copy();
+           watched_copy() || watched_poll() || listen_user_return();
 }
 
 int main(int argc, char **argv)

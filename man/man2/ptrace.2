@@ -339,7 +339,8 @@ fails with
 where Linux restarts it.
 A tracee that
 .Dv PTRACE_LISTEN
-keeps in its stop makes the new stop at once.
+keeps in its stop makes the new stop before executing another user
+instruction, including after repeated listen and interrupt requests.
 .It Dv PTRACE_LISTEN
 For a seized tracee in a
 .Dv PTRACE_EVENT_STOP ,
@@ -425,6 +426,17 @@ A breakpoint that fires sends
 with
 .Dv TRAP_HWBKPT ,
 also when the kernel touches the address in a copy for the tracee.
+A hit deferred in the kernel interrupts an interruptible wait as a
+pending
+.Dv SIGTRAP
+would, subject to its signal mask and disposition; the signal is posted
+before return to user mode.
+Thus an infinite
+.Xr poll 2
+whose descriptor the kernel reads through a watchpoint stops for the
+tracer and returns
+.Er EINTR
+after the tracer suppresses the signal and resumes it.
 When the tracer ends, any breakpoint still loaded on the processor
 running the tracee is disabled at its next hit, switch or user return.
 That stale hit sends no hardware-breakpoint signal; a simultaneous single

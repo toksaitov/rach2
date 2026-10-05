@@ -77,6 +77,35 @@ static void detach(void)
     host_cpu = 1;
 }
 
+/** The pending check sees only hardware hits still owned by this thread. */
+static void pending_hits(void)
+{
+    setup();
+    hardware[1][6] = 1;
+    debugreg_defer();
+    check(arch_debug_pending() && arch_debug_pending() && signals == 0,
+          "deferred hit is pending before a wait");
+    arch_debug_switch(&tracee, &other);
+    cpu_table[1].current = &other;
+    check(!arch_debug_pending(), "next thread has no deferred hit");
+    host_cpu = 0;
+    cpu_table[0].current = &tracee;
+    check(arch_debug_pending(), "saved hit is pending after migration");
+    debugreg_deliver();
+    check(!arch_debug_pending(), "delivered hit is no longer pending");
+
+    setup();
+    hardware[1][6] = 1;
+    debugreg_defer();
+    detach();
+    check(!arch_debug_pending(), "detached hit does not interrupt a wait");
+
+    setup();
+    hardware[1][6] = 0x4000;
+    debugreg_defer();
+    check(!arch_debug_pending(), "kernel step does not interrupt a wait");
+}
+
 /** Exercise the two stale-register paths and deferred exception ownership. */
 int main(void)
 {
@@ -129,6 +158,7 @@ int main(void)
     debugreg_defer();
     debugreg_deliver();
     check(signals == 0, "kernel single step does not duplicate syscall exit stop");
+    pending_hits();
     printf("debugreg-hosttest: result: %s\n", failures ? "fail" : "pass");
     return failures != 0;
 }

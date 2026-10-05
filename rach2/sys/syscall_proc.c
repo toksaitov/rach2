@@ -3417,13 +3417,14 @@ static void sender_info(struct k_siginfo *info, int32_t code, const process_t *t
     info->uid = current_proc ? ns_uid_from_kernel(proc_userns(target), current_proc->ruid) : 0;
 }
 
-/* Non-zero if the current process has a pending signal that is neither
+/** Non-zero if the current process has a pending signal that is neither
  * blocked nor ignored: one that is caught, or whose default action terminates
  * or stops the process; or if its tracer asked for a stop with
  * PTRACE_INTERRUPT, which, as a stop signal would, ends the wait so the stop
  * is taken on the way back to user mode (`ptrace_return_stops`). Blocking
- * syscall loops poll this so a signal interrupts the wait (the signal is then
- * delivered/acts on the syscall's return to user). */
+ * syscall loops poll this so a signal interrupts the wait. A deferred
+ * hardware hit counts as SIGTRAP, subject to its mask and disposition,
+ * before the user return posts it on the thread's stack. */
 int signal_pending(void)
 {
     uint64_t deliverable;
@@ -3440,8 +3441,11 @@ int signal_pending(void)
      * 32-bit loads, and a signal posted from an IRQ in between could tear it.
      */
     flags = sig_irq_save();
-    deliverable =
-        (current_proc->sig_pending | current_proc->tg->pending) & ~current_proc->sig_blocked;
+    deliverable = current_proc->sig_pending | current_proc->tg->pending;
+    if (arch_debug_pending()) {
+        deliverable |= KSIG_BIT(SIGTRAP);
+    }
+    deliverable &= ~current_proc->sig_blocked;
     sig_irq_restore(flags);
     /* Only a signal that would ACT interrupts a wait: a caught handler, a
      * default terminate or a default stop. A pending signal that is ignored

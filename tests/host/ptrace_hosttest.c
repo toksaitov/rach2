@@ -22,6 +22,7 @@ struct percpu cpu_table[NR_CPUS] = {{.current = &self}};
 process_t *proc_list = &self;
 uint32_t proc_dead_threads;
 static int failures, resume_on_copy, register_reads, wakes;
+static int stops, listen_interrupts, kill_on_resume;
 static uint32_t stop_status;
 static struct k_siginfo stop_info;
 
@@ -98,11 +99,29 @@ long arch_regset_set(process_t *t, unsigned long type, const uint8_t *in, uint32
     return 0;
 }
 
-/** Record the stop before the modeled tracer resumes its thread. */
+/** Record a stop, then model the tracer's requests while the tracee sleeps.
+ * A listening tracee resumes inside ptrace_stop after PTRACE_INTERRUPT. */
 void schedule(void)
 {
+    isr_params_t request;
+
+    stops++;
     stop_status = current_proc->ptrace_status;
     stop_info = current_proc->ptrace_info;
+    if (listen_interrupts) {
+        listen_interrupts--;
+        check(ptrace_listen(&tracee) == 0, "listen during return stop");
+        k_memset(&request, 0, sizeof(request));
+        request.ebx = PTRACE_INTERRUPT;
+        request.ecx = tracee.pid;
+        cpu_table[0].current = &self;
+        check(sys_ptrace(&request) == 0, "interrupt during return stop");
+        cpu_table[0].current = &tracee;
+        if (kill_on_resume) {
+            tracee.sig_pending |= KSIG_BIT(SIGKILL);
+        }
+        return;
+    }
     current_proc->ptrace_status = 0;
     current_proc->state = PROC_RUNNING;
 }
@@ -135,6 +154,28 @@ static void setup(void)
     tracee.ptrace_status = (PTRACE_EVENT_STOP << 16) | (SIGSTOP << 8) | 0x7f;
     cpu_table[0].current = &self;
     wakes = register_reads = resume_on_copy = 0;
+    stops = listen_interrupts = kill_on_resume = 0;
+}
+
+/** A resumed listen reports every interrupt before leaving the return path. */
+static void return_stops(void)
+{
+    setup();
+    cpu_table[0].current = &tracee;
+    tracee.ptrace |= PT_INTERRUPT;
+    listen_interrupts = 2;
+    ptrace_return_stops();
+    check(stops == 3 && wakes == 2 && !(tracee.ptrace & PT_INTERRUPT) &&
+              stop_status == ((PTRACE_EVENT_STOP << 16) | (SIGTRAP << 8) | 0x7f),
+          "listening interrupts stop before user return");
+
+    setup();
+    cpu_table[0].current = &tracee;
+    tracee.ptrace |= PT_INTERRUPT;
+    listen_interrupts = kill_on_resume = 1;
+    ptrace_return_stops();
+    check(stops == 1 && (tracee.sig_pending & KSIG_BIT(SIGKILL)) && (tracee.ptrace & PT_INTERRUPT),
+          "kill ends return stop sequence");
 }
 
 /** Exercise regset revalidation, listen interruption, options and stepping. */
@@ -179,6 +220,7 @@ int main(void)
     ptrace_syscall_stop(&frame, 20, 1);
     check(stop_status == ((SIGTRAP << 8) | 0x7f) && stop_info.code == TRAP_TRACE,
           "syscall single step reports TRAP_TRACE without syscall marker");
+    return_stops();
     printf("ptrace-hosttest: result: %s\n", failures ? "fail" : "pass");
     return failures != 0;
 }

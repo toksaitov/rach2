@@ -219,6 +219,10 @@ long arch_regset_set(struct process *t, unsigned long type, const uint8_t *in, u
  * enables when it has none. */
 void arch_debug_switch(struct process *old, const struct process *next);
 
+/** Whether this thread has a deferred hardware hit that will post SIGTRAP.
+ * The caller holds the big lock with interrupts off. */
+int arch_debug_pending(void);
+
 /** The bytes of the floating-point notes of one thread in a core file. */
 uint32_t arch_core_fp_size(void);
 

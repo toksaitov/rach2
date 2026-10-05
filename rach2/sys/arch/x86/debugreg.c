@@ -122,6 +122,17 @@ void debugreg_defer(void)
     deferred[cpu] |= dr6 & (DR6_HITS | DR6_BS);
 }
 
+/** Test deferred hardware hits without consuming them. A wait must see the
+ * hit before it sleeps, including after a switch moved it to the thread.
+ * Stale enables and kernel single steps post no signal at user return. */
+int arch_debug_pending(void)
+{
+    if (!current_proc || !(current_proc->debugreg[7] & DR7_ENABLES)) {
+        return 0;
+    }
+    return ((deferred[arch_cpu_id()] | current_proc->debug_pending) & DR6_HITS) != 0;
+}
+
 /** Post a deferred kernel debug exception on the thread's own stack, with
  * the big lock held and interrupts off. A switch kept its status in the
  * outgoing thread so it follows that thread to another processor. The

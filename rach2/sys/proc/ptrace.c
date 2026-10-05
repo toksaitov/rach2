@@ -108,17 +108,20 @@ static int ptrace_stop(uint32_t status, const struct k_siginfo *info)
     return self->ptrace_signo;
 }
 
+/** Take each requested event stop before returning to user mode. A tracer
+ * can listen and interrupt while ptrace_stop sleeps; recheck on each resume.
+ * SIGKILL ends the sequence so signal delivery can terminate the thread. */
 void ptrace_return_stops(void)
 {
     process_t *self = current_proc;
     uint32_t signo;
 
-    if (!(self->ptrace & PT_TRACED) || !(self->ptrace & (PT_START | PT_INTERRUPT))) {
-        return;
+    while ((self->ptrace & PT_TRACED) && (self->ptrace & (PT_START | PT_INTERRUPT)) &&
+           !kill_pending()) {
+        signo = self->tg->stop ? self->tg->stop : SIGTRAP;
+        self->ptrace &= ~(PT_START | PT_INTERRUPT);
+        (void)ptrace_stop(((uint32_t)PTRACE_EVENT_STOP << 16) | (signo << 8) | 0x7F, NULL);
     }
-    signo = self->tg->stop ? self->tg->stop : SIGTRAP;
-    self->ptrace &= ~(PT_START | PT_INTERRUPT);
-    (void)ptrace_stop(((uint32_t)PTRACE_EVENT_STOP << 16) | (signo << 8) | 0x7F, NULL);
 }
 
 int ptrace_signal_stop(int signo, struct k_siginfo *info)

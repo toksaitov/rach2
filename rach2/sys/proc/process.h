@@ -535,8 +535,9 @@ uint32_t proc_alarm_at(uint32_t now, uint32_t ticks);
  * Non-zero if the current process has a pending signal that is neither
  * blocked nor ignored: one that is caught, or whose default action
  * terminates or stops the process; or a stop its tracer asked for with
- * PTRACE_INTERRUPT. Blocking syscall loops poll it to break out so the
- * signal, or the stop, is acted on. Defined in syscall_proc.c.
+ * PTRACE_INTERRUPT. Deferred hardware hits count as pending SIGTRAP.
+ * Blocking syscall loops poll it so the signal or stop is acted on.
+ * Defined in syscall_proc.c.
  */
 int signal_pending(void);
 
