@@ -1,8 +1,15 @@
 #!/bin/sh
-# Prove that master closure releases both blocked canonical slave readers.
+# Prove that master closure releases both blocked canonical slave readers, on
+# the kernel, probe and emulator of the architecture ARCH names.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
+REPO=$repo
+. "$repo/mk/arch.sh"
+RACH2_QEMU=$ARCH_QEMU
+export RACH2_QEMU ARCH_BUILD
+tree=build$ARCH_SUFFIX
 [ ! -d build/.run.lock ] || {
     echo 'pty-hangup: another suite owns this tree' >&2; exit 1;
 }
@@ -27,8 +34,8 @@ stop_child()
 
 rebuild()
 {
-    rm -f build/rach2/sys/tty/pty.o build/rach2/kernel
-    make -s rach2
+    rm -f "$tree"/rach2/sys/tty/pty.o "$tree"/rach2/kernel
+    make -s rach2 "ARCH=$RACH2_ARCH"
 }
 
 restore()
@@ -57,7 +64,7 @@ run_probe()
     probe=ptyprobe
     token=PTYPROBE
     build/tests/system/runutil group build/tests/system/harness \
-        --kernel build/rach2/kernel --initrd "$work/test.krffs" \
+        --kernel "$tree"/rach2/kernel --initrd "$work/test.krffs" \
         --net hubport,id=net0,hubid=0 --qemu-arg=-cpu --qemu-arg=max \
         --append rach2.rescue --timeout 40 --steptmo 15 \
         --ok "$token OK" --never "$token FAIL" \
@@ -86,19 +93,19 @@ run_phase()
     expected=$2
     rebuild >"$work/$phase.build.log" 2>&1
     cat "$work/$phase.build.log"
-    cp build/rach2/kernel "$work/$phase.kernel"
-    cksum "$source" build/rach2/kernel "$work/test.krffs" >"$work/$phase.artifacts"
+    cp "$tree"/rach2/kernel "$work/$phase.kernel"
+    cksum "$source" "$tree"/rach2/kernel "$work/test.krffs" >"$work/$phase.artifacts"
     run_probe "$expected"
 }
 
 echo "pty-hangup: logs: $work"
-make -s -C tests ../build/tests/ptyprobe >"$work/build.log" 2>&1
+make -s -C tests ../"$tree"/tests/ptyprobe "ARCH=$RACH2_ARCH" >"$work/build.log" 2>&1
 # These three image tools do not use mkhash's vendored crypt source.
 make -s -C krffs -o libc-check ../build/krffs/mkfs.krffs \
     ../build/krffs/stageimage.krffs ../build/krffs/readfile.krffs >>"$work/build.log" 2>&1
-make -s build/tests/system/harness build/tests/system/runutil >>"$work/build.log" 2>&1
-cat >"$work/test.manifest" <<'MANIFEST'
-file 0755 /ptyprobe build/tests/ptyprobe
+make -s build/tests/system/harness build/tests/system/runutil "ARCH=$RACH2_ARCH" >>"$work/build.log" 2>&1
+cat >"$work/test.manifest" <<MANIFEST
+file 0755 /ptyprobe $tree/tests/ptyprobe
 MANIFEST
 {
     dd if=/dev/zero of="$work/test.krffs" bs=1048576 count=2
@@ -107,7 +114,7 @@ MANIFEST
 } >>"$work/build.log" 2>&1
 cat "$work/build.log"
 build/krffs/readfile.krffs "$work/test.krffs" /ptyprobe "$work/ptyprobe.staged"
-cmp build/tests/ptyprobe "$work/ptyprobe.staged"
+cmp "$tree"/tests/ptyprobe "$work/ptyprobe.staged"
 run_phase fixed pass
 changed=1
 python3 - "$source" <<'PYTHON'
