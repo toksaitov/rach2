@@ -28,6 +28,12 @@
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+# The architecture, from ARCH as mk/arch.sh reads it: its build tree, which
+# has the kernel, the programs and the boot's log.
+RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
+REPO=$repo
+. "$repo/mk/arch.sh"
+tree=build$ARCH_SUFFIX
 list=tests/system/probe_faults.txt
 shard=0/1
 if [ "${1:-}" = -s ] && [ "$#" -ge 2 ]; then
@@ -157,7 +163,7 @@ cleanup()
     stop_child
     restore
     if [ -n "$built" ]; then
-        make -s rach2 test-image >"$work/cleanup.build.log" 2>&1 </dev/null || :
+        make -s rach2 test-image "ARCH=$RACH2_ARCH" >"$work/cleanup.build.log" 2>&1 </dev/null || :
     fi
     rm -rf build/.run.lock
 }
@@ -166,11 +172,11 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-# The kernel and the programs of build/tests, build/tests/musl and
-# build/utils, as checksums in a stable order.
+# The kernel and the programs of the architecture's tests, tests/musl and
+# utils, as checksums in a stable order.
 products()
 {
-    find build/rach2/kernel build/tests build/tests/musl build/utils -maxdepth 1 -type f \
+    find "$tree/rach2/kernel" "$tree/tests" "$tree/tests/musl" "$tree/utils" -maxdepth 1 -type f \
         ! -name '*.d' ! -name '*.log' -exec cksum {} + | sort -k 3
 }
 
@@ -183,14 +189,15 @@ probe_fault()
     built=1
     faults apply "$name"
     touch "$file"
-    rm -f build/images/default-test.log
-    "$work/runutil" group make run-default >"$work/$name.log" 2>&1 </dev/null &
+    rm -f "$tree/images/default-test.log"
+    "$work/runutil" group make run-default "ARCH=$RACH2_ARCH" >"$work/$name.log" 2>&1 </dev/null &
     child=$!
     status=0
     wait "$child" || status=$?
     stop_child
     cat "$work/$name.log"
-    [ ! -f build/images/default-test.log ] || cp build/images/default-test.log "$work/$name.guest.log"
+    [ ! -f "$tree/images/default-test.log" ] ||
+        cp "$tree/images/default-test.log" "$work/$name.guest.log"
     restore
     if ! grep -q '^runtests: [0-9]* of [0-9]* probes' "$work/$name.log"; then
         echo "probe-faults: $name: the suite did not run; see $work/$name.log" >&2
@@ -205,14 +212,14 @@ probe_fault()
 }
 
 echo "probe-faults: logs: $work"
-make -s rach2 test-image >"$work/first.build.log" 2>&1 </dev/null ||
+make -s rach2 test-image "ARCH=$RACH2_ARCH" >"$work/first.build.log" 2>&1 </dev/null ||
     { cat "$work/first.build.log"; exit 1; }
 products >"$work/first.sums"
 while IFS=$tab read -r name probe file words; do
     probe_fault "$name" "$probe" "$file" "$words"
 done <"$work/selected"
 
-make -s rach2 test-image >"$work/restored.build.log" 2>&1 </dev/null ||
+make -s rach2 test-image "ARCH=$RACH2_ARCH" >"$work/restored.build.log" 2>&1 </dev/null ||
     { cat "$work/restored.build.log"; exit 1; }
 built=
 products >"$work/restored.sums"
