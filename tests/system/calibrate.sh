@@ -15,13 +15,19 @@
 # Prints one line, `compute=S storage=S width=W`, seconds to a thousandth, and
 # exits 1 with a reason when a machine did not finish. The calibration's
 # own deadlines are not scaled: this script runs before any factor exists.
+# The kernel, the image and the emulator are those of the architecture ARCH
+# names.
 set -u
 [ $# -eq 2 ] || { echo "usage: calibrate.sh WIDTH DIR" >&2; exit 2; }
 WIDTH=$1; DIR=$2
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
+RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
+. "$REPO/mk/arch.sh"
+RACH2_QEMU=$ARCH_QEMU
+export RACH2_QEMU
 HARNESS="$REPO/build/tests/system/harness"
-KERNEL="$REPO/build/rach2/kernel"
-IMAGE="$REPO/build/images/test.krffs"
+KERNEL="$ARCH_BUILD/rach2/kernel"
+IMAGE="$ARCH_BUILD/images/test.krffs"
 for f in "$HARNESS" "$KERNEL" "$IMAGE"; do
     [ -e "$f" ] || { echo "calibrate: $f is not built" >&2; exit 1; }
 done
