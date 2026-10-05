@@ -426,11 +426,13 @@ A breakpoint that fires sends
 with
 .Dv TRAP_HWBKPT ,
 also when the kernel touches the address in a copy for the tracee.
-A hit deferred in the kernel interrupts an interruptible wait as a
-pending
-.Dv SIGTRAP
-would, subject to its signal mask and disposition; the signal is posted
-before return to user mode.
+A hit deferred in the kernel is posted as that signal before the kernel
+next checks the tracee's pending signals, so it interrupts an
+interruptible wait subject to its signal mask and disposition, and
+.Xr rt_sigtimedwait 2
+or a
+.Xr signalfd 2
+read can take it.
 Thus an infinite
 .Xr poll 2
 whose descriptor the kernel reads through a watchpoint stops for the
