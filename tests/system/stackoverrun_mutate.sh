@@ -25,19 +25,26 @@
 # name the thread by but a mapped one, where nothing faults, so no layout of
 # the heap can let the fork row pass under it; the thread's record lies above
 # its stack, where the descent does not reach it. The proof needs the test
-# image `tests/run memory` boots, build/images/test.krffs, of which it boots
-# a copy. It changes nothing in the tree; its kernels, consoles and logs stay
-# under the build/stackoverrun-proof.* directory it prints.
+# image `tests/run memory` boots, test.krffs under the images of the
+# architecture ARCH names, of which it boots a copy, and its kernels are built
+# for that architecture. It changes nothing in the tree; its kernels, consoles
+# and logs stay under the build/stackoverrun-proof.* directory it prints.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
+REPO=$repo
+. "$repo/mk/arch.sh"
+RACH2_QEMU=$ARCH_QEMU
+export RACH2_QEMU ARCH_BUILD
+tree=build$ARCH_SUFFIX
 [ ! -d build/.run.lock ] || {
     echo 'stackoverrun-proof: another suite owns this tree' >&2; exit 1;
 }
-[ -f build/images/test.krffs ] || {
-    echo 'stackoverrun-proof: no build/images/test.krffs; make test-image first' >&2; exit 1;
+[ -f "$tree"/images/test.krffs ] || {
+    echo "stackoverrun-proof: no $tree/images/test.krffs; make test-image first" >&2; exit 1;
 }
-make -s build/tools/inspect/elfcheck build/tests/system/harness build/tests/system/runutil
+make -s build/tools/inspect/elfcheck build/tests/system/harness build/tests/system/runutil "ARCH=$RACH2_ARCH"
 mkdir -p build
 work=$(mktemp -d "$repo/build/stackoverrun-proof.XXXXXX")
 cp -R rach2 mk "$work/"
@@ -47,7 +54,7 @@ cat >"$work/Makefile" <<'MAKE'
 build/tools/inspect/elfcheck:
 	@test -x "$@"
 MAKE
-cp build/images/test.krffs "$work/test.krffs"
+cp "$tree"/images/test.krffs "$work/test.krffs"
 child=
 file=
 
@@ -100,15 +107,15 @@ judge()
 # changed within the second it was made.
 build()
 {
-    rm -f "$work/build/rach2/kernel"
+    rm -f "$work/build$ARCH_SUFFIX/rach2/kernel"
     if [ -n "$file" ]; then
         rm -f "$work/build/${file%.c}.o"
     fi
-    if ! make -C "$work/rach2" >"$work/$1.build.log" 2>&1; then
+    if ! make -C "$work/rach2" "ARCH=$RACH2_ARCH" >"$work/$1.build.log" 2>&1; then
         cat "$work/$1.build.log" >&2
         exit 1
     fi
-    cp "$work/build/rach2/kernel" "$work/$1.kernel"
+    cp "$work/build$ARCH_SUFFIX/rach2/kernel" "$work/$1.kernel"
 }
 
 # fault NAME: put the fault NAME into the private copy, the file it changes
