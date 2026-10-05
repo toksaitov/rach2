@@ -2,10 +2,15 @@
 # Build the two poll orders from one private source tree for measurement.
 # Each kernel's path is printed as RACH2_MEASURE_KERNEL, the name
 # machine_identity.sh takes, so that a measurement driver checks that the
-# machine runs that artifact before it times anything.
+# machine runs that artifact before it times anything. The kernels are built
+# for the architecture ARCH names.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
+REPO=$repo
+. "$repo/mk/arch.sh"
+out=build$ARCH_SUFFIX/rach2
 runner="$repo/build/tests/system/runutil"
 checker="$repo/build/tools/inspect/elfcheck"
 if [ ! -x "$runner" ] || [ ! -x "$checker" ]; then
@@ -48,16 +53,16 @@ build()
     order=$1
     echo "poll-kernels: building $order"
     # A source change within the object's timestamp unit must still compile.
-    rm -f "$work/build/rach2/sys/io/poll.o" "$work/build/rach2/kernel"
+    rm -f "$work/$out/sys/io/poll.o" "$work/$out/kernel"
     "$runner" watch poll-kernels 120 "$work/$order.jobs" \
-        make -s -C "$work/rach2" -j4 "ELFCHECK=$checker" &
+        make -s -C "$work/rach2" -j4 "ELFCHECK=$checker" "ARCH=$RACH2_ARCH" &
     child=$!
     rc=0
     wait "$child" || rc=$?
     child=
     [ "$rc" -eq 0 ] || exit "$rc"
-    cp "$work/build/rach2/kernel" "$work/$order.kernel"
-    cp "$work/build/rach2/.config" "$work/$order.config"
+    cp "$work/$out/kernel" "$work/$order.kernel"
+    cp "$work/$out/.config" "$work/$order.config"
     shasum -a 256 "$work/$order.kernel"
 }
 
