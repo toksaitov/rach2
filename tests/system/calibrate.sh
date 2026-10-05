@@ -24,7 +24,7 @@ REPO=$(cd "$(dirname "$0")/../.." && pwd)
 RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
 . "$REPO/mk/arch.sh"
 RACH2_QEMU=$ARCH_QEMU
-export RACH2_QEMU
+export RACH2_QEMU ARCH_BUILD
 HARNESS="$REPO/build/tests/system/harness"
 KERNEL="$ARCH_BUILD/rach2/kernel"
 IMAGE="$ARCH_BUILD/images/test.krffs"

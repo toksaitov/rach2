@@ -30,7 +30,7 @@ RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
 REPO=$repo
 . "$repo/mk/arch.sh"
 RACH2_QEMU=$ARCH_QEMU
-export RACH2_QEMU
+export RACH2_QEMU ARCH_BUILD
 abuild=build$ARCH_SUFFIX
 [ ! -d build/.run.lock ] || {
     echo 'gpt-write-mutation: another suite owns this tree' >&2; exit 1;

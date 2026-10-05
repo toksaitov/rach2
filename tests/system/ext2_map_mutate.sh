@@ -13,7 +13,7 @@ RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
 REPO=$repo
 . "$repo/mk/arch.sh"
 RACH2_QEMU=$ARCH_QEMU
-export RACH2_QEMU
+export RACH2_QEMU ARCH_BUILD
 tree=build$ARCH_SUFFIX
 [ ! -d build/.run.lock ] || {
     echo 'ext2-map-mutation: another suite owns this tree' >&2; exit 1;
@@ -86,7 +86,7 @@ run_phase()
 
 echo "ext2-map-mutation: logs: $work"
 make -s test-image build/tests/system/harness build/tests/system/runutil \
-    build/tools/image/mkmbr >"$work/build.log" 2>&1
+    build/tools/image/mkmbr "ARCH=$RACH2_ARCH" >"$work/build.log" 2>&1
 run_phase fixed pass
 for fault in release read write; do
     changed=1

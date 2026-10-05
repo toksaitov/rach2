@@ -8,7 +8,7 @@ RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
 REPO=$repo
 . "$repo/mk/arch.sh"
 RACH2_QEMU=$ARCH_QEMU
-export RACH2_QEMU
+export RACH2_QEMU ARCH_BUILD
 tree=build$ARCH_SUFFIX
 [ ! -d build/.run.lock ] || {
     echo 'framebuffer-guest: another suite owns this tree' >&2; exit 1;

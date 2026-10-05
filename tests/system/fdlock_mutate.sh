@@ -9,7 +9,7 @@ RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
 REPO=$repo
 . "$repo/mk/arch.sh"
 RACH2_QEMU=$ARCH_QEMU
-export RACH2_QEMU
+export RACH2_QEMU ARCH_BUILD
 tree=build$ARCH_SUFFIX
 runner=suite
 if [ "${1-}" = --direct ]; then
