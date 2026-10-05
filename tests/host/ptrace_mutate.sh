@@ -8,8 +8,8 @@ set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 if [ "$#" -eq 0 ]; then
-    sh "$0" ptrace
-    sh "$0" debugreg
+    sh "$repo/tests/host/ptrace_mutate.sh" ptrace
+    sh "$repo/tests/host/ptrace_mutate.sh" debugreg
     exit 0
 fi
 kind=${1:-}

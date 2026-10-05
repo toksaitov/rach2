@@ -6,12 +6,25 @@
 # The fixed entry must preserve a syscall on an invalid user stack. Removing
 # its interrupt stack or its GS check must fail. The original kernel is
 # restored, rebuilt and required to match and pass at the end. It holds the
-# run lock, as tests/run does, so that no suite builds or boots the tree, and
-# no other proof saves a source, while a fault is in it.
+# record lock on build/.run.guard and the run lock, as tests/run does, so that
+# no suite builds or boots the tree, and no other proof saves a source, while
+# a fault is in it.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 mkdir -p build
+if [ "${RACH2_DEBUG_LOCK:-}" != "$$" ]; then
+    helper=$(mktemp -d "${TMPDIR:-/tmp}/rach2-debug.XXXXXX")
+    cc -O2 -Wall -Wextra -o "$helper/runutil" tests/system/runner/runutil.c || {
+        rm -rf "$helper"; exit 1;
+    }
+    RACH2_DEBUG_LOCK=$$; RACH2_RUN_WORK=$helper
+    export RACH2_DEBUG_LOCK RACH2_RUN_WORK
+    exec "$helper/runutil" lock build/.run.guard build/.run.lock/owner \
+        sh "$repo/tests/system/ptrace_debug_mutate.sh" "$@"
+fi
+rm -rf "$RACH2_RUN_WORK"
+unset RACH2_DEBUG_LOCK RACH2_RUN_WORK
 mkdir build/.run.lock 2>/dev/null || {
     echo 'ptrace-debug: another run owns this tree' >&2; exit 1;
 }
