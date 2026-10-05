@@ -5,13 +5,17 @@
 # this exercises that entry state without depending on the emulator's delay.
 # The fixed entry must preserve a syscall on an invalid user stack. Removing
 # its interrupt stack or its GS check must fail. The original kernel is
-# restored, rebuilt and required to match and pass at the end.
+# restored, rebuilt and required to match and pass at the end. It holds the
+# run lock, as tests/run does, so that no suite builds or boots the tree, and
+# no other proof saves a source, while a fault is in it.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
-[ ! -d build/.run.lock ] || {
+mkdir -p build
+mkdir build/.run.lock 2>/dev/null || {
     echo 'ptrace-debug: another run owns this tree' >&2; exit 1;
 }
+trap 'rm -rf build/.run.lock' EXIT
 RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
 # shellcheck disable=SC2034
 REPO=$repo
@@ -21,6 +25,10 @@ RACH2_QEMU=$ARCH_QEMU
 export RACH2_QEMU
 mkdir -p build/tests
 work=$(mktemp -d "$repo/build/tests/ptrace-debug.XXXXXX")
+printf 'pid %s\npgid %s\nargs ptrace_debug_mutate.sh\nsince %s\nwork %s\n' "$$" \
+    "$(ps -o pgid= -p $$ | tr -d ' ')" "$(date '+%Y-%m-%d %H:%M:%S')" "$work" \
+    > build/.run.lock/owner.new
+mv build/.run.lock/owner.new build/.run.lock/owner
 sources='rach2/sys/syscall.c rach2/sys/arch/x86_64/idt.c rach2/sys/arch/x86_64/isr_handler.s'
 for file in $sources; do
     mkdir -p "$work/saved/$(dirname "$file")"
@@ -61,6 +69,7 @@ cleanup()
         restore
         rebuild >"$work/cleanup.build.log" 2>&1
     fi
+    rm -rf build/.run.lock
 }
 trap cleanup EXIT
 trap 'exit 129' HUP
@@ -138,7 +147,7 @@ make -s ARCH="$RACH2_ARCH" musl build/tests/system/harness build/tests/system/ru
 vendor/musl/muslgcc -O2 -Wall -Wextra -Werror -Wl,-z,noexecstack \
     -o "$work/ptracemusl" tests/musl/ptracemusl.c >>"$work/build.log" 2>&1
 make -s -C krffs -o libc-check ../build/krffs/mkfs.krffs \
-    ../build/krffs/stageimage.krffs ../build/krffs/readfile.krffs >>"$work/build.log" 2>&1
+    ../build/krffs/stageimage.krffs ../build/krffs/readfile.krffs "ARCH=$RACH2_ARCH" >>"$work/build.log" 2>&1
 printf 'file 0755 /ptracemusl %s/ptracemusl\n' "$work" >"$work/test.manifest"
 {
     dd if=/dev/zero of="$work/test.krffs" bs=1048576 count=2
