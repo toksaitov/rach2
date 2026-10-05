@@ -26,7 +26,13 @@
 # bus answering a call; and chromium-headless-shell, run by the test account
 # with its sandbox, printing the DOM of a local page with no complaint of D-Bus.
 # Each row has its own bound and a failed row does not stop the next, so a run
-# reports every row the machine cannot yet do.
+# reports every row the machine cannot yet do. The last row is a person at the
+# console: root logs in there, through the serial port, which feeds the
+# console's line discipline as the keyboard does, starts tmux, and runs a
+# command in its pane; the pane must reach the console and the machine must
+# still answer over SSH. tmux's server draws through the standard input its
+# client passes it, which a login on the console has from the kernel, and a
+# read-only one left the console as it was with the machine waiting on it.
 #
 # Usage: gnu.sh KERNEL IMAGE DISK PORT ROOT_PASSWORD TEST_PASSWORD
 #
@@ -55,6 +61,7 @@ ROOT_KEY="$REPO/krffs/rach2_demo_ed25519"
 TEST_KEY="$REPO/krffs/rach2_test_ed25519"
 LOG="$DISK.log"
 KNOWN="$DISK.known"
+CONSOLE="$DISK.console"
 QPID=""
 
 . "$REPO/tools/setup/e2fsprogs_path.sh"
@@ -71,7 +78,8 @@ stop_machine() {
 }
 cleanup() {
     stop_machine
-    rm -f "$DISK" "$KNOWN" "$DISK.back"
+    exec 9>&-
+    rm -f "$DISK" "$KNOWN" "$DISK.back" "$CONSOLE"
 }
 trap 'cleanup' EXIT
 trap 'cleanup; exit 130' INT
@@ -101,7 +109,8 @@ done
 # The disk: the volume at LBA 2048, as the machine has its root, copied
 # sparse, since the image is 4 GiB with most of it free.
 SIZE_MB=$(( $(wc -c < "$IMAGE") / 1048576 ))
-rm -f "$DISK" "$KNOWN" "$LOG"
+rm -f "$DISK" "$KNOWN" "$LOG" "$CONSOLE"
+mkfifo "$CONSOLE" || fail "the console's FIFO"
 dd if=/dev/zero of="$DISK" bs=1048576 count=0 seek=$((SIZE_MB + 2)) 2>/dev/null ||
     fail "the disk file"
 dd if="$IMAGE" of="$DISK" bs=1048576 seek=1 conv=notrunc,sparse 2>/dev/null ||
@@ -115,8 +124,10 @@ dd if="$IMAGE" of="$DISK" bs=1048576 seek=1 conv=notrunc,sparse 2>/dev/null ||
     -device ich9-ahci,id=ahci0 \
     -drive "if=none,id=drv0,file=$DISK,format=raw" -device ide-hd,drive=drv0,bus=ahci0.0 \
     -netdev "user,id=n0,hostfwd=tcp::$PORT-:22" -device rtl8139,netdev=n0 \
-    -serial stdio < /dev/null > "$LOG" 2>&1 &
+    -serial stdio < "$CONSOLE" > "$LOG" 2>&1 &
 QPID=$!
+# The console's input: the emulator's open of the FIFO waits for this end.
+exec 9> "$CONSOLE"
 
 "$RUNUTIL" until "$LOG" "ext2: root: /dev/disk0p1" "$(scaled 120)" ||
     fail "the machine did not mount the GNU system's volume as its root"
@@ -253,5 +264,38 @@ for row in $ROWS; do
         echo "gnu-test: $name: FAIL: $(grep '^GNUROW FAIL' "$DISK.$name.log" || tail -n 3 "$DISK.$name.log")" >&2
     fi
 done
+# console_type TEXT: type TEXT and Enter at the console.
+console_type() {
+    printf '%s\r' "$1" >&9
+}
+
+# The console row: root at the console, tmux there and a command in its pane.
+TOTAL=$((TOTAL + 1))
+console_type root
+if ! "$RUNUTIL" until "$LOG" "Password:" "$(scaled 60)"; then
+    echo "gnu-test: console: FAIL: no password prompt at the console" >&2
+    FAILED="$FAILED console"
+else
+    console_type "$PASSWORD"
+    console_type 'echo CONSOLE""LOGIN'
+    if ! "$RUNUTIL" until "$LOG" "CONSOLELOGIN" "$(scaled 60)"; then
+        echo "gnu-test: console: FAIL: root's login at the console gave no shell" >&2
+        FAILED="$FAILED console"
+    else
+        console_type tmux
+        # shellcheck disable=SC2016 # the machine's shell expands it
+        console_type 'echo TMUX""PANE$((6*7))'
+        if ! "$RUNUTIL" until "$LOG" "TMUXPANE42" "$(scaled 60)"; then
+            echo "gnu-test: console: FAIL: tmux on the console drew no pane" >&2
+            FAILED="$FAILED console"
+        elif ! ssh_as "$(scaled 60)" root "$ROOT_KEY" 'tmux kill-server; echo CONSOLE""DONE' |
+            grep -q CONSOLEDONE; then
+            echo "gnu-test: console: FAIL: the machine did not answer with tmux on the console" >&2
+            FAILED="$FAILED console"
+        else
+            echo "gnu-test: console: OK"
+        fi
+    fi
+fi
 [ -z "$FAILED" ] || fail "$(echo "$FAILED" | wc -w | tr -d ' ') of $TOTAL rows:$FAILED"
 echo "gnu-test: PASS"
