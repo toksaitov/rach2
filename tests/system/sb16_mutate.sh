@@ -1,10 +1,16 @@
 #!/bin/sh
 # Compile private kernels and judge the scale from QEMU's PCM recording, made
 # under an instruction clock, as the audio suite's row is, so that the notes'
-# lengths do not depend on the host.
+# lengths do not depend on the host. The kernels and the emulator are those
+# of the architecture ARCH names.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
+REPO=$repo
+. "$repo/mk/arch.sh"
+RACH2_QEMU=$ARCH_QEMU
+export RACH2_QEMU
 for artifact in build/tools/inspect/elfcheck build/tests/system/harness \
     build/tests/system/wavcheck; do
     [ -x "$artifact" ] || { echo "sb16-mutation: missing $artifact" >&2; exit 1; }
@@ -41,11 +47,11 @@ run_phase()
 {
     phase=$1
     base="$work/$fault-$phase"
-    if ! make -C "$work/rach2" >"$base.build.log" 2>&1; then
+    if ! make -C "$work/rach2" "ARCH=$RACH2_ARCH" >"$base.build.log" 2>&1; then
         cat "$base.build.log" >&2
         exit 1
     fi
-    cp "$work/build/rach2/kernel" "$base.kernel"
+    cp "$work/build$ARCH_SUFFIX/rach2/kernel" "$base.kernel"
     RACH2_QEMU_ACCEL=tcg build/tests/system/harness --kernel "$base.kernel" \
         --append 'rach2.rescue rach2.nonet' --net hubport,id=net0,hubid=0 \
         --qemu-arg=-cpu --qemu-arg=max \
