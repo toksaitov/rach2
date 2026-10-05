@@ -123,10 +123,12 @@ make -s rach2 utils check-busybox build/tests/system/harness build/tests/system/
     cat "$work/prepare.log" >&2; exit 1;
 }
 # The private tree has what the utilities' Makefile reads, utils/ and mk/,
-# and the ported musl it links against, which it only reads.
-mkdir -p "$tree/vendor/musl"
+# and the architecture's ported musl it links against, which it only reads,
+# at the same place under the tree as in the main one.
+musl_link=$tree${MUSL_PREFIX#"$repo"}
+mkdir -p "$(dirname "$musl_link")"
 cp -R utils mk "$tree/"
-ln -s "$repo/vendor/musl/install" "$tree/vendor/musl/install"
+ln -s "$MUSL_PREFIX" "$musl_link"
 cp "$source" "$work/init.saved"
 passed='servicelog-test: PASS'
 run_phase fixed pass "$passed"
