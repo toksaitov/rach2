@@ -1,8 +1,16 @@
 #!/bin/sh
+# The install stick's fault proofs, on the kernel, recovery system, installer
+# root and emulator of the architecture ARCH names.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
+REPO=$repo
+. "$repo/mk/arch.sh"
+RACH2_QEMU=$ARCH_QEMU
+export RACH2_QEMU ARCH_BUILD
+tree=build$ARCH_SUFFIX
 [ ! -d build/.run.lock ] || {
     echo 'install-stick-mutation: another suite owns this tree' >&2; exit 1;
 }
@@ -45,7 +53,7 @@ run_phase()
     expected=$2
     message=$3
     rm -f "$stick"
-    make -s -f "$work/Makefile" rach2-install-stick >"$work/$phase.build.log" 2>&1
+    make -s -f "$work/Makefile" rach2-install-stick "ARCH=$RACH2_ARCH" >"$work/$phase.build.log" 2>&1
     cat "$work/$phase.build.log"
     shasum -a 256 "$source" "$stick" >"$work/$phase.artifacts"
     cp "$stick" "$work/$phase.img"
@@ -63,25 +71,26 @@ run_phase()
 }
 
 echo "install-stick-mutation: logs: $work"
-make -s -j8 rach2 build/images/installer-root.ext2 rach2-recovery-image \
+make -s -j8 rach2 "$tree"/images/installer-root.ext2 rach2-recovery-image \
     build/tests/system/harness build/tests/system/runutil \
     build/tools/image/mkmbr build/tools/image/fatchains build/tools/image/grubembed \
-    build/tools/image/stickcheck build/tests/host/mkexfatfixture >"$work/build.log" 2>&1
+    build/tools/image/stickcheck build/tests/host/mkexfatfixture "ARCH=$RACH2_ARCH" \
+    >"$work/build.log" 2>&1
 tag=
 [ ! -f krffs/recovery_authorized_keys ] || tag=-with-key
-iso="build/images/rach2-recovery$tag.iso"
-make -s "$iso" >>"$work/build.log" 2>&1
+iso="$tree/images/rach2-recovery$tag.iso"
+make -s "$iso" "ARCH=$RACH2_ARCH" >>"$work/build.log" 2>&1
 cat "$work/build.log"
 mkdir "$work/input"
 root="$work/input/rach2-metal-disk.ext2"
 disk="$work/input/rach2-sealed.disk"
 stick="$work/rach2-install-stick$tag.img"
-cp build/images/installer-root.ext2 "$root"
+cp "$tree"/images/installer-root.ext2 "$root"
 RACH2_DISK_BOOT_MB=64 RACH2_DISK_CLUSTER=8 RACH2_DISK_RECOVERY_MB=64 \
-    RACH2_DISK_RECOVERY_KERNEL=build/rach2-recovery/kernel \
-    RACH2_DISK_RECOVERY_IMAGE="build/images/rach2-recovery$tag.krffs" \
+    RACH2_DISK_RECOVERY_KERNEL="$tree"/rach2-recovery/kernel \
+    RACH2_DISK_RECOVERY_IMAGE="$tree/images/rach2-recovery$tag.krffs" \
     RACH2_DISK_EXT2_MB=64 RACH2_DISK_EXT2_IMAGE="$root" \
-    sh tools/image/mkdisk_grub.sh build/rach2/kernel "$disk" >"$work/disk.build.log" 2>&1
+    sh tools/image/mkdisk_grub.sh "$tree"/rach2/kernel "$disk" >"$work/disk.build.log" 2>&1
 cat >"$work/Makefile" <<EOF
 IMAGES_DIR = $work
 RECOVERY_KEY_TAG = $tag
