@@ -1,9 +1,16 @@
 #!/bin/sh
-# Prove the descriptor regressions with compiled faults and restored builds.
+# Prove the descriptor regressions with compiled faults and restored builds,
+# on the kernel, probes and emulator of the architecture ARCH names.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
+REPO=$repo
+. "$repo/mk/arch.sh"
+RACH2_QEMU=$ARCH_QEMU
+export RACH2_QEMU
+tree=build$ARCH_SUFFIX
 runner=suite
 if [ "${1-}" = --direct ]; then
     runner=direct
@@ -57,8 +64,8 @@ cleanup()
     if [ -n "$changed" ]; then
         restore
         force_rebuild
-        make -C rach2 >"$work/cleanup.build.log" 2>&1
-        make build/tests/host/fd_hosttest >>"$work/cleanup.build.log" 2>&1
+        make -C rach2 "ARCH=$RACH2_ARCH" >"$work/cleanup.build.log" 2>&1
+        make build/tests/host/fd_hosttest "ARCH=$RACH2_ARCH" >>"$work/cleanup.build.log" 2>&1
     fi
 }
 trap cleanup EXIT
@@ -68,8 +75,8 @@ trap 'exit 143' TERM
 
 force_rebuild()
 {
-    rm -f build/rach2/sys/fs/fd.o build/rach2/sys/fs/vfs.o \
-        build/rach2/sys/syscall_fs.o build/rach2/kernel build/tests/host/fd_hosttest
+    rm -f "$tree"/rach2/sys/fs/fd.o "$tree"/rach2/sys/fs/vfs.o \
+        "$tree"/rach2/sys/syscall_fs.o "$tree"/rach2/kernel build/tests/host/fd_hosttest
 }
 
 run_phase()
@@ -77,23 +84,23 @@ run_phase()
     phase=$1
     expected=$2
     force_rebuild
-    make -C rach2 >"$work/$phase.build.log" 2>&1
-    make -C tests >>"$work/$phase.build.log" 2>&1
-    make build/tests/host/fd_hosttest >>"$work/$phase.build.log" 2>&1
-    cksum build/rach2/kernel build/tests/host/fd_hosttest \
-        build/tests/fdstale build/tests/bootprobe >"$work/$phase.artifacts"
-    rm -f build/images/fdlock-test.disk.orphan.log build/images/fdlock-test.disk.raw.log
+    make -C rach2 "ARCH=$RACH2_ARCH" >"$work/$phase.build.log" 2>&1
+    make -C tests "ARCH=$RACH2_ARCH" >>"$work/$phase.build.log" 2>&1
+    make build/tests/host/fd_hosttest "ARCH=$RACH2_ARCH" >>"$work/$phase.build.log" 2>&1
+    cksum "$tree"/rach2/kernel build/tests/host/fd_hosttest \
+        "$tree"/tests/fdstale "$tree"/tests/bootprobe >"$work/$phase.artifacts"
+    rm -f "$tree"/images/fdlock-test.disk.orphan.log "$tree"/images/fdlock-test.disk.raw.log
     if [ "$runner" = direct ]; then
-        "$work/runutil" group make run-fdlock >"$work/$phase.log" 2>&1 &
+        "$work/runutil" group make run-fdlock "ARCH=$RACH2_ARCH" >"$work/$phase.log" 2>&1 &
     else
-        "$work/runutil" group tests/run fdlock >"$work/$phase.log" 2>&1 &
+        ARCH=$RACH2_ARCH "$work/runutil" group tests/run fdlock >"$work/$phase.log" 2>&1 &
     fi
     child=$!
     status=0
     wait "$child" || status=$?
     stop_child
     for kind in orphan raw; do
-        log=build/images/fdlock-test.disk.$kind.log
+        log="$tree"/images/fdlock-test.disk.$kind.log
         [ ! -f "$log" ] || cp "$log" "$work/$phase.$kind.log"
     done
     cat "$work/$phase.build.log" "$work/$phase.log"
