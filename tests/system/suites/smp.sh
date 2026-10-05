@@ -160,13 +160,22 @@ drive_type 'nproc | grep -qx 4 && echo NPROC_""OK'
 drive_expect 'NPROC_OK' "$(scaled 30)" || fail "nproc does not count four processors"
 
 # The ish sources four times over, every compile in the background at once,
-# between two readings of /proc/stat; awk then requires each cpuN line's
-# user column to have grown.
+# between two readings of /proc/stat, and awk's test that each cpuN line's
+# user column grew. A compile is a few milliseconds, so a processor can end
+# its share of a round between two ticks and count no user tick; the build
+# runs again, up to five rounds, until every processor has counted one, so
+# the row judges the counts and not a round's timing. The build is a shell
+# function, since the console keeps 255 bytes of a typed line.
 # shellcheck disable=SC2016 # the guest's shell expands these, not this one
-drive_type 'cd && rm -rf smpbuild && mkdir smpbuild && cd smpbuild && cat /proc/stat > before && for i in 1 2 3 4; do for f in ish ish_cstring_utilities ish_shell_utilities ish_syscalls; do /bin/cc -c -o $i-$f.o /src/ish/$f.c & done; done; wait; cat /proc/stat > after; ls *.o | wc -l | grep -qx 16 && echo BUILD_""DONE'
+drive_type 'b() { for i in 1 2 3 4; do for f in ish ish_cstring_utilities ish_shell_utilities ish_syscalls; do /bin/cc -c -o $i-$f.o /src/ish/$f.c & done; done; wait; }'
+# shellcheck disable=SC2016 # the guest's shell expands these, not this one
+drive_type 'g() { awk '"'"'/^cpu[0-9]/ { if (FILENAME == "before") u[$1] = $2; else if ($2 > u[$1]) grew++; else stalled++ } END { exit !(grew == 4 && !stalled) }'"'"' before after; }'
+# shellcheck disable=SC2016 # the guest's shell expands these, not this one
+drive_type 'cd && rm -rf smpbuild && mkdir smpbuild && cd smpbuild && cat /proc/stat > before && n=0 && while [ $n -lt 5 ]; do n=$((n+1)); b; cat /proc/stat > after; g && break; done; ls *.o | wc -l | grep -qx 16 && echo BUILD_""DONE'
 drive_expect 'BUILD_DONE' "$(scaled 600)" || fail "the parallel build did not make its sixteen objects"
-drive_type "awk '/^cpu[0-9]/ { if (FILENAME == \"before\") u[\$1] = \$2; else if (\$2 > u[\$1]) grew++; else stalled++ } END { exit !(grew == 4 && !stalled) }' before after && echo USER_TIME_\"\"GREW"
-drive_expect 'USER_TIME_GREW' "$(scaled 30)" || fail "a processor's user ticks did not grow during the parallel build"
+drive_type 'g && echo USER_TIME_""GREW'
+drive_expect 'USER_TIME_GREW' "$(scaled 30)" ||
+    fail "a processor's user ticks did not grow in five rounds of the parallel build"
 echo "smp-test: ok: a parallel build ran on every one of four processors"
 
 drive_type 'exit'
