@@ -138,9 +138,9 @@ old
         if (ticks > 0x7FFFFFFEu) {
             ticks = 0x7FFFFFFEu;
         }
-        deadline = kernel_ticks + ticks + (ticks != 0 ? 1u : 0u);
+        deadline = rtc_ticks_now() + ticks + (ticks != 0 ? 1u : 0u);
 new
-        deadline = kernel_ticks + ticks + (ticks != 0 ? 1u : 0u);
+        deadline = rtc_ticks_now() + ticks + (ticks != 0 ? 1u : 0u);
 end
 
 fault usage-children-leader-only
