@@ -705,7 +705,7 @@ static void vt_csi_byte(char c)
         if (vt_nparams < VT_MAX_PARAMS)
             vt_params[vt_nparams++] = vt_cur;
         if (!vt_private && !vt_interm) {
-            /* Color and the queries leave a pending wrap; the rest cancel it. */
+            /* Only color and the queries keep a pending wrap. */
             vt_wrap_pending = vt_wrap_pending && (c == 'm' || c == 'c' || c == 'n');
             vt_dispatch_csi(c);
         }
