@@ -424,9 +424,6 @@ static void vt_dispatch_csi(char c)
 {
     unsigned int n, row, col;
 
-    if (c != 'm' && c != 'c' && c != 'n') {
-        vt_wrap_pending = false;
-    }
     switch (c) {
     case 'A':
         n = vt_arg(0, 1);
@@ -707,8 +704,11 @@ static void vt_csi_byte(char c)
     } else if (uc >= 0x40 && uc <= 0x7e) {
         if (vt_nparams < VT_MAX_PARAMS)
             vt_params[vt_nparams++] = vt_cur;
-        if (!vt_private && !vt_interm)
+        if (!vt_private && !vt_interm) {
+            /* Color and the queries leave a pending wrap; the rest cancel it. */
+            vt_wrap_pending = vt_wrap_pending && (c == 'm' || c == 'c' || c == 'n');
             vt_dispatch_csi(c);
+        }
         vt_state = VT_NORMAL;
     } else if (uc == 0x1b) {
         vt_state = VT_ESC;
