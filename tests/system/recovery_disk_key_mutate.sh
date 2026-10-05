@@ -1,6 +1,6 @@
 #!/bin/sh
 # Prove the recovery key rows of the installer suite with faults in a private
-# tree.
+# tree, on the programs and images of the architecture ARCH names.
 #
 # Usage: sh tests/system/recovery_disk_key_mutate.sh
 #
@@ -23,6 +23,12 @@
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
+REPO=$repo
+. "$repo/mk/arch.sh"
+RACH2_QEMU=$ARCH_QEMU
+export RACH2_QEMU ARCH_BUILD
+tree=build$ARCH_SUFFIX
 [ ! -d build/.run.lock ] || {
     echo 'recovery-disk-key-mutation: another suite owns this tree' >&2; exit 1;
 }
@@ -37,6 +43,7 @@ rsync -a --exclude=/.git --exclude=/build/.run.lock --exclude=/build/images \
     --exclude=/build/tests/failed --exclude='/build/machine-*' --exclude='/build/*-proof.*' \
     "$repo/" "$work/tree/"
 cd "$work/tree"
+ARCH_BUILD=$work/tree/build$ARCH_SUFFIX
 init_source="$work/tree/utils/init.c"
 installer_source="$work/tree/utils/rach2-install"
 cp "$init_source" "$work/init.saved"
@@ -98,23 +105,23 @@ run_phase()
     phase=$1
     expected=$2
     message=$3
-    rm -f build/images/rach2-recovery*.krffs build/images/rach2-recovery*.iso \
-        build/images/installer-test.disk build/images/install-test-stick.img \
-        build/utils/sbin/init-recovery
-    make -s utils >"$work/$phase.build.log" 2>&1
-    make -s -j8 build/images/install-test-stick.img build/images/installer-test.disk \
-        build/tests/system/harness build/tests/system/runutil \
+    rm -f "$tree"/images/rach2-recovery*.krffs "$tree"/images/rach2-recovery*.iso \
+        "$tree"/images/installer-test.disk "$tree"/images/install-test-stick.img \
+        "$tree"/utils/sbin/init-recovery
+    make -s utils "ARCH=$RACH2_ARCH" >"$work/$phase.build.log" 2>&1
+    make -s -j8 "$tree"/images/install-test-stick.img "$tree"/images/installer-test.disk \
+        build/tests/system/harness build/tests/system/runutil "ARCH=$RACH2_ARCH" \
         >>"$work/$phase.build.log" 2>&1
     cat "$work/$phase.build.log"
-    shasum -a 256 "$init_source" "$installer_source" build/utils/sbin/init-recovery \
-        build/images/install-test-stick.img >"$work/$phase.artifacts"
-    cp build/utils/sbin/init-recovery "$work/$phase.init"
+    shasum -a 256 "$init_source" "$installer_source" "$tree"/utils/sbin/init-recovery \
+        "$tree"/images/install-test-stick.img >"$work/$phase.artifacts"
+    cp "$tree"/utils/sbin/init-recovery "$work/$phase.init"
     cp "$installer_source" "$work/$phase.installer"
     build/tests/system/runutil group sh tests/system/suites/installer.sh \
-        build/images/install-test-stick.img build/images/installer-test.disk \
-        build/tests/system/harness "build/images/recovery-key-$phase" \
-        "$(cat krffs/rach2_demo_password)" build/images/install-test-stick.img \
-        build/images/installer-test.disk "${RACH2_RECOVERY_KEY_PORT:-2331}" \
+        "$tree"/images/install-test-stick.img "$tree"/images/installer-test.disk \
+        build/tests/system/harness "$tree/images/recovery-key-$phase" \
+        "$(cat krffs/rach2_demo_password)" "$tree"/images/install-test-stick.img \
+        "$tree"/images/installer-test.disk "${RACH2_RECOVERY_KEY_PORT:-2331}" \
         unused krffs/rach2_demo_ed25519 recoverykey >"$work/$phase.log" 2>&1 &
     child=$!
     status=0
@@ -128,7 +135,7 @@ run_phase()
 }
 
 passed='row 6b: root logs in to the recovery system with the key the install placed: OK'
-make -s -j8 rach2 utils krffs >"$work/components.build.log" 2>&1
+make -s -j8 rach2 utils krffs "ARCH=$RACH2_ARCH" >"$work/components.build.log" 2>&1
 cat "$work/components.build.log"
 run_phase fixed 0 "$passed"
 grep -Fq 'row 6c: and nothing answers SSH: OK' "$work/fixed.log"
