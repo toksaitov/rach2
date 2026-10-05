@@ -1,5 +1,6 @@
 #!/bin/sh
-# Prove the service log suite with inits built from a private copy.
+# Prove the service log suite with inits built from a private copy, on the
+# kernel, programs and emulator of the architecture ARCH names.
 #
 # Usage: sh tests/system/servicelog_mutate.sh
 #
@@ -16,6 +17,12 @@
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
+REPO=$repo
+. "$repo/mk/arch.sh"
+RACH2_QEMU=$ARCH_QEMU
+export RACH2_QEMU ARCH_BUILD
+abuild=build$ARCH_SUFFIX
 [ ! -d build/.run.lock ] || {
     echo 'servicelog-mutation: another suite owns this tree' >&2; exit 1;
 }
@@ -81,15 +88,16 @@ run_phase()
     message=$3
     # The program goes first: a source restored within the second its program
     # was built reads as up to date to a make that compares whole seconds.
-    rm -f "$tree/build/utils/sbin/init-shell"
-    make -s -C "$tree/utils" ../build/utils/sbin/init-shell >"$work/$phase.build.log" 2>&1 || {
+    rm -f "$tree/build$ARCH_SUFFIX/utils/sbin/init-shell"
+    make -s -C "$tree/utils" "../build$ARCH_SUFFIX/utils/sbin/init-shell" "ARCH=$RACH2_ARCH" \
+        >"$work/$phase.build.log" 2>&1 || {
         cat "$work/$phase.build.log" >&2; exit 1;
     }
-    cp "$tree/build/utils/sbin/init-shell" "$work/$phase.init"
+    cp "$tree/build$ARCH_SUFFIX/utils/sbin/init-shell" "$work/$phase.init"
     cksum "$source" "$work/$phase.init" >"$work/$phase.artifacts"
-    build/tests/system/runutil group sh tests/system/suites/servicelog.sh build/rach2/kernel \
+    build/tests/system/runutil group sh tests/system/suites/servicelog.sh "$abuild"/rach2/kernel \
         build/tests/system/harness build/tools/image/mkmbr "$work/$phase.init" \
-        build/utils/update build/vendor/busybox/busybox "$work/$phase" \
+        "$abuild"/utils/update "$abuild"/vendor/busybox/busybox "$work/$phase" \
         >"$work/$phase.out" 2>&1 &
     child=$!
     status=0
@@ -111,7 +119,7 @@ run_phase()
 
 echo "servicelog-mutation: logs: $work"
 make -s rach2 utils check-busybox build/tests/system/harness build/tests/system/runutil \
-    build/tools/image/mkmbr >"$work/prepare.log" 2>&1 || {
+    build/tools/image/mkmbr "ARCH=$RACH2_ARCH" >"$work/prepare.log" 2>&1 || {
     cat "$work/prepare.log" >&2; exit 1;
 }
 # The private tree has what the utilities' Makefile reads, utils/ and mk/,
