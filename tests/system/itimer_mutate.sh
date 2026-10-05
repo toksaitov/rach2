@@ -193,9 +193,10 @@ restore
 run_phase checked pass
 cmp "$work/fixed.kernel" "$work/checked.kernel"
 
-fault rach2/sys/syscall_proc.c '    deliverable =
-        (current_proc->sig_pending | current_proc->tg->pending) & ~current_proc->sig_blocked;' \
-    '    deliverable = current_proc->sig_pending | current_proc->tg->pending;'
+fault rach2/sys/syscall_proc.c '    deliverable = sig_pending_now() & ~current_proc->sig_blocked;
+    sig_irq_restore(flags);' \
+    '    deliverable = sig_pending_now();
+    sig_irq_restore(flags);'
 detail='a blocked alarm does not end a sleep and leaves the timer disarmed'
 run_phase unmasked fail
 if cmp -s "$work/fixed.kernel" "$work/unmasked.kernel"; then
