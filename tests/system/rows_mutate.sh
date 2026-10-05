@@ -16,12 +16,19 @@
 # processes are stopped. The kernel rebuilt at the end must be the first one,
 # byte for byte, so the full set run on this tree afterwards is what shows
 # each restored row passing; this script does not run the rows on the
-# unmodified tree. It refuses to start while a suite holds the run lock.
+# unmodified tree. It refuses to start while a suite holds the run lock. The
+# kernel, the image and the rows are those of the architecture ARCH names.
 #
 # Usage: sh tests/system/rows_mutate.sh
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
+REPO=$repo
+. "$repo/mk/arch.sh"
+RACH2_QEMU=$ARCH_QEMU
+export RACH2_QEMU ARCH_BUILD
+tree=build$ARCH_SUFFIX
 [ "$#" -eq 0 ] || { echo 'rows-mutation: usage: rows_mutate.sh' >&2; exit 2; }
 [ ! -d build/.run.lock ] || {
     echo 'rows-mutation: another suite owns this tree' >&2; exit 1;
@@ -64,7 +71,7 @@ cleanup()
     stop_child
     if [ -n "$changed" ]; then
         restore
-        make -s rach2 test-image >"$work/cleanup.build.log" 2>&1 || :
+        make -s rach2 test-image "ARCH=$RACH2_ARCH" >"$work/cleanup.build.log" 2>&1 || :
     fi
 }
 trap cleanup EXIT
@@ -146,9 +153,10 @@ probe_phase()
 {
     name=$1
     mutate "$name"
-    rm -f build/images/default-test.log
-    run_row "$name" make run-default
-    [ ! -f build/images/default-test.log ] || cp build/images/default-test.log "$work/$name.guest.log"
+    rm -f "$tree"/images/default-test.log
+    run_row "$name" make run-default "ARCH=$RACH2_ARCH"
+    [ ! -f "$tree"/images/default-test.log ] ||
+        cp "$tree"/images/default-test.log "$work/$name.guest.log"
     if ! failed_with "^ *$name +$2 +FAIL" "$work/$name.log" ||
         ! grep -Fqs -- "$3" "$work/$name.guest.log"; then
         echo "rows-mutation: $name did not fail its row with its fault compiled in" >&2
@@ -159,11 +167,12 @@ probe_phase()
 }
 
 echo "rows-mutation: logs: $work"
-make -s rach2 >"$work/first.build.log" 2>&1 || { cat "$work/first.build.log"; exit 1; }
-cp build/rach2/kernel "$work/first.kernel"
+make -s rach2 "ARCH=$RACH2_ARCH" >"$work/first.build.log" 2>&1 ||
+    { cat "$work/first.build.log"; exit 1; }
+cp "$tree"/rach2/kernel "$work/first.kernel"
 
 mutate runner
-run_row runner make run-runner
+run_row runner make run-runner "ARCH=$RACH2_ARCH"
 failed_with "FAIL: a suite that remakes a product of the run's target passes" "$work/runner.log" ||
     { echo 'rows-mutation: the runner check did not fail with its fault in' >&2; exit 1; }
 echo "rows-mutation: result: runner failed with its fault, status $status"
@@ -180,7 +189,7 @@ probe_phase sigprobe 'killed by signal 11' 'bad read at 0x0 (err'
 probe_phase procprobe 'status=[0-9]+' 'and the open files have different inodes too'
 
 mutate sealed
-run_row sealed make run-sealed
+run_row sealed make run-sealed "ARCH=$RACH2_ARCH"
 failed_with 'the installed root runs no update process' "$work/sealed.log" ||
     { echo 'rows-mutation: the sealed row did not fail without update' >&2; exit 1; }
 echo "rows-mutation: result: sealed failed without update, status $status"
@@ -193,19 +202,19 @@ restore
 # status step too, but only at arping's deadline, which the dhcp suite judges
 # in a step of its own.
 mutate arping
-run_row arping env RACH2_TRACE="$work/arping.trace" make dhcp-card
+run_row arping env RACH2_TRACE="$work/arping.trace" make dhcp-card "ARCH=$RACH2_ARCH"
 if ! failed_with 'HARNESS: [0-9]+ step\(s\) failed' "$work/arping.log" ||
     ! grep -qs '^step expect=ARPING-STATUS:0 fail ' "$work/arping.trace" ||
-    ! grep -q 'ARPING-STATUS:2' build/images/dhcp.log; then
+    ! grep -q 'ARPING-STATUS:2' "$tree"/images/dhcp.log; then
     echo 'rows-mutation: the dhcp status step did not fail on a failed arping' >&2
     exit 1
 fi
 echo "rows-mutation: result: arping failed without its interface, status $status"
 restore
 
-make -s rach2 test-image >"$work/restored.build.log" 2>&1 ||
+make -s rach2 test-image "ARCH=$RACH2_ARCH" >"$work/restored.build.log" 2>&1 ||
     { cat "$work/restored.build.log"; exit 1; }
-cmp build/rach2/kernel "$work/first.kernel"
+cmp "$tree"/rach2/kernel "$work/first.kernel"
 for f in $sources; do
     cmp "$f" "$work/saved/$f"
 done
