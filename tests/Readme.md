@@ -92,6 +92,8 @@ threadmusl ishmusl
 
 `tests/run addressed` does not repeat this list. It boots with `rach2.ip=10.0.2.77/24 rach2.gateway=10.0.2.2`, runs `pingtest` alone, and requires the capture to show that address as the source of the machine's packets and of its ARP requests.
 
+`musl/ptracemusl` checks syscall single steps at the exact return address, without executing the next instruction; a hardware watchpoint on `MOV SS` followed by a system call with an unusable user stack; a watchpoint on a kernel copy; interruption of `PTRACE_LISTEN`; and rejection of upper option bits on x86-64. Its debug-register rows use the architecture's `struct user` offsets and accept a breakpoint ending at the last user byte. The `MOV SS` row reports an early exception separately, since QEMU TCG does not defer that watchpoint through the next instruction. `system/ptrace_debug_mutate.sh` also injects vector 1 before the x86-64 syscall entry changes GS or RSP, then removes the interrupt stack and the GS check separately; each fault must fail, and each restoration must pass. The script checks a syscall step with the exit stop omitted on both architectures. The host ptrace test models a resume during an iovec copy and checks revalidation before register access. The host debug-register test models two processors and checks that a detached tracee's enables cannot affect another thread.
+
 ## Other guest programs and targets
 
 `PROBES` is not an inventory of the image. The following helpers are built and staged but are invoked only by another test:

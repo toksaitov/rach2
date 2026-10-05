@@ -80,7 +80,9 @@ void ptrace_event(int event, uint32_t msg);
  * register is -ENOSYS during the stop, as on Linux, and both stay as the tracer
  * leaves them: the dispatcher runs the call orig_nr then names, or none for -1,
  * with the result register its result. A thread SIGKILL was sent during the
- * entry stop gets -1, so the call does not run, as Linux skips it.
+ * entry stop gets -1, so the call does not run, as Linux skips it. A single
+ * step over the call stops at its exit with TRAP_TRACE, before the next
+ * user instruction, without the TRACESYSGOOD bit.
  */
 void ptrace_syscall_stop(isr_params_t *tf, uint32_t nr, int leaving);
 

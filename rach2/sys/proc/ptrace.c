@@ -166,22 +166,30 @@ int ptrace_group_stop(int signo)
     return 1;
 }
 
+/**
+ * Request a new PTRACE_EVENT_STOP for the seized thread `t`.
+ * A listening tracee must leave its current stop to report the new event.
+ */
+static void ptrace_restop(process_t *t)
+{
+    t->ptrace |= PT_INTERRUPT;
+    if ((t->ptrace & PT_LISTEN) && t->ptrace_status != 0) {
+        t->ptrace &= ~PT_LISTEN;
+        t->ptrace_signo = 0;
+        t->ptrace_status = 0;
+        if (t->state == PROC_STOPPED) {
+            sched_make_ready(t);
+        }
+    }
+}
+
 void ptrace_group_change(struct tgroup *tg)
 {
     process_t *t;
 
     for (t = proc_list; t; t = t->next) {
-        if (t->tg != tg || (t->ptrace & (PT_TRACED | PT_SEIZED)) != (PT_TRACED | PT_SEIZED)) {
-            continue;
-        }
-        t->ptrace |= PT_INTERRUPT;
-        if ((t->ptrace & PT_LISTEN) && t->ptrace_status != 0) {
-            t->ptrace &= ~PT_LISTEN;
-            t->ptrace_signo = 0;
-            t->ptrace_status = 0;
-            if (t->state == PROC_STOPPED) {
-                sched_make_ready(t);
-            }
+        if (t->tg == tg && (t->ptrace & (PT_TRACED | PT_SEIZED)) == (PT_TRACED | PT_SEIZED)) {
+            ptrace_restop(t);
         }
     }
 }
@@ -202,19 +210,24 @@ void ptrace_syscall_stop(isr_params_t *tf, uint32_t nr, int leaving)
     process_t *self = current_proc;
     uint32_t signo = SIGTRAP;
     struct k_siginfo info;
+    int stepping = leaving && (self->ptrace & PT_STEP);
     int sig;
 
-    if ((self->ptrace & (PT_TRACED | PT_SYSCALL)) != (PT_TRACED | PT_SYSCALL)) {
+    if (!(self->ptrace & PT_TRACED) || (!(self->ptrace & PT_SYSCALL) && !stepping)) {
         return;
     }
-    if (self->ptrace_opts & PTRACE_O_TRACESYSGOOD) {
+    k_memset(&info, 0, sizeof(info));
+    if (stepping) {
+        info.code = TRAP_TRACE;
+        info.addr = FRAME_PC(tf);
+    } else if (self->ptrace_opts & PTRACE_O_TRACESYSGOOD) {
         signo |= 0x80u;
     }
     self->orig_nr = (int32_t)nr;
     if (!leaving) {
         SC_RET(tf) = (unsigned long)-ENOSYS;
     }
-    sig = ptrace_stop((signo << 8) | 0x7F, NULL);
+    sig = ptrace_stop((signo << 8) | 0x7F, stepping ? &info : NULL);
     if (!leaving && ((self->sig_pending | self->tg->pending) & KSIG_BIT(SIGKILL))) {
         self->orig_nr = -1;
     }
@@ -479,7 +492,7 @@ int ptrace_tracer_privileged(const process_t *t)
  * and a thread already traced are refused. ATTACH sends the thread SIGSTOP;
  * SEIZE takes the options in `opts` and stops nothing.
  */
-static int ptrace_attach(process_t *t, int seize, uint32_t opts)
+static int ptrace_attach(process_t *t, int seize, unsigned long opts)
 {
     struct k_siginfo info;
 
@@ -496,12 +509,12 @@ static int ptrace_attach(process_t *t, int seize, uint32_t opts)
          proc_privileged(t))) {
         return -EPERM;
     }
-    if (seize && (opts & ~PTRACE_O_MASK)) {
+    if (seize && (opts & ~(unsigned long)PTRACE_O_MASK)) {
         return -EINVAL;
     }
     t->ptrace = PT_TRACED | (seize ? PT_SEIZED : 0);
     t->tracer = current_proc->tgid;
-    t->ptrace_opts = seize ? opts : 0;
+    t->ptrace_opts = seize ? (uint32_t)opts : 0;
     t->ptrace_exit_seen = 0;
     if (!seize) {
         k_memset(&info, 0, sizeof(info));
@@ -699,7 +712,7 @@ static long ptrace_stopped(process_t *t, uint32_t pid, long request, uintptr_t a
     case PTRACE_LISTEN:
         return ptrace_listen(t);
     case PTRACE_SETOPTIONS:
-        if (data & ~PTRACE_O_MASK) {
+        if (data & ~(unsigned long)PTRACE_O_MASK) {
             return -EINVAL;
         }
         t->ptrace_opts = (uint32_t)data;
@@ -739,7 +752,7 @@ long sys_ptrace(isr_params_t *params)
         return -ESRCH;
     }
     if (request == PTRACE_ATTACH || request == PTRACE_SEIZE) {
-        return ptrace_attach(t, request == PTRACE_SEIZE, (uint32_t)data);
+        return ptrace_attach(t, request == PTRACE_SEIZE, data);
     }
     if (!(t->ptrace & PT_TRACED) || t->tracer != current_proc->tgid) {
         return -ESRCH;
@@ -760,6 +773,8 @@ long sys_ptrace(isr_params_t *params)
                 t->wakeup_tick = 0;
                 sched_make_ready(t);
             }
+        } else if (t->ptrace & PT_LISTEN) {
+            ptrace_restop(t);
         }
         return 0;
     }

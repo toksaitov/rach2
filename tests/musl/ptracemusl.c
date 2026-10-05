@@ -70,6 +70,9 @@
  * x86-64, which user space does not reach.
  */
 #if defined __x86_64__
+#define R_BX(r)        ((r).rbx)
+#define R_PTR(r)       ((r).rdi)
+#define R_SP(r)        ((r).rsp)
 #define R_NR(r)        ((r).orig_rax)
 #define R_RET(r)       ((r).rax)
 #define R_IP(r)        ((r).rip)
@@ -79,6 +82,9 @@
 #define LAST_USER_WORD 0x00007FFFFFFFEFFCUL
 typedef struct user_fpregs_struct fxregs_t;
 #else
+#define R_BX(r)        ((r).ebx)
+#define R_PTR(r)       ((r).esi)
+#define R_SP(r)        ((r).esp)
 #define R_NR(r)        ((r).orig_eax)
 #define R_RET(r)       ((r).eax)
 #define R_IP(r)        ((r).eip)
@@ -298,6 +304,11 @@ static int syscalls_and_exec(void)
     if (debug_bounds(pid) != 0) {
         return 1;
     }
+#if defined __x86_64__
+    if (ptrace(PTRACE_SETOPTIONS, pid, NULL, (void *)(1UL << 32)) != -1 || errno != EINVAL) {
+        return fail("PTRACE_SETOPTIONS accepted an upper option bit");
+    }
+#endif
     for (;;) {
         if (ptrace(PTRACE_SYSCALL, pid, NULL, NULL) != 0 || !stopped_by(pid, SIGTRAP | 0x80) ||
             ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0) {
@@ -1027,9 +1038,18 @@ static int listen_and_continue(void)
     if (waitpid(pid, &status, WUNTRACED) != pid || !WIFSTOPPED(status)) {
         return fail("the child to be listened to did not stop");
     }
+#if defined __x86_64__
+    if (ptrace(PTRACE_SEIZE, pid, NULL, (void *)(1UL << 32)) != -1 || errno != EINVAL) {
+        return abandon(pid, "PTRACE_SEIZE accepted an upper option bit");
+    }
+#endif
     if (ptrace(PTRACE_SEIZE, pid, NULL, NULL) != 0 ||
         expect_stop(pid, SIGSTOP | (PTRACE_EVENT_STOP << 8),
                     "the seize of the stopped process was not a group stop") ||
+        ptrace(PTRACE_LISTEN, pid, NULL, NULL) != 0 ||
+        ptrace(PTRACE_INTERRUPT, pid, NULL, NULL) != 0 ||
+        expect_stop(pid, SIGSTOP | (PTRACE_EVENT_STOP << 8),
+                    "PTRACE_INTERRUPT did not end PTRACE_LISTEN") ||
         kill(pid, SIGCONT) != 0 || ptrace(PTRACE_LISTEN, pid, NULL, NULL) != 0 ||
         expect_stop(pid, SIGTRAP | (PTRACE_EVENT_STOP << 8),
                     "PTRACE_LISTEN after the stop ended made no new event stop") ||
@@ -1201,12 +1221,226 @@ static int killed_tracee(void)
     return 0;
 }
 
-int main(void)
+/* The labels bound exactly one system call and the following instruction. */
+extern const char step_call[], step_return[], step_next[], watched_ss[], watched_call[],
+    watched_return[];
+#if defined __x86_64__
+__asm__(".text\n"
+        ".globl step_call, step_return, step_next, watched_ss, watched_call, watched_return\n"
+        "step_call: syscall\n"
+        "step_return: incq %rbx\n"
+        "step_next: int3\n"
+        "watched_ss: movw (%rdi), %ss\n"
+        "watched_call: syscall\n"
+        "watched_return: int3\n");
+static unsigned short user_ss = 0x2b;
+#else
+__asm__(".text\n"
+        ".globl step_call, step_return, step_next, watched_ss, watched_call, watched_return\n"
+        "step_call: int $0x80\n"
+        "step_return: incl %ebx\n"
+        "step_next: int3\n"
+        "watched_ss: movw (%esi), %ss\n"
+        "watched_call: int $0x80\n"
+        "watched_return: int3\n");
+static unsigned short user_ss = 0x23;
+#endif
+
+/** Stop a child for a row that supplies its registers. */
+static pid_t register_child(void)
 {
+    pid_t pid = fork();
+
+    if (pid == 0) {
+        if (ptrace(PTRACE_TRACEME, 0, NULL, NULL) != 0) {
+            _exit(1);
+        }
+        raise(SIGSTOP);
+        _exit(2);
+    }
+    if (pid < 0 || expect_stop(pid, SIGSTOP, "register child did not stop")) {
+        return -1;
+    }
+    return pid;
+}
+
+/** Reap a row's child after its last stop, without running injected code. */
+static void finish_register_child(pid_t pid)
+{
+    int status;
+
+    kill(pid, SIGKILL);
+    wait_within(pid, &status);
+}
+
+/** A syscall step stops at its return, before the next user instruction. */
+static int step_system_call(void)
+{
+    struct user_regs_struct regs;
+    siginfo_t info;
+    pid_t pid = register_child();
+
+    if (pid < 0) {
+        return fail("fork for syscall step");
+    }
+    if (ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0) {
+        return abandon(pid, "registers before syscall step");
+    }
+    R_IP(regs) = (unsigned long)step_call;
+    R_RET(regs) = SYS_getpid;
+    R_NR(regs) = -1;
+    R_BX(regs) = 41;
+    if (ptrace(PTRACE_SETREGS, pid, NULL, &regs) != 0 ||
+        ptrace(PTRACE_SETOPTIONS, pid, NULL, (void *)PTRACE_O_TRACESYSGOOD) != 0 ||
+        ptrace(PTRACE_SINGLESTEP, pid, NULL, NULL) != 0 ||
+        expect_stop(pid, SIGTRAP, "syscall step did not trap") ||
+        ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0 ||
+        ptrace(PTRACE_GETSIGINFO, pid, NULL, &info) != 0 ||
+        (unsigned long)R_IP(regs) != (unsigned long)step_return || R_BX(regs) != 41 ||
+        (unsigned long)R_RET(regs) != (unsigned long)pid || info.si_code != TRAP_TRACE) {
+        return abandon(pid, "syscall step ran the next instruction or lost its result");
+    }
+    if (ptrace(PTRACE_SINGLESTEP, pid, NULL, NULL) != 0 ||
+        expect_stop(pid, SIGTRAP, "step after syscall did not trap") ||
+        ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0 ||
+        (unsigned long)R_IP(regs) != (unsigned long)step_next || R_BX(regs) != 42) {
+        return abandon(pid, "step after syscall did not execute exactly one instruction");
+    }
+    finish_register_child(pid);
+    return 0;
+}
+
+/** A syscall can use an invalid user stack because entry changes stacks. */
+static int entry_system_call(void)
+{
+    struct user_regs_struct regs;
+    pid_t pid = register_child();
+
+    if (pid < 0) {
+        return fail("fork for syscall entry");
+    }
+    if (ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0) {
+        return abandon(pid, "registers before syscall entry");
+    }
+    R_IP(regs) = (unsigned long)step_call;
+    R_RET(regs) = SYS_getpid;
+    R_NR(regs) = -1;
+    R_BX(regs) = 41;
+    R_SP(regs) = 1;
+    if (ptrace(PTRACE_SETREGS, pid, NULL, &regs) != 0 ||
+        ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 ||
+        expect_stop(pid, SIGTRAP, "syscall on an invalid user stack did not return") ||
+        ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0 ||
+        (unsigned long)R_IP(regs) != (unsigned long)step_next + 1 || R_BX(regs) != 42 ||
+        (unsigned long)R_RET(regs) != (unsigned long)pid) {
+        return abandon(pid, "syscall entry lost its frame or result");
+    }
+    finish_register_child(pid);
+    return 0;
+}
+
+/** Check a watched MOV SS followed by a syscall with an invalid user stack.
+ * QEMU TCG can report the watchpoint before the syscall. That result checks
+ * only the user debug entry; the injected-entry proof checks the kernel
+ * entry even on a processor model that does not defer the exception. */
+static int delayed_debug(void)
+{
+    struct user_regs_struct regs;
+    siginfo_t info;
+    pid_t pid = register_child();
+
+    if (pid < 0) {
+        return fail("fork for delayed debug exception");
+    }
+    if (ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0) {
+        return abandon(pid, "registers before delayed debug exception");
+    }
+    R_IP(regs) = (unsigned long)watched_ss;
+    R_RET(regs) = SYS_getpid;
+    R_NR(regs) = -1;
+    R_PTR(regs) = (unsigned long)&user_ss;
+    R_SP(regs) = 1;
+    if (debug_set(pid, 0, (unsigned long)&user_ss) != 0 || debug_set(pid, 7, 0x70001) != 0 ||
+        ptrace(PTRACE_SETREGS, pid, NULL, &regs) != 0 ||
+        ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 ||
+        expect_stop(pid, SIGTRAP, "delayed debug exception did not trap") ||
+        ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0 ||
+        ptrace(PTRACE_GETSIGINFO, pid, NULL, &info) != 0 || info.si_code != TRAP_HWBKPT) {
+        return abandon(pid, "delayed debug exception lost its status");
+    }
+    if ((unsigned long)R_IP(regs) == (unsigned long)watched_call && R_RET(regs) == SYS_getpid) {
+        printf("ptracemusl: not run: debug exception preceded system call\n");
+    } else if ((unsigned long)R_IP(regs) != (unsigned long)watched_return ||
+               (unsigned long)R_RET(regs) != (unsigned long)pid) {
+        return abandon(pid, "delayed debug exception lost its frame or result");
+    }
+    finish_register_child(pid);
+    return 0;
+}
+
+/** A watchpoint on a kernel copy still stops its tracee at the user return. */
+static int watched_copy(void)
+{
+    static char byte;
+    int p[2], status;
+    pid_t pid;
+    siginfo_t info;
+
+    if (pipe(p) != 0 || write(p[1], "g", 1) != 1) {
+        return fail("pipe for watched copy");
+    }
+    pid = fork();
+    if (pid == 0) {
+        ptrace(PTRACE_TRACEME, 0, NULL, NULL);
+        raise(SIGSTOP);
+        _exit(read(p[0], &byte, 1) == 1 && byte == 'g' ? 0 : 1);
+    }
+    close(p[0]);
+    close(p[1]);
+    if (pid < 0 || expect_stop(pid, SIGSTOP, "watched copy child did not stop")) {
+        return fail("fork for watched copy");
+    }
+    if (debug_set(pid, 0, (unsigned long)&byte) != 0 || debug_set(pid, 7, 0x10001) != 0 ||
+        ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 ||
+        expect_stop(pid, SIGTRAP, "kernel copy did not trap") ||
+        ptrace(PTRACE_GETSIGINFO, pid, NULL, &info) != 0 || info.si_code != TRAP_HWBKPT ||
+        debug_set(pid, 7, 0) != 0 || ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 ||
+        wait_within(pid, &status) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        return abandon(pid, "watched kernel copy lost its trap or result");
+    }
+    return 0;
+}
+
+/** Run the ordinary suite, or one debug row for a compiled fault proof. */
+int main(int argc, char **argv)
+{
+    int rc;
+
+    if (argc == 2) {
+        if (strcmp(argv[1], "step") == 0) {
+            rc = step_system_call();
+        } else if (strcmp(argv[1], "entry") == 0) {
+            rc = entry_system_call();
+        } else if (strcmp(argv[1], "delayed") == 0) {
+            rc = delayed_debug();
+        } else if (strcmp(argv[1], "copy") == 0) {
+            rc = watched_copy();
+        } else {
+            return fail("unknown row");
+        }
+        if (rc == 0) {
+            printf("PTRACEMUSL OK\n");
+        }
+        return rc;
+    }
+    if (argc != 1) {
+        return fail("unexpected argument count");
+    }
     if (memory_and_registers() || mem_after_end() || syscalls_and_exec() || syscall_changes() ||
         killed_at_entry() || restart_cancelled() || attach() || attach_stopped() ||
         listen_and_continue() || interrupt_read() || seized_fork() || stopped_leader() ||
-        traced_thread_usage() || tracer_first() || killed_tracee()) {
+        traced_thread_usage() || tracer_first() || killed_tracee() || step_system_call() ||
+        entry_system_call() || delayed_debug() || watched_copy()) {
         return 1;
     }
     printf("PTRACEMUSL OK\n");

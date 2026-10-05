@@ -1,4 +1,4 @@
-.Dd October 4, 2026
+.Dd October 6, 2026
 .Dt PTRACE 2
 .Os
 .Sh NAME
@@ -194,7 +194,7 @@ dumpable, for a requesting thread that is not privileged, as on Linux,
 whose check reads the credentials of the attach where this one reads
 the requesting thread's own.
 .It Dv PTRACE_PEEKUSER , PTRACE_POKEUSER
-A word of the i386
+A word of the architecture's
 .Vt struct user
 at byte
 .Fa addr :
@@ -202,7 +202,9 @@ the registers of
 .Vt user_regs_struct
 from 0, the debug registers
 .Va u_debugreg
-from 252; the floating-point valid mark reads 1 and the other fields 0.
+from byte 252 on i386 or 848 on x86-64, with four-byte or eight-byte
+words respectively; the floating-point valid mark reads 1 and the other
+fields 0.
 .It Dv PTRACE_GETREGS , PTRACE_SETREGS
 The
 .Vt user_regs_struct
@@ -307,6 +309,10 @@ after one instruction, with
 .Dv SIGTRAP
 and
 .Dv TRAP_TRACE .
+A step over a system call stops at its exit, with its result available,
+before the next user instruction.
+.Dv PTRACE_O_TRACESYSGOOD
+does not change that signal.
 .It Dv PTRACE_KILL
 Send the tracee
 .Dv SIGKILL .
@@ -331,6 +337,9 @@ resumes the tracee, and one that is not, such as
 fails with
 .Er EINTR ,
 where Linux restarts it.
+A tracee that
+.Dv PTRACE_LISTEN
+keeps in its stop makes the new stop at once.
 .It Dv PTRACE_LISTEN
 For a seized tracee in a
 .Dv PTRACE_EVENT_STOP ,
@@ -344,11 +353,20 @@ or begins again, when it makes a new
 .Dv PTRACE_EVENT_STOP ,
 with
 .Dv SIGTRAP
-after the end or the stop signal after a new stop; at once when such a
-change came before the request.
+after the end or the stop signal after a new stop, or when the tracer
+asks for one with
+.Dv PTRACE_INTERRUPT ;
+at once when such a change came before the request.
 A seized tracee not listening makes the same stop when its tracer next
 resumes it.
 .It Dv PTRACE_SETOPTIONS
+Set the supported option bits below.
+An unsupported bit anywhere in the native word is
+.Er EINVAL ,
+for this request and
+.Dv PTRACE_SEIZE ,
+and leaves the tracing state unchanged.
+.Pp
 .Dv PTRACE_O_TRACESYSGOOD ,
 .Dv PTRACE_O_TRACEFORK ,
 .Dv PTRACE_O_TRACEVFORK ,
@@ -398,7 +416,7 @@ exception, and DR7 the control bits, which the kernel loads when the
 tracee runs.
 DR7 may enable a breakpoint only on an address aligned to its length of
 1, 2 or 4 bytes, or 8 on x86-64, whose bytes are all user addresses, from
-0x02000000 to 0xbfffffff on i686 and from 0x10000 to 0x7ffffffeffff on
+0x02000000 to 0xbfffffff on i686 and from 0x10000 to 0x7fffffffefff on
 x86-64, an execute breakpoint only of length 1, and no I/O breakpoint,
 general-detect bit or reserved bit; a value against these is
 .Er EINVAL .
@@ -407,6 +425,10 @@ A breakpoint that fires sends
 with
 .Dv TRAP_HWBKPT ,
 also when the kernel touches the address in a copy for the tracee.
+When the tracer ends, any breakpoint still loaded on the processor
+running the tracee is disabled at its next hit, switch or user return.
+That stale hit sends no hardware-breakpoint signal; a simultaneous single
+step still sends its signal.
 .Sh RETURN VALUES
 0, or the negative error number of the raw call; the C libraries' wrappers
 return -1 and set

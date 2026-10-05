@@ -482,10 +482,10 @@ probe ptracemusl
 file rach2/sys/proc/ptrace.c
 expect PTRACEMUSL FAIL (a write changed to -1 did not return 42: errno
 old
-    sig = ptrace_stop((signo << 8) | 0x7F, NULL);
+    sig = ptrace_stop((signo << 8) | 0x7F, stepping ? &info : NULL);
     if (!leaving && ((self->sig_pending | self->tg->pending) & KSIG_BIT(SIGKILL))) {
 new
-    sig = ptrace_stop((signo << 8) | 0x7F, NULL);
+    sig = ptrace_stop((signo << 8) | 0x7F, stepping ? &info : NULL);
     if (!leaving) {
         tf->eax = nr;
     }
@@ -2059,12 +2059,12 @@ probe ptracemusl
 file rach2/sys/proc/ptrace.c
 expect PTRACEMUSL FAIL (a write the tracee was killed at the entry of ran
 old
-    sig = ptrace_stop((signo << 8) | 0x7F, NULL);
+    sig = ptrace_stop((signo << 8) | 0x7F, stepping ? &info : NULL);
     if (!leaving && ((self->sig_pending | self->tg->pending) & KSIG_BIT(SIGKILL))) {
         self->orig_nr = -1;
     }
 new
-    sig = ptrace_stop((signo << 8) | 0x7F, NULL);
+    sig = ptrace_stop((signo << 8) | 0x7F, stepping ? &info : NULL);
 end
 
 fault detach-keeps-stop-seen

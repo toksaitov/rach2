@@ -2755,7 +2755,7 @@ static void _syscall_handler(isr_params_t *params)
             current_proc->restart_nr = syscall_num + 1u;
         }
     }
-    if (current_proc && (current_proc->ptrace & PT_SYSCALL)) {
+    if (current_proc && (current_proc->ptrace & (PT_SYSCALL | PT_STEP))) {
         SC_RET(params) = (unsigned long)ret;
         ptrace_syscall_stop(params, syscall_num, 1);
         ret = (long)SC_RET(params);

@@ -47,6 +47,8 @@ Do not wrap a dependency onto an unmarked continuation line. Native tests may us
 
 ## Tests
 
+`ptrace_hosttest.c` includes the shared request code and checks register-set revalidation after a modeled sleeping iovec copy, interruption of a listening tracee, full-width option validation, and a syscall step's stop and siginfo. `debugreg_hosttest.c` replaces only privileged register instructions with per-processor arrays. It checks stale enables after detach, suppression of their traps, preservation of a simultaneous single step, deferred kernel hits across a switch and migration, and reloading on return. `ptrace_mutate.sh ptrace` and `ptrace_mutate.sh debugreg` compile deliberate faults in private copies, require the corresponding assertions to fail, and restore and rebuild before requiring another pass.
+
 The runner discovers one native test program per `*_hosttest.c` file.
 
 `hda_hosttest.c` models codec parameters, packed connections and the controller immediate-command interface. It runs the real enumeration, stream setup and proc formatter for twelve PCM rates, inherited and overridden capabilities, two-DAC intersections, long and short lists, ranges, invalid paths and retained reports. Renderer rows check silence and the sample sequence after an empty or partly filled 4096-frame period at 44100 Hz input and 32000 Hz output. `sh tests/host/hda_mutate.sh` runs this test alone under ASan and UBSan, compiles thirteen separate faults and requires named failures, then restores, touches and rebuilds each source. Its trap stops the child before restoring private copies. Logs, sources, binaries and checksums remain in the printed `build/tests/hda-proof.*` directory.
