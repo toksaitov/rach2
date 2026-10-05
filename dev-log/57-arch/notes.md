@@ -68,6 +68,14 @@ On 2026-10-04 the owner set the Lenovo's firmware to boot by UEFI, and the disk 
 * The machine build's script copied the recovery kernel and image from the build tree without building them, and the default target does not build them; the first final build carried a recovery system from 2026-10-04 19:37. The script now builds `rach2-recovery` and the recovery image before it copies them, and the recovery partition was written again with them.
 * The review of the fixes changed `vfs.Readme.md`, which the root carries in `/src`, so the root of `fed30fc0` was not the final one. The root of `49362aa8` was built, put on the stick and written by `rach2-install --update` once more; the kernel and the recovery system of that build are byte for byte those of `fed30fc0`, and stayed.
 
+## After the acceptance
+
+On 2026-10-05, after the acceptance, the owner started tmux as root at the Lenovo's console, and the console stayed as it was with the machine running on (entry 300 of `dev-log/50-shortcomings/plan.md`). With that fixed, tmux drew, but its status line scrolled the screen each time it was drawn (entry 301). Proving the fixes found `probe_faults.sh` unable to catch a fault on x86-64, and one fault's text stale (entry 302). The fixes are b9d9a8f8 to 00904d42, and the closing set found the smp suite's parallel build judging a round's timing (entry 303, 0ee388e1).
+
+Neither fault was in a suite: every check of tmux ran it detached, over SSH, or with the console opened read-write, and no suite logged in at the console. The gnu suite now does: root logs in at the console through the serial port, which feeds the console's line discipline as the keyboard does, starts tmux and runs a command in its pane. Under QEMU the same login, made with PS/2 and USB keys through the monitor's `sendkey`, reproduced the first fault and passes with the fix. The second was reproduced by recording tmux's output on the Lenovo for TERM=rach2 at 85 by 24 and replaying it into the console's code on the host, where the screen ended a row higher than tmux's; with the wrap left pending, the screen equals tmux's own record row for row.
+
+The checks: `tests/run all` on x86-64 at 00904d42, status 0 with 94 suites, and on i686 as `Readme.md` records; the three new probe faults caught on both architectures; and `fd_stdio_mutate.sh` and `vga_text_hosttest`'s wrap row each failing under the old code. The Lenovo runs the build of 00904d42: its root written by `rach2-install --update`, its kernel through `bootctl` and committed, its recovery partition with the new recovery kernel. The owner checked tmux at the console with the kernel of these fixes.
+
 ## Measurements
 
 * GNU sed's `configure` on the GNU root under KVM on the testing host, three runs each with two processors: i686 53, 55 and 55 s before entry 295's changes and lazy TLB, 52, 53 and 53 s after; x86-64 56, 58 and 55 s before, 51, 52 and 52 s after; one processor 46 to 51 s on both.

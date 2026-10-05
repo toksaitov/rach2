@@ -45,6 +45,14 @@ The Codex review's 146 units found faults that the record lists with their fixes
   * The i686 and x86-64 GCC 15.2.0, which also compiled the machine's kernel.
   * QEMU 10.2.1, Cppcheck 2.19.0 and clang-format 21.1.8.
 
+## After the acceptance
+
+tmux at the console, which the owner tried after the acceptance, found two faults no suite had reached, entries 300 and 301 of `dev-log/50-shortcomings/plan.md`, and their proofs found 302 and 303; `notes.md` says how each was found. The fixes are b9d9a8f8 to 0ee388e1. `tests/run all` at 00904d42 passed every suite on x86-64, and on i686 every suite but smp, whose parallel-build row judged a round's timing; with 0ee388e1, `tests/run style smp` passes on both architectures. The Lenovo runs the build of 00904d42, whose source differs from 0ee388e1 only in that suite:
+
+* The kernel: 1762200 bytes, sha256 `bc972be9a5e5ee3451949b9c1f24a4d59bb363c93046b731e0cf7d17c9af6748`, in the candidate slot and committed.
+* The recovery kernel, sha256 `2ef7a508cdb0db5702915732a7b9d92865c96fb4d38d1b13c7dce372075b3108`, with the recovery image above; the recovery partition is sha256 `d2010fc219f6ad099053987666d74e2ece6fb36bfc05937f769acb7ecbb6ddfa`.
+* The root: `os-real-gnu.ext2` for x86-64, sha256 `6acdda81d96a0a1cfdad53a8c20d52c303015b1c14fdcc4b0d9671150a153751`, written by `rach2-install --update` and grown to 232.8 GiB.
+
 ## What is still open
 
 Units 17 and 46 of the review, and the parts of units 137 and 146 that depend on them, are left for the owner. They cover ptrace's hardware breakpoints and debug registers, the x86-64 debug exception's entry, the breakpoint address limit and `u_debugreg` offset, and a single step over `syscall`. Their work is kept in the git stash `unit 46, left for the owner`. A terminal browser drawn by Chromium or Firefox waits for a framebuffer device for programs, as milestone 55 recorded.
