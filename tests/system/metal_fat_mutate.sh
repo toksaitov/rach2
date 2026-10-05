@@ -1,9 +1,16 @@
 #!/bin/sh
-# Prove the FAT acceptance row with corrupt disk bytes and a stale cache.
+# Prove the FAT acceptance row with corrupt disk bytes and a stale cache, on the
+# kernels and suite of the architecture ARCH names.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
+REPO=$repo
+. "$repo/mk/arch.sh"
+RACH2_QEMU=$ARCH_QEMU
+export RACH2_QEMU ARCH_BUILD
+tree=build$ARCH_SUFFIX
 [ ! -d build/.run.lock ] || {
     echo 'metal-fat-mutation: another suite owns this tree' >&2
     exit 1
@@ -36,9 +43,9 @@ stop_child()
 
 rebuild()
 {
-    rm -f build/rach2/sys/fs/bcache.o build/rach2/kernel \
-        build/rach2-metal/sys/fs/bcache.o build/rach2-metal/kernel
-    make -s rach2 rach2-metal
+    rm -f "$tree"/rach2/sys/fs/bcache.o "$tree"/rach2/kernel \
+        "$tree"/rach2-metal/sys/fs/bcache.o "$tree"/rach2-metal/kernel
+    make -s rach2 rach2-metal "ARCH=$RACH2_ARCH"
 }
 
 restore()
@@ -69,7 +76,7 @@ run_phase()
     mkfifo "$work/output"
     tee "$work/$phase.log" < "$work/output" &
     recorder=$!
-    "$work/runutil" group tests/run metal > "$work/output" 2>&1 &
+    ARCH=$RACH2_ARCH "$work/runutil" group tests/run metal > "$work/output" 2>&1 &
     child=$!
     status=0
     wait "$child" || status=$?
@@ -85,14 +92,14 @@ run_phase()
         }
         grep -Fq "$expected" "$work/$phase.log"
         grep -q 'stick: cached bytes match' "$work/$phase.log"
-        grep -q 'mutation: FAT witness changed' build/images/metal-test.metal.log
+        grep -q 'mutation: FAT witness changed' "$tree"/images/metal-test.metal.log
     fi
-    cp build/rach2-metal/kernel "$work/$phase.kernel"
-    cp build/rach2/kernel "$work/$phase.normal-kernel"
-    cksum "$source" build/rach2-metal/kernel build/rach2/kernel \
-        build/images/rach2-metal.krffs > "$work/$phase.artifacts"
+    cp "$tree"/rach2-metal/kernel "$work/$phase.kernel"
+    cp "$tree"/rach2/kernel "$work/$phase.normal-kernel"
+    cksum "$source" "$tree"/rach2-metal/kernel "$tree"/rach2/kernel \
+        "$tree"/images/rach2-metal.krffs > "$work/$phase.artifacts"
     mkdir "$work/$phase.logs"
-    for log in build/images/metal-test*.log; do
+    for log in "$tree"/images/metal-test*.log; do
         [ ! -f "$log" ] || cp "$log" "$work/$phase.logs/"
     done
     echo "metal-fat-mutation: result: $phase status $status"
@@ -144,7 +151,7 @@ path.write_text(text[:start] + text[start:].replace(old, new))
 PY
     rebuild > "$work/$fault.build.log" 2>&1
     cat "$work/$fault.build.log"
-    if cmp -s "$work/fixed.kernel" build/rach2-metal/kernel; then
+    if cmp -s "$work/fixed.kernel" "$tree"/rach2-metal/kernel; then
         echo 'metal-fat-mutation: the compiled kernel did not change' >&2
         exit 1
     fi
