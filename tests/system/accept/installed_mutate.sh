@@ -1,8 +1,15 @@
 #!/bin/sh
-# Prove the installed acceptance rows against staged and compiled faults.
+# Prove the installed acceptance rows against staged and compiled faults, for
+# the architecture ARCH names: its kernel, its bootctl and its emulator.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../../.." && pwd)
 cd "$repo"
+RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
+REPO=$repo
+. "$repo/mk/arch.sh"
+RACH2_QEMU=$ARCH_QEMU
+export ARCH_BUILD RACH2_QEMU
+tree=build$ARCH_SUFFIX
 [ ! -d build/.run.lock ] || {
     echo 'metal-installed-mutation: another suite owns this tree' >&2
     exit 1
@@ -30,8 +37,8 @@ stop_child()
 
 rebuild()
 {
-    rm -f build/utils/sbin/bootctl
-    make -s -C utils ../build/utils/sbin/bootctl
+    rm -f "$tree/utils/sbin/bootctl"
+    make -s -C utils "../$tree/utils/sbin/bootctl" "ARCH=$RACH2_ARCH"
 }
 
 restore()
@@ -61,7 +68,7 @@ run_phase()
     row=$2
     expected=$3
     build/tests/system/runutil group sh tests/system/accept/installed_test.sh \
-        build/rach2/kernel build/tests/system/harness "$work/$phase" "$row" \
+        "$tree/rach2/kernel" build/tests/system/harness "$work/$phase" "$row" \
         > "$work/$phase.log" 2>&1 &
     child=$!
     status=0
@@ -81,10 +88,10 @@ run_phase()
 }
 
 echo "metal-installed-mutation: logs: $work"
-make -s -j4 metal-installed-tools > "$work/build.log" 2>&1
+make -s -j4 metal-installed-tools "ARCH=$RACH2_ARCH" > "$work/build.log" 2>&1
 cat "$work/build.log"
 run_phase fixed all pass
-cp build/utils/sbin/bootctl "$work/fixed.bootctl"
+cp "$tree/utils/sbin/bootctl" "$work/fixed.bootctl"
 for fault in partition readonly window slot; do
     changed=1
     python3 - "$fault" "$accept" "$bootctl" <<'PY'
@@ -112,12 +119,12 @@ PY
             row=fallback; expected='fallback: wrong acceptance status'
             rebuild > "$work/slot.build.log" 2>&1
             cat "$work/slot.build.log"
-            cmp -s "$work/fixed.bootctl" build/utils/sbin/bootctl && exit 1
+            cmp -s "$work/fixed.bootctl" "$tree/utils/sbin/bootctl" && exit 1
             ;;
     esac
     run_phase "$fault" "$row" "$expected"
     restore
-    cmp "$work/fixed.bootctl" build/utils/sbin/bootctl
+    cmp "$work/fixed.bootctl" "$tree/utils/sbin/bootctl"
     run_phase "$fault-restored" "$row" pass
 done
 echo 'metal-installed-mutation: result: all four faults detected and restorations passed'
