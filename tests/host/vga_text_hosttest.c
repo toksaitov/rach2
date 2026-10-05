@@ -15,8 +15,10 @@
  * twenty-five rows the start address selects are the history's live lines
  * throughout, including across the copy. And the console's own byte path,
  * `k_putc` and the writers over it, costs the same, which is what the
- * driver was rewritten for. The driver and the console are included whole
- * to reach their state.
+ * driver was rewritten for. A byte in the last column leaves the wrap
+ * pending, as the terminfo's xenl says: a full last row does not scroll,
+ * which tmux's status line needs. The driver and the console are included
+ * whole to reach their state.
  */
 #include "lib/kint.h"
 
@@ -467,6 +469,67 @@ static void row_graphics(void)
           "the clear on the return sets the start address");
 }
 
+/** The cell at column `col` of live row `row`. */
+static uint16_t live_cell(unsigned int col, unsigned int row)
+{
+    return vram[(_hw_top + row * VGA_TEXT_COLS + col) % VGA_TEXT_CELLS];
+}
+
+/** The bytes of `s` through the console, with no line feed after them. */
+static void put_str(const char *s)
+{
+    while (*s) {
+        k_putc(*s++);
+    }
+}
+
+/** `n` bytes `c` through the console. */
+static void put_run(char c, unsigned int n)
+{
+    while (n--) {
+        k_putc(c);
+    }
+}
+
+/**
+ * A byte in the last column leaves the wrap pending, as Linux's console and
+ * the terminfo's xenl do: a full last row does not scroll, which tmux's
+ * status line needs, the next printable byte wraps, CR and LF after a full
+ * line give no blank line, BS only cancels the wrap, and a cursor move
+ * cancels it.
+ */
+static void row_wrap(void)
+{
+    uint32_t top;
+
+    k_cls();
+    put_str("\033[25;1H");
+    top = _hw_top;
+    put_run('x', VGA_TEXT_COLS);
+    CHECK(_hw_top == top, "a full last row does not scroll");
+    CHECK(x == VGA_TEXT_COLS - 1 && y == VGA_TEXT_ROWS - 1,
+          "the cursor stays in the last column with the wrap pending");
+    k_putc('y');
+    CHECK(_hw_top == top + VGA_TEXT_COLS, "the next byte wraps and scrolls");
+    CHECK(live_cell(0, VGA_TEXT_ROWS - 1) == vga_text_make_cell('y', get_curr_color_attr()),
+          "and is written at the start of the new line");
+    k_cls();
+    put_run('a', VGA_TEXT_COLS);
+    put_str("\r\nz");
+    CHECK(live_cell(0, 1) == vga_text_make_cell('z', get_curr_color_attr()),
+          "CR and LF after a full line leave no blank line");
+    put_str("\033[3;1H");
+    put_run('b', VGA_TEXT_COLS);
+    k_putc('\b');
+    CHECK(x == VGA_TEXT_COLS - 1 && y == 2, "BS with the wrap pending stays on the last cell");
+    put_str("\033[5;1H");
+    put_run('c', VGA_TEXT_COLS);
+    put_str("\033[5;80Hq");
+    CHECK(y == 4 &&
+              live_cell(VGA_TEXT_COLS - 1, 4) == vga_text_make_cell('q', get_curr_color_attr()),
+          "a cursor move cancels the wrap");
+}
+
 int main(void)
 {
     row_clear();
@@ -480,6 +543,7 @@ int main(void)
     row_font();
     row_graphics();
     row_release_echo();
+    row_wrap();
     if (failures) {
         printf("vga-text-test: %d failure(s)\n", failures);
         return 1;

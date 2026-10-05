@@ -110,6 +110,12 @@ static bool vt_reverse;
  */
 static const uint8_t vt_ansi_color[8] = {black, red, green, brown, blue, magenta, cyan, light_grey};
 
+/* A wrap the last column left pending, as a VT100's and Linux's console
+ * leave it, and the cell it was left at: the next printable byte begins the
+ * next line, and a cursor move, an erase, BS, HT, LF or CR cancels it. */
+static bool vt_wrap_pending;
+static unsigned int vt_wrap_x, vt_wrap_y;
+
 /**
  * Draw one byte at the cursor with no escape interpretation.
  *
@@ -117,18 +123,29 @@ static const uint8_t vt_ansi_color[8] = {black, red, green, brown, blue, magenta
  * program sends them to a terminal as padding and as a warning; any other
  * control byte is shown as `CHAR_NON_PRINTABLE`; a printable byte, or a byte
  * from 0x80 up, which is a character of the font's upper half, is written
- * with the current color and the cursor advances, wrapping and scrolling at
- * the screen edges.
+ * with the current color and the cursor advances, scrolling at the bottom.
+ *
+ * A byte written in the last column leaves the cursor there with the wrap
+ * pending, as the terminfo's `xenl` says, so a program may fill the last
+ * row, as tmux's status line does, without the screen scrolling. BS with the
+ * wrap pending only cancels it, so that the line discipline's erase,
+ * `\b \b`, of the last column ends on the erased cell.
  */
 static void vga_putc_raw(char c)
 {
+    bool pending = vt_wrap_pending && x == vt_wrap_x && y == vt_wrap_y;
+
+    vt_wrap_pending = false;
     if ((unsigned char)c < 32 || c == 127) {
         switch (c) {
         case CHAR_NULL:
         case CHAR_BEL:
+            vt_wrap_pending = pending;
             break;
 
         case CHAR_BS:
+            if (pending)
+                break;
             if (x)
                 --x;
             else if (y) {
@@ -162,14 +179,23 @@ static void vga_putc_raw(char c)
             c = CHAR_NULL;
     }
 
-    if (c) {
-        textcon_write_cell(x, y, c, get_curr_color_attr());
-        ++x;
-    }
-
-    if (x >= textcon_cols) {
+    if (c && pending) {
         x = 0;
         ++y;
+        if (y >= textcon_rows) {
+            k_scroll_down();
+            y = textcon_rows - 1;
+        }
+    }
+    if (c) {
+        textcon_write_cell(x, y, c, get_curr_color_attr());
+        if (x + 1 < textcon_cols) {
+            ++x;
+        } else {
+            vt_wrap_pending = true;
+            vt_wrap_x = x;
+            vt_wrap_y = y;
+        }
     }
     if (y >= textcon_rows) {
         k_scroll_down();
@@ -398,6 +424,9 @@ static void vt_dispatch_csi(char c)
 {
     unsigned int n, row, col;
 
+    if (c != 'm' && c != 'c' && c != 'n') {
+        vt_wrap_pending = false;
+    }
     switch (c) {
     case 'A':
         n = vt_arg(0, 1);
@@ -631,6 +660,7 @@ static void vt_escape(unsigned char uc)
     case '8':
         x = vt_saved_x;
         y = vt_saved_y;
+        vt_wrap_pending = false;
         vt_state = VT_NORMAL;
         break;
     case 'c':

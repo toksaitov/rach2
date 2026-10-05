@@ -8,13 +8,15 @@
 # A line feed also returns the carriage, so the entry moves down with CSI B
 # and has no index; the console has no scroll region and no line or character
 # insertion, so a program redraws where a terminal would scroll. A character
-# in the last column wraps at once, so there is no xenl. The keyboard sends
+# in the last column leaves the wrap pending, as a VT100 and Linux's console
+# do, so the entry has xenl, and a program may fill the last row, as tmux's
+# status line does, without the screen scrolling. The keyboard sends
 # the arrows, Home and End as xterm does, the editing keys as a VT220 does,
 # and DEL for Backspace. It answers the cursor position and the device
 # attributes as Linux's console does, which u6 to u9 describe, and draws UTF-8
 # from code page 437. install_root.sh compiles the entry into the GNU root.
 rach2|Rach2 VGA text console,
-	am, bw, msgr,
+	am, bw, msgr, xenl,
 	colors#8, it#8, pairs#64,
 	bold=\E[1m, clear=\E[H\E[2J, cr=\r, cub=\E[%p1%dD, cub1=^H,
 	cud=\E[%p1%dB, cud1=\E[B, cuf=\E[%p1%dC, cuf1=\E[C,
