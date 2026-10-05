@@ -1,8 +1,15 @@
 #!/bin/sh
-# Prove the two exit callers and their prohibition on waits after publication.
+# Prove the two exit callers and their prohibition on waits after publication,
+# on the kernel, probe and emulator of the architecture ARCH names.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
+REPO=$repo
+. "$repo/mk/arch.sh"
+RACH2_QEMU=$ARCH_QEMU
+export RACH2_QEMU
+tree=build$ARCH_SUFFIX
 [ ! -d build/.run.lock ] || {
     echo 'exit-integration: another suite owns this tree' >&2; exit 1;
 }
@@ -38,9 +45,9 @@ stop_child()
 
 rebuild()
 {
-    rm -f build/rach2/sys/syscall_proc.o build/rach2/kernel.o \
-        build/rach2/sys/proc/exit.o build/rach2/kernel
-    make -s rach2
+    rm -f "$tree"/rach2/sys/syscall_proc.o "$tree"/rach2/kernel.o \
+        "$tree"/rach2/sys/proc/exit.o "$tree"/rach2/kernel
+    make -s rach2 "ARCH=$RACH2_ARCH"
 }
 
 restore()
@@ -69,9 +76,9 @@ build_phase()
 {
     rebuild >"$work/$phase.build.log" 2>&1
     cat "$work/$phase.build.log"
-    cp build/rach2/kernel "$work/$phase.kernel"
+    cp "$tree"/rach2/kernel "$work/$phase.kernel"
     cksum rach2/sys/syscall_proc.c rach2/kernel.c rach2/sys/proc/exit.c \
-        "$work/$phase.kernel" "$work/test.krffs" build/tests/exitprobe \
+        "$work/$phase.kernel" "$work/test.krffs" "$tree"/tests/exitprobe \
         >"$work/$phase.artifacts"
 }
 
@@ -140,15 +147,15 @@ PY
 RACH2_DEADLINES=scaled
 RACH2_DEADLINE_FACTOR=${RACH2_TIMEOUT_FACTOR:-1}
 export RACH2_DEADLINES RACH2_DEADLINE_FACTOR
-make -s -C tests ../build/tests/exitprobe >"$work/build.log" 2>&1
+make -s -C tests ../"$tree"/tests/exitprobe "ARCH=$RACH2_ARCH" >"$work/build.log" 2>&1
 if [ -f "$work/exitprobe.staged" ]; then
-    cmp build/tests/exitprobe "$work/exitprobe.staged"
+    cmp "$tree"/tests/exitprobe "$work/exitprobe.staged"
 fi
 make -s -C krffs -o libc-check ../build/krffs/mkfs.krffs \
     ../build/krffs/stageimage.krffs ../build/krffs/readfile.krffs >>"$work/build.log" 2>&1
-make -s build/tests/system/harness build/tests/system/runutil >>"$work/build.log" 2>&1
-cat >"$work/test.manifest" <<'MANIFEST'
-file 0755 /exitprobe build/tests/exitprobe
+make -s build/tests/system/harness build/tests/system/runutil "ARCH=$RACH2_ARCH" >>"$work/build.log" 2>&1
+cat >"$work/test.manifest" <<MANIFEST
+file 0755 /exitprobe $tree/tests/exitprobe
 MANIFEST
 {
     dd if=/dev/zero of="$work/test.krffs" bs=1048576 count=2
@@ -157,12 +164,12 @@ MANIFEST
 } >>"$work/build.log" 2>&1
 cat "$work/build.log"
 build/krffs/readfile.krffs "$work/test.krffs" /exitprobe "$work/exitprobe.staged"
-cmp build/tests/exitprobe "$work/exitprobe.staged"
+cmp "$tree"/tests/exitprobe "$work/exitprobe.staged"
 phase=fixed
 if [ -f "$work/fixed.kernel" ]; then
     rebuild >"$work/resume.build.log" 2>&1
     cat "$work/resume.build.log"
-    cmp "$work/fixed.kernel" build/rach2/kernel
+    cmp "$work/fixed.kernel" "$tree"/rach2/kernel
 else
     build_phase
 fi
