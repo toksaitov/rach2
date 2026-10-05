@@ -4,7 +4,9 @@
 # For the entry proof, inject int $1 before syscall_entry changes GS or RSP;
 # this exercises that entry state without depending on the emulator's delay.
 # The fixed entry must preserve a syscall on an invalid user stack. Removing
-# its interrupt stack or its GS check must fail. The original kernel is
+# its interrupt stack or its GS check must fail, and so must removing the
+# post of a deferred hit before the pending-signal check, which only x86-64
+# defers, from the sigwait row. The original kernel is
 # restored, rebuilt and required to match and pass at the end. It holds the
 # record lock on build/.run.guard and the run lock, as tests/run does, so that
 # no suite builds or boots the tree, and no other proof saves a source, while
@@ -42,7 +44,8 @@ printf 'pid %s\npgid %s\nargs ptrace_debug_mutate.sh\nsince %s\nwork %s\n' "$$" 
     "$(ps -o pgid= -p $$ | tr -d ' ')" "$(date '+%Y-%m-%d %H:%M:%S')" "$work" \
     > build/.run.lock/owner.new
 mv build/.run.lock/owner.new build/.run.lock/owner
-sources='rach2/sys/syscall.c rach2/sys/arch/x86_64/idt.c rach2/sys/arch/x86_64/isr_handler.s'
+sources='rach2/sys/syscall.c rach2/sys/syscall_proc.c rach2/sys/arch/x86_64/idt.c
+    rach2/sys/arch/x86_64/isr_handler.s'
 for file in $sources; do
     mkdir -p "$work/saved/$(dirname "$file")"
     cp "$file" "$work/saved/$file"
@@ -100,6 +103,9 @@ changes = {
     'step': ('rach2/sys/syscall.c',
              '    if (current_proc && (current_proc->ptrace & (PT_SYSCALL | PT_STEP))) {',
              '    if (current_proc && (current_proc->ptrace & PT_SYSCALL)) {'),
+    'sigwait': ('rach2/sys/syscall_proc.c',
+                '    arch_debug_deliver();\n    set = current_proc->sig_pending',
+                '    set = current_proc->sig_pending'),
     'inject': ('rach2/sys/arch/x86_64/isr_handler.s',
                'syscall_entry:\n    swapgs', 'syscall_entry:\n    int $1\n    swapgs'),
     'stack': ('rach2/sys/arch/x86_64/idt.c',
@@ -178,7 +184,13 @@ run_phase step-restored step pass
 cmp "$work/fixed.kernel" "$work/step-restored.kernel"
 run_phase copy copy pass
 run_phase delayed delayed pass
+run_phase sigwait sigwait pass
 if [ "$RACH2_ARCH" = x86_64 ]; then
+    mutate sigwait
+    run_phase no-sigwait sigwait fail 'watched sigwait did not take SIGTRAP with TRAP_HWBKPT'
+    restore
+    run_phase sigwait-restored sigwait pass
+    cmp "$work/fixed.kernel" "$work/sigwait-restored.kernel"
     mutate inject
     run_phase injected entry pass
     mutate stack
