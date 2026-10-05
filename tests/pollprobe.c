@@ -17,7 +17,14 @@
  *   (g) bad timeout: an out-of-range timeval (tv_usec >= 1e6) is -EINVAL;
  *   (h) on x86-64, a ppoll whose timeout is 2^32 seconds waits for its pipe,
  *       which a child writes after 50 ms, and does not end at once, as a
- *       timeout narrowed to 32 bits would.
+ *       timeout narrowed to 32 bits would;
+ *   (i) the console: the kernel's fds 0, 1 and 2 are each open for reading
+ *       and writing, as Linux gives init /dev/console, and /dev/console
+ *       opened read-only answers POLLOUT, as a terminal does on Linux,
+ *       while a write through it is -EBADF. tmux's server draws through the
+ *       standard input its client passes it and polls it for POLLOUT first;
+ *       a read-only fd 0 whose poll never answered left it waiting with
+ *       nothing on the screen.
  *
  * Prints "POLLPROBE OK". Freestanding; direct system calls (probe.h).
  */
@@ -30,6 +37,11 @@
 
 #define EBADF  9
 #define EINVAL 22
+
+#define O_RDONLY  0
+#define O_RDWR    2
+#define O_ACCMODE 3
+#define F_GETFL   3
 
 struct pollfd {
     int fd;
@@ -187,6 +199,36 @@ static void select_contract(int closed)
     check(syscall5(SYS_SELECT, 2000, 0, 0, 0, 0) == -EINVAL, "select nfds > FD_SETSIZE -> -EINVAL");
 }
 
+/**
+ * (i): the kernel's standard descriptors are each open for reading and
+ * writing, and the console opened read-only is writable to poll, as on Linux,
+ * with the write itself refused.
+ */
+static void console_modes(void)
+{
+    struct pollfd pfd[1];
+    int fd, i;
+
+    for (i = 0; i <= 2; i++) {
+        check((syscall3(SYS_FCNTL, i, F_GETFL, 0) & O_ACCMODE) == O_RDWR,
+              "the kernel's fds 0, 1 and 2 are each open for reading and writing");
+    }
+    fd = syscall3(SYS_OPEN, (long)"/dev/console", O_RDONLY, 0);
+    check(fd >= 0, "open /dev/console for reading");
+    if (fd < 0) {
+        return;
+    }
+    pfd[0].fd = fd;
+    pfd[0].events = POLLOUT;
+    pfd[0].revents = 0;
+    check(do_poll(pfd, 1, 0) == 1 && (pfd[0].revents & POLLOUT) != 0,
+          "the console opened read-only answers POLLOUT, as a terminal does on Linux");
+    check(syscall3(SYS_WRITE, fd, (long)"", 0) == -EBADF ||
+              syscall3(SYS_WRITE, fd, (long)"x", 1) == -EBADF,
+          "a write through the console opened read-only is EBADF");
+    syscall1(SYS_CLOSE, fd);
+}
+
 #if defined __x86_64__
 /**
  * Case (h), a ppoll timeout past 32 bits of seconds. The child writes only
@@ -313,6 +355,7 @@ PROBE_START void _start(void)
 #if defined __x86_64__
     wide_ppoll();
 #endif
+    console_modes();
 
     if (fails == 0) {
         puts("POLLPROBE OK");

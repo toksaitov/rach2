@@ -62,7 +62,10 @@ immediately.
 Pipes use their buffered data, free space, and peer lifetime.
 Terminals use the line discipline's input state; pseudoterminals also
 report peer hangup.
-Console readiness is restricted to the descriptor's read and write modes.
+The console reports input only on a descriptor open for reading, and is
+always writable, as a terminal is on Linux whatever the descriptor's mode;
+a write through a read-only descriptor fails with
+.Er EBADF .
 .Pp
 Datagram, packet, and raw ICMP sockets are readable when a packet is
 queued and are always writable.

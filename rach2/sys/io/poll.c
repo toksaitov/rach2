@@ -70,9 +70,11 @@ static void irq_restore(uint32_t flags)
  * wake means "re-check me", or NULL if the descriptor is always ready.
  *
  * A regular file or directory never blocks. The console answers through its
- * tty, masked to what this descriptor can do: POLLIN, whose query drains
- * serial input, only for a readable descriptor, and POLLOUT only for a
- * writable one, so poll(stdout, POLLOUT) never drains serial input.
+ * tty: POLLIN, whose query drains serial input, only for a readable
+ * descriptor, so poll(stdout, POLLOUT) never drains serial input, and
+ * POLLOUT for any descriptor, as a terminal answers on Linux whatever the
+ * descriptor's mode; a write through a read-only one is then EBADF, where a
+ * poll that never answered left the caller waiting for good.
  */
 short poll_fd(fd_entry_t *e, short events, struct wait_queue **wq)
 {
@@ -92,9 +94,7 @@ short poll_fd(fd_entry_t *e, short events, struct wait_queue **wq)
         if (e->flags & FD_FLAG_READ) {
             want = (short)(events & POLLIN);
         }
-        if (e->flags & FD_FLAG_WRITE) {
-            want = (short)(want | (events & POLLOUT));
-        }
+        want = (short)(want | (events & POLLOUT));
         return tty_poll(&console_tty, want, wq);
     }
     /* Framebuffer/mouse: reported ready (no wait queue). */

@@ -72,7 +72,10 @@ poll of it is woken by a change in any descriptor it watches, as
 describes.
 Terminals report input when the line discipline has data ready;
 pseudoterminals also report peer hangup.
-Console readiness is restricted to the descriptor's read and write modes.
+The console reports input only on a descriptor open for reading, and is
+always writable, as a terminal is on Linux whatever the descriptor's mode;
+a write through a read-only descriptor fails with
+.Er EBADF .
 .Pp
 Datagram and protocol-bearing raw sockets are readable when a packet is
 queued and are always writable.

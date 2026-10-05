@@ -5966,3 +5966,30 @@ old
 new
         rc = bind ? vfs_remount_bind(m, flags) : vfs_remount(m, flags, data + k_strlen(data));
 end
+
+# The console's standard descriptors and its poll, which tmux's server draws
+# through.
+
+fault stdio-split-modes
+probe pollprobe
+file rach2/sys/fs/fd.c
+expect FAIL: the kernel's fds 0, 1 and 2 are each open for reading and writing
+old
+        table->entries[i].flags = FD_FLAG_READ | FD_FLAG_WRITE;
+new
+        table->entries[i].flags = (i == FD_STDIN) ? FD_FLAG_READ : FD_FLAG_WRITE;
+end
+
+fault console-pollout-writable-only
+probe pollprobe
+file rach2/sys/io/poll.c
+expect FAIL: the console opened read-only answers POLLOUT
+old
+        want = (short)(want | (events & POLLOUT));
+        return tty_poll(&console_tty, want, wq);
+new
+        if (e->flags & FD_FLAG_WRITE) {
+            want = (short)(want | (events & POLLOUT));
+        }
+        return tty_poll(&console_tty, want, wq);
+end
