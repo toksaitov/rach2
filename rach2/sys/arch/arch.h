@@ -214,9 +214,10 @@ void arch_regset_get(const struct process *t, unsigned long type, uint8_t *out);
  * negative errno as Linux's set of that type returns it. */
 long arch_regset_set(struct process *t, unsigned long type, const uint8_t *in, uint32_t len);
 
-/** At a switch from `old` to `next`: load the hardware breakpoints `next`
- * has, or clear those `old` left. */
-void arch_debug_switch(const struct process *old, const struct process *next);
+/** At a switch from `old` to `next`: save a deferred debug exception in
+ * `old`, load the hardware breakpoints `next` has, or clear the processor's
+ * enables when it has none. */
+void arch_debug_switch(struct process *old, const struct process *next);
 
 /** The bytes of the floating-point notes of one thread in a core file. */
 uint32_t arch_core_fp_size(void);

@@ -91,7 +91,7 @@ void fpu_restore(const void *area)
 }
 
 /** Check the mask at the debug registers' switch; no row sets any. */
-void arch_debug_switch(const struct process *old, const struct process *next)
+void arch_debug_switch(struct process *old, const struct process *next)
 {
     (void)old;
     (void)next;

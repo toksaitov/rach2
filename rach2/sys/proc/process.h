@@ -326,6 +326,7 @@ struct process {
     int32_t orig_nr;
     uint32_t ptrace_exit_seen;
     uintptr_t debugreg[8];
+    unsigned long debug_pending; /* DR6 deferred from a kernel debug exception */
     /* The execution domain and its flags personality(2) keeps; fork passes
      * it on and exec keeps it. */
     uint32_t persona;

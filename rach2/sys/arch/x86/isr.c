@@ -153,7 +153,8 @@ static int32_t _fpe_code(uint32_t status, uint32_t mask)
  * Linux's traps do: the precise causes to their signal and code with the
  * faulting instruction's address, and the protection faults to SIGSEGV or
  * SIGBUS with SI_KERNEL. A breakpoint's SIGTRAP is SI_KERNEL too, and a
- * single step's is TRAP_TRACE.
+ * single step's is TRAP_TRACE. A hardware breakpoint the thread no longer
+ * has, which a tracer's end left in the processor's DR7, returns 0.
  */
 static int _exception_signal(const isr_params_t *params, struct k_siginfo *info)
 {
@@ -169,6 +170,9 @@ static int _exception_signal(const isr_params_t *params, struct k_siginfo *info)
         return SIGFPE;
     case 1: /* debug: DR6 says whether a step or a breakpoint */
         info->code = debugreg_status();
+        if (info->code == DEBUGREG_STALE) {
+            return 0;
+        }
         if (info->code == 0) {
             info->code = TRAP_TRACE;
         }
@@ -239,6 +243,9 @@ static void _exception_handler(isr_params_t *params)
         struct k_siginfo info;
         int signo = _exception_signal(params, &info);
 
+        if (signo == 0) {
+            return;
+        }
         current_proc->trap_nr = params->vector;
         current_proc->trap_err = params->error_code;
         current_proc->trap_addr = 0;
@@ -572,7 +579,13 @@ void isr_paranoid_router(isr_params_t *params)
  */
 void isr_leave(isr_params_t *params)
 {
+    if (FRAME_USER(params)) {
+        debugreg_deliver();
+    }
     deliver_signals(params);
+    if (FRAME_USER(params)) {
+        debugreg_resume();
+    }
     bkl_exit();
 }
 

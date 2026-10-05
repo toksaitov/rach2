@@ -33,6 +33,8 @@ An architecture defines what these headers declare. `arch.h` and its `cpu.h` are
 * `serial.h`, `speaker.h`, `power.h`, `module.h`, `fs/cpuinfo.h`: the serial console, the speaker, the stop for a power off, the boot modules and the text of `/proc/cpuinfo`.
 * `platform.h`: the machine's own devices, in the order the shared boot brings them up: the processor's tables, the firmware's description of the machine, the interrupt controllers and the tick, the disks, sound, keyboard and mouse only the platform has, and its work at each tick; and the other processors, their count, their start and the interprocessor interrupt (on a PC, `x86/smpboot.c`).
 
+The x86-64 debug exception has its own interrupt stack. Its entry reads the GS base MSR, since a debug exception delayed by `MOV SS` can follow `SYSCALL` before the stack and GS change. A user frame moves to the thread's stack before any handler can stop it; a kernel exception only records its status, which is delivered on that thread's user return. [The ptrace Readme](../proc/ptrace.Readme.md) describes debug-register ownership and deferred delivery.
+
 ## The shared code
 
 `make -C rach2 check-arch` (`tools/verify/archcheck.sh`), which `tests/run style` runs, holds the shared code to what every architecture can build:

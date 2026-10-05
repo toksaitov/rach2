@@ -8,6 +8,8 @@
 #include "../arch.h"
 #include "../../lib/kerrno.h"
 #include "../../lib/ksignal.h"
+#include "../../lib/kstring.h"
+#include "../../proc/percpu.h"
 
 /* DR7: the enable bits of the four breakpoints, and the bits a tracer may
  * write: those, LE and GE, bit 10, which reads as one, and the conditions
@@ -26,19 +28,33 @@
  * the register N in the ModRM byte's reg field and the accumulator in its
  * r/m field; in long mode the same bytes move all 64 bits of RAX.
  */
+#ifndef RACH2_HOSTTEST
 #define DR_READ(n, v)  __asm__ __volatile__(".byte 0x0f, 0x21, " n : "=a"(v))
 #define DR_WRITE(n, v) __asm__ __volatile__(".byte 0x0f, 0x23, " n : : "a"(v) : "memory")
-#define DR0_MODRM      "0xc0"
-#define DR1_MODRM      "0xc8"
-#define DR2_MODRM      "0xd0"
-#define DR3_MODRM      "0xd8"
-#define DR6_MODRM      "0xf0"
-#define DR7_MODRM      "0xf8"
+#endif
+#define DR0_MODRM "0xc0"
+#define DR1_MODRM "0xc8"
+#define DR2_MODRM "0xd0"
+#define DR3_MODRM "0xd8"
+#define DR6_MODRM "0xf0"
+#define DR7_MODRM "0xf8"
 
-void arch_debug_switch(const process_t *old, const process_t *next)
+/* Whether each processor has debug enables loaded. A tracer's exit can
+ * clear a running tracee's saved DR7 without changing that processor's DR7. */
+static volatile unsigned char dr7_live[NR_CPUS];
+static volatile unsigned long deferred[NR_CPUS];
+
+/** Save a deferred exception in the outgoing thread and load the next
+ * thread's breakpoints. The caller holds the big lock with interrupts off. */
+void arch_debug_switch(process_t *old, const process_t *next)
 {
+    unsigned int cpu = arch_cpu_id();
     unsigned long v;
 
+    if (old) {
+        old->debug_pending |= deferred[cpu];
+    }
+    deferred[cpu] = 0;
     if (next && (next->debugreg[7] & DR7_ENABLES)) {
         v = next->debugreg[0];
         DR_WRITE(DR0_MODRM, v);
@@ -50,12 +66,35 @@ void arch_debug_switch(const process_t *old, const process_t *next)
         DR_WRITE(DR3_MODRM, v);
         v = next->debugreg[7] | DR7_ONE;
         DR_WRITE(DR7_MODRM, v);
-    } else if (old && (old->debugreg[7] & DR7_ENABLES)) {
+        dr7_live[cpu] = 1;
+    } else if (dr7_live[cpu]) {
         v = DR7_ONE;
         DR_WRITE(DR7_MODRM, v);
+        dr7_live[cpu] = 0;
     }
 }
 
+/** Classify DR6 against the current thread's saved enables. A tracer that
+ * ended may have cleared them while this processor still had DR7 loaded. */
+static int32_t debugreg_code(unsigned long dr6)
+{
+    if (current_proc) {
+        current_proc->debugreg[6] = dr6;
+    }
+    if ((dr6 & DR6_HITS) && current_proc && !(current_proc->debugreg[7] & DR7_ENABLES)) {
+        unsigned long v = DR7_ONE;
+
+        DR_WRITE(DR7_MODRM, v);
+        dr7_live[arch_cpu_id()] = 0;
+        return (dr6 & DR6_BS) ? TRAP_TRACE : DEBUGREG_STALE;
+    }
+    if (dr6 & DR6_HITS) {
+        return TRAP_HWBKPT;
+    }
+    return (dr6 & DR6_BS) ? TRAP_TRACE : 0;
+}
+
+/** Read and clear the processor's debug status for a user exception. */
 int32_t debugreg_status(void)
 {
     unsigned long dr6;
@@ -63,13 +102,62 @@ int32_t debugreg_status(void)
 
     DR_READ(DR6_MODRM, dr6);
     DR_WRITE(DR6_MODRM, zero);
-    if (current_proc) {
-        current_proc->debugreg[6] = dr6;
+    return debugreg_code(dr6);
+}
+
+/** Save a kernel debug exception without taking a lock or using a thread's
+ * stack. Only this processor changes these arrays. Disable its breakpoints
+ * until the next switch or user return, so its interrupt stack cannot nest. */
+void debugreg_defer(void)
+{
+    unsigned int cpu = arch_cpu_id();
+    unsigned long dr6;
+    unsigned long v = 0;
+
+    DR_READ(DR6_MODRM, dr6);
+    DR_WRITE(DR6_MODRM, v);
+    v = DR7_ONE;
+    DR_WRITE(DR7_MODRM, v);
+    dr7_live[cpu] = 0;
+    deferred[cpu] |= dr6 & (DR6_HITS | DR6_BS);
+}
+
+/** Post a deferred kernel debug exception on the thread's own stack, with
+ * the big lock held and interrupts off. A switch kept its status in the
+ * outgoing thread so it follows that thread to another processor. The
+ * syscall exit reports a kernel single step; only a hardware hit posts
+ * a signal here, as in i686's kernel debug handler. */
+void debugreg_deliver(void)
+{
+    unsigned int cpu = arch_cpu_id();
+    unsigned long dr6;
+    struct k_siginfo info;
+
+    if (!current_proc) {
+        deferred[cpu] = 0;
+        return;
     }
-    if (dr6 & DR6_HITS) {
-        return TRAP_HWBKPT;
+    dr6 = deferred[cpu] | current_proc->debug_pending;
+    deferred[cpu] = 0;
+    current_proc->debug_pending = 0;
+    if (dr6 == 0) {
+        return;
     }
-    return (dr6 & DR6_BS) ? TRAP_TRACE : 0;
+    k_memset(&info, 0, sizeof(info));
+    info.code = debugreg_code(dr6);
+    if (info.code == TRAP_HWBKPT) {
+        info.addr = FRAME_PC(proc_user_frame(current_proc));
+        signal_post_thread(current_proc, SIGTRAP, &info);
+    }
+}
+
+/** Reload enables cleared by a deferred exception, or by a tracer that
+ * ended while the current thread ran on this processor. */
+void debugreg_resume(void)
+{
+    if (!dr7_live[arch_cpu_id()] || !current_proc || !(current_proc->debugreg[7] & DR7_ENABLES)) {
+        arch_debug_switch(current_proc, current_proc);
+    }
 }
 
 /**
@@ -112,11 +200,13 @@ static int dr7_valid(const process_t *t, unsigned long v)
     return 1;
 }
 
+/** Read a saved debug register, including DR7's fixed bit. */
 unsigned long debugreg_peek(const process_t *t, unsigned n)
 {
     return n == 7 ? (t->debugreg[7] | DR7_ONE) : t->debugreg[n];
 }
 
+/** Validate a debug register write before keeping it in the stopped thread. */
 int debugreg_poke(process_t *t, unsigned n, unsigned long v)
 {
     if (n == 4 || n == 5 || n > 7) {

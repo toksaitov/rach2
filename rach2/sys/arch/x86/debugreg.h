@@ -24,9 +24,25 @@ unsigned long debugreg_peek(const process_t *t, unsigned n);
  * that an enabled breakpoint would then watch outside user space. */
 int debugreg_poke(process_t *t, unsigned n, unsigned long v);
 
+/* What `debugreg_status` returns for a breakpoint the current thread no
+ * longer has, which the processor's DR7 still had because a tracer's end
+ * cleared the thread's copy while it ran: no signal is sent. */
+#define DEBUGREG_STALE (-1)
+
 /** At a debug exception: move DR6 into the current thread's copy and clear
  * it. Returns the trap's si_code, TRAP_HWBKPT for a breakpoint and
- * TRAP_TRACE for a single step, or 0 when DR6 shows neither. */
+ * TRAP_TRACE for a single step, 0 when DR6 shows neither, or DEBUGREG_STALE,
+ * with the processor's DR7 cleared, for a breakpoint of a DR7 the thread no
+ * longer has. */
 int32_t debugreg_status(void);
+
+/** Defer a kernel debug exception on this processor, without taking a lock. */
+void debugreg_defer(void);
+
+/** Post this thread's deferred debug exception before signal delivery. */
+void debugreg_deliver(void);
+
+/** Restore the current thread's debug enables before returning to user mode. */
+void debugreg_resume(void);
 
 #endif /* _X86_DEBUGREG_H_ */

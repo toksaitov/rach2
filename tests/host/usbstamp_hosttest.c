@@ -154,7 +154,7 @@ void fpu_restore(const void *area)
 }
 
 /** No debug register is set in the host switch model. */
-void arch_debug_switch(const struct process *old, const struct process *next)
+void arch_debug_switch(struct process *old, const struct process *next)
 {
     (void)old;
     (void)next;

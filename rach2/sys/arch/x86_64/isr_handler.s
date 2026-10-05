@@ -16,12 +16,14 @@
 # RPL 3, runs `swapgs` before anything reads %gs, and the return to user
 # mode runs it again as its last step before the `iretq` or `sysretq`.
 #
-# Three exceptions come on interrupt stacks of their own and may arrive
+# Four exceptions come on interrupt stacks of their own and may arrive
 # anywhere, between the `swapgs` of an exit and its `iretq` among other
 # places, where the saved CS says kernel mode while GS has the user's base.
 # The NMI, the double fault and the machine check therefore take the
 # paranoid entry, which asks the GS base MSR itself whose base is loaded,
-# swaps only when it is the user's, and swaps back only if it swapped.
+# swaps only when it is the user's, and swaps back only if it swapped. The
+# debug exception makes the same GS check in debug_entry, which moves a
+# user frame to the thread's stack or defers a kernel exception.
 #
 # Vectors with an error code from the processor (8, 10 to 14, 17, 21, 29 and
 # 30) push only their vector; the others push a zero first, so the frame has
@@ -66,7 +68,7 @@ isr0:
 isr1:
     pushq $0
     pushq $1
-    jmp isr_common_handler
+    jmp debug_entry
 
 # The NMI, on its own stack.
 .globl isr2
@@ -326,6 +328,56 @@ isr_exit:
     swapgs
 .exit_iret:
     iretq
+
+# A debug exception may follow MOV SS and SYSCALL before syscall_entry
+# changes stacks or GS. Its IST stack is always usable, and the GS MSR
+# determines whether to swap. A user exception moves to the thread's stack
+# before any C code can stop or switch it. A kernel exception only saves
+# DR6 on this processor; isr_leave posts the signal on the thread's stack.
+debug_entry:
+    pushq %rax
+    pushq %rbx
+    pushq %rcx
+    pushq %rdx
+    pushq %rsi
+    pushq %rdi
+    pushq %rbp
+    pushq %r8
+    pushq %r9
+    pushq %r10
+    pushq %r11
+    pushq %r12
+    pushq %r13
+    pushq %r14
+    pushq %r15
+    cld
+    xorl %ebx, %ebx
+    movl $MSR_GS_BASE, %ecx
+    rdmsr
+    testl %edx, %edx
+    js .debug_kernel_gs
+    swapgs
+    movl $1, %ebx
+.debug_kernel_gs:
+    testb $3, F_CS(%rsp)
+    jz .debug_from_kernel
+    movq %rsp, %rsi
+    movq %gs:CPU_KERNEL_RSP, %rdi
+    subq $176, %rdi
+    movq %rdi, %rdx
+    movl $22, %ecx
+    rep movsq
+    movq %rdx, %rsp
+    movq %rsp, %rdi
+    call x86_64_route
+    jmp isr_return
+.debug_from_kernel:
+    call debugreg_defer
+    andq $-257, F_RFLAGS(%rsp)
+    testl %ebx, %ebx
+    jz .paranoid_restore
+    swapgs
+    jmp .paranoid_restore
 
 # The paranoid entry of the NMI, the double fault and the machine check,
 # on their interrupt stacks. RBX, which the C call preserves, remembers

@@ -71,17 +71,18 @@ static void set_gate(int vector, void (*handler)(void), uint8_t flags, uint8_t i
  * an `int $0x80` is a general-protection fault, a SIGSEGV, as it is on a
  * Linux without its 32-bit emulation.
  *
- * Three exceptions run on interrupt stacks of their own (percpu.h): the
+ * Four exceptions run on interrupt stacks of their own (percpu.h): the
  * double fault, whose cause may be the stack in use, the NMI, which may
  * arrive anywhere, the entry and exit paths included, and the machine
- * check, for the same reason.
+ * check, for the same reason. A debug exception delayed by MOV SS can
+ * arrive after SYSCALL changes privilege but before it changes stacks.
  */
 void init_idt(void)
 {
     k_memset(idt, 0, sizeof(idt));
 
     set_gate(0, isr0, GATE_KERNEL, 0);
-    set_gate(1, isr1, GATE_KERNEL, 0);
+    set_gate(1, isr1, GATE_KERNEL, IST_DEBUG);
     set_gate(2, isr2, GATE_KERNEL, IST_NMI);
     set_gate(3, isr3, GATE_USER, 0);
     set_gate(4, isr4, GATE_USER, 0);

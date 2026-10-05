@@ -27,16 +27,19 @@ typedef char cpu_offsets_fit[(__builtin_offsetof(struct cpu, self) == 0 &&
 #endif
 
 /*
- * The interrupt stacks of each processor, for the double fault, the NMI and
- * the machine check. A double fault comes from a kernel stack that ran into
- * its guard page and has no room for the frame, and the record and the
- * panic its handler writes take the most; the other two print and panic.
+ * The interrupt stacks of each processor, for the double fault, the NMI, the
+ * machine check and the debug exception. A double fault comes from a kernel
+ * stack that ran into its guard page and has no room for the frame, and the
+ * record and the panic its handler writes take the most; the NMI and the
+ * machine check print and panic, and the debug entry copies a user frame to
+ * the thread's stack or defers a kernel exception.
  */
 #define DOUBLE_FAULT_STACK_SIZE 0x2000
 #define IST_STACK_SIZE          0x1000
 static uint8_t double_fault_stacks[NR_CPUS][DOUBLE_FAULT_STACK_SIZE] __attribute__((aligned(16)));
 static uint8_t nmi_stacks[NR_CPUS][IST_STACK_SIZE] __attribute__((aligned(16)));
 static uint8_t machine_check_stacks[NR_CPUS][IST_STACK_SIZE] __attribute__((aligned(16)));
+static uint8_t debug_stacks[NR_CPUS][IST_STACK_SIZE] __attribute__((aligned(16)));
 
 /* The flags `syscall` clears on entry: TF, IF, DF, IOPL, NT and AC, so the
  * kernel starts with interrupts off and the direction flag clear. */
@@ -105,6 +108,7 @@ static void cpu_fill(uint32_t id)
     c->tss.ist[IST_NMI - 1] = (uint64_t)(uintptr_t)&nmi_stacks[id][IST_STACK_SIZE];
     c->tss.ist[IST_MACHINE_CHECK - 1] =
         (uint64_t)(uintptr_t)&machine_check_stacks[id][IST_STACK_SIZE];
+    c->tss.ist[IST_DEBUG - 1] = (uint64_t)(uintptr_t)&debug_stacks[id][IST_STACK_SIZE];
     c->tss.iomap_base = sizeof(struct tss64);
 }
 

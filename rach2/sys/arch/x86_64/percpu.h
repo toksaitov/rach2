@@ -38,9 +38,9 @@
  * The 64-bit TSS (Intel SDM Vol. 3A, 8.7): no task state, only the stacks
  * the processor switches to. `rsp0` is the one an interrupt or exception
  * from user mode lands on, the running thread's kernel stack; `ist` are the
- * interrupt stacks the gates of the double fault, the NMI and the machine
- * check name, which they get whatever stack was in use. The I/O map base
- * past the segment's end means every port is closed to user mode.
+ * interrupt stacks the gates of the double fault, the NMI, the machine
+ * check and the debug exception name, whatever stack was in use. The I/O
+ * map base past the segment's end means every port is closed to user mode.
  */
 struct tss64 {
     uint32_t reserved0;
@@ -54,10 +54,11 @@ struct tss64 {
     uint16_t iomap_base;
 } __attribute__((packed));
 
-/* The interrupt stacks, by their number in a gate (idt.c): 1 to 3. */
+/* The interrupt stacks, by their number in a gate (idt.c): 1 to 4. */
 #define IST_DOUBLE_FAULT  1
 #define IST_NMI           2
 #define IST_MACHINE_CHECK 3
+#define IST_DEBUG         4
 
 /*
  * One processor's record. The first four fields are read at fixed offsets,
