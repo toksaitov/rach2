@@ -131,7 +131,7 @@ run_phase()
 
 echo "ext2-batch-mutation: logs: $work"
 make -s krffs build/tests/system/harness build/tests/system/runutil \
-    build/tools/image/mkmbr >"$work/build.log" 2>&1
+    build/tools/image/mkmbr "ARCH=$RACH2_ARCH" >"$work/build.log" 2>&1
 make -s -C tests "../$probe" "ARCH=$RACH2_ARCH" >>"$work/build.log" 2>&1
 cat "$work/build.log"
 cat >"$work/probe.manifest" <<EOF
