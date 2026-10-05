@@ -16,12 +16,22 @@ if [ "${1-}" = --direct ]; then
     runner=direct
     shift
 fi
+# x86-64 has no _llseek: its probe seeks through lseek, which the lseek fault
+# covers, so the llseek fault is i686's alone.
 if [ "$#" -eq 0 ]; then
-    set -- namespace raw-read raw-write lseek llseek orphan readv
+    if [ -n "$ARCH_SUFFIX" ]; then
+        set -- namespace raw-read raw-write lseek orphan readv
+    else
+        set -- namespace raw-read raw-write lseek llseek orphan readv
+    fi
 fi
 for fault do
     case "$fault" in
-        namespace|raw-read|raw-write|lseek|llseek|orphan|readv) ;;
+        namespace|raw-read|raw-write|lseek|orphan|readv) ;;
+        llseek)
+            [ -z "$ARCH_SUFFIX" ] || {
+                echo "fdlock-mutation: x86-64 has no _llseek for the llseek fault" >&2; exit 2;
+            } ;;
         *) echo "fdlock-mutation: unknown fault: $fault" >&2; exit 2 ;;
     esac
 done
