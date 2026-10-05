@@ -1,5 +1,6 @@
 #!/bin/sh
-# Prove the init refusal row with kernels built from a private copy.
+# Prove the init refusal row with kernels built from a private copy, for the
+# architecture ARCH names, on its emulator.
 #
 # Usage: sh tests/system/init_refusal_mutate.sh
 #
@@ -15,6 +16,11 @@
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
+REPO=$repo
+. "$repo/mk/arch.sh"
+RACH2_QEMU=$ARCH_QEMU
+export RACH2_QEMU ARCH_BUILD
 [ ! -d build/.run.lock ] || {
     echo 'init-refusal-mutation: another suite owns this tree' >&2; exit 1;
 }
@@ -62,11 +68,11 @@ run_phase()
     expected=$2
     # The object goes first: a source restored within the second its object
     # was built reads as up to date to a make that compares whole seconds.
-    rm -f "$tree/build/rach2/kernel.o" "$tree/build/rach2/kernel"
-    make -s -j8 -C "$tree/rach2" >"$work/$phase.build.log" 2>&1 || {
+    rm -f "$tree/build$ARCH_SUFFIX/rach2/kernel.o" "$tree/build$ARCH_SUFFIX/rach2/kernel"
+    make -s -j8 -C "$tree/rach2" "ARCH=$RACH2_ARCH" >"$work/$phase.build.log" 2>&1 || {
         cat "$work/$phase.build.log" >&2; exit 1;
     }
-    cp "$tree/build/rach2/kernel" "$work/$phase.kernel"
+    cp "$tree/build$ARCH_SUFFIX/rach2/kernel" "$work/$phase.kernel"
     cksum "$source" "$work/$phase.kernel" >"$work/$phase.artifacts"
     build/tests/system/runutil group sh tests/system/init_refusal.sh "$work/$phase.kernel" \
         build/tests/system/harness build/tools/image/mkmbr "$work/$phase.row" \
