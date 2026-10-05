@@ -1,10 +1,17 @@
 #!/bin/sh
 # Prove the ext2 link, statfs and block-count branches with rebuilt kernel
-# faults.
+# faults, on the kernel, test image and emulator of the architecture ARCH
+# names.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
+REPO=$repo
+. "$repo/mk/arch.sh"
+RACH2_QEMU=$ARCH_QEMU
+export RACH2_QEMU ARCH_BUILD
+tree=build$ARCH_SUFFIX
 [ ! -d build/.run.lock ] || {
     echo 'probe-roots-mutation: another suite owns this tree' >&2; exit 1;
 }
@@ -29,8 +36,8 @@ stop_child()
 
 rebuild()
 {
-    rm -f build/rach2/sys/fs/ext2.o build/rach2/kernel
-    make -s rach2
+    rm -f "$tree"/rach2/sys/fs/ext2.o "$tree"/rach2/kernel
+    make -s rach2 "ARCH=$RACH2_ARCH"
 }
 
 restore()
@@ -59,7 +66,7 @@ run_phase()
     expected=$2
     rebuild >"$work/$phase.build.log" 2>&1
     cat "$work/$phase.build.log"
-    cp build/rach2/kernel "$work/$phase.kernel"
+    cp "$tree"/rach2/kernel "$work/$phase.kernel"
     cksum "$source" "$work/$phase.kernel" >"$work/$phase.artifacts"
     for root in krffs ext2; do
         set --
@@ -92,7 +99,7 @@ run_phase()
 
 echo "probe-roots-mutation: logs: $work"
 make -s test-image build/tests/system/harness build/tests/system/runutil \
-    build/tools/image/mkmbr >"$work/build.log" 2>&1
+    build/tools/image/mkmbr "ARCH=$RACH2_ARCH" >"$work/build.log" 2>&1
 cat "$work/build.log"
 run_phase fixed pass
 for fault in link magic blocks; do
