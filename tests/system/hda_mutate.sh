@@ -1,8 +1,15 @@
 #!/bin/sh
-# Boot the staged diagnostic and prove that the proc path is required.
+# Boot the staged diagnostic and prove that the proc path is required, on the
+# kernel, programs and emulator of the architecture ARCH names.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
+REPO=$repo
+. "$repo/mk/arch.sh"
+RACH2_QEMU=$ARCH_QEMU
+export RACH2_QEMU ARCH_BUILD
+tree=build$ARCH_SUFFIX
 [ ! -d build/.run.lock ] || {
     echo 'hda-guest: another suite owns this tree' >&2; exit 1;
 }
@@ -25,8 +32,8 @@ stop_child()
 
 rebuild()
 {
-    rm -f build/rach2/sys/fs/synthfs.o build/rach2/kernel
-    make -s rach2
+    rm -f "$tree"/rach2/sys/fs/synthfs.o "$tree"/rach2/kernel
+    make -s rach2 "ARCH=$RACH2_ARCH"
 }
 
 restore()
@@ -61,8 +68,8 @@ run_phase()
     fi
     rebuild >"$work/$phase.build.log" 2>&1
     cat "$work/$phase.build.log"
-    cp build/rach2/kernel "$work/$phase.kernel"
-    cksum "$source" build/rach2/kernel "$work/test.krffs" >"$work/$phase.artifacts"
+    cp "$tree"/rach2/kernel "$work/$phase.kernel"
+    cksum "$source" "$tree"/rach2/kernel "$work/test.krffs" >"$work/$phase.artifacts"
     build/tests/system/runutil group build/tests/system/harness \
         --kernel "$work/$phase.kernel" --initrd "$work/test.krffs" \
         --net hubport,id=net0,hubid=0 --qemu-arg=-cpu --qemu-arg=max \
@@ -93,13 +100,13 @@ echo "hda-guest: logs: $work"
 # the others, so this script neither compiles it nor keeps a copy of that
 # compile line.
 {
-    make -s check-libc build/tests/system/harness build/tests/system/runutil
-    make -s -C utils ../build/utils/audiotest
+    make -s check-libc build/tests/system/harness build/tests/system/runutil "ARCH=$RACH2_ARCH"
+    make -s -C utils ../"$tree"/utils/audiotest "ARCH=$RACH2_ARCH"
     make -s -C krffs -o libc-check ../build/krffs/mkfs.krffs \
         ../build/krffs/stageimage.krffs ../build/krffs/readfile.krffs
-    make -s musl-programs
+    make -s musl-programs "ARCH=$RACH2_ARCH"
 } >"$work/build.log" 2>&1
-cp build/tests/musl/hdaprobe "$work/hdaprobe"
+cp "$tree"/tests/musl/hdaprobe "$work/hdaprobe"
 for profile in rach2-metal rach2-metal-disk os-real; do
     grep -Fx 'file 0755 /bin/audiotest build/utils/audiotest' \
         "krffs/manifests/$profile.manifest" >/dev/null
@@ -119,7 +126,7 @@ for program in audiotest hdaprobe; do
     original="$work/hdaprobe"
     if [ "$program" = audiotest ]; then
         guest=/bin/audiotest
-        original=build/utils/audiotest
+        original="$tree"/utils/audiotest
     fi
     build/krffs/readfile.krffs "$work/test.krffs" "$guest" "$work/$program.staged"
     cmp "$original" "$work/$program.staged"
