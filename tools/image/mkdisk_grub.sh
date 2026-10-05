@@ -220,19 +220,20 @@ done
 # container, CHS fields included. The chain reader and the GRUB embedder are
 # built the same way.
 MKMBR="$REPO/build/tools/image/mkmbr"
-make -s -C "$REPO" build/tools/image/mkmbr || exit 1
+make -s -C "$REPO" build/tools/image/mkmbr "ARCH=$RACH2_ARCH" || exit 1
 MKGPT="$REPO/build/tools/image/mkgpt"
-make -s -C "$REPO" build/tools/image/mkgpt || exit 1
+make -s -C "$REPO" build/tools/image/mkgpt "ARCH=$RACH2_ARCH" || exit 1
 FATCHAINS="$REPO/build/tools/image/fatchains"
-make -s -C "$REPO" build/tools/image/fatchains || exit 1
+make -s -C "$REPO" build/tools/image/fatchains "ARCH=$RACH2_ARCH" || exit 1
 GRUBEMBED="$REPO/build/tools/image/grubembed"
-make -s -C "$REPO" build/tools/image/grubembed || exit 1
+make -s -C "$REPO" build/tools/image/grubembed "ARCH=$RACH2_ARCH" || exit 1
 
 # Every intermediate lives in this run's own directory, so two profiles
 # building in parallel (the suites do) cannot overwrite each other's
 # configuration or partition images. The trap clears it and the unrenamed
 # output on any exit; the finished disk appears only through the final mv.
-TMPD="$(mktemp -d "$REPO/build/images/mkdisk.XXXXXX")"
+mkdir -p "$ARCH_BUILD/images" || exit 1
+TMPD="$(mktemp -d "$ARCH_BUILD/images/mkdisk.XXXXXX")"
 # The unrenamed output carries this run's process number for the same reason:
 # two builds of one disk with one fixed name removed each other's file, and
 # make deleted the disk both wanted. On 2026-09-09 the installer and
