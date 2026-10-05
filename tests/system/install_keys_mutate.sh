@@ -3,6 +3,12 @@ set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
+REPO=$repo
+. "$repo/mk/arch.sh"
+RACH2_QEMU=$ARCH_QEMU
+export RACH2_QEMU ARCH_BUILD
+tree=build$ARCH_SUFFIX
 [ ! -d build/.run.lock ] || {
     echo 'install-keys-mutation: another suite owns this tree' >&2; exit 1;
 }
@@ -18,6 +24,7 @@ rsync -a --exclude=/.git --exclude=/build/.run.lock --exclude=/build/images \
     --exclude=/build/tests/failed --exclude='/build/machine-*' --exclude='/build/*-proof.*' \
     "$repo/" "$work/tree/"
 cd "$work/tree"
+ARCH_BUILD=$work/tree/build$ARCH_SUFFIX
 source="$work/tree/utils/rach2-install"
 cp "$source" "$work/installer.saved"
 child=
@@ -55,21 +62,22 @@ run_phase()
     phase=$1
     expected=$2
     failure=${3:-}
-    rm -f build/images/rach2-recovery*.krffs build/images/rach2-recovery*.iso \
-        build/images/installer-root.ext2 build/images/installer-test.disk \
-        build/images/install-test-stick.img
-    make -s -j8 build/images/install-test-stick.img build/tests/host/mkexfatfixture \
-        build/tests/system/harness build/tests/system/runutil >"$work/$phase.build.log" 2>&1
+    rm -f "$tree"/images/rach2-recovery*.krffs "$tree"/images/rach2-recovery*.iso \
+        "$tree"/images/installer-root.ext2 "$tree"/images/installer-test.disk \
+        "$tree"/images/install-test-stick.img
+    make -s -j8 "$tree"/images/install-test-stick.img build/tests/host/mkexfatfixture \
+        build/tests/system/harness build/tests/system/runutil "ARCH=$RACH2_ARCH" \
+        >"$work/$phase.build.log" 2>&1
     cat "$work/$phase.build.log"
-    shasum -a 256 "$source" build/images/install-test-stick.img \
-        build/images/installer-root.ext2 >"$work/$phase.artifacts"
+    shasum -a 256 "$source" "$tree"/images/install-test-stick.img \
+        "$tree"/images/installer-root.ext2 >"$work/$phase.artifacts"
     cp "$source" "$work/$phase.installer"
     build/tests/system/runutil group sh tests/system/suites/installer.sh \
-        build/images/install-test-stick.img build/images/installer-test.disk \
-        build/tests/system/harness "build/images/keys-$phase" \
-        "$(cat krffs/rach2_demo_password)" build/images/install-test-stick.img \
-        build/images/installer-test.disk "${RACH2_INSTALL_KEYS_PORT:-2327}" \
-        unused krffs/rach2_demo_ed25519 resume build/images/installer-root.ext2 \
+        "$tree"/images/install-test-stick.img "$tree"/images/installer-test.disk \
+        build/tests/system/harness "$tree/images/keys-$phase" \
+        "$(cat krffs/rach2_demo_password)" "$tree"/images/install-test-stick.img \
+        "$tree"/images/installer-test.disk "${RACH2_INSTALL_KEYS_PORT:-2327}" \
+        unused krffs/rach2_demo_ed25519 resume "$tree"/images/installer-root.ext2 \
         >"$work/$phase.log" 2>&1 &
     child=$!
     status=0
@@ -90,13 +98,13 @@ run_phase()
             'row 17:')
                 grep -Fq 'retried from the marked archive: OK' "$work/$phase.log" ;;
             'row archive-stop:'*)
-                grep -Fq 'STOP_STATUS=99' "build/images/keys-$phase/archive-stop.log" ;;
+                grep -Fq 'STOP_STATUS=99' "$tree/images/keys-$phase/archive-stop.log" ;;
         esac
     fi
     echo "install-keys-mutation: result: $phase status $status"
 }
 
-make -s -j8 rach2 utils krffs >"$work/components.build.log" 2>&1
+make -s -j8 rach2 utils krffs "ARCH=$RACH2_ARCH" >"$work/components.build.log" 2>&1
 cat "$work/components.build.log"
 run_phase fixed 0
 python3 - "$source" <<'PY'
