@@ -10,6 +10,9 @@
 # passes first, and again after each source is restored, touched and rebuilt,
 # with the game's bytes those of the first build.
 #
+# The game, the disk and the emulator are those of the architecture ARCH
+# names.
+#
 # Usage: sh tests/system/doom_mutate.sh [--direct] [FAULT...]
 #   --direct runs `make run-doom` instead of `tests/run doom`. FAULT is status
 #   or crash; the default is both.
@@ -17,6 +20,10 @@ set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
+REPO=$repo
+. "$repo/mk/arch.sh"
+tree=build$ARCH_SUFFIX
 runner=suite
 if [ "${1-}" = --direct ]; then
     runner=direct
@@ -61,8 +68,8 @@ stop_child()
 
 force_rebuild()
 {
-    rm -f build/ports/doom/doomgeneric_rach2.o build/ports/doom/d_iwad.o \
-        build/ports/doom/doom
+    rm -f "$tree/ports/doom/doomgeneric_rach2.o" "$tree/ports/doom/d_iwad.o" \
+        "$tree/ports/doom/doom"
 }
 
 restore()
@@ -80,7 +87,7 @@ cleanup()
     if [ -n "$changed" ]; then
         restore
         force_rebuild
-        make ports/doom >"$work/cleanup.build.log" 2>&1
+        make ports/doom "ARCH=$RACH2_ARCH" >"$work/cleanup.build.log" 2>&1
     fi
 }
 trap cleanup EXIT
@@ -97,19 +104,20 @@ run_phase()
     phase=$1
     expected=$2
     force_rebuild
-    make ports/doom >"$work/$phase.build.log" 2>&1 || { cat "$work/$phase.build.log"; exit 1; }
-    cksum build/ports/doom/doom >"$work/$phase.game"
-    rm -f build/images/doom-test.disk.doom.log
+    make ports/doom "ARCH=$RACH2_ARCH" >"$work/$phase.build.log" 2>&1 ||
+        { cat "$work/$phase.build.log"; exit 1; }
+    cksum "$tree/ports/doom/doom" >"$work/$phase.game"
+    rm -f "$tree/images/doom-test.disk.doom.log"
     if [ "$runner" = direct ]; then
-        "$work/runutil" group make run-doom >"$work/$phase.log" 2>&1 &
+        "$work/runutil" group make run-doom "ARCH=$RACH2_ARCH" >"$work/$phase.log" 2>&1 &
     else
-        "$work/runutil" group tests/run doom >"$work/$phase.log" 2>&1 &
+        ARCH=$RACH2_ARCH "$work/runutil" group tests/run doom >"$work/$phase.log" 2>&1 &
     fi
     child=$!
     status=0
     wait "$child" || status=$?
     stop_child
-    log=build/images/doom-test.disk.doom.log
+    log=$tree/images/doom-test.disk.doom.log
     [ ! -f "$log" ] || cp "$log" "$work/$phase.console.log"
     cat "$work/$phase.log"
     if [ "$expected" = pass ]; then
