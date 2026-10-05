@@ -21,6 +21,13 @@
 #   MUSL_PREFIX  the ported musl's install directory
 #   ARCH_BUILD   the build tree: the kernels, the guest programs, what each
 #                port stages, and the images
+#   RACH2_PATH_MAP for x86-64, when the caller has none, the map the stager
+#                reads a manifest's i686 paths through, as the root Makefile
+#                exports it, so that a fault script staging a manifest itself
+#                stages x86-64's files; its prefixes are relative to the
+#                directory the stager runs in, so a script working in a
+#                private copy of the tree stages from that copy, and a path
+#                already in the x86-64 tree is read as it is
 #
 # ARCH itself is taken out of the environment, and so is a `make ARCH=...`
 # above this script, which GNU Make passes down in MAKEFLAGS after a ` -- `.
@@ -77,3 +84,10 @@ else
     ARCH_VENDOR="$REPO/vendor"
 fi
 MUSL_PREFIX="$ARCH_VENDOR/musl/install"
+if [ -n "$ARCH_SUFFIX" ] && [ -z "${RACH2_PATH_MAP-}" ]; then
+    RACH2_PATH_MAP="build$ARCH_SUFFIX/=build$ARCH_SUFFIX/ build/man/=build/man/"
+    RACH2_PATH_MAP="$RACH2_PATH_MAP build/tests/system/=build/tests/system/"
+    RACH2_PATH_MAP="$RACH2_PATH_MAP build/=build$ARCH_SUFFIX/"
+    RACH2_PATH_MAP="$RACH2_PATH_MAP vendor/musl/install/=build$ARCH_SUFFIX/vendor-work/musl/install/"
+    export RACH2_PATH_MAP
+fi
