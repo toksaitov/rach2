@@ -1532,14 +1532,57 @@ static int watched_poll(void)
     return 0;
 }
 
+/** Block SIGTRAP, stop for the tracer, then wait for the watched set's hit.
+ * The raw rt_sigtimedwait timeout has two native longs on either
+ * architecture, unlike musl's i686 timespec with its 64-bit seconds. */
+static void sigwait_child(sigset_t *set)
+{
+    long timeout[2] = {1, 0};
+    siginfo_t info;
+
+    sigemptyset(set);
+    sigaddset(set, SIGTRAP);
+    memset(&info, 0, sizeof(info));
+    if (sigprocmask(SIG_BLOCK, set, NULL) != 0 || ptrace(PTRACE_TRACEME, 0, NULL, NULL) != 0 ||
+        raise(SIGSTOP) != 0) {
+        _exit(1);
+    }
+    _exit(syscall(SYS_rt_sigtimedwait, set, &info, timeout, 8) == SIGTRAP &&
+                  info.si_code == TRAP_HWBKPT
+              ? 0
+              : 1);
+}
+
+/** A wait on a watched signal set takes the hit without a SIGTRAP stop. */
+static int watched_sigwait(void)
+{
+    static sigset_t set;
+    int status;
+    pid_t pid = fork();
+
+    if (pid == 0) {
+        sigwait_child(&set);
+    }
+    if (pid < 0 || expect_stop(pid, SIGSTOP, "watched sigwait child did not stop")) {
+        return fail("fork for watched sigwait");
+    }
+    if (debug_set(pid, 0, (unsigned long)&set) != 0 || debug_set(pid, 7, 0xf0001) != 0 ||
+        ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 || wait_within(pid, &status) != pid ||
+        !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        return abandon(pid, "watched sigwait did not take SIGTRAP with TRAP_HWBKPT");
+    }
+    return 0;
+}
+
 /** Run the ordinary suite, or one debug row for a compiled fault proof. */
 /* The rows a suite may run alone, by the name it passes. */
 static const struct {
     const char *name;
     int (*row)(void);
 } named_rows[] = {
-    {"step", step_system_call}, {"entry", entry_system_call}, {"delayed", delayed_debug},
-    {"copy", watched_copy},     {"poll", watched_poll},       {"listen", listen_user_return},
+    {"step", step_system_call},     {"entry", entry_system_call}, {"delayed", delayed_debug},
+    {"copy", watched_copy},         {"poll", watched_poll},       {"sigwait", watched_sigwait},
+    {"listen", listen_user_return},
 };
 
 /* The rows of memory, system calls and attaching; 0, or 1. */
@@ -1556,7 +1599,7 @@ static int second_rows(void)
 {
     return seized_fork() || stopped_leader() || traced_thread_usage() || tracer_first() ||
            killed_tracee() || step_system_call() || entry_system_call() || delayed_debug() ||
-           watched_copy() || watched_poll() || listen_user_return();
+           watched_copy() || watched_poll() || watched_sigwait() || listen_user_return();
 }
 
 int main(int argc, char **argv)

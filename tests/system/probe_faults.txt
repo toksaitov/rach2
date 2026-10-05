@@ -453,6 +453,19 @@ new
             t->debugreg[i] < USER_ADDR_MIN || t->debugreg[i] >= USER_ADDR_MAX - bytes) {
 end
 
+# Only x86-64 defers a hardware hit taken in the kernel; i686 posts SIGTRAP
+# from the exception itself, so this fault is proved with ARCH=x86_64.
+fault sigwait-deferred-debug-hit
+probe ptracemusl
+file rach2/sys/syscall_proc.c
+expect PTRACEMUSL FAIL (watched sigwait did not take SIGTRAP with TRAP_HWBKPT: errno
+old
+    arch_debug_deliver();
+    set = current_proc->sig_pending | current_proc->tg->pending;
+new
+    set = current_proc->sig_pending | current_proc->tg->pending;
+end
+
 fault syscall-number-reload
 probe ptracemusl
 file rach2/sys/syscall.c
