@@ -152,7 +152,7 @@ if [ -f "$work/exitprobe.staged" ]; then
     cmp "$tree"/tests/exitprobe "$work/exitprobe.staged"
 fi
 make -s -C krffs -o libc-check ../build/krffs/mkfs.krffs \
-    ../build/krffs/stageimage.krffs ../build/krffs/readfile.krffs >>"$work/build.log" 2>&1
+    ../build/krffs/stageimage.krffs ../build/krffs/readfile.krffs "ARCH=$RACH2_ARCH" >>"$work/build.log" 2>&1
 make -s build/tests/system/harness build/tests/system/runutil "ARCH=$RACH2_ARCH" >>"$work/build.log" 2>&1
 cat >"$work/test.manifest" <<MANIFEST
 file 0755 /exitprobe $tree/tests/exitprobe
@@ -203,6 +203,7 @@ if fault == 'wait':
     helper.write_text(helper.read_text() + '''
 
 #include "wait_queue.h"
+#include "../lib/kirq.h"
 extern volatile uint32_t kernel_ticks;
 void exit_proof_wait(void);
 int exit_proof_waited(int last);
@@ -219,12 +220,12 @@ void exit_proof_wait(void)
 {
     wait_queue_t queue;
     uint32_t flags, target;
-    __asm__ __volatile__("pushfl; popl %0; cli" : "=r"(flags) : : "memory");
+    flags = kirq_save();
     wait_queue_init(&queue);
     target = kernel_ticks + 2;
     current_proc->wakeup_tick = target ? target : 1;
     wq_wait_event_nointr(&queue, exit_proof_awake, 0);
-    __asm__ __volatile__("pushl %0; popfl" : : "r"(flags) : "memory", "cc");
+    kirq_restore(flags);
 }
 
 /** Wait after the cleanup has published the death, and pass on its result. */
