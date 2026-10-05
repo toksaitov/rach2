@@ -175,7 +175,7 @@ The recovery stick is `build/images/rach2-recovery-stick.img` written to the who
 
 The supporting files under `verify/` have narrower jobs:
 
-* `probecheck.sh` requires each built root or musl probe to appear in the default runner, `tests/probe-suites`, or `tests/probe-helpers`. The style suite runs it and `tests/system/probecheck_test.sh`.
+* `probecheck.sh` requires each built root or musl probe to appear in the default runner, `tests/probe-suites`, or `tests/probe-helpers`. The style suite runs it, `tests/system/probecheck_test.sh`, and `tests/system/probe_faults.sh --check`, which requires each fault of `tests/system/probe_faults.txt` to find its text once in its file.
 * `check.sh` creates a private directory under `${TMPDIR:-/tmp}`, prints its path and retains its logs. `tests/system/verify_temp_test.sh` executes its directory setup and write statements against planted symlinks in an isolated temporary directory.
 * `tests/system/build_inputs_test.sh`, run by the style suite, builds utilities, `dnstest` and a kernel against private copies of link inputs. Each changed library or startup object must relink the programs with its new marker value; a linker-script edit must produce its new symbol in the validated kernel. The test uses distinct future timestamps so it needs no clock delay.
 * `check_sources.sh` compares `C_SRC` in `rach2/sources.mk` with `kernel.c` and the C files below `rach2/sys/`. `tests/system/build_rules_test.sh`, run by the style suite, requires it to name a source missing from the list and one missing from the disk.

@@ -22,9 +22,12 @@
 # NAME arguments run those faults alone. -s K/N runs the faults whose place
 # in the list, counted from 0, is K modulo N, so that N copies of the tree can
 # share the list. Every fault runs even when an earlier one was not caught,
-# and the exit status is 1 when any was not.
+# and the exit status is 1 when any was not. --check checks the list alone,
+# each fault's text once in its file, and builds and boots nothing; `tests/run
+# style` runs it, so that a change to a file a fault names changes the fault
+# with it, instead of leaving it to fail at the next proof.
 #
-# Usage: sh tests/system/probe_faults.sh [-s K/N] [NAME...]
+# Usage: sh tests/system/probe_faults.sh [-s K/N] [NAME...] | --check
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
@@ -40,19 +43,26 @@ if [ "${1:-}" = -s ] && [ "$#" -ge 2 ]; then
     shard=$2
     shift 2
 fi
+check_only=
+if [ "${1:-}" = --check ] && [ "$#" -eq 1 ]; then
+    check_only=1
+    shift
+fi
 case ${1:-} in
-    -*) echo 'probe-faults: usage: probe_faults.sh [-s K/N] [NAME...]' >&2; exit 2 ;;
+    -*) echo 'probe-faults: usage: probe_faults.sh [-s K/N] [NAME...] | --check' >&2; exit 2 ;;
 esac
-mkdir -p build/tests
-mkdir build/.run.lock 2>/dev/null || {
-    echo 'probe-faults: another run owns this tree' >&2; exit 1;
-}
-trap 'rm -rf build/.run.lock' EXIT
-work=$(mktemp -d "$repo/build/tests/probe-faults.XXXXXX")
-printf 'pid %s\npgid %s\nargs probe_faults.sh %s\nsince %s\nwork %s\n' "$$" \
-    "$(ps -o pgid= -p $$ | tr -d ' ')" "$*" "$(date '+%Y-%m-%d %H:%M:%S')" "$work" \
-    > build/.run.lock/owner.new
-mv build/.run.lock/owner.new build/.run.lock/owner
+if [ -z "$check_only" ]; then
+    mkdir -p build/tests
+    mkdir build/.run.lock 2>/dev/null || {
+        echo 'probe-faults: another run owns this tree' >&2; exit 1;
+    }
+    trap 'rm -rf build/.run.lock' EXIT
+    work=$(mktemp -d "$repo/build/tests/probe-faults.XXXXXX")
+    printf 'pid %s\npgid %s\nargs probe_faults.sh %s\nsince %s\nwork %s\n' "$$" \
+        "$(ps -o pgid= -p $$ | tr -d ' ')" "$*" "$(date '+%Y-%m-%d %H:%M:%S')" "$work" \
+        > build/.run.lock/owner.new
+    mv build/.run.lock/owner.new build/.run.lock/owner
+fi
 
 # `faults select SHARD [NAME...]` prints the chosen faults, one a line, as
 # NAME, PROBE, FILE and WORDS separated by tabs; `faults apply NAME` puts that
@@ -104,6 +114,9 @@ if len(set(names)) != len(names):
 for f in faults:
     if Path(f['file']).read_text().count(text(f['old'])) != 1:
         sys.exit('probe-faults: %s: the text is not once in %s' % (f['name'], f['file']))
+if verb == 'check':
+    print('probe-faults: checked: %d faults, each text once in its file' % len(faults))
+    sys.exit(0)
 if verb == 'select':
     k, _, n = sys.argv[3].partition('/')
     if not (k.isdigit() and n.isdigit() and int(k) < int(n)):
@@ -122,6 +135,10 @@ elif verb == 'apply':
 PY
 }
 
+if [ -n "$check_only" ]; then
+    faults check
+    exit
+fi
 faults select "$shard" "$@" >"$work/selected"
 [ -s "$work/selected" ] || { echo 'probe-faults: no fault selected' >&2; exit 2; }
 tab=$(printf '\t')
