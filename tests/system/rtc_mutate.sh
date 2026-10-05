@@ -3,10 +3,17 @@
 # The fault takes the PIT's position out of the time between ticks, in
 # rach2/sys/clock.c: the host proof compiles rtc_hosttest.c with a private
 # copy of it, as tests/run host compiles the test, and the guest proof runs
-# STATTIME on the KRFFS test root in all three phases.
+# STATTIME on the KRFFS test root in all three phases, on the kernel, image
+# and emulator of the architecture ARCH names.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
+REPO=$repo
+. "$repo/mk/arch.sh"
+RACH2_QEMU=$ARCH_QEMU
+export RACH2_QEMU ARCH_BUILD
+tree=build$ARCH_SUFFIX
 mode=${1:---host}
 case "$mode" in
     --host|--guest) ;;
@@ -49,7 +56,7 @@ cleanup()
     if [ -n "$changed" ]; then
         restore
         if [ "$mode" = --guest ]; then
-            make -s rach2 >"$work/cleanup.build.log" 2>&1
+            make -s rach2 "ARCH=$RACH2_ARCH" >"$work/cleanup.build.log" 2>&1
         fi
     fi
 }
@@ -80,9 +87,9 @@ run_phase()
     fi
     echo "rtc-mutation: result: $phase host status $status"
     [ "$mode" = --guest ] || return 0
-    make -s rach2 >"$work/$phase.build.log" 2>&1
+    make -s rach2 "ARCH=$RACH2_ARCH" >"$work/$phase.build.log" 2>&1
     cat "$work/$phase.build.log"
-    cp build/rach2/kernel "$work/$phase.kernel"
+    cp "$tree"/rach2/kernel "$work/$phase.kernel"
     cksum "$source" "$work/$phase.kernel" >"$work/$phase.artifacts"
     build/tests/system/runutil group sh tests/system/probe_roots.sh \
         "$work/$phase.kernel" "$work/$phase" krffs stattest \
@@ -107,7 +114,7 @@ run_phase()
 echo "rtc-mutation: logs: $work"
 if [ "$mode" = --guest ]; then
     make -s test-image build/tests/system/harness build/tests/system/runutil \
-        >"$work/prepare.log" 2>&1
+        "ARCH=$RACH2_ARCH" >"$work/prepare.log" 2>&1
     cat "$work/prepare.log"
 fi
 run_phase fixed pass
