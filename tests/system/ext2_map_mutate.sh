@@ -1,13 +1,20 @@
 #!/bin/sh
 # Prove mapmusl's rows of a shared mapping of a file on ext2 with rebuilt
 # kernel faults: a mapping released without writing its pages back, a read
-# that does not write them back first, and a write not copied into them.
+# that does not write them back first, and a write not copied into them. The
+# kernel and the emulator are those of the architecture ARCH names.
 # Each faulted kernel must fail its row on an ext2 root (probe_roots.sh), and
 # the restored kernel must match the first and pass.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
+REPO=$repo
+. "$repo/mk/arch.sh"
+RACH2_QEMU=$ARCH_QEMU
+export RACH2_QEMU
+tree=build$ARCH_SUFFIX
 [ ! -d build/.run.lock ] || {
     echo 'ext2-map-mutation: another suite owns this tree' >&2; exit 1;
 }
@@ -42,7 +49,7 @@ cleanup()
     stop_child
     if [ -n "$changed" ]; then
         restore
-        make -s rach2 >"$work/cleanup.build.log" 2>&1
+        make -s rach2 "ARCH=$RACH2_ARCH" >"$work/cleanup.build.log" 2>&1
     fi
 }
 trap cleanup EXIT
@@ -56,8 +63,8 @@ run_phase()
 {
     phase=$1
     expected=$2
-    make -s rach2 >"$work/$phase.build.log" 2>&1
-    cp build/rach2/kernel "$work/$phase.kernel"
+    make -s rach2 "ARCH=$RACH2_ARCH" >"$work/$phase.build.log" 2>&1
+    cp "$tree"/rach2/kernel "$work/$phase.kernel"
     status=0
     build/tests/system/runutil group sh tests/system/probe_roots.sh \
         "$work/$phase.kernel" "$work/$phase" ext2 musl/mapmusl >"$work/$phase.log" 2>&1 &
