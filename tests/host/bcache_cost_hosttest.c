@@ -36,20 +36,21 @@
  * on a device that takes eight blocks a request, gathers them all in one
  * walk into a batch the heap gives it, sorted in a heap where a block takes
  * at most ten steps to go in and ten to come out in order; it walks the list
- * once more for its pass over the firsts and twice to find nothing left, and
- * reads each block a few times more, for its lookup in the batch, its place
- * in a run and its hold across the request. The list has its newest buffer
- * first, so these blocks, dirtied in order, are read highest first, which
- * cost an insertion sort a shift of the whole batch for each. The bound
- * allows four walks of the cache, eight reads a block and the heap's steps,
- * where batches of 128 are 43940 and the insertion sort half a million
- * steps, and the count must be at least four walks' worth.
+ * once more for its pass over the firsts, and reads each block a few times
+ * more, for its lookup in the batch, its place in a run and its hold across
+ * the request. The list has its newest buffer first, so these blocks,
+ * dirtied in order, are read highest first, which cost an insertion sort a
+ * shift of the whole batch for each. The bound allows four walks of the
+ * cache, eight reads a block and the heap's steps, where batches of 128 are
+ * 43940 and the insertion sort half a million steps, and the count must be
+ * at least the two walks' 2048 reads.
  *
  * Without room in the heap the sync gathers 128 blocks a walk on its stack,
  * one walk for each batch, in a list 128 shorter after each, and seven
  * steps of the heap a block each way. That bound allows twelve walks, eight
  * reads a block and those steps, where a walk for every run written is 128
- * walks, and the count must be at least eleven walks' worth. A sync of eight
+ * walks, and the count must be at least the walks' reads: 1024 for the
+ * firsts and 1024, 896 and so on down to 128 for the batches. A sync of eight
  * dirty blocks in a full cache of 1024 reads the eight, at most twelve times
  * each, where a walk of the cache is 1024 reads.
  *
@@ -92,21 +93,21 @@ extern unsigned long kheap_host_largest;
 #define MISS_LEAST    3u
 /* The most a sync of CACHE_BUFFERS dirty blocks may read with a batch of
  * them all: four walks of the cache, eight reads a block, and ten steps of
- * the heap for each block going in and ten coming out. The least is the
- * four walks: the one that gathers, one for the firsts and two to find
- * nothing left. */
+ * the heap for each block going in and ten coming out. The least is its two
+ * walks of the dirty list, one for the firsts and the one that gathers; the
+ * walks after the writes find the list empty. */
 #define SYNC_MOST     (CACHE_BUFFERS * (4u + 8u + 2u * 10u))
-#define SYNC_LEAST    (CACHE_BUFFERS * 4u)
+#define SYNC_LEAST    (CACHE_BUFFERS * 2u)
 /* The most such a sync may read in batches of 128: twelve walks of the
  * cache and eight reads a block, and HEAP_STEPS steps for each block a walk
  * reads into the batch and for each block it takes out in order. The least
- * is eleven walks of the cache, one for the firsts, one for each batch of
- * 128 and two to find nothing left. */
+ * is its walks of the dirty list: one for the firsts, and one for each
+ * batch over a list 128 shorter each time, 1024 down to 128. */
 #define BATCH_WALKS   (CACHE_BUFFERS / 128u + 4u)
 #define BATCH_READS   (CACHE_BUFFERS * BATCH_WALKS + 8u * CACHE_BUFFERS)
 #define HEAP_STEPS    7u
 #define BATCH_MOST    (BATCH_READS + HEAP_STEPS * (CACHE_BUFFERS * BATCH_WALKS + CACHE_BUFFERS))
-#define BATCH_LEAST   (CACHE_BUFFERS * (CACHE_BUFFERS / 128u + 3u))
+#define BATCH_LEAST   (CACHE_BUFFERS + (CACHE_BUFFERS / 128u) * (CACHE_BUFFERS + 128u) / 2u)
 /* A sync of a full cache with FEW_DIRTY dirty blocks reads the dirty ones,
  * at most twelve times each: its walks of the dirty buffers and its reads of
  * each block to write it. It reads them at least twice, once for the pass
@@ -305,7 +306,7 @@ static void sync_row(void)
     check(writes_made == CACHE_BUFFERS / 8u, "in runs of eight blocks");
     check(sync_visits <= SYNC_MOST,
           "a sync gathers its dirty blocks in one walk and sorts them in a heap");
-    check(sync_visits >= SYNC_LEAST, "the counter counts the sync's four walks of the cache");
+    check(sync_visits >= SYNC_LEAST, "the counter counts the sync's two walks of the dirty list");
 }
 
 /* The same, with a heap that grants nothing longer than a page: the sync
@@ -326,7 +327,8 @@ static void batch_row(void)
     check(batch_visits <= BATCH_MOST,
           "without room for one batch, a sync reads the cache once for each 128 dirty blocks, "
           "not once for each run, and sorts each batch in a heap");
-    check(batch_visits >= BATCH_LEAST, "the counter counts the sync's eleven walks of the cache");
+    check(batch_visits >= BATCH_LEAST,
+          "the counter counts the batched sync's walks of the dirty list");
 }
 
 /* The cache full of clean blocks 0 to 1023 but blocks 2048 to 2055, which

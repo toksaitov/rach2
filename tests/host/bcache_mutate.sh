@@ -207,8 +207,8 @@ a heap of another size has a cache of half its own pages" ;;
         fixed-cap) message='a heap of another size has a cache of half its own pages' ;;
         uncounted) message="the counter counts the buffers a hit and its release read
 the counter counts the buffers each miss and its release read
-the counter counts the sync's four walks of the cache
-the counter counts the sync's eleven walks of the cache" ;;
+the counter counts the sync's two walks of the dirty list
+the counter counts the batched sync's walks of the dirty list" ;;
     esac
     run_phase "$fault-mutated" fail "$message"
     restore
