@@ -122,22 +122,13 @@ void debugreg_defer(void)
     deferred[cpu] |= dr6 & (DR6_HITS | DR6_BS);
 }
 
-/** Test deferred hardware hits without consuming them. A wait must see the
- * hit before it sleeps, including after a switch moved it to the thread.
- * Stale enables and kernel single steps post no signal at user return. */
-int arch_debug_pending(void)
-{
-    if (!current_proc || !(current_proc->debugreg[7] & DR7_ENABLES)) {
-        return 0;
-    }
-    return ((deferred[arch_cpu_id()] | current_proc->debug_pending) & DR6_HITS) != 0;
-}
-
-/** Post a deferred kernel debug exception on the thread's own stack, with
- * the big lock held and interrupts off. A switch kept its status in the
- * outgoing thread so it follows that thread to another processor. The
- * syscall exit reports a kernel single step; only a hardware hit posts
- * a signal here, as in i686's kernel debug handler. */
+/** Post a deferred kernel debug exception before a pending-signal check or
+ * user return, on the thread's stack with the big lock held and interrupts
+ * off. A switch kept its status in the outgoing thread so it follows that
+ * thread to another processor. The syscall exit reports a kernel single
+ * step; only a hardware hit with saved enables posts a signal here, as in
+ * i686's kernel debug handler. Both deferred copies are cleared even when
+ * a detach made the hit stale. */
 void debugreg_deliver(void)
 {
     unsigned int cpu = arch_cpu_id();
@@ -156,10 +147,19 @@ void debugreg_deliver(void)
     }
     k_memset(&info, 0, sizeof(info));
     info.code = debugreg_code(dr6);
-    if (info.code == TRAP_HWBKPT) {
+    if (info.code == TRAP_HWBKPT && (current_proc->debugreg[7] & DR7_ENABLES)) {
         info.addr = FRAME_PC(proc_user_frame(current_proc));
         signal_post_thread(current_proc, SIGTRAP, &info);
     }
+}
+
+/** Post deferred hits for shared signal code through the user-return path.
+ * The caller runs on the thread's stack with the big lock held and
+ * interrupts off. Clearing both deferred copies keeps a dequeued hit from
+ * being posted again at user return. */
+void arch_debug_deliver(void)
+{
+    debugreg_deliver();
 }
 
 /** Reload enables cleared by a deferred exception, or by a tracer that

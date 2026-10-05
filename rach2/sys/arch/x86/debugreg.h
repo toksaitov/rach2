@@ -39,7 +39,8 @@ int32_t debugreg_status(void);
 /** Defer a kernel debug exception on this processor, without taking a lock. */
 void debugreg_defer(void);
 
-/** Post this thread's deferred debug exception before signal delivery. */
+/** Post this thread's deferred hit once, before a pending-signal check or
+ * user return, on its stack with the big lock held and interrupts off. */
 void debugreg_deliver(void);
 
 /** Restore the current thread's debug enables before returning to user mode. */

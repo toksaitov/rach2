@@ -8,7 +8,8 @@
  * the running tracee's saved registers, as ptrace_detach does; its processor
  * must clear its hardware enables on a switch or suppress a stale hit. A
  * kernel hit is deferred without posting a signal, saved on a switch, and
- * delivered only when its thread returns, including on another processor.
+ * posted before its thread checks pending signals or returns, including on
+ * another processor.
  */
 #include "arch/x86/debugreg.h"
 #include "proc/percpu.h"
@@ -44,10 +45,15 @@ isr_params_t *proc_user_frame(const process_t *t)
     return &frame;
 }
 
-/** Record the signal; a trap must belong to the running tracee. */
+/** Record the signal and its pending bit as signal_post_thread does.
+ * A trap must belong to the running tracee. */
 void signal_post_thread(process_t *t, int signo, const struct k_siginfo *info)
 {
     check(t == &tracee && t == current_proc && signo == SIGTRAP, "trap owner");
+    if (!(t->sig_pending & KSIG_BIT(signo))) {
+        t->sig_info[signo] = *info;
+    }
+    t->sig_pending |= KSIG_BIT(signo);
     signal_code = info->code;
     signals++;
 }
@@ -77,33 +83,85 @@ static void detach(void)
     host_cpu = 1;
 }
 
-/** The pending check sees only hardware hits still owned by this thread. */
+/** Pending checks post hardware hits only for their owner, including after
+ * migration. Detached hits and kernel single steps post no signal. */
 static void pending_hits(void)
 {
     setup();
     hardware[1][6] = 1;
     debugreg_defer();
-    check(arch_debug_pending() && arch_debug_pending() && signals == 0,
-          "deferred hit is pending before a wait");
-    arch_debug_switch(&tracee, &other);
-    cpu_table[1].current = &other;
-    check(!arch_debug_pending(), "next thread has no deferred hit");
-    host_cpu = 0;
-    cpu_table[0].current = &tracee;
-    check(arch_debug_pending(), "saved hit is pending after migration");
-    debugreg_deliver();
-    check(!arch_debug_pending(), "delivered hit is no longer pending");
+    arch_debug_deliver();
+    check(signals == 1 && tracee.sig_pending == KSIG_BIT(SIGTRAP) &&
+              tracee.sig_info[SIGTRAP].code == TRAP_HWBKPT,
+          "deferred hit is posted before a wait");
 
     setup();
     hardware[1][6] = 1;
     debugreg_defer();
+    arch_debug_switch(&tracee, &other);
+    cpu_table[1].current = &other;
+    arch_debug_deliver();
+    check(signals == 0 && other.sig_pending == 0, "next thread posts no deferred hit");
+    host_cpu = 0;
+    cpu_table[0].current = &tracee;
+    arch_debug_deliver();
+    check(signals == 1 && tracee.sig_pending == KSIG_BIT(SIGTRAP) &&
+              tracee.sig_info[SIGTRAP].code == TRAP_HWBKPT,
+          "saved hit is posted after migration");
+
+    setup();
+    hardware[1][6] = 1;
+    debugreg_defer();
+    arch_debug_switch(&tracee, &tracee);
+    hardware[1][6] = 1;
+    debugreg_defer();
     detach();
-    check(!arch_debug_pending(), "detached hit does not interrupt a wait");
+    arch_debug_deliver();
+    check(signals == 0 && tracee.sig_pending == 0, "detached hit posts no signal");
+    tracee.debugreg[7] = 0x10001;
+    arch_debug_deliver();
+    check(signals == 0 && tracee.sig_pending == 0, "detached hit is cleared before rearming");
 
     setup();
     hardware[1][6] = 0x4000;
     debugreg_defer();
-    check(!arch_debug_pending(), "kernel step does not interrupt a wait");
+    arch_debug_deliver();
+    check(signals == 0 && tracee.sig_pending == 0, "kernel step posts no signal");
+}
+
+/** A dequeue gets a deferred hit's siginfo, before and after migration.
+ * Taking the pending bit must leave no second post for another wait or the
+ * user return, even when the return reloads the hardware enables. */
+static void dequeue_hits(void)
+{
+    int migrated;
+
+    for (migrated = 0; migrated <= 1; migrated++) {
+        setup();
+        tracee.sig_blocked = KSIG_BIT(SIGTRAP);
+        FRAME_PC(&frame) = USER_ADDR_MIN + 32;
+        hardware[1][6] = 1;
+        debugreg_defer();
+        if (migrated) {
+            arch_debug_switch(&tracee, &other);
+            cpu_table[1].current = &other;
+            host_cpu = 0;
+            cpu_table[0].current = &tracee;
+        }
+        arch_debug_deliver();
+        check(signals == 1 && tracee.sig_pending == KSIG_BIT(SIGTRAP) &&
+                  tracee.sig_info[SIGTRAP].code == TRAP_HWBKPT &&
+                  tracee.sig_info[SIGTRAP].addr == FRAME_PC(&frame) &&
+                  tracee.sig_blocked == KSIG_BIT(SIGTRAP),
+              "deferred hit is posted for dequeue with siginfo");
+        tracee.sig_pending &= ~KSIG_BIT(SIGTRAP);
+        arch_debug_deliver();
+        debugreg_deliver();
+        debugreg_resume();
+        debugreg_deliver();
+        check(signals == 1 && tracee.sig_pending == 0,
+              "dequeued hit is not posted again at user return");
+    }
 }
 
 /** Exercise the two stale-register paths and deferred exception ownership. */
@@ -159,6 +217,7 @@ int main(void)
     debugreg_deliver();
     check(signals == 0, "kernel single step does not duplicate syscall exit stop");
     pending_hits();
+    dequeue_hits();
     printf("debugreg-hosttest: result: %s\n", failures ? "fail" : "pass");
     return failures != 0;
 }

@@ -3395,13 +3395,17 @@ void signal_force(process_t *target, int signo, const struct k_siginfo *info)
     signal_post_thread(target, signo, info);
 }
 
-/** The signals pending for the current thread: its own and its process's.
- * Read with interrupts off, since a 64-bit read is two loads. */
+/** Post deferred debug hits before reading the thread's and process's
+ * pending signals, so a signal wait can dequeue them with their siginfo.
+ * Called on the thread's stack with the big lock held. Read with interrupts
+ * off, since a 64-bit read is two loads on i686. */
 static uint64_t sig_pending_now(void)
 {
     uint32_t flags = sig_irq_save();
-    uint64_t set = current_proc->sig_pending | current_proc->tg->pending;
+    uint64_t set;
 
+    arch_debug_deliver();
+    set = current_proc->sig_pending | current_proc->tg->pending;
     sig_irq_restore(flags);
     return set;
 }
@@ -3422,9 +3426,12 @@ static void sender_info(struct k_siginfo *info, int32_t code, const process_t *t
  * or stops the process; or if its tracer asked for a stop with
  * PTRACE_INTERRUPT, which, as a stop signal would, ends the wait so the stop
  * is taken on the way back to user mode (`ptrace_return_stops`). Blocking
- * syscall loops poll this so a signal interrupts the wait. A deferred
- * hardware hit counts as SIGTRAP, subject to its mask and disposition,
- * before the user return posts it on the thread's stack. */
+ * syscall loops call this on the thread's stack with the big lock held.
+ * Post a deferred hardware hit before testing its mask and disposition.
+ * Posting can make this thread ready and clear its wakeup_tick; a caller
+ * that keeps waiting must rearm its deadline. No wait queue is changed.
+ * The x86-64 debug interrupt stack calls only debugreg_defer; a user debug
+ * exception moves to the thread's stack before entering C. */
 int signal_pending(void)
 {
     uint64_t deliverable;
@@ -3437,15 +3444,8 @@ int signal_pending(void)
     if (current_proc->ptrace & PT_INTERRUPT) {
         return 1;
     }
-    /* Snapshot the 64-bit masks with IRQs off: on i386 a 64-bit read is two
-     * 32-bit loads, and a signal posted from an IRQ in between could tear it.
-     */
     flags = sig_irq_save();
-    deliverable = current_proc->sig_pending | current_proc->tg->pending;
-    if (arch_debug_pending()) {
-        deliverable |= KSIG_BIT(SIGTRAP);
-    }
-    deliverable &= ~current_proc->sig_blocked;
+    deliverable = sig_pending_now() & ~current_proc->sig_blocked;
     sig_irq_restore(flags);
     /* Only a signal that would ACT interrupts a wait: a caught handler, a
      * default terminate or a default stop. A pending signal that is ignored
@@ -4007,7 +4007,7 @@ long sys_rt_sigpending(isr_params_t *params)
         return -EINVAL;
     }
     flags = sig_irq_save();
-    set = (current_proc->sig_pending | current_proc->tg->pending) & current_proc->sig_blocked;
+    set = sig_pending_now() & current_proc->sig_blocked;
     sig_irq_restore(flags);
     words[0] = (uint32_t)set;
     words[1] = (uint32_t)(set >> 32);

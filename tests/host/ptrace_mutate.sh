@@ -15,7 +15,7 @@ fi
 kind=${1:-}
 case "$kind" in
     ptrace) source=proc/ptrace.c; faults='regset listen return-stops return-kill options seize step' ;;
-    debugreg) source=arch/x86/debugreg.c; faults='switch stale migration delivery kernel-step pending pending-saved pending-stale pending-step' ;;
+    debugreg) source=arch/x86/debugreg.c; faults='switch stale migration delivery kernel-step pending pending-saved pending-stale pending-step dequeue dequeue-repeat' ;;
     *) echo 'ptrace-proof: usage: ptrace_mutate.sh [ptrace|debugreg [--check]]' >&2; exit 2 ;;
 esac
 shift
@@ -109,21 +109,25 @@ changes = {
               '    if (0) {', 'stale hit sends no trap'),
     'migration': ('        old->debug_pending |= deferred[cpu];',
                   '        old->debug_pending |= 0;', 'deferred trap follows thread'),
-    'kernel-step': ('    if (info.code == TRAP_HWBKPT) {',
-                    '    if (info.code == TRAP_HWBKPT || info.code == TRAP_TRACE) {',
+    'kernel-step': ('    if (info.code == TRAP_HWBKPT && (current_proc->debugreg[7] & DR7_ENABLES)) {',
+                    '    if ((info.code == TRAP_HWBKPT || info.code == TRAP_TRACE) && (current_proc->debugreg[7] & DR7_ENABLES)) {',
                     'kernel single step does not duplicate syscall exit stop'),
     'delivery': ('        signal_post_thread(current_proc, SIGTRAP, &info);',
                  '        (void)info;', 'deferred trap follows thread'),
-    'pending': ('    return ((deferred[arch_cpu_id()] | current_proc->debug_pending) & DR6_HITS) != 0;',
-                '    return 0;', 'deferred hit is pending before a wait'),
-    'pending-saved': ('    return ((deferred[arch_cpu_id()] | current_proc->debug_pending) & DR6_HITS) != 0;',
-                      '    return (deferred[arch_cpu_id()] & DR6_HITS) != 0;',
-                      'saved hit is pending after migration'),
-    'pending-stale': ('    if (!current_proc || !(current_proc->debugreg[7] & DR7_ENABLES)) {',
-                      '    if (!current_proc) {', 'detached hit does not interrupt a wait'),
-    'pending-step': ('    return ((deferred[arch_cpu_id()] | current_proc->debug_pending) & DR6_HITS) != 0;',
-                     '    return ((deferred[arch_cpu_id()] | current_proc->debug_pending) & (DR6_HITS | DR6_BS)) != 0;',
-                     'kernel step does not interrupt a wait'),
+    'pending': ('    dr6 = deferred[cpu] | current_proc->debug_pending;',
+                '    dr6 = 0;', 'deferred hit is posted before a wait'),
+    'pending-saved': ('    dr6 = deferred[cpu] | current_proc->debug_pending;',
+                      '    dr6 = deferred[cpu];', 'saved hit is posted after migration'),
+    'pending-stale': ('    if (info.code == TRAP_HWBKPT && (current_proc->debugreg[7] & DR7_ENABLES)) {',
+                      '    if (dr6 & DR6_HITS) {', 'detached hit posts no signal'),
+    'pending-step': ('    if (info.code == TRAP_HWBKPT && (current_proc->debugreg[7] & DR7_ENABLES)) {',
+                     '    if ((info.code == TRAP_HWBKPT || info.code == TRAP_TRACE) && (current_proc->debugreg[7] & DR7_ENABLES)) {',
+                     'kernel step posts no signal'),
+    'dequeue': ('    debugreg_deliver();', '    return;',
+                'deferred hit is posted for dequeue with siginfo'),
+    'dequeue-repeat': ('    current_proc->debug_pending = 0;',
+                       '    current_proc->debug_pending |= 0;',
+                       'dequeued hit is not posted again at user return'),
 }
 old, new, message = changes[fault]
 s = path.read_text()
