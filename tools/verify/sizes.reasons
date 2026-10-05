@@ -82,7 +82,7 @@ rach2/sys/arch/x86/board.c:board_init lines 123 a hardware sequence, the registe
 rach2/sys/display/vga_gfx.c:vga_set_mode params 9 the parameters are the fields of one command; a struct for them would be filled and unpacked once
 
 rach2/sys/fs/bcache.c:bcache_shrink complexity 28 one file system operation over the on-disk format, each step a rule of the format
-rach2/sys/fs/bcache.c:sync_pass nesting 5 one file system operation over the on-disk format, each step a rule of the format
+rach2/sys/fs/bcache.c:sync_batches nesting 5 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/bcache.c:get complexity 35 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/bcache.c:get lines 119 one file system operation over the on-disk format, each step a rule of the format
 
