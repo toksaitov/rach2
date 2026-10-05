@@ -1,5 +1,6 @@
 #!/bin/sh
-# Prove the fail-closed steps of `tests/run noentropy` with compiled faults.
+# Prove the fail-closed steps of `tests/run noentropy` with compiled faults, on
+# the kernel and suite of the architecture ARCH names.
 #
 # Three faults are put into the kernel in turn, each alone: `urandom` lets
 # the random devices answer a read while the generator is untrusted,
@@ -21,6 +22,12 @@ set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
+REPO=$repo
+. "$repo/mk/arch.sh"
+RACH2_QEMU=$ARCH_QEMU
+export RACH2_QEMU ARCH_BUILD
+tree=build$ARCH_SUFFIX
 runner=suite
 if [ "${1-}" = --direct ]; then
     runner=direct
@@ -61,7 +68,7 @@ stop_child()
 
 force_rebuild()
 {
-    rm -f build/rach2/sys/fs/devfs.o build/rach2/sys/syscall.o build/rach2/kernel
+    rm -f "$tree"/rach2/sys/fs/devfs.o "$tree"/rach2/sys/syscall.o "$tree"/rach2/kernel
 }
 
 restore()
@@ -79,7 +86,7 @@ cleanup()
     if [ -n "$changed" ]; then
         restore
         force_rebuild
-        make -C rach2 >"$work/cleanup.build.log" 2>&1
+        make -C rach2 "ARCH=$RACH2_ARCH" >"$work/cleanup.build.log" 2>&1
     fi
 }
 trap cleanup EXIT
@@ -93,8 +100,9 @@ trap 'exit 143' TERM
 build_kernel()
 {
     force_rebuild
-    make -C rach2 >"$work/$1.build.log" 2>&1 || { cat "$work/$1.build.log"; exit 1; }
-    cksum build/rach2/kernel >"$work/$1.kernel"
+    make -C rach2 "ARCH=$RACH2_ARCH" >"$work/$1.build.log" 2>&1 ||
+        { cat "$work/$1.build.log"; exit 1; }
+    cksum "$tree"/rach2/kernel >"$work/$1.kernel"
 }
 
 # One run of the suite in a process group of its own, its output in the
@@ -103,14 +111,14 @@ run_suite()
 {
     phase=$1
     shift
-    rm -f build/images/noentropy-rng.log build/images/noentropy-keygen.log
+    rm -f "$tree"/images/noentropy-rng.log "$tree"/images/noentropy-keygen.log
     "$work/runutil" group "$@" >"$work/$phase.log" 2>&1 &
     child=$!
     status=0
     wait "$child" || status=$?
     stop_child
     for kind in rng keygen; do
-        log=build/images/noentropy-$kind.log
+        log="$tree"/images/noentropy-$kind.log
         [ ! -f "$log" ] || cp "$log" "$work/$phase.$kind.log"
     done
     cat "$work/$phase.log"
@@ -121,9 +129,9 @@ pass_phase()
 {
     build_kernel "$1"
     if [ "$runner" = direct ]; then
-        run_suite "$1" make run-noentropy
+        run_suite "$1" make run-noentropy "ARCH=$RACH2_ARCH"
     else
-        run_suite "$1" tests/run noentropy
+        run_suite "$1" env "ARCH=$RACH2_ARCH" tests/run noentropy
     fi
     [ "$status" -eq 0 ] || { echo "noentropy-mutation: $1 failed" >&2; exit 1; }
     echo "noentropy-mutation: result: $1 status $status"
@@ -139,7 +147,7 @@ fault_phase()
         echo "noentropy-mutation: the $phase fault did not change the kernel" >&2
         exit 1
     fi
-    run_suite "$phase" make -i run-noentropy
+    run_suite "$phase" make -i run-noentropy "ARCH=$RACH2_ARCH"
     grep -Fq "HARNESS: saw 'RNGPROBE FAIL', which must not appear" "$work/$phase.log" || {
         echo "noentropy-mutation: fault passed the probe's step: $phase" >&2; exit 1;
     }
