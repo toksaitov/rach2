@@ -102,7 +102,7 @@ echo "pty-hangup: logs: $work"
 make -s -C tests ../"$tree"/tests/ptyprobe "ARCH=$RACH2_ARCH" >"$work/build.log" 2>&1
 # These three image tools do not use mkhash's vendored crypt source.
 make -s -C krffs -o libc-check ../build/krffs/mkfs.krffs \
-    ../build/krffs/stageimage.krffs ../build/krffs/readfile.krffs >>"$work/build.log" 2>&1
+    ../build/krffs/stageimage.krffs ../build/krffs/readfile.krffs "ARCH=$RACH2_ARCH" >>"$work/build.log" 2>&1
 make -s build/tests/system/harness build/tests/system/runutil "ARCH=$RACH2_ARCH" >>"$work/build.log" 2>&1
 cat >"$work/test.manifest" <<MANIFEST
 file 0755 /ptyprobe $tree/tests/ptyprobe

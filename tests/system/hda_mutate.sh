@@ -103,7 +103,7 @@ echo "hda-guest: logs: $work"
     make -s check-libc build/tests/system/harness build/tests/system/runutil "ARCH=$RACH2_ARCH"
     make -s -C utils ../"$tree"/utils/audiotest "ARCH=$RACH2_ARCH"
     make -s -C krffs -o libc-check ../build/krffs/mkfs.krffs \
-        ../build/krffs/stageimage.krffs ../build/krffs/readfile.krffs
+        ../build/krffs/stageimage.krffs ../build/krffs/readfile.krffs "ARCH=$RACH2_ARCH"
     make -s musl-programs "ARCH=$RACH2_ARCH"
 } >"$work/build.log" 2>&1
 cp "$tree"/tests/musl/hdaprobe "$work/hdaprobe"

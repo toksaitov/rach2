@@ -97,7 +97,7 @@ run_phase()
 
 echo "init-refusal-mutation: logs: $work"
 make -s build/tests/system/harness build/tests/system/runutil build/tools/image/mkmbr \
-    build/tools/inspect/elfcheck >"$work/prepare.log" 2>&1 || {
+    build/tools/inspect/elfcheck "ARCH=$RACH2_ARCH" >"$work/prepare.log" 2>&1 || {
     cat "$work/prepare.log" >&2; exit 1;
 }
 # The private tree has what the kernel's own Makefile reads: rach2/ and mk/.
