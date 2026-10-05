@@ -373,7 +373,11 @@ int fd_table_reach(fd_table_t *table, int fd)
  * Initialize the standard console descriptors on an empty descriptor table.
  * Each descriptor owns a separate open-file description.
  *
- * fd 0 is stdin (read-only); fd 1 and fd 2 are stdout and stderr (write-only).
+ * fds 0, 1 and 2 are each open for reading and writing, as Linux gives init
+ * `/dev/console` opened O_RDWR on all three: a program may write through its
+ * standard input, as tmux's server draws through the terminal its client
+ * passes it, and a console that answered POLLOUT only for a writable
+ * descriptor left that server waiting with nothing on the screen.
  * Return 0 on success, or -1 after releasing partial allocations on failure.
  */
 int fd_init_stdio(fd_table_t *table)
@@ -400,7 +404,7 @@ int fd_init_stdio(fd_table_t *table)
         table->entries[i].ops = NULL;
         table->entries[i].priv = NULL;
         table->entries[i].dev = NULL;
-        table->entries[i].flags = (i == FD_STDIN) ? FD_FLAG_READ : FD_FLAG_WRITE;
+        table->entries[i].flags = FD_FLAG_READ | FD_FLAG_WRITE;
     }
     return 0;
 }

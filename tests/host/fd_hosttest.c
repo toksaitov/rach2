@@ -284,7 +284,8 @@ static void stdio_allocations(void)
             fd_entry_t *e = &table.entries[i];
 
             check(e->type == FD_TYPE_CONSOLE && e->ofd, "stdio descriptor has a description");
-            check(e->flags == (i == FD_STDIN ? FD_FLAG_READ : FD_FLAG_WRITE), "stdio access mode");
+            check(e->flags == (FD_FLAG_READ | FD_FLAG_WRITE),
+                  "each stdio descriptor is open for reading and writing");
             if (!e->ofd) {
                 continue;
             }

@@ -19,6 +19,12 @@
 .Pa /dev/console
 is the kernel console.
 Output goes to the screen and COM1 serial port.
+The kernel gives the first process descriptors 0, 1 and 2 on the console,
+each open for reading and writing, as Linux gives init
+.Pa /dev/console
+opened
+.Dv O_RDWR ;
+a program such as tmux writes through its standard input.
 Keyboard and serial input pass through one terminal line discipline.
 The kernel's screen log level is controlled through
 .Pa /dev/screenlog ;

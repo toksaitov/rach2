@@ -6,7 +6,9 @@
 # The six allocation faults answer -1 where a refusal of a descriptor
 # answers EMFILE, ENOMEM or EBADF. The two faults of `fd_ofd_live` call a
 # description open for a later serial than its own, or while its last
-# reference is closed.
+# reference is closed. The split-modes fault gives the standard descriptors
+# the modes they had before tmux on the console needed a writable fd 0:
+# fd 0 read-only and fds 1 and 2 write-only.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -64,7 +66,8 @@ run_phase()
 echo "fd-stdio-mutation: logs: $work"
 run_phase fixed 0 'fd_hosttest: pass:'
 for fault in unchecked rollback process repoint namespace unserialised alloc-description \
-    alloc-growth alloc-minimum alloc-limit reach-growth reach-range live-serial live-closing; do
+    alloc-growth alloc-minimum alloc-limit reach-growth reach-range live-serial live-closing \
+    split-modes; do
     source="$work/sys/fs/fd.c"
     [ "$fault" != process ] || source="$work/sys/proc/process.c"
     python3 - "$source" "$fault" <<'PY'
@@ -101,6 +104,8 @@ changes = {
                     "return rec->ofd.refcount > 0 && rec->ofd.serial <= serial;"),
     "live-closing": ("return rec->ofd.refcount > 0 && rec->ofd.serial == serial;",
                      "return rec->ofd.serial == serial;"),
+    "split-modes": ("table->entries[i].flags = FD_FLAG_READ | FD_FLAG_WRITE;",
+                    "table->entries[i].flags = (i == FD_STDIN) ? FD_FLAG_READ : FD_FLAG_WRITE;"),
 }
 old, new = changes[sys.argv[2]]
 if sys.argv[2] in ("namespace", "unserialised"):
@@ -132,6 +137,7 @@ PY
         reach-range) message='a dup2 destination outside the limit is EBADF' ;;
         live-serial) message='a description is not one with another serial' ;;
         live-closing) message='a description its file system closes after its last reference is not open' ;;
+        split-modes) message='each stdio descriptor is open for reading and writing' ;;
     esac
     run_phase "$fault-mutated" 1 "$message"
     cleanup
