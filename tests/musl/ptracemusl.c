@@ -273,10 +273,54 @@ static int debug_bounds(pid_t pid)
     return 0;
 }
 
-static int syscalls_and_exec(void)
+/* The stopped `pid`'s debug registers through POKEUSER and PEEKUSER, their
+ * bounds, and on x86-64 an option bit past 32 refused; 0, or 1. */
+static int debug_and_options(pid_t pid)
+{
+    unsigned long dr = 0x1000;
+
+    if (ptrace(PTRACE_POKEUSER, pid, (void *)offsetof(struct user, u_debugreg[0]), (void *)dr) !=
+            0 ||
+        ptrace(PTRACE_PEEKUSER, pid, (void *)offsetof(struct user, u_debugreg[0]), NULL) !=
+            0x1000) {
+        return fail("a debug register through POKEUSER and PEEKUSER");
+    }
+    if (debug_bounds(pid) != 0) {
+        return 1;
+    }
+#if defined __x86_64__
+    if (ptrace(PTRACE_SETOPTIONS, pid, NULL, (void *)(1UL << 32)) != -1 || errno != EINVAL) {
+        return fail("PTRACE_SETOPTIONS accepted an upper option bit");
+    }
+#endif
+    return 0;
+}
+
+/* Run `pid` through syscall stops to getpid's entry, then to its exit with
+ * the pid as its result; 0, or 1. */
+static int getpid_stops(pid_t pid)
 {
     struct user_regs_struct regs;
-    unsigned long dr;
+
+    for (;;) {
+        if (ptrace(PTRACE_SYSCALL, pid, NULL, NULL) != 0 || !stopped_by(pid, SIGTRAP | 0x80) ||
+            ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0) {
+            return fail("a syscall stop");
+        }
+        if (R_NR(regs) == SYS_getpid) {
+            break;
+        }
+    }
+    if (ptrace(PTRACE_SYSCALL, pid, NULL, NULL) != 0 || !stopped_by(pid, SIGTRAP | 0x80) ||
+        ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0 || R_NR(regs) != SYS_getpid ||
+        (long)R_RET(regs) != pid) {
+        return fail("the exit stop of getpid");
+    }
+    return 0;
+}
+
+static int syscalls_and_exec(void)
+{
     char path[32];
     long word;
     int status, mem;
@@ -294,34 +338,8 @@ static int syscalls_and_exec(void)
                (void *)(long)(PTRACE_O_TRACESYSGOOD | PTRACE_O_TRACEEXEC)) != 0) {
         return fail("PTRACE_SETOPTIONS");
     }
-    dr = 0x1000;
-    if (ptrace(PTRACE_POKEUSER, pid, (void *)offsetof(struct user, u_debugreg[0]), (void *)dr) !=
-            0 ||
-        ptrace(PTRACE_PEEKUSER, pid, (void *)offsetof(struct user, u_debugreg[0]), NULL) !=
-            0x1000) {
-        return fail("a debug register through POKEUSER and PEEKUSER");
-    }
-    if (debug_bounds(pid) != 0) {
+    if (debug_and_options(pid) != 0 || getpid_stops(pid) != 0) {
         return 1;
-    }
-#if defined __x86_64__
-    if (ptrace(PTRACE_SETOPTIONS, pid, NULL, (void *)(1UL << 32)) != -1 || errno != EINVAL) {
-        return fail("PTRACE_SETOPTIONS accepted an upper option bit");
-    }
-#endif
-    for (;;) {
-        if (ptrace(PTRACE_SYSCALL, pid, NULL, NULL) != 0 || !stopped_by(pid, SIGTRAP | 0x80) ||
-            ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0) {
-            return fail("a syscall stop");
-        }
-        if (R_NR(regs) == SYS_getpid) {
-            break;
-        }
-    }
-    if (ptrace(PTRACE_SYSCALL, pid, NULL, NULL) != 0 || !stopped_by(pid, SIGTRAP | 0x80) ||
-        ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0 || R_NR(regs) != SYS_getpid ||
-        (long)R_RET(regs) != pid) {
-        return fail("the exit stop of getpid");
     }
     snprintf(path, sizeof(path), "/proc/%d/mem", (int)pid);
     mem = open(path, O_RDONLY);
@@ -1025,6 +1043,50 @@ static int expect_stop(pid_t pid, int want, const char *what)
     return 0;
 }
 
+/* The seize of a stopped `pid`, PTRACE_INTERRUPT ending its PTRACE_LISTEN,
+ * a new event stop when the stop ends, and the SIGCONT's own stop. */
+static int listen_first(pid_t pid)
+{
+    if (ptrace(PTRACE_SEIZE, pid, NULL, NULL) != 0 ||
+        expect_stop(pid, SIGSTOP | (PTRACE_EVENT_STOP << 8),
+                    "the seize of the stopped process was not a group stop") ||
+        ptrace(PTRACE_LISTEN, pid, NULL, NULL) != 0 ||
+        ptrace(PTRACE_INTERRUPT, pid, NULL, NULL) != 0 ||
+        expect_stop(pid, SIGSTOP | (PTRACE_EVENT_STOP << 8),
+                    "PTRACE_INTERRUPT did not end PTRACE_LISTEN") ||
+        kill(pid, SIGCONT) != 0 || ptrace(PTRACE_LISTEN, pid, NULL, NULL) != 0 ||
+        expect_stop(pid, SIGTRAP | (PTRACE_EVENT_STOP << 8),
+                    "PTRACE_LISTEN after the stop ended made no new event stop") ||
+        ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 ||
+        expect_stop(pid, SIGCONT, "the SIGCONT made no signal-delivery stop")) {
+        return 1;
+    }
+    return 0;
+}
+
+/* PTRACE_LISTEN refused at a signal-delivery stop, then the second SIGSTOP's
+ * group stop, ended during PTRACE_LISTEN, and the process let run on. */
+static int listen_second(pid_t pid)
+{
+    if (ptrace(PTRACE_LISTEN, pid, NULL, NULL) != -1 || errno != EIO) {
+        return abandon(pid, "PTRACE_LISTEN of a signal-delivery stop was taken");
+    }
+    if (ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 ||
+        expect_stop(pid, SIGSTOP, "the second SIGSTOP made no signal-delivery stop") ||
+        ptrace(PTRACE_CONT, pid, NULL, (void *)(long)SIGSTOP) != 0 ||
+        expect_stop(pid, SIGSTOP | (PTRACE_EVENT_STOP << 8),
+                    "the second stop was not a group stop") ||
+        ptrace(PTRACE_LISTEN, pid, NULL, NULL) != 0 || kill(pid, SIGCONT) != 0 ||
+        expect_stop(pid, SIGTRAP | (PTRACE_EVENT_STOP << 8),
+                    "the stop's end during PTRACE_LISTEN made no new event stop") ||
+        ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 ||
+        expect_stop(pid, SIGCONT, "the second SIGCONT made no signal-delivery stop") ||
+        ptrace(PTRACE_CONT, pid, NULL, NULL) != 0) {
+        return 1;
+    }
+    return 0;
+}
+
 static int listen_and_continue(void)
 {
     pid_t pid = fork();
@@ -1043,34 +1105,7 @@ static int listen_and_continue(void)
         return abandon(pid, "PTRACE_SEIZE accepted an upper option bit");
     }
 #endif
-    if (ptrace(PTRACE_SEIZE, pid, NULL, NULL) != 0 ||
-        expect_stop(pid, SIGSTOP | (PTRACE_EVENT_STOP << 8),
-                    "the seize of the stopped process was not a group stop") ||
-        ptrace(PTRACE_LISTEN, pid, NULL, NULL) != 0 ||
-        ptrace(PTRACE_INTERRUPT, pid, NULL, NULL) != 0 ||
-        expect_stop(pid, SIGSTOP | (PTRACE_EVENT_STOP << 8),
-                    "PTRACE_INTERRUPT did not end PTRACE_LISTEN") ||
-        kill(pid, SIGCONT) != 0 || ptrace(PTRACE_LISTEN, pid, NULL, NULL) != 0 ||
-        expect_stop(pid, SIGTRAP | (PTRACE_EVENT_STOP << 8),
-                    "PTRACE_LISTEN after the stop ended made no new event stop") ||
-        ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 ||
-        expect_stop(pid, SIGCONT, "the SIGCONT made no signal-delivery stop")) {
-        return 1;
-    }
-    if (ptrace(PTRACE_LISTEN, pid, NULL, NULL) != -1 || errno != EIO) {
-        return abandon(pid, "PTRACE_LISTEN of a signal-delivery stop was taken");
-    }
-    if (ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 ||
-        expect_stop(pid, SIGSTOP, "the second SIGSTOP made no signal-delivery stop") ||
-        ptrace(PTRACE_CONT, pid, NULL, (void *)(long)SIGSTOP) != 0 ||
-        expect_stop(pid, SIGSTOP | (PTRACE_EVENT_STOP << 8),
-                    "the second stop was not a group stop") ||
-        ptrace(PTRACE_LISTEN, pid, NULL, NULL) != 0 || kill(pid, SIGCONT) != 0 ||
-        expect_stop(pid, SIGTRAP | (PTRACE_EVENT_STOP << 8),
-                    "the stop's end during PTRACE_LISTEN made no new event stop") ||
-        ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 ||
-        expect_stop(pid, SIGCONT, "the second SIGCONT made no signal-delivery stop") ||
-        ptrace(PTRACE_CONT, pid, NULL, NULL) != 0) {
+    if (listen_first(pid) != 0 || listen_second(pid) != 0) {
         return 1;
     }
     if (wait_within(pid, &status) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
@@ -1412,35 +1447,54 @@ static int watched_copy(void)
 }
 
 /** Run the ordinary suite, or one debug row for a compiled fault proof. */
+/* The rows a suite may run alone, by the name it passes. */
+static const struct {
+    const char *name;
+    int (*row)(void);
+} named_rows[] = {
+    {"step", step_system_call},
+    {"entry", entry_system_call},
+    {"delayed", delayed_debug},
+    {"copy", watched_copy},
+};
+
+/* The rows of memory, system calls and attaching; 0, or 1. */
+static int first_rows(void)
+{
+    return memory_and_registers() || mem_after_end() || syscalls_and_exec() || syscall_changes() ||
+           killed_at_entry() || restart_cancelled() || attach() || attach_stopped() ||
+           listen_and_continue() || interrupt_read();
+}
+
+/* The rows of forks, threads, killed tracees and the debug exception; 0, or
+ * 1. */
+static int second_rows(void)
+{
+    return seized_fork() || stopped_leader() || traced_thread_usage() || tracer_first() ||
+           killed_tracee() || step_system_call() || entry_system_call() || delayed_debug() ||
+           watched_copy();
+}
+
 int main(int argc, char **argv)
 {
-    int rc;
+    unsigned int i;
 
     if (argc == 2) {
-        if (strcmp(argv[1], "step") == 0) {
-            rc = step_system_call();
-        } else if (strcmp(argv[1], "entry") == 0) {
-            rc = entry_system_call();
-        } else if (strcmp(argv[1], "delayed") == 0) {
-            rc = delayed_debug();
-        } else if (strcmp(argv[1], "copy") == 0) {
-            rc = watched_copy();
-        } else {
-            return fail("unknown row");
+        for (i = 0; i < sizeof(named_rows) / sizeof(named_rows[0]); i++) {
+            if (strcmp(argv[1], named_rows[i].name) == 0) {
+                if (named_rows[i].row() != 0) {
+                    return 1;
+                }
+                printf("PTRACEMUSL OK\n");
+                return 0;
+            }
         }
-        if (rc == 0) {
-            printf("PTRACEMUSL OK\n");
-        }
-        return rc;
+        return fail("unknown row");
     }
     if (argc != 1) {
         return fail("unexpected argument count");
     }
-    if (memory_and_registers() || mem_after_end() || syscalls_and_exec() || syscall_changes() ||
-        killed_at_entry() || restart_cancelled() || attach() || attach_stopped() ||
-        listen_and_continue() || interrupt_read() || seized_fork() || stopped_leader() ||
-        traced_thread_usage() || tracer_first() || killed_tracee() || step_system_call() ||
-        entry_system_call() || delayed_debug() || watched_copy()) {
+    if (first_rows() || second_rows()) {
         return 1;
     }
     printf("PTRACEMUSL OK\n");
