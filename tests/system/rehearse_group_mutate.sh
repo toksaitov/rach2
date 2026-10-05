@@ -15,12 +15,25 @@
 #
 # Usage: sh tests/system/rehearse_group_mutate.sh [ROOT DISK]
 # ROOT and DISK name the installer root and disk the rehearsal ran, by
-# default build/images/installer-root.ext2 and build/images/installer-test.disk.
+# default installer-root.ext2 and installer-test.disk under the images of
+# the architecture ARCH names, build/images or build/x86_64/images.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
+REPO=$repo
+. "$repo/mk/arch.sh"
+RACH2_QEMU=$ARCH_QEMU
+export RACH2_QEMU ARCH_BUILD
+# The manifests name their files by the i686 paths; for x86-64 the stager
+# reads them from the x86-64 tree, by the map the root Makefile exports.
+if [ -n "$ARCH_SUFFIX" ]; then
+    RACH2_PATH_MAP="build/man/=build/man/ build/tests/system/=build/tests/system/"
+    RACH2_PATH_MAP="$RACH2_PATH_MAP build/=$ARCH_BUILD/ vendor/musl/install/=$MUSL_PREFIX/"
+    export RACH2_PATH_MAP
+fi
 case $# in
-    0) root=$repo/build/images/installer-root.ext2 disk=$repo/build/images/installer-test.disk ;;
+    0) root=$ARCH_BUILD/images/installer-root.ext2 disk=$ARCH_BUILD/images/installer-test.disk ;;
     2) root=$1 disk=$2 ;;
     *) echo 'rehearse-group-mutation: usage: rehearse_group_mutate.sh [ROOT DISK]' >&2; exit 2 ;;
 esac
