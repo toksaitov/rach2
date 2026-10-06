@@ -441,6 +441,8 @@ taken by a signal wait, and is forced as a user-mode hit is, through a
 blocked
 .Dv SIGTRAP ,
 so the tracee stops at the call's return.
+An Intel processor reports such a hit with no breakpoint bit in DR6, and
+the tracee's DR6 then shows none.
 Thus an infinite
 .Xr poll 2
 whose descriptor the kernel reads through a watchpoint stops for the
