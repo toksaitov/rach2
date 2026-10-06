@@ -433,6 +433,12 @@ interruptible wait subject to its signal mask and disposition, and
 or a
 .Xr signalfd 2
 read can take it.
+A hit on a user instruction that the processor delays into the
+system-call entry, as after a watched
+.Li mov ss ,
+is forced as a user-mode hit is, through a blocked
+.Dv SIGTRAP ,
+and stops the tracee at the call's return.
 Thus an infinite
 .Xr poll 2
 whose descriptor the kernel reads through a watchpoint stops for the
