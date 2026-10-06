@@ -4,9 +4,10 @@
 # For the entry proof, inject int $1 before syscall_entry changes GS or RSP;
 # this exercises that entry state without depending on the emulator's delay.
 # The fixed entry must preserve a syscall on an invalid user stack. Removing
-# its interrupt stack or its GS check must fail, and so must removing the
-# post of a deferred hit before the pending-signal check, which only x86-64
-# defers, from the sigwait row. The original kernel is
+# its interrupt stack must end in a double fault. Choosing GS by the saved CS
+# must reset the machine, a triple fault, before any handler prints. On
+# x86-64, which alone defers a kernel hit, removing its post before the
+# pending-signal check must fail the sigwait row. The original kernel is
 # restored, rebuilt and required to match and pass at the end. It holds the
 # record lock on build/.run.guard and the run lock, as tests/run does, so that
 # no suite builds or boots the tree, and no other proof saves a source, while
@@ -152,7 +153,8 @@ run_phase()
     if [ "$expected" = pass ]; then
         [ "$status" -eq 0 ] || exit 1
     else
-        if [ "$status" -eq 0 ] || ! grep -Fq "$detail" "$work/$phase.serial.log"; then
+        if [ "$status" -eq 0 ] ||
+            ! cat "$work/$phase.log" "$work/$phase.serial.log" | grep -Fq "$detail"; then
             echo "ptrace-debug: fail: $phase did not produce its expected failure" >&2
             exit 1
         fi
@@ -200,7 +202,7 @@ if [ "$RACH2_ARCH" = x86_64 ]; then
     run_phase stack-restored entry pass
     cmp "$work/injected.kernel" "$work/stack-restored.kernel"
     mutate gs
-    run_phase wrong-gs entry fail 'kernel exception: double fault'
+    run_phase wrong-gs entry fail 'qemu had already exited'
     restore
     mutate inject
     run_phase gs-restored entry pass
