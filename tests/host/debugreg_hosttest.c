@@ -11,7 +11,8 @@
  * posted before its thread checks pending signals or returns, including on
  * another processor. A user hit delayed across system-call entry must
  * interrupt a wait without being posted, then be forced once at the syscall
- * return even when the wait restores a mask that blocks SIGTRAP.
+ * return even when the wait restores a mask that blocks SIGTRAP. Intel's
+ * delayed hit has no DR6 status bit; delivery must not invent one.
  */
 #include "arch/x86/debugreg.h"
 #include "proc/percpu.h"
@@ -191,8 +192,9 @@ static void dequeue_hits(void)
 
 /** A pending check cannot post or consume a user hit, even for a signal
  * wait that unblocks SIGTRAP. It interrupts with either wait set, leaving
- * user return to force the trap once after the saved mask comes back. */
-static void pending_user_hits(void)
+ * user return to force the trap once after the saved mask comes back.
+ * Status is B0 or zero, for a hit with or without a DR6 status bit. */
+static void pending_user_hits(unsigned long status)
 {
     int location, in_set;
 
@@ -207,7 +209,8 @@ static void pending_user_hits(void)
             actions[SIGTRAP].handler = KSIG_IGN;
             FRAME_PC(&frame) = USER_ADDR_MIN + 32;
             SC_RET(&frame) = -EINTR;
-            hardware[1][6] = 1;
+            tracee.debugreg[6] = 0xf;
+            hardware[1][6] = 0xffff0ff0ul | status;
             debugreg_defer_user((uintptr_t)&isr128);
             if (location == 1) {
                 arch_debug_switch(&tracee, &other);
@@ -230,9 +233,11 @@ static void pending_user_hits(void)
             check(signals == 0 && forced == 0 && tracee.sig_pending == 0 &&
                       tracee.sig_blocked == (saved & ~wait_set) &&
                       actions[SIGTRAP].handler == KSIG_IGN,
-                  "pending check keeps delayed user hit out of signal waits");
+                  status ? "pending check keeps delayed user hit out of signal waits" :
+                           "pending check keeps status-less user hit out of signal waits");
             check(arch_debug_pending() == 1,
-                  "delayed user hit interrupts wait regardless of mask and disposition");
+                  status ? "delayed user hit interrupts wait regardless of mask and disposition" :
+                           "status-less user hit interrupts wait regardless of mask and disposition");
             check(deferred[host_cpu] == cpu_pending && tracee.debug_pending == thread_pending,
                   "pending check preserves both copies of delayed user status");
             tracee.sig_blocked = saved;
@@ -240,24 +245,27 @@ static void pending_user_hits(void)
             check(forced == 1 && signals == 1 && tracee.sig_pending == KSIG_BIT(SIGTRAP) &&
                       tracee.sig_blocked == KSIG_BIT(SIGUSR1) &&
                       actions[SIGTRAP].handler == KSIG_DFL,
-                  "user return forces delayed hit after wait restores mask");
-            check(tracee.debugreg[6] == (location == 2 ? 3ul : 1ul) &&
+                  status ? "user return forces delayed hit after wait restores mask" :
+                           "user return forces status-less hit after wait restores mask");
+            check(tracee.debugreg[6] == (status | (location == 2 ? 2ul : 0ul)) &&
                       tracee.sig_info[SIGTRAP].code == TRAP_HWBKPT &&
                       tracee.sig_info[SIGTRAP].addr == USER_ADDR_MIN + 32 &&
                       FRAME_PC(&frame) == USER_ADDR_MIN + 32 && SC_RET(&frame) == -EINTR,
-                  "user return keeps delayed status and interrupted syscall frame");
+                  status ? "user return keeps delayed status and interrupted syscall frame" :
+                           "user return keeps status-less hit and interrupted syscall frame");
             check(!arch_debug_pending(), "delivered user hit no longer interrupts wait");
             tracee.sig_pending = 0;
             arch_debug_deliver();
             debugreg_resume();
             debugreg_deliver();
             check(forced == 1 && signals == 1 && tracee.sig_pending == 0,
-                  "user hit checked during wait is forced only once");
+                  status ? "user hit checked during wait is forced only once" :
+                           "status-less user hit checked during wait is forced only once");
         }
     }
 
     setup();
-    hardware[1][6] = 1;
+    hardware[1][6] = 0xffff0ff0ul | status;
     debugreg_defer_user((uintptr_t)&isr128);
     cpu_table[1].current = NULL;
     check(!arch_debug_pending(), "no current thread means no forced wait interruption");
@@ -268,8 +276,9 @@ static void pending_user_hits(void)
 /** A delayed user hit stops before the next user instruction even with
  * SIGTRAP blocked, as musl's raise leaves it when a tracer redirects the PC.
  * Migration keeps that origin, delivery consumes it, and detach cancels it.
+ * Status is B0 or zero, for a hit with or without a DR6 status bit.
  * The existing dequeue rows check that kernel-copy hits keep their mask. */
-static void delayed_user_hits(void)
+static void delayed_user_hits(unsigned long status)
 {
     int migrated;
 
@@ -279,7 +288,8 @@ static void delayed_user_hits(void)
         actions[SIGTRAP].handler = KSIG_IGN;
         FRAME_PC(&frame) = USER_ADDR_MIN + 32;
         SC_RET(&frame) = 2;
-        hardware[1][6] = 1;
+        tracee.debugreg[6] = 0xf;
+        hardware[1][6] = 0xffff0ff0ul | status;
         debugreg_defer_user((uintptr_t)&isr128);
         check(signals == 0 && hardware[1][6] == 0 && (hardware[1][7] & 0xff) == 0,
               "delayed user hit only defers and disables on interrupt stack");
@@ -295,16 +305,19 @@ static void delayed_user_hits(void)
         check(forced == 1 && signals == 1 &&
                   (tracee.sig_pending & ~tracee.sig_blocked) == KSIG_BIT(SIGTRAP) &&
                   tracee.sig_blocked == KSIG_BIT(SIGUSR1) && actions[SIGTRAP].handler == KSIG_DFL,
-              "delayed user hit is deliverable at syscall return");
-        check(tracee.debugreg[6] == 1 && tracee.sig_info[SIGTRAP].code == TRAP_HWBKPT &&
+              status ? "delayed user hit is deliverable at syscall return" :
+                       "status-less user hit is deliverable at syscall return");
+        check(tracee.debugreg[6] == status && tracee.sig_info[SIGTRAP].code == TRAP_HWBKPT &&
                   tracee.sig_info[SIGTRAP].addr == USER_ADDR_MIN + 32 &&
                   FRAME_PC(&frame) == USER_ADDR_MIN + 32 && SC_RET(&frame) == 2,
-              "delayed user hit keeps status and syscall frame");
+              status ? "delayed user hit keeps status and syscall frame" :
+                       "status-less user hit keeps status and syscall frame");
         tracee.sig_pending = 0;
         debugreg_resume();
         debugreg_deliver();
         check(forced == 1 && signals == 1 && tracee.sig_pending == 0,
-              "delayed user hit is forced only once");
+              status ? "delayed user hit is forced only once" :
+                       "status-less user hit is forced only once");
         tracee.sig_blocked = KSIG_BIT(SIGTRAP);
         hardware[host_cpu][6] = 1;
         debugreg_defer();
@@ -315,10 +328,10 @@ static void delayed_user_hits(void)
 
     setup();
     tracee.sig_blocked = KSIG_BIT(SIGTRAP);
-    hardware[1][6] = 1;
+    hardware[1][6] = 0xffff0ff0ul | status;
     debugreg_defer_user((uintptr_t)&isr128);
     arch_debug_switch(&tracee, &tracee);
-    hardware[1][6] = 1;
+    hardware[1][6] = 0xffff0ff0ul | status;
     debugreg_defer_user((uintptr_t)&isr128);
     detach();
     check(!arch_debug_pending(), "detached user hit does not interrupt wait");
@@ -327,35 +340,73 @@ static void delayed_user_hits(void)
           "pending check clears detached user hit from both copies");
     debugreg_deliver();
     check(forced == 0 && signals == 0 && tracee.sig_blocked == KSIG_BIT(SIGTRAP),
-          "detach cancels delayed user hit without changing mask");
+          status ? "detach cancels delayed user hit without changing mask" :
+                   "detach cancels status-less user hit without changing mask");
     tracee.debugreg[7] = 0x10001;
     check(!arch_debug_pending(), "rearming does not revive detached user hit");
-
-    setup();
-    hardware[1][6] = 0x4000;
-    debugreg_defer_user((uintptr_t)&isr128);
-    debugreg_deliver();
-    check(forced == 0 && signals == 0, "syscall entry single step does not force a second signal");
 }
 
 /** Only the gate's first instruction identifies a delayed user hit.
- * An adjacent address must leave DR6 for the ordinary kernel-hit path. */
-static void syscall_entry_address(void)
+ * An adjacent address must leave DR6 for the ordinary kernel-hit path.
+ * Status is B0 or zero, for a hit with or without a DR6 status bit. */
+static void syscall_entry_address(unsigned long status)
 {
     uintptr_t entry = (uintptr_t)&isr128;
 
     setup();
     tracee.sig_blocked = KSIG_BIT(SIGTRAP);
-    hardware[1][6] = 1;
+    hardware[1][6] = 0xffff0ff0ul | status;
     check(debugreg_defer_user(entry - 1) == 0 && debugreg_defer_user(entry + 1) == 0 &&
-              hardware[1][6] == 1 && hardware[1][7] == 0x10401 && deferred[1] == 0 && signals == 0,
-          "adjacent gate addresses leave kernel hit unchanged");
+              hardware[1][6] == (0xffff0ff0ul | status) && hardware[1][7] == 0x10401 &&
+              deferred[1] == 0 && signals == 0,
+          status ? "adjacent gate addresses leave kernel hit unchanged" :
+                   "adjacent gate addresses leave status-less exception unchanged");
+    debugreg_defer();
+    debugreg_deliver();
+    check(forced == 0 && signals == (status ? 1 : 0) &&
+              tracee.sig_blocked == KSIG_BIT(SIGTRAP),
+          "non-entry exception retains kernel-copy delivery");
+    setup();
+    tracee.sig_blocked = KSIG_BIT(SIGTRAP);
+    hardware[1][6] = 0xffff0ff0ul | status;
     check(debugreg_defer_user(entry) == 1 && hardware[1][6] == 0 && (hardware[1][7] & 0xff) == 0 &&
               signals == 0,
           "exact gate entry defers user hit");
     debugreg_deliver();
     check(forced == 1 && signals == 1 && tracee.sig_blocked == 0,
           "exact gate entry forces blocked trap");
+}
+
+/** A status-less entry exception with no saved enables has no user hit.
+ * Rearming after it cannot create a hit, and no thread means no owner. */
+static void stale_statusless_entry(void)
+{
+    setup();
+    tracee.sig_blocked = KSIG_BIT(SIGTRAP);
+    actions[SIGTRAP].handler = KSIG_IGN;
+    detach();
+    hardware[1][6] = 0xffff0ff0ul;
+    debugreg_defer_user((uintptr_t)&isr128);
+    check(deferred[1] == 0 && !arch_debug_pending(),
+          "stale status-less entry records no user hit");
+    debugreg_deliver();
+    check(forced == 0 && signals == 0 && tracee.sig_blocked == KSIG_BIT(SIGTRAP) &&
+              actions[SIGTRAP].handler == KSIG_IGN,
+          "stale status-less entry posts no signal");
+    tracee.debugreg[7] = 0x10001;
+    arch_debug_deliver();
+    debugreg_deliver();
+    check(forced == 0 && signals == 0 && !arch_debug_pending(),
+          "rearming after status-less entry creates no hit");
+
+    setup();
+    cpu_table[1].current = NULL;
+    hardware[1][6] = 0xffff0ff0ul;
+    debugreg_defer_user((uintptr_t)&isr128);
+    check(deferred[1] == 0 && !arch_debug_pending(),
+          "status-less entry without thread records no user hit");
+    debugreg_deliver();
+    check(forced == 0 && signals == 0, "status-less entry without thread posts no signal");
 }
 
 /** Exercise the two stale-register paths and deferred exception ownership. */
@@ -412,9 +463,13 @@ int main(void)
     check(signals == 0, "kernel single step does not duplicate syscall exit stop");
     pending_hits();
     dequeue_hits();
-    pending_user_hits();
-    delayed_user_hits();
-    syscall_entry_address();
+    pending_user_hits(1);
+    pending_user_hits(0);
+    delayed_user_hits(1);
+    delayed_user_hits(0);
+    syscall_entry_address(1);
+    syscall_entry_address(0);
+    stale_statusless_entry();
     printf("debugreg-hosttest: result: %s\n", failures ? "fail" : "pass");
     return failures != 0;
 }

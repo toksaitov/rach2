@@ -136,8 +136,11 @@ void debugreg_defer(void)
 }
 
 /** Defer a user watchpoint when pc is the first instruction of system-call
- * entry: isr128 on i686, syscall_entry on x86-64. Its signal must be forced,
- * as for a user-mode debug exception, even when the thread blocks SIGTRAP.
+ * entry: isr128 on i686, syscall_entry on x86-64. Intel can report this
+ * delayed hit without a DR6 status bit. With saved enables it is a user
+ * data breakpoint: TF is clear (the i686 interrupt gate clears it; x86-64
+ * FMASK masks it), and DR7 validation forbids kernel addresses and GD.
+ * Its signal must be forced even when the thread blocks SIGTRAP.
  * Keep that origin across switches until the syscall returns to user mode.
  * Return 1 for that entry, or 0 without reading DR6 for any other address. */
 int debugreg_defer_user(uintptr_t pc)
@@ -149,7 +152,7 @@ int debugreg_defer_user(uintptr_t pc)
     }
     cpu = arch_cpu_id();
     debugreg_defer();
-    if (deferred[cpu] & DR6_HITS) {
+    if (current_proc && (current_proc->debugreg[7] & DR7_ENABLES)) {
         deferred[cpu] |= DEFER_USER;
     }
     return 1;
@@ -161,8 +164,9 @@ int debugreg_defer_user(uintptr_t pc)
  * follows that thread to another processor. The syscall exit reports kernel
  * single steps; only a hardware hit with saved enables posts a signal here,
  * as in i686's kernel debug handler. Both deferred copies are cleared even when
- * a detach made the hit stale. A hit delayed from user code forces SIGTRAP;
- * a kernel copy's hit respects the mask, so a signal wait can take it. */
+ * a detach made the hit stale. A hit delayed from user code forces SIGTRAP
+ * even without a DR6 status bit; the saved DR6 contains only reported bits.
+ * A kernel copy's hit respects the mask, so a signal wait can take it. */
 void debugreg_deliver(void)
 {
     unsigned int cpu = arch_cpu_id();
@@ -181,6 +185,9 @@ void debugreg_deliver(void)
     }
     k_memset(&info, 0, sizeof(info));
     info.code = debugreg_code(dr6 & ~DEFER_USER);
+    if (dr6 & DEFER_USER) {
+        info.code = TRAP_HWBKPT;
+    }
     if (info.code == TRAP_HWBKPT && (current_proc->debugreg[7] & DR7_ENABLES)) {
         info.addr = FRAME_PC(proc_user_frame(current_proc));
         if (dr6 & DEFER_USER) {

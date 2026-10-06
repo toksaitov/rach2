@@ -15,7 +15,7 @@ fi
 kind=${1:-}
 case "$kind" in
     ptrace) source=proc/ptrace.c; faults='regset listen return-stops return-kill options seize step' ;;
-    debugreg) source=arch/x86/debugreg.c; faults='switch stale migration delivery kernel-step pending pending-saved pending-stale pending-step dequeue dequeue-repeat user-force user-entry user-origin user-status user-wait-post user-wait-cpu user-wait-saved user-wait-stale user-wait-kernel user-wait-no-thread' ;;
+    debugreg) source=arch/x86/debugreg.c; faults='switch stale migration delivery kernel-step pending pending-saved pending-stale pending-step dequeue dequeue-repeat user-force user-entry user-origin user-status user-wait-post user-wait-cpu user-wait-saved user-wait-stale user-wait-kernel user-wait-no-thread user-no-status-origin user-no-status-code user-no-status-dr6 user-no-status-capture user-no-status-stale user-no-status-repeat-cpu user-no-status-repeat-saved user-no-status-wait' ;;
     *) echo 'ptrace-proof: usage: ptrace_mutate.sh [ptrace|debugreg [--check]]' >&2; exit 2 ;;
 esac
 shift
@@ -130,11 +130,34 @@ changes = {
                    'delayed user hit is deliverable at syscall return'),
     'user-entry': ('    if (pc != (uintptr_t)&DEBUG_SYSCALL_ENTRY) {',
                    '    if (pc < (uintptr_t)&DEBUG_SYSCALL_ENTRY - 1 || pc > (uintptr_t)&DEBUG_SYSCALL_ENTRY + 1) {',
-                   'adjacent gate addresses leave kernel hit unchanged'),
+                   'adjacent gate addresses leave status-less exception unchanged'),
     'user-origin': ('        deferred[cpu] |= DEFER_USER;', '        deferred[cpu] |= 0;',
                     'exact gate entry forces blocked trap'),
     'user-status': ('    info.code = debugreg_code(dr6 & ~DEFER_USER);', '    info.code = debugreg_code(dr6);',
                   'delayed user hit keeps status and syscall frame'),
+    'user-no-status-origin': ('    if (current_proc && (current_proc->debugreg[7] & DR7_ENABLES)) {',
+                              '    if (deferred[cpu] & DR6_HITS) {',
+                              'status-less user hit is deliverable at syscall return'),
+    'user-no-status-code': ('    if (dr6 & DEFER_USER) {\n        info.code = TRAP_HWBKPT;\n    }',
+                            '', 'status-less user hit is deliverable at syscall return'),
+    'user-no-status-dr6': ('    info.code = debugreg_code(dr6 & ~DEFER_USER);',
+                           '    info.code = debugreg_code((dr6 & ~DEFER_USER) | ((dr6 & DEFER_USER) ? 1ul : 0ul));',
+                           'status-less user hit keeps status and syscall frame'),
+    'user-no-status-capture': ('    if (current_proc && (current_proc->debugreg[7] & DR7_ENABLES)) {',
+                               '    if (current_proc) {',
+                               'stale status-less entry records no user hit'),
+    'user-no-status-stale': ('    if (info.code == TRAP_HWBKPT && (current_proc->debugreg[7] & DR7_ENABLES)) {',
+                             '    if (info.code == TRAP_HWBKPT) {',
+                             'detach cancels status-less user hit without changing mask'),
+    'user-no-status-repeat-cpu': ('    dr6 = deferred[cpu] | current_proc->debug_pending;\n    deferred[cpu] = 0;',
+                                  '    dr6 = deferred[cpu] | current_proc->debug_pending;\n    deferred[cpu] &= DEFER_USER;',
+                                  'status-less user hit checked during wait is forced only once'),
+    'user-no-status-repeat-saved': ('    current_proc->debug_pending = 0;',
+                                    '    current_proc->debug_pending &= DEFER_USER;',
+                                    'status-less user hit is forced only once'),
+    'user-no-status-wait': ('    return ((deferred[arch_cpu_id()] | current_proc->debug_pending) & DEFER_USER) != 0;',
+                            '    return ((deferred[arch_cpu_id()] | current_proc->debug_pending) & DEFER_USER) != 0 &&\n        ((deferred[arch_cpu_id()] | current_proc->debug_pending) & DR6_HITS) != 0;',
+                            'status-less user hit interrupts wait regardless of mask and disposition'),
     'user-wait-post': ('    if (!arch_debug_pending()) {', '    if (1) {',
                        'pending check keeps delayed user hit out of signal waits'),
     'user-wait-cpu': ('    return ((deferred[arch_cpu_id()] | current_proc->debug_pending) & DEFER_USER) != 0;',
