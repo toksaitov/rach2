@@ -7,7 +7,11 @@
 # its interrupt stack must end in a double fault. Choosing GS by the saved CS
 # must reset the machine, a triple fault, before any handler prints. On
 # x86-64, which alone defers a kernel hit, removing its post before the
-# pending-signal check must fail the sigwait row. The original kernel is
+# pending-signal check must fail the sigwait row. Where /dev/kvm is usable,
+# the delayed row also runs under KVM, which delays a watched MOV SS's hit
+# into the system-call entry as hardware does, and posting that hit without
+# forcing it must fail; elsewhere the script says those rows did not run.
+# The original kernel is
 # restored, rebuilt and required to match and pass at the end. It holds the
 # record lock on build/.run.guard and the run lock, as tests/run does, so that
 # no suite builds or boots the tree, and no other proof saves a source, while
@@ -45,14 +49,15 @@ printf 'pid %s\npgid %s\nargs ptrace_debug_mutate.sh\nsince %s\nwork %s\n' "$$" 
     "$(ps -o pgid= -p $$ | tr -d ' ')" "$(date '+%Y-%m-%d %H:%M:%S')" "$work" \
     > build/.run.lock/owner.new
 mv build/.run.lock/owner.new build/.run.lock/owner
-sources='rach2/sys/syscall.c rach2/sys/syscall_proc.c rach2/sys/arch/x86_64/idt.c
-    rach2/sys/arch/x86_64/isr_handler.s'
+sources='rach2/sys/syscall.c rach2/sys/syscall_proc.c rach2/sys/arch/x86/debugreg.c
+    rach2/sys/arch/x86_64/idt.c rach2/sys/arch/x86_64/isr_handler.s'
 for file in $sources; do
     mkdir -p "$work/saved/$(dirname "$file")"
     cp "$file" "$work/saved/$file"
 done
 child=
 changed=
+kvm=
 
 stop_child()
 {
@@ -104,6 +109,9 @@ changes = {
     'step': ('rach2/sys/syscall.c',
              '    if (current_proc && (current_proc->ptrace & (PT_SYSCALL | PT_STEP))) {',
              '    if (current_proc && (current_proc->ptrace & PT_SYSCALL)) {'),
+    'unforced': ('rach2/sys/arch/x86/debugreg.c',
+                 '            signal_force(current_proc, SIGTRAP, &info);',
+                 '            signal_post_thread(current_proc, SIGTRAP, &info);'),
     'sigwait': ('rach2/sys/syscall_proc.c',
                 '    arch_debug_deliver();\n    set = current_proc->sig_pending',
                 '    set = current_proc->sig_pending'),
@@ -131,6 +139,8 @@ run_phase()
     row=$2
     expected=$3
     detail=${4:-}
+    accel=
+    [ -z "$kvm" ] || accel='--qemu-arg=-accel --qemu-arg=kvm'
     rebuild >"$work/$phase.build.log" 2>&1
     cat "$work/$phase.build.log"
     cp "$ARCH_BUILD/rach2/kernel" "$work/$phase.kernel"
@@ -138,7 +148,7 @@ run_phase()
         >"$work/$phase.artifacts"
     build/tests/system/runutil group build/tests/system/harness \
         --kernel "$work/$phase.kernel" --initrd "$work/test.krffs" \
-        --net hubport,id=net0,hubid=0 --qemu-arg=-cpu --qemu-arg=max \
+        --net hubport,id=net0,hubid=0 --qemu-arg=-cpu --qemu-arg=max $accel \
         --append rach2.rescue --timeout 40 --steptmo 15 \
         --ok 'PTRACEMUSL OK' --never 'PTRACEMUSL FAIL' \
         --log "$work/$phase.serial.log" \
@@ -152,6 +162,10 @@ run_phase()
     cat "$work/$phase.log" "$work/$phase.serial.log"
     if [ "$expected" = pass ]; then
         [ "$status" -eq 0 ] || exit 1
+        if [ -n "$kvm" ] && grep -Fq 'not run: debug exception preceded' "$work/$phase.serial.log"; then
+            echo "ptrace-debug: fail: $phase: KVM did not delay the watchpoint" >&2
+            exit 1
+        fi
     else
         if [ "$status" -eq 0 ] ||
             ! cat "$work/$phase.log" "$work/$phase.serial.log" | grep -Fq "$detail"; then
@@ -187,6 +201,19 @@ cmp "$work/fixed.kernel" "$work/step-restored.kernel"
 run_phase copy copy pass
 run_phase delayed delayed pass
 run_phase sigwait sigwait pass
+kvm=
+if [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
+    kvm=1
+    run_phase delayed-kvm delayed pass
+    mutate unforced
+    run_phase unforced delayed fail 'delayed debug exception lost its frame or result'
+    restore
+    run_phase unforced-restored delayed pass
+    cmp "$work/fixed.kernel" "$work/unforced-restored.kernel"
+    kvm=
+else
+    echo 'ptrace-debug: not run: the delayed-watchpoint rows need KVM, which this host does not offer'
+fi
 if [ "$RACH2_ARCH" = x86_64 ]; then
     mutate sigwait
     run_phase no-sigwait sigwait fail 'watched sigwait did not take SIGTRAP with TRAP_HWBKPT'
