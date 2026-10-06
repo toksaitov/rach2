@@ -453,6 +453,18 @@ new
             t->debugreg[i] < USER_ADDR_MIN || t->debugreg[i] >= USER_ADDR_MAX - bytes) {
 end
 
+# Under KVM the processor delays a watched MOV SS's data breakpoint into the
+# system-call entry; the default suite runs there, and TCG reports it early.
+fault delayed-hit-unforced
+probe ptracemusl
+file rach2/sys/arch/x86/debugreg.c
+expect PTRACEMUSL FAIL (delayed debug exception lost its frame or result: errno
+old
+            signal_force(current_proc, SIGTRAP, &info);
+new
+            signal_post_thread(current_proc, SIGTRAP, &info);
+end
+
 fault syscall-number-reload
 probe ptracemusl
 file rach2/sys/syscall.c

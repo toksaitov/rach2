@@ -15,7 +15,7 @@ fi
 kind=${1:-}
 case "$kind" in
     ptrace) source=proc/ptrace.c; faults='regset listen return-stops return-kill options seize step' ;;
-    debugreg) source=arch/x86/debugreg.c; faults='switch stale migration delivery kernel-step pending pending-saved pending-stale pending-step dequeue dequeue-repeat' ;;
+    debugreg) source=arch/x86/debugreg.c; faults='switch stale migration delivery kernel-step pending pending-saved pending-stale pending-step dequeue dequeue-repeat user-force user-entry user-origin user-status' ;;
     *) echo 'ptrace-proof: usage: ptrace_mutate.sh [ptrace|debugreg [--check]]' >&2; exit 2 ;;
 esac
 shift
@@ -125,6 +125,16 @@ changes = {
                      'kernel step posts no signal'),
     'dequeue': ('    debugreg_deliver();', '    return;',
                 'deferred hit is posted for dequeue with siginfo'),
+    'user-force': ('            signal_force(current_proc, SIGTRAP, &info);',
+                   '            signal_post_thread(current_proc, SIGTRAP, &info);',
+                   'delayed user hit is deliverable at syscall return'),
+    'user-entry': ('    if (pc != (uintptr_t)&DEBUG_SYSCALL_ENTRY) {',
+                   '    if (pc < (uintptr_t)&DEBUG_SYSCALL_ENTRY - 1 || pc > (uintptr_t)&DEBUG_SYSCALL_ENTRY + 1) {',
+                   'adjacent gate addresses leave kernel hit unchanged'),
+    'user-origin': ('        deferred[cpu] |= DEFER_USER;', '        deferred[cpu] |= 0;',
+                    'exact gate entry forces blocked trap'),
+    'user-status': ('    info.code = debugreg_code(dr6 & ~DEFER_USER);', '    info.code = debugreg_code(dr6);',
+                  'delayed user hit keeps status and syscall frame'),
     'dequeue-repeat': ('    current_proc->debug_pending = 0;',
                        '    current_proc->debug_pending |= 0;',
                        'dequeued hit is not posted again at user return'),
