@@ -1466,6 +1466,52 @@ static int delayed_debug(void)
     return 0;
 }
 
+/** A watched MOV SS interrupts an infinite poll when its hit reaches entry.
+ * With no descriptors, poll never reads the watched memory in the kernel;
+ * x86-64 passes its address as the unused first argument. The child keeps
+ * its valid user stack for the wait. TCG can stop before the call. */
+static int delayed_poll(void)
+{
+    struct user_regs_struct regs;
+    siginfo_t info;
+    pid_t pid = register_child();
+
+    if (pid < 0) {
+        return fail("fork for delayed poll");
+    }
+    if (ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0) {
+        return abandon(pid, "registers before delayed poll");
+    }
+    R_IP(regs) = (unsigned long)watched_ss;
+    R_RET(regs) = SYS_poll;
+    R_NR(regs) = -1;
+    R_PTR(regs) = (unsigned long)&user_ss;
+#if defined __x86_64__
+    regs.rsi = 0;
+    regs.rdx = -1;
+#else
+    regs.ebx = 0;
+    regs.ecx = 0;
+    regs.edx = -1;
+#endif
+    if (debug_set(pid, 0, (unsigned long)&user_ss) != 0 || debug_set(pid, 7, 0x70001) != 0 ||
+        ptrace(PTRACE_SETREGS, pid, NULL, &regs) != 0 ||
+        ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 ||
+        expect_stop(pid, SIGTRAP, "delayed infinite poll did not trap") ||
+        ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0 ||
+        ptrace(PTRACE_GETSIGINFO, pid, NULL, &info) != 0 || info.si_code != TRAP_HWBKPT) {
+        return abandon(pid, "delayed poll lost its status");
+    }
+    if ((unsigned long)R_IP(regs) == (unsigned long)watched_call && R_RET(regs) == SYS_poll) {
+        printf("ptracemusl: not run: debug exception preceded system call\n");
+    } else if ((unsigned long)R_IP(regs) != (unsigned long)watched_return ||
+               (long)R_RET(regs) != -EINTR) {
+        return abandon(pid, "delayed poll lost its frame or EINTR result");
+    }
+    finish_register_child(pid);
+    return 0;
+}
+
 /** A watchpoint on a kernel copy still stops its tracee at the user return. */
 static int watched_copy(void)
 {
@@ -1580,9 +1626,9 @@ static const struct {
     const char *name;
     int (*row)(void);
 } named_rows[] = {
-    {"step", step_system_call},     {"entry", entry_system_call}, {"delayed", delayed_debug},
-    {"copy", watched_copy},         {"poll", watched_poll},       {"sigwait", watched_sigwait},
-    {"listen", listen_user_return},
+    {"step", step_system_call},     {"entry", entry_system_call},   {"delayed", delayed_debug},
+    {"delayed-poll", delayed_poll}, {"copy", watched_copy},         {"poll", watched_poll},
+    {"sigwait", watched_sigwait},   {"listen", listen_user_return},
 };
 
 /* The rows of memory, system calls and attaching; 0, or 1. */
@@ -1599,7 +1645,8 @@ static int second_rows(void)
 {
     return seized_fork() || stopped_leader() || traced_thread_usage() || tracer_first() ||
            killed_tracee() || step_system_call() || entry_system_call() || delayed_debug() ||
-           watched_copy() || watched_poll() || watched_sigwait() || listen_user_return();
+           delayed_poll() || watched_copy() || watched_poll() || watched_sigwait() ||
+           listen_user_return();
 }
 
 int main(int argc, char **argv)

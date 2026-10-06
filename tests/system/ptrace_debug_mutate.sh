@@ -8,14 +8,14 @@
 # must reset the machine, a triple fault, before any handler prints. On
 # x86-64, which alone defers a kernel hit, removing its post before the
 # pending-signal check must fail the sigwait row. Where /dev/kvm is usable,
-# the delayed row also runs under KVM, which delays a watched MOV SS's hit
-# into the system-call entry as hardware does, and posting that hit without
-# forcing it must fail; elsewhere the script says those rows did not run.
-# The original kernel is
-# restored, rebuilt and required to match and pass at the end. It holds the
-# record lock on build/.run.guard and the run lock, as tests/run does, so that
-# no suite builds or boots the tree, and no other proof saves a source, while
-# a fault is in it.
+# the delayed and delayed-poll rows also run under KVM, which delays a watched
+# MOV SS's hit into the system-call entry as hardware does. Posting that hit
+# without forcing it must fail delayed; ignoring it in signal_pending must
+# fail delayed-poll. Elsewhere the script says those rows did not run.
+# The original kernel is restored, rebuilt and required to match and pass at
+# the end. The script holds the record lock on build/.run.guard and the run
+# lock, as tests/run does, so no suite builds or boots the tree and no other
+# proof saves a source while a fault is in it.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
@@ -112,6 +112,9 @@ changes = {
     'unforced': ('rach2/sys/arch/x86/debugreg.c',
                  '            signal_force(current_proc, SIGTRAP, &info);',
                  '            signal_post_thread(current_proc, SIGTRAP, &info);'),
+    'pending': ('rach2/sys/syscall_proc.c',
+                '    debug_pending = arch_debug_pending();',
+                '    debug_pending = 0;'),
     'sigwait': ('rach2/sys/syscall_proc.c',
                 '    arch_debug_deliver();\n    set = current_proc->sig_pending',
                 '    set = current_proc->sig_pending'),
@@ -139,8 +142,8 @@ run_phase()
     row=$2
     expected=$3
     detail=${4:-}
-    accel=
-    [ -z "$kvm" ] || accel='--qemu-arg=-accel --qemu-arg=kvm'
+    set --
+    [ -z "$kvm" ] || set -- --qemu-arg=-accel --qemu-arg=kvm
     rebuild >"$work/$phase.build.log" 2>&1
     cat "$work/$phase.build.log"
     cp "$ARCH_BUILD/rach2/kernel" "$work/$phase.kernel"
@@ -148,7 +151,7 @@ run_phase()
         >"$work/$phase.artifacts"
     build/tests/system/runutil group build/tests/system/harness \
         --kernel "$work/$phase.kernel" --initrd "$work/test.krffs" \
-        --net hubport,id=net0,hubid=0 --qemu-arg=-cpu --qemu-arg=max $accel \
+        --net hubport,id=net0,hubid=0 --qemu-arg=-cpu --qemu-arg=max "$@" \
         --append rach2.rescue --timeout 40 --steptmo 15 \
         --ok 'PTRACEMUSL OK' --never 'PTRACEMUSL FAIL' \
         --log "$work/$phase.serial.log" \
@@ -200,6 +203,7 @@ run_phase step-restored step pass
 cmp "$work/fixed.kernel" "$work/step-restored.kernel"
 run_phase copy copy pass
 run_phase delayed delayed pass
+run_phase delayed-poll delayed-poll pass
 run_phase sigwait sigwait pass
 kvm=
 if [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
@@ -210,6 +214,12 @@ if [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
     restore
     run_phase unforced-restored delayed pass
     cmp "$work/fixed.kernel" "$work/unforced-restored.kernel"
+    run_phase delayed-poll-kvm delayed-poll pass
+    mutate pending
+    run_phase no-pending delayed-poll fail 'delayed infinite poll did not trap'
+    restore
+    run_phase pending-restored delayed-poll pass
+    cmp "$work/fixed.kernel" "$work/pending-restored.kernel"
     kvm=
 else
     echo 'ptrace-debug: not run: the delayed-watchpoint rows need KVM, which this host does not offer'
