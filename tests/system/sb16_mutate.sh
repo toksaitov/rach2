@@ -6,6 +6,8 @@
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" sb16-mutation "$repo/tests/system/sb16_mutate.sh" "$@"
 RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
 REPO=$repo
 . "$repo/mk/arch.sh"

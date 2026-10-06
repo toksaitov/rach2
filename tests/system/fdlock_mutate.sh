@@ -35,9 +35,8 @@ for fault do
         *) echo "fdlock-mutation: unknown fault: $fault" >&2; exit 2 ;;
     esac
 done
-[ ! -d build/.run.lock ] || {
-    echo "fdlock-mutation: another suite owns this tree" >&2; exit 1;
-}
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" fdlock-mutation "$repo/tests/system/fdlock_mutate.sh" "$@"
 mkdir -p build
 work=$(mktemp -d "$repo/build/fdlock-proof.XXXXXX")
 child=

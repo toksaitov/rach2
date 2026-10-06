@@ -11,9 +11,8 @@ REPO=$repo
 RACH2_QEMU=$ARCH_QEMU
 export RACH2_QEMU ARCH_BUILD
 tree=build$ARCH_SUFFIX
-[ ! -d build/.run.lock ] || {
-    echo 'install-stick-mutation: another suite owns this tree' >&2; exit 1;
-}
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" install-stick-mutation "$repo/tests/system/install_stick_mutate.sh" "$@"
 mkdir -p build
 work=$(mktemp -d "$repo/build/install-stick-proof.XXXXXX")
 source="$work/images.mk"

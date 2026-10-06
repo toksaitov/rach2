@@ -23,9 +23,8 @@ REPO=$repo
 RACH2_QEMU=$ARCH_QEMU
 export RACH2_QEMU ARCH_BUILD
 abuild=build$ARCH_SUFFIX
-[ ! -d build/.run.lock ] || {
-    echo 'servicelog-mutation: another suite owns this tree' >&2; exit 1;
-}
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" servicelog-mutation "$repo/tests/system/servicelog_mutate.sh" "$@"
 mkdir -p build
 work=$(mktemp -d "$repo/build/servicelog-proof.XXXXXX")
 tree="$work/tree"

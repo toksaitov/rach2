@@ -3,6 +3,8 @@
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" fixture-mutation "$repo/tests/host/fixture_readers_mutate.sh" "$@"
 mkdir -p build
 work=$(mktemp -d build/fixture-readers-proof.XXXXXX)
 child=

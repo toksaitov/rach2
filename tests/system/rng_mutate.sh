@@ -3,6 +3,8 @@
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" rng-mutation "$repo/tests/system/rng_mutate.sh" "$@"
 # The architecture, from ARCH as mk/arch.sh reads it: its compiler, its text
 # address, its kernel and its emulator.
 RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}

@@ -30,9 +30,8 @@ RACH2_QEMU=$ARCH_QEMU
 export RACH2_QEMU ARCH_BUILD
 tree=build$ARCH_SUFFIX
 [ "$#" -eq 0 ] || { echo 'rows-mutation: usage: rows_mutate.sh' >&2; exit 2; }
-[ ! -d build/.run.lock ] || {
-    echo 'rows-mutation: another suite owns this tree' >&2; exit 1;
-}
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" rows-mutation "$repo/tests/system/rows_mutate.sh" "$@"
 mkdir -p build/tests
 work=$(mktemp -d "$repo/build/tests/rows-mutation.XXXXXX")
 sources="tests/run rach2/sys/fs/devfs.c rach2/sys/syscall_proc.c rach2/sys/fs/procfs.c

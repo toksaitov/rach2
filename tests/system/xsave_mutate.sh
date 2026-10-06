@@ -4,9 +4,8 @@ set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
-[ ! -d build/.run.lock ] || {
-    echo "xsave-mutation: another suite owns this tree" >&2; exit 1;
-}
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" xsave-mutation "$repo/tests/system/xsave_mutate.sh" "$@"
 # The architecture, from ARCH as mk/arch.sh reads it: its kernel, its build
 # tree and its emulator.
 RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}

@@ -10,9 +10,8 @@ REPO=$repo
 RACH2_QEMU=$ARCH_QEMU
 export RACH2_QEMU ARCH_BUILD
 tree=build$ARCH_SUFFIX
-[ ! -d build/.run.lock ] || {
-    echo 'hda-guest: another suite owns this tree' >&2; exit 1;
-}
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" hda-guest "$repo/tests/system/hda_mutate.sh" "$@"
 mkdir -p build
 work=$(mktemp -d "$repo/build/hda-guest.XXXXXX")
 source=rach2/sys/fs/synthfs.c

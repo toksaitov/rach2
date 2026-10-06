@@ -12,9 +12,8 @@ REPO=$repo
 RACH2_QEMU=$ARCH_QEMU
 export RACH2_QEMU ARCH_BUILD
 tree=build$ARCH_SUFFIX
-[ ! -d build/.run.lock ] || {
-    echo 'probe-roots-mutation: another suite owns this tree' >&2; exit 1;
-}
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" probe-roots-mutation "$repo/tests/system/probe_roots_mutate.sh" "$@"
 mkdir -p build
 work=$(mktemp -d "$repo/build/probe-roots-proof.XXXXXX")
 source=rach2/sys/fs/ext2.c

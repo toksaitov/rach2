@@ -19,9 +19,8 @@ case "$mode" in
     --host|--guest) ;;
     *) echo 'rtc-mutation: use --host or --guest' >&2; exit 2 ;;
 esac
-[ ! -d build/.run.lock ] || {
-    echo 'rtc-mutation: another suite owns this tree' >&2; exit 1;
-}
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" rtc-mutation "$repo/tests/system/rtc_mutate.sh" "$@"
 mkdir -p build/clock-proof
 work=$(mktemp -d "$repo/build/clock-proof/mutation.XXXXXX")
 cp rach2/sys/clock.c "$work/source.saved"

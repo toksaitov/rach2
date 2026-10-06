@@ -244,8 +244,12 @@ trap 'SIGNALLED=1; finish; echo "run: result: interrupted by hup" >&2; exit 129'
 # person to stop. The takeover moves the old lock aside by rename, which
 # one taker at most can do. The pid alone does not say the owner is alive,
 # since pids are reused; the pid is the owner's while its group is the
-# recorded one.
+# recorded one. A fault script holds the tree through runlock_exec.sh, and a
+# run it starts finds the lock's owner among its ancestors (runlock.sh) and
+# runs under that hold, taking and releasing nothing; a fault script a run
+# starts finds the run's hold the same way.
 LOCK="$REPO/build/.run.lock"
+. "$REPO/tests/system/runlock.sh"
 lock_field() { sed -n "s/^$1 //p" "$LOCK/owner" 2>/dev/null; }
 lock_owner_alive() {
     opid=$(lock_field pid)
@@ -275,6 +279,10 @@ lock_survivors() {
 }
 lock_take() {
     mkdir -p "$REPO/build"
+    if runlock_held "$REPO"; then
+        echo "run: the tree is held for this run by its caller, pid $RACH2_TREE_HELD"
+        return 0
+    fi
     if [ "${RACH2_RUN_LOCK:-}" != "$$" ]; then
         RACH2_RUN_LOCK=$$; RACH2_RUN_GROUP=$$; RACH2_RUN_WORK=$WORK
         export RACH2_RUN_LOCK RACH2_RUN_GROUP RACH2_RUN_WORK
@@ -301,6 +309,8 @@ lock_take() {
     { echo "pid $$"; echo "pgid $OWN_PGID"; echo "work $WORK"; echo "since $(date '+%Y-%m-%d %H:%M:%S')"; echo "args $*"; } > "$LOCK/owner.new"
     mv "$LOCK/owner.new" "$LOCK/owner"
     LOCKED=1
+    RACH2_TREE_HELD=$$
+    export RACH2_TREE_HELD
 }
 LOCKED=""
 # shellcheck disable=SC2329 # run from finish, from the traps

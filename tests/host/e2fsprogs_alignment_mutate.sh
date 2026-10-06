@@ -6,6 +6,8 @@ set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" alignment-mutation "$repo/tests/host/e2fsprogs_alignment_mutate.sh" "$@"
 source=vendor/e2fsprogs/e2fsprogs-1.47.4/lib/ext2fs/unix_io.c
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-alignment.XXXXXX")
 child=

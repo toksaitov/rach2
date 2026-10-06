@@ -39,9 +39,8 @@ REPO=$repo
 RACH2_QEMU=$ARCH_QEMU
 export RACH2_QEMU ARCH_BUILD
 tree=build$ARCH_SUFFIX
-[ ! -d build/.run.lock ] || {
-    echo 'stackoverrun-proof: another suite owns this tree' >&2; exit 1;
-}
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" stackoverrun-proof "$repo/tests/system/stackoverrun_mutate.sh" "$@"
 [ -f "$tree"/images/test.krffs ] || {
     echo "stackoverrun-proof: no $tree/images/test.krffs; make test-image first" >&2; exit 1;
 }

@@ -14,10 +14,9 @@
 # and the programs rebuilt at the end must be the first ones, byte for byte,
 # so the full set run on this tree afterwards is what shows each restored
 # row passing; this script does not run the rows on the unmodified tree. It
-# holds the run lock, as tests/run does, so that no suite builds or boots the
-# tree while a fault is in it, and refuses to start while another run holds
-# it. Its owner file appears whole, by rename, since tests/run takes over a
-# lock whose owner file names no live process.
+# holds the tree through runlock.sh, as tests/run does, so that no suite
+# builds or boots the tree while a fault is in it, and refuses to start while
+# another run holds it.
 #
 # NAME arguments run those faults alone. -s K/N runs the faults whose place
 # in the list, counted from 0, is K modulo N, so that N copies of the tree can
@@ -52,16 +51,10 @@ case ${1:-} in
     -*) echo 'probe-faults: usage: probe_faults.sh [-s K/N] [NAME...] | --check' >&2; exit 2 ;;
 esac
 if [ -z "$check_only" ]; then
+    . "$repo/tests/system/runlock.sh"
+    runlock_hold "$repo" probe-faults "$repo/tests/system/probe_faults.sh" -s "$shard" "$@"
     mkdir -p build/tests
-    mkdir build/.run.lock 2>/dev/null || {
-        echo 'probe-faults: another run owns this tree' >&2; exit 1;
-    }
-    trap 'rm -rf build/.run.lock' EXIT
     work=$(mktemp -d "$repo/build/tests/probe-faults.XXXXXX")
-    printf 'pid %s\npgid %s\nargs probe_faults.sh %s\nsince %s\nwork %s\n' "$$" \
-        "$(ps -o pgid= -p $$ | tr -d ' ')" "$*" "$(date '+%Y-%m-%d %H:%M:%S')" "$work" \
-        > build/.run.lock/owner.new
-    mv build/.run.lock/owner.new build/.run.lock/owner
 fi
 
 # `faults select SHARD [NAME...]` prints the chosen faults, one a line, as
@@ -182,7 +175,6 @@ cleanup()
     if [ -n "$built" ]; then
         make -s rach2 test-image "ARCH=$RACH2_ARCH" >"$work/cleanup.build.log" 2>&1 </dev/null || :
     fi
-    rm -rf build/.run.lock
 }
 trap cleanup EXIT
 trap 'exit 129' HUP

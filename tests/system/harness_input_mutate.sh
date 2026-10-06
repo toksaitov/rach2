@@ -13,6 +13,8 @@ set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" harness-input-mutation "$repo/tests/system/harness_input_mutate.sh" "$@"
 mkdir -p build/tests
 work=$(mktemp -d "$repo/build/tests/harness-input-proof.XXXXXX")
 cp tests/system/runner/harness.c "$work/harness.c"

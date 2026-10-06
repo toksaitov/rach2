@@ -21,9 +21,8 @@ REPO=$repo
 . "$repo/mk/arch.sh"
 RACH2_QEMU=$ARCH_QEMU
 export RACH2_QEMU ARCH_BUILD
-[ ! -d build/.run.lock ] || {
-    echo 'init-refusal-mutation: another suite owns this tree' >&2; exit 1;
-}
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" init-refusal-mutation "$repo/tests/system/init_refusal_mutate.sh" "$@"
 mkdir -p build
 work=$(mktemp -d "$repo/build/init-refusal-proof.XXXXXX")
 tree="$work/tree"

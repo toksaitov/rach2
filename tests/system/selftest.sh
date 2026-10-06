@@ -61,6 +61,7 @@ check "detached work fails and is stopped before the verdict" 0 "$rc"
 # `prepare-all` that builds the fixture's product and its shared image.
 mkdir -p "$WORK/tests/system/runner" "$WORK/tools/setup"
 cp "$REPO/tests/run" "$WORK/tests/run"
+cp "$REPO/tests/system/runlock.sh" "$REPO/tests/system/runlock_exec.sh" "$WORK/tests/system/"
 cp "$REPO/tests/system/runner/runutil.c" "$WORK/tests/system/runner/runutil.c"
 cc -O2 -Wall -Wextra -o "$WORK/runutil" "$REPO/tests/system/runner/runutil.c" || exit 1
 SELFTEST_UTIL=$WORK/runutil
@@ -927,5 +928,53 @@ out=$(run needsprod1 needsprod2); rc=$?
 check "two suites that name one product pass" 0 "$rc"
 check "the product was built once" 1 "$(wc -l < "$WORK/product.count" | tr -d ' ')"
 check "and both ran after it" 2 "$(wc -l < "$WORK/after-product" | tr -d ' ')"
+# A fault script holds the tree through runlock_exec.sh, as a run holds it:
+# a run started beside the script is refused with the script named, a run
+# the script starts goes on under its hold and leaves the lock alone, a run
+# that only claims the hold is refused, and the lock goes with the script,
+# also when the script is stopped with TERM.
+cat > "$WORK/holder.sh" <<'HOLDER'
+#!/bin/sh
+repo=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+cd "$repo" || exit 1
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" holder "$repo/holder.sh" "$@"
+case $1 in
+    inner) sh tests/run passing; echo "inner status $?" ;;
+    wait) touch holder-in; while [ ! -f holder-go ]; do sleep 0.1; done ;;
+esac
+HOLDER
+rm -rf "$WORK/build/.run.lock" "$WORK/holder-in" "$WORK/holder-go"
+out=$(cd "$WORK" && PATH="$WORK/bin:$PATH" RACH2_WORKERS=2 sh holder.sh inner 2>&1); rc=$?
+check "a run a lock holder starts goes on under its hold" 1 \
+    "$(printf '%s\n' "$out" | grep -c 'held for this run by its caller')"
+check "and passes" 1 "$(printf '%s\n' "$out" | grep -c '^inner status 0$')"
+check "and the holder exits as its script does" 0 "$rc"
+check "and the lock goes with the holder" 0 "$([ -e "$WORK/build/.run.lock" ] && echo 1 || echo 0)"
+( cd "$WORK" && sh holder.sh wait > "$WORK/holder.out" 2>&1 ) &
+holdrun=$!
+i=0
+while [ ! -f "$WORK/holder-in" ] && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+holder=$(sed -n 's/^pid //p' "$WORK/build/.run.lock/owner" 2>/dev/null)
+out=$(run passing); rc=$?
+check "a run beside a lock holder is refused" 1 "$rc"
+check "and the holder is named" 1 "$(printf '%s\n' "$out" | grep -c "another run holds this tree: $holder, holder ")"
+out=$(RACH2_TREE_HELD=$holder run passing); rc=$?
+check "a run that names the holder but is not its descendant is refused" 1 "$rc"
+touch "$WORK/holder-go"
+wait "$holdrun"
+check "and the lock goes when the holder ends" 0 "$([ -e "$WORK/build/.run.lock" ] && echo 1 || echo 0)"
+rm -f "$WORK/holder-in" "$WORK/holder-go"
+( cd "$WORK" && sh holder.sh wait > "$WORK/holder.out" 2>&1 ) &
+holdrun=$!
+i=0
+while [ ! -f "$WORK/holder-in" ] && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+holder=$(sed -n 's/^pid //p' "$WORK/build/.run.lock/owner" 2>/dev/null)
+kill -TERM "$holder" 2>/dev/null
+wait "$holdrun"; rc=$?
+check "a holder stopped with TERM exits as its stopped script does" 143 "$rc"
+check "and the lock goes with it" 0 "$([ -e "$WORK/build/.run.lock" ] && echo 1 || echo 0)"
+rm -f "$WORK/holder-in" "$WORK/holder-go"
+
 echo "selftest: $((total - fails)) of $total checks passed"
 [ "$fails" -eq 0 ] || exit 1

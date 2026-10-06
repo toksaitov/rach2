@@ -11,10 +11,8 @@ REPO=$repo
 RACH2_QEMU=$ARCH_QEMU
 export RACH2_QEMU ARCH_BUILD
 tree=build$ARCH_SUFFIX
-[ ! -d build/.run.lock ] || {
-    echo 'metal-fat-mutation: another suite owns this tree' >&2
-    exit 1
-}
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" metal-fat-mutation "$repo/tests/system/metal_fat_mutate.sh" "$@"
 mkdir -p build
 work=$(mktemp -d "$repo/build/metal-fat-proof.XXXXXX")
 source=rach2/sys/fs/bcache.c

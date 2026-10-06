@@ -7,9 +7,8 @@ unset ARCH MAKEFLAGS MFLAGS
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
-[ ! -d build/.run.lock ] || {
-    echo "sigcontext-mutation: another suite owns this tree" >&2; exit 1;
-}
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" sigcontext-mutation "$repo/tests/system/sigcontext_mutate.sh" "$@"
 mkdir -p build
 work=$(mktemp -d "$repo/build/sigcontext-proof.XXXXXX")
 source=rach2/sys/arch/i686/sigframe.c

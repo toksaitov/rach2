@@ -13,9 +13,8 @@ RACH2_QEMU=$ARCH_QEMU
 export RACH2_QEMU
 kernel=build$ARCH_SUFFIX/rach2/kernel
 probe=build$ARCH_SUFFIX/tests/ext2probe
-[ ! -d build/.run.lock ] || {
-    echo "ext2-batch-mutation: another suite owns this tree" >&2; exit 1;
-}
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" ext2-batch-mutation "$repo/tests/system/ext2_batch_mutate.sh" "$@"
 mkdir -p build
 work=$(mktemp -d "$repo/build/ext2-batch-proof.XXXXXX")
 source=rach2/sys/fs/ext2.c

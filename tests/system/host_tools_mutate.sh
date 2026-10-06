@@ -3,6 +3,8 @@
 set -eu
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$REPO"
+. "$REPO/tests/system/runlock.sh"
+runlock_hold "$REPO" host-tools-proof "$REPO/tests/system/host_tools_mutate.sh" "$@"
 mkdir -p build
 WORK=$(mktemp -d "$REPO/build/host-tools-proof.XXXXXX")
 source_file=

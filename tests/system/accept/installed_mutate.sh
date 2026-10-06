@@ -10,10 +10,8 @@ REPO=$repo
 RACH2_QEMU=$ARCH_QEMU
 export ARCH_BUILD RACH2_QEMU
 tree=build$ARCH_SUFFIX
-[ ! -d build/.run.lock ] || {
-    echo 'metal-installed-mutation: another suite owns this tree' >&2
-    exit 1
-}
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" metal-installed-mutation "$repo/tests/system/accept/installed_mutate.sh" "$@"
 mkdir -p build
 work=$(mktemp -d "$repo/build/metal-installed-proof.XXXXXX")
 accept=tests/system/accept/metal_accept.sh

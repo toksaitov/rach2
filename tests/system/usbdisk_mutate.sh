@@ -4,6 +4,8 @@ set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" usbdisk-mutation "$repo/tests/system/usbdisk_mutate.sh" "$@"
 # The architecture, from ARCH as mk/arch.sh reads it: its compiler, its text
 # address, its build tree and its emulator.
 RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}

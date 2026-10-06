@@ -42,9 +42,8 @@ for fault do
         *) echo "noentropy-mutation: unknown fault: $fault" >&2; exit 2 ;;
     esac
 done
-[ ! -d build/.run.lock ] || {
-    echo 'noentropy-mutation: another suite owns this tree' >&2; exit 1;
-}
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" noentropy-mutation "$repo/tests/system/noentropy_mutate.sh" "$@"
 mkdir -p build
 work=$(mktemp -d "$repo/build/noentropy-proof.XXXXXX")
 for source in rach2/sys/fs/devfs.c rach2/sys/syscall.c; do

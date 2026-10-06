@@ -38,9 +38,8 @@ for fault do
         *) echo "doom-mutation: unknown fault: $fault" >&2; exit 2 ;;
     esac
 done
-[ ! -d build/.run.lock ] || {
-    echo 'doom-mutation: another suite owns this tree' >&2; exit 1;
-}
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" doom-mutation "$repo/tests/system/doom_mutate.sh" "$@"
 [ -f ports/doom/doom1.wad ] || {
     echo 'doom-mutation: ports/doom/doom1.wad is absent; the suite needs the WAD' >&2
     exit 1

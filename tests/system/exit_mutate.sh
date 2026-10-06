@@ -10,9 +10,8 @@ REPO=$repo
 RACH2_QEMU=$ARCH_QEMU
 export RACH2_QEMU ARCH_BUILD
 tree=build$ARCH_SUFFIX
-[ ! -d build/.run.lock ] || {
-    echo 'exit-integration: another suite owns this tree' >&2; exit 1;
-}
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" exit-integration "$repo/tests/system/exit_mutate.sh" "$@"
 mkdir -p build
 sources='rach2/sys/syscall_proc.c rach2/kernel.c rach2/sys/proc/exit.c'
 if [ "$#" -eq 0 ]; then

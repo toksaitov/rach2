@@ -13,29 +13,14 @@
 # without forcing it must fail delayed; ignoring it in signal_pending must
 # fail delayed-poll. Elsewhere the script says those rows did not run.
 # The original kernel is restored, rebuilt and required to match and pass at
-# the end. The script holds the record lock on build/.run.guard and the run
-# lock, as tests/run does, so no suite builds or boots the tree and no other
-# proof saves a source while a fault is in it.
+# the end. The script holds the tree through runlock.sh, as tests/run does,
+# so no suite builds or boots the tree and no other proof saves a source
+# while a fault is in it.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
-mkdir -p build
-if [ "${RACH2_DEBUG_LOCK:-}" != "$$" ]; then
-    helper=$(mktemp -d "${TMPDIR:-/tmp}/rach2-debug.XXXXXX")
-    cc -O2 -Wall -Wextra -o "$helper/runutil" tests/system/runner/runutil.c || {
-        rm -rf "$helper"; exit 1;
-    }
-    RACH2_DEBUG_LOCK=$$; RACH2_RUN_WORK=$helper
-    export RACH2_DEBUG_LOCK RACH2_RUN_WORK
-    exec "$helper/runutil" lock build/.run.guard build/.run.lock/owner \
-        sh "$repo/tests/system/ptrace_debug_mutate.sh" "$@"
-fi
-rm -rf "$RACH2_RUN_WORK"
-unset RACH2_DEBUG_LOCK RACH2_RUN_WORK
-mkdir build/.run.lock 2>/dev/null || {
-    echo 'ptrace-debug: another run owns this tree' >&2; exit 1;
-}
-trap 'rm -rf build/.run.lock' EXIT
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" ptrace-debug "$repo/tests/system/ptrace_debug_mutate.sh" "$@"
 RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
 # shellcheck disable=SC2034
 REPO=$repo
@@ -45,10 +30,6 @@ RACH2_QEMU=$ARCH_QEMU
 export RACH2_QEMU
 mkdir -p build/tests
 work=$(mktemp -d "$repo/build/tests/ptrace-debug.XXXXXX")
-printf 'pid %s\npgid %s\nargs ptrace_debug_mutate.sh\nsince %s\nwork %s\n' "$$" \
-    "$(ps -o pgid= -p $$ | tr -d ' ')" "$(date '+%Y-%m-%d %H:%M:%S')" "$work" \
-    > build/.run.lock/owner.new
-mv build/.run.lock/owner.new build/.run.lock/owner
 sources='rach2/sys/syscall.c rach2/sys/syscall_proc.c rach2/sys/arch/x86/debugreg.c
     rach2/sys/arch/x86_64/idt.c rach2/sys/arch/x86_64/isr_handler.s'
 for file in $sources; do
@@ -91,7 +72,6 @@ cleanup()
         restore
         rebuild >"$work/cleanup.build.log" 2>&1
     fi
-    rm -rf build/.run.lock
 }
 trap cleanup EXIT
 trap 'exit 129' HUP
