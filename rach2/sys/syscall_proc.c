@@ -3395,8 +3395,9 @@ void signal_force(process_t *target, int signo, const struct k_siginfo *info)
     signal_post_thread(target, signo, info);
 }
 
-/** Post deferred debug hits before reading the thread's and process's
+/** Post deferred kernel debug hits before reading the thread's and process's
  * pending signals, so a signal wait can dequeue them with their siginfo.
+ * A deferred user hit stays out of these sets until user return forces it.
  * Called on the thread's stack with the big lock held. Read with interrupts
  * off, since a 64-bit read is two loads on i686. */
 static uint64_t sig_pending_now(void)
@@ -3427,7 +3428,9 @@ static void sender_info(struct k_siginfo *info, int32_t code, const process_t *t
  * PTRACE_INTERRUPT, which, as a stop signal would, ends the wait so the stop
  * is taken on the way back to user mode (`ptrace_return_stops`). Blocking
  * syscall loops call this on the thread's stack with the big lock held.
- * Post a deferred hardware hit before testing its mask and disposition.
+ * Post a deferred kernel hit before testing its mask and disposition. A
+ * deferred user hit interrupts regardless of either, but stays deferred
+ * until user return forces it.
  * Posting can make this thread ready and clear its wakeup_tick; a caller
  * that keeps waiting must rearm its deadline. No wait queue is changed.
  * The x86-64 debug interrupt stack calls only debugreg_defer; a user debug
@@ -3436,6 +3439,7 @@ int signal_pending(void)
 {
     uint64_t deliverable;
     uint32_t flags;
+    int debug_pending;
     int signo;
 
     if (!current_proc) {
@@ -3446,6 +3450,7 @@ int signal_pending(void)
     }
     flags = sig_irq_save();
     deliverable = sig_pending_now() & ~current_proc->sig_blocked;
+    debug_pending = arch_debug_pending();
     sig_irq_restore(flags);
     /* Only a signal that would ACT interrupts a wait: a caught handler, a
      * default terminate or a default stop. A pending signal that is ignored
@@ -3465,7 +3470,7 @@ int signal_pending(void)
         }
         return 1; /* caught, or default terminate/stop: it acts, so it interrupts */
     }
-    return 0;
+    return debug_pending;
 }
 
 /**

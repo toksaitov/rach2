@@ -138,7 +138,7 @@ void debugreg_defer(void)
 /** Defer a user watchpoint when pc is the first instruction of system-call
  * entry: isr128 on i686, syscall_entry on x86-64. Its signal must be forced,
  * as for a user-mode debug exception, even when the thread blocks SIGTRAP.
- * Keep that origin across switches until the syscall's frame is complete.
+ * Keep that origin across switches until the syscall returns to user mode.
  * Return 1 for that entry, or 0 without reading DR6 for any other address. */
 int debugreg_defer_user(uintptr_t pc)
 {
@@ -155,12 +155,12 @@ int debugreg_defer_user(uintptr_t pc)
     return 1;
 }
 
-/** Post a deferred kernel debug exception before a pending-signal check or
- * user return, on the thread's stack with the big lock held and interrupts
- * off. A switch kept its status in the outgoing thread so it follows that
- * thread to another processor. The syscall exit reports a kernel single
- * step; only a hardware hit with saved enables posts a signal here, as in
- * i686's kernel debug handler. Both deferred copies are cleared even when
+/** Post a deferred debug exception at user return, or a kernel hit before
+ * a pending-signal check, on the thread's stack with the big lock held and
+ * interrupts off. A switch kept its status in the outgoing thread so it
+ * follows that thread to another processor. The syscall exit reports kernel
+ * single steps; only a hardware hit with saved enables posts a signal here,
+ * as in i686's kernel debug handler. Both deferred copies are cleared even when
  * a detach made the hit stale. A hit delayed from user code forces SIGTRAP;
  * a kernel copy's hit respects the mask, so a signal wait can take it. */
 void debugreg_deliver(void)
@@ -191,13 +191,27 @@ void debugreg_deliver(void)
     }
 }
 
-/** Post deferred hits for shared signal code through the user-return path.
- * The caller runs on the thread's stack with the big lock held and
- * interrupts off. Clearing both deferred copies keeps a dequeued hit from
- * being posted again at user return. */
+/** Whether a deferred user hit must interrupt a wait regardless of the
+ * signal mask or disposition. Leave its status for user-return delivery;
+ * a stale hit no longer forces a signal. The caller holds the big lock
+ * with interrupts off. */
+int arch_debug_pending(void)
+{
+    if (!current_proc || !(current_proc->debugreg[7] & DR7_ENABLES)) {
+        return 0;
+    }
+    return ((deferred[arch_cpu_id()] | current_proc->debug_pending) & DEFER_USER) != 0;
+}
+
+/** Post kernel hits before shared signal code reads the pending sets.
+ * Keep a live user hit deferred until user return, so a signal wait cannot
+ * take it or restore a blocked mask after it was forced. The caller runs
+ * on the thread's stack with the big lock held and interrupts off. */
 void arch_debug_deliver(void)
 {
-    debugreg_deliver();
+    if (!arch_debug_pending()) {
+        debugreg_deliver();
+    }
 }
 
 /** Reload enables cleared by a deferred exception, or by a tracer that

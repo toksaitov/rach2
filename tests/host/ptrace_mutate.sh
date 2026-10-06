@@ -15,7 +15,7 @@ fi
 kind=${1:-}
 case "$kind" in
     ptrace) source=proc/ptrace.c; faults='regset listen return-stops return-kill options seize step' ;;
-    debugreg) source=arch/x86/debugreg.c; faults='switch stale migration delivery kernel-step pending pending-saved pending-stale pending-step dequeue dequeue-repeat user-force user-entry user-origin user-status' ;;
+    debugreg) source=arch/x86/debugreg.c; faults='switch stale migration delivery kernel-step pending pending-saved pending-stale pending-step dequeue dequeue-repeat user-force user-entry user-origin user-status user-wait-post user-wait-cpu user-wait-saved user-wait-stale user-wait-kernel user-wait-no-thread' ;;
     *) echo 'ptrace-proof: usage: ptrace_mutate.sh [ptrace|debugreg [--check]]' >&2; exit 2 ;;
 esac
 shift
@@ -135,6 +135,22 @@ changes = {
                     'exact gate entry forces blocked trap'),
     'user-status': ('    info.code = debugreg_code(dr6 & ~DEFER_USER);', '    info.code = debugreg_code(dr6);',
                   'delayed user hit keeps status and syscall frame'),
+    'user-wait-post': ('    if (!arch_debug_pending()) {', '    if (1) {',
+                       'pending check keeps delayed user hit out of signal waits'),
+    'user-wait-cpu': ('    return ((deferred[arch_cpu_id()] | current_proc->debug_pending) & DEFER_USER) != 0;',
+                      '    return (current_proc->debug_pending & DEFER_USER) != 0;',
+                      'delayed user hit interrupts wait regardless of mask and disposition'),
+    'user-wait-saved': ('    return ((deferred[arch_cpu_id()] | current_proc->debug_pending) & DEFER_USER) != 0;',
+                        '    return (deferred[arch_cpu_id()] & DEFER_USER) != 0;',
+                        'delayed user hit interrupts wait regardless of mask and disposition'),
+    'user-wait-stale': ('    if (!current_proc || !(current_proc->debugreg[7] & DR7_ENABLES)) {',
+                        '    if (!current_proc) {', 'detached user hit does not interrupt wait'),
+    'user-wait-kernel': ('    return ((deferred[arch_cpu_id()] | current_proc->debug_pending) & DEFER_USER) != 0;',
+                         '    return (deferred[arch_cpu_id()] | current_proc->debug_pending) != 0;',
+                         'kernel hit does not force a wait interruption'),
+    'user-wait-no-thread': ('    if (!current_proc || !(current_proc->debugreg[7] & DR7_ENABLES)) {\n        return 0;',
+                            '    if (!current_proc || !(current_proc->debugreg[7] & DR7_ENABLES)) {\n        return 1;',
+                            'no current thread means no forced wait interruption'),
     'dequeue-repeat': ('    current_proc->debug_pending = 0;',
                        '    current_proc->debug_pending |= 0;',
                        'dequeued hit is not posted again at user return'),

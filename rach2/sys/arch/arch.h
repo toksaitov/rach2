@@ -219,8 +219,14 @@ long arch_regset_set(struct process *t, unsigned long type, const uint8_t *in, u
  * enables when it has none. */
 void arch_debug_switch(struct process *old, const struct process *next);
 
-/** Post a deferred debug signal in process context, on the thread's stack.
+/** Whether a deferred user debug hit must interrupt a wait regardless of
+ * its signal mask or disposition, without posting or consuming the hit.
  * The caller holds the big lock with interrupts off. */
+int arch_debug_pending(void);
+
+/** Post a deferred kernel debug signal in process context, on the thread's
+ * stack, keeping a user hit for forced delivery at user return. The caller
+ * holds the big lock with interrupts off. */
 void arch_debug_deliver(void);
 
 /** The bytes of the floating-point notes of one thread in a core file. */

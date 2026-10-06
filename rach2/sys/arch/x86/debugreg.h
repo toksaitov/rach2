@@ -41,11 +41,12 @@ void debugreg_defer(void);
 
 /** Defer a user hit if pc is the first instruction of system-call entry.
  * Return 1 for that entry, or 0 without changing the debug state otherwise.
- * Delivery forces its SIGTRAP once the syscall's user frame is complete. */
+ * Delivery forces its SIGTRAP at user return. */
 int debugreg_defer_user(uintptr_t pc);
 
-/** Post this thread's deferred hit once, before a pending-signal check or
- * user return, on its stack with the big lock held and interrupts off. */
+/** Post this thread's deferred hit once at user return, forcing a user hit.
+ * Pending checks use arch_debug_deliver to post kernel hits alone. The
+ * caller runs on its stack with the big lock held and interrupts off. */
 void debugreg_deliver(void);
 
 /** Restore the current thread's debug enables before returning to user mode. */
