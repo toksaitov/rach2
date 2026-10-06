@@ -96,7 +96,7 @@ typedef struct user_fpregs_struct fxregs_t;
 typedef struct user_fpxregs_struct fxregs_t;
 #endif
 
-static volatile int target = 1234;
+static volatile long target = 1234;
 
 static int fail(const char *what)
 {
