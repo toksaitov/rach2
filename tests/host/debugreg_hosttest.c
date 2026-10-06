@@ -9,7 +9,8 @@
  * must clear its hardware enables on a switch or suppress a stale hit. A
  * kernel hit is deferred without posting a signal, saved on a switch, and
  * posted before its thread checks pending signals or returns, including on
- * another processor.
+ * another processor. A user hit delayed across system-call entry must be
+ * deliverable at the syscall return even when SIGTRAP was blocked.
  */
 #include "arch/x86/debugreg.h"
 #include "proc/percpu.h"
@@ -22,12 +23,17 @@ struct percpu cpu_table[NR_CPUS];
 static unsigned long hardware[NR_CPUS][8];
 static process_t tracee, other;
 static isr_params_t frame;
-static int failures, signals;
+static struct k_sigaction actions[KSIG_MAX + 1];
+static int failures, signals, forced;
 static int32_t signal_code;
 
 #define DR_READ(n, v)  ((v) = hardware[host_cpu][(strtoul(n, 0, 16) - 0xc0) / 8])
 #define DR_WRITE(n, v) (hardware[host_cpu][(strtoul(n, 0, 16) - 0xc0) / 8] = (v))
 #include "arch/x86/debugreg.c"
+
+/** Supply the i686 gate's address for the shared entry comparison. */
+void isr128(void)
+{}
 
 /** Record a failed row without ending the other independent rows. */
 static void check(int ok, const char *row)
@@ -58,19 +64,36 @@ void signal_post_thread(process_t *t, int signo, const struct k_siginfo *info)
     signals++;
 }
 
+/** Model signal_force's mask and disposition changes before posting. */
+void signal_force(process_t *t, int signo, const struct k_siginfo *info)
+{
+    struct k_sigaction *sa = &t->sigacts[signo];
+
+    if (sa->handler == KSIG_IGN || (t->sig_blocked & KSIG_BIT(signo))) {
+        sa->handler = KSIG_DFL;
+        t->sig_blocked &= ~KSIG_BIT(signo);
+    }
+    forced++;
+    signal_post_thread(t, signo, info);
+}
+
 /** Load one write watchpoint on processor 1 and clear earlier results. */
 static void setup(void)
 {
     k_memset(&tracee, 0, sizeof(tracee));
     k_memset(&other, 0, sizeof(other));
+    k_memset(&frame, 0, sizeof(frame));
+    k_memset(actions, 0, sizeof(actions));
     k_memset(hardware, 0, sizeof(hardware));
     k_memset((void *)deferred, 0, sizeof(deferred));
     k_memset((void *)dr7_live, 0, sizeof(dr7_live));
     host_cpu = 1;
     cpu_table[host_cpu].current = &tracee;
+    tracee.sigacts = actions;
     tracee.debugreg[0] = USER_ADDR_MIN;
     tracee.debugreg[7] = 0x10001;
     signals = 0;
+    forced = 0;
     arch_debug_switch(NULL, &tracee);
     check(hardware[1][0] == USER_ADDR_MIN && hardware[1][7] == 0x10401, "loaded registers");
 }
@@ -164,6 +187,90 @@ static void dequeue_hits(void)
     }
 }
 
+/** A delayed user hit stops before the next user instruction even with
+ * SIGTRAP blocked, as musl's raise leaves it when a tracer redirects the PC.
+ * Migration keeps that origin, delivery consumes it, and detach cancels it.
+ * The existing dequeue rows check that kernel-copy hits keep their mask. */
+static void delayed_user_hits(void)
+{
+    int migrated;
+
+    for (migrated = 0; migrated <= 1; migrated++) {
+        setup();
+        tracee.sig_blocked = KSIG_BIT(SIGTRAP) | KSIG_BIT(SIGUSR1);
+        actions[SIGTRAP].handler = KSIG_IGN;
+        FRAME_PC(&frame) = USER_ADDR_MIN + 32;
+        SC_RET(&frame) = 2;
+        hardware[1][6] = 1;
+        debugreg_defer_user((uintptr_t)&isr128);
+        check(signals == 0 && hardware[1][6] == 0 && (hardware[1][7] & 0xff) == 0,
+              "delayed user hit only defers and disables on interrupt stack");
+        if (migrated) {
+            arch_debug_switch(&tracee, &other);
+            cpu_table[1].current = &other;
+            debugreg_deliver();
+            check(signals == 0, "next thread does not force delayed user hit");
+            host_cpu = 0;
+            cpu_table[0].current = &tracee;
+        }
+        debugreg_deliver();
+        check(forced == 1 && signals == 1 &&
+                  (tracee.sig_pending & ~tracee.sig_blocked) == KSIG_BIT(SIGTRAP) &&
+                  tracee.sig_blocked == KSIG_BIT(SIGUSR1) && actions[SIGTRAP].handler == KSIG_DFL,
+              "delayed user hit is deliverable at syscall return");
+        check(tracee.debugreg[6] == 1 && tracee.sig_info[SIGTRAP].code == TRAP_HWBKPT &&
+                  tracee.sig_info[SIGTRAP].addr == USER_ADDR_MIN + 32 &&
+                  FRAME_PC(&frame) == USER_ADDR_MIN + 32 && SC_RET(&frame) == 2,
+              "delayed user hit keeps status and syscall frame");
+        tracee.sig_pending = 0;
+        debugreg_resume();
+        debugreg_deliver();
+        check(forced == 1 && signals == 1 && tracee.sig_pending == 0,
+              "delayed user hit is forced only once");
+        tracee.sig_blocked = KSIG_BIT(SIGTRAP);
+        hardware[host_cpu][6] = 1;
+        debugreg_defer();
+        debugreg_deliver();
+        check(forced == 1 && tracee.sig_blocked == KSIG_BIT(SIGTRAP),
+              "later kernel hit does not inherit user origin");
+    }
+
+    setup();
+    tracee.sig_blocked = KSIG_BIT(SIGTRAP);
+    hardware[1][6] = 1;
+    debugreg_defer_user((uintptr_t)&isr128);
+    detach();
+    debugreg_deliver();
+    check(forced == 0 && signals == 0 && tracee.sig_blocked == KSIG_BIT(SIGTRAP),
+          "detach cancels delayed user hit without changing mask");
+
+    setup();
+    hardware[1][6] = 0x4000;
+    debugreg_defer_user((uintptr_t)&isr128);
+    debugreg_deliver();
+    check(forced == 0 && signals == 0, "syscall entry single step does not force a second signal");
+}
+
+/** Only the gate's first instruction identifies a delayed user hit.
+ * An adjacent address must leave DR6 for the ordinary kernel-hit path. */
+static void syscall_entry_address(void)
+{
+    uintptr_t entry = (uintptr_t)&isr128;
+
+    setup();
+    tracee.sig_blocked = KSIG_BIT(SIGTRAP);
+    hardware[1][6] = 1;
+    check(debugreg_defer_user(entry - 1) == 0 && debugreg_defer_user(entry + 1) == 0 &&
+              hardware[1][6] == 1 && hardware[1][7] == 0x10401 && deferred[1] == 0 && signals == 0,
+          "adjacent gate addresses leave kernel hit unchanged");
+    check(debugreg_defer_user(entry) == 1 && hardware[1][6] == 0 && (hardware[1][7] & 0xff) == 0 &&
+              signals == 0,
+          "exact gate entry defers user hit");
+    debugreg_deliver();
+    check(forced == 1 && signals == 1 && tracee.sig_blocked == 0,
+          "exact gate entry forces blocked trap");
+}
+
 /** Exercise the two stale-register paths and deferred exception ownership. */
 int main(void)
 {
@@ -218,6 +325,8 @@ int main(void)
     check(signals == 0, "kernel single step does not duplicate syscall exit stop");
     pending_hits();
     dequeue_hits();
+    delayed_user_hits();
+    syscall_entry_address();
     printf("debugreg-hosttest: result: %s\n", failures ? "fail" : "pass");
     return failures != 0;
 }

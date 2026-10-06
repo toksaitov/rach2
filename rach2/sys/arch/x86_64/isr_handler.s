@@ -372,7 +372,12 @@ debug_entry:
     call x86_64_route
     jmp isr_return
 .debug_from_kernel:
+    movq F_RIP(%rsp), %rdi
+    call debugreg_defer_user
+    testl %eax, %eax
+    jnz .debug_deferred
     call debugreg_defer
+.debug_deferred:
     andq $-257, F_RFLAGS(%rsp)
     testl %ebx, %ebx
     jz .paranoid_restore

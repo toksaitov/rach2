@@ -218,21 +218,24 @@ static int _exception_signal(const isr_params_t *params, struct k_siginfo *info)
  * forces one: a handler the process installed runs, a tracer takes the stop,
  * and otherwise the process dies and the cause is printed. A fault in kernel
  * mode has no safe recovery and panics.
+ *
+ * A debug exception at i686's system-call gate entry is deferred until the
+ * syscall has built its user frame, as on x86-64. Other kernel data hits
+ * post SIGTRAP for user return and let the memory access go on.
  */
 static void _exception_handler(isr_params_t *params)
 {
     const char *name = params->vector < 32 ? _exception_names[params->vector] : "unknown";
 
-    /* A data breakpoint a tracer set on a user address fires when the
-     * kernel touches it too, in a copy to or from the process: the thread
-     * gets its SIGTRAP on the way back to user mode, and the access goes
-     * on, since a data breakpoint traps after it. */
     if (params->vector == 1 && (params->cs & 3) != 3 && current_proc) {
         struct k_siginfo info;
 
+        FRAME_FLAGS(params) &= ~0x100u;
+        if (debugreg_defer_user(FRAME_PC(params))) {
+            return;
+        }
         k_memset(&info, 0, sizeof(info));
         info.code = debugreg_status();
-        FRAME_FLAGS(params) &= ~0x100u;
         if (info.code == TRAP_HWBKPT) {
             signal_post_thread(current_proc, SIGTRAP, &info);
         }

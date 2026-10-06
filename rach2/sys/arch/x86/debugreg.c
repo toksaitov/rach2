@@ -11,6 +11,15 @@
 #include "../../lib/kstring.h"
 #include "../../proc/percpu.h"
 
+/* The first instruction after the user's system-call instruction. */
+#if defined(__x86_64__) && !defined(RACH2_HOSTTEST)
+extern void syscall_entry(void);
+#define DEBUG_SYSCALL_ENTRY syscall_entry
+#else
+extern void isr128(void);
+#define DEBUG_SYSCALL_ENTRY isr128
+#endif
+
 /* DR7: the enable bits of the four breakpoints, and the bits a tracer may
  * write: those, LE and GE, bit 10, which reads as one, and the conditions
  * and lengths. The rest are GD and reserved bits; on x86-64 a one in bits
@@ -21,6 +30,10 @@
 /* DR6: the four breakpoints' bits and the single-step bit. */
 #define DR6_HITS 0x0000000Fu
 #define DR6_BS   0x00004000u
+
+/* A deferred hit from user code, delayed across a system call. This software
+ * bit follows DR6 through a switch, but is never exposed as debug status. */
+#define DEFER_USER 0x80000000ul
 
 /*
  * The debug registers, as bytes: TinyCC's assembler has no mnemonic for
@@ -122,13 +135,34 @@ void debugreg_defer(void)
     deferred[cpu] |= dr6 & (DR6_HITS | DR6_BS);
 }
 
+/** Defer a user watchpoint when pc is the first instruction of system-call
+ * entry: isr128 on i686, syscall_entry on x86-64. Its signal must be forced,
+ * as for a user-mode debug exception, even when the thread blocks SIGTRAP.
+ * Keep that origin across switches until the syscall's frame is complete.
+ * Return 1 for that entry, or 0 without reading DR6 for any other address. */
+int debugreg_defer_user(uintptr_t pc)
+{
+    unsigned int cpu;
+
+    if (pc != (uintptr_t)&DEBUG_SYSCALL_ENTRY) {
+        return 0;
+    }
+    cpu = arch_cpu_id();
+    debugreg_defer();
+    if (deferred[cpu] & DR6_HITS) {
+        deferred[cpu] |= DEFER_USER;
+    }
+    return 1;
+}
+
 /** Post a deferred kernel debug exception before a pending-signal check or
  * user return, on the thread's stack with the big lock held and interrupts
  * off. A switch kept its status in the outgoing thread so it follows that
  * thread to another processor. The syscall exit reports a kernel single
  * step; only a hardware hit with saved enables posts a signal here, as in
  * i686's kernel debug handler. Both deferred copies are cleared even when
- * a detach made the hit stale. */
+ * a detach made the hit stale. A hit delayed from user code forces SIGTRAP;
+ * a kernel copy's hit respects the mask, so a signal wait can take it. */
 void debugreg_deliver(void)
 {
     unsigned int cpu = arch_cpu_id();
@@ -146,10 +180,14 @@ void debugreg_deliver(void)
         return;
     }
     k_memset(&info, 0, sizeof(info));
-    info.code = debugreg_code(dr6);
+    info.code = debugreg_code(dr6 & ~DEFER_USER);
     if (info.code == TRAP_HWBKPT && (current_proc->debugreg[7] & DR7_ENABLES)) {
         info.addr = FRAME_PC(proc_user_frame(current_proc));
-        signal_post_thread(current_proc, SIGTRAP, &info);
+        if (dr6 & DEFER_USER) {
+            signal_force(current_proc, SIGTRAP, &info);
+        } else {
+            signal_post_thread(current_proc, SIGTRAP, &info);
+        }
     }
 }
 

@@ -39,6 +39,11 @@ int32_t debugreg_status(void);
 /** Defer a kernel debug exception on this processor, without taking a lock. */
 void debugreg_defer(void);
 
+/** Defer a user hit if pc is the first instruction of system-call entry.
+ * Return 1 for that entry, or 0 without changing the debug state otherwise.
+ * Delivery forces its SIGTRAP once the syscall's user frame is complete. */
+int debugreg_defer_user(uintptr_t pc);
+
 /** Post this thread's deferred hit once, before a pending-signal check or
  * user return, on its stack with the big lock held and interrupts off. */
 void debugreg_deliver(void);
