@@ -79,11 +79,11 @@ source = path.read_text()
 before = '''        if (current_proc->state == PROC_BLOCKED) {
             idle_wait_irq_off();
         }
-        for (i = 0; i < nfds; i++) {
+        for (i = 0; i < n; i++) {
             wq_poll_remove(wqs[i], &recs[i]);
         }
 '''
-after = '''        for (i = 0; i < nfds; i++) {
+after = '''        for (i = 0; i < n; i++) {
             wq_poll_remove(wqs[i], &recs[i]);
         }
         if (current_proc->state == PROC_BLOCKED) {
