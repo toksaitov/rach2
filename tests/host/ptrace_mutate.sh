@@ -147,6 +147,10 @@ fi
 . "$repo/tests/system/runlock.sh"
 runlock_hold "$repo" ptrace-proof "$repo/tests/host/ptrace_mutate.sh" "$@"
 if [ "$#" -eq 0 ]; then
+    # A group signal reaches the child too; these run once it has restored.
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
     sh "$repo/tests/host/ptrace_mutate.sh" ptrace
     sh "$repo/tests/host/ptrace_mutate.sh" debugreg
     exit 0

@@ -9,8 +9,10 @@
 # signal sent to this process's group, as a terminal's interrupt is, reaches
 # the script once, through this process, and not again while its trap
 # restores the sources: a TERM, HUP or INT here is passed to the script's
-# group as TERM. The directory goes when the script has ended, and the exit
-# status is the script's. Its owner file says `held`, which tests/run never
+# group as TERM, once. The directory goes when the script has ended, and the
+# exit status is the script's: a wait a signal interrupts is waited again,
+# and a wait that had already ended with the script, the next returning 127,
+# keeps the status it had. Its owner file says `held`, which tests/run never
 # takes over: a script killed with KILL restored nothing and may have left
 # work running in groups of its own, and so may one whose holder was killed,
 # so only this process's own exit removes the directory.
@@ -47,10 +49,13 @@ RACH2_TREE_HELD=$$
 export RACH2_TREE_HELD
 child=
 signalled=
-# stop_script: TERM to the script's group, or to its pid while it has not
-# made the group yet.
+forwarded=
+# stop_script: TERM, once, to the script's group, or to its pid while it has
+# not made the group yet.
 stop_script()
 {
+    [ -z "$forwarded" ] || return 0
+    forwarded=1
     "$helper/runutil" killgroup "$child" 15 2>/dev/null || kill -TERM "$child" 2>/dev/null
 }
 trap 'signalled=1; [ -z "$child" ] || stop_script' TERM HUP INT
@@ -58,13 +63,19 @@ trap 'signalled=1; [ -z "$child" ] || stop_script' TERM HUP INT
 "$helper/runutil" group sh "$@" &
 child=$!
 [ -z "$signalled" ] || stop_script
+# An interrupted wait returns the signal's status; the next, the script's.
+status=
 while :; do
     signalled=
-    status=0
-    wait "$child" || status=$?
-    if [ -z "$signalled" ] || ! kill -0 "$child" 2>/dev/null; then
+    waited=0
+    wait "$child" || waited=$?
+    if [ -z "$signalled" ]; then
+        if [ "$waited" -ne 127 ] || [ -z "$status" ]; then
+            status=$waited
+        fi
         break
     fi
+    status=$waited
 done
 if [ "$status" -eq 137 ]; then
     echo "$name: the script was killed; its work may still run and its fault may be" \

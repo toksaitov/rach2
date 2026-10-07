@@ -28,39 +28,6 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-"${CC:-cc}" -O2 -Wall -Wextra -Werror -o "$work/bin/ssh" \
-    "$repo/tests/system/fixtures/pty_secret.c"
-"${CC:-cc}" -O2 -Wall -Wextra -Werror -o "$work/build/tests/system/runutil" \
-    "$repo/tests/system/runner/runutil.c"
-cat > "$work/bin/su" <<'SU'
-#!/bin/sh
-[ "$1" = -c ] || exit 2
-exec /bin/sh -c "$2"
-SU
-cat > "$work/bin/rm" <<'RM'
-#!/bin/sh
-# Save the helper's actual transcripts immediately before its cleanup.
-for directory do :; done
-case "$directory" in
-    */rach2-accept-su.*)
-        for name in raw text; do
-            if [ -f "$directory/$name" ]; then
-                cp "$directory/$name" "$PTY_SECRET_AUDIT/$name" || exit 1
-            fi
-        done
-        ;;
-esac
-exec /bin/rm "$@"
-RM
-chmod +x "$work/bin/su" "$work/bin/rm"
-
-PATH="$work/bin:$PATH"
-TMPDIR="$work/tmp"
-RACH2_ACCEPT_PASSWORD=Q7pL9xZ2mK4vT8sN
-export PATH TMPDIR RACH2_ACCEPT_PASSWORD
-unset RACH2_DEADLINES RACH2_DEADLINE_FACTOR
-
-
 # password_edit MUTATION: $work/ptydrive.c is the saved driver with MUTATION in
 # it, and `diagnostic` the words its failing case prints; fail when the edit
 # changes nothing, since its text has left the driver.
@@ -103,6 +70,39 @@ if [ "${1:-}" = --texts ]; then
     echo 'accept-password: texts: every fault is once in its source'
     exit 0
 fi
+
+"${CC:-cc}" -O2 -Wall -Wextra -Werror -o "$work/bin/ssh" \
+    "$repo/tests/system/fixtures/pty_secret.c"
+"${CC:-cc}" -O2 -Wall -Wextra -Werror -o "$work/build/tests/system/runutil" \
+    "$repo/tests/system/runner/runutil.c"
+cat > "$work/bin/su" <<'SU'
+#!/bin/sh
+[ "$1" = -c ] || exit 2
+exec /bin/sh -c "$2"
+SU
+cat > "$work/bin/rm" <<'RM'
+#!/bin/sh
+# Save the helper's actual transcripts immediately before its cleanup.
+for directory do :; done
+case "$directory" in
+    */rach2-accept-su.*)
+        for name in raw text; do
+            if [ -f "$directory/$name" ]; then
+                cp "$directory/$name" "$PTY_SECRET_AUDIT/$name" || exit 1
+            fi
+        done
+        ;;
+esac
+exec /bin/rm "$@"
+RM
+chmod +x "$work/bin/su" "$work/bin/rm"
+
+PATH="$work/bin:$PATH"
+TMPDIR="$work/tmp"
+RACH2_ACCEPT_PASSWORD=Q7pL9xZ2mK4vT8sN
+export PATH TMPDIR RACH2_ACCEPT_PASSWORD
+unset RACH2_DEADLINES RACH2_DEADLINE_FACTOR
+
 
 compile()
 {
