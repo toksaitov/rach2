@@ -17,6 +17,14 @@ if os.environ.get('RACH2_FAULT_TEXTS'):
     pathlib.Path.write_text = lambda self, *args, **kwargs: 0
 
 work = Path(sys.argv[1])
+
+
+def swap(body, old, new):
+    if old not in body:
+        raise SystemExit("krffs-open: mutation pattern is not in its function: " + old.strip())
+    return body.replace(old, new)
+
+
 path = work / "sys/syscall_fs.c"
 text = path.read_text()
 old = "VFS_WALK_LOCK |"
@@ -25,10 +33,10 @@ end = text.index("\n}", start)
 body = text[start:end]
 if body.count(old) != 1:
     raise SystemExit("krffs-open: mutation pattern is not unique")
-body = body.replace(old, "0 |")
-body = body.replace("            vfs_walk_unlock(ref.mnt);\n", "")
-body = body.replace("            vfs_walk_unlock(locked);\n", "")
-body = body.replace("    vfs_walk_unlock(locked);", "    (void)locked;")
+body = swap(body, old, "0 |")
+body = swap(body, "            vfs_walk_unlock(ref.mnt);\n", "")
+body = swap(body, "            vfs_walk_unlock(locked);\n", "")
+body = swap(body, "    vfs_walk_unlock(locked);", "    (void)locked;")
 path.write_text(text[:start] + body + text[end:])
 if sys.argv[2] == "late-lock":
     path = work / "sys/fs/krffsmount.c"
@@ -36,12 +44,12 @@ if sys.argv[2] == "late-lock":
     start = text.index("static int kv_open(")
     end = text.index("\n}", start)
     body = text[start:end]
-    body = body.replace("struct krffs_open *o = open_at(vol, at);", "struct krffs_open *o;")
-    body = body.replace("    (void)flags;", "    (void)flags;\n    vfs_ns_lock(mnt);\n"
+    body = swap(body, "struct krffs_open *o = open_at(vol, at);", "struct krffs_open *o;")
+    body = swap(body, "    (void)flags;", "    (void)flags;\n    vfs_ns_lock(mnt);\n"
                         "    o = open_at(vol, at);")
-    body = body.replace("            return -ENOMEM;", "            vfs_ns_unlock(mnt);\n"
+    body = swap(body, "            return -ENOMEM;", "            vfs_ns_unlock(mnt);\n"
                         "            return -ENOMEM;")
-    body = body.replace("    return 0;", "    vfs_ns_unlock(mnt);\n    return 0;")
+    body = swap(body, "    return 0;", "    vfs_ns_unlock(mnt);\n    return 0;")
     path.write_text(text[:start] + body + text[end:])
 PY
 }

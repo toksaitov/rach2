@@ -91,13 +91,18 @@ changes = {
              'k_memset(data->data, 0xAB, BCACHE_BLOCK_BYTES);'),
     'reserve-run': ('kalloc_pages(1, 0)', 'kalloc_pages(EXT2_WB_DATA + EXT2_WB_META + 1, 0)'),
 }
+def first(body, old, new):
+    if old not in body:
+        raise SystemExit('ext2-batch-mutation: fault pattern is not in its function: ' + fault)
+    return body.replace(old, new, 1)
+
+
 if fault == 'stage-lock':
-    body = body.replace('    vfs_ns_lock(mnt);\n', '', 1)
-    body = body.replace('    vfs_ns_unlock(mnt);\n', '', 1)
+    body = first(body, '    vfs_ns_lock(mnt);\n', '')
+    body = first(body, '    vfs_ns_unlock(mnt);\n', '')
 elif fault == 'handoff':
-    body = body.replace('    vfs_ns_lock(mnt);\n', '', 1)
-    body = body.replace('    if (what & VFS_SET_MODE)',
-                        '    vfs_ns_lock(mnt);\n    if (what & VFS_SET_MODE)', 1)
+    body = first(body, '    vfs_ns_lock(mnt);\n', '')
+    body = first(body, '    if (what & VFS_SET_MODE)', '    vfs_ns_lock(mnt);\n    if (what & VFS_SET_MODE)')
 else:
     old, new = changes[fault]
     if body.count(old) != 1:
