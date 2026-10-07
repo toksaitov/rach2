@@ -62,6 +62,10 @@ esac
 [ "$#" -le 1 ] || exit 2
 
 REPO=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
+if [ "${1:-}" != --texts ]; then
+    . "$REPO/tests/system/runlock.sh"
+    runlock_hold "$REPO" build-rules-test "$REPO/tests/system/build_rules_test.sh" "$@"
+fi
 cd "$REPO"
 mkdir -p build/tests
 WORK=$(mktemp -d "$REPO/build/tests/build-rules-test.XXXXXX")

@@ -4,6 +4,10 @@
 # between load sessions, and inbound cleanup.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
+if [ "${1:-}" != --texts ]; then
+    . "$repo/tests/system/runlock.sh"
+    runlock_hold "$repo" machine-measure-test "$repo/tests/system/machine_measure_test.sh" "$@"
+fi
 exec python3 - "$repo" "$@" <<'PY'
 import os
 import pathlib

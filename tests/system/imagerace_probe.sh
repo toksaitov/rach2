@@ -7,6 +7,10 @@ set -eu
 unset ARCH RACH2_ARCH RACH2_PATH_MAP MAKEFLAGS MFLAGS
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
+if [ "${1:-}" != --texts ]; then
+    . "$repo/tests/system/runlock.sh"
+    runlock_hold "$repo" imagerace-probe "$repo/tests/system/imagerace_probe.sh" "$@"
+fi
 cd "$repo"
 case ${1:-} in
     '') mutate=0 ;;

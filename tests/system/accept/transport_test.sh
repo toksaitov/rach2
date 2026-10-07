@@ -3,6 +3,10 @@
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../../.." && pwd)
+if [ "${1:-}" != --texts ]; then
+    . "$repo/tests/system/runlock.sh"
+    runlock_hold "$repo" accept-transport "$repo/tests/system/accept/transport_test.sh" "$@"
+fi
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-accept-test.XXXXXX")
 copy="$work/tests/system/accept"
 mkdir -p "$copy" "$work/bin" "$work/build/images" "$work/build/krffs" "$work/krffs"

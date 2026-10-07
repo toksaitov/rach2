@@ -2,6 +2,10 @@
 # Check recovery credentials in a KRFFS image without a guest or real keys.
 set -eu
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
+if [ "${1:-}" != --texts ]; then
+    . "$REPO/tests/system/runlock.sh"
+    runlock_hold "$REPO" recovery-key-test "$REPO/tests/system/recovery_key_test.sh" "$@"
+fi
 case "${1:-}" in
     ''|--mutate|--texts) ;;
     *) echo "recovery-key-test: usage: recovery_key_test.sh [--mutate | --texts]" >&2; exit 2 ;;

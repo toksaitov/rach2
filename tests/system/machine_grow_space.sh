@@ -10,6 +10,10 @@ ARCH_BUILD=${ARCH_BUILD:-build}
 QEMU=${RACH2_QEMU:-qemu-system-i386}
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
+if [ "${1:-}" != --texts ]; then
+    . "$repo/tests/system/runlock.sh"
+    runlock_hold "$repo" grow-space "$repo/tests/system/machine_grow_space.sh" "$@"
+fi
 cd "$repo"
 
 # space_mutant FAULT SCRIPT: print SCRIPT, the machine's grow helper, with its

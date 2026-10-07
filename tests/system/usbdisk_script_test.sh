@@ -3,6 +3,10 @@
 # Exercise the mutation script's image construction and interrupted command.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
+if [ "${1:-}" != --texts ]; then
+    . "$repo/tests/system/runlock.sh"
+    runlock_hold "$repo" usbdisk-script "$repo/tests/system/usbdisk_script_test.sh" "$@"
+fi
 root=$(mktemp -d "${TMPDIR:-/tmp}/rach2-usbdisk-script.XXXXXX")
 echo "usbdisk-script: logs: $root"
 [ "$#" -eq 0 ] || [ "$*" = --mutate ] || [ "$*" = --texts ] || exit 2

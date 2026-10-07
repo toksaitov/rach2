@@ -3,6 +3,10 @@
 # Exercise the machine's checks with real seed files and complete boot reads.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
+if [ "${1:-}" != --texts ]; then
+    . "$repo/tests/system/runlock.sh"
+    runlock_hold "$repo" machine-grow-check "$repo/tests/system/machine_grow_check.sh" "$@"
+fi
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-grow-check.XXXXXX")
 echo "machine-grow-check: logs: $work"
 fail() { echo "machine-grow-check: failed: $*" >&2; exit 1; }

@@ -32,6 +32,10 @@ case ${1:-} in
 esac
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
+if [ "${1:-}" != --texts ]; then
+    . "$repo/tests/system/runlock.sh"
+    runlock_hold "$repo" run-scripts-test "$repo/tests/system/run_scripts_test.sh" "$@"
+fi
 work=$(mktemp -d "${TMPDIR:-/tmp}/run-scripts.XXXXXX")
 trap 'rm -rf "$work"' EXIT
 # The scripts name their files from `cd` and `pwd`, which fold a doubled

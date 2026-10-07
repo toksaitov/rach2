@@ -32,6 +32,10 @@ case ${1:-} in
 esac
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
+if [ "${1:-}" != --texts ]; then
+    . "$repo/tests/system/runlock.sh"
+    runlock_hold "$repo" style-scope-test "$repo/tests/system/style_scope_test.sh" "$@"
+fi
 work=$(mktemp -d "${TMPDIR:-/tmp}/style-scope.XXXXXX")
 trap 'rm -rf "$work"' EXIT
 trap 'exit 129' HUP

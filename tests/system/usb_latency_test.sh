@@ -3,6 +3,10 @@
 # --mutate adds the faults below; --texts checks their texts and builds nothing.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
+if [ "${1:-}" != --texts ]; then
+    . "$repo/tests/system/runlock.sh"
+    runlock_hold "$repo" usb-latency-test "$repo/tests/system/usb_latency_test.sh" "$@"
+fi
 cd "$repo"
 
 # apply_fault ARGS...: put one fault into its source; with

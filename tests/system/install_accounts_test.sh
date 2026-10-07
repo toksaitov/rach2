@@ -39,6 +39,10 @@ case ${1:-} in
 esac
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
+if [ "${1:-}" != --texts ]; then
+    . "$repo/tests/system/runlock.sh"
+    runlock_hold "$repo" install-accounts-test "$repo/tests/system/install_accounts_test.sh" "$@"
+fi
 work=$(mktemp -d "${TMPDIR:-/tmp}/install-accounts.XXXXXX") || exit 1
 trap 'rm -rf "$work"' EXIT
 trap 'exit 129' HUP

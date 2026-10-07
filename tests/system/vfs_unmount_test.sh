@@ -2,6 +2,10 @@
 # Compile whole production functions with counted filesystem substitutes.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
+if [ "${1:-}" != --texts ]; then
+    . "$repo/tests/system/runlock.sh"
+    runlock_hold "$repo" vfs-unmount "$repo/tests/system/vfs_unmount_test.sh" "$@"
+fi
 [ "$#" -eq 0 ] || [ "$*" = --mutate ] || [ "$*" = --texts ] || exit 2
 if [ "$*" = --texts ]; then
     for line in 'm = rc == -EIO ?' 'streq(m->covered_path, want)' \

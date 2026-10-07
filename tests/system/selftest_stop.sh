@@ -13,6 +13,10 @@ case ${1:-} in
 esac
 [ "$#" -le 1 ] || exit 2
 repo=$(cd "$(dirname "$0")/../.." && pwd)
+if [ "${1:-}" != --texts ]; then
+    . "$repo/tests/system/runlock.sh"
+    runlock_hold "$repo" selftest-stop "$repo/tests/system/selftest_stop.sh" "$@"
+fi
 # once FILE TEXT: TEXT, which a fault changes, is once in FILE.
 once()
 {

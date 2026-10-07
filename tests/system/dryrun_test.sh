@@ -28,6 +28,10 @@ esac
 [ "$#" -le 1 ] || exit 2
 
 REPO=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
+if [ "${1:-}" != --texts ]; then
+    . "$REPO/tests/system/runlock.sh"
+    runlock_hold "$REPO" dryrun-test "$REPO/tests/system/dryrun_test.sh" "$@"
+fi
 cd "$REPO"
 if [ "$mutate" -eq 2 ]; then
     if [ "$(grep -c '^DRY_RUN :=' mk/dryrun.mk 2>/dev/null)" != 1 ]; then

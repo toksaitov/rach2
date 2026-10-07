@@ -28,6 +28,10 @@ case ${1:-} in
 esac
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
+if [ "${1:-}" != --texts ]; then
+    . "$repo/tests/system/runlock.sh"
+    runlock_hold "$repo" commit-msg-test "$repo/tests/system/commit_msg_test.sh" "$@"
+fi
 work=$(mktemp -d "${TMPDIR:-/tmp}/commit-msg.XXXXXX") || exit 1
 trap 'rm -rf "$work"' EXIT
 trap 'exit 129' HUP

@@ -10,6 +10,10 @@ case ${1:-} in
 esac
 [ "$#" -le 1 ] || exit 2
 repo=$(cd "$(dirname "$0")/../.." && pwd)
+if [ "${1:-}" != --texts ]; then
+    . "$repo/tests/system/runlock.sh"
+    runlock_hold "$repo" runutil-group "$repo/tests/system/runutil_group.sh" "$@"
+fi
 if [ "$mutate" -eq 2 ]; then
     if [ "$(grep -c 'if (actual != pid)' "$repo/tests/system/runner/runutil.c" 2>/dev/null)" != 1 ]; then
         echo 'runutil-group: the group check is not once in runutil.c' >&2

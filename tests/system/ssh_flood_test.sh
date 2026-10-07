@@ -8,6 +8,10 @@ case ${1:-} in
     *) echo 'ssh-flood: usage: ssh_flood_test.sh [--mutate | --texts]' >&2; exit 2 ;;
 esac
 repo=$(cd "$(dirname "$0")/../.." && pwd)
+if [ "${1:-}" != --texts ]; then
+    . "$repo/tests/system/runlock.sh"
+    runlock_hold "$repo" ssh-flood "$repo/tests/system/ssh_flood_test.sh" "$@"
+fi
 if [ "$mutate" -eq 2 ]; then
     sed '/exec sleep 300/,/FLOOD_PIDS=/s/FLOOD_PIDS=.*$/ :/' "$repo/tests/system/suites/ssh.sh" |
         cmp -s - "$repo/tests/system/suites/ssh.sh" && {

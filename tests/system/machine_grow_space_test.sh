@@ -3,6 +3,10 @@
 # shellcheck disable=SC2034,SC2016,SC2154
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
+if [ "${1:-}" != --texts ]; then
+    . "$repo/tests/system/runlock.sh"
+    runlock_hold "$repo" machine-grow-space-test "$repo/tests/system/machine_grow_space_test.sh" "$@"
+fi
 proof=$(mktemp -d "${TMPDIR:-/tmp}/rach2-grow-space.XXXXXX")
 proof=$(CDPATH='' cd -- "$proof" && pwd -P)
 echo "machine-grow-space-test: logs: $proof"

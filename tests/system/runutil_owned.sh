@@ -13,6 +13,10 @@ case ${1:-} in
 esac
 [ "$#" -le 1 ] || exit 2
 repo=$(cd "$(dirname "$0")/../.." && pwd)
+if [ "${1:-}" != --texts ]; then
+    . "$repo/tests/system/runlock.sh"
+    runlock_hold "$repo" runutil-owned "$repo/tests/system/runutil_owned.sh" "$@"
+fi
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-runutil-owned.XXXXXX")
 
 # owned_edit FAULT [SOURCE]: write $work/runutil.c as SOURCE, by default the

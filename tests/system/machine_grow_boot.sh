@@ -4,6 +4,10 @@
 # shellcheck disable=SC2034,SC2016,SC2154
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
+if [ "${1:-}" != --texts ]; then
+    . "$repo/tests/system/runlock.sh"
+    runlock_hold "$repo" machine-grow-boot "$repo/tests/system/machine_grow_boot.sh" "$@"
+fi
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-grow-boot.XXXXXX")
 echo "machine-grow-boot: logs: $work"
 fail() { echo "machine-grow-boot: failed: $*" >&2; exit 1; }
