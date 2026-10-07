@@ -27,6 +27,8 @@ elif fault in ("gfx-enter", "gfx-exit", "cursor"):
     start = s.index(name + "\n{")
     end = s.index("\n}", start) + 2
     old = s[start:end]
+    if old.count("uint32_t flags = kirq_save();") != 1 or "kirq_restore(flags);" not in old:
+        raise SystemExit("driver-mutation: the interrupt save is not once in " + name)
     new = old.replace("uint32_t flags = kirq_save();", "uint32_t flags = 0;")
     new = new.replace("kirq_restore(flags);", "(void)flags;")
 elif fault == "setup-speaker":
@@ -93,6 +95,9 @@ if [ "${1:-}" = --texts ]; then
     echo 'driver-mutation: texts: every fault is once in its source'
     exit 0
 fi
+
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" driver-mutation "$repo/tests/host/driver_mutate.sh" "$@"
 
 mkdir -p build/review-proof
 work=$(mktemp -d "$repo/build/review-proof/drivers.XXXXXX")
