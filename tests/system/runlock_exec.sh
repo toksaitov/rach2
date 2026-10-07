@@ -69,13 +69,10 @@ while :; do
     signalled=
     waited=0
     wait "$child" || waited=$?
-    if [ -z "$signalled" ]; then
-        if [ "$waited" -ne 127 ] || [ -z "$status" ]; then
-            status=$waited
-        fi
-        break
+    if [ "$waited" -ne 127 ] || [ -z "$status" ]; then
+        status=$waited
     fi
-    status=$waited
+    [ -n "$signalled" ] || break
 done
 if [ "$status" -eq 137 ]; then
     echo "$name: the script was killed; its work may still run and its fault may be" \
