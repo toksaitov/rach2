@@ -116,6 +116,11 @@ fi
 
 . "$REPO/tests/system/runlock.sh"
 runlock_hold "$REPO" host-tools-proof "$REPO/tests/system/host_tools_mutate.sh" "$@"
+# The probes build into the tree of the ARCH make reads, as mk/arch.mk sets it.
+case "${ARCH:-i686}" in
+    x86_64) probes=build/x86_64/tests ;;
+    *) probes=build/tests ;;
+esac
 mkdir -p build
 WORK=$(mktemp -d "$REPO/build/host-tools-proof.XXXXXX")
 source_file=
@@ -146,13 +151,13 @@ restore() {
     stop_job
     if [ -n "$source_file" ]; then
         if [ "$created" = musl ]; then
-            rm -f "$source_file" build/tests/musl/review_unassigned
+            rm -f "$source_file" "$probes/musl/review_unassigned"
         else
             cp "$WORK/source" "$source_file"
             touch "$source_file"
         fi
         if [ "$created" = root ]; then
-            rm -f build/tests/review_unassigned build/tests/review_unassigned.d
+            rm -f "$probes/review_unassigned" "$probes/review_unassigned.d"
         fi
         created=
         source_file=
@@ -221,7 +226,7 @@ for case_name in "$@"; do
         cp "$file" "$WORK/source"
     fi
     if [ "$case_name" = probe-root ]; then
-        test ! -e build/tests/review_unassigned || fail 'unassigned root artifact already exists'
+        test ! -e "$probes/review_unassigned" || fail 'unassigned root artifact already exists'
         created=root
     fi
     source_file=$file
@@ -229,7 +234,7 @@ for case_name in "$@"; do
     touch "$source_file"
     case "$case_name" in
         probe-root)
-            job make -C tests ../build/tests/review_unassigned > "$WORK/$case_name.build" 2>&1 ||
+            job make -C tests "../$probes/review_unassigned" > "$WORK/$case_name.build" 2>&1 ||
                 fail 'unassigned root probe did not build' ;;
         probe-musl)
             job make musl-programs > "$WORK/$case_name.build" 2>&1 ||
