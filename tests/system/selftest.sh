@@ -941,7 +941,7 @@ cd "$repo" || exit 1
 runlock_hold "$repo" holder "$repo/holder.sh" "$@"
 case $1 in
     inner) sh tests/run passing; echo "inner status $?" ;;
-    wait) touch holder-in; while [ ! -f holder-go ]; do sleep 0.1; done ;;
+    wait) echo "$$" > holder-pid; touch holder-in; while [ ! -f holder-go ]; do sleep 0.1; done ;;
 esac
 HOLDER
 rm -rf "$WORK/build/.run.lock" "$WORK/holder-in" "$WORK/holder-go"
@@ -974,7 +974,21 @@ kill -TERM "$holder" 2>/dev/null
 wait "$holdrun"; rc=$?
 check "a holder stopped with TERM exits as its stopped script does" 143 "$rc"
 check "and the lock goes with it" 0 "$([ -e "$WORK/build/.run.lock" ] && echo 1 || echo 0)"
-rm -f "$WORK/holder-in" "$WORK/holder-go"
+rm -f "$WORK/holder-in" "$WORK/holder-go" "$WORK/holder-pid"
+( cd "$WORK" && sh holder.sh wait > "$WORK/holder.out" 2>&1 ) &
+holdrun=$!
+i=0
+while [ ! -f "$WORK/holder-in" ] && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+kill -KILL "$(cat "$WORK/holder-pid")" 2>/dev/null
+wait "$holdrun"; rc=$?
+check "a holder whose script was killed exits as the script did" 137 "$rc"
+check "and leaves the lock, since the script's work may still run" 1 \
+    "$([ -e "$WORK/build/.run.lock" ] && echo 1 || echo 0)"
+out=$(run passing); rc=$?
+check "which a run takes over once nothing of the holder is left" 0 "$rc"
+check "and says whose it was" 1 "$(printf '%s\n' "$out" | grep -c 'taking over the lock a run left: [0-9]*, holder ')"
+rm -rf "$WORK/build/.run.lock"
+rm -f "$WORK/holder-in" "$WORK/holder-go" "$WORK/holder-pid"
 
 echo "selftest: $((total - fails)) of $total checks passed"
 [ "$fails" -eq 0 ] || exit 1

@@ -6,7 +6,9 @@
 # naming this process, so it and what it starts find the tree held
 # (runlock.sh). A TERM, HUP or INT is passed to the child as TERM, so its own
 # trap restores the sources; the directory goes when the child has ended,
-# and the exit status is the child's.
+# and the exit status is the child's. A child killed with KILL could restore
+# nothing and may have left work running, so its directory stays, for
+# tests/run to take over once nothing of this process group is left.
 set -u
 name=$1
 shift
@@ -39,12 +41,20 @@ RACH2_TREE_HELD=$$
 export RACH2_TREE_HELD
 sh "$@" &
 child=$!
-trap 'kill -TERM "$child" 2>/dev/null' TERM HUP INT
-status=0
-wait "$child" || status=$?
-while kill -0 "$child" 2>/dev/null; do
+signalled=
+trap 'signalled=1; kill -TERM "$child" 2>/dev/null' TERM HUP INT
+while :; do
+    signalled=
     status=0
     wait "$child" || status=$?
+    if [ -z "$signalled" ] || ! kill -0 "$child" 2>/dev/null; then
+        break
+    fi
 done
+if [ "$status" -eq 137 ]; then
+    echo "$name: the script was killed and its work may still run; $lock stays" \
+        "for tests/run to take over when nothing of it is left" >&2
+    exit "$status"
+fi
 rm -rf "$lock"
 exit "$status"
