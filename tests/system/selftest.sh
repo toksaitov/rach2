@@ -984,9 +984,10 @@ wait "$holdrun"; rc=$?
 check "a holder whose script was killed exits as the script did" 137 "$rc"
 check "and leaves the lock, since the script's work may still run" 1 \
     "$([ -e "$WORK/build/.run.lock" ] && echo 1 || echo 0)"
-out=$(run passing); rc=$?
-check "which a run takes over once nothing of the holder is left" 0 "$rc"
-check "and says whose it was" 1 "$(printf '%s\n' "$out" | grep -c 'taking over the lock a run left: [0-9]*, holder ')"
+heldwork=$(sed -n 's/^work //p' "$WORK/build/.run.lock/owner" 2>/dev/null)
+check "and names the script's process group where a run looks for what a run left" \
+    "$(cat "$WORK/holder-pid")" "$(cat "$heldwork/held.groups" 2>/dev/null)"
+rm -rf "$heldwork"
 rm -rf "$WORK/build/.run.lock"
 rm -f "$WORK/holder-in" "$WORK/holder-go" "$WORK/holder-pid"
 
