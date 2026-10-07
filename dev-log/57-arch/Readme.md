@@ -47,12 +47,14 @@ The Codex review's 146 units found faults that the record lists with their fixes
 
 ## After the acceptance
 
-tmux at the console, which the owner tried after the acceptance, found two faults no suite had reached, entries 300 and 301 of `dev-log/50-shortcomings/plan.md`, and their proofs found 302 and 303; `notes.md` says how each was found. The fixes are b9d9a8f8 to 0ee388e1. `tests/run all` at 00904d42 passed every suite on x86-64, and on i686 every suite but smp, whose parallel-build row judged a round's timing; with 0ee388e1, `tests/run style smp` passes on both architectures. The Lenovo runs the build of 00904d42, whose source differs from 0ee388e1 only in that suite:
+tmux at the console, which the owner tried after the acceptance, found two faults no suite had reached, entries 300 and 301 of `dev-log/50-shortcomings/plan.md`, and their proofs found 302 and 303; `notes.md` says how each was found. The fixes are b9d9a8f8 to 0ee388e1.
 
-* The kernel: 1762200 bytes, sha256 `bc972be9a5e5ee3451949b9c1f24a4d59bb363c93046b731e0cf7d17c9af6748`, in the candidate slot and committed.
-* The recovery kernel, sha256 `2ef7a508cdb0db5702915732a7b9d92865c96fb4d38d1b13c7dce372075b3108`, with the recovery image above; the recovery partition is sha256 `d2010fc219f6ad099053987666d74e2ece6fb36bfc05937f769acb7ecbb6ddfa`.
-* The root: `os-real-gnu.ext2` for x86-64, sha256 `6acdda81d96a0a1cfdad53a8c20d52c303015b1c14fdcc4b0d9671150a153751`, written by `rach2-install --update` and grown to 232.8 GiB.
+The leftovers came next, entries 304 to 309. The fault scripts were made to follow `ARCH` (304), Codex did the debug-register work the review had left for the owner (305), and KVM and the Lenovo's Intel processor showed the delayed watchpoint lost in two different ways (306), which the emulator had hidden by reporting it early. Proving the work found a ptracemusl row that read past its variable (307), fault scripts that did not hold the tree (308) and fault texts that went stale between proofs (309). The fixes are 699da1c0 to 13f6e181; RESULTS. The Lenovo runs the build of 2757a64d, whose image the later commits, all to tests and tools, do not change:
+
+* The kernel: 1762784 bytes, sha256 `eea5cfee76cdea722ec53dda18afa937d0f1a89617e46f6df6efb9db230dd357`, in the candidate slot and committed, booted by UEFI.
+* The recovery kernel, sha256 `2ebc9b16e758a795be988e84f6a7d8d6225589e0cc657f019f9c23fa0c77c55b`, with the recovery image sha256 `b6314a31de550006b5054b3240c80ec071898b285214c71ab45a40234eb84712`; the recovery partition is sha256 `761a3e0a73afd1530f53ff122b49ba0376c12ae483b3b8e29d9f3936f93e6887`.
+* The root: `os-real-gnu.ext2` for x86-64, sha256 `cf1a5a7f01388b94138114f71bcc94dace027d3fc469b8c408e7e1143a44900a`, written by `rach2-install --update` from the recovery system's memory, since the stick did not enumerate (entry 310), and grown to 232.8 GiB.
 
 ## What is still open
 
-Units 17 and 46 of the review, and the parts of units 137 and 146 that depend on them, are left for the owner. They cover ptrace's hardware breakpoints and debug registers, the x86-64 debug exception's entry, the breakpoint address limit and `u_debugreg` offset, and a single step over `syscall`. Their work is kept in the git stash `unit 46, left for the owner`. A terminal browser drawn by Chromium or Firefox waits for a framebuffer device for programs, as milestone 55 recorded.
+The Lenovo's xHCI controller does not address the devices on its ports 1 and 2 after a reboot, entry 310, so the stick, the keyboard and the mouse are absent; it is the next work. A terminal browser drawn by Chromium or Firefox waits for a framebuffer device for programs, as milestone 55 recorded.

@@ -76,6 +76,8 @@ Neither fault was in a suite: every check of tmux ran it detached, over SSH, or 
 
 The checks: `tests/run all` on x86-64 at 00904d42, status 0 with 94 suites, and on i686 as `Readme.md` records; the three new probe faults caught on both architectures; and `fd_stdio_mutate.sh` and `vga_text_hosttest`'s wrap row each failing under the old code. The Lenovo runs the build of 00904d42: its root written by `rach2-install --update`, its kernel through `bootctl` and committed, its recovery partition with the new recovery kernel. The owner checked tmux at the console with the kernel of these fixes.
 
+The leftovers' proofs found the debug-register work wrong only on real processors. The harness boots QEMU under TCG, which reports a watched `MOV SS` before the `SYSCALL` that follows it, so ptracemusl's delayed row reported that it did not run and passed. `tests/run` boots under KVM, and there the AMD processor of the testing host delayed the hit into the system-call entry, where the deferred SIGTRAP was posted through the mask `raise` had left blocking it. On the Lenovo, a small tracer that read DR6 at the stop showed the Intel processor delivering the same exception with no breakpoint bit set, and a diagnostic kernel, booted once as a trial, recorded the saved RIP, CS and DR6 in the kernel-mode path and printed them from process context: `rip=syscall_entry cs=0x10 dr6=0xffff0ff0`.
+
 ## Measurements
 
 * GNU sed's `configure` on the GNU root under KVM on the testing host, three runs each with two processors: i686 53, 55 and 55 s before entry 295's changes and lazy TLB, 52, 53 and 53 s after; x86-64 56, 58 and 55 s before, 51, 52 and 52 s after; one processor 46 to 51 s on both.
