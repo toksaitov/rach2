@@ -19,8 +19,8 @@ cd "$repo" || exit 1
 scripts=$( {
     ls tests/system/*_mutate.sh tests/system/accept/*_mutate.sh tests/host/*_mutate.sh \
         tools/dev/poll_kernels.sh
-    grep -l -e '--mutate)' -e '= --mutate' -e "'--mutate'" tests/system/*.sh tests/host/*.sh \
-        tools/*/*.sh
+    grep -l -e '--mutate)' -e '= --mutate' -e "'--mutate'" tests/system/*.sh \
+        tests/system/accept/*.sh tests/host/*.sh tools/*/*.sh
 } | grep -v '^tools/verify/faulttexts\.sh$' | sort -u)
 log=$(mktemp "${TMPDIR:-/tmp}/rach2-faulttexts.XXXXXX") || exit 1
 trap 'rm -f "$log"' EXIT

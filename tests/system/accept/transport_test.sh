@@ -16,6 +16,36 @@ cleanup()
     cp "$copy/original.sh" "$copy/metal_accept.sh"
 }
 trap cleanup EXIT
+
+# transport_edit FAULT: the private metal_accept.sh is the saved one with FAULT
+# in it: no failure record (record) or a disk matched by its prefix alone
+# (disk-prefix); fail when the edit changes nothing, since its text has left
+# the script.
+transport_edit()
+{
+    case $1 in
+        record)
+            # shellcheck disable=SC2016 # Match the variable in the private source.
+            sed 's@: > "\$LOCAL_TMP/command-failed"@:@' "$copy/original.sh" > "$copy/metal_accept.sh" ;;
+        disk-prefix)
+            # shellcheck disable=SC2016 # Match the private source's variable.
+            sed 's@grep -E "\^/dev/\$STICK(p\[0-9\]+)?:"@grep "^/dev/$STICK"@' \
+                "$copy/original.sh" > "$copy/metal_accept.sh" ;;
+    esac
+    if cmp -s "$copy/original.sh" "$copy/metal_accept.sh"; then
+        echo "accept-transport: the $1 fault is not in metal_accept.sh" >&2
+        exit 1
+    fi
+}
+
+if [ "${1:-}" = --texts ]; then
+    transport_edit record
+    transport_edit disk-prefix
+    trap - EXIT
+    rm -rf "$work"
+    echo 'accept-transport: texts: every fault is once in its source'
+    exit 0
+fi
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
@@ -259,9 +289,7 @@ cases
 case "${1:-}" in
     '') ;;
     --mutate)
-        # shellcheck disable=SC2016 # Match the variable in the private source.
-        sed 's@: > "\$LOCAL_TMP/command-failed"@:@' "$copy/original.sh" > "$copy/metal_accept.sh"
-        cmp -s "$copy/original.sh" "$copy/metal_accept.sh" && exit 1
+        transport_edit record
         phase=mutated
         if cases > "$work/mutation.log" 2>&1; then
             echo 'accept-transport: the missing failure record was not detected' >&2
@@ -272,10 +300,7 @@ case "${1:-}" in
         cp "$copy/original.sh" "$copy/metal_accept.sh"
         phase=restored
         cases
-        # shellcheck disable=SC2016 # Match the private source's variable.
-        sed 's@grep -E "\^/dev/\$STICK(p\[0-9\]+)?:"@grep "^/dev/$STICK"@' \
-            "$copy/original.sh" > "$copy/metal_accept.sh"
-        cmp -s "$copy/original.sh" "$copy/metal_accept.sh" && exit 1
+        transport_edit disk-prefix
         phase='disk-mutated'
         if cases > "$work/disk-mutation.log" 2>&1; then
             echo 'accept-transport: the disk prefix mutation was not detected' >&2
@@ -287,6 +312,6 @@ case "${1:-}" in
         phase='disk-restored'
         cases
         ;;
-    *) echo 'accept-transport: usage: [--mutate]' >&2; exit 2 ;;
+    *) echo 'accept-transport: usage: [--mutate | --texts]' >&2; exit 2 ;;
 esac
 echo "accept-transport: logs: $work"

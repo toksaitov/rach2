@@ -56,6 +56,50 @@ RACH2_ACCEPT_PASSWORD=Q7pL9xZ2mK4vT8sN
 export PATH TMPDIR RACH2_ACCEPT_PASSWORD
 unset RACH2_DEADLINES RACH2_DEADLINE_FACTOR
 
+
+# password_edit MUTATION: $work/ptydrive.c is the saved driver with MUTATION in
+# it, and `diagnostic` the words its failing case prints; fail when the edit
+# changes nothing, since its text has left the driver.
+password_edit()
+{
+    case "$1" in
+        repeat)
+            sed 's/if (asked > 1)/if (asked > 100)/' "$work/original.c" > "$work/ptydrive.c"
+            diagnostic='the second prompt was answered'
+            ;;
+        redact)
+            awk '
+                /static void secret_byte/ { function_seen = 1 }
+                { print }
+                function_seen && /^\{/ {
+                    print "    putchar(byte); return;"
+                    function_seen = 0
+                }
+            ' "$work/original.c" > "$work/ptydrive.c"
+            diagnostic='credential bytes reached raw'
+            ;;
+        count)
+            sed 's/asked, answered);/(asked != 0), answered);/' "$work/original.c" > "$work/ptydrive.c"
+            diagnostic='prompt or answer count is wrong'
+            ;;
+    esac
+    if cmp -s "$work/original.c" "$work/ptydrive.c"; then
+        echo "accept-password: the $1 fault is not in ptydrive.c" >&2
+        exit 1
+    fi
+}
+
+if [ "${1:-}" = --texts ]; then
+    for mutation in repeat redact count; do
+        password_edit "$mutation"
+    done
+    cp "$work/original.c" "$work/ptydrive.c"
+    trap - EXIT
+    rm -rf "$work"
+    echo 'accept-password: texts: every fault is once in its source'
+    exit 0
+fi
+
 compile()
 {
     "${CC:-cc}" -O2 -Wall -Wextra -Werror -o "$work/build/tests/system/ptydrive" "$work/ptydrive.c"
@@ -139,28 +183,7 @@ case "${1:-}" in
     '') ;;
     --mutate)
         for mutation in repeat redact count; do
-            case "$mutation" in
-                repeat)
-                    sed 's/if (asked > 1)/if (asked > 100)/' "$work/original.c" > "$work/ptydrive.c"
-                    diagnostic='the second prompt was answered'
-                    ;;
-                redact)
-                    awk '
-                        /static void secret_byte/ { function_seen = 1 }
-                        { print }
-                        function_seen && /^\{/ {
-                            print "    putchar(byte); return;"
-                            function_seen = 0
-                        }
-                    ' "$work/original.c" > "$work/ptydrive.c"
-                    diagnostic='credential bytes reached raw'
-                    ;;
-                count)
-                    sed 's/asked, answered);/(asked != 0), answered);/' "$work/original.c" > "$work/ptydrive.c"
-                    diagnostic='prompt or answer count is wrong'
-                    ;;
-            esac
-            cmp -s "$work/original.c" "$work/ptydrive.c" && exit 1
+            password_edit "$mutation"
             phase=$mutation
             compile
             if cases > "$work/$mutation.log" 2>&1; then
@@ -179,6 +202,6 @@ case "${1:-}" in
             cases
         done
         ;;
-    *) echo 'accept-password: usage: [--mutate]' >&2; exit 2 ;;
+    *) echo 'accept-password: usage: [--mutate | --texts]' >&2; exit 2 ;;
 esac
 echo "accept-password: logs: $work"

@@ -8,6 +8,41 @@ case "${1-}" in
 esac
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault FILE FAULT: put FAULT into FILE, a copy of ata.c; with
+# RACH2_FAULT_TEXTS set, only check that its text is once in FILE.
+apply_fault()
+{
+    python3 - "$1" "$2" <<'PY'
+import os
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+if sys.argv[2] == "pio":
+    start = text.index("static int ata_write_on(")
+    prefix, body = text[:start], text[start:]
+    old = "if (d->dma && owned)"
+    new = "if (0 && d->dma && owned)"
+else:
+    prefix, body = "", text
+    old = "#define ATA_SPIN_BEFORE_SLEEP 8"
+    new = "#define ATA_SPIN_BEFORE_SLEEP 512"
+if body.count(old) != 1:
+    raise SystemExit("ata-rate-test: source pattern is not unique")
+if not os.environ.get("RACH2_FAULT_TEXTS"):
+    path.write_text(prefix + body.replace(old, new))
+PY
+}
+
+if [ "${1-}" = --texts ]; then
+    for fault in pio spin; do
+        RACH2_FAULT_TEXTS=1 apply_fault rach2/sys/block/ata.c "$fault"
+    done
+    echo 'ata-rate-test: texts: every fault is once in its source'
+    exit 0
+fi
 mkdir -p build/review-proof
 work=$(mktemp -d "$repo/build/review-proof/ata-rate.XXXXXX")
 mkdir -p "$work/rach2" "$work/tests/host"
@@ -66,50 +101,17 @@ run_phase()
     echo "ata-rate-test: result: $phase status $status"
 }
 
-if [ "${1-}" = --texts ]; then
-    source=rach2/sys/block/ata.c
-    run_phase() { :; }
-    restore() { :; }
-    trap - EXIT
-    RACH2_FAULT_TEXTS=1
-    export RACH2_FAULT_TEXTS
-else
-    echo "ata-rate-test: logs: $work"
-    run_phase fixed
-    [ "${1-}" = --mutate ] || exit 0
-fi
+echo "ata-rate-test: logs: $work"
+run_phase fixed
+[ "${1-}" = --mutate ] || exit 0
 for fault in pio spin; do
     case "$fault" in
         pio) failure='a DMA write uses one data command per 32 KiB and no data-port sectors' ;;
         spin) failure='a delayed write and flush use at most 32 status reads per 32 KiB' ;;
     esac
-    python3 - "$source" "$fault" <<'PY'
-import os
-import pathlib
-import sys
-
-path = pathlib.Path(sys.argv[1])
-text = path.read_text()
-if sys.argv[2] == "pio":
-    start = text.index("static int ata_write_on(")
-    prefix, body = text[:start], text[start:]
-    old = "if (d->dma && owned)"
-    new = "if (0 && d->dma && owned)"
-else:
-    prefix, body = "", text
-    old = "#define ATA_SPIN_BEFORE_SLEEP 8"
-    new = "#define ATA_SPIN_BEFORE_SLEEP 512"
-if body.count(old) != 1:
-    raise SystemExit("ata-rate-test: source pattern is not unique")
-if not os.environ.get("RACH2_FAULT_TEXTS"):
-    path.write_text(prefix + body.replace(old, new))
-PY
+    apply_fault "$source" "$fault"
     run_phase "$fault-mutated"
     restore
     run_phase "$fault-restored"
     cmp "$work/ata.saved.c" "$source"
 done
-if [ "${1-}" = --texts ]; then
-    rm -rf "$work"
-    echo 'ata-rate-test: texts: every fault is once in its source'
-fi
