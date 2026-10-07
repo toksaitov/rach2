@@ -12,6 +12,7 @@ if [ -z "${ARCH_BUILD:-}" ]; then
     REPO=$repo
     . "$repo/mk/arch.sh"
     RACH2_QEMU=${RACH2_QEMU:-$ARCH_QEMU}
+    export RACH2_QEMU
 fi
 QEMU=${RACH2_QEMU:-qemu-system-i386}
 if [ "${1:-}" != --texts ]; then
