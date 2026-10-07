@@ -73,6 +73,9 @@ if [ "${1:-}" = --texts ]; then
     exit 0
 fi
 
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" kstack-proof "$repo/tests/host/kstack_mutate.sh" "$@"
+
 [ "$#" -eq 0 ] || [ "$*" = --check ] || {
     echo 'kstack-proof: usage: kstack_mutate.sh [--check]' >&2
     exit 2

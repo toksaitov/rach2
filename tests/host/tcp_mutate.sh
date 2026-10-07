@@ -8,6 +8,10 @@ repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 texts=
 [ "${1:-}" != --texts ] || texts=1
+if [ -z "$texts" ]; then
+    . "$repo/tests/system/runlock.sh"
+    runlock_hold "$repo" tcp-mutation "$repo/tests/host/tcp_mutate.sh" "$@"
+fi
 child=
 if [ -n "$texts" ]; then
     work=

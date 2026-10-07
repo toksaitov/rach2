@@ -43,6 +43,9 @@ if [ "${1-}" = --texts ]; then
     echo 'ata-rate-test: texts: every fault is once in its source'
     exit 0
 fi
+
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" ata-rate-test "$repo/tests/host/ata_rate_test.sh" "$@"
 mkdir -p build/review-proof
 work=$(mktemp -d "$repo/build/review-proof/ata-rate.XXXXXX")
 mkdir -p "$work/rach2" "$work/tests/host"

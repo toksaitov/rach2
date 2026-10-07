@@ -21,6 +21,10 @@ repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 texts=
 [ "${1:-}" != --texts ] || texts=1
+if [ -z "$texts" ]; then
+    . "$repo/tests/system/runlock.sh"
+    runlock_hold "$repo" kheap-proof "$repo/tests/host/kheap_mutate.sh" "$@"
+fi
 [ "$#" -eq 0 ] || [ "$*" = --check ] || [ "$*" = --texts ] || {
     echo 'kheap-proof: usage: kheap_mutate.sh [--check | --texts]' >&2
     exit 2

@@ -81,6 +81,9 @@ if [ "${1:-}" = --texts ]; then
     exit 0
 fi
 
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" userland-mutation "$repo/tests/host/userland_mutate.sh" "$@"
+
 mkdir -p build
 work=$(mktemp -d "$repo/build/userland-mutation.XXXXXX")
 mkdir -p "$work/tests/host" "$work/tests/musl" "$work/ports" "$work/saved"

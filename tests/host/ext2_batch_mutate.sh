@@ -119,6 +119,9 @@ if [ "${1:-}" = --texts ]; then
     exit 0
 fi
 
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" ext2-batch-mutation "$repo/tests/host/ext2_batch_mutate.sh" "$@"
+
 mode=${1:---batch-only}
 case "$mode" in
     --batch-only|--all) ;;

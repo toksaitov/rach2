@@ -59,6 +59,9 @@ if [ "${1:-}" = --texts ]; then
     exit 0
 fi
 
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" krffs-open "$repo/tests/host/krffs_open_mutate.sh" "$@"
+
 [ "$#" -eq 0 ] || [ "$*" = --check ] || exit 2
 mkdir -p build/tests
 work=$(mktemp -d "$repo/build/tests/krffs-open-proof.XXXXXX")

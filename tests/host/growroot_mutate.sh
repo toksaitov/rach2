@@ -79,6 +79,9 @@ if [ "${1:-}" = --texts ]; then
     exit 0
 fi
 
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" growroot-mutation "$repo/tests/host/growroot_mutate.sh" "$@"
+
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-growroot.XXXXXX")
 cp utils/growroot.c "$work/growroot.saved"
 cp "$work/growroot.saved" "$work/growroot.c"

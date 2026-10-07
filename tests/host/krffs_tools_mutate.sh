@@ -30,6 +30,10 @@ cd "$repo"
 }
 texts=
 [ "$*" != --texts ] || texts=1
+if [ -z "$texts" ]; then
+    . "$repo/tests/system/runlock.sh"
+    runlock_hold "$repo" krffs-tools-mutation "$repo/tests/host/krffs_tools_mutate.sh" "$@"
+fi
 child=
 sources='stageimage.krffs.c fsviz.krffs.c defrag.krffs.c edfs.krffs.c mkimage.sh'
 if [ -n "$texts" ]; then

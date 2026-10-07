@@ -56,6 +56,9 @@ if [ "${1:-}" = --texts ]; then
     exit 0
 fi
 
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" ata-identify-proof "$repo/tests/host/ata_identify_mutate.sh" "$@"
+
 [ "$#" -eq 0 ] || [ "$*" = --check ] || {
     echo 'ata-identify-proof: usage: ata_identify_mutate.sh [--check]' >&2
     exit 2

@@ -19,6 +19,9 @@ if [ "${1:-}" = --texts ]; then
     echo 'rtl8139-mutation: texts: every fault is once in its source'
     exit 0
 fi
+
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" rtl8139-mutation "$repo/tests/host/rtl8139_mutate.sh" "$@"
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-rtl8139.XXXXXX")
 child=
 cp -R rach2/sys "$work/sys"

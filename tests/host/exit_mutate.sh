@@ -25,6 +25,9 @@ if [ "${1:-}" = --texts ]; then
     echo 'exit-mutation: texts: every fault is once in its source'
     exit 0
 fi
+
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" exit-mutation "$repo/tests/host/exit_mutate.sh" "$@"
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-exit.XXXXXX")
 child=
 

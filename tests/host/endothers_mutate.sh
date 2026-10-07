@@ -58,6 +58,9 @@ if [ "${1:-}" = --texts ]; then
     exit 0
 fi
 
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" endothers-proof "$repo/tests/host/endothers_mutate.sh" "$@"
+
 [ "$#" -eq 0 ] || [ "$*" = --check ] || {
     echo 'endothers-proof: usage: endothers_mutate.sh [--check]' >&2
     exit 2

@@ -69,6 +69,9 @@ if [ "${1:-}" = --texts ]; then
     exit 0
 fi
 
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" pagecache-mutation "$repo/tests/host/pagecache_mutate.sh" "$@"
+
 
 [ "$#" -eq 0 ] || [ "$*" = --check ] || exit 2
 mkdir -p build/tests

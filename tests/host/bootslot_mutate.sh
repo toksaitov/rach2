@@ -71,6 +71,9 @@ if [ "${1:-}" = --texts ]; then
     exit 0
 fi
 
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" bootslot-proof "$repo/tests/host/bootslot_mutate.sh" "$@"
+
 mkdir -p build/tests
 work=$(mktemp -d "$repo/build/tests/bootslot-proof.XXXXXX")
 child=

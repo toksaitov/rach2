@@ -17,6 +17,10 @@ repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 texts=
 [ "${1:-}" != --texts ] || texts=1
+if [ -z "$texts" ]; then
+    . "$repo/tests/system/runlock.sh"
+    runlock_hold "$repo" fat-synced-proof "$repo/tests/host/fat_synced_mutate.sh" "$@"
+fi
 if [ -n "$texts" ]; then
     work=
     source=rach2/sys/fs/fat32.c

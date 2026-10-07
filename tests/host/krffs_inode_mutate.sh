@@ -45,6 +45,9 @@ if [ "${1:-}" = --texts ]; then
     exit 0
 fi
 
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" inode-proof "$repo/tests/host/krffs_inode_mutate.sh" "$@"
+
 mkdir -p build/tests
 work=$(mktemp -d "$repo/build/tests/krffs-inode-proof.XXXXXX")
 child=

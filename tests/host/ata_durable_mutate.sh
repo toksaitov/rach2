@@ -47,6 +47,9 @@ if [ "${1:-}" = --texts ]; then
     exit 0
 fi
 
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" ata-durable-proof "$repo/tests/host/ata_durable_mutate.sh" "$@"
+
 mkdir -p build/tests
 work=$(mktemp -d "$repo/build/tests/ata-durable-proof.XXXXXX")
 mkdir -p "$work/rach2" "$work/tests/host"

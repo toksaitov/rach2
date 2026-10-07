@@ -40,6 +40,9 @@ if [ "${1:-}" = --texts ]; then
     exit 0
 fi
 
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" pagecache-ring-proof "$repo/tests/host/pagecache_ring_mutate.sh" "$@"
+
 
 [ "$#" -eq 0 ] || {
     echo 'usage: pagecache_ring_mutate.sh' >&2

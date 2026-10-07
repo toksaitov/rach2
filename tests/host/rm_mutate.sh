@@ -40,6 +40,9 @@ if [ "${1:-}" = --texts ]; then
     exit 0
 fi
 
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" rm-mutation "$repo/tests/host/rm_mutate.sh" "$@"
+
 
 mkdir -p build/tests
 work=$(mktemp -d "$repo/build/tests/rm-proof.XXXXXX")

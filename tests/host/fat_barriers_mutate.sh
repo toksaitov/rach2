@@ -39,6 +39,10 @@ cd "$repo"
 }
 texts=
 [ "$*" != --texts ] || texts=1
+if [ -z "$texts" ]; then
+    . "$repo/tests/system/runlock.sh"
+    runlock_hold "$repo" fat-barriers-proof "$repo/tests/host/fat_barriers_mutate.sh" "$@"
+fi
 if [ -n "$texts" ]; then
     # --texts lists the sites of the tree's drivers alone, in a directory the
     # trap removes as it would remove the fixtures.

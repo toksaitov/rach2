@@ -26,6 +26,10 @@ cd "$repo"
 }
 texts=
 [ "$*" != --texts ] || texts=1
+if [ -z "$texts" ]; then
+    . "$repo/tests/system/runlock.sh"
+    runlock_hold "$repo" dma32-proof "$repo/tests/host/dma32_mutate.sh" "$@"
+fi
 child=
 if [ -n "$texts" ]; then
     ahci=rach2/sys/block/ahci.c

@@ -128,6 +128,9 @@ if [ "${1:-}" = --texts ]; then
     exit 0
 fi
 
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" paging-proof "$repo/tests/host/paging_mutate.sh" "$@"
+
 [ "$#" -eq 0 ] || [ "$*" = --check ] || {
     echo 'paging-proof: usage: paging_mutate.sh [--check]' >&2
     exit 2

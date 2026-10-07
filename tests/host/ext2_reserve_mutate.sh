@@ -80,6 +80,9 @@ if [ "${1:-}" = --texts ]; then
     exit 0
 fi
 
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" ext2-reserve-mutation "$repo/tests/host/ext2_reserve_mutate.sh" "$@"
+
 mkdir -p build/tests
 work=$(mktemp -d "$repo/build/tests/ext2-reserve-proof.XXXXXX")
 cp -R rach2/sys "$work/sys"

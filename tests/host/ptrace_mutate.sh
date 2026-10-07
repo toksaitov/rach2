@@ -143,6 +143,9 @@ if [ "${1:-}" = --texts ]; then
     echo 'ptrace-proof: texts: every fault is once in its source'
     exit 0
 fi
+
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" ptrace-proof "$repo/tests/host/ptrace_mutate.sh" "$@"
 if [ "$#" -eq 0 ]; then
     sh "$repo/tests/host/ptrace_mutate.sh" ptrace
     sh "$repo/tests/host/ptrace_mutate.sh" debugreg
