@@ -20,6 +20,8 @@ set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" doom-mutation "$repo/tests/system/doom_mutate.sh" "$@"
 RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
 REPO=$repo
 . "$repo/mk/arch.sh"
@@ -38,8 +40,6 @@ for fault do
         *) echo "doom-mutation: unknown fault: $fault" >&2; exit 2 ;;
     esac
 done
-. "$repo/tests/system/runlock.sh"
-runlock_hold "$repo" doom-mutation "$repo/tests/system/doom_mutate.sh" "$@"
 [ -f ports/doom/doom1.wad ] || {
     echo 'doom-mutation: ports/doom/doom1.wad is absent; the suite needs the WAD' >&2
     exit 1

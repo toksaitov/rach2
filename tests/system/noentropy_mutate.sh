@@ -22,6 +22,8 @@ set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" noentropy-mutation "$repo/tests/system/noentropy_mutate.sh" "$@"
 RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
 REPO=$repo
 . "$repo/mk/arch.sh"
@@ -42,8 +44,6 @@ for fault do
         *) echo "noentropy-mutation: unknown fault: $fault" >&2; exit 2 ;;
     esac
 done
-. "$repo/tests/system/runlock.sh"
-runlock_hold "$repo" noentropy-mutation "$repo/tests/system/noentropy_mutate.sh" "$@"
 mkdir -p build
 work=$(mktemp -d "$repo/build/noentropy-proof.XXXXXX")
 for source in rach2/sys/fs/devfs.c rach2/sys/syscall.c; do

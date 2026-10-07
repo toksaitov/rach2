@@ -5,6 +5,8 @@ set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" fdlock-mutation "$repo/tests/system/fdlock_mutate.sh" "$@"
 RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
 REPO=$repo
 . "$repo/mk/arch.sh"
@@ -35,8 +37,6 @@ for fault do
         *) echo "fdlock-mutation: unknown fault: $fault" >&2; exit 2 ;;
     esac
 done
-. "$repo/tests/system/runlock.sh"
-runlock_hold "$repo" fdlock-mutation "$repo/tests/system/fdlock_mutate.sh" "$@"
 mkdir -p build
 work=$(mktemp -d "$repo/build/fdlock-proof.XXXXXX")
 child=
