@@ -29,7 +29,7 @@ transport_edit()
 {
     case $1 in
         record)
-            # shellcheck disable=SC2016 # Match the variable in the private source.
+            # shellcheck disable=SC2016 # The private source's variable.
             sed 's@: > "\$LOCAL_TMP/command-failed"@:@' "$copy/original.sh" > "$copy/metal_accept.sh" ;;
         disk-prefix)
             # shellcheck disable=SC2016 # Match the private source's variable.
