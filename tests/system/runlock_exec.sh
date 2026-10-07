@@ -37,8 +37,14 @@ fi
 helper=$RACH2_RUN_WORK
 unset RACH2_TREE_TAKING RACH2_RUN_WORK
 if ! mkdir "$lock" 2>/dev/null; then
-    echo "$name: no run holds this tree, but a run that is gone left $lock;" \
-        "tests/run takes it over when nothing of that run is left" >&2
+    if grep -q '^held ' "$lock/owner" 2>/dev/null; then
+        echo "$name: a fault script's hold on this tree was left: $lock; its fault may" \
+            "be in the sources and its work may still run; restore them, stop its work" \
+            "and remove $lock" >&2
+    else
+        echo "$name: no run holds this tree, but a run that is gone left $lock;" \
+            "tests/run takes it over when nothing of that run is left" >&2
+    fi
     rm -rf "$helper"
     exit 1
 fi
