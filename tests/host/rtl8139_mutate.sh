@@ -8,7 +8,7 @@ cd "$repo"
 # overflow_once FILE: the check the fault replaces is once in FILE.
 overflow_once()
 {
-    if [ "$(grep -c 'if (!rx_overflow_logged)' "$1")" -ne 1 ]; then
+    if [ "$(grep -c 'if (!rx_overflow_logged)' "$1" 2>/dev/null)" != 1 ]; then
         echo "rtl8139-mutation: the overflow check is not once in $1" >&2
         exit 1
     fi

@@ -8,7 +8,7 @@ cd "$repo"
 # line_once FILE TEXT: TEXT, the line a fault changes, is once in FILE.
 line_once()
 {
-    if [ "$(grep -c "$2" "$1")" -ne 1 ]; then
+    if [ "$(grep -c "$2" "$1" 2>/dev/null)" != 1 ]; then
         echo "usbdisk-mutation: not once in $1: $2" >&2
         exit 1
     fi

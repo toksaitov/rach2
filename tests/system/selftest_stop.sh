@@ -16,7 +16,7 @@ repo=$(cd "$(dirname "$0")/../.." && pwd)
 # once FILE TEXT: TEXT, which a fault changes, is once in FILE.
 once()
 {
-    if [ "$(grep -Fc "$2" "$1")" -ne 1 ]; then
+    if [ "$(grep -Fc "$2" "$1" 2>/dev/null)" != 1 ]; then
         echo "selftest-stop: not once in $1: $2" >&2
         exit 1
     fi

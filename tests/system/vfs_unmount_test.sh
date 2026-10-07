@@ -6,7 +6,7 @@ repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 if [ "$*" = --texts ]; then
     for line in 'm = rc == -EIO ?' 'streq(m->covered_path, want)' \
         'if (rc == 0 && !VFS_IS_DIR(st.mode)) {' 'if (dir && tref->node != tref->mnt->root) {'; do
-        if [ "$(grep -Fc "$line" "$repo/rach2/sys/fs/vfs.c")" -ne 1 ]; then
+        if [ "$(grep -Fc "$line" "$repo/rach2/sys/fs/vfs.c" 2>/dev/null)" != 1 ]; then
             echo "vfs-unmount: not once in vfs.c: $line" >&2
             exit 1
         fi

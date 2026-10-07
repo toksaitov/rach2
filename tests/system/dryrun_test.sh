@@ -30,7 +30,7 @@ esac
 REPO=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$REPO"
 if [ "$mutate" -eq 2 ]; then
-    if [ "$(grep -c '^DRY_RUN :=' mk/dryrun.mk)" -ne 1 ]; then
+    if [ "$(grep -c '^DRY_RUN :=' mk/dryrun.mk 2>/dev/null)" != 1 ]; then
         echo 'dryrun-test: mk/dryrun.mk does not define DRY_RUN once' >&2
         exit 1
     fi

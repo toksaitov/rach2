@@ -8,7 +8,7 @@ cd "$repo"
 # ring_once FILE: the check the fault removes is once in FILE.
 ring_once()
 {
-    if [ "$(grep -c 'if (!valid_node_ring(&file_system))' "$1")" -ne 1 ]; then
+    if [ "$(grep -c 'if (!valid_node_ring(&file_system))' "$1" 2>/dev/null)" != 1 ]; then
         echo "krffs-fuse-mutation: the node ring check is not once in $1" >&2
         exit 1
     fi

@@ -7,7 +7,7 @@ cd "$repo"
 # rc_once FILE: the operand the fault changes is once in FILE.
 rc_once()
 {
-    if [ "$(grep -c '"+c"(rc)' "$1")" -ne 1 ]; then
+    if [ "$(grep -c '"+c"(rc)' "$1" 2>/dev/null)" != 1 ]; then
         echo "rng-mutation: the cpuid operand is not once in $1" >&2
         exit 1
     fi

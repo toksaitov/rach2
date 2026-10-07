@@ -13,7 +13,7 @@ exit_texts()
 {
     for line in 'self->state = PROC_ZOMBIE;' 'self->in_syscall = 1;' 'mm_drop(self);' \
         'switch_page_directory(_kernel_dir);'; do
-        if [ "$(grep -c "$line" "$1")" -ne 1 ]; then
+        if [ "$(grep -c "$line" "$1" 2>/dev/null)" != 1 ]; then
             echo "exit-mutation: not once in $1: $line" >&2
             return 1
         fi
