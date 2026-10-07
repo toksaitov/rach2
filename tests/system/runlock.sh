@@ -1,3 +1,4 @@
+# shellcheck shell=sh
 # runlock.sh: the tree lock for a script that changes sources in place.
 #
 # A fault script puts a fault into this tree's sources and builds and boots

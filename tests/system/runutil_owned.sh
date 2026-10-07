@@ -98,6 +98,8 @@ make_tree()
     tree=$work/$1
     mkdir -p "$tree/tests/system/runner" "$tree/tools/setup" || return 125
     cp "$repo/tests/run" "$tree/tests/run" || return 125
+    cp "$repo/tests/system/runlock.sh" "$repo/tests/system/runlock_exec.sh" \
+        "$tree/tests/system/" || return 125
     cp "$work/runutil.c" "$tree/tests/system/runner/runutil.c" || return 125
     if [ "$2" = hidden ]; then
         mv "$tree/tests/system/runner/runutil.c" "$tree/tests/system/runner/runutil_source.c" || return 125

@@ -37,6 +37,7 @@ runner=0
 mkdir -p "$tree/tests/system/runner" "$tree/tools/setup" "$tree/tmp"
 cp "$repo/tests/system/runner/runutil.c" "$work/runutil.saved"
 cp "$repo/tests/run" "$work/run.saved"
+cp "$repo/tests/system/runlock.sh" "$repo/tests/system/runlock_exec.sh" "$tree/tests/system/"
 
 restore()
 {
