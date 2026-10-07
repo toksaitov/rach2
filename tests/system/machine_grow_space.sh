@@ -28,7 +28,8 @@ space_mutant()
 
 if [ "${1:-}" = --texts ]; then
     for fault in ram-work ram-log; do
-        if space_mutant "$fault" tools/dev/machine_grow.sh | cmp -s - tools/dev/machine_grow.sh; then
+        if [ ! -r tools/dev/machine_grow.sh ] ||
+            space_mutant "$fault" tools/dev/machine_grow.sh | cmp -s - tools/dev/machine_grow.sh; then
             echo "grow-space: the $fault fault is not in tools/dev/machine_grow.sh" >&2
             exit 1
         fi

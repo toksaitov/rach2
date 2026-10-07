@@ -37,7 +37,7 @@ if [ "$*" = --texts ]; then
     for fault in stale unknown retained; do
         script_edit "$fault" "$repo/tests/system/usbdisk_mutate.sh"
     done
-    if [ "$(grep -c 'the child volume would not mount' "$repo/tests/usbdiskprobe.c")" -eq 0 ]; then
+    if ! grep -q 'the child volume would not mount' "$repo/tests/usbdiskprobe.c"; then
         echo 'usbdisk-script: the probe no longer prints the assertion the rows edit' >&2
         exit 1
     fi

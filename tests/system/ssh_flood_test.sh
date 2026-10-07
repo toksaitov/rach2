@@ -13,10 +13,12 @@ if [ "${1:-}" != --texts ]; then
     runlock_hold "$repo" ssh-flood "$repo/tests/system/ssh_flood_test.sh" "$@"
 fi
 if [ "$mutate" -eq 2 ]; then
-    sed '/exec sleep 300/,/FLOOD_PIDS=/s/FLOOD_PIDS=.*$/ :/' "$repo/tests/system/suites/ssh.sh" |
-        cmp -s - "$repo/tests/system/suites/ssh.sh" && {
-        echo 'ssh-flood: the flood functions no longer record their sleep' >&2; exit 1;
-    }
+    suite=$repo/tests/system/suites/ssh.sh
+    if [ ! -r "$suite" ] ||
+        sed '/exec sleep 300/,/FLOOD_PIDS=/s/FLOOD_PIDS=.*$/ :/' "$suite" | cmp -s - "$suite"; then
+        echo 'ssh-flood: the flood functions no longer record their sleep' >&2
+        exit 1
+    fi
     echo 'ssh-flood: texts: every fault is once in its source'
     exit 0
 fi

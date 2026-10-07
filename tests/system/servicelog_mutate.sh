@@ -41,7 +41,7 @@ if text.count(old) != 1:
 if not os.environ.get('RACH2_FAULT_TEXTS'):
     path.write_text(text.replace(old, new))
 PY
-    touch "$source"
+    [ -n "$texts" ] || touch "$source"
 }
 
 # log_fault NAME: put the fault whose failing phase is NAME into its source.

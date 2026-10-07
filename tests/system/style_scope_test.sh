@@ -53,8 +53,9 @@ for f in scripts.sh textcheck.sh; do
 done
 # The byte scanner the text check runs, compiled into the private tree; with no
 # makefile there, the check's own make finds it present and does nothing.
-"${CC:-cc}" -O2 -Wall -Wextra -Werror -o "$tree/build/tools/verify/asciiscan" \
-    "$repo/tools/verify/asciiscan.c"
+# --texts runs no row and needs none.
+[ "$mutate" -eq 2 ] || "${CC:-cc}" -O2 -Wall -Wextra -Werror \
+    -o "$tree/build/tools/verify/asciiscan" "$repo/tools/verify/asciiscan.c"
 
 # One clean file of each kind, and the vendored scripts the list must leave out.
 printf '#!/bin/sh\necho "run: starting"\n' >"$tree/tests/run"
