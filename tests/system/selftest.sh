@@ -986,8 +986,8 @@ check "and leaves the lock, since the script's work may still run" 1 \
     "$([ -e "$WORK/build/.run.lock" ] && echo 1 || echo 0)"
 out=$(run passing); rc=$?
 check "which no run takes over, since its work and its fault may remain" 1 "$rc"
-check "and the refusal says the script was killed" 1 \
-    "$(printf '%s\n' "$out" | grep -c 'a fault script holding this tree was killed: holder ')"
+check "and the refusal says a fault script's hold was left" 1 \
+    "$(printf '%s\n' "$out" | grep -c "a fault script's hold on this tree was left: holder ")"
 rm -rf "$WORK/build/.run.lock"
 rm -f "$WORK/holder-in" "$WORK/holder-go" "$WORK/holder-pid"
 

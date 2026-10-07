@@ -10,10 +10,10 @@
 # the script once, through this process, and not again while its trap
 # restores the sources: a TERM, HUP or INT here is passed to the script's
 # group as TERM. The directory goes when the script has ended, and the exit
-# status is the script's. A script killed with KILL restored nothing and may
-# have left work running in groups of its own, which nothing here can name,
-# so the directory stays with `killed` in its owner file, and tests/run
-# refuses it until a person has looked.
+# status is the script's. Its owner file says `held`, which tests/run never
+# takes over: a script killed with KILL restored nothing and may have left
+# work running in groups of its own, and so may one whose holder was killed,
+# so only this process's own exit removes the directory.
 set -u
 name=$1
 shift
@@ -40,8 +40,8 @@ if ! mkdir "$lock" 2>/dev/null; then
     rm -rf "$helper"
     exit 1
 fi
-printf 'pid %s\npgid %s\nsince %s\nargs %s\n' "$$" "$(ps -o pgid= -p $$ | tr -d ' ')" \
-    "$(date '+%Y-%m-%d %H:%M:%S')" "$name $*" > "$lock/owner.new"
+printf 'pid %s\npgid %s\nsince %s\nargs %s\nheld fault script\n' "$$" \
+    "$(ps -o pgid= -p $$ | tr -d ' ')" "$(date '+%Y-%m-%d %H:%M:%S')" "$name $*" > "$lock/owner.new"
 mv "$lock/owner.new" "$lock/owner"
 RACH2_TREE_HELD=$$
 export RACH2_TREE_HELD
@@ -67,7 +67,6 @@ while :; do
     fi
 done
 if [ "$status" -eq 137 ]; then
-    printf 'killed %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" >> "$lock/owner"
     echo "$name: the script was killed; its work may still run and its fault may be" \
         "in the sources; $lock stays until a person has looked" >&2
     rm -rf "$helper"
