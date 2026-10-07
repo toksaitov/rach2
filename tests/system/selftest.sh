@@ -984,10 +984,10 @@ wait "$holdrun"; rc=$?
 check "a holder whose script was killed exits as the script did" 137 "$rc"
 check "and leaves the lock, since the script's work may still run" 1 \
     "$([ -e "$WORK/build/.run.lock" ] && echo 1 || echo 0)"
-heldwork=$(sed -n 's/^work //p' "$WORK/build/.run.lock/owner" 2>/dev/null)
-check "and names the script's process group where a run looks for what a run left" \
-    "$(cat "$WORK/holder-pid")" "$(cat "$heldwork/held.groups" 2>/dev/null)"
-rm -rf "$heldwork"
+out=$(run passing); rc=$?
+check "which no run takes over, since its work and its fault may remain" 1 "$rc"
+check "and the refusal says the script was killed" 1 \
+    "$(printf '%s\n' "$out" | grep -c 'a fault script holding this tree was killed: holder ')"
 rm -rf "$WORK/build/.run.lock"
 rm -f "$WORK/holder-in" "$WORK/holder-go" "$WORK/holder-pid"
 

@@ -8,12 +8,12 @@
 # SCRIPT runs in a process group of its own, as tests/run runs a suite, so a
 # signal sent to this process's group, as a terminal's interrupt is, reaches
 # the script once, through this process, and not again while its trap
-# restores the sources: a TERM, HUP or INT here is passed to it as TERM. The
-# owner file's work directory lists that group in held.groups, where
-# tests/run looks for what a run left. The directory goes when the script has
-# ended, and the exit status is the script's. A script killed with KILL could
-# restore nothing and may have left work running, so the directory stays,
-# for tests/run to take over once nothing of the group is left.
+# restores the sources: a TERM, HUP or INT here is passed to the script's
+# group as TERM. The directory goes when the script has ended, and the exit
+# status is the script's. A script killed with KILL restored nothing and may
+# have left work running in groups of its own, which nothing here can name,
+# so the directory stays with `killed` in its owner file, and tests/run
+# refuses it until a person has looked.
 set -u
 name=$1
 shift
@@ -40,16 +40,24 @@ if ! mkdir "$lock" 2>/dev/null; then
     rm -rf "$helper"
     exit 1
 fi
-printf 'pid %s\npgid %s\nwork %s\nsince %s\nargs %s\n' "$$" "$(ps -o pgid= -p $$ | tr -d ' ')" \
-    "$helper" "$(date '+%Y-%m-%d %H:%M:%S')" "$name $*" > "$lock/owner.new"
+printf 'pid %s\npgid %s\nsince %s\nargs %s\n' "$$" "$(ps -o pgid= -p $$ | tr -d ' ')" \
+    "$(date '+%Y-%m-%d %H:%M:%S')" "$name $*" > "$lock/owner.new"
 mv "$lock/owner.new" "$lock/owner"
 RACH2_TREE_HELD=$$
 export RACH2_TREE_HELD
+child=
+signalled=
+# stop_script: TERM to the script's group, or to its pid while it has not
+# made the group yet.
+stop_script()
+{
+    "$helper/runutil" killgroup "$child" 15 2>/dev/null || kill -TERM "$child" 2>/dev/null
+}
+trap 'signalled=1; [ -z "$child" ] || stop_script' TERM HUP INT
+[ -z "$signalled" ] || { rm -rf "$lock" "$helper"; exit 143; }
 "$helper/runutil" group sh "$@" &
 child=$!
-echo "$child" > "$helper/held.groups"
-signalled=
-trap 'signalled=1; kill -TERM "$child" 2>/dev/null' TERM HUP INT
+[ -z "$signalled" ] || stop_script
 while :; do
     signalled=
     status=0
@@ -59,8 +67,10 @@ while :; do
     fi
 done
 if [ "$status" -eq 137 ]; then
-    echo "$name: the script was killed and its work may still run; $lock stays" \
-        "for tests/run to take over when nothing of it is left" >&2
+    printf 'killed %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" >> "$lock/owner"
+    echo "$name: the script was killed; its work may still run and its fault may be" \
+        "in the sources; $lock stays until a person has looked" >&2
+    rm -rf "$helper"
     exit "$status"
 fi
 rm -rf "$lock" "$helper"

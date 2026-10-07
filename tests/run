@@ -247,7 +247,9 @@ trap 'SIGNALLED=1; finish; echo "run: result: interrupted by hup" >&2; exit 129'
 # recorded one. A fault script holds the tree through runlock_exec.sh, and a
 # run it starts finds the lock's owner among its ancestors (runlock.sh) and
 # runs under that hold, taking and releasing nothing; a fault script a run
-# starts finds the run's hold the same way.
+# starts finds the run's hold the same way. A lock whose owner file says a
+# fault script was killed is never taken over: its work may run in groups no
+# ledger names, and its fault may still be in the sources.
 LOCK="$REPO/build/.run.lock"
 . "$REPO/tests/system/runlock.sh"
 lock_field() { sed -n "s/^$1 //p" "$LOCK/owner" 2>/dev/null; }
@@ -296,6 +298,9 @@ lock_take() {
         return 1
     elif lock_owner_alive; then
         echo "run: another run holds this tree: $(lock_field pid), $(lock_field args), since $(lock_field since)" >&2
+        return 1
+    elif [ -n "$(lock_field killed)" ]; then
+        echo "run: a fault script holding this tree was killed: $(lock_field args), since $(lock_field since); its work may still run and its fault may be in the sources; restore them, stop its work and remove $LOCK" >&2
         return 1
     elif [ -n "$(lock_survivors)" ]; then
         echo "run: a run that is gone left work running: pids $(lock_survivors); stop them before the next run" >&2
