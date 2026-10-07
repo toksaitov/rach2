@@ -4,12 +4,16 @@
 # shellcheck disable=SC2016
 set -eu
 
-# The build tree and the emulator of the architecture
-# tests/system/suites.mk names.
-ARCH_BUILD=${ARCH_BUILD:-build}
-QEMU=${RACH2_QEMU:-qemu-system-i386}
-
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
+# The build tree and the emulator of the architecture tests/system/suites.mk
+# names, or, run directly, of ARCH, which machine_grow_plan.sh also reads.
+if [ -z "${ARCH_BUILD:-}" ]; then
+    RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
+    REPO=$repo
+    . "$repo/mk/arch.sh"
+    RACH2_QEMU=${RACH2_QEMU:-$ARCH_QEMU}
+fi
+QEMU=${RACH2_QEMU:-qemu-system-i386}
 if [ "${1:-}" != --texts ]; then
     . "$repo/tests/system/runlock.sh"
     runlock_hold "$repo" grow-space "$repo/tests/system/machine_grow_space.sh" "$@"
