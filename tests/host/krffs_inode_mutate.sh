@@ -3,6 +3,48 @@
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" "$2" <<'PY'
+from pathlib import Path
+import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+w = Path(sys.argv[1])
+changes = {
+'orphan': ('sys/fs/krffs.c', 'return krffs_mix_hash(node->parent_id, node->id);',
+           'return krffs_mix_id(node->parent_id, (const char *)node->name);'),
+'root-node': ('sys/fs/krffs.c', '    if (node->type == KRFFS_ROOT_NODE) {\n        return 1;\n    }\n', ''),
+'root-old': ('sys/syscall_fs.c', '        kst.st_ino = 1;\n', '        kst.st_ino = 0;\n'),
+'root-wide': ('sys/syscall_fs.c', '            STAT_SET_INO(&kst, 1);\n', '            kst.st_ino = 0;\n'),
+'harness': ('harness.c', '    if (child_poll() >= 0)\n        drain_ready();\n', '')}
+file, old, new = changes[sys.argv[2]]
+p = w / file
+s = p.read_text()
+assert s.count(old) == 1, sys.argv[2]
+p.write_text(s.replace(old, new))
+PY
+}
+
+faults='orphan root-node root-old root-wide harness'
+if [ "${1:-}" = --texts ]; then
+    # The faults name their files as the private tree lays them out.
+    root=$(mktemp -d "${TMPDIR:-/tmp}/rach2-krffs-inode-texts.XXXXXX")
+    trap 'rm -rf "$root"' EXIT
+    ln -s "$repo/rach2/sys" "$root/sys"
+    ln -s "$repo/tests/system/runner/harness.c" "$root/harness.c"
+    for fault in $faults; do
+        RACH2_FAULT_TEXTS=1 apply_fault "$root" "$fault" >/dev/null || exit 1
+    done
+    echo 'inode-proof: texts: every fault is once in its source'
+    exit 0
+fi
+
 mkdir -p build/tests
 work=$(mktemp -d "$repo/build/tests/krffs-inode-proof.XXXXXX")
 child=
@@ -182,24 +224,8 @@ run_phase()
 echo "inode-proof: logs: $work"
 run_phase fixed inode 0 'root stat paths pass'
 run_phase harness-fixed harness 0 'probe wait bounds pass'
-for fault in orphan root-node root-old root-wide harness; do
-    python3 - "$work" "$fault" <<'PY'
-from pathlib import Path
-import sys
-w = Path(sys.argv[1])
-changes = {
-'orphan': ('sys/fs/krffs.c', 'return krffs_mix_hash(node->parent_id, node->id);',
-           'return krffs_mix_id(node->parent_id, (const char *)node->name);'),
-'root-node': ('sys/fs/krffs.c', '    if (node->type == KRFFS_ROOT_NODE) {\n        return 1;\n    }\n', ''),
-'root-old': ('sys/syscall_fs.c', '        kst.st_ino = 1;\n', '        kst.st_ino = 0;\n'),
-'root-wide': ('sys/syscall_fs.c', '            STAT_SET_INO(&kst, 1);\n', '            kst.st_ino = 0;\n'),
-'harness': ('harness.c', '    if (child_poll() >= 0)\n        drain_ready();\n', '')}
-file, old, new = changes[sys.argv[2]]
-p = w / file
-s = p.read_text()
-assert s.count(old) == 1, sys.argv[2]
-p.write_text(s.replace(old, new))
-PY
+for fault in $faults; do
+    apply_fault "$work" "$fault"
     kind=inode
     message='root inode is 1'
     case "$fault" in

@@ -4,9 +4,18 @@ set -eu
 case ${1:-} in
     '') mutate=0 ;;
     --mutate) mutate=1 ;;
-    *) echo 'ssh-flood: usage: ssh_flood_test.sh [--mutate]' >&2; exit 2 ;;
+    --texts) mutate=2 ;;
+    *) echo 'ssh-flood: usage: ssh_flood_test.sh [--mutate | --texts]' >&2; exit 2 ;;
 esac
 repo=$(cd "$(dirname "$0")/../.." && pwd)
+if [ "$mutate" -eq 2 ]; then
+    sed '/exec sleep 300/,/FLOOD_PIDS=/s/FLOOD_PIDS=.*$/ :/' "$repo/tests/system/suites/ssh.sh" |
+        cmp -s - "$repo/tests/system/suites/ssh.sh" && {
+        echo 'ssh-flood: the flood functions no longer record their sleep' >&2; exit 1;
+    }
+    echo 'ssh-flood: texts: every fault is once in its source'
+    exit 0
+fi
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-ssh-flood.XXXXXX")
 driver=0
 cp "$repo/tests/system/suites/ssh.sh" "$work/saved.sh"

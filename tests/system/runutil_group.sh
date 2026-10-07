@@ -5,10 +5,19 @@ set -eu
 case ${1:-} in
     '') mutate=0 ;;
     --mutate) mutate=1 ;;
-    *) echo 'runutil-group: usage: runutil_group.sh [--mutate]' >&2; exit 2 ;;
+    --texts) mutate=2 ;;
+    *) echo 'runutil-group: usage: runutil_group.sh [--mutate | --texts]' >&2; exit 2 ;;
 esac
 [ "$#" -le 1 ] || exit 2
 repo=$(cd "$(dirname "$0")/../.." && pwd)
+if [ "$mutate" -eq 2 ]; then
+    if [ "$(grep -c 'if (actual != pid)' "$repo/tests/system/runner/runutil.c")" -ne 1 ]; then
+        echo 'runutil-group: the group check is not once in runutil.c' >&2
+        exit 1
+    fi
+    echo 'runutil-group: texts: every fault is once in its source'
+    exit 0
+fi
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-runutil-group.XXXXXX")
 child=0
 

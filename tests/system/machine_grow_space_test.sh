@@ -7,9 +7,43 @@ proof=$(mktemp -d "${TMPDIR:-/tmp}/rach2-grow-space.XXXXXX")
 proof=$(CDPATH='' cd -- "$proof" && pwd -P)
 echo "machine-grow-space-test: logs: $proof"
 fail() { echo "machine-grow-space-test: failed: $*" >&2; exit 1; }
-[ "$#" = 0 ] || [ "$*" = --mutate ] || fail 'usage: machine_grow_space_test.sh [--mutate]'
+[ "$#" = 0 ] || [ "$*" = --mutate ] || [ "$*" = --texts ] || fail 'usage: machine_grow_space_test.sh [--mutate | --texts]'
 cp "$repo/tools/dev/machine_grow.sh" "$proof/original.sh"
 cp "$proof/original.sh" "$proof/source.sh"
+
+# mutate_source MUTATION: $proof/source.sh is $proof/original.sh with
+# MUTATION in it, and `diagnostic` the words its failing row prints.
+mutate_source()
+{
+    case "$1" in
+        work)
+            sed 's|mktemp -d "$store/machine-grow.XXXXXX"|mktemp -d /tmp/machine-grow.XXXXXX|' "$proof/original.sh" > "$proof/source.sh"
+            diagnostic='work returned 1, expected 0'
+            ;;
+        log)
+            sed 's/fail "writing $work\/$log_name"/: "writing $work\/$log_name"/' "$proof/original.sh" > "$proof/source.sh"
+            diagnostic='log returned 0, expected 1'
+            ;;
+        diagnostic)
+            sed 's/fail "creating $work\/expected-ranges.txt; growset failed (see $work\/growset.log)"/fail "the seed geometry is not supported"/' "$proof/original.sh" > "$proof/source.sh"
+            diagnostic='output diagnostic'
+            ;;
+    esac
+}
+
+if [ "$*" = --texts ]; then
+    for mutation in work log diagnostic; do
+        mutate_source "$mutation"
+        if cmp -s "$proof/original.sh" "$proof/source.sh"; then
+            echo "machine-grow-space-test: the $mutation fault is not in tools/dev/machine_grow.sh" >&2
+            exit 1
+        fi
+    done
+    trap - EXIT
+    rm -rf "$proof"
+    echo 'machine-grow-space-test: texts: every fault is once in its source'
+    exit 0
+fi
 trap 'cp "$proof/original.sh" "$proof/source.sh"' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
@@ -151,20 +185,7 @@ run_rows()
 run_rows fixed
 if [ "$#" = 1 ]; then
     for mutation in work log diagnostic; do
-        case "$mutation" in
-            work)
-                sed 's|mktemp -d "$store/machine-grow.XXXXXX"|mktemp -d /tmp/machine-grow.XXXXXX|' "$proof/original.sh" > "$proof/source.sh"
-                diagnostic='work returned 1, expected 0'
-                ;;
-            log)
-                sed 's/fail "writing $work\/$log_name"/: "writing $work\/$log_name"/' "$proof/original.sh" > "$proof/source.sh"
-                diagnostic='log returned 0, expected 1'
-                ;;
-            diagnostic)
-                sed 's/fail "creating $work\/expected-ranges.txt; growset failed (see $work\/growset.log)"/fail "the seed geometry is not supported"/' "$proof/original.sh" > "$proof/source.sh"
-                diagnostic='output diagnostic'
-                ;;
-        esac
+        mutate_source "$mutation"
         if run_rows "$mutation" >"$proof/$mutation.log" 2>&1; then fail "$mutation mutation passed"; fi
         grep -q "$diagnostic" "$proof/$mutation.log" || { cat "$proof/$mutation.log" >&2; fail "$mutation wrong failure"; }
         echo "machine-grow-space-test: mutation: $mutation detected"

@@ -2,7 +2,7 @@
 # Prove the GPT disk-write refusal row with recovery kernels built privately,
 # for the architecture ARCH names, on its test image and its emulator.
 #
-# Usage: sh tests/system/gpt_write_mutate.sh
+# Usage: sh tests/system/gpt_write_mutate.sh [--texts]
 #
 # tests/system/gpt_write_refusal.sh types the recovery shell's `disk write`
 # at its GPT and MBR disks and requires the refusal and an unchanged disk, or
@@ -26,6 +26,91 @@
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_refusal ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_refusal()
+{
+    python3 - "$1" <<'PY'
+from pathlib import Path
+import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+path = Path(sys.argv[1])
+text = path.read_text()
+start_line = "    if (is_gpt) {\n"
+if text.count(start_line) != 1:
+    raise SystemExit("gpt-write-mutation: the GPT refusal is not unique")
+start = text.index(start_line)
+end = text.index("\n    }\n", start) + len("\n    }\n")
+if "return;" not in text[start:end]:
+    raise SystemExit("gpt-write-mutation: the GPT refusal does not return")
+path.write_text(text[:start] + "    (void)is_gpt;\n" + text[end:])
+PY
+}
+
+
+# apply_backup ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_backup()
+{
+    python3 - "$1" <<'PY'
+from pathlib import Path
+import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+path = Path(sys.argv[1])
+text = path.read_text()
+read = ("        if (block0->read(block0, lba, 1, disk_sector) != 0) {\n"
+        "            console_printf(\"disk: the last sector is unreadable; it is not written\\n\");\n"
+        "            return;\n"
+        "        }\n"
+        "        is_gpt = holds_gpt_header(disk_sector);\n")
+if text.count(read) != 1:
+    raise SystemExit("gpt-write-mutation: the read of the last sector is not unique")
+path.write_text(text.replace(read, ""))
+PY
+}
+
+
+# apply_mbr ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_mbr()
+{
+    python3 - "$1" <<'PY'
+from pathlib import Path
+import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+path = Path(sys.argv[1])
+text = path.read_text()
+check = "            return (int)i + 1;\n"
+if text.count(check) != 1:
+    raise SystemExit("gpt-write-mutation: the MBR check is not unique")
+path.write_text(text.replace(check, "            return 0;\n"))
+PY
+}
+
+if [ "${1:-}" = --texts ]; then
+    RACH2_FAULT_TEXTS=1
+    export RACH2_FAULT_TEXTS
+    apply_refusal rach2/kernel.c >/dev/null
+    apply_backup rach2/kernel.c >/dev/null
+    apply_mbr rach2/kernel.c >/dev/null
+    echo 'gpt-write-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
+
 RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
 REPO=$repo
 . "$repo/mk/arch.sh"
@@ -126,21 +211,7 @@ printf 'build/tools/inspect/elfcheck: ;\n' >"$tree/Makefile"
 cp "$source" "$work/kernel.saved"
 run_phase fixed pass
 changed=1
-python3 - "$source" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-text = path.read_text()
-start_line = "    if (is_gpt) {\n"
-if text.count(start_line) != 1:
-    raise SystemExit("gpt-write-mutation: the GPT refusal is not unique")
-start = text.index(start_line)
-end = text.index("\n    }\n", start) + len("\n    }\n")
-if "return;" not in text[start:end]:
-    raise SystemExit("gpt-write-mutation: the GPT refusal does not return")
-path.write_text(text[:start] + "    (void)is_gpt;\n" + text[end:])
-PY
+apply_refusal "$source"
 touch "$source"
 run_phase refusal-removed fail g
 if cmp -s "$work/fixed.kernel" "$work/refusal-removed.kernel"; then
@@ -150,21 +221,7 @@ restore
 run_phase restored pass
 cmp "$work/fixed.kernel" "$work/restored.kernel"
 changed=1
-python3 - "$source" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-text = path.read_text()
-read = ("        if (block0->read(block0, lba, 1, disk_sector) != 0) {\n"
-        "            console_printf(\"disk: the last sector is unreadable; it is not written\\n\");\n"
-        "            return;\n"
-        "        }\n"
-        "        is_gpt = holds_gpt_header(disk_sector);\n")
-if text.count(read) != 1:
-    raise SystemExit("gpt-write-mutation: the read of the last sector is not unique")
-path.write_text(text.replace(read, ""))
-PY
+apply_backup "$source"
 touch "$source"
 run_phase backup-unread fail h
 if cmp -s "$work/fixed.kernel" "$work/backup-unread.kernel"; then
@@ -174,17 +231,7 @@ restore
 run_phase backup-restored pass
 cmp "$work/fixed.kernel" "$work/backup-restored.kernel"
 changed=1
-python3 - "$source" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-text = path.read_text()
-check = "            return (int)i + 1;\n"
-if text.count(check) != 1:
-    raise SystemExit("gpt-write-mutation: the MBR check is not unique")
-path.write_text(text.replace(check, "            return 0;\n"))
-PY
+apply_mbr "$source"
 touch "$source"
 run_phase mbr-unread fail e
 if cmp -s "$work/fixed.kernel" "$work/mbr-unread.kernel"; then

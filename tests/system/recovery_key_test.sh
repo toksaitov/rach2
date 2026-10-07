@@ -3,9 +3,25 @@
 set -eu
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 case "${1:-}" in
-    ''|--mutate) ;;
-    *) echo "recovery-key-test: usage: recovery_key_test.sh [--mutate]" >&2; exit 2 ;;
+    ''|--mutate|--texts) ;;
+    *) echo "recovery-key-test: usage: recovery_key_test.sh [--mutate | --texts]" >&2; exit 2 ;;
 esac
+# once FILE TEXT: TEXT, which a fault changes, is once in FILE.
+once()
+{
+    if [ "$(grep -Fc "$2" "$1")" -ne 1 ]; then
+        echo "recovery-key-test: not once in $1: $2" >&2
+        exit 1
+    fi
+}
+
+if [ "${1:-}" = --texts ]; then
+    # shellcheck disable=SC2016
+    once "$REPO/krffs/gen_recovery_key.sh" 'cat "$TMP.line" >> "$TMP"'
+    once "$REPO/krffs/stageimage.krffs.c" 'ok = stage_file(file_system, path, mode, uid, gid, data, len);'
+    echo 'recovery-key-test: texts: every fault is once in its source'
+    exit 0
+fi
 mkdir -p "$REPO/build"
 WORK=$(mktemp -d "$REPO/build/recovery-key-test.XXXXXX")
 echo "recovery-key-test: logs: $WORK"

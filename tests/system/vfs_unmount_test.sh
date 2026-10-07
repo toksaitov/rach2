@@ -2,9 +2,20 @@
 # Compile whole production functions with counted filesystem substitutes.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
+[ "$#" -eq 0 ] || [ "$*" = --mutate ] || [ "$*" = --texts ] || exit 2
+if [ "$*" = --texts ]; then
+    for line in 'm = rc == -EIO ?' 'streq(m->covered_path, want)' \
+        'if (rc == 0 && !VFS_IS_DIR(st.mode)) {' 'if (dir && tref->node != tref->mnt->root) {'; do
+        if [ "$(grep -Fc "$line" "$repo/rach2/sys/fs/vfs.c")" -ne 1 ]; then
+            echo "vfs-unmount: not once in vfs.c: $line" >&2
+            exit 1
+        fi
+    done
+    echo 'vfs-unmount: texts: every fault is once in its source'
+    exit 0
+fi
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-unmount.XXXXXX")
 echo "vfs-unmount: logs: $work"
-[ "$#" -eq 0 ] || [ "$*" = --mutate ] || exit 2
 cp "$repo/rach2/sys/fs/vfs.c" "$work/saved.c"
 cp "$work/saved.c" "$work/vfs.c"
 trap 'cp "$work/saved.c" "$work/vfs.c"' EXIT

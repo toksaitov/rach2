@@ -4,6 +4,37 @@ set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" <<'PY'
+from pathlib import Path
+import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+path = Path(sys.argv[1])
+source = path.read_text()
+old = 'if (synchronous || wb->bytes == EXT2_WB_BYTES)'
+if source.count(old) != 1:
+    raise SystemExit('ext2-batch-mutation: source pattern is not unique')
+path.write_text(source.replace(old, 'if (synchronous || 1)'))
+PY
+}
+
+if [ "${1:-}" = --texts ]; then
+    RACH2_FAULT_TEXTS=1
+    export RACH2_FAULT_TEXTS
+    apply_fault rach2/sys/fs/ext2.c >/dev/null
+    echo 'ext2-batch-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
+
 # The architecture, from ARCH as mk/arch.sh reads it: its build tree and its
 # emulator.
 RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
@@ -158,17 +189,7 @@ if [ -n "$baseline" ]; then
     restore
 fi
 changed=1
-python3 - "$source" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-source = path.read_text()
-old = 'if (synchronous || wb->bytes == EXT2_WB_BYTES)'
-if source.count(old) != 1:
-    raise SystemExit('ext2-batch-mutation: source pattern is not unique')
-path.write_text(source.replace(old, 'if (synchronous || 1)'))
-PY
+apply_fault "$source"
 run_phase per-call fail
 run_phase per-call-append fail cost-append append
 if cmp -s "$work/fixed.kernel" "$work/per-call.kernel"; then

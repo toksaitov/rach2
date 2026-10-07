@@ -10,6 +10,49 @@ set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" "$2" <<'PY'
+import pathlib
+import sys
+import os
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+opening = ("return ((flags & TCP_ACK) && ack_num == tcb->snd_nxt) ? TCP_RST_ACCEPT "
+           ": TCP_RST_IGNORE;")
+changes = {
+    "in-window": ("        return TCP_RST_CHALLENGE;\n", "        return TCP_RST_ACCEPT;\n"),
+    "out-of-window": ("    return TCP_RST_IGNORE;\n}\n", "    return TCP_RST_CHALLENGE;\n}\n"),
+    "opening-flag": (opening, "return ack_num == tcb->snd_nxt ? TCP_RST_ACCEPT : TCP_RST_IGNORE;"),
+    "opening-number": (opening, "return (flags & TCP_ACK) ? TCP_RST_ACCEPT : TCP_RST_IGNORE;"),
+    "listener-gone": ("            tcp_free_half_open(t);\n", "            (void)t;\n"),
+    "unkeyed": ("return kernel_ticks * TCP_ISN_PER_TICK + tcp_isn_hash(tcb);",
+                "return kernel_ticks * TCP_ISN_PER_TICK + tcb->local_port;"),
+    "rekeyed": ("    isn_keyed = 1;\n", ""),
+}
+old, new = changes[sys.argv[2]]
+path = pathlib.Path(sys.argv[1])
+source = path.read_text()
+if source.count(old) != 1:
+    raise SystemExit("tcp-reset-mutation: source pattern is not unique")
+path.write_text(source.replace(old, new))
+PY
+}
+
+faults='in-window out-of-window opening-flag opening-number listener-gone
+    unkeyed rekeyed'
+if [ "${1:-}" = --texts ]; then
+    for fault in $faults; do
+        RACH2_FAULT_TEXTS=1 apply_fault rach2/sys/network/tcp/tcp.c "$fault" >/dev/null || exit 1
+    done
+    echo 'tcp-reset-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
 mkdir -p build/tests
 work=$(mktemp -d "$repo/build/tests/tcp-reset-proof.XXXXXX")
 child=
@@ -70,30 +113,8 @@ run_phase()
 
 echo "tcp-reset-mutation: logs: $work"
 run_phase fixed 0 'tcp_reset_hosttest: PASS'
-for fault in in-window out-of-window opening-flag opening-number listener-gone unkeyed rekeyed; do
-    python3 - "$source" "$fault" <<'PY'
-import pathlib
-import sys
-
-opening = ("return ((flags & TCP_ACK) && ack_num == tcb->snd_nxt) ? TCP_RST_ACCEPT "
-           ": TCP_RST_IGNORE;")
-changes = {
-    "in-window": ("        return TCP_RST_CHALLENGE;\n", "        return TCP_RST_ACCEPT;\n"),
-    "out-of-window": ("    return TCP_RST_IGNORE;\n}\n", "    return TCP_RST_CHALLENGE;\n}\n"),
-    "opening-flag": (opening, "return ack_num == tcb->snd_nxt ? TCP_RST_ACCEPT : TCP_RST_IGNORE;"),
-    "opening-number": (opening, "return (flags & TCP_ACK) ? TCP_RST_ACCEPT : TCP_RST_IGNORE;"),
-    "listener-gone": ("            tcp_free_half_open(t);\n", "            (void)t;\n"),
-    "unkeyed": ("return kernel_ticks * TCP_ISN_PER_TICK + tcp_isn_hash(tcb);",
-                "return kernel_ticks * TCP_ISN_PER_TICK + tcb->local_port;"),
-    "rekeyed": ("    isn_keyed = 1;\n", ""),
-}
-old, new = changes[sys.argv[2]]
-path = pathlib.Path(sys.argv[1])
-source = path.read_text()
-if source.count(old) != 1:
-    raise SystemExit("tcp-reset-mutation: source pattern is not unique")
-path.write_text(source.replace(old, new))
-PY
+for fault in $faults; do
+    apply_fault "$source" "$fault"
     case $fault in
         in-window)
             message='a reset inside the window but not at the next sequence number closes nothing' ;;

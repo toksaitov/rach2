@@ -10,6 +10,51 @@ set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" "$2" <<'PY'
+import pathlib
+import sys
+import os
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+changes = {
+    "log-per-drop": ("        if (!loop_drop_logged) {\n"
+                     "            loop_drop_logged = 1;\n",
+                     "        {\n"
+                     "            loop_drop_logged = 1;\n"),
+    "silent-drop": ("further drops are counted\");\n        }\n        return -ENOBUFS;",
+                    "further drops are counted\");\n        }\n        return 0;"),
+    "uncounted": ("        loop_dropped++;\n", ""),
+    "overwrite": ("        loop_dropped++;\n",
+                  "        k_memcpy(loop_ring[loop_tail % LOOP_RING_SLOTS], ip_tx_buf, total_len);\n"
+                  "        loop_dropped++;\n"),
+    "first-card": ("out = ip_broadcast_iface(dst_ip);", "out = netdev_first();"),
+    "limited-scan": ("    if (dst == 0xFFFFFFFFu) {\n        return netdev_first();",
+                     "    if (0) {\n        return netdev_first();"),
+}
+old, new = changes[sys.argv[2]]
+path = pathlib.Path(sys.argv[1])
+source = path.read_text()
+if source.count(old) != 1:
+    raise SystemExit("ip-mutation: source pattern is not unique")
+path.write_text(source.replace(old, new))
+PY
+}
+
+faults='log-per-drop silent-drop uncounted overwrite first-card limited-scan'
+if [ "${1:-}" = --texts ]; then
+    for fault in $faults; do
+        RACH2_FAULT_TEXTS=1 apply_fault rach2/sys/network/ip/ip.c "$fault" >/dev/null || exit 1
+    done
+    echo 'ip-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
 mkdir -p build/tests
 work=$(mktemp -d "$repo/build/tests/ip-proof.XXXXXX")
 child=
@@ -67,33 +112,8 @@ run_phase()
 
 echo "ip-mutation: logs: $work"
 run_phase fixed 0 'packet_hosttest: PASS'
-for fault in log-per-drop silent-drop uncounted overwrite first-card limited-scan; do
-    python3 - "$ip" "$fault" <<'PY'
-import pathlib
-import sys
-
-changes = {
-    "log-per-drop": ("        if (!loop_drop_logged) {\n"
-                     "            loop_drop_logged = 1;\n",
-                     "        {\n"
-                     "            loop_drop_logged = 1;\n"),
-    "silent-drop": ("further drops are counted\");\n        }\n        return -ENOBUFS;",
-                    "further drops are counted\");\n        }\n        return 0;"),
-    "uncounted": ("        loop_dropped++;\n", ""),
-    "overwrite": ("        loop_dropped++;\n",
-                  "        k_memcpy(loop_ring[loop_tail % LOOP_RING_SLOTS], ip_tx_buf, total_len);\n"
-                  "        loop_dropped++;\n"),
-    "first-card": ("out = ip_broadcast_iface(dst_ip);", "out = netdev_first();"),
-    "limited-scan": ("    if (dst == 0xFFFFFFFFu) {\n        return netdev_first();",
-                     "    if (0) {\n        return netdev_first();"),
-}
-old, new = changes[sys.argv[2]]
-path = pathlib.Path(sys.argv[1])
-source = path.read_text()
-if source.count(old) != 1:
-    raise SystemExit("ip-mutation: source pattern is not unique")
-path.write_text(source.replace(old, new))
-PY
+for fault in $faults; do
+    apply_fault "$ip" "$fault"
     case $fault in
         log-per-drop) message='one line records the refusals, not one a datagram' ;;
         silent-drop) message='a datagram past a full loopback ring is refused with -ENOBUFS' ;;

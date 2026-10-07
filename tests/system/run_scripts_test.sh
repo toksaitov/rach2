@@ -18,14 +18,17 @@
 # must fail the row named for it, and is restored and touched before every row
 # runs again.
 #
-# Usage: sh tests/system/run_scripts_test.sh [--mutate]
+# --texts puts each fault into its copy and restores it, and runs no row.
+#
+# Usage: sh tests/system/run_scripts_test.sh [--mutate | --texts]
 #
 set -eu
 
 case ${1:-} in
     '') mutate=0 ;;
     --mutate) mutate=1 ;;
-    *) echo 'run-scripts-test: usage: run_scripts_test.sh [--mutate]' >&2; exit 2 ;;
+    --texts) mutate=2 ;;
+    *) echo 'run-scripts-test: usage: run_scripts_test.sh [--mutate | --texts]' >&2; exit 2 ;;
 esac
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -197,10 +200,12 @@ PY
     touch "$work/rach2/$1"
 }
 
-rows
-[ -z "$failed" ] || exit 1
-echo "run-scripts-test: result: pass: every row"
-[ "$mutate" -eq 1 ] || exit 0
+if [ "$mutate" -ne 2 ]; then
+    rows
+    [ -z "$failed" ] || exit 1
+    echo "run-scripts-test: result: pass: every row"
+    [ "$mutate" -eq 1 ] || exit 0
+fi
 
 # The dollars are the scripts' own, left for their shell.
 # shellcheck disable=SC2016
@@ -218,6 +223,10 @@ for fault in run-default run-override disk-default disk-override iso-default iso
             change "$copy" 'CPU="${CPU:-max}"' 'CPU=max'
             named=${fault%-override}-cpu ;;
     esac
+    if [ "$mutate" -eq 2 ]; then
+        cp "$work/saved/$copy" "$work/rach2/$copy"
+        continue
+    fi
     rows >"$work/$fault.log"
     case " $failed " in
         *" $named "*) echo "run-scripts-test: result: $fault: the fault fails $named" ;;
@@ -232,4 +241,8 @@ for fault in run-default run-override disk-default disk-override iso-default iso
     [ -z "$failed" ] || { cat "$work/$fault.restored.log"; exit 1; }
     echo "run-scripts-test: result: $fault: restored, every row passes"
 done
+if [ "$mutate" -eq 2 ]; then
+    echo 'run-scripts-test: texts: every fault is once in its source'
+    exit 0
+fi
 echo "run-scripts-test: result: pass: six faults failed their rows; restored rows passed"

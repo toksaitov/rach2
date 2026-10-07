@@ -4,6 +4,51 @@ set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" "$2" "$3" <<'PY'
+import pathlib
+import sys
+import os
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+fault = sys.argv[3]
+changes = {
+    "refusal": ("if (!refused && drivers[i]->error)", "if (drivers[i]->error)"),
+    "tcp": ("        tcp_local_addr_changed();",
+            "        if (is_machine(nd)) {\n"
+            "            tcp_local_addr_changed();\n        }"),
+    "primary": ("""        if (nd == netdev_first()) {
+            net_ip_addr = ip;
+            net_ip_mask = mask;
+            net_ip_gateway = gw;
+        }
+""", ""),
+    "oversized": ("""            klog(KLOG_WARN, "net", "ifaddr: value too long");
+            continue;""", "            break;"),
+}
+path = pathlib.Path(sys.argv[1] if fault == "refusal" else sys.argv[2])
+source = path.read_text()
+old, new = changes[fault]
+if source.count(old) != 1:
+    raise SystemExit("netconfig-mutation: source pattern is not unique")
+path.write_text(source.replace(old, new))
+PY
+}
+
+faults='refusal tcp primary oversized'
+if [ "${1:-}" = --texts ]; then
+    for fault in $faults; do
+        RACH2_FAULT_TEXTS=1 apply_fault rach2/sys/network/driver/netdev.c rach2/sys/network/netconf.c "$fault" >/dev/null || exit 1
+    done
+    echo 'netconfig-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
 mkdir -p build/tests
 work=$(mktemp -d "$repo/build/tests/network-proof.XXXXXX")
 child=
@@ -72,33 +117,8 @@ run_phase()
 echo "netconfig-mutation: logs: $work"
 run_phase netdev fixed pass 'netdev-hosttest: result: pass'
 run_phase netconf fixed pass 'netconf-hosttest: result: pass'
-for fault in refusal tcp primary oversized; do
-    python3 - "$netdev" "$netconf" "$fault" <<'PY'
-import pathlib
-import sys
-
-fault = sys.argv[3]
-changes = {
-    "refusal": ("if (!refused && drivers[i]->error)", "if (drivers[i]->error)"),
-    "tcp": ("        tcp_local_addr_changed();",
-            "        if (is_machine(nd)) {\n"
-            "            tcp_local_addr_changed();\n        }"),
-    "primary": ("""        if (nd == netdev_first()) {
-            net_ip_addr = ip;
-            net_ip_mask = mask;
-            net_ip_gateway = gw;
-        }
-""", ""),
-    "oversized": ("""            klog(KLOG_WARN, "net", "ifaddr: value too long");
-            continue;""", "            break;"),
-}
-path = pathlib.Path(sys.argv[1] if fault == "refusal" else sys.argv[2])
-source = path.read_text()
-old, new = changes[fault]
-if source.count(old) != 1:
-    raise SystemExit("netconfig-mutation: source pattern is not unique")
-path.write_text(source.replace(old, new))
-PY
+for fault in $faults; do
+    apply_fault "$netdev" "$netconf" "$fault"
     test=netconf
     case $fault in
         refusal) test=netdev; message='injected refusal reason is retained' ;;

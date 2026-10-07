@@ -2,7 +2,7 @@
 # Compile the KRFFS root's data operations and the mount's lock, with and
 # without the lock and its line.
 #
-# Usage: sh tests/host/krffs_root_lock_mutate.sh [--check]
+# Usage: sh tests/host/krffs_root_lock_mutate.sh [--check | --texts]
 #
 # The five data operations of the root adapter in rach2/sys/fs/vfs.c, the
 # bodies they call and the namespace lock, with the bind's base it takes, are
@@ -19,6 +19,55 @@
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" "$2" <<'PY'
+from pathlib import Path
+import re
+import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+path = Path(sys.argv[1])
+fault = sys.argv[2]
+text = path.read_text()
+if fault == "line":
+    # The lock as it was before its line: free is enough, whoever asked
+    # first.
+    name = "ns_my_turn"
+    changes = [("    return t->mnt->ns_holder == -1 && t->mnt->ns_serving == t->place;",
+                "    return t->mnt->ns_holder == -1;")]
+else:
+    name = "kfs_" + fault
+    changes = [("    vfs_ns_lock(mnt);\n", ""), ("    vfs_ns_unlock(mnt);\n", "")]
+matches = list(re.finditer(r"^static [\w ]*?\b" + name + r"\([^;]*?\n\{", text, re.M))
+if len(matches) != 1:
+    raise SystemExit("krffs-root-lock: the function is not unique: " + name)
+start = matches[0].start()
+end = text.index("\n}\n", start)
+body = text[start:end]
+for old, new in changes:
+    if body.count(old) != 1:
+        raise SystemExit("krffs-root-lock: the pattern is not in " + name + " once")
+    body = body.replace(old, new)
+path.write_text(text[:start] + body + text[end:])
+PY
+}
+
+faults='read write truncate fsync readdir line'
+if [ "${1:-}" = --texts ]; then
+    for fault in $faults; do
+        RACH2_FAULT_TEXTS=1 apply_fault rach2/sys/fs/vfs.c "$fault" >/dev/null || exit 1
+    done
+    echo 'krffs-root-lock: texts: every fault is once in its source'
+    exit 0
+fi
+
 [ "$#" -eq 0 ] || [ "$*" = --check ] || exit 2
 mkdir -p build/tests
 work=$(mktemp -d "$repo/build/tests/krffs-root-lock-proof.XXXXXX")
@@ -123,36 +172,8 @@ PY
 echo "krffs-root-lock: logs: $work"
 run_phase fixed 0 'krffs-root-lock: result: pass:'
 [ "${1:-}" != --check ] || exit 0
-for fault in read write truncate fsync readdir line; do
-    python3 - "$work/sys/fs/vfs.c" "$fault" <<'PY'
-from pathlib import Path
-import re
-import sys
-
-path = Path(sys.argv[1])
-fault = sys.argv[2]
-text = path.read_text()
-if fault == "line":
-    # The lock as it was before its line: free is enough, whoever asked
-    # first.
-    name = "ns_my_turn"
-    changes = [("    return t->mnt->ns_holder == -1 && t->mnt->ns_serving == t->place;",
-                "    return t->mnt->ns_holder == -1;")]
-else:
-    name = "kfs_" + fault
-    changes = [("    vfs_ns_lock(mnt);\n", ""), ("    vfs_ns_unlock(mnt);\n", "")]
-matches = list(re.finditer(r"^static [\w ]*?\b" + name + r"\([^;]*?\n\{", text, re.M))
-if len(matches) != 1:
-    raise SystemExit("krffs-root-lock: the function is not unique: " + name)
-start = matches[0].start()
-end = text.index("\n}\n", start)
-body = text[start:end]
-for old, new in changes:
-    if body.count(old) != 1:
-        raise SystemExit("krffs-root-lock: the pattern is not in " + name + " once")
-    body = body.replace(old, new)
-path.write_text(text[:start] + body + text[end:])
-PY
+for fault in $faults; do
+    apply_fault "$work/sys/fs/vfs.c" "$fault"
     if cmp -s "$work/vfs.saved" "$work/sys/fs/vfs.c"; then
         echo "krffs-root-lock: the $fault mutation did not change the source" >&2
         exit 1

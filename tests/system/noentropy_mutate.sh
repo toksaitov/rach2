@@ -14,7 +14,7 @@
 # passes first, through tests/run, and again after each source is restored,
 # touched and rebuilt, with the kernel's bytes those of the first build.
 #
-# Usage: sh tests/system/noentropy_mutate.sh [--direct] [FAULT...]
+# Usage: sh tests/system/noentropy_mutate.sh [--direct] [FAULT...] | --texts
 #   --direct runs the unmodified phases with `make run-noentropy` instead of
 #   `tests/run noentropy`. FAULT is urandom, random or insecure; the default
 #   is all three.
@@ -22,8 +22,61 @@ set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" "$2" <<'PY'
+from pathlib import Path
+import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+fault, name = sys.argv[1:]
+path = Path(name)
+text = path.read_text()
+if fault == 'urandom':
+    start = text.index('static int32_t dev_rand_read(')
+    end = text.index('\n}\n', start)
+    body = text[start:end]
+    assert body.count('if (!krandom_is_trusted()) {') == 1
+    text = text[:start] + body.replace('if (!krandom_is_trusted()) {', 'if (0) {') + text[end:]
+elif fault == 'random':
+    old = '{"random", 1, 8, 0, 0666, &rand_ops}'
+    assert text.count(old) == 1
+    text = text.replace(old, '{"random", 1, 8, 0, 0666, &zero_ops}')
+else:
+    old = 'if (!krandom_is_trusted() && !(flags & GRND_INSECURE)) {'
+    assert text.count(old) == 1
+    text = text.replace(old, 'if (!krandom_is_trusted()) {')
+path.write_text(text)
+PY
+}
+
+# select_fault FAULT: the source FAULT changes, in `changed`.
+select_fault()
+{
+    case "$1" in
+        urandom|random) changed=rach2/sys/fs/devfs.c ;;
+        insecure) changed=rach2/sys/syscall.c ;;
+    esac
+}
+
+if [ "${1:-}" = --texts ]; then
+    for fault in urandom random insecure; do
+        select_fault "$fault"
+        RACH2_FAULT_TEXTS=1 apply_fault "$fault" "$changed" >/dev/null || exit 1
+    done
+    echo 'noentropy-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
 . "$repo/tests/system/runlock.sh"
 runlock_hold "$repo" noentropy-mutation "$repo/tests/system/noentropy_mutate.sh" "$@"
+
 RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
 REPO=$repo
 . "$repo/mk/arch.sh"
@@ -170,33 +223,8 @@ fault_phase()
 echo "noentropy-mutation: logs: $work"
 pass_phase fixed
 for fault do
-    case "$fault" in
-        urandom|random) changed=rach2/sys/fs/devfs.c ;;
-        insecure) changed=rach2/sys/syscall.c ;;
-    esac
-    python3 - "$fault" "$changed" <<'PY'
-from pathlib import Path
-import sys
-
-fault, name = sys.argv[1:]
-path = Path(name)
-text = path.read_text()
-if fault == 'urandom':
-    start = text.index('static int32_t dev_rand_read(')
-    end = text.index('\n}\n', start)
-    body = text[start:end]
-    assert body.count('if (!krandom_is_trusted()) {') == 1
-    text = text[:start] + body.replace('if (!krandom_is_trusted()) {', 'if (0) {') + text[end:]
-elif fault == 'random':
-    old = '{"random", 1, 8, 0, 0666, &rand_ops}'
-    assert text.count(old) == 1
-    text = text.replace(old, '{"random", 1, 8, 0, 0666, &zero_ops}')
-else:
-    old = 'if (!krandom_is_trusted() && !(flags & GRND_INSECURE)) {'
-    assert text.count(old) == 1
-    text = text.replace(old, 'if (!krandom_is_trusted()) {')
-path.write_text(text)
-PY
+    select_fault "$fault"
+    apply_fault "$fault" "$changed"
     touch "$changed"
     fault_phase "$fault"
     restore

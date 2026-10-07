@@ -17,22 +17,32 @@
 # touched and rebuilt before every row runs again. The tree's own sources are
 # never changed.
 #
-# Usage: sh tests/host/krffs_tools_mutate.sh [--check]
+# --texts checks that each fault's text is once in the tree's source, and
+# builds and runs nothing.
+#
+# Usage: sh tests/host/krffs_tools_mutate.sh [--check | --texts]
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
-[ "$#" -eq 0 ] || [ "$*" = --check ] || {
-    echo 'krffs-tools-mutation: usage: krffs_tools_mutate.sh [--check]' >&2; exit 2;
+[ "$#" -eq 0 ] || [ "$*" = --check ] || [ "$*" = --texts ] || {
+    echo 'krffs-tools-mutation: usage: krffs_tools_mutate.sh [--check | --texts]' >&2; exit 2;
 }
-mkdir -p build/tests
-work=$(mktemp -d "$repo/build/tests/krffs-tools-proof.XXXXXX")
+texts=
+[ "$*" != --texts ] || texts=1
 child=
 sources='stageimage.krffs.c fsviz.krffs.c defrag.krffs.c edfs.krffs.c mkimage.sh'
-mkdir -p "$work/src" "$work/bin" "$work/tree/krffs" "$work/tree/build/krffs"
-for f in $sources; do
-    cp "krffs/$f" "$work/$f.saved"
-done
+if [ -n "$texts" ]; then
+    src=krffs
+else
+    mkdir -p build/tests
+    work=$(mktemp -d "$repo/build/tests/krffs-tools-proof.XXXXXX")
+    src=$work/src
+    mkdir -p "$work/src" "$work/bin" "$work/tree/krffs" "$work/tree/build/krffs"
+    for f in $sources; do
+        cp "krffs/$f" "$work/$f.saved"
+    done
+fi
 
 restore()
 {
@@ -51,11 +61,13 @@ cleanup()
     fi
     restore
 }
-restore
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+if [ -z "$texts" ]; then
+    restore
+    trap cleanup EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+fi
 
 # The flags krffs/Makefile gives the tools, fsviz's exception among them, and
 # its directory on the include path, so a private copy of a tool's main
@@ -276,10 +288,12 @@ run_phase()
     echo "krffs-tools-mutation: result: $phase: $failed rows failed"
 }
 
-# Change one private source where the old text occurs exactly once.
+# Change one private source where the old text occurs exactly once; with
+# --texts, only check that the text is once in the tree's source.
 mutate()
 {
-    python3 - "$work/src/$1" "$2" "$3" <<'PY'
+    python3 - "$src/$1" "$2" "$3" <<'PY'
+import os
 import pathlib
 import sys
 
@@ -287,55 +301,19 @@ path, old, new = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
 text = path.read_text()
 if text.count(old) != 1:
     raise SystemExit("krffs-tools-mutation: source pattern is not unique: " + old)
-path.write_text(text.replace(old, new))
+if not os.environ.get('RACH2_FAULT_TEXTS'):
+    path.write_text(text.replace(old, new))
 PY
-    touch "$work/src/$1"
+    [ -n "$texts" ] || touch "$src/$1"
 }
 
-# A reader of the node ring that shares no code with the tools it judges. The
-# field offsets are krffs/krffs_node.h's: the type at 2, the name at 11 and the
-# size at 325. `names` prints the ring in order, `at` one node's position and
-# `changed` the offsets where the second file differs, with its byte there.
-cat >"$work/ring.py" <<'PY'
-import struct
-import sys
-
-
-def ring(path):
-    data = open(path, "rb").read()
-    nodes, position = [], 0
-    for _ in range(64):
-        if position + 333 > len(data):
-            return nodes + [(position, "broken")]
-        kind = data[position + 2]
-        size = struct.unpack_from("<Q", data, position + 325)[0]
-        name = data[position + 11:position + 267].split(b"\0")[0].decode(errors="replace")
-        nodes.append((position, ("root", "free", name)[kind] if kind < 3 else "unknown"))
-        if size == 0 or position + size > len(data):
-            return nodes + [(position, "broken")]
-        position += size
-        if position == len(data):
-            break
-    return nodes
-
-
-if sys.argv[1] == "names":
-    print(" ".join(name for _, name in ring(sys.argv[2])))
-elif sys.argv[1] == "at":
-    print(next((str(p) for p, name in ring(sys.argv[2]) if name == sys.argv[3]), ""))
-elif sys.argv[1] == "changed":
-    a, b = (open(p, "rb").read() for p in sys.argv[2:4])
-    print(" ".join("%d:%02x" % (i, b[i]) for i in range(min(len(a), len(b))) if a[i] != b[i]))
-PY
-echo "krffs-tools-mutation: logs: $work"
-run_phase fixed ''
-[ "${1:-}" != --check ] || exit 0
-faults='doubled-slash synthetic-dir synthetic twice tree-twice through-file full'
-faults="$faults dir-id dir-id-implicit replace fsviz defrag edfs"
-for fault in $faults; do
+# apply_fault FAULT: put FAULT into its private source, and name in `row`
+# the row it must fail.
+apply_fault()
+{
     # The dollars are the image builder's own, left for its shell.
     # shellcheck disable=SC2016
-    case $fault in
+    case $1 in
         doubled-slash)
             mutate stageimage.krffs.c 'strstr(path, "//") != NULL || ' ''
             row=stager-doubled-slash ;;
@@ -379,6 +357,60 @@ for fault in $faults; do
             mutate edfs.krffs.c 'node->magic = magic;' '(void)magic;'
             row=edfs-magic ;;
     esac
+}
+
+faults='doubled-slash synthetic-dir synthetic twice tree-twice through-file full'
+faults="$faults dir-id dir-id-implicit replace fsviz defrag edfs"
+if [ -n "$texts" ]; then
+    RACH2_FAULT_TEXTS=1
+    export RACH2_FAULT_TEXTS
+    for fault in $faults; do
+        apply_fault "$fault"
+    done
+    echo 'krffs-tools-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
+# A reader of the node ring that shares no code with the tools it judges. The
+# field offsets are krffs/krffs_node.h's: the type at 2, the name at 11 and the
+# size at 325. `names` prints the ring in order, `at` one node's position and
+# `changed` the offsets where the second file differs, with its byte there.
+cat >"$work/ring.py" <<'PY'
+import struct
+import sys
+
+
+def ring(path):
+    data = open(path, "rb").read()
+    nodes, position = [], 0
+    for _ in range(64):
+        if position + 333 > len(data):
+            return nodes + [(position, "broken")]
+        kind = data[position + 2]
+        size = struct.unpack_from("<Q", data, position + 325)[0]
+        name = data[position + 11:position + 267].split(b"\0")[0].decode(errors="replace")
+        nodes.append((position, ("root", "free", name)[kind] if kind < 3 else "unknown"))
+        if size == 0 or position + size > len(data):
+            return nodes + [(position, "broken")]
+        position += size
+        if position == len(data):
+            break
+    return nodes
+
+
+if sys.argv[1] == "names":
+    print(" ".join(name for _, name in ring(sys.argv[2])))
+elif sys.argv[1] == "at":
+    print(next((str(p) for p, name in ring(sys.argv[2]) if name == sys.argv[3]), ""))
+elif sys.argv[1] == "changed":
+    a, b = (open(p, "rb").read() for p in sys.argv[2:4])
+    print(" ".join("%d:%02x" % (i, b[i]) for i in range(min(len(a), len(b))) if a[i] != b[i]))
+PY
+echo "krffs-tools-mutation: logs: $work"
+run_phase fixed ''
+[ "${1:-}" != --check ] || exit 0
+for fault in $faults; do
+    apply_fault "$fault"
     run_phase "$fault-mutated" "$row"
     restore
     run_phase "$fault-restored" ''

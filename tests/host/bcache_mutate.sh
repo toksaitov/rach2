@@ -16,90 +16,21 @@
 # private tree laid out as the repository is, so its host-deps lines and its
 # relative includes resolve to the private copy.
 #
-# Usage: bcache_mutate.sh
+# Usage: bcache_mutate.sh [--texts]
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
-[ "$#" -eq 0 ] || {
-    echo 'usage: bcache_mutate.sh' >&2
-    exit 2
-}
-mkdir -p build/tests
-work=$(mktemp -d "$repo/build/tests/bcache-proof.XXXXXX")
-child=
-mkdir -p "$work/rach2" "$work/tests/host"
-cp -R rach2/sys "$work/rach2/sys"
-cp -R tests/host/compat "$work/tests/host/compat"
-cp tests/host/bcache_cost_hosttest.c "$work/tests/host/bcache_cost_hosttest.c"
-source="$work/rach2/sys/fs/bcache.c"
-cp "$source" "$work/bcache.saved"
 
-restore()
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
 {
-    cp "$work/bcache.saved" "$source"
-    touch "$source"
-}
-cleanup()
-{
-    if [ -n "$child" ]; then
-        kill -TERM "$child" 2>/dev/null || :
-        wait "$child" 2>/dev/null || :
-        child=
-    fi
-    restore
-}
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
-
-test=tests/host/bcache_cost_hosttest.c
-deps=$(grep -oE 'host-deps:[^*]*' "$work/$test" | sed 's/host-deps://' | tr '\n' ' ')
-
-# run_phase PHASE pass|fail MESSAGE: compile and run the test. A passing
-# phase must exit 0 with MESSAGE in its output; a failing one must exit
-# nonzero, not by a signal, with a failure for each line of MESSAGE.
-run_phase()
-{
-    phase=$1
-    expected=$2
-    message=$3
-    binary="$work/$phase"
-    # shellcheck disable=SC2086 # the dependency list is one path a word
-    if ! (cd "$work" && "${CC:-cc}" -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 \
-        -DRACH2_HOSTTEST -fsanitize=address,undefined -fno-sanitize-recover=all -g -O1 \
-        -Wno-empty-body -ffreestanding -I rach2/sys -I rach2/sys/lib -I rach2/sys/proc \
-        -I tests/host/compat -o "$binary" "$test" $deps) >"$binary.compile.log" 2>&1; then
-        cat "$binary.compile.log" >&2
-        exit 1
-    fi
-    cksum "$source" "$binary" >"$binary.cksum"
-    perl -e 'alarm 180; exec @ARGV or die "bcache-proof: exec: $!\n"' \
-        "$binary" >"$binary.log" 2>&1 &
-    child=$!
-    status=0
-    wait "$child" || status=$?
-    child=
-    cat "$binary.log"
-    if [ "$expected" = pass ]; then
-        [ "$status" -eq 0 ] && grep -Fq "$message" "$binary.log" || exit 1
-    else
-        [ "$status" -gt 0 ] && [ "$status" -lt 128 ] || exit 1
-        while IFS= read -r row; do
-            grep -Fq "FAIL: $row" "$binary.log" || exit 1
-        done <<EOF
-$message
-EOF
-    fi
-    echo "bcache-proof: result: $phase status $status"
-}
-
-echo "bcache-proof: logs: $work"
-run_phase fixed pass 'bcache_cost_hosttest: result: pass:'
-for fault in hold-walk victim-walk sync-rescan insertion-sort small-batch cap fixed-cap uncounted; do
-    python3 - "$source" "$fault" <<'PY'
+    python3 - "$1" "$2" <<'PY'
 import pathlib
 import sys
+import os
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
 
 path = pathlib.Path(sys.argv[1])
 fault = sys.argv[2]
@@ -191,6 +122,96 @@ for old, new in changes:
     body = body.replace(old, new)
 path.write_text(text[:start] + body + text[end:])
 PY
+}
+
+faults='hold-walk victim-walk sync-rescan insertion-sort small-batch cap
+    fixed-cap uncounted'
+if [ "${1:-}" = --texts ]; then
+    for fault in $faults; do
+        RACH2_FAULT_TEXTS=1 apply_fault rach2/sys/fs/bcache.c "$fault" >/dev/null || exit 1
+    done
+    echo 'bcache-proof: texts: every fault is once in its source'
+    exit 0
+fi
+
+[ "$#" -eq 0 ] || {
+    echo 'usage: bcache_mutate.sh' >&2
+    exit 2
+}
+mkdir -p build/tests
+work=$(mktemp -d "$repo/build/tests/bcache-proof.XXXXXX")
+child=
+mkdir -p "$work/rach2" "$work/tests/host"
+cp -R rach2/sys "$work/rach2/sys"
+cp -R tests/host/compat "$work/tests/host/compat"
+cp tests/host/bcache_cost_hosttest.c "$work/tests/host/bcache_cost_hosttest.c"
+source="$work/rach2/sys/fs/bcache.c"
+cp "$source" "$work/bcache.saved"
+
+restore()
+{
+    cp "$work/bcache.saved" "$source"
+    touch "$source"
+}
+cleanup()
+{
+    if [ -n "$child" ]; then
+        kill -TERM "$child" 2>/dev/null || :
+        wait "$child" 2>/dev/null || :
+        child=
+    fi
+    restore
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+test=tests/host/bcache_cost_hosttest.c
+deps=$(grep -oE 'host-deps:[^*]*' "$work/$test" | sed 's/host-deps://' | tr '\n' ' ')
+
+# run_phase PHASE pass|fail MESSAGE: compile and run the test. A passing
+# phase must exit 0 with MESSAGE in its output; a failing one must exit
+# nonzero, not by a signal, with a failure for each line of MESSAGE.
+run_phase()
+{
+    phase=$1
+    expected=$2
+    message=$3
+    binary="$work/$phase"
+    # shellcheck disable=SC2086 # the dependency list is one path a word
+    if ! (cd "$work" && "${CC:-cc}" -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 \
+        -DRACH2_HOSTTEST -fsanitize=address,undefined -fno-sanitize-recover=all -g -O1 \
+        -Wno-empty-body -ffreestanding -I rach2/sys -I rach2/sys/lib -I rach2/sys/proc \
+        -I tests/host/compat -o "$binary" "$test" $deps) >"$binary.compile.log" 2>&1; then
+        cat "$binary.compile.log" >&2
+        exit 1
+    fi
+    cksum "$source" "$binary" >"$binary.cksum"
+    perl -e 'alarm 180; exec @ARGV or die "bcache-proof: exec: $!\n"' \
+        "$binary" >"$binary.log" 2>&1 &
+    child=$!
+    status=0
+    wait "$child" || status=$?
+    child=
+    cat "$binary.log"
+    if [ "$expected" = pass ]; then
+        [ "$status" -eq 0 ] && grep -Fq "$message" "$binary.log" || exit 1
+    else
+        [ "$status" -gt 0 ] && [ "$status" -lt 128 ] || exit 1
+        while IFS= read -r row; do
+            grep -Fq "FAIL: $row" "$binary.log" || exit 1
+        done <<EOF
+$message
+EOF
+    fi
+    echo "bcache-proof: result: $phase status $status"
+}
+
+echo "bcache-proof: logs: $work"
+run_phase fixed pass 'bcache_cost_hosttest: result: pass:'
+for fault in $faults; do
+    apply_fault "$source" "$fault"
     if cmp -s "$work/bcache.saved" "$source"; then
         echo "bcache-proof: the $fault mutation did not change the source" >&2
         exit 1

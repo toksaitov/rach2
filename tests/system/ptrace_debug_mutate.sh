@@ -19,6 +19,61 @@
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" <<'PY'
+from pathlib import Path
+import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+changes = {
+    'step': ('rach2/sys/syscall.c',
+             '    if (current_proc && (current_proc->ptrace & (PT_SYSCALL | PT_STEP))) {',
+             '    if (current_proc && (current_proc->ptrace & PT_SYSCALL)) {'),
+    'unforced': ('rach2/sys/arch/x86/debugreg.c',
+                 '            signal_force(current_proc, SIGTRAP, &info);',
+                 '            signal_post_thread(current_proc, SIGTRAP, &info);'),
+    'pending': ('rach2/sys/syscall_proc.c',
+                '    debug_pending = arch_debug_pending();',
+                '    debug_pending = 0;'),
+    'sigwait': ('rach2/sys/syscall_proc.c',
+                '    arch_debug_deliver();\n    set = current_proc->sig_pending',
+                '    set = current_proc->sig_pending'),
+    'inject': ('rach2/sys/arch/x86_64/isr_handler.s',
+               'syscall_entry:\n    swapgs', 'syscall_entry:\n    int $1\n    swapgs'),
+    'stack': ('rach2/sys/arch/x86_64/idt.c',
+              '    set_gate(1, isr1, GATE_KERNEL, IST_DEBUG);',
+              '    set_gate(1, isr1, GATE_KERNEL, 0);'),
+    'gs': ('rach2/sys/arch/x86_64/isr_handler.s',
+           '    js .debug_kernel_gs',
+           '    testb $3, F_CS(%rsp)\n    jz .debug_kernel_gs'),
+}
+file, old, new = changes[sys.argv[1]]
+p = Path(file)
+s = p.read_text()
+if s.count(old) != 1:
+    sys.exit('ptrace-debug: fault text must occur once: ' + sys.argv[1])
+p.write_text(s.replace(old, new))
+PY
+}
+
+if [ "${1:-}" = --texts ]; then
+    RACH2_FAULT_TEXTS=1
+    export RACH2_FAULT_TEXTS
+    for fault in step unforced pending sigwait inject stack gs; do
+        apply_fault "$fault" >/dev/null
+    done
+    echo 'ptrace-debug: texts: every fault is once in its source'
+    exit 0
+fi
+
+
 . "$repo/tests/system/runlock.sh"
 runlock_hold "$repo" ptrace-debug "$repo/tests/system/ptrace_debug_mutate.sh" "$@"
 RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
@@ -81,39 +136,7 @@ trap 'exit 143' TERM
 mutate()
 {
     changed=1
-    python3 - "$1" <<'PY'
-from pathlib import Path
-import sys
-
-changes = {
-    'step': ('rach2/sys/syscall.c',
-             '    if (current_proc && (current_proc->ptrace & (PT_SYSCALL | PT_STEP))) {',
-             '    if (current_proc && (current_proc->ptrace & PT_SYSCALL)) {'),
-    'unforced': ('rach2/sys/arch/x86/debugreg.c',
-                 '            signal_force(current_proc, SIGTRAP, &info);',
-                 '            signal_post_thread(current_proc, SIGTRAP, &info);'),
-    'pending': ('rach2/sys/syscall_proc.c',
-                '    debug_pending = arch_debug_pending();',
-                '    debug_pending = 0;'),
-    'sigwait': ('rach2/sys/syscall_proc.c',
-                '    arch_debug_deliver();\n    set = current_proc->sig_pending',
-                '    set = current_proc->sig_pending'),
-    'inject': ('rach2/sys/arch/x86_64/isr_handler.s',
-               'syscall_entry:\n    swapgs', 'syscall_entry:\n    int $1\n    swapgs'),
-    'stack': ('rach2/sys/arch/x86_64/idt.c',
-              '    set_gate(1, isr1, GATE_KERNEL, IST_DEBUG);',
-              '    set_gate(1, isr1, GATE_KERNEL, 0);'),
-    'gs': ('rach2/sys/arch/x86_64/isr_handler.s',
-           '    js .debug_kernel_gs',
-           '    testb $3, F_CS(%rsp)\n    jz .debug_kernel_gs'),
-}
-file, old, new = changes[sys.argv[1]]
-p = Path(file)
-s = p.read_text()
-if s.count(old) != 1:
-    sys.exit('ptrace-debug: fault text must occur once: ' + sys.argv[1])
-p.write_text(s.replace(old, new))
-PY
+    apply_fault "$1"
 }
 
 run_phase()

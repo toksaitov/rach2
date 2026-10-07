@@ -2,7 +2,7 @@
 # Prove the recovery key rows of the installer suite with faults in a private
 # tree, on the programs and images of the architecture ARCH names.
 #
-# Usage: sh tests/system/recovery_disk_key_mutate.sh
+# Usage: sh tests/system/recovery_disk_key_mutate.sh [--texts]
 #
 # Rows 6b and 6c of tests/system/suites/installer.sh install a disk with a key
 # for its recovery system and one without, boot each disk's own recovery
@@ -29,6 +29,62 @@ REPO=$repo
 RACH2_QEMU=$ARCH_QEMU
 export RACH2_QEMU ARCH_BUILD
 tree=build$ARCH_SUFFIX
+texts=
+[ "${1:-}" != --texts ] || texts=1
+# Change one private source where the old text occurs exactly once, and touch
+# it, since a copy back within the second of the last build reads as current.
+mutate()
+{
+    python3 - "$1" "$2" "$3" <<'PY'
+import pathlib
+import os
+import sys
+
+path, old, new = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+text = path.read_text()
+if text.count(old) != 1:
+    raise SystemExit("recovery-disk-key-mutation: pattern is not unique: " + old)
+if not os.environ.get('RACH2_FAULT_TEXTS'):
+    path.write_text(text.replace(old, new))
+PY
+    [ -n "$texts" ] || touch "$1"
+}
+
+# key_fault NAME: put the fault whose failing phase is NAME into its source.
+key_fault()
+{
+    case $1 in
+        init-mutated)
+            mutate "$init_source" 'boot_line_has("rach2.slot=recovery")' 'boot_line_has("rach2.slot=never")'
+            ;;
+        installer-mutated)
+            # The dollars are the installer's own text.
+            # shellcheck disable=SC2016
+            mutate "$installer_source" '        cp "$key_copy" "$RECOVERY_MNT/$RECOVERY_KEYS_FILE" ||' \
+                '        : "$key_copy" ||'
+            ;;
+        server-always)
+            mutate "$init_source" 'if (s->sshd.pid < 0 && anyone_to_let_in()) {' 'if (s->sshd.pid < 0) {'
+            ;;
+        server-late)
+            mutate "$init_source" 'if (s->sshd.pid < 0 && anyone_to_let_in()) {' \
+                'if (s->sshd.pid < 0 && (anyone_to_let_in() || s->sshd.spawned++ > 0)) {'
+            ;;
+    esac
+}
+
+if [ -n "$texts" ]; then
+    init_source=utils/init.c
+    installer_source=utils/rach2-install
+    RACH2_FAULT_TEXTS=1
+    export RACH2_FAULT_TEXTS
+    for name in init-mutated installer-mutated server-always server-late; do
+        key_fault "$name"
+    done
+    echo 'recovery-disk-key-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
 . "$repo/tests/system/runlock.sh"
 runlock_hold "$repo" recovery-disk-key-mutation "$repo/tests/system/recovery_disk_key_mutate.sh" "$@"
 mkdir -p build
@@ -78,23 +134,6 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-# Change one private source where the old text occurs exactly once, and touch
-# it, since a copy back within the second of the last build reads as current.
-mutate()
-{
-    python3 - "$1" "$2" "$3" <<'PY'
-import pathlib
-import sys
-
-path, old, new = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
-text = path.read_text()
-if text.count(old) != 1:
-    raise SystemExit("recovery-disk-key-mutation: pattern is not unique: " + old)
-path.write_text(text.replace(old, new))
-PY
-    touch "$1"
-}
-
 # Each phase rebuilds the recovery init and every image that stages it or the
 # installer, from nothing: an image whose staged program changed in the same
 # second as its last build reads as current to make. The rows stage their own
@@ -140,7 +179,7 @@ run_phase fixed 0 "$passed"
 grep -Fq 'row 6c: and nothing answers SSH: OK' "$work/fixed.log"
 
 # The recovery init no longer reads the key off its partition.
-mutate "$init_source" 'boot_line_has("rach2.slot=recovery")' 'boot_line_has("rach2.slot=never")'
+key_fault init-mutated
 run_phase init-mutated 1 'FAIL: row 6b: the placed key'
 if cmp -s "$work/fixed.init" "$work/init-mutated.init"; then
     echo 'recovery-disk-key-mutation: the init fault did not change the init' >&2; exit 1
@@ -149,11 +188,8 @@ restore
 run_phase init-restored 0 "$passed"
 cmp "$work/fixed.init" "$work/init-restored.init"
 
-# The installer no longer copies the key it was given. The dollars are the
-# installer's own text.
-# shellcheck disable=SC2016
-mutate "$installer_source" '        cp "$key_copy" "$RECOVERY_MNT/$RECOVERY_KEYS_FILE" ||' \
-    '        : "$key_copy" ||'
+# The installer no longer copies the key it was given.
+key_fault installer-mutated
 run_phase installer-mutated 1 "FAIL: row 6b: the recovery partition's key file holds"
 restore
 run_phase installer-restored 0 "$passed"
@@ -162,11 +198,10 @@ cmp "$work/fixed.init" "$work/installer-restored.init"
 
 # The recovery init starts the server with no key to let in, and then one turn
 # of its loop late, after its first test for a key.
-mutate "$init_source" 'if (s->sshd.pid < 0 && anyone_to_let_in()) {' 'if (s->sshd.pid < 0) {'
+key_fault server-always
 run_phase server-always 1 'FAIL: row 6c: init started an SSH server on a recovery system with no key'
 restore
-mutate "$init_source" 'if (s->sshd.pid < 0 && anyone_to_let_in()) {' \
-    'if (s->sshd.pid < 0 && (anyone_to_let_in() || s->sshd.spawned++ > 0)) {'
+key_fault server-late
 run_phase server-late 1 'FAIL: row 6c: init started an SSH server on a recovery system with no key'
 restore
 run_phase server-restored 0 "$passed"

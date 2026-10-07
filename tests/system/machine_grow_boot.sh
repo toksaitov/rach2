@@ -7,9 +7,41 @@ repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-grow-boot.XXXXXX")
 echo "machine-grow-boot: logs: $work"
 fail() { echo "machine-grow-boot: failed: $*" >&2; exit 1; }
-[ "$#" = 0 ] || [ "$*" = --mutate ] || fail 'usage: machine_grow_boot.sh [--mutate]'
+[ "$#" = 0 ] || [ "$*" = --mutate ] || [ "$*" = --texts ] || fail 'usage: machine_grow_boot.sh [--mutate | --texts]'
 cp "$repo/tools/dev/machine_grow.sh" "$work/original.sh"
 cp "$work/original.sh" "$work/source.sh"
+
+# mutate_source MUTATION: $work/source.sh is $work/original.sh with
+# MUTATION in it, and `diagnostic` the words its failing row prints.
+mutate_source()
+{
+    case "$1" in
+        rewrite)
+            sed 's/if \[ "$wanted" = "$current" \]; then/if false; then/' \
+                "$work/original.sh" > "$work/source.sh"
+            diagnostic='verified recovery was rewritten'
+            ;;
+        repair)
+            sed 's/| reflash "$disk" "$((1048576 + at))" "$amount"; then/| cat > \/dev\/null; then/' \
+                "$work/original.sh" > "$work/source.sh"
+            diagnostic='repair did not reach the torn write'
+            ;;
+    esac
+}
+
+if [ "$*" = --texts ]; then
+    for mutation in rewrite repair; do
+        mutate_source "$mutation"
+        if cmp -s "$work/original.sh" "$work/source.sh"; then
+            echo "machine-grow-boot: the $mutation fault is not in tools/dev/machine_grow.sh" >&2
+            exit 1
+        fi
+    done
+    trap - EXIT
+    rm -rf "$work"
+    echo 'machine-grow-boot: texts: every fault is once in its source'
+    exit 0
+fi
 # shellcheck disable=SC2329
 cleanup() { cp "$work/original.sh" "$work/source.sh"; }
 trap cleanup EXIT
@@ -186,18 +218,7 @@ rows fixed || { cat "$work/fixed.log" >&2; fail 'fixed boot checks'; }
 echo 'machine-grow-boot: fixed: unchanged recovery, invalid header, torn repair and retry passed'
 if [ "$#" = 1 ]; then
     for mutation in rewrite repair; do
-        case "$mutation" in
-            rewrite)
-                sed 's/if \[ "$wanted" = "$current" \]; then/if false; then/' \
-                    "$work/original.sh" > "$work/source.sh"
-                diagnostic='verified recovery was rewritten'
-                ;;
-            repair)
-                sed 's/| reflash "$disk" "$((1048576 + at))" "$amount"; then/| cat > \/dev\/null; then/' \
-                    "$work/original.sh" > "$work/source.sh"
-                diagnostic='repair did not reach the torn write'
-                ;;
-        esac
+        mutate_source "$mutation"
         if rows "$mutation"; then fail "$mutation mutation passed"; fi
         grep -q "$diagnostic" "$work/$mutation.log" || fail "$mutation did not fail its assertion"
         echo "machine-grow-boot: mutation: $mutation detected"

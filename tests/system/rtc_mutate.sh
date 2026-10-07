@@ -1,5 +1,5 @@
 #!/bin/sh
-# Usage: sh tests/system/rtc_mutate.sh [--host|--guest]
+# Usage: sh tests/system/rtc_mutate.sh [--host|--guest] | --texts
 # The fault takes the PIT's position out of the time between ticks, in
 # rach2/sys/clock.c: the host proof compiles rtc_hosttest.c with a private
 # copy of it, as tests/run host compiles the test, and the guest proof runs
@@ -8,6 +8,36 @@
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" <<'PY'
+from pathlib import Path
+import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+path = Path(sys.argv[1])
+text = path.read_text()
+old = '*nanoseconds += phase_ns;'
+if text.count(old) != 1:
+    raise SystemExit('rtc-mutation: sub-tick expression is not unique')
+path.write_text(text.replace(old, '*nanoseconds += phase_ns * 0u;'))
+PY
+}
+
+if [ "${1:-}" = --texts ]; then
+    RACH2_FAULT_TEXTS=1
+    export RACH2_FAULT_TEXTS
+    apply_fault rach2/sys/clock.c >/dev/null
+    echo 'rtc-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
+
 RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
 REPO=$repo
 . "$repo/mk/arch.sh"
@@ -118,16 +148,7 @@ if [ "$mode" = --guest ]; then
 fi
 run_phase fixed pass
 changed=1
-python3 - "$source" <<'PY'
-from pathlib import Path
-import sys
-path = Path(sys.argv[1])
-text = path.read_text()
-old = '*nanoseconds += phase_ns;'
-if text.count(old) != 1:
-    raise SystemExit('rtc-mutation: sub-tick expression is not unique')
-path.write_text(text.replace(old, '*nanoseconds += phase_ns * 0u;'))
-PY
+apply_fault "$source"
 run_phase coarse fail
 restore
 run_phase restored pass

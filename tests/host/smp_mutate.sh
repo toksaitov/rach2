@@ -7,7 +7,7 @@
 # kernel's sources with each fault put in turn, and its row must fail; the
 # restored copy must pass again.
 #
-# Usage: smp_mutate.sh [--check]
+# Usage: smp_mutate.sh [--check | --texts]
 # With --check it compiles and runs the unmodified test alone. The faults:
 # a shootdown that interrupts idle processors too, as before lazy TLB; one
 # that passes every processor by, which leaves a running thread with a
@@ -19,6 +19,67 @@
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" "$2" <<'PY'
+from pathlib import Path
+import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+path = Path(sys.argv[1])
+source = path.read_text()
+fault = sys.argv[2]
+function = {
+    'no-skip': 'void smp_tlb_shootdown(const struct page_dir *dir, uintptr_t va)\n{',
+    'skip-all': 'void smp_tlb_shootdown(const struct page_dir *dir, uintptr_t va)\n{',
+    'no-release': 'void smp_space_release(const struct page_dir *dir)\n{',
+    'no-stop-wait': 'void smp_stop_others(void)\n{',
+    'late-admit': 'static void smp_cpu_main(int cpu)\n{',
+}[fault]
+changes = {
+    'no-skip': (
+        '        if (other->current->space_root == 0) {\n',
+        '        if (0) {\n'),
+    'skip-all': (
+        '        if (other->current->space_root == 0) {\n',
+        '        if (1) {\n'),
+    'no-release': (
+        '    if (cpus_online < 2) {\n',
+        '    if (cpus_online > 0) {\n'),
+    'no-stop-wait': (
+        '        for (waited = 0; asked[c] && ',
+        '        for (waited = 0; 0 && asked[c] && '),
+    'late-admit': (
+        '    if (arch_atomic_cmpxchg(&self->admit, CPU_STARTING, CPU_ADMITTED) != CPU_STARTING) {\n',
+        '    if (0 && arch_atomic_cmpxchg(&self->admit, CPU_STARTING, CPU_ADMITTED) != CPU_STARTING) {\n'),
+}
+old, new = changes[fault]
+if source.count(function) != 1:
+    raise SystemExit('smp-proof: the function is not unique: ' + fault)
+start = source.index(function)
+end = source.index('\n}\n', start)
+body = source[start:end]
+if body.count(old) != 1:
+    raise SystemExit('smp-proof: the fault\'s pattern is not unique: ' + fault)
+path.write_text(source[:start] + body.replace(old, new) + source[end:])
+PY
+}
+
+faults='no-skip skip-all no-release no-stop-wait late-admit'
+if [ "${1:-}" = --texts ]; then
+    for fault in $faults; do
+        RACH2_FAULT_TEXTS=1 apply_fault rach2/sys/proc/smp.c "$fault" >/dev/null || exit 1
+    done
+    echo 'smp-proof: texts: every fault is once in its source'
+    exit 0
+fi
+
 [ "$#" -eq 0 ] || [ "$*" = --check ] || {
     echo 'smp-proof: usage: smp_mutate.sh [--check]' >&2
     exit 2
@@ -85,48 +146,8 @@ run_phase()
 echo "smp-proof: logs: $work"
 run_phase fixed 0 'smp-hosttest: result: pass'
 [ "$#" -eq 0 ] || exit 0
-for fault in no-skip skip-all no-release no-stop-wait late-admit; do
-    python3 - "$smp" "$fault" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-source = path.read_text()
-fault = sys.argv[2]
-function = {
-    'no-skip': 'void smp_tlb_shootdown(const struct page_dir *dir, uintptr_t va)\n{',
-    'skip-all': 'void smp_tlb_shootdown(const struct page_dir *dir, uintptr_t va)\n{',
-    'no-release': 'void smp_space_release(const struct page_dir *dir)\n{',
-    'no-stop-wait': 'void smp_stop_others(void)\n{',
-    'late-admit': 'static void smp_cpu_main(int cpu)\n{',
-}[fault]
-changes = {
-    'no-skip': (
-        '        if (other->current->space_root == 0) {\n',
-        '        if (0) {\n'),
-    'skip-all': (
-        '        if (other->current->space_root == 0) {\n',
-        '        if (1) {\n'),
-    'no-release': (
-        '    if (cpus_online < 2) {\n',
-        '    if (cpus_online > 0) {\n'),
-    'no-stop-wait': (
-        '        for (waited = 0; asked[c] && ',
-        '        for (waited = 0; 0 && asked[c] && '),
-    'late-admit': (
-        '    if (arch_atomic_cmpxchg(&self->admit, CPU_STARTING, CPU_ADMITTED) != CPU_STARTING) {\n',
-        '    if (0 && arch_atomic_cmpxchg(&self->admit, CPU_STARTING, CPU_ADMITTED) != CPU_STARTING) {\n'),
-}
-old, new = changes[fault]
-if source.count(function) != 1:
-    raise SystemExit('smp-proof: the function is not unique: ' + fault)
-start = source.index(function)
-end = source.index('\n}\n', start)
-body = source[start:end]
-if body.count(old) != 1:
-    raise SystemExit('smp-proof: the fault\'s pattern is not unique: ' + fault)
-path.write_text(source[:start] + body.replace(old, new) + source[end:])
-PY
+for fault in $faults; do
+    apply_fault "$smp" "$fault"
     touch "$smp"
     case $fault in
         no-skip)

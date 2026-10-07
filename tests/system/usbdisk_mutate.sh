@@ -4,6 +4,23 @@ set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# line_once FILE TEXT: TEXT, the line a fault changes, is once in FILE.
+line_once()
+{
+    if [ "$(grep -c "$2" "$1")" -ne 1 ]; then
+        echo "usbdisk-mutation: not once in $1: $2" >&2
+        exit 1
+    fi
+}
+
+if [ "${1:-}" = --texts ]; then
+    line_once rach2/sys/fs/vfs.c 'm = rc == -EIO ?'
+    line_once rach2/sys/fs/vfs.c 'return mnt->dev &&'
+    echo 'usbdisk-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
 . "$repo/tests/system/runlock.sh"
 runlock_hold "$repo" usbdisk-mutation "$repo/tests/system/usbdisk_mutate.sh" "$@"
 # The architecture, from ARCH as mk/arch.sh reads it: its compiler, its text
@@ -66,7 +83,7 @@ elif [ "$#" -eq 0 ] || { [ "$#" -eq 1 ] && [ "$1" = --nested ]; }; then
     work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-usbdisk.XXXXXX")
     [ "$#" -eq 0 ] || fault=nested
 else
-    echo 'usbdisk-mutation: usage: [--nested | --resume DIRECTORY | --restore DIRECTORY]' >&2
+    echo 'usbdisk-mutation: usage: [--nested | --resume DIRECTORY | --restore DIRECTORY | --texts]' >&2
     exit 2
 fi
 runner="$work/runutil"
@@ -195,10 +212,10 @@ if [ "$resume" -eq 0 ]; then
 fi
 if [ "$resume" -ne 2 ]; then
     if [ "$fault" = nested ]; then
-        [ "$(grep -c 'm = rc == -EIO ?' "$work/vfs.saved")" -eq 1 ]
+        line_once "$work/vfs.saved" 'm = rc == -EIO ?'
         sed 's/m = rc == -EIO ?/m = rc == -EIO \&\& 0 ?/' "$work/vfs.saved" > "$source"
     else
-        [ "$(grep -c 'return mnt->dev &&' "$work/vfs.saved")" -eq 1 ]
+        line_once "$work/vfs.saved" 'return mnt->dev &&'
         sed '/return mnt->dev &&/c\
     (void)mnt;\
     return 0;

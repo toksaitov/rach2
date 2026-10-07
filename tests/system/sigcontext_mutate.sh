@@ -7,6 +7,36 @@ unset ARCH MAKEFLAGS MFLAGS
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" <<'PY'
+from pathlib import Path
+import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+path = Path(sys.argv[1])
+text = path.read_text()
+old = '        fill_sigcontext(&frame.rt.uc.mc, tf, fp_addr, oldmask);\n'
+assert text.count(old) == 1
+path.write_text(text.replace(old, ''))
+PY
+}
+
+if [ "${1:-}" = --texts ]; then
+    RACH2_FAULT_TEXTS=1
+    export RACH2_FAULT_TEXTS
+    apply_fault rach2/sys/arch/i686/sigframe.c >/dev/null
+    echo 'sigcontext-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
+
 . "$repo/tests/system/runlock.sh"
 runlock_hold "$repo" sigcontext-mutation "$repo/tests/system/sigcontext_mutate.sh" "$@"
 mkdir -p build
@@ -104,16 +134,7 @@ build/krffs/readfile.krffs build/images/test.krffs /musl/sigmusl "$work/sigmusl.
 cmp build/tests/musl/sigmusl "$work/sigmusl.staged"
 run_phase fixed pass
 changed=1
-python3 - "$source" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-text = path.read_text()
-old = '        fill_sigcontext(&frame.rt.uc.mc, tf, fp_addr, oldmask);\n'
-assert text.count(old) == 1
-path.write_text(text.replace(old, ''))
-PY
+apply_fault "$source"
 run_phase short fail
 if cmp -s "$work/fixed.kernel" "$work/short.kernel"; then
     echo "sigcontext-mutation: kernel did not change" >&2; exit 1

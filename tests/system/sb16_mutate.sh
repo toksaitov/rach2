@@ -6,6 +6,45 @@
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" "$2" <<'PY'
+import pathlib
+import sys
+import os
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+p = pathlib.Path(sys.argv[1])
+s = p.read_text()
+if sys.argv[2] == "rate":
+    old = "    if (audio->type == AUDIO_DRIVER_SB16) {\n" \
+          "        sample_rate = 44100;\n    }"
+    new = ""
+else:
+    old = "    if (user_callback) {\n" \
+          "        user_callback(fill_buffer, SB16_BUFFER_SIZE);\n" \
+          "    } else {\n" \
+          "        ring_read_to_buffer(fill_buffer, SB16_BUFFER_SIZE);\n    }"
+    new = "    ring_read_to_buffer(fill_buffer, SB16_BUFFER_SIZE);"
+if s.count(old) != 1:
+    raise SystemExit("sb16-mutation: source pattern is not unique")
+p.write_text(s.replace(old, new))
+PY
+}
+
+if [ "${1:-}" = --texts ]; then
+    RACH2_FAULT_TEXTS=1
+    export RACH2_FAULT_TEXTS
+    apply_fault rach2/sys/audio/audio_debug.c rate >/dev/null
+    apply_fault rach2/sys/audio/sb16.c refill >/dev/null
+    echo 'sb16-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
+
 . "$repo/tests/system/runlock.sh"
 runlock_hold "$repo" sb16-mutation "$repo/tests/system/sb16_mutate.sh" "$@"
 RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
@@ -95,25 +134,7 @@ for fault in rate refill; do
     esac
     cp "$source" "$work/saved.c"
     run_phase fixed
-    python3 - "$source" "$fault" <<'PY'
-import pathlib
-import sys
-p = pathlib.Path(sys.argv[1])
-s = p.read_text()
-if sys.argv[2] == "rate":
-    old = "    if (audio->type == AUDIO_DRIVER_SB16) {\n" \
-          "        sample_rate = 44100;\n    }"
-    new = ""
-else:
-    old = "    if (user_callback) {\n" \
-          "        user_callback(fill_buffer, SB16_BUFFER_SIZE);\n" \
-          "    } else {\n" \
-          "        ring_read_to_buffer(fill_buffer, SB16_BUFFER_SIZE);\n    }"
-    new = "    ring_read_to_buffer(fill_buffer, SB16_BUFFER_SIZE);"
-if s.count(old) != 1:
-    raise SystemExit("sb16-mutation: source pattern is not unique")
-p.write_text(s.replace(old, new))
-PY
+    apply_fault "$source" "$fault"
     run_phase mutated
     restore
     run_phase restored

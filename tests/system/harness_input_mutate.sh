@@ -13,6 +13,87 @@ set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_blocking ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_blocking()
+{
+    python3 - "$1" <<'PY'
+from pathlib import Path
+import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+path = Path(sys.argv[1])
+source = path.read_text()
+old = ("    if (fcntl(child_out, F_SETFL, O_NONBLOCK) < 0 || "
+       "fcntl(child_in, F_SETFL, O_NONBLOCK) < 0)\n")
+new = "    if (fcntl(child_out, F_SETFL, O_NONBLOCK) < 0)\n"
+if source.count(old) != 1:
+    raise SystemExit("harness-input-mutation: source pattern is not unique: blocking")
+path.write_text(source.replace(old, new))
+PY
+}
+
+
+# apply_drain ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_drain()
+{
+    python3 - "$1" <<'PY'
+from pathlib import Path
+import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+path = Path(sys.argv[1])
+source = path.read_text()
+start = source.index("static void drain_rest(void)\n{")
+old = "        n = read(child_out, chunk, sizeof(chunk));\n"
+at = source.index(old, start)
+if at > source.index("\n}\n", start):
+    raise SystemExit("harness-input-mutation: source pattern is not in drain_rest")
+path.write_text(source[:at] + "        n = 0;\n" + source[at + len(old):])
+PY
+}
+
+
+# apply_unread ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_unread()
+{
+    python3 - "$1" <<'PY'
+from pathlib import Path
+import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+path = Path(sys.argv[1])
+source = path.read_text()
+old = "    if (sf && ferror(sf))\n        sent = 0;\n"
+if source.count(old) != 1:
+    raise SystemExit("harness-input-mutation: source pattern is not unique: unread")
+path.write_text(source.replace(old, ""))
+PY
+}
+
+if [ "${1:-}" = --texts ]; then
+    RACH2_FAULT_TEXTS=1
+    export RACH2_FAULT_TEXTS
+    apply_blocking tests/system/runner/harness.c >/dev/null
+    apply_drain tests/system/runner/harness.c >/dev/null
+    apply_unread tests/system/runner/harness.c >/dev/null
+    echo 'harness-input-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
+
 . "$repo/tests/system/runlock.sh"
 runlock_hold "$repo" harness-input-mutation "$repo/tests/system/harness_input_mutate.sh" "$@"
 mkdir -p build/tests
@@ -61,51 +142,17 @@ run_phase()
 
 echo "harness-input-mutation: logs: $work"
 run_phase fixed 0 'a write the machine does not read ends at the deadline'
-python3 - "$work/harness.c" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-source = path.read_text()
-old = ("    if (fcntl(child_out, F_SETFL, O_NONBLOCK) < 0 || "
-       "fcntl(child_in, F_SETFL, O_NONBLOCK) < 0)\n")
-new = "    if (fcntl(child_out, F_SETFL, O_NONBLOCK) < 0)\n"
-if source.count(old) != 1:
-    raise SystemExit("harness-input-mutation: source pattern is not unique: blocking")
-path.write_text(source.replace(old, new))
-PY
+apply_blocking "$work/harness.c"
 run_phase blocking-mutated 1 'a write the machine does not read was not ended by the deadline'
 cleanup
 run_phase blocking-restored 0 'a write the machine does not read ends at the deadline'
 cmp "$work/harness.saved" "$work/harness.c"
-python3 - "$work/harness.c" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-source = path.read_text()
-start = source.index("static void drain_rest(void)\n{")
-old = "        n = read(child_out, chunk, sizeof(chunk));\n"
-at = source.index(old, start)
-if at > source.index("\n}\n", start):
-    raise SystemExit("harness-input-mutation: source pattern is not in drain_rest")
-path.write_text(source[:at] + "        n = 0;\n" + source[at + len(old):])
-PY
+apply_drain "$work/harness.c"
 run_phase late-mutated 1 'output written before a timeout was not read after it'
 cleanup
 run_phase late-restored 0 'output written before a timeout is read after it'
 cmp "$work/harness.saved" "$work/harness.c"
-python3 - "$work/harness.c" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-source = path.read_text()
-old = "    if (sf && ferror(sf))\n        sent = 0;\n"
-if source.count(old) != 1:
-    raise SystemExit("harness-input-mutation: source pattern is not unique: unread")
-path.write_text(source.replace(old, ""))
-PY
+apply_unread "$work/harness.c"
 run_phase unread-mutated 1 'a sendfile= step whose file cannot be read passed'
 cleanup
 run_phase unread-restored 0 'a sendfile= step whose file cannot be read fails'

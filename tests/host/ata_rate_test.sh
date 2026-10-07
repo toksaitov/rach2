@@ -3,8 +3,8 @@
 set -eu
 case "${1-}" in
     '') [ "$#" -eq 0 ] ;;
-    --mutate) [ "$#" -eq 1 ] ;;
-    *) echo "ata-rate-test: usage: ata_rate_test.sh [--mutate]" >&2; exit 2 ;;
+    --mutate | --texts) [ "$#" -eq 1 ] ;;
+    *) echo "ata-rate-test: usage: ata_rate_test.sh [--mutate | --texts]" >&2; exit 2 ;;
 esac
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
@@ -66,15 +66,25 @@ run_phase()
     echo "ata-rate-test: result: $phase status $status"
 }
 
-echo "ata-rate-test: logs: $work"
-run_phase fixed
-[ "${1-}" = --mutate ] || exit 0
+if [ "${1-}" = --texts ]; then
+    source=rach2/sys/block/ata.c
+    run_phase() { :; }
+    restore() { :; }
+    trap - EXIT
+    RACH2_FAULT_TEXTS=1
+    export RACH2_FAULT_TEXTS
+else
+    echo "ata-rate-test: logs: $work"
+    run_phase fixed
+    [ "${1-}" = --mutate ] || exit 0
+fi
 for fault in pio spin; do
     case "$fault" in
         pio) failure='a DMA write uses one data command per 32 KiB and no data-port sectors' ;;
         spin) failure='a delayed write and flush use at most 32 status reads per 32 KiB' ;;
     esac
     python3 - "$source" "$fault" <<'PY'
+import os
 import pathlib
 import sys
 
@@ -91,10 +101,15 @@ else:
     new = "#define ATA_SPIN_BEFORE_SLEEP 512"
 if body.count(old) != 1:
     raise SystemExit("ata-rate-test: source pattern is not unique")
-path.write_text(prefix + body.replace(old, new))
+if not os.environ.get("RACH2_FAULT_TEXTS"):
+    path.write_text(prefix + body.replace(old, new))
 PY
     run_phase "$fault-mutated"
     restore
     run_phase "$fault-restored"
     cmp "$work/ata.saved.c" "$source"
 done
+if [ "${1-}" = --texts ]; then
+    rm -rf "$work"
+    echo 'ata-rate-test: texts: every fault is once in its source'
+fi

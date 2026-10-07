@@ -4,6 +4,21 @@ set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# overflow_once FILE: the check the fault replaces is once in FILE.
+overflow_once()
+{
+    if [ "$(grep -c 'if (!rx_overflow_logged)' "$1")" -ne 1 ]; then
+        echo "rtl8139-mutation: the overflow check is not once in $1" >&2
+        exit 1
+    fi
+}
+
+if [ "${1:-}" = --texts ]; then
+    overflow_once rach2/sys/network/driver/rtl8139.c
+    echo 'rtl8139-mutation: texts: every fault is once in its source'
+    exit 0
+fi
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-rtl8139.XXXXXX")
 child=
 cp -R rach2/sys "$work/sys"
@@ -56,7 +71,7 @@ run_phase()
 
 echo "rtl8139-mutation: logs: $work"
 run_phase fixed
-[ "$(grep -c 'if (!rx_overflow_logged)' "$source")" -eq 1 ]
+overflow_once "$source"
 sed 's/if (!rx_overflow_logged)/if (1)/' "$work/rtl8139.saved" > "$source"
 run_phase mutated
 cleanup

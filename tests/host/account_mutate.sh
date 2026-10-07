@@ -4,80 +4,18 @@ set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
-mkdir -p build/tests
-work=$(mktemp -d "$repo/build/tests/account-proof.XXXXXX")
-cp -R utils "$work/utils"
-cp -R "$work/utils" "$work/saved"
-child=
 
-stop_child()
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
 {
-    if [ -n "$child" ]; then
-        kill -TERM "-$child" 2>/dev/null || :
-        wait "$child" 2>/dev/null || :
-        while kill -0 "-$child" 2>/dev/null; do
-            sleep 1
-        done
-        child=
-    fi
-}
-
-restore()
-{
-    for file in pwauth.c login.c su.c sudo.c init.c nc.c; do
-        cp "$work/saved/$file" "$work/utils/$file"
-        touch "$work/utils/$file"
-    done
-}
-
-cleanup()
-{
-    stop_child
-    restore
-}
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
-
-run_phase()
-{
-    phase=$1
-    test=$2
-    expected=$3
-    message=$4
-    binary="$work/$phase"
-    if ! "${CC:-cc}" -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST \
-        -g -O1 -ffreestanding -Wall -Wextra -Werror \
-        -fsanitize=address,undefined -fno-sanitize-recover=all \
-        -I "$work/utils" -I tests/host/compat \
-        "tests/host/${test}_hosttest.c" -o "$binary" >"$binary.compile.log" 2>&1; then
-        cat "$binary.compile.log" >&2
-        exit 1
-    fi
-    cksum "$work/utils/"*.c "$binary" >"$binary.cksum"
-    perl -e 'setpgrp(0, 0); alarm 15; exec @ARGV or die "account-mutation: exec: $!\n"' \
-        "$binary" >"$binary.log" 2>&1 &
-    child=$!
-    status=0
-    wait "$child" || status=$?
-    stop_child
-    cat "$binary.log"
-    [ "$status" -eq "$expected" ] && grep -Fq "$message" "$binary.log" || exit 1
-    echo "account-mutation: result: $phase status $status"
-}
-
-echo "account-mutation: logs: $work"
-for test in pwauthfault accounttools initpolicy ncwrite; do
-    run_phase "$test-fixed" "$test" 0 "$test-hosttest: result: pass"
-done
-for fault in pid-nul pid-tail echo tty-detect tty-error lock-cleanup temp-cleanup \
-    login-eof login-fds su-fds sudo-fds sudo-line init-redirect init-network \
-    init-block init-signals init-sshd-block init-sshd-defaults init-sshd-mask \
-    init-login-timeout init-login-keep init-login-parent ssh-suffix nc-socket nc-stdout; do
-    python3 - "$work/utils" "$fault" <<'PY'
+    python3 - "$1" "$2" <<'PY'
 from pathlib import Path
 import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
 
 root = Path(sys.argv[1])
 fault = sys.argv[2]
@@ -189,6 +127,90 @@ elif fault == 'init-network':
 else:
     raise SystemExit('account-mutation: unknown fault')
 PY
+}
+
+faults='pid-nul pid-tail echo tty-detect tty-error lock-cleanup temp-cleanup
+    login-eof login-fds su-fds sudo-fds sudo-line init-redirect init-network
+    init-block init-signals init-sshd-block init-sshd-defaults init-sshd-mask
+    init-login-timeout init-login-keep init-login-parent ssh-suffix nc-socket
+    nc-stdout'
+if [ "${1:-}" = --texts ]; then
+    for fault in $faults; do
+        RACH2_FAULT_TEXTS=1 apply_fault utils "$fault" >/dev/null || exit 1
+    done
+    echo 'account-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
+mkdir -p build/tests
+work=$(mktemp -d "$repo/build/tests/account-proof.XXXXXX")
+cp -R utils "$work/utils"
+cp -R "$work/utils" "$work/saved"
+child=
+
+stop_child()
+{
+    if [ -n "$child" ]; then
+        kill -TERM "-$child" 2>/dev/null || :
+        wait "$child" 2>/dev/null || :
+        while kill -0 "-$child" 2>/dev/null; do
+            sleep 1
+        done
+        child=
+    fi
+}
+
+restore()
+{
+    for file in pwauth.c login.c su.c sudo.c init.c nc.c; do
+        cp "$work/saved/$file" "$work/utils/$file"
+        touch "$work/utils/$file"
+    done
+}
+
+cleanup()
+{
+    stop_child
+    restore
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+run_phase()
+{
+    phase=$1
+    test=$2
+    expected=$3
+    message=$4
+    binary="$work/$phase"
+    if ! "${CC:-cc}" -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST \
+        -g -O1 -ffreestanding -Wall -Wextra -Werror \
+        -fsanitize=address,undefined -fno-sanitize-recover=all \
+        -I "$work/utils" -I tests/host/compat \
+        "tests/host/${test}_hosttest.c" -o "$binary" >"$binary.compile.log" 2>&1; then
+        cat "$binary.compile.log" >&2
+        exit 1
+    fi
+    cksum "$work/utils/"*.c "$binary" >"$binary.cksum"
+    perl -e 'setpgrp(0, 0); alarm 15; exec @ARGV or die "account-mutation: exec: $!\n"' \
+        "$binary" >"$binary.log" 2>&1 &
+    child=$!
+    status=0
+    wait "$child" || status=$?
+    stop_child
+    cat "$binary.log"
+    [ "$status" -eq "$expected" ] && grep -Fq "$message" "$binary.log" || exit 1
+    echo "account-mutation: result: $phase status $status"
+}
+
+echo "account-mutation: logs: $work"
+for test in pwauthfault accounttools initpolicy ncwrite; do
+    run_phase "$test-fixed" "$test" 0 "$test-hosttest: result: pass"
+done
+for fault in $faults; do
+    apply_fault "$work/utils" "$fault"
     case $fault in
         pid-nul) test=pwauthfault; message='embedded NUL rejected' ;;
         pid-tail) test=pwauthfault; message='suffix beyond first buffer rejected' ;;

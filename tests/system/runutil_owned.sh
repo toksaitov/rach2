@@ -8,11 +8,42 @@ set -eu
 case ${1:-} in
     '') mutate=0 ;;
     --mutate) mutate=1 ;;
-    *) echo 'runutil-owned: usage: runutil_owned.sh [--mutate]' >&2; exit 2 ;;
+    --texts) mutate=2 ;;
+    *) echo 'runutil-owned: usage: runutil_owned.sh [--mutate | --texts]' >&2; exit 2 ;;
 esac
 [ "$#" -le 1 ] || exit 2
 repo=$(cd "$(dirname "$0")/../.." && pwd)
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-runutil-owned.XXXXXX")
+
+# owned_edit FAULT [SOURCE]: write $work/runutil.c as SOURCE, by default the
+# saved runner helper, with the rule FAULT names reversed; fail when the edit
+# changes nothing, since its text has left the helper.
+owned_edit()
+{
+    case $1 in
+        missing-check) program='s/leaked = check_token(/leaked = 0 \&\& check_token(/' ;;
+        recorded-group) program='s/!list\[i\].owned && complete == 0/complete == 0/' ;;
+        short-grace) program='s/now() - started >= 15/now() - started >= 2/' ;;
+        unnamed-failure) program='/if (!count) {/,/^        }/s/return 0;/return 1;/' ;;
+        killed-survivor) program='/recorded group did not stop within 15 s/,/failed = 1;/s/failed = 1;/signal_token(token, SIGKILL);/' ;;
+        machine-reuse) program='s/id.start != start/0/' ;;
+    esac
+    sed "$program" "${2:-$work/runutil.saved}" > "$work/runutil.c"
+    if cmp -s "${2:-$work/runutil.saved}" "$work/runutil.c"; then
+        echo "runutil-owned: the $1 fault is not in the helper" >&2
+        exit 1
+    fi
+}
+
+if [ "$mutate" -eq 2 ]; then
+    for fault in missing-check recorded-group short-grace unnamed-failure killed-survivor \
+        machine-reuse; do
+        owned_edit "$fault" "$repo/tests/system/runner/runutil.c"
+    done
+    rm -rf "$work"
+    echo 'runutil-owned: texts: every fault is once in its source'
+    exit 0
+fi
 runner=0
 sentinel=0
 machine_test=0
@@ -231,18 +262,17 @@ prove_mutation()
 
 check_phase fixed
 if [ "$mutate" -eq 1 ]; then
-    sed 's/leaked = check_token(/leaked = 0 \&\& check_token(/' "$work/runutil.saved" > "$work/runutil.c"
+    owned_edit missing-check
     prove_mutation missing-check session PASS
-    sed 's/!list\[i\].owned && complete == 0/complete == 0/' "$work/runutil.saved" > "$work/runutil.c"
+    owned_edit recorded-group
     prove_mutation recorded-group ingroup FAIL
-    sed 's/now() - started >= 15/now() - started >= 2/' "$work/runutil.saved" > "$work/runutil.c"
+    owned_edit short-grace
     prove_mutation short-grace draining FAIL
-    sed '/if (!count) {/,/^        }/s/return 0;/return 1;/' "$work/runutil.saved" > "$work/runutil.c"
+    owned_edit unnamed-failure
     prove_mutation unnamed-failure hidden FAIL
-    sed '/recorded group did not stop within 15 s/,/failed = 1;/s/failed = 1;/signal_token(token, SIGKILL);/' \
-        "$work/runutil.saved" > "$work/runutil.c"
+    owned_edit killed-survivor
     prove_mutation killed-survivor stubborn PASS
-    sed 's/id.start != start/0/' "$work/runutil.saved" > "$work/runutil.c"
+    owned_edit machine-reuse
     mkdir "$work/machine-reuse"
     machine_rc=0
     check_machine machine-reuse reused || machine_rc=$?

@@ -4,6 +4,45 @@ set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" <<'PY'
+from pathlib import Path
+import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+path = Path(sys.argv[1])
+source = path.read_text()
+start = source.index('static int loop_resolve(')
+end = source.index('\n}', start) + 2
+source = source[:start] + '''static int loop_resolve(const char *path, struct vfs_ref *ref)
+{
+    int rc = vfs_resolve(0, path, 0, ref, 0, 0);
+
+    if (rc == 0) {
+        vfs_ns_lock(ref->mnt);
+    }
+    return rc;
+}''' + source[end:]
+path.write_text(source)
+PY
+}
+
+if [ "${1:-}" = --texts ]; then
+    RACH2_FAULT_TEXTS=1
+    export RACH2_FAULT_TEXTS
+    apply_fault rach2/sys/block/loop.c >/dev/null
+    echo 'loop-attach-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
+
 mkdir -p build/tests
 work=$(mktemp -d "$repo/build/tests/loop-attach-proof.XXXXXX")
 cp -R rach2/sys "$work/sys"
@@ -56,25 +95,7 @@ run_phase()
 
 echo "loop-attach-mutation: logs: $work"
 run_phase fixed 0 'loop-attach-hosttest: result: pass:'
-python3 - "$source" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-source = path.read_text()
-start = source.index('static int loop_resolve(')
-end = source.index('\n}', start) + 2
-source = source[:start] + '''static int loop_resolve(const char *path, struct vfs_ref *ref)
-{
-    int rc = vfs_resolve(0, path, 0, ref, 0, 0);
-
-    if (rc == 0) {
-        vfs_ns_lock(ref->mnt);
-    }
-    return rc;
-}''' + source[end:]
-path.write_text(source)
-PY
+apply_fault "$source"
 run_phase stale-resolution 1 'loop read avoids the reused old extent'
 cleanup
 run_phase restored 0 'loop-attach-hosttest: result: pass:'

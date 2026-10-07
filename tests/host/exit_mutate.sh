@@ -1,11 +1,30 @@
 #!/bin/sh
 # Compile each phase from a private copy; no running kernel image is replaced.
 # Two faults: death published before the cleanup, and an exit that keeps its
-# address space for the reap.
+# address space for the reap. --texts checks that each line the faults find
+# is once in the tree's exit.c, and compiles nothing.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# exit_texts FILE: each line the two faults find is once in FILE.
+exit_texts()
+{
+    for line in 'self->state = PROC_ZOMBIE;' 'self->in_syscall = 1;' 'mm_drop(self);' \
+        'switch_page_directory(_kernel_dir);'; do
+        if [ "$(grep -c "$line" "$1")" -ne 1 ]; then
+            echo "exit-mutation: not once in $1: $line" >&2
+            return 1
+        fi
+    done
+}
+
+if [ "${1:-}" = --texts ]; then
+    exit_texts rach2/sys/proc/exit.c
+    echo 'exit-mutation: texts: every fault is once in its source'
+    exit 0
+fi
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-exit.XXXXXX")
 child=
 
@@ -65,7 +84,7 @@ run_phase()
 
 echo "exit-mutation: logs: $work"
 run_phase fixed
-[ "$(grep -c 'self->state = PROC_ZOMBIE;' "$work/exit.saved")" -eq 1 ]
+exit_texts "$work/exit.saved"
 sed '/self->state = PROC_ZOMBIE;/d; /self->in_syscall = 1;/a\
     self->state = PROC_ZOMBIE;
 ' "$work/exit.saved" > "$work/proc/exit.c"
@@ -74,8 +93,6 @@ run_phase mutated
 cleanup
 run_phase restored
 cmp "$work/exit.saved" "$work/proc/exit.c"
-[ "$(grep -c 'mm_drop(self);' "$work/exit.saved")" -eq 1 ]
-[ "$(grep -c 'switch_page_directory(_kernel_dir);' "$work/exit.saved")" -eq 1 ]
 sed '/mm_drop(self);/d; /switch_page_directory(_kernel_dir);/d' "$work/exit.saved" \
     > "$work/proc/exit.c"
 touch "$work/proc/exit.c"

@@ -4,6 +4,43 @@ set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" <<'PY'
+from pathlib import Path
+import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+path = Path(sys.argv[1])
+source = path.read_text()
+changes = [
+    ("    struct stat st;\n\n", ""),
+    ("    if (lstat(path, &st) < 0 || !S_ISDIR(st.st_mode)) {\n"
+     "        return -1;\n    }\n", ""),
+]
+for old, new in changes:
+    if source.count(old) != 1:
+        raise SystemExit("rm-mutation: source pattern is not unique")
+    source = source.replace(old, new)
+path.write_text(source)
+PY
+}
+
+if [ "${1:-}" = --texts ]; then
+    RACH2_FAULT_TEXTS=1
+    export RACH2_FAULT_TEXTS
+    apply_fault utils/rm.c >/dev/null
+    echo 'rm-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
+
 mkdir -p build/tests
 work=$(mktemp -d "$repo/build/tests/rm-proof.XXXXXX")
 child=
@@ -54,23 +91,7 @@ run_phase()
 
 echo "rm-mutation: logs: $work"
 run_phase fixed 0 'rm-hosttest: result: pass:'
-python3 - "$work/utils/rm.c" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-source = path.read_text()
-changes = [
-    ("    struct stat st;\n\n", ""),
-    ("    if (lstat(path, &st) < 0 || !S_ISDIR(st.st_mode)) {\n"
-     "        return -1;\n    }\n", ""),
-]
-for old, new in changes:
-    if source.count(old) != 1:
-        raise SystemExit("rm-mutation: source pattern is not unique")
-    source = source.replace(old, new)
-path.write_text(source)
-PY
+apply_fault "$work/utils/rm.c"
 run_phase unguarded 1 'rm-hosttest: fail: denied operand preserves target contents'
 if cmp -s "$work/fixed" "$work/unguarded"; then
     echo "rm-mutation: binary did not change" >&2

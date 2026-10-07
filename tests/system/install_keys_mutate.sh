@@ -3,6 +3,82 @@ set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_keys ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_keys()
+{
+    python3 - "$1" <<'PY'
+from pathlib import Path
+import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+path = Path(sys.argv[1])
+source = path.read_text()
+start = source.index('    if [ -d "$1/etc/dropbear" ]; then', source.index('write_archive()'))
+end = source.index('    if [ -n "${2:-}" ]; then', start)
+assert 'could not be archived' in source[start:end]
+path.write_text(source[:start] + source[end:])
+PY
+}
+
+
+# apply_archive ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_archive()
+{
+    python3 - "$1" <<'PYOLD'
+from pathlib import Path
+import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+path = Path(sys.argv[1])
+source = path.read_text()
+needle = '    rm -f "$next_archive/generation"'
+assert source.count(needle) == 1
+source = source.replace(needle, '    [ -z "$archive" ] || next_archive="$archive"\n' + needle)
+path.write_text(source)
+PYOLD
+}
+
+
+# apply_case ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_case()
+{
+    python3 - "$1" <<'PYCASE'
+from pathlib import Path
+import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+path = Path(sys.argv[1])
+source = path.read_text()
+needle = '                die "ssh key names collide on FAT32: $entry and $other"'
+assert source.count(needle) == 1
+path.write_text(source.replace(needle, '                :'))
+PYCASE
+}
+
+if [ "${1:-}" = --texts ]; then
+    RACH2_FAULT_TEXTS=1
+    export RACH2_FAULT_TEXTS
+    apply_keys utils/rach2-install >/dev/null
+    apply_archive utils/rach2-install >/dev/null
+    apply_case utils/rach2-install >/dev/null
+    echo 'install-keys-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
+
 RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
 REPO=$repo
 . "$repo/mk/arch.sh"
@@ -106,49 +182,20 @@ run_phase()
 make -s -j8 rach2 utils krffs "ARCH=$RACH2_ARCH" >"$work/components.build.log" 2>&1
 cat "$work/components.build.log"
 run_phase fixed 0
-python3 - "$source" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-source = path.read_text()
-start = source.index('    if [ -d "$1/etc/dropbear" ]; then', source.index('write_archive()'))
-end = source.index('    if [ -n "${2:-}" ]; then', start)
-assert 'could not be archived' in source[start:end]
-path.write_text(source[:start] + source[end:])
-PY
+apply_keys "$source"
 run_phase mutated 1 "row 17:"
 restore
 run_phase restored 0
 cmp "$work/fixed.installer" "$work/restored.installer"
 # Rebuilding the chosen slot destroys the only complete copy at the stop.
-python3 - "$source" <<'PYOLD'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-source = path.read_text()
-needle = '    rm -f "$next_archive/generation"'
-assert source.count(needle) == 1
-source = source.replace(needle, '    [ -z "$archive" ] || next_archive="$archive"\n' + needle)
-path.write_text(source)
-PYOLD
+apply_archive "$source"
 run_phase archive-mutated 1 "row archive-stop: the retry did not recover"
 restore
 run_phase archive-restored 0
 cmp "$work/fixed.installer" "$work/archive-restored.installer"
 # Without the check, two key names that differ only in case reach FAT32,
 # which folds them into one file, and the update writes the root.
-python3 - "$source" <<'PYCASE'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-source = path.read_text()
-needle = '                die "ssh key names collide on FAT32: $entry and $other"'
-assert source.count(needle) == 1
-path.write_text(source.replace(needle, '                :'))
-PYCASE
+apply_case "$source"
 run_phase case-mutated 1 "row archive-keys: two key names that differ only in case were not refused"
 restore
 run_phase case-restored 0

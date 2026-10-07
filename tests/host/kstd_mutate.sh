@@ -8,6 +8,39 @@ set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" <<'PY'
+from pathlib import Path
+import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+path = Path(sys.argv[1])
+source = path.read_text()
+old = ("        } else if (is_signed && initial_input > 0 && force_sign) {\n"
+       "            *tmp_str++ = '+';\n"
+       "        }\n")
+if source.count(old) != 1:
+    raise SystemExit("kstd-mutation: source pattern is not unique: plus")
+path.write_text(source.replace(old, "        }\n"))
+PY
+}
+
+if [ "${1:-}" = --texts ]; then
+    RACH2_FAULT_TEXTS=1
+    export RACH2_FAULT_TEXTS
+    apply_fault rach2/sys/lib/kstd.c >/dev/null
+    echo 'kstd-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
+
 mkdir -p build/tests
 work=$(mktemp -d "$repo/build/tests/kstd-proof.XXXXXX")
 cp -R rach2/sys/lib "$work/lib"
@@ -58,19 +91,7 @@ run_phase()
 
 echo "kstd-mutation: logs: $work"
 run_phase fixed 0
-python3 - "$work/lib/kstd.c" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-source = path.read_text()
-old = ("        } else if (is_signed && initial_input > 0 && force_sign) {\n"
-       "            *tmp_str++ = '+';\n"
-       "        }\n")
-if source.count(old) != 1:
-    raise SystemExit("kstd-mutation: source pattern is not unique: plus")
-path.write_text(source.replace(old, "        }\n"))
-PY
+apply_fault "$work/lib/kstd.c"
 run_phase plus-mutated 1
 cleanup
 run_phase plus-restored 0

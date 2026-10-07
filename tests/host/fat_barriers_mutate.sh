@@ -26,29 +26,42 @@
 # with either dropped and no row can tell them apart. The proof passes
 # when every other site is proved and that one alone is not.
 #
-# Usage: fat_barriers_mutate.sh [--check]
+# Usage: fat_barriers_mutate.sh [--check | --texts]
 # With --check it compiles and runs the two tests' barrier rows over the
 # unmodified drivers alone.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
-[ "$#" -eq 0 ] || [ "$*" = --check ] || {
-    echo 'fat-barriers-proof: usage: fat_barriers_mutate.sh [--check]' >&2
+[ "$#" -eq 0 ] || [ "$*" = --check ] || [ "$*" = --texts ] || {
+    echo 'fat-barriers-proof: usage: fat_barriers_mutate.sh [--check | --texts]' >&2
     exit 2
 }
-mkdir -p build/tests
-work=$(mktemp -d "$repo/build/tests/fat-barriers-proof.XXXXXX")
-# The tests' fixtures, in a directory of this run's that the trap removes: a
-# test given none makes its own and keeps it when it fails, as a dropped
-# barrier makes it do.
-fixtures=$(mktemp -d /tmp/rach2-fix.XXXXXX)
-mkdir -p "$work/rach2" "$work/tests/host"
-cp -R rach2/sys "$work/rach2/sys"
-cp tests/host/exfat_hosttest.c tests/host/fat32_hosttest.c "$work/tests/host/"
-for driver in exfat fat32; do
-    cp "$work/rach2/sys/fs/$driver.c" "$work/$driver.saved"
-done
+texts=
+[ "$*" != --texts ] || texts=1
+if [ -n "$texts" ]; then
+    # --texts lists the sites of the tree's drivers alone, in a directory the
+    # trap removes as it would remove the fixtures.
+    work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-fat-barriers-texts.XXXXXX")
+    fixtures=$work
+    mkdir -p "$work/rach2/sys/fs"
+    for driver in exfat fat32; do
+        cp "rach2/sys/fs/$driver.c" "$work/$driver.saved"
+    done
+else
+    mkdir -p build/tests
+    work=$(mktemp -d "$repo/build/tests/fat-barriers-proof.XXXXXX")
+    # The tests' fixtures, in a directory of this run's that the trap removes:
+    # a test given none makes its own and keeps it when it fails, as a dropped
+    # barrier makes it do.
+    fixtures=$(mktemp -d /tmp/rach2-fix.XXXXXX)
+    mkdir -p "$work/rach2" "$work/tests/host"
+    cp -R rach2/sys "$work/rach2/sys"
+    cp tests/host/exfat_hosttest.c tests/host/fat32_hosttest.c "$work/tests/host/"
+    for driver in exfat fat32; do
+        cp "$work/rach2/sys/fs/$driver.c" "$work/$driver.saved"
+    done
+fi
 child=
 
 stop_child()
@@ -133,6 +146,32 @@ else:
     start, end = found[int(sys.argv[3])][:2]
     path.write_text(text[:start] + '0' + text[end:])
 PY
+
+# site_lists: list the barrier sites of the two saved drivers into
+# $work/DRIVER.sites, and require 15 in each, and among fat32's the flush in
+# fat_rmdir, the one site the proof expects to leave unproved.
+site_lists()
+{
+    for driver in exfat fat32; do
+        python3 "$work/sites.py" "$work/$driver.saved" list >"$work/$driver.sites"
+        have=$(wc -l <"$work/$driver.sites" | tr -d ' ')
+        if [ "$have" -ne 15 ]; then
+            cat "$work/$driver.sites"
+            echo "fat-barriers-proof: fail: $driver.c has $have barrier sites, not 15" >&2
+            exit 1
+        fi
+    done
+    if ! grep -q "$(printf '\tfat_rmdir\tblock_flush(fm->dev)$')" "$work/fat32.sites"; then
+        echo 'fat-barriers-proof: fail: fat32.c has no flush in fat_rmdir' >&2
+        exit 1
+    fi
+}
+
+if [ -n "$texts" ]; then
+    site_lists
+    echo 'fat-barriers-proof: texts: each driver has the barrier sites the proof expects'
+    exit 0
+fi
 
 # compile DRIVER: the driver's host test over the private tree, into
 # $work/DRIVER.bin; the test's own dependency lines, as the host suite
@@ -223,18 +262,7 @@ done
 
 # The sites each driver has; a count that moved means a site was added or
 # removed, and the proof and its expectation are to be read again.
-python3 "$work/sites.py" "$work/exfat.saved" list >"$work/exfat.sites"
-python3 "$work/sites.py" "$work/fat32.saved" list >"$work/fat32.sites"
-for pair in exfat:15 fat32:15; do
-    driver=${pair%%:*}
-    want=${pair#*:}
-    have=$(wc -l <"$work/$driver.sites" | tr -d ' ')
-    if [ "$have" -ne "$want" ]; then
-        cat "$work/$driver.sites"
-        echo "fat-barriers-proof: fail: $driver.c has $have barrier sites, not $want" >&2
-        exit 1
-    fi
-done
+site_lists
 
 unproved=
 for driver in exfat fat32; do

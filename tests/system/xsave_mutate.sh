@@ -4,6 +4,72 @@ set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+texts=
+[ "${1:-}" != --texts ] || texts=1
+# Replace the one occurrence of $1 in the source with $2.
+mutate()
+{
+    changed=1
+    python3 - "$source" "$1" "$2" <<'PY'
+from pathlib import Path
+import os
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+assert text.count(sys.argv[2]) == 1, sys.argv[2]
+if not os.environ.get('RACH2_FAULT_TEXTS'):
+    path.write_text(text.replace(sys.argv[2], sys.argv[3]))
+PY
+}
+
+# fpu_fault NAME: put the fault whose failing phase is NAME into its source.
+fpu_fault()
+{
+    case $1 in
+        switch)
+            mutate '"D"(area), "a"(0xFFFFFFFFu), "d"(0xFFFFFFFFu) : "memory");
+    } else if (use_fxsr) {
+        __asm__ __volatile__(FXSAVE' '"D"(area), "a"(3u), "d"(0u) : "memory");
+    } else if (use_fxsr) {
+        __asm__ __volatile__(FXSAVE'
+            ;;
+        xcr0)
+            mutate '        mask |= XFEATURE_YMM;' ''
+            ;;
+        magic1)
+            mutate '    put32(sw, FP_XSTATE_MAGIC1);' '    put32(sw, 0);'
+            ;;
+        ucflags)
+            mutate '    return use_xsave ? UC_FP_XSTATE : 0u;' '    return 0u;'
+            ;;
+        sigreturn)
+            mutate '        bv = get64(a + XSAVE_HDR) & rfbm;' \
+                '        bv = get64(a + XSAVE_HDR) & rfbm & ~(uint64_t)XFEATURE_YMM;'
+            ;;
+        view)
+            mutate '    put64(copy + FX_SW, xfeatures);' ''
+            ;;
+        magic2)
+            mutate '    if (size != 0 && magic2 == FP_XSTATE_MAGIC2) {' '    if (size != 0) {'
+            ;;
+        header)
+            mutate '        if (img[i] != 0) {' '        if (0) {'
+            ;;
+    esac
+}
+
+if [ -n "$texts" ]; then
+    source=rach2/sys/arch/x86/fpu.c
+    RACH2_FAULT_TEXTS=1
+    export RACH2_FAULT_TEXTS
+    for name in switch xcr0 magic1 ucflags sigreturn view magic2 header; do
+        fpu_fault "$name"
+    done
+    echo 'xsave-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
 . "$repo/tests/system/runlock.sh"
 runlock_hold "$repo" xsave-mutation "$repo/tests/system/xsave_mutate.sh" "$@"
 # The architecture, from ARCH as mk/arch.sh reads it: its kernel, its build
@@ -58,21 +124,6 @@ trap cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
-
-# Replace the one occurrence of $1 in the source with $2.
-mutate()
-{
-    changed=1
-    python3 - "$source" "$1" "$2" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-text = path.read_text()
-assert text.count(sys.argv[2]) == 1, sys.argv[2]
-path.write_text(text.replace(sys.argv[2], sys.argv[3]))
-PY
-}
 
 # The two frame host tests, compiled as tests/system/suites/host.sh compiles
 # them; 0 when both pass. The caller's `||` turns errexit off in here, so a
@@ -144,40 +195,35 @@ make -s ARCH="$RACH2_ARCH" rach2 tests krffs test-image \
 cat "$work/build.log"
 run_phase fixed pass '' pass ''
 
-mutate '"D"(area), "a"(0xFFFFFFFFu), "d"(0xFFFFFFFFu) : "memory");
-    } else if (use_fxsr) {
-        __asm__ __volatile__(FXSAVE' '"D"(area), "a"(3u), "d"(0u) : "memory");
-    } else if (use_fxsr) {
-        __asm__ __volatile__(FXSAVE'
+fpu_fault switch
 run_phase switch fail 'the upper half' pass ''
 restore
 
-mutate '        mask |= XFEATURE_YMM;' ''
+fpu_fault xcr0
 run_phase xcr0 fail 'XCR0 is not x87, SSE, and AVX' pass ''
 restore
 
-mutate '    put32(sw, FP_XSTATE_MAGIC1);' '    put32(sw, 0);'
+fpu_fault magic1
 run_phase magic1 fail 'lack FP_XSTATE_MAGIC1' fail 'FP_XSTATE_MAGIC1'
 restore
 
-mutate '    return use_xsave ? UC_FP_XSTATE : 0u;' '    return 0u;'
+fpu_fault ucflags
 run_phase ucflags fail 'lack UC_FP_XSTATE' pass ''
 restore
 
-mutate '        bv = get64(a + XSAVE_HDR) & rfbm;' \
-    '        bv = get64(a + XSAVE_HDR) & rfbm & ~(uint64_t)XFEATURE_YMM;'
+fpu_fault sigreturn
 run_phase sigreturn fail 'clobbered the registers: ymm0: the upper half' fail 'XSTATE_BV comes back'
 restore
 
-mutate '    put64(copy + FX_SW, xfeatures);' ''
+fpu_fault view
 run_phase view fail 'XCR0 at byte 464' fail 'the view has XCR0 at byte 464'
 restore
 
-mutate '    if (size != 0 && magic2 == FP_XSTATE_MAGIC2) {' '    if (size != 0) {'
+fpu_fault magic2
 run_phase magic2 pass '' fail 'without FP_XSTATE_MAGIC2'
 restore
 
-mutate '        if (img[i] != 0) {' '        if (0) {'
+fpu_fault header
 run_phase header fail '' fail 'XCOMP_BV set is refused'
 restore
 

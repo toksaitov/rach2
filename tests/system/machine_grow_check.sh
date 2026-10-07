@@ -6,9 +6,35 @@ repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-grow-check.XXXXXX")
 echo "machine-grow-check: logs: $work"
 fail() { echo "machine-grow-check: failed: $*" >&2; exit 1; }
-[ "$#" = 0 ] || [ "$*" = --mutate ] || fail 'usage: machine_grow_check.sh [--mutate]'
+[ "$#" = 0 ] || [ "$*" = --mutate ] || [ "$*" = --texts ] || fail 'usage: machine_grow_check.sh [--mutate | --texts]'
 cp "$repo/tools/dev/machine_grow.sh" "$work/original.sh"
 cp "$work/original.sh" "$work/source.sh"
+
+# mutate_source MUTATION: $work/source.sh is $work/original.sh with the
+# check MUTATION names taken out.
+mutate_source()
+{
+    case "$1" in
+        ranges) pattern='cmp "$work/ranges.txt" "$work/expected-ranges.txt"' ;;
+        boot) pattern='[ "$actual_boot" = "$expected_boot" ]' ;;
+    esac
+    awk -v pattern="$pattern" 'index($0, pattern) {print "    :"; next} {print}' \
+        "$work/original.sh" > "$work/source.sh"
+}
+
+if [ "$*" = --texts ]; then
+    for mutation in ranges boot; do
+        mutate_source "$mutation"
+        if cmp -s "$work/original.sh" "$work/source.sh"; then
+            echo "machine-grow-check: the $mutation fault is not in tools/dev/machine_grow.sh" >&2
+            exit 1
+        fi
+    done
+    trap - EXIT
+    rm -rf "$work"
+    echo 'machine-grow-check: texts: every fault is once in its source'
+    exit 0
+fi
 # shellcheck disable=SC2329
 cleanup() { cp "$work/original.sh" "$work/source.sh"; }
 trap cleanup EXIT
@@ -90,12 +116,7 @@ rows fixed || { cat "$work/fixed.log" >&2; fail 'fixed checks'; }
 echo 'machine-grow-check: fixed: both geometries and the complete boot copy passed'
 if [ "$#" = 1 ]; then
     for mutation in ranges boot; do
-        case "$mutation" in
-            ranges) pattern='cmp "$work/ranges.txt" "$work/expected-ranges.txt"' ;;
-            boot) pattern='[ "$actual_boot" = "$expected_boot" ]' ;;
-        esac
-        awk -v pattern="$pattern" 'index($0, pattern) {print "    :"; next} {print}' \
-            "$work/original.sh" > "$work/source.sh"
+        mutate_source "$mutation"
         if rows "$mutation"; then fail "$mutation mutation passed"; fi
         case "$mutation" in
             ranges) diagnostic='small omitted range accepted' ;;

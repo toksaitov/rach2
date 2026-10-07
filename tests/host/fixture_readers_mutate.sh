@@ -3,6 +3,68 @@
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" "$2" <<'PY'
+from pathlib import Path
+import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+path = Path(sys.argv[1])
+source = path.read_text()
+changes = {
+    "path": [
+        ("        size_t n;\n", "        size_t n;\n        char want[600];\n"),
+        ("        n = slash ? (size_t)(slash - p) : strlen(p);\n",
+         "        n = slash ? (size_t)(slash - p) : strlen(p);\n"
+         "        memcpy(want, p, n);\n        want[n] = 0;\n"),
+        ("strlen(name) == n && memcmp(name, p, n) == 0", "strcmp(name, want) == 0"),
+    ],
+    "extent": [("if (nofat && !read_extent(v, first, length))",
+                "if (0 && nofat && !read_extent(v, first, length))")],
+    "length": [("    if (valid > length || (length && nofat",
+                "    length = valid;\n    if (valid > length || (length && nofat")],
+    "ordinal": [("seq >= 1 && seq <= 20 &&", "seq >= 1 &&")],
+    "restart": [("pending == 1 && seq >= 1", "pending >= 1 && seq >= 1")],
+}
+for before, after in changes[sys.argv[2]]:
+    if source.count(before) != 1:
+        sys.exit("fixture-mutation: source no longer matches: " + before)
+    source = source.replace(before, after)
+path.write_text(source)
+PY
+}
+# select_mutation MUTATION: the fixture writer MUTATION changes, and the
+# failure its reader's row prints.
+select_mutation()
+{
+    case "$1" in
+        path) kind=exfat; expected='FAIL: oversized path component' ;;
+        extent) kind=exfat; expected='FAIL: reject directory after heap' ;;
+        length) kind=exfat; expected='FAIL: zero tail through DataLength' ;;
+        ordinal) kind=fat; expected="FAIL: 'reject twenty-one-entry name'" ;;
+        restart) kind=fat; expected="FAIL: 'reject repeated start before twenty entries'" ;;
+        *) echo "fixture-mutation: unknown mutation: $1" >&2; exit 1 ;;
+    esac
+}
+
+mutations='path extent length ordinal restart'
+if [ "${1:-}" = --texts ]; then
+    for mutation in $mutations; do
+        select_mutation "$mutation"
+        RACH2_FAULT_TEXTS=1 apply_fault "tests/host/mk${kind}fixture.c" "$mutation" >/dev/null ||
+            exit 1
+    done
+    echo 'fixture-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
 . "$repo/tests/system/runlock.sh"
 runlock_hold "$repo" fixture-mutation "$repo/tests/host/fixture_readers_mutate.sh" "$@"
 mkdir -p build
@@ -113,45 +175,13 @@ echo "fixture-mutation: logs: $work"
 run_phase fixed exfat ''
 run_phase fixed fat ''
 if [ "$#" -eq 0 ]; then
-    set -- path extent length ordinal restart
+    # shellcheck disable=SC2086 # the mutations are separate words
+    set -- $mutations
 fi
 for mutation do
-    case "$mutation" in
-        path) kind=exfat; expected='FAIL: oversized path component' ;;
-        extent) kind=exfat; expected='FAIL: reject directory after heap' ;;
-        length) kind=exfat; expected='FAIL: zero tail through DataLength' ;;
-        ordinal) kind=fat; expected="FAIL: 'reject twenty-one-entry name'" ;;
-        restart) kind=fat; expected="FAIL: 'reject repeated start before twenty entries'" ;;
-        *) echo "fixture-mutation: unknown mutation: $mutation" >&2; exit 1 ;;
-    esac
+    select_mutation "$mutation"
     source="tests/host/mk${kind}fixture.c"
-    python3 - "$source" "$mutation" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-source = path.read_text()
-changes = {
-    "path": [
-        ("        size_t n;\n", "        size_t n;\n        char want[600];\n"),
-        ("        n = slash ? (size_t)(slash - p) : strlen(p);\n",
-         "        n = slash ? (size_t)(slash - p) : strlen(p);\n"
-         "        memcpy(want, p, n);\n        want[n] = 0;\n"),
-        ("strlen(name) == n && memcmp(name, p, n) == 0", "strcmp(name, want) == 0"),
-    ],
-    "extent": [("if (nofat && !read_extent(v, first, length))",
-                "if (0 && nofat && !read_extent(v, first, length))")],
-    "length": [("    if (valid > length || (length && nofat",
-                "    length = valid;\n    if (valid > length || (length && nofat")],
-    "ordinal": [("seq >= 1 && seq <= 20 &&", "seq >= 1 &&")],
-    "restart": [("pending == 1 && seq >= 1", "pending >= 1 && seq >= 1")],
-}
-for before, after in changes[sys.argv[2]]:
-    if source.count(before) != 1:
-        sys.exit("fixture-mutation: source no longer matches: " + before)
-    source = source.replace(before, after)
-path.write_text(source)
-PY
+    apply_fault "$source" "$mutation"
     touch "$source"
     run_phase "$mutation" "$kind" "$expected"
     restore

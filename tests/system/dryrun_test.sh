@@ -10,22 +10,33 @@
 # must run, and with -n, with --dry-run, and with -n beside
 # --no-print-directory it must not. `--mutate` puts the first-word test back in
 # the private copy of the rule and requires the --no-print-directory row to
-# fail, then restores it and requires every row to pass again.
+# fail, then restores it and requires every row to pass again. The fault
+# replaces the rule whole; --texts checks that mk/dryrun.mk still defines the
+# DRY_RUN it replaces, once, and runs no row.
 #
 # Usage:
-#     sh tests/system/dryrun_test.sh [--mutate]
+#     sh tests/system/dryrun_test.sh [--mutate | --texts]
 #
 set -eu
 
 case ${1:-} in
     '') mutate=0 ;;
     --mutate) mutate=1 ;;
-    *) echo 'dryrun-test: usage: dryrun_test.sh [--mutate]' >&2; exit 2 ;;
+    --texts) mutate=2 ;;
+    *) echo 'dryrun-test: usage: dryrun_test.sh [--mutate | --texts]' >&2; exit 2 ;;
 esac
 [ "$#" -le 1 ] || exit 2
 
 REPO=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$REPO"
+if [ "$mutate" -eq 2 ]; then
+    if [ "$(grep -c '^DRY_RUN :=' mk/dryrun.mk)" -ne 1 ]; then
+        echo 'dryrun-test: mk/dryrun.mk does not define DRY_RUN once' >&2
+        exit 1
+    fi
+    echo 'dryrun-test: texts: every fault is once in its source'
+    exit 0
+fi
 mkdir -p build
 WORK=$(mktemp -d "$REPO/build/dryrun-test.XXXXXX")
 trap 'rm -rf "$WORK"' 0

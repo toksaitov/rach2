@@ -4,6 +4,121 @@ set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_per_call ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_per_call()
+{
+    python3 - "$1" <<'PY'
+from pathlib import Path
+import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+path = Path(sys.argv[1])
+source = path.read_text()
+old = 'if (synchronous || wb->bytes == EXT2_WB_BYTES)'
+if source.count(old) != 1:
+    raise SystemExit('ext2-batch-mutation: source pattern is not unique')
+path.write_text(source.replace(old, 'if (synchronous || 1)'))
+PY
+}
+
+
+# apply_drain ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_drain()
+{
+    python3 - "$1" <<'PY'
+from pathlib import Path
+import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+path = Path(sys.argv[1])
+source = path.read_text()
+start = source.index('static int writeback_drain(struct ext2_mount *em)\n{')
+end = source.index('\n}', start) + 2
+body = source[start:end]
+old = 'rc = block_flush(em->dev);'
+if body.count(old) != 1:
+    raise SystemExit('ext2-batch-mutation: drain flush pattern is not unique')
+path.write_text(source[:start] + body.replace(old, 'rc = 0;') + source[end:])
+PY
+}
+
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" "$2" <<'PYFAULT'
+from pathlib import Path
+import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+path = Path(sys.argv[1])
+source = path.read_text()
+fault = sys.argv[2]
+function = {
+    'release': 'static void ext2_release(',
+    'sticky': 'static int ext2_fsync(',
+    'handoff': 'static int ext2_setattr(',
+    'abort': 'static void ext2_abort_unmount(',
+    'zero': 'static int writeback_prepare_data(',
+    'stage-lock': 'static int ext2_fsync(',
+    'reserve-run': 'static int writeback_init(struct ext2_mount *em)\n{',
+}.get(fault, 'static int32_t ext2_write(')
+start = source.index(function)
+end = source.index('\n}', start) + 2
+body = source[start:end]
+changes = {
+    'bytes': ('synchronous || wb->bytes == EXT2_WB_BYTES', 'synchronous'),
+    'data': ('wb->datas == EXT2_WB_DATA', '0'),
+    'metadata': ('wb->metas == EXT2_WB_META', '0'),
+    'inodes': ('wb->count == EXT2_WB_NODES', '0'),
+    'release': ('(void)writeback_drain(em_of(mnt));', '(void)mnt;'),
+    'sticky': ('if (mnt->write_error)', 'if (0)'),
+    'abort': ('em->state &= ~EXT2_VALID_FS;', 'em->state |= EXT2_VALID_FS;'),
+    'zero': ('k_memset(data->data, 0, BCACHE_BLOCK_BYTES);',
+             'k_memset(data->data, 0xAB, BCACHE_BLOCK_BYTES);'),
+    'reserve-run': ('kalloc_pages(1, 0)', 'kalloc_pages(EXT2_WB_DATA + EXT2_WB_META + 1, 0)'),
+}
+if fault == 'stage-lock':
+    body = body.replace('    vfs_ns_lock(mnt);\n', '', 1)
+    body = body.replace('    vfs_ns_unlock(mnt);\n', '', 1)
+elif fault == 'handoff':
+    body = body.replace('    vfs_ns_lock(mnt);\n', '', 1)
+    body = body.replace('    if (what & VFS_SET_MODE)',
+                        '    vfs_ns_lock(mnt);\n    if (what & VFS_SET_MODE)', 1)
+else:
+    old, new = changes[fault]
+    if body.count(old) != 1:
+        raise SystemExit('ext2-batch-mutation: fault pattern is not unique: ' + fault)
+    body = body.replace(old, new)
+path.write_text(source[:start] + body + source[end:])
+PYFAULT
+}
+
+faults='bytes data metadata inodes release sticky handoff abort zero
+    stage-lock reserve-run'
+if [ "${1:-}" = --texts ]; then
+    RACH2_FAULT_TEXTS=1 apply_per_call rach2/sys/fs/ext2.c >/dev/null || exit 1
+    RACH2_FAULT_TEXTS=1 apply_drain rach2/sys/fs/ext2.c >/dev/null || exit 1
+    for fault in $faults; do
+        RACH2_FAULT_TEXTS=1 apply_fault rach2/sys/fs/ext2.c "$fault" >/dev/null || exit 1
+    done
+    echo 'ext2-batch-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
 mode=${1:---batch-only}
 case "$mode" in
     --batch-only|--all) ;;
@@ -103,85 +218,18 @@ make -s build/tests/system/runutil \
     >"$work/tools.build.log" 2>&1
 cat "$work/tools.build.log"
 run_phase fixed pass
-python3 - "$source" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-source = path.read_text()
-old = 'if (synchronous || wb->bytes == EXT2_WB_BYTES)'
-if source.count(old) != 1:
-    raise SystemExit('ext2-batch-mutation: source pattern is not unique')
-path.write_text(source.replace(old, 'if (synchronous || 1)'))
-PY
+apply_per_call "$source"
 run_phase per-call fail
 cmp "$source" "$work/source.saved"
 run_phase restored pass
 cmp "$source" "$work/source.saved"
-python3 - "$source" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-source = path.read_text()
-start = source.index('static int writeback_drain(struct ext2_mount *em)\n{')
-end = source.index('\n}', start) + 2
-body = source[start:end]
-old = 'rc = block_flush(em->dev);'
-if body.count(old) != 1:
-    raise SystemExit('ext2-batch-mutation: drain flush pattern is not unique')
-path.write_text(source[:start] + body.replace(old, 'rc = 0;') + source[end:])
-PY
+apply_drain "$source"
 run_phase no-stage-flush media
 cmp "$source" "$work/source.saved"
 run_phase flush-restored pass
 cmp "$source" "$work/source.saved"
-for fault in bytes data metadata inodes release sticky handoff abort zero stage-lock reserve-run; do
-    python3 - "$source" "$fault" <<'PYFAULT'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-source = path.read_text()
-fault = sys.argv[2]
-function = {
-    'release': 'static void ext2_release(',
-    'sticky': 'static int ext2_fsync(',
-    'handoff': 'static int ext2_setattr(',
-    'abort': 'static void ext2_abort_unmount(',
-    'zero': 'static int writeback_prepare_data(',
-    'stage-lock': 'static int ext2_fsync(',
-    'reserve-run': 'static int writeback_init(struct ext2_mount *em)\n{',
-}.get(fault, 'static int32_t ext2_write(')
-start = source.index(function)
-end = source.index('\n}', start) + 2
-body = source[start:end]
-changes = {
-    'bytes': ('synchronous || wb->bytes == EXT2_WB_BYTES', 'synchronous'),
-    'data': ('wb->datas == EXT2_WB_DATA', '0'),
-    'metadata': ('wb->metas == EXT2_WB_META', '0'),
-    'inodes': ('wb->count == EXT2_WB_NODES', '0'),
-    'release': ('(void)writeback_drain(em_of(mnt));', '(void)mnt;'),
-    'sticky': ('if (mnt->write_error)', 'if (0)'),
-    'abort': ('em->state &= ~EXT2_VALID_FS;', 'em->state |= EXT2_VALID_FS;'),
-    'zero': ('k_memset(data->data, 0, BCACHE_BLOCK_BYTES);',
-             'k_memset(data->data, 0xAB, BCACHE_BLOCK_BYTES);'),
-    'reserve-run': ('kalloc_pages(1, 0)', 'kalloc_pages(EXT2_WB_DATA + EXT2_WB_META + 1, 0)'),
-}
-if fault == 'stage-lock':
-    body = body.replace('    vfs_ns_lock(mnt);\n', '', 1)
-    body = body.replace('    vfs_ns_unlock(mnt);\n', '', 1)
-elif fault == 'handoff':
-    body = body.replace('    vfs_ns_lock(mnt);\n', '', 1)
-    body = body.replace('    if (what & VFS_SET_MODE)',
-                        '    vfs_ns_lock(mnt);\n    if (what & VFS_SET_MODE)', 1)
-else:
-    old, new = changes[fault]
-    if body.count(old) != 1:
-        raise SystemExit('ext2-batch-mutation: fault pattern is not unique: ' + fault)
-    body = body.replace(old, new)
-path.write_text(source[:start] + body + source[end:])
-PYFAULT
+for fault in $faults; do
+    apply_fault "$source" "$fault"
     status=1
     case $fault in
         bytes) message='FAIL: the byte limit drains on its last block' ;;

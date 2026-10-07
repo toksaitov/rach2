@@ -1,12 +1,85 @@
 #!/bin/sh
 # Compile fixed, faulty and restored ISH sources in a private test tree.
 #
-# Usage: sh tests/host/ish_mutate.sh [FAULT ...]
+# Usage: sh tests/host/ish_mutate.sh [FAULT ...] | --texts
 # With no operand every fault is proved; an operand proves only the ones named.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" "$2" <<'PY'
+from pathlib import Path
+import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+root = Path(sys.argv[1])
+fault = sys.argv[2]
+changes = {
+    "interrupted": ("ish.c", [
+        ("} while (waited == -1 && errno == EINTR);", "} while (0);"),
+        ("} while (waited == -4);", "} while (0);"),
+    ]),
+    "failed": ("ish.c", [("if (waited != pid) {", "if (0) {")]),
+    "partial": ("ish.c", [
+        ("int i;\n        for (i = 0;", "int i;\n        length = 0;\n        for (i = 0;")
+    ]),
+    "eof": ("ish.c", [
+        ("if (bytes_read == 0 && length != 0 && !discarding) {", "if (0) {")
+    ]),
+    "overflow": ("ish.c", [("                if (!discarding) {", "                if (1) {")]),
+    "path": ("ish.c", [
+        ("if (!cut && stat(candidate, stat_result) == 0) {",
+         "if (stat(candidate, stat_result) == 0) {")
+    ]),
+    "join": ("ish_cstring_utilities.c", [
+        ("    combined_path[i] = '\\0';\n    return result;",
+         "    combined_path[i] = '\\0';\n    return 0;")
+    ]),
+}
+if fault == "chunks":
+    path = root / "ish.c"
+    source = path.read_text()
+    start = source.index("    char input[Max_Input_String_Length];")
+    end = source.rindex("    return 0;")
+    source = source[:start] + '''    char input[Max_Input_String_Length + 1];
+    int bytes_read;
+    while ((bytes_read = read(0, input, Max_Input_String_Length)) > 0) {
+        input[bytes_read] = '\\0';
+        ish_run_line(input, home, paths, envp);
+    }
+
+''' + source[end:]
+elif fault in changes:
+    name, edits = changes[fault]
+    path = root / name
+    source = path.read_text()
+    for old, new in edits:
+        if source.count(old) != 1:
+            raise SystemExit("ish-mutation: source pattern is not unique: " + fault)
+        source = source.replace(old, new)
+else:
+    raise SystemExit("ish-mutation: unknown fault: " + fault)
+path.write_text(source)
+PY
+}
+
+faults='interrupted failed chunks partial eof overflow path join'
+if [ "${1:-}" = --texts ]; then
+    for fault in $faults; do
+        RACH2_FAULT_TEXTS=1 apply_fault ish "$fault" >/dev/null || exit 1
+    done
+    echo 'ish-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
 mkdir -p build/tests
 work=$(mktemp -d "$repo/build/tests/ish-proof.XXXXXX")
 mkdir -p "$work/tests/host" "$work/tests/musl"
@@ -75,64 +148,13 @@ run_phase()
 }
 
 if [ "$#" -eq 0 ]; then
-    set -- interrupted failed chunks partial eof overflow path join
+    # shellcheck disable=SC2086 # the faults are separate words
+    set -- $faults
 fi
 echo "ish-mutation: logs: $work"
 run_phase fixed 0 'ish_hosttest: ok'
 for fault do
-    python3 - "$work/ish" "$fault" <<'PY'
-from pathlib import Path
-import sys
-
-root = Path(sys.argv[1])
-fault = sys.argv[2]
-changes = {
-    "interrupted": ("ish.c", [
-        ("} while (waited == -1 && errno == EINTR);", "} while (0);"),
-        ("} while (waited == -4);", "} while (0);"),
-    ]),
-    "failed": ("ish.c", [("if (waited != pid) {", "if (0) {")]),
-    "partial": ("ish.c", [
-        ("int i;\n        for (i = 0;", "int i;\n        length = 0;\n        for (i = 0;")
-    ]),
-    "eof": ("ish.c", [
-        ("if (bytes_read == 0 && length != 0 && !discarding) {", "if (0) {")
-    ]),
-    "overflow": ("ish.c", [("                if (!discarding) {", "                if (1) {")]),
-    "path": ("ish.c", [
-        ("if (!cut && stat(candidate, stat_result) == 0) {",
-         "if (stat(candidate, stat_result) == 0) {")
-    ]),
-    "join": ("ish_cstring_utilities.c", [
-        ("    combined_path[i] = '\\0';\n    return result;",
-         "    combined_path[i] = '\\0';\n    return 0;")
-    ]),
-}
-if fault == "chunks":
-    path = root / "ish.c"
-    source = path.read_text()
-    start = source.index("    char input[Max_Input_String_Length];")
-    end = source.rindex("    return 0;")
-    source = source[:start] + '''    char input[Max_Input_String_Length + 1];
-    int bytes_read;
-    while ((bytes_read = read(0, input, Max_Input_String_Length)) > 0) {
-        input[bytes_read] = '\\0';
-        ish_run_line(input, home, paths, envp);
-    }
-
-''' + source[end:]
-elif fault in changes:
-    name, edits = changes[fault]
-    path = root / name
-    source = path.read_text()
-    for old, new in edits:
-        if source.count(old) != 1:
-            raise SystemExit("ish-mutation: source pattern is not unique: " + fault)
-        source = source.replace(old, new)
-else:
-    raise SystemExit("ish-mutation: unknown fault: " + fault)
-path.write_text(source)
-PY
+    apply_fault "$work/ish" "$fault"
     case $fault in
         interrupted) message='ISHMUSL FAIL (interrupted wait)' ;;
         failed) message='ISHMUSL FAIL (failed wait)' ;;

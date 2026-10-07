@@ -1,7 +1,7 @@
 #!/bin/sh
 # Prove fat32_hosttest's rows on what the two synced sequences leave.
 #
-# Usage: sh tests/host/fat_synced_mutate.sh
+# Usage: sh tests/host/fat_synced_mutate.sh [--texts]
 #
 # The unlink and the truncate of a file its fsync put on the medium (entry
 # 209) are read back after the sequences run: the unlinked file must be gone
@@ -15,13 +15,20 @@
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
-mkdir -p build/tests
-work=$(mktemp -d "$repo/build/tests/fat-synced-proof.XXXXXX")
-fixtures=$(mktemp -d /tmp/rach2-fix.XXXXXX)
-mkdir -p "$work/rach2"
-cp -R rach2/sys "$work/rach2/sys"
-source="$work/rach2/sys/fs/fat32.c"
-cp "$source" "$work/fat32.saved"
+texts=
+[ "${1:-}" != --texts ] || texts=1
+if [ -n "$texts" ]; then
+    work=
+    source=rach2/sys/fs/fat32.c
+else
+    mkdir -p build/tests
+    work=$(mktemp -d "$repo/build/tests/fat-synced-proof.XXXXXX")
+    fixtures=$(mktemp -d /tmp/rach2-fix.XXXXXX)
+    mkdir -p "$work/rach2"
+    cp -R rach2/sys "$work/rach2/sys"
+    source="$work/rach2/sys/fs/fat32.c"
+    cp "$source" "$work/fat32.saved"
+fi
 child=
 
 stop_child()
@@ -102,6 +109,7 @@ fault()
 {
     python3 - "$source" "$1" "$2" <<'PYTHON'
 from pathlib import Path
+import os
 import sys
 
 path = Path(sys.argv[1])
@@ -109,12 +117,21 @@ text = path.read_text()
 old, new = sys.argv[2] + '\n', sys.argv[3] + '\n'
 if text.count(old) != 1:
     raise SystemExit('fat-synced-proof: the lines to change are not unique: ' + sys.argv[2])
-path.write_text(text.replace(old, new))
+if not os.environ.get('RACH2_FAULT_TEXTS'):
+    path.write_text(text.replace(old, new))
 PYTHON
-    touch "$source"
+    [ -n "$texts" ] || touch "$source"
 }
 
-echo "fat-synced-proof: logs: $work"
+if [ -n "$texts" ]; then
+    trap - EXIT
+    run_phase() { :; }
+    restore() { :; }
+    RACH2_FAULT_TEXTS=1
+    export RACH2_FAULT_TEXTS
+else
+    echo "fat-synced-proof: logs: $work"
+fi
 run_phase fixed pass ''
 
 fault '        rc = free_name_entries(fm, d->first, &sc);
@@ -139,5 +156,9 @@ run_phase size-kept fail 'the file truncated after a sync reads back its first 7
 restore
 run_phase size-restored pass ''
 
+if [ -n "$texts" ]; then
+    echo 'fat-synced-proof: texts: every fault is once in its source'
+    exit 0
+fi
 cmp "$work/fat32.saved" "$source"
 echo 'fat-synced-proof: result: pass: each fault failed its row; the restored source passed'

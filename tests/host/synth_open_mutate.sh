@@ -14,83 +14,18 @@ set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
-mkdir -p build/tests
-work=$(mktemp -d "$repo/build/tests/synth-open-proof.XXXXXX")
-child=
-cp -R rach2/sys "$work/sys"
-for component in devfs procfs; do
-    cp "$work/sys/fs/$component.c" "$work/$component.saved"
-done
 
-cleanup()
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
 {
-    if [ -n "$child" ]; then
-        kill -TERM "$child" 2>/dev/null || :
-        wait "$child" 2>/dev/null || :
-        child=
-    fi
-    for component in devfs procfs; do
-        cp "$work/$component.saved" "$work/sys/fs/$component.c"
-        touch "$work/sys/fs/$component.c"
-    done
-}
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
-
-run_phase()
-{
-    test=$1
-    phase=$2
-    expected=$3
-    message=$4
-    binary="$work/$phase"
-    # The test's own dependency lines, with its kernel sources taken from the
-    # private tree.
-    deps=$(grep -oE 'host-deps:[^*]*' "tests/host/${test}_hosttest.c" | sed 's/host-deps://' |
-        tr '\n' ' ' | sed "s# rach2/sys/# $work/sys/#g")
-    # shellcheck disable=SC2086 # the dependency list is one path a word
-    if ! "${CC:-cc}" -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 \
-        -DRACH2_HOSTTEST -g -O1 -ffreestanding -Wall -Wextra -Werror \
-        -Wno-unused-function -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast \
-        -fsanitize=address,undefined -fno-sanitize-recover=all \
-        -I "$work/sys" -I "$work/sys/arch/x86" -I "$work/sys/arch/i686" -I "$work/sys/lib" \
-        -I "$work/sys/proc" "tests/host/${test}_hosttest.c" $deps \
-        -o "$binary" >"$binary.compile.log" 2>&1; then
-        cat "$binary.compile.log" >&2
-        exit 1
-    fi
-    cksum "$work/sys/fs/$test.c" "$binary" >"$binary.cksum"
-    UBSAN_OPTIONS=halt_on_error=1:abort_on_error=0:exitcode=1 perl -e 'alarm 10; exec @ARGV or die "synth-open-mutation: exec: $!\n"' \
-        "$binary" >"$binary.log" 2>&1 &
-    child=$!
-    status=0
-    wait "$child" || status=$?
-    child=
-    cat "$binary.log"
-    [ "$status" -eq "$expected" ] && grep -Fq "$message" "$binary.log" || exit 1
-    echo "synth-open-mutation: result: $test $phase status $status"
-}
-
-# faults TEST: the faults compiled into the source of TEST, one at a time.
-faults()
-{
-    case $1 in
-        devfs) echo ptmx screenlog-unheld ;;
-        procfs) echo terminator mem-hold mem-live exe-present exe-deleted unheld-space \
-            record-after-sleep hold-not-user oom-range oom-floor oom-floor-kept oom-open-emfile \
-            oom-nbsp oom-range-first ;;
-    esac
-}
-
-echo "synth-open-mutation: logs: $work"
-for test in devfs procfs; do
-    run_phase "$test" fixed 0 "$test-hosttest: result: pass:"
-    for fault in $(faults "$test"); do
-        python3 - "$work/sys/fs/$test.c" "$fault" <<'PY'
+    python3 - "$1" "$2" <<'PY'
 from pathlib import Path
 import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
 
 path = Path(sys.argv[1])
 source = path.read_text()
@@ -158,6 +93,93 @@ else:
         source = source.replace(old, new)
 path.write_text(source)
 PY
+}
+
+# faults TEST: the faults compiled into the source of TEST, one at a time.
+faults()
+{
+    case $1 in
+        devfs) echo ptmx screenlog-unheld ;;
+        procfs) echo terminator mem-hold mem-live exe-present exe-deleted unheld-space \
+            record-after-sleep hold-not-user oom-range oom-floor oom-floor-kept oom-open-emfile \
+            oom-nbsp oom-range-first ;;
+    esac
+}
+
+if [ "${1:-}" = --texts ]; then
+    for test in devfs procfs; do
+        for fault in $(faults "$test"); do
+            RACH2_FAULT_TEXTS=1 apply_fault "rach2/sys/fs/$test.c" "$fault" >/dev/null || exit 1
+        done
+    done
+    echo 'synth-open-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
+mkdir -p build/tests
+work=$(mktemp -d "$repo/build/tests/synth-open-proof.XXXXXX")
+child=
+cp -R rach2/sys "$work/sys"
+for component in devfs procfs; do
+    cp "$work/sys/fs/$component.c" "$work/$component.saved"
+done
+
+cleanup()
+{
+    if [ -n "$child" ]; then
+        kill -TERM "$child" 2>/dev/null || :
+        wait "$child" 2>/dev/null || :
+        child=
+    fi
+    for component in devfs procfs; do
+        cp "$work/$component.saved" "$work/sys/fs/$component.c"
+        touch "$work/sys/fs/$component.c"
+    done
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+run_phase()
+{
+    test=$1
+    phase=$2
+    expected=$3
+    message=$4
+    binary="$work/$phase"
+    # The test's own dependency lines, with its kernel sources taken from the
+    # private tree.
+    deps=$(grep -oE 'host-deps:[^*]*' "tests/host/${test}_hosttest.c" | sed 's/host-deps://' |
+        tr '\n' ' ' | sed "s# rach2/sys/# $work/sys/#g")
+    # shellcheck disable=SC2086 # the dependency list is one path a word
+    if ! "${CC:-cc}" -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 \
+        -DRACH2_HOSTTEST -g -O1 -ffreestanding -Wall -Wextra -Werror \
+        -Wno-unused-function -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast \
+        -fsanitize=address,undefined -fno-sanitize-recover=all \
+        -I "$work/sys" -I "$work/sys/arch/x86" -I "$work/sys/arch/i686" -I "$work/sys/lib" \
+        -I "$work/sys/proc" "tests/host/${test}_hosttest.c" $deps \
+        -o "$binary" >"$binary.compile.log" 2>&1; then
+        cat "$binary.compile.log" >&2
+        exit 1
+    fi
+    cksum "$work/sys/fs/$test.c" "$binary" >"$binary.cksum"
+    UBSAN_OPTIONS=halt_on_error=1:abort_on_error=0:exitcode=1 perl -e 'alarm 10; exec @ARGV or die "synth-open-mutation: exec: $!\n"' \
+        "$binary" >"$binary.log" 2>&1 &
+    child=$!
+    status=0
+    wait "$child" || status=$?
+    child=
+    cat "$binary.log"
+    [ "$status" -eq "$expected" ] && grep -Fq "$message" "$binary.log" || exit 1
+    echo "synth-open-mutation: result: $test $phase status $status"
+}
+
+echo "synth-open-mutation: logs: $work"
+for test in devfs procfs; do
+    run_phase "$test" fixed 0 "$test-hosttest: result: pass:"
+    for fault in $(faults "$test"); do
+        apply_fault "$work/sys/fs/$test.c" "$fault"
         case $fault in
             ptmx) message='ptmx exclusive create returns EEXIST before dispatch' ;;
             screenlog-unheld) message='a read of /dev/screenlog holds its description, as it moves the offset' ;;

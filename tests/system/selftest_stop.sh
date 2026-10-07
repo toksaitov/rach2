@@ -8,10 +8,27 @@ set -eu
 case ${1:-} in
     '') mutate=0 ;;
     --mutate) mutate=1 ;;
-    *) echo 'selftest-stop: usage: selftest_stop.sh [--mutate]' >&2; exit 2 ;;
+    --texts) mutate=2 ;;
+    *) echo 'selftest-stop: usage: selftest_stop.sh [--mutate | --texts]' >&2; exit 2 ;;
 esac
 [ "$#" -le 1 ] || exit 2
 repo=$(cd "$(dirname "$0")/../.." && pwd)
+# once FILE TEXT: TEXT, which a fault changes, is once in FILE.
+once()
+{
+    if [ "$(grep -Fc "$2" "$1")" -ne 1 ]; then
+        echo "selftest-stop: not once in $1: $2" >&2
+        exit 1
+    fi
+}
+
+if [ "$mutate" -eq 2 ]; then
+    once "$repo/tests/system/runner/runutil.c" 'return WIFEXITED(status) ? WEXITSTATUS(status)'
+    # shellcheck disable=SC2016
+    once "$repo/tests/run" '[ "$rc" = 0 ] || [ -z "${RACH2_STOP_ON_FAIL:-}" ] || stopped=1'
+    echo 'selftest-stop: texts: every fault is once in its source'
+    exit 0
+fi
 mkdir -p "$repo/build"
 work=$(mktemp -d "$repo/build/selftest-stop.XXXXXX")
 tree=$work/tree

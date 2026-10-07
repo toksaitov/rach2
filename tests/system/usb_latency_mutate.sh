@@ -13,10 +13,52 @@
 # are the ones `tests/run usb` built, and must be current. ARCH chooses the
 # architecture, as it does for `tests/run`.
 #
-# Usage: sh tests/system/usb_latency_mutate.sh
+# Usage: sh tests/system/usb_latency_mutate.sh [--texts]
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" "$2" <<'PY'
+import pathlib
+import sys
+import os
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+root = pathlib.Path(sys.argv[1])
+changes = {
+    'preempt': ('arch/x86/isr.c', [
+        ('        sched_preempt(); /* a woken reader runs now, or at the call\'s exit */\n', ''),
+        ('    if (params->vector != 32) {\n        sched_preempt();\n    }\n', '')]),
+    'service': ('syscall.c', [
+        ('        if ((done & 4095u) == 0) {\n            sched_service_point();\n        }\n',
+         '')]),
+}
+name, edits = changes[sys.argv[2]]
+path = root / name
+source = path.read_text()
+for old, new in edits:
+    if source.count(old) != 1:
+        raise SystemExit('usb-latency-mutation: source pattern is not unique')
+    source = source.replace(old, new)
+path.write_text(source)
+PY
+}
+
+if [ "${1:-}" = --texts ]; then
+    RACH2_FAULT_TEXTS=1
+    export RACH2_FAULT_TEXTS
+    apply_fault rach2/sys preempt >/dev/null
+    apply_fault rach2/sys service >/dev/null
+    echo 'usb-latency-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
+
 . "$repo/tests/system/runlock.sh"
 runlock_hold "$repo" usb-latency-mutation "$repo/tests/system/usb_latency_mutate.sh" "$@"
 RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
@@ -115,28 +157,7 @@ run_rows()
 
 mutate()
 {
-    python3 - "$work/rach2/sys" "$1" <<'PY'
-import pathlib
-import sys
-
-root = pathlib.Path(sys.argv[1])
-changes = {
-    'preempt': ('arch/x86/isr.c', [
-        ('        sched_preempt(); /* a woken reader runs now, or at the call\'s exit */\n', ''),
-        ('    if (params->vector != 32) {\n        sched_preempt();\n    }\n', '')]),
-    'service': ('syscall.c', [
-        ('        if ((done & 4095u) == 0) {\n            sched_service_point();\n        }\n',
-         '')]),
-}
-name, edits = changes[sys.argv[2]]
-path = root / name
-source = path.read_text()
-for old, new in edits:
-    if source.count(old) != 1:
-        raise SystemExit('usb-latency-mutation: source pattern is not unique')
-    source = source.replace(old, new)
-path.write_text(source)
-PY
+    apply_fault "$work/rach2/sys" "$1"
 }
 
 echo "usb-latency-mutation: logs: $work"

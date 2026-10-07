@@ -4,6 +4,72 @@ set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_sync ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_sync()
+{
+    python3 - "$1" <<'PYMUTATE'
+from pathlib import Path
+import re
+import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+path = Path(sys.argv[1])
+source = path.read_text()
+source, count = re.subn(
+    r"^long sys_sync\(isr_params_t \*params\)\n\{.*?^\}",
+    "long sys_sync(isr_params_t *params)\n{\n"
+    "    (void)params;\n    filemap_sync_all();\n    vfs_sync_all();\n    pc_sync();\n    return 0;\n}",
+    source, flags=re.M | re.S)
+if count != 1:
+    raise SystemExit("pagecache-mutation: sys_sync is not unique")
+path.write_text(source)
+PYMUTATE
+}
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" "$2" <<'PY'
+from pathlib import Path
+import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+path = Path(sys.argv[1])
+source = path.read_text()
+start = source.index('static int pc_writeback(')
+end = source.index('\n/**', start)
+body = source[start:end]
+changes = {
+    'pin': ('    e->pinned = 1;\n', ''),
+    'busy': ('    if (e->pinned) {\n        return -1;\n    }\n', ''),
+}
+old, new = changes[sys.argv[2]]
+if body.count(old) != 1:
+    raise SystemExit('pagecache-mutation: source pattern is not unique')
+path.write_text(source[:start] + body.replace(old, new) + source[end:])
+PY
+}
+
+faults='pin busy'
+if [ "${1:-}" = --texts ]; then
+    RACH2_FAULT_TEXTS=1 apply_sync rach2/sys/syscall_fs.c >/dev/null || exit 1
+    for fault in $faults; do
+        RACH2_FAULT_TEXTS=1 apply_fault rach2/sys/mm/pagecache.c "$fault" >/dev/null || exit 1
+    done
+    echo 'pagecache-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
+
 [ "$#" -eq 0 ] || [ "$*" = --check ] || exit 2
 mkdir -p build/tests
 work=$(mktemp -d "$repo/build/tests/pagecache-proof.XXXXXX")
@@ -71,25 +137,8 @@ PYEXTRACT
 echo "pagecache-mutation: logs: $work"
 run_phase fixed 0 'pagecache-hosttest: result: pass: 0 failures'
 [ "$#" -eq 0 ] || exit 0
-for fault in pin busy; do
-    python3 - "$work/sys/mm/pagecache.c" "$fault" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-source = path.read_text()
-start = source.index('static int pc_writeback(')
-end = source.index('\n/**', start)
-body = source[start:end]
-changes = {
-    'pin': ('    e->pinned = 1;\n', ''),
-    'busy': ('    if (e->pinned) {\n        return -1;\n    }\n', ''),
-}
-old, new = changes[sys.argv[2]]
-if body.count(old) != 1:
-    raise SystemExit('pagecache-mutation: source pattern is not unique')
-path.write_text(source[:start] + body.replace(old, new) + source[end:])
-PY
+for fault in $faults; do
+    apply_fault "$work/sys/mm/pagecache.c" "$fault"
     case $fault in
         pin) message='pagecache-hosttest: failed: pc_test_page(0) == page' ;;
         busy) message='pagecache-hosttest: failed: fake_attempts[0] == 1' ;;
@@ -100,22 +149,7 @@ PY
     cmp "$work/pagecache.saved" "$work/sys/mm/pagecache.c"
 done
 
-python3 - "$work/sys/syscall_fs.c" <<'PYMUTATE'
-from pathlib import Path
-import re
-import sys
-
-path = Path(sys.argv[1])
-source = path.read_text()
-source, count = re.subn(
-    r"^long sys_sync\(isr_params_t \*params\)\n\{.*?^\}",
-    "long sys_sync(isr_params_t *params)\n{\n"
-    "    (void)params;\n    filemap_sync_all();\n    vfs_sync_all();\n    pc_sync();\n    return 0;\n}",
-    source, flags=re.M | re.S)
-if count != 1:
-    raise SystemExit("pagecache-mutation: sys_sync is not unique")
-path.write_text(source)
-PYMUTATE
+apply_sync "$work/sys/syscall_fs.c"
 run_phase sync-mutated 1 'pagecache-hosttest: failed: fake_disk[0][0] == 0xE2u'
 cleanup
 run_phase sync-restored 0 'pagecache-hosttest: result: pass: 0 failures'

@@ -13,13 +13,43 @@
 # which must equal the first byte for byte. Nothing under build/ is written:
 # the mutated root goes into a private copy of the installer disk.
 #
-# Usage: sh tests/system/rehearse_group_mutate.sh [ROOT DISK]
+# Usage: sh tests/system/rehearse_group_mutate.sh [ROOT DISK] | --texts
 # ROOT and DISK name the installer root and disk the rehearsal ran, by
 # default installer-root.ext2 and installer-test.disk under the images of
 # the architecture ARCH names, build/images or build/x86_64/images.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" <<'PY'
+import pathlib
+import sys
+import os
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+old = 'mkext2.sh krffs/manifests/rach2-metal-disk.manifest $@ 64 16384 32768\n'
+if text.count(old) != 1:
+    raise SystemExit('rehearse-group-mutation: the recipe pattern is not unique')
+path.write_text(text.replace(old, 'mkext2.sh krffs/manifests/rach2-metal-disk.manifest $@ 64 32768 32768\n'))
+PY
+}
+
+if [ "${1:-}" = --texts ]; then
+    RACH2_FAULT_TEXTS=1
+    export RACH2_FAULT_TEXTS
+    apply_fault tests/system/suites.mk >/dev/null
+    echo 'rehearse-group-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
+
 . "$repo/tests/system/runlock.sh"
 runlock_hold "$repo" rehearse-group-mutation "$repo/tests/system/rehearse_group_mutate.sh" "$@"
 RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
@@ -131,17 +161,7 @@ fi
 save_set "$work/fixed.ext2" "$work/fixed.set"
 echo 'rehearse-group-mutation: result: fixed: growset computed the save set'
 
-python3 - "$work/suites.mk" <<'PY'
-import pathlib
-import sys
-
-path = pathlib.Path(sys.argv[1])
-text = path.read_text()
-old = 'mkext2.sh krffs/manifests/rach2-metal-disk.manifest $@ 64 16384 32768\n'
-if text.count(old) != 1:
-    raise SystemExit('rehearse-group-mutation: the recipe pattern is not unique')
-path.write_text(text.replace(old, 'mkext2.sh krffs/manifests/rach2-metal-disk.manifest $@ 64 32768 32768\n'))
-PY
+apply_fault "$work/suites.mk"
 build_root mutated
 [ "$(blocks_per_group "$work/mutated.ext2")" = 32768 ]
 if save_set "$work/mutated.ext2" "$work/mutated.set"; then

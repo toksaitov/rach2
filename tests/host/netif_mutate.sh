@@ -4,6 +4,69 @@ set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" "$2" <<'PY'
+import pathlib
+import sys
+import os
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+path = pathlib.Path(sys.argv[1])
+changes = {
+    "device-index": ("entry->sock->bound_device = nd->index;",
+                     "entry->sock->bound_device = 1;"),
+    "device-name": ("k_strncpy(name, nd->name, sizeof(name) - 1);",
+                    "k_strncpy(name, NETDEV_IFNAME, sizeof(name) - 1);"),
+    "packet-index": ("int ifindex = packet_ifindex(entry->sock);",
+                     "int ifindex = NETDEV_IFINDEX;"),
+    "packet-mac": ("struct netdev *nd = netdev_at(ifindex - 1);",
+                   "struct netdev *nd = netdev_first();"),
+    "tcp-address": ("        local_ip = entry->sock->tcb->local_ip;\n",
+                    "        local_ip = net_ip_addr;\n"),
+    "accept": ("if (listen_sock->type != SOCK_STREAM || !listen_sock->listening) {",
+               "if (0) {"),
+    "socket-check": ("    if (flags & ~(uint32_t)(SOCK_CLOEXEC | SOCK_NONBLOCK)) {\n"
+                     "        return -EINVAL;\n    }\n    fd = do_socket(",
+                     "    fd = do_socket("),
+    "socket-flags": ("        sock_fd_flags(&current_proc->fds->entries[fd], flags);\n", ""),
+    "accept-check": ("    if (flags & ~(uint32_t)(SOCK_CLOEXEC | SOCK_NONBLOCK)) {\n"
+                     "        return -EINVAL;\n    }\n    entry = fd_get(",
+                     "    entry = fd_get("),
+    "accept-flags": ("    sock_fd_flags(new_entry, flags);\n", ""),
+    "accept-enomem": ("    if (new_fd < 0) {\n        return new_fd;",
+                      "    if (new_fd < 0) {\n        return -EMFILE;"),
+    "recvfrom-length": ("    want_addr = sa_ptr != 0;",
+                        "    want_addr = sa_ptr != 0 && salen_ptr != 0;"),
+    "recvfrom-sender": ("        if (!salen_ptr || !user_buffer_ok(salen_ptr, sizeof(cap), 1) ||",
+                        "        if (salen_ptr || !user_buffer_ok(salen_ptr, sizeof(cap), 1) ||"),
+    "accept-reserve": ("    conn_sock = listen_sock->accept_queue[listen_sock->accept_head];\n",
+                       "    conn_sock = listen_sock->accept_queue[listen_sock->accept_head];\n"
+                       "    current_proc->fds->entries[new_fd].type = FD_TYPE_SOCKET;\n"),
+}
+old, new = changes[sys.argv[2]]
+source = path.read_text()
+if source.count(old) != 1:
+    raise SystemExit("netif-mutation: mutation target is not unique")
+path.write_text(source.replace(old, new))
+PY
+}
+
+faults='device-index device-name packet-index packet-mac tcp-address accept
+    socket-check socket-flags accept-check accept-flags accept-enomem
+    recvfrom-length recvfrom-sender accept-reserve'
+if [ "${1:-}" = --texts ]; then
+    for mutation in $faults; do
+        RACH2_FAULT_TEXTS=1 apply_fault rach2/sys/syscall_net.c "$mutation" >/dev/null || exit 1
+    done
+    echo 'netif-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
 mkdir -p build/tests/host
 work=$(mktemp -d "$repo/build/tests/host/netif-mutation.XXXXXX")
 child=
@@ -55,51 +118,8 @@ run_phase()
 
 echo "netif-mutation: logs: $work"
 run_phase fixed 0 'netif-test: pass:'
-for mutation in device-index device-name packet-index packet-mac tcp-address accept \
-    socket-check socket-flags accept-check accept-flags accept-enomem recvfrom-length \
-    recvfrom-sender accept-reserve; do
-    python3 - "$work/syscall_net.c" "$mutation" <<'PY'
-import pathlib
-import sys
-
-path = pathlib.Path(sys.argv[1])
-changes = {
-    "device-index": ("entry->sock->bound_device = nd->index;",
-                     "entry->sock->bound_device = 1;"),
-    "device-name": ("k_strncpy(name, nd->name, sizeof(name) - 1);",
-                    "k_strncpy(name, NETDEV_IFNAME, sizeof(name) - 1);"),
-    "packet-index": ("int ifindex = packet_ifindex(entry->sock);",
-                     "int ifindex = NETDEV_IFINDEX;"),
-    "packet-mac": ("struct netdev *nd = netdev_at(ifindex - 1);",
-                   "struct netdev *nd = netdev_first();"),
-    "tcp-address": ("        local_ip = entry->sock->tcb->local_ip;\n",
-                    "        local_ip = net_ip_addr;\n"),
-    "accept": ("if (listen_sock->type != SOCK_STREAM || !listen_sock->listening) {",
-               "if (0) {"),
-    "socket-check": ("    if (flags & ~(uint32_t)(SOCK_CLOEXEC | SOCK_NONBLOCK)) {\n"
-                     "        return -EINVAL;\n    }\n    fd = do_socket(",
-                     "    fd = do_socket("),
-    "socket-flags": ("        sock_fd_flags(&current_proc->fds->entries[fd], flags);\n", ""),
-    "accept-check": ("    if (flags & ~(uint32_t)(SOCK_CLOEXEC | SOCK_NONBLOCK)) {\n"
-                     "        return -EINVAL;\n    }\n    entry = fd_get(",
-                     "    entry = fd_get("),
-    "accept-flags": ("    sock_fd_flags(new_entry, flags);\n", ""),
-    "accept-enomem": ("    if (new_fd < 0) {\n        return new_fd;",
-                      "    if (new_fd < 0) {\n        return -EMFILE;"),
-    "recvfrom-length": ("    want_addr = sa_ptr != 0;",
-                        "    want_addr = sa_ptr != 0 && salen_ptr != 0;"),
-    "recvfrom-sender": ("        if (!salen_ptr || !user_buffer_ok(salen_ptr, sizeof(cap), 1) ||",
-                        "        if (salen_ptr || !user_buffer_ok(salen_ptr, sizeof(cap), 1) ||"),
-    "accept-reserve": ("    conn_sock = listen_sock->accept_queue[listen_sock->accept_head];\n",
-                       "    conn_sock = listen_sock->accept_queue[listen_sock->accept_head];\n"
-                       "    current_proc->fds->entries[new_fd].type = FD_TYPE_SOCKET;\n"),
-}
-old, new = changes[sys.argv[2]]
-source = path.read_text()
-if source.count(old) != 1:
-    raise SystemExit("netif-mutation: mutation target is not unique")
-path.write_text(source.replace(old, new))
-PY
+for mutation in $faults; do
+    apply_fault "$work/syscall_net.c" "$mutation"
     touch "$work/syscall_net.c"
     case "$mutation" in
         device-index) detail='device index is two' ;;

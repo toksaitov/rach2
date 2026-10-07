@@ -6,6 +6,18 @@ set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+original='#define BUFFER_ALIGNED(buf, align) 1'
+# The extracted tree is made from the tarball and the committed patches, so
+# --texts checks that the patch adds the faulted line once.
+if [ "${1:-}" = --texts ]; then
+    if [ "$(grep -Fxc "+$original" vendor/e2fsprogs/patches/buffer-alignment.patch)" != 1 ]; then
+        echo 'alignment-mutation: buffer-alignment.patch does not add the faulted line once' >&2
+        exit 1
+    fi
+    echo 'alignment-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
 . "$repo/tests/system/runlock.sh"
 runlock_hold "$repo" alignment-mutation "$repo/tests/host/e2fsprogs_alignment_mutate.sh" "$@"
 source=vendor/e2fsprogs/e2fsprogs-1.47.4/lib/ext2fs/unix_io.c
@@ -35,7 +47,6 @@ trap 'exit 143' TERM
 
 command -v perl >/dev/null
 cp -p "$source" "$work/unix_io.c.saved"
-original='#define BUFFER_ALIGNED(buf, align) 1'
 if [ "$(grep -Fxc "$original" "$source")" != 1 ]; then
     echo "alignment-mutation: expected one rach2 buffer alignment definition" >&2
     exit 1

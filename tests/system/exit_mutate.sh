@@ -4,14 +4,93 @@
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" "$2" <<'PY'
+from pathlib import Path
+import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+row, fault = sys.argv[1:]
+path, call, removed, waited = {
+    'normal': ('rach2/sys/syscall_proc.c', 'if (!proc_exit_cleanup(code)) {', 'if (1) {',
+               'if (!exit_proof_waited(proc_exit_cleanup(code))) {'),
+    'signal': ('rach2/kernel.c', 'last = proc_exit_cleanup(signo);', 'last = 0;',
+               'last = exit_proof_waited(proc_exit_cleanup(signo));'),
+}[row]
+path = Path(path)
+source = path.read_text()
+if source.count(call) != 1:
+    raise SystemExit('exit-integration: caller is not unique')
+replacement = removed
+if fault == 'wait':
+    helper = Path('rach2/sys/proc/exit.c')
+    helper.write_text(helper.read_text() + '''
+
+#include "wait_queue.h"
+#include "../lib/kirq.h"
+extern volatile uint32_t kernel_ticks;
+void exit_proof_wait(void);
+int exit_proof_waited(int last);
+
+/** Complete the wait after the real timer wakes this process. */
+static int exit_proof_awake(void *arg)
+{
+    (void)arg;
+    return current_proc->wakeup_tick == 0;
+}
+
+/** Exercise a finite wait after publication, violating the exit contract. */
+void exit_proof_wait(void)
+{
+    wait_queue_t queue;
+    uint32_t flags, target;
+    flags = kirq_save();
+    wait_queue_init(&queue);
+    target = kernel_ticks + 2;
+    current_proc->wakeup_tick = target ? target : 1;
+    wq_wait_event_nointr(&queue, exit_proof_awake, 0);
+    kirq_restore(flags);
+}
+
+/** Wait after the cleanup has published the death, and pass on its result. */
+int exit_proof_waited(int last)
+{
+    exit_proof_wait();
+    return last;
+}
+''')
+    source = 'int exit_proof_waited(int last);\n' + source
+    replacement = waited
+path.write_text(source.replace(call, replacement))
+PY
+}
+
+if [ "${1:-}" = --texts ]; then
+    for fault in remove wait; do
+        for row in normal signal; do
+            RACH2_FAULT_TEXTS=1 apply_fault "$row" "$fault" >/dev/null || exit 1
+        done
+    done
+    echo 'exit-integration: texts: every fault is once in its source'
+    exit 0
+fi
+
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" exit-integration "$repo/tests/system/exit_mutate.sh" "$@"
+
 RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
 REPO=$repo
 . "$repo/mk/arch.sh"
 RACH2_QEMU=$ARCH_QEMU
 export RACH2_QEMU ARCH_BUILD
 tree=build$ARCH_SUFFIX
-. "$repo/tests/system/runlock.sh"
-runlock_hold "$repo" exit-integration "$repo/tests/system/exit_mutate.sh" "$@"
 mkdir -p build
 sources='rach2/sys/syscall_proc.c rach2/kernel.c rach2/sys/proc/exit.c'
 if [ "$#" -eq 0 ]; then
@@ -25,7 +104,7 @@ elif [ "$#" -eq 2 ] && [ "$1" = --resume ]; then
         cmp "$source" "$work/$(basename "$source").saved"
     done
 else
-    echo 'exit-integration: usage: exit_mutate.sh [--resume work-directory]' >&2; exit 1
+    echo 'exit-integration: usage: exit_mutate.sh [--resume work-directory | --texts]' >&2; exit 1
 fi
 child=
 changed=
@@ -181,63 +260,7 @@ for fault in remove wait; do
     for row in normal signal; do
         [ ! -f "$work/$row-$fault.passed" ] || continue
         changed=1
-        python3 - "$row" "$fault" <<'PY'
-from pathlib import Path
-import sys
-
-row, fault = sys.argv[1:]
-path, call, removed, waited = {
-    'normal': ('rach2/sys/syscall_proc.c', 'if (!proc_exit_cleanup(code)) {', 'if (1) {',
-               'if (!exit_proof_waited(proc_exit_cleanup(code))) {'),
-    'signal': ('rach2/kernel.c', 'last = proc_exit_cleanup(signo);', 'last = 0;',
-               'last = exit_proof_waited(proc_exit_cleanup(signo));'),
-}[row]
-path = Path(path)
-source = path.read_text()
-if source.count(call) != 1:
-    raise SystemExit('exit-integration: caller is not unique')
-replacement = removed
-if fault == 'wait':
-    helper = Path('rach2/sys/proc/exit.c')
-    helper.write_text(helper.read_text() + '''
-
-#include "wait_queue.h"
-#include "../lib/kirq.h"
-extern volatile uint32_t kernel_ticks;
-void exit_proof_wait(void);
-int exit_proof_waited(int last);
-
-/** Complete the wait after the real timer wakes this process. */
-static int exit_proof_awake(void *arg)
-{
-    (void)arg;
-    return current_proc->wakeup_tick == 0;
-}
-
-/** Exercise a finite wait after publication, violating the exit contract. */
-void exit_proof_wait(void)
-{
-    wait_queue_t queue;
-    uint32_t flags, target;
-    flags = kirq_save();
-    wait_queue_init(&queue);
-    target = kernel_ticks + 2;
-    current_proc->wakeup_tick = target ? target : 1;
-    wq_wait_event_nointr(&queue, exit_proof_awake, 0);
-    kirq_restore(flags);
-}
-
-/** Wait after the cleanup has published the death, and pass on its result. */
-int exit_proof_waited(int last)
-{
-    exit_proof_wait();
-    return last;
-}
-''')
-    source = 'int exit_proof_waited(int last);\n' + source
-    replacement = waited
-path.write_text(source.replace(call, replacement))
-PY
+        apply_fault "$row" "$fault"
         phase="$row-$fault"
         build_phase
         if cmp -s "$work/fixed.kernel" "$work/$phase.kernel"; then

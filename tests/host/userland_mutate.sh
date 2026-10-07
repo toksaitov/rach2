@@ -3,6 +3,84 @@
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" "$2" <<'PY'
+import pathlib
+import sys
+import os
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+root = pathlib.Path(sys.argv[1])
+mutation = sys.argv[2]
+
+def replace(file, before, after, count=1):
+    path = root / file
+    source = path.read_text()
+    if source.count(before) != count:
+        sys.exit("userland-mutation: source no longer matches: " + file)
+    path.write_text(source.replace(before, after))
+
+music = "ports/doom/i_oplmusic.c"
+if mutation.startswith("midi-"):
+    path = root / "ports/doom/midifile.c"
+    before = "if (!ReadByte(&b, stream) || (b & 0x80) != 0)"
+    parts = path.read_text().split(before)
+    if len(parts) != 3:
+        sys.exit("userland-mutation: channel reads no longer match")
+    reads = [before, before]
+    reads[mutation == "midi-second"] = "if (!ReadByte(&b, stream))"
+    path.write_text(parts[0] + reads[0] + parts[1] + reads[1] + parts[2])
+elif mutation == "genmidi":
+    replace(music, """if (lumpnum < 0
+     || W_LumpLength(lumpnum) < 8
+        + (GENMIDI_NUM_INSTRS + GENMIDI_NUM_PERCUSSION)
+          * (int)sizeof(genmidi_instr_t))""", "if (lumpnum < 0)")
+elif mutation == "dns":
+    replace("utils/resolv.c", """    if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
+        close(fd);
+        return -1;
+    }
+""", "")
+elif mutation == "redirection":
+    replace("ish/ish.c", "stdout_descriptor >= 0 && stdout_descriptor != 1", "stdout_descriptor > 1")
+elif mutation == "environment":
+    for key in ("Home", "Path"):
+        replace("ish/ish.c", '"' + key.upper() + '="', '"' + key.upper() + '"')
+        replace("ish/ish.c", "sizeof(Environment_Variable_" + key + ") - 1",
+                "sizeof(Environment_Variable_" + key + ")")
+elif mutation == "environment-case":
+    replace("ish/ish_shell_utilities.c", "ish_cstring_starts_with(key, *variable)",
+            "ish_cstring_starts_with_ignoring_case(key, *variable)")
+elif mutation == "tempo":
+    replace(music, "                         / ((uint64_t)ticks_per_beat * 1000000);",
+            "                         / (ticks_per_beat * 1000000);")
+elif mutation == "tempo-minimum":
+    replace(music, """        if (samples_per_tick == 0)
+        {
+            samples_per_tick = 1;
+        }
+""", "")
+elif mutation == "loop":
+    replace(music, "if (song_looping && !restarted)",
+            "if (song_looping && !restarted && samples_generated > 0)")
+PY
+}
+
+faults='midi-first midi-second genmidi dns redirection environment
+    environment-case tempo tempo-minimum loop'
+if [ "${1:-}" = --texts ]; then
+    for mutation in $faults; do
+        RACH2_FAULT_TEXTS=1 apply_fault . "$mutation" >/dev/null || exit 1
+    done
+    echo 'userland-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
 mkdir -p build
 work=$(mktemp -d "$repo/build/userland-mutation.XXXXXX")
 mkdir -p "$work/tests/host" "$work/tests/musl" "$work/ports" "$work/saved"
@@ -114,7 +192,7 @@ PY
 }
 
 echo "userland-mutation: logs: $work"
-for mutation in midi-first midi-second genmidi dns redirection environment environment-case tempo tempo-minimum loop; do
+for mutation in $faults; do
     case "$mutation" in
         midi-*) expected='channel parameters must be seven bits' ;;
         genmidi) expected='a truncated instrument table is rejected' ;;
@@ -125,64 +203,7 @@ for mutation in midi-first midi-second genmidi dns redirection environment envir
         loop) expected='the boundary replays the delta-zero note' ;;
     esac
     run_phase fixed
-    python3 - "$work" "$mutation" <<'PY'
-import pathlib
-import sys
-
-root = pathlib.Path(sys.argv[1])
-mutation = sys.argv[2]
-
-def replace(file, before, after, count=1):
-    path = root / file
-    source = path.read_text()
-    if source.count(before) != count:
-        sys.exit("userland-mutation: source no longer matches: " + file)
-    path.write_text(source.replace(before, after))
-
-music = "ports/doom/i_oplmusic.c"
-if mutation.startswith("midi-"):
-    path = root / "ports/doom/midifile.c"
-    before = "if (!ReadByte(&b, stream) || (b & 0x80) != 0)"
-    parts = path.read_text().split(before)
-    if len(parts) != 3:
-        sys.exit("userland-mutation: channel reads no longer match")
-    reads = [before, before]
-    reads[mutation == "midi-second"] = "if (!ReadByte(&b, stream))"
-    path.write_text(parts[0] + reads[0] + parts[1] + reads[1] + parts[2])
-elif mutation == "genmidi":
-    replace(music, """if (lumpnum < 0
-     || W_LumpLength(lumpnum) < 8
-        + (GENMIDI_NUM_INSTRS + GENMIDI_NUM_PERCUSSION)
-          * (int)sizeof(genmidi_instr_t))""", "if (lumpnum < 0)")
-elif mutation == "dns":
-    replace("utils/resolv.c", """    if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
-        close(fd);
-        return -1;
-    }
-""", "")
-elif mutation == "redirection":
-    replace("ish/ish.c", "stdout_descriptor >= 0 && stdout_descriptor != 1", "stdout_descriptor > 1")
-elif mutation == "environment":
-    for key in ("Home", "Path"):
-        replace("ish/ish.c", '"' + key.upper() + '="', '"' + key.upper() + '"')
-        replace("ish/ish.c", "sizeof(Environment_Variable_" + key + ") - 1",
-                "sizeof(Environment_Variable_" + key + ")")
-elif mutation == "environment-case":
-    replace("ish/ish_shell_utilities.c", "ish_cstring_starts_with(key, *variable)",
-            "ish_cstring_starts_with_ignoring_case(key, *variable)")
-elif mutation == "tempo":
-    replace(music, "                         / ((uint64_t)ticks_per_beat * 1000000);",
-            "                         / (ticks_per_beat * 1000000);")
-elif mutation == "tempo-minimum":
-    replace(music, """        if (samples_per_tick == 0)
-        {
-            samples_per_tick = 1;
-        }
-""", "")
-elif mutation == "loop":
-    replace(music, "if (song_looping && !restarted)",
-            "if (song_looping && !restarted && samples_generated > 0)")
-PY
+    apply_fault "$work" "$mutation"
     run_phase mutated
     restore
     run_phase restored

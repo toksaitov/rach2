@@ -13,6 +13,81 @@ set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" "$2" <<'PY'
+import pathlib
+import sys
+import os
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+path = pathlib.Path(sys.argv[1])
+source = path.read_text()
+changes = {
+    "namespace": ("if (ofd->vmnt && ofd->vmnt->type->ns_serialised) {",
+                  "if (ofd->vmnt && ofd->vmnt->type == &vfs_krffs_type) {"),
+    "unserialised": ("if (ofd->vmnt && ofd->vmnt->type->ns_serialised) {",
+                     "if (ofd->vmnt) {"),
+    "repoint": ("mnt->type == &vfs_krffs_type && rec->ofd.fhandle == from",
+                "rec->ofd.fhandle == from"),
+    "process": ("if (fd_init_stdio(p->fds) != 0) {",
+                "if (fd_init_stdio(p->fds) != 0 && 0) {"),
+    "unchecked": ("        if (!ofd) {\n            while (i > FD_STDIN)",
+                  "        if (0) {\n            while (i > FD_STDIN)"),
+    "rollback": ("                fd_free(table, --i);", "                --i;"),
+    "alloc-description": ("        if (!ofd) {\n            return -ENOMEM;",
+                          "        if (!ofd) {\n            return -1;"),
+    "alloc-growth": ("        if (rc != 0) {\n            return rc;",
+                     "        if (rc != 0) {\n            return -1;"),
+    "alloc-minimum": ("    if (!table || minfd < 0 || minfd >= limit) {\n        return -EMFILE;",
+                      "    if (!table || minfd < 0 || minfd >= limit) {\n        return -1;"),
+    "alloc-limit": ("    if (i >= limit) {\n        return -EMFILE;",
+                    "    if (i >= limit) {\n        return -1;"),
+    "reach-growth": ("    return fd_table_grow(table, fd + 1);",
+                     "    return fd_table_grow(table, fd + 1) ? -1 : 0;"),
+    "reach-range": ("    if (!table || fd < 0 || fd >= fd_limit(table)) {\n        return -EBADF;",
+                    "    if (!table || fd < 0 || fd >= fd_limit(table)) {\n        return -1;"),
+    "live-serial": ("return rec->ofd.refcount > 0 && rec->ofd.serial == serial;",
+                    "return rec->ofd.refcount > 0 && rec->ofd.serial <= serial;"),
+    "live-closing": ("return rec->ofd.refcount > 0 && rec->ofd.serial == serial;",
+                     "return rec->ofd.serial == serial;"),
+    "split-modes": ("table->entries[i].flags = FD_FLAG_READ | FD_FLAG_WRITE;",
+                    "table->entries[i].flags = (i == FD_STDIN) ? FD_FLAG_READ : FD_FLAG_WRITE;"),
+}
+old, new = changes[sys.argv[2]]
+if sys.argv[2] in ("namespace", "unserialised"):
+    for name in ("fd_ofd_lock", "fd_ofd_unlock"):
+        start = source.index("void " + name + "(")
+        end = source.index("\n}", start) + 2
+        body = source[start:end]
+        if body.count(old) != 1:
+            raise SystemExit("fd-stdio-mutation: lock pattern is not unique")
+        source = source[:start] + body.replace(old, new) + source[end:]
+else:
+    if source.count(old) != 1:
+        raise SystemExit("fd-stdio-mutation: source pattern is not unique")
+    source = source.replace(old, new)
+path.write_text(source)
+PY
+}
+
+faults='unchecked rollback process repoint namespace unserialised
+    alloc-description alloc-growth alloc-minimum alloc-limit reach-growth
+    reach-range live-serial live-closing split-modes'
+if [ "${1:-}" = --texts ]; then
+    for fault in $faults; do
+        source=rach2/sys/fs/fd.c
+        [ "$fault" != process ] || source=rach2/sys/proc/process.c
+        RACH2_FAULT_TEXTS=1 apply_fault "$source" "$fault" >/dev/null || exit 1
+    done
+    echo 'fd-stdio-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
 mkdir -p build/tests
 work=$(mktemp -d "$repo/build/tests/fd-stdio-proof.XXXXXX")
 child=
@@ -65,63 +140,10 @@ run_phase()
 
 echo "fd-stdio-mutation: logs: $work"
 run_phase fixed 0 'fd_hosttest: pass:'
-for fault in unchecked rollback process repoint namespace unserialised alloc-description \
-    alloc-growth alloc-minimum alloc-limit reach-growth reach-range live-serial live-closing \
-    split-modes; do
+for fault in $faults; do
     source="$work/sys/fs/fd.c"
     [ "$fault" != process ] || source="$work/sys/proc/process.c"
-    python3 - "$source" "$fault" <<'PY'
-import pathlib
-import sys
-
-path = pathlib.Path(sys.argv[1])
-source = path.read_text()
-changes = {
-    "namespace": ("if (ofd->vmnt && ofd->vmnt->type->ns_serialised) {",
-                  "if (ofd->vmnt && ofd->vmnt->type == &vfs_krffs_type) {"),
-    "unserialised": ("if (ofd->vmnt && ofd->vmnt->type->ns_serialised) {",
-                     "if (ofd->vmnt) {"),
-    "repoint": ("mnt->type == &vfs_krffs_type && rec->ofd.fhandle == from",
-                "rec->ofd.fhandle == from"),
-    "process": ("if (fd_init_stdio(p->fds) != 0) {",
-                "if (fd_init_stdio(p->fds) != 0 && 0) {"),
-    "unchecked": ("        if (!ofd) {\n            while (i > FD_STDIN)",
-                  "        if (0) {\n            while (i > FD_STDIN)"),
-    "rollback": ("                fd_free(table, --i);", "                --i;"),
-    "alloc-description": ("        if (!ofd) {\n            return -ENOMEM;",
-                          "        if (!ofd) {\n            return -1;"),
-    "alloc-growth": ("        if (rc != 0) {\n            return rc;",
-                     "        if (rc != 0) {\n            return -1;"),
-    "alloc-minimum": ("    if (!table || minfd < 0 || minfd >= limit) {\n        return -EMFILE;",
-                      "    if (!table || minfd < 0 || minfd >= limit) {\n        return -1;"),
-    "alloc-limit": ("    if (i >= limit) {\n        return -EMFILE;",
-                    "    if (i >= limit) {\n        return -1;"),
-    "reach-growth": ("    return fd_table_grow(table, fd + 1);",
-                     "    return fd_table_grow(table, fd + 1) ? -1 : 0;"),
-    "reach-range": ("    if (!table || fd < 0 || fd >= fd_limit(table)) {\n        return -EBADF;",
-                    "    if (!table || fd < 0 || fd >= fd_limit(table)) {\n        return -1;"),
-    "live-serial": ("return rec->ofd.refcount > 0 && rec->ofd.serial == serial;",
-                    "return rec->ofd.refcount > 0 && rec->ofd.serial <= serial;"),
-    "live-closing": ("return rec->ofd.refcount > 0 && rec->ofd.serial == serial;",
-                     "return rec->ofd.serial == serial;"),
-    "split-modes": ("table->entries[i].flags = FD_FLAG_READ | FD_FLAG_WRITE;",
-                    "table->entries[i].flags = (i == FD_STDIN) ? FD_FLAG_READ : FD_FLAG_WRITE;"),
-}
-old, new = changes[sys.argv[2]]
-if sys.argv[2] in ("namespace", "unserialised"):
-    for name in ("fd_ofd_lock", "fd_ofd_unlock"):
-        start = source.index("void " + name + "(")
-        end = source.index("\n}", start) + 2
-        body = source[start:end]
-        if body.count(old) != 1:
-            raise SystemExit("fd-stdio-mutation: lock pattern is not unique")
-        source = source[:start] + body.replace(old, new) + source[end:]
-else:
-    if source.count(old) != 1:
-        raise SystemExit("fd-stdio-mutation: source pattern is not unique")
-    source = source.replace(old, new)
-path.write_text(source)
-PY
+    apply_fault "$source" "$fault"
     case $fault in
         unchecked) message='stdio reports allocation failure' ;;
         process) message='failed process is not published' ;;

@@ -25,14 +25,17 @@
 # --mutate each fault below is put into the copy of the functions and must
 # fail its row; the rows run again on the functions as they are at the end.
 #
-# Usage: sh tests/system/install_accounts_test.sh [--mutate]
+# --texts puts each fault into the copy and runs no row.
+#
+# Usage: sh tests/system/install_accounts_test.sh [--mutate | --texts]
 #
 set -u
 
 case ${1:-} in
     '') mutate=0 ;;
     --mutate) mutate=1 ;;
-    *) echo 'install-accounts-test: usage: install_accounts_test.sh [--mutate]' >&2; exit 2 ;;
+    --texts) mutate=2 ;;
+    *) echo 'install-accounts-test: usage: install_accounts_test.sh [--mutate | --texts]' >&2; exit 2 ;;
 esac
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -179,6 +182,7 @@ text = open(path).read()
 assert old in text, old
 open(path, 'w').write(text.replace(old, new, 1))
 PY
+    [ "$mutate" -ne 2 ] || return 0
     before=$failures
     out=$(rows)
     failures=$before
@@ -188,7 +192,7 @@ PY
     esac
 }
 
-if [ "$mutate" -eq 1 ]; then
+if [ "$mutate" -ge 1 ]; then
     sshd_row="the image's sshd is appended with its group and shadow line, and nothing else is"
     fault uid-bound '$3 + 0 < 1000 && !($1 in name)' '!($1 in name)' "$sshd_row"
     fault uid-inclusive '$3 + 0 < 1000 && !($1 in name)' '$3 + 0 <= 1000 && !($1 in name)' "$sshd_row"
@@ -218,6 +222,10 @@ if [ "$mutate" -eq 1 ]; then
     fault shadow-no-nobody 'if ($3 + 0 < 1000 || $3 + 0 == 65534) uid' 'if ($3 + 0 < 1000) uid' \
         'a system account the machine has without a shadow line gets the image'"'"'s'
     cp "$work/function.saved" "$work/function.sh"
+fi
+if [ "$mutate" -eq 2 ]; then
+    echo 'install-accounts-test: texts: every fault is once in its source'
+    exit 0
 fi
 
 rows

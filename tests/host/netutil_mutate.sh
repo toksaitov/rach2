@@ -1,82 +1,24 @@
 #!/bin/sh
 # Compile fixed, faulty and restored network utilities in a private directory.
 #
-# Usage: sh tests/host/netutil_mutate.sh [FAULT ...]
+# Usage: sh tests/host/netutil_mutate.sh [FAULT ...] | --texts
 # With no operand every fault is proved; an operand proves only the ones named.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
-mkdir -p build/tests
-work=$(mktemp -d "$repo/build/tests/netutil-proof.XXXXXX")
-mkdir "$work/utils" "$work/saved"
-cp utils/*.c utils/*.h "$work/utils/"
-cp "$work/utils/"* "$work/saved/"
-child=
 
-cleanup()
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
 {
-    if [ -n "$child" ]; then
-        kill -TERM "$child" 2>/dev/null || :
-        wait "$child" 2>/dev/null || :
-        child=
-    fi
-    cp "$work/saved/"* "$work/utils/"
-    touch "$work/utils/"*.c
-}
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
-
-run_phase()
-{
-    phase=$1
-    test=$2
-    expected=$3
-    message=$4
-    binary="$work/$phase"
-    deps="$work/utils/ipcheck.c"
-    case $test in
-        dhcpc) deps="$deps $work/utils/dhcpmsg.c" ;;
-        netup) deps="$deps $work/utils/netcfg.c" ;;
-    esac
-    # shellcheck disable=SC2086
-    if ! "${CC:-cc}" -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 \
-        -DRACH2_HOSTTEST -g -O1 -Wno-empty-body -ffreestanding \
-        -fsanitize=address,undefined -fno-sanitize-recover=all \
-        -I "$work/utils" -I tests/host/compat/netutil \
-        "tests/host/${test}_hosttest.c" $deps -o "$binary" \
-        >"$binary.compile.log" 2>&1; then
-        cat "$binary.compile.log" >&2
-        exit 1
-    fi
-    cksum "$work/utils/"*.c "$binary" >"$binary.cksum"
-    perl -e 'alarm 15; exec @ARGV or die "netutil-mutation: exec: $!\n"' \
-        "$binary" >"$binary.log" 2>&1 &
-    child=$!
-    status=0
-    wait "$child" || status=$?
-    child=
-    cat "$binary.log"
-    [ "$status" -eq "$expected" ] && grep -Fq "$message" "$binary.log" || exit 1
-    echo "netutil-mutation: result: $phase status $status"
-}
-
-echo "netutil-mutation: logs: $work"
-for test in netcfg_io dhcpc netup ncport httpd; do
-    run_phase "$test-fixed" "$test" 0 'result: pass'
-done
-if [ "$#" -eq 0 ]; then
-    set -- read-first read-second seek cleanup release expiry mask resolver \
-        claim-open claim-read holder-open holder-read detach dup receive rebinding \
-        dhcp-status nc-port httpd-page httpd-port initial-record adopted handoff-adopted \
-        claim-rewrite
-fi
-for fault do
-    python3 - "$work/utils" "$fault" <<'PY'
+    python3 - "$1" "$2" <<'PY'
 from pathlib import Path
 import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
 
 root = Path(sys.argv[1])
 fault = sys.argv[2]
@@ -173,6 +115,85 @@ if source.count(old) != 1:
     raise SystemExit("netutil-mutation: source pattern is not unique: " + fault)
 path.write_text(source.replace(old, new))
 PY
+}
+
+faults='read-first read-second seek cleanup release expiry mask resolver claim-open
+    claim-read holder-open holder-read detach dup receive rebinding dhcp-status nc-port
+    httpd-page httpd-port initial-record adopted handoff-adopted claim-rewrite'
+if [ "${1:-}" = --texts ]; then
+    for fault in $faults; do
+        RACH2_FAULT_TEXTS=1 apply_fault utils "$fault" >/dev/null || exit 1
+    done
+    echo 'netutil-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
+mkdir -p build/tests
+work=$(mktemp -d "$repo/build/tests/netutil-proof.XXXXXX")
+mkdir "$work/utils" "$work/saved"
+cp utils/*.c utils/*.h "$work/utils/"
+cp "$work/utils/"* "$work/saved/"
+child=
+
+cleanup()
+{
+    if [ -n "$child" ]; then
+        kill -TERM "$child" 2>/dev/null || :
+        wait "$child" 2>/dev/null || :
+        child=
+    fi
+    cp "$work/saved/"* "$work/utils/"
+    touch "$work/utils/"*.c
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+run_phase()
+{
+    phase=$1
+    test=$2
+    expected=$3
+    message=$4
+    binary="$work/$phase"
+    deps="$work/utils/ipcheck.c"
+    case $test in
+        dhcpc) deps="$deps $work/utils/dhcpmsg.c" ;;
+        netup) deps="$deps $work/utils/netcfg.c" ;;
+    esac
+    # shellcheck disable=SC2086
+    if ! "${CC:-cc}" -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 \
+        -DRACH2_HOSTTEST -g -O1 -Wno-empty-body -ffreestanding \
+        -fsanitize=address,undefined -fno-sanitize-recover=all \
+        -I "$work/utils" -I tests/host/compat/netutil \
+        "tests/host/${test}_hosttest.c" $deps -o "$binary" \
+        >"$binary.compile.log" 2>&1; then
+        cat "$binary.compile.log" >&2
+        exit 1
+    fi
+    cksum "$work/utils/"*.c "$binary" >"$binary.cksum"
+    perl -e 'alarm 15; exec @ARGV or die "netutil-mutation: exec: $!\n"' \
+        "$binary" >"$binary.log" 2>&1 &
+    child=$!
+    status=0
+    wait "$child" || status=$?
+    child=
+    cat "$binary.log"
+    [ "$status" -eq "$expected" ] && grep -Fq "$message" "$binary.log" || exit 1
+    echo "netutil-mutation: result: $phase status $status"
+}
+
+echo "netutil-mutation: logs: $work"
+for test in netcfg_io dhcpc netup ncport httpd; do
+    run_phase "$test-fixed" "$test" 0 'result: pass'
+done
+if [ "$#" -eq 0 ]; then
+    # shellcheck disable=SC2086 # the faults are separate words
+    set -- $faults
+fi
+for fault do
+    apply_fault "$work/utils" "$fault"
     test=dhcpc
     case $fault in
         read-first) test=netcfg_io; message='first-pass read error' ;;

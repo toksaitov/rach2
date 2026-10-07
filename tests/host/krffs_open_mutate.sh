@@ -3,6 +3,62 @@
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" "$2" <<'PY'
+from pathlib import Path
+import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+work = Path(sys.argv[1])
+path = work / "sys/syscall_fs.c"
+text = path.read_text()
+old = "VFS_WALK_LOCK |"
+start = text.index("static int32_t do_open(")
+end = text.index("\n}", start)
+body = text[start:end]
+if body.count(old) != 1:
+    raise SystemExit("krffs-open: mutation pattern is not unique")
+body = body.replace(old, "0 |")
+body = body.replace("            vfs_walk_unlock(ref.mnt);\n", "")
+body = body.replace("            vfs_walk_unlock(locked);\n", "")
+body = body.replace("    vfs_walk_unlock(locked);", "    (void)locked;")
+path.write_text(text[:start] + body + text[end:])
+if sys.argv[2] == "late-lock":
+    path = work / "sys/fs/krffsmount.c"
+    text = path.read_text()
+    start = text.index("static int kv_open(")
+    end = text.index("\n}", start)
+    body = text[start:end]
+    body = body.replace("struct krffs_open *o = open_at(vol, at);", "struct krffs_open *o;")
+    body = body.replace("    (void)flags;", "    (void)flags;\n    vfs_ns_lock(mnt);\n"
+                        "    o = open_at(vol, at);")
+    body = body.replace("            return -ENOMEM;", "            vfs_ns_unlock(mnt);\n"
+                        "            return -ENOMEM;")
+    body = body.replace("    return 0;", "    vfs_ns_unlock(mnt);\n    return 0;")
+    path.write_text(text[:start] + body + text[end:])
+PY
+}
+
+faults='open-lock late-lock'
+if [ "${1:-}" = --texts ]; then
+    # The faults name their files as the private tree lays them out.
+    root=$(mktemp -d "${TMPDIR:-/tmp}/rach2-krffs-open-texts.XXXXXX")
+    trap 'rm -rf "$root"' EXIT
+    ln -s "$repo/rach2/sys" "$root/sys"
+    for fault in $faults; do
+        RACH2_FAULT_TEXTS=1 apply_fault "$root" "$fault" >/dev/null || exit 1
+    done
+    echo 'krffs-open: texts: every fault is once in its source'
+    exit 0
+fi
+
 [ "$#" -eq 0 ] || [ "$*" = --check ] || exit 2
 mkdir -p build/tests
 work=$(mktemp -d "$repo/build/tests/krffs-open-proof.XXXXXX")
@@ -117,39 +173,8 @@ PY
 echo "krffs-open: logs: $work"
 run_phase fixed 0 'krffs-open: result: pass:'
 [ "${1:-}" != --check ] || exit 0
-for fault in open-lock late-lock; do
-    python3 - "$work" "$fault" <<'PY'
-from pathlib import Path
-import sys
-
-work = Path(sys.argv[1])
-path = work / "sys/syscall_fs.c"
-text = path.read_text()
-old = "VFS_WALK_LOCK |"
-start = text.index("static int32_t do_open(")
-end = text.index("\n}", start)
-body = text[start:end]
-if body.count(old) != 1:
-    raise SystemExit("krffs-open: mutation pattern is not unique")
-body = body.replace(old, "0 |")
-body = body.replace("            vfs_walk_unlock(ref.mnt);\n", "")
-body = body.replace("            vfs_walk_unlock(locked);\n", "")
-body = body.replace("    vfs_walk_unlock(locked);", "    (void)locked;")
-path.write_text(text[:start] + body + text[end:])
-if sys.argv[2] == "late-lock":
-    path = work / "sys/fs/krffsmount.c"
-    text = path.read_text()
-    start = text.index("static int kv_open(")
-    end = text.index("\n}", start)
-    body = text[start:end]
-    body = body.replace("struct krffs_open *o = open_at(vol, at);", "struct krffs_open *o;")
-    body = body.replace("    (void)flags;", "    (void)flags;\n    vfs_ns_lock(mnt);\n"
-                        "    o = open_at(vol, at);")
-    body = body.replace("            return -ENOMEM;", "            vfs_ns_unlock(mnt);\n"
-                        "            return -ENOMEM;")
-    body = body.replace("    return 0;", "    vfs_ns_unlock(mnt);\n    return 0;")
-    path.write_text(text[:start] + body + text[end:])
-PY
+for fault in $faults; do
+    apply_fault "$work" "$fault"
     message='original open follows second move despite copy reuse'
     if [ "$fault" = late-lock ]; then
         message='concurrent open follows second move despite copy reuse'

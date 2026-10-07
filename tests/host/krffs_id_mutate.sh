@@ -19,10 +19,92 @@
 # each fault in turn, where that fault's row must fail; and on the restored,
 # touched core, where it must pass again.
 #
-# Usage: sh tests/host/krffs_id_mutate.sh
+# Usage: sh tests/host/krffs_id_mutate.sh [--texts]
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" "$2" <<'PY'
+from pathlib import Path
+import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+path = Path(sys.argv[1])
+fault = sys.argv[2]
+text = path.read_text()
+# Each fault is the code as it stood before its fix, in the one function it
+# lived in.
+faults = {
+    'new-id-rule': ('int krffs_create_node_at(krffs_mount_t *mount, const char *path, '
+                    'uint16_t mode,',
+                    '    rc |= krffs_put_new_u64(mount, node, KRFFS_FIELD_ID, '
+                    'krffs_calculate_djb_hash(name));\n',
+                    '    rc |= krffs_put_u64(mount, node, KRFFS_FIELD_ID, '
+                    'krffs_calculate_djb_hash(name));\n'),
+    'id-taken': ('int krffs_mkdir_at(krffs_mount_t *mount, const char *path, uint16_t mode,',
+                 '    if (krffs_id_taken(mount, krffs_mix_id(parent_id, base))) {\n'
+                 '        return KRFFS_ETAKEN;\n'
+                 '    }\n',
+                 ''),
+    'taken-is-bad': ('int krffs_mkdir_at(krffs_mount_t *mount, const char *path, uint16_t mode,',
+                     '    if (krffs_id_taken(mount, krffs_mix_id(parent_id, base))) {\n'
+                     '        return KRFFS_ETAKEN;\n'
+                     '    }\n',
+                     '    if (krffs_id_taken(mount, krffs_mix_id(parent_id, base))) {\n'
+                     '        return KRFFS_EBAD;\n'
+                     '    }\n'),
+    'mkdir-id-rule': ('int krffs_mkdir_at(krffs_mount_t *mount, const char *path, uint16_t mode,',
+                      '    rc |= krffs_put_new_u64(mount, node, KRFFS_FIELD_ID, '
+                      'krffs_mix_id(parent_id, base));\n',
+                      '    rc |= krffs_put_u64(mount, node, KRFFS_FIELD_ID, '
+                      'krffs_mix_id(parent_id, base));\n'),
+    'copy-times-rule': ('static uint64_t krffs_allocate_err(krffs_mount_t *mount, uint64_t size, '
+                        'uint64_t original, int *err)',
+                        '                rc |= krffs_put_new(mount, offset, KRFFS_FIELD_ATIME, '
+                        '&from.access_time,\n',
+                        '                rc |= krffs_put(mount, offset, KRFFS_FIELD_ATIME, '
+                        '&from.access_time,\n'),
+    'copy-length-rule': ('static uint64_t krffs_allocate_err(krffs_mount_t *mount, uint64_t size, '
+                         'uint64_t original, int *err)',
+                         '            if (krffs_put_new_u64(mount, offset, KRFFS_FIELD_DATA_SIZE, '
+                         'data_size) != 0 ||\n',
+                         '            if (krffs_put_u64(mount, offset, KRFFS_FIELD_DATA_SIZE, '
+                         'data_size) != 0 ||\n'),
+    'new-times-rule': ('static int krffs_stamp_new(krffs_mount_t *mount, uint64_t node)',
+                       '    rc |= krffs_put_new(mount, node, KRFFS_FIELD_MTIME, &now, '
+                       '(uint32_t)sizeof(now));\n',
+                       '    rc |= krffs_put(mount, node, KRFFS_FIELD_MTIME, &now, '
+                       '(uint32_t)sizeof(now));\n'),
+}
+head, old, new = faults[fault]
+if text.count(head) != 1:
+    raise SystemExit('krffs-id-proof: the function for ' + fault + ' is not unique')
+start = text.index(head)
+end = text.index('\n}\n', start)
+body = text[start:end]
+if body.count(old) != 1:
+    raise SystemExit('krffs-id-proof: the pattern for ' + fault + ' is not unique')
+path.write_text(text[:start] + body.replace(old, new) + text[end:])
+PY
+}
+
+faults='new-id-rule id-taken taken-is-bad mkdir-id-rule copy-times-rule
+    copy-length-rule new-times-rule'
+if [ "${1:-}" = --texts ]; then
+    for fault in $faults; do
+        RACH2_FAULT_TEXTS=1 apply_fault rach2/sys/fs/krffs.c "$fault" >/dev/null || exit 1
+    done
+    echo 'krffs-id-proof: texts: every fault is once in its source'
+    exit 0
+fi
+
 [ "$#" -eq 0 ] || {
     echo 'usage: krffs_id_mutate.sh' >&2
     exit 2
@@ -92,69 +174,8 @@ run_phase()
 
 echo "krffs-id-proof: logs: $work"
 run_phase fixed pass ''
-for fault in new-id-rule id-taken taken-is-bad mkdir-id-rule copy-times-rule copy-length-rule \
-    new-times-rule; do
-    python3 - "$source" "$fault" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-fault = sys.argv[2]
-text = path.read_text()
-# Each fault is the code as it stood before its fix, in the one function it
-# lived in.
-faults = {
-    'new-id-rule': ('int krffs_create_node_at(krffs_mount_t *mount, const char *path, '
-                    'uint16_t mode,',
-                    '    rc |= krffs_put_new_u64(mount, node, KRFFS_FIELD_ID, '
-                    'krffs_calculate_djb_hash(name));\n',
-                    '    rc |= krffs_put_u64(mount, node, KRFFS_FIELD_ID, '
-                    'krffs_calculate_djb_hash(name));\n'),
-    'id-taken': ('int krffs_mkdir_at(krffs_mount_t *mount, const char *path, uint16_t mode,',
-                 '    if (krffs_id_taken(mount, krffs_mix_id(parent_id, base))) {\n'
-                 '        return KRFFS_ETAKEN;\n'
-                 '    }\n',
-                 ''),
-    'taken-is-bad': ('int krffs_mkdir_at(krffs_mount_t *mount, const char *path, uint16_t mode,',
-                     '    if (krffs_id_taken(mount, krffs_mix_id(parent_id, base))) {\n'
-                     '        return KRFFS_ETAKEN;\n'
-                     '    }\n',
-                     '    if (krffs_id_taken(mount, krffs_mix_id(parent_id, base))) {\n'
-                     '        return KRFFS_EBAD;\n'
-                     '    }\n'),
-    'mkdir-id-rule': ('int krffs_mkdir_at(krffs_mount_t *mount, const char *path, uint16_t mode,',
-                      '    rc |= krffs_put_new_u64(mount, node, KRFFS_FIELD_ID, '
-                      'krffs_mix_id(parent_id, base));\n',
-                      '    rc |= krffs_put_u64(mount, node, KRFFS_FIELD_ID, '
-                      'krffs_mix_id(parent_id, base));\n'),
-    'copy-times-rule': ('static uint64_t krffs_allocate_err(krffs_mount_t *mount, uint64_t size, '
-                        'uint64_t original, int *err)',
-                        '                rc |= krffs_put_new(mount, offset, KRFFS_FIELD_ATIME, '
-                        '&from.access_time,\n',
-                        '                rc |= krffs_put(mount, offset, KRFFS_FIELD_ATIME, '
-                        '&from.access_time,\n'),
-    'copy-length-rule': ('static uint64_t krffs_allocate_err(krffs_mount_t *mount, uint64_t size, '
-                         'uint64_t original, int *err)',
-                         '            if (krffs_put_new_u64(mount, offset, KRFFS_FIELD_DATA_SIZE, '
-                         'data_size) != 0 ||\n',
-                         '            if (krffs_put_u64(mount, offset, KRFFS_FIELD_DATA_SIZE, '
-                         'data_size) != 0 ||\n'),
-    'new-times-rule': ('static int krffs_stamp_new(krffs_mount_t *mount, uint64_t node)',
-                       '    rc |= krffs_put_new(mount, node, KRFFS_FIELD_MTIME, &now, '
-                       '(uint32_t)sizeof(now));\n',
-                       '    rc |= krffs_put(mount, node, KRFFS_FIELD_MTIME, &now, '
-                       '(uint32_t)sizeof(now));\n'),
-}
-head, old, new = faults[fault]
-if text.count(head) != 1:
-    raise SystemExit('krffs-id-proof: the function for ' + fault + ' is not unique')
-start = text.index(head)
-end = text.index('\n}\n', start)
-body = text[start:end]
-if body.count(old) != 1:
-    raise SystemExit('krffs-id-proof: the pattern for ' + fault + ' is not unique')
-path.write_text(text[:start] + body.replace(old, new) + text[end:])
-PY
+for fault in $faults; do
+    apply_fault "$source" "$fault"
     if cmp -s "$work/krffs.saved" "$source"; then
         echo "krffs-id-proof: the $fault mutation did not change the source" >&2
         exit 1

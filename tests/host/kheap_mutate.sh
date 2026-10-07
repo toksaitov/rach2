@@ -12,25 +12,34 @@
 #   one-end    takes the cache's pages from the bottom with the rest, as
 #              the heap did before, so their holes break every run.
 #
-# Usage: kheap_mutate.sh [--check]
-# With --check it compiles and runs the unmodified test alone.
+# Usage: kheap_mutate.sh [--check | --texts]
+# With --check it compiles and runs the unmodified test alone. With --texts
+# it checks that each fault's text is once in the tree's source, and builds
+# and runs nothing.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
-[ "$#" -eq 0 ] || [ "$*" = --check ] || {
-    echo 'kheap-proof: usage: kheap_mutate.sh [--check]' >&2
+texts=
+[ "${1:-}" != --texts ] || texts=1
+[ "$#" -eq 0 ] || [ "$*" = --check ] || [ "$*" = --texts ] || {
+    echo 'kheap-proof: usage: kheap_mutate.sh [--check | --texts]' >&2
     exit 2
 }
-mkdir -p build/tests
-work=$(mktemp -d "$repo/build/tests/kheap-proof.XXXXXX")
 child=
-# The test includes kheap.c and its headers by paths relative to itself.
-mkdir -p "$work/rach2" "$work/tests/host"
-cp -R rach2/sys "$work/rach2/"
-cp tests/host/kheap_hosttest.c "$work/tests/host/"
-cp -R tests/host/compat "$work/tests/host/"
-source="$work/rach2/sys/mm/kheap.c"
-cp "$source" "$work/kheap.c.saved"
+if [ -n "$texts" ]; then
+    work=
+    source=rach2/sys/mm/kheap.c
+else
+    mkdir -p build/tests
+    work=$(mktemp -d "$repo/build/tests/kheap-proof.XXXXXX")
+    # The test includes kheap.c and its headers by paths relative to itself.
+    mkdir -p "$work/rach2" "$work/tests/host"
+    cp -R rach2/sys "$work/rach2/"
+    cp tests/host/kheap_hosttest.c "$work/tests/host/"
+    cp -R tests/host/compat "$work/tests/host/"
+    source="$work/rach2/sys/mm/kheap.c"
+    cp "$source" "$work/kheap.c.saved"
+fi
 
 restore()
 {
@@ -86,15 +95,17 @@ mutate()
 {
     python3 - "$source" "$1" "$2" <<'PY'
 from pathlib import Path
+import os
 import sys
 
 path = Path(sys.argv[1])
 source = path.read_text()
 if source.count(sys.argv[2]) != 1:
     raise SystemExit('kheap-proof: the pattern is not unique: ' + sys.argv[2])
-path.write_text(source.replace(sys.argv[2], sys.argv[3]))
+if not os.environ.get('RACH2_FAULT_TEXTS'):
+    path.write_text(source.replace(sys.argv[2], sys.argv[3]))
 PY
-    touch "$source"
+    [ -n "$texts" ] || touch "$source"
 }
 
 # fault NAME CHECK...: run the mutated tree and require it to fail exactly
@@ -116,10 +127,21 @@ fault()
     restore
 }
 
-echo "kheap-proof: logs: $work"
-run_phase fixed
-[ "$status" -eq 0 ] && grep -q '^kheap_hosttest: PASS$' "$work/fixed.log" || exit 1
-[ "$#" -eq 0 ] || exit 0
+if [ -n "$texts" ]; then
+    trap - EXIT
+    run_phase() { :; }
+    restore() { :; }
+    fault() { :; }
+    RACH2_FAULT_TEXTS=1
+    export RACH2_FAULT_TEXTS
+else
+    echo "kheap-proof: logs: $work"
+fi
+if [ -z "$texts" ]; then
+    run_phase fixed
+    [ "$status" -eq 0 ] && grep -q '^kheap_hosttest: PASS$' "$work/fixed.log" || exit 1
+    [ "$#" -eq 0 ] || exit 0
+fi
 
 mutate '    if (bytes < KHEAP_FLOOR) {' '    if (0) {'
 fault no-floor 'i686, 512 MiB: the region' 'x86-64, 512 MiB: the floor' \
@@ -146,6 +168,10 @@ mutate '    uint32_t page = find_page_high();' '    uint32_t page = find_run(1);
 fault one-end 'with the single pages given back, a run of 17 lies below every cache page' \
     'a page the cache gives back is the next cache page'
 
+if [ -n "$texts" ]; then
+    echo 'kheap-proof: texts: every fault is once in its source'
+    exit 0
+fi
 run_phase restored
 [ "$status" -eq 0 ] && grep -q '^kheap_hosttest: PASS$' "$work/restored.log" || exit 1
 cmp "$work/kheap.c.saved" "$source"

@@ -4,6 +4,46 @@ set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" "$2" "$3" <<'PY'
+import pathlib
+import sys
+import os
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+changes = {
+    "hardware-length": (sys.argv[1], " || data[4] != 6", ""),
+    "protocol-length": (sys.argv[1], " || data[5] != 4", ""),
+    "network-interface": (sys.argv[1], "ip == (nd->ip & nd->mask)",
+                          "ip == (net_ip_addr & net_ip_mask)"),
+    "broadcast-interface": (sys.argv[1], "ip == (nd->ip | ~nd->mask)",
+                            "netconf_is_broadcast(ip)"),
+    "ip-mtu": (sys.argv[2], "if (plen > 1500 - IP_HDR_SIZE)", "if (plen > 1500)"),
+}
+name, old, new = changes[sys.argv[3]]
+path = pathlib.Path(name)
+source = path.read_text()
+if source.count(old) != 1:
+    raise SystemExit("network-mutation: source pattern is not unique")
+path.write_text(source.replace(old, new))
+PY
+}
+
+faults='hardware-length protocol-length network-interface broadcast-interface
+    ip-mtu'
+if [ "${1:-}" = --texts ]; then
+    for fault in $faults; do
+        RACH2_FAULT_TEXTS=1 apply_fault rach2/sys/network/arp/arp.c rach2/sys/network/ip/ip.c "$fault" >/dev/null || exit 1
+    done
+    echo 'network-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
 mkdir -p build/tests
 work=$(mktemp -d "$repo/build/tests/network-proof.XXXXXX")
 child=
@@ -66,27 +106,8 @@ run_phase()
 echo "network-mutation: logs: $work"
 run_phase arp-fixed arp 0 'arp_hosttest: OK'
 run_phase packet-fixed packet 0 'packet_hosttest: PASS'
-for fault in hardware-length protocol-length network-interface broadcast-interface ip-mtu; do
-    python3 - "$arp" "$ip" "$fault" <<'PY'
-import pathlib
-import sys
-
-changes = {
-    "hardware-length": (sys.argv[1], " || data[4] != 6", ""),
-    "protocol-length": (sys.argv[1], " || data[5] != 4", ""),
-    "network-interface": (sys.argv[1], "ip == (nd->ip & nd->mask)",
-                          "ip == (net_ip_addr & net_ip_mask)"),
-    "broadcast-interface": (sys.argv[1], "ip == (nd->ip | ~nd->mask)",
-                            "netconf_is_broadcast(ip)"),
-    "ip-mtu": (sys.argv[2], "if (plen > 1500 - IP_HDR_SIZE)", "if (plen > 1500)"),
-}
-name, old, new = changes[sys.argv[3]]
-path = pathlib.Path(name)
-source = path.read_text()
-if source.count(old) != 1:
-    raise SystemExit("network-mutation: source pattern is not unique")
-path.write_text(source.replace(old, new))
-PY
+for fault in $faults; do
+    apply_fault "$arp" "$ip" "$fault"
     test=arp
     pass='arp_hosttest: OK'
     case $fault in

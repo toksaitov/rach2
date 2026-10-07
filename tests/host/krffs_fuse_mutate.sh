@@ -4,6 +4,21 @@ set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# ring_once FILE: the check the fault removes is once in FILE.
+ring_once()
+{
+    if [ "$(grep -c 'if (!valid_node_ring(&file_system))' "$1")" -ne 1 ]; then
+        echo "krffs-fuse-mutation: the node ring check is not once in $1" >&2
+        exit 1
+    fi
+}
+
+if [ "${1:-}" = --texts ]; then
+    ring_once krffs/krffs.c
+    echo 'krffs-fuse-mutation: texts: every fault is once in its source'
+    exit 0
+fi
 mkdir -p build/tests
 work=$(mktemp -d "$repo/build/tests/krffs-fuse-proof.XXXXXX")
 child=
@@ -71,7 +86,7 @@ run_phase()
 echo "krffs-fuse-mutation: logs: $work"
 cd "$work"
 run_phase fixed
-[ "$(grep -c 'if (!valid_node_ring(&file_system))' "$source")" -eq 1 ]
+ring_once "$source"
 sed 's/if (!valid_node_ring(\&file_system))/if (0)/' "$work/krffs.saved" > "$source"
 touch "$source"
 run_phase mutated

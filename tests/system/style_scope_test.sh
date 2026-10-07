@@ -18,14 +18,17 @@
 # must fail the row named for it, and is restored and touched before every row
 # runs again.
 #
-# Usage: sh tests/system/style_scope_test.sh [--mutate]
+# --texts puts each fault into its copy and restores it, and runs no row.
+#
+# Usage: sh tests/system/style_scope_test.sh [--mutate | --texts]
 #
 set -eu
 
 case ${1:-} in
     '') mutate=0 ;;
     --mutate) mutate=1 ;;
-    *) echo 'style-scope-test: usage: style_scope_test.sh [--mutate]' >&2; exit 2 ;;
+    --texts) mutate=2 ;;
+    *) echo 'style-scope-test: usage: style_scope_test.sh [--mutate | --texts]' >&2; exit 2 ;;
 esac
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -177,10 +180,12 @@ path.write_text(text.replace(old, new))
 PY
 }
 
-rows
-[ -z "$failed" ] || exit 1
-echo "style-scope-test: result: pass: every row"
-[ "$mutate" -eq 1 ] || exit 0
+if [ "$mutate" -ne 2 ]; then
+    rows
+    [ -z "$failed" ] || exit 1
+    echo "style-scope-test: result: pass: every row"
+    [ "$mutate" -eq 1 ] || exit 0
+fi
 
 for fault in list-extensionless list-script list-vendored text-ascii text-config \
     text-diary text-code; do
@@ -192,6 +197,10 @@ for fault in list-extensionless list-script list-vendored text-ascii text-config
         text-code) copy=textcheck.sh; named=text-code-dash ;;
     esac
     change "$fault"
+    if [ "$mutate" -eq 2 ]; then
+        cp "$tree/saved/$copy" "$tree/tools/verify/$copy"
+        continue
+    fi
     touch "$tree/tools/verify/$copy"
     rows >"$work/$fault.log"
     case " $failed " in
@@ -207,4 +216,8 @@ for fault in list-extensionless list-script list-vendored text-ascii text-config
     [ -z "$failed" ] || { cat "$work/$fault.restored.log"; exit 1; }
     echo "style-scope-test: result: $fault: restored, every row passes"
 done
+if [ "$mutate" -eq 2 ]; then
+    echo 'style-scope-test: texts: every fault is once in its source'
+    exit 0
+fi
 echo "style-scope-test: result: pass: seven faults failed their rows; restored rows passed"

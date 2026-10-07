@@ -4,6 +4,40 @@
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" "$2" <<'PY'
+from pathlib import Path
+import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+path = Path(sys.argv[1])
+old, new = {
+    'owner': ('if (fb_owner_pid != current_proc->tgid &&',
+              'if (0 && fb_owner_pid != current_proc->tgid &&'),
+    'reentry': ('if (!gfx_is_active()) {', 'if (0) {'),
+}[sys.argv[2]]
+text = path.read_text()
+if text.count(old) != 1:
+    raise SystemExit('framebuffer-guest: target is not unique')
+path.write_text(text.replace(old, new))
+PY
+}
+
+faults='owner reentry'
+if [ "${1:-}" = --texts ]; then
+    for mutation in $faults; do
+        RACH2_FAULT_TEXTS=1 apply_fault rach2/sys/syscall.c "$mutation" >/dev/null || exit 1
+    done
+    echo 'framebuffer-guest: texts: every fault is once in its source'
+    exit 0
+fi
+
 RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
 REPO=$repo
 . "$repo/mk/arch.sh"
@@ -121,22 +155,9 @@ for probe in devprobe loopprobe; do
     cmp "$tree/tests/$probe" "$work/$probe.staged"
 done
 run_phase fixed pass
-for mutation in owner reentry; do
+for mutation in $faults; do
     changed=1
-    python3 - "$source" "$mutation" <<'PY'
-from pathlib import Path
-import sys
-path = Path(sys.argv[1])
-old, new = {
-    'owner': ('if (fb_owner_pid != current_proc->tgid &&',
-              'if (0 && fb_owner_pid != current_proc->tgid &&'),
-    'reentry': ('if (!gfx_is_active()) {', 'if (0) {'),
-}[sys.argv[2]]
-text = path.read_text()
-if text.count(old) != 1:
-    raise SystemExit('framebuffer-guest: target is not unique')
-path.write_text(text.replace(old, new))
-PY
+    apply_fault "$source" "$mutation"
     case "$mutation" in
         owner) detail="stale descriptor cannot release second owner's display" ;;
         reentry) detail='graphics reentry restores writable display' ;;

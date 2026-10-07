@@ -13,15 +13,18 @@
 # executable bit fails every row. With --mutate each fault below is put into
 # the copy and must fail exactly its expected rows; the copy is restored from
 # the original before each fault and before the rows run again at the end.
+# --texts puts each fault into the copy and requires only that it changes
+# the hook, and runs no row.
 #
-# Usage: sh tests/system/commit_msg_test.sh [--mutate]
+# Usage: sh tests/system/commit_msg_test.sh [--mutate | --texts]
 #
 set -u
 
 case ${1:-} in
     '') mutate=0 ;;
     --mutate) mutate=1 ;;
-    *) echo 'commit-msg-test: usage: commit_msg_test.sh [--mutate]' >&2; exit 2 ;;
+    --texts) mutate=2 ;;
+    *) echo 'commit-msg-test: usage: commit_msg_test.sh [--mutate | --texts]' >&2; exit 2 ;;
 esac
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -77,10 +80,12 @@ rows() {
     echo "$failed"
 }
 
-failed=$(rows)
-if [ -n "$failed" ]; then
-    echo "commit-msg-test: result: fail:$failed" >&2
-    exit 1
+if [ "$mutate" -ne 2 ]; then
+    failed=$(rows)
+    if [ -n "$failed" ]; then
+        echo "commit-msg-test: result: fail:$failed" >&2
+        exit 1
+    fi
 fi
 if [ "$mutate" -eq 0 ]; then
     echo 'commit-msg-test: result: pass: 10 rows'
@@ -96,6 +101,7 @@ fault() {
         echo "commit-msg-test: fault $1: its text is not in the hook" >&2
         return 1
     fi
+    [ "$mutate" -ne 2 ] || return 0
     f=$(rows 2>/dev/null)
     if [ "$f" != " $2" ]; then
         echo "commit-msg-test: fault $1: failed rows:$f; expected: $2" >&2
@@ -117,6 +123,11 @@ fault prefix verbose 's/\[^ -~]/[^[:alnum:][:space:]]/' || bad=1
 fault dash verbose 's/\^\[\[:alnum:]]\[\[:alnum:]-]\*:/^[[:alnum:]-]*:/' || bad=1
 fault indent verbose "s/-e '\\^(co-authored-by/-e '^[[:space:]]*(co-authored-by/" || bad=1
 cp "$hook.orig" "$hook" || exit 1
+if [ "$mutate" -eq 2 ]; then
+    [ "$bad" -eq 0 ] || exit 1
+    echo 'commit-msg-test: texts: every fault is once in its source'
+    exit 0
+fi
 failed=$(rows)
 if [ "$bad" -ne 0 ] || [ -n "$failed" ]; then
     echo "commit-msg-test: result: fail: mutation$failed" >&2

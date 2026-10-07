@@ -3,6 +3,97 @@
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" "$2" <<'PY'
+import pathlib
+import sys
+import os
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+p = pathlib.Path(sys.argv[1])
+s = p.read_text()
+fault = sys.argv[2]
+if fault == "frames":
+    old = "    to_read -= to_read % frame_bytes;"
+    new = "    (void)frame_bytes;"
+elif fault in ("gfx-enter", "gfx-exit", "cursor"):
+    name = {"gfx-enter": "uint8_t *fb_enter(void)",
+            "gfx-exit": "void fb_exit(void)",
+            "cursor": "void textcon_release(void)"}[fault]
+    start = s.index(name + "\n{")
+    end = s.index("\n}", start) + 2
+    old = s[start:end]
+    new = old.replace("uint32_t flags = kirq_save();", "uint32_t flags = 0;")
+    new = new.replace("kirq_restore(flags);", "(void)flags;")
+elif fault == "setup-speaker":
+    old = "        goto fail;\n    }\n\n    /* Silence both halves:"
+    new = "        (void)0;\n    }\n\n    /* Silence both halves:"
+elif fault == "setup-transfer":
+    old = "    return dsp_write(dsp_cmd) && dsp_write(mode) && dsp_write(block_size & 0xFF) &&\n" \
+          "           dsp_write((block_size >> 8) & 0xFF);"
+    new = "    dsp_write(dsp_cmd);\n    dsp_write(mode);\n" \
+          "    dsp_write(block_size & 0xFF);\n" \
+          "    dsp_write((block_size >> 8) & 0xFF);\n    return true;"
+elif fault == "setup-dma":
+    old = "        return false;\n    }\n\n    /* DSP 4.xx auto-init:"
+    new = "        (void)0;\n    }\n\n    /* DSP 4.xx auto-init:"
+elif fault == "callback":
+    old = "    if (user_callback) {\n" \
+          "        user_callback(fill_buffer, SB16_BUFFER_SIZE);\n" \
+          "    } else {\n" \
+          "        ring_read_to_buffer(fill_buffer, SB16_BUFFER_SIZE);\n    }"
+    new = "    ring_read_to_buffer(fill_buffer, SB16_BUFFER_SIZE);"
+elif fault == "scale":
+    old = "    if (audio->type == AUDIO_DRIVER_SB16) {\n" \
+          "        sample_rate = 44100;\n    }"
+    new = ""
+else:
+    raise SystemExit("driver-mutation: unknown fault")
+if s.count(old) != 1:
+    raise SystemExit("driver-mutation: source pattern is not unique")
+p.write_text(s.replace(old, new))
+PY
+}
+
+# select_fault FAULT: the test, the source under rach2/sys and the failure
+# its row prints for FAULT.
+select_fault()
+{
+    argument=
+    case "$1" in
+        frames) test=sb16; file=audio/sb16.c; argument=frames
+            failure='partial frame stays queued' ;;
+        setup-speaker) test=sb16; file=audio/sb16.c; argument=setup
+            failure='failed setup does not start dma early' ;;
+        setup-*) test=sb16; file=audio/sb16.c; argument=setup
+            failure='failed setup returns failure' ;;
+        callback) test=sb16; file=audio/sb16.c
+            failure='callback continues after priming' ;;
+        scale) test=sb16; file=audio/audio_debug.c
+            failure='sb16 scale selects 44100 hz' ;;
+        gfx-enter|gfx-exit) test=vga_gfx; file=display/vga_gfx.c
+            failure='programs maximum scan line\|text clear excludes interrupts' ;;
+        cursor) test=vga_text; file=display/vga_text.c
+            failure='echo leaves cursor at 0x0100' ;;
+        *) echo "driver-mutation: unknown fault: $1" >&2; exit 1 ;;
+    esac
+}
+
+faults='frames gfx-enter gfx-exit setup-speaker setup-transfer setup-dma scale
+    callback cursor'
+if [ "${1:-}" = --texts ]; then
+    for fault in $faults; do
+        select_fault "$fault"
+        RACH2_FAULT_TEXTS=1 apply_fault "rach2/sys/$file" "$fault" >/dev/null || exit 1
+    done
+    echo 'driver-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
 mkdir -p build/review-proof
 work=$(mktemp -d "$repo/build/review-proof/drivers.XXXXXX")
 child=
@@ -59,77 +150,16 @@ run_phase()
 }
 
 if [ "$#" -eq 0 ]; then
-    set -- frames gfx-enter gfx-exit setup-speaker setup-transfer setup-dma scale callback cursor
+    # shellcheck disable=SC2086 # the faults are separate words
+    set -- $faults
 fi
 echo "driver-mutation: logs: $work"
 for fault do
-    argument=
-    case "$fault" in
-        frames) test=sb16; file=audio/sb16.c; argument=frames
-            failure='partial frame stays queued' ;;
-        setup-speaker) test=sb16; file=audio/sb16.c; argument=setup
-            failure='failed setup does not start dma early' ;;
-        setup-*) test=sb16; file=audio/sb16.c; argument=setup
-            failure='failed setup returns failure' ;;
-        callback) test=sb16; file=audio/sb16.c
-            failure='callback continues after priming' ;;
-        scale) test=sb16; file=audio/audio_debug.c
-            failure='sb16 scale selects 44100 hz' ;;
-        gfx-enter|gfx-exit) test=vga_gfx; file=display/vga_gfx.c
-            failure='programs maximum scan line\|text clear excludes interrupts' ;;
-        cursor) test=vga_text; file=display/vga_text.c
-            failure='echo leaves cursor at 0x0100' ;;
-        *) echo "driver-mutation: unknown fault: $fault" >&2; exit 1 ;;
-    esac
+    select_fault "$fault"
     source="$work/sys/$file"
     cp "$source" "$work/saved.c"
     run_phase fixed
-    python3 - "$source" "$fault" <<'PY'
-import pathlib
-import sys
-p = pathlib.Path(sys.argv[1])
-s = p.read_text()
-fault = sys.argv[2]
-if fault == "frames":
-    old = "    to_read -= to_read % frame_bytes;"
-    new = "    (void)frame_bytes;"
-elif fault in ("gfx-enter", "gfx-exit", "cursor"):
-    name = {"gfx-enter": "uint8_t *fb_enter(void)",
-            "gfx-exit": "void fb_exit(void)",
-            "cursor": "void textcon_release(void)"}[fault]
-    start = s.index(name + "\n{")
-    end = s.index("\n}", start) + 2
-    old = s[start:end]
-    new = old.replace("uint32_t flags = kirq_save();", "uint32_t flags = 0;")
-    new = new.replace("kirq_restore(flags);", "(void)flags;")
-elif fault == "setup-speaker":
-    old = "        goto fail;\n    }\n\n    /* Silence both halves:"
-    new = "        (void)0;\n    }\n\n    /* Silence both halves:"
-elif fault == "setup-transfer":
-    old = "    return dsp_write(dsp_cmd) && dsp_write(mode) && dsp_write(block_size & 0xFF) &&\n" \
-          "           dsp_write((block_size >> 8) & 0xFF);"
-    new = "    dsp_write(dsp_cmd);\n    dsp_write(mode);\n" \
-          "    dsp_write(block_size & 0xFF);\n" \
-          "    dsp_write((block_size >> 8) & 0xFF);\n    return true;"
-elif fault == "setup-dma":
-    old = "        return false;\n    }\n\n    /* DSP 4.xx auto-init:"
-    new = "        (void)0;\n    }\n\n    /* DSP 4.xx auto-init:"
-elif fault == "callback":
-    old = "    if (user_callback) {\n" \
-          "        user_callback(fill_buffer, SB16_BUFFER_SIZE);\n" \
-          "    } else {\n" \
-          "        ring_read_to_buffer(fill_buffer, SB16_BUFFER_SIZE);\n    }"
-    new = "    ring_read_to_buffer(fill_buffer, SB16_BUFFER_SIZE);"
-elif fault == "scale":
-    old = "    if (audio->type == AUDIO_DRIVER_SB16) {\n" \
-          "        sample_rate = 44100;\n    }"
-    new = ""
-else:
-    raise SystemExit("driver-mutation: unknown fault")
-if s.count(old) != 1:
-    raise SystemExit("driver-mutation: source pattern is not unique")
-p.write_text(s.replace(old, new))
-PY
+    apply_fault "$source" "$fault"
     run_phase mutated
     restore
     run_phase restored

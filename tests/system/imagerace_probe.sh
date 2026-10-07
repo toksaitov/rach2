@@ -11,8 +11,30 @@ cd "$repo"
 case ${1:-} in
     '') mutate=0 ;;
     --mutate) mutate=1 ;;
-    *) echo 'imagerace-probe: usage: [--mutate]' >&2; exit 2 ;;
+    --texts) mutate=2 ;;
+    *) echo 'imagerace-probe: usage: [--mutate | --texts]' >&2; exit 2 ;;
 esac
+
+# drop_delegation MAKEFILE: print MAKEFILE without the rule that hands the
+# musl programs to tests/Makefile, the fault; fail unless the rule is there
+# once.
+drop_delegation()
+{
+    awk '
+        /^\$\(filter-out \$\(ARCH_BUILD\)\/tests\/musl\/%.*: tests$/ { found++; skip = 1; next }
+        skip && /^\t/ { next }
+        { skip = 0; print }
+        END { if (found != 1) exit 1 }
+    ' "$1"
+}
+
+if [ "$mutate" -eq 2 ]; then
+    drop_delegation Makefile >/dev/null || {
+        echo 'imagerace-probe: the delegation rule is not once in Makefile' >&2; exit 1;
+    }
+    echo 'imagerace-probe: texts: every fault is once in its source'
+    exit 0
+fi
 mkdir -p build/tests/system
 work=$(mktemp -d "$repo/build/tests/system/imagerace-probe.XXXXXX")
 tree=$work/tree
@@ -127,12 +149,7 @@ check_phase()
 
 check_phase fixed || exit 1
 if [ "$mutate" -eq 1 ]; then
-    awk '
-        /^\$\(filter-out \$\(ARCH_BUILD\)\/tests\/musl\/%.*: tests$/ { found++; skip = 1; next }
-        skip && /^\t/ { next }
-        { skip = 0; print }
-        END { if (found != 1) exit 1 }
-    ' "$work/Makefile.saved" > "$tree/Makefile" || fail 'delegation rule not found'
+    drop_delegation "$work/Makefile.saved" > "$tree/Makefile" || fail 'delegation rule not found'
     touch "$tree/Makefile"
     if check_phase mutated; then
         fail 'the removed delegation rule was not detected'

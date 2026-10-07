@@ -5,6 +5,63 @@ set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" "$2" <<'PY'
+from pathlib import Path
+import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+path = Path(sys.argv[1])
+text = path.read_text()
+start = text.index('int bcache_invalidate(block_device_t *dev)')
+old = '''        if (b->dev == dev) {
+            make_empty(b);
+        }'''
+new = '''        if (b->dev == dev) {
+            uint32_t at, match;
+            int witness = 0;
+
+            for (at = 0; at + 15 <= b->bytes; at += BLOCK_SECTOR_SIZE) {
+                for (match = 0; match < 15 &&
+                     b->data[at + match] == (uint8_t)"fat acceptance "[match]; match++) {
+                }
+                if (match == 15) {
+                    b->data[at] = 'x';
+                    if (block_request(dev, 1, b->blk * BCACHE_BLOCK_SECTORS,
+                                      b->bytes / BLOCK_SECTOR_SIZE, b->data) != 0) {
+                        return -EIO;
+                    }
+                    b->data[at] = 'f';
+                    witness = 1;
+                    klog(KLOG_WARN, "bcache", "mutation: FAT witness changed");
+                }
+            }
+            if (!witness || DROP_WITNESS) {
+                make_empty(b);
+            }
+        }'''
+new = new.replace('DROP_WITNESS', '1' if sys.argv[2] == 'disk' else '0')
+assert text[start:].count(old) == 1
+path.write_text(text[:start] + text[start:].replace(old, new))
+PY
+}
+
+faults='disk cached'
+if [ "${1:-}" = --texts ]; then
+    for fault in $faults; do
+        RACH2_FAULT_TEXTS=1 apply_fault rach2/sys/fs/bcache.c "$fault" >/dev/null || exit 1
+    done
+    echo 'metal-fat-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
 RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
 REPO=$repo
 . "$repo/mk/arch.sh"
@@ -108,45 +165,9 @@ echo "metal-fat-mutation: logs: $work"
     tests/system/runner/runutil.c > "$work/helper.build.log" 2>&1
 cat "$work/helper.build.log"
 run_phase fixed pass
-for fault in disk cached; do
+for fault in $faults; do
     changed=1
-    python3 - "$source" "$fault" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-text = path.read_text()
-start = text.index('int bcache_invalidate(block_device_t *dev)')
-old = '''        if (b->dev == dev) {
-            make_empty(b);
-        }'''
-new = '''        if (b->dev == dev) {
-            uint32_t at, match;
-            int witness = 0;
-
-            for (at = 0; at + 15 <= b->bytes; at += BLOCK_SECTOR_SIZE) {
-                for (match = 0; match < 15 &&
-                     b->data[at + match] == (uint8_t)"fat acceptance "[match]; match++) {
-                }
-                if (match == 15) {
-                    b->data[at] = 'x';
-                    if (block_request(dev, 1, b->blk * BCACHE_BLOCK_SECTORS,
-                                      b->bytes / BLOCK_SECTOR_SIZE, b->data) != 0) {
-                        return -EIO;
-                    }
-                    b->data[at] = 'f';
-                    witness = 1;
-                    klog(KLOG_WARN, "bcache", "mutation: FAT witness changed");
-                }
-            }
-            if (!witness || DROP_WITNESS) {
-                make_empty(b);
-            }
-        }'''
-new = new.replace('DROP_WITNESS', '1' if sys.argv[2] == 'disk' else '0')
-assert text[start:].count(old) == 1
-path.write_text(text[:start] + text[start:].replace(old, new))
-PY
+    apply_fault "$source" "$fault"
     rebuild > "$work/$fault.build.log" 2>&1
     cat "$work/$fault.build.log"
     if cmp -s "$work/fixed.kernel" "$tree"/rach2-metal/kernel; then

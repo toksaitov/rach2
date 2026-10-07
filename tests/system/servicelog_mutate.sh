@@ -2,7 +2,7 @@
 # Prove the service log suite with inits built from a private copy, on the
 # kernel, programs and emulator of the architecture ARCH names.
 #
-# Usage: sh tests/system/servicelog_mutate.sh
+# Usage: sh tests/system/servicelog_mutate.sh [--texts]
 #
 # tests/system/suites/servicelog.sh boots a root whose init is init-shell and
 # requires the log its services write to be emptied within the boot once it
@@ -23,6 +23,52 @@ REPO=$repo
 RACH2_QEMU=$ARCH_QEMU
 export RACH2_QEMU ARCH_BUILD
 abuild=build$ARCH_SUFFIX
+texts=
+[ "${1:-}" != --texts ] || texts=1
+# Change the private init.c where the old text occurs exactly once.
+mutate()
+{
+    changed=1
+    python3 - "$source" "$1" "$2" <<'PY'
+import pathlib
+import os
+import sys
+
+path, old, new = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+text = path.read_text()
+if text.count(old) != 1:
+    raise SystemExit("servicelog-mutation: pattern is not unique: " + old)
+if not os.environ.get('RACH2_FAULT_TEXTS'):
+    path.write_text(text.replace(old, new))
+PY
+    touch "$source"
+}
+
+# log_fault NAME: put the fault whose failing phase is NAME into its source.
+log_fault()
+{
+    case $1 in
+        bound-removed)
+            mutate '    if (st.st_size < SERVICE_LOG_CAP) {' '    if (st.st_size >= 0) {'
+            ;;
+        removal-removed)
+            mutate '    if (stat(SERVICE_LOG, &st) == 0 && st.st_size >= SERVICE_LOG_CAP) {' \
+                '    if (0 && stat(SERVICE_LOG, &st) == 0 && st.st_size >= SERVICE_LOG_CAP) {'
+            ;;
+    esac
+}
+
+if [ -n "$texts" ]; then
+    source=utils/init.c
+    RACH2_FAULT_TEXTS=1
+    export RACH2_FAULT_TEXTS
+    for name in bound-removed removal-removed; do
+        log_fault "$name"
+    done
+    echo 'servicelog-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
 . "$repo/tests/system/runlock.sh"
 runlock_hold "$repo" servicelog-mutation "$repo/tests/system/servicelog_mutate.sh" "$@"
 mkdir -p build
@@ -62,23 +108,6 @@ trap cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
-
-# Change the private init.c where the old text occurs exactly once.
-mutate()
-{
-    changed=1
-    python3 - "$source" "$1" "$2" <<'PY'
-import pathlib
-import sys
-
-path, old, new = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
-text = path.read_text()
-if text.count(old) != 1:
-    raise SystemExit("servicelog-mutation: pattern is not unique: " + old)
-path.write_text(text.replace(old, new))
-PY
-    touch "$source"
-}
 
 run_phase()
 {
@@ -132,14 +161,13 @@ cp "$source" "$work/init.saved"
 passed='servicelog-test: PASS'
 run_phase fixed pass "$passed"
 
-mutate '    if (st.st_size < SERVICE_LOG_CAP) {' '    if (st.st_size >= 0) {'
+log_fault bound-removed
 run_phase bound-removed fail 'servicelog-test: FAIL: the log was not emptied within the boot'
 restore
 run_phase bound-restored pass "$passed"
 cmp "$work/fixed.init" "$work/bound-restored.init"
 
-mutate '    if (stat(SERVICE_LOG, &st) == 0 && st.st_size >= SERVICE_LOG_CAP) {' \
-    '    if (0 && stat(SERVICE_LOG, &st) == 0 && st.st_size >= SERVICE_LOG_CAP) {'
+log_fault removal-removed
 run_phase removal-removed fail 'servicelog-test: FAIL: the log the boot before left full was not removed'
 restore
 run_phase removal-restored pass "$passed"

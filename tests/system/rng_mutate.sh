@@ -3,6 +3,22 @@
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# rc_once FILE: the operand the fault changes is once in FILE.
+rc_once()
+{
+    if [ "$(grep -c '"+c"(rc)' "$1")" -ne 1 ]; then
+        echo "rng-mutation: the cpuid operand is not once in $1" >&2
+        exit 1
+    fi
+}
+
+if [ "${1:-}" = --texts ]; then
+    rc_once rach2/sys/arch/x86/kcpu.c
+    echo 'rng-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
 . "$repo/tests/system/runlock.sh"
 runlock_hold "$repo" rng-mutation "$repo/tests/system/rng_mutate.sh" "$@"
 # The architecture, from ARCH as mk/arch.sh reads it: its compiler, its text
@@ -77,7 +93,7 @@ run_phase()
 }
 echo "rng-mutation: logs: $work"
 run_phase fixed
-[ "$(grep -c '\"+c\"(rc)' "$source")" -eq 1 ]
+rc_once "$source"
 sed 's/"+c"(rc)/"=c"(rc)/' "$work/saved.c" > "$source"
 run_phase mutated
 restore

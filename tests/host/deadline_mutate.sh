@@ -2,7 +2,7 @@
 # Prove the host rows on wait deadlines, the timer's tick and the kinds of
 # change a wake counts with faults in a private kernel tree.
 #
-# Usage: sh tests/host/deadline_mutate.sh
+# Usage: sh tests/host/deadline_mutate.sh [--texts]
 #
 # wait_queue_hosttest requires a wait that a wake does not end to arm the
 # caller's deadline again before it blocks again (entry 217), and a wake to be
@@ -27,17 +27,23 @@
 # rach2/sys as it is, where it must pass; with each fault below, where it must
 # fail every row the fault names; and restored, touched and compiled again,
 # where it must pass. The trap stops the test before it restores the source.
+# --texts checks that each fault's lines are once in the tree's source, and
+# builds and runs nothing.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
-mkdir -p build
-work=$(mktemp -d "$repo/build/deadline-proof.XXXXXX")
-mkdir "$work/sys"
-cp -R rach2/sys/. "$work/sys/"
+texts=
+[ "${1:-}" != --texts ] || texts=1
 sources='proc/wait_queue.c io/poll.c proc/process.c'
-for source in $sources; do
-    cp "$work/sys/$source" "$work/$(basename "$source").saved"
-done
+if [ -z "$texts" ]; then
+    mkdir -p build
+    work=$(mktemp -d "$repo/build/deadline-proof.XXXXXX")
+    mkdir "$work/sys"
+    cp -R rach2/sys/. "$work/sys/"
+    for source in $sources; do
+        cp "$work/sys/$source" "$work/$(basename "$source").saved"
+    done
+fi
 child=
 
 restore()
@@ -127,6 +133,7 @@ fault()
 {
     python3 - "$work/sys/$1" "$2" "$3" <<'PYTHON'
 from pathlib import Path
+import os
 import sys
 
 path = Path(sys.argv[1])
@@ -134,7 +141,8 @@ text = path.read_text()
 old, new = sys.argv[2] + '\n', sys.argv[3] + '\n'
 if text.count(old) != 1:
     raise SystemExit('deadline-mutation: the lines to change are not unique: ' + sys.argv[2])
-path.write_text(text.replace(old, new))
+if not os.environ.get('RACH2_FAULT_TEXTS'):
+    path.write_text(text.replace(old, new))
 PYTHON
 }
 
@@ -148,7 +156,15 @@ prove()
     run_phase "$1-restored" "$2" pass ''
 }
 
-echo "deadline-mutation: logs: $work"
+if [ -n "$texts" ]; then
+    work=rach2
+    run_phase() { :; }
+    restore() { :; }
+    RACH2_FAULT_TEXTS=1
+    export RACH2_FAULT_TEXTS
+else
+    echo "deadline-mutation: logs: $work"
+fi
 run_phase wait-fixed wait_queue_hosttest pass ''
 run_phase poll-fixed poll_deadline_hosttest pass ''
 run_phase tick-fixed process_timer_hosttest pass ''
@@ -333,6 +349,10 @@ prove tick-alarm-wrap process_timer_hosttest proc/process.c \
     '        if (p->alarm_tick != 0 && now >= p->alarm_tick) {' \
     'a timer and a sleeper due past the wrap wait for it'
 
+if [ -n "$texts" ]; then
+    echo 'deadline-mutation: texts: every fault is once in its source'
+    exit 0
+fi
 for source in $sources; do
     cmp "$work/$(basename "$source").saved" "$work/sys/$source"
 done

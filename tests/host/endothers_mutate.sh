@@ -6,7 +6,7 @@
 # from a private copy of rach2/sys/syscall_proc.c and compiled under ASan and
 # UBSan in tests/host/fixtures/endothers.c.
 #
-# Usage: endothers_mutate.sh [--check]
+# Usage: endothers_mutate.sh [--check | --texts]
 # With --check it compiles and runs the source as it is, which is what the
 # host suite does; without, it also compiles each fault in, requires its row
 # to fail, and requires the restored source to pass again. The faults are
@@ -17,6 +17,47 @@
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" "$2" <<'PY'
+from pathlib import Path
+import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+path = Path(sys.argv[1])
+text = path.read_text()
+count = '                alive += p->in_syscall != 0 && p->state != PROC_UNUSED;\n'
+changes = {
+    'ending-passed': '',
+    'unused-waited': '                alive += p->in_syscall != 0;\n',
+    'kthread-waited': '                alive += p->state != PROC_UNUSED;\n',
+}
+if sys.argv[2] == 'held':
+    count, changes['held'] = '        idle_wait_irq_on();\n', '        if (0) {\n            idle_wait_irq_on();\n        }\n'
+start = text.index('static void proc_end_others(void)\n{')
+end = text.index('\n}\n', start)
+body = text[start:end]
+if body.count(count) != 1:
+    raise SystemExit('endothers-proof: the fault is not unique in its function: ' + sys.argv[2])
+path.write_text(text[:start] + body.replace(count, changes[sys.argv[2]]) + text[end:])
+PY
+}
+
+faults='ending-passed unused-waited kthread-waited held'
+if [ "${1:-}" = --texts ]; then
+    for fault in $faults; do
+        RACH2_FAULT_TEXTS=1 apply_fault rach2/sys/syscall_proc.c "$fault" >/dev/null || exit 1
+    done
+    echo 'endothers-proof: texts: every fault is once in its source'
+    exit 0
+fi
+
 [ "$#" -eq 0 ] || [ "$*" = --check ] || {
     echo 'endothers-proof: usage: endothers_mutate.sh [--check]' >&2
     exit 2
@@ -101,28 +142,8 @@ PY
 echo "endothers-proof: logs: $work"
 run_phase fixed 0 'endothers-proof: result: pass:'
 [ "$#" -eq 0 ] || exit 0
-for fault in ending-passed unused-waited kthread-waited held; do
-    python3 - "$work/syscall_proc.c" "$fault" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-text = path.read_text()
-count = '                alive += p->in_syscall != 0 && p->state != PROC_UNUSED;\n'
-changes = {
-    'ending-passed': '',
-    'unused-waited': '                alive += p->in_syscall != 0;\n',
-    'kthread-waited': '                alive += p->state != PROC_UNUSED;\n',
-}
-if sys.argv[2] == 'held':
-    count, changes['held'] = '        idle_wait_irq_on();\n', '        if (0) {\n            idle_wait_irq_on();\n        }\n'
-start = text.index('static void proc_end_others(void)\n{')
-end = text.index('\n}\n', start)
-body = text[start:end]
-if body.count(count) != 1:
-    raise SystemExit('endothers-proof: the fault is not unique in its function: ' + sys.argv[2])
-path.write_text(text[:start] + body.replace(count, changes[sys.argv[2]]) + text[end:])
-PY
+for fault in $faults; do
+    apply_fault "$work/syscall_proc.c" "$fault"
     touch "$work/syscall_proc.c"
     case $fault in
         ending-passed)

@@ -7,6 +7,49 @@
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" <<'PY'
+import pathlib
+import sys
+import os
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+path = pathlib.Path(sys.argv[1])
+source = path.read_text()
+before = '''        if (current_proc->state == PROC_BLOCKED) {
+            idle_wait_irq_off();
+        }
+        for (i = 0; i < n; i++) {
+            wq_poll_remove(wqs[i], &recs[i]);
+        }
+'''
+after = '''        for (i = 0; i < n; i++) {
+            wq_poll_remove(wqs[i], &recs[i]);
+        }
+        if (current_proc->state == PROC_BLOCKED) {
+            idle_wait_irq_off();
+        }
+'''
+if source.count(before) != 1:
+    sys.exit("poll-kernels: the poll block no longer matches")
+path.write_text(source.replace(before, after))
+PY
+}
+
+if [ "${1:-}" = --texts ]; then
+    RACH2_FAULT_TEXTS=1
+    export RACH2_FAULT_TEXTS
+    apply_fault rach2/sys/io/poll.c >/dev/null
+    echo 'poll-kernels: texts: every fault is once in its source'
+    exit 0
+fi
+
+
 . "$repo/tests/system/runlock.sh"
 runlock_hold "$repo" poll-kernels "$repo/tools/dev/poll_kernels.sh" "$@"
 RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
@@ -72,30 +115,7 @@ echo "poll-kernels: artifacts: $work"
 git rev-parse HEAD > "$work/base.commit"
 git diff --binary > "$work/working.diff"
 build poll-after-halt
-python3 - "$poll" <<'PY'
-import pathlib
-import sys
-
-path = pathlib.Path(sys.argv[1])
-source = path.read_text()
-before = '''        if (current_proc->state == PROC_BLOCKED) {
-            idle_wait_irq_off();
-        }
-        for (i = 0; i < n; i++) {
-            wq_poll_remove(wqs[i], &recs[i]);
-        }
-'''
-after = '''        for (i = 0; i < n; i++) {
-            wq_poll_remove(wqs[i], &recs[i]);
-        }
-        if (current_proc->state == PROC_BLOCKED) {
-            idle_wait_irq_off();
-        }
-'''
-if source.count(before) != 1:
-    sys.exit("poll-kernels: the poll block no longer matches")
-path.write_text(source.replace(before, after))
-PY
+apply_fault "$poll"
 touch "$poll"
 cp "$poll" "$work/poll.before-halt.c"
 diff -u "$work/poll.saved" "$poll" > "$work/poll-order.diff" || [ "$?" -eq 1 ]

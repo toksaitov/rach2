@@ -3,6 +3,82 @@
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_unchecked_read ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_unchecked_read()
+{
+    python3 - "$1" <<'PY'
+import pathlib
+import sys
+import os
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+path = pathlib.Path(sys.argv[1])
+source = path.read_text()
+before = '''    if (read(fd, sector, sizeof(sector)) != (ssize_t)sizeof(sector)) {
+        close(fd);
+        return fail(dev, "the first sector did not read; nothing written");
+    }
+    {
+'''
+after = '''    if (read(fd, sector, sizeof(sector)) == (ssize_t)sizeof(sector)) {
+'''
+write = '''    e = sector + MBR_ENTRIES + 16 * (entry - 1);
+'''
+reread = '''    if (lseek(fd, 0, SEEK_SET) != 0 ||
+        read(fd, sector, sizeof(sector)) != (ssize_t)sizeof(sector)) {
+        close(fd);
+        return fail(dev, "the first sector did not read");
+    }
+'''
+if source.count(before) != 1 or source.count(write) != 1:
+    sys.exit("growroot-mutation: the writer block no longer matches")
+path.write_text(source.replace(before, after).replace(write, reread + write))
+PY
+}
+
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" "$2" <<'PYTHON'
+import pathlib
+import sys
+import os
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+path = pathlib.Path(sys.argv[1])
+source = path.read_text()
+if sys.argv[2] == "zero":
+    before = '    printf("growroot: measure:'
+    after = '    us = commands = flushes = 0;\n' + before
+else:
+    before = '    rc = run(tool, arg, part_node);\n'
+    marker = '    if (measured(phase, "after")) {\n        return -2;\n    }\n'
+    if source.count(marker) != 1:
+        sys.exit("growroot-mutation: measurement block no longer matches")
+    before += marker
+    after = marker + '    rc = run(tool, arg, part_node);\n'
+if source.count(before) != 1:
+    sys.exit("growroot-mutation: source no longer matches")
+path.write_text(source.replace(before, after))
+PYTHON
+}
+
+faults='zero attribution'
+if [ "${1:-}" = --texts ]; then
+    RACH2_FAULT_TEXTS=1 apply_unchecked_read utils/growroot.c >/dev/null || exit 1
+    for mutation in $faults; do
+        RACH2_FAULT_TEXTS=1 apply_fault utils/growroot.c "$mutation" >/dev/null || exit 1
+    done
+    echo 'growroot-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-growroot.XXXXXX")
 cp utils/growroot.c "$work/growroot.saved"
 cp "$work/growroot.saved" "$work/growroot.c"
@@ -56,59 +132,15 @@ run_phase()
 
 echo "growroot-mutation: logs: $work"
 run_phase fixed
-python3 - "$work/growroot.c" <<'PY'
-import pathlib
-import sys
-
-path = pathlib.Path(sys.argv[1])
-source = path.read_text()
-before = '''    if (read(fd, sector, sizeof(sector)) != (ssize_t)sizeof(sector)) {
-        close(fd);
-        return fail(dev, "the first sector did not read; nothing written");
-    }
-    {
-'''
-after = '''    if (read(fd, sector, sizeof(sector)) == (ssize_t)sizeof(sector)) {
-'''
-write = '''    e = sector + MBR_ENTRIES + 16 * (entry - 1);
-'''
-reread = '''    if (lseek(fd, 0, SEEK_SET) != 0 ||
-        read(fd, sector, sizeof(sector)) != (ssize_t)sizeof(sector)) {
-        close(fd);
-        return fail(dev, "the first sector did not read");
-    }
-'''
-if source.count(before) != 1 or source.count(write) != 1:
-    sys.exit("growroot-mutation: the writer block no longer matches")
-path.write_text(source.replace(before, after).replace(write, reread + write))
-PY
+apply_unchecked_read "$work/growroot.c"
 touch "$work/growroot.c"
 run_phase mutated
 cleanup
 run_phase restored
 cmp "$work/growroot.saved" "$work/growroot.c"
 
-for mutation in zero attribution; do
-    python3 - "$work/growroot.c" "$mutation" <<'PYTHON'
-import pathlib
-import sys
-
-path = pathlib.Path(sys.argv[1])
-source = path.read_text()
-if sys.argv[2] == "zero":
-    before = '    printf("growroot: measure:'
-    after = '    us = commands = flushes = 0;\n' + before
-else:
-    before = '    rc = run(tool, arg, part_node);\n'
-    marker = '    if (measured(phase, "after")) {\n        return -2;\n    }\n'
-    if source.count(marker) != 1:
-        sys.exit("growroot-mutation: measurement block no longer matches")
-    before += marker
-    after = marker + '    rc = run(tool, arg, part_node);\n'
-if source.count(before) != 1:
-    sys.exit("growroot-mutation: source no longer matches")
-path.write_text(source.replace(before, after))
-PYTHON
+for mutation in $faults; do
+    apply_fault "$work/growroot.c" "$mutation"
     run_phase "$mutation"
     cleanup
     run_phase "restored-$mutation"

@@ -4,6 +4,49 @@ set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" "$2" <<'PY'
+from pathlib import Path
+import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+path = Path(sys.argv[1])
+source = path.read_text()
+start = source.index('static int ata_write_on(')
+end = source.index('\n}', start) + 2
+body = source[start:end]
+command = 'if (!ata_command(ch, d->lba48 ? ATA_CMD_FLUSH_EXT : ATA_CMD_FLUSH))'
+if body.count(command) != 1:
+    raise SystemExit('ata-durable-mutation: flush command pattern is not unique')
+if sys.argv[2] == 'command':
+    body = body.replace(command, 'if (0)')
+else:
+    split = body.index(command)
+    prefix, suffix = body[:split], body[split:]
+    wait = 'if (ata_wait_ready(ch) != 0)'
+    if suffix.count(wait) != 1:
+        raise SystemExit('ata-durable-mutation: flush wait pattern is not unique')
+    body = prefix + suffix.replace(wait, 'if (0)')
+path.write_text(source[:start] + body + source[end:])
+PY
+}
+
+faults='command wait'
+if [ "${1:-}" = --texts ]; then
+    for fault in $faults; do
+        RACH2_FAULT_TEXTS=1 apply_fault rach2/sys/block/ata.c "$fault" >/dev/null || exit 1
+    done
+    echo 'ata-durable-proof: texts: every fault is once in its source'
+    exit 0
+fi
+
 mkdir -p build/tests
 work=$(mktemp -d "$repo/build/tests/ata-durable-proof.XXXXXX")
 mkdir -p "$work/rach2" "$work/tests/host"
@@ -63,30 +106,8 @@ run_phase()
 
 echo "ata-durable-mutation: logs: $work"
 run_phase fixed 0 'ata-test: OK'
-for fault in command wait; do
-    python3 - "$source" "$fault" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-source = path.read_text()
-start = source.index('static int ata_write_on(')
-end = source.index('\n}', start) + 2
-body = source[start:end]
-command = 'if (!ata_command(ch, d->lba48 ? ATA_CMD_FLUSH_EXT : ATA_CMD_FLUSH))'
-if body.count(command) != 1:
-    raise SystemExit('ata-durable-mutation: flush command pattern is not unique')
-if sys.argv[2] == 'command':
-    body = body.replace(command, 'if (0)')
-else:
-    split = body.index(command)
-    prefix, suffix = body[:split], body[split:]
-    wait = 'if (ata_wait_ready(ch) != 0)'
-    if suffix.count(wait) != 1:
-        raise SystemExit('ata-durable-mutation: flush wait pattern is not unique')
-    body = prefix + suffix.replace(wait, 'if (0)')
-path.write_text(source[:start] + body + source[end:])
-PY
+for fault in $faults; do
+    apply_fault "$source" "$fault"
     run_phase "$fault-mutated" 1 'ata-test: fail: a returned write is durable before power loss'
     cmp "$source" "$work/source.saved"
     run_phase "$fault-restored" 0 'ata-test: OK'

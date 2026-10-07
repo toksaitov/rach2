@@ -6,6 +6,71 @@ set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" "$2" <<'PY'
+import pathlib
+import sys
+import os
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+path = pathlib.Path(sys.argv[1])
+source = path.read_text()
+if sys.argv[2] == "order":
+    start = source.index('    if (file_write_sector(bs, &bs->fallback, 0, head)')
+    end = source.index('    return 0;', start)
+    final = source[start:end]
+    source = source[:start] + source[end:]
+    before = '    for (s = 1; s < nsectors; s++) {\n'
+    after = final + before
+elif sys.argv[2] == "policy":
+    before = '''    if (ro && !rw) {
+        return fail(err, errlen,
+                    "the image is the read-only disk build, which cannot mount a disk root");
+    }
+'''
+    after = ''
+elif sys.argv[2] == "bound":
+    before = '''        if (p_memsz > 0xFFFFFFFFu - p_vaddr) {
+            return fail(err, errlen, "a load leaves the 32-bit address space");
+        }
+'''
+    after = ''
+else:
+    before, after = {
+        "mb2": ('return fail(err, errlen, "no multiboot2 header in the first 8192 bytes");',
+                'return policy_judged(image, present, size, err, errlen);'),
+        "padded": ('return fail(err, errlen, "the load runs to the end of the file, which the slot pads");',
+                   'load_end = load_addr + (size - file_start);'),
+        "search": ('search = present < MULTIBOOT_SEARCH ? present : MULTIBOOT_SEARCH;',
+                   'search = present;'),
+        "chain": ('return len == size / cluster_bytes + (size % cluster_bytes != 0 ? 1u : 0u);',
+                  'return size <= len * cluster_bytes && len * cluster_bytes - size < cluster_bytes;'),
+        "tags": ('} else if (type != 4 && type != 5 && (le16(h + at + 2) & 1u) == 0) {',
+                 '} else if (0) {'),
+        "tagend": ('if (at > len || len - at < 8) {', 'if (len - at < 8) {'),
+        "x86tags": ('if (x86_64 && address == 0) {', 'if (x86_64 < 0 && address == 0) {'),
+        "pair": ('if ((address != 0) != (entry != 0)) {', 'if (0) {'),
+    }[sys.argv[2]]
+if source.count(before) != 1:
+    raise SystemExit("bootslot-mutation: source pattern is not unique")
+path.write_text(source.replace(before, after))
+PY
+}
+
+faults='order bound policy mb2 padded search chain tags tagend x86tags pair'
+if [ "${1:-}" = --texts ]; then
+    for fault in $faults; do
+        RACH2_FAULT_TEXTS=1 apply_fault utils/bootslot.c "$fault" >/dev/null || exit 1
+    done
+    echo 'bootslot-proof: texts: every fault is once in its source'
+    exit 0
+fi
+
 mkdir -p build/tests
 work=$(mktemp -d "$repo/build/tests/bootslot-proof.XXXXXX")
 child=
@@ -56,53 +121,8 @@ run_phase()
 
 echo "bootslot-mutation: logs: $work"
 run_phase fixed 0 'bootslot-hosttest: result: pass:'
-for fault in order bound policy mb2 padded search chain tags tagend x86tags pair; do
-    python3 - "$work/bootslot.c" "$fault" <<'PY'
-import pathlib
-import sys
-
-path = pathlib.Path(sys.argv[1])
-source = path.read_text()
-if sys.argv[2] == "order":
-    start = source.index('    if (file_write_sector(bs, &bs->fallback, 0, head)')
-    end = source.index('    return 0;', start)
-    final = source[start:end]
-    source = source[:start] + source[end:]
-    before = '    for (s = 1; s < nsectors; s++) {\n'
-    after = final + before
-elif sys.argv[2] == "policy":
-    before = '''    if (ro && !rw) {
-        return fail(err, errlen,
-                    "the image is the read-only disk build, which cannot mount a disk root");
-    }
-'''
-    after = ''
-elif sys.argv[2] == "bound":
-    before = '''        if (p_memsz > 0xFFFFFFFFu - p_vaddr) {
-            return fail(err, errlen, "a load leaves the 32-bit address space");
-        }
-'''
-    after = ''
-else:
-    before, after = {
-        "mb2": ('return fail(err, errlen, "no multiboot2 header in the first 8192 bytes");',
-                'return policy_judged(image, present, size, err, errlen);'),
-        "padded": ('return fail(err, errlen, "the load runs to the end of the file, which the slot pads");',
-                   'load_end = load_addr + (size - file_start);'),
-        "search": ('search = present < MULTIBOOT_SEARCH ? present : MULTIBOOT_SEARCH;',
-                   'search = present;'),
-        "chain": ('return len == size / cluster_bytes + (size % cluster_bytes != 0 ? 1u : 0u);',
-                  'return size <= len * cluster_bytes && len * cluster_bytes - size < cluster_bytes;'),
-        "tags": ('} else if (type != 4 && type != 5 && (le16(h + at + 2) & 1u) == 0) {',
-                 '} else if (0) {'),
-        "tagend": ('if (at > len || len - at < 8) {', 'if (len - at < 8) {'),
-        "x86tags": ('if (x86_64 && address == 0) {', 'if (x86_64 < 0 && address == 0) {'),
-        "pair": ('if ((address != 0) != (entry != 0)) {', 'if (0) {'),
-    }[sys.argv[2]]
-if source.count(before) != 1:
-    raise SystemExit("bootslot-mutation: source pattern is not unique")
-path.write_text(source.replace(before, after))
-PY
+for fault in $faults; do
+    apply_fault "$work/bootslot.c" "$fault"
     case $fault in
         order) message='install refuses the unverified fallback' ;;
         bound) message='load crossing 4 GiB is refused' ;;

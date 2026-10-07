@@ -7,7 +7,7 @@
 # kernel's sources with each fault put in turn, and its row must fail; the
 # restored copy must pass again.
 #
-# Usage: paging_mutate.sh [--check]
+# Usage: paging_mutate.sh [--check | --texts]
 # With --check it compiles and runs the unmodified test alone. The faults:
 # map_mmio_typed's page count rounded up by `+ PAGE_SIZE - 1`, which wraps
 # for a span that begins in the first page and ends in the last; the loop of
@@ -22,83 +22,18 @@
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
-[ "$#" -eq 0 ] || [ "$*" = --check ] || {
-    echo 'paging-proof: usage: paging_mutate.sh [--check]' >&2
-    exit 2
-}
-mkdir -p build/tests
-work=$(mktemp -d "$repo/build/tests/paging-proof.XXXXXX")
-child=
-mkdir "$work/rach2"
-cp -R rach2/sys "$work/rach2/"
-paging="$work/rach2/sys/mm/paging.c"
-mmu="$work/rach2/sys/arch/i686/mmu.c"
-cp "$paging" "$work/paging.saved"
-cp "$mmu" "$work/mmu.saved"
 
-cleanup()
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
 {
-    if [ -n "$child" ]; then
-        kill -TERM "$child" 2>/dev/null || :
-        wait "$child" 2>/dev/null || :
-        child=
-    fi
-    cp "$work/paging.saved" "$paging"
-    cp "$work/mmu.saved" "$mmu"
-    touch "$paging" "$mmu"
-}
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
-
-# The test's own dependency and flag lines, as the host suite reads them,
-# with its kernel sources taken from the private tree.
-test=tests/host/paging_hosttest.c
-deps=$(grep -oE 'host-deps:[^*]*' "$test" | sed 's/host-deps://' | tr '\n' ' ' |
-    sed "s# rach2/# $work/rach2/#g")
-extra=$(grep -oE 'host-cflags:[^*]*' "$test" | sed 's/host-cflags://' | tr '\n' ' ')
-
-run_phase()
-{
-    phase=$1
-    expected=$2
-    message=$3
-    binary="$work/$phase"
-    # shellcheck disable=SC2086
-    if ! "${CC:-cc}" -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST \
-        -fsanitize=address,undefined -fno-sanitize-recover=all -g -O1 \
-        -Wno-empty-body -ffreestanding $extra \
-        -I "$work/rach2/sys" -I "$work/rach2/sys/arch/x86" -I "$work/rach2/sys/arch/i686" \
-        -I "$work/rach2/sys/lib" -I "$work/rach2/sys/proc" \
-        -I utils -I krffs -I tests/host/compat \
-        -o "$binary" "$test" $deps >"$binary.compile.log" 2>&1; then
-        cat "$binary.compile.log" >&2
-        exit 1
-    fi
-    cksum "$paging" "$mmu" "$binary" >"$binary.cksum"
-    perl -e 'alarm 10; exec @ARGV or die "paging-proof: exec: $!\n"' \
-        "$binary" >"$binary.log" 2>&1 &
-    child=$!
-    status=0
-    wait "$child" || status=$?
-    child=
-    cat "$binary.log"
-    [ "$status" -eq "$expected" ] && grep -Fq "$message" "$binary.log" || exit 1
-    echo "paging-proof: result: $phase status $status"
-}
-
-echo "paging-proof: logs: $work"
-run_phase fixed 0 'paging-hosttest: result: pass'
-[ "$#" -eq 0 ] || exit 0
-for fault in rounding loop zero guard unmap-each stale-reuse held-swept no-change; do
-    case $fault in
-        loop | zero) source=$mmu ;;
-        *) source=$paging ;;
-    esac
-    python3 - "$source" "$fault" <<'PY'
+    python3 - "$1" "$2" <<'PY'
 from pathlib import Path
 import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
 
 path = Path(sys.argv[1])
 source = path.read_text()
@@ -169,6 +104,102 @@ if body.count(old) != 1:
     raise SystemExit('paging-proof: the fault\'s pattern is not unique: ' + fault)
 path.write_text(source[:start] + body.replace(old, new) + source[end:])
 PY
+}
+
+faults='rounding loop zero guard unmap-each stale-reuse held-swept no-change'
+# fault_source FAULT: the source FAULT changes, i686's mmu.c or paging.c,
+# in `source`.
+fault_source()
+{
+    case $1 in
+        loop | zero) source=$mmu ;;
+        *) source=$paging ;;
+    esac
+}
+
+if [ "${1:-}" = --texts ]; then
+    mmu=rach2/sys/arch/i686/mmu.c
+    paging=rach2/sys/mm/paging.c
+    for fault in $faults; do
+        fault_source "$fault"
+        RACH2_FAULT_TEXTS=1 apply_fault "$source" "$fault" >/dev/null || exit 1
+    done
+    echo 'paging-proof: texts: every fault is once in its source'
+    exit 0
+fi
+
+[ "$#" -eq 0 ] || [ "$*" = --check ] || {
+    echo 'paging-proof: usage: paging_mutate.sh [--check]' >&2
+    exit 2
+}
+mkdir -p build/tests
+work=$(mktemp -d "$repo/build/tests/paging-proof.XXXXXX")
+child=
+mkdir "$work/rach2"
+cp -R rach2/sys "$work/rach2/"
+paging="$work/rach2/sys/mm/paging.c"
+mmu="$work/rach2/sys/arch/i686/mmu.c"
+cp "$paging" "$work/paging.saved"
+cp "$mmu" "$work/mmu.saved"
+
+cleanup()
+{
+    if [ -n "$child" ]; then
+        kill -TERM "$child" 2>/dev/null || :
+        wait "$child" 2>/dev/null || :
+        child=
+    fi
+    cp "$work/paging.saved" "$paging"
+    cp "$work/mmu.saved" "$mmu"
+    touch "$paging" "$mmu"
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# The test's own dependency and flag lines, as the host suite reads them,
+# with its kernel sources taken from the private tree.
+test=tests/host/paging_hosttest.c
+deps=$(grep -oE 'host-deps:[^*]*' "$test" | sed 's/host-deps://' | tr '\n' ' ' |
+    sed "s# rach2/# $work/rach2/#g")
+extra=$(grep -oE 'host-cflags:[^*]*' "$test" | sed 's/host-cflags://' | tr '\n' ' ')
+
+run_phase()
+{
+    phase=$1
+    expected=$2
+    message=$3
+    binary="$work/$phase"
+    # shellcheck disable=SC2086
+    if ! "${CC:-cc}" -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST \
+        -fsanitize=address,undefined -fno-sanitize-recover=all -g -O1 \
+        -Wno-empty-body -ffreestanding $extra \
+        -I "$work/rach2/sys" -I "$work/rach2/sys/arch/x86" -I "$work/rach2/sys/arch/i686" \
+        -I "$work/rach2/sys/lib" -I "$work/rach2/sys/proc" \
+        -I utils -I krffs -I tests/host/compat \
+        -o "$binary" "$test" $deps >"$binary.compile.log" 2>&1; then
+        cat "$binary.compile.log" >&2
+        exit 1
+    fi
+    cksum "$paging" "$mmu" "$binary" >"$binary.cksum"
+    perl -e 'alarm 10; exec @ARGV or die "paging-proof: exec: $!\n"' \
+        "$binary" >"$binary.log" 2>&1 &
+    child=$!
+    status=0
+    wait "$child" || status=$?
+    child=
+    cat "$binary.log"
+    [ "$status" -eq "$expected" ] && grep -Fq "$message" "$binary.log" || exit 1
+    echo "paging-proof: result: $phase status $status"
+}
+
+echo "paging-proof: logs: $work"
+run_phase fixed 0 'paging-hosttest: result: pass'
+[ "$#" -eq 0 ] || exit 0
+for fault in $faults; do
+    fault_source "$fault"
+    apply_fault "$source" "$fault"
     touch "$source"
     case $fault in
         rounding)

@@ -20,69 +20,18 @@ set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
-mkdir -p build/tests
-work=$(mktemp -d "$repo/build/tests/unix-proof.XXXXXX")
-child=
-cp -R rach2/sys "$work/sys"
-cp "$work/sys/ipc/unix.c" "$work/unix.saved"
-cp "$work/sys/ipc/pipe.c" "$work/pipe.saved"
 
-restore()
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
 {
-    cp "$work/unix.saved" "$work/sys/ipc/unix.c"
-    cp "$work/pipe.saved" "$work/sys/ipc/pipe.c"
-    touch "$work/sys/ipc/unix.c" "$work/sys/ipc/pipe.c"
-}
-cleanup()
-{
-    if [ -n "$child" ]; then
-        kill -TERM "$child" 2>/dev/null || :
-        wait "$child" 2>/dev/null || :
-        child=
-    fi
-    restore
-}
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
-
-run_phase()
-{
-    phase=$1
-    expected=$2
-    message=$3
-    binary="$work/$phase"
-    if ! "${CC:-cc}" -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 \
-        -DRACH2_HOSTTEST -g -O1 -ffreestanding -Wall -Wextra -Werror \
-        -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast \
-        -fsanitize=address,undefined -fno-sanitize-recover=all \
-        -I "$work/sys" -I "$work/sys/lib" -I "$work/sys/proc" \
-        tests/host/unix_hosttest.c tests/host/compat/park_host.c \
-        -o "$binary" >"$binary.compile.log" 2>&1; then
-        cat "$binary.compile.log" >&2
-        exit 1
-    fi
-    cksum "$work/sys/ipc/unix.c" "$work/sys/ipc/pipe.c" "$binary" >"$binary.cksum"
-    perl -e 'alarm 10; exec @ARGV or die "unix-proof: exec: $!\n"' \
-        "$binary" >"$binary.log" 2>&1 &
-    child=$!
-    status=0
-    wait "$child" || status=$?
-    child=
-    cat "$binary.log"
-    [ "$status" -eq "$expected" ] && grep -Fq "$message" "$binary.log" || exit 1
-    echo "unix-proof: result: $phase status $status"
-}
-
-echo "unix-proof: logs: $work"
-run_phase fixed 0 'unix-hosttest: result: pass:'
-for fault in accept socketpair rights pipe2 connect bind bind-wake bind-check receive receive-wake \
-    send-stream send-datagram transit-count transit-release transit-installed moved-count \
-    moved-install moved-release flight-left-unlocked; do
-    python3 - "$work/sys/ipc" "$fault" <<'PY'
+    python3 - "$1" "$2" <<'PY'
 from pathlib import Path
 import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
 
 ipc = Path(sys.argv[1])
 release = '            fd_release_backing(fd_get(table(), %s));\n            fd_free(table(), %s);\n'
@@ -169,6 +118,79 @@ for old, new in changes:
     source = source.replace(old, new)
 path.write_text(source)
 PY
+}
+
+faults='accept socketpair rights pipe2 connect bind bind-wake bind-check
+    receive receive-wake send-stream send-datagram transit-count
+    transit-release transit-installed moved-count moved-install moved-release
+    flight-left-unlocked'
+if [ "${1:-}" = --texts ]; then
+    for fault in $faults; do
+        RACH2_FAULT_TEXTS=1 apply_fault rach2/sys/ipc "$fault" >/dev/null || exit 1
+    done
+    echo 'unix-proof: texts: every fault is once in its source'
+    exit 0
+fi
+
+mkdir -p build/tests
+work=$(mktemp -d "$repo/build/tests/unix-proof.XXXXXX")
+child=
+cp -R rach2/sys "$work/sys"
+cp "$work/sys/ipc/unix.c" "$work/unix.saved"
+cp "$work/sys/ipc/pipe.c" "$work/pipe.saved"
+
+restore()
+{
+    cp "$work/unix.saved" "$work/sys/ipc/unix.c"
+    cp "$work/pipe.saved" "$work/sys/ipc/pipe.c"
+    touch "$work/sys/ipc/unix.c" "$work/sys/ipc/pipe.c"
+}
+cleanup()
+{
+    if [ -n "$child" ]; then
+        kill -TERM "$child" 2>/dev/null || :
+        wait "$child" 2>/dev/null || :
+        child=
+    fi
+    restore
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+run_phase()
+{
+    phase=$1
+    expected=$2
+    message=$3
+    binary="$work/$phase"
+    if ! "${CC:-cc}" -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 \
+        -DRACH2_HOSTTEST -g -O1 -ffreestanding -Wall -Wextra -Werror \
+        -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast \
+        -fsanitize=address,undefined -fno-sanitize-recover=all \
+        -I "$work/sys" -I "$work/sys/lib" -I "$work/sys/proc" \
+        tests/host/unix_hosttest.c tests/host/compat/park_host.c \
+        -o "$binary" >"$binary.compile.log" 2>&1; then
+        cat "$binary.compile.log" >&2
+        exit 1
+    fi
+    cksum "$work/sys/ipc/unix.c" "$work/sys/ipc/pipe.c" "$binary" >"$binary.cksum"
+    perl -e 'alarm 10; exec @ARGV or die "unix-proof: exec: $!\n"' \
+        "$binary" >"$binary.log" 2>&1 &
+    child=$!
+    status=0
+    wait "$child" || status=$?
+    child=
+    cat "$binary.log"
+    [ "$status" -eq "$expected" ] && grep -Fq "$message" "$binary.log" || exit 1
+    echo "unix-proof: result: $phase status $status"
+}
+
+echo "unix-proof: logs: $work"
+run_phase fixed 0 'unix-hosttest: result: pass:'
+for fault in $faults; do
+    apply_fault "$work/sys/ipc" "$fault"
     touch "$work/sys/ipc/unix.c" "$work/sys/ipc/pipe.c"
     case $fault in
         accept) message="a sibling's close of the number accept reserved finds nothing" ;;

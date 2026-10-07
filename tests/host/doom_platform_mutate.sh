@@ -4,6 +4,44 @@ set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" "$2" "$3" <<'PY'
+from pathlib import Path
+import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+platform, system = map(Path, sys.argv[1:3])
+changes = {
+    "arguments": (platform, "    int doom_argc = (argc > 0 ? argc : 1) + 2;",
+                  "    argc = 1;\n    int doom_argc = (argc > 0 ? argc : 1) + 2;"),
+    "shutdown": (platform, "    DG_Shutdown();", ""),
+    "exit": (system, "#endif\n    exit(0);\n}", "#endif\n}"),
+    "report": (system, "    DG_zone_mib = *size / (1024 * 1024);", ""),
+}
+path, old, new = changes[sys.argv[3]]
+source = path.read_text()
+if source.count(old) != 1:
+    raise SystemExit("doom-platform-mutation: source pattern is not unique")
+path.write_text(source.replace(old, new))
+PY
+}
+
+faults='arguments shutdown exit report'
+if [ "${1:-}" = --texts ]; then
+    for fault in $faults; do
+        RACH2_FAULT_TEXTS=1 apply_fault ports/doom/doomgeneric_rach2.c ports/doom/src/i_system.c "$fault" >/dev/null || exit 1
+    done
+    echo 'doom-platform-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
 mkdir -p build/tests
 work=$(mktemp -d "$repo/build/tests/doom-platform-proof.XXXXXX")
 mkdir -p "$work/ports" "$work/tests/host"
@@ -62,25 +100,8 @@ run_phase()
 
 echo "doom-platform-mutation: logs: $work"
 run_phase fixed 0 'doom-platform-hosttest: result: pass:'
-for fault in arguments shutdown exit report; do
-    python3 - "$platform" "$system" "$fault" <<'PY'
-from pathlib import Path
-import sys
-
-platform, system = map(Path, sys.argv[1:3])
-changes = {
-    "arguments": (platform, "    int doom_argc = (argc > 0 ? argc : 1) + 2;",
-                  "    argc = 1;\n    int doom_argc = (argc > 0 ? argc : 1) + 2;"),
-    "shutdown": (platform, "    DG_Shutdown();", ""),
-    "exit": (system, "#endif\n    exit(0);\n}", "#endif\n}"),
-    "report": (system, "    DG_zone_mib = *size / (1024 * 1024);", ""),
-}
-path, old, new = changes[sys.argv[3]]
-source = path.read_text()
-if source.count(old) != 1:
-    raise SystemExit("doom-platform-mutation: source pattern is not unique")
-path.write_text(source.replace(old, new))
-PY
+for fault in $faults; do
+    apply_fault "$platform" "$system" "$fault"
     case $fault in
         arguments) message='argument count' ;;
         shutdown) message='both devices closed once' ;;

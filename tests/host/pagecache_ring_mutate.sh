@@ -7,10 +7,40 @@
 # and rebuilt must pass. The test includes pagecache.c whole, as
 # tests/system/suites/host.sh compiles it, from the private copy.
 #
-# Usage: pagecache_ring_mutate.sh
+# Usage: pagecache_ring_mutate.sh [--texts]
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" <<'PY'
+import pathlib
+import sys
+import os
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+old = '#define PC_SLOTS 2048u\n'
+if text.count(old) != 1:
+    raise SystemExit('pagecache-ring-proof: the slots are not defined once as 2048')
+path.write_text(text.replace(old, '#define PC_SLOTS 1024u\n'))
+PY
+}
+
+if [ "${1:-}" = --texts ]; then
+    RACH2_FAULT_TEXTS=1
+    export RACH2_FAULT_TEXTS
+    apply_fault rach2/sys/mm/pagecache.h >/dev/null
+    echo 'pagecache-ring-proof: texts: every fault is once in its source'
+    exit 0
+fi
+
+
 [ "$#" -eq 0 ] || {
     echo 'usage: pagecache_ring_mutate.sh' >&2
     exit 2
@@ -71,17 +101,7 @@ run_phase()
 
 echo "pagecache-ring-proof: logs: $work"
 run_phase fixed 0 'pagecache_ring_hosttest: result: pass:'
-python3 - "$source" <<'PY'
-import pathlib
-import sys
-
-path = pathlib.Path(sys.argv[1])
-text = path.read_text()
-old = '#define PC_SLOTS 2048u\n'
-if text.count(old) != 1:
-    raise SystemExit('pagecache-ring-proof: the slots are not defined once as 2048')
-path.write_text(text.replace(old, '#define PC_SLOTS 1024u\n'))
-PY
+apply_fault "$source"
 run_phase slots-1024 1 \
     "pagecache_ring_hosttest: FAIL: at PC_SLOTS a compile's lookups over the ring with the manual read nothing from the disk once warm"
 restore

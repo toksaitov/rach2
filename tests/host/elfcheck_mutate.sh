@@ -3,6 +3,44 @@
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" <<'PY'
+from pathlib import Path
+import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+path = Path(sys.argv[1]) / 'proc' / 'elf.c'
+text = path.read_text()
+new = ('''    if (ehdr->e_phentsize != sizeof(Elf_Phdr)) {
+        return false;
+    }
+    if (ehdr->e_phoff > size ||
+        (uint32_t)ehdr->e_phnum > (size - (uint32_t)ehdr->e_phoff) / sizeof(Elf_Phdr)) {
+        return false;
+    }
+''')
+old = ('''    if ((uint32_t)ehdr->e_phoff + (uint32_t)ehdr->e_phnum * (uint32_t)ehdr->e_phentsize > size) {
+        return false;
+    }
+''')
+if text.count(new) != 1:
+    raise SystemExit('elfcheck-mutation: target is not unique')
+path.write_text(text.replace(new, old))
+PY
+}
+
+if [ "${1:-}" = --texts ]; then
+    RACH2_FAULT_TEXTS=1 apply_fault rach2/sys >/dev/null
+    echo 'elfcheck-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
 mkdir -p build
 work=$(mktemp -d "$repo/build/elfcheck-proof.XXXXXX")
 child=
@@ -58,27 +96,7 @@ run_phase()
 
 echo "elfcheck-mutation: logs: $work"
 run_phase fixed zero
-python3 - "$work" <<'PY'
-from pathlib import Path
-import sys
-path = Path(sys.argv[1]) / 'proc' / 'elf.c'
-text = path.read_text()
-new = ('''    if (ehdr->e_phentsize != sizeof(Elf_Phdr)) {
-        return false;
-    }
-    if (ehdr->e_phoff > size ||
-        (uint32_t)ehdr->e_phnum > (size - (uint32_t)ehdr->e_phoff) / sizeof(Elf_Phdr)) {
-        return false;
-    }
-''')
-old = ('''    if ((uint32_t)ehdr->e_phoff + (uint32_t)ehdr->e_phnum * (uint32_t)ehdr->e_phentsize > size) {
-        return false;
-    }
-''')
-if text.count(new) != 1:
-    raise SystemExit('elfcheck-mutation: target is not unique')
-path.write_text(text.replace(new, old))
-PY
+apply_fault "$work"
 run_phase wrapping-sum nonzero
 restore
 run_phase restored zero

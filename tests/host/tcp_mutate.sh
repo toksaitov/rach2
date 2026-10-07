@@ -1,18 +1,27 @@
 #!/bin/sh
-# Compile fixed, faulty and restored TCP sources in a private tree.
+# Compile fixed, faulty and restored TCP sources in a private tree. --texts
+# checks that each fault's text is once in the tree's source, and builds
+# and runs nothing.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
-mkdir -p build/tests
-work=$(mktemp -d "$repo/build/tests/tcp-proof.XXXXXX")
+texts=
+[ "${1:-}" != --texts ] || texts=1
 child=
-mkdir -p "$work/rach2" "$work/tests/host/compat"
-cp -R rach2/sys "$work/rach2/sys"
-cp tests/host/tcp_hosttest.c "$work/tests/host/"
-cp tests/host/compat/kheap_host.c tests/host/compat/pressure_host.c "$work/tests/host/compat/"
-source="$work/rach2/sys/network/tcp/tcp.c"
-cp "$source" "$work/tcp.saved"
+if [ -n "$texts" ]; then
+    work=
+    source=rach2/sys/network/tcp/tcp.c
+else
+    mkdir -p build/tests
+    work=$(mktemp -d "$repo/build/tests/tcp-proof.XXXXXX")
+    mkdir -p "$work/rach2" "$work/tests/host/compat"
+    cp -R rach2/sys "$work/rach2/sys"
+    cp tests/host/tcp_hosttest.c "$work/tests/host/"
+    cp tests/host/compat/kheap_host.c tests/host/compat/pressure_host.c "$work/tests/host/compat/"
+    source="$work/rach2/sys/network/tcp/tcp.c"
+    cp "$source" "$work/tcp.saved"
+fi
 
 cleanup()
 {
@@ -62,10 +71,19 @@ run_phase()
     echo "tcp-mutation: result: $phase status $status"
 }
 
-echo "tcp-mutation: logs: $work"
+if [ -n "$texts" ]; then
+    trap - EXIT
+    run_phase() { :; }
+    cleanup() { :; }
+    RACH2_FAULT_TEXTS=1
+    export RACH2_FAULT_TEXTS
+else
+    echo "tcp-mutation: logs: $work"
+fi
 run_phase fixed 0 'tcp_hosttest: PASS'
 python3 - "$source" <<'PY'
 import pathlib
+import os
 import sys
 
 path = pathlib.Path(sys.argv[1])
@@ -83,13 +101,15 @@ old = "    free_space = TCP_RING_SIZE"
 if faulty.count(old) != 1:
     raise SystemExit("tcp-mutation: ring pattern is not unique")
 faulty = faulty.replace(old, "    flags = net_lock();\n\n" + old, 1)
-path.write_text(source[:start] + faulty + source[end:])
+if not os.environ.get('RACH2_FAULT_TEXTS'):
+    path.write_text(source[:start] + faulty + source[end:])
 PY
 run_phase mutated 3 'send rejects a reset before masking'
 cleanup
 run_phase restored 0 'tcp_hosttest: PASS'
 python3 - "$source" <<'PY'
 import pathlib
+import os
 import sys
 
 path = pathlib.Path(sys.argv[1])
@@ -97,7 +117,8 @@ source = path.read_text()
 old = "        hdr_len = (uint8_t)(20 + tcp_sack_option(tcb, tcp_tx_buf + 20));\n"
 if source.count(old) != 1:
     raise SystemExit("tcp-mutation: SACK pattern is not unique")
-path.write_text(source.replace(old, "        (void)tcp_sack_option;\n", 1))
+if not os.environ.get('RACH2_FAULT_TEXTS'):
+    path.write_text(source.replace(old, "        (void)tcp_sack_option;\n", 1))
 PY
 run_phase sackless 5 'a segment past a hole is named in the acknowledgement'
 cleanup
@@ -106,13 +127,15 @@ mutate()
 {
     python3 - "$source" "$1" "$2" <<'PY'
 import pathlib
+import os
 import sys
 
 path = pathlib.Path(sys.argv[1])
 source = path.read_text()
 if source.count(sys.argv[2]) != 1:
     raise SystemExit("tcp-mutation: pattern is not unique: " + sys.argv[2])
-path.write_text(source.replace(sys.argv[2], sys.argv[3], 1))
+if not os.environ.get('RACH2_FAULT_TEXTS'):
+    path.write_text(source.replace(sys.argv[2], sys.argv[3], 1))
 PY
 }
 mutate '                tcp_sack_note(tcb, seq);
@@ -131,4 +154,8 @@ mutate '    if (tcb && (tcb->state == TCP_ESTABLISHED || tcb->state == TCP_FIN_W
 run_phase half-close-quiet 2 'a window reopened in FIN_WAIT_1 is announced'
 cleanup
 run_phase restored-half-close 0 'tcp_hosttest: PASS'
+if [ -n "$texts" ]; then
+    echo 'tcp-mutation: texts: every fault is once in its source'
+    exit 0
+fi
 cmp "$work/tcp.saved" "$source"

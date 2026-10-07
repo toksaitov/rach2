@@ -4,6 +4,54 @@ set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" "$2" <<'PY'
+import pathlib
+import sys
+import os
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+root = pathlib.Path(sys.argv[1])
+fault = sys.argv[2]
+path = root / ("fs/procfs.c" if fault == "report" else "audio/hda.c")
+source = path.read_text()
+changes = {
+    "rate32": ("{32000, 0x0A00}", "{32000, 0x4000}"),
+    "rate96": ("{96000, 0x0800}", "{96000, 0x0000}"),
+    "capability": ("hda_rates[i].rate == sample_rate && (pcm & (1u << i))", "hda_rates[i].rate == sample_rate"),
+    "inheritance": ("(widgets & (1u << 4)) ? nid : audio_fg_nid", "nid"),
+    "fallback": ("if (pcm & (1u << i)) {", "if ((pcm & (1u << i)) && i != 7 && i != 9 && i != 11) {"),
+    "shortoffset": ("HDA_VERB_GET_CONN_LIST | i", "HDA_VERB_GET_CONN_LIST | (bits == 8 ? i / per_word : i)"),
+    "longoffset": ("HDA_VERB_GET_CONN_LIST | i", "HDA_VERB_GET_CONN_LIST | (bits == 16 ? i / per_word : i)"),
+    "width": ("node = entry & (range_bit - 1);", "node = entry & 0xFF;"),
+    "range": ("first = (uint32_t)previous + 1;", "first = node;"),
+    "route": ("HDA_VERB_SET_CONN_SEL | pin_conn_sel);", "HDA_VERB_SET_CONN_SEL | 0);"),
+    "report": ('audio_field(t, " programmed ", r->programmed_rate);', 'audio_field(t, " programmed ", 0);'),
+    "underrun": ("                frac &= 0xFFFFu;\n", ""),
+    "phase": ("                frac &= 0xFFFFu;", "                frac = 0;"),
+}
+old, new = changes[fault]
+if source.count(old) != 1:
+    raise SystemExit("hda-mutation: source pattern is not unique: " + fault)
+path.write_text(source.replace(old, new))
+PY
+}
+
+faults='rate32 rate96 capability inheritance fallback shortoffset longoffset
+    width range route report underrun phase'
+if [ "${1:-}" = --texts ]; then
+    for fault in $faults; do
+        RACH2_FAULT_TEXTS=1 apply_fault rach2/sys "$fault" >/dev/null || exit 1
+    done
+    echo 'hda-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
 mkdir -p build/tests
 work=$(mktemp -d "$repo/build/tests/hda-proof.XXXXXX")
 child=
@@ -56,35 +104,8 @@ run_phase()
 
 echo "hda-mutation: logs: $work"
 run_phase fixed 0 'hda-test: result: pass'
-for fault in rate32 rate96 capability inheritance fallback shortoffset longoffset width range route report underrun phase; do
-    python3 - "$work/sys" "$fault" <<'PY'
-import pathlib
-import sys
-
-root = pathlib.Path(sys.argv[1])
-fault = sys.argv[2]
-path = root / ("fs/procfs.c" if fault == "report" else "audio/hda.c")
-source = path.read_text()
-changes = {
-    "rate32": ("{32000, 0x0A00}", "{32000, 0x4000}"),
-    "rate96": ("{96000, 0x0800}", "{96000, 0x0000}"),
-    "capability": ("hda_rates[i].rate == sample_rate && (pcm & (1u << i))", "hda_rates[i].rate == sample_rate"),
-    "inheritance": ("(widgets & (1u << 4)) ? nid : audio_fg_nid", "nid"),
-    "fallback": ("if (pcm & (1u << i)) {", "if ((pcm & (1u << i)) && i != 7 && i != 9 && i != 11) {"),
-    "shortoffset": ("HDA_VERB_GET_CONN_LIST | i", "HDA_VERB_GET_CONN_LIST | (bits == 8 ? i / per_word : i)"),
-    "longoffset": ("HDA_VERB_GET_CONN_LIST | i", "HDA_VERB_GET_CONN_LIST | (bits == 16 ? i / per_word : i)"),
-    "width": ("node = entry & (range_bit - 1);", "node = entry & 0xFF;"),
-    "range": ("first = (uint32_t)previous + 1;", "first = node;"),
-    "route": ("HDA_VERB_SET_CONN_SEL | pin_conn_sel);", "HDA_VERB_SET_CONN_SEL | 0);"),
-    "report": ('audio_field(t, " programmed ", r->programmed_rate);', 'audio_field(t, " programmed ", 0);'),
-    "underrun": ("                frac &= 0xFFFFu;\n", ""),
-    "phase": ("                frac &= 0xFFFFu;", "                frac = 0;"),
-}
-old, new = changes[fault]
-if source.count(old) != 1:
-    raise SystemExit("hda-mutation: source pattern is not unique: " + fault)
-path.write_text(source.replace(old, new))
-PY
+for fault in $faults; do
+    apply_fault "$work/sys" "$fault"
     case $fault in
         rate32|rate96|fallback) row=rates ;;
         capability|inheritance) row=capabilities ;;

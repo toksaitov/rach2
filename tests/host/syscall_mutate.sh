@@ -3,95 +3,18 @@
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
-mkdir -p build
-work=$(mktemp -d "$repo/build/syscall-proof.XXXXXX")
-child=
-for source in syscall syscall_net; do
-    cp "rach2/sys/$source.c" "$work/$source.saved"
-    cp "$work/$source.saved" "$work/$source.c"
-done
 
-restore()
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
 {
-    for source in syscall syscall_net; do
-        cp "$work/$source.saved" "$work/$source.c"
-        touch "$work/$source.c"
-    done
-}
-
-cleanup()
-{
-    if [ -n "$child" ]; then
-        kill -TERM "$child" 2>/dev/null || :
-        wait "$child" 2>/dev/null || :
-        child=
-    fi
-    restore
-}
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
-
-# run_phase PHASE STATUS DETAILS: compile the test against the private copies
-# and run it; it must exit with STATUS and print each of DETAILS, which are
-# separated by `|`.
-run_phase()
-{
-    phase=$1
-    expected=$2
-    detail=$3
-    binary="$work/$phase"
-    if ! "${CC:-cc}" -std=c99 -g -O1 -ffreestanding -DRACH2_HOSTTEST \
-        -fsanitize=address,undefined -fno-sanitize-recover=all \
-        -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast \
-        -I "$work" -I rach2/sys -I rach2/sys/arch/x86 -I rach2/sys/arch/i686 -I rach2/sys/lib -I rach2/sys/proc \
-        tests/host/syscall_hosttest.c rach2/sys/lib/kstring.c \
-        rach2/sys/lib/kctypes.c -o "$binary" >"$binary.compile.log" 2>&1; then
-        cat "$binary.compile.log" >&2
-        exit 1
-    fi
-    cksum "$work/syscall.c" "$work/syscall_net.c" "$binary" >"$binary.artifacts"
-    # A sanitizer's report ends the test with status 1 on every host; macOS
-    # would otherwise abort it.
-    ASAN_OPTIONS=abort_on_error=0 UBSAN_OPTIONS=abort_on_error=0 \
-        perl -e 'alarm 10; exec @ARGV or die "syscall-mutation: exec: $!\n"' \
-        "$binary" >"$binary.log" 2>&1 &
-    child=$!
-    status=0
-    wait "$child" || status=$?
-    child=
-    cat "$binary.log"
-    [ "$status" -eq "$expected" ] || exit 1
-    rest=$detail
-    while [ -n "$rest" ]; do
-        grep -F "${rest%%|*}" "$binary.log" >/dev/null || exit 1
-        case $rest in
-            *'|'*) rest=${rest#*|} ;;
-            *) rest= ;;
-        esac
-    done
-    echo "syscall-mutation: result: $phase status $status"
-}
-
-echo "syscall-mutation: logs: $work"
-run_phase fixed 0 'syscall-test: pass:'
-for mutation in connect-wait connect-result connect-nonblock framebuffer-owner framebuffer-reentry \
-    clock sleep-mask sleep-block-order sleep-arm-order sleep-halt-unmasked sleep-halt-read \
-    sleep-left-early sleep-switch sleep-early-return sleep-deadline sleep-zero sleep-nsec \
-    sleep-nsec-one sleep-nsec-near sleep-arg-sec sleep-arg-nsec sleep-arg-nsec-neg sleep-remainder sleep-last-tick sleep-cut-short \
-    sleep-signal-first sleep-rearm sleep-wrap sleep-clamp sleep-sec-clamp sleep-unmask \
-    sleep-running rem-sec rem-zero timer-first timer-left timer-floor timer-disarm timer-round \
-    timer-usec-one timer-usec-near \
-    timer-sec-clamp timer-clamp timer-clamp-low timer-interval-read timer-interval-sec \
-    timer-interval-read-sec timer-usec timer-mask getitimer-which alarm-round alarm-nearest \
-    alarm-half alarm-interval alarm-mask clock-coarse clock-cpu-system clock-cpu-user \
-    clock-cpu-pid clock-cpu-thread clock-descriptor clock-res clock-sleep-clock \
-    clock-sleep-thread clock-sleep-due clock-sleep-epoch clock-sleep-absolute-rem \
-    clock-sleep-cpu-due; do
-    python3 - "$work" "$mutation" <<'PY'
+    python3 - "$1" "$2" <<'PY'
 from pathlib import Path
 import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
 work = Path(sys.argv[1])
 changes = {
     'connect-wait': ('syscall_net',
@@ -399,6 +322,107 @@ if text.count(old) != 1:
     raise SystemExit('syscall-mutation: the lines to change do not occur exactly once: ' + sys.argv[2])
 path.write_text(text.replace(old, new))
 PY
+}
+
+faults='connect-wait connect-result connect-nonblock framebuffer-owner
+    framebuffer-reentry clock sleep-mask sleep-block-order sleep-arm-order
+    sleep-halt-unmasked sleep-halt-read sleep-left-early sleep-switch
+    sleep-early-return sleep-deadline sleep-zero sleep-nsec sleep-nsec-one
+    sleep-nsec-near sleep-arg-sec sleep-arg-nsec sleep-arg-nsec-neg
+    sleep-remainder sleep-last-tick sleep-cut-short sleep-signal-first
+    sleep-rearm sleep-wrap sleep-clamp sleep-sec-clamp sleep-unmask
+    sleep-running rem-sec rem-zero timer-first timer-left timer-floor
+    timer-disarm timer-round timer-usec-one timer-usec-near timer-sec-clamp
+    timer-clamp timer-clamp-low timer-interval-read timer-interval-sec
+    timer-interval-read-sec timer-usec timer-mask getitimer-which alarm-round
+    alarm-nearest alarm-half alarm-interval alarm-mask clock-coarse
+    clock-cpu-system clock-cpu-user clock-cpu-pid clock-cpu-thread
+    clock-descriptor clock-res clock-sleep-clock clock-sleep-thread
+    clock-sleep-due clock-sleep-epoch clock-sleep-absolute-rem
+    clock-sleep-cpu-due'
+if [ "${1:-}" = --texts ]; then
+    for mutation in $faults; do
+        RACH2_FAULT_TEXTS=1 apply_fault rach2/sys "$mutation" >/dev/null || exit 1
+    done
+    echo 'syscall-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
+mkdir -p build
+work=$(mktemp -d "$repo/build/syscall-proof.XXXXXX")
+child=
+for source in syscall syscall_net; do
+    cp "rach2/sys/$source.c" "$work/$source.saved"
+    cp "$work/$source.saved" "$work/$source.c"
+done
+
+restore()
+{
+    for source in syscall syscall_net; do
+        cp "$work/$source.saved" "$work/$source.c"
+        touch "$work/$source.c"
+    done
+}
+
+cleanup()
+{
+    if [ -n "$child" ]; then
+        kill -TERM "$child" 2>/dev/null || :
+        wait "$child" 2>/dev/null || :
+        child=
+    fi
+    restore
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# run_phase PHASE STATUS DETAILS: compile the test against the private copies
+# and run it; it must exit with STATUS and print each of DETAILS, which are
+# separated by `|`.
+run_phase()
+{
+    phase=$1
+    expected=$2
+    detail=$3
+    binary="$work/$phase"
+    if ! "${CC:-cc}" -std=c99 -g -O1 -ffreestanding -DRACH2_HOSTTEST \
+        -fsanitize=address,undefined -fno-sanitize-recover=all \
+        -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast \
+        -I "$work" -I rach2/sys -I rach2/sys/arch/x86 -I rach2/sys/arch/i686 -I rach2/sys/lib -I rach2/sys/proc \
+        tests/host/syscall_hosttest.c rach2/sys/lib/kstring.c \
+        rach2/sys/lib/kctypes.c -o "$binary" >"$binary.compile.log" 2>&1; then
+        cat "$binary.compile.log" >&2
+        exit 1
+    fi
+    cksum "$work/syscall.c" "$work/syscall_net.c" "$binary" >"$binary.artifacts"
+    # A sanitizer's report ends the test with status 1 on every host; macOS
+    # would otherwise abort it.
+    ASAN_OPTIONS=abort_on_error=0 UBSAN_OPTIONS=abort_on_error=0 \
+        perl -e 'alarm 10; exec @ARGV or die "syscall-mutation: exec: $!\n"' \
+        "$binary" >"$binary.log" 2>&1 &
+    child=$!
+    status=0
+    wait "$child" || status=$?
+    child=
+    cat "$binary.log"
+    [ "$status" -eq "$expected" ] || exit 1
+    rest=$detail
+    while [ -n "$rest" ]; do
+        grep -F "${rest%%|*}" "$binary.log" >/dev/null || exit 1
+        case $rest in
+            *'|'*) rest=${rest#*|} ;;
+            *) rest= ;;
+        esac
+    done
+    echo "syscall-mutation: result: $phase status $status"
+}
+
+echo "syscall-mutation: logs: $work"
+run_phase fixed 0 'syscall-test: pass:'
+for mutation in $faults; do
+    apply_fault "$work" "$mutation"
     case "$mutation" in
         connect-wait) detail='completed handshake wakes caller' ;;
         connect-result) detail='blocking connect result' ;;

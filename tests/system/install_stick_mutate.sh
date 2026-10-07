@@ -5,6 +5,37 @@ set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" "$2" <<'PY'
+from pathlib import Path
+import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+path = Path(sys.argv[1])
+source = path.read_text()
+old = '$(STICKCHECK) $(SEALED_EXT2) 256'
+assert source.count(old) == 1
+new = '$(STICKCHECK) "" 256' if sys.argv[2] == 'root' else '$(STICKCHECK) $(SEALED_EXT2) 4'
+path.write_text(source.replace(old, new))
+PY
+}
+
+faults='root reserve'
+if [ "${1:-}" = --texts ]; then
+    for fault in $faults; do
+        RACH2_FAULT_TEXTS=1 apply_fault mk/images.mk "$fault" >/dev/null || exit 1
+    done
+    echo 'install-stick-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
 RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
 REPO=$repo
 . "$repo/mk/arch.sh"
@@ -104,18 +135,8 @@ GRUBEMBED = build/tools/image/grubembed
 include $source
 EOF
 run_phase fixed 0 'install-stick-test: result: pass:'
-for fault in root reserve; do
-    python3 - "$source" "$fault" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-source = path.read_text()
-old = '$(STICKCHECK) $(SEALED_EXT2) 256'
-assert source.count(old) == 1
-new = '$(STICKCHECK) "" 256' if sys.argv[2] == 'root' else '$(STICKCHECK) $(SEALED_EXT2) 4'
-path.write_text(source.replace(old, new))
-PY
+for fault in $faults; do
+    apply_fault "$source" "$fault"
     message='install-stick-test: missing root image'
     [ "$fault" != reserve ] || message='STICKFAIL: space'
     run_phase "$fault-mutated" 1 "$message"

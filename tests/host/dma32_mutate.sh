@@ -13,27 +13,36 @@
 #   xhci-no-back   xHCI does not copy an IN transfer back from the pages.
 #   xhci-copy      xHCI copies each OUT piece from the buffer's start.
 #
-# Usage: dma32_mutate.sh [--check]
-# With --check it compiles and runs the two unmodified tests alone.
+# Usage: dma32_mutate.sh [--check | --texts]
+# With --check it compiles and runs the two unmodified tests alone. With
+# --texts it checks that each fault's text is once in the tree's driver, and
+# builds and runs nothing.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
-[ "$#" -eq 0 ] || [ "$*" = --check ] || {
-    echo 'dma32-proof: usage: dma32_mutate.sh [--check]' >&2
+[ "$#" -eq 0 ] || [ "$*" = --check ] || [ "$*" = --texts ] || {
+    echo 'dma32-proof: usage: dma32_mutate.sh [--check | --texts]' >&2
     exit 2
 }
-mkdir -p build/tests
-work=$(mktemp -d "$repo/build/tests/dma32-proof.XXXXXX")
+texts=
+[ "$*" != --texts ] || texts=1
 child=
-# The tests include the drivers by paths relative to themselves.
-mkdir -p "$work/rach2" "$work/tests/host"
-cp -R rach2/sys "$work/rach2/"
-cp -R tests/host/compat "$work/tests/host/"
-cp tests/host/ahci_hosttest.c tests/host/xhci_hosttest.c "$work/tests/host/"
-ahci="$work/rach2/sys/block/ahci.c"
-xhci="$work/rach2/sys/usb/xhci.c"
-cp "$ahci" "$work/ahci.c.saved"
-cp "$xhci" "$work/xhci.c.saved"
+if [ -n "$texts" ]; then
+    ahci=rach2/sys/block/ahci.c
+    xhci=rach2/sys/usb/xhci.c
+else
+    mkdir -p build/tests
+    work=$(mktemp -d "$repo/build/tests/dma32-proof.XXXXXX")
+    # The tests include the drivers by paths relative to themselves.
+    mkdir -p "$work/rach2" "$work/tests/host"
+    cp -R rach2/sys "$work/rach2/"
+    cp -R tests/host/compat "$work/tests/host/"
+    cp tests/host/ahci_hosttest.c tests/host/xhci_hosttest.c "$work/tests/host/"
+    ahci="$work/rach2/sys/block/ahci.c"
+    xhci="$work/rach2/sys/usb/xhci.c"
+    cp "$ahci" "$work/ahci.c.saved"
+    cp "$xhci" "$work/xhci.c.saved"
+fi
 
 restore()
 {
@@ -86,20 +95,23 @@ run_phase()
     echo "dma32-proof: result: $phase status $status"
 }
 
-# mutate FILE OLD NEW: replace the unique OLD in FILE by NEW.
+# mutate FILE OLD NEW: replace the unique OLD in FILE by NEW; with --texts,
+# only check that OLD is once in FILE.
 mutate()
 {
     python3 - "$@" <<'PY'
 from pathlib import Path
+import os
 import sys
 
 path = Path(sys.argv[1])
 source = path.read_text()
 if source.count(sys.argv[2]) != 1:
     raise SystemExit('dma32-proof: the pattern is not unique: ' + sys.argv[2])
-path.write_text(source.replace(sys.argv[2], sys.argv[3]))
+if not os.environ.get('RACH2_FAULT_TEXTS'):
+    path.write_text(source.replace(sys.argv[2], sys.argv[3]))
 PY
-    touch "$1"
+    [ -n "$texts" ] || touch "$1"
 }
 
 # fault NAME TEST ROW...: run TEST on the mutated tree and require it to
@@ -123,12 +135,19 @@ fault()
     restore
 }
 
-echo "dma32-proof: logs: $work"
-for t in ahci_hosttest.c xhci_hosttest.c; do
+if [ -n "$texts" ]; then
+    trap - EXIT
+    fault() { :; }
+    RACH2_FAULT_TEXTS=1
+    export RACH2_FAULT_TEXTS
+else
+    echo "dma32-proof: logs: $work"
+fi
+[ -n "$texts" ] || for t in ahci_hosttest.c xhci_hosttest.c; do
     run_phase "fixed-${t%.c}" "$t"
     [ "$status" -eq 0 ] && [ ! -s "$work/fixed-${t%.c}.fails" ] || exit 1
 done
-[ "$#" -eq 0 ] || exit 0
+[ "$#" -eq 0 ] || [ -n "$texts" ] || exit 0
 
 mutate "$ahci" '    if (ahci_dma64 || *phys + len <= AHCI_FOUR_GIB) {' '    if (1) {'
 fault ahci-direct ahci_hosttest.c 'in three pieces, each through a page of the DMA pool' \
@@ -161,6 +180,10 @@ mutate "$xhci" '                b->page[i][j] = at[j];' '                b->page
 fault xhci-copy xhci_hosttest.c 'holding its bytes' \
     "and the medium holds the buffer's bytes, moved through the pool"
 
+if [ -n "$texts" ]; then
+    echo 'dma32-proof: texts: every fault is once in its source'
+    exit 0
+fi
 for t in ahci_hosttest.c xhci_hosttest.c; do
     run_phase "restored-${t%.c}" "$t"
     [ "$status" -eq 0 ] && [ ! -s "$work/restored-${t%.c}.fails" ] || exit 1

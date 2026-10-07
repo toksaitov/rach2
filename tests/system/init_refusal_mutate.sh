@@ -2,7 +2,7 @@
 # Prove the init refusal row with kernels built from a private copy, for the
 # architecture ARCH names, on its emulator.
 #
-# Usage: sh tests/system/init_refusal_mutate.sh
+# Usage: sh tests/system/init_refusal_mutate.sh [--texts]
 #
 # tests/system/init_refusal.sh boots a root whose /sbin/init is a symbolic
 # link to itself and requires the kernel to refuse it and halt. The kernel
@@ -16,6 +16,37 @@
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" <<'PY'
+from pathlib import Path
+import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+path = Path(sys.argv[1])
+text = path.read_text()
+old = "        if (rc == -ENOENT) {\n"
+if text.count(old) != 1:
+    raise SystemExit("init-refusal-mutation: the init lookup's test is not unique")
+path.write_text(text.replace(old, "        if (rc != 0) {\n"))
+PY
+}
+
+if [ "${1:-}" = --texts ]; then
+    RACH2_FAULT_TEXTS=1
+    export RACH2_FAULT_TEXTS
+    apply_fault rach2/kernel.c >/dev/null
+    echo 'init-refusal-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
+
 RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
 REPO=$repo
 . "$repo/mk/arch.sh"
@@ -109,17 +140,7 @@ printf 'build/tools/inspect/elfcheck: ;\n' >"$tree/Makefile"
 cp "$source" "$work/kernel.saved"
 run_phase fixed pass
 changed=1
-python3 - "$source" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-text = path.read_text()
-old = "        if (rc == -ENOENT) {\n"
-if text.count(old) != 1:
-    raise SystemExit("init-refusal-mutation: the init lookup's test is not unique")
-path.write_text(text.replace(old, "        if (rc != 0) {\n"))
-PY
+apply_fault "$source"
 touch "$source"
 run_phase fallthrough fail
 if cmp -s "$work/fixed.kernel" "$work/fallthrough.kernel"; then

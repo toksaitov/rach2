@@ -2,7 +2,7 @@
 # Prove the memory suite's two stack-overrun rows with faults compiled into
 # private kernels.
 #
-# Usage: sh tests/system/stackoverrun_mutate.sh
+# Usage: sh tests/system/stackoverrun_mutate.sh [--texts]
 #
 # The rows (tests/system/stackoverrun_row.sh) boot `rach2.stackoverrun=fork`
 # and `rach2.stackoverrun=boot`, which descend a kernel stack until it runs
@@ -33,6 +33,53 @@
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" "$2" <<'PY'
+from pathlib import Path
+import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+path = Path(sys.argv[1])
+text = path.read_text()
+old, new = {
+    'guard-mapped': (
+        '    if (guard >= heap_pages || map_run(guard + 1, count) != 0) {\n',
+        '    if (guard >= heap_pages || map_run(guard, count + 1) != 0) {\n'),
+    'boot-guard-mapped': (
+        '    unmap_kernel_frame((uintptr_t)stack_guard);\n',
+        ''),
+    'interrupt-gate': (
+        '    _idt_set_desciptor(8, 0, DOUBLE_FAULT_TSS_SELECTOR, 0x85);\n',
+        '    _idt_set_desciptor(8, (uintptr_t)&isr10, 0x08, 0x8E);\n'),
+    'interrupt-gate-x86_64': (
+        '    set_gate(8, isr8, GATE_KERNEL, IST_DOUBLE_FAULT);\n',
+        '    set_gate(8, isr8, GATE_KERNEL, 0);\n'),
+}[sys.argv[2]]
+if text.count(old) != 1:
+    raise SystemExit('stackoverrun-proof: the lines to change are not unique: ' + sys.argv[2])
+path.write_text(text.replace(old, new))
+PY
+}
+
+if [ "${1:-}" = --texts ]; then
+    RACH2_FAULT_TEXTS=1
+    export RACH2_FAULT_TEXTS
+    apply_fault rach2/sys/mm/kheap.c guard-mapped >/dev/null
+    apply_fault rach2/kernel.c boot-guard-mapped >/dev/null
+    apply_fault rach2/sys/arch/i686/idt.c interrupt-gate >/dev/null
+    apply_fault rach2/sys/arch/x86_64/idt.c interrupt-gate-x86_64 >/dev/null
+    echo 'stackoverrun-proof: texts: every fault is once in its source'
+    exit 0
+fi
+
+
 RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
 REPO=$repo
 . "$repo/mk/arch.sh"
@@ -133,30 +180,7 @@ fault()
         variant=interrupt-gate-x86_64
     fi
     cp "$work/$file" "$work/saved"
-    python3 - "$work/$file" "$variant" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-text = path.read_text()
-old, new = {
-    'guard-mapped': (
-        '    if (guard >= heap_pages || map_run(guard + 1, count) != 0) {\n',
-        '    if (guard >= heap_pages || map_run(guard, count + 1) != 0) {\n'),
-    'boot-guard-mapped': (
-        '    unmap_kernel_frame((uintptr_t)stack_guard);\n',
-        ''),
-    'interrupt-gate': (
-        '    _idt_set_desciptor(8, 0, DOUBLE_FAULT_TSS_SELECTOR, 0x85);\n',
-        '    _idt_set_desciptor(8, (uintptr_t)&isr10, 0x08, 0x8E);\n'),
-    'interrupt-gate-x86_64': (
-        '    set_gate(8, isr8, GATE_KERNEL, IST_DOUBLE_FAULT);\n',
-        '    set_gate(8, isr8, GATE_KERNEL, 0);\n'),
-}[sys.argv[2]]
-if text.count(old) != 1:
-    raise SystemExit('stackoverrun-proof: the lines to change are not unique: ' + sys.argv[2])
-path.write_text(text.replace(old, new))
-PY
+    apply_fault "$work/$file" "$variant"
 }
 
 restore()

@@ -6,6 +6,47 @@ set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" "$2" <<'PY'
+import pathlib
+import sys
+import os
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+path = pathlib.Path(sys.argv[1])
+source = path.read_text()
+calls = {
+    "read": ("!vm_prefault_range(addr, page_piece(addr, to_read - done), 1)", "0"),
+    "write": ("!vm_prefault_range(addr, page_piece(addr, count - done), 0)", "0"),
+    "read-kind": ("pipe_wake(p, &p->write_wq, WQ_ROOM);", "pipe_wake(p, &p->write_wq, WQ_ALL);"),
+    "write-kind": ("pipe_wake(p, &p->read_wq, WQ_DATA);", "pipe_wake(p, &p->read_wq, WQ_ALL);"),
+    "close-kind": ("pipe_wake(p, &p->read_wq, WQ_ALL);", "pipe_wake(p, &p->read_wq, WQ_DATA);"),
+    "write-empty-only": ("pipe_wake(p, &p->read_wq, WQ_DATA);",
+                         "if (pipe_available(p) == chunk) {\n"
+                         "                pipe_wake(p, &p->read_wq, WQ_DATA);\n"
+                         "            }"),
+}
+old, new = calls[sys.argv[2]]
+if source.count(old) != 1:
+    raise SystemExit("pipe-copy-mutation: source pattern is not unique")
+path.write_text(source.replace(old, new))
+PY
+}
+
+faults='read write read-kind write-kind close-kind write-empty-only'
+if [ "${1:-}" = --texts ]; then
+    for fault in $faults; do
+        RACH2_FAULT_TEXTS=1 apply_fault rach2/sys/ipc/pipe.c "$fault" >/dev/null || exit 1
+    done
+    echo 'pipe-copy-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
 mkdir -p build/tests
 work=$(mktemp -d "$repo/build/tests/pipe-copy-proof.XXXXXX")
 child=
@@ -56,29 +97,8 @@ run_phase()
 
 echo "pipe-copy-mutation: logs: $work"
 run_phase fixed 0 'pipe-copy-hosttest: result: pass:'
-for fault in read write read-kind write-kind close-kind write-empty-only; do
-    python3 - "$work/sys/ipc/pipe.c" "$fault" <<'PY'
-import pathlib
-import sys
-
-path = pathlib.Path(sys.argv[1])
-source = path.read_text()
-calls = {
-    "read": ("!vm_prefault_range(addr, page_piece(addr, to_read - done), 1)", "0"),
-    "write": ("!vm_prefault_range(addr, page_piece(addr, count - done), 0)", "0"),
-    "read-kind": ("pipe_wake(p, &p->write_wq, WQ_ROOM);", "pipe_wake(p, &p->write_wq, WQ_ALL);"),
-    "write-kind": ("pipe_wake(p, &p->read_wq, WQ_DATA);", "pipe_wake(p, &p->read_wq, WQ_ALL);"),
-    "close-kind": ("pipe_wake(p, &p->read_wq, WQ_ALL);", "pipe_wake(p, &p->read_wq, WQ_DATA);"),
-    "write-empty-only": ("pipe_wake(p, &p->read_wq, WQ_DATA);",
-                         "if (pipe_available(p) == chunk) {\n"
-                         "                pipe_wake(p, &p->read_wq, WQ_DATA);\n"
-                         "            }"),
-}
-old, new = calls[sys.argv[2]]
-if source.count(old) != 1:
-    raise SystemExit("pipe-copy-mutation: source pattern is not unique")
-path.write_text(source.replace(old, new))
-PY
+for fault in $faults; do
+    apply_fault "$work/sys/ipc/pipe.c" "$fault"
     case $fault in
         read) message='reader returns remaining bytes' ;;
         write) message='writer preserves peer bytes' ;;

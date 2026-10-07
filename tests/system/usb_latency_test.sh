@@ -1,8 +1,51 @@
 #!/bin/sh
 # Prove the USB record checker with compiled production recorder and scheduler.
+# --mutate adds the faults below; --texts checks their texts and builds nothing.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" "$2" <<'PY'
+from pathlib import Path
+import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+root = Path(sys.argv[1])
+if sys.argv[2] == 'cutoff':
+    path = root / 'usb/stamp.c'
+    old = '    result = stamp;'
+    new = '''    if (read_us - stamp.wake > 20000u) {
+        kirq_restore(flags);
+        return;
+    }
+''' + old
+else:
+    path = root / 'proc/sched.c'
+    old = '    usb_stamp_dispatch(next->pid);'
+    new = '    (void)next->pid;'
+source = path.read_text()
+assert source.count(old) == 1
+path.write_text(source.replace(old, new))
+PY
+}
+
+if [ "${1:-}" = --texts ]; then
+    RACH2_FAULT_TEXTS=1
+    export RACH2_FAULT_TEXTS
+    apply_fault rach2/sys cutoff >/dev/null
+    apply_fault rach2/sys dispatch >/dev/null
+    echo 'usb-latency-test: texts: every fault is once in its source'
+    exit 0
+fi
+
+
 mkdir -p build/tests
 work=$(mktemp -d "$repo/build/tests/usb-latency-proof.XXXXXX")
 cp -R rach2/sys "$work/sys"
@@ -75,27 +118,7 @@ echo "usb-latency-test: logs: $work"
 run_phase fixed 0
 if [ "${1:-}" = --mutate ]; then
     for fault in cutoff dispatch; do
-        python3 - "$work/sys" "$fault" <<'PY'
-from pathlib import Path
-import sys
-
-root = Path(sys.argv[1])
-if sys.argv[2] == 'cutoff':
-    path = root / 'usb/stamp.c'
-    old = '    result = stamp;'
-    new = '''    if (read_us - stamp.wake > 20000u) {
-        kirq_restore(flags);
-        return;
-    }
-''' + old
-else:
-    path = root / 'proc/sched.c'
-    old = '    usb_stamp_dispatch(next->pid);'
-    new = '    (void)next->pid;'
-source = path.read_text()
-assert source.count(old) == 1
-path.write_text(source.replace(old, new))
-PY
+        apply_fault "$work/sys" "$fault"
         run_phase "$fault-mutated" 1
         if cmp -s "$work/fixed.binary" "$work/$fault-mutated.binary"; then
             echo "usb-latency-test: mutation did not change the binary" >&2; exit 1

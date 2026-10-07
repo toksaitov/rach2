@@ -4,6 +4,86 @@
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" "$2" <<'PY'
+from pathlib import Path
+import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+work = Path(sys.argv[1])
+changes = {
+    'budget-quarter': [('unsigned long limit = stack_limit / 4u;',
+                        'unsigned long limit = stack_limit / 2u;')],
+    'budget-cap': [('if (limit > UIMAGE_ARGS_MAX) {', 'if (0) {')],
+    'budget-floor': [('if (limit < UIMAGE_ARGS_MIN) {', 'if (0) {')],
+    'pointers-argv0': [('pointers = ((argc > 0 ? argc : 1u) + envc) * word;',
+                        'pointers = (argc + envc) * word;')],
+    'pointers-edge': [('if (pointers >= limit) {', 'if (pointers > limit) {')],
+    'string-max': [('int n = strnlen_user(s, UIMAGE_STRING_MAX);',
+                    'int n = strnlen_user(s, UIMAGE_STRING_MAX + 1u);'),
+                   ('if (len > UIMAGE_STRING_MAX || len > u->room - u->used) {',
+                    'if (len > UIMAGE_STRING_MAX + 1u || len > u->room - u->used) {')],
+    'room-edge': [('len > u->room - u->used', 'len >= u->room - u->used')],
+    'room-check': [('if (len > UIMAGE_STRING_MAX || len > u->room - u->used) {',
+                    'if (len > UIMAGE_STRING_MAX) {')],
+    'nul': [("        if (done == len) {\n            dst[chunk - 1u] = '\\0';\n        }\n",
+             '')],
+    'zero': [('if (paging_zero_frame(frame) != 0) {', 'if (0) {')],
+    'random-align': [('return (u->top - u->used - 16u) & ~(uintptr_t)15u;',
+                      'return u->top - u->used - 16u;')],
+    'sp-align': [('u->sp = (uimage_random_at(u) - words * sizeof(unsigned long)) & ~(uintptr_t)15u;',
+                  'u->sp = (uimage_random_at(u) - words * sizeof(unsigned long)) & ~(uintptr_t)3u;')],
+    'clktck': [('aux[11] = 100;', 'aux[11] = 1000;')],
+    'secure': [('aux[13] = ids->secure ? 1u : 0u;', 'aux[13] = 0;')],
+    'argv-null': [('if (i == argc) {', 'if (i == argc + 1u) {')],
+    'envp-null': [('    if (rc == 0) {\n        rc = uimage_put(&out, &at, 0);\n    }\n'
+                   '    for (i = 0; i < 2u * UIMAGE_AUXV',
+                   '    for (i = 0; i < 2u * UIMAGE_AUXV')],
+    'drop-clear': [('        *p = 0;\n        addr++;', '        addr++;')],
+    'drop-used': [('u->used = (uint32_t)(u->top - addr);',
+                   'u->used = (uint32_t)(u->top - addr + 1u);')],
+    'map-address': [('uintptr_t page = u->top - (uintptr_t)(u->given + 1u) * PAGE_SIZE;',
+                     'uintptr_t page = u->top - (uintptr_t)u->given * PAGE_SIZE;')],
+    'map-flags': [('u->frames[u->given], PTE_P | PTE_W | PTE_U | PTE_NOEXEC)',
+                   'u->frames[u->given], PTE_P | PTE_U | PTE_NOEXEC)')],
+    'frames-cap': [('u->cap = limit / PAGE_SIZE + 4u;', 'u->cap = limit / PAGE_SIZE;')],
+    'release-given': [('for (i = u->given; i < u->nframes; i++) {',
+                       'for (i = 0; i < u->nframes; i++) {')],
+    'release-none': [('        free_frame(u->frames[i]);', '        (void)u->frames[i];')],
+    'fault': [('    if (n == -EFAULT) {\n        return -EFAULT;\n    }\n', '')],
+}
+path = work / 'uimage.c'
+text = path.read_text()
+for old, new in changes[sys.argv[2]]:
+    if text.count(old) != 1:
+        raise SystemExit('uimage-mutation: ' + sys.argv[2] + ': the text to change is not there once')
+    text = text.replace(old, new, 1)
+path.write_text(text)
+PY
+}
+
+faults='budget-quarter budget-cap budget-floor pointers-argv0 pointers-edge
+    string-max room-edge room-check nul zero random-align sp-align clktck
+    secure argv-null envp-null drop-clear drop-used map-address map-flags
+    frames-cap release-given release-none fault'
+if [ "${1:-}" = --texts ]; then
+    # The faults name the source as the private directory holds it.
+    root=$(mktemp -d "${TMPDIR:-/tmp}/rach2-uimage-texts.XXXXXX")
+    trap 'rm -rf "$root"' EXIT
+    ln -s "$repo/rach2/sys/proc/uimage.c" "$root/uimage.c"
+    for mutation in $faults; do
+        RACH2_FAULT_TEXTS=1 apply_fault "$root" "$mutation" >/dev/null || exit 1
+    done
+    echo 'uimage-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
 mkdir -p build
 work=$(mktemp -d "$repo/build/uimage-proof.XXXXXX")
 child=
@@ -65,63 +145,8 @@ run_phase()
 
 echo "uimage-mutation: logs: $work"
 run_phase fixed 0 'uimage-test: pass: every row'
-for mutation in budget-quarter budget-cap budget-floor pointers-argv0 pointers-edge \
-    string-max room-edge room-check nul zero random-align sp-align clktck secure \
-    argv-null envp-null drop-clear drop-used map-address map-flags frames-cap \
-    release-given release-none fault; do
-    python3 - "$work" "$mutation" <<'PY'
-from pathlib import Path
-import sys
-work = Path(sys.argv[1])
-changes = {
-    'budget-quarter': [('unsigned long limit = stack_limit / 4u;',
-                        'unsigned long limit = stack_limit / 2u;')],
-    'budget-cap': [('if (limit > UIMAGE_ARGS_MAX) {', 'if (0) {')],
-    'budget-floor': [('if (limit < UIMAGE_ARGS_MIN) {', 'if (0) {')],
-    'pointers-argv0': [('pointers = ((argc > 0 ? argc : 1u) + envc) * word;',
-                        'pointers = (argc + envc) * word;')],
-    'pointers-edge': [('if (pointers >= limit) {', 'if (pointers > limit) {')],
-    'string-max': [('int n = strnlen_user(s, UIMAGE_STRING_MAX);',
-                    'int n = strnlen_user(s, UIMAGE_STRING_MAX + 1u);'),
-                   ('if (len > UIMAGE_STRING_MAX || len > u->room - u->used) {',
-                    'if (len > UIMAGE_STRING_MAX + 1u || len > u->room - u->used) {')],
-    'room-edge': [('len > u->room - u->used', 'len >= u->room - u->used')],
-    'room-check': [('if (len > UIMAGE_STRING_MAX || len > u->room - u->used) {',
-                    'if (len > UIMAGE_STRING_MAX) {')],
-    'nul': [("        if (done == len) {\n            dst[chunk - 1u] = '\\0';\n        }\n",
-             '')],
-    'zero': [('if (paging_zero_frame(frame) != 0) {', 'if (0) {')],
-    'random-align': [('return (u->top - u->used - 16u) & ~(uintptr_t)15u;',
-                      'return u->top - u->used - 16u;')],
-    'sp-align': [('u->sp = (uimage_random_at(u) - words * sizeof(unsigned long)) & ~(uintptr_t)15u;',
-                  'u->sp = (uimage_random_at(u) - words * sizeof(unsigned long)) & ~(uintptr_t)3u;')],
-    'clktck': [('aux[11] = 100;', 'aux[11] = 1000;')],
-    'secure': [('aux[13] = ids->secure ? 1u : 0u;', 'aux[13] = 0;')],
-    'argv-null': [('if (i == argc) {', 'if (i == argc + 1u) {')],
-    'envp-null': [('    if (rc == 0) {\n        rc = uimage_put(&out, &at, 0);\n    }\n'
-                   '    for (i = 0; i < 2u * UIMAGE_AUXV',
-                   '    for (i = 0; i < 2u * UIMAGE_AUXV')],
-    'drop-clear': [('        *p = 0;\n        addr++;', '        addr++;')],
-    'drop-used': [('u->used = (uint32_t)(u->top - addr);',
-                   'u->used = (uint32_t)(u->top - addr + 1u);')],
-    'map-address': [('uintptr_t page = u->top - (uintptr_t)(u->given + 1u) * PAGE_SIZE;',
-                     'uintptr_t page = u->top - (uintptr_t)u->given * PAGE_SIZE;')],
-    'map-flags': [('u->frames[u->given], PTE_P | PTE_W | PTE_U | PTE_NOEXEC)',
-                   'u->frames[u->given], PTE_P | PTE_U | PTE_NOEXEC)')],
-    'frames-cap': [('u->cap = limit / PAGE_SIZE + 4u;', 'u->cap = limit / PAGE_SIZE;')],
-    'release-given': [('for (i = u->given; i < u->nframes; i++) {',
-                       'for (i = 0; i < u->nframes; i++) {')],
-    'release-none': [('        free_frame(u->frames[i]);', '        (void)u->frames[i];')],
-    'fault': [('    if (n == -EFAULT) {\n        return -EFAULT;\n    }\n', '')],
-}
-path = work / 'uimage.c'
-text = path.read_text()
-for old, new in changes[sys.argv[2]]:
-    if text.count(old) != 1:
-        raise SystemExit('uimage-mutation: ' + sys.argv[2] + ': the text to change is not there once')
-    text = text.replace(old, new, 1)
-path.write_text(text)
-PY
+for mutation in $faults; do
+    apply_fault "$work" "$mutation"
     case $mutation in
         budget-quarter) detail='budget: 1 MiB gives 256 KiB' ;;
         budget-cap) detail='budget: 64 MiB gives 6 MiB' ;;

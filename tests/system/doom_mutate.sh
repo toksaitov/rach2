@@ -13,15 +13,63 @@
 # The game, the disk and the emulator are those of the architecture ARCH
 # names.
 #
-# Usage: sh tests/system/doom_mutate.sh [--direct] [FAULT...]
+# Usage: sh tests/system/doom_mutate.sh [--direct] [FAULT...] | --texts
 #   --direct runs `make run-doom` instead of `tests/run doom`. FAULT is status
 #   or crash; the default is both.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" "$2" <<'PY'
+from pathlib import Path
+import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+fault, name = sys.argv[1:]
+path = Path(name)
+text = path.read_text()
+if fault == 'status':
+    old, new = '    _exit(status);\n', '    _exit(0);\n'
+else:
+    old = '            I_Error("IWAD file \'%s\' not found!", iwadfile);\n'
+    new = ''
+assert text.count(old) == 1
+path.write_text(text.replace(old, new))
+PY
+}
+
+# select_fault FAULT: the source FAULT changes, in `changed`, and the words
+# its failing row prints, in `expected`.
+select_fault()
+{
+    case "$1" in
+        status) changed=ports/doom/doomgeneric_rach2.c
+            expected='without its WAD the game exited with status 0 and' ;;
+        crash) changed=ports/doom/src/d_iwad.c
+            expected='and 0 not-found line(s); the engine' ;;
+    esac
+}
+
+if [ "${1:-}" = --texts ]; then
+    for fault in status crash; do
+        select_fault "$fault"
+        RACH2_FAULT_TEXTS=1 apply_fault "$fault" "$changed" >/dev/null || exit 1
+    done
+    echo 'doom-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
 . "$repo/tests/system/runlock.sh"
 runlock_hold "$repo" doom-mutation "$repo/tests/system/doom_mutate.sh" "$@"
+
 RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
 REPO=$repo
 . "$repo/mk/arch.sh"
@@ -133,27 +181,8 @@ run_phase()
 echo "doom-mutation: logs: $work"
 run_phase fixed pass
 for fault do
-    case "$fault" in
-        status) changed=ports/doom/doomgeneric_rach2.c
-            expected='without its WAD the game exited with status 0 and' ;;
-        crash) changed=ports/doom/src/d_iwad.c
-            expected='and 0 not-found line(s); the engine' ;;
-    esac
-    python3 - "$fault" "$changed" <<'PY'
-from pathlib import Path
-import sys
-
-fault, name = sys.argv[1:]
-path = Path(name)
-text = path.read_text()
-if fault == 'status':
-    old, new = '    _exit(status);\n', '    _exit(0);\n'
-else:
-    old = '            I_Error("IWAD file \'%s\' not found!", iwadfile);\n'
-    new = ''
-assert text.count(old) == 1
-path.write_text(text.replace(old, new))
-PY
+    select_fault "$fault"
+    apply_fault "$fault" "$changed"
     touch "$changed"
     run_phase "$fault" "$expected"
     if cmp -s "$work/fixed.game" "$work/$fault.game"; then

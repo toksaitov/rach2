@@ -6,7 +6,7 @@
 # lookup of the last name. On the same private copy it proves the whole
 # test's row on the file the unlink-synced sequence unlinks after its fsync.
 #
-# Usage: exfat_scan_mutate.sh [--check]
+# Usage: exfat_scan_mutate.sh [--check | --texts]
 # With --check it compiles and runs the unmodified rows alone, the cost
 # rows and the whole test. The faults, the first four each an old path
 # put back:
@@ -29,6 +29,65 @@ set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" "$2" <<'PY'
+from pathlib import Path
+import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+path = Path(sys.argv[1])
+source = path.read_text()
+fault = sys.argv[2]
+function, old, new = {
+    'filler': ('static int free_slots(',
+               '                    if (raw[0] == 0x00) {\n'
+               '                        uint8_t filler[32];\n',
+               '                    if (1) {\n'
+               '                        uint8_t filler[32];\n'),
+    'entry': ('static int dir_entry(',
+              '    if (!em->dir_block_held || em->dir_block != blk) {\n',
+              '    if (1) {\n'),
+    'upcase': ('static int ex_upcase(',
+               '    if (em->upcase_low_held && unit < UPCASE_LOW) {\n',
+               '    if (0) {\n'),
+    'grow': ('static int dir_grow(',
+             '    k_memcpy(em->setbuf, em->setsave, sizeof(em->setbuf));\n',
+             ''),
+    'unlink': ('static int ex_unlink(',
+               '    rc = set_retire(em, d, set.index, set.entries);\n'
+               '    if (rc != 0) {\n'
+               '        return rc;\n'
+               '    }\n'
+               '    return retire_chain(em, d, &set);',
+               '    return 0;'),
+}[fault]
+if source.count(function) != 1:
+    raise SystemExit('exfat-scan-proof: the function is not unique: ' + function)
+start = source.index(function)
+end = source.index('\n}\n', start)
+body = source[start:end]
+if body.count(old) != 1:
+    raise SystemExit('exfat-scan-proof: the pattern is not unique: ' + fault)
+path.write_text(source[:start] + body.replace(old, new) + source[end:])
+PY
+}
+
+faults='filler entry upcase grow unlink'
+if [ "${1:-}" = --texts ]; then
+    for fault in $faults; do
+        RACH2_FAULT_TEXTS=1 apply_fault rach2/sys/fs/exfat.c "$fault" >/dev/null || exit 1
+    done
+    echo 'exfat-scan-proof: texts: every fault is once in its source'
+    exit 0
+fi
+
 [ "$#" -eq 0 ] || [ "$*" = --check ] || {
     echo 'exfat-scan-proof: usage: exfat_scan_mutate.sh [--check]' >&2
     exit 2
@@ -113,46 +172,8 @@ echo "exfat-scan-proof: logs: $work"
 run_phase fixed 0 'exfat_hosttest: OK' --scan-cost
 run_phase fixed-whole 0 'exfat_hosttest: OK'
 [ "$#" -eq 0 ] || exit 0
-for fault in filler entry upcase grow unlink; do
-    python3 - "$source" "$fault" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-source = path.read_text()
-fault = sys.argv[2]
-function, old, new = {
-    'filler': ('static int free_slots(',
-               '                    if (raw[0] == 0x00) {\n'
-               '                        uint8_t filler[32];\n',
-               '                    if (1) {\n'
-               '                        uint8_t filler[32];\n'),
-    'entry': ('static int dir_entry(',
-              '    if (!em->dir_block_held || em->dir_block != blk) {\n',
-              '    if (1) {\n'),
-    'upcase': ('static int ex_upcase(',
-               '    if (em->upcase_low_held && unit < UPCASE_LOW) {\n',
-               '    if (0) {\n'),
-    'grow': ('static int dir_grow(',
-             '    k_memcpy(em->setbuf, em->setsave, sizeof(em->setbuf));\n',
-             ''),
-    'unlink': ('static int ex_unlink(',
-               '    rc = set_retire(em, d, set.index, set.entries);\n'
-               '    if (rc != 0) {\n'
-               '        return rc;\n'
-               '    }\n'
-               '    return retire_chain(em, d, &set);',
-               '    return 0;'),
-}[fault]
-if source.count(function) != 1:
-    raise SystemExit('exfat-scan-proof: the function is not unique: ' + function)
-start = source.index(function)
-end = source.index('\n}\n', start)
-body = source[start:end]
-if body.count(old) != 1:
-    raise SystemExit('exfat-scan-proof: the pattern is not unique: ' + fault)
-path.write_text(source[:start] + body.replace(old, new) + source[end:])
-PY
+for fault in $faults; do
+    apply_fault "$source" "$fault"
     touch "$source"
     mode=--scan-cost
     case $fault in

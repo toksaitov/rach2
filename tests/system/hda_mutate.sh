@@ -4,6 +4,36 @@
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" <<'PY'
+from pathlib import Path
+import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+p = Path(sys.argv[1])
+s = p.read_text()
+old = '"audio", VNODE_PROC_AUDIO'
+if s.count(old) != 1:
+    raise SystemExit('hda-guest: audio path is not unique')
+p.write_text(s.replace(old, '"audio-disabled", VNODE_PROC_AUDIO'))
+PY
+}
+
+if [ "${1:-}" = --texts ]; then
+    RACH2_FAULT_TEXTS=1
+    export RACH2_FAULT_TEXTS
+    apply_fault rach2/sys/fs/synthfs.c >/dev/null
+    echo 'hda-guest: texts: every fault is once in its source'
+    exit 0
+fi
+
+
 RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
 REPO=$repo
 . "$repo/mk/arch.sh"
@@ -132,16 +162,7 @@ for program in audiotest hdaprobe; do
 done
 run_phase fixed pass
 changed=1
-python3 - "$source" <<'PY'
-from pathlib import Path
-import sys
-p = Path(sys.argv[1])
-s = p.read_text()
-old = '"audio", VNODE_PROC_AUDIO'
-if s.count(old) != 1:
-    raise SystemExit('hda-guest: audio path is not unique')
-p.write_text(s.replace(old, '"audio-disabled", VNODE_PROC_AUDIO'))
-PY
+apply_fault "$source"
 run_phase mutated fail
 if cmp -s "$work/fixed.kernel" "$work/mutated.kernel"; then
     echo 'hda-guest: mutation did not change kernel' >&2; exit 1

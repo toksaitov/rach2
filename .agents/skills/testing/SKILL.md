@@ -35,3 +35,5 @@ description: Run suites, full sets, analyses or mutation tests on the testing ho
 * Drive the mutation from a script that restores the source in a trap, since a mutation can hang the suite and outlive the command that applied it. Stop the test processes before restoring a source they share.
 * Copying the source back does not make `make` rebuild it, so touch the file or rebuild explicitly before believing the result.
 * One mutation shows that one fault is caught, not that the whole test is sound.
+* A script that changes sources in the tree holds it: it sources `tests/system/runlock.sh` and calls `runlock_hold` before it reads its arguments, so that no run builds or boots the tree while a fault is in it.
+* Every fault script takes `--texts`, which finds each fault's text in the tree's sources by the script's own rule and builds nothing; `tests/run style` runs them all through `tools/verify/faulttexts.sh`. Give a new fault script the mode when it is written, so that a source change that moves a faulted line fails style rather than the next proof.

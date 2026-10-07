@@ -11,10 +11,31 @@ QEMU=${RACH2_QEMU:-qemu-system-i386}
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# space_mutant FAULT SCRIPT: print SCRIPT, the machine's grow helper, with its
+# work directory (ram-work) or its log (ram-log) moved to the RAM disk.
+space_mutant()
+{
+    case $1 in
+        ram-work) sed 's|mktemp -d "$store/machine-grow.XXXXXX"|mktemp -d /tmp/machine-grow.XXXXXX|' "$2" ;;
+        ram-log) sed 's|tee -a "$work/$log_name"|tee -a "/tmp/$log_name"|' "$2" ;;
+    esac
+}
+
+if [ "${1:-}" = --texts ]; then
+    for fault in ram-work ram-log; do
+        if space_mutant "$fault" tools/dev/machine_grow.sh | cmp -s - tools/dev/machine_grow.sh; then
+            echo "grow-space: the $fault fault is not in tools/dev/machine_grow.sh" >&2
+            exit 1
+        fi
+    done
+    echo 'grow-space: texts: every fault is once in its source'
+    exit 0
+fi
 if [ "$#" -le 1 ]; then
     mode=space
     [ "$#" = 0 ] || { [ "$1" = --mutate ] && mode=space-mutate; } \
-        || { echo 'grow-space: usage: machine_grow_space.sh [--mutate]' >&2; exit 1; }
+        || { echo 'grow-space: usage: machine_grow_space.sh [--mutate | --texts]' >&2; exit 1; }
     # Image targets are deliberately not built here. tests/run grow supplies
     # them; a direct proof runs against the same prepared artifacts, the MBR
     # disk among them, whose boot partition the legacy grow saves as the
@@ -50,10 +71,8 @@ trap 'exit 143' TERM
 mkexfat="$repo/build/tests/host/mkexfatfixture"
 mkdir "$proof/scripts"
 cp "$repo/tools/dev/machine_grow.sh" "$proof/scripts/fixed.sh"
-sed 's|mktemp -d "$store/machine-grow.XXXXXX"|mktemp -d /tmp/machine-grow.XXXXXX|' \
-    "$proof/scripts/fixed.sh" > "$proof/scripts/ram-work.sh"
-sed 's|tee -a "$work/$log_name"|tee -a "/tmp/$log_name"|' \
-    "$proof/scripts/fixed.sh" > "$proof/scripts/ram-log.sh"
+space_mutant ram-work "$proof/scripts/fixed.sh" > "$proof/scripts/ram-work.sh"
+space_mutant ram-log "$proof/scripts/fixed.sh" > "$proof/scripts/ram-log.sh"
 # Fill the actual exFAT volume after the first restored range. The log ends
 # on a cluster boundary, so its next completion must allocate more space.
 awk '

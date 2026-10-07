@@ -15,8 +15,8 @@ import tempfile
 import time
 
 repo = pathlib.Path(sys.argv[1])
-if sys.argv[2:] not in ([], ['--mutate']):
-    sys.exit('usage: machine_measure_test.sh [--mutate]')
+if sys.argv[2:] not in ([], ['--mutate'], ['--texts']):
+    sys.exit('usage: machine_measure_test.sh [--mutate | --texts]')
 work = pathlib.Path(tempfile.mkdtemp(prefix='rach2-measure.', dir='/tmp'))
 print('machine-measure-test: logs:', work, flush=True)
 source = work / 'source'
@@ -363,28 +363,36 @@ def cases(label):
     print(f'machine-measure-test: {label}: {checks} checks passed', flush=True)
 
 
+# Each fault: its name, the driver, the text, its replacement, and the words
+# of the row it must fail.
+mutations = [
+    ('cleanup', 'machine_net_in.sh', '        rm -f "$known"', '        :',
+     'default known-hosts file remains'),
+    ('deadline', 'machine_load_session.sh', '[ "$finished" -lt "$end" ]',
+     '[ "$began" -lt "$end" ]', 'late completion counted inside the window'),
+    ('stagger', 'machine_load.sh', '    sleep 1\n', '    :\n',
+     'sessions started without a second between them'),
+    ('slot', 'machine_identity.sh', '[ "$booted" = "$want" ]', '[ -n "$want" ]',
+     'a machine booted from another slot was measured'),
+    ('trial', 'machine_identity.sh', '[ "$trial" = none ]', '[ -n "$trial" ]',
+     'a machine with an armed trial was measured'),
+    ('kernel', 'machine_identity.sh', '[ "$have" = "$sum" ]', '[ -n "$sum" ]',
+     'a machine running another kernel was measured'),
+    ('inbound-unchecked', 'machine_net_in.sh', '"$measure_user@$address" || exit\n',
+     '"$measure_user@$address" || :\n',
+     'the inbound driver timed a machine the identity check refused'),
+    ('load-unchecked', 'machine_load.sh', '"$MEASURE_USER@$ADDR" || exit\n',
+     '"$MEASURE_USER@$ADDR" || :\n',
+     'the load driver started sessions on a machine the identity check refused')]
+if '--texts' in sys.argv:
+    for label, name, before, after, diagnostic in mutations:
+        assert (source / name).read_text().count(before) == 1, label
+    shutil.rmtree(work)
+    print('machine-measure-test: texts: every fault is once in its source', flush=True)
+    sys.exit(0)
 try:
     cases('fixed')
     if '--mutate' in sys.argv:
-        mutations = [
-            ('cleanup', 'machine_net_in.sh', '        rm -f "$known"', '        :',
-             'default known-hosts file remains'),
-            ('deadline', 'machine_load_session.sh', '[ "$finished" -lt "$end" ]',
-             '[ "$began" -lt "$end" ]', 'late completion counted inside the window'),
-            ('stagger', 'machine_load.sh', '    sleep 1\n', '    :\n',
-             'sessions started without a second between them'),
-            ('slot', 'machine_identity.sh', '[ "$booted" = "$want" ]', '[ -n "$want" ]',
-             'a machine booted from another slot was measured'),
-            ('trial', 'machine_identity.sh', '[ "$trial" = none ]', '[ -n "$trial" ]',
-             'a machine with an armed trial was measured'),
-            ('kernel', 'machine_identity.sh', '[ "$have" = "$sum" ]', '[ -n "$sum" ]',
-             'a machine running another kernel was measured'),
-            ('inbound-unchecked', 'machine_net_in.sh', '"$measure_user@$address" || exit\n',
-             '"$measure_user@$address" || :\n',
-             'the inbound driver timed a machine the identity check refused'),
-            ('load-unchecked', 'machine_load.sh', '"$MEASURE_USER@$ADDR" || exit\n',
-             '"$MEASURE_USER@$ADDR" || :\n',
-             'the load driver started sessions on a machine the identity check refused')]
         for label, name, before, after, diagnostic in mutations:
             path = source / name
             text = path.read_text()

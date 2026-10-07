@@ -13,25 +13,35 @@
 #   place-low        puts the frame table at the bottom of its range instead
 #                    of the top.
 #
-# Usage: frame_mutate.sh [--check]
-# With --check it compiles and runs the unmodified test alone.
+# Usage: frame_mutate.sh [--check | --texts]
+# With --check it compiles and runs the unmodified test alone. With --texts
+# it checks that each fault's text is once in the tree's source, and builds
+# and runs nothing.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
-[ "$#" -eq 0 ] || [ "$*" = --check ] || {
-    echo 'frame-proof: usage: frame_mutate.sh [--check]' >&2
+texts=
+[ "${1:-}" != --texts ] || texts=1
+[ "$#" -eq 0 ] || [ "$*" = --check ] || [ "$*" = --texts ] || {
+    echo 'frame-proof: usage: frame_mutate.sh [--check | --texts]' >&2
     exit 2
 }
-mkdir -p build/tests
-work=$(mktemp -d "$repo/build/tests/frame-proof.XXXXXX")
 child=
-# frame.h reaches boot.h by a relative path.
-mkdir "$work/rach2"
-cp -R rach2/sys "$work/rach2/"
-source="$work/rach2/sys/mm/frame.c"
-header="$work/rach2/sys/mm/frame.h"
-cp "$source" "$work/frame.c.saved"
-cp "$header" "$work/frame.h.saved"
+if [ -n "$texts" ]; then
+    work=
+    source=rach2/sys/mm/frame.c
+    header=rach2/sys/mm/frame.h
+else
+    mkdir -p build/tests
+    work=$(mktemp -d "$repo/build/tests/frame-proof.XXXXXX")
+    # frame.h reaches boot.h by a relative path.
+    mkdir "$work/rach2"
+    cp -R rach2/sys "$work/rach2/"
+    source="$work/rach2/sys/mm/frame.c"
+    header="$work/rach2/sys/mm/frame.h"
+    cp "$source" "$work/frame.c.saved"
+    cp "$header" "$work/frame.h.saved"
+fi
 
 restore()
 {
@@ -104,6 +114,7 @@ mutate()
 {
     python3 - "$@" <<'PY'
 from pathlib import Path
+import os
 import sys
 
 path = Path(sys.argv[1])
@@ -113,9 +124,10 @@ for old, new in zip(pairs[0::2], pairs[1::2]):
     if source.count(old) != 1:
         raise SystemExit('frame-proof: the pattern is not unique: ' + old)
     source = source.replace(old, new)
-path.write_text(source)
+if not os.environ.get('RACH2_FAULT_TEXTS'):
+    path.write_text(source)
 PY
-    touch "$1"
+    [ -n "$texts" ] || touch "$1"
 }
 
 # fault NAME: run the mutated tree and require the failures `want` lists.
@@ -131,10 +143,21 @@ fault()
     restore
 }
 
-echo "frame-proof: logs: $work"
-run_phase fixed
-[ "$status" -eq 0 ] && [ ! -s "$work/fixed.log" ] || exit 1
-[ "$#" -eq 0 ] || exit 0
+if [ -n "$texts" ]; then
+    trap - EXIT
+    run_phase() { :; }
+    restore() { :; }
+    fault() { :; }
+    RACH2_FAULT_TEXTS=1
+    export RACH2_FAULT_TEXTS
+else
+    echo "frame-proof: logs: $work"
+fi
+if [ -z "$texts" ]; then
+    run_phase fixed
+    [ "$status" -eq 0 ] && [ ! -s "$work/fixed.log" ] || exit 1
+    [ "$#" -eq 0 ] || exit 0
+fi
 
 mutate "$source" \
     'if (type == FRAME_MAP_USABLE && range_add' 'if (type != 2u && range_add' \
@@ -199,6 +222,10 @@ want=$(expected "$p1" "$p2" "$p1" "$p2" \
     'CHECK(at == MIB(192) - MIB(1) - KIB(4));')
 fault place-low
 
+if [ -n "$texts" ]; then
+    echo 'frame-proof: texts: every fault is once in its source'
+    exit 0
+fi
 run_phase restored
 [ "$status" -eq 0 ] && [ ! -s "$work/restored.log" ] || exit 1
 cmp "$work/frame.c.saved" "$source"

@@ -5,7 +5,42 @@ set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 root=$(mktemp -d "${TMPDIR:-/tmp}/rach2-usbdisk-script.XXXXXX")
 echo "usbdisk-script: logs: $root"
-[ "$#" -eq 0 ] || [ "$*" = --mutate ] || exit 2
+[ "$#" -eq 0 ] || [ "$*" = --mutate ] || [ "$*" = --texts ] || exit 2
+
+# script_edit FAULT SCRIPT: write $root/source.sh as SCRIPT, a copy of
+# usbdisk_mutate.sh, with FAULT in it; fail when the edit changes nothing,
+# since its text has left the script.
+script_edit()
+{
+    case $1 in
+        stale)
+            sed '/^    "${CROSS_CC/i\
+    [ -f "$work/usbdiskprobe" ] ||
+' "$2" > "$root/source.sh" ;;
+        unknown)
+            sed 's|"$work/usbdisk-proof.manifest"|"$work/unknown-probe.manifest"|g' \
+                "$2" > "$root/source.sh" ;;
+        retained)
+            sed '/^    rm -f "$work\/output"$/d' "$2" > "$root/source.sh" ;;
+    esac
+    if cmp -s "$2" "$root/source.sh"; then
+        echo "usbdisk-script: the $1 fault is not in usbdisk_mutate.sh" >&2
+        exit 1
+    fi
+}
+
+if [ "$*" = --texts ]; then
+    for fault in stale unknown retained; do
+        script_edit "$fault" "$repo/tests/system/usbdisk_mutate.sh"
+    done
+    if [ "$(grep -c 'the child volume would not mount' "$repo/tests/usbdiskprobe.c")" -eq 0 ]; then
+        echo 'usbdisk-script: the probe no longer prints the assertion the rows edit' >&2
+        exit 1
+    fi
+    rm -rf "$root"
+    echo 'usbdisk-script: texts: every fault is once in its source'
+    exit 0
+fi
 # The architecture, from ARCH as usbdisk_mutate.sh takes it, for the
 # mk/arch.sh the extracted builder sources, which reads RACH2_ARCH alone.
 RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
@@ -145,9 +180,7 @@ rows fixed
 if [ "$#" -ne 0 ]; then
     # The stale binary is allowed only on the second invocation, reproducing
     # a source edit followed by a run that reuses an earlier built probe.
-    sed '/^    "${CROSS_CC/i\
-    [ -f "$work/usbdiskprobe" ] ||
-' "$root/saved.sh" > "$root/source.sh"
+    script_edit stale "$root/saved.sh"
     extract
     status=0
     image_case stale > "$root/stale.log" 2>&1 || status=$?
@@ -156,8 +189,7 @@ if [ "$#" -ne 0 ]; then
     echo 'usbdisk-script: result: stale probe detected'
     cp "$root/saved.sh" "$root/source.sh"
     rows restored-image
-    sed 's|"$work/usbdisk-proof.manifest"|"$work/unknown-probe.manifest"|g' \
-        "$root/saved.sh" > "$root/source.sh"
+    script_edit unknown "$root/saved.sh"
     extract
     status=0
     image_case unknown > "$root/unknown.log" 2>&1 || status=$?
@@ -184,7 +216,7 @@ if [ "$#" -ne 0 ]; then
     grep -qx 'usbdisk-script: failed: compiler failure was swallowed' "$root/swallowed.log"
     echo 'usbdisk-script: result: conditional function swallowed failure and was detected'
     rows restored-shell
-    sed '/^    rm -f "$work\/output"$/d' "$root/saved.sh" > "$root/source.sh"
+    script_edit retained "$root/saved.sh"
     extract
     status=0
     fifo_case retained > "$root/retained.log" 2>&1 || status=$?

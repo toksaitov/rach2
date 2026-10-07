@@ -40,10 +40,12 @@
 # The trees hold copies of the real files, and marker directories stand for
 # build/, so a clean there cannot reach the real one. --mutate puts each fault
 # into the private copy that holds it, requires the row named for it to fail,
-# then restores and touches the copy and requires every row again.
+# then restores and touches the copy and requires every row again. --texts
+# puts each fault into its copy and restores it, and runs no row, so that a
+# fault whose text has left its file is found without the rows.
 #
 # Usage:
-#     sh tests/system/build_rules_test.sh [--mutate]
+#     sh tests/system/build_rules_test.sh [--mutate | --texts]
 #
 set -eu
 # The fixture lists i686 and x86-64 sources by naming each architecture, so
@@ -54,7 +56,8 @@ unset ARCH MAKEFLAGS MFLAGS
 case ${1:-} in
     '') mutate=0 ;;
     --mutate) mutate=1 ;;
-    *) echo 'build-rules-test: usage: build_rules_test.sh [--mutate]' >&2; exit 2 ;;
+    --texts) mutate=2 ;;
+    *) echo 'build-rules-test: usage: build_rules_test.sh [--mutate | --texts]' >&2; exit 2 ;;
 esac
 [ "$#" -le 1 ] || exit 2
 
@@ -471,9 +474,11 @@ PY
     touch "$C/Makefile" "$C/mk/images.mk"
 }
 
-rows
-[ -z "$failed" ] || exit 1
-[ "$mutate" -eq 1 ] || exit 0
+if [ "$mutate" -ne 2 ]; then
+    rows
+    [ -z "$failed" ] || exit 1
+    [ "$mutate" -eq 1 ] || exit 0
+fi
 
 # Each fault, the copy it changes and the row it must fail. The make faults
 # are the states the entries were found in: no rule for the GRUB disk (112),
@@ -522,6 +527,12 @@ for fault in unlisted missing clean grub-target tools-late include-early plain-s
             mutate "$C/Makefile" '$(error release: refused:' '$(info release: allowed:'
             row='release-guard' ;;
     esac
+    if [ "$mutate" -eq 2 ]; then
+        for pair in $copies; do
+            cp "${pair#*=}" "${pair%%=*}"
+        done
+        continue
+    fi
     rows
     case " $failed " in
         *" $row "*) echo "build-rules-test: result: $fault: the fault fails $row" ;;
@@ -535,3 +546,4 @@ for fault in unlisted missing clean grub-target tools-late include-early plain-s
     [ -z "$failed" ] || exit 1
     echo "build-rules-test: result: $fault: restored, every row passes"
 done
+[ "$mutate" -ne 2 ] || echo 'build-rules-test: texts: every fault is once in its source'

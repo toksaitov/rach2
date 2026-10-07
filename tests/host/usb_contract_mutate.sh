@@ -4,6 +4,75 @@ set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" "$2" <<'PY'
+import pathlib
+import sys
+import os
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+root = pathlib.Path(sys.argv[1])
+fault = sys.argv[2]
+changes = {
+    "doorbells": ("xhci.c", [
+        ("hc->caps.dboff > XHCI_MAP_SIZE || ", ""),
+        ("doorbells_bytes > XHCI_MAP_SIZE - hc->caps.dboff",
+         "hc->caps.dboff + doorbells_bytes > XHCI_MAP_SIZE"),
+    ]),
+    "runtime": ("xhci.c", [
+        ("hc->caps.rtsoff > XHCI_MAP_SIZE ||", ""),
+        ("runtime_bytes > XHCI_MAP_SIZE - hc->caps.rtsoff",
+         "hc->caps.rtsoff + runtime_bytes > XHCI_MAP_SIZE"),
+    ]),
+    "interrupters": ("xhci.c", [("hc->caps.max_intrs == 0", "0")]),
+    "timeout": ("core.c", [
+        ("d->abandoned = !xhci_command_free(d->hc);", "d->abandoned = 0;"),
+    ]),
+    "interfaces": ("core.c", [
+        ("            k_memset(out, 0, sizeof(*out));\n", ""),
+    ]),
+    "context": ("xhci.c", [
+        ("slot_words(s, slot, last_ctx);", "slot_words(s, slot, dci);"),
+    ]),
+    "shutdown": ("xhci.c", [
+        ('klog(KLOG_WARN, "usb", "stop: the controller would not halt");\n        return;',
+         'klog(KLOG_WARN, "usb", "stop: the controller would not halt");'),
+    ]),
+    "abort": ("xhci.c", [
+        ("    hc->command_stop_seen = 0;\n    hc->command_aborting = 1;",
+         "    hc->command_running = 0;\n    hc->command_stop_seen = 0;\n    hc->command_aborting = 1;"),
+    ]),
+    "stop": ("xhci.c", [
+        ("    hc->command_stop_seen = 0;\n    hc->command_aborting = 1;",
+         "    hc->command_stop_seen = 1;\n    hc->command_aborting = 1;"),
+    ]),
+}
+name, pairs = changes[fault]
+path = root / name
+source = path.read_text()
+for old, new in pairs:
+    if source.count(old) != 1:
+        raise SystemExit("usb-mutation: source pattern is not unique: " + fault)
+    source = source.replace(old, new)
+path.write_text(source)
+PY
+}
+
+faults='doorbells runtime interrupters timeout interfaces context shutdown
+    abort stop'
+if [ "${1:-}" = --texts ]; then
+    for fault in $faults; do
+        RACH2_FAULT_TEXTS=1 apply_fault rach2/sys/usb "$fault" >/dev/null || exit 1
+    done
+    echo 'usb-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
 mkdir -p build/tests
 work=$(mktemp -d "$repo/build/tests/usb-contract-proof.XXXXXX")
 child=
@@ -62,56 +131,8 @@ run_phase()
 echo "usb-mutation: logs: $work"
 run_phase fixed usb 0 'usb_hosttest: OK'
 run_phase fixed xhci 0 'xhci_hosttest: OK'
-for fault in doorbells runtime interrupters timeout interfaces context shutdown abort stop; do
-    python3 - "$work/rach2/sys/usb" "$fault" <<'PY'
-import pathlib
-import sys
-
-root = pathlib.Path(sys.argv[1])
-fault = sys.argv[2]
-changes = {
-    "doorbells": ("xhci.c", [
-        ("hc->caps.dboff > XHCI_MAP_SIZE || ", ""),
-        ("doorbells_bytes > XHCI_MAP_SIZE - hc->caps.dboff",
-         "hc->caps.dboff + doorbells_bytes > XHCI_MAP_SIZE"),
-    ]),
-    "runtime": ("xhci.c", [
-        ("hc->caps.rtsoff > XHCI_MAP_SIZE ||", ""),
-        ("runtime_bytes > XHCI_MAP_SIZE - hc->caps.rtsoff",
-         "hc->caps.rtsoff + runtime_bytes > XHCI_MAP_SIZE"),
-    ]),
-    "interrupters": ("xhci.c", [("hc->caps.max_intrs == 0", "0")]),
-    "timeout": ("core.c", [
-        ("d->abandoned = !xhci_command_free(d->hc);", "d->abandoned = 0;"),
-    ]),
-    "interfaces": ("core.c", [
-        ("            k_memset(out, 0, sizeof(*out));\n", ""),
-    ]),
-    "context": ("xhci.c", [
-        ("slot_words(s, slot, last_ctx);", "slot_words(s, slot, dci);"),
-    ]),
-    "shutdown": ("xhci.c", [
-        ('klog(KLOG_WARN, "usb", "stop: the controller would not halt");\n        return;',
-         'klog(KLOG_WARN, "usb", "stop: the controller would not halt");'),
-    ]),
-    "abort": ("xhci.c", [
-        ("    hc->command_stop_seen = 0;\n    hc->command_aborting = 1;",
-         "    hc->command_running = 0;\n    hc->command_stop_seen = 0;\n    hc->command_aborting = 1;"),
-    ]),
-    "stop": ("xhci.c", [
-        ("    hc->command_stop_seen = 0;\n    hc->command_aborting = 1;",
-         "    hc->command_stop_seen = 1;\n    hc->command_aborting = 1;"),
-    ]),
-}
-name, pairs = changes[fault]
-path = root / name
-source = path.read_text()
-for old, new in pairs:
-    if source.count(old) != 1:
-        raise SystemExit("usb-mutation: source pattern is not unique: " + fault)
-    source = source.replace(old, new)
-path.write_text(source)
-PY
+for fault in $faults; do
+    apply_fault "$work/rach2/sys/usb" "$fault"
     test_name=xhci
     case $fault in
         doorbells) message='wrapping doorbell range is refused' ;;

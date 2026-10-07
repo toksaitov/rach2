@@ -4,6 +4,38 @@
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" <<'PYTHON'
+from pathlib import Path
+import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+path = Path(sys.argv[1])
+text = path.read_text()
+old = 'return !p->master_open || n_tty_readable(&p->slave.ldisc);'
+new = 'return n_tty_readable(&p->slave.ldisc);'
+if text.count(old) != 1:
+    raise SystemExit('pty-hangup: wait predicate is not unique')
+path.write_text(text.replace(old, new))
+PYTHON
+}
+
+if [ "${1:-}" = --texts ]; then
+    RACH2_FAULT_TEXTS=1
+    export RACH2_FAULT_TEXTS
+    apply_fault rach2/sys/tty/pty.c >/dev/null
+    echo 'pty-hangup: texts: every fault is once in its source'
+    exit 0
+fi
+
+
 RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
 REPO=$repo
 . "$repo/mk/arch.sh"
@@ -116,18 +148,7 @@ build/krffs/readfile.krffs "$work/test.krffs" /ptyprobe "$work/ptyprobe.staged"
 cmp "$tree"/tests/ptyprobe "$work/ptyprobe.staged"
 run_phase fixed pass
 changed=1
-python3 - "$source" <<'PYTHON'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-text = path.read_text()
-old = 'return !p->master_open || n_tty_readable(&p->slave.ldisc);'
-new = 'return n_tty_readable(&p->slave.ldisc);'
-if text.count(old) != 1:
-    raise SystemExit('pty-hangup: wait predicate is not unique')
-path.write_text(text.replace(old, new))
-PYTHON
+apply_fault "$source"
 detail='PTYPROBE FAIL (hangup releases both blocked readers)'
 run_phase mutated fail
 if cmp -s "$work/fixed.kernel" "$work/mutated.kernel"; then

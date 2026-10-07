@@ -2,7 +2,7 @@
 # Prove sigprobe's timer rows with faults compiled into the kernel, on the
 # kernel, probe and emulator of the architecture ARCH names.
 #
-# Usage: sh tests/system/itimer_mutate.sh
+# Usage: sh tests/system/itimer_mutate.sh [--texts]
 #
 # sigprobe arms the real-time timer of setitimer(2) and requires a blocked
 # single alarm not to end a sleep and its handler to run once unblocked, an
@@ -27,6 +27,70 @@ REPO=$repo
 RACH2_QEMU=$ARCH_QEMU
 export RACH2_QEMU ARCH_BUILD
 tree=build$ARCH_SUFFIX
+# fault FILE OLD NEW: replace the lines OLD of FILE, which must occur once,
+# with NEW. The mark is set first, so a trap that runs while the file is
+# being written still restores it.
+fault()
+{
+    changed=1
+    python3 - "$1" "$2" "$3" <<'PYTHON'
+from pathlib import Path
+import os
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+old, new = sys.argv[2] + '\n', sys.argv[3] + '\n'
+if text.count(old) != 1:
+    raise SystemExit('itimer-mutation: the lines to change are not unique: ' + sys.argv[2])
+if not os.environ.get('RACH2_FAULT_TEXTS'):
+    path.write_text(text.replace(old, new))
+PYTHON
+}
+
+# itimer_fault NAME: put the fault whose failing phase is NAME into its
+# source, and name in `detail` the words of the row it must fail.
+itimer_fault()
+{
+    case $1 in
+        unposted)
+            fault rach2/sys/proc/process.c '            signal_post(p, SIGALRM);' '            (void)0;'
+            detail='and its handler runs once SIGALRM is unblocked'
+            ;;
+        unrearmed)
+            fault rach2/sys/proc/process.c \
+                '            p->alarm_tick = p->alarm_interval != 0 ? proc_alarm_at(now, p->alarm_interval) : 0;' \
+                '            p->alarm_tick = 0;'
+            detail='the interval timer ends three sleeps in turn'
+            ;;
+        unchecked)
+            fault rach2/sys/syscall.c '    if (which < ITIMER_REAL || which > ITIMER_PROF) {
+        return -EINVAL;
+    }
+    if (!unew || copy_from_user(&set, unew, sizeof(set)) != 0) {' \
+                '    if (!unew || copy_from_user(&set, unew, sizeof(set)) != 0) {'
+            detail='a timer other than the three is refused and arms nothing'
+            ;;
+        unmasked)
+            fault rach2/sys/syscall_proc.c '    deliverable = sig_pending_now() & ~current_proc->sig_blocked;
+    debug_pending = arch_debug_pending();' \
+                '    deliverable = sig_pending_now();
+    debug_pending = arch_debug_pending();'
+            detail='a blocked alarm does not end a sleep and leaves the timer disarmed'
+            ;;
+    esac
+}
+
+if [ "${1:-}" = --texts ]; then
+    RACH2_FAULT_TEXTS=1
+    export RACH2_FAULT_TEXTS
+    for name in unposted unrearmed unchecked unmasked; do
+        itimer_fault "$name"
+    done
+    echo 'itimer-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
 . "$repo/tests/system/runlock.sh"
 runlock_hold "$repo" itimer-mutation "$repo/tests/system/itimer_mutate.sh" "$@"
 mkdir -p build
@@ -118,25 +182,6 @@ run_phase()
     run_probe "$expected"
 }
 
-# fault FILE OLD NEW: replace the lines OLD of FILE, which must occur once,
-# with NEW. The mark is set first, so a trap that runs while the file is
-# being written still restores it.
-fault()
-{
-    changed=1
-    python3 - "$1" "$2" "$3" <<'PYTHON'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-text = path.read_text()
-old, new = sys.argv[2] + '\n', sys.argv[3] + '\n'
-if text.count(old) != 1:
-    raise SystemExit('itimer-mutation: the lines to change are not unique: ' + sys.argv[2])
-path.write_text(text.replace(old, new))
-PYTHON
-}
-
 echo "itimer-mutation: logs: $work"
 make -s -C tests ../"$tree"/tests/sigprobe "ARCH=$RACH2_ARCH" >"$work/build.log" 2>&1
 # These three image tools do not use mkhash's vendored crypt source.
@@ -156,8 +201,7 @@ build/krffs/readfile.krffs "$work/test.krffs" /sigprobe "$work/sigprobe.staged"
 cmp "$tree"/tests/sigprobe "$work/sigprobe.staged"
 run_phase fixed pass
 
-fault rach2/sys/proc/process.c '            signal_post(p, SIGALRM);' '            (void)0;'
-detail='and its handler runs once SIGALRM is unblocked'
+itimer_fault unposted
 run_phase unposted fail
 if cmp -s "$work/fixed.kernel" "$work/unposted.kernel"; then
     echo 'itimer-mutation: the first fault did not change the kernel' >&2; exit 1
@@ -166,10 +210,7 @@ restore
 run_phase posted pass
 cmp "$work/fixed.kernel" "$work/posted.kernel"
 
-fault rach2/sys/proc/process.c \
-    '            p->alarm_tick = p->alarm_interval != 0 ? proc_alarm_at(now, p->alarm_interval) : 0;' \
-    '            p->alarm_tick = 0;'
-detail='the interval timer ends three sleeps in turn'
+itimer_fault unrearmed
 run_phase unrearmed fail
 if cmp -s "$work/fixed.kernel" "$work/unrearmed.kernel"; then
     echo 'itimer-mutation: the second fault did not change the kernel' >&2; exit 1
@@ -178,12 +219,7 @@ restore
 run_phase rearmed pass
 cmp "$work/fixed.kernel" "$work/rearmed.kernel"
 
-fault rach2/sys/syscall.c '    if (which < ITIMER_REAL || which > ITIMER_PROF) {
-        return -EINVAL;
-    }
-    if (!unew || copy_from_user(&set, unew, sizeof(set)) != 0) {' \
-    '    if (!unew || copy_from_user(&set, unew, sizeof(set)) != 0) {'
-detail='a timer other than the three is refused and arms nothing'
+itimer_fault unchecked
 run_phase unchecked fail
 if cmp -s "$work/fixed.kernel" "$work/unchecked.kernel"; then
     echo 'itimer-mutation: the third fault did not change the kernel' >&2; exit 1
@@ -192,11 +228,7 @@ restore
 run_phase checked pass
 cmp "$work/fixed.kernel" "$work/checked.kernel"
 
-fault rach2/sys/syscall_proc.c '    deliverable = sig_pending_now() & ~current_proc->sig_blocked;
-    debug_pending = arch_debug_pending();' \
-    '    deliverable = sig_pending_now();
-    debug_pending = arch_debug_pending();'
-detail='a blocked alarm does not end a sleep and leaves the timer disarmed'
+itimer_fault unmasked
 run_phase unmasked fail
 if cmp -s "$work/fixed.kernel" "$work/unmasked.kernel"; then
     echo 'itimer-mutation: the fourth fault did not change the kernel' >&2; exit 1

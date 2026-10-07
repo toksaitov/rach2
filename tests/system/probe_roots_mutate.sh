@@ -6,6 +6,49 @@ set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" "$2" <<'PY'
+from pathlib import Path
+import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+path = Path(sys.argv[1])
+text = path.read_text()
+if sys.argv[2] == 'link':
+    start = text.index('static int ext2_link(')
+    end = text.index('\n}', start)
+    body = text[start:end]
+    old = 'if ((n->mode & S_IFMT_) == S_IFDIR_) {'
+    assert body.count(old) == 1
+    text = text[:start] + body.replace(old, 'if (n != 0) {') + text[end:]
+elif sys.argv[2] == 'magic':
+    old = 'st->magic = EXT2_SUPER_MAGIC;'
+    assert text.count(old) == 1
+    text = text.replace(old, 'st->magic = 0x4B524646u;')
+else:
+    old = 'st->blocks_known = 1;'
+    assert text.count(old) == 1
+    text = text.replace(old, 'st->blocks_known = 0;')
+path.write_text(text)
+PY
+}
+
+faults='link magic blocks'
+if [ "${1:-}" = --texts ]; then
+    for fault in $faults; do
+        RACH2_FAULT_TEXTS=1 apply_fault rach2/sys/fs/ext2.c "$fault" >/dev/null || exit 1
+    done
+    echo 'probe-roots-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
 RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
 REPO=$repo
 . "$repo/mk/arch.sh"
@@ -101,31 +144,9 @@ make -s test-image build/tests/system/harness build/tests/system/runutil \
     build/tools/image/mkmbr "ARCH=$RACH2_ARCH" >"$work/build.log" 2>&1
 cat "$work/build.log"
 run_phase fixed pass
-for fault in link magic blocks; do
+for fault in $faults; do
     changed=1
-    python3 - "$source" "$fault" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-text = path.read_text()
-if sys.argv[2] == 'link':
-    start = text.index('static int ext2_link(')
-    end = text.index('\n}', start)
-    body = text[start:end]
-    old = 'if ((n->mode & S_IFMT_) == S_IFDIR_) {'
-    assert body.count(old) == 1
-    text = text[:start] + body.replace(old, 'if (n != 0) {') + text[end:]
-elif sys.argv[2] == 'magic':
-    old = 'st->magic = EXT2_SUPER_MAGIC;'
-    assert text.count(old) == 1
-    text = text.replace(old, 'st->magic = 0x4B524646u;')
-else:
-    old = 'st->blocks_known = 1;'
-    assert text.count(old) == 1
-    text = text.replace(old, 'st->blocks_known = 0;')
-path.write_text(text)
-PY
+    apply_fault "$source" "$fault"
     case "$fault" in
         link) detail='link on ext2 succeeds' ;;
         magic) detail='statfs64 of the root' ;;

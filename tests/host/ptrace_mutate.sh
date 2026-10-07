@@ -1,87 +1,21 @@
 #!/bin/sh
 # Prove native ptrace tests against faults in private source copies.
-# Usage: ptrace_mutate.sh [ptrace|debugreg [--check]]
-# With no argument, run both tests and their faults.
-# --check compiles and runs the unmodified test alone. Every fault must
-# fail its named row; a restored, touched and rebuilt source must pass.
+# Usage: ptrace_mutate.sh [ptrace|debugreg [--check]] | --texts
+# With no argument, run both tests and their faults. --check compiles and
+# runs the unmodified test alone; --texts checks that every fault's text is
+# once in the tree's source and builds nothing. Every fault must fail its
+# named row; a restored, touched and rebuilt source must pass.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
-if [ "$#" -eq 0 ]; then
-    sh "$repo/tests/host/ptrace_mutate.sh" ptrace
-    sh "$repo/tests/host/ptrace_mutate.sh" debugreg
-    exit 0
-fi
-kind=${1:-}
-case "$kind" in
-    ptrace) source=proc/ptrace.c; faults='regset listen return-stops return-kill options seize step' ;;
-    debugreg) source=arch/x86/debugreg.c; faults='switch stale migration delivery kernel-step pending pending-saved pending-stale pending-step dequeue dequeue-repeat user-force user-entry user-origin user-status user-wait-post user-wait-cpu user-wait-saved user-wait-stale user-wait-kernel user-wait-no-thread user-no-status-origin user-no-status-code user-no-status-dr6 user-no-status-capture user-no-status-stale user-no-status-repeat-cpu user-no-status-repeat-saved user-no-status-wait' ;;
-    *) echo 'ptrace-proof: usage: ptrace_mutate.sh [ptrace|debugreg [--check]]' >&2; exit 2 ;;
-esac
-shift
-[ "$#" -eq 0 ] || [ "$*" = --check ] || exit 2
-mkdir -p build/tests
-work=$(mktemp -d "$repo/build/tests/$kind-proof.XXXXXX")
-mkdir "$work/rach2"
-cp -R rach2/sys "$work/rach2/"
-file="$work/rach2/sys/$source"
-cp "$file" "$work/source.saved"
-child=
-extra=
-[ "$kind" != debugreg ] || extra=-DRACH2_HOST_CPU
 
-cleanup()
+# apply_fault FILE FAULT: put FAULT into FILE and print its row's message;
+# with RACH2_FAULT_TEXTS set, only check that its text is once in FILE.
+apply_fault()
 {
-    if [ -n "$child" ]; then
-        kill -TERM "$child" 2>/dev/null || :
-        wait "$child" 2>/dev/null || :
-        child=
-    fi
-    cp "$work/source.saved" "$file"
-    touch "$file"
-}
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
-
-run_phase()
-{
-    phase=$1
-    expected=$2
-    message=$3
-    binary="$work/$phase"
-    # shellcheck disable=SC2086
-    if ! "${CC:-cc}" -std=c99 -DRACH2_HOSTTEST $extra \
-        -fsanitize=address,undefined -fno-sanitize-recover=all -g -O1 -ffreestanding \
-        -I "$work/rach2/sys" -I "$work/rach2/sys/lib" -I "$work/rach2/sys/proc" \
-        -o "$binary" "tests/host/${kind}_hosttest.c" \
-        "$work/rach2/sys/lib/kstring.c" "$work/rach2/sys/lib/kctypes.c" \
-        >"$binary.compile.log" 2>&1; then
-        cat "$binary.compile.log" >&2
-        exit 1
-    fi
-    cksum "$file" "$binary" >"$binary.cksum"
-    perl -e 'alarm 10; exec @ARGV or die "ptrace-proof: exec: $!\n"' \
-        "$binary" >"$binary.log" 2>&1 &
-    child=$!
-    status=0
-    wait "$child" || status=$?
-    child=
-    cat "$binary.log"
-    if [ "$status" -ne "$expected" ] || ! grep -Fq "$message" "$binary.log"; then
-        echo "ptrace-proof: fail: $phase status $status" >&2
-        exit 1
-    fi
-    echo "ptrace-proof: result: $kind $phase status $status"
-}
-
-printf 'ptrace-proof: logs: %s\n' "$work"
-run_phase fixed 0 "$kind-hosttest: result: pass"
-[ "$#" -eq 0 ] || exit 0
-for fault in $faults; do
-    message=$(python3 - "$file" "$fault" <<'PY'
+    python3 - "$1" "$2" <<'PY'
 from pathlib import Path
+import os
 import sys
 
 path, fault = Path(sys.argv[1]), sys.argv[2]
@@ -182,10 +116,103 @@ old, new, message = changes[fault]
 s = path.read_text()
 if s.count(old) != 1:
     sys.exit('ptrace-proof: fault text must occur once: ' + fault)
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    sys.exit(0)
 path.write_text(s.replace(old, new))
 print(message)
 PY
-    )
+}
+
+# select_kind KIND: the source and the faults of KIND.
+select_kind()
+{
+    case "$1" in
+        ptrace) source=proc/ptrace.c; faults='regset listen return-stops return-kill options seize step' ;;
+        debugreg) source=arch/x86/debugreg.c; faults='switch stale migration delivery kernel-step pending pending-saved pending-stale pending-step dequeue dequeue-repeat user-force user-entry user-origin user-status user-wait-post user-wait-cpu user-wait-saved user-wait-stale user-wait-kernel user-wait-no-thread user-no-status-origin user-no-status-code user-no-status-dr6 user-no-status-capture user-no-status-stale user-no-status-repeat-cpu user-no-status-repeat-saved user-no-status-wait' ;;
+        *) echo 'ptrace-proof: usage: ptrace_mutate.sh [ptrace|debugreg [--check]]' >&2; exit 2 ;;
+    esac
+}
+
+if [ "${1:-}" = --texts ]; then
+    for kind in ptrace debugreg; do
+        select_kind "$kind"
+        for fault in $faults; do
+            RACH2_FAULT_TEXTS=1 apply_fault "rach2/sys/$source" "$fault" >/dev/null || exit 1
+        done
+    done
+    echo 'ptrace-proof: texts: every fault is once in its source'
+    exit 0
+fi
+if [ "$#" -eq 0 ]; then
+    sh "$repo/tests/host/ptrace_mutate.sh" ptrace
+    sh "$repo/tests/host/ptrace_mutate.sh" debugreg
+    exit 0
+fi
+kind=${1:-}
+select_kind "$kind"
+shift
+[ "$#" -eq 0 ] || [ "$*" = --check ] || exit 2
+mkdir -p build/tests
+work=$(mktemp -d "$repo/build/tests/$kind-proof.XXXXXX")
+mkdir "$work/rach2"
+cp -R rach2/sys "$work/rach2/"
+file="$work/rach2/sys/$source"
+cp "$file" "$work/source.saved"
+child=
+extra=
+[ "$kind" != debugreg ] || extra=-DRACH2_HOST_CPU
+
+cleanup()
+{
+    if [ -n "$child" ]; then
+        kill -TERM "$child" 2>/dev/null || :
+        wait "$child" 2>/dev/null || :
+        child=
+    fi
+    cp "$work/source.saved" "$file"
+    touch "$file"
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+run_phase()
+{
+    phase=$1
+    expected=$2
+    message=$3
+    binary="$work/$phase"
+    # shellcheck disable=SC2086
+    if ! "${CC:-cc}" -std=c99 -DRACH2_HOSTTEST $extra \
+        -fsanitize=address,undefined -fno-sanitize-recover=all -g -O1 -ffreestanding \
+        -I "$work/rach2/sys" -I "$work/rach2/sys/lib" -I "$work/rach2/sys/proc" \
+        -o "$binary" "tests/host/${kind}_hosttest.c" \
+        "$work/rach2/sys/lib/kstring.c" "$work/rach2/sys/lib/kctypes.c" \
+        >"$binary.compile.log" 2>&1; then
+        cat "$binary.compile.log" >&2
+        exit 1
+    fi
+    cksum "$file" "$binary" >"$binary.cksum"
+    perl -e 'alarm 10; exec @ARGV or die "ptrace-proof: exec: $!\n"' \
+        "$binary" >"$binary.log" 2>&1 &
+    child=$!
+    status=0
+    wait "$child" || status=$?
+    child=
+    cat "$binary.log"
+    if [ "$status" -ne "$expected" ] || ! grep -Fq "$message" "$binary.log"; then
+        echo "ptrace-proof: fail: $phase status $status" >&2
+        exit 1
+    fi
+    echo "ptrace-proof: result: $kind $phase status $status"
+}
+
+printf 'ptrace-proof: logs: %s\n' "$work"
+run_phase fixed 0 "$kind-hosttest: result: pass"
+[ "$#" -eq 0 ] || exit 0
+for fault in $faults; do
+    message=$(apply_fault "$file" "$fault")
     run_phase "$fault" 1 "$message"
     cp "$work/source.saved" "$file"
     touch "$file"

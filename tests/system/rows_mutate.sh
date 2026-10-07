@@ -19,10 +19,62 @@
 # unmodified tree. It refuses to start while a suite holds the run lock. The
 # kernel, the image and the rows are those of the architecture ARCH names.
 #
-# Usage: sh tests/system/rows_mutate.sh
+# Usage: sh tests/system/rows_mutate.sh [--texts]
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" <<'PY'
+from pathlib import Path
+import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+changes = {
+'runner': ('tests/run',
+    '    if [ -f "$WORK/inventory.products" ]; then\n',
+    '    if false; then\n'),
+'devprobe': ('rach2/sys/fs/devfs.c',
+    '    const struct disk_node *node = disk_node_of(dev);\n\n    if (node) {\n        return DEVFS_NDEV',
+    '    const struct disk_node *node = (const struct disk_node *)dev;\n\n    if (node) {\n        return DEVFS_NDEV'),
+'sigprobe': ('rach2/sys/syscall_proc.c',
+    '        if (sigframe_setup(tf, signo, sa, &info, oldmask) != 0) {\n',
+    '        if (handler_flags & SA_RESETHAND) {\n'
+    '            sa->handler = KSIG_DFL;\n        }\n'
+    '        if (sigframe_setup(tf, signo, sa, &info, oldmask) != 0) {\n'),
+'procprobe': ('rach2/sys/fs/procfs.c',
+    '        f->origin_file = SYNTH_PROC_INTERRUPTS;\n',
+    '        f->origin_file = SYNTH_PROC_LOOP;\n'),
+'sealed': ('krffs/manifests/rach2-metal-disk.manifest',
+    'file 0755 /bin/update build/utils/update\n', ''),
+'arping': ('tests/system/suites.mk',
+    'send=arping -f -w 5 192.168.90.2 > /tmp/ap',
+    'send=arping -f -w 5 -I eth9 192.168.90.2 > /tmp/ap'),
+}
+path, old, new = changes[sys.argv[1]]
+p = Path(path)
+s = p.read_text()
+assert s.count(old) == 1, sys.argv[1]
+p.write_text(s.replace(old, new))
+PY
+}
+
+if [ "${1:-}" = --texts ]; then
+    RACH2_FAULT_TEXTS=1
+    export RACH2_FAULT_TEXTS
+    for name in runner devprobe sigprobe procprobe sealed arping; do
+        apply_fault "$name" >/dev/null
+    done
+    echo 'rows-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
+
 RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
 REPO=$repo
 . "$repo/mk/arch.sh"
@@ -88,36 +140,7 @@ mutate()
         sealed) changed=krffs/manifests/rach2-metal-disk.manifest ;;
         arping) changed=tests/system/suites.mk ;;
     esac
-    python3 - "$1" <<'PY'
-from pathlib import Path
-import sys
-changes = {
-'runner': ('tests/run',
-    '    if [ -f "$WORK/inventory.products" ]; then\n',
-    '    if false; then\n'),
-'devprobe': ('rach2/sys/fs/devfs.c',
-    '    const struct disk_node *node = disk_node_of(dev);\n\n    if (node) {\n        return DEVFS_NDEV',
-    '    const struct disk_node *node = (const struct disk_node *)dev;\n\n    if (node) {\n        return DEVFS_NDEV'),
-'sigprobe': ('rach2/sys/syscall_proc.c',
-    '        if (sigframe_setup(tf, signo, sa, &info, oldmask) != 0) {\n',
-    '        if (handler_flags & SA_RESETHAND) {\n'
-    '            sa->handler = KSIG_DFL;\n        }\n'
-    '        if (sigframe_setup(tf, signo, sa, &info, oldmask) != 0) {\n'),
-'procprobe': ('rach2/sys/fs/procfs.c',
-    '        f->origin_file = SYNTH_PROC_INTERRUPTS;\n',
-    '        f->origin_file = SYNTH_PROC_LOOP;\n'),
-'sealed': ('krffs/manifests/rach2-metal-disk.manifest',
-    'file 0755 /bin/update build/utils/update\n', ''),
-'arping': ('tests/system/suites.mk',
-    'send=arping -f -w 5 192.168.90.2 > /tmp/ap',
-    'send=arping -f -w 5 -I eth9 192.168.90.2 > /tmp/ap'),
-}
-path, old, new = changes[sys.argv[1]]
-p = Path(path)
-s = p.read_text()
-assert s.count(old) == 1, sys.argv[1]
-p.write_text(s.replace(old, new))
-PY
+    apply_fault "$1"
     touch "$changed"
 }
 

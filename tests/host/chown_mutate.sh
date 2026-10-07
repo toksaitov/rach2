@@ -7,7 +7,7 @@
 # `EPERM` from rach2/sys/lib/kerrno.h, and compiled under ASan and UBSan in
 # tests/host/fixtures/chown_plan.c.
 #
-# Usage: chown_mutate.sh [--check]
+# Usage: chown_mutate.sh [--check | --texts]
 # With --check it compiles and runs the source as it is, which is what the
 # host suite does; without, it also compiles each fault in, requires its row
 # to fail, and requires the restored source to pass again. The faults: a
@@ -17,6 +17,51 @@
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" "$2" <<'PY'
+from pathlib import Path
+import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+path = Path(sys.argv[1])
+text = path.read_text()
+changes = {
+    'dir': ('    if ((vst->mode & 06000u) && (vst->mode & 0170000u) != 0040000u) {\n',
+            '    if (vst->mode & 06000u) {\n'),
+    'gexec': ('        if (vst->mode & 0010u) {\n            vst->mode &= ~02000u;\n        }\n',
+              '        vst->mode &= ~02000u;\n'),
+    'owner': ('(what & VFS_SET_UID) != 0 ||', '0 ||'),
+    'group': ('!cred_in_group(gid)', '!cred_in_group(vst->gid)'),
+}
+old, new = changes[sys.argv[2]]
+head = 'static int vfs_chown_plan(struct vfs_stat *vst, uint32_t uid, uint32_t gid)\n{'
+if text.count(head) != 1:
+    raise SystemExit('chown-proof: vfs_chown_plan is not unique')
+start = text.index(head)
+end = text.index('\n}\n', start)
+body = text[start:end]
+if body.count(old) != 1:
+    raise SystemExit('chown-proof: the pattern for ' + sys.argv[2] + ' is not unique')
+path.write_text(text[:start] + body.replace(old, new) + text[end:])
+PY
+}
+
+faults='dir gexec owner group'
+if [ "${1:-}" = --texts ]; then
+    for fault in $faults; do
+        RACH2_FAULT_TEXTS=1 apply_fault rach2/sys/syscall_fs.c "$fault" >/dev/null || exit 1
+    done
+    echo 'chown-proof: texts: every fault is once in its source'
+    exit 0
+fi
+
 [ "$#" -eq 0 ] || [ "$*" = --check ] || {
     echo 'chown-proof: usage: chown_mutate.sh [--check]' >&2
     exit 2
@@ -113,32 +158,8 @@ PY
 echo "chown-proof: logs: $work"
 run_phase fixed 0 'chown-proof: result: pass:'
 [ "$#" -eq 0 ] || exit 0
-for fault in dir gexec owner group; do
-    python3 - "$work/syscall_fs.c" "$fault" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-text = path.read_text()
-changes = {
-    'dir': ('    if ((vst->mode & 06000u) && (vst->mode & 0170000u) != 0040000u) {\n',
-            '    if (vst->mode & 06000u) {\n'),
-    'gexec': ('        if (vst->mode & 0010u) {\n            vst->mode &= ~02000u;\n        }\n',
-              '        vst->mode &= ~02000u;\n'),
-    'owner': ('(what & VFS_SET_UID) != 0 ||', '0 ||'),
-    'group': ('!cred_in_group(gid)', '!cred_in_group(vst->gid)'),
-}
-old, new = changes[sys.argv[2]]
-head = 'static int vfs_chown_plan(struct vfs_stat *vst, uint32_t uid, uint32_t gid)\n{'
-if text.count(head) != 1:
-    raise SystemExit('chown-proof: vfs_chown_plan is not unique')
-start = text.index(head)
-end = text.index('\n}\n', start)
-body = text[start:end]
-if body.count(old) != 1:
-    raise SystemExit('chown-proof: the pattern for ' + sys.argv[2] + ' is not unique')
-path.write_text(text[:start] + body.replace(old, new) + text[end:])
-PY
+for fault in $faults; do
+    apply_fault "$work/syscall_fs.c" "$fault"
     touch "$work/syscall_fs.c"
     case $fault in
         dir) message='a directory keeps its set-id bits across a change of owner' ;;

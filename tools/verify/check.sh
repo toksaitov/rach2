@@ -132,7 +132,8 @@ inhouse_ch()
 if ! sh tests/system/verify_temp_test.sh ||
    ! sh tools/verify/probecheck.sh ||
    ! sh tests/system/probecheck_test.sh ||
-   ! sh tests/system/probe_faults.sh --check; then
+   ! sh tests/system/probe_faults.sh --check ||
+   ! sh tools/verify/faulttexts.sh; then
     fail=1
 fi
 

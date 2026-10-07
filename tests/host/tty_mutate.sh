@@ -4,6 +4,110 @@ set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" "$2" <<'PY'
+from pathlib import Path
+import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+root = Path(sys.argv[1])
+case = sys.argv[2]
+
+def replace(name, old, new):
+    path = root / name
+    text = path.read_text()
+    if text.count(old) != 1:
+        raise SystemExit('tty-mutation: mutation does not match once: ' + case)
+    path.write_text(text.replace(old, new))
+
+if case == 'split-queue':
+    replace('pty.h', '    wait_queue_t m_read_wq;',
+            '    wait_queue_t m_read_wq;\n    wait_queue_t m_write_wq;')
+    replace('pty.c', '    wait_queue_init(&p->m_read_wq);',
+            '    wait_queue_init(&p->m_read_wq);\n    wait_queue_init(&p->m_write_wq);')
+    replace('pty.c', 'wq_wait_event(&p->m_read_wq, ptm_has_room, p)',
+            'wq_wait_event(&p->m_write_wq, ptm_has_room, p)')
+    replace('pty.c', '    if (n > 0) {\n        wq_wake(&p->m_read_wq, WQ_ROOM);',
+            '    if (n > 0) {\n        wq_wake(&p->m_write_wq, WQ_ROOM);')
+elif case == 'flush':
+    replace('tty.c', '    n_tty_flush(&t->ldisc);\n    wq_wake(t->space_wq, WQ_ROOM);',
+            '    n_tty_flush(&t->ldisc);')
+elif case == 'termios-flush':
+    replace('tty.c', '    readable = n_tty_set_termios(&t->ldisc, kt);\n'
+                    '    wq_wake(t->space_wq, WQ_ROOM);',
+            '    readable = n_tty_set_termios(&t->ldisc, kt);')
+elif case in ('partial-master', 'partial-slave'):
+    path = root / 'pty.c'
+    text = path.read_text()
+    begin = text.index('static int32_t ' + ('ptm_write' if case == 'partial-master' else 'pts_write'))
+    end = text.index('\nstatic ', begin + 1)
+    part = text[begin:end]
+    old = '            wake_master(p, &pushed);\n            return (done > 0)'
+    if part.count(old) != 1:
+        raise SystemExit('tty-mutation: copy failure branch does not match once')
+    path.write_text(text[:begin] + part.replace(old, '            return (done > 0)') + text[end:])
+elif case == 'latency-lock':
+    replace('tty.c', '            flags = kirq_save();\n            rc = tty_ready_cond(t);',
+            '            rc = tty_ready_cond(t);')
+    replace('tty.c', '            rc = wq_wait_event(&t->input_wq, tty_ready_cond, t);\n'
+                    '            kirq_restore(flags);',
+            '            rc = wq_wait_event(&t->input_wq, tty_ready_cond, t);')
+elif case == 'veol-byte':
+    replace('n_tty.c', "            echo(t, out, ctx, c);\n"
+                       "            if (t->line_len < N_TTY_LINE_MAX) {\n"
+                       "                t->line[t->line_len++] = c;",
+            "            echo(t, out, ctx, '\\n');\n"
+            "            if (t->line_len < N_TTY_LINE_MAX) {\n"
+            "                t->line[t->line_len++] = '\\n';")
+elif case == 'line-end':
+    replace('n_tty.c', 't->rq_end[(t->rq_tail - 1) & (N_TTY_READ_MAX - 1)] = 1;',
+            't->rq_end[(t->rq_tail - 1) & (N_TTY_READ_MAX - 1)] = 0;')
+elif case == 'slot-reset':
+    replace('n_tty.c', '        t->rq_end[t->rq_tail & (N_TTY_READ_MAX - 1)] = 0;\n', '')
+elif case == 'input-kind':
+    replace('tty.c', '            t->ready_us = timer_now_us();\n        }\n'
+                    '        wq_wake(&t->input_wq, WQ_DATA);',
+            '            t->ready_us = timer_now_us();\n        }\n'
+            '        wq_wake_all(&t->input_wq);')
+elif case == 'echo-kind':
+    replace('pty.c', 'p->m_tail != *from ? WQ_DATA : 0u', 'WQ_DATA')
+elif case == 'room-kind':
+    replace('pty.c', '    if (n > 0) {\n        wq_wake(&p->m_read_wq, WQ_ROOM);',
+            '    if (n > 0) {\n        wq_wake_all(&p->m_read_wq);')
+elif case == 'output-kind':
+    replace('pty.c', '    wake_master(p, &pushed); /* output pushed into m_buf: wake the master */',
+            '    wq_wake_all(&p->m_read_wq);')
+elif case == 'flush-kind':
+    replace('tty.c', '    n_tty_flush(&t->ldisc);\n    wq_wake(t->space_wq, WQ_ROOM);',
+            '    n_tty_flush(&t->ldisc);\n    wq_wake_all(t->space_wq);')
+elif case == 'signal-room':
+    replace('tty.c', '    if (n_tty_held(&t->ldisc) < held) {\n'
+                    '        wq_wake(t->space_wq, WQ_ROOM);\n    }\n', '')
+elif case == 'erase-room':
+    replace('tty.c', '    if (n_tty_held(&t->ldisc) < held) {', '    if (signo != 0 && held) {')
+else:
+    raise SystemExit('tty-mutation: unknown mutation: ' + case)
+PY
+}
+
+faults='split-queue flush termios-flush partial-slave partial-master
+    latency-lock veol-byte line-end slot-reset input-kind echo-kind room-kind
+    output-kind flush-kind signal-room erase-room'
+if [ "${1:-}" = --texts ]; then
+    for case_name in $faults; do
+        RACH2_FAULT_TEXTS=1 apply_fault rach2/sys/tty "$case_name" >/dev/null || exit 1
+    done
+    echo 'tty-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
 mkdir -p build/tests
 work=$(mktemp -d "$repo/build/tests/tty-proof.XXXXXX")
 child=
@@ -85,95 +189,12 @@ run_phase()
 
 mutate()
 {
-    python3 - "$work/tty" "$case_name" <<'PY'
-from pathlib import Path
-import sys
-
-root = Path(sys.argv[1])
-case = sys.argv[2]
-
-def replace(name, old, new):
-    path = root / name
-    text = path.read_text()
-    if text.count(old) != 1:
-        raise SystemExit('tty-mutation: mutation does not match once: ' + case)
-    path.write_text(text.replace(old, new))
-
-if case == 'split-queue':
-    replace('pty.h', '    wait_queue_t m_read_wq;',
-            '    wait_queue_t m_read_wq;\n    wait_queue_t m_write_wq;')
-    replace('pty.c', '    wait_queue_init(&p->m_read_wq);',
-            '    wait_queue_init(&p->m_read_wq);\n    wait_queue_init(&p->m_write_wq);')
-    replace('pty.c', 'wq_wait_event(&p->m_read_wq, ptm_has_room, p)',
-            'wq_wait_event(&p->m_write_wq, ptm_has_room, p)')
-    replace('pty.c', '    if (n > 0) {\n        wq_wake(&p->m_read_wq, WQ_ROOM);',
-            '    if (n > 0) {\n        wq_wake(&p->m_write_wq, WQ_ROOM);')
-elif case == 'flush':
-    replace('tty.c', '    n_tty_flush(&t->ldisc);\n    wq_wake(t->space_wq, WQ_ROOM);',
-            '    n_tty_flush(&t->ldisc);')
-elif case == 'termios-flush':
-    replace('tty.c', '    readable = n_tty_set_termios(&t->ldisc, kt);\n'
-                    '    wq_wake(t->space_wq, WQ_ROOM);',
-            '    readable = n_tty_set_termios(&t->ldisc, kt);')
-elif case in ('partial-master', 'partial-slave'):
-    path = root / 'pty.c'
-    text = path.read_text()
-    begin = text.index('static int32_t ' + ('ptm_write' if case == 'partial-master' else 'pts_write'))
-    end = text.index('\nstatic ', begin + 1)
-    part = text[begin:end]
-    old = '            wake_master(p, &pushed);\n            return (done > 0)'
-    if part.count(old) != 1:
-        raise SystemExit('tty-mutation: copy failure branch does not match once')
-    path.write_text(text[:begin] + part.replace(old, '            return (done > 0)') + text[end:])
-elif case == 'latency-lock':
-    replace('tty.c', '            flags = kirq_save();\n            rc = tty_ready_cond(t);',
-            '            rc = tty_ready_cond(t);')
-    replace('tty.c', '            rc = wq_wait_event(&t->input_wq, tty_ready_cond, t);\n'
-                    '            kirq_restore(flags);',
-            '            rc = wq_wait_event(&t->input_wq, tty_ready_cond, t);')
-elif case == 'veol-byte':
-    replace('n_tty.c', "            echo(t, out, ctx, c);\n"
-                       "            if (t->line_len < N_TTY_LINE_MAX) {\n"
-                       "                t->line[t->line_len++] = c;",
-            "            echo(t, out, ctx, '\\n');\n"
-            "            if (t->line_len < N_TTY_LINE_MAX) {\n"
-            "                t->line[t->line_len++] = '\\n';")
-elif case == 'line-end':
-    replace('n_tty.c', 't->rq_end[(t->rq_tail - 1) & (N_TTY_READ_MAX - 1)] = 1;',
-            't->rq_end[(t->rq_tail - 1) & (N_TTY_READ_MAX - 1)] = 0;')
-elif case == 'slot-reset':
-    replace('n_tty.c', '        t->rq_end[t->rq_tail & (N_TTY_READ_MAX - 1)] = 0;\n', '')
-elif case == 'input-kind':
-    replace('tty.c', '            t->ready_us = timer_now_us();\n        }\n'
-                    '        wq_wake(&t->input_wq, WQ_DATA);',
-            '            t->ready_us = timer_now_us();\n        }\n'
-            '        wq_wake_all(&t->input_wq);')
-elif case == 'echo-kind':
-    replace('pty.c', 'p->m_tail != *from ? WQ_DATA : 0u', 'WQ_DATA')
-elif case == 'room-kind':
-    replace('pty.c', '    if (n > 0) {\n        wq_wake(&p->m_read_wq, WQ_ROOM);',
-            '    if (n > 0) {\n        wq_wake_all(&p->m_read_wq);')
-elif case == 'output-kind':
-    replace('pty.c', '    wake_master(p, &pushed); /* output pushed into m_buf: wake the master */',
-            '    wq_wake_all(&p->m_read_wq);')
-elif case == 'flush-kind':
-    replace('tty.c', '    n_tty_flush(&t->ldisc);\n    wq_wake(t->space_wq, WQ_ROOM);',
-            '    n_tty_flush(&t->ldisc);\n    wq_wake_all(t->space_wq);')
-elif case == 'signal-room':
-    replace('tty.c', '    if (n_tty_held(&t->ldisc) < held) {\n'
-                    '        wq_wake(t->space_wq, WQ_ROOM);\n    }\n', '')
-elif case == 'erase-room':
-    replace('tty.c', '    if (n_tty_held(&t->ldisc) < held) {', '    if (signo != 0 && held) {')
-else:
-    raise SystemExit('tty-mutation: unknown mutation: ' + case)
-PY
+    apply_fault "$work/tty" "$case_name"
     touch "$work/tty/"*
 }
 
 echo "tty-mutation: logs: $work"
-for case_name in split-queue flush termios-flush partial-slave partial-master \
-                 latency-lock veol-byte line-end slot-reset input-kind echo-kind \
-                 room-kind output-kind flush-kind signal-room erase-room; do
+for case_name in $faults; do
     test='tty'
     case "$case_name" in
         split-queue) expected='slave read wakes master POLLOUT' ;;

@@ -4,6 +4,43 @@ set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" "$2" <<'PY'
+import pathlib
+import sys
+import os
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+path = pathlib.Path(sys.argv[1])
+source = path.read_text()
+changes = {
+    "preference": ("next = sched_find(me, 1);", "next = NULL;"),
+    "bound": ("_wake_turn[me] = 0;", "_wake_turn[me] = 1;"),
+    "cursor": ("_wake_turn[me] = 0;", "_last_sched[me] = next;\n        _wake_turn[me] = 0;"),
+    "catchup": ("    while (ticks-- > 0) {\n        sched_account_one(cpu, user);\n    }",
+                "    (void)ticks;\n    sched_account_one(cpu, user);"),
+}
+old, new = changes[sys.argv[2]]
+if source.count(old) != 1:
+    raise SystemExit("sched-mutation: source pattern is not unique")
+path.write_text(source.replace(old, new))
+PY
+}
+
+faults='preference bound cursor catchup'
+if [ "${1:-}" = --texts ]; then
+    for fault in $faults; do
+        RACH2_FAULT_TEXTS=1 apply_fault rach2/sys/proc/sched.c "$fault" >/dev/null || exit 1
+    done
+    echo 'sched-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
 mkdir -p build/tests
 work=$(mktemp -d "$repo/build/tests/sched-proof.XXXXXX")
 child=
@@ -52,25 +89,8 @@ run_phase()
 
 echo "sched-mutation: logs: $work"
 run_phase fixed 0 'sched-hosttest: result: pass:'
-for fault in preference bound cursor catchup; do
-    python3 - "$work/sys/proc/sched.c" "$fault" <<'PY'
-import pathlib
-import sys
-
-path = pathlib.Path(sys.argv[1])
-source = path.read_text()
-changes = {
-    "preference": ("next = sched_find(me, 1);", "next = NULL;"),
-    "bound": ("_wake_turn[me] = 0;", "_wake_turn[me] = 1;"),
-    "cursor": ("_wake_turn[me] = 0;", "_last_sched[me] = next;\n        _wake_turn[me] = 0;"),
-    "catchup": ("    while (ticks-- > 0) {\n        sched_account_one(cpu, user);\n    }",
-                "    (void)ticks;\n    sched_account_one(cpu, user);"),
-}
-old, new = changes[sys.argv[2]]
-if source.count(old) != 1:
-    raise SystemExit("sched-mutation: source pattern is not unique")
-path.write_text(source.replace(old, new))
-PY
+for fault in $faults; do
+    apply_fault "$work/sys/proc/sched.c" "$fault"
     case $fault in
         preference) message='woken sleeper precedes spinner' ;;
         bound) message='spinner missed fourteen dispatches' ;;

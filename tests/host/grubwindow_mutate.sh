@@ -9,6 +9,73 @@ set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
+
+# apply_fault ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_fault()
+{
+    python3 - "$1" "$2" <<'PY'
+import pathlib
+import sys
+import os
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+work = pathlib.Path(sys.argv[1])
+fault = sys.argv[2]
+faults = {
+    # The window's tails as the gap's constant, whatever the window is.
+    "tails": ("utils/grubslot.c",
+              "    tail = (uint32_t)((sectors - 1u) / 2u);\n",
+              "    tail = GRUBSLOT_TAIL_SECTORS;\n"),
+    # A candidate judged against the longest tail, not this window's.
+    "bound": ("utils/grubslot.c",
+              "    if (sectors - 1u > w->tail) {\n",
+              "    if (sectors > GRUBSLOT_MAX_IMAGE_SECTORS) {\n"),
+    # A running image judged against the longest tail, not this window's.
+    "active": ("utils/grubslot.c",
+               "    if (len == 0u || (uint32_t)len > w->tail) {\n",
+               "    if (len == 0u || (uint32_t)len > GRUBSLOT_TAIL_SECTORS) {\n"),
+    # The unread copy's array forgotten.
+    "other-array": ("sys/block/partition.c",
+                    "    if (ranges_meet(start, n, other_array, g->array_sectors)) {\n",
+                    "    if (other_array == 1) {\n"),
+    # The first BIOS boot partition taken, where a second makes it unclear.
+    "one-entry": ("sys/block/partition.c",
+                  "            if (found) {\n                return -1;\n            }\n",
+                  ""),
+    # The serving header's own array forgotten.
+    "own-array": ("sys/block/partition.c",
+                  "        ranges_meet(start, n, g->array_lba, g->array_sectors)) {\n",
+                  "        0) {\n"),
+    # A partition past the disk's end published all the same.
+    "past-disk": ("sys/fs/devfs.c",
+                  "    if (count > backing->sector_count || first > backing->sector_count - count) {\n",
+                  "    if (0) {\n"),
+}
+name, before, after = faults[fault]
+path = work / name
+source = path.read_text()
+if source.count(before) != 1:
+    raise SystemExit("grubwindow-mutation: source pattern is not unique: " + fault)
+path.write_text(source.replace(before, after))
+PY
+}
+
+faults='tails bound active other-array one-entry own-array past-disk'
+if [ "${1:-}" = --texts ]; then
+    # The faults name their files as the private tree lays them out.
+    root=$(mktemp -d "${TMPDIR:-/tmp}/rach2-grubwindow-texts.XXXXXX")
+    trap 'rm -rf "$root"' EXIT
+    ln -s "$repo/rach2/sys" "$root/sys"
+    ln -s "$repo/utils" "$root/utils"
+    for fault in $faults; do
+        RACH2_FAULT_TEXTS=1 apply_fault "$root" "$fault" >/dev/null || exit 1
+    done
+    echo 'grubwindow-mutation: texts: every fault is once in its source'
+    exit 0
+fi
+
 mkdir -p build/tests
 work=$(mktemp -d "$repo/build/tests/grubwindow-proof.XXXXXX")
 child=
@@ -91,50 +158,8 @@ for test in grubslot partition devfs; do
     run_phase "$test" fixed 0 "$(pass_of "$test")"
 done
 
-for fault in tails bound active other-array one-entry own-array past-disk; do
-    python3 - "$work" "$fault" <<'PY'
-import pathlib
-import sys
-
-work = pathlib.Path(sys.argv[1])
-fault = sys.argv[2]
-faults = {
-    # The window's tails as the gap's constant, whatever the window is.
-    "tails": ("utils/grubslot.c",
-              "    tail = (uint32_t)((sectors - 1u) / 2u);\n",
-              "    tail = GRUBSLOT_TAIL_SECTORS;\n"),
-    # A candidate judged against the longest tail, not this window's.
-    "bound": ("utils/grubslot.c",
-              "    if (sectors - 1u > w->tail) {\n",
-              "    if (sectors > GRUBSLOT_MAX_IMAGE_SECTORS) {\n"),
-    # A running image judged against the longest tail, not this window's.
-    "active": ("utils/grubslot.c",
-               "    if (len == 0u || (uint32_t)len > w->tail) {\n",
-               "    if (len == 0u || (uint32_t)len > GRUBSLOT_TAIL_SECTORS) {\n"),
-    # The unread copy's array forgotten.
-    "other-array": ("sys/block/partition.c",
-                    "    if (ranges_meet(start, n, other_array, g->array_sectors)) {\n",
-                    "    if (other_array == 1) {\n"),
-    # The first BIOS boot partition taken, where a second makes it unclear.
-    "one-entry": ("sys/block/partition.c",
-                  "            if (found) {\n                return -1;\n            }\n",
-                  ""),
-    # The serving header's own array forgotten.
-    "own-array": ("sys/block/partition.c",
-                  "        ranges_meet(start, n, g->array_lba, g->array_sectors)) {\n",
-                  "        0) {\n"),
-    # A partition past the disk's end published all the same.
-    "past-disk": ("sys/fs/devfs.c",
-                  "    if (count > backing->sector_count || first > backing->sector_count - count) {\n",
-                  "    if (0) {\n"),
-}
-name, before, after = faults[fault]
-path = work / name
-source = path.read_text()
-if source.count(before) != 1:
-    raise SystemExit("grubwindow-mutation: source pattern is not unique: " + fault)
-path.write_text(source.replace(before, after))
-PY
+for fault in $faults; do
+    apply_fault "$work" "$fault"
     case $fault in
         tails) test=grubslot message='two tails of 1006 sectors' ;;
         bound) test=grubslot message='one of 1008 does not' ;;
