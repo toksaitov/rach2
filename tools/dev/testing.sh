@@ -12,10 +12,11 @@
 # tree here. Whatever `.gitignore` names, `build/`, the extracted vendor trees
 # and their stamps, the compilation database, is not sent, so the host
 # builds with its own compiler, and what it built is left in place, so a run
-# after a small edit rebuilds only what the edit touched. The one ignored
-# file that is sent is the shareware WAD `ports/doom/fetch_wad.sh` downloads,
-# because the Doom suite reads it from the image. `run`
-# syncs and then runs COMMAND in the copy; the command is passed to the remote
+# after a small edit rebuilds only what the edit touched. A sync refuses, and
+# says why, while anything on the host works in the copy (see tree_free). The
+# one ignored file that is sent is the shareware WAD `ports/doom/fetch_wad.sh`
+# downloads, because the Doom suite reads it from the image. `run` syncs and
+# then runs COMMAND in the copy; the command is passed to the remote
 # shell as one string, so quote it as that shell will see it. `get` copies
 # each PATH, relative to the copy, from the host to the same path here,
 # compressed on the wire, which is how a product that only the Linux host
@@ -74,9 +75,55 @@ need_rsync3()
     esac
 }
 
+# tree_probe: the script tree_free runs on the host, given the copy's path.
+tree_probe()
+{
+    cat <<'EOF'
+lock=$1/build/.run.lock
+if [ -d "$lock" ]; then
+    pid=$(sed -n 's/^pid //p' "$lock/owner" 2>/dev/null)
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null &&
+        echo "the run lock, held by pid $pid: $(sed -n 's/^args //p' "$lock/owner")"
+fi
+for d in /proc/[0-9]*; do
+    case "$(readlink "$d/cwd" 2>/dev/null)" in
+        "$1"|"$1"/*) ;;
+        *) continue ;;
+    esac
+    command=$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null)
+    case "$(cat "$d/comm" 2>/dev/null)" in
+        bash|sh|dash|zsh)
+            # A shell that runs no script of its own is a person's prompt.
+            echo "$command" | awk '$2 != "" && $2 !~ /^-/ {f = 1} END {exit !f}' || continue ;;
+    esac
+    echo "pid ${d#/proc/}: $(echo "$command" | cut -c1-120)"
+done
+exit 0
+EOF
+}
+
+# tree_free: succeed when nothing on the host is working in the copy. A sync
+# rewrites the sources under whatever is, and a build that reads half of the
+# old tree and half of the new one fails in ways that look like faults of the
+# code. The copy is busy while a run or a fault script holds its lock and the
+# holder lives, or while any process other than a shell has its working
+# directory in it: a make, a compiler, QEMU, or a script between two runs.
+tree_free()
+{
+    busy=$(tree_probe | ssh -o BatchMode=yes "$HOST" "MSYS_NO_PATHCONV=1 wsl.exe -- sh -s -- $DEST") || {
+        echo "testing: the host did not answer; nothing was synced" >&2
+        return 1
+    }
+    [ -z "$busy" ] && return 0
+    echo "testing: the copy at $DEST is in use; nothing was synced:" >&2
+    printf '%s\n' "$busy" | sed 's/^/testing:   /' >&2
+    return 1
+}
+
 sync_tree()
 {
     need_rsync3
+    tree_free || exit 1
     rsync -a --no-times --checksum --delete \
         --filter='+ /ports/doom/doom1.wad' --filter=':- .gitignore' \
         --rsync-path="$RSYNC_PATH" -e 'ssh -o BatchMode=yes' \
