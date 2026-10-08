@@ -19,3 +19,18 @@ $(OS_REAL_GNU_EXT2): $(DEMO_CREDS) krffs/manifests/os-real-gnu.manifest $(MANIFE
                      | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-e2fsck ports/doom
 	RACH2_ARCH=$(ARCH) sh tools/image/mkext2.sh --overlay vendor/gnu/install_root.sh \
 	    krffs/manifests/os-real-gnu.manifest $@ 4096
+
+# `make machine`: everything an installed machine is given, in one target, so
+# that no part of it is left from an older build: the kernel, the recovery
+# kernel with its checks, the recovery image with this tree's key in it, and
+# the GNU root. `all` builds neither recovery part, and a machine was once
+# given a recovery system older than its kernel that way. The style check
+# runs first, since the GNU root carries the sources and a style fix made
+# after the build changes it. The key is minted by a make of its own, because
+# make reads the recovery image's name, which says whether it has a key,
+# when it starts. Like the GNU root, this builds on a Linux host.
+.PHONY: machine
+machine:
+	sh tests/run style
+	$(MAKE) --no-print-directory recovery-key
+	$(MAKE) --no-print-directory rach2 rach2-recovery rach2-recovery-image os-real-gnu-ext2

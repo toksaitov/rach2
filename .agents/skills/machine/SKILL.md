@@ -16,6 +16,7 @@ description: Write the development flash drive or a disk of the Lenovo, or updat
 
 * The Lenovo is on the Mac's network, not the testing host's, so hardware sittings (sessions with the owner at the machine) and stick writes run from the Mac.
 * Its disk stays in its bay, since removing and refitting it is an hour of physical work. A machine left unbootable is reinstalled from the flash drive, which stays plugged into it.
+* `make machine`, with `ARCH=x86_64` for the Lenovo and on the testing host, builds everything the machine is given, recovery included, after the style check; a part built by hand can be older than the rest.
 * The installed Lenovo is updated over SSH: a kernel through `bootctl` on the running system; a root through the recovery system with `rach2-install --update`, which keeps the machine's accounts; a partition the installer does not know about through `reflash`.
 * The manual has the commands: `rach2-install(8)` for an install, `recovery(7)` for the recovery system and the three update paths, `bootctl(8)` and `reflash(8)` for the two writes, and `disk(7)` for the device nodes they write through, each limited to one region of the disk.
 * The machine's own offsets are in `dev-log/43-machine/hardware.md`, and the credential check before a root write is in `tools/Readme.md`, under Working an installed machine from the host. Take a path from these; do not derive one.

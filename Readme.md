@@ -21,7 +21,7 @@ Kernel drivers support VGA text and mode 13h graphics, a text console on the fir
 * `os-real` uses BusyBox and Dropbear and includes TinyCC, pdpmake, the musl development files, and the project sources under `/src`. `make os-real-ext2` builds the same manifest as an ext2 volume, `build/images/os-real.ext2`, which the kernel boots from a disk partition with `rach2.root=ext2`.
 * `os-real-gnu` is the os-real system with the GNU system of milestone 54 installed over it, on a 4 GiB ext2 root: glibc, bash, the GNU tools, Perl, Git, Vim, curl, OpenSSH in Dropbear's place, GCC, GDB, the SpiderMonkey shell and Debian's chromium-headless-shell. `make os-real-gnu-ext2` builds it, on a Linux host only ([the GNU layer](vendor/gnu/Readme.md#the-root-image)).
 
-`make ARCH=x86_64` builds the same images for x86-64 under `build/x86_64/images`, and `make ARCH=x86_64 os-real-gnu-ext2` the GNU root.
+`make ARCH=x86_64` builds the same images for x86-64 under `build/x86_64/images`, and `make ARCH=x86_64 os-real-gnu-ext2` the GNU root. `make machine` builds everything an installed machine is given, after `tests/run style`: the kernel, the recovery kernel, the recovery image with this tree's key, and the GNU root.
 
 Additional targets build persistent disks, GRUB images, metal images, and recovery images. `make rach2-stick-image` builds `build/images/rach2-stick.img`, the metal ISO followed by an exFAT volume, which a machine boots from a USB socket and then mounts through `/dev/diskNp2`, using the stick's disk number from `/proc/usb`. With no other disk registered, the source is `/dev/disk0p2`. The root Makefile names them. The [kernel Readme](rach2/Readme.md) describes the boot paths and disk authority.
 
