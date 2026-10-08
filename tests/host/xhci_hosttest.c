@@ -1812,26 +1812,12 @@ static void dma32_rows(void)
     dma32_transfer_rows();
 }
 
-int main(void)
+/* The companion EHCI rows: one is not taken for an xHCI, one the firmware
+   owns and runs, one already told to stop, and one whose memory window is
+   off. The configuration space the other rows set up is put back after
+   them. */
+static void ehci_rows(void)
 {
-    struct usb_location root0 = root_at(0);
-    const struct xhci_caps *c;
-    struct usb_port_status status;
-    struct usb_command_result result;
-    unsigned i;
-
-    /* Finding the controller. */
-    model_reset();
-    CHECK("a controller with a memory aperture is taken", discover() == 0);
-    CHECK("found by the class the standard gives USB",
-          searched_class == PCI_CLASS_SERIAL_BUS && searched_subclass == PCI_SUBCLASS_USB);
-    CHECK("with its registers decoded", memory_space_enabled == 1);
-    CHECK("and allowed to reach memory itself", bus_master_enabled == 1);
-
-    model_reset();
-    model_present = 0;
-    CHECK("a bus with no xHCI is refused", discover() != 0);
-
     model_reset();
     model_progif = 0x20;
     CHECK("an EHCI is not mistaken for an xHCI", discover() != 0);
@@ -1888,6 +1874,29 @@ int main(void)
     CHECK("an EHCI with its memory window off is not touched", window[8] == 0x1u);
     model_command = 0;
     memcpy(pci_cfg, saved_cfg, sizeof(pci_cfg));
+}
+
+int main(void)
+{
+    struct usb_location root0 = root_at(0);
+    const struct xhci_caps *c;
+    struct usb_port_status status;
+    struct usb_command_result result;
+    unsigned i;
+
+    /* Finding the controller. */
+    model_reset();
+    CHECK("a controller with a memory aperture is taken", discover() == 0);
+    CHECK("found by the class the standard gives USB",
+          searched_class == PCI_CLASS_SERIAL_BUS && searched_subclass == PCI_SUBCLASS_USB);
+    CHECK("with its registers decoded", memory_space_enabled == 1);
+    CHECK("and allowed to reach memory itself", bus_master_enabled == 1);
+
+    model_reset();
+    model_present = 0;
+    CHECK("a bus with no xHCI is refused", discover() != 0);
+
+    ehci_rows();
 
     model_reset();
     model_bar0 = 0xFEBF0001u;
