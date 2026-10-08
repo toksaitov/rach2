@@ -2,11 +2,11 @@
  * xhci.c: the USB host controller.
  *
  * The register interface every machine newer than about 2010 presents, and the
- * only one this kernel drives; the notebook's companion EHCI is left alone and
- * its pins are routed here. One controller also handles every speed, so a
- * low-speed keyboard needs no companion controller, no transaction translator
- * and no split transactions, which is most of what a driver for the older
- * interfaces is made of.
+ * only one this kernel drives; the notebook's companion EHCI is taken from the
+ * firmware and halted, and its pins are routed here. One controller also
+ * handles every speed, so a low-speed keyboard needs no companion controller,
+ * no transaction translator and no split transactions, which is most of what a
+ * driver for the older interfaces is made of.
  *
  * This file is bring-up and transport: registers, rings, contexts and commands.
  * Descriptors, classes and what a keyboard is belong to `core.c` above it,
@@ -461,6 +461,111 @@ static void power_up(const pci_device_t *dev)
     }
 }
 
+/*
+ * The companion EHCI's registers this driver touches to quiet it: the
+ * capability length and parameters, the operational command, status,
+ * interrupt-enable and configure-flag registers, and the legacy-support
+ * capability in configuration space. EHCI specification 1.0, sections 2.2,
+ * 2.3 and 5.1.
+ */
+#define EHCI_PCI_PROGIF        0x20
+#define EHCI_HCCPARAMS         0x08
+#define EHCI_USBCMD            0x00
+#define EHCI_USBSTS            0x04
+#define EHCI_USBINTR           0x08
+#define EHCI_CONFIGFLAG        0x40
+#define EHCI_USBCMD_RUN        0x00000001u
+#define EHCI_USBSTS_HALTED     0x00001000u
+#define EHCI_USBSTS_CHANGES    0x0000003Fu
+#define EHCI_LEGSUP_ID         0x01u
+#define EHCI_LEGSUP_BIOS_OWNED 0x00010000u
+#define EHCI_LEGSUP_OS_OWNED   0x01000000u
+
+/**
+ * Take one EHCI controller from the firmware and stop it, before its pins
+ * are moved to the xHCI controller.
+ *
+ * A firmware's own USB driver runs the EHCI controller for the keyboard and
+ * the disk it boots from, and may leave it running, its system-management
+ * handler still answering for it, when it starts the operating system. A pin
+ * moved away from a controller in the middle of a transfer leaves the device
+ * half way through one, and such a device can fail to answer the xHCI
+ * controller's Set Address, which then never completes. So the controller is
+ * claimed through its legacy-support capability, its system-management
+ * interrupts are turned off, and it is halted with its interrupts masked:
+ * what Linux does to every EHCI controller before any USB driver starts. A
+ * firmware that owned it gets its configure flag cleared too, since nothing
+ * it set up survives the handoff.
+ */
+static void quiesce_ehci(const pci_device_t *dev)
+{
+    uint8_t bus = dev->bus, slot = dev->device, function = dev->function;
+    uint64_t base;
+    uintptr_t cap;
+    uintptr_t op;
+    uint32_t eecp = 0;
+    uint32_t polls;
+    int owned = 0;
+
+    if (!pci_bar_is_memory(dev->bar[0]) ||
+        !(pci_read_config16(bus, slot, function, 0x04) & 0x0002u)) {
+        return; /* no memory window, or one the firmware never enabled */
+    }
+    base = pci_bar_address64(dev, 0);
+    if (base == 0 || (uint64_t)(uintptr_t)base != base) {
+        return;
+    }
+    cap = map_mmio((uintptr_t)base, 0x100u);
+    if (cap == 0) {
+        return;
+    }
+    op = cap + *(volatile uint8_t *)cap;
+
+    eecp = (*(volatile uint32_t *)(cap + EHCI_HCCPARAMS) >> 8) & 0xFFu;
+    if (eecp >= 0x40u &&
+        (pci_read_config32(bus, slot, function, (uint8_t)eecp) & 0xFFu) == EHCI_LEGSUP_ID) {
+        uint32_t legsup = pci_read_config32(bus, slot, function, (uint8_t)eecp);
+
+        if (legsup & EHCI_LEGSUP_BIOS_OWNED) {
+            owned = 1;
+            pci_write_config32(bus, slot, function, (uint8_t)eecp, legsup | EHCI_LEGSUP_OS_OWNED);
+            for (polls = 0; polls < XHCI_HANDOFF_POLLS; polls++) {
+                if (!(pci_read_config32(bus, slot, function, (uint8_t)eecp) &
+                      EHCI_LEGSUP_BIOS_OWNED)) {
+                    break;
+                }
+                k_udelay(XHCI_POLL_US);
+            }
+            if (pci_read_config32(bus, slot, function, (uint8_t)eecp) & EHCI_LEGSUP_BIOS_OWNED) {
+                klog(KLOG_WARN, "usb", "handoff: ehci at %02x:%02x.%d: the firmware kept it",
+                     (int)bus, (int)slot, (int)function);
+                pci_write_config32(bus, slot, function, (uint8_t)eecp,
+                                   (legsup | EHCI_LEGSUP_OS_OWNED) & ~EHCI_LEGSUP_BIOS_OWNED);
+            }
+        }
+        pci_write_config32(bus, slot, function, (uint8_t)(eecp + 4), 0);
+    }
+
+    if (*(volatile uint32_t *)(op + EHCI_USBCMD) & EHCI_USBCMD_RUN) {
+        *(volatile uint32_t *)(op + EHCI_USBCMD) &= ~EHCI_USBCMD_RUN;
+        for (polls = 0; polls < XHCI_HALT_POLLS; polls++) {
+            if (*(volatile uint32_t *)(op + EHCI_USBSTS) & EHCI_USBSTS_HALTED) {
+                break;
+            }
+            k_udelay(XHCI_POLL_US);
+        }
+    }
+    *(volatile uint32_t *)(op + EHCI_USBINTR) = 0;
+    *(volatile uint32_t *)(op + EHCI_USBSTS) = EHCI_USBSTS_CHANGES;
+    if (owned) {
+        *(volatile uint32_t *)(op + EHCI_CONFIGFLAG) = 0;
+    }
+    klog(KLOG_INFO, "usb", "handoff: ehci at %02x:%02x.%d: %s, %s", (int)bus, (int)slot,
+         (int)function, owned ? "taken from the firmware" : "the firmware did not own it",
+         (*(volatile uint32_t *)(op + EHCI_USBSTS) & EHCI_USBSTS_HALTED) ? "halted"
+                                                                         : "would not halt");
+}
+
 /**
  * Take the pins the chipset will give.
  *
@@ -580,6 +685,14 @@ int xhci_discover(void)
     int said_full = 0;
 
     nctrls = 0;
+    while (pci_find_device_skip(PCI_CLASS_SERIAL_BUS, PCI_SUBCLASS_USB, skip_dev, &dev)) {
+        skip = dev;
+        skip_dev = &skip;
+        if (dev.prog_if == EHCI_PCI_PROGIF) {
+            quiesce_ehci(&dev);
+        }
+    }
+    skip_dev = 0;
     while (pci_find_device_skip(PCI_CLASS_SERIAL_BUS, PCI_SUBCLASS_USB, skip_dev, &dev)) {
         skip = dev;
         skip_dev = &skip;

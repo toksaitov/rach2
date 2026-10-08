@@ -77,6 +77,8 @@ An Intel chipset routes each USB2 pin to either this controller or the companion
 
 So bring-up moves them. `XUSB2PR` at configuration offset `0xD0` takes the pins `XUSB2PRM` at `0xD4` says may move, and the SuperSpeed pair at `0xD8` and `0xDC` works the same way. The mask is read rather than assumed, and only an Intel controller is written to at all. The routing is the firmware's again after the next power cycle, so this runs on every boot, and a machine on which it goes wrong is one power cycle from the way it was. It is what every other operating system on this hardware does at the same point.
 
+Before any pin moves, each EHCI controller is taken from the firmware and stopped. The notebook's firmware still owns its EHCI when it starts the kernel, and may still be running a transfer on it to the disk it booted from or the keyboard; a pin moved in the middle of one leaves the device half way through it, and the xHCI controller's Address Device command for that device then never completes. On the notebook that lost the stick, the keyboard and the mouse on some boots and not on others. So `quiesce_ehci` sets the operating-system semaphore of the EHCI legacy-support capability and waits up to a second for the firmware to drop its own, clears the capability's system-management enables, halts the controller and masks its interrupts, and clears its configure flag when the firmware had owned it, which is what Linux does to every EHCI controller before any USB driver starts. The boot record says which: `usb: handoff: ehci at 00:1d.0: taken from the firmware, halted`. A controller whose memory window the firmware never enabled is not touched.
+
 ## A device this kernel cannot drive
 
 The configuration parser selects the first supported interface on alternate setting zero with all required endpoints: one interrupt IN endpoint for HID or a hub, and one bulk endpoint in each direction for storage. Every selected endpoint comes from that interface. An incomplete candidate is discarded before the next interface is examined, including a different alternate setting or an unsupported interface.
@@ -153,7 +155,7 @@ When a hub is pulled, or a hub reports a port's connection gone, everything belo
 * **Isochronous transfers.** Audio and video over USB. Nothing here reads them.
 * **Typematic repeat.** A held key on a USB keyboard does not repeat. The PS/2 keyboard's repeat comes from its hardware; a USB host is supposed to make its own, and this one does not.
 * **More than one interrupter.** The driver uses one interrupter for every event. When messages are enabled, `isr_alloc_vector` allocates its vector, and `/proc/interrupts` identifies the handler as `xhci`. Several interrupters would need several vectors and a rule for assigning endpoints to them.
-* **EHCI.** The companion controller is not driven and will not be. Taking its pins costs one register write. Driving it would cost a controller driver, a hub driver and split transactions, for an interface no machine made after about 2014 has.
+* **EHCI.** The companion controller is not driven and will not be. Taking its pins costs one register write and taking it from the firmware a few more. Driving it would cost a controller driver, a hub driver and split transactions, for an interface no machine made after about 2014 has.
 * **Booting from a USB disk.** The firmware loads the kernel; this stack starts afterwards.
 
 ## The guest's view
