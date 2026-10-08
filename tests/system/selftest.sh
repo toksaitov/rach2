@@ -19,7 +19,12 @@ set -u
 # copy have no such target, so the name a caller set is dropped here.
 RACH2_KERNEL=""
 export RACH2_KERNEL
-unset RACH2_TIMEOUT_FACTOR RACH2_IDLE_TIMEOUT RACH2_STOP_ON_FAIL
+unset RACH2_TIMEOUT_FACTOR RACH2_IDLE_TIMEOUT RACH2_STOP_ON_FAIL RACH2_KVM_DEVICE
+# The fixture writes a few files, and asking Windows for its drive's free
+# space under WSL costs a second a run, so the floor is off but where a row
+# sets one.
+RACH2_MIN_FREE_GIB=0
+export RACH2_MIN_FREE_GIB
 # The stand-in machines are named qemu-system-i386, the emulator the harness
 # and the runner use when no architecture is set, so a caller's is dropped,
 # with the make flags tests/run gives it.
@@ -293,11 +298,29 @@ out=$(RACH2_IDLE_TIMEOUT=2 run silent consolebusy passing); rc=$?
 check "one suite's console cannot keep another suite alive" 1 "$(printf '%s\n' "$out" | grep -c 'run: silent: no output for 2 s')"
 check "the active neighbour still passes" 1 "$(printf '%s\n' "$out" | grep -c 'run: consolebusy: PASS')"
 check "and the queued suite still runs" 1 "$(printf '%s\n' "$out" | grep -c 'run: passing: PASS')"
-out=$(RACH2_IDLE_TIMEOUT=2 run style passing usb); rc=$?
+out=$(RACH2_IDLE_TIMEOUT=2 run style passing); rc=$?
 check "a serial suite before the pool has the idle limit" 1 "$(printf '%s\n' "$out" | grep -c 'run: style: no output for 2 s')"
+check "a failed style stops the set before its pool" 1 "$(printf '%s\n' "$out" | grep -c 'run: stopped: style failed; not started: passing')"
+check "so nothing in the pool starts" 0 "$(printf '%s\n' "$out" | grep -c 'run: passing: PASS')"
+out=$(RACH2_IDLE_TIMEOUT=2 run usb passing); rc=$?
 check "a pooled suite has the same bound" 1 "$(printf '%s\n' "$out" | grep -c 'run: usb: no output for 2 s')"
 out=$(RACH2_IDLE_TIMEOUT=2 RACH2_TIMEOUT_FACTOR=8 run silent); rc=$?
 check "the idle limit is never scaled" 1 "$(printf '%s\n' "$out" | grep -c 'run: silent: no output for 2 s')"
+
+# A KVM device the user cannot open refuses the run, unless the emulator is
+# asked for; a disk below the free-space floor refuses it too.
+: > "$WORK/kvm-closed"
+chmod 000 "$WORK/kvm-closed"
+out=$(RACH2_QEMU_ACCEL='' RACH2_KVM_DEVICE="$WORK/kvm-closed" run passing); rc=$?
+check "a KVM device this user cannot open refuses the run" 2 "$rc"
+check "and says what to do" 1 "$(printf '%s\n' "$out" | grep -c 'cannot read and write it; add the user to its group')"
+out=$(RACH2_QEMU_ACCEL=tcg RACH2_KVM_DEVICE="$WORK/kvm-closed" run passing); rc=$?
+check "the emulator asked for outright still runs" 0 "$rc"
+out=$(RACH2_MIN_FREE_GIB=99999999 run passing); rc=$?
+check "a disk below the free-space floor refuses the run" 1 "$rc"
+check "and names the floor" 1 "$(printf '%s\n' "$out" | grep -c 'below the 99999999 GiB a run needs')"
+out=$(RACH2_MIN_FREE_GIB=lots run passing); rc=$?
+check "a floor that is not a number is refused" 1 "$(printf '%s\n' "$out" | grep -c 'RACH2_MIN_FREE_GIB must be a whole number')"
 
 out=$(run failing); rc=$?
 check "a failing suite exits nonzero" 1 "$rc"
