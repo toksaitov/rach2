@@ -57,4 +57,4 @@ The leftovers came next, entries 304 to 309. The fault scripts were made to foll
 
 ## What is still open
 
-A terminal browser drawn by Chromium or Firefox waits for a framebuffer device for programs, as milestone 55 recorded.
+Nothing. On 2026-10-09 the owner dropped the terminal browser drawn by Chromium or Firefox, which milestones 55 to 57 had left for a framebuffer device for programs.
