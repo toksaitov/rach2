@@ -4,14 +4,15 @@
 # gen_demo_key.sh: ensure the demo SSH keypairs exist for the os-real image's
 # dropbear logins.
 #
-# Generates two keypairs, one per demo account: rach2_demo_ed25519 for root and
-# rach2_test_ed25519 for the unprivileged test user. The private halves are
-# git-ignored host-side test credentials; the public halves (authorized_keys and
-# test_authorized_keys) the os-real manifest stages into each account's ~/.ssh.
-# Each keypair is generated only when its public half is absent, so a present
-# key is left as is (idempotent). Set RACH2_REPLACE_KEYS=1 to mint new ones over
-# whatever is there, which is what a machine going somewhere real needs: the
-# keys a development tree has been using are the keys every demo has used.
+# There are two keypairs, one per demo account: rach2_demo_ed25519 for root and
+# rach2_test_ed25519 for the unprivileged test user. Both are committed, the
+# project's development keys, so every clone builds images that trust the same
+# keys and any host reaches any development machine; the machines are on a
+# private network. Their public halves become authorized_keys and
+# test_authorized_keys, which the manifests stage into each account's ~/.ssh.
+# A keypair is generated only when it is absent. Set RACH2_REPLACE_KEYS=1 to
+# mint new ones over whatever is there, which is what a machine going somewhere
+# real needs, since the development keys are public.
 #
 #   ssh -i krffs/rach2_demo_ed25519 -p 2222 root@localhost
 #   ssh -i krffs/rach2_test_ed25519 -p 2222 test@localhost
@@ -22,17 +23,17 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# Generate keypair $1 into public-half file $2 for a login as user $3, unless $2
-# is already present.
+# Generate keypair $1 and its public-half file $2 for a login as user $3, unless
+# the keypair is already present, as the committed one is.
 gen_key() {
     key="$1"
     pub="$2"
     user="$3"
 
-    if [ -f "$pub" ] && [ -z "${RACH2_REPLACE_KEYS:-}" ]; then
+    if [ -f "$key" ] && [ -f "$key.pub" ] && [ -z "${RACH2_REPLACE_KEYS:-}" ]; then
         return 0
     fi
-    if [ -f "$pub" ]; then
+    if [ -f "$key" ]; then
         echo "gen_demo_key: replacing the keypair already in krffs/"
     fi
     if ! command -v ssh-keygen >/dev/null 2>&1; then
@@ -102,6 +103,12 @@ add_local_keys() {
         echo "gen_demo_key: krffs/$pub has the demo key and krffs/$extra"
     fi
 }
+
+# Git keeps no file mode but the executable bit, and ssh refuses a private key
+# others can read.
+for key in rach2_demo_ed25519 rach2_test_ed25519; do
+    [ ! -f "$key" ] || chmod 600 "$key"
+done
 
 gen_key rach2_demo_ed25519 authorized_keys      root
 gen_key rach2_test_ed25519 test_authorized_keys test

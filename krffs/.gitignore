@@ -1,14 +1,11 @@
-# Demo credentials: the SSH keypairs from gen_demo_key.sh and the passwords and
-# /etc/shadow from gen_demo_password.sh, never committed (each is a host-side
-# test credential, referenced as krffs/<name>). Everything this component builds
+# The demo key pairs, rach2_demo_ed25519 and rach2_test_ed25519, are committed:
+# they are the project's development keys, the same in every clone. What is
+# made from them, the authorized_keys lists, and the passwords and /etc/shadow
+# from gen_demo_password.sh are made in each tree. Everything this component builds
 # (the host tools, the RAM-disk image, the mount point) goes out of tree to
 # build/krffs/ (mk/build.mk), covered by the repo-root build/ ignore.
 authorized_keys
-rach2_demo_ed25519
-rach2_demo_ed25519.pub
 test_authorized_keys
-rach2_test_ed25519
-rach2_test_ed25519.pub
 rach2_demo_password
 rach2_test_password
 shadow

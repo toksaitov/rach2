@@ -580,14 +580,15 @@ os-real-ext2: $(OS_REAL_EXT2)
 # time: with `make -j` and a pool of suites, two of them mint a key at once and
 # race on the temporary file, which is `mv: authorized_keys.tmp: No such file
 # or directory`. Make builds each once, and everything that needs them says so.
-krffs/authorized_keys:
+# Each list is made again when its committed public key changes.
+krffs/authorized_keys: krffs/rach2_demo_ed25519.pub
 	sh krffs/gen_demo_key.sh
 
 # The same generator writes the test account's key, which the images name
 # too. The rule is ordered behind the root key so the two never mint at once,
 # and a run of the generator leaves a key that is there alone, so this mints
 # only a test key that is missing on its own.
-krffs/test_authorized_keys: | krffs/authorized_keys
+krffs/test_authorized_keys: krffs/rach2_test_ed25519.pub | krffs/authorized_keys
 	sh krffs/gen_demo_key.sh
 
 # The password hashes are minted by the krffs hasher, so a tree with no build
@@ -599,7 +600,7 @@ krffs/test_authorized_keys: | krffs/authorized_keys
 krffs/shadow: krffs/gen_demo_password.sh | build/krffs/mkfs.krffs
 	sh krffs/gen_demo_password.sh
 
-# `make recovery-key`: put this tree's own key into the recovery system, so a
+# `make recovery-key`: put the development key into the recovery system, so a
 # machine built here can be updated over the network. An image built without
 # that key starts no SSH server at all and the only way in is the keyboard,
 # which is what its absence means. `tests/run` mints it before it builds

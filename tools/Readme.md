@@ -126,21 +126,16 @@ Every root has an SSH host key of its own, generated at boot for the RAM roots, 
 
 Write `-i KEY` before the destination: after it, ssh reads the two words as part of the remote command, offers the default identities instead, and the machine refuses a login that looks correct. Root logs in by key alone on an image built here, since `init` starts the server with `-g`, or OpenSSH's with `PermitRootLogin prohibit-password`, unless `/etc/rach2/sshd.conf` says `root-password-login yes`, which the installer writes on a machine it installs; `su` from the unprivileged account is the other way in. Dropbear has no sftp server, so on its roots a file goes over with `ssh ... 'cat > /tmp/f' < f` and comes back with `ssh ... 'cat /tmp/f' > f`; the GNU system's root has OpenSSH's, for `scp` and `sftp`.
 
-Check the credentials before writing a root. The image trusts `krffs/authorized_keys`, which `krffs/gen_demo_key.sh` composes from the demo public key and an optional `krffs/authorized_keys.extra`. The private key used to log in must be the pair of one of those, and a copy carried between hosts can be older than the file it is meant to match:
+The development keys are committed: `krffs/rach2_demo_ed25519` for root and `krffs/rach2_test_ed25519` for the test account are the same in every clone, and `krffs/gen_demo_key.sh` makes `krffs/authorized_keys` and `krffs/test_authorized_keys` from their public halves, with an optional `krffs/authorized_keys.extra`. Every image built from this tree trusts that key, its recovery system included, so any host reaches any development machine with it, whoever built the image. The machines are on a private network; one that is to go anywhere else is built after `RACH2_REPLACE_KEYS=1 sh krffs/gen_demo_key.sh` has minted keys of its own.
 
-    ssh-keygen -y -f krffs/rach2_demo_ed25519 | cut -d' ' -f2
-    cut -d' ' -f2 krffs/authorized_keys
-
-A root written with keys whose private halves are on another machine is then reached through the console, through an ordinary account and `su`, through a password login where `/etc/rach2/sshd.conf` says `root-password-login yes`, which the installer writes, or from recovery.
-
-An install stick built on another host must trust the operator's key before it is written. Copy only the operator's `.pub` file to the build host, then run these as two commands in that tree:
+A stick can also trust a key that is not the development key. Copy only that key's `.pub` file to the build host, then run these as two commands in that tree:
 
 ```sh
 make recovery-key RECOVERY_EXTRA_KEYS=/path/operator.pub
 make rach2-install-stick
 ```
 
-The first command replaces `krffs/recovery_authorized_keys` with the builder's root keys and the supplied public keys. With no `RECOVERY_EXTRA_KEYS`, it preserves any existing recovery list. The second builds `build/images/rach2-install-stick-with-key.img`; the separate command is required because Make chooses keyed artifact names at startup. The operator logs in with the matching private key kept on the operator's host. Repeat the first command with the intended public file when that list changes. `make no-recovery-key` removes recovery access and its built images, the sealed and GRUB disks under both names among them. This changes recovery access only; installed accounts follow the installer's account procedure. `make release` builds the install stick and the recovery ISO for a person who is to receive them, and it and `RELEASE=1` are refused, before anything is built, in a tree that has `krffs/recovery_authorized_keys`; `make no-recovery-key` makes a tree that can build a release.
+The first command replaces `krffs/recovery_authorized_keys` with the builder's root keys and the supplied public keys. With no `RECOVERY_EXTRA_KEYS`, it preserves any existing recovery list. The second builds `build/images/rach2-install-stick-with-key.img`; the separate command is required because Make chooses keyed artifact names at startup. Its holder logs in with the matching private key. Repeat the first command with the intended public file when that list changes. `make no-recovery-key` removes recovery access and its built images, the sealed and GRUB disks under both names among them. This changes recovery access only; installed accounts follow the installer's account procedure. `make release` builds the install stick and the recovery ISO for a person who is to receive them, and it and `RELEASE=1` are refused, before anything is built, in a tree that has `krffs/recovery_authorized_keys`; `make no-recovery-key` makes a tree that can build a release.
 
 With `rach2.netconsole` on the boot line, the kernel broadcasts its log records in Ethernet frames of type `0x88b5`. `sudo tcpdump -i en0 -U 'ether proto 0x88b5' -w FILE` keeps it, which is the only record of a panic on a machine with no serial port: the screen shows one line and the boot log is in memory the restart clears.
 
