@@ -480,6 +480,9 @@ static void power_up(const pci_device_t *dev)
 #define EHCI_LEGSUP_ID         0x01u
 #define EHCI_LEGSUP_BIOS_OWNED 0x00010000u
 #define EHCI_LEGSUP_OS_OWNED   0x01000000u
+/* How many extended capabilities are followed before the list is taken for
+ * a loop; configuration space has room for 48 above 0x40. */
+#define EHCI_EXTCAP_HOPS       48u
 
 /**
  * Take one EHCI controller from the firmware and stop it, before its pins
@@ -491,8 +494,10 @@ static void power_up(const pci_device_t *dev)
  * moved away from a controller in the middle of a transfer leaves the device
  * half way through one, and such a device can fail to answer the xHCI
  * controller's Set Address, which then never completes. So the controller is
- * claimed through its legacy-support capability, its system-management
- * interrupts are turned off, and it is halted with its interrupts masked:
+ * claimed through its legacy-support capability, found by following the
+ * extended-capability list, its system-management interrupts are turned off,
+ * and it is halted with its interrupts masked, the halt waited for even when
+ * the firmware had already cleared the run bit:
  * what Linux does to every EHCI controller before any USB driver starts. A
  * firmware that owned it gets its configure flag cleared too, since nothing
  * it set up survives the handoff.
@@ -503,7 +508,8 @@ static void quiesce_ehci(const pci_device_t *dev)
     uint64_t base;
     uintptr_t cap;
     uintptr_t op;
-    uint32_t eecp = 0;
+    uint32_t eecp;
+    uint32_t hops;
     uint32_t polls;
     int owned = 0;
 
@@ -521,9 +527,16 @@ static void quiesce_ehci(const pci_device_t *dev)
     }
     op = cap + *(volatile uint8_t *)cap;
 
-    eecp = (*(volatile uint32_t *)(cap + EHCI_HCCPARAMS) >> 8) & 0xFFu;
-    if (eecp >= 0x40u &&
-        (pci_read_config32(bus, slot, function, (uint8_t)eecp) & 0xFFu) == EHCI_LEGSUP_ID) {
+    eecp = (*(volatile uint32_t *)(cap + EHCI_HCCPARAMS) >> 8) & 0xFCu;
+    for (hops = 0; eecp >= 0x40u && hops < EHCI_EXTCAP_HOPS; hops++) {
+        uint32_t word = pci_read_config32(bus, slot, function, (uint8_t)eecp);
+
+        if ((word & 0xFFu) == EHCI_LEGSUP_ID) {
+            break;
+        }
+        eecp = (word >> 8) & 0xFCu;
+    }
+    if (eecp >= 0x40u && hops < EHCI_EXTCAP_HOPS) {
         uint32_t legsup = pci_read_config32(bus, slot, function, (uint8_t)eecp);
 
         if (legsup & EHCI_LEGSUP_BIOS_OWNED) {
@@ -548,12 +561,12 @@ static void quiesce_ehci(const pci_device_t *dev)
 
     if (*(volatile uint32_t *)(op + EHCI_USBCMD) & EHCI_USBCMD_RUN) {
         *(volatile uint32_t *)(op + EHCI_USBCMD) &= ~EHCI_USBCMD_RUN;
-        for (polls = 0; polls < XHCI_HALT_POLLS; polls++) {
-            if (*(volatile uint32_t *)(op + EHCI_USBSTS) & EHCI_USBSTS_HALTED) {
-                break;
-            }
-            k_udelay(XHCI_POLL_US);
+    }
+    for (polls = 0; polls < XHCI_HALT_POLLS; polls++) {
+        if (*(volatile uint32_t *)(op + EHCI_USBSTS) & EHCI_USBSTS_HALTED) {
+            break;
         }
+        k_udelay(XHCI_POLL_US);
     }
     *(volatile uint32_t *)(op + EHCI_USBINTR) = 0;
     *(volatile uint32_t *)(op + EHCI_USBSTS) = EHCI_USBSTS_CHANGES;

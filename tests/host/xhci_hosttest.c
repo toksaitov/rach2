@@ -406,6 +406,8 @@ static uint32_t model_bar1;
 static uint32_t pci_cfg[256];
 static uint16_t model_vendor;
 static uint8_t model_progif;
+static uint16_t model_command;
+static uint32_t saved_cfg[256];
 static int model_present;
 
 bool pci_find_device_skip(uint8_t cls, uint8_t sub, pci_device_t *skip, pci_device_t *out)
@@ -501,6 +503,9 @@ uint16_t pci_read_config16(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t off)
     if (off == 0x74) {
         return (uint16_t)pm_state;
     }
+    if (off == 0x04) {
+        return model_command;
+    }
     return 0;
 }
 
@@ -551,9 +556,11 @@ void pci_enable_memory_space(pci_device_t *dev)
     memory_space_enabled = 1;
 }
 
-/* The window the driver would map. Its address is never dereferenced here:
-   every register access goes through the model. */
-static uint8_t window[64];
+/* The window the driver would map. The xHCI registers are reached through
+   the model, never through this address; a companion EHCI's are read and
+   written here directly, as `quiesce_ehci` does, so it has room for them. */
+static uint32_t window[64];
+static unsigned udelay_calls;
 
 /* The physical address the driver last asked to map. */
 static uint64_t mapped_phys;
@@ -568,6 +575,7 @@ uintptr_t map_mmio(uintptr_t phys, size_t size)
 void k_udelay(uint32_t us)
 {
     (void)us;
+    udelay_calls++;
 }
 
 static int stop_halted;
@@ -1827,6 +1835,59 @@ int main(void)
     model_reset();
     model_progif = 0x20;
     CHECK("an EHCI is not mistaken for an xHCI", discover() != 0);
+
+    memcpy(saved_cfg, pci_cfg, sizeof(pci_cfg));
+    /* A companion EHCI the firmware owns and runs: its capability length is
+       0x20, its first extended capability at 0x40 is not legacy support and
+       links to the one at 0x68, which the firmware never lets go of. */
+    model_reset();
+    model_progif = 0x20;
+    model_command = 0x0002u;
+    memset(window, 0, sizeof(window));
+    memset(pci_cfg, 0, sizeof(pci_cfg));
+    window[0] = 0x20u;
+    window[2] = 0x40u << 8;
+    pci_cfg[0x40] = 0x0Au | (0x68u << 8);
+    pci_cfg[0x68] = 0x01u | 0x00010000u;
+    pci_cfg[0x6C] = 0xE000003Fu;
+    window[8] = 0x1u;
+    window[10] = 0x3Fu;
+    window[24] = 0x1u;
+    udelay_calls = 0;
+    discover();
+    CHECK("an EHCI's legacy support is found past another capability",
+          (pci_cfg[0x68] & 0x01000000u) != 0);
+    CHECK("and a firmware that keeps it has its semaphore cleared",
+          (pci_cfg[0x68] & 0x00010000u) == 0);
+    CHECK("and its system-management interrupts are turned off", pci_cfg[0x6C] == 0);
+    CHECK("and the controller is told to stop", (window[8] & 0x1u) == 0);
+    CHECK("and its interrupts are masked", window[10] == 0);
+    CHECK("and its configure flag is cleared", window[24] == 0);
+
+    /* One the firmware has stopped but which has not halted yet. */
+    model_reset();
+    model_progif = 0x20;
+    model_command = 0x0002u;
+    memset(window, 0, sizeof(window));
+    memset(pci_cfg, 0, sizeof(pci_cfg));
+    window[0] = 0x20u;
+    window[24] = 0x1u;
+    udelay_calls = 0;
+    discover();
+    CHECK("an EHCI already told to stop is waited for until it halts", udelay_calls >= 16u);
+    CHECK("and its configure flag is kept when the firmware did not own it", window[24] == 1u);
+
+    /* One whose memory window the firmware never enabled. */
+    model_reset();
+    model_progif = 0x20;
+    model_command = 0;
+    memset(window, 0, sizeof(window));
+    window[0] = 0x20u;
+    window[8] = 0x1u;
+    discover();
+    CHECK("an EHCI with its memory window off is not touched", window[8] == 0x1u);
+    model_command = 0;
+    memcpy(pci_cfg, saved_cfg, sizeof(pci_cfg));
 
     model_reset();
     model_bar0 = 0xFEBF0001u;
