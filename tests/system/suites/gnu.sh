@@ -246,20 +246,22 @@ TOTAL=0
 for row in $ROWS; do
     name=${row%%:*}
     TOTAL=$((TOTAL + 1))
+    began=$("$RUNUTIL" now)
     "$DEADLINE" "$(scaled "${row#*:}")" \
         ssh -i "$ROOT_KEY" -p "$PORT" -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$KNOWN" \
         -o "ConnectTimeout=$(scaled 30)" -o BatchMode=yes -o IdentitiesOnly=yes \
         root@127.0.0.1 "/bin/bash /tmp/gnu/rows.sh $name ${RACH2_ARCH:-i686}" > "$DISK.$name.log" 2>&1
     status=$?
+    took="$(($("$RUNUTIL" now) - began)) s"
     if [ "$status" -eq 0 ] && grep -q "^GNUROW OK $name\$" "$DISK.$name.log"; then
-        echo "gnu-test: $name: OK"
+        echo "gnu-test: $name: OK in $took"
         continue
     fi
     FAILED="$FAILED $name"
     if [ "$status" -eq 124 ]; then
-        echo "gnu-test: $name: FAIL: no answer within its bound" >&2
+        echo "gnu-test: $name: FAIL: no answer within its bound, after $took" >&2
     elif grep -q "^GNUROW OK $name\$" "$DISK.$name.log"; then
-        echo "gnu-test: $name: FAIL: the row printed its OK, but ssh ended with status $status" >&2
+        echo "gnu-test: $name: FAIL: the row printed its OK in $took, but ssh ended with status $status" >&2
     else
         echo "gnu-test: $name: FAIL: $(grep '^GNUROW FAIL' "$DISK.$name.log" || tail -n 3 "$DISK.$name.log")" >&2
     fi
