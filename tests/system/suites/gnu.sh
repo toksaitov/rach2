@@ -231,7 +231,11 @@ echo "gnu-test: scp puts a file on the machine and sftp takes it back, byte for 
     root@127.0.0.1:/tmp/gnu/sed.tar.xz > /dev/null 2>&1 ||
     fail "scp could not put GNU sed's tarball on the machine"
 
-# Each row with the seconds it takes on an idle host under the emulator.
+# Each row with the seconds it may take under TCG on the testing host, the
+# accelerator its accounts run the suites under. GNU sed's configure runs
+# the compiler and the linker for each of its tests, which takes about 50 s
+# under KVM; on 2026-10-14 the autotools row took 1706 s on i686 and 1397 s
+# on x86-64 under TCG there, beside the host's other work.
 ROWS="names:120 glibc:120 zlib:120 openssl:180 openssh:600 ncurses:120 less:120
 vim:120 perl:180 curl:600 git:300 coreutils:120 bash:120 grep:120 sed:120
 gawk:120 findutils:120 diffutils:120 patch:120 tar:120 gzip:120 xz:120 file:120 iproute2:120
@@ -240,7 +244,7 @@ pkgconf:120 procps:120 utillinux:120 zstd:120 rsync:300 nano:120 texinfo:120 str
 tmux:120 cron:180 zip:120 htop:120 dosfstools:120 uname:120 ttygroup:120 disknode:120
 fallocate:120 chattr:120 filecache:120 shadow:120 chawan:120 python:300 gnupg:300 m4:120
 autoreconf:300 bison:120 flex:120 jq:120 screen:120 sudo:120 cmake:300 dig:120
-make:600 autotools:900 gcc:900 gdb:600 js:600 dbus:120 chromium:1200"
+make:600 autotools:2700 gcc:900 gdb:600 js:600 dbus:120 chromium:1200"
 FAILED=""
 TOTAL=0
 for row in $ROWS; do
