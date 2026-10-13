@@ -70,20 +70,9 @@ if [ "${RACH2_RUN_GROUP:-}" != "$$" ]; then
     fi
     exec "$RACH2_RUN_UTIL" group sh "$0" "$@"
 fi
-# The block of host ports the run's suites forward. Every tree on the host,
-# in every account, claims a block from the same lock files in /tmp, so two
-# trees never forward the same port; the helper holds the lock through exec
-# for as long as this process lives and sets RACH2_PORT_OFFSET, which
-# tests/system/suites.mk adds to every port in its table. A caller that set
-# the offset itself, such as an outer run around the runner's selftest, owns
-# the ports it names.
-if [ -z "${RACH2_PORT_OFFSET:-}" ]; then
-    exec "$RACH2_RUN_UTIL" ports /tmp 10 sh "$0" "$@"
-fi
-case "$RACH2_PORT_OFFSET" in
+case "${RACH2_PORT_OFFSET:-}" in
     *[!0-9]*) echo "run: result: refused: RACH2_PORT_OFFSET must be a whole number" >&2; rm -rf "$RACH2_RUN_WORK"; exit 2 ;;
 esac
-export RACH2_PORT_OFFSET
 WORK=$RACH2_RUN_WORK
 trap 'rm -rf "$WORK"' 0
 unset RACH2_RUN_GROUP RACH2_RUN_WORK RACH2_PROGRESS_FD
@@ -1072,6 +1061,22 @@ for suite in "$@"; do
         *) sockets="" ;;
     esac
 done
+# The block of host ports the run's suites forward, claimed once the names
+# are known to start a machine: `inventory`, `style`, `host` and a refused
+# command forward nothing and claim nothing. Every tree on the host, in every
+# account, claims a block from the same lock files in /tmp, so two trees
+# never forward the same port; the helper holds the lock through exec for as
+# long as this process lives and sets RACH2_PORT_OFFSET, which
+# tests/system/suites.mk adds to every port in its table. The runner starts
+# again under the lock with the names it was given, as a set expanded them. A
+# caller that set the offset itself, such as an outer run around the
+# runner's selftest, owns the ports it names.
+if [ -z "$sockets" ] && [ -z "${RACH2_PORT_OFFSET:-}" ]; then
+    RACH2_RUN_GROUP=$$; RACH2_RUN_WORK=$WORK
+    export RACH2_RUN_GROUP RACH2_RUN_WORK
+    exec "$RACH2_RUN_UTIL" ports /tmp 10 sh "$0" "$@"
+fi
+[ -z "${RACH2_PORT_OFFSET:-}" ] || export RACH2_PORT_OFFSET
 check_host $diskimage $sockets || { echo "run: result: refused: this host cannot run the set" >&2; exit 1; }
 [ -n "$sockets" ] || check_space || exit 1
 
