@@ -26,8 +26,9 @@
  * * `super`: a stick with no partition table mounts through `/dev/disk0`.
  * * `pullread`: `/dev/disk0` read in 32 KiB pieces, `USBDISKPROBE READING`
  *   printed first, until a read answers `EIO`, then `USBDISKPROBE READ
- *   FAILED`; the harness pulls the stick during the reads and reads the
- *   order of that line and the kernel's `given back` line.
+ *   FAILED`; one read of the probe's own goes before them. The harness
+ *   pulls the stick during the reads and reads the order of that line and
+ *   the kernel's `given back` line.
  * * `throughput`: 16 MiB read from `/dev/disk0` in 32 KiB pieces, timed by
  *   the monotonic clock and printed as `USBDISKPROBE THROUGHPUT N KB/s`.
  *   The number is recorded, not judged: it is what this milestone's
@@ -617,8 +618,12 @@ static void part_throughput(void)
 /*
  * The pull during a transfer: a child reads the stick in large calls until
  * one fails, and `USBDISKPROBE READING` is said once the block layer counts
- * a request in flight, `disk-in-flight` in /proc/disk, so the pull the
- * suite makes on the word lands on a data stage and not between two calls.
+ * a request in flight, `disk-in-flight` in /proc/disk. The suite throttles
+ * the medium to a budget of 32 KiB and a byte a second after it, and the
+ * probe spends the budget with a read of its own before the child starts, so
+ * the child's first read cannot leave its data stage before the pull the
+ * suite makes on the word, however late the pull comes within the driver's
+ * deadline.
  */
 static void part_pullread(void)
 {
@@ -628,6 +633,9 @@ static void part_pullread(void)
 
     if (fd < 0) {
         fail("/dev/disk0 would not open");
+    }
+    if (syscall3(SYS_READ, fd, (long)big, (int)sizeof(big)) != (int)sizeof(big)) {
+        fail("the read that spends the throttle's budget did not complete");
     }
     child = syscall1(SYS_FORK, 0);
     if (child < 0) {
