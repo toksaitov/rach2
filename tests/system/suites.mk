@@ -1995,7 +1995,9 @@ run-style:
 # The e2fsprogs stamp is a dependency because two host tests compile the port's
 # own `unix_io.c` out of the extracted tree: without it they build against
 # whatever that tree last held, or fail to build at all in a fresh checkout.
-run-host: check-libc $(E2FSPROGS_STAMP) $(DEADLINE)
+# The KRFFS stager is one because mkext2_overlay_test.sh makes its volumes
+# with tools/image/mkext2.sh, which stages each manifest with it.
+run-host: check-libc $(E2FSPROGS_STAMP) $(DEADLINE) build/krffs/stageimage.krffs
 	@sh tests/system/machine_measure_test.sh
 	@./tests/system/suites/host.sh
 

@@ -264,6 +264,13 @@ if [ -z "${HOST_PRINT_COMMANDS:-}" ]; then
         echo "hosttest: result: fail: the installer's kept image accounts" >&2
         fail=1
     fi
+    if sh tests/system/mkext2_overlay_test.sh >"$VDIR/mkext2_overlay.rlog" 2>&1; then
+        echo "hosttest: result: pass: the modes an ext2 overlay adds under umask 002"
+    else
+        cat "$VDIR/mkext2_overlay.rlog"
+        echo "hosttest: result: fail: the modes an ext2 overlay adds under umask 002" >&2
+        fail=1
+    fi
     if TMPDIR="$VDIR" sh vendor/tcc/check_asm.sh >"$VDIR/check_asm.rlog" 2>&1; then
         echo "hosttest: result: pass: TinyCC's assemblers against GNU as"
     else
