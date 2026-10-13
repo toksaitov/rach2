@@ -418,26 +418,31 @@ else
 fi
 
 # ---- 17b: a 32 KiB read in flight when the stick is pulled: the request is
-#           failed only after the controller has given the slot back, since
-#           the request's pages are the controller's until then, which the
-#           driver's line at the close says. The stick's medium is throttled
-#           to 32 KiB a second, so a read's data stage lasts a second and the
-#           pull lands inside it; unthrottled, the emulator completes each
-#           stage inside its doorbell and the pull lands between stages, and
-#           the emulator gives the slot back within a millisecond, so the
-#           order of the process's line and the kernel's proves nothing.
-#           The next stick enumerates after. ----
+#           kept and failed only after the controller has given the slot
+#           back, since the request's buffers are the controller's until
+#           then, which the driver's line at the close says. The stick's
+#           medium is throttled to a budget of 32 KiB and a byte a second
+#           after it; the probe spends the budget with a read of its own, so
+#           the read it then starts cannot leave its data stage before the
+#           pull, however late the pull comes, within the driver's ten-second
+#           deadline. Unthrottled, the emulator completes each stage inside
+#           its doorbell and the pull lands between stages, and the order of
+#           the process's line and the kernel's proves nothing. The pull
+#           drains the medium before it takes the device away, which ends the
+#           data stage, so the driver may see the status wrapper sent before
+#           it sees the device gone; either way the request is kept. The next
+#           stick enumerates after. ----
 if run_shell --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
-    --qemu-arg=-object --qemu-arg=throttle-group,id=tgs,x-bps-total=32768 \
+    --qemu-arg=-object --qemu-arg=throttle-group,id=tgs,x-bps-total=1,x-bps-total-max=32768 \
     --qemu-arg=-blockdev --qemu-arg="driver=file,filename=$STICK,node-name=stickfile" \
     --qemu-arg=-blockdev --qemu-arg=driver=raw,file=stickfile,node-name=stickraw \
     --qemu-arg=-blockdev --qemu-arg=driver=throttle,throttle-group=tgs,file=stickraw,node-name=stick \
     --qemu-arg=-device --qemu-arg=usb-storage,bus=xhci.0,drive=stick,id=st0 \
     --timeout 180 --steptmo 60 --ok "USBDISKPROBE OK" --never "USBDISKPROBE FAIL" \
-    --log "$OUT.pullread.log" \
+    --never "a transfer never answered" --log "$OUT.pullread.log" \
     "expect=Type 'help'" "send=exec /usbdiskprobe pullread" "expect=USBDISKPROBE READING" \
-    "usb=del:st0" "expect=its request is kept, its data stage in flight" \
+    "usb=del:st0" "expect=its request is kept, its [a-z ]* in flight" \
     "expect=: given back" "expect=its request is failed with the slot given back" \
     "expect=USBDISKPROBE READ FAILED" \
     "expect=Type 'help'" \

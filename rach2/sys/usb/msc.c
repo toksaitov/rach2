@@ -817,12 +817,13 @@ int msc_attach(struct xhci_ctrl *hc, int device, int interface, int ep_in, int e
  * A request whose pages the controller may still reach is kept until Disable
  * Slot is answered, which `msc_slot_closed` reports; the rest fail now. The
  * record line names the stage the kept request is in, which `tests/run usb`
- * reads: the pull it arranges lands in the data stage. The record stays taken:
- * its block device is what a mount, a description and a held buffer point
- * at, and a second stick given this record would be given their pointers with
- * it. The disk layer frees it when the last of those has gone
- * (`msc_release`), and its own buffers are the controller's until the slot
- * has been given back.
+ * reads: the pull it arranges lands in the data stage, or in the status
+ * wrapper when the emulator's drain of the medium ends the data stage before
+ * the device goes. The record stays taken: its block device is what a mount,
+ * a description and a held buffer point at, and a second stick given this
+ * record would be given their pointers with it. The disk layer frees it when
+ * the last of those has gone (`msc_release`), and its own buffers are the
+ * controller's until the slot has been given back.
  */
 void msc_detach(struct xhci_ctrl *hc, int device)
 {
