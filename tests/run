@@ -1103,6 +1103,12 @@ if [ -f "$REPO/krffs/manifests/rach2-recovery.manifest" ] &&
         exit 1
     }
 fi
+# Git keeps no file mode but the executable bit, so a checkout that writes the
+# committed demo keys leaves them readable by others, and ssh refuses such a
+# key. krffs/gen_demo_key.sh sets the mode only when it makes the key lists.
+for key in rach2_demo_ed25519 rach2_test_ed25519; do
+    [ ! -f "$REPO/krffs/$key" ] || chmod 600 "$REPO/krffs/$key"
+done
 check_declarations || exit 1
 take_scripts
 build_components
