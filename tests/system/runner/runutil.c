@@ -1196,6 +1196,84 @@ static void lock_exec(const char *path, const char *owner, char **cmd)
     execute(cmd, 0);
 }
 
+/** Open a block's lock file, which every account on the host must be able to
+ * lock. The file is made mode 0666 by its first opener. An existing file is
+ * opened without O_CREAT, which Linux refuses on another account's file in a
+ * sticky directory such as /tmp.
+ */
+static int open_shared(const char *path)
+{
+    int fd = open(path, O_RDWR);
+    if (fd >= 0 || errno != ENOENT)
+        return fd;
+    fd = open(path, O_RDWR | O_CREAT | O_EXCL, 0666);
+    if (fd >= 0) {
+        fchmod(fd, 0666);
+        return fd;
+    }
+    return errno == EEXIST ? open(path, O_RDWR) : -1;
+}
+
+/** Claim a block of host ports and hold it through exec, as `lock` holds the
+ * tree. Block N is `DIR/rach2-ports.N`, locked with a POSIX record lock, and
+ * the command runs with `RACH2_PORT_OFFSET` set to N * 1000, which
+ * tests/system/suites.mk adds to every port it forwards. The lowest free
+ * block is taken; while every block is held, the claim waits.
+ */
+static void ports_exec(const char *dir, int count, char **cmd)
+{
+    char path[4096], offset[32];
+    struct flock lock;
+    int slot, fd, opened, said = 0;
+
+    signal(SIGINT, on_signal);
+    signal(SIGTERM, on_signal);
+    signal(SIGHUP, on_signal);
+    for (;;) {
+        opened = 0;
+        for (slot = 0; slot < count; slot++) {
+            snprintf(path, sizeof(path), "%s/rach2-ports.%d", dir, slot);
+            if ((fd = open_shared(path)) < 0)
+                continue;
+            opened++;
+            memset(&lock, 0, sizeof(lock));
+            lock.l_type = F_WRLCK;
+            lock.l_whence = SEEK_SET;
+            if (fcntl(fd, F_SETLK, &lock) == 0) {
+                snprintf(offset, sizeof(offset), "%d", slot * 1000);
+                setenv("RACH2_PORT_OFFSET", offset, 1);
+                if (slot > 0)
+                    printf("run: ports: block %d, %s above the table's\n", slot, offset);
+                fflush(stdout);
+                execute(cmd, 0);
+            }
+            close(fd);
+        }
+        if (opened == 0) {
+            fprintf(stderr, "run: result: refused: no port block under %s can be opened\n", dir);
+            remove_work();
+            exit(1);
+        }
+        if (!said) {
+            printf("run: ports: all %d blocks are held by other runs; waiting\n", count);
+            fflush(stdout);
+            said = 1;
+        }
+        pause_for(1.0);
+        if (interrupted) {
+            remove_work();
+            exit(128 + interrupted);
+        }
+    }
+}
+
+/** Whether `path` was modified less than `seconds` ago. */
+static int is_young(const char *path, double seconds)
+{
+    struct stat st;
+    return stat(path, &st) == 0 && difftime(time(NULL), st.st_mtime) < seconds;
+}
+
 /** Small POSIX interfaces used by the shell runner on macOS and Linux. */
 int main(int argc, char **argv)
 {
@@ -1203,6 +1281,8 @@ int main(int argc, char **argv)
         execute(argv + 2, !strcmp(argv[1], "group"));
     if (argc >= 5 && !strcmp(argv[1], "lock"))
         lock_exec(argv[2], argv[3], argv + 4);
+    if (argc >= 5 && !strcmp(argv[1], "ports"))
+        ports_exec(argv[2], (int)strtol(argv[3], NULL, 10), argv + 4);
     if (argc == 4 && !strcmp(argv[1], "killgroup")) {
         pid_t group = (pid_t)strtol(argv[2], NULL, 10);
         int sig = (int)strtol(argv[3], NULL, 10);
@@ -1230,12 +1310,8 @@ int main(int argc, char **argv)
         printf("%ld\n", (long)group);
         return 0;
     }
-    if (argc == 4 && !strcmp(argv[1], "young")) {
-        struct stat st;
-        if (stat(argv[2], &st) != 0)
-            return 1;
-        return difftime(time(NULL), st.st_mtime) < strtod(argv[3], NULL) ? 0 : 1;
-    }
+    if (argc == 4 && !strcmp(argv[1], "young"))
+        return !is_young(argv[2], strtod(argv[3], NULL));
     if (argc >= 6 && (!strcmp(argv[1], "watch") || !strcmp(argv[1], "suite")))
         return supervise(argv + 5, argv[2], strtod(argv[3], NULL), argv[4],
                          !strcmp(argv[1], "suite"));
