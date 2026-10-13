@@ -775,6 +775,30 @@ wait "$portrun"
 out=$("$SELFTEST_UTIL" ports "$WORK/ports" 2 sh -c 'echo "offset $RACH2_PORT_OFFSET"')
 check "the block is released at exit" "offset 0" "$out"
 
+# A signal the claim receives before it locks a free block ends it, and the
+# command does not start. The signal is made pending and blocked before the
+# claim begins, so it is there however soon the block is locked.
+cat > "$WORK/pending.c" <<'PENDING'
+#include <signal.h>
+#include <unistd.h>
+int main(int argc, char **argv)
+{
+    sigset_t set;
+    sigemptyset(&set);
+    sigaddset(&set, SIGTERM);
+    sigprocmask(SIG_BLOCK, &set, 0);
+    raise(SIGTERM);
+    execvp(argv[1], argv + 1);
+    return 127;
+}
+PENDING
+cc -o "$WORK/pending" "$WORK/pending.c" || exit 1
+rm -f "$WORK/ports-entered"
+# shellcheck disable=SC2016 # $1 is the inner shell's argument
+"$WORK/pending" "$SELFTEST_UTIL" ports "$WORK/ports" 2 sh -c 'echo started > "$1"' sh "$WORK/ports-entered" > /dev/null; rc=$?
+check "a claim signalled before it locks a block ends with 128 plus the signal" 143 "$rc"
+check "and its command does not start" 0 "$([ -e "$WORK/ports-entered" ] && echo 1 || echo 0)"
+
 # What a run owns. One run at a time on a tree: a second is refused with the
 # first named; a lock a dead run left is taken over, unless something of that
 # run's process group is still alive, which is named for the person to stop.

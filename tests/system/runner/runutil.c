@@ -1214,21 +1214,62 @@ static int open_shared(const char *path)
     return errno == EEXIST ? open(path, O_RDWR) : -1;
 }
 
+/** End the port claim with 128 plus the number of a signal it has received.
+ * The signals in `stop` are blocked except while the claim waits, and here,
+ * where any that arrived during a pass over the blocks are delivered.
+ */
+static void stop_if_interrupted(const sigset_t *stop)
+{
+    sigprocmask(SIG_UNBLOCK, stop, NULL);
+    sigprocmask(SIG_BLOCK, stop, NULL);
+    if (interrupted) {
+        remove_work();
+        exit(128 + interrupted);
+    }
+}
+
+/** Run the command that has claimed a block. The caller has called
+ * `stop_if_interrupted` with the signals in `stop` still blocked, and the
+ * handlers become the defaults before they are unblocked, so a signal that
+ * arrives after that check ends the process instead of being lost when exec
+ * replaces it. The run's work directory is removed first if one is pending.
+ */
+static void ports_start(const sigset_t *stop, char **cmd)
+{
+    sigset_t pending;
+
+    reset_signals();
+    if (sigpending(&pending) == 0 &&
+        (sigismember(&pending, SIGINT) || sigismember(&pending, SIGTERM) ||
+         sigismember(&pending, SIGHUP)))
+        remove_work();
+    sigprocmask(SIG_UNBLOCK, stop, NULL);
+    execute(cmd, 0);
+}
+
 /** Claim a block of host ports and hold it through exec, as `lock` holds the
  * tree. Block N is `DIR/rach2-ports.N`, locked with a POSIX record lock, and
  * the command runs with `RACH2_PORT_OFFSET` set to N * 1000, which
  * tests/system/suites.mk adds to every port it forwards. The lowest free
- * block is taken; while every block is held, the claim waits.
+ * block is taken; while every block is held, the claim waits. An interrupt,
+ * hangup or termination at any point of the claim ends it with 128 plus the
+ * signal's number, and the command does not start.
  */
 static void ports_exec(const char *dir, int count, char **cmd)
 {
     char path[4096], offset[32];
     struct flock lock;
+    sigset_t stop;
     int slot, fd, opened, said = 0;
 
+    sigemptyset(&stop);
+    sigaddset(&stop, SIGINT);
+    sigaddset(&stop, SIGTERM);
+    sigaddset(&stop, SIGHUP);
     signal(SIGINT, on_signal);
     signal(SIGTERM, on_signal);
     signal(SIGHUP, on_signal);
+    sigprocmask(SIG_BLOCK, &stop, NULL);
     for (;;) {
         opened = 0;
         for (slot = 0; slot < count; slot++) {
@@ -1240,12 +1281,13 @@ static void ports_exec(const char *dir, int count, char **cmd)
             lock.l_type = F_WRLCK;
             lock.l_whence = SEEK_SET;
             if (fcntl(fd, F_SETLK, &lock) == 0) {
+                stop_if_interrupted(&stop);
                 snprintf(offset, sizeof(offset), "%d", slot * 1000);
                 setenv("RACH2_PORT_OFFSET", offset, 1);
                 if (slot > 0)
                     printf("run: ports: block %d, %s above the table's\n", slot, offset);
                 fflush(stdout);
-                execute(cmd, 0);
+                ports_start(&stop, cmd);
             }
             close(fd);
         }
@@ -1259,11 +1301,9 @@ static void ports_exec(const char *dir, int count, char **cmd)
             fflush(stdout);
             said = 1;
         }
+        sigprocmask(SIG_UNBLOCK, &stop, NULL);
         pause_for(1.0);
-        if (interrupted) {
-            remove_work();
-            exit(128 + interrupted);
-        }
+        stop_if_interrupted(&stop);
     }
 }
 
