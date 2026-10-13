@@ -150,7 +150,10 @@ fi
 # ---- 6b: more devices than the table held before milestone 50: two hubs
 #          on two root ports with fourteen devices between them, sixteen in
 #          all, every one configured. A hub's last port is scanned like its
-#          first, which is what a table that fills from behind a hub needs. ----
+#          first, which is what a table that fills from behind a hub needs.
+#          The probe is given the count, so it reads /proc/usb until the
+#          kernel lists all sixteen: the shell can start while the hubs are
+#          still being scanned. ----
 if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
     --qemu-arg=-device --qemu-arg=usb-hub,bus=xhci.0,port=1,id=hub1 \
@@ -169,7 +172,7 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci.0,port=2.4 \
     --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci.0,port=2.5 \
     --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci.0,port=2.6 \
-    --timeout 120 --log "$REPO/$ARCH_BUILD/images/usb-sixteen.log" "probe=usbprobe" > /dev/null 2>&1 \
+    --timeout 120 --log "$REPO/$ARCH_BUILD/images/usb-sixteen.log" "probe=usbprobe 16" > /dev/null 2>&1 \
     && [ "$(grep -ac 'usb: device: port [0-9.]*: .*class' "$REPO/$ARCH_BUILD/images/usb-sixteen.log")" = 16 ]; then
     note "two hubs with fourteen devices between them, sixteen in all, are every one configured: OK"
 else
