@@ -41,7 +41,9 @@
  *   --never TEXT fails the run if TEXT ever appears on the serial console,
  *   however the run ends. It is how a probe that must be killed is checked:
  *   the line it prints when it was not killed is forbidden. It may be given
- *   more than once.
+ *   more than once. An expect=, boot=, seen= or execq= step ends, failed,
+ *   as soon as such a text appears, rather than waiting out its limit for
+ *   output a failed run does not need.
  *
  *   STEP forms:
  *     expect=REGEX   wait until REGEX appears (per-step cap = --steptmo)
@@ -357,6 +359,12 @@ static size_t buf_len, buf_cap;
 static size_t consumed;
 /* Where the last send began, which a `seen=` step searches from. */
 static size_t exchange;
+/* The `--never` texts, how far the output has been searched for them, and
+   whether one has appeared. */
+static const char *nevers[MAX_ARGS];
+static int n_never;
+static size_t never_searched;
+static int never_found;
 
 static void buf_add(const unsigned char *data, size_t n)
 {
@@ -371,6 +379,49 @@ static void buf_add(const unsigned char *data, size_t n)
     memcpy(buf + buf_len, data, n);
     buf_len += n;
     buf[buf_len] = '\0';
+}
+
+/** End of the first literal token at or after `from`, or -1. */
+static long token_end(const unsigned char *hay, size_t len, const char *needle, size_t from)
+{
+    size_t n = strlen(needle), i;
+
+    if (n == 0 || n > len)
+        return -1;
+    for (i = from; i <= len - n; i++)
+        if (memcmp(hay + i, needle, n) == 0)
+            return (long)(i + n);
+    return -1;
+}
+
+static int contains(const unsigned char *hay, size_t len, const char *needle)
+{
+    return token_end(hay, len, needle, 0) >= 0;
+}
+
+/**
+ * Whether a `--never` text has appeared in the output read so far.
+ *
+ * A step that waits for output ends when one has, since the run fails on it
+ * whatever the step goes on to find. Each search starts a text's length short
+ * of where the last one ended, so a text split across two reads is found and
+ * the output before it is not searched again.
+ */
+static int never_appeared(void)
+{
+    int i;
+
+    if (never_searched > buf_len)
+        never_searched = 0;
+    for (i = 0; i < n_never && !never_found; i++) {
+        size_t n = strlen(nevers[i]);
+        size_t from = never_searched >= n ? never_searched - n + 1 : 0;
+
+        if (token_end(buf, buf_len, nevers[i], from) >= 0)
+            never_found = 1;
+    }
+    never_searched = buf_len;
+    return never_found;
 }
 
 /* ---- the clock ---- */
@@ -823,6 +874,7 @@ static void stamp(const char *what)
 /**
  * Wait until `pattern` appears in the guest's output or `stop` passes.
  *
+ * A `--never` text in the output ends the wait with no match.
  * A child that has exited can still have output in the pipe, since reaping it
  * reads nothing; that output is drained before the last search.
  */
@@ -840,6 +892,8 @@ static int expect_pattern(const char *pattern, double stop)
             consumed = (size_t)end;
             return 1;
         }
+        if (never_appeared())
+            return 0;
         pump(now() + 0.3);
     }
     if (child_poll() >= 0)
@@ -899,7 +953,8 @@ static int expect_step(const char *step)
  * Wait until `pattern` has appeared since the last send, wherever it lies:
  * two `seen=` steps are satisfied in either order, where two `expect=`
  * steps are satisfied in theirs. The cursor moves past the match only
- * when the match is beyond it, so a later `expect=` still searches on.
+ * when the match is beyond it, so a later `expect=` still searches on. A
+ * `--never` text in the output ends the wait with no match.
  */
 static int seen_pattern(const char *pattern)
 {
@@ -918,7 +973,7 @@ static int seen_pattern(const char *pattern)
                 consumed = (size_t)end;
             return 1;
         }
-        if (now() >= stop || child_poll() >= 0)
+        if (now() >= stop || child_poll() >= 0 || never_appeared())
             break;
         pump(now() + 0.3);
     }
@@ -1072,24 +1127,6 @@ static int unescape(const char *in, char *out, size_t cap)
 }
 
 /* ---- main ---- */
-
-/** End of the first literal token at or after `from`, or -1. */
-static long token_end(const unsigned char *hay, size_t len, const char *needle, size_t from)
-{
-    size_t n = strlen(needle), i;
-
-    if (n == 0 || n > len)
-        return -1;
-    for (i = from; i <= len - n; i++)
-        if (memcmp(hay + i, needle, n) == 0)
-            return (long)(i + n);
-    return -1;
-}
-
-static int contains(const unsigned char *hay, size_t len, const char *needle)
-{
-    return token_end(hay, len, needle, 0) >= 0;
-}
 
 /** Split a probe into its boot wait, under the run's timeout, and its exec. */
 static int expand_probe(const char *arg, const char **steps, char *execq, size_t size)
@@ -1365,6 +1402,91 @@ static int late_output_selftest(void)
 }
 
 /**
+ * Require a step that waits for output to end when a `--never` text appears.
+ *
+ * A child holds the serial pipe open, having written a `--never` text and
+ * nothing the step waits for. Each of an `expect=`, a `boot=` and a `seen=`
+ * step must fail within a second and a half, where the step's limit and the
+ * run's deadline are three seconds away: a step that did not look for the
+ * text would wait out its limit.
+ */
+static int never_step_selftest(void)
+{
+    static const char *const steps[] = {"expect=check passed", "boot=check passed",
+                                        "seen=check passed"};
+    static const char text[] = "machine-grow: failed: stopped with status 1\n";
+    int serial[2], bad = 0;
+    size_t i;
+
+    if (pipe(serial) != 0) {
+        perror("harness: selftest pipe");
+        return 1;
+    }
+    child_pid = fork();
+    if (child_pid < 0) {
+        perror("harness: selftest fork");
+        close(serial[0]);
+        close(serial[1]);
+        return 1;
+    }
+    if (child_pid == 0) {
+        close(serial[0]);
+        if (write(serial[1], text, sizeof(text) - 1) != (ssize_t)sizeof(text) - 1)
+            _exit(1);
+        for (;;)
+            pause();
+    }
+    close(serial[1]);
+    child_out = serial[0];
+    child_reaped = 0;
+    if (fcntl(child_out, F_SETFL, O_NONBLOCK) < 0) {
+        perror("harness: selftest nonblocking pipe");
+        bad++;
+    }
+    nevers[0] = "machine-grow: failed:";
+    n_never = 1;
+    steptmo = 3.0;
+    for (i = 0; !bad && i < sizeof(steps) / sizeof(steps[0]); i++) {
+        double start = now(), took;
+        int got;
+
+        never_searched = 0;
+        never_found = 0;
+        consumed = exchange = 0;
+        deadline = start + 3.0;
+        if (strncmp(steps[i], "seen=", 5) == 0)
+            got = seen_pattern(steps[i] + 5);
+        else
+            got = expect_step(steps[i]);
+        took = now() - start;
+        if (got || took >= 1.5) {
+            fprintf(stderr,
+                    "harness: selftest: %s returned %d and waited %.1f seconds "
+                    "after a --never text appeared\n",
+                    steps[i], got, took);
+            bad++;
+        }
+    }
+    kill(child_pid, SIGKILL);
+    while (waitpid(child_pid, NULL, 0) < 0 && errno == EINTR)
+        ;
+    close(child_out);
+    child_out = -1;
+    child_pid = -1;
+    child_reaped = 0;
+    n_never = 0;
+    never_searched = 0;
+    never_found = 0;
+    free(buf);
+    buf = NULL;
+    buf_len = buf_cap = consumed = exchange = 0;
+    if (!bad)
+        printf("harness: selftest: a step that waits for output ends when a "
+               "--never text appears\n");
+    return bad != 0;
+}
+
+/**
  * Check the escape decoder and the mouse step's parsing.
  *
  * The escapes are the cases the suites depend on and the ones they do not: a
@@ -1581,7 +1703,7 @@ static int step_tcp(int port)
  * on it afterwards and a probe that failed at once is not waited for to the
  * step's limit.
  */
-static void step_execq(const char *name, const char *ok, const char *const *nevers, int n_never)
+static void step_execq(const char *name, const char *ok)
 {
     double step_end = now() + steptmo;
     double sent = 0;
@@ -1665,8 +1787,6 @@ int main(int argc, char **argv)
     int bios = 0;
     const char *net = "user,id=net0", *device = "rtl8139,netdev=net0";
     const char *log = NULL, *ok = NULL;
-    const char *nevers[MAX_ARGS];
-    int n_never = 0;
     const char *drives[MAX_ARGS];
     const char *qemu_args[MAX_ARGS];
     const char *steps[MAX_STEPS];
@@ -1686,7 +1806,7 @@ int main(int argc, char **argv)
 
     if (argc == 2 && strcmp(argv[1], "--selftest") == 0)
         return unescape_selftest() | probe_wait_selftest() | input_deadline_selftest() |
-               late_output_selftest() | sendfile_selftest();
+               late_output_selftest() | sendfile_selftest() | never_step_selftest();
     if (argc == 3 && strcmp(argv[1], "--match") == 0)
         return match_mode(argv[2]);
 
@@ -2073,7 +2193,7 @@ int main(int argc, char **argv)
                 step_failures++;
             trace("step %s %s consumed=%lu", step, seen ? "ok" : "fail", (unsigned long)consumed);
         } else if (strncmp(step, "execq=", 6) == 0) {
-            step_execq(step + 6, ok, nevers, n_never);
+            step_execq(step + 6, ok);
         } else {
             fprintf(stderr, "unknown step: %s\n", step);
             step_failures++;
