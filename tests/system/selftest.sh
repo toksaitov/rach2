@@ -283,6 +283,26 @@ out=$(cd "$WORK" && PATH="$WORK/bin:$PATH" RACH2_WORKERS=2 \
       bash -c 'set -m; sh tests/run passing 2>&1 | tail -1; echo "status ${PIPESTATUS[*]}"' 2>&1)
 check "a run piped to tail under job control leaves tail its last line" \
     "run: result: all 1 suites passed|status 0 0" "$(printf '%s\n' "$out" | tr '\n' '|' | sed 's/|$//')"
+# A run that leads its group passes a signal to its whole new group, so a
+# command the run waits for in the foreground, here a host checker that
+# sleeps, ends with it, and the run ends at once and not when that command
+# would have.
+cat > "$WORK/bin/hostcheck-waiting" <<'HC'
+#!/bin/sh
+echo $$ > "$HOSTCHECK_PID"
+exec sleep 30
+HC
+chmod +x "$WORK/bin/hostcheck-waiting"
+rm -f "$WORK/hostcheck.pid"
+out=$(cd "$WORK" && PATH="$WORK/bin:$PATH" RACH2_WORKERS=2 HOSTCHECK_PID="$WORK/hostcheck.pid" \
+      RACH2_HOSTCHECK="$WORK/bin/hostcheck-waiting" UTIL="$SELFTEST_UTIL" \
+      bash -c 'set -m; sh tests/run passing > leader.out 2>&1 & run=$!
+               "$UTIL" until hostcheck.pid . 10 >/dev/null
+               kill -INT "$run"
+               if "$UTIL" gone "$run" 5; then wait "$run"; echo "status $?"; else echo "still running"; fi' 2>&1)
+check "a leading run given INT ends at once with its foreground command" "status 130" "$out"
+check "and that command is stopped" 0 "$(kill -0 "$(cat "$WORK/hostcheck.pid" 2>/dev/null)" 2>/dev/null && echo 1 || echo 0)"
+kill "$(cat "$WORK/hostcheck.pid" 2>/dev/null)" 2>/dev/null
 
 # The suite supervisor observes both output channels, isolates their clocks,
 # and applies the same rule at every position in the schedule.

@@ -52,21 +52,13 @@ if [ "${RACH2_RUN_GROUP:-}" != "$$" ]; then
     # A shell with job control makes the first command of a pipeline the
     # leader of a group that holds the whole pipeline, such as the `tail` the
     # run's output is piped to, and the end of a run stops its group. So a
-    # run that finds itself a leader starts in a group of its own as a child,
-    # which is given the signals that reach this process and whose status is
-    # this process's.
+    # run that finds itself a leader starts in a group of its own under
+    # `runutil lead`, which passes that whole group the signals that reach
+    # this process and exits with the run's status.
     if [ "$("$RACH2_RUN_UTIL" pgid $$)" = "$$" ]; then
         # shellcheck disable=SC2016 # $$ is the inner shell's, expanded there
-        "$RACH2_RUN_UTIL" exec sh -c 'RACH2_RUN_GROUP=$$; export RACH2_RUN_GROUP; exec "$0" group sh "$@"' \
-            "$RACH2_RUN_UTIL" "$0" "$@" &
-        run=$!
-        trap 'kill -INT "$run" 2>/dev/null' INT
-        trap 'kill -TERM "$run" 2>/dev/null' TERM
-        trap 'kill -HUP "$run" 2>/dev/null' HUP
-        while :; do
-            wait "$run"; status=$?
-            kill -0 "$run" 2>/dev/null || exit "$status"
-        done
+        exec "$RACH2_RUN_UTIL" lead sh -c 'RACH2_RUN_GROUP=$$; export RACH2_RUN_GROUP; exec "$0" group sh "$@"' \
+            "$RACH2_RUN_UTIL" "$0" "$@"
     fi
     exec "$RACH2_RUN_UTIL" group sh "$0" "$@"
 fi
