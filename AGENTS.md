@@ -18,7 +18,7 @@ This file states the rules in force; their history is in commit messages and `de
 
 ## Roles
 
-* The owner sets the work and its order on the board, and decides what the plans leave open. Everyone takes work from the board: the five research assistants, each with Claude Code in an account of their own on the testing host, and the owner, from the Mac.
+* The owner sets the work and its order on the board, and decides what the plans leave open. Everyone takes work from the board: the five research assistants, each with Claude Code in an account of their own on the testing host, and the owner, from a computer of the owner's own.
 * Claude Code does the work: code, tests and prose. Codex does work only when the owner asks for it.
 * Codex reviews the whole diff of a phase once the phase's last task has merged, and otherwise only when the owner asks. It does not review single pull requests. It is installed on the owner's machines, not in the team's accounts, so the owner's session runs the review, and each finding it keeps becomes an issue.
 * Claude Code may run at most three helpers at once, each Claude Opus 5.5 at xhigh effort in a git worktree of its own, as `CLAUDE.md` says; it starts no other subagents. Codex, one Astra instance at xhigh effort at a time, is used for review. A helper or Codex does its work itself and starts no subagents.
@@ -51,7 +51,7 @@ This file states the rules in force; their history is in commit messages and `de
 ## Testing
 
 * Check a change with the suites that cover what it changed; `ci` then runs `make test`. A pull request gets no Codex review; Codex reviews whole phases, as Roles says.
-* Builds and suites run on the testing host: each person's in a clone in their own account there, and the owner's in the copy `tools/dev/testing.sh` syncs from the Mac, which itself runs only a compile or one host test. The `testing` skill describes the host.
+* Builds and suites run on the testing host: each person's in a clone in their own account there, and the owner's in the copy `tools/dev/testing.sh` syncs from the owner's computer, which itself runs only a compile or one host test. The `testing` skill describes the host.
 * A new test is trusted only after it has been made to fail: the unmodified test passes; a mutation, a deliberate fault compiled into what it runs, makes it fail; with the source restored and the artifact rebuilt, it passes again. A changed test needs no new proof. The `testing` skill has the mechanics.
 * A suite judges what the kernel counts, never the clock; seconds in a suite are completion bounds.
 
