@@ -491,7 +491,10 @@ check_host() {
 # distribution's disk is a file that grows on a Windows drive, and when that
 # drive fills, the Linux root turns read-only part way through the run, so the
 # drive's free space is asked of Windows as well, through its PowerShell.
-# `RACH2_MIN_FREE_GIB` is the floor, 40 when unset; 0 turns the check off.
+# PowerShell is started from /: Windows opens its working directory through
+# WSL as the distribution's default user, who cannot enter another user's home
+# of mode 750, and fails to start it there. `RACH2_MIN_FREE_GIB` is the floor,
+# 40 when unset; 0 turns the check off.
 check_space() {
     floor=${RACH2_MIN_FREE_GIB:-40}
     case "$floor" in
@@ -507,7 +510,8 @@ check_space() {
     fi
     [ -n "${WSL_DISTRO_NAME:-}" ] && command -v powershell.exe >/dev/null 2>&1 || return 0
     # shellcheck disable=SC2016 # the dollars are PowerShell's
-    drive=$(RACH2_DISTRO=$WSL_DISTRO_NAME WSLENV="${WSLENV:+$WSLENV:}RACH2_DISTRO" \
+    drive=$(cd / &&
+        RACH2_DISTRO=$WSL_DISTRO_NAME WSLENV="${WSLENV:+$WSLENV:}RACH2_DISTRO" \
         timeout 60 powershell.exe -NoProfile -Command '
             $p = Get-ChildItem HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss |
                 ForEach-Object { Get-ItemProperty $_.PSPath } |
