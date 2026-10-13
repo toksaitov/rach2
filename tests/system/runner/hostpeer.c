@@ -20,7 +20,9 @@
  *       guest reaches the host at the user network's gateway address
  *       (10.0.2.2), and the probes there send a string and require the
  *       same bytes back, which proves the guest's own transmit and
- *       receive paths rather than QEMU's willingness to accept.
+ *       receive paths rather than QEMU's willingness to accept. With a
+ *       PORT of 0 the kernel chooses one free for both transports, and the
+ *       server prints it in the line that says it is listening.
  *
  * Exits nonzero when it could not do the job at all; the caller decides
  * whether that is fatal. In echo mode the run ends when the time is up,
@@ -101,37 +103,67 @@ static double scaled(double seconds)
     return seconds * deadline_factor;
 }
 
+/**
+ * Bind a TCP listener and a UDP socket to one port of the loopback address.
+ *
+ * With port 0 the kernel chooses a free TCP port, and the UDP socket is bound
+ * to the same number. TCP and UDP have separate ports, so that number may be
+ * in use for UDP; then a fresh pair of sockets is bound again, sixteen times
+ * at most.
+ *
+ * @return the port bound, or 0 when none could be, with the reason printed.
+ */
+static long bind_pair(int *listener, int *dgram, long port)
+{
+    struct sockaddr_in addr;
+    socklen_t len;
+    int one = 1;
+    int tries;
+
+    for (tries = 0; tries < 16; tries++) {
+        *listener = socket(AF_INET, SOCK_STREAM, 0);
+        *dgram = socket(AF_INET, SOCK_DGRAM, 0);
+        if (*listener < 0 || *dgram < 0) {
+            perror("hostpeer: socket");
+            return 0;
+        }
+        setsockopt(*listener, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+        fill_local(&addr, port);
+        len = sizeof(addr);
+        if (bind(*listener, (struct sockaddr *)&addr, sizeof(addr)) != 0 ||
+            listen(*listener, 4) != 0 ||
+            getsockname(*listener, (struct sockaddr *)&addr, &len) != 0) {
+            perror("hostpeer: tcp bind");
+            return 0;
+        }
+        if (bind(*dgram, (struct sockaddr *)&addr, sizeof(addr)) == 0)
+            return ntohs(addr.sin_port);
+        if (port != 0 || errno != EADDRINUSE)
+            break;
+        close(*listener);
+        close(*dgram);
+    }
+    perror("hostpeer: udp bind");
+    return 0;
+}
+
 /* Both transports on one descriptor set, because the two probes that need
    this run one after the other in the same boot and the suite starts one
    server for both. One TCP connection is served at a time; the probes make
    one each, and a second would only queue. */
 static int echo(long port, long seconds)
 {
-    struct sockaddr_in addr, from;
+    struct sockaddr_in from;
     int listener, dgram, conn = -1;
-    int one = 1;
     double deadline = now() + seconds;
 
     /* A guest that resets its connection would otherwise end this process
        with SIGPIPE, and the suite would read a dead server as a guest that
        never answered. */
     signal(SIGPIPE, SIG_IGN);
-    listener = socket(AF_INET, SOCK_STREAM, 0);
-    dgram = socket(AF_INET, SOCK_DGRAM, 0);
-    if (listener < 0 || dgram < 0) {
-        perror("hostpeer: socket");
+    port = bind_pair(&listener, &dgram, port);
+    if (port == 0)
         return 1;
-    }
-    setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
-    fill_local(&addr, port);
-    if (bind(listener, (struct sockaddr *)&addr, sizeof(addr)) != 0 || listen(listener, 4) != 0) {
-        perror("hostpeer: tcp bind");
-        return 1;
-    }
-    if (bind(dgram, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
-        perror("hostpeer: udp bind");
-        return 1;
-    }
     printf("hostpeer: echoing tcp and udp on 127.0.0.1:%ld for %lds\n", port, seconds);
     fflush(stdout);
 
@@ -227,10 +259,10 @@ int main(int argc, char **argv)
         fprintf(stderr, "usage: hostpeer hold|echo PORT SECONDS\n");
         return 2;
     }
-    if (!whole_number(argv[2], &port) || !whole_number(argv[3], &seconds) || port <= 0 ||
-        port > 65535 || seconds < 0) {
-        fprintf(stderr, "hostpeer: a port in 1..65535 and a whole number "
-                        "of seconds\n");
+    if (!whole_number(argv[2], &port) || !whole_number(argv[3], &seconds) || port < 0 ||
+        port > 65535 || seconds < 0 || (port == 0 && strcmp(argv[1], "echo") != 0)) {
+        fprintf(stderr, "hostpeer: a port in 1..65535, or 0 for echo, and a whole "
+                        "number of seconds\n");
         return 2;
     }
     /* A lifetime covers the work of the machine that uses the peer, so
