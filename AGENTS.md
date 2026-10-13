@@ -18,22 +18,24 @@ This file states the rules in force; their history is in commit messages and `de
 
 ## Roles
 
+* The owner sets the work and its order on the board, and decides what the plans leave open. Everyone takes work from the board: the five research assistants, each with Claude Code in an account of their own on the testing host, and the owner, from the Mac.
 * Claude Code does the work: code, tests and prose. Codex does work only when the owner asks for it.
-* Codex reviews at the end of each batch, as Batches says, and otherwise when the owner asks.
+* Codex reviews the whole diff of a phase once the phase's last task has merged, and otherwise only when the owner asks. It does not review single pull requests. It is installed on the owner's machines, not in the team's accounts, so the owner's session runs the review, and each finding it keeps becomes an issue.
 * Claude Code may run at most three helpers at once, each Claude Opus 5.5 at xhigh effort in a git worktree of its own, as `CLAUDE.md` says; it starts no other subagents. Codex, one Astra instance at xhigh effort at a time, is used for review. A helper or Codex does its work itself and starts no subagents.
 
-## Batches
+## Work
 
-* Work comes in batches: one phase of a plan, or several phases the owner names as one batch.
-* Build the whole batch first. Write every item, compile as you go, and check a detail by hand only when reading and reasoning cannot settle it. Start no suite, full set, review or other long run while the batch is being built.
-* Work on the real machine comes last in the building, after every item is written and before any check.
-* Then check the batch once, ordering the steps by cause and effect, so that nothing is checked before a later step changes it:
+* The work is on the board, the GitHub project "Rach2" of `toksaitov/rach2`. A phase of a plan is an issue with the label `phase`, its tasks are its sub-issues, and a "blocked by" link orders two issues. The Status field is Backlog, Ready, In progress or Done: the owner moves an issue to Ready, and the board moves it to Done when its pull request merges. `gh` reaches the board with the `project` scope, which `gh auth refresh -s project` adds.
+* Take the top Ready issue with no open blocker, assign it to yourself and set it In progress before starting. A problem found along the way that the task did not set out to fix becomes an issue with the label `bug`, a sub-issue of the same phase.
+* Work on a branch of your own named for the issue, such as `42-ahci-timeout`, never on `master`.
+* Build the whole task first. Write every part, compile as you go, and check a detail by hand only when reading and reasoning cannot settle it. Start no suite or other long run while the task is being built.
+* Then rebase onto `master` and check the task once, ordering the steps by cause and effect, so that nothing is checked before a later step changes it:
   1. The compile and `tests/run style`, which are fast and catch mechanical faults.
-  2. The Codex review of the whole batch, and its fixes.
-  3. The build from clean and `tests/run all`, with the mutation tests of new checks, and their fixes.
-  4. For every fix after that, only the checks it could affect and a review of its diff, repeated until a round finds nothing.
-  5. If the checks changed what the machine runs, the machine gets the final build.
-  6. A last `tests/run all` on the final tree closes the batch.
+  2. The suites the change could affect, as one `tests/run A B C`.
+  3. For every fix after that, only the checks it could affect.
+* Open the pull request with `Closes #N` and a sentence or two on what it does, and turn on auto-merge with `gh pr merge --auto --rebase`.
+* `ci`, in `.github/workflows/ci.yml`, builds the tree and runs `make test` on the testing host's runners; a line `Suites: NAME...` in the pull request's description adds suites. A pull request merges when `ci` passes on a branch up to date with `master`, with no approval, and rebase merging lands each commit as it was written. When `master` moves first, rebase the branch again with `gh pr update-branch --rebase`. When `ci` fails, the author fixes it.
+* The full set (`tests/run all`), the build from clean and the work on the Lenovo are the owner's.
 
 ## Build
 
@@ -48,13 +50,14 @@ This file states the rules in force; their history is in commit messages and `de
 
 ## Testing
 
-* Outside a plan's batches, check a change with the tests that cover what it changed, and run a Codex review only when the owner asks for one.
-* Code is written, reviewed and committed on the Mac mini, which runs a compile or one host test. Every suite, full set (`tests/run all`) and analysis runs on the testing host, as the `testing` skill describes.
-* A test is trusted only after it has been made to fail: the unmodified test passes; a mutation, a deliberate fault compiled into what it runs, makes it fail; with the source restored and the artifact rebuilt, it passes again. The `testing` skill has the mechanics.
+* Check a change with the suites that cover what it changed; `ci` then runs `make test`. A pull request gets no Codex review; Codex reviews whole phases, as Roles says.
+* Builds and suites run on the testing host: each person's in a clone in their own account there, and the owner's in the copy `tools/dev/testing.sh` syncs from the Mac, which itself runs only a compile or one host test. The `testing` skill describes the host.
+* A new test is trusted only after it has been made to fail: the unmodified test passes; a mutation, a deliberate fault compiled into what it runs, makes it fail; with the source restored and the artifact rebuilt, it passes again. A changed test needs no new proof. The `testing` skill has the mechanics.
 * A suite judges what the kernel counts, never the clock; seconds in a suite are completion bounds.
 
 ## Hardware
 
+* The hardware is the owner's: the Mac mini, the development flash drive and the Lenovo, which is on the Mac's network. Only the owner's sessions work on it.
 * The Mac mini's internal SSD, an APPLE SSD AP0512Z with serial `0ba02f1140bcba20`, is never written.
 * The owner has authorized writes to the development flash drive on the Mac mini and to any disk of the Lenovo. Both are a sandbox: write them as the work needs, without asking or naming them first, and take no backup, restore or hash for their safety. Report afterwards what was written and where. Any other target needs the owner's authorization.
 * A check of the target's identity runs before every write, and hardware work runs from the Mac, since the Lenovo is on its network. The `machine` skill has the check and the procedures.
@@ -94,7 +97,7 @@ This file states the rules in force; their history is in commit messages and `de
 
 ## Git
 
-* Never push. The remote is the owner's to update, and a push cannot be taken back once anyone has fetched it; ask, and let the owner do it.
-* Commit in scoped units, one logical change each, directly on the branch, with no attribution of any kind. The message is one line with no trailing period, begins with a capitalised verb in the imperative, and says what the commit does, not how it was arrived at; `git log --oneline -20` shows the style.
+* Push only your own branches, and force-push only a branch nobody else works on. `master` changes only through a merged pull request; the repository's ruleset refuses any other push to it, the owner's included.
+* Commit in scoped units, one logical change each, on your branch, with no attribution of any kind. The message is one line with no trailing period, begins with a capitalised verb in the imperative, and says what the commit does, not how it was arrived at; `git log --oneline -20` shows the style.
 * A text-only cleanup changes no behavior and no built artifact. Keep the vendored trees out of the diff.
 * `tools/git-hooks/commit-msg` refuses a message with an attribution line. `.claude/settings.json` turns off Claude Code's own attribution and turns the hook on when a session starts; `git config core.hooksPath tools/git-hooks` turns it on in any other clone.
