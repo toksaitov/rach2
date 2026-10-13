@@ -274,6 +274,12 @@ check "a passing suite exits zero" 0 "$rc"
 check "and says so" 1 "$(printf '%s\n' "$out" | grep -c 'run: passing: PASS')"
 check "and starts exactly once" 1 "$(printf '%s\n' "$out" | grep -c '^run: starting:')"
 check "and does not void an unchanged tree" 0 "$(printf '%s\n' "$out" | grep -c 'run: voided:')"
+# A shell with job control puts the run and the command its output is piped
+# to in one process group, which the run's end must not stop.
+out=$(cd "$WORK" && PATH="$WORK/bin:$PATH" RACH2_WORKERS=2 \
+      bash -c 'set -m; sh tests/run passing 2>&1 | tail -1; echo "status ${PIPESTATUS[*]}"' 2>&1)
+check "a run piped to tail under job control leaves tail its last line" \
+    "run: result: all 1 suites passed|status 0 0" "$(printf '%s\n' "$out" | tr '\n' '|' | sed 's/|$//')"
 
 # The suite supervisor observes both output channels, isolates their clocks,
 # and applies the same rule at every position in the schedule.
