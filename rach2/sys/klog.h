@@ -140,7 +140,9 @@ void console_printf(const char *format, ...);
 /** As `console_putc`, for a writer that has expanded the newline itself. */
 void console_putc_raw(char c);
 
-/** Bracket a program's console write: a record raised inside it waits. */
+/** Bracket a console write, a program's chunk or a call of the debug
+ * shell's `console_puts` or `console_printf`: a record raised inside it
+ * waits for its end. */
 void console_write_begin(void);
 void console_write_end(void);
 

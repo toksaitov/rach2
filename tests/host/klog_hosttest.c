@@ -58,6 +58,7 @@ static int serial_wedged;       /* the port never becomes ready */
 static int net_on;              /* netconsole has a device to send through */
 static int reenter_from_screen; /* raise a record from inside delivery */
 static int reenter_times;       /* how many more to raise, one per byte */
+static int reenter_after;       /* raise one at this many bytes from now */
 static unsigned serial_offered; /* bytes handed to a port that took none */
 static unsigned ring_at_screen; /* the ring's size when the screen was written */
 static int irq_depth;
@@ -95,6 +96,9 @@ void k_putc(char c)
     if (reenter_times > 0) {
         reenter_times--;
         klog(KLOG_ERR, "irq", "landed: one of a burst");
+    }
+    if (reenter_after > 0 && --reenter_after == 0) {
+        klog(KLOG_INFO, "usbdisk", "ready: device 4: lun 0");
     }
 }
 
@@ -195,6 +199,7 @@ static void reset(void)
     net_on = 0;
     reenter_from_screen = 0;
     reenter_times = 0;
+    reenter_after = 0;
     pending_head = pending_count = pending_lost = 0;
     irq_depth = irq_pairs = irq_unbalanced = 0;
     kernel_ticks = 0;
@@ -281,6 +286,68 @@ static unsigned count_lines(const char *s)
         }
     }
     return n;
+}
+
+/**
+ * The console writes: a record raised in the middle of one waits for its
+ * end and follows it whole, for a program's write and for both of the
+ * debug shell's calls.
+ */
+static void console_write_rows(void)
+{
+    char text[CAP];
+
+    /* A record raised in the middle of a program's console write waits for
+       the write: the bytes the program wrote in one call reach the port
+       together and the record follows them, whole. Without the bracket the
+       record would end the open line and split a token the harness looks
+       for, which is how the pool of twenty split `AHCIPROBE OK`. */
+    reset();
+    console_write_begin();
+    console_putc_raw('A');
+    klog(KLOG_WARN, "block", "completion dropped: stale generation");
+    ring_text(text, sizeof(text));
+    CHECK("the ring takes the record where it is raised, inside the write",
+          streq(text, "<4>[0.00] block: completion dropped: stale generation\n"));
+    CHECK("and the port has only the write's first byte so far",
+          serial_len == 1 && serial[0] == 'A');
+    console_putc_raw('B');
+    console_putc_raw('\r');
+    console_putc_raw('\n');
+    console_write_end();
+    serial[serial_len] = '\0';
+    CHECK("the write's bytes reach the port together and the record after them",
+          streq(serial, "AB\r\n<4>[0.00] block: completion dropped: stale generation\r\n"));
+    CHECK("and nothing waits or is held once the write has ended",
+          pending_count == 0 && klog_delivering == 0 && console_writing == 0);
+
+    /* A line the debug shell prints is one console write too. The banner's
+       `Type 'help'` is what every suite waits for before it types, and a
+       stick's record, raised by the USB stack in an interrupt in the middle
+       of the line, split it, so the harness waited out its step for a
+       prompt that had been printed. The record is raised at the line's seventh byte,
+       the `h`, where it landed in the usb suite. */
+    reset();
+    reenter_after = 7;
+    console_puts("Type 'help' for available commands.");
+    serial[serial_len] = '\0';
+    CHECK("a record raised inside a line of the shell follows the line on the port",
+          streq(serial, "Type 'help' for available commands.\r\n"
+                        "<6>[0.00] usbdisk: ready: device 4: lun 0\r\n"));
+    screen[screen_len] = '\0';
+    CHECK("and on the screen", streq(screen, "Type 'help' for available commands.\n"
+                                             "usbdisk: ready: device 4: lun 0\n"));
+    CHECK("and nothing waits or is held once the line is out",
+          pending_count == 0 && klog_delivering == 0 && console_writing == 0);
+    reset();
+    reenter_after = 3;
+    console_printf("%s %d\n", "USBDISKPROBE", 5);
+    serial[serial_len] = '\0';
+    CHECK("a record raised inside a formatted line of the shell follows it",
+          streq(serial, "USBDISKPROBE 5\r\n"
+                        "<6>[0.00] usbdisk: ready: device 4: lun 0\r\n"));
+    CHECK("and nothing waits or is held once the formatted line is out",
+          pending_count == 0 && klog_delivering == 0 && console_writing == 0);
 }
 
 int main(void)
@@ -558,29 +625,7 @@ int main(void)
     CHECK("and ends with the count",
           has(screen, "klog: dropped: 1 record(s) the queue could not hold\n"));
 
-    /* A record raised in the middle of a program's console write waits for
-       the write: the bytes the program wrote in one call reach the port
-       together and the record follows them, whole. Without the bracket the
-       record would end the open line and split a token the harness looks
-       for, which is how the pool of twenty split `AHCIPROBE OK`. */
-    reset();
-    console_write_begin();
-    console_putc_raw('A');
-    klog(KLOG_WARN, "block", "completion dropped: stale generation");
-    ring_text(text, sizeof(text));
-    CHECK("the ring takes the record where it is raised, inside the write",
-          streq(text, "<4>[0.00] block: completion dropped: stale generation\n"));
-    CHECK("and the port has only the write's first byte so far",
-          serial_len == 1 && serial[0] == 'A');
-    console_putc_raw('B');
-    console_putc_raw('\r');
-    console_putc_raw('\n');
-    console_write_end();
-    serial[serial_len] = '\0';
-    CHECK("the write's bytes reach the port together and the record after them",
-          streq(serial, "AB\r\n<4>[0.00] block: completion dropped: stale generation\r\n"));
-    CHECK("and nothing waits or is held once the write has ended",
-          pending_count == 0 && klog_delivering == 0 && console_writing == 0);
+    console_write_rows();
 
     /* The brackets: one build, one ring append, and one look at the queue per
        record, balanced. */
