@@ -238,6 +238,68 @@ static void execute(char **argv, int group)
     exit(127);
 }
 
+static volatile sig_atomic_t led_group;
+
+/** Pass a signal to the process group `lead_exec` started. */
+static void forward_signal(int sig)
+{
+    kill(-(pid_t)led_group, sig);
+}
+
+/** Run a command as the leader of a new process group, pass every INT, TERM
+ * and HUP this process receives to that whole group, and return the
+ * command's status: its exit status, or 128 plus the number of the signal
+ * that ended it. A signal this process ignored when it started stays ignored.
+ *
+ * The signals are blocked from before the fork until the child is in its
+ * group, which whichever of the two `setpgid` calls runs first makes, and
+ * the handlers know it, so one that arrives in between is neither
+ * lost nor sent to a group that does not exist yet; the child takes the
+ * default actions before it unblocks them. Sending to the group, and not to
+ * the child alone, ends a foreground command of a child shell at once, where
+ * the shell would run its trap only after that command ended.
+ */
+static int lead_exec(char **argv)
+{
+    static const int forwarded[] = {SIGINT, SIGTERM, SIGHUP};
+    struct sigaction action, old;
+    sigset_t stop, saved;
+    pid_t pid;
+    int i, status;
+
+    sigemptyset(&stop);
+    for (i = 0; i < 3; i++)
+        sigaddset(&stop, forwarded[i]);
+    sigprocmask(SIG_BLOCK, &stop, &saved);
+    pid = fork();
+    if (pid < 0) {
+        perror("runutil: fork");
+        return 2;
+    }
+    if (pid == 0) {
+        reset_signals();
+        sigprocmask(SIG_SETMASK, &saved, NULL);
+        execute(argv, 1);
+    }
+    setpgid(pid, pid);
+    led_group = pid;
+    memset(&action, 0, sizeof(action));
+    action.sa_handler = forward_signal;
+    sigemptyset(&action.sa_mask);
+    for (i = 0; i < 3; i++)
+        if (sigaction(forwarded[i], NULL, &old) == 0 && old.sa_handler != SIG_IGN)
+            sigaction(forwarded[i], &action, NULL);
+    sigprocmask(SIG_SETMASK, &saved, NULL);
+    while (waitpid(pid, &status, 0) < 0)
+        if (errno != EINTR) {
+            perror("runutil: waitpid");
+            return 2;
+        }
+    if (WIFSIGNALED(status))
+        return 128 + WTERMSIG(status);
+    return WEXITSTATUS(status);
+}
+
 struct process {
     pid_t pid, parent, group;
     int owned;
@@ -1325,11 +1387,23 @@ static int is_young(const char *path, double seconds)
     return stat(path, &st) == 0 && difftime(time(NULL), st.st_mtime) < seconds;
 }
 
+/** Start a command for the modes that run one, `group`, `exec` and `lead`;
+ * return for any other.
+ */
+static void start_command(int argc, char **argv)
+{
+    if (argc < 3)
+        return;
+    if (!strcmp(argv[1], "group") || !strcmp(argv[1], "exec"))
+        execute(argv + 2, !strcmp(argv[1], "group"));
+    if (!strcmp(argv[1], "lead"))
+        exit(lead_exec(argv + 2));
+}
+
 /** Small POSIX interfaces used by the shell runner on macOS and Linux. */
 int main(int argc, char **argv)
 {
-    if (argc >= 3 && (!strcmp(argv[1], "group") || !strcmp(argv[1], "exec")))
-        execute(argv + 2, !strcmp(argv[1], "group"));
+    start_command(argc, argv);
     if (argc >= 5 && !strcmp(argv[1], "lock"))
         lock_exec(argv[2], argv[3], argv + 4);
     if (argc >= 5 && !strcmp(argv[1], "ports"))
