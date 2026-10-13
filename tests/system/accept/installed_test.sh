@@ -80,6 +80,11 @@ RACH2_DISK_TABLE=mbr RACH2_DISK_APPEND='rach2.rescue' RACH2_DISK_DHCP_APPEND='' 
     RACH2_DISK_BOOT_MB=16 RACH2_DISK_CLUSTER=1 RACH2_DISK_RECOVERY_MB=8 \
     RACH2_DISK_EXT2_MB=8 RACH2_DISK_EXT2_IMAGE="$volume" \
     sh tools/image/mkdisk_grub.sh "$kernel" "$work/base.disk" > "$work/disk.log" 2>&1
+# The same root on a GUID table, which the boot line names by the table's disk
+# GUID, as the installer does on such a disk.
+RACH2_DISK_TABLE=gpt RACH2_DISK_APPEND='rach2.rescue' RACH2_DISK_DHCP_APPEND='' \
+    RACH2_DISK_RECOVERY_MB=8 RACH2_DISK_EXT2_MB=8 RACH2_DISK_EXT2_IMAGE="$volume" \
+    sh tools/image/mkdisk_grub.sh "$kernel" "$work/gpt.base.disk" > "$work/gpt.disk.log" 2>&1
 
 fail()
 {
@@ -91,7 +96,10 @@ run_row()
 {
     row=$1
     expected=$2
-    cp "$work/base.disk" "$work/$row.disk"
+    case "$row" in
+        gpt) cp "$work/gpt.base.disk" "$work/$row.disk" ;;
+        *) cp "$work/base.disk" "$work/$row.disk" ;;
+    esac
     case "$row" in
         wrong-partition)
             python3 - "$work/$row.disk" <<'PY'
@@ -154,6 +162,12 @@ PY
             grep -q '^  the ext2 root boot came from the candidate slot$' "$work/$row.log"
             grep -q '^  the ext2 root takes a file and gives it back$' "$work/$row.log"
             ;;
+        gpt)
+            grep -q '^cmdline: .*rach2.root=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,3 ' "$work/$row.log"
+            grep -q '^  the ext2 root is mounted writable from /dev/disk0p3$' "$work/$row.log"
+            grep -q '^  the ext2 root boot came from the candidate slot$' "$work/$row.log"
+            grep -q '^  the ext2 root takes a file and gives it back$' "$work/$row.log"
+            ;;
         wrong-partition)
             grep -q '^/dev/disk0p4 / ext2 rw,relatime' "$work/$row.log"
             grep -q '^  FAIL: the ext2 root is not the mounted root:' "$work/$row.log" \
@@ -175,12 +189,13 @@ PY
 case "${4:-all}" in
     all)
         run_row candidate 0
+        run_row gpt 0
         run_row wrong-partition 1
         run_row readonly 1
         run_row fallback 1
-        echo 'metal-installed: result: all four installed rows passed'
+        echo 'metal-installed: result: all five installed rows passed'
         ;;
-    candidate) run_row candidate 0 ;;
+    candidate|gpt) run_row "$4" 0 ;;
     wrong-partition|readonly|fallback) run_row "$4" 1 ;;
     *) fail "unknown row: $4" ;;
 esac

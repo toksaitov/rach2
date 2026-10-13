@@ -311,9 +311,13 @@ case " $CMDLINE " in
         ;;
 esac
 INSTALLED=0
-if printf '%s\n' "$CMDLINE" | grep -q 'rach2.root=\(disk\|ext2\|MBRID=\)'; then
-    INSTALLED=1
-fi
+case " $CMDLINE " in
+    *' rach2.fsdisk '*|*' rach2.root=disk '*|*' rach2.root=ext2 '*|\
+    *' rach2.root=MBRID='*|*' rach2.root=GPTID='*|*' rach2.root=PARTUUID='*|\
+    *' rach2.root=UUID='*|*' rach2.root=LABEL='*|*' rach2.root=/dev/disk'*)
+        INSTALLED=1
+        ;;
+esac
 
 # ---- what it says it is ----
 note "uname: $(run 'uname -a')"
@@ -349,10 +353,11 @@ else
     # Two kernels answer here. The stick's, milestone 25's, is built
     # read-only because the disk under it may be somebody's Windows, and it
     # mounts nothing from that disk. The installed one, whose boot line names
-    # its root with rach2.root=disk, rach2.root=ext2 or, since the installer
-    # names the disk by its table's id, rach2.root=MBRID=ID,N, writes that
-    # root and is built read-write; a read-only kernel there would be a
-    # system that cannot take a file.
+    # a root on a disk (rach2.root=disk, rach2.root=ext2, or a partition by
+    # identity, as the installer names it: rach2.root=MBRID=ID,N on an MBR
+    # disk and rach2.root=GPTID=GUID,N on a GUID table), writes that root and
+    # is built read-write; a read-only kernel there would be a system that
+    # cannot take a file.
     if [ "$INSTALLED" = 1 ]; then
         [ "$policy" = "read-write" ] || bad "the installed kernel is not the read-write build"
     else
