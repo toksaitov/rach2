@@ -27,11 +27,11 @@ An unreadable input descriptor or unwritable entry-number field returns `EFAULT`
 
 ## Descriptor and process state
 
-`rach2/sys/tables/gdt.c` creates GDT entry 6 at boot with base zero. `gdt_set_tls` rewrites only its three base fields. Paging, rather than the TLS descriptor limit, enforces access to the resulting linear addresses.
+`rach2/sys/arch/i686/gdt.c` creates entry 6 in each processor's GDT at boot with base zero. `gdt_set_tls` rewrites only its three base fields in the running processor's GDT. Paging, rather than the TLS descriptor limit, enforces access to the resulting linear addresses.
 
-`process_t.tls_base` records the value for each thread. A newly allocated process starts with base zero. The kernel's direct `exec_program` path, used for the initial init process and programs launched from the debug shell, passes that base to `gdt_set_tls` because it does not pass through `switch_context`.
+`process_t.tls_base` records the value for each thread. A newly allocated process starts with base zero. The kernel's direct entry path, `enter_program` in `rach2/kernel.c`, used for the initial init process and programs launched from the debug shell, passes that base to `arch_tls_set`, which calls `gdt_set_tls`, because it does not pass through `switch_context`.
 
-On every switch, `rach2/sys/proc/switch.s` writes the incoming thread's base into entry 6. It disables interrupts while updating the three descriptor fields and reloads `%gs` so the processor's hidden descriptor cache uses the new base. The interrupt-return frame later restores the incoming process's user selector.
+On every switch, `rach2/sys/arch/i686/switch.s` writes the incoming thread's base into entry 6. It disables interrupts while updating the three descriptor fields and reloads `%gs` so the processor's hidden descriptor cache uses the new base. The interrupt-return frame later restores the incoming process's user selector.
 
 System call and interrupt entry save `%gs`, `%fs`, `%es`, and `%ds` separately before loading the kernel data selector. Their return paths restore the four saved selectors. The system call handler does not enable interrupts until it has marked the current process non-preemptible, so a timer interrupt cannot switch away while the entry frame is incomplete. Signal delivery also saves and restores the `%gs` selector through its user frame.
 
@@ -39,13 +39,13 @@ System call and interrupt entry save `%gs`, `%fs`, `%es`, and `%ds` separately b
 
 ## Source map
 
-* `rach2/sys/proc/tls.h` defines the `user_desc` layout and flags.
-* `rach2/sys/proc/tls.c` validates the supported descriptor fields and returns the requested base.
-* `rach2/sys/tables/gdt.c` owns GDT entry 6 and its base update.
-* `rach2/sys/syscall.c` registers system call 243; `rach2/sys/syscall_proc.c` holds the `fork` and `execve` TLS rules.
-* `rach2/sys/proc/process.h` stores the per-process base; `rach2/sys/proc/process.c` checks the assembly-visible field offsets at boot.
-* `rach2/sys/proc/switch.s` applies the incoming base during a context switch.
-* `rach2/sys/isr.h` and `rach2/sys/isr_handler.s` define and preserve the saved segment-register frame.
+* `rach2/sys/arch/i686/tls.h` defines the `user_desc` layout and flags.
+* `rach2/sys/arch/i686/tls.c` validates the supported descriptor fields, returns the requested base, and implements `set_thread_area` and the `CLONE_SETTLS` argument.
+* `rach2/sys/arch/i686/gdt.c` owns GDT entry 6 and its base update.
+* `rach2/sys/arch/i686/systab.c` registers system call 243; `rach2/sys/syscall_proc.c` holds the `fork`, `clone` and `execve` TLS rules.
+* `rach2/sys/proc/process.h` stores the per-process base; `rach2/sys/arch/i686/context.c` defines `arch_context_check`, which `rach2/sys/proc/process.c` calls at boot to check the assembly-visible field offsets.
+* `rach2/sys/arch/i686/switch.s` applies the incoming base during a context switch.
+* `rach2/sys/arch/i686/cpu.h` defines the saved segment-register frame, `isr_params_t`, and `rach2/sys/arch/i686/isr_handler.s` saves and restores it.
 
 ## Verification
 
