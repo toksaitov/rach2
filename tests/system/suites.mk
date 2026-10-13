@@ -73,6 +73,9 @@ BOOT_KERNEL ?= $(ARCH_BUILD)/rach2/kernel
 # end in 222 to 331, 777 and 898 to 999, so no port of one block is a port
 # of another, and the highest, 15999 + 9000, is below the ephemeral ports. A
 # make run without tests/run has no offset and forwards the table's numbers.
+# SSH_TEST_PORT alone may come from the environment or the command line, as
+# in SSH_TEST_PORT=4022 make run-ssh; a port given that way is forwarded as
+# given, with no offset added.
 PORT_OFFSET     := $(or $(RACH2_PORT_OFFSET),0)
 port             = $(shell echo $$(($(1) + $(PORT_OFFSET))))
 DISKDIAG_PORT   := $(call port,2225)
@@ -84,7 +87,7 @@ PROCFILES_PORT  := $(call port,2299)
 SOCKET_PORT     := $(call port,7777)
 ifeq ($(NIC),e1000)
 NIC_TAG          = -e1000
-SSH_TEST_PORT   := $(call port,2322)
+SSH_TEST_PORT   ?= $(call port,2322)
 DHCP_SSH_PORT   := $(call port,2324)
 DHCP_TWO_PORT_A := $(call port,2326)
 DHCP_TWO_PORT_B := $(call port,2328)
@@ -92,7 +95,7 @@ DGRAM_PORT      := $(call port,15898)
 NETIF_PORT      := $(call port,15899)
 else
 NIC_TAG          =
-SSH_TEST_PORT   := $(call port,2222)
+SSH_TEST_PORT   ?= $(call port,2222)
 DHCP_SSH_PORT   := $(call port,2224)
 DHCP_TWO_PORT_A := $(call port,2226)
 DHCP_TWO_PORT_B := $(call port,2228)
