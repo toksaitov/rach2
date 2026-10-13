@@ -24,6 +24,7 @@ changes = {
     'partition': ('*"/dev/disk0p3 / ext2 rw,relatime"*)', '*"/dev/disk0p"[34]" / ext2 rw,relatime"*)'),
     'readonly': ('*"/dev/disk0p3 / ext2 rw,relatime"*)', '*"/dev/disk0p3 / ext2 r"[ow]",relatime"*)'),
     'window': ('note "disk: the MBR hashes to $mbr"', 'bad "disk: the MBR hashes to $mbr"'),
+    'gptid': ("*' rach2.root=GPTID='*|", ''),
     'slot': ('printf("bootctl: booted: fallback\\n");', 'printf("bootctl: booted: candidate\\n");'),
 }
 old, new = changes[fault]
@@ -33,7 +34,7 @@ PY
 }
 accept=tests/system/accept/metal_accept.sh
 bootctl=utils/bootctl.c
-faults='partition readonly window slot'
+faults='partition readonly window gptid slot'
 if [ "${1:-}" = --texts ]; then
     for fault in $faults; do
         RACH2_FAULT_TEXTS=1 apply_fault "$fault" "$accept" "$bootctl" >/dev/null || exit 1
@@ -133,6 +134,7 @@ for fault in $faults; do
         partition) row=wrong-partition; expected='wrong-partition: wrong acceptance status' ;;
         readonly) row='readonly'; expected='readonly: missing root rejection' ;;
         window) row=candidate; expected='candidate: wrong acceptance status' ;;
+        gptid) row=gpt; expected='gpt: wrong acceptance status' ;;
         slot)
             row=fallback; expected='fallback: wrong acceptance status'
             rebuild > "$work/slot.build.log" 2>&1
@@ -145,4 +147,4 @@ for fault in $faults; do
     cmp "$work/fixed.bootctl" "$tree/utils/sbin/bootctl"
     run_phase "$fault-restored" "$row" pass
 done
-echo 'metal-installed-mutation: result: all four faults detected and restorations passed'
+echo 'metal-installed-mutation: result: all five faults detected and restorations passed'
