@@ -20,7 +20,7 @@ This file states the rules in force; their history is in commit messages and `de
 
 * The owner sets the work and its order on the board, and decides what the plans leave open. Everyone takes work from the board: the five research assistants, each with Claude Code in an account of their own on the testing host, and the owner, from a computer of the owner's own.
 * Claude Code does the work: code, tests and prose. Codex does work only when the owner asks for it.
-* Codex reviews the whole diff of a phase once the phase's last task has merged, and otherwise only when the owner asks. It does not review single pull requests. It is installed on the owner's machines, not in the team's accounts, so the owner's session runs the review, and each finding it keeps becomes an issue.
+* Codex reviews the whole diff of a phase once the phase's last task has merged, and otherwise only when the owner asks. It does not review single pull requests. Only the owner's accounts are signed in to Codex, so the owner's session runs the review, and each finding it keeps becomes an issue.
 * Claude Code may run at most three helpers at once, each Claude Opus 5.5 at xhigh effort in a git worktree of its own, as `CLAUDE.md` says; it starts no other subagents. Codex, one Astra instance at xhigh effort at a time, is used for review. A helper or Codex does its work itself and starts no subagents.
 
 ## Work
