@@ -1,0 +1,73 @@
+# ci: build the tree and run its quick tests for every pull request to master.
+#
+# The job runs on the testing host's two runners, rach2-ci-1 and rach2-ci-2,
+# which run as the user ghrunner in WSL; tools/Readme.md describes them. A
+# runner keeps its checkout and its build/ between jobs, so a job rebuilds
+# only what the pull request changed. `make test` runs the style checks, the
+# host tests and the core tier. A line `Suites: NAME...` in the pull request's
+# description adds those suites, read when the job starts, and a run started
+# by hand takes them as its input. The last step runs the commit-msg hook over
+# the pull request's commits. A new push to a pull request cancels the job
+# still running for its old commits.
+name: ci
+
+on:
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+    inputs:
+      suites:
+        description: Suites to run after make test, separated by spaces
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    runs-on: [self-hosted, rach2]
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          clean: false
+          fetch-depth: 0
+
+      - name: build
+        run: make
+
+      - name: make test
+        run: make test
+
+      - name: named suites
+        env:
+          BODY: ${{ github.event.pull_request.body }}
+          INPUT: ${{ github.event.inputs.suites }}
+        run: |
+          set -f
+          names=$(printf '%s\n' "$BODY" | tr -d '\r' |
+              sed -n 's/^Suites:[[:space:]]*//p' | head -n 1)
+          names="$names ${INPUT:-}"
+          for n in $names; do
+              case "$n" in
+                  *[!a-z0-9-]*) echo "ci: refused: suite name '$n'" >&2; exit 2 ;;
+              esac
+          done
+          if [ -n "$(echo $names)" ]; then
+              tests/run $names
+          else
+              echo "ci: no suites named"
+          fi
+
+      - name: commit messages
+        if: github.event_name == 'pull_request'
+        run: |
+          for c in $(git rev-list HEAD^1..HEAD^2); do
+              git log -1 --format=%B "$c" > "$RUNNER_TEMP/msg"
+              sh tools/git-hooks/commit-msg "$RUNNER_TEMP/msg" || exit 1
+          done
