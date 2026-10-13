@@ -27,11 +27,17 @@
 # --overlay runs PROGRAM with the staged directory as its one argument, after
 # the manifest is staged and before the volume is written, for a system that
 # a manifest cannot describe, such as one with links (vendor/gnu's
-# install_root.sh). What it adds is root's, with the mode it has in the
-# directory and the fixed staged instant as its times, so a set-id bit it
-# leaves would be root's, and the set-id guard, which reads the finished
-# volume, refuses it; a node the manifest staged keeps the owner and mode the
-# manifest gives it, and one the program removed fails the build.
+# install_root.sh). What it adds is root's, with the fixed staged instant as
+# its times and the mode it has in the directory less the group's and
+# others' write bits, so that only root may write it. PROGRAM may copy what
+# an earlier build made under that build's umask, and a umask of 002 leaves
+# a directory writable by its group; the volume is the same whatever write
+# bits the umask left, though a read or search bit the umask took away is
+# not put back. A set-id bit the program leaves would be root's, and the
+# set-id guard, which reads the finished volume, refuses it. A node the
+# manifest staged keeps the owner and mode the manifest gives it, so only
+# the manifest makes a node that others may write, and one the program
+# removed fails the build.
 #
 
 set -e
@@ -139,6 +145,11 @@ if [ -n "$OVERLAY" ]; then
         grep "$BAD" "$ADDED" | head -n 3 >&2
         exit 1
     fi
+    # The group's and others' write bits come off every node but a link,
+    # since chmod follows a link to its target. debugfs gives each staged
+    # node the manifest's mode below, so this changes only what the program
+    # added.
+    find "$TREE" ! -type l \( -perm -020 -o -perm -002 \) -exec chmod go-w {} +
 fi
 
 # The profile: revision 1, 4 KiB blocks, 128-byte inodes, the three
