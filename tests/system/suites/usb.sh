@@ -447,10 +447,10 @@ if run_shell --qemu-arg=-cpu --qemu-arg=max \
     "expect=USBDISKPROBE READ FAILED" \
     "expect=Type 'help'" \
     "drive=add:if=none,id=again,format=raw,file=$STICK" \
-    "usb=add:usb-storage,bus=xhci.0,drive=again,id=st1" "expect=: mbr" > /dev/null 2>&1; then
+    "usb=add:usb-storage,bus=xhci.0,drive=again,id=st1" "expect=: mbr" > "$OUT.pullread.harness.log" 2>&1; then
     note "a 32 KiB read in flight when the stick is pulled fails after the slot is given back, and the next stick enumerates: OK"
 else
-    bad "the read in flight at the pull"
+    bad "the read in flight at the pull: $(grep -a '^HARNESS' "$OUT.pullread.harness.log" | tr '\n' ' ')"
 fi
 
 # ---- 18: the hub pulled with all three behind it: the stick's mount answers
@@ -466,10 +466,10 @@ if run_shell --qemu-arg=-cpu --qemu-arg=max \
     --timeout 180 --steptmo 60 --ok "USBDISKPROBE OK" --never "USBDISKPROBE FAIL" \
     --log "$OUT.hubpull.log" \
     "expect=Type 'help'" "send=exec /usbdiskprobe hold" "expect=USBDISKPROBE HOLDING" \
-    "usb=del:hub" "expect=USBDISKPROBE OK" > /dev/null 2>&1; then
+    "usb=del:hub" "expect=USBDISKPROBE OK" > "$OUT.hubpull.harness.log" 2>&1; then
     note "the hub pulled with three devices behind it: the stick's mount answers EIO and unmounts: OK"
 else
-    bad "the hub pulled with three devices behind it"
+    bad "the hub pulled with three devices behind it: $(grep -a '^HARNESS' "$OUT.hubpull.harness.log" | tr '\n' ' ')"
 fi
 if [ "$(grep -ac 'usb: device: port [0-9]*\.[0-9]*: gone' "$OUT.hubpull.log")" = 3 ] && \
    grep -a 'gone' "$OUT.hubpull.log" | tail -1 | grep -aq 'port [0-9]*: gone'; then
