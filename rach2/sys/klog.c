@@ -615,19 +615,22 @@ void klog(int level, const char *subsystem, const char *format, ...)
 /* ---- the console ---- */
 
 /**
- * Bracket a program's console write, so that a record raised by an
- * interrupt in the middle of it waits for the write to end.
+ * Bracket a console write, so that a record raised by an interrupt in the
+ * middle of it waits for the write to end.
  *
  * Without the bracket the record ends the open line and begins its own,
- * and a token a program printed in one write reaches the port as two
- * lines: in a pool of twenty machines a lag device's record split
- * `AHCIPROBE OK`, and the harness never saw it. The bracket is taken by
- * the tty's write of the console, which does not sleep, around each chunk
- * of at most 256 bytes that `sys_write` hands it, so a record waits for at
- * most that chunk's bytes, and a token printed within one chunk is one line
- * of the log; a longer write may still have a record between two chunks.
- * The bracket also holds the screen's cursor, which is then placed once for
- * the chunk instead of after every byte.
+ * and a token printed in one write reaches the port as two lines: in a
+ * pool of twenty machines a lag device's record split `AHCIPROBE OK`, and
+ * in the usb suite a stick's record split the shell's `Type 'help'`, and
+ * the harness never saw either. Two writers take the bracket, and neither
+ * sleeps inside it. The tty's write of the console takes it around each
+ * chunk of at most 256 bytes that `sys_write` hands it, so a record waits
+ * for at most that chunk's bytes, and a token printed within one chunk is
+ * one line of the log; a longer write may still have a record between two
+ * chunks. The debug shell's `console_puts` and `console_printf` take it
+ * around each call, so a line the shell prints in one call is one line of
+ * the log. The bracket also holds the screen's cursor, which is then placed
+ * once for the write instead of after every byte.
  */
 void console_write_begin(void)
 {
@@ -758,27 +761,31 @@ void console_putc_raw(char c)
  * prints a line: a version without it would drop one at every such call, and
  * the difference would show as a scrambled screen rather than as an error.
  * `console_printf`, like `k_printf`, adds nothing.
+ *
+ * Each call is one console write (`console_write_begin`), so a record raised
+ * while the line goes out follows it whole.
  */
 void console_puts(const char *str)
 {
     if (str == 0) {
         return;
     }
-    textcon_hold();
+    console_write_begin();
     while (*str != '\0') {
         console_putc(*str++);
     }
     console_putc('\n');
-    textcon_release();
+    console_write_end();
 }
 
+/** Format and write, as one console write, as `console_puts` is. */
 void console_printf(const char *format, ...)
 {
     va_list ap;
 
     va_start(ap, format);
-    textcon_hold();
+    console_write_begin();
     k_vprintf(console_putc, format, ap);
-    textcon_release();
+    console_write_end();
     va_end(ap);
 }
