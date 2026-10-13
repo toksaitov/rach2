@@ -1143,21 +1143,32 @@ static int machine_exec(const char *ledger, char **cmd)
     return 127;
 }
 
-/** Remove bootstrap scratch when an exec of the lock helper cannot continue. */
-static void remove_work(void)
+/** Remove the directory the environment variable `name` gives, if it is set. */
+static void remove_named(const char *name)
 {
-    const char *work = getenv("RACH2_RUN_WORK");
+    const char *path = getenv(name);
     pid_t child;
-    if (!work || !*work)
+    if (!path || !*path)
         return;
     child = fork();
     if (child == 0) {
-        execlp("rm", "rm", "-rf", work, (char *)NULL);
+        execlp("rm", "rm", "-rf", path, (char *)NULL);
         _exit(1);
     }
     if (child > 0)
         while (waitpid(child, NULL, 0) < 0 && errno == EINTR)
             ;
+}
+
+/** Remove what a run has made when an exec of the lock or port helper cannot
+ * continue: its scratch, `RACH2_RUN_WORK`, and the tree lock directory it
+ * took before claiming its ports, `RACH2_RUN_TREE_LOCK`, which tests/run sets
+ * only for that claim.
+ */
+static void remove_work(void)
+{
+    remove_named("RACH2_RUN_WORK");
+    remove_named("RACH2_RUN_TREE_LOCK");
 }
 
 /** Hold a POSIX record lock through exec. The file remains in the tree;
