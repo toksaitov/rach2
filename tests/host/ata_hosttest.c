@@ -691,6 +691,50 @@ static void two_ticks_while_asleep(void)
     ata_tick();
 }
 
+/* Ten seconds of ticks while the owner sleeps, which a loaded host can
+   take for one write. */
+static void ten_seconds_while_asleep(void)
+{
+    int i;
+
+    for (i = 0; i < 1000; i++) {
+        ata_tick();
+    }
+}
+
+/* One tick past thirty seconds while the owner sleeps. */
+static void thirty_seconds_while_asleep(void)
+{
+    int i;
+
+    for (i = 0; i < 3001; i++) {
+        ata_tick();
+    }
+}
+
+/**
+ * Check the sleeping wait's bound of thirty seconds of ticks: a DMA read
+ * the drive ends after ten seconds is its answer, and one still running a
+ * tick past thirty seconds is given up with `-EIO` and a record.
+ */
+static void wait_bound_rows(struct ata_drive *d)
+{
+    int rc;
+
+    model_reset(2);
+    dma_on_reads = 0;
+    on_sleep = ten_seconds_while_asleep;
+    rc = ata_read(&d->dev, 100, 8, owner_buf);
+    CHECK(rc == 0 && sector_is(owner_buf, 100) && records == 0,
+          "a DMA read the drive ends after ten seconds returns its sectors");
+    model_reset(-1);
+    dma_on_reads = 0;
+    on_sleep = thirty_seconds_while_asleep;
+    rc = ata_read(&d->dev, 100, 8, owner_buf);
+    CHECK(rc == -EIO && records == 1 && contains(last_record, "no answer in"),
+          "a DMA read still running after thirty seconds fails with a record");
+}
+
 /**
  * Check DMA writes at 512 bytes, 4 KiB, 32 KiB and across the bounce-buffer
  * boundary, in both address forms. DMA completes while the caller sleeps;
@@ -1014,6 +1058,7 @@ int main(void)
            refused by name. */
     identify_rows();
 
+    wait_bound_rows(d);
     write_rate_rows(d);
     durability_rows(d);
 

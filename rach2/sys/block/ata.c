@@ -180,8 +180,11 @@ void ata_set_io(const struct ata_io *ops)
    of the wait is the sleep. Each read is a trap under a hypervisor. */
 #define ATA_SPIN_BEFORE_SLEEP 8
 
-/* A sleeping wait's bound in ticks, five seconds at 100 Hz. */
-#define ATA_WAIT_TICKS 500
+/* A sleeping wait's bound in ticks, thirty seconds at 100 Hz, the AHCI and
+   NVMe drivers' bound with interrupts on and Linux's ATA command timeout:
+   an emulator completes a write through its host's file, and on a loaded
+   host one write can take longer than five seconds. */
+#define ATA_WAIT_TICKS 3000
 
 /* The channels' interrupt lines and the vectors the router gives them. */
 #define ATA_IRQ_PRIMARY   14
