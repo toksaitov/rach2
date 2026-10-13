@@ -8,6 +8,8 @@
 # reading nothing, which the selftest of output written before a timeout must
 # fail. The third is `send_file` taking a read error for the end of its file,
 # which the selftest of a `sendfile=` step whose file cannot be read must
+# fail. The fourth is `never_appeared` that never reports a `--never` text,
+# which the selftest of a step that waits for output after such a text must
 # fail. The fixed and restored builds pass.
 set -eu
 
@@ -83,12 +85,34 @@ path.write_text(source.replace(old, ""))
 PY
 }
 
+# apply_never ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_never()
+{
+    python3 - "$1" <<'PY'
+from pathlib import Path
+import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+path = Path(sys.argv[1])
+source = path.read_text()
+old = "    return never_found;\n"
+if source.count(old) != 1:
+    raise SystemExit("harness-input-mutation: source pattern is not unique: never")
+path.write_text(source.replace(old, "    return 0;\n"))
+PY
+}
+
 if [ "${1:-}" = --texts ]; then
     RACH2_FAULT_TEXTS=1
     export RACH2_FAULT_TEXTS
     apply_blocking tests/system/runner/harness.c >/dev/null
     apply_drain tests/system/runner/harness.c >/dev/null
     apply_unread tests/system/runner/harness.c >/dev/null
+    apply_never tests/system/runner/harness.c >/dev/null
     echo 'harness-input-mutation: texts: every fault is once in its source'
     exit 0
 fi
@@ -156,4 +180,9 @@ apply_unread "$work/harness.c"
 run_phase unread-mutated 1 'a sendfile= step whose file cannot be read passed'
 cleanup
 run_phase unread-restored 0 'a sendfile= step whose file cannot be read fails'
+cmp "$work/harness.saved" "$work/harness.c"
+apply_never "$work/harness.c"
+run_phase never-mutated 1 'after a --never text appeared'
+cleanup
+run_phase never-restored 0 'a step that waits for output ends when a --never text appears'
 cmp "$work/harness.saved" "$work/harness.c"
