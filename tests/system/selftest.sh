@@ -762,21 +762,48 @@ wait "$lockrun"
 out=$("$SELFTEST_UTIL" lock "$WORK/guard" "$WORK/no-owner" sh -c 'echo entered'); rc=$?
 check "the record lock is released at exit" 0 "$rc"
 
-# The port claim: a run beside one that holds block 0 takes block 1 and its
-# offset, and the block is free again once its holder exits.
+# The port claim. Two runs hold blocks 0 and 1 until the test releases them; a
+# third waits while both are held, and takes block 1 and its offset once that
+# block's holder exits. A block is free again once its holder exits. A holder
+# writes its offset to its entered file and lives until its release file
+# appears; the bound of 600 tenths of a second only ends a failed test.
 mkdir -p "$WORK/ports"
-rm -f "$WORK/ports-entered"
+rm -f "$WORK"/ports-entered.* "$WORK"/ports-release.* "$WORK"/ports-out.*
+# shellcheck disable=SC2016 # $1 and $2 are the inner shell's arguments
+holder='echo "$RACH2_PORT_OFFSET" > "$1"; i=0; while [ ! -e "$2" ] && [ "$i" -lt 600 ]; do sleep 0.1; i=$((i+1)); done'
+ports_entered() {
+    i=0
+    while [ ! -s "$WORK/ports-entered.$1" ] && [ "$i" -lt 600 ]; do sleep 0.1; i=$((i+1)); done
+}
+"$SELFTEST_UTIL" ports "$WORK/ports" 2 sh -c "$holder" sh "$WORK/ports-entered.0" "$WORK/ports-release.0" > /dev/null &
+portrun0=$!
+ports_entered 0
+"$SELFTEST_UTIL" ports "$WORK/ports" 2 sh -c "$holder" sh "$WORK/ports-entered.1" "$WORK/ports-release.1" > "$WORK/ports-out.1" &
+portrun1=$!
+ports_entered 1
 # shellcheck disable=SC2016 # $1 is the inner shell's argument
-"$SELFTEST_UTIL" ports "$WORK/ports" 2 sh -c 'echo "$RACH2_PORT_OFFSET" > "$1"; sleep 2' sh "$WORK/ports-entered" > /dev/null &
-portrun=$!
+"$SELFTEST_UTIL" ports "$WORK/ports" 2 sh -c 'echo "$RACH2_PORT_OFFSET" > "$1"' sh "$WORK/ports-entered.2" > "$WORK/ports-out.2" &
+portrun2=$!
 i=0
-while [ ! -s "$WORK/ports-entered" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i+1)); done
-# shellcheck disable=SC2016 # the offset is the inner shell's
-out=$("$SELFTEST_UTIL" ports "$WORK/ports" 2 sh -c 'echo "offset $RACH2_PORT_OFFSET"')
-check "the first claim takes block 0" 0 "$(cat "$WORK/ports-entered")"
-check "a claim beside it takes block 1" "offset 1000" "$(printf '%s\n' "$out" | grep '^offset')"
-check "and says so" 1 "$(printf '%s\n' "$out" | grep -c '^run: ports: block 1, 1000 above')"
-wait "$portrun"
+while ! grep -q '^run: ports: all 2 blocks are held' "$WORK/ports-out.2" 2> /dev/null && [ "$i" -lt 600 ]; do
+    sleep 0.1; i=$((i+1))
+done
+out=$(cat "$WORK/ports-out.2")
+check "the first claim takes block 0" 0 "$(cat "$WORK/ports-entered.0")"
+check "a claim beside it takes block 1" 1000 "$(cat "$WORK/ports-entered.1")"
+check "and says so" 1 "$(grep -c '^run: ports: block 1, 1000 above' "$WORK/ports-out.1")"
+check "a third claim while both are held says it waits" 1 "$(grep -c '^run: ports: all 2 blocks are held by other runs; waiting' "$WORK/ports-out.2")"
+check "and does not start its command" 0 "$([ -e "$WORK/ports-entered.2" ] && echo 1 || echo 0)"
+: > "$WORK/ports-release.1"
+wait "$portrun1"
+ports_entered 2
+kill "$portrun2" 2> /dev/null
+wait "$portrun2"
+out=$(cat "$WORK/ports-out.2")
+check "once block 1 is released, the waiting claim takes it" 1000 "$(cat "$WORK/ports-entered.2" 2> /dev/null)"
+check "and says so" 1 "$(grep -c '^run: ports: block 1, 1000 above' "$WORK/ports-out.2")"
+: > "$WORK/ports-release.0"
+wait "$portrun0"
 # shellcheck disable=SC2016 # the offset is the inner shell's
 out=$("$SELFTEST_UTIL" ports "$WORK/ports" 2 sh -c 'echo "offset $RACH2_PORT_OFFSET"')
 check "the block is released at exit" "offset 0" "$out"
