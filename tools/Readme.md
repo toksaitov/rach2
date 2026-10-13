@@ -95,7 +95,7 @@ The archive's version is the lower bound this tree supports: GCC 15.2 and binuti
 
 ### The testing host
 
-The suites, the sets and the analyses run on the testing host that `AGENTS.md` names: Ubuntu 26.04 under WSL2 on a Windows machine with 32 threads and 200 GB of memory, of which WSL has 93 GB. The owner's Mac reaches it as `ssh testing`, and keeps a copy of this tree at `/home/testing/rach2`. It is set up as any Debian or Ubuntu host above, with the analysers the audit milestone runs added:
+The suites, the sets and the analyses run on the testing host that `AGENTS.md` names: Ubuntu 26.04 under WSL2 on a Windows machine with 32 threads and 200 GB of memory, of which WSL has 93 GB. The owner's computer reaches it as `ssh testing`, and keeps a copy of this tree at `/home/testing/rach2`. It is set up as any Debian or Ubuntu host above, with the analysers the audit milestone runs added:
 
     sudo apt install clang clang-tidy clang-tools sparse pmccabe mandoc xorriso
 

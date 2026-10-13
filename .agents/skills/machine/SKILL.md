@@ -7,7 +7,7 @@ description: Write the development flash drive or a disk of the Lenovo, or updat
 
 ## Targets
 
-* This work is the owner's: only the owner's sessions on the Mac write a disk or work on the Lenovo.
+* This work is the owner's: only the owner's sessions on the Mac mini write a disk or work on the Lenovo.
 * The owner has authorized writes to two targets: the development flash drive on the Mac mini, and any disk of the Lenovo. Both have nothing on them but this work, and both are a sandbox: write them as the work needs, without asking and without naming them to the owner first, and take no backup, restore or hash for their safety. Report afterwards what was written and where. Any other target, such as a second flash drive, another machine or hardware of another kind, needs the owner's authorization.
 * The Mac mini's internal SSD, an APPLE SSD AP0512Z with serial `0ba02f1140bcba20`, is never written.
 * A check of the target runs before every write, in place of asking. A target on the Mac must be external, removable and on USB, and must report the flash drive's serial and size: a SanDisk 3.2Gen1 of 61,524,148,224 bytes with USB serial `00014101091624031318`. Its device node changes between connections, so the serial and the size identify it. A target that is internal, or that reports the SSD's serial, is refused and the write does not run.
