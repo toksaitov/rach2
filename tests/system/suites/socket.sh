@@ -3,17 +3,19 @@
 # socket.sh: the guest as a network client, against a real host peer.
 #
 # udptest and tcptest send a string to an echo server at the user network's
-# gateway (10.0.2.2:7777, which is the host's loopback) and require the same
-# bytes back. Nothing else in the suite makes the guest open a connection of
-# its own: the SSH suites have the guest listening, and the capture suites
-# read what it sent without anyone answering. What is proved here is the
-# other half, the guest's client path, end to end through a peer that would
-# not answer if the frames were wrong.
+# gateway (10.0.2.2, which is the host's loopback) and require the same bytes
+# back. The port is the fifth argument, 7777 when it is not given;
+# tests/system/suites.mk moves it with the run's block of ports, and each
+# probe is told it as its argument. Nothing else in the suite makes the guest
+# open a connection of its own: the SSH suites have the guest listening, and
+# the capture suites read what it sent without anyone answering. What is
+# proved here is the other half, the guest's client path, end to end through
+# a peer that would not answer if the frames were wrong.
 #
 # The server is one `hostpeer echo`, started here and stopped in the trap,
 # serving both boots.
 #
-# Usage: socket.sh <kernel> <image> <harness> <hostpeer>
+# Usage: socket.sh <kernel> <image> <harness> <hostpeer> [port]
 #
 # The runner helper, whose `until` and `gone` are the suite's waits.
 RUNUTIL="$(cd "$(dirname "$0")/../../.." && pwd)/build/tests/system/runutil"
@@ -25,7 +27,7 @@ IMAGE="$2"
 OUT="$(dirname "$IMAGE")/socket-test"
 HARNESS="$3"
 HOSTPEER="$4"
-PORT=7777
+PORT="${5:-7777}"
 
 if [ ! -x "$HARNESS" ] || [ ! -x "$HOSTPEER" ]; then
     echo "socket-test: the harness and hostpeer must be built first" >&2
@@ -61,7 +63,7 @@ run_probe() {
     if ! "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
             --qemu-arg=-cpu --qemu-arg=max \
             --timeout 150 --ok "$2" --never "Some tests failed!" \
-            "expect=Type 'help'" "send=exec /$1" "expect=$2"; then
+            "expect=Type 'help'" "send=exec /$1 $PORT" "expect=$2"; then
         echo "socket-test: FAIL: $1 did not report its echo" >&2
         return 1
     fi

@@ -719,7 +719,7 @@ tests/system/runner/runutil.c:supervise lines 172 a parser over an external form
 
 tests/touchtest.c:_start lines 142 a probe, one sequence of steps in the order the log records them
 
-tests/udptest.c:_start lines 126 a probe, one sequence of steps in the order the log records them
+tests/udptest.c:probe_main lines 126 a probe, one sequence of steps in the order the log records them
 
 tests/unlinkdirprobe.c:_start complexity 35 a probe, one sequence of steps in the order the log records them
 tests/unlinkdirprobe.c:_start lines 164 a probe, one sequence of steps in the order the log records them

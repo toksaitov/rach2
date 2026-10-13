@@ -1,6 +1,6 @@
 /**
  * Exercises the TCP socket path against a host echo server at the SLIRP
- * gateway 10.0.2.2:7777.
+ * gateway 10.0.2.2:7777, or at the port its argument names.
  *
  * Connects, sends data and reads it back through `read()`/`write()` on the
  * socket fd (the unified descriptor path), closes gracefully, then verifies
@@ -132,7 +132,27 @@ static int connect_to(int fd, uint16_t port)
     return socketcall(SC_CONNECT, args);
 }
 
-PROBE_START void _start(void)
+/** The echo server's port: the first argument when there is one, since the
+ * socket suite moves its port with the run's block (tests/run), else
+ * DST_PORT. */
+static uint16_t server_port(unsigned long *sp)
+{
+    char **argv = (char **)(sp + 1);
+    const char *p;
+    uint32_t n = 0;
+
+    if (sp[0] < 2)
+        return DST_PORT;
+    for (p = argv[1]; *p >= '0' && *p <= '9'; p++)
+        n = n * 10 + (uint32_t)(*p - '0');
+    return (uint16_t)n;
+}
+
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
+
+void probe_main(unsigned long *sp)
 {
     char msg[] = "hello-tcp-echo";
     uint8_t buf[64];
@@ -151,7 +171,7 @@ PROBE_START void _start(void)
         puts("FAILED (socket)");
         sys_exit(1);
     }
-    if (connect_to(fd, DST_PORT) == 0) {
+    if (connect_to(fd, server_port(sp)) == 0) {
         puts("OK");
         passed++;
     } else {

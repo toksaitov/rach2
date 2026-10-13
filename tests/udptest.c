@@ -2,7 +2,7 @@
  * Exercises the socket calls of the UDP path: socket, bind, sendto, and
  * recvfrom in both blocking and non-blocking (MSG_DONTWAIT) forms. Acts as a
  * UDP echo client against a host echo server reachable at the SLIRP gateway
- * 10.0.2.2:7777.
+ * 10.0.2.2:7777, or at the port its argument names.
  *
  * Freestanding; direct system calls (probe.h).
  */
@@ -140,7 +140,27 @@ static void delay_ms(int ms)
     } while (elapsed < ms);
 }
 
-PROBE_START void _start(void)
+/** The echo server's port: the first argument when there is one, since the
+ * socket suite moves its port with the run's block (tests/run), else
+ * DST_PORT. */
+static uint16_t server_port(unsigned long *sp)
+{
+    char **argv = (char **)(sp + 1);
+    const char *p;
+    uint32_t n = 0;
+
+    if (sp[0] < 2)
+        return DST_PORT;
+    for (p = argv[1]; *p >= '0' && *p <= '9'; p++)
+        n = n * 10 + (uint32_t)(*p - '0');
+    return (uint16_t)n;
+}
+
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
+
+void probe_main(unsigned long *sp)
 {
     unsigned long args[6], rcv_len = 16;
     uint8_t local_sa[16], dst_sa[16], rcv_sa[16];
@@ -204,7 +224,7 @@ PROBE_START void _start(void)
     /* Test 4: echo round-trip. Retry the send so the first datagram, which is
      * dropped while ARP resolves the gateway, does not stall the test. */
     print("Test 4: sendto + recvfrom echo... ");
-    make_sockaddr(dst_sa, DST_PORT, DST_IP_0, DST_IP_1, DST_IP_2, DST_IP_3);
+    make_sockaddr(dst_sa, server_port(sp), DST_IP_0, DST_IP_1, DST_IP_2, DST_IP_3);
     n = EAGAIN;
     for (attempt = 0; attempt < 40 && n < 0; attempt++) {
         args[0] = (uint32_t)fd;
