@@ -613,12 +613,13 @@ check "a reply and prompt that arrive before the wait are preserved" 0 "$rc"
 # The consumers of the factor, each a real program of the tree driven by a
 # stand-in for what it waits on: the harness over a machine that prints its
 # token after two and a half seconds, ptydrive over a command that answers
-# after the same, and hostpeer's lifetime; each under a deadline written as
-# one second, which a factor of four makes enough and no factor leaves
-# short, with a second and a half of room each way for the host's
-# scheduling; each row unsets the variables first, since this test may
-# itself be running under a set's factor. The harness's own deadlines are
-# the ones the suite rows use.
+# after the same, and hostpeer's lifetime on a port the kernel chooses (this
+# test claims no block of ports, and two trees may run it at once); each
+# under a deadline written as one second, which a factor of four makes
+# enough and no factor leaves short, with a second and a half of room each
+# way for the host's scheduling; each row unsets the variables first, since
+# this test may itself be running under a set's factor. The harness's own
+# deadlines are the ones the suite rows use.
 HARNESS_BIN="$REPO/build/tests/system/harness"
 PTYDRIVE_BIN="$REPO/build/tests/system/ptydrive"
 HOSTPEER_BIN="$REPO/build/tests/system/hostpeer"
@@ -647,9 +648,9 @@ LATE
     out=$( (export RACH2_DEADLINES=scaled RACH2_DEADLINE_FACTOR=4.0 RACH2_PASSWORD=x; "$PTYDRIVE_BIN" --timeout 1 -- sh -c 'sleep 2.5; echo PTYDONE' 2>&1) )
     check "and under the factor reads its answer" 1 "$(printf '%s\n' "$out" | grep -c PTYDONE)"
     check "in time" 0 "$(printf '%s\n' "$out" | grep -c TIMEDOUT)"
-    t0=$(now); (unset RACH2_DEADLINES RACH2_DEADLINE_FACTOR; "$HOSTPEER_BIN" echo 47123 1 > /dev/null 2>&1); rc=$?; held=$(($(now) - t0))
+    t0=$(now); (unset RACH2_DEADLINES RACH2_DEADLINE_FACTOR; "$HOSTPEER_BIN" echo 0 1 > /dev/null 2>&1); rc=$?; held=$(($(now) - t0))
     check "hostpeer as written holds its port for a second" 1 "$([ "$rc" -eq 0 ] && [ "$held" -le 2 ] && echo 1 || echo 0)"
-    t0=$(now); (export RACH2_DEADLINES=scaled RACH2_DEADLINE_FACTOR=4.0; "$HOSTPEER_BIN" echo 47123 1 > /dev/null 2>&1); rc=$?; held=$(($(now) - t0))
+    t0=$(now); (export RACH2_DEADLINES=scaled RACH2_DEADLINE_FACTOR=4.0; "$HOSTPEER_BIN" echo 0 1 > /dev/null 2>&1); rc=$?; held=$(($(now) - t0))
     check "and under the factor for four" 1 "$([ "$rc" -eq 0 ] && [ "$held" -ge 4 ] && [ "$held" -le 8 ] && echo 1 || echo 0)"
 else
     echo "  SKIP: the harness, ptydrive and hostpeer are not built; their factor rows did not run"
