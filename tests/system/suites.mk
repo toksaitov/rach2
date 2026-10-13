@@ -61,28 +61,43 @@ BOOT_KERNEL ?= $(ARCH_BUILD)/rach2/kernel
 # ports and tags the files each run writes: without that, the second-card ping
 # and the first-card ping forward the same port and capture into the same
 # file, and neither can say which of them wrote what.
-DISKDIAG_PORT    = 2225
-METAL_PORT       = 2223
-GNU_PORT         = 2296
-SEALED_PORT      = 2297
-DRILL_PORT       = 2298
-PROCFILES_PORT   = 2299
+#
+# The table keeps the suites of one tree apart; PORT_OFFSET keeps the trees
+# of one host apart. The testing host runs several trees at once, the two ci
+# runners and each person's clone, and two of them running one suite would
+# forward one port. So tests/run claims a block of ports for its run before
+# it starts anything: block N is the lock file /tmp/rach2-ports.N, which
+# every account can lock, the lowest free block of ten is taken, and the run
+# exports RACH2_PORT_OFFSET as N * 1000 while it holds the lock. Every port
+# below is the table's number plus that offset. Within a block the numbers
+# end in 222 to 331, 777 and 898 to 999, so no port of one block is a port
+# of another, and the highest, 15999 + 9000, is below the ephemeral ports. A
+# make run without tests/run has no offset and forwards the table's numbers.
+PORT_OFFSET     := $(or $(RACH2_PORT_OFFSET),0)
+port             = $(shell echo $$(($(1) + $(PORT_OFFSET))))
+DISKDIAG_PORT   := $(call port,2225)
+METAL_PORT      := $(call port,2223)
+GNU_PORT        := $(call port,2296)
+SEALED_PORT     := $(call port,2297)
+DRILL_PORT      := $(call port,2298)
+PROCFILES_PORT  := $(call port,2299)
+SOCKET_PORT     := $(call port,7777)
 ifeq ($(NIC),e1000)
 NIC_TAG          = -e1000
-SSH_TEST_PORT   ?= 2322
-DHCP_SSH_PORT    = 2324
-DHCP_TWO_PORT_A  = 2326
-DHCP_TWO_PORT_B  = 2328
-DGRAM_PORT       = 15898
-NETIF_PORT       = 15899
+SSH_TEST_PORT   := $(call port,2322)
+DHCP_SSH_PORT   := $(call port,2324)
+DHCP_TWO_PORT_A := $(call port,2326)
+DHCP_TWO_PORT_B := $(call port,2328)
+DGRAM_PORT      := $(call port,15898)
+NETIF_PORT      := $(call port,15899)
 else
 NIC_TAG          =
-SSH_TEST_PORT   ?= 2222
-DHCP_SSH_PORT    = 2224
-DHCP_TWO_PORT_A  = 2226
-DHCP_TWO_PORT_B  = 2228
-DGRAM_PORT       = 15998
-NETIF_PORT       = 15999
+SSH_TEST_PORT   := $(call port,2222)
+DHCP_SSH_PORT   := $(call port,2224)
+DHCP_TWO_PORT_A := $(call port,2226)
+DHCP_TWO_PORT_B := $(call port,2228)
+DGRAM_PORT      := $(call port,15998)
+NETIF_PORT      := $(call port,15999)
 endif
 NIC             ?= rtl8139
 NIC_DEV          = --device $(NIC),netdev=net0
@@ -441,7 +456,7 @@ run-diskfull: rach2 tests krffs test-image $(HARNESS)
 # host that answers (see tests/system/suites/socket.sh).
 run-socket: rach2 tests krffs test-image $(HARNESS) $(HOSTPEER) $(RUNUTIL)
 	sh tests/system/suites/socket.sh $(BOOT_KERNEL) $(TEST_IMAGE) \
-	    $(HARNESS) $(HOSTPEER)
+	    $(HARNESS) $(HOSTPEER) $(SOCKET_PORT)
 # `tests/run disk`: the disk-backed page-cache integrity check. Builds a disk
 # image holding blockprobe, boots disk-only with KRFFS on the real ATA disk
 # through the cache (rach2.fsdisk), and runs blockprobe from the debug shell,
@@ -1570,10 +1585,10 @@ $(INSTALL_TEST_STICK): $(RECOVERY_ISO) $(INSTALLER_DISK) $(INSTALLER_EXT2) \
 # booted through the firmware with no kernel given to the emulator, so what runs
 # is what GRUB reads off it.
 INSTALLER_DIR = $(IMAGES_DIR)/installer
-INSTALLER_PORT = 2327
+INSTALLER_PORT := $(call port,2327)
 # The repair half forwards SSH too, for its key login after a resumed update,
 # and the pool runs it beside the install half, so it has a port of its own.
-INSTALLER_REPAIR_PORT = 2329
+INSTALLER_REPAIR_PORT := $(call port,2329)
 run-installer: $(DEMO_CREDS) $(INSTALL_STICK) $(INSTALL_TEST_STICK) $(PTYDRIVE) $(HARNESS) $(GROWSET) $(MKEXFATFIXTURE) $(MKGPT) $(RUNUTIL)
 	sh tests/system/install_stick_test.sh $(INSTALL_STICK) $(SEALED_DISK) $(SEALED_EXT2) \
 	    $(INSTALLER_DIR)/stick-update
@@ -1615,7 +1630,7 @@ run-installer-repair: $(DEMO_CREDS) $(INSTALL_STICK) $(INSTALL_TEST_STICK) $(PTY
 # installer's root, the metal system whose init starts the SSH server.
 UEFI_DIR = $(IMAGES_DIR)/uefi
 UEFI_TEST_DISK = $(IMAGES_DIR)/uefi-test.disk
-UEFI_PORT = 2331
+UEFI_PORT := $(call port,2331)
 run-uefi: $(DEMO_CREDS) rach2 utils krffs rach2-recovery $(RECOVERY_IMAGE) $(INSTALLER_EXT2) \
           $(INSTALL_TEST_STICK) $(RECOVERY_ISO) $(RUNUTIL) $(SCREENTEXT) $(DISK_TOOLS) $(MKGPT)
 	@mkdir -p $(IMAGES_DIR)

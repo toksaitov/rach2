@@ -756,6 +756,25 @@ wait "$lockrun"
 out=$("$SELFTEST_UTIL" lock "$WORK/guard" "$WORK/no-owner" sh -c 'echo entered'); rc=$?
 check "the record lock is released at exit" 0 "$rc"
 
+# The port claim: a run beside one that holds block 0 takes block 1 and its
+# offset, and the block is free again once its holder exits.
+mkdir -p "$WORK/ports"
+rm -f "$WORK/ports-entered"
+# shellcheck disable=SC2016 # $1 is the inner shell's argument
+"$SELFTEST_UTIL" ports "$WORK/ports" 2 sh -c 'echo "$RACH2_PORT_OFFSET" > "$1"; sleep 2' sh "$WORK/ports-entered" > /dev/null &
+portrun=$!
+i=0
+while [ ! -s "$WORK/ports-entered" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i+1)); done
+# shellcheck disable=SC2016 # the offset is the inner shell's
+out=$("$SELFTEST_UTIL" ports "$WORK/ports" 2 sh -c 'echo "offset $RACH2_PORT_OFFSET"')
+check "the first claim takes block 0" 0 "$(cat "$WORK/ports-entered")"
+check "a claim beside it takes block 1" "offset 1000" "$(printf '%s\n' "$out" | grep '^offset')"
+check "and says so" 1 "$(printf '%s\n' "$out" | grep -c '^run: ports: block 1, 1000 above')"
+wait "$portrun"
+# shellcheck disable=SC2016 # the offset is the inner shell's
+out=$("$SELFTEST_UTIL" ports "$WORK/ports" 2 sh -c 'echo "offset $RACH2_PORT_OFFSET"')
+check "the block is released at exit" "offset 0" "$out"
+
 # What a run owns. One run at a time on a tree: a second is refused with the
 # first named; a lock a dead run left is taken over, unless something of that
 # run's process group is still alive, which is named for the person to stop.
