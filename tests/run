@@ -75,7 +75,7 @@ case "${RACH2_PORT_OFFSET:-}" in
 esac
 WORK=$RACH2_RUN_WORK
 trap 'rm -rf "$WORK"' 0
-unset RACH2_RUN_GROUP RACH2_RUN_WORK RACH2_PROGRESS_FD
+unset RACH2_RUN_GROUP RACH2_RUN_WORK RACH2_RUN_TREE_LOCK RACH2_PROGRESS_FD
 LC_ALL=C; export LC_ALL
 now() { "$RACH2_RUN_UTIL" now; }
 sleep() { "$RACH2_RUN_UTIL" sleep "$1"; }
@@ -272,7 +272,9 @@ trap 'SIGNALLED=1; finish; echo "run: result: interrupted by hup" >&2; exit 129'
 # starts finds the run's hold the same way. A fault script's lock, whose
 # owner file says `held`, is never taken over: only its holder's clean exit
 # removes it, since a holder that is gone may have left a fault in the
-# sources and work running in groups no ledger names.
+# sources and work running in groups no ledger names. A runner that took the
+# tree and then claimed its ports starts again as the same process, finds
+# itself the owner, and keeps the tree.
 LOCK="$REPO/build/.run.lock"
 . "$REPO/tests/system/runlock.sh"
 lock_field() { sed -n "s/^$1 //p" "$LOCK/owner" 2>/dev/null; }
@@ -304,6 +306,10 @@ lock_survivors() {
 }
 lock_take() {
     mkdir -p "$REPO/build"
+    if [ "${RACH2_TREE_HELD:-}" = "$$" ] && [ "$(lock_field pid)" = "$$" ]; then
+        LOCKED=1
+        return 0
+    fi
     if runlock_held "$REPO"; then
         echo "run: the tree is held for this run by its caller, pid $RACH2_TREE_HELD"
         return 0
@@ -1052,33 +1058,25 @@ for suite in "$@"; do
 done
 diskimage=""
 sockets="--no-sockets"
+machines=""
 for suite in "$@"; do
     case ",$(suite_tools "$suite")," in
         *,hdiutil,*) diskimage="--diskimage" ;;
+    esac
+    case ",$(suite_tools "$suite")," in
+        *,qemu,*|*,qemu-system-*) machines=1 ;;
     esac
     case "$suite" in
         style|host) ;;
         *) sockets="" ;;
     esac
 done
-# The block of host ports the run's suites forward, claimed once the names
-# are known to start a machine: `inventory`, `style`, `host` and a refused
-# command forward nothing and claim nothing. Every tree on the host, in every
-# account, claims a block from the same lock files in /tmp, so two trees
-# never forward the same port; the helper holds the lock through exec for as
-# long as this process lives and sets RACH2_PORT_OFFSET, which
-# tests/system/suites.mk adds to every port in its table. The runner starts
-# again under the lock with the names it was given, as a set expanded them. A
-# caller that set the offset itself, such as an outer run around the
-# runner's selftest, owns the ports it names.
-if [ -z "$sockets" ] && [ -z "${RACH2_PORT_OFFSET:-}" ]; then
-    RACH2_RUN_GROUP=$$; RACH2_RUN_WORK=$WORK
-    export RACH2_RUN_GROUP RACH2_RUN_WORK
-    exec "$RACH2_RUN_UTIL" ports /tmp 10 sh "$0" "$@"
+# A runner that took the tree and then claimed its ports, below, starts again
+# as the same process and has made these checks already.
+if [ "${RACH2_TREE_HELD:-}" != "$$" ]; then
+    check_host $diskimage $sockets || { echo "run: result: refused: this host cannot run the set" >&2; exit 1; }
+    [ -n "$sockets" ] || check_space || exit 1
 fi
-[ -z "${RACH2_PORT_OFFSET:-}" ] || export RACH2_PORT_OFFSET
-check_host $diskimage $sockets || { echo "run: result: refused: this host cannot run the set" >&2; exit 1; }
-[ -n "$sockets" ] || check_space || exit 1
 
 IDLE_SECONDS=${RACH2_IDLE_TIMEOUT:-300}
 case "$IDLE_SECONDS" in
@@ -1091,6 +1089,28 @@ set_factor || exit 2
 set_accel || exit 2
 set_cpus || exit 2
 lock_take "$@" || { echo "run: result: refused: the tree is not free" >&2; exit 1; }
+# The block of host ports the run's machines forward, claimed last, after
+# every check that can refuse the run and after the tree is taken, and only
+# when a suite named boots a machine: one whose tools name QEMU. `inventory`,
+# a refused command and a set of suites that boot nothing, such as `style`,
+# `host` and `runner`, claim nothing. Every tree on the host, in every
+# account, claims a block from the same lock files in /tmp, so two trees
+# never forward the same port; the helper holds the lock through exec for as
+# long as this process lives and sets RACH2_PORT_OFFSET, which
+# tests/system/suites.mk adds to every port in its table. The runner starts
+# again under the lock with the names it was given, as a set expanded them,
+# and keeps the tree it took: RACH2_RUN_TREE_LOCK names the lock directory,
+# which the helper removes if the claim is interrupted. A caller that set the
+# offset itself owns the ports it names.
+if [ -n "$machines" ] && [ -z "${RACH2_PORT_OFFSET:-}" ]; then
+    RACH2_RUN_GROUP=$$; RACH2_RUN_WORK=$WORK
+    export RACH2_RUN_GROUP RACH2_RUN_WORK
+    if [ -n "$LOCKED" ]; then
+        RACH2_RUN_TREE_LOCK=$LOCK; export RACH2_RUN_TREE_LOCK
+    fi
+    exec "$RACH2_RUN_UTIL" ports /tmp 10 sh "$0" "$@"
+fi
+[ -z "${RACH2_PORT_OFFSET:-}" ] || export RACH2_PORT_OFFSET
 # Each suite names the machines it starts, so a leaked one can be blamed on the
 # suite that left it. Listing every QEMU on the host works only while one suite
 # runs at a time; with twenty running, each would see the other nineteen. So a
