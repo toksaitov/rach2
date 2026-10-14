@@ -44,7 +44,11 @@
 # so that a connection whose other end is gone without having closed it, as
 # when this machine loses power, fails when TCP gives up on the data nobody
 # acknowledges, not after the hours the host's TCP keepalive takes, and the
-# shell ends with it.
+# shell ends with it. A lost connection frees the lock while this caller
+# still works in the copy, so the caller watches it: a sync whose holder has
+# ended fails and says so, `run` starts its command only while the holder
+# lives, and a command whose holder ends first is stopped here and the run
+# fails and says so. The command's side on the host is not stopped with it.
 #
 # `wait` watches a run started on the host as `/home/testing/NAME.sh`, which
 # writes its results as lines beginning `NAME: ` to `/home/testing/NAME.out`
@@ -209,6 +213,14 @@ release_copy()
     holder=
 }
 
+# holder_lost WHEN: say that the connection that holds the sync lock ended
+# WHEN, and fail.
+holder_lost()
+{
+    echo "testing: the connection that held the sync lock ended $1" >&2
+    exit 1
+}
+
 # sync_tree WHAT: hold the copy for WHAT, `sync` or `run`, and send this tree.
 sync_tree()
 {
@@ -219,6 +231,29 @@ sync_tree()
         --filter='+ /ports/doom/doom1.wad' --filter=':- .gitignore' \
         --rsync-path="$RSYNC_PATH" -e 'ssh -o BatchMode=yes' \
         "$REPO/" "$HOST:$DEST/" 3>&-
+    kill -0 "$holder" 2>/dev/null ||
+        holder_lost "during the sync; another caller may have synced over it"
+}
+
+# run_held COMMAND: run COMMAND in the copy while the holder lives. The
+# command's ssh runs in the background, with this script's input, so that
+# the holder can be watched; if the holder ends first, the ssh is stopped.
+run_held()
+{
+    exec 5<&0
+    ssh -o BatchMode=yes "$HOST" "wsl.exe -- bash -lc 'cd $DEST && export RACH2_QEMU_ACCEL=tcg && $*'" \
+        <&5 3>&- 5<&- &
+    command=$!
+    exec 5<&-
+    while kill -0 "$command" 2>/dev/null; do
+        if ! kill -0 "$holder" 2>/dev/null; then
+            kill "$command" 2>/dev/null || :
+            wait "$command" 2>/dev/null || :
+            holder_lost "while the command ran; it was stopped here, and its side on the host may still run"
+        fi
+        sleep 2
+    done
+    wait "$command"
 }
 
 case "${1:-}" in
@@ -232,7 +267,7 @@ case "${1:-}" in
             exit 2
         fi
         sync_tree run
-        ssh -o BatchMode=yes "$HOST" "wsl.exe -- bash -lc 'cd $DEST && export RACH2_QEMU_ACCEL=tcg && $*'" 3>&-
+        run_held "$@"
         ;;
     get)
         shift
