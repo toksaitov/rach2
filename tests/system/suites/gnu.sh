@@ -267,7 +267,7 @@ for row in $ROWS; do
     elif grep -q "^GNUROW OK $name\$" "$DISK.$name.log"; then
         echo "gnu-test: $name: FAIL: the row printed its OK in $took, but ssh ended with status $status" >&2
     else
-        echo "gnu-test: $name: FAIL: $(grep '^GNUROW FAIL' "$DISK.$name.log" || tail -n 3 "$DISK.$name.log")" >&2
+        echo "gnu-test: $name: FAIL after $took: $(grep '^GNUROW FAIL' "$DISK.$name.log" || tail -n 3 "$DISK.$name.log")" >&2
     fi
 done
 # console_type TEXT: type TEXT and Enter at the console.
@@ -277,31 +277,34 @@ console_type() {
 
 # The console row: root at the console, tmux there and a command in its pane.
 TOTAL=$((TOTAL + 1))
+began=$("$RUNUTIL" now)
+problem=""
 console_type root
 if ! "$RUNUTIL" until "$LOG" "Password:" "$(scaled 60)"; then
-    echo "gnu-test: console: FAIL: no password prompt at the console" >&2
-    FAILED="$FAILED console"
+    problem="no password prompt at the console"
 else
     console_type "$PASSWORD"
     console_type 'echo CONSOLE""LOGIN'
     if ! "$RUNUTIL" until "$LOG" "CONSOLELOGIN" "$(scaled 60)"; then
-        echo "gnu-test: console: FAIL: root's login at the console gave no shell" >&2
-        FAILED="$FAILED console"
+        problem="root's login at the console gave no shell"
     else
         console_type tmux
         # shellcheck disable=SC2016 # the machine's shell expands it
         console_type 'echo TMUX""PANE$((6*7))'
         if ! "$RUNUTIL" until "$LOG" "TMUXPANE42" "$(scaled 60)"; then
-            echo "gnu-test: console: FAIL: tmux on the console drew no pane" >&2
-            FAILED="$FAILED console"
+            problem="tmux on the console drew no pane"
         elif ! ssh_as "$(scaled 60)" root "$ROOT_KEY" 'tmux kill-server; echo CONSOLE""DONE' |
             grep -q CONSOLEDONE; then
-            echo "gnu-test: console: FAIL: the machine did not answer with tmux on the console" >&2
-            FAILED="$FAILED console"
-        else
-            echo "gnu-test: console: OK"
+            problem="the machine did not answer with tmux on the console"
         fi
     fi
+fi
+took="$(($("$RUNUTIL" now) - began)) s"
+if [ -n "$problem" ]; then
+    echo "gnu-test: console: FAIL after $took: $problem" >&2
+    FAILED="$FAILED console"
+else
+    echo "gnu-test: console: OK in $took"
 fi
 [ -z "$FAILED" ] || fail "$(echo "$FAILED" | wc -w | tr -d ' ') of $TOTAL rows:$FAILED"
 echo "gnu-test: PASS"
