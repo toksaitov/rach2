@@ -17,7 +17,7 @@ The questions are what a thing is, how to run it, where a rule is written, and w
 
 ## The kernel
 
-9. How does the kernel boot, and what runs first? The [kernel Readme](../../rach2/Readme.md#architecture), the Architecture section.
+9. How does the kernel boot, and what runs first? The [kernel Readme](../../rach2/Readme.md), its section "From the loader to the first program".
 10. Which root does it mount, and how do I choose? The kernel Readme's Root selection section.
 11. What can I put on the kernel command line? The kernel Readme's Kernel command line table.
 12. Where does a subsystem live, and which document owns it? The kernel Readme's subsystems section, one paragraph each.
