@@ -1,188 +1,118 @@
 # The GNU layer
 
-This directory builds the GNU system of milestone 54 (`dev-log/54-gnu/plan.md`): a cross toolchain for i686-linux-gnu or x86_64-rach2-linux-gnu, as `ARCH` names the architecture, and with it the programs of a root that the GNU system is installed from. The layer builds on a Linux host only and is not part of `make` or `make all`; `make gnu-toolchain` and `make gnu-ports` build it (`mk/gnu.mk`). Three directories have programs with build scripts of their own (`mk/gnu-extra.mk`), each with its Readme: `native/`, GCC, binutils and GDB that run on Rach2; `spidermonkey/`, the SpiderMonkey shell; and `chromium/`, Debian's chromium-headless-shell with its libraries. `make os-real-gnu-ext2` installs all of it over the os-real system in an ext2 root that the kernel boots (`mk/gnu-image.mk`, and [the root image](#the-root-image) below).
+The GNU layer builds a GNU system for Rach2: a cross toolchain with glibc, 72 port recipes built with it, a native GCC and GDB, the SpiderMonkey shell, and Debian's chromium-headless-shell, all installed over the os-real system in an ext2 root that the kernel boots. It gives Rach2 the dynamically linked programs a person expects of a Linux machine (bash, coreutils, OpenSSH, Python, Git, GCC), which the static musl system does not have. It builds on an x86-64 Linux host only and is not part of `make`. The targets are `i686-linux-gnu` and `x86_64-rach2-linux-gnu`, as `ARCH` selects.
 
-## Sources
+## Use
 
-`sources.txt` lists every tarball of the layer with its version, URL and SHA-256, and its header says how each digest was verified: with gpgv, against an upstream signature that covers the release. For most projects that is the release's own signature; for Perl it is the signed CPAN checksum file of the uploader's directory, and for Vim, whose tag archive is not signed, the signed git tag. The tarballs are not committed: GCC's is larger than GitHub accepts for one file, and together they are about twice the rest of the repository. `fetch.sh` downloads a tarball into `downloads/`, which Git ignores, once, and checks its digest every time it is used; a file with another digest is removed and refused. `fetch.sh` with no arguments fetches everything, and `fetch.sh --path NAME` prints one tarball's path. `sources-extra.txt`, in the same format, lists what the three directories above build from, among them Firefox's source, Rust and Debian's archive keys, and the CA bundle the root image installs, with how its digest was checked; `fetch.sh` reads both lists. GDB 18.1 is pinned in `sources.txt`, and `native/build_gdb.sh` builds it.
+The Make targets build for the architecture `ARCH` names, so `make ARCH=x86_64 gnu-ports` builds the x86-64 ports:
 
-## The toolchain
+* `make gnu-toolchain`: the cross toolchain, by `build_toolchain.sh`.
+* `make gnu-ports`: every recipe of `ports/`, by `build_port.sh --all`.
+* `make gnu-native` and `make gnu-gdb`: binutils, GCC and GDB that run on Rach2 ([`native/`](native/Readme.md)).
+* `make gnu-js`: the SpiderMonkey shell ([`spidermonkey/`](spidermonkey/Readme.md)).
+* `make gnu-chromium`: Debian's chromium-headless-shell with its libraries ([`chromium/`](chromium/Readme.md)).
+* `make os-real-gnu-ext2`: the root image, `build/images/os-real-gnu.ext2` or `build/x86_64/images/os-real-gnu.ext2`, 4096 MiB and sparse, which needs all of the above. `make machine` builds it with the kernels and the recovery image an installed machine takes.
 
-`make gnu-toolchain` runs `build_toolchain.sh`, which builds into the layer's build tree, `build/vendor/gnu/` for i686 and `build/x86_64/vendor/gnu/` for x86-64. Every script of the layer takes the architecture from `RACH2_ARCH`, which the Makefile sets from `ARCH`, and `arch.sh` gives the tree, the target, the loader and Debian's names for it. The paths below are i686's; an x86-64 build has the same under `build/x86_64/`.
+Each target is behind a stamp; [`mk/Readme.md`](../../mk/Readme.md) says what rebuilds it. The scripts also run alone, with `RACH2_ARCH` for the architecture:
 
-* `cross/`: binutils 2.47 and GCC 16.2.0 for C and C++ (with GMP 6.3.0, MPFR 4.2.2 and MPC 1.3.1 built in GCC's tree), as `i686-linux-gnu-gcc` or `x86_64-rach2-linux-gnu-gcc` and the rest, configured for the i686 or the x86-64 instruction set. The x86-64 target has a vendor of its own, `rach2`, as Linux From Scratch's has: the build host is an x86-64 Linux whose own compilers are `x86_64-linux-gnu-gcc` and the rest, and GCC and autoconf take a target of the host's own triplet for a native build. An x86-64 GCC without multilib still names `lib64` as its directory of libraries; the build points that line of GCC's `t-linux64` at `lib`, as Linux From Scratch does, so that the libraries are in `/lib` and `/usr/lib` on both architectures.
-* `sysroot/`: the target's system: the Linux 6.18.54 headers, glibc 2.44 with the dynamic loader in `lib/`, or `lib64/` on x86-64, where glibc is told to keep its libraries in `lib/` and `usr/lib/`, and libxcrypt 4.5.2, which provides the `crypt` glibc 2.44 no longer has.
+* `fetch.sh [NAME...]` downloads tarballs into `downloads/` and checks them; `fetch.sh --path NAME` prints one tarball's path.
+* `build_toolchain.sh [STEP...]` runs the steps `binutils`, `headers`, `gcc1`, `glibc`, `gcc2` and `libxcrypt`; with none it builds the toolchain again from nothing.
+* `build_port.sh NAME...` builds those ports, and the ports they depend on that are not built yet, into the existing root.
 
-The order is binutils, the headers, a first GCC for C without a C library, glibc, the final GCC, and libxcrypt. glibc keeps its default minimum kernel, 3.2.0, so it falls back from the newer system calls to the older ones Rach2 has. The script takes step names (`binutils`, `headers`, `gcc1`, `glibc`, `gcc2`, `libxcrypt`) to run only those over an earlier build; with none, it builds the toolchain again from nothing and leaves the ports' and Chromium's build directories alone. Under make its sub-makes share the caller's jobs, so `make -j32 gnu-toolchain` built it in ten minutes on the testing host.
-
-The host needs a C and C++ compiler, GNU make 4, gawk, bison, flex, m4, Perl, Python 3, texinfo, xz, patch, and curl or wget. A pkg-config, where the host has one, is used by the ports' configure scripts and reads only the root's files; none of the ports needs it. The one exception is the Python that the python recipe builds for the build host, whose pkg-config reads the build host's own files.
-
-## The runtime
-
-The first port in the root, `build/vendor/gnu/root`, is the runtime, `ports/runtime.sh`, which has no tarball. It installs the toolchain's sysroot: glibc 2.44 with its dynamic loader as `/lib/ld-linux.so.2` on i686 or `/lib64/ld-linux-x86-64.so.2` on x86-64, the interpreter GCC names, and its shared libraries in `/lib`, as a GNU system without multiarch directories has them; glibc's headers, start files and static libraries and the Linux headers in `/usr`; and libxcrypt's `libcrypt.so.1` in `/usr/lib`. To these it adds GCC's shared libraries, `libgcc_s.so.1` in `/lib` and `libstdc++.so.6` in `/usr/lib`, and a locale archive, `/usr/lib/locale/locale-archive`, with `C.UTF-8` and `en_US.UTF-8`, which the target's own `localedef` writes, run on the build host through the staged loader. libxcrypt's soname is `libcrypt.so.1` because the toolchain builds it with the glibc-compatible interface (`--enable-obsolete-api=glibc`); Debian's packages ask for the same name. With the headers and libraries in it, the root is a sysroot as well as a system.
-
-## The ports
-
-`build_port.sh NAME...` builds ports with the toolchain; `build_port.sh --all`, which `make gnu-ports` runs, builds every recipe into an empty root. Each port has a recipe in `ports/`: a shell fragment that sets its version, the ports it depends on, its configure arguments, the configure answers a cross build cannot find out for itself, and the pinned patches applied after the extract. A port that autoconf does not configure has its own build and install steps, and its recipe's comment says how and why. A port autoconf configures has the prefix `/usr`, and `/etc` and `/var` for its configuration and its state, as Debian's packages have them, so that a system-wide file such as `/etc/nanorc`, `/etc/tmux.conf` or `/etc/gnupg/gpg.conf` is the one the program reads; a recipe's own `--sysconfdir` or `--localstatedir` overrides them.
-
-* The compilers run through wrappers in `build/vendor/gnu/wrap/` that give them the root as their sysroot, so a port finds the headers and libraries of the ports before it where the target has them.
-* A port's dependencies are built first when the root does not have them, and every port depends on the runtime.
-* A port installs into `build/vendor/gnu/stage/NAME`. There the target's `strip` removes the debugging information from its ELF files, which keep their symbol tables, and its libtool archives and Info index are removed; the rest is copied into the root and listed in `stage/NAME.files`.
-* Programs link with the shared glibc and ask for its loader. `GNU_LINK=static` links the ports that autoconf configures statically instead, with `-all-static` for a port with libtool, which reads `-static` as leaving the C library shared.
-
-A program in the root runs on the build host through the root's own loader, which loads the root's glibc rather than the host's, as `/lib64/ld-linux-x86-64.so.2` in the x86-64 root:
+A program of the root runs on the build host through the root's own loader, which loads the root's glibc:
 
     R=build/vendor/gnu/root
     $R/lib/ld-linux.so.2 --library-path $R/lib:$R/usr/lib $R/usr/bin/git --version
 
-The table gives each port's version, the time it took under `make -j32 gnu-ports` on the testing host, and the size of what it installs after stripping, for the ports of the layer's first set. That run took 565 seconds and made a root of 326 MB. All 72 ports today make a root of 611 MB for i686; for x86-64 they took 1349 seconds together, under one `make ARCH=x86_64 -j32` that built the native compiler, GDB, the shell and the browser at the same time, and made a root of 628 MB.
+On x86-64 the root is `build/x86_64/vendor/gnu/root` and the loader `lib64/ld-linux-x86-64.so.2`.
 
-| Port      | Version    | Time  | Size    |
-| --------- | ---------- | ----- | ------- |
-| runtime   | glibc 2.44 | 3 s   | 65.0 MB |
-| zlib      | 1.3.2      | 1 s   | 0.4 MB  |
-| OpenSSL   | 4.0.2      | 32 s  | 31.5 MB |
-| OpenSSH   | 10.5p1     | 30 s  | 10.1 MB |
-| ncurses   | 6.6        | 43 s  | 11.1 MB |
-| less      | 710        | 4 s   | 0.5 MB  |
-| Vim       | 9.2.1132   | 17 s  | 38.0 MB |
-| Perl      | 5.44.0     | 109 s | 80.3 MB |
-| PCRE2     | 10.49      | 31 s  | 5.2 MB  |
-| curl      | 8.22.0     | 20 s  | 5.9 MB  |
-| Git       | 2.55.0     | 20 s  | 32.3 MB |
-| coreutils | 9.12       | 43 s  | 12.4 MB |
-| bash      | 5.3        | 23 s  | 5.8 MB  |
-| make      | 4.4.1      | 7 s   | 0.9 MB  |
-| grep      | 3.12       | 30 s  | 0.5 MB  |
-| sed       | 4.10       | 19 s  | 0.5 MB  |
-| gawk      | 5.4.1      | 14 s  | 4.1 MB  |
-| findutils | 4.11.0     | 28 s  | 1.3 MB  |
-| diffutils | 3.12       | 21 s  | 0.7 MB  |
-| patch     | 2.8        | 13 s  | 0.3 MB  |
-| tar       | 1.35       | 22 s  | 1.4 MB  |
-| gzip      | 1.15       | 12 s  | 0.3 MB  |
-| xz        | 5.8.4      | 11 s  | 1.4 MB  |
-| file      | 5.48       | 7 s   | 10.7 MB |
-| tzdata    | 2026e      | 0 s   | 1.5 MB  |
-| iproute2  | 7.2.0      | 4 s   | 4.0 MB  |
+### On the machine
 
-The ports milestone 55 added were built one at a time, so the table of them gives each one's version and the size of what it installs.
+The image boots with `rach2.root=ext2`. Its `/sbin/init` is `init-metal`, which starts OpenSSH's `sshd`, D-Bus's system bus and cronie's `crond` ([`init(8)`](../../man/man8/init.8)); Dropbear is not installed. Root and `test` log in to bash. `/etc/profile` sets the path to `/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin`, gives every terminal but a dumb one `LANG=C.UTF-8`, and starts a D-Bus session bus at `~/.dbus/session_bus_socket` where none answers.
 
-| Port         | Version       | Size     |
-| ------------ | ------------- | -------- |
-| pkgconf      | 2.5.1         | 0.5 MB   |
-| procps-ng    | 4.0.7         | 3.3 MB   |
-| util-linux   | 2.42.4        | 12.4 MB  |
-| zstd         | 1.5.7         | 3.6 MB   |
-| rsync        | 3.5.1         | 1.1 MB   |
-| libevent     | 2.1.13-stable | 2.3 MB   |
-| tmux         | 3.7c          | 1.4 MB   |
-| nano         | 9.2           | 1.0 MB   |
-| Texinfo      | 7.3           | 10.6 MB  |
-| strace       | 7.2           | 1.4 MB   |
-| lsof         | 4.99.4        | 0.4 MB   |
-| cronie       | 1.7.2         | 0.2 MB   |
-| zip          | 3.0           | 0.6 MB   |
-| unzip        | 6.0           | 0.4 MB   |
-| bzip2        | 1.0.8         | 0.5 MB   |
-| libffi       | 3.8.0         | 0.3 MB   |
-| Readline     | 8.3           | 1.9 MB   |
-| SQLite       | 3.53.4        | 4.8 MB   |
-| Python       | 3.14.8        | 78.5 MB  |
-| libgpg-error | 1.61          | 0.5 MB   |
-| Libgcrypt    | 1.12.4        | 1.6 MB   |
-| Libassuan    | 3.0.2         | 0.2 MB   |
-| Libksba      | 1.8.1         | 0.5 MB   |
-| nPth         | 1.8           | 0.1 MB   |
-| NTBTLS       | 0.3.2         | 0.2 MB   |
-| pinentry     | 1.3.3         | 0.2 MB   |
-| GnuPG        | 2.5.24        | 9.4 MB   |
-| htop         | 3.5.3         | 0.5 MB   |
-| dosfstools   | 4.2           | 0.5 MB   |
-| shadow       | 4.20.2        | 1.3 MB   |
-| brotli       | 1.2.0         | 1.0 MB   |
-| libssh2      | 1.11.1        | 1.2 MB   |
-| Chawan       | 0.5~dev1      | 6.3 MB   |
+The path finds a GNU program in `/usr/bin` before a file of `/bin`. `make` is GNU make and `cc` is GCC; pdpmake and TinyCC keep `/bin/make`, `/bin/cc` and `/bin/tcc`, which the self-build of `/src` names. `/bin/sh` is bash, so a script and `system(3)` find GNU's `sed` and `grep` by the path, where BusyBox's ash would run its own applet first. Each BusyBox applet that no file of the four program directories provides is a link to `/bin/busybox`. `man` also finds the ports' pages ([`man(1)`](../../man/man1/man.1)).
 
-The ports milestone 56 added, built the same way:
+## Sources and license
 
-| Port          | Version  | Size     |
-| ------------- | -------- | -------- |
-| m4            | 1.4.21   | 0.7 MB   |
-| Autoconf      | 2.73     | 3.6 MB   |
-| Automake      | 1.19     | 2.5 MB   |
-| Bison         | 3.8.2    | 2.8 MB   |
-| flex          | 2.6.4    | 0.8 MB   |
-| jq            | 1.8.2    | 1.6 MB   |
-| screen        | 5.0.2    | 1.3 MB   |
-| sudo          | 1.9.17p2 | 8.5 MB   |
-| CMake         | 4.3.4    | 107.2 MB |
-| libuv         | 1.52.1   | 0.9 MB   |
-| Userspace RCU | 0.15.7   | 1.4 MB   |
-| libcap        | 2.75     | 0.6 MB   |
-| BIND          | 9.20.4   | 6.7 MB   |
+[`sources.txt`](sources.txt) pins each tarball of the toolchain and the ports, and [`sources-extra.txt`](sources-extra.txt) the sources of the three subdirectories, the Debian archive keys and the CA bundle. A line gives a name, version, URL and SHA-256, and each file's header says which upstream key verified each digest. `fetch.sh` downloads a file once, into `downloads/`, which Git ignores, and checks its digest every time a script uses it; a file with another digest is removed and refused. Nothing fetched is committed.
 
-These notes say what some ports provide and what they leave to the system they are installed on.
+Each port keeps its upstream license, which its tarball has. The scripts, the recipes, `rach2.ti` and the files in `etc/` are in-house.
 
-* OpenSSL is built for `linux-x86`, shared, with zlib. Its configuration is in `/etc/ssl`, where the programs that use it look for certificates; the root has none, and the root image installs the CA bundle there.
-* OpenSSH installs `ssh`, `scp`, `sftp`, `ssh-keygen` and the other clients in `/usr/bin`, `sshd` in `/usr/sbin`, and `sshd-session`, `sshd-auth`, `sftp-server` and the helpers in `/usr/libexec`, with its configuration in `/etc/ssh` and no PAM. The server's privilege-separated child runs as the user `sshd` in `/var/empty`, so the system needs that user and a `/var/empty` owned by root. The child that talks to a client before it authenticates runs in the rlimit sandbox, `--with-sandbox=rlimit`, with limits of 0 on the descriptors it may open, the processes it may fork and the size of the files it may grow, which it writes none of (`prlimit64(2)`). The kernel has no seccomp for the sandbox configure would choose, and configure takes the rlimit sandbox only after a test program it cannot run in a cross build, which shows that poll and select work under a descriptor limit of 0; the recipe gives it that answer, which limitprobe checks on the kernel. The host keys are made on the system. The root image has the user and the directory, and its init makes the keys.
-* ncurses has wide characters and installs the terminfo database, 1861 entries, in `/usr/share/terminfo`. bash's readline, Vim and less read the terminal's capabilities through it. The console's entry, `rach2`, is not among them: `rach2.ti` has it, and `install_root.sh` compiles it into the root.
-* Vim has its huge feature set, for the terminal only.
-* Perl is configured as a native build whose programs run on the build host, for the reasons its recipe gives, with interpreter threads, as Debian's has, and has 143 extensions.
-* Git has curl, OpenSSL, zlib and Perl, and no Tcl/Tk, gettext, Python, expat or Rust. Its manual pages come from the `git-manpages` tarball.
-* coreutils and make start their children with glibc's `posix_spawn`, which shares the caller's address space through `clone` with `CLONE_VM` and `CLONE_VFORK`.
-* pkgconf is built twice: for the build host, as `i686-linux-gnu-pkg-config` or `x86_64-rach2-linux-gnu-pkg-config` beside the cross tools, which answers `configure`'s questions about the root's libraries, and for the root, as `pkg-config`. Every port depends on it, so the build host needs no `pkg-config` of its own.
-* procps-ng and util-linux install their programs in `/usr/bin` and `/usr/sbin`, where the path finds them before BusyBox's applets. util-linux's `libmount`, `libblkid` and `libuuid` replace Debian's copies, and `newgrp` is set-id root.
-* tmux uses libevent and takes `tmux-256color` as its terminal. nano reads `/etc/nanorc`, which includes the syntax files. Texinfo installs `makeinfo`, `info` and `install-info`.
-* lsof is built from Debian's source of it, since its upstream signs nothing, with its own Configure script. zip and unzip are Info-ZIP's last releases, since it makes no more, with Debian's patches applied from its packaging tarballs (`DEBIAN` in `build_port.sh`), unzip with bzip2.
-* cronie's `crond` runs from init, and `crontab` is set-id to the group `crontab`, which may write the crontabs in `/var/spool/cron/crontabs`. There is no anacron and no PAM.
-* Python has the modules of its standard library that link the root's libraries, and neither `tkinter`, `dbm.gnu`, pip nor the test suite. Its ssl module is built against OpenSSL 4, which has no SSLv3 and no methods of one protocol version. Its byte code records a hash of each source, since the image gives every file the same time.
-* htop has ncurses' wide characters and CPU affinity, and no sensors, capabilities, delay accounting, hwloc or libunwind. dosfstools installs `mkfs.fat` and `fsck.fat` with Debian's other names for them, which the path finds before BusyBox's `mkdosfs`.
-* shadow installs the account tools BusyBox has not, `useradd`, `usermod`, `userdel`, the group tools, `gpasswd`, `chsh`, `chfn`, `chage`, `vipw` and the checkers, with `/etc/login.defs`; `passwd`, `su`, `login`, `chpasswd` and `nologin` stay BusyBox's and `newgrp` util-linux's. `chsh`, `chfn` and `gpasswd` are set-id root, as on Debian; `chage` is not, where Debian's is set-group-ID `shadow`, so only root runs it. There is no PAM, no subordinate ids and no `lastlog`.
-* m4, Autoconf, Automake, Bison and flex build a package from its sources on the machine: `autoreconf -i` makes a `configure` and a `Makefile.in` from `configure.ac` and `Makefile.am`, as the gnu suite's autoreconf row does. Automake's recipe builds an Autoconf for the build host first, since its `configure` runs one, and flex's makes its own scanner with the build host's flex.
-* CMake, with `ccmake`, configures and builds a project from its `CMakeLists.txt`. Its recipe bootstraps a CMake for the build host into `build/vendor/gnu/host`, which builds the root's and the ports built with CMake, libuv among them.
-* jq reads and transforms JSON, with the Oniguruma its release carries for its regular expressions.
-* screen multiplexes a terminal, not set-id: a user's sessions are sockets in `~/.screen`.
-* sudo runs a command as another user by `/etc/sudoers`, which gives root and the group `sudo`, 27, every command, against the shadow file, since the root has no PAM. It is set-id root through `build/vendor/gnu/setid`.
-* BIND's `dig`, `host`, `nslookup`, `delv` and `nsupdate` ask a name server, on libuv, Userspace RCU, libcap and OpenSSL; the server is built and left out.
-* Chawan, `cha`, is the terminal's web browser: its own HTML and CSS engine with flow, table and flex layout, JavaScript in QuickJS when its configuration turns scripting on, HTTP and HTTPS with brotli, SFTP through libssh2, Gopher and Gemini, and images in a terminal that shows sixels or the kitty protocol. Each page loads in a process of its own under a seccomp filter. Its recipe builds Nim 2.2.12 for the build host and compiles Chawan with it, and `chac`, which compiles its startup script to QuickJS byte code, runs on the build host. brotli's libraries and its `brotli` program are compiled by the recipe itself, since upstream builds with CMake. The recipe adds the Rach2 console, `TERM=rach2`, to Chawan's table of terminals, so it uses the ANSI colours and none of the scroll regions, line-drawing set, alternate screen and mouse an XTerm has, and keeps the right edge's column free.
-* GnuPG has its agent, `dirmngr` with NTBTLS for hkps, `keyboxd` with SQLite and `pinentry`'s curses and tty programs, and no LDAP and no TPM2 daemon.
+## Local changes
 
-## The root image
+A recipe changes its upstream only where Rach2 or a cross build needs it, and its comment gives the reason:
 
-`make os-real-gnu-ext2` builds `build/images/os-real-gnu.ext2`, and `make ARCH=x86_64 os-real-gnu-ext2` `build/x86_64/images/os-real-gnu.ext2`, a 4 GiB ext2 volume, sparse on the host, that the kernel boots with `rach2.root=ext2`: the os-real system, staged from `krffs/manifests/os-real-gnu.manifest`, with this layer installed over it by `install_root.sh`. `tools/image/mkext2.sh --overlay` runs the script over the staged tree before it formats the volume, and the volume passes mkext2.sh's checks: what the overlay added is root's, with the fixed staged instant as its times, `e2fsck -fn` finds the volume clean, and the set-id guard reads it with its own reader and admits no set-id file but BusyBox's `su`, `passwd` and `login`, util-linux's `newgrp` and cronie's `crontab`, which the manifest installs from `build/vendor/gnu/setid`, where their recipes leave them. Only root may write what the overlay added: mkext2.sh takes the group's and others' write bits off it, so a layer built under a umask of 002, which leaves its directories writable by their group, makes the same volume as one built under 022. The system takes 1.2 GiB of the volume and 26,588 of its inodes; the rest is room for what the machine builds and fetches.
+* bash and Readline take their upstream patch series, pinned in `sources.txt`. zip and unzip take Debian's patch series from Debian's packaging tarballs (`DEBIAN` in [`build_port.sh`](build_port.sh)).
+* The toolchain and the native GCC point the `m64` line of GCC's `gcc/config/i386/t-linux64` at `lib`, so that x86-64 libraries are in `/lib` and `/usr/lib`, as on i686.
+* [`ports/lsof.sh`](ports/lsof.sh) treats an unknown count of an epoll descriptor's watched descriptors as 0; [`ports/bind9.sh`](ports/bind9.sh) keeps OpenSSL's own allocator; [`ports/chawan.sh`](ports/chawan.sh) adds the Rach2 console, `TERM=rach2`, to Chawan's table of terminals; [`ports/tmux.sh`](ports/tmux.sh) dates tmux's manual page.
+* A recipe's `CACHE` gives configure the answers a cross build cannot find out. [`ports/openssh.sh`](ports/openssh.sh) edits configure's own cross-build answer instead, so that it accepts the rlimit sandbox.
 
-The image is built where the layer is, on a Linux host, and is not part of `make`. `sh tools/dev/testing.sh run make os-real-gnu-ext2` builds it in the testing host's copy, first building what of the layer is missing, and `sh tools/dev/testing.sh get build/images/os-real-gnu.ext2` brings it to the same path on the Mac, compressed on the wire, in 40 seconds; there it takes nearly all of its 4 GiB, since APFS keeps few of the volume's holes. With the layer built, the image took 10 to 14 seconds on the testing host; the layer from nothing took 447 seconds for the toolchain and then 639 seconds under `make -j32` for the ports, the native compiler, GDB, the shell and the browser at once.
+## Design
 
-`install_root.sh` installs the system as a Debian system of its architecture has it:
+### The build tree
 
-* The trees of the ports, the native compiler, GDB and the shell: glibc with its loader and its libraries in `/lib`, the loader in `/lib64` on x86-64, and the rest under `/usr`. The native compiler's `libstdc++.so.6` replaces the runtime's copy of the same library, and any other file the tree already has is refused, so what the manifest staged is what the image has. The two C libraries share `/lib`, where TinyCC finds musl's `libc.a` and start files beside glibc's shared libraries; GCC takes glibc's start files and libraries from `/usr/lib`, which it searches before `/lib`.
-* From the packages `chromium/fetch_chromium.sh` unpacked, the browser in `/usr/lib/chromium`, its libraries in `/usr/lib/i386-linux-gnu` or `/usr/lib/x86_64-linux-gnu`, and D-Bus's daemon and tools in `/usr/bin` with the bus's configuration in `/usr/share/dbus-1`: every package of the closure except those whose libraries the root has its own builds of, of the same sonames and newer, `libc6`, `libgcc-s1`, `libstdc++6`, `libatomic1`, `zlib1g`, `liblzma5`, `libpcre2-8-0`, `libmount1`, `libblkid1`, `libuuid1`, `libffi8`, `libsqlite3-0`, `libbz2-1.0` and `libzstd1`, with `gcc-14-base`, which only documents GCC's, and except the programs that `chromium-common`'s dependencies bring and a headless shell does not run, in `debconf`, `lsb-base`, `sysvinit-utils`, `x11-utils` and `xdg-utils`.
-* `/etc/ld.so.cache`, which the root's own `ldconfig` writes from the manifest's `/etc/ld.so.conf`, which lists `/usr/lib/i386-linux-gnu` and `/usr/lib/x86_64-linux-gnu`, so that one manifest serves both architectures; an image has its own architecture's, and `ldconfig` passes over the other. glibc links `ldconfig` statically, so the build host runs it without the loader, with `-r` for the tree. The cache has 182 entries, and the loader searches `/lib` and `/usr/lib` for a library the cache does not have.
-* `/bin/bash`, a link to `/usr/bin/bash`, `/bin/sh`, a second name of bash's file, since the set-id guard requires the shell root runs to be a file, `/usr/bin/cc`, a link to `gcc`, and `/usr/bin/vi`, a link to `vim`.
-* A link to `/bin/busybox` for each BusyBox applet that no file in `/usr/bin`, `/bin`, `/usr/sbin` or `/sbin` answers for, 203 of the 318, where BusyBox's own install would put it. The build host runs the BusyBox the manifest stages, which is static, from the build for the list, since the stager writes the tree's files without the modes the volume gets.
-* For each program of `/bin` that `/usr/bin` lacks, a link of its name in `/usr/bin`, and for each of `/usr/bin` that `/bin` lacks, one in `/bin`, and the same for `/sbin` and `/usr/sbin`: Debian's `/bin` and `/sbin` are links into `/usr`, so every program has both names, and a script that names `/bin/true` or `/usr/sbin/ldconfig` finds it. A name both have keeps its two programs.
-* The ports' manual pages rendered to plain text under `/usr/share/man/gnu/catN`, by `render_man.sh` with the build host's mandoc.
-* The terminfo entry of the console, from `rach2.ti`, compiled by the root's `tic`, which the build host runs through the root's loader. The kernel gives a console session `TERM=rach2`, and the entry lists what the console's interpreter in `rach2/sys/kio.c` does and what its keyboard sends.
-* The CA bundle as `/etc/ssl/certs/ca-certificates.crt`, Debian's name for it, and `/etc/ssl/cert.pem`, the file OpenSSL reads by default, as a link to it, so that curl and Git verify HTTPS against Mozilla's roots.
-* `/etc/services`, `/etc/protocols` and `/etc/networks`, the files Debian's netbase gives, written from IANA's assignments in `etc/`, so that a program names a port as `https` or `ssh`; and `/etc/localtime`, a link to the zone `Etc/UTC`, with `/etc/timezone` naming it, as Debian's tzdata leaves a machine set to UTC.
-* `ssh-keysign` without its set-id bit: the system uses no host-based authentication, and the guard admits no set-id file the manifest does not declare.
-* `/run`, a link to `/var/run`, where D-Bus's programs look for the system bus's socket, `/run/dbus/system_bus_socket`.
+Everything is built under `build/vendor/gnu/` for i686 and `build/x86_64/vendor/gnu/` for x86-64. [`arch.sh`](arch.sh) gives each script that tree, the target, GCC's `--with-arch`, the loader, and Debian's names for the architecture.
 
-The ports install their upstream manual pages under `/usr/share/man/manN` as troff sources, which the system's `man` does not read: it reads plain text. `render_man.sh` renders the pages of sections 1, 5, 7 and 8 with the build host's mandoc, as `man/render.sh` renders this project's, into `/usr/share/man/gnu/catN`, 1642 pages, and `man` looks a name up there when this project's manual has no page for it, or first when the command the path finds by the name is a port's and not a link to BusyBox, so `man git` shows Git's page and `man ls` GNU's. A page dated `$Mdocdate$` alone, which mandoc would render with the day of the build, is refused, and its recipe gives it the date its file has in the release, as tmux's does, so two builds of the root render alike.
+| Directory | Contents |
+| --- | --- |
+| `cross/` | binutils and GCC for C and C++, as `TARGET-gcc` and the rest |
+| `sysroot/` | the Linux headers, glibc and libxcrypt |
+| `wrap/` | compiler wrappers that pass `--sysroot=root/`, and the build host's `TARGET-pkg-config` |
+| `root/` | the runtime and every port |
+| `stage/` | each port's install, and `NAME.files`, the list of what it put in `root/` |
+| `setid/` | programs a recipe moved out of its stage to be installed set-id |
+| `host/` | CMake for the build host |
+| `native/`, `gdb/`, `js/`, `chromium/` | the staging roots of the subdirectories |
+| `rust/` | the Rust toolchain of the SpiderMonkey build |
+| `src/`, `work/`, `log/` | sources, build directories and step logs |
 
-### Which program a name finds
+### The toolchain
 
-The path, as `/etc/profile` sets it and as OpenSSH's server gives a session, is `/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin`, so what `make install` puts under `/usr/local` answers first, and a GNU program in `/usr/bin` before a file of `/bin`. Root and the test account log in to bash; `nobody` and `nogroup` are Debian's account and group with nothing of their own, 65534; `/etc/profile` gives a prompt of the user, the machine and the directory, a session on any terminal but a dumb one the C.UTF-8 locale that glibc builds in, the console's among them, since its screen draws UTF-8 from its font, and a D-Bus session bus, as the section on D-Bus below says. `/etc/hosts` is a machine's: `localhost` and the machine's own name, `rach2`, at 127.0.1.1. Two names are in both: `make`, which is GNU make before pdpmake, and `cc`, which is GCC before TinyCC. A program that asks the path for either on this system is nearly always a GNU build, a configure script or a makefile written for GNU make and GCC, and TinyCC refuses the dynamic link such a build asks for. pdpmake and TinyCC keep `/bin/make`, `/bin/tcc` and `/bin/cc`, which the musl self-build of `/src` names: in a writable copy of a component's tree, `/bin/make -f guest.mk` runs pdpmake on the POSIX makefile, which calls the compiler `/bin/cc`.
+`build_toolchain.sh` builds binutils, installs the Linux headers, builds a C compiler without a C library, glibc, the final GCC for C and C++, and libxcrypt, which provides the `crypt` that glibc no longer has. GMP, MPFR and MPC are built in GCC's tree. glibc keeps its default minimum kernel, 3.2.0, so it falls back from newer system calls to older ones. The loader is `/lib/ld-linux.so.2` on i686 and `/lib64/ld-linux-x86-64.so.2` on x86-64, and the libraries are in `/lib` and `/usr/lib` on both. The x86-64 target has the vendor `rach2` because the build host's own triplet is `x86_64-linux-gnu`, and GCC and autoconf take a target of that name for a native build.
 
-`/bin/sh` is bash, so a script, what runs a command through the shell, such as `system(3)` and a recipe with shell syntax in it, and a package's test suite find GNU's `grep` and `sed` by the path, as on a GNU/Linux system. BusyBox's ash, the os-real system's `/bin/sh`, runs its own applet for a name before it searches the path at all, which gave GNU sed's test suite BusyBox's sed through Perl's `system`. The system's scripts, `man`, `dmesg` and udhcpc's, are POSIX shell scripts and run under bash. The applets no GNU program stands for, such as `ps`, `top`, `free`, `mount`, `which`, `hostname` and `ifconfig`, are files as well, links to `/bin/busybox` that `install_root.sh` makes, so bash and a program that searches the path find them; `vi` is a link to Vim, so that Git's default editor is found. GNU tar's recipe names gzip, xz and lzma by their paths, so that `tar -cJ` runs GNU's xz whatever the caller's path holds.
+### The ports
 
-### OpenSSH in Dropbear's place
+A recipe in `ports/` is a shell fragment that `build_port.sh` reads. It sets `VERSION`, `DEPENDS`, `CONFIGURE_ARGS`, `CACHE` and `PATCHES`, and may define `port_build` and `port_install` for a port that autoconf does not configure; [`build_port.sh`](build_port.sh) documents every variable. By default a port is configured with the prefix `/usr`, `/etc` and `/var`, as Debian configures it. `configure_cmake` configures a CMake port with the host CMake.
 
-The image's `/sbin/init` is `init-metal`, which starts OpenSSH's `sshd` at boot where the machine's disk starts Dropbear: after the console login and, on a boot with `rach2.ip=none`, after `ifup -a` (`init(8)`). Before each start it runs `ssh-keygen -A`, which on the first boot makes the host keys in `/etc/ssh`, RSA, ECDSA, Ed25519 and ML-DSA-44 with Ed25519, and needs the kernel's entropy. The server runs in the foreground with its log in `/var/log/services`, and its unprivileged child runs as `sshd`, uid 74, with no password and `/usr/bin/false` for a shell, in `/var/empty`, which is root's and mode 0755. Root logs in by key alone unless `/etc/rach2/sshd.conf` permits its password, and the test account by key or by the password in `/etc/shadow`, which glibc and libxcrypt check. `ssh`, `scp` and `sftp` are the clients, and `sftp-server` serves the last two. Dropbear stays in the other images.
+Every other port depends on `runtime` and `pkgconf`. [`ports/runtime.sh`](ports/runtime.sh) has no tarball: it copies the sysroot, adds GCC's `libgcc_s.so.1` and `libstdc++.so.6`, and writes a locale archive with `C.UTF-8` and `en_US.UTF-8` using the target's `localedef`. [`ports/pkgconf.sh`](ports/pkgconf.sh) also builds a `pkg-config` for the build host that reads only the root's files, so the host needs none.
 
-### D-Bus's system bus
+A port installs into `stage/NAME`. There the target's `strip --strip-debug` runs on its ELF files, and its libtool archives and Info index are removed. Files the port's previous list had and the new one lacks are removed from the root, and the stage is copied in. Programs link with the shared glibc; `GNU_LINK=static` gives an autoconf port `LDFLAGS=-static`, and `-all-static` where it uses libtool.
 
-Debian's `dbus-daemon`, from the browser's closure, is the system bus that the browser and other programs linked with libdbus connect to at `/run/dbus/system_bus_socket`; without it the browser prints an error for each of its parts that asks the bus for something. `init-metal` starts it at boot as the user `messagebus`, uid 81, with no password and `/usr/bin/false` for a shell, after it has made `/var/run/dbus`, owned by that user, and on the first boot `/etc/machine-id`, the machine's identity, from the kernel's random numbers (`init(8)`). The bus is started as its user rather than as root, which Debian's service does: started as root, it drops to its user through libcap-ng, which keeps part of root's capabilities, and the kernel keeps all of a process's capabilities or none (`capget(2)`). It reads Debian's configuration in `/usr/share/dbus-1/system.conf`, and its messages go to the service log. No service is activated by the bus: Debian's `dbus` package, whose set-id helper activates them, is not installed. A login shell has a session bus of its user's, at `~/.dbus/session_bus_socket`, which `/etc/profile` starts where none answers there and names in `DBUS_SESSION_BUS_ADDRESS`, as a desktop's login gives one; a program started outside a login shell can have one of its own from `dbus-run-session`.
+### The root image
 
-`tests/run gnu` boots the image and has each port do its main job on the machine ([the system tests' Readme](../../tests/system/Readme.md)).
+[`mk/gnu-image.mk`](../../mk/gnu-image.mk) runs `tools/image/mkext2.sh --overlay vendor/gnu/install_root.sh` on [`os-real-gnu.manifest`](../../krffs/manifests/os-real-gnu.manifest). The manifest stages the musl system with OpenSSH's accounts and directories, bash as the login shell, glibc's `/etc` files and the set-id programs from `setid/`. [`tools/Readme.md`](../../tools/Readme.md) describes how `mkext2.sh` stages, formats and checks the volume.
+
+[`install_root.sh`](install_root.sh) refuses to replace a file the staged tree has, except the runtime's `libstdc++.so.6`, which the native compiler's copy replaces. It installs:
+
+* `root/`, `native/`, `gdb/` and `js/`.
+* The files of the Chromium packages, with paths under `/bin`, `/lib` and `/sbin` moved under `/usr`. Packages whose libraries the root already builds (`libc6`, GCC's, zlib, liblzma, PCRE2, util-linux's, libffi, SQLite, bzip2 and zstd) and the programs `chromium-common` pulls in that a headless shell does not run are left out; the list is `SKIP` in the script.
+* Links: `/bin/bash`, `/bin/apropos` and `/bin/whatis` to `man`, `/usr/bin/cc` to `gcc`, `/usr/bin/vi` to `vim`, `/bin/mkfs.ext2`, `/sbin/fsck.ext2`, `/sbin/e2label`, `/etc/mtab` to `/proc/self/mounts`, and `/run` to `/var/run`. `/bin/sh` is a hard link to bash, since the set-id guard requires root's shell to be a file.
+* A link to `/bin/busybox` for each unprovided applet, from the static BusyBox's `--list-full`, and a link in `/bin` for each program only `/usr/bin` has, and the reverse, and the same for `/sbin` and `/usr/sbin`.
+* The CA bundle as `/etc/ssl/certs/ca-certificates.crt`, with `/etc/ssl/cert.pem` linked to it.
+* `/etc/services`, `/etc/protocols` and `/etc/networks` from [`etc/`](etc), and `/etc/localtime` and `/etc/timezone` for `Etc/UTC`.
+* The console's terminfo entry, compiled from [`rach2.ti`](rach2.ti) by the root's `tic`.
+* The ports' manual pages of sections 1, 5, 7 and 8, rendered by [`render_man.sh`](render_man.sh) with the host's mandoc to `/usr/share/man/gnu/catN`. A page dated `$Mdocdate$` alone is refused, so that two builds render alike.
+* A locked `/etc/shadow` line for each account of `/etc/passwd` that has none, and `/etc/ld.so.cache`, written by the root's static `ldconfig` from the staged `/etc/ld.so.conf`.
+
+It also removes the set-id bit of `ssh-keysign`, since the system uses no host-based authentication.
+
+## Building
+
+The build host is an x86-64 Linux with a C and C++ compiler, GNU make, gawk, bison, flex, m4, Perl, Python 3, texinfo, xz, patch, gzip, and curl or wget. The subdirectories add `unshare` from util-linux, `chroot`, and a kernel that lets an ordinary user make user namespaces, for their checks; GnuPG, `ar` and tar for Chromium's packages; and access to crates.io for cbindgen's dependencies. The root image needs mandoc and e2fsprogs, which [`tools/Readme.md`](../../tools/Readme.md) lists for every build.
+
+Under make the scripts share the caller's jobs; alone they use every processor, or `GNU_JOBS` processors in the subdirectories' scripts.
+
+## Updating
+
+To update a port, verify the new tarball's signature with `gpgv` and the key the header of `sources.txt` names, replace the port's line with the new version, URL and digest, set `VERSION` in its recipe, and run `build_port.sh NAME`. A change to `sources.txt` rebuilds every port under `make gnu-ports`, and a change to a toolchain line (binutils, GCC, GMP, MPFR, MPC, glibc, Linux, libxcrypt) rebuilds the toolchain and everything built with it. A new port is a recipe and a line; `--all` builds every recipe in `ports/`.
+
+## Limits
+
+* The layer builds on an x86-64 Linux host only.
+* There is no PAM: OpenSSH, sudo, shadow and cronie are built without it.
+* D-Bus activates no service, since Debian's `dbus` package, which has the activation helper, is not installed.
+* chromium-headless-shell and D-Bus are Debian's binaries, not built here.
+
+## Tests
+
+`tests/run gnu` (`ARCH=x86_64 tests/run gnu` for x86-64) builds the root image, boots it, logs in over OpenSSH, and has each port and program do its main job on the machine, one row each; [`tests/system/Readme.md`](../../tests/system/Readme.md) lists the rows. It is in the full tier. The `check` steps of the subdirectories' scripts test their programs on the build host.
