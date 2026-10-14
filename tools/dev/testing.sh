@@ -13,7 +13,7 @@
 # and their stamps, the compilation database, is not sent, so the host
 # builds with its own compiler, and what it built is left in place, so a run
 # after a small edit rebuilds only what the edit touched. A sync refuses, and
-# says why, while anything on the host works in the copy (see tree_free). The
+# says why, while anything on the host works in the copy (see hold_copy). The
 # one ignored file that is sent is the shareware WAD `ports/doom/fetch_wad.sh`
 # downloads, because the Doom suite reads it from the image. The filter's
 # first rule protects the copy's WAD from deletion, ahead of the rule that
@@ -28,6 +28,23 @@
 # as holes, which the Mac's APFS keeps only for a long run, so an image that
 # is sparse on the host is not sparse here. `sh` opens an interactive shell in
 # the copy.
+#
+# The check that the copy is free and the sync are one step, under a lock on
+# the host, `/home/testing/rach2.sync.lock`; two callers started at once
+# would otherwise both find the copy free, and the later sync would land
+# under the other's run. A caller takes the lock before it checks, keeps it
+# until its sync ends, or for `run` until the command ends, and records
+# itself in `rach2.sync.owner` beside it. A second caller is refused, not
+# made to wait, as a busy copy refuses it, and prints that record: the first
+# may hold the copy for a run of hours, and the second learns at once that
+# its tree did not reach the host. The lock is flock(1)'s, taken by a shell
+# in WSL whose input comes from this script, so it ends when this script
+# ends, however it ends, or when the connection closes, and a caller that is
+# gone holds nothing. That shell writes to the connection every ten seconds,
+# so that a connection whose other end is gone without having closed it, as
+# when this machine loses power, fails when TCP gives up on the data nobody
+# acknowledges, not after the hours the host's TCP keepalive takes, and the
+# shell ends with it.
 #
 # `wait` watches a run started on the host as `/home/testing/NAME.sh`, which
 # writes its results as lines beginning `NAME: ` to `/home/testing/NAME.out`
@@ -66,6 +83,9 @@ REPO=$(cd "$(dirname "$0")/../.." && pwd)
 HOST=testing
 DEST=/home/testing/rach2
 RSYNC_PATH='MSYS_NO_PATHCONV=1 wsl.exe -- rsync'
+hold=
+holder=
+trap 'release_copy; [ -z "$hold" ] || rm -rf "$hold"' EXIT
 
 need_rsync3()
 {
@@ -79,65 +99,131 @@ need_rsync3()
     esac
 }
 
-# tree_probe: the script tree_free runs on the host, given the copy's path.
-tree_probe()
+# hold_script WHO: the script hold_copy runs on the host in bash, given the
+# copy's path. It takes the sync lock, or prints the owner file beside it,
+# which describes the holder, and ends. Holding the lock, it writes WHO, which
+# describes this caller, to the owner file, prints whatever works in the copy,
+# then `held`, and keeps the lock until its input ends. A caller takes the
+# lock or reads the owner file under a short lock on that file, so that a
+# refused caller reads the record of the holder that refused it and not of the
+# one before. Bash reads a script from a pipe a byte at a time, and the call
+# to hold is the script's last line, so the read in hold finds no text of the
+# script left in its input.
+hold_script()
 {
+    printf "who='%s'\n" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
     cat <<'EOF'
-lock=$1/build/.run.lock
-if [ -d "$lock" ]; then
-    pid=$(sed -n 's/^pid //p' "$lock/owner" 2>/dev/null)
-    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null &&
-        echo "the run lock, held by pid $pid: $(sed -n 's/^args //p' "$lock/owner")"
-fi
-for d in /proc/[0-9]*; do
-    case "$(readlink "$d/cwd" 2>/dev/null)" in
-        "$1"|"$1"/*) ;;
-        *) continue ;;
-    esac
-    command=$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null)
-    case "$(cat "$d/comm" 2>/dev/null)" in
-        bash|sh|dash|zsh)
-            # A shell that runs no script of its own is a person's prompt.
-            echo "$command" | awk '$2 != "" && $2 !~ /^-/ {f = 1} END {exit !f}' || continue ;;
-    esac
-    echo "pid ${d#/proc/}: $(echo "$command" | cut -c1-120)"
-done
-exit 0
+probe()
+{
+    lock=$1/build/.run.lock
+    if [ -d "$lock" ]; then
+        pid=$(sed -n 's/^pid //p' "$lock/owner" 2>/dev/null)
+        [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null &&
+            echo "the run lock, held by pid $pid: $(sed -n 's/^args //p' "$lock/owner")"
+    fi
+    for d in /proc/[0-9]*; do
+        case "$(readlink "$d/cwd" 2>/dev/null)" in
+            "$1"|"$1"/*) ;;
+            *) continue ;;
+        esac
+        command=$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null)
+        case "$(cat "$d/comm" 2>/dev/null)" in
+            bash|sh|dash|zsh)
+                # A shell that runs no script of its own is a person's prompt.
+                echo "$command" | awk '$2 != "" && $2 !~ /^-/ {f = 1} END {exit !f}' || continue ;;
+        esac
+        echo "pid ${d#/proc/}: $(echo "$command" | cut -c1-120)"
+    done
+}
+
+hold()
+{
+    exec 8>> "$1.sync.owner" 9>> "$1.sync.lock" || exit 1
+    flock 8 || exit 1
+    flock -n 9 || {
+        [ $? -eq 1 ] && echo "the sync lock, held by $(cat "$1.sync.owner")"
+        exit 0
+    }
+    echo "pid $$ since $(date '+%Y-%m-%d %H:%M:%S'): $who" > "$1.sync.owner"
+    exec 8>&-
+    probe "$1"
+    echo held
+    while :; do
+        read -r -t 10 _
+        case $? in
+            0) ;;
+            1) exit 0 ;;
+            *) echo . >&2 || exit 1 ;;
+        esac
+    done
+}
+
+hold "$@"
 EOF
 }
 
-# tree_free: succeed when nothing on the host is working in the copy. A sync
-# rewrites the sources under whatever is, and a build that reads half of the
-# old tree and half of the new one fails in ways that look like faults of the
-# code. The copy is busy while a run or a fault script holds its lock and the
-# holder lives, or while any process other than a shell has its working
-# directory in it: a make, a compiler, QEMU, or a script between two runs.
-tree_free()
+# hold_copy WHAT: take the sync lock on the host and check that nothing there
+# works in the copy, as one step, and keep the lock until release_copy; or
+# say why not and fail. A sync rewrites the sources under whatever works
+# there, and a build that reads half of the old tree and half of the new one
+# fails in ways that look like faults of the code. The copy is busy while a
+# run or a fault script holds its run lock and the holder lives, or while
+# any process other than a shell has its working directory in it: a make, a
+# compiler, QEMU, or a script between two runs. The owner file records WHAT,
+# `sync` or `run`, and this tree's path. The holder's input is its script
+# and then whatever reaches fd 3, which is nothing: closing fd 3 ends the
+# input, and the holder releases the lock.
+hold_copy()
 {
-    busy=$(tree_probe | ssh -o BatchMode=yes "$HOST" "MSYS_NO_PATHCONV=1 wsl.exe -- sh -s -- $DEST") || {
+    hold=$(mktemp -d "${TMPDIR:-/tmp}/testing.XXXXXX") || return 1
+    mkfifo "$hold/in" "$hold/out" || return 1
+    { hold_script "$1 from $(hostname -s):$REPO"; cat; } < "$hold/in" |
+        ssh -o BatchMode=yes "$HOST" "MSYS_NO_PATHCONV=1 wsl.exe -- bash -s -- $DEST" \
+            > "$hold/out" 2> "$hold/err" &
+    holder=$!
+    exec 3> "$hold/in" 4< "$hold/out"
+    verdict=$(sed '/^held$/q' <&4)
+    if [ "$verdict" = held ]; then
+        exec 4<&-
+        return 0
+    fi
+    release_copy
+    if [ -z "$verdict" ]; then
+        cat "$hold/err" >&2
         echo "testing: the host did not answer; nothing was synced" >&2
         return 1
-    }
-    [ -z "$busy" ] && return 0
+    fi
     echo "testing: the copy at $DEST is in use; nothing was synced:" >&2
-    printf '%s\n' "$busy" | sed 's/^/testing:   /' >&2
+    printf '%s\n' "$verdict" | sed '/^held$/d; s/^/testing:   /' >&2
     return 1
 }
 
+# release_copy: end the holder's input, which releases the sync lock, and
+# wait for its connection to close, so that the lock is free by the time
+# this script ends.
+release_copy()
+{
+    [ -n "$holder" ] || return 0
+    exec 3>&- 4<&-
+    wait "$holder" 2>/dev/null || :
+    holder=
+}
+
+# sync_tree WHAT: hold the copy for WHAT, `sync` or `run`, and send this tree.
 sync_tree()
 {
     need_rsync3
-    tree_free || exit 1
+    hold_copy "$1" || exit 1
     rsync -a --no-times --checksum --delete \
         --filter='P /ports/doom/doom1.wad' \
         --filter='+ /ports/doom/doom1.wad' --filter=':- .gitignore' \
         --rsync-path="$RSYNC_PATH" -e 'ssh -o BatchMode=yes' \
-        "$REPO/" "$HOST:$DEST/"
+        "$REPO/" "$HOST:$DEST/" 3>&-
 }
 
 case "${1:-}" in
     sync)
-        sync_tree
+        sync_tree sync
         ;;
     run)
         shift
@@ -145,8 +231,8 @@ case "${1:-}" in
             echo "testing: run needs a command" >&2
             exit 2
         fi
-        sync_tree
-        ssh -o BatchMode=yes "$HOST" "wsl.exe -- bash -lc 'cd $DEST && export RACH2_QEMU_ACCEL=tcg && $*'"
+        sync_tree run
+        ssh -o BatchMode=yes "$HOST" "wsl.exe -- bash -lc 'cd $DEST && export RACH2_QEMU_ACCEL=tcg && $*'" 3>&-
         ;;
     get)
         shift
