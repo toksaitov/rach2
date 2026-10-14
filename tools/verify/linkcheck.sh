@@ -9,8 +9,11 @@
 # URLs are left alone, since this runs with no network, and so is an anchor of
 # the form `L120`, which names a line and not a heading. A link inside a code
 # span is an example of the form and not a link, so code spans are removed
-# first. `dev-log/` is excluded: those records are history, and a path inside
-# one is relative to the repository root rather than to the document.
+# first. The in-house documents are the Markdown files that git tracks, so
+# the extracted vendor trees and any helper's worktree under `.claude/` are
+# left out. `dev-log/` is excluded too: those records are history, and a
+# path inside one is relative to the repository root rather than to the
+# document.
 #
 # An anchor is a heading's text in lower case, with spaces turned to hyphens
 # and everything that is not a letter, a digit, a hyphen or an underscore
@@ -27,10 +30,7 @@ cd "$REPO" || exit 1
 if [ "$#" -gt 0 ]; then
     files="$*"
 else
-    files=$(find . -name '*.md' \
-        -not -path './vendor/*' -not -path './build/*' -not -path './dev-log/*' \
-        -not -path './ports/doom/src/*' -not -path './.git/*' |
-        sed 's|^\./||' | sort)
+    files=$(git ls-files -- '*.md' ':!:dev-log/*' | sort)
 fi
 
 out=$(mktemp "${TMPDIR:-/tmp}/linkcheck.XXXXXX") || exit 1
