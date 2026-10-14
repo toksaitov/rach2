@@ -124,12 +124,16 @@
  * run of one of those is decided with --ok. QEMU's own exit code only
  * confirms that it stopped through isa-debug-exit.
  *
+ * Each failed step is reported on standard error when it fails, as
+ * `HARNESS: step N STEP failed after S s`, N counting from 1 and S the
+ * seconds the step took, and the run ends with the count of failed steps.
+ *
  * `harness --selftest` checks the escape decoder, the mouse step's parsing,
- * the probe's wait bounds and the bound on a write the machine does not
- * read, without QEMU. `harness --match PATTERN` prints where PATTERN first
- * ends in the text on standard input, or -1, which checks the matcher by
- * hand. `RACH2_TRACE=FILE` records each step's outcome and the final
- * decision.
+ * the probe's wait bounds, the bound on a write the machine does not read
+ * and the report of a failed step, without QEMU. `harness --match PATTERN`
+ * prints where PATTERN first ends in the text on standard input, or -1,
+ * which checks the matcher by hand. `RACH2_TRACE=FILE` records each step's
+ * outcome and the final decision.
  */
 #include <arpa/inet.h>
 #include <errno.h>
@@ -871,6 +875,27 @@ static void stamp(const char *what)
     }
 }
 
+static int step_failures;
+static double step_started;
+static FILE *failf;
+
+/**
+ * Count the current step as failed and report it on standard error, or on
+ * `failf` when the selftest has set one, as `HARNESS: step N STEP failed
+ * after S s`. The line is written when the step fails, so a run with several
+ * failed steps names each of them, and a log cut short by a hung machine
+ * still names the step it was on.
+ */
+static void step_fail(const char *step)
+{
+    FILE *f = failf != NULL ? failf : stderr;
+
+    fprintf(f, "HARNESS: step %d %s failed after %.0f s\n", step_number, step,
+            now() - step_started);
+    fflush(f);
+    step_failures++;
+}
+
 /**
  * Wait until `pattern` appears in the guest's output or `stop` passes.
  *
@@ -978,6 +1003,21 @@ static int seen_pattern(const char *pattern)
         pump(now() + 0.3);
     }
     return 0;
+}
+
+/**
+ * Run an `expect=`, `boot=` or `seen=` step, and stamp it when it matched or
+ * report it when it did not.
+ */
+static void wait_step(const char *step)
+{
+    int got = is_expect_step(step) ? expect_step(step) : seen_pattern(step + 5);
+
+    if (!got)
+        step_fail(step);
+    else
+        stamp("MATCH");
+    trace("step %s %s consumed=%lu", step, got ? "ok" : "fail", (unsigned long)consumed);
 }
 
 /** The value of the hexadecimal digit `c`, or -1. */
@@ -1487,6 +1527,100 @@ static int never_step_selftest(void)
 }
 
 /**
+ * Require a failed step to be named as it fails, and a step that passed not
+ * to be.
+ *
+ * A child writes the shell's prompt once and holds the serial pipe open.
+ * Step 2, an `expect=` of the prompt, matches it; step 3, the same `expect=`,
+ * finds nothing past the match and fails at its limit. The report must be
+ * the one line `HARNESS: step 3 expect=Type 'help' failed after 0 s` and the
+ * count one failed step.
+ */
+static int failed_step_selftest(void)
+{
+    static const char prompt[] = "Type 'help'\n";
+    static const char want[] = "HARNESS: step 3 expect=Type 'help' failed after 0 s\n";
+    static const char step[] = "expect=Type 'help'";
+    int serial[2], bad = 0;
+
+    if (pipe(serial) != 0) {
+        perror("harness: selftest pipe");
+        return 1;
+    }
+    failf = tmpfile();
+    if (failf == NULL) {
+        perror("harness: selftest tmpfile");
+        close(serial[0]);
+        close(serial[1]);
+        return 1;
+    }
+    child_pid = fork();
+    if (child_pid < 0) {
+        perror("harness: selftest fork");
+        close(serial[0]);
+        close(serial[1]);
+        fclose(failf);
+        failf = NULL;
+        return 1;
+    }
+    if (child_pid == 0) {
+        close(serial[0]);
+        if (write(serial[1], prompt, sizeof(prompt) - 1) != (ssize_t)sizeof(prompt) - 1)
+            _exit(1);
+        for (;;)
+            pause();
+    }
+    close(serial[1]);
+    child_out = serial[0];
+    child_reaped = 0;
+    if (fcntl(child_out, F_SETFL, O_NONBLOCK) < 0) {
+        perror("harness: selftest nonblocking pipe");
+        bad++;
+    } else {
+        char got[256];
+        size_t n;
+
+        buf_len = consumed = exchange = 0;
+        steptmo = 1.0;
+        deadline = now() + 10.0;
+        step_failures = 0;
+        for (step_number = 2; step_number <= 3; step_number++) {
+            step_started = now();
+            if (step_number == 3)
+                steptmo = 0.05;
+            wait_step(step);
+        }
+        rewind(failf);
+        n = fread(got, 1, sizeof(got) - 1, failf);
+        got[n] = '\0';
+        if (strcmp(got, want) != 0 || step_failures != 1) {
+            fprintf(stderr,
+                    "harness: selftest: a failed step was reported as \"%s\" with "
+                    "%d failure(s), not as \"%.*s\" with 1\n",
+                    got, step_failures, (int)sizeof(want) - 2, want);
+            bad++;
+        }
+    }
+    kill(child_pid, SIGKILL);
+    while (waitpid(child_pid, NULL, 0) < 0 && errno == EINTR)
+        ;
+    close(child_out);
+    fclose(failf);
+    failf = NULL;
+    child_out = -1;
+    child_pid = -1;
+    child_reaped = 0;
+    step_failures = 0;
+    step_number = 0;
+    free(buf);
+    buf = NULL;
+    buf_len = buf_cap = consumed = exchange = 0;
+    if (!bad)
+        printf("harness: selftest: a failed step is named with its number and text\n");
+    return bad != 0;
+}
+
+/**
  * Check the escape decoder and the mouse step's parsing.
  *
  * The escapes are the cases the suites depend on and the ones they do not: a
@@ -1799,14 +1933,14 @@ int main(int argc, char **argv)
     char *qemu[MAX_ARGS * 4];
     int nq = 0, i;
     int out_pipe[2], in_pipe[2];
-    int step_failures = 0;
     int qemu_rc;
     int self_exited = 0;
     const char *trace_path;
 
     if (argc == 2 && strcmp(argv[1], "--selftest") == 0)
         return unescape_selftest() | probe_wait_selftest() | input_deadline_selftest() |
-               late_output_selftest() | sendfile_selftest() | never_step_selftest();
+               late_output_selftest() | sendfile_selftest() | never_step_selftest() |
+               failed_step_selftest();
     if (argc == 3 && strcmp(argv[1], "--match") == 0)
         return match_mode(argv[2]);
 
@@ -1982,6 +2116,7 @@ int main(int argc, char **argv)
         const char *step = steps[i];
 
         step_number = i + 1;
+        step_started = now();
         if (child_poll() >= 0 && strncmp(step, "until=", 6) == 0)
             continue;
         if (child_poll() >= 0 && (is_expect_step(step) || strncmp(step, "seen=", 5) == 0)) {
@@ -2002,35 +2137,19 @@ int main(int argc, char **argv)
             int left;
 
             for (left = i; left < n_steps; left++) {
-                fprintf(stderr,
-                        "HARNESS: step '%s' never ran: qemu had "
-                        "already exited\n",
-                        steps[left]);
+                fprintf(stderr, "HARNESS: step %d %s never ran: qemu had already exited\n",
+                        left + 1, steps[left]);
                 step_failures++;
             }
             break;
         }
-        if (is_expect_step(step)) {
-            int got = expect_step(step);
-
-            if (!got)
-                step_failures++;
-            else
-                stamp("MATCH");
-            trace("step %s %s consumed=%lu", step, got ? "ok" : "fail", (unsigned long)consumed);
-        } else if (strncmp(step, "seen=", 5) == 0) {
-            int got = seen_pattern(step + 5);
-
-            if (!got)
-                step_failures++;
-            else
-                stamp("MATCH");
-            trace("step %s %s consumed=%lu", step, got ? "ok" : "fail", (unsigned long)consumed);
+        if (is_expect_step(step) || strncmp(step, "seen=", 5) == 0) {
+            wait_step(step);
         } else if (strncmp(step, "send=", 5) == 0) {
             stamp("SEND");
             if (!send_line(step + 5)) {
                 fprintf(stderr, "HARNESS: step '%s' did not reach the guest\n", step);
-                step_failures++;
+                step_fail(step);
             }
         } else if (strncmp(step, "sendraw=", 8) == 0) {
             char raw[256];
@@ -2042,20 +2161,20 @@ int main(int argc, char **argv)
                         "HARNESS: step '%s' did not reach the "
                         "guest\n",
                         step);
-                step_failures++;
+                step_fail(step);
             }
         } else if (strncmp(step, "sendfile=", 9) == 0) {
             begin_input();
             if (!send_file(step + 9)) {
                 fprintf(stderr, "HARNESS: step '%s' did not reach the guest\n", step);
-                step_failures++;
+                step_fail(step);
             }
         } else if (strncmp(step, "key=", 4) == 0) {
             char command[128];
 
             snprintf(command, sizeof(command), "sendkey %s", step + 4);
             if (monitor_send(command) != 0) {
-                step_failures++;
+                step_fail(step);
             }
         } else if (strncmp(step, "mouse=", 6) == 0) {
             char command[128];
@@ -2065,56 +2184,56 @@ int main(int argc, char **argv)
 
             if (parse_mouse(step + 6, &dx, &dy, &buttons) != 0) {
                 fprintf(stderr, "HARNESS: mouse= wants DX,DY,BUTTONS\n");
-                step_failures++;
+                step_fail(step);
                 continue;
             }
             snprintf(command, sizeof(command), "mouse_move %d %d", dx, dy);
             if (monitor_send(command) != 0) {
-                step_failures++;
+                step_fail(step);
+                continue;
             }
             if (buttons != 0) {
                 snprintf(command, sizeof(command), "mouse_button %d", buttons);
-                if (monitor_send(command) != 0) {
-                    step_failures++;
-                }
+                if (monitor_send(command) != 0)
+                    step_fail(step);
             }
         } else if (strncmp(step, "usb=add:", 8) == 0) {
             char command[192];
 
             snprintf(command, sizeof(command), "device_add %s", step + 8);
             if (monitor_send(command) != 0) {
-                step_failures++;
+                step_fail(step);
             }
         } else if (strncmp(step, "usb=del:", 8) == 0) {
             char command[192];
 
             snprintf(command, sizeof(command), "device_del %s", step + 8);
             if (monitor_send(command) != 0) {
-                step_failures++;
+                step_fail(step);
             }
         } else if (strncmp(step, "drive=add:", 10) == 0) {
             char command[192];
 
             snprintf(command, sizeof(command), "drive_add 0 %s", step + 10);
             if (monitor_send(command) != 0) {
-                step_failures++;
+                step_fail(step);
             }
         } else if (strncmp(step, "drive=del:", 10) == 0) {
             char command[192];
 
             snprintf(command, sizeof(command), "drive_del %s", step + 10);
             if (monitor_send(command) != 0) {
-                step_failures++;
+                step_fail(step);
             }
         } else if (strcmp(step, "nmi") == 0) {
             if (monitor_send("nmi") != 0) {
-                step_failures++;
+                step_fail(step);
             }
         } else if (strncmp(step, "barrier=", 8) == 0) {
             while (now() < deadline && child_poll() < 0 && access(step + 8, F_OK) != 0)
                 pump(now() + 0.05);
             if (access(step + 8, F_OK) != 0)
-                step_failures++;
+                step_fail(step);
         } else if (strncmp(step, "until=", 6) == 0) {
             double until = now() + scaled(atof(step + 6));
             size_t from = consumed;
@@ -2134,7 +2253,7 @@ int main(int argc, char **argv)
             }
         } else if (strncmp(step, "tcp=", 4) == 0) {
             if (!step_tcp(atoi(step + 4)))
-                step_failures++;
+                step_fail(step);
         } else if (strncmp(step, "udp=", 4) == 0) {
             const char *colon = strchr(step + 4, ':');
             int port = atoi(step + 4);
@@ -2148,11 +2267,11 @@ int main(int argc, char **argv)
             addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
             if (sk < 0) {
                 printf("HARNESS: no socket for port %d (%s)\n", port, strerror(errno));
-                step_failures++;
+                step_fail(step);
             } else {
                 if (sendto(sk, text, strlen(text), 0, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
                     printf("HARNESS: nothing sent to port %d (%s)\n", port, strerror(errno));
-                    step_failures++;
+                    step_fail(step);
                 }
                 close(sk);
             }
@@ -2175,7 +2294,7 @@ int main(int argc, char **argv)
                         "this harness holds; a shortened name runs a "
                         "different program\n",
                         step);
-                step_failures++;
+                step_fail(step);
                 continue;
             }
             while (tries < 4 && child_poll() < 0) {
@@ -2190,13 +2309,13 @@ int main(int argc, char **argv)
                 tries++;
             }
             if (!seen)
-                step_failures++;
+                step_fail(step);
             trace("step %s %s consumed=%lu", step, seen ? "ok" : "fail", (unsigned long)consumed);
         } else if (strncmp(step, "execq=", 6) == 0) {
             step_execq(step + 6, ok);
         } else {
             fprintf(stderr, "unknown step: %s\n", step);
-            step_failures++;
+            step_fail(step);
         }
     }
 

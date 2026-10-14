@@ -10,7 +10,9 @@
 # which the selftest of a `sendfile=` step whose file cannot be read must
 # fail. The fourth is `never_appeared` that never reports a `--never` text,
 # which the selftest of a step that waits for output after such a text must
-# fail. The fixed and restored builds pass.
+# fail. The fifth is `wait_step` counting a failed step without reporting
+# it, which the selftest of a failed step's report must fail. The fixed and
+# restored builds pass.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -106,6 +108,27 @@ path.write_text(source.replace(old, "    return 0;\n"))
 PY
 }
 
+# apply_report ARGS...: put one fault into its source; with
+# RACH2_FAULT_TEXTS set, only check its text and write nothing.
+apply_report()
+{
+    python3 - "$1" <<'PY'
+from pathlib import Path
+import sys
+import os
+import pathlib
+if os.environ.get('RACH2_FAULT_TEXTS'):
+    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
+
+path = Path(sys.argv[1])
+source = path.read_text()
+old = "    if (!got)\n        step_fail(step);\n    else\n        stamp(\"MATCH\");\n"
+if source.count(old) != 1:
+    raise SystemExit("harness-input-mutation: source pattern is not unique: report")
+path.write_text(source.replace(old, old.replace("step_fail(step);", "step_failures++;")))
+PY
+}
+
 if [ "${1:-}" = --texts ]; then
     RACH2_FAULT_TEXTS=1
     export RACH2_FAULT_TEXTS
@@ -113,6 +136,7 @@ if [ "${1:-}" = --texts ]; then
     apply_drain tests/system/runner/harness.c >/dev/null
     apply_unread tests/system/runner/harness.c >/dev/null
     apply_never tests/system/runner/harness.c >/dev/null
+    apply_report tests/system/runner/harness.c >/dev/null
     echo 'harness-input-mutation: texts: every fault is once in its source'
     exit 0
 fi
@@ -185,4 +209,9 @@ apply_never "$work/harness.c"
 run_phase never-mutated 1 'after a --never text appeared'
 cleanup
 run_phase never-restored 0 'a step that waits for output ends when a --never text appears'
+cmp "$work/harness.saved" "$work/harness.c"
+apply_report "$work/harness.c"
+run_phase report-mutated 1 'a failed step was reported as'
+cleanup
+run_phase report-restored 0 'a failed step is named with its number and text'
 cmp "$work/harness.saved" "$work/harness.c"
