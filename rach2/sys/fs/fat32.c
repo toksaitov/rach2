@@ -2473,9 +2473,10 @@ static int k_memcmp_bytes(const uint8_t *a, const uint8_t *b, uint32_t n)
  * the size's last cluster and then freed, orphan long-name entries are
  * freed, and a lagging mirror is rewritten from the active FAT. A lost
  * cluster is reported and left. Anything else (a cross-link, a loop, a
- * chain outside the volume or shorter than its size, a wrong `.` or `..`,
- * a name twice in one directory) is a state this driver never leaves, and
- * the volume is mounted read-only with a record naming it.
+ * chain outside the volume or shorter than its size, an empty file with a
+ * chain, a wrong `.` or `..`, a name twice in one directory) is a state
+ * this driver never leaves, and the volume is mounted read-only with a
+ * record naming it.
  */
 
 #define WALK_DEPTH       32
@@ -2495,10 +2496,11 @@ struct walk_state {
     uint32_t tail_first[WALK_TAILS];
 };
 
-/* Walk the chain at `first` for the entry `name11`, marking clusters;
- * `expect` clusters for a file (-1 for a directory). Returns the count, or
- * -1 for a bad chain. A surplus tail is walked and marked like the rest of
- * the chain and recorded for the repair that follows the walk. */
+/* Walk the chain at `first`, marking clusters; `expect` clusters for a
+ * file (-1 for a directory). Returns the count, or -1 for a bad chain or
+ * for a chain under an empty file, whose entry would still name a freed
+ * tail. A surplus tail is walked and marked like the rest of the chain
+ * and recorded for the repair that follows the walk. */
 static long walk_chain(struct walk_state *w, uint32_t first, long expect)
 {
     struct fat_mount *fm = w->fm;
@@ -2506,6 +2508,10 @@ static long walk_chain(struct walk_state *w, uint32_t first, long expect)
     uint32_t prev = 0;
     long count = 0;
 
+    if (expect == 0) {
+        w->why = "an empty file with a chain";
+        return -1;
+    }
     while (c != 0) {
         uint32_t next;
         int rc;
@@ -2680,7 +2686,6 @@ static int walk_dir(struct walk_state *w, uint32_t first, uint32_t parent, uint3
         }
         if (fc != 0) {
             uint32_t cb = cluster_bytes(fm);
-            /* A size of zero with a cluster expects none: all surplus. */
             long expect = (long)(le32(e.raw + 28) == 0 ? 0 : (le32(e.raw + 28) - 1) / cb + 1);
 
             if (walk_chain(w, fc, expect) < 0) {

@@ -69,7 +69,7 @@ FSInfo gets the driver's free count and hint at `sync` while the flag is set, at
 * A mirror FAT that differs from the active one is rewritten from it, last, after FSInfo has been given the free count the check made.
 * Lost clusters, used and reached by nothing, are counted in the record and left, since one may be the only copy of a file a rename was moving.
 
-Anything else is a state this driver does not leave: a cluster reached twice; a chain that leaves the volume, ends in a free or bad entry or is shorter than its size; a size with no chain; a directory with no cluster, or a wrong `.` or `..`; a short name twice in one directory; or a tree past the bounds `WALK_DEPTH`, `WALK_TAILS` and `WALK_DIR_ENTRIES`, which mount(2) gives. The volume then mounts read-only, with the fault in the record. A volume that passes stays marked dirty until its clean unmount.
+Anything else is a state this driver does not leave: a cluster reached twice; a chain that leaves the volume, ends in a free or bad entry or is shorter than its size; a size with no chain, or a size of zero with one; a directory with no cluster, or a wrong `.` or `..`; a short name twice in one directory; or a tree past the bounds `WALK_DEPTH`, `WALK_TAILS` and `WALK_DIR_ENTRIES`, which mount(2) gives. The volume then mounts read-only, with the fault in the record. A volume that passes stays marked dirty until its clean unmount.
 
 ### What the FAT drivers share
 

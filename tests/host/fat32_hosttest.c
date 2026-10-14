@@ -1673,6 +1673,14 @@ static void dirty_rows(void)
     unmount_image();
     check((image[65] & 1) == 1, "with its dirty flag left set");
 
+    load("--dirty-empty-chain");
+    __builtin_memcpy(image_before, image, sizeof(image));
+    check(mount_rw("") == 0 && (mnt.flags & VFS_MS_RDONLY),
+          "a file of size zero with a cluster mounts read-only");
+    check(__builtin_memcmp(image_before, image, sizeof(image)) == 0,
+          "and its chain is not freed under the entry");
+    unmount_image();
+
     /* FSInfo's count is not trusted: the driver counts the FAT. */
     load("--fsinfo-wrong");
     {

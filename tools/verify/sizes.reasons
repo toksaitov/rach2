@@ -418,7 +418,7 @@ tests/host/mkexfatfixture.c:read_path complexity 33 a fixture builder, the volum
 tests/host/mkexfatfixture.c:set_build params 10 a fixture builder, the volume written in on-disk order
 
 tests/host/mkfatfixture.c:build_fat complexity 78 a fixture builder, the volume written in on-disk order
-tests/host/mkfatfixture.c:build_fat lines 443 a fixture builder, the volume written in on-disk order
+tests/host/mkfatfixture.c:build_fat lines 444 a fixture builder, the volume written in on-disk order
 tests/host/mkfatfixture.c:check_image complexity 29 a fixture builder, the volume written in on-disk order
 tests/host/mkfatfixture.c:chk_bpb complexity 31 a fixture builder, the volume written in on-disk order
 tests/host/mkfatfixture.c:chk_dir complexity 56 a fixture builder, the volume written in on-disk order

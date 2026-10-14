@@ -25,7 +25,7 @@
  *     --no-menu --vfs --active-second --unmasked --dir-loop
  *     --lost-chain --overlong-chain --bad-dotdot --dup-name --fsinfo
  *     --fsinfo-wrong --junk --dirty --dirty-surplus --dirty-orphan
- *     --dirty-mirror --dirty-cross --dirty-surplus-cross
+ *     --dirty-mirror --dirty-cross --dirty-surplus-cross --dirty-empty-chain
  *
  * `mkfatfixture --check <image> [offset-sectors] [--list]` walks a volume
  * instead of building one; see the check section below. The last six
@@ -35,9 +35,9 @@
  * and hint. `--junk` is the FSInfo volume with every free cluster full of
  * bytes that would read as entries, for the writer's tests. The `--dirty`
  * family carries the dirty flag over a clean volume, a chain two clusters
- * past its size, orphan long-name entries, a mirror one entry behind, and
- * a cross-link, which is what the mount-time check must accept, repair, or
- * refuse.
+ * past its size, orphan long-name entries, a mirror one entry behind, a
+ * cross-link, and a file of size zero that keeps its cluster, which is
+ * what the mount-time check must accept, repair, or refuse.
  *
  * `--vfs` is the volume the vfat driver's host test reads: the root's
  * chain is fragmented and crosses a 4 KiB boundary, and it holds a deleted
@@ -954,8 +954,7 @@ static int build_fat(const char *option)
         w32(fat + (kernel_first + 3) * 4, 0); /* the first FAT lies */
     memcpy(img + (size_t)RESERVED * SECTOR, fat, (size_t)FATSZ * SECTOR);
     memcpy(img + (size_t)(RESERVED + FATSZ) * SECTOR, fat2, (size_t)FATSZ * SECTOR);
-    if (is("--dirty") || is("--dirty-surplus") || is("--dirty-orphan") || is("--dirty-mirror") ||
-        is("--dirty-cross") || is("--dirty-surplus-cross")) {
+    if (strncmp(opt, "--dirty", 7) == 0) {
         /* The dirty flag in both places, over a volume the check must
            call clean, repair, or refuse. */
         w32(fat + 4, le32_of(fat + 4) & ~0x08000000u);
@@ -1192,6 +1191,8 @@ static int build_fat(const char *option)
     dirent_at(dir, ".          ", 0x10, GRUBDIR, 0);
     dirent_at(dir + 32, "..         ", 0x10, is("--bad-dotdot") ? EXTRADIR : BOOTDIR, 0);
     dirent_at(dir + 64, "GRUB    CFG", 0x20, cfg_first, is("--cfg-short") ? 2000 : 40);
+    if (is("--dirty-empty-chain"))
+        w32(dir + 64 + 28, 0); /* the size, with the first cluster kept */
     if (!is("--no-grubenv"))
         dirent_at(dir + 96, "GRUBENV    ", 0x20, grubenv_first, 1024);
 
