@@ -1,0 +1,75 @@
+# Milestone 60: the documentation, rewritten from the code
+
+## Why
+
+The documentation grew one milestone at a time. Each change added a paragraph where it was needed and none removed one, so `Readme.md` is 2700 words of image contents, hardware notes, milestone history and reference, with no order a reader can follow, and the component Readmes and the code comments drifted the same way: stale facts, history where a contract belongs, and no common outline. This milestone rewrites every in-house Markdown document and code comment from the code as it is now, and adds the few rules that keep it from drifting again. It is also the first work done through the process of `59-flow`.
+
+## What other projects do
+
+* Front pages are short and point elsewhere. Go, Rust, LLVM and curl say what the project is in their first lines and take 200 to 300 words; FreeBSD adds a table of its top-level directories; xv6 and egos-2000, both written to be read, say so and send the reader to the code or the book. The long front pages, ToaruOS and SerenityOS, are long because of history and author lists.
+* Each document has one purpose. Diataxis names four, tutorial, how-to, reference and explanation, and finds that mixing them is the common fault; the operating systems keep reference in manual pages, explanation in papers or a book, and history in change logs.
+* A component's document has a fixed outline. Kubernetes enforces one per page type, and mdoc(7) fixes a manual page's section order, which `mandoc -T lint` checks.
+* A comment states the contract, not the implementation, so that only a change to the contract can make it wrong, and that change is in the same diff (Linux coding style and kernel-doc, the GNU standards, Google's C++ guide, style(9), Go's doc comments). Fluri and others found that 90 to 97 percent of comment changes land in the same revision as the code they describe.
+* What keeps documents true is the same commit, a check against a list the code already has (curl checks that every option has a page, as `mancheck` does here), and deleting what cannot be made true. Large lint rule sets and per-document owners are sized for teams of technical writers; the Linux kernel's build prints so many documentation warnings that they are ignored.
+
+## The front page
+
+`Readme.md` is the project's front page, read by a colleague who has never seen it. It is about 400 to 600 words, in this order:
+
+1. What Rach2 is and for whom, in one paragraph: an operating system written to be read, on both architectures, and what it runs, in plain words with numbers from `facts.md`.
+2. What a person can do on it, as a short list, each item linking to the component or manual page that has the detail.
+3. Status and the major limits, in a few sentences.
+4. Quick start: what the host needs (with a link to `tools/Readme.md`), the commands from a clone to a booted system in QEMU, and how to log in. Testing is a link to `tests/Readme.md`, not a step of the first boot.
+5. The source and its documentation, in one table of the top-level directories with one line and the Readme of each, followed by a sentence each on `man/`, `dev-log/` and `AGENTS.md`.
+6. License and third-party sources.
+
+Image contents, hardware procedures, feature inventories, the reading route through the kernel (which belongs in `rach2/Readme.md`) and milestone history do not belong on it; each goes to the component, manual page or record that owns it.
+
+## The component documents
+
+Every other in-house Readme opens with a summary paragraph under its title, with no heading: what the component does and why it exists. Its `##` sections then come from one list, in this order, and a document has only the sections it needs:
+
+* `## Use` (programs and tools) or `## Running` (tests): what a person types and what happens.
+* `## Results` (tests): how to read what a run prints.
+* `## Interfaces` (kernel subsystems and libraries): what callers and other components see, linking to manual pages rather than repeating them.
+* `## Sources and license` and `## Local changes` (ports): where the pinned source comes from, its license, and what Rach2 changes in it.
+* `## Design`: the data structures and the main paths in reading order, with file names, and the reason for each choice that is not obvious.
+* `## Building`: build steps of the component's own.
+* `## Updating` (ports): how a new upstream version is brought in.
+* `## Adding tests` (tests).
+* `## Limits`: what it does not do, stated as present facts.
+* `## Tests`: the suites and host tests that cover it, and how to run them.
+
+So a kernel subsystem reads Interfaces, Design, Limits, Tests; a program Use, Design, Building, Limits, Tests; a port Sources and license, Local changes, Building, Updating, Tests; and `tests/Readme.md` Running, Results, Design, Adding tests. `###` subsections are free. Policy files (`AGENTS.md`, `CLAUDE.md`, the skills), generated documents such as `tests/inventory.md`, and lists such as `tools/verify/exceptions.md` keep their own form.
+
+A document states what the code does now, and a fact has one home: a count, a table or a contract is written where it is owned and linked from elsewhere. History, milestone numbers and the reasons a design was abandoned belong in `dev-log/` and the commit messages. A document that cannot be made true is deleted, and two that cover one component become one.
+
+## Comments
+
+The rules of `AGENTS.md`'s Comments section stand, and the rewrite applies them to every in-house source file:
+
+* A file begins with a comment of a line or two on what it is for.
+* A function has a `/**` block before it that states its contract: what it does, an argument whose meaning is not obvious, the return values and errors, ownership and lifetime, and the locking and context it requires. A contract has one home: the declaration in a header for a function other files call, and the definition otherwise, where the reasoning of the implementation also goes.
+* A structure member has a comment when its units, invariants or special values are not obvious.
+* Inside a body, a comment is allowed only for a hardware or ABI fact or a deliberate hack, as one line.
+* A comment does not narrate the body, give the history of the code, or argue with an earlier version. A comment that is already correct and clear stays as it is.
+
+A comment-only change changes no code, and the writer shows it. The kernel is compiled with `-g` and the boot kernel is stripped of its debug sections; the images stage the sources, so they change with any edit, and some host tests use `__LINE__`. So the proof is on the objects, with their debug sections removed: on the testing host, build both architectures at `origin/master`, record a hash of every in-house object under `build/` after `objcopy --strip-debug`, apply the change, rebuild, and compare. The objects of the files changed must be rebuilt and every hash must match, except the objects of host tests that use `__LINE__`, which the writer lists. The writer also reads the diff for anything a tool reads from a comment: a `shellcheck` directive, a `/* fallthrough */`, a line continuation.
+
+## Keeping it true
+
+* A commit that changes a contract rewrites the Readme, manual page or `/**` comment that states it, as `AGENTS.md` already says. The phase review checks that every touched component's documents and comments are still true.
+* `tools/verify/textcheck.sh` checks two things more in the component documents: their `##` headings come from the list above and in its order, and they cite no milestone of `dev-log/` by number. Both fail `tests/run style`, and both are turned on only when every component document conforms, so that no writer's check fails on another writer's file.
+* The existing checks stay: links (`linkcheck.sh`), the manual's coverage (`mancheck`), the register (`prosecheck`) and ASCII.
+
+## The work
+
+The phase is one issue with the label `phase`; each task below is a sub-issue, sized for one worker session with its helpers. A task covers one component's documents and its comments together, so that one writer gives a component one voice. The issues name their files, the outline above and `facts.md`, and no two touch the same file.
+
+1. The rules: `AGENTS.md`'s Documentation section and this plan, written by the manager first.
+2. The front page, `Readme.md`.
+3. The components, in units of about 40 to 80 files, each its Readme and its comments, as `facts.md` divides them.
+4. The two checks in `textcheck.sh`, once every component document conforms.
+5. The edit: the manager reads the whole set as a new reader would, for contradictions, repetition, links and reading order, and fixes what it finds.
+
+Each task is checked as the Work section of `AGENTS.md` says: the build on both architectures and `tests/run style`, and for comments the object comparison above.
