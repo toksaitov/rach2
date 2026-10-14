@@ -896,10 +896,18 @@ static void step_fail(const char *step)
     step_failures++;
 }
 
+/** Start the step at `index` of the run's steps: its number and its clock. */
+static void begin_step(int index)
+{
+    step_number = index + 1;
+    step_started = now();
+}
+
 /**
  * Wait until `pattern` appears in the guest's output or `stop` passes.
  *
- * A `--never` text in the output ends the wait with no match.
+ * A `--never` text in the output ends the wait with no match, and is looked
+ * for before the pattern, so that one read that holds both fails the step.
  * A child that has exited can still have output in the pipe, since reaping it
  * reads nothing; that output is drained before the last search.
  */
@@ -911,18 +919,21 @@ static int expect_pattern(const char *pattern, double stop)
     if (stop > deadline)
         stop = deadline;
     while (now() < stop && child_poll() < 0) {
-        long end = regex_search(&re, buf, buf_len, consumed);
+        long end;
 
+        if (never_appeared())
+            return 0;
+        end = regex_search(&re, buf, buf_len, consumed);
         if (end >= 0) {
             consumed = (size_t)end;
             return 1;
         }
-        if (never_appeared())
-            return 0;
         pump(now() + 0.3);
     }
     if (child_poll() >= 0)
         drain_ready();
+    if (never_appeared())
+        return 0;
     {
         long end = regex_search(&re, buf, buf_len, consumed);
 
@@ -979,7 +990,8 @@ static int expect_step(const char *step)
  * two `seen=` steps are satisfied in either order, where two `expect=`
  * steps are satisfied in theirs. The cursor moves past the match only
  * when the match is beyond it, so a later `expect=` still searches on. A
- * `--never` text in the output ends the wait with no match.
+ * `--never` text in the output ends the wait with no match, and is looked
+ * for before the pattern, as `expect_pattern` looks for it.
  */
 static int seen_pattern(const char *pattern)
 {
@@ -991,14 +1003,17 @@ static int seen_pattern(const char *pattern)
     if (stop > deadline)
         stop = deadline;
     for (;;) {
-        long end = regex_search(&re, buf, buf_len, exchange);
+        long end;
 
+        if (never_appeared())
+            break;
+        end = regex_search(&re, buf, buf_len, exchange);
         if (end >= 0) {
             if ((size_t)end > consumed)
                 consumed = (size_t)end;
             return 1;
         }
-        if (now() >= stop || child_poll() >= 0 || never_appeared())
+        if (now() >= stop || child_poll() >= 0)
             break;
         pump(now() + 0.3);
     }
@@ -1527,19 +1542,122 @@ static int never_step_selftest(void)
 }
 
 /**
+ * Run `step` against a child that writes `first` and, after a third of a
+ * second, `second` when it is not NULL, with `--never` text `never`, and
+ * return what the step returned.
+ */
+static int never_case(const char *step, const char *never, const char *first, const char *second)
+{
+    int serial[2], got;
+
+    if (pipe(serial) != 0) {
+        perror("harness: selftest pipe");
+        return -1;
+    }
+    child_pid = fork();
+    if (child_pid < 0) {
+        perror("harness: selftest fork");
+        close(serial[0]);
+        close(serial[1]);
+        return -1;
+    }
+    if (child_pid == 0) {
+        close(serial[0]);
+        if (write(serial[1], first, strlen(first)) != (ssize_t)strlen(first))
+            _exit(1);
+        if (second != NULL) {
+            struct timespec third = {0, 330000000L};
+
+            nanosleep(&third, NULL);
+            if (write(serial[1], second, strlen(second)) != (ssize_t)strlen(second))
+                _exit(1);
+        }
+        for (;;)
+            pause();
+    }
+    close(serial[1]);
+    child_out = serial[0];
+    child_reaped = 0;
+    got = -1;
+    if (fcntl(child_out, F_SETFL, O_NONBLOCK) < 0) {
+        perror("harness: selftest nonblocking pipe");
+    } else {
+        nevers[0] = never;
+        n_never = 1;
+        never_searched = 0;
+        never_found = 0;
+        consumed = exchange = 0;
+        steptmo = 3.0;
+        deadline = now() + 3.0;
+        if (strncmp(step, "seen=", 5) == 0)
+            got = seen_pattern(step + 5);
+        else
+            got = expect_step(step);
+    }
+    kill(child_pid, SIGKILL);
+    while (waitpid(child_pid, NULL, 0) < 0 && errno == EINTR)
+        ;
+    close(child_out);
+    child_out = -1;
+    child_pid = -1;
+    child_reaped = 0;
+    n_never = 0;
+    never_searched = 0;
+    never_found = 0;
+    free(buf);
+    buf = NULL;
+    buf_len = buf_cap = consumed = exchange = 0;
+    return got;
+}
+
+/**
+ * Require a `--never` text that comes before a step's pattern to fail the
+ * step: in the same read as the pattern, and as a text split across two
+ * reads whose second also holds the pattern. A step that looked for its
+ * pattern first would match it and pass, and only the run's end would see
+ * the text, with no step named.
+ */
+static int never_first_selftest(void)
+{
+    static const char *const steps[] = {"expect=check passed", "boot=check passed",
+                                        "seen=check passed"};
+    static const char never[] = "machine-grow: failed:";
+    size_t i;
+    int bad = 0;
+
+    for (i = 0; i < sizeof(steps) / sizeof(steps[0]); i++) {
+        int one = never_case(steps[i], never, "machine-grow: failed: 1\ncheck passed\n", NULL);
+        int split = never_case(steps[i], never, "machine-gr", "ow: failed: 1\ncheck passed\n");
+
+        if (one != 0 || split != 0) {
+            fprintf(stderr,
+                    "harness: selftest: %s returned %d with a --never text before its "
+                    "pattern in one read, and %d with the text split across two\n",
+                    steps[i], one, split);
+            bad++;
+        }
+    }
+    if (!bad)
+        printf("harness: selftest: a --never text before a step's pattern fails the step\n");
+    return bad != 0;
+}
+
+/**
  * Require a failed step to be named as it fails, and a step that passed not
  * to be.
  *
  * A child writes the shell's prompt once and holds the serial pipe open.
  * Step 2, an `expect=` of the prompt, matches it; step 3, the same `expect=`,
- * finds nothing past the match and fails at its limit. The report must be
- * the one line `HARNESS: step 3 expect=Type 'help' failed after 0 s` and the
- * count one failed step.
+ * finds nothing past the match and fails at its limit of 1.2 seconds. Each
+ * step is begun as the run loop begins it, by `begin_step`. The report must
+ * be the one line `HARNESS: step 3 expect=Type 'help' failed after S s`, with
+ * S at least the limit the step waited and less than ten, and the count one
+ * failed step.
  */
 static int failed_step_selftest(void)
 {
     static const char prompt[] = "Type 'help'\n";
-    static const char want[] = "HARNESS: step 3 expect=Type 'help' failed after 0 s\n";
+    static const char want[] = "HARNESS: step 3 expect=Type 'help' failed after ";
     static const char step[] = "expect=Type 'help'";
     int serial[2], bad = 0;
 
@@ -1579,25 +1697,31 @@ static int failed_step_selftest(void)
     } else {
         char got[256];
         size_t n;
+        int index;
+        double seconds = -1;
 
         buf_len = consumed = exchange = 0;
         steptmo = 1.0;
-        deadline = now() + 10.0;
+        deadline = now() + 20.0;
         step_failures = 0;
-        for (step_number = 2; step_number <= 3; step_number++) {
-            step_started = now();
-            if (step_number == 3)
-                steptmo = 0.05;
+        step_number = 0;
+        step_started = 0;
+        for (index = 1; index <= 2; index++) {
+            begin_step(index);
+            if (index == 2)
+                steptmo = 1.2;
             wait_step(step);
         }
         rewind(failf);
         n = fread(got, 1, sizeof(got) - 1, failf);
         got[n] = '\0';
-        if (strcmp(got, want) != 0 || step_failures != 1) {
+        if (strncmp(got, want, sizeof(want) - 1) == 0)
+            seconds = atof(got + sizeof(want) - 1);
+        if (seconds < 1 || seconds >= 10 || step_failures != 1) {
             fprintf(stderr,
                     "harness: selftest: a failed step was reported as \"%s\" with "
-                    "%d failure(s), not as \"%.*s\" with 1\n",
-                    got, step_failures, (int)sizeof(want) - 2, want);
+                    "%d failure(s), not as \"%sS s\" for 1 <= S < 10 with 1\n",
+                    got, step_failures, want);
             bad++;
         }
     }
@@ -1940,7 +2064,7 @@ int main(int argc, char **argv)
     if (argc == 2 && strcmp(argv[1], "--selftest") == 0)
         return unescape_selftest() | probe_wait_selftest() | input_deadline_selftest() |
                late_output_selftest() | sendfile_selftest() | never_step_selftest() |
-               failed_step_selftest();
+               never_first_selftest() | failed_step_selftest();
     if (argc == 3 && strcmp(argv[1], "--match") == 0)
         return match_mode(argv[2]);
 
@@ -2115,8 +2239,7 @@ int main(int argc, char **argv)
     for (i = 0; i < n_steps; i++) {
         const char *step = steps[i];
 
-        step_number = i + 1;
-        step_started = now();
+        begin_step(i);
         if (child_poll() >= 0 && strncmp(step, "until=", 6) == 0)
             continue;
         if (child_poll() >= 0 && (is_expect_step(step) || strncmp(step, "seen=", 5) == 0)) {
@@ -2125,6 +2248,10 @@ int main(int argc, char **argv)
             int seen = step[0] == 's';
 
             pump(now() + 0.05);
+            if (never_appeared()) {
+                step_fail(step);
+                continue;
+            }
             regex_compile(&re, step + (step[0] == 'e' ? 7 : 5));
             end = regex_search(&re, buf, buf_len, seen ? exchange : consumed);
             if (end >= 0) {
