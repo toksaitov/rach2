@@ -16,6 +16,12 @@
 # takes over: a script killed with KILL restored nothing and may have left
 # work running in groups of its own, and so may one whose holder was killed,
 # so only this process's own exit removes the directory.
+#
+# A directory left with no owner record, or one without a pid, is taken
+# over once it is ten seconds old, as tests/run takes it over: a run cut off
+# while it wrote its record, as a restart of the host cuts one off, leaves
+# such a directory, and with no pid and no group no process of that run can
+# be found. A younger one may be a run taking the tree this moment.
 set -u
 name=$1
 shift
@@ -36,15 +42,28 @@ if [ "${RACH2_TREE_TAKING:-}" != "$$" ]; then
 fi
 helper=$RACH2_RUN_WORK
 unset RACH2_TREE_TAKING RACH2_RUN_WORK
-if ! mkdir "$lock" 2>/dev/null; then
-    if grep -q '^held ' "$lock/owner" 2>/dev/null; then
-        echo "$name: a fault script's hold on this tree was left: $lock; its fault may" \
-            "be in the sources and its work may still run; restore them, stop its work" \
-            "and remove $lock" >&2
+taken=
+if mkdir "$lock" 2>/dev/null; then
+    taken=1
+elif grep -q '^held ' "$lock/owner" 2>/dev/null; then
+    echo "$name: a fault script's hold on this tree was left: $lock; its fault may" \
+        "be in the sources and its work may still run; restore them, stop its work" \
+        "and remove $lock" >&2
+elif grep -q '^pid ' "$lock/owner" 2>/dev/null; then
+    echo "$name: no run holds this tree, but a run that is gone left $lock;" \
+        "tests/run takes it over when nothing of that run is left" >&2
+elif "$helper/runutil" young "$lock" 10; then
+    echo "$name: another run is taking this tree" >&2
+else
+    echo "$name: taking over the lock a run left with no owner record: $lock"
+    if mv "$lock" "$lock.old.$$" 2>/dev/null && mkdir "$lock" 2>/dev/null; then
+        taken=1
     else
-        echo "$name: no run holds this tree, but a run that is gone left $lock;" \
-            "tests/run takes it over when nothing of that run is left" >&2
+        echo "$name: another run took the tree first" >&2
     fi
+    rm -rf "$lock.old.$$"
+fi
+if [ -z "$taken" ]; then
     rm -rf "$helper"
     exit 1
 fi

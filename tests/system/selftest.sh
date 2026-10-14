@@ -1077,6 +1077,7 @@ runlock_hold "$repo" holder "$repo/holder.sh" "$@"
 case $1 in
     inner) sh tests/run passing; echo "inner status $?" ;;
     wait) echo "$$" > holder-pid; touch holder-in; while [ ! -f holder-go ]; do sleep 0.1; done ;;
+    plain) echo "holder ran" ;;
 esac
 HOLDER
 rm -rf "$WORK/build/.run.lock" "$WORK/holder-in" "$WORK/holder-go"
@@ -1125,6 +1126,21 @@ check "and the refusal says a fault script's hold was left" 1 \
     "$(printf '%s\n' "$out" | grep -c "a fault script's hold on this tree was left: holder ")"
 rm -rf "$WORK/build/.run.lock"
 rm -f "$WORK/holder-in" "$WORK/holder-go" "$WORK/holder-pid"
+# A lock left with an empty owner record, as a run cut off by a restart of
+# the host leaves it, is taken over by a holder once it is ten seconds old;
+# a younger one may be a run taking the tree, and is refused.
+mkdir -p "$WORK/build/.run.lock"
+: > "$WORK/build/.run.lock/owner"
+out=$(cd "$WORK" && sh holder.sh plain 2>&1); rc=$?
+check "a holder refuses a young lock with an empty owner record" 1 "$rc"
+check "and says another run is taking the tree" 1 \
+    "$(printf '%s\n' "$out" | grep -c '^holder: another run is taking this tree$')"
+touch -t 202001010000 "$WORK/build/.run.lock"
+out=$(cd "$WORK" && sh holder.sh plain 2>&1); rc=$?
+check "a holder takes over an old lock with an empty owner record" 0 "$rc"
+check "and runs its script" 1 "$(printf '%s\n' "$out" | grep -c '^holder ran$')"
+check "and the lock goes with the holder" 0 "$([ -e "$WORK/build/.run.lock" ] && echo 1 || echo 0)"
+rm -rf "$WORK/build/.run.lock"
 
 echo "selftest: $((total - fails)) of $total checks passed"
 [ "$fails" -eq 0 ] || exit 1
