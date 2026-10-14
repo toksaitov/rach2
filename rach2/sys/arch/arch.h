@@ -136,8 +136,10 @@ void arch_tls_set(uintptr_t base);
 uintptr_t arch_tls_get(void);
 
 /** Read clone's CLONE_SETTLS argument `arg` into the thread pointer it
- * gives the new thread: 0, or -EFAULT or -EINVAL. On i686 the argument
- * points at a struct user_desc; elsewhere it is the pointer itself. */
+ * gives the new thread: 0, or a negative errno. On i686 the argument points
+ * at a struct user_desc, which -EFAULT means cannot be read and -EINVAL that
+ * set_thread_area would refuse; on x86-64 it is the pointer itself, and
+ * -EPERM means it is not below USER_ADDR_MAX. */
 long arch_clone_tls(unsigned long arg, uintptr_t *base_out);
 
 struct process;

@@ -313,12 +313,19 @@ flag other than
 .Dv CLONE_NEWUSER
 was given by a caller not privileged in its user namespace, or in the new
 one the same call makes.
+.It Bq Er EPERM
+On x86-64,
+.Dv CLONE_SETTLS
+was given a base that is not below 0x00007ffffffff000, as
+.Xr arch_prctl 2
+refuses one.
 .It Bq Er ESRCH
 There is no current process.
 .It Bq Er EUSERS
 A user or PID namespace would be nested more than 7 deep.
 .El
 .Sh SEE ALSO
+.Xr arch_prctl 2 ,
 .Xr execve 2 ,
 .Xr exit 2 ,
 .Xr getpid 2 ,
