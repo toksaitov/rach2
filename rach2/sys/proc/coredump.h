@@ -8,7 +8,7 @@
  * writes it: an ELF file of type ET_CORE, of the class the architecture's
  * programs have, whose PT_NOTE segment has the threads' registers and the
  * process's state, and whose PT_LOAD segments have the memory of its
- * regions, which GDB reads. See ptrace.Readme.md.
+ * regions, which GDB reads. See Readme.md.
  */
 
 /** Where the file goes: write `len` bytes from `buf` at the end of what was
