@@ -1,127 +1,72 @@
-# Dropbear 2022.83 integration
+# Dropbear
 
-Rach2 uses a static Dropbear multi-call binary for the SSH server, client, and key generator. It is linked against the project [musl integration](../musl/Readme.md) and staged as `/bin/dropbearmulti`.
+Dropbear is the SSH server, client and key generator of the os-real, metal and recovery systems. Rach2 builds it as one static multi-call program, `dropbearmulti`, linked against the ported [musl](../musl/Readme.md), because it is small, has no dependency beyond its bundled cryptography libraries, and builds with its own autoconf script. [dropbear(8)](../../man/man8/dropbear.8) is its manual page on this system: the commands, the options and how the images start the server.
 
-The tracked integration has six files: `.gitignore`, this Readme, `build_dropbear.sh`, `dropbear-2022.83.tar.bz2`, `localoptions.h`, and the patch manifest `patches/series`, which is empty because there are no project source patches. It compiles through the musl integration's `muslgcc` wrapper. The extracted source, staged binary, and stamp are ignored and reproducible.
+## Use
 
-## Build
-
-From the repository root:
-
-```
-make dropbear
-make dropbear ARCH=x86_64
-```
-
-The build is for the architecture the root `make` names in `ARCH`: i686 by default, x86-64 with `make ARCH=x86_64`. The script reads it from `RACH2_ARCH` through `mk/arch.sh`, which gives the cross prefix, `i686-elf-` or `x86_64-elf-`, and the directories. An i686 build extracts here and stages under `build/vendor/dropbear/`; an x86-64 build extracts under `build/x86_64/vendor-work/dropbear/` and stages under `build/x86_64/vendor/dropbear/`. Each has its own stamp, so building one architecture leaves the other's files alone.
-
-The root `make` also builds Dropbear through the same stamp. The stamp depends on the build script, archive, local options, wrapper, `mk/arch.sh`, patch manifest and patches, and musl stamp. `make check-dropbearmulti` requires the staged binary to be nonempty.
-
-The build script:
-
-1. Requires `dropbear-2022.83.tar.bz2` to have SHA-256 `bc5a121ffbc94b5171ad5ebe01be42746d50aa797c9549a4639894a16749443b`.
-2. Replaces the extracted tree and copies `localoptions.h` into it.
-3. Configures for `i686-linux-musl` or `x86_64-linux-musl` through `muslgcc`, with the architecture's `ar` and `ranlib`.
-4. Uses bundled libtomcrypt and libtommath and disables zlib, syslog, hardening, utmp, utmpx, wtmp, wtmpx, lastlog, login functions, pututline, and pututxline.
-5. Builds `dropbear`, `dbclient`, and `dropbearkey` into one `MULTI=1 STATIC=1` executable, strips it, and stages `dropbearmulti`.
-
-The artifact is a stripped static `ET_EXEC`, ELF32 i386 or ELF64 x86-64. `--disable-harden` prevents Dropbear's configure script from adding PIE flags, which the Rach2 ELF loader cannot support.
-
-The wrapper has compile, partial-link, and final-link modes. Final links add musl's startup objects, `libc.a`, the architecture's libgcc, and `crtn.o` in the required order.
-
-## Feature selection
-
-`localoptions.h` explicitly enables Curve25519, ECDH, ChaCha20-Poly1305, AES-128 and AES-256 in CTR mode, Ed25519, server public-key authentication, and server password authentication. It disables the login MOTD. The header also defines `DROPBEAR_HMAC_SHA256`, which Dropbear 2022.83 does not read; HMAC-SHA256 remains enabled by the upstream `DROPBEAR_SHA2_256_HMAC` default. Other options absent from the local header retain their Dropbear defaults, including RSA and ECDSA. The configure options remove host facilities that Rach2 does not provide.
-
-The multi-call dispatcher accepts the command as its first argument:
-
-```
-dropbearmulti dropbear [server options]
-dropbearmulti dbclient [client options]
-dropbearmulti dropbearkey [key options]
-```
-
-It also recognizes `ssh` as a client command. KRFFS has no symbolic links, so the images stage only `/bin/dropbearmulti` and use the argument form.
-
-## Accounts and image staging
-
-The os-real, GRUB-test, metal, metal-disk, and recovery profiles stage the multi-call binary at mode 0755. They also stage:
-
-* root and `test` account records, with SHA-512 crypt hashes in `/etc/shadow` mode 0600;
-* `/bin/sh` in `/etc/shells`;
-* `/etc/dropbear` mode 0700 for generated host keys;
-* root's authorized keys at `/root/.ssh/authorized_keys` mode 0600;
-* the test account's authorized keys at `/home/test/.ssh/authorized_keys` mode 0600, owned by uid and gid 1000.
-
-`krffs/gen_demo_key.sh` creates separate Ed25519 keypairs for root and the test account when their public files are absent. `krffs/gen_demo_password.sh` writes the two ignored plaintext credential files and the ignored `shadow` file. It uses the documented development passwords unless the caller supplies replacements, and gives each SHA-512 crypt hash a random salt.
-
-## Starting the server
-
-The os-real init starts the console login but does not start SSH. To run the RAM-root image with host port 2222 forwarded to guest port 22:
+The os-real RAM image stages the program but its init starts no server. To reach it from the host, boot it with a port forwarded:
 
 ```
 cd rach2
 NET_HOSTFWD="hostfwd=tcp::2222-:22" ./run.sh os-real
 ```
 
-Log in at the console as root with the password in `krffs/rach2_demo_password`, then start the server:
+log in at the console as root, and start the server:
 
 ```
 dropbearmulti dropbear -R -g -p 22
 ```
 
-The server backgrounds after startup. From another terminal at the repository root:
+`-R` makes the missing host keys at the first connection, and `-g` refuses root's password while root's key is accepted. From the repository root on the host:
 
 ```
 ssh -i krffs/rach2_demo_ed25519 -p 2222 root@localhost
 ssh -i krffs/rach2_test_ed25519 -p 2222 test@localhost
 ```
 
-The test account may also authenticate with the password in `krffs/rach2_test_password`. `-g` disables password authentication for root while leaving root public-key authentication enabled. Blank passwords remain disabled because the command does not pass `-B`.
+The [krffs Readme](../../krffs/Readme.md) has the development keys and passwords. On a RAM root the host keys are lost at shutdown, so each boot presents a new one. The metal and recovery systems start the server from their init, as dropbear(8) and [sshd.conf(5)](../../man/man5/sshd.conf.5) say.
 
-The metal and recovery images use `init-metal`. It runs this supervised command beside the console login:
+## Sources and license
 
-```
-dropbearmulti dropbear -F -R -g -p 22
-```
+The source is the release tarball from [the Dropbear site](https://matt.ucc.asn.au/dropbear/releases/) in this directory. [`build_dropbear.sh`](build_dropbear.sh) has its version in `VERSION` and its SHA-256 in `TARBALL_SHA256`, and refuses a tarball whose checksum differs; the root `Makefile` gives the same file as `DROPBEAR_TARBALL`. Dropbear is under an MIT-style license, with the licenses of its bundled parts beside it in its `LICENSE` file.
 
-`-F` keeps the server process in the foreground so init can identify its exit and restart it. Init waits five seconds before restarting an early failure.
+## Local changes
 
-## Entropy and host keys
+The source is not patched: [`patches/series`](patches/series) lists no patch. The changes are the build options.
 
-`-R` generates missing host keys on the first connection. Dropbear tries `getrandom` and then `/dev/urandom`; both return `EIO` when the Rach2 CSPRNG lacks trusted hardware entropy. `rach2/run.sh` and `rach2/run_from_disk.sh` therefore use `-cpu max` by default, which exposes RDSEED or RDRAND. A CPU without either source cannot generate the delayed key. `tests/run noentropy` runs `dropbearmulti dropbearkey` on such a CPU and requires it to stop with `Failure reading random device /dev/urandom` and to write no key.
+[`localoptions.h`](localoptions.h), copied into the tree before the build, turns on Curve25519, ECDH, ChaCha20-Poly1305, AES-128 and AES-256 in CTR mode, Ed25519, and the server's public-key and password authentication, and turns off the message of the day. Its `DROPBEAR_HMAC_SHA256` is a name Dropbear does not read; HMAC-SHA256 is on through the upstream default `DROPBEAR_SHA2_256_HMAC`. Every option the header does not name keeps its upstream default, RSA and ECDSA among them.
 
-Generated keys are written under `/etc/dropbear`. A RAM root loses them at shutdown. A writable disk root preserves them after the file-system data is flushed. Clients must expect a new host key for each new RAM-root boot.
+The configure options use the bundled libtomcrypt and libtommath and turn off zlib, syslog, hardening, utmp, utmpx, wtmp, wtmpx, lastlog, the login functions, `pututline` and `pututxline`. `--disable-harden` keeps configure from adding position-independent flags, since the Rach2 ELF loader does not relocate a PIE. With syslog compiled out the server writes its diagnostics to standard error, and `-E` is not an option of this build.
 
-Syslog is compiled out, so server diagnostics already go to stderr. The `-E` option is absent from this build and is rejected.
+The program is built with the server, `dbclient` and `dropbearkey`. It dispatches on its first argument, and also takes `ssh` there for the client; KRFFS has no symbolic links, so the images stage only `/bin/dropbearmulti` and use the argument form.
 
-## Kernel boundary
+## Building
 
-The server depends on the ordinary socket stack, the trusted random interfaces, shadow password lookup and `crypt`, saved-user and saved-group identity changes, ownership and mode changes, `fsync`, and the KRFFS hard-link refusal used by Dropbear's host-key fallback. Interactive sessions also require pty allocation, controlling-terminal resolution through `/dev/tty`, termios, and window-size ioctls. The [network](../../rach2/sys/network/Readme.md), [random](../../rach2/sys/lib/krandom.Readme.md), [synthetic file-system](../../rach2/sys/fs/synthfs.Readme.md), and [descriptor I/O](../../rach2/sys/io/Readme.md) documents own those kernel contracts.
+`make dropbear` builds for the architecture `ARCH` selects, i686 by default; `make dropbear ARCH=x86_64` builds for x86-64. The root `make` builds it too, through the same stamp. The script takes the architecture from `RACH2_ARCH` through `mk/arch.sh`, which gives the cross prefix, `i686-elf-` or `x86_64-elf-`, the configure host `i686-linux-musl` or `x86_64-linux-musl`, and the directories. An i686 build extracts into this directory and stages under `build/vendor/dropbear/`; an x86-64 build extracts under `build/x86_64/vendor-work/dropbear/` and stages under `build/x86_64/vendor/dropbear/`. Each has its own stamp.
 
-## Updating the pin
+`build_dropbear.sh`:
 
-To update Dropbear:
+1. Checks the tarball's SHA-256, deletes the extracted tree and extracts it again.
+2. Applies the patches `patches/series` lists, in order, with `patch -p1 -F 0`. It fails on a named patch that is absent, one that does not apply, and a `patches/*.patch` the series does not list.
+3. Copies in `localoptions.h`.
+4. Configures with `CC` set to the `muslgcc` wrapper and the cross `ar` and `ranlib`, with the options above and `--build` from Dropbear's own `config.guess`.
+5. Builds `dropbearmulti` with `MULTI=1 STATIC=1`, strips it and stages it.
 
-1. Replace the archive with a release tarball from [the Dropbear site](https://matt.ucc.asn.au/dropbear/releases/).
-2. Change `VERSION` and `TARBALL_SHA256` in `build_dropbear.sh`, and change `DROPBEAR_TARBALL` in the root Makefile.
-3. Review `localoptions.h`, every configure option, the generated `config.h`, and the resolved defaults for changed or renamed features.
-4. Rebuild and inspect the staged ELF before running the verification below.
+The result is a stripped static `ET_EXEC`, ELF32 i386 or ELF64 x86-64. The stamp depends on the script, the tarball, `localoptions.h`, `muslgcc`, `mk/arch.sh`, `patches/series` and every patch, and the musl stamp. `make check-dropbearmulti` requires the staged program to be nonempty. The [manifests](../../krffs/manifests/) stage it at mode 0755 as `/bin/dropbearmulti`.
 
-A source patch is added by placing it under `patches/` and naming it in `patches/series`; the script applies exactly what the series names, in its order, and fails on a named patch that is absent or a patch file the series does not name. The root stamp depends on the series and on every patch, so adding, editing, or removing one invalidates the build through a tracked input.
+## Updating
 
-## Verification
+1. Put the new release tarball in this directory and delete the old one.
+2. Change `VERSION` and `TARBALL_SHA256` in `build_dropbear.sh`, and `DROPBEAR_TARBALL` in the root `Makefile`.
+3. Read the new `default_options.h` and `sysoptions.h` against `localoptions.h`, and the configure options against the new `configure`, for renamed or changed options.
+4. A source patch goes under `patches/` with its name in `patches/series`.
+5. Rebuild, and run the checks under Tests.
 
-```
-make dropbear
-make check-dropbearmulti
-make
-tests/run style
-tests/run host
-tests/run ssh
-tests/run metal
-```
+## Tests
 
-`tests/run ssh` boots a writable os-real disk copy and starts the server from the console. It proves root key authentication, test password authentication, pty allocation, terminal size and termios, and the rejection of missing credentials, a wrong test password, and root password authentication under `-g`.
+`make check-dropbearmulti` runs with every image build that stages the program. The suites, described in [suites.md](../../tests/system/suites.md):
 
-`tests/run metal` supplies no console input. It proves automatic network configuration and server startup, root key authentication, pty allocation, a checked file transfer in both directions, and server restart under `init-metal`. The default `make test` image contains neither Dropbear nor BusyBox and does not exercise this integration.
+* `tests/run ssh` boots os-real from a disk, starts the server from the console as Use does, and logs in as root by key and as the test account by password, over a pty; it requires the refusal of a missing key, a wrong password and root's password under `-g`.
+* `tests/run metal` boots the metal image with nothing typed at the console, logs in by key to the server its init started, and requires init to start the server again after it is killed.
+* `tests/run noentropy` runs `dropbearmulti dropbearkey` on a CPU with neither RDSEED nor RDRAND, and requires it to stop with its error that it could not read the random device and to write no key. `rach2/run.sh` passes `-cpu max` for this reason, so that the kernel's random source has a trusted seed.
+* `tests/run sealed`, `drill`, `installer` and `uefi` reach their machines over SSH.
