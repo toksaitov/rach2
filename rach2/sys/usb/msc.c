@@ -304,13 +304,19 @@ static struct msc_device *by_device(struct xhci_ctrl *hc, int device)
     return 0;
 }
 
-/** As `by_device`, a closing record included. */
+/**
+ * As `by_device`, a closing record included until its slot has been given
+ * back. The controller may then give the slot to another stick, while a mount
+ * still holds the closed record, and the slot's completions are the new
+ * stick's.
+ */
 static struct msc_device *by_device_any(struct xhci_ctrl *hc, int device)
 {
     int i;
 
     for (i = 0; i < MSC_MAX_DEVICES; i++) {
-        if (sticks[i].used && sticks[i].hc == hc && sticks[i].device == device) {
+        if (sticks[i].used && !sticks[i].slot_closed && sticks[i].hc == hc &&
+            sticks[i].device == device) {
             return &sticks[i];
         }
     }

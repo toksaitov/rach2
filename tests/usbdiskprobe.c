@@ -21,6 +21,11 @@
  *   below the first. The child must unmount before the parent can be released.
  * * `replug`: the volume mounts again and the file is still there, on a
  *   stick that inherits nothing from the one before it.
+ * * `keep`: a file held open on the FAT volume, `USBDISKPROBE KEEPING`
+ *   printed, and the file kept open through the pull and until the next
+ *   stick, which the controller gives the pulled stick's slot, answers a
+ *   read of its first sector; so the pulled stick's record is held the whole
+ *   time.
  * * `free`: the number of free names `/proc/usb` reports, printed, so the
  *   harness can compare it across a run of plugs and pulls.
  * * `super`: a stick with no partition table mounts through `/dev/disk0`.
@@ -414,6 +419,62 @@ static void part_write(void)
     if (syscall2(SYS_UMOUNT2, (long)MNT, 0) != 0) {
         fail("the volume would not unmount at the end");
     }
+    ok();
+}
+
+/** Whether `node` opens and its first sector ends in the 0x55 0xAA of a
+ * partition table.
+ */
+static int reads_mbr(const char *node)
+{
+    unsigned char sector[512];
+    int fd = syscall3(SYS_OPEN, (long)node, O_RDONLY, 0);
+    int n;
+
+    if (fd < 0) {
+        return 0;
+    }
+    n = syscall3(SYS_READ, fd, (long)sector, (int)sizeof(sector));
+    syscall1(SYS_CLOSE, fd);
+    return n == (int)sizeof(sector) && sector[510] == 0x55 && sector[511] == 0xAA;
+}
+
+/** Hold a file on the stick through its pull and the plug of the next one.
+ * The next stick may be given the name the pulled one had, or the next, as
+ * the held record keeps its name or not, so both nodes are read.
+ */
+static void part_keep(void)
+{
+    int fd;
+    int waited;
+
+    if (mount_at(fat_node, "vfat", 0) != 0) {
+        fail("the volume would not mount");
+    }
+    fd = syscall3(SYS_OPEN, (long)MNT "/hello.txt", O_RDONLY, 0);
+    if (fd < 0) {
+        fail("the file to hold would not open");
+    }
+    puts("USBDISKPROBE KEEPING");
+    for (waited = 0; waited < 900; waited++) {
+        if (slurp("/proc/disk") >= 0 && !contains(text, "disk 0 ")) {
+            break;
+        }
+        sleep_ms(100);
+    }
+    if (waited == 900) {
+        fail("the stick was never pulled out");
+    }
+    for (waited = 0; waited < 900; waited++) {
+        if (reads_mbr("/dev/disk0") || reads_mbr("/dev/disk1")) {
+            break;
+        }
+        sleep_ms(100);
+    }
+    if (waited == 900) {
+        fail("the stick plugged into the pulled stick's slot never answered a read");
+    }
+    syscall1(SYS_CLOSE, fd);
     ok();
 }
 
@@ -889,6 +950,9 @@ void probe_main(unsigned long *sp)
     }
     if (same(what, "hold")) {
         part_hold(fat_node, "vfat", 0);
+    }
+    if (same(what, "keep")) {
+        part_keep();
     }
     if (same(what, "holdexfat")) {
         part_hold(exfat_node, "exfat", 0);

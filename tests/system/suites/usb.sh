@@ -453,6 +453,28 @@ else
     bad "the read in flight at the pull: $(grep -a '^HARNESS' "$OUT.pullread.harness.log" | tr '\n' ' ')"
 fi
 
+# ---- 17c: a stick plugged in after a pull, while a file on the pulled stick
+#           is still open, is given the pulled stick's slot by the
+#           controller. The pulled stick's record stays while the file
+#           holds its mount; the slot's completions are the new stick's,
+#           which enumerates and answers a read, and only then is the file
+#           closed. ----
+if run_shell --qemu-arg=-cpu --qemu-arg=max \
+    --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
+    --drive "if=none,id=stick,format=raw,file=$STICK" \
+    --qemu-arg=-device --qemu-arg=usb-storage,bus=xhci.0,drive=stick,id=st0 \
+    --timeout 180 --steptmo 60 --ok "USBDISKPROBE OK" --never "USBDISKPROBE FAIL" \
+    --log "$OUT.reslot.log" \
+    "expect=Type 'help'" "send=exec /usbdiskprobe keep" "expect=USBDISKPROBE KEEPING" \
+    "usb=del:st0" "expect=: given back" \
+    "drive=add:if=none,id=again,format=raw,file=$STICK" \
+    "usb=add:usb-storage,bus=xhci.0,drive=again,id=st1" "expect=: mbr" \
+    "expect=USBDISKPROBE OK" > "$OUT.reslot.harness.log" 2>&1; then
+    note "a stick given a pulled stick's slot while a file holds the pulled one enumerates and reads: OK"
+else
+    bad "the stick given the pulled stick's slot: $(grep -a '^HARNESS' "$OUT.reslot.harness.log" | tr '\n' ' ')"
+fi
+
 # ---- 18: the hub pulled with all three behind it: the stick's mount answers
 #          EIO and unmounts once its file is closed, and every device below
 #          the hub goes before the hub does ----
