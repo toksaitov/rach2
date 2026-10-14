@@ -111,7 +111,7 @@ These options exist for the suites, which use them to bring about a fault or a b
 | `rach2.framefail` | Enable `/dev/framefail`, which takes a count: the count-th frame allocation inside a system call from then on fails. |
 | `rach2.framehigh` | Take frames from 4 GiB up first, so that on an x86-64 machine with memory there the heap's pages lie above 4 GiB. |
 | `rach2.dma32` | Treat the AHCI and xHCI controllers as able to reach only 32-bit addresses. |
-| `rach2.stackoverrun=fork`, `rach2.stackoverrun=boot` | Before the first program, run a kernel stack down until it overflows: one `kstack_alloc` gives, or the boot stack. The boot stops at the double fault ([the architectures' Readme](sys/arch/Readme.md)). |
+| `rach2.stackoverrun=fork`, `rach2.stackoverrun=boot` | Before the first program, run a kernel stack down until it overflows: one `kstack_alloc` gives, or the boot stack. The kernel panics at the page fault or the double fault that the guard page raises ([the architectures' Readme](sys/arch/Readme.md)). |
 | `rach2.strings` | Before the first program, check `k_memcpy`, `k_memset` and `k_memmove` over 68 lengths at four source and four destination offsets, with the bytes around each range required unchanged. |
 | `rach2.hubslow=MS` | Wait `MS` milliseconds between two ports of a hub scan. |
 | `rach2.msidrop=N` | Silence the USB controller's messages after `N`, so that the timer's pump alone serves it. |
