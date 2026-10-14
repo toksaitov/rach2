@@ -93,8 +93,11 @@ This file states the rules in force; their history is in commit messages and `de
 
 ## Comments
 
-* Explain a function in a Doxygen-compatible `/**` block before it. Its first sentence is the summary; prose paragraphs follow for the contract and the part of the reason that is not obvious. Use `@param` and `@return` only where the meaning is not obvious, keep Markdown light (mostly backticks around identifiers), and do not pile up tags.
+* A source file begins with a comment of a line or two on what it is for.
+* Explain a function in a Doxygen-compatible `/**` block before it. Its first sentence is the summary; prose paragraphs follow for the contract and the part of the reason that is not obvious. State the contract once: what the function does, the arguments whose meaning is not obvious, the return values and errors, ownership, and the locking and context it requires. Use `@param` and `@return` only where the meaning is not obvious, keep Markdown light (mostly backticks around identifiers), and do not pile up tags.
+* Comment a structure member whose units, invariants or special values are not obvious.
 * Let names and structure make a body clear; do not narrate it in comments. A comment inside a body is allowed only for a deliberate hack, or for a hardware or application binary interface (ABI) fact that cannot be named away, and is one line written as documentation, never as a reasoning trace.
+* A comment states what is true now. It does not give the history of the code or argue with an earlier version; that is for the commit message.
 
 ## Messages
 
@@ -102,7 +105,9 @@ This file states the rules in force; their history is in commit messages and `de
 
 ## Documentation
 
-* Each component has one Readme. A change that alters a contract rewrites the owning Readme in the same commit, and does not append to it. Documents state the current contract; history is in commit messages and `dev-log/`.
+* `Readme.md` is the front page, for a reader who has never seen the project: what Rach2 is and for whom, what a person can do on it, its status and major limits, the quick start to a booted system, the top-level directories with their Readmes, and the license, in about 500 words. Detail belongs to the component that owns it.
+* Each component has one Readme. It opens with a summary paragraph, and its `##` sections come from this list, in this order, as the component needs them: Use or Running, Results, Interfaces, Sources and license, Local changes, Design, Building, Updating, Adding tests, Limits, Tests. `dev-log/60-docs/plan.md` says what goes in each.
+* A document states what the code does now, and a fact has one home: a count, a table or a contract is written where it is owned and linked from elsewhere. A change that alters a contract rewrites the owning Readme in the same commit, and does not append to it. History, milestone numbers and abandoned designs are in commit messages and `dev-log/`. A document that cannot be made true is deleted.
 * The manual under `man/` covers the machine. Every program a system image stages or `utils/programs.mk` builds, every BusyBox applet and every system call the kernel registers has a page or an alias in its section; a program that only test images stage needs none. `tools/verify/mancheck.c`, run by `tests/run style`, refuses a tree that lacks one, a page `mandoc -T lint` warns about, an alias that names no page, or a recovery page the recovery manifest does not stage.
 * A commit that adds a program, an applet or a call adds its page or its alias line in the same commit, and a commit that changes what one does changes its page. A page states what the code does on this kernel, from a fact sheet gathered from the source, and says where that differs from Linux or from the program's upstream documentation.
 
@@ -110,5 +115,5 @@ This file states the rules in force; their history is in commit messages and `de
 
 * `master` changes only by a fast-forward push of checked work, as Work says; the repository's ruleset refuses a force push to it and its deletion. Push no other branch; a helper does not push at all.
 * Commit in scoped units, one logical change each, on your branch, with no attribution of any kind. The message is one line with no trailing period, begins with a capitalised verb in the imperative, and says what the commit does, not how it was arrived at; `git log --oneline -20` shows the style. A commit that finishes an issue adds a blank line and `Closes #N`.
-* A text-only cleanup changes no behavior and no built artifact. Keep the vendored trees out of the diff.
+* A text-only cleanup changes no behavior and no object code: every in-house object under `build/`, compared after `objcopy --strip-debug`, is the same before and after it, but for the host tests that use `__LINE__`. The images stage the sources, so they change with it. Keep the vendored trees out of the diff.
 * `tools/git-hooks/commit-msg` refuses a message with an attribution line. `.claude/settings.json` turns off Claude Code's own attribution and turns the hook on when a session starts; `git config core.hooksPath tools/git-hooks` turns it on in any other clone.
