@@ -1,110 +1,72 @@
-# ish/: freestanding command shell
+# ish: the freestanding shell
 
-ISH is the small command shell used by the os-simple image and the test image. It is a static program, i386 or x86-64, with its own startup code, string routines, and Linux system-call wrappers for each architecture. It links no C library.
+ISH is the command shell of the os-simple and test images: a static program for i386 or x86-64 with its own startup code, string routines and system call wrappers, which links no C library. It runs one command at a time, with `<` and `>` redirection and two builtins, `cd` and `exit`. It exists so that os-simple, which has no BusyBox, has a shell, and so that a reader can follow a shell's fork, exec and wait without a C library in the way.
 
-ISH runs one command at a time. It is not a POSIX shell and has no script language.
+## Use
 
-## Command syntax
+`ish` reads command lines from standard input and prints no prompt; `ish -c COMMAND` runs one command and exits with its status. The syntax, the builtins, the order redirections must be written in and the exit statuses are in [ish(1)](../man/man1/ish.1).
 
-Input mode reads command lines from standard input and prints no prompt. It retains incomplete lines between reads and runs every complete line in order. At EOF it runs a final line without a newline. A read error discards an incomplete line. A line can contain at most 255 bytes, excluding its newline; longer lines produce a diagnostic and are discarded in full. The argument array can contain 255 tokens.
+The os-simple image stages the binary as `/bin/ish` and `/bin/sh`, and both of its accounts, `root` and `test`, have `/bin/ish` as their shell (`krffs/manifests/os-simple.manifest`). The test image stages it as `/ish`, which `musl/ishmusl` runs, and as `/bin/sh`, which musl's `system` and `popen` start. The os-real, os-real-gnu and metal disk images stage the source under `/src/ish` for the build on Rach2, and use BusyBox's `sh`.
 
-The one-line form runs `COMMAND` and exits with its status:
+## Design
 
-```sh
-ish -c 'COMMAND'
-```
+The sources are listed in `ish/sources.mk`, `crt0.c` first since the linker keeps input order:
 
-Only `argv[2]` is used. The parser splits on ASCII whitespace. It does not implement quotes, escapes, variables, globbing, pipelines, command lists, subshells, or background jobs. Shell metacharacters have no special meaning except when `<` or `>` appears as a separate token.
+* `crt0.c` is the entry point, `_start`. It reads `argc`, `argv` and `envp` from the initial process stack, calls `main` and passes its return value to `exit`. On i386 `_start` is a C function that reads the stack through the frame pointer. On x86-64 it is assembly, because a C prologue would move RSP before the function could read it, and because `_start` is entered with RSP aligned to 16 bytes while a called function expects it 8 bytes past that.
+* `ish.c` has `main`, the input loop, the builtins, the path search, redirection, `fork`, `execve`, the wait and the conversion of the wait status.
+* `ish_shell_utilities.c` splits a line into arguments, finds environment entries and removes redirection tokens.
+* `ish_cstring_utilities.c` has the string, token, integer and path operations.
+* `ish_syscalls.c` includes `ish_syscalls.i386.c` or `ish_syscalls.x86_64.c` for the compiler's target and stops the build on any other.
 
-The two builtins are:
+### Reading lines
 
-* `cd [DIRECTORY]` changes the shell's working directory. With no operand it uses `HOME`. Success returns 0; failure returns 1.
-* `exit [STATUS]` exits the shell. The operand is read as a signed decimal prefix; a missing or nonnumeric operand means 0.
+`main` reads standard input in blocks of 255 bytes into a line buffer of 255 bytes and runs each line as its newline arrives, so a line may span reads. At end of file it runs a last line that has no newline; a read error discards it. A line longer than 255 bytes is reported as `ish: command line too long` and discarded up to its newline. The limits are the constants at the top of `ish.c`.
 
-An external command is tried as written. If `stat` cannot find it, ISH tries each nonempty element of `PATH`. A `PATH` element whose joined path would be longer than 1024 bytes is skipped, since the path cut short could name another program. The child inherits the shell's complete environment.
+### Running a line
 
-The parent waits for each external command and retries an interrupted wait. `-c` reports these statuses:
+`ish_run_line` splits the line in place on ASCII whitespace into at most 255 arguments, and drops any tokens past that. It then removes the redirections: the first `<` token, its file name and every token after it, then the first `>` token in what is left, the same way. Because the `<` is removed first, a `>` written after it is never found, which is why ish(1) requires the output redirection first. The input file is opened read-only and the output file is created with `creat` at mode 0644; an open that fails makes the line's status 126.
 
-* the child's exit status after a normal exit;
-* 127 when no executable path resolves;
-* 126 when the command cannot be started, including a redirection that cannot be opened, or its status cannot be obtained;
-* `128 + SIGNAL` when a signal kills the child.
+`cd` and `exit` run in the shell itself and do not use the redirected descriptors. Any other command is looked up with `stat`: first the name as written, then the name joined to each nonempty element of `PATH`. A joined path longer than 1024 bytes is skipped rather than cut short, since the shortened path could name another program. The child moves the opened files onto descriptors 0 and 1 with `dup2` and calls `execve` with the shell's whole environment. The parent waits with `waitpid`, retries a wait that a signal interrupted, and converts the wait status to the shell's: the exit code, or 128 plus the signal number.
 
-Input mode discards each command's status and returns 0 at EOF or a read error. The `exit` builtin terminates either mode with its operand's status.
+`HOME` and `PATH` are read once, at start, by exact and case-sensitive name. ISH does not treat an `argv[0]` that begins with a dash as a login shell; `login` and `su` start it that way and it runs its ordinary input loop.
 
-## Redirection
+### System calls
 
-`< FILE` opens `FILE` as standard input. `> FILE` creates or truncates `FILE` at mode 0644 and makes it standard output. The operator and filename must be separate tokens:
+ISH makes twelve system calls, each with the call number in the accumulator and no `errno`: a failure is returned as the negated error number. `ish_syscalls.i386.c` uses `int $0x80` and `ish_syscalls.x86_64.c` uses `syscall`.
 
-```sh
-cat < input.txt
-echo hello > output.txt
-```
+| Call | i386 | x86-64 |
+| --- | ---: | ---: |
+| `exit` | 1 | 60 |
+| `fork` | 2 | 57 |
+| `read` | 3 | 0 |
+| `write` | 4 | 1 |
+| `open` | 5 | 2 |
+| `close` | 6 | 3 |
+| `waitpid` | 7 | `wait4`, 61 |
+| `creat` | 8 | 85 |
+| `execve` | 11 | 59 |
+| `chdir` | 12 | 80 |
+| `dup2` | 63 | 33 |
+| `stat` | 106 | 4 |
 
-ISH supports one redirection for each stream. The first redirection removes itself and every later token from the command's argument array. When both streams are redirected, output must therefore come first:
+x86-64 has no `waitpid`, so its wrapper calls `wait4` with no resource usage. The shell passes `stat` a 256-byte buffer and reads nothing from it.
 
-```sh
-command > output.txt < input.txt
-```
+## Building
 
-Arguments that must reach the command go before either redirection. Redirections are opened before a builtin or child runs. A builtin does not attach them to its own input or output, but a requested file is still opened and an open failure still returns 126.
+`make -C ish`, or `make -C ish ARCH=x86_64`, builds `build/ish/ish` or `build/x86_64/ish/ish` with the architecture's freestanding cross compiler (`mk/toolchain.mk`). The link is `-nostdlib -static` with the text at `ARCH_USER_TEXT` from `mk/arch.mk`, `0x08048000` on i386 and `0x400000` on x86-64, the addresses at which TinyCC places a program's text, so that the host build and the build on Rach2 have one layout.
 
-## Environment and callers
+`make -C ish -f Makefile.linux`, with `ARCH=x86_64` if wanted, builds `build/ish/linux/ish` or `build/x86_64/ish/linux/ish` from the same sources, leaving the text address to the linker. The result is a static Linux program.
 
-ISH reads `HOME` for a bare `cd` and `PATH` for command lookup. Environment names match exactly and are case-sensitive. It does not change its behavior when `argv[0]` begins with a dash.
+On Rach2, `make -f guest.mk` in a writable copy of `/src/ish`, or in `/src/ish` itself as root, builds `ish` with pdpmake and the staged TinyCC through `/bin/cc`. It reads the same `sources.mk`, links to `ish.new` and renames it to `ish`, so that a link stopped part way leaves no program. It names no word size and no text address: TinyCC compiles for the machine it runs on and refuses the other architecture's `-m` flag, and its default text address is the one the host build names.
 
-The project `login` and `su` programs give a shell a fresh environment containing `PATH`, `HOME`, `SHELL`, `USER`, and `LOGNAME`. `su -c` passes `-c` and its command to the target shell. Login mode changes the working directory and places a dash at the start of `argv[0]`; ISH ignores the dash and enters its ordinary input loop.
+## Limits
 
-The os-simple image stages the binary as `/bin/ish` and `/bin/sh`, and both of its accounts name `/bin/ish`. The test image stages the same binary as `/ish` for `ishmusl` and as `/bin/sh` for musl's `system` and `popen` tests. The os-real image uses BusyBox `sh`; it stages the ISH source under `/src/ish` for self-build work.
+ISH has no quoting, escapes, variables, globbing, pipelines, command lists, subshells, background jobs or scripts. It allows one redirection for each stream, and the redirections must follow the command's arguments. The input mode ignores each command's status and exits 0 at end of file.
 
-## System-call ABI
+## Tests
 
-`ish_syscalls.i386.c` issues Linux i386 `int $0x80` calls directly, and `ish_syscalls.x86_64.c` Linux x86-64 `syscall` instructions; `ish_syscalls.c` includes the one for the compiler's target and stops the build on any other. The shell uses exactly these calls:
-
-```text
-exit fork read write open close waitpid creat execve chdir dup2 stat
-```
-
-x86-64 has no `waitpid`, so the x86-64 wrapper issues `wait4` with no resource usage. Its numbers are those of musl's `arch/x86_64/bits/syscall.h.in`.
-
-`crt0.c` reads `argc`, `argv`, and `envp` from the initial process stack, calls `main`, and passes its return value to `exit`. On i386 `_start` is a C function that reads the stack through the frame pointer; on x86-64 it is assembly, which reads the 64-bit words at RSP before a prologue could move it and aligns the stack for the call.
-
-## Builds
-
-The normal host build uses the shared freestanding cross compiler of the architecture `ARCH` names (`mk/arch.mk`) and writes `build/ish/ish`, or `build/x86_64/ish/ish`:
-
-```sh
-make -C ish
-make -C ish ARCH=x86_64
-```
-
-It builds five objects, links a static executable, and places `.text` and `_start` where TinyCC places a program's text on the architecture: an ELF32 Intel 80386 executable at `0x08048000`, or an ELF64 x86-64 one at `0x400000`. The shared toolchain rules select `i686-elf-gcc` or `x86_64-elf-gcc`, or accept an explicit `CROSS_CC`.
-
-The Linux compatibility build writes `build/ish/linux/ish`, or `build/x86_64/ish/linux/ish`:
-
-```sh
-make -C ish -f Makefile.linux [ARCH=x86_64]
-```
-
-It uses the same source and raw Linux ABI but leaves the text address to the linker. The result is a static Linux executable; it does not run natively on macOS.
-
-The staged source tree has a POSIX makefile for pdpmake and TinyCC:
-
-```sh
-make -f guest.mk
-```
-
-Run it in a writable copy of `/src/ish`. Root may also build the staged tree in place. `guest.mk` builds the same five objects and links a local `ish` with `-nostdlib -static`, to `ish.new` and then renamed, so a link stopped part way is not taken for a built program. The staged TinyCC compiles for the machine it runs on and refuses the other architecture's `-m` flag, so the makefile names no word size, and its default text address supplies the address named explicitly by the host build.
-
-## Source map
-
-* `ish.c` contains the input loop, builtins, path search, redirection, fork, exec, wait, and status conversion.
-* `ish_shell_utilities.[ch]` split arguments, read environment entries, and remove redirection tokens.
-* `ish_cstring_utilities.[ch]` provide the string, token, integer, and path operations.
-* `ish_syscalls.[ch]` select and declare the raw wrappers, which `ish_syscalls.i386.c` and `ish_syscalls.x86_64.c` define.
-* `crt0.c` supplies the freestanding `_start` entry.
-* `Makefile`, `Makefile.linux`, and `guest.mk` own the three build routes.
-
-## Verification
-
-`tests/run style` builds the normal component and checks that `guest.mk` names the same five objects. `tests/run default` runs `musl/ishmusl`, which checks `-c`, child and builtin statuses, a signal death, redirection failure, redirection with closed standard descriptors, exact environment names, and input lines across reads, at EOF and over the length limit. `tests/host/ish_hosttest.c` shares the descriptor, environment and input cases, injects interrupted or failed waits and short or failed reads, and checks the path joiner at its limit and a `PATH` element too long to join, which must be skipped. `sh tests/host/ish_mutate.sh` compiles that test alone under ASan and UBSan for both libc and raw wait errors. Each fault must fail its named assertion before restored, touched and rebuilt source passes. Logs and checksums remain under `build/tests/ish-proof.*`. `tests/run selfbuild` builds ISH with TinyCC as an ordinary guest account, runs the result with `-c`, and rebuilds `/src/ish` in place as root.
+* `tests/run default` runs `musl/ishmusl` on the test image. It runs `/ish -c` and the input mode and checks the statuses of a child, a builtin and a signal death, a redirection that cannot be opened, redirection with the standard descriptors closed, exact environment names, and input lines split across reads, at end of file and over the length limit.
+* `tests/run host` compiles `tests/host/ish_hosttest.c` with the shell's utilities against the host's libc (`ISH_USE_STDLIB`). It shares the input, descriptor and environment cases of `ishmusl`, injects interrupted and failed waits and short and failed reads, and checks the path join at its limit and a `PATH` element too long to join.
+* `sh tests/host/ish_mutate.sh` compiles the host test in a private tree twice, once with the libc's wait errors and once with the raw wrappers' (`ISH_RAW_HOSTTEST`), and compiles faults into the sources; each fault must fail the test, which passes before the faults and after the sources are restored.
+* `tests/run selfbuild` copies `/src/ish` as an ordinary account, builds it with `guest.mk`, runs the result with `-c`, and then builds `/src/ish` in place as root.
+* `tests/run style` checks with `tools/verify/guestcheck.c` that the object list of `guest.mk` equals the host `Makefile`'s.
