@@ -76,7 +76,7 @@ WORK=$RACH2_RUN_WORK
 HANDOFF_LOCK=${RACH2_RUN_TREE_LOCK:-}
 LOCKED=${HANDOFF_LOCK:+1}
 trap 'rm -rf "$WORK" ${HANDOFF_LOCK:+"$HANDOFF_LOCK"}' 0
-unset RACH2_RUN_GROUP RACH2_RUN_WORK RACH2_RUN_TREE_LOCK RACH2_PROGRESS_FD
+unset RACH2_RUN_GROUP RACH2_RUN_WORK RACH2_RUN_TREE_LOCK RACH2_PROGRESS_FD RACH2_HOST_LOCK
 LC_ALL=C; export LC_ALL
 now() { "$RACH2_RUN_UTIL" now; }
 sleep() { "$RACH2_RUN_UTIL" sleep "$1"; }
@@ -1090,6 +1090,16 @@ set_factor || exit 2
 set_accel || exit 2
 set_cpus || exit 2
 lock_take "$@" || { echo "run: result: refused: the tree is not free" >&2; exit 1; }
+# The host lock a run of the suites named takes before its port claim, below:
+# `alone` when one declares more guest memory than half of the host's, which
+# is two thirds of memory_default's three quarters, and `shared` otherwise.
+host_lock() { # host_lock NAME...
+    half=$(($(memory_default) * 2 / 3))
+    for s in "$@"; do
+        [ "$(suite_memory "$s")" -le "$half" ] || { echo alone; return; }
+    done
+    echo shared
+}
 # The block of host ports the run's machines forward, claimed last, after
 # every check that can refuse the run and after the tree is taken, and only
 # when a suite named boots a machine: one whose tools name QEMU. `inventory`,
@@ -1103,14 +1113,23 @@ lock_take "$@" || { echo "run: result: refused: the tree is not free" >&2; exit 
 # and keeps the tree it took: RACH2_RUN_TREE_LOCK names the lock directory,
 # which the helper removes if the claim is interrupted, and which the run
 # owns again from its first line. A caller that set the offset itself owns
-# the ports it names. RACH2_PORT_DIR names another directory for the block
-# files, for the runner's selftest, which holds every block of its own.
+# the ports it names. Before the block, the helper takes the host lock in the
+# same directory, of the kind RACH2_HOST_LOCK gives it: `shared`, which any
+# number of runs have at once, or, for a run with a suite that declares more
+# guest memory than half of the host's, as `bigmem` does on the testing host,
+# `alone`, which waits for the runs in progress to end and keeps every other
+# run that claims a block from starting until this one ends (`host_claim` in
+# the helper says how).
+# The variable is given to the helper alone, which unsets it before the exec.
+# RACH2_PORT_DIR names another directory for the block files and the host
+# lock's, for the runner's selftest, which holds every block of its own.
 if [ -n "$machines" ] && [ -z "${RACH2_PORT_OFFSET:-}" ]; then
     RACH2_RUN_GROUP=$$; RACH2_RUN_WORK=$WORK
     export RACH2_RUN_GROUP RACH2_RUN_WORK
     if [ -n "$LOCKED" ]; then
         RACH2_RUN_TREE_LOCK=$LOCK; export RACH2_RUN_TREE_LOCK
     fi
+    RACH2_HOST_LOCK=$(host_lock "$@"); export RACH2_HOST_LOCK
     exec "$RACH2_RUN_UTIL" ports "${RACH2_PORT_DIR:-/tmp}" 10 sh "$0" "$@"
 fi
 [ -z "${RACH2_PORT_OFFSET:-}" ] || export RACH2_PORT_OFFSET

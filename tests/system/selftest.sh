@@ -19,7 +19,7 @@ set -u
 # copy have no such target, so the name a caller set is dropped here.
 RACH2_KERNEL=""
 export RACH2_KERNEL
-unset RACH2_TIMEOUT_FACTOR RACH2_IDLE_TIMEOUT RACH2_STOP_ON_FAIL RACH2_KVM_DEVICE
+unset RACH2_TIMEOUT_FACTOR RACH2_IDLE_TIMEOUT RACH2_STOP_ON_FAIL RACH2_KVM_DEVICE RACH2_HOST_LOCK
 # The fixture writes a few files, and asking Windows for its drive's free
 # space under WSL costs a second a run, so the floor is off but where a row
 # sets one.
@@ -870,6 +870,74 @@ rm -f "$WORK/ports-entered"
 "$WORK/pending" "$SELFTEST_UTIL" ports "$WORK/ports" 2 sh -c 'echo started > "$1"' sh "$WORK/ports-entered" > /dev/null; rc=$?
 check "a claim signalled before it locks a block ends with 128 plus the signal" 143 "$rc"
 check "and its command does not start" 0 "$([ -e "$WORK/ports-entered" ] && echo 1 || echo 0)"
+
+# The host lock, in a directory of its own. A shared claim takes it; a claim
+# of the host alone made beside it waits and says so; a shared claim made
+# while that one waits waits behind it and says so. Once the first shared
+# claim's holder exits, the claim of the host alone starts and the second
+# shared claim still waits; once the holder of the host alone exits, the
+# second shared claim starts. The commands of the claim of the host alone
+# and of the second shared claim write `started` only if the claim each
+# waited for, their third argument, has exited when they start, as the
+# third port claim's command does, so a claim that starts too soon fails its
+# row however late the test looks. The test's wait for a claim to say that
+# it waits ends early if the claim's command starts instead.
+mkdir -p "$WORK/hostlock"
+rm -f "$WORK"/ports-entered.* "$WORK"/ports-release.* "$WORK"/ports-out.*
+# shellcheck disable=SC2016 # $1, $2 and $3 are the inner shell's arguments
+after='case "$(ps -o stat= -p "$3" 2> /dev/null | tr -d " ")" in
+    ""|Z*) echo started ;;
+    *) echo "started while held" ;;
+    esac > "$1"; i=0; while [ ! -e "$2" ] && [ "$i" -lt 600 ]; do sleep 0.1; i=$((i+1)); done'
+host_waits() { # host_waits NAME TEXT
+    i=0
+    while ! grep -q "^run: host: $2\$" "$WORK/ports-out.$1" 2> /dev/null &&
+        [ ! -e "$WORK/ports-entered.$1" ] && [ "$i" -lt 600 ]; do
+        sleep 0.1; i=$((i+1))
+    done
+}
+RACH2_HOST_LOCK=shared "$SELFTEST_UTIL" ports "$WORK/hostlock" 2 sh -c "$holder" sh \
+    "$WORK/ports-entered.shared1" "$WORK/ports-release.shared1" > "$WORK/ports-out.shared1" &
+hostshared1=$!
+portclaims=$hostshared1
+ports_entered shared1
+RACH2_HOST_LOCK=alone "$SELFTEST_UTIL" ports "$WORK/hostlock" 2 sh -c "$after" sh \
+    "$WORK/ports-entered.alone" "$WORK/ports-release.alone" "$hostshared1" > "$WORK/ports-out.alone" &
+hostalone=$!
+portclaims="$portclaims $hostalone"
+host_waits alone 'waiting for the runs in progress to end'
+RACH2_HOST_LOCK=shared "$SELFTEST_UTIL" ports "$WORK/hostlock" 2 sh -c "$after" sh \
+    "$WORK/ports-entered.shared2" "$WORK/ports-release.shared2" "$hostalone" > "$WORK/ports-out.shared2" &
+hostshared2=$!
+portclaims="$portclaims $hostshared2"
+host_waits shared2 'waiting for a run that needs the host alone'
+check "a shared claim of the host takes it" 0 "$(cat "$WORK/ports-entered.shared1" 2> /dev/null)"
+check "a claim of the host alone beside it says it waits" 1 \
+    "$(grep -c '^run: host: waiting for the runs in progress to end$' "$WORK/ports-out.alone")"
+check "and does not start its command" 0 "$([ -e "$WORK/ports-entered.alone" ] && echo 1 || echo 0)"
+check "a shared claim made while that one waits says it waits behind it" 1 \
+    "$(grep -c '^run: host: waiting for a run that needs the host alone$' "$WORK/ports-out.shared2")"
+check "and does not start its command" 0 "$([ -e "$WORK/ports-entered.shared2" ] && echo 1 || echo 0)"
+: > "$WORK/ports-release.shared1"
+ports_end shared1 "$hostshared1"
+ports_entered alone
+check "once the first shared claim ends, the claim of the host alone starts" started \
+    "$(cat "$WORK/ports-entered.alone" 2> /dev/null)"
+check "and the second shared claim still waits" 0 "$([ -e "$WORK/ports-entered.shared2" ] && echo 1 || echo 0)"
+: > "$WORK/ports-release.alone"
+: > "$WORK/ports-release.shared2"
+ports_end alone "$hostalone"
+ports_entered shared2
+ports_end shared2 "$hostshared2"
+portclaims=""
+check "once the claim of the host alone ends, the second shared claim starts" started \
+    "$(cat "$WORK/ports-entered.shared2" 2> /dev/null)"
+# shellcheck disable=SC2016 # the variable is the inner shell's
+out=$(RACH2_HOST_LOCK=shared "$SELFTEST_UTIL" ports "$WORK/hostlock" 2 sh -c 'echo "${RACH2_HOST_LOCK-unset}"')
+check "a claim's command is not given RACH2_HOST_LOCK" unset "$out"
+out=$(RACH2_HOST_LOCK=both "$SELFTEST_UTIL" ports "$WORK/hostlock" 2 sh -c 'echo started' 2>&1); rc=$?
+check "a host lock other than shared or alone is refused" 2 "$rc"
+check "and its command does not start" 0 "$(printf '%s\n' "$out" | grep -c '^started$')"
 
 # What a run owns. One run at a time on a tree: a second is refused with the
 # first named; a lock a dead run left is taken over, unless something of that

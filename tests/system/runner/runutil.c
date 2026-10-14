@@ -1289,7 +1289,8 @@ static int open_shared(const char *path)
 
 /** End the port claim with 128 plus the number of a signal it has received.
  * The signals in `stop` are blocked except while the claim waits, and here,
- * where any that arrived during a pass over the blocks are delivered.
+ * where any that arrived during a try of the host lock or a pass over the
+ * blocks are delivered.
  */
 static void stop_if_interrupted(const sigset_t *stop)
 {
@@ -1329,11 +1330,123 @@ static void ports_start(const sigset_t *stop, char **cmd)
     execute(cmd, 0);
 }
 
+/** Try to take a POSIX record lock of `type`, F_RDLCK or F_WRLCK, on the
+ * whole of the file `fd` has open. Return 0 when it is taken, 1 when another
+ * process has a lock that conflicts with it, and -1 on any other failure.
+ */
+static int try_lock(int fd, short type)
+{
+    struct flock lock;
+
+    memset(&lock, 0, sizeof(lock));
+    lock.l_type = type;
+    lock.l_whence = SEEK_SET;
+    if (fcntl(fd, F_SETLK, &lock) == 0)
+        return 0;
+    return errno == EACCES || errno == EAGAIN ? 1 : -1;
+}
+
+/** Open `DIR/NAME`, one of the two files of the host lock, as `open_shared`
+ * opens a block's, or refuse the run when it cannot be opened.
+ */
+static int open_host_file(const char *dir, const char *name)
+{
+    char path[4096];
+    int fd;
+
+    snprintf(path, sizeof(path), "%s/%s", dir, name);
+    fd = open_shared(path);
+    if (fd < 0) {
+        fprintf(stderr, "run: result: refused: the host lock %s cannot be opened: %s\n", path,
+                strerror(errno));
+        remove_work();
+        exit(1);
+    }
+    return fd;
+}
+
+/** Take a lock of `type` on the file `fd` has open, trying once a second, as
+ * the claim of a block does, while another process has a lock that conflicts
+ * with it. The signals in `stop` are unblocked only between the tries. The
+ * first try that fails prints `waiting`, unless `*said` says a line has been
+ * printed already. Return 0 when the lock is taken and -1 when it fails for
+ * another reason, with `errno` set.
+ */
+static int wait_for_lock(int fd, short type, const sigset_t *stop, const char *waiting, int *said)
+{
+    int held;
+
+    while ((held = try_lock(fd, type)) == 1) {
+        if (!*said) {
+            printf("%s\n", waiting);
+            fflush(stdout);
+            *said = 1;
+        }
+        sigprocmask(SIG_UNBLOCK, stop, NULL);
+        pause_for(1.0);
+        stop_if_interrupted(stop);
+    }
+    return held;
+}
+
+/**
+ * Take the host lock that `RACH2_HOST_LOCK` asks for, `shared` or `alone`,
+ * and keep it through exec; with the variable unset, take none. A shared run
+ * takes a read lock on `DIR/rach2-host.lock`, which any number of runs have
+ * at once, and a run that needs the host alone takes a write lock on it,
+ * which it gets only when no other run has a lock there.
+ *
+ * A write lock that only waited for the read locks to go could wait for
+ * ever, since a run that starts meanwhile takes a read lock of its own. So a
+ * run first locks `DIR/rach2-host.gate`: one that needs the host alone takes
+ * a write lock there and keeps it while it waits and while it runs, and a
+ * shared run takes a read lock there, then the host lock, and then gives the
+ * read lock back. A shared run that starts while another waits for the host
+ * alone waits behind it. A wait prints one line, once, and a signal ends it
+ * as it ends the wait for a block. The command is not given the variable,
+ * and a value other than the two refuses the run with status 2.
+ */
+static void host_claim(const char *dir, const sigset_t *stop)
+{
+    static const char ahead[] = "run: host: waiting for the runs in progress to end";
+    static const char behind[] = "run: host: waiting for a run that needs the host alone";
+    const char *mode = getenv("RACH2_HOST_LOCK");
+    int gate, host, alone, failed, said = 0;
+
+    if (mode == NULL)
+        return;
+    alone = !strcmp(mode, "alone");
+    if (!alone && strcmp(mode, "shared") != 0) {
+        fprintf(stderr, "run: result: refused: RACH2_HOST_LOCK must be shared or alone\n");
+        remove_work();
+        exit(2);
+    }
+    gate = open_host_file(dir, "rach2-host.gate");
+    host = open_host_file(dir, "rach2-host.lock");
+    if (alone)
+        failed = wait_for_lock(gate, F_WRLCK, stop, ahead, &said) != 0 ||
+                 wait_for_lock(host, F_WRLCK, stop, ahead, &said) != 0;
+    else
+        failed = wait_for_lock(gate, F_RDLCK, stop, behind, &said) != 0 ||
+                 wait_for_lock(host, F_RDLCK, stop, behind, &said) != 0;
+    if (failed) {
+        fprintf(stderr, "run: result: refused: the host lock under %s cannot be taken: %s\n", dir,
+                strerror(errno));
+        remove_work();
+        exit(1);
+    }
+    if (!alone)
+        close(gate);
+    unsetenv("RACH2_HOST_LOCK");
+}
+
 /** Claim a block of host ports and hold it through exec, as `lock` holds the
  * tree. Block N is `DIR/rach2-ports.N`, locked with a POSIX record lock, and
  * the command runs with `RACH2_PORT_OFFSET` set to N * 1000, which
  * tests/system/suites.mk adds to every port it forwards. The lowest free
- * block is taken; while every block is held, the claim waits. An interrupt,
+ * block is taken; while every block is held, the claim waits. Before the
+ * block, `host_claim` takes the host lock `RACH2_HOST_LOCK` asks for, in the
+ * same directory, and that lock too is held through exec. An interrupt,
  * hangup or termination at any point of the claim ends it with 128 plus the
  * signal's number, and the command does not start.
  */
@@ -1352,6 +1465,7 @@ static void ports_exec(const char *dir, int count, char **cmd)
     signal(SIGTERM, on_signal);
     signal(SIGHUP, on_signal);
     sigprocmask(SIG_BLOCK, &stop, NULL);
+    host_claim(dir, &stop);
     for (;;) {
         opened = 0;
         for (slot = 0; slot < count; slot++) {
