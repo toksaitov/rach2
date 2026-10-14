@@ -1301,21 +1301,30 @@ static void stop_if_interrupted(const sigset_t *stop)
     }
 }
 
+/** End the process with the signal `sig` after removing the run's work
+ * directory and tree lock. It is the handler for the last moments of the port
+ * claim, between the unblocking of the signals and the exec, where
+ * `on_signal` would lose a signal to the exec and the default action would
+ * leave the work behind. The exec makes the action the default again, and the
+ * run's first line traps the signals itself.
+ */
+static void on_handoff_signal(int sig)
+{
+    remove_work();
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+
 /** Run the command that has claimed a block. The caller has called
- * `stop_if_interrupted` with the signals in `stop` still blocked, and the
- * handlers become the defaults before they are unblocked, so a signal that
- * arrives after that check ends the process instead of being lost when exec
- * replaces it. The run's work directory is removed first if one is pending.
+ * `stop_if_interrupted` with the signals in `stop` still blocked. A signal
+ * that is pending or arrives before the exec goes to `on_handoff_signal`.
  */
 static void ports_start(const sigset_t *stop, char **cmd)
 {
-    sigset_t pending;
-
     reset_signals();
-    if (sigpending(&pending) == 0 &&
-        (sigismember(&pending, SIGINT) || sigismember(&pending, SIGTERM) ||
-         sigismember(&pending, SIGHUP)))
-        remove_work();
+    signal(SIGINT, on_handoff_signal);
+    signal(SIGTERM, on_handoff_signal);
+    signal(SIGHUP, on_handoff_signal);
     sigprocmask(SIG_UNBLOCK, stop, NULL);
     execute(cmd, 0);
 }

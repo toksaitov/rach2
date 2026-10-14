@@ -1148,5 +1148,63 @@ check "and runs its script" 1 "$(printf '%s\n' "$out" | grep -c '^holder ran$')"
 check "and the lock goes with the holder" 0 "$([ -e "$WORK/build/.run.lock" ] && echo 1 || echo 0)"
 rm -rf "$WORK/build/.run.lock"
 
+# A run started again under its port claim is handed the tree lock it took
+# before the claim, and owns it from its first line: a run that ends at its
+# first check, as one stopped by a signal there ends, removes the lock with
+# its scratch. The handoff is made here by hand, as the claim makes it, with
+# an offset that the first check refuses.
+mkdir -p "$WORK/handoff/lock" "$WORK/handoff/work"
+# shellcheck disable=SC2016 # $$ is the inner shell's, the run's own pid
+out=$(cd "$WORK" && RACH2_RUN_TREE_LOCK="$WORK/handoff/lock" RACH2_RUN_WORK="$WORK/handoff/work" \
+    RACH2_RUN_UTIL="$SELFTEST_UTIL" RACH2_PORT_OFFSET=x \
+    sh -c 'RACH2_RUN_GROUP=$$ exec sh tests/run passing' 2>&1); rc=$?
+check "a run handed the tree lock by its claim, ended at its first check, exits as refused" 2 "$rc"
+check "and removes the lock it was handed" 0 "$([ -e "$WORK/handoff/lock" ] && echo 1 || echo 0)"
+check "and its scratch" 0 "$([ -e "$WORK/handoff/work" ] && echo 1 || echo 0)"
+rm -rf "$WORK/handoff"
+
+# Every check that can refuse a run comes before its port claim. With every
+# block of a directory of its own held, a run whose registry declares one
+# image glob for two suites that boot machines is refused at once, and does
+# not wait for a block it would only give back. The offset a run of this
+# suite was given is unset, since a run given one claims no block. The bound
+# of 300 tenths of a second only ends a failed test, which then releases the
+# blocks.
+hold_all_ports() {
+    # shellcheck disable=SC2016 # $1 and $2 are the inner shell's arguments
+    set -- sh -c 'echo held > "$1"; i=0; while [ ! -e "$2" ] && [ "$i" -lt 600 ]; do sleep 0.1; i=$((i+1)); done' \
+        sh "$WORK/allports-held" "$WORK/allports-release"
+    n=9
+    while [ "$n" -ge 0 ]; do
+        set -- "$SELFTEST_UTIL" lock "$WORK/allports/rach2-ports.$n" "$WORK/allports/owner" "$@"
+        n=$((n - 1))
+    done
+    "$@" &
+}
+mkdir -p "$WORK/allports"
+rm -f "$WORK/allports-held" "$WORK/allports-release" "$WORK/dup.rc"
+cp "$WORK/tests/registry" "$WORK/registry.saved"
+printf '%s\n' 'dupa|qemu-system-i386|full|same/*' 'dupb|qemu-system-i386|full|same/*' >> "$WORK/tests/registry"
+hold_all_ports
+allports=$!
+i=0
+while [ ! -s "$WORK/allports-held" ] && [ "$i" -lt 600 ]; do sleep 0.1; i=$((i + 1)); done
+( unset RACH2_PORT_OFFSET; cd "$WORK" && PATH="$WORK/bin:$PATH" RACH2_WORKERS=2 \
+    RACH2_PORT_DIR="$WORK/allports" sh tests/run dupa > "$WORK/dup.out" 2>&1
+    echo $? > "$WORK/dup.rc" ) &
+duprun=$!
+i=0
+while [ ! -s "$WORK/dup.rc" ] && [ "$i" -lt 300 ]; do sleep 0.1; i=$((i + 1)); done
+check "a run whose registry declares one glob twice is refused while every block is held" 1 \
+    "$(cat "$WORK/dup.rc" 2> /dev/null || echo waiting)"
+: > "$WORK/allports-release"
+wait "$allports"
+wait "$duprun"
+check "and says two suites declare the same images" 1 \
+    "$(grep -c 'run: result: refused: two suites declare the same images' "$WORK/dup.out")"
+check "and waits for no block" 0 "$(grep -c '^run: ports: ' "$WORK/dup.out")"
+mv "$WORK/registry.saved" "$WORK/tests/registry"
+rm -rf "$WORK/allports" "$WORK/allports-held" "$WORK/allports-release" "$WORK/dup.rc" "$WORK/dup.out"
+
 echo "selftest: $((total - fails)) of $total checks passed"
 [ "$fails" -eq 0 ] || exit 1
