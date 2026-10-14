@@ -25,6 +25,7 @@ RESCUE=1 ./run.sh               # no root, the kernel debug shell
 * `NIC` is `rtl8139` (the default) or `e1000`, on QEMU's user network with host port 8080 forwarded to guest port 80; `NET_HOSTFWD` replaces the forwarding rule, and `NET=off` leaves the network options out, so QEMU adds its default e1000.
 * `DISK=FILE` attaches a raw disk on the IDE bus and adds `rach2.fsdisk`; `DISKBUS=ahci` puts it on an ICH9 AHCI controller instead, and `DISKNOMOUNT=1` attaches it without the mount option.
 * `RESCUE=1` adds `rach2.rescue`.
+* `DISPLAY_MODE` is passed to QEMU's `-display`. Unset, it is `none` on a host other than macOS and Windows when neither `DISPLAY` nor `WAYLAND_DISPLAY` is set, as in an ssh session, and QEMU opens no window; the console is then the terminal alone. `run_from_disk.sh`, `run_from_iso.sh` and `debug.sh` read it as well.
 * `ARCH=x86_64` boots `build/x86_64/rach2/kernel` and the images under `build/x86_64/images/` on `qemu-system-x86_64`. `run_from_disk.sh`, `run_from_iso.sh` and `debug.sh` read it as well.
 
 A persistent root is a disk image:

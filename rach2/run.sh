@@ -21,6 +21,10 @@
 #   NET_HOSTFWD="hostfwd=tcp::2222-:22" ./run.sh os-real  # forward SSH to :2222
 #   NIC=e1000 ./run.sh os-real                            # the other card
 #
+# With no X or Wayland display, as in an ssh session on Linux, QEMU opens no
+# window and the console is the terminal alone; DISPLAY_MODE=none, gtk, sdl or
+# cocoa chooses instead (see qemu_devices.sh).
+#
 # Both os-simple and os-real ask who is there. `make` mints the demo passwords
 # when they are absent: krffs/rach2_demo_password is root's, and
 # krffs/rach2_test_password the unprivileged test account's; neither is
@@ -116,4 +120,4 @@ if [ -n "$CMDLINE" ]; then
     set -- "$@" -append "$CMDLINE"
 fi
 
-"$QEMU" -cpu "$CPU" -kernel "$KERNEL" "$@" -serial stdio $AUDIO_OPTS $NET_OPTS
+"$QEMU" -cpu "$CPU" -kernel "$KERNEL" "$@" -serial stdio $AUDIO_OPTS $NET_OPTS $DISPLAY_OPTS

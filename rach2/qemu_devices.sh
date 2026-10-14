@@ -2,9 +2,9 @@
 # shellcheck shell=sh
 #
 # Sourced by the run/debug scripts. Set AUDIO_DEVICE (sb16, hda, or speaker;
-# default speaker) before sourcing; this sets AUDIO_OPTS and NET_OPTS for the
-# QEMU command line, and QEMU, BUILD_DIR and MAKE_ARCH, the words a make of
-# that build begins with, for the architecture.
+# default speaker) before sourcing; this sets AUDIO_OPTS, NET_OPTS and
+# DISPLAY_OPTS for the QEMU command line, and QEMU, BUILD_DIR and MAKE_ARCH,
+# the words a make of that build begins with, for the architecture.
 #
 # ARCH picks the architecture as mk/arch.mk does: i686, the default, boots
 # qemu-system-i386 on what build/ holds, and x86_64 boots qemu-system-x86_64
@@ -14,6 +14,13 @@
 #   NET=off                     disable networking
 #   NET_HOSTFWD="hostfwd=..."   override the host port forwards
 #   NIC=rtl8139|e1000           choose the card (default rtl8139)
+#
+# QEMU opens a window, which on Linux and the other Unix systems needs an X or
+# Wayland display. With neither DISPLAY nor WAYLAND_DISPLAY set, as in an ssh
+# session, the machine runs with no window and its console is the serial port
+# alone. DISPLAY_MODE is passed to -display and replaces that choice:
+#   DISPLAY_MODE=none           no window on any host
+#   DISPLAY_MODE=gtk|sdl|cocoa  the window QEMU names so
 
 AUDIO_DEVICE="${AUDIO_DEVICE:-speaker}"
 
@@ -57,6 +64,21 @@ case "$(uname -s)" in
         AUDIO_BACKEND="-audiodev sdl,id=audio0"
         ;;
 esac
+
+case "$(uname -s)" in
+    Darwin*|MINGW*|MSYS*|CYGWIN*)
+        ;;
+    *)
+        if [ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+            DISPLAY_MODE="${DISPLAY_MODE:-none}"
+        fi
+        ;;
+esac
+if [ -n "${DISPLAY_MODE:-}" ]; then
+    DISPLAY_OPTS="-display $DISPLAY_MODE"
+else
+    DISPLAY_OPTS=""
+fi
 
 # Configure audio device based on selection
 case "$AUDIO_DEVICE" in

@@ -30,7 +30,7 @@ make
 rach2/run.sh os-real
 ```
 
-The first `make` takes some minutes. `run.sh` starts QEMU and shows the console both in its window and in the terminal, through the serial port. Log in as `root` with the password in `krffs/rach2_demo_password`, which the build creates. `poweroff -f` stops the machine.
+The first `make` takes some minutes. `run.sh` starts QEMU and shows the console in the terminal, through the serial port, and in QEMU's window when the host has a display; over ssh there is no window. Log in as `root` with the password in `krffs/rach2_demo_password`, which the build creates. `poweroff -f` stops the machine.
 
 For x86-64, install the `x86_64-elf` toolchain, build with `make ARCH=x86_64`, and boot with `ARCH=x86_64 rach2/run.sh os-real`. [`tests/Readme.md`](tests/Readme.md) describes the tests.
 

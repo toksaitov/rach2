@@ -35,4 +35,4 @@ if [ ! -f "$ISO" ]; then
     exit 1
 fi
 
-"$QEMU" -cpu "$CPU" -cdrom "$ISO" -serial stdio $AUDIO_OPTS $NET_OPTS
+"$QEMU" -cpu "$CPU" -cdrom "$ISO" -serial stdio $AUDIO_OPTS $NET_OPTS $DISPLAY_OPTS

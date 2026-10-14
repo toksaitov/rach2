@@ -45,4 +45,4 @@ CPU="${CPU:-max}"
 
 "$QEMU" -cpu "$CPU" \
     -drive "file=$DISK,format=raw,if=ide,index=0,media=disk" \
-    -serial stdio $AUDIO_OPTS $NET_OPTS
+    -serial stdio $AUDIO_OPTS $NET_OPTS $DISPLAY_OPTS

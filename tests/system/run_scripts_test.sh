@@ -9,10 +9,13 @@
 # random devices fail closed and dropbear can make no host key. The rows
 # require that default and the override of each script, and the audio,
 # network, disk-bus and rescue options of run.sh, and that ARCH=x86_64 boots
-# the x86-64 build's kernel and image on qemu-system-x86_64. Copies of the
-# scripts run in a private tree against stand-ins for both emulators on the
-# PATH, which write their arguments one per line, so nothing boots; the
-# x86-64 one writes its own name first.
+# the x86-64 build's kernel and image on qemu-system-x86_64. They also require
+# `-display none` from every script on a Linux host with neither DISPLAY nor
+# WAYLAND_DISPLAY set, no -display with either set or on macOS, and DISPLAY_MODE
+# in its place when it is set. Copies of the scripts run in a private tree
+# against stand-ins for both emulators on the PATH, which write their arguments
+# one per line, so nothing boots; the x86-64 one writes its own name first. A
+# stand-in uname names the host system as UNAME_S says, Linux by default.
 #
 # With --mutate each fault below is put into the private copy of one script,
 # must fail the row named for it, and is restored and touched before every row
@@ -67,6 +70,11 @@ cat >"$work/bin/qemu-system-x86_64" <<'EOF'
 { echo qemu-system-x86_64; for a in "$@"; do printf '%s\n' "$a"; done; } >"$ARGS_OUT"
 EOF
 chmod +x "$work/bin/qemu-system-x86_64"
+cat >"$work/bin/uname" <<'EOF'
+#!/bin/sh
+echo "${UNAME_S:-Linux}"
+EOF
+chmod +x "$work/bin/uname"
 images="$work/rach2/../build/images"
 
 pass()
@@ -99,7 +107,8 @@ run()
     rc=0
     # shellcheck disable=SC2086 # one setting a word, split on purpose
     env -u ARCH -u CPU -u NET -u NIC -u NET_HOSTFWD -u DISK -u DISKBUS -u DISKNOMOUNT \
-        -u RESCUE -u AUDIO_DEVICE PATH="$work/bin:$PATH" ARGS_OUT="$work/$name.args" \
+        -u RESCUE -u AUDIO_DEVICE -u DISPLAY -u WAYLAND_DISPLAY -u DISPLAY_MODE -u UNAME_S \
+        PATH="$work/bin:$PATH" ARGS_OUT="$work/$name.args" \
         $settings sh "$work/rach2/$ran" "$@" >"$work/$name.out" 2>&1 || rc=$?
 }
 
@@ -165,6 +174,16 @@ rows()
     absent run-nomount rach2.fsdisk
     run run-rescue RESCUE=1 -- run.sh test
     row run-rescue -append rach2.rescue
+    run run-nodisplay -- run.sh test
+    row run-nodisplay -display none
+    run run-x11 DISPLAY=:0 -- run.sh test
+    absent run-x11 -display
+    run run-wayland WAYLAND_DISPLAY=wayland-0 -- run.sh test
+    absent run-wayland -display
+    run run-macos UNAME_S=Darwin -- run.sh test
+    absent run-macos -display
+    run run-display-mode DISPLAY=:0 DISPLAY_MODE=sdl -- run.sh test
+    row run-display-mode -display sdl
     run run-missing -- run.sh os-simple
     refused run-missing 1 "build it with 'make os-simple-image'"
     run run-x86_64 ARCH=x86_64 -- run.sh test
@@ -180,10 +199,14 @@ rows()
         -netdev user,id=net0,hostfwd=tcp::2222-:22
     run disk-cpu CPU=qemu64 -- run_from_disk.sh
     row disk-cpu -cpu qemu64
+    run disk-nodisplay -- run_from_disk.sh
+    row disk-nodisplay -display none
     run iso-default -- run_from_iso.sh test
     row iso-default -cpu max -cdrom "$images/test.iso"
     run iso-cpu CPU=qemu64 -- run_from_iso.sh test
     row iso-cpu -cpu qemu64
+    run iso-nodisplay -- run_from_iso.sh test
+    row iso-nodisplay -display none
     run iso-usage -- run_from_iso.sh
     refused iso-usage 2 'usage: ./run_from_iso.sh'
 }
@@ -213,13 +236,21 @@ fi
 
 # The dollars are the scripts' own, left for their shell.
 # shellcheck disable=SC2016
-for fault in run-default run-override disk-default disk-override iso-default iso-override; do
+for fault in run-default run-override disk-default disk-override iso-default iso-override \
+    display-default display-x11; do
     case $fault in
         run-*) copy=run.sh ;;
         disk-*) copy=run_from_disk.sh ;;
         iso-*) copy=run_from_iso.sh ;;
+        display-*) copy=qemu_devices.sh ;;
     esac
     case $fault in
+        display-default)
+            change "$copy" 'DISPLAY_MODE="${DISPLAY_MODE:-none}"' ':'
+            named=run-nodisplay ;;
+        display-x11)
+            change "$copy" '[ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]' '[ -z "${WAYLAND_DISPLAY:-}" ]'
+            named=run-x11 ;;
         *-default)
             change "$copy" 'CPU="${CPU:-max}"' 'CPU="${CPU:-qemu64}"'
             named=${fault%-default}-default ;;
@@ -249,4 +280,4 @@ if [ "$mutate" -eq 2 ]; then
     echo 'run-scripts-test: texts: every fault is once in its source'
     exit 0
 fi
-echo "run-scripts-test: result: pass: six faults failed their rows; restored rows passed"
+echo "run-scripts-test: result: pass: eight faults failed their rows; restored rows passed"
