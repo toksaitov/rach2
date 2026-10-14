@@ -1,30 +1,53 @@
-# krffs/: host file-system tools
+# `krffs/`: the KRFFS host tools and the image manifests
 
-This directory contains the host implementation of KRFFS and the tools that create, inspect, and stage the file-system images used by Rach2. The kernel implementation is documented in `rach2/sys/fs/Readme.md`. GRUB disk construction belongs to `tools/image/mkdisk_grub.sh` and is documented in `tools/Readme.md`.
+`krffs/` is the build machine's side of KRFFS, the project's own file system. It has the host programs that make, check, compact, edit, draw and read KRFFS images (`mkfs.krffs`, `fsck.krffs`, `defrag.krffs`, `edfs.krffs`, `fsviz.krffs`, `readfile.krffs`), the stager that writes a directory tree into an image from a manifest (`stageimage.krffs`), a password hasher (`mkhash.krffs`) and an optional FUSE driver (`krffs`); the scripts that build images and the development credentials; the 21 manifests in `manifests/`, which list what each image contains; and four scripts the images install as programs, `dmesg.script`, `man.script`, `udhcpc-default.script` and `rescue-static.script`. Every system image is staged on the host without mounting anything, so the build needs neither root nor FUSE and works the same on macOS and Linux, and `fsck.krffs`, which shares no code with the kernel, judges the images the kernel writes in the suites. The format is the kernel's: [krffs.Readme.md](../rach2/sys/fs/krffs.Readme.md).
 
-## Tools
+## Use
 
-* `krffs` (optional, `make -C krffs mount`) mounts a whole-file image through the FUSE 2.6 interface. It validates the complete node ring before FUSE starts and forces single-threaded operation.
-* `mkfs.krffs` initializes an existing regular file or region. `-f` permits replacement of an existing KRFFS signature.
-* `fsck.krffs` validates the root and the complete node ring, requiring of every node a signature, a known type, a size of at least one header that ends inside the region, data that fits inside the node holding it (of a node that has data: a free node keeps the length of whatever was removed there), a backward link that is the size of the node before it, and a root whose backward link is the size of the last. The kernel applies the same checks to a volume it is about to mount, and what it does with a repairable fault depends on the mount: a read-only one repairs nothing, and a writable one repairs only a volume whose dirty flag says a check is owed. A fault is fatal or repairable. A fatal one, an unreadable signature, an unknown type, a size that leaves the region, data larger than its node, or a chain that does not close, is reported and the image is left exactly as found. A repairable one, the dirty flag of an image that was not cleanly unmounted, a reserved node whose name is empty and no path reaches, one name on two nodes of a directory left by a move that was interrupted, or a backward link the forward chain contradicts, is repaired after the walk has passed and each repair is named. The repeated name is resolved in favour of the larger node, since a move only ever makes a node larger; the smaller loses its name and is reclaimed with the other orphans. Where one of the two is a directory and the other a file, the directory keeps the name whatever the sizes say, because its children name it by its identifier; where both are of one kind, the larger keeps it. `--strict` reports the repairable faults, changes nothing and exits `-15`, which is which is how a test tells an image the kernel left clean from one that is still repairable. The order of writes these repairs assume is in [`rach2/sys/fs/krffs.Readme.md`](../rach2/sys/fs/krffs.Readme.md).
-* `defrag.krffs` runs `fsck.krffs`, then moves allocated nodes toward the start and coalesces free space. It currently works only on a whole-file image; its pre-check does not forward region arguments.
-* `fsviz.krffs` draws the node layout with termbox2. `-t` selects text output.
-* `edfs.krffs` edits selected node fields for diagnosis and repair.
-* `stageimage.krffs` reads a manifest and writes a hierarchical image without mounting it.
-* `readfile.krffs` extracts one absolute guest path into a host file through a bounds-checked directory walk.
-* `mkhash.krffs '$6$salt'` reads a password from standard input and writes a musl-compatible SHA-512 crypt hash.
+### The programs
 
-The image tools other than the FUSE mount accept a backing-file region where applicable:
+`make` builds the programs into `build/krffs/`, all but the FUSE driver, which `make -C krffs mount` builds:
 
 ```text
---offset BYTES --size BYTES
+mkfs.krffs IMAGE [-f] [--offset BYTES --size BYTES]
+fsck.krffs IMAGE [--strict] [--offset BYTES --size BYTES]
+defrag.krffs IMAGE
+edfs.krffs IMAGE POSITION [--set-magic N] [--set-type root|free|reserved]
+    [--set-id N] [--set-name NAME] [--set-size N] [--set-prev-size N]
+    [--set-data-size N] [--offset BYTES --size BYTES]
+fsviz.krffs IMAGE [-t] [--offset BYTES --size BYTES]
+readfile.krffs IMAGE GUEST_PATH OUTPUT [--offset BYTES --size BYTES]
+stageimage.krffs MANIFEST IMAGE [--offset BYTES --size BYTES]
+stageimage.krffs MANIFEST --tree DIRECTORY
+mkhash.krffs '$6$SALT' < PASSWORD_FILE
+krffs IMAGE MOUNT_POINT [FUSE_OPTIONS]
 ```
 
-`mkfs.krffs`, `fsck.krffs`, `fsviz.krffs`, `edfs.krffs`, `stageimage.krffs`, and `readfile.krffs` support regions. A nonzero offset must be a multiple of 1 MiB and requires an explicit size. The region must fit in the backing file and may be at most 4095 MiB. `defrag.krffs` has the limitation noted above. The FUSE mount accepts a whole-file image, not a region.
+The first five print their usage line for `-h`.
 
-## Manifests and images
+`mkfs.krffs` writes an empty file system, a root node and one free node, over an existing regular file or a region of one, which must be at least two node headers (714 bytes). It refuses a region that already begins with the KRFFS magic number unless `-f` is given. The root gets the caller's user and group and the current time.
 
-`stageimage.krffs` accepts these line-oriented manifest directives:
+`fsck.krffs` walks the ring and prints a line for each node. A fault that the kernel's order of writes cannot produce is fatal and leaves the image as it was. Four faults that a stopped machine can leave are repaired, each with a message: a backward link the forward chain contradicts, a reserved node with no name, one name on two nodes of a directory, and the dirty flag. [krffs.Readme.md](../rach2/sys/fs/krffs.Readme.md) explains the two kinds and how a repeated name is resolved. `--strict` reports the repairable faults and changes nothing. The exit status is 0 for a clean or repaired image; 1 for a bad argument, an open or mapping that fails, or a root without the magic number or the root type; -10 for a chain that does not return to the root, -11 for a node whose header leaves the region, -12 for a missing magic number, -13 for an unknown type, -14 for a size, data length or name that does not fit, and -15 for repairs owed under `--strict`. A shell sees the negative values as 246 down to 241.
+
+`defrag.krffs` runs `fsck.krffs IMAGE` first, which repairs what it can, and stops if that fails; it looks for `fsck.krffs` on `PATH`, then in the current directory. It then moves the reserved nodes, in order, toward the start of the region, so the free space ends as one node at the end.
+
+`edfs.krffs` sets fields of the node that starts POSITION bytes into the region, to break a test image in a known way or mend one by hand. Numbers are decimal. `--set-name` stores at most 255 bytes and sets the identifier to the name's djb2 hash, in place of any `--set-id`. An option given twice is an error. When no node starts at POSITION, nothing changes and the status is still 0.
+
+`fsviz.krffs` draws the ring in the terminal, through the termbox2 library, as a row of bars labelled with file names and drawn in proportion to the nodes' sizes. `h` and `l` or the arrow keys scroll, `+` halves the bytes per character, `_` doubles them, and `q` or Ctrl-C quits; the help line shows `-` for the key that is `_`. `-t` prints one frame on standard output instead, at 512 KiB a character.
+
+`readfile.krffs` copies the regular file at the absolute GUEST_PATH out of an image into OUTPUT. It opens the image read-only and checks every node its path walk visits against the region (`krffs_reader.c`), so a damaged image is refused with the reason instead of being read out of bounds. It refuses a directory, a FIFO, a socket, and an OUTPUT that is the image itself. It is how a file a guest wrote to its disk reaches the host.
+
+`stageimage.krffs` writes the tree a manifest describes into an image that `mkfs.krffs` formatted, and prints the bytes used and free. It reads host paths relative to the current directory, the repository root when the image scripts run it. With `--tree DIRECTORY` it writes the tree as host files under DIRECTORY, which must not exist, and prints `node MODE UID GID PATH` for each node, the mode with its type bits; a directory no line declares is a node of 0:0 with mode 0755, whatever the builder's identity and umask. [`tools/Readme.md`](../tools/Readme.md) describes `tools/image/mkext2.sh`, which makes the ext2 images from that output.
+
+`mkhash.krffs` reads a password from the first line of standard input, not empty and at most 255 bytes, and prints its SHA-512 crypt hash under the `$6$` setting given as its argument. It is compiled from musl's own `crypt_sha512.c`, so the hash is the one the guest's C library checks at login.
+
+### Regions
+
+With `--offset` and `--size`, a program works on a KRFFS that is a region of a larger file, such as a partition of a disk image; without them the region is the whole file. The values are bytes, in any C base. A nonzero offset must be a multiple of 1 MiB and needs an explicit size. The region must be at least two node headers, lie inside the file, and be at most 4095 MiB, since the kernel keeps a file system's size in 32 bits (`krffs_file_system_t` in `rach2/sys/fs/krffs.h`).
+
+### Manifests
+
+A manifest has one directive a line:
 
 ```text
 dir           MODE GUEST_PATH
@@ -35,71 +58,136 @@ exec-dir      MODE GUEST_DIR HOST_DIR
 tree          MODE GUEST_DIR HOST_DIR
 ```
 
-`MODE` is octal and may include an owner as `MODE:UID:GID`; omitted ownership is `0:0`. Guest paths are absolute. `exec-dir` stages the regular executable files from one directory. `tree` recursively stages regular files and creates directories. Both walks are sorted. `stageimage.krffs` rejects a set-id `tree`. The image scripts' set-id checker also rejects a set-id `exec-dir`; a privileged file must have its own `file` directive. The stager rejects paths below the synthetic `/dev` and `/proc` trees. When it writes an image, the stager also rejects any directory it would create, including a missing parent of a path, whose identifier is that of a directory already in the image, since the two would share their children; `bC` and `cb` in one directory are such a pair.
+Fields are separated by blanks, a line whose first word begins with `#` is a comment, blank lines are skipped, and a line is at most 2046 bytes. `MODE` is octal, at most `07777`, and may give an owner as `MODE:UID:GID`; the default owner is 0:0. A guest path is absolute and at most 255 bytes, with no empty, `.` or `..` component and no trailing slash.
 
-Staged nodes use the fixed time one second after the Unix epoch, and the root is forced to uid 0 and gid 0. These rules and sorted bulk walks make repeated staging reproducible. The image scripts run the set-id guard (`tools/inspect/setidcheck.c`) on both the manifest and the completed image before publishing it. The guard selects an entry in `tools/inspect/setid.allow` by the manifest's basename without `.manifest`, so a private copy keeps that basename. The `usbdisk-proof` profile permits no set-id file or init and requires the probe at `/usbdiskprobe`; the USB mutation script substitutes its privately compiled host path and verifies the staged bytes by extraction.
+* `dir` makes a directory, or gives an existing one this mode and owner, so the line takes effect wherever it stands.
+* `file` copies a host file. `optional-file` skips one that does not exist, such as Doom's game data; one that exists and cannot be read is an error for both.
+* `text` writes the rest of the line, after the blanks that follow the path, with `\n`, `\t` and `\\` expanded.
+* `exec-dir` copies the regular files with an execute bit directly in HOST_DIR, not symbolic links and not files in its subdirectories.
+* `tree` copies every regular file under HOST_DIR, makes its directories with mode 0755 and the line's owner, and leaves a directory already in the image as it is. Any other kind of file, a symbolic link among them, is an error, and so is a HOST_DIR that is a link.
 
-A manifest names its host files by their i686 paths, `build/...` and `vendor/musl/install/...`, so one manifest describes the image of either architecture. When `RACH2_PATH_MAP` is set, the stager reads each host path through it: the variable is blank-separated `FROM=TO` pairs, and the first FROM that begins a path is replaced by its TO. The root Makefile of an x86-64 build sets it so that `build/...` is read from `build/x86_64/...`, the rendered manual and the suites' fixtures under `build/tests/system` excepted, and musl's install from `build/x86_64/vendor-work/musl/install`. Without the variable a path is read as it is written. The set-id guard and `manifest_deps.sh` read the same paths the same way.
+`exec-dir` and `tree` leave out names that begin with a dot and stage the rest in `strcmp` order. A missing parent directory is made with mode 0755 and owner 0:0. The stager refuses a file at a path already staged, a path at or below `/dev` or `/proc`, which the kernel provides, a path below a file, and a `tree` line with a set-user-ID or set-group-ID mode. In a KRFFS image it also refuses a file larger than the room left, and a directory, declared or made as a parent, whose identifier a directory in the image already has; `bC` and `cb` in one directory are such a pair.
 
-`manifest_deps.sh MANIFEST` prints the host paths a manifest stages, mapped as the stager maps them, which the image rules take as prerequisites, so that a rebuilt program rebuilds the image that carries it; an optional file that is absent is left out. A staged directory is printed as the files under it, since a directory keeps its time when a program in it is relinked, and since the source trees a `tree` line stages, `utils`, `rach2` and `ish`, are also the names of phony targets, which make holds to be out of date every time.
+Every staged node, the root included, has the time one second after the epoch, and the root has the owner 0:0. With the sorted walks, one manifest over one set of host files gives one image, byte for byte. The time is not zero because pdpmake takes a file of time zero for one that does not exist, and the staged sources are built on the machine with `make`.
 
-`stageimage.krffs MANIFEST --tree DIR` materialises the manifest into a host directory instead of an image: one host file or directory per node, every node at the fixed staged instant, and one line `node MODE UID GID PATH` on standard output for each, with the POSIX type bits in the mode; a directory a path passes through that no entry names becomes a node of its own, owned by uid 0 and gid 0 with mode 0755, so that the image does not keep the builder's identity and umask on it. A file is created exclusively and through no link, so a name staged twice is refused at the second. The directory must not exist, so that nothing a previous run left can end up in an image. `tools/image/mkext2.sh` hands the directory to `mke2fs` and the lines to `debugfs`, which sets the owners and the set-id bits a build that is not root cannot put on a host file.
+A manifest gives host files by their i686 paths, `build/...` and `vendor/musl/install/...`, so one manifest serves both architectures. When `RACH2_PATH_MAP` is set, it is a list of `FROM=TO` pairs separated by blanks, and the stager replaces the first FROM that begins a host path with its TO. The root Makefile sets it for x86-64, so that `build/...` is read from `build/x86_64/...` and musl's install from `build/x86_64/vendor-work/musl/install`, except the rendered manual under `build/man/` and the suites' fixtures under `build/tests/system/`. `manifest_deps.sh` and the set-id guard map paths the same way.
 
-`mkimage.sh MANIFEST OUTPUT [SIZE_MB [MIN_FREE_KIB]]` creates a whole-file RAM image. The default size is 10 MiB. With `MIN_FREE_KIB` the staged image must keep at least that many kibibytes free, or the build fails; the recovery image keeps 512, the room its system writes in. It builds a temporary file, runs `mkfs.krffs` and `stageimage.krffs`, checks it, and renames it over the output only after every step succeeds. It then writes `OUTPUT.d`, a make dependency file naming every host path the stager read. A directory an `exec-dir` line stages from is not named there: its own time moves whenever any entry is made or removed in it, and `build/tests` also holds the work directories of proofs and suites, so an image that depended on it was staged again by every suite of a pooled run at once. `OUTPUT.programs`, written before the image is moved into place, records instead the programs each such directory held, and the dependency file names that file. `programs.sh check`, which the root Makefile runs each time it reads the dependency files, writes the record again, and so puts the image out of date, only when a directory's programs are no longer the ones it records.
+A manifest needs an entry of its own name, less `.manifest`, in `tools/inspect/setid.allow`, and a script's private copy of a manifest must keep the name. The set-id guard, `tools/inspect/setidcheck.c`, which `mkimage.sh` and `mkdisk.sh` run on the manifest and on the staged image, refuses a manifest without an entry, an entry without a manifest, and a set-id `exec-dir` or `dir`, so a privileged program needs a `file` line. Each program that `os-real`, `os-simple`, `rach2-metal-disk` or `rach2-recovery` stages under `/bin` or `/sbin` needs a manual page or an alias ([`man/Readme.md`](../man/Readme.md)). [`tools/Readme.md`](../tools/Readme.md) describes the guard and the manual check.
 
-`mkdisk.sh MANIFEST OUTPUT [DISK_MB] [PARTITION_MB]` creates a disk file with an MBR and one KRFFS partition of type `0x7f` at LBA 2048. The defaults are a 64 MiB disk and a 48 MiB partition. The partition may not exceed the kernel's 512 MiB mount window. This script also builds through a temporary file and publishes only a checked image.
+### The manifests
 
-The root Makefile owns the named image profiles and their dependencies. The root `make` builds `test.krffs`, `os-simple.krffs`, and `os-real.krffs`. The metal and recovery RAM images have separate targets, named in the root Makefile. The metal RAM, metal disk and os-real manifests stage `/bin/audiotest` for PCM playback over SSH; `/proc/audio` comes from the kernel and is not an image node.
+The images are written under `build/images/`, or `build/x86_64/images/` for x86-64. The root Makefile and `tests/system/suites.mk` set their sizes.
 
-`gen_demo_key.sh` provisions separate Ed25519 keypairs for root and the test account. Optional `authorized_keys.extra` and `test_authorized_keys.extra` files add local public keys; the script rejects private-key material and malformed lines. `RACH2_REPLACE_KEYS=1` replaces existing generated pairs.
+| Manifest | Images | Contents |
+| --- | --- | --- |
+| `test` | `test.krffs` (`make test-image`) | the guest probes, the musl programs under `/musl`, `ish`, and the `/etc` files the probes read |
+| `os-simple` | `os-simple.krffs` (`make os-simple-image`), `os-simple.ext2` | `ish`, the in-house utilities and account programs, `init-login` |
+| `os-real` | `os-real.krffs`, `os-real.ext2`, `os-real.disk` (`make os-real-image`, `os-real-ext2`, `os-real-disk`), suites' disks and volumes | BusyBox, Dropbear, TinyCC, pdpmake, musl's headers and libraries, `mke2fs`, `bootctl`, `update`, the manual, Doom, `/src` |
+| `os-real-gnu` | `os-real-gnu.ext2` (`make os-real-gnu-ext2`) | os-real without Dropbear, with `init-metal`; the GNU layer is installed over it |
+| `rach2-metal` | `rach2-metal.krffs` (`make rach2-metal-image`) | the metal kernel's RAM root: a shell, Dropbear, the accounts and keys |
+| `rach2-metal-disk` | `rach2-metal-disk.ext2`, the sealed disk's root (`make rach2-sealed-disk`), and `installer-root.ext2` | os-real with `init-metal` and `/demo` |
+| `rach2-recovery` | `rach2-recovery.krffs`, or `rach2-recovery-with-key.krffs` in a tree with a recovery key (`make rach2-recovery-image`) | `init-recovery`, the repair programs, and `recovery_authorized_keys` if the tree has one |
+| `grub-test` | `grub-test.ext2`, for `grub` and `bootorder` | os-real and two marked GRUB cores; `grub` stops if the other lines differ from os-real's |
+| `fs-demo` | `fs-demo/ext2.img`, `fs-demo/krffs.img` | `demo/hello.txt` |
+| `disk-test` | disks of `disk`, `crash` and the other disk suites | probes the debug shell runs from a disk root |
+| `persist-test` | disks of `persist`, `persist-ahci` | `persistprobe` |
+| `cred-persist-test` | the disk of `cred-persist` | `creddisk` and the two files it replaces |
+| `stress-test` | disks of `stress`, `stress-ahci` | `stressprobe` |
+| `shutdown-test` | the disk of `shutdown` | BusyBox, a set-user-ID `su`, `init-shell`, a test account |
+| `login-test-strict`, `login-test-shell` | the two RAM roots of `login` | one system, with `init-login` or `init-shell`, and no `/bin/login` |
+| `krffsvol-test` | the volume of `krffsmount` and `krffscheck` | three files, one in a directory |
+| `loopimg-test` | `loopdev`'s loop image, and the KRFFS partition of `metal`'s stick | two files |
+| `imagerace-tree` | the second image of `imagerace` | the programs of one directory |
+| `rng-proof`, `usbdisk-proof` | private images of `tests/system/rng_mutate.sh` and `usbdisk_mutate.sh` | one probe, which each script replaces with its own build in a copy of the same name |
 
-`make recovery-key` seeds `recovery_authorized_keys` from `authorized_keys` when absent and preserves an existing recovery list. `make recovery-key RECOVERY_EXTRA_KEYS=/path/operator.pub` explicitly replaces that list with the builder's `authorized_keys` followed by the operator's public keys. `gen_recovery_key.sh` checks each extra key with `ssh-keygen`, rejects empty files and private keys, and publishes only a changed, complete list. This lets recovery built on one host trust an operator on another without copying a private key. Run this command before the separate `make rach2-install-stick`; recovery selects its artifact names when Make starts. `make release` and `RELEASE=1` are refused while `recovery_authorized_keys` exists, since every recovery artifact built then lets its keys in. The [host procedure](../tools/Readme.md#working-an-installed-machine-from-the-host) gives the commands.
+### Building an image
 
-`gen_demo_password.sh` provisions the two development passwords and a matching `/etc/shadow`. It uses `mkhash.krffs`, writes credentials with a restrictive umask, and publishes the two-line shadow file atomically. Existing credentials remain unchanged unless `RACH2_REPLACE_PASSWORDS=1` is set. `RACH2_ROOT_PASSWORD` and `RACH2_TEST_PASSWORD` supply replacement values.
+`mkimage.sh MANIFEST OUTPUT [SIZE_MIB [MIN_FREE_KIB]]` builds a whole-file image, the form of a RAM root. It fills a temporary file with SIZE_MIB mebibytes of zeros, 10 by default, runs `mkfs.krffs` and `stageimage.krffs` on it, fails if fewer than MIN_FREE_KIB kibibytes are left free, runs the set-id guard, and renames the file over OUTPUT only when every step has passed. A failed build leaves the previous image. The temporary names contain the process ID, so two builds of one image at once both finish.
 
-## The format the tools and the kernel share
+`mkdisk.sh MANIFEST OUTPUT [DISK_MIB [PARTITION_MIB]]` builds a disk image: an MBR (`tools/image/mkmbr.c`) with one primary partition of type `0x7f` at LBA 2048, 1 MiB in, and a KRFFS staged in that partition through the region options. The defaults are 64 and 48 MiB. It refuses a partition that does not fit, or one above 512 MiB, the cap of the kernel's page-cache window (`PC_WINDOW_CAP` in `rach2/sys/mm/pagecache.c`). It runs the set-id guard and renames only a finished image into place, but has no free-space floor and writes no dependency file.
 
-The format itself, the order in which a change reaches the medium and what a check may repair are [the kernel's document](../rach2/sys/fs/krffs.Readme.md); what follows is what a host tool must know to write an image the kernel will mount. KRFFS v2 is a packed sequence of variable-size nodes. The last node wraps to the root, and each node stores its own size and the previous node's size. The three node types are root, free, and reserved. Reserved nodes represent files and directories.
+Both run from any directory and need `mkfs.krffs` and `stageimage.krffs` in `build/krffs/`. `create_file_system.krffs.sh [SIZE_MIB]` makes an empty `build/krffs/file_system.krffs`, 10 MiB by default.
 
-Each node stores:
+### Credentials
 
-* the `KR` magic and node type;
-* a 64-bit hash identifier and the containing directory's identifier;
-* a 256-byte name buffer, for at most 255 name bytes plus the terminator;
-* mode, uid, gid, and access, modification, and attribute-change times;
-* total node size, previous node size, and data size.
+The images' accounts use keys and passwords made in `krffs/` and kept out of version control; [`tools/Readme.md`](../tools/Readme.md) gives the procedures.
 
-The allocator uses first fit, splits a free node when the remainder can hold a node header, and coalesces adjacent free nodes. Identifiers are hashes; the host and kernel implementations do not detect collisions.
+* `gen_demo_key.sh` writes `authorized_keys` and `test_authorized_keys` from the public halves of the committed key pairs `rach2_demo_ed25519` (root) and `rach2_test_ed25519` (the test account), followed by `authorized_keys.extra` and `test_authorized_keys.extra` if present, which must contain only public keys. It makes a key pair only where one is missing, or over the committed ones under `RACH2_REPLACE_KEYS=1`.
+* `gen_demo_password.sh` writes the two accounts' passwords to `rach2_demo_password` and `rach2_test_password`, readable only by their owner, and their hashes, made by `mkhash.krffs` with random salts, to `shadow`, which the manifests stage as `/etc/shadow`. The passwords are fixed development values unless `RACH2_ROOT_PASSWORD` or `RACH2_TEST_PASSWORD` gives others. While `shadow` exists it makes nothing new, unless `RACH2_REPLACE_PASSWORDS=1` is set.
+* `gen_recovery_key.sh BASE OUTPUT [EXTRA]`, run by `make recovery-key`, writes the recovery system's list `recovery_authorized_keys`: BASE, then each public key in EXTRA, which `ssh-keygen` must accept. Without EXTRA it keeps an existing list.
 
-`stageimage.krffs` writes parent-aware identifiers and directory modes. The FUSE mount remains a flat root directory: it has no `mkdir`, `rmdir`, hard-link, or symbolic-link operation. It supports lookup, listing, create, read, write, truncate, unlink, rename, timestamps, mode, ownership, sync, and file-system statistics for root-level files.
+The two key scripts replace a list only when its contents change, so a rebuild with the same keys does not restage the images.
 
-## Mounting a scratch image
-
-Build the optional mount tool with `make -C krffs mount`, then create the image and mount point under the ignored build directory:
+### Mounting an image on the host
 
 ```sh
+make -C krffs mount
+sh krffs/create_file_system.krffs.sh
 mkdir -p build/krffs/mount
-truncate -s 10M build/krffs/example.krffs
-build/krffs/mkfs.krffs build/krffs/example.krffs
-build/krffs/krffs build/krffs/example.krffs build/krffs/mount
+build/krffs/krffs build/krffs/file_system.krffs build/krffs/mount
 ```
 
-The mounted directory supports ordinary root-level file operations. Writes past EOF clear the gap, including retained allocation slack. Truncate updates EOF when the requested length equals the allocation capacity. Ownership changes preserve fields passed as `(uid_t)-1` or `(gid_t)-1`. Timestamp changes accept explicit seconds and nanoseconds, `UTIME_NOW`, `UTIME_OMIT`, or a null array for the current time. Use the host's FUSE unmount command when finished: `umount build/krffs/mount` on macOS, or `fusermount -u build/krffs/mount` on Linux with FUSE 2.
+The driver checks the whole ring first, backward links included, and runs FUSE single-threaded. The mount is one flat directory: create, read, write, truncate, rename, unlink, `chmod`, `chown`, `utimens`, `fsync` and `statfs` work, and there is no `mkdir`, `rmdir`, hard link or symbolic link. A write past the end of a file fills the gap with zeros. `chown` keeps an owner or group given as -1; `utimens` takes times, `UTIME_NOW`, `UTIME_OMIT`, or none, meaning now; and the root's dirty flag is neither shown in its mode nor changed by `chmod`. Unmount with `umount` on macOS or `fusermount -u` on Linux.
 
-`create_file_system.krffs.sh [SIZE_MB]` is a convenience wrapper that recreates `build/krffs/file_system.krffs`; its default size is 10 MiB.
+### The staged scripts
 
-## Build
+* `dmesg.script` is `/bin/dmesg`, which prints the kernel's log from `/dev/bootlog` ([dmesg(1)](../man/man1/dmesg.1)).
+* `man.script` is `/bin/man` ([man(1)](../man/man1/man.1)).
+* `udhcpc-default.script` is `/usr/share/udhcpc/default.script`, which BusyBox's `udhcpc` runs when a lease arrives, is renewed or ends, to set the address, the route and `/etc/resolv.conf` ([busybox-networking(1)](../man/man1/busybox-networking.1)).
+* `rescue-static.script` is the recovery image's `/bin/rescue-static`, which takes the sealed disk's fixed address when no lease arrives ([rescue-static(8)](../man/man8/rescue-static.8)).
 
-The component uses the host C compiler and builds eight binaries under `build/krffs/`:
+`demo/hello.txt` is the file in the FAT32, ext2 and KRFFS demonstration images that the sealed disk has in `/demo`, and on its two FAT partitions; `demo/Readme.txt` is the disk's `/demo/Readme.txt`.
 
-```sh
-make -C krffs
-```
+## Design
 
-The default build needs neither FUSE nor `pkg-config`. The FUSE mount is a separate optional target, `make -C krffs mount`, whose two objects use the flags reported by `pkg-config fuse` or `pkg-config fuse-t`; without an installed FUSE it fails with an installation hint. The other tools do not include FUSE headers or link with FUSE. Header dependencies are written beside the objects under `build/krffs/`.
+* `krffs_node.c`: `struct krffs_node`, the packed 357-byte node header, laid out as the kernel's `krffs_node_t`, and the ring walk: the next node is at a node's address plus its size, and the end of the region wraps to the root.
+* `krffs_file_system.c`, `krffs_platform.c`: the handle, a mapped region and its size; mapping it (`mmap`, or `MapViewOfFile` on Windows); the empty layout; the region options.
+* `krffs_allocator.c`: first fit with split and coalesce, as in the kernel, for the stager, `fsck.krffs` and the FUSE driver.
+* `krffs_utilities.c`: the djb2 hash of a name. `krffs_reader.c`: the bounds-checked path walk of `readfile.krffs`.
+* `NAME.krffs.c`: each tool. `krffs.c`, `krffs_fuse_operations.c`: the FUSE driver.
+* `vendor/`: termbox2 2.7.0-dev (MIT license), its Windows form, and `windows.sh`, which makes one from the other. `vs-dokany/`: a Visual Studio solution with the FUSE driver, over Dokany's FUSE library, and five of the tools.
 
-`mkhash.krffs` compiles the SHA-512 crypt implementation from the extracted musl 1.2.5 source. The root build orders KRFFS after `check-libc`. In a fresh tree, run the root `make` before a standalone `make -C krffs`.
+Every tool maps the region shared and works on the nodes in place, so a store into a node is a store into the file. No tool keeps the kernel's order of writes; the image scripts build in a temporary file that only a finished, checked image replaces.
 
-## Verification
+### Identifiers
 
-`tests/run host` covers the bounded reader, FUSE mount validation and callbacks, and the musl-compatible password hash. The FUSE test links the real mount, allocator and callback sources against `tests/host/fuse/fuse.h`; only request identity and dispatch are supplied by the test, so it needs no installed FUSE service. The host stager and kernel tests use the same fixed djb2 and parent-id vectors. `tests/run style` builds the component as part of the in-house tree and checks dependency, text, and source conventions. Image builds exercise staging and both set-id checks. The disk, persistence, credential, crash, shutdown, and stress targets exercise images made by `mkdisk.sh` through the kernel implementation.
+Each node has a 64-bit identifier, and a reserved node has its directory's in `parent_id`, 0 for the root directory. `krffs_calculate_djb_hash` is the djb2 hash of a name: `mkfs.krffs` gives it to the root and the FUSE driver to the files it creates, as the kernel does to the regular files it creates. `krffs_mix_id` in `stageimage.krffs.c` mixes the parent's identifier with that hash, as the kernel's function of the same name does, and the stager gives the result to every node. `tests/host/krffs_hash_vectors.h` has the values both must give, and the kernel's test checks its own functions against the same list. The kernel finds a file by its directory and name, never by its identifier, so a file with either kind works there.
+
+### Staging and checking
+
+`stageimage.krffs` gives the root the owner 0:0 and the staged time, then applies the manifest a line at a time (`apply_line`). `resolve_dir` finds or makes each directory of a path through `find_child`, which matches a reserved node's `parent_id` and name, and `stage_node` allocates the node, fills its header and copies the data after it. Each image is staged into an empty file system, so a name already there is an error, not an update. The bulk directives sort a directory's names before they stage them, since `readdir` order differs between hosts.
+
+`fsck.krffs` asks of each node what the kernel's mount check asks, and judges a node's size before it steps by it. It writes nothing until the walk has returned to the root. It then rebuilds the backward links first, since the allocator follows them when it frees a node, takes the name off the loser of each repeated name, frees the nameless reserved nodes through the allocator, and clears the dirty flag last.
+
+### Dependencies
+
+An image is staged again when a file it stages changes, and only then. `manifest_deps.sh MANIFEST` prints the host paths a manifest stages, mapped as the stager maps them, leaving out an absent optional file and a `build/` path not built yet. The root Makefile runs it at start on `test`, `os-simple`, `os-real`, `os-real-gnu`, `rach2-metal`, `rach2-metal-disk`, `rach2-recovery` and `grub-test`, and makes the paths prerequisites of their images. A directory is printed as the files the stager takes from it, since a directory's time does not change when a program in it is relinked, and the source trees `utils`, `rach2` and `ish` that `tree` lines stage are also the names of phony targets, which make always remakes.
+
+`mkimage.sh` sets `STAGEIMAGE_DEPS`, and the stager writes there every host path it reads, absent optional files included, and each directory an `exec-dir` line reads, marked apart. From the list `mkimage.sh` writes `OUTPUT.d`, which the root Makefile includes for the test, os-simple and os-real images. Each path that exists is a prerequisite with an empty rule, so that deleting it restages the image rather than stopping make; an absent one is replaced by its nearest existing directory, whose time changes when the file appears. An `exec-dir` directory's time changes when anything is made in it, and `build/tests` has the work directories of suites and proofs too, so `OUTPUT.programs` lists the programs in it instead (`programs.sh snapshot`), and `OUTPUT.d` lists that file. At each start the root Makefile runs `programs.sh check`, which rewrites a record, putting its image out of date, only when the programs have changed.
+
+## Building
+
+`make -C krffs` builds the eight tools into `build/krffs/`, whatever `ARCH` is, with `cc` and the host flags of `mk/host.mk` (`-O2 -Wall -Wextra -Werror`), `-std=gnu99` and `-D_FILE_OFFSET_BITS=64`; [`mk/Readme.md`](../mk/Readme.md) describes the header dependencies and the configuration fingerprint. The root `make` builds them before any image and after `check-libc`, because `mkhash.krffs` compiles `src/crypt/crypt_sha512.c` from the extracted musl 1.2.5 tree, `vendor/musl/musl-1.2.5/`, or its copy under `build/x86_64/vendor-work/musl/` for x86-64, without the warning flags. Where musl is not extracted, `make -C krffs` stops and says to run the root `make`. `fsviz.krffs` has `-Wno-error=unused-result`, since termbox2 ignores the results of a `read` and a `write` that the host's headers mark.
+
+`make -C krffs mount` builds `build/krffs/krffs` against FUSE's 2.6 interface with the flags `pkg-config` gives for `fuse`, or else `fuse-t`; without either it stops and names the packages, which [`tools/Readme.md`](../tools/Readme.md) gives for each host. No build or suite needs it. `make -C krffs clean` removes `build/krffs/`.
+
+## Limits
+
+* The FUSE driver takes a whole-file image. It finds a file by the djb2 hash of its name alone, ignoring `parent_id`, so it lists the named nodes of every directory as one, and cannot open a staged node, whose identifier is the mixed one. It is for images made with `mkfs.krffs`.
+* `defrag.krffs` does not pass the region options to `fsck.krffs`, so it works only on a whole-file image.
+* `fsviz.krffs` and `edfs.krffs` follow the ring by each node's size without `fsck.krffs`'s checks, so an image `fsck.krffs` refuses can make them loop or read past the mapping.
+* `edfs.krffs --set-name` on a directory replaces its identifier, which cuts it off from its children.
+* Every tool that opens an image, except `readfile.krffs`, opens it for writing, even `fsviz.krffs` and `fsck.krffs --strict`.
+* The stager refuses two directories with one identifier, not two files, which the kernel allows.
+* Nothing builds or tests `vs-dokany/`. It has no project for `stageimage.krffs`, `readfile.krffs` or `mkhash.krffs`, and its `fsck.krffs` project lacks `krffs_allocator.c`, which `fsck.krffs.c` calls.
+
+## Tests
+
+* `tests/run host` runs `krffs_fuse_hosttest.c` (the FUSE driver over real images, with a stand-in `tests/host/fuse/fuse.h`), `krffs_hash_hosttest.c` (the stager's identifiers against the kernel's vectors), `readfile_hosttest.c` (the reader over regions damaged by hand) and `mkhash_hosttest.c` (musl's SHA-512 crypt against published vectors) under AddressSanitizer and UndefinedBehaviorSanitizer. It also runs `sh tests/host/krffs_tools_mutate.sh --check`: the stager's refusals, a failed `mkimage.sh` keeping the previous image, `fsviz.krffs -t`, `defrag.krffs` closing a hole `edfs.krffs` made, and `edfs.krffs --set-magic`.
+* `tests/run style` builds the tools, runs the set-id guard over every manifest, and runs `tools/verify/check_repro.sh`, which stages one manifest twice and requires identical images with the bulk directives' nodes in name order.
+* `tests/run krffscheck` (`tests/system/krffscheck.sh`, needs `python3`) damages images and reads `fsck.krffs`'s verdicts on each fault, then stops a model of the kernel's order of writes after each store and requires every result to be accepted or repaired.
+* `tests/run imagerace` builds one image twice at once, and checks that a changed program restages its image while an unchanged one, or a file made beside it, does not.
+* `crash`, `shutdown`, `krffsmount` and `loopdev` run `fsck.krffs` on volumes the kernel wrote, and `selfbuild` takes the kernel the guest built off its disk with `readfile.krffs`.
+* `sh tests/host/krffs_tools_mutate.sh` puts thirteen faults into private copies of the stager, `fsviz.krffs`, `defrag.krffs`, `edfs.krffs` and `mkimage.sh`; `sh tests/host/krffs_fuse_mutate.sh` removes the driver's ring check; and `sh tests/system/host_tools_mutate.sh` puts faults into the driver, the host allocator's truncate and the host hashes, among others. Each fault must fail its test.
+
+[`tests/host/Readme.md`](../tests/host/Readme.md) and [`tests/system/Readme.md`](../tests/system/Readme.md) describe these. Run a suite with `tests/run NAME`, and a mutation script with `sh` from the repository root.
