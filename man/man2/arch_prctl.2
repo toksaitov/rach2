@@ -28,18 +28,21 @@ issues the call itself, with
 .Dv ARCH_SET_FS ,
 to install the thread-local storage of the first thread.
 .Pp
-Each thread has two bases of its own, kept in its process record, saved
-when it switches away and loaded when it switches back;
+Each thread has two bases and the FS and GS selectors of its own, kept in
+its process record, saved when it switches away and loaded when it
+switches back;
 .Xr fork 2
 gives the child its parent's as they are at the fork, and
 .Xr execve 2
-sets both to 0.
+sets the bases to 0 and the selectors to null.
 A selector the program loads into FS or GS sets that base to the
 descriptor's, 0, as on Linux, and
 .Dv ARCH_GET_FS
 and
 .Dv ARCH_GET_GS
 then read 0.
+Setting a base loads the null selector into its register first, as Linux
+does.
 FS's base is the thread pointer, where the thread's thread-local storage
 begins; GS's base is the program's to use as it likes.
 .Fa code

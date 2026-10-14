@@ -105,19 +105,39 @@ void arch_regs_get(const process_t *t, unsigned long *r)
     r[R_GS_BASE] = t == current_proc ? msr_read(MSR_KERNEL_GS_BASE) : t->regs.gs_base;
     r[R_DS] = 0;
     r[R_ES] = 0;
-    r[R_FS] = 0;
-    r[R_GS] = 0;
+    r[R_FS] = t == current_proc ? x86_64_fs_read() : t->regs.fs_sel;
+    r[R_GS] = t == current_proc ? x86_64_gs_read() : t->regs.gs_sel;
+}
+
+/**
+ * Set the FS or GS selector, by `i`, of the stopped thread `t` to `sel`,
+ * which the switch in loads before the bases. A selector must be null or a
+ * user segment's at RPL 3, the selectors Linux takes from a tracer that the
+ * GDT here has; any other loaded in the kernel could fault. 0, or -EIO.
+ */
+static int sel_set(process_t *t, int i, unsigned long sel)
+{
+    if (sel != 0 && sel != 3 && sel != GDT_USER_DATA && sel != GDT_USER_CODE) {
+        return -EIO;
+    }
+    if (i == R_FS) {
+        t->regs.fs_sel = (uint16_t)sel;
+    } else {
+        t->regs.gs_sel = (uint16_t)sel;
+    }
+    return 0;
 }
 
 /**
  * Set the user register `i` of the stopped thread `t` to `v`, as Linux's
  * `putreg` does: the flags only where a program may change them, a base
- * only to a user address, and CS and SS only to the ones they have, since a
- * return to user mode with any other would fault in the kernel. The kernel
- * keeps no data segment selectors for a 64-bit thread, which read as null,
- * so a tracer may write back the null it read and nothing else. An orig_rax
- * of -1 stops an interrupted system call from being restarted; it is kept
- * in 32 bits, as the system call number is. 0, or -EIO.
+ * only to a user address, CS and SS only to the ones they have, since a
+ * return to user mode with any other would fault in the kernel, and FS and
+ * GS only to a selector `sel_set` takes. The kernel keeps no DS or ES
+ * selector for a 64-bit thread, which read as null, so a tracer may write
+ * back the null it read and nothing else. An orig_rax of -1 stops an
+ * interrupted system call from being restarted; it is kept in 32 bits, as
+ * the system call number is. 0, or -EIO.
  */
 static int regs_set(process_t *t, int i, unsigned long v)
 {
@@ -207,12 +227,13 @@ static int regs_set(process_t *t, int i, unsigned long v)
         break;
     case R_DS:
     case R_ES:
-    case R_FS:
-    case R_GS:
         if ((v & 0xFFFFu) != 0) {
             return -EIO;
         }
         break;
+    case R_FS:
+    case R_GS:
+        return sel_set(t, i, v);
     default:
         return -EIO;
     }
@@ -382,8 +403,10 @@ static int prctl_access(process_t *t, unsigned long addr, unsigned long code)
             return -EPERM;
         }
         if (code == ARCH_SET_FS) {
+            t->regs.fs_sel = 0;
             t->tls_base = addr;
         } else {
+            t->regs.gs_sel = 0;
             t->regs.gs_base = addr;
         }
         return 0;

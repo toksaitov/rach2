@@ -12,7 +12,12 @@
  * USER_ADDR_MAX, the end of user space, is refused with EPERM by ARCH_SET_FS,
  * by ARCH_SET_GS and by clone with CLONE_SETTLS, which then makes no child,
  * and the bases set before stay; the last user address below it is taken,
- * and clone with CLONE_SETTLS gives its child the base it names.
+ * and clone with CLONE_SETTLS gives its child the base it names. A forked
+ * child must start with its parent's FS and GS selectors; when it loads
+ * others, each process must keep its own across two thousand yields between
+ * them on one processor. A tracer must read a stopped child's selectors
+ * with PTRACE_PEEKUSER, and selectors it writes with PTRACE_POKEUSER must
+ * be the child's when it runs again.
  *
  * arch_prctl is x86-64's alone; on i686 the probe says its rows did not run
  * and passes.
@@ -37,6 +42,19 @@
 #define WNOHANG       1
 #define EPERM         1
 #define ECHILD        10
+
+#define GDT_USER_DATA 0x2Bul
+#define GDT_USER_CODE 0x33ul
+
+#define SIGSTOP         19
+#define PTRACE_TRACEME  0
+#define PTRACE_PEEKUSER 3
+#define PTRACE_POKEUSER 6
+#define PTRACE_CONT     7
+
+/* The byte offsets of FS and GS in Linux x86-64's `struct user`. */
+#define USER_FS 200
+#define USER_GS 208
 
 static void sys_exit(int status)
 {
@@ -118,6 +136,28 @@ static void sleep_ms(long ms)
     ts.sec = 0;
     ts.nsec = ms * 1000000L;
     syscall2(SYS_NANOSLEEP, (long)&ts, 0);
+}
+
+static unsigned long fs_sel(void)
+{
+    unsigned long v = 0;
+
+    __asm__ __volatile__("movw %%fs, %w0" : "+r"(v));
+    return v;
+}
+
+static unsigned long gs_sel(void)
+{
+    unsigned long v = 0;
+
+    __asm__ __volatile__("movw %%gs, %w0" : "+r"(v));
+    return v;
+}
+
+static void load_sels(unsigned long fs, unsigned long gs)
+{
+    __asm__ __volatile__("movw %w0, %%fs" : : "r"(fs));
+    __asm__ __volatile__("movw %w0, %%gs" : : "r"(gs));
 }
 
 /** The exit status of the child `pid`, or -1. */
@@ -256,6 +296,92 @@ static void run_bounds(void)
     }
 }
 
+/*
+ * The parent has the user data selector in FS and GS from run_selectors.
+ * The child loads the null selector and the user code selector, and both
+ * yield to each other on processor 0, where a selector the kernel did not
+ * keep for each would pass from one to the other.
+ */
+static void run_selector_switches(void)
+{
+    unsigned long processor0 = 1;
+    long pid;
+    int i;
+
+    if (syscall3(SYS_SCHED_SETAFFINITY, 0, (long)sizeof(processor0), (long)&processor0) != 0) {
+        fail("the probe could not be bound to processor 0");
+    }
+    pid = syscall0(SYS_FORK);
+    if (pid == 0) {
+        if (fs_sel() != GDT_USER_DATA || gs_sel() != GDT_USER_DATA) {
+            sys_exit(2);
+        }
+        load_sels(0, GDT_USER_CODE);
+        for (i = 0; i < YIELDS; i++) {
+            syscall0(SYS_SCHED_YIELD);
+            if (fs_sel() != 0 || gs_sel() != GDT_USER_CODE) {
+                sys_exit(3);
+            }
+        }
+        sys_exit(0);
+    }
+    if (pid < 0) {
+        fail("fork");
+    }
+    for (i = 0; i < YIELDS; i++) {
+        syscall0(SYS_SCHED_YIELD);
+        if (fs_sel() != GDT_USER_DATA || gs_sel() != GDT_USER_DATA) {
+            fail("the parent's FS or GS selector did not survive the switches");
+        }
+    }
+    switch (child_status(pid)) {
+    case 0:
+        break;
+    case 2:
+        fail("a forked child did not start with its parent's selectors");
+        break;
+    default:
+        fail("a child's own FS or GS selector did not survive the switches");
+    }
+}
+
+/*
+ * The child stops itself with the user data selector in FS and GS; the
+ * parent reads them, writes the user code selector to FS and a null
+ * selector of RPL 3 to GS, and lets it run on to check them.
+ */
+static void run_selector_ptrace(void)
+{
+    unsigned long fs = 0, gs = 0;
+    int status = 0;
+    long pid = syscall0(SYS_FORK);
+
+    if (pid == 0) {
+        syscall4(SYS_PTRACE, PTRACE_TRACEME, 0, 0, 0);
+        syscall2(SYS_KILL, syscall0(SYS_GETPID), SIGSTOP);
+        sys_exit(fs_sel() == GDT_USER_CODE && gs_sel() == 3 ? 0 : 5);
+    }
+    if (pid < 0) {
+        fail("fork");
+    }
+    if (syscall3(SYS_WAITPID, pid, (long)&status, 0) != pid || (status & 0xFF) != 0x7F) {
+        fail("a traced child did not stop");
+    }
+    if (syscall4(SYS_PTRACE, PTRACE_PEEKUSER, pid, USER_FS, (long)&fs) != 0 ||
+        syscall4(SYS_PTRACE, PTRACE_PEEKUSER, pid, USER_GS, (long)&gs) != 0 ||
+        fs != GDT_USER_DATA || gs != GDT_USER_DATA) {
+        fail("PTRACE_PEEKUSER did not read a stopped child's FS and GS selectors");
+    }
+    if (syscall4(SYS_PTRACE, PTRACE_POKEUSER, pid, USER_FS, (long)GDT_USER_CODE) != 0 ||
+        syscall4(SYS_PTRACE, PTRACE_POKEUSER, pid, USER_GS, 3) != 0 ||
+        syscall4(SYS_PTRACE, PTRACE_CONT, pid, 0, 0) != 0) {
+        fail("PTRACE_POKEUSER refused an FS or GS selector");
+    }
+    if (child_status(pid) != 0) {
+        fail("selectors written by PTRACE_POKEUSER were not the child's");
+    }
+}
+
 #endif
 
 void probe_main(unsigned long *sp);
@@ -270,6 +396,8 @@ void probe_main(unsigned long *sp)
     run_fork_and_switches();
     run_bounds();
     run_selectors();
+    run_selector_switches();
+    run_selector_ptrace();
 #else
     say("fsbaseprobe: not run: arch_prctl is x86-64's\n");
 #endif

@@ -52,6 +52,46 @@ x86_64_load_gdt:
     pushq %rax
     lretq
 
+# unsigned int x86_64_fs_read(void)
+# unsigned int x86_64_gs_read(void)
+#
+# The selector in FS or GS, zero-extended.
+.globl x86_64_fs_read
+x86_64_fs_read:
+    xorl %eax, %eax
+    movw %fs, %ax
+    ret
+
+.globl x86_64_gs_read
+x86_64_gs_read:
+    xorl %eax, %eax
+    movw %gs, %ax
+    ret
+
+# void x86_64_fs_load(unsigned int sel)
+# void x86_64_gs_load(unsigned int sel)
+#
+# Load sel into FS or GS. The load also sets the register's base, to the
+# descriptor's or, for a null selector, to a value that differs between
+# processors, so the caller writes the base MSR afterwards. A load into GS
+# sets IA32_GS_BASE, the kernel's base, so it runs between two `swapgs`
+# with interrupts off: the user's slot takes the descriptor's base, and the
+# paranoid entry of an NMI on the way finds a lower-half base and swaps.
+.globl x86_64_fs_load
+x86_64_fs_load:
+    movw %di, %fs
+    ret
+
+.globl x86_64_gs_load
+x86_64_gs_load:
+    pushfq
+    cli
+    swapgs
+    movw %di, %gs
+    swapgs
+    popfq
+    ret
+
 # void x86_64_load_idt(const void *ptr)
 .globl x86_64_load_idt
 x86_64_load_idt:

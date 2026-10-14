@@ -30,13 +30,16 @@ typedef uint64_t phys_addr_t;
 /*
  * The process record's register block: the kernel stack pointer
  * `switch_context` saved when the process last switched away, or the one
- * built for its first switch, and the user's GS base, which arch_prctl's
- * ARCH_SET_GS sets, the switch away saves and the switch in loads. The FS
- * base, the thread pointer, is the record's `tls_base`.
+ * built for its first switch; the user's GS base, which arch_prctl's
+ * ARCH_SET_GS sets, the switch away saves and the switch in loads; and the
+ * FS and GS selectors, which the switch saves and loads in the same way.
+ * The FS base, the thread pointer, is the record's `tls_base`.
  */
 struct cpu_regs {
     uint64_t rsp;
     uint64_t gs_base;
+    uint16_t fs_sel; /* null, or a user segment's selector at any RPL */
+    uint16_t gs_sel;
 };
 
 typedef struct cpu_regs cpu_regs_t;

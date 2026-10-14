@@ -1,6 +1,7 @@
 /**
  * Check x86-64's thread pointer and arch_prctl, `arch/x86_64/tls.c`, over a
- * model of the three base registers, compiled with x86-64's `cpu.h`.
+ * model of the three base registers and the FS and GS selectors, compiled
+ * with x86-64's `cpu.h`.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-cflags: -DRACH2_HOST_X86_64
@@ -8,13 +9,16 @@
  * A base at or above USER_ADDR_MAX, the end of user space, is refused with
  * EPERM by ARCH_SET_FS, ARCH_SET_GS and clone's CLONE_SETTLS, and changes
  * neither the process record nor a register; the last user address below
- * it, and 0, are taken. ARCH_SET_FS writes the record's `tls_base` and FS's
- * base, ARCH_SET_GS the record's `gs_base` and the kernel GS base register,
- * where the program's base waits during a call, and neither touches the
- * kernel's own GS base. ARCH_GET_FS and ARCH_GET_GS read the registers, which
- * a selector the program loaded may have changed, not the record. An
- * address that cannot be written is EFAULT, another code EINVAL, and a call
- * with no process ESRCH.
+ * it, and 0, are taken. ARCH_SET_FS loads the null selector into FS and
+ * then writes the record's `tls_base` and FS's base, ARCH_SET_GS loads it
+ * into GS and then writes the record's `gs_base` and the kernel GS base
+ * register, where the program's base waits during a call; neither touches
+ * the other register's selector or the kernel's own GS base. A selector
+ * load in the model leaves a base no call asks for, as a load may on a
+ * processor, so a base written before the load fails. ARCH_GET_FS and
+ * ARCH_GET_GS read the registers, which a selector the program loaded may
+ * have changed, not the record. An address that cannot be written is
+ * EFAULT, another code EINVAL, and a call with no process ESRCH.
  */
 #include "arch/x86_64/tls.c"
 #include "lib/kstring.h"
@@ -25,8 +29,14 @@ struct percpu cpu_table[NR_CPUS];
 static process_t proc;
 static isr_params_t frame;
 static uint64_t fs_base, gs_base, kernel_gs_base;
+static unsigned int fs_sel, gs_sel;
 static uint64_t stored;
 static int failures;
+
+/* The base a selector load leaves in the model, and the selector a
+ * program loaded before each call. */
+#define LOADED_BASE 0xBADBA5Eul
+#define USER_SEL    0x2Bu
 
 /* The address copy_to_user refuses. */
 #define BAD_ADDR 0x1000ul
@@ -69,6 +79,30 @@ void msr_write(uint32_t msr, uint64_t value)
     *msr_of(msr) = value;
 }
 
+unsigned int x86_64_fs_read(void)
+{
+    return fs_sel;
+}
+
+unsigned int x86_64_gs_read(void)
+{
+    return gs_sel;
+}
+
+void x86_64_fs_load(unsigned int sel)
+{
+    fs_sel = sel;
+    fs_base = LOADED_BASE;
+}
+
+/** A load into GS, between two `swapgs`: the program's base, in the kernel
+ * GS base register, takes the load's. */
+void x86_64_gs_load(unsigned int sel)
+{
+    gs_sel = sel;
+    kernel_gs_base = LOADED_BASE;
+}
+
 /** Copy `n` bytes to `stored`, which stands for any user address but
  * BAD_ADDR. */
 int copy_to_user(void __user *dst, const void *src, size_t n)
@@ -90,6 +124,8 @@ static void setup(void)
     fs_base = proc.tls_base;
     kernel_gs_base = proc.regs.gs_base;
     gs_base = 0xFFFFFFFF80100000ul;
+    fs_sel = USER_SEL;
+    gs_sel = USER_SEL;
     stored = 0;
     cpu_table[0].current = &proc;
 }
@@ -101,12 +137,12 @@ static long prctl(unsigned long code, unsigned long addr)
     return sys_arch_prctl(&frame);
 }
 
-/** Every base unchanged since setup. */
+/** Every base and selector unchanged since setup. */
 static int unchanged(void)
 {
     return proc.tls_base == 0x500000ul && fs_base == 0x500000ul &&
            proc.regs.gs_base == 0x600000ul && kernel_gs_base == 0x600000ul &&
-           gs_base == 0xFFFFFFFF80100000ul;
+           gs_base == 0xFFFFFFFF80100000ul && fs_sel == USER_SEL && gs_sel == USER_SEL;
 }
 
 static void run_clone(void)
@@ -140,10 +176,10 @@ static void run_set(void)
         setup();
         check(prctl(ARCH_SET_FS, taken[i]) == 0 && proc.tls_base == taken[i] &&
                   fs_base == taken[i] && proc.regs.gs_base == 0x600000ul &&
-                  kernel_gs_base == 0x600000ul,
+                  kernel_gs_base == 0x600000ul && fs_sel == 0 && gs_sel == USER_SEL,
               "ARCH_SET_FS of a user base");
         check(prctl(ARCH_SET_GS, taken[i]) == 0 && proc.regs.gs_base == taken[i] &&
-                  kernel_gs_base == taken[i] && gs_base == 0xFFFFFFFF80100000ul,
+                  kernel_gs_base == taken[i] && gs_base == 0xFFFFFFFF80100000ul && gs_sel == 0,
               "ARCH_SET_GS of a user base");
     }
 }

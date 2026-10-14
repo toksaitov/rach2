@@ -48,6 +48,7 @@ long sys_arch_prctl(isr_params_t *params)
         if (addr >= USER_ADDR_MAX) {
             return -EPERM;
         }
+        x86_64_fs_load(0);
         current_proc->tls_base = addr;
         msr_write(MSR_FS_BASE, addr);
         return 0;
@@ -55,6 +56,7 @@ long sys_arch_prctl(isr_params_t *params)
         if (addr >= USER_ADDR_MAX) {
             return -EPERM;
         }
+        x86_64_gs_load(0);
         current_proc->regs.gs_base = addr;
         /* In the kernel the program's GS base waits in this MSR for the
          * `swapgs` of the return. */

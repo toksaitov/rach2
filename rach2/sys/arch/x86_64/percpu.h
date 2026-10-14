@@ -102,6 +102,16 @@ static __inline__ struct cpu *cpu_self(void)
 uint64_t msr_read(uint32_t msr);
 void msr_write(uint32_t msr, uint64_t value);
 
+/*
+ * The FS and GS selectors (switch.s). A load sets the register's base as
+ * well, so the caller writes the base MSR after it; a load into GS keeps
+ * the kernel's own GS base.
+ */
+unsigned int x86_64_fs_read(void);
+unsigned int x86_64_gs_read(void);
+void x86_64_fs_load(unsigned int sel);
+void x86_64_gs_load(unsigned int sel);
+
 /**
  * Make the boot processor's record, GDT and TSS, load them, and point GS at
  * the record: what `init_gdt` and `init_tss` do on i686, in one step here,
