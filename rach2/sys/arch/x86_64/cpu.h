@@ -220,7 +220,11 @@ typedef unsigned int core_uid_t;
 
 /* The running processor's index in the per-processor table
  * (proc/percpu.h): the `id` of the processor's own record, which GS's base
- * points at in the kernel, at offset 24 (percpu.h). */
+ * points at in the kernel, at offset 24 (percpu.h). A host test runs as
+ * processor 0. */
+#if defined(RACH2_HOSTTEST)
+#define arch_cpu_id() 0u
+#else
 static __inline__ unsigned int arch_cpu_id(void)
 {
     unsigned int id;
@@ -228,5 +232,6 @@ static __inline__ unsigned int arch_cpu_id(void)
     __asm__ __volatile__("movl %%gs:24, %0" : "=r"(id));
     return id;
 }
+#endif
 
 #endif /* _X86_64_CPU_H_ */

@@ -8,7 +8,11 @@
  * program that loads a selector into FS or GS, which sets the base to the
  * descriptor's, 0, must read 0 back at once and after a sleep, which
  * switches it away and back, must still address memory by its absolute
- * address there, and must give 0 to a child it forks.
+ * address there, and must give 0 to a child it forks. A base at or above
+ * USER_ADDR_MAX, the end of user space, is refused with EPERM by ARCH_SET_FS,
+ * by ARCH_SET_GS and by clone with CLONE_SETTLS, which then makes no child,
+ * and the bases set before stay; the last user address below it is taken,
+ * and clone with CLONE_SETTLS gives its child the base it names.
  *
  * arch_prctl is x86-64's alone; on i686 the probe says its rows did not run
  * and passes.
@@ -25,6 +29,14 @@
 #define ARCH_GET_GS 0x1004
 
 #define YIELDS 2000
+
+/* USER_ADDR_MAX of x86-64's cpu.h, clone's flags, and the errors. */
+#define USER_ADDR_MAX 0x00007FFFFFFFF000ul
+#define SIGCHLD       17
+#define CLONE_SETTLS  0x00080000
+#define WNOHANG       1
+#define EPERM         1
+#define ECHILD        10
 
 static void sys_exit(int status)
 {
@@ -197,6 +209,53 @@ static void run_selectors(void)
     }
 }
 
+/** Clone a child with CLONE_SETTLS and the base `tls`, x86-64's argument
+ * order: flags, stack, parent's and child's tid addresses, then the base. */
+static long clone_tls(unsigned long tls)
+{
+    return syscall5(SYS_CLONE, SIGCHLD | CLONE_SETTLS, 0, 0, 0, (long)tls);
+}
+
+static void run_bounds(void)
+{
+    static const unsigned long refused[] = {USER_ADDR_MAX, USER_ADDR_MAX + 1, ~0ul};
+    unsigned long i;
+    long pid;
+
+    if (prctl(ARCH_SET_FS, (unsigned long)block_a) != 0 ||
+        prctl(ARCH_SET_GS, (unsigned long)block_b) != 0) {
+        fail("the bases to keep could not be set");
+    }
+    for (i = 0; i < sizeof(refused) / sizeof(refused[0]); i++) {
+        if (prctl(ARCH_SET_FS, refused[i]) != -EPERM || prctl(ARCH_SET_GS, refused[i]) != -EPERM) {
+            fail("a base at or above USER_ADDR_MAX was not refused with EPERM");
+        }
+        if (clone_tls(refused[i]) != -EPERM) {
+            fail("clone with CLONE_SETTLS took a base at or above USER_ADDR_MAX");
+        }
+    }
+    if (base_of(ARCH_GET_FS) != (unsigned long)block_a ||
+        base_of(ARCH_GET_GS) != (unsigned long)block_b || fs_word(0) != block_a[0]) {
+        fail("a refused base changed the bases set before it");
+    }
+    if (syscall3(SYS_WAITPID, -1, 0, WNOHANG) != -ECHILD) {
+        fail("a refused clone made a child");
+    }
+    if (prctl(ARCH_SET_GS, USER_ADDR_MAX - 1) != 0 || base_of(ARCH_GET_GS) != USER_ADDR_MAX - 1) {
+        fail("the last user address below USER_ADDR_MAX was not taken as a base");
+    }
+    pid = clone_tls((unsigned long)block_c);
+    if (pid == 0) {
+        if (fs_word(0) != block_c[0] || base_of(ARCH_GET_FS) != (unsigned long)block_c) {
+            sys_exit(5);
+        }
+        sys_exit(0);
+    }
+    if (pid < 0 || child_status(pid) != 0) {
+        fail("clone with CLONE_SETTLS did not give its child the base");
+    }
+}
+
 #endif
 
 void probe_main(unsigned long *sp);
@@ -209,6 +268,7 @@ void probe_main(unsigned long *sp)
 #if defined __x86_64__
     run_set_get();
     run_fork_and_switches();
+    run_bounds();
     run_selectors();
 #else
     say("fsbaseprobe: not run: arch_prctl is x86-64's\n");

@@ -39,11 +39,15 @@
  * reported to its tracer before its parent may reap it, and then to the parent;
  * the tracer's next wait finds nothing left to wait for. A tracee SIGKILL ends
  * sends its tracer, here its parent, a SIGCHLD of CLD_KILLED with the signal.
+ * A tracer that moves a stopped tracee's thread pointer, by PTRACE_ARCH_PRCTL
+ * on x86-64 and PTRACE_SET_THREAD_AREA on i386, reads it back, and the
+ * tracee runs with it; a base past user space is refused on x86-64.
  *
  * Prints "PTRACEMUSL OK" on success and "PTRACEMUSL FAIL (detail)" otherwise.
  */
 
 #define _GNU_SOURCE
+#include <elf.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
@@ -57,6 +61,7 @@
 #include <sys/ptrace.h>
 #include <sys/syscall.h>
 #include <sys/times.h>
+#include <sys/uio.h>
 #include <sys/user.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -1620,6 +1625,237 @@ static int watched_sigwait(void)
     return 0;
 }
 
+/*
+ * The thread pointer through ptrace. Each row's tracee is a fork of the
+ * tracer, so its thread pointer is the tracer's, pthread_self. The tracer
+ * moves it to tp_copy, a copy of the thread's first words with TP_MARK
+ * after them, and the tracee, continued, must read the mark through its
+ * segment. On x86-64 the requests are PTRACE_ARCH_PRCTL and the fs_base and
+ * gs_base words of struct user. A base at or above USER_ADDR_MAX, the end of
+ * user space, is refused with EPERM by ARCH_SET_FS and ARCH_SET_GS and with
+ * EIO by POKEUSER, SETREGS and SETREGSET, and leaves the bases as they were.
+ * On i386 the requests are PTRACE_GET_THREAD_AREA and PTRACE_SET_THREAD_AREA:
+ * entry 6 is the thread pointer's, entries 7 and 8 read as unused and take
+ * only an unused entry, and the others are EINVAL.
+ */
+#define TP_WORDS 16
+#define TP_MARK  0x5A17C0DEUL
+
+static unsigned long tp_copy[TP_WORDS + 1];
+
+/** The word after the copied ones, read through the thread pointer's
+ * segment. */
+static unsigned long tp_mark_word(void)
+{
+    unsigned long v;
+
+#if defined __x86_64__
+    __asm__ __volatile__("movq %%fs:%c1, %0" : "=r"(v) : "i"(TP_WORDS * sizeof(long)));
+#else
+    __asm__ __volatile__("movl %%gs:%c1, %0" : "=r"(v) : "i"(TP_WORDS * sizeof(long)));
+#endif
+    return v;
+}
+
+#if defined __x86_64__
+#define ARCH_SET_GS   0x1001
+#define ARCH_SET_FS   0x1002
+#define ARCH_GET_FS   0x1003
+#define ARCH_GET_GS   0x1004
+#define USER_ADDR_MAX 0x00007FFFFFFFF000UL
+#define GS_MARK       0x6B28D1EFUL
+
+static unsigned long gs_block[2] = {GS_MARK};
+
+/** The first word GS's base addresses. */
+static unsigned long gs_word(void)
+{
+    unsigned long v;
+
+    __asm__ __volatile__("movq %%gs:0, %0" : "=r"(v));
+    return v;
+}
+
+#define USER_WORD(field) ((void *)offsetof(struct user, regs.field))
+
+/** The tracee's FS and GS bases through PTRACE_ARCH_PRCTL; 0, or -1. */
+static int bases_of(pid_t pid, unsigned long *fs, unsigned long *gs)
+{
+    return ptrace(PTRACE_ARCH_PRCTL, pid, fs, (void *)ARCH_GET_FS) == 0 &&
+                   ptrace(PTRACE_ARCH_PRCTL, pid, gs, (void *)ARCH_GET_GS) == 0
+               ? 0
+               : -1;
+}
+
+/** Each write of a base at or above USER_ADDR_MAX, refused, with the bases
+ * `fs` and `gs` of the tracee `pid` left as they were. */
+static int refused_bases(pid_t pid, unsigned long fs, unsigned long gs)
+{
+    static const unsigned long refused[] = {USER_ADDR_MAX, USER_ADDR_MAX + 1, ~0UL};
+    struct user_regs_struct regs, high;
+    struct iovec iov;
+    unsigned long now_fs, now_gs;
+    unsigned int i;
+
+    if (ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0) {
+        return abandon(pid, "GETREGS before the refused bases");
+    }
+    for (i = 0; i < sizeof(refused) / sizeof(refused[0]); i++) {
+        if (ptrace(PTRACE_ARCH_PRCTL, pid, (void *)refused[i], (void *)ARCH_SET_FS) != -1 ||
+            errno != EPERM ||
+            ptrace(PTRACE_ARCH_PRCTL, pid, (void *)refused[i], (void *)ARCH_SET_GS) != -1 ||
+            errno != EPERM) {
+            return abandon(pid, "ARCH_SET_FS or ARCH_SET_GS took a base past user space");
+        }
+        if (ptrace(PTRACE_POKEUSER, pid, USER_WORD(fs_base), (void *)refused[i]) != -1 ||
+            errno != EIO ||
+            ptrace(PTRACE_POKEUSER, pid, USER_WORD(gs_base), (void *)refused[i]) != -1 ||
+            errno != EIO) {
+            return abandon(pid, "POKEUSER took a base past user space");
+        }
+        high = regs;
+        high.fs_base = refused[i];
+        if (ptrace(PTRACE_SETREGS, pid, NULL, &high) != -1 || errno != EIO) {
+            return abandon(pid, "SETREGS took an FS base past user space");
+        }
+        high = regs;
+        high.gs_base = refused[i];
+        iov.iov_base = &high;
+        iov.iov_len = sizeof(high);
+        if (ptrace(PTRACE_SETREGSET, pid, (void *)NT_PRSTATUS, &iov) != -1 || errno != EIO) {
+            return abandon(pid, "SETREGSET took a GS base past user space");
+        }
+    }
+    if (bases_of(pid, &now_fs, &now_gs) != 0 || now_fs != fs || now_gs != gs) {
+        return abandon(pid, "a refused base changed the bases");
+    }
+    return 0;
+}
+
+static int thread_pointer(void)
+{
+    unsigned long fs, gs, peek;
+    int status;
+    pid_t pid;
+
+    memcpy(tp_copy, (void *)pthread_self(), TP_WORDS * sizeof(long));
+    tp_copy[TP_WORDS] = TP_MARK;
+    pid = fork();
+    if (pid == 0) {
+        ptrace(PTRACE_TRACEME, 0, NULL, NULL);
+        raise(SIGSTOP);
+        _exit(tp_mark_word() == TP_MARK && gs_word() == GS_MARK ? 0 : 1);
+    }
+    if (pid < 0 || expect_stop(pid, SIGSTOP, "the thread pointer's child did not stop")) {
+        return 1;
+    }
+    if (bases_of(pid, &fs, &gs) != 0 || fs != (unsigned long)pthread_self()) {
+        return abandon(pid, "ARCH_GET_FS did not read the thread pointer");
+    }
+    errno = 0;
+    peek = (unsigned long)ptrace(PTRACE_PEEKUSER, pid, USER_WORD(fs_base), NULL);
+    if (errno != 0 || peek != fs) {
+        return abandon(pid, "PEEKUSER of fs_base did not read the thread pointer");
+    }
+    if (ptrace(PTRACE_ARCH_PRCTL, pid, NULL, (void *)ARCH_GET_FS) != -1 || errno != EFAULT ||
+        ptrace(PTRACE_ARCH_PRCTL, pid, NULL, (void *)0x1005) != -1 || errno != EINVAL) {
+        return abandon(pid, "PTRACE_ARCH_PRCTL took a bad address or code");
+    }
+    if (refused_bases(pid, fs, gs) != 0) {
+        return 1;
+    }
+    if (ptrace(PTRACE_ARCH_PRCTL, pid, (void *)tp_copy, (void *)ARCH_SET_FS) != 0 ||
+        ptrace(PTRACE_POKEUSER, pid, USER_WORD(gs_base), (void *)gs_block) != 0 ||
+        bases_of(pid, &fs, &gs) != 0 || fs != (unsigned long)tp_copy ||
+        gs != (unsigned long)gs_block) {
+        return abandon(pid, "a base set did not read back");
+    }
+    if (ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 || wait_within(pid, &status) != pid ||
+        !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        return abandon(pid, "the tracee did not run with the bases set");
+    }
+    return 0;
+}
+#else
+#define TLS_ENTRY 6
+
+/* Linux i386's struct user_desc: the flags are its bit fields. */
+struct tp_desc {
+    unsigned int entry_number;
+    unsigned int base_addr;
+    unsigned int limit;
+    unsigned int flags;
+};
+
+#define UD_READ_EXEC_ONLY  0x08u
+#define UD_SEG_NOT_PRESENT 0x20u
+
+/** The entries beside the thread pointer's, read as unused and written
+ * only as unused; 0, or 1. */
+static int other_entries(pid_t pid)
+{
+    struct tp_desc d;
+    unsigned int i;
+
+    for (i = TLS_ENTRY + 1; i <= TLS_ENTRY + 2; i++) {
+        if (ptrace(PTRACE_GET_THREAD_AREA, pid, (void *)i, &d) != 0 || d.entry_number != i ||
+            d.base_addr != 0 || d.limit != 0 ||
+            (d.flags & 0x7Fu) != (UD_READ_EXEC_ONLY | UD_SEG_NOT_PRESENT)) {
+            return abandon(pid, "an entry beside the thread pointer's did not read as unused");
+        }
+        if (ptrace(PTRACE_SET_THREAD_AREA, pid, (void *)i, &d) != 0) {
+            return abandon(pid, "an unused entry could not be written back");
+        }
+        d.base_addr = 0x1000;
+        if (ptrace(PTRACE_SET_THREAD_AREA, pid, (void *)i, &d) != -1 || errno != EINVAL) {
+            return abandon(pid, "an entry beside the thread pointer's took a base");
+        }
+    }
+    if (ptrace(PTRACE_GET_THREAD_AREA, pid, (void *)(TLS_ENTRY - 1), &d) != -1 || errno != EINVAL ||
+        ptrace(PTRACE_GET_THREAD_AREA, pid, (void *)(TLS_ENTRY + 3), &d) != -1 || errno != EINVAL) {
+        return abandon(pid, "an entry outside 6 to 8 was not EINVAL");
+    }
+    return 0;
+}
+
+static int thread_pointer(void)
+{
+    struct tp_desc d, back;
+    int status;
+    pid_t pid;
+
+    memcpy(tp_copy, (void *)pthread_self(), TP_WORDS * sizeof(long));
+    tp_copy[TP_WORDS] = TP_MARK;
+    pid = fork();
+    if (pid == 0) {
+        ptrace(PTRACE_TRACEME, 0, NULL, NULL);
+        raise(SIGSTOP);
+        _exit(tp_mark_word() == TP_MARK ? 0 : 1);
+    }
+    if (pid < 0 || expect_stop(pid, SIGSTOP, "the thread pointer's child did not stop")) {
+        return 1;
+    }
+    if (ptrace(PTRACE_GET_THREAD_AREA, pid, (void *)TLS_ENTRY, &d) != 0 ||
+        d.entry_number != TLS_ENTRY || d.base_addr != (unsigned int)pthread_self()) {
+        return abandon(pid, "PTRACE_GET_THREAD_AREA did not read the thread pointer");
+    }
+    if (other_entries(pid) != 0) {
+        return 1;
+    }
+    d.base_addr = (unsigned int)tp_copy;
+    if (ptrace(PTRACE_SET_THREAD_AREA, pid, (void *)TLS_ENTRY, &d) != 0 ||
+        ptrace(PTRACE_GET_THREAD_AREA, pid, (void *)TLS_ENTRY, &back) != 0 ||
+        back.base_addr != (unsigned int)tp_copy) {
+        return abandon(pid, "a thread pointer set did not read back");
+    }
+    if (ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 || wait_within(pid, &status) != pid ||
+        !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        return abandon(pid, "the tracee did not run with the thread pointer set");
+    }
+    return 0;
+}
+#endif
+
 /** Run the ordinary suite, or one debug row for a compiled fault proof. */
 /* The rows a suite may run alone, by the name it passes. */
 static const struct {
@@ -1628,7 +1864,7 @@ static const struct {
 } named_rows[] = {
     {"step", step_system_call},     {"entry", entry_system_call},   {"delayed", delayed_debug},
     {"delayed-poll", delayed_poll}, {"copy", watched_copy},         {"poll", watched_poll},
-    {"sigwait", watched_sigwait},   {"listen", listen_user_return},
+    {"sigwait", watched_sigwait},   {"listen", listen_user_return}, {"tp", thread_pointer},
 };
 
 /* The rows of memory, system calls and attaching; 0, or 1. */
@@ -1646,7 +1882,7 @@ static int second_rows(void)
     return seized_fork() || stopped_leader() || traced_thread_usage() || tracer_first() ||
            killed_tracee() || step_system_call() || entry_system_call() || delayed_debug() ||
            delayed_poll() || watched_copy() || watched_poll() || watched_sigwait() ||
-           listen_user_return();
+           listen_user_return() || thread_pointer();
 }
 
 int main(int argc, char **argv)

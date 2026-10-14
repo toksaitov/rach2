@@ -56,7 +56,10 @@
  *   IRQ_VECTOR(line)       the vector a platform interrupt line arrives on
  *   ISR_DEVICE_FIRST, ISR_DEVICE_LAST  the vectors a device's interrupts take
  */
-#if defined(RACH2_HOSTTEST)
+#if defined(RACH2_HOSTTEST) && defined(RACH2_HOST_X86_64)
+/* A host test of x86-64's own code, natively on a 64-bit host. */
+#include "x86_64/cpu.h"
+#elif defined(RACH2_HOSTTEST)
 /* A host test checks the i686 kernel's logic natively, whatever the host. */
 #include "i686/cpu.h"
 #elif defined(__x86_64__)
