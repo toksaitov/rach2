@@ -64,12 +64,21 @@ A comment-only change changes no code, and the writer shows it. The kernel is co
 
 ## The work
 
-The phase is one issue with the label `phase`; each task below is a sub-issue, sized for one worker session with its helpers. A task covers one component's documents and its comments together, so that one writer gives a component one voice. The issues name their files, the outline above and `facts.md`, and no two touch the same file.
+The phase is #73; each task below is a sub-issue, sized for one worker session with its helpers, and no two touch the same file. `facts.md` is the fact base: the counts, the directory map, the faults found in each document, the comment samples, the text the rewrite must keep, and the units.
 
 1. The rules: `AGENTS.md`'s Documentation section and this plan, written by the manager first.
-2. The front page, `Readme.md`.
-3. The components, in units of about 40 to 80 files, each its Readme and its comments, as `facts.md` divides them.
-4. The two checks in `textcheck.sh`, once every component document conforms.
-5. The edit: the manager reads the whole set as a new reader would, for contradictions, repetition, links and reading order, and fixes what it finds.
+2. The front page, `Readme.md`, with `.github/screenshot.png`.
+3. The component documents, in ten issues by directory. A large document is an issue of its own.
+4. The comments, in the nineteen units of `facts.md`, K1 to K9 for the kernel first, then U1 to U3 and T1 to T7. A unit's documents are the issue of step 3 for the same directory, so a writer reads the other's work once it has landed.
+5. The two checks in `textcheck.sh`, once every component document conforms.
+6. The edit: the manager reads the whole set as a new reader would, for contradictions, repetition, links and reading order, and fixes what it finds, `AGENTS.md`, `CLAUDE.md` and the skills included.
 
-Each task is checked as the Work section of `AGENTS.md` says: the build on both architectures and `tests/run style`, and for comments the object comparison above.
+A document task is checked by `tests/run style`. A comment unit is checked by the build of both architectures, the suites its files feed (`tests/run host` for host tests, `tests/run style` always), and the object comparison. On the testing host, in the clone, at `origin/master` and again after the change and the rebuild:
+
+    t=$(mktemp)
+    find build -name '*.o' | sort | while read -r o; do
+        objcopy --strip-debug "$o" "$t" && echo "$(sha256sum < "$t" | cut -c1-16) $o"
+    done > ~/objects.before    # ~/objects.after the second time
+    diff ~/objects.before ~/objects.after
+
+An empty diff, or one that lists only host tests that use `__LINE__` and the KRFFS host tools that call `assert`, both named in `facts.md`, is the proof; the writer puts it in the commit's issue.
