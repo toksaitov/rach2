@@ -15,15 +15,19 @@
 # after a small edit rebuilds only what the edit touched. A sync refuses, and
 # says why, while anything on the host works in the copy (see tree_free). The
 # one ignored file that is sent is the shareware WAD `ports/doom/fetch_wad.sh`
-# downloads, because the Doom suite reads it from the image. `run` syncs and
-# then runs COMMAND in the copy; the command is passed to the remote
-# shell as one string, so quote it as that shell will see it. `get` copies
-# each PATH, relative to the copy, from the host to the same path here,
-# compressed on the wire, which is how a product that only the Linux host
-# builds, such as the GNU system's ext2 root, reaches this machine. Its runs
-# of zeros are written as holes, which the Mac's APFS keeps only for a long
-# run, so an image that is sparse on the host is not sparse here. `sh` opens
-# an interactive shell in the copy.
+# downloads, because the Doom suite reads it from the image. The filter's
+# first rule protects the copy's WAD from deletion, ahead of the rule that
+# sends it, since rsync applies the first rule that matches a name; so a sync
+# from a tree that has no WAD, such as a fresh git worktree, leaves the copy's
+# in place, and a sync from a tree that has one replaces it. `run` syncs and
+# then runs COMMAND in the copy; the command is passed to the remote shell as
+# one string, so quote it as that shell will see it. `get` copies each PATH,
+# relative to the copy, from the host to the same path here, compressed on the
+# wire, which is how a product that only the Linux host builds, such as the
+# GNU system's ext2 root, reaches this machine. Its runs of zeros are written
+# as holes, which the Mac's APFS keeps only for a long run, so an image that
+# is sparse on the host is not sparse here. `sh` opens an interactive shell in
+# the copy.
 #
 # `wait` watches a run started on the host as `/home/testing/NAME.sh`, which
 # writes its results as lines beginning `NAME: ` to `/home/testing/NAME.out`
@@ -125,6 +129,7 @@ sync_tree()
     need_rsync3
     tree_free || exit 1
     rsync -a --no-times --checksum --delete \
+        --filter='P /ports/doom/doom1.wad' \
         --filter='+ /ports/doom/doom1.wad' --filter=':- .gitignore' \
         --rsync-path="$RSYNC_PATH" -e 'ssh -o BatchMode=yes' \
         "$REPO/" "$HOST:$DEST/"
