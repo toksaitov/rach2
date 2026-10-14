@@ -1,73 +1,103 @@
-# ci: build the tree and run its quick tests for every pull request to master.
+# ci: the core tier on both architectures after each push to master.
 #
-# The job runs on the testing host's two runners, rach2-ci-1 and rach2-ci-2,
+# The jobs run on the testing host's two runners, rach2-ci-1 and rach2-ci-2,
 # which run as the user ghrunner in WSL; tools/Readme.md describes them. A
 # runner keeps its checkout and its build/ between jobs, so a job rebuilds
-# only what the pull request changed. `make test` runs the style checks, the
-# host tests and the core tier. A line `Suites: NAME...` in the pull request's
-# description adds those suites, read when the job starts, and a run started
-# by hand takes them as its input. The last step runs the commit-msg hook over
-# the pull request's commits. A new push to a pull request cancels the job
-# still running for its old commits.
+# only what changed. One core run runs at a time and is never cancelled; of
+# the pushes made while it runs, only the newest waits, since GitHub cancels
+# a waiting run when a newer one joins the group. The first job reads the
+# newest master once the run starts, and both architectures test that one
+# commit, one on each runner; a commit whose `ci/core` status an earlier run
+# set, once it had reported everything, is not tested again. tools/ci/run.sh runs the build, `tests/run style`,
+# `tests/run host` and `tests/run core`; each architecture's output and kept
+# logs are uploaded for every account to fetch, and tools/ci/report.sh sets
+# the commit's status, files a failure as an issue, starts bisect.yml for a
+# new one, and opens or closes the `hold` issue.
 name: ci
 
 on:
-  pull_request:
+  push:
     branches: [master]
   workflow_dispatch:
-    inputs:
-      suites:
-        description: Suites to run after make test, separated by spaces
-        required: false
-        default: ''
 
 permissions:
   contents: read
+  issues: write
+  statuses: write
+  actions: write
 
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: core
+  cancel-in-progress: false
 
 jobs:
-  ci:
+  head:
+    runs-on: [self-hosted, rach2]
+    outputs:
+      sha: ${{ steps.head.outputs.sha }}
+      tested: ${{ steps.head.outputs.tested }}
+    steps:
+      - id: head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          sha=$(gh api "repos/$REPO/commits/master" --jq .sha)
+          tested=$(gh api "repos/$REPO/commits/$sha/status" \
+              --jq '[.statuses[] | select(.context == "ci/core")] | length')
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "tested=$tested" >> "$GITHUB_OUTPUT"
+
+  core:
+    needs: head
+    if: needs.head.outputs.tested == '0'
     runs-on: [self-hosted, rach2]
     timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [i686, x86_64]
+    env:
+      ARCH: ${{ matrix.arch }}
     steps:
       - uses: actions/checkout@v5
         with:
+          ref: ${{ needs.head.outputs.sha }}
           clean: false
           fetch-depth: 0
 
-      - name: build
-        run: make
+      - name: core
+        run: sh tools/ci/run.sh core "$RUNNER_TEMP/core-$ARCH"
 
-      - name: make test
-        run: make test
+      - name: keep the result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-${{ matrix.arch }}
+          path: ${{ runner.temp }}/core-${{ matrix.arch }}
+          retention-days: 14
 
-      - name: named suites
+  report:
+    needs: [head, core]
+    if: always() && needs.head.result == 'success' && needs.head.outputs.tested == '0'
+    runs-on: [self-hosted, rach2]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.head.outputs.sha }}
+          clean: false
+          fetch-depth: 0
+
+      - name: results
+        run: mkdir -p "$RUNNER_TEMP/results"
+
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          path: ${{ runner.temp }}/results
+
+      - name: report
+        if: always()
         env:
-          BODY: ${{ github.event.pull_request.body }}
-          INPUT: ${{ github.event.inputs.suites }}
-        run: |
-          set -f
-          names=$(printf '%s\n' "$BODY" | tr -d '\r' |
-              sed -n 's/^Suites:[[:space:]]*//p' | head -n 1)
-          names="$names ${INPUT:-}"
-          for n in $names; do
-              case "$n" in
-                  *[!a-z0-9-]*) echo "ci: refused: suite name '$n'" >&2; exit 2 ;;
-              esac
-          done
-          if [ -n "$(echo $names)" ]; then
-              tests/run $names
-          else
-              echo "ci: no suites named"
-          fi
-
-      - name: commit messages
-        if: github.event_name == 'pull_request'
-        run: |
-          for c in $(git rev-list HEAD^1..HEAD^2); do
-              git log -1 --format=%B "$c" > "$RUNNER_TEMP/msg"
-              sh tools/git-hooks/commit-msg "$RUNNER_TEMP/msg" || exit 1
-          done
+          GH_TOKEN: ${{ github.token }}
+        run: sh tools/ci/report.sh core ${{ needs.head.outputs.sha }} "$RUNNER_TEMP/results"

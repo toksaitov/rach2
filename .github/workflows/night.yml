@@ -1,0 +1,79 @@
+# night: every suite on both architectures, once a night.
+#
+# The run starts at 19:00 UTC, 01:00 at the owner's UTC+6, on the newest
+# master, and runs the two architectures one after the other on one runner,
+# so that the core runs of the night keep the other. It is outside the core
+# runs' group, and a night that has not ended when the next one is due makes
+# that one wait. tools/ci/run.sh runs the build and every suite of the
+# architecture, `bigmem` last and alone; tools/ci/report.sh files what fails
+# as core runs do, under the status `ci/night/ARCH`.
+name: night
+
+on:
+  schedule:
+    - cron: '0 19 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  statuses: write
+  actions: write
+
+concurrency:
+  group: night
+  cancel-in-progress: false
+
+jobs:
+  night:
+    runs-on: [self-hosted, rach2]
+    timeout-minutes: 720
+    steps:
+      - id: head
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: echo "sha=$(gh api repos/${{ github.repository }}/commits/master --jq .sha)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.head.outputs.sha }}
+          clean: false
+          fetch-depth: 0
+
+      - name: i686
+        env:
+          ARCH: i686
+        run: sh tools/ci/run.sh night "$RUNNER_TEMP/results/night-i686" || true
+
+      - name: x86_64
+        env:
+          ARCH: x86_64
+        run: sh tools/ci/run.sh night "$RUNNER_TEMP/results/night-x86_64" || true
+
+      - name: keep the i686 result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: night-i686
+          path: ${{ runner.temp }}/results/night-i686
+          retention-days: 14
+
+      - name: keep the x86_64 result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: night-x86_64
+          path: ${{ runner.temp }}/results/night-x86_64
+          retention-days: 14
+
+      - name: report
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: sh tools/ci/report.sh night ${{ steps.head.outputs.sha }} "$RUNNER_TEMP/results"
+
+      - name: result
+        run: |
+          for arch in i686 x86_64; do
+              [ -f "$RUNNER_TEMP/results/night-$arch/failed" ] && [ ! -s "$RUNNER_TEMP/results/night-$arch/failed" ] || exit 1
+          done

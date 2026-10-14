@@ -1,0 +1,69 @@
+# bisect: find the commit that made a ci failure, started by
+# tools/ci/report.sh for each new failure issue.
+#
+# It runs outside the core runs' group, on either runner, one run for each
+# issue. tools/ci/bisect.sh tests the failing commit again, halves the
+# commits since the last pass, and comments on the issue with the commit it
+# names, an unresolved range, or a failure that did not repeat.
+name: bisect
+
+on:
+  workflow_dispatch:
+    inputs:
+      arch:
+        description: The architecture, i686 or x86_64
+        required: true
+      good:
+        description: The last commit that passed
+        required: true
+      bad:
+        description: The commit that failed
+        required: true
+      items:
+        description: What failed, separated by spaces
+        required: true
+      issue:
+        description: The failure's issue number
+        required: true
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: bisect-${{ inputs.issue }}
+  cancel-in-progress: false
+
+jobs:
+  bisect:
+    runs-on: [self-hosted, rach2]
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.bad }}
+          clean: false
+          fetch-depth: 0
+
+      - name: bisect
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARCH_IN: ${{ inputs.arch }}
+          GOOD: ${{ inputs.good }}
+          BAD: ${{ inputs.bad }}
+          ISSUE: ${{ inputs.issue }}
+          ITEMS: ${{ inputs.items }}
+        run: |
+          case "$ARCH_IN" in i686|x86_64) ;; *) echo "bisect: refused: architecture '$ARCH_IN'" >&2; exit 2 ;; esac
+          case "$GOOD$BAD$ISSUE" in *[!0-9a-f]*) echo "bisect: refused: a commit or issue that is not hexadecimal" >&2; exit 2 ;; esac
+          case "$ITEMS" in *[!a-z0-9\ -]*) echo "bisect: refused: items '$ITEMS'" >&2; exit 2 ;; esac
+          # shellcheck disable=SC2086 # the items are one word each
+          sh tools/ci/bisect.sh "$ARCH_IN" "$GOOD" "$BAD" "$ISSUE" $ITEMS
+
+      - name: keep the logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bisect-${{ inputs.issue }}
+          path: ${{ runner.temp }}/bisect
+          retention-days: 14
