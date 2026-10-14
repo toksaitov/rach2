@@ -20,22 +20,33 @@ This file states the rules in force; their history is in commit messages and `de
 
 * The owner sets the work and its order on the board, and decides what the plans leave open. Everyone takes work from the board: the five research assistants, each with Claude Code in an account of their own on the testing host, and the owner, from a computer of the owner's own.
 * Claude Code does the work: code, tests and prose. Codex does work only when the owner asks for it.
-* Codex reviews the whole diff of a phase once the phase's last task has merged, and otherwise only when the owner asks. It does not review single pull requests. Only the owner's accounts are signed in to Codex, so the owner's session runs the review, and each finding it keeps becomes an issue.
+* The owner's Claude Code session is also the manager of the process, as the section of that name says. The workers are the Claude Code sessions of the five accounts.
+* Codex reviews the whole diff of a phase once the phase's last issue has landed, and otherwise only when the owner asks. Only the owner's accounts are signed in to Codex, so the manager runs the review, one unit after another between its checks, and each finding it keeps becomes a `bug` issue. Nothing waits for the review: no push, no issue, no night's run and no milestone's close.
 * Claude Code may run at most three helpers at once, each Claude Opus 5.5 at xhigh effort in a git worktree of its own, as `CLAUDE.md` says; it starts no other subagents. Codex, one Astra instance at xhigh effort at a time, is used for review. A helper or Codex does its work itself and starts no subagents.
 
 ## Work
 
-* The work is on the board, the GitHub project "Rach2" of `toksaitov/rach2`. A phase of a plan is an issue with the label `phase`, its tasks are its sub-issues, and a "blocked by" link orders two issues. The Status field is Backlog, Ready, In progress or Done: the owner moves an issue to Ready, and the board moves it to Done when its pull request merges. `gh` reaches the board with the `project` scope, which `gh auth refresh -s project` adds.
-* Take the top Ready issue with no open blocker, assign it to yourself and set it In progress before starting. A problem found along the way that the task did not set out to fix becomes an issue with the label `bug`, a sub-issue of the same phase.
-* Work on a branch of your own named for the issue, such as `42-ahci-timeout`, never on `master`.
+* The work is on the board, the GitHub project "Rach2" of `toksaitov/rach2`. A phase of a plan is an issue with the label `phase`, its tasks are its sub-issues, and a "blocked by" link orders two issues. The Status field is Backlog, Ready, In progress or Done. The board adds every new open issue as Backlog; the owner, or the manager for the owner, moves an issue to Ready, and the manager moves a new `bug` issue to Ready at its next check; and an issue is closed, and moved to Done, when a commit whose message says `Closes #N` reaches `master`. `gh` reaches the board with the `project` scope, which `gh auth refresh -s project` adds.
+* Take the top Ready issue with no open blocker; an open issue that ci filed, whose title begins `ci:`, comes before any other, whatever its Status. Assign it to yourself and set it In progress, then read its timeline (`gh api repos/toksaitov/rach2/issues/N/timeline`): if another account was assigned before you, unassign yourself and take the next, so that no issue has two writers. A problem found along the way that the task did not set out to fix becomes an issue with the label `bug`, a sub-issue of the same phase.
+* Several related issues may go in one change, each a commit of its own. Helpers may write parts of it; the session that pushes runs the check below once, for all of it.
+* Work in your clone on a local branch named for the issue, such as `42-ahci-timeout`.
 * Build the whole task first. Write every part, compile as you go, and check a detail by hand only when reading and reasoning cannot settle it. Start no suite or other long run while the task is being built.
-* Then rebase onto `master` and check the task once, ordering the steps by cause and effect, so that nothing is checked before a later step changes it:
+* Then rebase onto `origin/master` and check the task once, ordering the steps by cause and effect, so that nothing is checked before a later step changes it:
   1. The compile and `tests/run style`, which are fast and catch mechanical faults.
-  2. The suites the change could affect, as one `tests/run A B C`.
+  2. The suites the change could affect, as one `RACH2_WORKERS=4 tests/run A B C`, and again with `ARCH=x86_64` when the change touches code that differs between the architectures.
   3. For every fix after that, only the checks it could affect.
-* Open the pull request with `Closes #N` and a sentence or two on what it does, and turn on auto-merge with `gh pr merge --auto --rebase`.
-* `ci`, in `.github/workflows/ci.yml`, builds the tree and runs `make test` on the testing host's runners; a line `Suites: NAME...` in the pull request's description adds suites. A pull request merges when `ci` passes on a branch up to date with `master`, with no approval, and rebase merging lands each commit as it was written. When `master` moves first, rebase the branch again with `gh pr update-branch --rebase`. When `ci` fails, the author fixes it.
-* The full set (`tests/run all`), the build from clean and the work on the Lenovo are the owner's.
+* A suite that fails in that check with the failure already recorded on `master`, in an open `ci:` issue for the same suite and architecture, is not yours. Push past it only when your change does not touch what the failing row tests; otherwise fix the failure, or show that your change passes a narrower check of that behavior. Either way, add your evidence to that issue.
+* Before pushing, look for an open issue with the label `hold`. While one is open, push only a repair toward a passing core run, and name it in that issue. Push with `git push origin HEAD:master`, which `master` takes only as a fast-forward. If another push came first, rebase, look at what it changed, and repeat only the checks it could affect. Never force-push.
+* ci checks `master` after the push. `.github/workflows/ci.yml` runs the build, `tests/run style`, `tests/run host` and `tests/run core` on both architectures, one run at a time, on the newest commit, and `night.yml` runs every suite at 19:00 UTC. A failure becomes an issue titled `ci: KIND: WHAT fails on ARCH`, with the commits since the last pass and the `gh run download` command that fetches the kept logs, and `bisect.yml` then comments with the commit that fails while its parent passes, or says that the range is unresolved or that the failure did not repeat. The next free worker takes the issue, whoever wrote the commit: fix forward when the fix is clear, otherwise revert the named commit and reopen the issue it closed, with the log. Nobody reverts on an unresolved range; narrow it first. A failure that did not repeat is labelled `intermittent` and stays open; nothing is quarantined.
+* A core failure of the build, style, the runner or the `default` suite opens the issue labelled `hold`, and the next core run that passes on both architectures closes it. Pushes go on while any other suite fails.
+* The owner reads what lands and reverts what they reject. The build from clean and the work on the Lenovo are the owner's, and the Lenovo takes only a commit that a night passed whole.
+
+## The manager
+
+* The manager works on its own schedule. Every 30 minutes it reads the worker sessions, the test runs on the host, ci, `master`, the board and the host's load, and writes one line to its log.
+* It fixes what it finds: a lost ci job run again, leftover jobs and locks cleared, fewer workers writing at once while the host is overloaded, new `bug` issues moved to Ready, and the `hold` issue opened when a change on `master` has waited more than two core runs for a pass. A worker is stuck only when neither its session nor its test has written anything for twenty minutes, since a long suite is not a stuck one; the manager stops it, confirms that its processes are gone, and only then puts its issue back in Ready.
+* A major incident is `master` failing for more than two core runs, the host or the runners down, every worker stuck or out of tokens, or the same failure coming back. The manager notifies the owner with the cause and the fix it has chosen, waits ten minutes, applies the fix unless the owner stops it, and reports the result. It changes the rules in this file the same way; a worker reads this file when its session starts, so a change applies from each worker's next session. Repository settings, the hardware and anything that deletes data wait for the owner's yes.
+* At the end of the day it reports, in an issue with the label `night-report`, what landed, what got stuck, where the time went and what it changed.
 
 ## Build
 
@@ -50,7 +61,7 @@ This file states the rules in force; their history is in commit messages and `de
 
 ## Testing
 
-* Check a change with the suites that cover what it changed; `ci` then runs `make test`. A pull request gets no Codex review; Codex reviews whole phases, as Roles says.
+* Check a change with the suites that cover what it changed, as Work says; ci then checks `master`, and the night runs every suite.
 * Builds and suites run on the testing host: each person's in a clone in their own account there, and the owner's in the copy `tools/dev/testing.sh` syncs from the owner's computer, which itself runs only a compile or one host test. The `testing` skill describes the host.
 * A new test is trusted only after it has been made to fail: the unmodified test passes; a mutation, a deliberate fault compiled into what it runs, makes it fail; with the source restored and the artifact rebuilt, it passes again. A changed test needs no new proof. The `testing` skill has the mechanics.
 * A suite judges what the kernel counts, never the clock; seconds in a suite are completion bounds.
@@ -97,7 +108,7 @@ This file states the rules in force; their history is in commit messages and `de
 
 ## Git
 
-* Push only your own branches, and force-push only a branch nobody else works on. `master` changes only through a merged pull request; the repository's ruleset refuses any other push to it, the owner's included.
-* Commit in scoped units, one logical change each, on your branch, with no attribution of any kind. The message is one line with no trailing period, begins with a capitalised verb in the imperative, and says what the commit does, not how it was arrived at; `git log --oneline -20` shows the style.
+* `master` changes only by a fast-forward push of checked work, as Work says; the repository's ruleset refuses a force push to it and its deletion. Push no other branch; a helper does not push at all.
+* Commit in scoped units, one logical change each, on your branch, with no attribution of any kind. The message is one line with no trailing period, begins with a capitalised verb in the imperative, and says what the commit does, not how it was arrived at; `git log --oneline -20` shows the style. A commit that finishes an issue adds a blank line and `Closes #N`.
 * A text-only cleanup changes no behavior and no built artifact. Keep the vendored trees out of the diff.
 * `tools/git-hooks/commit-msg` refuses a message with an attribution line. `.claude/settings.json` turns off Claude Code's own attribution and turns the hook on when a session starts; `git config core.hooksPath tools/git-hooks` turns it on in any other clone.

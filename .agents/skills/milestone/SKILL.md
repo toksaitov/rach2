@@ -5,18 +5,18 @@ description: Work through a milestone of dev-log/ and close it. Use when a task 
 
 # Milestone
 
-A milestone runs from its `plan.md` under `dev-log/`. Its phases are issues on the board and their tasks are sub-issues, each landed by a pull request, as the Work section of `AGENTS.md` says. This skill has the details a milestone adds.
+A milestone runs from its `plan.md` under `dev-log/`. Its phases are issues on the board and their tasks are sub-issues, each landed by a push to `master`, as the Work section of `AGENTS.md` says. This skill has the details a milestone adds.
 
 ## While a task is built
 
 * When a task changes a kernel header or a host test source, run `tests/run style host` once at the end of the task, before committing it.
 * A Readme whose contract a commit changes is rewritten in that commit.
-* A problem found along the way that the milestone did not set out to fix becomes an issue with the label `bug` the same day, with its severity, how to reproduce it, the contract it breaks, what it depends on, and the test that will show it fixed. The issue is a sub-issue of the milestone's phase, so the milestone that found it fixes it, and the pull request that fixes it closes it. Nothing is reported at the end as found and unfixed. `dev-log/50-shortcomings/plan.md` is the record of the problems found before 2026-10-13, and takes no new entries.
+* A problem found along the way that the milestone did not set out to fix becomes an issue with the label `bug` the same day, with its severity, how to reproduce it, the contract it breaks, what it depends on, and the test that will show it fixed. The issue is a sub-issue of the milestone's phase, so the milestone that found it fixes it, and the commit that fixes it closes it. Nothing is reported at the end as found and unfixed. `dev-log/50-shortcomings/plan.md` is the record of the problems found before 2026-10-13, and takes no new entries.
 * A step that costs the owner time or a device is checked before it starts: a build from clean, a full set, a Codex round, a hardware sitting, or any run a person waits for. Read what would stop it: `dev-log/50-shortcomings/plan.md`, the milestone's notes and the code the step depends on. Where a form is known to work, use it. A step whose conditions were not checked is not started.
 
 ## The close
 
-* At the end of each phase, Codex reviews the phase's whole diff from the owner's account, and each finding it keeps becomes an issue. The owner closes a milestone after a build from clean and a full set on its last commit.
+* Once a phase's last issue has landed, the manager has Codex review the phase's whole diff from the owner's account while the work goes on, and each finding it keeps becomes a `bug` issue. Nothing waits for the review. The owner closes a milestone after a build from clean and a night that passed its last commit whole.
 * The build from clean empties `build/` of everything but `build/vendor/`, and removes the vendor outputs as well only when a port or its toolchain changed.
 * The style suite runs `prosecheck`, the mechanical half of the register rule; the review covers its contextual half.
 * A phase's review takes its diff in units grouped by contract, each of at most six files and sized to finish in ten minutes, one unit at a time. Each unit gets the shared interface changes, may read what its diff depends on, and states its most serious findings first. An expired review is incomplete, not clean.
