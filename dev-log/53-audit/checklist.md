@@ -11,7 +11,7 @@ The questions are what a thing is, how to run it, where a rule is written, and w
 3. How do I build and boot it? The root Readme's Build and run section: `make`, then `(cd rach2 && ./run.sh os-simple)`.
 4. What are the three images and how do they differ? The root Readme's Images section.
 5. How do I log in, and what is the password? The root Readme's Build and run section: the build makes `krffs/rach2_demo_password` and `krffs/rach2_test_password`, and Git ignores both.
-6. How do I run the tests? The root Readme's Build and run section for `make test`, and [`tests/Readme.md`](../../tests/Readme.md#the-suite-runner) for `tests/run NAME`, the tiers and the runner's rules.
+6. How do I run the tests? The root Readme's Build and run section for `make test`, and [`tests/Readme.md`](../../tests/Readme.md#running) for `tests/run NAME`, the tiers and the runner's rules.
 7. What does each test suite prove? [`tests/system/suites.md`](../../tests/system/suites.md), one line per suite, which `tests/run inventory` generates.
 8. How do I boot it on real hardware? The root Readme's Installing and updating a machine section, which names `rach2-install(8)` and the stick `make rach2-install-stick` builds.
 
@@ -42,6 +42,6 @@ The questions are what a thing is, how to run it, where a rule is written, and w
 25. What are the rules for writing code and prose here? [`CLAUDE.md`](../../CLAUDE.md).
 26. What must pass before I commit? The root Readme's Development section: `tests/run style` and `tests/run host`.
 27. What does the style check check? [`tools/Readme.md`](../../tools/Readme.md), the `tests/run style` section, one line per numbered check.
-28. Where do I put a new test? [`tests/Readme.md`](../../tests/Readme.md#adding-a-guest-test) for a guest program, [`tests/host/Readme.md`](../../tests/host/Readme.md#adding-a-test) for a native one.
+28. Where do I put a new test? [`tests/Readme.md`](../../tests/Readme.md#adding-tests) for a guest program, [`tests/host/Readme.md`](../../tests/host/Readme.md#adding-a-test) for a native one.
 29. What is known to be wrong right now? [`dev-log/50-shortcomings/plan.md`](../50-shortcomings/plan.md), the open list.
 30. How was a decision made, and when? The milestone directories under [`dev-log/`](../Readme.md), which are history and are not rewritten.

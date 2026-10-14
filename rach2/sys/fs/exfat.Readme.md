@@ -101,5 +101,5 @@ Otherwise three states the order of writes leaves after a crash are repaired, in
 
 ## Tests
 
-* `tests/run exfat` (core) is six boots that write an exFAT volume from a program and from BusyBox, judge it on the host with `mkexfatfixture --check`, read it back after a reboot, and stop a write for the next mount to repair ([tests/system/Readme.md](../../../tests/system/Readme.md)). `tests/run usbdisk` (core), `large`, `diskrate` and `installer` also mount exFAT volumes.
+* `tests/run exfat` (core) is six boots that write an exFAT volume from a program and from BusyBox, judge it on the host with `mkexfatfixture --check`, read it back after a reboot, and stop a write for the next mount to repair ([`tests/system/suites/exfat.sh`](../../../tests/system/suites/exfat.sh)). `tests/run usbdisk` (core), `large`, `diskrate` and `installer` also mount exFAT volumes.
 * `tests/run host` runs `exfat_hosttest.c`, the driver over `mkexfatfixture`'s volumes and a device model that keeps every write pending until a flush, and `exfatcheck_hosttest.c`, which proves the host reader. `sh tests/host/exfat_scan_mutate.sh` and `sh tests/host/fat_barriers_mutate.sh` are mutation proofs of the cost rows and of each barrier. [tests/host/Readme.md](../../../tests/host/Readme.md) describes the rows.

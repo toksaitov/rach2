@@ -105,4 +105,4 @@ A new inode belongs to the caller's effective user and group, or to the director
 * `tests/run ext2` runs file-system probes on an ext2 root and on a mounted volume, and boots os-real on an ext2 root through a kill, the check, a fault and recovery's `e2fsck`.
 * `tests/run large` writes a file past 4 GiB, and `tests/run selfbuild-ext2` builds the kernel on an ext2 root.
 
-[tests/host/Readme.md](../../../tests/host/Readme.md) and [tests/system/Readme.md](../../../tests/system/Readme.md) describe each.
+[tests/host/Readme.md](../../../tests/host/Readme.md) describes the host tests, and [tests/system/suites.md](../../../tests/system/suites.md) the suites.
