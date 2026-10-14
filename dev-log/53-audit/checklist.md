@@ -7,7 +7,7 @@ The questions are what a thing is, how to run it, where a rule is written, and w
 ## What it is and how to start
 
 1. What is Rach2, and what does it run? The root [Readme](../../Readme.md), the first paragraph and the System section.
-2. What do I need installed to build it? The root Readme's Build and run section, and [`tools/Readme.md`](../../tools/Readme.md#machine-setup) for the commands, one list per operating system.
+2. What do I need installed to build it? The root Readme's Build and run section, and [`tools/Readme.md`](../../tools/Readme.md) for the commands, one list per operating system.
 3. How do I build and boot it? The root Readme's Build and run section: `make`, then `(cd rach2 && ./run.sh os-simple)`.
 4. What are the three images and how do they differ? The root Readme's Images section.
 5. How do I log in, and what is the password? The root Readme's Build and run section: the build makes `krffs/rach2_demo_password` and `krffs/rach2_test_password`, and Git ignores both.

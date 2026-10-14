@@ -11,7 +11,7 @@
 #     --query-driver=**/i686-elf-*gcc
 #
 # (VS Code: set "clangd.arguments" to ["--query-driver=**/i686-elf-*gcc"]; other
-# editors have an equivalent. See "clangd compilation database" in mk/Readme.md.)
+# editors have an equivalent. See "The compilation database" in tools/Readme.md.)
 #
 # For the cross-compiled trees, pin the driver to the i686-elf cross GCC so clangd uses
 # its freestanding headers even before the database is regenerated. The host krffs FUSE
