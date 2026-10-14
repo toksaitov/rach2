@@ -54,7 +54,7 @@ The rules of `AGENTS.md`'s Comments section stand, and the rewrite applies them 
 * Inside a body, a comment is allowed only for a hardware or ABI fact or a deliberate hack, as one line.
 * A comment does not narrate the body, give the history of the code, or argue with an earlier version. A comment that is already correct and clear stays as it is.
 
-A comment-only change changes no code, and the writer shows it. The kernel is compiled with `-g` and the boot kernel is stripped of its debug sections; the images stage the sources, so they change with any edit, and some host tests use `__LINE__`. So the proof is on the objects, with their debug sections removed: on the testing host, build both architectures at `origin/master`, record a hash of every in-house object under `build/` after `objcopy --strip-debug`, apply the change, rebuild, and compare. The objects of the files changed must be rebuilt and every hash must match, except the objects of host tests that use `__LINE__`, which the writer lists. The writer also reads the diff for anything a tool reads from a comment: a `shellcheck` directive, a `/* fallthrough */`, a line continuation.
+A comment-only change changes no code, and the writer shows it. The compiler cannot show it: the kernel and the host tests are built with `-g`, the sanitizers of the host tests record line numbers, and the images stage the sources, so all of them change with a comment. The proof is on the source instead. GCC's `-fpreprocessed` removes the comments of a C file and leaves its directives and code unexpanded, and with the white space reduced to one separator the file is a sequence of tokens. A comment-only change leaves that sequence the same in every C file it touches. A file that is not C, a script, a Makefile or a manifest, has no such proof; its diff must change only comment lines, and the writer reads it for anything a tool reads from a comment: a `shellcheck` directive, a `fallthrough` mark, a line continuation.
 
 ## Keeping it true
 
@@ -73,12 +73,13 @@ The phase is #73; each task below is a sub-issue, sized for one worker session w
 5. The two checks in `textcheck.sh`, once every component document conforms.
 6. The edit: the manager reads the whole set as a new reader would, for contradictions, repetition, links and reading order, and fixes what it finds, `AGENTS.md`, `CLAUDE.md` and the skills included.
 
-A document task is checked by `tests/run style`. A comment unit is checked by the build of both architectures, the suites its files feed (`tests/run host` for host tests, `tests/run style` always), and the object comparison. On the testing host, in the clone, at `origin/master` and again after the change and the rebuild:
+A document task is checked by `tests/run style`. A comment unit is checked by the build of both architectures, `tests/run style`, `tests/run host` when it changes a host test, and the token comparison, run in the clone with the change in the working tree:
 
-    t=$(mktemp)
-    find build -name '*.o' | sort | while read -r o; do
-        objcopy --strip-debug "$o" "$t" && echo "$(sha256sum < "$t" | cut -c1-16) $o"
-    done > ~/objects.before    # ~/objects.after the second time
-    diff ~/objects.before ~/objects.after
+    git diff --name-only origin/master -- '*.c' '*.h' | while read -r f; do
+        git show "origin/master:$f" | gcc -fpreprocessed -dD -E -P -x c - |
+            tr -s ' \t\n' '\n\n\n' > ~/tokens.before
+        gcc -fpreprocessed -dD -E -P -x c "$f" | tr -s ' \t\n' '\n\n\n' > ~/tokens.after
+        cmp -s ~/tokens.before ~/tokens.after || echo "differs: $f"
+    done
 
-An empty diff, or one that lists only host tests that use `__LINE__` and the KRFFS host tools that call `assert`, both named in `facts.md`, is the proof; the writer puts it in the commit's issue.
+It prints nothing when no C file's code changed. The writer puts its output, or the word "none", in a comment on the unit's issue, with the list of the files that are not C and were read by hand.
