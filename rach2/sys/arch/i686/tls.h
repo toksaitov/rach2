@@ -7,7 +7,7 @@
  * Thread-local storage, the i386 way: a GDT descriptor whose base is the
  * thread control block, reached through %gs. This mirrors Linux's i386
  * set_thread_area(2) and struct user_desc mechanism, the same syscall and ABI
- * musl's __set_thread_area calls from __init_tls. See Readme in this directory.
+ * musl's __set_thread_area calls from __init_tls. See ../tls.Readme.md.
  */
 
 /*

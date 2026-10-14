@@ -80,7 +80,7 @@ Rach2 supplies `AT_PHDR`, `AT_PHENT`, `AT_PHNUM`, `AT_ENTRY`, `AT_PAGESZ`, `AT_C
 
 Musl's i386 `_start` preserves the entry stack, aligns its working stack, and calls `__libc_start_main`. Startup finds envp and the following auxiliary vector, initializes the thread pointer and stack protector, runs constructors, calls `main`, and passes its return value to `exit`.
 
-Static TLS scans the program headers for `PT_TLS`, creates the initial thread block, calls `set_thread_area`, loads `%gs`, and registers the clear-tid address. Rach2 keeps a TLS base for each thread and loads it into its one TLS descriptor as it switches to the thread; a thread `pthread_create` makes gets its base from `clone`'s `CLONE_SETTLS`. The [TLS document](../../rach2/sys/arch/i686/tls.Readme.md) defines the supported descriptor and inheritance rules.
+Static TLS scans the program headers for `PT_TLS`, creates the initial thread block, calls `set_thread_area`, loads `%gs`, and registers the clear-tid address. Rach2 keeps a TLS base for each thread and loads it into its one TLS descriptor as it switches to the thread; a thread `pthread_create` makes gets its base from `clone`'s `CLONE_SETTLS`. The [TLS document](../../rach2/sys/arch/tls.Readme.md) defines the supported descriptor and inheritance rules.
 
 Rach2 publishes no `AT_SYSINFO` or `AT_SYSINFO_EHDR`, so musl uses its i386 `int 0x80` syscall path. The kernel returns failures as negative Linux errno values. The kernel and subsystem Readmes own the individual syscall contracts.
 

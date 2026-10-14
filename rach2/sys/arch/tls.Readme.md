@@ -1,0 +1,69 @@
+# Thread-local storage
+
+Each thread has a thread pointer: the address of its thread control block (TCB), the structure the C library keeps for the thread. In musl it is `struct pthread`, whose first word is its own address and which has the thread's `errno` and stack-protector canary; the program's `__thread` variables lie just below it. On i686 the thread pointer is the base of the segment in `%gs`, and on x86-64 it is the FS base, so a load relative to that register reaches the running thread's own data. The kernel keeps one base for each thread, loads it into the processor when it switches to the thread, gives a new thread its parent's base or the one `clone` asks for, and sets it to 0 at `execve`. The calls' contracts are in their manual pages; this document describes how each architecture keeps the base.
+
+## Interfaces
+
+A program sets its own thread pointer with one call, which differs between the architectures, and `clone` sets a new thread's:
+
+| Call | i686 | x86-64 | Manual page |
+| --- | --- | --- | --- |
+| `set_thread_area` | 243 | none | [set_thread_area(2)](../../../man/man2/set_thread_area.2) |
+| `arch_prctl` | none | 158 | [arch_prctl(2)](../../../man/man2/arch_prctl.2) |
+| `clone` | 120 | 56 | [fork(2)](../../../man/man2/fork.2) |
+| `clone3` | 435 | 435 | [fork(2)](../../../man/man2/fork.2) |
+
+* On i686, `set_thread_area` takes a pointer to a Linux i386 `struct user_desc` (`i686/tls.h`) and writes the entry number, 6, back into it; the program then loads the selector `0x33`, entry 6 at privilege level 3, into `%gs`. With `CLONE_SETTLS`, the TLS argument of `clone` and `clone3` is a pointer to the same structure, which the kernel checks as `set_thread_area` does (`tls_resolve_base` in `i686/tls.c`).
+* On x86-64, `arch_prctl` sets the FS base with `ARCH_SET_FS` and the GS base with `ARCH_SET_GS`, and stores them at a user address with `ARCH_GET_FS` and `ARCH_GET_GS` (`x86_64/tls.h`). With `CLONE_SETTLS`, the TLS argument of `clone` and `clone3` is the new thread's FS base itself.
+* musl makes these calls itself ([the musl port](../../../vendor/musl/Readme.md)). Before `main`, its `__init_tp` calls `__set_thread_area`, which on i386 asks `set_thread_area` for entry -1 with limit 0xfffff and flags 0x51 and then loads the selector, and on x86-64 calls `arch_prctl` with `ARCH_SET_FS`. Its `pthread_create` passes the new thread's TCB with `CLONE_SETTLS`; on i386 its `__clone` builds the `user_desc` from that TCB's address and the entry of the selector in `%gs`.
+* A tracer reads and sets a stopped thread's bases through [ptrace(2)](../../../man/man2/ptrace.2): `PTRACE_GET_THREAD_AREA` and `PTRACE_SET_THREAD_AREA` on i686, and `PTRACE_ARCH_PRCTL` and the `fs_base` and `gs_base` words of the registers on x86-64 (`i686/ptrace.c`, `x86_64/ptrace.c`).
+* The shared kernel code reaches the thread pointer through three functions of `arch.h`, which each architecture's `tls.c` defines: `arch_tls_set` loads a base into the processor for the thread about to run in user mode, `arch_tls_get` reads the running thread's, and `arch_clone_tls` turns clone's TLS argument into a base.
+
+## Design
+
+[The architectures' Readme](Readme.md) describes each architecture's descriptor tables, entry code and context switch; this section gives the part of them that keeps the thread pointer. The paths of files under `rach2/sys/arch/` are given from there, and those of other files from the top of the tree.
+
+### i686
+
+* `i686/gdt.c` gives each processor a global descriptor table (GDT) of its own, of nine entries (`GDT_ENTRY_COUNT` in `i686/gdt.h`). Entry 6, `GDT_TLS_ENTRY`, is the TLS segment: present, DPL 3, writable data with a 4 GiB limit, the shape of the user data segment in entry 4, with base 0 at boot. It is present from the start, so a program that loads `0x33` before it has set a base takes no fault. `gdt_set_tls` rewrites only the three base fields of the running processor's entry 6. The segment spans 4 GiB from any base, so paging decides what a `%gs`-relative access may reach, and the kernel does not check the base.
+* `process_t.tls_base` (`rach2/sys/proc/process.h`) is the thread's base. A new record is zeroed, so a new thread's base is 0.
+* `sys_set_thread_area` (`i686/tls.c`) copies the `user_desc` in, has `tls_resolve_base` check it and return its base, writes the base into the running processor's entry 6 and into the record, and copies the entry number 6 back to the caller. It leaves the `%gs` selector saved at the entry as it was: the program loads `0x33` itself.
+* `switch_context` (`i686/switch.s`) writes the incoming thread's `tls_base` into entry 6 with interrupts off and reloads `%gs` with `0x33`, since the processor keeps a hidden copy of a segment's descriptor that only a load of the selector refreshes. The thread's own selector comes back on its return to user mode. `isr_common_handler` (`i686/isr_handler.s`) saves `%gs`, `%fs`, `%es` and `%ds` in slots of their own in `isr_params_t` (`i686/cpu.h`) and runs the kernel with `0x10` in `%ds`, `%es` and `%gs` and the processor's own segment, `0x40`, in `%fs`; `isr_return` loads the four saved selectors back, and the load of `0x33` reads entry 6 with the base the switch wrote.
+* `switch.s` reads `tls_base` at the fixed offset 80 of the record. `i686/context.c` checks that offset against the compiler's at build time, and `arch_context_check`, which `init_proc` (`rach2/sys/proc/process.c`) calls at boot, checks it again for a kernel TinyCC builds, since TinyCC cannot make the check at build time. `i686/tls.c` stops the build if `GDT_TLS_ENTRY` is not 6 or `GDT_TLS_SELECTOR` is not `0x33`, the values `switch.s` has as `.set` constants.
+* `enter_program` (`rach2/kernel.c`), which starts the first program and each program the debug shell runs, goes to user mode without `switch_context`, so it calls `arch_tls_set` itself with the new record's base, 0. `arch_enter_user` (`i686/loader.s`) starts the program with the user data selector, `0x23`, in all four data segment registers.
+* The signal frame (`i686/sigframe.c`) saves the `%gs` selector. A signal return restores it when it is `0x23` or `0x33` and puts `0x23` in place of any other, since the return path loads the selector in ring 0, where a bad one would fault the kernel.
+
+### x86-64
+
+* The FS base is the thread pointer, and the program may use the GS base as it likes. Each is a model-specific register (MSR) of the processor: IA32_FS_BASE (`0xC0000100`) and IA32_GS_BASE (`0xC0000101`), with IA32_KERNEL_GS_BASE (`0xC0000102`) beside them (`x86_64/percpu.h`). The kernel uses GS for itself: in the kernel, GS's base is the running processor's `struct cpu`, and `swapgs` exchanges IA32_GS_BASE with IA32_KERNEL_GS_BASE. Every entry from user mode runs `swapgs` first and every return to user mode runs it last (`x86_64/isr_handler.s`), so while the kernel runs, the program's GS base is in IA32_KERNEL_GS_BASE. The kernel does not use FS, and the program's FS base stays loaded while the kernel runs.
+* The record has the FS base in `tls_base` and the GS base in `regs.gs_base` (`x86_64/cpu.h`).
+* `sys_arch_prctl` (`x86_64/tls.c`) writes an `ARCH_SET_FS` base into `tls_base` and IA32_FS_BASE, and an `ARCH_SET_GS` base into `regs.gs_base` and IA32_KERNEL_GS_BASE, where the `swapgs` of the return finds it. `ARCH_GET_FS` and `ARCH_GET_GS` read IA32_FS_BASE and IA32_KERNEL_GS_BASE, since the record may be out of date: a program that loads a selector into FS or GS sets that base to the descriptor's, 0, without a system call.
+* A base to set must be below `USER_ADDR_MAX`, `0x00007FFFFFFFF000` (`x86_64/cpu.h`), or `arch_prctl` fails with EPERM. `arch_clone_tls`, `PTRACE_ARCH_PRCTL` and the ptrace register writes make the same check, so every base the kernel loads is a canonical lower-half address. Two things depend on that. A `wrmsr` of a non-canonical address into a base MSR raises a general-protection fault in the kernel. And the NMI, the double fault, the machine check and the debug exception may arrive where the saved CS does not show whose GS base is loaded, such as between a `swapgs` and the `iretq` after it, so their entries read the top bit of IA32_GS_BASE, which only the kernel's upper-half `struct cpu` sets.
+* `switch_context` (`x86_64/context.c`) is C. It first reads the outgoing thread's bases from IA32_FS_BASE and IA32_KERNEL_GS_BASE back into its record (`arch_bases_save`), since a selector load may have changed them, then writes the incoming thread's into the same two MSRs, before `x86_64_switch` (`x86_64/switch.s`) changes the stacks. No assembly reads the process record, so `arch_context_check` checks only the offsets of `struct cpu`.
+* `enter_program` calls `arch_tls_set`, which writes IA32_FS_BASE, and `arch_enter_user` (`x86_64/context.c`) writes the record's GS base into IA32_KERNEL_GS_BASE before `x86_64_enter_user` goes to user mode through `swapgs` and `iretq`.
+* The GDT has no TLS entry. `x86_64_load_gdt` puts the null selector in FS and GS when a processor starts; no entry to the kernel saves a segment selector in its frame, and the kernel loads none into FS or GS after the start.
+
+### Fork, clone and exec
+
+* `do_fork` (`rach2/sys/syscall_proc.c`) gives the child the base `clone_with` got from the `CLONE_SETTLS` argument through `arch_clone_tls`, or else the parent's base as `arch_tls_get` reads it now: the record's on i686, where only `set_thread_area` changes it, and IA32_FS_BASE on x86-64. `SC_CLONE_TLS` in each `cpu.h` gives the TLS argument's position, the fourth on i686 and the fifth on x86-64, as Linux has them.
+* On i686 the child's frame is a copy of the parent's, so the child returns to user mode with the parent's `%gs` selector. On x86-64 `arch_fork_frame` (`x86_64/context.c`) gives the child the parent's GS base from IA32_KERNEL_GS_BASE; `CLONE_SETTLS` changes only the FS base.
+* A child of `fork` has the parent's TCB address, which in its copy of the address space reaches its own copy of the TCB. A thread shares the address space, so `pthread_create` gives it a TCB of its own with `CLONE_SETTLS`.
+* `exec_commit` (`rach2/sys/syscall_proc.c`) sets `tls_base` to 0 and loads base 0. `arch_exec_frame` sets `%gs`, `%fs`, `%es` and `%ds` to `0x23` on i686 (`i686/context.c`), and on x86-64 sets the GS base to 0 in the record and in IA32_KERNEL_GS_BASE (`x86_64/context.c`). The new program's C library sets its own thread pointer before `main`.
+
+## Limits
+
+* i686 has one TLS entry, 6, where Linux has three, 6 to 8. `set_thread_area` refuses any other entry with EINVAL, and `PTRACE_GET_THREAD_AREA` reads entries 7 and 8 as Linux reads an unused one.
+* The i686 segment always has a 4 GiB limit. Of a `user_desc`, only the base is used; its limit, its granularity bit and its usable bit are ignored.
+* i686 registers no `get_thread_area` or `modify_ldt`, so a program has no local descriptor table, and x86-64 registers no `set_thread_area` or `get_thread_area`. Each of these answers ENOSYS.
+* `arch_prctl` takes only its four codes. Linux's others, `ARCH_GET_CPUID`, `ARCH_SET_CPUID` and the rest, fail with EINVAL.
+* On x86-64 only the bases belong to a thread. The kernel keeps no FS or GS selector for it, so a selector one thread loads stays in the processor's register when another thread is switched in, and ptrace reports FS and GS as 0.
+
+## Tests
+
+`tests/run default` runs the probes below on the architecture in `ARCH`, i686 by default, and `ARCH=x86_64 tests/run default` runs them on x86-64 ([the tests' Readme](../../../tests/Readme.md)). `make test` runs the host tests and, in its core tier, the default suite.
+
+* `tests/tlsprobe.c`, built for i686 alone, calls `set_thread_area` as musl does and loads the selector. It checks eight words through `%gs` across 40,000 system calls and busy waits that span timer interrupts, then binds itself to processor 0 and forks. The child checks that the base it inherited reads the parent's words and sets a TCB of its own; then parent and child each check their own words across 3,000 iterations and 200 rounds of a byte passed over two pipes, each round a switch to the child and one back. It prints `All TLS checks passed!`. On x86-64 the runner reports it as `i686 only, not run`.
+* `tests/fsbaseprobe.c` checks on x86-64 that `arch_prctl` sets and reads both bases, that they survive fork and context switches, and that loading a selector into FS or GS sets that base to 0; the tests' Readme lists its rows. It prints `FSBASEPROBE OK`; on i686 it says its rows did not run and passes.
+* `tests/musl/threadmusl.c` starts four threads with `pthread_create`, which passes `CLONE_SETTLS`, and checks that each has its own copy of a `__thread` variable. It and every other musl program in the suite set their thread pointer through musl's startup.
+* `tests/run host` runs `tests/host/tls_hosttest.c` ([the host tests](../../../tests/host/Readme.md)), which checks i686's `tls_resolve_base`: it accepts musl's request and an explicit entry 6, and refuses another entry, a descriptor without the 32-bit flag, a code segment, a read-only or a not-present segment, and null arguments. `x86_64/tls.c` has no host test.
+* No test makes `arch_prctl`, `clone` or ptrace refuse a base at or above `USER_ADDR_MAX`, and none makes the ptrace TLS requests.
