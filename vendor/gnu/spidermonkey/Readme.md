@@ -1,39 +1,35 @@
 # The SpiderMonkey shell
 
-This directory builds `js`, the shell of SpiderMonkey, Firefox's JavaScript engine, from the source of Firefox 140.16.0esr, the release of Firefox ESR 140 current on 2026-09-27, as a program with its JIT for the GNU layer's target, i686-linux-gnu or x86_64-rach2-linux-gnu as `ARCH` names the architecture. `make gnu-js` runs `build_js.sh`, as `mk/gnu-extra.mk` says, and the script installs the shell under the prefix `/usr` into `js/` of the layer's build tree, `build/vendor/gnu/` or `build/x86_64/vendor/gnu/`, a staging root. It builds on a Linux host only and is not part of `make`.
+This directory builds `js`, the shell of SpiderMonkey, Firefox's JavaScript engine, with its JIT, for the [GNU layer](../Readme.md)'s target. It gives Rach2 a JavaScript engine that compiles to machine code. `make gnu-js` runs `build_js.sh`, which installs the shell as `usr/bin/js` in `js/` of the layer's build tree; `install_root.sh` copies it into the root image.
 
-## Sources
+## Sources and license
 
-`../sources-extra.txt` lists three kinds of source with their digests, and `../fetch.sh` checks each one's digest every time the script unpacks it.
+[`../sources-extra.txt`](../sources-extra.txt) pins Firefox's ESR source tarball, the Rust components (`rustc`, `cargo`, the standard library for the x86-64 build host, and the i686 standard library), and the cbindgen crate, and its header says how each digest was verified. cargo fetches cbindgen's dependencies from crates.io and checks each against the crate's `Cargo.lock`; Firefox's own crates are in its source. SpiderMonkey is under the Mozilla Public License 2.0. Rust and cbindgen run only on the build host.
 
-* Firefox's source, `firefox-140.16.0esr.source.tar.xz`. Its digest was recorded after its signature, and the signed `SHA256SUMS` beside it, verified with Mozilla's release key, `14F26682D0916CDD81E37B6D61B7B526D98F0353`.
-* Rust 1.86.0, the release Mozilla's automation builds Firefox 140 with (`taskcluster/kinds/toolchain/rust.yml` in the tree): `rustc`, `cargo` and the standard library for the build host, an x86-64 Linux, which serves an x86-64 target too, and the standard library for `i686-unknown-linux-gnu`. Each was verified with the Rust release key, `108F66205EAEB0AAA8DD5E1C85AB96E6FA1BE5FE`.
-* The crate of cbindgen 0.28.0. It has no signature; its digest is the one the crates.io index lists, and its `.cargo_vcs_info.json` has the git revision `bd78bbe59b10eda6ef1255e4acda95c56c6d0279`, the one Mozilla's automation builds cbindgen from, as `taskcluster/kinds/fetch/toolchains.yml` in Firefox's signed source gives it. The crate's `Cargo.lock` lists its dependencies with their digests, and cargo fetches them from crates.io with `--locked` and checks each one.
+## Local changes
 
-Firefox's own Rust crates are in its source, under `third_party/rust`.
+[`python-3.14.patch`](python-3.14.patch) replaces `ast.Str` and the `s` attribute of `ast.Constant`, which Python 3.14 removed, in mach and the moz.build reader, so that mach runs with Python 3.14. The SpiderMonkey sources are not changed.
 
-## The build
+## Building
 
-`build_js.sh` has five steps, `rust`, `cbindgen`, `source`, `build` and `check`, and runs all five from nothing when none is named. Each step writes its output to a log in `log/` of the build tree.
+[`build_js.sh`](build_js.sh) has five steps, and runs all of them from nothing when none is named. Each writes a log, `log/js-STEP.log`.
 
-1. `rust` installs the Rust components, the fourth, i686's standard library, only for an i686 target, with their own `install.sh` into `rust/` of the build tree, a toolchain of the build's own that no `rustup` manages.
-2. `cbindgen` builds cbindgen from its crate into the same directory. Firefox's configure requires cbindgen for every project, though the js project makes no header with it.
-3. `source` unpacks Firefox's source and applies `python-3.14.patch`. Firefox 140's mach and moz.build reader use `ast.Str` and the `s` attribute of `ast.Constant`, which Python 3.14, the Python of the testing host, removed; the patch uses `ast.Constant` and its `value`. mach warns that Python 3.14 is newer than any it is known to work with, and the build succeeds.
-4. `build` writes a mozconfig and runs `./mach build`, as Mozilla's instructions for building SpiderMonkey say: `--enable-project=js`, `--enable-optimize`, `--disable-debug`, `--disable-tests`, `--disable-jemalloc`, `--without-system-zlib`, `--disable-bootstrap` and `--target=` the toolchain's target, with the cross toolchain's `gcc`, `g++`, `ar`, `nm`, `ranlib` and `strip` for the target and the host's own compilers for the build's tools. `--disable-bootstrap` keeps mach from downloading toolchains of its own. `--without-system-zlib` builds the zlib of Firefox's tree into the shell, since SpiderMonkey alone takes zlib from the system by default and the sysroot has none. The i686 code is compiled with `-msse -msse2 -mfpmath=sse`, as Mozilla's automation compiles 32-bit x86, so that the interpreter and the JIT round floating point alike, and the shell needs a processor with SSE2, which every x86-64 one has. configure requires `llvm-objdump`, which only the browser's packaging runs and which the build host lacks, so `LLVM_OBJDUMP` is set to the cross toolchain's `objdump`. mach keeps its state and its virtual environments in `work/js-state` of the build tree and installs no Python packages from outside the tree.
-5. The shell is copied from the object directory's `dist/bin/js` into the staging root and stripped: a position-independent executable of 43.7 MB for i686, whose interpreter is `/lib/ld-linux.so.2`, or of 42.3 MB for x86-64, whose interpreter is `/lib64/ld-linux-x86-64.so.2`, and which needs `libstdc++.so.6`, `libgcc_s.so.1`, `libm.so.6` and `libc.so.6`.
+1. `rust` installs the Rust components into `rust/` of the build tree, adding the i686 standard library for an i686 target.
+2. `cbindgen` builds cbindgen from its crate with `cargo build --locked`. Firefox's configure requires it, though the js project does not use it.
+3. `source` unpacks Firefox's source and applies the patch.
+4. `build` writes a mozconfig and runs `./mach build`: `--enable-project=js`, `--enable-optimize`, `--disable-debug`, `--disable-tests`, `--disable-jemalloc`, `--without-system-zlib`, `--disable-bootstrap` and `--target=` the toolchain's target, with the cross toolchain for the target and the host's `cc` and `c++` for build tools. `--disable-bootstrap` keeps mach from downloading toolchains, and `--without-system-zlib` builds Firefox's own zlib in, since the sysroot has none. `LLVM_OBJDUMP` is the cross `objdump`, since configure requires one. On i686 the code is compiled with `-msse -msse2 -mfpmath=sse`, as Mozilla builds 32-bit x86. The shell is copied from `dist/bin/js` and stripped.
+5. `check` runs a script with the shell through the sysroot's loader and `--ion-offthread-compile=off`. The script calls a function until SpiderMonkey compiles it, then asks the shell's testing functions; the step requires the output line `inJit() = true, inIon() = true`.
 
-The check runs a script with the shell, started with the sysroot's loader by hand and the cross toolchain's C++ runtime on the library path. The script calls a function in a loop until SpiderMonkey compiles it, with Ion compiling on the calling thread (`--ion-offthread-compile=off`) so that the compilation is done when the loop is, then asks the shell's testing functions whether the function runs in JIT code and in Ion, SpiderMonkey's optimizing compiler, and the check requires both. On the testing host the script prints, for either architecture:
+mach and cargo run `GNU_JOBS` jobs, or one for each processor, even under make, since mach starts its own make. The object directory is `work/js-obj` and mach's state is in `work/js-state`. The host tools are those the [GNU layer](../Readme.md) lists, with access to crates.io.
 
-```
-sum(1000) = 499500
-baseline.enable = 1, ion.enable = 1
-inJit() = true, inIon() = true
-```
+## Updating
 
-## Times
+Replace the `firefox`, `rustc`, `cargo`, `rust-std`, `rust-std-i686` and `cbindgen` lines of `sources-extra.txt` together, with the Rust and cbindgen releases that Mozilla's automation builds that Firefox with (`taskcluster/kinds/toolchain/rust.yml` and `taskcluster/kinds/fetch/toolchains.yml` in its source). Drop or remake the patch if the new source no longer needs it or no longer takes it.
 
-On the testing host, a Ryzen 9 7950X3D under WSL2, `make gnu-js` with `GNU_JOBS=16` took 201 s: the Rust install 10 s, cbindgen 18 s, unpacking and patching the source 24 s, the build 143 s, and the check under a second. For x86-64, under one `make ARCH=x86_64 -j32` that built the ports, the native compiler, GDB and the browser at the same time, the Rust install took 9 s, cbindgen 25 s, the source 29 s and the build 179 s. The i686 Rust toolchain in `build/vendor/gnu/rust` takes 705 MB, the unpacked source 4.1 GB and the object directory, `build/vendor/gnu/work/js-obj`, 2.6 GB; the source and the object directory stay after the build.
+## Limits
 
-## Host
+The i686 shell needs a processor with SSE2.
 
-Python 3, GNU make, m4, patch, xz and a C and C++ compiler for the build host, and access to crates.io for cbindgen's dependencies. mach and cargo run `GNU_JOBS` jobs, or one for every processor when it is not set, under make as well, since mach starts its own make.
+## Tests
+
+The `check` step runs with every build. On Rach2, the `js` row of `tests/run gnu` runs a script of the same kind and requires the same line; [`tests/system/Readme.md`](../../../tests/system/Readme.md) describes it.
