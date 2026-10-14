@@ -791,10 +791,11 @@ check "the record lock is released at exit" 0 "$rc"
 # block's holder exits. A block is free again once its holder exits. A holder
 # writes its offset to its entered file and lives until its release file
 # appears; the bound of 600 tenths of a second only ends a failed test. The
-# third claim's command writes its offset only if block 1's release file
-# exists when it starts, so a claim that starts while the block is held fails
-# its row. A claim whose command has not started when the test is done with it
-# is stopped rather than waited for.
+# third claim's command writes its offset only if block 1's holder has exited
+# when it starts, its process gone or a zombie, which holds no lock; so a
+# claim that starts while the block is held fails its row, even after the
+# release file is made. A claim whose command has not started when the test
+# is done with it is stopped rather than waited for.
 mkdir -p "$WORK/ports"
 rm -f "$WORK"/ports-entered.* "$WORK"/ports-release.* "$WORK"/ports-out.*
 # shellcheck disable=SC2016 # $1 and $2 are the inner shell's arguments
@@ -816,8 +817,10 @@ portrun1=$!
 portclaims="$portclaims $portrun1"
 ports_entered 1
 # shellcheck disable=SC2016 # $1 and $2 are the inner shell's arguments
-"$SELFTEST_UTIL" ports "$WORK/ports" 2 sh -c 'if [ -e "$2" ]; then echo "$RACH2_PORT_OFFSET"; else echo "started while held"; fi > "$1"' \
-    sh "$WORK/ports-entered.2" "$WORK/ports-release.1" > "$WORK/ports-out.2" &
+"$SELFTEST_UTIL" ports "$WORK/ports" 2 sh -c 'case "$(ps -o stat= -p "$2" 2> /dev/null | tr -d " ")" in
+    ""|Z*) echo "$RACH2_PORT_OFFSET" ;;
+    *) echo "started while held" ;;
+    esac > "$1"' sh "$WORK/ports-entered.2" "$portrun1" > "$WORK/ports-out.2" &
 portrun2=$!
 portclaims="$portclaims $portrun2"
 i=0
@@ -1128,9 +1131,12 @@ rm -rf "$WORK/build/.run.lock"
 rm -f "$WORK/holder-in" "$WORK/holder-go" "$WORK/holder-pid"
 # A lock left with an empty owner record, as a run cut off by a restart of
 # the host leaves it, is taken over by a holder once it is ten seconds old;
-# a younger one may be a run taking the tree, and is refused.
+# a younger one may be a run taking the tree, and is refused. The young lock
+# is dated in the future, so that the holder's compile of its helper and the
+# host's schedule, however slow, do not age it before the holder reads it.
 mkdir -p "$WORK/build/.run.lock"
 : > "$WORK/build/.run.lock/owner"
+touch -t 209901010000 "$WORK/build/.run.lock"
 out=$(cd "$WORK" && sh holder.sh plain 2>&1); rc=$?
 check "a holder refuses a young lock with an empty owner record" 1 "$rc"
 check "and says another run is taking the tree" 1 \
