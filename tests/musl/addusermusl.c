@@ -1,45 +1,47 @@
 /**
- * `adduser` in the guest: an account made across three databases and a home.
+ * addusermusl: check `adduser`, which makes an account across three databases
+ * and a home directory.
  *
  * link-deps: utils/pwauth.c
  *
- * What `passwd` proves for one file this proves for four things published in
+ * What `passwdmusl` shows for one file this shows for four things published in
  * order, and the order is the whole subject: nothing here makes the four one
  * change, so what makes an interrupted run safe is that every prefix of the
  * order is a system a reader can still make sense of. The cases, as they run:
  *
- * The end-to-end case, asserted through libc, not on bytes alone:
+ * The end-to-end case, checked through libc as well as on the bytes:
  * `getpwnam` and `getgrnam` must parse the new account back with one number for
  * its uid and its gid, the shadow field must be a `$6$` hash `crypt` reproduces
  * from the scripted password, the home must be 0700 owned by those numbers, and
  * every line that was there before must come through byte for byte.
  *
- * The failed-password case, which is what proves the order bought something: a
- * new account whose two password lines disagree, after which the account still
- * exists in all three files with its field still `!`, so it cannot be entered
- * and there is nothing to roll back.
+ * The failed-password case, which shows what the order gains: a new account
+ * whose two password lines disagree, after which the account still exists in
+ * all three files with its field still `!`, so it cannot be entered and there
+ * is nothing to roll back.
  *
  * The refusals, each followed by all three files byte-identical and no lock
- * left behind, including the residue no crash of ours can produce: a name
- * written by hand into `/etc/group` alone, which a per-file absence check
- * catches and a check on the account as a whole would not.
+ * left behind, including the residue no crash of `adduser` can produce: a name
+ * written by hand into `/etc/group` alone, which a check of each file for the
+ * name catches and a check on the account as a whole would not.
  *
  * The injection, one round per publication point, run through the crash build
- * `/adduser-crash N`, which dies the instant that publication has landed. It
- * dies holding the transaction, so every round leaves the lock behind: the
- * probe asserts it is there, removes it the way root would, and only then runs
- * the real `adduser`, which by the never-break rule would otherwise spend ten
- * tries refusing on the lock, not on the residue the round is about.
- * Each round asserts what must be present, what must still be byte-identical,
- * and that the re-run refuses naming the files that hold the leftovers.
+ * `/adduser-crash N`, which exits with status 9 as soon as that publication
+ * is made. It exits holding the transaction, so every round leaves the lock
+ * behind: the probe checks it is there, removes it as root would, and only
+ * then runs the shipped `adduser`, which would otherwise spend its ten
+ * retries on the lock, since no caller breaks one, and not reach the residue
+ * the round is about. Each round checks what must be present, what must still
+ * be byte-identical, and that the re-run refuses, naming the files that have
+ * the leftovers.
  *
  * Then contention. `passwd` takes its transaction after its prompts, so no live
  * writer here holds the lock across anything a test can synchronize on, and the
- * deterministic half is built on the lock a crashed writer really leaves:
- * against it `adduser` must say it is waiting, be alive, and have published
- * nothing, which is the pair an `adduser` that ignored the lock fails. The live
- * half races two real writers, a password change against a creation, and then
- * two creations, which must not agree on a number.
+ * deterministic half is built on the lock a crashed writer leaves: against it
+ * `adduser` must say it is waiting, be alive, and have published nothing,
+ * which is the pair an `adduser` that ignored the lock fails. The live half
+ * races two writers, a password change against a creation, and then two
+ * creations, which must not agree on a number.
  *
  * The closing cross-check runs over the final files in both directions: every
  * passwd line has a shadow line and a group line whose gid it names, and no
@@ -88,6 +90,8 @@
 #define PROBE_PASS "probepass"
 #define PROBE_UID  1000
 
+/* The three databases, and their contents as `main` found them, which
+ * every case compares against and `restore_databases` writes back. */
 static const char *Databases[3] = {ETC_PASSWD, ETC_SHADOW, ETC_GROUP};
 static char Snapshot[3][4096];
 
@@ -99,7 +103,10 @@ static int fail(const char *what)
     return 1;
 }
 
-/** Read the whole of `path` into `buffer`. Returns the length, or -1. */
+/**
+ * Read up to `size - 1` bytes of `path` into `buffer`, terminated. Returns the
+ * length, or -1.
+ */
 static long slurp(const char *path, char *buffer, size_t size)
 {
     ssize_t got;
@@ -118,7 +125,7 @@ static long slurp(const char *path, char *buffer, size_t size)
     return (long)got;
 }
 
-/** Write `text` to `path` at `mode`, creating or truncating it. Returns 0. */
+/** Write `text` to `path` at `mode`, creating or truncating it; 0, or -1. */
 static int spill(const char *path, const char *text, mode_t mode)
 {
     size_t len = strlen(text);
@@ -233,7 +240,7 @@ static int field_of(const char *text, const char *name, int which, char *out, si
     return -1;
 }
 
-/** Take the pre-image every case compares against. Returns 0. */
+/** Read the three databases into `Snapshot`; 0, or -1. */
 static int snapshot_databases(void)
 {
     size_t i;
@@ -247,7 +254,10 @@ static int snapshot_databases(void)
     return 0;
 }
 
-/** Put the databases back and remove what a case created. */
+/**
+ * Write the snapshots back to the databases, and remove the homes and the
+ * lock a case may have left. Failures are ignored.
+ */
 static void restore_databases(void)
 {
     static const char *const homes[] = {"/home/" NEW_USER, "/home/" HALF_USER, "/home/" CRASH_USER};
@@ -263,10 +273,13 @@ static void restore_databases(void)
 }
 
 /**
- * Read from `fd` until `needle` appears or `ms` elapse. Returns 1 on a match.
+ * Read from `fd`, appending to the terminated string in `buffer` of `size`
+ * bytes, until `needle` appears in it. Returns 1 on a match, and 0 at end of
+ * file, on a read error, when the buffer is full, or once `ms` milliseconds
+ * of polls have passed with nothing to read.
  *
- * The rendezvous the concurrent case uses in place of a sleep: a token the
- * other process could only have printed after doing the thing waited for.
+ * The waiting case uses this in place of a sleep: the needle is a line the
+ * other process could print only after doing what is waited for.
  */
 static int read_until(int fd, const char *needle, char *buffer, size_t size, long ms)
 {
@@ -302,14 +315,15 @@ static int read_until(int fd, const char *needle, char *buffer, size_t size, lon
 }
 
 /**
- * Read from `fd` until it reaches end of input or `ms` elapse, appending to
- * `buffer`. Returns nothing.
+ * Read from `fd` to end of file, appending to the terminated string in
+ * `buffer` of `size` bytes, until the buffer is full or `ms` milliseconds of
+ * polls have passed with nothing to read.
  *
- * The whole of what a child said, and it must be the whole: a reader that
- * stopped at the first chunk would leave the pipe to be closed under a child
- * still writing, which delivers `SIGPIPE` and turns this probe into a test of
- * its own harness. End of input arrives when the child exits, so this is also
- * how the parent knows the child is done talking.
+ * It reads all that a child writes: a reader that stopped at the first chunk
+ * would leave the pipe to be closed under a child still writing, which would
+ * get `SIGPIPE`, and the probe would fail for a fault of its own. End of file
+ * comes when the child exits, so this is also how the parent knows the child
+ * has finished writing.
  */
 static void drain(int fd, char *buffer, size_t size, long ms)
 {
@@ -341,11 +355,12 @@ static void drain(int fd, char *buffer, size_t size, long ms)
 
 /**
  * Run `path` with `argv`, feeding `script` to its standard input and collecting
- * its standard error into `report`. Returns the child's exit status, or -1.
+ * its standard error into `report`. Returns the child's exit status, or -1
+ * when it cannot be run or does not exit.
  *
- * The input is a pipe, not a terminal, which is what makes the script
- * possible: the password prompt `adduser` execs takes the non-tty path and
- * reads the lines as they come.
+ * The input is a pipe, which is what makes the script possible: the password
+ * prompt of the `passwd` that `adduser` execs reads a pipe without changing
+ * terminal modes and takes the lines as they come.
  */
 static int run_with(const char *path, char *const argv[], const char *script, char *report,
                     size_t report_size)
@@ -396,7 +411,7 @@ static int run_with(const char *path, char *const argv[], const char *script, ch
     return WEXITSTATUS(status);
 }
 
-/** Run the shipped `adduser` on `name`, with `script` for the password. */
+/** As `run_with`, for the shipped `adduser` on `name`. */
 static int run_adduser(const char *name, const char *script, char *report, size_t report_size)
 {
     char *argv[3];
@@ -409,11 +424,14 @@ static int run_adduser(const char *name, const char *script, char *report, size_
 }
 
 /**
- * The account made end to end, read back through libc.
+ * Check an account made end to end, read back through libc. Returns 0, or 1
+ * after printing the failure.
  *
- * Asserting through `getpwnam` and `getgrnam`, not on the bytes alone is
- * the point of this case: it proves the readers can parse what was written,
- * which is a different claim from the bytes having landed.
+ * The reads through `getpwnam`, `getgrnam` and `getspnam` show that the
+ * readers can parse what was written, which the bytes alone do not show.
+ * Every line that was there before must still be there, byte for byte, since
+ * a check of the new account alone would pass on a file that lost every
+ * other line.
  */
 static int check_created(void)
 {
@@ -466,8 +484,6 @@ static int check_created(void)
     if (info.st_uid != pw->pw_uid || info.st_gid != pw->pw_gid) {
         return fail("the new home directory is not owned by the new account");
     }
-    /* Every line that was there before, byte for byte. A check through the new
-     * account alone would pass on a file that lost every other one. */
     for (i = 0; i < 3; i++) {
         const char *line = Snapshot[i];
 
@@ -504,12 +520,13 @@ static int check_created(void)
 }
 
 /**
- * The password that fails, which is what proves the order bought something.
+ * Check an account whose password is never set. Returns 0, or 1 after printing
+ * the failure.
  *
  * `adduser` publishes the account with a locked field and hands it to `passwd`,
  * so a password that is never set leaves an account that exists and cannot be
- * entered. That is the intended end state of the last prefix, not a
- * residue, and nothing needs undoing.
+ * entered. That is the end state of the last prefix, and nothing needs
+ * undoing.
  */
 static int check_failed_password(void)
 {
@@ -541,7 +558,10 @@ static int check_failed_password(void)
 }
 
 /**
- * The refusals, each of which must change nothing at all.
+ * Check the refusals, each of which must change nothing: an account that
+ * exists, uid 0, a uid already taken, a caller who is not root, and a name
+ * written by hand into the group file alone, which a check on the account as a
+ * whole would call absent. Returns 0, or 1 after printing the failure.
  */
 static int check_refusals(void)
 {
@@ -561,7 +581,7 @@ static int check_refusals(void)
         }
     }
 
-    /* An account that already exists is not this run's business. */
+    /* An account that already exists. */
     status = run_adduser(PROBE_USER, "", report, sizeof(report));
     if (status == 0) {
         return fail("adduser created an account that already existed");
@@ -570,7 +590,7 @@ static int check_refusals(void)
         return fail("adduser did not report an existing account as one");
     }
 
-    /* Root's number is not one to hand out. */
+    /* uid 0. */
     argv[0] = (char *)"adduser";
     argv[1] = (char *)"-u";
     argv[2] = (char *)"0";
@@ -580,7 +600,7 @@ static int check_refusals(void)
         return fail("adduser handed out uid 0");
     }
 
-    /* A number already taken, as a uid and then as a gid. */
+    /* A uid already taken. */
     argv[2] = (char *)"1000";
     if (run_with(ADDUSER_PATH, argv, "", report, sizeof(report)) == 0) {
         return fail("adduser handed out a uid that was taken");
@@ -609,8 +629,7 @@ static int check_refusals(void)
         }
     }
 
-    /* The residue no crash of ours can produce: a name written by hand into one
-     * database. A check on the account as a whole would call this absent. */
+    /* A name written by hand into the group file alone. */
     if (slurp(ETC_GROUP, staged, sizeof(staged)) < 0) {
         return fail("cannot read the group file the residue case writes");
     }
@@ -649,13 +668,21 @@ static int check_refusals(void)
 }
 
 /**
- * The ordering, proved by injection, not by a reading of the source.
+ * Check the publication order by injecting a crash at each point. Returns 0,
+ * or 1 after printing the failure.
  *
- * One round per publication point, each run through the crash build, which dies
- * the instant that publication has landed and inside the transaction, so it
- * leaves the lock a real crash leaves. The probe clears that lock the way root
- * would before running the shipped program, since the never-break rule would
- * otherwise make the re-run refuse on the lock, not on the residue.
+ * One round per publication point, each run through the crash build, which
+ * exits as soon as that publication is made and inside the transaction, so it
+ * leaves the lock a crash leaves. The probe removes that lock as root would
+ * before running the shipped program, since no caller breaks a lock and the
+ * re-run would otherwise fail on the lock and not on the residue.
+ *
+ * Shadow comes first, with a locked field: the prefix that uses no number and
+ * names no group. A file not yet published must be byte-identical, and not
+ * merely lack the name, since a rewrite that lost other lines would pass that.
+ * The re-run must refuse, naming the files that have the leftovers, except
+ * after the last point, where the account is complete and `passwd` can finish
+ * it.
  */
 static int check_injection(void)
 {
@@ -683,8 +710,7 @@ static int check_injection(void)
         }
         (void)unlink(CRED_LOCK_PATH);
 
-        /* Shadow first, and with a locked field: the prefix that consumes no
-         * number and names no group. */
+        /* Shadow first, with a locked field. */
         if (slurp(ETC_SHADOW, after, sizeof(after)) < 0) {
             return fail("cannot read the shadow file after the crash");
         }
@@ -713,8 +739,7 @@ static int check_injection(void)
         if (names_line(after, CRASH_USER) != (which >= 4)) {
             return fail("the passwd file does not match the publication point");
         }
-        /* What has not been published must be byte-identical, not merely free
-         * of the name: a rewrite that lost other lines would pass that. */
+        /* What has not been published is byte-identical. */
         if (which < 2 &&
             (slurp(ETC_GROUP, after, sizeof(after)) < 0 || strcmp(after, Snapshot[2]) != 0)) {
             return fail("a file published after the crash point was changed anyway");
@@ -724,8 +749,7 @@ static int check_injection(void)
             return fail("the passwd file was changed before its turn");
         }
 
-        /* And the re-run refuses, naming the files that hold the leftovers,
-         * except at the last point where the account is simply complete. */
+        /* The re-run. */
         if (which == 4) {
             char script[128];
 
@@ -735,7 +759,7 @@ static int check_injection(void)
             if (strstr(report, "already exists") == NULL) {
                 return fail("a complete account was reported as a residue");
             }
-            /* The last prefix is finishable, not wedged. */
+            /* The last prefix can be finished. */
             snprintf(script, sizeof(script), "%s\n%s\n", NEW_PASS, NEW_PASS);
             argv[0] = (char *)"passwd";
             argv[1] = (char *)CRASH_USER;
@@ -772,18 +796,19 @@ static int check_injection(void)
 }
 
 /**
- * Contention, on the windows this system actually has.
+ * Check that `adduser` waits for a held lock. Returns 0, or 1 after printing
+ * the failure.
  *
- * `passwd` takes its transaction after its prompts and not before, so a writer
- * held at a prompt holds no lock: holding one across a terminal read was the
- * defect that ordering fixed, and no live writer here keeps the lock across
- * anything a test can synchronize on. So the deterministic half is built on the
- * lock a real writer really leaves. The crash build dies inside its
- * transaction, and against that lock `adduser` must say it is waiting, must
- * still be alive, and must have published nothing: an `adduser` that ignored
- * the lock would have read the pre-image and published all four replacements
- * inside this window. The lock is then removed the way root would, and the run
- * must complete.
+ * `passwd` takes its transaction after its prompts, so a writer held at a
+ * prompt holds no lock, and no live writer here keeps the lock across
+ * anything a test can synchronize on. So this case is built on the lock a
+ * crashed writer leaves. The crash build exits inside its transaction, and
+ * against that lock `adduser` must say it is waiting, must still be alive,
+ * and must have published nothing: an `adduser` that ignored the lock would
+ * have read the snapshot and published all four replacements in this time.
+ * The lock is then removed as root would remove it, since the library never
+ * breaks one, and the run must create the account: the crash left `crashed`
+ * in the shadow file, and this run is for a different name.
  */
 static int check_waits(void)
 {
@@ -849,8 +874,6 @@ static int check_waits(void)
             return fail("the account maker published while the lock was held");
         }
     }
-    /* Removed the way root clears a crashed writer's residue, which is the only
-     * thing that ever removes it: the library never breaks a lock. */
     (void)unlink(CRED_LOCK_PATH);
     (void)write(a_in[1], NEW_PASS "\n" NEW_PASS "\n", 2 * strlen(NEW_PASS) + 2);
     close(a_in[1]);
@@ -858,8 +881,6 @@ static int check_waits(void)
         return fail("the waiting maker did not exit normally");
     }
     close(a_err[0]);
-    /* It refuses: the crash left `crashed` in the shadow file, and this run is
-     * for a different name, so what it must survive is the wait alone. */
     if (WEXITSTATUS(status) != 0) {
         return fail("the maker failed after the lock was freed");
     }
@@ -875,12 +896,22 @@ static int check_waits(void)
 }
 
 /**
- * Two real writers at once, and then two account makers at once.
+ * Check two writers at once, and then two account makers at once. Returns 0,
+ * or 1 after printing the failure.
  *
  * Nothing here is staged: both pairs are started together and race. What is
- * asserted is what a lost update destroys, that both results survive, and what
- * a number chosen outside the lock destroys, that two accounts made at once
- * have two different uids.
+ * checked is what a lost update destroys, that both results survive, since
+ * each writer must build its replacement from a file that already has the
+ * other's line, and what a number chosen outside the lock destroys, that two
+ * accounts made at once have two different uids.
+ *
+ * Each of the two makers gets its own input pipe: two exec'd `passwd`
+ * children sharing one pipe would race for lines a byte at a time, and the
+ * probe would fail for a fault of its own. Both makers must succeed, and both
+ * accounts must have a hash: each publishes its passwd line before it execs
+ * `passwd`, so a run whose password never got set still leaves the name in
+ * every file, with a `!` field, and the uid checks would pass over two
+ * half-made accounts.
  */
 static int check_concurrent(void)
 {
@@ -955,8 +986,7 @@ static int check_concurrent(void)
     if (waitpid(maker, &status, 0) != maker || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         return fail("the racing account creation failed");
     }
-    /* Both survive, which is what a lost update destroys: either writer built
-     * its replacement from an image that already held the other's line. */
+    /* Both survive. */
     if (slurp(ETC_SHADOW, after, sizeof(after)) < 0) {
         return fail("cannot read the shadow file after the race");
     }
@@ -974,10 +1004,7 @@ static int check_concurrent(void)
         return fail("the race left a lock behind");
     }
 
-    /* And two account makers at once, which must not agree on a number. Each
-     * gets its own input pipe: one pipe shared between two exec'd `passwd`
-     * children would have them racing for lines a byte at a time, and a probe
-     * that failed that way would be failing at its own plumbing. */
+    /* Two account makers at once, which must not agree on a number. */
     restore_databases();
     {
         static const char *const names[2] = {NEW_USER, HALF_USER};
@@ -1021,10 +1048,6 @@ static int check_concurrent(void)
             if (waitpid(makers[which], &status, 0) != makers[which] || !WIFEXITED(status)) {
                 return fail("one of two concurrent makers did not exit normally");
             }
-            /* The status matters: each publishes its passwd record before it
-             * execs `passwd`, so a run whose password never got set still
-             * leaves the name in every file, and the uid assertions below would
-             * pass over two half-made accounts. */
             if (WEXITSTATUS(status) != 0) {
                 return fail("one of two concurrent makers failed");
             }
@@ -1047,8 +1070,7 @@ static int check_concurrent(void)
     if (count_lines(after, NEW_USER) != 1 || count_lines(after, HALF_USER) != 1) {
         return fail("a concurrent run appended a name twice");
     }
-    /* And both were finished, not merely created: a `!` field is an account
-     * whose creation succeeded and whose password never got set. */
+    /* Both have a password. */
     if (slurp(ETC_SHADOW, after, sizeof(after)) < 0) {
         return fail("cannot read the shadow file after the two makers");
     }
@@ -1064,11 +1086,13 @@ static int check_concurrent(void)
 }
 
 /**
- * The closing cross-check, in both directions, over whatever the run left.
+ * Check the databases the run left: every passwd line has a shadow line and a
+ * group for its gid, and no name appears twice in any file. Returns 0, or 1
+ * after printing the failure.
  *
- * An `adduser` that ignored the lock leaves exactly the first failure, an `x`
- * field with no shadow line; one that checked only two databases leaves exactly
- * the second, a name appearing twice.
+ * An `adduser` that ignored the lock leaves the first failure, an `x` field
+ * with no shadow line; one that checked only two databases leaves the second,
+ * a name appearing twice.
  */
 static int check_consistent(void)
 {
@@ -1119,7 +1143,8 @@ static int check_consistent(void)
 }
 
 /**
- * Run the cases, restore what they changed, and report.
+ * Take the snapshots, run the cases, put back what they changed and print the
+ * result. Must run as root. Returns 0 when every case passes, 1 otherwise.
  */
 int main(void)
 {

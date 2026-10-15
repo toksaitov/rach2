@@ -1,42 +1,45 @@
 /**
- * `passwd` in the guest: the first program that writes a credential file.
+ * passwdmusl: check `passwd`, which rewrites the shadow file, in the guest.
  *
  * link-deps: utils/pwauth.c
  *
  * The library's own probe covers the transaction; this covers the program built
- * on it, and it drives the shipped `/passwd` at the shipped mode, not a
- * copy, so what is proved is what a user runs. Its cases, in the order they
- * run:
+ * on it, and it drives the shipped `/passwd` at the shipped mode, not a copy,
+ * so what is checked is what a user runs. Its cases, in the order they run:
  *
- * The sequential arc, asserted on the file's bytes and metadata, not on
- * an exit status. A uid-1000 child feeds its old and new passwords to `/passwd`
- * on a pipe and the account's hash must change to a `$6$` with a different
- * salt, `crypt` must reproduce it from the new password, every other line must
- * be byte-identical (a check through the account alone would pass on a file
- * that lost every other one), the mode and owner must still be 0600 root, and
- * no temporary file and no lock may remain.
+ * The sequential change, checked on the file's bytes and metadata, since an
+ * exit status shows little. A uid-1000 child feeds its old and new passwords to
+ * `/passwd` on a pipe and the account's hash must change to a `$6$` with a
+ * different salt, `crypt` must reproduce it from the new password, every other
+ * line must be byte-identical (a check through the account alone would pass on
+ * a file that lost every other one), the mode and owner must still be 0600
+ * root, and no temporary file and no lock may remain.
  *
  * Then the refusals, each of which must change nothing at all: a wrong old
- * password; uid 1000 naming another account, which is the real-uid rule and the
- * milestone-16 `su` finding in a second place, since this binary is 04755 and a
- * test on the effective uid would authorize everyone; and a database naming one
- * account twice, which musl's parsers resolve by file order and this program
- * refuses outright, because the line that authenticates and the line that is
- * rewritten could otherwise be different ones.
+ * password; uid 1000 naming another account, which only the real uid can
+ * refuse, since this binary is 04755 and a test of the effective uid would
+ * authorize everyone (`su` has the same rule); a database naming one account
+ * twice, which musl's parsers resolve by file order and this program refuses
+ * outright, because the line that authenticates and the line that is
+ * rewritten could otherwise be different ones; and records and passwords no
+ * reader would accept.
  *
- * Then the concurrent case, which is what the lock exists for and what no
- * single-process test can reach: two accounts changed at once, where the loser
- * must wait, not read a pre-image and publish over the winner's line.
- * The rendezvous is a token on the loser's standard error and never a sleep.
+ * Then the concurrent cases, which are what the lock exists for and what no
+ * single-process test can reach: two accounts changed at once, where both
+ * changes must survive, and records changed under a writer at its prompt,
+ * which it must refuse. The rendezvous is a prompt on the writer's standard
+ * error and never a sleep.
  *
- * Then the entropy implication, and it is `getrandom`'s answer that decides
- * which side runs, never a CPUID bit: a mint that cannot be trusted must refuse
- * before the new password is asked for, so that nothing is collected that
- * cannot be used.
+ * On a boot with no trusted entropy only the entropy case runs, and
+ * `getrandom`'s answer decides which side runs, never a CPUID bit: a mint that
+ * cannot be trusted must refuse before the new password is asked for, so that
+ * nothing is collected that cannot be used.
  *
- * Prints "PASSWDMUSL OK" on success and "PASSWDMUSL FAIL (detail)" otherwise.
- * It restores all three databases byte for byte before it exits, since the
- * probes share one boot and the ones after this read the same files.
+ * Prints "PASSWDMUSL OK" and exits 0 on the trusted side, prints
+ * "PASSWDMUSL OK (fail-closed)" and exits 1 on the untrusted side, and prints
+ * "PASSWDMUSL FAIL (detail)" otherwise. It restores all three databases byte
+ * for byte before it exits, since the probes share one boot and the ones
+ * after this read the same files.
  */
 
 #define _GNU_SOURCE /* crypt, getrandom */
@@ -62,8 +65,8 @@
 #define ETC_GROUP   "/etc/group"
 
 /* The two unprivileged accounts the test image stages, with the passwords whose
- * hashes are committed in the manifest. Two of them, because a lost update is
- * only visible when two accounts change. */
+ * hashes the manifest stages. Two of them, because a lost update is only
+ * visible when two accounts change. */
 #define PROBE_USER  "probe"
 #define PROBE_PASS  "probepass"
 #define PROBE2_USER "probe2"
@@ -72,6 +75,8 @@
 #define PROBE_UID  1000
 #define PROBE2_UID 1001
 
+/* The three databases, their contents as `main` found them, which
+ * `restore_databases` writes back, and the length `slurp` returned for each. */
 static const char *Databases[3] = {ETC_PASSWD, ETC_SHADOW, ETC_GROUP};
 static char Snapshot[3][4096];
 static long Snapshot_len[3];
@@ -84,7 +89,10 @@ static int fail(const char *what)
     return 1;
 }
 
-/** Read the whole of `path` into `buffer`. Returns the length, or -1. */
+/**
+ * Read up to `size - 1` bytes of `path` into `buffer`, terminated. Returns the
+ * length, or -1.
+ */
 static long slurp(const char *path, char *buffer, size_t size)
 {
     ssize_t got;
@@ -103,7 +111,7 @@ static long slurp(const char *path, char *buffer, size_t size)
     return (long)got;
 }
 
-/** Write `text` to `path` at `mode`, creating or truncating it. Returns 0. */
+/** Write `text` to `path` at `mode`, creating or truncating it; 0, or -1. */
 static int spill(const char *path, const char *text, mode_t mode)
 {
     size_t len = strlen(text);
@@ -179,9 +187,9 @@ static int hash_of_line(const char *line, char *out, size_t size)
 }
 
 /**
- * The same text with `user`'s line removed. Used to compare everything the
- * change did not touch, since an account that verifies says nothing about the
- * lines beside it.
+ * Copy `text` into `out` of `size` bytes without `user`'s line or empty lines.
+ * Used to compare everything the change did not touch, since an account that
+ * verifies says nothing about the lines beside it.
  */
 static void without(const char *text, const char *user, char *out, size_t size)
 {
@@ -209,8 +217,9 @@ static void without(const char *text, const char *user, char *out, size_t size)
 }
 
 /**
- * The hash field of `user`'s line in `text`, as a pointer into a static buffer.
- * Used only to rebuild a record the malformed case then breaks in one field.
+ * Return the hash field of `user`'s line in `text`, in a static buffer, or ""
+ * when the line is not there once. Used only to rebuild a record the
+ * malformed case then breaks in one field.
  */
 static const char *hash_from(const char *text, const char *user)
 {
@@ -226,14 +235,15 @@ static const char *hash_from(const char *text, const char *user)
 }
 
 /**
- * Put the three databases back as the image staged them.
+ * Write the snapshots back to the databases and remove the lock. Failures are
+ * ignored.
  *
- * Called at the head of every case, not only at the end, because each
- * case is written against the staged passwords and a case that ran before it
- * has changed one. Without this the refusals would pass for the wrong reason:
- * a wrong-password case and a wrong-caller case both refuse just as readily
- * when the password in the script is simply out of date, and the case would be
- * asserting nothing about the rule it names.
+ * Called at the head of every case, not only at the end, because each case is
+ * written against the staged passwords and a case that ran before it has
+ * changed one. Without this the refusals would pass for the wrong reason: a
+ * wrong-password case and a wrong-caller case both refuse just as readily
+ * when the password in the script is out of date, and the case would show
+ * nothing about the rule it names.
  */
 static void restore_databases(void)
 {
@@ -246,13 +256,15 @@ static void restore_databases(void)
 }
 
 /**
- * Read from `fd` until `needle` appears or `ms` elapse. Returns 1 on a match.
+ * Read from `fd`, appending to the terminated string in `buffer` of `size`
+ * bytes, until `needle` appears in it. Returns 1 on a match, and 0 at end of
+ * file, on a read error, when the buffer is full, or once `ms` milliseconds
+ * of polls have passed with nothing to read.
  *
- * The rendezvous every case here uses in place of a sleep: a token the other
- * process could only have printed after doing the thing being waited for. The
- * deadline bounds a failure and never decides a pass, since the pass condition
- * is the token and a build that printed a different one fails on the deadline
- * instead of passing on it.
+ * The concurrent cases use this in place of a sleep: the needle is a line the
+ * other process could print only after doing what is waited for. The time
+ * limit ends a failure and never decides a pass, since the pass condition is
+ * the needle, and a build that printed another line fails at the limit.
  */
 static int read_until(int fd, const char *needle, char *buffer, size_t size, long ms)
 {
@@ -287,13 +299,6 @@ static int read_until(int fd, const char *needle, char *buffer, size_t size, lon
     return 0;
 }
 
-/**
- * Run `/passwd` as `uid`, feeding `script` to its standard input and collecting
- * its standard error into `report`. Returns the child's exit status, or -1.
- *
- * The input is a pipe, not a terminal, which is what makes the script
- * possible: the prompt takes the non-tty path and reads the lines as they come.
- */
 static int run_passwd_raw(uid_t uid, const char *user, const char *script, size_t script_len,
                           char *report, size_t report_size);
 
@@ -370,12 +375,16 @@ static int spoil_aging(char *text, const char *user, const char *value)
 }
 
 /**
- * Run `/passwd` as `uid`, feeding it `script_len` bytes and collecting its
- * standard error. Returns the child's exit status, or -1.
+ * Run `/passwd` as `uid`, naming `user` when it is not NULL, feeding the
+ * `script_len` bytes of `script` to its standard input and collecting its
+ * standard error into `report` when that is not NULL. Returns the child's
+ * exit status, or -1 when it cannot be run or does not exit.
  *
- * The length is a parameter because one case feeds a script containing a NUL,
- * which is exactly the byte `strlen` would stop at, and that case exists
- * because the program must not stop at it either.
+ * The input is a pipe, which is what makes the script possible: the prompt
+ * reads a pipe without changing terminal modes and takes the lines as they
+ * come. The length is a parameter because one case feeds a script containing
+ * a NUL, the byte `strlen` would stop at, and the program must not stop at it
+ * either.
  */
 static int run_passwd_raw(uid_t uid, const char *user, const char *script, size_t script_len,
                           char *report, size_t report_size)
@@ -450,7 +459,10 @@ static int run_passwd_raw(uid_t uid, const char *user, const char *script, size_
 }
 
 /**
- * The change itself, asserted on the file, not on a status.
+ * Check a change of the probe account's password, on the file: a new SHA-512
+ * hash of the new password with a new salt, every other line as it was, the
+ * mode and owner kept, and no lock left. Returns 0, or 1 after printing the
+ * failure, with the program's own message when it refuses.
  */
 static int check_change(void)
 {
@@ -482,8 +494,6 @@ static int check_change(void)
     if (status != 0) {
         char said[640];
 
-        /* The program's own line, not just the status: a refusal here has half
-         * a dozen causes and the message names which. */
         snprintf(said, sizeof(said), "passwd refused a correct old password (status %d, said: %s)",
                  status, report);
 
@@ -507,7 +517,6 @@ static int check_change(void)
     if (!made || strcmp(made, new_hash) != 0) {
         return fail("the published hash is not the new password's");
     }
-    /* The salt is minted per change, so two changes of one password differ. */
     if (strncmp(new_hash, old_hash, 12) == 0) {
         return fail("passwd reused the salt it found");
     }
@@ -534,26 +543,42 @@ static int check_change(void)
 }
 
 /**
- * Two writers overlapping, which is the whole reason for the lock.
+ * Check writers that overlap, which is the reason for the lock. Returns 0, or
+ * 1 after printing the failure.
  *
  * `passwd` prompts first and takes the transaction last, so the lock is held
- * for microseconds, not for as long as a person takes to choose a
- * password. What keeps that safe is that it re-reads the database under the
- * lock and rewrites THAT, not the copy it surveyed before prompting,
+ * for microseconds and not for as long as a person takes to choose a
+ * password. What keeps that safe is that it reads the database again under
+ * the lock and rewrites that copy, and not the one it read before prompting,
  * and that it refuses if the record it authenticated against is no longer the
- * one it is about to replace. Both halves are asserted here, and the sequencing
- * is exact, not hopeful: the second writer is made to prompt first, so
- * it is holding a pre-image by construction, and only then is the first writer
- * run to completion.
+ * one it is about to replace. Both halves are checked here, in a fixed order:
+ * the second writer is brought to its prompt first, so it has read the file
+ * before the change, and only then is the first writer run to completion.
  *
  * Two accounts first, where both changes must survive: the writer that
- * published second re-read the other's result and carried it through. The image
- * has `probe2` at uid 1001 for exactly this, since a lost update is only
- * visible when two accounts change.
+ * published second read the other's result again and kept it. The image has
+ * `probe2` at uid 1001 for this, since a lost update is only visible when two
+ * accounts change.
  *
- * Then one account changed by two writers, where the second must be refused.
- * Its pre-image is stale in the one way that matters, and publishing from it
- * would erase a change its caller never saw.
+ * Then one account changed by two writers, where the second must be refused:
+ * its copy of the record is out of date, and publishing from it would erase a
+ * change its caller never saw.
+ *
+ * Then the caller's claim to the account, taken away while it is at the
+ * prompt, with the shadow record left alone. An administrator can rename the
+ * account or give the uid to somebody else, so a writer that checked only the
+ * record again would publish as root for an account that has just stopped
+ * being the caller's. The claim is taken away twice: by renaming the line,
+ * and by adding a line for another uid before it, which leaves the caller's
+ * uid resolving to the same name while `getpwnam` of that name, which takes
+ * the first line, gives the other uid.
+ *
+ * Last, the record's shape changed at the prompt, by a malformed aging field
+ * and by moving the record to the end of the file with no newline, which
+ * musl's `getspnam` reports as ERANGE; only the last line of a file can lack
+ * one. The rewrite copies those fields and the newline through, so a writer
+ * that checked the shape only before the prompt would publish a malformed
+ * record under a success message, for an account `getspnam` then refuses.
  */
 static int check_concurrent(void)
 {
@@ -572,8 +597,7 @@ static int check_concurrent(void)
 
     restore_databases();
 
-    /* The second writer, started first and held at its new-password prompt. It
-     * has read and authenticated by then, so its survey is the pre-image. */
+    /* The second writer, held at its new-password prompt. */
     if (pipe(b_in) != 0 || pipe(b_err) != 0) {
         return fail("could not make the pipes the overlapping writer reports on");
     }
@@ -604,8 +628,7 @@ static int check_concurrent(void)
         return fail("the overlapping writer never reached its new-password prompt");
     }
 
-    /* The first writer runs to completion while the second holds its
-     * pre-image. */
+    /* The first writer runs to completion. */
     snprintf(script, sizeof(script), "%s\nfirst-new-pw\nfirst-new-pw\n", PROBE_PASS);
     if (run_passwd(PROBE_UID, NULL, script, report, sizeof(report)) != 0) {
         kill(b, SIGKILL);
@@ -614,7 +637,7 @@ static int check_concurrent(void)
         return fail("the writer that published first did not finish cleanly");
     }
 
-    /* Only now does the second publish, from a survey that is out of date. */
+    /* The second publishes from a copy that is out of date. */
     (void)write(b_in[1], "second-new-pw\nsecond-new-pw\n", 28);
     close(b_in[1]);
     if (waitpid(b, &status, 0) != b || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
@@ -650,8 +673,7 @@ static int check_concurrent(void)
         return fail("a lock survived two overlapping writers");
     }
 
-    /* The same account, changed by two writers. The one holding the stale
-     * record must be refused, not publish over a change it never saw. */
+    /* One account, changed by two writers. */
     restore_databases();
     if (pipe(b_in) != 0 || pipe(b_err) != 0) {
         return fail("could not make the pipes the same-account case reports on");
@@ -714,11 +736,7 @@ static int check_concurrent(void)
         return fail("the refused writer published over root's change anyway");
     }
 
-    /* The caller's claim, revoked while the password is being typed. A name is
-     * not owned forever: an administrator can remove the account or give the
-     * uid to somebody else, and none of that need touch the shadow hash, so a
-     * writer that rechecked only the record would publish as root for an
-     * account that had just stopped being theirs. */
+    /* The caller's claim, taken away by a rename at the prompt. */
     restore_databases();
     if (pipe(b_in) != 0 || pipe(b_err) != 0) {
         return fail("could not make the pipes the revocation case reports on");
@@ -801,11 +819,7 @@ static int check_concurrent(void)
         return fail("the revoked writer published its new password anyway");
     }
 
-    /* The same revocation done by ADDING a line instead of renaming one. The
-     * caller's uid still resolves to the same name, so a check that asked only
-     * that question would pass; but the login now names two accounts and
-     * `getpwnam` takes the first, so the hash this caller publishes would
-     * authenticate a uid that is not theirs. */
+    /* The caller's claim, taken away by a line added before it. */
     restore_databases();
     if (pipe(b_in) != 0 || pipe(b_err) != 0) {
         return fail("could not make the pipes the reassignment case reports on");
@@ -881,11 +895,7 @@ static int check_concurrent(void)
         return fail("the writer published a hash that would authenticate another uid");
     }
 
-    /* The record's SHAPE can rot while the prompts are open just as its hash
-     * can, and a shape check made before the prompt does not cover it: the
-     * aging fields and the final newline are copied through by the rewrite, so
-     * a record that went malformed mid-prompt would be republished malformed
-     * under a success message, for an account `getspnam` then refuses. */
+    /* The record's shape, changed at the prompt. */
     {
         static const char *const rotted[] = {"aging", "newline"};
         size_t which;
@@ -941,9 +951,7 @@ static int check_concurrent(void)
                     char record[512];
                     size_t used;
 
-                    /* Last, and unterminated: `getspnam` reports ERANGE for a
-                     * matching record whose last character is not a newline,
-                     * and only the last line of a file can lack one. */
+                    /* The record moved last, with no newline. */
                     if (line_of(shadow_text, PROBE_USER, record, sizeof(record)) != 0 ||
                         strip_line(shadow_text, PROBE_USER) != 0) {
                         kill(b, SIGKILL);
@@ -996,23 +1004,18 @@ static int check_concurrent(void)
 }
 
 /**
- * What `passwd` does on a machine whose entropy cannot be trusted.
+ * Check what `passwd` does on a machine whose entropy cannot be trusted; `main`
+ * runs this case alone when `getrandom` fails with EIO. Returns 0, or 1 after
+ * printing the failure.
  *
- * It is `getrandom`'s answer that decides which side runs, never a CPUID bit:
- * the kernel marks its generator trusted only when a hardware source actually
- * delivered, so a CPU that advertises `RDRAND` and does not deliver has no
- * trusted entropy while one with `RDSEED` alone has it, and a probe reading the
- * feature bits would assert the wrong direction on both.
- *
- * The order is the point. The salt is minted after the old password is accepted
- * and before the new one is asked for, so a machine that cannot mint refuses
- * without first collecting a secret it cannot use. So on the untrusted side the
- * script stops after the old password, the run must fail, both the library's
- * line and the program's must appear, `New password:` must never be printed,
- * and every database must be byte-identical.
- *
- * This case runs on both sides of that answer, which is why it asks `getrandom`
- * first instead of being two probes.
+ * The salt is minted after the old password is accepted and before the new
+ * one is asked for, so a machine that cannot mint refuses without first
+ * collecting a secret it cannot use. So the script stops after the old
+ * password, the run must fail, both the library's line and the program's must
+ * appear, `New password:` must never be printed, and the shadow file must be
+ * byte-identical. Had the mint come later, `passwd` would prompt for a new
+ * password and find the script at its end, so the missing prompt is checked
+ * and not assumed.
  */
 static int check_entropy(void)
 {
@@ -1028,9 +1031,6 @@ static int check_entropy(void)
         return fail("cannot read the shadow file the entropy case guards");
     }
 
-    /* The script ends after the old password: if the mint came later, passwd
-     * would prompt for a new password here and this feed would leave it
-     * waiting, so the missing prompt is asserted, not assumed. */
     snprintf(script, sizeof(script), "%s\n", PROBE_PASS);
     status = run_passwd(PROBE_UID, NULL, script, report, sizeof(report));
     if (status == 0) {
@@ -1053,8 +1053,21 @@ static int check_entropy(void)
 }
 
 /**
- * The refusals: a wrong password, another account, and an ambiguous database.
- * Each must leave every byte as it was.
+ * Check the refusals, each of which must leave the shadow file as it was, and
+ * that a caller may name their own account. Returns 0, or 1 after printing
+ * the failure.
+ *
+ * Besides a wrong password, another account and an account named twice, the
+ * refusals are of what no reader would accept. A shadow record that does not
+ * parse would be published in its old shape, and `getspnam` wants nine
+ * fields, so the account would answer to no password while the user was told
+ * the new one was set; a record with no newline after it fails musl's
+ * `getspnam` the same way. Two entries that differ only after a NUL would
+ * confirm each other, since `strcmp` and `crypt` both stop there, and the
+ * stored secret would be the prefix alone. A passwd record musl's parser
+ * skips is not an account, and a change for it would be reported for a name
+ * no reader resolves. And a password longer than the shortest limit of any
+ * reader in the image is refused, not stored as a prefix nobody typed.
  */
 static int check_refusals(void)
 {
@@ -1084,8 +1097,7 @@ static int check_refusals(void)
         return fail("a refused change altered the shadow file");
     }
 
-    /* The real-uid rule: this binary is 04755, so geteuid() is 0 for everyone
-     * who runs it, and only getuid() says who asked. */
+    /* Another account: the binary is 04755, so only getuid() says who asked. */
     snprintf(script, sizeof(script), "%s\nnope\nnope\n", PROBE_PASS);
     status = run_passwd(PROBE_UID, "root", script, report, sizeof(report));
     if (status == 0) {
@@ -1095,7 +1107,7 @@ static int check_refusals(void)
         return fail("a refused cross-account change altered the shadow file");
     }
 
-    /* An ambiguous database is refused, not resolved by file order. */
+    /* An account the shadow file names twice. */
     if (line_of(before, PROBE_USER, line, sizeof(line)) != 0) {
         return fail("the shadow file does not name the probe account once");
     }
@@ -1126,11 +1138,7 @@ static int check_refusals(void)
         return fail("could not put the shadow file back after the ambiguous case");
     }
 
-    /* A record that does not parse is refused, not rewritten. A
-     * replacement that kept a malformed line's shape would publish a file this
-     * program calls changed and every reader goes on rejecting: `getspnam`
-     * wants nine fields, so the account would answer to no password at all and
-     * the user would be told the new one was set. */
+    /* A shadow record that does not parse. */
     {
         char broken[4096];
         char rest[4096];
@@ -1165,10 +1173,7 @@ static int check_refusals(void)
         }
     }
 
-    /* A record with no newline after it is one the reader refuses: musl's
-     * getspnam rejects a matching line whose last character is not a newline,
-     * so publishing it would leave an account answering to nothing while this
-     * program reported the password changed. */
+    /* A shadow record with no newline after it. */
     {
         char unterminated[4096];
         char rest[4096];
@@ -1207,8 +1212,7 @@ static int check_refusals(void)
         }
     }
 
-    /* A caller may name their own account: it is the same request as naming
-     * none, and it is how the command is conventionally written. */
+    /* A caller naming their own account, the same request as naming none. */
     {
         char feed[256];
 
@@ -1232,9 +1236,7 @@ static int check_refusals(void)
         }
     }
 
-    /* A NUL is not a password byte: `strcmp` and `crypt` both stop there, so
-     * two entries differing only past it would confirm each other and the
-     * stored secret would be the prefix alone. */
+    /* Two entries that differ only after a NUL. */
     {
         char feed[256];
         size_t n = 0;
@@ -1257,9 +1259,7 @@ static int check_refusals(void)
         }
     }
 
-    /* A passwd record musl's parser skips is not an account, whatever this
-     * program can make of it: authenticating against one and rewriting its
-     * shadow entry would report a change for a name no reader resolves. */
+    /* A passwd record musl's parser skips. */
     {
         static const char *const broken[] = {"%s:x:%djunk:%d:probe:/home/probe:/idreport\n",
                                              "%s:x:%d:%d:probe\n",
@@ -1299,8 +1299,7 @@ static int check_refusals(void)
         restore_databases();
     }
 
-    /* A password longer than the shortest limit any reader in the image
-     * imposes is refused, not stored as a prefix nobody typed. */
+    /* A password longer than a reader accepts. */
     {
         char longpw[256];
         size_t i;
@@ -1332,6 +1331,23 @@ static int check_refusals(void)
     return 0;
 }
 
+/**
+ * Take the snapshots, run the cases for the side `getrandom` answers, put the
+ * databases back and print the result.
+ *
+ * SIGPIPE is ignored: a refused change exits before it has read the rest of
+ * its script, so the write that feeds it finds a pipe with no reader, which
+ * must not kill this probe. The side is `getrandom`'s answer and never a
+ * feature bit, since the kernel marks its generator trusted only when a
+ * hardware source delivered: a CPU that advertises `RDRAND` without
+ * delivering has no trusted entropy, and one with `RDSEED` alone has it.
+ *
+ * Two runs read the result, and neither can pass on the side the other
+ * expects. The probe runner reads the kernel's exit line, so the status is 0
+ * only on the trusted side, and a fail-closed boot under `-cpu max` fails it.
+ * `tests/run noentropy` matches a token and never reads the status, so the
+ * fail-closed side prints its own token and exits 1.
+ */
 int main(void)
 {
     unsigned char sample[16];
@@ -1340,9 +1356,6 @@ int main(void)
     int trusted = 0;
     int rc;
 
-    /* A refused change exits before it has read the rest of the script, so the
-     * write that feeds it finds a pipe with no reader. That is the child doing
-     * exactly what it should, and it must not take this probe down with it. */
     signal(SIGPIPE, SIG_IGN);
 
     for (i = 0; i < 3; i++) {
@@ -1354,10 +1367,6 @@ int main(void)
         }
     }
 
-    /* Which side runs is `getrandom`'s answer and never a feature bit: the
-     * kernel marks its generator trusted only when a hardware source actually
-     * delivered, so a CPU that advertises `RDRAND` without delivering has no
-     * trusted entropy and one with `RDSEED` alone has it. */
     drawn = getrandom(sample, sizeof(sample), 0);
     if (drawn == (ssize_t)sizeof(sample)) {
         rc = check_change();
@@ -1383,11 +1392,6 @@ int main(void)
     if (rc != 0) {
         return rc;
     }
-    /* Two gates read this, and neither can be satisfied by the side the other
-     * expects. The suite scores on the kernel's exit line, so the status is 0
-     * only on the trusted side and a fail-closed boot under `-cpu max` fails
-     * it. `tests/run noentropy` matches a token and never reads the status, so
-     * the fail-closed side is named and exits non-zero. */
     if (!trusted) {
         printf("PASSWDMUSL OK (fail-closed)\n");
 
