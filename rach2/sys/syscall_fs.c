@@ -11891,11 +11891,12 @@ static int32_t synth_getdents(fd_entry_t *e, char *buf, uint32_t count)
  * the file system gives the entry, DT_UNKNOWN where it gives none, and never
  * DT_REG for anything but a regular file. Returns the bytes written, 0 only
  * at the end of the directory, or a negative errno: -EFAULT for a NULL or
- * bad buffer and for a size of 0; -EBADF for a descriptor that is not open,
+ * bad buffer of a nonzero size; -EBADF for a descriptor that is not open,
  * is an O_PATH one, or is on a KRFFS root directory removed since
  * (`fd_node_check`); -ENOTDIR for one that is no directory; -EINVAL when the
- * first record does not fit; -EIO before the root file system is mounted;
- * or, with nothing written, the file system's error.
+ * first record does not fit, as for a size of 0 before the end; -EIO before
+ * the root file system is mounted; or, with nothing written, the file
+ * system's error. A size of 0 checks no buffer, as on Linux.
  *
  * Each record is built in kernel memory and copied out, and the whole buffer
  * is checked and faulted in first, so a copy part way through the batch does
@@ -11933,11 +11934,10 @@ long sys_getdents64(isr_params_t *params)
     uint32_t rec_len;
     struct linux_dirent64 *dirent;
 
-    if (!current_proc || !buf || count == 0) {
+    if (!current_proc) {
         return -EFAULT;
     }
-
-    if (!user_buffer_ok((uintptr_t)buf, count, 1)) {
+    if (count > 0 && (!buf || !user_buffer_ok((uintptr_t)buf, count, 1))) {
         return -EFAULT;
     }
 

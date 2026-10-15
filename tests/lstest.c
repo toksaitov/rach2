@@ -1,9 +1,11 @@
 /**
  * lstest: the getdents64 call, as `ls` lists a directory.
  *
- * The probe opens "/", reads its entries, walks the linux_dirent64 records
- * and prints each, reads again, which gives the end of the directory or more
- * entries, and requires a descriptor that is not open to fail.
+ * The probe opens "/", requires a read of 0 bytes to be EINVAL, with a null
+ * buffer too, reads its entries, walks the linux_dirent64 records and prints
+ * each, reads again, which gives the end of the directory or more entries,
+ * requires a read of 0 bytes at the end to give 0, and requires a descriptor
+ * that is not open to fail.
  *
  * Prints a line for each test and exits 0 when every one passed, 1
  * otherwise. Freestanding; direct system calls (probe.h).
@@ -18,6 +20,8 @@ typedef unsigned long long uint64_t;
 typedef long long int64_t;
 
 #define STDOUT_FILENO 1
+
+#define EINVAL 22
 
 /* Open flags */
 #define O_RDONLY    0
@@ -107,6 +111,16 @@ static void print_num(int n)
     sys_write(STDOUT_FILENO, &c, 1);
 }
 
+/**
+ * Print "OK" and count a pass when `ok` is nonzero, else "FAILED" and a
+ * failure.
+ */
+static void verdict(int ok, int *passed, int *failed)
+{
+    puts(ok ? "OK" : "FAILED");
+    ++*(ok ? passed : failed);
+}
+
 /** Write `n` as "0x" and eight hexadecimal digits to standard output. */
 static void print_hex(uint32_t n)
 {
@@ -147,8 +161,9 @@ static const char *get_type_name(uint8_t d_type)
 }
 
 /**
- * The probe's entry: opens "/", reads its entries with getdents64, walks and
- * prints each one, reads again, checks that a bad fd fails, closes the
+ * The probe's entry: opens "/", checks that a count of 0 is EINVAL, reads its
+ * entries with getdents64, walks and prints each one, reads again, checks
+ * that a count of 0 at the end gives 0 and that a bad fd fails, closes the
  * directory, and prints the count of each verdict.
  */
 PROBE_START void _start(void)
@@ -181,8 +196,13 @@ PROBE_START void _start(void)
         goto done;
     }
 
-    /* Test 2: Read directory entries with getdents64 */
-    print("Test 2: getdents64(fd, buf, 1024)... ");
+    /* Test 2: A count of 0 is EINVAL while an entry remains, as on Linux. */
+    print("Test 2: getdents64(fd, buf, 0)... ");
+    verdict(sys_getdents64(fd, buf, 0) == -EINVAL && sys_getdents64(fd, 0, 0) == -EINVAL, &passed,
+            &failed);
+
+    /* Test 3: Read directory entries with getdents64 */
+    print("Test 3: getdents64(fd, buf, 1024)... ");
     nread = sys_getdents64(fd, buf, sizeof(buf));
     if (nread > 0) {
         print("OK (");
@@ -200,8 +220,8 @@ PROBE_START void _start(void)
         goto cleanup;
     }
 
-    /* Test 3: Parse and display entries */
-    puts("Test 3: Parsing directory entries...");
+    /* Test 4: Parse and display entries */
+    puts("Test 4: Parsing directory entries...");
     if (nread > 0) {
         pos = 0;
         while (pos < nread) {
@@ -244,8 +264,8 @@ PROBE_START void _start(void)
         passed++;
     }
 
-    /* Test 4: getdents64 again returns 0 (end of dir) or more entries */
-    print("Test 4: getdents64 again... ");
+    /* Test 5: getdents64 again returns 0 (end of dir) or more entries */
+    print("Test 5: getdents64 again... ");
     nread = sys_getdents64(fd, buf, sizeof(buf));
     if (nread >= 0) {
         if (nread == 0) {
@@ -263,27 +283,21 @@ PROBE_START void _start(void)
         failed++;
     }
 
-    /* Test 5: getdents64 on a descriptor that is not open fails. */
-    print("Test 5: getdents64(999, ...)... ");
-    nread = sys_getdents64(999, buf, sizeof(buf));
-    if (nread < 0) {
-        puts("OK (failed as expected)");
-        passed++;
-    } else {
-        puts("FAILED (should have failed)");
-        failed++;
+    /* Test 6: At the end of the directory a count of 0 gives 0. */
+    print("Test 6: getdents64(fd, buf, 0) at the end... ");
+    while (nread > 0) {
+        nread = sys_getdents64(fd, buf, sizeof(buf));
     }
+    verdict(nread == 0 && sys_getdents64(fd, buf, 0) == 0, &passed, &failed);
+
+    /* Test 7: getdents64 on a descriptor that is not open fails. */
+    print("Test 7: getdents64(999, ...)... ");
+    verdict(sys_getdents64(999, buf, sizeof(buf)) < 0, &passed, &failed);
 
 cleanup:
-    /* Test 6: Close directory */
-    print("Test 6: close(fd)... ");
-    if (sys_close(fd) == 0) {
-        puts("OK");
-        passed++;
-    } else {
-        puts("FAILED");
-        failed++;
-    }
+    /* Test 8: Close directory */
+    print("Test 8: close(fd)... ");
+    verdict(sys_close(fd) == 0, &passed, &failed);
 
 done:
     puts("");

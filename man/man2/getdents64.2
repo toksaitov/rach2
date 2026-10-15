@@ -259,15 +259,21 @@ is invalid, was opened with
 .Dv O_PATH ,
 or its open-file description has no mount.
 .It Bq Er EFAULT
-There is no current process,
-.Fa dirp
-is null,
+There is no current process, or
 .Fa count
-is zero, or the buffer is not writable user memory.
+is not zero and
+.Fa dirp
+is null or the buffer is not writable user memory.
 The kernel validates the whole requested buffer before reading entries.
 .It Bq Er EINVAL
 The buffer cannot hold the next record and no record has been written,
 or the file system has no directory-reading operation.
+A
+.Fa count
+of zero is this error before the end of the directory and returns 0 at
+the end, whatever
+.Fa dirp
+is, as on Linux.
 .It Bq Er EIO
 The root is not mounted, the backing device has been removed, or a
 file-system read fails or encounters invalid directory data.
