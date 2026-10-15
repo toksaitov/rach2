@@ -1,25 +1,26 @@
 /*
- * nvme_hosttest.c: the NVMe driver against a model of a controller.
+ * nvme_hosttest.c: the NVMe driver of rach2/sys/block/nvme.c against a model
+ * of a controller.
  *
  * host-deps:
  *
  * QEMU's NVMe controller resets when told, becomes ready, answers every
  * command and keeps its namespace in 512-byte blocks unless asked otherwise.
- * What no boot produces on demand is a controller that does not: one that
+ * A boot cannot produce on demand a controller that does not: one that
  * never becomes ready, a command that fails, a command that is never
  * answered, a controller that will not stop for the recovery, a namespace
- * of 4096-byte blocks. So the driver is compiled natively and given a model
- * of a controller through the register interface it reaches registers by,
- * `struct nvme_io`, and the model reads the queues and moves the data
- * through the PRP entries the driver wrote, as a controller does.
+ * of 4096-byte blocks. The test includes nvme.c, compiled natively, and
+ * gives it a model of a controller through its register interface, `struct
+ * nvme_io`; the model reads the queues and moves the data through the PRP
+ * entries the driver wrote, as a controller does.
  *
  * A physical address the driver gives the controller is a host address,
  * except where a row scatters a buffer's pages. The model keeps the memory
  * it may be pointed at in regions and finds a host byte by its address.
  *
- * Every row names what the driver must do, and the check is on what it
- * returned, what the model saw and what it left in memory, not on what it
- * printed, except where the log is the only account a failure gives.
+ * A row checks what the driver returned, what the model saw and what it left
+ * in memory, and checks the log only where the log is the only account a
+ * failure gives.
  */
 
 #include <stdarg.h>
@@ -41,8 +42,8 @@ extern void _exit(int status);
 #include "../../rach2/sys/irq.h"
 #include "../../rach2/sys/mm/paging.h"
 
-/* ---- memory the controller may be pointed at ---- */
-
+/* The pages `alloc_kernel_frame` hands out, and the size of a buffer the
+   rows transfer through. */
 #define ARENA_PAGES 32
 #define BIG_PAGES   8
 #define MEDIUM      2048 /* sectors of the model's namespace */
@@ -60,6 +61,8 @@ static int permuted;
 
 static uint8_t medium[MEDIUM * 512];
 
+/** Take the next page of `arena`; NULL when `frames_fail` is set or every
+ *  page is taken. */
 void *alloc_kernel_frame(void)
 {
     if (frames_fail || arena_used >= ARENA_PAGES) {
@@ -68,6 +71,8 @@ void *alloc_kernel_frame(void)
     return arena[arena_used++];
 }
 
+/** A host address is its own physical address, except a byte of `big` while
+ *  `permuted`, whose page is a page of `shadow`. */
 uintptr_t paging_virt_to_phys(uintptr_t va)
 {
     uintptr_t at = va - (uintptr_t)big;
@@ -78,10 +83,12 @@ uintptr_t paging_virt_to_phys(uintptr_t va)
     return va;
 }
 
-/** The host byte the controller reaches at `phys`, `len` bytes of it in one
- * region, or NULL, which the model counts as a fault. */
+/* Faults the model saw: an address it cannot reach, a doorbell past its
+   queues, or a tail past its queue. */
 static unsigned model_faults;
 
+/** The host byte the controller reaches at `phys`, `len` bytes of it in one
+ * region, or NULL, which the model counts as a fault. */
 static uint8_t *host_of(uint64_t phys, uint32_t len)
 {
     uint8_t *bases[3];
@@ -111,16 +118,19 @@ static uint8_t *at_phys(uint32_t i)
     return permuted ? shadow + perm[i / 4096] * 4096 + (i & 0xFFFu) : big + i;
 }
 
+/** Read the little-endian 32-bit word at `p`. */
 static uint32_t get32(const uint8_t *p)
 {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
+/** Read the little-endian 64-bit word at `p`. */
 static uint64_t get64(const uint8_t *p)
 {
     return (uint64_t)get32(p) | ((uint64_t)get32(p + 4) << 32);
 }
 
+/** Write `v` at `p` as a little-endian 32-bit word. */
 static void put32(uint8_t *p, uint32_t v)
 {
     p[0] = (uint8_t)v;
@@ -128,8 +138,6 @@ static void put32(uint8_t *p, uint32_t v)
     p[2] = (uint8_t)(v >> 16);
     p[3] = (uint8_t)(v >> 24);
 }
-
-/* ---- the controller ---- */
 
 /* What this run's controller does, set before each row. */
 static struct {
@@ -152,10 +160,15 @@ static struct {
     uint32_t mqes;         /* CAP.MQES */
 } m;
 
+/* The controller's registers; its enables and disables; the writes of AQA
+   while it was enabled before the first disable; and the enables with entry
+   or page sizes other than the driver's. */
 static uint32_t cc, csts, aqa;
 static uint64_t asq, acq;
 static unsigned enables, disables, aqa_before_disable, cc_entries_bad;
 
+/* A queue pair of the model, the admin pair `q[0]` and the I/O pair `q[1]`.
+   `phase` is the phase tag the controller writes in its next completion. */
 struct mq {
     int live;
     uint8_t *sq, *cq;
@@ -165,6 +178,7 @@ struct mq {
 };
 
 static struct mq q[2];
+/* What the model counted of the commands it took. */
 static unsigned created_cq, created_sq, cq_flags_bad, set_queues;
 static unsigned io_commands, reads, writes, flushes, fua_writes, max_nlb, dropped;
 static unsigned prp_faults, list_entries, overflows;
@@ -176,6 +190,8 @@ static struct {
 } held[32];
 static unsigned nheld;
 
+/** Post a completion of `cid` with `status` and `result` on queue `qid`, or
+ *  count an overflow when the queue is not live or is full. */
 static void model_post_now(int qid, uint16_t cid, uint16_t status, uint32_t result)
 {
     struct mq *c = &q[qid];
@@ -196,6 +212,7 @@ static void model_post_now(int qid, uint16_t cid, uint16_t status, uint32_t resu
     }
 }
 
+/** Post a completion, or hold an I/O completion back while `m.defer`. */
 static void model_post(int qid, uint16_t cid, uint16_t status, uint32_t result)
 {
     if (qid == 1 && m.defer && nheld < 32) {
@@ -218,6 +235,8 @@ static void model_release(void)
     nheld = 0;
 }
 
+/** Write `s` at `at` of `page` as a field of `len` bytes padded with
+ *  spaces. */
 static void copy_string(uint8_t *page, uint32_t at, const char *s, uint32_t len)
 {
     uint32_t i;
@@ -264,6 +283,15 @@ static uint16_t model_identify(uint8_t *page, uint32_t cns, uint32_t nsid)
     return 0;
 }
 
+/**
+ * Create the I/O completion or submission queue that admin entry `e` asks
+ * for, and answer it.
+ *
+ * Anything but a physically contiguous queue 1 within MQES is refused. A
+ * completion queue must have interrupts on, on vector 0, and the submission
+ * queue must name completion queue 1 and come after it; `cq_flags_bad`
+ * counts a queue that does not.
+ */
 static void model_create(const uint8_t *e, uint8_t opcode)
 {
     uint32_t cdw10 = get32(e + 40), cdw11 = get32(e + 44);
@@ -296,6 +324,9 @@ static void model_create(const uint8_t *e, uint8_t opcode)
     model_post(0, (uint16_t)(get32(e) >> 16), 0, 0);
 }
 
+/** Answer admin entry `e`: Identify, Set Features of the queue count, and the
+ *  queue creations; any other opcode fails. An Identify of namespace
+ *  `m.drop_ident` is taken and never answered. */
 static void model_admin(const uint8_t *e)
 {
     uint8_t opcode = (uint8_t)get32(e);
@@ -377,6 +408,14 @@ static void model_dma(const uint8_t *e, uint8_t *disk, uint32_t bytes, int to_ho
     list_entries = n > list_entries ? n : list_entries;
 }
 
+/**
+ * Answer I/O entry `e`.
+ *
+ * While `m.drop_io` it is taken and never answered, and while `m.fail_io`
+ * lasts it fails with LBA out of range (0x80), as does a read or write past
+ * the medium. A flush is counted. A read or write moves its data through its
+ * PRP entries, and a write's FUA bit is counted.
+ */
 static void model_io(const uint8_t *e)
 {
     uint8_t opcode = (uint8_t)get32(e);
@@ -415,6 +454,7 @@ static void model_io(const uint8_t *e)
     model_post(1, cid, 0, 0);
 }
 
+/** The doorbell of submission queue `qid`: take every entry up to `tail`. */
 static void model_ring(uint32_t qid, uint32_t tail)
 {
     struct mq *c = &q[qid];
@@ -437,7 +477,9 @@ static void model_ring(uint32_t qid, uint32_t tail)
 }
 
 /** CC: enabling brings the admin queue up from AQA, ASQ and ACQ, and
- * disabling takes every queue down, as a controller reset does. */
+ * disabling takes every queue down, as a controller reset does. An enable
+ * with entry sizes other than 64 and 16 bytes, or pages other than 4 KiB, is
+ * counted in `cc_entries_bad`. */
 static void model_cc(uint32_t v)
 {
     uint32_t was = cc & 1u;
@@ -474,6 +516,8 @@ static void model_cc(uint32_t v)
     }
 }
 
+/** Read a controller register: CAP, VS 1.4, CC and CSTS, and 0 for any
+ *  other. */
 static uint32_t model_r32(uintptr_t base, uint32_t off)
 {
     (void)base;
@@ -493,6 +537,8 @@ static uint32_t model_r32(uintptr_t base, uint32_t off)
     }
 }
 
+/** Write a controller register: the doorbells of the two queue pairs, CC,
+ *  AQA, ASQ and ACQ; any other write is dropped. */
 static void model_w32(uintptr_t base, uint32_t off, uint32_t v)
 {
     (void)base;
@@ -533,21 +579,25 @@ static void model_w32(uintptr_t base, uint32_t off, uint32_t v)
     }
 }
 
-/* The microseconds the driver has waited, which the timeout rows judge
- * against the thirty and five seconds it promises. */
+/* The microseconds the driver has waited, which the timeout rows check
+ * against the driver's limits of thirty and five seconds. */
 static uint64_t waited_us;
 
+/** The model's delay: add `us` to `waited_us`. */
 static void model_udelay(uint32_t us)
 {
     waited_us += us;
 }
 
+/* The register interface `model_reset` gives the driver. */
 static const struct nvme_io model_io_ops = {model_r32, model_w32, model_udelay};
 
-/* ---- what the driver reaches for outside itself ---- */
-
+/* The NVMe functions on the bus. */
 static int controllers = 1;
 
+/** Find the NVMe function after `skip`, while there are `controllers` of
+ *  them: a QEMU NVMe controller (1b36:0010) at device 3 and on, with BAR0
+ *  and BAR4 64-bit memory BARs. */
 bool pci_find_device_skip(uint8_t cls, uint8_t sub, pci_device_t *skip, pci_device_t *out)
 {
     int next = skip ? skip->device - 2 : 0;
@@ -568,16 +618,19 @@ bool pci_find_device_skip(uint8_t cls, uint8_t sub, pci_device_t *skip, pci_devi
     return 1;
 }
 
+/** Whether a BAR's type field says 64-bit. */
 bool pci_bar_is_64bit(uint32_t bar)
 {
     return (bar & 0x6u) == 0x4u;
 }
 
+/** Whether a BAR is a memory BAR: bit 0 clear. */
 bool pci_bar_is_memory(uint32_t bar)
 {
     return (bar & 1u) == 0;
 }
 
+/** A memory BAR's address, without its flag bits. */
 uint32_t pci_bar_address(uint32_t bar)
 {
     return bar & ~0xFu;
@@ -601,8 +654,10 @@ uint64_t pci_bar_address64(const pci_device_t *dev, int i)
     return phys;
 }
 
+/* The function's PCI command register. */
 static uint16_t pci_command;
 
+/** Configuration space: the command register, and 0 at any other offset. */
 uint16_t pci_read_config16(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t off)
 {
     (void)bus;
@@ -611,6 +666,8 @@ uint16_t pci_read_config16(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t off)
     return off == PCI_COMMAND ? pci_command : 0;
 }
 
+/** Configuration space: a write of the command register is kept, and any
+ *  other is dropped. */
 void pci_write_config16(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t off, uint16_t v)
 {
     (void)bus;
@@ -621,22 +678,28 @@ void pci_write_config16(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t off, uint1
     }
 }
 
+/** Set bus mastering in the command register. */
 void pci_enable_bus_master(pci_device_t *dev)
 {
     (void)dev;
     pci_command |= PCI_CMD_BUS_MASTER;
 }
 
+/** Set memory decoding in the command register. */
 void pci_enable_memory_space(pci_device_t *dev)
 {
     (void)dev;
     pci_command |= PCI_CMD_MEMORY_SPACE;
 }
 
+/* Whether the function has MSI-X and MSI, and the vectors the driver enabled
+   them on, -1 for none. */
 static int msix_ok, msi_ok, msix_vector, msi_vector;
-/* The holds of MSI-X, and how many completion queues each found made. */
+/* The holds of MSI-X, and those made after a completion queue was created. */
 static int msix_holds, msix_held_late;
 
+/** The MSI-X table: two entries at 0x3000 of BAR4; fails without
+ *  `msix_ok`. */
 int pci_msix_table(const pci_device_t *dev, uint8_t *bar, uint32_t *offset, uint32_t *entries)
 {
     (void)dev;
@@ -646,8 +709,11 @@ int pci_msix_table(const pci_device_t *dev, uint8_t *bar, uint32_t *offset, uint
     return msix_ok ? 0 : -1;
 }
 
+/* The physical address `map_mmio` mapped last. */
 static uintptr_t mapped_last;
 
+/** Hold MSI-X: count the hold, and whether a completion queue already
+ *  exists; fails without `msix_ok`. */
 int pci_msix_hold(const pci_device_t *dev)
 {
     (void)dev;
@@ -656,6 +722,7 @@ int pci_msix_hold(const pci_device_t *dev)
     return msix_ok ? 0 : -1;
 }
 
+/** Enable MSI-X: record its vector. */
 int pci_msix_enable(const pci_device_t *dev, uintptr_t table, uint8_t vector)
 {
     (void)dev;
@@ -664,6 +731,7 @@ int pci_msix_enable(const pci_device_t *dev, uintptr_t table, uint8_t vector)
     return 0;
 }
 
+/** Enable MSI: record its vector; fails without `msi_ok`. */
 int pci_msi_enable(const pci_device_t *dev, uint8_t vector)
 {
     (void)dev;
@@ -674,6 +742,8 @@ int pci_msi_enable(const pci_device_t *dev, uint8_t vector)
     return 0;
 }
 
+/** Map registers: record `phys` and return an address that the model's
+ *  interface ignores. */
 uintptr_t map_mmio(uintptr_t phys, size_t size)
 {
     (void)size;
@@ -681,20 +751,26 @@ uintptr_t map_mmio(uintptr_t phys, size_t size)
     return 0x10000u;
 }
 
+/* Whether the local APIC takes messages, whether a vector is free, and
+   whether rach2.nvmepoll is on the command line; then the handler the driver
+   registered, which the rows call as the interrupt, and its name. */
 static int lapic_ok, vector_free, nvmepoll;
 static isr_handler_t handler;
 static const char *handler_name;
 
+/** Whether the local APIC takes messages: `lapic_ok`. */
 int isr_msi_ready(void)
 {
     return lapic_ok;
 }
 
+/** Vector 48 while `vector_free`, and -1 otherwise. */
 int isr_alloc_vector(void)
 {
     return vector_free ? 48 : -1;
 }
 
+/** Keep the handler and its name. */
 void register_isr_handler(uint8_t vector, isr_handler_t h, const char *name)
 {
     (void)vector;
@@ -702,21 +778,25 @@ void register_isr_handler(uint8_t vector, isr_handler_t h, const char *name)
     handler_name = name;
 }
 
+/** The command line has rach2.nvmepoll while `nvmepoll`, and nothing else. */
 int kcmdline_has(const char *flag)
 {
     return nvmepoll && strcmp(flag, "rach2.nvmepoll") == 0;
 }
 
+/** The kernel's delay, which passes no time. */
 void k_udelay(uint32_t us)
 {
     (void)us;
 }
 
+/** The clock reads 0. */
 uint32_t timer_now_us(void)
 {
     return 0;
 }
 
+/** Delays are not noted. */
 void latency_span(int kind, uint32_t from, uint32_t to)
 {
     (void)kind;
@@ -724,8 +804,10 @@ void latency_span(int kind, uint32_t from, uint32_t to)
     (void)to;
 }
 
+/* Whether interrupts are masked. */
 static uint32_t masked;
 
+/** Mask interrupts, and return whether they were masked. */
 uint32_t kirq_save(void)
 {
     uint32_t old = masked;
@@ -734,11 +816,13 @@ uint32_t kirq_save(void)
     return old;
 }
 
+/** Restore the mask `kirq_save` returned. */
 void kirq_restore(uint32_t flags)
 {
     masked = flags;
 }
 
+/** Interrupts are on unless `masked`. */
 int kirq_enabled(void)
 {
     return !masked;
@@ -748,6 +832,8 @@ int kirq_enabled(void)
 static char logged[64][200];
 static unsigned nlogged;
 
+/** The kernel log: keep the driver's records up to KLOG_INFO, formatted, in
+ *  `logged`, which holds 64. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
     va_list ap;
@@ -761,6 +847,7 @@ void klog(int level, const char *subsystem, const char *format, ...)
     nlogged++;
 }
 
+/** Return 1 when a kept record contains `needle`, and 0 otherwise. */
 static int was_logged(const char *needle)
 {
     unsigned i;
@@ -774,21 +861,26 @@ static int was_logged(const char *needle)
 }
 
 block_device_t *block0;
+/* The polls and commands the driver counted. */
 static unsigned polls, commands;
 
+/** Count a command in `commands`. */
 void block_count_command(void)
 {
     commands++;
 }
 
+/** Count a flush; no row reads the count. */
 void block_count_flush(void)
 {}
 
+/** Count a poll in `polls`. */
 void block_count_poll(void)
 {
     polls++;
 }
 
+/* The block layer's completions in order, the first 32 of them. */
 static struct {
     struct block_request *r;
     uint32_t generation;
@@ -796,6 +888,7 @@ static struct {
 } done[32];
 static unsigned ndone;
 
+/** The block layer's completion: record it in `done`, and count it. */
 void block_request_complete(struct block_request *request, uint32_t generation, int status)
 {
     if (ndone < 32) {
@@ -806,12 +899,16 @@ void block_request_complete(struct block_request *request, uint32_t generation, 
     ndone++;
 }
 
+/* The disk registrations, and what the last one gave: its transport,
+   location and size, and the model string of its IDENTIFY words. */
 static unsigned registered;
 static const char *reg_transport;
 static int reg_location;
 static uint64_t reg_sectors;
 static char reg_model[41];
 
+/** Record a disk registration, taking the model string from IDENTIFY words
+ *  27 to 46, two characters a word, high byte first. */
 struct disk *disk_register(block_device_t *dev, const char *transport, int location,
                            const volatile uint16_t *identify)
 {
@@ -830,8 +927,11 @@ struct disk *disk_register(block_device_t *dev, const char *transport, int locat
     return 0;
 }
 
+/* Whether the disk policy allows every command; a row clears it. */
 static int policy_allows = 1;
 
+/** The disk command policy: every command while `policy_allows`, and
+ *  otherwise only the ATA opcodes of a read (0x25) and IDENTIFY (0xEC). */
 int diskcmd_allowed(uint8_t command)
 {
     return policy_allows || command == 0x25 || command == 0xEC;
@@ -839,10 +939,14 @@ int diskcmd_allowed(uint8_t command)
 
 const char diskcmd_policy_banner[] = "the model's policy";
 
+/* Set in the stuck row's child, which expects the recovery's panic. */
 static int expect_panic;
 
 #include "../../rach2/sys/block/nvme.c"
 
+/** The kernel's panic: while `expect_panic`, exit 42 for the recovery's
+ *  refusal with interrupts masked and no request given back; otherwise
+ *  print the text and exit 43. */
 void k_panic(const char *s)
 {
     if (expect_panic &&
@@ -853,8 +957,6 @@ void k_panic(const char *s)
     printf("  panic: %s\n", s);
     _exit(43);
 }
-
-/* ---- the rows ---- */
 
 static int fails;
 
@@ -909,6 +1011,7 @@ static void model_reset(void)
     nvme_set_io(&model_io_ops);
 }
 
+/** The first namespace of the first controller. */
 static struct nvme_ns *ns0(void)
 {
     return &nvme_ctrls[0].ns[0];
@@ -1182,9 +1285,11 @@ static void row_stuck(void)
           status == (42 << 8));
 }
 
-/** `n` requests of one sector from `lba` into `big`, a kilobyte apart. */
+/* The requests the queued rows submit. */
 static struct block_request reqs[12];
 
+/** Set up `n` requests in `reqs` of one sector each from `lba` into `big`,
+ *  a kilobyte apart, with generations from 100. */
 static void make_requests(int n, uint64_t lba, int write, uint32_t flags)
 {
     int i;
@@ -1501,6 +1606,7 @@ static void row_fallbacks(void)
           was_logged("polled: rach2.nvmepoll") && (ns0()->dev.flags & BLOCK_FAULT_SAFE));
 }
 
+/** Run the rows, and return 1 when any check failed. */
 int main(void)
 {
     row_bring_up();
