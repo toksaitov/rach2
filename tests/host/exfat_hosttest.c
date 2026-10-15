@@ -274,7 +274,7 @@ static void load(const char *opt)
     char cmd[2048];
 
     if (!builder_built) {
-        fix_format(cmd, sizeof(cmd), "cc -O2 -o %s tests/host/mkexfatfixture.c",
+        fix_format(cmd, sizeof(cmd), "${CC:-cc} -O2 -o %s tests/host/mkexfatfixture.c",
                    fix_path("mkexfatfixture"));
         if (system(cmd) != 0) {
             printf("exfat_hosttest: cannot build the fixture builder\n");

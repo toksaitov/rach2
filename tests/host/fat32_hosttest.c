@@ -213,7 +213,7 @@ static void load(const char *opt)
     void *f;
 
     if (!builder_built) {
-        fix_format(cmd, sizeof(cmd), "cc -O2 -o %s/mkfatfixture tests/host/mkfatfixture.c",
+        fix_format(cmd, sizeof(cmd), "${CC:-cc} -O2 -o %s/mkfatfixture tests/host/mkfatfixture.c",
                    fix_dir());
         if (system(cmd) != 0) {
             printf("fat32_hosttest: cannot build the fixture builder\n");

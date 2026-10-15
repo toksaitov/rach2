@@ -103,7 +103,7 @@ static void load(const char *opt)
     FILE *f;
 
     if (!built) {
-        fix_format(cmd, sizeof(cmd), "cc -O2 -o %s tests/host/mkfatfixture.c",
+        fix_format(cmd, sizeof(cmd), "${CC:-cc} -O2 -o %s tests/host/mkfatfixture.c",
                    fix_path("mkfatfixture"));
         if (system(cmd) != 0) {
             fprintf(stderr, "bootctl_hosttest: cannot build the fixture builder\n");

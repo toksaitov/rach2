@@ -4219,7 +4219,7 @@ int main(int argc, char **argv)
         printf("ext2_hosttest: mke2fs is not on the path; e2fsprogs is a required host tool\n");
         return 1;
     }
-    if (!run("cc -O2 -o $FIX/setidcheck tools/inspect/setidcheck.c")) {
+    if (!run("${CC:-cc} -O2 -o $FIX/setidcheck tools/inspect/setidcheck.c")) {
         printf("ext2_hosttest: setidcheck did not build\n");
         return 1;
     }
