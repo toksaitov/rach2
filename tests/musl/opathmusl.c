@@ -1,5 +1,5 @@
 /**
- * O_PATH descriptors: a descriptor that names a file and opens nothing.
+ * opathmusl: check O_PATH descriptors, which refer to a file and open nothing.
  *
  * The rows open a file of the boot root, a directory, /dev/null, /dev/ptmx,
  * /proc/meminfo, /dev and /proc/self with O_PATH, and require what Linux
@@ -12,9 +12,10 @@
  * the other fcntl commands are EBADF, and poll reports POLLNVAL. The other
  * open flags are dropped, so nothing is created or truncated; a file with no
  * permission bits opens for an unprivileged caller; /dev/ptmx allocates no
- * terminal; and O_NOFOLLOW names the /proc/self link itself.
+ * terminal; and O_NOFOLLOW opens the /proc/self link itself.
  *
- * Prints "OPATHMUSL OK" on success and "OPATHMUSL FAIL (detail)" otherwise.
+ * Prints `OPATHMUSL OK` and exits 0 on success, and prints
+ * `OPATHMUSL FAIL (detail)` and exits 1 otherwise.
  */
 
 #define _GNU_SOURCE
@@ -96,9 +97,10 @@ static int pts_count(void)
 }
 
 /**
- * Every call a path descriptor must refuse, on `fd`. fchmod and fchown are
- * called by number: musl's retry an EBADF through /proc/self/fd, which is
- * how it serves an O_PATH descriptor on a kernel that refuses one.
+ * Whether every call that must fail with EBADF on a path descriptor does so
+ * on `fd`, and poll reports POLLNVAL. fchmod and fchown are called by number,
+ * since musl's wrappers retry an EBADF through /proc/self/fd, which is how
+ * musl serves an O_PATH descriptor on a kernel that fails them.
  */
 static int refuses_io(int fd)
 {
@@ -141,7 +143,11 @@ static int keeps_path(int fd)
            refused(write(fd, "x", 1), EBADF);
 }
 
-/** A file of the boot root, and the flags O_PATH drops. */
+/**
+ * Check an O_PATH descriptor on a file of the boot root, its duplicates, and
+ * the flags O_PATH drops and keeps. Leaves `FILE_PATH` for the later rows.
+ * Returns 0, or 1 once the failure is reported.
+ */
 static int file_rows(void)
 {
     struct timespec ts[2];
@@ -206,7 +212,11 @@ static int file_rows(void)
     return 0;
 }
 
-/** A file with no permission bits, opened by uid 1000. */
+/**
+ * Check that a forked child that has become uid 1000 opens a file with no
+ * permission bits with O_PATH and not with O_RDONLY. Returns 0, or 1 once the
+ * failure is reported.
+ */
 static int permission_rows(void)
 {
     pid_t pid;
@@ -235,7 +245,11 @@ static int permission_rows(void)
     return 0;
 }
 
-/** A directory: fchdir, the *at calls and getdents64. */
+/**
+ * Check an O_PATH descriptor on a directory: the calls that fail on it,
+ * fchdir, and the *at calls against it. Returns 0, or 1 once the failure is
+ * reported.
+ */
 static int dir_rows(void)
 {
     char cwd[64];
@@ -267,7 +281,11 @@ static int dir_rows(void)
     return 0;
 }
 
-/** /dev and /proc: devices, a /proc file, a directory and a link. */
+/**
+ * Check O_PATH descriptors on /dev and /proc: devices, a /proc file, a
+ * directory and two links, followed and not. Returns 0, or 1 once the failure
+ * is reported.
+ */
 static int synth_rows(void)
 {
     char buf[64], cwd[64], want[64];

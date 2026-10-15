@@ -1,13 +1,13 @@
 /**
- * Paths of up to PATH_MAX, 4096 bytes with the terminator, in every kind of
- * call that takes one.
+ * pathmaxmusl: check paths of up to PATH_MAX in every kind of call that takes
+ * one. PATH_MAX is 4096 bytes with the terminator.
  *
  * The kernel copies each path into a page and joins a relative one to the
  * working directory or to a directory descriptor's path in that page, so the
  * cases are the edges of those two: a path of 4095 bytes works and one of
- * 4096 without a terminator answers ENAMETOOLONG, and the same for the
- * joined path. The long spellings pad with `./` components, which name the
- * same file, so each call reaches something the image has.
+ * 4096 without a terminator fails with ENAMETOOLONG, and the same for the
+ * joined path. The long paths are padded with `./` components, which leave
+ * the file the same, so each call reaches something the image has.
  *
  * The working directory's path is kept in the process's fs_struct, the
  * record of its directories and umask that clone with CLONE_FS shares
@@ -18,10 +18,11 @@
  * fork's copy of the long one are exercised.
  *
  * The rest reach the other copies: `execve` of the root's `hello` by a long
- * spelling, `symlink` with a target of 4095 and of 4096 bytes, `readlink` of
+ * path, `symlink` with a target of 4095 and of 4096 bytes, `readlink` of
  * /proc/self, and the namespace calls.
  *
- * Prints "PATHMAXMUSL OK" on success and "PATHMAXMUSL FAIL (detail)" otherwise.
+ * Prints `PATHMAXMUSL OK` and exits 0 on success, and prints
+ * `PATHMAXMUSL FAIL (detail)` and exits 1 otherwise.
  */
 
 #define _GNU_SOURCE
@@ -42,7 +43,8 @@
 #define LONGNAME "a123456789b123456789c123456789d123456789e123456789f123456789g123456789h123456789"
 #define LONGDIR  WORK "/" LONGNAME
 
-/* Two spellings at once at most; each has room for a path past the bound. */
+/* The long paths; a row uses two at most, and each has room for a path one
+ * byte past the bound. */
 static char spell_a[PATH_BYTES + 16];
 static char spell_b[PATH_BYTES + 16];
 
@@ -55,8 +57,9 @@ static int fail(const char *what)
 }
 
 /**
- * `lead`, then `./` components, then `tail`, `total` bytes long without the
- * terminator, into `out`: one more slash makes up an odd count.
+ * Write into `out` the path `lead`, then `./` components, then `tail`, of
+ * `total` bytes without the terminator; one more slash makes up an odd count.
+ * Returns `out`, which must have room for `total + 1` bytes.
  */
 static char *spell(char *out, const char *lead, const char *tail, size_t total)
 {
@@ -93,7 +96,10 @@ static int status_of(pid_t pid)
     return WEXITSTATUS(status);
 }
 
-/** The rows on absolute paths from the root. */
+/**
+ * Check absolute paths of 4095 and 4096 bytes to a file, a device and a
+ * /proc link. Returns 0, or 1 once the failure is reported.
+ */
 static int absolute_rows(void)
 {
     struct stat st;
@@ -140,7 +146,11 @@ static int absolute_rows(void)
     return 0;
 }
 
-/** The rows on the working directory and on paths joined to it. */
+/**
+ * Check a working directory whose path is too long for the record, a fork's
+ * copy of it, and relative paths joined to it. Leaves the working directory
+ * at the root. Returns 0, or 1 once the failure is reported.
+ */
 static int cwd_rows(void)
 {
     char cwd[256];
@@ -202,7 +212,10 @@ static int cwd_rows(void)
     return 0;
 }
 
-/** The rows on a directory descriptor's path joined to a relative one. */
+/**
+ * Check relative paths joined to the path of a descriptor on the long
+ * directory. Returns 0, or 1 once the failure is reported.
+ */
 static int dirfd_rows(void)
 {
     struct stat st;
@@ -235,7 +248,11 @@ static int dirfd_rows(void)
     return 0;
 }
 
-/** The namespace calls, each by a spelling of 4095 bytes. */
+/**
+ * Check the namespace calls, each by a path of 4095 bytes, and symlink with
+ * targets of 4095 and 4096 bytes. Returns 0, or 1 once the failure is
+ * reported.
+ */
 static int namespace_rows(void)
 {
     struct stat st;
@@ -266,9 +283,7 @@ static int namespace_rows(void)
         return fail("rmdir by a path of 4095 bytes");
     }
 
-    /* A target is copied, not resolved, so its bound is the copy's: the root
-     * has no links, so a target that fits reaches the file system and is
-     * refused there, and one that does not is refused first. */
+    /* A target is copied, not resolved; the KRFFS root has no links (EPERM). */
     spell(spell_a, "", "t", PATH_BYTES - 1);
     if (!refused(symlink(spell_a, WORK "/link"), EPERM)) {
         return fail("symlink with a target of 4095 bytes does not reach the file system");
@@ -280,7 +295,10 @@ static int namespace_rows(void)
     return 0;
 }
 
-/** `execve` of the root's hello program by a spelling of 4095 bytes. */
+/**
+ * Check `execve` of the root's hello program by a path of 4095 bytes, in a
+ * forked child. Returns 0, or 1 once the failure is reported.
+ */
 static int exec_row(void)
 {
     char *argv[2];

@@ -1,5 +1,5 @@
 /**
- * lchown and the two flags of fchownat, with Linux's meaning.
+ * lchownmusl: check lchown and the two flags of fchownat, as Linux has them.
  *
  * With no argument the rows run on the KRFFS boot root, which has no
  * symbolic links: lchown by both numbers and fchownat change a file;
@@ -7,14 +7,17 @@
  * directory that has a file of the same name, changes the file the
  * descriptor's directory has and not the other; AT_EMPTY_PATH changes the
  * file a descriptor is open on, an O_PATH one included, and the working
- * directory; and each refusal of the flags comes before the path is read.
+ * directory; and each error of the flags comes before the path is read.
  * With a directory argument, which tests/system/suites/ext2.sh gives as /tmp
  * on an ext2 root, the rows run there and a symbolic link is required: lchown
  * and AT_SYMLINK_NOFOLLOW change the link and leave its target alone, chown
- * changes the target, an O_PATH descriptor opened with O_NOFOLLOW names the
- * link for AT_EMPTY_PATH, and a dangling link can be changed and not followed.
+ * changes the target, an O_PATH descriptor opened with O_NOFOLLOW refers to
+ * the link for AT_EMPTY_PATH, and a dangling link can be changed and not
+ * followed.
  *
- * Prints "LCHOWNMUSL OK" on success and "LCHOWNMUSL FAIL (detail)" otherwise.
+ * The program runs as root. It prints `LCHOWNMUSL OK`, followed by
+ * " (links)" when the link rows ran, and exits 0 on success, and prints
+ * `LCHOWNMUSL FAIL (detail)` and exits 1 otherwise.
  */
 
 #define _GNU_SOURCE
@@ -72,9 +75,10 @@ static int group_is(const char *path, gid_t gid)
 }
 
 /**
- * fchownat of lchown.tmp through a descriptor of `dir`, called from
- * `decoy_dir`, which has a lchown.tmp of its own: `file` takes the new owner
- * and group, and the decoy keeps its own.
+ * Whether fchownat of lchown.tmp through a descriptor of `dir`, called from
+ * `decoy_dir`, which has a lchown.tmp of its own, gives `file` the new owner
+ * and group and leaves the decoy's as they were. Makes the decoy and returns
+ * with the working directory at `dir`.
  */
 static int through_descriptor(const char *dir)
 {
@@ -101,7 +105,10 @@ static int through_descriptor(const char *dir)
            after.st_gid == before.st_gid;
 }
 
-/** The forms that change the file itself, and the descriptor forms. */
+/**
+ * Check the forms that change the file itself, and the descriptor forms, in
+ * `dir`, the working directory. Returns 0, or 1 once the failure is reported.
+ */
 static int file_rows(const char *dir)
 {
     int pfd, ffd;
@@ -139,7 +146,10 @@ static int file_rows(const char *dir)
     return 0;
 }
 
-/** The refusals, and the nodes of fixed ownership. */
+/**
+ * Check the errors of the flags, and the nodes whose owner is fixed at root.
+ * Returns 0, or 1 once the failure is reported.
+ */
 static int refusal_rows(void)
 {
     int fd;
@@ -167,7 +177,10 @@ static int refusal_rows(void)
     return 0;
 }
 
-/** A symbolic link and its target, where the file system has links. */
+/**
+ * Check a symbolic link and its target, on a file system that has links.
+ * Returns 0, or 1 once the failure is reported.
+ */
 static int link_rows(void)
 {
     struct stat st;

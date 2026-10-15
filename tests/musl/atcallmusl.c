@@ -1,19 +1,20 @@
 /**
- * The directory-descriptor forms of the namespace calls, which GNU libc
- * issues where musl's older wrappers use the plain calls: mkdirat, unlinkat
- * with and without AT_REMOVEDIR, renameat, renameat2 and fchdir.
+ * atcallmusl: check the directory-descriptor forms of the namespace calls.
  *
- * Each call is made with a relative path through a descriptor on a directory
- * the probe makes, and its result is read back by an absolute path, so a
- * call that resolved the name from the wrong directory fails its row. The
- * refusals are the ones Linux makes: a descriptor that is not open or not a
- * directory, a flag the call does not take, unlink of a directory and rmdir
- * of a file, and for renameat2 with RENAME_NOREPLACE a new name that exists,
- * which must leave both files as they were. fchdir enters a directory of the
- * root, of /dev and of /proc through descriptors and reads the result back
- * with getcwd.
+ * GNU libc makes these calls where musl's wrappers make the plain ones:
+ * mkdirat, unlinkat with and without AT_REMOVEDIR, renameat, renameat2 and
+ * fchdir. Each call is made with a relative path through a descriptor on a
+ * directory the probe makes, and its result is read back by an absolute
+ * path, so a call that resolved the name from the wrong directory fails its
+ * row. The errors are the ones Linux returns: a descriptor that is not open
+ * or not a directory, a flag the call does not take, unlink of a directory
+ * and rmdir of a file, and for renameat2 with RENAME_NOREPLACE a new name
+ * that exists, which must leave both files as they were. fchdir enters a
+ * directory of the root, of /dev and of /proc through descriptors and reads
+ * the result back with getcwd.
  *
- * Prints "ATCALLMUSL OK" on success and "ATCALLMUSL FAIL (detail)" otherwise.
+ * Prints `ATCALLMUSL OK` and exits 0 on success, and prints
+ * `ATCALLMUSL FAIL (detail)` and exits 1 otherwise.
  */
 
 #define _GNU_SOURCE
@@ -46,7 +47,7 @@ static int refused(long rc, int err)
     return rc == -1 && errno == err;
 }
 
-/** Create `name` in `dirfd` holding `text`. */
+/** Create `name` in `dirfd` with `text` in it. Returns 1, or 0 on failure. */
 static int make_file(int dirfd, const char *name, const char *text)
 {
     int fd = openat(dirfd, name, O_WRONLY | O_CREAT | O_TRUNC, 0644);
@@ -84,7 +85,11 @@ static int is_dir(const char *path)
     return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
 }
 
-/** mkdirat and unlinkat through a descriptor on the work directory. */
+/**
+ * Check mkdirat and unlinkat through `dirfd`, a descriptor on the work
+ * directory; `filefd` is a descriptor on a regular file. Returns 0, or 1 once
+ * the failure is reported.
+ */
 static int mkdir_unlink_rows(int dirfd, int filefd)
 {
     struct stat st;
@@ -134,7 +139,11 @@ static int mkdir_unlink_rows(int dirfd, int filefd)
     return 0;
 }
 
-/** renameat and renameat2 between two directory descriptors. */
+/**
+ * Check renameat and renameat2 between descriptors on two directories made in
+ * `dirfd`, which are removed again. Returns 0, or 1 once the failure is
+ * reported.
+ */
 static int rename_rows(int dirfd)
 {
     int afd, bfd;
@@ -180,7 +189,10 @@ static int rename_rows(int dirfd)
     return rc;
 }
 
-/** Whether a descriptor opened on `path` enters it, as getcwd reports. */
+/**
+ * Whether fchdir through a descriptor opened on `path` makes the working
+ * directory `expect`, as getcwd reports it.
+ */
 static int enters(const char *path, const char *expect)
 {
     char cwd[64];
@@ -195,7 +207,12 @@ static int enters(const char *path, const char *expect)
     return ok;
 }
 
-/** fchdir through descriptors on three kinds of directory. */
+/**
+ * Check fchdir through descriptors on three kinds of directory, and its
+ * errors for `filefd`, a regular file, and for a descriptor that is not open.
+ * Leaves the working directory at the root. Returns 0, or 1 once the failure
+ * is reported.
+ */
 static int fchdir_rows(int filefd)
 {
     char self[32];
