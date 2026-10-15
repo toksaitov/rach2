@@ -1,10 +1,10 @@
 /*
- * elf.h - ELF executable format definitions
+ * elf.h: the ELF structures and constants the kernel reads to load a
+ * program and writes in a core file, and the interface of the loader.
  *
- * Defines structures for parsing the ELF executables the Rach2 kernel loads
- * and runs from the file system: ELF32 on i686 and ELF64 on x86-64, the
- * class `ELF_CLASS` names (arch/arch.h), through the types `Elf_Ehdr` and
- * `Elf_Phdr`.
+ * The programs are ELF32 on i686 and ELF64 on x86-64, the class `ELF_CLASS`
+ * names (arch/arch.h), and the types `Elf_Ehdr` and `Elf_Phdr` are that
+ * class's headers.
  *
  * Reference: ELF specification (TIS Committee, v1.2), and the System V ABI's
  * ELF-64 Object File Format.
@@ -183,13 +183,21 @@ typedef Elf32_Ehdr Elf_Ehdr;
 typedef Elf32_Phdr Elf_Phdr;
 #endif
 
-/** True if `data` is a valid ELF executable for this architecture. */
+/**
+ * Whether the `size` bytes at `data` are an ELF program of type ET_EXEC
+ * this kernel runs: the magic, the class `ELF_CLASS`, little-endian, the
+ * current version, the machine `ELF_MACHINE`, a nonzero entry point, and a
+ * nonempty program header table of entries of this class's size that lies
+ * wholly within the bytes. The debug shell's `elf` command reads a
+ * program held in memory with it and the three functions below.
+ */
 bool elf_check(const void *data, uint32_t size);
 
 /** Entry point virtual address; valid only after `elf_check`. */
 uintptr_t elf_entry_point(const void *data);
 
-/** Pointer to the program header table, or NULL if there is none. */
+/** Pointer to the program header table, or NULL if there is none. The table
+ * is not bounded here; `elf_check` bounds it. */
 const Elf_Phdr *elf_program_headers(const void *data);
 
 /** Number of program headers (`e_phnum`). */
@@ -197,16 +205,16 @@ uint16_t elf_program_header_count(const void *data);
 
 struct page_dir;
 
-/* Maximum program headers the segment loader accepts; bounds the phdr buffer.
- * Static binaries we target have far fewer. */
+/* The most program headers `elf_read_layout` and the loader take: the
+ * length of the array of them each has on its stack. */
 #define ELF_MAX_PHNUM 32
 
 /*
  * Byte-range reader for the segment loader: copy `count` bytes from source
  * offset `off` into `dst`. Returns the bytes copied, fewer than `count` only
- * at the end of the file, or a negative value when the read failed. The
- * kernel supplies a KRFFS-backed reader so the whole file is never slurped
- * into one buffer.
+ * at the end of the file, or a negative value when the read failed. execve
+ * reads through the VFS, and the boot from a KRFFS file or through the
+ * root's mount (kernel.c), so the file is never read into one buffer.
  */
 typedef int (*elf_read_fn)(void *ctx, void *dst, uint32_t count, uint32_t off);
 
@@ -240,17 +248,23 @@ typedef struct {
     elf_seg_t segs[ELF_MAX_SEGS];
 } elf_image_t;
 
-/** Validate just the ELF header of a streamed image, ET_EXEC or ET_DYN;
- * true if loadable. */
+/**
+ * Whether the `len` bytes at `ehdr` begin with the ELF header of an ET_EXEC
+ * or ET_DYN program this kernel loads: the checks of `elf_check` the header
+ * alone can answer, with a program header table offset that fits in 32
+ * bits. The table is not bounded against the file and the entry point is
+ * not checked; the loader, which reads the rest of the file on demand,
+ * fails a short read of the table and checks the entry against the user
+ * image window. execve uses it to tell a program from a script.
+ */
 bool elf_valid_exec(const void *ehdr, uint32_t len);
 
 /* The longest interpreter path PT_INTERP may name, its NUL included. */
 #define ELF_INTERP_MAX 256
 
 /*
- * What exec needs to know of an image before it loads it: its type, the page
- * span of its PT_LOAD segments, and the interpreter PT_INTERP names, "" for
- * none.
+ * What exec reads of an image before it loads it: its type, the page span
+ * of its PT_LOAD segments, and the interpreter PT_INTERP names, "" for none.
  */
 typedef struct {
     uint16_t type;
@@ -266,27 +280,56 @@ typedef struct {
  * that ends before its headers, or -EIO when a read fails. */
 int elf_read_layout(elf_read_fn readfn, void *ctx, int interp, elf_layout_t *out);
 
-/** Run-time vaddr of the program header table (AT_PHDR), or 0 if none
- * covers `phoff`. */
+/** The address at run time of the program header table at file offset
+ * `phoff`, AT_PHDR, where a static C library finds its PT_TLS: its place in
+ * the PT_LOAD whose file bytes contain the whole table, or 0 for none. */
 uintptr_t elf_phdr_vaddr(const Elf_Phdr *phdrs, uint16_t phnum, uint64_t phoff);
 
-/** Stream an ELF into `dir` via `read`, recording layout in `out`; 0, or
- * -ENOEXEC for a malformed image, -EIO for a failed read and -ENOMEM for
- * memory the load could not have. */
+/**
+ * Load an ELF program into `dir`, reading it through `read` with `ctx`, and
+ * describe it in `out`: the segment table, the image's end (the heap's
+ * base), the entry point and the program header geometry.
+ *
+ * The file is read on demand and never held whole, so its size has no
+ * bound. Each PT_LOAD must be well formed and lie in the user image window,
+ * clear of the kernel and of the stack, and start at or after the
+ * page-aligned end of the one before. A page that no segment with PF_W
+ * covers is made read-only, so a user write to it faults and kills the
+ * process, and one that no segment with PF_X covers is made not
+ * executable. The image needs at least one PT_LOAD, a program header table
+ * inside one, for AT_PHDR, and an entry point inside the window.
+ *
+ * 0; -ENOEXEC for a malformed image or one outside these rules, one with
+ * more than ELF_MAX_PHNUM program headers or ELF_MAX_SEGS PT_LOADs, or a
+ * file that ends before the bytes its headers name; -EIO when a read
+ * fails; -ENOMEM when a page, a page table or a temporary mapping could not
+ * be had; -EINVAL without a reader, a directory or `out`. On failure the
+ * pages already mapped stay in `dir`, for the caller to free with the
+ * address space.
+ */
 int elf_load_image(elf_read_fn read, void *ctx, struct page_dir *dir, elf_image_t *out);
 
 /** The same with every address moved by `bias`, page-aligned, which must be
- * 0 for an ET_EXEC image: an ET_DYN program or interpreter at its base. */
+ * 0 for an ET_EXEC image: an ET_DYN program or interpreter at its base.
+ * Another `bias` is -ENOEXEC. */
 int elf_load_image_at(elf_read_fn read, void *ctx, struct page_dir *dir, uintptr_t bias,
                       elf_image_t *out);
 
 struct vm_space; /* mm/vm.h */
 
-/** Add the regions of a loaded image's segments to `vm`: an interpreter's,
- * beside its program's. 0, or -1 when a region could not be recorded. */
+/** Add the regions of a loaded image's segments to `vm`, each with the
+ * protection of its `p_flags`, a code region for one with PF_X and a data
+ * region for another: an interpreter's, beside its program's. 0, or -1 when
+ * a region could not be recorded (`vm_insert`). */
 int elf_add_vmas(struct vm_space *vm, const elf_image_t *img);
 
-/** Build the VMA map of a fresh address space from a loaded image. */
+/**
+ * Start the regions of a new address space `vm` from a loaded image: the
+ * segments' (`elf_add_vmas`), an empty heap at the image's end, which brk
+ * grows, and a stack region of one page at `stack_top` that may grow down
+ * to `stack_top - stack_growth`. 0, or -1 when a region could not be
+ * recorded (`vm_insert`).
+ */
 int elf_setup_vmas(struct vm_space *vm, const elf_image_t *img, uintptr_t stack_top,
                    uintptr_t stack_growth);
 

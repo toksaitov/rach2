@@ -196,7 +196,7 @@ rach2/sys/pci.c:pci_find_device_skip nesting 6 a hardware sequence, the register
 rach2/sys/pci.c:pci_find_nth_by_id nesting 5 a hardware sequence, the registers written in the order the datasheet requires
 
 rach2/sys/proc/elf.c:elf_load_image_at complexity 42 one program loaded and entered, its stages in the order the loader takes them
-rach2/sys/proc/elf.c:elf_load_image_at lines 164 one program loaded and entered, its stages in the order the loader takes them
+rach2/sys/proc/elf.c:elf_load_image_at lines 157 one program loaded and entered, its stages in the order the loader takes them
 rach2/sys/proc/elf.c:elf_load_image_at nesting 5 one program loaded and entered, its stages in the order the loader takes them
 
 rach2/sys/arch/x86/cmos.c:rtc_decode complexity 31 a parser over an external format, one check per field in the format's order
