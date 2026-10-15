@@ -515,7 +515,7 @@ static int32_t shm_at(int32_t id, uintptr_t addr, uint32_t flag, uintptr_t *base
 }
 
 /** shmdt: unmap the segment attached at `addr`. EINVAL when no attachment
- * begins there. */
+ * begins there; other unmap errors are returned without recording a detach. */
 static int32_t shm_dt(uintptr_t addr)
 {
     int i;
@@ -525,8 +525,16 @@ static int32_t shm_dt(uintptr_t addr)
     }
     for (i = 0; i < SYSV_SLOTS; i++) {
         struct shm_seg *s = (struct shm_seg *)tables[SYSV_SHM][i];
+        int32_t rc;
 
-        if (s && munmap_shm(addr, shm_mem(s), s->size) == 0) {
+        if (s) {
+            rc = munmap_shm(addr, shm_mem(s), s->size);
+            if (rc == -EINVAL) {
+                continue;
+            }
+            if (rc != 0) {
+                return rc;
+            }
             s->dtime = sysv_now();
             s->lpid = (int32_t)current_proc->tgid;
             shm_reap();

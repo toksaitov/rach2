@@ -1,4 +1,4 @@
-.Dd October 2, 2026
+.Dd October 15, 2026
 .Dt SHMGET 2
 .Os
 .Sh NAME
@@ -171,7 +171,8 @@ No segment of
 and no
 .Dv IPC_CREAT .
 .It Bq Er ENOMEM
-No memory for the segment or the mapping.
+No memory for the segment or the mapping, or for the regions needed to
+unmap an attachment.
 .It Bq Er ENOSPC
 All 64 places are taken.
 .It Bq Er EPERM
