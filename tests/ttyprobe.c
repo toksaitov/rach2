@@ -1,27 +1,29 @@
 /**
- * Exercises the tty line discipline and termios ioctls from user space.
+ * ttyprobe: the terminal line discipline and the termios ioctls, tested
+ * from user space.
  *
- * Proves that the console fd is wired to the kernel tty (the n_tty
- * discipline), not just that the discipline is correct (the host test
- * covers that), but that read/write/ioctl on fd 0/1/2 route through it:
+ * Proves that read, write and ioctl on the console's descriptors 0, 1 and 2
+ * go through the kernel's line discipline (n_tty); the host test covers the
+ * discipline itself:
  *   (a) TIOCGWINSZ: the console reports a 25x80 window;
  *   (b) TCGETS: the default is cooked with echo (ICANON|ECHO set);
  *   (c) cooked read: a line typed with DEL erases is delivered edited. The
  *       driver sends "ab<DEL><DEL>cd\n", read() returns "cd\n";
  *   (d) TCSETS round-trip: clearing ICANON|ECHO and reading it back through
- *       TCGETS shows the kernel actually applied the new termios;
+ *       TCGETS shows the kernel applied the new termios;
  *   (e) raw read: in raw mode (VMIN=1) a byte is delivered with no newline
  *       and no echo. The driver sends "X", read() returns it;
+ *   (f) FIONREAD reports an empty queue after the read, and TCFLSH succeeds;
  *   (g) the screen's answers: the device attributes query, `ESC [ c`, reads
  *       back `ESC [ ? 6 c`, and the cursor position query, `ESC [ 6 n`, reads
  *       back `ESC [ row ; col R`, with nothing typed;
  *   (h) Alt: the driver presses Alt with x on the keyboard after
  *       `TTYPROBE ALT`, which reads as ESC and x.
  *
- * Prints "TTYPROBE OK" or "TTYPROBE FAIL". Freestanding; direct system calls
- * (probe.h). Driven by `tests/run console`, whose harness steps send the cooked
- * line and then, after the raw switch, the single byte with no newline after
- * it.
+ * Prints "TTYPROBE OK" and exits 0 when all pass, and "TTYPROBE FAIL" with
+ * the count of failed checks as its status otherwise. Driven by `tests/run
+ * console`, whose harness steps send the cooked line and then, after the
+ * raw switch, the single byte with no newline after it.
  */
 
 #include "probe.h"
@@ -32,8 +34,8 @@
 #define FIONREAD   0x541B
 #define TIOCGWINSZ 0x5413
 
-/* termios flag bits / c_cc indices (the i386 kernel termios; see */
-/* sys/tty/n_tty.h). */
+/* termios flag bits and c_cc indices, Linux's on i386 and x86-64 (see
+ * rach2/sys/tty/n_tty.h). */
 #define ICRNL  0000400 /* c_iflag: map CR to NL on input */
 #define OPOST  0000001 /* c_oflag: enable output processing */
 #define ICANON 0000002 /* c_lflag: canonical (cooked) input */
@@ -58,12 +60,14 @@ struct winsize {
     unsigned short ws_ypixel;
 };
 
+/** End the process with `status`; it does not return. */
 static void sys_exit(int status)
 {
     syscall3(SYS_EXIT, status, 0, 0);
     __builtin_unreachable();
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -73,22 +77,26 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write `len` bytes of `s` to standard output. */
 static void out(const char *s, int len)
 {
     syscall3(SYS_WRITE, 1, (long)s, len);
 }
 
+/** Write `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     out(s, (int)strlen(s));
     out("\n", 1);
 }
 
+/** The read call: the count read, 0 at the end, or a negated errno. */
 static int do_read(int fd, char *buf, int n)
 {
     return syscall3(SYS_READ, fd, (long)buf, n);
 }
 
+/** The ioctl call: its result, or a negated errno. */
 static int do_ioctl(int fd, int req, void *arg)
 {
     return syscall3(SYS_IOCTL, fd, req, (long)arg);
@@ -96,6 +104,7 @@ static int do_ioctl(int fd, int req, void *arg)
 
 static int fails = 0;
 
+/** Count a failure and print `msg` when `cond` is false. */
 static void check(int cond, const char *msg)
 {
     if (!cond) {
@@ -116,9 +125,11 @@ static void show(const char *tag, const char *buf, int n)
     out("]\n", 2);
 }
 
-/*
- * `TTYPROBE RAW` is said once the terminal is raw, so the byte the suite
- * types on the word reaches a raw terminal and not the cooked one before it.
+/**
+ * The probe: the cases of the opening comment in order, each counted by
+ * `check`. `TTYPROBE RAW` is printed once the terminal is raw, so the byte
+ * the suite types on the word reaches a raw terminal and not the cooked one
+ * before it.
  */
 PROBE_START void _start(void)
 {
@@ -139,23 +150,20 @@ PROBE_START void _start(void)
     check(ws.ws_row == 25 && ws.ws_col == 80, "console window is 25x80");
     check(ws.ws_xpixel == 0 && ws.ws_ypixel == 0, "console window has no pixel size");
 
-    /* (b) default termios is cooked, echoing, with the usual in/out processing;
-     * proving the whole 36-byte prefix (not just c_lflag) reads back sanely. */
+    /* (b) The default termios is cooked and echoing, with ICRNL and OPOST. */
     check(do_ioctl(0, TCGETS, &t) == 0, "TCGETS ok");
     check((t.c_lflag & ICANON) != 0, "default ICANON set");
     check((t.c_lflag & ECHO) != 0, "default ECHO set");
     check((t.c_iflag & ICRNL) != 0, "default ICRNL set");
     check((t.c_oflag & OPOST) != 0, "default OPOST set");
 
-    /* (c) cooked read: the driver sends "ab<DEL><DEL>cd\n"; erasing leaves */
-    /* "cd\n". */
+    /* (c) The driver sends "ab<DEL><DEL>cd\n"; the erases leave "cd\n". */
     n = do_read(0, buf, (int)sizeof(buf));
     show("COOKED:", buf, n);
     check(n == 3 && buf[0] == 'c' && buf[1] == 'd' && buf[2] == '\n',
           "cooked DEL erase -> \"cd\\n\"");
 
-    /* (d) switch to raw and confirm the kernel applied it (TCGETS */
-    /* round-trip). */
+    /* (d) Raw mode, read back through TCGETS. */
     t.c_lflag &= ~(unsigned int)(ICANON | ECHO);
     t.c_cc[VMIN] = 1;
     t.c_cc[VTIME] = 0;
@@ -164,18 +172,16 @@ PROBE_START void _start(void)
     check((t2.c_lflag & ICANON) == 0, "TCSETS cleared ICANON (round-trip)");
     check((t2.c_lflag & ECHO) == 0, "TCSETS cleared ECHO (round-trip)");
     puts("TTYPROBE RAW");
-    /* the fields we did not touch survive the round-trip unchanged; the kernel
-     * stored exactly the 36-byte prefix we sent. */
+    /* TCSETS stores the whole 36 bytes, so the other fields read back. */
     check(t2.c_iflag == t.c_iflag && t2.c_oflag == t.c_oflag, "TCSETS preserves c_iflag/c_oflag");
     check(t2.c_cflag == t.c_cflag && t2.c_line == t.c_line, "TCSETS preserves c_cflag/c_line");
 
-    /* (e) raw read: the driver sends "X"; it arrives with no newline, */
-    /* unechoed. */
+    /* (e) The driver sends "X", which arrives with no newline and no echo. */
     n = do_read(0, buf, (int)sizeof(buf));
     show("RAW:", buf, n);
     check(n >= 1 && buf[0] == 'X', "raw read delivers a byte without a newline");
 
-    /* (f) FIONREAD reports nothing buffered now; TCFLSH succeeds. */
+    /* (f) FIONREAD reports an empty queue, and TCFLSH succeeds. */
     {
         int navail = -1;
         check(do_ioctl(0, FIONREAD, &navail) == 0, "FIONREAD ok");

@@ -1,9 +1,7 @@
 /**
- * Exercises sys_read from stdin (fd 0): blocking, line buffering, and a
- * short-count read into a small buffer. Each test prompts, reads a line,
- * and echoes it back.
- *
- * Freestanding; direct system calls (probe.h).
+ * stdintest: read from standard input (fd 0), testing a blocking read, line
+ * buffering, and a short-count read into a small buffer. Each test prompts,
+ * reads a line, and echoes it back.
  */
 
 #include "probe.h"
@@ -11,24 +9,26 @@
 #define STDIN_FILENO  0
 #define STDOUT_FILENO 1
 
-/* Syscall numbers (32-bit Linux / Rach2 compatible) */
-
+/** The write call: the count written, or a negated errno. */
 static int sys_write(int fd, const void *buf, size_t count)
 {
     return syscall3(SYS_WRITE, (long)fd, (long)buf, (long)count);
 }
 
+/** The read call: the count read, 0 at the end, or a negated errno. */
 static int sys_read(int fd, void *buf, size_t count)
 {
     return syscall3(SYS_READ, (long)fd, (long)buf, (long)count);
 }
 
+/** End the process with `status`; it does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t len = 0;
@@ -38,17 +38,20 @@ static size_t strlen(const char *s)
     return len;
 }
 
+/** Write `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
     sys_write(STDOUT_FILENO, "\n", 1);
 }
 
+/** Write `s` to standard output. */
 static void print(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
 }
 
+/** Write `n` in decimal to standard output. */
 static void print_num(int n)
 {
     char buf[12];
@@ -82,6 +85,15 @@ static void print_num(int n)
  * count it was given shows up whatever it copied. */
 #define FILL_BYTE '\xA5'
 
+/**
+ * The probe: three reads of a typed line, each echoed. It exits 0 when all
+ * three pass and 1 otherwise.
+ *
+ * Test 3 reads at most 5 bytes. The count the kernel returns does not show
+ * a copy that ran past the fifth byte and still returned 5, so the buffer
+ * is filled with FILL_BYTE first, and every byte past the count is required
+ * to keep it.
+ */
 PROBE_START void _start(void)
 {
     char buf[128];
@@ -92,7 +104,7 @@ PROBE_START void _start(void)
     puts("Stdin read syscall test starting...");
     puts("");
 
-    /* Test 1: Basic stdin read */
+    /* Test 1: a read from standard input. */
     print("Test 1: read from stdin (type something and press Enter)...\n");
     print("> ");
     n = sys_read(STDIN_FILENO, buf, sizeof(buf) - 1);
@@ -119,7 +131,7 @@ PROBE_START void _start(void)
         failed++;
     }
 
-    /* Test 2: Second read to verify repeated reads work */
+    /* Test 2: a second read. */
     puts("");
     print("Test 2: second read (type another line)...\n");
     print("> ");
@@ -147,11 +159,7 @@ PROBE_START void _start(void)
         failed++;
     }
 
-    /* Test 3: Small buffer read. The count the kernel returns is not the
-     * whole claim: a kernel that copied the rest of the line past the fifth
-     * byte and still returned 5 would be caught by nothing the count can
-     * say, so the rest of the buffer is filled with a byte of our own first
-     * and required to still be there afterwards. */
+    /* Test 3: a read of at most 5 bytes, with no byte stored past the count. */
     puts("");
     print("Test 3: small buffer read (5 bytes max, type a longer line)...\n");
     print("> ");
