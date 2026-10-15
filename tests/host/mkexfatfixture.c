@@ -1428,8 +1428,6 @@ static unsigned char *dw_slot(struct dw *d, unsigned index)
     while (index / per >= d->n) {
         uint32_t c = b_alloc(d->b, 1, !d->nofat);
 
-        if (!d->nofat)
-            d->b->img[0] = d->b->img[0];
         b_fat(d->b, d->clusters[d->n - 1], d->nofat ? 0 : c);
         b_fat(d->b, c, 0xFFFFFFFFu);
         d->clusters[d->n++] = c;
