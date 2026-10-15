@@ -919,8 +919,9 @@ static void *send_lost(void *arg)
 
 /**
  * Start `body` on the socket `*fd` with its buffer in a page of its own,
- * wait until the thread is seen asleep, and unmap the page. Returns 0, or -1
- * when a step fails.
+ * wait until the thread is seen asleep, and unmap the page. Returns 0, or 1
+ * after the failure is printed. A thread never seen asleep keeps its page,
+ * since its call may not have begun, and is left for the exit to end.
  */
 static int lost_buffer_call(pthread_t *t, void *(*body)(void *), int *fd)
 {
@@ -929,12 +930,18 @@ static int lost_buffer_call(pthread_t *t, void *(*body)(void *), int *fd)
     lost_tid = 0;
     lost_page = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (lost_page == MAP_FAILED || pthread_create(t, NULL, body, fd) != 0) {
-        return -1;
+        return fail("setup for a socket call whose buffer goes");
     }
     for (i = 0; i < 500 && !(lost_tid && sleeping(lost_tid)); i++) {
         usleep(10000);
     }
-    return munmap(lost_page, 4096);
+    if (i == 500) {
+        return fail("a socket call was never seen asleep before its buffer went");
+    }
+    if (munmap(lost_page, 4096) != 0) {
+        return fail("munmap of a sleeping socket call's buffer");
+    }
+    return 0;
 }
 
 /** Whether the thread `t` returned the errno EFAULT. */
@@ -972,7 +979,10 @@ static int lost_tcp_rows(void)
         (as = accept(ls, NULL, NULL)) < 0) {
         return fail("setup for a TCP connection over the loopback");
     }
-    if (lost_buffer_call(&t, recv_lost, &cs) != 0 || write(as, "x", 1) != 1 || !failed_efault(t)) {
+    if (lost_buffer_call(&t, recv_lost, &cs) != 0) {
+        return 1;
+    }
+    if (write(as, "x", 1) != 1 || !failed_efault(t)) {
         return fail("a TCP receive whose buffer went while it slept did not fail with EFAULT");
     }
     if (recv(cs, &c, 1, 0) != 1 || c != 'x') {
@@ -985,7 +995,7 @@ static int lost_tcp_rows(void)
         return fail("setup: filling a TCP connection's send buffer");
     }
     if (lost_buffer_call(&t, send_lost, &cs) != 0) {
-        return fail("setup for a TCP send that waits for room");
+        return 1;
     }
     while (got < queued && (n = read(as, chunk, sizeof(chunk))) > 0) {
         got += n;
@@ -1022,8 +1032,10 @@ static int lost_udp_row(void)
     if (us < 0 || bind(us, (struct sockaddr *)&sa, sizeof(sa)) != 0) {
         return fail("setup for a UDP socket on the loopback");
     }
-    if (lost_buffer_call(&t, recv_lost, &us) != 0 ||
-        sendto(us, "y", 1, 0, (struct sockaddr *)&sa, sizeof(sa)) != 1 || !failed_efault(t)) {
+    if (lost_buffer_call(&t, recv_lost, &us) != 0) {
+        return 1;
+    }
+    if (sendto(us, "y", 1, 0, (struct sockaddr *)&sa, sizeof(sa)) != 1 || !failed_efault(t)) {
         return fail("a UDP receive whose buffer went while it slept did not fail with EFAULT");
     }
     if (recv(us, &c, 1, MSG_DONTWAIT) != 1 || c != 'y') {
