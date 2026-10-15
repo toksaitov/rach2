@@ -23,15 +23,18 @@
 
 #define O_RDONLY 0
 
-/* One packet as the kernel hands it out: buttons, then two signed movements. */
+/* Up to 32 packets as the kernel hands them out, three bytes each: the
+ * buttons, then two signed movements. */
 static unsigned char packet[3 * 32];
 
+/** exit(2) with `status`; does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -42,11 +45,13 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write `s` to standard output. */
 static void puts(const char *s)
 {
     syscall3(SYS_WRITE, STDOUT_FILENO, (long)s, (int)strlen(s));
 }
 
+/** Print "MOUSEPROBE FAIL: " and `why`, and exit 1. */
 static void fail(const char *why)
 {
     puts("MOUSEPROBE FAIL: ");
@@ -55,6 +60,7 @@ static void fail(const char *why)
     sys_exit(1);
 }
 
+/** Write `v` in decimal. */
 static void put_int(int v)
 {
     char digits[12];
@@ -79,6 +85,19 @@ static void put_int(int v)
 
 PROBE_SP_ENTRY;
 
+/**
+ * Open the mouse, read until a movement arrives or fifteen seconds pass, and
+ * judge the movement summed over the packets read.
+ *
+ * Opening the device empties the queue, so the movement has to arrive after
+ * the open: the suite moves the mouse while this is already reading, and a
+ * person at a machine is told to. The wait is fifteen seconds in turns of ten
+ * milliseconds, long enough for a hand and short enough for a suite that
+ * never moves the mouse. The suite moves the mouse right by 20 and up by 8,
+ * so that axes swapped for each other or a sign turned the wrong way fail
+ * rather than pass as some movement. Up is positive here and negative on the
+ * wire, which is the turn the class driver makes (usb/hid.c).
+ */
 void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];
@@ -96,11 +115,7 @@ void probe_main(unsigned long *sp)
         fail("the mouse device did not open");
     }
 
-    /* Opening the device empties the queue, so the movement has to arrive
-       after this point rather than before it: the suite moves the mouse while
-       this is already reading, and a person at a machine is told to. The
-       wait is fifteen seconds in turns of ten milliseconds, long enough for
-       a hand and short enough for a suite that never moves the mouse. */
+    /* The open dropped the packets queued before it. */
     puts("MOUSEPROBE: move the mouse");
     for (tries = 0; tries < 1500 && !moved; tries++) {
         static const long pause[2] = {0, 10000000};
@@ -139,10 +154,7 @@ void probe_main(unsigned long *sp)
         puts("MOUSEPROBE OK\n");
         sys_exit(0);
     }
-    /* The suite moves the mouse right by 20 and up by 8, so that axes
-       swapped for each other or a sign turned the wrong way is a failure
-       rather than a movement that still looks like one. Up is positive here
-       and negative on the wire, which is the turn the class driver makes. */
+    /* The suite's movement: right by 20, up by 8. */
     if (total_x <= 0) {
         fail("the movement did not go right");
     }

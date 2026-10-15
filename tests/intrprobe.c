@@ -22,7 +22,7 @@
  *   vector has no line and the fallback count is zero. The timer's own
  *   vector is required to have counted in every one of them.
  *
- * Prints "INTRPROBE OK" with the two numbers and exits 0. Freestanding;
+ * Prints "INTRPROBE OK" with the counts it read and exits 0. Freestanding;
  * direct system calls (probe.h).
  */
 
@@ -32,23 +32,21 @@
 
 #define O_RDONLY 0
 
-/* The two drivers' message vectors are found by the names their handlers
-   registered under, since a vector is given to a device when it enables its
-   messages and the number is whatever came next. */
-
-/* Larger than the file's own worst case, which `PROCFS_MAX_INTERRUPTS` in
-   the kernel fixes at 2304 bytes: a read that filled this buffer would be a
-   file cut in the middle of a line, and a count cut in the middle of its
-   digits reads as a smaller number that a check might accept. */
+/* Larger than the file on the machines the suites boot. The probe fails on a
+   file that fills it: that would be a file cut in the middle of a line, and a
+   count cut in the middle of its digits reads as a smaller number that a
+   check might accept. */
 static char text[4096];
 static char cmdline[512];
 
+/** exit(2) with `status`; does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -59,11 +57,13 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write `s` to standard output. */
 static void puts(const char *s)
 {
     syscall3(SYS_WRITE, STDOUT_FILENO, (long)s, (int)strlen(s));
 }
 
+/** Write `v` in decimal. */
 static void putnum(int v)
 {
     char digits[12];
@@ -90,6 +90,7 @@ static void putnum(int v)
     }
 }
 
+/** Print "INTRPROBE FAIL: " and `why`, and exit 1. */
 static void fail(const char *why)
 {
     puts("INTRPROBE FAIL: ");
@@ -98,7 +99,8 @@ static void fail(const char *why)
     sys_exit(1);
 }
 
-/** Read a whole file into `buf`, or -1. */
+/** Read the file `path` into `buf`, at most `cap` - 1 bytes and a NUL: the
+ * bytes read, or -1 when it does not open. */
 static int slurp(const char *path, char *buf, int cap)
 {
     int fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
@@ -240,10 +242,14 @@ static int option_value(const char *key)
     return value;
 }
 
-/*
+/**
  * The count on the line the file lists as KIND with NAME, whatever its
- * vector: `39:\t57\tPIC\txhci` is the controller's PCI line on the notebook
- * and vector 43 is the emulator's. -1 when no line has both.
+ * vector, or -1 when no line has both. A driver's message vector is found by
+ * the name its handler registered under, since a vector is given to a device
+ * when it enables its messages and the number is whatever came next; a PCI
+ * line's vector differs from machine to machine, as in `39:\t57\tPIC\txhci`.
+ * The names on a line are one per device, `rtl8139, xhci` where the emulator
+ * puts both on IRQ 11, and the name asked for must be one of them whole.
  */
 static int count_for_named(const char *kind, const char *name, const char *file)
 {
@@ -267,9 +273,6 @@ static int count_for_named(const char *kind, const char *name, const char *file)
                     fields[f++] = file + j + 1;
                 }
             }
-            /* The names are one per device on the line, `rtl8139, xhci`
-               where the emulator puts both on IRQ 11; the name asked for
-               must be one of them whole. */
             if (f == 3 && find(fields[1], kind) == 0 && fields[1][strlen(kind)] == '\t') {
                 const char *names = fields[2];
                 int m = (int)strlen(name);
@@ -312,6 +315,19 @@ static int count_for_named(const char *kind, const char *name, const char *file)
     return -1;
 }
 
+/**
+ * Read the boot line and /proc/interrupts, print the counts, and require
+ * those of the machine the boot line and /proc/usb describe. The timer's
+ * vector must have counted on every machine.
+ *
+ * The audio controller's vector is printed and not judged: whether it has
+ * taken anything depends on whether this boot played a sound, which is the
+ * audio suite's business. On the ordinary boot the controller's vector must
+ * have taken at least four interrupts for the five keys the suite typed
+ * before the probe ran; one message and no more is what a kernel that never
+ * ends the interrupt at the processor takes, while the machine goes on
+ * typing on the timer's pump.
+ */
 PROBE_START void _start(void)
 {
     int vector, audio, fallback, drop, devices, n, line;
@@ -339,17 +355,11 @@ PROBE_START void _start(void)
     if (fallback < 0) {
         fail("there is no fallback line");
     }
-    /* `rach2.msidrop=0` and a value that is not a number are both the kernel's
-       "not asked", since it acts on the option only when the count is not
-       zero, so both fall to the ordinary case below. */
+    /* The kernel acts on rach2.msidrop only with a count above zero. */
     drop = option_value("rach2.msidrop=");
     devices = usb_devices();
 
-    /* What the file said, before anything is required of it: a run that fails
-       is worth more when the numbers it failed on are in the log. */
-    /* The audio controller's vector is printed and not judged: whether it
-       has taken anything depends on whether this boot played a sound, which
-       is the audio suite's business and not this program's. */
+    /* The counts are printed first, so that a failing run logs them. */
     puts("INTRPROBE READ vector ");
     putnum(vector);
     puts(", audio ");
@@ -385,13 +395,7 @@ PROBE_START void _start(void)
             fail("a machine with no USB device counted a lost edge");
         }
     } else {
-        /*
-         * Four is the least this boot can have taken: the keys typed
-         * before it ran are five, and each of them is at least one message.
-         * One message and no more is what a kernel that never ends the
-         * interrupt at the processor takes, and the machine goes on typing on
-         * the timer's pump with nothing else to show for it.
-         */
+        /* The suite types five keys before the probe, each a message. */
         if (vector < 4) {
             fail("the controller's vector took fewer interrupts than the keys typed");
         }

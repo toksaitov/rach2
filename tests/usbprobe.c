@@ -10,10 +10,10 @@
  * requires the file to open, a line per device, a keyboard and a mouse among
  * them, and each line to name a port, a speed and a class.
  *
- * A machine with no controller has this file and it is empty. That case is not
- * this probe's: it is checked by the boot that passes `rach2.nousb`, because a
- * missing file and an empty one are different answers and both have to be the
- * right one.
+ * A machine booted with `rach2.nousb` has this file and it is empty, which is
+ * a different answer from a missing file and the one a program that opens it
+ * can act on. The probe reads the boot line to learn which machine it is on,
+ * and on that one requires the empty file and nothing more.
  *
  * Prints "USBPROBE OK" and exits 0. Freestanding; direct system calls
  * (probe.h).
@@ -27,12 +27,14 @@
 
 static char text[4096];
 
+/** exit(2) with `status`; does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -43,11 +45,13 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write `s` to standard output. */
 static void puts(const char *s)
 {
     syscall3(SYS_WRITE, STDOUT_FILENO, (long)s, (int)strlen(s));
 }
 
+/** Print "USBPROBE FAIL: " and `why`, and exit 1. */
 static void fail(const char *why)
 {
     puts("USBPROBE FAIL: ");
@@ -81,7 +85,9 @@ static int contains(const char *needle, int len)
  *
  * The log is root-only and this probe runs as the transient init the debug
  * shell starts, which is root. A machine where it cannot be opened answers
- * zero, because a check that cannot be made is not a check that failed.
+ * zero, because a check that cannot be made is not a check that failed. The
+ * log is read a piece at a time and only the matches inside a piece are
+ * counted, so a match split across two reads is missed.
  */
 static int count_in_log(const char *needle)
 {
@@ -94,10 +100,6 @@ static int count_in_log(const char *needle)
     if (fd < 0) {
         return 0;
     }
-    /* Read a piece at a time, and take the overlap into account by counting
-       only whole matches inside each piece: the log's lines are far shorter
-       than a piece, so a match split across two reads would have to be a line
-       longer than this buffer. */
     for (;;) {
         int i;
         int m = (int)strlen(needle);
@@ -123,7 +125,6 @@ static int count_in_log(const char *needle)
     return found;
 }
 
-/** Whether the boot line switched USB off. */
 /** Whether the boot line has `word` on it. */
 static int cmdline_has(const char *word)
 {
@@ -155,13 +156,14 @@ static int cmdline_has(const char *word)
     return 0;
 }
 
+/** Whether the boot line switched USB off. */
 static int switched_off(void)
 {
     return cmdline_has("rach2.nousb");
 }
 
-/* Whether the line at `i` names a device behind a hub: its port is a path
-   with a dot in it, `port 5.2`, rather than a root port alone. */
+/** Whether the line from `i` to `end` names a device behind a hub: its port
+ * is a path with a dot in it, `port 5.2`, rather than a root port alone. */
 static int behind_hub(int i, int end)
 {
     int k;
@@ -214,8 +216,8 @@ static int within(const char *needle, int from, int to)
     return 0;
 }
 
-/* Read /proc/usb whole into `text`, until its end: sixteen devices are more
-   than one read of the file returns. Returns the length. */
+/** Read /proc/usb whole into `text`, until a read returns 0, and return the
+ * length; fail when the file does not open or read or does not fit. */
 static int read_usb(void)
 {
     int fd = syscall3(SYS_OPEN, (long)"/proc/usb", O_RDONLY, 0);
@@ -243,6 +245,7 @@ static int read_usb(void)
     return len;
 }
 
+/** The count of the lines in the first `len` bytes of `text`. */
 static int count_lines(int len)
 {
     int i, lines = 0;
@@ -264,6 +267,15 @@ PROBE_SP_ENTRY;
  * argument N the machine was given N devices and a slowed scan may still
  * be configuring them, so the file is read again until it lists that many,
  * a bounded number of times, and the count is said.
+ *
+ * Each line is checked for a port, a speed, a device and a class, since a
+ * file whose first line held every word and whose second was empty would
+ * pass a search of the whole. On a boot with `rach2.hubtree`, which puts the
+ * keyboard and the mouse behind a hub, their lines must give a path and not
+ * a root port, and the hub must be listed. A device the kernel cannot drive
+ * is refused once and then left alone, so the log has its refusal at most
+ * once; a device enumerated again every tick would use up the slots and
+ * take a working keyboard's.
  */
 void probe_main(unsigned long *sp)
 {
@@ -295,10 +307,7 @@ void probe_main(unsigned long *sp)
         puts("USBPROBE settled: the devices the machine was given are listed\n");
     }
 
-    /* A machine booted without USB has this file and it is empty, which is a
-       different answer from the file not being there and the one a program
-       that opens it can act on. Which of the two is expected is decided by the
-       boot line, which is the only thing here that knows. */
+    /* Booted with rach2.nousb, the file is there and empty. */
     if (switched_off()) {
         if (len != 0) {
             fail("USB was switched off and devices are listed");
@@ -314,9 +323,7 @@ void probe_main(unsigned long *sp)
     if (lines < 2) {
         fail("fewer than two devices are listed");
     }
-    /* Every line, not the file as a whole: a file whose first line held every
-       word this looks for and whose second was empty would pass a search over
-       the whole of it. */
+    /* Every line, not the file as a whole. */
     for (i = 0; i < len; i = line_end(i, len) + 1) {
         int end = line_end(i, len);
 
@@ -343,10 +350,7 @@ void probe_main(unsigned long *sp)
     if (!contains("class 3 protocol 2", len)) {
         fail("no mouse is listed");
     }
-    /* On a boot that put them behind a hub, the boot line says so, and the
-       keyboard's and the mouse's lines must give a path and not a root port:
-       a device behind a hub that was listed on a root port would be a tree
-       the kernel had lost. */
+    /* With rach2.hubtree, the keyboard and the mouse are behind a hub. */
     if (cmdline_has("rach2.hubtree")) {
         for (i = 0; i < len; i = line_end(i, len) + 1) {
             int end = line_end(i, len);
@@ -364,12 +368,7 @@ void probe_main(unsigned long *sp)
         }
     }
 
-    /*
-     * And the log does not repeat itself. A device this kernel cannot drive is
-     * refused once and then left alone; the notebook found one that was
-     * enumerated again every tick until the slots ran out, which cost the
-     * keyboard that was already working. One line is the contract.
-     */
+    /* A device the kernel cannot drive is refused once, in one log line. */
     {
         int refusals = count_in_log("no interface this kernel can drive");
 

@@ -39,12 +39,14 @@
 
 static char line[64];
 
+/** exit(2) with `status`; does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -55,6 +57,7 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write `s` to standard output. */
 static void puts(const char *s)
 {
     syscall3(SYS_WRITE, STDOUT_FILENO, (long)s, (int)strlen(s));
@@ -66,6 +69,20 @@ static unsigned char random_buf[8u << 20];
 
 PROBE_SP_ENTRY;
 
+/**
+ * Bind to processor 0, fork the child that keeps the processor, print
+ * KEYLAT READING and read one line; then kill the child and report.
+ *
+ * The child never sleeps, so the reader runs only if something takes the
+ * processor from it. In the `random` mode the child is inside a system call
+ * nearly all the time, a `getrandom` of eight mebibytes made again as soon as
+ * it returns, its buffer touched first so that no page fault falls inside the
+ * call's time; a reader woken then runs only if the call gives way. It
+ * prints KEYLAT HOG once, so that the suite sends the key only once the
+ * child is in its loop. A fork that fails fails the probe: without the child
+ * nothing is on the processor to be taken off it, and a fast read would
+ * prove nothing.
+ */
 void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];
@@ -82,20 +99,10 @@ void probe_main(unsigned long *sp)
     }
     child = syscall3(SYS_FORK, 0, 0, 0);
     if (child < 0) {
-        /* Without the child there is nothing on the processor to be taken off
-           it, and the number this program exists to produce would be the easy
-           one. Better to fail than to report a fast read that proves
-           nothing. */
         puts("KEYLAT FAIL: no child could be forked\n");
         sys_exit(1);
     }
     if (child == 0) {
-        /* The child keeps the processor: it never sleeps, so the reader
-           runs only if something takes the processor from it. In the
-           `random` mode it is inside a system call nearly all the time, a
-           `getrandom` of eight mebibytes made again as soon as it returns,
-           touched first so no page fault is inside the call's time; a
-           reader woken then runs only if the call gives way. */
         if (random_mode) {
             for (off = 0; off < sizeof(random_buf); off += 4096) {
                 random_buf[off] = 1;
@@ -107,8 +114,7 @@ void probe_main(unsigned long *sp)
                     sys_exit(1);
                 }
                 if (n == 0) {
-                    /* Said once, so the row knows the tenant is in its loop
-                       before the key is sent. */
+                    /* once: the suite sends the key after this line */
                     puts("KEYLAT HOG\n");
                 }
             }

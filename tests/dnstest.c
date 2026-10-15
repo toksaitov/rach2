@@ -1,16 +1,18 @@
 /**
- * Exercises the userspace stub resolver in utils/resolv.c. The pure helpers run
- * hermetically (no network): inet_aton on good and bad literals, hosts_find
- * against a crafted /hosts buffer, resolve_host on literals and on names read
- * from the real /hosts staged in the image root, and dns_parse_a and
- * dns_build_query against crafted wire data. The final block does live
- * resolution through SLIRP and needs host internet.
+ * Exercises the userspace stub resolver in utils/resolv.c. The helpers that
+ * use no network run without one: inet_aton on good and bad literals,
+ * hosts_find against a crafted hosts buffer, resolve_host on literals and on
+ * names read from the image's hosts file (/etc/hosts, or else /hosts, which
+ * the test image stages at its root), and dns_parse_a and dns_build_query
+ * against crafted wire data. With `--live`, a last block resolves names
+ * through SLIRP's forwarder and needs the host's internet.
  *
  * Linked against the ported musl, the same libc utils/resolv.c uses.
  *
- * Needs: the emulator's /etc/hosts, whose addresses the resolver rows expect.
- * On a machine with its own hosts file those three rows read that file and
- * fail on its contents, not on the resolver.
+ * Needs: the test image's hosts file, whose addresses of QEMU's user network
+ * the rows for gateway, dns and rach2 expect. On a machine with its own hosts
+ * file those three rows read that file and fail on its contents, not on the
+ * resolver.
  */
 
 #include <stdio.h>
@@ -21,6 +23,7 @@
 
 static int passed = 0, failed = 0;
 
+/** Print `desc` with OK or FAILED, and count the result. */
 static void check(const char *desc, int ok)
 {
     printf("  %s: %s\n", desc, ok ? "OK" : "FAILED");
@@ -31,6 +34,7 @@ static void check(const char *desc, int ok)
     }
 }
 
+/** Print `label` and the address `ip`, in host order, as a dotted quad. */
 static void print_ip(const char *label, uint32_t ip)
 {
     printf("    %s -> %u.%u.%u.%u\n", label, (ip >> 24) & 0xFF, (ip >> 16) & 0xFF, (ip >> 8) & 0xFF,
@@ -77,6 +81,8 @@ static const unsigned char v_badname[] = {
     0x00, 0x04, 0x81, 0x80, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x07, 'e',  'x',  'a',
     'm',  'p',  'l',  'e',  0x03, 'c',  'o',  'm',  0x00, 0x00, 0x01, 0x00, 0x01, 0x40, 0x00, 0x01};
 
+/** Run every row, and the live rows with `--live`; 0 when every row
+ * passed, 1 otherwise. */
 int main(int argc, char **argv)
 {
     int live = (argc > 1 && strcmp(argv[1], "--live") == 0);

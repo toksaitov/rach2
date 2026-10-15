@@ -718,7 +718,6 @@ tests/usbdiskprobe.c:part_hold complexity 43 a probe, one sequence of steps in t
 tests/usbdiskprobe.c:part_hold lines 121 a probe, one sequence of steps in the order the log records them
 
 tests/usbprobe.c:probe_main complexity 31 a probe, one sequence of steps in the order the log records them
-tests/usbprobe.c:probe_main lines 113 a probe, one sequence of steps in the order the log records them
 
 tests/vfsprobe.c:_start complexity 103 a probe, one sequence of steps in the order the log records them
 tests/vfsprobe.c:_start lines 290 a probe, one sequence of steps in the order the log records them
