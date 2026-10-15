@@ -86,12 +86,16 @@ static int contains(const char *needle, int len)
  * The log is root-only and this probe runs as the transient init the debug
  * shell starts, which is root. A machine where it cannot be opened answers
  * zero, because a check that cannot be made is not a check that failed. The
- * log is read a piece at a time and only the matches inside a piece are
- * counted, so a match split across two reads is missed.
+ * log is read a piece at a time, and a read ends wherever the buffer fills,
+ * not at a line's end, so the last `strlen(needle) - 1` bytes of each piece
+ * are kept before the next: a match split across two reads is counted, and
+ * none is counted twice, since the kept bytes are too few to hold one.
  */
 static int count_in_log(const char *needle)
 {
-    static char chunk[1024];
+    static char window[1024];
+    int m = (int)strlen(needle);
+    int kept = 0;
     int fd;
     int n;
     int found = 0;
@@ -102,23 +106,27 @@ static int count_in_log(const char *needle)
     }
     for (;;) {
         int i;
-        int m = (int)strlen(needle);
 
-        n = syscall3(SYS_READ, fd, (long)chunk, (int)sizeof(chunk));
+        n = syscall3(SYS_READ, fd, (long)(window + kept), (int)sizeof(window) - kept);
         if (n <= 0) {
             break;
         }
+        n += kept;
         for (i = 0; i + m <= n; i++) {
             int j;
 
             for (j = 0; j < m; j++) {
-                if (chunk[i + j] != needle[j]) {
+                if (window[i + j] != needle[j]) {
                     break;
                 }
             }
             if (j == m) {
                 found++;
             }
+        }
+        kept = (n < m - 1) ? n : m - 1;
+        for (i = 0; i < kept; i++) {
+            window[i] = window[n - kept + i];
         }
     }
     syscall3(SYS_CLOSE, fd, 0, 0);
@@ -366,7 +374,7 @@ void probe_main(unsigned long *sp)
     }
 
     {
-        int refusals = count_in_log("no interface this kernel can drive");
+        int refusals = count_in_log(": no driver for it here");
 
         if (refusals > 1) {
             fail("a device that cannot be driven was refused more than once");
