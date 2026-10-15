@@ -1,11 +1,9 @@
-# ISH Shell Makefile (Linux)
+# ish/Makefile.linux: build ish as a static Linux program, with the
+# architecture's cross compiler (mk/toolchain.mk), into build/ish/linux/ or
+# build/x86_64/ish/linux/ (mk/build.mk), apart from the Rach2 build. The text
+# address is left to the linker.
 #
-# Builds shell for Linux using cross-compiler.
 # Usage: make -f Makefile.linux [ARCH=x86_64]
-#
-# Builds out of tree, into build/ish/linux/, or build/x86_64/ish/linux/ (its own
-# subdir, distinct from the main build's build/ish/). See ../mk/build.mk. The
-# compiler is the architecture's (mk/toolchain.mk).
 
 COMPONENT = ish/linux
 include ../mk/toolchain.mk

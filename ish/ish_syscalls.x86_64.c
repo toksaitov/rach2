@@ -1,17 +1,17 @@
-/**
- * The x86-64 Linux system call wrappers for ish.
+/*
+ * The x86-64 system call wrappers of ish, included by `ish_syscalls.c`.
  *
- * Each wrapper issues `syscall` with the syscall number in `rax` and the
- * arguments in `rdi`, `rsi`, `rdx`, `r10` in that order; the instruction
- * overwrites `rcx` with the return address and `r11` with the flags, so both
- * are clobbered. The kernel returns the result in `rax`, and a failure as the
- * negated error number, which the wrapper returns unchanged since there is no
- * `errno`. Each argument is widened to `long` before it reaches its register,
- * so a negative descriptor or process id arrives sign-extended. The numbers
- * are the Linux x86-64 ABI, as musl's arch/x86_64/bits/syscall.h.in has them:
- * `read` 0, `write` 1, `open` 2, `close` 3, `stat` 4, `dup2` 33, `fork` 57,
- * `execve` 59, `exit` 60, `wait4` 61, `chdir` 80, `creat` 85. x86-64 has no
- * `waitpid`; `ish_waitpid` is `wait4` with no resource usage.
+ * Each wrapper issues `syscall` with the call number in RAX and the
+ * arguments in RDI, RSI, RDX and R10 in that order, and returns RAX, where
+ * the kernel puts the result or the negated error number. The instruction
+ * overwrites RCX with the return address and R11 with the flags, so both are
+ * clobbered. Each integer argument is widened to `long` before it reaches its
+ * register, so a negative descriptor or process ID arrives sign-extended.
+ * The numbers are the Linux x86-64 ABI's, as musl's
+ * `arch/x86_64/bits/syscall.h.in` has them: `read` 0, `write` 1, `open` 2,
+ * `close` 3, `stat` 4, `dup2` 33, `fork` 57, `execve` 59, `exit` 60,
+ * `wait4` 61, `chdir` 80 and `creat` 85. x86-64 has no `waitpid`, so
+ * `ish_waitpid` is `wait4` with a null resource usage pointer in R10.
  */
 long ish_read(int file_descriptor, void *buffer, unsigned long buffer_size)
 {

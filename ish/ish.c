@@ -1,3 +1,8 @@
+/*
+ * ish: the input loop, the builtins, the path search, the redirections and
+ * the running of a command in a child process.
+ */
+
 #ifdef ISH_USE_STDLIB
 #include <unistd.h>
 #include <stdlib.h>
@@ -40,11 +45,14 @@ static const int Status_Not_Runnable = 126;
 static const int Status_Signalled_Base = 128;
 
 /**
- * Wait for `pid`, retrying interruptions, and return its shell status.
+ * Wait for the child `pid` and return its status as a shell reports it: the
+ * exit status, 128 + N for a child that signal N killed, or 126 when the
+ * wait fails.
  *
- * The raw wrappers return -4 for EINTR; libc returns -1 and sets errno.
- * A failed wait returns 126. A normal exit stores its status in bits 8-15;
- * a signal death stores the signal number in bits 0-6.
+ * A wait that a signal interrupts is made again. The raw wrapper reports
+ * that as -4, the C library as -1 with `errno` set to `EINTR`. The wait
+ * status has the exit status in bits 8 to 15 and the number of a killing
+ * signal in bits 0 to 6.
  */
 static int ish_wait_for_child(int pid)
 {
@@ -68,27 +76,26 @@ static int ish_wait_for_child(int pid)
 }
 
 /**
- * Split one line into arguments and run it. Returns the command's exit status.
+ * Run the command line `input` and return its status.
  *
- * The line is split into an argument array, and either a builtin (`cd`, `exit`)
- * runs in this process or the command is resolved to an executable and run in a
- * child. Resolution tries the name as given, then each `PATH` element joined
- * with the name; a name that `stat` cannot find is skipped, and so is a joined
- * path longer than `Max_Executable_Path_Length`, since cut short it could be
- * the path of another program. Before the `execve`, `< file` and `> file`
- * redirections recorded in the arguments are applied in the child by
- * `dup2`-ing the opened descriptors over 0 and 1. The parent retries an
- * interrupted wait and returns the child's status. If the status cannot be
- * obtained, it returns 126.
+ * `input` is cut at its first newline and split in place into arguments.
+ * The `<` and `>` redirections are taken out of them and their files opened,
+ * the input file read-only and the output file with `creat` at mode 0644,
+ * before anything runs. `cd` and `exit` run in this process: `cd` with no
+ * operand goes to `home`, and `exit` ends the shell with its operand's
+ * status, 0 when it has none. Any other command is looked up with `stat`,
+ * first as written and then joined to each element of `paths`; a joined path
+ * longer than `Max_Executable_Path_Length` is skipped, since cut short it
+ * could name another program. A child moves the opened files onto
+ * descriptors 0 and 1 and calls `execve` with `envp`, and the parent waits
+ * for it.
  *
- * `input` is split in place, so the caller's buffer comes back tokenized.
+ * `home` and `paths` are the values of HOME and PATH, or null.
  *
- * Redirections are opened before a builtin or child runs. An open failure
- * returns 126. Builtin operands are read after redirection tokens are removed;
- * `cd` without an operand uses HOME, including `cd > file`.
- *
- * An unresolved command returns 127. A fork or exec failure returns 126.
- * A signal death returns 128 + N. A failed `cd` returns 1.
+ * Returns 0 for an empty line, the child's status from `ish_wait_for_child`,
+ * 0 or 1 for `cd`, 127 for a command not found, and 126 for a redirection
+ * that cannot be opened, a failed fork, or a failed `dup2` or `execve` in
+ * the child.
  */
 static int ish_run_line(char *input, char *home, char *paths, char **envp)
 {
@@ -215,19 +222,18 @@ static int ish_run_line(char *input, char *home, char *paths, char **envp)
 }
 
 /**
- * Run the command supplied with `-c`, or read command lines from descriptor 0.
+ * Run the command given with `-c`, or read command lines from descriptor 0.
  *
- * `su -c` uses this form to run one command as the target account. It returns
- * that command's status.
+ * `ish -c COMMAND` runs one command and returns its status; `su -c` starts
+ * the shell this way. Otherwise each line is run as its newline arrives, in
+ * reads of up to 255 bytes, so a line may span reads. A last line with no
+ * newline runs at end of file, and a read error discards it. A line longer
+ * than 255 bytes, not counting its newline, is reported and discarded up to
+ * its newline. The input mode ignores each command's status and returns 0;
+ * the `exit` builtin ends either mode with its operand's status.
  *
- * Input mode discards each command's status and returns 0 at EOF or a read
- * error. It retains incomplete lines between reads and runs a final line at
- * EOF without a newline. A read error discards an incomplete line. Lines over
- * 255 bytes, excluding the newline, are diagnosed and discarded in full.
- * The `exit` builtin terminates either mode with its operand's status.
- *
- * The crt0 entry hands `main` the initial-stack ABI directly: `argc`, the
- * NULL-terminated `argv`, and the NULL-terminated `envp` that follows it.
+ * `_start` in `crt0.c` passes `argc`, the null-terminated `argv` and the
+ * null-terminated `envp` from the initial process stack.
  */
 int main(int argc, char **argv, char **envp)
 {

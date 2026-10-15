@@ -1,3 +1,7 @@
+/*
+ * The definition every ish source shares: `ish_check`, the shell's assertion.
+ */
+
 #ifndef ISH_COMMON_H
 #define ISH_COMMON_H
 
@@ -8,11 +12,12 @@
 #endif
 
 /**
- * Abort the process with `exit(-1)` when `value` is false.
+ * Exit the process with status -1, which a parent reads as 255, when `value`
+ * is false.
  *
- * The shell's assertion: a failed precondition is fatal, never recovered.
- * `exit` resolves to the C library under `ISH_USE_STDLIB` and to the raw
- * system call wrapper in `ish_syscalls.h` otherwise.
+ * A failed precondition is fatal and never recovered. `exit` is the C
+ * library's under `ISH_USE_STDLIB` and the raw system call wrapper of
+ * `ish_syscalls.h` otherwise.
  */
 #define ish_check(value) \
     do {                 \

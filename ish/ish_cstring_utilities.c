@@ -1,3 +1,8 @@
+/*
+ * The string, character, token, integer and path operations of ish; the
+ * contracts are in `ish_cstring_utilities.h`.
+ */
+
 #include "ish_cstring_utilities.h"
 
 unsigned long ish_get_cstring_length(const char *string)
@@ -9,12 +14,6 @@ unsigned long ish_get_cstring_length(const char *string)
     return (unsigned long)(string - start);
 }
 
-/**
- * Replace the first `character` in `string` with `replacement`, in place.
- *
- * Only the first match is replaced; later matches are left alone. Returns
- * `string` for chaining.
- */
 char *ish_replace_first_character_in_cstring(char *string, char character, char replacement)
 {
     for (char *cursor = string; *cursor; ++cursor) {
@@ -69,20 +68,6 @@ int ish_convert_to_uppercase(int character)
     return character;
 }
 
-/**
- * Carve the next token out of `string`, mutating it in place.
- *
- * Leading separators (per `is_separator`) are skipped, then the run up to the
- * next separator is the token. This writes a `'\0'` over that separator, so the
- * returned pointer is a NUL-terminated token cut out of the caller's buffer;
- * `string` is altered. Use `ish_get_token_in_cstring` for the non-destructive
- * variant.
- *
- * Returns the token, or `0` if only separators remain. When
- * `cursor_after_token` is non-null it receives the position just past the
- * terminator (the start of the rest), or `0` at end of input, so it can seed
- * the next call.
- */
 char *ish_carve_token_in_cstring(char *string, int (*is_separator)(int character),
                                  char **cursor_after_token)
 {
@@ -114,19 +99,6 @@ char *ish_carve_token_in_cstring(char *string, int (*is_separator)(int character
     return result;
 }
 
-/**
- * Locate the next token in `string` without modifying it.
- *
- * Behaves like `ish_carve_token_in_cstring` but leaves the source untouched: no
- * `'\0'` is written, so the returned token runs to the next separator and is
- * not separately terminated. Use this when the buffer is read-only or shared;
- * use `ish_carve_token_in_cstring` when an in-place NUL-terminated token is
- * wanted.
- *
- * Returns the token start, or `0` if only separators remain. When
- * `cursor_after_token` is non-null it receives the separator that ends the
- * token (the start of the rest), or `0` at end of input.
- */
 char *ish_get_token_in_cstring(char *string, int (*is_separator)(int character),
                                char **cursor_after_token)
 {
@@ -154,12 +126,6 @@ char *ish_get_token_in_cstring(char *string, int (*is_separator)(int character),
     return result;
 }
 
-/**
- * Test whether `string` begins with `prefix`.
- *
- * Returns true once all of `prefix` matches, so the empty prefix always
- * matches and `string` may be longer than `prefix`.
- */
 int ish_cstring_starts_with(const char *prefix, const char *string)
 {
     ish_check(prefix && string);
@@ -171,9 +137,6 @@ int ish_cstring_starts_with(const char *prefix, const char *string)
     return 1;
 }
 
-/**
- * Like `ish_cstring_starts_with`, comparing letters case-insensitively.
- */
 int ish_cstring_starts_with_ignoring_case(const char *prefix, const char *string)
 {
     ish_check(prefix && string);
@@ -185,9 +148,6 @@ int ish_cstring_starts_with_ignoring_case(const char *prefix, const char *string
     return 1;
 }
 
-/**
- * Test two NUL-terminated strings for byte-for-byte equality.
- */
 int ish_are_cstrings_equal(const char *string, const char *another_string)
 {
     ish_check(string && another_string);
@@ -198,9 +158,6 @@ int ish_are_cstrings_equal(const char *string, const char *another_string)
     return *string == *another_string;
 }
 
-/**
- * Like `ish_are_cstrings_equal`, comparing letters case-insensitively.
- */
 int ish_are_cstrings_equal_ignoring_case(const char *string, const char *another_string)
 {
     ish_check(string && another_string);
@@ -212,18 +169,7 @@ int ish_are_cstrings_equal_ignoring_case(const char *string, const char *another
     return ish_convert_to_lowercase(*string) == ish_convert_to_lowercase(*another_string);
 }
 
-/**
- * Parse a leading signed decimal integer out of `string`.
- *
- * Skips leading whitespace, accepts an optional `+` or `-`, then consumes the
- * run of digits. Parsing stops at the first non-digit; trailing text is
- * ignored. There is no overflow or error reporting: an empty or non-numeric
- * field yields `0`.
- *
- * Accumulation and negation use unsigned arithmetic, wrapping modulo
- * `UINT_MAX + 1`. The result is converted to `int`; the exit builtin uses
- * only its low eight bits.
- */
+/* The digits are summed in unsigned arithmetic, so that the wrap is defined. */
 int ish_get_integer_from_cstring(const char *string)
 {
     ish_check(string);
@@ -249,18 +195,6 @@ int ish_get_integer_from_cstring(const char *string)
     return (int)(negative ? 0u - magnitude : magnitude);
 }
 
-/**
- * Join `path_element` and `another_path_element` into `combined_path` with a
- * single `ISH_Directory_Separator` between them.
- *
- * Only the first path element up to (not including) an `ISH_Path_Separator` is
- * used, so a search-path entry can be passed straight in. The result is always
- * NUL-terminated. `maximum_combined_path_length` bounds the bytes written
- * before the terminator, so `combined_path` needs one byte more than that.
- *
- * Returns 0 when the whole path fits, or -1 when it was cut short. A path cut
- * short can be the path of another file, so a caller must not use it.
- */
 int ish_combine_path_elements(const char *path_element, const char *another_path_element,
                               char *combined_path, unsigned long maximum_combined_path_length)
 {

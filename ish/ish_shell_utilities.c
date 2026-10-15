@@ -1,16 +1,10 @@
+/*
+ * The command line operations of ish; the contracts of the exported ones are
+ * in `ish_shell_utilities.h`.
+ */
+
 #include "ish_shell_utilities.h"
 
-/**
- * Split `input` into whitespace-separated tokens, in place.
- *
- * Tokens are carved out of `input` itself: the separator ending each token is
- * overwritten with a NUL (leading and repeated separators are skipped), so the
- * caller's buffer is mutated and the `arguments` entries point into it. At most
- * `max_argument_count` slots are filled, and a NULL terminator is written after
- * the last token (so `arguments` must hold one more slot). Returns the number
- * of tokens after the first (the token count minus one, or 0 when empty), so it
- * is the operand count for the command in `arguments[0]`.
- */
 unsigned long ish_build_argument_array_from_input(char *input, char **arguments,
                                                   unsigned long max_argument_count)
 {
@@ -20,7 +14,7 @@ unsigned long ish_build_argument_array_from_input(char *input, char **arguments,
     while (cursor && argument_index < max_argument_count) {
         char *token = ish_carve_token_in_cstring(cursor, ish_is_space, &cursor);
         if (token == 0) {
-            break; /* only trailing separators remain: do not count a NULL token */
+            break;
         }
         arguments[argument_index++] = token;
     }
@@ -33,12 +27,6 @@ unsigned long ish_build_argument_array_from_input(char *input, char **arguments,
 char *_ish_extract_next_parameter_for_argument_lexeme(char **arguments,
                                                       const char *argument_lexeme);
 
-/**
- * Return the value of the first environment entry matching `key`.
- *
- * `key` includes the trailing '='; `key_length` excludes the terminating
- * NUL. Matching is case-sensitive. Return NULL when no entry matches.
- */
 char *ish_get_first_environment_variable(const char *key, unsigned long key_length,
                                          char **environment)
 {
@@ -56,25 +44,12 @@ char *ish_get_first_environment_variable(const char *key, unsigned long key_leng
     return result;
 }
 
-/**
- * Pull the first `<` redirection target out of `arguments`.
- *
- * Returns the filename after the first `<` and clears that `<` and the
- * filename from `arguments` so they are not passed to the command. Returns
- * NULL when there is no `<`. See
- * `_ish_extract_next_parameter_for_argument_lexeme`.
- */
 char *ish_extract_last_stdin_redirection_file(char **arguments)
 {
     return _ish_extract_next_parameter_for_argument_lexeme(arguments,
                                                            ISH_Standard_Input_Redirection_Lexeme);
 }
 
-/**
- * Pull the first `>` redirection target out of `arguments`.
- *
- * As `ish_extract_last_stdin_redirection_file`, for the `>` lexeme.
- */
 char *ish_extract_last_stdout_redirection_file(char **arguments)
 {
     return _ish_extract_next_parameter_for_argument_lexeme(arguments,
@@ -82,18 +57,12 @@ char *ish_extract_last_stdout_redirection_file(char **arguments)
 }
 
 /**
- * Strip the first `argument_lexeme` and its filename from `arguments`,
- * returning that filename.
+ * Remove the first entry of the null-terminated `arguments` that equals
+ * `argument_lexeme`, ignoring case, together with the entry after it, and
+ * return that entry: the file name of the redirection.
  *
- * Scans the NULL-terminated `arguments` for the first entry equal to
- * `argument_lexeme` (compared without case) and clears both it and the
- * following filename slot to NULL. That terminates the argv the command runs
- * with at the redirection, so the lexeme and anything after it are removed
- * (one redirection per stream is the supported case). A later scan stops at
- * that NULL too: `ish_run_line` takes `<` out first, so a `>` written after a
- * `<` is never found, and a line that redirects both streams must name `>`
- * first. Returns the filename, or NULL when the lexeme is absent or has no
- * filename.
+ * Both slots are set to null, so the array ends where the lexeme was.
+ * Returns null when the lexeme is absent or is the last entry.
  */
 char *_ish_extract_next_parameter_for_argument_lexeme(char **arguments, const char *argument_lexeme)
 {
