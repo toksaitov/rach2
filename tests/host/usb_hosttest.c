@@ -1,12 +1,13 @@
 /*
- * usb_hosttest.c: the standard half of the USB stack, with no controller.
+ * usb_hosttest.c: the USB core, usb/core.c, with no controller: its walk of a
+ * configuration's descriptors, the quiesce of an endpoint and the slot given
+ * back.
  *
  * What a device says about itself arrives as a string of descriptors, each
- * naming its own length, and the only way through them is to trust those
- * lengths. A device that lies about one is not a device this kernel will ever
- * be given in QEMU: the emulated keyboard and mouse are correct, and so is
- * every real one that works elsewhere. A malformed descriptor is what a broken
- * device, or a hostile one, sends.
+ * giving its own length, and the walk has nothing but those lengths to go
+ * by. QEMU's emulated keyboard and mouse send correct ones, as does every
+ * working device; a malformed descriptor is what a broken device, or a
+ * hostile one, sends.
  *
  * So the walk is compiled natively and given descriptors no device would send,
  * in buffers allocated to the exact length, under AddressSanitizer. A read
@@ -20,10 +21,11 @@ extern void free(void *p);
 #include "../../rach2/sys/usb/core.h"
 #include "../../rach2/sys/usb/hub.h"
 
-/* ---- what the core reaches for outside itself ---- */
+/* ---- the functions outside core.c that it calls ---- */
 
 #include "../../rach2/sys/usb/xhci.h"
 
+/** Discard the message: no row checks the log. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
     (void)level;
@@ -33,7 +35,8 @@ void klog(int level, const char *subsystem, const char *format, ...)
 
 #include "../../rach2/sys/lib/kdef.h"
 
-/* The kernel's fill, which the core reaches and this test does not build. */
+/** Fill `n` bytes at `ptr` with `c`, as the kernel's `k_memset`, which this
+ * test does not build. */
 void *k_memset(void *ptr, int c, size_t n)
 {
     unsigned char *p = (unsigned char *)ptr;
@@ -44,20 +47,13 @@ void *k_memset(void *ptr, int c, size_t n)
     return ptr;
 }
 
-/*
- * The identity-mapped frames a device's record lives in. On the host they are
- * pages of this program's memory; nothing here is given to a controller, so
- * the address it would be reached by is the only one that matters.
- */
-/*
- * The driver's table of controllers, as the stack asks about it. These tests
- * drive the layers above the driver through their own stubs, so there is one
- * controller and its record is never dereferenced.
- */
+/* The frames the core takes its device records from. On the host they are
+ * pages of this program's memory, and none is given to a controller. */
 #define FRAME_COUNT 64
 static uint8_t frames[FRAME_COUNT][4096] __attribute__((aligned(4096)));
 static uint8_t frame_taken[FRAME_COUNT];
 
+/** Take a free frame, or return 0 when all are taken. */
 void *alloc_kernel_frame(void)
 {
     unsigned i;
@@ -71,6 +67,7 @@ void *alloc_kernel_frame(void)
     return 0;
 }
 
+/** Give back a frame `alloc_kernel_frame` took. */
 void free_kernel_frame(void *frame)
 {
     unsigned i;
@@ -83,32 +80,41 @@ void free_kernel_frame(void *frame)
     }
 }
 
+/* The one controller. The stubs stand for the driver, so its record is a
+ * token that is never dereferenced. */
 static struct xhci_ctrl *the_ctrl = (struct xhci_ctrl *)1;
 
+/** Return 1: there is one controller. */
 int xhci_controllers(void)
 {
     return 1;
 }
 
+/** Return the one controller for `n` 0, else 0. */
 struct xhci_ctrl *xhci_controller(int n)
 {
     return n == 0 ? the_ctrl : 0;
 }
 
+/** Return 0 for the one controller, else -1. */
 int xhci_number(const struct xhci_ctrl *hc)
 {
     return hc == the_ctrl ? 0 : -1;
 }
 
+/** Return 0, so the port scan looks at no root port. */
 int xhci_ports(struct xhci_ctrl *hc)
 {
     return 0;
 }
 
-/* One root port with a device on it, for the rows that step a running
-   device: the port scan asks for none, since `xhci_ports` answers zero. */
+/* Whether a high-speed device is connected and enabled on every root port,
+ * for the rows that step a running device. The port scan asks about no port,
+ * since `xhci_ports` returns 0. */
 static int port_present;
 
+/** Report a connected, enabled high-speed device when `port_present` is
+ * set; return -1 otherwise. */
 int xhci_port_status(struct xhci_ctrl *hc, int port, struct usb_port_status *out)
 {
     (void)port;
@@ -121,24 +127,28 @@ int xhci_port_status(struct xhci_ctrl *hc, int port, struct usb_port_status *out
     return 0;
 }
 
+/** Return 0: no root port has settled. */
 int xhci_port_settled(struct xhci_ctrl *hc, int port)
 {
     (void)port;
     return 0;
 }
 
+/** Return -1: no root port is reset. */
 int xhci_port_reset_begin(struct xhci_ctrl *hc, int port)
 {
     (void)port;
     return -1;
 }
 
+/** Return -1, as `xhci_port_reset_begin` does. */
 int xhci_port_reset_done(struct xhci_ctrl *hc, int port)
 {
     (void)port;
     return -1;
 }
 
+/** Return 0: the slot is marked a hub. */
 int xhci_device_hub(struct xhci_ctrl *hc, int device, int ports, int multi_tt, int think_time)
 {
     (void)device;
@@ -148,6 +158,7 @@ int xhci_device_hub(struct xhci_ctrl *hc, int device, int ports, int multi_tt, i
     return 0;
 }
 
+/** Return -1: the rows open no slot through the driver. */
 int xhci_device_open(struct xhci_ctrl *hc, const struct usb_location *where, int speed)
 {
     (void)where;
@@ -155,12 +166,14 @@ int xhci_device_open(struct xhci_ctrl *hc, const struct usb_location *where, int
     return -1;
 }
 
+/** Return -1: no device is addressed. */
 int xhci_device_address(struct xhci_ctrl *hc, int device)
 {
     (void)device;
     return -1;
 }
 
+/** Return -1: no packet size is changed. */
 int xhci_device_packet_size(struct xhci_ctrl *hc, int device, int max_packet)
 {
     (void)device;
@@ -183,17 +196,27 @@ static struct {
     int pending; /* a command issued and not yet answered */
     int answer;  /* 1 to answer it with `status`, 0 to leave it */
     int status;  /* the answer's status */
+
+    /* The slot the answer gives back, the slot of the last Disable Slot, and
+     * the slot `xhci_device_closed` was told of; 0 for none. */
     int result_device;
     int disabled_device;
     int closed_device;
     int refuse_issue; /* every issue answers -1 */
+
+    /* The first 8 commands issued, in order, and the endpoint each named;
+     * `count` is every command issued, which may be more. */
     int issued[8];
-    int endpoint[8]; /* the endpoint each command named */
+    int endpoint[8];
     int count;
     int ep_state; /* the endpoint's state, as the driver would report it */
+
+    /* The calls that set and that cleared a quiescing flag. */
     int quiescing_on, quiescing_off;
     int quiescing_endpoint; /* the endpoint the last flag call named */
     int quiescing[32];      /* the flag per endpoint */
+
+    /* The calls of `xhci_endpoint_retire_all`. */
     int retired_all;
     int submits; /* transfers the core tried to submit */
 } ring;
@@ -225,6 +248,7 @@ static int ring_issue(int what, int endpoint)
     return 0;
 }
 
+/** Empty the record, with no command pending and the endpoint running. */
 static void ring_reset(void)
 {
     int i;
@@ -251,23 +275,27 @@ static void ring_reset(void)
     ring.submits = 0;
 }
 
+/** Issue Disable Slot for `device`, recorded as `CMD_DISABLE`. */
 int xhci_device_close(struct xhci_ctrl *hc, int device)
 {
     ring.disabled_device = device;
     return ring_issue(CMD_DISABLE, 0);
 }
 
+/** Record that the core gave back the driver's record of `device`. */
 void xhci_device_closed(struct xhci_ctrl *hc, int device)
 {
     (void)hc;
     ring.closed_device = device;
 }
 
+/** Return 0: the ring is never busy with a command of the driver's own. */
 int xhci_command_busy(struct xhci_ctrl *hc)
 {
     return 0;
 }
 
+/** Return -1: no endpoint is configured. */
 int xhci_endpoint_open(struct xhci_ctrl *hc, int device, const struct usb_endpoint *endpoint)
 {
     (void)device;
@@ -275,6 +303,11 @@ int xhci_endpoint_open(struct xhci_ctrl *hc, int device, const struct usb_endpoi
     return -1;
 }
 
+/**
+ * Answer the pending command once a row has set `ring.answer`: return 1 for
+ * success, which leaves the endpoint stopped after a stop, reset or dequeue,
+ * -1 for a failure, and 0 while there is no answer.
+ */
 int xhci_command_done(struct xhci_ctrl *hc, struct usb_command_result *out)
 {
     if (!ring.pending || !ring.answer) {
@@ -295,6 +328,8 @@ int xhci_command_done(struct xhci_ctrl *hc, struct usb_command_result *out)
     return ring.status == USB_XFER_OK ? 1 : -1;
 }
 
+/** Count a transfer, or return -1 on an endpoint marked quiescing, as the
+ * driver does. */
 int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint, const struct usb_transfer *transfer)
 {
     (void)device;
@@ -306,9 +341,7 @@ int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint, const struct usb
     return 0;
 }
 
-/* The class driver the core hands a stick to. This test drives the core's
-   own walk of the descriptors and its enumeration, not that driver, so the
-   stubs record what they were told and nothing more. */
+/** Accept the stick: the mass-storage driver is not under test here. */
 int msc_attach(struct xhci_ctrl *hc, int device, int interface, int ep_in, int ep_out)
 {
     (void)device;
@@ -318,25 +351,30 @@ int msc_attach(struct xhci_ctrl *hc, int device, int interface, int ep_in, int e
     return 0;
 }
 
+/** Do nothing, as `msc_attach` does. */
 void msc_detach(struct xhci_ctrl *hc, int device)
 {
     (void)hc;
     (void)device;
 }
 
+/** Return 1 when no command is pending. */
 int xhci_command_free(struct xhci_ctrl *hc)
 {
     return !ring.pending;
 }
 
+/** Return 0, so a failure records no controller state. */
 int xhci_interrupts_on(struct xhci_ctrl *hc)
 {
     return 0; /* the model's controller sends no interrupts of its own */
 }
 
+/** Do nothing: there are no registers to record. */
 void xhci_state_record(struct xhci_ctrl *hc)
 {}
 
+/** Return -1: the hub driver is not under test here. */
 int hub_attach(struct xhci_ctrl *hc, int index, int device, int interface, int protocol, int ep_dci,
                int depth, int super)
 {
@@ -350,22 +388,26 @@ int hub_attach(struct xhci_ctrl *hc, int index, int device, int interface, int p
     return -1;
 }
 
+/** Do nothing, as `hub_attach` does. */
 void hub_detach(int index)
 {
     (void)index;
 }
 
+/** Do nothing: there is no hub. */
 void hub_step(uint32_t elapsed_ms)
 {
     (void)elapsed_ms;
 }
 
+/** Return 0: no completion is a hub's. */
 int hub_completion(const struct usb_completion *completion)
 {
     (void)completion;
     return 0;
 }
 
+/** Report nothing connected and return -1: there is no hub port. */
 int hub_port_status(struct xhci_ctrl *hc, int owner, int port, struct usb_port_status *out)
 {
     (void)owner;
@@ -374,6 +416,7 @@ int hub_port_status(struct xhci_ctrl *hc, int owner, int port, struct usb_port_s
     return -1;
 }
 
+/** Return 0, as `hub_port_status` finds no port. */
 int hub_port_settled(struct xhci_ctrl *hc, int owner, int port)
 {
     (void)owner;
@@ -381,6 +424,7 @@ int hub_port_settled(struct xhci_ctrl *hc, int owner, int port)
     return 0;
 }
 
+/** Return -1: there is no hub port to reset. */
 int hub_port_reset_begin(struct xhci_ctrl *hc, int owner, int port)
 {
     (void)owner;
@@ -388,6 +432,7 @@ int hub_port_reset_begin(struct xhci_ctrl *hc, int owner, int port)
     return -1;
 }
 
+/** Return -1, as `hub_port_reset_begin` does. */
 int hub_port_reset_done(struct xhci_ctrl *hc, int owner, int port)
 {
     (void)owner;
@@ -395,48 +440,57 @@ int hub_port_reset_done(struct xhci_ctrl *hc, int owner, int port)
     return -1;
 }
 
+/** Do nothing: there is no disk. */
 void usbdisk_step(void)
 {}
 
+/** Do nothing: the mass-storage driver is not under test here. */
 void msc_step(uint32_t elapsed_ms)
 {
     (void)elapsed_ms;
 }
 
+/** Return 0: no completion is a stick's. */
 int msc_completion(const struct usb_completion *completion)
 {
     (void)completion;
     return 0;
 }
 
+/** Return 0: no transfer completes. */
 int xhci_poll(struct xhci_ctrl *hc, struct usb_completion *out)
 {
     (void)out;
     return 0;
 }
 
+/** Issue Reset Endpoint, recorded as `CMD_RESET`. */
 int xhci_endpoint_reset(struct xhci_ctrl *hc, int device, int endpoint)
 {
     (void)device;
     return ring_issue(CMD_RESET, endpoint);
 }
 
+/** Issue Stop Endpoint, recorded as `CMD_STOP`. */
 int xhci_endpoint_stop(struct xhci_ctrl *hc, int device, int endpoint)
 {
     (void)device;
     return ring_issue(CMD_STOP, endpoint);
 }
+/** Issue Set TR Dequeue Pointer, recorded as `CMD_DEQUEUE`. */
 int xhci_endpoint_dequeue_here(struct xhci_ctrl *hc, int device, int endpoint)
 {
     (void)device;
     return ring_issue(CMD_DEQUEUE, endpoint);
 }
+/** Return the endpoint's state as the row set it in `ring.ep_state`. */
 int xhci_endpoint_state(struct xhci_ctrl *hc, int device, int endpoint)
 {
     (void)device;
     (void)endpoint;
     return ring.ep_state;
 }
+/** Set or clear the quiescing flag of `endpoint`, and count the calls. */
 void xhci_endpoint_quiescing(struct xhci_ctrl *hc, int device, int endpoint, int on)
 {
     (void)device;
@@ -448,22 +502,24 @@ void xhci_endpoint_quiescing(struct xhci_ctrl *hc, int device, int endpoint, int
         ring.quiescing_off++;
     }
 }
+/** Count a retirement of every transfer queued on the endpoint. */
 void xhci_endpoint_retire_all(struct xhci_ctrl *hc, int device, int endpoint)
 {
     (void)device;
     (void)endpoint;
     ring.retired_all++;
 }
-/* The stick driver's word that a slot was given back, counted. */
+/* The calls of `msc_slot_closed`, which tells the stick driver that a slot
+ * was given back. */
 static int slots_closed;
+/** Count the call. */
 void msc_slot_closed(struct xhci_ctrl *hc, int device)
 {
     (void)device;
     slots_closed++;
 }
 
-/* The class driver, which this test does not exercise: what it does with a
-   report is its own file's business, and this one is about the walk. */
+/** Do nothing: the HID driver has its own test, hid_hosttest.c. */
 void hid_report(int slot, int kind, const uint8_t *report, int length)
 {
     (void)slot;
@@ -472,20 +528,23 @@ void hid_report(int slot, int kind, const uint8_t *report, int length)
     (void)length;
 }
 
+/** Do nothing, as `hid_report` does. */
 void hid_gone(int slot)
 {
     (void)slot;
 }
 
+/** Do nothing: no row checks the announcement of a mouse. */
 void input_mouse_found(void)
 {}
 
-/** The core reads a device's record with interrupts off; the host has none. */
+/** Return 0: the core masks interrupts, and the host has none. */
 uint32_t kirq_save(void)
 {
     return 0;
 }
 
+/** Do nothing, as `kirq_save` does. */
 void kirq_restore(uint32_t flags)
 {
     (void)flags;
@@ -517,7 +576,8 @@ static const unsigned char keyboard_config[] = {
     7, 5,  0x81, 3, 8, 0, 10            /* endpoint 1, in, interrupt, 8 bytes */
 };
 
-/** Give the walker its own buffer of exactly the right size. */
+/** Walk a copy of `length` bytes of `bytes` in a buffer of exactly that
+ * size, so AddressSanitizer catches a read past the end. */
 static void walk(const unsigned char *bytes, int length, struct usb_interface_info *out)
 {
     unsigned char *copy = (unsigned char *)malloc((unsigned long)(length > 0 ? length : 1));
@@ -532,7 +592,8 @@ static void walk(const unsigned char *bytes, int length, struct usb_interface_in
 
 /* ---- the quiesce, and the slot given back ---- */
 
-/** 1 when the ring's record is exactly `want`, every endpoint command on 3. */
+/** Return 1 when the ring's record is exactly the `n` commands of `want` and
+ * every endpoint command named endpoint 3. */
 static int issued_is(const int *want, int n)
 {
     int i;
@@ -551,7 +612,11 @@ static int issued_is(const int *want, int n)
     return 1;
 }
 
-/** A device the core did not enumerate, in `state` with `slot`, as a stick. */
+/**
+ * Put a stick in entry `i` without enumerating it: in `state`, on `slot`, on
+ * root port `i`, with endpoint DCIs 3 (IN) and 4 (OUT) and a deadline one
+ * step away. Return the entry.
+ */
 static struct usb_device_state *stick_at(int i, int state, int slot)
 {
     struct usb_device_state *d = dev_take(i);
@@ -571,12 +636,22 @@ static struct usb_device_state *stick_at(int i, int state, int slot)
     return d;
 }
 
+/**
+ * Check `usb_core_endpoint_quiesce` on endpoint 3 of a stick in every state
+ * of the endpoint and with every failure of a command, then the Disable Slot
+ * of a closing stick. The quiesce takes the command turn that enumeration
+ * takes, `enumerating[0]`, and holds it from the first command to the answer
+ * of the last. A failed report transfer leaves the endpoint halted or in the
+ * Error state, and the device is quiesced before it reports again, as after
+ * a stall. The stick driver hears that its slot was given back only after a
+ * Disable Slot succeeds: not before, not on a refused disable, and not on a
+ * tombstone.
+ */
 static void quiesce_rows(void)
 {
     struct usb_device_state *d;
 
-    /* A running endpoint: Stop Endpoint, then Set TR Dequeue, the turn held
-       from the first to the answer of the second. */
+    /* A running endpoint: Stop Endpoint, then Set TR Dequeue Pointer. */
     usb_core_reset();
     ring_reset();
     d = stick_at(0, ST_RUNNING, 1);
@@ -713,8 +788,7 @@ static void quiesce_rows(void)
           usb_core_endpoint_quiesce(the_ctrl, 1, 3) == -1);
     CHECK("with the turn given back", enumerating[0] == -1 && ring.quiescing_off == 1);
 
-    /* A halted endpoint is reset rather than stopped; a stopped one needs
-       only the dequeue. */
+    /* A halted endpoint is reset first; a stopped one is only moved on. */
     usb_core_reset();
     ring_reset();
     d = stick_at(0, ST_RUNNING, 1);
@@ -745,9 +819,7 @@ static void quiesce_rows(void)
               usb_core_endpoint_quiesce(the_ctrl, 1, 3) == 1 && ring.retired_all == 1);
     }
 
-    /* A report transfer that fails: the endpoint is halted or in the Error
-       state, and the device goes through the quiesce before it reports
-       again, as it does after a stall. */
+    /* A report transfer that fails, with a USB error and with a stall. */
     {
         int which;
 
@@ -785,9 +857,7 @@ static void quiesce_rows(void)
         }
     }
 
-    /* The slot given back: the stick driver hears of it after Disable Slot
-       succeeds, and not before, not on a refused disable, and not on a
-       tombstone. */
+    /* The slot given back, by a Disable Slot that succeeds or fails. */
     usb_core_reset();
     ring_reset();
     slots_closed = 0;
@@ -837,7 +907,10 @@ static void quiesce_rows(void)
     usb_core_reset();
 }
 
-/** Check cleanup of an Enable Slot that outlives the enumeration deadline. */
+/**
+ * Check the cleanup of an Enable Slot that outlives the enumeration deadline,
+ * once answered with a failure and once with a slot, which must be closed.
+ */
 static void slot_timeout_rows(void)
 {
     struct usb_device_state *d;
@@ -886,7 +959,12 @@ static void slot_timeout_rows(void)
     usb_core_reset();
 }
 
-/** Check that all selected endpoints belong to one complete interface. */
+/**
+ * Check that the endpoints the walk selects all belong to one complete
+ * interface: a storage interface split across two, on an alternate setting,
+ * or cut short is not taken, and a complete interface after an incomplete
+ * one of another class is.
+ */
 static void interface_rows(void)
 {
     unsigned char config[] = {9,    2, 48, 0, 2,    1, 0,   0x80, 50, 9, 4, 0,    0, 1, 8, 6,
@@ -962,6 +1040,15 @@ static void interface_rows(void)
           info.found && info.kind == USB_KIND_HID && info.number == 0 && info.ep_number == 4);
 }
 
+/**
+ * Run the rows and print the result; return 1 when a row failed.
+ *
+ * The walk is given a boot keyboard's configuration, then copies with a
+ * few bytes changed: interfaces and endpoints of kinds the core does not drive,
+ * and lengths no device would send, which a walk that trusted them would
+ * read past or never finish. The last descriptor cut short is read past
+ * only by a walk that trusts its length, which the sanitizer reports.
+ */
 int main(void)
 {
     struct usb_interface_info info;
@@ -983,13 +1070,11 @@ int main(void)
     CHECK("that endpoint's packet size", info.ep_max_packet == 8);
     CHECK("and the interval it asked for", info.ep_interval == 10);
 
-    /* The descriptors between the interface and its endpoint are skipped by
-       their own lengths rather than by knowing what they are. */
+    /* A descriptor after the interface is skipped by its length alone. */
     for (i = 0; i < sizeof(broken); i++) {
         broken[i] = keyboard_config[i];
     }
-    broken[19] = 0x22; /* the HID descriptor, with a type this kernel has no
-                          case for at all */
+    broken[19] = 0x22; /* the HID descriptor, given a type with no case */
     walk(broken, (int)sizeof(broken), &info);
     CHECK("a descriptor this kernel does not know is stepped over by its length", info.found == 1);
 
@@ -1052,8 +1137,7 @@ int main(void)
     walk(broken, (int)sizeof(broken), &info);
     CHECK("an endpoint of the wrong kind is not taken", info.found == 0);
 
-    /* Descriptors no device would send. Each of these reads past the buffer,
-       or never ends, in a walker that trusts what it is given. */
+    /* Descriptors no device would send. */
     for (i = 0; i < sizeof(broken); i++) {
         broken[i] = keyboard_config[i];
     }
@@ -1078,9 +1162,7 @@ int main(void)
     walk(keyboard_config, 20, &info);
     CHECK("a configuration cut short is walked only as far as it goes", info.found == 0);
 
-    /* The last descriptor cut in half: its length says seven bytes and three
-       arrived. A walk that reads it reads past the end of what the device
-       sent, which is what the sanitizer is here to see. */
+    /* The last descriptor cut short: it says seven bytes and three arrived. */
     walk(keyboard_config, (int)sizeof(keyboard_config) - 4, &info);
     CHECK("a descriptor cut off at the end is not read", info.found == 0);
 
