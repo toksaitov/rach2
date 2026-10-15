@@ -1,6 +1,8 @@
-# Rach2 house style: LLVM base, 4-space, Allman braces on functions but K&R on
-# control statements, pointers bound right, includes left as written, 100 cols.
-# Every in-house C file is formatted with it; tests/run style refuses one
+# .clang-format: the layout of Rach2's C code. LLVM base, an indent of four
+# spaces, Allman braces on functions and K&R braces on control statements,
+# pointers bound right, includes left as written, and 100 columns.
+#
+# Every in-house C file is formatted with it; tests/run style fails on one
 # that differs, judged by the clang-format version tools/setup/judges
 # records. The reformat commits are listed in tools/verify/blame-ignore-revs.
 ---
