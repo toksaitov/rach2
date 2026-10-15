@@ -20,7 +20,7 @@
 #   ARCH=x86_64 ./run.sh os-real  # the same system on the x86-64 kernel
 #
 # Networking (on QEMU's SLIRP user network) is enabled by default:
-#   NET=off ./run.sh os-real                              # QEMU's default card
+#   NET=off ./run.sh os-real                              # no network card
 #   NET_HOSTFWD="hostfwd=tcp::2222-:22" ./run.sh os-real  # forward SSH to :2222
 #   NIC=e1000 ./run.sh os-real                            # the other card
 #

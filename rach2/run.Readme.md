@@ -11,7 +11,7 @@ The scripts in `rach2/` boot the kernel under QEMU: with a RAM root, with a disk
 | `run.sh [IMAGE] [AUDIO]` | `build/rach2/kernel` by `-kernel`, with `build/images/IMAGE.krffs` as its boot module by `-initrd`. With no image the kernel has no root and halts, unless `RESCUE` asks for the debug shell or `DISK` gives it a root. |
 | `run_from_iso.sh IMAGE [AUDIO]` | `build/images/IMAGE.iso` from the CD drive, through GRUB. |
 | `run_from_disk.sh [AUDIO]` | `build/images/os-real-grub.disk`, or `os-real-grub-with-key.disk` in a tree with a recovery key, with no `-kernel`: the firmware runs the disk's boot code and GRUB's BIOS core, which loads the kernel from the boot partition. |
-| `debug.sh [AUDIO]` | `build/rach2/kernel` alone, stopped at its first instruction with a GDB server on port 1234, and GDB attached to `kernel.debug` through `.gdbinit`. Run it from `rach2/`. |
+| `debug.sh [IMAGE] [AUDIO]` | `build/rach2/kernel`, with `build/images/IMAGE.krffs` by `-initrd` as `run.sh` boots it, stopped at its first instruction with a GDB server on port 1234, and GDB attached to `kernel.debug` through `.gdbinit`. With no image it adds `rach2.rescue`, so the kernel reaches the debug shell instead of halting. Run it from `rach2/`. |
 
 `AUDIO` is `speaker`, the default, `sb16` or `hda`. The host's audio backend is CoreAudio on macOS, PulseAudio on Linux when it or PipeWire's server for it is installed, DirectSound on Windows, and SDL otherwise. `grub_install.sh DIR`, run from `rach2/`, copies the i686 kernel and the os-simple image, or the image given in `RACH2_IMAGE`, into an existing GRUB directory; it writes each file whole, since some GRUB builds refuse a sparse file.
 
@@ -31,15 +31,15 @@ RESCUE=1 ./run.sh               # no root, the kernel debug shell
 | Variable | Read by | Default | Effect |
 | --- | --- | --- | --- |
 | `ARCH` | every script | `i686` | `x86_64` boots `build/x86_64/rach2/kernel` and the images under `build/x86_64/images/` on `qemu-system-x86_64`. |
-| `CPU` | `run.sh`, `run_from_iso.sh`, `run_from_disk.sh` | `max` | The QEMU processor model. `max` has `RDRAND` and `RDSEED`, so the random generator has a trusted seed ([krandom](sys/lib/krandom.Readme.md)); without one, `getrandom` fails and Dropbear cannot make its keys. |
+| `CPU` | every script | `max` | The QEMU processor model. `max` has `RDRAND` and `RDSEED`, so the random generator has a trusted seed ([krandom](sys/lib/krandom.Readme.md)); without one, `getrandom` fails and Dropbear cannot make its keys. |
 | `NIC` | every script | `rtl8139` | The network card, `rtl8139` or `e1000`, on QEMU's user network. |
 | `NET_HOSTFWD` | every script | `hostfwd=tcp::8080-:80` | The user network's forwarding rule. `run_from_disk.sh` forwards host port 2222 to the guest's SSH server instead. |
-| `NET` | every script | `on` | `off` leaves the network options out, so QEMU adds its default e1000 with no port forwarded. |
+| `NET` | every script | `on` | `off` passes `-nic none`, so the machine has no network card; without it QEMU would add its default e1000. |
 | `DISPLAY_MODE` | every script | unset | Passed to QEMU's `-display`. Unset, it is `none` on a host other than macOS and Windows when neither `DISPLAY` nor `WAYLAND_DISPLAY` is set, as in an ssh session, and QEMU opens no window; the console is then the terminal alone. |
 | `DISK` | `run.sh` | none | A raw disk image, attached on the IDE bus, and `rach2.fsdisk` added to the command line. |
 | `DISKBUS` | `run.sh` | IDE | `ahci` attaches `DISK` to an ICH9 AHCI controller instead, and adds `rach2.disk=ahci`, which the kernel ignores. |
 | `DISKNOMOUNT` | `run.sh` | none | `1` attaches `DISK` without `rach2.fsdisk`, so that the kernel mounts the module and the debug shell's `disk` reads the disk. |
-| `RESCUE` | `run.sh` | none | `1` adds `rach2.rescue`. |
+| `RESCUE` | `run.sh`, `debug.sh` | none | `1` adds `rach2.rescue`. |
 
 ### A disk root
 

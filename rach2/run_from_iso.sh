@@ -13,7 +13,7 @@
 #   ./run_from_iso.sh os-simple sb16 # ish and utils/, Sound Blaster 16
 #
 # Networking (on QEMU's SLIRP user network) is enabled by default:
-#   NET=off ./run_from_iso.sh os-real                    # QEMU's default card
+#   NET=off ./run_from_iso.sh os-real                    # no network card
 #   NET_HOSTFWD="hostfwd=tcp::2222-:22" ./run_from_iso.sh os-real  # forward SSH
 #   NIC=e1000 ./run_from_iso.sh os-real                 # the other card
 

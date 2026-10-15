@@ -11,7 +11,7 @@
 # on what build/x86_64/ holds.
 #
 # Networking (on QEMU's SLIRP user network) is enabled by default:
-#   NET=off                     pass no network options (see below)
+#   NET=off                     attach no network card (-nic none)
 #   NET_HOSTFWD="hostfwd=..."   override the host port forwards
 #   NIC=rtl8139|e1000           choose the card (default rtl8139)
 #
@@ -104,14 +104,14 @@ esac
 # The kernel drives two of QEMU's cards, so the card is a choice. The RTL8139
 # is the default because it is the card the test harness gives a machine. The
 # e1000 is the 82540EM, which is what QEMU attaches when nothing asks for a
-# card, so it is what a plain qemu-system-i386 command line gets; a boot with
-# NET=off, which passes no network options at all, therefore still has a card
-# this kernel can drive, on QEMU's user network with no port forwarded.
+# card, so it is what a plain qemu-system-i386 command line gets. NET=off
+# passes -nic none, which turns that default card off, so the machine has no
+# network card at all.
 NET="${NET:-on}"
 NIC="${NIC:-rtl8139}"
 NET_HOSTFWD="${NET_HOSTFWD:-hostfwd=tcp::8080-:80}"
 if [ "$NET" = "off" ]; then
-    NET_OPTS=""
+    NET_OPTS="-nic none"
 else
     NET_OPTS="-netdev user,id=net0,$NET_HOSTFWD -device $NIC,netdev=net0"
 fi

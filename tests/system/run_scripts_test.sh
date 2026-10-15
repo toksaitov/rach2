@@ -8,14 +8,17 @@
 # RDRAND gives the kernel trusted entropy: without one, getrandom and the
 # random devices fail closed and dropbear can make no host key. The rows
 # require that default and the override of each script, and the audio,
-# network, disk-bus and rescue options of run.sh, and that ARCH=x86_64 boots
-# the x86-64 build's kernel and image on qemu-system-x86_64. They also require
+# network, disk-bus and rescue options of run.sh, `-nic none` for NET=off,
+# that debug.sh boots its image or, with none, the debug shell, and that
+# ARCH=x86_64 boots the x86-64 build's kernel and image on qemu-system-x86_64.
+# They also require
 # `-display none` from every script on a Linux host with neither DISPLAY nor
 # WAYLAND_DISPLAY set, no -display with either set or on macOS, and DISPLAY_MODE
 # in its place when it is set. Copies of the scripts run in a private tree
 # against stand-ins for both emulators on the PATH, which write their arguments
 # one per line, so nothing boots; the x86-64 one writes its own name first. A
-# stand-in uname names the host system as UNAME_S says, Linux by default.
+# stand-in uname names the host system as UNAME_S says, Linux by default, and
+# a stand-in x86_64-elf-gdb waits for those arguments and exits.
 #
 # With --mutate each fault below is put into the private copy of one script,
 # must fail the row named for it, and is restored and touched before every row
@@ -49,7 +52,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 mkdir -p "$work/rach2" "$work/build/rach2" "$work/build/images" "$work/bin" "$work/saved" \
     "$work/build/x86_64/rach2" "$work/build/x86_64/images"
-for f in run.sh run_from_disk.sh run_from_iso.sh qemu_devices.sh; do
+for f in run.sh run_from_disk.sh run_from_iso.sh debug.sh qemu_devices.sh; do
     cp "$repo/rach2/$f" "$work/rach2/$f"
     cp "$repo/rach2/$f" "$work/saved/$f"
 done
@@ -75,6 +78,15 @@ cat >"$work/bin/uname" <<'EOF'
 echo "${UNAME_S:-Linux}"
 EOF
 chmod +x "$work/bin/uname"
+cat >"$work/bin/x86_64-elf-gdb" <<'EOF'
+#!/bin/sh
+i=0
+while [ ! -s "$ARGS_OUT" ] && [ "$i" -lt 5 ]; do
+    sleep 1
+    i=$((i + 1))
+done
+EOF
+chmod +x "$work/bin/x86_64-elf-gdb"
 images="$work/rach2/../build/images"
 
 # pass ROW: report that ROW passed.
@@ -166,6 +178,7 @@ rows()
     run run-hda -- run.sh test hda
     row run-hda -device intel-hda -device hda-duplex,audiodev=audio0
     run run-nonet NET=off -- run.sh test
+    row run-nonet -nic none
     absent run-nonet -netdev
     run run-e1000 NIC=e1000 -- run.sh test
     row run-e1000 -device e1000,netdev=net0
@@ -196,6 +209,14 @@ rows()
     refused run-x86_64-missing 1 "build it with 'make ARCH=x86_64 os-simple-image'"
     run run-arch ARCH=arm -- run.sh test
     refused run-arch 2 "ARCH is i686 or x86_64, not arm"
+    run debug-rescue -- debug.sh
+    row debug-rescue -s -S -cpu max -kernel "$work/rach2/../build/rach2/kernel" \
+        -append rach2.rescue
+    run debug-image -- debug.sh test
+    row debug-image -initrd "$images/test.krffs"
+    absent debug-image rach2.rescue
+    run debug-missing -- debug.sh os-simple
+    refused debug-missing 1 "build it with 'make os-simple-image'"
     run disk-default -- run_from_disk.sh
     row disk-default -cpu max \
         "file=$images/os-real-grub.disk,format=raw,if=ide,index=0,media=disk" \
@@ -240,12 +261,13 @@ fi
 # The dollars are the scripts' own, left for their shell.
 # shellcheck disable=SC2016
 for fault in run-default run-override disk-default disk-override iso-default iso-override \
-    display-default display-x11; do
+    display-default display-x11 net-off debug-rescue; do
     case $fault in
         run-*) copy=run.sh ;;
         disk-*) copy=run_from_disk.sh ;;
         iso-*) copy=run_from_iso.sh ;;
-        display-*) copy=qemu_devices.sh ;;
+        display-* | net-*) copy=qemu_devices.sh ;;
+        debug-*) copy=debug.sh ;;
     esac
     case $fault in
         display-default)
@@ -254,6 +276,12 @@ for fault in run-default run-override disk-default disk-override iso-default iso
         display-x11)
             change "$copy" '[ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]' '[ -z "${WAYLAND_DISPLAY:-}" ]'
             named=run-x11 ;;
+        net-off)
+            change "$copy" 'NET_OPTS="-nic none"' 'NET_OPTS=""'
+            named=run-nonet ;;
+        debug-rescue)
+            change "$copy" '    set -- -append rach2.rescue' '    set --'
+            named=debug-rescue ;;
         *-default)
             change "$copy" 'CPU="${CPU:-max}"' 'CPU="${CPU:-qemu64}"'
             named=${fault%-default}-default ;;
@@ -283,4 +311,4 @@ if [ "$mutate" -eq 2 ]; then
     echo 'run-scripts-test: texts: every fault is once in its source'
     exit 0
 fi
-echo "run-scripts-test: result: pass: eight faults failed their rows; restored rows passed"
+echo "run-scripts-test: result: pass: ten faults failed their rows; restored rows passed"
