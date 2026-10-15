@@ -43,8 +43,9 @@
 #include <unistd.h>
 
 /* The descriptors a compile may hold, FD_RESERVED of them besides the
-   include chain. */
-#define FD_LIMIT    16
+   include chain: FD_TABLE_LIMIT of rach2/sys/fs/fd.h, which is also the
+   default soft RLIMIT_NOFILE. */
+#define FD_LIMIT    1024
 #define FD_RESERVED 4 /* stdin, stdout, stderr, and the output file */
 
 /* The kernel's execve budget for the argv and environment strings together
@@ -1472,7 +1473,7 @@ static int check_limits(void)
     if (depth + FD_RESERVED > FD_LIMIT)
         fail("the deepest kernel include chain is %d files; with the %d "
              "descriptors a compile has besides its includes that exceeds "
-             "the %d-descriptor table",
+             "the %d a process may hold",
              depth, FD_RESERVED, FD_LIMIT);
 
     for (f = 0; f < 3; f++) {
