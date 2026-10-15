@@ -60,7 +60,7 @@ static uint64_t le64(const uint8_t *p)
     return (uint64_t)le32(p) | (uint64_t)le32(p + 4) << 32;
 }
 
-/** Store `v` little-endian at `p`; `put64` stores 64 bits. */
+/** Store the 32 bits of `v` little-endian at `p`. */
 static void put32(uint8_t *p, uint32_t v)
 {
     p[0] = (uint8_t)v;
@@ -69,6 +69,7 @@ static void put32(uint8_t *p, uint32_t v)
     p[3] = (uint8_t)(v >> 24);
 }
 
+/** Store the 64 bits of `v` little-endian at `p`. */
 static void put64(uint8_t *p, uint64_t v)
 {
     put32(p, (uint32_t)v);
