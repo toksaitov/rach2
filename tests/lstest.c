@@ -101,13 +101,21 @@ static void print(const char *s)
     sys_write(STDOUT_FILENO, s, strlen(s));
 }
 
-/** Write `n`, 0 or more, in decimal to standard output. */
+/** Write `n` in decimal to standard output, with a minus sign before it when
+ * it is negative. */
 static void print_num(int n)
 {
-    if (n >= 10) {
-        print_num(n / 10);
+    unsigned int u = (unsigned int)n;
+    char c;
+
+    if (n < 0) {
+        sys_write(STDOUT_FILENO, "-", 1);
+        u = 0u - u;
     }
-    char c = '0' + (n % 10);
+    if (u >= 10) {
+        print_num((int)(u / 10));
+    }
+    c = (char)('0' + u % 10);
     sys_write(STDOUT_FILENO, &c, 1);
 }
 

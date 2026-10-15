@@ -56,13 +56,11 @@ typedef unsigned char uint8_t;
 #define BOUND_CLIENT_PORT 7301
 
 /* Where the simultaneous-open case's port pairs start; each round takes two. */
-#define SIM_PORT_A       7310
-#define TCP_PORT         7200
+#define SIM_PORT_A      7310
+#define TCP_PORT        7200
 /* The round trips of `tcp_loop_pingpong`, a byte each way. */
-#define PINGPONG_ROUNDS  200
-/* A tick of the 100 Hz timer, in milliseconds. No row reads it. */
-#define PINGPONG_TICK_MS 10
-#define CLOSED_PORT      7300
+#define PINGPONG_ROUNDS 200
+#define CLOSED_PORT     7300
 
 #define EADDRINUSE  98
 #define EPIPE       32
@@ -727,10 +725,8 @@ static void tcp_loop(void)
 
 /* The bytes `tcp_loop_bulk` sends, more than the loopback ring holds. */
 #define BULK_BYTES      (256u * 1024u)
-/* LOOP_PEAK_FLOOR is the least the ring's high-water mark must reach, so that
- * the transfer is known to have pressed the ring. LOOP_RING_SLOTS is read by
- * no row, and the ring has 64 slots (ip.c). */
-#define LOOP_RING_SLOTS 48u
+/* The least the ring's high-water mark must reach, so that the transfer is
+ * known to have pressed the ring. */
 #define LOOP_PEAK_FLOOR 8u
 
 /** The counter `key` of /proc/stat, `keylen` bytes with its trailing space,
