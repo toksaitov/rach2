@@ -121,7 +121,10 @@ main()
     git config core.hooksPath tools/git-hooks
     if [ "$0" != "$state/run/worker.sh" ]; then
         refresh
-        update worker.sh
+        while update worker.sh 2>> "$state/loop.log"; [ $? -eq 2 ]; do
+            log "update failed"
+            sleep 60
+        done
         log "loop starts: $agent in $repo"
         exec sh "$state/run/worker.sh" -a "$agent" -s "$state" -r "$repo"
     fi
@@ -132,10 +135,16 @@ main()
             sleep 60
             continue
         fi
-        if update worker.sh; then
-            log "restarting as master's loop"
-            exec sh "$state/run/worker.sh" -a "$agent" -s "$state" -r "$repo"
-        fi
+        update worker.sh 2>> "$state/loop.log"
+        case $? in
+            0)
+                log "restarting as master's loop"
+                exec sh "$state/run/worker.sh" -a "$agent" -s "$state" -r "$repo" ;;
+            2)
+                log "update failed"
+                sleep 60
+                continue ;;
+        esac
         issue=$(cat "$state/issue" 2> /dev/null)
         if [ -n "$issue" ]; then
             if ! held=$(sh "$state/run/board.sh" mine "$issue"); then

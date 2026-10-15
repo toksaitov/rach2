@@ -4,8 +4,10 @@
 # Each loop has a state directory, STATE. The loop runs from a copy of
 # `tools/flow` in STATE/run that `update` takes from `origin/master`, so the
 # version on master is the one that runs, whatever branch the clone is on,
-# and a loop restarts as master's version when master changes it. While a
-# session runs, STATE/session has the id of its process group.
+# and a loop restarts as master's version when master changes it. When the
+# copy fails, STATE/run stays as it was, and the loop logs the failure and
+# tries again a minute later. While a session runs, STATE/session has the id
+# of its process group.
 
 # log TEXT: append TEXT to STATE/loop.log with the time in UTC.
 log()
@@ -14,29 +16,44 @@ log()
 }
 
 # update SCRIPT: put master's `tools/flow` in STATE/run, or this clone's
-# when master has none, and succeed when SCRIPT or this file changed, which
-# the loop must restart to run. The new copy replaces the old by a rename, so
-# a shell that is reading the old one keeps reading the file it opened.
+# when master has none. Return 0 when SCRIPT or this file changed, which the
+# loop must restart to run; 1 when neither did; and 2 when a step failed or
+# the new copy lacks SCRIPT or this file, which leaves STATE/run as it was.
+# The new copy is built in STATE/new and replaces the old by a rename, so a
+# shell that is reading the old one keeps reading the file it opened.
 update()
 {
-    rm -rf "$state/new"
-    mkdir -p "$state/new"
+    rm -rf "$state/new" "$state/new.tar"
+    mkdir -p "$state/new" || return 2
     if git rev-parse -q --verify origin/master:tools/flow/lib.sh > /dev/null; then
-        git archive origin/master tools/flow | tar -x -f - -C "$state/new" --strip-components 2
+        git archive -o "$state/new.tar" origin/master tools/flow &&
+            tar -x -f "$state/new.tar" -C "$state/new" --strip-components 2
     else
         cp "$repo"/tools/flow/* "$state/new/"
+    fi
+    copied=$?
+    rm -f "$state/new.tar"
+    if [ "$copied" -ne 0 ] || [ ! -f "$state/new/$1" ] || [ ! -f "$state/new/lib.sh" ]; then
+        rm -rf "$state/new"
+        return 2
     fi
     if diff -r -q "$state/new" "$state/run" > /dev/null 2>&1; then
         rm -rf "$state/new"
         return 1
     fi
-    restart=no
+    restart=1
     cmp -s "$state/new/$1" "$state/run/$1" && cmp -s "$state/new/lib.sh" "$state/run/lib.sh" ||
-        restart=yes
+        restart=0
     rm -rf "$state/old"
-    [ ! -d "$state/run" ] || mv "$state/run" "$state/old"
-    mv "$state/new" "$state/run"
-    [ "$restart" = yes ]
+    if [ -d "$state/run" ] && ! mv "$state/run" "$state/old"; then
+        rm -rf "$state/new"
+        return 2
+    fi
+    if ! mv "$state/new" "$state/run"; then
+        [ ! -d "$state/old" ] || mv "$state/old" "$state/run"
+        return 2
+    fi
+    return "$restart"
 }
 
 # refresh: bring a clone with nothing uncommitted or unpushed to

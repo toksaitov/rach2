@@ -43,7 +43,10 @@ main()
     wait_session
     if [ "$0" != "$state/run/manager.sh" ]; then
         refresh
-        update manager.sh
+        while update manager.sh 2>> "$state/loop.log"; [ $? -eq 2 ]; do
+            log "update failed"
+            sleep 60
+        done
         log "loop starts in $repo"
         exec sh "$state/run/manager.sh" -s "$state" -r "$repo"
     fi
@@ -53,10 +56,16 @@ main()
             sleep 60
             continue
         fi
-        if update manager.sh; then
-            log "restarting as master's loop"
-            exec sh "$state/run/manager.sh" -s "$state" -r "$repo"
-        fi
+        update manager.sh 2>> "$state/loop.log"
+        case $? in
+            0)
+                log "restarting as master's loop"
+                exec sh "$state/run/manager.sh" -s "$state" -r "$repo" ;;
+            2)
+                log "update failed"
+                sleep 60
+                continue ;;
+        esac
         t=$(date -u '+%m%d-%H%M%S')
         prompt="$(cat "$state/run/manager.txt")
 
