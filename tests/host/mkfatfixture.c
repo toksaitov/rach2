@@ -64,7 +64,7 @@
  * of the volume, so that the cluster count is checked as a bound and not
  * only reported. `--no-signature` leaves out the boot sector's signature.
  *
- * An unknown option builds the default volume.
+ * An unknown option is refused: the maker writes no image and exits 2.
  */
 #include <stdint.h>
 #include <stdio.h>
