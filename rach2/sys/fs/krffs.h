@@ -827,31 +827,16 @@ int krffs_readdir(const char *path, uint32_t index, char *name_out, uint32_t buf
                   int *is_dir_out);
 
 /**
- * Store the fields of a free node in the header at `node` in memory: the
- * magic number, the free type, `size`, `previous_node_size` and a
- * `data_size` of 0. The other fields are left as they are. Returns `node`,
- * or NULL for NULL.
- */
-krffs_node_t *krffs_initialize_free_node(krffs_node_t *node, uint64_t size,
-                                         uint64_t previous_node_size);
-
-/**
- * `krffs_allocate_at` on the boot root, with a NULL `original` for a new
- * node; NULL when `fs` is not `krffs_fs` or the allocation fails.
- */
-krffs_node_t *krffs_allocate_reserved_node(krffs_file_system_t *fs, uint64_t size,
-                                           krffs_node_t *original);
-
-/**
- * `krffs_resize_at` on the boot root; NULL when `fs` is not `krffs_fs`,
- * for a null `node`, or when the resize fails.
+ * `krffs_resize_at` on the boot root; NULL before the mount, when `fs` is
+ * not `krffs_fs`, for a null `node`, or when the resize fails.
  */
 krffs_node_t *krffs_resize_reserved_node(krffs_file_system_t *fs, krffs_node_t *node,
                                          uint64_t size);
 
 /**
  * `krffs_remove_at` on the boot root, whose answer is not reported;
- * nothing when `fs` is not `krffs_fs` or `node` is NULL.
+ * nothing before the mount, when `fs` is not `krffs_fs` or when `node` is
+ * NULL.
  */
 void krffs_remove_reserved_node(krffs_file_system_t *fs, krffs_node_t *node);
 

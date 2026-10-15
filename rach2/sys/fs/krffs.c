@@ -2432,35 +2432,9 @@ uint32_t krffs_reap_orphans(void)
     return krffs_reap_orphans_at(&krffs_root_mount);
 }
 
-krffs_node_t *krffs_initialize_free_node(krffs_node_t *node, uint64_t size,
-                                         uint64_t previous_node_size)
-{
-    if (!node) {
-        return NULL;
-    }
-
-    node->magic = KRFFS_FILE_SYSTEM_MAGIC;
-    node->type = KRFFS_FREE_NODE;
-    node->size = size;
-    node->previous_node_size = previous_node_size;
-    node->data_size = 0;
-
-    return node;
-}
-
-krffs_node_t *krffs_allocate_reserved_node(krffs_file_system_t *fs, uint64_t size,
-                                           krffs_node_t *original)
-{
-    if (fs != krffs_fs || !fs->node) {
-        return NULL;
-    }
-    return krffs_node_of(krffs_allocate_at(&krffs_root_mount, size,
-                                           original ? krffs_offset_of(original) : KRFFS_NO_NODE));
-}
-
 krffs_node_t *krffs_resize_reserved_node(krffs_file_system_t *fs, krffs_node_t *node, uint64_t size)
 {
-    if (fs != krffs_fs || !fs->node || !node) {
+    if (!fs || fs != krffs_fs || !fs->node || !node) {
         return NULL;
     }
     return krffs_node_of(krffs_resize_at(&krffs_root_mount, krffs_offset_of(node), size));
@@ -2468,7 +2442,7 @@ krffs_node_t *krffs_resize_reserved_node(krffs_file_system_t *fs, krffs_node_t *
 
 void krffs_remove_reserved_node(krffs_file_system_t *fs, krffs_node_t *node)
 {
-    if (fs != krffs_fs || !fs->node || !node) {
+    if (!fs || fs != krffs_fs || !fs->node || !node) {
         return;
     }
     krffs_remove_at(&krffs_root_mount, krffs_offset_of(node));
