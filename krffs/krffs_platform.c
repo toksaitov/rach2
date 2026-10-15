@@ -136,9 +136,9 @@ void *krffs_map_file(int file_descriptor, off_t offset, size_t size)
     if (mapping_handle) {
         result = MapViewOfFile(mapping_handle, FILE_MAP_WRITE, offset_high, offset_low, size);
 
-        if (result) {
-            CloseHandle(mapping_handle);
-        } else {
+        CloseHandle(mapping_handle);
+
+        if (!result) {
             result = (void *)-1;
         }
     }
@@ -164,9 +164,9 @@ void *krffs_map_file_readonly(int file_descriptor, off_t offset, size_t size)
     if (mapping_handle) {
         result = MapViewOfFile(mapping_handle, FILE_MAP_READ, offset_high, offset_low, size);
 
-        if (result) {
-            CloseHandle(mapping_handle);
-        } else {
+        CloseHandle(mapping_handle);
+
+        if (!result) {
             result = (void *)-1;
         }
     }

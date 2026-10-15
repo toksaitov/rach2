@@ -117,7 +117,8 @@ int krffs_parse_region_args(int argc, char **argv, uint64_t file_size, uint64_t 
  * shared and writable, so a store into the mapping is a store into the file:
  * `mmap` on Unix, `MapViewOfFile` on Windows. `offset` must be a multiple of
  * the mapping granularity. Returns the address, or `(void *)-1` on failure,
- * as `mmap` does.
+ * as `mmap` does. On Windows the mapping object's handle is closed before the
+ * return, since the view keeps the object.
  */
 void *krffs_map_file(int file_descriptor, off_t offset, size_t size);
 
