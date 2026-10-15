@@ -1,6 +1,12 @@
 /**
- * Check service redirection and exact SSH policy lines in the real init source,
- * and the environment init starts the console's login with.
+ * initpolicy_hosttest.c: init's redirection of its services' output, its
+ * SSH policy lines and server arguments, and the environment it starts the
+ * console's login with.
+ *
+ * `utils/init.c` is included whole, as the metal build with the console
+ * login, with fopen, dup2, unlink, the execs, fork, waitpid and reboot
+ * replaced by the functions below, so that a row can fail a call, send a
+ * signal at a chosen point, and see what a child did by its exit status.
  */
 #define _GNU_SOURCE
 #include <unistd.h>
@@ -30,20 +36,34 @@
 #define RB_POWER_OFF 0x4321fedc
 #endif
 
+/* The failures; the dup2 call that fails, 0 for none, and the calls so far;
+ * and the pipe the ifup stand-in writes a byte to, or -1. */
 static int Failed, Dup_fail, Dup_calls, Notify_fd = -1;
+/* The signal a row sends, 0 for none; whether the child sends it before its
+ * fork returns; whether the worker's fork fails; whether the fork found the
+ * shutdown signals blocked; and the worker's wait status, -1 before it ends. */
 static int Network_signal, Early_signal, Fork_fail, Fork_blocked, Network_status;
+/* The worker's pid: 0 before its fork, -1 in the worker itself. */
 static pid_t Network_pid;
+/* The bytes of /etc/rach2/sshd.conf, or NULL for no file. */
 static const char *Policy;
 static size_t Policy_size;
 
-/** Replace reboot with a distinct child exit without stopping the host. */
+/** init's reboot: exit 90, which no other path exits with, rather than stop
+ * the host. */
 static int policy_reboot(int command)
 {
     (void)command;
     _exit(90);
 }
 
-/** Inject a signal before the worker returns from fork, or fail the fork. */
+/**
+ * init's fork. For the first fork of a signal row, the worker's, note whether
+ * SIGUSR1, SIGUSR2 and SIGTERM are blocked, fail with EAGAIN when `Fork_fail`
+ * is set, and with `Early_signal` have the child send itself the signal
+ * before the fork returns in it. A fork the host refuses ends the test with
+ * status 2.
+ */
 static pid_t policy_fork(void)
 {
     sigset_t mask;
@@ -74,7 +94,8 @@ static pid_t policy_fork(void)
     return pid;
 }
 
-/** Record whether the worker terminated by signal or called reboot. */
+/** init's waitpid: keep the worker's wait status in `Network_status`, which
+ * tells whether it ended by a signal or by the reboot stand-in. */
 static pid_t policy_waitpid(pid_t pid, int *status, int options)
 {
     int result;
@@ -91,7 +112,8 @@ static pid_t policy_waitpid(pid_t pid, int *status, int options)
     return reaped;
 }
 
-/** Supply policy bytes without opening the host's system configuration. */
+/** init's fopen: a temporary file of `Policy`'s bytes, whatever the path,
+ * or NULL when the row has no policy. */
 static FILE *policy_fopen(const char *path, const char *mode)
 {
     FILE *f;
@@ -108,7 +130,8 @@ static FILE *policy_fopen(const char *path, const char *mode)
     return f;
 }
 
-/** Fail each redirection call in turn. */
+/** init's dup2, which fails with EBADF on the `Dup_fail`th call, so that a
+ * row can fail each redirection in turn. */
 static int policy_dup2(int from, int to)
 {
     Dup_calls++;
@@ -119,14 +142,17 @@ static int policy_dup2(int from, int to)
     return dup2(from, to);
 }
 
-/**
- * Refuse filesystem mutation and replace ifup with an observable child exit.
- */
+/** init's unlink, which changes nothing on the host: 0. */
 static int policy_unlink(const char *path)
 {
     (void)path;
     return 0;
 }
+
+/**
+ * init's execv, which runs ifup: in a signal row, send the signal to the
+ * parent, the worker; write a byte to `Notify_fd` when it is open; and exit 0.
+ */
 static int policy_execv(const char *path, char *const argv[])
 {
     char c = 'x';
@@ -146,7 +172,7 @@ static int policy_execv(const char *path, char *const argv[])
  * `LOGIN_TIMEOUT` in the environment it passes is `LOGIN_TIMEOUT=0`, the one
  * getenv(3) gives login, and 3 otherwise. In a signal case a child that
  * reaches an exec has outlived the signal, and exits 91 rather than run the
- * host's ssh-keygen or sshd. Any other program is executed as before.
+ * host's ssh-keygen or sshd. Any other program is executed by execve.
  */
 static int policy_execve(const char *path, char *const argv[], char *const envp[])
 {
@@ -187,7 +213,7 @@ static int policy_execve(const char *path, char *const argv[], char *const envp[
 #undef waitpid
 #undef reboot
 
-/** Record failed assertions. */
+/** Count and print a failure when `ok` is false. */
 static void check(int ok, const char *name)
 {
     if (!ok) {
@@ -196,7 +222,8 @@ static void check(int ok, const char *name)
     }
 }
 
-/** Check exact bytes through the production policy parser. */
+/** Require init's policy parser to answer `want` for the `len` bytes of
+ * `data` as /etc/rach2/sshd.conf, or for no file when `data` is NULL. */
 static void policy_case(const char *data, size_t len, int want, const char *name)
 {
     Policy = data;
@@ -205,7 +232,10 @@ static void policy_case(const char *data, size_t len, int want, const char *name
 }
 
 /**
- * A child must either redirect all three descriptors or exit before returning.
+ * Run `service_output` in a child, with `nullfd` as init's /dev/null and
+ * `logfd` as its log, -1 for none, and the `fail`th dup2 failing, 0 for
+ * none. The child must redirect all three descriptors and exit 0, or exit
+ * 126 before it returns; `want` is the status it must exit with.
  */
 static void redirect_case(int nullfd, int logfd, int fail, int want)
 {
@@ -238,7 +268,9 @@ static void redirect_case(int nullfd, int logfd, int fail, int want)
 }
 
 /**
- * Network redirection must leave init's descriptors unchanged on every path.
+ * Run `start_network` with the descriptors and the failing dup2 as
+ * `redirect_case` takes them: ifup runs, writing `want` bytes, 1 or 0, to the
+ * pipe, and init's own descriptors 0 to 2 are unchanged on every path.
  */
 static void network_case(int nullfd, int logfd, int fail, int want)
 {
@@ -272,9 +304,12 @@ static void network_case(int nullfd, int logfd, int fail, int want)
 }
 
 /**
- * Exercise init's handlers with real fork, masks and signal delivery. Signals
- * arrive before the worker returns from fork or from its running ifup child.
- * A failed fork must also restore the parent's mask and preserve its handlers.
+ * Run `start_network` with init's shutdown handlers installed and the host's
+ * fork, masks and signal delivery: the signal `sig` arrives before the worker
+ * returns from its fork when `early`, and from its ifup child otherwise. The
+ * fork must block the shutdown signals, and the signal must end the worker.
+ * With `fail` the fork fails. Either way init's mask and handlers must be as
+ * they were.
  */
 static void network_signal_case(int nullfd, int logfd, int sig, int early, int fail)
 {
@@ -442,7 +477,9 @@ static void sshd_case(int openssh, int password_login, const char *const *want, 
     check(same && argv[i] == NULL, name);
 }
 
-/** Test parser boundaries and every redirection failure. */
+/** Run the rows: the policy parser's boundaries, the SSH server's
+ * arguments, every redirection failure, the signal rows and the login's
+ * environment. 0 when every check passed, 1 otherwise. */
 int main(void)
 {
     static const int signals[] = {SIGUSR1, SIGUSR2, SIGTERM};

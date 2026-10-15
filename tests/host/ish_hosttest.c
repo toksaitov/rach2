@@ -18,12 +18,17 @@
 #include <sys/wait.h>
 #include "../../ish/ish_syscalls.h"
 
+/* The scripted wait results, NULL for the host's waitpid: a pid, or -4 for
+ * EINTR and any other negative for ECHILD; and the status of a reaped pid. */
 static const int *wait_answers;
 static int wait_answer_count;
 static int wait_calls;
 static int wait_status;
+/* The most a read of standard input returns, 0 for no bound, and the reads
+ * that succeed before one fails with EIO, -1 for none. */
 static size_t read_limit;
 static int read_failure_after = -1;
+/* A path stat reports present without looking, and the times it did. */
 static const char *stat_present;
 static int stat_present_calls;
 
@@ -207,7 +212,8 @@ static int check_long_path(void)
     return status == 127 && stat_present_calls == 0 ? 0 : fail("long path entry");
 }
 
-/** Keep probe output files inside a private directory in this worktree. */
+/** Run the rows in a new directory under build/, which holds the probe's
+ * output files and is removed after; 0 when every row passed. */
 int main(void)
 {
     char directory[] = "build/ish-hosttest.XXXXXX";

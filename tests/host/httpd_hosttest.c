@@ -18,14 +18,20 @@
 #include <sys/time.h>
 #include <unistd.h>
 
+/* Where a run of the server ends, from the second accept or the exit. */
 static jmp_buf run_end;
+/* The status of the exit, -1 for none; the accepts of the run; and whether
+ * getsockname fails. */
 static int failures, exit_status, accepts, name_fails;
+/* What the server sent and what it wrote to standard output. */
 static char page[8192], logged[1024];
 static size_t page_len, logged_len;
+/* The local address and port getsockname answers, in host order. */
 static uint32_t local_ip;
 static uint16_t local_port;
 static const char request[] = "GET / HTTP/1.0\r\nHost: test\r\nUser-Agent: test\r\n\r\n";
 
+/** Make the listening socket, descriptor 3. */
 static int model_socket(int domain, int type, int protocol)
 {
     (void)domain;
@@ -34,6 +40,7 @@ static int model_socket(int domain, int type, int protocol)
     return 3;
 }
 
+/** Bind it: 0. */
 static int model_bind(int fd, const struct sockaddr *address, socklen_t size)
 {
     (void)fd;
@@ -42,6 +49,7 @@ static int model_bind(int fd, const struct sockaddr *address, socklen_t size)
     return 0;
 }
 
+/** Listen on it: 0. */
 static int model_listen(int fd, int backlog)
 {
     (void)fd;
@@ -66,6 +74,10 @@ static int model_accept(int fd, struct sockaddr *address, socklen_t *size)
     return 4;
 }
 
+/**
+ * Supply the one request; a buffer too small for it ends the test with status
+ * 2.
+ */
 static ssize_t model_recv(int fd, void *buffer, size_t size, int flags)
 {
     (void)fd;
@@ -108,6 +120,7 @@ static int model_getsockname(int fd, struct sockaddr *address, socklen_t *size)
     return 0;
 }
 
+/** Close a descriptor: 0. */
 static int model_close(int fd)
 {
     (void)fd;
@@ -127,12 +140,14 @@ static ssize_t model_write(int fd, const void *buffer, size_t size)
     return (ssize_t)size;
 }
 
+/** Keep `status` and end the run. */
 static void model_exit(int status)
 {
     exit_status = status;
     longjmp(run_end, 1);
 }
 
+/** The time of day: 1000 s. */
 static int model_gettimeofday(struct timeval *tv, void *zone)
 {
     (void)zone;
@@ -167,6 +182,7 @@ static int model_gettimeofday(struct timeval *tv, void *zone)
 #undef exit
 #undef gettimeofday
 
+/** Count and print a failure when `condition` is false. */
 #define CHECK(condition, detail)                                   \
     do {                                                           \
         if (!(condition)) {                                        \

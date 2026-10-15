@@ -1,16 +1,15 @@
 /*
- * bootverb_hosttest.c: bootctl's command line, every acceptance and refusal.
+ * bootverb_hosttest.c: bootctl's command line, every line it takes and every
+ * line it refuses.
  *
  * host-deps: utils/bootverb.c
  *
- * This tool rewrites a boot partition on a machine nobody will open again, so
- * a command line it half understands is worth an error, not a guess.
- * Two groups of refusals matter most. A verb given the wrong number of
- * operands must fail, not ignore the extra, because a typo that drops
- * an operand should not silently install something else. And the spellings the
- * tool shipped under its previous name must fail, not work, because a
- * compatibility spelling nobody documents is one that has to be carried
- * forever.
+ * bootctl rewrites a boot partition, so a line it does not fully understand
+ * is an error rather than a guess. Two groups of refusals matter most. A verb
+ * given the wrong number of operands fails rather than ignoring the surplus,
+ * so that a typo that drops an operand does not install something else. And
+ * `--commit`, `--where` and a bare kernel path name no verb and fail, so that
+ * no undocumented spelling works and has to be kept.
  */
 
 extern int printf(const char *fmt, ...);
@@ -19,8 +18,10 @@ extern int printf(const char *fmt, ...);
 
 #include "../../utils/bootverb.h"
 
+/** The number of failed checks, which is the exit status. */
 static int fails;
 
+/** Count and print a failure when `cond` is false; `what` says what held. */
 #define CHECK(cond, what)                   \
     do {                                    \
         if (!(cond)) {                      \
@@ -29,8 +30,14 @@ static int fails;
         }                                   \
     } while (0)
 
+/** The second operand the last `parse` returned, or NULL. */
 static const char *arg2_out;
 
+/**
+ * Run `bootverb_parse` on the line `bootctl a1 a2 a3`, where a NULL word and
+ * the words after it are left off. The first operand goes to `*arg` when
+ * `arg` is not NULL, and the second to `arg2_out`.
+ */
 static enum bootverb parse(char *a1, char *a2, char *a3, const char **arg)
 {
     char *argv[4];
@@ -50,6 +57,12 @@ static enum bootverb parse(char *a1, char *a2, char *a3, const char **arg)
     return bootverb_parse(argc, argv, arg, &arg2_out);
 }
 
+/**
+ * Check the verbs, their operand counts, the spellings that are not verbs,
+ * and `bootverb_known`. `env` is the one verb whose operand count varies: a
+ * key alone reads, a key and a value write, and the caller tells them apart
+ * by the second operand. Returns the number of failures, at most 255.
+ */
 int main(void)
 {
     const char *arg;
@@ -90,8 +103,6 @@ int main(void)
           "a caller that wants neither operand may pass NULL for both");
     CHECK(parse((char *)"cancel", 0, 0, &arg) == BOOTVERB_CANCEL, "cancel is a verb");
 
-    /* env is the one verb whose operand count varies: a key alone reads, a key
-       and a value write, and the caller tells them apart by the second. */
     CHECK(parse((char *)"env", (char *)"next_entry", 0, &arg) == BOOTVERB_ENV,
           "env with a key alone is a verb");
     CHECK(arg2_out == 0, "and yields no value");

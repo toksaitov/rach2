@@ -24,13 +24,18 @@ static fd_entry_t entry;
 static struct open_file description;
 static process_t reader;
 struct percpu cpu_table[NR_CPUS] = {{.current = &reader}};
+/* The caller's buffer. */
 static uint64_t user[4];
 static int failures, wakes, inner_reads;
+/* The kinds of every wake since `setup`, ORed. */
 static uint32_t wake_kinds;
+/* The result and value of the read made during a copy. */
 static int32_t inner_result;
 static uint64_t inner_value;
+/* Whether the next copy to the caller runs a second read first. */
 static int nested;
 
+/** Count and print a failure when `condition` is false. */
 #define CHECK(condition, detail)                              \
     do {                                                      \
         if (!(condition)) {                                   \
@@ -58,6 +63,7 @@ int copy_to_user(void __user *dst, const void *src, size_t len)
     return 0;
 }
 
+/** Copy `len` bytes from the caller; 0. */
 int copy_from_user(void *dst, const void __user *src, size_t len)
 {
     k_memcpy(dst, src, len);
@@ -73,6 +79,7 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     return -EINTR;
 }
 
+/** Count a wake and note its kinds. */
 void wq_wake(wait_queue_t *wq, uint32_t kinds)
 {
     (void)wq;
@@ -80,29 +87,33 @@ void wq_wake(wait_queue_t *wq, uint32_t kinds)
     wake_kinds |= kinds;
 }
 
+/** Make `wq` empty. */
 void wait_queue_init(wait_queue_t *wq)
 {
     wq->head = NULL;
 }
 
-/** Making a descriptor is outside this test. */
+/** Making a descriptor is outside this test: NULL. */
 void *kzalloc(size_t n)
 {
     (void)n;
     return NULL;
 }
 
+/** Nothing is allocated to free. */
 void kfree(void *ptr)
 {
     (void)ptr;
 }
 
+/** Making a descriptor is outside this test: -1. */
 int fd_alloc(fd_table_t *table)
 {
     (void)table;
     return -1;
 }
 
+/** memcpy, for eventfd.c. */
 void *k_memcpy(void *dst, const void *src, size_t n)
 {
     uint8_t *d = dst;
@@ -115,6 +126,7 @@ void *k_memcpy(void *dst, const void *src, size_t n)
     return dst;
 }
 
+/** memset, for the rows. */
 void *k_memset(void *dst, int c, size_t n)
 {
     uint8_t *d = dst;
@@ -146,6 +158,7 @@ static void setup(uint64_t value, int semaphore)
     wake_kinds = 0;
 }
 
+/** Run the rows; 0 when every check passed, 1 otherwise. */
 int main(void)
 {
     setup(1, 0);

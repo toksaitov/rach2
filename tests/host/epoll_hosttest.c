@@ -57,6 +57,7 @@ static uint8_t arena[1024];
 static uint32_t serials;
 static int failures;
 
+/** Count and print a failure when `condition` is false. */
 #define CHECK(condition, detail)                            \
     do {                                                    \
         if (!(condition)) {                                 \
@@ -71,6 +72,11 @@ struct model {
     wait_queue_t wq;
 };
 
+/**
+ * The poll of a model object: the events of `ready` that `events` asks for,
+ * and POLLERR and POLLHUP whether asked for or not. The object's queue goes
+ * in `*wq` when `wq` is not NULL.
+ */
 static short model_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {
     struct model *m = (struct model *)e->priv;
@@ -83,20 +89,23 @@ static short model_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 
 static const struct file_ops model_ops = {NULL, NULL, model_poll, NULL, NULL};
 
-/** No wait in these rows sleeps. */
+/** No wait in these rows sleeps, so nothing is scheduled. */
 void schedule(void)
 {}
 
+/** No signal is pending: 0. */
 int signal_pending(void)
 {
     return 0;
 }
 
+/** The host has no interrupts to mask: 0. */
 uint32_t kirq_save(void)
 {
     return 0;
 }
 
+/** The host has no interrupts to unmask. */
 void kirq_restore(uint32_t flags)
 {
     (void)flags;
@@ -161,6 +170,10 @@ int fd_ofd_live(const struct open_file *ofd, uint32_t serial)
     return 0;
 }
 
+/**
+ * The poll of `e`, through its file operations, or 0 for a descriptor without
+ * one; `*wq` is the queue it names, or NULL.
+ */
 short poll_fd(fd_entry_t *e, short events, struct wait_queue **wq)
 {
     *wq = NULL;
@@ -184,6 +197,7 @@ int poll_wait(poll_scan_fn scan, void *ctx, uint32_t n, int has_deadline, uint32
     return rc;
 }
 
+/** Every wait has a deadline, which a model wait does not read: 0. */
 uint32_t poll_ms_deadline(int timeout_ms, int *has_deadline)
 {
     (void)timeout_ms;
@@ -191,6 +205,7 @@ uint32_t poll_ms_deadline(int timeout_ms, int *has_deadline)
     return 0;
 }
 
+/** No row's wait has a signal mask: 0. */
 int32_t poll_mask_set(uintptr_t umask, uint32_t size)
 {
     (void)umask;
@@ -198,16 +213,19 @@ int32_t poll_mask_set(uintptr_t umask, uint32_t size)
     return 0;
 }
 
+/** No signal mask to restore: `ret`. */
 int32_t poll_mask_done(int32_t ret)
 {
     return ret;
 }
 
+/** Whether `len` bytes at `addr` lie in the arena. */
 int user_range_ok(uintptr_t addr, size_t len)
 {
     return addr <= sizeof(arena) && len <= sizeof(arena) - addr;
 }
 
+/** Copy `n` bytes from the arena at offset `src`; 0, or -EFAULT outside it. */
 int copy_from_user(void *dst, const void __user *src, size_t n)
 {
     uint32_t at = (uint32_t)(unsigned long)src;
@@ -223,6 +241,7 @@ int copy_from_user(void *dst, const void __user *src, size_t n)
     return 0;
 }
 
+/** Copy `n` bytes to the arena at offset `dst`; 0, or -EFAULT outside it. */
 int copy_to_user(void __user *dst, const void *src, size_t n)
 {
     uint32_t at = (uint32_t)(unsigned long)dst;
@@ -238,6 +257,7 @@ int copy_to_user(void __user *dst, const void *src, size_t n)
     return 0;
 }
 
+/** Zero the system call frame `params`. */
 static void clear_params(struct isr_params *params)
 {
     uint8_t *p = (uint8_t *)params;
@@ -653,6 +673,10 @@ static void nest_forked(void)
     }
 }
 
+/**
+ * Set up the parent's and the child's tables and run the rows; 0 when every
+ * check passed, 1 otherwise.
+ */
 int main(void)
 {
     int i;

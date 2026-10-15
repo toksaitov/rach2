@@ -29,6 +29,7 @@
 
 static int failures;
 
+/** Count and print a failure when `condition` is false. */
 #define CHECK(condition, detail)                             \
     do {                                                     \
         if (!(condition)) {                                  \
@@ -184,6 +185,7 @@ static void tmpdir_rows(void)
 }
 
 #if defined(__linux__)
+/* The leaked block; volatile, so that the store of it is kept. */
 static void *volatile lost;
 
 /** A child that says it passed and leaks, which LeakSanitizer reports as a
@@ -232,6 +234,7 @@ static void leak_row(void)
 }
 #endif
 
+/** Run the rows; 0 when every check passed, 1 otherwise. */
 int main(void)
 {
     plain_bases();
