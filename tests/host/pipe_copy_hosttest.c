@@ -1,5 +1,6 @@
 /**
- * Run pipe transfers with another operation inside the page resolver.
+ * Host test of pipe transfers in which another pipe operation runs while a
+ * user page is resolved.
  *
  * host-deps:
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
@@ -15,7 +16,7 @@
 #include "ipc/pipe_ring.c"
 #include "mm/usercopy.c"
 
-/* The compare-and-exchange `cmpxchg_user_u32` makes, which no row reaches,
+/** The compare-and-exchange `cmpxchg_user_u32` makes, which no row reaches,
  * on the host's one thread. */
 unsigned int arch_atomic_cmpxchg(volatile unsigned int *p, unsigned int old, unsigned int value)
 {
@@ -57,13 +58,15 @@ struct percpu cpu_table[NR_CPUS] = {{.current = &writing_thread}};
         }                                                       \
     } while (0)
 
-/** Return a model user address without accessing it on the host. */
+/** The model user address `offset` bytes into the user pages, as a pointer
+ * the host must not follow. */
 static char *user_at(uint32_t offset)
 {
     return (char *)(unsigned long)(USER_BASE + offset);
 }
 
-/** Translate model addresses only at the raw memory-copy boundary. */
+/** The host address of `ptr`: its byte in `memory` for a model user
+ * address, `ptr` itself for any other. */
 static void *host_address(const void *ptr)
 {
     unsigned long addr = (unsigned long)ptr;
@@ -74,7 +77,7 @@ static void *host_address(const void *ptr)
     return (void *)ptr;
 }
 
-/** Copy bytes after translating model user addresses. */
+/** Copy `n` bytes, translating model user addresses with `host_address`. */
 void *k_memcpy(void *dst, const void *src, size_t n)
 {
     uint8_t *d = host_address(dst);
@@ -87,7 +90,8 @@ void *k_memcpy(void *dst, const void *src, size_t n)
     return dst;
 }
 
-/** Clear host structures without linking the kernel's libc aliases. */
+/** Fill `n` bytes of `dst` with `c`, so that the test links none of the
+ * kernel's string functions. */
 void *k_memset(void *dst, int c, size_t n)
 {
     uint8_t *d = dst;
@@ -99,7 +103,14 @@ void *k_memset(void *dst, int c, size_t n)
     return dst;
 }
 
-/** Resolve one page, allowing a peer to run only when allocation is needed. */
+/**
+ * Resolve the page of `addr` for a read or, with `write`, a write: 0, a
+ * fault, for an address outside the model or a page marked -1, and 1
+ * otherwise. A page whose state is below what the access needs (0 missing, 1
+ * copy-on-write, 2 writable) first runs `resolve_action` once, as a peer
+ * would run while the kernel allocates the frame. A copy must stay in one
+ * page.
+ */
 int vm_prefault_range(uintptr_t addr, uintptr_t len, int write)
 {
     uint32_t page;
@@ -125,7 +136,8 @@ int vm_prefault_range(uintptr_t addr, uintptr_t len, int write)
     return 1;
 }
 
-/** Model a pipe wait; an unconfigured wait is interrupted. */
+/** A wait on a pipe's queue: run `wait_action` once, as a peer would run
+ * while the caller sleeps, and return 0; -EINTR when no action is set. */
 int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     void (*action)(void) = wait_action;
@@ -142,8 +154,8 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     return 0;
 }
 
-/** Count readiness notifications, and the kinds of change they name,
- * without switching processes. */
+/** Count the wakeups of each end's queue and the kinds of change they name,
+ * waking nothing. */
 void wq_wake(wait_queue_t *wq, uint32_t kinds)
 {
     if (wq == &ring.read_wq) {
@@ -163,14 +175,14 @@ void wq_wake_all(wait_queue_t *wq)
     wq_wake(wq, WQ_ALL);
 }
 
-/** Initialize queues for the unused pipe-creation path. */
+/** Empty the queue `wq`, for pipe creation, which no row reaches. */
 void wait_queue_init(wait_queue_t *wq)
 {
     wq->head = NULL;
 }
 
-/** Record SIGPIPE from a writer whose last reader closed, which goes to the
- * writing thread. */
+/** Count the SIGPIPE a writer whose last reader closed posts to the writing
+ * thread. */
 void signal_post_thread(process_t *proc, int signo, const struct k_siginfo *info)
 {
     CHECK(proc == current_proc && signo == SIGPIPE && info->code == SI_USER,
@@ -178,7 +190,7 @@ void signal_post_thread(process_t *proc, int signo, const struct k_siginfo *info
     signals++;
 }
 
-/** The test's pipe has its ring already. */
+/** A failure: the test's pipe has its ring already. */
 void *kmalloc(size_t n)
 {
     (void)n;
@@ -186,7 +198,7 @@ void *kmalloc(size_t n)
     return NULL;
 }
 
-/** Pipe creation is outside this test. */
+/** A failure: no row creates a pipe. */
 void *kzalloc(size_t n)
 {
     (void)n;
@@ -194,14 +206,14 @@ void *kzalloc(size_t n)
     return NULL;
 }
 
-/** A tested transfer retains its own pipe end. */
+/** A failure: no row frees a pipe end. */
 void kfree(void *ptr)
 {
     (void)ptr;
     CHECK(0, "unexpected pipe release");
 }
 
-/** Descriptor allocation is outside this test. */
+/** A failure: no row allocates a descriptor. */
 int fd_alloc(fd_table_t *table)
 {
     (void)table;
@@ -209,7 +221,7 @@ int fd_alloc(fd_table_t *table)
     return -1;
 }
 
-/** Descriptor release is outside this test. */
+/** A failure: no row frees a descriptor. */
 int fd_free(fd_table_t *table, int fd)
 {
     (void)table;
@@ -218,7 +230,9 @@ int fd_free(fd_table_t *table, int fd)
     return -1;
 }
 
-/** Reset two nonblocking ends and eight writable model pages. */
+/** Reset the pipe to two nonblocking ends of an empty ring whose head and
+ * tail are `head`, and every model page to writable, with 0x33 in the
+ * first pages and 0x22 from `PEER_PAGE`. */
 static void setup(uint32_t head)
 {
     unsigned i;
@@ -249,7 +263,8 @@ static void setup(uint32_t head)
     peer_closes = 0;
 }
 
-/** Consume bytes through the production reader during a resolver wait. */
+/** Read `peer_count` bytes through `pipe_read`, as a peer during a resolve
+ * or a wait, and with `peer_closes` close the writer after. */
 static void peer_read(void)
 {
     CHECK(pipe_read(&reader, user_at(PEER_PAGE * PAGE_SIZE), peer_count) == (int32_t)peer_count,
@@ -259,20 +274,27 @@ static void peer_read(void)
     }
 }
 
-/** Append bytes through the production writer during a resolver wait. */
+/** Write `peer_count` bytes through `pipe_write`, as a peer during a
+ * resolve or a wait. */
 static void peer_write(void)
 {
     CHECK(pipe_write(&writer, user_at(PEER_PAGE * PAGE_SIZE), peer_count) == (int32_t)peer_count,
           "peer write count");
 }
 
-/** Close the other end while a writer resolves its source page. */
+/** Close the read end, as a peer while a writer resolves its source page. */
 static void close_reader(void)
 {
     pipe_close(&reader);
 }
 
-/** Check competing readers across physical and counter wrap, including COW. */
+/**
+ * A reader whose page is resolved while a peer reads 2 of the 6 bytes
+ * copies the other 4 from the head as it is after the peer, and consumes no
+ * byte twice. `head` is the ring's head: 0, at the end of the buffer, or at
+ * the wrap of the counter; `present` is the page's state, 0 missing or 1
+ * copy-on-write.
+ */
 static void read_competition(uint32_t head, int present)
 {
     static const uint8_t bytes[] = {1, 2, 3, 4, 5, 6};
@@ -289,7 +311,12 @@ static void read_competition(uint32_t head, int present)
     CHECK(resolves == 1, "reader resolves lazy or cow page once");
 }
 
-/** Check peer writes preserve byte order and cannot exceed ring capacity. */
+/**
+ * A writer whose page is resolved while a peer writes rechecks the free
+ * space: with `fill` the peer fills the ring and the write gives -EAGAIN;
+ * without, the writer's 3 bytes follow the peer's 4. No byte already in the
+ * ring is lost.
+ */
 static void write_competition(int fill)
 {
     uint8_t bytes[PIPE_BUF_SIZE];
@@ -321,7 +348,13 @@ static void write_competition(int fill)
     CHECK(resolves == 1, "writer resolves lazy page once");
 }
 
-/** Check empty/full rechecks, EOF, signals and readiness after a pipe wait. */
+/**
+ * A transfer rechecks the ring after a resolve or a wait: a read of a ring a
+ * peer drained gives -EAGAIN, or 0 once the writer closed; a write after the
+ * reader closed gives -EPIPE and SIGPIPE; a blocking read or write waits,
+ * and a read wakes the writers for room alone and a write the readers for
+ * data alone.
+ */
 static void state_changes(void)
 {
     uint8_t bytes[PIPE_BUF_SIZE];
@@ -370,7 +403,11 @@ static void state_changes(void)
     CHECK(pipe_ring_get(&ring, bytes, sizeof(bytes)) == 3, "refill count");
 }
 
-/** A resolver can remove readiness before either blocking operation copies. */
+/**
+ * A blocking reader whose ring a peer drains during the resolve waits for
+ * new bytes, and a blocking writer whose ring a peer fills waits for room;
+ * each page a write copies wakes the readers.
+ */
 static void readiness_changes(void)
 {
     setup(0);
@@ -414,7 +451,8 @@ static void write_with_data(void)
           "a write into a ring that has data wakes the readers for data");
 }
 
-/** A second page fault or competing read returns only completed bytes. */
+/** A transfer over two pages whose second faults, or whose resolve lets a
+ * peer drain the ring or close the reader, returns the bytes of the first. */
 static void later_page(void)
 {
     setup(0);
@@ -444,7 +482,7 @@ static void later_page(void)
     CHECK(signals == 1 && pipe_available(&ring) == 2, "later close posts signal without copying");
 }
 
-/** Run deterministic scheduling cases and report one process exit status. */
+/** Run every case; 0 when each passes, 1 otherwise. */
 int main(void)
 {
     read_competition(0, 0);

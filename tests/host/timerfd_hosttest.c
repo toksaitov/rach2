@@ -13,10 +13,11 @@
  * that time finds nothing, and a copy that fails loses what it took, as in
  * Linux.
  *
- * A timer of 200 days, longer than one wait of ticks can span, reports 200
- * days, does not expire a tick early and expires at its tick; an interval of
- * 200 days is reported and waited whole; and a time past the most seconds a
- * setting keeps is taken as that most.
+ * A timer armed while a tick is pending counts from that tick. A timer of
+ * 200 days, longer than one wait of ticks can span, reports 200 days, does
+ * not expire a tick early and expires at its tick; an interval of 200 days
+ * is reported and waited whole; and a time past the most seconds a setting
+ * keeps is taken as that most.
  */
 #include "io/timerfd.c"
 
@@ -52,13 +53,14 @@ static uint64_t inner_value;
         }                                                     \
     } while (0)
 
-/* The POSIX timers' part, which these rows do not reach. */
+/** NULL: the POSIX timers' part, which no row reaches, finds no process. */
 process_t *get_process(uint32_t pid)
 {
     (void)pid;
     return 0;
 }
 
+/** A failure: a timerfd posts no signal. */
 void signal_post_info(process_t *target, int signo, const struct k_siginfo *info)
 {
     (void)target;
@@ -67,6 +69,7 @@ void signal_post_info(process_t *target, int signo, const struct k_siginfo *info
     CHECK(0, "a timerfd posted a signal");
 }
 
+/** A failure: a timerfd posts no signal. */
 void signal_post_thread(process_t *t, int signo, const struct k_siginfo *info)
 {
     (void)t;
@@ -75,11 +78,13 @@ void signal_post_thread(process_t *t, int signo, const struct k_siginfo *info)
     CHECK(0, "a timerfd posted a signal");
 }
 
+/** Count a nesting of the model's interrupt mask; the count before. */
 uint32_t kirq_save(void)
 {
     return (uint32_t)masked++;
 }
 
+/** Put the count of nestings back to `flags`. */
 void kirq_restore(uint32_t flags)
 {
     masked = (int)flags;
@@ -107,6 +112,7 @@ int copy_to_user(void __user *dst, const void *src, size_t len)
     return 0;
 }
 
+/** Copy `len` bytes from the host address `src`; 0. */
 int copy_from_user(void *dst, const void __user *src, size_t len)
 {
     k_memcpy(dst, src, len);
@@ -122,17 +128,20 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     return -EINTR;
 }
 
+/** Count a wakeup of the timer's readers. */
 void wq_wake_all(wait_queue_t *wq)
 {
     (void)wq;
     wakes++;
 }
 
+/** Empty the queue `wq`. */
 void wait_queue_init(wait_queue_t *wq)
 {
     wq->head = NULL;
 }
 
+/** 1000 s and 0 ns on every clock. */
 int32_t clock_now(int32_t clk, int64_t *sec, int32_t *nsec)
 {
     (void)clk;
@@ -151,29 +160,33 @@ int32_t clock_cpu_target(int32_t clk, struct tgroup **tg, uint32_t *tid, int *us
     return -EINVAL;
 }
 
+/** Nothing: no timer holds a process. */
 void tgroup_put(struct tgroup *tg)
 {
     (void)tg;
 }
 
-/** Making a descriptor, and finding one, are outside this test. */
+/** NULL: no row makes a descriptor. */
 void *kzalloc(size_t n)
 {
     (void)n;
     return NULL;
 }
 
+/** Nothing: no row makes a descriptor. */
 void kfree(void *ptr)
 {
     (void)ptr;
 }
 
+/** -1: no row makes a descriptor. */
 int fd_alloc(fd_table_t *table)
 {
     (void)table;
     return -1;
 }
 
+/** NULL: no row finds a descriptor by number. */
 fd_entry_t *fd_get(fd_table_t *table, int fd)
 {
     (void)table;
@@ -181,6 +194,7 @@ fd_entry_t *fd_get(fd_table_t *table, int fd)
     return NULL;
 }
 
+/** Copy `n` bytes from `src` to `dst`; `dst`. */
 void *k_memcpy(void *dst, const void *src, size_t n)
 {
     uint8_t *d = dst;
@@ -193,6 +207,7 @@ void *k_memcpy(void *dst, const void *src, size_t n)
     return dst;
 }
 
+/** Fill `n` bytes of `dst` with `c`; `dst`. */
 void *k_memset(void *dst, int c, size_t n)
 {
     uint8_t *d = dst;
@@ -229,7 +244,7 @@ static void setup(void)
     CHECK(timer.count == 1, "the timer expires at its tick");
 }
 
-/* The timer disarmed, at tick 1000. */
+/** Disarm the timer and set the tick count to 1000. */
 static void reset(void)
 {
     k_memset(&timer, 0, sizeof(timer));
@@ -297,6 +312,12 @@ static void long_rows(void)
     CHECK(got.vsec == (int64_t)TIME_MAX, "it is taken as the most seconds a setting keeps");
 }
 
+/**
+ * Run every row; 0 when each passes, 1 otherwise. An expiration during a
+ * read's copy is kept for the next read, a second read during the copy finds
+ * none, a copy that fails loses the count it took, and a read shorter than
+ * eight bytes gives -EINVAL.
+ */
 int main(void)
 {
     setup();

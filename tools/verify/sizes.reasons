@@ -438,9 +438,9 @@ tests/host/partition_hosttest.c:main lines 165 a test's rows, each a case, read 
 tests/host/pcimsi_hosttest.c:main complexity 37 a test's rows, each a case, read as one table
 tests/host/pcimsi_hosttest.c:main lines 167 a test's rows, each a case, read as one table
 
-tests/host/pipe_ring_hosttest.c:main lines 111 a test's rows, each a case, read as one table
+tests/host/pipe_ring_hosttest.c:main lines 103 a test's rows, each a case, read as one table
 
-tests/host/poll_select_hosttest.c:main lines 203 a test's rows, each a case, read as one table
+tests/host/poll_select_hosttest.c:main lines 183 a test's rows, each a case, read as one table
 
 tests/host/pwauth_hosttest.c:check_fork complexity 31 a test's rows, each a case, read as one table
 tests/host/pwauth_hosttest.c:check_fork lines 101 a test's rows, each a case, read as one table

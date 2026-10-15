@@ -1,13 +1,13 @@
 /**
- * Dual-target host test for the pipe byte-FIFO ring (ipc/pipe_ring.c).
+ * Host test of the pipe's byte ring, ipc/pipe_ring.c.
  *
  * host-deps: rach2/sys/ipc/pipe_ring.c
  *
- * The wrap arithmetic (occupancy = tail - head, slot = pos & (SIZE-1)) is the
- * fence-post logic a one-off bug hides in, so it runs natively under
- * ASan/UBSan: put never overruns free space, get never reads past occupancy, a
- * transfer that straddles the physical end of the buffer stays byte-correct,
- * and a full ring round-trips. Returns the failed-check count (0 == pass).
+ * The ring's count of bytes is tail - head, and a byte's slot is its
+ * position & (PIPE_BUF_SIZE - 1). The test runs that arithmetic under the
+ * sanitizers: a put never writes past the free space, a get never reads past
+ * the bytes in the ring, a transfer across the end of the buffer keeps every
+ * byte, and a full ring gives back all it holds.
  */
 
 extern int printf(const char *fmt, ...);
@@ -28,6 +28,16 @@ static unsigned char ring[PIPE_BUF_SIZE];
 static unsigned char src[2 * PIPE_BUF_SIZE];
 static unsigned char dst[2 * PIPE_BUF_SIZE];
 
+/**
+ * Run every check; the exit status is the count of failed checks, at most
+ * 255.
+ *
+ * A caller that copies straight from and into the ring is given spans: an
+ * empty ring has no read span and one write span of the whole buffer; a full
+ * ring whose head is past the buffer's start gives its bytes in two read
+ * spans, neither crossing the end; and `pipe_ring_produce` and
+ * `pipe_ring_consume` advance the ring as a put and a get do.
+ */
 int main(void)
 {
     pipe_t p;
@@ -44,8 +54,7 @@ int main(void)
     CHECK(pipe_available(&p) == 0);
     CHECK(pipe_free_space(&p) == PIPE_BUF_SIZE);
 
-    /* A put is bounded by free space; a full ring fits exactly (no lost
-     * slot). */
+    /* A put is bounded by the free space; a full ring uses every slot. */
     CHECK(pipe_ring_put(&p, src, PIPE_BUF_SIZE) == PIPE_BUF_SIZE);
     CHECK(pipe_available(&p) == PIPE_BUF_SIZE);
     CHECK(pipe_free_space(&p) == 0);
@@ -60,11 +69,10 @@ int main(void)
     CHECK(pipe_available(&p) == 0);
     CHECK(pipe_ring_get(&p, dst, 1) == 0); /* empty: nothing to read */
 
-    /* Position the ring so the next transfer straddles the physical wrap point,
-     * then verify a put/get across the wrap stays byte-correct. */
+    /* A put and a get across the end of the buffer keep every byte. */
     p.head = PIPE_BUF_SIZE - 10;
     p.tail = PIPE_BUF_SIZE - 10;
-    CHECK(pipe_ring_put(&p, src, 100) == 100); /* spans the [.. wrap ..] boundary */
+    CHECK(pipe_ring_put(&p, src, 100) == 100); /* across the buffer's end */
     CHECK(pipe_available(&p) == 100);
     got = pipe_ring_get(&p, dst, 100);
     CHECK(got == 100);
@@ -79,11 +87,7 @@ int main(void)
     CHECK(pipe_ring_put(&p, src, 200) == 50);
     CHECK(pipe_free_space(&p) == 0);
 
-    /* The spans: what a caller that copies straight from and into the ring
-       is given. An empty ring has no read span and a whole-page write
-       span; a full ring whose head is past the array's start gives its
-       bytes in two read spans, neither crossing the end; produce and
-       consume advance as put and get do. */
+    /* The spans. */
     {
         const unsigned char *rp;
         unsigned char *wp;
@@ -110,8 +114,7 @@ int main(void)
         CHECK(rp[0] == (unsigned char)((PIPE_BUF_SIZE - 100) & 0xff));
         pipe_ring_consume(&p, n);
         CHECK(pipe_available(&p) == 0 && pipe_free_space(&p) == PIPE_BUF_SIZE);
-        /* Writing across the end: the tail at slot PIPE_BUF_SIZE - 10 gives
-           a ten-byte span, then a span from the array's start. */
+        /* A write span stops at the buffer's end; the next starts at 0. */
         p.head = PIPE_BUF_SIZE - 10;
         p.tail = PIPE_BUF_SIZE - 10;
         n = pipe_ring_write_span(&p, &wp);

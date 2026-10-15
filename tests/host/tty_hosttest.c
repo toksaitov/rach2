@@ -1,14 +1,16 @@
 /**
- * Exercise terminal waits with the production PTY, tty and wait-queue code.
+ * Host test of a terminal's waits and wakeups, in tty/tty.c, tty/pty.c and
+ * proc/wait_queue.c, over the kernel's line discipline.
  *
  * host-deps: rach2/sys/tty/n_tty.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  *
- * The scheduler runs a producer only after the consumer is blocked. It checks
- * the wake before allowing the consumer to resume. There is no idle fallback,
- * timeout or endpoint close to make a missing wake appear successful.
- * User copies fail on a selected chunk; serial input and interrupt flags are
- * substituted. This tests queue transitions, not paging or interrupt delivery.
+ * The test's `schedule` runs a producer only after the consumer has blocked,
+ * and checks the wake before the consumer resumes; no idle loop, time limit
+ * or close of an end can hide a missing wake. A chosen copy from the user
+ * fails, and the serial input and the interrupt flag are the test's. The
+ * rows test the queues' changes of state, not paging or the delivery of
+ * interrupts.
  *
  * Each wake of a pair names its kind of change for an edge-triggered epoll
  * registration, and the queues count them: input written to the master is data
@@ -51,7 +53,8 @@ static char bytes[512];
         }                                               \
     } while (0)
 
-/** Clear a fixture without using the kernel's libc aliases. */
+/** Zero `size` bytes at `ptr`, so that the test links none of the kernel's
+ * string functions. */
 static void clear(void *ptr, unsigned long size)
 {
     unsigned char *p = ptr;
@@ -61,7 +64,7 @@ static void clear(void *ptr, unsigned long size)
     }
 }
 
-/** Model the saved interrupt-enable flag, including nested regions. */
+/** Clear the model's interrupt flag and return what it was. */
 uint32_t kirq_save(void)
 {
     uint32_t saved = (uint32_t)irq_enabled;
@@ -70,13 +73,14 @@ uint32_t kirq_save(void)
     return saved;
 }
 
-/** Restore exactly the flag saved by the caller. */
+/** Set the model's interrupt flag to `flags`. */
 void kirq_restore(uint32_t flags)
 {
     irq_enabled = (int)flags;
 }
 
-/** Supply interrupt masking around the host queue's assembly-free wait. */
+/** The wait queue's wait, with interrupts off around it as the kernel's
+ * wait has them. */
 int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     uint32_t flags = kirq_save();
@@ -86,7 +90,9 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     return rc;
 }
 
-/** Run another process once and require a wake before resuming the waiter. */
+/** Run `scheduled_action` once as the producer, with the consumer blocked,
+ * and check that it woke the consumer; when it did not, make a signal
+ * pending so that the wait ends. */
 void schedule(void)
 {
     process_t *waiting = current_proc;
@@ -110,13 +116,13 @@ void schedule(void)
     kirq_restore(flags);
 }
 
-/** End a failed modeled wait instead of repeating it indefinitely. */
+/** Whether `schedule` found a missing wake, which ends the wait. */
 int signal_pending(void)
 {
     return pending_signal;
 }
 
-/** No row sends a terminal signal. */
+/** A failure: no row sends a terminal signal. */
 void signal_post(process_t *p, int signo)
 {
     (void)p;
@@ -124,7 +130,8 @@ void signal_post(process_t *p, int signo)
     CHECK(0, "no signal substitutes for a readiness wake");
 }
 
-/** Supply one zeroed allocation for the real PTY allocation path. */
+/** The test's pair, zeroed, for `pty_alloc`; a request of another size is
+ * a failure. */
 void *kzalloc(size_t size)
 {
     CHECK(size == sizeof(pair), "allocation is one terminal pair");
@@ -132,13 +139,13 @@ void *kzalloc(size_t size)
     return &pair;
 }
 
-/** The fixture owns the static pair. */
+/** Check that `p` is the test's pair, which is static. */
 void kfree(void *p)
 {
     CHECK(p == &pair, "free refers to the terminal pair");
 }
 
-/** Descriptor allocation is outside these file-operation tests. */
+/** A failure: no row allocates a descriptor. */
 int fd_alloc(fd_table_t *table)
 {
     (void)table;
@@ -146,7 +153,8 @@ int fd_alloc(fd_table_t *table)
     return -1;
 }
 
-/** Host addresses are accepted; copy failures are injected separately. */
+/** 1: every host address is user memory. A copy fails only as
+ * `copy_failure` chooses. */
 int user_range_ok(uintptr_t addr, size_t len)
 {
     (void)addr;
@@ -154,7 +162,8 @@ int user_range_ok(uintptr_t addr, size_t len)
     return 1;
 }
 
-/** Copy an ordinary chunk or fail the selected copy before transferring it. */
+/** Copy `n` bytes from the host address `src`; -EFAULT, copying nothing,
+ * when this is copy number `copy_failure`. */
 int copy_from_user(void *dst, const void __user *src, size_t n)
 {
     unsigned char *d = dst;
@@ -170,7 +179,7 @@ int copy_from_user(void *dst, const void __user *src, size_t n)
     return 0;
 }
 
-/** Return the bytes actually consumed by the production read. */
+/** Copy `n` bytes to the host address `dst`; 0. */
 int copy_to_user(void __user *dst, const void *src, size_t n)
 {
     unsigned char *d = dst;
@@ -182,20 +191,20 @@ int copy_to_user(void __user *dst, const void *src, size_t n)
     return 0;
 }
 
-/** Use a nonzero timestamp without imposing a timing assertion. */
+/** 1, a time that is not 0; no row judges a time. */
 uint32_t timer_now_us(void)
 {
     return 1;
 }
 
-/** A pty's times are outside the readiness tests. */
+/** 1 s: no row reads a pty's times. */
 void rtc_coarse_realtime(int64_t *seconds, int64_t *nanoseconds)
 {
     *seconds = 1;
     *nanoseconds = 0;
 }
 
-/** Latency values are outside the readiness tests. */
+/** Nothing: no row reads a latency. */
 void latency_span(int kind, uint32_t from, uint32_t to)
 {
     (void)kind;
@@ -203,7 +212,7 @@ void latency_span(int kind, uint32_t from, uint32_t to)
     (void)to;
 }
 
-/** Select the production latency-recording branch. */
+/** Whether the console's latency is recorded: `recording`. */
 int usb_stamp_recording(void)
 {
     return recording;
@@ -215,7 +224,8 @@ void usb_stamp_read(void)
     read_stamps++;
 }
 
-/** Count the empty-input latency record. */
+/** Count a record; a console read that waits for input with latency
+ * recorded logs one. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
     (void)level;
@@ -224,7 +234,7 @@ void klog(int level, const char *subsystem, const char *format, ...)
     recorded_waits++;
 }
 
-/** Console output is irrelevant to the serial-input fixture. */
+/** Nothing: no row reads the console's output. */
 void console_putc_raw(char c)
 {
     (void)c;
@@ -238,11 +248,11 @@ unsigned int k_take_answer(char *buf, unsigned int size)
     return 0;
 }
 
-/** No console writes need batching in the fixture. */
+/** Nothing: the console's output is not batched. */
 void console_write_begin(void)
 {}
 
-/** Finish the fixture's empty output batch. */
+/** Nothing: the console's output is not batched. */
 void console_write_end(void)
 {}
 
@@ -254,34 +264,36 @@ void k_console_size(unsigned int *cols, unsigned int *rows)
     *rows = 24;
 }
 
-/** Check the interrupt lock at the first operation of each console pump. */
+/** The serial bytes not yet taken; check that interrupts are off, as the
+ * console's pump has them. */
 uint32_t serial_rx_pending(void)
 {
     CHECK(!irq_enabled, "console pump excludes input interrupts");
     return (uint32_t)(serial_len - serial_pos);
 }
 
-/** Supply each serial byte once and require the drain to remain locked. */
+/** The next serial byte, or -1 when none is left; check that interrupts
+ * are off. */
 int serial_rx_take(void)
 {
     CHECK(!irq_enabled, "serial drain excludes input interrupts");
     return serial_pos < serial_len ? serial_bytes[serial_pos++] : -1;
 }
 
-/** Serial availability is independent of any process state. */
+/** Whether a serial byte is left. */
 int serial_data_available(void)
 {
     return serial_pos < serial_len;
 }
 
-/** The fixture injects complete UART transfers. */
+/** 0: the test puts whole transfers in the serial input. */
 int serial_rx_service(int budget)
 {
     (void)budget;
     return 0;
 }
 
-/** No injected serial input contains a signal character. */
+/** -1: no serial input has a signal character. */
 int serial_rx_find(const unsigned char *set, int n)
 {
     (void)set;
@@ -289,31 +301,33 @@ int serial_rx_find(const unsigned char *set, int n)
     return -1;
 }
 
-/** Advance the simulated serial ring. */
+/** Drop `count` serial bytes. */
 void serial_rx_discard(int count)
 {
     serial_pos += count;
 }
 
-/** Empty simulated serial input on a console flush. */
+/** Drop every serial byte, for a flush of the console's input. */
 void serial_rx_flush(void)
 {
     serial_pos = serial_len;
 }
 
-/** Counters are unused by these rows. */
+/** Zeroed counters: no row reads them. */
 void serial_rx_counters(struct serial_rx_counters *out)
 {
     clear(out, sizeof(*out));
 }
 
-/** The test invokes the interrupt notification explicitly. */
+/** Nothing: a row calls `tty_console_poll` itself. */
 void serial_set_rx_notify(void (*notify)(void))
 {
     (void)notify;
 }
 
-/** Initialize open endpoints and distinct consumer, producer and poller. */
+/** Reset the consumer, current and running, the producer, ready, and the
+ * poller, and allocate the pair with both ends open in raw mode without
+ * echo or signals. */
 static void setup_pair(void)
 {
     int i;
@@ -343,7 +357,8 @@ static void setup_pair(void)
     }
 }
 
-/** Fill through the real master writer until its poll reports no space. */
+/** Fill the slave's input through `ptm_write` until the master's poll
+ * reports no room. */
 static void fill_input(void)
 {
     int i;
@@ -355,7 +370,8 @@ static void fill_input(void)
     CHECK(ptm_poll(&master, POLLOUT, &wq) == 0, "full input prevents POLLOUT");
 }
 
-/** Register exactly the queue returned by a master POLLOUT query. */
+/** Block the poller on the queue the master's poll for POLLOUT returns,
+ * and return that queue. */
 static wait_queue_t *park_poller(void)
 {
     wait_queue_t *wq = NULL;
@@ -367,7 +383,8 @@ static wait_queue_t *park_poller(void)
     return wq;
 }
 
-/** A slave read must wake the queue returned to a blocked master poll. */
+/** A slave read from full input wakes a poller blocked for the master's
+ * POLLOUT. */
 static void read_wakes_poll(void)
 {
     wait_queue_t *wq;
@@ -385,7 +402,9 @@ static void read_wakes_poll(void)
 
 static int flush_termios;
 
-/** Free input only after the writer has registered its wait. */
+/** With the master writer blocked, flush the slave's input, by TCSETSF
+ * when `flush_termios` is set and by TCFLSH otherwise, and check that a
+ * blocked poller wakes and the master has room. */
 static void flush_action(void)
 {
     wait_queue_t *wq = park_poller();
@@ -401,7 +420,8 @@ static void flush_action(void)
     wq_poll_remove(wq, &poller.waiter);
 }
 
-/** Both tty flush entry points must release a blocked master writer. */
+/** A master writer blocked on full input resumes after a flush, by TCSETSF
+ * with `termios` and by TCFLSH without, and only its byte is left. */
 static void flush_wakes_writer(int termios)
 {
     setup_pair();
@@ -417,7 +437,9 @@ static void flush_wakes_writer(int termios)
 
 static int echo_write;
 
-/** Queue one chunk, then fail the next copy while a master reader waits. */
+/** With the master reader blocked, write 512 bytes from the slave, or from
+ * the master with echo when `echo_write` is set, whose second copy of 256
+ * fails. */
 static void partial_action(void)
 {
     int rc;
@@ -430,7 +452,9 @@ static void partial_action(void)
     CHECK(pty_m_avail(&pair) == 256, "partial write leaves 256 output bytes");
 }
 
-/** A partial output or echo write must release a blocked master reader. */
+/** A write of slave output, or of echoed master input with `echo`, that
+ * fails after its first 256 bytes wakes the blocked master reader, which
+ * reads those 256. */
 static void partial_wakes_reader(int echo)
 {
     char out[512];
@@ -452,7 +476,8 @@ static void partial_wakes_reader(int echo)
     CHECK(pair.master_open && pair.slave_opens, "partial write leaves endpoints open");
 }
 
-/** Simulate input notification while the console reader is parked. */
+/** With the console reader blocked, give the serial input "q\n" and poll
+ * the console, as the serial interrupt does. */
 static void serial_action(void)
 {
     CHECK(wq_active(&console_tty.input_wq), "console reader registered before input");
@@ -461,7 +486,11 @@ static void serial_action(void)
     tty_console_poll();
 }
 
-/** The latency predicate must mask interrupts even before a waiter exists. */
+/**
+ * A console read with latency recorded waits for serial input and reads
+ * it whole, logs one wait and stamps one read, and leaves interrupts on;
+ * the console's window is its cells.
+ */
 static void latency_read(void)
 {
     unsigned char out[4];
@@ -540,7 +569,6 @@ static void input_room(void)
           "an erase the master writes is room for the master");
 }
 
-/** Run the independent wake and locking regressions. */
 /** Packet mode, which TIOCPKT sets: a master read gives TIOCPKT_DATA, 0,
  * before the slave's output; TCFLSH 0 on the master drops that output. The
  * ioctls' int travels through a 32-bit argument the host's pointers do not
@@ -560,6 +588,7 @@ static void packet_mode(void)
     CHECK(ptm_flush(&pair, 3) == -EINVAL, "TCFLSH takes 0, 1 and 2");
 }
 
+/** Run every row; 0 when each passes, 1 otherwise. */
 int main(void)
 {
     read_wakes_poll();
@@ -575,7 +604,7 @@ int main(void)
     return failures ? 1 : 0;
 }
 
-/** The terminal test does not track a USB reader. */
+/** Nothing: no row checks the stamps of a USB reader. */
 void usb_stamp_wait(uint32_t pid)
 {
     (void)pid;

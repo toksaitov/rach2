@@ -1,6 +1,6 @@
 /**
- * Run the AF_UNIX and pipe calls with another thread's call inside their
- * sleeps.
+ * Host test of the AF_UNIX and pipe calls, with another thread's call run
+ * inside their sleeps.
  *
  * host-deps: tests/host/compat/park_host.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
@@ -46,7 +46,7 @@
 #include "ipc/pipe_ring.c"
 #include "mm/usercopy.c"
 
-/* The compare-and-exchange `cmpxchg_user_u32` makes, which no row reaches,
+/** The compare-and-exchange `cmpxchg_user_u32` makes, which no row reaches,
  * on the host's one thread. */
 unsigned int arch_atomic_cmpxchg(volatile unsigned int *p, unsigned int old, unsigned int value)
 {
@@ -169,6 +169,7 @@ static void *host(const void *p)
     return (void *)p;
 }
 
+/** Copy `n` bytes, translating model user addresses with `host`. */
 void *k_memcpy(void *dest, const void *src, size_t n)
 {
     uint8_t *d = host(dest);
@@ -181,6 +182,8 @@ void *k_memcpy(void *dest, const void *src, size_t n)
     return dest;
 }
 
+/** Fill `n` bytes with `c`, translating a model user address with
+ * `host`. */
 void *k_memset(void *ptr, int c, size_t n)
 {
     uint8_t *d = host(ptr);
@@ -203,6 +206,7 @@ void *kmalloc(size_t size)
     return p;
 }
 
+/** `kmalloc`, zeroed. */
 void *kzalloc(size_t size)
 {
     void *p = kmalloc(size);
@@ -213,6 +217,7 @@ void *kzalloc(size_t size)
     return p;
 }
 
+/** Free a block `kmalloc` gave and count it back. */
 void kfree(void *p)
 {
     if (p) {
@@ -361,16 +366,19 @@ void wq_wake(wait_queue_t *wq, uint32_t kinds)
     }
 }
 
+/** A wake of every kind of change, as `wq_wake` counts it. */
 void wq_wake_all(wait_queue_t *wq)
 {
     wq_wake(wq, WQ_ALL);
 }
 
+/** Empty the queue `wq` and zero its counts. */
 void wait_queue_init(wait_queue_t *wq)
 {
     k_memset(wq, 0, sizeof(*wq));
 }
 
+/** Take a reference to the description `ofd`, when there is one. */
 void fd_ofd_ref(struct open_file *ofd)
 {
     if (ofd) {
@@ -517,17 +525,20 @@ void fd_release_backing(fd_entry_t *e)
     }
 }
 
+/** The next socket inode number, from 1. */
 uint32_t socket_inode_next(void)
 {
     return ++inodes;
 }
 
+/** A failure: no row sends a network socket. */
 void socket_ref(struct socket *sock)
 {
     (void)sock;
     check(0, "no row sends a network socket");
 }
 
+/** Count a SIGPIPE; post nothing. */
 void signal_post_thread(process_t *t, int signo, const struct k_siginfo *info)
 {
     (void)t;
@@ -537,6 +548,7 @@ void signal_post_thread(process_t *t, int signo, const struct k_siginfo *info)
     }
 }
 
+/** The length of the string `s`. */
 static uint32_t length(const char *s)
 {
     uint32_t n = 0;
@@ -547,6 +559,7 @@ static uint32_t length(const char *s)
     return n;
 }
 
+/** Whether the strings `a` and `b` are equal. */
 static int same(const char *a, const char *b)
 {
     uint32_t i;
@@ -610,11 +623,13 @@ void fs_socket_unbind(struct vfs_ref *ref)
     ((struct sockfile *)ref->node)->held = 0;
 }
 
+/** The host address of the model user address `addr`. */
 static uint8_t *user(uint32_t addr)
 {
     return memory + (addr - USER_BASE);
 }
 
+/** The 32-bit word at the model user address `addr`. */
 static uint32_t word(uint32_t addr)
 {
     uint32_t w;
@@ -623,16 +638,20 @@ static uint32_t word(uint32_t addr)
     return w;
 }
 
+/** Store the 32-bit word `w` at the model user address `addr`. */
 static void set_word(uint32_t addr, uint32_t w)
 {
     k_memcpy(user(addr), &w, sizeof(w));
 }
 
+/** Store the bytes of `s`, without its NUL, at the model user address
+ * `addr`. */
 static void set_bytes(uint32_t addr, const char *s)
 {
     k_memcpy(user(addr), s, length(s));
 }
 
+/** Whether the bytes at the model user address `addr` are those of `s`. */
 static int bytes_are(uint32_t addr, const char *s)
 {
     uint32_t i;
@@ -668,11 +687,13 @@ static uint32_t path_at(uint32_t addr, const char *path)
     return 3u + length(path);
 }
 
+/** Slot `fd` of the shared table, whatever its state. */
 static fd_entry_t *fd_at(int fd)
 {
     return &shared.entries[fd];
 }
 
+/** The socket of slot `fd` of the shared table. */
 static struct unix_sock *sock_at(int fd)
 {
     return (struct unix_sock *)shared.entries[fd].priv;
@@ -1397,12 +1418,14 @@ static void flight_lock_row(void)
     end_row("flight lock");
 }
 
-/* A mount is its own base here: no test makes a bind mount. */
+/** `m` itself: no row makes a bind mount, so a mount is its own base. */
 const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m)
 {
     return m;
 }
 
+/** Set up the process and its shared table, and run every row; 0 when
+ * each passes, 1 otherwise. */
 int main(void)
 {
     unix_init();

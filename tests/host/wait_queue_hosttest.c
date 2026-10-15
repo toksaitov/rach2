@@ -1,14 +1,13 @@
 /**
- * Dual-target host test for the multi-waiter queue logic of proc/wait_queue.c.
+ * Host test of the list of waiters of proc/wait_queue.c.
  *
  * host-deps:
  *
- * The fixed-slot array ops, enqueue (idempotent), dequeue, and wq_wake_all
- * (mark every BLOCKED waiter READY and empty the queue), are the part a
- * fence-post bug could break, so they run natively here under ASan/UBSan with a
- * stand-in PCB. The block/yield path (schedule + sti;hlt) is kernel-only and is
- * covered in-guest by waitprobe and by the live httpd accept/recv wake; here we
- * exercise exactly the array bookkeeping wq_wake_all relies on.
+ * The test runs the enqueue, which adds a waiter once, the dequeue, and
+ * wq_wake_all, which makes every blocked waiter ready and empties the queue,
+ * under the sanitizers and with process records of its own. The block and
+ * the idle wait run only in the kernel, where the guest probe waitprobe
+ * covers them.
  *
  * A wake is counted in the queue's `wakes` for each kind of change it names,
  * data, room or hangup, with waiters or none, and wq_wake_all names all three;
@@ -22,9 +21,10 @@
  * deadline again before it blocks again, or a blocked or ignored signal would
  * leave it asleep with no timer to end it.
  *
- * Built with WAIT_QUEUE_HOSTTEST, which drops the asm irq_save/restore and the
- * idle hlt and includes wait_queue.c directly so the static enqueue/dequeue are
- * reachable. Returns the failed-check count (0 == pass).
+ * The test defines WAIT_QUEUE_HOSTTEST, under which wait_queue.c masks no
+ * interrupt, takes no lock and does not halt, and a wake marks the process
+ * ready itself, and includes the file whole so that its static enqueue and
+ * dequeue can be called.
  */
 #define WAIT_QUEUE_HOSTTEST
 
@@ -49,6 +49,7 @@ void schedule(void)
     }
 }
 
+/** 0: no signal is pending. */
 int signal_pending(void)
 {
     return 0;
@@ -71,7 +72,7 @@ static int fails;
         }                                                     \
     } while (0)
 
-/* How many records on wq are p's. */
+/** How many of the waiters on `wq` are `p`'s. */
 static int count_in(wait_queue_t *wq, process_t *p)
 {
     struct wq_waiter *w;
@@ -85,6 +86,7 @@ static int count_in(wait_queue_t *wq, process_t *p)
     return n;
 }
 
+/** The number of waiters on `wq`. */
 static int total_queued(wait_queue_t *wq)
 {
     struct wq_waiter *w;
@@ -96,12 +98,14 @@ static int total_queued(wait_queue_t *wq)
     return n;
 }
 
+/** Put `p`'s own waiter on `wq`. */
 static void enqueue(wait_queue_t *wq, process_t *p)
 {
     p->waiter.proc = p;
     wq_enqueue(wq, &p->waiter);
 }
 
+/** Take `p`'s own waiter off `wq`. */
 static void dequeue(wait_queue_t *wq, process_t *p)
 {
     wq_dequeue(wq, &p->waiter);
@@ -143,6 +147,8 @@ static void wake_kinds(void)
     CHECK(wq_wakes(&wq, WQ_DATA) == 2);
 }
 
+/** Run every check; the exit status is the count of failed checks, at most
+ * 255. */
 int main(void)
 {
     wait_queue_t wq;
@@ -159,7 +165,7 @@ int main(void)
     b.state = PROC_BLOCKED;
     c.state = PROC_BLOCKED;
 
-    /* enqueue adds, and is idempotent (no double-insert). */
+    /* enqueue adds a waiter once. */
     enqueue(&wq, &a);
     enqueue(&wq, &b);
     enqueue(&wq, &a); /* already queued */
@@ -167,7 +173,7 @@ int main(void)
     CHECK(count_in(&wq, &b) == 1);
     CHECK(total_queued(&wq) == 2);
 
-    /* dequeue removes one, idempotently. */
+    /* dequeue removes a waiter, and a second dequeue does nothing. */
     dequeue(&wq, &a);
     dequeue(&wq, &a); /* already gone */
     CHECK(count_in(&wq, &a) == 0);
@@ -181,7 +187,7 @@ int main(void)
     CHECK(a.state == PROC_READY);
     CHECK(b.state == PROC_READY);
     CHECK(c.state == PROC_READY);
-    CHECK(total_queued(&wq) == 0); /* multi-waiter wake clears all slots */
+    CHECK(total_queued(&wq) == 0); /* the wake empties the list */
 
     /* The wake is counted for every kind (wake_kinds). */
     CHECK(wq_wakes(&wq, WQ_DATA) == 1 && wq_wakes(&wq, WQ_ROOM) == 1);
@@ -198,8 +204,7 @@ int main(void)
     CHECK(b.state == PROC_READY);
     CHECK(total_queued(&wq) == 0);
 
-    /* Sixty-four distinct waiters, four times the process table that was:
-     * the list has no size. */
+    /* Sixty-four waiters: the list has no fixed size. */
     wait_queue_init(&wq);
     {
         static process_t pool[64];
@@ -215,8 +220,7 @@ int main(void)
         CHECK(total_queued(&wq) == 0);
     }
 
-    /* A wake that does not end the wait clears the deadline; the wait arms
-     * it again before it blocks again. */
+    /* The wait arms the deadline a wake cleared before it blocks again. */
     {
         static process_t sleeper;
 

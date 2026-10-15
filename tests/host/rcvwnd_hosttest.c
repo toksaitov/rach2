@@ -1,21 +1,21 @@
 /*
- * rcvwnd_hosttest.c: the receiver's window-update decision.
+ * rcvwnd_hosttest.c: the TCP receiver's decision to announce a window that
+ * reopened, network/tcp/rcvwnd.c.
  *
  * host-deps: rach2/sys/network/tcp/rcvwnd.c
  *
- * The rule this guards is worth two hundred times the throughput of getting it
- * wrong. Before it existed, a reader drained its ring and told nobody, so a
- * peer that had filled the window waited for its own persist timer before
- * probing again, and bulk receive ran at about a kilobyte a second while
- * transmit ran at two hundred. So the case that matters most below is the
- * plain one: a full buffer, drained, must produce a window.
+ * A reader that drains a full receive ring must announce the window that
+ * reopened. Without the announcement a peer that filled the window waits for
+ * its persist timer before it probes again, and a bulk transfer to the
+ * receiver stops for that time at every full window. The first rows check
+ * that case.
  *
- * The opposite mistake is announcing after every byte, which spends a segment
- * per byte and draws segments just as small in reply. That is the silly-window
- * syndrome RFC 1122 4.2.3.3 exists to prevent, and its rule is one maximum
- * segment size or half the buffer, whichever is smaller. Which of those two
- * wins depends entirely on the geometry, so the arithmetic is driven here at
- * ring and segment sizes the running kernel never uses.
+ * Announcing after every byte read spends a segment for each byte and draws
+ * segments as small in reply, the silly-window syndrome. RFC 1122 4.2.3.3
+ * waits until the window has grown by one maximum segment size or half the
+ * buffer, whichever is smaller. Which of the two is smaller depends on the
+ * sizes of the ring and the segment, so the rows drive the arithmetic at
+ * rings from 8 bytes to 512 KiB.
  */
 
 extern int printf(const char *fmt, ...);
@@ -32,14 +32,22 @@ static int fails;
         }                                   \
     } while (0)
 
-/* The kernel's geometry: a 4096-byte ring and a 1460-byte segment, where one
- * segment is smaller than half the ring (2048) and therefore sets the bar. */
+/* A 4096-byte ring and a 1460-byte segment, which is smaller than half the
+ * ring (2048) and so is the threshold. */
 #define RING 4096u
 #define MSS  1460u
 
+/**
+ * Run every row; the exit status is the count of failed rows, at most 255.
+ *
+ * The window field has 16 bits, and a ring at or past that limit announces
+ * the largest window that fits. Its low 16 bits would not do: for a ring of
+ * 65536 they are 0, which `rcvwnd_update` returns to mean "send nothing", and
+ * a drained ring would announce nothing.
+ */
 int main(void)
 {
-    /* ---- the case the change exists for ---- */
+    /* ---- a drained ring announces its window ---- */
 
     CHECK(rcvwnd_update(0, 0, RING, 65535u, MSS) == RING,
           "a buffer drained from full to empty announces the whole ring");
@@ -64,9 +72,7 @@ int main(void)
 
     /* ---- which half of the rule wins follows the geometry ---- */
 
-    /* On a large ring one segment is far smaller than half the buffer, so the
-     * segment sets the bar; a kernel that always used half would stay quiet
-     * here and lose the throughput this test exists to keep. */
+    /* On a large ring one segment is smaller than half: the threshold. */
     CHECK(rcvwnd_update(0, 32768u - MSS, 32768u, 65535u, MSS) == MSS,
           "on a large ring one segment is the bar, not half the buffer");
     CHECK(rcvwnd_update(0, 32768u - (MSS - 1u), 32768u, 65535u, MSS) == 0,
@@ -80,10 +86,6 @@ int main(void)
 
     /* ---- the window is a 16-bit field ---- */
 
-    /* A ring at or past the 16-bit limit must report the largest window that
-     * fits, not the low bits of the real one. Truncating 65536 would yield 0,
-     * which this function uses to mean "stay quiet", so a fully drained buffer
-     * would announce nothing at all. */
     CHECK(rcvwnd_update(0, 0, 65536u, 65535u, MSS) == 65535u,
           "a ring at the 16-bit limit announces 65535, not a truncated zero");
     CHECK(rcvwnd_update(0, 0, 70000u, 65535u, MSS) == 65535u,
@@ -91,7 +93,7 @@ int main(void)
     CHECK(rcvwnd_update(65535u, 0, 65536u, 65535u, MSS) == 0,
           "a clamped window already advertised is not advertised again");
 
-    /* ---- refusals, not wraps ---- */
+    /* ---- sizes that would wrap give 0; the window scale ---- */
 
     CHECK(rcvwnd_update(0, 1u, 0u, 65535u, MSS) == 0,
           "a zero ring announces nothing instead of underflowing");

@@ -18,12 +18,11 @@
  * end at 1102, so seconds count a hundred ticks and a part of a tick rounds
  * up, and a `poll` of 1 ms and a `ppoll` of 1 ns end at 1001; begun 4 ms into
  * the tick, a `poll` of 1 ms ends at 1001 and one of 7 ms at 1002. A zero
- * timeout ends at once, a negative or
- * null one has no deadline, the longest `ppoll` timeout, begun 9 ms into a
- * tick so that its rounding would carry it a tick past the limit, ends
- * 0x7FFFFFFF ticks ahead when the count is about to wrap and is not reached
- * at the tick it began, and a deadline is reached at its tick and not the
- * tick before.
+ * timeout ends at once, and a negative or null one has no deadline. The
+ * longest `ppoll` timeout, begun 9 ms into a tick so that its rounding would
+ * carry it a tick past the limit, ends 0x7FFFFFFF ticks ahead when the count
+ * is about to wrap, and is not reached at the tick it began. A deadline is
+ * reached at its tick and not the tick before.
  */
 #include "isr.h"
 struct isr_params;
@@ -63,6 +62,7 @@ static int failures;
         }                                                         \
     } while (0)
 
+/** Run every check; 0 when each passes, 1 otherwise. */
 int main(void)
 {
     struct poll_timespec ts;
