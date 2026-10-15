@@ -1,6 +1,6 @@
 # Build and verification tools
 
-The programs and scripts under `tools/` prepare a machine to build Rach2 and check what the build makes. `setup/` checks a host for the tools the build and the suites need; `verify/` is the style check, `tests/run style`, which judges the source tree; `inspect/` judges built kernels, programs and images; `image/` makes the ext2 roots, GRUB disks, sticks and ISOs; `ci/` is what the GitHub workflows run; `dev/` reaches the testing host and installed machines and builds the compilation database; `font/` makes the console's font; and `git-hooks/` has the commit-msg hook. The root Makefile runs most of them with the arguments they need, so a person seldom calls one directly. The suites, their runner and their checkers are under [`tests/system/`](../tests/system/Readme.md).
+The programs and scripts under `tools/` prepare a machine to build Rach2 and check what the build makes. `setup/` checks a host for the tools the build and the suites need; `verify/` is the style check, `tests/run style`, which judges the source tree; `inspect/` judges built kernels, programs and images; `image/` makes the ext2 roots, GRUB disks, sticks and ISOs; `ci/` is what the GitHub workflows run; `flow/` runs the worker and manager loops; `dev/` reaches the testing host and installed machines and builds the compilation database; `font/` makes the console's font; and `git-hooks/` has the commit-msg hook. The root Makefile runs most of them with the arguments they need, so a person seldom calls one directly. The suites, their runner and their checkers are under [`tests/system/`](../tests/system/Readme.md).
 
 ## Use
 
@@ -76,6 +76,29 @@ The accounts are in the `kvm` group, and the runner uses `/dev/kvm` when it can 
     tools/dev/testing.sh wait NAME [SEEN]
 
 `sync` makes the copy match this tree, by content, except what `.gitignore` lists, of which it sends only the Doom WAD, so the host keeps its own `build/` and vendor trees. It refuses while a run or any process but a person's shell works in the copy, or another caller has the copy's lock. `run` syncs and runs the command, one string to the remote shell, with `RACH2_QEMU_ACCEL=tcg`. `get` copies paths of the copy here, such as products only Linux builds. `wait` watches a run started as `/home/testing/NAME.sh` that writes its result lines to `NAME.out`, and returns on a new line, the run's end, 15 minutes with nothing changed under `NAME/`, or 100 minutes. The script needs rsync 3; macOS's openrsync would delete the host's build and vendor trees.
+
+### The worker and manager loops: `flow/`
+
+The work and the management of the process run as loops: shell scripts that start one agent session after another, so that no session waits on a person and each piece of work is a process that ends. [worker.sh](flow/worker.sh) runs worker sessions in the clone it is in, as the account that clone's `gh` and git use, and [manager.sh](flow/manager.sh) runs the manager's checks. Each runs in a detached tmux session, from a clone of its own. An account on the testing host runs one, with its state in `~/flow`:
+
+    tmux new-session -d -s worker 'sh ~/rach2/tools/flow/worker.sh'
+
+The owner's computer runs three, with tmux from Homebrew:
+
+    git clone https://github.com/toksaitov/rach2 ~/flow/claude/rach2
+    git clone https://github.com/toksaitov/rach2 ~/flow/codex/rach2
+    git clone https://github.com/toksaitov/rach2 ~/flow/manager/rach2
+    tmux new-session -d -s claude 'RACH2_TESTING_COPY=/home/testing/rach2-claude \
+        sh ~/flow/claude/rach2/tools/flow/worker.sh -s ~/flow/claude'
+    tmux new-session -d -s codex 'RACH2_TESTING_COPY=/home/testing/rach2-codex \
+        sh ~/flow/codex/rach2/tools/flow/worker.sh -a codex -s ~/flow/codex'
+    tmux new-session -d -s manager 'sh ~/flow/manager/rach2/tools/flow/manager.sh'
+
+`touch STATE/stop` ends a loop after its current session; `tmux kill-session -t NAME` ends it at once and leaves that session running. A loop needs `claude` or `codex` signed in, `gh` with the `project` scope, git that can push, and perl. A loop on the owner's computer also needs `ssh testing` and a copy of its own on the host, which `RACH2_TESTING_COPY` names, so that the loops do not refuse each other's syncs.
+
+Before a session, a worker loop that has no issue claims one with [board.sh](flow/board.sh), under a lock shared by the loops of one user on one machine, and keeps its number in `STATE/issue`, since the owner's two loops share one account. The session's prompt, [worker.txt](flow/worker.txt), names the issue, and the session builds, checks and pushes as `AGENTS.md` says; the loop gives the next session the same issue until it is closed or handed back. Claude Code sessions run at high effort, cannot schedule a wakeup, and wait for their helpers; Codex sessions run `gpt-6.1-sol` at high effort without a sandbox, as Claude Code's run with permissions bypassed. The loop stops a session after six hours, with every process in its group, waits fifteen minutes after a usage limit, backs off after sessions that end within two minutes, and slows after three sessions that leave one issue open. It runs from a copy of `tools/flow` taken from `origin/master` and restarts when master's copy changes, so that a change to the loops reaches every machine at its next session.
+
+The manager loop starts a headless Claude Code check with [manager.txt](flow/manager.txt) and the last lines of `STATE/manager.log`, stops a check still running after forty minutes, and starts the next thirty minutes after the last ended. A check reads the process through [status.sh](flow/status.sh), which reads the loops that [workers](flow/workers) lists, and warns the owner of an incident with [notify.sh](flow/notify.sh): a push to the phone from an interactive Claude Code session with Remote Control, the only kind that sends one. That session waits two and a half minutes before the push, because Claude Code sends none while its terminal was just typed in, and the prompt a session starts with counts as typing; the owner can then open the session from the phone.
 
 ### ci: `ci/`
 
@@ -294,4 +317,4 @@ The C programs are compiled on the host with the rule text of [`mk/host.mk`](../
 * The suites test the image tools by booting what they make: `grub`, `bootorder`, `menu`, `install`, `drill`, `sealed`, `uefi`, `installer` and `grow` boot GRUB disks; `usbdisk` boots the stick; `diskpolicy` and `drill` run `check_diskpolicy.sh` and `check_recovery.sh`; and `grow` runs `dev/machine_grow_plan.sh` and `dev/machine_grow.sh` on a 64 MiB root. `tests/run runner` tests `tests/run`'s use of `hostcheck`.
 * The fault scripts `tests/host/elfcheck_mutate.sh`, `tests/system/host_tools_mutate.sh`, `install_stick_mutate.sh` and `rehearse_group_mutate.sh`, and the `--mutate` modes of the tests above, prove that these tests fail on a planted fault.
 
-Nothing tests the scripts of `ci/`, `dev/testing.sh`, `setup/doctor.sh`, `mkiso.sh` apart from the ISOs the suites boot, `keyname.sh`, `check_link.sh`, `mkfont.sh` or `sha256.c` on their own.
+Nothing tests the scripts of `ci/`, `flow/`, `dev/testing.sh`, `setup/doctor.sh`, `mkiso.sh` apart from the ISOs the suites boot, `keyname.sh`, `check_link.sh`, `mkfont.sh` or `sha256.c` on their own.

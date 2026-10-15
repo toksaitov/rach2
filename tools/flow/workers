@@ -1,0 +1,10 @@
+# workers: the worker loops that status.sh reads, one a line: a name, the
+# host the loop runs on as ssh(1) reaches it from the manager's machine, or
+# `-` for that machine itself, and the loop's state directory there.
+a rach2-toksaitov-a ~/flow
+d rach2-toksaitov-d ~/flow
+m rach2-toksaitov-m ~/flow
+s rach2-toksaitov-s ~/flow
+v rach2-toksaitov-v ~/flow
+claude - ~/flow/claude
+codex - ~/flow/codex
