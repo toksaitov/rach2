@@ -10,7 +10,9 @@
 # The report's `unfinished-core` and `unfinished-night` repeat the whole run
 # through tools/ci/run.sh, including its build and the night's separate bigmem.
 # A commit is tested by building it and running those items, the build alone
-# when `build` is among them. A test passes, fails, or cannot be made: a
+# when `build` is among them. tests/run takes a set only by itself, so `core`
+# runs after the other items in a run of its own, and `all` runs alone since
+# it covers every suite. A test passes, fails, or cannot be made: a
 # commit that cannot be checked out, or that does not build when the failure
 # is a suite's, is untestable, and an untestable commit ends the search with
 # the range unresolved. BAD is tested first: a failure that does not repeat
@@ -33,13 +35,19 @@ logs="$RUNNER_TEMP/bisect"
 mkdir -p "$logs"
 attempt=0
 run_kind=""
+test_set=""
+test_items=""
 case " $items " in
-    *" unfinished-core "*) run_kind=core; test_items="" ;;
-    *" unfinished-night "*) run_kind=night; test_items="" ;;
-    *" build "*) test_items="" ;;
-    *" core "*) test_items=core ;;
-    *" all "*) test_items=all ;;
-    *) test_items=$items ;;
+    *" unfinished-core "*) run_kind=core ;;
+    *" unfinished-night "*) run_kind=night ;;
+    *" build "*) ;;
+    *" all "*) test_set=all ;;
+    *) for item in $items; do
+           case $item in
+               core) test_set=core ;;
+               *) test_items="$test_items $item" ;;
+           esac
+       done ;;
 esac
 
 say() { # say TEXT: comment on the issue and print the text
@@ -67,14 +75,14 @@ tested() { # tested COMMIT
         mv "$log.log" "$log.failed.log"; return 1
     fi
     if ! make >> "$log.log" 2>&1; then
-        if [ -z "$test_items" ]; then
+        if [ -z "$test_set$test_items" ]; then
             mv "$log.log" "$log.failed.log"; return 1
         fi
         mv "$log.log" "$log.untestable.log"; return 2
     fi
-    [ -n "$test_items" ] || { mv "$log.log" "$log.passed.log"; return 0; }
     # shellcheck disable=SC2086 # a suite name is one word by format
-    if tests/run $test_items >> "$log.log" 2>&1; then
+    if { [ -z "$test_items" ] || tests/run $test_items >> "$log.log" 2>&1; } &&
+        { [ -z "$test_set" ] || tests/run "$test_set" >> "$log.log" 2>&1; }; then
         mv "$log.log" "$log.passed.log"; return 0
     fi
     mv "$log.log" "$log.failed.log"

@@ -28,13 +28,17 @@ fault()
             sed 's/items=unfinished-\$kind/items=runner/' "$repo/tools/ci/report.sh" > "$work/report.sh"
             ! cmp -s "$repo/tools/ci/report.sh" "$work/report.sh" ;;
         bisect)
-            sed 's/run_kind=core; test_items=""/run_kind=""; test_items=runner/' "$repo/tools/ci/bisect.sh" > "$work/bisect.sh"
+            sed 's/run_kind=core ;;/test_items=runner ;;/' "$repo/tools/ci/bisect.sh" > "$work/bisect.sh"
+            ! cmp -s "$repo/tools/ci/bisect.sh" "$work/bisect.sh" ;;
+        items)
+            sed 's/core) test_set=core ;;/core) test_set=core; test_items="" ;;/' "$repo/tools/ci/bisect.sh" > "$work/bisect.sh"
             ! cmp -s "$repo/tools/ci/bisect.sh" "$work/bisect.sh" ;;
     esac
 }
 if [ "$mode" = texts ]; then
     fault report
     fault bisect
+    fault items
     exit 0
 fi
 
@@ -118,6 +122,8 @@ report()
 }
 
 # bisect ITEM COMMAND FAIL: check the selected command and repeated verdicts.
+# For an item that is not an unfinished run, COMMAND is the tests/run lines
+# expected after the build, and the stand-in runner always passes.
 bisect()
 {
     item=$1 command=$2 CI_TEST_FAIL=$3
@@ -128,13 +134,15 @@ bisect()
     : > "$work/events"
     : > "$work/gh.log"
     sh "$work/bisect.sh" i686 good bad 7 "$item" > "$work/bisect.log" 2>&1 || return 1
-    if [ "$item" = runner ]; then
-        printf 'make\ntests runner\n' > "$work/expected"
-    elif [ "$CI_TEST_FAIL" = 0 ]; then
-        printf 'run %s bad\n' "$command" > "$work/expected"
-    else
-        printf 'run %s bad\nrun %s bad\nrun %s good\n' "$command" "$command" "$command" > "$work/expected"
-    fi
+    case $item in
+        unfinished-*)
+            if [ "$CI_TEST_FAIL" = 0 ]; then
+                printf 'run %s bad\n' "$command" > "$work/expected"
+            else
+                printf 'run %s bad\nrun %s bad\nrun %s good\n' "$command" "$command" "$command" > "$work/expected"
+            fi ;;
+        *) printf 'make\n%b\n' "$command" > "$work/expected" ;;
+    esac
     cmp -s "$work/expected" "$work/events" || return 1
     if [ "$CI_TEST_FAIL" = 0 ]; then
         grep -q -- '--add-label intermittent' "$work/gh.log" || return 1
@@ -143,7 +151,8 @@ bisect()
     fi
 }
 
-# rows: check both unfinished kinds and preserve an actual runner failure.
+# rows: check both unfinished kinds, preserve an actual runner failure, and
+# run the core set beside the other items of a core run that failed.
 rows()
 {
     for kind in core night; do
@@ -154,7 +163,8 @@ rows()
         bisect "unfinished-$kind" "$kind" 0 || return 1
         bisect "unfinished-$kind" "$kind" 1 || return 1
     done
-    bisect runner runner 0
+    bisect runner 'tests runner' 0 || return 1
+    bisect 'style core' 'tests style\ntests core' 0
 }
 
 if ! rows; then
@@ -172,7 +182,11 @@ if [ "$mode" = mutate ]; then
     if bisect unfinished-core core 0; then
         echo 'ci-test: result: fail: bisection fault passed' >&2; exit 1
     fi
+    fault items
+    if bisect 'style core' 'tests style\ntests core' 0; then
+        echo 'ci-test: result: fail: core items fault passed' >&2; exit 1
+    fi
     cp "$repo/tools/ci/bisect.sh" "$work/bisect.sh"
     rows
 fi
-echo 'ci-test: result: pass: unfinished runs and the runner suite'
+echo 'ci-test: result: pass: unfinished runs, the runner suite and core items'

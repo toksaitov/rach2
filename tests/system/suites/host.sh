@@ -263,10 +263,10 @@ if [ -z "${HOST_PRINT_COMMANDS:-}" ]; then
         fail=1
     fi
     if sh tests/system/ci_test.sh >"$VDIR/ci.rlog" 2>&1; then
-        echo "hosttest: result: pass: ci reports and bisection of unfinished runs"
+        echo "hosttest: result: pass: ci reports and bisection"
     else
         cat "$VDIR/ci.rlog"
-        echo "hosttest: result: fail: ci reports and bisection of unfinished runs" >&2
+        echo "hosttest: result: fail: ci reports and bisection" >&2
         fail=1
     fi
     if sh tests/system/install_accounts_test.sh >"$VDIR/install_accounts.rlog" 2>&1; then
