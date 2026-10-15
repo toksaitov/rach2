@@ -74,16 +74,6 @@ static size_t strlen(const char *s)
     return len;
 }
 
-/** Compare two strings as the C library's strcmp does. */
-static int strcmp(const char *s1, const char *s2)
-{
-    while (*s1 && *s1 == *s2) {
-        s1++;
-        s2++;
-    }
-    return *(unsigned char *)s1 - *(unsigned char *)s2;
-}
-
 /** Compare at most `n` bytes of two strings, as strncmp does. */
 static int strncmp(const char *s1, const char *s2, size_t n)
 {
@@ -144,10 +134,9 @@ static const char *test_content = "Hello from dup2!";
 PROBE_START void _start(void)
 {
     char buf[128];
-    int fd, fd2, n, result;
+    int fd, n, result;
     int passed = 0;
     int failed = 0;
-    int saved_stdout = -1;
 
     puts_stderr("Dup2 syscall test starting...");
     puts_stderr("");

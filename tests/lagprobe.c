@@ -437,7 +437,10 @@ static int lb_read_only(void)
     int fd, n, i, ro = 0;
 
     fd = syscall3(SYS_OPEN, (long)"/proc/mounts", O_RDONLY, 0);
-    n = fd < 0 ? -1 : syscall3(SYS_READ, fd, (long)text, (int)sizeof(text) - 1);
+    if (fd < 0) {
+        fail("open /proc/mounts");
+    }
+    n = syscall3(SYS_READ, fd, (long)text, (int)sizeof(text) - 1);
     syscall1(SYS_CLOSE, fd);
     if (n <= 0) {
         fail("read /proc/mounts");
@@ -690,7 +693,7 @@ static void run_mounted(void)
 {
     int pid, pid2, fd, before, after;
     int total;
-    int hello_bytes;
+    int pattern_bytes;
 
     if (syscall2(SYS_MKDIR, (long)"/lm", 0755) != 0) {
         fail("mkdir /lm");
@@ -736,8 +739,8 @@ static void run_mounted(void)
     if (fd < 0) {
         fail("open the shared file");
     }
-    hello_bytes = syscall3(SYS_LSEEK, fd, 0, 2);
-    if (hello_bytes != PATTERN_SECTORS * 512 || syscall3(SYS_LSEEK, fd, 0, 0) != 0) {
+    pattern_bytes = syscall3(SYS_LSEEK, fd, 0, 2);
+    if (pattern_bytes != PATTERN_SECTORS * 512 || syscall3(SYS_LSEEK, fd, 0, 0) != 0) {
         fail("the shared file's size");
     }
     if (syscall1(SYS_PIPE, (long)pipe_fds) != 0) {
@@ -792,10 +795,13 @@ static int mount_is_ro(const char *dir)
 {
     static char text[1024];
     int fd = syscall3(SYS_OPEN, (long)"/proc/mounts", O_RDONLY, 0);
-    int n = fd < 0 ? -1 : syscall3(SYS_READ, fd, (long)text, (int)sizeof(text) - 1);
-    int i, j, ro = 0;
+    int n, i, j, ro = 0;
     size_t dlen = strlen(dir);
 
+    if (fd < 0) {
+        fail("open /proc/mounts");
+    }
+    n = syscall3(SYS_READ, fd, (long)text, (int)sizeof(text) - 1);
     syscall1(SYS_CLOSE, fd);
     if (n <= 0) {
         fail("read /proc/mounts");

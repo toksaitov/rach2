@@ -54,7 +54,6 @@ typedef unsigned int u32;
 
 #define EBADF  9
 #define EISDIR 21
-#define EINVAL 22
 
 #define O_RDONLY 0
 #define O_WRONLY 1
