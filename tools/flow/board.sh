@@ -12,7 +12,9 @@
 # the open issues whose titles begin `ci:`, then the Ready issues in the
 # board's order, each open, unassigned and with no open blocker, one line each
 # with the number, a tab and the title. `gh project item-list` does not return
-# the board's order, so the query asks for the items by position.
+# the board's order, so the query asks for the items by position. When any
+# page of the answer is lost, `next` prints nothing and fails, so that a caller
+# does not take a part of the board for the whole.
 #
 # `take N` assigns N to this account and sets it In progress, then reads the
 # issue's timeline. When another account is assigned too and was assigned
@@ -78,7 +80,7 @@ set_status()
 
 next()
 {
-    gh api graphql --paginate -F n="$BOARD" -f o="$OWNER" -f query='
+    answer=$(gh api graphql --paginate -F n="$BOARD" -f o="$OWNER" -f query='
         query($o: String!, $n: Int!, $endCursor: String) {
             user(login: $o) { projectV2(number: $n) {
                 items(first: 100, after: $endCursor,
@@ -95,7 +97,8 @@ next()
                    .content.assignees.totalCount == 0 and
                    ([.content.blockedBy.nodes[] | select(.state == "OPEN")]
                     | length) == 0) |
-            "\(.fieldValueByName.name // "-")\t\(.content.number)\t\(.content.title)"' |
+            "\(.fieldValueByName.name // "-")\t\(.content.number)\t\(.content.title)"')
+    printf '%s\n' "$answer" |
         awk -F '\t' '$3 ~ /^ci:/ { print $2 "\t" $3; next }
             $1 == "Ready" { r = r $2 "\t" $3 "\n" } END { printf "%s", r }'
 }
