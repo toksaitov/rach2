@@ -20,7 +20,7 @@
  * char's flush or an erase; and slave output is data for it. In packet mode
  * a master read begins with the status byte, and TCFLSH on the master drops
  * the slave's output. A read that does not wait ends the console latency
- * span.
+ * span, and slave output takes no more of the master's ring than it needs.
  */
 #define WAIT_QUEUE_HOSTTEST
 #define wq_wait_event model_wait_event
@@ -41,6 +41,7 @@ static fd_entry_t master, slave;
 static int failures, irq_enabled = 1, pending_signal, switches;
 static int recording, recorded_waits, read_stamps, serial_pos, serial_len;
 static int copy_calls, copy_failure, spans;
+static void (*copy_action)(void);
 static const char *serial_bytes;
 static void (*scheduled_action)(void);
 static const char *wake_detail;
@@ -164,15 +165,21 @@ int user_range_ok(uintptr_t addr, size_t len)
 }
 
 /** Copy `n` bytes from the host address `src`; -EFAULT, copying nothing,
- * when this is copy number `copy_failure`. */
+ * when this is copy number `copy_failure`. A `copy_action` runs once, as
+ * another thread would while the copy sleeps on a page fault. */
 int copy_from_user(void *dst, const void __user *src, size_t n)
 {
     unsigned char *d = dst;
     const unsigned char *s = src;
+    void (*action)(void) = copy_action;
 
     copy_calls++;
     if (copy_calls == copy_failure) {
         return -EFAULT;
+    }
+    copy_action = NULL;
+    if (action) {
+        action();
     }
     while (n--) {
         *d++ = *s++;
@@ -346,6 +353,7 @@ static void setup_pair(void)
     poller.waiter.proc = &poller;
     current_proc = &consumer;
     pending_signal = switches = recording = copy_calls = copy_failure = spans = 0;
+    copy_action = NULL;
     irq_enabled = 1;
     pty_init_pool();
     CHECK(pty_alloc() == &pair, "production allocation initializes the pair");
@@ -607,6 +615,65 @@ static void nonblocking_latency(void)
           "a read that does not wait ends the latency span");
 }
 
+/** Under OPOST a byte of slave output takes at most two bytes of the
+ * master's ring, so the slave is writable, and a newline fits, while two
+ * are free, and not while one is. */
+static void output_growth(void)
+{
+    wait_queue_t *wq = NULL;
+    char out[4];
+
+    setup_pair();
+    current_proc = &producer;
+    pair.m_tail = PTY_BUF_SIZE - 1;
+    CHECK(pts_poll(&slave, POLLOUT, &wq) == 0, "a ring with one byte free has no room for output");
+    pair.m_tail = PTY_BUF_SIZE - 2;
+    CHECK(pts_poll(&slave, POLLOUT, &wq) == POLLOUT && pts_write(&slave, "\n", 1) == 1 &&
+              switches == 0 && pty_m_avail(&pair) == PTY_BUF_SIZE,
+          "the ring takes a newline into its last two bytes");
+    pair.m_head = PTY_BUF_SIZE - 2;
+    CHECK(ptm_read(&master, out, sizeof(out)) == 2 && out[0] == '\r' && out[1] == '\n',
+          "ONLCR makes the newline CR LF");
+}
+
+/** Echo of input the master wrote, put in the ring while the slave writer's
+ * copy sleeps. */
+static void echo_during_copy(void)
+{
+    pty_slave_sink(&pair, 'e');
+    pty_slave_sink(&pair, 'e');
+}
+
+/** The master reads the ring empty, which wakes the slave writer; the ring
+ * ends with the echo and the first newline. */
+static void drain_action(void)
+{
+    static char out[PTY_BUF_SIZE];
+    char *end = out + PTY_BUF_SIZE - 4;
+
+    CHECK(ptm_read(&master, out, sizeof(out)) == PTY_BUF_SIZE && end[0] == 'e' && end[1] == 'e' &&
+              end[2] == '\r' && end[3] == '\n',
+          "the master reads the echo and the first newline");
+}
+
+/** A slave writer that found room for two newlines, and whose copy slept
+ * while echo took half of it, writes one, waits for the master to read, and
+ * writes the other; no byte is dropped. */
+static void copy_refit(void)
+{
+    char out[4];
+
+    setup_pair();
+    pair.m_tail = PTY_BUF_SIZE - 4;
+    copy_action = echo_during_copy;
+    scheduled_action = drain_action;
+    wake_detail = "a master read wakes the slave writer";
+    CHECK(pts_write(&slave, "\n\n", 2) == 2 && switches == 1,
+          "slave output fits the room left after its copy");
+    CHECK(ptm_read(&master, out, sizeof(out)) == 2 && out[0] == '\r' && out[1] == '\n',
+          "the second newline follows the master's read");
+}
+
 /** Run every row; 0 when each passes, 1 otherwise. */
 int main(void)
 {
@@ -620,6 +687,8 @@ int main(void)
     input_room();
     packet_mode();
     nonblocking_latency();
+    output_growth();
+    copy_refit();
     printf("tty-test: result: %d failures\n", failures);
     return failures ? 1 : 0;
 }

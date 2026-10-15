@@ -86,12 +86,12 @@ static uint32_t pty_m_room(struct pty *p)
     return PTY_BUF_SIZE - pty_m_avail(p);
 }
 
-/** The room one byte of the slave's output is given in the ring: 8 under
+/** The room one byte of the slave's output is given in the ring: 2 under
  * OPOST, where n_tty_output makes at most two bytes of one (ONLCR's CR LF),
  * and 1 for raw output, which is a byte for a byte. */
 static uint32_t pts_growth(const struct pty *p)
 {
-    return (p->slave.ldisc.tio.c_oflag & OPOST) ? 8u : 1u;
+    return (p->slave.ldisc.tio.c_oflag & OPOST) ? 2u : 1u;
 }
 
 /**
@@ -593,7 +593,9 @@ static int pts_write_free(void *arg)
  * way of the slave's sink, a piece at a time that fits the ring at its
  * largest (`pts_growth`): a writer the ring has no room for waits until the
  * master reads, as on Linux, or takes -EAGAIN, or returns what it wrote, when
- * non-blocking. Master readers are woken even if a later copy fails.
+ * non-blocking. Master readers are woken even if a later copy fails. The
+ * piece is fitted again after the copy from the user, which may sleep on a
+ * page fault while echo of the master's input fills the ring.
  */
 static int32_t pts_write_out(fd_entry_t *e, struct pty *p, const char __user *buf, uint32_t count)
 {
@@ -625,6 +627,10 @@ static int32_t pts_write_out(fd_entry_t *e, struct pty *p, const char __user *bu
         if (copy_from_user(kbuf, (const void __user *)(buf + done), chunk) != 0) {
             wake_master(p, &pushed);
             return (done > 0) ? (int32_t)done : -EFAULT;
+        }
+        fit = pty_m_room(p) / pts_growth(p);
+        if (chunk > fit) {
+            chunk = fit;
         }
         tty_write(&p->slave, kbuf, (int)chunk);
         done += chunk;

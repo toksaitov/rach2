@@ -109,6 +109,15 @@ elif case == 'nonblock-latency':
             '        }\n'
             '        kirq_restore(flags);\n'
             '        return -EAGAIN;')
+elif case == 'output-growth':
+    replace('pty.c', 'OPOST) ? 2u : 1u;', 'OPOST) ? 8u : 1u;')
+elif case == 'copy-refit':
+    replace('pty.c', '        fit = pty_m_room(p) / pts_growth(p);\n'
+                    '        if (chunk > fit) {\n'
+                    '            chunk = fit;\n'
+                    '        }\n'
+                    '        tty_write(&p->slave, kbuf, (int)chunk);',
+            '        tty_write(&p->slave, kbuf, (int)chunk);')
 else:
     raise SystemExit('tty-mutation: unknown mutation: ' + case)
 PY
@@ -116,7 +125,8 @@ PY
 
 faults='split-queue flush termios-flush partial-slave partial-master
     latency-lock veol-byte line-end slot-reset input-kind echo-kind room-kind
-    output-kind flush-kind signal-room erase-room nonblock-latency'
+    output-kind flush-kind signal-room erase-room nonblock-latency output-growth
+    copy-refit'
 if [ "${1:-}" = --texts ]; then
     for case_name in $faults; do
         RACH2_FAULT_TEXTS=1 apply_fault rach2/sys/tty "$case_name" >/dev/null || exit 1
@@ -243,6 +253,8 @@ for case_name in $faults; do
         signal-room) expected='a signal char the master writes into full input is room for the master' ;;
         erase-room) expected='an erase the master writes is room for the master' ;;
         nonblock-latency) expected='a read that does not wait ends the latency span' ;;
+        output-growth) expected='the ring takes a newline into its last two bytes' ;;
+        copy-refit) expected='slave output fits the room left after its copy' ;;
     esac
     run_phase fixed
     mutate
