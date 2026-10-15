@@ -54,10 +54,13 @@ struct ns_extent {
 struct userns {
     struct ns_common c;
     struct userns *parent;
+    /* 0 for the first, and one more for each level below; under NS_LEVELS. */
     uint32_t level;
     /* The effective ids of the process that made it, the kernel's. */
     uint32_t owner_uid;
     uint32_t owner_gid;
+    /* Each map and the count of its extents, 0 until the map is written;
+     * a map is written once. */
     struct ns_extent uid_map[NS_EXTENTS];
     uint32_t uid_extents;
     struct ns_extent gid_map[NS_EXTENTS];
@@ -70,9 +73,11 @@ struct userns {
 struct pidns {
     struct ns_common c;
     struct pidns *parent;
+    /* 0 for the first, and one more for each level below; under NS_LEVELS. */
     uint32_t level;
-    /* The last number given out in it, and the kernel's id of its first
-     * process, its init, 0 until it is made. */
+    /* The last number given out in it, 0 before its first process; and the
+     * kernel's id of that process, its init, 0 before it is made and after
+     * it ends. */
     uint32_t last;
     uint32_t reaper;
 };
@@ -89,6 +94,7 @@ struct netns {
 
 struct utsns {
     struct ns_common c;
+    /* Each at most 64 bytes and a NUL, as uname(2) returns them. */
     char hostname[65];
     char domainname[65];
 };
@@ -109,6 +115,7 @@ struct nsset {
     struct pidns *pid_children;
 };
 
+/* The first namespace of each kind, static and never freed. */
 extern struct userns init_userns;
 extern struct pidns init_pidns;
 extern struct mntns init_mntns;
@@ -126,15 +133,20 @@ struct utsns *proc_utsns(const process_t *p);
 struct ipcns *proc_ipcns(const process_t *p);
 
 /**
- * Whether `p` has privilege in the user namespace `ns`: privileged in its
- * own user namespace, which is `ns` or one of its ancestors, or the owner of
- * `ns`'s parent... as Linux's ns_capable answers for a process that keeps
- * every capability or none. A process of the first namespace with effective
- * uid 0 has it everywhere.
+ * Whether `p` has privilege in the user namespace `ns`, NULL for the first,
+ * as Linux's `cap_capable` answers for a process that keeps every
+ * capability or none. `p` has it when `ns` is its own user namespace or one
+ * below it and `p` is privileged in its own; or when `ns` is below `p`'s own
+ * and the namespace on the way up from `ns` whose parent is `p`'s own was
+ * made by a process of `p`'s effective uid. In its own namespace `p` is
+ * privileged as effective uid 0 in the first, and in another while it has
+ * capabilities there or as effective uid 0 there; in neither after it gave
+ * them up (`nocaps`). A namespace that is not `p`'s own or below it gives 0.
  */
 int ns_privileged(const process_t *p, const struct userns *ns);
 
-/** Whether `p` has privilege over the namespace `c`, in its owner. */
+/** Whether `p` has privilege over the namespace `c`: privilege in the user
+ * namespace that owns it, the first for none. */
 int ns_owner_privileged(const process_t *p, const struct ns_common *c);
 
 /** The kernel's id of the id `id` of the namespace `ns`, or -1 when its map
@@ -161,19 +173,20 @@ int ns_ids_mapped(const struct userns *ns, uint32_t uid, uint32_t gid);
  * namespace `ns`, as `reader` reads it: a line of ten-column numbers for
  * each extent, the ids in `ns`, the kernel's ids as the reader's namespace
  * sees them, or as `ns`'s parent sees them when the reader is in `ns`, and
- * the count; or "allow" or "deny". Into `out` of `cap` bytes,
- * NUL-terminated; its length.
+ * the count; or "allow" or "deny". Into `out` of `cap` bytes, cut short
+ * where it does not fit, NUL-terminated; its length.
  */
 int ns_map_text(const struct userns *ns, int which, const process_t *reader, char *out, int cap);
 
 /**
- * A write by `writer` of the `len` bytes of `text` to that file of `ns`,
- * as Linux takes it: a map is written once, by a process in `ns` or its
- * parent privileged in `ns`, and maps ids its parent maps; a writer not
+ * A write by `writer` of the `len` bytes of `text` to the file `which` of
+ * `ns`, as Linux takes it: a map is written once, by a process in `ns` or
+ * its parent privileged in `ns`, and maps ids its parent maps; a writer not
  * privileged in the parent maps one id, its own effective id, and for the
  * groups only after setgroups was denied. setgroups takes "deny", or
- * "allow" when it was not denied, before the group map is written. The
- * length, or -EPERM or -EINVAL.
+ * "allow" when it was not denied, before the group map is written, from a
+ * writer privileged in `ns`. The first namespace's files are not written.
+ * The length, or -EPERM or -EINVAL.
  */
 int32_t ns_map_write(struct userns *ns, int which, const char *text, uint32_t len,
                      const process_t *writer);
@@ -197,7 +210,7 @@ int64_t gid_named(uint32_t id);
 uint32_t pid_seen(uint32_t kid);
 
 /** The kernel id of the process or thread the current process names `pid`,
- * 0 for none it can see. */
+ * 0 for none it can see; `pid` itself in the first PID namespace. */
 uint32_t pid_named(uint32_t pid);
 
 /** pid_seen for the viewer `viewer` in place of the current process. */
@@ -206,8 +219,12 @@ uint32_t pid_seen_by(const process_t *viewer, uint32_t kid);
 /**
  * The child `child` takes `parent`'s namespaces, and new ones for the
  * CLONE_NEW flags of `flags`, and its numbers in the PID namespaces it is
- * in. 0, or -EINVAL for a flag a thread may not have, -EPERM for a
- * namespace the parent may not make, -EUSERS past NS_LEVELS, -ENOMEM.
+ * in. 0, or -EINVAL for CLONE_NEWUSER or CLONE_NEWPID with CLONE_THREAD,
+ * CLONE_NEWUSER with CLONE_FS, or CLONE_THREAD when the parent's next
+ * children have a PID namespace other than its own; -EPERM for a namespace
+ * the parent may not make, -EUSERS past NS_LEVELS, -ENOSPC past NS_MNT_MAX
+ * mount namespaces, or -ENOMEM. A child that failed may have taken some of
+ * the references, which the release of its record drops (`ns_release`).
  */
 int32_t ns_fork(process_t *child, const process_t *parent, uint32_t flags);
 
@@ -228,20 +245,49 @@ void ns_exec(process_t *p);
 void ns_caps_fill(process_t *p);
 int ns_caps_held(const process_t *p);
 
-/** unshare and setns. */
+/**
+ * unshare(2) takes the flags. CLONE_NEWUSER gives the caller, which must be
+ * a process of one thread, a new user namespace, in which it has every
+ * capability, and needs no privilege. The other CLONE_NEW flags need
+ * privilege in the caller's user namespace, or in the new one with
+ * CLONE_NEWUSER, and give the caller new namespaces of those kinds, except
+ * that CLONE_NEWPID's is the one its next children are made in, and is
+ * -EINVAL when those already have a namespace other than the caller's.
+ * CLONE_FILES and CLONE_FS give it a descriptor table and directories of its
+ * own, and CLONE_NEWNS and CLONE_NEWUSER imply CLONE_FS. CLONE_SYSVSEM is
+ * taken and does nothing, and CLONE_THREAD, CLONE_SIGHAND and CLONE_VM are
+ * taken for a process of one thread. A cgroup or time namespace, or a flag
+ * outside these, in the upper half of an x86-64 long too, is -EINVAL.
+ * 0, or -EINVAL, -EPERM, -EUSERS, -ENOSPC or -ENOMEM.
+ */
 long sys_unshare(isr_params_t *params);
+
+/**
+ * setns(2) takes a descriptor open on a namespace, as an open of a
+ * /proc/PID/ns file gives, and the namespace's CLONE_NEW flag or 0 for any
+ * kind. Joining a user namespace other than its own needs a process of one
+ * thread whose directories are its own, privileged in that namespace, and
+ * gives it every capability there. Joining another kind needs privilege in
+ * the caller's user namespace and in the one that owns the target. A PID
+ * namespace must be the caller's or below it, and becomes the one its next
+ * children are made in; a mount namespace needs directories of the
+ * caller's own. 0, or -EBADF for no descriptor, -EINVAL for one that is not
+ * a namespace's, a flag of another kind or a caller these rules exclude,
+ * -EPERM without the privilege, or -ENOMEM.
+ */
 long sys_setns(isr_params_t *params);
 
 /**
  * The init of the PID namespace of `p`, when `p` is not in the first: the
  * kernel id children are given to when their parent ends, 0 for the
- * system's init. A namespace whose init has ended has none, and a process
- * made in it is refused.
+ * system's init. A namespace whose init has ended has none, and a fork into
+ * it fails with -ENOMEM.
  */
 uint32_t ns_reaper(const process_t *p);
 
-/** The init of a PID namespace, `p`, is ending: every other process of the
- * namespace is sent SIGKILL. */
+/** Called as `p` ends: when `p` is the init of its PID namespace, the
+ * namespace loses its init, and every other process in it or below it that
+ * has not ended is sent SIGKILL. Otherwise it does nothing. */
 void ns_reaper_gone(const process_t *p);
 
 /* The bits of CLONE_NEW flags clone and unshare take. */
@@ -257,9 +303,18 @@ void ns_reaper_gone(const process_t *p);
 
 /**
  * The namespace of kind `kind` of the process `p`, with a reference the
- * caller drops with `ns_put`, for /proc/PID/ns.
+ * caller drops with `ns_put`, for /proc/PID/ns; NULL past the kinds.
  */
 struct ns_common *ns_of(const process_t *p, int kind);
+
+/**
+ * Drop a reference to `c`, which may be NULL. The last one frees the
+ * namespace and does what the end of its kind does: a mount namespace's
+ * mounts and bit go (`vfs_mntns_gone`), a network or IPC namespace's
+ * objects are let go (`net_ns_gone`, `ipc_ns_gone`), and the references it
+ * had to its owner, and to its parent for a user or PID namespace, are
+ * dropped in turn. The first namespaces are never freed.
+ */
 void ns_put(struct ns_common *c);
 
 /** The name of kind `kind` as /proc/PID/ns names its file, "user" to
@@ -270,27 +325,37 @@ const char *ns_kind_name(int kind);
  * `out`, of at least 24 bytes. */
 void ns_link_name(const struct ns_common *c, char *out);
 
-/** A descriptor open on `c`, with O_CLOEXEC from `oflag`, as an open of a
- * /proc/PID/ns file gives; or -errno. */
+/** A descriptor of the current process open on `c`, read-only, with
+ * O_CLOEXEC from `oflag`, as an open of a /proc/PID/ns file gives; or
+ * -errno. The descriptor has a reference to `c` until it is closed. */
 int32_t nsfs_open(struct ns_common *c, uint32_t oflag);
 
-/** The namespace the descriptor `e` is open on, NULL for another kind of
- * descriptor. */
 struct fd_entry;
+/** The namespace the descriptor `e` is open on, NULL for another kind of
+ * descriptor or none. */
 struct ns_common *nsfs_ns(const struct fd_entry *e);
 
-/* What the other subsystems do for their namespaces, defined with them: a
- * new mount namespace's bit is given every mount the bit `from` has
- * (fs/vfs.c), and a mount namespace's end unmounts what only it had; a
- * network namespace's end closes nothing, since its sockets hold it
- * (network/netif.c); an IPC namespace's end removes its objects
- * (ipc/sysv.c). */
+/* What the other subsystems do for their namespaces, defined with them. */
+
+/** Make the mount namespace of bit `to` see every mount that of bit `from`
+ * sees (fs/vfs.c). */
 void vfs_mntns_copy(uint32_t from, uint32_t to);
+
+/** The end of the mount namespace of bit `bit`: unmount what it alone saw,
+ * and hide every mount from the bit (fs/vfs.c). */
 void vfs_mntns_gone(uint32_t bit);
 
 /** The bits of the mount namespaces that exist. */
 uint32_t mntns_live_bits(void);
+
+/** The end of the network namespace `ns`: its sockets, which have no
+ * reference to it, move to a namespace no process is in, and nothing is
+ * closed (network/socket/socket.c). */
 void net_ns_gone(struct netns *ns);
+
+/** The end of the IPC namespace `ns`: its semaphore sets and message queues
+ * are removed, its shared memory segments are marked for removal, and its
+ * POSIX message queues lose their names (ipc/sysv.c). */
 void ipc_ns_gone(struct ipcns *ns);
 
 #endif /* _NS_H_ */

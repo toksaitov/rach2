@@ -4,9 +4,11 @@
  * A process keeps its user namespace, its PID namespace and its numbers in
  * the PID namespaces it is in on its own record, and its other namespaces in
  * a `struct nsset` that the processes it makes share until one of them
- * changes it. A namespace counts the records and the sets that hold it, and
- * the namespaces it owns hold their user namespace. The first namespaces are
- * static, and a record or a set that holds none of a kind holds the first.
+ * changes it. A namespace counts the records and the sets that refer to it,
+ * and each namespace has a reference to the user namespace that owns it, and
+ * a user or PID namespace to its parent. The first namespaces are static,
+ * and a NULL pointer in a record stands for the first of its kind, or for
+ * the set of the first ones.
  */
 
 #include "ns.h"
@@ -50,9 +52,11 @@ struct netns init_netns = {{1, 0xF0000098u, NS_NET, NULL}};
 struct utsns init_utsns = {{1, 0xEFFFFFFEu, NS_UTS, NULL}, "rach2", "(none)"};
 struct ipcns init_ipcns = {{1, 0xEFFFFFFFu, NS_IPC, NULL}};
 
+/* The set of the first namespaces, which a record without a set uses. */
 static struct nsset init_nsset = {1,           &init_mntns, &init_netns,
                                   &init_utsns, &init_ipcns, &init_pidns};
 
+/* The inode number the next namespace made is given. */
 static uint32_t next_inum = NS_FIRST_DYNAMIC;
 
 /* The bits of the mount namespaces that exist, the first's bit 0. */
@@ -70,6 +74,7 @@ static int ns_first(const struct ns_common *c)
            c == &init_utsns.c || c == &init_ipcns.c;
 }
 
+/** Take a reference to `c`. */
 static void ns_get(struct ns_common *c)
 {
     c->refs++;
@@ -265,7 +270,8 @@ int64_t gid_named(uint32_t id)
 
 /* ---- /proc/PID/uid_map, gid_map and setgroups ---- */
 
-/** Append `v` right-aligned in ten columns to `out` at `*at`. */
+/** Append `v` right-aligned in ten columns to `out` at `*at`, stopping
+ * short of `out[cap - 1]`, the NUL's place. */
 static void put_col(char *out, int cap, int *at, uint32_t v)
 {
     char digits[10];
@@ -324,7 +330,9 @@ int ns_map_text(const struct userns *ns, int which, const process_t *reader, cha
     return at;
 }
 
-/** Read an unsigned number at `*p`, past spaces before it; 0 with none. */
+/** Read an unsigned number of at most ten digits at `*p` into `*v`, past
+ * the spaces and tabs before it, and step `*p` past it; 1, or 0 for no
+ * digit or more than ten. Ten digits past 4294967295 wrap. */
 static int read_number(const char **p, const char *end, uint32_t *v)
 {
     uint32_t n = 0;
@@ -364,7 +372,7 @@ static int extent_overlaps(const struct ns_extent *map, int n, uint32_t first, u
  * count, into `map`, with the parent's ids made the kernel's through
  * `parent`'s map. The number of extents, or -EINVAL for text of another
  * form, an empty or wrapping range or two that overlap, or -EPERM for
- * parent ids the parent does not map.
+ * parent ids the parent does not map to one run of kernel ids.
  */
 static int parse_map(const char *text, uint32_t len, const struct userns *parent, int gid,
                      struct ns_extent *map)
@@ -422,7 +430,8 @@ static int text_begins(const char *text, uint32_t len, const char *word)
 }
 
 /** A write of /proc/PID/setgroups: "deny", or "allow" when setgroups was
- * not denied, before the group map is written. */
+ * not denied, before the group map is written. `len`, or -EPERM, or -EINVAL
+ * for another word. */
 static int32_t setgroups_write(struct userns *ns, const char *text, uint32_t len)
 {
     if (ns->gid_extents != 0) {
@@ -586,7 +595,7 @@ uint32_t pid_named(uint32_t pid)
 }
 
 /** The next free number of the PID namespace `ns`: 1 for its first
- * process, then upward, past the numbers its processes hold, from 2 again
+ * process, then upward, past the numbers its processes have, from 2 again
  * after NS_PID_MAX; 0 when every number is held. */
 static uint32_t pidns_alloc(struct pidns *ns)
 {
@@ -722,8 +731,8 @@ static struct mntns *mntns_new(const struct mntns *from, struct userns *owner, i
 /**
  * A copy of the set `from` with new namespaces for the CLONE_NEW flags of
  * `flags` other than the user's, owned by `owner`; the new PID namespace is
- * made below `active`, the PID namespace of the process the set is for.
- * NULL with `*err` set on failure.
+ * made below `active`, the one `from` makes children in. NULL with `*err`
+ * set on failure.
  */
 static struct nsset *nsset_copy(const struct nsset *from, uint32_t flags, struct userns *owner,
                                 struct pidns *active, int32_t *err)
@@ -906,16 +915,9 @@ int ns_caps_held(const process_t *p)
 /* ---- unshare and setns ---- */
 
 /**
- * unshare takes the flags. CLONE_NEWUSER gives the caller a new user namespace,
- * in which it has every capability, and needs no privilege; the other CLONE_NEW
- * flags need privilege in the caller's user namespace, the new one with
- * CLONE_NEWUSER, and give it new namespaces of those kinds, but CLONE_NEWPID,
- * whose namespace is the one the caller's next children are made in.
- * CLONE_FILES and CLONE_FS give it a descriptor table and directories of its
- * own, CLONE_NEWNS and CLONE_NEWUSER the second with it, and CLONE_SYSVSEM,
- * CLONE_THREAD, CLONE_SIGHAND and CLONE_VM are taken for a process of one
- * thread. Cgroup and time namespaces are refused, and so is a flag outside
- * these, in the upper half of an x86-64 long too.
+ * The new namespaces are made before any of the caller's is replaced, so
+ * that a failure to make one leaves the caller's as they were. The new set
+ * is a copy, and the processes that shared the caller's set keep it.
  */
 long sys_unshare(isr_params_t *params)
 {
@@ -991,6 +993,7 @@ struct nsfs_file {
     struct ns_common *ns;
 };
 
+/** Close a namespace's descriptor: drop its reference and free its record. */
 static void nsfs_close(fd_entry_t *e)
 {
     struct nsfs_file *f = e->priv;
@@ -1033,11 +1036,12 @@ static int ns_below_own(const struct ns_common *c)
 }
 
 /**
- * ioctl(2) on a namespace's descriptor, as lsns(8) asks: NS_GET_USERNS gives
- * a descriptor of the user namespace that owns it, NS_GET_PARENT one of the
- * parent of a user or PID namespace, NS_GET_NSTYPE its CLONE_NEW flag and
- * NS_GET_OWNER_UID the uid of a user namespace's maker, as the caller sees
- * it, at `arg`. The namespace handed out must be the caller's or below it,
+ * ioctl(2) on a namespace's descriptor, the requests lsns(8) makes:
+ * NS_GET_USERNS gives a descriptor of the user namespace that owns it,
+ * NS_GET_PARENT one of the parent of a user or PID namespace, NS_GET_NSTYPE
+ * its CLONE_NEW flag and NS_GET_OWNER_UID the uid of a user namespace's
+ * maker, as the caller sees it, at `arg`. A descriptor handed out is
+ * close-on-exec. The namespace handed out must be the caller's or below it,
  * and the first has no parent: -EPERM; -EINVAL for a request of the wrong
  * kind, -ENOTTY for another.
  */
@@ -1076,6 +1080,7 @@ static int32_t nsfs_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
     return nsfs_open(to, NS_O_CLOEXEC);
 }
 
+/* A namespace's descriptor has only ioctl and close. */
 const struct file_ops nsfs_ops = {NULL, NULL, NULL, nsfs_ioctl, nsfs_close};
 
 struct ns_common *nsfs_ns(const fd_entry_t *e)
@@ -1085,7 +1090,6 @@ struct ns_common *nsfs_ns(const fd_entry_t *e)
                : NULL;
 }
 
-/** Write "KIND:[INUM]" for `c` into `out`, of at least 24 bytes. */
 void ns_link_name(const struct ns_common *c, char *out)
 {
     char digits[12];
@@ -1171,7 +1175,8 @@ const char *ns_kind_name(int kind)
 
 /** setns of a user namespace `ns`: a process of one thread, whose
  * directories are its own, privileged in `ns`, takes it with every
- * capability. */
+ * capability. 0, -EINVAL for the caller's own namespace or a caller of
+ * more threads or shared directories, or -EPERM without the privilege. */
 static int32_t setns_user(struct userns *ns)
 {
     process_t *self = current_proc;
@@ -1192,11 +1197,8 @@ static int32_t setns_user(struct userns *ns)
 }
 
 /**
- * setns takes a descriptor open on a namespace, from /proc/PID/ns and its
- * CLONE_NEW flag or 0 for any kind. The caller must be privileged in its own
- * user namespace and in the one that owns the target. A PID namespace becomes
- * the one the caller's next children are made in, and must be the caller's or
- * below it; a mount namespace needs directories of the caller's own.
+ * The caller is given a copy of its set with the one kind changed, so the
+ * processes that shared the caller's set keep it.
  */
 long sys_setns(isr_params_t *params)
 {
