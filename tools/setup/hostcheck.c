@@ -162,6 +162,10 @@ int main(int argc, char **argv)
             diskimage = 1;
         } else if (strcmp(argv[i], "--no-sockets") == 0) {
             sockets = 0;
+        } else {
+            fprintf(stderr, "hostcheck: unknown option %s\n", argv[i]);
+            fprintf(stderr, "usage: hostcheck DIR [--diskimage] [--no-sockets]\n");
+            return 2;
         }
     }
     if (sockets) {
