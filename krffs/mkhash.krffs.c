@@ -1,22 +1,29 @@
+/*
+ * mkhash.krffs.c: mkhash.krffs, which makes the SHA-512 crypt password hashes
+ * the images stage in /etc/shadow.
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-/* The vendored musl SHA-512 crypt (vendor/musl/musl-1.2.5/src/crypt/
-   crypt_sha512.c), compiled beside this tool by the Makefile under the
-   internal name musl exports it to its own crypt(). The host mints hashes
-   with exactly the code the guest verifies them with. */
+/**
+ * The SHA-512 crypt of the vendored musl,
+ * vendor/musl/musl-1.2.5/src/crypt/crypt_sha512.c, which the Makefile compiles
+ * beside this tool; `__crypt_sha512` is the name musl's own `crypt` calls it
+ * by. A hash made on the host is so checked on the guest by the same code.
+ */
 char *__crypt_sha512(const char *key, const char *setting, char *output);
 
 /**
- * Mints a SHA-512 crypt (`$6$`) password hash for `/etc/shadow`.
+ * mkhash.krffs SETTING: prints the SHA-512 crypt hash of a password for
+ * `/etc/shadow`, where SETTING is `$6$` and a salt.
  *
- * Usage: `mkhash.krffs <setting>`, where `<setting>` is a `$6$salt` prefix.
- * The password is the first line of stdin, so it never appears in the
- * process arguments. The hash goes to stdout as one line.
- *
- * @return `EXIT_SUCCESS` with the hash on stdout, `EXIT_FAILURE` for a usage
- *         error, an empty password, or a setting `crypt` rejects.
+ * The password is the first line of stdin, up to the first CR or LF, so it
+ * does not appear in the process arguments. The hash goes to stdout as one
+ * line. Returns `EXIT_SUCCESS`, or `EXIT_FAILURE` for a usage error, a
+ * password that is empty or longer than 255 bytes, or a setting `crypt`
+ * rejects.
  */
 int main(int argc, char **argv)
 {

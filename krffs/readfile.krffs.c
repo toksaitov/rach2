@@ -1,3 +1,8 @@
+/*
+ * readfile.krffs.c: readfile.krffs, which copies one file out of a KRFFS
+ * image.
+ */
+
 #include <errno.h>
 #include <fcntl.h>
 #include <stdbool.h>
@@ -18,23 +23,18 @@
 #endif
 
 /**
- * Reads one file out of a KRFFS image by absolute path and writes its bytes
- * to a host file.
+ * readfile.krffs IMAGE GUEST_PATH OUTPUT [--offset BYTES --size BYTES]:
+ * copies the regular file at the absolute GUEST_PATH in the KRFFS image to
+ * the host file OUTPUT and prints its size. The suites use it to take out a
+ * file the guest wrote, such as the kernel `tests/run selfbuild` builds.
  *
- * This is how a build product made inside the machine reaches the host that
- * judges it: the self-build proof extracts the guest-built kernel from a
- * shut-down disk copy with this tool, compares its hash against the one the
- * guest recorded, and boots it. The path walk refuses a malformed or
- * truncated image with the reason named instead of reading past the mapping
- * (see `krffs_reader.c`).
- *
- * Usage:
- *
- *     readfile.krffs <image> <guest path> <output> [--offset N --size N]
- *
- * `--offset` and `--size` follow the convention every KRFFS tool shares: the
- * file system may live inside a larger file (a partitioned disk image), and
- * a nonzero offset requires an explicit size.
+ * The image is mapped for reading only, and the file is found with
+ * `krffs_read_regular`, which refuses a damaged image with a reason and does
+ * not read out of bounds. An OUTPUT that is the image itself, by device and
+ * inode, is refused, since `fopen` with "wb" would empty the image before
+ * the copy. An argument after OUTPUT other than the region options is
+ * refused. Returns `EXIT_SUCCESS`, or `EXIT_FAILURE` with the reason on
+ * stderr.
  */
 int main(int argc, char **argv)
 {
@@ -57,7 +57,7 @@ int main(int argc, char **argv)
     }
     for (i = 4; i < argc; ++i) {
         if (strcmp(argv[i], "--offset") == 0 || strcmp(argv[i], "--size") == 0) {
-            ++i; /* a shared region option; krffs_parse_region_args consumes it below */
+            ++i;
         } else {
             fprintf(stderr, "readfile.krffs: unknown option '%s'\n", argv[i]);
             return EXIT_FAILURE;
@@ -99,9 +99,6 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
-    /* Refuse an output that names the image itself, through any path or hard
-     * link: fopen("wb") truncates before a byte is written, which would wipe
-     * the mapped image and then extract from the wreck. */
     {
         struct stat output_info;
 

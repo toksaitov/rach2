@@ -27,7 +27,7 @@ krffs/krffs_fuse_operations.c:krffs_create nesting 5 one procedure over a file f
 krffs/krffs_fuse_operations.c:krffs_mknod nesting 5 one procedure over a file format, in the order the format is read
 krffs/krffs_fuse_operations.c:krffs_readdir nesting 5 one procedure over a file format, in the order the format is read
 
-krffs/mkfs.krffs.c:main lines 125 one procedure over a file format, in the order the format is read
+krffs/mkfs.krffs.c:main lines 115 one procedure over a file format, in the order the format is read
 
 krffs/stageimage.krffs.c:apply_line lines 116 one procedure over a file format, in the order the format is read
 krffs/stageimage.krffs.c:main complexity 36 one procedure over a file format, in the order the format is read

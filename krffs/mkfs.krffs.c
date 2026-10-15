@@ -1,3 +1,8 @@
+/*
+ * mkfs.krffs.c: mkfs.krffs, which writes an empty KRFFS file system into a
+ * file.
+ */
+
 #include <fcntl.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -17,20 +22,15 @@
 #endif
 
 /**
- * Writes a fresh KRFFS file system into an existing file.
+ * mkfs.krffs IMAGE [-f] [--offset BYTES --size BYTES]: writes an empty file
+ * system, with `krffs_initialize_file_system`, over the region of IMAGE, an
+ * existing regular file. The region is the whole file unless the region
+ * options place it, and must be at least two headers.
  *
- * The target file must already exist and be a regular file at least two
- * `struct krffs_node` records long. Its contents are mapped, initialized as an
- * empty file system, and synced back through the mapping.
- *
- * Refuses to overwrite a file that already has a valid KRFFS unless the force
- * (`-f`) option is given. With `-h`, or no arguments, it prints usage and
- * exits successfully.
- *
- * Usage:
- *
- *     mkfs.krffs -h
- *     mkfs.krffs <file> [-f]
+ * A region whose first node has the magic number is left alone unless an
+ * argument begins with `-f`. With no arguments, or with one that begins with
+ * `-h`, the usage goes to stderr and the exit status is 0; a first argument
+ * that begins with `-` is an error. Returns `EXIT_SUCCESS` or `EXIT_FAILURE`.
  */
 int main(int argc, char **argv)
 {
@@ -103,12 +103,6 @@ int main(int argc, char **argv)
 
     file_system.size = region_size;
 
-    /*
-        Map the file into memory. After a successful `krffs_map_file`, writes
-        to `file_system.node` reach the file directly, either right away or on
-        `krffs_unmap_file` or `krffs_sync_mapping`. The kernel backs the mapping
-        with its virtual memory system.
-     */
     if ((file_system.node = krffs_map_file(file_descriptor, region_offset, file_system.size)) ==
         (void *)-1) {
         fprintf(stderr, "Failed to map the file system file at '%s' into memory.\n", path);
@@ -118,10 +112,6 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
-    /*
-        The descriptor may be closed once the mapping exists; the pages stay
-        mapped to the file.
-     */
     if (PLATFORM_PREFIX(close(file_descriptor)) == -1) {
         fprintf(stderr, "Failed to close the file system file at '%s'.\n", path);
 
