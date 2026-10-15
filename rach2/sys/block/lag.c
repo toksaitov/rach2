@@ -225,9 +225,15 @@ static int lag_knob(const char *name, uint32_t *out)
 }
 
 /**
- * Installed once: a later call returns the wrapper whatever `backing` is. The
- * wrapper's deadline is one period of five seconds, since its tests are of a
- * device that never answers; a test of the deadline's boundary sets the
+ * Return the lag wrapper for `backing`, installing it on the first call
+ * that finds `rach2.blocklag` set to a tick count.
+ *
+ * There is one wrapper, over the device of the call that installed it. A
+ * later call returns the wrapper when `backing` is that device and `backing`
+ * itself for any other, so a second disk keeps its own device. Without the
+ * option, or with a value that is not a tick count, `backing` is returned.
+ * The wrapper's deadline is one period of five seconds, since its tests are
+ * of a device that never answers; a test of the deadline's boundary sets the
  * period with `rach2.lagdeadline=T` ticks and the count with
  * `rach2.lagperiods=N`.
  */
@@ -238,7 +244,7 @@ block_device_t *block_lag_wrap(block_device_t *backing)
     int i;
 
     if (lag_backing) {
-        return &lag_device;
+        return backing == lag_backing ? &lag_device : backing;
     }
     if (!kcmdline_value("rach2.blocklag", value, sizeof(value))) {
         return backing;
