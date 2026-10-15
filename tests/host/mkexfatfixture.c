@@ -1,6 +1,7 @@
 /*
- * mkexfatfixture.c: an exFAT reader from Microsoft's published specification,
- * independent of the kernel's driver, the pair of mkfatfixture.c for FAT32.
+ * mkexfatfixture.c: a checker and reader of exFAT volumes, and a builder of
+ * them, written from Microsoft's published specification apart from the
+ * kernel's driver; the pair of mkfatfixture.c for FAT32.
  *
  *   mkexfatfixture --check IMAGE [OFFSET-SECTORS] [--list] [--dump]
  *   mkexfatfixture --check IMAGE [OFFSET-SECTORS] --read PATH
@@ -16,7 +17,7 @@
  * `dev-log/38-exfat/notes.md` keeps of a volume another implementation
  * wrote. `--read PATH` writes a file's bytes to stdout, which is how the
  * suite reads on the host what the kernel wrote, since mtools does not
- * read exFAT. The builder is the second half of this file.
+ * read exFAT. The builder is the second half of this file, with its usage.
  */
 
 #include <stdint.h>
@@ -37,65 +38,79 @@ struct vol {
     uint32_t bitmap_first, upcase_first;
     uint64_t bitmap_length, upcase_length;
     uint16_t *upcase; /* 65536 mappings */
+    /* The chain that owns each cluster, by its number in `chains`, 0 for
+       none; `chains` counts the chains walked. */
     uint32_t *owner;
     uint32_t chains;
     int findings, files, dirs, list, dump, first_set_dumped;
-    unsigned bitmap_index, upcase_index; /* the entries the objects were taken from */
+    /* The root entries the bitmap and the up-case table were taken from. */
+    unsigned bitmap_index, upcase_index;
 };
 
+/** The little-endian 16-bit field at `p`. */
 static uint16_t rd16(const unsigned char *p)
 {
     return (uint16_t)(p[0] | (p[1] << 8));
 }
 
+/** The little-endian 32-bit field at `p`. */
 static uint32_t rd32(const unsigned char *p)
 {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
+/** The little-endian 64-bit field at `p`. */
 static uint64_t rd64(const unsigned char *p)
 {
     return (uint64_t)rd32(p) | ((uint64_t)rd32(p + 4) << 32);
 }
 
+/** Count a finding and print it as `check: TEXT`. */
 static void finding(struct vol *v, const char *text)
 {
     v->findings++;
     printf("check: %s\n", text);
 }
 
+/** The volume's bytes per sector. */
 static unsigned bytes_per_sector(const struct vol *v)
 {
     return 1u << v->bps_shift;
 }
 
+/** The volume's bytes per cluster. */
 static unsigned cluster_bytes(const struct vol *v)
 {
     return 1u << (v->bps_shift + v->spc_shift);
 }
 
+/** The first byte of sector `n` of the volume. */
 static unsigned char *sector(const struct vol *v, uint64_t n)
 {
     return v->img + n * bytes_per_sector(v);
 }
 
+/** The first byte of cluster `c` of the heap. */
 static unsigned char *cluster(const struct vol *v, uint32_t c)
 {
     return sector(v, v->heap_offset + ((uint64_t)(c - 2) << v->spc_shift));
 }
 
+/** Whether `c` is a cluster of the heap. */
 static int in_heap(const struct vol *v, uint32_t c)
 {
     return c >= 2 && c < v->clusters + 2;
 }
 
+/** The entry of cluster `c` in the active FAT. */
 static uint32_t fat_entry(const struct vol *v, uint32_t c)
 {
     return rd32(sector(v, v->fat_offset + (uint64_t)v->active_fat * v->fat_length) + (size_t)c * 4);
 }
 
-/* The boot checksum over the eleven sectors before the checksum sector,
-   skipping VolumeFlags and PercentInUse, which a mount changes. */
+/** The boot checksum of the region at sector `first`, over the eleven
+ *  sectors before the checksum sector, skipping VolumeFlags and
+ *  PercentInUse, which a mount changes. */
 static uint32_t boot_checksum(const struct vol *v, uint64_t first)
 {
     uint32_t sum = 0;
@@ -110,6 +125,8 @@ static uint32_t boot_checksum(const struct vol *v, uint64_t first)
     return sum;
 }
 
+/** The checksum of a set of `count` entries, which skips its own field,
+ *  bytes 2 and 3 of the first entry. */
 static uint16_t set_checksum(const unsigned char *entries, unsigned count)
 {
     uint16_t sum = 0;
@@ -123,6 +140,7 @@ static uint16_t set_checksum(const unsigned char *entries, unsigned count)
     return sum;
 }
 
+/** The name hash of `n` units, each up-cased through the volume's table. */
 static uint16_t name_hash(const struct vol *v, const uint16_t *units, unsigned n)
 {
     uint16_t sum = 0;
@@ -137,6 +155,7 @@ static uint16_t name_hash(const struct vol *v, const uint16_t *units, unsigned n
     return sum;
 }
 
+/** The checksum of an up-case table over its `n` stored bytes. */
 static uint32_t table_checksum(const unsigned char *p, uint64_t n)
 {
     uint32_t sum = 0;
@@ -147,9 +166,9 @@ static uint32_t table_checksum(const unsigned char *p, uint64_t n)
     return sum;
 }
 
-/* Decompress an up-case table: a 0xFFFF followed by a count is that many
-   identity mappings; anything else maps the next unit. Returns the number
-   of mappings filled, 65536 for a whole table. */
+/** Decompress an up-case table: a 0xFFFF followed by a count is that many
+ *  identity mappings; anything else maps the next unit. Returns the number
+ *  of mappings filled, 65536 for a whole table. */
 static uint32_t decompress_upcase(const unsigned char *stored, uint64_t length, uint16_t *table)
 {
     uint64_t at = 0;
@@ -174,7 +193,7 @@ static uint32_t decompress_upcase(const unsigned char *stored, uint64_t length, 
     return u;
 }
 
-/* The stored bytes a table's first 65536 mappings take. */
+/** The stored bytes a table's first 65536 mappings take. */
 static uint64_t upcase_consumed(const unsigned char *stored, uint64_t length)
 {
     uint64_t at = 0;
@@ -194,6 +213,9 @@ static uint64_t upcase_consumed(const unsigned char *stored, uint64_t length)
     return at;
 }
 
+/** `n` UTF-16 units as UTF-8 in `out` of `cap` bytes, NUL-terminated. A
+ *  surrogate pair is one code point, and the text stops short where `cap`
+ *  cannot hold the next. */
 static void utf8_of(const uint16_t *units, unsigned n, char *out, size_t cap)
 {
     size_t o = 0;
@@ -226,8 +248,8 @@ static void utf8_of(const uint16_t *units, unsigned n, char *out, size_t cap)
     out[o] = 0;
 }
 
-/* A timestamp's fields as text: the 32-bit field, the 10 ms increment and
-   the UTC offset byte, decoded as the specification lays them out. */
+/** A timestamp's fields as text: the 32-bit field, the 10 ms increment and
+ *  the UTC offset byte, decoded as the specification lays them out. */
 static void stamp_text(uint32_t ts, unsigned char inc, unsigned char off, char *out, size_t cap)
 {
     unsigned year = 1980 + (ts >> 25), month = (ts >> 21) & 0xF, day = (ts >> 16) & 0x1F;
@@ -249,9 +271,16 @@ static long walk_chain(struct vol *v, uint32_t first, uint64_t length, int nofat
 static void check_dir(struct vol *v, uint32_t first, uint64_t length, int nofat, const char *path,
                       int depth);
 
-/* Own every cluster of a chain and count it; a chain is read from the FAT,
-   or, with NoFatChain, as `length` bytes of consecutive clusters. A length
-   of zero on a FAT chain is the root's, whose length no entry records. */
+/**
+ * Own every cluster of a chain and count it; a chain is read from the FAT,
+ * or, with NoFatChain, as `length` bytes of consecutive clusters. A length
+ * of zero on a FAT chain is the root's, whose length no entry records.
+ * Returns the count, or -1 after a finding named for `path`: a cluster out
+ * of the heap, a loop, a cross-link with another chain, a cluster free in
+ * the bitmap, a FAT chain that ends in a free or bad entry, or a chain
+ * short of `length`. A FAT chain longer than `length` is a finding too, of
+ * the surplus, and keeps its count.
+ */
 static long walk_chain(struct vol *v, uint32_t first, uint64_t length, int nofat, const char *path)
 {
     char text[400];
@@ -313,7 +342,8 @@ static long walk_chain(struct vol *v, uint32_t first, uint64_t length, int nofat
     return count;
 }
 
-/* Read entry `i` of a directory whose clusters are known. */
+/** Entry `i` of a directory of the `ncl` clusters `cl`, or NULL past the
+ *  last. */
 static const unsigned char *dir_entry(const struct vol *v, const uint32_t *cl, unsigned ncl,
                                       unsigned i)
 {
@@ -324,6 +354,7 @@ static const unsigned char *dir_entry(const struct vol *v, const uint32_t *cl, u
     return cluster(v, cl[i / per]) + (i % per) * 32;
 }
 
+/** Print the `n` entries of a set at `e` as hex, for `--dump`. */
 static void dump_set(const unsigned char *e, unsigned n)
 {
     unsigned i, k;
@@ -336,6 +367,22 @@ static void dump_set(const unsigned char *e, unsigned n)
     }
 }
 
+/**
+ * Walk the directory `path` at `first`, `length` bytes for a NoFatChain one
+ * or else its FAT chain, and every set and subdirectory in it. Each set is
+ * read entry by entry, since its clusters need not be adjacent, and checked
+ * for its secondary count, its stream extension second and its name entries
+ * after it, every secondary in use, the units past NameLength zero, its name
+ * hash, its name unlike every other in the directory once up-cased, its
+ * lengths, AllocationPossible, and its chain and any vendor allocation's.
+ *
+ * A set whose checksum alone fails is the state a stop between the two
+ * writes of a change that straddles a sector leaves, which a repair fixes by
+ * writing the checksum again; it is named `checksum-only`. In-use
+ * secondaries outside a set are what a stop before a file entry's write
+ * leaves; they are named `orphan secondaries`. A directory 32 levels down is
+ * a finding, since the kernel's walk descends at most 32 levels.
+ */
 static void check_dir(struct vol *v, uint32_t first, uint64_t length, int nofat, const char *path,
                       int depth)
 {
@@ -346,7 +393,7 @@ static void check_dir(struct vol *v, uint32_t first, uint64_t length, int nofat,
     long n;
     uint16_t (*upnames)[256] = malloc(sizeof(*upnames) * 4096);
 
-    if (depth >= 32) { /* the kernel's walk holds 32 levels */
+    if (depth >= 32) {
         snprintf(text, sizeof(text), "depth: %s", path);
         finding(v, text);
         return;
@@ -394,8 +441,7 @@ static void check_dir(struct vol *v, uint32_t first, uint64_t length, int nofat,
             continue;
         }
         if (type == 0xA0) {
-            /* A benign primary with no secondaries is a set of one, with
-               the set checksum over its own bytes. */
+            /* A GUID entry is a set of one, its checksum over itself. */
             if (e[1] != 0 || set_checksum(e, 1) != rd16(e + 2)) {
                 snprintf(text, sizeof(text),
                          "GUID entry with a bad SecondaryCount or checksum in %s", path);
@@ -404,11 +450,11 @@ static void check_dir(struct vol *v, uint32_t first, uint64_t length, int nofat,
             continue;
         }
         if (type == 0x83 || type == 0xA1) {
-            continue; /* the label, TexFAT padding: primaries with no set to walk */
+            /* The label and TexFAT padding: primaries with no set. */
+            continue;
         }
         if (type & 0x40) {
-            /* An in-use secondary outside a set: what a stop before a
-               file entry's write leaves, and the check frees. */
+            /* An in-use secondary outside a set is an orphan. */
             orphans++;
             continue;
         }
@@ -432,8 +478,6 @@ static void check_dir(struct vol *v, uint32_t first, uint64_t length, int nofat,
                 break;
             }
         }
-        /* The set is read entry by entry, since the clusters need not be
-           adjacent. */
         {
             static unsigned char set[256 * 32];
 
@@ -458,8 +502,7 @@ static void check_dir(struct vol *v, uint32_t first, uint64_t length, int nofat,
                     break;
                 }
             }
-            /* The name entries: exactly ceil(NameLength / 15) of them,
-               consecutive, right after the stream extension. */
+            /* ceil(NameLength / 15) name entries follow the stream. */
             for (k = 2; k <= secondaries && k < 2 + (nlen + 14) / 15; k++) {
                 const unsigned char *ne = set + k * 32;
                 unsigned m;
@@ -550,9 +593,6 @@ static void check_dir(struct vol *v, uint32_t first, uint64_t length, int nofat,
                 nnames++;
             }
             if (checksum_bad) {
-                /* Every other invariant held: the state a stop between the
-                   two writes of a straddling change leaves, which the check
-                   repairs by rewriting the checksum. */
                 snprintf(text, sizeof(text), "checksum-only: %s (stored %04x, computed %04x)",
                          child, rd16(set + 2), sum);
                 finding(v, text);
@@ -634,6 +674,16 @@ static void check_dir(struct vol *v, uint32_t first, uint64_t length, int nofat,
 
 /* ---- the boot regions and the root's objects ---- */
 
+/**
+ * Check the boot regions and take the volume's geometry from the main boot
+ * sector: the name, JumpBoot, the zeroed fields, the revision, the shifts
+ * and the FAT count, the signatures, the FAT and heap inside the volume, the
+ * root in the heap, and the active FAT present. Returns -1 after a finding
+ * that leaves nothing to walk, and 0 otherwise. Media failure, checksum
+ * sectors whose words differ, a checksum of either region, a backup that
+ * differs from the main outside VolumeFlags and PercentInUse, and the FAT's
+ * first two entries are findings that let the walk go on.
+ */
 static int check_boot(struct vol *v)
 {
     const unsigned char *b = v->img;
@@ -772,9 +822,9 @@ static int check_boot(struct vol *v)
     return 0;
 }
 
-/* The bytes of a system object, whose clusters the FAT chains: `length`
-   bytes from `first`, bounded; the count copied, or -1 for a chain that
-   ends, leaves the heap or loops. */
+/** The bytes of a system object, whose clusters the FAT chains: `length`
+ *  bytes from `first` into `out`, bounded; the count copied, or -1 for a
+ *  chain that ends, leaves the heap or loops. */
 static long read_object(const struct vol *v, uint32_t first, uint64_t length, unsigned char *out)
 {
     uint32_t c = first;
@@ -799,8 +849,9 @@ static long read_object(const struct vol *v, uint32_t first, uint64_t length, un
     return (long)done;
 }
 
-/* The bitmap and the up-case table, found in the root before anything is
-   walked; the root's own clusters are read through the FAT. */
+/** Load the bitmap and the up-case table, found in the root before
+ *  anything is walked; the root's own clusters are read through the FAT.
+ *  Returns 0, or -1 after a finding that leaves nothing to walk. */
 static int load_objects(struct vol *v)
 {
     char text[200];
@@ -873,8 +924,7 @@ static int load_objects(struct vol *v)
                     } else if (upcase_consumed(stored, v->upcase_length) != v->upcase_length) {
                         finding(v, "up-case table with bytes past its last mapping");
                     }
-                    /* The mandatory mappings: the first 128 code points are
-                       themselves, but a to z are A to Z. */
+                    /* Code points below 128 map to themselves, a-z to A-Z. */
                     for (m = 0; m < 128; m++) {
                         uint16_t want = (uint16_t)(m >= 'a' && m <= 'z' ? m - 32 : m);
 
@@ -971,8 +1021,9 @@ static int export_file(struct vol *v, uint32_t first, uint64_t length, uint64_t 
 }
 
 /**
- * Export the file at PATH through its FAT chain or contiguous extent.
+ * Export the file at `path` through its FAT chain or contiguous extent.
  * Compare components in place so their lengths cannot overrun a copy.
+ * Returns 0, or 1 when the path names no file or the export fails.
  */
 static int read_path(struct vol *v, const char *path)
 {
@@ -1068,6 +1119,16 @@ static int read_path(struct vol *v, const char *path)
     return export_file(v, first, length, valid, nofat);
 }
 
+/**
+ * The `--check` command over the image and the optional sector offset in
+ * `argv`. After the boot regions and the root's objects, it walks the
+ * bitmap's and the up-case table's chains first, so they own their
+ * clusters, then the tree, and counts as lost the clusters the bitmap
+ * allocates and nothing reached. With `--read` it exports a file instead of
+ * walking. Returns 0 for a volume with no finding, 1 for one with findings
+ * or an export that fails, and 2 for a usage error or an image it cannot
+ * read.
+ */
 static int check_main(int argc, char **argv)
 {
     struct vol v;
@@ -1119,7 +1180,6 @@ static int check_main(int argc, char **argv)
     if (read_what) {
         return read_path(&v, read_what);
     }
-    /* The system objects own their clusters first. */
     n = walk_chain(&v, v.bitmap_first, v.bitmap_length, 0, "(bitmap)");
     if (n >= 0)
         walk_chain(&v, v.upcase_first, v.upcase_length, 0, "(up-case table)");
@@ -1162,7 +1222,7 @@ static int check_main(int argc, char **argv)
  * four entries, a set with a vendor extension and a vendor allocation, a
  * set whose file and stream entries straddle a sector, a set that crosses a
  * cluster boundary, and a directory of two levels. An OPTION breaks one
- * rule, or changes the geometry, as the list in `variants` says.
+ * rule, or changes the geometry, as `build` says.
  */
 
 #include "exfat_upcase.inc"
@@ -1191,8 +1251,9 @@ struct build {
     int dirty;        /* VolumeDirty set over the tree */
 };
 
-/* The builder's own sums, apart from the reader's, so that a mutation in
-   either is seen by the other. */
+/** The checksum of a set of `count` entries: the builder's own sums,
+ *  apart from the reader's, so that a mutation in either is seen by the
+ *  other. */
 static uint16_t b_set_checksum(const unsigned char *entries, unsigned count)
 {
     uint16_t sum = 0;
@@ -1206,6 +1267,8 @@ static uint16_t b_set_checksum(const unsigned char *entries, unsigned count)
     return sum;
 }
 
+/** The checksum of an up-case table over its `n` stored bytes, the
+ *  builder's own. */
 static uint32_t b_table_checksum(const unsigned char *p, uint64_t n)
 {
     uint32_t sum = 0;
@@ -1216,49 +1279,59 @@ static uint32_t b_table_checksum(const unsigned char *p, uint64_t n)
     return sum;
 }
 
+/** Store the low 16 bits of `v` at `p`, little-endian. */
 static void wr16(unsigned char *p, uint32_t v)
 {
     p[0] = (unsigned char)v;
     p[1] = (unsigned char)(v >> 8);
 }
 
+/** Store `v` at `p`, little-endian. */
 static void wr32(unsigned char *p, uint32_t v)
 {
     wr16(p, v & 0xFFFF);
     wr16(p + 2, v >> 16);
 }
 
+/** Store the 64-bit `v` at `p`, little-endian. */
 static void wr64(unsigned char *p, uint64_t v)
 {
     wr32(p, (uint32_t)v);
     wr32(p + 4, (uint32_t)(v >> 32));
 }
 
+/** The volume's bytes per sector. */
 static unsigned b_bps(const struct build *b)
 {
     return 1u << b->bps_shift;
 }
 
+/** The volume's bytes per cluster. */
 static unsigned b_cbytes(const struct build *b)
 {
     return 1u << (b->bps_shift + b->spc_shift);
 }
 
+/** The first byte of sector `n` of the volume. */
 static unsigned char *b_sector(const struct build *b, uint64_t n)
 {
     return b->img + n * b_bps(b);
 }
 
+/** The first byte of cluster `c` of the heap. */
 static unsigned char *b_cluster(const struct build *b, uint32_t c)
 {
     return b_sector(b, b->heap_offset + ((uint64_t)(c - 2) << b->spc_shift));
 }
 
+/** Set the FAT entry of cluster `c` to `v`. */
 static void b_fat(struct build *b, uint32_t c, uint32_t v)
 {
     wr32(b_sector(b, b->fat_offset) + (size_t)c * 4, v);
 }
 
+/** Set or clear the bitmap's bit for cluster `c`; the bitmap is at
+ *  cluster 2. */
 static void b_bit(struct build *b, uint32_t c, int on)
 {
     unsigned char *bm = b_cluster(b, 2);
@@ -1269,8 +1342,9 @@ static void b_bit(struct build *b, uint32_t c, int on)
         bm[(c - 2) / 8] &= (unsigned char)~(1u << ((c - 2) % 8));
 }
 
-/* Take `n` consecutive clusters, marked in the bitmap; chained through the
-   FAT when `chain` is set (a NoFatChain stream leaves its entries alone). */
+/** Take `n` consecutive clusters, marked in the bitmap; chained through the
+ *  FAT when `chain` is set (a NoFatChain stream leaves its entries alone).
+ *  Returns the first. */
 static uint32_t b_alloc(struct build *b, uint32_t n, int chain)
 {
     uint32_t first = b->next, i;
@@ -1284,12 +1358,14 @@ static uint32_t b_alloc(struct build *b, uint32_t n, int chain)
     return first;
 }
 
+/** Whether the builder's option is `opt`. */
 static int b_is(const struct build *b, const char *opt)
 {
     return b->opt != 0 && strcmp(b->opt, opt) == 0;
 }
 
-/* UTF-8 to UTF-16, for the builder's own names (which are well-formed). */
+/** `name` from UTF-8 to UTF-16 in `units`, for the builder's own names,
+ *  which are well-formed. Returns the count of units. */
 static unsigned b_units(const char *name, uint16_t *units)
 {
     unsigned n = 0, i = 0;
@@ -1332,6 +1408,8 @@ struct dw {
     int nofat;
 };
 
+/** Start the directory `d` in the cluster `preallocated`, chained through
+ *  the FAT unless `nofat`. */
 static void dw_init(struct dw *d, struct build *b, int nofat, uint32_t preallocated)
 {
     memset(d, 0, sizeof(*d));
@@ -1341,6 +1419,8 @@ static void dw_init(struct dw *d, struct build *b, int nofat, uint32_t prealloca
     d->n = 1;
 }
 
+/** The slot of entry `index` of `d`, which grows a cluster at a time until
+ *  it has the slot. */
 static unsigned char *dw_slot(struct dw *d, unsigned index)
 {
     unsigned per = b_cbytes(d->b) / 32;
@@ -1349,7 +1429,7 @@ static unsigned char *dw_slot(struct dw *d, unsigned index)
         uint32_t c = b_alloc(d->b, 1, !d->nofat);
 
         if (!d->nofat)
-            d->b->img[0] = d->b->img[0]; /* the FAT link below */
+            d->b->img[0] = d->b->img[0];
         b_fat(d->b, d->clusters[d->n - 1], d->nofat ? 0 : c);
         b_fat(d->b, c, 0xFFFFFFFFu);
         d->clusters[d->n++] = c;
@@ -1357,6 +1437,8 @@ static unsigned char *dw_slot(struct dw *d, unsigned index)
     return b_cluster(d->b, d->clusters[index / per]) + (index % per) * 32;
 }
 
+/** Write the 32 bytes of `entry` to the next slot of `d`. Returns its
+ *  index. */
 static unsigned dw_put(struct dw *d, const unsigned char *entry)
 {
     unsigned at = d->used++;
@@ -1365,15 +1447,19 @@ static unsigned dw_put(struct dw *d, const unsigned char *entry)
     return at;
 }
 
+/** The timestamp of every entry, 2026-09-01 12:00:00 in exFAT's layout. */
 static uint32_t b_stamp(void)
 {
-    /* 2026-09-01 12:00:00 */
     return ((2026u - 1980u) << 25) | (9u << 21) | (1u << 16) | (12u << 11);
 }
 
-/* A file set in a buffer: the file entry, the stream extension, the name
-   entries, and `vendor` benign secondaries after them; returns its entry
-   count with the checksum written. */
+/**
+ * The set of the file or directory `name` in `set`: the file entry, the
+ * stream extension of `first`, `length` and `valid`, NoFatChain when `nofat`
+ * is set, the name entries, and when `vendor` is set a vendor extension and
+ * a vendor allocation of the cluster `vendor_cluster` after them. Returns
+ * its entry count, with the checksum written.
+ */
 static unsigned set_build(struct build *b, unsigned char *set, const char *name, int is_dir,
                           uint32_t first, uint64_t length, uint64_t valid, int nofat, int vendor,
                           uint32_t vendor_cluster)
@@ -1403,7 +1489,8 @@ static unsigned set_build(struct build *b, unsigned char *set, const char *name,
     e[20] = e[21] = (unsigned char)(b_is(b, "--zoned") ? 34 : 0);
     e = set + 32;
     e[0] = 0xC0;
-    e[1] = (unsigned char)(0x01 | (nofat ? 0x02 : 0x00)); /* AllocationPossible shall be 1 */
+    /* AllocationPossible shall be 1. */
+    e[1] = (unsigned char)(0x01 | (nofat ? 0x02 : 0x00));
     e[3] = (unsigned char)n;
     wr16(e + 4, hash);
     wr64(e + 8, valid);
@@ -1423,7 +1510,7 @@ static unsigned set_build(struct build *b, unsigned char *set, const char *name,
         memcpy(e + 18, "vendor bytes  ", 14);
         entries++;
         e = set + entries * 32;
-        e[0] = 0xE1; /* a vendor allocation: a GUID and one contiguous cluster */
+        e[0] = 0xE1; /* a vendor allocation: a GUID and one cluster */
         e[1] = 0x03;
         for (k = 0; k < 16; k++)
             e[2 + k] = (unsigned char)(0xB0 + k);
@@ -1436,6 +1523,8 @@ static unsigned set_build(struct build *b, unsigned char *set, const char *name,
     return entries;
 }
 
+/** Write the `entries` entries of `set` to `d`. Returns the index of the
+ *  first. */
 static unsigned dw_put_set(struct dw *d, const unsigned char *set, unsigned entries)
 {
     unsigned first = d->used, i;
@@ -1445,6 +1534,8 @@ static unsigned dw_put_set(struct dw *d, const unsigned char *set, unsigned entr
     return first;
 }
 
+/** Fill `bytes` bytes from cluster `first` on with the bytes `seed`,
+ *  `seed` + 1, and so on. */
 static void fill(struct build *b, uint32_t first, uint64_t bytes, unsigned char seed)
 {
     unsigned char *p = b_cluster(b, first);
@@ -1454,8 +1545,13 @@ static void fill(struct build *b, uint32_t first, uint64_t bytes, unsigned char 
         p[i] = (unsigned char)(seed + i);
 }
 
-/* The stored up-case table for the volume: the recommended one compressed,
-   or expanded in part or in whole for the variants that ask. */
+/**
+ * The stored up-case table for the volume in `out` of `cap` bytes: the
+ * recommended one compressed, or for `--big-upcase` and
+ * `--uncompressed-upcase` its first 12288 or all 65536 mappings written out
+ * one by one, and past those, identity runs compressed and the rest written
+ * out. Returns its length.
+ */
 static uint64_t upcase_bytes(struct build *b, unsigned char *out, uint64_t cap)
 {
     if (b_is(b, "--big-upcase") || b_is(b, "--uncompressed-upcase")) {
@@ -1467,7 +1563,6 @@ static uint64_t upcase_bytes(struct build *b, unsigned char *out, uint64_t cap)
             at += 2;
         }
         while (u < 65536) {
-            /* From here on, identity runs compressed, the rest explicit. */
             uint32_t run = 0;
 
             while (u + run < 65536 && b->upcase[u + run] == u + run)
@@ -1496,6 +1591,9 @@ static uint64_t upcase_bytes(struct build *b, unsigned char *out, uint64_t cap)
     return sizeof(upcase_stored);
 }
 
+/** Write the boot region at sector `first`, 0 for the main and 12 for the
+ *  backup: the boot sector, the signatures of the extended boot sectors and
+ *  the checksum sector, with the faults the options put in each. */
 static void boot_write(struct build *b, uint64_t first)
 {
     unsigned char *s0 = b_sector(b, first);
@@ -1538,8 +1636,11 @@ static void boot_write(struct build *b, uint64_t first)
         wr32(b_sector(b, first + 11) + i, sum);
 }
 
-/*
- * `mkexfatfixture --make OUT --sectors N [--offset S] [--add NAME=PATH]...`
+/**
+ * Build a volume of `sectors` at `offset` with the files `adds` name, each
+ * NAME=PATH, into `bp->img`, which the caller writes out and frees. Returns
+ * 0, or 2 for a name or file it cannot take, or no memory. This is
+ * `mkexfatfixture --make OUT --sectors N [--offset S] [--add NAME=PATH]...`.
  *
  * A volume with files in it, rather than the tree of shapes the fixture is.
  * The fixture is sixteen megabytes of every shape an entry set can take,
@@ -1550,11 +1651,20 @@ static void boot_write(struct build *b, uint64_t first)
  * the bitmap at cluster 2, the recommended up-case table, a label and a root,
  * so `--check` walks it as it walks the fixture.
  *
+ * The heap begins on a cluster boundary after a FAT long enough for the
+ * clusters the heap then holds; each pass of the loop shortens the heap and
+ * so the FAT, and it settles in two. A name is printable ASCII, since
+ * `b_units` reads a byte's continuation bytes without checking that they
+ * are there, and at most 200 characters. A file needs its clusters and one
+ * more for the root's own entries, since a name of 200 characters is
+ * fifteen entries and the root grows through the same allocator. An empty
+ * file has no cluster and no NoFatChain, as the specification gives an
+ * empty stream; the kernel's driver judges a set with NoFatChain and no
+ * length damaged.
+ *
  * The whole volume is held in memory while it is built, so what it can write
  * is bounded by the host's memory.
  */
-/* Build a volume of `sectors` at `offset` with the files `adds` name into
-   `b->img`, which the caller writes out and frees. */
 static int build_volume_image(struct build *bp, uint64_t sectors, uint64_t offset, char **adds,
                               int nadds)
 {
@@ -1572,9 +1682,6 @@ static int build_volume_image(struct build *bp, uint64_t sectors, uint64_t offse
     b.spc_shift = B_SPC_SHIFT;
     b.sectors = sectors;
     b.fat_offset = 24; /* after both boot regions */
-    /* The heap begins on a cluster boundary after a FAT long enough for the
-       clusters the heap then holds. Each pass shortens the heap and so the
-       FAT; it settles in two. */
     heap = 1u << b.spc_shift;
     for (i = 0; i < 8; i++) {
         uint64_t need;
@@ -1644,9 +1751,6 @@ static int build_volume_image(struct build *bp, uint64_t sectors, uint64_t offse
         }
         memcpy(name, adds[k], (size_t)(eq - adds[k]));
         name[eq - adds[k]] = '\0';
-        /* Printable ASCII only. The name goes to a decoder written for the
-           fixture's own well-formed names, which reads a byte's continuation
-           bytes without checking that they are there. */
         for (ni = 0; name[ni] != '\0'; ni++) {
             if ((unsigned char)name[ni] < 0x20 || (unsigned char)name[ni] > 0x7E) {
                 fprintf(stderr, "mkexfatfixture: %s: a name here is printable ASCII\n", name);
@@ -1666,9 +1770,6 @@ static int build_volume_image(struct build *bp, uint64_t sectors, uint64_t offse
         bytes = (uint64_t)ftell(in);
         fseek(in, 0, SEEK_SET);
         want = (bytes + b_cbytes(&b) - 1) / b_cbytes(&b);
-        /* The file's clusters and a cluster for the root's own entries, since
-           a name of two hundred characters is fifteen entries and the root
-           grows through the same allocator. */
         if (b.next + want + 1 > b.clusters + 2) {
             fprintf(stderr, "mkexfatfixture: %s does not fit the volume\n", name);
             return 2;
@@ -1679,9 +1780,6 @@ static int build_volume_image(struct build *bp, uint64_t sectors, uint64_t offse
             return 2;
         }
         fclose(in);
-        /* An empty file has no cluster and no NoFatChain, which is what the
-           specification says an empty stream is and what this kernel's reader
-           refuses it for otherwise. */
         n = set_build(&b, set, name, 0, c, bytes, bytes, bytes ? 1 : 0, 0, 0);
         dw_put_set(&root, set, n);
     }
@@ -1699,8 +1797,9 @@ static int build_volume_image(struct build *bp, uint64_t sectors, uint64_t offse
     return 0;
 }
 
-/* A volume of `sectors` for a harness that holds it in memory, without
-   files: the image, or NULL; its length in `bytes`. */
+/** A volume of `sectors` for a harness that holds it in memory, without
+ *  files: the image, which the caller frees, or NULL; its length in
+ *  `bytes`. */
 unsigned char *mkexfatfixture_build(unsigned long sectors, unsigned long *bytes)
 {
     struct build b;
@@ -1712,6 +1811,8 @@ unsigned char *mkexfatfixture_build(unsigned long sectors, unsigned long *bytes)
     return b.img;
 }
 
+/** The `--make` command: build the volume of `build_volume_image` and
+ *  write it to `out`. Returns 0, or 2 when the build or the write fails. */
 static int build_volume(const char *out, uint64_t sectors, uint64_t offset, char **adds, int nadds)
 {
     struct build b;
@@ -1731,6 +1832,72 @@ static int build_volume(const char *out, uint64_t sectors, uint64_t offset, char
     return 0;
 }
 
+/**
+ * Build the fixture volume, changed by the option `opt` or NULL, and write
+ * it to `out`. Returns 0, or 2 when memory or the write fails.
+ *
+ * The volume is 16 MiB of 4 KiB clusters, of 512-byte sectors or with
+ * `--sector-4k` of 4 KiB ones. The root holds the label, the bitmap and
+ * up-case table entries and a GUID entry, then the files:
+ *
+ * - hello.txt, twelve bytes, contiguous with NoFatChain;
+ * - chained.bin, three clusters chained through the FAT with a free
+ *   cluster between each two;
+ * - valid.bin, two clusters with 5000 bytes valid and 0xEE past them;
+ * - a name of four name entries, which crosses the end of the root's first
+ *   sector;
+ * - a name with U+00E9, which the up-case table alone folds;
+ * - a name with U+1E01, the first case-mapped unit past the stored table's
+ *   first run, so its mapping is not at its own index in the compressed
+ *   form;
+ * - vendor.txt, with a vendor extension and a vendor allocation;
+ * - empty, with no cluster;
+ * - empty files padNN.txt until a set's file entry is a sector's last slot,
+ *   then straddle.txt, whose stream extension is the next sector's first;
+ * - dir, contiguous with NoFatChain, its subdirectory sub chained through
+ *   the FAT, and dir/sub/leaf.txt;
+ * - more padding, then crossing.txt, whose set crosses the root's first
+ *   cluster boundary.
+ *
+ * `--sector-4k` makes the sectors 4 KiB; `--big-upcase` and
+ * `--uncompressed-upcase` write the up-case table out as `upcase_bytes`
+ * says; `--no-utc` gives the timestamps no valid UTC offset, and `--zoned`
+ * an offset of six hours and 34 hundredths of a second. `--empty` writes the
+ * system objects alone, a volume for a suite to write; `--demo` writes
+ * hello.txt with "hello, world" and no more, for the demonstration volume a
+ * person mounts; `--offset=N` sets PartitionOffset and takes no other
+ * option. Each of the rest breaks one rule, and exfatcheck_hosttest.c names
+ * each by the finding it must give. A set an option damages has its
+ * checksum written again unless the checksum is the rule broken;
+ * `--hash-and-checksum` leaves both wrong. `--dirty-X` makes X's damage
+ * under the dirty bit, the state a crash of another writer leaves. The
+ * states that exist only under the dirty bit are:
+ *
+ * - `--dirty-orphan`: two in-use name entries with no primary before them
+ *   at the root's end, what a stop before a file entry's write leaves;
+ * - `--dirty-surplus`: chained.bin's FAT chain one cluster past its length;
+ * - `--dirty-lost`: a chain of two clusters, allocated and chained, that no
+ *   set names, whose bytes are the only copy and which the check leaves;
+ * - `--dirty-all`: the three repairable states at once, a set whose
+ *   checksum alone fails, orphan secondaries and a surplus chain, so that
+ *   their order matters;
+ * - `--dirty-nofat-orphan`: a contiguous directory of two clusters with
+ *   orphan secondaries in its second, so the repair must follow the run and
+ *   not the FAT;
+ * - `--dirty-dup`: a second set whose name up-cases like hello.txt's, and
+ *   `--dirty-dup-checksum` the same with hello.txt's checksum wrong, so the
+ *   duplicate must be found before the checksum is written again;
+ * - `--dirty-label-below`: a volume label, which belongs to the root,
+ *   inside dir;
+ * - `--dirty-critical`: a critical primary entry the driver does not know,
+ *   in dir.
+ *
+ * `--swallow` enlarges hello.txt's set over the next file's entries, with
+ * its checksum written again, so that a reader that counts entries without
+ * checking each would take them for benign secondaries. With `--junk`, and
+ * on every dirty volume, each free cluster holds 0xEE, so that a size
+ * published before its data shows in the check.
+ */
 static int build(const char *out, const char *opt)
 {
     struct build b;
@@ -1745,15 +1912,13 @@ static int build(const char *out, const char *opt)
     b.opt = opt;
     if (opt && strncmp(opt, "--offset=", 9) == 0) {
         b.partition_offset = strtoull(opt + 9, 0, 10);
-        b.opt = 0; /* no other option travels with it */
+        b.opt = 0;
     }
     if (opt && strncmp(opt, "--dirty-", 8) == 0 && strcmp(opt, "--dirty-orphan") != 0 &&
         strcmp(opt, "--dirty-surplus") != 0 && strcmp(opt, "--dirty-lost") != 0 &&
         strcmp(opt, "--dirty-dup") != 0 && strcmp(opt, "--dirty-critical") != 0 &&
         strcmp(opt, "--dirty-all") != 0 && strcmp(opt, "--dirty-nofat-orphan") != 0 &&
         strcmp(opt, "--dirty-dup-checksum") != 0 && strcmp(opt, "--dirty-label-below") != 0) {
-        /* --dirty-X: X's damage under the dirty bit, the state a crash of
-           another writer leaves. */
         static char plain[64];
 
         snprintf(plain, sizeof(plain), "--%s", opt + 8);
@@ -1783,7 +1948,7 @@ static int build(const char *out, const char *opt)
     table = malloc(140000);
     table_len = upcase_bytes(&b, table, 140000);
     if (b_is(&b, "--truncated-upcase-run")) {
-        /* The table ends after a run's 0xFFFF marker, its count gone. */
+        /* The table ends after a run's 0xFFFF marker, without its count. */
         uint64_t at = 0, last_marker = 0;
 
         while (at + 3 < table_len) {
@@ -1800,20 +1965,17 @@ static int build(const char *out, const char *opt)
     memcpy(b_cluster(&b, c), table, (size_t)table_len);
     b.root = b_alloc(&b, 1, 1);
     dw_init(&root, &b, 0, b.root);
-    /* The label. */
     memset(entry, 0, 32);
     entry[0] = 0x83;
     entry[1] = 7;
     for (i = 0; i < 7; i++)
         wr16(entry + 2 + i * 2, (uint32_t)"FIXTURE"[i]);
     dw_put(&root, entry);
-    /* The bitmap entry. */
     memset(entry, 0, 32);
     entry[0] = 0x81;
     wr32(entry + 20, 2);
     wr64(entry + 24, b_is(&b, "--short-bitmap") ? bitmap_len - 1 : bitmap_len);
     b.bitmap_entry = dw_put(&root, entry);
-    /* The up-case entry. */
     memset(entry, 0, 32);
     entry[0] = 0x82;
     wr32(entry + 4,
@@ -1834,7 +1996,6 @@ static int build(const char *out, const char *opt)
         entry[0] = 0x86;
         dw_put(&root, entry);
     }
-    /* The GUID entry. */
     memset(entry, 0, 32);
     entry[0] = 0xA0;
     for (i = 0; i < 16; i++)
@@ -1843,13 +2004,9 @@ static int build(const char *out, const char *opt)
     dw_put(&root, entry);
     free(table);
     if (b_is(&b, "--empty")) {
-        goto finish; /* the system objects alone: a volume for the suite to write */
+        goto finish;
     }
 
-    /* hello.txt: twelve bytes, contiguous, NoFatChain. `--demo` writes the
-       line the machine's own demonstration volumes carry instead, and stops
-       there: what a person mounts should hold one file they can read and
-       write, not the shapes a test needs. */
     c = b_alloc(&b, 1, 0);
     if (b_is(&b, "--demo")) {
         memcpy(b_cluster(&b, c), "hello, world\n", 13);
@@ -1860,9 +2017,8 @@ static int build(const char *out, const char *opt)
     memcpy(b_cluster(&b, c), "hello exfat\n", 12);
     n = set_build(&b, set, "hello.txt", 0, c, 12, 12, 1, 0, 0);
     b.hello_set = dw_put_set(&root, set, n);
-    /* chained.bin: three clusters through the FAT, none adjacent. */
     b.chained_first = b_alloc(&b, 1, 1);
-    b.next++; /* a gap */
+    b.next++;
     c = b_alloc(&b, 1, 1);
     b_fat(&b, b.chained_first, c);
     b.next++;
@@ -1874,41 +2030,31 @@ static int build(const char *out, const char *opt)
     n = set_build(&b, set, "chained.bin", 0, b.chained_first, (uint64_t)b_cbytes(&b) * 3,
                   (uint64_t)b_cbytes(&b) * 3, 0, 0, 0);
     b.chained_set = dw_put_set(&root, set, n);
-    /* valid.bin: two clusters, 3000 bytes valid, junk past them. */
     c = b_alloc(&b, 2, 0);
     fill(&b, c, (uint64_t)b_cbytes(&b) * 2, 0x40);
     memset(b_cluster(&b, c) + 5000, 0xEE, (size_t)b_cbytes(&b) * 2 - 5000);
     n = set_build(&b, set, "valid.bin", 0, c, (uint64_t)b_cbytes(&b) * 2, 5000, 1, 0, 0);
     b.valid_set = dw_put_set(&root, set, n);
-    /* A name of four entries, crossing the first sector's end. */
     c = b_alloc(&b, 1, 0);
     memcpy(b_cluster(&b, c), "x", 1);
     n = set_build(&b, set, "A long name of some fifty characters for four entries.txt", 0, c, 1, 1,
                   1, 0, 0);
     dw_put_set(&root, set, n);
-    /* caf\xc3\xa9.txt: a name outside ASCII, folded by the table alone. */
     c = b_alloc(&b, 1, 0);
     memcpy(b_cluster(&b, c), "cafe\n", 5);
     n = set_build(&b, set, "caf\xc3\xa9.txt", 0, c, 5, 5, 1, 0, 0);
     dw_put_set(&root, set, n);
-    /* \xe1\xb8\x81.txt (U+1E01, a with a ring below): the first case-mapped
-       unit past the stored table's first run, so its mapping is not at
-       its own index in the compressed form. */
     c = b_alloc(&b, 1, 0);
     memcpy(b_cluster(&b, c), "ring\n", 5);
     n = set_build(&b, set, "\xe1\xb8\x81.txt", 0, c, 5, 5, 1, 0, 0);
     dw_put_set(&root, set, n);
-    /* vendor.txt: a set with a vendor extension and a vendor allocation. */
     c = b_alloc(&b, 1, 0);
     memcpy(b_cluster(&b, c), "vendor\n", 7);
     vendor_cluster = b_alloc(&b, 1, 0);
     n = set_build(&b, set, "vendor.txt", 0, c, 7, 7, 1, 1, vendor_cluster);
     dw_put_set(&root, set, n);
-    /* empty: no clusters. */
     n = set_build(&b, set, "empty", 0, 0, 0, 0, 0, 0, 0);
     dw_put_set(&root, set, n);
-    /* Pads until a set's file entry lands on a sector's last slot, so its
-       stream entry is the next sector's first. */
     for (i = 0; root.used % 16 != 15; i++) {
         char name[16];
 
@@ -1920,7 +2066,6 @@ static int build(const char *out, const char *opt)
     memcpy(b_cluster(&b, c), "straddle\n", 9);
     n = set_build(&b, set, "straddle.txt", 0, c, 9, 9, 1, 0, 0);
     dw_put_set(&root, set, n);
-    /* dir, contiguous with NoFatChain; dir/sub chained; dir/sub/leaf.txt. */
     c = b_alloc(&b, 1, 0);
     dw_init(&dir, &b, 1, c);
     n = set_build(&b, set, "dir", 1, c, b_cbytes(&b), b_cbytes(&b), 1, 0, 0);
@@ -1933,7 +2078,6 @@ static int build(const char *out, const char *opt)
     memcpy(b_cluster(&b, c), "leaf\n", 5);
     n = set_build(&b, set, "leaf.txt", 0, c, 5, 5, 1, 0, 0);
     dw_put_set(&sub, set, n);
-    /* Pads until a set crosses the root's first cluster boundary. */
     for (i = 100; root.used % (b_cbytes(&b) / 32) != b_cbytes(&b) / 32 - 2; i++) {
         char name[16];
 
@@ -1947,8 +2091,6 @@ static int build(const char *out, const char *opt)
     dw_put_set(&root, set, n);
     big_first = c;
 
-    /* The variants that damage a set or a chain, each with the checksum
-       recomputed where the rule broken is not the checksum. */
     {
         unsigned char *hello = dw_slot(&root, b.hello_set);
         unsigned char *chained = dw_slot(&root, b.chained_set);
@@ -1971,7 +2113,7 @@ static int build(const char *out, const char *opt)
             resum_hello = 1;
         }
         if (b_is(&b, "--hash-and-checksum")) {
-            wr16(hello + 32 + 4, rd16(hello + 32 + 4) + 1); /* the checksum left wrong too */
+            wr16(hello + 32 + 4, rd16(hello + 32 + 4) + 1);
         }
         if (b_is(&b, "--vdl-past-dl")) {
             wr64(valid + 32 + 8, rd64(valid + 32 + 24) + 1);
@@ -2019,8 +2161,6 @@ static int build(const char *out, const char *opt)
         b.percent = (unsigned)((uint64_t)used * 100 / b.clusters);
     }
     if (b_is(&b, "--dirty-orphan")) {
-        /* Two in-use name entries with no primary before them, at the
-           root's end: what a stop before a file entry's write leaves. */
         unsigned char e[32];
 
         memset(e, 0, 32);
@@ -2030,23 +2170,17 @@ static int build(const char *out, const char *opt)
         dw_put(&root, e);
     }
     if (b_is(&b, "--dirty-surplus")) {
-        /* chained.bin's FAT chain runs one cluster past its length. */
         uint32_t extra = b_alloc(&b, 1, 1);
 
-        b_fat(&b, b.chained_first + 4, extra); /* its third cluster, two gaps on */
+        b_fat(&b, b.chained_first + 4, extra);
     }
     if (b_is(&b, "--dirty-lost")) {
-        /* A chain of two clusters, allocated and chained, that no set
-           names: its bytes are the only copy and the check leaves them. */
         uint32_t lost = b_alloc(&b, 2, 1);
 
         fill(&b, lost, (uint64_t)b_cbytes(&b) * 2, 0x99);
         b.lost_first = lost;
     }
     if (b_is(&b, "--dirty-all")) {
-        /* The three repairable states at once, so their order matters:
-           a set whose checksum alone fails, orphan secondaries, and a
-           chain one cluster past its length. */
         unsigned char e[32];
         unsigned char *hset = dw_slot(&root, b.hello_set);
         uint32_t extra = b_alloc(&b, 1, 1);
@@ -2060,10 +2194,6 @@ static int build(const char *out, const char *opt)
         b_fat(&b, b.chained_first + 4, extra);
     }
     if (b_is(&b, "--swallow")) {
-        /* hello.txt's set enlarged to swallow the next file entry, its
-           checksum recomputed: a reader that counts entries without
-           checking each one would take the next file's entries for its
-           own benign secondaries. */
         unsigned char *hset = dw_slot(&root, b.hello_set);
         unsigned n0 = hset[1] + 1;
 
@@ -2071,15 +2201,13 @@ static int build(const char *out, const char *opt)
         wr16(hset + 2, b_set_checksum(hset, n0 + 3));
     }
     if (b_is(&b, "--dirty-nofat-orphan")) {
-        /* A contiguous directory of two clusters with orphan secondaries
-           in its second: the repair must follow the run, not the FAT. */
         uint32_t d2 = b_alloc(&b, 2, 0);
         struct dw wide;
         unsigned char e[32];
         unsigned i2;
 
         dw_init(&wide, &b, 1, d2);
-        wide.clusters[1] = d2 + 1; /* the run is contiguous: both clusters are its own */
+        wide.clusters[1] = d2 + 1;
         wide.n = 2;
         for (i2 = 0; i2 < 60;
              i2++) { /* three entries each: past the first cluster, inside the two */
@@ -2099,8 +2227,6 @@ static int build(const char *out, const char *opt)
         dw_put_set(&root, set, n);
     }
     if (b_is(&b, "--dirty-dup-checksum")) {
-        /* Two names that up-case alike, the earlier one's checksum wrong:
-           the duplicate must be found before the checksum is rewritten. */
         unsigned char *hset = dw_slot(&root, b.hello_set);
 
         wr16(hset + 2, rd16(hset + 2) + 1);
@@ -2110,14 +2236,12 @@ static int build(const char *out, const char *opt)
         dw_put_set(&root, set, n);
     }
     if (b_is(&b, "--dirty-dup")) {
-        /* A second set whose name up-cases like hello.txt's. */
         c = b_alloc(&b, 1, 0);
         memcpy(b_cluster(&b, c), "twin\n", 5);
         n = set_build(&b, set, "HELLO.txt", 0, c, 5, 5, 1, 0, 0);
         dw_put_set(&root, set, n);
     }
     if (b_is(&b, "--dirty-label-below")) {
-        /* A volume label, which belongs to the root, inside dir. */
         unsigned char e[32];
         unsigned k2;
 
@@ -2129,7 +2253,6 @@ static int build(const char *out, const char *opt)
         dw_put(&dir, e);
     }
     if (b_is(&b, "--dirty-critical")) {
-        /* A critical primary this driver does not know, in dir. */
         unsigned char e[32];
 
         memset(e, 0, 32);
@@ -2138,8 +2261,6 @@ static int build(const char *out, const char *opt)
     }
 finish:
     if (b_is(&b, "--junk") || b.dirty) {
-        /* Every free cluster holds bytes nobody wrote, so a size published
-           before its data shows in the oracle. */
         for (c = 2; c < b.clusters + 2; c++)
             if (!(b_cluster(&b, 2)[(c - 2) / 8] & (1u << ((c - 2) % 8))))
                 memset(b_cluster(&b, c), 0xEE, b_cbytes(&b));
@@ -2157,6 +2278,12 @@ finish:
 }
 
 #ifndef FIXTURE_NO_MAIN
+/**
+ * `--check` runs the checker, `--make` builds a volume with files, and
+ * otherwise IMAGE [OPTION] builds the fixture. Returns 0; 1 for a volume
+ * with findings; 2 for a usage error or an image that cannot be read,
+ * built or written.
+ */
 int main(int argc, char **argv)
 {
     int i;

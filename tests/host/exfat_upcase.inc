@@ -1,6 +1,7 @@
-/* The specification's recommended up-case table in its compressed form,
-   5836 bytes whose checksum is e619d30d; taken from a newfs_exfat volume
-   (dev-log/38-exfat/notes.md, phase 1). Generated; do not edit. */
+/* exfat_upcase.inc: the up-case table the exFAT specification recommends,
+   in its compressed form, which mkexfatfixture.c writes to its volumes: 5836
+   bytes whose checksum is e619d30d, taken from a volume newfs_exfat made
+   (dev-log/38-exfat/notes.md). Generated; do not edit. */
 static const unsigned char upcase_stored[5836] = {
     0x00, 0x00, 0x01, 0x00, 0x02, 0x00, 0x03, 0x00, 0x04, 0x00, 0x05, 0x00, 0x06, 0x00, 0x07, 0x00,
     0x08, 0x00, 0x09, 0x00, 0x0a, 0x00, 0x0b, 0x00, 0x0c, 0x00, 0x0d, 0x00, 0x0e, 0x00, 0x0f, 0x00,
