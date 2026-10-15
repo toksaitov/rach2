@@ -1,5 +1,8 @@
-/**
- * Exercise the mount entry point and FUSE callbacks over a private mapping.
+/*
+ * krffs_fuse_hosttest.c: the FUSE mount of KRFFS, the entry point of
+ * krffs/krffs.c and the callbacks of krffs/krffs_fuse_operations.c, over a
+ * mapping of a scratch image file, with tests/host/fuse/fuse.h in place of
+ * libfuse's header.
  *
  * host-deps: krffs/krffs_fuse_operations.c krffs/krffs_allocator.c
  * host-deps: krffs/krffs_node.c krffs/krffs_file_system.c
@@ -15,7 +18,7 @@ static int mounted;
 static struct krffs_file_system fixture;
 static char image_path[] = "krffs-fuse.XXXXXX";
 
-/** Record an assertion without stopping later independent rows. */
+/** Count and print a failed row; the rows after it still run. */
 static void check(int ok, const char *what)
 {
     if (!ok) {
@@ -24,7 +27,11 @@ static void check(int ok, const char *what)
     }
 }
 
-/** Replace only FUSE dispatch; the mount entry point maps the real image. */
+/**
+ * Count the call in `mounted` and return 0, in place of FUSE's dispatch.
+ * The mount entry point has mapped and checked the image before it calls
+ * this, so a row learns from `mounted` whether a bad image reached FUSE.
+ */
 int fuse_main(int argc, char **argv, const struct fuse_operations *ops, void *data)
 {
     (void)argc;
@@ -35,14 +42,17 @@ int fuse_main(int argc, char **argv, const struct fuse_operations *ops, void *da
     return 0;
 }
 
-/** Supply the identity FUSE would attach to a request. */
+/** The identity of a request, as FUSE gives it: user 123, group 456. */
 struct fuse_context *fuse_get_context(void)
 {
     static struct fuse_context context = {123, 456};
     return &context;
 }
 
-/** Initialize a valid ring with nonzero unused bytes. */
+/**
+ * Fill the image with 0xa5 and lay a fresh file system over it, so that a
+ * valid node ring has bytes no node uses that are not zero.
+ */
 static void reset_image(void)
 {
     memset(fixture.node, 0xa5, (size_t)fixture.size);
@@ -50,7 +60,11 @@ static void reset_image(void)
     KRFFS_File_System = &fixture;
 }
 
-/** Require invalid images to stop before FUSE receives the mapping. */
+/**
+ * Run the mount entry point over the image file and require it, when
+ * `valid`, to succeed and reach FUSE once, and otherwise to fail before
+ * FUSE gets the mapping.
+ */
 static void mount_result(int valid, const char *what)
 {
     char *args[] = {"krffs", image_path, "/unused", NULL};
@@ -62,7 +76,16 @@ static void mount_result(int valid, const char *what)
     KRFFS_File_System = &fixture;
 }
 
-/** Cover every ring field used by an unchecked callback walk. */
+/**
+ * Check that the mount fails on a fault in each field of the node ring a
+ * callback's walk reads unchecked: a root size past the image, a zero
+ * size, a bad magic, a first node that is not the root or a second root,
+ * a backward or closing link that is wrong, data larger than its node, a
+ * name with no end, and a last header cut short; and, on a ring with a
+ * file, the file's data past its node and its name with no end. A free
+ * node that keeps the length of deleted data mounts, as does the ring with
+ * the file before its faults.
+ */
 static void ring_rows(void)
 {
     struct krffs_node *root = fixture.node;
@@ -113,7 +136,12 @@ static void ring_rows(void)
     mount_result(0, "unterminated reserved name rejected");
 }
 
-/** Check a hole byte for byte, including the old free-node header. */
+/**
+ * Write one byte at 8192 of a new file and require the bytes before it to
+ * read as zeros, the old free node's header among them. With
+ * `relocate`, a second file right after the first makes the growth move
+ * the file.
+ */
 static void hole_row(int relocate)
 {
     char buffer[8193] = {0};
@@ -135,7 +163,11 @@ static void hole_row(int relocate)
     check(zero && buffer[8192] == 'x', "write gap is zero");
 }
 
-/** A file with an allocated neighbour keeps slack after shrinking. */
+/**
+ * Check that a file shrunk beside an allocated neighbour keeps its slack: a
+ * write inside the slack leaves zeros in the gap, and a truncate that grows
+ * back to the capacity reads the new byte as zero.
+ */
 static void slack_row(void)
 {
     char buffer[16] = {0};
@@ -156,7 +188,7 @@ static void slack_row(void)
     check(buffer[15] == 0, "truncate growth clears new byte");
 }
 
-/** The minus-one ownership sentinel preserves the corresponding field. */
+/** Check that an owner or a group of -1 in chown leaves that field alone. */
 static void owner_rows(void)
 {
     struct krffs_node *node;
@@ -172,7 +204,10 @@ static void owner_rows(void)
           "unchanged ownership");
 }
 
-/** Explicit times, omitted fields and current-time requests stay distinct. */
+/**
+ * Check utimens with explicit times, with `UTIME_OMIT` and `UTIME_NOW` in
+ * either field, and with no times, which sets both to now.
+ */
 static void time_rows(void)
 {
     struct timespec times[2] = {{946684800, 123}, {946684900, 456}};
@@ -211,7 +246,11 @@ static void time_rows(void)
           "null times set now");
 }
 
-/** Run all callback rows and release the private backing file. */
+/**
+ * Map a scratch image file of 64 KiB, run the rows, and remove the file.
+ * Returns 0 when every row passed, 1 when one failed, and 2 when the image
+ * cannot be made.
+ */
 int main(void)
 {
     int fd = mkstemp(image_path);
