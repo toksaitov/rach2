@@ -28,7 +28,9 @@
  * fstat reaches the file where it is now; and the bind's root is busy to rmdir
  * until the bind is unmounted. A bind of the KRFFS root directory reports its
  * links, owner and times as / does. A recursive bind of /dev has its devices
- * and /dev/shm, which are unmounted in turn with /dev/mqueue.
+ * and /dev/shm; ".." at its root, and a ".." that climbs out of it after a
+ * component inside, reach the parent of the directory it covers; and it is
+ * unmounted in turn with /dev/shm and /dev/mqueue.
  *
  * The program runs as root, since it mounts. It prints `TMPFSMUSL OK` and
  * exits 0 on success, and prints `TMPFSMUSL FAIL (detail)` and exits 1
@@ -350,9 +352,10 @@ static int bound_mount(void)
 }
 
 /**
- * Check that a recursive bind of /dev has its devices and /dev/shm, and is
- * unmounted from the bottom, /dev/shm and /dev/mqueue first. Returns 0, or 1
- * once the failure is reported.
+ * Check that a recursive bind of /dev has its devices and /dev/shm, that
+ * ".." above its root is taken in the parent of the directory it covers, and
+ * that it is unmounted from the bottom, /dev/shm and /dev/mqueue first.
+ * Returns 0, or 1 once the failure is reported.
  */
 static int rbound(void)
 {
@@ -362,6 +365,11 @@ static int rbound(void)
         stat(BIND_DEV "/null", &a) != 0 || !S_ISCHR(a.st_mode) || stat(BIND_DEV "/shm", &b) != 0 ||
         (b.st_mode & 07777) != 01777) {
         return fail("a recursive bind of /dev has its devices and /dev/shm");
+    }
+    if (stat("/tmp", &a) != 0 || stat(BIND_DEV "/..", &b) != 0 || a.st_dev != b.st_dev ||
+        a.st_ino != b.st_ino || stat(BIND_DEV "/pts/../../tmpfsmusl-dev/null", &b) != 0 ||
+        !S_ISCHR(b.st_mode)) {
+        return fail("\"..\" above the root of a bind of /dev is the parent of what it covers");
     }
     if (umount2(BIND_DEV, 0) != -1 || errno != EBUSY || umount2(BIND_DEV "/shm", 0) != 0 ||
         umount2(BIND_DEV "/mqueue", 0) != 0 || umount2(BIND_DEV, 0) != 0 || rmdir(BIND_DEV) != 0) {

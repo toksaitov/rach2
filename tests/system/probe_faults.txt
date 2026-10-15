@@ -6227,3 +6227,17 @@ new
             return rc;
         }
 end
+
+# The resolver's `..` above the root of a bind of a synthetic type.
+
+fault synth-bind-dotdot-used
+probe tmpfsmusl
+file rach2/sys/fs/vfs.c
+expect TMPFSMUSL FAIL (".." above the root of a bind of /dev
+old
+            if (cur.node == cur.mnt->root && cur.mnt->covered) {
+                p -= 2;
+new
+            if (cur.node == cur.mnt->root && cur.mnt->covered) {
+                p -= cur.mnt->type->ops->lookup_rest ? 0 : 2;
+end

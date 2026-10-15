@@ -31,10 +31,11 @@
  * place of `lookup` and are handed the rest of the path in one call, since
  * each namespace is a table classified by string. A `..` in the rest that
  * would climb above the mount's root is answered with VFS_CLIMB, and the
- * walk goes on in the parent mount. A rest that comes back to the mount's
- * root directory in front of the name of a nameless mount there is answered
- * with VFS_ROOT, and the walk enters that mount by its name. No mount
- * covers a node of such a type.
+ * walk takes that `..` at the mount's root as at the root of any other
+ * mount; a `..` first at that root is never handed to the type. A rest that
+ * comes back to the mount's root directory in front of the name of a
+ * nameless mount there is answered with VFS_ROOT, and the walk enters that
+ * mount by its name. No mount covers a node of such a type.
  *
  * An operation a type does not have is a NULL pointer, and the wrapper of
  * the operation, below, gives the default answer for it.
@@ -172,10 +173,10 @@ struct vfs_ops {
      * root. The node comes back held. */
     int (*lookup)(struct vfs_mount *mnt, void *dir, const char *name, void **node);
     /* In place of `lookup`, for a synthetic type: the rest of the path in
-     * one call. 0 with the node held; VFS_CLIMB with `*left` at what
-     * follows a `..` that climbed above the mount root, and the walk goes on
-     * in the parent mount; VFS_ROOT with `*left` at the name of a nameless
-     * mount at the mount root, which the walk enters; or a negative errno. */
+     * one call. 0 with the node held; VFS_CLIMB with `*left` at a `..`
+     * that climbs above the mount root, which the walk takes there;
+     * VFS_ROOT with `*left` at the name of a nameless mount at the mount
+     * root, which the walk enters; or a negative errno. */
     int (*lookup_rest)(struct vfs_mount *mnt, const char *rest, void **node, const char **left);
     void (*hold)(struct vfs_mount *mnt, void *node);
     void (*put)(struct vfs_mount *mnt, void *node);

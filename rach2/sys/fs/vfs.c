@@ -734,6 +734,15 @@ static int named_in_rest(const struct vfs_ref *cur, const char *p)
     return cur->node == cur->mnt->root && mount_named_at(cur->mnt, p, len) != 0;
 }
 
+/** Whether the path at `p` begins with `..` at the root directory of a type
+ * that takes the rest of a path in one call: the ordinary step takes that
+ * `..`, as at the root of any other mount. */
+static int climbs(const struct vfs_ref *cur, const char *p)
+{
+    return cur->node == cur->mnt->root && p[0] == '.' && p[1] == '.' &&
+           (p[2] == '\0' || p[2] == '/');
+}
+
 /** For a VFS_WALK_PARENT walk, copy the last component of `path`, trailing
  * slashes passed over, into `leaf` of `leafcap` bytes, and point `*last` at
  * it in `path`. 0, -EINVAL for a path with no component, or
@@ -852,10 +861,11 @@ static int walk_is_link(struct vfs_mount *mnt, void *node)
  * A type that takes the rest is handed the rest of the path; with
  * VFS_WALK_PARENT, a copy of the part before the leaf, after which the walk
  * goes on at the same offset of the path, and when that part is empty the
- * walk ends at the mount's root. On its VFS_CLIMB the walk goes on, the
- * `..` used up, at the covered node in the parent mount, or for a nameless
- * mount at the root of the root mount; on its VFS_ROOT it goes on at the
- * mount's root directory with the name of the nameless mount there.
+ * walk ends at the mount's root. On its VFS_CLIMB or VFS_ROOT the walk goes
+ * on at the mount's root directory with what the type left: a `..` that
+ * climbs, or the name of a nameless mount there. A `..` at that root is
+ * never handed to the type; the ordinary step takes it, as at the root of
+ * any other mount.
  *
  * On a type with symbolic links, a component that is one is followed when
  * more of the path comes after it, and at the last component unless the
@@ -955,7 +965,7 @@ begin:
             goto out_err;
         }
 
-        if (cur.mnt->type->ops->lookup_rest && !named_in_rest(&cur, p)) {
+        if (cur.mnt->type->ops->lookup_rest && !named_in_rest(&cur, p) && !climbs(&cur, p)) {
             const char *left = 0;
             char restbuf[VFS_NAME_MAX + 1];
             const char *rest = p;
@@ -979,19 +989,10 @@ begin:
             }
             rc = cur.mnt->type->ops->lookup_rest(cur.mnt, rest, &found, &left);
             if (rc == VFS_CLIMB || rc == VFS_ROOT) {
-                struct vfs_mount *pm = cur.mnt->parent ? cur.mnt->parent : mounts[0];
-                void *pnode = cur.mnt->covered ? cur.mnt->covered : mounts[0]->root;
                 if (rest == restbuf) {
                     p += left - restbuf;
                 } else {
                     p = left;
-                }
-                if (rc == VFS_ROOT) {
-                    continue;
-                }
-                rc = walk_move(&cur, pm, pnode, locked);
-                if (rc != 0) {
-                    goto out_err;
                 }
                 continue;
             }
@@ -2354,12 +2355,12 @@ static void synth_put(struct vfs_mount *mnt, void *node)
  * `prefix` names, "dev", "proc" or "sys". A `..` inside it is resolved by
  * the text, since the namespace is a table classified by string. A `..`
  * that would climb above the mount root returns VFS_CLIMB with `*left` at
- * the rest after it. A name at the mount root that a nameless mount is
- * entered by, as `shm` in /dev after `pts/..`, returns VFS_ROOT with
- * `*left` at that name. Otherwise the whole path, `prefix` and the rest
- * without its `.` and `..`, is classified (`synth_classify`): 0 with a new
- * node held, -ENOENT, -ENOTDIR, -ENAMETOOLONG for a path longer than 255
- * bytes, or -ENOMEM.
+ * that `..`, which the walk takes at the mount root. A name at the mount
+ * root that a nameless mount is entered by, as `shm` in /dev after `pts/..`,
+ * returns VFS_ROOT with `*left` at that name. Otherwise the whole path,
+ * `prefix` and the rest without its `.` and `..`, is classified
+ * (`synth_classify`): 0 with a new node held, -ENOENT, -ENOTDIR,
+ * -ENAMETOOLONG for a path longer than 255 bytes, or -ENOMEM.
  */
 static int synth_rest(struct vfs_mount *mnt, const char *prefix, const char *rest, void **node,
                       const char **left)
@@ -2398,10 +2399,7 @@ static int synth_rest(struct vfs_mount *mnt, const char *prefix, const char *res
         }
         if (len == 2 && comp[0] == '.' && comp[1] == '.') {
             if (out <= plen) {
-                while (*p == '/') {
-                    p++;
-                }
-                *left = p;
+                *left = comp;
                 return VFS_CLIMB;
             }
             while (out > 0 && full[out - 1] != '/') {

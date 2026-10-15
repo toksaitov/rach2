@@ -131,7 +131,7 @@ groups = [
     ("fs/vfs.c", "vfs_open.inc", "vfs_mount_gone mount_base mount_rdonly vfs_ref_hold vfs_ref_put "
      "vfs_enter vfs_leave "
      "ns_my_turn vfs_ns_lock vfs_ns_unlock in_groups may_search toward_cwd mount_covering path_last "
-     "mount_named_at mount_named named_in_rest node_put walk_lock walk_unlock vfs_walk_unlock "
+     "mount_named_at mount_named named_in_rest climbs node_put walk_lock walk_unlock vfs_walk_unlock "
      "ref_move_node "
      "walk_move walk_root root_current dotdot_stays walk_leaf walk_link walk_last_comp walk_is_link "
      "resolve_path vfs_resolve vfs_ref_release vfs_desc_open vfs_desc_close "
