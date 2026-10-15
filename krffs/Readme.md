@@ -33,7 +33,7 @@ The first five print their usage line for `-h`.
 
 `edfs.krffs` sets fields of the node that starts POSITION bytes into the region, to break a test image in a known way or mend one by hand. Numbers are decimal. `--set-name` stores at most 255 bytes and sets the identifier to the name's djb2 hash, in place of any `--set-id`. An option given twice is an error. When no node starts at POSITION, nothing changes and the status is still 0.
 
-`fsviz.krffs` draws the ring in the terminal, through the termbox2 library, as a row of bars labelled with file names and drawn in proportion to the nodes' sizes. `h` and `l` or the arrow keys scroll, `+` halves the bytes per character, `_` doubles them, and `q` or Ctrl-C quits; the help line shows `-` for the key that is `_`. `-t` prints one frame on standard output instead, at 512 KiB a character.
+`fsviz.krffs` draws the ring in the terminal, through the termbox2 library, as a row of bars labelled with file names and drawn in proportion to the nodes' sizes. `h` and `l` or the arrow keys scroll, `+` halves the bytes per character, `_` doubles them, and `q` or Ctrl-C quits. `-t` prints one frame on standard output instead, at 512 KiB a character.
 
 `readfile.krffs` copies the regular file at the absolute GUEST_PATH out of an image into OUTPUT. It opens the image read-only and checks every node its path walk visits against the region (`krffs_reader.c`), so a damaged image is refused with the reason instead of being read out of bounds. It refuses a directory, a FIFO, a socket, and an OUTPUT that is the image itself. It is how a file a guest wrote to its disk reaches the host.
 

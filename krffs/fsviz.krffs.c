@@ -442,7 +442,7 @@ int main(int argc, char **argv)
 
         static const char *help = "Press 'q' or 'ctrl+c' to exit. "
                                   "Scroll left or right with arrow keys or 'h' and 'l'. "
-                                  "Scale node size with '+' or '-'.";
+                                  "Scale node size with '+' or '_'.";
         tb_print_string(0, window_height - 1, help, window_width);
 
         tb_present();
