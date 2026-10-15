@@ -66,10 +66,10 @@ The program writes one command at a time to
 or
 .Ql detach N .
 The control node is owned by root with mode 0600.
-The loop nodes are reported as character devices by stat;
-only
-.Xr mount 2
-accesses their contents.
+The loop nodes are block devices.
+A node also reads and writes its device in whole sectors, as
+.Xr loop 4
+describes.
 .Pp
 Attachment resolves and opens the file under its volume's namespace lock,
 syncs it, and rechecks its length and busy state before publishing the device.
@@ -140,5 +140,6 @@ or the file is not regular.
 .El
 .Sh SEE ALSO
 .Xr mount 2 ,
+.Xr loop 4 ,
 .Xr disk 7 ,
 .Xr mount 8
