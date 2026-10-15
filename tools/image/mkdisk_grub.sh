@@ -254,7 +254,7 @@ load_env
 # the tail of this list, so these keep the low indices whatever that file has.
 # Every entry finds its own root, by the serial of the partition holding its
 # kernel, wherever the firmware put this disk. GRUB does not put `root` back
-# when an entry fails: the recovery entries set it to partition 3, and a
+# when an entry fails: the recovery entries set it to partition 2, and a
 # fallback that assumed the root it started with would look for the ordinary
 # kernel there and fail too, which is a machine that stops instead of falling
 # back.
@@ -417,7 +417,7 @@ sed -e "s|RACH2_DHCP_TOKENS|$(sedq "$DHCP_APPEND")|" \
     "$GRUB_CFG" > "$GRUB_CFG.new"
 mv "$GRUB_CFG.new" "$GRUB_CFG"
 
-# The menu on partition 3. Everything above lives on partition 1, and a machine
+# The menu on partition 2. Everything above lives on partition 1, and a machine
 # whose boot partition is damaged cannot read any of it: no menu, no entry, no
 # recovery. What reaches this file is the configuration built into the core
 # image, `grub-embed.cfg` beside this script, which says why it is shaped so;
@@ -447,7 +447,7 @@ mv "$RECOVERY_CFG.new" "$RECOVERY_CFG"
 
 cp "$REPO/tools/image/grub-embed.cfg" "$EMBED_CFG"
 
-# The lines whose absence is silent: a core that cannot reach partition 3 boots
+# The lines whose absence is silent: a core that cannot reach partition 2 boots
 # every ordinary machine and no damaged one, and one that reaches it first sends
 # every healthy machine to recovery. cfgcheck requires the four lines in their
 # order, and the three of the EFI image's configuration in theirs.
