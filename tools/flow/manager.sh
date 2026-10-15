@@ -9,16 +9,18 @@
 # with the prompt `manager.txt` followed by the last ten lines of the
 # manager's log, so that each check knows what the ones before it found and
 # started. The loop starts one check at a time and counts the twenty minutes
-# from its end, so two checks never overlap. A check still running after
-# forty minutes, which leaves room for the ten minutes an incident waits, is
-# stopped with every process in its group, and the log says so.
+# from its end, and a loop that starts while a check of the loop before it
+# still runs waits for that check to end, so two checks never overlap. A check
+# still running after forty minutes, which leaves room for the ten minutes an
+# incident waits, is stopped with every process in its group, and the log
+# says so.
 #
 # STATE, `~/flow/manager` unless given, holds the log `loop.log`, the
 # manager's log `manager.log`, with the time and the last line of each check,
-# each check's output as `c-TIME.jsonl` and `c-TIME.err`, and `last`, the time
-# of the last check that ended by itself. `touch STATE/stop` ends the loop
-# after the check that is running. The checks run at high effort, as a
-# worker's sessions do.
+# each check's output as `c-TIME.jsonl` and `c-TIME.err`, the process group of
+# the check that is running in `session`, and `last`, the time of the last
+# check that ended by itself. `touch STATE/stop` ends the loop after the check
+# that is running. The checks run at high effort, as a worker's sessions do.
 
 PERIOD=1200
 DEADLINE=2400
@@ -38,6 +40,7 @@ main()
     state=$(cd "$state" && pwd)
     cd "$repo" || exit 1
     echo "$repo" > "$state/repo"
+    wait_session
     if [ "$0" != "$state/run/manager.sh" ]; then
         refresh
         update manager.sh

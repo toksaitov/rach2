@@ -22,7 +22,8 @@
 # wakeup, since print mode keeps a finished session open until a pending
 # wakeup fires. STATE, `~/flow` unless given, holds the issue file, the log
 # `loop.log`, each session's output as `s-TIME.jsonl` and `s-TIME.err`, the
-# clone's path in `repo`, and in `copy` the copy on the testing host that
+# process group of the session that is running in `session`, the clone's path
+# in `repo`, and in `copy` the copy on the testing host that
 # RACH2_TESTING_COPY names for testing.sh, if any; `touch STATE/stop` ends
 # the loop after the session that is running.
 #
@@ -33,7 +34,10 @@
 # every process in its group; a long suite is not a stuck session, and the
 # manager stops one that is stuck sooner. After three sessions on one issue
 # that leave it open, the loop waits thirty minutes before each further one
-# and says so in its log, for the manager to see.
+# and says so in its log, for the manager to see. A loop that starts while a
+# session of the loop before it still runs, as one does after that loop's
+# tmux session is killed, waits for the session to end before it does
+# anything in the clone.
 
 REASONING=high
 CODEX_MODEL=gpt-6.1-sol
@@ -113,6 +117,7 @@ main()
     cd "$repo" || exit 1
     echo "$repo" > "$state/repo"
     echo "${RACH2_TESTING_COPY:-}" > "$state/copy"
+    wait_session
     git config core.hooksPath tools/git-hooks
     if [ "$0" != "$state/run/worker.sh" ]; then
         refresh

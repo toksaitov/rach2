@@ -4,7 +4,8 @@
 # Each loop has a state directory, STATE. The loop runs from a copy of
 # `tools/flow` in STATE/run that `update` takes from `origin/master`, so the
 # version on master is the one that runs, whatever branch the clone is on,
-# and a loop restarts as master's version when master changes it.
+# and a loop restarts as master's version when master changes it. While a
+# session runs, STATE/session has the id of its process group.
 
 # log TEXT: append TEXT to STATE/loop.log with the time in UTC.
 log()
@@ -63,9 +64,14 @@ limited()
 # when it is still running after LIMIT seconds: TERM, then KILL half a minute
 # later. Return COMMAND's status as soon as it ends; or, when the limit
 # stopped it, 124, after the KILL has gone to the whole group, so that a child
-# that outlives the TERM, such as an emulator, does not outlive the call. The
-# watcher that keeps the limit is a perl process with no children, stopped by
-# its pid, since it may not have made its own group yet.
+# that outlives the TERM, such as an emulator, does not outlive the call.
+#
+# STATE/session has the group's id while COMMAND runs. The watcher, the perl
+# process that enforces the limit, has a group of its own too, so a hangup
+# that ends the loop reaches neither: the session runs on under its limit,
+# and `wait_session` keeps the next loop from starting another beside it. The
+# watcher has no children, and it is stopped by its pid, since it may not have
+# made its group yet.
 run_session()
 {
     out=$1 err=$2 limit=$3
@@ -74,6 +80,7 @@ run_session()
     perl -e 'setpgrp(0, 0); exec @ARGV or die "exec $ARGV[0]: $!\n"' "$@" \
         > "$out" 2> "$err" < /dev/null &
     pid=$!
+    echo "$pid" > "$state/session"
     perl -e 'setpgrp(0, 0); sleep $ARGV[0]; kill 0, -$ARGV[1] or exit;
         open(F, ">", $ARGV[2]) and close(F); kill "TERM", -$ARGV[1];
         sleep 30; kill "KILL", -$ARGV[1]' "$limit" "$pid" "$state/expired" &
@@ -86,6 +93,24 @@ run_session()
         kill -KILL -"$pid" 2> /dev/null
         status=124
     fi
-    rm -f "$state/expired"
+    rm -f "$state/expired" "$state/session"
     return "$status"
+}
+
+# wait_session: wait while the process group whose id is in STATE/session is
+# alive, testing it every half minute, and then remove the file. A loop calls
+# this before it does anything in the clone: a session that outlived the loop
+# that started it, as one does when the loop's tmux session is killed, still
+# has its group and the file, and the clone must not get a second session.
+wait_session()
+{
+    group=$(cat "$state/session" 2> /dev/null)
+    if [ -n "$group" ] && kill -0 -"$group" 2> /dev/null; then
+        log "session group $group of an earlier loop still runs; waiting for it"
+        while kill -0 -"$group" 2> /dev/null; do
+            sleep 30
+        done
+        log "session group $group ended"
+    fi
+    rm -f "$state/session"
 }
