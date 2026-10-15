@@ -17,10 +17,11 @@
 # already open under that title gets a comment instead, and only a new issue
 # starts `bisect.yml`. A core failure of the build, style or the runner, or
 # of the `default` suite, which boots the test image, opens the issue
-# labelled `hold`, and a core run that passes on both architectures closes
-# it. A GitHub call that fails is named, the rest are still made, and the
-# exit status is 1. GH_TOKEN, GITHUB_REPOSITORY, GITHUB_SERVER_URL and
-# GITHUB_RUN_ID come from the job.
+# labelled `hold`, or comments on the oldest one open, and a core run that
+# passes on both architectures closes every open one, whoever opened it and
+# whatever its title. A GitHub call that fails is named, the rest are still
+# made, and the exit status is 1. GH_TOKEN, GITHUB_REPOSITORY,
+# GITHUB_SERVER_URL and GITHUB_RUN_ID come from the job.
 #
 set -u
 
@@ -70,6 +71,13 @@ open_issue() { # open_issue LABEL TITLE
     list=$(gh issue list --repo "$repo" --state open --label "$1" --limit 500 \
         --json number,title --jq ".[] | select(.title == \"$2\") | .number") || return 1
     echo "$list" | head -n 1
+}
+
+# The numbers of the open issues with the label `hold`, oldest first; the
+# status is 1 when the listing could not be read.
+open_holds() {
+    gh issue list --repo "$repo" --state open --label hold --limit 500 \
+        --json number --jq 'sort_by(.number) | .[].number'
 }
 
 passed=""
@@ -141,7 +149,7 @@ $(tail -n 40 "$result/log")
 done
 
 if [ "$kind" = core ]; then
-    if ! hold=$(open_issue hold "$hold_title"); then
+    if ! holds=$(open_holds); then
         lost "the hold issue's list"
     elif [ -n "$held" ]; then
         body="The core run at $short failed in a way that stops every check:$held
@@ -149,6 +157,7 @@ if [ "$kind" = core ]; then
 Run: $run_url
 
 While this issue is open, push only a repair toward a passing core run, and name it here."
+        hold=$(echo "$holds" | head -n 1)
         if [ -n "$hold" ]; then
             gh issue comment "$hold" --repo "$repo" --body "$body" > /dev/null || lost "the comment on #$hold"
         else
@@ -156,10 +165,12 @@ While this issue is open, push only a repair toward a passing core run, and name
                 lost "the hold issue"
         fi
         echo "ci: report: hold opened"
-    elif [ "$passed" = " i686 x86_64" ] && [ -n "$hold" ]; then
-        gh issue close "$hold" --repo "$repo" --comment "The core run at $short passed on both architectures: $run_url" > /dev/null ||
-            lost "the close of #$hold"
-        echo "ci: report: hold #$hold closed"
+    elif [ "$passed" = " i686 x86_64" ]; then
+        for hold in $holds; do
+            gh issue close "$hold" --repo "$repo" --comment "The core run at $short passed on both architectures: $run_url" > /dev/null ||
+                lost "the close of #$hold"
+            echo "ci: report: hold #$hold closed"
+        done
     fi
 fi
 if [ "$rc" = 0 ]; then
