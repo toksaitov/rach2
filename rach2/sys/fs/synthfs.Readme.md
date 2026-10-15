@@ -123,7 +123,7 @@ The links, `/sys/bus/pci/devices/NAME`, `/sys/bus/usb/devices/NAME`, `/sys/class
 * A path does not go on through a link of `/proc`: `/proc/PID/cwd/NAME`, `/proc/PID/root/NAME` and `/proc/PID/fd/N/NAME` fail with `ENOENT`, and `/dev/fd/N/NAME` with `ENOTDIR`, where Linux goes on in the directory the link reaches. The links are followed only as the last component of a path.
 * `/dev/pts` opens and lists, but the listing of `/dev` does not show it.
 * A listing of the root directory shows `dev`, `proc` and `sys` only where the root file system has directories of those names.
-* Every entry of one `/proc/PID`, the directory, its files and its links, reports the one inode 0x200 + (PID & 0xFFFF), so a program that tells files apart by inode takes them for one file.
+* Every entry of one `/proc/PID`, the directory, its files and its links, reports the one inode 0x200 plus the low 16 bits of the process's kernel id, in whatever PID namespace the reader is, so a program that tells files apart by inode takes them for one file.
 * A `/proc` file reports a size of 0, and a `/sys` attribute 4096, whatever the length of its text.
 * `/proc/PID/mounts` and `/proc/PID/mountinfo` list the mounts visible in the reader's mount namespace, not in that of process PID.
 * `/proc/filesystems` lists `devfs` and `proc` and not `sysfs`.

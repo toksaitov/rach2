@@ -1710,10 +1710,10 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
             }
             ap_str(t, "/proc/");
             if (pf->origin_task != 0) {
-                ap_int(t, pf->origin_task);
+                ap_u32(t, pid_seen((uint32_t)pf->origin_task));
                 ap_str(t, "/task/");
             }
-            ap_int(t, pf->origin_pid);
+            ap_u32(t, pid_seen((uint32_t)pf->origin_pid));
             ap_ch(t, '/');
             ap_str(t, procfs_pid_file_name(pf->origin_file));
         }

@@ -11857,7 +11857,7 @@ static int synth_dirent_at(const struct synth_dir *sd, int n, char *name, uint64
                 return 0;
             }
             synth_u32_str(name, (uint32_t)p);
-            *ino = procfs_ino_pid(p);
+            *ino = procfs_ino_pid(procfs_resolve_pid(p));
             *dtype = DT_DIR;
             return 1;
         }

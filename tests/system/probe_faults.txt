@@ -5768,6 +5768,26 @@ new
         t = get_process((uint32_t)SC_ARG(params, 0));
 end
 
+fault ns-proc-link-kernel-id
+probe nsmusl
+file rach2/sys/fs/procfs.c
+expect NSMUSL FAIL (the link of its /proc file names it 1
+old
+                ap_u32(t, pid_seen((uint32_t)pf->origin_task));
+new
+                ap_int(t, pf->origin_task);
+end
+
+fault ns-proc-entry-ino-seen
+probe nsmusl
+file rach2/sys/syscall_fs.c
+expect NSMUSL FAIL (the entry 1 of /proc has the inode of /proc/1
+old
+            *ino = procfs_ino_pid(procfs_resolve_pid(p));
+new
+            *ino = procfs_ino_pid(p);
+end
+
 fault ns-uts-shared
 probe nsmusl
 file rach2/sys/proc/ns.c

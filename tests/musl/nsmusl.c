@@ -7,11 +7,13 @@
  * process 1, whose parent it sees as 0, and that process's child 2; the first
  * process's status file shows it one number, and shows its parent, outside
  * the namespace, both; get_robust_list of pid 1 gives that process's own
- * list; and a name relative to its descriptor of /proc/self/fd reaches its
- * own descriptor. The caller of unshare keeps its own pid. In a
- * new network namespace a connection to the loopback address fails with
- * ENETUNREACH. A mount made in a new mount namespace is not seen outside it,
- * and a new IPC namespace has none of the first's System V objects.
+ * list; the link of its descriptor of a /proc file names it 1, and its entry
+ * in a listing of /proc has the inode of /proc/1; and a name relative to its
+ * descriptor of /proc/self/fd reaches its own descriptor. The caller of
+ * unshare keeps its own pid. In a new network namespace a connection to the
+ * loopback address fails with ENETUNREACH. A mount made in a new mount
+ * namespace is not seen outside it, and a new IPC namespace has none of the
+ * first's System V objects.
  *
  * As uid 1000, one clone makes a user, a PID and a network namespace, as
  * Chromium's sandbox does; in them the child is pid 1, with uid 65534 until a
@@ -198,10 +200,54 @@ static int own_fd_dir(void)
 }
 
 /**
+ * Check that /proc names the caller, the first process of a PID namespace, by
+ * its number 1 there: the link of its descriptor of /proc/self/task/1/stat is
+ * /proc/1/task/1/stat, and the entry 1 of a listing of /proc has the inode
+ * that stat of /proc/1 gives. Returns 0, or 1 after printing the failure.
+ */
+static int proc_own_number(void)
+{
+    char link[64];
+    const struct dirent *e;
+    struct stat st;
+    ssize_t n = -1;
+    ino_t listed = 0;
+    DIR *d;
+    int fd = open("/proc/self/task/1/stat", O_RDONLY);
+
+    if (fd >= 0) {
+        char path[32];
+
+        snprintf(path, sizeof(path), "/proc/self/fd/%d", fd);
+        n = readlink(path, link, sizeof(link) - 1);
+        close(fd);
+    }
+    if (n >= 0) {
+        link[n] = '\0';
+    }
+    if (n < 0 || strcmp(link, "/proc/1/task/1/stat") != 0) {
+        return fail("the link of its /proc file names it 1");
+    }
+    if (stat("/proc/1", &st) != 0 || !(d = opendir("/proc"))) {
+        return fail("the entry 1 of /proc has the inode of /proc/1");
+    }
+    while ((e = readdir(d)) != NULL) {
+        if (strcmp(e->d_name, "1") == 0) {
+            listed = e->d_ino;
+        }
+    }
+    closedir(d);
+    if (listed != st.st_ino) {
+        return fail("the entry 1 of /proc has the inode of /proc/1");
+    }
+    return 0;
+}
+
+/**
  * Check, as the first process of a new PID namespace, that it is pid 1 with
  * parent 0, that its child is 2, that its NSpid line has the one number, that
- * get_robust_list of pid 1 gives the head it set, and then `own_fd_dir`.
- * Returns 0, or 1 after printing the failure.
+ * get_robust_list of pid 1 gives the head it set, and then `proc_own_number`
+ * and `own_fd_dir`. Returns 0, or 1 after printing the failure.
  */
 static int pid_first(void)
 {
@@ -230,7 +276,7 @@ static int pid_first(void)
         syscall(SYS_get_robust_list, 1, &got, &len) != 0 || got != head || len != sizeof(head)) {
         return fail("get_robust_list of pid 1 gives the first process's own list");
     }
-    return own_fd_dir();
+    return proc_own_number() || own_fd_dir();
 }
 
 /**
