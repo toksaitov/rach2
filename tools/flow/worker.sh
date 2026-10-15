@@ -214,7 +214,8 @@ main()
             sleep 900
             continue
         fi
-        if [ "$took" -lt 120 ]; then
+        if [ "$took" -lt 120 ] && [ "$(gh issue view "$issue" --repo "$REPO" \
+            --json state --jq .state)" != CLOSED ]; then
             fails=$((fails + 1))
             wait=60
             i=1
