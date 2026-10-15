@@ -1855,9 +1855,9 @@ run-exitline: $(DEMO_CREDS) rach2 tests utils krffs busybox os-real-image test-i
 run-crash: rach2 tests krffs $(RUNUTIL)
 	$(MKDISK) krffs/manifests/disk-test.manifest $(CRASH_TEST_IMAGE) 64 48
 	sh tests/system/suites/crash.sh $(BOOT_KERNEL) $(CRASH_TEST_IMAGE) build/krffs/fsck.krffs
-# `tests/run stress`: prove an on-disk KRFFS larger than physical RAM works.
+# `tests/run stress`: prove an on-disk KRFFS larger than the page cache works.
 # Boots a 64 MB disk with a 48 MB partition and runs stressprobe, which writes
-# and re-reads 33 MiB (past the 32 MiB RAM cap) through the 4 MiB cache. The run
+# and re-reads 33 MiB through the page cache, which holds at most 8 MiB. The run
 # ends on the probe's token; the bound is the run's budget and not its cost,
 # since the 33 MiB take about 130 s under either accelerator and a bound of 150
 # s would cut a loaded emulator's run short. A hang is the runner's idle limit
@@ -1984,8 +1984,8 @@ run-persist-ahci: rach2 tests krffs $(HARNESS)
 	    --drive "file=$(PERSIST_AHCI_DISK),format=raw,if=none,id=drv0" \
 	    $(AHCI_ATTACH) \
 	    --timeout 60 --ok "PERSISTPROBE OK (read back)" probe=persistprobe
-# `tests/run stress-ahci`: the stress suite's on-disk KRFFS larger than RAM,
-# on an AHCI controller.
+# `tests/run stress-ahci`: the stress suite's on-disk KRFFS larger than the page
+# cache, on an AHCI controller.
 run-stress-ahci: rach2 tests krffs $(HARNESS)
 	$(MKDISK) krffs/manifests/stress-test.manifest $(STRESS_AHCI_DISK) 64 48
 	$(HARNESS) --kernel $(BOOT_KERNEL) \

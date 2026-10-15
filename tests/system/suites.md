@@ -28,9 +28,9 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `krffsmount` (full tier; needs qemu; 128 MiB): a KRFFS volume placed by mount(2), read through to its last byte and unmounted, and the three volumes the kernel refuses.
 * `diskrate` (full tier; needs qemu, mformat; 512 MiB): the storage paths timed in the machine and held under bounds: the raw device, a file on exFAT and on FAT32 written and read, two hundred small files, and a raw read piped into a hash.
 * `usbdisk` (core tier; needs qemu, xorriso, mformat, mcopy, mtype; 128 MiB): a flash drive as a disk.
-* `stress-ahci` (full tier; needs qemu; 128 MiB): the stress suite's on-disk KRFFS larger than RAM, on an AHCI controller.
+* `stress-ahci` (full tier; needs qemu; 128 MiB): the stress suite's on-disk KRFFS larger than the page cache, on an AHCI controller.
 * `default` (core tier; needs qemu; 128 MiB): the probe suite, every guest probe booted on the test image in one machine and scored by the runner.
-* `stress` (full tier; needs qemu; 128 MiB): prove an on-disk KRFFS larger than physical RAM works.
+* `stress` (full tier; needs qemu; 128 MiB): prove an on-disk KRFFS larger than the page cache works.
 * `procfiles` (full tier; needs qemu; 128 MiB): the machine's own /proc files, on the boots that differ and through the programs that read them.
 * `bigmem` (full tier; needs qemu; 73728 MiB; x86_64 only): all of an x86-64 machine's eight gigabytes is counted, and a program's pages fill memory past what lies below 4 GiB and read back as written; without 1 GiB pages, 72 GiB is counted to the direct map's 64 GiB (see tests/system/suites/bigmem.sh).
 * `memory` (core tier; needs qemu; 4096 MiB): the kernel's account of physical memory at five sizes (see tests/system/suites/memory.sh).

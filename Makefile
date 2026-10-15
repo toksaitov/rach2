@@ -706,7 +706,7 @@ $(OS_SIMPLE_IMAGE): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(MANIFEST_
 # The module sits in the kernel's 32 MiB window, where the DMA buffers and the
 # kernel stacks are carved, so it is kept small; and the manual's aliases are
 # a table and not files, since the RAM root and a KRFFS disk walk every node
-# on a lookup and four hundred alias files would make the self-build suite
+# on a lookup and hundreds of alias files would make the self-build suite
 # five times slower. gen_demo_key.sh provisions the SSH login keys and
 # gen_demo_password.sh the account passwords and /etc/shadow, each when
 # absent; the check targets require each vendored binary it stages.
