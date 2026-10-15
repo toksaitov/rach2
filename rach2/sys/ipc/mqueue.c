@@ -2,9 +2,10 @@
  * mqueue.c: POSIX message queues, as Linux gives them through mq_open and
  * its five calls (ipc/Readme.md).
  *
- * A named queue is on one list, which every process shares, with the IPC
- * namespace it was made in, until mq_unlink takes its name; it lives while
- * its name, a descriptor, a waiter or an open of its file has a reference.
+ * A named queue is on one list with the IPC namespace it was made in, and
+ * only a process of that namespace finds it by name. It stays on the list
+ * until mq_unlink takes its name, and it lives while its name, a descriptor,
+ * a waiter or an open of its file has a reference.
  * A descriptor is an anonymous one whose object refers to the queue; its
  * access mode is the descriptor's read and write flags and its O_NONBLOCK
  * the description's. Messages are kept highest priority first, in the order

@@ -23,7 +23,7 @@
 .Fn timer_delete "timer_t timerid"
 .Sh DESCRIPTION
 .Fn timer_create ,
-number 259, makes a timer on the clock
+number 259 on i386 and 222 on x86-64, makes a timer on the clock
 .Dv CLOCK_REALTIME ,
 .Dv CLOCK_MONOTONIC ,
 .Dv CLOCK_BOOTTIME ,
@@ -62,15 +62,17 @@ and a thread of their own.
 A process has at most 64 timers.
 .Pp
 .Fn timer_settime ,
-number 260, arms and disarms the timer as
+number 260 on i386 and 223 on x86-64, arms and disarms the timer as
 .Xr timerfd_settime 2
 arms a timerfd, with
 .Dv TIMER_ABSTIME
 for an absolute time, and
 .Fn timer_gettime ,
-number 261, reports its setting as
+number 261 on i386 and 224 on x86-64, reports its setting as
 .Xr timerfd_gettime 2
-does; the 64-bit time forms are numbers 409 and 408.
+does.
+The i386 64-bit time forms are numbers 409 and 408; x86-64 has none, since
+its times are 64 bits already.
 Times are kept in the same 10 ms ticks, rounded up, so a timer never
 expires early.
 .Pp
@@ -91,10 +93,10 @@ counts them.
 While a signal of the same number that is not the timer's is pending, the
 expirations wait and count toward the next signal.
 .Fn timer_getoverrun ,
-number 262, gives the overrun of the timer's last signal.
+number 262 on i386 and 225 on x86-64, gives the overrun of the timer's last signal.
 .Pp
 .Fn timer_delete ,
-number 263, disarms and deletes the timer.
+number 263 on i386 and 226 on x86-64, disarms and deletes the timer.
 .Xr execve 2
 and the end of the process delete its timers; a child of
 .Xr fork 2

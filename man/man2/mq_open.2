@@ -22,8 +22,8 @@
 .Ft int
 .Fn mq_notify "mqd_t mqdes" "const struct sigevent *sevp"
 .Sh DESCRIPTION
-A queue has a name, which every process shares, and messages of at most
-its message size, at most its count of them, kept highest priority first
+A queue has a name, which every process of the IPC namespace it was made
+in shares, and messages of at most its message size, at most its count of them, kept highest priority first
 and in the order they came within a priority.
 The C library passes the name without its leading slash, and calls the
 attribute calls through
@@ -45,9 +45,10 @@ With
 it makes the queue if there is none, the caller's, with the mode its
 umask leaves, and the count and size of the
 .Vt struct mq_attr
-given, at most 10 and 8192 for an unprivileged caller, or 10 and 8192
-without one.
-An unprivileged caller may make 256 queues.
+given, at most 10 and 8192 for an unprivileged caller and 65536 and
+16 MiB for a privileged one, or 10 and 8192 without the structure.
+An unprivileged caller may make a queue while fewer than 256 exist,
+counted over every namespace.
 .Pp
 .Fn mq_unlink
 takes the name away from a queue the caller owns, or any for a

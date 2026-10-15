@@ -131,8 +131,9 @@ buffer are dropped and
 set, and with
 .Dv MSG_TRUNC
 in the flags the call returns the message's whole length.
-A datagram receiver queues at most 10 messages and 212992 bytes, and a
-sender waits for room, or fails with
+A datagram receiver takes a message while it has at most 10 queued and
+fewer than 212992 bytes, so it holds up to 11, as Linux's does; otherwise
+a sender waits for room, or fails with
 .Er EAGAIN .
 A datagram socket may be connected to one peer; a socket connected to
 another refuses the send, and the connect, with

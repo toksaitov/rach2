@@ -16,7 +16,7 @@
 .Fn timerfd_gettime "int fd" "struct itimerspec *cur"
 .Sh DESCRIPTION
 .Fn timerfd_create ,
-number 322, makes a timer on the clock
+number 322 on i386 and 283 on x86-64, makes a timer on the clock
 .Dv CLOCK_REALTIME ,
 .Dv CLOCK_MONOTONIC
 or
@@ -29,7 +29,7 @@ and
 .Dv TFD_NONBLOCK .
 .Pp
 .Fn timerfd_settime ,
-number 325, arms the timer to expire first after
+number 325 on i386 and 286 on x86-64, arms the timer to expire first after
 .Fa new Ns -> Ns Fa it_value ,
 or at that time on its clock with
 .Dv TFD_TIMER_ABSTIME ,
@@ -45,9 +45,10 @@ An absolute time already past expires at the next tick.
 is accepted and does nothing: a change of the real-time clock does not
 move an armed timer.
 .Fn timerfd_gettime ,
-number 326, reports the time to the next expiration and the interval,
+number 326 on i386 and 287 on x86-64, reports the time to the next expiration and the interval,
 zeros for a disarmed timer.
-The 64-bit time forms are numbers 411 and 410.
+The i386 64-bit time forms are numbers 411 and 410; x86-64 has none, since
+its times are 64 bits already.
 .Pp
 A
 .Xr read 2
