@@ -109,11 +109,6 @@ trap 'cleanup; exit 130' INT
 trap 'cleanup; exit 143' TERM
 trap 'cleanup; exit 129' HUP
 
-if [ ! -f "$KEY" ]; then
-    echo "metal-accept: no key at $KEY" >&2
-    exit 2
-fi
-
 fails=0
 # Record $1 as a note, or as a failure that is counted.
 note() {

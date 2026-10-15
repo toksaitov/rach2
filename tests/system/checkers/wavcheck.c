@@ -10,7 +10,7 @@
  * `wavcheck scale FILE FREQ [FREQ ...]` sweeps the recording in short windows,
  * labels each with whichever of the named frequencies is loudest in it, and
  * requires those labels to visit every frequency, in the order they were
- * named. At most 16 frequencies are read. The measurement is a Goertzel
+ * named. More than 16 frequencies are refused. The measurement is a Goertzel
  * filter, which computes a single term of the Fourier transform and needs no
  * library.
  *
@@ -166,7 +166,11 @@ int main(int argc, char **argv)
         fprintf(stderr, "usage: wavcheck scale FILE FREQ [FREQ ...]\n");
         return 2;
     }
-    for (i = 3; i < argc && n_notes < MAX_NOTES; i++) {
+    if (argc - 3 > MAX_NOTES) {
+        fprintf(stderr, "wavcheck: at most %d frequencies can be checked\n", MAX_NOTES);
+        return 2;
+    }
+    for (i = 3; i < argc; i++) {
         freqs[n_notes++] = atof(argv[i]);
         if (freqs[n_notes - 1] <= 0.0) {
             fprintf(stderr, "wavcheck: %s is not a frequency\n", argv[i]);

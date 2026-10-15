@@ -69,12 +69,15 @@ done
 child=
 changed=
 
-# Stop the running boot's process group and wait for it.
+# Stop the running boot's process group and wait until it is gone.
 stop_child()
 {
     if [ -n "$child" ]; then
         kill -TERM "-$child" 2>/dev/null || :
         wait "$child" 2>/dev/null || :
+        while kill -0 "-$child" 2>/dev/null; do
+            sleep 1
+        done
         child=
     fi
 }

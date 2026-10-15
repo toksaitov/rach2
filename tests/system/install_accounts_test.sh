@@ -177,7 +177,7 @@ rows() {
     fi
 }
 
-# fault NAME OLD NEW EXPECT: the functions with the first OLD replaced by NEW
+# fault NAME OLD NEW EXPECT: the functions with the unique OLD replaced by NEW
 # must fail the row named EXPECT.
 fault() {
     cp "$work/function.saved" "$work/function.sh"
@@ -185,7 +185,7 @@ fault() {
 import sys
 path, old, new = sys.argv[1:4]
 text = open(path).read()
-assert old in text, old
+assert text.count(old) == 1, old
 open(path, 'w').write(text.replace(old, new, 1))
 PY
     [ "$mutate" -ne 2 ] || return 0
@@ -200,13 +200,19 @@ PY
 
 if [ "$mutate" -ge 1 ]; then
     sshd_row="the image's sshd is appended with its group and shadow line, and nothing else is"
-    fault uid-bound '$3 + 0 < 1000 && !($1 in name)' '!($1 in name)' "$sshd_row"
-    fault uid-inclusive '$3 + 0 < 1000 && !($1 in name)' '$3 + 0 <= 1000 && !($1 in name)' "$sshd_row"
-    fault id-taken '!($1 in name) && !(($3 + 0) in id)' '!($1 in name)' \
+    fault uid-bound '$3 + 0 < 1000 && !($1 in name) && !(($3 + 0) in id) {' \
+        '!($1 in name) && !(($3 + 0) in id) {' "$sshd_row"
+    fault uid-inclusive '$3 + 0 < 1000 && !($1 in name) && !(($3 + 0) in id) {' \
+        '$3 + 0 <= 1000 && !($1 in name) && !(($3 + 0) in id) {' "$sshd_row"
+    fault id-taken '!($1 in name) && !(($3 + 0) in id) {' '!($1 in name) {' \
         'an image account whose id the machine has is not added'
-    fault id-as-text 'name[$1] = 1; id[$3 + 0] = 1; next' 'name[$1] = 1; id[$3] = 1; next' \
+    fault id-as-text 'name[$1] = 1; id[$3 + 0] = 1; next }
+        $3 + 0 < 1000' 'name[$1] = 1; id[$3] = 1; next }
+        $3 + 0 < 1000' \
         'an image account whose id the machine has is not added'
-    fault twice 'print; name[$1] = 1; id[$3 + 0] = 1' 'print' \
+    fault twice '
+            print; name[$1] = 1; id[$3 + 0] = 1' '
+            print' \
         "an account the image has twice, or with another's id, is added once"
     fault no-newline 'if [ -s "$1" ] && [ -n "$(tail -c 1 "$1")" ]; then' 'if false; then' \
         'a machine file whose last line has no newline keeps that line whole'

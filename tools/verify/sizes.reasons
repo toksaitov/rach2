@@ -657,7 +657,7 @@ tests/system/checkers/pcapcheck.c:cmd_netconsole lines 158 an inspector's check,
 tests/system/checkers/pcapcheck.c:cmd_rawwire complexity 26 an inspector's check, one walk over the format it reads
 
 tests/system/checkers/wavcheck.c:main complexity 32 an inspector's check, one walk over the format it reads
-tests/system/checkers/wavcheck.c:main lines 127 an inspector's check, one walk over the format it reads
+tests/system/checkers/wavcheck.c:main lines 131 an inspector's check, one walk over the format it reads
 
 tests/system/fixtures/runutil_owned.c:main complexity 35 a fixture builder, the volume written in on-disk order
 
