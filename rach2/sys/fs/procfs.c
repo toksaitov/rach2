@@ -1,12 +1,12 @@
 /*
- * procfs.c: the synthetic /proc, generated from the process table.
+ * The files of /proc and /sys, made from the kernel's tables.
  *
- * A /proc text file is snapshotted into a buffer from the heap when opened and
- * served from there (so a read sees a consistent moment, and dup/fork share the
- * snapshot until the last descriptor closes; the per-open-file-description
- * lifetime). The text is built with append helpers that grow the buffer and
- * hand-rolled integer formatting (the kernel has no snprintf and avoids 64-bit
- * division).
+ * Most files are a snapshot: the text is made into a buffer from the heap
+ * when the file is opened and served from there, so a read sees one moment,
+ * and dup and fork share the snapshot until the open-file description's
+ * last close. The text is built by append functions that grow the buffer
+ * and write numbers themselves, since the kernel has no snprintf and i686
+ * has no 64-bit division here.
  */
 
 #include "../klog.h"
@@ -68,6 +68,7 @@
 #include "../io/anon.h"
 #include "../ipc/unix.h"
 
+/* O_CLOEXEC, Linux's value on i386 and x86-64. */
 #define PROCFS_O_CLOEXEC 02000000
 
 /* Inode namespace for /proc: the directory and the global files, then a
@@ -103,11 +104,14 @@
 #define PROCFS_INO_LOCKS       0x11Fu
 #define PROCFS_INO_NET         0x120u /* and the other files of /proc/net after it */
 
-/* Inode namespace for /sys: the fixed directories by their node; a PCI
- * function's directory by its key, doubled, with its uevent one more, and
- * its link by its key in a range of its own; and a USB device's directory
- * by its key with the top bit set, its uevent with the next bit too, and
- * its link with that bit alone. The keys are below 2^30 (synthfs.h). */
+/* Inode namespace for /sys: a fixed directory by its node, with its
+ * attribute files 256 apart above it; a PCI function's directory by its
+ * key, doubled, with its uevent one more, and its link by its key in a
+ * range of its own; a USB device's directory by its key with the top bit
+ * set, its uevent with the next bit too, and its link with that bit alone;
+ * and an interface's, a disk node's and a processor's directory and files
+ * each in a range of its own, by the key from bit 8 and the file in the low
+ * byte. The keys are below 2^30 (synthfs.h). */
 #define SYSFS_INO_FIXED     0x100u
 #define SYSFS_INO_PCI       0x01000000u
 #define SYSFS_INO_PCI_LINK  0x02000000u
@@ -242,12 +246,19 @@ static const char *procfs_kind_name(const struct vpath *vp)
     return "/proc/<pid>/cmdline";
 }
 
-/* A /proc text file, snapshotted at open and served through file_ops. */
+/*
+ * The private record of a descriptor of /proc or /sys, from the heap at the
+ * open and freed at the last close. Its origin is the file it was opened
+ * on, for the descriptor's link, its inode and its owner: `origin_pid` is
+ * the kernel's id of the process or thread for a file under /proc/<pid>,
+ * the entry of a /proc/sys file, and the key of a /sys file's device,
+ * interface or disk node.
+ */
 struct procfs_file {
-    char *data; /* the text, from the heap, freed at the last close */
+    char *data; /* the text, from the heap; NULL for a file with no snapshot */
     int len;
-    int origin_pid;  /* the /proc/<pid> this snapshot came from (for fd readlink) */
-    int origin_file; /* SYNTH_PROC_STAT or SYNTH_PROC_CMDLINE */
+    int origin_pid;  /* the process or thread, or the entry or key above */
+    int origin_file; /* SYNTH_PROC_*, or SYNTH_SYS_UEVENT for any /sys file */
     int origin_task; /* the process whose task/<origin_pid> it came from, or 0;
                       * for a /sys file, its node << 8 | its attribute */
     struct mm *mm;   /* /proc/<pid>/mem: a hold on the address space it allowed */
@@ -281,6 +292,7 @@ struct procfs_text {
 
 #define PROCFS_TEXT_FIRST 256
 
+/** Make `t` an empty text with no buffer. */
 static void procfs_text_init(struct procfs_text *t)
 {
     t->buf = NULL;
@@ -289,7 +301,8 @@ static void procfs_text_init(struct procfs_text *t)
     t->nomem = 0;
 }
 
-/* Room for `want` bytes and a NUL; -1 when the heap has none. */
+/** Grow `t`'s buffer to hold `want` bytes and a NUL: 0, or -1 with `nomem`
+ * set when the heap has no room. */
 static int procfs_text_room(struct procfs_text *t, int want)
 {
     int cap = t->cap ? t->cap : PROCFS_TEXT_FIRST;
@@ -315,8 +328,9 @@ static int procfs_text_room(struct procfs_text *t, int want)
     return 0;
 }
 
-/* text builders (no snprintf; the buffer keeps room for a NUL) */
+/* The append functions. Each leaves room for a NUL after the text. */
 
+/** Append `c`; nothing, with `nomem` set, when the heap has no room. */
 static void ap_ch(struct procfs_text *t, char c)
 {
     if (t->len + 1 >= t->cap && procfs_text_room(t, t->len + 1) != 0) {
@@ -326,6 +340,7 @@ static void ap_ch(struct procfs_text *t, char c)
     t->len++;
 }
 
+/** Append the string `s`. */
 static void ap_str(struct procfs_text *t, const char *s)
 {
     while (*s) {
@@ -386,7 +401,8 @@ static void ap_u32_width(struct procfs_text *t, uint32_t v, int width)
     ap_u32(t, v);
 }
 
-/* Append a signed decimal. INT_MIN is handled by negating in unsigned space. */
+/** Append `v` as signed decimal; INT_MIN is negated in unsigned arithmetic,
+ * where it has a value. */
 static void ap_int(struct procfs_text *t, int v)
 {
     char tmp[12];
@@ -412,14 +428,8 @@ static void ap_int(struct procfs_text *t, int v)
     }
 }
 
-/* queries over the process table */
+/* The queries over the process table. */
 
-/**
- * Resolve a /proc pid token to a live pid, or -1.
- *
- * SYNTH_PID_SELF maps to the caller's pid. A numeric pid must name a process
- * that exists and is not PROC_UNUSED.
- */
 int procfs_resolve_pid(int pid)
 {
     process_t *p;
@@ -437,13 +447,6 @@ int procfs_resolve_pid(int pid)
     return (int)p->pid;
 }
 
-/**
- * Resolve the ids of the /proc path `vp` to the process or thread whose
- * files it shows, or -1. A path under /proc/<pid>/task/<tid> names both,
- * and needs both: the process <pid>, and the thread <tid> among the threads
- * its task directory lists, which is what the path shows. Any other path
- * is its pid's (`procfs_resolve_pid`).
- */
 int procfs_resolve_id(const struct vpath *vp)
 {
     int pid = procfs_resolve_pid(vp->pid);
@@ -463,9 +466,9 @@ int procfs_resolve_id(const struct vpath *vp)
 }
 
 /** The state letter of `p` in its stat file, which the State line of its
- * status file spells out: a ptrace stop is 't', a stop of its process 'T',
- * and a sleep no signal ends, the disk's waits among them, 'D', as in
- * Linux. */
+ * status file gives with its name: a ptrace stop is 't', a stop of its
+ * process 'T', and a sleep no signal ends, the disk's waits among them, 'D',
+ * as in Linux. */
 static char proc_state_char(const process_t *p)
 {
     if (p->state == PROC_ZOMBIE) {
@@ -502,20 +505,21 @@ static void ap_tty(struct procfs_text *t, const process_t *p)
 }
 
 /**
- * Format /proc/<pid>/stat into `t`, returning its length or -ENOENT.
+ * Format /proc/<pid>/stat into `t`: its length, or -ENOENT for no such
+ * process.
  *
- * Emits the space-separated fields ps and friends parse. comm (field 2) is
- * wrapped in parentheses, with any stray parens scrubbed so a naive parser that
- * scans for the closing ')' is not fooled. The CPU times are ticks, which are
- * the 100 Hz clock ticks the fields count: the whole process's, every
+ * The fields are separated by spaces, as ps and top parse them. comm, field
+ * 2, is in parentheses, with each parenthesis in it made '_', so that a
+ * parser that scans for the closing ')' finds the right one. The CPU times
+ * are in the 100 Hz ticks the fields count: the whole process's, every
  * thread's, for a process's file (`whole`), and the thread's own for a
  * thread's under /proc/<pid>/task, as Linux keeps them apart; the children's
  * are the process's in both. The nice value is the one setpriority keeps.
  * The start time is the tick the process or thread was made at, which ps
  * subtracts from the uptime for its elapsed time, and the virtual size in
  * bytes and the resident pages are the address space's, as statm has them.
- * The accounting fields the kernel does not keep (faults) are zero, but
- * every field is present and in order.
+ * The fields end at the 24th, rss; the flags, the fault counts and
+ * itrealvalue, which the kernel does not keep, are 0.
  */
 static int procfs_gen_stat(struct procfs_text *t, int pid, int whole)
 {
@@ -549,8 +553,7 @@ static int procfs_gen_stat(struct procfs_text *t, int pid, int whole)
     ap_ch(t, ' ');
     ap_int(t, (int)pid_seen(p->sid)); /* 6 session */
     ap_tty(t, p);                     /* 7 tty_nr, 8 tpgid */
-    /* 9..13 flags,minflt,cminflt,majflt,cmajflt;
-       14..17 utime,stime,cutime,cstime */
+    /* 9-13 flags, minflt, cminflt, majflt, cmajflt; 14-17 the CPU times */
     ap_str(t, " 0 0 0 0 0 ");
     if (whole) {
         proc_cpu_time(p, &user, &sys);
@@ -565,8 +568,7 @@ static int procfs_gen_stat(struct procfs_text *t, int pid, int whole)
     ap_u32(t, p->tg->cutime);
     ap_ch(t, ' ');
     ap_u32(t, p->tg->cstime);
-    /* 18 priority, which Linux reports as 20 more than the nice value for a
-       process of no real-time policy; 19 nice */
+    /* 18 priority, Linux's nice + 20 without real-time policy; 19 nice */
     ap_ch(t, ' ');
     ap_int(t, 20 + (int)p->nice);
     ap_ch(t, ' ');
@@ -587,13 +589,13 @@ static int procfs_gen_stat(struct procfs_text *t, int pid, int whole)
     return t->len;
 }
 
-/** The process `pid` names for one of its /proc files, or NULL. */
 /** Whether the /proc/<pid> file `file` is one of the user namespace's. */
 static int procfs_is_idmap(int file)
 {
     return file == SYNTH_PROC_UID_MAP || file == SYNTH_PROC_GID_MAP || file == SYNTH_PROC_SETGROUPS;
 }
 
+/** The process `pid` names for one of its /proc files, or NULL. */
 static process_t *procfs_proc(int pid)
 {
     process_t *p = get_process((uint32_t)pid);
@@ -602,9 +604,8 @@ static process_t *procfs_proc(int pid)
 }
 
 /**
- * The link count of process `pid`'s task directory, as Linux gives it: 2,
- * for the directory's entry in its parent and its own `.`, and one for each
- * live thread, whose directory's `..` names it. Chromium's zygote takes a
+ * The count is Linux's: the directory's entry in its parent, its own `.`,
+ * and the `..` of each live thread's directory. Chromium's zygote takes a
  * count of 3 as the proof that it runs one thread, and stops when it is less.
  */
 uint32_t procfs_task_links(int pid)
@@ -894,8 +895,9 @@ static int procfs_gen_environ(struct procfs_text *t, int pid)
     return t->len;
 }
 
-/** /proc/<pid>/auxv: the auxiliary vector the program was given, as the
- * words of its initial stack, through its AT_NULL pair. */
+/** /proc/<pid>/auxv: the auxiliary vector the program was given, the words
+ * of its initial stack as the address space keeps them, through its AT_NULL
+ * pair; -EACCES for a caller `procfs_may_read_mem` refuses. */
 static int procfs_gen_auxv(struct procfs_text *t, int pid)
 {
     process_t *p = procfs_proc(pid);
@@ -1149,7 +1151,7 @@ static void ap_kb(struct procfs_text *t, const char *name, unsigned long bytes)
     ap_str(t, " kB\n");
 }
 
-/** Append a 64-bit set as sixteen hex digits. */
+/** Append "Name:\t" and the 64-bit set `set` as sixteen hex digits. */
 static void ap_set(struct procfs_text *t, const char *name, uint64_t set)
 {
     ap_str(t, name);
@@ -1159,7 +1161,8 @@ static void ap_set(struct procfs_text *t, const char *name, uint64_t set)
     ap_ch(t, '\n');
 }
 
-/** Append "Name:\t" and four ids separated by tabs. */
+/** Append "Name:\t" and four ids separated by tabs: the real, effective and
+ * saved ones, and the effective one again as the file-system id. */
 static void ap_ids(struct procfs_text *t, const char *name, uint32_t r, uint32_t e, uint32_t s)
 {
     ap_str(t, name);
@@ -1174,14 +1177,6 @@ static void ap_ids(struct procfs_text *t, const char *name, uint32_t r, uint32_t
     ap_ch(t, '\n');
 }
 
-/**
- * /proc/<pid>/status: the lines of Linux's that programs read, among them
- * the name, the state, the ids, the tracer, the memory in kilobytes, the
- * thread count and the signal sets. The file-system ids are the effective
- * ones, and the capability sets full for effective user ID 0 and empty
- * otherwise, as this kernel has no capabilities apart from root. VmPeak and
- * VmHWM are the present sizes, since the kernel keeps no peak.
- */
 /** `head`, then the numbers of `p` in each PID namespace from the reader's
  * down to its own, as the NSpid line has them. */
 static void ap_ns_pids(struct procfs_text *t, const char *head, const process_t *p)
@@ -1218,6 +1213,14 @@ static void ap_signal_sets(struct procfs_text *t, const process_t *p)
     ap_set(t, "SigCgt", caught);
 }
 
+/**
+ * /proc/<pid>/status: the lines of Linux's that programs read, among them
+ * the name, the state, the ids, the tracer, the memory in kilobytes, the
+ * thread count and the signal sets. The file-system ids are the effective
+ * ones. The capability sets are full for a process `proc_privileged` passes
+ * and empty otherwise, since the kernel has no capabilities but that test.
+ * VmPeak and VmHWM are the present sizes, since the kernel keeps no peak.
+ */
 static int procfs_gen_status(struct procfs_text *t, int pid)
 {
     process_t *p = procfs_proc(pid);
@@ -1338,7 +1341,7 @@ static int procfs_gen_statm(struct procfs_text *t, int pid)
     return t->len;
 }
 
-/* Append `s` and spaces to `width` bytes, or `s` and one space when it is
+/** Append `s` and spaces to `width` bytes, or `s` and one space when it is
  * as wide: printf's "%-Ns " for a column of N. */
 static void ap_left(struct procfs_text *t, const char *s, int width)
 {
@@ -1350,7 +1353,7 @@ static void ap_left(struct procfs_text *t, const char *s, int width)
     } while (++n < width);
 }
 
-/* A limit's value in its column: "unlimited", or the number. */
+/** Append a limit's value in its column of 21: "unlimited", or the number. */
 static void ap_limit(struct procfs_text *t, unsigned long v)
 {
     char digits[24];
@@ -1462,7 +1465,9 @@ static const char *procfs_pid_file_name(int kind)
     }
 }
 
-/** Return the fixed path for a global snapshot with a named fd link. */
+/** The path of the file of origin `origin`, for a descriptor's link; NULL
+ * for a file of /proc/<pid>, /proc/sys or /sys, and for the files of
+ * /proc/net with a name from `synth_net_name`. */
 static const char *procfs_global_fd_path(int origin)
 {
     switch (origin) {
@@ -1531,10 +1536,10 @@ static const char *procfs_global_fd_path(int origin)
  * Append the /proc/<pid>/fd/<fd> target of a file or directory descriptor to
  * `t`: the absolute path of a KRFFS node, "/memfd:NAME (deleted)" for a memfd
  * as Linux shows one, the path a node of another type was opened by, and "/"
- * for the root directory or a stale descriptor. A KRFFS path is rebuilt only
- * from a node still live and reachable, since a stale descriptor's node
- * (unlinked or relocated) may be free-list bytes by now; 256 bytes is the
- * path capacity the syscall layer uses.
+ * for the root directory, a stale descriptor or a path that does not fit. A
+ * KRFFS path is rebuilt, in 256 bytes, only from a node still live and
+ * reachable, since the node of a stale descriptor, unlinked or relocated,
+ * may be on the free list.
  */
 static void procfs_file_target(struct procfs_text *t, const fd_entry_t *e)
 {
@@ -1559,18 +1564,18 @@ static void procfs_file_target(struct procfs_text *t, const fd_entry_t *e)
 }
 
 /**
- * Render the /proc/<pid>/fd/<fd> symlink target into `buf`, or -ENOENT.
- *
- * The target string matches what each descriptor type reports through the real
- * Linux /proc: a path for files and dirs (`procfs_file_target`), /dev/console,
- * /dev/pts/N, /dev/ptmx, and the pipe:[N]/socket:[N]/anon_inode forms. musl
- * ttyname_r relies on the /dev/pts/N spelling. A socket names its own inode,
- * the same number `/proc/net/tcp` and `fstat` report, so one socket is one
- * thing to a program reading all three. A descriptor that is closed, whose
+ * The target of each kind of descriptor is the one Linux's /proc gives: the
+ * path of a file or directory (`procfs_file_target`), /dev/console,
+ * /dev/NAME for a device, /dev/pts/N, which musl's ttyname_r matches,
+ * /dev/ptmx, pipe:[N], socket:[N], and anon_inode:NAME. A socket names its
+ * own inode, the same number `/proc/net/tcp` and `fstat` report, so one
+ * socket is one thing to a program reading all three. A synthetic directory
+ * has its path, a descriptor of a file of /proc or /sys the path of that
+ * file, rebuilt from its origin, and an O_PATH descriptor of a /dev or /proc
+ * node the path it was opened by. The framebuffer and the mouse have no
+ * name, and show "anon_inode:[device]". A descriptor that is closed, whose
  * release waits for another thread's call or is under way, has no link, as
  * it has no entry in the directory's listing and no lookup finds it.
- *
- * @return the length written, -ENOENT, or -ENOMEM.
  */
 int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
 {
@@ -1610,7 +1615,6 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
         break;
     }
     case FD_TYPE_PTS:
-        /* a pty slave: /dev/pts/N (so musl ttyname_r can match it). */
         ap_str(t, "/dev/pts/");
         ap_int(t, pty_slave_index(e));
         break;
@@ -1638,7 +1642,6 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
         procfs_file_target(t, e);
         break;
     case FD_TYPE_SYNTH_DIR: {
-        /* a /dev or /proc directory fd: its reconstructed path */
         struct synth_dir *sd = (struct synth_dir *)e->priv;
         char path[64];
         if (sd) {
@@ -1648,8 +1651,6 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
         break;
     }
     case FD_TYPE_PROC: {
-        /* a /proc snapshot fd: a global path procfs_global_fd_path knows, else
-         * the pid file */
         struct procfs_file *pf = (struct procfs_file *)e->priv;
         if (pf) {
             const char *path = procfs_global_fd_path(pf->origin_file);
@@ -1693,14 +1694,13 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
         break;
     }
     case FD_TYPE_SYNTH_PATH:
-        /* an O_PATH fd on a /dev or /proc node: the path it was opened by */
         ap_str(t, e->ofd && e->ofd->dirpath[0] ? e->ofd->dirpath : "/");
         break;
     case FD_TYPE_FRAMEBUFFER:
     case FD_TYPE_MOUSE:
     case FD_TYPE_NONE:
     default:
-        ap_str(t, "anon_inode:[device]"); /* fb/mouse: best effort */
+        ap_str(t, "anon_inode:[device]");
         break;
     }
     if (t->nomem) {
@@ -1719,12 +1719,11 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
 }
 
 /**
- * Return the pid of the n-th live process in process-table order, or -1.
- *
- * Lets a /proc directory read walk the table by index without exposing slots.
- * A process is listed once, by its leader; the ids of its other threads are
- * not listed, as on Linux, though /proc/<tid> still opens. The idle process,
- * pid 0, is not listed, as Linux lists no pid 0.
+ * The processes are counted in the order of the process list. A process is
+ * listed once, by its leader; the ids of its other threads are not listed,
+ * as on Linux, though /proc/<tid> still opens. The idle process, pid 0, is
+ * not listed, as Linux lists no pid 0, nor is a process outside the
+ * caller's PID namespace.
  */
 int procfs_nth_pid(int n)
 {
@@ -1846,7 +1845,6 @@ uint32_t procfs_ino_mounts(void)
     return PROCFS_INO_MOUNTS;
 }
 
-/** Return the stable inode of the audio report. */
 uint32_t procfs_ino_audio(void)
 {
     return PROCFS_INO_AUDIO;
@@ -1912,11 +1910,6 @@ uint32_t procfs_ino_sysvipc(int origin)
     return PROCFS_INO_SYSVIPC + 1u + (uint32_t)(origin - SYNTH_PROC_SYSVIPC);
 }
 
-/**
- * The inode of an open /proc snapshot descriptor, from its origin, so fstat
- * reports the same identity as the stat of the path it was opened by.
- * Returns 0 if `e` is not a /proc snapshot fd.
- */
 uint32_t procfs_fd_ino(struct fd_entry *e)
 {
     struct procfs_file *pf;
@@ -2121,26 +2114,23 @@ static int procfs_gen_partitions(struct procfs_text *t)
 }
 
 /**
- * Render /proc/net/dev.
- *
- * The two header lines and one line per interface, in the order and with the
- * sixteen counters Linux prints, because `ifconfig` and everything like it
- * parses this file by counting fields. Only the interfaces the probe brought
- * up are listed: an interface that is not there is not one a program should
- * be told about.
+ * Render /proc/net/dev: the two header lines and one line for each interface
+ * the caller sees (`netdev_seen_count`), in the order and with the sixteen
+ * counters Linux prints, since `ifconfig` and the programs like it parse
+ * this file by counting fields.
  *
  * Seven of the sixteen come from the interface: bytes and packets each way,
- * receive errors, receive drops, and transmit drops. The three refusal
- * columns are what the drivers report: a transmit verdict for the transmit
- * drops, and the two receive-note calls for the receive errors and drops.
- * Every driver here refuses a frame under some condition. Seven more come
- * from the card, through the driver's `counters`, in the columns Linux fills
- * from a card's own tallies: frames the card missed add to the receive drops,
- * alignment errors are the frame column, multicasts their own, and on the
- * transmit side errors, underruns (fifo), collisions and the transmissions
- * the card aborted (carrier). A card that keeps no such counts leaves them
- * zero. The two compressed columns and the receive fifo are zero: nothing
- * here has them.
+ * receive errors, receive drops, and transmit drops. The receive errors and
+ * drops are the ones the drivers note (`ethernet_note_rx_error`,
+ * `ethernet_note_rx_drop`) and the frames `ethernet_rx` drops, and the
+ * transmit drops are the frames a driver refused or `ethernet_tx` did not
+ * give it. Seven more come from the card, through the driver's `counters`,
+ * in the columns Linux fills from a card's own tallies: frames the card
+ * missed add to the receive drops, alignment errors are the frame column,
+ * multicasts their own, and on the transmit side errors, underruns (fifo),
+ * collisions and the transmissions the card aborted (carrier). A card that
+ * keeps no such counts leaves them zero. The two compressed columns and the
+ * receive fifo are zero: nothing here has them.
  */
 static int procfs_gen_netdev(struct procfs_text *t)
 {
@@ -2195,16 +2185,12 @@ static int procfs_gen_netdev(struct procfs_text *t)
 }
 
 /*
- * The machine's own files.
- *
- * Every number below is one the kernel already holds. Where Linux prints a
- * field this system has no equivalent for, the field is zero and the applet
- * that needs it is left not working rather than shown a plausible invention:
- * `top` reads several CPU categories and a load average, and neither is here.
+ * The machine's own files. Every number below is one the kernel keeps; a
+ * field of Linux's that the kernel has no count for is 0.
  */
 
-/** Append a count of ticks as seconds with two decimals, the /proc/uptime
- * shape. Ticks are 100 Hz, so the fraction is the remainder outright. */
+/** Append a count of ticks as seconds with two decimals, as /proc/uptime
+ * has them. Ticks are 100 Hz, so the fraction is the remainder. */
 static void ap_ticks_as_seconds(struct procfs_text *t, uint32_t ticks)
 {
     ap_u32(t, ticks / 100u);
@@ -2237,13 +2223,9 @@ static void ap_ticks64_as_seconds(struct procfs_text *t, uint64_t ticks)
  * Render /proc/uptime: seconds since boot, and the seconds the processors
  * idled, summed over them as Linux sums them.
  *
- * Both are counted from delivered ticks rather than timed. Interrupts are off
- * in several paths here and a tick can be lost, so what these say is what the
- * timer actually delivered: the uptime is the boot processor's ticks, idle and
- * busy, and on one processor the two numbers add up to each other. The
- * counters are read once, into locals: a tick landing between two reads of
- * the same file would report a total and an idle from different moments,
- * which is what the snapshot exists to prevent.
+ * Both are counted in ticks (`sched_account_tick`): the uptime is the boot
+ * processor's idle and busy ticks together, and the idle time the idle
+ * ticks of every processor.
  */
 static int procfs_gen_uptime(struct procfs_text *t)
 {
@@ -2334,12 +2316,15 @@ static void ap_cpu_ticks(struct procfs_text *t, uint64_t user, uint64_t busy, ui
 
 /**
  * Render /proc/stat: the tick counters, the interrupt total, the boot epoch,
- * the process counts, and this kernel's own latency and loopback counters.
+ * the process counts, and this kernel's own counters: the sleeps a signal
+ * cut short (`process_sleeps_cut_short`), the longest delays since boot
+ * (latency.h), and the loopback ring's.
  *
  * `loopback_dropped` is the datagrams the loopback ring had no room for, which
  * the ring logs once and counts thereafter, and `loopback_peak` is the most it
- * has held at once, which is what says how much room it has over a window's
- * worth.
+ * has held at once, which says how much room it has over what one system
+ * call can put in it; the `loopback_delivered_` counts are its datagrams
+ * delivered by the tick, by the idle wait and at the exit of a system call.
  *
  * The `cpu` line, and the `cpuN` line of each processor online, have user,
  * nice, system and idle in that order, then six columns this kernel does not
@@ -2348,12 +2333,11 @@ static void ap_cpu_ticks(struct procfs_text *t, uint64_t user, uint64_t busy, ui
  * tick is told apart by the nice value; an interrupt's time is the
  * interrupted code's, as `sched_account_tick` charges it.
  *
- * `processes` is what Linux means by it, the count of processes CREATED since
- * boot and not the count alive now. `procs_running` and `procs_blocked` are
- * counted from the table rather than fixed, since a machine with two runnable
- * processes reporting one is wrong the moment anything looks; a process is
- * blocked, as Linux counts it, while it sleeps in a wait no signal ends, the
- * disk's among them, and not in a wait a signal ends.
+ * `processes` is what Linux means by it, the count of processes created
+ * since boot, not of those alive now. `procs_running` and `procs_blocked`
+ * are counted from the process list; a process is blocked, as Linux counts
+ * it, while it sleeps in a wait no signal ends, the disk's among them, and
+ * not in a wait a signal ends.
  */
 static int procfs_gen_statsys(struct procfs_text *t)
 {
@@ -2390,7 +2374,6 @@ static int procfs_gen_statsys(struct procfs_text *t)
     ap_str(t, "\nsleeps_interrupted ");
     ap_u32(t, process_sleeps_cut_short());
     ap_ch(t, '\n');
-    /* The longest delays since boot, for the load row; see latency.h. */
     ap_str(t, "latency_timer_us ");
     ap_u32(t, latency_max(LAT_TIMER));
     ap_str(t, "\nlatency_disk_us ");
@@ -2446,6 +2429,8 @@ static void ap_frames_as_kb(struct procfs_text *t, size_t frames)
  * the heap holds and Buffers counts, in kilobytes: the kernel's own objects
  * as Linux's slab holds them, which BusyBox's nmeter adds to MemFree,
  * Buffers and Cached, and subtracts from MemTotal, for the memory in use.
+ * Every count is taken before the first append, which may take a page for
+ * the heap.
  */
 static int procfs_gen_meminfo(struct procfs_text *t)
 {
@@ -2456,7 +2441,6 @@ static int procfs_gen_meminfo(struct procfs_text *t)
     uint32_t heap_pages = 0;
     size_t heap_bytes = 0;
 
-    /* Every count before the first append, which may take a heap page. */
     kheap_stats(&heap_pages, &heap_bytes);
 
     ap_str(t, "MemTotal:       ");
@@ -2522,17 +2506,13 @@ static int procfs_gen_vmstat(struct procfs_text *t)
 }
 
 /**
- * Render /proc/usb.
- *
- * One line per device the USB stack has configured: the root port it is on,
- * its speed, what it says it is, and the class it was driven as. Then one
- * line per stick that is a disk, naming its node, what the drive says it
- * is, its size and whether it is still there, and, on a machine that has had
- * a stick, a last line with how many names are free and how many sticks have
- * been given up since boot. A machine with no controller, or one booted
- * without USB, has this file and it is empty, which is a different answer
- * from the file not being there and is the one a program that opens it can
- * act on.
+ * Render /proc/usb: one line for each device the USB stack has configured,
+ * with the root port it is on, its speed, what it says it is, and the class
+ * it was driven as; then one line for each stick that is a disk, with its
+ * node, what the drive says it is, its size and whether it is still there;
+ * and, on a machine that has had a stick, a last line with how many names
+ * are free and how many sticks have been given up since boot. A machine with
+ * no controller, or one booted without USB, has the file, empty.
  */
 static int procfs_gen_usb(struct procfs_text *t)
 {
@@ -2596,12 +2576,11 @@ static const char *procfs_mount_source(int i, const struct vfs_mount *m)
 }
 
 /**
- * Append the options of entry `i`, `m`, as /proc/mounts gives them.
- *
- * A KRFFS root's options are what the mount recorded when it succeeded,
- * because the three branches that can mount that file system differ in
- * ways nothing afterwards reports: a fixed line would call a RAM root a disk
- * one on two boots out of three. Another mount has its flags as words.
+ * Append the options of entry `i`, `m`, as /proc/mounts gives them: a KRFFS
+ * root's as its mount recorded them (`krffs_mount_options`), since a RAM
+ * root and a disk root differ in ways the mount table does not keep; rw or
+ * ro with relatime for another of the first three entries, the root, /dev
+ * and /proc; and another mount's flags as words.
  */
 static void ap_mount_options(struct procfs_text *t, int i, const struct vfs_mount *m)
 {
@@ -2659,10 +2638,6 @@ static int procfs_gen_mounts(struct procfs_text *t)
     return t->nomem ? -1 : t->len;
 }
 
-/** The device stat gives the files of entry `i`, `m` (`vfs_fill_stat64`):
- * the node of /dev it was mounted from, in Linux's encoding, as a disk's or
- * a loop device's mount has it; else the synthetic types' own numbers, 0
- * on a KRFFS root, and the entry's index past 16 for any other mount. */
 uint32_t procfs_mount_dev(int i, const struct vfs_mount *m)
 {
     uint32_t major, minor;
@@ -2693,8 +2668,9 @@ uint32_t procfs_mount_dev(int i, const struct vfs_mount *m)
  * options, a hyphen where Linux puts its propagation fields, its type, its
  * source and the file system's options. The id is the entry's index plus
  * one, and the root is its own parent. A bind mount has the device of the
- * mount it shows and the path of its root within that file system. Every
- * process sees one table.
+ * mount it shows and the path of its root within that file system. The
+ * table is the reader's, whatever process the file is of: it leaves out the
+ * mounts the reader's mount namespace does not see (`procfs_mount_listed`).
  */
 static int procfs_gen_mountinfo(struct procfs_text *t)
 {
@@ -2943,7 +2919,7 @@ static int procfs_gen_sysvipc(struct procfs_text *t, int origin)
     return t->nomem ? -1 : t->len;
 }
 
-/* One counter of /proc/console: `name value`. */
+/** Append one counter of /proc/console: `name value`. */
 static void ap_counter(struct procfs_text *t, const char *name, uint32_t v)
 {
     ap_str(t, name);
@@ -2981,13 +2957,14 @@ static int procfs_gen_console(struct procfs_text *t)
     return t->len;
 }
 
-/*
- * /proc/interrupts: one line per vector that has taken an interrupt, the
- * vector, its count and where it comes from, then the counts the APIC's
- * spurious vector and the timer's fallback pump keep. The fallback count is
- * what the pump found that a message should have brought: zero on a machine
- * whose messages arrive, so a number there is a count of lost edges and not
- * of work done.
+/**
+ * Render /proc/interrupts: a line for each vector that has taken an
+ * interrupt, with the vector, its count, where it comes from and the names
+ * of the devices on it, separated by commas, or "none"; then the count of
+ * the APIC's spurious vector, SPU, and FBK, the times the timer's drain of
+ * the USB controllers found work with no USB interrupt pending
+ * (`usb_fallback_count`): work an interrupt should have announced, or one
+ * still in transit.
  */
 static int procfs_gen_interrupts(struct procfs_text *t)
 {
@@ -3014,7 +2991,7 @@ static int procfs_gen_interrupts(struct procfs_text *t)
                 continue;
             }
             if (named++) {
-                ap_str(t, ", "); /* two devices on one line are two names */
+                ap_str(t, ", ");
             }
             ap_str(t, name);
         }
@@ -3032,10 +3009,10 @@ static int procfs_gen_interrupts(struct procfs_text *t)
     return t->nomem ? -1 : t->len;
 }
 
-/* /proc/loop: one line per attached device, its size in bytes, whether it
- * takes writes, and the path it was attached by. A device nothing is attached
- * to has no line, so an empty file is a machine with no image mounted through
- * one. */
+/** Render /proc/loop: a line for each attached device, with its size in
+ * bytes, whether it takes writes, and the path it was attached by
+ * (`loop_line`). A device nothing is attached to has no line, so the file
+ * of a machine with no device attached is empty. */
 static int procfs_gen_loop(struct procfs_text *t)
 {
     char line[128];
@@ -3049,10 +3026,11 @@ static int procfs_gen_loop(struct procfs_text *t)
     return t->nomem ? -1 : t->len;
 }
 
-/* /proc/filesystems: `nodev` for the two synthetic namespaces, then every
- * type mount(2) accepts, KRFFS among them, with `nodev` before one that
- * stands on no device. The KRFFS root's own type is not one of these: it is
- * a mapped image, not a volume placed by mount(2). */
+/** Render /proc/filesystems: devfs and proc, each after `nodev`, then every
+ * type mount(2) accepts (`vfs_type_at`), KRFFS volumes among them, with
+ * `nodev` before one that stands on no device. The type of the KRFFS root
+ * is not among them: the root is an image the kernel maps, which mount(2)
+ * does not place. */
 static int procfs_gen_filesystems(struct procfs_text *t)
 {
     int i;
@@ -3075,16 +3053,12 @@ static int procfs_gen_filesystems(struct procfs_text *t)
 }
 
 /*
- * The network files, in the shapes the programs that read them parse.
- *
- * Each format was taken from the parser rather than from a description of it:
- * `route` reads eleven whitespace-separated fields with `fscanf` and skips one
- * header line; `arp` reads six with `sscanf` and skips one header line; and
- * `netstat` reads nine and rejects a line that yields fewer. A file that is
- * nearly right fails in the reader, not here, so the numbers below are what
- * those three call for and not what looks tidy. The columns Linux prints after
- * the ninth are kept for fidelity: no parser here needs them, and a program
- * that counts fields on a line would.
+ * The network files, in the forms the programs that read them parse:
+ * BusyBox's `route` reads eleven whitespace-separated fields with `fscanf`
+ * and skips one header line; its `arp` reads six with `sscanf` and skips one
+ * header line; and its `netstat` reads nine and rejects a line that yields
+ * fewer. The columns Linux prints after the ninth are there too, for a
+ * program that counts the fields of a line.
  */
 
 /** Append `v` as `width` uppercase hex digits, most significant first. */
@@ -3099,9 +3073,10 @@ static void ap_hex(struct procfs_text *t, uint32_t v, int width)
 }
 
 /**
- * An IPv4 address as /proc writes it: the four bytes in memory order, which on
- * this machine reads as the address reversed. Both readers undo it the same
- * way, so writing it the human way would put every address backwards.
+ * Append the IPv4 address `ip`, in host order, as Linux's /proc writes one:
+ * the hex of the word that has the address's bytes in network order, read
+ * as a little-endian x86 reads it, so 127.0.0.1 is 0100007F. `route` and
+ * `netstat` undo it the same way.
  */
 static void ap_ip_hex(struct procfs_text *t, uint32_t ip)
 {
@@ -3111,7 +3086,8 @@ static void ap_ip_hex(struct procfs_text *t, uint32_t ip)
            8);
 }
 
-/** An address as dotted decimal, which /proc/net/arp uses instead of hex. */
+/** Append the address `ip`, in host order, as dotted decimal, which
+ * /proc/net/arp uses in place of hex. */
 static void ap_ip_dotted(struct procfs_text *t, uint32_t ip)
 {
     ap_u32(t, (ip >> 24) & 0xFFu);
@@ -3123,14 +3099,6 @@ static void ap_ip_dotted(struct procfs_text *t, uint32_t ip)
     ap_u32(t, ip & 0xFFu);
 }
 
-/**
- * Render /proc/net/route: for each interface with an address, its default
- * route if it has a gateway, then its on-link subnet.
- *
- * Each interface has one subnet and at most one gateway, so it has one or two
- * rows, from its own address, mask and gateway. The flags are the ones
- * `route` prints from: 1 is up, and 2 more says the destination is a gateway.
- */
 /** One line of /proc/net/route for `r`: the interface, the destination,
  * the gateway, RTF_UP with RTF_GATEWAY for a route through one, the metric
  * and the mask. */
@@ -3222,14 +3190,19 @@ static int procfs_gen_netarp(struct procfs_text *t)
 }
 
 /**
- * Render /proc/net/tcp: the connections, in the columns netstat parses.
+ * Render /proc/net/tcp: the connections, in the columns netstat parses, or
+ * none for a caller outside the first network namespace; -ENOMEM when the
+ * heap has no room for the snapshot of the connections.
  *
  * The state numbers are Linux's, which this stack's own enumeration does not
- * match, so they are mapped rather than cast: a reader prints the name for the
- * number it is given, and an unmapped value would name the wrong state.
- * `uid` and `inode` come from the block rather than from its socket, which is
- * cleared while a connection is still closing. A listener's local address is
- * the one it was bound to, 0.0.0.0 for one bound to INADDR_ANY.
+ * match, so they are mapped (`tcp_state_to_linux`): a reader prints the name
+ * for the number it is given. `uid` and `inode` come from the block rather
+ * than from its socket, which is cleared while a connection is still
+ * closing. A listener's local address is the one it was bound to, 0.0.0.0
+ * for one bound to INADDR_ANY. After Linux's columns each line has this
+ * stack's own, as `struct tcp_row` describes them: the peer's window, the
+ * congestion window, the bytes in flight and unsent, the two timers, and the
+ * transmits the driver refused and for how long.
  */
 static int procfs_gen_nettcp(struct procfs_text *t)
 {
@@ -3241,7 +3214,7 @@ static int procfs_gen_nettcp(struct procfs_text *t)
         return -ENOMEM;
     }
     if (!net_ns_seen()) {
-        n = 0; /* the caller's network namespace has no connection */
+        n = 0;
     }
     ap_str(t, PROCFS_NETTCP_HEADER);
     for (i = 0; i < n; i++) {
@@ -3497,8 +3470,6 @@ static int procfs_gen_netsnmp(struct procfs_text *t)
     return t->len;
 }
 
-/** Render the /proc/net file `origin`, SYNTH_PROC_NETUDP to
- * SYNTH_PROC_NETSNMP. */
 /** Append `v` as eight lowercase hex digits and `sep`, as /proc/net/stat's
  * files have each counter. */
 static void ap_stat(struct procfs_text *t, uint32_t v, const char *sep)
@@ -3516,9 +3487,9 @@ static void ap_stat(struct procfs_text *t, uint32_t v, const char *sep)
  * Render /proc/net/stat/rt_cache and arp_cache, which iproute2's lnstat, rtstat
  * among its names, reads: Linux's heading and a line of hex counters for the
  * one processor. Of the route counters, the routes in the table, the datagrams
- * received and those for another host, and the lookups of the output path; the
- * cache of routes Linux once had has no hits, and the broadcasts are not
- * counted apart. Of the neighbour counters, the mappings held, stored and
+ * received and those for another host, and the lookups of the output path;
+ * the hits are 0, since there is no cache of routes, and the broadcasts are
+ * not counted apart. Of the neighbour counters, the mappings held, stored and
  * dropped, the lookups and hits, the resolutions that got no answer and the
  * datagrams dropped waiting for one, and the mappings refused for a full table.
  */
@@ -3569,6 +3540,9 @@ static int procfs_gen_netstat(struct procfs_text *t, int origin)
     return t->len;
 }
 
+/** Render the /proc/net file of origin `origin`, one with a name from
+ * `synth_net_name`: SYNTH_PROC_NETUDP to SYNTH_PROC_NETSNMP and the two
+ * files of /proc/net/stat. */
 static int procfs_gen_net(struct procfs_text *t, int origin)
 {
     switch (origin) {
@@ -3588,7 +3562,9 @@ static int procfs_gen_net(struct procfs_text *t, int origin)
     }
 }
 
-/* /sys: the devices of the PCI and USB buses, and each one's uevent. */
+/* The files of /sys: the uevents of the PCI and USB devices, and the
+ * attributes of the interfaces, the disk nodes, the clock, the processors
+ * and the memory. */
 
 int procfs_fd_is_sys(struct fd_entry *e)
 {
@@ -3643,7 +3619,8 @@ static int sysfs_usb_key(const struct usb_sys_row *r)
     return key;
 }
 
-/** The table entry of the running USB device `key`, or -1. */
+/** The entry of the USB device `key` in the USB stack's table, with its row
+ * in `*r`, or -1 when the device is not there. */
 static int sysfs_usb_find(int key, struct usb_sys_row *r)
 {
     int i;
@@ -3791,17 +3768,9 @@ static int same_word(const char *a, const char *b)
     return *a == *b;
 }
 
-/**
- * Render the attribute `attr` of the /sys directory `node` of the disk node
- * `key`, as Linux's files of the same names give it for lsblk and its
- * kind: a disk's or a partition's numbers, size in 512-byte sectors, first
- * sector and number, a disk's range of minor numbers and whether it is a
- * removable stick, its uevent, its queue's sizes, a transfer at most 128
- * KiB, no discard and no scheduler, and its model and serial number.
- */
-/** Append an attribute of a bound loop device's `loop` directory: the
- * backing file's path, its autoclear flag, and 0 for the offset, the size
- * limit, partition scanning and direct I/O, which this driver does not
+/** Append the attribute `name` of a bound loop device's `loop` directory:
+ * the backing file's path, its autoclear flag, and 0 for the offset, the
+ * size limit, partition scanning and direct I/O, which this driver does not
  * have. */
 static void ap_loopattr(struct procfs_text *t, int key, const char *name)
 {
@@ -3815,6 +3784,18 @@ static void ap_loopattr(struct procfs_text *t, int key, const char *name)
     }
 }
 
+/**
+ * Render the attribute `attr` of the /sys directory `node` of the disk node
+ * `key`, as Linux's files of the same names give it for lsblk and the
+ * programs like it: a disk's or a partition's numbers, size in 512-byte
+ * sectors, first sector and number, a disk's range of minor numbers and
+ * whether it is a removable stick, its uevent; its queue's sizes, a transfer
+ * of at most 128 KiB, no discard and no scheduler; its device's model,
+ * serial number and vendor, "USB" or "ATA"; and a loop device's `loop`
+ * attributes (`ap_loopattr`). Another attribute of a disk, a partition or
+ * a queue is 0, and a device's revision is empty. -ENOENT for no such
+ * attribute or disk node.
+ */
 static int procfs_gen_blockattr(struct procfs_text *t, int node, int key, int attr)
 {
     const char *name = sysfs_attr(node, attr);
@@ -3935,7 +3916,7 @@ int sysfs_device_exists(int node, int key)
     return node == SYSFS_PCI_DEVICE ? sysfs_pci_present(key) : sysfs_usb_find(key, &r) >= 0;
 }
 
-/** Append `v` as two decimal digits. */
+/** Append `v`, 0 to 99, as two decimal digits. */
 static void ap_two(struct procfs_text *t, int32_t v)
 {
     ap_ch(t, (char)('0' + v / 10 % 10));
@@ -3995,9 +3976,10 @@ static void ap_cpu_list(struct procfs_text *t)
  * machine; the one sleep state, suspend to idle, by its two names; the
  * highest processor number the kernel takes, NR_CPUS less one, and the
  * processors that may be, are and are online, which are the ones started,
- * as a list of ranges, with none offline; and the one memory
- * block, memory0, the size of all the memory the kernel manages, online and
- * not removable, which lsmem reads.
+ * as a list of ranges, with none offline; and the one memory block,
+ * memory0, the size of all the memory the kernel manages, online and not
+ * removable, which lsmem reads. -ENOENT for no such attribute, and -EIO
+ * when the clock cannot be read.
  */
 static int procfs_gen_sysattr(struct procfs_text *t, int node, int attr)
 {
@@ -4089,7 +4071,8 @@ static void ap_mac(struct procfs_text *t, const uint8_t *mac)
  * files of the same names give. The link comes from the card where it can
  * say, and an interface down has no carrier, as on Linux; the MTU is the
  * Ethernet frame's, which the interface ioctls report too. `lo` has Linux's
- * loopback type, flags and MTU, and a broadcast address of zeros.
+ * loopback type, flags and MTU, and a broadcast address of zeros. -ENOENT
+ * for no such interface or attribute.
  */
 static int procfs_gen_netattr(struct procfs_text *t, int node, int index, int attr)
 {
@@ -4201,6 +4184,7 @@ static void ap_u32_3(struct procfs_text *t, uint32_t v)
  * of itself, and its type last: `lsusb` takes a uevent whose first line is
  * the type for an interface's, and Linux's first lines, the device node's
  * numbers and name, are left out, since no node of the device exists here.
+ * -ENOENT for a device that is not there.
  */
 static int procfs_gen_uevent(struct procfs_text *t, int node, int key)
 {
@@ -4266,9 +4250,10 @@ static int procfs_gen_uevent(struct procfs_text *t, int node, int key)
 }
 
 /**
- * Render the /sys file `vp` names: an interface's attribute, a fixed node's
- * attribute, or a device's uevent. `*key` gets the interface or the device
- * the file is for, which its descriptor keeps.
+ * Render the /sys file at the path `vp`: an attribute of a disk node, of an
+ * interface or of a fixed directory, or a device's uevent. `*key` gets the
+ * disk node, the interface or the device the file is for, which its
+ * descriptor keeps.
  */
 static int procfs_gen_sysfile(struct procfs_text *t, const struct vpath *vp, int *key)
 {
@@ -4287,18 +4272,17 @@ static int procfs_gen_sysfile(struct procfs_text *t, const struct vpath *vp, int
     return procfs_gen_uevent(t, vp->sysent, vp->syskey);
 }
 
-/* the /proc file backing: a snapshot served through file_ops */
+/* The operations of a descriptor of /proc or /sys. */
 
-/* A snapshot and its text are allocated from the heap at open and freed at
- * the last close. */
-
+/** Read the snapshot from the description's offset, which moves past what
+ * is read: the bytes read, 0 at its end, or -EFAULT. */
 static int32_t procfs_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
     struct procfs_file *f = (struct procfs_file *)e->priv;
     uint32_t off, avail, n;
 
     if (!f || e->ofd->offset >= (uint64_t)f->len) {
-        return 0; /* end of the snapshot */
+        return 0;
     }
     off = (uint32_t)e->ofd->offset;
     avail = (uint32_t)f->len - off;
@@ -4310,23 +4294,26 @@ static int32_t procfs_read(fd_entry_t *e, char __user *buf, uint32_t count)
     return (int32_t)n;
 }
 
+/** The write of a snapshot, which takes none: -EBADF. */
 static int32_t procfs_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
     (void)e;
     (void)buf;
     (void)count;
-    return -EBADF; /* these /proc files are read-only */
+    return -EBADF;
 }
 
+/** POLLIN of `events`, with no wait queue: a read never waits. */
 static short procfs_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {
     (void)e;
     if (wq) {
         *wq = NULL;
     }
-    return (short)(events & POLLIN); /* always has data (or EOF) ready */
+    return (short)(events & POLLIN);
 }
 
+/** -ENOTTY for every request. */
 static int32_t procfs_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 {
     (void)e;
@@ -4335,6 +4322,8 @@ static int32_t procfs_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
     return -ENOTTY;
 }
 
+/** Free the descriptor's record and its text, and drop a mem descriptor's
+ * hold on its address space; at the description's last close. */
 static void procfs_close(fd_entry_t *e)
 {
     struct procfs_file *f = (struct procfs_file *)e->priv;
@@ -4351,13 +4340,13 @@ static const struct file_ops procfs_file_ops = {procfs_read, procfs_write, procf
 
 /**
  * The address space a /proc/<pid>/mem descriptor may reach, with a user's
- * count of the caller's own, or NULL: the one the open allowed, while
- * anything still runs in it. The descriptor keeps only its record
- * (`mm_hold`), as Linux's file keeps the mm_struct and a read takes
- * mm_users only while it is not 0: the pages go when the last thread that
- * ran in them ends or executes another program, and a program the process
- * executes, one of other ids among them, is never reached through a
- * descriptor opened before.
+ * count taken for the caller, who drops it (`procfs_mm_put`), or NULL: the
+ * one the open allowed, while anything still runs in it. The descriptor
+ * keeps only its record (`mm_hold`), as Linux's file keeps the mm_struct
+ * and a read takes mm_users only while it is not 0: the pages go when the
+ * last thread that ran in them ends or executes another program, and a
+ * program the process executes, one of other ids among them, is never
+ * reached through a descriptor opened before.
  */
 static struct mm *procfs_mem_mm(const struct procfs_file *f)
 {
@@ -4372,10 +4361,11 @@ static struct mm *procfs_mem_mm(const struct procfs_file *f)
  * read-only program text, as a tracer's does. A transfer goes no further
  * than a page at a time, and all of a page or none of it is done, so one
  * that meets an address no region allows has done every byte before it:
- * those are returned and the offset moves past them. -EIO when none could
- * be, and 0 once nothing runs in the address space. It has a user's count
- * for the length of the call, which may sleep bringing a page in while the
- * process ends.
+ * those are returned and the offset moves past them. When none could be,
+ * -EIO, -EFAULT for the caller's buffer, or -ENOMEM (`paging_access`); 0
+ * once nothing runs in the address space; and -EIO for an offset past the
+ * machine's addresses. It has a user's count for the length of the call,
+ * which may sleep bringing a page in while the process ends.
  */
 static int32_t procfs_mem_access(fd_entry_t *e, char __user *ubuf, uint32_t count, int write)
 {
@@ -4421,11 +4411,13 @@ static int32_t procfs_mem_access(fd_entry_t *e, char __user *ubuf, uint32_t coun
     return done > 0 ? (int32_t)done : rc;
 }
 
+/** The read of a mem descriptor (`procfs_mem_access`). */
 static int32_t procfs_mem_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
     return procfs_mem_access(e, buf, count, 0);
 }
 
+/** The write of a mem descriptor (`procfs_mem_access`). */
 static int32_t procfs_mem_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
     return procfs_mem_access(e, (char __user *)(uintptr_t)buf, count, 1);
@@ -4441,12 +4433,15 @@ int procfs_is_mem(const fd_entry_t *e)
 }
 
 /**
- * Open /proc/<pid>/mem for reading, writing or both: the caller needs
- * effective user ID 0, or the process's real user ID and a dumpable process,
- * as a tracer does to attach. The descriptor keeps the process's id, `pid`
- * as `procfs_resolve_id` gave it for the path `vp`, a hold on the record of
- * the address space those checks allowed, which keeps none of its memory,
- * and no text; its offset is an address.
+ * Open /proc/<pid>/mem for reading, writing or both: the caller is a thread
+ * of the process or privileged, or has the process's real user ID while the
+ * process is dumpable and not privileged, as a tracer needs to attach. The
+ * descriptor keeps the process's id, `pid` as `procfs_resolve_id` gave it
+ * for the path `vp`, a hold on the record of the address space those checks
+ * allowed, which keeps none of its memory, and no text; its offset is an
+ * address. Returns the descriptor, -ENOENT for no process or address space,
+ * -EACCES for an access mode of 3, O_CREAT or a caller refused, -ENOMEM, or
+ * the error of allocating the descriptor.
  */
 static int procfs_open_mem(const struct vpath *vp, int pid, int flags)
 {
@@ -4494,14 +4489,17 @@ static int procfs_open_mem(const struct vpath *vp, int pid, int flags)
     return fd;
 }
 
-/** Append one decimal audio field. */
+/** Append `name` and `value` in decimal, one field of /proc/audio. */
 static void audio_field(struct procfs_text *t, const char *name, uint32_t value)
 {
     ap_str(t, name);
     ap_u32(t, value);
 }
 
-/** Render cached codec enumeration and the last programmed stream. */
+/** Render /proc/audio: the audio driver's name and the HDA driver's report
+ * (`hda_get_report`), the codec and the widgets it chose, the rates and
+ * formats of the last stream it programmed, the converters' capabilities and
+ * the connection lists it read. */
 static int procfs_gen_audio(struct procfs_text *t)
 {
     const hda_report_t *r = hda_get_report();
@@ -4802,7 +4800,9 @@ static int procfs_gen_idmap(struct procfs_text *t, int pid, int file)
     return t->len;
 }
 
-/** Read a user namespace's file opened for writing as well: its text now. */
+/** Read a user namespace's file opened for writing as well: its text at
+ * this read, from the description's offset; -ESRCH once the process has
+ * been reaped. */
 static int32_t procfs_idmap_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
     struct procfs_file *f = (struct procfs_file *)e->priv;
@@ -4828,7 +4828,9 @@ static int32_t procfs_idmap_read(fd_entry_t *e, char __user *buf, uint32_t count
 }
 
 /** Write a user namespace's map or its setgroups, as `ns_map_write` takes
- * it, from at most 256 bytes of `buf`. */
+ * it, from at most 256 bytes of `buf`, at offset 0: what `ns_map_write`
+ * returns, -EINVAL at another offset, -EFAULT, or -ESRCH once the process
+ * has been reaped. */
 static int32_t procfs_idmap_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
     struct procfs_file *f = (struct procfs_file *)e->priv;
@@ -4855,6 +4857,7 @@ static const struct file_ops procfs_idmap_ops = {procfs_idmap_read, procfs_idmap
  * Open /proc/<pid>/uid_map, gid_map or setgroups, `file`, for writing, or
  * for reading and writing; who may write it is the namespace's rule
  * (`ns_map_write`), checked at the write, which must be at the start.
+ * -EACCES for an access mode of 3, and -ENOENT for no such process.
  */
 static int procfs_open_idmap(int file, int pid, int flags)
 {
@@ -4957,7 +4960,8 @@ static void procfs_sysctl_text(struct procfs_text *t, int entry)
     }
 }
 
-/** Read a /proc/sys file opened for writing as well: its value now. */
+/** Read a /proc/sys file opened for writing as well: its value at this
+ * read, from the description's offset. */
 static int32_t procfs_sysctl_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
     struct procfs_file *f = (struct procfs_file *)e->priv;
@@ -4988,10 +4992,11 @@ static int32_t procfs_sysctl_read(fd_entry_t *e, char __user *buf, uint32_t coun
  *
  * kernel/hostname and kernel/domainname become the text up to its first
  * newline, at most 64 bytes, as sethostname(2) and setdomainname(2) would
- * set them; the whole count is taken. A write
- * to net/ipv4/ip_forward is an integer, and 0, which it is, is taken; any
+ * set them; the whole count is taken. A write to net/ipv4/ip_forward is an
+ * integer, read as `oom_parse` reads one, and 0, its value, is taken; any
  * other value is -EINVAL, since the stack forwards nothing between
- * interfaces, where Linux would begin to.
+ * interfaces, where Linux would begin to. -EFAULT for a buffer the caller
+ * cannot read.
  */
 static int32_t procfs_sysctl_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
@@ -5028,8 +5033,8 @@ static int32_t procfs_sysctl_write(fd_entry_t *e, const char __user *buf, uint32
 static const struct file_ops procfs_sysctl_ops = {procfs_sysctl_read, procfs_sysctl_write,
                                                   procfs_poll, procfs_ioctl, procfs_close};
 
-/** Read a writable /sys attribute opened for writing as well: its value
- * now. */
+/** Read a writable /sys attribute opened for writing as well: its value at
+ * this read, from the description's offset. */
 static int32_t procfs_sysattr_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
     struct procfs_file *f = (struct procfs_file *)e->priv;
@@ -5066,8 +5071,9 @@ static int sysattr_is(const char *s, uint32_t len, const char *word)
     return i == len && word[i] == '\0';
 }
 
-/** The decimal number at `s`, at most `len` bytes long, with a leading `+`
- * noted in `*relative`; -1 for no number. */
+/** The decimal number at the start of the `len` bytes at `s`, with a
+ * leading `+` noted in `*relative`; -1 when no digit begins them. Reading
+ * stops at the first other byte, or once the value reaches 2^31 - 1. */
 static int64_t sysattr_number(const char *s, uint32_t len, int *relative)
 {
     int64_t v = 0;
@@ -5088,9 +5094,13 @@ static int64_t sysattr_number(const char *s, uint32_t len, int *relative)
  * Write a writable /sys attribute, as Linux's do. rtc0's wakealarm takes
  * seconds since 1970, or `+N` for N seconds from now, and 0 to clear it; a
  * new time while an alarm is set is -EBUSY, as on Linux, which wants the
- * alarm cleared first. /sys/power/state takes `freeze` or `mem`, both
- * suspend to idle, which the write waits in until a wake event; another
- * state is -EINVAL.
+ * alarm cleared first, and a time `devfs_rtc_set_wakealarm` does not set
+ * has its error; text that is no number is -EINVAL.
+ * /sys/power/state takes `freeze` or `mem`, both suspend to idle, which the
+ * write waits in until a wake event, or has the error of `suspend_to_idle`;
+ * another state is -EINVAL. The whole count is taken, or the write fails
+ * with -EFAULT, -EIO for a clock that cannot be read or cleared, or one of
+ * the errors above.
  */
 static int32_t procfs_sysattr_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
@@ -5266,7 +5276,9 @@ static int procfs_gen_fdinfo(struct procfs_text *t, int pid, int fd)
     return t->nomem ? -1 : t->len;
 }
 
-/** Distinguish global snapshots from files whose process must still exist. */
+/** Whether a file of kind `kind` is one of a process, whose process must be
+ * there at the open; 0 for the files of /proc outside /proc/<pid> and for
+ * those of /sys. */
 static int procfs_needs_pid(int kind)
 {
     static const int global[] = {
@@ -5289,25 +5301,16 @@ static int procfs_needs_pid(int kind)
 }
 
 /**
- * Open a /proc text file, global or per process, returning a descriptor or
- * -errno.
+ * The checks of the flags are in the order that gives the errno of a
+ * regular file that exists: O_CREAT with O_EXCL is -EEXIST first, then
+ * O_DIRECTORY -ENOTDIR. The files a write reaches then go to opens of their
+ * own (`procfs_open_oom`, `procfs_open_idmap`, `procfs_open_mem`,
+ * `procfs_open_sysctl`, `procfs_open_sysattr`), and any other write or
+ * create is -EACCES.
  *
- * The text is generated into a snapshot at open, then served read-only
- * through procfs_file_ops; the snapshot is freed on the last close. These
- * files are read-only regular files, so the open-flag checks are ordered to
- * report the conventional errno: O_CREAT|O_EXCL on an existing file is
- * -EEXIST first, then O_DIRECTORY is -ENOTDIR, then any write or create
- * intent is -EACCES. After the first two, /proc/<pid>/oom_score_adj and
- * /proc/<pid>/mem, which have no snapshot, go to opens of their own
- * (`procfs_open_oom`, `procfs_open_mem`).
- *
- * The snapshot grows as text is appended. If allocation fails, discard
- * the partial text and return -ENOMEM.
- *
- * `/proc/disk` is rendered from the record taken at boot, so opening it issues
- * no command to the device. `diskinfo_format` truncates to the cap it is
- * given rather than reporting,
- * so a text that reached the cap is refused with `-EOVERFLOW`.
+ * `/proc/disk` is rendered from the record taken at boot, so opening it
+ * issues no command to the device. `diskinfo_format` truncates to the size
+ * it is given, so a text that reached it is refused with -EOVERFLOW.
  */
 int procfs_open(const struct vpath *vp, int flags)
 {
@@ -5355,7 +5358,7 @@ int procfs_open(const struct vpath *vp, int flags)
     }
     procfs_text_init(&text);
     if (vp->kind == VNODE_PROC_CMDLINE) {
-        /* The captured boot line and a newline, the Linux shape. */
+        /* The boot line and a newline, as Linux's /proc/cmdline has it. */
         const char *line = kcmdline_get();
         ap_str(&text, line);
         ap_ch(&text, '\n');
@@ -5400,7 +5403,7 @@ int procfs_open(const struct vpath *vp, int flags)
         ap_str(&text, "Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n");
         len = text.len;
     } else if (vp->kind == VNODE_PROC_VERSION) {
-        /* Linux's "Linux version 6.8.0 ... #1 ...", with uname's version. */
+        /* Linux's "Linux version", then uname's release and version. */
         ap_str(&text, UTS_SYSNAME " version " UTS_RELEASE " " UTS_VERSION "\n");
         len = text.len;
     } else if (vp->kind == VNODE_PROC_CPUINFO) {
@@ -5462,8 +5465,7 @@ int procfs_open(const struct vpath *vp, int flags)
     } else {
         len = procfs_gen_cmdline(&text, pid);
     }
-    /* No memory first: a generator that ran out says so with -1, which is
-       not an error of its own. */
+    /* -1 from a generator that ran out of heap is not -EPERM. */
     if (len < 0 && !text.nomem) {
         kfree(text.buf);
         kfree(f);
