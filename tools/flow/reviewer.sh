@@ -28,9 +28,11 @@
 # fifteen minutes. Nothing waits for a review.
 #
 # STATE, `~/flow/reviewer` unless given, holds the log `loop.log`, `since`,
-# `queue`, `failed`, the worktree `wt`, and each review's output as
-# `r-P-TIME.jsonl`, `.err` and `.json`. `touch STATE/stop` ends the loop
-# after the review that is running.
+# `queue`, `failed`, the worktree `wt`, the process group of the review that
+# is running in `session`, and each review's output as `r-P-TIME.jsonl`,
+# `.err` and `.json`. `touch STATE/stop` ends the loop after the review that
+# is running, and a loop that starts while a review of the loop before it
+# still runs waits for that review to end.
 
 # shellcheck disable=SC2016 # the dollars are GraphQL's, jq's and perl's
 REPO=toksaitov/rach2
@@ -219,9 +221,13 @@ main()
     cd "$repo" || exit 1
     echo "$repo" > "$state/repo"
     [ -s "$state/since" ] || date -u '+%Y-%m-%dT%H:%M:%SZ' > "$state/since"
+    wait_session
     if [ "$0" != "$state/run/reviewer.sh" ]; then
         refresh
-        update reviewer.sh
+        while update reviewer.sh 2>> "$state/loop.log"; [ $? -eq 2 ]; do
+            log "update failed"
+            sleep 60
+        done
         log "loop starts: $agent in $repo"
         exec sh "$state/run/reviewer.sh" -a "$agent" -s "$state" -r "$repo"
     fi
@@ -231,10 +237,16 @@ main()
             sleep 60
             continue
         fi
-        if update reviewer.sh; then
-            log "restarting as master's loop"
-            exec sh "$state/run/reviewer.sh" -a "$agent" -s "$state" -r "$repo"
-        fi
+        update reviewer.sh 2>> "$state/loop.log"
+        case $? in
+            0)
+                log "restarting as master's loop"
+                exec sh "$state/run/reviewer.sh" -a "$agent" -s "$state" -r "$repo" ;;
+            2)
+                log "update failed"
+                sleep 60
+                continue ;;
+        esac
         if ! p=$(pick); then
             log "board unreachable"
             sleep 300
