@@ -129,14 +129,13 @@ next()
                         content { ... on Issue { number title state
                             assignees(first: 1) { totalCount }
                             labels(first: 20) { nodes { name } }
-                            blockedBy(first: 20) { nodes { state } } } } } } } } }' \
+                            issueDependenciesSummary { blockedBy } } } } } } } }' \
         --jq '.data.user.projectV2.items.nodes[] |
             select(.content.state == "OPEN" and
                    .content.assignees.totalCount == 0 and
                    ([.content.labels.nodes[] | select(.name == "grouped")]
                     | length) == 0 and
-                   ([.content.blockedBy.nodes[] | select(.state == "OPEN")]
-                    | length) == 0) |
+                   .content.issueDependenciesSummary.blockedBy == 0) |
             "\(.fieldValueByName.name // "-")\t\(.content.number)\t\(.content.title)"')
     printf '%s\n' "$answer" |
         awk -F '\t' '$3 ~ /^ci:/ { print $2 "\t" $3; next }
