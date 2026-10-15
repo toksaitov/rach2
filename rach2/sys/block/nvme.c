@@ -1691,6 +1691,7 @@ static void nvme_start_one(struct nvme_ctrl *c)
     if (nvme_msix(c, (uint8_t)vector) != 0) {
         kind = "msi";
         if (pci_msi_enable(&c->pci, (uint8_t)vector) != 0) {
+            isr_free_vector(vector);
             c->vector = -1;
             klog(KLOG_INFO, "nvme", "polled: the controller has no message capability");
             return;

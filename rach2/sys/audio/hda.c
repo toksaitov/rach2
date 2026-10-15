@@ -1602,6 +1602,28 @@ static bool is_hdmi_controller(uint16_t vendor_id, uint16_t device_id)
 }
 
 /**
+ * Register the handler on a message vector of the controller's own and
+ * enable the output stream's interrupt there, when the machine has an APIC
+ * and the controller a capability for it. A controller whose messages will
+ * not enable gives the vector back, handler and all, and `msi_vector` stays
+ * -1.
+ */
+static void hda_msi_start(void)
+{
+    if (!isr_msi_ready() || (msi_vector = isr_alloc_vector()) < 0) {
+        return;
+    }
+    register_isr_handler((uint8_t)msi_vector, hda_irq_handler, "hda");
+    if (pci_msi_enable(&hda_pci, (uint8_t)msi_vector) != 0) {
+        isr_free_vector(msi_vector);
+        msi_vector = -1;
+        return;
+    }
+    hda_write32(HDA_INTCTL, 0x80000000 | (1 << output_stream_index));
+    klog(KLOG_INFO, "audio", "interrupts: messages on vector %d", msi_vector);
+}
+
+/**
  * Find, power on, reset, and enumerate the HDA controller.
  *
  * Locates a non-HDMI PCI audio controller (falling back to the first audio
@@ -1616,10 +1638,10 @@ static bool is_hdmi_controller(uint16_t vendor_id, uint16_t device_id)
  *
  * The handler is registered on the controller's legacy IRQ line, when it is
  * below 16, and also on a message vector where the machine has an APIC and
- * the controller a capability for it. The timer tick services the stream as
- * well, so a machine whose messages do not arrive still plays, and the
- * handler first reads INTSTS for the stream's bit, so being called twice for
- * one event costs a register read.
+ * the controller a capability for it (`hda_msi_start`). The timer tick
+ * services the stream as well, so a machine whose messages do not arrive
+ * still plays, and the handler first reads INTSTS for the stream's bit, so
+ * being called twice for one event costs a register read.
  */
 static int hda_init(void)
 {
@@ -1719,13 +1741,7 @@ static int hda_init(void)
         hda_write32(HDA_INTCTL, 0x80000000 | (1 << output_stream_index));
     }
 
-    if (isr_msi_ready() && (msi_vector = isr_alloc_vector()) >= 0 &&
-        pci_msi_enable(&hda_pci, (uint8_t)msi_vector) == 0) {
-        register_isr_handler((uint8_t)msi_vector, hda_irq_handler, "hda");
-        hda_write32(HDA_INTCTL, 0x80000000 | (1 << output_stream_index));
-        klog(KLOG_INFO, "audio", "interrupts: messages on vector %d", msi_vector);
-    }
-
+    hda_msi_start();
     hda_build_boot_status();
     return 0;
 }

@@ -36,8 +36,9 @@ int nvme_init(void);
  * message on it, and `submit` and `flush` on each namespace in place of
  * `BLOCK_FAULT_SAFE`. A controller keeps polling under `rach2.nvmepoll`,
  * without the local APIC, without a free vector, or without a message
- * capability, and logs which. Called once at boot, after the root is
- * mounted, with interrupts on.
+ * capability, and logs which; in the last case it gives the vector back,
+ * with its handler. Called once at boot, after the root is mounted, with
+ * interrupts on.
  */
 void nvme_start(void);
 

@@ -38,8 +38,9 @@ int ahci_init(void);
  * its polled `read` and `write` remain for the fault path, which finishes
  * the port's active command first. The disks stay polled under
  * `rach2.ahcipoll`, and, with a record, when there is no local APIC, no free
- * vector or no MSI capability. Called once at boot, after the root is
- * mounted, with interrupts on.
+ * vector or no MSI capability; in the last case the vector is given back,
+ * with its handler. Called once at boot, after the root is mounted, with
+ * interrupts on.
  */
 void ahci_start(void);
 

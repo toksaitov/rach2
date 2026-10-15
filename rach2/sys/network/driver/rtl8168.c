@@ -1419,7 +1419,8 @@ static void rtl8168_isr(isr_params_t *params)
  * message can arrive on a vector nothing serves, and the sources are
  * unmasked last, once the device is known to send to this vector. A machine
  * with no usable APIC, no vector to give, or a capability that does not
- * enable stays polled, which the log line and the detail lines report.
+ * enable stays polled, which the log line and the detail lines report; in
+ * the last case the vector is given back, handler and all.
  */
 static void r8168_interrupts_enable(void)
 {
@@ -1438,6 +1439,7 @@ static void r8168_interrupts_enable(void)
     register_isr_handler((uint8_t)vector, rtl8168_isr, "rtl8168");
     if (pci_msi_enable(&r8168_pci, (uint8_t)vector) != 0) {
         klog(KLOG_INFO, "rtl8168", "interrupts: polled, the card sends no messages");
+        isr_free_vector(vector);
         return;
     }
     r8168_msi_vector = vector;

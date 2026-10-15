@@ -1424,6 +1424,7 @@ void ahci_start(void)
     register_isr_handler((uint8_t)ahci_vector, ahci_handler, "ahci");
     if (pci_msi_enable(&ahci_pci, (uint8_t)ahci_vector) != 0) {
         klog(KLOG_INFO, "ahci", "polled: the controller has no message capability");
+        isr_free_vector(ahci_vector);
         ahci_vector = -1;
         return;
     }
