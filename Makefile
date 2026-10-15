@@ -1019,19 +1019,19 @@ check-e2fsck: $(E2FSPROGS_STAMP) $(E2FSCK_BIN) $(RESIZE2FS_BIN) $(MKE2FS_BIN) $(
 	@$(ELFCHECK) --arch $(ARCH) $(TUNE2FS_BIN)
 	@$(ELFCHECK) --arch $(ARCH) $(DUMPE2FS_BIN)
 	@size=$$(wc -c < $(E2FSCK_BIN) | tr -d ' '); test "$$size" -le $(E2FSCK_LIMIT) || { \
-	    echo "e2fsprogs: e2fsck is $$size bytes, over the $(E2FSCK_LIMIT) limit vendor/e2fsprogs/Readme.md sets" >&2; \
+	    echo "e2fsprogs: e2fsck is $$size bytes, over the Makefile's E2FSCK_LIMIT of $(E2FSCK_LIMIT)" >&2; \
 	    exit 1; }
 	@size=$$(wc -c < $(RESIZE2FS_BIN) | tr -d ' '); test "$$size" -le $(RESIZE2FS_LIMIT) || { \
-	    echo "e2fsprogs: resize2fs is $$size bytes, over the $(RESIZE2FS_LIMIT) limit vendor/e2fsprogs/Readme.md sets" >&2; \
+	    echo "e2fsprogs: resize2fs is $$size bytes, over the Makefile's RESIZE2FS_LIMIT of $(RESIZE2FS_LIMIT)" >&2; \
 	    exit 1; }
 	@size=$$(wc -c < $(MKE2FS_BIN) | tr -d ' '); test "$$size" -le $(MKE2FS_LIMIT) || { \
-	    echo "e2fsprogs: mke2fs is $$size bytes, over the $(MKE2FS_LIMIT) limit vendor/e2fsprogs/Readme.md sets" >&2; \
+	    echo "e2fsprogs: mke2fs is $$size bytes, over the Makefile's MKE2FS_LIMIT of $(MKE2FS_LIMIT)" >&2; \
 	    exit 1; }
 	@size=$$(wc -c < $(TUNE2FS_BIN) | tr -d ' '); test "$$size" -le $(TUNE2FS_LIMIT) || { \
-	    echo "e2fsprogs: tune2fs is $$size bytes, over the $(TUNE2FS_LIMIT) limit vendor/e2fsprogs/Readme.md sets" >&2; \
+	    echo "e2fsprogs: tune2fs is $$size bytes, over the Makefile's TUNE2FS_LIMIT of $(TUNE2FS_LIMIT)" >&2; \
 	    exit 1; }
 	@size=$$(wc -c < $(DUMPE2FS_BIN) | tr -d ' '); test "$$size" -le $(DUMPE2FS_LIMIT) || { \
-	    echo "e2fsprogs: dumpe2fs is $$size bytes, over the $(DUMPE2FS_LIMIT) limit vendor/e2fsprogs/Readme.md sets" >&2; \
+	    echo "e2fsprogs: dumpe2fs is $$size bytes, over the Makefile's DUMPE2FS_LIMIT of $(DUMPE2FS_LIMIT)" >&2; \
 	    exit 1; }
 
 # The compiler the guest runs, and the two things it cannot work without: its
