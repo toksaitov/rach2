@@ -1,3 +1,5 @@
+/* uimage.c: the initial stack of a new image, as uimage.h describes it. */
+
 #include "uimage.h"
 #include "auxv.h"
 #include "sched.h"
@@ -60,12 +62,6 @@ static void uwin_open(struct uwin *w, const struct uimage *u)
     w->map = NULL;
 }
 
-/**
- * The bytes the strings of an exec and their pointers may take under a soft
- * RLIMIT_STACK of `stack_limit`, as Linux's `bprm_stack_limits` sizes them: a
- * quarter of the limit, at most UIMAGE_ARGS_MAX and at least
- * UIMAGE_ARGS_MIN.
- */
 uint32_t uimage_budget(unsigned long stack_limit)
 {
     unsigned long limit = stack_limit / 4u;
@@ -80,19 +76,10 @@ uint32_t uimage_budget(unsigned long stack_limit)
 }
 
 /**
- * Start an initial stack whose top is `top`, to hold `argc` and `envc`
- * strings under a soft RLIMIT_STACK of `stack_limit`.
- *
- * The strings and their pointers share the budget `uimage_budget` gives.
- * The pointers are set aside first, one for argv[0] even in an empty argv,
- * since execve gives such a program an empty argv[0], and the strings get
- * what is left. The array of frames is sized for the budget, with pages to
- * spare for the information block below the strings, and it is the only
- * kernel memory the stack holds; the frames are taken as the strings reach
- * them.
- *
- * @return 0; -E2BIG when the pointers alone take the budget; -ENOMEM when
- *         the array could not be had.
+ * An empty argv has a pointer set aside too, since execve gives such a
+ * program an empty argv[0]. The array of frames is sized for the budget,
+ * with four pages to spare for the information block below the strings,
+ * and is the only kernel memory the stack takes.
  */
 int uimage_start(struct uimage *u, uintptr_t top, unsigned long stack_limit, uint32_t argc,
                  uint32_t envc)
@@ -118,7 +105,7 @@ int uimage_start(struct uimage *u, uintptr_t top, unsigned long stack_limit, uin
 
 /**
  * Take frames until they cover the `bytes` below the top, each zeroed
- * through a temporary mapping before it holds anything.
+ * through a temporary mapping before anything is written to it.
  *
  * @return 0; -E2BIG past the frames the array has room for; -ENOMEM when no
  *         frame, or no temporary mapping to clear it through, could be had.
@@ -150,7 +137,7 @@ static int uimage_grow(struct uimage *u, uint32_t bytes)
  * Copy a string of `len` bytes, its NUL counted, below the strings already
  * there: from user space at `user` when it is not NULL, else from `kernel`.
  *
- * The last byte is written as the NUL whatever the source holds by then, so
+ * The last byte is written as the NUL whatever the source has by then, so
  * every string on the stack ends before the next one begins, and a walk
  * from the lowest string cannot run past the top.
  *
@@ -205,13 +192,6 @@ static int uimage_copy(struct uimage *u, const char __user *user, const char *ke
     return 0;
 }
 
-/**
- * Copy the user string at `s` below the strings already there, as Linux's
- * `copy_strings` copies one: its length is found first, a string of
- * UIMAGE_STRING_MAX bytes or more with its NUL is -E2BIG, and one that does
- * not fit the room left is -E2BIG too. -EFAULT for an address that cannot
- * be read, -ENOMEM.
- */
 int uimage_push_user(struct uimage *u, const char __user *s)
 {
     int n = strnlen_user(s, UIMAGE_STRING_MAX);
@@ -225,19 +205,11 @@ int uimage_push_user(struct uimage *u, const char __user *s)
     return uimage_copy(u, s, NULL, (uint32_t)n + 1u);
 }
 
-/** Copy the kernel string `s` below the strings already there, under the
- * rules of `uimage_push_user`. */
 int uimage_push(struct uimage *u, const char *s)
 {
     return uimage_copy(u, NULL, s, (uint32_t)k_strlen(s) + 1u);
 }
 
-/**
- * Take away the lowest string, which is argv[0], as Linux's
- * `remove_arg_zero` does before an interpreter's arguments are put in its
- * place. Its bytes are cleared, so none is left for the new image to find.
- * 0, or -ENOMEM when no temporary mapping was free.
- */
 int uimage_drop_first(struct uimage *u)
 {
     struct uwin w;
@@ -271,16 +243,6 @@ static uintptr_t uimage_random_at(const struct uimage *u)
     return (u->top - u->used - 16u) & ~(uintptr_t)15u;
 }
 
-/**
- * Place the information block below the strings, and take the frames it
- * needs.
- *
- * Below the strings go the 16 bytes AT_RANDOM points at, and below them
- * argc, the argv pointers and their NULL, the envp pointers and theirs, and
- * the auxiliary vector, each a word of a pointer's width. Their start, the
- * entry stack pointer, is aligned down to 16 bytes, as the call ABIs of
- * i386 and x86-64 want it. 0, -E2BIG, -ENOMEM.
- */
 int uimage_place(struct uimage *u, uint32_t argc, uint32_t envc)
 {
     uint32_t words = 3u + argc + envc + 2u * UIMAGE_AUXV;
@@ -323,16 +285,9 @@ static int uimage_next(struct uwin *w, uintptr_t *str)
 }
 
 /**
- * Write the information block `uimage_place` placed: AT_RANDOM's bytes, argc,
- * the pointers to the `argc` strings of argv and then the `envc` of the
- * environment, each array ending in NULL, and the auxiliary vector (AT_PHDR,
- * AT_PHENT, AT_PHNUM, AT_ENTRY, AT_PAGESZ, AT_CLKTCK 100, AT_SECURE, AT_RANDOM,
- * AT_BASE, AT_UID, AT_EUID, AT_GID, AT_EGID, AT_EXECFN, AT_MINSIGSTKSZ and
- * AT_NULL), which a dynamic linker reads to find itself and the program it
- * loads. The pointers are found by walking the strings from the lowest, which
- * is argv[0], as Linux's `create_elf_tables` finds them; the walk stops before
- * any string above the environment, such as the program's path. 0, or -1 when
- * no temporary mapping was free.
+ * The pointers are found by walking the strings from the lowest, argv[0],
+ * as Linux's `create_elf_tables` finds them; the walk stops before any
+ * string above the environment, such as the program's path.
  */
 int uimage_write(struct uimage *u, uint32_t argc, uint32_t envc, const elf_image_t *img,
                  const uint8_t random16[16], const struct uimage_aux *ids)
@@ -425,12 +380,6 @@ int uimage_write(struct uimage *u, uint32_t argc, uint32_t envc, const elf_image
     return rc;
 }
 
-/**
- * Map each frame into `dir` at its place in the stack, read and write for
- * the user and not executable, as the stack's region is. The frames mapped
- * belong to `dir` from then on; 0, or -1 when a page table could not be
- * had, with the frames not yet mapped still `u`'s.
- */
 int uimage_map(struct uimage *u, struct page_dir *dir)
 {
     while (u->given < u->nframes) {
@@ -450,8 +399,6 @@ uintptr_t uimage_bottom(const struct uimage *u)
     return u->top - (uintptr_t)u->nframes * PAGE_SIZE;
 }
 
-/** Give back the frames no page directory took, and the array; `u` holds
- * nothing afterwards and may be released again. */
 void uimage_release(struct uimage *u)
 {
     uint32_t i;
