@@ -59,6 +59,9 @@
 
 #define MS_RDONLY 1
 
+#define WIFEXITED(s)   (((s) & 0x7F) == 0)
+#define WEXITSTATUS(s) (((s) >> 8) & 0xFF)
+
 #define EIO   5
 #define EBUSY 16
 
@@ -765,7 +768,10 @@ static void part_pullread(void)
     if (syscall3(SYS_WAITPID, child, (long)&status, 0) != child) {
         fail("waiting for the reading child");
     }
-    switch ((status >> 8) & 0xFF) {
+    if (!WIFEXITED(status)) {
+        fail("the reading child was killed by a signal");
+    }
+    switch (WEXITSTATUS(status)) {
     case 0:
         puts("USBDISKPROBE READ FAILED");
         ok();
