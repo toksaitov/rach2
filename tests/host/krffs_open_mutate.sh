@@ -79,7 +79,10 @@ fi
 . "$repo/tests/system/runlock.sh"
 runlock_hold "$repo" krffs-open "$repo/tests/host/krffs_open_mutate.sh" "$@"
 
-[ "$#" -eq 0 ] || [ "$*" = --check ] || exit 2
+if [ "$#" -gt 0 ] && [ "$*" != --check ]; then
+    echo 'krffs-open: usage: krffs_open_mutate.sh [--check | --texts]' >&2
+    exit 2
+fi
 mkdir -p build/tests
 work=$(mktemp -d "$repo/build/tests/krffs-open-proof.XXXXXX")
 child=

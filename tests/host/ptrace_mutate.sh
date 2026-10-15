@@ -173,7 +173,10 @@ fi
 kind=${1:-}
 select_kind "$kind"
 shift
-[ "$#" -eq 0 ] || [ "$*" = --check ] || exit 2
+if [ "$#" -gt 0 ] && [ "$*" != --check ]; then
+    echo 'ptrace-proof: usage: ptrace_mutate.sh [ptrace|debugreg [--check]]' >&2
+    exit 2
+fi
 mkdir -p build/tests
 work=$(mktemp -d "$repo/build/tests/$kind-proof.XXXXXX")
 mkdir "$work/rach2"

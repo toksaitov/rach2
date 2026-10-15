@@ -79,7 +79,10 @@ fi
 runlock_hold "$repo" pagecache-mutation "$repo/tests/host/pagecache_mutate.sh" "$@"
 
 
-[ "$#" -eq 0 ] || [ "$*" = --check ] || exit 2
+if [ "$#" -gt 0 ] && [ "$*" != --check ]; then
+    echo 'pagecache-mutation: usage: pagecache_mutate.sh [--check | --texts]' >&2
+    exit 2
+fi
 mkdir -p build/tests
 work=$(mktemp -d "$repo/build/tests/pagecache-proof.XXXXXX")
 child=
