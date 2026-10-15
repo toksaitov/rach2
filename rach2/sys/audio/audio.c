@@ -9,6 +9,7 @@
 #include "hda.h"
 #include "../serial.h"
 #include "../pci.h"
+#include "../lib/kerrno.h"
 
 audio_driver_t *audio = NULL;
 static const char *audio_boot_status = "Not initialized";
@@ -60,12 +61,12 @@ static void speaker_set_callback(audio_callback_t fn)
     (void)speaker_callback;
 }
 
-/** Return -1 for any samples: the speaker cannot play them. */
+/** Return -EOPNOTSUPP for any samples: the speaker cannot play them. */
 static int speaker_write(const uint8_t *buffer, size_t size)
 {
     (void)buffer;
     (void)size;
-    return -1;
+    return -EOPNOTSUPP;
 }
 
 /** Ignore `volume`: the speaker has no volume control. */

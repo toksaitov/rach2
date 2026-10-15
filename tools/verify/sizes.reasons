@@ -197,9 +197,6 @@ rach2/sys/arch/x86/cmos.c:rtc_decode complexity 31 a parser over an external for
 rach2/sys/proc/sched.c:schedule complexity 29 one decision, its cases in the order they are tried
 
 rach2/sys/syscall.c:ktimex_adjust complexity 27 one arm per mode of adjtimex, in the order Linux applies them
-rach2/sys/syscall.c:sys_ioctl complexity 34 a dispatcher, one arm per command, read as a table
-rach2/sys/syscall.c:sys_ioctl lines 124 a dispatcher, one arm per command, read as a table
-rach2/sys/syscall.c:sys_ioctl nesting 5 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall.c:tty_common_ioctl lines 109 a dispatcher, one arm per command, read as a table
 
 rach2/sys/syscall_fs.c:chown_fd complexity 27 one system call's contract, its checks in the order the manual page lists the errors

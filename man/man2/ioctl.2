@@ -470,8 +470,6 @@ returns 0 or the request's result on success.
 On failure it returns -1 and sets
 .Va errno .
 The kernel interface returns the negative error number.
-An audio driver's bare -1 return is interpreted as
-.Er EPERM .
 .Sh EXAMPLES
 The default suite's
 .Pa tests/jobprobe.c
@@ -497,10 +495,6 @@ A framebuffer mode or palette request belongs to another process,
 or a text-mode or palette request has no owner.
 .It Bq Er EFAULT
 A required argument or buffer cannot be read or written in user memory.
-.Dv AUDIO_START
-and
-.Dv AUDIO_WRITE
-also return this error when there is no active driver.
 .It Bq Er EFBIG
 The sector count requested by
 .Dv BLKGETSIZE
@@ -510,13 +504,21 @@ The flush selector is outside 0 through 2, the foreground group ID
 is not positive, or an interface address, mask, broadcast address, or
 gateway is invalid.
 Adding a default route with gateway zero is invalid.
+The audio driver refused the rate, format or channel count of
+.Dv AUDIO_START :
+Sound Blaster 16 takes rates from 5000 through 44100 and HDA those
+through 384000 that its codec can play.
+.Dv AUDIO_WRITE
+was given a zero size, or no stream is playing.
 .It Bq Er EIO
-The partition rescan could not read the disk's first sector.
+The partition rescan could not read the disk's first sector, or the
+sound device failed to start the stream of
+.Dv AUDIO_START .
 .It Bq Er ENODEV
-The named network interface or index does not exist, or
-.Dv AUDIO_STOP
-or
-.Dv AUDIO_SET_VOLUME
+The named network interface or index does not exist, or an
+.Dv AUDIO_*
+request other than
+.Dv AUDIO_GET_INFO
 has no active driver.
 .It Bq Er ENOPKG
 A bridge or VLAN request was made.
@@ -527,7 +529,9 @@ raw window, or
 selected a terminal outside the caller's session.
 .It Bq Er EOPNOTSUPP
 A route change other than a default route or addition of the existing
-subnet route was requested.
+subnet route was requested, or
+.Dv AUDIO_WRITE
+was given to the PC speaker, which cannot play samples.
 .It Bq Er EPERM
 A controlling-terminal claim is forbidden, the proposed foreground group
 is outside the terminal's session, a network setter or route change
@@ -536,10 +540,6 @@ was requested without effective user ID 0, or
 came from a caller that neither owns the file nor is privileged, or
 asked an unprivileged caller's change of the immutable or append-only
 flag.
-An audio driver also gives this error for a refused start or write:
-Sound Blaster 16 refuses rates outside 5000 through 44100, HDA may fail
-to reset its stream, sample writes require active playback and a nonzero
-size, and the PC speaker cannot accept samples.
 .It Bq Er ESRCH
 There is no current process, or the default route to remove is absent
 or has a different nonzero gateway from the one supplied.

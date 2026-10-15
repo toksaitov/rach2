@@ -2034,6 +2034,89 @@ static int32_t tty_common_ioctl(struct tty *t, uint32_t request, uintptr_t arg, 
 }
 
 /**
+ * Answer the console's sound requests: KIOCSOUND on the PC speaker, and the
+ * AUDIO_* requests on the active driver. The AUDIO_* requests other than
+ * AUDIO_GET_INFO are -ENODEV with no driver, and AUDIO_START and AUDIO_WRITE
+ * return the driver's -errno. AUDIO_WRITE checks the caller's samples with
+ * `user_buffer_ok`, and the driver reads them in place. Any other request is
+ * -ENOTTY.
+ */
+static int32_t console_ioctl(uint32_t request, uintptr_t arg)
+{
+    if (request == KIOCSOUND) {
+        if (arg == 0) {
+            speaker_off();
+        } else {
+            speaker_on((uint32_t)arg);
+        }
+        return 0;
+    }
+
+    switch (request) {
+    case AUDIO_GET_INFO: {
+        struct audio_info kinfo;
+        if (arg) {
+            k_memset(&kinfo, 0, sizeof(kinfo));
+            kinfo.driver_type = audio ? audio->type : AUDIO_DRIVER_NONE;
+            kinfo.has_real_audio = audio_has_real_output() ? 1 : 0;
+            if (copy_to_user((void __user *)arg, &kinfo, sizeof(kinfo)) != 0) {
+                return -EFAULT;
+            }
+        }
+        return 0;
+    }
+
+    case AUDIO_START: {
+        struct audio_start_params kp;
+        if (!audio) {
+            return -ENODEV;
+        }
+        if (!arg) {
+            return -EFAULT;
+        }
+        if (copy_from_user(&kp, (const void __user *)arg, sizeof(kp)) != 0) {
+            return -EFAULT;
+        }
+        return audio->start(kp.sample_rate, (audio_format_t)kp.format, (int)kp.channels);
+    }
+
+    case AUDIO_STOP:
+        if (audio) {
+            audio->stop();
+            return 0;
+        }
+        return -ENODEV;
+
+    case AUDIO_WRITE: {
+        struct audio_write_params kp;
+        if (!audio) {
+            return -ENODEV;
+        }
+        if (!arg) {
+            return -EFAULT;
+        }
+        if (copy_from_user(&kp, (const void __user *)arg, sizeof(kp)) != 0) {
+            return -EFAULT;
+        }
+        if (!kp.buffer || !user_buffer_ok((uintptr_t)kp.buffer, kp.size, 0)) {
+            return -EFAULT;
+        }
+        return audio->write(kp.buffer, kp.size);
+    }
+
+    case AUDIO_SET_VOLUME:
+        if (audio) {
+            audio->set_volume((int)arg);
+            return 0;
+        }
+        return -ENODEV;
+    default:
+        break;
+    }
+    return -ENOTTY;
+}
+
+/**
  * Change framebuffer mode or palette only for the process that owns it.
  *
  * A descriptor can survive a return to text mode and another process's open.
@@ -2088,10 +2171,9 @@ static int32_t framebuffer_ioctl(uint32_t request, uintptr_t arg)
  * console and a pty slave, ahead of the slave's own operations; and the
  * `ioctl` of an object with operations of its own, such as a pipe or a pty
  * master, -ENOTTY when it has none. The framebuffer answers its FB_* requests
- * (`framebuffer_ioctl`), and the console KIOCSOUND and the AUDIO_* requests;
- * these go by the descriptor's type, so a descriptor 1 reopened onto a
- * regular file never reaches the speaker. AUDIO_WRITE checks the caller's
- * samples with `user_buffer_ok`, and the driver reads them in place.
+ * (`framebuffer_ioctl`), and the console its sound requests
+ * (`console_ioctl`); these go by the descriptor's type, so a descriptor 1
+ * reopened onto a regular file never reaches the speaker.
  */
 long sys_ioctl(isr_params_t *params)
 {
@@ -2152,70 +2234,7 @@ long sys_ioctl(isr_params_t *params)
     }
 
     if (entry->type == FD_TYPE_CONSOLE) {
-        if (request == KIOCSOUND) {
-            if (arg == 0) {
-                speaker_off();
-            } else {
-                speaker_on((uint32_t)arg);
-            }
-            return 0;
-        }
-
-        switch (request) {
-        case AUDIO_GET_INFO: {
-            struct audio_info kinfo;
-            if (arg) {
-                k_memset(&kinfo, 0, sizeof(kinfo));
-                kinfo.driver_type = audio ? audio->type : AUDIO_DRIVER_NONE;
-                kinfo.has_real_audio = audio_has_real_output() ? 1 : 0;
-                if (copy_to_user((void __user *)arg, &kinfo, sizeof(kinfo)) != 0) {
-                    return -EFAULT;
-                }
-            }
-            return 0;
-        }
-
-        case AUDIO_START: {
-            struct audio_start_params kp;
-            if (!audio || !arg) {
-                return -EFAULT;
-            }
-            if (copy_from_user(&kp, (const void __user *)arg, sizeof(kp)) != 0) {
-                return -EFAULT;
-            }
-            return audio->start(kp.sample_rate, (audio_format_t)kp.format, (int)kp.channels);
-        }
-
-        case AUDIO_STOP:
-            if (audio) {
-                audio->stop();
-                return 0;
-            }
-            return -ENODEV;
-
-        case AUDIO_WRITE: {
-            struct audio_write_params kp;
-            if (!audio || !arg) {
-                return -EFAULT;
-            }
-            if (copy_from_user(&kp, (const void __user *)arg, sizeof(kp)) != 0) {
-                return -EFAULT;
-            }
-            if (!kp.buffer || !user_buffer_ok((uintptr_t)kp.buffer, kp.size, 0)) {
-                return -EFAULT;
-            }
-            return audio->write(kp.buffer, kp.size);
-        }
-
-        case AUDIO_SET_VOLUME:
-            if (audio) {
-                audio->set_volume((int)arg);
-                return 0;
-            }
-            return -ENODEV;
-        default:
-            break;
-        }
+        return console_ioctl(request, arg);
     }
 
     return -ENOTTY;

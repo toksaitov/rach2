@@ -184,13 +184,13 @@ static void row_setup(void)
             reset_model();
             busy_after = fail < 8 ? fail : -1;
             dma_failure = fail == 8;
-            CHECK(sb16_start(11025, bits ? AUDIO_S16LE : AUDIO_U8, 1) == -1,
+            CHECK(sb16_start(11025, bits ? AUDIO_S16LE : AUDIO_U8, 1) == -EIO,
                   "failed setup returns failure");
             CHECK(!sb16_is_playing() && !dma_active, "failed setup leaves playback stopped");
             CHECK(dma_starts == (fail < 4 ? 0 : 1), "failed setup does not start dma early");
             CHECK(stopped_channel == (bits ? 5 : 1), "failed setup masks dma channel");
             CHECK(resets == 1, "failed setup resets partial dsp command");
-            CHECK(sb16_write(&byte, 1) == -1, "failed setup refuses samples");
+            CHECK(sb16_write(&byte, 1) == -EINVAL, "failed setup refuses samples");
             busy_after = -1;
             dma_failure = 0;
             writes = 0;
@@ -199,6 +199,9 @@ static void row_setup(void)
             CHECK(playing && dma_active && writes == 8, "successful setup starts hardware");
         }
     }
+    reset_model();
+    CHECK(sb16_start(4999, AUDIO_U8, 1) == -EINVAL && !sb16_is_playing(),
+          "rate below 5000 refused");
 }
 
 /** Stamp each callback fill so repeated or silent halves can be detected. */

@@ -14,6 +14,7 @@
 #include "../irq.h"
 #include "../pci.h"
 #include "../udelay.h"
+#include "../lib/kerrno.h"
 #include "../lib/kstd.h"
 #include "../lib/kstring.h"
 #include "../mm/paging.h"
@@ -2363,7 +2364,8 @@ static void hda_check_dma(int stream)
  * supported rate. Reset the stream, fill its DMA buffers, program the
  * discovered codec path and start DMA. Cache the requested and programmed
  * rates with controller and converter format readbacks for procfs.
- * Return -1 for an unsupported format or a failed stream reset, otherwise 0.
+ * Return 0, -EINVAL for a format the codec cannot play, or -EIO when the
+ * codec was never set up or the stream does not reset.
  *
  * The session's counters start again; total_bytes_written goes on. The codec
  * path is set up in order: the function group's power, the DAC, the mixer,
@@ -2397,15 +2399,17 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
     int hw_channels;
     bool hp_present = false;
 
-    if (!hda_report.ready || sample_rate == 0 || sample_rate > 384000 ||
-        (format != AUDIO_U8 && format != AUDIO_S16LE) || channels < 1 || channels > 2)
-        return -1;
+    if (!hda_report.ready)
+        return -EIO;
+    if (sample_rate == 0 || sample_rate > 384000 || (format != AUDIO_U8 && format != AUDIO_S16LE) ||
+        channels < 1 || channels > 2)
+        return -EINVAL;
     hw_format = user_callback ? format : AUDIO_S16LE;
     hw_rate = user_callback ? sample_rate : hda_select_hw_rate(sample_rate);
     hw_channels = user_callback ? channels : 2;
     fmt = hda_calc_format(hw_rate, hw_format, hw_channels);
     if (fmt == 0xFFFF)
-        return -1;
+        return -EINVAL;
 
     if (playing) {
         hda_driver.stop();
@@ -2436,7 +2440,7 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
     out_max_s16 = (int16_t)-32768;
 
     if (!hda_stream_reset(stream)) {
-        return -1;
+        return -EIO;
     }
 
     buf_addr = (uint64_t)virt_to_phys(audio_buffer);
@@ -2729,18 +2733,14 @@ static void hda_set_callback(audio_callback_t fn)
  *
  * Copies into the ring buffer, dropping any tail that does not fit (see
  * `ring_write`), and updates the byte counters. Returns the number of bytes
- * accepted, or -1 if not playing or given an empty buffer.
+ * accepted, or -EINVAL if not playing or given an empty buffer.
  */
 static int hda_write(const uint8_t *buffer, size_t size)
 {
     uint32_t written;
 
-    if (!buffer || size == 0) {
-        return -1;
-    }
-
-    if (!playing) {
-        return -1;
+    if (!buffer || size == 0 || !playing) {
+        return -EINVAL;
     }
 
     written = ring_write(buffer, (uint32_t)size);

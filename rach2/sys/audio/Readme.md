@@ -10,10 +10,10 @@ The boot calls `init_audio` (`audio.c`) once, unless the command line has `rach2
 
 ### The driver interface
 
-`audio_driver_t` has `init`, `shutdown`, `start`, `stop`, `is_playing`, `set_callback`, `write` and `set_volume`. `start(rate, format, channels)` takes a rate in samples per second, `AUDIO_U8` (unsigned 8-bit) or `AUDIO_S16LE` (signed 16-bit little-endian), and one or two channels; it stops a stream already playing and returns 0 or -1. There is one stream for the machine. A caller feeds it in one of two ways:
+`audio_driver_t` has `init`, `shutdown`, `start`, `stop`, `is_playing`, `set_callback`, `write` and `set_volume`. `start(rate, format, channels)` takes a rate in samples per second, `AUDIO_U8` (unsigned 8-bit) or `AUDIO_S16LE` (signed 16-bit little-endian), and one or two channels; it stops a stream already playing and returns 0, -EINVAL for a rate, format or channel count the device does not take, or -EIO when the device fails. There is one stream for the machine. A caller feeds it in one of two ways:
 
 * With a callback set by `set_callback` before `start`, the driver calls it to fill a whole DMA period: twice during `start`, then once for each period played. Those later calls run in interrupt context, from the device's interrupt or, on HDA, the timer tick, so the callback must not sleep. A period is 16384 bytes on HDA and 160 bytes on SB16.
-* With no callback, `write` copies bytes into the driver's ring, 8192 bytes on HDA and 1280 on SB16, and returns how many it took. That may be fewer than offered, or 0 when the ring is full, and the caller retries the rest; -1 means the stream is not playing or the buffer is empty. The interrupt side takes only whole frames, and a period it cannot fill is completed with silence.
+* With no callback, `write` copies bytes into the driver's ring, 8192 bytes on HDA and 1280 on SB16, and returns how many it took. That may be fewer than offered, or 0 when the ring is full, and the caller retries the rest; -EINVAL means the stream is not playing or the buffer is empty, and the speaker's `write` is always -EOPNOTSUPP. The interrupt side takes only whole frames, and a period it cannot fill is completed with silence.
 
 `set_volume` takes a percentage from 0 to 100; the speaker ignores it.
 

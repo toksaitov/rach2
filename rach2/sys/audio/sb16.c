@@ -11,6 +11,7 @@
 #include "../kio.h"
 #include "../serial.h"
 #include "../irq.h"
+#include "../lib/kerrno.h"
 
 #define SB16_BASE      0x220
 #define SB16_IRQ       5
@@ -454,7 +455,8 @@ static void sb16_shutdown(void)
  * The DSP 4.xx sample-rate command must precede the transfer command, so the
  * rate is programmed before sb16_start_auto_init() issues 0xC6/0xB6.
  *
- * @return 0 on success, -1 for an unsupported rate or failed setup.
+ * @return 0 on success, -EINVAL for a rate outside 5000 through 44100, or
+ * -EIO when the DSP or DMA setup fails.
  */
 static int sb16_start(uint32_t sample_rate, audio_format_t format, int channels)
 {
@@ -469,7 +471,7 @@ static int sb16_start(uint32_t sample_rate, audio_format_t format, int channels)
 
     if (sample_rate < 5000 || sample_rate > 44100) {
         klog(KLOG_WARN, "sb16", "refused: sample rate %d", sample_rate);
-        return -1;
+        return -EINVAL;
     }
 
     /* DSP 4.xx sample-rate command must precede the transfer command. */
@@ -503,7 +505,7 @@ fail:
     playing = false;
     dma_stop(is_16bit ? SB16_DMA_16BIT : SB16_DMA_8BIT);
     dsp_reset();
-    return -1;
+    return -EIO;
 }
 
 /**
@@ -557,18 +559,15 @@ static void sb16_set_callback(audio_callback_t fn)
  * as DMA halves need refilling, decoupling Doom's frame-paced writes from the
  * fixed DMA rate. Overflow beyond the ring's free space is dropped.
  *
- * @return the number of bytes queued, or -1 if not playing or given no data.
+ * @return the number of bytes queued, or -EINVAL if not playing or given no
+ * data.
  */
 static int sb16_write(const uint8_t *buffer, size_t size)
 {
     uint32_t written;
 
-    if (!buffer || size == 0) {
-        return -1;
-    }
-
-    if (!playing) {
-        return -1;
+    if (!buffer || size == 0 || !playing) {
+        return -EINVAL;
     }
 
     written = ring_write(buffer, (uint32_t)size);

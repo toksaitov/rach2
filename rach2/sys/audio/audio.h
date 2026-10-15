@@ -49,7 +49,9 @@ typedef struct audio_driver {
     /*
      * Start playback. `sample_rate` is samples per second (e.g. 11025,
      * 22050, 44100); `format` is AUDIO_U8 or AUDIO_S16LE; `channels` is
-     * 1 (mono) or 2 (stereo). Returns 0 on success, -1 on failure.
+     * 1 (mono) or 2 (stereo). Returns 0 on success, -EINVAL for a rate,
+     * format or channel count the device does not take, or -EIO when the
+     * device fails to start.
      */
     int (*start)(uint32_t sample_rate, audio_format_t format, int channels);
 
@@ -65,7 +67,8 @@ typedef struct audio_driver {
     /*
      * Queue samples for playback, an alternative to callback-driven
      * playback. Returns the bytes queued, fewer than `size` when the queue is
-     * full (the rest is dropped), or -1 when not playing or given no data.
+     * full (the rest is dropped), -EINVAL when not playing or given no data,
+     * or -EOPNOTSUPP from a driver that cannot play samples.
      */
     int (*write)(const uint8_t *buffer, size_t size);
 

@@ -346,7 +346,7 @@ static void row_caps(void)
     hda_stop();
     user_callback = callback;
     before = verbs;
-    check(hda_start(32000, AUDIO_S16LE, 2) == -1 && !playing && verbs == before,
+    check(hda_start(32000, AUDIO_S16LE, 2) == -EINVAL && !playing && verbs == before,
           "unsupported callback refused before programming");
     reset_model();
     params[2][HDA_PARAM_AUDIO_CAPS] |= 1u << 4;
@@ -357,22 +357,22 @@ static void row_caps(void)
           "widget overrides afg");
     hda_stop();
     user_callback = callback;
-    check(hda_start(32000, AUDIO_U8, 1) == -1, "unsupported width refused");
+    check(hda_start(32000, AUDIO_U8, 1) == -EINVAL, "unsupported width refused");
     params[2][0x0A] = 0;
     hda_capture_report();
     user_callback = NULL;
-    check(hda_start(48000, AUDIO_S16LE, 2) == -1, "empty mask refused");
+    check(hda_start(48000, AUDIO_S16LE, 2) == -EINVAL, "empty mask refused");
     params[2][0x0A] = 0x30040;
     params[2][0x0B] = 0;
     hda_capture_report();
-    check(hda_start(48000, AUDIO_S16LE, 2) == -1, "non-pcm refused");
+    check(hda_start(48000, AUDIO_S16LE, 2) == -EINVAL, "non-pcm refused");
     params[2][0x0B] = 1;
     hp_dac_nid = 3;
     params[3][HDA_PARAM_AUDIO_CAPS] = 0x11;
     params[3][0x0A] = 0x30100;
     params[3][0x0B] = 1;
     hda_capture_report();
-    check(hda_start(48000, AUDIO_S16LE, 2) == -1, "disjoint dacs refused");
+    check(hda_start(48000, AUDIO_S16LE, 2) == -EINVAL, "disjoint dacs refused");
     params[3][0x0A] |= 0x40;
     hda_capture_report();
     check(hda_start(96000, AUDIO_S16LE, 2) == 0 && current_hw_sample_rate == 48000,
