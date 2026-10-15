@@ -32,7 +32,11 @@ jobs:
       - id: head
         env:
           GH_TOKEN: ${{ github.token }}
-        run: echo "sha=$(gh api repos/${{ github.repository }}/commits/master --jq .sha)" >> "$GITHUB_OUTPUT"
+          REPO: ${{ github.repository }}
+        run: |
+          sha=$(gh api "repos/$REPO/commits/master" --jq .sha)
+          [ -n "$sha" ] || { echo "night: head: no commit for master" >&2; exit 1; }
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@v5
         with:
@@ -67,10 +71,11 @@ jobs:
           retention-days: 14
 
       - name: report
-        if: always()
+        if: always() && steps.head.outcome == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: sh tools/ci/report.sh night ${{ steps.head.outputs.sha }} "$RUNNER_TEMP/results"
+          SHA: ${{ steps.head.outputs.sha }}
+        run: sh tools/ci/report.sh night "$SHA" "$RUNNER_TEMP/results"
 
       - name: result
         run: |
