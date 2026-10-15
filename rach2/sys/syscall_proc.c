@@ -3775,9 +3775,9 @@ long sys_rt_sigsuspend(isr_params_t *params)
  * new one is stored. Installing SIG_IGN drops any instance of the signal
  * already pending, the process's and each thread's, as Linux does, with
  * interrupts off so that a signal posted from an interrupt cannot change the
- * pending sets in the middle. -EINVAL for a signal out of range, another
- * sigsetsize, or SIGKILL and SIGSTOP, whose action cannot be read or
- * changed; -EFAULT.
+ * pending sets in the middle. A query of SIGKILL or SIGSTOP reports SIG_DFL,
+ * as in Linux. -EINVAL for a signal out of range, another sigsetsize, or a
+ * new action for SIGKILL or SIGSTOP, which writes no old action; -EFAULT.
  */
 long sys_rt_sigaction(isr_params_t *params)
 {
@@ -3793,7 +3793,7 @@ long sys_rt_sigaction(isr_params_t *params)
     if (signo < 1 || signo > KSIG_MAX || setsize != 8) {
         return -EINVAL;
     }
-    if (signo == SIGKILL || signo == SIGSTOP) {
+    if (uact && (signo == SIGKILL || signo == SIGSTOP)) {
         return -EINVAL; /* cannot be caught or ignored */
     }
     if (uold) {

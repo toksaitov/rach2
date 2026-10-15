@@ -43,11 +43,13 @@ is non-null, it receives the previous disposition.
 A null
 .Fa act
 leaves the disposition unchanged.
-The kernel rejects even a query for
+A new action for
 .Dv SIGKILL
 or
-.Dv SIGSTOP ;
-neither can be caught, ignored, or blocked.
+.Dv SIGSTOP
+is rejected, since neither can be caught, ignored, or blocked;
+a query of either succeeds and reports
+.Dv SIG_DFL .
 .Pp
 The kernel accepts signal numbers 1 through 64.
 Numbers 1 through 31 have their Linux meanings, which are the same on
@@ -580,11 +582,12 @@ or
 .Fn sigsuspend
 ended because a signal could act.
 .It Bq Er EINVAL
-The signal is outside 1 through 64, is
+The signal is outside 1 through 64 or is reserved by musl;
+.Fa act
+is given for
 .Dv SIGKILL
 or
-.Dv SIGSTOP ,
-or is reserved by musl;
+.Dv SIGSTOP ;
 a kernel set size is not 8, or more than 8 for
 .Nm rt_sigpending ;
 .Fa how

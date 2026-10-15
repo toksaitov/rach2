@@ -24,7 +24,9 @@
  *     judged by what the kernel reports and counts: a blocked alarm that does
  *     not end a sleep and runs its handler once unblocked, an interval timer
  *     that ends three sleeps, a child with no timer, and the timers the
- *     kernel does not keep refused.
+ *     kernel does not keep refused;
+ *   * the actions of SIGKILL and SIGSTOP, which a query reads as SIG_DFL and
+ *     a new action may not change.
  *
  * Prints "SIGPROBE OK" and exits 0 when all pass, and "SIGPROBE FAIL" with
  * the count of failed checks as its status otherwise.
@@ -36,9 +38,11 @@
 
 #define O_RDONLY 0
 
+#define SIGKILL 9
 #define SIGUSR1 10
 #define SIGALRM 14
 #define SIGTERM 15
+#define SIGSTOP 19
 
 #define EINTR  4
 #define EINVAL 22
@@ -49,6 +53,8 @@
 #define SA_SIGINFO   0x00000004u
 #define SA_RESTORER  0x04000000u
 #define SA_RESETHAND 0x80000000u
+
+#define SIG_IGN 1
 
 #define SIG_BLOCK   0
 #define SIG_UNBLOCK 1
@@ -378,6 +384,48 @@ static void timer_rows(void)
     check(syscall1(SYS_ALARM, 0) == 0 && itimer_disarmed(), "and alarm(0) leaves none");
 }
 
+/* SIG_IGN as the kernel reads a k_sigaction: the handler, the flags, the
+ * restorer and the 8-byte mask, which take five words on i386 and four of
+ * the five on x86-64. */
+static const unsigned long ignore[5] = {SIG_IGN, 0, 0, 0, 0};
+
+/** Set every byte of `ka` to 0xff. */
+static void fill_ones(struct k_sigaction *ka)
+{
+    volatile unsigned char *b = (volatile unsigned char *)ka;
+    size_t i;
+
+    for (i = 0; i < sizeof(*ka); i++) {
+        b[i] = 0xff;
+    }
+}
+
+/**
+ * The actions of SIGKILL and SIGSTOP. A query, with no new action, succeeds
+ * and reads SIG_DFL into a buffer filled with ones beforehand. A new action
+ * of SIG_IGN is refused with -EINVAL, writes no old action and changes none,
+ * so a query after it still reads SIG_DFL.
+ */
+static void uncatchable_rows(void)
+{
+    static const int sigs[2] = {SIGKILL, SIGSTOP};
+    struct k_sigaction old;
+    int i;
+
+    for (i = 0; i < 2; i++) {
+        fill_ones(&old);
+        check(syscall4(SYS_RT_SIGACTION, sigs[i], 0, (long)&old, 8) == 0 && old.handler == 0 &&
+                  old.flags == 0,
+              "a query of SIGKILL or SIGSTOP reads SIG_DFL");
+        fill_ones(&old);
+        check(syscall4(SYS_RT_SIGACTION, sigs[i], (long)&ignore, (long)&old, 8) == -EINVAL &&
+                  old.flags == ~0ul,
+              "SIG_IGN for SIGKILL or SIGSTOP is refused and writes no old action");
+        check(syscall4(SYS_RT_SIGACTION, sigs[i], 0, (long)&old, 8) == 0 && old.handler == 0,
+              "and leaves the action SIG_DFL");
+    }
+}
+
 /**
  * The probe: the rows of the opening comment in order, each counted by
  * `check`.
@@ -473,6 +521,9 @@ PROBE_START void _start(void)
 
     /* 7. The real-time interval timer. */
     timer_rows();
+
+    /* 8. SIGKILL and SIGSTOP. */
+    uncatchable_rows();
 
     if (fails == 0) {
         puts("SIGPROBE OK");
