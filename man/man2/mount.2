@@ -26,15 +26,18 @@ points to a null-terminated option string.
 A null
 .Fa data
 is treated as an empty string.
-Both calls require effective user ID 0.
+Both calls require effective user ID 0, except as
+.Er EPERM
+under ERRORS says.
 .Pp
 The supported types are
 .Ql vfat ,
 .Ql exfat ,
 .Ql ext2 ,
 .Ql krffs ,
+.Ql tmpfs ,
 and
-.Ql tmpfs .
+.Ql mqueue .
 .Dv MS_RDONLY ,
 .Dv MS_NOSUID ,
 .Dv MS_NOEXEC ,
@@ -77,10 +80,10 @@ to the file system, of whose options tmpfs takes
 .Ql size= .
 On ext2 it makes the mount read-only, synced and marked clean as an
 unmount leaves it, or writable, checked as a writable mount is; tmpfs
-changes between the two at once; KRFFS, FAT32 and exFAT refuse a change
+changes between the two at once; every other type refuses a change
 between them with
 .Er EINVAL
-and take one of the other flags.
+and takes one of the other flags.
 A mount is not made read-only while a descriptor is open on it for
 writing, or on ext2 while a file removed from it is open,
 .Er EBUSY ,
@@ -200,6 +203,14 @@ and one smaller than the pages the files hold fails with
 as on Linux.
 A file in memory reaches 16 TiB less a page on both architectures, as on
 Linux on i386; Linux on x86-64 allows more.
+.Pp
+For
+.Ql mqueue ,
+the source is any string, recorded as given, nothing is claimed, and the
+options are ignored.
+The mount lists the queues of the caller's IPC namespace; see
+.Xr mq_open 2 .
+.Pp
 For every other type, the source must name a published block device
 under
 .Pa /dev :
@@ -214,7 +225,9 @@ A read-only source makes the mount read-only regardless of
 The handler checks for a current process and privilege before copying
 any strings.
 It copies the source, then the target, makes the target absolute,
-then copies the type and options.
+then copies the type, refuses a type the caller may not mount with
+.Er EPERM ,
+and copies the options.
 The source, target, type, and options must fit buffers of 64, 4096, 16,
 and 128 bytes respectively, including the terminating null byte.
 A relative target is joined to the current working directory, and an
@@ -235,29 +248,31 @@ Reject unsupported flag bits with
 .It
 Resolve and hold the target, returning any path-resolution error.
 .It
-Require the absolute target path to fit 63 bytes, excluding the null
-byte, or return
-.Er ENAMETOOLONG .
-.It
-Reject the root directory and a directory of the synthetic
-.Pa /dev
-or
-.Pa /proc
-themselves with
-.Er EINVAL ;
-a directory of the tmpfs
-.Pa /dev/shm
-below them is a target like any other.
-A mount of type
-.Ql proc
+Finish a mount of type
+.Ql proc :
 over a directory of
 .Pa /proc
-succeeds and changes nothing, since every
+it succeeds and changes nothing, since every
 .Pa /proc
 shows the processes of its reader's PID namespace, as
 .Ql unshare --mount-proc
 would have it; one anywhere else fails with
 .Er ENODEV .
+.It
+Require the absolute target path to fit 63 bytes, excluding the null
+byte, or return
+.Er ENAMETOOLONG .
+.It
+Reject the root directory and a directory of the synthetic
+.Pa /dev ,
+.Pa /proc
+or
+.Pa /sys
+themselves with
+.Er EINVAL ;
+a directory of the tmpfs
+.Pa /dev/shm
+below them is a target like any other.
 .It
 Reject the root of an already placed mount with
 .Er EBUSY .
@@ -287,18 +302,50 @@ The kernel reserves a slot before running the file-system constructor,
 holds the covered directory, and keeps a reference to its parent mount.
 The mount becomes active only after the constructor succeeds.
 A failure releases the claim and references acquired by the call.
-The kernel mounts a tmpfs at
-.Pa /dev/shm
-at boot, with
+.Pp
+The kernel makes seven mounts at boot, and they are permanent: the root;
+the synthetic
+.Pa /dev
+and
+.Pa /proc ;
+a tmpfs at
+.Pa /dev/shm ,
+with
 .Dv MS_NOSUID
 and
-.Dv MS_NODEV .
+.Dv MS_NODEV ;
+the tmpfs that holds the files of
+.Xr memfd_create 2 ,
+which has no path;
+the synthetic
+.Pa /sys ,
+with
+.Dv MS_RDONLY ,
+.Dv MS_NOSUID ,
+.Dv MS_NODEV
+and
+.Dv MS_NOEXEC ;
+and an
+.Ql mqueue
+mount at
+.Pa /dev/mqueue ,
+with
+.Dv MS_NOSUID ,
+.Dv MS_NODEV
+and
+.Dv MS_NOEXEC ,
+which lists the queues of the first IPC namespace.
+On Linux the init system makes most of these, and each it makes may be
+unmounted.
 .Pa /dev
 is synthetic and has no directory to cover, so
 .Pa /dev/shm
-stands in its root directory by name, as
+and
+.Pa /dev/mqueue
+stand in its root directory by name, as
 .Pa /dev
-stands in the root's; a mount may be placed on a directory inside it.
+stands in the root's; a mount may be placed on a directory inside
+.Pa /dev/shm .
 .Pp
 An active mount's source, target and type appear in
 .Pa /proc/mounts
@@ -316,8 +363,8 @@ and
 .Ql relatime
 are set; the silent flag and the file system's own options are not
 shown.
-KRFFS and ext2 ignore the option string; FAT32, exFAT and tmpfs parse
-it.
+KRFFS, ext2 and mqueue ignore the option string; FAT32, exFAT and tmpfs
+parse it.
 .Ss Dirty-volume checks
 Before a writable mount, FAT32 checks a dirty volume with limits of
 32 directory levels including the root and 16 surplus tails.
@@ -356,12 +403,7 @@ must be zero;
 .Dv UMOUNT_NOFOLLOW ,
 and all other nonzero values return
 .Er EINVAL .
-The root,
-.Pa /dev ,
-.Pa /proc ,
-and
-.Pa /dev/shm
-are permanent and return
+The seven permanent mounts return
 .Er EBUSY .
 .Pp
 The mount stops accepting new operations and waits for operations
@@ -410,7 +452,9 @@ The kernel interface returns the negative error number.
 .Bl -tag -width /proc/mounts
 .It Pa /proc/mounts
 Active mounts with the flags listed above.
-Mounts whose devices have been removed are omitted.
+Mounts whose devices have been removed, and the tmpfs of
+.Xr memfd_create 2 ,
+are omitted.
 .El
 .Sh ERRORS
 .Bl -tag -width "[ENAMETOOLONG]"
@@ -443,10 +487,20 @@ A copied string or joined path exceeds its buffer, the mount target
 exceeds 63 bytes, or a path component or symbolic-link expansion is
 too long.
 .It Bq Er ENODEV
-The file-system type is unknown.
+The file-system type is unknown, or a mount of type
+.Ql proc
+is outside
+.Pa /proc .
+The type
+.Ql sysfs
+is unknown to
+.Fn mount :
+the kernel makes the one
+.Pa /sys
+at boot.
 .It Bq Er ENOENT
-A target component does not exist, the source device is not published,
-or the selected loop device is unattached.
+A target component does not exist, or the source device is not
+published.
 .It Bq Er ENOMEM
 Memory for path resolution, a mount record, or file-system state is
 unavailable, or the sector-claim table is full.
@@ -457,14 +511,22 @@ unmount target ends in a slash or in
 or
 .Pa \&..
 and reaches something else.
+.It Bq Er ENXIO
+The source is a loop device with no file attached.
 .It Bq Er EPERM
 The caller's effective user ID is not 0, and it is not privileged over its
 own mount namespace, or is and mounts a type other than
 .Ql proc ,
-.Ql sysfs
-or
-.Ql tmpfs ,
+.Ql sysfs ,
+.Ql tmpfs
+and
+.Ql mqueue ,
 or remounts.
+A caller privileged over its own mount namespace may also make a bind,
+change propagation and unmount; its mount of
+.Ql sysfs
+passes this check and fails with
+.Er ENODEV .
 .It Bq Er EROFS
 An exFAT unmount could not write its metadata after an earlier write
 failure.
@@ -472,7 +534,9 @@ failure.
 There is no current process.
 .El
 .Sh SEE ALSO
+.Xr memfd_create 2 ,
 .Xr mkdir 2 ,
+.Xr mq_open 2 ,
 .Xr open 2 ,
 .Xr loop 4 ,
 .Xr proc 5 ,

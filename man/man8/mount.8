@@ -24,23 +24,39 @@ With no arguments,
 .Nm mount
 lists mounts from
 .Pa /proc/mounts .
-Mounting requires effective user ID 0.
+Mounting requires effective user ID 0, except as
+.Er EPERM
+in
+.Xr mount 2
+says.
 .Pp
 The kernel accepts the types
 .Ql vfat ,
 .Ql exfat ,
 .Ql ext2 ,
+.Ql krffs ,
+.Ql tmpfs
 and
-.Ql krffs .
-The kernel places the synthetic
-.Ql devfs
+.Ql mqueue .
+The kernel places the root,
+.Pa /dev ,
+.Pa /proc ,
+.Pa /dev/shm ,
+.Pa /sys
 and
-.Ql proc
-mounts itself.
+.Pa /dev/mqueue
+itself, and they cannot be unmounted, as
+.Xr mount 2
+describes.
 The target must be a directory other than the root directory or an
 existing mount point.
 .Pp
-The source can be a partition node
+The source of a
+.Ql tmpfs
+or
+.Ql mqueue
+mount is any string.
+For the other types it can be a partition node
 .Pa /dev/diskNpM ,
 a whole disk
 .Pa /dev/diskN

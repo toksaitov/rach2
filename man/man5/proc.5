@@ -372,9 +372,13 @@ and
 .Pa /proc
 mounts, the tmpfs at
 .Pa /dev/shm ,
-and the synthetic
+the synthetic
 .Pa /sys ,
-read-only, precede mounts made by programs.
+read-only, and the
+.Ql mqueue
+mount at
+.Pa /dev/mqueue
+precede mounts made by programs.
 The source, target, type, and options describe the mounted file system.
 Options are comma-separated:
 .Ql ro
