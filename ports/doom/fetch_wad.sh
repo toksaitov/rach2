@@ -1,26 +1,26 @@
 #!/usr/bin/env sh
 #
-# fetch_wad.sh: check that the Doom game data (an IWAD) the Doom capstone needs
-# is in place, and verify it against a known-good hash.
+# fetch_wad.sh: check that Doom's game data, an IWAD, is at
+# ports/doom/doom1.wad, and say whether it is the shareware Doom 1.9
+# doom1.wad, by its SHA-256 digest. It downloads nothing, and exits with
+# status 1 when there is no file.
 #
-# The WAD is operator-supplied: it is game data, not built, and never committed
-# (shareware or commercial content, git-ignored via ports/doom/.gitignore). So a
-# fresh clone has the doom binary but no game data, and doom then starts and
-# exits with status 255 after "IWAD file '/demo/doom1.wad' not found!". Put a
-# Doom IWAD at ports/doom/doom1.wad; the os-real manifest stages that file to
-# /demo/doom1.wad in the image.
+# The tree has no game data, and ports/doom/.gitignore keeps a WAD out of
+# Git. Without one the game exits with status 255 after "IWAD file
+# '/demo/doom1.wad' not found!". The manifests that stage the game stage
+# this file as /demo/doom1.wad.
 #
-# Usage: ./fetch_wad.sh   (run it before `make os-real-image` on a fresh clone)
+# Usage: sh ports/doom/fetch_wad.sh   (before make builds the images)
 #
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR" || exit 1
 
-# The id Software Doom shareware WAD (v1.9) is freely redistributable; this is
-# its canonical sha256. Any other IWAD the port recognizes (retail doom.wad, the
-# BSD-licensed freedoom1.wad, and the rest in src/d_iwad.c) also works, placed
-# at this same path; it is simply not hash-pinned here.
+# The SHA-256 of the shareware Doom 1.9 doom1.wad, which id Software lets
+# anyone copy. Another IWAD that src/d_iwad.c knows, such as the retail
+# doom.wad or Freedoom's freedoom1.wad, also plays when saved at this path,
+# and the script prints its digest.
 WAD="doom1.wad"
 SHAREWARE_SHA256="1d7d43be501e67d927e415e0b8f3e29c3bf33075e859721816f652a526cac771"
 

@@ -1,4 +1,4 @@
-# Doom game data (WAD): supplied by the operator, not built, never committed
-# (shareware or commercial data). The Doom binary and every build product go out of
-# tree to build/ports/doom/ (mk/build.mk), covered by the repo-root build/ ignore.
+# The game data, a WAD, which a person supplies and the tree does not have.
+# The build's output is under the top-level build/, which the top-level
+# .gitignore covers.
 *.wad

@@ -1,10 +1,9 @@
-# Doom for Rach2 - Makefile
-#
-# Builds Doom using doomgeneric for the Rach2 kernel: a freestanding static
-# executable of the architecture mk/arch.mk names, ELF32 i386 into
-# build/ports/doom/ or ELF64 x86-64 into build/x86_64/ports/doom/.
+# Makefile: Doom for Rach2, the engine of src/ and the platform layer beside
+# it, built as one freestanding static program of the architecture
+# mk/arch.mk names: ELF32 i386 into build/ports/doom/ or ELF64 x86-64 into
+# build/x86_64/ports/doom/.
 
-# Shared cross toolchain + automatic header-dependency tracking (see ../../mk/).
+# The cross toolchain, the header dependencies and the output tree (../../mk/).
 include ../../mk/toolchain.mk
 include ../../mk/deps.mk
 TOP = ../..
@@ -12,21 +11,21 @@ COMPONENT = ports/doom
 include ../../mk/build.mk
 CC := $(CROSS_CC)
 
-# Doomgeneric source directory (self-contained in src/)
+# The engine's sources, doomgeneric's.
 DOOMGENERIC_DIR = src
 
 # Compiler flags
 CFLAGS = $(ARCH_CFLAGS) -nostdlib -static -ffreestanding -Wl,-Ttext=$(ARCH_USER_TEXT) -Wl,--build-id=none $(ARCH_LDFLAGS)
-# Our stub headers MUST come first to override system headers
+# The headers of include/ come first, in place of a C library's.
 CFLAGS += -I./include -I$(DOOMGENERIC_DIR) -I.
 CFLAGS += -DNORMALUNIX -DCMAP256 -DDOOMGENERIC_RESX=320 -DDOOMGENERIC_RESY=200
 CFLAGS += -Os -fomit-frame-pointer -fno-strict-aliasing
 CFLAGS += -Wno-unused-parameter -Wno-sign-compare -Wno-implicit-function-declaration
-# Use C99 to avoid issues with bool/true/false as keywords in newer C standards
+# C99, since C23 makes keywords of false and true, which doomtype.h defines.
 CFLAGS += -std=gnu99
-# Enable PC speaker sound support
+# The sound and music modules of i_pcsound.c.
 CFLAGS += -DFEATURE_SOUND
-# Disable features we don't support
+# Two macros that no source of the port reads.
 CFLAGS += -DSNDSERV=0 -D_DEFAULT_SOURCE
 # Automatic header-dependency tracking (see ../../mk/deps.mk).
 CFLAGS += $(DEPFLAGS)
@@ -34,7 +33,7 @@ CFLAGS += $(DEPFLAGS)
 # Output binary (under $(BUILD) = build/ports/doom/, from mk/build.mk)
 OUTPUT = $(BUILD)/doom
 
-# Doom source files (from doomgeneric)
+# The engine's sources: every .c file of src/.
 DOOM_SRC = \
 	dummy.c am_map.c doomdef.c doomstat.c dstrings.c d_event.c d_items.c \
 	d_iwad.c d_loop.c d_main.c d_mode.c d_net.c f_finale.c f_wipe.c g_game.c \
@@ -52,7 +51,7 @@ DOOM_SRC = \
 # Object files (under $(BUILD), mirroring the source tree)
 DOOM_OBJS = $(addprefix $(BUILD)/, $(DOOM_SRC:.c=.o))
 
-# Local source files
+# The platform layer, the sound modules and the music player.
 LOCAL_SRC = doomgeneric_rach2.c i_pcsound.c opl3.c mus2mid.c midifile.c i_oplmusic.c
 LOCAL_OBJS = $(addprefix $(BUILD)/, $(LOCAL_SRC:.c=.o))
 
@@ -63,7 +62,7 @@ OBJS = $(BUILD)/crt0.o $(LOCAL_OBJS) $(DOOM_OBJS)
 
 all: $(OUTPUT)
 
-# Build output
+# Link
 $(OUTPUT): $(OBJS)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -o $@ $^
@@ -78,7 +77,7 @@ $(BUILD)/%.o: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-# Compile doom sources from doomgeneric directory
+# Compile the engine's sources
 $(BUILD)/%.o: $(DOOMGENERIC_DIR)/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c -o $@ $<
