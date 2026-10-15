@@ -1,5 +1,6 @@
 /**
- * The /proc snapshot: taken once at open, bounded, and served whole.
+ * procprobe: the /proc snapshot, taken once at open and served whole, and the
+ * files of /proc and /sys in the forms their readers parse.
  *
  * A /proc file here is generated into a buffer when it is opened and read back
  * from there, so every read of one descriptor sees one moment. That is worth a
@@ -13,28 +14,28 @@
  * asked at that moment could answer nothing; a snapshot answers what it took.
  * Reading twice with nothing changing would prove neither.
  *
- * The rest is the bound. Each file declares a worst case and a text that
- * exceeds it is refused rather than served short, so every file this image can
- * open must come back whole: `/proc/cmdline` and `/proc/net/dev` end in the
- * newline their last line has, and `/proc/self/stat` ends in one after a
- * closing parenthesis it must also carry, which a truncated line would lack.
- * And two files are two inodes: `/proc/loop` and `/proc/interrupts` once
- * shared a number, and a program that compares files by identity would have
- * called them one. Both are asked twice, by path and through an open
- * descriptor, because the two answers come from different places in the
- * kernel and only the second saw the number they shared.
+ * The rest is completeness. A text is built in the heap and grows as it is
+ * written, and one the heap cannot hold is refused whole rather than served
+ * short, so every file this image can open must come back whole:
+ * `/proc/cmdline` and `/proc/net/dev` end in the newline their last line has,
+ * and `/proc/self/stat` ends in one after a closing parenthesis it must also
+ * have, which a truncated line would lack. And two files are two inodes, or
+ * a program that compares files by identity would call them one:
+ * `/proc/loop` and `/proc/interrupts` are each asked twice, by path and
+ * through an open descriptor, because the two answers come from different
+ * places in the kernel.
  *
  * `procprobe mount` reads the root's line out of /proc/mounts, prints it, and
  * stops there. That line is the one thing here that depends on how the machine
  * came up, so the suite boots three ways for it; the rest of this probe does
  * not differ between those boots and runs once, in the shared probe boot.
  *
- * Prints "PROCPROBE OK" and exits 0. Freestanding; direct system calls
- * (probe.h).
+ * Prints "PROCPROBE OK" and exits 0 when every check passes, and
+ * "PROCPROBE FAIL" with the count of failed checks as its status otherwise.
  *
- * Needs: the machine to itself. The rows over `/proc/net/tcp` and the
- * connection pool count what the whole machine has open, so a login over
- * SSH, or anything else holding a socket, fails them on its own presence.
+ * Needs: the machine to itself. The rows over `/proc/net/tcp` count what the
+ * whole machine has open, so a login over SSH, or anything else holding a
+ * socket, fails them on its own presence.
  */
 
 #include "probe.h"
@@ -57,12 +58,14 @@
 #define ECONNREFUSED 111
 #define SIGKILL      9
 
+/** End the process with `status`; it does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, status);
     __builtin_unreachable();
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -72,6 +75,7 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     syscall3(SYS_WRITE, STDOUT_FILENO, (long)s, (int)strlen(s));
@@ -98,6 +102,7 @@ static void say_number(const char *label, long v)
     syscall3(SYS_WRITE, STDOUT_FILENO, (long)(digits + i), (int)sizeof(digits) - i);
 }
 
+/** Count a failure and print `msg` when `cond` is false. */
 static void check(int cond, const char *msg)
 {
     if (!cond) {
@@ -108,7 +113,8 @@ static void check(int cond, const char *msg)
 }
 
 /**
- * Read a file to its end, and say how long it was.
+ * Read the file `name` to its end into `out`, at most `cap` - 1 bytes, and
+ * end it with a NUL: the count read, or the open's negated errno.
  *
  * Reads until the file reports the end rather than once, since a snapshot is
  * served in whatever pieces the caller asks for and a single short read would
@@ -160,7 +166,7 @@ static void stat_path_of(char *dst, int pid)
     dst[i] = '\0';
 }
 
-/** How many newline-terminated lines `buf` holds. */
+/** How many newline-terminated lines the `n` bytes at `b` have. */
 static int lines_in(const char *b, int n)
 {
     int i, lines = 0;
@@ -173,7 +179,7 @@ static int lines_in(const char *b, int n)
     return lines;
 }
 
-/** How many blank-separated fields the text holds. */
+/** How many blank-separated fields the text has. */
 static int fields_in(const char *b, int n)
 {
     int i, fields = 0, in_field = 0;
@@ -318,7 +324,8 @@ struct timespec_probe {
     long tv_nsec;
 };
 
-/** Sleep `ms`, which parks the processor: the ticks it costs are idle ones. */
+/** Sleep `ms` milliseconds, which leaves the processor idle: the ticks it
+ * costs are idle ones. */
 static void nap(long ms)
 {
     struct timespec_probe req;
@@ -328,7 +335,7 @@ static void nap(long ms)
     syscall3(SYS_NANOSLEEP, (long)&req, 0, 0);
 }
 
-/** Burn `ms` of wall time in user code, which parks nothing.
+/** Spin for `ms` of wall time in user code, which keeps the processor busy.
  *
  * Bounded by the monotonic clock rather than by an iteration count, so the
  * two halves of the idle test cost the same wall time on any host, and by a
@@ -370,7 +377,7 @@ static int processors(void)
  * Busy ticks, read out of /proc/stat's cpu line.
  *
  * The line is `cpu user nice system idle ...`, and a busy tick is charged to
- * user or to system, so the busy figure is the sum of the first three numbers.
+ * user, nice or system, so the busy figure is the sum of the first three.
  * Read from a different file than the idle count on purpose: the two must
  * agree, and they cannot be checked against each other if one is derived from
  * the other.
@@ -400,7 +407,8 @@ static int busy_ticks_now(void)
     return -1;
 }
 
-/** Total and idle ticks, read out of /proc/uptime's two second counts. */
+/** Total and idle ticks, read out of /proc/uptime's two second counts into
+ * `*total` and `*idle`, each -1 when it cannot be read. */
 static void ticks_now(int *total, int *idle)
 {
     char t[64];
@@ -464,9 +472,9 @@ static void fd_path_of(char *dst, int fd)
     dst[i] = '\0';
 }
 
-/* Whether the last row of /proc/net/tcp has the retrnsmt column as eight hex
-   digits after the timer field and every one of the stack's own fields
-   with a digit after its name. */
+/** Whether the last row of /proc/net/tcp has the retrnsmt column as eight hex
+ * digits after the timer field and every one of the stack's own fields
+ * with a digit after its name. */
 static int last_row_has_fields(const char *text, int n)
 {
     int i, start = 0, hex = 0;
@@ -613,11 +621,11 @@ static void count_row_owners(const char *b, int n, int want, int *matching, int 
     }
 }
 
-/** Whether every row's inode is nonzero. */
 /**
- * The whitespace-separated field at `idx` of the first line holding `needle`,
- * copied into `out` and NUL-terminated. Returns its length, or -1 if the line
- * is not there or has no such field.
+ * The whitespace-separated field at `idx` of the first line that contains
+ * `needle`, copied into `out` and NUL-terminated. Returns its length, or -1
+ * if the line is not there or has no such field, or the field does not fit
+ * in `cap` bytes.
  */
 static int line_field(const char *b, int n, const char *needle, int idx, char *out, int cap)
 {
@@ -661,6 +669,7 @@ static int line_field(const char *b, int n, const char *needle, int idx, char *o
     return -1;
 }
 
+/** Whether every row's inode is nonzero. */
 static int no_row_has_zero_inode(const char *b, int n)
 {
     const char *tail = " 1 0000000000000000 100 0 0 10 0 wnd=";
@@ -750,9 +759,7 @@ static int listen_on(int fd, int port, unsigned char *sa, unsigned long *args)
     return 0;
 }
 
-/* The connection pool is sixteen blocks and a process may hold sixteen
-   descriptors, three of them already standard, so filling the pool takes two
-   processes. */
+/* The listeners `pool_full_rows` opens, eight in a child and the rest here. */
 #define MAX_TCP_ROWS 16
 #define FILL_CHILD   8
 #define FILL_HERE    (MAX_TCP_ROWS - FILL_CHILD)
@@ -760,7 +767,8 @@ static int listen_on(int fd, int port, unsigned char *sa, unsigned long *args)
 static char buf[4096];
 static char path[32];
 
-/* The one verdict, so the mount-only run and the whole run report alike. */
+/** Print the verdict and exit with the count of failures, so the mount-only
+ * run and the whole run report alike. */
 static void done(void)
 {
     if (fails == 0) {
@@ -771,10 +779,10 @@ static void done(void)
     sys_exit(fails);
 }
 
-/* /sys: the host bridge every machine here has at 00:00.0, its link in the
-   bus's list leading where Linux's does, and its uevent with the variables
-   lspci reads; the mount table listing /sys read-only; and mountinfo with
-   each mount's id, parent and options, and the device stat gives. */
+/** /sys: the host bridge every machine here has at 00:00.0, its link in the
+ * bus's list leading where Linux's does, and its uevent with the variables
+ * lspci reads; the mount table listing /sys read-only; and mountinfo with
+ * each mount's id, parent and options, and the device stat gives. */
 static void sys_rows(void)
 {
     static unsigned char st[144];
@@ -803,8 +811,8 @@ static void sys_rows(void)
           "and the device it gives /dev/shm is the one stat gives");
 }
 
-/* A write of `text` through a descriptor of `name` opened for writing; the
-   write's result, or the open's error. */
+/** A write of `text` through a descriptor of `name` opened for writing; the
+ * write's result, or the open's error. */
 static int write_file(const char *name, const char *text, int len)
 {
     int fd = syscall3(SYS_OPEN, (long)name, O_WRONLY | O_TRUNC, 0);
@@ -818,9 +826,10 @@ static int write_file(const char *name, const char *text, int len)
     return rc;
 }
 
-/* /proc/sys/kernel/hostname takes a write as sethostname does, the text
-   before its newline, and net/ipv4/ip_forward takes 0 and refuses
-   forwarding, which the stack does not do, with EINVAL. */
+/** /proc/sys/kernel/hostname takes a write as sethostname does, the text
+ * before its newline; /proc/version gives the kernel's name and release; and
+ * net/ipv4/ip_forward takes 0 and refuses forwarding, which the stack does
+ * not do, with EINVAL. The host name is put back. */
 static void sysctl_rows(void)
 {
     static char old[80];
@@ -844,12 +853,12 @@ static void sysctl_rows(void)
           "/proc/sys/net/ipv4/ip_forward takes 0 and refuses 1 with EINVAL");
 }
 
-/* /dev/rtc0: the CMOS clock as hwclock reads it, the time of day of
-   RTC_RD_TIME the real time's within two minutes either way. The real time
-   runs from the clock read at boot by the ticks counted since, and under a
-   hypervisor a tick the timer misses is not made up (proc(5)), so on a loaded
-   host it falls tens of seconds behind the clock; an hour, or a time zone,
-   wrong is what this row is for. */
+/** /dev/rtc0: the CMOS clock as hwclock reads it, the time of day of
+ * RTC_RD_TIME the real time's within two minutes either way. The real time
+ * runs from the clock read at boot by the ticks counted since, and under a
+ * hypervisor a tick the timer misses is not made up (proc(5)), so on a loaded
+ * host it falls tens of seconds behind the clock; an hour, or a time zone,
+ * wrong is what this row is for. */
 static void rtc_rows(void)
 {
     int tm[9];
@@ -872,16 +881,16 @@ static void rtc_rows(void)
     syscall1(SYS_CLOSE, fd);
 }
 
-/* An anonymous private mapping of `len` bytes, read and write; its address,
-   or a negated errno. */
+/** An anonymous private mapping of `len` bytes, read and write; its address,
+ * or a negated errno. */
 static long map_anonymous(int len)
 {
     return probe_mmap(0, len, 3, 0x22, -1, 0);
 }
 
-/* /proc/self/smaps as BusyBox's pmap reads it: each region's maps line and
-   Linux's sizes for it. A region with no path ends its maps line at the
-   space after the inode, as on Linux, where pmap looks for that space. */
+/** /proc/self/smaps as BusyBox's pmap reads it: each region's maps line and
+ * Linux's sizes for it. A region with no path ends its maps line at the
+ * space after the inode, as on Linux, where pmap looks for that space. */
 static void smaps_rows(void)
 {
     static char maps[4096];
@@ -903,10 +912,10 @@ static void smaps_rows(void)
 }
 
 #if defined __x86_64__
-/* A reserved region of 64 TiB with no page in it: smaps passes the page
-   tables it lacks in a few steps, where a walk of its 2^34 pages would take
-   minutes and run past the probe's limit, and gives its whole size, whose
-   kilobytes pass 32 bits. */
+/** A reserved region of 64 TiB with no page in it: smaps passes the page
+ * tables it lacks in a few steps, where a walk of its 2^34 pages would take
+ * minutes and run past the probe's limit, and gives its whole size, whose
+ * kilobytes pass 32 bits. */
 static void smaps_large_rows(void)
 {
     static char text[65536];
@@ -925,9 +934,9 @@ static void smaps_large_rows(void)
 }
 #endif
 
-/* The names a listing of directory `dir` gives, by getdents64, in its order
-   and but for . and .., each followed by a space, in `out`; 0, or -1 when the
-   directory does not open, a read fails, or the names do not fit. */
+/** The names a listing of directory `dir` gives, by getdents64, in its order
+ * and but for . and .., each followed by a space, in `out`; 0, or -1 when the
+ * directory does not open, a read fails, or the names do not fit. */
 static int listing(const char *dir, char *out, int cap)
 {
     static char d[4096];
@@ -962,9 +971,11 @@ static int listing(const char *dir, char *out, int cap)
     return n == 0 ? 0 : -1;
 }
 
-/* A /proc/<pid> directory lists its files in their order, `task` last, and a
-   thread's directory under `task` lists them but `task`; its cwd and root
-   are links to the process's directories, which a walk follows. */
+/** A /proc/<pid> directory lists its files in their order, `task` last, and a
+ * thread's directory under `task` lists them but `task`; /proc/self/limits
+ * has Linux's header and sixteen limits; /proc lists interrupts and
+ * filesystems; and cwd and root are links to the process's directories,
+ * which a walk follows. */
 static void pid_dir_rows(void)
 {
     static const char files[] = "stat cmdline fd maps smaps status statm auxv environ comm "
@@ -1026,9 +1037,9 @@ static void pid_dir_rows(void)
     }
 }
 
-/* /sys/class/net: the card's interface listed, its address in Linux's
-   lowercase form with QEMU's prefix, its MTU, a counter of its statistics,
-   and its device link leading to its PCI function. */
+/** /sys/class/net: the card's interface listed, its address in Linux's
+ * lowercase form with QEMU's prefix, its MTU, a counter of its statistics,
+ * and its device link leading to its PCI function. */
 static void net_class_rows(void)
 {
     static char names[256];
@@ -1051,7 +1062,7 @@ static void net_class_rows(void)
           "and its device link leads to its PCI function");
 }
 
-/* Where the first line beginning with `head` starts, or -1. */
+/** Where the first line beginning with `head` starts, or -1. */
 static int line_starting(const char *b, int n, const char *head)
 {
     int at, j;
@@ -1068,7 +1079,7 @@ static int line_starting(const char *b, int n, const char *head)
     return -1;
 }
 
-/* Where field `k` of the space-separated line at `at` starts, or -1. */
+/** Where field `k` of the space-separated line at `at` starts, or -1. */
 static int field_at(const char *b, int n, int at, int k)
 {
     int i;
@@ -1089,7 +1100,7 @@ static int field_at(const char *b, int n, int at, int k)
     }
 }
 
-/* Whether the field at `at` is the word `w`. */
+/** Whether the field at `at` is the word `w`. */
 static int field_is(const char *b, int n, int at, const char *w)
 {
     int j;
@@ -1099,8 +1110,8 @@ static int field_is(const char *b, int n, int at, const char *w)
     return !w[j] && (at + j == n || b[at + j] == ' ' || b[at + j] == '\n');
 }
 
-/* The kilobytes smaps gives under `name` for the first region whose rights
-   are `perms`, or -1. */
+/** The kilobytes smaps gives under `name` for the first region whose rights
+ * are `perms`, or -1. */
 static int smaps_kb(const char *b, int n, const char *perms, const char *name)
 {
     int at, k;
@@ -1116,9 +1127,9 @@ static int smaps_kb(const char *b, int n, const char *perms, const char *name)
     return -1;
 }
 
-/* Anonymous memory in smaps as Linux counts it, which gdb's gcore reads to
-   choose what a core keeps: none in the program's text, which is read from
-   its file and never written, and some in its data, which it has written. */
+/** Anonymous memory in smaps as Linux counts it, which gdb's gcore reads to
+ * choose what a core keeps: none in the program's text, which is read from
+ * its file and never written, and some in its data, which it has written. */
 static void anonymous_rows(void)
 {
     int n = slurp("/proc/self/smaps", buf, (int)sizeof(buf));
@@ -1128,8 +1139,8 @@ static void anonymous_rows(void)
     check(smaps_kb(buf, n, "rw-p", "Anonymous:") > 0, "and its written data has some");
 }
 
-/* The value under `name` in the /proc/net/snmp group whose two lines begin
-   with `group`, or -1. */
+/** The value under `name` in the /proc/net/snmp group whose two lines begin
+ * with `group`, or -1. */
 static int mib_value(const char *b, int n, const char *group, const char *name)
 {
     int names = line_starting(b, n, group);
@@ -1152,10 +1163,10 @@ static int mib_value(const char *b, int n, const char *group, const char *name)
     return -1;
 }
 
-/* The counts `ss -s` reads, by the names Linux gives them, with a listener
-   open on port 8080, and the MIB counters `nstat` reads, after a connect to
-   a closed local port, which leaves no connection behind for the pool's
-   rows to count. */
+/** The counts `ss -s` reads, by the names Linux gives them, with a listener
+ * open on port 8080, and the MIB counters `nstat` reads, after a connect to
+ * a closed local port, which leaves no connection behind for the later rows
+ * of /proc/net/tcp to count. */
 static void count_rows(void)
 {
     unsigned char sa[16];
@@ -1196,7 +1207,7 @@ static void count_rows(void)
           "and the SYN and the reset as sent and received by TCP and IP");
 }
 
-/* A datagram socket and a local one, each in its file: the UDP socket by
+/** A datagram socket and a local one, each in its file: the UDP socket by
  * its port, unconnected, which Linux writes as state 07, and the local
  * one by its abstract name, which Linux writes with an @ for the NUL. */
 static void dgram_and_local_rows(void)
@@ -1295,10 +1306,9 @@ static void memory_file_rows(void)
 }
 
 /**
- * Capacity. The pool is filled to its last block, half in a child and half
- * here, because one process cannot hold that many descriptors, and the file
- * must then come back with every row and nothing cut: this is what the
- * declared bound is for, and three rows never reached it.
+ * Many rows. MAX_TCP_ROWS listening sockets, FILL_CHILD of them in a child
+ * and the rest here, give /proc/net/tcp a header and a row for each, and the
+ * file must come back in one read with every row and nothing cut.
  */
 static void pool_full_rows(void)
 {
@@ -1348,6 +1358,11 @@ static void pool_full_rows(void)
  * receive context, where no process is calling, so an implementation taking
  * the current process's uid would report root and pass a test whose two
  * sides had the same owner.
+ *
+ * A closed connection stays in the table while it finishes closing, and its
+ * socket is detached the moment the descriptor goes, so the row must still
+ * have its owner and its inode, which reading them through the socket could
+ * not give.
  */
 static void connection_owner_rows(void)
 {
@@ -1416,16 +1431,12 @@ static void connection_owner_rows(void)
                            "account that listened, not to whoever was running");
     check(root_rows >= 1, "and root's own connecting socket belongs to root");
 
-    /* Capacity: the table must come back whole however many rows it has,
-     * which is what the bound is for. */
+    /* The table comes back whole however many rows it has. */
     check(ends_with(buf, n, "\n") && contains(buf, n, " 100 0 0 10 0 wnd="),
           "a table with several rows still ends with a whole row");
 
     syscall1(SYS_CLOSE, cfd);
-    /* A closed connection stays in the pool while it finishes closing, and
-     * its socket is detached the moment the descriptor goes. The row must
-     * still name its owner and its inode, which reading them through the
-     * socket could not do. */
+    /* A closing row keeps its inode after its socket is detached. */
     n = slurp("/proc/net/tcp", buf, (int)sizeof(buf));
     check(n > 0 && no_row_has_zero_inode(buf, n),
           "a row whose socket is detached still reports its inode");
@@ -1436,10 +1447,11 @@ void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
 
-/* Print the root's line from /proc/mounts, which is the one thing in this
-   file that differs per boot: a root mounted from a disk, from the module
-   through the page-cache window, or from the module in place. The suite
-   outside boots three times and reads this line from each. */
+/** Print "PROCPROBE ROOTMOUNT " and the first line of `b`, the root's line of
+ * /proc/mounts, which is the one thing in this file that differs per boot: a
+ * root mounted from a disk, from the module through the page-cache window,
+ * or from the module in place. The suite boots three times and reads this
+ * line from each. */
 static void print_rootmount(const char *b, int n)
 {
     int i;
@@ -1451,8 +1463,8 @@ static void print_rootmount(const char *b, int n)
     syscall3(SYS_WRITE, STDOUT_FILENO, (long)"\n", 1);
 }
 
-/** /proc/mounts, read into `buf` of `cap` bytes: its newline, the six
- * permanent mounts, whole rows, and the root's line, printed. */
+/** Check /proc/mounts, read into `buf` of `cap` bytes: it ends in a newline
+ * and a whole row and has the six permanent mounts. Print the root's line. */
 static void mounts_rows(char *buf, int cap)
 {
     int n = slurp("/proc/mounts", buf, cap);
@@ -1465,16 +1477,62 @@ static void mounts_rows(char *buf, int cap)
     print_rootmount(buf, n);
 }
 
+/**
+ * The probe, entered with `sp` at argc: with an argument beginning with 'm',
+ * the root's mount line alone, since the three boots that differ are booted
+ * for that line and the rest would repeat on each of them what the shared
+ * probe boot does once; otherwise every row, ending with `done`.
+ *
+ * Ending in a newline does not show that a file came back whole: a generator
+ * that stopped after its first line ends in one too. So each file is asked
+ * for something only its last line has, which a text cut short at any
+ * earlier point would be missing. /proc/net/dev's header is two lines, and
+ * its interface line is there only when the machine has an interface, which
+ * a boot with no network device does not; so the probe requires the tail of
+ * the second header line and a whole counter row whenever an interface is
+ * listed. A forked child keeps the name its parent had, which is what a
+ * daemon that backgrounds itself without an exec has to go on.
+ *
+ * btime names one moment and does not move between two reads: a value taken
+ * afresh from the clock each time would drift by whatever the read cost. The
+ * reads are 1.5 seconds apart, since such a value is the same whenever the
+ * two reads fall inside one second.
+ *
+ * Idle against busy, over two intervals of the same length: sleeping leaves
+ * the processors idle and running does not, so the halves must move in
+ * opposite directions; and the two together must account for every tick the
+ * timer delivered, which is the boot processor's count in /proc/uptime for
+ * each processor. A spinner runs on every processor, so that busy is ahead
+ * of idle however many there are. Busy is read from /proc/stat's own
+ * columns, user, nice and system, rather than worked out as the total less
+ * the idle: defined that way the sum is an identity and holds however wrong
+ * both counters are. The total comes from /proc/uptime and the busy columns
+ * from /proc/stat, which are two reads, and a tick that lands between them
+ * belongs to one sample and not the other; the slack of four ticks for each
+ * processor is the ticks those system calls can span on a loaded machine.
+ *
+ * For the network files a listening socket is opened first, so the tcp
+ * table has a row to describe, and the row's inode must be the number the
+ * descriptor reports through fstat and through its /proc/self/fd link. A
+ * socket's inode is its own and is not handed out twice: two live sockets
+ * differ, and a socket opened after one of them closes differs from both,
+ * which a constant and a number reused from a freed socket each fail. The
+ * listener's row is the last, and its inode is the last number before the
+ * fixed columns every row ends with. Its state column is Linux's number,
+ * 0A for LISTEN, and not this stack's own, which netstat would print as
+ * the wrong name.
+ *
+ * A descriptor of each global file must link to the path it was opened by
+ * and report that path's inode: procfs.c builds the link of a file its
+ * tables do not name as /proc/0/stat.
+ */
 void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];
     char **argv = (char **)(sp + 1);
     int pid, status, fd, n;
 
-    /* `procprobe mount` reads the mount line and nothing else. The three
-       boots that differ are booted for that line alone, and the rest of
-       this probe would have them repeat, on each of them, work the shared
-       probe boot already does once. */
+    /* `procprobe mount`: the root's mount line and nothing else. */
     if (argc > 1 && argv[1][0] == 'm') {
         n = slurp("/proc/mounts", buf, (int)sizeof(buf));
         check(n > 0 && buf[n - 1] == '\n', "/proc/mounts ends with its newline");
@@ -1482,8 +1540,7 @@ void probe_main(unsigned long *sp)
         done();
     }
 
-    /* The snapshot. The child exists when the file is opened and does not when
-     * it is read, so what comes back can only have been taken at open. */
+    /* The snapshot: the child exists at the open and not at the read. */
     pid = syscall1(SYS_FORK, 0);
     check(pid >= 0, "fork");
     if (pid == 0) {
@@ -1498,8 +1555,7 @@ void probe_main(unsigned long *sp)
     memory_file_rows();
     check(syscall3(SYS_KILL, pid, SIGKILL, 0) == 0, "kill the child");
     check(syscall3(SYS_WAITPID, pid, (long)&status, 0) == pid, "reap the child");
-    /* The pid names nothing now. A generator asked here has nothing to answer
-     * with; a snapshot answers what it took. */
+    /* The pid names no process; a snapshot answers what it took. */
     check(syscall3(SYS_OPEN, (long)path, O_RDONLY, 0) < 0,
           "the dead child's /proc entry is gone, so the read below is a snapshot");
     if (fd >= 0) {
@@ -1512,10 +1568,7 @@ void probe_main(unsigned long *sp)
         syscall1(SYS_CLOSE, fd);
     }
 
-    /* Every file this image can open comes back whole. Ending in a newline is
-     * not enough to say so: a generator that stopped after its first line ends
-     * in one too. So each file is asked for something only its LAST line has,
-     * which is what a text cut short at any earlier point would be missing. */
+    /* Every file comes back whole, asked for what its last line has. */
     n = slurp("/proc/cmdline", buf, (int)sizeof(buf));
     check(n > 0 && buf[n - 1] == '\n', "/proc/cmdline ends with its newline");
 
@@ -1542,11 +1595,7 @@ void probe_main(unsigned long *sp)
         syscall1(SYS_CLOSE, loop_fd);
         syscall1(SYS_CLOSE, intr_fd);
     }
-    /* The header is two lines and the interface line is there only when the
-     * machine has an interface, which a boot with no network device does not.
-     * So what is required is that the text is COMPLETE: the tail of the second
-     * header line, which only a whole header carries, and a whole counter row
-     * whenever an interface was listed at all. */
+    /* /proc/net/dev: the whole header, and a whole row for an interface. */
     check(contains(buf, n, "carrier compressed\n"), "/proc/net/dev carries its whole header");
     check(lines_in(buf, n) == 2 || ends_with(buf, n, " 0 0 0 0 0 0\n"),
           "/proc/net/dev's interface line, when there is one, is a whole row");
@@ -1561,8 +1610,7 @@ void probe_main(unsigned long *sp)
     n = slurp("/proc/self/cmdline", buf, (int)sizeof(buf));
     check(n > 0 && buf[n - 1] == '\0', "/proc/self/cmdline ends with its NUL");
 
-    /* A forked child keeps the name its parent had, which is what a daemon
-     * that backgrounds itself without ever exec'ing has to go on. */
+    /* A forked child keeps the name its parent had. */
     {
         int kid, kid_status = -1;
 
@@ -1577,8 +1625,7 @@ void probe_main(unsigned long *sp)
         if (kid > 0) {
             check(syscall3(SYS_WAITPID, kid, (long)&kid_status, 0) == kid,
                   "the child of the name check was reaped");
-            /* The whole status: a child killed by a signal has a zero exit
-               byte and would otherwise read as one that exited cleanly. */
+            /* The whole status, since a signal leaves the exit byte zero. */
             check(kid_status == 0, "a forked child lost the name its parent had");
         }
     }
@@ -1587,8 +1634,7 @@ void probe_main(unsigned long *sp)
     check(n > 0 && buf[n - 1] == '\n', "/proc/disk ends with its newline");
     check(has_line_starting(buf, n, "policy "), "/proc/disk names the build policy");
 
-    /* The machine's own files. Each is asked for a field only its own last
-     * line has, so a text cut short anywhere earlier fails here. */
+    /* The machine's own files, each asked for a field of its last line. */
     n = slurp("/proc/uptime", buf, (int)sizeof(buf));
     check(n > 0 && buf[n - 1] == '\n', "/proc/uptime ends with its newline");
     check(count_of(buf, n, '.') == 2, "/proc/uptime carries both of its numbers");
@@ -1659,36 +1705,20 @@ void probe_main(unsigned long *sp)
 
     mounts_rows(buf, (int)sizeof(buf));
 
-    /* btime names one moment and must not move between two reads: a value
-     * taken afresh from the clock each time would drift by whatever the read
-     * cost, and anything comparing boots would be misled by it. */
+    /* btime is one moment and does not move between two reads. */
     {
         int first_btime, second_btime;
 
         n = slurp("/proc/stat", buf, (int)sizeof(buf));
         first_btime = uint_after(buf, n, "btime ");
-        /* Longer than a second, and deliberately so: an implementation taking
-         * the clock afresh on each read answers the same value whenever the two
-         * reads fall inside one second, so a shorter wait proves nothing. */
-        nap(1500);
+        nap(1500); /* over a second, so a fresh clock read would differ */
         n = slurp("/proc/stat", buf, (int)sizeof(buf));
         second_btime = uint_after(buf, n, "btime ");
         check(first_btime > 0, "btime is a value, not a missing line");
         check(first_btime == second_btime, "btime is the same across a second boundary");
     }
 
-    /* Idle against busy, over two intervals of the same length. Sleeping parks
-     * the processors and running does not, so the halves must move in opposite
-     * directions; and the two together must account for every tick the timer
-     * delivered, which is the boot processor's count in /proc/uptime for each
-     * processor. A spinner runs on every processor, so that busy is ahead of
-     * idle however many there are.
-     *
-     * Busy is read from /proc/stat's own columns, user and system, rather than
-     * worked out as the total less the idle: defined that way the sum is an
-     * identity and holds however wrong both counters are.
-     * Read from the two files the two generators fill, it is a real check that
-     * they agree. */
+    /* Idle against busy, over two intervals of the same length. */
     {
         int t0, i0, t1, i1, t2, i2;
         int b0, b1, b2;
@@ -1727,12 +1757,7 @@ void probe_main(unsigned long *sp)
               "a machine running user code spends more ticks busy than idle");
         check(busy_spun >= 20, "and enough of them to be a measurement");
         {
-            /* The total comes from /proc/uptime and the busy columns from
-             * /proc/stat, which are two reads: a tick that lands between them
-             * belongs to one sample and not the other. Two such reads bound
-             * this sum's, and each read is a system call, so the slack is the
-             * ticks those calls can span on a loaded machine and not a
-             * measurement of anything. */
+            /* A tick between the reads of two files counts in one alone. */
             int drift = (t2 - t0) * cpus - ((i2 - i0) + (b2 - b0));
 
             if (drift < 0) {
@@ -1751,11 +1776,7 @@ void probe_main(unsigned long *sp)
         }
     }
 
-    /* The network files, in the shapes their readers parse. A listening socket
-     * is opened first so the tcp table has a row to describe; the row's own
-     * inode is then required to be the number the descriptor reports through
-     * both of the other two paths, which the constant printed before could
-     * never have been. */
+    /* The network files, in the shapes their readers parse. */
     {
         unsigned long args[6];
         int sfd, i, row_inode = -1, fd_inode = -1;
@@ -1764,11 +1785,7 @@ void probe_main(unsigned long *sp)
         char link[64];
         char fdpath[32];
 
-        /* An inode is a socket's own, and is not handed out twice. Two live
-         * sockets must differ, and a socket opened after one of them closes
-         * must differ from both: a constant, and a number taken from the pool
-         * slot, each fail one of those. The constant this replaced was
-         * `socket:[1]`, which the first socket of a boot really has. */
+        /* A socket's inode is its own and is not handed out twice. */
         {
             int ino_a, ino_b, ino_c, fd_a, fd_b, fd_c;
 
@@ -1824,14 +1841,11 @@ void probe_main(unsigned long *sp)
         check(last_row_has_fields(buf, n),
               "/proc/net/tcp's last row has an eight-digit retransmission count and the "
               "stack's own fields with values");
-        /* The listener's row is the one whose local port is 1F90. Its inode is
-         * the last number before the trailing fixed columns. */
+        /* The listener's row, local port 1F90, is the last. */
         row_inode = last_row_inode(buf, n);
         check(row_inode > 1,
               "/proc/net/tcp names an inode past the first, so a constant cannot match");
-        /* The state column is Linux's number, not this stack's own: LISTEN is
-         * 0A there and something else here, so a cast would print the wrong
-         * name in netstat. */
+        /* The state column is Linux's number: 0A for LISTEN. */
         {
             char st[8];
 
@@ -1859,10 +1873,7 @@ void probe_main(unsigned long *sp)
         syscall1(SYS_CLOSE, sfd);
     }
 
-    /* A descriptor open on one of the global files names that file, and
-     * reports the identity the path it was opened by reports. Each was added
-     * to the open dispatcher and could have been left out of these two, where
-     * a file with no entry falls through to /proc/0/stat. */
+    /* A descriptor of a global file links to it and has its path's inode. */
     {
         static const char *const netfiles[15] = {
             "/proc/net/route", "/proc/net/arp",  "/proc/net/tcp",
