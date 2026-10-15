@@ -228,6 +228,51 @@ static void past_a_file(void)
     CHECK(synth_classify("proc/7/root/x", &vp) == VNODE_ENOENT);
 }
 
+/**
+ * The files of /proc/net, /proc/net/stat, /proc/sysvipc, /proc/PID/ns,
+ * /proc/PID/fdinfo and /dev/fd. A path past one of them is ENOTDIR, and a
+ * path past a name none of them has is ENOENT, since there is no file to be
+ * not a directory.
+ */
+static void past_a_name(void)
+{
+    struct vpath vp;
+
+    CHECK(synth_classify("proc/net", &vp) == VNODE_PROC_NET_DIR);
+    CHECK(synth_classify("proc/net/udp", &vp) == VNODE_PROC_NET_FILE &&
+          vp.procfile == SYNTH_PROC_NETUDP);
+    CHECK(synth_classify("proc/net/tcp", &vp) == VNODE_PROC_NET_TCP);
+    CHECK(synth_classify("proc/net/udp/x", &vp) == VNODE_ENOTDIR);
+    CHECK(synth_classify("proc/net/tcp/x", &vp) == VNODE_ENOTDIR);
+    CHECK(synth_classify("proc/net/bogus", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("proc/net/bogus/x", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("proc/net/stat", &vp) == VNODE_PROC_NET_STAT_DIR);
+    CHECK(synth_classify("proc/net/stat/rt_cache", &vp) == VNODE_PROC_NET_FILE &&
+          vp.procfile == SYNTH_PROC_NETSTAT_RT);
+    CHECK(synth_classify("proc/net/stat/rt_cache/x", &vp) == VNODE_ENOTDIR);
+    CHECK(synth_classify("proc/net/stat/bogus/x", &vp) == VNODE_ENOENT);
+
+    CHECK(synth_classify("proc/sysvipc/msg", &vp) == VNODE_PROC_SYSVIPC &&
+          vp.procfile == SYNTH_PROC_SYSVIPC + 2);
+    CHECK(synth_classify("proc/sysvipc/shm/x", &vp) == VNODE_ENOTDIR);
+    CHECK(synth_classify("proc/sysvipc/bogus/x", &vp) == VNODE_ENOENT);
+
+    CHECK(synth_classify("proc/7/ns/net", &vp) == VNODE_PROC_NS_LINK && vp.procfd == 3);
+    CHECK(synth_classify("proc/7/ns/net/x", &vp) == VNODE_ENOTDIR && vp.pid == 7);
+    CHECK(synth_classify("proc/7/ns/bogus", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("proc/7/ns/bogus/x", &vp) == VNODE_ENOENT);
+
+    CHECK(synth_classify("proc/7/fdinfo/3", &vp) == VNODE_PROC_FDINFO && vp.procfd == 3);
+    CHECK(synth_classify("proc/7/fdinfo/3/x", &vp) == VNODE_ENOTDIR && vp.pid == 7);
+    CHECK(synth_classify("proc/7/fdinfo/xy/z", &vp) == VNODE_ENOENT);
+
+    CHECK(synth_classify("dev/fd/3", &vp) == VNODE_PROC_FD_LINK && vp.procfd == 3 &&
+          vp.pid == SYNTH_PID_SELF);
+    CHECK(synth_classify("dev/fd/3/x", &vp) == VNODE_ENOTDIR);
+    CHECK(synth_classify("dev/fd/xy", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("dev/fd/xy/z", &vp) == VNODE_ENOENT);
+}
+
 /** The path `synth_dir_path` writes back for a directory, a thread's under
  *  its process's task directory among them. */
 static void paths(void)
@@ -246,7 +291,7 @@ static void paths(void)
 
 /**
  * The rows of the root, /dev and /proc, then those of `bounds`,
- * `past_a_file`, `paths` and `sys_tree`:
+ * `past_a_file`, `past_a_name`, `paths` and `sys_tree`:
  *
  * - the empty path and ordinary names are the KRFFS root's, "devices" and
  *   "proconsul" among them, which only begin as "dev" and "proc" do;
@@ -351,6 +396,7 @@ int main(void)
 
     bounds();
     past_a_file();
+    past_a_name();
     paths();
     sys_tree();
     return fails > 255 ? 255 : fails;

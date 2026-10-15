@@ -343,7 +343,8 @@ const char *synth_ns_name(int kind)
 }
 
 /** Classify /proc/<pid>/ns, `c[1]` of the `n` components from the pid, and
- * with a third component its link of that kind. */
+ * with a third component its link of that kind, which leads to no
+ * directory. */
 static int synth_classify_ns(const struct comp *c, int n, struct vpath *vp)
 {
     int k;
@@ -352,14 +353,14 @@ static int synth_classify_ns(const struct comp *c, int n, struct vpath *vp)
         vp->kind = VNODE_PROC_NS_DIR;
         return vp->kind;
     }
-    for (k = 0; n == 3 && synth_ns_name(k); k++) {
-        if (comp_eq(c[2], synth_ns_name(k))) {
-            vp->procfd = k;
-            vp->kind = VNODE_PROC_NS_LINK;
-            return vp->kind;
-        }
+    for (k = 0; synth_ns_name(k) && !comp_eq(c[2], synth_ns_name(k)); k++) {
     }
-    vp->kind = n == 3 ? VNODE_ENOENT : VNODE_ENOTDIR;
+    if (!synth_ns_name(k)) {
+        vp->kind = VNODE_ENOENT;
+        return vp->kind;
+    }
+    vp->procfd = k;
+    vp->kind = n == 3 ? VNODE_PROC_NS_LINK : VNODE_ENOTDIR;
     return vp->kind;
 }
 
@@ -424,7 +425,7 @@ static int synth_classify_pid(const struct comp *c, int n, struct vpath *vp, int
             return vp->kind;
         }
         vp->procfd = comp_uint(c[2]);
-        vp->kind = n != 3 ? VNODE_ENOTDIR : (vp->procfd >= 0 ? VNODE_PROC_FDINFO : VNODE_ENOENT);
+        vp->kind = vp->procfd < 0 ? VNODE_ENOENT : n == 3 ? VNODE_PROC_FDINFO : VNODE_ENOTDIR;
         return vp->kind;
     }
     if (comp_eq(c[1], "ns")) {
@@ -489,11 +490,9 @@ static int synth_classify_dev_fd(const struct comp *c, int n, struct vpath *vp)
     if (comp_eq(c[1], "fd")) {
         if (n == 2) {
             vp->kind = VNODE_PROC_FD_DIR;
-        } else if (n == 3 && comp_uint(c[2]) >= 0) {
-            vp->kind = VNODE_PROC_FD_LINK;
-            vp->procfd = comp_uint(c[2]);
         } else {
-            vp->kind = n == 3 ? VNODE_ENOENT : VNODE_ENOTDIR;
+            vp->procfd = comp_uint(c[2]);
+            vp->kind = vp->procfd < 0 ? VNODE_ENOENT : n == 3 ? VNODE_PROC_FD_LINK : VNODE_ENOTDIR;
         }
         return 1;
     }
@@ -1104,11 +1103,51 @@ static int synth_classify_net_stat(const struct comp *c, int n, struct vpath *vp
 {
     if (n == 0) {
         vp->kind = VNODE_PROC_NET_STAT_DIR;
-    } else if (n == 1 && (comp_eq(c[0], "rt_cache") || comp_eq(c[0], "arp_cache"))) {
-        vp->kind = VNODE_PROC_NET_FILE;
+    } else if (comp_eq(c[0], "rt_cache") || comp_eq(c[0], "arp_cache")) {
+        vp->kind = n == 1 ? VNODE_PROC_NET_FILE : VNODE_ENOTDIR;
         vp->procfile = comp_eq(c[0], "rt_cache") ? SYNTH_PROC_NETSTAT_RT : SYNTH_PROC_NETSTAT_ARP;
     } else {
-        vp->kind = n == 1 ? VNODE_ENOENT : VNODE_ENOTDIR;
+        vp->kind = VNODE_ENOENT;
+    }
+    return vp->kind;
+}
+
+/** Classify the components `c` of `n` below /proc/net: the directory, its
+ * files, and its `stat` directory. */
+static int synth_classify_net(const struct comp *c, int n, struct vpath *vp)
+{
+    static const struct {
+        const char *name;
+        int kind;
+    } files[] = {{"dev", VNODE_PROC_NET_DEV},
+                 {"route", VNODE_PROC_NET_ROUTE},
+                 {"arp", VNODE_PROC_NET_ARP},
+                 {"tcp", VNODE_PROC_NET_TCP}};
+    int f = SYNTH_PROC_NETUDP;
+    unsigned i;
+
+    if (n == 0) {
+        vp->kind = VNODE_PROC_NET_DIR;
+        return vp->kind;
+    }
+    if (comp_eq(c[0], "stat")) {
+        return synth_classify_net_stat(c + 1, n - 1, vp);
+    }
+    while (synth_net_name(f) && !comp_eq(c[0], synth_net_name(f))) {
+        f++;
+    }
+    vp->kind = VNODE_ENOENT;
+    if (synth_net_name(f)) {
+        vp->kind = VNODE_PROC_NET_FILE;
+        vp->procfile = f;
+    }
+    for (i = 0; i < sizeof(files) / sizeof(files[0]); i++) {
+        if (comp_eq(c[0], files[i].name)) {
+            vp->kind = files[i].kind;
+        }
+    }
+    if (n > 1 && vp->kind != VNODE_ENOENT) {
+        vp->kind = VNODE_ENOTDIR;
     }
     return vp->kind;
 }
@@ -1127,16 +1166,16 @@ static int synth_classify_sysvipc(const struct comp *c, int n, struct vpath *vp)
 {
     int f = SYNTH_PROC_SYSVIPC;
 
-    while (n == 1 && synth_sysvipc_name(f) && !comp_eq(c[0], synth_sysvipc_name(f))) {
+    while (n >= 1 && synth_sysvipc_name(f) && !comp_eq(c[0], synth_sysvipc_name(f))) {
         f++;
     }
     if (n == 0) {
         vp->kind = VNODE_PROC_SYSVIPC_DIR;
-    } else if (n == 1 && synth_sysvipc_name(f)) {
-        vp->kind = VNODE_PROC_SYSVIPC;
+    } else if (synth_sysvipc_name(f)) {
+        vp->kind = n == 1 ? VNODE_PROC_SYSVIPC : VNODE_ENOTDIR;
         vp->procfile = f;
     } else {
-        vp->kind = n == 1 ? VNODE_ENOENT : VNODE_ENOTDIR;
+        vp->kind = VNODE_ENOENT;
     }
     return vp->kind;
 }
@@ -1222,30 +1261,7 @@ int synth_classify(const char *path, struct vpath *vp)
             return synth_classify_sys(c + 2, n - 2, vp);
         }
         if (comp_eq(c[1], "net")) {
-            int f = SYNTH_PROC_NETUDP;
-
-            while (n == 3 && synth_net_name(f) && !comp_eq(c[2], synth_net_name(f))) {
-                f++;
-            }
-            if (n == 3 && synth_net_name(f)) {
-                vp->kind = VNODE_PROC_NET_FILE;
-                vp->procfile = f;
-            } else if (n >= 3 && comp_eq(c[2], "stat")) {
-                return synth_classify_net_stat(c + 3, n - 3, vp);
-            } else if (n == 2) {
-                vp->kind = VNODE_PROC_NET_DIR;
-            } else if (n == 3 && comp_eq(c[2], "dev")) {
-                vp->kind = VNODE_PROC_NET_DEV;
-            } else if (n == 3 && comp_eq(c[2], "route")) {
-                vp->kind = VNODE_PROC_NET_ROUTE;
-            } else if (n == 3 && comp_eq(c[2], "arp")) {
-                vp->kind = VNODE_PROC_NET_ARP;
-            } else if (n == 3 && comp_eq(c[2], "tcp")) {
-                vp->kind = VNODE_PROC_NET_TCP;
-            } else {
-                vp->kind = (n == 3) ? VNODE_ENOENT : VNODE_ENOTDIR;
-            }
-            return vp->kind;
+            return synth_classify_net(c + 2, n - 2, vp);
         }
         if (comp_eq(c[1], "sysvipc")) {
             return synth_classify_sysvipc(c + 2, n - 2, vp);
