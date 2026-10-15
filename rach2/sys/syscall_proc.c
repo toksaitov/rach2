@@ -72,7 +72,6 @@
 #include "network/ip/ip.h"
 #include "network/ip/icmp.h"
 #include "network/net.h"
-#include "network/netconf.h"
 #include "cmdline.h" /* kcmdline_has, for the rach2.stackoverrun test switch */
 #include "mm/filemap.h"
 #include "mm/mm.h"
