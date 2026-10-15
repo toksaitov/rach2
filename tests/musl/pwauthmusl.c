@@ -689,8 +689,8 @@ static int check_lost_lock(void)
  *
  * The byte on the pipe is what orders the two, and it goes out only once the
  * lock is held, so the second writer is guaranteed to find it there. The pipe
- * closes when this process leaves whatever happens, so a failure here is a
- * refused acquire in the second writer, not a wait with no end.
+ * closes when this process leaves, so if it fails before the byte goes out the
+ * second writer's read returns end of file and it exits 22 instead of waiting.
  */
 static void interleave_first(int notify)
 {

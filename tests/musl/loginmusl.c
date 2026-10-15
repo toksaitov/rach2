@@ -19,14 +19,14 @@
  *
  * The refusals: a wrong password, an unknown name, and an account whose shadow
  * field is empty, which BusyBox's login admits without asking anything. Each
- * must leave the databases as they were, must not exec, and must be an
- * ordinary exit, not a crash that happened to print nothing.
+ * must not exec, and must be an ordinary exit, not a crash that happened to
+ * print nothing. The databases are written back before each case.
  *
- * Then the two ways to take the console for good, not for a moment: a
- * login stopped by an uncatchable `SIGSTOP`, which only its parent can undo,
- * and a terminal left the way `stty -icanon min 0` leaves it, which outlives
- * the session that did it and would have every later login read nothing, exit,
- * and be respawned into the same failure.
+ * Then the two ways to take the console for good, not for a moment: a login
+ * stopped by an uncatchable `SIGSTOP`, which only its parent can undo, and a
+ * terminal left the way `stty -icanon -echo min 0` leaves it, which outlives
+ * the session that did it and would have every later login read nothing,
+ * exit, and be respawned into the same failure.
  *
  * Prints "LOGINMUSL OK" on success and "LOGINMUSL FAIL (detail)" otherwise.
  */
@@ -365,8 +365,8 @@ static int check_refusals(void)
  * For the stop, this process plays init: it must see the stop with `WUNTRACED`,
  * without which the wait would never return, and continue the login, which must
  * then log the account in. For the terminal, a pty is left as
- * `stty -icanon min 0` leaves a line, and a login started on it must put it
- * back into canonical mode, read through the slave the login uses. A login
+ * `stty -icanon -echo min 0` leaves a line, and a login started on it must put
+ * it back into canonical mode, read through the slave the login uses. A login
  * that did not would read zero bytes at once, exit, and be respawned into the
  * same failure forever; only a terminal shows this, since a login on a pipe
  * has no modes to reset. The name is written only once the prompt appears,
@@ -450,7 +450,7 @@ static int check_wedges(void)
         return fail("a login that was stopped and continued never came back");
     }
 
-    /* A terminal left as `stty -icanon min 0` leaves it. */
+    /* A terminal left as `stty -icanon -echo min 0` leaves it. */
     {
         int master = -1;
         int slave = -1;
