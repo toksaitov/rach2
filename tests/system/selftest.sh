@@ -742,6 +742,13 @@ rm -f "$WORK/silent/pid"
 check "the harness gives up on a stamp file it cannot open" 2 "$rc"
 check "and stops its machine" 1 "$(silent_gone)"
 
+# ptydrive's negated class: `[^P]assword:` passes over `Password:` and
+# answers `xassword:`.
+out=$( (unset RACH2_DEADLINES RACH2_DEADLINE_FACTOR; RACH2_PASSWORD=x "$PTYDRIVE_BIN" --timeout 5 --prompt-re '[^P]assword:' -- sh -c 'printf "Password:\n"' 2>&1) )
+check "ptydrive's negated class passes over the byte it excludes" 1 "$(printf '%s\n' "$out" | grep -c '^PROMPTED=0$')"
+out=$( (unset RACH2_DEADLINES RACH2_DEADLINE_FACTOR; RACH2_PASSWORD=x "$PTYDRIVE_BIN" --timeout 5 --prompt-re '[^P]assword:' -- sh -c 'printf "xassword:"; read -r answer' 2>&1) )
+check "and answers a prompt that begins with another" 1 "$(printf '%s\n' "$out" | grep -c '^ANSWERED=1$')"
+
 # The harness also starts its search before sending a command. Old output
 # may still be in its pipe, and a fast new reply may precede expect itself;
 # `until=1` after a consumed token is the second's delay, since the harness

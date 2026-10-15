@@ -139,24 +139,28 @@ static void class_add(struct item *it, unsigned char c)
 }
 
 /**
- * Compile `pattern` into `items`.
- *
- * A literal character matches itself, `.` any character but a newline, and
- * `[...]` one of its members, with ranges; `\` escapes the character after
- * it, and `*`, `+` and `?` repeat the item before them. A pattern with an
+ * End the program with status 2 and a message when `pattern` has an
  * unescaped `(`, `)`, `{`, `}`, `|`, `^` or `$` anywhere, inside a class
- * too, or with more than 64 items ends the program with status 2 and a
- * message. It is refused rather than read as literal text, since a driver
- * that never saw its prompt would wait out its timeout and report a prompt
- * that was shown as one that was not.
+ * too, but for a `^` that is the first character of a class.
  */
-static void compile_prompt(const char *pattern)
+static void refuse_unsupported(const char *pattern)
 {
     const char *p;
+    int in_class = 0;
 
     for (p = pattern; *p != '\0'; p++) {
         if (*p == '\\' && p[1] != '\0') {
             p++;
+            continue;
+        }
+        if (!in_class && *p == '[') {
+            in_class = 1;
+            if (p[1] == '^')
+                p++;
+            continue;
+        }
+        if (in_class && *p == ']') {
+            in_class = 0;
             continue;
         }
         if (strchr("(){}|^$", *p) != NULL) {
@@ -167,6 +171,25 @@ static void compile_prompt(const char *pattern)
             exit(2);
         }
     }
+}
+
+/**
+ * Compile `pattern` into `items`.
+ *
+ * A literal character matches itself, `.` any character but a newline,
+ * `[...]` one of its members, with ranges, and `[^...]` any character but
+ * them; `\` escapes the character after it, and `*`, `+` and `?` repeat the
+ * item before them. A pattern with more than 64 items, or with a character
+ * `refuse_unsupported` refuses, ends the program with status 2 and a
+ * message. Such a pattern is refused rather than read as literal text,
+ * since a driver that never saw its prompt would wait out its timeout and
+ * report a prompt that was shown as one that was not.
+ */
+static void compile_prompt(const char *pattern)
+{
+    const char *p;
+
+    refuse_unsupported(pattern);
     p = pattern;
     while (*p != '\0') {
         struct item *it = &items[n_items];
