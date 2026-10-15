@@ -198,10 +198,11 @@ block_device_t *block_lag_partition_backing(block_device_t *backing, uint64_t st
 
 /**
  * Read the boot option `name` as a whole decimal number from 1 to a million
- * ticks or periods, into `*out`; 1 when it was, 0 when it is absent or
- * refused. A value with anything after its digits, or past the bound, is
- * refused, since the deadline's arithmetic is signed and a period near the
- * top of the range would expire a request as it was made.
+ * ticks, periods or writes, into `*out`; 1 when it was, 0 when it is absent
+ * or refused. A value with anything after its digits, or past the bound, is
+ * refused, since the lag's and the deadline's arithmetic is signed and a
+ * value near the top of the range would answer or expire a request as it
+ * was made.
  */
 static int lag_knob(const char *name, uint32_t *out)
 {
@@ -233,7 +234,7 @@ static int lag_knob(const char *name, uint32_t *out)
  * There is one wrapper, over the device of the call that installed it. A
  * later call returns the wrapper when `backing` is that device and `backing`
  * itself for any other, so a second disk keeps its own device. Without the
- * option, or with a value that is not a tick count, `backing` is returned.
+ * option, or with a value `lag_knob` refuses, `backing` is returned.
  * The wrapper's deadline is one period of five seconds, since its tests are
  * of a device that never answers; a test of the deadline's boundary sets the
  * period with `rach2.lagdeadline=T` ticks and the count with
@@ -242,29 +243,18 @@ static int lag_knob(const char *name, uint32_t *out)
 block_device_t *block_lag_wrap(block_device_t *backing)
 {
     char value[16];
-    uint32_t n = 0;
-    int i;
+    uint32_t n;
 
     if (lag_backing) {
         return backing == lag_backing ? &lag_device : backing;
     }
-    if (!kcmdline_value("rach2.blocklag", value, sizeof(value))) {
-        return backing;
-    }
-    for (i = 0; value[i] >= '0' && value[i] <= '9'; i++) {
-        n = n * 10u + (uint32_t)(value[i] - '0');
-    }
-    if (i == 0 || value[i] != '\0' || n == 0) {
-        klog(KLOG_WARN, "block", "rach2.blocklag: not a tick count; ignored");
+    if (!lag_knob("rach2.blocklag", &n)) {
         return backing;
     }
     lag_backing = backing;
     lag_delay = n;
-    if (kcmdline_value("rach2.blockfail", value, sizeof(value))) {
-        for (i = 0; value[i] >= '0' && value[i] <= '9'; i++) {
-            fail_write_at = fail_write_at * 10u + (uint32_t)(value[i] - '0');
-        }
-        klog(KLOG_INFO, "block", "lag: write %d fails", (int)fail_write_at);
+    if (lag_knob("rach2.blockfail", &fail_write_at)) {
+        klog(KLOG_INFO, "block", "lag: write %u fails", (unsigned)fail_write_at);
     }
     if (kcmdline_value("rach2.blockdead", value, sizeof(value))) {
         uint8_t table[BLOCK_SECTOR_SIZE];

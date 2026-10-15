@@ -29,19 +29,34 @@ static int same(const char *a, const char *b)
     return *a == *b;
 }
 
+/* The values of `rach2.blocklag` and `rach2.blockfail`, or NULL for an
+   option that is absent; every other option is absent. */
+static const char *opt_blocklag = "3";
+static const char *opt_blockfail;
+
 /**
- * The boot options the wrapper reads at install: `rach2.blocklag` is "3",
- * copied into `out`, and every other option is absent. Returns 1 when the
- * option is present and 0 otherwise.
+ * Copy the value of the boot option `key` into `out`. Returns 1 when the
+ * option is present and its value fits in `outlen` bytes with its NUL, and
+ * 0 otherwise, as the kernel's does.
  */
 int kcmdline_value(const char *key, char *out, unsigned int outlen)
 {
-    if (same(key, "rach2.blocklag") && outlen > 1) {
-        out[0] = '3';
-        out[1] = '\0';
-        return 1;
+    const char *v = same(key, "rach2.blocklag")    ? opt_blocklag
+                    : same(key, "rach2.blockfail") ? opt_blockfail
+                                                   : 0;
+    unsigned int i;
+
+    if (!v) {
+        return 0;
     }
-    return 0;
+    for (i = 0; v[i] != '\0'; i++) {
+        if (i + 1 >= outlen) {
+            return 0;
+        }
+        out[i] = v[i];
+    }
+    out[i] = '\0';
+    return 1;
 }
 
 /** The kernel log, which the test discards. */
@@ -196,11 +211,49 @@ static void ticks(int n)
     }
 }
 
+/* Values of `rach2.blocklag` and `rach2.blockfail` the wrapper refuses: no
+   digits, a trailing non-digit, zero, past a million, and past 32 bits,
+   where 4294967296 would wrap to 0 and 4294967297 to 1. */
+static const char *const refused[] = {
+    "",        "x",          "3x",         "0",          "000",
+    "1000001", "4294967295", "4294967296", "4294967297", "99999999999999",
+};
+
+/**
+ * Refuse each value of `refused` as `rach2.blocklag`, which leaves the
+ * wrapper uninstalled, and as `rach2.blockfail`, which arms no write, and
+ * take the bounds of the range. Leaves `rach2.blocklag` at "3" and
+ * `rach2.blockfail` at "3x", so the install that follows arms nothing.
+ */
+static void refusals(void)
+{
+    uint32_t n;
+    int i;
+
+    for (i = 0; i < (int)(sizeof(refused) / sizeof(refused[0])); i++) {
+        opt_blocklag = refused[i];
+        CHECK(block_lag_wrap(&backing) == &backing && lag_backing == 0,
+              "a refused rach2.blocklag installs no wrapper");
+        opt_blockfail = refused[i];
+        n = 7;
+        CHECK(!lag_knob("rach2.blockfail", &n) && n == 7, "a refused rach2.blockfail sets nothing");
+    }
+    opt_blockfail = "1";
+    CHECK(lag_knob("rach2.blockfail", &n) && n == 1, "a count of 1 is taken");
+    opt_blockfail = "1000000";
+    CHECK(lag_knob("rach2.blockfail", &n) && n == 1000000u, "a count of a million is taken");
+    opt_blocklag = "3";
+    opt_blockfail = "3x";
+}
+
 /**
  * Install the wrapper over the backing device with a lag of three ticks and
  * run the rows. The wrapper delivers each completion after the lag, and a
  * duplicate with an error two ticks later. The rows require that:
  *
+ * - `rach2.blocklag` and `rach2.blockfail` take a count from 1 to a million
+ *   and refuse any other value, with no digits, with a trailing non-digit,
+ *   or past 32 bits, so a refused `rach2.blockfail` arms no write;
  * - the wrapper keeps only the backing's `BLOCK_READ_ONLY`, so a disk that
  *   polls and writes through, as AHCI and NVMe do, gives a wrapper that only
  *   sleeps;
@@ -228,9 +281,11 @@ int main(void)
     backing.read = backing_read;
     backing.write = backing_write;
     backing.flags = BLOCK_FAULT_SAFE | BLOCK_POLLABLE | BLOCK_WRITE_THROUGH | BLOCK_READ_ONLY;
+    refusals();
     lag = block_lag_wrap(&backing);
     CHECK(lag == &lag_device, "the wrapper installs over the backing");
     CHECK(lag_delay == 3, "the lag is the three ticks the option named");
+    CHECK(fail_write_at == 0, "rach2.blockfail=3x arms no write");
     CHECK(lag->flags == BLOCK_READ_ONLY, "the wrapper keeps only the backing's read-only flag");
     k_memset(&other, 0, sizeof(other));
     other.read = backing_read;

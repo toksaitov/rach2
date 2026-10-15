@@ -424,8 +424,9 @@ block_device_t *block_submitter(block_device_t *dev);
  * The lag test device: `rach2.blocklag=N` wraps disk 0 for the partition
  * nodes and the mounts in a device without `BLOCK_FAULT_SAFE` whose requests
  * complete N ticks later, from the timer. The root window keeps the real
- * device. Returns `backing` unchanged when the option is absent and when
- * `backing` is not the device the wrapper is over.
+ * device. Returns `backing` unchanged when the option is absent or is not
+ * a count from 1 to 1000000, and when `backing` is not the device the
+ * wrapper is over.
  */
 block_device_t *block_lag_wrap(block_device_t *backing);
 
