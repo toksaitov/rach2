@@ -2515,6 +2515,40 @@ old
 new
 end
 
+fault old-lseek-socket-ebadf
+probe preadmusl
+file rach2/sys/syscall_fs.c
+expect PREADMUSL FAIL (lseek of a socket or a pseudo-terminal master)
+old
+        return seek_rc != 0 ? seek_rc : (long)at;
+    }
+    if (entry->type != FD_TYPE_FILE) {
+        return -ESPIPE;
+    }
+new
+        return seek_rc != 0 ? seek_rc : (long)at;
+    }
+    if (entry->type != FD_TYPE_FILE) {
+        return -EBADF;
+    }
+end
+
+fault llseek-socket-ebadf
+probe preadmusl
+file rach2/sys/syscall_fs.c
+expect PREADMUSL FAIL (lseek of a socket or a pseudo-terminal master)
+old
+    if (entry->type != FD_TYPE_FILE) {
+        return -ESPIPE;
+    }
+    seek_rc = entry->ofd ? file_size_now(entry, &size) : -EBADF;
+new
+    if (entry->type != FD_TYPE_FILE) {
+        return -EBADF;
+    }
+    seek_rc = entry->ofd ? file_size_now(entry, &size) : -EBADF;
+end
+
 fault open-dir-end-not-directory
 probe direntmusl
 file rach2/sys/syscall_fs.c

@@ -1,4 +1,4 @@
-.Dd September 28, 2026
+.Dd October 15, 2026
 .Dt LSEEK 2
 .Os
 .Sh NAME
@@ -67,15 +67,17 @@ Seeks on
 and
 .Pa /dev/full
 always return position 0, ignoring the displacement and origin.
-Pipes, the console, the mouse, and other device nodes, including
+Every other descriptor does not seek and returns
+.Er ESPIPE :
+pipes, sockets, the console, pseudo-terminals, the mouse, the
+framebuffer, event objects such as an eventfd or an epoll instance, and
+the other device nodes, including
 .Pa /dev/random
 and
-.Pa /dev/urandom ,
-are not seekable and return
-.Er ESPIPE .
-Other descriptor types, including sockets, pseudo-terminals and the
-framebuffer, return
-.Er EBADF .
+.Pa /dev/urandom .
+Linux answers the same for pipes, sockets and terminals, but returns 0
+for an eventfd, epoll, inotify, signalfd or timerfd descriptor, and
+seeks a message queue descriptor and the framebuffer.
 .Ss Directories and proc files
 The offset of a directory is the place in its listing that
 .Xr getdents64 2
@@ -177,10 +179,10 @@ each to report the original file size.
 .Bl -tag -width "[EOVERFLOW]"
 .It Bq Er EBADF
 .Fa fd
-is invalid, was opened with
+is invalid or was opened with
 .Dv O_PATH ,
-its type is not supported by the seek handler, or the ordinary file
-or directory description no longer identifies a valid file.
+or the ordinary file or directory description no longer identifies a
+valid file.
 .It Bq Er EFAULT
 The 64-bit result cannot be written to user memory, or a required
 result pointer is null.
@@ -206,8 +208,9 @@ A raw disk window was withdrawn while its descriptor remained open.
 The resulting position of a file, a raw disk window or the boot log
 exceeds the call's representable range.
 .It Bq Er ESPIPE
-The descriptor refers to a pipe, the console, the mouse, or a device
-without a seek operation.
+The descriptor does not seek: it is no ordinary file, directory,
+.Pa /proc
+file or seekable device.
 .It Bq Er ESRCH
 There is no current process.
 .El

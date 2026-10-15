@@ -4016,9 +4016,9 @@ static int seek_bootlog(fd_entry_t *entry, long long off, int whence, uint64_t l
  * transfer that holds it. A raw disk window, /dev/mem and a loop device seek
  * by `raw_lseek`, /dev/bootlog by `seek_bootlog`, and a directory or a /proc
  * file by `seek_listing`. /dev/null, /dev/zero and /dev/full take any seek
- * and land at 0. A pipe, the console, the mouse and any other device are
- * -ESPIPE, as POSIX has it for what cannot seek; any other kind of
- * descriptor, and one opened with O_PATH, is -EBADF.
+ * and land at 0. Any other descriptor, among them a pipe, a socket, a
+ * terminal, the mouse and any other device, is -ESPIPE, as POSIX has it for
+ * what cannot seek; one opened with O_PATH is -EBADF.
  *
  * The result is a register's worth: on i686 a place at 2 GiB or past it is
  * -EOVERFLOW, which _llseek reaches, and on x86-64 the offset is 64 bits.
@@ -4067,7 +4067,7 @@ long sys_lseek(isr_params_t *params)
         return seek_rc != 0 ? seek_rc : (long)at;
     }
     if (entry->type != FD_TYPE_FILE) {
-        return -EBADF;
+        return -ESPIPE;
     }
 
     if (!entry->ofd || !entry->ofd->vmnt) {
@@ -8605,10 +8605,10 @@ static int file_size_now(fd_entry_t *entry, uint64_t *out)
  * _llseek(2), i386's 64-bit lseek: the descriptor, the high and low words of
  * the displacement, the address of the 64-bit result and `whence`. Moves the
  * offset and writes it to `*result`. Returns 0 or a negative errno: -EBADF
- * for a descriptor that is not open or is an O_PATH one, and for a socket
- * and any other descriptor that is no file; -ESPIPE for a pipe, a terminal,
- * the mouse and a device that does not seek; -ENXIO for a disk window whose
- * size cannot be read; -EINVAL for a bad `whence` or a place before 0;
+ * for a descriptor that is not open or is an O_PATH one; -ESPIPE for any
+ * other descriptor that does not seek, among them a pipe, a socket, a
+ * terminal, the mouse and a device; -ENXIO for a disk window whose size
+ * cannot be read; -EINVAL for a bad `whence` or a place before 0;
  * -EOVERFLOW for a place past the largest offset; -EFAULT for a NULL or bad
  * `result`.
  *
@@ -8694,10 +8694,10 @@ long sys__llseek(isr_params_t *params)
     if (seeks_listing(entry)) {
         return llseek_listing(entry, off_from(offset_high, offset_low), whence, result);
     }
-    if (entry->type != FD_TYPE_FILE || !entry->ofd) {
-        return -EBADF;
+    if (entry->type != FD_TYPE_FILE) {
+        return -ESPIPE;
     }
-    seek_rc = file_size_now(entry, &size);
+    seek_rc = entry->ofd ? file_size_now(entry, &size) : -EBADF;
     if (seek_rc != 0) {
         return seek_rc;
     }

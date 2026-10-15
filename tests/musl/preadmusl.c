@@ -16,7 +16,8 @@
  * reads nothing at 4 GiB. Then each error, in Linux's order: a negative offset
  * before the descriptor, a pipe, a socket and the terminal that cannot seek, a
  * descriptor open for the other direction, an end past the signed range, and
- * a directory.
+ * a directory. lseek of a socket and of a pseudo-terminal master is ESPIPE, by
+ * _llseek and by call 19 (lseek, call 8, on x86-64), as on Linux.
  *
  * Prints `PREADMUSL OK` and exits 0 on success, and prints
  * `PREADMUSL FAIL (detail)` and exits 1 otherwise.
@@ -27,6 +28,7 @@
 #include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -299,10 +301,34 @@ static int refusal_rows(void)
     return 0;
 }
 
+/**
+ * Check that lseek of a socket and of a pseudo-terminal master is ESPIPE, by
+ * musl's lseek and by call SYS_lseek. Returns 0, or 1 once the failure is
+ * reported.
+ */
+static int seek_refusal_rows(void)
+{
+    int fd;
+    int ok;
+
+    fd = socket(AF_INET, SOCK_DGRAM, 0);
+    ok = fd >= 0 && refused(lseek(fd, 0, SEEK_CUR), ESPIPE) &&
+         refused(syscall(SYS_lseek, fd, 0L, SEEK_CUR), ESPIPE);
+    close(fd);
+    fd = posix_openpt(O_RDWR | O_NOCTTY);
+    ok = ok && fd >= 0 && refused(lseek(fd, 0, SEEK_SET), ESPIPE) &&
+         refused(syscall(SYS_lseek, fd, 0L, SEEK_SET), ESPIPE);
+    close(fd);
+    if (!ok) {
+        return fail("lseek of a socket or a pseudo-terminal master");
+    }
+    return 0;
+}
+
 int main(void)
 {
     if (file_rows() != 0 || device_rows() != 0 || proc_seek_rows() != 0 || wide_proc_rows() != 0 ||
-        refusal_rows() != 0) {
+        refusal_rows() != 0 || seek_refusal_rows() != 0) {
         unlink(FILE_PATH);
         return 1;
     }
