@@ -1,23 +1,24 @@
 # night: every suite on both architectures, once a night.
 #
-# The run starts at 19:00 UTC, 01:00 at the owner's UTC+6, on the newest
-# master, and runs the two architectures one after the other on one runner,
-# so that the core runs of the night keep the other. It is outside the core
-# runs' group, and a night that has not ended when the next one is due makes
-# that one wait. tools/ci/run.sh runs the build and every suite of the
-# architecture, `bigmem` last and alone; tools/ci/report.sh files what fails
-# as core runs do, under the status `ci/night/ARCH`. A run that a person
-# cancels reports nothing. GitHub cancels a job that passes its time limit
-# too, so each architecture has 340 minutes of its own inside the job's,
-# which leave time for the report. At the limit timeout(1) sends TERM to the
-# run's process group, and run.sh ends once tests/run has stopped its
-# machines, so that the next architecture starts on a free tree; the
-# architecture that ran out of time is reported as unfinished.
+# The run starts at 19:17 UTC, 01:17 at the owner's UTC+6, on the newest master;
+# it is due off the hour because GitHub delays or drops scheduled runs due at
+# the start of an hour under load. It runs the two architectures one after the
+# other on one runner, so that the core runs of the night keep the other. It is
+# outside the core runs' group, and a night that has not ended when the next one
+# is due makes that one wait. tools/ci/run.sh runs the build and every suite of
+# the architecture, `bigmem` last and alone; tools/ci/report.sh files what fails
+# as core runs do, under the status `ci/night/ARCH`. A run that a person cancels
+# reports nothing. GitHub cancels a job that passes its time limit too, so each
+# architecture has 340 minutes of its own inside the job's, which leave time for
+# the report. At the limit timeout(1) sends TERM to the run's process group, and
+# run.sh ends once tests/run has stopped its machines, so that the next
+# architecture starts on a free tree; the architecture that ran out of time is
+# reported as unfinished.
 name: night
 
 on:
   schedule:
-    - cron: '0 19 * * *'
+    - cron: '17 19 * * *'
   workflow_dispatch:
 
 permissions:
