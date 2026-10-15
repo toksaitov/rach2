@@ -133,12 +133,12 @@
  *
  * `harness --selftest` checks, without QEMU, the escape decoder, the mouse
  * step's parsing, the probe's wait bounds, the bound on a write the machine
- * does not read, the reading of output written before a timeout, a
- * `sendfile=` step whose file cannot be read, the end of a step at a
- * `--never` text, and the report of a failed step. `harness --match
- * PATTERN` prints where PATTERN first ends in the text on standard input,
- * or -1, which checks the matcher by hand. `RACH2_TRACE=FILE` records each
- * step's outcome and the final decision.
+ * does not read, the reading of output written before a timeout or before
+ * the machine exited, a `sendfile=` step whose file cannot be read, the end
+ * of a step at a `--never` text, and the report of a failed step. `harness
+ * --match PATTERN` prints where PATTERN first ends in the text on standard
+ * input, or -1, which checks the matcher by hand. `RACH2_TRACE=FILE` records
+ * each step's outcome and the final decision.
  */
 #include <arpa/inet.h>
 #include <errno.h>
@@ -1048,7 +1048,9 @@ static int expect_step(const char *step)
  * steps are satisfied in theirs. The cursor moves past the match only
  * when the match is beyond it, so a later `expect=` still searches on. A
  * `--never` text in the output ends the wait with no match, and is looked
- * for before the pattern, as `expect_pattern` looks for it.
+ * for before the pattern, as `expect_pattern` looks for it. A machine that
+ * has exited can still have output in the pipe, which is read before the
+ * last search.
  */
 static int seen_pattern(const char *pattern)
 {
@@ -1060,8 +1062,11 @@ static int seen_pattern(const char *pattern)
     if (stop > deadline)
         stop = deadline;
     for (;;) {
+        int exited = child_poll() >= 0;
         long end;
 
+        if (exited)
+            drain_ready();
         if (never_appeared())
             break;
         end = regex_search(&re, buf, buf_len, exchange);
@@ -1070,7 +1075,7 @@ static int seen_pattern(const char *pattern)
                 consumed = (size_t)end;
             return 1;
         }
-        if (now() >= stop || child_poll() >= 0)
+        if (exited || now() >= stop)
             break;
         pump(now() + 0.3);
     }
@@ -1529,6 +1534,66 @@ static int late_output_selftest(void)
     }
     printf("harness: selftest: output written before a timeout is read after it\n");
     return 0;
+}
+
+/**
+ * Require a step to search the output a machine wrote before it exited.
+ *
+ * The pipe holds the machine's last lines, and the machine has been reaped
+ * before the step first reads: a step that gave up when it saw the exit,
+ * without reading the pipe, would fail a pattern the machine printed. Each
+ * of an `expect=` and a `seen=` step must match it.
+ */
+static int exited_output_selftest(void)
+{
+    static const char *const steps[] = {"expect=FIRST", "seen=FIRST"};
+    static const char lines[] = "READY\nFIRST\n";
+    size_t i;
+    int bad = 0;
+
+    for (i = 0; !bad && i < sizeof(steps) / sizeof(steps[0]); i++) {
+        int out[2], got;
+
+        if (pipe(out) != 0) {
+            perror("harness: selftest pipe");
+            return 1;
+        }
+        if (write(out[1], lines, sizeof(lines) - 1) != (ssize_t)(sizeof(lines) - 1) ||
+            fcntl(out[0], F_SETFL, O_NONBLOCK) < 0) {
+            perror("harness: selftest pipe");
+            close(out[0]);
+            close(out[1]);
+            return 1;
+        }
+        close(out[1]);
+        child_out = out[0];
+        child_reaped = 1;
+        child_status = 0;
+        consumed = exchange = 0;
+        steptmo = 3.0;
+        deadline = now() + 3.0;
+        if (strncmp(steps[i], "seen=", 5) == 0)
+            got = seen_pattern(steps[i] + 5);
+        else
+            got = expect_step(steps[i]);
+        close(child_out);
+        child_out = -1;
+        child_reaped = 0;
+        free(buf);
+        buf = NULL;
+        buf_len = buf_cap = consumed = exchange = 0;
+        if (!got) {
+            fprintf(stderr,
+                    "harness: selftest: %s did not match the output of a machine "
+                    "that had exited\n",
+                    steps[i]);
+            bad++;
+        }
+    }
+    if (!bad)
+        printf("harness: selftest: a step searches the output a machine wrote "
+               "before it exited\n");
+    return bad != 0;
 }
 
 /**
@@ -2134,8 +2199,8 @@ int main(int argc, char **argv)
 
     if (argc == 2 && strcmp(argv[1], "--selftest") == 0)
         return unescape_selftest() | probe_wait_selftest() | input_deadline_selftest() |
-               late_output_selftest() | sendfile_selftest() | never_step_selftest() |
-               never_first_selftest() | failed_step_selftest();
+               late_output_selftest() | exited_output_selftest() | sendfile_selftest() |
+               never_step_selftest() | never_first_selftest() | failed_step_selftest();
     if (argc == 3 && strcmp(argv[1], "--match") == 0)
         return match_mode(argv[2]);
 
