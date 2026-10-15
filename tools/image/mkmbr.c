@@ -213,6 +213,22 @@ static int write_logical(FILE *f, int lba_units, unsigned long ext_lba, unsigned
 }
 
 /**
+ * Return why a partition cannot have a slot in the table, or NULL when it
+ * can: a primary one after `primaries` others, or a logical one after
+ * `logicals` others, which needs an extended partition (`have_extended`).
+ */
+static const char *slot_refusal(int logical, int primaries, int have_extended, int logicals)
+{
+    if (!logical && primaries == 4)
+        return "more than four primary partitions";
+    if (logical && !have_extended)
+        return "a logical partition needs an extended one before it";
+    if (logical && logicals == 16)
+        return "more than sixteen logical partitions";
+    return NULL;
+}
+
+/**
  * Write the table the arguments describe, as the opening comment says, or
  * list one with `--list`. The first sector is written back only after
  * every argument has been checked and the extended boot records written.
@@ -284,6 +300,7 @@ int main(int argc, char **argv)
         unsigned long lba, count;
         unsigned char *e = sector + 0x1be + 16 * primaries;
         const char *p = argv[i];
+        const char *why;
         int boot = 0, logical = 0, j;
 
         if (!field(&p, 10, &start_mib) || !colon(&p) || !field(&p, 10, &size_mib) || !colon(&p) ||
@@ -295,13 +312,9 @@ int main(int argc, char **argv)
         }
         boot = strcmp(p, ":boot") == 0;
         logical = strcmp(p, ":logical") == 0;
-        if (!logical && primaries == 4) {
-            fprintf(stderr, "mkmbr: more than four primary partitions\n");
-            fclose(f);
-            return 2;
-        }
-        if (logical && (ext_count == 0 || logicals == 16)) {
-            fprintf(stderr, "mkmbr: a logical partition needs an extended one before it\n");
+        why = slot_refusal(logical, primaries, ext_count != 0, logicals);
+        if (why != NULL) {
+            fprintf(stderr, "mkmbr: %s\n", why);
             fclose(f);
             return 2;
         }

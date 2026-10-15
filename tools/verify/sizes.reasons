@@ -704,8 +704,8 @@ tools/image/fatchains.c:print_chain complexity 29 an inspector's check, one walk
 tools/image/mkgpt.c:main complexity 54 an inspector's check, one walk over the format it reads
 tools/image/mkgpt.c:main lines 147 an inspector's check, one walk over the format it reads
 
-tools/image/mkmbr.c:main complexity 53 an inspector's check, one walk over the format it reads
-tools/image/mkmbr.c:main lines 153 an inspector's check, one walk over the format it reads
+tools/image/mkmbr.c:main complexity 49 an inspector's check, one walk over the format it reads
+tools/image/mkmbr.c:main lines 150 an inspector's check, one walk over the format it reads
 
 tools/image/stickcheck.c:main complexity 29 an inspector's check, one walk over the format it reads
 
