@@ -1,9 +1,10 @@
-# The Ubuntu image the GRUB steps run in, pinned by digest.
+# ubuntu-image.txt: the Ubuntu container image, pinned by digest, in which
+# vendor/grub/regen_grub.sh makes the GRUB images.
 #
-# vendor/grub/regen_grub.sh reads this file.
-# A tag moves: ubuntu:24.04 in six months is not the image this project was
-# proved against, and a GRUB built from a different grub-pc would be a change
-# nobody chose. Repin deliberately, and say why in the commit.
+# regen_grub.sh reads the first line of the form `ubuntu@sha256:DIGEST`. A
+# tag moves: ubuntu:24.04 six months later is a different image, and a GRUB
+# built from a different grub-pc would be a change nobody chose. Change the
+# digest only on purpose, and say why in the commit.
 #
 # ubuntu:24.04 as of 2026-08-21
 ubuntu@sha256:d78ab76437b1afc5f01e223d6bf0172763f404bb166441328845adbef44518cb

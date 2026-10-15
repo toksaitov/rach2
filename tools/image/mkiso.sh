@@ -7,8 +7,8 @@
 # build/images/<image>.iso with xorriso and the pinned GRUB El Torito, hybrid
 # and EFI images under vendor/grub/, so no GRUB toolchain and no Docker is
 # needed. The hybrid MBR keeps the ISO bootable when written to a USB
-# device. Each image gets its own ISO and its own staging dir, so
-# `make isos` can build all three in parallel without a race.
+# device. Each image gets its own ISO and its own staging directory, so
+# `make isos` can build them all in parallel without a race.
 #
 # The ISO boots by UEFI as well. Its EFI boot image, a FAT volume holding
 # GRUB's EFI image as \EFI\BOOT\BOOTX64.EFI, is appended after the ISO's file
@@ -19,7 +19,10 @@
 # the ISO's file system by its UUID, the volume's modification time, which
 # this build sets, and opens the ISO's menu there.
 #
-# Usage: ./mkiso.sh <test|os-simple|os-real|rach2-metal>
+# Usage: ./mkiso.sh IMAGE
+#
+# IMAGE is test, os-simple, os-real, rach2-metal, rach2-recovery or
+# rach2-recovery-with-key.
 #
 # Requires xorriso. Build the kernel and the image first (make). The kernel,
 # the image and the ISO are those of the architecture in RACH2_ARCH
@@ -40,8 +43,8 @@ esac
 
 # `rach2-recovery-with-key` is the recovery system with an authorized key staged
 # in it, which is what makes it start an SSH server. It is built under a name of
-# its own so that a stick made from it says what it answers; everything below
-# treats the two the same.
+# its own so that the name of a stick made from it says it has a key;
+# everything below treats the two the same.
 case "$IMAGE" in
     rach2-recovery*) RECOVERY=yes ;;
     *)               RECOVERY=no ;;
@@ -53,9 +56,9 @@ REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 # The metal profile has the kernel that cannot write a disk, and no other
 # profile does. This is the stick that goes into a laptop whose SSD has
-# somebody's Windows, so the artifact is checked here, not assumed:
-# staging the ordinary kernel under the metal name would produce exactly the
-# image this milestone promises not to make.
+# somebody's Windows, so the kernel's disk policy is checked here: the
+# ordinary kernel staged under the metal name would make a stick that can
+# write that SSD.
 if [ "$IMAGE" = rach2-metal ]; then
     KERNEL="$ARCH_BUILD/rach2-metal/kernel"
     POLICY=read-only
@@ -98,15 +101,15 @@ cat "$KERNEL" > "$ISODIR/boot/kernel"
 cat "$KRFFS" > "$ISODIR/boot/$IMAGE.krffs"
 
 # The metal profile's menu. It is longer than the others' because this is the
-# stick that goes into a laptop with no serial port, where every question has
-# to be answerable by choosing a menu entry, not by typing a command
-# line at a machine you cannot read.
+# stick that goes into a laptop with no serial port, where each choice a
+# person may need is a menu entry, so that nobody has to type a command line
+# at a machine whose output cannot be read.
 #
-# The default entry's address is baked in, not typed, because a machine
-# whose network is the broken part is one you want on a known address. Typing
-# one at a GRUB prompt on a laptop keyboard, correctly, every time, is a tax
-# with no teaching value. These defaults are the network the machine actually
-# lives on; override them at build time for anywhere else:
+# The default entry's address is built in, since a machine whose network is
+# the broken part should be on a known address, and typing one at a GRUB
+# prompt on a laptop keyboard at every boot is error-prone. The defaults are
+# those of the network the machine is on; set them at build time for any
+# other:
 #
 # RACH2_METAL_IP=10.0.0.50/24 RACH2_METAL_GATEWAY=10.0.0.1 make rach2-metal-iso
 #
@@ -122,9 +125,9 @@ METAL_NET="rach2.ip=$METAL_IP rach2.gateway=$METAL_GATEWAY rach2.netconsole"
 
 if [ "$IMAGE" = rach2-metal ]; then
     # The disk diagnostic is its own entry and not part of the default, because
-    # it probes the SATA controller and resets its link, and that path has less
-    # standing on this board than the rest. A boot that stops there should cost
-    # a different menu choice, not a reinstall.
+    # it probes the SATA controller and resets its link, a path tested less on
+    # this board than the rest. A boot that stops there is undone by choosing
+    # another entry.
     METAL_ENTRIES="menuentry \"Start Rach2, and probe the disk controller\" {
     \$rach2_load /boot/kernel $METAL_NET rach2.disk=ahci rach2.diskdiag
     \$rach2_module /boot/rach2-metal.krffs
@@ -238,14 +241,13 @@ mmd -i "$ISODIR.efi.img" ::/EFI ::/EFI/BOOT ::/boot ::/boot/grub
 mcopy -i "$ISODIR.efi.img" "$ISODIR.bootx64.efi" ::/EFI/BOOT/BOOTX64.EFI
 mcopy -i "$ISODIR.efi.img" "$ISODIR.efi.cfg" ::/boot/grub/grub.cfg
 
-# xorriso assembles what grub-mkrescue assembled in the retired container:
-# an ISO9660 tree with the El Torito boot image, its boot-info table patched
-# in, and GRUB's hybrid MBR so the same ISO boots from a USB device; and the
-# EFI boot image appended as the MBR's second partition, of type 0xEF, which
-# the second El Torito entry names by its sectors. The output goes to a .new
-# sibling renamed only on success, and the exit status is xorriso's own, not
-# a log filter's, so a failure can neither pass nor leave a half-written ISO
-# where the old one was.
+# xorriso assembles an ISO9660 tree with the El Torito boot image, its
+# boot-info table patched in, and GRUB's hybrid MBR so the same ISO boots from
+# a USB device; and the EFI boot image appended as the MBR's second partition,
+# of type 0xEF, which the second El Torito entry names by its sectors. The
+# output goes to a .new sibling renamed only on success, and the exit status
+# is xorriso's own, not a log filter's, so a failure can neither pass nor
+# leave a half-written ISO where the old one was.
 if xorriso -as mkisofs -graft-points -R -J \
         --modification-date="$ISO_DATE" \
         -b boot/grub/eltorito.img -no-emul-boot -boot-load-size 4 \

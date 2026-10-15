@@ -170,7 +170,8 @@ grep -v '128-byte inodes cannot handle dates beyond 2038' "$MKLOG" >&2 || true
 
 # Read the superblock back: the magic, the revision, the block size, the
 # inode size and the three feature words must be the profile's, whatever
-# mke2fs's configuration said.
+# mke2fs's configuration said. sb OFFSET and sb16 OFFSET print in decimal the
+# 32-bit and the 16-bit field at byte OFFSET of the superblock.
 sb() { od -A n -t u4 -j "$((1024 + $1))" -N 4 "$TMP" | tr -d ' '; }
 sb16() { od -A n -t u2 -j "$((1024 + $1))" -N 2 "$TMP" | tr -d ' '; }
 [ "$(sb16 56)" = "61267" ] || { echo "mkext2: no ext2 magic in the image" >&2; exit 1; }
@@ -233,7 +234,7 @@ if [ "$DBSTATUS" -ne 0 ] || grep -v '^debugfs' "$WORK/debugfs.log" | grep -q .; 
     exit 1
 fi
 
-# The two gates: structure, then policy.
+# The two checks: e2fsck for the structure, then setidcheck for the policy.
 e2fsck -fn "$TMP" > "$FSCK" 2>&1 || { cat "$FSCK" >&2; exit 1; }
 if [ ! -x "$SETIDCHECK" ] || [ "$REPO/tools/inspect/setidcheck.c" -nt "$SETIDCHECK" ]; then
     mkdir -p "${SETIDCHECK%/*}"

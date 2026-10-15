@@ -5,9 +5,9 @@
 # It has the shape of the product stick mkstick.sh writes, with two
 # differences: the bootable part is the recovery system rather than the metal
 # one, since recovery is what runs the installer, and the exFAT volume after it
-# carries a whole disk image, under its own name, and a manifest naming that
-# image's name, length and SHA-256. The product stick carries the sealed disk;
-# the suites build one carrying a small disk instead, so the rows that install
+# has a whole disk image, under its own name, and a manifest giving that
+# image's name, length and SHA-256. The product stick has the sealed disk;
+# the suites build one with a small disk instead, so the rows that install
 # do not each write a gibibyte and a half.
 #
 # The installer reads the manifest, hashes the image on the stick before it
@@ -21,7 +21,7 @@
 # and which xorriso gave the ISO's own table as its second entry. The boot
 # code around the table is GRUB's, as the ISO wrote it.
 #
-# The volume also carries GRUB's EFI image, `bootx64.efi`, with its digest in
+# The volume also has GRUB's EFI image, `bootx64.efi`, with its digest in
 # `bootx64.efi.sha256`, beside the root image: `rach2-install --update` takes
 # it from beside the image it is given to convert an MBR disk to boot by UEFI
 # as well.
@@ -32,9 +32,11 @@
 # An EXTRA file, if one is given, is placed in the volume beside the image: the
 # root file system an update writes, which `rach2-install --update` takes.
 #
-# FREE-MIB is four by default; recovery backups need a larger value.
 # Usage: mkinstallstick.sh ISO DISK OUT MKEXFATFIXTURE MKMBR STICKCHECK
 #                         [EXTRA [FREE-MIB]]
+#
+# FREE-MIB is 4 to 8192, and 4 by default; recovery backups need a larger
+# value.
 set -e
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 ISO=$1; DISK=$2; OUT=$3; MKFIX=$4; MKMBR=$5; CHECK=$6; EXTRA=${7:-}
@@ -80,7 +82,7 @@ volume=$(( disk_sectors + extra_sectors + efi_sectors_on_volume + SLACK_SECTORS 
 volume=$(( ((volume + MIB_SECTORS - 1) / MIB_SECTORS) * MIB_SECTORS ))
 
 # A failure at any step leaves neither the half-built image nor its parts.
-# Each temporary carries this run's process number, so two builds of one stick
+# Each temporary has this run's process number, so two builds of one stick
 # cannot take each other's file away and leave make to delete the stick both
 # of them needed.
 NEW="$OUT.$$.new"
@@ -91,10 +93,11 @@ EFISUM="$OUT.$$.bootx64.efi.sha256"
 trap 'rm -f "$NEW" "$VOL" "$MAN" "$EFI" "$EFISUM"' EXIT
 rm -f "$NEW"
 
-# The SHA-256 of FILE, named WHAT in a diagnostic, with the hash's own status
-# checked: `shasum | cut` under `set -e` reports the status of `cut`, so a
-# hash that was never taken would be written as an empty field and the stick
-# would carry a digest nothing can match.
+# Print the SHA-256 of FILE in hexadecimal, or return 1 with a diagnostic that
+# names WHAT when shasum fails or prints anything but 64 hexadecimal digits.
+# The hash's own status is checked: `shasum | cut` under `set -e` reports the
+# status of `cut`, so a hash that was never taken would be written as an empty
+# field and the stick would have a digest nothing can match.
 sha256_of() { # sha256_of FILE WHAT
     sum_line=$(shasum -a 256 "$1") || {
         echo "mkinstallstick: $2's hash could not be taken" >&2

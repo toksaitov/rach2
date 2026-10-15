@@ -1,19 +1,22 @@
 #!/usr/bin/env sh
 #
-# keyname.sh: refuse to stage a recovery artifact whose name does not say what
-# it carries.
+# keyname.sh: stop the build of a recovery artifact whose name does not say
+# whether it has a recovery key.
 #
 # Make reads `krffs/recovery_authorized_keys` when it starts, and that decides
 # whether the recovery image, its ISO, the install stick, the sealed disk and
 # the GRUB disk are built under their plain names or under `-with-key` ones;
-# the two disks carry the recovery image on their recovery partitions. A key
-# that appears after that decision, which is what `make recovery-key
-# rach2-install-stick` does in one command, would be staged into an artifact
-# whose name says it answers nobody. The name is the guard a person reads
-# before writing a stick, so the build stops here instead. It is also what
-# makes `make release` safe against a key minted in the same command.
+# the two disks have the recovery image on their recovery partitions. A key
+# made after that decision, as `make recovery-key rach2-install-stick` makes
+# one in a single command, would be staged into an artifact whose name says it
+# has no key. A person reads the name before writing a stick, so the build
+# stops here instead. This check also keeps `make release` from building an
+# artifact with a key made in the same command.
 #
 # Usage: keyname.sh PATH
+#
+# The exit status is 0 when the name of PATH matches the tree, 1 when it does
+# not, and 2 for a usage error.
 set -u
 [ -n "${1:-}" ] || { echo "usage: keyname.sh PATH" >&2; exit 2; }
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"

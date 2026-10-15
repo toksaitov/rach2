@@ -6,13 +6,13 @@
 #
 # The disk has a GUID partition table, or an MBR when RACH2_DISK_TABLE is
 # `mbr`, which boots by BIOS alone, since it has no EFI image, and three
-# partitions in the same roles on either. Partition 1 is a
-# FAT32 boot file system holding GRUB's menu, its environment block and two
-# kernel slots. Partition 2 is a FAT32 volume for the recovery kernel and its
-# RAM image, in a file system of its own so that a boot partition damaged by
-# the writes an install makes still leaves a way to repair the machine.
-# Partition 3 is the ext2 image RACH2_DISK_EXT2_IMAGE names, which both kernel
-# entries boot as their root.
+# partitions in the same roles on either. Partition 1 is a FAT32 boot file
+# system holding GRUB's menu, its environment block and two kernel slots.
+# Partition 2 is a FAT32 volume for the recovery kernel and its RAM image, in
+# a file system of its own so that a boot partition damaged by the writes an
+# install makes still leaves a way to repair the machine. Partition 3 is the
+# ext2 image RACH2_DISK_EXT2_IMAGE names, which both kernel entries boot as
+# their root.
 #
 # On a GUID table, partition 1 is the EFI system partition, which UEFI
 # firmware starts \EFI\BOOT\BOOTX64.EFI from: GRUB's EFI image, which opens
@@ -20,16 +20,14 @@
 # between the table and the first megabyte, and holds GRUB's BIOS core, since
 # the sectors after the MBR are the table's. A GUID table addresses any disk,
 # where an MBR stops at 2 TiB, so this is the table a new install writes. The
-# MBR layout is the one disks installed before milestone 57 have, which the
-# suites of the boot loader's replacement and of their conversion build.
+# MBR layout is the one on machines installed before Rach2 booted by UEFI;
+# the suites of the boot loader's replacement build it, and installer-repair
+# converts one.
 #
-# There was a KRFFS root between them until 2026-09-14: a second complete
-# system with the demonstration accounts, which the fallback entry booted so
-# that a machine came up to something when the installed root would not mount.
-# The recovery system does that and more, from RAM, and reaches the machine
-# whether or not the boot partition reads; the fallback slot now guards the one
-# failure GRUB can detect by itself, a kernel image that will not load, and
-# boots the person's own root with it.
+# The fallback entry boots the person's own root with the previous kernel, and
+# covers the one failure GRUB detects by itself, a kernel image that does not
+# load. A root that does not mount is repaired from the recovery system, which
+# runs from RAM and is reached whether or not the boot partition reads.
 #
 # GRUB's boot.img goes in the MBR and its core in the post-MBR gap of an MBR
 # disk, or in the BIOS boot partition of a GPT disk (partition 1 starts at
@@ -42,23 +40,24 @@
 # framebuffer and, under UEFI, its memory map. The core of an MBR disk has
 # only the Multiboot loader, and its menu uses that.
 #
-# The boot partition is the install surface (dev-log/23-install/plan.md):
+# The boot partition is what an install rewrites (dev-log/23-install/plan.md):
 # /boot/kernel is the candidate, the kernel padded with zeros to a fixed
 # 2 MiB slot whose data sectors bootctl rewrites in place on the
 # machine itself; /boot/fallback is the same kernel, padded the same, which
 # `bootctl fallback` rewrites from a committed candidate and nothing else;
 # and /boot/grub/grubenv is the 1024-byte state block that selects between
-# them, initialized to boot the candidate. The build verifies every staged
-# chain and the four files' disjointness before committing the partition,
+# them, initialized to boot the candidate. The build verifies the chains of
+# the five boot files and their disjointness before committing the partition,
 # because the installer walks the same structures and a broken chain would
 # stop every install.
 #
 # The disk is assembled on the host with mtools, the project MBR writer, and
 # the pinned GRUB artifacts under vendor/grub/, so no GRUB toolchain and no
-# Docker is needed.
-# Build the kernel and the capstones first (make).
+# Docker is needed. Run make first, which builds the kernel.
 #
-# Usage: ./mkdisk_grub.sh
+# Usage: ./mkdisk_grub.sh [KERNEL [OUTPUT]]
+#
+# The RACH2_DISK_* variables below describe the disk.
 #
 
 set -e
@@ -78,13 +77,11 @@ KEY_TAG=""
 [ ! -f "$REPO/krffs/recovery_authorized_keys" ] || KEY_TAG=-with-key
 OUT="${2:-$ARCH_BUILD/images/os-real-grub$KEY_TAG.disk}"
 
-# Knobs for a disk aimed at a particular machine, each defaulting to exactly
-# what this script always built so no existing caller changes: extra kernel
-# command-line tokens appended to every menu entry (a real
-# machine needs its address and its disk driver named; QEMU's defaults need
-# neither). The network tokens are separate from those, since the kernel
-# refuses an address given twice and a line carrying `rach2.ip=none` can
-# have no address appended to it.
+# Kernel command-line tokens for a disk meant for one machine, empty by
+# default and appended to every menu entry (a real machine needs its address
+# and its disk driver named; QEMU's defaults need neither). The network tokens
+# are a set of their own, since the kernel rejects an address given twice and
+# a line with `rach2.ip=none` can have no address appended to it.
 EXTRA_APPEND="${RACH2_DISK_APPEND:-}"
 DHCP_APPEND="${RACH2_DISK_DHCP_APPEND:-}"
 
@@ -98,7 +95,7 @@ DHCP_APPEND="${RACH2_DISK_DHCP_APPEND:-}"
 # OVMF does not mount a 64 MiB one at eight sectors per cluster, which has
 # 16348. So it takes one sector per cluster, whatever CLUSTER says, and at
 # least 33 MiB. bootslot_open refuses a volume whose FAT exceeds
-# BOOTSLOT_FAT_MAX_SECTORS (1024) or whose cluster count exceeds
+# BOOTSLOT_FAT_MAX_SECTORS (1024) or whose cluster count plus two exceeds
 # BOOTSLOT_MAX_CLUSTERS (131072), which a 64 MiB partition at one sector per
 # cluster, about 130000 clusters with a 1016-sector FAT, stays within. The
 # build reads the count back from the volume and refuses one outside both.
@@ -124,9 +121,7 @@ RECOVERY_IMAGE="${RACH2_DISK_RECOVERY_IMAGE:-}"
 EXT2_MB="${RACH2_DISK_EXT2_MB:-0}"
 EXT2_IMAGE="${RACH2_DISK_EXT2_IMAGE:-}"
 # Every disk this builds has a root, because both kernel entries name one and a
-# disk without it boots to nothing. The KRFFS root that used to stand in for it
-# is gone, and the callers that relied on it were found by this check rather
-# than by booting the disks they produced.
+# disk without it boots to nothing.
 if [ "$EXT2_MB" -le 0 ]; then
     echo "mkdisk_grub: this disk would have no root; set RACH2_DISK_EXT2_MB and RACH2_DISK_EXT2_IMAGE" >&2
     exit 1
@@ -153,17 +148,8 @@ BOOT_LABEL=RACH2BOOT
 RECOVERY_LABEL=RACH2RECOV
 # The root by identity: the disk id and the entry, with the type beside it, so
 # a clone of this disk behind it is not taken for it and a partition of the
-# wrong kind is refused by name.
-#
-# Both kernel entries take the same root, the ext2 one. They used to differ:
-# the fallback booted a KRFFS root of its own in a partition of its own, a
-# second complete system with the demonstration accounts, kept so a machine
-# came up to something when the installed root would not mount. The recovery
-# system does that job and does it better, from RAM, with the tools to repair
-# the thing, and it is reached whether or not the boot partition reads. So the
-# fallback slot now guards the one failure it can actually catch, a kernel
-# image that will not load: GRUB falls into it by itself and the machine comes
-# back on the previous kernel with the person's own files.
+# wrong kind is refused by name. Both kernel entries take the same root, the
+# ext2 one.
 if [ "$TABLE" = gpt ]; then
     DISK_IDENTITY="GPTID=$DISK_GUID"
 else
@@ -172,17 +158,14 @@ fi
 CANDIDATE_ROOT="$DISK_IDENTITY,3 rach2.rootfstype=ext2"
 FALLBACK_ROOT="$DISK_IDENTITY,3 rach2.rootfstype=ext2"
 
-# The FAT half of this disk used to differ between two builds of one tree, in
-# two places that have nothing to do with its contents: mformat picks a random
-# volume serial, and mcopy stamps each directory entry's creation and access
-# dates from the clock. Both are pinned here. SOURCE_DATE_EPOCH is the standard
-# name and mtools honours it; a caller that has one already keeps it, so this
-# disk agrees with whatever else that caller is building.
-#
-# What is still not fixed, and is not pretended to be: the machine's SSH
-# host key and password salt are generated per tree. Those are inputs to
-# the artifact, not noise in it. The GRUB bytes themselves are pinned under
-# vendor/grub/ and verified before use.
+# Two builds of one tree write the same FAT volumes. mformat would pick a
+# random volume serial and mcopy would stamp each directory entry's creation
+# and access dates from the clock; the serials are pinned above, and the dates
+# come from SOURCE_DATE_EPOCH, the standard name, which mtools honours. A
+# caller that has one already keeps it, so this disk agrees with whatever else
+# that caller is building. The machine's SSH host key and password salt are
+# made for each tree, so two trees give different disks. The GRUB bytes are
+# pinned under vendor/grub/ and verified before use.
 SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-1700000000}"
 export SOURCE_DATE_EPOCH
 
@@ -193,11 +176,10 @@ SLOT_BYTES=2097152
 # extends the file or moves its chain, so the size is fixed at build time and is
 # a whole number of clusters at either geometry this script produces.
 MENU_BYTES=8192
-# One spare MiB so the last partition ends before the device edge (parted
-# rejects a partition that ends exactly at the device size).
-# The ext2 partition begins after the spare MiB, where the installed machine's
-# fourth partition already begins, so the sealed image and the machine agree
-# on its offset; a second spare MiB then ends the disk.
+# The ext2 partition begins one spare MiB after the recovery partition, where
+# the installed machine's fourth partition begins, so the sealed image and the
+# machine agree on its offset; a second spare MiB ends the disk, so that the
+# last partition ends before the end of the device.
 EXT2_START_MB=$((GAP_MB + BOOT_MB + RECOVERY_MB + 1))
 DISK_MB=$((EXT2_START_MB + EXT2_MB + 1))
 if [ "$EXT2_MB" -le 0 ]; then
@@ -215,10 +197,8 @@ for t in mformat mmd mcopy; do
     }
 done
 
-# The MBR writer beside this script, built by make when missing or older
-# than its source; it writes the same bytes parted wrote in the retired
-# container, CHS fields included. The chain reader and the GRUB embedder are
-# built the same way.
+# The MBR and GUID table writers, the chain reader and the GRUB embedder,
+# which make builds when one is missing or older than its source.
 MKMBR="$REPO/build/tools/image/mkmbr"
 make -s -C "$REPO" build/tools/image/mkmbr "ARCH=$RACH2_ARCH" || exit 1
 MKGPT="$REPO/build/tools/image/mkgpt"
@@ -234,10 +214,9 @@ make -s -C "$REPO" build/tools/image/grubembed "ARCH=$RACH2_ARCH" || exit 1
 # output on any exit; the finished disk appears only through the final mv.
 mkdir -p "$ARCH_BUILD/images" || exit 1
 TMPD="$(mktemp -d "$ARCH_BUILD/images/mkdisk.XXXXXX")"
-# The unrenamed output carries this run's process number for the same reason:
-# two builds of one disk with one fixed name removed each other's file, and
-# make deleted the disk both wanted. On 2026-09-09 the installer and
-# installer-repair suites went down that way, six and twelve seconds each.
+# The unrenamed output has this run's process number in its name for the same
+# reason: two builds of one disk under one fixed name would remove each
+# other's file, and make would delete the disk both wanted.
 NEW="$OUT.$$.new"
 trap 'rm -rf "$TMPD" "$NEW"' EXIT
 GRUB_CFG="$TMPD/grub-disk.cfg"
@@ -262,15 +241,9 @@ sh "$REPO/vendor/grub/verify_grub.sh" \
     "$CORE=$TMPD/$CORE" \
     "bootx64.efi=$TMPD/bootx64.efi"
 
-# The install contract (dev-log/23-install/plan.md): /boot/kernel is the
-# candidate slot bootctl rewrites, /boot/fallback the untouched copy,
-# and /boot/grub/grubenv the 1024-byte state block both GRUB and the installer
-# edit in place. saved_entry and next_entry are compared against the exact
-# menu ids and any other value selects the fallback entry, because the block
-# has no checksum and a torn write can still load; next_entry is consumed by
-# this script (set empty, saved back), the one-boot trial, since this GRUB
-# does not consume it built-in. The serial terminal mirrors loader errors
-# into the harness's log.
+# The menu on partition 1, /boot/grub/grub.cfg. Its own comments state the
+# order of its entries and the install contract. The serial terminal copies
+# loader errors into the harness's log.
 cat > "$GRUB_CFG" <<'CFG'
 serial --unit=0 --speed=115200
 terminal_output serial console
@@ -286,7 +259,7 @@ load_env
 # kernel there and fail too, which is a machine that stops instead of falling
 # back.
 #
-# `set fallback` takes an entry NUMBER and an id does not resolve, so a menu
+# `set fallback` takes an entry number and an id does not resolve, so a menu
 # supplied later cannot move what the fallback points at. A boot.cfg that is
 # missing, truncated mid-write or wrong leaves these standing and the machine
 # still boots.
@@ -322,10 +295,9 @@ menuentry "Start Rach2 with the previous kernel" --id fallback {
 # is defined either way (the numbers above are a contract and adding an entry
 # afterwards would move them). `/boot/grub/recovery.cfg` on the recovery
 # partition, written from the heredoc below, has a second one, which the
-# core image's embedded configuration loads when the boot partition does
-# not read. Both carry
-# `rach2.slot=recovery`, which is how `bootctl` running there knows it is
-# running from neither kernel slot and may therefore install into either.
+# core image's embedded configuration loads when the boot partition does not
+# read. Both have `rach2.slot=recovery`, which is how `bootctl` running there
+# knows it is running from neither kernel slot and may install into either.
 menuentry "RACH2_RECOVERY_TITLE" --id recovery {
     search --no-floppy --fs-uuid --set=root RACH2_RECOVERY_SERIAL
     RACH2_MULTIBOOT /boot/recovery rach2.root=ram rach2.boot=RACH2_BOOT_PART rach2.slot=recovery RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
@@ -335,32 +307,27 @@ menuentry "RACH2_RECOVERY_TITLE" --id recovery {
 }
 
 
-# Recovery changes nothing a person did not ask for: its line carries no
-# `rach2.fsck`, so nothing is checked or repaired by the act of booting it.
-# `e2fsck` is there, and a person who came to repair a root runs it. A second
-# recovery entry that ran the check at boot was removed on 2026-09-14, with the
-# two entries that carried a fixed address: a menu of eight entries asked a
-# person at a broken machine to choose between things only its author could
-# tell apart. `bootctl trial recovery` arms recovery for one boot, which is how
-# a machine that still starts is sent to the image that can rewrite its root.
+# Recovery changes nothing a person did not ask for: its line has no
+# `rach2.fsck`, so booting it checks and repairs nothing. `e2fsck` is there,
+# and a person who came to repair a root runs it. `bootctl trial recovery`
+# arms recovery for one boot, which is how a machine that still starts is sent
+# to the image that can rewrite its root.
 
 # The rewritable half. `configfile` would open a new environment context, show
 # its own menu on the spot and never come back here; `source` merges into this
 # one and returns. The test keeps a missing file from being an error.
 #
-# This file is GRUB script, not a list of declarations, so whoever can write it
-# can direct this boot: `source` will run a `set next_entry=` in it, or a
-# `multiboot` and `boot` at its top level, before control comes back here. That
-# is the same authority level one already grants, since `bootctl kernel`
-# replaces the kernel that boots next. It is not what the entries above defend
-# against.
+# This file is GRUB script, so whoever can write it can direct this boot:
+# `source` runs a `set next_entry=` in it, or a `multiboot` and `boot` at its
+# top level, before control comes back here. That is no more than the right to
+# write the kernel gives, since `bootctl kernel` replaces the kernel that boots
+# next.
 #
-# What they defend against is a file that is damaged, not written: a
-# power cut during a write leaves a prefix of a new menu above the tail of an
-# old one, and one slot overwritten in place cannot be written atomically. Every
-# entry the machine needs is already defined by the time this line runs, so a
-# `boot.cfg` that is missing, truncated, or unparseable costs only the entries
-# it meant to add.
+# The entries above protect against a damaged file: a power cut during a write
+# leaves a prefix of a new menu above the tail of an old one, and one slot
+# overwritten in place cannot be written atomically. Every entry the machine
+# needs is already defined by the time this line runs, so a `boot.cfg` that is
+# missing, truncated, or unparseable costs only the entries it meant to add.
 if [ -f /boot/boot.cfg ]; then
     source /boot/boot.cfg
 fi
@@ -421,6 +388,8 @@ for v in "$EXTRA_APPEND" "$DHCP_APPEND"; do
         exit 1
     fi
 done
+# sedq STRING: print STRING with `\`, `&` and `|` escaped for the replacement
+# of a sed `s|||` command.
 sedq() { printf '%s' "$1" | sed 's/[\\&|]/\\&/g'; }
 # A FAT serial as GRUB's `search --fs-uuid` names it: XXXX-XXXX, upper case.
 fat_uuid() { printf '%s' "$1" | tr 'a-f' 'A-F' | sed 's/^\(....\)\(....\)$/\1-\2/'; }
@@ -480,8 +449,8 @@ cp "$REPO/tools/image/grub-embed.cfg" "$EMBED_CFG"
 
 # The lines whose absence is silent: a core that cannot reach partition 3 boots
 # every ordinary machine and no damaged one, and one that reaches it first sends
-# every healthy machine to recovery. Both builders check the same file with the
-# same checker.
+# every healthy machine to recovery. cfgcheck requires the four lines in their
+# order.
 CFGCHECK="$REPO/build/tools/inspect/cfgcheck"
 if [ ! -x "$CFGCHECK" ] || [ "$REPO/tools/inspect/cfgcheck.c" -nt "$CFGCHECK" ]; then
     mkdir -p "${CFGCHECK%/*}"
@@ -503,8 +472,8 @@ fi
 # GUID writer for the partition table, the pinned GRUB images for the boot
 # path. No container, no loop mount, no GRUB toolchain.
 export MTOOLS_SKIP_CHECK=1
-# UTC, so the SOURCE_DATE_EPOCH timestamps land in FAT fields the way the
-# retired container (which ran UTC) wrote them.
+# UTC, so that the FAT timestamps from SOURCE_DATE_EPOCH do not depend on the
+# host's time zone.
 export TZ=UTC
 
 dd if=/dev/zero of="$NEW" bs=1048576 count="$DISK_MB" 2>/dev/null
@@ -553,10 +522,8 @@ dd if=/dev/zero bs=1 count="$MENU_BYTES" 2>/dev/null | tr '\0' '#' > "$TMPD/boot
 printf '# no menu staged; bootctl config replaces this file\n' \
     | dd of="$TMPD/boot.cfg" conv=notrunc 2>/dev/null
 mcopy -i "$TMPD/p1.img" "$TMPD/boot.cfg" ::/boot/boot.cfg
-# The 1024-byte GRUB environment block, written here byte-for-byte the way
-# grub-editenv wrote it in the retired container (a header, one variable,
-# and a '#' fill), proved identical by digest when the container path was
-# converted.
+# The 1024-byte GRUB environment block, byte for byte as grub-editenv writes
+# it: a header, one variable and a '#' fill.
 {
     printf '# GRUB Environment Block\n'
     printf '# WARNING: Do not edit this file by tools other than grub-editenv!!!\n'
