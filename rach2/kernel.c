@@ -3438,7 +3438,8 @@ static void publish_disks(void)
  * serial port a line printed before it would be gone before a camera could
  * read it, and the panic's record goes to the port and netconsole. The
  * command line is taken next (`kcmdline_capture`), from the boot record's own
- * copy of the loader's string, before the first boot option is read.
+ * copy of the loader's string, before the first boot option is read; a line
+ * too long to keep whole is logged as cut.
  * `rach2.loglevel=N` sets how much of the log the screen shows; the ring and
  * the port keep every record, and a boot being brought up wants all of them
  * on the screen, since the screen is then the only instrument there is.
@@ -3537,8 +3538,8 @@ void kernel_main(const struct boot_info *boot)
         }
     }
 
-    if (boot->cmdline != NULL) {
-        kcmdline_capture(boot->cmdline);
+    if (kcmdline_capture(boot->cmdline)) {
+        klog(KLOG_WARN, "boot", "command line cut: past 510 bytes, at its last whole option");
     }
 
     {

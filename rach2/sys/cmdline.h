@@ -9,12 +9,15 @@
  * Copy the kernel command line `cmdline` into the kernel's buffer, which
  * every lookup here reads; the shared boot calls it once, early.
  *
- * The buffer holds 255 bytes. A longer line is cut at the last space or tab
- * that fits, so that no token is kept in part: a cut `rach2.disk=ahcix` would
- * otherwise read as `rach2.disk=ahci`. A NULL `cmdline` leaves the line
- * empty.
+ * The buffer holds `BOOT_CMDLINE_MAX` - 2 bytes, 510. A longer line is cut
+ * at the last space or tab that fits, so that no token is kept in part: a cut
+ * `rach2.disk=ahcix` would otherwise read as `rach2.disk=ahci`. A line of
+ * exactly 511 bytes is cut too, since the boot record may have cut a longer
+ * one there. A NULL `cmdline` leaves the line empty.
+ *
+ * @return 1 when the line was cut, 0 when it was kept whole.
  */
-void kcmdline_capture(const char *cmdline);
+int kcmdline_capture(const char *cmdline);
 
 /**
  * Non-zero if the captured command line contains `flag` as a whole token.

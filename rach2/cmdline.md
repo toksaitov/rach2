@@ -2,7 +2,7 @@
 
 This page lists the words the Rach2 kernel reads from its command line, which the loader passes: QEMU's `-append`, or the `multiboot` and `multiboot2` lines of a GRUB menu. [The kernel's Readme](Readme.md) describes what the boot does with the root and the first program.
 
-The line is a list of words separated by spaces and tabs (`sys/cmdline.c`). A flag matches a whole word, so `rach2.rescue` does not match `xrach2.rescue`. A `key=value` option is read from its first occurrence; `rach2.ifaddr` may be given once for each interface, and a second `rach2.ip` or `rach2.gateway` makes the network refuse both. The kernel keeps the first 255 bytes of the line, and a longer line is cut at the last space or tab that fits, so that no word is kept in part. A word the kernel does not read is ignored, as `rach2.disk=ahci`, which `run.sh` adds with `DISKBUS=ahci`, is.
+The line is a list of words separated by spaces and tabs (`sys/cmdline.c`). A flag matches a whole word, so `rach2.rescue` does not match `xrach2.rescue`. A `key=value` option is read from its first occurrence; `rach2.ifaddr` may be given once for each interface, and a second `rach2.ip` or `rach2.gateway` makes the network refuse both. The kernel keeps a line of up to 510 bytes, and a longer one is cut at the last space or tab that fits, so that no word is kept in part, and logged as cut. A word the kernel does not read is ignored, as `rach2.disk=ahci`, which `run.sh` adds with `DISKBUS=ahci`, is.
 
 | Option | Effect |
 | --- | --- |

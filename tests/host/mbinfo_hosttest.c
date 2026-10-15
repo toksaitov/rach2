@@ -2,7 +2,7 @@
  * mbinfo_hosttest.c: the loader's information into the boot record, from
  * multiboot2 tag lists and Multiboot structures built here.
  *
- * host-deps: rach2/sys/arch/x86/mbinfo.c
+ * host-deps: rach2/sys/arch/x86/mbinfo.c rach2/sys/cmdline.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  *
  * Each row writes a tag list the way the Multiboot2 Specification lays it
@@ -10,13 +10,15 @@
  * data, each starting on an 8-byte boundary, and checks the record the
  * parser filled: the memory map, from multiboot2's own tag and from the EFI
  * map that takes its place under UEFI; the framebuffer of each type; the
- * two RSDP tags; the modules with their command lines; the command line;
- * and lists cut short, which must stop the parser where they stop. The
- * Multiboot structure's pointers are physical addresses, answered by a
- * model of physical memory: one buffer at a fixed address.
+ * two RSDP tags; the modules with their command lines; the command line,
+ * and the kernel's capture of it; and lists cut short, which must stop the
+ * parser where they stop. The Multiboot structure's pointers are physical
+ * addresses, answered by a model of physical memory: one buffer at a fixed
+ * address.
  */
 
 #include "../../rach2/sys/arch/x86/mbinfo.h"
+#include "../../rach2/sys/cmdline.h"
 #include "../../rach2/sys/lib/kdef.h"
 
 extern int printf(const char *fmt, ...);
@@ -1014,6 +1016,50 @@ static void row_multiboot(void)
           "a structure without flags gives an empty record");
 }
 
+/** Fill `line` with `len` bytes of 8-letter tokens and a space after each. */
+static void fill_tokens(char *line, unsigned len)
+{
+    unsigned i;
+
+    for (i = 0; i < len; i++) {
+        line[i] = i % 9 == 8 ? ' ' : (char)('a' + i % 9);
+    }
+    line[len] = '\0';
+}
+
+/**
+ * Check that the kernel's capture keeps every line the boot record keeps
+ * whole, up to 510 bytes, and cuts a longer one at a space: the record cuts a
+ * long line at 511 bytes inside a token, and the capture drops that token and
+ * says so.
+ */
+static void row_cmdline_capture(void)
+{
+    char line[BOOT_CMDLINE_MAX + 100];
+    const char *kept;
+    unsigned n;
+
+    fill_tokens(line, BOOT_CMDLINE_MAX - 2);
+    list_begin();
+    tag_string(1, line);
+    list_end();
+    CHECK(mb2_read(mbi, &boot, &store) == 0 && kcmdline_capture(boot.cmdline) == 0 &&
+              strcmp(kcmdline_get(), line) == 0,
+          "a command line of 510 bytes is captured whole");
+
+    fill_tokens(line, sizeof(line) - 1);
+    list_begin();
+    tag_string(1, line);
+    list_end();
+    CHECK(mb2_read(mbi, &boot, &store) == 0 && kcmdline_capture(boot.cmdline) == 1,
+          "a command line longer than the record keeps is captured as cut");
+    kept = kcmdline_get();
+    n = (unsigned)strlen(kept);
+    CHECK(n > BOOT_CMDLINE_MAX - 2 - 9 && n <= BOOT_CMDLINE_MAX - 2 && memcmp(kept, line, n) == 0 &&
+              line[n - 1] == ' ',
+          "a long command line is cut after its last whole token");
+}
+
 /** Run the rows; 0 when every check passed, 1 otherwise. */
 int main(void)
 {
@@ -1027,6 +1073,7 @@ int main(void)
     row_modules();
     row_cut_short();
     row_multiboot();
+    row_cmdline_capture();
     if (fails) {
         printf("mbinfo-test: %d failure(s)\n", fails);
         return 1;

@@ -3,22 +3,23 @@
  * describes them.
  */
 #include "cmdline.h"
+#include "boot.h"
 #include "lib/kstring.h"
 
-/* The buffer's bytes, the NUL included. The boot record keeps a line of up
- * to BOOT_CMDLINE_MAX bytes (boot.h), so a line longer than this loses its
- * last tokens here. */
-#define KCMDLINE_MAX 256
+/* The buffer's bytes, the NUL included: one fewer than the boot record's
+ * (boot.h), so that a line the record cut at its own limit, perhaps inside a
+ * token, is too long here and is cut again at a delimiter. */
+#define KCMDLINE_MAX (BOOT_CMDLINE_MAX - 1)
 
 static char kcmdline[KCMDLINE_MAX];
 
-void kcmdline_capture(const char *cmdline)
+int kcmdline_capture(const char *cmdline)
 {
     size_t i;
 
     if (cmdline == 0) {
         kcmdline[0] = '\0';
-        return;
+        return 0;
     }
     for (i = 0; i + 1 < KCMDLINE_MAX && cmdline[i] != '\0'; i++) {
         kcmdline[i] = cmdline[i];
@@ -30,7 +31,9 @@ void kcmdline_capture(const char *cmdline)
             i--;
         }
         kcmdline[i] = '\0';
+        return 1;
     }
+    return 0;
 }
 
 const char *kcmdline_get(void)
