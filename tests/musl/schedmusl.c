@@ -16,7 +16,9 @@
  * A parent may set its child's process group after a failed exec, but a
  * successful exec, by the leader or another thread, makes that EACCES.
  * The new image may still set its own group and the group of a fresh child.
- * SIGSTOP and waitpid order each check against the child's exec.
+ * SIGSTOP and waitpid order each check against the child's exec. A parent
+ * that has moved to a new session with setsid may not set the group of a
+ * child left in the old one, which is EPERM and leaves the child's group.
  *
  * `sched_yield` returns 0. Every process has SCHED_OTHER with priority 0, and
  * asking for it, with SCHED_RESET_ON_FORK or not, succeeds; SCHED_FIFO and
@@ -235,6 +237,40 @@ static int exec_groups(int threaded)
                    setpgid(child, getpgrp()) != -1 || errno != EACCES || getpgid(child) != child) {
             rc = fail("setpgid after a child's successful exec was not EACCES");
         }
+    }
+    kill(child, SIGKILL);
+    waitpid(child, NULL, 0);
+    return rc;
+}
+
+/**
+ * Run in a child that is not a group leader: fork a grandchild, wait until it
+ * stops, move to a new session, and check that setting the grandchild's group
+ * is EPERM and leaves it unchanged. Returns 0, or the failed step.
+ */
+static int other_session_group(void)
+{
+    pid_t child = fork();
+    pid_t group;
+    int status, rc;
+
+    if (child < 0) {
+        return 1;
+    }
+    if (child == 0) {
+        kill(getpid(), SIGSTOP);
+        _exit(0);
+    }
+    group = getpgrp();
+    if (waitpid(child, &status, WUNTRACED) != child || !WIFSTOPPED(status) ||
+        WSTOPSIG(status) != SIGSTOP) {
+        rc = 2;
+    } else if (setsid() != getpid()) {
+        rc = 3;
+    } else if (setpgid(child, child) != -1 || errno != EPERM) {
+        rc = 4;
+    } else {
+        rc = getpgid(child) == group ? 0 : 5;
     }
     kill(child, SIGKILL);
     waitpid(child, NULL, 0);
@@ -808,8 +844,13 @@ int main(int argc, char **argv)
     if (argc == 2 && strcmp(argv[1], "--exec-group") == 0) {
         return exec_group_image();
     }
-    if (thread_ids() != 0 || exec_groups(0) != 0 || exec_groups(1) != 0 || priorities() != 0 ||
-        scheduling() != 0 || oom_score() != 0 || io_priorities() != 0) {
+    if (thread_ids() != 0 || exec_groups(0) != 0 || exec_groups(1) != 0) {
+        return 1;
+    }
+    if (in_child(other_session_group) != 0) {
+        return fail("setpgid of a child in another session was not EPERM");
+    }
+    if (priorities() != 0 || scheduling() != 0 || oom_score() != 0 || io_priorities() != 0) {
         return 1;
     }
     printf("SCHEDMUSL OK\n");

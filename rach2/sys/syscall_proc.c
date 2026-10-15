@@ -4696,10 +4696,11 @@ long sys_setsid(isr_params_t *params)
  *
  * Its arguments are pid (0 = caller) and pgid (0 = the target's own pid, i.e.
  * make it a group leader). The target must be the caller or a child of the
- * caller, else -ESRCH, and must not be a session leader, whose group is fixed
- * with its session, else -EPERM. A group other than the target's own must
- * already exist in the target's session, else -EPERM: some process must be in
- * it, whether or not its leader is still alive (`pgrp_in_session`). Returns 0;
+ * caller, else -ESRCH. A child must be in the caller's session, else -EPERM.
+ * The target must not be a session leader, whose group is fixed with its
+ * session, else -EPERM. A group other than the target's own must already
+ * exist in the target's session, else -EPERM: some process must be in it,
+ * whether or not its leader is still alive (`pgrp_in_session`). Returns 0;
  * -EINVAL for a negative pgid, -EPERM for a pgid the caller cannot see, and
  * -ESRCH for no such process. A child that has successfully executed a new
  * image cannot be moved by its parent; the call returns -EACCES.
@@ -4728,6 +4729,9 @@ long sys_setpgid(isr_params_t *params)
     }
     if (target->tg != current_proc->tg && target->parent_pid != current_proc->tgid) {
         return -ESRCH;
+    }
+    if (target->tg != current_proc->tg && target->sid != current_proc->sid) {
+        return -EPERM;
     }
     if (target->tg != current_proc->tg && target->tg->execed) {
         return -EACCES;

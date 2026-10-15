@@ -61,6 +61,7 @@ A
 of 0 selects the target's own process ID, making it a group leader.
 The target must be the caller's process or its child and must not have
 ended or be a session leader; any thread's ID names its process.
+A child must be in the caller's session.
 Every thread of the target is moved.
 A parent may change its child's group only before the child successfully
 calls
@@ -68,10 +69,6 @@ calls
 Unless the target is forming its own group, the destination group must
 already have a member in the target's session.
 The group's original leader need not still be alive.
-.Pp
-The kernel does not check whether the child's session differs from the
-caller's session.
-The destination group is checked against the target's session.
 .Pp
 .Fn setsid
 creates a session and a process group, both with the caller's process ID.
@@ -157,8 +154,8 @@ was given a negative
 .It Bq Er EPERM
 The target of
 .Fn setpgid
-is a session leader, or the destination is neither its own process ID
-nor an existing group in its session.
+is a session leader or a child in another session, or the destination
+is neither its own process ID nor an existing group in its session.
 For
 .Fn setsid ,
 the caller already leads a process group.

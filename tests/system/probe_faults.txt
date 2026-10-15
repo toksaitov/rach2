@@ -4341,6 +4341,20 @@ long sys_exit(isr_params_t *params)
 }
 end
 
+fault setpgid-other-session-allowed
+probe schedmusl
+file rach2/sys/syscall_proc.c
+expect SCHEDMUSL FAIL (setpgid of a child in another session was not EPERM)
+old
+    if (target->tg != current_proc->tg && target->sid != current_proc->sid) {
+        return -EPERM;
+    }
+new
+    if (target->tg != current_proc->tg && target->sid != current_proc->sid) {
+        (void)target;
+    }
+end
+
 fault setpgid-exec-allowed
 probe schedmusl
 file rach2/sys/syscall_proc.c
