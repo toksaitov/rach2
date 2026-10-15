@@ -30,7 +30,7 @@ The boot logs the source as an `entropy: ready:` record, at warning level for th
 
 `krandom.c` keeps one ChaCha20 input block of 16 words: the four constant words of "expand 32-byte k", eight key words, a 64-bit block counter and a 64-bit nonce, always zero. `chacha_block` runs the 20 rounds as ten column and diagonal double rounds and adds the input back, giving 64 bytes of keystream. A byte cursor indexes that block; when it reaches the end, the next block is computed and the counter advanced. `krandom_u32` takes four bytes from the same cursor as `krandom_bytes`, least significant first, so draws of any size form one stream.
 
-`krandom_reseed` builds the eight-word key from its four words and the same four XORed with fixed constants, sets the counter and nonce to zero and discards the rest of the current block. It leaves the recorded source as it was. Before the boot keys it the block has a fixed key and the source reads as the fallback, so an early draw gives a fixed stream and nothing trusts it.
+`krandom_reseed` builds the eight-word key from its four words and the same four XORed with fixed constants, sets the counter and nonce to zero and discards the rest of the current block. It leaves the recorded source as it was. Before the boot keys it the block has a fixed key and the source reads as the fallback, so an early draw gives a fixed stream and `krandom_is_trusted` is 0.
 
 ### Seeding
 

@@ -8,7 +8,7 @@ The USB stack drives keyboards, mice, flash drives and hubs attached to xHCI hos
 
 The stack delivers:
 
-* Keystrokes as set-1 scancodes through `input_key`, the call the PS/2 keyboard driver makes, and mouse reports through `input_mouse`, into the queue the PS/2 mouse fills ([`input.h`](../input.h)). `input_mouse_found`, called when a boot mouse is configured, lets the mouse device of [`synthfs.Readme.md`](../fs/synthfs.Readme.md) be opened.
+* Keystrokes as set-1 scancodes through `input_key`, the call the PS/2 keyboard driver makes, and mouse reports through `input_mouse`, into the queue the PS/2 mouse fills ([`input.h`](../input.h)). `input_mouse_found`, called when a boot mouse is configured, lets `/mouse` be opened ([`synthfs.Readme.md`](../fs/synthfs.Readme.md)).
 * A block device for each logical unit of a flash drive, with `submit` and `flush` and no `read` or `write`, since a transfer completes later, in the pump. `block/usbdisk.c` registers it as a removable disk and publishes its nodes; [`block/Readme.md`](../block/Readme.md) describes that side.
 * `/proc/usb` and the `FBK` line of `/proc/interrupts` ([`proc(5)`](../../../man/man5/proc.5)), and a link and a `uevent` per device under `/sys/bus/usb/devices`, which BusyBox's `lsusb` reads ([`sysfs(5)`](../../../man/man5/sysfs.5), [`busybox-util-linux(1)`](../../../man/man1/busybox-util-linux.1)).
 
@@ -101,7 +101,7 @@ A keyboard or mouse has one interrupt IN transfer outstanding, of the endpoint's
 
 A boot keyboard's report is 8 bytes: modifier bits, a reserved byte and six key usages. `hid.c` keeps each device's previous report and sends the difference as set-1 make and break codes, with the 0xE0 prefix for the right Ctrl and Alt, the GUI and Application keys, the arrows, the editing keys, and the keypad's Enter and slash. The table covers usages 0x04 to 0x65, and a usage without a code sends nothing. A report whose key slots hold an error usage, 0x01 to 0x03, which a keyboard sends when it cannot tell which keys are down, has its modifiers read and its keys ignored, so the held keys stay down. When a keyboard goes, `hid_gone` releases every key it had down.
 
-A boot mouse's report is at least 3 bytes: three buttons and signed X and Y. Y is negated, since a USB mouse's Y grows downward and the PS/2 queue's grows upward.
+A boot mouse's report is at least 3 bytes: three buttons and signed X and Y. Y is negated, as `ps2mouse.c` negates the PS/2 report's, so the two mice give the queue opposite signs for the same movement ([terminals](../tty/Readme.md)).
 
 ### Hubs
 
@@ -158,7 +158,7 @@ The disk side's limits are in [`block/Readme.md`](../block/Readme.md).
 * Only xHCI controllers are driven.
 * Keyboards and mice are driven through the boot protocol alone. Report descriptors are not read, so a device without a boot interface is not driven and a mouse wheel is ignored.
 * A held key does not repeat.
-* All keyboards share the input layer's one modifier state, so a shift released on one is released for all.
+* All keyboards share the input layer's one modifier state ([terminals](../tty/Readme.md)).
 * Mass storage is SCSI over Bulk-Only Transport, with 512-byte blocks. A drive that offers only UAS is not driven.
 * There are no isochronous transfers, so no USB audio or video.
 * A controller has one interrupter and one command in flight, so its devices are enumerated one at a time.

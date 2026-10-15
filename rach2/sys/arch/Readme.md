@@ -54,9 +54,7 @@ These headers belong to their subsystems, and the architecture defines what they
 | Processor mode | 32-bit protected mode | long mode |
 | Page tables | two levels of 1024 entries, no PAE | four levels of 512 entries |
 | No-execute bit | none: every page is executable | bit 63, where `EFER.NXE` is on |
-| Kernel image | at its physical address, from 1 MiB | at `KVA_IMAGE`, `0xFFFFFFFF80000000`, plus its physical address |
 | `KVA_BASE`, where the kernel's layout begins | `0xC0000000` | `0xFFFF800000000000`, the direct map |
-| User addresses | `0x02000000` to `0xC0000000` | `0x10000` to `0x7FFFFFFFF000` |
 | System call | `int 0x80` | `syscall` |
 | Number; arguments | EAX; EBX, ECX, EDX, ESI, EDI, EBP | RAX; RDI, RSI, RDX, R10, R8, R9 |
 | clone's TLS and child tid | `SC_ARG` 3 and 4 | `SC_ARG` 4 and 3 |
@@ -66,6 +64,8 @@ These headers belong to their subsystems, and the architecture defines what they
 | Programs (`ELF_CLASS`, `ELF_MACHINE`) | ELFCLASS32, `EM_386` | ELFCLASS64, `EM_X86_64` |
 | Double fault | task gate to a TSS of its own | interrupt stack 1 |
 
+The kernel's layout and the range of user addresses on each are in [memory's tables](../mm/Readme.md).
+
 ## Design
 
 ### The entry from the loader
@@ -74,7 +74,7 @@ Either loader enters `_start` of `loader.s` in 32-bit protected mode with paging
 
 On i686 the kernel is linked at 1 MiB and runs at its physical addresses. `_start` sets ESP to the top of the boot stack, 16 KiB, pushes EBX and EAX, calls `init_gdt`, so that `%fs` has the processor's own segment from the first C code on, and calls `k_main` with paging off. `init_paging` (`mm/paging.c`) turns paging on through `mmu_start`, which loads the kernel's directory and sets `CR0.PG` and `CR0.WP`; the window below `HARD_MEMORY_LIMIT`, 32 MiB, is identity-mapped, so execution goes on at the same addresses.
 
-On x86-64 the kernel is linked at `KVA_IMAGE` plus its physical address (`link.ld`), so the 32-bit code of `_start` refers to each symbol by its address less `KVA_IMAGE`. `_start` saves EAX and EBX and checks CPUID for long mode; on a processor without it, it writes `boot: refused: the processor has no long mode, and this kernel is x86-64` to COM1 and stops. It builds page tables that map the first 4 GiB in 2 MiB pages at 0 and at `KVA_DIRECT`, and the first 2 GiB at `KVA_IMAGE`; turns on PAE, `EFER.LME`, `EFER.NXE` where the processor has NX, then paging and `CR0.WP`; loads a boot GDT; and jumps to 64-bit code, which moves to the kernel's own addresses, takes the boot stack, writes the address of the boot processor's record, `cpus[0]`, into the GS base MSR, and calls `k_main` with the information's address in the direct map. `mmu_frame_table` later loads the kernel's own PML4, which maps nothing in the lower half.
+On x86-64 the kernel is linked at `KVA_IMAGE`, `0xFFFFFFFF80000000`, plus its physical address (`link.ld`), so the 32-bit code of `_start` refers to each symbol by its address less `KVA_IMAGE`. `_start` saves EAX and EBX and checks CPUID for long mode; on a processor without it, it writes `boot: refused: the processor has no long mode, and this kernel is x86-64` to COM1 and stops. It builds page tables that map the first 4 GiB in 2 MiB pages at 0 and at `KVA_DIRECT`, and the first 2 GiB at `KVA_IMAGE`; turns on PAE, `EFER.LME`, `EFER.NXE` where the processor has NX, then paging and `CR0.WP`; loads a boot GDT; and jumps to 64-bit code, which moves to the kernel's own addresses, takes the boot stack, writes the address of the boot processor's record, `cpus[0]`, into the GS base MSR, and calls `k_main` with the information's address in the direct map. `mmu_frame_table` later loads the kernel's own PML4, which maps nothing in the lower half.
 
 ### Descriptor tables and the processor's record
 
@@ -173,7 +173,7 @@ The shared code is written to pass them: an address is a `uintptr_t`, a length a
 
 `make ARCH=x86_64` builds for x86-64; `ARCH` is `i686` when it is not given, and any other value stops the build (`mk/arch.mk`). The i686 build writes under `build/` and the x86-64 build under `build/x86_64/`. `rach2/Makefile` takes the architecture's flags, which [the kernel's document](../../Readme.md) gives, and its link script, `sys/arch/$(ARCH)/link.ld`.
 
-`rach2/sources.mk` lists `C_SRC_SHARED` and includes `sys/arch/$(ARCH)/sources.mk`, which gives `ARCH_ASM_SRC` and `ARCH_C_SRC` and includes `x86/sources.mk`. That list, `PC_C_SRC`, has the files of `x86/` and the drivers the PC platform takes from other subsystems: `sys/block/ata.c`, `sys/display/vga_text.c`, `vga_gfx.c`, `vga_font.c` and `fbcon.c`, and `sys/audio/dma.c` and `sb16.c`. `loader.s` is first in `ARCH_ASM_SRC`, since the link keeps the input order and the Multiboot header must lie in the kernel's first 8192 bytes. Each architecture's list also gives TinyCC's flags for the build on Rach2, `ARCH_TCC_CFLAGS` and `ARCH_TCC_LDFLAGS`; `guest.mk`, which pdpmake reads there, takes `ARCH` from `uname -m`.
+`rach2/sources.mk` lists `C_SRC_SHARED` and includes `sys/arch/$(ARCH)/sources.mk`, which gives `ARCH_ASM_SRC` and `ARCH_C_SRC` and includes `x86/sources.mk`. That list, `PC_C_SRC`, has the files of `x86/` and the drivers the PC platform takes from other subsystems: `sys/block/ata.c`, `sys/display/vga_text.c`, `vga_gfx.c`, `vga_font.c` and `fbcon.c`, and `sys/audio/dma.c` and `sb16.c`. `loader.s` is first in `ARCH_ASM_SRC`, since the link keeps the input order and the Multiboot header must lie in the kernel's first 8192 bytes. Each architecture's list also gives TinyCC's flags for the build on Rach2, `ARCH_TCC_CFLAGS` and `ARCH_TCC_LDFLAGS` ([the kernel's document](../../Readme.md)).
 
 ## Limits
 

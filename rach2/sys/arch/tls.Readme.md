@@ -58,7 +58,7 @@ A program sets its own thread pointer with one call, which differs between the a
 * i686 registers no `get_thread_area` or `modify_ldt`, so a program has no local descriptor table, and x86-64 registers no `set_thread_area` or `get_thread_area`. Each of these answers ENOSYS.
 * `arch_prctl` takes only its four codes. Linux's others, `ARCH_GET_CPUID`, `ARCH_SET_CPUID` and the rest, fail with EINVAL.
 * On x86-64 a child of `clone` with `CLONE_SETTLS` keeps its parent's FS selector, where Linux gives it the null selector; its FS base is the one it asked for either way.
-* A tracer may set the x86-64 FS or GS selector only to the null selector, 3, the user data selector or the user code selector. The base words win over a selector's descriptor: the switch in loads the selector and then the base.
+* A tracer may set the x86-64 FS or GS selector only to the null selector, 3, the user data selector or the user code selector. The base words win over a selector's descriptor: the switch to the thread loads the selector and then the base.
 
 ## Tests
 

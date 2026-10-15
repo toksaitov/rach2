@@ -61,7 +61,7 @@ The PS/2 mouse (`sys/arch/x86/ps2mouse.c`, IRQ 12, vector 44) assembles three-by
 
 ### COM1
 
-COM1 (`sys/arch/x86/serial.c`, port 0x3F8, IRQ 4, vector 36) runs at 115200 baud, 8N1, with its FIFO on. `serial_init` finds it by its scratch register, and on a machine without one every serial call does nothing. Received bytes go to a ring of 4096 bytes by two services: the port's interrupt takes at most 64 bytes a time, and `tty_console_poll`, which the timer tick calls every 10 ms (`TICK_HZ` is 100) and the interrupt calls when its service leaves bytes in the ring, takes at most 64 more, so a port whose interrupt is not enabled is still read. A full ring stops the service and masks the receive interrupt until a take leaves the ring less than half full. The bytes stay in the UART, whose FIFO then fills, so QEMU's sender waits and a real sender overruns, which the line status reports.
+COM1 is the 16550 that [the PC platform](../arch/x86/Readme.md) sets up (`sys/arch/x86/serial.c`, IRQ 4, vector 36), with its FIFO on; on a machine without one every serial call does nothing. Received bytes go to a ring of 4096 bytes by two services: the port's interrupt takes at most 64 bytes a time, and `tty_console_poll`, which the timer tick calls every 10 ms (`TICK_HZ` is 100) and the interrupt calls when its service leaves bytes in the ring, takes at most 64 more, so a port whose interrupt is not enabled is still read. A full ring stops the service and masks the receive interrupt until a take leaves the ring less than half full. The bytes stay in the UART, whose FIFO then fills, so QEMU's sender waits and a real sender overruns, which the line status reports.
 
 After the service, what `tty_console_poll` does depends on who reads the console:
 

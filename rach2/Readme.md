@@ -2,7 +2,7 @@
 
 ![Rach2 showing a kernel panic](https://raw.githubusercontent.com/rachmiroff/images/refs/heads/main/rach2/bsod.png)
 
-The Rach2 kernel is a freestanding C89 kernel for 32-bit and 64-bit x86 PCs, built from one tree for the architecture `ARCH` names, `i686` or `x86_64`. A loader starts it by Multiboot or multiboot2, from BIOS or UEFI firmware; it mounts its root from a boot module or a disk partition, and runs ELF programs in ring 3 behind Linux's system call interface for the architecture: `int 0x80` with the i386 numbers on i686, `syscall` with the x86-64 numbers on x86-64. It schedules processes and threads preemptively on every processor the firmware lists, up to 64. This document is the reader's route into the kernel: how to build and run it, what it reads from its command line and prints in its log, the path from the loader to the first program, and a map of `sys/` that links each subsystem's document in reading order.
+The Rach2 kernel is a freestanding C89 kernel for 32-bit and 64-bit x86 PCs, built from one tree for the architecture that `ARCH` selects, `i686` or `x86_64`. A loader starts it by Multiboot or multiboot2, from BIOS or UEFI firmware; it mounts its root from a boot module or a disk partition, and runs ELF programs in ring 3 behind Linux's system call interface for the architecture: `int 0x80` with the i386 numbers on i686, `syscall` with the x86-64 numbers on x86-64. It schedules processes and threads preemptively on every processor the firmware lists, up to 64. This document is the reader's route into the kernel: how to build and run it, what it reads from its command line and prints in its log, the path from the loader to the first program, and a map of `sys/` that links each subsystem's document in reading order.
 
 ## Use
 
@@ -71,7 +71,7 @@ The shell's prompts and output go to the screen and COM1 through `console_putc`,
 
 ### The kernel command line
 
-The command line is a list of words separated by white space. A flag matches a whole word, and a `key=value` option is read from its first occurrence (`sys/cmdline.c`). A word the kernel does not know is ignored, as `rach2.disk=ahci`, which `run.sh` adds with `DISKBUS=ahci`, is.
+The command line is a list of words separated by white space. A flag matches a whole word, and a `key=value` option is read from its first occurrence (`sys/cmdline.c`). A word the kernel does not read is ignored, as `rach2.disk=ahci`, which `run.sh` adds with `DISKBUS=ahci`, is.
 
 | Option | Effect |
 | --- | --- |
@@ -79,14 +79,14 @@ The command line is a list of words separated by white space. A flag matches a w
 | `rach2.root=ram` | Mount the first boot module in place: the default. |
 | `rach2.fsdisk`, `rach2.root=disk` | Mount the KRFFS partition among the first four entries of the boot disk's table, through the page cache. |
 | `rach2.root=ext2` | Mount the first ext2 partition among the first four entries of the boot disk's table, through the buffer cache. |
-| `rach2.root=SPEC` | Mount the one partition, on any disk, that `SPEC` names: `PARTUUID=`, `MBRID=`, `GPTID=`, `UUID=`, `LABEL=` or `/dev/diskNpM`, as [disk(7)](../man/man7/disk.7) defines them. |
+| `rach2.root=SPEC` | Mount the one partition, on any disk, that `SPEC` matches: `PARTUUID=`, `MBRID=`, `GPTID=`, `UUID=`, `LABEL=` or `/dev/diskNpM`, as [disk(7)](../man/man7/disk.7) defines them. |
 | `rach2.rootfstype=TYPE` | With `rach2.root=SPEC`, mount it as `krffs` or `ext2`; another value is refused. Without it the kernel tries KRFFS, then ext2. |
 | `rach2.fswindow` | Mount the boot module through the page cache's window, as a disk root is mounted. |
 | `rach2.boot=SPEC` | Name the boot partition, which must be entry 1 of an MBR or a GUID table, by the forms of `rach2.root=SPEC`. Without it the boot disk is the root's, when the root is named by identity, and disk 0 otherwise. |
 | `rach2.nodisk`, `rach2.nousb`, `rach2.nonet`, `rach2.noaudio`, `rach2.nomouse` | Skip the probe of the disks, the USB controllers, the network cards, the sound cards or the PS/2 mouse. |
 | `rach2.ahcipoll`, `rach2.nvmepoll` | Keep the AHCI or the NVMe disks polled, with no interrupts and no request queue. |
 | `rach2.atapio` | Move ATA transfers through the data port and not through the controller's bus master. |
-| `rach2.diskdiag` | Probe the disks and publish `/dev/diskN` for each ([disk(7)](../man/man7/disk.7)). |
+| `rach2.diskdiag` | Probe the disks once the root is mounted, when the boot has not, and log whether one answered; the whole-disk nodes are published either way ([disk(7)](../man/man7/disk.7)). |
 | `rach2.fsck` | Read by the recovery image's `init`, not by the kernel: run `e2fsck -p` on every ext2 partition first. |
 | `rach2.ip=A.B.C.D/PREFIX`, `rach2.ip=none`, `rach2.gateway=A.B.C.D`, `rach2.ifaddr=MAC,ADDR/PREFIX[,GATEWAY]` | The interfaces' addresses ([the network Readme](sys/network/Readme.md)). Without them the first interface takes QEMU's user-network defaults. |
 | `rach2.netconsole` | Broadcast the log in Ethernet frames once a card is up. |
@@ -115,7 +115,7 @@ These options exist for the suites, which use them to bring about a fault or a b
 | `rach2.stackoverrun=fork`, `rach2.stackoverrun=boot` | Before the first program, run a kernel stack down until it overflows: one `kstack_alloc` gives, or the boot stack. The kernel panics at the page fault or the double fault that the guard page raises ([the architectures' Readme](sys/arch/Readme.md)). |
 | `rach2.strings` | Before the first program, check `k_memcpy`, `k_memset` and `k_memmove` over 68 lengths at four source and four destination offsets, with the bytes around each range required unchanged. |
 | `rach2.hubslow=MS` | Wait `MS` milliseconds between two ports of a hub scan. |
-| `rach2.msidrop=N` | Silence the USB controller's messages after `N`, so that the timer's pump alone serves it. |
+| `rach2.msidrop=N` | Silence every USB controller's interrupts at the `N`th, so that the timer's pump alone serves them. |
 | `rach2.hcfail=N`, `rach2.nicfail=N` | Refuse the `N`th xHCI controller or network card, counting from 0. |
 
 ### System calls
@@ -178,13 +178,13 @@ The subsystems in reading order, each with the files it is in and its document:
 * The library, `sys/lib/`: fixed-width integers (`kint.h`), the string, character and memory functions (`kstring.c`, `kctypes.c`, `kstd.c`), the one text formatter (`kfmt.c`), errno and signal numbers (`kerrno.h`, `ksignal.h`), the `__user` annotation (`kuser.h`), the interrupt flag around a region (`kirq.h`), spinlocks and [the random generator](sys/lib/krandom.Readme.md).
 * The log and the panic, `sys/klog.[ch]`, `sys/panic.[ch]` and `sys/latency.[ch]`: the record and its destinations above, the stop, and the longest delays `/proc/stat` reports.
 * Memory, `sys/mm/`: the frame map, the kernel's layout on each architecture, the heap, page tables, virtual memory areas, faults, copy-on-write, the user-pointer checks and the page cache ([memory](sys/mm/Readme.md)).
-* Processes, `sys/proc/`: records, threads, the scheduler, the processors and the big lock, ELF loading and the initial stack, wait queues, signals, ptrace, seccomp, futexes, namespaces and core files ([the process subsystem's Readme](sys/proc/Readme.md)).
+* Processes, `sys/proc/`: records, threads, the scheduler, the processors and the big lock, ELF loading and the initial stack, wait queues, signals, ptrace, seccomp, futexes, namespaces and core files ([the process subsystem's Readme](sys/proc/Readme.md), [signals](sys/proc/signal.Readme.md), [ptrace](sys/proc/ptrace.Readme.md), [futexes](sys/proc/futex.Readme.md) and [namespaces](sys/proc/ns.Readme.md)).
 * The system call layer, `sys/syscall*.[ch]` and `sys/clock.c` (above).
-* Files, `sys/fs/`: descriptors, the mount table and the resolver, the buffer cache, and the file systems, each with its document ([the file system layer](sys/fs/Readme.md), [the VFS](sys/fs/vfs.Readme.md), [KRFFS](sys/fs/krffs.Readme.md), [ext2](sys/fs/ext2.Readme.md), [FAT32](sys/fs/fat32.Readme.md), [exFAT](sys/fs/exfat.Readme.md), [tmpfs](sys/fs/tmpfs.Readme.md), [locks](sys/fs/lock.Readme.md), and [devfs, procfs and sysfs](sys/fs/synthfs.Readme.md)).
+* Files, `sys/fs/`: descriptors, the mount table and the resolver, the buffer cache, and the file systems, each with its document ([the file system layer](sys/fs/Readme.md), [the VFS](sys/fs/vfs.Readme.md), [KRFFS](sys/fs/krffs.Readme.md), [ext2](sys/fs/ext2.Readme.md), [FAT32](sys/fs/fat32.Readme.md), [exFAT](sys/fs/exfat.Readme.md), [tmpfs](sys/fs/tmpfs.Readme.md), [devfs, procfs and sysfs](sys/fs/synthfs.Readme.md), and [locks](sys/fs/lock.Readme.md)).
 * Block storage, `sys/block/`: the ATA, AHCI and NVMe drivers, the request and its deadline, partition tables, the disk registry, the loop device and the disk write policy of each kernel ([block storage](sys/block/Readme.md)).
 * USB, `sys/usb/`: the xHCI driver, enumeration, and the keyboard, mouse, hub and mass storage class drivers ([USB](sys/usb/Readme.md)).
 * The network, `sys/network/`: the card drivers, Ethernet, ARP, IPv4, ICMP, UDP and TCP, the sockets, netlink and netconsole ([the network](sys/network/Readme.md)).
-* Readiness, `sys/io/`, and communication between processes, `sys/ipc/`: `poll`, `select`, `epoll`, `eventfd`, `timerfd` and `inotify`; pipes, AF_UNIX sockets, System V IPC and message queues ([readiness](sys/io/Readme.md), [IPC](sys/ipc/Readme.md)).
+* Readiness, `sys/io/`, and communication between processes, `sys/ipc/`: `poll`, `select`, `epoll`, `eventfd`, `timerfd`, POSIX timers and `inotify`; pipes and FIFOs, AF_UNIX sockets, System V IPC and POSIX message queues ([readiness](sys/io/Readme.md), [IPC](sys/ipc/Readme.md)).
 * Terminals and input, `sys/tty/`, `sys/input.[ch]`, `sys/kbd.[ch]` and `sys/mouse.[ch]`: the line discipline, the console terminal, job control, pseudo-terminals, and the path of a keystroke or a serial byte into them ([terminals](sys/tty/Readme.md)).
 * The display, `sys/display/` and `sys/kio.[ch]`: the VGA text console, the framebuffer console, mode 13h and `/fb` ([display](sys/display/Readme.md)).
 * Sound, `sys/audio/`: HDA, Sound Blaster 16 and the PC speaker ([audio](sys/audio/Readme.md)).
@@ -199,7 +199,7 @@ make rach2-metal               # the kernel that writes no disk
 make rach2-recovery            # the kernel that may write a whole disk
 ```
 
-The kernel is C89, compiled by the cross compiler of `mk/arch.mk` (`i686-elf-gcc` or `x86_64-elf-gcc`) with `-ansi -nostdlib -nostartfiles -nodefaultlibs`, and linked with no C library and no libgcc. The x86-64 kernel is compiled with `-mcmodel=kernel -mno-red-zone` and no MMX or SSE, and its link aligns segments to 4 KiB, so that the file follows the memory layout the a.out kludge copies (`sys/arch/x86_64/link.ld`). Objects and dependency files go under `build/rach2/`, or `build/x86_64/rach2/`. Every link is checked by the project's ELF validator (`tools/inspect/elfcheck.c`, with `--kernel`) before it replaces the old kernel. The link writes the kernel with its debug sections to `kernel.debug`, which GDB reads, and the kernel without them to `kernel`, which every loader, boot slot and stick carries, since a boot partition's kernel slot holds 2 MiB.
+The kernel is C89, compiled by the cross compiler of `mk/arch.mk` (`i686-elf-gcc` or `x86_64-elf-gcc`) with `-ansi -nostdlib -nostartfiles -nodefaultlibs`, and linked with no C library and no libgcc. The x86-64 kernel is compiled with `-mcmodel=kernel -mno-red-zone` and no MMX or SSE, and its link aligns segments to 4 KiB, so that the file follows the memory layout the a.out kludge copies (`sys/arch/x86_64/link.ld`). Objects and dependency files go under `build/rach2/`, or `build/x86_64/rach2/`. Every link is checked by the project's ELF validator (`tools/inspect/elfcheck.c`, with `--kernel`) before it replaces the old kernel. The link writes the kernel with its debug sections to `kernel.debug`, which GDB reads, and the kernel without them to `kernel`, which every loader boots and every boot slot and stick has, since a boot partition's kernel slot is 2 MiB.
 
 `make rach2-metal` builds `build/rach2-metal/kernel` with `-DRACH2_DISK_READONLY`, and `make rach2-recovery` builds `build/rach2-recovery/kernel` with `-DRACH2_RECOVERY`; [block storage](sys/block/Readme.md) says what each allows. Each kernel has its own object tree, and a fingerprint of the compiler options (`mk/fingerprint.mk`) rebuilds a tree whose options changed, so that no kernel links objects of two configurations.
 
@@ -212,14 +212,14 @@ The kernel is C89, compiled by the cross compiler of `mk/arch.mk` (`i686-elf-gcc
 * One lock covers the kernel, so kernel code runs on one processor at a time.
 * The scheduler has one policy and reads no nice value or I/O priority.
 * The root is a boot module or a partition of a disk the block layer found at boot, never a USB stick.
-* The kernel's fixed limits, with what enforces each, are listed in [limits(7)](../man/man7/limits.7).
+* A process's resource limits and a few of the kernel's fixed capacities are in [limits(7)](../man/man7/limits.7); each subsystem's document gives the rest in its Limits.
 
 ## Tests
 
 `make test` runs `tests/run style`, `tests/run host` and `tests/run core`, the suites `tests/registry` marks `core`; [the tests Readme](../tests/Readme.md) describes them. `tests/run style` builds the kernel with warnings as errors, checks the source lists and the linked ELF, and runs the static and text checks; `tests/run host` compiles kernel files natively under AddressSanitizer and UndefinedBehaviorSanitizer. Of the suites that boot the kernel, these test what this document describes:
 
 * `tests/run default` boots the test image and runs every guest probe.
-* `tests/run memory` boots the kernel at five memory sizes and with `rach2.stackoverrun=fork`, `rach2.stackoverrun=boot` and `rach2.strings`.
+* `tests/run memory` boots the kernel at six memory sizes, from 8 MiB to 4 GiB, and with `rach2.stackoverrun=fork`, `rach2.stackoverrun=boot` and `rach2.strings`.
 * `tests/run bootline` boots the contradictory line of `rach2.nodisk` with a disk root, with and without `rach2.rescue`; `tests/run parts` chooses a root by identity among four disks; `tests/run bootorder` boots the GRUB disk behind an empty one and finds its root as disk 1.
 * `tests/run uefi` boots installed disks, the install stick and the recovery ISO by UEFI firmware.
 * `tests/run smp` and `tests/run fpu` test the processors and the floating-point state.
