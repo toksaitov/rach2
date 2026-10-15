@@ -217,6 +217,24 @@ uint32_t pci_read_config32(uint8_t bus, uint8_t device, uint8_t function, uint8_
     return 0xA0000000u | ((uint32_t)device << 16) | ((uint32_t)function << 8) | offset;
 }
 
+/** A 16-bit configuration read: the word at `offset` of the double word
+ * `pci_read_config32` gives. */
+uint16_t pci_read_config16(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset)
+{
+    uint32_t dword = pci_read_config32(bus, device, function, (uint8_t)(offset & 0xFCu));
+
+    return (uint16_t)(dword >> ((offset & 2u) * 8u));
+}
+
+/** An 8-bit configuration read: the byte at `offset` of the double word
+ * `pci_read_config32` gives. */
+uint8_t pci_read_config8(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset)
+{
+    uint32_t dword = pci_read_config32(bus, device, function, (uint8_t)(offset & 0xFCu));
+
+    return (uint8_t)(dword >> ((offset & 3u) * 8u));
+}
+
 /** Record a configuration write of `width` bits; the bus is not kept. */
 static void cfg_write(uint8_t device, uint8_t function, uint8_t offset, uint32_t value,
                       uint32_t width)
