@@ -1,5 +1,6 @@
 /**
- * HDA enumeration and stream programming against a model codec and MMIO.
+ * HDA enumeration and stream programming against a model codec and MMIO,
+ * and the driver's report as /proc/audio formats it.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  */
@@ -7,6 +8,8 @@
 struct vpath;
 struct fd_entry;
 struct vfs_ref;
+/* The functions procfs.c defines for other files, declared static so that
+ * they have internal linkage in this test, which includes procfs.c. */
 static int procfs_resolve_pid(int pid);
 static int procfs_resolve_id(const struct vpath *vp);
 static int procfs_open(const struct vpath *vp, int flags);
@@ -49,7 +52,7 @@ static void sysfs_block_name(int key, char *out, int cap);
 static int sysfs_block_whole(int key);
 #include "fs/procfs.c"
 
-/* No disks: devfs's table has none of them. */
+/** No disks: devfs's table has none of them. */
 int devfs_disk_row(int i, struct devfs_disk_row *row)
 {
     (void)i;
@@ -57,6 +60,7 @@ int devfs_disk_row(int i, struct devfs_disk_row *row)
     return -1;
 }
 
+/** No device node has numbers here. */
 int devfs_numbers(const char *path, uint32_t *major, uint32_t *minor)
 {
     (void)path;
@@ -83,15 +87,17 @@ int netdev_seen_count(void)
     return netdev_count();
 }
 
+/** No interface at any index. */
 struct netdev *netdev_at(int n)
 {
     (void)n;
     return 0;
 }
 
-/* The running process and the table procfs_may_read asks about; none here. */
+/* The running process and the table procfs_may_read reads; none here. */
 struct percpu cpu_table[NR_CPUS];
 
+/** No process has `pid`. */
 process_t *get_process(uint32_t pid)
 {
     (void)pid;
@@ -104,7 +110,11 @@ process_t *get_process(uint32_t pid)
 extern int printf(const char *format, ...);
 extern char *strstr(const char *text, const char *needle);
 static int failures;
-static const char *row;
+static const char *row; /* the row under way, named in a failure */
+/* The model: the controller's registers, and for each node its parameters,
+ * connection list, selected input, converter format and pin configuration;
+ * the connection-list reads, the verbs, and the list reads at an offset
+ * that is not the start of a response. */
 static uint8_t mmio[HDA_MMIO_SIZE];
 static uint32_t params[128][32];
 static uint16_t connections[128][127];
@@ -112,10 +122,10 @@ static uint8_t selected[128];
 static uint16_t converter_format[128];
 static uint32_t configurations[128];
 static unsigned conn_reads, verbs, bad_offsets;
-static int refuse_alloc;
+static int refuse_alloc; /* kmalloc fails */
 extern void *malloc(unsigned long size);
 extern void free(void *ptr);
-static uint32_t clock_value;
+static uint32_t clock_value; /* the wall clock, 24000 ticks on at each read */
 
 /** Report the row and assertion that failed. */
 static void check(int ok, const char *message)
@@ -497,7 +507,8 @@ const char *audio_get_driver_name(void)
     return "Intel HD Audio";
 }
 
-/** Run codec and controller rows without executing host I/O instructions. */
+/** Run codec and controller rows without executing host I/O instructions:
+ * 0 when every check passes, 1 otherwise. */
 int main(void)
 {
     row_rates();
@@ -649,6 +660,7 @@ void arch_dma_flush(const volatile void *p, size_t len)
     (void)len;
 }
 
+/** Nothing to write back, as for `arch_dma_flush`. */
 void arch_dma_flush_all(void)
 {}
 /** Boot banner formatting is outside these rows. */

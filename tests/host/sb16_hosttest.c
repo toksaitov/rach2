@@ -1,5 +1,6 @@
 /**
- * SB16 PCM frames, failed setup, and callback playback against port stubs.
+ * SB16 PCM frames, failed setup, callback playback and the shell's scale
+ * command against port stubs.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  */
@@ -11,15 +12,15 @@
 
 extern int printf(const char *format, ...);
 static int failures;
-static int busy_after = -1;
-static int writes;
+static int busy_after = -1; /* the DSP is busy after this many writes; -1 never */
+static int writes;          /* bytes written to the DSP */
 static int resets;
 static int dma_failure;
 static int dma_active;
 static int dma_starts;
 static int stopped_channel;
 static int callback_count;
-static int immediate_irq;
+static int immediate_irq; /* the 8th DSP byte completes a block at once */
 static uint8_t commands[32];
 static int scale_done;
 static int scale_failed;
@@ -329,7 +330,11 @@ static void row_scale(void)
     CHECK(!playing && !dma_active && !user_callback, "scale stops and detaches callback");
 }
 
-/** Select the frame, setup, or complete set of playback rows. */
+/**
+ * Select the rows: with no argument all of them; with one that begins with
+ * `s` the frame rows and the setup rows; with any other the frame rows only.
+ * Returns 0 when every check passes, 1 otherwise.
+ */
 int main(int argc, char **argv)
 {
     row_frames();
