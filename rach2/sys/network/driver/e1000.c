@@ -81,7 +81,6 @@ struct e1000_io {
  * 112 KiB of buffer volatile would slow every copy to no purpose.
  */
 struct e1000 {
-    int used;
     int number; /* its place in `e1000s`, the `nth` of its bring-up */
     /* The interface this card is, so a frame it delivers says where it
      * arrived and its counters are that interface's. */
