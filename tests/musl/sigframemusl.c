@@ -1,6 +1,6 @@
 /**
- * The signal behaviour GNU libc and debuggers rely on, past what sigmusl
- * covers.
+ * sigframemusl: check the signal behavior GNU libc and debuggers rely on,
+ * past what sigmusl covers.
  *
  * A write to a read-only page reaches a SIGSEGV handler with SEGV_ACCERR and
  * the address, and runs again once the handler makes the page writable; a
@@ -20,8 +20,8 @@
  * stack until its frames no longer fit ends the process with SIGSEGV and writes
  * nothing below the stack.
  *
- * Prints "SIGFRAMEMUSL OK" on success and "SIGFRAMEMUSL FAIL (detail)"
- * otherwise.
+ * It prints "SIGFRAMEMUSL OK" and exits 0 on success, or prints
+ * "SIGFRAMEMUSL FAIL (detail)" and exits 1 at the first failure.
  */
 
 #define _GNU_SOURCE
@@ -52,6 +52,8 @@ typedef uint64_t word_mask_t;
 #define BLOCK_RAW(set, old) syscall(SYS_rt_sigprocmask, SIG_BLOCK, set, old, sizeof(word_mask_t))
 #endif
 
+/* What the handlers saw, for the rows to check; usr1_answer is the pipe
+ * on_usr1 answers on, or -1 for none. */
 static volatile sig_atomic_t usr1_runs;
 static int usr1_answer = -1;
 static volatile sig_atomic_t got_code;
@@ -63,16 +65,26 @@ static volatile sig_atomic_t handler_mask_had_usr1;
 static volatile sig_atomic_t chld_code;
 static volatile sig_atomic_t chld_pid;
 static volatile sig_atomic_t chld_status;
+
+/* The read-only page of fault_rows, which on_segv makes writable. */
 static char *page;
+
+/* Where on_segv jumps for a fault it cannot let run again. */
 static sigjmp_buf escape;
+
 static char altstack[16384];
 
+/** Report one failed check and return 1, the probe's failure status. */
 static int fail(const char *what)
 {
     printf("SIGFRAMEMUSL FAIL (%s)\n", what);
     return 1;
 }
 
+/**
+ * Record a SIGSEGV's code and address. For SEGV_ACCERR make `page` writable
+ * so the store runs again; otherwise jump to `escape`.
+ */
 static void on_segv(int sig, siginfo_t *info, void *uc)
 {
     (void)sig;
@@ -86,8 +98,10 @@ static void on_segv(int sig, siginfo_t *info, void *uc)
     }
 }
 
-/** Count a SIGUSR1, and answer it with a byte on `usr1_answer` when that is
- * open. */
+/**
+ * Count a SIGUSR1, and answer it with a byte on `usr1_answer` when that is
+ * open. errno is kept.
+ */
 static void on_usr1(int sig)
 {
     int saved = errno;
@@ -100,6 +114,10 @@ static void on_usr1(int sig)
     errno = saved;
 }
 
+/**
+ * Record whether the handler runs on `altstack` with sigaltstack reporting
+ * SS_ONSTACK, and the stack flags its frame saved.
+ */
 static void on_alt_handler(int sig, siginfo_t *info, void *ctx)
 {
     stack_t st;
@@ -112,6 +130,7 @@ static void on_alt_handler(int sig, siginfo_t *info, void *ctx)
     saved_ss_flags = ((ucontext_t *)ctx)->uc_stack.ss_flags;
 }
 
+/** Record a SIGTRAP's code. */
 static void on_trap(int sig, siginfo_t *info, void *uc)
 {
     (void)sig;
@@ -119,6 +138,7 @@ static void on_trap(int sig, siginfo_t *info, void *uc)
     trapped = info->si_code;
 }
 
+/** Record whether SIGUSR1 is in the mask the SIGUSR2 handler runs under. */
 static void on_usr2(int sig, siginfo_t *info, void *context)
 {
     sigset_t now;
@@ -155,6 +175,7 @@ static int suspend_row(void)
     return 0;
 }
 
+/** Record a SIGCHLD's code, pid and status. */
 static void on_chld(int sig, siginfo_t *info, void *uc)
 {
     (void)sig;
@@ -164,15 +185,20 @@ static void on_chld(int sig, siginfo_t *info, void *uc)
     chld_status = info->si_status;
 }
 
+/** Raise `sig` again from its own handler, which runs with SA_NODEFER. */
 static void nest(int sig)
 {
     raise(sig);
 }
 
-/** A child whose SIGUSR1 handler raises SIGUSR1 again, SA_NODEFER, on an
+/**
+ * Check a child whose SIGUSR1 handler raises SIGUSR1 again, SA_NODEFER, on an
  * alternate stack of MINSIGSTKSZ bytes at the start of a shared page, with
- * the page below it filled with a mark the kernel must leave. The child
- * clears the mask it inherits, in which the rows before block SIGUSR1. */
+ * the page below it filled with a mark the kernel must leave. The child must
+ * die by SIGSEGV with the mark whole. It clears the mask it inherits, in
+ * which the rows before block SIGUSR1. Returns 0, or 1 after the failure is
+ * printed.
+ */
 static int overflow(void)
 {
     char *m = mmap(NULL, 8192, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
@@ -216,6 +242,10 @@ static int overflow(void)
     return 0;
 }
 
+/**
+ * Install `fn` as the SA_SIGINFO handler of `sig`, with `flags` added and an
+ * empty mask. Returns sigaction's result.
+ */
 static int install(int sig, void (*fn)(int, siginfo_t *, void *), int flags)
 {
     struct sigaction sa;
@@ -227,7 +257,10 @@ static int install(int sig, void (*fn)(int, siginfo_t *, void *), int flags)
     return sigaction(sig, &sa, NULL);
 }
 
-/** Whether process `pid` sleeps, by its state in /proc/<pid>/stat. */
+/**
+ * Return 1 when process `pid` is asleep, state S in /proc/<pid>/stat, and 0
+ * otherwise.
+ */
 static int sleeping(pid_t pid)
 {
     char path[64], line[256], *state;
@@ -339,8 +372,11 @@ static int interrupted_read(int restart)
     return 0;
 }
 
-/** A write to a read-only page is handled as SEGV_ACCERR at its address
- * and run again; a read of an unmapped page is SEGV_MAPERR at its own. */
+/**
+ * Check that a write to a read-only page is handled as SEGV_ACCERR at its
+ * address and run again, and that a read of an unmapped page is SEGV_MAPERR
+ * at its own. Returns 0, or 1 after the failure is printed.
+ */
 static int fault_rows(void)
 {
     volatile char *unmapped = (volatile char *)0x00001000;
@@ -349,8 +385,7 @@ static int fault_rows(void)
     if (page == MAP_FAILED || install(SIGSEGV, on_segv, 0) != 0) {
         return fail("setup");
     }
-    /* Through a volatile pointer, so the compiler cannot read got_code before
-     * the store that faults. */
+    /* Volatile, so the compiler cannot read got_code before the fault. */
     ((volatile char *)page)[10] = 'w';
     if (got_code != SEGV_ACCERR || got_addr != (uintptr_t)page + 10 ||
         ((volatile char *)page)[10] != 'w') {
@@ -366,8 +401,11 @@ static int fault_rows(void)
     return 0;
 }
 
-/** A handler installed with SA_ONSTACK runs on the alternate stack, and its
- * frame saves the flags of the stack the signal came on. */
+/**
+ * Check that a handler installed with SA_ONSTACK runs on the alternate stack,
+ * and that its frame saves the flags of the stack the signal came on.
+ * Returns 0, or 1 after the failure is printed.
+ */
 static int alt_stack_row(void)
 {
     struct sigaction sa;

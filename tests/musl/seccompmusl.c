@@ -1,27 +1,31 @@
 /**
- * seccomp filters, through musl's syscall(), prctl() and pthreads.
+ * seccompmusl: check seccomp filters and the strict mode, through musl's
+ * syscall(), prctl() and pthreads.
  *
- * The probe starts with no filter and mode 0. It refuses an empty program,
- * a jump past the end, a load past struct seccomp_data, and a filter from
- * an unprivileged caller without no_new_privs; it reports the actions it
- * has, and not SECCOMP_RET_USER_NOTIF.
+ * The probe starts with no filter and mode 0. The kernel fails with EINVAL an
+ * empty program, a jump past the end and a load past struct seccomp_data, and
+ * with EACCES a filter from an unprivileged caller without no_new_privs; it
+ * reports the actions it has as available, and SECCOMP_RET_USER_NOTIF as not.
  *
  * In a child with no_new_privs, a filter fails getppid with errno 77 and
  * lets the rest run, and /proc/self/status shows mode 2 and one filter. A
  * second filter traps getuid32 with data 5: the handler's siginfo has
- * SYS_SECCOMP, the call, the instruction after it, AUDIT_ARCH_I386 and the
- * data in si_errno, and EAX holds the call's number, as Linux's rollback
- * leaves it. Both filters judge getppid, and the trap, of higher
- * precedence, wins over the errno. A grandchild inherits both and adds a
- * third that kills the process at getgid32, and dies by SIGSYS. On x86-64
+ * SYS_SECCOMP, the call, a call address, AUDIT_ARCH_I386 and the data in
+ * si_errno, and EAX has the call's number, as Linux's rollback leaves it.
+ * A third filter traps getppid, which the first fails with an errno, and the
+ * trap, of higher precedence, wins. A grandchild inherits the filters and
+ * adds one that kills the process at getgid32, and dies by SIGSYS. On x86-64
  * the calls are getuid and getgid, the architecture AUDIT_ARCH_X86_64 and the
- * register RAX. TSYNC gives
- * a waiting thread the caller's new filter, and an exec keeps the four.
+ * register RAX. TSYNC gives a waiting thread the caller's new filter, and an
+ * exec keeps the four filters.
+ *
  * The strict mode lets write, read and exit through, by the architecture's
  * numbers, and kills the process with SIGKILL at getpid and at close.
  *
- * Prints "SECCOMPMUSL OK" on success and "SECCOMPMUSL FAIL (detail)"
- * otherwise.
+ * Run with an argument, the program is the image the filter child execs, and
+ * checks that the filters were kept. The parent prints "SECCOMPMUSL OK" and
+ * exits 0 on success; a failure prints "SECCOMPMUSL FAIL (detail: errno N)"
+ * and the program exits 1.
  */
 
 #define _GNU_SOURCE
@@ -37,6 +41,7 @@
 #include <ucontext.h>
 #include <unistd.h>
 
+/* The seccomp operations, flag and actions, and the classic BPF opcodes. */
 #define SET_MODE_STRICT  0
 #define SET_MODE_FILTER  1
 #define GET_ACTION_AVAIL 2
@@ -72,6 +77,7 @@
 #define REG_NR          REG_EAX
 #endif
 
+/* A classic BPF instruction and program, Linux's sock_filter and sock_fprog. */
 struct insn {
     uint16_t code;
     uint8_t jt, jf;
@@ -83,6 +89,7 @@ struct fprog {
     struct insn *filter;
 };
 
+/* The count of SIGSYS traps, and whether the last one was the call's. */
 static volatile int trapped;
 static volatile int trap_ok;
 
@@ -93,7 +100,10 @@ static int fail(const char *what)
     return 1;
 }
 
-/** Install the filter `n` instructions at `prog` describe, with `flags`. */
+/**
+ * Install the filter of the `n` instructions at `prog`, with the seccomp
+ * `flags`. Returns the call's result, or -1 with errno set.
+ */
 static long install(struct insn *prog, unsigned short n, unsigned flags)
 {
     struct fprog fp;
@@ -103,8 +113,10 @@ static long install(struct insn *prog, unsigned short n, unsigned flags)
     return syscall(NR_SECCOMP, SET_MODE_FILTER, flags, &fp);
 }
 
-/** Install a filter that answers the call `nr` with `action` and lets the
- * rest run. */
+/**
+ * Install, with `flags`, a filter that answers the call `nr` with `action`
+ * and lets the rest run. Returns as `install` does.
+ */
 static long answer(int nr, uint32_t action, unsigned flags)
 {
     struct insn prog[4] = {
@@ -117,7 +129,10 @@ static long answer(int nr, uint32_t action, unsigned flags)
     return install(prog, 4, flags);
 }
 
-/** Whether /proc/self/status has the line `line`. */
+/**
+ * Return 1 when the first 4 KiB of /proc/self/status contain `line`, and 0
+ * otherwise.
+ */
 static int status_has(const char *line)
 {
     char buf[4096];
@@ -133,7 +148,11 @@ static int status_has(const char *line)
     return strstr(buf, line) != NULL;
 }
 
-/** The handler of the trap: the siginfo and EAX must be the call's. */
+/**
+ * Handle the trap of getuid: count it, record in `trap_ok` whether the
+ * siginfo and the saved number register are the call's, and set the register
+ * to 4242, which the trapped call then returns.
+ */
 static void on_sigsys(int signo, siginfo_t *si, void *ctx)
 {
     ucontext_t *uc = ctx;
@@ -146,7 +165,10 @@ static void on_sigsys(int signo, siginfo_t *si, void *ctx)
     uc->uc_mcontext.gregs[REG_NR] = 4242;
 }
 
-/** The refusals and the queries, in the probe itself. */
+/**
+ * Check the errors and the action queries, in the probe's own process with no
+ * filter. Returns 0, or 1 after the failure is printed.
+ */
 static int refusals(void)
 {
     struct insn past[2] = {{0x05, 0, 0, 5}, {RET_K, 0, 0, RET_ALLOW}};
@@ -181,7 +203,11 @@ static int refusals(void)
     return 0;
 }
 
-/** The thread TSYNC reaches: it waits for the filter, then makes the call. */
+/**
+ * Run as the thread TSYNC reaches: wait until `*arg` is nonzero, then make
+ * gettid. Returns non-null when the call failed with errno 33, the answer of
+ * the filter TSYNC gave the thread.
+ */
 static void *tsync_thread(void *arg)
 {
     volatile int *go = arg;
@@ -192,7 +218,11 @@ static void *tsync_thread(void *arg)
     return (void *)(long)(syscall(NR_GETTID) == -1 && errno == 33);
 }
 
-/** The filters, in a child with no_new_privs; returns its exit status. */
+/**
+ * Install and check the filters, in a forked child, which this sets
+ * no_new_privs in. On success it execs `self` with the argument `exec`, so
+ * it returns only on failure: 1, after the failure is printed.
+ */
 static int filters(const char *self)
 {
     struct sigaction sa;
@@ -245,7 +275,10 @@ static int filters(const char *self)
     return fail("execl");
 }
 
-/** After the exec: the filters are kept. */
+/**
+ * Check, in the image `filters` execs, that the four filters were kept.
+ * Returns 0, or 1 after the failure is printed.
+ */
 static int after_exec(void)
 {
     if (prctl(PR_GET_SECCOMP) != 2 || syscall(NR_GETTID) != -1 || errno != 33 ||
@@ -255,8 +288,11 @@ static int after_exec(void)
     return 0;
 }
 
-/** A child in the strict mode that writes, reads a byte from a pipe, makes
- * the call `nr` unless it is 0, and exits; its wait status, or -1. */
+/**
+ * Fork a child that enters the strict mode, writes, reads a byte from a pipe,
+ * makes the call `nr` on the pipe's read end unless `nr` is 0, and exits
+ * through the raw exit call. Returns its wait status, or -1.
+ */
 static int strict_child(long nr)
 {
     int fds[2], status;
@@ -284,9 +320,12 @@ static int strict_child(long nr)
     return pid > 0 && waitpid(pid, &status, 0) == pid ? status : -1;
 }
 
-/** The strict mode, in children: write, read and exit run, by the
- * architecture's numbers, and getpid and close kill, whose x86-64 numbers
- * are i386's read and stat. */
+/**
+ * Check the strict mode, in children: write, read and exit run, by the
+ * architecture's numbers, and getpid and close kill. close's x86-64 number,
+ * 3, is i386's read, so a kernel that judged x86-64 calls by i386's numbers
+ * would let it through. Returns 0, or 1 after the failure is printed.
+ */
 static int strict(void)
 {
     int status = strict_child(0);
