@@ -197,7 +197,7 @@ faults = {
     'text-milestone': ('textcheck.sh',
         "tolower($0) ~ /milestones? +[0-9]/ ||", "$0 ~ /milestones? +[0-9]/ ||"),
     'text-docs': ('textcheck.sh',
-        "    find man ports '(' -name", "    find ports '(' -name"),
+        "    find man '(' -name", "    find man -prune -o '(' -name"),
 }
 name, old, new = faults[fault]
 path = directory / name

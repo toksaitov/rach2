@@ -34,10 +34,15 @@ trap 'rm -f "$findings"' EXIT INT TERM
 # Find in-house files under the source roots; the arguments are the name
 # filter and -print. The extracted vendor trees and their built output
 # (vendor/musl/install and the extracted musl, busybox, dropbear, tcc, pdpmake
-# and e2fsprogs trees) are pruned. build/, ports/doom and dev-log/ are not
-# roots, so they are not searched.
+# and e2fsprogs trees) are pruned, as are Doom's upstream sources:
+# ports/doom/src and the Chocolate Doom and Nuked OPL3 files beside the
+# platform layer. build/ and dev-log/ are not roots, so they are not searched.
 prune_find() {
-    find rach2 ish utils tests krffs tools mk vendor \
+    find rach2 ish utils tests krffs tools mk vendor ports \
+        -path 'ports/doom/src' -prune -o \
+        -path 'ports/doom/midifile.[ch]' -prune -o \
+        -path 'ports/doom/mus2mid.[ch]' -prune -o \
+        -path 'ports/doom/opl3.[ch]' -prune -o \
         -path 'vendor/musl/install' -prune -o \
         -path 'vendor/musl/musl-*' -prune -o \
         -path 'vendor/busybox/busybox-*' -prune -o \
@@ -59,7 +64,7 @@ md_files() {
 # and the lists keep their own form and are not among them.
 doc_files() {
     prune_find '(' -name 'Readme.md' -o -name '*.Readme.md' ')' -print
-    find man ports '(' -name 'Readme.md' -o -name '*.Readme.md' ')' -print 2>/dev/null
+    find man '(' -name 'Readme.md' -o -name '*.Readme.md' ')' -print 2>/dev/null
 }
 
 # Every in-house shell script, as tools/verify/scripts.sh lists them for the
