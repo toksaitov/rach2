@@ -1,3 +1,9 @@
+/*
+ * cmos.c: the PC's CMOS clock, as cmos.h describes: the judgement and
+ * decoding of samples, and the boot's read, the setting and the alarm of
+ * ../../rtc.h through the clock's two ports.
+ */
+
 #include "portio.h"
 #include "../../klog.h"
 #include "cmos.h"
@@ -25,17 +31,12 @@ static int32_t rtc_from_bcd(uint8_t value)
 }
 
 /**
- * Whether this sample says the clock lost its own contents.
- *
- * Register D's validity bit is clear once the battery has gone, and on some
- * parts READING that register sets it again, so the bit tells the truth once.
- * A sample that sees it clear therefore ends the read: taking another pair
- * would find them agreeing, in range, and holding whatever the dead cell left,
- * which is exactly the clock this guard exists to refuse. A missing sample is
- * counted the same way, since the answer here decides whether to believe a
- * clock.
- *
- * @return 1 when the contents are not to be believed, 0 otherwise.
+ * Register D's valid bit is clear once the battery has failed, and on some
+ * parts a read of that register sets it again, so only the first read of a
+ * failed clock shows it clear. A sample that sees it clear therefore ends
+ * the read: another pair would agree, be in range, and hold whatever the
+ * failed cell left. A missing sample counts as lost, since the answer
+ * decides whether the clock's time is used.
  */
 int rtc_contents_lost(const rtc_snapshot_t *raw)
 {
@@ -47,21 +48,13 @@ int rtc_contents_lost(const rtc_snapshot_t *raw)
 }
 
 /**
- * Whether two samples of the clock describe the same instant and the same
- * clock.
- *
- * The caller takes two samples and decodes neither unless this says they agree,
- * because the registers advance while they are being read. Every field is
- * compared, the three status registers included: the decode judges the clock by
- * what status A, B and D say, and a sample whose status changed between the two
- * reads is one where that judgement would rest on a register the other read did
- * not see.
- *
- * The update-in-progress bit is the one exception and is masked off both sides.
- * It is the only bit in those registers that the hardware moves on its own, it
- * moves once a second, and it says nothing about the values themselves.
- *
- * @return 1 when the two agree, 0 otherwise.
+ * The caller decodes neither sample unless the two agree, because the
+ * registers advance while they are read. The status registers are compared
+ * because the decode judges the clock by them, and a status that changed
+ * between the reads would leave that judgement resting on a register the
+ * other read did not see. The update-in-progress bit is masked off both
+ * sides: it is the only bit of those registers that the hardware changes on
+ * its own, once a second, and it says nothing about the values.
  */
 int rtc_snapshots_agree(const rtc_snapshot_t *a, const rtc_snapshot_t *b)
 {
@@ -77,18 +70,12 @@ int rtc_snapshots_agree(const rtc_snapshot_t *a, const rtc_snapshot_t *b)
 }
 
 /**
- * What a pair of samples is worth: use it, take another, or stop reading.
- *
- * The whole policy of the boot read is here, not in the loop that reads,
- * so that it can be stated once and tested. Two rules, and the order of them is
- * the point. A clock that says it lost its contents STOPS the read, even though
- * the pair also disagrees, because taking another pair is exactly the mistake:
- * reading register D can set the validity bit again, so the only usable sample
- * is the one already in hand and every later one is a fiction that agrees with
- * itself. Any other disagreement is a read that straddled an update, which is
- * worth taking again.
- *
- * @return `RTC_PAIR_ACCEPT`, `RTC_PAIR_RETRY` or `RTC_PAIR_STOP`.
+ * The policy of a read is here, not in the loops that read, so that it is
+ * stated once and tested. The order of the two rules matters. A clock that
+ * says it lost its contents stops the read even when the pair also
+ * disagrees, because a read of register D can set the valid bit again: a
+ * later pair would agree and hold whatever the failed cell left. Any other
+ * disagreement is a read that straddled an update, worth taking again.
  */
 int rtc_pair_disposition(const rtc_snapshot_t *a, const rtc_snapshot_t *b)
 {
@@ -103,25 +90,13 @@ int rtc_pair_disposition(const rtc_snapshot_t *a, const rtc_snapshot_t *b)
 }
 
 /**
- * Convert a raw CMOS sample to seconds since the Unix epoch, in UTC.
- *
- * This is the whole of the clock's arithmetic and it touches no hardware, so
- * `tests/host/rtc_hosttest.c` runs it natively over crafted samples: the two
- * encodings, the 12-hour PM flag, a leap year, and the out-of-range fields a
- * machine with a dead battery reports.
- *
- * The order of operations is not free. The PM flag rides in the high bit of the
- * hour register, so it is taken off BEFORE the value is decoded; a BCD decode
- * of an hour with that bit still set reads as a nonsense digit and would be
- * rejected, not corrected. A field outside its range fails the whole
- * sample: a clock that reports month 0 is not a clock to base a build on.
- *
- * @param raw the six registers and status B, as read.
- * @param seconds set to the decoded time when the sample is good.
- * @param out when not NULL, the same instant as fields, which is what the
- *        console line prints and what the host test reads to tell a wrong hour
- *        from a wrong total.
- * @return 0 on success, -1 if any field is out of range.
+ * The status registers are judged before any field: a clock whose battery
+ * failed has whatever was in those bytes, which can be stable, in range and
+ * wrong. The PM flag is the hour register's high bit, so it is taken off
+ * before the hour is decoded; a BCD decode of an hour with the bit set
+ * would fail the sample. `tests/host/rtc_hosttest.c` runs this over crafted
+ * samples: the two encodings, the 12-hour PM flag, a leap year, and the
+ * fields out of range that a clock with a failed battery reports.
  */
 int rtc_decode(const rtc_snapshot_t *raw, int64_t *seconds, rtc_time_t *out)
 {
@@ -140,12 +115,6 @@ int rtc_decode(const rtc_snapshot_t *raw, int64_t *seconds, rtc_time_t *out)
         return -1;
     }
 
-    /* What the clock says about itself, before anything it says about the time.
-     * A machine whose battery went reports VRT clear and has whatever was in
-     * those bytes, which can be stable and in range and completely wrong; a
-     * clock with SET raised or a divider that is not the running one is not
-     * advancing; and DSE means the clock shifts itself twice a year, which this
-     * system will not model. Each is a reason to keep the epoch instead. */
     if (!(raw->status_d & RTC_STATUS_D_VALID)) {
         return -1;
     }
@@ -226,7 +195,8 @@ int rtc_decode(const rtc_snapshot_t *raw, int64_t *seconds, rtc_time_t *out)
 #include "pic.h"
 #include "pit.h"
 
-/* Kernel-side only, like krandom.c's hardware half (see kio.c / kernel.c). */
+/* The uptime the timer handler keeps (kernel.c); a host test that defines
+ * RTC_HOST_TEST defines it, and the ports, itself. */
 extern volatile uint32_t kernel_uptime_seconds;
 extern volatile uint32_t kernel_second_ticks;
 
@@ -252,19 +222,21 @@ extern volatile uint32_t kernel_second_ticks;
 #define RTC_STATUS_C_AF      0x20 /* set: the alarm has come since C was read */
 
 /*
- * How long to wait for an update to finish. An RTC update takes under two
- * milliseconds and each read here is a pair of port accesses, so this bound is
- * orders of magnitude past the wait and is a bound on a WEDGED clock rather
- * than a slow one. It is a spin count and not a tick count deliberately: this
- * runs at boot and must not depend on the timer already being live.
+ * How many reads of status A to wait for an update to finish. An update
+ * takes under two milliseconds and each read is a pair of port accesses, so
+ * the bound is orders of magnitude past the wait: it ends the wait on a
+ * clock that is stuck, not on one that is slow. It counts reads, not ticks,
+ * since `rtc_read_clock` waits with interrupts off, where the tick does not
+ * advance.
  */
 #define RTC_UPDATE_SPINS 1000000
 
-/* How many times to re-read a sample that changed under us before giving up. */
+/* How many pairs of samples a read takes before it gives up on a clock
+ * whose samples keep disagreeing. */
 #define RTC_SAMPLE_TRIES 4
 
-/** Read one CMOS register. Bit 7 of the address port is left clear, so NMI
- *  stays enabled: this reads the clock, it does not change the machine. */
+/** Read the CMOS register `reg`. Bit 7 of the address port is left clear,
+ *  which leaves the NMI enabled. */
 static uint8_t rtc_register(uint8_t reg)
 {
     outb(RTC_ADDRESS_PORT, reg);
@@ -287,8 +259,8 @@ static int rtc_wait_ready(void)
     return -1;
 }
 
-/** Read the six registers and status A, B and D once, after waiting out an
- *  update. */
+/** Read the six registers and status A, B and D into `*out` once, after
+ *  waiting out an update: 0, or -1 for a clock whose update never ends. */
 static int rtc_sample(rtc_snapshot_t *out)
 {
     if (rtc_wait_ready() != 0) {
@@ -315,18 +287,21 @@ static void rtc_two(char *out, int32_t value)
 }
 
 /**
- * Read the CMOS clock once and anchor the system's idea of real time to it.
+ * Read the CMOS clock once, at boot with interrupts on, anchor real time to
+ * it (`rtc_anchor`), and log the time read.
  *
- * The read is taken twice and accepted only when the two agree, because the
- * registers advance while they are being read: a sample that straddles the
- * turn of a minute reports the old minute with the new second, which is a time
- * an hour wrong once an hour. Waiting out the update-in-progress flag makes
- * that rare and does not make it impossible, since the flag clears a little
- * before the registers change.
+ * The clock is sampled twice and the pair used only when the two agree,
+ * because the registers advance while they are read: a sample that
+ * straddles the turn of an hour can pair the new hour with the old minute,
+ * a time an hour wrong. Waiting out the update-in-progress flag makes that
+ * rare but not impossible, since the flag clears a little before the
+ * registers change. The uptime is read after the pair: waiting out an
+ * update can cost a tick or two, and an uptime read before it would date
+ * the clock early and put real time that far ahead.
  *
- * A machine with no working clock is not a machine that should refuse to boot.
- * A failed read leaves the anchor unset, real time falls back to time since
- * boot the way it behaved before this driver existed, and the console says so.
+ * A machine with no working clock still boots. A failed read leaves the
+ * anchor unset, so that real time counts from the epoch, and the log says
+ * so.
  */
 void rtc_init(void)
 {
@@ -343,11 +318,6 @@ void rtc_init(void)
         if (rtc_sample(&first) != 0 || rtc_sample(&second) != 0) {
             break;
         }
-        /* The uptime is taken with the sample and not before it. Interrupts are
-         * on here, and waiting out an update can cost a tick or two, so a
-         * reading taken before the sampling would date the clock earlier than
-         * it was and put the machine that far ahead for the rest of the boot.
-         */
         uptime = kernel_uptime_seconds;
         disposition = rtc_pair_disposition(&first, &second);
         if (disposition == RTC_PAIR_STOP) {
@@ -361,8 +331,6 @@ void rtc_init(void)
         }
         rtc_anchor(seconds, uptime);
 
-        /* Composed by hand: this printf has no field width, so the two-digit
-         * fields would print as one digit and read as a different time. */
         rtc_two(text + 0, when.year / 100);
         rtc_two(text + 2, when.year);
         text[4] = '-';
@@ -457,9 +425,9 @@ int rtc_write_clock(const rtc_time_t *t)
     return 0;
 }
 
-/** `reg`, an alarm or time register, decoded from the clock's encoding, with
- * the hour's PM bit turned into a 24-hour hour; -1 for a value that is not
- * a number in the encoding. */
+/** `value`, an alarm or time register, decoded from the encoding status
+ * register B `b` gives, with the PM bit turned into a 24-hour hour when
+ * `hour` is set; -1 for a value that is not a number in the encoding. */
 static int32_t rtc_from_register(uint8_t value, uint8_t b, int hour)
 {
     int32_t v;

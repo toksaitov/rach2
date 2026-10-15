@@ -9,24 +9,27 @@
 #include "../../kio.h"
 
 /*
- * The PC's timer, the 8254 programmable interval timer: channel 0 raises the
- * tick when the 8259 pair has the lines, and its counter under the tick is
- * then the clock ../../timer.h reads. With the I/O APIC the local APIC's
- * timer ticks, and `timer_set_counter` puts its count under the clock.
- *
- * Initializes the Programmable Interval Timer (PIT) with a specific
- * update frequency.
+ * The PC's timer, the 8254 programmable interval timer, and the clock under
+ * the tick that ../../timer.h declares. Channel 0 raises the tick on line 0
+ * when the 8259 pair has the lines. With the I/O APIC the local APIC's
+ * timer ticks, or channel 0 through the I/O APIC when that timer could not
+ * be measured, and `timer_set_counter` puts the ticking timer's count under
+ * the clock.
  */
+
+/** Program channel 0 to raise line 0 `frequency` times a second, in mode 3,
+ * the square wave, and record its reload in `pit_reload`. The caller
+ * installs the tick's handler. */
 void init_pit(uint32_t frequency);
 
 /*
  * The reload value `init_pit` last programmed into channel 0.
  *
- * Published because `udelay.c` measures against that same counter and has to
- * know where it wraps, and computing the divisor a second time there would be
- * a copy that a change to the tick rate would silently leave behind. It has
- * the 100 Hz value before `init_pit` runs, so a wait taken during early boot
- * is measured, not undefined.
+ * `udelay.c` measures against the same counter and needs to know where it
+ * wraps, so it reads the reload here rather than computing the divisor a
+ * second time, which a change to the tick rate could leave behind. It has
+ * the 100 Hz value before `init_pit` runs, so that a wait during early boot
+ * is measured.
  */
 extern uint32_t pit_reload;
 
@@ -51,14 +54,22 @@ struct tick_counter {
     int (*pending)(void);
 };
 
-/** Read the clock from `c`, or from channel 0 again when `c` is NULL.
- * Called before the tick starts. */
+/** Read the clock from `c`, or from channel 0 again when `c` is NULL. The
+ * platform calls it with interrupts off, before the tick starts or when it
+ * moves the tick to another timer. */
 void timer_set_counter(const struct tick_counter *c);
 
-/* Channel 0's own part of a counter, for a platform that takes its tick
- * through another controller than the 8259. */
+/* Channel 0's own parts of a counter, for a platform that takes its tick
+ * through another controller than the 8259 (apictimer.c). */
+
+/** Where channel 0's counter is inside its period now, in microseconds,
+ * from its count and status latched together. */
 uint32_t pit_phase_us(void);
+
+/** `pit_phase_us` in nanoseconds, at a microsecond's resolution. */
 uint32_t pit_phase_ns(void);
+
+/** Channel 0's period, two sweeps of its counter, in microseconds. */
 uint32_t pit_period_us(void);
 
 /*

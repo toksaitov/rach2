@@ -1,3 +1,9 @@
+/*
+ * pit.c: the 8254's channel 0, and the clock under the tick that
+ * ../../timer.h declares: the microseconds since the boot, the place within
+ * the tick, and the ticks the time-stamp counter finds missed.
+ */
+
 #include "portio.h"
 #include "pit.h"
 #include "refclock.h"
@@ -11,7 +17,7 @@
 uint32_t pit_reload = 1193182 / 100;
 
 /*
- * Microseconds per count as the counter is READ in mode 3, where it steps by
+ * Microseconds per count as the counter is read in mode 3, where it steps by
  * two per input clock: 1000000 / (2 * 1193182) = 0.419047. Kept as 419
  * thousandths so the arithmetic stays in 32 bits; the error is one part in
  * ten thousand, which is a fifth of a microsecond over a whole sweep.
@@ -19,16 +25,12 @@ uint32_t pit_reload = 1193182 / 100;
 #define US_PER_COUNT_THOUSANDTHS 419u
 
 /**
- * Program the 8254 PIT channel 0 to raise IRQ0 at `frequency` Hz.
- *
- * Channel 0 is the system timer line (IRQ0, vector 32); the divisor scales the
- * fixed 1.193182 MHz input clock down to the requested rate. The caller
- * installs the IRQ0 handler.
- *
- * The control byte selects mode 3, the square wave generator, and `udelay.c`
- * converts counts to microseconds on the strength of it: in mode 3 the counter
- * steps by two per input clock. Changing the mode here changes that arithmetic
- * and must change it there too.
+ * The divisor scales the 1.193182 MHz input clock down to the rate. The
+ * control byte, 0x36, selects channel 0, both bytes of the count and mode
+ * 3, the square wave generator, and `udelay.c` converts counts to
+ * microseconds on the strength of it: in mode 3 the counter steps by two
+ * per input clock. A change of mode here changes that arithmetic, and
+ * `udelay.c` must change with it.
  */
 void init_pit(uint32_t frequency)
 {
@@ -50,13 +52,13 @@ static uint32_t sweep_us(void)
  * Where the clock is: the periods that have passed, where the counter was at
  * the last reading, and whether that reading was the one that saw the wrap.
  *
- * Neither the tick nor the counter can carry this alone. The counter says
+ * Neither the tick nor the counter can keep this alone. The counter says
  * where in a period the machine is and says nothing about which period, and
  * two readings a whole period apart land in the same place; the tick counts
- * periods exactly but arrives when it arrives, which under QEMU is a
- * millisecond or two into the period it counts. So a reading that finds the
- * counter behind where the last reading left it counts the wrap itself, and
- * the tick counts one only when no reading beat it to it.
+ * periods exactly, but its interrupt comes late, under QEMU a millisecond or
+ * two into the period it counts. So a reading that finds the counter behind
+ * where the last reading left it counts the wrap itself, and the tick counts
+ * one only when no reading counted it first.
  */
 struct pit_clock {
     uint32_t periods;    /* whole periods counted since the boot */
@@ -64,6 +66,8 @@ struct pit_clock {
     int wrapped;         /* a reading counted the period the next tick sees */
 };
 
+/* The boot processor's clock, read and ticked with interrupts off; the
+ * other processors read the edge below. */
 static struct pit_clock clock;
 
 /*
@@ -95,6 +99,8 @@ static uint32_t pit_phase_from(uint32_t count, uint8_t status);
 static int pit_pending(void);
 static void edge_phase(uint32_t ns, uint32_t period_ns, int *pending, uint32_t *phase_ns);
 
+/* Channel 0's counter, and the counter the clock reads, channel 0's until
+ * `timer_set_counter` chooses another. */
 static const struct tick_counter pit_counter = {pit_phase_us, pit_phase_ns, pit_period_us,
                                                 pit_pending};
 static const struct tick_counter *counter = &pit_counter;
@@ -148,7 +154,8 @@ static uint32_t tsc_last_lo, tsc_last_hi;
 /* The most ticks one interrupt makes up: a minute. */
 #define PIT_LOST_MAX 6000u
 
-/** The time-stamp counter's halves. */
+/** The time-stamp counter's halves into `*lo` and `*hi`; 0 in a host
+ * test. */
 static void tsc_read(uint32_t *lo, uint32_t *hi)
 {
 #ifndef RACH2_HOSTTEST
@@ -207,8 +214,7 @@ uint32_t timer_calibrate(void)
     k_udelay(20000);
     tsc_read(&lo1, &hi1);
     kirq_restore(flags);
-    /* Twenty milliseconds are two ticks, and fewer than 2^32 counts below a
-     * clock of 200 GHz. */
+    /* 20 ms is two ticks, and under 2^32 counts below a 200 GHz clock. */
     tsc_per_tick = (lo1 - lo0) / 2u;
     return tsc_per_tick;
 }
@@ -305,10 +311,8 @@ static int timer_missed_rows(void)
     return ok;
 }
 
-/**
- * The clock's arithmetic on fixed inputs, as `pit.h` describes: the phase
- * rows, the clock rows and the missed-tick rows, each in its own function.
- */
+/** The rows are in three functions: the phase rows, the clock rows and the
+ * missed-tick rows. */
 int timer_clock_check(void)
 {
     uint32_t p = 2u * sweep_us();
@@ -336,7 +340,6 @@ static uint32_t pit_phase_from(uint32_t count, uint8_t status)
     return phase;
 }
 
-/** Where the counter is inside its period now, in microseconds. */
 uint32_t pit_phase_us(void)
 {
     uint8_t status, lo, hi;
@@ -349,13 +352,11 @@ uint32_t pit_phase_us(void)
 }
 
 /**
- * Count one period, from the boot processor's timer handler and nowhere
- * else, and record where its tick began by the reference counter: the
- * counter now less the counts of the place within the tick, read together.
- *
- * The tick counts the period unless a reading has already counted it, which
- * is what `clock_wrapped` says. Both counting it would put the clock ten
- * milliseconds ahead once a period.
+ * Where the tick began by the reference counter is the counter now less
+ * the counts of the place within the tick, the two read together with
+ * interrupts off. The tick counts the period unless a reading has already
+ * counted it, which is what `clock.wrapped` says; counting it twice would
+ * put the clock a period ahead each period.
  */
 void timer_tick_clock(void)
 {
@@ -404,8 +405,6 @@ static void edge_phase(uint32_t ns, uint32_t period_ns, int *pending, uint32_t *
 }
 
 /**
- * Microseconds since the boot, from the tick and the counter under it.
- *
  * The tick alone has 10 ms of resolution, which is coarser than the intervals
  * the USB interrupt path is measured over, so this reads where the counter
  * under the tick is inside its period as well: the local APIC timer's count
@@ -427,7 +426,7 @@ static void edge_phase(uint32_t ns, uint32_t period_ns, int *pending, uint32_t *
  * to another.
  *
  * It wraps after about 71 minutes, which is a diagnostic clock's bound and
- * not a wall clock's; `rtc.c` is where the time of day lives.
+ * not a wall clock's; the time of day is kept by ../../clock.c.
  */
 uint32_t timer_now_us(void)
 {
@@ -457,13 +456,11 @@ uint32_t timer_now_us(void)
     return now;
 }
 
-/** The period of channel 0's tick: two sweeps of its counter. */
 uint32_t pit_period_us(void)
 {
     return 2u * sweep_us();
 }
 
-/** Nanoseconds within channel 0's period, from the latched phase. */
 uint32_t pit_phase_ns(void)
 {
     return pit_phase_us() * 1000u;
