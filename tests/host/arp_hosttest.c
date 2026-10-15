@@ -1,32 +1,34 @@
 /*
- * arp_hosttest.c: the address cache, driven on the host.
+ * arp_hosttest.c: drive the ARP cache of arp.c on the host.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  *
- * The cache is sixteen entries and this machine now lives on a real network,
- * where it hears every neighbour rather than the three peers QEMU provides.
- * What that changes cannot be provoked from inside a guest: a test there can
- * neither invent seventeen neighbours nor make one of them send the ARP a DHCP
- * client sends while it is probing, which carries a sender address of 0.0.0.0.
+ * The cache has sixteen entries, and on a real network a machine hears every
+ * neighbour rather than the three peers QEMU provides. What that changes
+ * cannot be provoked from inside a guest: a test there can neither invent
+ * seventeen neighbours nor make one of them send the ARP a DHCP client sends
+ * while it is probing, whose sender address is 0.0.0.0.
  *
  * So `arp.c` is compiled natively and fed packets one at a time, with the
  * Ethernet layer replaced by a recorder. The cases are the ones a real network
- * produced or would produce:
+ * produces or can produce:
  *
- *   * an address no neighbour can have is not cached (0.0.0.0, which was found
- *     in the cache of the machine on the desk, and the broadcast and multicast
- *     ranges, which name many machines or none);
+ *   * a packet with a wrong layout changes nothing and is not answered;
+ *   * an address no neighbour can have is not cached (0.0.0.0, which a probing
+ *     DHCP client sends, and the broadcast and multicast ranges, which name
+ *     many machines or none), judged by the subnet of the interface the packet
+ *     came in on;
  *   * a seventeenth neighbour replaces the entry gone longest without use,
  *     rather than being dropped: dropping it is how a machine that filled its
  *     cache with strangers before learning its gateway loses every route off
- *     its own subnet, permanently;
+ *     its own subnet for good;
  *   * a lookup counts as use, so a mapping the machine keeps reaching for is
  *     among the last to be replaced rather than the first;
- *   * a request for our address is answered, and the reply carries our own
- *     hardware address;
+ *   * a request for the interface's address is answered, and the reply has
+ *     the interface's own hardware address;
  *   * a mapping set by hand as permanent is neither changed by a packet nor
  *     replaced when the cache is full, nor flushed;
- *   * the ordering survives the counter wrapping, which no run of this machine
+ *   * the ordering survives the counter wrapping, which no run of a machine
  *     will reach and which a reader cannot check by reading.
  *
  * The file is included, not linked, so the test can put its statics back
@@ -48,7 +50,7 @@ static uint8_t frame_data[MAX_FRAMES][64];
 static uint16_t frame_len[MAX_FRAMES];
 static uint16_t frame_type[MAX_FRAMES];
 static uint8_t frame_dst[MAX_FRAMES][6];
-static unsigned frame_count;
+static unsigned frame_count; /* frames sent; the first MAX_FRAMES are kept */
 
 uint8_t net_mac[6] = {0x52, 0x54, 0x00, 0x12, 0x34, 0x56};
 uint32_t net_ip_addr = 0xC0A80005u; /* 192.168.0.5 */
@@ -58,8 +60,6 @@ uint32_t net_ip_mask = 0xFFFFFF00u;
  * inside. */
 struct netdev;
 
-/* The interface this test's stack sends through. It never looks inside one,
- * so a record of its own is all that is needed. */
 /* The interface these cases run on, with the machine's own address, since
  * that is what a reply answers for and what a neighbour is judged against. */
 static struct netdev the_iface = {0,
@@ -71,22 +71,26 @@ static struct netdev the_iface = {0,
                                   0xFFFFFF00u,
                                   0};
 
+/** Return the primary interface. */
 struct netdev *netdev_first(void)
 {
     return &the_iface;
 }
 
+/** Report whether `ip` is `nd`'s address; 0 for a NULL `nd` or an `ip` of 0. */
 int netdev_holds(const struct netdev *nd, uint32_t ip)
 {
     return nd && ip != 0 && ip == nd->ip;
 }
 
+/** Return `nd`'s one address as the source for any next hop. */
 uint32_t netdev_source(const struct netdev *nd, uint32_t hop)
 {
     (void)hop;
     return nd->ip;
 }
 
+/** Record a frame sent and return 0, NETDEV_TX_OK. */
 int ethernet_tx(struct netdev *out, const uint8_t *dst, uint16_t type, const uint8_t *payload,
                 uint16_t plen)
 {
@@ -107,11 +111,12 @@ int ethernet_tx(struct netdev *out, const uint8_t *dst, uint16_t type, const uin
     return 0;
 }
 
-/* The stack's held datagrams, of which the cache tells the address it learns
-   and which a flush drops. */
+/* The next hop of the last ip_hold_resolved call, and the calls made. */
 static uint32_t resolved_ip;
 static unsigned resolved_calls;
 
+/** Record that ARP learned the station address of `hop`, which in the kernel
+ * sends the datagrams IP holds for it. */
 void ip_hold_resolved(struct netdev *nd, uint32_t hop, const uint8_t *mac)
 {
     (void)nd;
@@ -120,23 +125,26 @@ void ip_hold_resolved(struct netdev *nd, uint32_t hop, const uint8_t *mac)
     resolved_calls++;
 }
 
+/** Drop the datagrams held for `nd`: a no-op; the model holds none. */
 void ip_hold_forget(struct netdev *nd)
 {
     (void)nd;
 }
 
-/* The kernel's interrupt bracket. On the host there are no interrupts, so the
-   flag value is a token; what the test needs is that every lock is released,
-   which the balance counter checks. */
+/* The network lock's balance: locks taken and not released, and whether a
+   release ever came without a lock. */
 static int lock_depth;
 static int lock_ever_negative;
 
+/** Take the network lock: count it and return 0 as the saved flags, since no
+ * interrupt runs on the host. */
 uint32_t net_lock(void)
 {
     lock_depth++;
     return 0;
 }
 
+/** Release the network lock, noting a release without a lock. */
 void net_unlock(uint32_t flags)
 {
     (void)flags;
@@ -146,25 +154,33 @@ void net_unlock(uint32_t flags)
     }
 }
 
-/* The big-endian readers and writers live beside the interrupt bracket in
-   net_core.c, which is x86 assembly and will not compile here, so they are
-   written out. They are the whole of what arp.c needs from that file. */
+/**
+ * Read the big-endian 16-bit field at `p`.
+ *
+ * This and the three functions after it stand in for the byte-order helpers
+ * of net_core.c, which brings the stack's bring-up with it and is not
+ * compiled here. With the network lock above they are all arp.c needs from
+ * that file.
+ */
 uint16_t read16be(const uint8_t *p)
 {
     return (uint16_t)((p[0] << 8) | p[1]);
 }
 
+/** Read the big-endian 32-bit field at `p`. */
 uint32_t read32be(const uint8_t *p)
 {
     return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | (uint32_t)p[3];
 }
 
+/** Store `value` at `p` in network byte order. */
 void write16be(uint8_t *p, uint16_t value)
 {
     p[0] = (uint8_t)(value >> 8);
     p[1] = (uint8_t)(value & 0xff);
 }
 
+/** Store `value` at `p` in network byte order. */
 void write32be(uint8_t *p, uint32_t value)
 {
     p[0] = (uint8_t)(value >> 24);
@@ -173,6 +189,8 @@ void write32be(uint8_t *p, uint32_t value)
     p[3] = (uint8_t)(value & 0xff);
 }
 
+/** Report an address no machine can hold, on network 0, loopback, multicast
+ * or above, as netconf.c does. */
 int netconf_address_is_impossible(uint32_t ip)
 {
     uint32_t top = ip >> 24;
@@ -180,8 +198,12 @@ int netconf_address_is_impossible(uint32_t ip)
     return top == 0u || top == 127u || top >= 224u;
 }
 
+/* The interface of test_interfaces; a mask of 0 leaves it out of the
+   broadcast addresses. */
 static struct netdev second_iface;
 
+/** Report the all-ones address and the broadcast address of either
+ * interface's subnet, as netconf.c does for every interface. */
 int netconf_is_broadcast(uint32_t ip)
 {
     return ip == 0xFFFFFFFFu || ip == (the_iface.ip | ~the_iface.mask) ||
@@ -204,7 +226,8 @@ static int fails;
         }                                   \
     } while (0)
 
-/** Feed an Ethernet/IPv4 ARP packet to `nd`. */
+/** Feed `nd` an Ethernet/IPv4 ARP packet of operation `op` from `sender_ip`,
+ * whose hardware address ends in `mac_last`, for `target_ip`. */
 static void feed_on(struct netdev *nd, int op, uint32_t sender_ip, uint8_t mac_last,
                     uint32_t target_ip)
 {
@@ -236,13 +259,13 @@ static void feed_on(struct netdev *nd, int op, uint32_t sender_ip, uint8_t mac_l
     arp_rx(nd, pkt, 28);
 }
 
-/** Feed one ARP packet to the primary interface. */
+/** Feed an ARP packet to the primary interface, as feed_on does. */
 static void feed(int op, uint32_t sender_ip, uint8_t mac_last, uint32_t target_ip)
 {
     feed_on(&the_iface, op, sender_ip, mac_last, target_ip);
 }
 
-/** How many entries the cache holds. */
+/** Return the number of entries in the cache. */
 static int cached(void)
 {
     struct arp_row rows[ARP_CACHE_SIZE];
@@ -250,7 +273,7 @@ static int cached(void)
     return arp_snapshot(rows, ARP_CACHE_SIZE);
 }
 
-/** 1 if `ip` is in the cache. */
+/** Return 1 when the cache maps `ip` on the primary interface, else 0. */
 static int holds(uint32_t ip)
 {
     uint8_t mac[6];
@@ -258,7 +281,9 @@ static int holds(uint32_t ip)
     return arp_lookup(&the_iface, ip, mac);
 }
 
-/** Require a rejected packet to leave both new and existing mappings alone. */
+/** Feed the malformed packet `pkt` of `len` bytes for a mapped sender and for
+ * a new one, and require that it changes no mapping, adds none and is not
+ * answered. The packet's sender address is overwritten. */
 static void reject_packet(uint8_t *pkt, uint16_t len)
 {
     uint8_t mac[6];
@@ -276,7 +301,9 @@ static void reject_packet(uint8_t *pkt, uint16_t len)
     CHECK(frame_count == 0, "invalid ARP layout produced a reply");
 }
 
-/** Check address lengths independently for requests and replies. */
+/** Check that a request or a reply is rejected for each wrong address length,
+ * hardware type and protocol type and for a short packet, and that a valid
+ * request with a byte of padding is taken and answered. */
 static void test_layout(void)
 {
     static const uint8_t bad_lengths[2][4] = {{0, 5, 7, 255}, {0, 3, 5, 255}};
@@ -315,7 +342,9 @@ static void test_layout(void)
     CHECK(cached() == 1 && frame_count == 1, "valid padded ARP request was rejected");
 }
 
-/** Check subnet exclusions against the receiving interface alone. */
+/** Check that the network and broadcast addresses excluded are those of the
+ * receiving interface's subnet alone, and that each interface keeps its own
+ * mapping for the same address. */
 static void test_interfaces(void)
 {
     uint8_t mac[6];
@@ -352,6 +381,19 @@ static void test_interfaces(void)
           "primary interface mapping was overwritten");
 }
 
+/**
+ * Run the rows of test_layout and test_interfaces, then: no address a
+ * neighbour cannot have is cached or releases held datagrams, while an
+ * ordinary neighbour is cached and releases them; a request for the
+ * interface's address is answered from its hardware address to the machine
+ * that asked; a seventeenth neighbour replaces the entry gone longest without
+ * use, the first entry being kept by a lookup in between; a mapping that
+ * changes is followed, not duplicated; a permanent mapping survives a packet,
+ * a full cache and a flush, and is dropped by arp_forget; and the order of
+ * use survives the wrap of arp_clock. Every lock taken must be released.
+ *
+ * Returns 0 when every row passes and 1 otherwise.
+ */
 int main(void)
 {
     uint8_t mac[6];
@@ -361,9 +403,6 @@ int main(void)
     test_layout();
     test_interfaces();
 
-    /* An address no neighbour can have is not cached. 0.0.0.0 is what a DHCP
-       client sends while it is probing, and it was found in the cache of the
-       machine on the desk. */
     arp_flush();
     frame_count = 0;
     resolved_calls = 0;
@@ -387,8 +426,6 @@ int main(void)
           "the neighbour learned did not release the datagrams held for it");
     CHECK(holds(0xC0A80001u), "the neighbour that was cached cannot be looked up");
 
-    /* A request for our address is answered, with our own hardware address in
-       the reply, and the answer goes to the machine that asked. */
     arp_flush();
     frame_count = 0;
     feed(ARP_OP_REQUEST, 0xC0A80009u, 0x09, net_ip_addr);
@@ -402,29 +439,23 @@ int main(void)
         CHECK(frame_dst[0][5] == 0x09, "the answer did not go to the asker");
     }
 
-    /* A seventeenth neighbour replaces the entry gone longest without use.
-       The gateway is looked up in between, which is what keeps it. */
     arp_flush();
     for (i = 0; i < ARP_CACHE_SIZE; i++) {
         feed(ARP_OP_REPLY, 0xC0A80010u + (uint32_t)i, (unsigned char)(0x10 + i), net_ip_addr);
     }
     CHECK(cached() == ARP_CACHE_SIZE, "the cache did not fill");
     CHECK(holds(0xC0A80010u), "the first neighbour is missing before the last arrives");
-    /* That lookup was use: the second entry is now the oldest. */
     feed(ARP_OP_REPLY, 0xC0A80099u, 0x99, net_ip_addr);
     CHECK(cached() == ARP_CACHE_SIZE, "the cache grew past its size");
     CHECK(holds(0xC0A80099u), "the last neighbour was dropped instead of cached");
     CHECK(holds(0xC0A80010u), "the entry that was just used was the one replaced");
     CHECK(!holds(0xC0A80011u), "the entry gone longest without use is still there");
 
-    /* A mapping that changes is followed, not duplicated. */
     feed(ARP_OP_REPLY, 0xC0A80099u, 0x77, net_ip_addr);
     CHECK(cached() == ARP_CACHE_SIZE, "a changed mapping added an entry");
     CHECK(arp_lookup(&the_iface, 0xC0A80099u, mac) && mac[5] == 0x77,
           "a changed mapping was not followed");
 
-    /* A permanent mapping: a packet does not change it, a full cache does not
-       replace it, a flush keeps it, and forgetting it by hand drops it. */
     arp_flush();
     {
         static const uint8_t set[6] = {0x02, 0, 0, 0, 0, 0x5e};
@@ -442,12 +473,11 @@ int main(void)
               "a permanent mapping was not forgotten by hand");
     }
 
-    /* And the ordering survives the counter wrapping, which no run reaches. */
     arp_flush();
     feed(ARP_OP_REPLY, 0xC0A80021u, 0x21, net_ip_addr);
     feed(ARP_OP_REPLY, 0xC0A80022u, 0x22, net_ip_addr);
     arp_clock = 0xFFFFFFFEu;
-    (void)arp_lookup(&the_iface, 0xC0A80021u, mac); /* 21 is used; 22 becomes the oldest */
+    (void)arp_lookup(&the_iface, 0xC0A80021u, mac);
     for (i = 0; i < ARP_CACHE_SIZE - 2; i++) {
         feed(ARP_OP_REPLY, 0xC0A80030u + (uint32_t)i, (unsigned char)(0x30 + i), net_ip_addr);
     }
