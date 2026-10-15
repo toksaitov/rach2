@@ -61,12 +61,17 @@
 #define MAX_FILE (4 * 1024 * 1024)
 
 /* The roots the checks walk. The root Makefile is named because it is the
-   build's entry point and is in no walked directory. */
-static const char *const ROOTS[] = {"rach2", "utils", "ish",        "krffs",   "tests",
-                                    "tools", "mk",    "ports/doom", "Makefile"};
+   build's entry point and is in no walked directory. Under `vendor` only the
+   in-house files are read: the build scripts, Readmes and configurations.
+   The upstream trees the scripts extract (see upstream_tree), musl's
+   installed headers and the GNU downloads are skipped, and a directory
+   named `vendor` below a root, such as `krffs/vendor`, is upstream code. */
+static const char *const ROOTS[] = {"rach2", "utils", "ish",        "krffs",  "tests",
+                                    "tools", "mk",    "ports/doom", "vendor", "Makefile"};
 static const char *const TOP_MD[] = {"CLAUDE.md", "AGENTS.md", "Readme.md"};
 static const char *const SKIP_DIRS[] = {"vendor", "build", ".git"};
-static const char *const SKIP_PATHS[] = {"ports/doom/src"};
+static const char *const SKIP_PATHS[] = {"ports/doom/src", "vendor/musl/install",
+                                         "vendor/gnu/downloads"};
 
 /* Wrong at any frequency: the terms the register rule in AGENTS.md lists,
    with "load bearing" for the unhyphenated form. A term belongs here only
@@ -436,16 +441,16 @@ static int ends_with(const char *s, const char *suffix)
 
 enum lang { LANG_NONE, LANG_C, LANG_HASH, LANG_MD };
 
-/** The language of `path` by its name. A makefile is commented with `#`
-   like a shell script, and the build's own files are held to the same
-   80-column rule as the code they build; a file named Makefile has no
-   suffix, so it is matched by name. */
+/** The language of `path` by its name. A makefile and a Kconfig `.config`
+   file are commented with `#` like a shell script, and the build's own files
+   are held to the same 80-column rule as the code they build; a file named
+   Makefile has no suffix, so it is matched by name. */
 static enum lang lang_of(const char *path)
 {
     if (ends_with(path, ".c") || ends_with(path, ".h"))
         return LANG_C;
     if (ends_with(path, ".sh") || ends_with(path, ".mk") || ends_with(path, ".py") ||
-        ends_with(path, "/Makefile") || strcmp(path, "Makefile") == 0)
+        ends_with(path, ".config") || ends_with(path, "/Makefile") || strcmp(path, "Makefile") == 0)
         return LANG_HASH;
     if (ends_with(path, ".md"))
         return LANG_MD;
@@ -462,6 +467,38 @@ static const char *relpath(const char *path)
     return path;
 }
 
+/** Whether the directory `dir` is an upstream tree a build script extracted
+   beside its tarball, `vendor/NAME/NAME-VERSION`, such as
+   `vendor/busybox/busybox-1.36.1`. Its files are upstream's and are not in
+   the repository. */
+static int upstream_tree(const char *dir)
+{
+    const char *rel = relpath(dir), *name, *slash;
+    size_t len;
+
+    if (strncmp(rel, "vendor/", 7) != 0)
+        return 0;
+    name = rel + 7;
+    slash = strchr(name, '/');
+    if (slash == NULL || slash == name)
+        return 0;
+    len = (size_t)(slash - name);
+    return strncmp(slash + 1, name, len) == 0 && slash[1 + len] == '-' &&
+           strchr(slash + 1, '/') == NULL;
+}
+
+/** Whether a walk passes over the directory `dir` below the path it was
+   given: one of the SKIP_PATHS or an upstream tree. */
+static int skipped_dir(const char *dir)
+{
+    int i;
+
+    for (i = 0; i < (int)(sizeof(SKIP_PATHS) / sizeof(SKIP_PATHS[0])); i++)
+        if (strstr(dir, SKIP_PATHS[i]) != NULL)
+            return 1;
+    return upstream_tree(dir);
+}
+
 /* The callback a walk calls for each file it reaches. */
 typedef void (*file_fn)(void *ctx, const char *path);
 
@@ -471,10 +508,10 @@ typedef void (*file_fn)(void *ctx, const char *path);
    followed, since a link to a directory above would walk the tree again
    and again. What cannot be read is reported and counted in `unread`.
 
-   `is_top` marks the path the caller named. The SKIP_PATHS are skipped as
-   descendants, not as roots: `ports/doom/src` is upstream Doom and is left
-   out of this project's prose, and it is also the corpus the report reads,
-   which it asks for by name. */
+   `is_top` marks the path the caller named. The SKIP_PATHS and the upstream
+   trees are skipped as descendants, not as roots: `ports/doom/src` is
+   upstream Doom and is left out of this project's prose, and it is also the
+   corpus the report reads, which it asks for by name. */
 static void walk_at(const char *root, file_fn visit, void *ctx, int md_too, int is_top)
 {
     DIR *dir;
@@ -495,10 +532,8 @@ static void walk_at(const char *root, file_fn visit, void *ctx, int md_too, int 
         visit(ctx, root);
         return;
     }
-    if (!is_top)
-        for (i = 0; i < (int)(sizeof(SKIP_PATHS) / sizeof(SKIP_PATHS[0])); i++)
-            if (strstr(root, SKIP_PATHS[i]) != NULL)
-                return;
+    if (!is_top && skipped_dir(root))
+        return;
     dir = opendir(root);
     if (dir == NULL) {
         fprintf(stderr,
@@ -1310,6 +1345,10 @@ static const char PROSE_SH[] = "#!/bin/sh\n"
                                "# an ordinary comment\n"
                                "echo \"the seam failed\"          # a message a person reads\n";
 
+static const char PROSE_CONFIG[] = "# a Kconfig comment with a load-bearing term\n"
+                                   "# CONFIG_FEATURE_SEAMLESS_GZ is not set\n"
+                                   "CONFIG_PREFIX=\"./_install\"\n";
+
 static const char PROSE_MD[] = "# Doc\n\n"
                                "A sentence with worth noting in it.\n\n"
                                "```\n"
@@ -1387,6 +1426,43 @@ static void st_widths(const char *name, const char *body, int want_line)
     (void)want_line;
 }
 
+/** Checks the prose of the `#`-commented fixtures: a shell string a person
+   reads, and a Kconfig file's comments, whose option names are not words. */
+static void st_hash_prose(void)
+{
+    struct spans sh = {NULL, 0, 0}, cfg = {NULL, 0, 0};
+    char *path = st_write("p.sh", PROSE_SH);
+    size_t n;
+    char *text = read_text(path, &n);
+
+    if (text != NULL)
+        prose_of(path, text, n, 1, &sh);
+    st_check(any_span_has(&sh, "seam"), "a shell string a person reads was not scanned");
+    free(text);
+
+    path = st_write("p.config", PROSE_CONFIG);
+    text = read_text(path, &n);
+    if (text != NULL)
+        prose_of(path, text, n, 1, &cfg);
+    st_check(any_span_has(&cfg, "load-bearing"), "missed a banned term in a .config comment");
+    st_check(count_spans(&cfg, "seam") == 0, "a banned term was matched inside an option name");
+    free(text);
+    spans_free(&sh);
+    spans_free(&cfg);
+}
+
+/** Checks that upstream_tree finds the trees the vendor scripts extract and
+   takes no in-house directory for one. */
+static void st_upstream(void)
+{
+    st_check(upstream_tree("vendor/busybox/busybox-1.36.1"),
+             "an extracted upstream tree was not recognized");
+    st_check(!upstream_tree("vendor/busybox/patches") && !upstream_tree("vendor/gnu/ports") &&
+                 !upstream_tree("vendor/busybox/busybox-1.36.1/editors") &&
+                 !upstream_tree("vendor/tcc/asm-test") && !upstream_tree("rach2/tcc/tcc-x"),
+             "an in-house directory was taken for an upstream tree");
+}
+
 /** Runs the rules against the fixtures, written to a temporary directory
    under TMPDIR, or /tmp, that is removed afterwards. The register rule's
    cases read the repository's AGENTS.md and are passed over when it cannot
@@ -1395,7 +1471,7 @@ static void st_widths(const char *name, const char *body, int want_line)
 static int selftest(void)
 {
     struct spans only = {NULL, 0, 0}, both = {NULL, 0, 0};
-    struct spans sh = {NULL, 0, 0}, md = {NULL, 0, 0};
+    struct spans md = {NULL, 0, 0};
     char *path;
     size_t n;
     char *text;
@@ -1446,11 +1522,8 @@ static int selftest(void)
     }
     free(text);
 
-    path = st_write("p.sh", PROSE_SH);
-    text = read_text(path, &n);
-    prose_of(path, text, n, 1, &sh);
-    st_check(any_span_has(&sh, "seam"), "a shell string a person reads was not scanned");
-    free(text);
+    st_hash_prose();
+    st_upstream();
 
     path = st_write("p.md", PROSE_MD);
     text = read_text(path, &n);
@@ -1577,7 +1650,6 @@ static int selftest(void)
 
     spans_free(&only);
     spans_free(&both);
-    spans_free(&sh);
     spans_free(&md);
     if (st_bad) {
         fprintf(stderr, "prosecheck: selftest: %d case(s) failed\n", st_bad);
@@ -1585,7 +1657,7 @@ static int selftest(void)
         return 1;
     }
     st_clean();
-    printf("prosecheck: selftest OK (24 cases)\n");
+    printf("prosecheck: selftest OK (28 cases)\n");
     return 0;
 }
 
