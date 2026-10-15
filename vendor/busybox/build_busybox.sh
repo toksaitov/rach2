@@ -4,8 +4,9 @@
 # build_busybox.sh: build a static musl BusyBox for Rach2 from the pinned,
 # vendored tarball. Verifies the sha256, extracts, applies the curated
 # rach2.config, builds against the ported musl via the muslgcc wrapper, strips,
-# and stages the binary out of tree to build/vendor/busybox/busybox (staged into the
-# os-real RAM-disk image by its manifest). Run vendor/musl/build_libc.sh first.
+# and stages the binary out of tree to build/vendor/busybox/busybox (staged into
+# the os-real RAM-disk image by its manifest). Run vendor/musl/build_libc.sh
+# first.
 # The architecture is RACH2_ARCH's (mk/arch.sh); an x86-64 build extracts
 # into build/x86_64/vendor-work/busybox/ and stages under
 # build/x86_64/vendor/busybox/.
@@ -26,9 +27,10 @@ WORK="$ARCH_VENDOR/busybox"
 SRC="$WORK/busybox-${VERSION}"
 PREFIX="$MUSL_PREFIX"
 WRAP="$SCRIPT_DIR/../musl/muslgcc"
-# Out-of-tree staging dir, mirroring the source path vendor/busybox/ (mk/build.mk).
-# It lives under build/ so a routine `make clean` never reaches it; only `make
-# distclean` (which removes build/vendor) forces this multi-minute rebuild.
+# Out-of-tree staging dir, mirroring the source path vendor/busybox/
+# (mk/build.mk). It lives under build/ so a routine `make clean` never reaches
+# it; only `make distclean` (which removes build/vendor) forces this
+# multi-minute rebuild.
 STAGE="$ARCH_BUILD/vendor/busybox"
 
 # Pinned sha256 of the vendored tarball (published on busybox.net). The build
@@ -69,8 +71,8 @@ mkdir -p "$WORK"
 tar xjf "$TARBALL" -C "$WORK"
 
 # Apply any curated patches, in order, before configuring. The vendored tree is
-# otherwise pristine; this is the escape hatch for the rare fix the config cannot
-# express. With no patches/ directory the loop does nothing.
+# otherwise pristine; this is the escape hatch for the rare fix the config
+# cannot express. With no patches/ directory the loop does nothing.
 if [ -d patches ]; then
     for p in patches/*.patch; do
         [ -e "$p" ] || break

@@ -26,10 +26,11 @@
 # say what to build for. Without --cpu, configure takes the target from
 # `uname -m` (configure:157), which on an arm64 Mac is arm64.
 #
-# No Mach-O. On a Mac, configure adds OSX to its configuration (configure:52-56),
-# which makes the Makefile define TCC_TARGET_MACHO (Makefile:71) and rename the
-# target to $(ARCH)-osx (Makefile:48). TARGETOS and CONFIG_OSX are overridden on
-# the make command line, and the result is checked rather than hoped for.
+# No Mach-O. On a Mac, configure adds OSX to its configuration
+# (configure:52-56), which makes the Makefile define TCC_TARGET_MACHO
+# (Makefile:71) and rename the target to $(ARCH)-osx (Makefile:48). TARGETOS and
+# CONFIG_OSX are overridden on the make command line, and the result is checked
+# rather than hoped for.
 #
 # libtcc1.a, tcc's runtime, is normally built by running the tcc that was just
 # built. lib/Makefile:23-27 offers <target>-libtcc1-usegcc=yes, which builds it
@@ -202,8 +203,8 @@ echo "tcc: configuring for $TCC_CPU, with the guest's own paths"
 # On a Mac, configure has just written TARGETOS=Darwin and CONFIG_OSX=yes into
 # config.mak, and the Makefile turns those into -DTCC_TARGET_MACHO and a target
 # named i386-osx or x86_64-osx. Both are corrected in the file rather than only
-# on the make command line, so that what config.mak says is what the build does, and so the
-# libtcc1 target below keeps the name this script uses.
+# on the make command line, so that what config.mak says is what the build does,
+# and so the libtcc1 target below keeps the name this script uses.
 sed -e 's/^TARGETOS=.*/TARGETOS=Linux/' -e '/^CONFIG_OSX=/d' \
     "$SRC/config.mak" > "$SRC/config.mak.rach2"
 mv "$SRC/config.mak.rach2" "$SRC/config.mak"

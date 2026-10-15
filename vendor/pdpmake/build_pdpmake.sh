@@ -84,8 +84,8 @@ rm -rf "$SRC"
 mkdir -p "$WORK"
 tar xzf "$TARBALL" -C "$WORK"
 
-# The platform patch is REQUIRED, not discovered. A missing patch directory or an
-# empty glob would build quietly and ship a make whose default rules call a
+# The platform patch is REQUIRED, not discovered. A missing patch directory or
+# an empty glob would build quietly and ship a make whose default rules call a
 # compiler this image does not have and whose default link this system's
 # compiler refuses, and the student would meet that at their first build.
 PATCH="patches/0001-platform-macros.patch"

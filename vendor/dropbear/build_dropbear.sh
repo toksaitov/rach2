@@ -3,14 +3,14 @@
 #
 # build_dropbear.sh: build a static-musl Dropbear SSH server for Rach2 from the
 # pinned, vendored tarball. Verifies the sha256, extracts, configures
-# against the ported musl via the muslgcc wrapper (bundled libtomcrypt/libtommath,
-# no zlib/PAM/utmp/syslog/loginrec, hardening OFF so the binary links static
-# non-PIE; Rach2's ELF loader does not relocate a PIE), applies the curated
-# localoptions.h, builds dropbearmulti (the dropbear server, the dbclient SSH
-# client, and dropbearkey, dispatched on argv[1], so `dropbearmulti dropbear`),
-# strips, and stages it out of tree
-# to build/vendor/dropbear/dropbearmulti (staged at /bin/dropbearmulti in the os-real
-# image by its manifest). Run vendor/musl/build_libc.sh first. The
+# against the ported musl via the muslgcc wrapper (bundled
+# libtomcrypt/libtommath, no zlib/PAM/utmp/syslog/loginrec, hardening OFF so the
+# binary links static non-PIE; Rach2's ELF loader does not relocate a PIE),
+# applies the curated localoptions.h, builds dropbearmulti (the dropbear server,
+# the dbclient SSH client, and dropbearkey, dispatched on argv[1], so
+# `dropbearmulti dropbear`), strips, and stages it out of tree to
+# build/vendor/dropbear/dropbearmulti (staged at /bin/dropbearmulti in the
+# os-real image by its manifest). Run vendor/musl/build_libc.sh first. The
 # architecture is RACH2_ARCH's (mk/arch.sh); an x86-64 build extracts into
 # build/x86_64/vendor-work/dropbear/ and stages under
 # build/x86_64/vendor/dropbear/.
@@ -31,9 +31,10 @@ WORK="$ARCH_VENDOR/dropbear"
 SRC="$WORK/dropbear-${VERSION}"
 PREFIX="$MUSL_PREFIX"
 WRAP="$SCRIPT_DIR/../musl/muslgcc"
-# Out-of-tree staging dir, mirroring the source path vendor/dropbear/ (mk/build.mk).
-# It lives under build/ so a routine `make clean` never reaches it; only `make
-# distclean` (which removes build/vendor) forces this multi-minute rebuild.
+# Out-of-tree staging dir, mirroring the source path vendor/dropbear/
+# (mk/build.mk). It lives under build/ so a routine `make clean` never reaches
+# it; only `make distclean` (which removes build/vendor) forces this
+# multi-minute rebuild.
 STAGE="$ARCH_BUILD/vendor/dropbear"
 
 # Pinned sha256 of the vendored tarball (published on matt.ucc.asn.au/dropbear).
@@ -103,11 +104,11 @@ echo "dropbear: installing the curated localoptions.h"
 cp localoptions.h "$SRC/localoptions.h"
 
 echo "dropbear: configuring (muslgcc, bundled libtom, static, hardening off)"
-# --build is THIS host's own triple. config.guess ships with dropbear (not +x in the
-# tarball, so run it through sh); computing the triple (instead of hard-coding
-# x86_64-apple-darwin) makes the cross-configure work on Linux and on Intel or
-# Apple-Silicon macOS alike. If config.guess fails, omit --build and let configure
-# infer it.
+# --build is THIS host's own triple. config.guess ships with dropbear (not +x in
+# the tarball, so run it through sh); computing the triple (instead of
+# hard-coding x86_64-apple-darwin) makes the cross-configure work on Linux and
+# on Intel or Apple-Silicon macOS alike. If config.guess fails, omit --build and
+# let configure infer it.
 BUILD_TRIPLE="$(sh "$SRC/config.guess" 2>/dev/null || true)"
 (
     cd "$SRC"
