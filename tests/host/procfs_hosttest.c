@@ -1,31 +1,17 @@
 /**
- * Check proc stat generation when every text allocation fails, the CPU time
- * of a process's stat and of a thread's, the descriptor links of a process,
- * which a closed descriptor has none of, the ids a path under a process's
- * task directory needs, the counts a /proc/PID/mem descriptor takes of the
- * address space: a hold on its record, and a user's count for a read only
- * while a user remains, the text and the file of /proc/PID/exe, a read of a
- * process's arguments while the process ends and is reaped, the reads
- * and writes of oom_score_adj, and the paths /proc/PID/maps gives the
- * segments of the program and of its dynamic linker.
+ * procfs_hosttest.c: the files rach2/sys/fs/procfs.c makes: the stat text
+ * and its allocation, /proc/uptime, the CPU times of a process and of a
+ * thread, task ids, descriptor links, /proc/PID/mem, /proc/PID/exe, the
+ * paths of /proc/PID/maps, a read of a process's arguments while the process
+ * is reaped, and oom_score_adj.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-cflags: -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast
  *
- * Unused exports are private so the compiler removes unrelated generators.
- *
- * The first read of a process's arguments sleeps for the page, as a read of
- * a page of a file the process maps does, and meanwhile the process ends,
- * dropping its user's count of the address space, and is reaped, which
- * frees its record. The read goes on through the user's count it took, and
- * each later read looks the page up in the address space again: nothing may
- * be read from the freed record or a freed address space, which
- * AddressSanitizer judges.
- *
- * A write to oom_score_adj is read as Linux reads it, and the value must
- * be in -1000 to 1000; a caller without privilege may not write a value
- * below the floor a privileged caller's write sets, and a read gives the
- * value as it is at the read.
+ * The test includes the source whole, with its exports declared static
+ * first, so that the compiler drops those no row reaches and their calls
+ * need no stubs. Process 7 is the process of most rows, 9 a thread of it, 11
+ * a process of another group, and 13 the process reaped during a read.
  */
 #include "lib/kint.h"
 struct vpath;
@@ -91,6 +77,7 @@ int netdev_seen_count(void)
     return netdev_count();
 }
 
+/** The attribute files of a /sys directory: none. */
 const char *sysfs_attr(int node, int n)
 {
     (void)node;
@@ -98,6 +85,7 @@ const char *sysfs_attr(int node, int n)
     return 0;
 }
 
+/** No interface is up: NULL for every index. */
 struct netdev *netdev_at(int n)
 {
     (void)n;
@@ -109,6 +97,7 @@ struct netdev *netdev_at(int n)
  * with these. */
 const struct vfs_type vfs_devfs_type, vfs_procfs_type, vfs_sysfs_type;
 
+/** No path names a node of /dev. Returns 0. */
 int devfs_numbers(const char *path, uint32_t *major, uint32_t *minor)
 {
     (void)path;
@@ -170,15 +159,15 @@ process_t *get_process(uint32_t pid)
     return pid == 7 ? &process : NULL;
 }
 
-/** The whole process's time, its two threads' together. */
-/* The address space's size and pages, which a stat line gives and no check
- * here reads. */
+/** The size of an address space, which a stat line gives and no row
+ *  reads: 0. */
 uintptr_t vm_total(const vm_space_t *vm)
 {
     (void)vm;
     return 0;
 }
 
+/** No user page is present: 0. */
 uintptr_t paging_user_phys(page_dir_t *dir, uintptr_t va)
 {
     (void)dir;
@@ -186,13 +175,14 @@ uintptr_t paging_user_phys(page_dir_t *dir, uintptr_t va)
     return 0;
 }
 
-/* The resident pages of an address space, which mm.c counts; none here. */
+/** The resident pages of an address space, which mm.c counts; none here. */
 unsigned long mm_resident(const struct mm *mm)
 {
     (void)mm;
     return 0;
 }
 
+/** The whole process's time, its two threads' together. */
 void proc_cpu_time(const process_t *p, uint32_t *user, uint32_t *sys)
 {
     (void)p;
@@ -200,19 +190,21 @@ void proc_cpu_time(const process_t *p, uint32_t *user, uint32_t *sys)
     *sys = process.stime + thread.stime;
 }
 
-/** Fail every text allocation when requested. */
+/** The host's allocation, counted in `allocations`, or NULL while
+ *  `refuse` is set. */
 void *kmalloc(size_t size)
 {
     allocations++;
     return refuse ? NULL : malloc(size);
 }
 
-/** Release the snapshot's host memory. */
+/** Free what `kmalloc` or `kzalloc` gave. */
 void kfree(void *ptr)
 {
     free(ptr);
 }
 
+/** The host's zeroed allocation, which never fails. */
 void *kzalloc(size_t size)
 {
     void *p = malloc(size);
@@ -233,21 +225,25 @@ int fd_alloc(fd_table_t *t)
     return alloc_error;
 }
 
-/* The counts of an address space, as mm.c keeps them: the users together
- * have one hold, which the last user's put gives back, and the last hold
- * frees the record. Only the address space of `reaped_during_read` is from
- * the heap; the /proc/7/mem rows' is static, and a fault that takes its last
- * hold must fail their checks, not end the test in the allocator. */
+/** Take a user's count of `mm`. */
 void mm_get(struct mm *mm)
 {
     mm->users++;
 }
 
+/** Take a hold on the record of `mm`. */
 void mm_hold(struct mm *mm)
 {
     mm->holds++;
 }
 
+/**
+ * Drop a hold on the record of `mm`, as mm.c does: the last hold frees the
+ * record. Only the address space of `reaped_during_read` is from the heap;
+ * the /proc/7/mem rows' is static and is not freed, so that a fault that
+ * drops its last hold fails their checks and does not end the test in the
+ * allocator.
+ */
 void mm_unhold(struct mm *mm)
 {
     if (mm && --mm->holds == 0 && mm != &space) {
@@ -255,6 +251,8 @@ void mm_unhold(struct mm *mm)
     }
 }
 
+/** Take a user's count of `mm` while it has a user. Returns 1, or 0 when
+ *  no user is left. */
 int mm_get_live(struct mm *mm)
 {
     if (mm->users == 0) {
@@ -264,6 +262,8 @@ int mm_get_live(struct mm *mm)
     return 1;
 }
 
+/** Drop a user's count of `mm`. The users together have one hold, which
+ *  the last user's put gives back. */
 void mm_put(struct mm *mm)
 {
     if (--mm->users == 0) {
@@ -271,6 +271,7 @@ void mm_put(struct mm *mm)
     }
 }
 
+/** Make `dir` the current page directory. */
 void switch_page_directory(page_dir_t *dir)
 {
     _curr_dir = dir;
@@ -312,12 +313,14 @@ int paging_access(struct mm *mm, uintptr_t addr, void *buf, uint32_t len, int wr
     return 0;
 }
 
+/** Copy to the caller's buffer, which is host memory. Returns 0. */
 int copy_to_user(void __user *dst, const void *src, size_t n)
 {
     k_memcpy((void __force *)dst, src, n);
     return 0;
 }
 
+/** Copy from the caller's buffer, which is host memory. Returns 0. */
 int copy_from_user(void *dst, const void __user *src, size_t n)
 {
     k_memcpy(dst, (const void __force *)src, n);
@@ -338,6 +341,7 @@ const char *devfs_fd_name(struct fd_entry *e)
     return "null";
 }
 
+/** The pty of a descriptor: 0, since no row's descriptor is a pty. */
 int pty_slave_index(struct fd_entry *e)
 {
     (void)e;
@@ -353,6 +357,7 @@ int tty_controlling(int sid, uint32_t *dev, int *fg_pgid)
     return 0;
 }
 
+/** The inode of a Unix socket, which no row's descriptor is: 0. */
 uint32_t unix_inode(const fd_entry_t *e)
 {
     (void)e;
@@ -372,18 +377,21 @@ static const char *program_path;
 static char exec_path[] = "/tmp/a";
 static char interp_path[] = "/lib/ld-linux.so.2";
 
+/** The root mount, the model KRFFS root. */
 struct vfs_mount *vfs_root_mount(void)
 {
     return &root_mount;
 }
 
-/* The directories /proc/<pid>/cwd and root name, which no row reads. */
+/** The working directory of `p`, "/", which no row reads. */
 const char *proc_cwd(const struct process *p)
 {
     (void)p;
     return "/";
 }
 
+/** The path of a node of another mount, "/" for every node, or
+ *  -ENAMETOOLONG when `cap` does not hold it. */
 int vfs_node_path(struct vfs_mount *mnt, void *node, char *out, uint32_t cap)
 {
     (void)mnt;
@@ -396,6 +404,9 @@ int vfs_node_path(struct vfs_mount *mnt, void *node, char *out, uint32_t cap)
     return 0;
 }
 
+/** The path the root gives `node`: `program_path` for the program. Returns
+ *  0, or -1 for another node, for a program with no name, and when `size`
+ *  does not hold the path. */
 int krffs_node_path(krffs_node_t *node, char *buf, uint32_t size)
 {
     uint32_t n = program_path ? (uint32_t)k_strlen(program_path) : 0;
@@ -407,6 +418,8 @@ int krffs_node_path(krffs_node_t *node, char *buf, uint32_t size)
     return 0;
 }
 
+/** The node at `path`: the program at `program_path`, and NULL for any
+ *  other path. */
 krffs_node_t *krffs_resolve(const char *path)
 {
     return program_path && __builtin_strcmp(path, program_path) == 0 ? &program : NULL;
@@ -414,12 +427,14 @@ krffs_node_t *krffs_resolve(const char *path)
 
 const struct vfs_type vfs_tmpfs_type = {0};
 
+/** The name of a memfd, which no row's node is: NULL. */
 const char *tmpfs_label(void *node)
 {
     (void)node;
     return NULL;
 }
 
+/** The path of a synthetic directory, which no row reads: empty. */
 void synth_dir_path(int kind, int pid, int tid, char *out, int cap)
 {
     (void)kind;
@@ -463,12 +478,15 @@ static int stat_times(const char *line, unsigned user, unsigned sys)
 /* The processors' idle ticks summed, which the uptime row sets. */
 static uint64_t idle_sum;
 
+/** The processors' idle ticks, `idle_sum`. */
 uint64_t sched_idle_ticks(void)
 {
     return idle_sum;
 }
 
-/* diskinfo_u64_dec, which diskinfo_hosttest tests, by the host's divide. */
+/** `v` in decimal into `out` of `cap` bytes, as `diskinfo_u64_dec` writes
+ *  it, by the host's divide; diskinfo_hosttest.c tests that function.
+ *  Returns the length, or 0 when `cap` does not hold the digits. */
 int diskinfo_u64_dec(char *out, int cap, uint64_t v)
 {
     char tmp[24];
@@ -813,7 +831,9 @@ static void oom_open_errors(void)
  * A read of a process's arguments that sleeps for a page while the process
  * ends and is reaped reads the rest through the user's count it took of the
  * address space, whose put then frees it, and nothing of the freed record:
- * all 300 bytes come back, three reads of up to 128 each.
+ * all 300 bytes come back, three reads of up to 128 each. Each later read
+ * looks the page up in the address space again, and AddressSanitizer
+ * reports a read of the freed record or of a freed address space.
  */
 static void reaped_during_read(void)
 {
@@ -843,7 +863,14 @@ static void reaped_during_read(void)
     kfree(text.buf);
 }
 
-/** Exercise empty and partially allocated text, then normal generation. */
+/**
+ * The rows of a stat text, then those of the functions above. A stat text
+ * whose allocation fails is empty and marked out of memory, for ENOMEM; one
+ * whose growth fails keeps its first bytes, marked, to be freed; and one
+ * made whole ends in a newline and a NUL and begins with the pid, the
+ * command in parentheses and the state. Returns 0 when every check passed
+ * and 1 otherwise.
+ */
 int main(void)
 {
     struct procfs_text text;
