@@ -79,7 +79,7 @@ esac
 case "$REMOTE" in
     *[!A-Za-z0-9_./-]*) echo "machine_load: invalid work directory" >&2; exit 1 ;;
 esac
-echo 'machine_load: clock: guest delivered ticks; separate session windows; late successes counted separately'
+echo 'machine_load: clock: guest ticks; separate session windows; late successes counted separately'
 echo "machine_load: working: $LOAD_USER@$ADDR $REMOTE, logs $DIR/load-$RUN-sessionN.log"
 pids=""
 n=1

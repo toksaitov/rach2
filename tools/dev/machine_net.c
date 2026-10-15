@@ -76,8 +76,10 @@ static unsigned number(const char *s, unsigned low, unsigned high)
 }
 
 /**
- * Return CLOCK_MONOTONIC in microseconds. Rach2 counts delivered 10 ms
- * ticks, so ticks lost shorten an interval measured with it.
+ * Return CLOCK_MONOTONIC in microseconds. Rach2 reads it as its 10 ms ticks
+ * and the timer's place within the tick, and counts the ticks the timer missed
+ * while interrupts were off only on a processor with an invariant time-stamp
+ * counter; on bare metal without one, a missed tick shortens an interval.
  */
 static uint64_t usec(void)
 {
@@ -246,8 +248,8 @@ static void receive(int listener, uint64_t bytes, unsigned timeout)
         sender = -1;
     }
     printf("machine-net: result: %llu bytes %llu us %lu reads select-timeout %u "
-           "clock CLOCK_MONOTONIC (Rach2: delivered 10 ms ticks; "
-           "lost ticks can inflate rates)\n",
+           "clock CLOCK_MONOTONIC (Rach2: without an invariant TSC, "
+           "missed ticks can inflate rates)\n",
            (unsigned long long)total, (unsigned long long)elapsed, reads, timeout);
 }
 

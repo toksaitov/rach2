@@ -85,11 +85,11 @@ static int fail(const char *what, const char *detail)
 /**
  * Record each phase against the same monotonic clock and disk counters.
  * The counters cover the machine, so recovery must have no other disk work
- * running for their differences to describe this grow alone. Rach2 time
- * counts delivered 10 ms ticks; masked interrupts can lose ticks, so these
- * timestamps do not independently establish wall time. `edge` is `before` or
- * `after`. Does nothing without `--measure`; returns 0, or 1 having said
- * why.
+ * running for their differences to describe this grow alone. Rach2's clock
+ * counts the ticks missed while interrupts were masked only on a processor
+ * with an invariant time-stamp counter, so these timestamps do not
+ * independently establish wall time. `edge` is `before` or `after`. Does
+ * nothing without `--measure`; returns 0, or 1 having said why.
  */
 static int measured(const char *phase, const char *edge)
 {
@@ -639,8 +639,8 @@ int main(int argc, char **argv)
                                  : "the entry is not a primary one; only entries 1 to 4 grow");
     }
     if (measure) {
-        puts("growroot: clock: CLOCK_MONOTONIC uses delivered 10 ms ticks on Rach2; "
-             "lost ticks can undercount elapsed time");
+        puts("growroot: clock: CLOCK_MONOTONIC on Rach2 loses missed ticks without an "
+             "invariant TSC, which can undercount elapsed time");
     }
     mem = memory_kib();
     if (mem < GROWROOT_MEMORY_KIB) {

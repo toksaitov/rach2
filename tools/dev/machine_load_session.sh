@@ -17,8 +17,9 @@ cp -r /src/rach2 "$directory"
 cd "$directory"
 
 # Print the whole seconds of /proc/uptime, or exit 1 when it does not read as
-# a number. /proc/uptime counts delivered ticks. These are not host
-# wall-clock seconds.
+# a number. /proc/uptime counts the boot processor's 10 ms ticks, and the
+# ticks missed while interrupts were off only on a processor with an invariant
+# time-stamp counter. These are not host wall-clock seconds.
 now()
 {
     value=$(cut -d. -f1 /proc/uptime) || exit 1
@@ -38,7 +39,7 @@ attempt=0
 previous=$start
 printf 'load-session: window: %s start %s deadline %s clock guest-tick-seconds\n' \
     "$session" "$start" "$end"
-echo 'load-session: clock: delivered ticks can be lost; each session has its own window'
+echo 'load-session: clock: missed ticks are lost without an invariant TSC; each session has its own window'
 while :; do
     began=$(now)
     [ "$began" -ge "$previous" ] || exit 1
