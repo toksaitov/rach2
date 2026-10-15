@@ -13,8 +13,8 @@
 
 extern int printf(const char *format, ...);
 
-static wait_queue_t *woken;
-static uint32_t woken_kinds;
+static wait_queue_t *woken;  /* the queue wq_wake last named; NULL before */
+static uint32_t woken_kinds; /* the WQ_ kinds of every wake, or-ed together */
 static int failures;
 
 #define CHECK(condition, detail)                          \
@@ -25,18 +25,19 @@ static int failures;
         }                                                 \
     } while (0)
 
-/** No interrupt can enter a native row. */
+/** Take the network lock: a no-op, since no interrupt runs in this model. */
 uint32_t net_lock(void)
 {
     return 0;
 }
 
+/** Release the network lock: a no-op. */
 void net_unlock(uint32_t flags)
 {
     (void)flags;
 }
 
-/** No row fills a queue. */
+/** Fail the row: raw.c logs only when a queue is full, and no row fills one. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
     (void)level;
@@ -53,6 +54,7 @@ void wq_wake(wait_queue_t *wq, uint32_t kinds)
     woken_kinds |= kinds;
 }
 
+/** Run the rows; return 0 when every one passes and 1 otherwise. */
 int main(void)
 {
     static struct socket sock;

@@ -19,20 +19,21 @@
 
 extern int printf(const char *format, ...);
 
-/** The model is one network namespace, the first, whose devices every
- * caller sees and whose end closes nothing. */
+/** Report that the caller sees the devices of the model's one network
+ * namespace, the first. */
 int net_ns_seen(void)
 {
     return 1;
 }
 
+/** Do nothing: no row ends the namespace. */
 void unix_ns_gone(const struct netns *ns)
 {
     (void)ns;
 }
 
-static wait_queue_t *woken;
-static uint32_t woken_kinds;
+static wait_queue_t *woken;  /* the queue wq_wake last named; NULL before */
+static uint32_t woken_kinds; /* the WQ_ kinds of every wake, or-ed together */
 static int failures;
 
 #define CHECK(condition, detail)                                  \
@@ -51,16 +52,19 @@ void wq_wake(wait_queue_t *wq, uint32_t kinds)
     woken_kinds |= kinds;
 }
 
+/** Record a wake of `wq` for every kind of change. */
 void wq_wake_all(wait_queue_t *wq)
 {
     wq_wake(wq, WQ_ALL);
 }
 
+/** Make `wq` an empty queue. */
 void wait_queue_init(wait_queue_t *wq)
 {
     wq->head = NULL;
 }
 
+/** Fail the row and return -EINTR: no row waits. */
 int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     (void)wq;
@@ -70,16 +74,19 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     return -EINTR;
 }
 
+/** Take the network lock: a no-op, since no interrupt runs in this model. */
 uint32_t net_lock(void)
 {
     return 0;
 }
 
+/** Release the network lock: a no-op. */
 void net_unlock(uint32_t flags)
 {
     (void)flags;
 }
 
+/** Discard a kernel log record. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
     (void)level;
@@ -87,23 +94,27 @@ void klog(int level, const char *subsystem, const char *format, ...)
     (void)format;
 }
 
+/** Unbind a packet socket: a no-op, since no row makes one. */
 void packet_unbind(struct socket *sock)
 {
     (void)sock;
 }
 
+/** Report that no datagram is queued for a packet socket. */
 int packet_ready(struct socket *sock)
 {
     (void)sock;
     return 0;
 }
 
+/** Report an empty packet socket queue: -1. */
 int packet_pending(struct socket *sock)
 {
     (void)sock;
     return -1;
 }
 
+/** Copy nothing from a packet socket's queue and return -1. */
 int packet_peek(struct socket *sock, uint32_t offset, uint8_t *buf, int len)
 {
     (void)sock;
@@ -113,33 +124,39 @@ int packet_peek(struct socket *sock, uint32_t offset, uint8_t *buf, int len)
     return -1;
 }
 
+/** Drop a packet socket's head datagram: a no-op. */
 void packet_consume(struct socket *sock)
 {
     (void)sock;
 }
 
+/** Note a packet socket's head datagram: a no-op. */
 void packet_note_head(struct socket *sock)
 {
     (void)sock;
 }
 
+/** Unregister a raw socket: a no-op, since no row makes one. */
 void raw_unregister(struct socket *sock)
 {
     (void)sock;
 }
 
+/** Report that no datagram is queued for a raw socket. */
 int raw_ready(struct socket *sock)
 {
     (void)sock;
     return 0;
 }
 
+/** Report an empty raw socket queue: -1. */
 int raw_pending(struct socket *sock)
 {
     (void)sock;
     return -1;
 }
 
+/** Copy nothing from a raw socket's queue and return -1. */
 int raw_peek(struct socket *sock, uint32_t offset, uint8_t *buf, int len)
 {
     (void)sock;
@@ -149,23 +166,27 @@ int raw_peek(struct socket *sock, uint32_t offset, uint8_t *buf, int len)
     return -1;
 }
 
+/** Drop a raw socket's head datagram: a no-op. */
 void raw_consume(struct socket *sock)
 {
     (void)sock;
 }
 
+/** Report 0 as the source of a raw socket's last datagram. */
 uint32_t raw_last_src(struct socket *sock)
 {
     (void)sock;
     return 0;
 }
 
+/** Report 0 as the source of a raw socket's head datagram. */
 uint32_t raw_head_src(struct socket *sock)
 {
     (void)sock;
     return 0;
 }
 
+/** Fail the row and return 0: no row sends. */
 int tcp_send(struct socket *sock, const uint8_t *buf, int len)
 {
     (void)sock;
@@ -175,45 +196,52 @@ int tcp_send(struct socket *sock, const uint8_t *buf, int len)
     return 0;
 }
 
+/** Close a TCP connection: a no-op. */
 void tcp_close(struct socket *sock)
 {
     (void)sock;
 }
 
+/** Announce a TCP receive window: a no-op. */
 void tcp_window_update(struct socket *sock)
 {
     (void)sock;
 }
 
+/** Unbind a UDP socket: a no-op. */
 void udp_unbind(struct socket *sock)
 {
     (void)sock;
 }
 
+/** Report that no Unix-domain socket uses inode `ino`. */
 int unix_inode_used(uint32_t ino)
 {
     (void)ino;
     return 0;
 }
 
+/** Forget the wakes recorded so far. */
 static void reset(void)
 {
     woken = NULL;
     woken_kinds = 0;
 }
 
-/** No row makes a netlink socket, whose calls socket.c makes. */
+/** Close a netlink socket: a no-op, since no row makes one. */
 void netlink_close(struct socket *sock)
 {
     (void)sock;
 }
 
+/** Report an empty netlink socket queue: -1. */
 int netlink_pending(struct socket *sock)
 {
     (void)sock;
     return -1;
 }
 
+/** Copy nothing from a netlink socket's queue and return -1. */
 int netlink_peek(struct socket *sock, uint32_t offset, uint8_t *buf, int len)
 {
     (void)sock;
@@ -223,17 +251,20 @@ int netlink_peek(struct socket *sock, uint32_t offset, uint8_t *buf, int len)
     return -1;
 }
 
+/** Drop a netlink socket's head message: a no-op. */
 void netlink_consume(struct socket *sock)
 {
     (void)sock;
 }
 
+/** Report that no message is queued for a netlink socket. */
 int netlink_ready(struct socket *sock)
 {
     (void)sock;
     return 0;
 }
 
+/** Run the rows; return 0 when every one passes and 1 otherwise. */
 int main(void)
 {
     static struct socket udp, tcp, listener, conn;

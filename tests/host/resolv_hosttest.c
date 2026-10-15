@@ -1,5 +1,6 @@
 /**
- * Check DNS sender selection with a connected UDP socket model.
+ * Check that dns_query of utils/resolv.c takes its answer only from the
+ * nameserver it asked, through a model of a connected UDP socket.
  *
  * The model discards datagrams outside the connected peer. It does not test
  * the kernel's UDP delivery; the guest UDP probes cover that implementation.
@@ -14,10 +15,18 @@
 #include <arpa/inet.h>
 #include <sys/time.h>
 
+/*
+ * connected: set by a successful connect. connect_error: nonzero to fail the
+ * connect with EIO. closes, sends, receives: the calls of each kind made.
+ * foreign_nxdomain: the foreign datagram is an NXDOMAIN, not an answer with
+ * another address. foreign_port: the foreign datagram comes from the
+ * nameserver's address on port 54, not from 10.0.2.4 on port 53. packet: the
+ * datagrams offered so far; the first is the foreign one.
+ */
 static int failures, connected, connect_error, closes, sends, receives;
 static int foreign_nxdomain, foreign_port, packet;
-static struct sockaddr_in peer;
-static unsigned char reply[512];
+static struct sockaddr_in peer;  /* the address connect was given */
+static unsigned char reply[512]; /* the nameserver's answer to the query */
 static size_t reply_len;
 
 /** Record a failed assertion without stopping the remaining cases. */
@@ -29,7 +38,8 @@ static void check(const char *detail, int ok)
     }
 }
 
-/** Allocate the one modeled UDP socket. */
+/** Check that the resolver opens an IPv4 datagram socket, and return 42 as
+ * its descriptor. */
 static int model_socket(int domain, int type, int protocol)
 {
     check("an ipv4 datagram socket is opened",
@@ -37,7 +47,8 @@ static int model_socket(int domain, int type, int protocol)
     return 42;
 }
 
-/** Record the peer, or fail before any query is sent. */
+/** Check that the socket is connected to the nameserver's port 53 and record
+ * the peer; with `connect_error` set, fail with EIO instead. */
 static int model_connect(int fd, const struct sockaddr *address, socklen_t length)
 {
     check("connect uses the query socket", fd == 42 && length == sizeof(peer));
@@ -53,7 +64,8 @@ static int model_connect(int fd, const struct sockaddr *address, socklen_t lengt
     return 0;
 }
 
-/** Construct the nameserver's answer from the transmitted question. */
+/** Check that the query goes to the nameserver, and build in `reply` its
+ * answer: the query with the response flags and one A record for 192.0.2.7. */
 static ssize_t model_sendto(int fd, const void *buf, size_t size, int flags,
                             const struct sockaddr *address, socklen_t length)
 {
@@ -74,7 +86,12 @@ static ssize_t model_sendto(int fd, const void *buf, size_t size, int flags,
     return (ssize_t)size;
 }
 
-/** Offer a foreign response first, then the configured nameserver's answer. */
+/**
+ * Give the next datagram. The first comes from a foreign sender and has an
+ * NXDOMAIN or a wrong address, as `foreign_nxdomain` says; each later one is
+ * the nameserver's answer. A connected socket drops a datagram from any
+ * sender but its peer, and the call then fails with EAGAIN.
+ */
 static ssize_t model_recvfrom(int fd, void *buf, size_t size, int flags, struct sockaddr *address,
                               socklen_t *length)
 {
@@ -106,7 +123,7 @@ static ssize_t model_recvfrom(int fd, void *buf, size_t size, int flags, struct 
     return (ssize_t)reply_len;
 }
 
-/** Count socket cleanup on successful and failed queries. */
+/** Check that the query socket is the one closed, and count the close. */
 static int model_close(int fd)
 {
     check("the query socket is closed", fd == 42);
@@ -114,7 +131,7 @@ static int model_close(int fd)
     return 0;
 }
 
-/** Advance the resolver's polling clock without a real delay. */
+/** Advance the resolver's clock by 100 ms at each call, without a delay. */
 static int model_gettimeofday(struct timeval *tv, void *zone)
 {
     static long tick;
@@ -134,7 +151,11 @@ static int model_gettimeofday(struct timeval *tv, void *zone)
 #define gettimeofday model_gettimeofday
 #include "../../utils/resolv.c"
 
-/** Reject foreign A and NXDOMAIN responses from either a wrong IP or port. */
+/**
+ * Run the rows: for each foreign sender and each foreign reply, the query
+ * resolves to the nameserver's address and closes its socket once; a failed
+ * connect fails the query before it sends. Returns 0 when every row passes.
+ */
 int main(void)
 {
     unsigned int ip;

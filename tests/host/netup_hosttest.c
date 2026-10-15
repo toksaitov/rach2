@@ -1,6 +1,6 @@
 /**
- * Check that an unverified DHCP claim blocks static configuration, and what a
- * DHCP client's status is reported as.
+ * Check that a DHCP claim that cannot be read blocks the static configuration
+ * of utils/netup.c, and how netup reports a DHCP client's exit status.
  *
  * host-deps: utils/netcfg.c utils/ipcheck.c
  * host-cflags: -I tests/host/compat/netutil
@@ -17,8 +17,14 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+/*
+ * open_error: the errno with which opening the claim fails, or 0.
+ * read_error: nonzero to report a read error on the claim. live: the claim's
+ * process exists. sockets: the socket calls made. child_status: the wait
+ * status of the DHCP client.
+ */
 static int open_error, read_error, live, sockets, failures, child_status;
-static const char *claim = "123\n10.0.0.2\n";
+static const char *claim = "123\n10.0.0.2\n"; /* the claim file's text */
 
 #define CHECK(condition, detail)                               \
     do {                                                       \
@@ -28,7 +34,8 @@ static const char *claim = "123\n10.0.0.2\n";
         }                                                      \
     } while (0)
 
-/** Supply the claim or an open error without accessing the host's network. */
+/** Open a temporary stream with the text of `claim`, whatever `path` is, or
+ * fail with `open_error` when it is set; exit with status 2 when it cannot. */
 static FILE *model_fopen(const char *path, const char *mode)
 {
     FILE *f;
@@ -48,13 +55,15 @@ static FILE *model_fopen(const char *path, const char *mode)
     return f;
 }
 
-/** Report a read error even when the pid was readable. */
+/** Report the stream's error, or an error when `read_error` is set even after
+ * the pid was read. */
 static int model_ferror(FILE *f)
 {
     return read_error || ferror(f);
 }
 
-/** Model an existing process or a known dead one. */
+/** Fail as kill does for a process that exists and is not the caller's, with
+ * EPERM, when `live` is set, and for one that does not exist, with ESRCH. */
 static int model_kill(pid_t pid, int sig)
 {
     (void)pid;
@@ -63,7 +72,8 @@ static int model_kill(pid_t pid, int sig)
     return -1;
 }
 
-/** Count attempts to configure and stop before a host ioctl is possible. */
+/** Count a socket call and fail it with EMFILE, so that no ioctl reaches the
+ * host. */
 static int model_socket(int domain, int type, int protocol)
 {
     (void)domain;
@@ -104,7 +114,13 @@ static pid_t model_waitpid(pid_t pid, int *status, int options)
 #undef fork
 #undef waitpid
 
-/** Run the DHCP step on a chosen client status and keep what it printed. */
+/**
+ * Run run_dhcp for eth0 with `status` as the client's wait status, and copy
+ * what it writes to stderr into `text`, of `size` bytes, terminated.
+ *
+ * Returns what run_dhcp returns; exits with status 2 when stderr cannot be
+ * captured.
+ */
 static int run_dhcp_status(int status, char *text, size_t size)
 {
     struct netcfg_iface iface;
@@ -132,7 +148,8 @@ static int run_dhcp_status(int status, char *text, size_t size)
     return rc;
 }
 
-/** Check both the claim reader and the static configuration caller. */
+/** Run the rows of dhcp_holder, apply_static and run_dhcp; return 0 when every
+ * row passes. */
 int main(void)
 {
     struct netcfg_iface iface;
