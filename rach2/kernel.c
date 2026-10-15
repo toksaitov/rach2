@@ -3434,6 +3434,25 @@ static void publish_disks(void)
 }
 
 /**
+ * Take the boot record's command line `cmdline` into the kernel's buffer
+ * (`kcmdline_capture`), and log a line too long to keep whole: the bytes
+ * kept, and the bytes the record has, "or more" when the record cut the
+ * loader's line at its own limit too.
+ */
+static void capture_cmdline(const char *cmdline)
+{
+    unsigned int given;
+
+    if (!kcmdline_capture(cmdline)) {
+        return;
+    }
+    given = (unsigned int)k_strlen(cmdline);
+    klog(KLOG_WARN, "boot", "command line cut: kept %u of %u%s bytes, at its last whole option",
+         (unsigned int)k_strlen(kcmdline_get()), given,
+         given + 1 >= BOOT_CMDLINE_MAX ? " or more" : "");
+}
+
+/**
  * The order of the boot is the hardware's and the allocator's.
  *
  * The boot is kernel code, and holds the big lock, as every entry into the
@@ -3449,7 +3468,7 @@ static void publish_disks(void)
  * read it, and the panic's record goes to the port and netconsole. The
  * command line is taken next (`kcmdline_capture`), from the boot record's own
  * copy of the loader's string, before the first boot option is read; a line
- * too long to keep whole is logged as cut.
+ * too long to keep whole is logged as cut (`capture_cmdline`).
  * `rach2.loglevel=N` sets how much of the log the screen shows; the ring and
  * the port keep every record, and a boot being brought up wants all of them
  * on the screen, since the screen is then the only instrument there is.
@@ -3548,9 +3567,7 @@ void kernel_main(const struct boot_info *boot)
         }
     }
 
-    if (kcmdline_capture(boot->cmdline)) {
-        klog(KLOG_WARN, "boot", "command line cut: past 510 bytes, at its last whole option");
-    }
+    capture_cmdline(boot->cmdline);
 
     {
         char level[8];

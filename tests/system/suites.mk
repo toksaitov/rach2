@@ -802,7 +802,8 @@ run-packet: rach2 tests krffs test-image $(HARNESS)
 # to itself on an ext2 volume, is refused the same way
 # (tests/system/init_refusal.sh), and so is a processor without what the
 # kernel needs. Each refusal is asserted twice: the diagnostic, and that no
-# shell, or for a processor no kernel code, followed it.
+# shell, or for a processor no kernel code, followed it. A boot line of 458
+# bytes is kept whole, and one of 668 is cut at a word and logged as cut.
 run-bootline: rach2 tests krffs $(RUNUTIL) $(HARNESS) $(MKMBR)
 	$(MKDISK) krffs/manifests/disk-test.manifest $(BOOTLINE_TEST_IMAGE) 64 48
 	sh tests/system/suites/bootline.sh $(BOOT_KERNEL) $(BOOTLINE_TEST_IMAGE) $(HARNESS) $(MKMBR)

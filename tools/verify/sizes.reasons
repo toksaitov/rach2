@@ -33,8 +33,8 @@ krffs/stageimage.krffs.c:stage_node params 8 one procedure over a file format, i
 krffs/stageimage.krffs.c:stage_tree lines 120 one procedure over a file format, in the order the format is read
 
 rach2/kernel.c:check_strings nesting 6 a parser over an external format, one check per field in the format's order
-rach2/kernel.c:kernel_main complexity 58 the boot sequence, in the order the hardware requires
-rach2/kernel.c:kernel_main lines 333 the boot sequence, in the order the hardware requires
+rach2/kernel.c:kernel_main complexity 57 the boot sequence, in the order the hardware requires
+rach2/kernel.c:kernel_main lines 331 the boot sequence, in the order the hardware requires
 rach2/kernel.c:process_command complexity 122 a dispatcher, one arm per command, read as a table
 rach2/kernel.c:process_command lines 408 a dispatcher, one arm per command, read as a table
 rach2/kernel.c:process_command nesting 6 a dispatcher, one arm per command, read as a table

@@ -12,7 +12,8 @@
 # cannot be read is refused the same way; tests/system/init_refusal.sh is that
 # row, run here on the kernel under test. A processor without what the kernel
 # needs is refused before the kernel's own code runs: cmov or the time-stamp
-# counter on i686, long mode on x86-64.
+# counter on i686, long mode on x86-64. A boot line of 458 bytes is kept whole,
+# and one of 668 is cut before its last word and logged as cut.
 #
 # Each refusal is asserted twice: the diagnostic is there, and the machine
 # never reached a shell. A test that looked only for the message would pass on
@@ -175,6 +176,33 @@ else
     boot_cpu 486 "boot: refused: the processor has no rdtsc, and this kernel is i686"
     boot_cpu pentium "boot: refused: the processor has no cmov, and this kernel is i686"
 fi
+
+# A long boot line: the kernel keeps 510 bytes of it and cuts a longer one at
+# its last whole word, with a log line. pad N: N words the kernel does not
+# read, 21 bytes each with the space.
+pad() {
+    i=0
+    while [ "$i" -lt "$1" ]; do
+        printf 'rach2.pad=0123456789 '
+        i=$((i + 1))
+    done
+}
+# 26 + 20 * 21 + 12 = 458 bytes, with the rescue that exempts the
+# combination as the last word: the kernel must keep it and reach the shell.
+boot "rach2.nodisk rach2.fsdisk $(pad 20)rach2.rescue" "Kernel debug shell active" 0
+grep -q "Kernel debug shell active" "$LOG" ||
+    fail "a boot line of 458 bytes lost its last word, rach2.rescue"
+grep -q "boot: command line cut" "$LOG" &&
+    fail "a boot line of 458 bytes was logged as cut"
+echo "bootline-test: kept whole: a boot line of 458 bytes"
+# 26 + 30 * 21 + 12 = 668 bytes: the rescue is past the cut, so the
+# combination is refused, and the cut is logged with what was kept.
+boot "rach2.nodisk rach2.fsdisk $(pad 30)rach2.rescue" "and no rach2.rescue" 0
+grep -q "boot: command line cut: kept [0-9]* of 511 or more bytes" "$LOG" ||
+    fail "a boot line of 668 bytes was cut with no log line, or one that gave no lengths"
+grep -q "boot: refused: rach2.nodisk" "$LOG" ||
+    fail "a boot line of 668 bytes was not cut before its last word, rach2.rescue"
+echo "bootline-test: cut and logged: a boot line of 668 bytes"
 
 # And the same combination with rescue asked for, which must reach the shell:
 # that is what the token is for, and the refusal must not stand in its way.
