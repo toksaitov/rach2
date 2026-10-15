@@ -1,8 +1,8 @@
 /**
- * The setuid-exec contract through the ported musl: prove libc sees the ids
- * and the AT_SECURE flag the kernel set on a set-id exec, and that the
- * kernel ignores the set-id bit when the new image could be changed by a
- * process without root.
+ * suidmusl: check the set-id exec through the ported musl: libc sees the ids
+ * and the AT_SECURE flag the kernel sets on a set-id exec, and the kernel
+ * ignores the set-id bit when a process without root could change the new
+ * image.
  *
  * Run with no argument, the program forks a child, drops it to uid 1000, and
  * execs the setuid-root copy of itself (`/musl/suidmusl.suid`) with the
@@ -38,6 +38,12 @@
 #define SUID_COPY  "/musl/suidmusl.suid"
 #define XONLY_COPY "/musl/suidmusl.xonly"
 
+/**
+ * Check, in the setuid-root copy run by uid 1000, that the real uid is 1000,
+ * the effective and saved uids are 0, AT_SECURE is 1, and the saved uid lets
+ * the process set its effective uid to 1000 and back to 0. Returns 0 when all
+ * hold, and 1 after printing the failure.
+ */
 static int run_child(void)
 {
     uid_t r, e, s;
@@ -54,7 +60,6 @@ static int run_child(void)
         printf("SUIDMUSL FAIL (AT_SECURE not 1)\n");
         return 1;
     }
-    /* Shed the acquired root and take it back: the saved uid is 0. */
     if (seteuid(1000) != 0 || geteuid() != 1000 || seteuid(0) != 0 || geteuid() != 0) {
         printf("SUIDMUSL FAIL (saved-id dance)\n");
         return 1;
@@ -62,8 +67,11 @@ static int run_child(void)
     return 0;
 }
 
-/** The copy where its set-id bit is ignored: every id 1000, no AT_SECURE,
- * and a dumpable process. */
+/**
+ * Check, in a copy whose set-id bit the kernel ignored, that every uid is
+ * 1000, AT_SECURE is 0 and the process is dumpable. Returns 0 when all hold,
+ * and 1 after printing the failure.
+ */
 static int run_plain(void)
 {
     uid_t r, e, s;
@@ -79,8 +87,11 @@ static int run_plain(void)
     return 0;
 }
 
-/** The execute-only copy, which its caller may run and not read: every id
- * 1000, and a process that is not dumpable. */
+/**
+ * Check, in the execute-only copy, which its caller may run and not read,
+ * that every uid is 1000 and the process is not dumpable. Returns 0 when both
+ * hold, and 1 after printing the failure.
+ */
 static int run_xonly(void)
 {
     uid_t r, e, s;
@@ -96,17 +107,17 @@ static int run_xonly(void)
     return 0;
 }
 
-/** Drop the calling process to uid and gid 1000; 0, or -1. */
+/** Set every uid and gid of the calling process to 1000; 0, or -1. */
 static int drop(void)
 {
     return setresgid(1000, 1000, 1000) == 0 && setresuid(1000, 1000, 1000) == 0 ? 0 : -1;
 }
 
 /**
- * Fork a child that drops to uid 1000, asks with `traced` to be traced by
- * the caller, and execs the copy at `path` with the argument `mode`;
- * continue a traced one past the SIGTRAP its exec stops with. The child's
- * exit status, or 1.
+ * Fork a child that drops to uid 1000, asks to be traced by the caller when
+ * `traced` is nonzero, and execs the copy at `path` with the argument `mode`.
+ * A traced child is continued past the SIGTRAP its exec stops with. Returns
+ * the child's exit status, or 1 when the fork, the stop or the wait fails.
  */
 static int exec_copy(const char *path, const char *mode, int traced)
 {
@@ -133,15 +144,19 @@ static int exec_copy(const char *path, const char *mode, int traced)
     return WEXITSTATUS(status);
 }
 
-/** The copy traced by a helper that is uid 1000 itself. */
+/**
+ * Run the setuid-root copy as `plain` in a child traced by the caller, which
+ * `as_user` has made uid 1000. Returns the child's status, or 1.
+ */
 static int traced_row(void)
 {
     return exec_copy(SUID_COPY, "plain", 1);
 }
 
+/* The stack of the CLONE_FS child of `shared_row`. */
 static char clone_stack[16384] __attribute__((aligned(16)));
 
-/** The child of `shared_row`, which execs the copy. */
+/** Exec the setuid-root copy as `plain`; the CLONE_FS child of `shared_row`. */
 static int exec_plain(void *arg)
 {
     (void)arg;
@@ -149,8 +164,11 @@ static int exec_plain(void *arg)
     return 1;
 }
 
-/** The copy run by a child the helper makes with CLONE_FS, which shares
- * the helper's working directory, root and umask. */
+/**
+ * Run the setuid-root copy as `plain` in a child made with CLONE_FS, which
+ * shares the caller's working directory, root and umask; the caller is uid
+ * 1000 under `as_user`. Returns the child's exit status, or 1.
+ */
 static int shared_row(void)
 {
     pid_t pid = clone(exec_plain, clone_stack + sizeof(clone_stack), CLONE_FS | SIGCHLD, NULL);
@@ -162,7 +180,10 @@ static int shared_row(void)
     return WEXITSTATUS(status);
 }
 
-/** Run `row` in a helper that is uid 1000; its status, or 1. */
+/**
+ * Run `row` in a forked helper that has dropped to uid 1000. Returns the
+ * helper's exit status, which is what `row` returned, or 1.
+ */
 static int as_user(int (*row)(void))
 {
     pid_t pid = fork();
@@ -181,10 +202,11 @@ static int as_user(int (*row)(void))
 }
 
 /**
- * The execute-only copy traced by a helper that is uid 1000 itself: at the
- * exec's stop the helper may not read the image, so PTRACE_PEEKTEXT of the
- * copy's text, where this program's `exec_copy` is, since the copy is this
- * program, fails with EIO. 0, or 1.
+ * Check that a tracer that is uid 1000, the caller under `as_user`, cannot
+ * read the execute-only copy: at the exec's stop, PTRACE_PEEKTEXT of the
+ * copy's text must fail with EIO. The address read is that of `exec_copy`,
+ * since the copy is this program. Returns 0 when the read fails so, and 1
+ * otherwise; the child is killed either way.
  */
 static int xonly_peek_row(void)
 {
@@ -213,6 +235,10 @@ static int xonly_peek_row(void)
     return ok ? 0 : 1;
 }
 
+/**
+ * Run as the copy named by the argument `child`, `plain` or `xonly`, or with
+ * no argument run every row and print the result.
+ */
 int main(int argc, char **argv)
 {
     if (argc >= 2 && strcmp(argv[1], "child") == 0) {

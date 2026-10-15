@@ -1,5 +1,6 @@
 /**
- * chroot: a process's own root.
+ * chrootmusl: check chroot, which gives a process a root directory of its
+ * own.
  *
  * The refusals come first: a file that is not a directory is ENOTDIR, a missing
  * path ENOENT, /proc and /dev EINVAL, and a caller who is not root EPERM, after
@@ -45,7 +46,10 @@ static int fail(const char *what)
     return 1;
 }
 
-/** Report a child that failed at `step` and return 1. */
+/**
+ * Report a child that failed at `step`, its exit status (-1 for one that did
+ * not exit), and return 1.
+ */
 static int fail_step(const char *what, int step)
 {
     printf("CHROOTMUSL FAIL (%s: step %d)\n", what, step);
@@ -58,7 +62,7 @@ static int refused(int rc, int want)
     return rc == -1 && errno == want;
 }
 
-/** Whether the file at `path` holds exactly `want`. */
+/** Whether the file at `path` has exactly the bytes of `want`, at most 32. */
 static int holds(const char *path, const char *want)
 {
     char buf[32];
@@ -73,7 +77,7 @@ static int holds(const char *path, const char *want)
     return n == (ssize_t)strlen(want) && memcmp(buf, want, (size_t)n) == 0;
 }
 
-/** Write `text` to a new file at `path`. */
+/** Write `text` to the file at `path`, created or truncated; 1, or 0. */
 static int put(const char *path, const char *text)
 {
     int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
@@ -85,7 +89,7 @@ static int put(const char *path, const char *text)
     return ok;
 }
 
-/** Copy the file `from` to a new file `to` of mode 0755. */
+/** Copy the file `from` to `to`, created with mode 0755; 1, or 0. */
 static int copy(const char *from, const char *to)
 {
     char buf[4096];
@@ -135,9 +139,9 @@ static int child_status(pid_t pid)
 }
 
 /**
- * The checks of a process whose root is JAIL: the root's own file by an
- * absolute path, nothing of the tree above it, and ".." at the root staying
- * there. 0 when all pass, or the number of the one that failed.
+ * Check, in a process whose root is JAIL, that it reads the root's own file
+ * by an absolute path, finds nothing of the tree above it, and stays at the
+ * root on "..". Returns 0 when all pass, or the number of the one that failed.
  */
 static int inside(void)
 {
@@ -154,7 +158,11 @@ static int inside(void)
     return 0;
 }
 
-/** Make JAIL on the KRFFS root, with a copy of this program in it. */
+/**
+ * Make JAIL on the KRFFS root, with a marker file and a copy of this program
+ * in it. Directories left from an earlier run are reused. Returns 0, or 1
+ * after printing the failure.
+ */
 static int build_jail(void)
 {
     mkdir(JAIL, 0755);
@@ -167,7 +175,10 @@ static int build_jail(void)
     return 0;
 }
 
-/** The refusals, in Linux's order, and chroot("/"), which changes nothing. */
+/**
+ * Check the refusals, in Linux's order, and that chroot("/") changes nothing.
+ * Returns 0, or 1 after printing the failure.
+ */
 static int refusals(void)
 {
     pid_t pid;
@@ -196,9 +207,10 @@ static int refusals(void)
 }
 
 /**
- * A root the caller may not search: a child that chroots into a directory of
- * mode 0700 owned by root and then takes uid 1000 is refused chdir("/") with
- * EACCES, as it is refused any directory it may not search.
+ * Check a root the caller may not search: a child that chroots into a
+ * directory of mode 0700 owned by root and then takes uid 1000 is refused
+ * chdir("/") with EACCES, as it is refused any directory it may not search.
+ * Returns 0, or 1 after printing the failure.
  */
 static int private_root(void)
 {
@@ -224,10 +236,11 @@ static int private_root(void)
 }
 
 /**
- * A root on KRFFS: the child keeps a working directory inside under its new
- * path, reaches the tree outside through a directory descriptor opened
- * there but cannot fchdir to it, stays at the root on "..", and passes the
- * root to a child of fork and to what it execs.
+ * Check a root on KRFFS: the child keeps a working directory inside under its
+ * new path, reaches the tree outside through a directory descriptor opened
+ * there but cannot fchdir to it (ENOENT), stays at the root on "..", and
+ * passes the root to a child of fork and to the copy of this program it
+ * execs. Returns 0, or 1 after printing the failure.
  */
 static int krffs_root(void)
 {
@@ -274,9 +287,9 @@ static int krffs_root(void)
 }
 
 /**
- * A working directory outside the new root moves to it, and a second chroot
- * inside the first leaves the working directory under its path from the
- * inner root.
+ * Check that a working directory outside the new root moves to it, and that a
+ * second chroot inside the first leaves the working directory under its path
+ * from the inner root. Returns 0, or 1 after printing the failure.
  */
 static int moved_cwd(void)
 {
@@ -304,9 +317,10 @@ static int moved_cwd(void)
 }
 
 /**
- * A root on a tmpfs: an absolute link and a relative one that climbs past
- * the root resolve inside, and the working directory has its path from the
- * root of a mounted type.
+ * Check a root on a tmpfs mounted at TJAIL: an absolute link and a relative
+ * one that climbs past the root resolve inside, and the working directory has
+ * its path from the root on that file system too. Returns 0, or 1 after
+ * printing the failure.
  */
 static int tmpfs_root(void)
 {
@@ -341,8 +355,10 @@ static int tmpfs_root(void)
 }
 
 /**
- * While a child has its root in `dir`, rmdir of `dir` is EBUSY, and so is
- * umount2 of `mnt` when it is not NULL; after the child ends both succeed.
+ * Check that while a child has its root in `dir`, rmdir of `dir` is EBUSY,
+ * and so is umount2 of `mnt` when it is not NULL, and that the rmdir succeeds
+ * after the child ends. Two pipes hold the child in place while the parent
+ * tries. Returns 0, or 1 after printing the failure.
  */
 static int busy(const char *dir, const char *mnt)
 {
@@ -381,7 +397,7 @@ static int busy(const char *dir, const char *mnt)
     return 0;
 }
 
-/** Take the jails apart. */
+/** Unmount and remove the jails; 0, or 1 after printing the failure. */
 static int clean(void)
 {
     if (umount2(TJAIL, 0) != 0 || rmdir(TJAIL) != 0) {
@@ -394,6 +410,10 @@ static int clean(void)
     return 0;
 }
 
+/**
+ * Run every check, or, with the argument `inside`, the checks of the copy
+ * exec'd inside JAIL.
+ */
 int main(int argc, char **argv)
 {
     if (argc == 2 && strcmp(argv[1], "inside") == 0) {

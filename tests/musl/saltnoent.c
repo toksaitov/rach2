@@ -1,20 +1,20 @@
 /**
- * The salt policy's negative half: with no trusted entropy the mint refuses,
- * says so once, and writes nothing.
+ * saltnoent: check that with no trusted entropy the salt mint fails, says so
+ * once, and writes nothing.
  *
  * link-deps: utils/pwauth.c
  *
- * Nothing in `make test` can reach this. That run always boots `-cpu max`, so
- * the CPU has RDSEED and RDRAND and the kernel's random pool is trusted; a
- * minter that quietly fell back to the untrusted stream would pass every other
- * proof in the tree. So this program is staged at `/musl/saltnoent` and is
- * deliberately not in the probe runner's `PROBES`, since it must fail where
- * entropy is trusted. `tests/run noentropy` boots the same image on a CPU that
- * exposes neither instruction and runs it there.
+ * Nothing in `make test` reaches this. The probe runner always boots
+ * `-cpu max`, so the CPU has RDSEED and RDRAND and the kernel's random pool is
+ * trusted; a minter that fell back to the untrusted stream without a word
+ * would pass every other test in the tree. So this program is staged at
+ * `/musl/saltnoent` and is not in the probe runner's `PROBES`, since it must
+ * fail where entropy is trusted. `tests/run noentropy` boots the same image on
+ * a CPU that has neither instruction and runs it there.
  *
- * The precondition is asserted first, that `getrandom` really does refuse, so a
- * machine that did have the instructions reports a wrong premise, not a
- * mystery. Then the refusal itself: `pwauth_mint_salt` returns -1 with every
+ * The premise is checked first, that `getrandom` fails with EIO, so a machine
+ * that does have the instructions reports a wrong premise and not a fault of
+ * the mint. Then the failure itself: `pwauth_mint_salt` returns -1 with every
  * sentinel byte of its buffer untouched, since a partly filled salt is a
  * predictable one, and its one line arrives on standard error exactly once,
  * read back through a pipe put there for the call. Then the writer's whole
@@ -38,6 +38,8 @@
 
 #include "pwauth.h"
 
+/* The byte the salt buffer is filled with before a mint, so that a write by
+ * the mint shows. */
 #define SENTINEL '#'
 
 /** Print the failure line and return 1, this program's failing status. */
@@ -79,13 +81,13 @@ static int present(const char *path)
 }
 
 /**
- * How many temporary files of `/etc/shadow`'s the directory still has.
+ * Count the temporary files of `/etc/shadow` in `/etc`.
  *
- * A replacement writes through `<path>.tmp.<pid>`, so the question is about a
- * prefix and not one name: a temporary this program's own run left behind would
- * carry its pid, and one an earlier boot left behind would carry another. A
- * directory that cannot be opened counts as one, since a question this could
- * not answer must not read as a clean `/etc`.
+ * A replacement writes through `<path>.tmp.<pid>`, so the count matches a
+ * prefix and not one name: a temporary file this run left would have its pid,
+ * and one an earlier boot left would have another. A directory that cannot be
+ * opened counts as one, so that a failure to look is not taken for a clean
+ * `/etc`.
  */
 static int shadow_temps(void)
 {
