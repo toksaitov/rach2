@@ -1,8 +1,6 @@
 /**
- * Check the core file `fs_core_file` writes: the descriptor it writes
- * through, which no other process sharing the descriptor table can use while
- * the dump runs, and the limit, which counts the zero that gives a file that
- * ends in a hole its length.
+ * corefile_hosttest.c: the core file `fs_core_file` writes, its descriptor
+ * and its limit.
  *
  * host-deps: rach2/sys/fs/fd.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
@@ -20,14 +18,14 @@
  * mounted type whose one directory is the working directory; the open makes
  * "core" there, and its writes are kept in memory.
  *
- * The dump first waits for the process's other threads, which sleeps. While
- * it does, a process that shares the descriptor table writes through the
- * core file's descriptor and duplicates it: both must find no descriptor,
- * since the end of the dump frees what the descriptor holds. With a limit of
- * the bytes the dump writes before the zero at its end, the zero must not be
- * written, the file must end with the last page written and the call must
- * answer EFBIG; with one byte more, the zero is written at the file's last
- * byte.
+ * The writes of the dump can sleep, and while one does, a process that
+ * shares the descriptor table can run. The model runs that process at the
+ * start of `core_write`: it writes through the core file's descriptor and
+ * duplicates it, and both must find no descriptor, since the end of the dump
+ * frees what the descriptor holds. With a limit of the bytes the dump writes
+ * before the zero at its end, the zero must not be written, the file must end
+ * with the last page written and the call must answer EFBIG; with one byte
+ * more, the zero is written at the file's last byte.
  */
 #include "isr.h"
 #include "lib/kuser.h"
@@ -35,6 +33,7 @@
 #include "fs/vfs.h"
 #include "fs/krffs.h"
 #include "network/socket/socket.h"
+/* The exports of syscall_fs.c that no row calls, made static. */
 static int fs_node_is_held(const krffs_node_t *node);
 static void fs_node_moved(const krffs_node_t *from, krffs_node_t *to);
 static void fd_release_backing(fd_entry_t *e);
@@ -207,9 +206,11 @@ uint8_t *core_notes(int signo, uint32_t *size)
 }
 
 /**
- * Write the model dump through `write`: the wait for the other threads,
- * during which the row's `meanwhile` runs, then the header, the pages and the
- * holes, the bytes counted toward `limit` as `core_write` counts them.
+ * Write the model dump through `write`: first the row's `meanwhile`, which
+ * runs once, as another process runs while a write sleeps; then the header,
+ * the pages and the holes, the bytes counted toward `limit` as `core_write`
+ * counts them. Returns 0, -EFBIG when a part with bytes passes the limit, or
+ * the error of `write`.
  */
 int32_t core_write(core_write_fn write, void *ctx, const uint8_t *notes, uint32_t notes_size,
                    uint64_t limit)
@@ -253,23 +254,25 @@ int32_t core_write(core_write_fn write, void *ctx, const uint8_t *notes, uint32_
     return 0;
 }
 
-/** The heap is the host's. */
+/** The kernel's zeroed allocation, from the host's heap. */
 void *kzalloc(size_t size)
 {
     return calloc(1, size);
 }
 
+/** Free a block from `kzalloc`. */
 void kfree(void *p)
 {
     free(p);
 }
 
-/** A path page from the heap, and its return. */
+/** A path buffer of `VFS_PATH_MAX` bytes from the heap. */
 char *path_buf_get(void)
 {
     return calloc(1, VFS_PATH_MAX);
 }
 
+/** Free a buffer from `path_buf_get`. */
 void path_buf_put(char *buf)
 {
     free(buf);
@@ -282,17 +285,19 @@ const char *proc_cwd(const struct process *p)
     return "/";
 }
 
-/** The model type is the root mount, but its type is not KRFFS's: its nodes
+/** The model mount is the root mount. Its type is not KRFFS's, so its nodes
  * take the paths of a mounted type. */
 struct vfs_mount *vfs_root_mount(void)
 {
     return &mount;
 }
 
+/* KRFFS's type, which no mount of the model has. */
 const struct vfs_type vfs_krffs_type = {"krffs", 0, &model_ops, 1, 0};
 
-/** Resolve a path of the working directory: its directory with the last
- * name for a walk to the parent, and "core" once the open has made it. */
+/** Resolve "core" in the working directory: the directory, with "core" in
+ * `leaf`, for a walk to the parent, and the file once the open has made it,
+ * -ENOENT before. */
 int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct vfs_ref *out,
                 char *leaf, uint32_t leafcap)
 {
@@ -313,17 +318,20 @@ int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct
     return 0;
 }
 
+/** The model type takes no walk lock. */
 void vfs_walk_unlock(struct vfs_mount *mnt)
 {
     (void)mnt;
 }
 
+/** Count a hold of the namespace lock, which no walk may start under. */
 void vfs_ns_lock(struct vfs_mount *mnt)
 {
     (void)mnt;
     ns_depth++;
 }
 
+/** Let go of a hold of the namespace lock that `vfs_ns_lock` counted. */
 void vfs_ns_unlock(struct vfs_mount *mnt)
 {
     (void)mnt;
@@ -331,7 +339,7 @@ void vfs_ns_unlock(struct vfs_mount *mnt)
     ns_depth--;
 }
 
-/** No row keeps a program's file, and no row takes a second reference. */
+/** No row's file is a program's: 0. */
 int mm_exe_holds(const struct vfs_mount *mnt, const void *node)
 {
     (void)mnt;
@@ -339,17 +347,20 @@ int mm_exe_holds(const struct vfs_mount *mnt, const void *node)
     return 0;
 }
 
+/** No row takes a second reference; a call fails the row. */
 void vfs_ref_hold(const struct vfs_ref *r)
 {
     (void)r;
     check(0, "unexpected reference hold");
 }
 
+/** Let go of a reference, which the model does not count. */
 void vfs_ref_release(struct vfs_ref *ref)
 {
     (void)ref;
 }
 
+/** No node of the model is in /dev, /proc or /sys: NULL. */
 const struct vpath *vfs_synth_vpath(struct vfs_mount *mnt, void *node)
 {
     (void)mnt;
@@ -357,6 +368,7 @@ const struct vpath *vfs_synth_vpath(struct vfs_mount *mnt, void *node)
     return NULL;
 }
 
+/** Nothing is mounted on a node of the model: NULL. */
 struct vfs_mount *vfs_leaf_mount(struct vfs_mount *mnt, void *node, const char *name)
 {
     (void)mnt;
@@ -365,7 +377,8 @@ struct vfs_mount *vfs_leaf_mount(struct vfs_mount *mnt, void *node, const char *
     return NULL;
 }
 
-/** The working directory, anyone's to write, and the file, root's. */
+/** The attributes of the working directory, anyone's to write, and of the
+ * file, root's, with the length written so far. */
 int vfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 {
     (void)mnt;
@@ -376,6 +389,7 @@ int vfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
     return 0;
 }
 
+/** Take every change of attributes: 0. */
 int vfs_setattr(struct vfs_mount *mnt, void *node, int what, const struct vfs_stat *st)
 {
     (void)mnt;
@@ -385,7 +399,7 @@ int vfs_setattr(struct vfs_mount *mnt, void *node, int what, const struct vfs_st
     return 0;
 }
 
-/** No core file is there before the dump makes one. */
+/** No core file is there before the dump makes one: -ENOENT. */
 int vfs_unlink_name(struct vfs_mount *mnt, void *dir, const char *name)
 {
     (void)mnt;
@@ -394,6 +408,7 @@ int vfs_unlink_name(struct vfs_mount *mnt, void *dir, const char *name)
     return -ENOENT;
 }
 
+/** Make "core", which must be of mode 0600 in the working directory. */
 int vfs_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode, void **node)
 {
     (void)mnt;
@@ -404,6 +419,7 @@ int vfs_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode
     return 0;
 }
 
+/** Open `node`, whose handle is the node itself, and count the open. */
 int vfs_open_node(struct vfs_mount *mnt, void *node, int flags, void **handle)
 {
     (void)mnt;
@@ -413,17 +429,19 @@ int vfs_open_node(struct vfs_mount *mnt, void *node, int flags, void **handle)
     return 0;
 }
 
+/** The model type counts no open descriptions. */
 void vfs_desc_open(struct vfs_mount *mnt)
 {
     (void)mnt;
 }
 
+/** The model type counts no calls in progress. */
 void vfs_leave(struct vfs_mount *mnt)
 {
     (void)mnt;
 }
 
-/** The last close of the file's description. */
+/** Count the last close of the file's description. */
 void vfs_desc_close(struct vfs_mount *mnt, void *node, void *handle)
 {
     (void)mnt;
@@ -431,8 +449,9 @@ void vfs_desc_close(struct vfs_mount *mnt, void *node, void *handle)
     releases++;
 }
 
-/** Keep the dump's bytes at their place, and count a write of the process
- * that shares the table without keeping it. */
+/** Keep the dump's bytes at their place in `file`, and count a write of the
+ * process that shares the table without keeping it. Returns `count`, or
+ * -EFBIG past the end of `file`. */
 int32_t vfs_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t count,
                   uint64_t offset)
 {
@@ -453,7 +472,7 @@ int32_t vfs_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t
     return (int32_t)count;
 }
 
-/** A user buffer of the model passes the range check, and no row copies one. */
+/** A user buffer of the model passes the range check. */
 int user_buffer_ok(uintptr_t addr, size_t len, int write)
 {
     (void)addr;
@@ -462,6 +481,7 @@ int user_buffer_ok(uintptr_t addr, size_t len, int write)
     return 1;
 }
 
+/** No row copies from a user buffer: -1. */
 int copy_from_user(void *dst, const void __user *src, size_t n)
 {
     (void)dst;
@@ -470,6 +490,7 @@ int copy_from_user(void *dst, const void __user *src, size_t n)
     return -1;
 }
 
+/** No row copies to a user buffer: -1. */
 int copy_to_user(void __user *dst, const void *src, size_t n)
 {
     (void)dst;
@@ -478,8 +499,7 @@ int copy_to_user(void __user *dst, const void *src, size_t n)
     return -1;
 }
 
-/** No row's file backs a loop device, is locked, is held by a message in
- * flight or a mapping, or is a node of the KRFFS root. */
+/** No row's file backs a loop device: 0. */
 int loop_backs(struct vfs_mount *mnt, void *node)
 {
     (void)mnt;
@@ -487,27 +507,32 @@ int loop_backs(struct vfs_mount *mnt, void *node)
     return 0;
 }
 
+/** No row's file is locked: 0. */
 int lock_any(void)
 {
     return 0;
 }
 
+/** No row's file has a lock to drop. */
 void lock_close(const struct lock_key *key)
 {
     (void)key;
 }
 
+/** No row's description has a lock to drop. */
 void lock_ofd_gone(const struct open_file *ofd)
 {
     (void)ofd;
 }
 
+/** No row's file is held by a message in flight: 0. */
 int unix_inflight_holds(const void *node)
 {
     (void)node;
     return 0;
 }
 
+/** No row's file is held by a mapping: 0. */
 int filemap_holds(const void *node)
 {
     (void)node;
@@ -516,17 +541,20 @@ int filemap_holds(const void *node)
 
 krffs_file_system_t *krffs_fs;
 
+/** No node of the KRFFS root is in a row: 0. */
 uint64_t krffs_node_ino(const krffs_node_t *node)
 {
     (void)node;
     return 0;
 }
 
+/** The file type bits of `mode`. */
 uint32_t krffs_mode_type(uint16_t mode)
 {
     return mode & 0170000u;
 }
 
+/** No row removes a node of the KRFFS root; a call fails the row. */
 void krffs_remove_reserved_node(krffs_file_system_t *fs, krffs_node_t *node)
 {
     (void)fs;
@@ -534,23 +562,26 @@ void krffs_remove_reserved_node(krffs_file_system_t *fs, krffs_node_t *node)
     check(0, "unexpected root node removal");
 }
 
+/** No row unlinks a node of the KRFFS root; a call fails the row. */
 void krffs_unlink_held(krffs_node_t *node)
 {
     (void)node;
     check(0, "unexpected root node unlink");
 }
 
-/** No row waits for a description or wakes a waiter. */
+/** Make `wq` empty. */
 void wait_queue_init(wait_queue_t *wq)
 {
     wq->head = NULL;
 }
 
+/** No row has a waiter to wake. */
 void wq_wake_all(wait_queue_t *wq)
 {
     (void)wq;
 }
 
+/** No row waits for a description; a call fails the row. */
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     (void)wq;
@@ -560,36 +591,42 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     return 0;
 }
 
-/** The opens of the display, the mouse, /dev and /proc, and the writes of
- * sockets and the console, which no row reaches. */
+/* The state of the display and the console, which no row reaches. */
 volatile uint32_t fb_owner_pid;
 gfx_info_t gfx_current;
 struct tty console_tty;
 
+/** No row opens the framebuffer: NULL. */
 uint8_t *fb_enter(void)
 {
     return NULL;
 }
 
+/** No row lets go of the framebuffer. */
 void fb_exit(void)
 {}
 
+/** No row reads the keyboard. */
 void kbd_clear_scancodes(void)
 {}
 
+/** No mouse: 0. */
 bool mouse_is_available(void)
 {
     return 0;
 }
 
+/** No mouse: 0. */
 int input_mouse_present(void)
 {
     return 0;
 }
 
+/** No row reads the mouse. */
 void mouse_clear_packets(void)
 {}
 
+/** No row opens a /dev name: -ENOENT. */
 int devfs_open(const char *name, int flags)
 {
     (void)name;
@@ -597,6 +634,7 @@ int devfs_open(const char *name, int flags)
     return -ENOENT;
 }
 
+/** No row looks up a /dev name: -ENOENT. */
 int devfs_stat(const char *name, uint32_t *mode, uint32_t *rdev, uint32_t *ino)
 {
     (void)name;
@@ -606,20 +644,21 @@ int devfs_stat(const char *name, uint32_t *mode, uint32_t *rdev, uint32_t *ino)
     return -ENOENT;
 }
 
-/** The type fallocate asks of a device descriptor, which no row has. */
+/** The type of a device descriptor, which no row has: 0. */
 uint32_t devfs_fd_mode(struct fd_entry *e)
 {
     (void)e;
     return 0;
 }
 
+/** No row's descriptor is a raw device: 0. */
 int devfs_fd_is_raw(struct fd_entry *e)
 {
     (void)e;
     return 0;
 }
 
-/** No row's descriptor is the kernel log. */
+/** No row's descriptor is the kernel log: 0. */
 int devfs_fd_log_size(struct fd_entry *e, uint32_t *size)
 {
     (void)e;
@@ -627,19 +666,21 @@ int devfs_fd_log_size(struct fd_entry *e, uint32_t *size)
     return 0;
 }
 
-/** No row's descriptor is a device whose transfers move the offset. */
+/** No row's descriptor is a device whose transfers move the offset: 0. */
 int devfs_fd_moves_offset(struct fd_entry *e)
 {
     (void)e;
     return 0;
 }
 
+/** No pseudo-terminal: NULL. */
 struct pty *pty_get(int index)
 {
     (void)index;
     return NULL;
 }
 
+/** No pseudo-terminal: -ENXIO. */
 int pty_open_slave(int index, int flags)
 {
     (void)index;
@@ -647,21 +688,25 @@ int pty_open_slave(int index, int flags)
     return -ENXIO;
 }
 
+/** The boot time, in seconds of the epoch: 0. */
 int64_t rtc_boot_time(void)
 {
     return 0;
 }
 
+/** No row's descriptor is a socket. */
 void socket_ref(struct socket *sock)
 {
     (void)sock;
 }
 
+/** No row's descriptor is a socket. */
 void socket_unref(struct socket *sock)
 {
     (void)sock;
 }
 
+/** No row writes to a TCP socket: -EBADF. */
 int socket_tcp_send(struct socket *sock, const uint8_t *buf, int len, int nonblock)
 {
     (void)sock;
@@ -671,6 +716,7 @@ int socket_tcp_send(struct socket *sock, const uint8_t *buf, int len, int nonblo
     return -EBADF;
 }
 
+/** No row writes to a datagram socket: -EBADF. */
 int32_t dgram_send(struct socket *sock, uint32_t dst_ip, uint16_t dst_port, const uint8_t *buf,
                    uint16_t len)
 {
@@ -682,6 +728,7 @@ int32_t dgram_send(struct socket *sock, uint32_t dst_ip, uint16_t dst_port, cons
     return -EBADF;
 }
 
+/** No process of a row is in the background: 0. */
 int tty_is_background(struct tty *t, int sid, int pgid)
 {
     (void)t;
@@ -690,12 +737,14 @@ int tty_is_background(struct tty *t, int sid, int pgid)
     return 0;
 }
 
+/** No row signals a process group. */
 void tty_signal_group(int pgid, int signo)
 {
     (void)pgid;
     (void)signo;
 }
 
+/** Take every byte written to the console: `count`. */
 int tty_write(struct tty *t, const unsigned char *kbuf, int count)
 {
     (void)t;
@@ -703,6 +752,7 @@ int tty_write(struct tty *t, const unsigned char *kbuf, int count)
     return count;
 }
 
+/** No row opens a /proc file: -ENOENT. */
 int procfs_open(const struct vpath *vp, int flags)
 {
     (void)vp;
@@ -710,30 +760,35 @@ int procfs_open(const struct vpath *vp, int flags)
     return -ENOENT;
 }
 
+/** No row names a /proc process: -1. */
 int procfs_resolve_pid(int pid)
 {
     (void)pid;
     return -1;
 }
 
+/** No row reads /proc: 0. */
 int procfs_may_read(int pid)
 {
     (void)pid;
     return 0;
 }
 
+/** No row names a /proc process: -1. */
 int procfs_resolve_id(const struct vpath *vp)
 {
     (void)vp;
     return -1;
 }
 
+/** The link count of a /proc task directory, which no row asks for: 0. */
 uint32_t procfs_task_links(int pid)
 {
     (void)pid;
     return 0;
 }
 
+/** No row reads a /proc/PID/fd link: -ENOENT. */
 int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
 {
     (void)pid;
@@ -743,6 +798,7 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
     return -ENOENT;
 }
 
+/** No row reads a /proc/PID/exe link: -ENOENT. */
 int procfs_readlink_exe(int pid, char *buf, int cap)
 {
     (void)pid;
@@ -751,6 +807,7 @@ int procfs_readlink_exe(int pid, char *buf, int cap)
     return -ENOENT;
 }
 
+/** The inode number of a /proc/PID directory, which no row reads: 0. */
 uint32_t procfs_ino_pid(int pid)
 {
     (void)pid;
@@ -760,12 +817,15 @@ uint32_t procfs_ino_pid(int pid)
 /* The descriptor, process and mount lookups of fstat and of a descriptor's
  * path, which no row reaches: GCC keeps their callers, so a link needs
  * them. */
+
+/** No row looks up a process: NULL. */
 process_t *get_process(uint32_t pid)
 {
     (void)pid;
     return NULL;
 }
 
+/** No row reads a /proc/PID/oom file: -ENOENT. */
 int procfs_oom_owner(int pid, uint32_t *uid, uint32_t *gid)
 {
     (void)pid;
@@ -774,6 +834,7 @@ int procfs_oom_owner(int pid, uint32_t *uid, uint32_t *gid)
     return -ENOENT;
 }
 
+/** No row's descriptor is a /proc file: -1. */
 int procfs_fd_owner(struct fd_entry *e, uint32_t *uid, uint32_t *gid)
 {
     (void)e;
@@ -782,36 +843,42 @@ int procfs_fd_owner(struct fd_entry *e, uint32_t *uid, uint32_t *gid)
     return -1;
 }
 
+/** No row's descriptor is a /proc file: 0. */
 int procfs_fd_writable(struct fd_entry *e)
 {
     (void)e;
     return 0;
 }
 
+/** No row's descriptor is a /proc file: 0. */
 uint32_t procfs_fd_ino(struct fd_entry *e)
 {
     (void)e;
     return 0;
 }
 
+/** No row's descriptor is a pseudo-terminal: -1. */
 int pty_slave_index(struct fd_entry *e)
 {
     (void)e;
     return -1;
 }
 
+/** No row's descriptor is a Unix socket: 0. */
 uint32_t unix_inode(const fd_entry_t *e)
 {
     (void)e;
     return 0;
 }
 
+/** No row resolves a path on the KRFFS root: NULL. */
 krffs_node_t *krffs_resolve(const char *path)
 {
     (void)path;
     return NULL;
 }
 
+/** No row asks a KRFFS node's path: -1. */
 int krffs_node_path(krffs_node_t *node, char *buf, uint32_t size)
 {
     (void)node;
@@ -820,52 +887,62 @@ int krffs_node_path(krffs_node_t *node, char *buf, uint32_t size)
     return -1;
 }
 
+/** No mount table to walk: 0 slots. */
 int vfs_mount_slots(void)
 {
     return 0;
 }
 
+/** No mount table to walk: NULL. */
 struct vfs_mount *vfs_mount_at(int idx)
 {
     (void)idx;
     return NULL;
 }
 
+/** The inode number of /proc, which no row reads: 0. */
 uint32_t procfs_ino_dir(void)
 {
     return 0;
 }
 
+/** The inode number of /proc/cmdline, which no row reads: 0. */
 uint32_t procfs_ino_cmdline(void)
 {
     return 0;
 }
 
+/** The inode number of /proc/net, which no row reads: 0. */
 uint32_t procfs_ino_netdir(void)
 {
     return 0;
 }
 
+/** The inode number of /proc/net/dev, which no row reads: 0. */
 uint32_t procfs_ino_netdev(void)
 {
     return 0;
 }
 
+/** The inode number of /proc/disk, which no row reads: 0. */
 uint32_t procfs_ino_disk(void)
 {
     return 0;
 }
 
+/** The inode number of /proc/uptime, which no row reads: 0. */
 uint32_t procfs_ino_uptime(void)
 {
     return 0;
 }
 
+/** The inode number of /proc/stat, which no row reads: 0. */
 uint32_t procfs_ino_statsys(void)
 {
     return 0;
 }
 
+/** The inode number of /proc/meminfo, which no row reads: 0. */
 uint32_t procfs_ino_meminfo(void)
 {
     return 0;
@@ -875,18 +952,21 @@ uint32_t procfs_ino_meminfo(void)
  * inotify_add_watch, which no row makes. */
 int inotify_watches;
 
+/** No row's description is watched. */
 void inotify_desc(struct open_file *ofd, uint32_t mask)
 {
     (void)ofd;
     (void)mask;
 }
 
+/** No row's descriptor is an inotify instance: 0. */
 int inotify_is(int fd)
 {
     (void)fd;
     return 0;
 }
 
+/** No row adds a watch: -EINVAL. */
 int32_t inotify_watch(int fd, struct vfs_mount *mnt, uint64_t ino, int isdir, uint32_t mask)
 {
     (void)fd;
@@ -897,6 +977,7 @@ int32_t inotify_watch(int fd, struct vfs_mount *mnt, uint64_t ino, int isdir, ui
     return -EINVAL;
 }
 
+/** No row copies a path from user memory: -EFAULT. */
 int strncpy_from_user(char *dst, const char __user *src, uint32_t n)
 {
     (void)dst;
@@ -905,12 +986,14 @@ int strncpy_from_user(char *dst, const char __user *src, uint32_t n)
     return -EFAULT;
 }
 
+/** No row's path walk enters a mount: -EIO. */
 int vfs_enter(struct vfs_mount *mnt)
 {
     (void)mnt;
     return -EIO;
 }
 
+/** No row asks a node's path: -ENOENT. */
 int vfs_node_path(struct vfs_mount *mnt, void *node, char *out, uint32_t cap)
 {
     (void)mnt;
@@ -920,74 +1003,87 @@ int vfs_node_path(struct vfs_mount *mnt, void *node, char *out, uint32_t cap)
     return -ENOENT;
 }
 
-/* /proc's newer files, which no row reads. */
+/** The inode number of /proc/cpuinfo, which no row reads: 0. */
 uint32_t procfs_ino_cpuinfo(void)
 {
     return 0;
 }
 
+/** The inode number of /proc/loadavg, which no row reads: 0. */
 uint32_t procfs_ino_loadavg(void)
 {
     return 0;
 }
 
+/** The inode number of /proc/diskstats, which no row reads: 0. */
 uint32_t procfs_ino_diskstats(void)
 {
     return 0;
 }
 
+/** The inode number of /proc/version, which no row reads: 0. */
 uint32_t procfs_ino_version(void)
 {
     return 0;
 }
 
+/** The inode number of /proc/partitions, which no row reads: 0. */
 uint32_t procfs_ino_partitions(void)
 {
     return 0;
 }
 
+/** The inode number of /proc/vmstat, which no row reads: 0. */
 uint32_t procfs_ino_vmstat(void)
 {
     return 0;
 }
 
+/** The inode number of /proc/slabinfo, which no row reads: 0. */
 uint32_t procfs_ino_slabinfo(void)
 {
     return 0;
 }
 
+/** The inode number of /proc/swaps, which no row reads: 0. */
 uint32_t procfs_ino_swaps(void)
 {
     return 0;
 }
 
+/** The inode number of /proc/locks, which no row reads: 0. */
 uint32_t procfs_ino_locks(void)
 {
     return 0;
 }
 
+/** The inode number of /proc/net/stat, which no row reads: 0. */
 uint32_t procfs_ino_netstatdir(void)
 {
     return 0;
 }
 
+/** The inode number of /proc/sysvipc, which no row reads: 0. */
 uint32_t procfs_ino_sysvipcdir(void)
 {
     return 0;
 }
 
+/** The inode number of a /proc/sysvipc file, which no row reads: 0. */
 uint32_t procfs_ino_sysvipc(int origin)
 {
     (void)origin;
     return 0;
 }
 
+/** No /sys file is writable: 0. */
 int synth_sys_writable(int entry)
 {
     (void)entry;
     return 0;
 }
 
+/** No row remounts: -EINVAL. */
 int vfs_remount(struct vfs_mount *m, uint32_t flags, const char *options)
 {
     (void)m;
@@ -996,13 +1092,14 @@ int vfs_remount(struct vfs_mount *m, uint32_t flags, const char *options)
     return -EINVAL;
 }
 
+/** The inode number of a /proc/sys file, which no row reads: 0. */
 uint32_t procfs_ino_sys(int entry)
 {
     (void)entry;
     return 0;
 }
 
-/* The shared mappings of disk files, which no row makes. */
+/** A write to a file a shared mapping has, which no row makes. */
 void filemap_file_written(fd_entry_t *e, uint64_t off, uint32_t len)
 {
     (void)e;
@@ -1010,6 +1107,7 @@ void filemap_file_written(fd_entry_t *e, uint64_t off, uint32_t len)
     (void)len;
 }
 
+/** No row's file has a shared mapping: 0. */
 int filemap_disk_mapped(const struct vfs_mount *mnt, uint64_t ino)
 {
     (void)mnt;
@@ -1017,7 +1115,7 @@ int filemap_disk_mapped(const struct vfs_mount *mnt, uint64_t ino)
     return 0;
 }
 
-/* The truncation of an open with O_TRUNC, which no row asks for. */
+/** The truncation of an open with O_TRUNC, which no row asks for: -EROFS. */
 int vfs_truncate(struct vfs_mount *mnt, void *at, uint64_t size)
 {
     (void)mnt;
@@ -1026,7 +1124,7 @@ int vfs_truncate(struct vfs_mount *mnt, void *at, uint64_t size)
     return -EROFS;
 }
 
-/* fallocate, which no row asks for. */
+/** fallocate, which no row asks for: -EOPNOTSUPP. */
 int vfs_fallocate(struct vfs_mount *mnt, void *handle, uint32_t mode, uint64_t offset, uint64_t len)
 {
     (void)mnt;
@@ -1037,8 +1135,8 @@ int vfs_fallocate(struct vfs_mount *mnt, void *handle, uint32_t mode, uint64_t o
     return -EOPNOTSUPP;
 }
 
-/* A FIFO or a device file opened again through its descriptor's link,
- * which no row opens. */
+/** Open a FIFO again through its descriptor's link, which no row does:
+ * -ENXIO. */
 int32_t fifo_attach(struct fd_entry *e, const void *mnt, uint64_t ino, int flags)
 {
     (void)e;
@@ -1048,6 +1146,7 @@ int32_t fifo_attach(struct fd_entry *e, const void *mnt, uint64_t ino, int flags
     return -ENXIO;
 }
 
+/** No row names a device: NULL. */
 const char *devfs_name_of(int block, uint32_t rdev)
 {
     (void)block;
@@ -1055,62 +1154,74 @@ const char *devfs_name_of(int block, uint32_t rdev)
     return NULL;
 }
 
+/** The inode number of /proc/mounts, which no row reads: 0. */
 uint32_t procfs_ino_mounts(void)
 {
     return 0;
 }
 
+/** The inode number of /proc/usb, which no row reads: 0. */
 uint32_t procfs_ino_usb(void)
 {
     return 0;
 }
 
+/** The inode number of /proc/audio, which no row reads: 0. */
 uint32_t procfs_ino_audio(void)
 {
     return 0;
 }
 
+/** The inode number of /proc/loop, which no row reads: 0. */
 uint32_t procfs_ino_loop(void)
 {
     return 0;
 }
 
+/** The inode number of /proc/interrupts, which no row reads: 0. */
 uint32_t procfs_ino_interrupts(void)
 {
     return 0;
 }
 
+/** The inode number of /proc/console, which no row reads: 0. */
 uint32_t procfs_ino_console(void)
 {
     return 0;
 }
 
+/** The inode number of /proc/filesystems, which no row reads: 0. */
 uint32_t procfs_ino_filesystems(void)
 {
     return 0;
 }
 
+/** The inode number of /proc/net/route, which no row reads: 0. */
 uint32_t procfs_ino_netroute(void)
 {
     return 0;
 }
 
+/** The inode number of /proc/net/arp, which no row reads: 0. */
 uint32_t procfs_ino_netarp(void)
 {
     return 0;
 }
 
+/** The inode number of /proc/net/tcp, which no row reads: 0. */
 uint32_t procfs_ino_nettcp(void)
 {
     return 0;
 }
 
+/** The inode number of a /proc/net file, which no row reads: 0. */
 uint32_t procfs_ino_net(int origin)
 {
     (void)origin;
     return 0;
 }
 
+/** The inode number of a /sys file, which no row reads: 0. */
 uint32_t sysfs_ino(int node, int key, int file)
 {
     (void)node;
@@ -1119,6 +1230,7 @@ uint32_t sysfs_ino(int node, int key, int file)
     return 0;
 }
 
+/** No /sys attribute is writable: 0. */
 int sysfs_attr_writable(int node, int attr)
 {
     (void)node;
@@ -1126,6 +1238,7 @@ int sysfs_attr_writable(int node, int attr)
     return 0;
 }
 
+/** No /sys device exists: 0. */
 int sysfs_device_exists(int node, int key)
 {
     (void)node;
@@ -1133,6 +1246,7 @@ int sysfs_device_exists(int node, int key)
     return 0;
 }
 
+/** No /sys device exists: -1. */
 int sysfs_device_key(int node, int n)
 {
     (void)node;
@@ -1140,12 +1254,14 @@ int sysfs_device_key(int node, int n)
     return -1;
 }
 
+/** No row's descriptor is a /sys file: 0. */
 int procfs_fd_is_sys(struct fd_entry *e)
 {
     (void)e;
     return 0;
 }
 
+/** No /sys path: an empty string in `out`. */
 void synth_sys_path(int node, int key, char *out, int cap)
 {
     (void)node;
@@ -1254,12 +1370,13 @@ static void trailing_zero_limit(void)
     row_end();
 }
 
-/* A mount is its own base here: no test makes a bind mount. */
+/** A mount is its own base here: no row makes a bind mount. */
 const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m)
 {
     return m;
 }
 
+/** No row sends a signal. */
 void signal_post_thread(process_t *t, int signo, const struct k_siginfo *info)
 {
     (void)t;
@@ -1267,6 +1384,10 @@ void signal_post_thread(process_t *t, int signo, const struct k_siginfo *info)
     (void)info;
 }
 
+/**
+ * Set up the dumping process and the process that shares its table, and run the
+ * rows; 0 when every check passed, 1 otherwise.
+ */
 int main(void)
 {
     self.pid = self.tgid = 3;

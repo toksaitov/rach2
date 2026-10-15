@@ -109,6 +109,7 @@ extern int memcmp(const void *a, const void *b, unsigned long n);
 
 static int failures;
 
+/** Count and print a failure, with its line, when `c` is false. */
 #define CHECK(c, detail)                                                                 \
     do {                                                                                 \
         if (!(c)) {                                                                      \
@@ -124,11 +125,13 @@ static uint8_t stack[STACK_SIZE] __attribute__((aligned(64)));
 static uintptr_t fault_at;
 static size_t fault_len;
 
+/** Whether `n` bytes at `a` touch the range that faults. */
 static int faults(uintptr_t a, size_t n)
 {
     return fault_len != 0 && a < fault_at + fault_len && fault_at < a + n;
 }
 
+/** Copy `n` bytes from the user's stack; 0, or -1 when the range faults. */
 int copy_from_user(void *dst, const void __user *src, size_t n)
 {
     if (faults((uintptr_t)src, n)) {
@@ -138,6 +141,7 @@ int copy_from_user(void *dst, const void __user *src, size_t n)
     return 0;
 }
 
+/** Copy `n` bytes to the user's stack; 0, or -1 when the range faults. */
 int copy_to_user(void __user *dst, const void *src, size_t n)
 {
     if (faults((uintptr_t)dst, n)) {
@@ -147,18 +151,20 @@ int copy_to_user(void __user *dst, const void *src, size_t n)
     return 0;
 }
 
+/** The kernel's allocator, from the C library, zeroed. */
 void *kmalloc(size_t size)
 {
     return calloc(1, size);
 }
 
+/** Free a block from `kmalloc`. */
 void kfree(void *p)
 {
     free(p);
 }
 
-/* The initial state as the unit makes it: control word 0x37F, MXCSR 0x1F80
- * and its mask, every other byte zero. */
+/** Set the initial state as the unit makes it: control word 0x37F, MXCSR
+ * 0x1F80 and its mask, every other byte zero. */
 static void set_initial(void)
 {
     memset(initial_state, 0, sizeof(initial_state));
@@ -167,7 +173,8 @@ static void set_initial(void)
     put32(initial_state + FX_MXCSR + 4, mxcsr_mask);
 }
 
-/* XSAVE with x87, SSE and AVX at Intel's offsets, 832 bytes. */
+/** Set the format to XSAVE with x87, SSE and AVX at Intel's offsets, 832
+ * bytes. */
 static void set_avx(void)
 {
     use_fxsr = 1;
@@ -183,7 +190,8 @@ static void set_avx(void)
     set_initial();
 }
 
-/* XSAVE with AVX-512 too, at Intel's offsets with MPX's gap, 2688 bytes. */
+/** Set the format to XSAVE with AVX-512 too, at Intel's offsets with MPX's
+ * gap, 2688 bytes. */
 static void set_avx512(void)
 {
     set_avx();
@@ -198,8 +206,9 @@ static void set_avx512(void)
     set_initial();
 }
 
-/* An area of the format with every byte a pattern of `seed`, a valid MXCSR,
- * the header's reserved bytes zero and XSTATE_BV `bv`. */
+/** A new area of the format with every byte a pattern of `seed`, a valid
+ * MXCSR, the header's reserved bytes zero and XSTATE_BV `bv`; the caller
+ * frees it with `fpu_area_free`. */
 static uint8_t *pattern_area(unsigned seed, uint64_t bv)
 {
     uint8_t *a = fpu_area_alloc();
@@ -210,8 +219,7 @@ static uint8_t *pattern_area(unsigned seed, uint64_t bv)
     }
     put32(a + FX_MXCSR, 0x1F80u);
 #if !defined(FPU_X86_64)
-    /* The bytes 32-bit mode reserves beside the tag byte and the code and
-     * data selectors, which the `fnsave` layout has no room for. */
+    /* Reserved beside FTW, FCS and FDS in 32-bit mode; `fnsave` drops them. */
     a[FX_TWD + 1] = 0;
     put16(a + FX_FCS + 2, 0);
     put16(a + FX_FOS + 2, 0);
@@ -224,8 +232,8 @@ static uint8_t *pattern_area(unsigned seed, uint64_t bv)
     return a;
 }
 
-/* A frame of `area` placed below the stack's top, with the stack filled
- * with 0xCC first; its state's address. */
+/** Write a frame of `area` placed below the stack's top, with the stack
+ * filled with 0xCC first; the address of its state. */
 static uintptr_t frame_of(const uint8_t *area)
 {
     uintptr_t fp;
@@ -236,6 +244,7 @@ static uintptr_t frame_of(const uint8_t *area)
     return fp;
 }
 
+/** Whether each of `n` bytes at `p` is `v`. */
 static int all_bytes(const uint8_t *p, size_t n, uint8_t v)
 {
     size_t i;
@@ -248,6 +257,10 @@ static int all_bytes(const uint8_t *p, size_t n, uint8_t v)
     return 1;
 }
 
+/**
+ * An XSAVE frame's place below the stack pointer, and every byte of the state
+ * it writes.
+ */
 static void row_place_and_put(void)
 {
     uint8_t *a;
@@ -287,7 +300,8 @@ static void row_place_and_put(void)
     fpu_area_free(a);
 }
 
-/* Take the frame at `fp` into a fresh area; the result in `*rc`. */
+/** Take the frame at `fp` into a new area, which the caller frees; the
+ * result of the take in `*rc`. */
 static uint8_t *take(uintptr_t fp, int *rc)
 {
     uint8_t *b = fpu_area_alloc();
@@ -296,6 +310,10 @@ static uint8_t *take(uintptr_t fp, int *rc)
     return b;
 }
 
+/**
+ * A frame taken back gives the area again, and one with a wrong mark or size
+ * gives its legacy part alone, limited by the frame's XCR0.
+ */
 static void row_take(void)
 {
     uint8_t *a, *b;
@@ -365,6 +383,10 @@ static void row_take(void)
     fpu_area_free(a);
 }
 
+/**
+ * A frame with a bad XSTATE_BV, XCOMP_BV, reserved header byte or MXCSR, or one
+ * any part of which faults, is refused.
+ */
 static void row_refused(void)
 {
     uint8_t *a, *b;
@@ -429,6 +451,10 @@ static void row_refused(void)
     fpu_area_free(a);
 }
 
+/**
+ * In the AVX-512 layout a frame is taken whole, and one whose image ends before
+ * AVX-512 leaves it out.
+ */
 static void row_avx512(void)
 {
     uint8_t *a, *b;
@@ -455,6 +481,10 @@ static void row_avx512(void)
     fpu_area_free(a);
 }
 
+/**
+ * The NT_X86_XSTATE image ptrace reads, and the checks and the initial state of
+ * one a tracer sets.
+ */
 static void row_xstate(void)
 {
     uint8_t *a, *b, *in;
@@ -511,6 +541,9 @@ static void row_xstate(void)
     fpu_area_free(a);
 }
 
+/**
+ * The frame without XSAVE: the `fxsave` image, and on i686 the `fnsave` one.
+ */
 static void row_legacy(void)
 {
     uint8_t *a, *b;
@@ -556,6 +589,7 @@ static void row_legacy(void)
 #endif
 }
 
+/** Run the rows; 0 when every check passed, 1 otherwise. */
 int main(void)
 {
     row_place_and_put();

@@ -1,8 +1,6 @@
 /**
- * Check the core file's layout against an address space that changes while
- * the file is written, the wait for the process's other threads to park, a
- * thread's parking, and the count of program headers past what the ELF
- * header's field holds.
+ * coredump_hosttest.c: the core file's regions, the wait for a process's
+ * other threads to park, a thread's parking, and extended numbering.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-cflags: -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast
@@ -13,13 +11,15 @@
  * the address space can with an mmap while the writer sleeps: the program
  * headers must still describe the regions as they were taken, each once,
  * and nothing may be read from the freed array, which AddressSanitizer
- * judges. The wait for the other threads is a model that parks them: the
- * notes must be built after it, with a status for the parked thread whose
- * registers are read only once it has parked, and the
- * regions it leaves are the ones the file written after records; an execve
- * waiting for the dumping thread ends it at once. A thread that parks saves
- * its floating-point state, marks itself parked and wakes the dumping thread
- * before it waits, and the wait goes on until the core is written.
+ * judges.
+ *
+ * The wait for the other threads is a model that parks them. The notes must
+ * be built after it, with a status for the parked thread, whose registers are
+ * read only once it has parked, and the file written after must record the
+ * regions as the parked thread left them. An execve waiting for the dumping
+ * thread ends the wait at once. A thread that parks saves its floating-point
+ * state, marks itself parked and wakes the dumping thread before it waits,
+ * and the wait goes on until the core is written.
  *
  * A page of a mapped file the process never touched is read for the file,
  * where one of anonymous memory is a hole.
@@ -42,10 +42,13 @@ static struct tgroup group;
 static struct mm space;
 struct percpu cpu_table[NR_CPUS] = {{.current = &self}};
 process_t *proc_list = &self;
+/** The core file `put` has written, `file_len` bytes in `file_cap`. */
 static uint8_t *file;
 static uint32_t file_len, file_cap;
+/* Calls of put, the call that grows the regions (0 for none), and counts. */
 static int writes, grow_at, waits, wakes, fpu_saves, failures;
 
+/** Count and print a failure when `c` is false. */
 #define CHECK(c, detail)                                 \
     do {                                                 \
         if (!(c)) {                                      \
@@ -54,32 +57,36 @@ static int writes, grow_at, waits, wakes, fpu_saves, failures;
         }                                                \
     } while (0)
 
+/** The kernel's allocator, from the C library, zeroed. */
 void *kmalloc(size_t size)
 {
     return calloc(1, size);
 }
 
+/** Free a block from `kmalloc`. */
 void kfree(void *p)
 {
     free(p);
 }
 
+/** Count a save of the floating-point state; nothing is saved. */
 void fpu_save(void *area)
 {
     (void)area;
     fpu_saves++;
 }
 
+/** Count a wake, which must be on the process's `gone` queue. */
 void wq_wake_all(wait_queue_t *wq)
 {
     CHECK(wq == &group.gone, "a wake of the core is on its process's queue");
     wakes++;
 }
 
-/** The rows judge the regions, not the notes: the registers are zeros and
- * no floating-point note is written. Another thread's are read only while
- * it is parked, or waits in an execve for the dumping thread, when its
- * saved state does not change. */
+/** Zero the registers of `t`. The rows judge the regions, so the registers
+ * are zeros and no floating-point note is written. Another thread's
+ * registers are read only while it is parked, or waits in an execve for the
+ * dumping thread, when its saved state does not change. */
 void arch_regs_get(const struct process *t, unsigned long *r)
 {
     CHECK(t != &sibling || sibling.core_parked || group.exec_task == &sibling,
@@ -87,19 +94,22 @@ void arch_regs_get(const struct process *t, unsigned long *r)
     k_memset(r, 0, ARCH_GREGS * sizeof(unsigned long));
 }
 
+/** The size of the floating-point notes of a thread: none. */
 uint32_t arch_core_fp_size(void)
 {
     return 0;
 }
 
+/** Write no floating-point notes. */
 void arch_core_fp_notes(uint8_t **p, const struct process *t)
 {
     (void)p;
     (void)t;
 }
 
-/** The pages the process has: every page of a region but the second page
- * of one that is longer. */
+/** The physical address of the page at `addr`: 0x100000 for every page of a
+ * region but the second page of a longer one, and 0, no page, for that page
+ * and outside every region. */
 uintptr_t paging_user_phys(page_dir_t *dir, uintptr_t addr)
 {
     uint32_t i;
@@ -160,8 +170,9 @@ static void regions_grow(void)
     space.vm.count = count + 1u;
 }
 
-/** The writer: keep the bytes, holes as zeros, growing the regions on the
- * call `grow_at`. */
+/** The writer: append `len` bytes of `buf` to `file`, or zeros for a hole
+ * when `buf` is NULL, growing the regions on the call `grow_at`. Returns 0,
+ * or -ENOMEM when the file cannot grow. */
 static int32_t put(void *ctx, const void *buf, uint32_t len)
 {
     uint8_t *more;
@@ -215,6 +226,7 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     return 0;
 }
 
+/** The little-endian 16-bit field at `off` of the file. */
 static uint32_t get16(uint32_t off)
 {
     uint16_t v;
@@ -223,6 +235,7 @@ static uint32_t get16(uint32_t off)
     return v;
 }
 
+/** The little-endian 32-bit field at `off` of the file. */
 static uint32_t get32(uint32_t off)
 {
     uint32_t v;
@@ -401,6 +414,8 @@ static void numbering(uint32_t count)
     }
 }
 
+/** Set up the dumping thread and its process and run the rows; 0 when every
+ * check passed, 1 otherwise. */
 int main(void)
 {
     self.pid = self.tgid = 3;

@@ -22,6 +22,7 @@ extern unsigned long strtoul(const char *text, char **end, int base);
 
 unsigned int host_cpu;
 struct percpu cpu_table[NR_CPUS];
+/** Each processor's debug registers DR0 to DR7, by number. */
 static unsigned long hardware[NR_CPUS][8];
 static process_t tracee, other;
 static isr_params_t frame;
@@ -29,6 +30,7 @@ static struct k_sigaction actions[KSIG_MAX + 1];
 static int failures, signals, forced;
 static int32_t signal_code;
 
+/* The ModR/M byte of a mov to or from DRn is 0xc0 + 8 * n. */
 #define DR_READ(n, v)  ((v) = hardware[host_cpu][(strtoul(n, 0, 16) - 0xc0) / 8])
 #define DR_WRITE(n, v) (hardware[host_cpu][(strtoul(n, 0, 16) - 0xc0) / 8] = (v))
 #include "arch/x86/debugreg.c"
@@ -53,8 +55,9 @@ isr_params_t *proc_user_frame(const process_t *t)
     return &frame;
 }
 
-/** Record the signal and its pending bit as signal_post_thread does.
- * A trap must belong to the running tracee. */
+/** Record the signal and its pending bit as signal_post_thread does, keeping
+ * the first siginfo of a pending signal. A trap must belong to the running
+ * tracee. */
 void signal_post_thread(process_t *t, int signo, const struct k_siginfo *info)
 {
     check(t == &tracee && t == current_proc && signo == SIGTRAP, "trap owner");
@@ -297,7 +300,7 @@ static void pending_user_hits(unsigned long status)
  * SIGTRAP blocked, as musl's raise leaves it when a tracer redirects the PC.
  * Migration keeps that origin, delivery consumes it, and detach cancels it.
  * Status is B0 or zero, for a hit with or without a DR6 status bit.
- * The existing dequeue rows check that kernel-copy hits keep their mask. */
+ * `dequeue_hits` checks that kernel-copy hits keep their mask. */
 static void delayed_user_hits(unsigned long status)
 {
     int migrated;

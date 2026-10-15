@@ -67,9 +67,14 @@ void tick_now(uint32_t *seconds, uint32_t *second_ticks, uint32_t *ticks)
     *ticks = kernel_ticks;
     kirq_restore(flags);
 }
+
+/* Thread 5 while it has not ended, and the thread the next copy out ends. */
 static process_t *named;
 static process_t *ends_at_copy;
+/* The word whose waiter sets FUTEX_WAITERS in the next fault for a write. */
 static uint32_t waiters_at;
+/* The address whose next fault takes `slow_ticks` ticks, and the tick the
+ * last wait was armed for. */
 static uint32_t slow_at, slow_ticks, armed;
 static struct futex_q waiter;
 static int masked, failures, wakes, waits, cmpxchgs;
@@ -77,6 +82,7 @@ static int masked, failures, wakes, waits, cmpxchgs;
  * a load and the compare-and-exchange after it, whatever the interrupts. */
 static uint32_t raced_at;
 
+/** Count and print a failure when `c` is false. */
 #define CHECK(c, detail)                              \
     do {                                              \
         if (!(c)) {                                   \
@@ -131,6 +137,10 @@ int vm_prefault_range(uintptr_t addr, uintptr_t len, int write)
     return 1;
 }
 
+/**
+ * Copy `n` bytes from user address `src` through the model's prefault; 0, or
+ * -EFAULT outside user memory.
+ */
 int copy_from_user(void *dst, const void __user *src, size_t n)
 {
     uint32_t at = (uint32_t)(unsigned long)src;
@@ -191,6 +201,7 @@ int cmpxchg_user_u32(uintptr_t dst, uint32_t old, uint32_t value, uint32_t *prev
     return 0;
 }
 
+/** Mask interrupts; whether they were masked before. */
 uint32_t kirq_save(void)
 {
     uint32_t prior = (uint32_t)masked;
@@ -199,6 +210,7 @@ uint32_t kirq_save(void)
     return prior;
 }
 
+/** Mask interrupts again or not, as `flags` from `kirq_save` says. */
 void kirq_restore(uint32_t flags)
 {
     masked = (int)flags;
@@ -221,18 +233,21 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     return 0;
 }
 
+/** Count a wake. */
 void wq_wake_all(wait_queue_t *wq)
 {
     (void)wq;
     wakes++;
 }
 
+/** The wall clock: 100 s. */
 void get_current_time(int64_t *seconds, int64_t *nanoseconds)
 {
     *seconds = 100;
     *nanoseconds = 0;
 }
 
+/** The model has no regions: NULL. */
 vma_t *vm_find(vm_space_t *vm, uintptr_t addr)
 {
     (void)vm;
@@ -240,6 +255,7 @@ vma_t *vm_find(vm_space_t *vm, uintptr_t addr)
     return NULL;
 }
 
+/** The model has no pages: 0. */
 uintptr_t paging_user_phys(page_dir_t *dir, uintptr_t addr)
 {
     (void)dir;
@@ -496,6 +512,7 @@ static void robust_head_read(void)
     }
 }
 
+/** Run the rows; 0 when every check passed, 1 otherwise. */
 int main(void)
 {
     self.pid = self.tgid = 42;

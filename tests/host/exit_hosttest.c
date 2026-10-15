@@ -3,9 +3,10 @@
  *
  * host-deps:
  *
- * The file callbacks wait on the real queue. The scheduler substitute releases
- * the lock only after observing the blocked waiter, then wakes it. No timer or
- * probability decides whether cleanup sleeps.
+ * The file callbacks wait on a queue of the kernel's wait queue code, which
+ * is included whole. The scheduler substitute releases the lock only after
+ * observing the blocked waiter, then wakes it. No timer or probability
+ * decides whether cleanup sleeps.
  *
  * The thread's address space must go at its end, once, after its futex words,
  * which are in it, and before its files and the publication of its death, as
@@ -33,6 +34,8 @@ static page_dir_t *loaded;
 static int dropped;
 static wait_queue_t lock_wait;
 static int lock_free;
+/* Whether the close of the files, and the release of the directories,
+ * wait for the lock, and whether the child has a parent to notify. */
 static int fd_wait;
 static int cwd_wait;
 static int with_parent;
@@ -44,6 +47,7 @@ static int notified;
 static int switches;
 static int failures;
 
+/** Count and print a failure when `condition` is false. */
 #define CHECK(condition, detail)                     \
     do {                                             \
         if (!(condition)) {                          \
@@ -52,6 +56,10 @@ static int failures;
         }                                            \
     } while (0)
 
+/**
+ * The condition of the lock wait: whether the lock is free. The process must
+ * not be a zombie yet.
+ */
 static int available(void *arg)
 {
     CHECK(arg == &lock_wait, "the wait keeps its lock");
@@ -59,6 +67,10 @@ static int available(void *arg)
     return lock_free;
 }
 
+/**
+ * The one switch of a lock wait: check that the child is blocked on the lock,
+ * release the lock and wake the child, and return to it running.
+ */
 void schedule(void)
 {
     CHECK(child.state == PROC_BLOCKED, "cleanup blocked before scheduling");
@@ -78,12 +90,14 @@ void sched_make_ready(process_t *p)
     p->state = PROC_READY;
 }
 
+/** Exit cleanup must not ask; a call fails the row. */
 int signal_pending(void)
 {
     CHECK(0, "cleanup must use an uninterruptible wait");
     return 1;
 }
 
+/** Take the lock after a wait, which `schedule` ends. */
 static void wait_for_lock(void)
 {
     lock_free = 0;
@@ -92,6 +106,7 @@ static void wait_for_lock(void)
     CHECK(!wq_active(&lock_wait), "the wait leaves no queued record");
 }
 
+/** Close the child's files, after a wait for the lock when `fd_wait` is set. */
 void proc_files_put(process_t *p)
 {
     CHECK(p == &child, "cleanup closes the dying process's files");
@@ -124,21 +139,28 @@ void ptrace_exit_notify(process_t *p)
     CHECK(0, "an untraced thread tells no tracer");
 }
 
+/** Check that the POSIX timers deleted are the child's process's. */
 void ptimer_delete_all(struct tgroup *tg)
 {
     CHECK(tg == child.tg, "the process's POSIX timers are deleted at its end");
 }
 
+/** Check that the semaphore adjustments applied are the child's process's. */
 void sysv_exit(struct tgroup *tg)
 {
     CHECK(tg == child.tg, "the process's semaphore adjustments are applied at its end");
 }
 
+/** Check that the tracees let go are the child's process's. */
 void ptrace_tracer_gone(uint32_t tgid)
 {
     CHECK(tgid == child.tgid, "the process's own tracees are let go at its end");
 }
 
+/**
+ * Count the release of the thread's futexes, which comes before its address
+ * space and its files go.
+ */
 void proc_thread_gone(process_t *p)
 {
     CHECK(p == &child && !closed && !dropped,
@@ -146,6 +168,10 @@ void proc_thread_gone(process_t *p)
     thread_released++;
 }
 
+/**
+ * Count the drop of the address space, which comes after the futexes and before
+ * the files.
+ */
 void mm_drop(struct process *p)
 {
     CHECK(p == &child && thread_released == 1 && !closed,
@@ -154,6 +180,7 @@ void mm_drop(struct process *p)
     dropped++;
 }
 
+/** Load `dir`, which must be the kernel's, once the address space is gone. */
 void switch_page_directory(page_dir_t *dir)
 {
     CHECK(dir == _kernel_dir && dropped == 1,
@@ -161,30 +188,41 @@ void switch_page_directory(page_dir_t *dir)
     loaded = dir;
 }
 
+/**
+ * Count the release of a vfork parent, which comes after the files and the
+ * directories.
+ */
 void proc_vfork_release(process_t *p)
 {
     CHECK(p == &child && closed && cwd_released, "a vfork parent runs after the files go");
     vfork_released++;
 }
 
+/** Note the adoption of the children, which comes after the cleanup. */
 void reparent_children(uint32_t pid)
 {
     CHECK(pid == child.pid && closed && cwd_released, "children are adopted after cleanup");
     adopted = 1;
 }
 
+/** The child's parent, or NULL when the row has none. */
 process_t *get_process(uint32_t pid)
 {
     CHECK(pid == child.parent_pid, "notification finds the parent");
     return with_parent ? &parent : 0;
 }
 
+/** The model's siginfo of a child's end is not read. */
 void proc_child_info(const process_t *p, struct k_siginfo *info)
 {
     (void)p;
     (void)info;
 }
 
+/**
+ * Count the SIGCHLD to the parent, which must follow every cleanup and find the
+ * child a zombie.
+ */
 void signal_post_info(process_t *target, int signo, const struct k_siginfo *info)
 {
     (void)info;
@@ -194,6 +232,12 @@ void signal_post_info(process_t *target, int signo, const struct k_siginfo *info
     notified++;
 }
 
+/**
+ * End the child with `status`, waiting for the lock in the close of the files
+ * when `files` is set and in the release of the directories when `directory`
+ * is, with a parent when `has_parent` is, and check the order and the count of
+ * each step.
+ */
 static void run_case(int files, int directory, int has_parent, int32_t status)
 {
     fd_wait = files;
@@ -237,6 +281,7 @@ static void run_case(int files, int directory, int has_parent, int32_t status)
     CHECK(!wq_active(&lock_wait), "cleanup leaves no waiter");
 }
 
+/** Run the five cases; 0 when every check passed, 1 otherwise. */
 int main(void)
 {
     run_case(0, 0, 1, 7 << 8);

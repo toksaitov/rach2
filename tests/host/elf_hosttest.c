@@ -1,12 +1,13 @@
 /**
- * Host test for the ELF loader's hostile-image rejection (sys/proc/elf.c).
+ * elf_hosttest.c: the ELF loader's checks of a malformed image
+ * (`proc/elf.c`).
  *
  * host-deps:
  *
  * Includes elf.c directly and stubs the page and VMA calls, then drives
  * elf_load_image with crafted in-memory images through a readfn over a byte
  * buffer. Every malformed image must be rejected with ENOEXEC during
- * validation, BEFORE any page is allocated. The alloc stub records whether
+ * validation, before any page is allocated. The alloc stub records whether
  * allocation was reached, so a test tells a validation reject (alloc never
  * reached) from an image that passed validation (reached alloc, which the
  * stub then fails, and which must answer ENOMEM). A reader that fails must
@@ -15,18 +16,23 @@
  * read callback. Both loads must retain their own segment geometry and
  * bytes. A position-independent image is read for its layout and
  * interpreter and loaded at a base, and read as an interpreter is, with its
- * own PT_INTERP not read. Returns the failed-check count.
+ * own PT_INTERP not read. Exits with the count of failed checks, at most
+ * 100.
  */
 
 #include "proc/elf.c"
 #include "arch/i686/mmu.h"
 
 static int fails;
+/* Whether `alloc_user_page` was called since the flag was cleared. */
 static int alloc_reached;
+/* Whether `alloc_user_page` maps frames, or fails every allocation. */
 static int map_frames;
+/* The frames taken from `frames`; frame N is at physical address N pages. */
 static unsigned frame_count;
 static unsigned char frames[4][PAGE_SIZE];
 
+/** Count a failure when `cond` is false. */
 #define CHECK(cond)    \
     do {               \
         if (!(cond)) { \
@@ -34,7 +40,9 @@ static unsigned char frames[4][PAGE_SIZE];
         }              \
     } while (0)
 
-/** Fail allocation in rejection rows; map frames in the reentry row. */
+/** Note that allocation was reached and fail it in the rejection rows; with
+ * `map_frames` set, map the next of `frames` at `virt_addr` in `dir` and
+ * return its physical address, or 0 when the four are taken. */
 uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
 {
     uintptr_t phys;
@@ -62,6 +70,7 @@ uintptr_t paging_user_phys(page_dir_t *dir, uintptr_t addr)
     return pt ? (uintptr_t)(pt->pages[addr / PAGE_SIZE % 1024] & ~0xFFFu) : 0;
 }
 
+/** The model has no page rights to change. */
 void paging_set_writable(page_dir_t *dir, uintptr_t addr, bool writable)
 {
     (void)dir;
@@ -69,6 +78,7 @@ void paging_set_writable(page_dir_t *dir, uintptr_t addr, bool writable)
     (void)writable;
 }
 
+/** The model has no page rights to change. */
 void paging_set_exec(page_dir_t *dir, uintptr_t addr, bool exec)
 {
     (void)dir;
@@ -76,7 +86,8 @@ void paging_set_exec(page_dir_t *dir, uintptr_t addr, bool exec)
     (void)exec;
 }
 
-/** Map synthetic frame numbers without truncating a host pointer to 32 bits. */
+/** The host buffer of the synthetic frame at `phys`, or NULL; the frames
+ * are numbered so that a host pointer is never truncated to 32 bits. */
 void *kmap_temp(uintptr_t phys)
 {
     if (phys == 0 || phys / PAGE_SIZE > frame_count) {
@@ -85,6 +96,7 @@ void *kmap_temp(uintptr_t phys)
     return frames[phys / PAGE_SIZE - 1];
 }
 
+/** Zero the synthetic frame at `phys`; 0, or -1 when there is none. */
 int paging_zero_frame(uintptr_t phys)
 {
     void *page = kmap_temp(phys);
@@ -96,16 +108,19 @@ int paging_zero_frame(uintptr_t phys)
     return 0;
 }
 
+/** A frame of `kmap_temp` needs no unmapping. */
 void kunmap_temp(void *va)
 {
     (void)va;
 }
 
+/** The model keeps no regions. */
 void vm_init(vm_space_t *vm)
 {
     (void)vm;
 }
 
+/** Take every region: 0. */
 int vm_insert(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot, vm_type_t type)
 {
     (void)vm;
@@ -116,6 +131,7 @@ int vm_insert(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot, vm_
     return 0;
 }
 
+/** memset, for elf.c. */
 void *k_memset(void *ptr, int c, size_t n)
 {
     unsigned char *d = ptr;
@@ -125,6 +141,7 @@ void *k_memset(void *ptr, int c, size_t n)
     return ptr;
 }
 
+/** memcpy, for elf.c. */
 void *k_memcpy(void *dest, const void *src, size_t n)
 {
     unsigned char *d = dest;
@@ -135,6 +152,7 @@ void *k_memcpy(void *dest, const void *src, size_t n)
     return dest;
 }
 
+/* The image the rows load, its first `img_size` bytes readable. */
 static unsigned char img_buf[8192];
 static uint32_t img_size;
 
@@ -142,6 +160,10 @@ static uint32_t img_size;
  * past any image for none. */
 static uint32_t read_fails_at = 0xFFFFFFFFu;
 
+/**
+ * The reader of the rows: up to `count` bytes at `off` of `img_buf`, 0 past
+ * `img_size`, and -1 from `read_fails_at` on.
+ */
 static int test_read(void *ctx, void *dst, uint32_t count, uint32_t off)
 {
     uint32_t avail;
@@ -160,7 +182,8 @@ static int test_read(void *ctx, void *dst, uint32_t count, uint32_t off)
     return (int)avail;
 }
 
-/* Lay down a valid ELF header with `nph` program headers right after it. */
+/** Lay down a valid ELF header with `nph` program headers, all zero, right
+ * after it, and set `img_size` to cover them and 0x100 bytes more. */
 static void base_image(int nph)
 {
     Elf32_Ehdr *e = (Elf32_Ehdr *)img_buf;
@@ -186,6 +209,7 @@ static void base_image(int nph)
     img_size = sizeof(Elf32_Ehdr) + (uint32_t)nph * sizeof(Elf32_Phdr) + 0x100u;
 }
 
+/** Make program header `i` a PT_LOAD of the given fields. */
 static void set_load(int i, uint32_t off, uint32_t vaddr, uint32_t filesz, uint32_t memsz,
                      uint32_t flags)
 {
@@ -199,23 +223,31 @@ static void set_load(int i, uint32_t off, uint32_t vaddr, uint32_t filesz, uint3
     p->p_flags = flags;
 }
 
+/**
+ * Load the image in `img_buf` into `dir`, clearing `alloc_reached` first; the
+ * load's result.
+ */
 static int run(page_dir_t *dir, elf_image_t *out)
 {
     alloc_reached = 0;
     return elf_load_image(test_read, 0, dir, out);
 }
 
+/** An image of the reentry row, with the page directory it loads into. */
 struct nested_image {
     unsigned char bytes[8192];
     uint32_t size;
-    struct nested_image *other;
+    struct nested_image *other; /* loaded inside this one's read, or NULL */
     page_dir_t dir;
     page_table_t table;
     elf_image_t loaded;
     int result;
 };
 
-/** A segment read may sleep while another process completes its own exec. */
+/** The reader of the reentry row: up to `count` bytes at `off` of the image
+ * `ctx`. The read of the first segment, at offset 0, loads the image's
+ * `other` first, once, as a read that sleeps lets another process's exec
+ * run. Returns the bytes read. */
 static int nested_read(void *ctx, void *dst, uint32_t count, uint32_t off)
 {
     struct nested_image *image = ctx;
@@ -236,7 +268,8 @@ static int nested_read(void *ctx, void *dst, uint32_t count, uint32_t off)
     return (int)count;
 }
 
-/** Two valid images with different second segments must load independently. */
+/** Two valid images with different second segments load independently, one
+ * inside the other's read. */
 static void reentrant_load(void)
 {
     static struct nested_image images[2];
@@ -314,8 +347,8 @@ static void header_table_bounds(void)
     CHECK(elf_check(img_buf, img_size));
 }
 
-/* A PT_INTERP header `i` naming `path`, whose bytes, NUL included, are put at
- * `off`. */
+/** Make program header `i` a PT_INTERP naming `path`, whose bytes, NUL
+ * included, are put at `off`. */
 static void set_interp(int i, uint32_t off, const char *path)
 {
     Elf32_Phdr *p = (Elf32_Phdr *)(img_buf + sizeof(Elf32_Ehdr)) + i;
@@ -330,6 +363,7 @@ static void set_interp(int i, uint32_t off, const char *path)
     p->p_memsz = n;
 }
 
+/** Whether the strings `a` and `b` are equal. */
 static int same_text(const char *a, const char *b)
 {
     while (*a && *a == *b) {
@@ -427,6 +461,17 @@ static void read_error(void)
     CHECK(elf_read_layout(test_read, 0, 1, &lay) == -ENOEXEC);
 }
 
+/**
+ * Run the rejection rows on an image each, then the read error, reentry, header
+ * table and position-independent rows.
+ *
+ * The row of too many program headers covers the whole claimed table with
+ * `img_size` and makes phdr[0] a valid PT_LOAD, so the cap on e_phnum is the
+ * only check that rejects it: without the cap the loader would read past its
+ * array of program headers and reach allocation. A well-formed image passes
+ * validation and reaches the allocation, which the stub fails, so the load
+ * answers ENOMEM and not the ENOEXEC of a malformed image.
+ */
 int main(void)
 {
     page_dir_t dir;
@@ -449,11 +494,7 @@ int main(void)
     ((Elf32_Ehdr *)img_buf)->e_ident[EI_MAG0] = 0;
     CHECK(run(&dir, &out) == -ENOEXEC && alloc_reached == 0);
 
-    /* More program headers than the loader will hold. img_size covers the whole
-       claimed table and phdr[0] is a valid PT_LOAD, so the e_phnum cap is the
-       only thing that rejects this image: were the cap removed, the loader
-       would read past its phdr array and reach allocation, which alloc_reached
-       catches. */
+    /* More program headers than the loader will hold. */
     base_image(1);
     set_load(0, 0x100u, 0x08048000u, 0x10u, 0x10u, 5u);
     ((Elf32_Ehdr *)img_buf)->e_phnum = ELF_MAX_PHNUM + 1;
@@ -471,7 +512,7 @@ int main(void)
     set_load(0, 0x100u, 0x08048000u, 0x200u, 0x100u, 5u);
     CHECK(run(&dir, &out) == -ENOEXEC && alloc_reached == 0);
 
-    /* A segment whose end runs into the page-cache window. */
+    /* A segment whose end runs into the stack's top page, USER_STACK_BASE. */
     base_image(1);
     set_load(0, 0x100u, 0xBFFFE000u, 0x2000u, 0x2000u, 5u);
     CHECK(run(&dir, &out) == -ENOEXEC && alloc_reached == 0);
@@ -486,9 +527,7 @@ int main(void)
     set_load(0, 0x100u, 0xBFFFE000u, 0x100u, 0xFFFFFFFFu, 5u);
     CHECK(run(&dir, &out) == -ENOEXEC && alloc_reached == 0);
 
-    /* A well-formed single-segment image passes validation and reaches the
-       allocation step, which the stub then fails: the load answers ENOMEM,
-       not the ENOEXEC of a malformed image. */
+    /* A well-formed image passes validation and the failed allocation. */
     base_image(1);
     set_load(0, 0x100u, 0x08048000u, 0x100u, 0x100u, 5u);
     CHECK(run(&dir, &out) == -ENOMEM && alloc_reached == 1);
