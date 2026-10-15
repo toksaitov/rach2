@@ -72,8 +72,4 @@ int32_t netif_ioctl(uint32_t request, uintptr_t arg, int *handled);
  * (`netdev_by_name`), whatever the caller's network namespace. */
 int netif_name_is_ours(const char *name);
 
-/** Whether the first interface is up, as an administrator left it; 0 with no
- * card. */
-int netif_is_up(void);
-
 #endif /* _NETIF_H_ */

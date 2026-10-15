@@ -330,7 +330,7 @@ void netdev_stop(struct netdev *nd)
     }
 }
 
-int netdev_link(struct netdev *nd, struct netdev_link *out)
+int netdev_link(const struct netdev *nd, struct netdev_link *out)
 {
     if (nd && nd->ops->link) {
         return nd->ops->link(nd->dev, out);
@@ -338,7 +338,7 @@ int netdev_link(struct netdev *nd, struct netdev_link *out)
     return 0;
 }
 
-int netdev_running(struct netdev *nd)
+int netdev_running(const struct netdev *nd)
 {
     struct netdev_link link;
 

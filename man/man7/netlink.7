@@ -134,11 +134,12 @@ With
 an
 .Dv RTM_NEWLINK
 message for each interface, with its index, its flags
-.Dv ( IFF_UP ,
+.Dv ( IFF_UP
+while it is up,
 .Dv IFF_RUNNING
 and
 .Dv IFF_LOWER_UP
-while it is up, and
+while it is up and its card reports its link up, and
 .Dv IFF_BROADCAST
 and
 .Dv IFF_MULTICAST ) ,

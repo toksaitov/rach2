@@ -84,13 +84,6 @@ struct kernel_rtentry {
 
 #define ARPHRD_ETHER 1
 
-int netif_is_up(void)
-{
-    struct netdev *nd = netdev_first();
-
-    return nd ? nd->up : 0;
-}
-
 /** The 32-bit big-endian address at `p`, as a host-order number. */
 static uint32_t be32(const uint8_t *p)
 {

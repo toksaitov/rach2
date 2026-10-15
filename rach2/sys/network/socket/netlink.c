@@ -423,7 +423,11 @@ static uint32_t prefix_of(uint32_t mask)
 }
 
 /**
- * Append the message of the link `nd`, with `flags`. Its counters go in
+ * Append the message of the link `nd`, with `flags`. IFF_UP is `nd`'s own
+ * state, as an administrator left it; IFF_RUNNING, IFF_LOWER_UP and the
+ * operational state up also need its card to report its link up
+ * (`netdev_running`), as on Linux, where a link that is down has neither
+ * flag. `lo` reports the operational state unknown. Its counters go in
  * Linux's `struct rtnl_link_stats`, 24 words of which this interface keeps
  * seven: the packets, bytes and drops each way, and the receive errors. They
  * go again in `struct rtnl_link_stats64`, 25 eight-byte words, which Linux
@@ -436,8 +440,9 @@ static void link_msg(struct nl_build *b, const struct netdev *nd, uint16_t flags
     uint8_t msg[NL_MSG_MAX];
     uint8_t *ifi = msg_start(b, msg, RTM_NEWLINK, flags, 16);
     static const uint8_t broadcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-    uint32_t up = nd->loopback || netif_is_up() ? IFF_UP | IFF_RUNNING | IFF_LOWER_UP : 0;
-    uint8_t oper = nd->loopback ? IF_OPER_UNKNOWN : up ? IF_OPER_UP : IF_OPER_DOWN;
+    int running = nd->up && netdev_running(nd);
+    uint32_t up = (nd->up ? IFF_UP : 0) | (running ? IFF_RUNNING | IFF_LOWER_UP : 0);
+    uint8_t oper = nd->loopback ? IF_OPER_UNKNOWN : running ? IF_OPER_UP : IF_OPER_DOWN;
     uint8_t stats[96];
     uint8_t stats64[200];
     int i;

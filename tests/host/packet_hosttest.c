@@ -41,18 +41,10 @@ extern void *memcpy(void *d, const void *s, unsigned long n);
 
 /* The frames or datagrams each layer above was given. */
 static unsigned to_arp, to_icmp, to_udp, to_tcp, to_raw, to_packet;
-static unsigned up = 1; /* what netif_is_up reports */
 
 uint8_t net_mac[6] = {0x52, 0x54, 0x00, 0x12, 0x34, 0x56};
 uint32_t net_ip_addr = 0x0A00020Fu; /* 10.0.2.15 */
 uint32_t net_ip_mask = 0xFFFFFF00u;
-
-/** Report `up`; no code compiled here calls this, and a row takes the
- * interface down through `the_iface.up`. */
-int netif_is_up(void)
-{
-    return (int)up;
-}
 
 /** Count an ARP packet received. */
 void arp_rx(struct netdev *nd, const uint8_t *data, uint16_t len)
@@ -333,7 +325,7 @@ struct netdev *netdev_first(void)
 static int link_down;
 
 /** Report the link up unless `link_down` is set. */
-int netdev_running(struct netdev *nd)
+int netdev_running(const struct netdev *nd)
 {
     return nd && !link_down;
 }
@@ -826,13 +818,11 @@ int main(void)
     CHECK("but the packet sockets are still offered it", to_packet == 1);
 
     reset();
-    up = 0;
     the_iface.up = 0; /* the flag the receive path reads is the interface's */
     n = build_eth(f, 0x0800);
     n += build_ip(f + n, 17, 8);
     deliver(f, n + 8);
     CHECK("an interface that is down delivers nothing", to_udp == 0);
-    up = 1;
 
     reset();
     n = build_eth(f, 0x0800);

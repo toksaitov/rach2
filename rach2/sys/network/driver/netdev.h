@@ -383,7 +383,7 @@ void netdev_stop(struct netdev *nd);
  * @return 1 with `*out` filled, or 0 when `nd` is NULL or its card cannot
  *         report its link, `lo` among them.
  */
-int netdev_link(struct netdev *nd, struct netdev_link *out);
+int netdev_link(const struct netdev *nd, struct netdev_link *out);
 
 /**
  * Whether the interface is running, as `IFF_RUNNING` reports it: the
@@ -391,6 +391,6 @@ int netdev_link(struct netdev *nd, struct netdev_link *out);
  * included; 0 for NULL. ethernet.c sends no frame on an interface that is
  * not running.
  */
-int netdev_running(struct netdev *nd);
+int netdev_running(const struct netdev *nd);
 
 #endif /* _NETDEV_H_ */

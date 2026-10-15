@@ -73,7 +73,7 @@ struct netdev *netdev_first(void)
 }
 
 /** Report the link up unless `link_down` is set. */
-int netdev_running(struct netdev *nd)
+int netdev_running(const struct netdev *nd)
 {
     return nd && !link_down;
 }

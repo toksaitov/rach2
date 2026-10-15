@@ -16,7 +16,8 @@
  * then a mask, then a route.
  *
  * `netifprobe second`, on a machine with two cards, takes the second card
- * down and requires the first to keep serving, and checks that /proc/net/dev,
+ * down and requires the first to keep serving and the netlink link dump to
+ * report each card's own state, and checks that /proc/net/dev,
  * SO_BINDTODEVICE, a TCP connection's addresses and the packet sockets each
  * name the right interface.
  *
@@ -35,6 +36,7 @@ typedef unsigned char uint8_t;
 #define STDOUT_FILENO 1
 
 #define AF_INET     2
+#define AF_NETLINK  16
 #define AF_PACKET   17
 #define SOCK_STREAM 1
 #define SOCK_DGRAM  2
@@ -71,6 +73,16 @@ typedef unsigned char uint8_t;
 #define IFF_BROADCAST 0x0002
 #define IFF_RUNNING   0x0040
 #define IFF_MULTICAST 0x1000
+
+/* Linux's netlink ABI, <linux/netlink.h> and <linux/rtnetlink.h>: a link
+ * dump's request, and the types of the messages that answer it. */
+#define NETLINK_ROUTE 0
+#define NLM_F_REQUEST 0x001
+#define NLM_F_DUMP    0x300
+#define NLMSG_ERROR   2
+#define NLMSG_DONE    3
+#define RTM_NEWLINK   16
+#define RTM_GETLINK   18
 
 #define RTF_UP      0x0001
 #define RTF_GATEWAY 0x0002
@@ -799,11 +811,79 @@ static void packet_on_second(int raw_fd)
 }
 
 /**
+ * The flags RTM_GETLINK's dump, which `ip link` reads, gives the interface
+ * of index `index`: the `ifi_flags` of its `struct ifinfomsg`. Fails the
+ * probe when the dump cannot be had or does not list the interface.
+ */
+static uint32_t link_flags(int index)
+{
+    static uint32_t buf[1024];
+    uint32_t req[8];
+    unsigned long args[6];
+    uint32_t flags = 0;
+    int fd, n, off, found = 0;
+
+    args[0] = AF_NETLINK;
+    args[1] = SOCK_RAW;
+    args[2] = NETLINK_ROUTE;
+    fd = socketcall(SC_SOCKET, args);
+    if (fd < 0) {
+        fail_n("a netlink route socket did not open", fd);
+    }
+    for (n = 0; n < 8; n++) {
+        req[n] = 0;
+    }
+    req[0] = sizeof(req); /* nlmsghdr, then a struct ifinfomsg of zeros */
+    req[1] = RTM_GETLINK | ((uint32_t)(NLM_F_REQUEST | NLM_F_DUMP) << 16);
+    req[2] = 1;
+    args[0] = (unsigned long)fd;
+    args[1] = (unsigned long)req;
+    args[2] = sizeof(req);
+    args[3] = 0;
+    n = socketcall(SC_SEND, args);
+    if (n != (int)sizeof(req)) {
+        fail_n("the link dump could not be asked for", n);
+    }
+    for (;;) {
+        args[1] = (unsigned long)buf;
+        args[2] = sizeof(buf);
+        n = socketcall(SC_RECV, args);
+        if (n <= 0) {
+            fail_n("the link dump ended without NLMSG_DONE", n);
+        }
+        for (off = 0; off + 16 <= n; off += (int)((buf[off / 4] + 3u) & ~3u)) {
+            uint32_t len = buf[off / 4];
+            uint32_t type = buf[off / 4 + 1] & 0xFFFFu;
+
+            if (len < 16 || off + (int)len > n) {
+                fail("the link dump had a message of a bad length");
+            }
+            if (type == NLMSG_DONE) {
+                sys_close(fd);
+                if (!found) {
+                    fail_n("the link dump did not list the interface", index);
+                }
+                return flags;
+            }
+            if (type == NLMSG_ERROR) {
+                fail("the link dump was answered with an error");
+            }
+            if (type == RTM_NEWLINK && len >= 32 && (int)buf[off / 4 + 5] == index) {
+                flags = buf[off / 4 + 6];
+                found = 1;
+            }
+        }
+    }
+}
+
+/**
  * `netifprobe second`: with two cards, each gateway answers through its own
  * card, and taking the second card down leaves the first serving, which
  * shows that the flag belongs to the interface and not to the stack. The
- * second card comes back up, the other rows of the two-card machine run,
- * and the probe exits with NETIFPROBE OK; it does not return.
+ * link dump says the same of each card: eth1 down and not running, eth0 up
+ * and running, and eth1 up again once it is brought back. The other rows of
+ * the two-card machine run, and the probe exits with NETIFPROBE OK; it does
+ * not return.
  */
 static void second_down(void)
 {
@@ -846,11 +926,20 @@ static void second_down(void)
     if (ping_retry(SLIRP_GW) < 0) {
         fail("the gateway stopped answering when the second interface went down");
     }
+    if (link_flags(2) & (IFF_UP | IFF_RUNNING)) {
+        fail("the link dump reported the second interface up while it was down");
+    }
+    if ((link_flags(1) & (IFF_UP | IFF_RUNNING)) != (IFF_UP | IFF_RUNNING)) {
+        fail("the link dump reported the first interface down with the second");
+    }
     set_name("eth1");
     ifr[16] = IFF_UP;
     ifr[17] = 0;
     if (sys_ioctl(fd, SIOCSIFFLAGS, ifr) != 0) {
         fail("the second interface could not be brought back up");
+    }
+    if (!(link_flags(2) & IFF_UP)) {
+        fail("the link dump reported the second interface down once it was up");
     }
     proc_names_both();
     device_option(fd);
