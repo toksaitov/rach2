@@ -1,8 +1,8 @@
 /**
- * netlink: the NETLINK_ROUTE dumps of the machine's links, addresses and
- * routes, the request of one link, the refusals, the port ids a bind
- * takes, the interface ioctls on an AF_UNIX socket and SIOCGIFCONF, and a
- * NETLINK_KOBJECT_UEVENT socket that hears nothing.
+ * netlinkmusl: check the NETLINK_ROUTE dumps of the machine's links,
+ * addresses and routes, the request of one link, the errors, the port ids a
+ * bind takes, the interface ioctls on an AF_UNIX socket and SIOCGIFCONF, and
+ * a NETLINK_KOBJECT_UEVENT socket that hears nothing.
  *
  * A socket's first port id is the process ID and a second socket's is
  * another; a bind of a port id another socket has is EADDRINUSE. Each
@@ -34,10 +34,11 @@
  * that network is the one `ip route get` takes, before the default route
  * through the gateway; and a neighbour set by hand as permanent is in
  * /proc/net/arp with the flags 0x6, in lowercase hexadecimal, until it is
- * forgotten.
+ * forgotten. A netlink protocol the kernel does not have fails with
+ * EPROTONOSUPPORT.
  *
- * Prints "NETLINKMUSL OK" on success and "NETLINKMUSL FAIL (detail)"
- * otherwise.
+ * It prints "NETLINKMUSL OK" and exits 0 on success, or prints "NETLINKMUSL
+ * FAIL (detail: errno N)" and exits 1 at the first failure.
  */
 
 #include <arpa/inet.h>
@@ -159,24 +160,30 @@ struct rtattr {
 #define PAYLOAD(h, body) ((int)(h)->nlmsg_len - NLMSG_HDRLEN - (int)NLMSG_ALIGN(sizeof(body)))
 #define FIRST_RTA(p)     ((struct rtattr *)((char *)(p) + NLMSG_ALIGN(sizeof(*(p)))))
 
+/** Report one failed check with errno and return 1, the failure status. */
 static int fail(const char *what)
 {
     printf("NETLINKMUSL FAIL (%s: errno %d)\n", what, errno);
     return 1;
 }
 
-/* `fail` for a function whose answer is a count or -1. */
+/** Report a failure as `fail` does, for a function that returns -1 for one. */
 static int failed(const char *what)
 {
     fail(what);
     return -1;
 }
 
-/* What the dumps found. */
+/* The first link the dump found, and the first socket's port id. */
 static int first_index;
 static char first_name[IF_NAMESIZE];
 static unsigned int port;
 
+/**
+ * Send a request of `type` with `flags` and NLM_F_REQUEST, sequence number
+ * `seq`, and the `len` bytes of `body`, at most 64. Returns 0, or -1 when the
+ * send was short or failed.
+ */
 static int request(int fd, int type, int flags, unsigned int seq, const void *body, int len)
 {
     struct {
@@ -193,7 +200,10 @@ static int request(int fd, int type, int flags, unsigned int seq, const void *bo
     return send(fd, &req, req.h.nlmsg_len, 0) == (ssize_t)req.h.nlmsg_len ? 0 : -1;
 }
 
-/* The address SIOCGIFADDR gives for the interface of index `index`. */
+/**
+ * Read into `*out` the address SIOCGIFADDR gives for the interface of index
+ * `index`. Returns 0, or -1.
+ */
 static int ioctl_addr(int index, struct in_addr *out)
 {
     struct ifreq ifr;
@@ -212,9 +222,12 @@ static int ioctl_addr(int index, struct in_addr *out)
     return rc;
 }
 
-/* A link of a dump: it has a name and the 25 counters of Linux's struct
- * rtnl_link_stats64, which iproute2 reads, and the first is kept for the
- * rows after the dumps. 0, or -1. */
+/**
+ * Check a link of a dump: it has a name and the 25 counters of Linux's struct
+ * rtnl_link_stats64, which iproute2 reads. With `first` set the link is kept
+ * in `first_index` and `first_name` for the rows after the dumps. Returns 0,
+ * or -1 after the failure is printed.
+ */
 static int link_ok(struct nlmsghdr *h, int first)
 {
     struct ifinfomsg *ifi = NLMSG_DATA(h);
@@ -244,8 +257,10 @@ static int link_ok(struct nlmsghdr *h, int first)
     return 0;
 }
 
-/* An address of a dump: its local address is the one SIOCGIFADDR gives for
- * its interface. 0, or -1. */
+/**
+ * Check an address of a dump: its local address is the one SIOCGIFADDR gives
+ * for its interface. Returns 0, or -1 after the failure is printed.
+ */
 static int addr_ok(struct nlmsghdr *h)
 {
     struct ifaddrmsg *ifa = NLMSG_DATA(h);
@@ -264,8 +279,11 @@ static int addr_ok(struct nlmsghdr *h)
     return 0;
 }
 
-/* A message of the dump of sequence `seq`, the `count`-th: 1 for its end,
- * 0 for a message that checks, -1 for one that does not. */
+/**
+ * Check the `count`-th message of the dump of sequence `seq`. Returns 1 for
+ * its end, 0 for a message that checks, and -1, after the failure is
+ * printed, for one that does not.
+ */
 static int dump_msg(struct nlmsghdr *h, unsigned int seq, int count)
 {
     if (h->nlmsg_seq != seq || h->nlmsg_pid != port || !(h->nlmsg_flags & NLM_F_MULTI)) {
@@ -317,8 +335,12 @@ static int dump(int fd, int type, unsigned int seq)
     }
 }
 
-/* The answer to a request that is not a dump: one message, whose type is
- * returned, with its error in `*error` for an NLMSG_ERROR. */
+/**
+ * Read the answer to a request that is not a dump: one message, with its
+ * error in `*error` for an NLMSG_ERROR and the link's index in `*index` for
+ * an RTM_NEWLINK. Returns the message's type, or -1 when the read is not one
+ * whole message.
+ */
 static int one_answer(int fd, int *index, int *error)
 {
     char buf[4096] __attribute__((aligned(4)));
@@ -340,8 +362,11 @@ static int one_answer(int fd, int *index, int *error)
     return h->nlmsg_type;
 }
 
-/* A socket of NETLINK_ROUTE into `*out`, and the port ids of it and of
- * two more. */
+/**
+ * Open a socket of NETLINK_ROUTE into `*out`, keep its port id in `port`, and
+ * check the port ids of it and of two more sockets. Returns 0, or 1 after the
+ * failure is printed.
+ */
 static int route_socket(int *out)
 {
     struct sockaddr_nl me;
@@ -377,6 +402,11 @@ static int route_socket(int *out)
     return 0;
 }
 
+/**
+ * Check the dumps of links, addresses and routes, and the answers to
+ * RTM_GETLINK and RTM_NEWADDR that are not dumps. Returns 0, or 1 after the
+ * failure is printed.
+ */
 static int requests(int fd)
 {
     struct ifinfomsg ifi;
@@ -410,7 +440,10 @@ static int requests(int fd)
     return 0;
 }
 
-/* Append a four-byte attribute of `type` to the body of `*len` bytes. */
+/**
+ * Append a four-byte attribute of `type` with the value at `value` to `body`
+ * of `*len` bytes, and add its eight bytes to `*len`.
+ */
 static void attr32(char *body, int *len, int type, const void *value)
 {
     struct rtattr a;
@@ -422,8 +455,10 @@ static void attr32(char *body, int *len, int type, const void *value)
     *len += 8;
 }
 
-/* Send a change with NLM_F_ACK and read its acknowledgement: its error, 0
- * when the change was made, or 1 for no acknowledgement. */
+/**
+ * Send a change with NLM_F_ACK and read its acknowledgement. Returns its
+ * error, 0 when the change was made, or 1 for no acknowledgement.
+ */
 static int ask(int fd, int type, int flags, unsigned int seq, const void *body, int len)
 {
     int index = -1, error = 1;
@@ -435,8 +470,11 @@ static int ask(int fd, int type, int flags, unsigned int seq, const void *body, 
     return error;
 }
 
-/* The first link's address taken away and given back, through RTM_DELADDR
- * and RTM_NEWADDR with SLIRP's prefix. */
+/**
+ * Check that the first link's address is EEXIST to add again, and is taken
+ * away and given back through RTM_DELADDR and RTM_NEWADDR with SLIRP's
+ * prefix. Returns 0, or 1 after the failure is printed.
+ */
 static int address_changes(int fd)
 {
     char body[48];
@@ -468,9 +506,12 @@ static int address_changes(int fd)
     return 0;
 }
 
-/* The default route through SLIRP's gateway, which the address's removal
- * may have taken with it, set and removed and set again, and the changes a
- * link here cannot hold refused. */
+/**
+ * Check the default route through SLIRP's gateway, which the address's
+ * removal may have taken with it, set and removed and set again; the link set
+ * up; and the errors for an MTU of 9000 and for forgetting a neighbour the
+ * cache does not have. Returns 0, or 1 after the failure is printed.
+ */
 static int route_changes(int fd)
 {
     char body[48];
@@ -531,7 +572,10 @@ static int route_changes(int fd)
 static int route_get(int fd, unsigned int seq, struct in_addr dst, int *type, int *oif,
                      unsigned int *gw);
 
-/** Whether the file `path` has the text `needle`. */
+/**
+ * Return 1 when the first 4 KiB of the file `path` contain `needle`, and 0
+ * otherwise.
+ */
 static int file_has(const char *path, const char *needle)
 {
     static char text[4096];
@@ -545,8 +589,12 @@ static int file_has(const char *path, const char *needle)
     return strstr(text, needle) != NULL;
 }
 
-/* A route to another network through SLIRP's gateway, added and removed;
- * one through a gateway no subnet has refused. */
+/**
+ * Check a route to another network through SLIRP's gateway, added, listed in
+ * /proc/net/route, and removed; one through a gateway no subnet has, which is
+ * ENETUNREACH; and a route on the link to that network, which `ip route get`
+ * takes. Returns 0, or 1 after the failure is printed.
+ */
 static int table_routes(int fd)
 {
     char body[64];
@@ -592,7 +640,11 @@ static int table_routes(int fd)
     return 0;
 }
 
-/* A second address and a permanent neighbour, each made and taken away. */
+/**
+ * Check a second address and a permanent neighbour, each made and taken away,
+ * then the routes of `table_routes`. Returns 0, or 1 after the failure is
+ * printed.
+ */
 static int table_changes(int fd)
 {
     char body[64];
@@ -647,9 +699,12 @@ static int table_changes(int fd)
     return table_routes(fd);
 }
 
-/* `ip route get ADDRESS`'s request, an rtmsg and the address's RTA_DST:
- * the answer's route type, output interface and gateway, 0 for none, into
- * `*type`, `*oif` and `*gw`; 0, or -1 for no route message. */
+/**
+ * Send `ip route get ADDRESS`'s request, an rtmsg and the RTA_DST of `dst`,
+ * and read the answer's route type, output interface and gateway, 0 for
+ * none, into `*type`, `*oif` and `*gw`. Returns 0, or -1 for no route
+ * message.
+ */
 static int route_get(int fd, unsigned int seq, struct in_addr dst, int *type, int *oif,
                      unsigned int *gw)
 {
@@ -693,8 +748,11 @@ static int route_get(int fd, unsigned int seq, struct in_addr dst, int *type, in
     return 0;
 }
 
-/* `ip route get` of the first link's address and of an address it reaches,
- * and the dumps of `ip rule` and `tc qdisc`. */
+/**
+ * Check `ip route get` of the first link's address and of an address it
+ * reaches, and the dumps of `ip rule` and `tc qdisc`. Returns 0, also when
+ * the first link has no address, or 1 after the failure is printed.
+ */
 static int lookups(int fd)
 {
     struct in_addr own, other;
@@ -722,9 +780,11 @@ static int lookups(int fd)
     return 0;
 }
 
-/* A dump request sent in a buffer longer than it, as iproute2's ip sends
- * RTM_GETROUTE: the zeros after it are no message, and the dump is answered
- * to its NLMSG_DONE. */
+/**
+ * Check a dump request sent in a buffer longer than it, as iproute2's ip
+ * sends RTM_GETROUTE: the zeros after it are no message, and the dump is
+ * answered to its NLMSG_DONE. Returns 0, or 1 after the failure is printed.
+ */
 static int padded(int fd)
 {
     union {
@@ -759,7 +819,10 @@ static int padded(int fd)
     }
 }
 
-/* The length of an answer before it is read, and an answer cut short. */
+/**
+ * Check the length of an answer before it is read, and an answer cut short.
+ * Returns 0, or 1 after the failure is printed.
+ */
 static int truncation(int fd)
 {
     struct ifinfomsg ifi;
@@ -791,6 +854,10 @@ static int truncation(int fd)
     return 0;
 }
 
+/**
+ * Check if_nametoindex of the first link, and SIOCGIFCONF without and with a
+ * buffer. Returns 0, or 1 after the failure is printed.
+ */
 static int interfaces(void)
 {
     struct ifconf ifc;
@@ -817,6 +884,11 @@ static int interfaces(void)
     return 0;
 }
 
+/**
+ * Check that a NETLINK_KOBJECT_UEVENT socket hears nothing, and that an unknown
+ * netlink protocol fails with EPROTONOSUPPORT. Returns 0, or 1 after the
+ * failure is printed.
+ */
 static int uevents(void)
 {
     struct sockaddr_nl sa;
