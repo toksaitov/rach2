@@ -7,7 +7,7 @@
  * the six arguments, each widened to 64 bits. The program may load those
  * words, compute in its accumulator A and index X with sixteen scratch
  * words, and jump only forward, so it always ends, at a return of the
- * action. The check at the install refuses anything else, as Linux's
+ * action. The check at the install rejects anything else, as Linux's
  * `seccomp_check_filter` does.
  */
 
@@ -54,7 +54,8 @@
  * call a filter trapped is ksignal.h's SIGSYS_SECCOMP. */
 
 /* Linux's limits: instructions in one program, and in a chain, each filter
- * counted with four more. */
+ * counted with four more; the scratch words; and the largest errno a
+ * filter's SECCOMP_RET_ERRNO gives. */
 #define BPF_MAXINSNS       4096u
 #define MAX_INSNS_PER_PATH 32768u
 #define BPF_MEMWORDS       16u
@@ -110,11 +111,14 @@ struct sock_filter {
     uint32_t k;
 };
 
+/* One installed filter. A chain is its newest filter, and a filter's
+ * `refs` counts the threads whose chain begins at it and each newer filter
+ * whose `prev` it is. */
 struct seccomp_filter {
     uint32_t refs;
-    struct seccomp_filter *prev;
+    struct seccomp_filter *prev; /* the next older filter, NULL for none */
     uint32_t len;
-    struct sock_filter insns[1];
+    struct sock_filter insns[1]; /* `len` of them, allocated past the end */
 };
 
 /* struct seccomp_data, in words: nr, arch, the instruction pointer's two
@@ -187,7 +191,9 @@ static int program_valid(const struct sock_filter *f, uint32_t len)
     return BPF_CLASS(f[len - 1].code) == BPF_RET;
 }
 
-/** The result of the arithmetic instruction `code` on `a` and `b`. */
+/** The result of the arithmetic instruction `code` on `a` and `b`. A
+ * division or remainder by zero sets `*divzero` and gives 0, and a shift by
+ * 32 or more gives 0. */
 static uint32_t alu(uint32_t code, uint32_t a, uint32_t b, int *divzero)
 {
     switch (BPF_OP(code)) {
@@ -370,11 +376,13 @@ static void seccomp_trap(isr_params_t *tf, uint32_t nr, uint32_t data)
 }
 
 /**
- * The tracer's turn for a call a filter answered with SECCOMP_RET_TRACE:
- * with PTRACE_O_TRACESECCOMP, a PTRACE_EVENT_SECCOMP stop with the data,
- * after which the call runs unless the tracer skipped it or the filters,
- * run again on what the tracer left, refuse it. Without a tracer that asked,
- * the call fails with ENOSYS. Returns 1 to run the call.
+ * The tracer's turn for a call a filter answered with SECCOMP_RET_TRACE: with
+ * PTRACE_O_TRACESECCOMP, a PTRACE_EVENT_SECCOMP stop with the data, after which
+ * the call runs unless the tracer skipped it with -1 for its number, SIGKILL
+ * came, or the filters, run again on the number the tracer left, return an
+ * action other than ALLOW, LOG or TRACE, and that action is taken. Without a
+ * tracer that set the option, the call fails with ENOSYS. Returns 1 to run the
+ * call, as `seccomp_permit` does.
  */
 static int seccomp_trace(isr_params_t *tf, uint32_t nr, uint32_t data, long *ret)
 {
@@ -443,8 +451,8 @@ int seccomp_permit(isr_params_t *tf, uint32_t nr, long *ret)
     }
 }
 
-/** Drop one reference to the chain from `f`, freeing each filter no one
- * else holds. */
+/** Drop one reference to the chain from `f`, freeing each filter no other
+ * thread or filter refers to. */
 static void chain_put(struct seccomp_filter *f)
 {
     while (f && --f->refs == 0) {
@@ -484,8 +492,8 @@ uint32_t seccomp_filter_count(const process_t *p)
 /**
  * The filter `struct sock_fprog` at the user address `uprog` describes,
  * checked and copied: its length and the program's address, then the
- * program. NULL with `*err` set: -EFAULT, -EINVAL for an empty, long or
- * refused program, or -ENOMEM.
+ * program. The filter is the caller's to free. NULL with `*err` set:
+ * -EFAULT, -EINVAL for an empty, long or invalid program, or -ENOMEM.
  */
 static struct seccomp_filter *filter_from_user(uintptr_t uprog, int32_t *err)
 {
@@ -537,7 +545,8 @@ static int chain_fits(const struct seccomp_filter *f, uint32_t extra)
     return total <= MAX_INSNS_PER_PATH;
 }
 
-/** Whether `f` is the chain `chain` or one of its older filters. */
+/** Whether `f` is the chain `chain` or one of its older filters; an empty
+ * `f` is in every chain. */
 static int chain_has(const struct seccomp_filter *chain, const struct seccomp_filter *f)
 {
     for (; chain; chain = chain->prev) {
@@ -592,7 +601,10 @@ static void tsync_apply(process_t *self)
  * Add the filter at the user address `uprog` to the current thread, with
  * `flags`: a caller without no_new_privs must be privileged, and under
  * TSYNC every thread of the process takes the new chain, unless one cannot,
- * whose id is returned, or -ESRCH with TSYNC_ESRCH.
+ * whose id is returned, or -ESRCH with TSYNC_ESRCH. 0; -EINVAL for an
+ * unknown flag or a thread in the strict mode, -EACCES without the
+ * privilege, -ENOMEM past the instructions of a chain, or an error of
+ * `filter_from_user`.
  */
 static int32_t set_mode_filter(uint32_t flags, uintptr_t uprog)
 {
@@ -663,19 +675,8 @@ int32_t seccomp_prctl_set(uint32_t mode, uintptr_t prog)
     return -EINVAL;
 }
 
-/**
- * seccomp takes the operation, its flags and its argument.
- *
- * SECCOMP_SET_MODE_STRICT, with no flags and no argument, leaves the thread
- * only read, write, exit and sigreturn; any other call kills it.
- * SECCOMP_SET_MODE_FILTER adds the filter `struct sock_fprog` describes.
- * SECCOMP_GET_ACTION_AVAIL returns 0 for an action the filters may return
- * and -EOPNOTSUPP for another, and SECCOMP_GET_NOTIF_SIZES stores Linux's
- * three sizes. SECCOMP_RET_USER_NOTIF is not one of the actions, since a
- * filter cannot be installed with a listener (SECCOMP_FILTER_FLAG_NEW_LISTENER
- * is refused with -EINVAL), and a filter that returns it fails the call with
- * ENOSYS, as Linux does without a listener.
- */
+/** The three sizes are those of Linux's `struct seccomp_notif`,
+ * `struct seccomp_notif_resp` and `struct seccomp_data`. */
 long sys_seccomp(isr_params_t *params)
 {
     uint32_t op = (uint32_t)SC_ARG(params, 0), flags = (uint32_t)SC_ARG(params, 1);
