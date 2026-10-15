@@ -19,8 +19,9 @@
  * it is SuperSpeed and no translator because nothing below it is slow, its
  * ports report three changes USB 2 has no feature numbers for, and a port
  * whose link has fallen to SS.Inactive is given a warm reset and what is on
- * it enumerated again. The USB 3.0 hub in the notebook's blue socket is two
- * devices, this one and a high-speed hub for the USB 2 devices.
+ * it enumerated again. A USB 3 hub is two devices on the bus, a SuperSpeed
+ * hub and a high-speed hub for the USB 2 devices, and each is driven here as
+ * a hub of its own.
  *
  * Everything the hub is asked is a control transfer on its endpoint zero,
  * one at a time per hub, stepped from the pump. Nothing here waits.
@@ -42,6 +43,9 @@
 static uint32_t hub_slow_ms;
 static int hub_slow_known;
 
+/** `rach2.hubslow` in milliseconds, read from the command line at the first
+ * call: its digits up to the first other character, or until the value
+ * reaches 100000. */
 static uint32_t hub_slow(void)
 {
     char value[16];
@@ -175,8 +179,8 @@ static uint32_t hub_slow(void)
 #define POWER_OFF_BIT           0x8000
 
 struct hub_port {
-    uint16_t status;
-    uint16_t change;
+    uint16_t status;        /* the port status word as last read */
+    uint16_t change;        /* the port change word as last read */
     int known;              /* the status has been read at least once */
     uint32_t connect_ms;    /* when the connection was first seen */
     int reset;              /* one of the RESET_ values */
@@ -202,29 +206,38 @@ struct hub {
     int ep_dci; /* the change endpoint */
     int state;
     int ports; /* from the descriptor, at most USB_HUB_PORT_MAX */
+    /* How its ports switch power, one of the `LPSM_` values; its think time,
+     * 0 to 3 for 8 to 32 full-speed bit times; and whether a translator per
+     * port was asked for and accepted. */
     int lpsm;
     int think_time;
     int multi_tt;
     int super; /* a SuperSpeed hub: the USB 3 descriptor, depth and status words */
     int depth; /* its tier below the root port, told to a SuperSpeed hub */
+    /* The power-good time from the descriptor, and the milliseconds left of
+     * a wait: the power-good time, or the pause between two ports of a scan. */
     uint32_t power_good_ms;
     int wait_fresh; /* the wait was set this tick; the tick is not counted */
     uint32_t wait_ms;
     int at;      /* the port being powered or scanned, numbered from one */
     int request; /* what the transfer in flight is for, or REQ_NONE */
+    /* The port it is for, numbered from one; its generation, which its
+     * completion must have; and how long it has been in flight. */
     int request_port;
     uint32_t tag;
     uint32_t request_ms;
     uint8_t setup[8];
-    uint8_t data[16];
-    /* The change endpoint: the transfer outstanding on it, the bitmap it
-     * answers with, and the ports whose bits arrived and are not yet dealt
-     * with, bit 0 being the hub itself. */
+    uint8_t data[16]; /* what the request sends or the hub answers */
+    /* The change endpoint: whether a transfer is outstanding on it, under
+     * the generation `change_tag`. */
     int change_out;
     uint32_t change_tag;
-    /* One bit per port plus the hub's own, so a hub with more ports than
-     * a byte holds still reports every one of them. */
+    /* The bitmap it answers with: one bit per port plus the hub's own, so a
+     * hub with more ports than a byte holds still reports every one of
+     * them. */
     uint8_t bitmap[(USB_HUB_PORT_MAX + 8) / 8];
+    /* The bits that arrived and are not yet dealt with, bit 0 being the hub
+     * itself. */
     uint32_t changes;
     int change_reading; /* the port whose status is being read for a change */
     struct hub_port port[USB_HUB_PORT_MAX];
@@ -274,9 +287,10 @@ static void hub_release(int i)
         hubs[i] = 0;
     }
 }
-static uint32_t hub_ms;
-static uint32_t tag_seed;
+static uint32_t hub_ms;   /* this driver's clock in milliseconds */
+static uint32_t tag_seed; /* the last generation given to a hub's transfer */
 
+/** The hub in use at the core's device index `index`, or NULL. */
 static struct hub *by_index(int index)
 {
     int i;
@@ -289,7 +303,12 @@ static struct hub *by_index(int index)
     return 0;
 }
 
-/** Send one control request on the hub's endpoint zero. */
+/**
+ * Send one control request on the hub's endpoint zero, under a generation of
+ * its own, with `h->data` as its data stage when `length` is not zero.
+ * `what` is the REQ_ value its answer is for and `port` the port it is for,
+ * numbered from one. Returns 0 when it was queued, -1 when it was not.
+ */
 static int request(struct hub *h, int type, int req, int value, int index, int length, int what,
                    int port)
 {
@@ -318,7 +337,8 @@ static int request(struct hub *h, int type, int req, int value, int index, int l
     return 0;
 }
 
-/** Keep a transfer on the change endpoint; its bitmap is the hub's report. */
+/** Keep a transfer on the change endpoint; its bitmap is the hub's report.
+ * Returns 0 when it was queued, -1 when it was not. */
 static int change_submit(struct hub *h)
 {
     struct usb_transfer transfer;
@@ -337,6 +357,8 @@ static int change_submit(struct hub *h)
     return 0;
 }
 
+/** Ask for the status of port `port`, numbered from one; 0 when it was
+ * queued. */
 static int port_status_read(struct hub *h, int port)
 {
     return request(h, TYPE_CLASS_PORT_IN, REQ_GET_STATUS, 0, port, 4, REQ_PORT_STATUS, port);
@@ -406,9 +428,12 @@ void hub_detach(int index)
     }
 }
 
-/** What the descriptor said; -1 when it is not the hub descriptor asked
- * for. The USB 3 descriptor keeps the port count, the characteristics and
- * the power-good time at the USB 2 offsets, and has no think time. */
+/** Take what the descriptor in `h->data`, `length` bytes, says; 0, or -1
+ * when it is not the hub descriptor asked for, is shorter than seven bytes
+ * or has no ports. The USB 3 descriptor keeps the port count, the
+ * characteristics and the power-good time at the USB 2 offsets, and has no
+ * think time. The power-good time is held between HUB_POWER_MIN_MS and
+ * HUB_POWER_MAX_MS. */
 static int take_descriptor(struct hub *h, int length)
 {
     int ports;
@@ -439,7 +464,9 @@ static int take_descriptor(struct hub *h, int length)
 }
 
 /**
- * Start powering the next port, or say there is none left.
+ * Start powering port `h->at`: 1 when the request went out, 0 when there is
+ * no port left, the hub cannot switch its ports, or the request could not go
+ * out and the hub was given up.
  *
  * Every port gets its own request whether the descriptor says the ports
  * switch together or one by one. On a ganged hub one request energises the
@@ -465,8 +492,9 @@ static int power_next(struct hub *h)
 /** Answer an over-current on a port: power it off and close what is
  * below, then power it on again once after a second, and leave it off with
  * a record when it recurs. Called from the first scan when the status
- * already shows the fault, and from a status read the change endpoint
- * prompted. */
+ * already shows the fault, and from a status read that the change endpoint
+ * or an acknowledgement prompted. The power-off is a request owed, sent by
+ * `clear_next`. */
 static void over_current(struct hub *h, int port)
 {
     struct hub_port *p = &h->port[port - 1];
@@ -498,10 +526,11 @@ static uint16_t change_mask(const struct hub *h)
 /**
  * Act on a port's link and enable changes, and start the device below.
  *
- * A link that went inactive on a SuperSpeed hub is warm reset; an enable lost
- * on a lower-speed hub closes the device below and starts the connect window
- * again. A connection change, or that lost enable, then starts enumeration
- * unless a warm reset is already in flight.
+ * A link that went inactive on a SuperSpeed hub is given a warm reset, owed
+ * until `step_hub` sends it; an enable lost on a USB 2 hub closes the device
+ * below and starts the connect window again. A connection change, or that
+ * lost enable, then starts enumeration unless a warm reset is owed or in
+ * flight. `now` is whether the status shows a connection.
  */
 static void port_link_change(struct hub *h, int port, uint16_t status, uint16_t change, int now)
 {
@@ -660,7 +689,8 @@ static int clear_next(struct hub *h, int port)
 }
 
 /**
- * The answer to the request in flight.
+ * Act on the answer `c` to the request in flight, one arm for each kind of
+ * request.
  *
  * After the descriptor, a SuperSpeed hub is told its tier, by which it routes
  * packets to its ports and which it must have before any port is used (USB
@@ -671,6 +701,13 @@ static int clear_next(struct hub *h, int port)
  * connections it found are told to the core, now that the hub can take a
  * reset; the running hub reads its change endpoint once every change bit the
  * scan found has been acknowledged.
+ *
+ * A change of the hub's local power or over-current is recorded and
+ * acknowledged, one for each answer. A port status read that fails gives the
+ * hub up during the scan or after an acknowledgement (`clear_next` says
+ * why), fails a reset in progress, and is otherwise dropped. A reset ends
+ * when the status no longer shows it: a port still enabled and connected has
+ * its reset change cleared and the reset done, and any other fails it.
  */
 static void answered(struct hub *h, const struct usb_completion *c)
 {
@@ -896,7 +933,8 @@ int hub_completion(const struct usb_completion *completion)
 }
 
 /**
- * One pass for one hub.
+ * One pass for one hub, `elapsed_ms` after the last: one arm per state of
+ * the hub as a whole.
  *
  * A request in flight is waited for, up to HUB_REQUEST_MS, and nothing else
  * is done. A wait set inside a tick, by a completion, does not count that
@@ -906,7 +944,10 @@ int hub_completion(const struct usb_completion *completion)
  * bit's acknowledgement, the status read after one, a warm reset, and the
  * port's power after an over-current; then the hub's own status for bit 0 of
  * the change report and a port's for its bit; then, with the change report
- * out again, the next step of a reset the core asked for.
+ * out again once the last answer is acted on, the next step of a reset the
+ * core asked for, one request at a time. A status read that cannot go out is
+ * owed again, its change bit put back; a warm reset that cannot go out is
+ * dropped.
  */
 static void step_hub(struct hub *h, uint32_t elapsed_ms)
 {
@@ -981,7 +1022,6 @@ static void step_hub(struct hub *h, uint32_t elapsed_ms)
                 if (port_status_read(h, i + 1) == 0) {
                     return;
                 }
-                /* The read could not go out: it is owed again. */
                 h->change_reading = 0;
             }
             if (p->warm_pending && p->to_clear == 0 && !p->recheck) {
@@ -1015,17 +1055,14 @@ static void step_hub(struct hub *h, uint32_t elapsed_ms)
                 if (port_status_read(h, i + 1) == 0) {
                     return;
                 }
-                /* The read could not go out: the bit is owed again. */
                 h->changes |= (uint32_t)1u << (i + 1);
                 h->change_reading = 0;
             }
         }
-        /* The report itself, out again once the last answer is acted on. */
         if (!h->change_out && change_submit(h) != 0) {
             give_up(h, "its change endpoint could not be read");
             return;
         }
-        /* The resets the core asked for, one request at a time. */
         for (i = 0; i < h->ports; i++) {
             struct hub_port *p = &h->port[i];
 
@@ -1064,10 +1101,10 @@ static void step_hub(struct hub *h, uint32_t elapsed_ms)
 }
 
 /**
- * Advance active hubs and release detached records after slot closure.
- *
- * A detached record remains unavailable for reuse while the controller
- * can access its control or interrupt-transfer buffers.
+ * A detached record remains unavailable for reuse while the controller can
+ * access its control or interrupt-transfer buffers, which is until the
+ * core's entry for the hub is free and its slot given back. A hub whose slot
+ * is never given back keeps its record.
  */
 void hub_step(uint32_t elapsed_ms)
 {
@@ -1118,6 +1155,8 @@ int hub_port_status(struct xhci_ctrl *hc, int owner, int port, struct usb_port_s
     return 0;
 }
 
+/** A scanning hub cannot reset a port, so a port settles only once the hub
+ * runs. */
 int hub_port_settled(struct xhci_ctrl *hc, int owner, int port)
 {
     struct hub *h = by_index(owner);
@@ -1129,7 +1168,6 @@ int hub_port_settled(struct xhci_ctrl *hc, int owner, int port)
         return 0;
     }
     p = &h->port[port];
-    /* A port settles only once the hub runs: a scanning hub cannot reset. */
     return h->state == HUB_RUNNING && p->known && (p->status & PORT_STAT_CONNECTION) != 0 &&
            hub_ms - p->connect_ms >= HUB_DEBOUNCE_MS;
 }

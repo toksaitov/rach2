@@ -246,25 +246,25 @@ rach2/sys/syscall_proc.c:exec_shebang complexity 30 one system call's contract, 
 rach2/sys/tty/n_tty.c:n_tty_receive complexity 33 a state machine, one arm per state, read as a table
 
 rach2/sys/usb/core.c:step_device complexity 79 a state machine, one arm per state, read as a table
-rach2/sys/usb/core.c:step_device lines 451 a state machine, one arm per state, read as a table
+rach2/sys/usb/core.c:step_device lines 413 a state machine, one arm per state, read as a table
 rach2/sys/usb/core.c:usb_core_step complexity 49 a state machine, one arm per state, read as a table
-rach2/sys/usb/core.c:usb_core_step lines 151 a state machine, one arm per state, read as a table
+rach2/sys/usb/core.c:usb_core_step lines 126 a state machine, one arm per state, read as a table
 rach2/sys/usb/core.c:usb_parse_config complexity 47 a parser over an external format, one check per field in the format's order
 
 rach2/sys/usb/hub.c:answered complexity 40 a state machine, one arm per state, read as a table
-rach2/sys/usb/hub.c:answered lines 185 a state machine, one arm per state, read as a table
+rach2/sys/usb/hub.c:answered lines 175 a state machine, one arm per state, read as a table
 rach2/sys/usb/hub.c:answered nesting 5 a state machine, one arm per state, read as a table
 rach2/sys/usb/hub.c:hub_attach params 8 the parameters are the fields of one packet or descriptor; a struct for them would be filled and unpacked once
 rach2/sys/usb/hub.c:request params 8 the parameters are the fields of one packet or descriptor; a struct for them would be filled and unpacked once
 rach2/sys/usb/hub.c:step_hub complexity 47 a state machine, one arm per state, read as a table
-rach2/sys/usb/hub.c:step_hub lines 160 a state machine, one arm per state, read as a table
+rach2/sys/usb/hub.c:step_hub lines 147 a state machine, one arm per state, read as a table
 rach2/sys/usb/hub.c:step_hub nesting 5 a state machine, one arm per state, read as a table
 
 rach2/sys/usb/msc.c:msc_completion complexity 45 a state machine, one arm per state, read as a table
-rach2/sys/usb/msc.c:msc_completion lines 175 a state machine, one arm per state, read as a table
+rach2/sys/usb/msc.c:msc_completion lines 154 a state machine, one arm per state, read as a table
 rach2/sys/usb/msc.c:msc_step complexity 31 a state machine, one arm per state, read as a table
 rach2/sys/usb/msc.c:step_command_done complexity 39 a state machine, one arm per state, read as a table
-rach2/sys/usb/msc.c:step_command_done lines 179 a state machine, one arm per state, read as a table
+rach2/sys/usb/msc.c:step_command_done lines 156 a state machine, one arm per state, read as a table
 
 rach2/sys/usb/xhci.c:event_dispatch complexity 55 a dispatcher, one arm per command, read as a table
 rach2/sys/usb/xhci.c:event_dispatch lines 176 a dispatcher, one arm per command, read as a table

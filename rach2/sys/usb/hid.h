@@ -1,8 +1,3 @@
-#ifndef _USB_HID_H_
-#define _USB_HID_H_
-
-#include "../lib/kint.h"
-
 /*
  * hid.h: the boot-protocol keyboard and mouse.
  *
@@ -13,6 +8,10 @@
  * need no describing. A device that offers no boot protocol is refused, and
  * the Readme says so.
  */
+#ifndef _USB_HID_H_
+#define _USB_HID_H_
+
+#include "../lib/kint.h"
 
 /** A device that reports as a boot keyboard. */
 #define HID_KEYBOARD 1
@@ -21,20 +20,25 @@
 #define HID_MOUSE 2
 
 /**
- * Take one report from a device.
+ * Take one report from a device, in the USB pump.
  *
- * `kind` is `HID_KEYBOARD` or `HID_MOUSE`, `slot` names the device so its
- * previous report can be found, and `length` is how much actually arrived. A
- * report shorter than its layout is dropped rather than read past.
+ * `device` is the core's table entry for the device plus one, 1 to
+ * USB_MAX_DEVICES, so its previous report can be found; any other value is
+ * ignored. `kind` is `HID_KEYBOARD` or `HID_MOUSE`, and `length` is how much
+ * actually arrived. A keyboard's report goes to the input layer as the set-1
+ * scancodes of the keys that went down or came up since its last report; a
+ * mouse's goes as one movement with its buttons. A report shorter than its
+ * layout is dropped rather than read past.
  */
 void hid_report(int device, int kind, const uint8_t *report, int length);
 
 /**
- * Say that a device has gone.
+ * Say that a device has gone, `device` numbered as for `hid_report`.
  *
  * Everything it was holding down is released. Without this a key held while
  * the keyboard is unplugged stays down for ever, because the release that
- * would have lifted it is on a device that is no longer there.
+ * would have lifted it is on a device that is no longer there. Nothing is
+ * done for a device that has not reported since it last went.
  */
 void hid_gone(int device);
 

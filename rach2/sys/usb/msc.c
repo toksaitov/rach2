@@ -10,19 +10,20 @@
  * Bringing a stick up is a sequence of such commands, and every step of it is
  * written from what real drives do rather than from the specification alone:
  * a drive answers `TEST UNIT READY` with a failure for a while after it is
- * plugged in, wants `REQUEST SENSE` after any failure before it will take the
- * next command, reports the address of its last block rather than a count,
+ * plugged in, takes no next command after a failure until `REQUEST SENSE`
+ * has been sent, reports the address of its last block rather than a count,
  * stalls `Get Max LUN` instead of answering it, hides its flash behind a
  * CD-ROM on a promotional drive, and crashes if it is reset at
- * initialisation, which is why reset here is recovery and nothing else.
+ * initialization, which is why reset here is recovery and nothing else.
  *
- * What this driver refuses, by name and in the record: a block size other
- * than 512, because the block layer's sectors are 512 bytes; a capacity of
- * all ones from `READ CAPACITY(16)`, which is not a capacity; and a device
- * whose unit does not finish initialization within ten seconds. A unit too
- * large for `READ(10)` is driven with the sixteen-byte commands. A stick that
- * offers only UAS never reaches this file: the core finds no interface it has
- * a driver for.
+ * What this driver passes over or refuses, by name and in the record: a unit
+ * whose blocks are not 512 bytes is passed over, because the block layer's
+ * sectors are 512 bytes; a capacity of all ones from `READ CAPACITY(16)`,
+ * which is not a capacity, refuses the device, and so does a unit that does
+ * not finish initialization within ten seconds. A unit too large for
+ * `READ(10)` is driven with the sixteen-byte commands. A stick that offers
+ * only UAS never reaches this file: the core finds no interface it has a
+ * driver for.
  */
 
 #include "msc.h"
@@ -79,7 +80,7 @@
  * direct-access device is a disk; anything else on a LUN is passed over. */
 #define SCSI_TYPE_DISK 0x00
 
-/* Sense keys, of which this driver acts on three and records the rest. */
+/* Sense keys, of which this driver acts on three. */
 #define SENSE_NOT_READY       0x02
 #define SENSE_ILLEGAL_REQUEST 0x05
 #define SENSE_UNIT_ATTENTION  0x06
@@ -115,13 +116,12 @@
 
 /*
  * Recovery, which the class defines as three things in this order: the reset
- * request, the halt cleared on the inward endpoint, then on the outward one.
- * A driver that cleared them the other way round leaves a device that
- * answers nothing again.
+ * request, the halt cleared on the inward endpoint, then on the outward one
+ * (Bulk-Only Transport 1.0, 5.3.4).
  *
- * The two clears are commands the controller executes, and the controller
- * takes one command at a time for the whole stack, so they go through the
- * core's turn rather than being issued here.
+ * The controller's half of each clear is a command, and the controller takes
+ * one command at a time for the whole stack, so it goes through the core's
+ * turn (`usb_core_clear_halt`) rather than being issued here.
  */
 #define RECOVER_NONE          0
 #define RECOVER_RESET         1
@@ -140,10 +140,12 @@
 #define RECOVER_CLEAR_OUT_DEV 7
 #define RECOVER_CLEAR_ONE_DEV 8
 
-/* Maximum time for one command transfer, in ms. */
+/* How long one transfer, one recovery step or one stop of the endpoints may
+ * take, in ms. */
 #define MSC_STEP_MS     10000u
-/* Maximum elapsed initialization time for each logical unit, in ms. */
+/* How long each logical unit may take to initialize, in ms. */
 #define MSC_READY_MS    10000u
+/* The pause before TEST UNIT READY is sent again, in ms. */
 #define MSC_TEST_GAP_MS 100u
 
 /* The most this driver moves in one command: 512 KiB, whose 129 pieces at
@@ -152,8 +154,9 @@
 #define MSC_REQ_SECTORS 1024u
 #define MSC_SECTOR_SIZE 512u
 
-/* How many requests may wait for one stick. The block layer's pool is
- * sixteen, one per process, so a queue of sixteen cannot overflow. */
+/* How many requests may wait for one stick. The block layer has at most
+ * sixteen requests live (`REQ_LIMIT`), so a queue of sixteen cannot
+ * overflow. */
 #define MSC_QUEUE 16
 
 /* How long a request has before the block layer gives up on it, in ticks of
@@ -166,9 +169,9 @@ struct msc_device;
 /** One logical unit of a stick: what it is and the device it is served as. */
 struct msc_lun {
     int present;
-    int index;
+    int index; /* its logical unit number */
     struct msc_device *owner;
-    uint64_t blocks;
+    uint64_t blocks; /* 512-byte blocks */
     uint32_t block_size;
     int write_protect;
     char serial[64]; /* the unit's serial page, or empty when it has none */
@@ -191,12 +194,18 @@ struct msc_device {
     int ep_in;
     int ep_out;
 
+    /* What the driver is doing with the stick, one of the `MSC_STATE_`
+     * values; the stage of the command in flight, one of the `STAGE_` values;
+     * the unit the next command addresses; and the highest unit number, from
+     * Get Max LUN. */
     int state;
     int stage;
     int lun;
     int max_lun;
     int recover;       /* one of the `RECOVER_` values */
     int after_recover; /* the one endpoint a single clear is for */
+    /* The command wrapper's tag, which its status wrapper repeats, and the
+     * milliseconds left for the transfer or step in flight. */
     uint32_t tag;
     uint32_t deadline;
     uint32_t ready_left; /* milliseconds left to initialize the current unit */
@@ -227,36 +236,37 @@ struct msc_device {
     uint32_t block_size;
     int write_protect;
 
-    /* The logical units that answered, each the block device it is
-     * published as, whose `drvdata` is its record; a command addresses
-     * `lun`. The request in flight on the stick and the ones waiting their
-     * turn: two processes may want one stick, since either can sleep inside
-     * a request while the other runs, so the requests are admitted in the
-     * order they arrived and served one at a time, the units sharing the
-     * one pipe; a flush waits its turn like a read, which is what puts it
-     * after every write before it. */
+    /* The logical units that answered, each with the block device it is
+     * published as, whose `drvdata` is the unit's record. */
     struct msc_lun luns[MSC_MAX_LUNS];
     int ready_luns;
+    /* The request in flight, and whether it is a flush. Two processes may
+     * want one stick, since either can sleep inside a request while the
+     * other runs, so the requests are admitted in the order they arrived,
+     * wait in `queue`, and are served one at a time, the units sharing the
+     * one pipe; a flush waits its turn like a read, which is what puts it
+     * after every write before it. */
     struct block_request *request;
     int flushing;
-    /* The controller's hold on the request's pages: set when the data
-     * transfer naming them is given to the controller, cleared only when
-     * the controller driver says the transfer is retired, which a terminal
-     * event, a stop or a reset with its dequeue, or Disable Slot answered
-     * establishes. A request is completed only after; a record is reclaimed
-     * only when the disk layer has let go and the slot has been closed. */
+    /* The controller's hold on the data stage's buffer, a request's pages or
+     * `scratch`: set when the data transfer naming it is given to the
+     * controller, cleared only when the controller driver says the transfer
+     * is retired, which a terminal event, a stop or a reset with its
+     * dequeue, or Disable Slot answered establishes. A request is completed
+     * only after; a record is reclaimed only when the disk layer has let go
+     * and the slot has been closed. */
     int owned;
     int slot_closed;
     int disk_released;
     uint32_t data_gen;   /* the data transfer's generation, held in the controller driver */
-    uint32_t expect_gen; /* the submission a completion must carry */
+    uint32_t expect_gen; /* the generation a completion must have */
     int expect_ep;       /* and the endpoint */
     uint32_t data_moved; /* bytes the data stage moved, kept apart from the wrapper's residue */
     int quiescing;       /* a timeout's stop: 1 bulk IN in progress, 2 bulk OUT */
     int finish_status;   /* the status the request is completed with once its transfer is retired */
     int finish_then;     /* 1: REQUEST SENSE follows the retirement, before the completion */
     int finish_command;  /* 1: the command's end is acted on after the retirement */
-    int recover_failed;  /* a clear of the recovery was refused */
+    int recover_failed;  /* cleared when recovery begins; nothing sets it */
     struct block_request *queue[MSC_QUEUE];
     int queue_flush[MSC_QUEUE];
     int queue_lun[MSC_QUEUE]; /* the unit each waiting request is for */
@@ -264,6 +274,8 @@ struct msc_device {
     int queue_count;
 };
 
+/* The driver's table: an entry is a stick from `msc_attach` until the disk
+ * layer has let go of it and its slot has been given back. */
 static struct msc_device sticks[MSC_MAX_DEVICES];
 
 /* The tag of the last command sent to any stick. Tags go up across every
@@ -272,9 +284,9 @@ static struct msc_device sticks[MSC_MAX_DEVICES];
  * same controller handle. */
 static uint32_t tag_seed;
 
-/* The one buffer a control transfer's setup packet is built in. One command
- * is in flight per stick and the class requests are part of that command, so
- * one per stick is enough. */
+/* The buffer each stick's control transfers have their setup packet built
+ * in. One command is in flight per stick and the class requests are part of
+ * that command, so one per stick is enough. */
 static uint8_t setup_buffer[MSC_MAX_DEVICES][8];
 
 static struct block_request *queue_take(struct msc_device *m, int *flush);
@@ -286,10 +298,10 @@ static void publish(struct msc_device *m, int lun);
 static void refuse(struct msc_device *m, const char *why);
 static void refuse_to_core(struct msc_device *m, const char *why);
 
-/*
- * The stick at `device` on `hc`. Slot numbers start at one on every
- * controller, so a machine with two of them has two sticks called slot one
- * and the controller is half of the name.
+/**
+ * The stick in use and not closing at slot `device` of `hc`, or NULL. Slot
+ * numbers start at one on every controller, so a machine with two of them
+ * has two sticks called slot one and the controller is half of the name.
  */
 static struct msc_device *by_device(struct xhci_ctrl *hc, int device)
 {
@@ -325,7 +337,7 @@ static struct msc_device *by_device_any(struct xhci_ctrl *hc, int device)
 
 /**
  * Give the controller a transfer under a generation of its own, and keep
- * the generation and the endpoint a completion must carry to be this
+ * the generation and the endpoint a completion must have to be this
  * transfer's: a completion for an earlier stage of the same command, on the
  * same endpoint, is told apart by it.
  */
@@ -384,11 +396,13 @@ static void setup_fill(struct msc_device *m, int type, int request, int value, i
     p[7] = (uint8_t)((length >> 8) & 0xFF);
 }
 
+/** The 32-bit value at `p`, little-endian as the wrappers have it. */
 static uint32_t read32(const uint8_t *p)
 {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
+/** Store `v` at `p`, little-endian. */
 static void write32(uint8_t *p, uint32_t v)
 {
     p[0] = (uint8_t)v;
@@ -397,11 +411,13 @@ static void write32(uint8_t *p, uint32_t v)
     p[3] = (uint8_t)(v >> 24);
 }
 
+/** The 32-bit value at `p`, big-endian as SCSI has it. */
 static uint32_t read32_be(const uint8_t *p)
 {
     return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | (uint32_t)p[3];
 }
 
+/** Store `v` at `p`, big-endian. */
 static void write32_be(uint8_t *p, uint32_t v)
 {
     p[0] = (uint8_t)(v >> 24);
@@ -411,11 +427,13 @@ static void write32_be(uint8_t *p, uint32_t v)
 }
 
 /**
- * Start one SCSI command: build its wrapper and submit it.
+ * Start one SCSI command to unit `m->lun`: build its wrapper under a new tag
+ * and submit it.
  *
- * `cdb` is the command block, `data` the buffer for its data stage and
- * `length` how many bytes that stage moves, zero for a command with none.
- * Returns 0 when the wrapper was submitted.
+ * `cdb` is the command block, 1 to 16 bytes, `data` the buffer for its data
+ * stage, `length` how many bytes that stage moves, zero for a command with
+ * none, and `data_in` whether they come in. Returns 0 when the wrapper was
+ * submitted, -1 otherwise.
  */
 static int command_begin(struct msc_device *m, const uint8_t *cdb, int cdb_length, uint8_t *data,
                          uint32_t length, int data_in)
@@ -461,7 +479,7 @@ static int command_begin(struct msc_device *m, const uint8_t *cdb, int cdb_lengt
 }
 
 /**
- * Submit the data stage of the command in flight.
+ * Submit the data stage of the command in flight; 0 when it was submitted.
  *
  * The buffer is the controller's from here, a request's pages and the
  * record's own scratch alike: the controller driver's record of the transfer
@@ -486,7 +504,8 @@ static int data_begin(struct msc_device *m)
     return 0;
 }
 
-/** Submit the status wrapper of the command in flight. */
+/** Submit the status wrapper of the command in flight; 0 when it was
+ * submitted. */
 static int status_begin(struct msc_device *m)
 {
     struct usb_transfer transfer;
@@ -508,9 +527,10 @@ static int status_begin(struct msc_device *m)
 }
 
 /**
- * Ask the device to clear the halt on the endpoint with DCI `dci`: the
- * standard request, on the control endpoint, expected like any other
- * transfer. The endpoint address is the number with the direction bit.
+ * Ask the device to clear the halt on the endpoint with device context index
+ * `dci`: the standard request, on the control endpoint, expected like any
+ * other transfer. The endpoint address is the number with the direction bit.
+ * Returns 0 when it was submitted.
  */
 static int send_clear_halt(struct msc_device *m, int dci)
 {
@@ -529,16 +549,16 @@ static int send_clear_halt(struct msc_device *m, int dci)
     return 0;
 }
 
-/** As `recover_begin`, and says what the controller reported. */
 static void recover_with_code(struct msc_device *m, const char *why, int code);
 
 /**
- * Begin reset recovery: the class reset, the halt cleared on the inward
- * endpoint, then on the outward one, and then the command is failed.
+ * Begin reset recovery, with `why` in the record: the class reset, the halt
+ * cleared on the inward endpoint, then on the outward one, in the order the
+ * specification gives, and then the command is failed with a phase error.
  *
- * The specification's order is exactly this, and a driver that cleared the
- * outward endpoint first leaves a device that answers nothing again. A reset
- * that cannot be sent fails the command with a phase error at once.
+ * Only the reset is sent here; its completion and `step_recovery` take the
+ * rest. A reset that cannot be sent fails the command with a phase error at
+ * once.
  */
 static void recover_begin(struct msc_device *m, const char *why)
 {
@@ -563,6 +583,8 @@ static void recover_begin(struct msc_device *m, const char *why)
     m->deadline = MSC_STEP_MS;
 }
 
+/** As `recover_begin`, with the controller's completion `code` recorded
+ * first. */
 static void recover_with_code(struct msc_device *m, const char *why, int code)
 {
     klog(KLOG_WARN, "usbdisk", "device %d: %s: completion code %d", m->device, why, code);
@@ -578,7 +600,9 @@ static void recover_with_code(struct msc_device *m, const char *why, int code)
  * on through the core, then the device's half, a CLEAR_FEATURE(ENDPOINT_HALT)
  * request. A controller half that fails leaves an endpoint that moves nothing
  * again, so the stick is refused and handed to the core, whose port reset
- * brings it back as a new device.
+ * brings it back as a new device. The class reset and the device's half of
+ * each clear are requests, whose completions `msc_completion` acts on; here
+ * they are only waited for.
  */
 static int step_recovery(struct msc_device *m)
 {
@@ -589,7 +613,7 @@ static int step_recovery(struct msc_device *m)
         return 0;
 
     case RECOVER_RESET:
-        return 1; /* the reset request's own completion moves this on */
+        return 1;
 
     case RECOVER_CLEAR_IN:
     case RECOVER_CLEAR_OUT:
@@ -619,7 +643,7 @@ static int step_recovery(struct msc_device *m)
     case RECOVER_CLEAR_IN_DEV:
     case RECOVER_CLEAR_OUT_DEV:
     case RECOVER_CLEAR_ONE_DEV:
-        return 1; /* the request's completion moves this on */
+        return 1;
 
     case RECOVER_CLEAR_CONTROL:
         answer = usb_core_clear_halt(m->hc, m->device, 1);
@@ -640,7 +664,8 @@ static int step_recovery(struct msc_device *m)
     }
 }
 
-/** The command ended, well or badly; whoever asked for it is told by state. */
+/** End the command in flight with `status`, a status wrapper's status byte;
+ * `msc_step` acts on it by the stick's state. */
 static void command_end(struct msc_device *m, int status)
 {
     m->stage = STAGE_DONE;
@@ -768,9 +793,7 @@ static int step_quiesce(struct msc_device *m)
     return 0;
 }
 
-/**
- * Finish the block request in flight, if there is one, with `status`.
- */
+/** Complete the block request in flight, if there is one, with `status`. */
 static void request_end(struct msc_device *m, int status)
 {
     struct block_request *r = m->request;
@@ -817,9 +840,6 @@ int msc_attach(struct xhci_ctrl *hc, int device, int interface, int ep_in, int e
 }
 
 /**
- * A stick has gone: end its recovery, fail its waiting requests, tell the
- * disk layer, and keep its record.
- *
  * A request whose pages the controller may still reach is kept until Disable
  * Slot is answered, which `msc_slot_closed` reports; the rest fail now. The
  * record line names the stage the kept request is in, which `tests/run usb`
@@ -855,11 +875,9 @@ void msc_detach(struct xhci_ctrl *hc, int device)
 }
 
 /**
- * The controller has given the stick's slot back: fail a request kept
- * through the pull, and free the record if the disk layer has let go too.
- *
  * The record line for the failed request is what `tests/run usb` reads: a
- * request kept through the pull is failed here and not at the pull.
+ * request kept through the pull is failed here and not at the pull. Found
+ * by `by_device_any`, since the record is closing.
  */
 void msc_slot_closed(struct xhci_ctrl *hc, int device)
 {
@@ -881,12 +899,10 @@ void msc_slot_closed(struct xhci_ctrl *hc, int device)
 }
 
 /**
- * Free the record of a gone stick whose device nothing holds any more.
- *
- * Called by the disk layer and by nothing else: it is the one place that
- * knows the teardown count reached zero. The record goes once the controller
- * has let go as well, which Disable Slot's answer says; a slot never given
- * back keeps the record, its request and its pages, and the log says so.
+ * The disk layer is the one place that knows the teardown count reached
+ * zero. The record goes once the controller has let go as well, which
+ * Disable Slot's answer says; a slot never given back keeps the record, its
+ * request and its pages, and the log says so.
  */
 void msc_release(int index)
 {
@@ -913,11 +929,6 @@ int msc_ready(int index)
     return sticks[index].used && !sticks[index].closing && sticks[index].state == MSC_STATE_READY;
 }
 
-/**
- * The identity of unit `lun` of stick `index`, for `/proc/usb` and the
- * disk registry: INQUIRY's strings, the unit's serial page, its capacity
- * and its state. -1 for a stick or a unit that is not there.
- */
 int msc_lun_ident(int index, int lun, struct msc_ident *out)
 {
     struct msc_device *m;
@@ -969,8 +980,6 @@ int msc_count(void)
 }
 
 /**
- * Take a completion that is a stick's, returning 1, or return 0.
- *
  * A gone stick's completions are taken and dropped until its slot is given
  * back; after that the controller can post nothing of its own, and a
  * completion naming the slot is a new device's. A completion for a submission
@@ -981,14 +990,17 @@ int msc_count(void)
  * A class reset that fails leaves the control endpoint halted and the stick in
  * a state this driver cannot read, so the stick is handed to the core; one
  * that succeeds is followed by the two clears, since an endpoint left halted
- * moves nothing again. When the clears are done the command recovery was for
- * is failed and the device can take the next one. A class request is one
- * transfer, and a stall is an answer of its own: a drive that will not say
- * how many logical units it has, has one. The stall halts the control
- * endpoint, which is moved on before the next transfer on it (xHCI 1.2,
- * 4.8.3). A halted data endpoint is cleared and the status wrapper read, since
- * the stick still has one to give and it says how much of the transfer it
- * did.
+ * moves nothing again. The controller's half of each clear is a command,
+ * which `msc_step` turns, so a completion that arrives during it is taken and
+ * ignored. When the clears are done the command recovery was for is failed
+ * and the device can take the next one.
+ *
+ * A class request is one transfer, and a stall is an answer of its own: a
+ * drive that will not say how many logical units it has, has one. The stall
+ * halts the control endpoint, which is moved on before the next transfer on
+ * it (xHCI 1.2, 4.8.3). A halted data endpoint is cleared and the status
+ * wrapper read, since the stick still has one to give and it says how much of
+ * the transfer it did.
  */
 int msc_completion(const struct usb_completion *completion)
 {
@@ -1021,7 +1033,6 @@ int msc_completion(const struct usb_completion *completion)
     }
     if (m->recover == RECOVER_CLEAR_IN_DEV || m->recover == RECOVER_CLEAR_OUT_DEV ||
         m->recover == RECOVER_CLEAR_ONE_DEV) {
-        /* The device's clear has answered. */
         int which = m->recover;
 
         if (completion->status != USB_XFER_OK) {
@@ -1044,7 +1055,7 @@ int msc_completion(const struct usb_completion *completion)
         return 1;
     }
     if (m->recover != RECOVER_NONE) {
-        return 1; /* the clears are commands, and `msc_step` turns them */
+        return 1;
     }
 
     switch (m->stage) {
@@ -1152,7 +1163,7 @@ int msc_completion(const struct usb_completion *completion)
 /* bringing a stick up, and serving it */
 
 /** Send one class request that reads `length` bytes into `data`: the one
- * sent is `Get Max LUN`. */
+ * sent is `Get Max LUN`. Returns 0 when it was submitted. */
 static int class_request_in(struct msc_device *m, int request, uint8_t *data, int length)
 {
     struct usb_transfer transfer;
@@ -1183,6 +1194,8 @@ static void cdb_clear(uint8_t *cdb, int length)
     }
 }
 
+/** Send TEST UNIT READY, which has no data stage. The `send_` functions
+ * return what `command_begin` returns. */
 static int send_test_unit_ready(struct msc_device *m)
 {
     uint8_t cdb[6];
@@ -1192,6 +1205,7 @@ static int send_test_unit_ready(struct msc_device *m)
     return command_begin(m, cdb, 6, 0, 0, 0);
 }
 
+/** Send REQUEST SENSE for 18 bytes of fixed-format sense into `scratch`. */
 static int send_request_sense(struct msc_device *m)
 {
     uint8_t cdb[6];
@@ -1202,6 +1216,7 @@ static int send_request_sense(struct msc_device *m)
     return command_begin(m, cdb, 6, m->scratch, 18, 1);
 }
 
+/** Send INQUIRY for its 36-byte standard answer into `scratch`. */
 static int send_inquiry(struct msc_device *m)
 {
     uint8_t cdb[6];
@@ -1214,7 +1229,8 @@ static int send_inquiry(struct msc_device *m)
 
 /** INQUIRY's vital product data page 0x80, the unit serial number, which
  * is what a person names a stick by; a device without the page answers
- * with an error, and the serial is left empty. */
+ * with an error, and the serial is left empty. `scratch` is cleared first,
+ * so a short answer leaves zeros and not the last command's bytes. */
 static int send_inquiry_serial(struct msc_device *m)
 {
     uint8_t cdb[6];
@@ -1222,7 +1238,7 @@ static int send_inquiry_serial(struct msc_device *m)
     int i;
 
     for (i = 0; i < (int)sizeof(m->scratch); i++) {
-        m->scratch[i] = 0; /* a short answer leaves blanks, not the last command's bytes */
+        m->scratch[i] = 0;
     }
     cdb_clear(cdb, 6);
     cdb[0] = SCSI_INQUIRY;
@@ -1232,6 +1248,8 @@ static int send_inquiry_serial(struct msc_device *m)
     return command_begin(m, cdb, 6, m->scratch, 64, 1);
 }
 
+/** Send READ CAPACITY(10), whose 8-byte answer is the last block's address
+ * and the block size. */
 static int send_read_capacity(struct msc_device *m)
 {
     uint8_t cdb[10];
@@ -1253,6 +1271,8 @@ static int send_read_capacity16(struct msc_device *m)
     return command_begin(m, cdb, 16, m->scratch, 32, 1);
 }
 
+/** Send MODE SENSE(6) for the 4-byte header, whose byte 2 has the write
+ * protect bit. */
 static int send_mode_sense(struct msc_device *m)
 {
     uint8_t cdb[6];
@@ -1290,6 +1310,7 @@ static int send_read_write(struct msc_device *m, struct block_request *r)
     return command_begin(m, cdb, 10, r->page, r->count * MSC_SECTOR_SIZE, !r->write);
 }
 
+/** Send SYNCHRONIZE CACHE(10) for the whole unit. */
 static int send_synchronize(struct msc_device *m)
 {
     uint8_t cdb[10];
@@ -1423,12 +1444,19 @@ static void serve_end(struct msc_device *m, int status)
 }
 
 /**
- * What to do with a command that has ended, given what it was for.
+ * Act on a command that has ended, by what it was for: one arm per state of
+ * the stick, each setting the state whose command `step_idle` sends next.
  *
  * A drive that stalls `Get Max LUN` has one logical unit, which is what most
- * sticks do, and an answer above fifteen is taken as one unit too. A drive
- * answers a failed TEST UNIT READY with a sense that says why, and takes no
- * next command until it has been asked for it. A drive that refuses the MODE
+ * sticks do, and an answer above fifteen is taken as one unit too. A unit
+ * that fails INQUIRY, is not a disk, or has blocks other than 512 bytes is
+ * passed over; one that will not report its capacity refuses the stick. A
+ * drive answers a failed TEST UNIT READY with a sense that says why, and
+ * takes no next command until it has been asked for it; a unit with no
+ * medium in it (NOT READY, additional sense code 0x3A) is passed over, and
+ * any other sense has TEST UNIT READY sent again after MSC_TEST_GAP_MS, until
+ * the unit's time runs out. A unit without the serial page answers with a
+ * failure, whose sense is read in the same way. A drive that refuses the MODE
  * SENSE page has no write protection to report, which is the ordinary answer
  * and not a failure.
  *
@@ -1520,7 +1548,7 @@ static void step_command_done(struct msc_device *m)
             uint32_t size = read32_be(&m->scratch[4]);
 
             if (last == 0xFFFFFFFFu) {
-                /* READ CAPACITY(16) gives the count when this is all ones. */
+                /* All ones: READ CAPACITY(16) has the last block's address. */
                 m->state = MSC_STATE_CAPACITY16;
                 return;
             }
@@ -1528,7 +1556,7 @@ static void step_command_done(struct msc_device *m)
                 next_lun(m, "its blocks are not 512 bytes");
                 return;
             }
-            /* The field is the address of the last block, not a count. */
+            /* The field is the last block's address; the count is one more. */
             m->blocks = (uint64_t)last + 1u;
             m->block_size = size;
         }
@@ -1602,7 +1630,8 @@ static void step_command_done(struct msc_device *m)
     }
 }
 
-/** Start whatever this stick should be doing next. */
+/** Send the command this stick's state calls for; one that cannot be sent is
+ * tried again on the next pass. */
 static void step_idle(struct msc_device *m)
 {
     switch (m->state) {
@@ -1682,11 +1711,12 @@ static void step_timeout(struct msc_device *m)
 }
 
 /**
- * Charge all initialization stages to the current unit's elapsed deadline.
+ * Charge `elapsed_ms` to the unit being brought up, and refuse the stick
+ * through the core when its MSC_READY_MS have run out: 1 when it was refused.
  *
- * Unit zero includes Get Max LUN; later units start at INQUIRY. Expiry
- * closes the device through the core, which retains any DMA buffers until
- * the controller releases the slot.
+ * Every stage of bring-up counts. Unit zero's time includes Get Max LUN;
+ * each later unit's starts at its INQUIRY. The core's close of the device
+ * keeps any buffer the controller can reach until the slot is given back.
  */
 static int initialization_expired(struct msc_device *m, uint32_t elapsed_ms)
 {
@@ -1703,8 +1733,6 @@ static int initialization_expired(struct msc_device *m, uint32_t elapsed_ms)
 }
 
 /**
- * One pass over every stick, from the core's pass.
- *
  * A command that ended with its data transfer still held has that transfer
  * retired and released before its end is acted on, so no buffer is reused
  * while the controller can reach it. The deadline runs through a stop, a
@@ -1779,7 +1807,8 @@ void msc_step(uint32_t elapsed_ms)
 
 /* the stick as a block device */
 
-/** Put a request at the end of this stick's queue. */
+/** Put request `r`, a flush or not, for unit `lun` at the end of this
+ * stick's queue; -1 when the queue is full. */
 static int queue_put(struct msc_device *m, struct block_request *r, int flush, int lun)
 {
     int at;
@@ -1812,7 +1841,8 @@ static struct block_request *queue_take(struct msc_device *m, int *flush)
     return r;
 }
 
-/** Fail everything waiting, which is what a stick that has gone leaves. */
+/** Complete every waiting request with `status`, as a stick that has gone or
+ * been refused leaves them. */
 static void queue_drain(struct msc_device *m, int status)
 {
     int flush;
@@ -1834,12 +1864,13 @@ static void queue_drain(struct msc_device *m, int status)
  * write-protected unit fails with -EROFS, and a request past the unit's end,
  * or one the full queue has no room for, with -EIO.
  *
- * This is the one entry from a process, and everything else that touches the
- * stick runs in the pump with interrupts off, so this runs with them off too.
- * The emulator completes a transfer inside the doorbell write, so without
- * that the interrupt for a wrapper could arrive before the stage that sent it
- * was recorded, the pump would find an idle stick with a completion for it,
- * and the next wrapper would go out into the middle of the command.
+ * This and `msc_block_flush` are the entries from a process, and everything
+ * else that touches the stick runs in the pump with interrupts off, so these
+ * run with them off too. The emulator completes a transfer inside the
+ * doorbell write, so without that the interrupt for a wrapper could arrive
+ * before the stage that sent it was recorded, the pump would find an idle
+ * stick with a completion for it, and the next wrapper would go out into the
+ * middle of the command.
  */
 static int msc_block_submit(block_device_t *device, struct block_request *request)
 {
@@ -1878,7 +1909,8 @@ static int msc_block_submit(block_device_t *device, struct block_request *reques
  *
  * A stick with nothing to flush answers `ILLEGAL REQUEST`, which is a stick
  * with no cache and not a failure; anything else is one, and the caller's
- * sync or unmount fails with it.
+ * sync or unmount fails with it. Interrupts are off for the reason
+ * `msc_block_submit` gives.
  */
 static int msc_block_flush(block_device_t *device, struct block_request *request)
 {
@@ -1890,7 +1922,7 @@ static int msc_block_flush(block_device_t *device, struct block_request *request
     if (m == 0 || !m->used || m->state != MSC_STATE_READY || !u->present) {
         return -EIO;
     }
-    flags = kirq_save(); /* as in `msc_block_submit` */
+    flags = kirq_save();
     if (m->request == 0 && m->stage == STAGE_IDLE) {
         m->request = request;
         m->flushing = 1;

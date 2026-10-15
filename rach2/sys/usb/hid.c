@@ -60,7 +60,7 @@ static const uint16_t modifier_scancode[8] = {0x1D,       0x2A, 0x38,       EXT 
 /* What each device was reporting last time, one per entry of the core's
  * device table, indexed from one. */
 struct hid_state {
-    int used;
+    int used; /* it has reported since it last went */
     uint8_t modifiers;
     uint8_t keys[KEYS_IN_REPORT];
 };
@@ -68,8 +68,9 @@ struct hid_state {
 static struct hid_state states[USB_MAX_DEVICES + 1];
 
 /**
- * Send a scancode, in the two-byte form where the usage asks for one, then
- * take the third of the four stamps the latency record prints.
+ * Send a scancode, pressed or `released`, in the two-byte form when `code`
+ * has EXT set, then take the third of the four stamps the latency record
+ * prints. A usage with no scancode, zero in the table, sends nothing.
  */
 static void send_code(uint16_t code, int released)
 {
@@ -117,8 +118,6 @@ static void keyboard_report(struct hid_state *state, const uint8_t *report)
     uint8_t modifiers = report[0];
     const uint8_t *keys = &report[2];
     int i;
-
-    /* The modifier byte is read even from an error report. */
 
     for (i = 0; i < 8; i++) {
         uint8_t bit = (uint8_t)(1u << i);
@@ -169,7 +168,7 @@ void hid_report(int device, int kind, const uint8_t *report, int length)
 
     if (kind == HID_KEYBOARD) {
         if (length < KEYBOARD_REPORT) {
-            return; /* less than the layout: nothing here can be trusted */
+            return;
         }
         keyboard_report(state, report);
         return;
