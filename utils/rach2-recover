@@ -174,13 +174,14 @@ restore_image() {
     }
     want=""
     if [ -f "$image.sha256" ]; then
-        want=$(cut -d' ' -f1 < "$image.sha256")
+        hashfile=$image.sha256
+        want=$(cut -d' ' -f1 < "$hashfile")
     else
-        here=$(dirname "$image")
-        if [ -f "$here/rach2-install.manifest" ] &&
-            [ "$(sed -n 's/^image //p' "$here/rach2-install.manifest")" = "$(basename "$image")" ]
+        hashfile=$(dirname "$image")/rach2-install.manifest
+        if [ -f "$hashfile" ] &&
+            [ "$(sed -n 's/^image //p' "$hashfile")" = "$(basename "$image")" ]
         then
-            want=$(sed -n 's/^sha256 //p' "$here/rach2-install.manifest")
+            want=$(sed -n 's/^sha256 //p' "$hashfile")
         fi
     fi
     [ -n "$want" ] || {
@@ -205,7 +206,7 @@ $(($(disk_field "$n" 5) * 512)) bytes, $(disk_field "$n" 3), table $(disk_field 
     say "reading the image to check it against its hash"
     got=$(dd if="$image" bs=1048576 2>/dev/null | sha256sum | cut -d' ' -f1)
     [ "$got" = "$want" ] || {
-        warn "the image hashes to $got and its manifest says $want; nothing was written"
+        warn "the image hashes to $got and $hashfile says $want; nothing was written"
         return 0
     }
     reflash -p "$target" 0 "$bytes" < "$image" || {
