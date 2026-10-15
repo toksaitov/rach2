@@ -1,12 +1,7 @@
 /*
- * ethernet.c - Ethernet frame parsing and construction.
- *
- * ethernet_rx dispatches a received frame to ARP or IP by EtherType, offering
- * every ARP and IPv4 frame to the packet sockets on the way past, and drops
- * everything while the interface is down.
- * ethernet_tx prepends the 14-byte header and hands the frame to the driver.
- * Every frame passes one of the two, so they keep the interface's counters
- * that /proc/net/dev reads.
+ * ethernet.c: the link layer, as ethernet.h describes it: the received
+ * frame given to ARP or IP by its EtherType, the frame sent built around its
+ * payload, and the interface's counters, which both keep.
  */
 
 #include "../../klog.h"
@@ -24,18 +19,14 @@
 static uint8_t eth_tx_frame[ETH_HDR_SIZE + 1500];
 
 /**
- * Dispatch a received Ethernet frame to ARP or IP by EtherType.
- *
- * The EtherType is the big-endian 16-bit field at bytes 12..13 of the header.
- * Each protocol handler receives only the payload (the bytes after the 14-byte
- * header), so it never needs to know about Ethernet; the packet-socket tap is
- * given the whole frame, since the addresses in the header are part of what it
- * reports. The tap sees each ARP and IPv4 frame first and unconditionally,
- * since ip_rx drops what is not addressed to this machine, which is every
- * reply a DHCP client waits for; the kernel's own handler still runs after
- * it. Frames shorter than a header are dropped, and so is every frame while
- * an administrator has the interface down, since ethernet_tx would send no
- * reply.
+ * The EtherType is the big-endian 16-bit field at bytes 12 and 13 of the
+ * header. ARP and IP are given the payload alone, the bytes after the
+ * header, and the packet sockets the whole frame, since the addresses in
+ * the header are part of what they report. The packet sockets see each ARP
+ * and IPv4 frame first and whatever its destination, since `ip_rx` drops
+ * what is not addressed to this machine, which is every reply a DHCP client
+ * waits for. Every frame on an interface that is down is dropped, since
+ * `ethernet_tx` would send no reply.
  */
 void ethernet_rx(struct netdev *nd, const uint8_t *data, uint16_t len)
 {
@@ -70,19 +61,13 @@ void ethernet_rx(struct netdev *nd, const uint8_t *data, uint16_t len)
 }
 
 /**
- * Build an Ethernet frame and hand it to the driver.
- *
- * Prepends the 14-byte header (destination MAC, the interface's own MAC as the
- * source, and the big-endian EtherType) ahead of the payload and hands it to
- * the driver of `out`. The payload must fit the 1500-byte MTU; an oversize
- * payload is dropped, not truncated. An interface an administrator took down
- * sends no IP and no ARP, but netconsole frames still leave: the log of a
- * machine whose network was just misconfigured is the one most worth having.
- * A card that says its link is down is given nothing, as Linux gives a card
- * nothing while its carrier is off: the frame could not leave, and a card
- * such as the RTL8168 counts each one it is given as a transmit error.
- * Both refusals count as transmit drops. A frame is counted as sent only once
- * the driver has taken it.
+ * An interface an administrator took down sends no IP and no ARP, but a
+ * frame of another EtherType, such as netconsole's, still leaves: the log of
+ * a machine whose network was just configured wrong is the one most worth
+ * having. A card that says its link is down is given nothing, as Linux
+ * gives a card nothing while its carrier is off: the frame could not leave,
+ * and a card such as the RTL8168 counts each one it is given as a transmit
+ * error.
  */
 int ethernet_tx(struct netdev *out, const uint8_t *dst_mac, uint16_t ethertype,
                 const uint8_t *payload, uint16_t plen)
@@ -90,7 +75,7 @@ int ethernet_tx(struct netdev *out, const uint8_t *dst_mac, uint16_t ethertype,
     uint16_t total;
 
     if (!out) {
-        return NETDEV_TX_DROPPED; /* no interface reaches that address */
+        return NETDEV_TX_DROPPED;
     }
 
     if (plen > 1500) {

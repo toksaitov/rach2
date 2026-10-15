@@ -1,10 +1,7 @@
 /*
- * net_core.c - Network stack bring-up, byte order helpers and the lock.
- *
- * init_network() empties the TCP and socket lists, probes for network
- * devices and gives them their addresses. Which device answers belongs to
- * the driver table (driver/netdev.c), not to this layer. The other layers
- * keep their state in zero-initialized statics and need no explicit init.
+ * net_core.c: the network stack's bring-up and boot report, the big-endian
+ * field helpers of byteorder.h, and the network lock, as net.h describes
+ * them.
  */
 
 #include "../../lib/kirq.h"
@@ -18,7 +15,7 @@
 #include "../socket/socket.h"
 #include "../../serial.h"
 
-/* The first interface's hardware address; netdev_probe copies it in. */
+/* The first interface's station address, which netdev_probe copies in. */
 uint8_t net_mac[6] = {0, 0, 0, 0, 0, 0};
 
 struct net_mib net_mib;
@@ -48,17 +45,13 @@ void write32be(uint8_t *p, uint32_t value)
 }
 
 /**
- * Bring the network stack up and start the NICs.
- *
- * The TCB and socket lists are emptied before the device probe, so they are
- * ready before a NIC can deliver the first packet. ARP, IP, and ICMP keep
- * their state in zero-initialized statics and need no explicit init. Which
- * card answers is the driver table's business (driver/netdev.c), not this
- * layer's. The boot line's address was read before there was an interface
- * to put it on, so it is published once the probe has brought one up, and
- * the `rach2.ifaddr=` entries are applied after it.
- *
- * @return 1 when at least one interface came up, 0 when none did.
+ * The TCP and socket lists are emptied before the probe, so that they are
+ * ready before a card can deliver its first frame; ARP, IP, ICMP and UDP
+ * keep their state in statics that start zeroed. Which cards come up is the
+ * driver table's (`netdev_probe`). The boot line's address was read before
+ * there was an interface to put it on, so it is published once the probe
+ * has brought one up (`netconf_publish`), and the `rach2.ifaddr=` entries
+ * are applied after it (`netconf_apply_by_mac`).
  */
 int init_network(void)
 {
@@ -85,12 +78,9 @@ const char *net_error(void)
 }
 
 /**
- * Log each interface's driver, station address and IPv4 configuration, then
- * netconsole's state.
- *
- * Each interface gets a report of its own, which starts with its name. The
- * card's lines come from the driver through netdev_print_info, since only
- * the driver knows what its own registers are called.
+ * Each card's lines begin with its interface's name: its driver and station
+ * address, the lines its driver writes about the card (`netdev_print_info`),
+ * and its IPv4 configuration. Netconsole's state comes last.
  */
 void net_print_info(void)
 {
@@ -125,14 +115,8 @@ void net_print_info(void)
     netconsole_print_info();
 }
 
-/**
- * Disable interrupts around a network critical section, and restore them.
- *
- * The stack is reached from a driver's interrupt and from a syscall, and the
- * two must not be inside the same table at once. These are kirq_save and
- * kirq_restore under the network's own names; a bracket inside another is
- * safe, since each restores the flags it saved.
- */
+/** `kirq_save` and `kirq_restore` under the network's names; a bracket
+ * inside another is safe, since each restores the flags it saved. */
 uint32_t net_lock(void)
 {
     return kirq_save();
