@@ -116,10 +116,10 @@ void bcache_dirty(struct bbuf *b);
  * writes: a sync writes the firsts before the rest, in separate requests,
  * and an eviction or the memory reclaim that chose an `after` buffer writes
  * the device's firsts before it, or passes it over while one of them is
- * held or failed its write. The marks clear with the write. An ext2 write's
- * bitmaps and descriptors are first and its pointer and data blocks after,
- * so no pointer reaches the disk before the bit of the block it names,
- * however the cache is pressed while the write runs.
+ * held or failed its write. The marks clear with the write. When ext2 frees
+ * a file's blocks its pointer blocks and inode are first and its bitmaps and
+ * descriptors after, so no pointer on the disk names a block whose bit is
+ * clear, however the cache is pressed while the free runs.
  */
 void bcache_dirty_ordered(struct bbuf *b, int order);
 

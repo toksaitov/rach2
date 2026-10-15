@@ -84,11 +84,6 @@ struct ext2_node {
 #define WRITE_UNFLUSHED 2
 #define WRITE_DURABLE   3
 
-/* The kinds of a mount's `batch`. */
-#define BATCH_NONE  0
-#define BATCH_ALLOC 1
-#define BATCH_FREE  2
-
 /*
  * The file-write batch's limits: the bytes it takes, its data and metadata
  * images, and the inodes it holds. Then its stages, drained in order: the
@@ -177,16 +172,12 @@ struct ext2_mount {
     const char *readonly_why;
     /* The file-write batch, set up when the mount becomes writable. */
     struct ext2_writeback *wb;
-    /* The batch of metadata writes in progress, or BATCH_NONE: the bitmap
-     * bytes, descriptors and pointer slots it touches are marked dirty and
-     * written together at its end. `BATCH_ALLOC` puts the bitmaps and
-     * descriptors first, so no pointer reaches the disk before the bit of
-     * the block it names; `BATCH_FREE`, which `punch` opens, puts them after
-     * the pointers, so no pointer on the disk names a block whose bit is
-     * clear. `meta` is the bitmap and descriptor blocks noted so far,
-     * `metas` how many; a block past the table is written through at once
-     * in an allocation, and in a free the table is emptied by a sync first,
-     * which keeps the order. No caller opens an allocation batch. */
+    /* Nonzero while `punch` has a batch of frees open: the bitmap bytes,
+     * descriptors and pointer slots it touches are marked dirty and written
+     * together at its end, the bitmaps and descriptors after the pointers,
+     * so no pointer on the disk names a block whose bit is clear. `meta` is
+     * the bitmap and descriptor blocks noted so far, `metas` how many; when
+     * the table is full a sync empties it, which keeps the order. */
     int batch;
     uint64_t meta[16];
     int metas;
@@ -1477,9 +1468,8 @@ static void em_balance(struct ext2_mount *em)
  * Copy `len` bytes from `src`, or zeros for NULL, to byte offset `off` of
  * the volume, written the way `sync` says (WRITE_THROUGH and the rest), or
  * left dirty with 0. Inside a batch a write left to the cache is dirtied in
- * the batch's order: first when its block is noted and the batch allocates,
- * or when it is not noted and the batch frees, and after otherwise. A whole
- * block is not read first, since nothing of it survives. 0, or -errno.
+ * the batch's order: after when its block is noted, and first otherwise. A
+ * whole block is not read first, since nothing of it survives. 0, or -errno.
  */
 static int write_bytes(struct ext2_mount *em, uint64_t off, const void *src, uint32_t len, int sync)
 {
@@ -1514,9 +1504,7 @@ static int write_bytes(struct ext2_mount *em, uint64_t off, const void *src, uin
         } else if (sync && em_strict(em)) {
             rc = bcache_write_unflushed(b);
         } else if (em->batch) {
-            int first = meta_noted(em, blk) == (em->batch == BATCH_ALLOC);
-
-            bcache_dirty_ordered(b, first ? BCACHE_ORDER_FIRST : BCACHE_ORDER_AFTER);
+            bcache_dirty_ordered(b, meta_noted(em, blk) ? BCACHE_ORDER_AFTER : BCACHE_ORDER_FIRST);
         } else {
             bcache_dirty(b);
         }
@@ -1680,10 +1668,9 @@ static int gd_store(struct ext2_mount *em, uint32_t g)
 
 /**
  * Whether a write of a bitmap or descriptor at byte `at` may wait for the
- * end of the batch, its block noted once: only inside a batch, and only
- * while the table of noted blocks has room. A free batch whose table is full
- * empties it with a sync first, which keeps the order; an allocation batch
- * writes the block at once instead.
+ * end of the batch, its block noted once: only inside a batch. A full table
+ * of noted blocks is emptied by a sync first, which keeps the order; when
+ * that sync fails the block is written at once.
  */
 static int meta_deferred(struct ext2_mount *em, uint64_t at)
 {
@@ -1699,7 +1686,7 @@ static int meta_deferred(struct ext2_mount *em, uint64_t at)
         }
     }
     if (em->metas == (int)(sizeof(em->meta) / sizeof(em->meta[0]))) {
-        if (em->batch != BATCH_FREE || em_sync(em) != 0) {
+        if (em_sync(em) != 0) {
             return 0;
         }
         em->metas = 0;
@@ -1709,7 +1696,7 @@ static int meta_deferred(struct ext2_mount *em, uint64_t at)
 }
 
 /** Whether `blk` is one of the bitmap and descriptor blocks the batch has
- * noted to write first. */
+ * noted to write after the pointers. */
 static int meta_noted(const struct ext2_mount *em, uint64_t blk)
 {
     int i;
@@ -1723,38 +1710,21 @@ static int meta_noted(const struct ext2_mount *em, uint64_t blk)
 }
 
 /**
- * The end of a batch. On a mount with `sync` or `dirsync` an allocation's
- * noted bitmap and descriptor blocks are written first, then everything
- * else the write left dirty, data and pointer blocks, so that no pointer
- * reaches the disk before the bit of the block it names, and a free's sync
- * writes its pointer blocks and inode before its bitmaps and descriptors;
- * on any other mount the blocks stay dirty for the sync, and the cache is
- * balanced (`em_balance`). The cache keeps each order while the batch is
- * open: an allocation's noted blocks are dirtied `first` and everything else
- * it dirties `after`, a free's the other way round, so an eviction under
- * pressure writes the blocks that must go first before the one it chose,
- * and a sync does the same. 0, or -errno.
+ * The end of a batch. On a mount with `sync` or `dirsync` a sync writes
+ * the pointer blocks and inode before the bitmaps and descriptors; on any
+ * other mount the blocks stay dirty for the sync, and the cache is balanced
+ * (`em_balance`). The cache keeps the order while the batch is open, the
+ * pointers dirtied `first` and the noted blocks `after`, so an eviction
+ * under pressure writes the blocks that must go first before the one it
+ * chose, and a sync does the same. 0, or -errno.
  */
 static int batch_end(struct ext2_mount *em)
 {
-    int kind = em->batch;
-    int i, rc = 0;
+    int rc;
 
-    em->batch = BATCH_NONE;
-    for (i = 0; kind == BATCH_ALLOC && em_strict(em) && i < em->metas && rc == 0; i++) {
-        struct bbuf *b = bcache_get(em->dev, em->meta[i]);
-
-        if (!b) {
-            rc = -EIO;
-            break;
-        }
-        rc = bcache_write(b);
-        bcache_release(b);
-    }
+    em->batch = 0;
     em->metas = 0;
-    if (rc == 0) {
-        rc = em_sync(em);
-    }
+    rc = em_sync(em);
     if (rc == 0) {
         em_balance(em);
     }
@@ -2019,7 +1989,7 @@ static int inode_alloc(struct ext2_mount *em, uint32_t parent_ino, int is_dir, u
         if (i >= limit) {
             continue;
         }
-        rc = bit_write(em, le32(gd + 4), i, 1, em->batch ? WRITE_THROUGH : WRITE_UNFLUSHED);
+        rc = bit_write(em, le32(gd + 4), i, 1, WRITE_UNFLUSHED);
         if (rc != 0) {
             return rc;
         }
@@ -2213,7 +2183,7 @@ static int punch(struct ext2_mount *em, struct ext2_node *n, uint32_t keep)
     if (em->dev->flags & BLOCK_WRITE_FAILED) {
         return -EIO;
     }
-    em->batch = BATCH_FREE;
+    em->batch = 1;
     rc = punch_from(em, n, keep);
     end = batch_end(em);
     return rc != 0 ? rc : end;
@@ -2223,17 +2193,11 @@ static int punch(struct ext2_mount *em, struct ext2_node *n, uint32_t keep)
  * The block for data index `index` of `n`, allocated when missing, into
  * `*out`, with `*fresh` set for a new data block. A missing pointer block is
  * allocated and its zeros written before the pointer to it, so that the
- * pointer cannot reach the disk over what the block held before; outside a
- * batch an inode that has that pointer is stored at once. A data block's
- * pointer is written after the block is in the bitmap. `n->blocks` and the
- * inode's own pointers change in memory; the caller stores the inode with
- * them. 0, -EFBIG past the triple indirect's reach, -ENOSPC, or -errno.
- *
- * A new pointer block's zeros are written with WRITE_THROUGH rather than
- * noted with the bitmaps to go first in a batch, since the pointers the
- * block is about to hold would then be first too and could reach the disk,
- * under eviction, before the bitmap that allocates the blocks they name.
- * That is one write per new pointer block.
+ * pointer cannot reach the disk over what the block held before; an inode
+ * that has that pointer is stored at once. A data block's pointer is
+ * written after the block is in the bitmap. `n->blocks` and the inode's own
+ * pointers change in memory; the caller stores the inode with them. 0,
+ * -EFBIG past the triple indirect's reach, -ENOSPC, or -errno.
  */
 static int map_alloc(struct ext2_mount *em, struct ext2_node *n, uint32_t index, uint32_t *out,
                      int *fresh)
@@ -2287,11 +2251,11 @@ static int map_alloc(struct ext2_mount *em, struct ext2_node *n, uint32_t index,
                     uint8_t raw[4];
 
                     LE32_PUT(raw, b);
-                    rc = write_bytes(em, slot_at, raw, 4, !em->batch);
+                    rc = write_bytes(em, slot_at, raw, 4, WRITE_THROUGH);
                     if (rc != 0) {
                         return rc;
                     }
-                } else if (!em->batch) {
+                } else {
                     *slot = b;
                     rc = inode_store(em, n);
                     if (rc != 0) {
@@ -2332,7 +2296,7 @@ static int map_alloc(struct ext2_mount *em, struct ext2_node *n, uint32_t index,
             uint8_t raw[4];
 
             LE32_PUT(raw, b);
-            rc = write_bytes(em, slot_at, raw, 4, !em->batch);
+            rc = write_bytes(em, slot_at, raw, 4, WRITE_THROUGH);
             if (rc != 0) {
                 return rc;
             }
