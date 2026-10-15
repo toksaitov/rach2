@@ -308,6 +308,59 @@ static uint8_t sender[24];
 static uint8_t control[64];
 
 /**
+ * Open, bind and close four packet sockets in a row, and fail unless the
+ * kernel heap is back where it started.
+ *
+ * A binding is a record from the heap on the list the receive path walks, so
+ * a close that kept it would leave HeapUsed in /proc/meminfo larger by one
+ * record each time, and frames would go on being queued for a socket nobody
+ * can read. Each bind must make the heap grow, which shows that the record is
+ * counted there and the final comparison can see one that was kept.
+ */
+static void check_close_releases(void)
+{
+    unsigned long args[3];
+    struct sockaddr_ll_probe sll;
+    unsigned int before, opened;
+    int fd, r, k;
+
+    before = probe_meminfo("HeapUsed:");
+    if (before == 0xFFFFFFFFu) {
+        fail("HeapUsed could not be read from /proc/meminfo");
+    }
+    for (k = 0; k < 4; k++) {
+        args[0] = AF_PACKET;
+        args[1] = SOCK_DGRAM;
+        args[2] = ETH_P_IP_BE;
+        fd = socketcall(SC_SOCKET, args);
+        if (fd < 0) {
+            fail_n("a packet socket did not open after an earlier one closed", fd);
+        }
+        opened = probe_meminfo("HeapUsed:");
+        sll = zero_sll;
+        sll.sll_family = AF_PACKET;
+        sll.sll_protocol = ETH_P_IP_BE;
+        sll.sll_ifindex = 1;
+        args[0] = (uint32_t)fd;
+        args[1] = (unsigned long)&sll;
+        args[2] = sizeof(sll);
+        r = socketcall(SC_BIND, args);
+        if (r != 0) {
+            fail_n("a bind after an earlier socket closed was refused", r);
+        }
+        if (probe_meminfo("HeapUsed:") <= opened) {
+            fail("a bind took nothing from the heap, so the heap cannot show "
+                 "whether a close frees the binding");
+        }
+        sys_close(fd);
+    }
+    if (probe_meminfo("HeapUsed:") != before) {
+        fail("four packet sockets bound and closed left the heap other than it "
+             "was, so a close kept its binding");
+    }
+}
+
+/**
  * The probe, in the order below; it fails at the first wrong answer.
  *
  * What it refuses: a stream packet socket; a socket for IPv6, a protocol
@@ -362,7 +415,8 @@ static uint8_t control[64];
  * `arp_rx` would pass a socket-only test and leave the machine unable to
  * resolve anything, so the gateway must be in /proc/net/arp.
  *
- * Four sockets are then opened, bound and closed in a row. Last, a child
+ * Four sockets are then opened, bound and closed in a row, and each close
+ * must free its binding, as `check_close_releases` says. Last, a child
  * that drops to an ordinary user is refused a packet socket, since the
  * socket reads every frame the machine receives. A child that a signal
  * killed has an exit byte of zero, so its status is checked for a signal
@@ -787,10 +841,10 @@ PROBE_START void _start(void)
         for (i = 0; i < 6; i++) {
             mac[i] = ifr[18 + i]; /* ifr_hwaddr.sa_data, past name and family */
         }
+        /* No field below may keep 0xa5: each must be the kernel's answer. */
         for (i = 0; i < sizeof(sll); i++) {
             ((uint8_t *)&sll)[i] = 0xa5;
         }
-        sll = zero_sll; /* so each field below is the kernel's answer */
         senderlen = sizeof(sll);
         args[0] = (uint32_t)arp_fd;
         args[1] = (unsigned long)&sll;
@@ -951,26 +1005,7 @@ PROBE_START void _start(void)
         sys_close(ip_fd);
     }
 
-    /* Four sockets opened, bound and closed in a row. */
-    for (tries = 0; tries < 4; tries++) {
-        int again;
-
-        args[0] = AF_PACKET;
-        args[1] = SOCK_DGRAM;
-        args[2] = ETH_P_IP_BE;
-        again = socketcall(SC_SOCKET, args);
-        if (again < 0) {
-            fail("a packet socket did not open after an earlier one closed");
-        }
-        sll.sll_ifindex = 1;
-        args[0] = (uint32_t)again;
-        args[1] = (unsigned long)&sll;
-        args[2] = sizeof(sll);
-        if (socketcall(SC_BIND, args) != 0) {
-            fail("a bind failed, so closing did not free the delivery table");
-        }
-        sys_close(again);
-    }
+    check_close_releases();
 
     /* An ordinary user is refused a packet socket. */
     pid = sys_fork();
