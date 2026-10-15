@@ -161,7 +161,11 @@ fi
 
 hr "preflight: tools present"
 miss=0
-for t in i686-elf-gcc i686-elf-readelf cppcheck shellcheck clang-format clang; do
+# The link-dependency test before step 6 builds i686's fixture whatever ARCH
+# is; the other steps that compile use ARCH's cross toolchain.
+cross="i686-elf-gcc i686-elf-readelf"
+[ "$ABI_CROSS" = i686-elf- ] || cross="$cross ${ABI_CROSS}gcc ${ABI_CROSS}readelf"
+for t in $cross cppcheck shellcheck clang-format clang; do
     command -v "$t" >/dev/null 2>&1 || { echo "  MISSING: $t"; miss=1; }
 done
 if [ "$miss" -eq 0 ]; then echo "  PASS"; else echo "  FAIL"; fail=1; fi
@@ -399,8 +403,7 @@ if [ -f "$LIBC/lib/libc.a" ]; then
         echo "  FAIL: musl link failed; see $VDIR/_abi.log"; fail=1
     fi
 else
-    echo "  FAIL: libc not built; run vendor/musl/build_libc.sh first (this"
-    echo "          check cannot verify the musl ABI without it)"
+    echo "  FAIL: $LIBC/lib/libc.a is absent; \`make musl\` builds it for this ARCH"
     fail=1
 fi
 
