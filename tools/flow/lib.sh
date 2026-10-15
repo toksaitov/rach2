@@ -61,9 +61,11 @@ limited()
 # run_session OUT ERR LIMIT COMMAND...: run COMMAND with its output in OUT and
 # its errors in ERR, in a process group of its own, and stop the whole group
 # when it is still running after LIMIT seconds: TERM, then KILL half a minute
-# later. Return COMMAND's status; or, when the limit stopped it, 124, after
-# the KILL has gone to the whole group, so that a child that outlives the
-# TERM, such as an emulator, does not outlive the call.
+# later. Return COMMAND's status as soon as it ends; or, when the limit
+# stopped it, 124, after the KILL has gone to the whole group, so that a child
+# that outlives the TERM, such as an emulator, does not outlive the call. The
+# watcher that keeps the limit is a perl process with no children, stopped by
+# its pid, since it may not have made its own group yet.
 run_session()
 {
     out=$1 err=$2 limit=$3
@@ -78,7 +80,7 @@ run_session()
     watch=$!
     wait "$pid"
     status=$?
-    [ -e "$state/expired" ] || kill -TERM -"$watch" 2> /dev/null
+    [ -e "$state/expired" ] || kill -TERM "$watch" 2> /dev/null
     wait "$watch" 2> /dev/null
     if [ -e "$state/expired" ]; then
         kill -KILL -"$pid" 2> /dev/null
