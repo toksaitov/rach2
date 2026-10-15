@@ -20,9 +20,10 @@
 # preprocessing directive are set between two empty lines, since a line
 # break ends a directive: a line joined to a directive or split from one
 # changes the list. A deleted file and a new one are compared with an empty
-# file. A file whose mode or type changes, such as a script that loses its
-# execute bit, is not a document change, nor is a new file that is not a
-# plain one of mode 644.
+# file, and a C file the preprocessor fails on, at BASE or in the work tree,
+# is not a document change. Nor is a file whose mode or type changes, such
+# as a script that loses its execute bit, or a new file that is not a plain
+# one of mode 644.
 #
 # The checks are the steps of `tests/run style` that read documents and
 # comments: textcheck.sh, prosecheck's comment width, terms and dev-log
@@ -58,9 +59,12 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/doccheck.XXXXXX") || exit 2
 trap 'rm -rf "$work"' 0
 
 # The tokens of the C text on stdin, one a line, literals kept whole and
-# each directive set between empty lines.
+# each directive set between empty lines; the status is 1, with the
+# compiler's errors in $work/pperr, when the text does not preprocess.
 tokens() {
-    "$TOKCC" -fpreprocessed -dD -E -P -x c - 2>/dev/null | awk '
+    "$TOKCC" -fpreprocessed -dD -E -P -x c - > "$work/pp" 2> "$work/pperr" ||
+        return 1
+    awk '
     {
         line = $0
         while (line ~ /\\$/ && (getline more) > 0)
@@ -85,7 +89,13 @@ tokens() {
         }
         if (out != "") print out
         if (directive) print ""
-    }'
+    }' "$work/pp"
+}
+
+# Report that FILE, at the place WHERE, does not preprocess.
+unparsed() {
+    echo "doccheck: $1: the preprocessor fails on it $2" >&2
+    sed "s|^<stdin>:|$1:|; s/^/    /" "$work/pperr" | head -5 >&2
 }
 
 # The text of FILE at BASE, or nothing when BASE has no such file.
@@ -115,9 +125,14 @@ while read -r omode nmode _ _ status f; do
     *.md|man/man[1-9]/*)
         ;;
     *.c|*.h)
-        at_base "$f" | tokens > "$work/before"
-        if [ -f "$f" ]; then tokens < "$f"; fi > "$work/after"
-        if ! cmp -s "$work/before" "$work/after"; then
+        : > "$work/after"
+        if ! at_base "$f" | tokens > "$work/before"; then
+            unparsed "$f" "at $BASE"
+            code=1
+        elif [ -f "$f" ] && ! tokens < "$f" > "$work/after"; then
+            unparsed "$f" "in the work tree"
+            code=1
+        elif ! cmp -s "$work/before" "$work/after"; then
             echo "doccheck: $f: its code differs from $BASE, not only its comments" >&2
             code=1
         fi
