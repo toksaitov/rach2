@@ -1,19 +1,21 @@
 /**
- * Check exclusive creation before pty or descriptor allocation, which
- * devices' transfers move the description's offset, so that read(2) and
- * write(2) hold the description for them, and where /dev/grubcore is
- * published: the post-MBR gap of an MBR disk and the BIOS boot partition of a
- * GPT disk, with the first sector and the size its ioctls report.
+ * devfs_hosttest.c: the device files of rach2/sys/fs/devfs.c: the errors of
+ * an exclusive create, the devices whose transfers move the description's
+ * offset, and the windows /dev/grubcore and a whole-disk node publish.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: rach2/sys/block/partition.c rach2/sys/block/gpt.c
+ *
+ * The test includes the source whole. A stub of a call that no row should
+ * reach fails the test through `unexpected`.
  */
 #include "fs/devfs.c"
 
 extern int printf(const char *format, ...);
 static int failures, master_calls, descriptor_calls;
 /* Set by the rows that publish a window, which log, cut a partition view and
-   copy an ioctl's answer out; every other row must reach none of those. */
+   copy an ioctl's answer out; every other row must reach none of those. The
+   views cut are counted in `views_cut`. */
 static int publishing, views_cut;
 static process_t process;
 struct percpu cpu_table[NR_CPUS] = {{.current = &process}};
@@ -28,7 +30,7 @@ static void check(int ok, const char *what)
     }
 }
 
-/** Count the pty allocation dispatch. */
+/** Count an open of a pty master. Returns descriptor 7. */
 int pty_open_master(int flags)
 {
     (void)flags;
@@ -36,7 +38,7 @@ int pty_open_master(int flags)
     return 7;
 }
 
-/** Count a descriptor allocation without allocating kernel storage. */
+/** Count a descriptor allocation, which fails. Returns -1. */
 int fd_alloc(fd_table_t *table)
 {
     (void)table;
@@ -111,7 +113,8 @@ static void installed_table(struct part_table *t)
     k_memcpy(t->parts[3].type_guid, bios_boot_type, 16);
 }
 
-/** The window's first sector and its size, as `bootctl` asks for them. */
+/** Whether the ioctls of /dev/grubcore report `first` as its first sector
+ *  and `bytes` as its size, as `bootctl` reads them. */
 static int window_reports(uint64_t first, uint64_t bytes)
 {
     struct {
@@ -137,11 +140,13 @@ static int window_reports(uint64_t first, uint64_t bytes)
 }
 
 /**
- * Where /dev/grubcore is. On an MBR disk the gap, LBA 1 through 2047, on any
- * disk that holds it; on a GPT disk exactly the BIOS boot partition, from the
- * primary header or the backup, and nothing where the table has none or the
- * partition is past the disk. `HDIO_GETGEO` reports the window's first sector
- * and `BLKGETSIZE64` its size, which is how `bootctl grub` lays out its tails.
+ * Where /dev/grubcore is. On an MBR disk it is the gap, LBA 1 through 2047,
+ * on any disk that holds it; on a GPT disk it is the BIOS boot partition,
+ * whether the table was read from the primary header or the backup. There is
+ * none where the table has no BIOS boot partition, where the partition
+ * covers the entry array or runs past the disk, and where the table is an
+ * MBR's. `HDIO_GETGEO` reports the window's first sector and `BLKGETSIZE64`
+ * its size, which is how `bootctl grub` lays out its tails.
  */
 static void grubcore_windows(void)
 {
@@ -216,15 +221,14 @@ static void grubcore_windows(void)
     publishing = 0;
 }
 
-/** Check errno precedence, absent leaves, ordinary pty dispatch and the
- * devices whose transfers move the offset. */
-/* The loop devices and the descriptor table, which no row here opens. */
+/** No loop device is attached at `index`; no row opens one. */
 block_device_t *loop_attached_at(int index)
 {
     (void)index;
     return 0;
 }
 
+/** A loop node has no device: -ENXIO. */
 block_device_t *loop_node_device(int index, int write, int32_t *err)
 {
     (void)index;
@@ -233,6 +237,7 @@ block_device_t *loop_node_device(int index, int write, int32_t *err)
     return 0;
 }
 
+/** No file can be attached to a loop device: -ENXIO. */
 int loop_attach_file(int index, const char *path, int writable, uint32_t flags)
 {
     (void)index;
@@ -242,6 +247,7 @@ int loop_attach_file(int index, const char *path, int writable, uint32_t flags)
     return -ENXIO;
 }
 
+/** An ioctl of a loop device fails with -ENXIO. */
 int32_t loop_ioctl(int index, int privileged, uint32_t request, uintptr_t arg)
 {
     (void)index;
@@ -251,6 +257,7 @@ int32_t loop_ioctl(int index, int privileged, uint32_t request, uintptr_t arg)
     return -ENXIO;
 }
 
+/** An ioctl of /dev/loop-control fails with -ENXIO. */
 int32_t loop_control_ioctl(uint32_t request, uintptr_t arg)
 {
     (void)request;
@@ -258,11 +265,13 @@ int32_t loop_control_ioctl(uint32_t request, uintptr_t arg)
     return -ENXIO;
 }
 
+/** The close of a loop node, which has nothing to do. */
 void loop_node_closed(int index)
 {
     (void)index;
 }
 
+/** Loop information is refused with -EINVAL. */
 int loop_info_flags(const uint8_t *info, uint32_t *flags)
 {
     (void)info;
@@ -270,6 +279,7 @@ int loop_info_flags(const uint8_t *info, uint32_t *flags)
     return -EINVAL;
 }
 
+/** No descriptor link resolves: -ENOENT. */
 int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
 {
     (void)pid;
@@ -279,6 +289,7 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
     return -ENOENT;
 }
 
+/** No descriptor is open. */
 fd_entry_t *fd_get(fd_table_t *table, int fd)
 {
     (void)table;
@@ -307,6 +318,15 @@ static void whole_disk_window(void)
     publishing = 0;
 }
 
+/**
+ * The rows of an open, then those of `offset_devices`, `grubcore_windows`
+ * and `whole_disk_window`. An exclusive create of ptmx, null or an absent
+ * name, in each access mode and with or without O_DIRECTORY and O_NONBLOCK,
+ * is EEXIST for a device and ENOENT for an absent one, and opens no pty
+ * master and takes no descriptor. An open of ptmx with O_DIRECTORY is
+ * ENOTDIR and opens nothing, and an ordinary open of ptmx opens a pty
+ * master. Returns 0 when every check passed and 1 otherwise.
+ */
 int main(void)
 {
     int acc, extra;
@@ -335,13 +355,14 @@ int main(void)
     return failures != 0;
 }
 
-/** Fail if these open rows enter an unrelated device operation. */
+/** Fail the test: a row reached a call it should not. Returns -EIO. */
 static int unexpected(void)
 {
     check(0, "unrelated device operation");
     return -EIO;
 }
 
+/** The transfer limit of a block device, which no row reads. */
 uint32_t block_max_sectors(block_device_t *dev)
 {
     (void)dev;
@@ -363,12 +384,14 @@ void block_partition_init(block_partition_t *part, block_device_t *dev, uint64_t
     part->device.sector_count = count;
 }
 
+/** The device under a view, which no row looks up. */
 block_device_t *block_physical(block_device_t *dev)
 {
     unexpected();
     return dev;
 }
 
+/** A block transfer, which no row makes. */
 int block_request(block_device_t *dev, int write, uint64_t lba, uint32_t count, void *buf)
 {
     (void)dev;
@@ -395,6 +418,8 @@ int copy_from_user(void *dst, const void __user *src, size_t size)
     return unexpected();
 }
 
+/** Copy an ioctl's answer out in a row that publishes a window, and fail
+ *  as `copy_from_user` does in any other. */
 int copy_to_user(void __user *dst, const void *src, size_t size)
 {
     if (publishing) {
@@ -404,6 +429,7 @@ int copy_to_user(void __user *dst, const void *src, size_t size)
     return copy_from_user(dst, src, size);
 }
 
+/** The disk at `index`, which no row looks up. */
 struct disk *disk_at(int index)
 {
     (void)index;
@@ -411,11 +437,13 @@ struct disk *disk_at(int index)
     return NULL;
 }
 
+/** The number of disks, which no row reads. */
 int disk_count(void)
 {
     return unexpected();
 }
 
+/** The disk of a device, which no row looks up. */
 struct disk *disk_of(block_device_t *dev)
 {
     (void)dev;
@@ -423,12 +451,14 @@ struct disk *disk_of(block_device_t *dev)
     return NULL;
 }
 
+/** A rescan of a disk's partitions, which no row makes. */
 int disk_rescan(struct disk *d)
 {
     (void)d;
     return unexpected();
 }
 
+/** A page allocation, which no row makes. */
 void *kalloc_pages_try(uint32_t count, uintptr_t *phys)
 {
     (void)count;
@@ -437,6 +467,7 @@ void *kalloc_pages_try(uint32_t count, uintptr_t *phys)
     return NULL;
 }
 
+/** Free pages, which no row has. */
 void kfree_pages(void *ptr, uint32_t count)
 {
     (void)ptr;
@@ -444,6 +475,8 @@ void kfree_pages(void *ptr, uint32_t count)
     unexpected();
 }
 
+/** The kernel log: discarded in a row that publishes a window, and a
+ *  failure in any other. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
     (void)level;
@@ -454,11 +487,13 @@ void klog(int level, const char *subsystem, const char *format, ...)
     }
 }
 
+/** The length of the kernel log, which no row reads. */
 uint32_t klog_len(void)
 {
     return (uint32_t)unexpected();
 }
 
+/** A read of the kernel log, which no row makes. */
 uint32_t klog_read(char *buf, uint32_t cap, uint32_t offset)
 {
     (void)buf;
@@ -467,17 +502,20 @@ uint32_t klog_read(char *buf, uint32_t cap, uint32_t offset)
     return (uint32_t)unexpected();
 }
 
+/** The screen's log level, which no row reads. */
 int klog_screen_level(void)
 {
     return unexpected();
 }
 
+/** A change of the screen's log level, which no row makes. */
 void klog_set_screen_level(int level)
 {
     (void)level;
     unexpected();
 }
 
+/** A read of the real-time clock, which no row makes. */
 int rtc_read_clock(rtc_time_t *out)
 {
     (void)out;
@@ -485,6 +523,7 @@ int rtc_read_clock(rtc_time_t *out)
     return -1;
 }
 
+/** A write of the real-time clock, which no row makes. */
 int rtc_write_clock(const rtc_time_t *t)
 {
     (void)t;
@@ -492,6 +531,7 @@ int rtc_write_clock(const rtc_time_t *t)
     return -1;
 }
 
+/** The weekday and the day of the year, which no row reads. */
 void rtc_week_and_year_day(const rtc_time_t *t, int32_t *weekday, int32_t *yearday)
 {
     (void)t;
@@ -500,6 +540,7 @@ void rtc_week_and_year_day(const rtc_time_t *t, int32_t *weekday, int32_t *yeard
     unexpected();
 }
 
+/** Random bytes, which no row reads. */
 void krandom_bytes(void *buf, uint32_t count)
 {
     (void)buf;
@@ -507,7 +548,7 @@ void krandom_bytes(void *buf, uint32_t count)
     unexpected();
 }
 
-/* The clock's alarm, its interrupt and /dev/mem, which no row reaches. */
+/** The clock time of a count of seconds, which no row converts. */
 void rtc_time_of_seconds(uint32_t seconds, rtc_time_t *t)
 {
     (void)seconds;
@@ -515,6 +556,7 @@ void rtc_time_of_seconds(uint32_t seconds, rtc_time_t *t)
     unexpected();
 }
 
+/** The seconds of a clock time, which no row converts. */
 int64_t rtc_seconds_of(const rtc_time_t *t)
 {
     (void)t;
@@ -522,12 +564,14 @@ int64_t rtc_seconds_of(const rtc_time_t *t)
     return 0;
 }
 
+/** A write of the clock's alarm, which no row makes. */
 void rtc_alarm_write(const rtc_time_t *t)
 {
     (void)t;
     unexpected();
 }
 
+/** A read of the clock's alarm, which no row makes. */
 int rtc_alarm_read(rtc_time_t *t)
 {
     (void)t;
@@ -535,35 +579,41 @@ int rtc_alarm_read(rtc_time_t *t)
     return 0;
 }
 
+/** The alarm's interrupt turned on or off, which no row does. */
 void rtc_alarm_interrupts(int on)
 {
     (void)on;
     unexpected();
 }
 
+/** The acknowledgement of an alarm, which no row makes. */
 int rtc_alarm_ack(void)
 {
     unexpected();
     return 0;
 }
 
+/** A wake from suspend, which no row makes. */
 void suspend_wake(void)
 {
     unexpected();
 }
 
+/** The alarm's handler attached, which no row does. */
 void rtc_alarm_attach(isr_handler_t handler)
 {
     (void)handler;
     unexpected();
 }
 
+/** A wait queue made, which no row needs. */
 void wait_queue_init(wait_queue_t *wq)
 {
     (void)wq;
     unexpected();
 }
 
+/** A sleep, which no row takes. */
 int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     (void)wq;
@@ -573,18 +623,21 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     return 0;
 }
 
+/** Interrupts masked, which no row needs. */
 uint32_t kirq_save(void)
 {
     unexpected();
     return 0;
 }
 
+/** Interrupts restored, which no row needs. */
 void kirq_restore(uint32_t flags)
 {
     (void)flags;
     unexpected();
 }
 
+/** A temporary map of a frame for /dev/mem, which no row reads. */
 void *kmap_temp(uintptr_t phys)
 {
     (void)phys;
@@ -592,12 +645,14 @@ void *kmap_temp(uintptr_t phys)
     return 0;
 }
 
+/** The end of a temporary map, which no row makes. */
 void kunmap_temp(void *va)
 {
     (void)va;
     unexpected();
 }
 
+/** Whether a frame is a device's, for /dev/mem, which no row reads. */
 int paging_frame_is_device(uintptr_t phys)
 {
     (void)phys;
@@ -605,11 +660,13 @@ int paging_frame_is_device(uintptr_t phys)
     return 0;
 }
 
+/** Whether the random source is hardware entropy, which no row reads. */
 int krandom_is_trusted(void)
 {
     return unexpected();
 }
 
+/** A write to /dev/loop-control, which no row makes. */
 int loop_control_write(const char *buf, uint32_t count)
 {
     (void)buf;
@@ -617,19 +674,21 @@ int loop_control_write(const char *buf, uint32_t count)
     return unexpected();
 }
 
-/** No loop devices are attached in this fixture. */
+/** No loop device is attached at `index`. */
 block_device_t *loop_device_at(int index)
 {
     (void)index;
     return NULL;
 }
 
+/** The injected failure of frame allocations, which no row arms. */
 int paging_framefail_arm(uint32_t count)
 {
     (void)count;
     return unexpected();
 }
 
+/** An open of a pty slave, which no row makes. */
 int pty_open_slave(int index, int flags)
 {
     (void)index;
@@ -637,17 +696,20 @@ int pty_open_slave(int index, int flags)
     return unexpected();
 }
 
+/** The pty of a session's controlling terminal, which no row looks up. */
 int pty_session_slave(int sid)
 {
     (void)sid;
     return unexpected();
 }
 
+/** Whether a recovery kernel publishes the disks, which no row reads. */
 int recovery_publishes_disk(void)
 {
     return unexpected();
 }
 
+/** An uninterruptible sleep, which no row takes. */
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     (void)wq;
@@ -656,6 +718,7 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     return unexpected();
 }
 
+/** A wake, which no row makes. */
 void wq_wake_all(wait_queue_t *wq)
 {
     (void)wq;
