@@ -1,9 +1,10 @@
 /*
  * ptrace.c: the x86-64 part of ptrace(2) and of core files: the registers
  * in Linux x86-64's `user_regs_struct`, the words of its `struct user`, the
- * floating-point state as `user_i387_struct`, the 512-byte `fxsave64`
- * image, and as the XSAVE image, the register sets of PTRACE_GETREGSET, and
- * the FS and GS bases through PTRACE_ARCH_PRCTL.
+ * floating-point state as `user_i387_struct`, which is the 512-byte
+ * `fxsave64` image, the register sets of PTRACE_GETREGSET, the XSAVE image
+ * among them, the FS and GS bases through PTRACE_ARCH_PRCTL, and a core
+ * file's floating-point notes.
  */
 
 #include "../arch.h"
@@ -71,8 +72,16 @@ enum {
 /* The register set of the general registers, by its core note's type. */
 #define NT_PRSTATUS 1u
 
+/* The build stops unless the enum has the ARCH_GREGS words of cpu.h. */
 typedef char user_regs_fit[(R_COUNT == ARCH_GREGS) ? 1 : -1];
 
+/**
+ * The running thread, whose registers a core dump of its own process reads,
+ * has its bases and selectors read from the processor, since a selector it
+ * loaded may have changed them since its record was written; a stopped
+ * thread's were saved when it switched away. DS and ES read as the null
+ * selector: the kernel keeps neither for a 64-bit thread.
+ */
 void arch_regs_get(const process_t *t, unsigned long *r)
 {
     const isr_params_t *tf = proc_user_frame(t);
@@ -98,9 +107,6 @@ void arch_regs_get(const process_t *t, unsigned long *r)
     r[R_EFLAGS] = tf->rflags;
     r[R_RSP] = tf->rsp;
     r[R_SS] = tf->ss & 0xFFFFu;
-    /* The running thread's bases are its MSRs, which a selector it loaded
-     * may have changed since its record was written; a stopped thread's
-     * were saved when it switched away. */
     r[R_FS_BASE] = t == current_proc ? msr_read(MSR_FS_BASE) : t->tls_base;
     r[R_GS_BASE] = t == current_proc ? msr_read(MSR_KERNEL_GS_BASE) : t->regs.gs_base;
     r[R_DS] = 0;
@@ -111,9 +117,10 @@ void arch_regs_get(const process_t *t, unsigned long *r)
 
 /**
  * Set the FS or GS selector, by `i`, of the stopped thread `t` to `sel`,
- * which the switch in loads before the bases. A selector must be null or a
- * user segment's at RPL 3, the selectors Linux takes from a tracer that the
- * GDT here has; any other loaded in the kernel could fault. 0, or -EIO.
+ * which the switch in loads before the bases. The selector must be null, at
+ * RPL 0 or 3, or the user data or code selector: the selectors Linux takes
+ * from a tracer that this GDT has, since any other could fault when the
+ * kernel loads it. Returns 0, or -EIO.
  */
 static int sel_set(process_t *t, int i, unsigned long sel)
 {
@@ -137,7 +144,7 @@ static int sel_set(process_t *t, int i, unsigned long sel)
  * selector for a 64-bit thread, which read as null, so a tracer may write
  * back the null it read and nothing else. An orig_rax of -1 stops an
  * interrupted system call from being restarted; it is kept in 32 bits, as
- * the system call number is. 0, or -EIO.
+ * the system call number is. Returns 0, or -EIO.
  */
 static int regs_set(process_t *t, int i, unsigned long v)
 {
@@ -292,9 +299,9 @@ static int user_poke(process_t *t, unsigned long off, unsigned long v)
 
 /** PTRACE_GETFPREGS and PTRACE_SETFPREGS: copy the floating-point state of
  * `t`, the thread `pid`, to or from the user at `data` as the 512-byte
- * `user_i387_struct`, which is the `fxsave64` image. -EINVAL for one
- * `fxrstor64` would fault on, -ESRCH for a thread that left its stop
- * during the copy. */
+ * `user_i387_struct`, which is the `fxsave64` image. -EFAULT for a buffer
+ * that cannot be copied, -EINVAL for an image `fxrstor64` would fault on,
+ * and -ESRCH for a thread that left its stop during the copy. */
 static int fp_access(uint32_t pid, process_t *t, uintptr_t data, int set)
 {
     uint8_t buf[FX_SIZE];
@@ -390,7 +397,9 @@ long arch_regset_set(process_t *t, unsigned long type, const uint8_t *in, uint32
  * PTRACE_ARCH_PRCTL: arch_prctl(2) on the stopped thread `t`, with the base,
  * or the user address to store it at, in `addr` and the operation in
  * `code`, which ptrace(2) takes in its `addr` and `data`, the reverse of
- * arch_prctl's own order.
+ * arch_prctl's own order. Setting a base sets that register's selector to
+ * null, as arch_prctl does. -EPERM for a base at or above USER_ADDR_MAX,
+ * -EFAULT for an address that cannot be written, -EINVAL for another code.
  */
 static int prctl_access(process_t *t, unsigned long addr, unsigned long code)
 {
@@ -419,6 +428,13 @@ static int prctl_access(process_t *t, unsigned long addr, unsigned long code)
     }
 }
 
+/**
+ * x86-64's requests are PEEKUSER, POKEUSER, GETREGS, SETREGS, GETFPREGS,
+ * SETFPREGS and ARCH_PRCTL. A request that copies from the tracer looks the
+ * tracee up again by `pid` after the copy, which may sleep, and answers
+ * -ESRCH when it has left its stop. SETREGS sets the registers in order and
+ * stops at the first one `regs_set` refuses, with those before it set.
+ */
 long arch_ptrace(process_t *t, uint32_t pid, long request, unsigned long addr, unsigned long data)
 {
     unsigned long word;

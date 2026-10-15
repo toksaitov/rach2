@@ -7,9 +7,9 @@
  * floating-point state, the XSAVE image or, without XSAVE, the 512-byte
  * `fxsave` image Linux calls `struct _fpstate_64` (../x86/fpu.h), lies
  * above the frame at a 64-byte boundary, and the sigcontext points at it.
- * The handler returns to `sa_restorer`, which
- * calls rt_sigreturn: Linux requires SA_RESTORER on x86-64, and musl always
- * gives it, so the frame has no return code of its own.
+ * The handler returns to `sa_restorer`, which calls rt_sigreturn: Linux
+ * requires SA_RESTORER on x86-64, and musl always gives it, so the frame has
+ * no return code of its own.
  */
 
 #include "../../proc/sigframe.h"
@@ -32,6 +32,7 @@ struct lx_sigcontext {
     uint64_t reserved1[8];
 };
 
+/* Linux's `stack_t`, as a ucontext has it. */
 struct lx_stack {
     uint64_t ss_sp;
     int32_t ss_flags;
@@ -39,6 +40,7 @@ struct lx_stack {
     uint64_t ss_size;
 };
 
+/* Linux x86-64's `struct ucontext`, with the kernel's 64-bit signal mask. */
 struct lx_ucontext {
     uint64_t uc_flags;
     uint64_t uc_link;
@@ -47,6 +49,8 @@ struct lx_ucontext {
     uint64_t sigmask;
 };
 
+/* The frame at the handler's stack pointer: the return address its `ret`
+ * takes, the ucontext and the siginfo. */
 struct lx_rt_sigframe {
     uint64_t pretcode;
     struct lx_ucontext uc;
@@ -83,16 +87,19 @@ int sigframe_on_altstack(uintptr_t sp)
            sp - (uintptr_t)current_proc->altstack_sp < (uintptr_t)current_proc->altstack_size;
 }
 
+/** Store `v` at `p`, which need not be aligned. */
 static void put32(uint8_t *p, uint32_t v)
 {
     k_memcpy(p, &v, sizeof(v));
 }
 
+/** Store `v` at `p`, which need not be aligned. */
 static void put64(uint8_t *p, uint64_t v)
 {
     k_memcpy(p, &v, sizeof(v));
 }
 
+/** The value at `p`, which need not be aligned. */
 static uint32_t get32(const uint8_t *p)
 {
     uint32_t v;
@@ -101,6 +108,7 @@ static uint32_t get32(const uint8_t *p)
     return v;
 }
 
+/** The value at `p`, which need not be aligned. */
 static uint64_t get64(const uint8_t *p)
 {
     uint64_t v;
@@ -109,7 +117,7 @@ static uint64_t get64(const uint8_t *p)
     return v;
 }
 
-/* Whether `signo` with `code` is a seccomp filter's SIGSYS, whose union
+/** Whether `signo` with `code` is a seccomp filter's SIGSYS, whose union
  * has the call's address, number and architecture. */
 static int is_sigsys(int signo, int32_t code)
 {
@@ -178,6 +186,13 @@ void sigframe_take_siginfo(const uint8_t *in, struct k_siginfo *info)
     info->value = get64(in + 24);
 }
 
+/**
+ * Fill `sc` from the frame `tf`, with the number, error code and address of
+ * the current process's last processor exception, the user address of the
+ * floating-point state `fp_addr` and the mask `oldmask`. The FS and GS
+ * fields are left alone: the caller's frame has 0 there, which is what
+ * Linux writes.
+ */
 static void fill_sigcontext(struct lx_sigcontext *sc, const isr_params_t *tf, uint64_t fp_addr,
                             uint64_t oldmask)
 {
@@ -208,11 +223,29 @@ static void fill_sigcontext(struct lx_sigcontext *sc, const isr_params_t *tf, ui
     sc->fpstate = fp_addr;
 }
 
+/** The frame's alignment in `sigframe_setup` costs up to 15 bytes, and the
+ * 8 below the 16-byte boundary 8 more. */
 uintptr_t sigframe_stack_bytes(void)
 {
     return fpu_frame_bytes() + sizeof(struct lx_rt_sigframe) + 15u + 8u;
 }
 
+/**
+ * Every handler gets the rt frame, with or without SA_SIGINFO, and an
+ * action without SA_RESTORER is refused with -1, since the frame has no
+ * return code. The frame goes below the red zone of the interrupted code,
+ * or at the top of the alternate stack, with the floating-point state above
+ * it (`fpu_frame_place`), and starts 8 bytes below a 16-byte boundary, as a
+ * function's stack does after the call that entered it. The ucontext's
+ * `ss_flags` are what sigaltstack would have read where the signal came, as
+ * Linux saves them: SS_ONSTACK only when the thread was already on the
+ * alternate stack.
+ *
+ * The handler starts with the initial floating-point state, as a new image
+ * does, its arguments in RDI, RSI and RDX, and RAX 0, which a variadic
+ * handler reads, in AL, as the count of its arguments in vector registers.
+ * DF, TF and RF are cleared, and CS and SS are the user's.
+ */
 int sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *sa,
                    const struct k_siginfo *info, uint64_t oldmask)
 {
@@ -247,9 +280,6 @@ int sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *sa,
     frame.uc.uc_flags = UC_SIGCONTEXT_SS | UC_STRICT_RESTORE_SS | fpu_frame_uc_flags();
     frame.uc.uc_stack.ss_sp = (uintptr_t)current_proc->altstack_sp;
     frame.uc.uc_stack.ss_size = (uintptr_t)current_proc->altstack_size;
-    /* The flags as sigaltstack read them where the signal arrived, which a
-     * sigreturn restores, as Linux saves them: SS_ONSTACK only for a signal
-     * that came while the thread was already on the alternate stack. */
     frame.uc.uc_stack.ss_flags =
         (int32_t)(!current_proc->altstack_on ? SS_DISABLE : (was_on ? SS_ONSTACK : 0u));
     fill_sigcontext(&frame.uc.mc, tf, fp_addr, oldmask);
@@ -259,9 +289,6 @@ int sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *sa,
         return -1;
     }
 
-    /* The handler starts with the initial floating-point state, as a fresh
-     * image does, and its arguments in RDI, RSI and RDX; RAX is 0 for a
-     * handler declared without a prototype that takes a variable count. */
     fpu_reset();
     tf->rsp = frame_addr;
     tf->rip = (uintptr_t)sa->handler;
@@ -276,11 +303,16 @@ int sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *sa,
 }
 
 /**
- * Restore the registers rt_sigreturn finds in the frame below the stack
- * pointer: the handler's `ret` took `pretcode`, so the frame starts 8 bytes
- * under it. There is no plain sigreturn on x86-64, and a call without `rt`
- * is refused. A return address outside the lower half is refused too:
- * `iretq` itself would fault on it.
+ * The frame starts 8 bytes below the stack pointer, since the handler's
+ * `ret` took `pretcode`. There is no plain sigreturn on x86-64, and a call
+ * without `rt` is refused with -1. A return address outside the lower half
+ * is refused too: `iretq` itself would fault on it. CS and SS are the
+ * user's whatever the frame says, and a frame without floating-point state
+ * gets the initial one.
+ *
+ * The frame's alternate stack comes back as sigaltstack would take it,
+ * unless the restored stack pointer is on the alternate stack now in use; a
+ * stack of under 2048 bytes is not taken.
  */
 int sigframe_restore(isr_params_t *tf, int rt, uint64_t *mask)
 {
@@ -328,8 +360,6 @@ int sigframe_restore(isr_params_t *tf, int rt, uint64_t *mask)
     tf->ss = GDT_USER_DATA;
     tf->rflags = (tf->rflags & ~(uint64_t)FIX_EFLAGS) | (sc->eflags & FIX_EFLAGS);
 
-    /* A frame's alternate stack comes back as sigaltstack would take it,
-     * except that a stack in use or too small is left as it is. */
     if (!sigframe_on_altstack(tf->rsp)) {
         if (frame.uc.uc_stack.ss_flags & SS_DISABLE) {
             current_proc->altstack_on = 0;

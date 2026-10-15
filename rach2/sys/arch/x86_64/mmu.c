@@ -7,8 +7,8 @@
  * PML4 entry the kernel will use is made here, at boot, and a process's
  * PML4 is a copy of those 256 entries, so the tables below them are shared
  * and a mapping made in a window later is seen by every process. A
- * process's own tables are the lower half's. What a page entry holds is the
- * shared code's business; which table holds it is this file's.
+ * process's own tables are the lower half's. The shared code decides what a
+ * page entry holds; this file decides which table holds it.
  */
 
 #include "mmu.h"
@@ -126,7 +126,7 @@ static pte_t *table_for(pte_t *pml4, uintptr_t va, int level, int create, pte_t 
     return table;
 }
 
-/* Make every page table of [va, va + size) in the kernel's PML4, or panic:
+/** Make every page table of [va, va + size) in the kernel's PML4, or panic:
  * for the boot's windows. */
 static void boot_tables(uintptr_t va, uintptr_t size)
 {
@@ -139,8 +139,8 @@ static void boot_tables(uintptr_t va, uintptr_t size)
     }
 }
 
-/* Map the image's pages [from, to), virtual, to their physical addresses
- * with `flags`, at boot. */
+/** Map the image's pages [from, to), virtual, to their physical addresses
+ * with `flags`, at boot, or panic. */
 static void map_image(uintptr_t from, uintptr_t to, pte_t flags)
 {
     uintptr_t va;
@@ -267,11 +267,12 @@ void *mmu_frame_table(struct frame_map *map, size_t bytes)
 }
 
 /**
- * Give the kernel's windows their PML4 entries and every page table of the
- * regions cpu.h gives them, as on i686, so that map_mmio and the temporary
- * mappings write entries that exist. The heap's tables are made for the
- * size the heap is given, by `kheap_init` (mm/kheap.c), since the region's
- * PML4 entry has room for far more than one machine's heap.
+ * Give the windows their eight PML4 entries, and the MMIO and module
+ * regions every page table, so that map_mmio and the mapping of the boot
+ * modules write entries that exist. The heap's tables are made for the size
+ * the heap is given, by `kheap_init` (mm/kheap.c), and the page-cache
+ * window's by `init_pagecache`, since a region's PML4 entry has room for
+ * far more than one machine uses.
  */
 void mmu_init(void)
 {
@@ -308,14 +309,11 @@ void mmu_heap_ready(void)
 }
 
 /**
- * Make every page table spanning [`va_start`, `va_start` + `size`) in the
- * kernel's PML4, leaving their entries not present, so that
- * `map_kernel_frame` can write one there.
- *
- * Only a PML4 entry the boot made can take new tables (`mmu_init`): one made
- * after the first process would be missing from its copy. Returns 0, or -1
- * for a range outside those entries, one that runs past the end of the
- * address space, or a table that could not be had.
+ * Only a PML4 entry the boot made can take new tables (`mmu_init`): one
+ * made after the first process would be missing from its copy. The result
+ * is -1 also for a range that leaves those entries or the upper half, or
+ * that runs past the end of the address space; `va_start` need not be
+ * aligned.
  */
 int premap_kernel_window(uintptr_t va_start, size_t size)
 {
@@ -340,10 +338,11 @@ int premap_kernel_window(uintptr_t va_start, size_t size)
 }
 
 /**
- * Mark the page of `addr` in the directory in use as reachable from user
- * mode, or not: the leaf entry, and with `user` every entry above it too,
- * since the processor asks for the user bit at each level. The debug
- * shell's ring-3 exercise uses it on the kernel's own pages.
+ * The leaf entry changes, and with `user` every entry above it too, since
+ * the processor tests the user bit at each level; clearing it leaves the
+ * levels above as they are. A page with no entry, or one inside a large
+ * page, is left alone. The debug shell's ring-3 exercise uses it on the
+ * kernel's own pages.
  */
 void paging_set_user(uintptr_t addr, bool user)
 {
@@ -370,8 +369,8 @@ void paging_set_user(uintptr_t addr, bool user)
 }
 
 /**
- * A new directory with the kernel's upper half and an empty lower half, or
- * NULL when no frame was free.
+ * The new PML4 copies the kernel's 256 upper-half entries, so the tables
+ * below them are shared; its lower half is empty.
  */
 page_dir_t *clone_page_directory(void)
 {
@@ -405,9 +404,10 @@ void switch_page_directory(page_dir_t *dir)
 }
 
 /**
- * The page table of `dir` for the user address `va`, as ../../mm/paging.h
- * describes. A table made here has the user bit and the write bit in the
- * entries above it, so the leaf entry alone decides an access.
+ * A table made here has the user bit and the write bit in the entries above
+ * it, so the leaf entry alone decides an access. The kernel's PML4 shares
+ * no table of the lower half, so none is copied; an address at or above
+ * USER_ADDR_MAX has no table.
  */
 pte_t *mmu_user_table(page_dir_t *dir, uintptr_t va, int create)
 {
@@ -418,10 +418,9 @@ pte_t *mmu_user_table(page_dir_t *dir, uintptr_t va, int create)
 }
 
 /**
- * The first user address at or after `va` whose page table `dir` may have,
- * as ../../mm/paging.h describes: the end of the span an absent entry of
- * the PML4, a page directory pointer table or a page directory covers,
- * 512 GiB, 1 GiB or 2 MiB, or `va` when the walk reaches a page table.
+ * The span an absent entry covers is 512 GiB in the PML4, 1 GiB in a page
+ * directory pointer table and 2 MiB in a page directory; `va` comes back
+ * when the walk reaches a page table, and also at or above USER_ADDR_MAX.
  */
 uintptr_t mmu_user_skip(page_dir_t *dir, uintptr_t va)
 {
@@ -487,18 +486,18 @@ phys_addr_t mmu_virt_to_phys(const volatile void *v)
     return va >= KVA_IMAGE ? va - KVA_IMAGE : va - KVA_DIRECT;
 }
 
-/* The table an entry names. */
+/** The table an entry names. */
 static pte_t *entry_table(pte_t e)
 {
     return MMU_VIRT(PTE_ADDR(e));
 }
 
 /**
- * Free all user pages in a directory: drop the frame reference of each
- * present user page of the lower half and clear its entry, flushing it when
- * `dir` is the one in use. A PROT_NONE page is a user page without the
- * user bit. An entry naming frame 0 is corrupt and is cleared without
- * touching a frame. The tables stay, for `free_page_directory`.
+ * Only the lower half is walked. Each present user page loses its frame
+ * reference and its entry, which is flushed wherever `dir` is in use; a
+ * PROT_NONE page counts, though it has no user bit. An entry naming frame 0
+ * is corrupt and is cleared without touching a frame. The tables stay, for
+ * `free_page_directory`.
  */
 void free_user_pages(page_dir_t *dir)
 {
@@ -548,10 +547,9 @@ void free_user_pages(page_dir_t *dir)
 }
 
 /**
- * Free a directory and its lower half's tables. Call it after
- * `free_user_pages`; the frames go back to the allocator. The kernel's
- * directory and the one in use are refused and left in place: a caller
- * switches to another first.
+ * The PML4 and its lower half's tables go back to the allocator; the upper
+ * half's tables are the kernel's and stay. The kernel's directory and the
+ * one in use are left in place: a caller switches to another first.
  */
 void free_page_directory(page_dir_t *dir)
 {
