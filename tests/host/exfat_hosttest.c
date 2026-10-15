@@ -1322,6 +1322,31 @@ static int seq_crossing_rename(void)
     return rc;
 }
 
+/** Rename the fixture's straddle.txt, read it and rename it back. Its file
+ * entry is in a sector's last slot, with the stream and name in the next
+ * sector. A rewrite in place would write the name before its new hash. */
+static int seq_straddle_rename(void)
+{
+    void *n;
+    int err, rc = OPS->rename(&mnt, mnt.root, "straddle.txt", mnt.root, "straddled.txt");
+
+    if (rc != 0) {
+        return rc;
+    }
+    n = walk("/straddled.txt", &err);
+    if (!n) {
+        return -1;
+    }
+    if (read_all(n, back, sizeof(back)) != 9 || memcmp(back, "straddle\n", 9) != 0) {
+        rc = -1;
+    }
+    OPS->put(&mnt, n);
+    if (rc == 0) {
+        rc = OPS->rename(&mnt, mnt.root, "straddled.txt", mnt.root, "straddle.txt");
+    }
+    return rc;
+}
+
 /* The write sequences, by name. Each runs on a writable mount of the
    fixture built with --junk, and returns 0, or nonzero when a call fails. */
 static const struct {
@@ -1341,6 +1366,7 @@ static const struct {
     {"unlink-synced", seq_unlink_synced},
     {"crossing", seq_crossing},
     {"crossing-rename", seq_crossing_rename},
+    {"straddle-rename", seq_straddle_rename},
 };
 
 /** Files made and remade: what a program rewriting a set of files does,
@@ -1403,21 +1429,21 @@ static int judging_crossing;
  * and "w six.txt" the pattern from 100 on; valid.bin the fixture's bytes,
  * zeros past 5000 and at 7000 the ten bytes the vdl sequence writes;
  * hello.txt its twelve bytes and then what the nofat sequence writes; and
- * straddle.txt its nine bytes and then the hundred the straddle sequence
- * writes at 9. In the last three, zeros stand where the sequence has not
- * yet written. Returns 1 when every file passes, and 0 after a message
- * naming the one that does not.
+ * straddle.txt or straddled.txt its nine bytes and then the hundred the
+ * straddle sequence writes at 9. For these fixture files, zeros stand where
+ * the sequence has not yet written. Returns 1 when every file passes, and
+ * 0 after a message naming the one that does not.
  */
 static int oracle_ok(void)
 {
-    static const char *const names[] = {"w one.txt", "w two.bin", "w three.bin", "w four.txt",
-                                        "over.txt",  "R1x.txt",   "r1.txt",      "w six.txt",
-                                        "valid.bin", "hello.txt", "straddle.txt"};
+    static const char *const names[] = {"w one.txt", "w two.bin", "w three.bin",  "w four.txt",
+                                        "over.txt",  "R1x.txt",   "r1.txt",       "w six.txt",
+                                        "valid.bin", "hello.txt", "straddle.txt", "straddled.txt"};
     static const char *const fixed[] = {"chained.bin", "dir/sub/leaf.txt", "crossing.txt"};
     int f, err;
     long i;
 
-    for (f = 0; f < 11; f++) {
+    for (f = 0; f < 12; f++) {
         void *n;
         long got;
         int zeros = 1, written = 1;
@@ -1459,7 +1485,7 @@ static int oracle_ok(void)
                 if (i >= 12 && back[i] == 0) {
                     want = 0;
                 }
-            } else if (f == 10) {
+            } else if (f >= 10) {
                 want = i < 9 ? (unsigned char)"straddle\n"[i] : pattern[i - 9];
                 if (i >= 9 && back[i] == 0) {
                     want = 0;

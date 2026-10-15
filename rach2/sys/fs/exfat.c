@@ -3004,16 +3004,16 @@ static int is_under(struct ex_mount *em, uint32_t dir, uint32_t anc)
 }
 
 /** Whether a rename may rewrite the set `src` in place as a new set of
- * `count` entries: the counts agree, and the stream and name entries lie in
- * one sector, so that a stop leaves either name under its own hash, at
- * worst with the checksum the dirty-volume check repairs. Across two
- * sectors a stop would leave parts of both names under the old hash. */
+ * `count` entries: the counts agree, and the file, stream and name entries lie
+ * in one sector, which `set_store` writes at once. Otherwise its separate
+ * secondary writes could leave the new name under the old hash, a fault
+ * the dirty-volume check cannot repair. */
 static int fits_in_place(const struct ex_set *src, uint32_t count)
 {
     uint32_t per_sector = BLOCK_SECTOR_SIZE / 32;
     uint32_t stream = src->index + 1, last_name = stream + (src->count + 14) / 15;
 
-    return count == src->entries && stream / per_sector == last_name / per_sector;
+    return count == src->entries && src->index / per_sector == last_name / per_sector;
 }
 
 /**
@@ -3024,17 +3024,17 @@ static int fits_in_place(const struct ex_set *src, uint32_t count)
  * A destination of the same kind is replaced, a directory only when it is
  * empty and nothing holds its node, and a rename to another spelling of the
  * source's own name changes nothing. A rename within one directory, to a
- * name no other set has and with as many entries as before, whose stream
- * and name entries lie in one sector (`fits_in_place`), rewrites the set in
- * place by `set_store`, the name entries first and then the file entry's
- * sector. Any other finds room at the destination
- * first, so that -ENOSPC changes nothing; writes the new set with its file
- * entry inactive; retires a replaced destination, whose clusters wait for
- * its holders as on an unlink, and then the source; flushes, so that a drive
- * that keeps writes pending cannot put the publication first; and publishes
- * the new file entry. A crash between the source's retirement and the
- * publication leaves the chain with no name, as lost clusters, where the
- * other order could leave two names on one chain.
+ * name no other set has and with as many entries as before, whose file,
+ * stream and name entries lie in one sector (`fits_in_place`), rewrites
+ * those entries in one write by `set_store`. Any other finds room at the
+ * destination first, so that -ENOSPC changes nothing; writes the new set
+ * with its file entry inactive; retires a replaced destination, whose
+ * clusters wait for its holders as on an unlink, and then the source;
+ * flushes, so that a drive that keeps writes pending cannot put the
+ * publication first; and publishes the new file entry. A crash between the
+ * source's retirement and the publication leaves the chain with no name,
+ * as lost clusters, where the other order could leave two names on one
+ * chain.
  *
  * The new set has the source's file and stream entries, so the times, the
  * chain and the flags stay, and its benign secondaries, a vendor allocation

@@ -6,7 +6,7 @@
 # lookup of the last name. On the same private copy it proves the whole
 # test's row on the file the unlink-synced sequence unlinks after its fsync.
 #
-# Usage: exfat_scan_mutate.sh [--check | --texts]
+# Usage: exfat_scan_mutate.sh [--check | --texts | --rename]
 # With --check it compiles and runs the unmodified rows alone, the cost
 # rows and the whole test. The faults:
 #   filler  the filler entry at a sector's last slot written at every scan
@@ -23,7 +23,10 @@
 #           require the file unlinked while held and the one unlinked after a
 #           sync to be gone; the phase requires both. The mkdir and
 #           crossing sequences and the free-durability row fail as well,
-#           since the driver has one unlink path.
+#           since the driver has one unlink path;
+#   rename  an in-place rewrite with the file entry in another sector,
+#           which leaves a name hash the interruption matrix rejects.
+# With --rename it proves the rename fault using the barrier rows alone.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -59,6 +62,9 @@ function, old, new = {
     'grow': ('static int dir_grow(',
              '    k_memcpy(em->setbuf, em->setsave, sizeof(em->setbuf));\n',
              ''),
+    'rename': ('static int fits_in_place(',
+               'src->index / per_sector == last_name / per_sector',
+               'stream / per_sector == last_name / per_sector'),
     'unlink': ('static int ex_unlink(',
                '    rc = set_retire(em, d, set.index, set.entries);\n'
                '    if (rc != 0) {\n'
@@ -78,7 +84,7 @@ path.write_text(source[:start] + body.replace(old, new) + source[end:])
 PY
 }
 
-faults='filler entry upcase grow unlink'
+faults='filler entry upcase grow unlink rename'
 if [ "${1:-}" = --texts ]; then
     for fault in $faults; do
         RACH2_FAULT_TEXTS=1 apply_fault rach2/sys/fs/exfat.c "$fault" >/dev/null || exit 1
@@ -90,8 +96,8 @@ fi
 . "$repo/tests/system/runlock.sh"
 runlock_hold "$repo" exfat-scan-proof "$repo/tests/host/exfat_scan_mutate.sh" "$@"
 
-[ "$#" -eq 0 ] || [ "$*" = --check ] || {
-    echo 'exfat-scan-proof: usage: exfat_scan_mutate.sh [--check]' >&2
+[ "$#" -eq 0 ] || [ "$*" = --check ] || [ "$*" = --rename ] || {
+    echo 'exfat-scan-proof: usage: exfat_scan_mutate.sh [--check | --rename]' >&2
     exit 2
 }
 mkdir -p build/tests
@@ -174,9 +180,14 @@ EOF
 }
 
 echo "exfat-scan-proof: logs: $work"
-run_phase fixed 0 'exfat_hosttest: OK' --scan-cost
-run_phase fixed-whole 0 'exfat_hosttest: OK'
-[ "$#" -eq 0 ] || exit 0
+if [ "${1:-}" = --rename ]; then
+    faults=rename
+    run_phase fixed-barriers 0 'exfat_hosttest: OK' --barriers
+else
+    run_phase fixed 0 'exfat_hosttest: OK' --scan-cost
+    run_phase fixed-whole 0 'exfat_hosttest: OK'
+    [ "$#" -eq 0 ] || exit 0
+fi
 for fault in $faults; do
     apply_fault "$source" "$fault"
     touch "$source"
@@ -188,6 +199,10 @@ for fault in $faults; do
         entry | upcase) message='exfat_hosttest: FAIL: and take at most 4000 cache gets' ;;
         grow)
             message='exfat_hosttest: FAIL: the volume is consistent after two hundred and twenty creates'
+            ;;
+        rename)
+            message="exfat_hosttest: FAIL: 'straddle-rename' stopped after write 1"
+            mode=--barriers
             ;;
         unlink)
             message='exfat_hosttest: FAIL: the file unlinked while held is gone
