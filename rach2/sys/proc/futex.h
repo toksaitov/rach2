@@ -40,12 +40,12 @@ long sys_set_robust_list(isr_params_t *params);
 /**
  * get_robust_list takes a thread id or 0, where the head goes and where its
  * size goes, and writes there the head and length of the robust list of
- * that thread, the caller for 0. The id is the kernel's, the first PID
- * namespace's. 0; -ESRCH for a thread that is not there or has ended;
- * -EPERM when the thread is of another process and the caller is not
- * privileged, and either the caller's effective uid is neither the
- * thread's real nor its effective one, or the thread is privileged; or
- * -EFAULT.
+ * that thread, the caller for 0. The id is the thread's number in the
+ * caller's PID namespace. 0; -ESRCH for a thread that the namespace does not
+ * show or that has ended; -EPERM when the thread is of another process and
+ * the caller is not privileged, and either the caller's effective uid is
+ * neither the thread's real nor its effective one, or the thread is
+ * privileged; or -EFAULT.
  */
 long sys_get_robust_list(isr_params_t *params);
 

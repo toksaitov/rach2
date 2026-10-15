@@ -159,6 +159,13 @@ process_t *get_process(uint32_t pid)
     return pid == 7 ? &process : NULL;
 }
 
+/** The process the PID `pid` names, its kernel id in the first PID
+ * namespace. */
+process_t *proc_named(uint32_t pid)
+{
+    return get_process(pid);
+}
+
 /** The size of an address space, which a stat line gives and no row
  *  reads: 0. */
 uintptr_t vm_total(const vm_space_t *vm)

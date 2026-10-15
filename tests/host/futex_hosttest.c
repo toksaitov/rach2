@@ -222,11 +222,11 @@ process_t *get_process(uint32_t pid)
     return pid == 5 ? named : NULL;
 }
 
-/** A thread id in the caller's PID namespace, which in the model is the
- * kernel's. */
-uint32_t pid_named(uint32_t pid)
+/** The thread the caller names `pid`; in the model its PID namespace is
+ * the first, so the thread with kernel id `pid`. */
+process_t *proc_named(uint32_t pid)
 {
-    return pid;
+    return get_process(pid);
 }
 
 /** A wait that ends at its deadline, noting the tick it was armed for. */

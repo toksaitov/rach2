@@ -7,13 +7,14 @@
  * process 1, whose parent it sees as 0, and that process's child 2; the first
  * process's status file shows it one number, and shows its parent, outside
  * the namespace, both; get_robust_list of pid 1 gives that process's own
- * list; the link of its descriptor of a /proc file names it 1, and its entry
- * in a listing of /proc has the inode of /proc/1; and a name relative to its
- * descriptor of /proc/self/fd reaches its own descriptor. The caller of
- * unshare keeps its own pid. In a new network namespace a connection to the
- * loopback address fails with ENETUNREACH. A mount made in a new mount
- * namespace is not seen outside it, and a new IPC namespace has none of the
- * first's System V objects.
+ * list, and get_robust_list and kill of a number the namespace has not given
+ * fail with ESRCH; the link of its descriptor of a /proc file names it 1, and
+ * its entry in a listing of /proc has the inode of /proc/1; and a name
+ * relative to its descriptor of /proc/self/fd reaches its own descriptor. The
+ * caller of unshare keeps its own pid. In a new network namespace a
+ * connection to the loopback address fails with ENETUNREACH. A mount made in
+ * a new mount namespace is not seen outside it, and a new IPC namespace has
+ * none of the first's System V objects.
  *
  * As uid 1000, one clone makes a user, a PID and a network namespace, as
  * Chromium's sandbox does; in them the child is pid 1, with uid 65534 until a
@@ -248,8 +249,10 @@ static int proc_own_number(void)
 /**
  * Check, as the first process of a new PID namespace, that it is pid 1 with
  * parent 0, that its child is 2, that its NSpid line has the one number, that
- * get_robust_list of pid 1 gives the head it set, and then `proc_own_number`
- * and `own_fd_dir`. Returns 0, or 1 after printing the failure.
+ * get_robust_list of pid 1 gives the head it set, that get_robust_list and
+ * kill of pid 99, which the namespace has not given, fail with ESRCH, and
+ * then `proc_own_number` and `own_fd_dir`. Returns 0, or 1 after printing
+ * the failure.
  */
 static int pid_first(void)
 {
@@ -277,6 +280,14 @@ static int pid_first(void)
     if (syscall(SYS_set_robust_list, head, sizeof(head)) != 0 ||
         syscall(SYS_get_robust_list, 1, &got, &len) != 0 || got != head || len != sizeof(head)) {
         return fail("get_robust_list of pid 1 gives the first process's own list");
+    }
+    errno = 0;
+    if (syscall(SYS_get_robust_list, 99, &got, &len) != -1 || errno != ESRCH) {
+        return fail("get_robust_list of a pid the namespace has not given is ESRCH");
+    }
+    errno = 0;
+    if (kill(99, 0) != -1 || errno != ESRCH) {
+        return fail("kill of a pid the namespace has not given is ESRCH");
     }
     return proc_own_number() || own_fd_dir();
 }

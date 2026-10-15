@@ -3541,7 +3541,7 @@ static int32_t do_kill(int pid, int signo)
     if (pid == -1) {
         return -ESRCH; /* broadcast-to-all is not supported */
     }
-    target = get_process(pid_named((uint32_t)pid));
+    target = proc_named((uint32_t)pid);
     if (!target || target->state == PROC_UNUSED) {
         return -ESRCH;
     }
@@ -3570,7 +3570,7 @@ static int32_t do_tkill(int tgid, int tid, int signo)
     if (tid <= 0 || tgid < 0 || signo < 0 || signo > KSIG_MAX) {
         return -EINVAL;
     }
-    t = get_process(pid_named((uint32_t)tid));
+    t = proc_named((uint32_t)tid);
     if (!t || t->state == PROC_UNUSED || t->state == PROC_ZOMBIE ||
         (tgid != 0 && t->tgid != pid_named((uint32_t)tgid))) {
         return -ESRCH;
@@ -3642,7 +3642,7 @@ long sys_rt_sigqueueinfo(isr_params_t *params)
 {
     int pid = (int)SC_ARG(params, 0);
     int signo = (int)SC_ARG(params, 1);
-    process_t *target = pid > 0 ? get_process(pid_named((uint32_t)pid)) : NULL;
+    process_t *target = pid > 0 ? proc_named((uint32_t)pid) : NULL;
     struct k_siginfo info;
     int32_t rc;
 
@@ -3669,7 +3669,7 @@ long sys_rt_tgsigqueueinfo(isr_params_t *params)
     int tgid = (int)SC_ARG(params, 0);
     int tid = (int)SC_ARG(params, 1);
     int signo = (int)SC_ARG(params, 2);
-    process_t *t = tid > 0 ? get_process(pid_named((uint32_t)tid)) : NULL;
+    process_t *t = tid > 0 ? proc_named((uint32_t)tid) : NULL;
     struct k_siginfo info;
     int32_t rc;
 
@@ -4723,7 +4723,7 @@ long sys_setpgid(isr_params_t *params)
             return -EPERM;
         }
     }
-    target = (pid == 0) ? current_proc : get_process(pid_named((uint32_t)pid));
+    target = (pid == 0) ? current_proc : proc_named((uint32_t)pid);
     if (!target || target->state == PROC_UNUSED || target->tg->live == 0) {
         return -ESRCH;
     }
@@ -4756,7 +4756,7 @@ static process_t *pgrp_target(int pid)
     if (pid == 0) {
         return current_proc;
     }
-    return get_process(pid_named((uint32_t)pid));
+    return proc_named((uint32_t)pid);
 }
 
 /**
@@ -6632,7 +6632,7 @@ static process_t *sched_target(int pid)
     if (pid == 0) {
         return current_proc;
     }
-    return get_process(pid_named((uint32_t)pid));
+    return proc_named((uint32_t)pid);
 }
 
 /**
@@ -7262,7 +7262,7 @@ long sys_capget(isr_params_t *params)
         return -EINVAL;
     }
     if (pid != 0) {
-        p = get_process(pid_named((uint32_t)pid));
+        p = proc_named((uint32_t)pid);
         if (!p || p->state == PROC_UNUSED) {
             return -ESRCH;
         }

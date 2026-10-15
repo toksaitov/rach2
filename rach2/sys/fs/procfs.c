@@ -462,7 +462,7 @@ int procfs_resolve_pid(int pid)
     if (pid < 0) {
         return -1;
     }
-    p = get_process(pid_named((uint32_t)pid));
+    p = proc_named((uint32_t)pid);
     if (!p || p->state == PROC_UNUSED) {
         return -1;
     }
@@ -479,7 +479,7 @@ int procfs_resolve_id(const struct vpath *vp)
         return pid;
     }
     p = get_process((uint32_t)pid);
-    t = get_process(pid_named((uint32_t)vp->tid));
+    t = proc_named((uint32_t)vp->tid);
     if (!p || !t || t->state == PROC_UNUSED || t->tg != p->tg ||
         (t->state == PROC_ZOMBIE && t != t->tg->leader)) {
         return -1;

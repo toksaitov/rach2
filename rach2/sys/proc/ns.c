@@ -594,6 +594,13 @@ uint32_t pid_named(uint32_t pid)
     return 0;
 }
 
+process_t *proc_named(uint32_t pid)
+{
+    uint32_t kid = pid_named(pid);
+
+    return kid != 0 ? get_process(kid) : NULL;
+}
+
 /** The next free number of the PID namespace `ns`: 1 for its first
  * process, then upward, past the numbers its processes have, from 2 again
  * after NS_PID_MAX; 0 when every number is held. */

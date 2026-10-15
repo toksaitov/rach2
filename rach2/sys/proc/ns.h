@@ -213,6 +213,11 @@ uint32_t pid_seen(uint32_t kid);
  * 0 for none it can see; `pid` itself in the first PID namespace. */
 uint32_t pid_named(uint32_t pid);
 
+/** The process or thread the current process names `pid`, as `pid_named`
+ * finds it, or NULL for none it can see. No `pid` names the idle process,
+ * whose kernel id 0 is also `pid_named`'s answer for none, so 0 gives NULL. */
+process_t *proc_named(uint32_t pid);
+
 /** pid_seen for the viewer `viewer` in place of the current process. */
 uint32_t pid_seen_by(const process_t *viewer, uint32_t kid);
 

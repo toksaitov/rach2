@@ -312,10 +312,10 @@ uint32_t ns_uid_from_kernel(const struct userns *ns, uint32_t id)
     return id + (ns == &tracee_ns ? 1000 : 2000);
 }
 
-/** The PID `pid` itself. */
-uint32_t pid_named(uint32_t pid)
+/** The process the PID `pid` names, its kernel id in the model. */
+process_t *proc_named(uint32_t pid)
 {
-    return pid;
+    return get_process(pid);
 }
 
 /** The kernel id `pid` plus 100 as the tracee sees it, plus 200 as any

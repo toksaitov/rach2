@@ -755,7 +755,6 @@ long sys_ptrace(isr_params_t *params)
     long request = (long)SC_ARG(params, 0);
     uintptr_t addr = SC_ARG(params, 2);
     unsigned long data = SC_ARG(params, 3);
-    uint32_t pid;
     process_t *t;
     struct k_siginfo info;
 
@@ -765,8 +764,7 @@ long sys_ptrace(isr_params_t *params)
     if (request == PTRACE_TRACEME) {
         return ptrace_traceme();
     }
-    pid = pid_named((uint32_t)SC_ARG(params, 1));
-    t = get_process(pid);
+    t = proc_named((uint32_t)SC_ARG(params, 1));
     if (!t || t->state == PROC_UNUSED || t->state == PROC_ZOMBIE) {
         return -ESRCH;
     }
@@ -800,5 +798,5 @@ long sys_ptrace(isr_params_t *params)
     if (t->ptrace_status == 0) {
         return -ESRCH;
     }
-    return ptrace_stopped(t, pid, request, addr, data);
+    return ptrace_stopped(t, t->pid, request, addr, data);
 }
