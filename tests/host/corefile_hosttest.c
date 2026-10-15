@@ -39,7 +39,7 @@ static void fs_node_moved(const krffs_node_t *from, krffs_node_t *to);
 static void fd_release_backing(fd_entry_t *e);
 static void fd_holds_release(void);
 static long sys_ftruncate(isr_params_t *params);
-static long ksys_ftruncate(int fd, uint64_t length);
+static long ksys_ftruncate(int fd, long long length);
 static long ksys_truncate(const char __user *upath, long long length);
 static long ksys_pread64(int fd, char __user *buf, uint32_t count, long long pos);
 static long ksys_pwrite64(int fd, const char __user *buf, uint32_t count, long long pos);

@@ -71,14 +71,16 @@ long sys_ftruncate(isr_params_t *params);
  * Truncate or extend the open file `fd` to `length` bytes: the core of
  * ftruncate(2) and of i386's ftruncate64, the form musl calls there, whose
  * handlers give it the length whole; the file system answers a length past what
- * it can hold. Returns 0 or a negative errno: -EBADF for a descriptor that is
- * not open on a file of a mount or is an O_PATH one, as on Linux; -EINVAL for
- * one not open for writing; -EFBIG past RLIMIT_FSIZE, with SIGXFSZ sent
+ * it can hold. Returns 0 or a negative errno, in Linux's order: -EINVAL for a
+ * negative length, before the descriptor is looked at; -EBADF for a descriptor
+ * that is not open or is an O_PATH one; -EINVAL for one open on anything but a
+ * file of a mount, such as a directory, a pipe, a socket or a device, or not
+ * open for writing; -EFBIG past RLIMIT_FSIZE, with SIGXFSZ sent
  * (`fsize_refused`); -EPERM for an immutable or append-only file
  * (`size_guarded`); -EBUSY for a file that backs a loop device; or the file
  * system's error. May sleep.
  */
-long ksys_ftruncate(int fd, uint64_t length);
+long ksys_ftruncate(int fd, long long length);
 
 /**
  * The core of truncate(2) and of i386's truncate64(2): set the length of the

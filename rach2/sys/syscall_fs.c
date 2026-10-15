@@ -787,7 +787,7 @@ static int size_guarded(struct vfs_mount *mnt, void *node);
  * mappings of the file lose the pages past the new end
  * (`filemap_file_truncated`).
  */
-long ksys_ftruncate(int fd, uint64_t length)
+long ksys_ftruncate(int fd, long long length)
 {
     fd_entry_t *entry;
     int rc;
@@ -795,17 +795,20 @@ long ksys_ftruncate(int fd, uint64_t length)
     if (!current_proc) {
         return -ESRCH;
     }
+    if (length < 0) {
+        return -EINVAL;
+    }
     entry = fd_get(current_proc->fds, fd);
-    if (!entry || entry->type != FD_TYPE_FILE || (entry->flags & FD_FLAG_PATH)) {
+    if (!entry || (entry->flags & FD_FLAG_PATH)) {
         return -EBADF;
     }
-    if (!(entry->flags & FD_FLAG_WRITE)) {
+    if (entry->type != FD_TYPE_FILE || !(entry->flags & FD_FLAG_WRITE)) {
         return -EINVAL;
     }
     if (!entry->ofd || !entry->ofd->vmnt) {
         return -EBADF;
     }
-    if (fsize_refused(length) != 0) {
+    if (fsize_refused((uint64_t)length) != 0) {
         return -EFBIG;
     }
     if (size_guarded(entry->ofd->vmnt, entry->ofd->vnode)) {
@@ -819,7 +822,7 @@ long ksys_ftruncate(int fd, uint64_t length)
         fd_ofd_unlock(entry->ofd);
         return -EBUSY;
     }
-    rc = vfs_truncate(entry->ofd->vmnt, entry->ofd->fhandle, length);
+    rc = vfs_truncate(entry->ofd->vmnt, entry->ofd->fhandle, (uint64_t)length);
     if (rc == 0 && !cred_privileged()) {
         if (entry->node) {
             cred_kill_setid(entry->node);
@@ -829,7 +832,7 @@ long ksys_ftruncate(int fd, uint64_t length)
     }
     fd_ofd_unlock(entry->ofd);
     if (rc == 0) {
-        filemap_file_truncated(entry->ofd->vmnt, entry->ofd->ino, length);
+        filemap_file_truncated(entry->ofd->vmnt, entry->ofd->ino, (uint64_t)length);
         if (inotify_watches) {
             inotify_desc(entry->ofd, IN_MODIFY);
         }
@@ -837,12 +840,12 @@ long ksys_ftruncate(int fd, uint64_t length)
     return rc;
 }
 
-/** ftruncate(2) takes fd and length, the length in one register, so of 32
- * bits on i686, whose ftruncate64 is in arch/i686/sys_ia32.c; it returns as
- * `ksys_ftruncate` does. */
+/** ftruncate(2) takes fd and length, the length a signed register's worth,
+ * so of 32 bits on i686, whose ftruncate64 is in arch/i686/sys_ia32.c; it
+ * returns as `ksys_ftruncate` does. */
 long sys_ftruncate(isr_params_t *params)
 {
-    return ksys_ftruncate((int)SC_ARG(params, 0), (uint64_t)SC_ARG(params, 1));
+    return ksys_ftruncate((int)SC_ARG(params, 0), SC_SIGNED(params, 1));
 }
 
 /** write(2) takes fd, buf and count, a count past Linux's MAX_RW_COUNT

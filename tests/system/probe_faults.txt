@@ -1726,6 +1726,36 @@ new
         } else {
 end
 
+fault ftruncate-negative-length
+probe truncmusl
+file rach2/sys/syscall_fs.c
+expect TRUNCMUSL FAIL (a negative length to ftruncate)
+old
+    if (length < 0) {
+        return -EINVAL;
+    }
+    entry = fd_get(current_proc->fds, fd);
+new
+    entry = fd_get(current_proc->fds, fd);
+end
+
+fault ftruncate-nonfile-ebadf
+probe truncmusl
+file rach2/sys/syscall_fs.c
+expect TRUNCMUSL FAIL (ftruncate of a directory)
+old
+    if (entry->type != FD_TYPE_FILE || !(entry->flags & FD_FLAG_WRITE)) {
+        return -EINVAL;
+    }
+new
+    if (entry->type != FD_TYPE_FILE) {
+        return -EBADF;
+    }
+    if (!(entry->flags & FD_FLAG_WRITE)) {
+        return -EINVAL;
+    }
+end
+
 fault exec-keeps-vfork-parent
 probe vforkmusl
 file rach2/sys/syscall_proc.c

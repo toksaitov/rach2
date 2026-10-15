@@ -1,4 +1,4 @@
-.Dd October 3, 2026
+.Dd October 15, 2026
 .Dt TRUNCATE 2
 .Os
 .Sh NAME
@@ -88,8 +88,18 @@ device made meanwhile returns
 as it does during an
 .Fn ftruncate .
 .Ss Truncating a descriptor
+.Fn ftruncate
+makes its checks in Linux's order.
+A negative length returns
+.Er EINVAL
+before the descriptor is looked at.
+A descriptor that is not open, or was opened with
+.Dv O_PATH ,
+returns
+.Er EBADF .
 The descriptor must refer to a file on a mounted file system, open for
-writing; one open only for reading returns
+writing; a directory, a pipe, a socket, a device, or a file open only
+for reading returns
 .Er EINVAL ,
 as on Linux.
 .Ss System call interface
@@ -124,19 +134,11 @@ The older system calls 92,
 and 93,
 .Nm ftruncate ,
 take the path or the descriptor in EBX and a 32-bit length in ECX.
-System call 92 reads the length as signed, as Linux does, so a
-negative length returns
-.Er EINVAL .
-System call 93 reads it as unsigned, and
-.Nm ftruncate64
-also treats the length as unsigned and leaves the limit check to the
-file system.
-A negative length given to
-.Fn ftruncate
-therefore exceeds the file system's limit and yields
-.Er EFBIG
-when the descriptor and mount checks succeed, where Linux returns
-.Er EINVAL .
+Both read the length as signed, as Linux does, so a negative length
+returns
+.Er EINVAL ,
+as a 64-bit length with its high bit set does through calls 193 and
+194.
 .Pp
 On x86-64
 .Nm truncate
@@ -160,7 +162,7 @@ byte, and checks that a seek to the end returns 1.
 shortens and lengthens a file by path through both system calls,
 checks the zeros an extension reads as and a descriptor open on the
 file, drops the set-id bits as an unprivileged caller, and asks for
-each refusal in order.
+each refusal of both functions in order.
 .Sh ERRORS
 .Bl -tag -width ENAMETOOLONG
 .It Er EACCES
@@ -170,9 +172,9 @@ permission on the file, or the file is under
 .Pa /proc .
 .It Er EBADF
 .Fa fd
-is invalid, was opened with
+is not an open descriptor, was opened with
 .Dv O_PATH ,
-does not refer to a file, or has no mounted open-file description.
+or has no mounted open-file description.
 .It Er EBUSY
 The file backs an attached loop device, or path resolution enters a
 mount being mounted or unmounted.
@@ -181,9 +183,13 @@ The path cannot be read from user memory.
 .It Er EFBIG
 The requested length exceeds the file system's limit.
 .It Er EINVAL
+The length is negative.
 .Fn truncate
-was given a negative length or a file that is not a regular file.
-The descriptor is not writable, or ext2 was given a nonregular file.
+was given a file that is not a regular file, or
+.Fn ftruncate
+a descriptor that does not refer to a file of a mounted file system or
+is not open for writing.
+ext2 was given a nonregular file.
 .It Er EIO
 The device was removed, an input/output operation failed, or KRFFS
 could not resolve or resize the file.

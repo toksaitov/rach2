@@ -1,9 +1,12 @@
 /**
- * truncmusl: check truncate by path through both of its system calls.
+ * truncmusl: check truncate by path through both of its system calls, and
+ * the refusals of ftruncate.
  *
  * On i686 musl's and GNU libc's truncate is truncate64, call 193, with the
  * length in ECX and EDX, and the older call 92 takes a signed 32-bit length
- * in ECX. On x86-64 both are truncate, call 76, with the whole length in RSI.
+ * in ECX; ftruncate is ftruncate64, call 194, and the older call 93, in the
+ * same way. On x86-64 they are truncate, call 76, and ftruncate, call 77,
+ * with the whole length in RSI.
  *
  * The rows shorten and lengthen a file through both, and require an
  * extension to read as zeros and a descriptor open on the file to see each
@@ -16,7 +19,10 @@
  * each error, in Linux's order: a negative length before the path is looked
  * at, a missing file, a directory, a device, a /proc file, a file used as a
  * directory, a path too long, and a length past what the file system can
- * hold.
+ * hold. ftruncate's errors follow, in Linux's order: a negative length through
+ * each of its calls before the descriptor is looked at, a descriptor that is
+ * not open, and EINVAL for a descriptor open on a directory, a pipe, a socket
+ * or a device.
  *
  * The program runs as root. It prints `TRUNCMUSL OK` and exits 0 on success,
  * and prints `TRUNCMUSL FAIL (detail)` and exits 1 otherwise.
@@ -28,6 +34,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
@@ -41,16 +48,19 @@
 #define FAR 65536
 
 /*
- * The truncate of a 64-bit length given as its low and high words: i386's
- * truncate64, which takes them in two registers, and x86-64's truncate,
- * which takes the length in one.
+ * The truncate and the ftruncate of a 64-bit length given as its low and
+ * high words: i386's truncate64 and ftruncate64, which take them in two
+ * registers, and x86-64's truncate and ftruncate, which take the length in
+ * one.
  */
 #if defined __x86_64__
-#define TRUNCATE_WIDE(path, lo, hi) \
-    syscall(SYS_truncate, path, (long)((unsigned long)(hi) << 32 | (unsigned long)(lo)))
-#define WIDE_ROW "call 76 with the length in one word"
+#define WIDE_LENGTH(lo, hi)         ((long)((unsigned long)(hi) << 32 | (unsigned long)(lo)))
+#define TRUNCATE_WIDE(path, lo, hi) syscall(SYS_truncate, path, WIDE_LENGTH(lo, hi))
+#define FTRUNCATE_WIDE(fd, lo, hi)  syscall(SYS_ftruncate, fd, WIDE_LENGTH(lo, hi))
+#define WIDE_ROW                    "call 76 with the length in one word"
 #else
 #define TRUNCATE_WIDE(path, lo, hi) syscall(SYS_truncate64, path, lo, hi)
+#define FTRUNCATE_WIDE(fd, lo, hi)  syscall(SYS_ftruncate64, fd, lo, hi)
 #define WIDE_ROW                    "call 193 with the length in two words"
 #endif
 
@@ -248,9 +258,61 @@ static int refusal_rows(void)
     return 0;
 }
 
+/** Whether ftruncate of the descriptor `fd` to 0 fails with EINVAL, and
+ * close it. */
+static int not_regular(int fd)
+{
+    int ok = refused(ftruncate(fd, 0), EINVAL);
+
+    close(fd);
+    return ok;
+}
+
+/**
+ * Check ftruncate's errors, in the order Linux checks for them. Returns 0, or
+ * 1 once the failure is reported.
+ */
+static int descriptor_rows(void)
+{
+    int fd, ends[2];
+
+    fd = open(FILE_PATH, O_RDWR | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) {
+        return fail("make the file for ftruncate");
+    }
+    if (!refused(ftruncate(fd, -1), EINVAL) || !refused(syscall(SYS_ftruncate, fd, -1L), EINVAL) ||
+        !refused(FTRUNCATE_WIDE(fd, 0L, 0x80000000L), EINVAL) ||
+        !refused(ftruncate(-1, -1), EINVAL) || !size_is(fd, 0)) {
+        close(fd);
+        return fail("a negative length to ftruncate");
+    }
+    close(fd);
+    if (!refused(ftruncate(fd, 0), EBADF)) {
+        return fail("ftruncate of a closed descriptor");
+    }
+    if (!not_regular(open("/", O_RDONLY | O_DIRECTORY))) {
+        return fail("ftruncate of a directory");
+    }
+    if (pipe(ends) != 0) {
+        return fail("make a pipe");
+    }
+    close(ends[0]);
+    if (!not_regular(ends[1])) {
+        return fail("ftruncate of a pipe");
+    }
+    if (!not_regular(socket(AF_UNIX, SOCK_STREAM, 0))) {
+        return fail("ftruncate of a socket");
+    }
+    if (!not_regular(open("/dev/null", O_WRONLY))) {
+        return fail("ftruncate of a device");
+    }
+    return 0;
+}
+
 int main(void)
 {
-    if (length_rows() != 0 || identity_rows() != 0 || refusal_rows() != 0) {
+    if (length_rows() != 0 || identity_rows() != 0 || refusal_rows() != 0 ||
+        descriptor_rows() != 0) {
         unlink(FILE_PATH);
         unlink(NEXT_PATH);
         return 1;

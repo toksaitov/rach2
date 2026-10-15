@@ -34,7 +34,8 @@ long sys_ia32_truncate64(isr_params_t *params)
 /** ftruncate64(2): the descriptor, then the length's low and high words. */
 long sys_ia32_ftruncate64(isr_params_t *params)
 {
-    return ksys_ftruncate((int)SC_ARG(params, 0), ia32_join(SC_ARG(params, 1), SC_ARG(params, 2)));
+    return ksys_ftruncate((int)SC_ARG(params, 0),
+                          (long long)ia32_join(SC_ARG(params, 1), SC_ARG(params, 2)));
 }
 
 /** pread64(2): the descriptor, the buffer, the count, then the offset's low
