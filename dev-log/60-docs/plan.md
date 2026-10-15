@@ -71,7 +71,7 @@ The phase is #73; each task below is a sub-issue, sized for one worker session w
 3. The component documents, in ten issues by directory. A large document is an issue of its own.
 4. The comments, in the nineteen units of `facts.md`, K1 to K9 for the kernel first, then U1 to U3 and T1 to T7. A unit's documents are the issue of step 3 for the same directory, so a writer reads the other's work once it has landed.
 5. The two checks in `textcheck.sh`, once every component document conforms.
-6. The edit: the manager reads the whole set as a new reader would, for contradictions, repetition, links and reading order, and fixes what it finds, `AGENTS.md`, `CLAUDE.md` and the skills included.
+6. The edit: the whole set read as a new reader would, for contradictions, repetition, links and reading order, and fixed where it fails. The component documents are three issues for the workers, by part of the tree; the manager edits the policy files, `AGENTS.md`, `CLAUDE.md` and the skills.
 
 A document task is checked by `tests/run style`. A comment unit is checked by the build of both architectures, `tests/run style`, `tests/run host` when it changes a host test, and the token comparison, run in the clone with the change in the working tree:
 

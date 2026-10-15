@@ -10,10 +10,10 @@ This file states the rules in force; their history is in commit messages and `de
 
 ## Project
 
-* Rach2 is an educational 32-bit x86 operating system. Its readers are students and developers, and the code and its prose are meant to teach.
-* The kernel is freestanding C89 (`-ansi`, no libgcc), cross-built with `i686-elf-gcc`. The same sources also build on Rach2 with the staged TinyCC and pdpmake, so kernel code stays inside the dialect both compilers accept.
-* The userland is the ported musl libc, the BusyBox shell, the Dropbear SSH server, and TinyCC with pdpmake to drive it.
-* Read `Readme.md` first, and a component's `Readme.md` before changing its code. `dev-log/` records how each milestone was planned and built; [its index](dev-log/Readme.md) lists them in order, and the last acceptance is `dev-log/06-review/results-2026-09-20.md`.
+* Rach2 is an educational operating system for 32-bit and 64-bit x86 PCs, i686 and x86-64. Its readers are students and developers, and the code and its prose are meant to teach.
+* The kernel is freestanding C89 (`-ansi`, no libgcc), cross-built with `i686-elf-gcc` or `x86_64-elf-gcc`, as `ARCH` selects (`mk/arch.mk`). The same sources also build on Rach2 with the staged TinyCC and pdpmake, so kernel code stays inside the dialect both compilers accept.
+* The userland is the ported musl libc, the BusyBox shell, the Dropbear SSH server, and TinyCC with pdpmake to drive it. `vendor/gnu/` builds a larger root beside it, with glibc and GNU programs.
+* Read `Readme.md` first, and a component's `Readme.md` before changing its code. `dev-log/` records how each milestone was planned and built; [its index](dev-log/Readme.md) lists them in order.
 * For a new machine, `dev-log/26-portable/arrival.md` lists what a clone does not provide, and `tools/Readme.md` has the setup for macOS, Debian and Ubuntu.
 
 ## Roles
@@ -50,7 +50,7 @@ This file states the rules in force; their history is in commit messages and `de
 
 ## Build
 
-* `make` builds the kernel, the host tools, the guest programs, five of the vendored projects (musl, BusyBox, Dropbear, TinyCC, pdpmake), Doom, and the test, os-simple and os-real RAM images. The first build takes minutes; later ones rebuild only what changed, header dependencies included.
+* `make` builds, for the architecture `ARCH` names (i686 by default), the kernel, the host tools, the guest programs, six of the vendored projects (musl, BusyBox, Dropbear, TinyCC, pdpmake, e2fsprogs), Doom, the test, os-simple and os-real RAM images, and os-real's ext2 root. The first build takes minutes; later ones rebuild only what changed, header dependencies included.
 * `make test` runs the style checks, the host tests and the core tier of suites; `tests/run NAME` runs one suite; `make clean` and `make distclean` clean up. The build checks its tools before it compiles with the cross toolchain, and `sh tools/setup/doctor.sh` reports on the wider machine setup.
 * Do not run a `build_*.sh` script by hand, and do not use `make clean` as a routine step.
 * Every in-house component writes its objects, `.d` files and binaries under the top-level `build/`; shared host Make rules are in `mk/`. Image targets run no QEMU: `rach2/run*.sh` boot an image, and the test scripts start QEMU for the suites.
