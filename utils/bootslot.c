@@ -1,15 +1,16 @@
 /**
- * bootslot.c: the boot-slot core bootctl drives, over caller-supplied sector
- * I/O.
+ * bootslot.c: the boot partition's slots and environment block, over sector
+ * I/O the caller supplies. The contracts are in bootslot.h.
  *
- * The shape follows dev-log/23-install/plan.md. Nothing here trusts the
- * volume: the BPB is validated field by field with subtraction-based bounds,
- * the two FAT copies must be identical, every chain the namespace reaches is
- * walked under a visited bitmap (a cluster reached twice is a cross-link and
- * an error), a regular file's chain length must match its directory size,
- * and the three named files must exist as short directory entries. Only then
- * does an install write anything, in the order the interruption matrix
- * documents, so a power cut at any point leaves a machine that boots.
+ * The shape follows dev-log/23-install/plan.md. No field of the volume is
+ * used before it is checked: the BPB field by field with subtraction-based
+ * bounds, the two FAT copies against each other, every chain the namespace
+ * reaches under a visited bitmap (a cluster reached twice is a cross-link
+ * and an error), a regular file's chain length against its directory size,
+ * and /boot/kernel, /boot/fallback and /boot/grub/grubenv must exist as
+ * short directory entries. Only then does an install write anything, in the
+ * order the interruption matrix documents, so a power cut at any point
+ * leaves a machine that boots.
  */
 
 #include "bootslot.h"
@@ -32,8 +33,8 @@
 
 /* The banners diskcmd.c embeds, one per build, which name the disk policy a
  * kernel was compiled with. A machine's kernel must be the read-write build:
- * the read-only build refuses every write command, so the mount of a disk
- * root fails and the boot stops with nothing mounted. */
+ * the read-only build issues no write command to a disk, so the mount of a
+ * disk root fails and the boot stops with nothing mounted. */
 #define POLICY_READ_WRITE "rach2: disk policy: read-write"
 #define POLICY_READ_ONLY  "rach2: disk policy: read-only"
 
@@ -54,11 +55,13 @@ static int fail(char *err, size_t errlen, const char *msg)
     return -1;
 }
 
+/** The little-endian 16-bit field at `p`. */
 static uint32_t le16(const uint8_t *p)
 {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8);
 }
 
+/** The little-endian 32-bit field at `p`. */
 static uint32_t le32(const uint8_t *p)
 {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
@@ -95,11 +98,15 @@ static int visit(struct bootslot *bs, uint32_t cluster)
 }
 
 /**
- * Walk the chain from `first`, marking every cluster visited.
+ * Walk the chain from `first` to its end mark, marking every cluster
+ * visited.
  *
- * Record clusters when `file` is non-NULL; otherwise return only the chain
- * length through `len_out` when supplied. The bound is the volume's own
- * cluster count, so a loop that survives the visited bitmap still terminates.
+ * Record the clusters in `file` when it is non-NULL, and store the chain's
+ * length in `len_out` when it is. Fails for a cluster outside the volume, one
+ * already visited, a free or bad entry, a chain longer than `file` holds,
+ * and a chain longer than the volume. That last bound is the volume's own
+ * cluster count, so a loop that survives the visited bitmap still
+ * terminates.
  */
 static int walk_chain(struct bootslot *bs, uint32_t first, struct bootslot_file *file,
                       uint32_t *len_out, char *err, size_t errlen)
@@ -212,9 +219,9 @@ static int chain_fits(const struct bootslot *bs, uint32_t len, uint32_t size)
  * when this directory is their parent, and recurse into subdirectories.
  * `path` selects which names are expected here: 0 the root (BOOT), 1 /boot
  * (KERNEL, FALLBACK, BOOT.CFG, GRUB), 2 /boot/grub (GRUBENV), 3 anything
- * deeper. The sector buffer is on the stack, not static, so the recursion
- * does not clobber the sector a frame is still reading; the depth bound keeps
- * that to a few sectors.
+ * deeper. Returns 0, or -1 with `err` set. The sector buffer is on the
+ * stack, not static, so the recursion does not clobber the sector a frame
+ * is still reading; the depth bound keeps that to a few sectors.
  */
 static int scan_dir(struct bootslot *bs, uint32_t first_cluster, int path, int depth,
                     struct scan_state *st, char *err, size_t errlen)
@@ -310,7 +317,8 @@ static int scan_dir(struct bootslot *bs, uint32_t first_cluster, int path, int d
 
 /** Resolve one named file after the scan: walk its own chain into `file`
  *  (the scan marked it visited, so `bootslot_open` clears the bitmap before
- *  the files are resolved) and hold its chain to its directory size. */
+ *  the files are resolved) and hold its chain to its directory size. `what`
+ *  names the file and is not used. */
 static int resolve_file(struct bootslot *bs, uint32_t first, uint32_t size,
                         struct bootslot_file *file, const char *what, char *err, size_t errlen)
 {
@@ -326,17 +334,16 @@ static int resolve_file(struct bootslot *bs, uint32_t first, uint32_t size,
 }
 
 /**
- * Read and validate the volume; the contract is in `bootslot.h`.
- *
- * The BPB bounds are those of the FAT32 boot partitions
- * `tools/image/mkdisk_grub.sh` builds and has built, 16 MiB and 64 MiB at
- * one or eight sectors per cluster, stated as bounds and not as a FAT-type
- * threshold. The scan marks every chain it reaches, so the
- * bitmap is cleared before each named file's chain is walked again alone;
- * the scan has already proved them disjoint. A menu slot that is empty or not
- * a whole number of sectors is a disk built wrong and cannot be rewritten
- * whole, so it is refused here, where the volume is judged, and not later,
- * where a write would half-succeed.
+ * The BPB bounds admit the FAT32 boot partitions `tools/image/mkdisk_grub.sh`
+ * builds, 16 MiB to 64 MiB at one or eight sectors per cluster, and are
+ * stated as bounds and not as a FAT-type threshold: a 16 MiB FAT32 volume
+ * has fewer than the 65525 clusters that conventionally mark FAT32. The FATs
+ * are compared sector by sector as the first is kept. The scan marks every
+ * chain it reaches, so the bitmap is cleared before each named file's chain
+ * is walked again alone; the scan has already proved them disjoint. A menu
+ * slot that is empty or not a whole number of sectors is a disk built wrong
+ * and cannot be rewritten whole, so it fails here, where the volume is
+ * judged, and not later, where a write would half-succeed.
  */
 int bootslot_open(struct bootslot *bs, const struct bootslot_io *io, char *err, size_t errlen)
 {
@@ -408,7 +415,6 @@ int bootslot_open(struct bootslot *bs, const struct bootslot_io *io, char *err, 
         return fail(err, errlen, "the root cluster is out of range");
     }
 
-    /* Both FAT copies, compared sector by sector as the first is kept. */
     for (s = 0; s < fatsz; s++) {
         if (io->read(io->ctx, bs->fat_start + s, bs->fat + s * BOOTSLOT_SECTOR) != 0) {
             return fail(err, errlen, "the first FAT does not read");
@@ -421,7 +427,6 @@ int bootslot_open(struct bootslot *bs, const struct bootslot_io *io, char *err, 
         }
     }
 
-    /* The whole reachable namespace, visited once, cross-links refused. */
     if (scan_dir(bs, root_cluster, 0, 0, &st, err, errlen) != 0) {
         return -1;
     }
@@ -477,11 +482,12 @@ static int image_carries(const uint8_t *image, uint32_t size, const char *needle
  * Judge the disk policy an image names, when the whole image is in memory.
  *
  * A machine's kernel must be the read-write build. The read-only build
- * refuses every write command, so its mount of a disk root fails and the
- * boot stops with nothing mounted; an image naming neither policy, or both,
- * is not a kernel this tool can answer for. An image of which only a prefix
- * is present, as when a slot already installed is checked, passes unjudged,
- * since its banner may lie past the prefix.
+ * issues no write command to a disk, so its mount of a disk root fails and
+ * the boot stops with nothing mounted; an image naming neither policy, or
+ * both, fails as well, since nothing then says which build it is. An image
+ * of which only a prefix is present, as when a slot already installed is
+ * checked, passes unjudged, since its banner may lie past the prefix.
+ * Returns 0, or -1 with `err` set.
  */
 static int policy_judged(const uint8_t *image, uint32_t present, uint32_t size, char *err,
                          size_t errlen)
@@ -528,6 +534,8 @@ static long multiboot_header(const uint8_t *image, uint32_t present)
  * loader follows: each load's file range must fit `size` and its memory
  * range the 32-bit space at or above 1 MiB, its physical address must equal
  * its virtual one, and the entry must lie in a load's file-backed bytes.
+ * The program headers must lie in the first `present` bytes. Returns 0, or
+ * -1 with `err` set.
  */
 static int elf32_loads(const uint8_t *image, uint32_t present, uint32_t size, char *err,
                        size_t errlen)
@@ -605,7 +613,7 @@ struct load_addresses {
  *
  * A `load_end` of 0 copies to the end of the file, which the slot pads to
  * its own size, so the copy would be judged against one length and loaded
- * at another; such a load is refused.
+ * at another; such a load fails the check. Returns 0, or -1 with `err` set.
  */
 static int address_load(const struct load_addresses *a, uint32_t off, uint32_t size, char *err,
                         size_t errlen)
@@ -680,9 +688,10 @@ static long multiboot2_header(const uint8_t *image, uint32_t present)
  * (type 2) places the file as the a.out kludge does, judged by
  * `address_load`, and needs an entry tag (type 3) with it; an x86-64 kernel
  * needs both, since its ELF entry is an address in the top 2 GiB, which the
- * loader refuses. The console (4) and framebuffer (5) tags change only the
- * display the loader sets up; another tag the loader must honour (flags bit
- * 0 clear) changes what it does with the image and is refused.
+ * loader cannot jump to. The console (4) and framebuffer (5) tags change
+ * only the display the loader sets up; another tag the loader must honour
+ * (flags bit 0 clear) changes what it does with the image and fails the
+ * check. Returns 0, or -1 with `err` set.
  */
 static int multiboot2_tags(const uint8_t *image, uint32_t off, uint32_t size, int x86_64, char *err,
                            size_t errlen)
@@ -764,22 +773,10 @@ static int kernel_elf_class(const uint8_t *image, uint32_t present, char *err, s
 }
 
 /**
- * Validate the in-memory headers of a kernel a Multiboot loader can load:
- * an ELF32 i386 kernel, whose program headers the loader follows, or an
- * ELF64 x86-64 kernel, whose Multiboot header gives the load's addresses
- * through the a.out kludge.
- *
- * `present` gives the available prefix; the ELF header, an i386 kernel's
- * program headers and both Multiboot headers must fit it, and the headers
- * must be in the first 8192 bytes, which are what the slot checks read.
- * The Multiboot header is QEMU's and an MBR menu's, and its flags must be
- * ALIGN|MEMINFO for an i386 kernel and ALIGN|MEMINFO with the a.out kludge
- * for an x86-64 one; other flags change how the loader reads the image.
- * The multiboot2 header is the GPT menu's, judged by `multiboot2_tags`.
- * Load file ranges must fit `size`, load memory ranges the 32-bit address
- * space at or above 1 MiB, and the entry point a load's file-backed bytes.
- * An i386 load's physical address must equal its virtual one. A whole image
- * must name the read-write disk policy (`policy_judged`).
+ * The headers must be in the first 8192 bytes because those are what the
+ * checks of an installed slot read. The Multiboot header is QEMU's and an
+ * MBR menu's; flags other than the ones required change how the loader
+ * reads the image. The multiboot2 header is the GPT menu's.
  */
 int bootslot_validate_kernel(const uint8_t *image, uint32_t present, uint32_t size, char *err,
                              size_t errlen)
@@ -820,11 +817,13 @@ int bootslot_validate_kernel(const uint8_t *image, uint32_t present, uint32_t si
 }
 
 /**
- * Set `key=value` in the environment block, and drop any `drop_key=` line:
- * read the 1024 bytes, require GRUB's header line, drop any existing `key=`
- * line, append the new one, pad with '#', write both sectors back in order,
- * and read them back. GRUB's own save_env edits the same block the same way;
- * neither writer moves or resizes the file.
+ * Set `set_key=set_val` in the environment block, and drop any `drop_key=`
+ * line: read the 1024 bytes, require GRUB's header line, drop any existing
+ * `set_key=` line, append the new one, pad with '#', write both sectors back
+ * in order, and read them back. GRUB's own save_env edits the same block the
+ * same way; neither writer moves or resizes the file. Returns 0, or -1 with
+ * `err` set for a block that does not read, lacks the header or a line, has
+ * no room for the new line, or does not read back as written.
  *
  * The block is newline-terminated lines, comments and variables, followed by
  * a '#' pad with no newline in it, so everything up to the last newline is
@@ -871,14 +870,14 @@ static int env_edit(struct bootslot *bs, const char *set_key, const char *set_va
         len = (uint32_t)i - start;
         if (key != NULL && len > keylen && memcmp(env + start, key, keylen) == 0 &&
             env[start + keylen] == '=') {
-            continue; /* the line being replaced */
+            continue;
         }
         if (drop_key != NULL) {
             size_t dlen = strlen(drop_key);
 
             if (len > dlen && memcmp(env + start, drop_key, dlen) == 0 &&
                 env[start + dlen] == '=') {
-                continue; /* the line being dropped (a stale trial) */
+                continue;
             }
         }
         if (n + len > ENV_BYTES) {
@@ -957,13 +956,6 @@ int bootslot_env_set(struct bootslot *bs, const char *key, const char *value, ch
     return env_edit(bs, key, value, NULL, err, errlen);
 }
 
-/**
- * Remove a key without writing an empty value.
- *
- * Removing `next_entry` cancels a trial without supplying the empty marker
- * that `bootslot_commit` requires. That marker is written when GRUB selects
- * a trial, before loading its kernel.
- */
 int bootslot_env_drop(struct bootslot *bs, const char *key, char *err, size_t errlen)
 {
     return env_edit(bs, NULL, NULL, key, err, errlen);
@@ -982,18 +974,14 @@ int bootslot_read_env(struct bootslot *bs, uint8_t *out, char *err, size_t errle
 }
 
 /**
- * Install `image` into the candidate slot, in the order that keeps the
- * machine bootable at every step.
- *
- * The image is validated whole. The fallback must validate as a bootable
- * kernel before the saved default is pointed at it, so a machine whose
- * fallback does not validate gets no install at all; its first 8192 bytes
- * hold everything that check reads. One environment write then moves the
- * saved default to the fallback and drops any stale `next_entry` from an
- * earlier install, so a retry cannot leave a half-written slot armed. The
- * slot is written, padded with zeros, and read back whole and compared,
- * since structural validation alone would pass a slot missing a load sector
- * away from the headers. Only then is `next_entry=candidate` set.
+ * The fallback must check as a bootable kernel before the saved default is
+ * pointed at it, so a machine whose fallback does not check gets no install
+ * at all; its first 8192 bytes hold everything that check reads. The write
+ * that moves the saved default to the fallback also drops any stale
+ * `next_entry` from an earlier install, so a retry cannot leave a
+ * half-written slot armed. The slot is read back whole, since the header
+ * checks alone would pass a slot missing a load sector away from the
+ * headers.
  */
 int bootslot_install(struct bootslot *bs, const uint8_t *image, uint32_t size, char *err,
                      size_t errlen)
@@ -1096,19 +1084,6 @@ static int env_trial_armed(const uint8_t *env)
     return 0;
 }
 
-/**
- * Copy the candidate slot into the fallback file and read it back.
- *
- * Require `saved_entry=candidate` and no nonempty `next_entry` before
- * copying the candidate slot, both slots a whole number of sectors, a
- * fallback file at least as long as the slot, and a candidate whose headers
- * validate.
- *
- * Invalidate the fallback's first sector, copy and verify the remaining
- * sectors, then restore and verify the first sector. A failure before that
- * final write leaves no valid ELF header. A failure during the final write
- * may leave a partial header.
- */
 int bootslot_fallback(struct bootslot *bs, char *err, size_t errlen)
 {
     static uint8_t env[ENV_BYTES];
@@ -1185,12 +1160,6 @@ int bootslot_fallback(struct bootslot *bs, char *err, size_t errlen)
     return 0;
 }
 
-/**
- * Set `saved_entry=candidate` when the environment contains an empty
- * `next_entry` and no nonempty occurrence. The caller must establish that
- * this boot runs the candidate. GRUB writes the empty marker when selecting
- * a trial, before loading its kernel.
- */
 int bootslot_commit(struct bootslot *bs, char *err, size_t errlen)
 {
     static uint8_t env[ENV_BYTES];
