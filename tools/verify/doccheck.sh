@@ -9,7 +9,8 @@
 # pushed, and is not part of it. It is a document change when each of its
 # files is a Markdown file; a manual page under man/; a C file or header
 # whose tokens, once its comments are removed, are those of BASE; a shell
-# script whose interpreter line and commands are those of BASE; or a makefile
+# script (`*.sh`, `tests/run` or a program under `krffs/` named `*.script`)
+# whose interpreter line and commands are those of BASE; or a makefile
 # or manifest whose changed lines are all comments or blank lines that its
 # reader skips. The script names any other file and exits 2, and the change
 # is then checked as code.
@@ -192,7 +193,7 @@ while read -r omode nmode _ _ status f; do
         fi
         [ -f "$f" ] && cfiles="$cfiles $f"
         ;;
-    *.sh|tests/run)
+    *.sh|tests/run|krffs/*.script)
         at_base "$f" > "$work/old"
         if [ -f "$f" ]; then cat "$f"; fi > "$work/now"
         if [ "$status" = A ]; then
