@@ -5,8 +5,8 @@
 # vendored tarball. Verifies the sha256, extracts, applies the curated
 # rach2.config, builds against the ported musl via the muslgcc wrapper, strips,
 # and stages the binary out of tree to build/vendor/busybox/busybox (staged into
-# the os-real RAM-disk image by its manifest). Run vendor/musl/build_libc.sh
-# first.
+# the os-real RAM-disk image by its manifest). `make musl` builds the musl it
+# needs.
 # The architecture is RACH2_ARCH's (mk/arch.sh); an x86-64 build extracts
 # into build/x86_64/vendor-work/busybox/ and stages under
 # build/x86_64/vendor/busybox/.
@@ -44,7 +44,7 @@ sha256_of()
 }
 
 if [ ! -f "$PREFIX/lib/libc.a" ]; then
-    echo "busybox: $PREFIX/lib/libc.a not found; run vendor/musl/build_libc.sh first" >&2
+    echo "busybox: $PREFIX/lib/libc.a not found; run make musl in the top directory first" >&2
     exit 1
 fi
 if [ ! -f "$TARBALL" ]; then

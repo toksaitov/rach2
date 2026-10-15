@@ -9,7 +9,7 @@
 # libraries and the five programs, strips them, and stages them out of tree
 # under build/vendor/e2fsprogs/, from which the manifests stage them. mke2fs
 # is built with mke2fs.conf beside this script as its defaults. debugfs is
-# not built. Run vendor/musl/build_libc.sh first. The architecture is
+# not built. `make musl` builds the musl it needs. The architecture is
 # RACH2_ARCH's (mk/arch.sh); an x86-64 build extracts into
 # build/x86_64/vendor-work/e2fsprogs/ and stages under
 # build/x86_64/vendor/e2fsprogs/.
@@ -47,7 +47,7 @@ sha256_of()
 }
 
 if [ ! -f "$PREFIX/lib/libc.a" ]; then
-    echo "e2fsprogs: $PREFIX/lib/libc.a not found; run vendor/musl/build_libc.sh first" >&2
+    echo "e2fsprogs: $PREFIX/lib/libc.a not found; run make musl in the top directory first" >&2
     exit 1
 fi
 if [ ! -f "$TARBALL" ]; then

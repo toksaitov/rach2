@@ -54,7 +54,7 @@ LIBGCC="$($CC -print-libgcc-file-name)"
 OUT="$ARCH_BUILD/tests/musl"
 
 if [ ! -f "$PREFIX/lib/libc.a" ]; then
-    echo "error: $PREFIX/lib/libc.a not found; run vendor/musl/build_libc.sh first" >&2
+    echo "error: $PREFIX/lib/libc.a not found; run make musl in the top directory first" >&2
     exit 1
 fi
 

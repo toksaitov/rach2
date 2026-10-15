@@ -100,7 +100,7 @@ sha256_of()
 }
 
 if [ ! -f "$PREFIX/lib/libc.a" ]; then
-    echo "tcc: $PREFIX/lib/libc.a not found; run vendor/musl/build_libc.sh first" >&2
+    echo "tcc: $PREFIX/lib/libc.a not found; run make musl in the top directory first" >&2
     exit 1
 fi
 if [ ! -f "$TARBALL" ]; then

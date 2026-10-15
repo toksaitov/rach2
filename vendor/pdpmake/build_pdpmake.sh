@@ -54,7 +54,7 @@ sha256_of()
 }
 
 if [ ! -f "$PREFIX/lib/libc.a" ]; then
-    echo "pdpmake: $PREFIX/lib/libc.a not found; run vendor/musl/build_libc.sh first" >&2
+    echo "pdpmake: $PREFIX/lib/libc.a not found; run make musl in the top directory first" >&2
     exit 1
 fi
 if [ ! -x "$WRAP" ]; then
