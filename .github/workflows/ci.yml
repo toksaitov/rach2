@@ -13,7 +13,8 @@
 # architecture's output and kept logs are uploaded for every account to fetch,
 # and tools/ci/report.sh sets the commit's status, files a failure as an
 # issue, starts bisect.yml for a new one, and opens or closes the `hold`
-# issue.
+# issue. A run that a person cancels reports nothing; a core job that passes
+# its time limit is reported as unfinished.
 name: ci
 
 on:
@@ -80,7 +81,7 @@ jobs:
 
   report:
     needs: [head, core]
-    if: always() && needs.head.result == 'success' && needs.head.outputs.tested == '0'
+    if: ${{ !cancelled() && needs.head.result == 'success' && needs.head.outputs.tested == '0' }}
     runs-on: [self-hosted, rach2]
     steps:
       - uses: actions/checkout@v5
