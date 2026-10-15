@@ -763,7 +763,10 @@ static void say_threads(pid_t pid)
         if (d->d_name[0] == '.') {
             continue;
         }
-        snprintf(path, sizeof(path), "/proc/%d/task/%s/status", (int)pid, d->d_name);
+        if (snprintf(path, sizeof(path), "/proc/%d/task/%s/status", (int)pid, d->d_name) >=
+            (int)sizeof(path)) {
+            continue;
+        }
         f = fopen(path, "r");
         if (!f) {
             continue;
