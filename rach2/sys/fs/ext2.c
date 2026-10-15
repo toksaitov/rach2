@@ -60,8 +60,7 @@
 /* An inode in memory, from the heap, on its mount's list. */
 struct ext2_node {
     struct ext2_node *next; /* the mount's list of nodes in memory */
-    int used;
-    uint32_t refs; /* holds; the last `ext2_put` frees the node */
+    uint32_t refs;          /* holds; the last `ext2_put` frees the node */
     uint32_t ino;
     uint32_t mode;
     uint32_t uid, gid;
@@ -112,25 +111,17 @@ struct ext2_image {
     uint8_t *data;
 };
 
-/* An inode the batch holds, with its size when the batch took it or at the
- * last drain. */
-struct ext2_pending {
-    struct ext2_node *node;
-    uint64_t committed_size;
-};
-
 /*
  * The file-write batch a mount keeps across calls: the images of the blocks
  * its writes change, `datas` and `metas` of them in use, and the `count`
- * inodes it holds; the bytes accepted since the last drain; the drains done
- * (`generation`); the stage a drain is at, where a failed one resumes; and
- * the first failure's errno, stage, block and generation, kept for the
- * mount's life.
+ * inodes it holds; the bytes accepted since the last drain; the stage a
+ * drain is at, where a failed one resumes; and the first failure's errno,
+ * kept for the mount's life.
  */
 struct ext2_writeback {
     struct ext2_image data[EXT2_WB_DATA];
     struct ext2_image meta[EXT2_WB_META];
-    struct ext2_pending nodes[EXT2_WB_NODES];
+    struct ext2_node *nodes[EXT2_WB_NODES];
     /* One heap page per buffer. A single run of 288 pages is more than a
      * reserve run of the heap can give, so it would have to come from the
      * ordinary region in one piece, and after the cache has moved much data
@@ -138,9 +129,8 @@ struct ext2_writeback {
      * fail a writable mount with ENOMEM. */
     uint8_t *slot[EXT2_WB_DATA + EXT2_WB_META];
     int datas, metas, count;
-    uint32_t bytes, generation;
-    int stage, draining, error, error_stage;
-    uint32_t error_block, error_generation;
+    uint32_t bytes;
+    int stage, error;
 };
 
 /* The directories whose last lookup a mount remembers, enough for the walk
@@ -149,7 +139,6 @@ struct ext2_writeback {
 
 /* A mounted volume, from the heap, at `mnt->priv`. */
 struct ext2_mount {
-    int used;
     block_device_t *dev;
     struct vfs_mount *mnt;
     uint32_t block_size;
@@ -205,7 +194,6 @@ static struct ext2_node *node_new(struct ext2_mount *em)
     struct ext2_node *n = kzalloc(sizeof(*n));
 
     if (n) {
-        n->used = 1;
         n->next = em->nodes;
         em->nodes = n;
     }
@@ -264,7 +252,7 @@ static void writeback_free(struct ext2_writeback *wb)
     kfree(wb);
 }
 
-static int writeback_error(struct ext2_mount *em, int rc, uint32_t block);
+static int writeback_error(struct ext2_mount *em, int rc);
 
 /** The batch's image of block `block`, metadata or data, or NULL; the cache
  * is neither read nor changed. */
@@ -1158,7 +1146,7 @@ static int ext2_sync(struct vfs_mount *mnt)
         rc = block_flush(em->dev);
     }
     if (rc != 0) {
-        (void)writeback_error(em, rc, 0);
+        (void)writeback_error(em, rc);
     }
     vfs_ns_unlock(mnt);
     return rc;
@@ -1186,7 +1174,7 @@ static int ext2_prepare_unmount(struct vfs_mount *mnt)
     rc = sb_store(em);
     if (rc != 0) {
         em->state &= ~EXT2_VALID_FS;
-        return writeback_error(em, rc, 0);
+        return writeback_error(em, rc);
     }
     em->valid_cleared = 0;
     return 0;
@@ -1222,7 +1210,7 @@ static void ext2_abort_unmount(struct vfs_mount *mnt)
         }
     }
     if (rc != 0) {
-        (void)writeback_error(em, rc, 0);
+        (void)writeback_error(em, rc);
     }
     vfs_ns_unlock(mnt);
 }
@@ -1300,7 +1288,7 @@ static void ext2_unmount(struct vfs_mount *mnt)
     struct ext2_mount *em = em_of(mnt);
 
     if ((em->dev->flags & BLOCK_GONE) && em->wb && em->wb->count) {
-        (void)writeback_error(em, -EIO, 0);
+        (void)writeback_error(em, -EIO);
     }
     while (em->nodes) {
         node_drop(em, em->nodes);
@@ -1756,7 +1744,7 @@ static void mark_error(struct ext2_mount *em)
     }
     em->state |= EXT2_ERROR_FS;
     if (em->wb && em->wb->count) {
-        (void)writeback_error(em, -EIO, 0);
+        (void)writeback_error(em, -EIO);
     } else if (em->writable) {
         (void)sb_store(em);
     }
@@ -2600,7 +2588,7 @@ static int writeback_plan(struct ext2_mount *em, struct ext2_node *n, uint64_t o
     int rc = 0;
 
     for (plan->node_index = 0; plan->node_index < wb->count; plan->node_index++) {
-        if (wb->nodes[plan->node_index].node == n) {
+        if (wb->nodes[plan->node_index] == n) {
             break;
         }
     }
@@ -2696,8 +2684,7 @@ static void writeback_commit(struct ext2_mount *em, struct ext2_node *n, uint64_
         plan->feature->dirty = 1;
     }
     if (plan->node_index == wb->count) {
-        wb->nodes[plan->node_index].node = n;
-        wb->nodes[plan->node_index].committed_size = n->size;
+        wb->nodes[plan->node_index] = n;
         wb->count++;
         n->refs++;
     }
@@ -2751,20 +2738,17 @@ fail:
 }
 
 /**
- * Record a failure `rc` of the batch at `block`: the first one's errno,
- * stage, block and generation kept for the mount's life, the error bit set
- * in memory, the mount made read-only, and the mount's `write_error` set
- * when it has none, which every later `fsync` reports. Returns `rc`.
+ * Record a failure `rc` of the batch: the first one's errno kept for the
+ * mount's life, the error bit set in memory, the mount made read-only, and
+ * the mount's `write_error` set when it has none, which every later
+ * `fsync` reports. Returns `rc`.
  */
-static int writeback_error(struct ext2_mount *em, int rc, uint32_t block)
+static int writeback_error(struct ext2_mount *em, int rc)
 {
     struct ext2_writeback *wb = em->wb;
 
     if (wb && !wb->error) {
         wb->error = rc;
-        wb->error_stage = wb->stage;
-        wb->error_block = block;
-        wb->error_generation = wb->generation;
     }
     em->state |= EXT2_ERROR_FS;
     em->mnt->flags |= VFS_MS_RDONLY;
@@ -2794,17 +2778,15 @@ static int writeback_drain(struct ext2_mount *em)
 {
     struct ext2_writeback *wb = em->wb;
     int i, count, rc;
-    uint32_t block = 0;
 
     if (em->dev->flags & BLOCK_GONE) {
-        return writeback_error(em, -EIO, 0);
+        return writeback_error(em, -EIO);
     }
     if (!wb || !wb->count) {
         return 0;
     }
-    wb->draining = 1;
     for (i = 0; i < wb->count; i++) {
-        struct ext2_node *n = wb->nodes[i].node;
+        struct ext2_node *n = wb->nodes[i];
         uint64_t at = inode_offset(em, n->ino);
         struct ext2_image *im = writeback_find(em, (uint32_t)(at >> 12));
 
@@ -2826,8 +2808,7 @@ static int writeback_drain(struct ext2_mount *em)
             if (!im->dirty || im->stage != wb->stage) {
                 continue;
             }
-            block = im->block;
-            b = bcache_get_blank(em->dev, block);
+            b = bcache_get_blank(em->dev, im->block);
             if (!b) {
                 rc = -EIO;
                 goto fail;
@@ -2851,19 +2832,13 @@ static int writeback_drain(struct ext2_mount *em)
     wb->count = wb->datas = wb->metas = 0;
     wb->bytes = 0;
     wb->stage = 0;
-    wb->draining = 0;
-    wb->generation++;
     for (i = 0; i < count; i++) {
-        struct ext2_node *n = wb->nodes[i].node;
-
-        wb->nodes[i].committed_size = n->size;
-        ext2_put(em->mnt, n);
+        ext2_put(em->mnt, wb->nodes[i]);
     }
     em_balance(em);
     return 0;
 fail:
-    wb->draining = 0;
-    return writeback_error(em, rc, block);
+    return writeback_error(em, rc);
 }
 
 /**
@@ -3546,7 +3521,7 @@ static int ext2_fsync(struct vfs_mount *mnt, void *handle)
         rc = block_flush(em->dev);
     }
     if (rc != 0) {
-        (void)writeback_error(em, rc, 0);
+        (void)writeback_error(em, rc);
     }
     if (mnt->write_error) {
         rc = mnt->write_error;
@@ -3764,7 +3739,7 @@ static int32_t ext2_write(struct vfs_mount *mnt, void *handle, const void *buf, 
     rc = 0;
 out:
     if (rc == -EIO && wb && wb->count) {
-        (void)writeback_error(em, rc, 0);
+        (void)writeback_error(em, rc);
     }
     vfs_ns_unlock(mnt);
     return done ? (int32_t)done : rc;
@@ -5500,7 +5475,6 @@ static int ext2_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags
     if (!em) {
         return -ENOMEM;
     }
-    em->used = 1;
     rc = ext2_mount_on(em, mnt, dev, flags);
     if (rc != 0) {
         while (em->nodes) {

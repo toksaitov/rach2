@@ -45,7 +45,6 @@
 
 struct fat_node {
     struct fat_node *next; /* the mount's list of nodes in memory */
-    int used;
     int refs;
     int is_dir;
     uint32_t dir_cluster; /* the directory holding the entry; 0 for the root */
@@ -78,7 +77,6 @@ struct new_name {
 };
 
 struct fat_mount {
-    int used;
     block_device_t *dev;
     uint32_t spc;      /* sectors per cluster, a power of two to 64 */
     uint32_t reserved; /* sectors before the first FAT */
@@ -271,7 +269,6 @@ static struct fat_node *node_take(struct fat_mount *fm)
     struct fat_node *n = kzalloc(sizeof(*n));
 
     if (n) {
-        n->used = 1;
         n->refs = 1;
         n->next = fm->nodes;
         fm->nodes = n;
@@ -1402,7 +1399,7 @@ static int fat_lookup(struct vfs_mount *mnt, void *dir, const char *name, void *
 
             n = node_for(fm, dir_cluster, &sc);
             if (!n) {
-                klog(KLOG_WARN, "vfat", "node pool full");
+                klog(KLOG_WARN, "vfat", "lookup: kernel heap allocation failed");
                 return -ENOMEM;
             }
             *node = n;
@@ -3139,7 +3136,6 @@ static int fat_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
     if (!fm) {
         return -ENOMEM;
     }
-    fm->used = 1;
     rc = fat_mount_on(fm, mnt, dev, flags, options);
     if (rc != 0) {
         while (fm->nodes) {

@@ -32,13 +32,11 @@
 
 #define UPCASE_HELD 16384u /* a stored table up to this size is kept per mount */
 #define UPCASE_LOW  2048u  /* code points whose mapping is kept, walked once */
-#define SET_MAX     19     /* the file entry, the stream, and up to 17 name entries */
 
 /* A file or directory in memory, from the heap, on its mount's list. */
 struct ex_node {
     struct ex_node *next; /* the mount's list of nodes in memory */
-    int used;
-    int refs; /* holds; the last `ex_put` frees the node */
+    int refs;             /* holds; the last `ex_put` frees the node */
     int is_dir;
     uint32_t dir_cluster; /* the directory holding the set; 0 for the root */
     uint32_t index;       /* the set's file entry, an index in that directory */
@@ -63,7 +61,6 @@ struct ex_node {
 
 /* A mounted volume, from the heap, at `mnt->priv`. */
 struct ex_mount {
-    int used;
     block_device_t *dev;
     struct vfs_mount *mnt;
     uint32_t spc_shift; /* log2 of the sectors in a cluster */
@@ -297,7 +294,6 @@ static struct ex_node *node_take(struct ex_mount *em)
     struct ex_node *n = kzalloc(sizeof(*n));
 
     if (n) {
-        n->used = 1;
         n->refs = 1;
         n->next = em->nodes;
         em->nodes = n;
@@ -1053,7 +1049,7 @@ static int ex_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **
             struct ex_node *n = node_for(em, d, &set);
 
             if (!n) {
-                klog(KLOG_WARN, "exfat", "node pool full");
+                klog(KLOG_WARN, "exfat", "lookup: kernel heap allocation failed");
                 return -ENOMEM;
             }
             *node = n;
@@ -1759,7 +1755,6 @@ static int ex_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags, 
     if (!em) {
         return -ENOMEM;
     }
-    em->used = 1;
     rc = ex_mount_on(em, mnt, dev, flags, options);
     if (rc != 0) {
         while (em->nodes) {
