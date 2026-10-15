@@ -1,42 +1,38 @@
 /**
- * The clock this machine reads at boot, seen from a program.
+ * clockmusl: check that the real-time clock reports the date and advances.
  *
- * Distinct from `timemusl`, which is about the SLEEP: that one proves
- * `nanosleep` really suspends a thread and that `getrandom` returns different
- * bytes each time. This one is about the DATE.
+ * `timemusl` checks that `nanosleep` suspends a thread; this program checks
+ * the date. Each of its three checks catches a different fault:
  *
- * Three claims, and they fail in different ways:
+ * The date is later than `NOT_BEFORE`. A machine that reports the time since
+ * boot as the date answers a few dozen seconds and fails here.
  *
- * The date is REAL. `time(NULL)` must be at least the lower bound below, which
- * is a moment already past when this probe was written. A machine reporting
- * time since boot answers a few dozen seconds and fails here, which is what it
- * did before there was a clock to read.
+ * The clock advances. Two reads of `time` across a two-second sleep must
+ * differ by 1 to 30 seconds; a clock set once at boot and never advanced
+ * passes the first check and fails this one.
  *
- * The clock RUNS. Two reads across a sleep must differ, and by about the time
- * that was slept: a clock anchored once and never advanced would pass the first
- * claim and fail this one.
+ * The two clocks differ. `CLOCK_REALTIME` must be later than `NOT_BEFORE`
+ * and `CLOCK_MONOTONIC`, the time since boot, under `BOOT_CEILING`, so a
+ * machine that answers the same number for both fails one of them.
  *
- * The two clocks are DIFFERENT clocks. `CLOCK_MONOTONIC` reports time since
- * boot and `CLOCK_REALTIME` reports the date, so a machine that answered the
- * same number for both has one clock wearing two names. That is exactly what
- * this system did before, so it is asserted, not assumed.
+ * The bound is a literal in this file rather than the date of the build,
+ * which would make the binary differ on every build.
  *
- * The bound is a literal committed with the probe, not a build-time
- * constant: a date compiled in at build time makes the binary differ on every
- * build, and a probe whose expected value moves with the thing it tests proves
- * nothing.
- *
- * Prints "CLOCKMUSL OK" on success and "CLOCKMUSL FAIL (detail)" otherwise.
+ * Before "CLOCKMUSL OK" it prints "CLOCKMUSL EPOCH n", the date in seconds,
+ * which the suite's runner compares with the host clock. A bound in this file
+ * cannot catch a date wrong by hours, as a local-time CMOS read as UTC is;
+ * the runner's comparison can. A failure prints "CLOCKMUSL FAIL (detail)".
+ * The exit status is 0 on success and 1 on the first failure.
  */
 
 #include <stdio.h>
 #include <time.h>
 #include <unistd.h>
 
-/* 2026-08-14 00:00:00 UTC, the day this probe was written. */
+/* 2026-08-14 00:00:00 UTC, in seconds; a correct clock reads later. */
 #define NOT_BEFORE 1786665600L
 
-/* A boot that reaches a probe takes seconds, not weeks. */
+/* The bound on CLOCK_MONOTONIC, in seconds: about 11 days. */
 #define BOOT_CEILING 1000000L
 
 /** Report one failed check and return 1, the probe's failure status. */
@@ -93,10 +89,6 @@ int main(void)
         return fail(detail);
     }
 
-    /* Printed for the host side of the check: the harness compares this with
-     * the clock QEMU handed the machine. A bound committed in this file cannot
-     * catch a date that is wrong by hours, and a machine reading a local-time
-     * CMOS as UTC is wrong by exactly that. */
     printf("CLOCKMUSL EPOCH %ld\n", (long)second);
     printf("CLOCKMUSL OK\n");
 

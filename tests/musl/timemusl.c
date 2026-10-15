@@ -1,18 +1,17 @@
 /**
- * Exercises time, sleep, and randomness through the ported musl.
+ * timemusl: check `nanosleep`, `CLOCK_MONOTONIC` and `getrandom` through musl.
  *
- * An ordinary hosted C program. It reads a monotonic timestamp with
- * `clock_gettime(CLOCK_MONOTONIC)`, sleeps 120 ms with `nanosleep`, then
- * confirms the clock advanced by at least 100 ms, so the block-and-schedule
- * sleep really suspended the thread instead of returning early. It then draws
- * two 16-byte buffers from `getrandom` (the CSPRNG behind syscall 355) and
- * requires them to differ. musl 1.2.5 has no arc4random, so getrandom is the
- * integration point.
+ * It reads `CLOCK_MONOTONIC`, sleeps 120 ms with `nanosleep`, and requires the
+ * clock to have advanced by at least 100 ms, so the sleep suspended the thread
+ * rather than returning early. It then draws two 16-byte buffers from
+ * `getrandom`, which reads the kernel's random generator, and requires them to
+ * differ. musl 1.2.5 has no `arc4random`, so `getrandom` is the interface a
+ * program uses.
  *
- * Prints "TIMEMUSL OK" with the slept milliseconds and a few random bytes when
- * the whole libc path works, or "TIMEMUSL FAIL: <reason>" on the first failure.
- *
- * Linked statically against the ported musl; see tests/musl/build.sh.
+ * It prints "TIMEMUSL OK" with the milliseconds slept and a few random bytes
+ * when every step works, or "TIMEMUSL FAIL: reason" at the first failure, and
+ * exits 0 or 1 to match. It is linked statically against the ported musl; see
+ * `tests/musl/build.sh`.
  */
 
 #define _GNU_SOURCE /* expose getrandom */

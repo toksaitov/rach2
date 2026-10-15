@@ -1,5 +1,6 @@
 /**
- * The CPU time the kernel charges each process, read through musl.
+ * cputimemusl: check the CPU time the kernel charges each process, read
+ * through musl's `times`, `wait4` and `getrusage`.
  *
  * The timer charges the tick it interrupts to the process it finds running:
  * as user time when the process was in its own code, as system time when it
@@ -19,13 +20,13 @@
  *
  * `getrusage` reports the same ticks as timevals: for the process and for
  * its thread what `times` reports, read between two readings of it, and for
- * the children their totals; any other `who` is refused.
+ * the children their totals; any other `who` fails with `EINVAL`.
  *
  * The loops are bounded by the ticks since boot: a kernel that never charged
  * the time would otherwise spin forever instead of failing.
  *
- * Prints "CPUTIMEMUSL OK" on success and "CPUTIMEMUSL FAIL (detail)"
- * otherwise.
+ * It prints "CPUTIMEMUSL OK" and exits 0 on success, or prints
+ * "CPUTIMEMUSL FAIL (detail)" and exits 1 at the first failure.
  */
 
 #include <errno.h>
@@ -53,8 +54,10 @@ static int fail(const char *what)
     return 1;
 }
 
-/** Spend a while in user mode without a system call; the sum is what the
- * loop computed, returned so the compiler keeps the loop. */
+/**
+ * Spend a while in user mode without a system call. Returns the sum the loop
+ * computed, so that the compiler keeps the loop.
+ */
 static unsigned int spin(void)
 {
     volatile unsigned int x = 0;
@@ -66,15 +69,16 @@ static unsigned int spin(void)
     return x;
 }
 
-/** A timeval as the 100 Hz ticks the kernel counted. */
+/** Convert a timeval to the 100 Hz ticks the kernel counts. */
 static long ticks_of(const struct timeval *tv)
 {
     return (long)tv->tv_sec * 100 + (long)tv->tv_usec / 10000;
 }
 
 /**
- * Spin until this process has `want` more ticks of user time than `from`, or
- * until LOOP_BOUND ticks have passed. Returns the user time gained.
+ * Spin until this process has `want` more ticks of user time than it had at
+ * the start, or until `LOOP_BOUND` ticks have passed. `from` receives the
+ * times read at the start. Returns the ticks of user time gained.
  */
 static long spin_for(long want, struct tms *from)
 {
@@ -91,8 +95,9 @@ static long spin_for(long want, struct tms *from)
 }
 
 /**
- * Whether getrusage(`who`) reads between two readings of `times`: 0 when
- * it does, 1 when it does not.
+ * Check that `getrusage(who)` reports user and system times that lie between
+ * two readings of `times` taken around it. Returns 0 when they do, and 1 when
+ * they do not or the call fails.
  */
 static int usage_between(int who)
 {
@@ -156,8 +161,7 @@ int main(void)
         return fail("the process was charged more CPU time than the ticks since boot");
     }
 
-    /* A reaped child: wait4 reports its time, and the parent's children's
-       time rises by exactly that. */
+    /* A reaped child: the time wait4 reports is added to the children's. */
     times(&before);
     pid = fork();
     if (pid < 0) {
