@@ -9,15 +9,15 @@
  *
  * A subsystem that every processor enters on its ticks, faults and
  * allocations has one of these over its data, taken with interrupts off,
- * so that an interrupt on the holding processor cannot ask for the lock it
- * already holds. A lock is taken after the big lock (proc/smp.h), never
- * before it, and is held for a short region that does not sleep. A
- * processor that waits for one still answers the requests other processors
- * leave it, the TLB's and the stop's, since the holder may be waiting for
- * its answer.
+ * so that an interrupt on the holding processor cannot try to take the
+ * lock that processor already holds. A lock is taken after the big lock
+ * (proc/smp.h), never before it, and is held for a short region that does
+ * not sleep. A processor that waits for one still answers the requests
+ * other processors leave it, the TLB's and the stop's, since the holder may
+ * be waiting for its answer.
  */
 struct spinlock {
-    volatile unsigned int locked;
+    volatile unsigned int locked; /* 1 while a processor holds it, else 0 */
 };
 
 #define SPINLOCK_INIT {0}

@@ -1,3 +1,4 @@
+/* The spinlock's acquire and release, over the architecture's exchange. */
 #include "spinlock.h"
 
 #include "kirq.h"
@@ -5,8 +6,6 @@
 #include "../proc/smp.h"
 
 /**
- * Take `lock`, spinning while another processor holds it.
- *
  * The exchange is tried first, and then the word is only read until it
  * reads free, so that a waiting processor does not take the bus on every
  * turn. Interrupts are off, so a waiter answers the requests left in its

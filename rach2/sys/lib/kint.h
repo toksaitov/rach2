@@ -1,6 +1,8 @@
 #ifndef _KINT_H_
 #define _KINT_H_
 
+/* The exact-width integer types of <stdint.h>, for the freestanding kernel. */
+
 /* Signed 8-bit byte. */
 typedef signed char int8_t;
 /* Unsigned 8-bit byte. */

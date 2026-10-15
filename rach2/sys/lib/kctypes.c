@@ -1,3 +1,4 @@
+/* The kernel's case conversion for ASCII letters. */
 #include "kctypes.h"
 
 char k_toupper(char c)

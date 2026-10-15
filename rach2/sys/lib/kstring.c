@@ -1,3 +1,4 @@
+/* The string and memory functions of the freestanding kernel. */
 #include "kstring.h"
 
 #include "../arch/arch.h"
@@ -11,8 +12,6 @@ size_t k_strlen(const char *str)
 }
 
 /**
- * Reverse the NUL-terminated string `str` in place.
- *
  * An empty string is left untouched; without that guard the length-minus-one
  * upper index would wrap to SIZE_MAX and walk off the buffer.
  */
@@ -49,10 +48,10 @@ void k_strtoupper(char *str)
  * since a user program may leave it set at a system call). The kernel is
  * built without optimisation, so a byte loop costs a load, a store and a
  * compare per byte, and every disk and network path passes each byte
- * through several of them; on the Lenovo the byte loops bounded the SSD at
- * 90 MB/s. A byte loop moves the tail. Elsewhere, and in the host tests, the
- * byte loop is the whole function, and the tests of the tail run against
- * it.
+ * through several of them; on the Lenovo, byte loops limit the SSD to
+ * about 90 MB/s. A byte loop moves the tail. Elsewhere, and in the host
+ * tests, the byte loop is the whole function, and the tests of the tail
+ * run against it.
  */
 #if defined(ARCH_STRING_WORDS) && !defined(RACH2_HOSTTEST)
 #define KSTRING_WORDS 1
@@ -100,8 +99,6 @@ void *k_memcpy(void *dest, const void *src, size_t n)
 }
 
 /**
- * Copy `n` bytes between ranges that may overlap.
- *
  * When the destination starts inside the source, a forward copy would
  * overwrite source bytes before they are read, so the copy runs backward
  * from the last byte. Every other arrangement copies forward through
@@ -134,20 +131,13 @@ void *k_memmove(void *dest, const void *src, size_t n)
 
 /**
  * The standard memory routines and `strlen`, as wrappers over the `k_`
- * bodies above.
- *
- * Kernel code calls the `k_` names; these wrappers exist because both
- * compilers that build this kernel emit calls to the standard names on
- * their own: gcc can emit `memcpy` or `memset` for a struct copy or a large
- * initializer, and `strlen` at -O2, and tcc emits `memmove` for every struct
- * assignment and `memset` for initializer holes. A kernel linked without a
- * libc must define what its compiler emits, or those calls fail at link
- * time. The bodies stay in the `k_` forms because the host test runs this
- * file under AddressSanitizer, which rewrites every call to a standard
- * memory name into its own checked copy; a body under the standard name
- * would be unreachable there. The size parameter is `__SIZE_TYPE__`, the
- * type each compiler's builtin prototype expects, which `-Werror` holds
- * these definitions to.
+ * bodies above. A kernel linked without a libc must define what its
+ * compiler emits, or those calls fail at link time. The bodies stay in the
+ * `k_` forms because the host test runs this file under AddressSanitizer,
+ * which rewrites every call to a standard memory name into its own checked
+ * copy; a body under the standard name would be unreachable there. The
+ * size parameter is `__SIZE_TYPE__`, the type each compiler's builtin
+ * prototype expects, which `-Werror` enforces on these definitions.
  */
 void *memset(void *ptr, int c, __SIZE_TYPE__ n)
 {

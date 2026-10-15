@@ -1,31 +1,13 @@
+/* The kernel's text formatter, k_vprintf. */
 #include "kfmt.h"
 #include "kstd.h"
 
 /**
- * Format `format` against the arguments in `ap`, emitting each byte through
- * `putc_fn`.
- *
- * Supported conversions are `%d` (signed decimal), `%u` (unsigned decimal),
- * `%b`, `%o`, `%x`, `%X` (binary, octal, lower- and upper-case hex), `%p`
- * (a pointer, as `0x` and
- * its hex digits at the pointer's full width), `%s` (a string, with a NULL
- * pointer rendered as `(null)`), `%c` (a character), and `%%` (a literal
- * percent). The numeric conversions and `%s` take an optional `0` flag and
- * an optional single-digit width between the percent and the letter, and are
- * padded on the left to that width, so `%02x` writes a byte as two hex
- * digits. The padding is done here and not in `k_ltoa`, so numbers and
- * strings share one rule. A numeric conversion takes an `l` before its
- * letter for a long or an unsigned long, and a `z` for a `size_t` or a
- * `ssize_t`, which are as wide as a long; without one it reads an int. `ap`
- * is consumed left to right; a character is read as `int`, which is what
- * the call passed.
- *
- * An unknown conversion writes its letter alone, without the `%`, flag or
- * width, and consumes nothing, so every argument after it in the same call
- * is read one slot early. That is why `tools/verify/fmtcheck.sh`, in the
- * style check, refuses a format string with a conversion this does not
- * have. A format that ends on its `%`, or on a flag or width after it,
- * writes the `%` and returns, since reading on would pass the terminator.
+ * Each number is converted into `buffer` and then written by the same code
+ * as a string, so the padding is done here and not in `k_ltoa`, and numbers
+ * and strings share one rule. `%u` converts its digits here, since `k_ltoa`
+ * treats a decimal as signed. A format that ends after its `%` stops at the
+ * terminator, since reading on would pass it.
  */
 void k_vprintf(putc_fn_t putc_fn, const char *format, va_list ap)
 {

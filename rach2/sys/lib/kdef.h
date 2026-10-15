@@ -1,7 +1,12 @@
 #ifndef _KDEF_H_
 #define _KDEF_H_
 
-/* NULL pointer */
+/*
+ * The definitions of <stddef.h> and <stdbool.h> the freestanding kernel
+ * needs, and the attributes it gives the compilers that build it.
+ */
+
+/* The null pointer constant. */
 #define NULL ((void *)0)
 
 /*
@@ -11,7 +16,7 @@
  */
 #define k_barrier() __asm__ __volatile__("" : : : "memory")
 
-/* Boolean data type */
+/* A truth value: 0 for false and 1 for true; C89 has no bool. */
 typedef int bool;
 
 #define false 0

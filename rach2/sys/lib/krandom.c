@@ -1,15 +1,12 @@
+/* The kernel CSPRNG, a ChaCha20 keystream, and its seeding at boot. */
 #include "krandom.h"
 
 /*
- * ChaCha20 keystream CSPRNG. The 16-word input block is the standard layout:
- * four constant words, an eight-word key, a 64-bit block counter, and a 64-bit
- * nonce. krandom_reseed/krandom_seed install the key; each 64-byte block of
- * keystream is produced on demand and dispensed as a contiguous BYTE stream.
- *
- * NOT reentrant: the single CSPRNG instance is file-static. Call it only from
- * kernel-thread / syscall context (where the timer never preempts, in_syscall),
- * never from an interrupt handler; a nested call would corrupt a half-dispensed
- * block. krandom_seed() runs once at boot before any user.
+ * The 16-word input block is ChaCha20's standard layout: four constant
+ * words, an eight-word key, a 64-bit block counter, and a 64-bit nonce.
+ * krandom_reseed and krandom_seed install the key; each 64-byte block of
+ * keystream is produced on demand and dispensed as one contiguous byte
+ * stream.
  *
  * The state is initialized with the ChaCha constants and a non-zero default
  * key, so even a draw before krandom_seed() yields a non-zero
@@ -119,8 +116,6 @@ static uint8_t cc_next_byte(void)
 }
 
 /**
- * Reseed the CSPRNG from four seed words.
- *
  * The four words expand to a full eight-word key deterministically (each
  * high word a distinct mix), so a reseed is a pure function of its inputs.
  * ChaCha has no all-zero lock state, so even a zero seed yields a non-zero
@@ -182,10 +177,9 @@ int krandom_is_trusted(void)
  * Draw one word from the processor's conditioned seed source (RDSEED on an
  * x86), through `arch_random`.
  *
- * The source may transiently fail, so it is asked a bounded number of times.
- * Return 1 and store *out on success, 0 if it never delivers, or the
- * processor has none. (`rdrand32`, below, draws from the processor's
- * generator, RDRAND on an x86, on the same terms.)
+ * The source may fail for a moment, so it is tried a bounded number of
+ * times. Return 1 and store *out on success, 0 if it never delivers or the
+ * processor has none.
  */
 static int rdseed32(uint32_t *out)
 {
@@ -199,6 +193,8 @@ static int rdseed32(uint32_t *out)
     return 0;
 }
 
+/** Draw one word from the processor's generator (RDRAND on an x86) on the
+ * same terms as `rdseed32`. */
 static int rdrand32(uint32_t *out)
 {
     int tries;
@@ -246,16 +242,13 @@ static int hw_key(uint32_t key[8])
 }
 
 /**
- * Seed the CSPRNG once at boot, before any user.
- *
- * Real hardware entropy is used when the CPU offers it: a defensible seed that
- * marks the generator trusted. Otherwise the seed comes from boot-time jitter
- * (the processor's cycle counter, the clock's reading at boot, and the
- * tick). Jitter varies
- * across boots but is not defensible entropy, so the source stays untrusted:
- * getrandom without GRND_INSECURE and /dev/[u]random fail closed, and only
- * best-effort uses draw from it, such as AT_RANDOM, from which the C library
- * takes its stack canary.
+ * Hardware entropy is used when the CPU offers it: a defensible seed that
+ * marks the generator trusted. Otherwise the seed comes from boot-time
+ * jitter (the processor's cycle counter, the clock's reading at boot, and
+ * the tick). Jitter varies across boots but is not defensible entropy, so
+ * the source stays untrusted: getrandom without GRND_INSECURE and
+ * /dev/[u]random fail closed, and only best-effort uses draw from it, such
+ * as AT_RANDOM, from which the C library takes its stack canary.
  */
 void krandom_seed(void)
 {
@@ -283,9 +276,8 @@ void krandom_seed(void)
 #else
 
 /**
- * Seed the CSPRNG for the host build, which has no hardware entropy.
- *
- * Tests that need a specific stream call krandom_reseed() explicitly.
+ * The host build has no hardware entropy and seeds from four fixed words.
+ * Tests that need a specific stream call krandom_reseed() themselves.
  */
 void krandom_seed(void)
 {

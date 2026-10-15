@@ -4,12 +4,13 @@
 #include "kint.h"
 
 /*
- * Linux i386 signals: numbers, the kernel-side sigaction, and the per-signal
- * default-action classes. The delivery machinery (per-process disposition,
- * pending and blocked masks, delivery on return-to-user via a signal frame on
- * the user stack, and rt_sigreturn) lives in syscall_proc.c, sigframe.c and the
- * ISR return path. Signals 1..64, each with one pending bit; no real-time
- * queueing.
+ * Linux's signals, whose numbers and flags are the same on i386 and x86-64:
+ * the numbers, the kernel-side sigaction, and the default-action classes.
+ * The delivery (disposition, pending and blocked masks, the signal frame on
+ * the user stack at the return to user mode, and rt_sigreturn) is in
+ * syscall_proc.c, the sigframe.c of each architecture and the interrupt
+ * return path. Signals are 1..64, each with one pending bit; a real-time
+ * signal is not queued.
  */
 #define SIGHUP    1
 #define SIGINT    2 /* terminal interrupt (CTRL+C) */
@@ -49,7 +50,7 @@
 #define KSIG_DFL 0u /* default action */
 #define KSIG_IGN 1u /* ignore */
 
-/* sa_flags bits (Linux i386 values). The kernel honors SA_SIGINFO, SA_ONSTACK,
+/* sa_flags bits (Linux's values). The kernel honors SA_SIGINFO, SA_ONSTACK,
  * SA_RESTORER, SA_RESTART, SA_NODEFER and SA_RESETHAND; SA_NOCLDSTOP and
  * SA_NOCLDWAIT are stored and have no effect. */
 #define SA_NOCLDSTOP 0x00000001u
@@ -133,9 +134,9 @@ struct k_sigaction {
 
 /* Default-action classes; ksig_default_action in syscall_proc.c maps a
  * signal to one. The common default is TERM; the signals of a program fault,
- * SIGQUIT, SIGABRT, SIGXCPU and SIGXFSZ end the process with a core file;
- * SIGCHLD/SIGURG/SIGWINCH/SIGCONT ignore; the job-control signals
- * SIGSTOP/SIGTSTP/SIGTTIN/SIGTTOU stop. */
+ * SIGQUIT, SIGABRT, SIGXCPU, SIGXFSZ and SIGSYS end the process with a core
+ * file; SIGCHLD, SIGURG, SIGWINCH and SIGCONT are ignored; the job-control
+ * signals SIGSTOP, SIGTSTP, SIGTTIN and SIGTTOU stop it. */
 enum ksig_default {
     KSIG_DEFAULT_TERM,   /* terminate (the common case) */
     KSIG_DEFAULT_CORE,   /* terminate with a core file */
