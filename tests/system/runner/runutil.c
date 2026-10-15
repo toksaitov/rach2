@@ -1389,21 +1389,29 @@ static void lock_exec(const char *path, const char *owner, char **cmd)
 }
 
 /** Open a block's lock file, which every account on the host must be able to
- * lock. The file is made mode 0666 by its first opener. An existing file is
- * opened without O_CREAT, which Linux refuses on another account's file in a
- * sticky directory such as /tmp.
+ * lock. The first opener creates the file mode 0666 with the umask cleared,
+ * so that no other account finds it with a narrower mode, even when the
+ * creator dies at once; the helper is single-threaded, so nothing else sees
+ * the cleared umask. Every opener then sets the mode 0666, which repairs a
+ * narrower file of its own account and fails harmlessly on another's. An
+ * existing file is opened without O_CREAT, which Linux refuses on another
+ * account's file in a sticky directory such as /tmp.
  */
 static int open_shared(const char *path)
 {
+    mode_t mask;
     int fd = open(path, O_RDWR);
-    if (fd >= 0 || errno != ENOENT)
-        return fd;
-    fd = open(path, O_RDWR | O_CREAT | O_EXCL, 0666);
-    if (fd >= 0) {
-        fchmod(fd, 0666);
-        return fd;
+
+    if (fd < 0 && errno == ENOENT) {
+        mask = umask(0);
+        fd = open(path, O_RDWR | O_CREAT | O_EXCL, 0666);
+        umask(mask);
+        if (fd < 0 && errno == EEXIST)
+            fd = open(path, O_RDWR);
     }
-    return errno == EEXIST ? open(path, O_RDWR) : -1;
+    if (fd >= 0)
+        fchmod(fd, 0666);
+    return fd;
 }
 
 /** End the port claim with 128 plus the number of a signal it has received.
