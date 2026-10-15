@@ -16,11 +16,11 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `dhcp` (full tier; needs qemu; 128 MiB): the machine taking an address it was not told, with both of its clients: BusyBox's `udhcpc`, which `ifup` runs, and os-simple's own `dhcpc`, which its `netup` runs.
 * `netif` (full tier; needs qemu; 128 MiB): the interface ioctls, which is how a program sets this machine's address.
 * `netif-e1000` (full tier; needs qemu; 128 MiB): the netif suite's card half on the e1000 card.
-* `mount` (core tier; needs qemu, mformat, mcopy, mdir; 128 MiB): the mount milestone's suite.
+* `mount` (core tier; needs qemu, mformat, mcopy, mdir; 128 MiB): the partition nodes, the block path through a device that sleeps or never answers, and mount(2) and the claims it makes (see tests/system/suites/mount.sh).
 * `fdlock` (full tier; needs qemu; 128 MiB): pending KRFFS relocation, orphan truncation, and concurrent raw offsets.
 * `grow` (full tier; needs qemu, mke2fs, e2fsck, qemu-img; 512 MiB): a 1 GiB ext2 root grown by `growroot` on the recovery system to a partition the size of the installed machine's disk, its writes checked against the grow set, a grow killed and repaired, one interrupted between the entry and the grow, and the memory it needs.
 * `drill` (full tier; needs qemu, ssh, mformat, mmd, mcopy, mke2fs, debugfs, e2fsck; 128 MiB): the recovery drill, boots of one disk that carries the same three partitions the sealed disk has.
-* `account` (full tier; needs qemu; 128 MiB): accounts created, authenticated, changed and deleted on both images, since both have account tools now and they are different code.
+* `account` (full tier; needs qemu; 128 MiB): accounts created, authenticated, changed and deleted on both images, since both have account tools and they are different code.
 * `large` (full tier; needs qemu, mke2fs, e2fsck, mformat, either hdiutil and newfs_exfat or mkfs.exfat and fsck.exfat; 128 MiB): a file past 4 GiB on ext2 and on exFAT, written, read back after a remount, sought, sized, truncated, appended and shared between two descriptors, and a write past each format's limit refused by name.
 * `usb` (core tier; needs qemu; 128 MiB): the USB stack, from a port to a keystroke, in the boots that `tests/system/suites/usb.sh` counts and describes.
 * `raw-e1000` (full tier; needs qemu; 128 MiB): the raw suite's card half on the e1000 card.
@@ -44,7 +44,7 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `noentropy` (full tier; needs qemu; 128 MiB): the entropy policy's fail-closed half, which no other target can reach.
 * `shutdown` (full tier; needs qemu; 128 MiB): userland stopping the machine, on a disk fixture, with every claim of a stop asserted on the QEMU process ending rather than on a token, and every image checked by offline fsck afterwards.
 * `fatwrite` (core tier; needs qemu, mformat, mcopy, mdir, python3; 128 MiB): FAT32 written from a program, read back after a reboot, judged by the host's walk and mtools, taken through a crash and its repair, written from BusyBox, and written by two processes under the lag.
-* `ssh` (core tier; needs qemu, ssh, nc; 128 MiB): the SSH capstone with nobody at the keyboard.
+* `ssh` (core tier; needs qemu, ssh, nc; 128 MiB): logins over SSH with nobody at the keyboard.
 * `ssh-e1000` (full tier; needs qemu, ssh; 128 MiB): the ssh suite on the e1000 card.
 * `exfat` (core tier; needs qemu, python3; 128 MiB): exFAT written from a program, read back after a reboot, judged by the host's reader and the external checker where the host has one, taken through a crash and its repair, written from BusyBox, and written by two processes under the lag.
 * `ext2` (core tier; needs qemu, mke2fs, e2fsck, mtype; 128 MiB): the ext2 driver booted over a fixture disk the host's mke2fs wrote, with the walker's link rows on the mounted volume.
@@ -88,11 +88,11 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `audio` (core tier; needs qemu; 128 MiB): what the machine actually played.
 * `netconsole` (core tier; needs qemu; 128 MiB): the kernel log on the wire.
 * `crash` (core tier; needs qemu; 128 MiB): prove the dirty-mount flag detects an unclean shutdown.
-* `pools` (core tier; needs qemu; 128 MiB): the objects that were pools, past the count each pool had, and the heap where it started after a thousand of each (see tests/poolprobe.c).
+* `pools` (core tier; needs qemu; 128 MiB): many pipes, ptys, sockets and processes live at once, and the kernel heap back where it started after a thousand each of pipes, ptys and sockets (see tests/poolprobe.c).
 * `runner` (core tier; needs nothing beyond the build; no machine): the harness's selftest, then the runner's own, tests/run driven against a registry and a makefile of its own in a temporary directory (tests/system/selftest.sh).
 * `diskfull` (core tier; needs qemu; 128 MiB): a file system with no room left.
 * `fault` (core tier; needs qemu; 128 MiB): the three probes whose whole claim is that the kernel killed them.
-* `imagerace` (full tier; needs nothing beyond the build; no machine): two builds of one image at the same moment, which a parallel run of the suites produces and which used to take both of them down.
+* `imagerace` (full tier; needs nothing beyond the build; no machine): two builds of one image at the same moment, as a parallel run of the suites can make them, both of which must finish and leave the image whole.
 * `krffscheck` (full tier; needs python3; no machine): what the offline checker says about images broken on purpose.
 * `conload` (core tier; needs qemu, mformat; 128 MiB): every line typed at the console under load arrives, numbered and checksummed, with the reader parked, as type-ahead, after an interrupt character to a foreground child, and across an exec.
 * `drive` (core tier; needs nothing beyond the build; no machine): the drivers' waits, drive.sh and the harness against fake machines that choose when they are ready, booting nothing.

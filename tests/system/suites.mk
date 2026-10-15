@@ -43,15 +43,11 @@ BOOT_KERNEL ?= $(ARCH_BUILD)/rach2/kernel
 .PHONY: prepare-all prepare-images components harness-kernel \
         $(addprefix run-,$(shell awk -F'|' '!/^#/ && NF > 1 { print $$1 }' tests/registry))
 
-# --- RAM-disk images. Each is built out of tree from a checked-in manifest
-#     by the manifest-driven stageimage.krffs (see krffs/mkimage.sh and
-#     krffs/manifests/), which writes the whole tree directly as KRFFS v2
-#     nodes (no FUSE mount). Each image is its own file, so they coexist. ---
-# The card the network suites attach. The RTL8139 is the default, so every
-# invocation that names nothing runs what it always ran; `tests/run e1000`
-# re-enters these same targets with the other emulated card. The runner and
-# the harness both take --device, and ssh.sh takes the card as an argument,
-# because it builds its own QEMU command line.
+# The card the network suites attach. The RTL8139 is the default, which an
+# invocation that names no card gets; the `NAME-e1000` suites run these same
+# targets with the other emulated card. The runner and the harness both take
+# --device, and ssh.sh takes the card as an argument, because it builds its
+# own QEMU command line.
 # The host ports the suites forward. They are named here because two suites
 # sharing one cannot both run, and a number buried in a recipe is a collision
 # nobody sees until the two are scheduled together.
@@ -125,8 +121,8 @@ SCREENTEXT      = build/tests/system/screentext
 GROWSET         = build/tools/inspect/growset
 INSTALL_TEST_STICK = $(IMAGES_DIR)/install-test-stick.img
 INSTALLER_MBR_DISK = $(IMAGES_DIR)/installer-test-mbr.disk
-# The deadline tool: the suites' wall-clock limit with process-group kill,
-# replacing coreutils' gtimeout. Built with the host compiler like the KRFFS
+# The deadline tool: the suites' wall-clock limit, which kills the process
+# group at the deadline. It is built with the host compiler like the KRFFS
 # tools.
 $(DEADLINE): tests/system/runner/deadline.c
 	@mkdir -p $(dir $@)
@@ -177,19 +173,18 @@ $(PTYDRIVE): tests/system/runner/ptydrive.c
 $(RUNUTIL): tests/system/runner/runutil.c
 	@mkdir -p $(dir $@)
 	$(HOST_LINK)
-# `make test`: the automated end-to-end pass over the test image. Boots it
-# headless (-cpu max) and runs every probe, failing if any does not exit 0. The
-# few probes with a special contract (fork-exit-code, stdin, faults, network)
-# are run by hand under tests/system/runner/harness.c; see
-# tests/system/runner/runtests.c. --timeout is one deadline for the whole run,
-# not per probe, so it is stated here rather than left at the default: the suite
-# grows every milestone, and a default sized for an older, shorter suite fails
-# the tail as a hang on a slow host. --steptmo is the per-probe window, and it
-# is stated here for one probe: musl/pwauthmusl waits out the credential lock's
-# real ten-second retry budget twice, so tens of seconds is its GREEN path. Only
-# a failing probe ever waits a step window out, so widening it costs a passing
-# run nothing. The default suite's build-and-run target; `make test` lands
-# here too.
+# The probe suite boots the test image headless (-cpu max) and runs every
+# probe, failing if any does not exit 0; `make test` runs it with the rest of
+# the core tier. The few probes with a special contract (fork-exit-code,
+# stdin, faults, network) are run by hand under tests/system/runner/harness.c;
+# see tests/system/runner/runtests.c. --timeout is one deadline for the whole
+# run, not per probe, so it is stated here rather than left at the default:
+# the suite grows as probes are added, and a default sized for a shorter suite
+# would fail the tail as a hang on a slow host. --steptmo is the per-probe
+# window, and it is stated here for one probe: musl/pwauthmusl waits out the
+# credential lock's ten-second retry delay twice, so it takes tens of seconds
+# to pass. Only a failing probe waits a step window out, so widening it costs
+# a passing run nothing.
 # `tests/run default`: the probe suite, every guest probe booted on the test
 # image in one machine and scored by the runner.
 run-default: rach2 test-image $(RUNTESTS)
@@ -223,15 +218,15 @@ prepare-all: components
 # `tests/run addressed`: the address named on the boot line, and the proof that
 # it is the one in force. The address is deliberately not the one SLIRP hands
 # out: a kernel that ignored `rach2.ip=` entirely would still hold 10.0.2.15 and
-# still pass every probe, which is what this suite used to do with all of them.
-# It is not .99 either, which pingtest requires to stay unreachable.
-# So the machine is given .77, pings the gateway, and the capture is read from
-# outside: the echo request must leave from .77, which only the IP layer can put
-# there, and the ARP request for the gateway must be sent as .77, which is where
-# the address reached ARP. Nothing on this network ever asks the machine for its
-# address, so what it answers cannot be read; what it asks as can. The gateway
-# half of the boot line is not checked here: every destination in reach is on
-# the subnet, so nothing has to be routed. `dhcp` and `netif` check routing.
+# pass every probe. It is not .99 either, which pingtest requires to stay
+# unreachable. So the machine is given .77, pings the gateway, and the capture
+# is read from outside: the echo request must leave from .77, which only the IP
+# layer can put there, and the ARP request for the gateway must be sent as .77,
+# which is where the address reached ARP. Nothing on this network ever asks the
+# machine for its address, so what it answers cannot be read; what it asks as
+# can. The gateway half of the boot line is not checked here: every destination
+# in reach is on the subnet, so nothing has to be routed. `dhcp` and `netif`
+# check routing.
 ADDRESSED_PCAP = $(IMAGES_DIR)/addressed$(NIC_TAG).pcap
 run-addressed: rach2 tests krffs test-image $(PCAPCHECK) $(HARNESS)
 	@rm -f $(ADDRESSED_PCAP)
@@ -244,20 +239,20 @@ run-addressed: rach2 tests krffs test-image $(PCAPCHECK) $(HARNESS)
 	    "expect=Type 'help'" "send=exec /pingtest" until=60
 	$(PCAPCHECK) bcast $(ADDRESSED_PCAP) --source 10.0.2.77 --arp-from 10.0.2.77
 # `tests/run noentropy`: the entropy policy's fail-closed half, which no other
-# target can reach. `make test` always boots -cpu max, so the CPU has RDSEED
-# and RDRAND and the kernel's pool is trusted; a minter that quietly fell back
-# to the untrusted stream would pass every proof in the suite. This boots on a
-# CPU that exposes neither instruction. On the test image /musl/saltnoent
-# (staged by the image sweep, deliberately absent from the probe runner's list
-# because it must fail where entropy is trusted) asserts that the mint refuses,
-# says so once, and leaves /etc/shadow, its temporary file and the lock exactly
-# as they were; /musl/passwdmusl takes its fail-closed side; and /rngprobe
-# takes its fail-closed branch, in which getrandom, /dev/urandom and
-# /dev/random answer EIO while GRND_INSECURE still returns bytes. On os-real,
-# Dropbear's key generator must stop with its error that it could not read
-# the random device and write no key, which is why rach2/run.sh and its
-# siblings boot -cpu max. The harness passes no -cpu of its own, so the
-# passthrough is the only one on the command line.
+# target can reach. The probe suite boots -cpu max, so the CPU has RDSEED and
+# RDRAND and the kernel's pool is trusted; a minter that quietly fell back to
+# the untrusted stream would pass every probe there. This boots on a CPU that
+# exposes neither instruction. On the test image /musl/saltnoent (staged by the
+# image sweep, deliberately absent from the probe runner's list because it must
+# fail where entropy is trusted) asserts that the mint refuses, says so once,
+# and leaves /etc/shadow, its temporary file and the lock exactly as they were;
+# /musl/passwdmusl takes its fail-closed side; and /rngprobe takes its
+# fail-closed branch, in which getrandom, /dev/urandom and /dev/random answer
+# EIO while GRND_INSECURE still returns bytes. On os-real, Dropbear's key
+# generator must stop with its error that it could not read the random device
+# and write no key, which is why rach2/run.sh and its siblings boot -cpu max.
+# The harness passes no -cpu of its own, so the passthrough is the only one on
+# the command line.
 run-noentropy: $(DEMO_CREDS) rach2 test-image os-real-image $(HARNESS)
 	$(HARNESS) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
 	    --qemu-arg=-cpu --qemu-arg=qemu64 \
@@ -332,9 +327,9 @@ run-bigmem: rach2 tests krffs test-image $(HARNESS)
 run-memory: rach2 rach2-recovery tests krffs test-image $(RECOVERY_IMAGE) $(HARNESS)
 	sh tests/system/suites/memory.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) \
 	    $(RECOVERY_KERNEL) $(RECOVERY_IMAGE)
-# `tests/run pools`: the objects that were pools, past the count each pool
-# had, and the heap where it started after a thousand of each (see
-# tests/poolprobe.c).
+# `tests/run pools`: many pipes, ptys, sockets and processes live at once,
+# and the kernel heap back where it started after a thousand each of pipes,
+# ptys and sockets (see tests/poolprobe.c).
 run-pools: rach2 tests krffs test-image $(HARNESS)
 	$(HARNESS) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
 	    --qemu-arg=-cpu --qemu-arg=max --append "rach2.rescue" \
@@ -348,9 +343,8 @@ run-pools: rach2 tests krffs test-image $(HARNESS)
 # running, so the boot ends by executing a program that prints a token: a
 # kernel that took any of the three faults with it cannot print it. The
 # `--never` text is the line each probe prints when it was not killed. These
-# cannot join
-# the shared probe boot, which scores a probe by its exit status; a probe that
-# is killed has none.
+# cannot join the shared probe boot, which scores a probe by its exit status;
+# a probe that is killed has none.
 run-fault: rach2 tests krffs test-image $(HARNESS)
 	$(HARNESS) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
 	    --qemu-arg=-cpu --qemu-arg=max \
@@ -407,8 +401,7 @@ run-console: rach2 tests krffs test-image $(HARNESS)
 # the machine before the notes and again after them, and the count on the
 # audio controller's message vector must have grown between the two: the notes
 # come out either way, since the timer services the stream as well, and the
-# difference is what says the interrupt this milestone gave it is the one that
-# fed them.
+# growth is what shows that the controller's own interrupt fed them.
 AUDIO_WAV = $(IMAGES_DIR)/audio-scale.wav
 AUDIO_LOG = $(IMAGES_DIR)/audio-scale.log
 run-audio: rach2 tests krffs test-image $(HARNESS) $(WAVCHECK)
@@ -447,9 +440,9 @@ run-audio: rach2 tests krffs test-image $(HARNESS) $(WAVCHECK)
 	    "expect=Type 'help'" "send=audio test scale 2000" "expect=Done."
 	$(WAVCHECK) scale $(IMAGES_DIR)/audio-scale-sb16.wav 262 294 330 349 392
 # `tests/run diskfull`: a file system with no room left. The probe writes until
-# the write is refused, requires `ENOSPC` rather than the `EIO` this kernel used
-# to return for a full disk, removes the file and writes again. It has a boot of
-# its own because it fills the image every other probe is staged in.
+# the write is refused, requires `ENOSPC` rather than `EIO`, removes the file
+# and writes again. It has a boot of its own because it fills the image every
+# other probe is staged in.
 run-diskfull: rach2 tests krffs test-image $(HARNESS)
 	$(HARNESS) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
 	    --qemu-arg=-cpu --qemu-arg=max \
@@ -481,12 +474,11 @@ run-disk: rach2 tests krffs $(HARNESS)
 # bytes at a seek, a written sector read back, exactly 0 at the end, -ENOSPC
 # past it, -EINVAL unaligned, -EACCES unprivileged); and a third boot mounts a
 # RAM image instead of the disk and requires both /dev/bootpart and
-# /dev/grubcore anyway. That third one is the milestone 25 property: a machine
-# that mounts nothing from its disk still manages its boot partition and its
-# boot loader, which is what recovery depends on. A fourth boot attaches a
-# sparse 260 GB drive over AHCI and reads known sectors at 5 GiB and at 258 GiB,
-# which the raw windows could not address at all while an open file's offset was
-# 32 bits. It is that large on purpose: a few gigabytes would be satisfied by an
+# /dev/grubcore anyway, since a machine that mounts nothing from its disk must
+# still manage its boot partition and its boot loader, which is what recovery
+# depends on. A fourth boot attaches a sparse 260 GB drive over AHCI and reads
+# known sectors at 5 GiB and at 258 GiB, which a 32-bit file offset could not
+# address. It is that large on purpose: a few gigabytes would be satisfied by an
 # implementation that kept 33 bits, and it is attached over AHCI because the ATA
 # driver's 28-bit LBA stops at 128 GiB.
 BOOTPART_TEST_IMAGE = $(IMAGES_DIR)/bootpart-test.disk
@@ -553,13 +545,11 @@ run-bootpart: rach2 tests krffs test-image $(MKFIXTURE) $(HARNESS)
 # from inside the running core, because reading the pointer back would prove
 # only bytes at rest.
 GRUB_TEST_DISK = $(IMAGES_DIR)/grub-test.disk
-# The root this disk boots. It was a KRFFS partition carrying grub-test.manifest
-# until 2026-09-14; the same manifest, as the ext2 root the disk now has, so the
-# guest commands this suite types still find what they expect.
-# The two marked cores the root's manifest stages. They were made inside the
-# `run-grub` recipe, which ran after the root was staged, so a clean build
-# staged nothing and a used tree staged the previous pair: rules of their own,
-# and the root waits for them.
+# The root this disk boots is an ext2 root made from grub-test.manifest, which
+# has what the guest commands this suite types expect.
+# The two marked cores the root's manifest stages. They have rules of their
+# own, and the root waits for them, so that the root stages the pair this
+# build made.
 GRUB_CORE_A = $(IMAGES_DIR)/core-a.img
 GRUB_CORE_B = $(IMAGES_DIR)/core-b.img
 # The pinned core and the manifest it is verified against are inputs of these
@@ -606,8 +596,8 @@ run-bootorder: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image utils krf
 MENU_TEST_DISK = $(IMAGES_DIR)/menu-test.disk
 # The root is os-real's, not os-simple's, because every line this suite types
 # at the machine is a busybox command and os-simple carries no busybox: with
-# that root the first command printed nothing and the suite waited out its
-# deadline.
+# that root the first command would print nothing and the suite would wait out
+# its deadline.
 run-menu: $(DEMO_CREDS) rach2 utils krffs $(OS_REAL_SMALL_EXT2) check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(BINFIND) $(RUNUTIL) $(DISK_TOOLS)
 	@mkdir -p $(IMAGES_DIR)
 	RACH2_DISK_TABLE=mbr \
@@ -624,7 +614,7 @@ run-menu: $(DEMO_CREDS) rach2 utils krffs $(OS_REAL_SMALL_EXT2) check-busybox ch
 # than merely returned an error. The recovery build must write a sector past 2
 # GiB, read it back byte for byte, and take a 200-sector write in one call,
 # which is what makes a whole-disk reflash finishable: one sector per driver
-# call turned a 500 MiB write into a million cache flushes.
+# call would turn a 500 MiB write into a million cache flushes.
 #
 # The two kernels are the same sources built with different switches into
 # different object trees, and check_recovery.sh reads the authority back off
@@ -652,9 +642,8 @@ run-authority: rach2 rach2-recovery tests krffs test-image $(MKFIXTURE) $(HARNES
 # installer-named extent, recovered through the fallback and repaired from
 # inside. The interruption matrix's determinate states are then booted from
 # host-crafted environment blocks.
-# `tests/run install`: the suite on a disk whose entries boot the ext2 root,
-# the os-real system at 96 MiB. The kernel is built on that root and installed
-# from it. It ran twice until 2026-09-14, once per root type.
+# The install disk's entries boot the ext2 root, the os-real system at
+# 96 MiB. The kernel is built on that root and installed from it.
 OS_REAL_SMALL_EXT2 = $(IMAGES_DIR)/os-real-small.ext2
 $(OS_REAL_SMALL_EXT2): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	sh tools/image/mkext2.sh krffs/manifests/os-real.manifest $@ 96
@@ -698,14 +687,13 @@ run-sealed: $(DEMO_CREDS) $(SEALED_DISK) $(DEADLINE) $(ELFCHECK) $(BINFIND) $(MK
 # the core image's own configuration. The disk is small so the drill is quick.
 #
 # Its entries carry `rach2.diskdiag`, which is what publishes /dev/disk0 on an
-# everyday kernel: the refusal is worth proving on a machine that HAS the device
+# everyday kernel: the refusal is worth proving on a machine that has the device
 # rather than on one where the node is simply absent. The sealed disk carries no
 # such flag, so there the everyday entries have no whole-disk node at all, and
 # the recovery build publishes its own whatever the command line says.
-# `tests/run drill`: the root the everyday kernel must refuse to write, that is
-# destroyed, that recovery rewrites through the pipe, and that the last boot
-# mounts again. It ran twice until 2026-09-14, once per root type; the disk has
-# one root now.
+# The drill disk's root, the os-simple system as an ext2 root of 16 MiB: the
+# root the everyday kernel must refuse to write, that is destroyed, that
+# recovery rewrites through the pipe, and that the last boot mounts again.
 OS_SIMPLE_EXT2 = $(IMAGES_DIR)/os-simple.ext2
 $(OS_SIMPLE_EXT2): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(MANIFEST_DEPS_os_simple) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-setid
 	sh tools/image/mkext2.sh krffs/manifests/os-simple.manifest $@ 16
@@ -724,7 +712,7 @@ run-drill: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image utils krffs c
 	sh tests/system/suites/drill.sh $(DRILL_DISK) \
 	    "`cat krffs/rach2_demo_password`" $(DRILL_PORT) $(RECOVERY_IMAGE)
 # `tests/run persist`: fsync durability across a reboot. Builds a disk holding
-# persistprobe, boots it twice against the SAME image: the first boot writes and
+# persistprobe, boots it twice against the same image: the first boot writes and
 # fsyncs /persist.txt, the second reads it back. The second boot passes only if
 # fsync pushed the write through the cache to the disk, since the file would
 # otherwise be gone.
@@ -740,11 +728,11 @@ run-persist: rach2 tests krffs $(HARNESS)
 	    --drive "file=$(PERSIST_DISK),format=raw,if=ide,index=0,media=disk" \
 	    --timeout 60 --ok "PERSISTPROBE OK (read back)" probe=persistprobe
 # `tests/run cred-persist`: the credential replacement's durability across a
-# reboot. Both of cred_rewrite's flushes are no-ops on the RAM module `make
-# test` boots, so a library that dropped either would pass every other proof in
-# the milestone. This boots one disk image three times. The first boot publishes
-# one replacement and releases, then publishes a second and is cut off holding
-# the lock, as a power failure would cut it off. The second boot reads both back
+# reboot. Both of cred_rewrite's flushes are no-ops on the RAM module the probe
+# suite boots, so a library that dropped either would pass every other probe.
+# This boots one disk image three times. The first boot publishes one
+# replacement and releases, then publishes a second and is cut off holding the
+# lock, as a power failure would cut it off. The second boot reads both back
 # with the modes and owners they inherited, and reports the lock the cut-off
 # writer left rather than breaking it. The third reads back the release itself:
 # a lock whose removal stayed in the page cache would still be there.
@@ -843,7 +831,7 @@ raw-stack: raw-card
 	    --append "rach2.ip=10.0.2.15/24" \
 	    --timeout 200 --ok "RAWPROBE OK" --log $(IMAGES_DIR)/raw-test.static.log \
 	    "expect=Type 'help'" "send=exec /rawprobe" until=30
-	# And the program the socket was built for. The ping first is not a flourish: a
+	# And the program the socket was built for. The ping comes first because a
 	# datagram for an address whose hardware address is not known yet is dropped
 	# while the request goes out, and traceroute sends one probe per hop and does
 	# not retry, so a cold cache costs it its first answer. What is asserted is the
@@ -857,7 +845,7 @@ raw-stack: raw-card
 	    "expect=# " \
 	    "send=/bin/ping -c 1 10.0.2.2 > /dev/null; traceroute -n -q 1 -m 2 8.8.8.8" \
 	    "expect= 1  10.0.2.2" "send=echo TRACE\"\"DONE" "expect=TRACEDONE"
-	# The in-house ping is still the one an ordinary account runs: busybox's needs
+	# The in-house ping is the one an ordinary account runs: busybox's needs
 	# a raw socket, which is root's, and is not built for that reason. Its reply
 	# line has the hop limit the reply arrived with, 255 from the emulator's
 	# gateway, which answers with the most there is.
@@ -1089,27 +1077,26 @@ dhcp-stack: dhcp-card
 	    --timeout 180 --steptmo 60 --ok "rach2 login:" \
 	    "expect=net: eth0: IPv4 192.168.90.20/" \
 	    "tcp=$(DHCP_SSH_PORT)"
-	# Since 2026-09-14 what init starts writes to `/var/log/services` and not to
-	# the console, so the client's lease line is not on this serial at all and the
-	# console can only say the machine got as far as a login. Nothing is typed
-	# here, so the wire is the whole proof: the step above knocks on the SSH port
-	# through the address the lease gave, and the capture must then hold packets
-	# sent FROM that address, which only a machine holding it can send. The knock
-	# alone proves nothing, because QEMU's user network accepts the host side of a
-	# connection before it knows whether the guest is there. The asking is on the
-	# wire too, as a broadcast to port 67, and is required here: without it a
-	# machine given that address by hand would satisfy the rest of this row.
+	# What init starts writes to `/var/log/services` and not to the console, so the
+	# client's lease line is not on this serial at all and the console can only say
+	# the machine got as far as a login. Nothing is typed here, so the wire is the
+	# whole proof: the step above knocks on the SSH port through the address the
+	# lease gave, and the capture must then hold packets sent from that address,
+	# which only a machine holding it can send. The knock alone proves nothing,
+	# because QEMU's user network accepts the host side of a connection before it
+	# knows whether the guest is there. The asking is on the wire too, as a
+	# broadcast to port 67, and is required here: without it a machine given that
+	# address by hand would satisfy the rest of this row.
 	$(PCAPCHECK) bcast $(METAL_PCAP) --port 67 --source 192.168.90.20
 	# And on a network with no server at all, which is a cable plugged in later or
 	# a switch that has not started forwarding. The client must go to the
 	# background and keep asking rather than give up, because a machine that gave
-	# up is one nobody can reach until somebody walks to it, and walking to it is
-	# what this milestone exists to avoid. The console login must still be there,
-	# so a network that never comes up does not take the local way in with it. And
-	# the same on the machine that carries none of busybox: os-simple's own `netup`
-	# reads the same `/etc/network/interfaces` and its own `dhcpc` takes the lease.
-	# Both images end up on the same network by the same exchange, which is the
-	# point of having two clients over one kernel interface.
+	# up is one nobody can reach until somebody walks to it. The console login must
+	# still be there, so a network that never comes up does not take the local way
+	# in with it. And the same on the machine that carries none of busybox:
+	# os-simple's own `netup` reads the same `/etc/network/interfaces` and its own
+	# `dhcpc` takes the lease. Both images end up on the same network by the same
+	# exchange, which is the point of having two clients over one kernel interface.
 	#
 	# This one runs on a /16, and that is what makes the netmask provable: the
 	# classful mask for a 10.x address is /8, so a client that took the address and
@@ -1178,7 +1165,7 @@ dhcp-stack: dhcp-card
 	    "send=ping -c 4 -W 1 10.90.0.2" "expect=4 packets transmitted, 4 received" \
 	    "send=ping -c 4 -W 1 10.200.0.1" "expect=4 packets transmitted, 0 received"
 	# The address is the fixed one and not the leased one, which the capture says:
-	# packets sent FROM 10.90.0.50, and the off-subnet packet addressed to the
+	# packets sent from 10.90.0.50, and the off-subnet packet addressed to the
 	# gateway's hardware address, which is the route the stanza asked for. Neither
 	# is possible from a machine still holding the lease.
 	$(PCAPCHECK) bcast $(STATIC_PCAP) --source 10.90.0.50 \
@@ -1212,7 +1199,7 @@ dhcp-stack: dhcp-card
 	# hands out a day, so `-l` caps what the client will act on, the renewal falls
 	# due ten seconds in, and the run must see the lease applied more than once.
 	# Without that cap nothing here could reach the renewal path at all, and a
-	# client that renewed wrongly would ship green.
+	# client that renewed wrongly would pass.
 	$(HARNESS) --kernel $(BOOT_KERNEL) \
 	    --initrd $(OS_SIMPLE_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --net "$(SIMPLE_NET)" --append "rach2.ip=none" \
@@ -1277,12 +1264,12 @@ dhcp-stack: dhcp-card
 	#
 	# The knock on each forwarded port proves nothing on its own, since QEMU's
 	# user network accepts the host side before it knows whether the guest is
-	# there. What proves it is the capture of each network: packets sent FROM the
+	# there. What proves it is the capture of each network: packets sent from the
 	# address that network leased, which only a machine holding that address on
 	# that card can send, and on the second network that address is not the
-	# machine's own. Until TCP took the address a connection arrived on, a
-	# connection to the second card was answered from the first card's address
-	# and no capture held a packet from the second's.
+	# machine's own. A TCP that did not take the address a connection arrived on
+	# would answer a connection to the second card from the first card's address,
+	# and no capture would hold a packet from the second's.
 	@rm -f $(TWONET_PCAP_A) $(TWONET_PCAP_B)
 	$(HARNESS) --kernel $(BOOT_KERNEL) \
 	    --initrd $(OS_REAL_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
@@ -1314,10 +1301,10 @@ dhcp-stack: dhcp-card
 	# And the server's own record of who reached it. The knock says only that
 	# QEMU took the host side; this says the segments crossed the interface, were
 	# taken by TCP as addressed to the address that card holds, and reached the
-	# program listening. A connection arriving on the second card was dropped at
-	# the checksum until it was taken against the address the segment was sent
-	# to, and answered from the wrong address until the connection recorded the
-	# one it arrived on.
+	# program listening. A connection arriving on the second card is dropped at
+	# the checksum unless it is taken against the address the segment was sent
+	# to, and is answered from the wrong address unless the connection records
+	# the one it arrived on.
 	@sh -c 'l=$(IMAGES_DIR)/twonet$(NIC_TAG).log; \
 	    grep -aq "Child connection from 192.168.90.2:" "$$l" || \
 	        { echo "dhcp-test: FAIL: nothing reached the server on the first card" >&2; \
@@ -1328,11 +1315,11 @@ dhcp-stack: dhcp-card
 	    echo "dhcp-test: a lease on each interface and the server answering through both: OK"'
 endif
 .PHONY: dhcp-card dhcp-stack
-# `tests/run netconsole`: the kernel log on the wire. The machine this milestone
-# targets has no serial port, so the boot log has to leave over Ethernet or not
-# at all. QEMU's filter-dump writes every frame the guest sends to a libpcap
+# `tests/run netconsole`: the kernel log on the wire. The laptop the sealed disk
+# goes into has no serial port, so the boot log has to leave over Ethernet or
+# not at all. QEMU's filter-dump writes every frame the guest sends to a libpcap
 # file; the boot below asks for netconsole on the command line, and the checker
-# holds the frames to the header's contract and requires a line printed BEFORE
+# holds the frames to the header's contract and requires a line printed before
 # the network device came up, which is what proves the pre-transmit buffer was
 # carried rather than dropped.
 #
@@ -1378,16 +1365,13 @@ run-netconsole: rach2 tests krffs test-image $(PCAPCHECK) $(HARNESS)
 #
 # This card is the one QEMU attaches when nobody asks for one, so it is what a
 # person running qemu-system-i386 from a generic command line has. The suites
-# re-run here are the ones whose subject is the wire: ICMP, the packet socket,
-# the interface ioctls, broadcast, netconsole, the raw socket, DHCP, and the
-# SSH capstone, which is the deepest use the TCP path gets. The other suites
-# are about disks, accounts, and building, and running them again on a second
-# card would cost minutes and show nothing.
-# `tests/run e1000`: the card selection itself. The eight network suites that
-# run on this card as well are separate registry entries, `NAME-e1000`, so the
-# pool schedules them beside their first-card twins and can see what each
-# costs. This suite ran them itself with an inner `-j4`, which hid nine jobs
-# from the pool that was accounting for one.
+# run on it as well are the ones whose subject is the wire: ICMP, the packet
+# socket, the interface ioctls, broadcast, netconsole, the raw socket, DHCP,
+# and SSH, which uses the TCP path most. Each is a registry entry of its own,
+# `NAME-e1000`, so that the pool schedules it beside its first-card twin and
+# can see what it costs. The other suites are about disks, accounts and
+# building, and running them again on a second card would cost minutes and
+# show nothing.
 run-e1000: rach2 tests krffs test-image $(HARNESS)
 # The probe order, which only a machine holding more than one card can show.
 # The table tries the RTL8139 first, so a machine with both must bind that one;
@@ -1437,9 +1421,10 @@ run-diskdiag: rach2 rach2-metal rach2-metal-image $(HARNESS) $(SHA256TOOL) $(RUN
 # out.
 # `tests/run usb`: the USB stack, from a port to a keystroke, in the boots
 # that `tests/system/suites/usb.sh` counts and describes.
-# `tests/run mount`: the mount milestone's suite. Phase 2 boots the lag device
-# and the partition nodes; later phases grow it. Its disk is the test disk
-# with a FAT32 partition added at 49 MiB by mkmbr and mtools.
+# `tests/run mount`: the partition nodes, the block path through a device
+# that sleeps or never answers, and mount(2) and the claims it makes (see
+# tests/system/suites/mount.sh). Its disk is the test disk with a FAT32
+# partition added at 49 MiB by mkmbr and mtools.
 MOUNT_DISK = $(IMAGES_DIR)/mount-test.disk
 run-mount: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(MKFIXTURE) $(MKMBR) $(HARNESS)
 	sh tests/system/suites/mount.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) $(MOUNT_DISK) \
@@ -1531,19 +1516,19 @@ $(GROWSET): tools/inspect/growset.c utils/growset.c
 	@mkdir -p $(dir $@)
 	$(HOSTCC) $(HOSTCFLAGS) -o $@ $<
 # A stick of the same shape carrying a 138 MiB disk instead of the sealed one,
-# so the rows that install do not each write a gibibyte and a half. The image
-# it carries has the shape the sealed disk has, a boot partition,
-# a recovery partition and a 64 MiB ext2 root; a machine written from it boots,
-# and that ext2 root is what the installer writes accounts into.
+# so the rows that install do not each write a gibibyte and a half. The image it
+# carries has the shape the sealed disk has, a boot partition, a recovery
+# partition and a 64 MiB ext2 root; a machine written from it boots, and that
+# ext2 root is what the installer writes accounts into.
 # The ext2 root the installer's own disk carries: the same manifest the sealed
 # disk's root is built from, since its `init` is the one that starts the SSH
 # server and reads the policy the installer writes. It is 64 MiB, the smallest
 # that holds it, because every row that installs reads and hashes the whole
 # image and the emulator hashes at a megabyte or two a second. Its 16384-block
-# groups fill the first 64 MiB group, as growset requires, and it has one
-# inode for each 32 KiB, 2048, twice the nodes it holds, so that the
-# uefi suite's grow to 4 TiB writes 16 GiB of inode tables and not the 128
-# GiB mke2fs's ratio for a small volume would make it.
+# groups fill the first 64 MiB group, as growset requires, and it has one inode
+# for each 32 KiB, 2048, twice the nodes it holds, so that the uefi suite's grow
+# to 4 TiB writes 16 GiB of inode tables and not the 128 GiB mke2fs's ratio for
+# a small volume would make it.
 INSTALLER_EXT2 = $(IMAGES_DIR)/installer-root.ext2
 $(INSTALLER_EXT2): $(FS_DEMO_IMAGES) $(DEMO_CREDS) krffs/manifests/rach2-metal-disk.manifest \
                    $(MANIFEST_DEPS_rach2_metal_disk) \
@@ -1561,12 +1546,12 @@ $(INSTALLER_DISK): $(DEMO_CREDS) $(KERNEL) $(RECOVERY_KERNEL) $(INSTALLER_EXT2) 
 	RACH2_DISK_RECOVERY_KERNEL=$(RECOVERY_KERNEL) \
 	RACH2_DISK_RECOVERY_IMAGE=$(RECOVERY_IMAGE) \
 	    sh tools/image/mkdisk_grub.sh $(ARCH_BUILD)/rach2/kernel $@
-# The disk an installer of before milestone 57 wrote: an MBR, with the 64 MiB
-# boot and recovery partitions at the notebook's offsets that the sealed disk
-# had then, the boot partition at eight sectors to a cluster, which UEFI
-# firmware does not read. installer-repair's conversion row updates it, and
-# the grow suite takes its first 130 MiB for the notebook's fixture. Its name
-# is set with the test sticks', since prepare-images lists it.
+# A disk in the layout an earlier installer wrote: an MBR, with 64 MiB boot and
+# recovery partitions at the notebook's offsets, and the boot partition at eight
+# sectors to a cluster, which UEFI firmware does not read. installer-repair's
+# conversion row updates it, and the grow suite takes its first 130 MiB for the
+# notebook's fixture. Its name is set with the test sticks', since
+# prepare-images lists it.
 $(INSTALLER_MBR_DISK): $(DEMO_CREDS) $(KERNEL) $(RECOVERY_KERNEL) $(INSTALLER_EXT2) $(RECOVERY_IMAGE) \
                        tools/image/mkdisk_grub.sh $(DISK_TOOLS) | rach2 rach2-recovery utils krffs
 	@mkdir -p $(IMAGES_DIR)
@@ -1676,7 +1661,7 @@ metal-installed-tools: rach2 utils check-busybox $(HARNESS) $(RUNUTIL) $(DISK_TO
 run-metal: rach2-metal rach2-metal-image metal-installed-tools $(PTYDRIVE)
 	sh tests/system/suites/metal.sh $(METAL_KERNEL) $(METAL_IMAGE) $(METAL_PORT)
 # `tests/run account`: accounts created, authenticated, changed and deleted on
-# both images, since both have account tools now and they are different code.
+# both images, since both have account tools and they are different code.
 # os-real gets busybox's over three boots, so what is asserted is what reached
 # the platter and not what one process had in its cache; os-simple gets this
 # project's own in RAM, where there is no `deluser` to finish with. Both
@@ -1709,13 +1694,12 @@ run-tcc: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdpmake c
 	$(MKDISK) krffs/manifests/os-real.manifest $(TCC_TEST_DISK) 64 48
 	sh tests/system/suites/tcc.sh $(BOOT_KERNEL) $(TCC_TEST_DISK) \
 	    "`cat krffs/rach2_demo_password`" "`cat krffs/rach2_test_password`"
-# `tests/run smp`: the kernel on one processor, on four and on two of four,
-# each finding its processors and passing a stress of fork, exec, pipes,
-# futexes and munmap across them and sleeps on the last, the debug shell's
-# preemption test and its ring-3 payload on two,
-# an NMI on two that must stop the machine as a fault of the machine, and a
-# parallel build on the installed system that runs on every one of four (see
-# tests/system/suites/smp.sh).
+# `tests/run smp`: the kernel on one processor, on four and on two of four, each
+# finding its processors and passing a stress of fork, exec, pipes, futexes and
+# munmap across them and sleeps on the last, the debug shell's preemption test
+# and its ring-3 payload on two, an NMI on two that must stop the machine as a
+# fault of the machine, and a parallel build on the installed system that runs
+# on every one of four (see tests/system/suites/smp.sh).
 SMP_TEST_DISK = $(IMAGES_DIR)/smp-test.disk
 run-smp: $(DEMO_CREDS) rach2 utils tests krffs test-image check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(HARNESS)
 	@mkdir -p $(IMAGES_DIR)
@@ -1760,7 +1744,7 @@ run-selfbuild-ext2: $(DEMO_CREDS) rach2 utils krffs test-image check-busybox che
 	build/tools/image/mkmbr --lba $(SELFBUILD_EXT2_DISK) 2048:98304:83 > /dev/null
 	SELFBUILD_ROOT=ext2 sh tests/system/suites/selfbuild.sh $(BOOT_KERNEL) $(SELFBUILD_EXT2_DISK) \
 	    "`cat krffs/rach2_test_password`" "`cat krffs/rach2_demo_password`"
-# `tests/run ssh`: the SSH capstone with nobody at the keyboard. Boots os-real
+# `tests/run ssh`: logins over SSH with nobody at the keyboard. Boots os-real
 # from a disk with the port forwarded, starts dropbear from the console session
 # the way the Readme's recipe does, then logs in twice: root by key, and the
 # unprivileged account by password, which is the half that reaches /etc/shadow.
@@ -1801,7 +1785,8 @@ run-man: $(DEMO_CREDS) rach2 rach2-recovery krffs busybox os-real-image rach2-re
 # `tests/run procfiles`: the machine's own /proc files, on the boots that differ
 # and through the programs that read them. Three boots of the test image, one
 # per mount source, each of which must name its own; then `ps`, `df`, `free` and
-# `uptime` on the real image, each of which failed on a missing /proc file.
+# `uptime` on the real image, each of which fails when a /proc file it reads is
+# missing.
 PROCFILES_DISK = $(IMAGES_DIR)/procfiles-test.disk
 run-procfiles: $(DEMO_CREDS) rach2 tests utils krffs busybox os-real-image test-image $(HOSTPEER) $(RUNUTIL)
 	$(MKDISK) krffs/manifests/disk-test.manifest $(PROCFILES_DISK) 64 48
@@ -1811,16 +1796,16 @@ run-procfiles: $(DEMO_CREDS) rach2 tests utils krffs busybox os-real-image test-
 # `tests/run exitline`: the plain process-exit line is printed under the debug
 # shell and nowhere else. Four boots: an init image that must stay quiet while a
 # forked program runs, the test image that must still print it for a child and a
-# probe, a killed probe whose dedicated marker must survive, and a the harness
+# probe, a killed probe whose dedicated marker must survive, and a harness
 # run with no token, which has only the plain line to read.
 HARNESS_KERNEL = $(ARCH_BUILD)/rach2-harness/kernel
 
-# The kernels a tier can be run on instead of the default one, each a
-# component of its own beside the harness kernel: the UBSan-trap kernel,
-# in which undefined behaviour is a `ud2` the fault handler panics on with
-# the address, and the -O2 kernel, which the close boots once through the
-# core tier. `tests/run` builds the one `RACH2_KERNEL` names and passes its
-# path as BOOT_KERNEL, which every suite recipe boots.
+# The kernels a tier can be run on instead of the default one, each a component
+# of its own beside the harness kernel: the UBSan-trap kernel, in which
+# undefined behaviour is a `ud2` the fault handler panics on with the address,
+# and the -O2 kernel, which a milestone's close boots once through the core
+# tier. `tests/run` builds the one `RACH2_KERNEL` names and passes its path as
+# BOOT_KERNEL, which every suite recipe boots.
 .PHONY: ubsan-kernel o2-kernel
 ubsan-kernel:
 	$(MAKE) -C rach2 COMPONENT=rach2-ubsan KEXTRA="-fsanitize=undefined -fsanitize-undefined-trap-on-error"
@@ -1845,11 +1830,11 @@ run-crash: rach2 tests krffs $(RUNUTIL)
 	sh tests/system/suites/crash.sh $(BOOT_KERNEL) $(CRASH_TEST_IMAGE) build/krffs/fsck.krffs
 # `tests/run stress`: prove an on-disk KRFFS larger than physical RAM works.
 # Boots a 64 MB disk with a 48 MB partition and runs stressprobe, which writes
-# and re-reads 33 MiB (past the 32 MiB RAM cap) through the 4 MiB cache. The
-# run ends on the probe's token; the bound is the run's budget and not its
-# cost, since the 33 MiB take about 130 s under either accelerator and a
-# bound of 150 s cut a loaded emulator's run short. A hang is the runner's
-# idle limit to catch.
+# and re-reads 33 MiB (past the 32 MiB RAM cap) through the 4 MiB cache. The run
+# ends on the probe's token; the bound is the run's budget and not its cost,
+# since the 33 MiB take about 130 s under either accelerator and a bound of 150
+# s would cut a loaded emulator's run short. A hang is the runner's idle limit
+# to catch.
 STRESS_DISK = $(IMAGES_DIR)/stress-test.disk
 run-stress: rach2 tests krffs $(HARNESS)
 	$(MKDISK) krffs/manifests/stress-test.manifest $(STRESS_DISK) 64 48
@@ -2017,9 +2002,10 @@ run-runner: $(HARNESS) $(PTYDRIVE) $(HOSTPEER)
 run-drive: $(HARNESS)
 	@./tests/system/drivetest.sh
 
-# `tests/run imagerace`: two builds of one image at the same moment, which a
-# parallel run of the suites produces and which used to take both of them
-# down. No machine is booted; the image is built twice and read.
+# `tests/run imagerace`: two builds of one image at the same moment, as a
+# parallel run of the suites can make them, both of which must finish and
+# leave the image whole. No machine is booted; the image is built twice and
+# read.
 # `tests/run krffscheck`: what the offline checker says about images broken on
 # purpose. No machine is booted.
 KRFFSCHECK_DIR = $(IMAGES_DIR)/krffscheck
