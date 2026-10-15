@@ -26,7 +26,7 @@ if [ "$mutate" -eq 2 ]; then
     suite=$repo/tests/system/suites/ssh.sh
     if [ ! -r "$suite" ] ||
         sed '/exec sleep 300/,/FLOOD_PIDS=/s/FLOOD_PIDS=.*$/ :/' "$suite" | cmp -s - "$suite"; then
-        echo 'ssh-flood: the flood functions no longer record their sleep' >&2
+        echo 'ssh-flood: texts: ssh.sh has no FLOOD_PIDS line after the flood sleep for the fault to edit' >&2
         exit 1
     fi
     echo 'ssh-flood: texts: every fault is once in its source'

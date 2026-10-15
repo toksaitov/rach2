@@ -54,7 +54,7 @@ if [ "$*" = --texts ]; then
         script_edit "$fault" "$repo/tests/system/usbdisk_mutate.sh"
     done
     if ! grep -q 'the child volume would not mount' "$repo/tests/usbdiskprobe.c"; then
-        echo 'usbdisk-script: the probe no longer prints the assertion the rows edit' >&2
+        echo 'usbdisk-script: texts: usbdiskprobe.c does not print the assertion the rows edit' >&2
         exit 1
     fi
     rm -rf "$root"

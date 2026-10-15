@@ -63,16 +63,16 @@ static int make_boot(const char *path)
     int j;
 
     if (f == NULL || fread(mbr, 1, SECTOR, f) != SECTOR) {
-        fprintf(stderr, "mkbootfixture: cannot read %s\n", path);
+        fprintf(stderr, "mkfixture: boot: cannot read %s\n", path);
         return 1;
     }
     if (mbr[510] != 0x55 || mbr[511] != 0xAA) {
-        fprintf(stderr, "mkbootfixture: no MBR signature in %s\n", path);
+        fprintf(stderr, "mkfixture: boot: no MBR signature in %s\n", path);
         fclose(f);
         return 1;
     }
     if (r32(entry1 + 12) == 0) {
-        fprintf(stderr, "mkbootfixture: entry 1 is empty; not a mkdisk "
+        fprintf(stderr, "mkfixture: boot: entry 1 is empty; not a mkdisk "
                         "image\n");
         fclose(f);
         return 1;
@@ -83,12 +83,12 @@ static int make_boot(const char *path)
     w32(entry1 + 8, BOOT_PART_LBA);
     w32(entry1 + 12, BOOT_PART_SECTORS);
     if (fseek(f, 0, SEEK_SET) != 0 || fwrite(mbr, 1, SECTOR, f) != SECTOR) {
-        fprintf(stderr, "mkbootfixture: cannot write the MBR\n");
+        fprintf(stderr, "mkfixture: boot: cannot write the MBR\n");
         fclose(f);
         return 1;
     }
     if (fseek(f, (long)BOOT_PART_LBA * SECTOR, SEEK_SET) != 0) {
-        fprintf(stderr, "mkbootfixture: cannot seek to the partition\n");
+        fprintf(stderr, "mkfixture: boot: cannot seek to the partition\n");
         fclose(f);
         return 1;
     }
@@ -96,16 +96,16 @@ static int make_boot(const char *path)
         for (j = 0; j < SECTOR; j++)
             sector[j] = (unsigned char)((k * 7 + (unsigned long)j) & 0xFF);
         if (fwrite(sector, 1, SECTOR, f) != SECTOR) {
-            fprintf(stderr, "mkbootfixture: cannot write the pattern\n");
+            fprintf(stderr, "mkfixture: boot: cannot write the pattern\n");
             fclose(f);
             return 1;
         }
     }
     if (fclose(f) != 0) {
-        fprintf(stderr, "mkbootfixture: cannot write %s\n", path);
+        fprintf(stderr, "mkfixture: boot: cannot write %s\n", path);
         return 1;
     }
-    printf("mkbootfixture: %s: FAT-typed partition 1 at LBA %d, %d sectors "
+    printf("mkfixture: boot: %s: FAT-typed partition 1 at LBA %d, %d sectors "
            "of pattern\n",
            path, BOOT_PART_LBA, BOOT_PART_SECTORS);
     return 0;
@@ -121,11 +121,11 @@ static int make_wide(const char *path)
     int i, j;
 
     if (f == NULL) {
-        fprintf(stderr, "mkwidefixture: cannot create %s\n", path);
+        fprintf(stderr, "mkfixture: wide: cannot create %s\n", path);
         return 1;
     }
     if (fseeko(f, (off_t)WIDE_SIZE - 1, SEEK_SET) != 0 || fputc(0, f) == EOF) {
-        fprintf(stderr, "mkwidefixture: cannot size %s\n", path);
+        fprintf(stderr, "mkfixture: wide: cannot size %s\n", path);
         fclose(f);
         return 1;
     }
@@ -135,17 +135,17 @@ static int make_wide(const char *path)
         for (j = 0; j < SECTOR; j++)
             marker[j] = (unsigned char)(((unsigned long)j * 7 + 3 + tag) & 0xFF);
         if (fseeko(f, (off_t)at[i], SEEK_SET) != 0 || fwrite(marker, 1, SECTOR, f) != SECTOR) {
-            fprintf(stderr, "mkwidefixture: cannot write a marker\n");
+            fprintf(stderr, "mkfixture: wide: cannot write a marker\n");
             fclose(f);
             return 1;
         }
     }
     if (fseeko(f, 510, SEEK_SET) != 0 || fputc(0x55, f) == EOF || fputc(0xAA, f) == EOF ||
         fclose(f) != 0) {
-        fprintf(stderr, "mkwidefixture: cannot write %s\n", path);
+        fprintf(stderr, "mkfixture: wide: cannot write %s\n", path);
         return 1;
     }
-    printf("mkwidefixture: %s: %llu bytes, patterns at %llu and %llu\n", path,
+    printf("mkfixture: wide: %s: %llu bytes, patterns at %llu and %llu\n", path,
            (unsigned long long)WIDE_SIZE, (unsigned long long)WIDE_NEAR,
            (unsigned long long)WIDE_FAR);
     return 0;

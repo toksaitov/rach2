@@ -123,7 +123,7 @@ run_phase()
         [ "$status" -eq 0 ] || exit 1
     else
         [ "$status" -ne 0 ] || {
-            echo "init-refusal-mutation: the old fall-through passed: $phase" >&2; exit 1;
+            echo "init-refusal-mutation: the kernel that takes any lookup failure for an absent init passed: $phase" >&2; exit 1;
         }
         grep -aq 'no /sbin/init in the root; falling back to the debug shell' \
             "$work/$phase.row.log" || exit 1
@@ -156,4 +156,4 @@ fi
 restore
 run_phase restored pass
 cmp "$work/fixed.kernel" "$work/restored.kernel"
-echo 'init-refusal-mutation: result: pass: the fixed kernel passed, the old fall-through failed, the restored kernel passed and matched'
+echo 'init-refusal-mutation: result: pass: the kernel as it is passed, the mutated kernel failed, the restored kernel passed and matched'

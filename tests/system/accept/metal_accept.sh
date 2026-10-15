@@ -456,7 +456,7 @@ BOOTLOG_OUT="$REPO/build/images/metal-bootlog.txt"
 if run 'cat /dev/bootlog' > "$BOOTLOG_OUT" 2>/dev/null && [ -s "$BOOTLOG_OUT" ]; then
     note "boot log: $(wc -l < "$BOOTLOG_OUT" | tr -d ' ') lines saved to $BOOTLOG_OUT"
 else
-    bad "/dev/bootlog gave nothing; this kernel predates it, or the log is empty"
+    bad "/dev/bootlog gave nothing; this kernel does not provide it, or the log is empty"
 fi
 if [ -s "$BOOTLOG_OUT" ]; then
     if grep -q "refused command" "$BOOTLOG_OUT"; then
@@ -493,7 +493,7 @@ if grep -q 'usb: controller:' "$BOOTLOG_OUT" 2>/dev/null; then
         bad "a USB controller was found and the stack did not come up on it"
     fi
 else
-    bad "the boot log has no usb inventory; this kernel predates it"
+    bad "the boot log has no usb inventory; this kernel does not provide it"
 fi
 
 # ---- which interrupts this machine takes, and by which path: whether the
@@ -506,7 +506,7 @@ fi
 #      `lapic: timer:` line, which it logs when no tick arrives. ----
 INTR="$(run 'cat /proc/interrupts 2>/dev/null')"
 if [ -z "$INTR" ]; then
-    bad "/proc/interrupts is not there; this kernel predates it"
+    bad "/proc/interrupts is not there; this kernel does not provide it"
 else
     echo "$INTR" | while read -r line; do note "interrupts: $line"; done
     timer="$(echo "$INTR" | awk -F'\t' '$1 == "32:" { print $2 }')"
@@ -520,8 +520,8 @@ else
     # A vector that has taken nothing has no line at all, so an empty answer
     # here is the failure and there is no zero to test for.
     case "$timer" in
-        ''|*[!0-9]*) bad "the timer's vector has no line, so the 8259's interrupts are not arriving" ;;
-        *) note "interrupts: the timer has taken $timer, so the 8259's interrupts arrive" ;;
+        ''|*[!0-9]*) bad "the timer's vector has no line, so no timer interrupt has arrived" ;;
+        *) note "interrupts: the timer has taken $timer, so its interrupts arrive" ;;
     esac
     note "interrupts: usb vector ${usb_vector:-none}, audio vector ${audio_vector:-none}"
     note "interrupts: spurious ${spurious:-none}, usb fallback ${fallback:-none}"
@@ -538,7 +538,7 @@ else
     elif grep -q 'lapic: ready:' "$BOOTLOG_OUT" 2>/dev/null; then
         note "interrupts: $(grep -m1 'lapic: ready:' "$BOOTLOG_OUT" | sed 's/^.*lapic: /lapic: /')"
     else
-        bad "the boot log says nothing about the local APIC; this kernel predates it"
+        bad "the boot log says nothing about the local APIC; this kernel does not provide it"
     fi
     if grep -q 'lapic: timer:' "$BOOTLOG_OUT" 2>/dev/null; then
         bad "the timer stopped when the APIC was enabled: $(grep -m1 'lapic: timer:' "$BOOTLOG_OUT")"

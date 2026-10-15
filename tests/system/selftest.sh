@@ -567,7 +567,7 @@ check "both suites receive the bound once" 2 "$(printf '%s\n' "$out" | grep -c '
 out=$(RACH2_TIMEOUT_FACTOR=3 run slowtoken); rc=$?
 check "the same explicit factor applies to a single suite" 0 "$rc"
 out=$(RACH2_TIMEOUT_FACTOR=8.2 run passing slow1); rc=$?
-check "a factor above the former envelope still runs" 0 "$rc"
+check "a factor above 8 runs, within the bound of 64" 0 "$rc"
 out=$(RACH2_TIMEOUT_FACTOR=08.0 run passing); rc=$?
 check "a factor with leading zeros is decimal" 0 "$rc"
 check "and is printed as a decimal" 1 "$(printf '%s\n' "$out" | grep -c 'timeout factor 8.0')"

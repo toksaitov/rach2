@@ -196,14 +196,14 @@ static int check_arp_from(struct pcap *pc, const char *capture, const char *addr
         const unsigned char *arp = arp_op(f, n, 1);
 
         if (arp != NULL && memcmp(arp + 14, want, 4) == 0) {
-            printf("bcast_check: ok: the machine asked ARP as %s, so that "
+            printf("pcapcheck: bcast: ok: the machine asked ARP as %s, so that "
                    "is the address its ARP layer holds\n",
                    address);
             return 0;
         }
     }
     fprintf(stderr,
-            "bcast_check: no ARP request in %s was sent as %s, so "
+            "pcapcheck: bcast: no ARP request in %s was sent as %s, so "
             "that address never reached the machine's ARP layer\n",
             capture, address);
     return 1;
@@ -227,12 +227,12 @@ static int check_source(struct pcap *pc, const char *capture, const char *addres
     }
     if (seen == 0) {
         fprintf(stderr,
-                "bcast_check: nothing in %s was sent from %s, so no "
+                "pcapcheck: bcast: nothing in %s was sent from %s, so no "
                 "machine had that address on an interface\n",
                 capture, address);
         return 1;
     }
-    printf("bcast_check: ok: %ld packet(s) were sent from %s\n", seen, address);
+    printf("pcapcheck: bcast: ok: %ld packet(s) were sent from %s\n", seen, address);
     return 0;
 }
 
@@ -249,14 +249,14 @@ static int check_owns(struct pcap *pc, const char *capture, const char *address)
         const unsigned char *arp = arp_reply(f, n);
 
         if (arp != NULL && memcmp(arp + 14, want, 4) == 0) {
-            printf("bcast_check: ok: the machine answered ARP for %s, so "
+            printf("pcapcheck: bcast: ok: the machine answered ARP for %s, so "
                    "the address is on its interface\n",
                    address);
             return 0;
         }
     }
     fprintf(stderr,
-            "bcast_check: nothing answered ARP for %s in %s, so no "
+            "pcapcheck: bcast: nothing answered ARP for %s in %s, so no "
             "machine has that address\n",
             address, capture);
     return 1;
@@ -316,18 +316,18 @@ static int check_routed(struct pcap *pc, const char *gateway, const char *destin
     }
     if (n_gw == 0) {
         fprintf(stderr,
-                "bcast_check: %s never answered an ARP request, so "
+                "pcapcheck: bcast: %s never answered an ARP request, so "
                 "there is no hardware address to compare against\n",
                 gateway);
         return 1;
     }
     if (routed == 0) {
-        fprintf(stderr, "bcast_check: nothing was sent to %s at all\n", destination);
+        fprintf(stderr, "pcapcheck: bcast: nothing was sent to %s at all\n", destination);
         return 1;
     }
     if (routed < 0) {
         fprintf(stderr,
-                "bcast_check: a packet for %s went to "
+                "pcapcheck: bcast: a packet for %s went to "
                 "%02x%02x%02x%02x%02x%02x, and the gateway %s answers at "
                 "%02x%02x%02x%02x%02x%02x: it was not routed through the "
                 "gateway\n",
@@ -336,7 +336,7 @@ static int check_routed(struct pcap *pc, const char *gateway, const char *destin
                 gw_macs[0][4], gw_macs[0][5]);
         return 1;
     }
-    printf("bcast_check: ok: %ld packet(s) for %s went to "
+    printf("pcapcheck: bcast: ok: %ld packet(s) for %s went to "
            "%02x%02x%02x%02x%02x%02x, which is where %s answers ARP\n",
            routed, destination, gw_macs[0][0], gw_macs[0][1], gw_macs[0][2], gw_macs[0][3],
            gw_macs[0][4], gw_macs[0][5], gateway);
@@ -381,12 +381,12 @@ static int check_broadcast(struct pcap *pc, const char *capture, long port, cons
     }
     if (found == 0) {
         fprintf(stderr,
-                "bcast_check: no broadcast datagram for port %ld in "
+                "pcapcheck: bcast: no broadcast datagram for port %ld in "
                 "%s (%ld datagram(s) for that port went somewhere else)\n",
                 port, capture, seen);
         return 1;
     }
-    printf("bcast_check: ok: %ld broadcast datagram(s) for port %ld\n", found, port);
+    printf("pcapcheck: bcast: ok: %ld broadcast datagram(s) for port %ld\n", found, port);
     return 0;
 }
 
@@ -420,7 +420,7 @@ static int cmd_bcast(int argc, char **argv)
         else if (argv[i][0] != '-' && capture == NULL)
             capture = argv[i];
         else {
-            fprintf(stderr, "bcast_check: unknown argument %s\n", argv[i]);
+            fprintf(stderr, "pcapcheck: bcast: unknown argument %s\n", argv[i]);
             return 2;
         }
     }
@@ -433,8 +433,8 @@ static int cmd_bcast(int argc, char **argv)
     }
     if (port < 0 && routed_via == NULL && routed_dst == NULL && owns == NULL && source == NULL &&
         arp_from == NULL) {
-        fprintf(stderr, "bcast_check: nothing to check: give --port, or "
-                        "--routed-via with --routed-dst\n");
+        fprintf(stderr, "pcapcheck: bcast: nothing to check: give --port, --routed-via "
+                        "with --routed-dst, --source, --owns or --arp-from\n");
         return 2;
     }
     if ((source && !parse_ip4(source, scratch)) || (owns && !parse_ip4(owns, scratch)) ||
@@ -442,10 +442,10 @@ static int cmd_bcast(int argc, char **argv)
         (routed_via && !parse_ip4(routed_via, scratch)) ||
         (routed_dst && !parse_ip4(routed_dst, scratch)) ||
         (dst_ip && !parse_ip4(dst_ip, scratch))) {
-        fprintf(stderr, "bcast_check: a malformed IPv4 address was given\n");
+        fprintf(stderr, "pcapcheck: bcast: a malformed IPv4 address was given\n");
         return 2;
     }
-    pcap_open(&pc, capture, "bcast_check");
+    pcap_open(&pc, capture, "pcapcheck: bcast");
     if (source != NULL && (rc = check_source(&pc, capture, source)) != 0)
         return rc;
     if (owns != NULL && (rc = check_owns(&pc, capture, owns)) != 0)
@@ -454,7 +454,7 @@ static int cmd_bcast(int argc, char **argv)
         return rc;
     if (routed_via != NULL || routed_dst != NULL) {
         if (routed_via == NULL || routed_dst == NULL) {
-            fprintf(stderr, "bcast_check: --routed-via and --routed-dst go "
+            fprintf(stderr, "pcapcheck: bcast: --routed-via and --routed-dst go "
                             "together\n");
             return 2;
         }
@@ -495,7 +495,7 @@ static void nc_fail(const char *fmt, ...)
 {
     va_list ap;
 
-    fprintf(stderr, "netconsole_check: ");
+    fprintf(stderr, "pcapcheck: netconsole: ");
     va_start(ap, fmt);
     vfprintf(stderr, fmt, ap);
     va_end(ap);
@@ -550,7 +550,7 @@ static int cmd_netconsole(int argc, char **argv)
         else if (argv[i][0] != '-' && capture == NULL)
             capture = argv[i];
         else {
-            fprintf(stderr, "netconsole_check: unknown argument %s\n", argv[i]);
+            fprintf(stderr, "pcapcheck: netconsole: unknown argument %s\n", argv[i]);
             return 2;
         }
     }
@@ -560,7 +560,7 @@ static int cmd_netconsole(int argc, char **argv)
                         "[--print]\n");
         return 2;
     }
-    pcap_open(&pc, capture, "netconsole_check");
+    pcap_open(&pc, capture, "pcapcheck: netconsole");
     nc_fails = 0;
     while ((f = pcap_next(&pc, &n)) != NULL) {
         const unsigned char *body;
@@ -612,7 +612,7 @@ static int cmd_netconsole(int argc, char **argv)
             log_cap = (log_len + length + 1) * 2;
             grown = realloc(log, log_cap);
             if (grown == NULL) {
-                fprintf(stderr, "netconsole_check: out of memory\n");
+                fprintf(stderr, "pcapcheck: netconsole: out of memory\n");
                 free(log);
                 return 2;
             }
@@ -634,7 +634,7 @@ static int cmd_netconsole(int argc, char **argv)
     if (log == NULL)
         log = calloc(1, 1);
     if (log == NULL) {
-        fprintf(stderr, "netconsole_check: out of memory\n");
+        fprintf(stderr, "pcapcheck: netconsole: out of memory\n");
         return 2;
     }
     log[log_len] = '\0';
@@ -669,7 +669,7 @@ static int cmd_netconsole(int argc, char **argv)
     if (nc_fails)
         return 1;
     fprintf(stderr,
-            "netconsole_check: ok: %ld frames, %lu bytes, boot id "
+            "pcapcheck: netconsole: ok: %ld frames, %lu bytes, boot id "
             "0x%08x, from %02x:%02x:%02x:%02x:%02x:%02x\n",
             ours, (unsigned long)log_len, boot_id, src_mac[0], src_mac[1], src_mac[2], src_mac[3],
             src_mac[4], src_mac[5]);
@@ -692,7 +692,7 @@ static int cmd_rawwire(int argc, char **argv)
         fprintf(stderr, "usage: pcapcheck rawwire <capture.pcap>\n");
         return 2;
     }
-    pcap_open(&pc, argv[0], "rawwire_check");
+    pcap_open(&pc, argv[0], "pcapcheck: rawwire");
     while ((f = pcap_next(&pc, &n)) != NULL) {
         uint32_t ihl, body;
         unsigned ttl, proto;
@@ -717,7 +717,7 @@ static int cmd_rawwire(int argc, char **argv)
         }
     }
     if (!icmp_ttls[1] || !icmp_ttls[2] || !icmp_ttls[3]) {
-        fprintf(stderr, "rawwire_check: FAIL: the raw sends did not carry "
+        fprintf(stderr, "pcapcheck: rawwire: FAIL: the raw sends did not carry "
                         "the hop limits they were given: saw");
         for (i = 0; i < 256; i++)
             if (icmp_ttls[i])
@@ -725,10 +725,10 @@ static int cmd_rawwire(int argc, char **argv)
         fputc('\n', stderr);
         ok = 0;
     } else
-        printf("rawwire_check: ok: raw sends left with hop limits 1, 2 "
+        printf("pcapcheck: rawwire: ok: raw sends left with hop limits 1, 2 "
                "and 3\n");
     if (!udp_ttls[4] || !udp_ttls[5] || !udp_ttls[6]) {
-        fprintf(stderr, "rawwire_check: FAIL: the datagram sends did not "
+        fprintf(stderr, "pcapcheck: rawwire: FAIL: the datagram sends did not "
                         "carry the hop limits they were given: saw");
         for (i = 0; i < 256; i++)
             if (udp_ttls[i])
@@ -736,15 +736,15 @@ static int cmd_rawwire(int argc, char **argv)
         fputc('\n', stderr);
         ok = 0;
     } else
-        printf("rawwire_check: ok: datagram sends left with hop limits 4, "
+        printf("pcapcheck: rawwire: ok: datagram sends left with hop limits 4, "
                "5 and 6\n");
     if (!kept_checksum) {
-        fprintf(stderr, "rawwire_check: FAIL: the message with a wrong "
+        fprintf(stderr, "pcapcheck: rawwire: FAIL: the message with a wrong "
                         "checksum did not leave with it, so the checksum is not "
                         "the caller's\n");
         ok = 0;
     } else
-        printf("rawwire_check: ok: the caller's checksum crossed the wire "
+        printf("pcapcheck: rawwire: ok: the caller's checksum crossed the wire "
                "unchanged\n");
     return ok ? 0 : 1;
 }
