@@ -77,7 +77,7 @@ The kernel debug shell is the supervisor of a boot with `rach2.rescue`, and of a
 * The mounted root: `ls`, `cat FILE`, `touch FILE`, `rm FILE`, `mv OLD NEW` and `write FILE DATA`.
 * Programs: `elf FILE` prints an executable's header, and `exec FILE [ARGS...]` runs it as a transient init, which returns to the shell when it ends.
 * Storage: `disk` probes the boot disk and dumps sector 0, and `ahci` probes the AHCI controller and reads LBA 0. `disk write`, in the recovery kernel alone, writes the last sector and reads it back; it refuses when an MBR entry covers that sector, or when LBA 1 or the last sector begins with the GPT signature `EFI PART`.
-* Exercises: `switch`, `preempt`, `isolate`, `usermode`, `netping` (the gateway, 10.0.2.2), `netbad` (an address that does not answer) and the `audio` commands of [the audio Readme](sys/audio/Readme.md).
+* Exercises: `switch`, `preempt`, `isolate`, `usermode`, `netping` (the configured gateway, 10.0.2.2 on QEMU's user network), `netbad` (an address that does not answer) and the `audio` commands of [the audio Readme](sys/audio/Readme.md).
 * Stops: `halt`, `poweroff` and `reboot` write the mounted disk root's dirty pages before they stop the machine ([the PC platform](sys/arch/x86/Readme.md) has the power off and reset methods), and `fault` panics the kernel by a page fault.
 
 The shell's prompts and output go to the screen and COM1 through `console_putc`, `console_puts` and `console_printf`, and never to the log ring or the network: they are not diagnostics, and netconsole broadcasts the log to everyone on the segment.

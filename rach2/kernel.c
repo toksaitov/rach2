@@ -73,9 +73,6 @@
 extern char stack[];
 extern char stack_guard[];
 
-/* A page; nothing in this file uses it. */
-#define USER_STACK_SIZE 0x1000
-
 /*
  * The debug shell's command line: the bytes typed, how many, and whether
  * Enter has ended the line. `kernel_shell_active` is set while the shell
@@ -924,7 +921,6 @@ static void test_preempt(void)
     console_puts("Two processes will print A and B, preempted by timer.");
     console_puts("Expected: interleaved As and Bs (e.g., AABBABAB...)");
     console_printf("Result:   ");
-    console_printf("Result:   ");
 
     preempt_done = 0;
     preempt_count_a = 0;
@@ -967,8 +963,6 @@ static void test_preempt(void)
     sched_disable();
 
     console_puts("");
-    console_printf("\n");
-    console_printf("Counts: A=%d B=%d\n", preempt_count_a, preempt_count_b);
     console_printf("Counts: A=%d B=%d\n", preempt_count_a, preempt_count_b);
 
     free_process(proc_a);
@@ -978,11 +972,9 @@ static void test_preempt(void)
     if (preempt_count_a > 0 && preempt_count_b > 0) {
         set_fore_color(light_green);
         console_puts("Preemptive scheduling test passed!");
-        console_printf("Preemptive scheduling test passed!\n");
     } else {
         set_fore_color(light_red);
         console_puts("Preemptive scheduling test FAILED - one process didn't run!");
-        console_printf("Preemptive scheduling test FAILED!\n");
     }
     set_fore_color(light_grey);
 }
@@ -2850,6 +2842,45 @@ static void disk_write_roundtrip(void)
 #endif
 
 /**
+ * Copy the first word of `args`, up to its first space or its end, into
+ * `word`, a buffer of CMD_BUFFER_SIZE bytes, which holds any word of a
+ * command line. Returns what follows that space, or NULL when no space
+ * follows the word.
+ */
+static const char *shell_split_word(const char *args, char *word)
+{
+    size_t i;
+
+    for (i = 0; args[i] != '\0' && args[i] != ' '; i++) {
+        word[i] = args[i];
+    }
+    word[i] = '\0';
+    return args[i] == ' ' ? args + i + 1 : NULL;
+}
+
+/**
+ * The `netping` and `netbad` commands: ping `ip`, an IPv4 address in host
+ * order, and print the round trip or the timeout, in green when a reply
+ * came and `want_reply` asks for one or none came and it does not, and in
+ * red otherwise.
+ */
+static void shell_ping(uint32_t ip, bool want_reply)
+{
+    int rtt = icmp_ping(ip);
+
+    set_fore_color((rtt >= 0) == want_reply ? light_green : light_red);
+    console_printf("ping %d.%d.%d.%d: ", (int)((ip >> 24) & 0xFF), (int)((ip >> 16) & 0xFF),
+                   (int)((ip >> 8) & 0xFF), (int)(ip & 0xFF));
+    if (rtt >= 0) {
+        console_printf("%s in %d ticks (%d ms)\n", want_reply ? "reply" : "unexpected reply", rtt,
+                       rtt * 10);
+    } else {
+        console_puts(want_reply ? "timeout" : "timeout (expected)");
+    }
+    set_fore_color(light_grey);
+}
+
+/**
  * Run one line `cmd` of the debug shell: the commands `help` lists, the
  * audio commands `audio_debug_handle_command` takes, and `poweroff` and
  * `reboot`, which `help` does not list. An empty line does nothing.
@@ -2908,11 +2939,12 @@ static void process_command(const char *cmd)
         console_puts("  usermode            - Test ring 3 execution");
         console_puts("  audio ...           - Audio tests, routing, and HDA diagnostics");
         console_puts("  ahci                - Probe the AHCI/SATA HBA, dump registers, read LBA 0");
-        console_puts("  netping             - Ping the gateway (10.0.2.2)");
+        console_puts("  netping             - Ping the gateway");
         console_puts("  netbad              - Ping an unreachable host (timeout demo)");
         console_puts("  fault               - Trigger page fault (panic)");
         console_puts("  halt                - Halt the CPU");
-        console_printf("  ...and more (see VGA display)\n");
+        console_puts("  poweroff            - Power the machine off");
+        console_puts("  reboot              - Restart the machine");
     } else if (str_equal(cmd, "info")) {
         console_printf("Memory pointer:  0x%X\n", mem_reserved_ptr);
         console_printf("Timer ticks:     %d\n", kernel_ticks);
@@ -3163,20 +3195,8 @@ static void process_command(const char *cmd)
             }
         }
     } else if (str_starts_with(cmd, "mv ")) {
-        const char *args = cmd + 3;
-        const char *new_name = NULL;
-        char old_buf[64];
-        size_t i;
-
-        for (i = 0; args[i] != '\0' && args[i] != ' '; i++) {
-            if (i < 63)
-                old_buf[i] = args[i];
-        }
-        old_buf[i < 63 ? i : 63] = '\0';
-
-        if (args[i] == ' ') {
-            new_name = args + i + 1;
-        }
+        char old_buf[CMD_BUFFER_SIZE];
+        const char *new_name = shell_split_word(cmd + 3, old_buf);
 
         if (!krffs_fs) {
             console_puts("No file system mounted.");
@@ -3197,20 +3217,8 @@ static void process_command(const char *cmd)
             }
         }
     } else if (str_starts_with(cmd, "write ")) {
-        const char *args = cmd + 6;
-        const char *data = NULL;
-        char file_buf[64];
-        size_t i;
-
-        for (i = 0; args[i] != '\0' && args[i] != ' '; i++) {
-            if (i < 63)
-                file_buf[i] = args[i];
-        }
-        file_buf[i < 63 ? i : 63] = '\0';
-
-        if (args[i] == ' ') {
-            data = args + i + 1;
-        }
+        char file_buf[CMD_BUFFER_SIZE];
+        const char *data = shell_split_word(cmd + 6, file_buf);
 
         if (!krffs_fs) {
             console_puts("No file system mounted.");
@@ -3258,27 +3266,9 @@ static void process_command(const char *cmd)
         set_fore_color(light_grey);
     } else if (audio_debug_handle_command(cmd)) {
     } else if (str_equal(cmd, "netping")) {
-        int rtt = icmp_ping(net_ip_gateway);
-        if (rtt >= 0) {
-            set_fore_color(light_green);
-            console_printf("ping 10.0.2.2: reply in %d ticks (%d ms)\n", rtt, rtt * 10);
-            console_printf("ping 10.0.2.2: reply in %d ticks\n", rtt);
-        } else {
-            set_fore_color(light_red);
-            console_puts("ping 10.0.2.2: timeout");
-        }
-        set_fore_color(light_grey);
+        shell_ping(net_ip_gateway, true);
     } else if (str_equal(cmd, "netbad")) {
-        int rtt = icmp_ping(0x0A000263UL); /* 10.0.2.99 */
-        if (rtt >= 0) {
-            set_fore_color(light_red);
-            console_printf("ping 10.0.2.99: unexpected reply (%d ticks)\n", rtt);
-            console_printf("ping 10.0.2.99: unexpected reply\n");
-        } else {
-            set_fore_color(light_green);
-            console_puts("ping 10.0.2.99: timeout (expected)");
-        }
-        set_fore_color(light_grey);
+        shell_ping(0x0A000263UL, false); /* 10.0.2.99 */
     } else if (str_equal(cmd, "fault")) {
         volatile uint32_t *bad_ptr = (volatile uint32_t *)0xA0000000;
         console_puts("Triggering page fault at 0xA0000000...");
@@ -3366,8 +3356,6 @@ void shell_loop(void)
                 }
                 cmd_buffer[cmd_pos] = '\0';
                 cmd_ready = true;
-                console_putc('\n');
-                console_putc('\r');
                 console_putc('\n');
                 break;
             } else if (ch == '\b' || ch == 0x7F) {
