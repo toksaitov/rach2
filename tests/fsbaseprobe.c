@@ -1,5 +1,6 @@
 /**
- * The x86-64 thread's FS and GS bases, which arch_prctl sets and gets.
+ * fsbaseprobe: the x86-64 thread's FS and GS bases, which arch_prctl sets
+ * and gets, and its FS and GS selectors.
  *
  * Each base set by ARCH_SET_FS or ARCH_SET_GS must read back by ARCH_GET_FS
  * or ARCH_GET_GS and address the block it names. A forked child must start
@@ -22,8 +23,8 @@
  * arch_prctl is x86-64's alone; on i686 the probe says its rows did not run
  * and passes.
  *
- * Prints "FSBASEPROBE OK" or "FSBASEPROBE FAIL: reason". Freestanding;
- * direct system calls (probe.h).
+ * Prints "FSBASEPROBE OK" and exits 0, or "FSBASEPROBE FAIL: " and the
+ * reason and exits 1.
  */
 
 #include "probe.h"
@@ -56,12 +57,14 @@
 #define USER_FS 200
 #define USER_GS 208
 
+/** End the process with `status`; it does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, status);
     __builtin_unreachable();
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -72,6 +75,7 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write `s` to standard output. */
 static void say(const char *s)
 {
     syscall3(SYS_WRITE, 1, (long)s, (long)strlen(s));
@@ -90,6 +94,7 @@ static unsigned long block_b[4] = {0xB6B6B6B6B6B6B6B6ul};
 static unsigned long block_c[4] = {0xC7C7C7C7C7C7C7C7ul};
 static unsigned long absolute = 0xD8D8D8D8D8D8D8D8ul;
 
+/** Print "FSBASEPROBE FAIL: " and `why`, and exit 1. */
 static void fail(const char *why)
 {
     say("FSBASEPROBE FAIL: ");
@@ -98,11 +103,14 @@ static void fail(const char *why)
     sys_exit(1);
 }
 
+/** The arch_prctl call: 0, or a negated errno. */
 static long prctl(long code, unsigned long arg)
 {
     return syscall2(SYS_ARCH_PRCTL, code, (long)arg);
 }
 
+/** The base ARCH_GET_FS or ARCH_GET_GS (`code`) reads; fail when the call
+ * fails. */
 static unsigned long base_of(long code)
 {
     unsigned long base = 1;
@@ -113,6 +121,7 @@ static unsigned long base_of(long code)
     return base;
 }
 
+/** The word at offset `off` from the FS base. */
 static unsigned long fs_word(unsigned long off)
 {
     unsigned long v;
@@ -121,6 +130,7 @@ static unsigned long fs_word(unsigned long off)
     return v;
 }
 
+/** The word at offset `off` from the GS base. */
 static unsigned long gs_word(unsigned long off)
 {
     unsigned long v;
@@ -129,6 +139,7 @@ static unsigned long gs_word(unsigned long off)
     return v;
 }
 
+/** Sleep for `ms` milliseconds, under a second. */
 static void sleep_ms(long ms)
 {
     struct timespec ts;
@@ -138,6 +149,7 @@ static void sleep_ms(long ms)
     syscall2(SYS_NANOSLEEP, (long)&ts, 0);
 }
 
+/** The selector in FS. */
 static unsigned long fs_sel(void)
 {
     unsigned long v = 0;
@@ -146,6 +158,7 @@ static unsigned long fs_sel(void)
     return v;
 }
 
+/** The selector in GS. */
 static unsigned long gs_sel(void)
 {
     unsigned long v = 0;
@@ -154,6 +167,7 @@ static unsigned long gs_sel(void)
     return v;
 }
 
+/** Load the selector `fs` into FS and `gs` into GS. */
 static void load_sels(unsigned long fs, unsigned long gs)
 {
     __asm__ __volatile__("movw %w0, %%fs" : : "r"(fs));
@@ -171,6 +185,8 @@ static int child_status(long pid)
     return (status >> 8) & 0xFF;
 }
 
+/** Set the FS base to `block_a` and the GS base to `block_b`, and check that
+ * each reads back and addresses its block. */
 static void run_set_get(void)
 {
     if (prctl(ARCH_SET_FS, (unsigned long)block_a) != 0 ||
@@ -183,6 +199,9 @@ static void run_set_get(void)
     }
 }
 
+/** A forked child starts with the bases `run_set_get` set, then moves its FS
+ * base to `block_c`; each keeps its own across YIELDS yields. The child exits
+ * 2 when its bases were not inherited and 3 when its base did not last. */
 static void run_fork_and_switches(void)
 {
     long pid = syscall0(SYS_FORK);
@@ -221,6 +240,9 @@ static void run_fork_and_switches(void)
     }
 }
 
+/** Load the stack's selector, the user data selector, into FS and GS: both
+ * bases read 0 at once and after a sleep, address `absolute` at its own
+ * address, and are 0 in a forked child. */
 static void run_selectors(void)
 {
     unsigned long ss;
@@ -256,6 +278,10 @@ static long clone_tls(unsigned long tls)
     return syscall5(SYS_CLONE, SIGCHLD | CLONE_SETTLS, 0, 0, 0, (long)tls);
 }
 
+/** The bound on a base: USER_ADDR_MAX and above are -EPERM from both
+ * arch_prctl sets and from clone, which then makes no child, and leave the
+ * bases set before; USER_ADDR_MAX - 1 is taken, and clone with CLONE_SETTLS
+ * gives its child the base. */
 static void run_bounds(void)
 {
     static const unsigned long refused[] = {USER_ADDR_MAX, USER_ADDR_MAX + 1, ~0ul};
@@ -296,11 +322,13 @@ static void run_bounds(void)
     }
 }
 
-/*
- * The parent has the user data selector in FS and GS from run_selectors.
- * The child loads the null selector and the user code selector, and both
- * yield to each other on processor 0, where a selector the kernel did not
- * keep for each would pass from one to the other.
+/**
+ * The selectors across switches. The parent has the user data selector in
+ * FS and GS from `run_selectors`. A forked child starts with the same, then
+ * loads the null selector and the user code selector, and both yield to
+ * each other on processor 0, where a selector the kernel did not keep for
+ * each would pass from one to the other. The child exits 2 when it did not
+ * start with its parent's selectors and 3 when its own did not last.
  */
 static void run_selector_switches(void)
 {
@@ -345,10 +373,11 @@ static void run_selector_switches(void)
     }
 }
 
-/*
- * The child stops itself with the user data selector in FS and GS; the
- * parent reads them, writes the user code selector to FS and a null
- * selector of RPL 3 to GS, and lets it run on to check them.
+/**
+ * The selectors through ptrace. The child stops itself with the user data
+ * selector in FS and GS; the parent reads them, writes the user code
+ * selector to FS and a null selector of RPL 3 to GS, and lets it run on to
+ * check them.
  */
 static void run_selector_ptrace(void)
 {
@@ -388,6 +417,7 @@ void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
 
+/** The probe: the rows in order on x86-64, and none on i686. */
 void probe_main(unsigned long *sp)
 {
     (void)sp;

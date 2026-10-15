@@ -1,11 +1,12 @@
 /**
- * Exercises signal delivery from user space via direct system calls.
+ * sigprobe: signal delivery, tested from user space.
  *
  * Its checks:
- *   * install a SIGUSR1 handler (with a tiny rt_sigreturn restorer), raise it
- *     to ourselves, and confirm the handler runs and resumes after it;
- *   * block SIGUSR1, raise it (stays pending, handler must NOT run), then
- *     unblock and confirm the now-pending signal is delivered;
+ *   * install a SIGUSR1 handler (with a small rt_sigreturn restorer), send
+ *     the signal to the probe itself, and confirm the handler runs and the
+ *     probe resumes after it;
+ *   * block SIGUSR1, raise it (it stays pending and the handler does not
+ *     run), then unblock and confirm the pending signal is delivered;
  *   * fork a child that spins; SIGTERM it and confirm the default action
  *     terminates it (parent reaps WTERMSIG == SIGTERM);
  *   * a handler that writes a selector naming no descriptor into the saved
@@ -25,7 +26,8 @@
  *     that ends three sleeps, a child with no timer, and the timers the
  *     kernel does not keep refused.
  *
- * Prints "SIGPROBE OK" on success. Freestanding; direct system calls (probe.h).
+ * Prints "SIGPROBE OK" and exits 0 when all pass, and "SIGPROBE FAIL" with
+ * the count of failed checks as its status otherwise.
  */
 
 #include "probe.h"
@@ -58,12 +60,14 @@ struct k_sigaction {
     unsigned mask[2];
 };
 
+/** End the process with `status`; it does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, status);
     __builtin_unreachable();
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -73,6 +77,7 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     syscall3(SYS_WRITE, STDOUT_FILENO, (long)s, (int)strlen(s));
@@ -81,6 +86,7 @@ static void puts(const char *s)
 
 static int fails = 0;
 
+/** Count a failure and print `msg` when `cond` is false. */
 static void check(int cond, const char *msg)
 {
     if (!cond) {
@@ -107,6 +113,7 @@ static volatile int forge_ran;
  * take a general-protection fault in kernel mode and panic. */
 #define BAD_SELECTOR 0xFFFFu
 
+/** Record that the handler ran, and for which signal. */
 static void usr1_handler(int sig)
 {
     handler_ran = 1;
@@ -121,6 +128,7 @@ static void usr1_handler(int sig)
 #define SAVED_CS(uc) ((volatile unsigned short *)((char *)(uc) + 40 + 144))
 #define SAVED_SS(uc) ((volatile unsigned short *)((char *)(uc) + 40 + 150))
 
+/** Write BAD_SELECTOR into the saved `cs` and `ss` of the frame `uc`. */
 static void forge_siginfo_handler(int sig, void *info, void *uc)
 {
     forge_ran = 1;
@@ -141,6 +149,7 @@ static void forge_siginfo_handler(int sig, void *info, void *uc)
 #define SAVED_GS_FROM_ARG(argp) \
     ((volatile unsigned *)(*(char *const *)((const char *)(argp) + 2 * 4) + 5 * 4))
 
+/** Write BAD_SELECTOR into the saved `gs` of the handler's own frame. */
 static void forge_handler(int sig)
 {
     forge_ran = 1;
@@ -149,6 +158,8 @@ static void forge_handler(int sig)
 }
 #endif
 
+/** Install `h` for `signo` with SA_SIGINFO, the restorer and the flags
+ * `extra`, and an empty mask; a failure counts as a failed check. */
 static void install_with(int signo, void (*h)(int), unsigned long extra)
 {
     struct k_sigaction ka;
@@ -257,6 +268,7 @@ static int sleep_ms(int ms)
     return syscall2(SYS_NANOSLEEP, (long)req, 0);
 }
 
+/** Install `h` for `signo` with no extra flags. */
 static void install(int signo, void (*h)(int))
 {
     install_with(signo, h, 0);
@@ -264,6 +276,7 @@ static void install(int signo, void (*h)(int))
 
 static volatile int alarms;
 
+/** Count a SIGALRM. */
 static void alarm_handler(int sig)
 {
     (void)sig;
@@ -302,13 +315,12 @@ static int itimer_disarmed(void)
  * of a second, must leave the timer disarmed once it fires, and its handler
  * must run once when SIGALRM is unblocked; the alarm is due at the third
  * tick and the sleep ends at the hundred and first, so no scheduling can put
- * the one after the other. An interval
- * timer ends three sleeps of five seconds in turn, which the kernel counts
- * as sleeps cut short. getitimer reports the interval as set and a value no
- * longer than the one set; a fork's child has no timer; alarm returns the
- * seconds left before the alarm it replaces; and a timer other than the
- * three is refused though its time is valid, and arms nothing. Every row
- * leaves the timer disarmed.
+ * the one after the other. An interval timer ends three sleeps of five
+ * seconds in turn, which the kernel counts as sleeps cut short. getitimer
+ * reports the interval as set and a value no longer than the one set; a
+ * fork's child has no timer; alarm returns the seconds left before the
+ * alarm it replaces; and a timer other than the three is refused though its
+ * time is valid, and arms nothing. Every row leaves the timer disarmed.
  */
 static void timer_rows(void)
 {
@@ -366,6 +378,27 @@ static void timer_rows(void)
     check(syscall1(SYS_ALARM, 0) == 0 && itimer_disarmed(), "and alarm(0) leaves none");
 }
 
+/**
+ * The probe: the rows of the opening comment in order, each counted by
+ * `check`.
+ *
+ * Row 4: the i386 return path loads gs, fs, es and ds with `mov` while still
+ * at ring 0, and the x86-64 one returns through cs and ss with `iretq`, so a
+ * selector past the GDT's limit would fault the kernel and not the process;
+ * the kernel must replace it. Reaching the next statement at all is the
+ * proof, since the alternative is a machine that stops.
+ *
+ * Row 5: `SA_RESETHAND` puts the disposition back for the next signal, not
+ * for this one: a delivery that entered the disposition it had just cleared
+ * would jump to address zero.
+ *
+ * Row 6: the child sleeps far longer than the probe waits; the parent waits
+ * until /proc shows it asleep, so the signal lands in the sleep however late
+ * the child runs, then signals it and requires the kernel's count of the
+ * sleeps a signal cut short to rise, which a sleep that ran to its deadline
+ * would not do. The wait is at most 500 sleeps of 10 ms, each one or two
+ * ticks, and a child not seen asleep by then fails its own row.
+ */
 PROBE_START void _start(void)
 {
     int pid, status;
@@ -401,34 +434,21 @@ PROBE_START void _start(void)
     check(syscall3(SYS_WAITPID, pid, (long)&status, 0) == pid, "reap killed child");
     check((status & 0x7f) == SIGTERM, "child terminated by SIGTERM (WTERMSIG)");
 
-    /* 4. A forged selector in the frame the kernel restores. The i386 return
-       path loads gs, fs, es and ds with `mov` while still at ring 0, and the
-       x86-64 one returns through cs and ss with `iretq`, so a selector past
-       the GDT's limit would fault the kernel and not the process; the kernel
-       must coerce it. Reaching the next statement at all is the proof, since
-       the alternative is a machine that stops. */
+    /* 4. A forged selector in the frame the kernel restores. */
     install(SIGUSR1, forge_handler);
     forge_ran = 0;
     syscall2(SYS_KILL, syscall1(SYS_GETPID, 0), SIGUSR1);
     check(forge_ran == 1, "the forging handler ran");
     check(syscall1(SYS_GETPID, 0) > 0, "the machine survives a forged selector in the frame");
 
-    /* 5. A one-shot handler runs once. `SA_RESETHAND` puts the disposition
-       back for the next signal, not for this one: a delivery that entered the
-       disposition it had just cleared would jump to address zero. */
+    /* 5. A one-shot handler runs once. */
     install_with(SIGUSR1, usr1_handler, SA_RESETHAND);
     handler_ran = 0;
     handler_sig = 0;
     syscall2(SYS_KILL, syscall1(SYS_GETPID, 0), SIGUSR1);
     check(handler_ran == 1 && handler_sig == SIGUSR1, "a one-shot handler runs on its signal");
 
-    /* 6. A signal ends a sleep where it lands. The child sleeps far longer
-       than this probe waits; the parent waits until /proc shows it asleep,
-       so the signal lands in the sleep however late the child runs, then
-       signals it and requires the kernel's count of the sleeps a signal cut
-       short to rise, which a sleep that ran to its deadline would not do.
-       The wait is at most 500 sleeps of 10 ms, each one or two ticks, and a
-       child not seen asleep by then fails its own row. */
+    /* 6. A signal ends a sleep where it lands. */
     {
         int before = sleeps_cut_short();
         int i;

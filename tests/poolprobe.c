@@ -1,22 +1,20 @@
 /**
- * The pools that were: pipes, ptys and sockets past the sixteen each used
- * to have, and the heap where it started after a thousand of each.
+ * poolprobe: many pipes, ptys, sockets and processes live at once, and the
+ * kernel heap back where it started after a thousand of each object.
  *
- * Eight children each open six pipes, then five pty masters, then six
- * datagram sockets, and hold them while they tell the parent through one
- * shared pipe that they have them; each then waits for the parent's word
- * before letting go, and the parent gives it only after all eight have
- * reported, so forty-eight pipes, forty ptys and forty-eight sockets are
- * live at once, three times the old sixteen; and each child forks four
- * children of its own that wait for the same word, forty processes with
- * the parent and the shell, past the sixteen the process table held. Then
- * the parent opens and
- * closes a pipe, a pty and a socket a thousand times each, and the heap's
- * `HeapUsed` in `/proc/meminfo` must be what it was before, with
- * `HeapPages` within two pages of it, so nothing leaked.
+ * In each of four rounds, eight children each open and hold six pipes, or
+ * five pty masters, or six datagram sockets, or fork four children of their
+ * own, and tell the parent through one shared pipe that they have them; each
+ * then waits for the parent's word before letting go, and the parent gives
+ * it only after all eight have reported. So forty-eight pipes, forty ptys,
+ * forty-eight sockets and, in the last round, forty processes besides the
+ * parent and the shell are live at once. Then the parent opens and closes a
+ * pipe, a pty and a socket a thousand times each, and the heap's `HeapUsed`
+ * in `/proc/meminfo` must be what it was before, with `HeapPages` within two
+ * pages of it, so nothing leaked.
  *
- * Prints "POOLPROBE OK" or "POOLPROBE FAIL: reason". Freestanding; direct
- * system calls (probe.h).
+ * Prints "POOLPROBE OK" and exits 0, or "POOLPROBE FAIL: " and the reason
+ * and exits 1.
  */
 
 #include "probe.h"
@@ -26,12 +24,14 @@
 #define O_RDONLY   0
 #define O_RDWR     2
 
+/** End the process with `status`; it does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, status);
     __builtin_unreachable();
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -41,12 +41,14 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
     syscall3(SYS_WRITE, 1, (long)"\n", 1);
 }
 
+/** Print "POOLPROBE FAIL: " and `why`, and exit 1. */
 static void fail(const char *why)
 {
     syscall3(SYS_WRITE, 1, (long)"POOLPROBE FAIL: ", 16);
@@ -54,6 +56,7 @@ static void fail(const char *why)
     sys_exit(1);
 }
 
+/** Sleep for `ms` milliseconds. */
 static void sleep_ms(int ms)
 {
     long ts[2];
@@ -63,6 +66,7 @@ static void sleep_ms(int ms)
     syscall2(SYS_NANOSLEEP, (long)ts, 0);
 }
 
+/** A UDP socket: its descriptor, or a negated errno. */
 static int open_socket(void)
 {
     unsigned long args[3];
@@ -73,7 +77,8 @@ static int open_socket(void)
     return sock_call(SC_SOCKET, args);
 }
 
-/* A field of /proc/meminfo, in its own units, or 0xFFFFFFFF when absent. */
+/** The value of the field `key`, with its colon, of /proc/meminfo, in its
+ * own units, or 0xFFFFFFFF when the file or the field is absent. */
 static unsigned meminfo(const char *key)
 {
     static char buf[1024];
@@ -113,6 +118,7 @@ static unsigned meminfo(const char *key)
 
 static int ack_fd = -1; /* the parent's word that every holder has reported */
 
+/** Block until the parent writes its word, a byte, to `ack_fd`. */
 static void wait_for_word(void)
 {
     char byte;
@@ -120,7 +126,13 @@ static void wait_for_word(void)
     syscall3(SYS_READ, ack_fd, (long)&byte, 1);
 }
 
-/* A child: `kind` objects opened and held while the parent counts. */
+/**
+ * A holder's half: open `count` objects of `kind` (0 a pipe, 1 a pty master,
+ * 2 a datagram socket, 3 a child that waits for the word), write "h" to
+ * `report`, wait for the word, reap any children, and exit 0. It exits 2
+ * when a pipe fails and 3 when another object or a fork fails. `count` is
+ * at most 8 for pipes and 16 for the others.
+ */
 static void hold(int kind, int count, int report)
 {
     int fds[16];
@@ -171,6 +183,8 @@ static void hold(int kind, int count, int report)
     sys_exit(0);
 }
 
+/** One round: eight holders of `per_child` objects of `kind` each, all live
+ * at once; fail with `what` unless every holder reports and exits 0. */
 static void crossed(int kind, int per_child, const char *what)
 {
     int report[2];
@@ -202,8 +216,7 @@ static void crossed(int kind, int per_child, const char *what)
             fail(what);
         }
     }
-    /* Every holder has reported: the word to let go, one byte per waiter,
-       the holders and their children. */
+    /* One byte of the word for each waiter, holders and their children. */
     for (i = 0; i < 8 * (1 + (kind == 3 ? per_child : 0)); i++) {
         syscall3(SYS_WRITE, ack[1], (long)"g", 1);
     }
@@ -220,6 +233,9 @@ static void crossed(int kind, int per_child, const char *what)
     ack_fd = -1;
 }
 
+/** Make and close a thousand objects of `kind` (0 a pipe, 1 a pty master, 2
+ * a socket), and fail with `what` unless HeapUsed is unchanged and
+ * HeapPages within two pages of where it was. */
 static void cycle(int kind, const char *what)
 {
     unsigned used0 = meminfo("HeapUsed:"), pages0 = meminfo("HeapPages:");
@@ -256,6 +272,7 @@ void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
 
+/** The probe: the four rounds, then the three cycles. */
 void probe_main(unsigned long *sp)
 {
     (void)sp;

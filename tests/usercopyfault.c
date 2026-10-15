@@ -1,18 +1,17 @@
 /**
- * Probes that a user string running off a mapped page into a hole is rejected
- * with -EFAULT, not a kernel fault.
+ * usercopyfault: a user path that runs off a mapped page into a hole is
+ * refused with -EFAULT, and the kernel does not fault.
  *
- * The kernel copies a syscall pathname out of user memory with
- * strncpy_from_user, which validates and backs each page as the copy crosses a
+ * The kernel copies a system call's path out of user memory with
+ * strncpy_from_user, which checks and backs each page as the copy crosses a
  * boundary. An unterminated string that runs from a mapped page into an
- * unmapped one must make the syscall return -EFAULT and leave the process
- * running; it must never fault the kernel. The probe maps two pages, unmaps the
- * second to leave a hole, fills the end of the first with non-NUL bytes up to
- * the boundary, and calls open() with a path pointer near the end so the copy
- * walks off the mapped page into the hole.
+ * unmapped one makes the call return -EFAULT and leaves the process
+ * running. The probe maps two pages, unmaps the second to leave a hole,
+ * fills the end of the first with non-NUL bytes up to the boundary, and
+ * calls open with a path that starts near the end, so the copy runs off the
+ * mapped page into the hole.
  *
- * Prints "USERCOPYFAULT OK" and exits 0. Freestanding; direct system calls
- * (probe.h).
+ * Prints "USERCOPYFAULT OK" and exits 0 on success.
  */
 
 #include "probe.h"
@@ -28,32 +27,39 @@
 #define EFAULT   14
 #define PAGE     4096u
 
+/** The write call: the count written, or a negated errno. */
 static int sys_write(int fd, const void *buf, size_t count)
 {
     return syscall3(SYS_WRITE, (long)fd, (long)buf, (long)count);
 }
 
+/** End the process with `status`; it does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
+/** Map `len` bytes of private anonymous memory: the address, or a negated
+ * errno that `sys_failed` recognizes. */
 static long mmap_anon(long len, int prot)
 {
     return probe_mmap(0, len, prot, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 }
 
+/** The munmap call: 0, or a negated errno. */
 static int sys_munmap(unsigned long addr, unsigned long len)
 {
     return syscall2(SYS_MUNMAP, (long)addr, (long)len);
 }
 
+/** The open call with mode 0: a descriptor, or a negated errno. */
 static int sys_open(const char *path, int flags)
 {
     return syscall3(SYS_OPEN, (long)path, (long)flags, (long)0);
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -63,12 +69,14 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
     sys_write(STDOUT_FILENO, "\n", 1);
 }
 
+/** Print "USERCOPYFAULT FAIL: " and `why`, and exit 1. */
 static void fail(const char *why)
 {
     sys_write(STDOUT_FILENO, "USERCOPYFAULT FAIL: ", 20);
@@ -76,6 +84,8 @@ static void fail(const char *why)
     sys_exit(1);
 }
 
+/** The probe, as the file's opening comment describes; it exits 1 through
+ * `fail` at the first step that does not hold. */
 PROBE_START void _start(void)
 {
     long p;
@@ -87,15 +97,14 @@ PROBE_START void _start(void)
         fail("mmap two pages");
     }
 
-    /* Back both pages, then drop the second so it becomes an unmapped hole. */
+    /* Back both pages, then unmap the second to leave a hole. */
     ((volatile char *)p)[0] = 'a';
     ((volatile char *)p)[PAGE] = 'a';
     if (sys_munmap(p + PAGE, PAGE) != 0) {
         fail("munmap the trailing page");
     }
 
-    /* Eight non-NUL bytes ending exactly at the page boundary: the ninth byte
-     * the copy would read sits in the now-unmapped page. */
+    /* The ninth byte the copy reads is the first of the unmapped page. */
     path = (char *)(p + PAGE - 8);
     for (i = 0; i < 8; i++) {
         path[i] = 'A';

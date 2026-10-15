@@ -1,14 +1,14 @@
 /**
- * Exercises the misc syscalls busybox needs, from user space.
+ * miscprobe: the smaller system calls BusyBox needs, tested from user space.
  *
- * Proves getppid (a child sees the parent's pid), umask (set returns the
- * previous mask, inherited across fork), times (a monotonic tick count plus
+ * Proves getppid (a child sees the parent's pid), umask (a set returns the
+ * previous mask, the default 022 first), times (a positive tick count and
  * the four CPU times, none negative and none past the ticks since boot),
  * sysinfo (a live-process count, mem_unit 1), and vfork (the child runs
  * and exits with 7, and the parent then gets its pid and that status).
  *
- * Prints "MISCPROBE OK" / "MISCPROBE FAIL". Freestanding; direct system calls
- * (probe.h).
+ * Prints "MISCPROBE OK" and exits 0 when all pass, and "MISCPROBE FAIL" with
+ * the count of failed checks as its status otherwise.
  */
 
 #include "probe.h"
@@ -25,30 +25,35 @@
 #define SI_MEM_UNIT 52
 #endif
 
+/** End the process with status `s`; it does not return. */
 static void sys_exit(int s)
 {
     syscall1(SYS_EXIT, s);
     __builtin_unreachable();
 }
+/** The caller's pid. */
 static int getpid(void)
 {
     return syscall1(SYS_GETPID, 0);
 }
+/** The pid of the caller's parent. */
 static int getppid(void)
 {
     return syscall1(SYS_GETPPID, 0);
 }
+/** Set the file mode creation mask to `m`; the mask it replaced. */
 static int umask(int m)
 {
     return syscall1(SYS_UMASK, m);
 }
+/** The fork call: the child's pid, 0 in the child, or a negated errno. */
 static int fork(void)
 {
     return syscall1(SYS_FORK, 0);
 }
 /**
  * vfork, with the child's exit in the same instructions. The child runs on
- * the parent's stack until it exits, so it must not return through the
+ * the parent's stack until it exits, so it may not return through the
  * frames the parent returns through later, nor call a function, whose frame
  * would overwrite them; it exits with `code` from the instructions that made
  * the call. The parent gets the child's pid, or -errno.
@@ -79,20 +84,24 @@ static int vfork_exit(int code)
 #endif
     return (int)r;
 }
+/** Wait for the child `pid`: the pid reaped, or a negated errno. */
 static int waitpid(int pid, int *st, int opt)
 {
     return syscall3(SYS_WAITPID, pid, (long)st, opt);
 }
-/* times' result and fields are clock_t, a long: 64 bits on x86-64. */
+/** The times call: the ticks since boot, with the four CPU times in `tms`.
+ * Its result and fields are clock_t, a long: 64 bits on x86-64. */
 static long times(void *tms)
 {
     return syscall1(SYS_TIMES, (long)tms);
 }
+/** The sysinfo call into the SI_SIZE bytes at `si`: 0, or a negated errno. */
 static int sysinfo(void *si)
 {
     return syscall1(SYS_SYSINFO, (long)si);
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -101,6 +110,7 @@ static size_t strlen(const char *s)
     }
     return n;
 }
+/** Write `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
@@ -116,6 +126,7 @@ static int sum_within(long a, long b, long t)
 }
 
 static int fails = 0;
+/** Count a failure and print `msg` when `cond` is false. */
 static void check(int cond, const char *msg)
 {
     if (!cond) {
@@ -125,6 +136,7 @@ static void check(int cond, const char *msg)
     }
 }
 
+/** The probe: the five checks of the opening comment in order. */
 PROBE_START void _start(void)
 {
     int me = getpid();
@@ -133,7 +145,7 @@ PROBE_START void _start(void)
 
     puts("MISCPROBE START");
 
-    /* getppid: a child reports our pid as its parent. */
+    /* getppid: a child reports the probe's pid as its parent. */
     pid = fork();
     if (pid == 0) {
         sys_exit(getppid() == me ? 0 : 1);

@@ -1,23 +1,22 @@
 /**
- * The machine under load, and the longest delays it saw.
+ * loadprobe: the machine under load, and the longest delays it saw.
  *
  * Six children spin, two write a file of 256 KiB on the mounted volume and
  * sync it over and over, one pings the gateway through the kernel's own
  * ping every fifty milliseconds, and one reads lines from the console,
  * which the harness types one after another, each once the reader has
- * said it took the last, for twenty seconds. Then the
- * parent kills them all, reads `/proc/stat`, and prints the four delays the
- * kernel kept as its longest: the gap between two timer ticks, a block
- * request from its taking to its completion, a wait for the request limit,
- * and a console line from readable to read. The four delays are the
- * machine's and are printed for the record; what is judged is counted: at
- * least three lines must have been read, and no request may have been
- * quarantined by its deadline, which /proc/disk counts. A bound on the
- * delays was one machine's.
+ * said it took the last, for twenty seconds. Then the parent kills them
+ * all, reads `/proc/stat`, and prints the four delays the kernel kept as
+ * its longest: the gap between two timer ticks, a block request from its
+ * taking to its completion, a wait for the request limit, and a console
+ * line from readable to read. The four delays depend on the machine and
+ * are printed, not judged; what is judged is counted: at least three lines
+ * must have been read, and no request may have been quarantined by its
+ * deadline, which /proc/disk counts.
  *
- * Prints "LOADPROBE timer N disk N diskwait N console N" and then
- * "LOADPROBE OK" or "LOADPROBE FAIL: reason". Freestanding; direct system calls
- * (probe.h).
+ * Prints "LOADPROBE timer N disk N diskwait N console N lines N" and then
+ * "LOADPROBE OK" and exits 0, or "LOADPROBE FAIL: " and the reason and
+ * exits 1.
  */
 
 #include "probe.h"
@@ -30,12 +29,14 @@
 #define O_TRUNC  01000
 #define SIGKILL  9
 
+/** End the process with `status`; it does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, status);
     __builtin_unreachable();
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -45,17 +46,20 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write `s` to standard output. */
 static void print(const char *s)
 {
     syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
 }
 
+/** Write `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     print(s);
     print("\n");
 }
 
+/** Write `v` in decimal to standard output. */
 static void print_num(unsigned v)
 {
     char tmp[12];
@@ -70,6 +74,7 @@ static void print_num(unsigned v)
     }
 }
 
+/** Print "LOADPROBE FAIL: " and `why`, and exit 1. */
 static void fail(const char *why)
 {
     print("LOADPROBE FAIL: ");
@@ -77,6 +82,7 @@ static void fail(const char *why)
     sys_exit(1);
 }
 
+/** Sleep for `ms` milliseconds. */
 static void sleep_ms(int ms)
 {
     long ts[2];
@@ -88,9 +94,12 @@ static void sleep_ms(int ms)
 
 static unsigned char block[4096];
 
-/* A writer: the file written whole and synced, again and again. */
+/* Whether a writer syncs after each pass; the argument's `n` clears it. */
 static int writer_syncs = 1;
 
+/** A writer: write the file `path` whole, 64 blocks of 4 KiB, close it and
+ * sync, again and again. It exits 2 when the open fails and 3 when a write
+ * is short. */
 static void writer(const char *path)
 {
     unsigned i;
@@ -116,6 +125,7 @@ static void writer(const char *path)
     }
 }
 
+/** The pinger: the kernel's ping of the gateway every 50 ms, forever. */
 static void pinger(void)
 {
     unsigned long args[3];
@@ -127,9 +137,9 @@ static void pinger(void)
     }
 }
 
-/* The console reader: lines counted into the report pipe, one byte each,
- * and each said on the console, which is what the harness types the next
- * line after. */
+/** The console reader: count each line read into `report`, one byte each,
+ * and print "LOADPROBE read" for it, after which the harness types the next
+ * line. It does not return. */
 static void reader(int report)
 {
     char c;
@@ -142,8 +152,10 @@ static void reader(int report)
     }
 }
 
-/* A field of /proc/stat, or 0xFFFFFFFF when absent, the file read to its
-   end past a line for each processor. */
+/** The number after `key` on the line of the file `path` that begins with it,
+ * or 0xFFFFFFFF when the file or the line is absent or the file does not fit
+ * in 32 KiB. The whole file is read, since /proc/stat has a line for each
+ * processor before the ones read here. */
 static unsigned file_field(const char *path, const char *key)
 {
     static char text[32768];
@@ -187,8 +199,8 @@ void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
 
-/* Which of the four loads run: every one unless the argument names some
-   by their first letters, `s`pinners, `w`riters, `p`inger, `r`eader. */
+/** Non-zero when the argument `arg` has the letter `kind`, or when there is
+ * no argument. */
 static int wanted(const char *arg, char kind)
 {
     int i;
@@ -204,6 +216,14 @@ static int wanted(const char *arg, char kind)
     return 0;
 }
 
+/**
+ * The probe, entered with `sp` at argc. Every load runs unless the first
+ * argument names some by their first letters: `s`pinners, `w`riters, `W` for
+ * the first writer alone, `p`inger, `r`eader. With an argument, `n` makes
+ * the writers skip the sync and `k` mounts the volume as KRFFS in place of
+ * FAT32. A child whose load is not wanted sleeps for 30 seconds, and is
+ * killed at 20.
+ */
 void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];

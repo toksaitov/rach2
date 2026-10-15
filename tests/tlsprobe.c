@@ -1,36 +1,36 @@
 /**
- * Verify that %gs thread-local storage survives syscalls, IRQs, and context
- * switches, with per-process isolation.
+ * tlsprobe: %gs thread-local storage lasts across system calls, interrupts
+ * and context switches, and each process has its own.
  *
- * Drives the kernel's set_thread_area(2) exactly as musl's __init_tls does: it
+ * Calls the kernel's set_thread_area(2) as musl's __init_tls does: it
  * points a GDT TLS descriptor at a thread control block (TCB) and loads the
  * returned selector into %gs. It then writes sentinel words through %gs and
- * re-reads them while hammering the kernel:
+ * reads them again while the kernel is entered over and over:
  *
  *   1. Solo phase: thousands of system calls plus busy-waits across many
- *      100 Hz timer IRQs. Every %gs:off read must still equal the sentinel, so
- *      the syscall AND IRQ entry/exit paths must save and restore %gs (the old
- *      bug smeared %gs from the saved %ds, which this would catch immediately).
+ *      100 Hz timer interrupts. Every %gs:off read must still equal the
+ *      sentinel, so the entry and exit paths of both the system call and the
+ *      interrupt must save and restore %gs; one that loaded %gs from the
+ *      saved %ds fails at once.
  *
- *   2. Isolation phase: fork a child that points its OWN TLS descriptor at a
- *      DIFFERENT TCB with different sentinels. Parent and child then spin so
- *      the round-robin scheduler switches between them hundreds of times, and
- *      then hand a byte back and forth over two pipes, so that each round
- *      takes one switch to the child and one back; each must always read back
- *      its own sentinels. This only holds if the context switch reprograms
- *      the shared TLS GDT descriptor per process. Both are bound to processor
- *      0 first: on two processors each could keep one to itself, and no
- *      switch would go from one to the other.
+ *   2. Isolation phase: fork a child that points its own TLS descriptor at a
+ *      different TCB with different sentinels. Parent and child then spin so
+ *      the scheduler switches between them hundreds of times, and then hand
+ *      a byte back and forth over two pipes, so that each round takes one
+ *      switch to the child and one back; each must always read back its own
+ *      sentinels. This holds only if the context switch reprograms the
+ *      shared TLS GDT descriptor for each process. Both are bound to
+ *      processor 0 first: on two processors each could keep one to itself,
+ *      and no switch would go from one to the other.
  *
- * Prints "All TLS checks passed!" and exits 0 only if every check passes.
+ * Prints "All TLS checks passed!" and exits 0 when every check passes, and
+ * "tlsprobe: FAILED" and exits 1 otherwise.
  *
- * The Linux/BSD analogue is set_thread_area(2) plus the i386 %gs thread pointer
- * that glibc/musl, the stack-protector canary, and pthread_self() all rely on.
- *
- * Freestanding; direct system calls (probe.h). set_thread_area and the TLS
- * descriptor in the GDT are i386's, so tests/Makefile builds the probe for
- * i686 alone; x86-64 keeps the thread pointer in the FS base, set by
- * arch_prctl.
+ * On Linux the same interface is set_thread_area(2) and the i386 %gs thread
+ * pointer that glibc and musl, the stack-protector canary and
+ * pthread_self() rely on. set_thread_area and the TLS descriptor in the GDT
+ * are i386's, so tests/Makefile builds the probe for i686 alone; x86-64
+ * keeps the thread pointer in the FS base, set by arch_prctl.
  */
 
 #include "probe.h"
@@ -50,44 +50,52 @@ typedef unsigned char u8;
 /* Number of sentinel slots checked per TCB (offsets 0,4,...,28). */
 #define NUM_SLOTS 8
 
-/* Iteration counts: thousands of syscalls solo, hundreds of switches in iso. */
+/* Iteration counts: thousands of system calls in the solo phase, hundreds of
+ * switches in the isolation phase. */
 #define SOLO_ITERS  40000
 #define ISO_ITERS   3000
 #define BUSY_SPIN   60000
 #define PING_ROUNDS 200
 
+/** The write call: the count written, or a negated errno. */
 static int sys_write(int fd, const void *buf, u32 n)
 {
     return syscall3(SYS_WRITE, (long)fd, (long)buf, (long)n);
 }
 
+/** End the process with `status`; it does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
+/** The read call: the count read, 0 at the end, or a negated errno. */
 static int sys_read(int fd, void *buf, u32 n)
 {
     return syscall3(SYS_READ, (long)fd, (long)buf, (long)n);
 }
 
+/** Close `fd`, ignoring the result. */
 static void sys_close(int fd)
 {
     (void)syscall1(SYS_CLOSE, (long)fd);
 }
 
+/** The fork call: the child's pid, 0 in the child, or a negated errno. */
 static int sys_fork(void)
 {
     return syscall0(SYS_FORK);
 }
 
+/** Wait for the child `pid`: the pid reaped, or a negated errno. */
 static int sys_waitpid(int pid, int *status, int options)
 {
     return syscall3(SYS_WAITPID, (long)pid, (long)status, (long)options);
 }
 
-/** A cheap, side-effect-free syscall used to exercise the int 0x80 path. */
+/** A cheap system call with no side effect, to enter the kernel through
+ * int 0x80. */
 static void sys_gettimeofday(long *tv2)
 {
     (void)syscall1(SYS_GETTIMEOFDAY, (long)tv2);
@@ -123,7 +131,7 @@ static void load_gs(int entry)
     __asm__ __volatile__("movw %w0, %%gs" : : "r"(sel));
 }
 
-/** Read/write a 32-bit word at %gs:off (off is a byte offset into the TCB). */
+/** The 32-bit word at %gs:off, `off` a byte offset into the TCB. */
 static u32 gs_read(u32 off)
 {
     u32 v;
@@ -132,11 +140,13 @@ static u32 gs_read(u32 off)
     return v;
 }
 
+/** Write the 32-bit word `val` at %gs:off. */
 static void gs_write(u32 off, u32 val)
 {
     __asm__ __volatile__("movl %0, %%gs:(%1)" : : "r"(val), "r"(off) : "memory");
 }
 
+/** The length of the string `s`. */
 static u32 slen(const char *s)
 {
     u32 n = 0;
@@ -147,11 +157,13 @@ static u32 slen(const char *s)
     return n;
 }
 
+/** Write `s` to standard output, with no newline. */
 static void puts_(const char *s)
 {
     sys_write(STDOUT, s, slen(s));
 }
 
+/** Write `v` as "0x" and eight hex digits. */
 static void put_u32(u32 v)
 {
     static const char hex[] = "0123456789abcdef";
@@ -182,8 +194,8 @@ static void tls_fill(u32 magic)
 }
 
 /**
- * Re-read every slot through %gs and confirm it still has magic^slot.
- * Returns the number of mismatches (0 == intact).
+ * Read every slot through %gs again and count those that no longer have
+ * magic^slot; 0 when all are intact.
  */
 static int tls_check(u32 magic)
 {
@@ -198,7 +210,8 @@ static int tls_check(u32 magic)
     return bad;
 }
 
-/** Burn cycles in user mode so timer IRQs (and, with a peer, switches) fire. */
+/** Spin in user mode, so that timer interrupts and, with a peer, switches
+ * come. */
 static void busy(u32 spins)
 {
     volatile u32 x = 0;
@@ -221,7 +234,7 @@ static int solo_phase(int fails)
 
     tls_fill(0xA5A50000u);
     for (i = 0; i < SOLO_ITERS; i++) {
-        sys_gettimeofday(tv2); /* int 0x80: tests syscall %gs save */
+        sys_gettimeofday(tv2); /* int 0x80: the system call's %gs save */
         if ((i & 0x3FF) == 0) {
             busy(BUSY_SPIN); /* span several timer IRQs */
         }
@@ -247,6 +260,12 @@ static int solo_phase(int fails)
  * passed over the pipes. It exits 0 when all were intact, 8 when the base
  * it inherited did not read the parent's sentinels, 7 when it could not
  * set its own, and 1 on a mismatch. Does not return.
+ *
+ * Before it sets its own TLS, the child still has the base it inherited
+ * across fork, which copies the TLS base and the %gs of the trap frame. Its
+ * copy of tcb_parent has the parent's sentinels, so a read through the
+ * inherited %gs returns them; a fork that dropped the base would make the
+ * switch program base 0, and the read would not match.
  */
 static void iso_child(const int to_child[2], const int to_parent[2])
 {
@@ -259,12 +278,7 @@ static void iso_child(const int to_child[2], const int to_parent[2])
     sys_close(to_child[1]);
     sys_close(to_parent[0]);
 
-    /* Before re-arming TLS, the child must still see the base it INHERITED
-     * from the parent across fork (fork copies tls_base and the trapframe
-     * %gs). Its own copy of tcb_parent holds the parent's sentinels, so a
-     * read through the inherited %gs must return them. If fork dropped
-     * tls_base the switch would reprogram base 0 and this would
-     * mismatch. */
+    /* The base inherited across fork reads the parent's sentinels. */
     if (tls_check(0xA5A50000u) != 0) {
         sys_exit(8);
     }
@@ -290,7 +304,6 @@ static void iso_child(const int to_child[2], const int to_parent[2])
             cbad++;
         }
     }
-    /* Exit status has the child verdict to the parent (0 == clean). */
     sys_exit(cbad == 0 ? 0 : 1);
 }
 
@@ -384,7 +397,7 @@ void probe_main(unsigned long *sp)
 
     puts_("tlsprobe: starting\n");
 
-    /* Establish this process's TLS pointing at tcb_parent. */
+    /* This process's TLS, at tcb_parent. */
     entry = set_thread_area(tcb_parent);
     if (entry < 0) {
         puts_("FAIL: set_thread_area\n");
@@ -395,7 +408,7 @@ void probe_main(unsigned long *sp)
     puts_("\n");
     load_gs(entry);
 
-    /* Sanity: %gs:0 must alias tcb_parent[0]. */
+    /* %gs:0 is tcb_parent[0]. */
     gs_write(0, 0xdeadbeef);
     if (tcb_parent[0] != 0xdeadbeef) {
         puts_("FAIL: %gs does not alias the TCB\n");
@@ -404,8 +417,7 @@ void probe_main(unsigned long *sp)
 
     fails = solo_phase(fails);
 
-    /* Isolation phase: a second process with a DIFFERENT TCB, on the
-     * processor this one is bound to, which the child inherits. */
+    /* Isolation phase: a child with its own TCB, on the parent's processor. */
     if (syscall3(SYS_SCHED_SETAFFINITY, 0, (long)sizeof(processor0), (long)&processor0) != 0) {
         puts_("FAIL: the probe could not be bound to processor 0\n");
         sys_exit(1);

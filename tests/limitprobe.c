@@ -1,5 +1,5 @@
 /**
- * The resource limits, proved from user space.
+ * limitprobe: the resource limits, proved from user space.
  *
  * `prlimit64` keeps three limits in the process record: the processes of a
  * real user (`RLIMIT_NPROC`), a process's open descriptors (`RLIMIT_NOFILE`)
@@ -8,29 +8,28 @@
  * proves, one child at a time: the limits read back as the table's; a
  * descriptor limit of eight refuses the ninth open with `EMFILE` and a
  * `dup2` onto a number past it with `EBADF`, a child forked under a limit
- * reads that limit, and an
- * address-space limit of eight megabytes refuses a larger mapping with
- * `ENOMEM` and leaves the break where it was; a hard limit raised by a
- * user is refused with `EPERM` while a lowering and root's raising are
- * allowed; the limits are seen after a fork and after an exec, which is
- * `limitprobe show NOFILE` reporting the number it inherited; one user
- * with four processes allowed is refused its fifth fork with `EAGAIN`
- * while another user forks; and a process that took that user's identity
- * with `setuid` counts against that user's four. Last, a child under the
- * limits OpenSSH's rlimit sandbox sets, none for the files it may grow, the
- * descriptors it may open and the processes it may fork, still selects and
- * polls a descriptor it opened before, as the test of that sandbox in
- * OpenSSH's configure requires. A child with a file limit of 4096 bytes has
- * a write of 8192 cut to 4096, and the next write and a truncation past the
- * limit refused with `EFBIG`.
+ * reads that limit, and an address-space limit of eight megabytes refuses
+ * a larger mapping with `ENOMEM` and leaves the break where it was; a hard
+ * limit raised by a user is refused with `EPERM` while a lowering and
+ * root's raising are allowed; the limits are seen after a fork and after
+ * an exec, which is `limitprobe show` reporting the number it inherited;
+ * one user with four processes allowed is refused a fork past the four
+ * with `EAGAIN` while another user forks; and a process that took that
+ * user's identity with `setuid` counts against that user's four. Last, a
+ * child under the limits OpenSSH's rlimit sandbox sets, none for the files
+ * it may grow, the descriptors it may open and the processes it may fork,
+ * still selects and polls a descriptor it opened before, as the test of
+ * that sandbox in OpenSSH's configure requires. A child with a file limit
+ * of 4096 bytes has a write of 8192 cut to 4096, and the next write and a
+ * truncation past the limit refused with `EFBIG`.
  *
  * Needs: root privilege, readable /hello, this binary at /limitprobe, and
  * only descriptors 0, 1 and 2 open. Start with RLIMIT_NOFILE at 1024/1024,
  * unlimited RLIMIT_AS, and no other processes owned by uid 1000 or 1001.
  * Neither path nor limit depends on the root file system's type.
  *
- * Prints "LIMITPROBE OK" or "LIMITPROBE FAIL: reason". Freestanding;
- * direct system calls (probe.h).
+ * Prints "LIMITPROBE OK" and exits 0, or "LIMITPROBE FAIL: " and the reason
+ * and exits 1.
  */
 
 #include "probe.h"
@@ -67,19 +66,21 @@ struct pollfd {
 
 #define POLLIN 1
 
-/* An anonymous read-write mapping of `len` bytes; its address, or a negated
+/** An anonymous read-write mapping of `len` bytes; its address, or a negated
  * errno. */
 static long mmap_anon(unsigned long len)
 {
     return probe_mmap(0, (long)len, 3, 0x22, -1, 0);
 }
 
+/** End the process with `status`; it does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, status);
     __builtin_unreachable();
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -89,12 +90,14 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
     syscall3(SYS_WRITE, 1, (long)"\n", 1);
 }
 
+/** Print "LIMITPROBE FAIL: " and `why`, and exit 1. */
 static void fail(const char *why)
 {
     syscall3(SYS_WRITE, 1, (long)"LIMITPROBE FAIL: ", 17);
@@ -102,11 +105,14 @@ static void fail(const char *why)
     sys_exit(1);
 }
 
+/** Read the caller's limit `resource` into `rl`: 0, or a negated errno. */
 static int get_limit(int resource, struct rlimit64 *rl)
 {
     return syscall4(SYS_PRLIMIT64, 0, resource, 0, (long)rl);
 }
 
+/** Set the caller's limit `resource` to the soft value `cur` and the hard
+ * value `max`: 0, or a negated errno. */
 static int set_limit(int resource, unsigned cur, unsigned max)
 {
     struct rlimit64 rl;
@@ -118,6 +124,8 @@ static int set_limit(int resource, unsigned cur, unsigned max)
     return syscall4(SYS_PRLIMIT64, 0, resource, (long)&rl, 0);
 }
 
+/** The exit status of the child `pid`, 128 and the signal for a child a
+ * signal ended, or -1 when the wait fails. */
 static int wait_status(int pid)
 {
     int status = -1;
@@ -131,6 +139,7 @@ static int wait_status(int pid)
     return (status >> 8) & 0xff;
 }
 
+/** Sleep for `ms` milliseconds. */
 static void sleep_ms(int ms)
 {
     long ts[2];
@@ -140,8 +149,8 @@ static void sleep_ms(int ms)
     syscall2(SYS_NANOSLEEP, (long)ts, 0);
 }
 
-/* A child that runs `body` and exits with its answer; the parent requires
-   `want`. */
+/** Run `body` in a child that exits with its answer, and fail with `what`
+ * unless the answer is `want`. */
 static void child_must(int (*body)(void), int want, const char *what)
 {
     int pid = syscall1(SYS_FORK, 0);
@@ -157,8 +166,10 @@ static void child_must(int (*body)(void), int want, const char *what)
     }
 }
 
-/* Eight descriptors: the opens past the three of stdio stop at the ninth,
-   with EMFILE, and the limit is seen across an exec. */
+/** Eight descriptors: the opens past the three of stdio stop at the ninth,
+ * with EMFILE, a dup2 onto 9 is EBADF, and the limit is seen across an exec
+ * of `limitprobe show`, whose status is then the child's. Returns 2 to 5 for
+ * the step that fails. */
 static int body_nofile(void)
 {
     int i, fd = 0;
@@ -186,9 +197,10 @@ static int body_nofile(void)
     return 4;
 }
 
-/* OpenSSH's rlimit sandbox: with limits of 0 on the files it may grow, the
-   descriptors it may open and the processes it may fork, the child selects
-   and polls a descriptor it opened before; each answers it ready. */
+/** OpenSSH's rlimit sandbox: with limits of 0 on the files it may grow, the
+ * descriptors it may open and the processes it may fork, the child selects
+ * and polls a descriptor it opened before; each answers it ready. Returns
+ * 0, or 2 to 4 for the step that fails. */
 static int body_sandbox(void)
 {
     unsigned rset[32];
@@ -219,14 +231,14 @@ static int body_sandbox(void)
     return 0;
 }
 
-/* A file of at most 4096 bytes: a write of 8192 writes 4096, the next one
-   and a truncation to 8192 are EFBIG, and SIGXFSZ, ignored here, would
-   otherwise have ended the child. */
+/** A file of at most 4096 bytes: a write of 8192 writes 4096, the next one
+ * and a truncation to 8192 are EFBIG, and SIGXFSZ, ignored here, would
+ * otherwise have ended the child. Returns 0, or 2 to 4 for the step that
+ * fails. */
 static int body_fsize(void)
 {
     static char block[8192];
-    /* The kernel's sigaction: the handler, the flags, the restorer and the
-       64-bit mask. */
+    /* The kernel's sigaction: handler, flags, restorer and a 64-bit mask. */
     static const struct {
         unsigned long handler, flags, restorer;
         unsigned long long mask;
@@ -249,8 +261,9 @@ static int body_fsize(void)
     return wrote == 4096 && again == -EFBIG && cut == -EFBIG ? 0 : 4;
 }
 
-/* Eight megabytes of address space: a mapping of sixteen is refused, one of
-   one is not, and the break does not move past the limit. */
+/** Eight megabytes of address space: a mapping of sixteen is refused, one of
+ * one is not, and the break does not move past the limit. Returns 0, or 2
+ * to 5 for the step that fails. */
 static int body_as(void)
 {
     long r;
@@ -275,7 +288,8 @@ static int body_as(void)
     return 0;
 }
 
-/* The hard limit: a user may lower it and not raise it; root raises it. */
+/** The hard limit: a user may lower it and not raise it; root raises it.
+ * Returns 0, or 2 to 7 for the step that fails. */
 static int body_hard(void)
 {
     if (set_limit(RLIMIT_NOFILE, 512, 512) != 0) {
@@ -299,10 +313,12 @@ static int body_hard(void)
     return 0;
 }
 
+/* The pipe on which `body_nproc` tells the parent that its four exist. */
 static int report_fd = -1;
 
-/* Uid 1000 with four processes allowed: three forks succeed and the fourth
-   is EAGAIN; the parent is told once the four exist. */
+/** Uid 1000 with four processes allowed: three forks succeed and the fourth
+ * is EAGAIN; the parent is told once the four exist, and the three children
+ * exit after 1.5 seconds. Returns 0, or 2 to 4 for the step that fails. */
 static int body_nproc(void)
 {
     int i, pid;
@@ -331,8 +347,8 @@ static int body_nproc(void)
     return 0;
 }
 
-/* Uid 1001 beside it forks; a root process that becomes uid 1000 with two
-   allowed finds the four already there and is refused. */
+/** Uid 1001 forks beside the limited uid 1000. Returns 0, or 2 to 4 for the
+ * step that fails. */
 static int body_others(void)
 {
     int pid;
@@ -350,9 +366,10 @@ static int body_others(void)
     return wait_status(pid) == 0 ? 0 : 4;
 }
 
-/* Five allowed, with the family's four of uid 1000 standing: this process,
-   once it is uid 1000, is the fifth, and its fork is refused only if it is
-   counted; a kernel that left it out would see four and allow the fork. */
+/** Five allowed, with the family's four of uid 1000 standing: this process,
+ * once it is uid 1000, is the fifth, and its fork is refused only if it is
+ * counted; a kernel that left it out would see four and allow the fork.
+ * Returns 0, 2 when the setup fails, and 3 when the fork is not EAGAIN. */
 static int body_setuid(void)
 {
     if (set_limit(RLIMIT_NPROC, 5, 5) != 0 || syscall1(SYS_SETUID, 1000) != 0) {
@@ -361,8 +378,8 @@ static int body_setuid(void)
     return syscall1(SYS_FORK, 0) == -EAGAIN ? 0 : 3;
 }
 
-/* The limits are the parent's at the fork: a child forked under a
-   descriptor limit of 200 reads 200. */
+/** The limits are the parent's at the fork: a child forked under a
+ * descriptor limit of 200 reads 200. Returns 0, or 2. */
 static int body_inherit(void)
 {
     struct rlimit64 rl;
@@ -370,6 +387,8 @@ static int body_inherit(void)
     return get_limit(RLIMIT_NOFILE, &rl) == 0 && rl.cur_lo == 200 && rl.max_lo == 200 ? 0 : 2;
 }
 
+/** `limitprobe show`: exit 0 when the descriptor limit is the 8 and 8
+ * `body_nofile` set before its exec, and 9 otherwise. */
 static void run_show(void)
 {
     struct rlimit64 rl;
@@ -384,6 +403,8 @@ void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
 
+/** The probe, entered with `sp` at argc: `run_show` when the first argument
+ * begins with 's', and otherwise the rows of the opening comment in order. */
 void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];

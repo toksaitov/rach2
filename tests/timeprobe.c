@@ -1,17 +1,18 @@
 /**
- * Exercises the kernel's time, sleep-with-yield, and entropy paths from user
- * space, then prints "TIMEPROBE OK".
+ * timeprobe: the kernel's clock, its sleep and its random bytes, tested
+ * from user space.
  *
  * Three checks run through direct system calls:
  *
- *   * clock_gettime(CLOCK_MONOTONIC) never goes backwards;
+ *   * clock_gettime(CLOCK_MONOTONIC) does not go backwards;
  *   * getrandom returns the requested count and varying bytes;
- *   * nanosleep(N) waits about N AND yields: a child forked just before the
- *     sleep runs during it, creating a marker file the parent finds on waking,
- *     which only happens if the sleeping parent gives up the CPU.
+ *   * nanosleep(N) waits about N and yields: a child forked just before the
+ *     sleep runs during it, creating a marker file the parent finds on
+ *     waking, which happens only if the sleeping parent gives up the CPU.
  *
- * Freestanding; direct system calls (probe.h). No 64-bit division (the user
- * image has no libgcc either).
+ * It prints "TIMEPROBE OK" and exits 0 when all pass, and "TIMEPROBE FAIL"
+ * with the count of failed checks as its status otherwise. It does no
+ * 64-bit division, since the probes link without libgcc.
  */
 
 #include "probe.h"
@@ -27,12 +28,14 @@ struct timespec {
     long tv_nsec;
 };
 
+/** End the process with `status`; it does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, status);
     __builtin_unreachable();
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -42,6 +45,7 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     syscall3(SYS_WRITE, STDOUT_FILENO, (long)s, (int)strlen(s));
@@ -50,6 +54,7 @@ static void puts(const char *s)
 
 static int fails = 0;
 
+/** Count a failure and print `msg` when `cond` is false. */
 static void check(int cond, const char *msg)
 {
     if (!cond) {
@@ -65,10 +70,12 @@ static int elapsed_ms(const struct timespec *a, const struct timespec *b)
     return (int)((b->tv_sec - a->tv_sec) * 1000 + (b->tv_nsec - a->tv_nsec) / 1000000);
 }
 
-/*
- * The sleep of 150 ms is fifteen ticks; two reads of a clock that moves
- * in ticks can straddle two of them, so the bound is 130. How far the sleep
- * overshot is the machine's and is printed.
+/**
+ * The probe: the three checks in order, each counted by `check`.
+ *
+ * The sleep of 150 ms is fifteen ticks; two reads of a clock that moves in
+ * ticks can straddle two of them, so the bound is 130. How far the sleep
+ * overshot depends on the machine, and the probe does not judge it.
  */
 PROBE_START void _start(void)
 {
@@ -76,16 +83,15 @@ PROBE_START void _start(void)
     unsigned char r1[16], r2[16];
     int i, differ, pid, status, slept_ms;
 
-    /* 1. CLOCK_MONOTONIC must not run backwards. */
+    /* 1. CLOCK_MONOTONIC does not run backwards. */
     check(syscall2(SYS_CLOCK_GETTIME, CLOCK_MONOTONIC, (long)&t0) == 0, "clock_gettime t0");
     check(syscall2(SYS_CLOCK_GETTIME, CLOCK_MONOTONIC, (long)&t1) == 0, "clock_gettime t1");
     check(t1.tv_sec > t0.tv_sec || (t1.tv_sec == t0.tv_sec && t1.tv_nsec >= t0.tv_nsec),
           "monotonic clock does not go backwards");
     check(t0.tv_nsec >= 0 && t0.tv_nsec < 1000000000, "tv_nsec in range");
 
-    /* 2. getrandom returns the count and varying bytes. Pre-zero both buffers
-     * so the difference test can actually fail (a broken getrandom that writes
-     * nothing leaves them equal) and so they are visibly written. */
+    /* 2. getrandom: both buffers start equal, so a call that writes nothing
+     * fails the difference test. */
     for (i = 0; i < 16; i++) {
         r1[i] = 0;
         r2[i] = 0;
@@ -100,16 +106,12 @@ PROBE_START void _start(void)
     }
     check(differ, "two getrandom draws differ");
 
-    /* 3. nanosleep waits ~N AND yields: a child forked right before the sleep
-     *    creates /childran while the parent sleeps; the parent finds it on
-     *    waking. */
+    /* 3. nanosleep waits about N and yields to the child. */
     syscall1(SYS_UNLINK, (long)"/childran");
 
     pid = syscall1(SYS_FORK, 0);
     check(pid >= 0, "fork");
     if (pid == 0) {
-        /* Child: its first act is to drop the marker, then exit. If the
-         * parent's sleep yields, this runs during the parent's nanosleep. */
         int fd = syscall2(SYS_CREAT, (long)"/childran", 0644);
         if (fd >= 0) {
             syscall3(SYS_WRITE, fd, (long)"x", 1);
@@ -132,7 +134,6 @@ PROBE_START void _start(void)
     check(slept_ms >= 130, "nanosleep waited at least ~150ms");
 
     {
-        /* The marker exists only if the child ran during the parent's sleep. */
         int fd = syscall3(SYS_OPEN, (long)"/childran", O_RDONLY, 0);
         check(fd >= 0, "child made progress during the sleep (nanosleep yields)");
         if (fd >= 0) {

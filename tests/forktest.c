@@ -1,42 +1,44 @@
 /**
- * Exercises the process-lifecycle syscalls: fork a child that exits with a
- * known status, then confirm the parent reads back that status through waitpid.
- *
- * Freestanding; direct system calls (probe.h).
+ * forktest: fork a child that exits with a known status, and check that the
+ * parent reads that status back through waitpid.
  */
 
 #include "probe.h"
 
 #define STDOUT_FILENO 1
 
-/* Exit status for child to return */
 #define CHILD_EXIT_STATUS 42
 
 /* Linux wait-status decoding (the kernel encodes a normal exit as code<<8). */
 #define WIFEXITED(s)   (((s) & 0x7F) == 0)
 #define WEXITSTATUS(s) (((s) >> 8) & 0xFF)
 
+/** The write call: the count written, or a negated errno. */
 static int sys_write(int fd, const void *buf, size_t count)
 {
     return syscall3(SYS_WRITE, (long)fd, (long)buf, (long)count);
 }
 
+/** End the process with `status`; it does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
+/** The fork call: the child's pid, 0 in the child, or a negated errno. */
 static int sys_fork(void)
 {
     return syscall0(SYS_FORK);
 }
 
+/** Wait for the child `pid`: the pid reaped, or a negated errno. */
 static int sys_waitpid(int pid, int *status, int options)
 {
     return syscall3(SYS_WAITPID, (long)pid, (long)status, (long)options);
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t len = 0;
@@ -46,17 +48,20 @@ static size_t strlen(const char *s)
     return len;
 }
 
+/** Write `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
     sys_write(STDOUT_FILENO, "\n", 1);
 }
 
+/** Write `s` to standard output. */
 static void print(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
 }
 
+/** Write `n` in decimal to standard output. */
 static void print_num(int n)
 {
     char buf[12];
@@ -85,10 +90,9 @@ static void print_num(int n)
 }
 
 /**
- * ELF entry point and the test driver.
- *
- * The parent forks a child that exits with `CHILD_EXIT_STATUS`, then waits and
- * checks that `WIFEXITED` and `WEXITSTATUS` report that status back.
+ * The probe: the parent forks a child that exits with `CHILD_EXIT_STATUS`,
+ * then waits and checks that `WIFEXITED` and `WEXITSTATUS` report that
+ * status. It exits 0 when they do and 1 otherwise.
  */
 PROBE_START void _start(void)
 {

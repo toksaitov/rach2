@@ -1,15 +1,15 @@
 /**
- * Verifies the SysV initial process stack the kernel hands a new program.
+ * auxvprobe: the System V initial process stack the kernel gives a new
+ * program.
  *
- * Walks its own initial stack exactly as a C runtime would, in words of a
- * long, 4 bytes on i386 and 8 on x86-64: argc, the argv[] pointers and their
- * NULL, the envp[] pointers and their NULL, then the auxv {type,value} pairs
- * terminated by AT_NULL. It prints what it finds, including
- * the 16 AT_RANDOM bytes so the harness can confirm they differ across two
- * boots, and asserts the layout is correct, exiting 0 only if every check
- * passes. This is the same stack the dynamic loader and crt1 read on Linux.
- *
- * Freestanding; direct system calls (probe.h).
+ * Walks its own initial stack as a C runtime would, in words of a long, 4
+ * bytes on i386 and 8 on x86-64: argc, the argv[] pointers and their NULL,
+ * the envp[] pointers and their NULL, then the auxv {type,value} pairs
+ * terminated by AT_NULL. It prints what it finds, the 16 AT_RANDOM bytes
+ * included, and checks the layout and the values of the auxv entries; it
+ * prints "auxvprobe: ALL OK" and exits 0 when every check passes, and
+ * "auxvprobe: FAILED" and exits 1 otherwise. This is the same stack the
+ * dynamic loader and crt1 read on Linux.
  */
 
 #include "probe.h"
@@ -40,17 +40,20 @@ typedef unsigned char u8;
 #define PHENT_TEXT "32"
 #endif
 
+/** The write call: the count written, or a negated errno. */
 static int sys_write(int fd, const void *buf, u32 n)
 {
     return syscall3(SYS_WRITE, (long)fd, (long)buf, (long)n);
 }
 
+/** End the process with `status`; it does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
 }
 
+/** The length of the string `s`. */
 static u32 slen(const char *s)
 {
     u32 n = 0;
@@ -61,11 +64,13 @@ static u32 slen(const char *s)
     return n;
 }
 
+/** Write `s` to standard output, with no newline. */
 static void puts_(const char *s)
 {
     sys_write(STDOUT, s, slen(s));
 }
 
+/** Write `v` as "0x" and eight hex digits. */
 static void put_u32(u32 v)
 {
     static const char hex[] = "0123456789abcdef";
@@ -81,6 +86,7 @@ static void put_u32(u32 v)
     puts_(buf);
 }
 
+/** Write `b` as two hex digits. */
 static void put_byte(u8 b)
 {
     static const char hex[] = "0123456789abcdef";
@@ -94,6 +100,7 @@ static void put_byte(u8 b)
 
 static int fails;
 
+/** Count a failure and print `msg` when `cond` is false. */
 static void check(int cond, const char *msg)
 {
     if (!cond) {
@@ -108,6 +115,7 @@ void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
 
+/** The probe, entered with `sp` at argc. It reads at most 64 auxv pairs. */
 void probe_main(unsigned long *sp)
 {
     int argc;
@@ -130,7 +138,7 @@ void probe_main(unsigned long *sp)
 
     puts_("auxvprobe: starting\n");
 
-    /* The kernel must hand us a 16-byte-aligned stack pointer. */
+    /* The initial stack pointer is 16-byte aligned. */
     check(((unsigned long)sp & 0xF) == 0, "esp not 16-byte aligned");
 
     /* argc and argv[]. */
@@ -208,8 +216,7 @@ void probe_main(unsigned long *sp)
        registers and siginfo above it. */
     check(minsigstksz > 512, "AT_MINSIGSTKSZ missing or smaller than a frame");
 
-    /* AT_RANDOM: print the 16 bytes (the harness compares across two boots) and
-     * confirm they are not all zero. */
+    /* AT_RANDOM: 16 bytes in the initial stack page, not all zero. */
     check(random_ptr != 0, "no AT_RANDOM");
     check(((unsigned long)random_ptr & ~0xFFFul) == ((unsigned long)sp & ~0xFFFul),
           "AT_RANDOM not in the initial stack page");

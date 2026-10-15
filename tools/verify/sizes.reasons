@@ -272,7 +272,7 @@ rach2/sys/usb/xhci.c:xhci_own nesting 5 a hardware sequence, the registers writt
 rach2/sys/usb/xhci.c:xhci_submit complexity 37 a hardware sequence, the registers written in the order the datasheet requires
 rach2/sys/usb/xhci.c:xhci_submit lines 161 a hardware sequence, the registers written in the order the datasheet requires
 
-tests/auxvprobe.c:probe_main lines 122 a probe, one sequence of steps in the order the log records them
+tests/auxvprobe.c:probe_main lines 121 a probe, one sequence of steps in the order the log records them
 
 tests/bigfileprobe.c:write_mode complexity 26 a probe, one sequence of steps in the order the log records them
 tests/bigfileprobe.c:write_mode lines 119 a probe, one sequence of steps in the order the log records them
@@ -511,7 +511,7 @@ tests/idreport.c:match params 7 a probe, one sequence of steps in the order the 
 tests/intrprobe.c:count_for_named complexity 30 a probe, one sequence of steps in the order the log records them
 tests/intrprobe.c:count_for_named nesting 5 a probe, one sequence of steps in the order the log records them
 
-tests/jobprobe.c:_start lines 164 a probe, one sequence of steps in the order the log records them
+tests/jobprobe.c:_start lines 151 a probe, one sequence of steps in the order the log records them
 
 tests/krffsprobe.c:probe_main complexity 71 a probe, one sequence of steps in the order the log records them
 tests/krffsprobe.c:probe_main lines 290 a probe, one sequence of steps in the order the log records them

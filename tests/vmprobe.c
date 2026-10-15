@@ -1,14 +1,14 @@
 /**
- * Exercises the VMA and demand-paging machinery end to end from user space:
- * brk() (query, grow, lazy-zero, read/write, shrink), anonymous mmap() (map,
- * lazy-zero, read/write, munmap), brk refusing to grow over an mmap region, and
- * stack growth by deep recursion that faults pages well past the initial one.
+ * vmprobe: the regions and demand paging of a process, tested from user
+ * space: brk() (query, grow, lazy-zero, read/write, shrink), anonymous
+ * mmap() (map, lazy-zero, read/write, munmap), brk refusing to grow over an
+ * mmap region, and stack growth by deep recursion that faults pages well
+ * past the initial one.
  *
- * Prints "VMPROBE OK" and exits 0 when every check passes, otherwise the failed
- * count. The wild-pointer/segfault case is a separate program (vmfault) since
- * it deliberately kills the process.
- *
- * Freestanding; direct system calls (probe.h).
+ * Prints "VMPROBE OK" and exits 0 when every check passes, and otherwise
+ * "VMPROBE FAIL count=N" and exits with N, the count of failed checks. The
+ * wild-pointer case is a separate program (vmfault), since it kills the
+ * process.
  */
 
 #include "probe.h"
@@ -23,11 +23,13 @@
 #define MAP_PRIVATE   0x02
 #define MAP_ANONYMOUS 0x20
 
+/** The write call: the count written, or a negated errno. */
 static int sys_write(int fd, const void *buf, size_t count)
 {
     return syscall3(SYS_WRITE, (long)fd, (long)buf, (long)count);
 }
 
+/** End the process with `status`; it does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, (long)status);
@@ -47,11 +49,13 @@ static unsigned long mmap_anon(unsigned long len, int prot)
     return (unsigned long)probe_mmap(0, (long)len, prot, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 }
 
+/** The munmap call: 0, or a negated errno. */
 static int sys_munmap(unsigned long addr, unsigned long len)
 {
     return syscall2(SYS_MUNMAP, (long)addr, (long)len);
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -61,17 +65,20 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write `s` to standard output. */
 static void print(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
 }
 
+/** Write `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     print(s);
     sys_write(STDOUT_FILENO, "\n", 1);
 }
 
+/** Write `n` in decimal to standard output. */
 static void print_num(int n)
 {
     char buf[12];
@@ -96,6 +103,7 @@ static void print_num(int n)
 
 static int fails = 0;
 
+/** Count a failure and print `msg` when `cond` is false. */
 static void check(int cond, const char *msg)
 {
     if (!cond) {
@@ -106,10 +114,10 @@ static void check(int cond, const char *msg)
 }
 
 /**
- * Recurse 'n' deep with a 1 KB buffer per frame, touching every byte so each
- * new stack page must fault in. Crucially the buffer is re-checked AFTER the
- * deeper call returns, so a deeper stack fault that corrupted this frame would
- * be caught on the way back up. Returns 1 + 2 + ... + n if every frame stayed
+ * Recurse `n` deep with a 1 KiB buffer per frame, touching every byte so
+ * that each new stack page faults in. The buffer is checked again after the
+ * deeper call returns, so a deeper stack fault that corrupted this frame is
+ * caught on the way back up. Returns 1 + 2 + ... + n if every frame stayed
  * intact, else a large negative value.
  */
 static int recurse(int n)
@@ -124,9 +132,8 @@ static int recurse(int n)
         buf[i] = (char)(n + i);
     }
 
-    deeper = recurse(n - 1); /* faults in more stack pages below us */
+    deeper = recurse(n - 1); /* faults in more stack pages below this frame */
 
-    /* After unwinding, our frame's buffer must be exactly as we left it. */
     for (i = 0; i < 1024; i++) {
         if (buf[i] != (char)(n + i)) {
             return -100000;
@@ -135,6 +142,8 @@ static int recurse(int n)
     return n + deeper;
 }
 
+/** The probe: the four cases of the opening comment in order, each counted
+ * by `check`. */
 PROBE_START void _start(void)
 {
     puts("vmprobe: start");
@@ -179,9 +188,7 @@ PROBE_START void _start(void)
         }
     }
 
-    /* 3. brk must refuse to grow over an existing mmap region: map a page, then
-     * try to push the break up past it. brk returns the (unchanged) old break
-     * on refusal, never the requested value. */
+    /* 3. brk refuses to grow over a mapping, and returns the old break. */
     {
         unsigned long p = mmap_anon(PAGE, PROT_READ | PROT_WRITE);
 
@@ -195,8 +202,7 @@ PROBE_START void _start(void)
         }
     }
 
-    /* 4. Stack growth via deep recursion (~64 KB, far past the initial
-     * page). */
+    /* 4. Stack growth by about 64 KiB of recursion, far past the first page. */
     check(recurse(64) == 64 * 65 / 2, "stack grew under deep recursion");
 
     if (fails == 0) {

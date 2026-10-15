@@ -1,5 +1,5 @@
 /**
- * The floating-point state of a process, proved from user space.
+ * fpuprobe: the floating-point state of a process, proved from user space.
  *
  * `fpuprobe`: the parent and a forked child each keep their own values in
  * `st(0)`, `st(1)` and `xmm0` to `xmm7`, or to `xmm15` on x86-64, a control
@@ -23,8 +23,8 @@
  * On x86-64 the probe's own code is compiled to use the general registers
  * alone, so that nothing but the rows' assembly touches an XMM register.
  *
- * Prints "FPUPROBE OK" or "FPUPROBE FAIL: reason". Freestanding; direct system
- * calls (probe.h).
+ * Prints "FPUPROBE OK" and exits 0, or "FPUPROBE FAIL: " and the reason and
+ * exits 1.
  */
 
 #include "probe.h"
@@ -49,12 +49,14 @@ struct k_sigaction {
     unsigned mask[2];
 };
 
+/** End the process with `status`; it does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, status);
     __builtin_unreachable();
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -64,12 +66,14 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
     syscall3(SYS_WRITE, 1, (long)"\n", 1);
 }
 
+/** Print "FPUPROBE FAIL: " and `why`, and exit 1. */
 static void fail(const char *why)
 {
     syscall3(SYS_WRITE, 1, (long)"FPUPROBE FAIL: ", 15);
@@ -82,6 +86,7 @@ struct timeval {
     long usec;
 };
 
+/** The time of day in milliseconds, modulo 2^32. */
 static unsigned now_ms(void)
 {
     struct timeval tv;
@@ -89,8 +94,10 @@ static unsigned now_ms(void)
     return (unsigned)tv.sec * 1000u + (unsigned)tv.usec / 1000u;
 }
 
+/* 0 for `fpuprobe x87` and `reset-x87`, which run no SSE instruction. */
 static int with_sse = 1;
 
+/** The x87 control word. */
 static unsigned read_cw(void)
 {
     unsigned short w = 0;
@@ -99,6 +106,7 @@ static unsigned read_cw(void)
     return w;
 }
 
+/** The MXCSR register. */
 static unsigned read_mxcsr(void)
 {
     unsigned m = 0;
@@ -115,6 +123,7 @@ struct values {
     unsigned xmm[NXMM][4];
 };
 
+/** Fill `v` with values derived from `seed`. */
 static void make_values(struct values *v, unsigned seed)
 {
     int i, j;
@@ -135,6 +144,8 @@ static void make_values(struct values *v, unsigned seed)
 #define MXCSR_INITIAL 0x1F80u
 #define MXCSR_FLUSH   0x9F80u /* the initial with FZ set */
 
+/** Reset the x87 unit, load the control word `cw` and push st(1) and st(0)
+ * of `v`; with SSE, load `mxcsr` and the XMM registers of `v` too. */
 static void load_values(const struct values *v, unsigned cw, unsigned mxcsr)
 {
     unsigned short w = (unsigned short)cw;
@@ -164,8 +175,9 @@ static void load_values(const struct values *v, unsigned cw, unsigned mxcsr)
     }
 }
 
-/* What the registers hold now, read without changing them: the x87 stack is
- * stored and loaded back, so the tags stay as they were. */
+/** The values in the registers, read without changing them: the x87 stack
+ * is stored and loaded back, so the tags stay as they were. `*mxcsr` is 0
+ * without SSE. */
 static void read_values(struct values *v, unsigned *cw, unsigned *mxcsr)
 {
     unsigned short w = 0;
@@ -194,7 +206,8 @@ static void read_values(struct values *v, unsigned *cw, unsigned *mxcsr)
     *mxcsr = m;
 }
 
-/* The values against what was loaded: NULL when they agree, else why not. */
+/** Compare the registers with `want`, `cw` and `mxcsr`: NULL when they
+ * agree, else the name of the first that differs. */
 static const char *compare(const struct values *want, unsigned cw, unsigned mxcsr)
 {
     struct values got;
@@ -226,7 +239,7 @@ static const char *compare(const struct values *want, unsigned cw, unsigned mxcs
     return 0;
 }
 
-/* Check for `ms` milliseconds while yielding, so the other process runs
+/** Check for `ms` milliseconds while yielding, so the other process runs
  * between checks and the timer preempts the spins. Returns the first
  * failure, or NULL. */
 static const char *hold(const struct values *v, unsigned cw, unsigned mxcsr, unsigned ms)
@@ -250,6 +263,8 @@ static const char *hold(const struct values *v, unsigned cw, unsigned mxcsr, uns
 extern void sig_restorer(void);
 PROBE_RT_RESTORER(sig_restorer);
 
+/** Install `h` for `signo` with SA_SIGINFO and the restorer; fail when the
+ * call fails. */
 static void install(int signo, void (*h)(int))
 {
     struct k_sigaction ka;
@@ -267,8 +282,10 @@ static void install(int signo, void (*h)(int))
 static volatile int handlers_ran;
 static volatile const char *handler_fault;
 
-/* Every handler must start with the initial state, and it leaves behind
- * values the interrupted code must not see. */
+/** A handler: it records a fault in `handler_fault` unless it starts with
+ * the initial state, and leaves behind values the interrupted code must not
+ * see. For SIGUSR1 it raises SIGUSR2 from inside and checks that its own
+ * values come back. */
 static void clobber_handler(int sig)
 {
     struct values junk;
@@ -284,8 +301,7 @@ static void clobber_handler(int sig)
     handlers_ran++;
     if (sig == SIGUSR1) {
         syscall2(SYS_KILL, syscall1(SYS_GETPID, 0), SIGUSR2);
-        /* The inner handler clobbered everything and returned: the outer
-         * one must find its own values back. */
+        /* The inner handler returned, and the outer one's values are back. */
         if (compare(&junk, 0x0F7Fu, 0x7F80u)) {
             handler_fault = "the outer handler did not get its state back from the inner one";
         }
@@ -302,8 +318,8 @@ static int damage_pipe[2];
  * argument. Its `uc_mcontext` starts 40 bytes in, and its `fpstate` word,
  * 184 bytes further, holds the address of the `_fpstate_64`, the `fxsave64`
  * image, with MXCSR 24 bytes into it. A byte goes down the pipe after the
- * write, so the parent knows the frame was damaged before the kernel refused
- * it.
+ * write, so that the parent counts the child's SIGSEGV only once the frame
+ * was damaged.
  */
 static void damage_siginfo_handler(int sig, void *info, void *ucontext)
 {
@@ -338,8 +354,8 @@ static void damage_siginfo_handler(int sig, void *info, void *ucontext)
  * ucontext's `uc_mcontext` starts 20 bytes in, and its `fpstate` word, 76
  * bytes further, holds the address of the `_fpstate_32`, whose `fxsave`
  * image starts at byte 112 with MXCSR 24 bytes into it. A byte goes down the
- * pipe after the write, so the parent knows the frame was damaged before the
- * kernel refused it.
+ * pipe after the write, so that the parent counts the child's SIGSEGV only
+ * once the frame was damaged.
  */
 static void damage_handler(int sig)
 {
@@ -366,14 +382,15 @@ static void damage_handler(int sig)
 }
 #endif
 
+/** The parent and a forked child start with the parent's state, then each
+ * keeps its own for half a second of switches between them. */
 static void run_switches(void)
 {
     struct values mine, before;
     int pid, status;
     const char *why;
 
-    /* The parent's live state before the fork is what the child must start
-     * with, on both sides of the fork and before either loads its own. */
+    /* Both sides of the fork have the parent's state before either loads. */
     make_values(&before, 0x0F0Fu);
     load_values(&before, CW_ROUND_DOWN, MXCSR_FLUSH);
     pid = syscall1(SYS_FORK, 0);
@@ -407,6 +424,8 @@ static void run_switches(void)
     }
 }
 
+/** A signal and a nested one, each of whose handlers starts with the
+ * initial state and clobbers it; the probe's state is back afterwards. */
 static void run_signals(void)
 {
     struct values mine;
@@ -431,6 +450,8 @@ static void run_signals(void)
     }
 }
 
+/** A child sets the state and executes /fpuprobe with `reset` or
+ * `reset-x87`, which must exit 0; it exits 2 when the exec fails. */
 static void run_exec(void)
 {
     struct values mine;
@@ -456,10 +477,12 @@ static void run_exec(void)
     }
 }
 
-/* The state a fresh image sees: the control word, an empty stack (the tag
- * word all ones through fnstenv), and the MXCSR. */
 static unsigned char env[28]; /* what fnstenv writes: the x87 environment */
 
+/** The `reset` run after the exec: exit 0 when the state is a fresh image's,
+ * the initial control word, an empty stack (the tag word all ones through
+ * fnstenv) and, with SSE, the initial MXCSR; 3, 4 or 5 for the first that
+ * differs. */
 static void run_reset(void)
 {
     unsigned short cw, tags;
@@ -479,6 +502,8 @@ static void run_reset(void)
     sys_exit(0);
 }
 
+/** A child whose handler damages MXCSR in its frame dies of SIGSEGV when the
+ * handler returns. */
 static void run_damaged(void)
 {
     int pid, status;
@@ -512,6 +537,9 @@ void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
 
+/** The probe, entered with `sp` at argc: `run_reset` when the first argument
+ * begins with 'r', without SSE for `reset-x87`; otherwise the rows in order,
+ * without SSE when the argument begins with 'x'. */
 void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];
