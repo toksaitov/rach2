@@ -201,6 +201,9 @@ static void ticks(int n)
  * run the rows. The wrapper delivers each completion after the lag, and a
  * duplicate with an error two ticks later. The rows require that:
  *
+ * - the wrapper keeps only the backing's `BLOCK_READ_ONLY`, so a disk that
+ *   polls and writes through, as AHCI and NVMe do, gives a wrapper that only
+ *   sleeps;
  * - a later wrap of another device returns that device unchanged, and a
  *   later wrap of the backing returns the wrapper again;
  * - a tick that runs under a transfer does not deliver that transfer's
@@ -224,9 +227,11 @@ int main(void)
     k_memset(&backing, 0, sizeof(backing));
     backing.read = backing_read;
     backing.write = backing_write;
+    backing.flags = BLOCK_FAULT_SAFE | BLOCK_POLLABLE | BLOCK_WRITE_THROUGH | BLOCK_READ_ONLY;
     lag = block_lag_wrap(&backing);
     CHECK(lag == &lag_device, "the wrapper installs over the backing");
     CHECK(lag_delay == 3, "the lag is the three ticks the option named");
+    CHECK(lag->flags == BLOCK_READ_ONLY, "the wrapper keeps only the backing's read-only flag");
     k_memset(&other, 0, sizeof(other));
     other.read = backing_read;
     other.write = backing_write;

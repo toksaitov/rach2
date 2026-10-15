@@ -1,10 +1,12 @@
 /*
  * lag.c: the sleeping test device.
  *
- * `rach2.blocklag=N` wraps disk 0 in a device without the fault-safe flag
- * whose requests complete N ticks later, from the timer. Only the partition
- * views and the mounts on them use the wrapper; the whole-disk window keeps
- * the real device. The sleeping path is tested on it with a device that
+ * `rach2.blocklag=N` wraps disk 0 in a device whose requests complete N
+ * ticks later, from the timer. It has no polled calls and no cache, so it
+ * keeps none of the disk's fault-safe, pollable and write-through flags, and
+ * every transfer and sync on it takes a request. Only the partition views
+ * and the mounts on them use the wrapper; the whole-disk window keeps the
+ * real device. The sleeping path is tested on it with a device that
  * answers and with one that does not: with N above the deadline it is a
  * device that never answers in time, which tests the quarantine without a
  * mutation. `rach2.blockfail=N` makes the Nth write through the wrapper fail
@@ -281,7 +283,7 @@ block_device_t *block_lag_wrap(block_device_t *backing)
         }
     }
     lag_device = *backing;
-    lag_device.flags &= ~BLOCK_FAULT_SAFE;
+    lag_device.flags = backing->flags & BLOCK_READ_ONLY;
     lag_device.max_sectors = 0;      /* a page, the staging it copies through */
     lag_device.deadline_ticks = 500; /* five seconds, the lag its rows are set against */
     lag_device.deadline_limit = 1;   /* one period: its rows test a device that never answers */
