@@ -1,7 +1,10 @@
 /*
  * The boot allocator: physical memory taken from the end of the kernel image
  * up, below HARD_MEMORY_LIMIT, and never given back. The boot's page tables
- * come from it, and on i686 the frame table.
+ * come from it, and on i686 the frame table. The one caller after the boot
+ * is the RTL8139 driver, for its receive ring at the card's first bring-up:
+ * the ring is physically contiguous, which no other allocator gives. A
+ * caller whose memory is to go back takes it from the heap instead.
  */
 #ifndef _HEAP_H_
 #define _HEAP_H_

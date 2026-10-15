@@ -97,19 +97,16 @@ void fb_release_if_owner(uint32_t pid)
 extern char stack[];
 
 /**
- * A kernel stack, returning its base, or 0 when the heap has none.
- *
- * The caller uses `base + KERNEL_STACK_SIZE` as the stack top. The page
- * below the base is the heap's guard (`kalloc_guarded`), taken and never
- * mapped, so a thread that runs past the base faults there at once instead
- * of writing over the heap page below; `isr_double_fault` reports it.
+ * The page below the base is the heap's guard (`kalloc_guarded`), taken and
+ * never mapped, so a thread that runs past the base faults there at once
+ * instead of writing over the heap page below; `isr_double_fault` reports it.
  *
  * QEMU can retain code translations in reused frames. Clear every page
  * so translations outside the used part of the stack cannot keep stack
  * stores on its slow write path. Clearing also leaves the child nothing
  * of the stack's previous owner.
  */
-static uintptr_t kstack_alloc(void)
+uintptr_t kstack_alloc(void)
 {
     void *base = kalloc_guarded(KERNEL_STACK_SIZE / PAGE_SIZE);
 
@@ -120,17 +117,16 @@ static uintptr_t kstack_alloc(void)
 }
 
 /**
- * Give back the stack whose top is `top`, with its guard page.
- *
  * A stack goes back when its zombie is reaped, when a fork fails after taking
- * it, and when exec takes the leader's place; the caller never runs on it.
+ * it, when exec takes the leader's place, and when a test of the debug
+ * shell's ends; the caller never runs on it.
  *
  * The boot stack is part of the kernel image and not the heap's, and is left
  * as it is. A record whose stack it is can still come here: a thread of a
  * program on the boot stack that calls execve takes its leader's place, and
  * the leader's record goes (`exec_take_leader`).
  */
-static void kstack_free(uintptr_t top)
+void kstack_free(uintptr_t top)
 {
     if (top != 0 && top != (uintptr_t)stack + KERNEL_STACK_SIZE) {
         kfree_guarded((void *)(top - KERNEL_STACK_SIZE), KERNEL_STACK_SIZE / PAGE_SIZE);

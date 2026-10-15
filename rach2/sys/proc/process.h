@@ -426,6 +426,16 @@ process_t *alloc_process(void);
  * stack loader.s reserves, which is as large. */
 #define KERNEL_STACK_SIZE 0x4000
 
+/** A zeroed kernel stack of KERNEL_STACK_SIZE bytes with an unmapped guard
+ * page below it, returning its base, whose stack top is `base +
+ * KERNEL_STACK_SIZE`; 0 when the heap has none. Defined in syscall_proc.c. */
+uintptr_t kstack_alloc(void);
+
+/** Give back the stack of `kstack_alloc` whose top is `top`, with its guard
+ * page. A `top` of 0 and the boot stack's are ignored. Defined in
+ * syscall_proc.c. */
+void kstack_free(uintptr_t top);
+
 /** Take a record off the list and give it back to the heap with its exec
  * workspace, path pages and floating-point area, dropping its references
  * to its thread group, its directories, its seccomp filters and its

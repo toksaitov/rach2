@@ -765,6 +765,44 @@ static bool test_usermode(void)
     return false;
 }
 
+/**
+ * A kernel process for a test of the shell's, the shell's child, that begins
+ * at `entry` on a kernel stack of its own, in the address space `dir`, or,
+ * when `dir` is NULL, in whatever directory is loaded when it runs. NULL
+ * when no record or no stack can be had. `test_process_free` gives back
+ * both.
+ */
+static process_t *test_process(page_dir_t *dir, void (*entry)(void))
+{
+    process_t *p = alloc_process();
+    uintptr_t base;
+
+    if (!p) {
+        return NULL;
+    }
+    base = kstack_alloc();
+    if (!base) {
+        free_process(p);
+        return NULL;
+    }
+    p->kernel_stack = base + KERNEL_STACK_SIZE;
+    p->space_root = dir ? get_page_dir_phys(dir) : 0;
+    p->page_dir = dir;
+    p->parent_pid = current_proc->pid;
+    setup_process_stack(p, entry);
+    return p;
+}
+
+/** Give back a process of `test_process` that will not run again, and its
+ * stack. A NULL `p` is ignored. */
+static void test_process_free(process_t *p)
+{
+    if (p) {
+        kstack_free(p->kernel_stack);
+        free_process(p);
+    }
+}
+
 /* Context-switch test state, shared between the two cooperating processes. */
 static process_t *switch_proc_a = NULL;
 static process_t *switch_proc_b = NULL;
@@ -795,26 +833,17 @@ static void proc_b_entry(void)
  */
 static void test_switch(void)
 {
-    uintptr_t stack_b;
-
     console_puts("Testing context switch between two processes...");
     console_puts("Expected output: ABABABABAB done");
     console_printf("Result:          ");
 
     switch_proc_a = current_proc;
 
-    switch_proc_b = alloc_process();
+    switch_proc_b = test_process(NULL, proc_b_entry);
     if (!switch_proc_b) {
         console_puts("Failed to allocate process B");
         return;
     }
-
-    stack_b = (uintptr_t)phys_to_virt(mem_reserve(KERNEL_STACK_SIZE, true));
-    switch_proc_b->kernel_stack = stack_b + KERNEL_STACK_SIZE;
-    switch_proc_b->space_root = 0; /* shares the kernel page directory */
-    switch_proc_b->parent_pid = switch_proc_a->pid;
-
-    setup_process_stack(switch_proc_b, proc_b_entry);
 
     console_printf("Process B created: pid=%d stack=0x%X\n", switch_proc_b->pid,
                    switch_proc_b->kernel_stack);
@@ -829,7 +858,7 @@ static void test_switch(void)
 
     console_puts("");
 
-    free_process(switch_proc_b);
+    test_process_free(switch_proc_b);
     switch_proc_b = NULL;
 
     set_fore_color(light_green);
@@ -913,7 +942,6 @@ static void test_preempt(void)
 {
     process_t *proc_a;
     process_t *proc_b;
-    uintptr_t stack_a, stack_b;
     uint64_t shell_affinity = current_proc->affinity;
     uint64_t here = (uint64_t)1 << arch_cpu_id();
 
@@ -927,32 +955,22 @@ static void test_preempt(void)
     preempt_count_b = 0;
     sched_set_affinity(current_proc, here);
 
-    proc_a = alloc_process();
+    proc_a = test_process(NULL, preempt_proc_a);
     if (!proc_a) {
         sched_set_affinity(current_proc, shell_affinity);
         console_puts("Failed to allocate process A");
         return;
     }
     proc_a->affinity = here;
-    stack_a = (uintptr_t)phys_to_virt(mem_reserve(KERNEL_STACK_SIZE, true));
-    proc_a->kernel_stack = stack_a + KERNEL_STACK_SIZE;
-    proc_a->space_root = 0;
-    proc_a->parent_pid = current_proc->pid;
-    setup_process_stack(proc_a, preempt_proc_a);
 
-    proc_b = alloc_process();
+    proc_b = test_process(NULL, preempt_proc_b);
     if (!proc_b) {
-        free_process(proc_a);
+        test_process_free(proc_a);
         sched_set_affinity(current_proc, shell_affinity);
         console_puts("Failed to allocate process B");
         return;
     }
     proc_b->affinity = here;
-    stack_b = (uintptr_t)phys_to_virt(mem_reserve(KERNEL_STACK_SIZE, true));
-    proc_b->kernel_stack = stack_b + KERNEL_STACK_SIZE;
-    proc_b->space_root = 0;
-    proc_b->parent_pid = current_proc->pid;
-    setup_process_stack(proc_b, preempt_proc_b);
 
     sched_enable();
 
@@ -965,8 +983,8 @@ static void test_preempt(void)
     console_puts("");
     console_printf("Counts: A=%d B=%d\n", preempt_count_a, preempt_count_b);
 
-    free_process(proc_a);
-    free_process(proc_b);
+    test_process_free(proc_a);
+    test_process_free(proc_b);
     sched_set_affinity(current_proc, shell_affinity);
 
     if (preempt_count_a > 0 && preempt_count_b > 0) {
@@ -1033,65 +1051,65 @@ static void isolation_proc_b_entry(void)
 }
 
 /**
+ * Give back an address space of `test_isolation` that no process uses any
+ * more: its user pages, its tables and the directory. This processor loads
+ * the kernel's directory first if it still translates through `dir`, which
+ * the last switch away from process A leaves it doing, since the shell has
+ * no directory of its own. A NULL `dir` is ignored.
+ */
+static void isolation_space_free(page_dir_t *dir)
+{
+    if (!dir) {
+        return;
+    }
+    if (_curr_dir == dir) {
+        switch_page_directory(_kernel_dir);
+    }
+    smp_space_release(dir);
+    free_user_pages(dir);
+    free_page_directory(dir);
+}
+
+/**
  * The `isolate` command: run processes A and B in two page directories, each
  * with a page of its own at `ISOLATION_TEST_ADDR` in a frame of its own, and
  * return whether each read back the value it wrote. Returns false too when a
- * directory, a page or a process cannot be had.
+ * directory, a page or a process cannot be had. The processes, their stacks,
+ * the pages and the directories are given back on every path.
  */
 static bool test_isolation(void)
 {
-    page_dir_t *dir_a, *dir_b;
-    uintptr_t stack_a, stack_b;
-    uintptr_t phys_a, phys_b;
+    page_dir_t *dir_a = clone_page_directory();
+    page_dir_t *dir_b = clone_page_directory();
+    uintptr_t phys_a = 0, phys_b = 0;
+    bool ok = false;
 
     isolation_result_a = 0;
     isolation_result_b = 0;
-
     isolation_proc_main = current_proc;
-
-    dir_a = clone_page_directory();
-    dir_b = clone_page_directory();
-    if (!dir_a || !dir_b) {
-        return false;
-    }
-
-    phys_a = alloc_user_page(dir_a, ISOLATION_TEST_ADDR);
-    phys_b = alloc_user_page(dir_b, ISOLATION_TEST_ADDR);
-    if (!phys_a || !phys_b || phys_a == phys_b) {
-        return false;
-    }
-
-    isolation_proc_a = alloc_process();
-    if (!isolation_proc_a) {
-        return false;
-    }
-    stack_a = (uintptr_t)phys_to_virt(mem_reserve(KERNEL_STACK_SIZE, true));
-    isolation_proc_a->kernel_stack = stack_a + KERNEL_STACK_SIZE;
-    isolation_proc_a->space_root = get_page_dir_phys(dir_a);
-    isolation_proc_a->page_dir = dir_a;
-    isolation_proc_a->parent_pid = isolation_proc_main->pid;
-    setup_process_stack(isolation_proc_a, isolation_proc_a_entry);
-
-    isolation_proc_b = alloc_process();
-    if (!isolation_proc_b) {
-        free_process(isolation_proc_a);
-        return false;
-    }
-    stack_b = (uintptr_t)phys_to_virt(mem_reserve(KERNEL_STACK_SIZE, true));
-    isolation_proc_b->kernel_stack = stack_b + KERNEL_STACK_SIZE;
-    isolation_proc_b->space_root = get_page_dir_phys(dir_b);
-    isolation_proc_b->page_dir = dir_b;
-    isolation_proc_b->parent_pid = isolation_proc_main->pid;
-    setup_process_stack(isolation_proc_b, isolation_proc_b_entry);
-
-    switch_context(isolation_proc_main, isolation_proc_a);
-
-    free_process(isolation_proc_a);
-    free_process(isolation_proc_b);
     isolation_proc_a = NULL;
     isolation_proc_b = NULL;
 
-    return (isolation_result_a == 0xAAAAAAAA && isolation_result_b == 0xBBBBBBBB);
+    if (dir_a && dir_b) {
+        phys_a = alloc_user_page(dir_a, ISOLATION_TEST_ADDR);
+        phys_b = alloc_user_page(dir_b, ISOLATION_TEST_ADDR);
+    }
+    if (phys_a && phys_b && phys_a != phys_b) {
+        isolation_proc_a = test_process(dir_a, isolation_proc_a_entry);
+        isolation_proc_b = test_process(dir_b, isolation_proc_b_entry);
+    }
+    if (isolation_proc_a && isolation_proc_b) {
+        switch_context(isolation_proc_main, isolation_proc_a);
+        ok = isolation_result_a == 0xAAAAAAAA && isolation_result_b == 0xBBBBBBBB;
+    }
+
+    test_process_free(isolation_proc_a);
+    test_process_free(isolation_proc_b);
+    isolation_proc_a = NULL;
+    isolation_proc_b = NULL;
+    isolation_space_free(dir_a);
+    isolation_space_free(dir_b);
+    return ok;
 }
 
 /** The segment loader's `elf_read_fn` over a KRFFS file: `ctx` is a

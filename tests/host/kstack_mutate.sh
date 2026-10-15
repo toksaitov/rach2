@@ -38,10 +38,10 @@ path = Path(sys.argv[1])
 text = path.read_text()
 clear = '        k_memset(base, 0, KERNEL_STACK_SIZE);\n'
 changes = {
-    'none': ('static uintptr_t kstack_alloc(void)\n{', clear, ''),
-    'top': ('static uintptr_t kstack_alloc(void)\n{', clear,
+    'none': ('uintptr_t kstack_alloc(void)\n{', clear, ''),
+    'top': ('uintptr_t kstack_alloc(void)\n{', clear,
             '        k_memset((char *)base + KERNEL_STACK_SIZE - PAGE_SIZE, 0, PAGE_SIZE);\n'),
-    'unguarded': ('static uintptr_t kstack_alloc(void)\n{',
+    'unguarded': ('uintptr_t kstack_alloc(void)\n{',
                   '    void *base = kalloc_guarded(KERNEL_STACK_SIZE / PAGE_SIZE);\n',
                   '    void *base = kalloc_pages(KERNEL_STACK_SIZE / PAGE_SIZE, NULL);\n'),
     'guard-in-stack': ('int kstack_overrun_pid(uintptr_t addr)\n{',
@@ -50,7 +50,7 @@ changes = {
     'empty': ('int kstack_overrun_pid(uintptr_t addr)\n{',
               '    if (!current_proc || current_proc->kernel_stack < KERNEL_STACK_SIZE + PAGE_SIZE) {\n',
               '    if (!current_proc) {\n'),
-    'boot-freed': ('static void kstack_free(uintptr_t top)\n{',
+    'boot-freed': ('void kstack_free(uintptr_t top)\n{',
                    '    if (top != 0 && top != (uintptr_t)stack + KERNEL_STACK_SIZE) {\n',
                    '    if (top != 0) {\n'),
 }
