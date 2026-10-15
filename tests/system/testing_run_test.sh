@@ -28,12 +28,12 @@ fault()
     case $1 in
         paste)
             cat > "$work/fault.sed" <<'EOF'
-s/\. <(base64 .* bash \$encoded"/$*'"/
+s/read -r c && \. <(base64 .*)'"/$*'"/
 EOF
             ;;
         quoted)
             cat > "$work/fault.sed" <<'EOF'
-s/\. <(base64 -d <<< \\\$1)/eval \\"\\$(printf %s \\"\\$1\\" | base64 -d)\\"/
+s/\. <(base64 -d <<< \\\$c)/eval \\"\\$(printf %s \\"\\$c\\" | base64 -d)\\"/
 EOF
             ;;
     esac
@@ -49,11 +49,14 @@ fi
 # The ssh fixture stands for the host's sshd and its default shell, a batch
 # file that starts MSYS's bash: it answers the holder's script at once and
 # keeps the lock until its input ends. It refuses any other command line that
-# has a double quote, `%` or `!`, which cmd.exe reads as its own, and gives
-# the rest to a shell to parse, as the batch file gives it to MSYS's.
+# is longer than cmd.exe's limit of 8191 characters or has a double quote, `%`
+# or `!`, which cmd.exe reads as its own, and gives the rest to a shell to
+# parse, as the batch file gives it to MSYS's.
 cat > "$work/bin/ssh" <<'EOF'
 #!/bin/sh
 [ "$1 $3" = '-o testing' ] || exit 255
+[ "${#4}" -le 8191 ] ||
+    { echo "ssh fixture: cmd.exe refuses a line of ${#4} characters" >&2; exit 255; }
 case $4 in
     *'bash -s -- '*) echo held; exec cat > /dev/null ;;
     *[\"%!]*) echo "ssh fixture: cmd.exe misreads: $4" >&2; exit 255 ;;
@@ -110,8 +113,10 @@ a\\b" '' "printf '%s\\n' \"it's\" 'say \"hi\"' '(x)' 'a\\b' | tr -d '()'" ||
     row input 0 'got line' 'line
 ' 'read -r v; echo "got $v"' || failed=1
     row status 7 '' '' '(exit 7)' || failed=1
+    row long 0 9000 '' "echo $long | awk '{ print length(\$0) }'" || failed=1
     return "$failed"
 }
+long=$(printf '%9000s' '' | tr ' ' x)
 rows || exit 1
 if [ "$mode" = mutate ]; then
     fault paste
@@ -120,6 +125,7 @@ if [ "$mode" = mutate ]; then
         exit 1
     fi
     grep -q '^testing-run-test: failed: quotes:' "$work/mutated.out"
+    grep -q '^testing-run-test: failed: long:' "$work/mutated.out"
     if grep -q '^testing-run-test: failed: words:' "$work/mutated.out"; then
         echo 'testing-run-test: fault failed a command without quotes' >&2
         exit 1
@@ -137,4 +143,4 @@ if [ "$mode" = mutate ]; then
     rows || exit 1
     echo 'testing-run-test: result: pass: both faults caught and restored'
 fi
-echo 'testing-run-test: result: pass: 7 rows'
+echo 'testing-run-test: result: pass: 8 rows'

@@ -99,7 +99,8 @@ esac
 RSYNC_PATH='MSYS_NO_PATHCONV=1 wsl.exe -- rsync'
 hold=
 holder=
-trap 'release_copy; [ -z "$hold" ] || rm -rf "$hold"' EXIT
+feeder=
+trap 'stop_feeder; release_copy; [ -z "$hold" ] || rm -rf "$hold"' EXIT
 
 # Exit 2 unless the rsync here is rsync 3.
 need_rsync3()
@@ -251,28 +252,34 @@ sync_tree()
 }
 
 # run_held COMMAND: run COMMAND in the copy while the holder lives. The
-# command's ssh runs in the background, with this script's input, so that
-# the holder can be watched; if the holder ends first, the ssh is stopped.
+# command's ssh runs in the background, so that the holder can be watched; if
+# the holder ends first, the ssh is stopped.
 #
-# COMMAND travels in base64, whose letters no shell or command line on the
-# way treats specially, and bash in WSL decodes it and runs the text. sshd
-# hands the ssh command to its default shell as `-c "COMMAND"`, and cmd.exe
-# reads that line first: a double quote in the command ends cmd's quoting,
-# so that a `|` or `&` after it starts a Windows program, and cmd expands `%`
-# and, in that batch file, `!`. MSYS's shell parses the line next, and
-# wsl.exe, given `--`, would hand the rest of its command line to a shell
-# that parses it again. So the line has no double quote, `%` or `!`, and its
-# `&&`, `<` and parentheses stay inside cmd's quotes; bash reads the text
-# from a here-string and sources it, where a quoted `eval` would need double
-# quotes; and COMMAND itself is written into no line. `-e` makes wsl.exe
-# start bash with its arguments as given, and MSYS_NO_PATHCONV keeps MSYS
-# from rewriting an argument it takes for a path.
+# COMMAND travels on the ssh's input, as one line of base64 ahead of this
+# script's own input, which the command reads after it. sshd hands the ssh
+# command to its default shell as `-c "COMMAND"`, and cmd.exe reads that line
+# first: it refuses a line longer than 8191 characters, a double quote in the
+# command ends cmd's quoting, so that a `|` or `&` after it starts a Windows
+# program, and cmd expands `%` and, in that batch file, `!`. MSYS's shell parses
+# the line next, and wsl.exe, given `--`, would hand the rest of its command
+# line to a shell that parses it again. So the line is the same for every
+# command and has no double quote, `%` or `!`, and its `&&`, `<` and parentheses
+# stay inside cmd's quotes. Bash in WSL reads the first line of its input a byte
+# at a time, as it reads any input it cannot seek, so that the rest is left for
+# the command; it decodes the line from a here-string and sources the text,
+# where a quoted `eval` would need double quotes. `-e` makes wsl.exe start bash
+# with its arguments as given, and MSYS_NO_PATHCONV keeps MSYS from rewriting an
+# argument it takes for a path. The feeder that writes the input is stopped once
+# the command ends, since it may wait on a terminal nobody types in.
 run_held()
 {
-    encoded=$(printf '%s' "$*" | base64 | tr -d '\n')
     exec 5<&0
-    ssh -o BatchMode=yes "$HOST" "MSYS_NO_PATHCONV=1 wsl.exe -e bash -lc 'cd $DEST && export RACH2_QEMU_ACCEL=tcg && . <(base64 -d <<< \$1)' bash $encoded" \
-        <&5 3>&- 5<&- &
+    mkfifo "$hold/command"
+    { printf '%s' "$*" | base64 | tr -d '\n'; echo; exec cat; } \
+        <&5 5<&- > "$hold/command" 3>&- &
+    feeder=$!
+    ssh -o BatchMode=yes "$HOST" "MSYS_NO_PATHCONV=1 wsl.exe -e bash -lc 'cd $DEST && export RACH2_QEMU_ACCEL=tcg && read -r c && . <(base64 -d <<< \$c)'" \
+        < "$hold/command" 3>&- 5<&- &
     command=$!
     exec 5<&-
     while kill -0 "$command" 2>/dev/null; do
@@ -283,7 +290,19 @@ run_held()
         fi
         sleep 2
     done
-    wait "$command"
+    status=0
+    wait "$command" || status=$?
+    stop_feeder
+    return "$status"
+}
+
+# stop_feeder: stop the process that writes the command's input, if any.
+stop_feeder()
+{
+    [ -n "$feeder" ] || return 0
+    kill "$feeder" 2>/dev/null || :
+    wait "$feeder" 2>/dev/null || :
+    feeder=
 }
 
 case "${1:-}" in
