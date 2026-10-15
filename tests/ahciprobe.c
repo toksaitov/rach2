@@ -11,8 +11,8 @@
  * proof, since a polled driver holds the processor for every slow
  * transfer and the fast reader would then end after it. Then the
  * controller's vector in `/proc/interrupts` must have counted the
- * completions. The times are printed and not judged; a bound on them was
- * one machine's.
+ * completions. The times are printed and not judged, since a bound on them
+ * would hold for one machine alone.
  *
  * Mode `fault`: the KRFFS root is the disk on port 0, mounted through the
  * page-cache window, whose faults read the disk polled with interrupts
@@ -45,6 +45,7 @@
 #define CHUNK      (32 * 1024)
 #define WNOHANG    1
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -54,12 +55,14 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
     syscall3(SYS_WRITE, 1, (long)"\n", 1);
 }
 
+/** Write `v` in decimal. */
 static void putnum(int v)
 {
     char buf[12];
@@ -78,6 +81,7 @@ static void putnum(int v)
     }
 }
 
+/** Print "AHCIPROBE FAIL: " and `why`, and exit 1. */
 static void fail(const char *why)
 {
     syscall3(SYS_WRITE, 1, (long)"AHCIPROBE FAIL: ", 16);
@@ -85,9 +89,10 @@ static void fail(const char *why)
     syscall2(SYS_EXIT, 1, 0);
 }
 
-/* A counter of /proc/disk by its label, defined with the file readers below. */
+/* A counter of /proc/disk by its label, defined below. */
 static int disk_counter(const char *label);
 
+/** The monotonic clock in milliseconds. */
 static int now_ms(void)
 {
     long ts[2];
@@ -97,10 +102,9 @@ static int now_ms(void)
     return ts[0] * 1000 + ts[1] / 1000000;
 }
 
-/* Read `bytes` from `node` in chunks; the longest chunk's time in
-   milliseconds is left in `*longest`. Returns 0, or -1 on a short read. */
-/* Open `node`, waiting for it: a throttled disk is found seconds into the
-   boot, after the shell has run the probe. */
+/** Open `node` for reading, waiting for it up to ten seconds: a throttled
+ * disk is found seconds into the boot, after the shell has run the probe. A
+ * descriptor, or a negated errno. */
 static int open_node(const char *node)
 {
     int fd = -1, tries;
@@ -118,6 +122,9 @@ static int open_node(const char *node)
     return fd;
 }
 
+/** Read `bytes` from `node` in chunks; the longest chunk's time in
+ * milliseconds is left in `*longest`. Returns 0, or -1 when the node does not
+ * open or a read is short. */
 static int read_node(const char *node, int bytes, int *longest)
 {
     static char buf[CHUNK];
@@ -147,6 +154,8 @@ static int read_node(const char *node, int bytes, int *longest)
     return 0;
 }
 
+/** Read the file `path` into `buf`, at most `cap` - 1 bytes and a NUL: the
+ * bytes read, or -1 when it does not open. */
 static int slurp(const char *path, char *buf, int cap)
 {
     int fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
@@ -167,7 +176,8 @@ static int slurp(const char *path, char *buf, int cap)
     return total;
 }
 
-/* The count on the `/proc/interrupts` line whose names include `name`. */
+/** The count on the `/proc/interrupts` line whose names include `name`, or
+ * -1 when no line does. */
 static int count_for_named(const char *name, const char *file)
 {
     const char *p;
@@ -207,6 +217,19 @@ static int count_for_named(const char *name, const char *file)
     return -1;
 }
 
+/**
+ * The `slow` mode: a slow and a fast reader, the fast one started once the
+ * slow one has begun, and the order in which they end.
+ *
+ * The clock starts before the slow reader, since a driver that holds the
+ * processor through its transfers would hold this process too, and a clock
+ * started after its word would start after its whole read. The order alone
+ * would pass a driver that serialized the two and let the fast reader finish
+ * first by its fewer reads, so a request of the fast disk must also have
+ * completed while one of the slow disk's was in flight, which the block
+ * layer counts as an overlap. A vector that has counted nothing is not
+ * listed, so the controller's line is read after the reads.
+ */
 static void slow_row(void)
 {
     static char text[4096];
@@ -214,15 +237,11 @@ static void slow_row(void)
     int slow, fast, status, t0, t_fast, longest, slow_running, reaped, overlaps;
     char byte;
 
-    /* A vector that has counted nothing is not listed, so the controller's
-       line is asked for after the reads and not before. */
     pipefd[0] = pipefd[1] = -1;
     if (syscall1(SYS_PIPE, (long)pipefd) != 0) {
         fail("pipe");
     }
-    /* The clock starts before the slow reader, since a driver that holds
-       the processor through its transfers would hold this process too, and
-       a clock started after its word would start after its whole read. */
+    /* The clock starts before the slow reader. */
     overlaps = disk_counter("disk-overlaps ");
     t0 = now_ms();
     slow = syscall1(SYS_FORK, 0);
@@ -245,8 +264,7 @@ static void slow_row(void)
     if (fast == 0) {
         int l, rc = read_node("/dev/disk1p1", FAST_BYTES, &l);
 
-        /* The longest single read, back to the parent through the exit
-           status, below the value that means a failed read. */
+        /* The longest read, in the exit status, below 200 for a failure. */
         syscall2(SYS_EXIT, rc != 0 ? 200 : (l > 199 ? 199 : l), 0);
     }
     status = -1;
@@ -258,8 +276,7 @@ static void slow_row(void)
     if (longest == 200) {
         fail("the fast disk's read");
     }
-    /* The order: the slow reader has not ended when the fast one has. The
-       one wait that reaps it is the one whose status is read. */
+    /* The slow reader has not ended when the fast one has. */
     status = -1;
     reaped = syscall3(SYS_WAITPID, slow, (long)&status, WNOHANG);
     slow_running = reaped == 0;
@@ -277,10 +294,7 @@ static void slow_row(void)
         }
         fail("the fast reader ended after the slow disk's read, so it waited behind it");
     }
-    /* And the requests overlapped: the fast disk's completed while the
-       slow disk's were in flight, which the block layer counts. An order
-       alone would pass a driver that serialized the two and let the fast
-       reader finish first by its fewer reads. */
+    /* A fast request completed while a slow one was in flight. */
     if (disk_counter("disk-overlaps ") - overlaps < 1) {
         fail("no request of the fast disk completed while the slow disk's was in flight");
     }
@@ -298,6 +312,9 @@ static void slow_row(void)
     syscall2(SYS_EXIT, 0, 0);
 }
 
+/** The `fault` mode: blockprobe on the root in a child, and raw reads of
+ * the disk's second partition beside it until the child exits; the child
+ * must pass and at least 64 raw reads must have run. */
 static void fault_row(void)
 {
     static char buf[CHUNK];
@@ -349,22 +366,24 @@ static void fault_row(void)
 
 void probe_main(unsigned long *sp);
 
-/* `ahciprobe late`: the throttled disk's ext2 partition mounted for
-   writing, under a deadline period shorter than one of its requests, which
-   the row sets with `rach2.blockdeadline=1` against a disk of 512 KiB a
-   second. ext2 keeps a write's blocks dirty and writes them back in runs
-   at the end of the call, a run being at most a request of 1 MiB; the
-   file is longer than one, so its first run is a request of 1 MiB, which
-   takes two seconds: it passes its deadline and is answered after it. The
-   answer must be taken: the write succeeds, the file reads back whole, and
-   the mount is still writable. FAT32 would not do: it writes each block
-   through as it is written, and a 4 KiB request is under the deadline.
-   The file is written in one call, so it is one batch of ext2's and its
-   blocks go back in runs; a call per block would end a batch per block
-   and write each block, its bitmap and its inode in requests of 4 KiB,
-   all under the deadline. */
 #define LATE_BYTES (1280 * 1024)
 
+/**
+ * `ahciprobe late`: the throttled disk's ext2 partition mounted for
+ * writing, under a deadline period shorter than one of its requests, which
+ * the row sets with `rach2.blockdeadline=1` against a disk of 512 KiB a
+ * second. ext2 keeps a write's blocks dirty and writes them back in runs
+ * at the end of the call, a run being at most a request of 1 MiB; the
+ * file is longer than one, so its first run is a request of 1 MiB, which
+ * takes two seconds: it passes its deadline and is answered after it. The
+ * answer must be taken: the write succeeds, the file reads back whole, and
+ * the mount is still writable. FAT32 would not do: it writes each block
+ * through as it is written, and a 4 KiB request is under the deadline.
+ * The file is written in one call, so it is one batch of ext2's and its
+ * blocks go back in runs; a call per block would end a batch per block
+ * and write each block, its bitmap and its inode in requests of 4 KiB,
+ * all under the deadline.
+ */
 static void late_row(void)
 {
     static unsigned char whole[LATE_BYTES];
@@ -424,12 +443,12 @@ static void late_row(void)
     syscall2(SYS_EXIT, 0, 0);
 }
 
-/* One raw read of `bytes` from `node`, at most a window's request; the
-   syscall's answer, so a request the deadline gave up on shows as a short
-   or failed read. `*ms` is the call's time, and -1 when the node did not
-   open, so that no row reads a time from a request never made. */
 static char read_once_buf[32 * 1024];
 
+/** One raw read of `bytes` from `node`, at most a window's request; the
+ * syscall's answer, so a request the deadline gave up on shows as a short
+ * or failed read. `*ms` is the call's time, and -1 when the node did not
+ * open, so that no row reads a time from a request never made. */
 static int read_once(const char *node, int bytes, int *ms)
 {
     int fd = open_node(node);
@@ -446,6 +465,7 @@ static int read_once(const char *node, int bytes, int *ms)
     return n;
 }
 
+/** Sleep `ms` milliseconds. */
 static void sleep_ms(int ms)
 {
     long ts[2];
@@ -455,16 +475,17 @@ static void sleep_ms(int ms)
     syscall2(SYS_NANOSLEEP, (long)ts, 0);
 }
 
-/* `ahciprobe edge`: the deadline's boundary, one request of 4 KiB on the
-   boot disk behind the lag device, which answers every request an exact
-   number of ticks after it was made. The suite boots it twice under a
-   period of a hundred ticks, `rach2.lagdeadline=100`: with
-   `rach2.blocklag=75` the request is answered inside its period and must
-   not be overdue, and with `rach2.blocklag=125` it is overdue once and
-   taken; the suite reads
-   the kernel's record of which. The request must answer its bytes either
-   way. An emulator's throttle would not do here: it pays for a burst
-   unevenly across the requests after it. */
+/**
+ * `ahciprobe edge`: the deadline's boundary, one request of 4 KiB on the
+ * boot disk behind the lag device, which answers every request an exact
+ * number of ticks after it was made. The suite boots it twice under a
+ * period of a hundred ticks, `rach2.lagdeadline=100`: with
+ * `rach2.blocklag=75` the request is answered inside its period and must
+ * not be overdue, and with `rach2.blocklag=125` it is overdue once and
+ * taken; the suite reads the kernel's record of which. The request must
+ * answer its bytes either way. An emulator's throttle would not do here: it
+ * pays for a burst unevenly across the requests after it.
+ */
 static void edge_row(void)
 {
     int ms, n;
@@ -479,16 +500,8 @@ static void edge_row(void)
     syscall2(SYS_EXIT, 0, 0);
 }
 
-/* `ahciprobe quarantine`: one slot in the pool, `rach2.blockpool=1`, and
-   the lag device answering 500 ticks late under four periods of a hundred:
-   the request is given up on with EIO at the fourth deadline and its slot
-   quarantined. The completion arrives a second after and must free the
-   slot: a request made once it has is the proof, since with one slot in
-   the pool a slot not freed leaves nothing to take. The lag answers that
-   request 500 ticks late as well, so it too is given up on; what tells a
-   slot taken from a slot refused is the time: a request refused for want
-   of a slot answers at once, and one taken waits its four periods. */
-/* A counter of /proc/disk by its label, or -1 when the file cannot be read. */
+/** A counter of /proc/disk by its label, or -1 when the file cannot be read
+ * or has no such line. */
 static int disk_counter(const char *label)
 {
     static char text[2048];
@@ -521,6 +534,17 @@ static int disk_counter(const char *label)
     return -1;
 }
 
+/**
+ * `ahciprobe quarantine`: one slot in the pool, `rach2.blockpool=1`, and
+ * the lag device answering 500 ticks late under four periods of a hundred:
+ * the request is given up on with EIO at the fourth deadline and its slot
+ * quarantined. The completion arrives a second after and must free the
+ * slot: a request made once it has is the proof, since with one slot in
+ * the pool a slot not freed leaves nothing to take. The lag answers that
+ * request 500 ticks late as well, so it too is given up on and quarantined,
+ * which the kernel counts; a request refused for want of a slot answers at
+ * once and counts nothing.
+ */
 static void quarantine_row(void)
 {
     int ms, n, quarantined;
@@ -535,11 +559,7 @@ static void quarantine_row(void)
     puts("AHCIPROBE GAVEUP ms:");
     putnum(ms);
     sleep_ms(6000); /* the late completion lands in the meantime */
-    /* The request after the late completion is taken, which is what shows
-       the slot was freed: with one slot in the pool a slot not freed leaves
-       nothing to take and the request is refused at once. Taken, it waits
-       its periods under the same lag and is quarantined in its turn, which
-       the kernel counts; a refusal counts nothing. */
+    /* The next request is taken only if the late completion freed the slot. */
     quarantined = disk_counter("disk-quarantines ");
     n = read_once("/dev/disk0p1", 4 * 1024, &ms);
     if (ms < 0) {
@@ -554,11 +574,11 @@ static void quarantine_row(void)
     syscall2(SYS_EXIT, 0, 0);
 }
 
-/* `ahciprobe pool`: two slots in the pool, `rach2.blockpool=2`, two disks
-   throttled to 16 KiB a second and one at full speed. A reader on each
-   slow disk holds a slot for a 64 KiB read; a reader of the fast disk,
-   started once both are in flight, finds the pool full, waits for a slot,
-   and must succeed. The kernel's record of the wait is the suite's. */
+/** `ahciprobe pool`: two slots in the pool, `rach2.blockpool=2`, two disks
+ * throttled to 16 KiB a second and one at full speed. A reader on each
+ * slow disk holds a slot for a 64 KiB read; a reader of the fast disk,
+ * started once both are in flight, finds the pool full, waits for a slot,
+ * and must succeed. The kernel's record of the wait is the suite's. */
 static void pool_row(void)
 {
     int pipefd[2], readers[2], i, ms, n, status;
@@ -607,6 +627,8 @@ static void pool_row(void)
 
 PROBE_SP_ENTRY;
 
+/** Run the mode argv[1] names by its first letter, `fault`, `late`, `edge`,
+ * `quarantine` or `pool`, and the `slow` mode otherwise; each mode exits. */
 void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];

@@ -1,5 +1,6 @@
 /**
- * Four disks with four kinds of table, all read by the partition service.
+ * Four disks with four kinds of table, all read by the partition reader
+ * (block/partition.c).
  *
  * The suite attaches, on one AHCI controller: an MBR disk whose entries are
  * a KRFFS partition, a FAT32 one, an extended one holding three logical
@@ -28,6 +29,7 @@
 #define EBUSY     16
 #define BLKRRPART 0x125F
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -37,12 +39,14 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
     syscall3(SYS_WRITE, 1, (long)"\n", 1);
 }
 
+/** Print "PARTSPROBE FAIL: " and `why`, and exit 1. */
 static void fail(const char *why)
 {
     syscall3(SYS_WRITE, 1, (long)"PARTSPROBE FAIL: ", 17);
@@ -50,6 +54,7 @@ static void fail(const char *why)
     syscall2(SYS_EXIT, 1, 0);
 }
 
+/** stat(2) of `path`: 0 when it exists, or a negated errno. */
 static int xstat(const char *path)
 {
     char st[KSTAT_SIZE];
@@ -58,7 +63,7 @@ static int xstat(const char *path)
     return syscall2(SYS_STAT, (long)path, (long)st);
 }
 
-/* Whether `text` has a line beginning with `line`. */
+/** Whether `text` has a line beginning with `line`. */
 static int has_line(const char *text, const char *line)
 {
     const char *p;
@@ -80,7 +85,7 @@ static int has_line(const char *text, const char *line)
     return 0;
 }
 
-/* Whether `text` contains `needle` anywhere. */
+/** Whether `text` contains `needle` anywhere. */
 static int has_text(const char *text, const char *needle)
 {
     const char *p;
@@ -99,6 +104,8 @@ static int has_text(const char *text, const char *needle)
     return 0;
 }
 
+/** Read the file `path` into `buf`, at most `cap` - 1 bytes and a NUL: the
+ * bytes read, or -1 when it does not open. */
 static int slurp(const char *path, char *buf, int cap)
 {
     int fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
@@ -119,7 +126,7 @@ static int slurp(const char *path, char *buf, int cap)
     return total;
 }
 
-/* Whether the file `path` reads as `text`, all of it. */
+/** Whether the file `path` reads as `text`, all of it. */
 static int reads_as(const char *path, const char *text)
 {
     static char got[256];
@@ -128,9 +135,9 @@ static int reads_as(const char *path, const char *text)
     return n == (int)strlen(text) && has_line(got, text);
 }
 
-/* /sys/block: the first primary partition's first sector, size, number and
-   device numbers, a logical one's number, the disk's sector size, and the
-   link /sys/dev/block has for the partition. */
+/** Check /sys/block: the first primary partition's first sector, size,
+ * number and device numbers, a logical one's number, the disk's sector size,
+ * and the link /sys/dev/block has for the partition. */
 static void sys_block_rows(void)
 {
     static char link[64];
@@ -157,6 +164,8 @@ static void sys_block_rows(void)
     }
 }
 
+/** Write `text` to the new file `path`, read it back and compare; fail,
+ * naming `path`, at the first step that does not hold. */
 static void write_and_read_back(const char *path, const char *text)
 {
     static char back[64];
@@ -186,6 +195,8 @@ static void write_and_read_back(const char *path, const char *text)
     }
 }
 
+/** Make the directory `at` and mount the FAT file system of `src` on it: 0,
+ * or a negated errno. */
 static int mount_vfat(const char *src, const char *at)
 {
     syscall2(SYS_MKDIR, (long)at, 0755);
@@ -196,6 +207,12 @@ void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
 
+/**
+ * Check each disk's lines in /proc/disk and the boot log's record of the
+ * backup GPT, the nodes and /sys/block, a write read back on a logical and a
+ * GPT partition, and BLKRRPART refused with -EBUSY under a mount and done
+ * once the mount is gone.
+ */
 void probe_main(unsigned long *sp)
 {
     static char text[8192];

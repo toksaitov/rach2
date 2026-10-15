@@ -1,27 +1,37 @@
 /**
- * Exercises /proc/cmdline and the /dev/bootpart boot-partition window.
+ * Exercises /proc/cmdline and the raw windows onto the boot disk:
+ * /dev/bootpart, /dev/grubcore and /dev/disk0.
  *
- * Two boots share this one probe, told apart by the command line the harness
- * passes. With `rach2.bootprobe=fixture` the disk has a FAT-typed
+ * Several boots share this one probe, told apart by the command line the
+ * harness passes. With `rach2.bootprobe=fixture` the disk has a FAT-typed
  * partition 1 of known bytes (sector k has byte j = (k * 7 + j) & 0xff), and
  * the probe proves the device end to end: the 0600 mode from stat and fstat
  * both, seeks resolved against the partition size, a read of known bytes at a
  * seek, a written sector read back, exactly 0 at the end, -ENOSPC past it,
  * -EINVAL unaligned, and -EACCES for an unprivileged open. With
  * `rach2.bootprobe=ramroot` the machine mounted a RAM image and no disk file
- * system, and both /dev/bootpart and /dev/grubcore must exist anyway. With
+ * system, and both /dev/bootpart and /dev/grubcore must exist anyway, the
+ * gap bounded and refusing as the fixture's partition does. With
  * `rach2.bootprobe=wide` a sparse 260 GB drive is attached over AHCI with
  * markers at 5 GiB and 258 GiB: the far one needs 38 bits of offset, so an
  * implementation keeping fewer misses it however well it does at 5 GiB, and the
  * boot also walks SEEK_CUR across the 4 GiB line both ways, refuses a seek
  * before the start, and duplicates a descriptor to prove the wide offset is
- * shared through the open-file description. Without the flag
- * the disk has only the KRFFS partition and the device must be absent from
- * stat and open alike. /proc/cmdline is proved at each of its layers: content,
- * the /proc listing, stat/fstat identity, and the fd's readlink origin.
+ * shared through the open-file description. With `rach2.bootprobe=auth` and
+ * `rach2.bootprobe=auth-recovery` the probe checks whether the kernel may write
+ * its own disk (`auth_case`) and whether the bounded windows batch
+ * (`window_batch_case`); with `rach2.bootprobe=shared`, behind a delayed
+ * device, it races a transfer on an inherited description with another
+ * (`raw_readv_case`, `raw_shared_case`). Without the flag the disk has only
+ * the KRFFS partition and the device must be absent from stat and open
+ * alike. /proc/cmdline is proved at each of its layers in every boot:
+ * content, the /proc listing, stat/fstat identity, and the fd's readlink
+ * origin.
  *
- * Prints "BOOTPROBE OK", "BOOTPROBE ABSENT OK", "BOOTPROBE RAMROOT OK" or
- * "BOOTPROBE WIDE OK".
+ * Prints "BOOTPROBE OK", "BOOTPROBE ABSENT OK", "BOOTPROBE RAMROOT OK",
+ * "BOOTPROBE WIDE OK", "BOOTPROBE SHARED OK", "BOOTPROBE AUTH ORDINARY OK"
+ * or "BOOTPROBE AUTH RECOVERY OK", and "BOOTPROBE FAILED" when a check
+ * failed.
  *
  * Freestanding; direct system calls (probe.h).
  */
@@ -60,12 +70,14 @@ static int pattern_ok(const char *buf, int gib)
     return 1;
 }
 
+/** exit(2) with `status`; does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, status);
     __builtin_unreachable();
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -75,6 +87,7 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
@@ -83,6 +96,7 @@ static void puts(const char *s)
 
 static int fails = 0;
 
+/** Count a failure and print `msg` when `cond` is 0. */
 static void check(int cond, const char *msg)
 {
     if (!cond) {
@@ -118,7 +132,8 @@ static char big[200 * SECTOR];
 static char past[PAST_SECTORS * SECTOR];
 
 /**
- * Read one decimal field out of /proc/disk, or -1 if it is not there.
+ * Read the decimal field after `key` at the start of a line of /proc/disk
+ * into `*out`: 1, or 0 when the file cannot be read or has no such line.
  *
  * The file is small and read whole each time, because the fields this looks
  * for change as the machine runs and a cached copy would answer with the
@@ -164,7 +179,7 @@ static int proc_disk_field(const char *key, unsigned long long *out)
 }
 
 /**
- * Whether this kernel may write any sector of its own disk.
+ * Check whether this kernel may write any sector of its own disk.
  *
  * Both boots run this against the same image and differ only in the kernel:
  * `recovery` says which one is running. An ordinary build must refuse and leave
@@ -172,7 +187,18 @@ static int proc_disk_field(const char *key, unsigned long long *out)
  * not merely returned an error. A recovery build must write past 2 GiB,
  * read it back, and take a large write in few driver calls, which is what makes
  * a whole-disk reflash finishable: batching is invisible in the result, so the
- * count of calls is read out of /proc/disk either side of it.
+ * count of calls is read out of /proc/disk either side of it. What the driver
+ * did with each call decides whether a reflash finishes, so the disk commands
+ * and the cache flushes are counted as they leave for the device, and a
+ * transfer longer than one batch must take two calls with the bytes on both
+ * sides of the boundary between them intact.
+ *
+ * One writer at a time is allowed, across every window onto this disk. Two
+ * reflashes over ranges that overlap each write their whole length and each
+ * report success, and what is on the disk is neither image; and the windows
+ * are not three disks, since the boot partition and the loader's gap are both
+ * inside the whole one. So the second writer is refused whichever name it
+ * asks by. A reader is not a writer and is not counted.
  */
 static void auth_case(int recovery)
 {
@@ -183,12 +209,7 @@ static void auth_case(int recovery)
     fd = syscall3(SYS_OPEN, (long)"/dev/disk0", O_RDWR, 0);
     check(fd >= 0, "root opens /dev/disk0 read-write");
 
-    /* One writer at a time, across every window onto this disk. Two reflashes
-       over ranges that overlap each write their whole length and each report
-       success, and what is on the platter is neither image; and the windows are
-       not three disks, since the boot partition and the loader's gap are both
-       inside the whole one. So the second writer is refused whichever name it
-       asks by. A reader is not a writer and is not counted. */
+    /* One writer at a time, across every window onto this disk. */
     {
         int second = syscall3(SYS_OPEN, (long)"/dev/disk0", O_RDWR, 0);
 
@@ -290,10 +311,7 @@ static void auth_case(int recovery)
         check(proc_disk_field("raw-batch-sectors ", &batch) && batch == 2048,
               "/proc/disk reports the batch size the count should be read against");
 
-        /* The call count says how devfs batched. What the driver did with each
-           call is the number that decides whether a reflash finishes, so the
-           commands and the cache flushes are counted where they leave for the
-           device and required to match. */
+        /* The driver's commands and cache flushes for the batch. */
         check(proc_disk_field("disk-commands ", &cmd_after), "/proc/disk reports disk commands");
         check(proc_disk_field("disk-flushes ", &flush_after), "and cache flushes");
         check(cmd_after - cmd_before == 2,
@@ -301,9 +319,7 @@ static void auth_case(int recovery)
         check(flush_after - flush_before == 1, "and exactly one cache flush, not two hundred");
     }
 
-    /* A transfer longer than one batch: two driver calls, two commands
-       with their two flushes, and the bytes on both sides of the boundary
-       between the calls are the ones written. */
+    /* A transfer longer than one batch: two calls, and the boundary between. */
     rc = probe_llseek(fd, at, SEEK_SET, &pos);
     check(rc == 0, "seek back for a transfer past one batch");
     {
@@ -350,7 +366,7 @@ static void auth_case(int recovery)
 }
 
 /**
- * That the bounded windows batch too, in both directions.
+ * Check that the bounded windows batch too, in both directions.
  *
  * The whole-disk window is the one a reflash uses, but all three share the same
  * loops, and a batching regression in the two bounded ones would be just as
@@ -392,7 +408,8 @@ static char written[SECTOR];
  * Wait until the child is blocked in its raw transfer, after its pipe signal:
  * in the state D, a sleep no signal ends, as Linux reports a process waiting
  * on its disk. The delayed device provides the wait; no elapsed-time
- * assertion is needed.
+ * assertion is needed. 1 once the state reads D; 0 when the child is a
+ * zombie or its stat does not open, or after 100000 reads without a D.
  */
 static int raw_child_sleeping(int pid)
 {
@@ -437,7 +454,8 @@ static int raw_child_sleeping(int pid)
     return 0;
 }
 
-/** Check the boot fixture's independent sector pattern. */
+/** Whether `bytes` is sector `which` of the boot fixture's pattern, byte i
+ * being (which * 7 + i) & 255. */
 static int raw_pattern(const char *bytes, int which)
 {
     int i;
@@ -450,7 +468,13 @@ static int raw_pattern(const char *bytes, int which)
     return 1;
 }
 
-/** Race a read with the second vector of an inherited raw readv. */
+/**
+ * Race a read with the second vector of an inherited raw readv. A child's
+ * readv of two sectors on /dev/disk0p1 is seen blocked after its second
+ * driver call; a read through the parent's copy of the description then
+ * takes the third sector, so the readv reserved its second, and the shared
+ * offset ends three sectors in.
+ */
 static void raw_readv_case(void)
 {
     struct {
@@ -631,6 +655,19 @@ static void proc_listing_case(void)
     }
 }
 
+/**
+ * Check /proc/cmdline, then run the boot's mode, each ending with its token:
+ * `shared`, `ramroot`, `auth`, `wide`, the absent device when no mode is
+ * named, and the fixture.
+ *
+ * A machine that mounted a RAM image and no disk file system still has a
+ * disk, and both of its level-one devices: the boot partition it may have to
+ * repair, and the gap that holds the boot loader. A device's mode stops a
+ * caller other than root at open and nothing else, since the credential
+ * check passes uid 0 whatever the mode says; so the write handler checks
+ * again, and a descriptor opened while privileged and carried across a drop
+ * of privilege must stop writing.
+ */
 PROBE_START void _start(void)
 {
     int fd, rc, n, fixture;
@@ -644,8 +681,7 @@ PROBE_START void _start(void)
     if (n > 0) {
         cmdline[n] = '\0';
     }
-    /* The RAM-root boot deliberately does not ask for a disk root, so the token
-       it is checked for is the one its own mode is named by. */
+    /* The RAM-root, wide and auth boots ask for no disk root. */
     if (contains(cmdline, "rach2.bootprobe=ramroot") || contains(cmdline, "rach2.bootprobe=wide") ||
         contains(cmdline, "rach2.bootprobe=auth")) {
         check(!contains(cmdline, "rach2.fsdisk"), "a RAM-root boot asks for no disk root");
@@ -709,11 +745,7 @@ PROBE_START void _start(void)
         sys_exit(fails != 0);
     }
 
-    /* A machine that mounted a RAM image and no disk file system still has a
-       disk, and milestone 25 gives it both level-one devices: the boot
-       partition it may have to repair, and the gap holding the boot loader.
-       Before discovery ran ahead of the root choice, /dev/bootpart appeared
-       only at the end of a successful mount, so this boot had neither. */
+    /* A RAM root still has the disk's boot partition and loader gap. */
     if (contains(cmdline, "rach2.bootprobe=ramroot")) {
         rc = syscall3(SYS_STAT, (long)"/dev/bootpart", (long)statbuf, 0);
         check(rc == 0, "a RAM-root boot still has /dev/bootpart");
@@ -732,8 +764,7 @@ PROBE_START void _start(void)
         n = syscall3(SYS_READ, fd, (long)sector, SECTOR);
         check(n == SECTOR, "the gap's first sector reads whole");
 
-        /* The window ends at LBA 2047 and the checks are on the whole request,
-           so a write starting past the end writes nothing, not part. */
+        /* A write at or across the end writes nothing, not part. */
         rc = syscall3(SYS_LSEEK, fd, 2047 * SECTOR, SEEK_SET);
         check(rc == 2047 * SECTOR, "seek to the gap's end");
         n = syscall3(SYS_READ, fd, (long)sector, SECTOR);
@@ -756,10 +787,7 @@ PROBE_START void _start(void)
         n = syscall3(SYS_WRITE, fd, (long)sector, SECTOR - 1);
         check(n == -EINVAL, "a partial-sector count is -EINVAL");
 
-        /* The mode stops a non-root caller at open and nothing else: the
-           credential check passes uid 0 whatever the mode says. So the write
-           handler asks again, and this descriptor, opened while privileged and
-           carried across a privilege drop, must stop working. */
+        /* The write handler checks privilege again, past the open. */
         rc = syscall1(SYS_SETUID, 1000);
         check(rc == 0, "the probe drops to an unprivileged uid");
         rc = syscall3(SYS_LSEEK, fd, 0, SEEK_SET);
@@ -781,8 +809,7 @@ PROBE_START void _start(void)
         sys_exit(1);
     }
 
-    /* Whether this kernel may write the whole disk. Both boots run the same
-       probe against the same image; the kernel is what differs. */
+    /* Whether this kernel may write its own disk. */
     if (contains(cmdline, "rach2.bootprobe=auth")) {
         auth_case(contains(cmdline, "rach2.bootprobe=auth-recovery"));
         window_batch_case();
@@ -917,8 +944,7 @@ PROBE_START void _start(void)
         check(ok, "sector 5 has the pattern");
     }
 
-    /* The end: SEEK_END lands on the partition size, a read there is exactly
-       0, a read past it is exactly 0, and a write there is -ENOSPC. */
+    /* The end: reads at and past it return 0, and a write is -ENOSPC. */
     rc = syscall3(SYS_LSEEK, fd, 0, SEEK_END);
     check(rc == PART_SECTORS * SECTOR, "SEEK_END is the partition size");
     n = syscall3(SYS_READ, fd, (long)sector, SECTOR);

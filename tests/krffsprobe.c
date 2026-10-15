@@ -2,7 +2,7 @@
  * krffsprobe: a mounted KRFFS volume, from a program.
  *
  * `krffsprobe read` mounts /dev/disk0p1 read-only, the volume
- * tests/system/suites/krffsmount.sh builds, on /k read-only and asks it what
+ * tests/system/suites/krffsmount.sh builds, on /k read-only and checks what
  * a mounted volume owes: every byte of a file whose contents follow a rule,
  * the names in the root and in a subdirectory, a stat of each kind, a read
  * past the end, a name that is not there, and a write refused because the
@@ -18,7 +18,10 @@
  *
  * `krffsprobe refuse` mounts the same device expecting the kernel to refuse
  * it: the suite gives it a volume broken on purpose, and the row is the
- * errno plus the kernel's own line on the console.
+ * errno plus the kernel's own line on the console. `krffsprobe failed`
+ * writes until the device fails a write, `krffsprobe three` mounts three
+ * volumes at once, and `krffsprobe pull` writes until the stick under the
+ * mount is pulled; `probe_main` says what each owes.
  *
  * Prints "KRFFSPROBE OK (mode)" or "KRFFSPROBE FAIL: reason". Freestanding;
  * direct system calls (probe.h).
@@ -40,6 +43,7 @@
 #define EBUSY  16
 #define EROFS  30
 
+/** exit(2) with `status`; does not return. */
 static void sys_exit(int status) __attribute__((noreturn));
 static void sys_exit(int status)
 {
@@ -47,6 +51,7 @@ static void sys_exit(int status)
     __builtin_unreachable();
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -57,12 +62,14 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
     syscall3(SYS_WRITE, 1, (long)"\n", 1);
 }
 
+/** Print "KRFFSPROBE FAIL: " and `why`, and exit 1. */
 static void fail(const char *why) __attribute__((noreturn));
 static void fail(const char *why)
 {
@@ -71,6 +78,7 @@ static void fail(const char *why)
     sys_exit(1);
 }
 
+/** Print "KRFFSPROBE FAIL: ", `why` and the answer `n` it got, and exit 1. */
 static void fail_with(const char *why, int n) __attribute__((noreturn));
 static void fail_with(const char *why, int n)
 {
@@ -94,6 +102,7 @@ static void fail_with(const char *why, int n)
     sys_exit(1);
 }
 
+/** Whether the strings `a` and `b` are equal. */
 static int streq(const char *a, const char *b)
 {
     size_t i;
@@ -103,8 +112,8 @@ static int streq(const char *a, const char *b)
     return a[i] == b[i];
 }
 
-/* What the suite wrote into /pattern.bin: the byte at `i` is a rule, so a
-   volume that reads back wrong says where. */
+/** What the suite wrote into /pattern.bin: the byte at `i` is a rule, so a
+ * volume that reads back wrong says where. */
 static unsigned char pattern_byte(unsigned i)
 {
     return (unsigned char)((i * 31u + 7u) & 0xFFu);
@@ -112,6 +121,8 @@ static unsigned char pattern_byte(unsigned i)
 
 #define PATTERN_BYTES 65536u
 
+/** The mode stat gives for `path`, with the whole stat left in `st`; fail
+ * when stat does. */
 static unsigned stat_mode(const char *path, unsigned char *st)
 {
     if (syscall2(SYS_STAT, (long)path, (long)st) != 0) {
@@ -151,6 +162,9 @@ static void listed_rows(void)
     fail("/proc/filesystems does not name krffs");
 }
 
+/** The read mode's rows: every byte of /k/pattern.bin and a read past its
+ * end, a file in a subdirectory, a missing name, a stat of each kind, and
+ * the root's names through getdents. */
 static void read_rows(void)
 {
     unsigned char st[144];
@@ -255,14 +269,8 @@ static void read_rows(void)
     (void)0;
 }
 
-/**
- * `/proc/mounts` calls the volume read-only.
- *
- * A type with no write among its operations refuses a write whatever the
- * flags say, so this line is the only place a caller sees what it got. The
- * row that matters is the mount that did not ask for read-only: the kernel
- * gives it anyway, and says so here.
- */
+/** `/proc/mounts` calls the volume read-only, as the read mode mounted it:
+ * the line is where a caller sees what it got. */
 static void mounts_say_ro(void)
 {
     {
@@ -294,7 +302,7 @@ static void mounts_say_ro(void)
     }
 }
 
-/* A read-only mount refuses every way of changing it. */
+/** A read-only mount refuses every way of changing it. */
 static void refusal_rows(void)
 {
     int rc = syscall3(SYS_OPEN, (long)"/k/pattern.bin", O_WRONLY, 0);
@@ -308,7 +316,9 @@ static void refusal_rows(void)
     }
 }
 
-/* The bytes a write boot leaves, and the boot after it reads. */
+/** Write `bytes` bytes of the pattern to `fd`, from byte `start` of it: the
+ * bytes a write boot leaves, and the boot after it reads. Fail at a short
+ * write. */
 static void write_pattern_from(int fd, unsigned start, unsigned bytes)
 {
     char buf[512];
@@ -331,12 +341,14 @@ static void write_pattern_from(int fd, unsigned start, unsigned bytes)
     }
 }
 
-/* The pattern from its start, which is what a fresh file gets. */
+/** The pattern from its start, which is what a fresh file gets. */
 static void write_pattern(int fd, unsigned bytes)
 {
     write_pattern_from(fd, 0, bytes);
 }
 
+/** Require the file `path` to hold the first `bytes` bytes of the pattern
+ * and nothing more. */
 static void read_pattern(const char *path, unsigned bytes)
 {
     char buf[512];
@@ -368,16 +380,28 @@ static void read_pattern(const char *path, unsigned bytes)
     syscall1(SYS_CLOSE, fd);
 }
 
-/* What a write boot leaves behind, which the boot after it checks. */
+/**
+ * What a write boot leaves behind, which the boot after it checks: a file
+ * written and read back, a grow and a truncate, a directory, a rename and
+ * removals, a file whose name went while it was open, a directory held open
+ * and a rename over an open file, the truncation of a nameless file, a file
+ * that moves under its descriptors as a write or ftruncate grows it, an
+ * overwrite in place, and the modes chmod, creat and mkdir give.
+ *
+ * The rows run twice in one suite: once on a volume nobody has written and
+ * once on the volume a killed machine left, so they start by taking away
+ * what they are about to make. What is not there does not matter. A nameless
+ * file has no path, and the one its parent and empty name spell reaches the
+ * directory it was in; its truncation must reach the file itself and leave
+ * that directory and everything else in it as they were.
+ */
 static void write_rows(void)
 {
     unsigned char st[144];
     int fd;
     int rc;
 
-    /* The rows run twice in one suite: once on a volume nobody has written
-       and once on the volume a killed machine left, so they start by taking
-       away what they are about to make. What is not there does not matter. */
+    /* What the rows are about to make, taken away first, if it is there. */
     syscall1(SYS_UNLINK, (long)"/k/made/inside");
     syscall1(SYS_RMDIR, (long)"/k/made");
     syscall1(SYS_UNLINK, (long)"/k/after.txt");
@@ -470,8 +494,7 @@ static void write_rows(void)
     if (syscall1(SYS_RMDIR, (long)"/k/empty") != 0) {
         fail("rmdir on the volume");
     }
-    /* A name taken away while the file is open: the reader keeps the file,
-       the name is gone at once, and the space comes back at the close. */
+    /* A name taken while the file is open: the reader keeps the file. */
     fd = syscall3(SYS_OPEN, (long)"/k/held.bin", O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) {
         fail_with("creating the file to hold open", fd);
@@ -504,9 +527,7 @@ static void write_rows(void)
     }
     syscall1(SYS_CLOSE, fd);
 
-    /* A directory somebody has open is not taken away under them, and a
-       rename over an open file leaves that file for its holder the way an
-       unlink does. */
+    /* An open directory is not removed; a renamed-over open file is kept. */
     {
         int dirfd;
 
@@ -568,10 +589,7 @@ static void write_rows(void)
         syscall1(SYS_CLOSE, fd);
     }
 
-    /* A truncation of a file whose name is gone. It has no path, and the one
-       its parent and empty name spell reaches the directory it was in; the
-       truncation must reach the file itself and leave that directory and
-       everything else in it exactly as they were. */
+    /* A truncation of a file whose name is gone reaches the file alone. */
     if (syscall2(SYS_MKDIR, (long)"/k/hold", 0755) != 0) {
         fail("the directory for the truncation of a nameless file");
     }
@@ -611,8 +629,7 @@ static void write_rows(void)
         syscall1(SYS_CLOSE, fd);
     }
 
-    /* A descriptor open across a grow that moves the file: the write path
-       repoints it, and the same descriptor reads what it wrote. */
+    /* A descriptor open across a grow that moves the file follows it. */
     fd = syscall3(SYS_OPEN, (long)"/k/moved.bin", O_RDWR | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) {
         fail_with("creating the file to move", fd);
@@ -648,9 +665,7 @@ static void write_rows(void)
     }
     syscall1(SYS_CLOSE, fd);
 
-    /* A grow through ftruncate, which is the other way a file moves, with two
-       descriptors on it: both must follow the file, the bytes it had must
-       still be there, and the length it gained must read as zeroes. */
+    /* A grow through ftruncate moves the file too; both descriptors follow. */
     {
         int one = syscall3(SYS_OPEN, (long)"/k/cut.bin", O_RDWR | O_CREAT | O_TRUNC, 0644);
         int two;
@@ -707,8 +722,7 @@ static void write_rows(void)
         syscall1(SYS_CLOSE, two);
     }
 
-    /* An overwrite of bytes that are already there, which a write that
-       reported what it never wrote would leave unchanged. */
+    /* An overwrite of bytes that are already there. */
     {
         int over = syscall3(SYS_OPEN, (long)"/k/over.bin", O_RDWR | O_CREAT | O_TRUNC, 0644);
         char got[16];
@@ -745,8 +759,7 @@ static void write_rows(void)
         fail_with("the mode after a chmod", rc & 07777);
     }
 
-    /* The mode a creation asks for is the mode it gets: the format stamps a
-       new node 0644 and the volume must put the caller's own bits on it. */
+    /* A creation gets the mode it asks for, not the format's 0644. */
     fd = syscall3(SYS_OPEN, (long)"/k/secret.txt", O_WRONLY | O_CREAT | O_TRUNC, 0600);
     if (fd < 0) {
         fail_with("creating a file with a mode of its own", fd);
@@ -765,7 +778,7 @@ static void write_rows(void)
     }
 }
 
-/* What the boot after a write boot must find. */
+/** What the boot after a write boot must find. */
 static void readback_rows(void)
 {
     unsigned char st[144];
@@ -831,10 +844,30 @@ static void readback_rows(void)
 
 PROBE_SP_ENTRY;
 
-/*
- * The pull row writes until the stick is not there any more, then once
- * more; `KRFFSPROBE HOLDING` is said after the first write, so the pull the
- * suite makes on the word lands on a process writing.
+/**
+ * Make /k and run the mode argv[1] names.
+ *
+ * `failed`: a write the device fails takes the mount read-only, and the
+ * unmount that follows writes nothing: the volume owes the next mount a
+ * check, and the flag that says so must still be set when the host reads
+ * it. `three`: three volumes at once, each of its own, so that what one
+ * mount writes is in that volume and in no other.
+ *
+ * `pull`: a stick pulled from under a mounted volume. What the machine owes
+ * then is an error from what was in flight, no writes to a device that is
+ * not there, and an unmount that takes the mount down rather than failing
+ * its sync for ever. The row writes until the stick is not there any more,
+ * then once more; `KRFFSPROBE HOLDING` is said after the first write, so the
+ * pull the suite makes on the word lands on a process writing. The mount
+ * stays while the stick is plugged back in: the driver finds a second
+ * device with the first still held, and a machine that gave the new one the
+ * old one's slot would be handing this mount a pointer into it, so the
+ * mount over the device that went must read nothing of the new stick.
+ *
+ * `crash` rewrites the same bytes until the machine is killed: a volume
+ * that filled up would say nothing about what a stop leaves behind, and the
+ * token comes after the first round, so what the kill interrupts is a write
+ * and not a mount.
  */
 void probe_main(unsigned long *sp)
 {
@@ -857,9 +890,7 @@ void probe_main(unsigned long *sp)
         sys_exit(0);
     }
 
-    /* A write the device fails takes the mount read-only, and the unmount
-       that follows writes nothing: the volume owes the next mount a check,
-       and the flag that says so must still be set when the host reads it. */
+    /* A failed write takes the mount read-only; the unmount writes nothing. */
     if (streq(mode, "failed")) {
         int fd;
         int i;
@@ -894,9 +925,7 @@ void probe_main(unsigned long *sp)
         sys_exit(0);
     }
 
-    /* Three volumes at once, past the two the kernel once had room for.
-       Each is a volume of its own: what one mount writes is in that volume
-       and in no other. */
+    /* Three volumes at once, each holding only what its own mount writes. */
     if (streq(mode, "three")) {
         int fd;
         char got[16];
@@ -959,10 +988,7 @@ void probe_main(unsigned long *sp)
         sys_exit(0);
     }
 
-    /* A stick pulled from under a mounted volume. What the machine owes then
-       is an error from what was in flight, no writes to a device that is not
-       there, and an unmount that takes the mount down rather than failing its
-       sync for ever. */
+    /* A stick pulled from under a mounted volume. */
     if (streq(mode, "pull")) {
         int tries = 0;
         int writes = 0;
@@ -1001,10 +1027,7 @@ void probe_main(unsigned long *sp)
                 fail("the stick was never pulled");
             }
         }
-        /* The mount stays while the stick is plugged back in: the driver
-           finds a second device with the first still held, and a machine
-           that gave the new one the old one's slot would be handing this
-           mount a pointer into it. */
+        /* The mount stays while the stick is plugged back in. */
         puts("KRFFSPROBE GONE");
         for (tries = 0; tries < 2000000; tries++) {
             int fd = syscall3(SYS_OPEN, (long)"/dev/disk0p1", O_RDONLY, 0);
@@ -1020,8 +1043,7 @@ void probe_main(unsigned long *sp)
             }
         }
         {
-            /* And the mount over the device that went answers as it did:
-               nothing of the new stick reaches it. */
+            /* Nothing of the new stick reaches the mount over the old one. */
             int fd = syscall3(SYS_OPEN, (long)"/k/hello.txt", O_RDONLY, 0);
             char one[8];
 
@@ -1053,11 +1075,7 @@ void probe_main(unsigned long *sp)
             if (fd < 0) {
                 fail_with("creating the file to be killed", fd);
             }
-            /* The same bytes over and over: the machine is killed somewhere
-               in here, and a volume that filled up would say nothing about
-               what a stop leaves behind. The token comes after the first
-               round, so what the machine is killed in the middle of is a
-               write and not a mount. */
+            /* The same bytes over and over, until the machine is killed. */
             for (;;) {
                 syscall3(SYS_LSEEK, fd, 0, 0);
                 write_pattern(fd, 4096);

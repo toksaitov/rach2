@@ -24,6 +24,7 @@
 
 #define DISK1_SECTORS 40960u /* the suite's second disk, 20 MiB */
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -33,12 +34,14 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
     syscall3(SYS_WRITE, 1, (long)"\n", 1);
 }
 
+/** Print "DISKSPROBE FAIL: " and `why`, and exit 1. */
 static void fail(const char *why)
 {
     syscall3(SYS_WRITE, 1, (long)"DISKSPROBE FAIL: ", 17);
@@ -46,6 +49,7 @@ static void fail(const char *why)
     syscall2(SYS_EXIT, 1, 0);
 }
 
+/** stat(2) of `path`: 0 when it exists, or a negated errno. */
 static int xstat(const char *path)
 {
     char st[KSTAT_SIZE];
@@ -54,6 +58,7 @@ static int xstat(const char *path)
     return syscall2(SYS_STAT, (long)path, (long)st);
 }
 
+/** Whether `s` begins with `prefix`. */
 static int starts(const char *s, const char *prefix)
 {
     while (*prefix) {
@@ -64,8 +69,9 @@ static int starts(const char *s, const char *prefix)
     return 1;
 }
 
-/* The sector count on the `/proc/disk` line `disk N TRANSPORT PORT SECTORS`,
-   for the disk numbered `n`, or 0 when there is no such line. */
+/** The sector count on the `/proc/disk` line `disk N TRANSPORT PORT SECTORS`
+ * for the disk numbered `n` on `transport` port `port`, each number a single
+ * digit, or 0 when there is no such line. */
 static unsigned disk_sectors(const char *text, int n, const char *transport, int port)
 {
     char want[24];
@@ -101,6 +107,8 @@ static unsigned disk_sectors(const char *text, int n, const char *transport, int
     return 0;
 }
 
+/** Write `text` to the new file `path`, read it back and compare; fail,
+ * naming `path`, at the first step that does not hold. */
 static void write_and_read_back(const char *path, const char *text)
 {
     static char back[64];
@@ -134,6 +142,8 @@ void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
 
+/** Check the two disks' lines in /proc/disk and their nodes, then mount a
+ * partition of each, write a file and read it back, and unmount both. */
 void probe_main(unsigned long *sp)
 {
     static char text[2048];

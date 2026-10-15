@@ -9,7 +9,9 @@
  * same volume with mtools and the check. `fatwriteprobe crash` rewrites
  * two hundred files until the machine is killed, and says so before it
  * starts, which is where the suite kills it; `fatwriteprobe repair` mounts
- * what that left, which runs the check, and counts what survived.
+ * what that left, which runs the check, and counts what survived. A second
+ * argument names the type to mount in place of `vfat`, as the exfat suite
+ * runs the same modes with `exfat`.
  *
  * Prints "FATWRITE OK (mode)" or "FATWRITE FAIL: reason". Freestanding;
  * direct system calls (probe.h).
@@ -45,6 +47,7 @@
 
 #define STATFS_MAGIC_VFAT 0x4d44
 
+/** exit(2) with `status`; does not return. */
 static void sys_exit(int status) __attribute__((noreturn));
 static void sys_exit(int status)
 {
@@ -52,6 +55,7 @@ static void sys_exit(int status)
     __builtin_unreachable();
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -61,12 +65,14 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
     syscall3(SYS_WRITE, 1, (long)"\n", 1);
 }
 
+/** Print "FATWRITE FAIL: " and `why`, and exit 1. */
 static void fail(const char *why) __attribute__((noreturn));
 static void fail(const char *why)
 {
@@ -75,7 +81,8 @@ static void fail(const char *why)
     sys_exit(1);
 }
 
-/* A failure with its number, for the boot's log. */
+/** A failure with its number, for the boot's log: print "FATWRITE FAIL: ",
+ * `why` and `n` in parentheses, and exit 1. */
 static void fail_n(const char *why, int n) __attribute__((noreturn));
 static void fail_n(const char *why, int n)
 {
@@ -99,6 +106,7 @@ static void fail_n(const char *why, int n)
     sys_exit(1);
 }
 
+/** Whether `needle` occurs in the string `hay`. */
 static int contains(const char *hay, const char *needle)
 {
     const char *h;
@@ -118,8 +126,9 @@ static int contains(const char *hay, const char *needle)
     return 0;
 }
 
-/* Whether the getdents64 records in buf[0..n) name `name`: the records are
-   binary, so they are walked by d_reclen rather than read as text. */
+/** Whether the getdents64 records in the first `n` bytes of `b` name `name`:
+ * the records are binary, so they are walked by d_reclen rather than read as
+ * text. */
 static int dirents_contain(const unsigned char *b, int n, const char *name)
 {
     int at = 0;
@@ -145,6 +154,7 @@ static int dirents_contain(const unsigned char *b, int n, const char *name)
     return 0;
 }
 
+/** stat(2) of `path`: 0 when it exists, or a negated errno. */
 static int xstat(const char *path)
 {
     char st[KSTAT_SIZE];
@@ -157,11 +167,14 @@ static int xstat(const char *path)
  * is how the exfat suite runs the same modes on its volume. */
 static const char *fs_type = "vfat";
 
+/** mount(2) of `src` on `target` as `fs_type` with `flags` and `data`: 0, or
+ * a negated errno. */
 static int do_mount(const char *src, const char *target, unsigned flags, const char *data)
 {
     return syscall5(SYS_MOUNT, (long)src, (long)target, (long)fs_type, (int)flags, (long)data);
 }
 
+/** Sleep `ms` milliseconds. */
 static void sleep_ms(int ms)
 {
     long ts[2];
@@ -171,6 +184,7 @@ static void sleep_ms(int ms)
     syscall2(SYS_NANOSLEEP, (long)ts, 0);
 }
 
+/** Reap `pid` and return its wait status; fail when waitpid does. */
 static int wait_status(int pid)
 {
     int status = 0;
@@ -183,7 +197,8 @@ static int wait_status(int pid)
 
 static unsigned char buf[4096];
 
-/* Read a whole /proc file into buf as text. */
+/** Read the /proc file `path` into `buf` as text, with one read of at most
+ * 4095 bytes; fail when it does not open or read. */
 static void read_text(const char *path)
 {
     int fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
@@ -208,6 +223,7 @@ static void read_text(const char *path)
 static unsigned char pattern[65536];
 static unsigned char back[65536];
 
+/** Fill `pattern`: byte i is (i * 31 + 7) mod 256. */
 static void fill_pattern(void)
 {
     unsigned i;
@@ -217,6 +233,8 @@ static void fill_pattern(void)
     }
 }
 
+/** Write `n` bytes of `data` to `path`, created or truncated: 0, a negated
+ * errno, or -1 for a short write. */
 static int write_file(const char *path, const void *data, int n)
 {
     int fd = syscall3(SYS_OPEN, (long)path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
@@ -230,6 +248,8 @@ static int write_file(const char *path, const void *data, int n)
     return rc == n ? 0 : (rc < 0 ? rc : -1);
 }
 
+/** Read the file `path` into `dst`, at most `cap` bytes: the bytes read, or
+ * a negated errno. */
 static int read_file(const char *path, void *dst, int cap)
 {
     int fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
@@ -245,6 +265,8 @@ static int read_file(const char *path, void *dst, int cap)
     return n < 0 ? n : total;
 }
 
+/** The `write` mode: mount the volume writable, make each file of the set,
+ * and unmount it. */
 static void mode_write(void)
 {
     int fd;
@@ -283,6 +305,9 @@ static void mode_write(void)
     puts("FATWRITE OK (wrote)");
 }
 
+/** The `readback` mode: mount the volume read-only and require every byte
+ * and name the write mode left, the long name under its folded case and, on
+ * vfat, its short alias, and the renamed and removed names gone. */
 static void mode_readback(void)
 {
     int n, i;
@@ -329,6 +354,12 @@ static void mode_readback(void)
     puts("FATWRITE OK (read back)");
 }
 
+/**
+ * The `crash` mode: mount the volume writable, print FATWRITE WRITING, and
+ * rewrite the files f000 to f199, 1 KiB each, round and round until the
+ * machine is killed, so that the kill lands inside a write sequence however
+ * long the harness waits.
+ */
 static void mode_crash(void)
 {
     int i;
@@ -340,8 +371,6 @@ static void mode_crash(void)
         fail("the writable mount for the crash");
     }
     puts("FATWRITE WRITING");
-    /* Rewritten until the machine is killed, so the kill lands inside a
-     * write sequence however long the harness waits. */
     for (i = 0;; i = (i + 1) % 200) {
         name[0] = '/';
         name[1] = 'f';
@@ -362,6 +391,8 @@ static void mode_crash(void)
     }
 }
 
+/** The `repair` mode: mount what the crash left, which checks the volume, and
+ * require a file of the crash sequence in its root. */
 static void mode_repair(void)
 {
     int fd, n, count = 0;
@@ -406,6 +437,8 @@ void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
 
+/** Run the mode argv[1] names, `write` when none, on the type argv[2] names,
+ * `vfat` when none, and exit 0. */
 void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];

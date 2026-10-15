@@ -275,11 +275,11 @@ rach2/sys/usb/xhci.c:xhci_submit lines 161 a hardware sequence, the registers wr
 tests/auxvprobe.c:probe_main lines 122 a probe, one sequence of steps in the order the log records them
 
 tests/bigfileprobe.c:write_mode complexity 26 a probe, one sequence of steps in the order the log records them
-tests/bigfileprobe.c:write_mode lines 121 a probe, one sequence of steps in the order the log records them
+tests/bigfileprobe.c:write_mode lines 119 a probe, one sequence of steps in the order the log records them
 
 tests/bootprobe.c:_start complexity 42 a probe, one sequence of steps in the order the log records them
-tests/bootprobe.c:_start lines 356 a probe, one sequence of steps in the order the log records them
-tests/bootprobe.c:auth_case lines 171 a probe, one sequence of steps in the order the log records them
+tests/bootprobe.c:_start lines 334 a probe, one sequence of steps in the order the log records them
+tests/bootprobe.c:auth_case lines 161 a probe, one sequence of steps in the order the log records them
 
 tests/conloadprobe.c:probe_main lines 109 a probe, one sequence of steps in the order the log records them
 
@@ -514,9 +514,9 @@ tests/intrprobe.c:count_for_named nesting 5 a probe, one sequence of steps in th
 tests/jobprobe.c:_start lines 164 a probe, one sequence of steps in the order the log records them
 
 tests/krffsprobe.c:probe_main complexity 71 a probe, one sequence of steps in the order the log records them
-tests/krffsprobe.c:probe_main lines 305 a probe, one sequence of steps in the order the log records them
+tests/krffsprobe.c:probe_main lines 290 a probe, one sequence of steps in the order the log records them
 tests/krffsprobe.c:write_rows complexity 84 a probe, one sequence of steps in the order the log records them
-tests/krffsprobe.c:write_rows lines 392 a probe, one sequence of steps in the order the log records them
+tests/krffsprobe.c:write_rows lines 379 a probe, one sequence of steps in the order the log records them
 
 tests/lagprobe.c:run_mounted complexity 30 a probe, one sequence of steps in the order the log records them
 tests/lagprobe.c:run_mounted lines 103 a probe, one sequence of steps in the order the log records them
@@ -540,9 +540,9 @@ tests/memprobe.c:probe_main complexity 31 a probe, one sequence of steps in the 
 tests/modeprobe.c:probe_main lines 125 a probe, one sequence of steps in the order the log records them
 
 tests/mountprobe.c:rows_flags complexity 28 a probe, one sequence of steps in the order the log records them
-tests/mountprobe.c:rows_flags lines 107 a probe, one sequence of steps in the order the log records them
+tests/mountprobe.c:rows_flags lines 105 a probe, one sequence of steps in the order the log records them
 tests/mountprobe.c:rows_lifetime complexity 30 a probe, one sequence of steps in the order the log records them
-tests/mountprobe.c:rows_lifetime lines 138 a probe, one sequence of steps in the order the log records them
+tests/mountprobe.c:rows_lifetime lines 131 a probe, one sequence of steps in the order the log records them
 tests/mountprobe.c:rows_placing complexity 26 a probe, one sequence of steps in the order the log records them
 tests/mountprobe.c:rows_reading complexity 26 a probe, one sequence of steps in the order the log records them
 

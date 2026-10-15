@@ -11,13 +11,15 @@
  * `dup2` and `F_DUPFD`, and a close-on-exec descriptor is dropped by
  * `execve`; a working directory inside it is busy too; the refused flags
  * and targets answer EINVAL, a bind of a device ENOTDIR, a long target
- * ENAMETOOLONG, a rename across
- * EXDEV, and the mount point refuses `rmdir`, `unlink` and `rename` with
- * EBUSY; an unprivileged caller gets EPERM; `..` climbs out of the mount
- * physically; and /proc/mounts and /proc/filesystems say what is mounted.
+ * ENAMETOOLONG, a rename across EXDEV, and the mount point refuses `rmdir`,
+ * `unlink` and `rename` with EBUSY; an unprivileged caller gets EPERM; `..`
+ * climbs out of the mount physically; /proc/mounts and /proc/filesystems
+ * say what is mounted; and the kernel's record of an unmount counts
+ * descriptions, not descriptors. `mountprobe claim` runs the boot
+ * partition's rows alone (`rows_claim`).
  *
- * Prints "MOUNTPROBE OK" or "MOUNTPROBE FAIL: reason". Freestanding; int
- * 0x80.
+ * Prints "MOUNTPROBE OK" or "MOUNTPROBE FAIL: reason", or CLAIMPROBE in the
+ * `claim` mode. Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
@@ -54,6 +56,7 @@
 
 #define STATFS_MAGIC_VFAT 0x4d44
 
+/** exit(2) with `status`; does not return. */
 static void sys_exit(int status) __attribute__((noreturn));
 static void sys_exit(int status)
 {
@@ -61,6 +64,7 @@ static void sys_exit(int status)
     __builtin_unreachable();
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -70,14 +74,16 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write `s` and a newline to standard output. */
 static void puts(const char *s)
 {
     syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
     syscall3(SYS_WRITE, 1, (long)"\n", 1);
 }
 
-static int claim_mode;
+static int claim_mode; /* the `claim` mode, whose lines say CLAIMPROBE */
 
+/** Print the mode's FAIL line with `why`, and exit 1. */
 static void fail(const char *why) __attribute__((noreturn));
 static void fail(const char *why)
 {
@@ -90,6 +96,7 @@ static void fail(const char *why)
     sys_exit(1);
 }
 
+/** Whether `needle` occurs in the string `hay`. */
 static int contains(const char *hay, const char *needle)
 {
     const char *h;
@@ -109,8 +116,9 @@ static int contains(const char *hay, const char *needle)
     return 0;
 }
 
-/* Whether the getdents64 records in buf[0..n) name `name`: the records are
-   binary, so they are walked by d_reclen rather than read as text. */
+/** Whether the getdents64 records in the first `n` bytes of `b` name `name`:
+ * the records are binary, so they are walked by d_reclen rather than read as
+ * text. */
 static int dirents_contain(const unsigned char *b, int n, const char *name)
 {
     int at = 0;
@@ -136,6 +144,7 @@ static int dirents_contain(const unsigned char *b, int n, const char *name)
     return 0;
 }
 
+/** stat(2) of `path`: 0 when it exists, or a negated errno. */
 static int xstat(const char *path)
 {
     char st[KSTAT_SIZE];
@@ -144,11 +153,14 @@ static int xstat(const char *path)
     return syscall2(SYS_STAT, (long)path, (long)st);
 }
 
+/** mount(2) of `src` on `target` as vfat with `flags` and `data`: 0, or a
+ * negated errno. */
 static int do_mount(const char *src, const char *target, unsigned flags, const char *data)
 {
     return syscall5(SYS_MOUNT, (long)src, (long)target, (long)"vfat", (int)flags, (long)data);
 }
 
+/** Sleep `ms` milliseconds. */
 static void sleep_ms(int ms)
 {
     long ts[2];
@@ -158,6 +170,7 @@ static void sleep_ms(int ms)
     syscall2(SYS_NANOSLEEP, (long)ts, 0);
 }
 
+/** Reap `pid` and return its wait status; fail when waitpid does. */
 static int wait_status(int pid)
 {
     int status = 0;
@@ -173,7 +186,8 @@ static unsigned char buf[4096];
 #define SRC "/dev/disk0p2"
 #define MNT "/mnt"
 
-/* Read a whole /proc file into buf as text. */
+/** Read the /proc file `path` into `buf` as text, with one read of at most
+ * 4095 bytes; fail when it does not open or read. */
 static void read_text(const char *path)
 {
     int fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
@@ -190,12 +204,18 @@ static void read_text(const char *path)
     syscall1(SYS_CLOSE, fd);
 }
 
+/**
+ * The rows that place and refuse mounts: a writable mount, on which a
+ * directory descriptor follows a rename of its directory, since the type
+ * rebuilds the path from the volume; its removal; the refused flags,
+ * targets, sources and options; and the read-only mount the later rows use,
+ * with the second mounts it makes busy.
+ */
 static void rows_placing(void)
 {
     int fd, d;
 
-    /* F_DUPFD on the root, before any mount, so a failure later is the
-       mount's and not the table's. */
+    /* F_DUPFD on the root first, so a later failure is the mount's. */
     fd = syscall3(SYS_OPEN, (long)"/hello", O_RDONLY, 0);
     d = syscall3(SYS_FCNTL, fd, F_DUPFD, 10);
     if (fd < 0 || d != 10) {
@@ -209,8 +229,7 @@ static void rows_placing(void)
     if (do_mount(SRC, MNT, 0, 0) != 0) {
         fail("a writable mount is placed");
     }
-    /* A directory descriptor on the mount follows a rename of its
-       directory: the type rebuilds the path from the volume. */
+    /* A directory descriptor on the mount follows its directory's rename. */
     {
         int rfd, xfd;
 
@@ -275,6 +294,16 @@ static void rows_placing(void)
     }
 }
 
+/**
+ * The rows of the read-only mount: its file stats, opens and reads, writes
+ * of every kind are EROFS (a symlink onto a name that exists is EEXIST
+ * first), getdents64 refuses a buffer too small for one record with EINVAL
+ * and still lists the directory after, statfs is vfat's, `..` climbs out,
+ * a rename across is EXDEV, and the mount point is EBUSY. The refused
+ * getdents64 must give the description back: a read that kept it would
+ * leave every later read of the directory, through this descriptor or a
+ * copy of it, waiting for a lock nothing releases.
+ */
 static void rows_reading(void)
 {
     int fd, n;
@@ -312,10 +341,7 @@ static void rows_reading(void)
     if (fd < 0) {
         fail("open the mount root");
     }
-    /* A buffer too small for one record answers EINVAL and gives the
-       description back: a read that kept it would leave every later read of
-       this file, through this descriptor or a copy of it, waiting for a lock
-       nothing releases. */
+    /* A buffer too small for one record is EINVAL and keeps no lock. */
     if (syscall3(SYS_GETDENTS64, fd, (long)buf, 1) != -EINVAL) {
         fail("getdents64 with a buffer too small for one record is EINVAL");
     }
@@ -361,6 +387,7 @@ static void rows_reading(void)
     }
 }
 
+/** /proc/mounts lists the mount, and /proc/filesystems the types. */
 static void rows_proc(void)
 {
     read_text("/proc/mounts");
@@ -374,7 +401,19 @@ static void rows_proc(void)
     }
 }
 
-/* Every way a description can outlive its opener keeps the mount busy. */
+/**
+ * Every way a description can outlive its opener keeps the mount busy: a
+ * descriptor and its duplicates, one a forked child inherited, and a working
+ * directory inside the mount.
+ *
+ * A close-on-exec descriptor is dropped by execve: the child holds the only
+ * description and execs `stdintest`, which blocks on the console and stays
+ * alive; the mount is busy until the exec and free after it, while the child
+ * still runs, which is what shows execve did it. The parent waits for the
+ * child's open through a pipe before it tries the unmount, since a first try
+ * before the open would find the mount free and the row would then judge the
+ * scheduler and not execve.
+ */
 static void rows_lifetime(void)
 {
     int fd, d1, d2, d3, dfd, pid;
@@ -417,8 +456,7 @@ static void rows_lifetime(void)
     if (syscall2(SYS_UMOUNT2, (long)MNT, 0) != -EBUSY) {
         fail("umount2 with the last duplicate open is EBUSY");
     }
-    /* A forked child inherits the description; it must close it in its own
-       process before the mount is free. */
+    /* A description a forked child inherited holds the mount too. */
     pid = syscall1(SYS_FORK, 0);
     if (pid < 0) {
         fail("fork");
@@ -443,13 +481,7 @@ static void rows_lifetime(void)
         fail("the mount again after umount2");
     }
 
-    /* A close-on-exec descriptor is dropped by execve: the child holds the
-       only description and execs `stdintest`, which blocks on the console
-       and stays alive; the mount is busy until the exec and free after it,
-       while the child still runs, which is what shows execve did it. The
-       parent waits for the child's open through a pipe before it tries the
-       unmount, since a first try before the open would find the mount free
-       and the row would then judge the scheduler and not execve. */
+    /* execve drops a close-on-exec descriptor: the mount is free after it. */
     opened[0] = -1; /* the kernel fills the pair through the cast address */
     opened[1] = -1;
     if (syscall1(SYS_PIPE, (long)opened) != 0) {
@@ -517,6 +549,9 @@ static void rows_lifetime(void)
     }
 }
 
+/** The rows of umount2's flags and the permanent mounts, an unprivileged
+ * caller, noexec, a program run from the mount, and a target too long for
+ * the mount's record, which claims nothing. */
 static void rows_flags(void)
 {
     char *av[2];
@@ -559,8 +594,7 @@ static void rows_flags(void)
         fail("umount2 before the noexec rows");
     }
 
-    /* A noexec mount refuses a program its mode would allow: umask=000
-       gives every file 0777. */
+    /* A noexec mount refuses a program umask=000 makes 0777. */
     if (do_mount(SRC, MNT, MS_RDONLY | MS_NOEXEC, "umask=000") != 0) {
         fail("the noexec mount");
     }
@@ -602,8 +636,7 @@ static void rows_flags(void)
         fail("umount2 after running from the mount");
     }
 
-    /* A target whose path does not fit the record is refused before
-       anything is claimed. */
+    /* A target too long for the record is refused, and claims nothing. */
     {
         static char longname[80];
         int i;
@@ -632,10 +665,10 @@ void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
 
-/* `mountprobe claim`, on a disk whose entry 0 is the FAT volume: the boot
-   partition mounted read-only refuses the raw writer with EBUSY, which is
-   the bootctl conflict, and takes it again once the mount is gone; a
-   mount over the writer's range, by either of its names, is EBUSY. */
+/** `mountprobe claim`, on a disk whose entry 0 is the FAT volume: the boot
+ * partition mounted read-only refuses the raw writer with EBUSY, which is
+ * the bootctl conflict, and takes it again once the mount is gone; a
+ * mount over the writer's range, by either of its names, is EBUSY. */
 static void rows_claim(void)
 {
     int fd;
@@ -675,10 +708,10 @@ static void rows_claim(void)
     sys_exit(0);
 }
 
-/* The unmount record counts descriptions, not descriptors: one open and
-   three duplicates, then a duplication that fails on a table filled to a
-   limit of sixteen and one refused past the limit, end in a record of one
-   open and one release, read back from the kernel log. */
+/** The unmount record counts descriptions, not descriptors: one open and
+ * three duplicates, then a duplication that fails on a table filled to a
+ * limit of sixteen and one refused past the limit, end in a record of one
+ * open and one release, read back from the kernel log. */
 static void rows_record(void)
 {
     static char log[16384 + 1];
@@ -697,8 +730,7 @@ static void rows_record(void)
         syscall3(SYS_FCNTL, fd, F_DUPFD, 3) < 3) {
         fail("the duplicates for the record row");
     }
-    /* The descriptor limit lowered to sixteen, the table filled to it, and a
-       duplication that must fail there without taking a reference. */
+    /* A failed duplication on a full table takes no reference. */
     rl[0] = 16;
     rl[1] = 0;
     rl[2] = 1024;
@@ -747,6 +779,8 @@ static void rows_record(void)
     fail("the unmount record does not say 1 opens, 1 releases");
 }
 
+/** Run the `claim` rows when argv[1] begins with c; otherwise run every
+ * other group of rows in order and remove the mount points. */
 void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];

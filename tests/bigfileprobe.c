@@ -1,5 +1,5 @@
 /**
- * Files past 4 GiB: `bigfileprobe MODE NODE TYPE [ARG]`.
+ * Files past 4 GiB: `bigfileprobe MODE NODE TYPE ARG`; `sparse` ignores ARG.
  *
  * The probe mounts NODE at `/big` as TYPE and runs one of:
  *
@@ -47,6 +47,7 @@ typedef unsigned long long u64;
 #define BLOCK 4096u
 #define CHUNK (1u << 20)
 
+/** exit(2) with `status`; does not return. */
 static void sys_exit(int status) __attribute__((noreturn));
 static void sys_exit(int status)
 {
@@ -54,6 +55,7 @@ static void sys_exit(int status)
     __builtin_unreachable();
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -64,13 +66,14 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Write `s` to standard output. */
 static void put(const char *s)
 {
     syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
 }
 
-/* `v / 10` by shifting and subtracting, since a freestanding program has no
-   64-bit division; the remainder goes to `*rem`. */
+/** `v / 10` by shifting and subtracting, since an i386 64-bit division
+ * calls libgcc, which a probe does not link; the remainder goes to `*rem`. */
 static u64 div10(u64 v, unsigned *rem)
 {
     u64 q = 0, r = 0;
@@ -88,6 +91,7 @@ static u64 div10(u64 v, unsigned *rem)
     return q;
 }
 
+/** Write `v` in decimal. */
 static void put_u64(u64 v)
 {
     char digits[24];
@@ -102,12 +106,13 @@ static void put_u64(u64 v)
     put(digits + i);
 }
 
-/* The clock in seconds: times(2) answers ticks of a hundredth. */
+/** The clock in seconds: times(2) answers ticks of a hundredth. */
 static unsigned now(void)
 {
     return (unsigned)syscall1(SYS_TIMES, 0) / 100u;
 }
 
+/** Print "BIGFILE FAIL: " and `why`, and exit 1. */
 static void fail(const char *why) __attribute__((noreturn));
 static void fail(const char *why)
 {
@@ -117,6 +122,7 @@ static void fail(const char *why)
     sys_exit(1);
 }
 
+/** Print "BIGFILE FAIL: ", `why` and the answer `n` it got, and exit 1. */
 static void fail_with(const char *why, long long n) __attribute__((noreturn));
 static void fail_with(const char *why, long long n)
 {
@@ -132,6 +138,7 @@ static void fail_with(const char *why, long long n)
     sys_exit(1);
 }
 
+/** Whether the strings `a` and `b` are equal. */
 static int streq(const char *a, const char *b)
 {
     while (*a && *a == *b) {
@@ -141,6 +148,7 @@ static int streq(const char *a, const char *b)
     return *a == *b;
 }
 
+/** The decimal number at the start of `s`, 0 when it has none. */
 static u64 parse(const char *s)
 {
     u64 v = 0;
@@ -152,7 +160,7 @@ static u64 parse(const char *s)
     return v;
 }
 
-/* llseek(2): the resolved offset, or a negative errno. */
+/** llseek(2): the resolved offset, or a negative errno. */
 static long long seek(int fd, long long off, int whence)
 {
     long long result = 0;
@@ -161,7 +169,7 @@ static long long seek(int fd, long long off, int whence)
     return rc < 0 ? rc : result;
 }
 
-/* fstat's st_size, or a negative errno. */
+/** fstat's st_size, or a negative errno. */
 static long long size_of(int fd)
 {
     unsigned char st[KSTAT_SIZE];
@@ -181,6 +189,7 @@ static long long size_of(int fd)
     return (long long)size;
 }
 
+/** ftruncate to the 64-bit `length`: 0, or a negated errno. */
 static int ftruncate64(int fd, u64 length)
 {
     return probe_ftruncate64(fd, (long long)length);
@@ -188,7 +197,7 @@ static int ftruncate64(int fd, u64 length)
 
 static unsigned char chunk[CHUNK] __attribute__((aligned(4096)));
 
-/* Fill `chunk` with the numbers of the blocks from `first` on. */
+/** Fill `chunk` with the numbers of the blocks from `first` on. */
 static void fill(u64 first)
 {
     unsigned i;
@@ -200,8 +209,8 @@ static void fill(u64 first)
     }
 }
 
-/* Whether `len` bytes of `chunk` hold the numbers of the blocks from
-   `first`; `len` is whole blocks. */
+/** Whether `len` bytes of `chunk` hold the numbers of the blocks from
+ * `first`; `len` is whole blocks. */
 static int holds(u64 first, unsigned len)
 {
     unsigned i;
@@ -214,6 +223,8 @@ static int holds(u64 first, unsigned len)
     return 1;
 }
 
+/** Read `len` bytes into `chunk`; fail, naming `what`, at an error or the
+ * end. */
 static void read_full(int fd, unsigned len, const char *what)
 {
     unsigned done = 0;
@@ -228,6 +239,7 @@ static void read_full(int fd, unsigned len, const char *what)
     }
 }
 
+/** Write `len` bytes of `chunk`; fail, naming `what`, on an error. */
 static void write_full(int fd, unsigned len, const char *what)
 {
     unsigned done = 0;
@@ -242,7 +254,8 @@ static void write_full(int fd, unsigned len, const char *what)
     }
 }
 
-/* One block read at byte `at` and checked. */
+/** Read the block at byte `at` and require its number; fail, naming `what`,
+ * otherwise. */
 static void check_block(int fd, u64 at, const char *what)
 {
     if (seek(fd, (long long)at, SEEK_SET) != (long long)at) {
@@ -254,9 +267,9 @@ static void check_block(int fd, u64 at, const char *what)
     }
 }
 
-/* The disk layer's command count from /proc/disk into `out`, a total
-   since the boot that outgrows an int on a long run; -1 when the file
-   cannot be read or has no such line. */
+/** The disk layer's command count from /proc/disk into `out`, a total since
+ * the boot that outgrows an int on a long run: 0, or -1 when the file cannot
+ * be read or has no such line. */
 static int disk_commands(u64 *out)
 {
     static char text[2048];
@@ -291,7 +304,7 @@ static int disk_commands(u64 *out)
     return -1;
 }
 
-/*
+/**
  * The write mode: the file is written whole, read back, shrunk to three
  * quarters and grown by a mebibyte. The shrink frees a quarter of the file,
  * and the disk's commands around it are counted: a driver that frees its
@@ -302,8 +315,7 @@ static int disk_commands(u64 *out)
 static void write_mode(u64 mib)
 {
     u64 total = mib << 20, done = 0, three_quarters = (total >> 2) * 3;
-    /* The 4 GiB line, where a 32-bit offset would wrap; a smaller file, for
-       a measurement, is probed at its middle instead. */
+    /* The 4 GiB line, or the middle of a file too small to reach it. */
     u64 line = total > ((u64)1 << 32) + CHUNK ? (u64)1 << 32 : total >> 1;
     int fd, fd2, fd3;
     u64 before, after;
@@ -353,8 +365,7 @@ static void write_mode(u64 mib)
     check_block(fd, line, "the block at the 4 GiB line");
     check_block(fd, line - BLOCK, "the block before the 4 GiB line");
     check_block(fd, total - 3 * CHUNK + BLOCK, "a block near the end");
-    /* Two descriptions: the second open has its own offset, the duplicate
-       shares the first's. */
+    /* The second open has its own offset; the duplicate shares the first's. */
     fd2 = syscall3(SYS_OPEN, (long)"/big/big.bin", O_RDONLY, 0);
     if (fd2 < 0) {
         fail_with("a second open", fd2);
@@ -424,6 +435,9 @@ static void write_mode(u64 mib)
     syscall1(SYS_CLOSE, fd);
 }
 
+/** The verify mode: the file the write mode of `mib` MiB left, three
+ * quarters of it and a mebibyte, read whole, every block's number checked,
+ * and a read at its end that returns 0. */
 static void verify_mode(u64 mib)
 {
     u64 total = ((mib << 20) >> 2) * 3 + CHUNK, done = 0;
@@ -454,6 +468,9 @@ static void verify_mode(u64 mib)
     syscall1(SYS_CLOSE, fd);
 }
 
+/** The sparse mode: a mebibyte written astride the 4 GiB line of a new file,
+ * read back, a block of the hole read as zeros, and the file truncated to a
+ * block past the line and removed. */
 static void sparse_mode(void)
 {
     u64 line = (u64)1 << 32, at = line - CHUNK / 2;
@@ -500,6 +517,8 @@ static void sparse_mode(void)
     syscall1(SYS_UNLINK, (long)"/big/sparse.bin");
 }
 
+/** The limit mode: a one-byte write at `offset` of a new file must fail with
+ * -EFBIG and leave the file empty. */
 static void limit_mode(u64 offset)
 {
     int fd = syscall3(SYS_OPEN, (long)"/big/limit.bin", O_RDWR | O_CREAT | O_TRUNC, 0644);
@@ -529,6 +548,8 @@ void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
 
+/** Mount argv[2] at /big as the type argv[3], run the mode argv[1] names with
+ * argv[4], unmount, and print "BIGFILE OK (mode)". */
 void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];
