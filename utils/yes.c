@@ -1,9 +1,14 @@
-/** Print a line forever: the joined arguments, or `y`. The loop ends when
-    the output does: a write that fails, as when the reader has gone, is
-    the one way out, and the status says so. */
+/** yes: print a line over and over until the output fails. */
 
 #include <stdio.h>
 
+/**
+ * Print the operands joined by single spaces, or `y` when there are none, as
+ * one line, again and again, until a write fails; stdio finds the failure
+ * when it writes out a full buffer, and the status is then 1. A pipe whose
+ * reader has gone raises `SIGPIPE` on that write, which ends the program
+ * first unless the signal is ignored.
+ */
 int main(int argc, char *argv[])
 {
     int i;
