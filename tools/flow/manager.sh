@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# manager.sh: run the manager's check, then the next thirty minutes after it
+# manager.sh: run the manager's check, then the next twenty minutes after it
 # ends, until STATE/stop exists.
 #
 # Usage: manager.sh [-s STATE]
@@ -8,7 +8,7 @@
 # A check is one headless Claude Code session in the clone this script is in,
 # with the prompt `manager.txt` followed by the last ten lines of the
 # manager's log, so that each check knows what the ones before it found and
-# started. The loop starts one check at a time and counts the thirty minutes
+# started. The loop starts one check at a time and counts the twenty minutes
 # from its end, so two checks never overlap. A check still running after
 # forty minutes, which leaves room for the ten minutes an incident waits, is
 # stopped with every process in its group, and the log says so.
@@ -20,7 +20,7 @@
 # after the check that is running. The checks run at high effort, as a
 # worker's sessions do.
 
-PERIOD=1800
+PERIOD=1200
 DEADLINE=2400
 
 main()
