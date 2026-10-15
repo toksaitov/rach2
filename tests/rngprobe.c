@@ -1,19 +1,23 @@
 /**
- * Exercises trusted entropy and the fail-closed RNG policy.
+ * rngprobe: trusted entropy, and the random devices' refusal when there is
+ * none.
  *
- * The probe adapts to the boot's entropy source, so it passes on both a CPU
- * with RDSEED/RDRAND and one without. It asks getrandom() for bytes. If that
- * succeeds the source is trusted, and the probe verifies that /dev/urandom
- * returns bytes that vary across reads and pass a loose monobit sanity (a
- * stuck/zero stream fails). If getrandom() returns -EIO the source is
- * untrusted, and the probe verifies the fail-closed policy is consistent:
- * /dev/urandom and /dev/random each open and answer a read with -EIO, while
- * getrandom(GRND_INSECURE) still returns bytes (the best-effort escape hatch).
- * The default suite boots `-cpu max` and takes the first branch; `tests/run
- * noentropy` boots a CPU with neither instruction and takes the second.
+ * First the kernel's `kcpu_id`, compiled into the probe from kcpu.c, must
+ * give leaf 7, subleaf 0, as a direct cpuid does; tests/system/rng_mutate.sh
+ * puts a fault there. Then the probe follows the boot's entropy source, so
+ * that it passes on a processor with RDSEED and RDRAND and on one without.
+ * It asks getrandom() for bytes. If that succeeds the source is trusted, and
+ * /dev/urandom must return bytes that vary across reads and pass a loose
+ * monobit test, which a stuck or zero stream fails. If getrandom() returns
+ * -EIO the source is untrusted, and the devices must refuse: /dev/urandom
+ * and /dev/random each open and answer a read with -EIO, while
+ * getrandom(GRND_INSECURE) still returns its best-effort bytes. The default
+ * suite boots `-cpu max` and takes the first branch; `tests/run noentropy`
+ * boots a processor with neither instruction and takes the second.
  *
- * Prints "RNGPROBE OK (trusted)" / "RNGPROBE OK (fail-closed)" /
- * "RNGPROBE FAIL". Freestanding; direct system calls (probe.h).
+ * Prints "RNGPROBE START", then "RNGPROBE OK (trusted)", "RNGPROBE OK
+ * (fail-closed)" or "RNGPROBE FAIL (why)". Freestanding; direct system calls
+ * (probe.h).
  */
 
 #include "probe.h"
@@ -24,28 +28,34 @@
 #define GRND_INSECURE 0x0004u
 #define EIO           5
 
+/** exit(2); does not return. */
 static void sys_exit(int status)
 {
     syscall3(SYS_EXIT, status, 0, 0);
     __builtin_unreachable();
 }
+/** open(2) with no mode. */
 static int sys_open(const char *p, int flags)
 {
     return syscall3(SYS_OPEN, (long)p, flags, 0);
 }
+/** close(2). */
 static int sys_close(int fd)
 {
     return syscall3(SYS_CLOSE, fd, 0, 0);
 }
+/** read(2). */
 static int sys_read(int fd, void *b, int n)
 {
     return syscall3(SYS_READ, fd, (long)b, n);
 }
+/** getrandom(2). */
 static int getrandom(void *b, int n, unsigned f)
 {
     return syscall3(SYS_GETRANDOM, (long)b, n, (int)f);
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -54,11 +64,13 @@ static size_t strlen(const char *s)
     }
     return n;
 }
+/** Write the string `s`, which ends in a newline, to standard output. */
 static void puts(const char *s)
 {
     syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
 }
 
+/** The number of bits set in the `n` bytes at `b`. */
 static int popcount_buf(const unsigned char *b, int n)
 {
     int i, bits = 0;
@@ -71,6 +83,7 @@ static int popcount_buf(const unsigned char *b, int n)
     return bits;
 }
 
+/** Whether the `n` bytes at `a` and `b` are the same. */
 static int bufs_equal(const unsigned char *a, const unsigned char *b, int n)
 {
     int i;
@@ -101,7 +114,15 @@ static int refuses_read(const char *path)
     return r == -EIO;
 }
 
-/** Compare the production helper with a direct leaf-7, subleaf-zero query. */
+/**
+ * Whether the kernel's `kcpu_id`, asked for leaf 7, gives what a direct cpuid
+ * of leaf 7, subleaf 0 gives. Returns 1 without the comparison on a processor
+ * whose highest leaf is below 7.
+ *
+ * The cpuid of leaf 0 just before leaves part of the vendor string, which is
+ * not zero, in ECX, so that a `kcpu_id` that does not load ECX with subleaf 0
+ * asks for another subleaf.
+ */
 static int cpuid_subleaf_zero(void)
 {
     uint32_t want_a = 7, want_b, want_c = 0, want_d;
@@ -117,6 +138,7 @@ static int cpuid_subleaf_zero(void)
     return got_a == want_a && got_b == want_b && got_c == want_c && got_d == want_d;
 }
 
+/** The probe's entry: the cpuid check, then the branch getrandom() picks. */
 PROBE_START void _start(void)
 {
     unsigned char a[32], b[32];
@@ -132,7 +154,6 @@ PROBE_START void _start(void)
     g = getrandom(a, (int)sizeof(a), 0);
 
     if (g == (int)sizeof(a)) {
-        /* Trusted: /dev/urandom must return bytes that vary and look random. */
         fd = sys_open("/dev/urandom", O_RDONLY);
         if (fd < 0) {
             puts("RNGPROBE FAIL (urandom open, trusted)\n");
@@ -148,9 +169,7 @@ PROBE_START void _start(void)
             puts("RNGPROBE FAIL (urandom did not vary)\n");
             sys_exit(1);
         }
-        /* Loose monobit over 512 bits (a + b): a uniform stream is ~256 ones; a
-         * stuck/zero stream is far off. Tolerate a wide band to avoid
-         * flakiness. */
+        /* 512 bits hold about 256 ones; a wide band, so a fair run passes. */
         bits = popcount_buf(a, (int)sizeof(a)) + popcount_buf(b, (int)sizeof(b));
         if (bits < 180 || bits > 332) {
             puts("RNGPROBE FAIL (monobit out of range)\n");
@@ -161,8 +180,6 @@ PROBE_START void _start(void)
     }
 
     if (g == -EIO) {
-        /* Fail-closed: both devices must refuse as well, and GRND_INSECURE
-         * must still deliver bytes (the best-effort escape hatch). */
         if (!refuses_read("/dev/urandom")) {
             puts("RNGPROBE FAIL (urandom not fail-closed)\n");
             sys_exit(1);

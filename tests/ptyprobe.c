@@ -1,6 +1,6 @@
 /**
- * Exercises the pseudo-terminal pair (/dev/ptmx + /dev/pts/N) from user space,
- * the way a network login drives it.
+ * ptyprobe: the pseudo-terminal pair, /dev/ptmx and /dev/pts/N, as a network
+ * login drives it.
  *
  * * open("/dev/ptmx") returns a master; TIOCGPTN reports the slave index N
  *   (exact request 0x80045430); TIOCSPTLCK(0) unlocks the pair.
@@ -16,18 +16,22 @@
  *   rather than the slave's own ops, and `stty` over a network login is
  *   nothing but these three. TCGETS2 and TCSETSW2, the termios2 requests GNU
  *   libc's tcgetattr, tcsetattr and isatty make, read the same settings with
- *   the speeds the baud code names, and install them.
+ *   the speeds of the baud code, and install them.
  * * master write -> the slave reads the cooked line, and the echo comes back
  *   on the master; slave write -> the master reads the ONLCR output.
+ * * Closing the master gives two canonical readers blocked on the slave the
+ *   end of input, and again on a second read, with SIGHUP ignored and then
+ *   with it blocked; a line queued before the close is read in short reads,
+ *   and the end of input after it stays.
  *
- * The child verifies the ioctls and the cooked read and reports via exit
- * status; the parent verifies the echo and output it reads back on the master.
- * The child writes a readiness line before the parent writes anything, so the
- * echo the parent checks is never settled while the child has ECHO off, and
- * every wait here is bounded (a non-blocking master, a reaped-within-a-limit
- * child) so a stalled half fails the test rather than hanging it.
- * Prints "PTYPROBE OK" or "PTYPROBE FAIL". Freestanding; direct system calls
- * (probe.h).
+ * The child checks the ioctls and the cooked read and reports through its
+ * exit status; the parent checks the echo and the output it reads back on
+ * the master. The child writes a readiness line before the parent writes
+ * anything, so that the echo the parent checks is never settled while the
+ * child has ECHO off, and every wait here is bounded (a non-blocking master,
+ * a child reaped within a limit), so that a stalled half fails the test
+ * rather than hanging it. Prints "PTYPROBE START", then "PTYPROBE OK" or
+ * "PTYPROBE FAIL (why)". Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
@@ -53,9 +57,9 @@
 #define CBAUD  0010017 /* c_cflag's baud code */
 #define B38400 0000017
 
-/* The kernel termios (sys/tty/n_tty.h): four flag words, a line discipline
-   byte, and nineteen control characters; the termios2 adds the input and
-   output speeds. */
+/* The kernel termios (rach2/sys/tty/n_tty.h): four flag words, a line
+ * discipline byte and nineteen control characters; the termios2 of TCGETS2
+ * (rach2/sys/syscall.c) adds the input and output speeds. */
 #define TIO_CFLAG   8
 #define TIO_LFLAG   12
 #define TIO_SIZE    36
@@ -71,44 +75,54 @@
 #define WIFEXITED(s)   (((s) & 0x7f) == 0)
 #define WEXITSTATUS(s) (((s) >> 8) & 0xff)
 
+/** exit(2); does not return. */
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, status);
     __builtin_unreachable();
 }
+/** fork(2). */
 static int sys_fork(void)
 {
     return syscall1(SYS_FORK, 0);
 }
+/** setsid(2). */
 static int sys_setsid(void)
 {
     return syscall1(SYS_SETSID, 0);
 }
+/** open(2) with no mode. */
 static int sys_open(const char *p, int flags)
 {
     return syscall3(SYS_OPEN, (long)p, flags, 0);
 }
+/** close(2). */
 static int sys_close(int fd)
 {
     return syscall1(SYS_CLOSE, fd);
 }
+/** read(2). */
 static int sys_read(int fd, void *b, int n)
 {
     return syscall3(SYS_READ, fd, (long)b, n);
 }
+/** write(2). */
 static int sys_write(int fd, const void *b, int n)
 {
     return syscall3(SYS_WRITE, fd, (long)b, n);
 }
+/** ioctl(2). */
 static int sys_ioctl(int fd, int req, void *arg)
 {
     return syscall3(SYS_IOCTL, fd, req, (long)arg);
 }
+/** waitpid(2). */
 static int sys_waitpid(int pid, int *st, int o)
 {
     return syscall3(SYS_WAITPID, pid, (long)st, o);
 }
 
+/** The length of the string `s`. */
 static size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -117,6 +131,7 @@ static size_t strlen(const char *s)
     }
     return n;
 }
+/** Write the string `s`, which ends in a newline, to standard output. */
 static void puts(const char *s)
 {
     sys_write(1, s, (int)strlen(s));
@@ -170,7 +185,10 @@ static int contains(const char *hay, int len, const char *needle)
     return 0;
 }
 
-/** Append a decimal number and suffix to a path prefix. */
+/**
+ * Write `prefix`, the non-negative `number` in decimal and `suffix` into
+ * `path`, ended with a NUL; `path` must have room for all of it.
+ */
 static void numbered_path(char *path, const char *prefix, int number, const char *suffix)
 {
     char digits[12];
@@ -306,7 +324,12 @@ static int slave_rows(int slave)
     return 0;
 }
 
-/** Open a fresh canonical pair with both endpoints blocking. */
+/**
+ * Open a new pair and unlock it, both ends blocking and the slave canonical,
+ * as a new pair starts. Returns 1 with the ends in `*master` and `*slave`, or
+ * 0 when a step fails; an end that was not opened is then negative, and the
+ * caller closes each end that was.
+ */
 static int open_pair(int *master, int *slave)
 {
     int index = -1, unlock = 0;
@@ -324,8 +347,10 @@ static int open_pair(int *master, int *slave)
 }
 
 /**
- * Require the child to reach its read wait before closing the master.
- * The child closes its master and reads; it has no other blocking operation.
+ * Whether the reader `pid` reaches state S in /proc/PID/stat within two
+ * seconds. A reader closes its master and reads, and has nothing else to
+ * sleep on, so state S means it is blocked in its read. Returns 0 when it is
+ * a zombie, its stat file cannot be opened, or the time runs out.
  */
 static int reader_blocked(int pid)
 {
@@ -351,7 +376,10 @@ static int reader_blocked(int pid)
     return 0;
 }
 
-/** Reap every child, including a reader left blocked by a faulty kernel. */
+/**
+ * Kill and reap each of the two readers in `pids` not yet reaped, whose pid
+ * is still positive, such as one a faulty kernel left blocked in its read.
+ */
 static void stop_readers(int *pids)
 {
     int i, status;
@@ -365,14 +393,19 @@ static void stop_readers(int *pids)
 }
 
 /**
- * Close the master with two canonical readers blocked and require EOF in both.
- * SIGHUP is ignored or blocked by the whole foreground group, including us.
- * Each child reads again to check that EOF persists after the marker is gone.
+ * Close the master of a new pair with two canonical readers blocked on the
+ * slave, and require the end of input in both, on a first read and again on
+ * a second. Returns 1 when both readers saw it, else 0.
+ *
+ * The slave becomes the probe's controlling terminal, and closing the master
+ * sends SIGHUP to its foreground group, the probe and both readers. The probe
+ * ignores SIGHUP, or with `block_hup` sets its default action and blocks
+ * it, before it forks, so that the readers inherit the setting and the
+ * signal ends none of them. The setting stays in the probe on return.
  */
 static int hangup_readers(int block_hup)
 {
-    /* The kernel's sigaction: the handler, SIG_IGN, the flags, the restorer
-       and the 64-bit mask. */
+    /* The kernel's sigaction: handler (SIG_IGN), flags, restorer, mask. */
     struct {
         unsigned long handler, flags, restorer;
         unsigned long long mask;
@@ -435,7 +468,12 @@ done:
     return ok;
 }
 
-/** Drain a queued line in short reads, then require the persistent EOF. */
+/**
+ * On a new pair, require a non-blocking read of the empty slave to give
+ * -EAGAIN; then queue the line "kept", close the master, and require the
+ * slave to give the line in two short reads and then the end of input on
+ * each read, blocking and non-blocking. Returns 1 when all of it held.
+ */
 static int hangup_queued(void)
 {
     int master = -1, slave = -1, nb = 1, ok = 0;
@@ -471,6 +509,20 @@ done:
     return ok;
 }
 
+/**
+ * The probe's entry: the pair, the window size, the child on the slave, the
+ * round trip, and the hangup rows.
+ *
+ * The child, a new session leader, makes the slave its controlling terminal,
+ * runs its rows, writes "ready", reads the cooked line the parent sends and
+ * writes "world"; when a row fails, it exits with that row's status, which
+ * the parent prints. The parent puts the master in non-blocking mode first,
+ * so that every wait is a bounded number of naps and a child that stalls
+ * before it writes fails the test instead of hanging it; it waits for
+ * "ready", writes "hello", which the slave reads cooked and the master gets
+ * back as the echo, and then reads the echo and "world" back on the master.
+ * The slave's path is built for an index below 100.
+ */
 PROBE_START void _start(void)
 {
     int master, slave, ptn, unlock, pid, status, nb;
@@ -498,7 +550,6 @@ PROBE_START void _start(void)
         sys_exit(1);
     }
 
-    /* Build "/dev/pts/<ptn>" (ptn is a small non-negative index). */
     p = 0;
     path[p++] = '/';
     path[p++] = 'd';
@@ -533,8 +584,6 @@ PROBE_START void _start(void)
         sys_exit(1);
     }
     if (pid == 0) {
-        /* Child: a new session leader makes the slave its controlling terminal,
-         * then reads the cooked line the parent sends on the master. */
         char sbuf[32];
         int sn, sid;
 
@@ -553,7 +602,6 @@ PROBE_START void _start(void)
         if (sn != 0) {
             sys_exit(sn);
         }
-        /* The line the parent waits for before it writes. */
         if (sys_write(slave, "ready\n", 6) != 6) {
             sys_exit(21); /* the readiness line was not written whole */
         }
@@ -568,11 +616,6 @@ PROBE_START void _start(void)
         sys_exit(0);
     }
 
-    /* Parent: drive the master. Writing the line cooks it into the slave (and
-     * echoes it back to us); the child then writes "world" on the slave, which
-     * we read back here. The master is put in non-blocking mode first: every
-     * wait below is then a bounded number of naps, and a child that stalls
-     * before writing fails this test instead of hanging it. */
     nb = 1;
     if (sys_ioctl(master, FIONBIO, &nb) < 0) {
         puts("PTYPROBE FAIL (the master would not go non-blocking)\n");
@@ -588,13 +631,9 @@ PROBE_START void _start(void)
             }
             continue;
         }
-        /* Nothing yet: no slave open, nothing written, or a child that has
-         * died. Wait a little and look again, within the bound. */
         nap_ms(20);
     }
     if (!contains(mbuf, n, "ready")) {
-        /* A child that failed one of its own checks has exited with the status
-         * that says which; one still running is reported as itself. */
         status = -1;
         if (!reap_within(pid, &status, 2000)) {
             puts("PTYPROBE FAIL (the child never reported its terminal ready)\n");
@@ -619,8 +658,6 @@ PROBE_START void _start(void)
         sys_exit(1);
     }
 
-    /* Drain everything the master accumulated: the echo of "hello" plus the
-     * slave's "world" output. */
     for (i = 0; i < 100 && n < (int)sizeof(mbuf) - 1; i++) {
         int r = sys_read(master, mbuf + n, (int)sizeof(mbuf) - 1 - n);
         if (r > 0) {
