@@ -1,30 +1,28 @@
 /*
- * ata_hosttest.c: the ATA driver against a model of a drive.
+ * ata_hosttest.c: the ATA driver of rach2/sys/block/ata.c against a model of
+ * a drive, for the driver's two paths meeting on one channel.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  *
- * The disk suites boot this driver against QEMU's IDE, where a command
- * completes when the emulator's main loop runs, and the machine's disk is
- * behind the AHCI driver. What a boot cannot show is the driver's two
+ * The disk suites boot the driver on QEMU's IDE, where a command completes
+ * when the emulator's main loop runs. A boot does not show the driver's two
  * paths meeting on one channel: a caller that owns the channel and sleeps
  * for its DMA command, and a caller that cannot sleep, from a page fault,
  * arriving on the same channel while that command is in flight. The
  * emulator shows a drive in a DMA transfer as ready with DRQ set and BSY
  * clear, and a second command written to it then is refused or answered
- * with the first command's data; the self-build suite under KVM in a full
- * pool found both (entries 102 and 103).
+ * with the first command's data.
  *
- * So the driver is compiled natively and given a model of a drive through
- * the port interface it now reaches registers by. The model answers its
- * registers from a phase, moves the phase on as the emulator would, after a
- * number of status reads, when the driver pauses off the device, or when the
- * owner sleeps, and counts what the driver did: the status reads, the
- * commands it refused, and the data port reads that landed in another
- * command's transfer. Every row names what the driver must do, and the
- * check is on what it returned, what the model counted, and the sectors.
- * The model also answers IDENTIFY with words a row sets, for the refusal
- * of a drive whose logical sector is not 512 bytes, which QEMU cannot
- * present.
+ * The test compiles ata.c natively with ATA_HOSTTEST and gives it a model of
+ * a drive through its port interface (`ata_set_io`). The model answers its
+ * registers from a phase, and moves the phase on as the emulator would:
+ * after a number of status reads, when the driver pauses off the device, or
+ * when the owner sleeps. It counts what the driver did: the status reads,
+ * the commands written while the drive was busy, and the data port reads
+ * that landed in another command's transfer. A row checks what the driver
+ * returned, what the model counted, and the sectors. The model also answers
+ * IDENTIFY with words a row sets, for the refusal of a drive whose logical
+ * sector is not 512 bytes, which QEMU cannot present.
  */
 
 extern int printf(const char *fmt, ...);
@@ -45,22 +43,23 @@ static int fails;
         }                                           \
     } while (0)
 
-/* ---- what the driver reaches for outside itself ---- */
-
 /* Interrupts as the test's flag says, not the host's register. */
 static int masked;
 static int in_syscall;
 
+/** Whether interrupts are on: not `masked`. */
 int ata_hosttest_interrupts_on(void)
 {
     return !masked;
 }
 
+/** Whether the caller is in a system call: `in_syscall`. */
 int proc_in_syscall(void)
 {
     return in_syscall;
 }
 
+/** Mask interrupts, and return whether they were masked. */
 uint32_t kirq_save(void)
 {
     uint32_t old = (uint32_t)masked;
@@ -75,6 +74,8 @@ uint32_t kirq_save(void)
 static int dma_written_not_started;
 static int unmasked_between;
 
+/** Restore the mask `kirq_save` returned, noting an unmasking while a DMA
+ *  command waits for its engine's start. */
 void kirq_restore(uint32_t flags)
 {
     masked = (int)flags;
@@ -86,6 +87,8 @@ void kirq_restore(uint32_t flags)
 static char last_record[256];
 static int records;
 
+/** The kernel log: keep the last record's format in `last_record`, and count
+ *  the records. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
     unsigned int i;
@@ -101,13 +104,14 @@ void klog(int level, const char *subsystem, const char *format, ...)
 
 const char diskcmd_policy_banner[] = "host test";
 
-/* The boot line, which names no option here. */
+/** No option is on the boot line. */
 int kcmdline_has(const char *flag)
 {
     (void)flag;
     return 0;
 }
 
+/** The disk command policy allows every command. */
 int diskcmd_allowed(uint8_t command)
 {
     (void)command;
@@ -119,30 +123,37 @@ block_device_t *block0;
 /* The scheduler runs unless a row stops it, as a shutdown does. */
 static int scheduler_on = 1;
 
+/** Whether the scheduler runs: `scheduler_on`. */
 int sched_is_enabled(void)
 {
     return scheduler_on;
 }
 
+/* The polls and the ticks of a sleeper's wait the driver counted. */
 static uint32_t polls;
 static uint32_t wait_ticks;
 
+/** Count a tick of a sleeper's wait in `wait_ticks`. */
 void block_count_wait_tick(void)
 {
     wait_ticks++;
 }
 
+/** Count a command; no row reads the count. */
 void block_count_command(void)
 {}
 
+/** Count a flush; no row reads the count. */
 void block_count_flush(void)
 {}
 
+/** Count a poll in `polls`. */
 void block_count_poll(void)
 {
     polls++;
 }
 
+/** Count a batch of `sectors`; no row reads the count. */
 void block_count_batch(uint32_t sectors)
 {
     (void)sectors;
@@ -150,6 +161,7 @@ void block_count_batch(uint32_t sectors)
 
 #include "../../rach2/sys/pci.h"
 
+/** No PCI IDE controller is found. */
 bool pci_find_device(uint8_t class_code, uint8_t subclass, pci_device_t *out)
 {
     (void)class_code;
@@ -158,6 +170,7 @@ bool pci_find_device(uint8_t class_code, uint8_t subclass, pci_device_t *out)
     return false;
 }
 
+/** Configuration space reads 0. */
 uint8_t pci_read_config8(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset)
 {
     (void)bus;
@@ -167,6 +180,7 @@ uint8_t pci_read_config8(uint8_t bus, uint8_t device, uint8_t function, uint8_t 
     return 0;
 }
 
+/** Configuration space reads 0. */
 uint32_t pci_read_config32(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset)
 {
     (void)bus;
@@ -176,6 +190,7 @@ uint32_t pci_read_config32(uint8_t bus, uint8_t device, uint8_t function, uint8_
     return 0;
 }
 
+/** Nothing to enable. */
 void pci_enable_bus_master(pci_device_t *dev)
 {
     (void)dev;
@@ -183,6 +198,7 @@ void pci_enable_bus_master(pci_device_t *dev)
 
 #include "../../rach2/sys/arch/x86/isr.h"
 
+/** Register no handler. */
 void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *name)
 {
     (void)vector;
@@ -192,6 +208,7 @@ void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *nam
 
 #include "../../rach2/sys/block/disk.h"
 
+/** The disk registry makes no record. */
 struct disk *disk_register(block_device_t *dev, const char *transport, int location,
                            const volatile uint16_t *identify)
 {
@@ -204,8 +221,6 @@ struct disk *disk_register(block_device_t *dev, const char *transport, int locat
 
 #include "../../rach2/sys/proc/wait_queue.h"
 
-/* ---- the model ---- */
-
 #define IO   0x1F0
 #define CTRL 0x3F6
 #define BM   0xC000
@@ -213,6 +228,9 @@ struct disk *disk_register(block_device_t *dev, const char *transport, int locat
 #define SECTORS 256u
 #define SECTOR  512u
 
+/* The drive's phase: idle, busy before or after a PIO sector, in a PIO data
+   phase (DRQ), a DMA command waiting for the bus master's start or running,
+   or busy with a flush. */
 enum phase {
     IDLE,
     PIO_READ_BUSY,
@@ -230,20 +248,27 @@ static int reads_in_phase;
 static int complete_on_pause; /* the pause at which a running DMA completes */
 static int dma_on_reads;      /* a running DMA also completes after the status reads */
 static int pauses;
+/* The task-file registers 0 to 7, and each one's value before its last write,
+   which a 48-bit command reads as the high bytes. */
 static uint8_t cur[8], prev[8];
 static uint64_t cmd_lba;
 static uint32_t sectors_left;
 static int cmd_write;
 static int bm_active, bm_intr;
+/* The drive's volatile image, and the media, which a flush makes equal. */
 static uint8_t disk[SECTORS][SECTOR];
 static uint8_t durable[SECTORS][SECTOR];
 static int flush_fails;
 static uint32_t status_reads, refused, garbage_reads, garbage_writes, commands;
 static uint32_t dma_writes, flushes, pio_write_sectors;
+/* Whether interrupts were masked at the DMA command, at the engine's start,
+   at the PIO command and at the last PIO sector written; -1 for not yet. */
 static int masked_at_dma_cmd, masked_at_start, masked_at_pio_cmd, masked_at_last_data;
 static int dma_fails;      /* the running DMA ends in ERR */
 static int error_pending;  /* ERR shows in the status until the next command */
 static int drive_at_flush; /* the drive register's value at the last flush */
+/* What runs once while the owner sleeps, as the other process, and the
+   sleeps. */
 static void (*on_sleep)(void);
 static int sleeps;
 static uint32_t reads_at_sleep;      /* the status reads when the owner came to sleep */
@@ -255,6 +280,8 @@ static int identifying;              /* the data phase is IDENTIFY's, not a sect
    a physical address the host cannot follow; defined below the driver. */
 static uint8_t *model_bounce(void);
 
+/** The status register for the phase: DRDY and DSC when idle, with ERR
+ *  while an error is pending; BSY in a busy phase; DRQ in a data phase. */
 static uint8_t model_status(void)
 {
     switch (phase) {
@@ -270,8 +297,14 @@ static uint8_t model_status(void)
 }
 
 /**
- * Complete the pending command; only a successful flush updates durable media.
- * Reads and data transfers use the volatile drive image until then.
+ * Move a busy phase on, as the drive completes its work.
+ *
+ * A PIO read goes to its data phase, a PIO write to its next sector or to
+ * idle, and a flush or a DMA to idle. A flush copies the volatile image to
+ * the durable media unless `flush_fails`; only a flush does. A DMA moves its
+ * sectors between the image and the channel's bounce buffer unless
+ * `dma_fails`, and ends the bus master's transfer with its interrupt. A
+ * failed flush or DMA leaves ERR pending.
  */
 static void model_advance(void)
 {
@@ -316,6 +349,15 @@ static void model_advance(void)
     reads_in_phase = 0;
 }
 
+/**
+ * Read port `port` of the model.
+ *
+ * A status read is counted, and after `answer_after` reads in a busy phase,
+ * or in a running DMA when `dma_on_reads`, it moves the phase on; with -1 it
+ * never does. The alternate status reads the status uncounted, the bus
+ * master's status gives its active and interrupt bits, and a task-file
+ * register reads back what was written.
+ */
 static uint8_t model_in8(uint16_t port)
 {
     if (port == IO + 7) {
@@ -340,6 +382,14 @@ static uint8_t model_in8(uint16_t port)
     return 0;
 }
 
+/**
+ * Take `command`, written to the command register.
+ *
+ * A command written while BSY or DRQ is set is refused and counted in
+ * `refused`. Any other clears a pending error, takes its count and LBA from
+ * the task-file registers, and enters its phase; a command the model does
+ * not know fails the test.
+ */
 static void model_command(uint8_t command)
 {
     uint8_t status = model_status();
@@ -419,6 +469,14 @@ static void model_command(uint8_t command)
     }
 }
 
+/**
+ * Write `value` to port `port` of the model.
+ *
+ * The command register takes a command, and a task-file register keeps its
+ * last two values. Bit 0 of the bus master's command starts a waiting DMA,
+ * and clearing it stops the engine. Bit 2 written to the bus master's
+ * status clears its interrupt.
+ */
 static void model_out8(uint16_t port, uint8_t value)
 {
     if (port == IO + 7) {
@@ -451,6 +509,9 @@ static void model_out8(uint16_t port, uint8_t value)
     }
 }
 
+/** Read `words` from the data port: in a PIO read's data phase the next
+ *  sector or the IDENTIFY words, and otherwise 0xEE bytes, counted in
+ *  `garbage_reads`. */
 static void model_ins16(uint16_t port, void *buffer, uint32_t words)
 {
     uint32_t i;
@@ -478,6 +539,9 @@ static void model_ins16(uint16_t port, void *buffer, uint32_t words)
     reads_in_phase = 0;
 }
 
+/** Write `words` to the data port: in a PIO write's data phase the next
+ *  sector, after which the drive is busy, and otherwise nothing, counted in
+ *  `garbage_writes`. */
 static void model_outs16(uint16_t port, const void *buffer, uint32_t words)
 {
     if (port != IO || phase != PIO_WRITE_DRQ) {
@@ -495,35 +559,39 @@ static void model_outs16(uint16_t port, const void *buffer, uint32_t words)
     reads_in_phase = 0;
 }
 
+/** A 32-bit port write, which the model drops. */
 static void model_out32(uint16_t port, uint32_t value)
 {
     (void)port;
     (void)value;
 }
 
+/* The port interface the driver is given by `ata_set_io`. */
 static const struct ata_io model_io = {model_in8, model_out8, model_out32, model_ins16,
                                        model_outs16};
 
-/* The machine's ports, which the driver names as its default and this
-   test never reaches. */
+/** The machine's byte read, the driver's default, which no row reaches. */
 uint8_t inb(uint16_t port)
 {
     (void)port;
     return 0;
 }
 
+/** The machine's byte write, which no row reaches. */
 void outb(uint16_t port, uint8_t value)
 {
     (void)port;
     (void)value;
 }
 
+/** The machine's 32-bit write, which no row reaches. */
 void outd(uint16_t port, uint32_t value)
 {
     (void)port;
     (void)value;
 }
 
+/** The machine's string read, which no row reaches. */
 void insw(uint16_t port, void *buffer, uint32_t words)
 {
     (void)port;
@@ -531,6 +599,7 @@ void insw(uint16_t port, void *buffer, uint32_t words)
     (void)words;
 }
 
+/** The machine's string write, which no row reaches. */
 void outsw(uint16_t port, const void *buffer, uint32_t words)
 {
     (void)port;
@@ -538,7 +607,8 @@ void outsw(uint16_t port, const void *buffer, uint32_t words)
     (void)words;
 }
 
-/* The driver's pause: the emulator's main loop gets in here. */
+/** The driver's pause off the device, where the emulator's main loop runs:
+ *  the pause numbered `complete_on_pause` completes a running DMA. */
 void ata_hosttest_paused(void)
 {
     pauses++;
@@ -547,8 +617,13 @@ void ata_hosttest_paused(void)
     }
 }
 
-/* The owner's sleep: the other process runs, and the emulator completes
-   what is pending until the sleeper's condition holds. */
+/**
+ * The owner's sleep: `on_sleep` runs once, as the other process, and the
+ * emulator then completes what is pending until `cond` holds.
+ *
+ * Records the status reads at the sleep in `reads_at_sleep`, and fails the
+ * test when `cond` does not hold within 1000 steps.
+ */
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     int spins = 0;
@@ -575,16 +650,19 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     return 0;
 }
 
+/** Wake nobody: the sleep above ends by itself. */
 void wq_wake_all(wait_queue_t *wq)
 {
     (void)wq;
 }
 
+/** Nothing to set up. */
 void wait_queue_init(wait_queue_t *wq)
 {
     (void)wq;
 }
 
+/** No one waits. */
 int wq_active(const wait_queue_t *wq)
 {
     (void)wq;
@@ -593,13 +671,15 @@ int wq_active(const wait_queue_t *wq)
 
 #include "../../rach2/sys/block/ata.c"
 
+/** The channel's bounce buffer. */
 static uint8_t *model_bounce(void)
 {
     return channels[0].bounce;
 }
 
-/* ---- the rows ---- */
-
+/** Reset the model to an idle drive whose sectors hold their pattern on the
+ *  media too, a busy phase lasting `answer` status reads (-1 for ever), and
+ *  the caller in a system call with interrupts on. */
 static void model_reset(int answer)
 {
     uint32_t s, i;
@@ -638,6 +718,8 @@ static void model_reset(int answer)
     k_memcpy(durable, disk, sizeof(durable));
 }
 
+/** Return 1 when `got` holds sector `lba`'s pattern, byte i being
+ *  lba * 7 + i, and 0 otherwise. */
 static int sector_is(const uint8_t *got, uint32_t lba)
 {
     uint32_t i;
@@ -650,6 +732,7 @@ static int sector_is(const uint8_t *got, uint32_t lba)
     return 1;
 }
 
+/** Return 1 when `needle` occurs in `text`, and 0 otherwise. */
 static int contains(const char *text, const char *needle)
 {
     uint32_t i, j;
@@ -668,8 +751,9 @@ static uint8_t owner_buf[8 * SECTOR];
 static uint8_t polled_buf[SECTOR];
 static int polled_rc;
 
-/* The other process: a page fault's read on the channel, with interrupts
-   off and no way to sleep, while the owner's DMA is in flight. */
+/** The other process: a page fault's read of sector 200 on the channel,
+ *  with interrupts off and no way to sleep, while the owner's DMA is in
+ *  flight; the DMA completes at the third pause from here. */
 static void polled_read_while_owner_sleeps(void)
 {
     int was_masked = masked;
@@ -684,15 +768,15 @@ static void polled_read_while_owner_sleeps(void)
     in_syscall = was_in_syscall;
 }
 
-/* The tick, twice, while the owner sleeps. */
+/** The tick, twice, while the owner sleeps. */
 static void two_ticks_while_asleep(void)
 {
     ata_tick();
     ata_tick();
 }
 
-/* Ten seconds of ticks while the owner sleeps, which a loaded host can
-   take for one write. */
+/** Ten seconds of ticks while the owner sleeps, which a loaded host can
+ *  take for one write. */
 static void ten_seconds_while_asleep(void)
 {
     int i;
@@ -702,7 +786,7 @@ static void ten_seconds_while_asleep(void)
     }
 }
 
-/* One tick past thirty seconds while the owner sleeps. */
+/** One tick past thirty seconds while the owner sleeps. */
 static void thirty_seconds_while_asleep(void)
 {
     int i;
@@ -736,11 +820,13 @@ static void wait_bound_rows(struct ata_drive *d)
 }
 
 /**
- * Check DMA writes at 512 bytes, 4 KiB, 32 KiB and across the bounce-buffer
- * boundary, in both address forms. DMA completes while the caller sleeps;
- * a PIO sector or flush also completes after 512 status reads. This models
- * a delayed completion without judging host time. A DMA drive is supplied;
- * controller discovery and delivery of real interrupts need a guest boot.
+ * Check DMA writes of 512 bytes, 4 KiB, 32 KiB and across the bounce
+ * buffer's end, in both address forms, LBA28 and LBA48.
+ *
+ * A DMA completes only while the caller sleeps, and a busy phase, a PIO
+ * sector or a flush, after 512 status reads: a delayed completion modelled
+ * without judging host time. The drive is set up as a DMA drive here;
+ * finding the controller and taking real interrupts need a guest boot.
  */
 static void write_rate_rows(struct ata_drive *d)
 {
@@ -788,7 +874,7 @@ static void write_rate_rows(struct ata_drive *d)
     d->dev.sector_count = SECTORS;
 }
 
-/** Compare every byte of a submitted transfer with its media image. */
+/** Return 1 when the `count` bytes at `a` and at `b` are equal. */
 static int bytes_equal(const uint8_t *a, const uint8_t *b, uint32_t count)
 {
     uint32_t i;
@@ -802,9 +888,13 @@ static int bytes_equal(const uint8_t *a, const uint8_t *b, uint32_t count)
 }
 
 /**
- * A successful write survives loss of the volatile drive cache at return.
- * Exercise sleeping DMA, owned PIO and polled PIO in both address forms.
- * A failed flush leaves the old durable bytes and must fail the write.
+ * Check that a write that returns success is on the media, so that it
+ * survives the loss of the drive's volatile cache.
+ *
+ * Path 0 is a PIO write by a caller that takes the channel, 1 a sleeping
+ * DMA write, and 2 a polled write with interrupts off while the channel is
+ * owned; each runs in both address forms. A failed flush fails the write,
+ * after the whole data transfer, and leaves the media as they were.
  */
 static void durability_rows(struct ata_drive *d)
 {
@@ -862,14 +952,16 @@ static void durability_rows(struct ata_drive *d)
 }
 
 /**
- * IDENTIFY and the logical sector size (entry 11 of milestone 50). Word 106
- * with its valid bit, bit 14, and bit 12 set, and words 117 and 118 giving
- * 2048 words a sector, is a drive whose logical sector is 4096 bytes, which
- * the block layer, counting in 512-byte sectors, cannot serve: it is refused
- * by name. The same words with bit 12 clear are a 512-byte drive, taken with
- * the 48-bit count of words 100 to 103, and bit 12 without the valid bit
- * says nothing of the sector. The AHCI driver's refusal of the same word is
- * ahci_hosttest's; tests/host/ata_identify_mutate.sh drops this driver's.
+ * Check IDENTIFY and the logical sector size.
+ *
+ * Word 106 with its valid bit, bit 14, and bit 12 set, and words 117 and 118
+ * giving 2048 words a sector, is a drive whose logical sector is 4096 bytes,
+ * which the block layer, counting in 512-byte sectors, cannot serve: it is
+ * refused by name. The same words with bit 12 clear are a 512-byte drive,
+ * taken with the 48-bit count of words 100 to 103, and bit 12 without the
+ * valid bit says nothing of the sector. The AHCI driver's refusal of the
+ * same word is ahci_hosttest's; tests/host/ata_identify_mutate.sh drops this
+ * driver's.
  */
 static void identify_rows(void)
 {
@@ -910,6 +1002,39 @@ static void identify_rows(void)
           "bit 12 of word 106 without its valid bit says nothing of the sector");
 }
 
+/**
+ * Set the primary channel's master up on the model as a DMA drive of 256
+ * sectors, run the rows, and return 1 when any check failed.
+ *
+ * The rows, in order:
+ *
+ * 1. The owner's DMA read reads the status eight times after the engine's
+ *    start and then sleeps, and the emulator completes it in the sleep; the
+ *    command and the engine's start are written with interrupts off.
+ * 2. A caller that cannot sleep reads an idle channel through the data port,
+ *    with interrupts off throughout.
+ * 3. The two paths on one channel: with the owner's DMA in flight and the
+ *    drive showing DRQ, a polled read arrives. The emulator completes the
+ *    DMA only at the third pause off the device, as on a loaded host; the
+ *    polled read waits for the drive to go idle and reads its own sector,
+ *    and the DMA completes with its own.
+ * 4. A drive that never answers: the polled wait's bound in status reads,
+ *    and the record it leaves.
+ * 5. A data-port write by the owner of a drive without DMA runs with
+ *    interrupts off from its command to its last sector.
+ * 6. The owner's DMA fails, and a polled read runs inside its sleep, whose
+ *    own command clears the drive's error bits; the owner's answer is still
+ *    the failure.
+ * 7. A write's flush selects its own drive again: the writer is the slave,
+ *    and the polled read inside its sleep selected the master.
+ * 8. With the scheduler stopped, as at a shutdown, a caller in a system call
+ *    polls rather than sleep on a channel it might wait on for ever.
+ * 9. The tick counts a sleeper's wait: two ticks while the owner sleeps are
+ *    two in `disk-wait-ticks`.
+ *
+ * Then the rows of IDENTIFY, of the sleeping wait's bound, of the write
+ * rate and of durability.
+ */
 int main(void)
 {
     struct ata_drive *d = &drives[0];
@@ -935,8 +1060,6 @@ int main(void)
     d->dev.write = ata_write;
     d->dev.drvdata = d;
 
-    /* 1. The owner's DMA read: eight status reads, then the sleep, in
-          which the emulator completes it. */
     model_reset(2);
     dma_on_reads = 0;
     rc = ata_read(&d->dev, 100, 8, owner_buf);
@@ -951,8 +1074,6 @@ int main(void)
           "the DMA command and its engine's start are written with interrupts off");
     CHECK(refused == 0 && garbage_reads == 0, "the owner's read met no other command");
 
-    /* 2. A caller that cannot sleep, on an idle channel: the data port,
-          with interrupts off throughout. */
     model_reset(2);
     masked = 1;
     in_syscall = 0;
@@ -961,12 +1082,6 @@ int main(void)
     CHECK(sleeps == 0, "a polled read does not sleep");
     CHECK(refused == 0 && garbage_reads == 0, "a polled read of an idle drive is answered");
 
-    /* 3. The two paths on one channel: the owner's DMA in flight, the
-          drive showing DRQ, and a polled read arriving. The emulator's
-          completion needs the driver off the device, as on a loaded host,
-          and comes at the third pause; the polled read waits for the drive
-          idle and then reads its own sector, and the owner's DMA completes
-          with its own. */
     model_reset(2);
     dma_on_reads = 0;
     on_sleep = polled_read_while_owner_sleeps;
@@ -981,8 +1096,6 @@ int main(void)
     CHECK(garbage_reads == 0, "no data port read landed in the DMA's transfer");
     CHECK(pauses >= 3, "the polled read paused off the device while the DMA ran");
 
-    /* 4. A drive that never answers: the polled wait's bound, and the
-          record it leaves. */
     model_reset(-1);
     masked = 1;
     in_syscall = 0;
@@ -994,8 +1107,6 @@ int main(void)
     CHECK(records == 1 && contains(last_record, "no answer to a polled wait"),
           "a polled wait that gives up records it");
 
-    /* 5. A data-port write from the owner of a drive without DMA runs
-          with interrupts off from its command to its last sector. */
     model_reset(2);
     d->dma = 0;
     k_memset(polled_buf, 0x5A, SECTOR);
@@ -1008,9 +1119,6 @@ int main(void)
     CHECK(refused == 0 && garbage_writes == 0, "the data-port write was taken as written");
     d->dma = 1;
 
-    /* 6. The owner's DMA fails, and a polled read runs inside its sleep,
-          whose own command clears the drive's error bits: the owner's
-          answer is still the failure. */
     model_reset(2);
     dma_on_reads = 0;
     dma_fails = 1;
@@ -1020,9 +1128,6 @@ int main(void)
     CHECK(polled_rc == 0 && sector_is(polled_buf, 200),
           "and the polled read inside it still succeeds");
 
-    /* 7. A write's flush selects its own drive again: the writer is the
-          slave, and the polled read inside its sleep selected the
-          master. */
     model_reset(2);
     dma_on_reads = 0;
     drives[1] = drives[0];
@@ -1035,9 +1140,6 @@ int main(void)
     CHECK(drive_at_flush >= 0 && (drive_at_flush & 0x10) != 0,
           "the flush after the write went to the slave, not the drive the polled read selected");
 
-    /* 8. With the scheduler stopped, as at a shutdown, a caller in a
-          system call polls instead of sleeping for a channel it might
-          wait on forever. */
     model_reset(2);
     scheduler_on = 0;
     rc = ata_read(&d->dev, 5, 1, polled_buf);
@@ -1045,8 +1147,6 @@ int main(void)
           "a read with the scheduler stopped returns its sector");
     CHECK(sleeps == 0, "and did not sleep");
 
-    /* 9. The tick counts a sleeper's wait: two ticks while the owner
-          sleeps are two ticks in `disk-wait-ticks`. */
     model_reset(2);
     dma_on_reads = 0;
     on_sleep = two_ticks_while_asleep;
@@ -1054,8 +1154,6 @@ int main(void)
     CHECK(rc == 0, "the owner's DMA read returns 0 with two ticks inside its sleep");
     CHECK(wait_ticks == 2, "the two ticks the owner slept through are counted");
 
-    /* 10. IDENTIFY: a drive whose logical sector is not 512 bytes is
-           refused by name. */
     identify_rows();
 
     wait_bound_rows(d);

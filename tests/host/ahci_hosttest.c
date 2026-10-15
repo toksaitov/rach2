@@ -1,24 +1,21 @@
 /*
- * ahci_hosttest.c: the AHCI driver against a model of a controller.
+ * ahci_hosttest.c: the AHCI driver of rach2/sys/block/ahci.c against a model
+ * of a controller, for the failures QEMU's ich9-ahci does not produce.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/paging_host.c
  *
- * The disk suites boot this driver against QEMU's ich9-ahci, which works: it
- * resets when told, answers the handoff, brings its link up and completes
- * every command. What none of them can produce is a controller that does not.
- * A reset that never completes, firmware that never answers the handoff, a
- * port whose link never comes up, a command that never completes, a device
- * that reports a fatal task-file status: each is a line of this driver that no
- * boot in this project has ever run.
+ * The disk suites boot the driver on QEMU's ich9-ahci, which resets when
+ * told, answers the handoff, brings its link up and completes every command.
+ * This test compiles ahci.c natively and gives it a model through its
+ * register interface (`ahci_set_io`). The model answers reads from a register
+ * array and moves its state on when the driver writes, so a row can make a
+ * reset that never completes, firmware that never answers the handoff, a
+ * port whose link never comes up, a command that never completes, or a
+ * device that reports a fatal task-file status.
  *
- * So the driver is compiled natively and given a model of a controller through
- * the interface it now reaches registers by. The model answers reads from a
- * register array and moves the state on when the driver writes, which is what
- * lets a case say "this reset never completes" and have the driver meet it.
- *
- * Every row below names what the driver must do, and the check is on what it
- * returned and what it left behind, not on what it printed.
+ * A row checks what the driver returned and the registers and records it
+ * left; for a failed polled command it also checks the warning logged.
  */
 
 #include <stdarg.h>
@@ -34,12 +31,12 @@ extern void _exit(int status);
 #include "../../rach2/sys/klog.h"
 #include "../../rach2/sys/latency.h"
 
-/* ---- the model ---- */
-
 #define REGS 0x400
 
 static uint32_t reg[REGS];
-/* What this run's controller does, set before each case. */
+/* What this run's controller does, set before each case. `fatal_status` 1
+   gives a task-file error, and 2 also raises the port's task-file error
+   interrupt. `engine_stuck` keeps PxCMD.CR set when ST is cleared. */
 static int reset_completes;
 static int handoff_answers;
 static int link_comes_up;
@@ -47,11 +44,13 @@ static int command_completes;
 static int fatal_status;
 static int engine_stuck;
 static int immediate_interrupt;
+/* Reads of PxCMD while the engine is stuck. */
 static unsigned stop_reads;
 /* Reads of the command-issue register a command takes to complete, 0 for at
    once: a slow device, such as a flush a busy emulator's host takes seconds
    over, which the driver's polled wait must outlast. */
 static unsigned complete_after;
+/* The reads of PxCI left before a slow command completes. */
 static unsigned pending_reads;
 /* Warnings the driver logged, since a polled command that fails is reported
    only as EIO to its caller and the log is what says why, with the command
@@ -59,12 +58,14 @@ static unsigned pending_reads;
 static unsigned ahci_warnings;
 static unsigned logged_command;
 static const char *logged_why;
+/* Commands issued, those issued while port 0's bit of IS was still set, and
+   the block layer's completions. */
 static unsigned issued;
 static unsigned stale_issues;
 static unsigned completed;
 static uint32_t interrupts_masked;
-/* What the model says it moved, which the driver compares with what it
-   asked for. */
+/* The byte count the model writes back for a command, which the driver
+   compares with what it asked for. */
 static uint32_t moved_bytes;
 /* Set after `ahci.c` is included, because what it does reaches into the
    driver's own command list, which is defined there. */
@@ -103,6 +104,13 @@ static void (*on_command_issued)(void);
    not bound itself never returns at all. */
 static unsigned ci_reads;
 
+/**
+ * Read register `off` of the model; an offset past the array reads 0.
+ *
+ * A read of PxCMD while the engine is stuck is counted in `stop_reads`. A
+ * read of PxCI is counted in `ci_reads`, and the read that ends a slow
+ * command's `complete_after` clears PxCI and runs `on_command_issued`.
+ */
 static uint32_t model_r32(uint32_t off)
 {
     if (off >= REGS) {
@@ -123,12 +131,16 @@ static uint32_t model_r32(uint32_t off)
     return reg[off];
 }
 
-/*
+/**
+ * Issue the commands of PxCI bits `v`, as a write of PxCI does.
+ *
  * A command the controller completes clears its bit and reports the bytes it
- * moved; one it does not leaves the bit set until the driver's wait gives up,
- * and a slow one clears it after `complete_after` reads of the register. The
- * byte count is the controller's word for what it did, and the driver checks
- * it, so the model must give one.
+ * moved, through `on_command_issued`; one it does not complete leaves the bit
+ * set until the driver's wait gives up, and a slow one clears it after
+ * `complete_after` reads of the register. The driver checks the byte count,
+ * so the model must give one. With `immediate_interrupt` a completion also
+ * sets port 0's bits of PxIS and IS. The issue is counted in `issued`, and in
+ * `stale_issues` when port 0's bit of IS is still set.
  */
 static void model_issue(uint32_t v)
 {
@@ -154,20 +166,29 @@ static void model_issue(uint32_t v)
         reg[R_IS] |= 1u;
     }
     if (fatal_status) {
-        reg[P0 + P_TFD] = 0x81; /* BSY clear, ERR set */
+        reg[P0 + P_TFD] = 0x81; /* BSY and ERR set */
     }
 }
 
+/**
+ * Write `v` to register `off` of the model, which moves its state as a
+ * controller's would; an offset past the array is dropped.
+ *
+ * GHC.HR clears itself when the reset completes, and a controller that never
+ * finishes keeps it set. A reset also clears GHC.AE, so a driver that does
+ * not set AE again afterwards fails. The firmware answers BOHC.OOS by
+ * clearing its BOS. A PxSCTL write of DET 1 takes the link down, and DET 0
+ * brings it up when `link_comes_up`, so a port that starts with no link gets
+ * one only through a reset. PxCMD.CR and FR follow ST and FRE, except that a
+ * stuck engine keeps CR; an engine that stops clears PxCI. IS, PxIS and
+ * PxSERR are write-one-to-clear. A write of PxCI issues commands.
+ */
 static void model_w32(uint32_t off, uint32_t v)
 {
     if (off >= REGS) {
         return;
     }
     if (off == R_GHC) {
-        /* The reset bit clears itself when the controller has finished, and a
-           controller that never finishes never clears it. A reset also clears
-           AHCI enable, which is why the driver sets it again afterwards: a
-           model that kept the bit would let a driver that forgot to pass. */
         if (v & GHC_HR) {
             if (reset_completes) {
                 v &= ~GHC_HR;
@@ -178,7 +199,6 @@ static void model_w32(uint32_t off, uint32_t v)
         return;
     }
     if (off == R_BOHC) {
-        /* The firmware answers by clearing its own ownership bit. */
         if ((v & BOHC_OOS) && handoff_answers) {
             v &= ~BOHC_BOS;
         }
@@ -186,10 +206,6 @@ static void model_w32(uint32_t off, uint32_t v)
         return;
     }
     if (off == P0 + P_SCTL) {
-        /* COMRESET: while DET is 1 the link is down, and releasing it brings
-           the link up on a port that has a device. A model that answered DET
-           3 whatever the driver did would pass a driver that never reset the
-           link at all. */
         reg[off] = v;
         if ((v & 0xFu) == 1u) {
             reg[P0 + P_SSTS] = 0x000u;
@@ -199,7 +215,6 @@ static void model_w32(uint32_t off, uint32_t v)
         return;
     }
     if (off == P0 + P_CMD) {
-        /* The engines follow the bits that start and stop them. */
         if (v & CMD_ST) {
             v |= CMD_CR;
         } else if (!engine_stuck) {
@@ -215,14 +230,10 @@ static void model_w32(uint32_t off, uint32_t v)
         return;
     }
     if (off == R_IS || off == P0 + P_IS || off == P0 + P_SERR) {
-        /* Write one to clear, which is how a controller's status registers
-           are cleared and the opposite of storing what was written. */
         reg[off] &= ~v;
         return;
     }
     if (off == P0 + P_IS || off == P0 + P_SERR) {
-        /* Write one to clear, which is how a controller's status registers
-           work and the opposite of storing what was written. */
         reg[off] &= ~v;
         return;
     }
@@ -233,23 +244,25 @@ static void model_w32(uint32_t off, uint32_t v)
     reg[off] = v;
 }
 
+/** The model's delay, which passes no time. */
 static void model_udelay(uint32_t us)
 {
     (void)us;
 }
 
+/* The register interface `model_reset` gives the driver. */
 static const struct ahci_io model_io = {model_r32, model_w32, model_udelay};
-
-/* ---- what the driver reaches for outside itself ---- */
 
 #include "../../rach2/sys/pci.h"
 
+/** Find one controller, an Intel ICH9 AHCI function (8086:2922) at 0:31.2
+ *  with its ABAR at 0xFEBF0000, and none after it. */
 bool pci_find_device_skip(uint8_t cls, uint8_t sub, pci_device_t *skip, pci_device_t *out)
 {
     (void)cls;
     (void)sub;
     if (skip) {
-        return 0; /* one controller on this bus */
+        return 0;
     }
     out->vendor_id = 0x8086;
     out->device_id = 0x2922;
@@ -263,21 +276,25 @@ bool pci_find_device_skip(uint8_t cls, uint8_t sub, pci_device_t *skip, pci_devi
     return 1;
 }
 
+/** Whether a BAR's type field says 64-bit. */
 bool pci_bar_is_64bit(uint32_t bar)
 {
     return (bar & 0x6u) == 0x4u;
 }
 
+/** Whether a BAR is a memory BAR: bit 0 clear. */
 bool pci_bar_is_memory(uint32_t bar)
 {
     return (bar & 1u) == 0;
 }
 
+/** A memory BAR's address, without its flag bits. */
 uint32_t pci_bar_address(uint32_t bar)
 {
     return bar & ~0xFu;
 }
 
+/** Configuration space reads 0. */
 uint16_t pci_read_config16(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t off)
 {
     (void)bus;
@@ -287,6 +304,7 @@ uint16_t pci_read_config16(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t off)
     return 0;
 }
 
+/** Configuration space reads 0. */
 uint8_t pci_read_config8(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t off)
 {
     (void)bus;
@@ -296,6 +314,7 @@ uint8_t pci_read_config8(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t off)
     return 0;
 }
 
+/** A configuration space write is dropped. */
 void pci_write_config16(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t off, uint16_t v)
 {
     (void)bus;
@@ -305,11 +324,13 @@ void pci_write_config16(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t off, uint1
     (void)v;
 }
 
+/** Nothing to enable. */
 void pci_enable_bus_master(pci_device_t *dev)
 {
     (void)dev;
 }
 
+/** Nothing to enable. */
 void pci_enable_memory_space(pci_device_t *dev)
 {
     (void)dev;
@@ -319,6 +340,7 @@ void pci_enable_memory_space(pci_device_t *dev)
    every register access goes through the model. */
 static uint8_t window[REGS];
 
+/** Map the controller's registers: the address of `window`. */
 uintptr_t map_mmio(uintptr_t phys, size_t size)
 {
     (void)phys;
@@ -326,6 +348,7 @@ uintptr_t map_mmio(uintptr_t phys, size_t size)
     return (uintptr_t)(unsigned long)window;
 }
 
+/** The kernel's delay, which passes no time. */
 void k_udelay(uint32_t us)
 {
     (void)us;
@@ -338,8 +361,10 @@ void arch_dma_flush(const volatile void *p, size_t len)
     (void)len;
 }
 
+/* What `diskcmd_allowed` answers for every command; a row clears it. */
 static int policy_allows = 1;
 
+/** The disk command policy: `policy_allows`. */
 int diskcmd_allowed(uint8_t command)
 {
     (void)command;
@@ -349,6 +374,9 @@ int diskcmd_allowed(uint8_t command)
 /* The policy's name, which the driver's refusal logs. */
 const char diskcmd_policy_banner[] = "the model's policy";
 
+/** The kernel log: count the driver's warnings in `ahci_warnings`, and from
+ *  a failed command's warning record the command and the reason in
+ *  `logged_command` and `logged_why`. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
     va_list ap;
@@ -368,11 +396,13 @@ void klog(int level, const char *subsystem, const char *format, ...)
     }
 }
 
+/** Interrupts are on unless `interrupts_masked`. */
 int kirq_enabled(void)
 {
     return !interrupts_masked;
 }
 
+/** The console; output is dropped. */
 void console_printf(const char *format, ...)
 {
     (void)format;
@@ -380,22 +410,26 @@ void console_printf(const char *format, ...)
 
 block_device_t *block0;
 
-/* The counters /proc/disk reports, which this test does not read. */
+/** Count a command for /proc/disk; this test reads no counter. */
 void block_count_command(void)
 {}
 
+/** Count a flush for /proc/disk. */
 void block_count_flush(void)
 {}
 
+/** Count a poll for /proc/disk. */
 void block_count_poll(void)
 {}
 
+/** Count a batch of `sectors` for /proc/disk. */
 void block_count_batch(uint32_t sectors)
 {
     (void)sectors;
 }
 
-/** Count completions so failed recovery cannot release a DMA buffer. */
+/** The block layer's completion: count it in `completed`. A completion
+ *  releases the request's DMA buffer, so the recovery rows require none. */
 void block_request_complete(struct block_request *request, uint32_t generation, int status)
 {
     (void)request;
@@ -404,17 +438,20 @@ void block_request_complete(struct block_request *request, uint32_t generation, 
     completed++;
 }
 
+/** No interrupt vector is free. */
 int isr_alloc_vector(void)
 {
     return -1;
 }
 
+/** No token is on the command line. */
 int kcmdline_has(const char *token)
 {
     (void)token;
     return 0;
 }
 
+/** Mask interrupts, and return whether they were masked. */
 uint32_t kirq_save(void)
 {
     uint32_t old = interrupts_masked;
@@ -423,11 +460,13 @@ uint32_t kirq_save(void)
     return old;
 }
 
+/** Restore the mask `kirq_save` returned. */
 void kirq_restore(uint32_t flags)
 {
     interrupts_masked = flags;
 }
 
+/** MSI is not ready. */
 int isr_msi_ready(void)
 {
     return 0;
@@ -436,6 +475,7 @@ int isr_msi_ready(void)
 static int disk_spans;          /* delays noted for the disk */
 static uint32_t disk_span_from; /* the last one's start */
 
+/** Note a delay: for the disk, count it and keep its start. */
 void latency_span(int which, uint32_t from, uint32_t to)
 {
     if (which == LAT_DISK) {
@@ -445,6 +485,7 @@ void latency_span(int which, uint32_t from, uint32_t to)
     (void)to;
 }
 
+/** MSI cannot be enabled. */
 int pci_msi_enable(const pci_device_t *dev, uint8_t vector)
 {
     (void)dev;
@@ -452,11 +493,13 @@ int pci_msi_enable(const pci_device_t *dev, uint8_t vector)
     return -1;
 }
 
+/** The clock reads 0. */
 uint32_t timer_now_us(void)
 {
     return 0;
 }
 
+/** The disk registry makes no record. */
 struct disk *disk_register(block_device_t *dev, const char *transport, int location,
                            const volatile uint16_t *identify)
 {
@@ -489,16 +532,20 @@ static uint8_t pool[POOL_PAGES][4096] __attribute__((aligned(4096)));
 static int pool_taken[POOL_PAGES];
 static unsigned pool_out;
 
+/** The kernel heap: zeroed host memory. */
 void *kzalloc(size_t size)
 {
     return calloc(1, size);
 }
 
+/** Free host memory from `kzalloc`. */
 void kfree(void *p)
 {
     free(p);
 }
 
+/** Take a free page of `pool`, counting it in `pool_out`; NULL when every
+ *  page is taken. */
 void *alloc_kernel_frame(void)
 {
     int i;
@@ -513,6 +560,7 @@ void *alloc_kernel_frame(void)
     return 0;
 }
 
+/** Return 1 when `p` is the start of a page of `pool`, and 0 otherwise. */
 static int in_pool(const volatile void *p)
 {
     int i;
@@ -525,6 +573,7 @@ static int in_pool(const volatile void *p)
     return 0;
 }
 
+/** Register no handler. */
 void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *name)
 {
     (void)vector;
@@ -532,8 +581,8 @@ void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *nam
     (void)name;
 }
 
-/* What the controller does when a command is issued and completes: it writes
-   back the number of bytes it moved. */
+/** What the controller does when a command completes: write `moved_bytes`
+ *  back into the command header's byte count. */
 static void complete_command(void)
 {
     volatile ahci_cmd_header_t *hdr = (volatile ahci_cmd_header_t *)ahci_disks[0].cmdlist;
@@ -541,8 +590,7 @@ static void complete_command(void)
     hdr->prdbc = moved_bytes;
 }
 
-/* ---- the rows ---- */
-
+/** Return 1 when the strings are equal, and 0 otherwise. */
 static int same_text(const char *a, const char *b)
 {
     while (*a && *a == *b) {
@@ -562,8 +610,9 @@ static int fails;
         }                                 \
     } while (0)
 
-/* A controller that does everything right, before each row changes one
-   thing about it. */
+/** Reset the model to a controller that does everything right, with no BIOS
+ *  handoff and 64-bit addressing, and give it to the driver; a row then
+ *  changes one thing about it. */
 static void model_reset(void)
 {
     unsigned i;
@@ -571,7 +620,7 @@ static void model_reset(void)
     for (i = 0; i < REGS; i++) {
         reg[i] = 0;
     }
-    reg[R_CAP] = 0x80000001u | (31u << 8); /* 64-bit, one port, 32 command slots */
+    reg[R_CAP] = 0x80000001u | (31u << 8); /* S64A, NCS 31 (32 slots), NP 1 */
     reg[R_PI] = 0x1u;                      /* port 0 implemented */
     reg[R_VS] = 0x10300u;
     reg[P0 + P_SSTS] = 0x123u;     /* DET 3, IPM 1, SPD 2: a live link */
@@ -592,18 +641,29 @@ static void model_reset(void)
     immediate_interrupt = 0;
     stop_reads = issued = completed = stale_issues = 0;
     interrupts_masked = 0;
-    reg[R_CAP2] = 0u; /* no handoff, unless a row asks for one */
+    reg[R_CAP2] = 0u;
     block0 = 0;
     ahci_dma64 = 1;
     ahci_set_io(&model_io);
 }
 
+/* The requests the recovery and completion rows hand the driver, and what a
+   recovery row's child expects: a panic, and whether a request was active. */
 static struct block_request active_request;
 static struct block_request queued_request;
 static int expect_active;
 static int expect_panic;
 
-/** A panic must precede every release or reuse of the active DMA state. */
+/**
+ * The kernel's panic, in a recovery row's child: exit 42 for the driver's
+ * refusal to go on while the command engine runs, and 43 for any other.
+ *
+ * The refusal counts only with interrupts masked, the engine's stop polled
+ * more than once and left with ST clear and CR set, no command issued or
+ * completed, and the active request, the queue and the command table as the
+ * row left them: the panic must come before any release or reuse of the
+ * DMA state.
+ */
 void k_panic(const char *s)
 {
     struct ahci_disk *d = &ahci_disks[0];
@@ -620,8 +680,14 @@ void k_panic(const char *s)
 }
 
 /**
- * Fail engine stop in each completion path. A child lets the test observe a
- * panic without returning into code that could reuse the controller's buffer.
+ * Make the command engine fail to stop in recovery path `path`, and require
+ * the panic `k_panic` accepts.
+ *
+ * Path 0 is a fatal interrupt with the command outstanding, 1 a drain of the
+ * queue, 2 a fatal interrupt after PxCI cleared, and 3 a failed polled
+ * command with no request active. The row runs in a forked child, so that
+ * after the panic nothing returns into code that could reuse the
+ * controller's buffer.
  */
 static void stuck_recovery(int path)
 {
@@ -666,7 +732,15 @@ static void stuck_recovery(int path)
     CHECK("failed engine stop preserves DMA ownership before halting", status == (42 << 8));
 }
 
-/** A flush and the next queued read may finish before the handler returns. */
+/**
+ * Check the interrupt handler when completions arrive at once.
+ *
+ * A completed write issues its flush, and the flush completes before the
+ * handler returns. The handler leaves that completion, and another port's
+ * bit of IS, pending; its next call completes the request and starts the
+ * queued read, and the call after that completes the read and notes its
+ * delay from the time it was taken.
+ */
 static void quick_completions(void)
 {
     static uint8_t buf[512];
@@ -706,7 +780,15 @@ static void quick_completions(void)
     CHECK("the other port remains pending", reg[R_IS] == 2);
 }
 
-/** A polled command is acknowledged before its queue resumes, even on error. */
+/**
+ * Check that a polled command's interrupt is acknowledged before the queue
+ * it held back resumes, whatever its result.
+ *
+ * `fault` 0 completes the command, 1 completes it with a fatal task-file
+ * status, and 2 never completes it and raises the task-file error interrupt.
+ * The queued request starts after it, and the queued completion and another
+ * port's bit of IS stay pending.
+ */
 static void polled_queue_restart(int fault)
 {
     static uint8_t buf[512];
@@ -751,22 +833,15 @@ static int polled_identify(unsigned after, int masked)
 }
 
 /**
- * A polled command's wait: one that never completes is refused after the wait
- * polled and gave up, and the driver logs the command and why, since its
- * caller sees only EIO. With interrupts on, one that answers after ten
- * seconds of polls, as a flush on a busy emulator's host can, completes;
- * with them off, where every tick of the wait is lost to the clock, it is
- * refused after five, and one that answers after a second and a half
- * completes. A command that moves fewer bytes than asked is refused and
- * logged.
- */
-/*
- * A controller without 64-bit addressing, CAP.S64A clear: a write's pieces
- * above 4 GiB are copied into pages of the DMA pool and the table names
- * those pages, each address's high half 0; a read's are copied back from
- * them into the buffer after the command; the pages are taken once and
- * kept, and a write of the same pieces again takes none. With the bit set
- * the table names the buffer's own pages, both halves.
+ * Check a buffer above 4 GiB on controllers with and without 64-bit
+ * addressing.
+ *
+ * With CAP.S64A set the table names the buffer's own pages, both halves.
+ * With it clear a write's pieces are copied into pages of the DMA pool and
+ * the table names those pages, each address's high half 0; a read's are
+ * copied back from them into the buffer after the command. The pages are
+ * taken once and kept for the read after the write. A host buffer lies above
+ * 4 GiB, so every piece of one goes through a page.
  */
 static void dma32_rows(void)
 {
@@ -834,6 +909,17 @@ static void dma32_rows(void)
     ahci_dma64 = 1;
 }
 
+/**
+ * Check a polled command's wait.
+ *
+ * One that never completes is refused after the wait polled and gave up, and
+ * the driver logs the command and why, since its caller sees only EIO. With
+ * interrupts on, one that answers after ten seconds of polls, as a flush on
+ * a busy emulator's host can, completes; with them off, where every tick of
+ * the wait is lost to the clock, it is refused after five, and one that
+ * answers after a second and a half completes. A command that moves fewer
+ * bytes than asked is refused and logged.
+ */
 static void command_waits(void)
 {
     static uint8_t buf[512];
@@ -861,18 +947,36 @@ static void command_waits(void)
               ahci_warnings == 1);
 }
 
+/**
+ * Run the rows, each on a fresh model, and return the count of failed
+ * checks, at most 255.
+ *
+ * Each row drives the step it is about rather than the whole of
+ * `ahci_init`, which would fail on a model that cannot answer IDENTIFY and
+ * so pass any row that expects a refusal.
+ *
+ * IDENTIFY data of a 4096-byte logical sector (word 106 with bit 14 valid
+ * and bit 12 set, words 117 and 118 giving 2048 words) is refused by name,
+ * as the block Readme states, and the same words with bit 12 clear are
+ * taken, with the sector count from words 100 to 103. The controller's reset
+ * leaves it in AHCI mode with its interrupts off, and a reset that never
+ * completes is refused. Firmware that never answers the handoff does not
+ * stop the driver, and firmware that answers clears its ownership bit. A
+ * port with a disk is chosen; a port with no device, one with an ATAPI
+ * signature and a controller with no implemented port are refused; a port
+ * whose link comes up only on a reset is taken, with the reset released. A
+ * started port has the command engine and the FIS receiver running.
+ *
+ * A 2048-sector read, the block layer's limit, into a buffer that starts in
+ * the middle of a page is described as 257 entries, a half page at each end
+ * and a page between, with the FIS naming the sectors. A buffer of 265 pages
+ * from the middle of a page is 266 pieces, more than the table's 264
+ * entries, and is refused with no command issued. A device that reports a
+ * fatal status is refused, and a command the disk policy refuses never
+ * reaches the port.
+ */
 int main(void)
 {
-    /* Each row drives the step it is about, rather than the whole bring-up:
-       a row that ran the whole of `ahci_init` would pass whenever anything at
-       all refused, which is every row on a model that cannot answer an
-       IDENTIFY. What a step returned is what is checked. */
-
-    /* IDENTIFY data under the driver's control: a device whose logical
-       sector is not 512 bytes, word 106 with bit 14 valid and bit 12 set and
-       words 117 and 118 giving 2048 words a sector, is refused by name, the
-       restriction the block Readme states; the same words with bit 12 clear
-       are taken, with the sector count read from words 100 to 103. */
     model_reset();
     {
         volatile uint16_t *w = (volatile uint16_t *)ahci_idbuf;
@@ -892,7 +996,6 @@ int main(void)
               ahci_identify(&ahci_disks[0]) == 0 && ahci_disks[0].sectors == 0x1000u);
     }
 
-    /* The controller's own reset. */
     model_reset();
     CHECK("a controller that resets is taken", ahci_hba_own() == 0);
     CHECK("and is left in AHCI mode", (reg[R_GHC] & GHC_AE) != 0);
@@ -902,9 +1005,6 @@ int main(void)
     reset_completes = 0;
     CHECK("a reset that never completes is refused", ahci_hba_own() != 0);
 
-    /* The handoff, which a controller may or may not offer. Firmware that
-       never answers does not stop the driver: being refused by silence is not
-       a reason to stop. */
     model_reset();
     reg[R_CAP2] = 0x1u;
     reg[R_BOHC] = BOHC_BOS;
@@ -919,24 +1019,23 @@ int main(void)
     CHECK("firmware that answers hands the controller over", ahci_hba_own() == 0);
     CHECK("and its ownership bit is clear", (reg[R_BOHC] & BOHC_BOS) == 0);
 
-    /* Choosing a port. */
     model_reset();
     CHECK("a port with a disk on it is chosen", ahci_select_port() == 0);
     CHECK("and it is port 0", ahci_port == 0);
 
     model_reset();
     reg[P0 + P_SSTS] = 0x000u; /* DET 0: nothing on the link */
-    link_comes_up = 0;         /* and a reset does not bring one up */
+    link_comes_up = 0;
     CHECK("a port with no device is refused", ahci_select_port() != 0);
 
     model_reset();
     reg[P0 + P_SSTS] = 0x000u;
-    link_comes_up = 1; /* nothing yet, but the link comes up when reset */
+    link_comes_up = 1;
     CHECK("a port whose link comes up on reset is taken", ahci_select_port() == 0);
     CHECK("and the reset was released", (reg[P0 + P_SCTL] & 0xFu) != 1u);
 
     model_reset();
-    reg[P0 + P_SSTS] = 0x113u;     /* DET 3 with IPM 1 but no speed: not ready */
+    reg[P0 + P_SSTS] = 0x113u;
     reg[P0 + P_SIG] = 0xEB140101u; /* an ATAPI signature */
     CHECK("a port whose device is not a disk is refused", ahci_select_port() != 0);
 
@@ -944,14 +1043,12 @@ int main(void)
     reg[R_PI] = 0; /* no port implemented at all */
     CHECK("a controller with no implemented port is refused", ahci_select_port() != 0);
 
-    /* Starting the port's engines. */
     model_reset();
     CHECK("a port can be selected", ahci_select_port() == 0);
     CHECK("and started", ahci_port_start(&ahci_disks[0]) == 0);
     CHECK("with the command engine running", (reg[P0 + P_CMD] & CMD_CR) != 0);
     CHECK("and the FIS receiver running", (reg[P0 + P_CMD] & CMD_FR) != 0);
 
-    /* A command, and the two ways it can fail. */
     {
         static uint8_t buf[512];
 
@@ -961,11 +1058,6 @@ int main(void)
         CHECK("a command that completes is accepted",
               ahci_run_command(&ahci_disks[0], ATA_IDENTIFY, 0, 0, buf, sizeof(buf), 0) == 0);
 
-        /* A request of the block layer's whole limit, from a buffer that
-           starts mid-page: the table describes it as 257 entries, a piece
-           per page, the first and last half pages, the FIS naming the
-           sectors; and a buffer of more pieces than the table has entries
-           for is refused. */
         {
             static uint8_t huge[266 * 4096] __attribute__((aligned(4096)));
             volatile ahci_cmd_header_t *hdr = (volatile ahci_cmd_header_t *)ahci_disks[0].cmdlist;
@@ -990,7 +1082,6 @@ int main(void)
             {
                 unsigned issued_before = issued;
 
-                /* 265 pages from mid-page: 266 pieces, past the table's 264. */
                 CHECK("a buffer of more pieces than the table holds is refused",
                       ahci_run_command(&ahci_disks[0], ATA_READ_DMA_EXT, 0, 2048, huge + 2048,
                                        265 * 4096, 0) != 0);
