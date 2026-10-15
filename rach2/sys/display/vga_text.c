@@ -1,5 +1,7 @@
 /*
- * VGA text mode (Mode 3) driver.
+ * vga_text.c: the text console of textcon.h, its scrollback and its cursor,
+ * on the VGA's text mode (mode 3) or, through fbcon.c, on the loader's
+ * framebuffer.
  *
  * The visible screen is a window onto a ring of scrollback lines. Each line is
  * `textcon_cols` cells, a cell is a character byte plus an attribute byte; the
@@ -31,8 +33,9 @@
  * which draws what they select, and the economy is the same: a cell drawn is a
  * glyph's pixels stored to the display's memory.
  *
- * The caller keeps interrupts off around a byte's work here: k_putc does, and a
- * keyboard's echo comes through k_putc from its interrupt.
+ * The caller holds the console's lock around a byte's work here, with
+ * interrupts off: k_putc does, and a keyboard's echo comes through k_putc
+ * from its interrupt.
  */
 
 #include "vga_font.h"
@@ -60,6 +63,9 @@ unsigned int textcon_rows = VGA_TEXT_ROWS;
 static display_color_t _fore_color = VGA_TEXT_DEFAULT_FG;
 static display_color_t _back_color = VGA_TEXT_DEFAULT_BG;
 
+/* The history ring and the logical number of its oldest line, how many it
+ * holds, the live area's top line and the viewport's, and whether the
+ * viewport follows the live area. */
 static uint16_t _history[VGA_TEXT_SCROLLBACK_LINES][TEXTCON_COLS_MAX];
 static uint32_t _history_start_line = 0;
 static uint32_t _history_line_count = 0;
@@ -76,6 +82,8 @@ static bool _hw_started = false;
 static unsigned int _hold = 0;
 static bool _cursor_stale = false;
 
+/** The memory of cells the display takes its screen from: fbcon.c's on a
+ * framebuffer, the adapter's otherwise. */
 static volatile uint16_t *vga_text_memory(void)
 {
     if (fbcon_active) {
@@ -84,11 +92,14 @@ static volatile uint16_t *vga_text_memory(void)
     return (volatile uint16_t *)VGA_TEXT_BUFFER;
 }
 
-/* One cell to the adapter's memory: the only store there, so a host test
-   can count them. */
+/* The host test's count of the stores (tests/host/vga_text_hosttest.c). */
 #ifdef VGA_TEXT_HOSTTEST
 void vga_text_hosttest_stored(void);
 #endif
+
+/** Store `cell` at cell `at` of the adapter's memory, the only store there,
+ * so that a host test can count them; on a framebuffer fbcon.c then draws
+ * the cell if the screen shows it. */
 static void vga_text_store(uint32_t at, uint16_t cell)
 {
     vga_text_memory()[at] = cell;
@@ -123,16 +134,21 @@ static void vga_text_set_start(uint32_t cell)
     _hw_started = true;
 }
 
+/** The cell of character `c` in attribute `attr`, the attribute in the high
+ * byte. */
 static uint16_t vga_text_make_cell(char c, uint8_t attr)
 {
     return (uint16_t)((uint8_t)c | ((uint16_t)attr << 8));
 }
 
+/** A blank cell in the current colors. */
 static uint16_t vga_text_blank_cell(void)
 {
     return vga_text_make_cell(VGA_TEXT_BLANK_CHAR, get_curr_color_attr());
 }
 
+/** The logical number of the newest line in the history, 0 when it is
+ * empty. */
 static uint32_t vga_text_last_line(void)
 {
     if (_history_line_count == 0) {
@@ -142,6 +158,7 @@ static uint32_t vga_text_last_line(void)
     return _history_start_line + _history_line_count - 1;
 }
 
+/** Whether the history still holds logical line `line`. */
 static bool vga_text_has_line(uint32_t line)
 {
     if (_history_line_count == 0) {
@@ -151,6 +168,8 @@ static bool vga_text_has_line(uint32_t line)
     return line >= _history_start_line && line <= vga_text_last_line();
 }
 
+/** The cells of logical line `line` in the ring, or NULL when the history
+ * does not hold it. */
 static uint16_t *vga_text_line_ptr(uint32_t line)
 {
     uint32_t idx;
@@ -163,6 +182,8 @@ static uint16_t *vga_text_line_ptr(uint32_t line)
     return _history[idx];
 }
 
+/** Blank logical line `line` in the current colors, when the history holds
+ * it. */
 static void vga_text_clear_line(uint32_t line)
 {
     uint16_t *cells;
@@ -207,6 +228,8 @@ static void vga_text_append_blank_line(void)
     }
 }
 
+/** Empty the history and start it again with a screen of blank lines, the
+ * viewport following the live area. */
 static void vga_text_reset_history(void)
 {
     uint32_t i;
@@ -258,10 +281,6 @@ static void vga_text_update_cursor(void)
     outb(0x3D5, cursor_pos);
 }
 
-/**
- * Place the hardware cursor where the next byte will land, or note that it
- * moved when a writer holds it.
- */
 void textcon_place_cursor(void)
 {
     if (_hold > 0) {
@@ -272,8 +291,6 @@ void textcon_place_cursor(void)
 }
 
 /**
- * Hold the cursor for a write of many bytes.
- *
  * Each byte of output moves the cursor, and placing it is four port writes;
  * a line placed once at the end costs the same as one byte placed on its own.
  * Holds nest, so a message an interrupt handler prints during a program's
@@ -287,7 +304,6 @@ void textcon_hold(void)
     _hold++;
 }
 
-/** Release a hold, placing the cursor if it moved while held. */
 void textcon_release(void)
 {
     uint32_t flags = kirq_save();
@@ -302,8 +318,6 @@ void textcon_release(void)
 }
 
 /**
- * Blit the current viewport to the adapter's memory and place the cursor.
- *
  * Each on-screen row is filled from its scrollback line; rows mapping to lines
  * that do not exist (above the start of history) are filled with blanks. The
  * rows go to the window at `_hw_top`, which the display is then pointed at.
@@ -368,7 +382,8 @@ static void vga_text_scroll_hardware(void)
     vga_text_set_start(_hw_top);
 }
 
-/** Clear the screen: the history starts over, and so does the window. */
+/** The history starts over, and so does the window, at the front of the
+ * adapter's memory. */
 void k_cls(void)
 {
     x = 0;
@@ -379,12 +394,10 @@ void k_cls(void)
 }
 
 /**
- * Scroll the live area down by one line.
- *
- * Appends a fresh blank line and advances the live top. A viewport following
- * live output scrolls with the display's start address. A viewport scrolled
- * back into history stays where it is, unless the append evicted its top
- * line: the append then moves it to the new oldest line, and it is redrawn.
+ * A viewport following live output scrolls with the display's start
+ * address. A viewport scrolled back into history stays where it is, unless
+ * the new line evicted its top line: the append then moves it to the new
+ * oldest line, and it is redrawn.
  */
 void k_scroll_down(void)
 {
@@ -402,8 +415,6 @@ void k_scroll_down(void)
 }
 
 /**
- * Write one character cell at (col, row) of the live area.
- *
  * Coordinates are relative to the live top, not the viewport. Out-of-range
  * coordinates and missing history lines are ignored. The write lands in the
  * history ring and, while the viewport follows live output, in the one cell

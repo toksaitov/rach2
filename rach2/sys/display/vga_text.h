@@ -1,6 +1,6 @@
 /*
- * VGA text mode (Mode 3) driver: the text console of textcon.h on the
- * adapter's 80x25 text mode, its memory at VGA_TEXT_BUFFER.
+ * vga_text.h: the text console of textcon.h on the VGA's text mode (mode 3),
+ * 80x25 cells in the adapter's memory at VGA_TEXT_BUFFER.
  */
 
 #ifndef _VGA_TEXT_H_
@@ -26,7 +26,7 @@
 #define VGA_TEXT_DEFAULT_BG 0x00 /* Black */
 
 /*
- * VGA_TEXT_BUFFER aliased, for the code that addresses the adapter's memory.
+ * Another name for VGA_TEXT_BUFFER.
  */
 #define VIDEO_COLOR_TEXT_BUFFER VGA_TEXT_BUFFER
 

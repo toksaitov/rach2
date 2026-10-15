@@ -1,7 +1,6 @@
 /*
- * VGA graphics mode driver (Mode 13h, 320x200, 256 colors).
- *
- * Implements the common framebuffer interface defined in fb.h.
+ * vga_gfx.h: the VGA's graphics mode 13h, 320x200 in 256 colors, which
+ * vga_gfx.c gives /fb through fb.h, and the VGA's registers.
  */
 
 #ifndef _VGA_GFX_H_
@@ -17,7 +16,7 @@
 /* The kernel's address of the adapter's window at physical 0xA0000. */
 #define VGA_GFX_FRAMEBUFFER phys_to_virt(0xA0000)
 
-/* Legacy macro names kept for compatibility. */
+/* The same constants under a second set of names. */
 #define VGA_MODE13H_WIDTH  VGA_GFX_WIDTH
 #define VGA_MODE13H_HEIGHT VGA_GFX_HEIGHT
 #define VGA_MODE13H_BPP    1 /* 1 byte per pixel */
@@ -40,7 +39,8 @@
 #define VGA_DAC_WRITE_INDEX 0x3C8
 #define VGA_DAC_DATA        0x3C9
 
-/** True while the VGA is in graphics mode. */
+/** True while the graphics mode is in force, on the VGA or on a framebuffer
+ * console. */
 extern bool vga_graphics_mode;
 
 #endif /* _VGA_GFX_H_ */

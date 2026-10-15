@@ -10,7 +10,8 @@
  * every cell whose line differs from the one above it, and no blank cell
  * under a blank one.
  *
- * The caller keeps interrupts off around a byte's work, as vga_text.c says.
+ * The caller holds the console's lock around a byte's work, as vga_text.c
+ * says.
  */
 
 #include "fbcon.h"
@@ -57,6 +58,8 @@ static uint32_t grid_left;
 static uint32_t grid_top;
 static uint32_t pixel[16];
 
+/* The memory's cell the screen starts at and the cursor's, what each screen
+ * cell was drawn as, and the screen cell drawn with the cursor, or NO_CELL. */
 static uint32_t start;
 static uint32_t cursor;
 static uint16_t drawn[TEXTCON_COLS_MAX * TEXTCON_ROWS_MAX];
@@ -112,6 +115,7 @@ static uint32_t nearest_index(const struct boot_framebuffer *fb, uint32_t c)
     return best;
 }
 
+/** Store the pixel `v` at `p`, in as many bytes as the screen's pixel has. */
 static void put_pixel(volatile uint8_t *p, uint32_t v)
 {
     switch (fb_bytes) {

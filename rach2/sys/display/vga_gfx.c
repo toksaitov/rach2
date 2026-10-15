@@ -1,5 +1,7 @@
 /*
- * VGA Graphics Mode driver (Mode 13h, 320x200, 256 colors).
+ * vga_gfx.c: the graphics mode of /fb, VGA mode 13h, 320x200 in 256 colors,
+ * entered and left by programming the VGA's registers from tables; and the
+ * load of the console's font into the adapter's character memory.
  *
  * When the console is on a framebuffer (fbcon.c) the display may be no VGA
  * at all, as on a machine booted by UEFI, so entering and leaving the mode
@@ -21,9 +23,9 @@
 
 bool vga_graphics_mode = false;
 
-/* Live framebuffer state, updated on entry to and exit from graphics mode. */
-/* The gfx_info_t fields, in the order fb.h declares them: mode, width,
-   height, bpp, pitch, framebuffer, size. */
+/* The mode in force, which `fb_enter` and `fb_exit` set: the gfx_info_t
+   fields in the order fb.h declares them, mode, width, height, bpp, pitch,
+   framebuffer and size. */
 gfx_info_t gfx_current = {GFX_MODE_NONE, 0, 0, 0, 0, NULL, 0};
 
 /* 8x16 text font (256 chars * 16 bytes), saved before Mode 13h, restored on
@@ -309,17 +311,6 @@ int vga_font_load(void)
  * alias the screen the console draws on: memory, which reaches no screen. */
 static uint8_t gfx_shadow[VGA_GFX_SIZE];
 
-/**
- * Switch to Mode 13h and return the linear framebuffer at A0000, or on a
- * framebuffer console the memory that stands for it (`gfx_shadow`), so that
- * the hardware is left alone.
- *
- * Saves the text font first so fb_exit can restore it, clears the
- * framebuffer to color 0, and publishes gfx_current, all with interrupts off.
- * A no-op that returns the framebuffer if already in graphics mode.
- *
- * @return Pointer to the 320x200 8bpp framebuffer.
- */
 uint8_t *fb_enter(void)
 {
     uint32_t flags = kirq_save();
@@ -410,13 +401,6 @@ static void vga_restore_text_palette(void)
     }
 }
 
-/**
- * Leave graphics mode and return the VGA to its 80x25 text state.
- *
- * Reprograms Mode 3, reloads the text palette and font, clears gfx_current, and
- * clears the text screen, all with interrupts off. A no-op if not currently
- * in graphics mode.
- */
 void fb_exit(void)
 {
     uint32_t flags = kirq_save();
@@ -450,14 +434,8 @@ void fb_exit(void)
     kirq_restore(flags);
 }
 
-/**
- * Load a 256-entry RGB palette into the DAC.
- *
- * @param data 768 bytes, 256 entries of 8-bit R, G, B, in the kernel's
- *   memory. Each component is shifted right by 2 because the VGA DAC has
- *   6-bit values (0-63); a framebuffer console takes them whole. Ignored if
- *   NULL.
- */
+/** Each component is shifted right by 2 because the VGA DAC has 6-bit
+ * values (0-63); a framebuffer console takes them whole. */
 void fb_set_palette(const uint8_t *data)
 {
     int i;

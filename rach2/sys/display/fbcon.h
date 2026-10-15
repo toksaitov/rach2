@@ -1,17 +1,18 @@
 /*
- * fbcon: the text console on the framebuffer the loader set up, which a
+ * fbcon.h: the text console on the framebuffer the loader set up, which a
  * machine booted by UEFI always has and one booted by BIOS has when its
  * loader was asked for one.
  *
  * The console's driver, vga_text.c, keeps the scrollback and writes the
  * screen as a text adapter shows it: cells, a character and its colors, in
  * the adapter's memory, a start address that selects the cells on the
- * screen, and a cursor. On a framebuffer this file keeps those three in
- * place of the adapter and draws what they select: the 80x25 cells,
- * centered, each glyph of vga_font.c eight pixels by sixteen, or twice
- * that on a screen 2000 pixels wide or more. It draws a cell only when it
- * shows something other than what it showed, since every pixel is a store
- * to the display's memory.
+ * screen, and a cursor. On a framebuffer fbcon.c keeps those three in place
+ * of the adapter and draws what they select: as many cells as the screen
+ * holds of vga_font.c's glyphs, eight pixels by sixteen, at the largest
+ * whole scale that still gives 80 columns and 24 rows, centered. It draws a
+ * cell only when it shows something other than what it showed, since every
+ * pixel is a store to the display's memory. It also draws the picture of
+ * /fb, which has the screen while a program holds it.
  */
 
 #ifndef _FBCON_H_
@@ -34,15 +35,18 @@ extern uint16_t fbcon_cells[FBCON_CELLS];
 /**
  * Take the loader's framebuffer `fb` as the console's screen and clear it,
  * with as many cells as it holds of the font at the largest whole scale that
- * still gives 80 columns and 24 rows, `textcon_cols` and `textcon_rows`:
- * 85x24 at twice the font's size on a 1366x768 screen. Returns 0, or -1 when
- * it is a kind this console cannot draw or holds fewer than 80 columns and 24
- * rows, and the console stays on the text adapter.
+ * still gives 80 columns and 24 rows, `textcon_cols` and `textcon_rows`, at
+ * most `TEXTCON_COLS_MAX` by `TEXTCON_ROWS_MAX`: 85x24 at twice the font's
+ * size on a 1366x768 screen. The log records the screen and the cells.
+ * Returns 0, or -1, and the console stays on the text adapter, when the
+ * framebuffer is neither direct color at 8 to 32 bits a pixel nor indexed
+ * color at 8, holds fewer than 80 columns and 24 rows, has a pitch shorter
+ * than a row of pixels, or cannot be reached (`fbcon_window`).
  */
 int fbcon_init(const struct boot_framebuffer *fb);
 
 /** Draw cell `at` of the memory, if it is on the screen and shows
- * something new. */
+ * something new; nothing while the picture of /fb has the screen. */
 void fbcon_stored(uint32_t at);
 
 /** Start the screen at cell `cell` of the memory, drawing the cells that
@@ -76,8 +80,9 @@ void fbcon_gfx_end(void);
 
 /**
  * The kernel's address of the framebuffer's first byte now, or NULL when
- * the framebuffer cannot be reached. The platform defines it (x86/boot.c),
- * since the address changes when the kernel turns its own page tables on.
+ * the framebuffer cannot be reached. The platform defines it
+ * (arch/x86/boot.c), since the address changes when the kernel turns its
+ * own page tables on.
  */
 volatile uint8_t *fbcon_window(void);
 
