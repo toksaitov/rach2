@@ -21,9 +21,9 @@ static const uint16_t KRFFS_File_System_Root_Node_Mode = 0755;
 
 /**
  * A KRFFS region mapped into memory: `node` is the root, at the first byte of
- * the mapping, and `size` is the region's length in bytes. Every node a tool
- * holds is a pointer into the mapping, so a store into a node is a store
- * into the file.
+ * the mapping, and `size` is the region's length in bytes. Every node
+ * pointer of a tool points into the mapping, so a store into a node is a
+ * store into the file.
  */
 struct krffs_file_system {
     struct krffs_node *node;

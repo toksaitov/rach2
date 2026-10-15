@@ -12,9 +12,9 @@ struct krffs_node;
 
 /**
  * Reserves a node with room for `size` bytes of data, as the `malloc` of
- * K&R's first-fit allocator does: the first free node after the root that
- * holds a header and `size` bytes is split, the rest staying free, or taken
- * whole when the rest could not hold a header. The node gets the reserved
+ * K&R's first-fit allocator does: the first free node after the root with
+ * room for a header and `size` bytes is split, the rest staying free, or
+ * taken whole when the rest could not hold a header. The node gets the reserved
  * type and a `data_size` of `size`.
  *
  * With `original_node`, the node being moved by a resize, its name, `id`,

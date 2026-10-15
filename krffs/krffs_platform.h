@@ -88,9 +88,9 @@ void krffs_get_time_of_day(struct timeval *time_of_day);
 #define KRFFS_REGION_ALIGN (1024 * 1024)
 
 /**
- * The largest region, 4095 MiB, the most whole MiB a `uint32_t` holds: the
- * kernel keeps a file system's size in one (`krffs_file_system_t` in
- * rach2/sys/fs/krffs.h).
+ * The largest region, 4095 MiB, the largest whole number of MiB under 4 GiB:
+ * the kernel keeps a file system's size in a `uint32_t`
+ * (`krffs_file_system_t` in rach2/sys/fs/krffs.h).
  */
 #define KRFFS_MAX_REGION_SIZE (4095u * 1024u * 1024u)
 

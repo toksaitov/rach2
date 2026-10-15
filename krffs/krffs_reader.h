@@ -19,7 +19,8 @@ struct krffs_file_system;
  * Every node the lookup reads is checked first: it has the magic number,
  * lies whole inside the region, and has a `size` of at least a header that
  * ends inside the region. The file's `data_size` must fit its node. A
- * truncated or damaged image is so refused, not read out of bounds.
+ * truncated or damaged image so fails with a reason and is not read out of
+ * bounds.
  *
  * Returns 0, or -1 with the reason in `errbuf`, of `errlen` bytes, when a
  * check fails, `path` is not absolute or names no node, or the node is a

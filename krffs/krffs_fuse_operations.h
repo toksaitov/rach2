@@ -49,7 +49,7 @@ int krffs_read(const char *path, char *buffer, size_t size, PLATFORM_OFF_T offse
  * included, the owner of the calling process, and the current time as its
  * three times and the root's modification and change times. `device` is not
  * used. Returns -EEXIST when the name is found and -ENOSPC when no free node
- * holds a header.
+ * has room for a header.
  */
 int krffs_mknod(const char *path, mode_t mode, dev_t device);
 

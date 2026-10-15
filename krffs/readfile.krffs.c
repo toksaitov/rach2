@@ -29,11 +29,11 @@
  * file the guest wrote, such as the kernel `tests/run selfbuild` builds.
  *
  * The image is mapped for reading only, and the file is found with
- * `krffs_read_regular`, which refuses a damaged image with a reason and does
+ * `krffs_read_regular`, which fails on a damaged image with a reason and does
  * not read out of bounds. An OUTPUT that is the image itself, by device and
- * inode, is refused, since `fopen` with "wb" would empty the image before
- * the copy. An argument after OUTPUT other than the region options is
- * refused. Returns `EXIT_SUCCESS`, or `EXIT_FAILURE` with the reason on
+ * inode, is an error, since `fopen` with "wb" would empty the image before
+ * the copy, and so is an argument after OUTPUT other than the region
+ * options. Returns `EXIT_SUCCESS`, or `EXIT_FAILURE` with the reason on
  * stderr.
  */
 int main(int argc, char **argv)
