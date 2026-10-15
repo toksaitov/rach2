@@ -1,5 +1,5 @@
 /**
- * `login` in the guest: the program the console is now behind.
+ * loginmusl: check `login`, the program the console is behind, in the guest.
  *
  * link-deps: utils/pwauth.c
  *
@@ -10,17 +10,17 @@
  * account or it does not.
  *
  * The success case needs something to exec, and this image stages no shell, so
- * it uses the account the credential probes already committed: `probe` at uid
+ * it uses the account the credential probes already stage: `probe` at uid
  * 1000, whose shell is the `/idreport` helper and whose home is `/home/probe`.
- * `idreport` prints the six ids and its `argv[0]`, which is exactly the triple
- * this program is answerable for plus the leading dash a login shell is told it
- * has. Asserting on that line is asserting on the identity a shell would start
- * with, not on an exit status that a refusal and a success can share.
+ * `idreport` prints the six ids and its `argv[0]`, which are the ids this
+ * program sets plus the leading dash that tells a shell it is a login shell.
+ * The check is on that line, the identity a shell would start with, since an
+ * exit status can be the same for a refusal and a success.
  *
  * The refusals: a wrong password, an unknown name, and an account whose shadow
- * field is empty, which busybox's login would have admitted without asking
- * anything. Each must leave the databases as they were, must not exec, and must
- * be an ordinary exit, not a crash that happened to print nothing.
+ * field is empty, which BusyBox's login admits without asking anything. Each
+ * must leave the databases as they were, must not exec, and must be an
+ * ordinary exit, not a crash that happened to print nothing.
  *
  * Then the two ways to take the console for good, not for a moment: a
  * login stopped by an uncatchable `SIGSTOP`, which only its parent can undo,
@@ -57,6 +57,8 @@
 #define PROBE_PASS "probepass"
 #define PROBE_UID  1000
 
+/* The three databases, and their contents as `main` found them, which
+ * `restore_databases` writes back. */
 static const char *Databases[3] = {ETC_PASSWD, ETC_SHADOW, ETC_GROUP};
 static char Snapshot[3][4096];
 
@@ -68,7 +70,10 @@ static int fail(const char *what)
     return 1;
 }
 
-/** Read the whole of `path` into `buffer`. Returns the length, or -1. */
+/**
+ * Read up to `size - 1` bytes of `path` into `buffer`, terminated. Returns the
+ * length, or -1.
+ */
 static long slurp(const char *path, char *buffer, size_t size)
 {
     ssize_t got;
@@ -87,7 +92,7 @@ static long slurp(const char *path, char *buffer, size_t size)
     return (long)got;
 }
 
-/** Write `text` to `path` at `mode`, creating or truncating it. Returns 0. */
+/** Write `text` to `path` at `mode`, creating or truncating it; 0, or -1. */
 static int spill(const char *path, const char *text, mode_t mode)
 {
     size_t len = strlen(text);
@@ -103,7 +108,10 @@ static int spill(const char *path, const char *text, mode_t mode)
     return wrote == (ssize_t)len ? 0 : -1;
 }
 
-/** Put the databases back the way every case here expects to find them. */
+/**
+ * Write the snapshots back to the databases, the shadow file at 0600 and the
+ * others at 0644. A failed write is ignored.
+ */
 static void restore_databases(void)
 {
     size_t i;
@@ -148,8 +156,10 @@ static int set_hash(char *text, const char *user, const char *value)
 }
 
 /**
- * Read from `fd` until `needle` appears or `ms` elapse, appending to `buffer`.
- * Returns 1 on a match.
+ * Read from `fd`, appending to the terminated string in `buffer` of `size`
+ * bytes, until `needle` appears in it. Returns 1 on a match, and 0 at end of
+ * file, on a read error, when the buffer is full, or once `ms` milliseconds
+ * of polls have passed with nothing to read.
  */
 static int read_until(int fd, const char *needle, char *buffer, size_t size, long ms)
 {
@@ -254,7 +264,11 @@ static int run_login(const char *script, char *said, size_t size)
 }
 
 /**
- * The login that succeeds, asserted on the identity it hands over.
+ * Check the login that succeeds: it prompts, and the program it execs has
+ * every uid and gid of `probe` and the leading dash. Every one of the six ids
+ * is checked, since a real uid alone would pass for a program that set the
+ * real id and kept the saved one, a process that can regain root. Returns 0,
+ * or 1 after printing the failure.
  */
 static int check_login(void)
 {
@@ -270,9 +284,6 @@ static int check_login(void)
     if (strstr(said, "rach2 login:") == NULL) {
         return fail("login did not ask who was there");
     }
-    /* The whole triple, and the dash. A real uid alone would pass on a program
-     * that dropped the real id and kept the saved one, which is a process that
-     * can climb back. */
     snprintf(wanted, sizeof(wanted), "uid=%d euid=%d suid=%d gid=%d egid=%d sgid=%d arg0=-idreport",
              PROBE_UID, PROBE_UID, PROBE_UID, PROBE_UID, PROBE_UID, PROBE_UID);
     if (strstr(said, wanted) == NULL) {
@@ -283,7 +294,15 @@ static int check_login(void)
 }
 
 /**
- * The refusals, none of which may exec anything.
+ * Check the refusals, none of which may exec anything: a wrong password, an
+ * unknown name, and an empty shadow field, which is no password at all.
+ *
+ * Each must end in an ordinary exit: `run_login` returns -1 for a child that
+ * was killed or faulted, and a crash that printed nothing about a uid would
+ * otherwise count as a refusal. An unknown name gets the same words as a
+ * wrong password and is not repeated back, since a message that told them
+ * apart would show which accounts exist. Returns 0, or 1 after printing the
+ * failure.
  */
 static int check_refusals(void)
 {
@@ -302,9 +321,6 @@ static int check_refusals(void)
         if (status == 0) {
             return fail("login admitted a caller who proved nothing");
         }
-        /* And exited to say so. `run_login` reports -1 for a child that was
-         * killed or faulted, and a crash that happened to print nothing about
-         * a uid would otherwise be scored as a refusal. */
         if (status < 0) {
             return fail("login did not exit normally when it refused");
         }
@@ -314,16 +330,12 @@ static int check_refusals(void)
         if (strstr(said, "uid=") != NULL) {
             return fail("a refused login still exec'd the account's shell");
         }
-        /* The same words for an unknown name as for a wrong password: a
-         * message that told them apart would be an oracle for which accounts
-         * exist, which is a question a login prompt must not answer. */
         if (which == 1 && strstr(said, "nosuchaccount") != NULL) {
             return fail("login repeated an unknown name back at the prompt");
         }
     }
 
-    /* An empty shadow field is not a password everyone knows: it is no
-     * password at all, and busybox's login would have admitted it. */
+    /* An empty shadow field. */
     restore_databases();
     if (slurp(ETC_SHADOW, staged, sizeof(staged)) < 0 || set_hash(staged, PROBE_USER, "") != 0 ||
         spill(ETC_SHADOW, staged, 0600) != 0) {
@@ -341,13 +353,25 @@ static int check_refusals(void)
 }
 
 /**
- * A login that was stopped, and a terminal somebody left unusable.
+ * Check a login that was stopped, and a terminal a session left unusable.
+ * Returns 0, or 1 after printing the failure.
  *
- * Both are ways to take the console away for good, not for a moment, and
- * neither can be fixed by the process they happen to: a stop cannot be caught
- * when it arrives as `SIGSTOP`, and the terminal's modes outlive every session
- * that changes them. So one is init's to undo and the other is the login's to
- * undo before it asks anything.
+ * Both are ways to take the console away for good, and neither can be fixed
+ * by the process they happen to: a stop cannot be caught when it arrives as
+ * `SIGSTOP`, and the terminal's modes outlive every session that changes
+ * them. So one is init's to undo and the other is the login's to undo before
+ * it prompts.
+ *
+ * For the stop, this process plays init: it must see the stop with `WUNTRACED`,
+ * without which the wait would never return, and continue the login, which must
+ * then log the account in. For the terminal, a pty is left as
+ * `stty -icanon min 0` leaves a line, and a login started on it must put it
+ * back into canonical mode, read through the slave the login uses. A login
+ * that did not would read zero bytes at once, exit, and be respawned into the
+ * same failure forever; only a terminal shows this, since a login on a pipe
+ * has no modes to reset. The name is written only once the prompt appears,
+ * since the reset discards input already queued, and a name written earlier
+ * would be lost to the repair being tested.
  */
 static int check_wedges(void)
 {
@@ -360,8 +384,7 @@ static int check_wedges(void)
 
     restore_databases();
 
-    /* A stopped login: the probe plays init, and must be able to bring it
-     * back. A `wait` without WUNTRACED never returns here at all. */
+    /* A stopped login. */
     if (pipe(in) != 0 || pipe(out) != 0) {
         return fail("could not make the pipes the stop case needs");
     }
@@ -427,11 +450,7 @@ static int check_wedges(void)
         return fail("a login that was stopped and continued never came back");
     }
 
-    /* A terminal left the way `stty -icanon min 0` leaves it. A login that did
-     * not put the line back would read zero bytes at once, exit, and be
-     * respawned into the same failure forever. It takes a real terminal to see
-     * this at all: through a pipe there is nothing to reset, and a login whose
-     * standard input is a pipe never asks. */
+    /* A terminal left as `stty -icanon min 0` leaves it. */
     {
         int master = -1;
         int slave = -1;
@@ -476,9 +495,6 @@ static int check_wedges(void)
             char seen[2048];
 
             seen[0] = '\0';
-            /* The prompt is the rendezvous, and it has to be: the reset flushes
-             * whatever was already typed, so a name written before login got
-             * that far would be discarded by the very repair being tested. */
             if (read_until(master, "rach2 login:", seen, sizeof(seen), 20000)) {
                 (void)write(master, PROBE_USER "\n", strlen(PROBE_USER) + 1);
                 if (read_until(master, "Password:", seen, sizeof(seen), 20000)) {
@@ -486,8 +502,6 @@ static int check_wedges(void)
                     (void)read_until(master, "uid=", seen, sizeof(seen), 20000);
                 }
             }
-            /* Read back through the slave the login is using, since that is
-             * the line whose modes it was answerable for. */
             if (tcgetattr(slave, &asked) == 0 && (asked.c_lflag & ICANON) != 0 &&
                 asked.c_cc[VMIN] == 1) {
                 sane = 1;
@@ -514,7 +528,8 @@ static int check_wedges(void)
 }
 
 /**
- * Run the cases and report.
+ * Take the snapshots, run the cases, write the databases back and print the
+ * result. Must run as root. Returns 0 when every case passes, 1 otherwise.
  */
 int main(void)
 {

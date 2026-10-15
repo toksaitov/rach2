@@ -1,22 +1,23 @@
 /**
- * The credential replacement across a reboot, on a real disk (three-boot).
+ * creddisk: check that a credential replacement and the writer's lock reach
+ * the disk, across three boots of one disk image.
  *
  * link-deps: utils/pwauth.c
  *
- * `cred_rewrite` is the milestone's most consequential write, and every other
- * proof of it runs on the RAM module, where both of its flushes are no-ops and
- * a library that dropped either would pass them all. This is the boot that can
- * tell: the KRFFS is mounted from a real disk through the page cache
- * (`rach2.fsdisk`), so anything left in the cache when the machine goes is
- * gone. Which boot this is, is read off `/credtarget`, and each one leaves the
- * disk in the state the next one reads.
+ * Every other test of `cred_rewrite` runs on the RAM module, where both of
+ * its flushes do nothing and a library that dropped either would pass them
+ * all. This boot can tell: the KRFFS is mounted from a disk through the page
+ * cache (`rach2.fsdisk`), so anything left in the cache when the machine stops
+ * is lost. Which boot this is, is read off `/credtarget`, and each one leaves
+ * the disk in the state the next one reads. `tests/run cred-persist` boots
+ * the image three times.
  *
  * The first boot replaces `/credtarget` under a transaction and ends it, then
  * takes a second transaction, replaces `/credalso`, and leaves through `_exit`
- * still holding it. That second half is a writer cut off exactly where a power
- * failure would cut it off: no release, no flush after the one `cred_rewrite`
- * makes itself, which is what makes the flush after the rename the only thing
- * that can carry the publish to the platter.
+ * still holding it. That second half is a writer cut off where a power failure
+ * would cut it off: no release and no flush after the one `cred_rewrite`
+ * makes itself, so the flush after the rename is the only one that can take
+ * the publish to the disk.
  *
  * The second boot is the reader of both. `/credtarget` and `/credalso` must
  * hold their replacements with the modes and owners they inherited and no
@@ -32,7 +33,9 @@
  * removal stayed in the cache would leave one on every clean writer's reboot,
  * which is the same dead end reached by accident.
  *
- * Prints "CREDDISK FAIL (detail)" and exits 1 on any failure.
+ * The boots print "CREDDISK OK (wrote)", "CREDDISK OK (released)" and
+ * "CREDDISK OK (read back)" in turn; any failure prints
+ * "CREDDISK FAIL (detail)" and exits 1.
  */
 
 #include <stdio.h>
@@ -44,6 +47,8 @@
 
 #include "pwauth.h"
 
+/* The two staged files, root's, at modes 0600 and 0640, and the texts
+ * `TARGET` has before the first boot, after it, and after the second. */
 #define TARGET   "/credtarget"
 #define ALSO     "/credalso"
 #define BEFORE   "original\n"
@@ -81,13 +86,12 @@ static ssize_t slurp(const char *path, char *buffer, size_t size)
 }
 
 /**
- * How many temporary files of `path`'s the root directory still has.
+ * Count the temporary files of `path` in the root directory.
  *
- * A replacement writes through `<path>.tmp.<pid>`, so a boot that asks whether
- * the one before it left a temporary behind is asking about a prefix: the pid
- * that named it belonged to a machine that is gone. A root directory that
- * cannot be opened counts as one temporary, since a question this could not
- * answer must not read as a clean disk.
+ * A replacement writes through `<path>.tmp.<pid>`, so the count matches a
+ * prefix: the pid in a name an earlier boot left belonged to a process of
+ * that boot. A root directory that cannot be opened counts as one temporary
+ * file, so that a failure to look is not taken for a clean disk.
  */
 static int temps_left(const char *path)
 {
@@ -132,8 +136,8 @@ static int has(const char *path, const char *text, mode_t mode)
 }
 
 /**
- * The first boot: one replacement released, and one the writer is cut off
- * holding.
+ * Run the first boot: one replacement released, and one the writer is cut off
+ * holding. Exits 0 on success, and returns 1 after printing a failure.
  *
  * The cut-off half leaves through `_exit`, so the release registered with
  * `atexit` never runs and no flush follows the one `cred_rewrite` makes. The
@@ -165,8 +169,11 @@ static int write_boot(void)
 }
 
 /**
- * The second boot: both replacements had to reach the platter, and the lock the
- * cut-off writer left is reported, not broken.
+ * Run the second boot: both replacements must have reached the disk, and the
+ * lock the cut-off writer left is reported and left in place by an acquire.
+ * The lock is then removed by hand, as the report says, and `TARGET` replaced
+ * again under a transaction that is released. Returns 0, or 1 after printing
+ * the failure.
  */
 static int read_boot(void)
 {
@@ -210,8 +217,6 @@ static int read_boot(void)
     }
     unlink("/credreport.txt");
 
-    /* What the report says to do, done: root owns /etc and the removal is
-     * root's. */
     if (unlink(CRED_LOCK_PATH) != 0) {
         return fail("could not remove the stale lock by hand");
     }
@@ -229,7 +234,10 @@ static int read_boot(void)
     return 0;
 }
 
-/** The third boot: the release reached the platter, so no lock is there. */
+/**
+ * Run the third boot: the release reached the disk, so no lock is there, and
+ * the last replacement did too. Returns 0, or 1 after printing the failure.
+ */
 static int release_boot(void)
 {
     if (present(CRED_LOCK_PATH)) {
@@ -246,6 +254,7 @@ static int release_boot(void)
     return 0;
 }
 
+/** Run the boot that the text of `TARGET` names; 0, or 1 on a failure. */
 int main(void)
 {
     char content[64];
