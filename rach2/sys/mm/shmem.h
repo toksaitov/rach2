@@ -38,7 +38,8 @@ struct shmem {
     uint32_t nleaves;   /* the directory's length */
     uint32_t npages;    /* the pages the directory reaches, nleaves leaves' */
     uint32_t held;      /* the frames the table holds */
-    uint64_t size;             /* the file's size in bytes */
+    /* The file's size in bytes. */
+    uint64_t size;
     uint32_t maps;             /* the mappings of it, which a truncation reaches */
     struct shmem_quota *quota; /* the count its pages are held against, or NULL */
 };

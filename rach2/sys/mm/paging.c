@@ -30,7 +30,8 @@ size_t _frames_number;
  * `alloc_kernel_frame` gives out: frames whose physical address a device can
  * be given. */
 static size_t _window_frames;
-static size_t _managed_frames; /* counted at boot, for frame_total_count */
+/* The frames the allocator manages, counted at boot (`frame_total_count`). */
+static size_t _managed_frames;
 static size_t _free_frames; /* words of the table that are 0, kept by every writer */
 
 static void frame_take(uintptr_t frame);
