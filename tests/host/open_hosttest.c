@@ -1,34 +1,54 @@
 /**
- * Check mounted open truncation, cleanup and loop handle relocation, the
- * close of a descriptor whose release sleeps, by one thread or by the end of
- * another thread's call, the errors of an open, a dup and a dup2 that get no
- * descriptor, an unlink and a rename on the KRFFS root of a file an open is
- * installing or a program runs from, a chmod, a chown, the stat calls, access
- * and utimensat of a file a write moves, an open that truncates while
- * another thread sharing its table asks for the table's last free slot, the
- * key a file's locks are found by on each kind of mount, a mkdir of a name
- * another process makes while the call waits for the parent's lock, the
- * locks of an orphan's last description dropped before the orphan is freed,
- * the release of a program's file that lost its name, under the root's lock,
- * an rmdir on the KRFFS root of a directory a description or a working
- * directory has, or an open publishes a descriptor on while the call waits,
- * a seek of a /proc file's or /dev/bootlog's description while a read or a
- * write of it sleeps, the log's seeks past the offsets they can return, and
- * the release of the last holder of a file of the KRFFS root
- * that lost its name, by each path a descriptor or a file mapping ends on,
- * while another process's allocation on the root runs in the reclaim's
- * sleep.
+ * open_hosttest.c: the open, close, dup and path calls of
+ * rach2/sys/syscall_fs.c, with the descriptor tables of rach2/sys/fs/fd.c,
+ * the loop devices of rach2/sys/block/loop.c and the file mappings of
+ * rach2/sys/mm/filemap.c, on a model mounted type and a model KRFFS root.
  *
  * host-deps: rach2/sys/fs/fd.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c tests/host/compat/park_host.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  *
- * Unused syscall, loop and file mapping exports are private so their
- * hardware paths are removed. The model uses distinct nodes and open
- * handles. A call of another process that must wait for a description or
- * for the namespace lock that a sleeping call holds parks in its wait with
- * its frames kept (`compat/park_host.c`), and the row resumes it there once
- * the holder has let go and woken its queue.
+ * The rows check:
+ *
+ * - an open that truncates a file of a mounted type, and the cleanup of an
+ *   open that fails;
+ * - the close of a descriptor whose release sleeps, by its own thread or at
+ *   the end of another thread's call, and a dup2 whose source is closed
+ *   while the replacement of its target sleeps;
+ * - the errors of an open, a dup and a dup2 that get no descriptor;
+ * - an unlink and a rename on the KRFFS root of a file an open is
+ *   installing or a program runs from;
+ * - the release of a program's file that lost its name, under the root's
+ *   lock;
+ * - a mkdir of a name another process makes while the call waits for the
+ *   parent's lock;
+ * - the locks of an orphan's last description, dropped before the orphan is
+ *   freed;
+ * - an rmdir on the KRFFS root of a directory a description or a working
+ *   directory has, or an open publishes a descriptor on while the call
+ *   waits;
+ * - a chdir that pins its directory until the working directory records it;
+ * - a chmod, a chown, the stat calls, access and utimensat of a file a write
+ *   moves;
+ * - an open that truncates while another thread sharing its table takes the
+ *   table's last free slot;
+ * - a loop device's handle when its node moves;
+ * - the key a file's locks are found by on each kind of mount;
+ * - a seek of a /proc file's or /dev/bootlog's description while a read or
+ *   a write of it sleeps, and the log's seeks past the offsets they can
+ *   return;
+ * - the release of the last holder of a file of the KRFFS root that lost
+ *   its name, by each path a descriptor or a file mapping ends on, while
+ *   another process's allocation on the root runs in the reclaim's sleep.
+ *
+ * The static declarations before the includes make the unused exports of
+ * the three sources private, so the compiler drops them and the hardware
+ * calls they make need no stub. `node` and `handle` are distinct, so a
+ * check can tell a node from an open handle of it. A call of another
+ * process that must wait for a description or for the namespace lock that
+ * a sleeping call holds parks in its wait with its frames kept
+ * (`compat/park_host.c`), and the row resumes it there once the holder has
+ * let go and woken its queue.
  */
 #include "isr.h"
 #include "lib/kuser.h"
@@ -233,7 +253,7 @@ static int mkdir_row;
  * description whose locks went. */
 static const struct open_file *orphan_ofd, *ofd_gone;
 /* The call that holds the root's namespace lock when a row's call first
- * asks for it, which runs before the row's call has the lock, the depth of
+ * takes it, which runs before the row's call has the lock, the depth of
  * the lock, the number of times it was taken from a depth of 0, and that
  * number at the row's first lookup in the root. */
 static void (*waiting)(void);
@@ -248,7 +268,7 @@ static int path_pages_out[4];
 static wait_queue_t *parked_on;
 static int parked_wakes;
 /* The process that holds the namespace lock, and the queue a call of another
- * process that asks for the lock meanwhile sleeps on. */
+ * process sleeps on while it waits for the lock. */
 static process_t *ns_holder;
 static wait_queue_t ns_queue;
 /* The call another process makes while a reclaim of a node of the root
@@ -294,12 +314,14 @@ int strncpy_from_user(char *dst, const char __user *src, uint32_t n)
     return -ENAMETOOLONG;
 }
 
+/** Copy to user memory, which in the model is the caller's own. */
 int copy_to_user(void __user *dst, const void *src, size_t n)
 {
     k_memcpy(dst, src, n);
     return 0;
 }
 
+/** Copy from user memory, which in the model is the caller's own. */
 int copy_from_user(void *dst, const void __user *src, size_t n)
 {
     k_memcpy(dst, src, n);
@@ -321,6 +343,7 @@ char *path_buf_get(void)
     return 0;
 }
 
+/** Give back a path page `path_buf_get` took. */
 void path_buf_put(char *buf)
 {
     int i;
@@ -345,12 +368,13 @@ int vfs_mount_slots(void)
     return 1;
 }
 
+/** The model's one mount, at index 0. */
 struct vfs_mount *vfs_mount_at(int idx)
 {
     return idx == 0 ? &mount : 0;
 }
 
-/* No row opens a /proc/PID/mem. */
+/** No row opens a /proc/PID/mem. */
 int procfs_is_mem(const struct fd_entry *e)
 {
     (void)e;
@@ -372,6 +396,7 @@ void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
     *nanoseconds = 0;
 }
 
+/** The boot time, which no row reads. */
 int64_t rtc_boot_time(void)
 {
     return 0;
@@ -389,6 +414,7 @@ int32_t fifo_attach(struct fd_entry *e, const void *mnt, uint64_t ino, int flags
     return -ENXIO;
 }
 
+/** Fail the row: no row opens a device node. */
 const char *devfs_name_of(int block, uint32_t rdev)
 {
     (void)block;
@@ -397,6 +423,7 @@ const char *devfs_name_of(int block, uint32_t rdev)
     return 0;
 }
 
+/** Fail the row: no row opens a device by name. */
 int devfs_open(const char *name, int flags)
 {
     (void)name;
@@ -405,6 +432,7 @@ int devfs_open(const char *name, int flags)
     return -ENXIO;
 }
 
+/** Fail the row: no row looks up a terminal. */
 struct pty *pty_get(int index)
 {
     (void)index;
@@ -412,6 +440,7 @@ struct pty *pty_get(int index)
     return 0;
 }
 
+/** Fail the row: no row opens a terminal. */
 int pty_open_slave(int index, int flags)
 {
     (void)index;
@@ -440,28 +469,33 @@ uint8_t *fb_enter(void)
     return 0;
 }
 
+/** Fail the row: no row opens the framebuffer. */
 void kbd_clear_scancodes(void)
 {
     check(0, "unexpected framebuffer open");
 }
 
+/** Fail the row: no row opens the mouse. */
 bool mouse_is_available(void)
 {
     check(0, "unexpected mouse open");
     return false;
 }
 
+/** Fail the row: no row opens the mouse. */
 int input_mouse_present(void)
 {
     check(0, "unexpected mouse open");
     return 0;
 }
 
+/** Fail the row: no row opens the mouse. */
 void mouse_clear_packets(void)
 {
     check(0, "unexpected mouse open");
 }
 
+/** Fail the row: no row reads the path of a node of the root. */
 int krffs_node_path(krffs_node_t *n, char *buf, uint32_t size)
 {
     (void)n;
@@ -471,6 +505,7 @@ int krffs_node_path(krffs_node_t *n, char *buf, uint32_t size)
     return -1;
 }
 
+/** Fail the row: no row resolves a path of the root by name. */
 krffs_node_t *krffs_resolve(const char *path)
 {
     (void)path;
@@ -509,7 +544,7 @@ void lock_ofd_gone(const struct open_file *ofd)
  * -1 none. */
 static int fail_after = -1;
 
-/** Count host allocations, and refuse the one `fail_after` names. */
+/** Count host allocations, and fail the one `fail_after` names. */
 void *kzalloc(size_t size)
 {
     void *p;
@@ -574,7 +609,7 @@ int vfs_root_mounted(void)
     return 1;
 }
 
-/** Require the node the file is at, and, but in the attribute rows,
+/** Require the node the file is at and, except in the attribute rows,
  * set-id removal after successful truncation. */
 int vfs_setattr(struct vfs_mount *mnt, void *at, int what, const struct vfs_stat *st)
 {
@@ -602,7 +637,7 @@ int vfs_open_node(struct vfs_mount *mnt, void *at, int flags, void **out)
     return 0;
 }
 
-/** fallocate, which no row asks for. */
+/** fallocate, which no row calls: EOPNOTSUPP. */
 int vfs_fallocate(struct vfs_mount *mnt, void *handle, uint32_t mode, uint64_t offset, uint64_t len)
 {
     (void)mnt;
@@ -688,11 +723,12 @@ void vfs_leave(struct vfs_mount *mnt)
 }
 
 /** Close the handle when the description is freed, which is where a release
- * sleeps: run what the row has happen meanwhile. */
+ * sleeps: run what the row has happen meanwhile. The orphan rows'
+ * descriptions open nothing on the root, and have nothing to close. */
 void vfs_desc_close(struct vfs_mount *mnt, void *at, void *opened)
 {
     if (orphan_ofd) {
-        return; /* the orphan rows' descriptions open nothing on the root */
+        return;
     }
     check(at == (relocate ? &moved : &node), "close retains current node identity");
     if (in_release) {
@@ -720,6 +756,7 @@ void *kmap_temp(uintptr_t phys)
     return NULL;
 }
 
+/** Unmap nothing: `kmap_temp` maps nothing. */
 void kunmap_temp(void *va)
 {
     (void)va;
@@ -729,18 +766,21 @@ void kunmap_temp(void *va)
  * for it. */
 int inotify_watches;
 
+/** Report no event: nothing is watched. */
 void inotify_desc(struct open_file *ofd, uint32_t mask)
 {
     (void)ofd;
     (void)mask;
 }
 
+/** No descriptor is an inotify instance. */
 int inotify_is(int fd)
 {
     (void)fd;
     return 0;
 }
 
+/** Add no watch: EINVAL. */
 int32_t inotify_watch(int fd, struct vfs_mount *mnt, uint64_t ino, int isdir, uint32_t mask)
 {
     (void)fd;
@@ -751,13 +791,14 @@ int32_t inotify_watch(int fd, struct vfs_mount *mnt, uint64_t ino, int isdir, ui
     return -EINVAL;
 }
 
+/** Allocate through `kzalloc`, which counts and can fail. */
 void *kmalloc(size_t size)
 {
     return kzalloc(size);
 }
 
-/* The shared mappings of disk files, which no row makes: a row's mapping
- * is private. */
+/** The shared mappings of disk files, which no row makes: a row's mapping
+ * is private, and no page of a shared one is resident. */
 uintptr_t shmem_resident(const struct shmem *sh, uint32_t pgoff)
 {
     (void)sh;
@@ -765,6 +806,7 @@ uintptr_t shmem_resident(const struct shmem *sh, uint32_t pgoff)
     return 0;
 }
 
+/** Fail the row: no page joins a shared mapping. */
 uintptr_t shmem_adopt(struct shmem *sh, uint32_t pgoff, uintptr_t phys)
 {
     (void)sh;
@@ -774,6 +816,7 @@ uintptr_t shmem_adopt(struct shmem *sh, uint32_t pgoff, uintptr_t phys)
     return 0;
 }
 
+/** Fail the row: no shared pages are truncated. */
 int shmem_truncate(struct shmem *sh, uint64_t size)
 {
     (void)sh;
@@ -782,36 +825,42 @@ int shmem_truncate(struct shmem *sh, uint64_t size)
     return 0;
 }
 
+/** Fail the row: no frame is taken for a shared page. */
 uintptr_t alloc_user_frame(void)
 {
     check(0, "unexpected frame for a shared page");
     return 0;
 }
 
+/** Fail the row: no shared page gains a reference. */
 void frame_ref(uintptr_t phys)
 {
     (void)phys;
     check(0, "unexpected reference to a shared page");
 }
 
+/** Fail the row: no shared page is freed. */
 void free_frame(uintptr_t phys)
 {
     (void)phys;
     check(0, "unexpected free of a shared page");
 }
 
+/** Fail the row: no row holds a mapping. */
 void vm_file_get(struct vm_file *f)
 {
     (void)f;
     check(0, "unexpected hold of a mapping");
 }
 
+/** Fail the row: no row puts a mapping. */
 void vm_file_put(struct vm_file *f)
 {
     (void)f;
     check(0, "unexpected put of a mapping");
 }
 
+/** Fail the row: no row reads a mapped file. */
 int32_t vfs_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t count, uint64_t offset)
 {
     (void)mnt;
@@ -823,6 +872,7 @@ int32_t vfs_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t count,
     return -EIO;
 }
 
+/** Fail the row: no row writes a mapped file. */
 int32_t vfs_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t count,
                   uint64_t offset)
 {
@@ -835,6 +885,7 @@ int32_t vfs_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t
     return -EIO;
 }
 
+/** Fail the row: no shared page is mapped. */
 uintptr_t shmem_map_page(struct shmem *sh, uint32_t pgoff)
 {
     (void)sh;
@@ -843,12 +894,14 @@ uintptr_t shmem_map_page(struct shmem *sh, uint32_t pgoff)
     return 0;
 }
 
+/** Fail the row: no shared pages are released. */
 void shmem_free(struct shmem *sh)
 {
     (void)sh;
     check(0, "unexpected release of shared pages");
 }
 
+/** Fail the row: no row unmaps a range. */
 void unmap_user_range(page_dir_t *dir, uintptr_t start, uintptr_t end)
 {
     (void)dir;
@@ -865,9 +918,9 @@ int mm_exe_holds(const struct vfs_mount *mnt, const void *n)
 }
 
 /** Free an orphan of the KRFFS root, which only the orphan rows do, once the
- * closing description's locks are gone; no row owns the display or has a
- * socket. The reclaim marks the extent free and may then sleep reading a
- * neighbouring header, and the call a row arms for that runs meanwhile. */
+ * closing description's locks are gone. The reclaim marks the extent free
+ * and may then sleep reading a neighbouring header, and the call a row arms
+ * for that runs meanwhile. */
 void krffs_remove_reserved_node(krffs_file_system_t *fs, krffs_node_t *node)
 {
     (void)fs;
@@ -890,17 +943,20 @@ void krffs_remove_reserved_node(krffs_file_system_t *fs, krffs_node_t *node)
     }
 }
 
+/** Fail the row: no row owns the display. */
 void fb_exit(void)
 {
     check(0, "unexpected display release");
 }
 
+/** Fail the row: no row has a socket. */
 void socket_ref(struct socket *sock)
 {
     (void)sock;
     check(0, "unexpected socket reference");
 }
 
+/** Fail the row: no row has a socket. */
 void socket_unref(struct socket *sock)
 {
     (void)sock;
@@ -942,7 +998,7 @@ void wait_queue_init(wait_queue_t *wq)
 static const struct file_ops log_ops;
 static uint32_t log_len;
 
-/** The type fallocate asks of a device descriptor, which no row has. */
+/** The type of a device descriptor, which fallocate reads and no row has. */
 uint32_t devfs_fd_mode(struct fd_entry *e)
 {
     (void)e;
@@ -957,6 +1013,7 @@ int devfs_fd_is_raw(struct fd_entry *e)
     return 0;
 }
 
+/** Fail the row: no row seeks a raw device window. */
 int devfs_fd_raw_size(struct fd_entry *e, uint64_t *size)
 {
     (void)e;
@@ -965,6 +1022,8 @@ int devfs_fd_raw_size(struct fd_entry *e, uint64_t *size)
     return 0;
 }
 
+/** Whether `e` is the model's /dev/bootlog, with the ring's length in
+ *  `size` when it is and `size` is not null. */
 int devfs_fd_log_size(struct fd_entry *e, uint32_t *size)
 {
     if (!e || e->type != FD_TYPE_DEVICE || e->ops != &log_ops) {
@@ -1016,6 +1075,7 @@ NO_PROC_INO(procfs_ino_locks)
 NO_PROC_INO(procfs_ino_netstatdir)
 NO_PROC_INO(procfs_ino_sysvipcdir)
 
+/** Fail the row: no row stats a file of /proc. */
 uint32_t procfs_ino_sysvipc(int origin)
 {
     (void)origin;
@@ -1023,12 +1083,14 @@ uint32_t procfs_ino_sysvipc(int origin)
     return 0;
 }
 
+/** No entry of /proc/sys is writable. */
 int synth_sys_writable(int entry)
 {
     (void)entry;
     return 0;
 }
 
+/** Remount nothing: EINVAL. */
 int vfs_remount(struct vfs_mount *m, uint32_t flags, const char *options)
 {
     (void)m;
@@ -1037,6 +1099,7 @@ int vfs_remount(struct vfs_mount *m, uint32_t flags, const char *options)
     return -EINVAL;
 }
 
+/** Fail the row: no row stats an entry of /proc/sys. */
 uint32_t procfs_ino_sys(int entry)
 {
     (void)entry;
@@ -1050,12 +1113,14 @@ NO_PROC_INO(procfs_ino_netdev)
 NO_PROC_INO(procfs_ino_netdir)
 NO_PROC_INO(procfs_ino_netroute)
 NO_PROC_INO(procfs_ino_nettcp)
+/** Fail the row: no row stats a file of /proc. */
 uint32_t procfs_ino_net(int origin)
 {
     (void)origin;
     check(0, "unexpected stat of a /proc file");
     return 0;
 }
+/** Fail the row: no row stats a file of /sys. */
 uint32_t sysfs_ino(int node, int key, int file)
 {
     (void)node;
@@ -1064,6 +1129,7 @@ uint32_t sysfs_ino(int node, int key, int file)
     check(0, "unexpected stat of a /sys file");
     return 0;
 }
+/** Fail the row: no row stats a file of /sys. */
 int sysfs_attr_writable(int node, int attr)
 {
     (void)node;
@@ -1071,24 +1137,28 @@ int sysfs_attr_writable(int node, int attr)
     check(0, "unexpected stat of a /sys file");
     return 0;
 }
+/** No device of /sys exists. */
 int sysfs_device_exists(int node, int key)
 {
     (void)node;
     (void)key;
     return 0;
 }
+/** No device of /sys has a key: -1. */
 int sysfs_device_key(int node, int n)
 {
     (void)node;
     (void)n;
     return -1;
 }
+/** No descriptor is of /proc/sys. */
 int procfs_fd_is_sys(struct fd_entry *e)
 {
     (void)e;
     return 0;
 }
 
+/** The path of an entry of /sys, which no row has: empty. */
 void synth_sys_path(int node, int key, char *out, int cap)
 {
     (void)node;
@@ -1107,6 +1177,7 @@ int devfs_fd_moves_offset(struct fd_entry *e)
     return devfs_fd_log_size(e, NULL);
 }
 
+/** Fail the row: the log is the one device a row seeks. */
 int devfs_lseek_zero(struct fd_entry *e)
 {
     (void)e;
@@ -1114,6 +1185,7 @@ int devfs_lseek_zero(struct fd_entry *e)
     return 0;
 }
 
+/** Fail the row: no row seeks a raw device window. */
 int32_t raw_seek_resolve(uint64_t cur, uint64_t size, long long delta, int whence, uint64_t *out)
 {
     (void)cur;
@@ -1147,7 +1219,8 @@ void wq_wake_all(wait_queue_t *wq)
 /**
  * A description wait: it ends when `cond` holds, and a call of another
  * process that a row runs in a sleep parks until the row resumes it, then
- * asks again. Any other wait is one that nothing can end, which ends the run.
+ * tests `cond` again. Any other wait is one that nothing can end, which
+ * ends the run.
  */
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
@@ -1167,7 +1240,7 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
  * Take the namespace lock, first running the call that holds it, which the
  * caller waits for, unless the caller holds the lock already. A call of
  * another process that a row runs in a sleep of the lock's holder parks
- * until the row resumes it, then asks again; any other request for a lock
+ * until the row resumes it, then tries again; any other wait for a lock
  * another process holds is one that nothing can end, which ends the run.
  */
 void vfs_ns_lock(struct vfs_mount *mnt)
@@ -1230,8 +1303,9 @@ static int root_lookup(struct vfs_mount *mnt, void *dir, const char *name, void 
 }
 
 /** Resolve a path of the root to the root directory and its last name,
- * taking the root's lock for a locked walk, as the resolver does for a type
- * that asks for it. */
+ * taking the root's lock for a locked walk of a serialised type, as the
+ * resolver does. A walk to the file itself finds the attribute rows' file,
+ * under the same lock, as the resolver takes it before each lookup. */
 int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct vfs_ref *out,
                 char *leaf, uint32_t leafcap)
 {
@@ -1241,8 +1315,6 @@ int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct
     (void)start;
     check(ns_depth == 0, "a walk starts with no namespace lock held");
     if (!(flags & VFS_WALK_PARENT)) {
-        /* The attribute rows' file, found under the lock a locked walk
-         * takes, as the resolver takes it before each lookup. */
         if ((flags & VFS_WALK_LOCK) && mount.type->ns_serialised) {
             vfs_ns_lock(&mount);
         }
@@ -1281,6 +1353,7 @@ const struct vpath *vfs_synth_vpath(struct vfs_mount *mnt, void *node)
     return 0;
 }
 
+/** No name is a mount point. */
 struct vfs_mount *vfs_leaf_mount(struct vfs_mount *mnt, void *node, const char *name)
 {
     (void)mnt;
@@ -1316,6 +1389,7 @@ static int dir_pin(struct vfs_mount *mnt, void *at, void **token)
     return 0;
 }
 
+/** Let go of a pin `dir_pin` made. */
 static void dir_unpin(struct vfs_mount *mnt, void *token)
 {
     check(mnt == &mount && token == &dir_pins && dir_pins > 0, "an unpin matches a pin");
@@ -1330,6 +1404,7 @@ int procfs_resolve_id(const struct vpath *vp)
     return -1;
 }
 
+/** Fail the row: no row's path is of /proc. */
 int procfs_resolve_pid(int pid)
 {
     (void)pid;
@@ -1337,6 +1412,7 @@ int procfs_resolve_pid(int pid)
     return 0;
 }
 
+/** Fail the row: no row's path is of /proc. */
 int procfs_may_read(int pid)
 {
     (void)pid;
@@ -1344,6 +1420,7 @@ int procfs_may_read(int pid)
     return 0;
 }
 
+/** Fail the row: no row's path is of /proc. */
 int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
 {
     (void)pid;
@@ -1354,6 +1431,7 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
     return -ENOENT;
 }
 
+/** Fail the row: no row's path is of /proc. */
 uint32_t procfs_ino_pid(int pid)
 {
     (void)pid;
@@ -1361,7 +1439,7 @@ uint32_t procfs_ino_pid(int pid)
     return 0;
 }
 
-/* The descriptor and process lookups of fstat, which no row reaches: GCC
+/** The descriptor and process lookups of fstat, which no row reaches: GCC
  * keeps their callers, so a link needs them. */
 process_t *get_process(uint32_t pid)
 {
@@ -1370,6 +1448,7 @@ process_t *get_process(uint32_t pid)
     return NULL;
 }
 
+/** Fail the row: no row looks up a process of /proc. */
 int procfs_oom_owner(int pid, uint32_t *uid, uint32_t *gid)
 {
     (void)pid;
@@ -1379,6 +1458,7 @@ int procfs_oom_owner(int pid, uint32_t *uid, uint32_t *gid)
     return -ENOENT;
 }
 
+/** No descriptor is of /proc: -1. */
 int procfs_fd_owner(struct fd_entry *e, uint32_t *uid, uint32_t *gid)
 {
     (void)e;
@@ -1387,42 +1467,49 @@ int procfs_fd_owner(struct fd_entry *e, uint32_t *uid, uint32_t *gid)
     return -1;
 }
 
+/** No descriptor is a writable file of /proc. */
 int procfs_fd_writable(struct fd_entry *e)
 {
     (void)e;
     return 0;
 }
 
+/** No descriptor has an inode number of /proc. */
 uint32_t procfs_fd_ino(struct fd_entry *e)
 {
     (void)e;
     return 0;
 }
 
+/** No descriptor has a device number. */
 uint32_t devfs_rdev(struct fd_entry *e)
 {
     (void)e;
     return 0;
 }
 
+/** No descriptor has an inode number of /dev. */
 uint32_t devfs_fd_ino(struct fd_entry *e)
 {
     (void)e;
     return 0;
 }
 
+/** No descriptor is a terminal: -1. */
 int pty_slave_index(struct fd_entry *e)
 {
     (void)e;
     return -1;
 }
 
+/** No descriptor is a socket with an inode number. */
 uint32_t unix_inode(const fd_entry_t *e)
 {
     (void)e;
     return 0;
 }
 
+/** Fail the row: no row names a synthetic directory. */
 void synth_dir_path(int kind, int pid, int tid, char *out, int cap)
 {
     (void)kind;
@@ -1462,6 +1549,7 @@ int vfs_node_path(struct vfs_mount *mnt, void *at, char *out, uint32_t cap)
     return -ENOENT;
 }
 
+/** Fail the row: no row enters a process's root. */
 int vfs_enter(struct vfs_mount *mnt)
 {
     (void)mnt;
@@ -1469,6 +1557,7 @@ int vfs_enter(struct vfs_mount *mnt)
     return -EBUSY;
 }
 
+/** Fail the row: no row holds a process's root. */
 void vfs_ref_hold(const struct vfs_ref *r)
 {
     (void)r;
@@ -1483,9 +1572,9 @@ static void changed_in_lookup_hold(void)
           "the lookups, the count and the change run under one hold of the root's lock");
 }
 
-/** Make `name` in the root directory, or refuse a name that is there, as
- * the KRFFS core refuses one, with the errno its adapter gives every such
- * refusal: ENOSPC on the root and EIO on a volume. */
+/** Make `name` in the root directory. A name that is there fails, as it
+ * does in the KRFFS core, with the errno its adapter gives every such
+ * failure: ENOSPC on the root and EIO on a volume. */
 int vfs_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode)
 {
     (void)mode;
@@ -1500,8 +1589,8 @@ int vfs_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode)
     return 0;
 }
 
-/** Remove the directory "made", as the root does once the syscall layer has
- * made its refusals. */
+/** Remove the directory "made", as the root does once the checks of the
+ * syscall layer have passed. */
 int vfs_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
 {
     check(mnt == &mount && dir == &root_dir && __builtin_strcmp(name, "made") == 0,
@@ -1554,6 +1643,7 @@ void krffs_unlink_held(krffs_node_t *n)
     keeps++;
 }
 
+/** Take the name off a node a holder keeps, keeping the node. */
 void krffs_orphan_node(krffs_node_t *n)
 {
     changed_in_lookup_hold();
@@ -1747,8 +1837,8 @@ static int orphan_desc(int fifo);
 static int program_fd = -1;
 static int program_close_removals = -1;
 
-/** The close of the program's file's descriptor by a process that asked for
- * the root's lock while the release of the program's file held it. */
+/** The close of the program's file's descriptor by a process that waited
+ * for the root's lock while the release of the program's file held it. */
 static void program_desc_closes(void)
 {
     orphan_ofd = proc.fds->entries[program_fd].ofd;
@@ -1762,7 +1852,7 @@ static void program_desc_closes(void)
  * root's lock (`fs_exe_lock`), frees the node with the lock held, as an
  * unlink does, since the reclaim may sleep in the page cache and no
  * allocation may take the extent meanwhile, and gives the lock back. With a
- * descriptor of the file open, whose close asks for the lock while the
+ * descriptor of the file open, whose close waits for the lock while the
  * release holds it, the release counts the descriptor in the hold it took
  * before its address space left the holders, and leaves the file to the
  * close, which frees it once.
@@ -1813,7 +1903,7 @@ static void program_reclaim(void)
 }
 
 /** The mkdir a row's call waits for: another process has made the
- * directory "made" while it held the lock the call asks for. */
+ * directory "made" while it held the lock the call waits for. */
 static void other_makes_it(void)
 {
     k_strncpy((char *)made_dir.name, "made", sizeof(made_dir.name));
@@ -1837,6 +1927,7 @@ static void mkdir_row_begin(int mounted)
     mkdir_row = 1;
 }
 
+/** End a mkdir row. */
 static void mkdir_row_end(void)
 {
     mkdir_row = 0;
@@ -1849,10 +1940,11 @@ static void mkdir_row_end(void)
  * A mkdir of a name another process makes while this one waits for the
  * namespace lock, on the KRFFS root and on a serialised mounted type. The
  * lookup runs under the lock with the creation, so the name is found and
- * the answer is EEXIST, where the file system would refuse it as it refuses
- * a full volume on the root (ENOSPC) and a failing one on a KRFFS volume
- * (EIO). With no other process, the directory is made, and on the root
- * stamped with its maker's ids and the mode less the umask.
+ * the answer is EEXIST, where the file system's own check of the name would
+ * give the errno it gives a full volume on the root (ENOSPC) and a failing
+ * one on a KRFFS volume (EIO). With no other process, the directory is
+ * made, and on the root stamped with its maker's group and the mode less
+ * the umask.
  */
 static void mkdir_race(void)
 {
@@ -1970,6 +2062,7 @@ static void rmdir_row_begin(void)
     k_memset(&other_fs, 0, sizeof(other_fs));
 }
 
+/** End an rmdir row. */
 static void rmdir_row_end(void)
 {
     proc.fs = 0;
@@ -2056,7 +2149,7 @@ static void chdir_sleeps(void)
     pins_asleep = dir_pins;
 }
 
-/** The call that holds the lock the chdir row's walk asks for last; the
+/** The call that holds the lock the chdir row's walk takes last; the
  * chdir's next sleep comes after its walk. */
 static void chdir_walks(void)
 {
@@ -2222,8 +2315,8 @@ static void times_after_move(void)
  * error `fd_alloc` gave it. */
 static int other_slot;
 
-/** Another thread that shares the table asks for a descriptor while the
- * open waits for the mount's lock in its walk. */
+/** Another thread that shares the table takes a descriptor while the open
+ * waits for the mount's lock in its walk. */
 static void other_takes_slot(void)
 {
     current_proc = &other;
@@ -2233,7 +2326,7 @@ static void other_takes_slot(void)
 
 /**
  * An open that truncates, in a table with one free slot, while another
- * thread sharing the table asks for a descriptor as the open's walk waits
+ * thread sharing the table takes a descriptor as the open's walk waits
  * for the mount's lock: the open reserved the slot before its walk, so the
  * other thread finds the table full, and the open ends with that slot and
  * the file truncated.
@@ -2564,12 +2657,14 @@ static int32_t mem_transfer(fd_entry_t *e, uint32_t count)
     return (int32_t)count;
 }
 
+/** A read of /proc/PID/mem, through `mem_transfer`. */
 static int32_t mem_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
     (void)buf;
     return mem_transfer(e, count);
 }
 
+/** A write of /proc/PID/mem, through `mem_transfer`. */
 static int32_t mem_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
     (void)buf;
@@ -2593,9 +2688,9 @@ static int32_t log_read(fd_entry_t *e, char __user *buf, uint32_t count)
 
 static const struct file_ops log_ops = {log_read, 0, 0, 0, 0};
 
-/* A transfer a row makes through the dispatch of read(2) or write(2), on a
- * descriptor of `type` with `ops`; the seek of the sharer that waits for it;
- * and the failure that names the case. */
+/* A transfer a row makes through the dispatch of read(2), or of write(2)
+ * when `writing` is set, on a descriptor of `type` with `ops`; the seek of
+ * the sharer that waits for it; and the failure that names the case. */
 struct offset_case {
     fd_type_t type;
     const struct file_ops *ops;
@@ -2764,11 +2859,13 @@ static int orphan_desc(int fifo)
 /* The descriptor a release row lets go of. */
 static int orphan_fd = -1;
 
+/** Close the orphan's descriptor. */
 static void orphan_close(void)
 {
     check(close_fd(orphan_fd) == 0, "the close of the orphan's descriptor");
 }
 
+/** Clear the orphan's descriptor as a dup2 onto it does (`dup_clear`). */
 static void orphan_dup2(void)
 {
     check(dup_clear(orphan_fd) == 0, "a dup2 onto the orphan's descriptor");
@@ -2907,43 +3004,48 @@ static void mapping_reclaims(void)
     root_row_end();
 }
 
-/** Exercise mounted open and loop references. */
-/* A mount is its own base here: no test makes a bind mount. */
+/** A mount is its own base here: no row makes a bind mount. */
 const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m)
 {
     return m;
 }
 
+/** No mount holds a device. */
 int vfs_device_holds(block_device_t *dev)
 {
     (void)dev;
     return 0;
 }
 
+/** Sync nothing: the model has no cache. */
 int bcache_sync(block_device_t *dev)
 {
     (void)dev;
     return 0;
 }
 
+/** Drop nothing: the model has no cache. */
 int bcache_invalidate(block_device_t *dev)
 {
     (void)dev;
     return 0;
 }
 
+/** No buffer of a device is held. */
 int bcache_device_holds(block_device_t *dev)
 {
     (void)dev;
     return 0;
 }
 
+/** No device is under another: 0. */
 int block_depth(block_device_t *device)
 {
     (void)device;
     return 0;
 }
 
+/** Run every row. Returns 0 when every check passed, 1 otherwise. */
 int main(void)
 {
     mount.type = &mounted_type;
