@@ -1,27 +1,27 @@
 /**
  * Rach2 PID 1: it reaps orphans and keeps a console session running.
  *
- * The kernel starts this as the first user process, so it is init, and it
- * reparents every orphaned process onto it. Its core job is three things a
- * system needs for as long as it runs: reap whatever children land on it (the
- * console session and every orphan the kernel hands over), respawn that
+ * The kernel starts this as the first user process, so it is init, and the
+ * kernel reparents every orphaned process to it. Its core job is three things
+ * a system needs for as long as it runs: reap whatever children land on it
+ * (the console session and every orphan the kernel hands over), respawn that
  * session when it exits, so the console is never left without one, and
  * continue a child that is stopped, since nothing else can. Beside that it
- * clears `/var/run`, sets the resource limits and keeps `/bin/update`
- * running. It never exits; if it did, the kernel would have no reaper, so the
- * kernel panics if init dies.
+ * clears `/var/run`, writes the boot's utmp record, sets the resource limits
+ * and keeps `/bin/update` running. It never exits; if it did, the kernel
+ * would have no reaper, so the kernel panics if init dies.
  *
  * Four artifacts are built from this one source, and none of them is named
  * plain `init`: `init-shell` runs a shell on the console, `init-login` puts
  * that console behind `/bin/login`, `init-metal` is `init-login` plus the
- * network, a supervised SSH server and, on the GNU system's root, D-Bus's
- * system bus, and `init-recovery` is the recovery system's, a shell on the
- * console with the metal build's network, server and file system check beside
- * it. The metal build exists because the machine it is for is across the room:
- * nobody is going to type a command at its console to start a daemon, so the
- * daemon has to be running when the machine finishes booting. The console login
- * stays exactly as it is beside it, and is the way back in when the network is
- * the thing that is broken.
+ * network, a supervised SSH server, the system log and, on the GNU system's
+ * root, D-Bus's system bus and the cron daemon, and `init-recovery` is the
+ * recovery system's, a shell on the console with the metal build's network,
+ * services and file system check beside it. The metal build exists because
+ * the machine it is for is across the room: nobody types a command at its
+ * console to start a daemon, so the daemon has to be running when the
+ * machine finishes booting. The console login is the same as `init-login`'s
+ * beside it, and is the way back in when the network is what is broken.
  *
  * Built like the other utils, linked against the ported musl (see
  * utils/Makefile), and staged at /sbin/init by the image manifests.
@@ -56,15 +56,15 @@ extern char **environ;
 /* The one program the console session may exec in this build. There is no
  * list and no fallback: a fall-through to a shell on any exec failure hands
  * the console to whoever is standing at it, and narrowing the fall-through to
- * ENOENT inverts the danger instead of removing it, since ENOENT is exactly
- * the case of an image built without /bin/login, which is the image that must
- * refuse hardest. So the fallback is compiled out: this artifact has no code
+ * ENOENT inverts the danger instead of removing it, since ENOENT is the case
+ * of an image built without /bin/login, and that image above all must not
+ * give a shell. So the fallback is compiled out: this artifact has no code
  * path and no string that names a shell. */
 #define LOGIN_PROGRAM "/bin/login"
 
-/* The pause before a failed exec is tried again. Longer than the shell build's,
- * so a permanent failure states its reason on the console instead of scrolling
- * it away. */
+/* The pause, in seconds, before a session that died within two seconds is
+ * started again. Longer than the shell build's one second, so a permanent
+ * failure leaves its reason on the console instead of scrolling it away. */
 #define LOGIN_RESPAWN_PAUSE 5
 #else
 /* The login shell, tried in order: /bin/sh then /ish. The recovery system's
@@ -97,9 +97,9 @@ static const char *const Shell_Arg0[] = {"-sh", "-ish", 0};
  * OpenSSH's `sshd` takes `-D` for the same foreground and `-e` to write its
  * log to standard error, which is the service log, readable only by root, as
  * Linux keeps its authentication log from users; the system log is readable
- * by all. Its argv[0] is its absolute path, without which it refuses
- * to start, since a SIGHUP makes it execute itself again by that name to
- * read its configuration anew. It makes no host keys: `ssh-keygen -A` runs
+ * by all. Its argv[0] is its absolute path, without which it does not
+ * start, since a SIGHUP makes it execute itself again by that name to read
+ * its configuration anew. It makes no host keys: `ssh-keygen -A` runs
  * before each start and makes those missing from `/etc/ssh`, every one on a
  * first boot, with the same need for the kernel's entropy. The same policy
  * file decides root's password, which `PermitRootLogin prohibit-password`
@@ -109,10 +109,11 @@ static const char *const Shell_Arg0[] = {"-sh", "-ish", 0};
 #define OPENSSH_PROGRAM "/usr/sbin/sshd"
 #define OPENSSH_KEYGEN  "/usr/bin/ssh-keygen"
 
-/* The pause after an SSH server that died almost at once. Long enough that a
- * server failing for a permanent reason (no entropy, no network, a port
- * already taken) does not respawn at full speed, and short enough that a
- * machine reachable only over the network is reachable again quickly. */
+/* The pause, in seconds, after a service that died almost at once, the SSH
+ * server among them (`service_ended`). Long enough that a server failing for
+ * a permanent reason (no entropy, no network, a port already taken) does not
+ * respawn at full speed, and short enough that a machine reachable only over
+ * the network is reachable again quickly. */
 #define SSHD_RESPAWN_PAUSE 5
 
 /*
@@ -155,16 +156,16 @@ static int login_hint_given;
 
 /**
  * Say on the console that the login program could not be run, and, the first
- * time in a boot, how to get back in. Returns nothing.
+ * time in a boot, how to get back in.
  *
- * Written with `write`, not `printf`, because this runs in a child that
- * has just failed an `execve`, and the only thing it can still be sure of is a
- * descriptor. The second line gives the way back in: `rach2.rescue` boots the
- * kernel debug shell with the file system mounted and writable. On the login
- * build it is the only way back in, since nothing there starts a network
- * service; the metal build also has its SSH server. The child exits at once,
- * so it cannot remember that the hint was given; the flag it reads is init's,
- * copied at the fork.
+ * Written with `write`, not `printf`, because this runs in a forked child
+ * that has just failed an `execve`, and a write to a descriptor depends on
+ * none of the stdio state it was forked with. The second line gives the way
+ * back in: `rach2.rescue` boots the kernel debug shell with the file system
+ * mounted and writable. On the login build it is the only way back in, since
+ * nothing there starts a network service; the metal build also has its SSH
+ * server. The child exits at once, so it cannot record that the hint was
+ * given; the flag it reads is init's, copied at the fork.
  */
 static void report_no_login(void)
 {
@@ -178,10 +179,10 @@ static void report_no_login(void)
 }
 
 /**
- * Record how the console session ended, `lived` seconds after its fork. A
- * session child that exited with 127 in under two seconds is one whose exec of
- * the login program failed, and it has printed the rescue hint, so the
- * children forked after it leave the hint out.
+ * Record how the console session ended, from its wait status `status`,
+ * `lived` seconds after its fork. A session child that exited with 127 in
+ * under two seconds is one whose exec of the login program failed, and it has
+ * printed the rescue hint, so the children forked after it leave the hint out.
  */
 static void session_ended(int status, time_t lived)
 {
@@ -192,7 +193,7 @@ static void session_ended(int status, time_t lived)
 #endif
 
 /**
- * Stop the machine the way the signal asks. Does not return.
+ * Stop the machine as the signal `sig` selects. Does not return.
  *
  * Installed for the three signals busybox's `halt`, `poweroff` and `reboot`
  * send to pid 1, with busybox's own mapping: SIGUSR1 halts, SIGUSR2 powers off,
@@ -205,9 +206,9 @@ static void session_ended(int status, time_t lived)
  * so there is nothing to return to. A failed `reboot` falls to `_exit`, and
  * the kernel panics when init dies.
  *
- * The kernel disables scheduling and attempts to flush the file systems
- * before stopping. Shutdown continues if a flush fails. Init does not first
- * terminate user processes.
+ * The kernel disables scheduling and writes out the root file system before
+ * it stops the machine, and stops it even when that write fails. init does
+ * not terminate the user processes first.
  */
 static void shutdown_handler(int sig)
 {
@@ -247,21 +248,19 @@ static void shutdown_handler(int sig)
    second, so this is about a minute on a quiet machine and less on a busy one. */
 #define SERVICE_LOG_CHECK_TURNS 60
 
+/* The service log and `/dev/null`, both close-on-exec, or -1 when not open. */
 static int service_log_fd = -1;
 static int service_null_fd = -1;
 
 /**
- * Empty the log when it has reached its cap, leaving a line that says so.
+ * Empty the service log when it has reached `SERVICE_LOG_CAP` bytes, and
+ * write a line that says so. Nothing is done when the log is not open.
  *
  * The services hold descriptors opened `O_APPEND`, so truncating the file to
  * nothing is enough: their next write lands at the start of it and nothing has
- * to be reopened or renamed. Rotation would need the opposite, a new file the
- * running services cannot be moved onto, and a collector that owns the
- * writing, which init does not have.
- *
- * What is lost is every record the log held. What is kept is a root that does
- * not fill because one service is repeating itself, and on the recovery system
- * that root is memory.
+ * to be reopened or renamed. Every record the log held is lost, and in return
+ * one service that repeats itself cannot fill the root, which on the recovery
+ * system is memory.
  */
 static void bound_service_log(void)
 {
@@ -281,9 +280,9 @@ static void bound_service_log(void)
 
 /**
  * Open the service log, removing it first when the last boots left it at the
- * cap, and `/dev/null` as its fallback. A machine with no writable /var keeps
- * -1 and its services are silenced rather than allowed back onto the console,
- * since the console is the one thing this is protecting.
+ * cap, and `/dev/null` as its fallback. On a machine with no writable /var
+ * the log's descriptor stays -1 and the services write to `/dev/null`, never
+ * to the console.
  *
  * `/dev/null` is opened read-write because it stands in for the log when there
  * is no log, and a service redirected onto a read-only descriptor would fail
@@ -308,15 +307,17 @@ static void open_service_log(void)
     }
 }
 
-/** Return the service log descriptor, or the null descriptor as fallback. */
+/** The service log's descriptor, or `/dev/null`'s when the log is not open,
+ * or -1 when neither is. */
 static int service_sink(void)
 {
     return service_log_fd >= 0 ? service_log_fd : service_null_fd;
 }
 
 /**
- * Connect standard input to `/dev/null` and both output streams to the service
- * log, falling back to `/dev/null`. Exit the child if redirection fails.
+ * In a child, point standard input at `/dev/null` and standard output and
+ * error at the service log, or at `/dev/null` when there is no log. A child
+ * whose redirection fails exits with status 126.
  */
 static void service_output(void)
 {
@@ -329,33 +330,36 @@ static void service_output(void)
 }
 
 #ifdef INIT_METAL
+/* Root's authorized keys, which `anyone_to_let_in` reads and `take_disk_keys`
+ * adds to. */
 #define RECOVERY_KEYS "/root/.ssh/authorized_keys"
 
 /**
- * Whether this image has anybody to let in over SSH.
+ * Whether this image has anybody to let in over SSH: 1 when it has, so the
+ * SSH server is started, and 0 when it has not.
  *
  * On the recovery build the server starts where root has an authorized key
  * and nowhere else, which makes a credential a property of the image rather
  * than a switch in the code. A stick built for development has the owner's
  * key and can update a machine remotely; one built for anybody else has none,
- * answers nothing, and is reachable only after a person puts a key on it. The
+ * starts no server, and is reachable only after a person puts a key on it. The
  * recovery partition of an installed disk is the same: it starts no server
  * unless its image has a key or the installer put one beside it, which
- * `take_disk_keys` adds to root's before this is first asked.
+ * `take_disk_keys` adds to root's before this is first called.
  *
  * Root's own file is the one that counts. `--update` and a repair are done as
  * root, and an image that let an unprivileged account in but had no root key
  * could not do either. The file must be a regular one with a line that is
  * neither blank nor a comment. What such a line says is for the server to
  * judge: an entry may begin with options (`no-port-forwarding
- * ssh-ed25519 ...`), and reading it more closely here would refuse entries
- * Dropbear accepts and admit lines it does not.
+ * ssh-ed25519 ...`), and a closer reading here would fail entries Dropbear
+ * accepts and pass lines it does not.
  *
- * The metal build always answers yes. An installed system's policy is its
- * own: the installer decides who may log in, puts the account's key in the
- * account's own directory and writes the SSH policy for root, and root's
- * directory is empty by design, so asking about root's keys would leave every
- * freshly installed machine with no server at all.
+ * The metal build always returns 1. An installed system's policy is its own:
+ * the person installing decides who may log in, and the installer puts the
+ * account's key in the account's own directory and writes the SSH policy for
+ * root. Root's directory is empty by design, so a test of root's keys would
+ * leave every freshly installed machine with no server at all.
  */
 static int anyone_to_let_in(void)
 {
@@ -392,16 +396,18 @@ static int anyone_to_let_in(void)
 
 /**
  * Fork the console session and return its pid (-1 on failure): `/bin/login`
- * on the login builds, the first of `Shells` that executes on the others.
+ * on the login builds, the first of `Shells` that executes on the others. A
+ * child that executes nothing exits with status 127, whatever the error, and
+ * on the login builds `session_ended` reads that status.
  *
  * The child does what getty does before exec: `setsid` makes it a new
  * session's leader (with no controlling terminal), then `ioctl(TIOCSCTTY)`
  * claims the console as that session's controlling terminal. The program thus
  * starts as a session leader that already owns the terminal, so a
  * job-control shell like busybox ash, which checks `tcgetpgrp` at startup,
- * finds itself the foreground. That is why init must never own the console:
- * it hands the console to each session it spawns, as a real init delegates a
- * terminal through getty.
+ * finds itself the foreground. That is why init never has the console as
+ * its own controlling terminal: it gives the console to each session it
+ * starts, as a Unix init does through getty.
  *
  * On the login builds the child sets `LOGIN_TIMEOUT=0` before the exec.
  * BusyBox's login, the `/bin/login` of the images that stage BusyBox,
@@ -417,44 +423,44 @@ static pid_t spawn_shell(void)
 #endif
 
     if (pid != 0) {
-        return pid; /* init (the parent), or -1 if fork failed */
+        return pid;
     }
 
-    setsid();                                  /* new session; this child is its leader */
-    ioctl(STDIN_FILENO, TIOCSCTTY, (void *)0); /* claim the console as our ctty */
+    setsid();
+    ioctl(STDIN_FILENO, TIOCSCTTY, (void *)0);
 #ifdef INIT_CONSOLE_LOGIN
     {
         char *argv[2];
         argv[0] = (char *)"login";
         argv[1] = 0;
         (void)setenv("LOGIN_TIMEOUT", "0", 1);
-        execve(LOGIN_PROGRAM, argv, environ); /* returns only on failure */
+        execve(LOGIN_PROGRAM, argv, environ);
     }
     report_no_login();
-    _exit(127); /* every failure is this one, ENOENT included */
+    _exit(127);
 #else
     for (i = 0; Shells[i] != 0; i++) {
         char *argv[2];
         argv[0] = (char *)Shell_Arg0[i];
         argv[1] = 0;
-        execve(Shells[i], argv, environ); /* returns only on failure */
+        execve(Shells[i], argv, environ);
     }
-    _exit(127); /* no login shell present in the image */
+    _exit(127);
 #endif
     return -1; /* unreachable; quiets the compiler */
 }
 
 #ifdef INIT_METAL
 /**
- * Check every ext2 partition with `e2fsck -p` before anything runs from the
- * disk.
+ * Check each ext2 partition of the first disk with `e2fsck -p` before
+ * anything runs from the disk.
  *
  * An image without `/sbin/e2fsck` skips this, which leaves the recovery
  * system, whose root needs nothing from the disk, as the one that runs it.
  * `main` calls it only when the boot line has `rach2.fsck`, since a person who
  * booted recovery to look, or an installer that booted it to write, did not
- * ask for a repair. The partitions are the four MBR entries the kernel
- * publishes as nodes, and a partition is an ext2 one when byte 56 of its
+ * ask for a repair. The partitions are the nodes `/dev/disk0p1` to
+ * `/dev/disk0p4`, and a partition is an ext2 one when byte 56 of its
  * superblock, which starts at byte 1024 of the partition, has the magic. A
  * fork that fails is retried up to five times a second apart, because a check
  * skipped is a repair not made.
@@ -521,8 +527,8 @@ static void check_ext2_partitions(void)
  * Whether the boot line has `want` as a whole token.
  *
  * A whole token and not a prefix: `rach2.ip=none` and `rach2.ip=none.x` are
- * different things. The line is read from `/proc/cmdline` each time, which
- * is twice in a boot.
+ * different things. The first 511 bytes of `/proc/cmdline` are read at each
+ * call, of which a boot makes up to three.
  */
 static int boot_line_has(const char *want)
 {
@@ -577,9 +583,10 @@ static int boot_wants_userland_network(void)
 #define DISK_KEYS_MAX   16384
 /* The kernel's own limit on disks, DISK_MAX in rach2/sys/block/disk.h. */
 #define DISK_NODES      8
-/* The recovery partition's label as its FAT32 boot sector holds it, at byte
- * 71: tools/image/mkdisk_grub.sh gives it, and the boot loader's core finds
- * the partition by it when the boot partition does not read. */
+/* The recovery partition's label as it is in its FAT32 boot sector, at byte
+ * 71, padded to 11 bytes: tools/image/mkdisk_grub.sh gives it, and the boot
+ * loader's core finds the partition by it when the boot partition does not
+ * read. */
 #define RECOVERY_LABEL  "RACH2RECOV "
 
 /** The first `rach2.boot=` token of `line` from `from` on, or NULL. */
@@ -600,10 +607,10 @@ static char *boot_token(char *line, char *from)
  * `GPTID=` and a GUID table's disk GUID. `text` is the form the boot line
  * gave, for the messages. */
 struct disk_identity {
-    int gpt;
-    unsigned long id;
-    unsigned char guid[16];
-    char text[44];
+    int gpt;                /* 1 for `GPTID=`, 0 for `MBRID=` */
+    unsigned long id;       /* the MBR signature; set only when `gpt` is 0 */
+    unsigned char guid[16]; /* the disk GUID as the table stores it */
+    char text[44];          /* `MBRID=...` or `GPTID=...`, without `,1` */
 };
 
 /**
@@ -755,9 +762,9 @@ static int is_recovery_partition(const char *node)
 }
 
 /**
- * Why the `len` bytes of `keys`, which end in a NUL, will not do as keys, or
- * NULL when they will: they are not text, they hold a private key, or no line
- * of them is neither blank nor a comment.
+ * Why the `len` bytes of `keys`, followed by a NUL, will not do as keys, or
+ * NULL when they will: they are not text (a NUL is among them), they hold a
+ * private key, or every line of them is blank or a comment.
  */
 static const char *keys_fault(const char *keys, long len)
 {
@@ -790,10 +797,10 @@ static const char *keys_fault(const char *keys, long len)
  * Read the key file under the mounted partition into `keys`, which holds
  * `DISK_KEYS_MAX + 1` bytes, and return its length.
  *
- * Returns -1 with `*why` set when the file is there and is refused: not a
- * regular file, larger than `DISK_KEYS_MAX`, or refused by `keys_fault`.
- * Returns 0 with `*why` NULL when there is no file, which is a disk installed
- * without a key.
+ * Returns -1 with `*why` set when the file is there and cannot be used: it
+ * cannot be opened or read, is not a regular file, is larger than
+ * `DISK_KEYS_MAX`, or fails `keys_fault`. Returns 0 with `*why` NULL when
+ * there is no file, which is a disk installed without a key.
  */
 static long read_disk_keys(char *keys, const char **why)
 {
@@ -843,8 +850,10 @@ static long read_disk_keys(char *keys, const char **why)
 }
 
 /**
- * Append `len` bytes of keys to root's `authorized_keys`, after a newline if
- * the file there does not end with one. Returns 0 on success, -1 otherwise.
+ * Append the `len` bytes of `keys`, `len` at least 1, to root's
+ * `authorized_keys`, making `/root/.ssh` and the file when they are missing.
+ * A newline goes before them when the file does not end with one, and after
+ * them when they do not. Returns 0 on success, -1 otherwise.
  */
 static int append_root_keys(const char *keys, long len)
 {
@@ -895,9 +904,9 @@ static int append_root_keys(const char *keys, long len)
  * person installing gives it a key, so that a machine installed from a stick
  * with no key can still be updated over the network: a root update runs from
  * recovery. Only a boot from that partition reads it, which the recovery
- * entries of the disk's own menu say with `rach2.slot=recovery`. The stick's
- * recovery system keeps the rule that its image decides, so a stick built
- * for nobody answers nobody wherever it is booted. The disk is the one
+ * entries of the disk's own menu say with `rach2.slot=recovery`. On the
+ * stick's recovery system the image alone decides, so a stick built with no
+ * key starts no server wherever it is booted. The disk is the one
  * `rach2.boot=` names by its identity, `MBRID=` or `GPTID=`, and the
  * partition is its second, where both installed layouts keep recovery, and
  * only when its FAT32 boot sector has the recovery label and it holds
@@ -906,8 +915,8 @@ static int append_root_keys(const char *keys, long len)
  *
  * The partition is mounted read-only and unmounted as soon as the file is
  * read, before anything else runs, so a boot changes nothing on the disk
- * and leaves no mount on it for `reflash` or the installer to refuse. The
- * file is refused, and said to be, for the reasons `read_disk_keys` gives;
+ * and leaves no mount on it to stop `reflash` or the installer. The file is
+ * not used, and a message says why, for the reasons `read_disk_keys` gives;
  * what its lines say beyond that is the server's to judge, as in
  * `anyone_to_let_in`.
  */
@@ -1032,7 +1041,8 @@ static void report_backup_tables(void)
 #endif
 
 /**
- * Configure the network, once, before the SSH server is started.
+ * Configure the network with `ifup -a`, wait for it, and report a failure on
+ * standard error. `start_network` calls it once, in a child.
  *
  * A machine across the room is reached over the network, and on a machine that
  * is carried between two buildings the address is not something the boot line
@@ -1055,15 +1065,15 @@ static void report_backup_tables(void)
  *
  * `/var/run/ifstate`, where `ifup` records the interfaces it has brought up,
  * is removed first: on a disk root the previous boot's record survives, and
- * `ifup -a` would refuse eth0 as already configured and bring up nothing.
+ * `ifup -a` would take eth0 as already configured and bring up nothing.
  *
  * `ifup` runs its commands, `ifconfig` and `udhcpc` among them, through
  * root's login shell, with the path it was given. BusyBox's ash runs its
  * applets by name whatever the path, but bash, root's login shell on the GNU
  * system, finds them only through the path, and init's has no `/sbin`, so
  * `ifup` gets the four directories of programs for its path. It is not given
- * a shell by `SHELL`, which it would also take: the strict init holds no
- * shell's path, as `check-setid` requires.
+ * a shell by `SHELL`, which it would also take: `check-setid` requires that
+ * `init-metal` have no shell's path in it.
  */
 static void configure_network(void)
 {
@@ -1108,9 +1118,9 @@ static void configure_network(void)
 
 /**
  * Block init's shutdown signals, SIGUSR1, SIGUSR2 and SIGTERM, before a fork,
- * with the mask before in `saved`; 0, or -1 when the mask cannot change.
- * A child forked with them blocked cannot run init's handlers, which would
- * shut the machine down, before `shutdown_defaults`.
+ * and store the mask as it was in `saved`. Returns 0, or -1 when the mask
+ * cannot be changed. A child forked with them blocked cannot run init's
+ * handlers, which would shut the machine down, before `shutdown_defaults`.
  */
 static int shutdown_block(sigset_t *saved)
 {
@@ -1126,7 +1136,7 @@ static int shutdown_block(sigset_t *saved)
 /**
  * In a child forked under `shutdown_block`, give the shutdown signals their
  * default actions and put back the mask `saved`, so that one sent to the
- * child ends it; 0, or -1 on failure.
+ * child ends it. Returns 0, or -1 on failure.
  */
 static int shutdown_defaults(const sigset_t *saved)
 {
@@ -1143,11 +1153,14 @@ static int shutdown_defaults(const sigset_t *saved)
 }
 
 /**
- * Configure networking in a redirected child, then wait for it.
- * A failed fork skips configuration. Redirection failure exits only the child;
- * init keeps the console descriptors used by later login sessions.
- * Shutdown signals are blocked across the fork until the child has default
- * dispositions, so a signal to the worker terminates it without invoking
+ * Run `configure_network` in a child whose output goes to the service log,
+ * and wait for the child. A failed fork or a failure to block the shutdown
+ * signals skips the configuration.
+ *
+ * The redirection is the child's, so init keeps the console descriptors the
+ * later sessions inherit, and a redirection that fails ends only the child.
+ * The shutdown signals are blocked across the fork until the child has their
+ * default actions, so a signal sent to the child ends it and does not run
  * init's handler.
  */
 static void start_network(void)
@@ -1284,7 +1297,7 @@ static void make_host_keys(void)
 /**
  * Fork the SSH server and return its pid (-1 on failure).
  *
- * Unlike the console session this child does NOT call `setsid` or claim a
+ * Unlike the console session this child does not call `setsid` or claim a
  * controlling terminal. The server makes a session per login and gives each
  * one a pty of its own; handing it the console as well would put two sessions
  * on one terminal, and the console login is the recovery path precisely
@@ -1320,7 +1333,7 @@ static pid_t spawn_sshd(void)
         if (openssh) {
             make_host_keys();
         }
-        execve(program, argv, environ); /* returns only on failure */
+        execve(program, argv, environ);
         (void)write(STDERR_FILENO, msg, sizeof(msg) - 1);
         (void)write(STDERR_FILENO, program, strlen(program));
         (void)write(STDERR_FILENO, "\n", 1);
@@ -1403,7 +1416,7 @@ static pid_t spawn_bus(void)
     pid = fork();
     if (pid != 0) {
         (void)sigprocmask(SIG_SETMASK, &saved, NULL);
-        return pid; /* init (the parent), or -1 if fork failed */
+        return pid;
     }
     if (shutdown_defaults(&saved) != 0) {
         _exit(126);
@@ -1450,7 +1463,7 @@ static pid_t spawn_syslog(void)
     pid = fork();
     if (pid != 0) {
         (void)sigprocmask(SIG_SETMASK, &saved, NULL);
-        return pid; /* init (the parent), or -1 if fork failed */
+        return pid;
     }
     if (shutdown_defaults(&saved) != 0) {
         _exit(126);
@@ -1492,7 +1505,7 @@ static pid_t spawn_cron(void)
     pid = fork();
     if (pid != 0) {
         (void)sigprocmask(SIG_SETMASK, &saved, NULL);
-        return pid; /* init (the parent), or -1 if fork failed */
+        return pid;
     }
     if (shutdown_defaults(&saved) != 0) {
         _exit(126);
@@ -1549,8 +1562,9 @@ struct services {
 };
 
 /**
- * Find which of the optional services this image runs: D-Bus's system bus
- * (`bus_user`) and the cron daemon, where the image has `CRON_PROGRAM`.
+ * Set `*s` to no service running, and find which of the optional services
+ * this image runs: D-Bus's system bus (`bus_user`) and the cron daemon, where
+ * the image has `CRON_PROGRAM`.
  */
 static void services_found(struct services *s)
 {
@@ -1591,9 +1605,11 @@ static void start_services(struct services *s)
 }
 
 /**
- * Whether `reaped`, a pid `waitpid` returned, is the service `s`'s, which
- * is then not running, after a pause when it ended within two seconds of
- * its start. -1 is both a failed wait and the pid of a service not running.
+ * Whether `reaped`, what `waitpid` returned, is the pid of the service `s`.
+ * When it is, the service is marked not running, and when it ended within
+ * two seconds of its start, the call first sleeps `SSHD_RESPAWN_PAUSE`
+ * seconds. A `reaped` of 0 or less never matches, since -1 is both a failed
+ * wait and the pid of a service not running.
  */
 static int service_ended(struct service *s, pid_t reaped)
 {
@@ -1612,7 +1628,8 @@ static int service_ended(struct service *s, pid_t reaped)
  * Empty the directory `dir` of what a boot leaves there and, `depth` levels
  * down, each directory in it, which is then removed (`clear_var_run`). Only
  * an entry that is itself a directory is walked, so a link that could not
- * be unlinked is not followed out of `dir`.
+ * be unlinked is not followed out of `dir`. A directory that cannot be
+ * opened, as on an image without one, is left alone.
  */
 static void clear_dir(const char *dir, int depth)
 {
@@ -1620,7 +1637,7 @@ static void clear_dir(const char *dir, int depth)
     struct dirent *e;
 
     if (!d) {
-        return; /* an image without it has nothing to clear */
+        return;
     }
     while ((e = readdir(d)) != NULL) {
         char path[2 * NAME_MAX + 16];
@@ -1657,7 +1674,7 @@ static void clear_dir(const char *dir, int depth)
  * What is in it describes the machine as it was running, not as it is: `ifup`
  * records there which interfaces it has configured, and a DHCP client leaves
  * its pid. On a machine whose /var/run survives a reboot, the next `ifup -a`
- * reads the last boot's record, decides the interface is already configured,
+ * reads the last boot's record, takes the interface as already configured,
  * and takes no lease at all, while a stale pid file names a process that is
  * either gone or somebody else. Linux keeps this directory in memory for the
  * same reason. This file system has nowhere to put it that a reboot clears, so
@@ -1668,9 +1685,9 @@ static void clear_dir(const char *dir, int depth)
  * directory goes with the socket in it; a directory one level deeper that is
  * not empty is reported, not descended into. Nothing else runs while init
  * does this, so no entry changes between the unlink and the walk. A name
- * holding a slash is refused, since a name read from a damaged file system
- * would otherwise be joined into a path outside this directory, and pid 1
- * would delete a file elsewhere at every boot.
+ * with a slash in it is skipped with a message, since a name read from a
+ * damaged file system would otherwise be joined into a path outside this
+ * directory, and pid 1 would delete a file elsewhere at every boot.
  */
 static void clear_var_run(void)
 {
@@ -1793,12 +1810,14 @@ static pid_t spawn_update(void)
     }
 }
 
-/**
- * One limit value as the file writes it: a decimal number, or `unlimited`.
- * A word that is not one of those, a negative number, or one past what the
- * type holds is `LIMIT_BAD`.
- */
+/* What `limit_value` returns for a word that is not a limit. */
 #define LIMIT_BAD ((rlim_t) - 2)
+
+/**
+ * Parse one limit value of `/etc/rach2/limits`: a decimal number, or
+ * `unlimited`, which is `RLIM_INFINITY`. Returns `LIMIT_BAD` for any other
+ * word, a number with a sign, or a number at or past `RLIM_INFINITY`.
+ */
 static rlim_t limit_value(const char *word)
 {
     char *end;
@@ -1819,13 +1838,15 @@ static rlim_t limit_value(const char *word)
 }
 
 /**
- * The resource limits every session starts with, from `/etc/rach2/limits`:
- * one line per limit, `nproc`, `nofile` or `as`, then the soft and the hard
- * value, a number or `unlimited`. They are set on init itself, and fork and
- * exec hand them down to every login and everything it starts, root's
- * included, and root may raise them. A line that does not parse is reported
- * and skipped; a missing file leaves the kernel's own defaults, which are
- * the table's limits.
+ * Set the resource limits every session starts with, from
+ * `/etc/rach2/limits`: one line per limit, `nproc`, `nofile` or `as`, then
+ * the soft and the hard value, a number or `unlimited`. A line that begins
+ * with `#` or is empty is skipped.
+ *
+ * They are set on init itself, and fork and exec hand them down to every
+ * login and everything it starts, root's included, and root may raise them.
+ * A line that does not parse, or a limit `setrlimit` does not take, is
+ * reported and skipped; a missing file leaves the kernel's own defaults.
  */
 static void apply_limits(void)
 {
@@ -1878,12 +1899,14 @@ static void apply_limits(void)
  *
  * The three shutdown handlers go in before the first child, so a request that
  * arrives early is answered and does not meet a terminating default, which for
- * pid 1 is a panic. Then `/var/run` is emptied and given an empty `utmp`, the
- * limits set and the service log opened. The recovery build takes the key the
- * installer put on the recovery partition it booted from, and says on the
- * console whether a key was built into its image and whether the partition's
- * turned SSH on, since the two kinds of image look identical from outside. A
- * metal boot whose line has `rach2.fsck` then checks its ext2 partitions.
+ * pid 1 is a panic. Then `/var/run` is emptied and given a `utmp` with only
+ * this boot's record, the limits set and the service log opened. The
+ * recovery build takes the key the installer put on the recovery partition
+ * it booted from, says on the console whether a key was built into its image
+ * and whether the partition's turned SSH on, since the two kinds of image
+ * look identical from outside, and names each disk whose GUID table was read
+ * from its backup. A metal boot whose line has `rach2.fsck` then checks its
+ * ext2 partitions.
  *
  * Each turn respawns what is missing: the console session, whose failed fork
  * (a full process table) is retried after a second so the loop does not spin;
@@ -1903,11 +1926,12 @@ static void apply_limits(void)
  * `^Z` at the console prompt stops the session, and there is no shell above it
  * to type `fg`.
  *
- * A console session or a service that dies within two seconds of its
- * start has a permanent reason (a missing or crashing binary, no entropy for
- * the host key, no network, a port already taken), and is respawned only after
- * a pause, so the loop does not spin; an interactive session outlives that
- * window, so an ordinary `exit` brings the prompt back at once.
+ * A console session or a service that dies within two seconds of its start
+ * is taken to have a permanent reason (a missing or crashing binary, no
+ * entropy for the host key, no network, a port already taken), and is
+ * respawned only after a pause, so the loop does not spin; an interactive
+ * session outlives that window, so an ordinary `exit` brings the prompt back
+ * at once.
  */
 int main(void)
 {
@@ -1952,7 +1976,7 @@ int main(void)
             spawned = time(0);
         }
         if (updater < 0) {
-            updater = spawn_update(); /* a failed fork is retried next round */
+            updater = spawn_update();
         }
 
 #ifdef INIT_METAL
@@ -1983,7 +2007,7 @@ int main(void)
             continue;
         }
         if (reaped > 0 && reaped == updater) {
-            updater = -1; /* respawned next round, after a pause below */
+            updater = -1;
             sleep(1);
             continue;
         }
