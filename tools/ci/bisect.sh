@@ -12,14 +12,15 @@
 # A commit is tested by building it and running those items, the build alone
 # when `build` is among them. tests/run takes a set only by itself, so `core`
 # runs after the other items in a run of its own, and `all` runs alone since
-# it covers every suite. A test passes, fails, or cannot be made: a
-# commit that cannot be checked out, or that does not build when the failure
-# is a suite's, is untestable, and an untestable commit ends the search with
-# the range unresolved. BAD is tested first: a failure that does not repeat
-# is labelled `intermittent` and the issue stays open. Otherwise the
-# first-parent commits between GOOD and BAD are halved until one fails and
-# its parent passes, and both are tested once more; the commit is named only
-# when both results repeat. Each test's output is kept under
+# it covers every suite. A test passes, fails, or cannot be made: a commit
+# that cannot be checked out, that does not build when the failure is a
+# suite's, or whose tests/run refuses or stops before its final
+# `run: result: failed` is untestable, and an untestable commit ends the
+# search with the range unresolved. BAD is tested first: a failure that does
+# not repeat is labelled `intermittent` and the issue stays open. Otherwise
+# the first-parent commits between GOOD and BAD are halved until one fails
+# and its parent passes, and both are tested once more; the commit is named
+# only when both results repeat. Each test's output is kept under
 # RUNNER_TEMP/bisect, one file for each commit and attempt, for the job to
 # upload. GH_TOKEN, GITHUB_REPOSITORY and GITHUB_RUN_ID come from the job.
 #
@@ -61,6 +62,18 @@ Logs: \`gh run download $GITHUB_RUN_ID --repo $repo --name bisect-$issue\`" > /d
 # The abbreviated hash of a commit.
 short() { git rev-parse --short "$1"; }
 
+# Run tests/run with ARGS, its output on the log: 0 when it passes, 1 when it
+# ran its suites and failed, 2 when it refused or stopped before its result.
+suites() { # suites ARGS...
+    tests/run "$@" >> "$log.log" 2>&1
+    rc=$?
+    case $rc/$(grep '^run: result: ' "$log.log" | tail -n 1) in
+        0/*) return 0 ;;
+        '1/run: result: failed') return 1 ;;
+    esac
+    return 2
+}
+
 # Build COMMIT and run the failing items on it: 0 when it passes, 1 when the
 # failure repeats, 2 when the commit is untestable.
 tested() { # tested COMMIT
@@ -80,13 +93,16 @@ tested() { # tested COMMIT
         fi
         mv "$log.log" "$log.untestable.log"; return 2
     fi
+    verdict=0
     # shellcheck disable=SC2086 # a suite name is one word by format
-    if { [ -z "$test_items" ] || tests/run $test_items >> "$log.log" 2>&1; } &&
-        { [ -z "$test_set" ] || tests/run "$test_set" >> "$log.log" 2>&1; }; then
-        mv "$log.log" "$log.passed.log"; return 0
-    fi
-    mv "$log.log" "$log.failed.log"
-    return 1
+    [ -z "$test_items" ] || suites $test_items || verdict=$?
+    [ "$verdict" != 0 ] || [ -z "$test_set" ] || suites "$test_set" || verdict=$?
+    case $verdict in
+        0) mv "$log.log" "$log.passed.log" ;;
+        1) mv "$log.log" "$log.failed.log" ;;
+        *) mv "$log.log" "$log.untestable.log" ;;
+    esac
+    return "$verdict"
 }
 
 tested "$bad"

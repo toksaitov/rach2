@@ -1,6 +1,6 @@
 #!/bin/sh
-# ci_test.sh: check unfinished ci reports, the hold issue, bisection runs
-# and verdict errors.
+# ci_test.sh: check unfinished ci reports, the hold issue, bisection runs,
+# a refused run in bisection, and verdict errors.
 # The scripts run in a private tree with stand-ins for git, gh and make.
 
 set -eu
@@ -47,6 +47,9 @@ fault()
         intermittent)
             sed '/say .*passed .*when run again/s/|| status=1/|| :/' "$repo/tools/ci/bisect.sh" > "$work/bisect.sh"
             ! cmp -s "$repo/tools/ci/bisect.sh" "$work/bisect.sh" ;;
+        refusal)
+            sed "s|'1/run: result: failed')|[1-9]*/*)|" "$repo/tools/ci/bisect.sh" > "$work/bisect.sh"
+            ! cmp -s "$repo/tools/ci/bisect.sh" "$work/bisect.sh" ;;
     esac
 }
 if [ "$mode" = texts ]; then
@@ -57,6 +60,7 @@ if [ "$mode" = texts ]; then
     fault comment
     fault label
     fault intermittent
+    fault refusal
     exit 0
 fi
 
@@ -102,7 +106,14 @@ echo make >> "$CI_TEST_WORK/events"
 EOF
 cat > "$work/tree/tests/run" <<'EOF'
 #!/bin/sh
-echo "tests $*" >> "$CI_TEST_WORK/events"
+current=$(cat "$CI_TEST_WORK/current")
+echo "tests $* $current" >> "$CI_TEST_WORK/events"
+case $CI_TEST_RUN/$current in
+    fail/bad) echo "run: $1: FAIL in 1s"; echo 'run: result: failed'; exit 1 ;;
+    refuse/bad) echo "run: result: refused: unknown suite '$1'" >&2; exit 2 ;;
+esac
+echo "run: $1: PASS in 1s"
+echo 'run: result: all 1 suites passed'
 EOF
 cat > "$work/tree/tools/ci/run.sh" <<'EOF'
 #!/bin/sh
@@ -174,8 +185,8 @@ hold()
 # expected after the build, and the stand-in runner always passes.
 bisect()
 {
-    item=$1 command=$2 CI_TEST_FAIL=$3 CI_TEST_GH_FAIL=${4:-}
-    export CI_TEST_FAIL CI_TEST_GH_FAIL
+    item=$1 command=$2 CI_TEST_FAIL=$3 CI_TEST_GH_FAIL=${4:-} CI_TEST_RUN=pass
+    export CI_TEST_FAIL CI_TEST_GH_FAIL CI_TEST_RUN
     RUNNER_TEMP=$work/logs
     export RUNNER_TEMP
     rm -rf "$RUNNER_TEMP"
@@ -211,9 +222,34 @@ bisect()
     fi
 }
 
+# suite RESULT: bisect the runner suite when tests/run on BAD passes, fails,
+# or refuses, and check that only a failure it reports is counted as one.
+suite()
+{
+    CI_TEST_RUN=$1 CI_TEST_GH_FAIL=
+    RUNNER_TEMP=$work/logs
+    export CI_TEST_RUN CI_TEST_GH_FAIL RUNNER_TEMP
+    rm -rf "$RUNNER_TEMP"
+    : > "$work/events"
+    : > "$work/gh.log"
+    status=0
+    sh "$work/bisect.sh" i686 good bad 7 runner > "$work/bisect.log" 2>&1 || status=$?
+    case $1 in
+        pass) printf 'make\ntests runner bad\n' > "$work/expected"
+              verdict='--add-label intermittent' want=0 ;;
+        fail) printf 'make\ntests runner bad\nmake\ntests runner bad\nmake\ntests runner good\n' > "$work/expected"
+              verdict='fails .* and its parent good passes' want=0 ;;
+        refuse) printf 'make\ntests runner bad\n' > "$work/expected"
+                verdict='unresolved: bad could not be tested again' want=1 ;;
+    esac
+    [ "$status" = "$want" ] || return 1
+    cmp -s "$work/expected" "$work/events" || return 1
+    grep -q -- "$verdict" "$work/gh.log"
+}
+
 # rows: check both unfinished kinds and the hold issue, preserve an actual
-# runner failure, and run the core set beside the other items of a core run
-# that failed.
+# runner failure, run the core set beside the other items of a core run that
+# failed, and count only a reported failure of the runner suite as one.
 rows()
 {
     for kind in core night; do
@@ -226,11 +262,13 @@ rows()
     done
     hold fail || return 1
     hold pass || return 1
-    bisect runner 'tests runner' 0 || return 1
-    bisect 'style core' 'tests style\ntests core' 0 || return 1
+    bisect 'style core' 'tests style bad\ntests core bad' 0 || return 1
     bisect unfinished-core core 1 comment || return 1
     bisect unfinished-core core 0 comment || return 1
-    bisect unfinished-core core 0 edit
+    bisect unfinished-core core 0 edit || return 1
+    for result in pass fail refuse; do
+        suite "$result" || return 1
+    done
 }
 
 if ! rows; then
@@ -254,7 +292,7 @@ if [ "$mode" = mutate ]; then
         echo 'ci-test: result: fail: bisection fault passed' >&2; exit 1
     fi
     fault items
-    if bisect 'style core' 'tests style\ntests core' 0; then
+    if bisect 'style core' 'tests style bad\ntests core bad' 0; then
         echo 'ci-test: result: fail: core items fault passed' >&2; exit 1
     fi
     cp "$repo/tools/ci/bisect.sh" "$work/bisect.sh"
@@ -270,6 +308,11 @@ if [ "$mode" = mutate ]; then
         fi
         cp "$repo/tools/ci/bisect.sh" "$work/bisect.sh"
     done
+    fault refusal
+    if suite refuse; then
+        echo 'ci-test: result: fail: refusal fault passed' >&2; exit 1
+    fi
+    cp "$repo/tools/ci/bisect.sh" "$work/bisect.sh"
     rows
 fi
-echo 'ci-test: result: pass: unfinished runs, the hold issue, the runner suite, core items and verdict errors'
+echo 'ci-test: result: pass: unfinished runs, the hold issue, the runner suite, core items, a refused run and verdict errors'
