@@ -1,20 +1,18 @@
 /*
- * diskcmd_hosttest.c: which ATA commands each build policy permits.
+ * diskcmd_hosttest.c: which ATA commands each build policy of
+ * rach2/sys/block/diskcmd.c permits.
  *
  * host-deps: rach2/sys/block/diskcmd.c
  *
- * What this guards is the one promise milestone 24 makes about somebody else's
- * property: a Rach2 built for the laptop must not write its SSD, which has a
- * Windows installation nobody has backed up. So the interesting half of the
- * table is not the commands it permits but the ones it does not, and the
- * sweep below is exhaustive, not a sample: all 256 command bytes are
- * offered under the read-only policy, and exactly five may be accepted.
+ * The read-only policy is for a kernel on a machine whose disk must not be
+ * written, so the commands it refuses matter more than those it permits. The
+ * test offers all 256 command bytes under it, and exactly five may be
+ * permitted: the four reads and IDENTIFY.
  *
- * The compiled-in policy is only half of it. This build is whatever the host
- * compiler's default is, so the table is exercised through
- * `diskcmd_allowed_under`, which takes the policy as an argument; that the
- * BUILD switch actually selects the read-only policy is checked on the built
- * artifact instead, by tools/inspect/check_diskpolicy.sh.
+ * The policy compiled into this test is the host build's, so the table is
+ * run through `diskcmd_allowed_under`, which takes the policy as an argument.
+ * That the build switch selects the read-only policy is checked on the built
+ * kernel by tools/inspect/check_diskpolicy.sh.
  */
 
 extern int printf(const char *fmt, ...);
@@ -31,13 +29,19 @@ static int fails;
         }                                   \
     } while (0)
 
+/**
+ * Run the rows. Read-write must permit every command byte, and read-only
+ * exactly the five above. Named rows require the writes and flushes to be
+ * refused and the reads and IDENTIFY permitted under read-only, unknown
+ * command bytes refused, and a policy value that is neither of the two
+ * judged as read-only. The last row requires the banner to name the policy
+ * `diskcmd_policy` returns. Returns the count of failed checks, at most 255.
+ */
 int main(void)
 {
     unsigned c;
     int permitted = 0;
 
-    /* ---- read-write permits everything, which is what every other image
-            this project builds has always done ---- */
     for (c = 0; c < 256u; c++) {
         if (!diskcmd_allowed_under(DISKCMD_READ_WRITE, (uint8_t)c)) {
             fails++;
@@ -46,7 +50,6 @@ int main(void)
         }
     }
 
-    /* ---- read-only permits four commands and no others ---- */
     for (c = 0; c < 256u; c++) {
         int allowed = diskcmd_allowed_under(DISKCMD_READ_ONLY, (uint8_t)c);
         int expected =
@@ -64,7 +67,6 @@ int main(void)
     }
     CHECK(permitted == 5, "read-only permits exactly five of the 256 command bytes");
 
-    /* ---- and the two that would reach the platter, named ---- */
     CHECK(!diskcmd_allowed_under(DISKCMD_READ_ONLY, DISKCMD_WRITE_DMA_EXT),
           "WRITE DMA EXT is refused");
     CHECK(!diskcmd_allowed_under(DISKCMD_READ_ONLY, DISKCMD_WRITE_SECTORS),
@@ -79,7 +81,6 @@ int main(void)
     CHECK(diskcmd_allowed_under(DISKCMD_READ_ONLY, DISKCMD_IDENTIFY),
           "IDENTIFY is permitted, since the diagnostic needs it");
 
-    /* ---- a command nobody here has heard of is refused, not permitted ---- */
     CHECK(!diskcmd_allowed_under(DISKCMD_READ_ONLY, 0xF8),
           "an unknown command is refused under the read-only policy");
     CHECK(!diskcmd_allowed_under(DISKCMD_READ_ONLY, 0x00),
@@ -87,11 +88,9 @@ int main(void)
     CHECK(!diskcmd_allowed_under(DISKCMD_READ_ONLY, 0xFF),
           "command 0xFF is refused under the read-only policy");
 
-    /* ---- an unknown policy value is read-only, not read-write ---- */
     CHECK(!diskcmd_allowed_under(42, DISKCMD_WRITE_DMA_EXT),
           "a policy value that is neither of the two still refuses a write");
 
-    /* ---- the banner and the compiled-in policy agree with each other ---- */
     {
         const char *b = diskcmd_policy_banner;
         int i, dash = -1;

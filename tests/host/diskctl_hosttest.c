@@ -1,10 +1,10 @@
 /*
- * diskctl_hosttest.c: diskctl's `esp` over an image file, with the kernel's
- * reread answered here.
+ * diskctl_hosttest.c: the `esp` command of utils/diskctl.c over an image
+ * file, with the kernel's table reread answered by the test.
  *
  * host-deps: utils/gptdisk.c
  *
- * The source is included with `ioctl` replaced: a reread refused with EBUSY,
+ * The source is included with `ioctl` replaced. A reread refused with EBUSY,
  * as the kernel refuses one while another descriptor is open on the disk,
  * comes after the type is written, so the disk has 0xEF and the kernel's
  * table does not. The next run must read the table again although the disk
@@ -22,7 +22,8 @@
 
 static int busy, rereads;
 
-/** The kernel's BLKRRPART: refused with EBUSY while `busy`, else counted. */
+/** The kernel's BLKRRPART (0x125F): refused with EBUSY while `busy`, else
+ *  counted in `rereads`. Every other request fails with ENOTTY. */
 static int counted_ioctl(int fd, unsigned long request, void *arg)
 {
     (void)fd;
@@ -55,7 +56,8 @@ static int fails;
         }                                 \
     } while (0)
 
-/** The type byte of entry 1 of the image open on `fd`. */
+/** The type byte of entry 1 of the image open on `fd`, or -1 when sector 0
+ *  does not read. */
 static int entry_type(int fd)
 {
     unsigned char sector[512];
@@ -66,6 +68,13 @@ static int entry_type(int fd)
     return sector[446 + 4];
 }
 
+/**
+ * Run `diskctl esp` on a 128-sector image whose MBR entry 1 has type 0x0C:
+ * once with the reread refused, then twice with it answered, and once more
+ * with the entry's type changed to 0x83, which must be refused before the
+ * table is reread or the entry written. Returns 0 when every check passed, 1
+ * when one failed, and 2 when the image file could not be made.
+ */
 int main(void)
 {
     char path[] = "/tmp/diskctl-hosttest.XXXXXX";

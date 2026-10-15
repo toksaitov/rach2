@@ -1,21 +1,19 @@
 /*
- * diskinfo_hosttest.c: what a disk says about itself, rendered as text.
+ * diskinfo_hosttest.c: the text rach2/sys/block/diskinfo.c renders for
+ * /proc/disk, from IDENTIFY words and disk records built in memory.
  *
  * host-deps: rach2/sys/block/diskinfo.c rach2/sys/block/mbr.c
  * host-deps: rach2/sys/block/partition.c rach2/sys/block/gpt.c
  *
- * The kernel side of this is exercised by `tests/run diskdiag`, which boots a
- * real disk and hashes its sectors. What that cannot reach is the arithmetic
- * and the fence posts, because a real device will not answer with a serial
- * number full of control bytes or a capacity above 2^32 on request. So those
- * are crafted here.
+ * `tests/run diskdiag` boots a disk and hashes its sectors. A device in a
+ * guest does not answer with a serial number full of control bytes or a
+ * capacity above 2^32 on request, so the conversions and the boundaries are
+ * tested here.
  *
- * Two of them are worth naming. ATA stores its strings big-endian WITHIN each
- * 16-bit word, which is the one detail a reader who has not checked the layout
- * gets backwards, and the field has no terminator. And the sector count is
- * a 48-bit number in a kernel that links no libgcc, so it is turned into
- * decimal by long division over 32-bit halves, not by a 64-bit divide
- * that would not link.
+ * ATA stores its strings with the first character of each pair in the high
+ * byte of its 16-bit word, and a field that fills its width has no
+ * terminator. The sector count is a 48-bit number in a kernel that links no
+ * libgcc, so it is turned into decimal by long division over 32-bit halves.
  */
 
 extern int printf(const char *fmt, ...);
@@ -28,77 +26,89 @@ extern char *strstr(const char *hay, const char *needle);
 #include "../../rach2/sys/block/block.h"
 #include "../../rach2/sys/block/diskcmd.h"
 
-/* The stub the driver half of diskinfo.c links against; nothing reaches it. */
+/* The disk the probe half of diskinfo.c reads; no row runs the probe. */
 block_device_t *block0 = 0;
 
+/** No disk answers the probe. */
 int block_probe(void)
 {
     return -1;
 }
 
+/** No disk is ready. */
 int block_ready(void)
 {
     return -1;
 }
 
+/** The block layer's command count, 0 for every row. */
 uint64_t block_commands(void)
 {
     return 0;
 }
 
+/** The block layer's flush count, 0 for every row. */
 uint64_t block_flushes(void)
 {
     return 0;
 }
 
+/** The block layer's poll count, 0 for every row. */
 uint64_t block_polls(void)
 {
     return 0;
 }
 
+/** The block layer's ticks spent waiting, 0 for every row. */
 uint64_t block_wait_ticks(void)
 {
     return 0;
 }
 
+/** The block layer's requests in flight, 0 for every row. */
 uint32_t block_in_flight(void)
 {
     return 0;
 }
 
+/** The block layer's overlap count, 0 for every row. */
 uint32_t block_overlaps(void)
 {
     return 0;
 }
 
+/** The block layer's quarantine count, 0 for every row. */
 uint32_t block_quarantines(void)
 {
     return 0;
 }
 
+/** The block layer's release count, 0 for every row. */
 uint32_t block_releases(void)
 {
     return 0;
 }
 
+/** The tick of the block layer's last release, 0 for every row. */
 uint32_t block_release_tick(void)
 {
     return 0;
 }
 
+/** The block layer's late completions, 0 for every row. */
 uint32_t block_lag_completions(void)
 {
     return 0;
 }
 
+/** The count of raw disk calls through devfs. The kernel's count changes as
+ *  the machine runs; this one is 0, so the expected text is a constant. */
 uint64_t devfs_raw_calls(void)
 {
-    /* The rendered text has a live count; the fixture pins it so the
-       expected bytes below are a constant, not whatever a previous case
-       happened to leave behind. */
     return 0;
 }
 
+/** Publishing a disk's nodes does nothing here. */
 void devfs_disk_publish(struct disk *d)
 {
     (void)d;
@@ -112,26 +122,28 @@ void devfs_disk_publish(struct disk *d)
 static struct disk fake[2];
 static block_device_t fake_dev[2];
 static int fake_count;
-static int fake_claimed;
+static int fake_claimed; /* nonzero: a mount holds fake[1] */
 
+/** Whether a mount holds `d`: only the second disk, and only while
+ *  `fake_claimed` is set. */
 int devfs_disk_claimed(const struct disk *d)
 {
-    /* The second disk is the one with something mounted from it. */
     return fake_claimed && d == &fake[1];
 }
 
+/** The number of records in the registry. */
 int disk_count(void)
 {
     return fake_count;
 }
 
+/** Record `n` of the registry, or NULL past its end. */
 struct disk *disk_at(int n)
 {
     return n >= 0 && n < fake_count ? &fake[n] : 0;
 }
 
-/* The probe says what disk answered through the kernel log, which this test
-   has no use for; the records are dropped. */
+/** The kernel log; the probe's records are dropped. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
     (void)level;
@@ -139,27 +151,31 @@ void klog(int level, const char *subsystem, const char *format, ...)
     (void)format;
 }
 
-/* The record prints the buffer cache's counters; here there is no cache. */
+/** The buffer cache's hit count; the test links no cache, so 0. */
 uint64_t bcache_stat_hits(void)
 {
     return 0;
 }
+/** The buffer cache's fill count, 0. */
 uint64_t bcache_stat_fills(void)
 {
     return 0;
 }
+/** The buffer cache's wait count, 0. */
 uint64_t bcache_stat_waits(void)
 {
     return 0;
 }
+/** The buffer cache's count of buffers visited, 0. */
 uint64_t bcache_stat_visits(void)
 {
     return 0;
 }
 
-/* The build policy diskinfo_format prints; both values are exercised. */
+/* The build policy diskinfo_format prints; the rows set both values. */
 static int policy_now = DISKCMD_READ_WRITE;
 
+/** The policy `policy_now` gives. */
 int diskcmd_policy(void)
 {
     return policy_now;
@@ -175,7 +191,9 @@ static int fails;
         }                                   \
     } while (0)
 
-/** Build an IDENTIFY word array carrying `text` from `first_word`. */
+/** Store `text` in the IDENTIFY words `id` from `first_word`, `chars`
+ *  characters wide, as a drive does: two characters a word, the first in the
+ *  high byte, and spaces after the text. */
 static void put_field(uint16_t *id, int first_word, int chars, const char *text)
 {
     int len = 0, i;
@@ -191,6 +209,31 @@ static void put_field(uint16_t *id, int first_word, int chars, const char *text)
     }
 }
 
+/**
+ * Run the rows, in four groups.
+ *
+ * - `diskinfo_ata_string`: a model and a serial read back in order without
+ *   trailing spaces; a field that fills its width, which has no terminator
+ *   in the IDENTIFY data, is terminated in the output; an all-space field is
+ *   empty; and bytes of all ones, NUL, newline and DEL each become '?', so
+ *   no byte the drive sends can split a line that awk or grep reads.
+ * - `diskinfo_u64_dec`: small numbers, 2^32 - 1 and 2^32, where a carry
+ *   lost between the halves shows, a 1 TB disk's sector count, the largest
+ *   48-bit value, and a buffer too short, which gets nothing.
+ * - `diskinfo_format`: the whole record of a kernel never asked, one with no
+ *   device and one under the read-only policy; the widest record, which must
+ *   fit `DISKINFO_RECORD_BYTES`; the lines of a present disk, each compared
+ *   as rendered; each `mbr-signature` state; and buffers one byte short, of
+ *   one byte and of none, with a sentinel past the cap to catch a byte
+ *   written at the edge.
+ * - `diskinfo_format_disks`: a fixed disk of 512-byte sectors with nothing
+ *   mounted and a removable one of 4096-byte sectors held by a mount. Every
+ *   field of the `identity` line decides whether an installer offers the
+ *   disk, so each is compared as rendered. A removed disk is hidden while
+ *   its mount still holds the record.
+ *
+ * Returns the count of failed checks, at most 255.
+ */
 int main(void)
 {
     static uint16_t id[256];
@@ -199,7 +242,6 @@ int main(void)
     struct diskinfo d;
     int i;
 
-    /* ---- the string field, which ATA stores byte-swapped ---- */
     put_field(id, 27, 40, "Samsung SSD 870 EVO 1TB");
     diskinfo_ata_string(out, 40, id, 27);
     CHECK(strcmp(out, "Samsung SSD 870 EVO 1TB") == 0,
@@ -209,21 +251,17 @@ int main(void)
     diskinfo_ata_string(out, 20, id, 10);
     CHECK(strcmp(out, "S5Y2NJ0RA12345X") == 0, "a serial comes back in order");
 
-    /* A field that is exactly full has no terminator on the wire. */
     put_field(id, 27, 40, "0123456789012345678901234567890123456789");
     diskinfo_ata_string(out, 40, id, 27);
     CHECK(strlen(out) == 40, "a field that fills its width is terminated by us, not by the device");
     CHECK(out[39] == '9' && out[40] == '\0', "and its last character survives");
 
-    /* All spaces is an empty string, not forty of them. */
     for (i = 0; i < 20; i++) {
         id[27 + i] = 0x2020;
     }
     diskinfo_ata_string(out, 40, id, 27);
     CHECK(out[0] == '\0', "an all-space field is empty");
 
-    /* A device that answers all ones, and one that answers control bytes:
-       neither may put a byte into the file that awk or grep would act on. */
     for (i = 0; i < 20; i++) {
         id[27 + i] = 0xFFFF;
     }
@@ -242,8 +280,6 @@ int main(void)
     CHECK(out[0] == '?' && out[1] == '?' && out[2] == '?' && out[3] == 'A',
           "a NUL, a newline and a DEL each become '?', so no line can be split");
 
-    /* ---- decimal, over 32-bit halves, in a kernel with no 64-bit divide
-     * ---- */
     CHECK(diskinfo_u64_dec(out, (int)sizeof(out), 0) == 1 && strcmp(out, "0") == 0, "zero");
     CHECK(diskinfo_u64_dec(out, (int)sizeof(out), 9) == 1 && strcmp(out, "9") == 0, "nine");
     CHECK(diskinfo_u64_dec(out, (int)sizeof(out), 10) == 2 && strcmp(out, "10") == 0, "ten");
@@ -264,7 +300,6 @@ int main(void)
     CHECK(diskinfo_u64_dec(out, 3, 4294967295u) == 0 && out[0] == '\0',
           "a buffer too short writes nothing, not half a number");
 
-    /* ---- the rendered file ---- */
     for (i = 0; i < (int)sizeof(d); i++) {
         ((char *)&d)[i] = 0;
     }
@@ -335,7 +370,6 @@ int main(void)
         CHECK(n < (int)sizeof(buf), "and fits the buffer /proc/disk gives it, with room over");
     }
 
-    /* The exact text, because what reads it is awk and grep on the machine. */
     {
         static const char *want[] = {"state present\n",
                                      "driver ahci\n",
@@ -380,7 +414,6 @@ int main(void)
         }
     }
 
-    /* mbr-signature has three values and the file must distinguish them. */
     d.mbr_state = DISKINFO_MBR_NONE;
     diskinfo_format(&d, buf, (int)sizeof(buf));
     CHECK(buf[0] != '\0', "a table with no signature still renders");
@@ -389,9 +422,6 @@ int main(void)
     CHECK(buf[0] != '\0', "a first sector that could not be read still renders");
     d.mbr_state = DISKINFO_MBR_OK;
 
-    /* A buffer one byte short of the text must truncate, terminate, and write
-       nothing past its end. The sanitizers catch the overrun a wrong guard
-       would cause; the sentinel catches a byte written exactly at the edge. */
     {
         int full = diskinfo_format(&d, buf, (int)sizeof(buf));
         static char small[600];
@@ -411,13 +441,6 @@ int main(void)
         CHECK(n == 0, "a zero-byte buffer writes nothing at all");
     }
 
-    /* ---- the lines a program choosing a disk reads ----
-     *
-     * Two disks: a fixed one of 512-byte sectors with nothing mounted, and a
-     * removable one of 4096-byte sectors with a mount holding it. Every field
-     * of the `identity` line decides whether an installer offers the disk, so
-     * each is compared as it is rendered rather than as a count of lines.
-     */
     {
         static char text[1024];
 
