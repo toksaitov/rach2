@@ -1,16 +1,31 @@
 /**
- * The ISH shell's one-line form, `ish -c command`, and the status it reports.
+ * ishmusl: check the ISH shell's one-line form, `ish -c command`, and the
+ * status it reports.
  *
- * That form is not a convenience: it is how one program asks a shell to run one
- * thing as somebody, which is what `su -c` does, and the status it comes back
- * with is the only thing the caller learns. A shell that answered 0 for a
- * command it never found would have `su -c` report work done that never ran.
+ * That form is how one program asks a shell to run one thing as somebody,
+ * which is what `su -c` does, and the status it returns is all the caller
+ * learns. A shell that answered 0 for a command it never found would have
+ * `su -c` report work done that never ran.
  *
  * The cases are the four answers a caller can get: the command's own status,
  * whether zero or not; 127 for a name that resolved to nothing; 126 for a
  * redirection that could not be opened, since a command run without the
  * redirection it asked for is not the command that was asked for; and 128 + N
- * for a command a signal killed.
+ * for a command a signal killed. `/musl/statushelper` gives each status.
+ *
+ * The builtins `cd` and `exit` answer the same way. They are the shell's own
+ * work, so no child's status reports them, and a `cd` that went nowhere would
+ * leave the next command of the caller's line running somewhere the caller
+ * did not choose. A redirection that opens must leave a builtin's operand
+ * alone: the shell removes the redirection from the argument array and clears
+ * its slots, so a builtin that read its operand from the old position would
+ * find the redirection's leftovers. A bare `cd` must do the same with a
+ * redirection as without one; this probe runs with no `HOME`, so here both
+ * fail.
+ *
+ * The input, descriptor and environment cases are shared with
+ * `tests/host/ish_hosttest.c`, which includes this file with `ISH_HOSTTEST`
+ * defined and calls the shell's `ish_main` in place of exec'ing `/ish`.
  *
  * `/ish` and the helpers it runs are staged into the test image beside this
  * probe. Prints "ISHMUSL OK" on success and "ISHMUSL FAIL (detail)" otherwise.
@@ -35,10 +50,12 @@ static int fail(const char *what)
 }
 
 /**
- * Run `line` through `ish -c` and return the shell's exit status, or -1.
+ * Run `line` through `ish -c` and return the shell's exit status, or -1 when
+ * the fork fails or the shell does not exit.
  *
- * Use the supplied environment. Bits 0 and 1 of `closed` close stdin and
- * stdout; `output`, when nonnegative, replaces inherited stdout first.
+ * The shell gets `environment` as its environment. In the child, `output`,
+ * when nonnegative, is put on stdout first, and then bits 0 and 1 of `closed`
+ * close stdin and stdout. A child that cannot set up or exec exits with 125.
  */
 static int ish_run(const char *line, char **environment, int closed, int output)
 {
@@ -84,7 +101,7 @@ static int ish_run(const char *line, char **environment, int closed, int output)
     return WEXITSTATUS(status);
 }
 
-/** Run a command with the probe's inherited descriptors and environment. */
+/** As `ish_run`, with this process's descriptors and environment. */
 static int ish_status(const char *line)
 {
     extern char **environ;
@@ -92,7 +109,7 @@ static int ish_status(const char *line)
     return ish_run(line, environ, 0, -1);
 }
 
-/** Require an exact file value, including its length. */
+/** Whether the file at `path` has exactly the bytes of `expected`. */
 static int file_equals(const char *path, const char *expected)
 {
     char buf[64];
@@ -107,7 +124,11 @@ static int file_equals(const char *path, const char *expected)
     return n == (ssize_t)strlen(expected) && memcmp(buf, expected, (size_t)n) == 0;
 }
 
-/** Run input from a regular file and check the shell's output and status. */
+/**
+ * Run the shell with no arguments and `input` on its stdin, from a regular
+ * file, and check that its stdout is exactly `output` and its status
+ * `expected`. Returns 0, or 1 after reporting `name`.
+ */
 static int check_input_case(const char *input, const char *output, int expected, const char *name)
 {
     char *argv[] = {(char *)"ish", NULL};
@@ -152,7 +173,12 @@ static int check_input_case(const char *input, const char *output, int expected,
     return result ? fail(name) : 0;
 }
 
-/** Check complete lines, read boundaries, EOF and rejection of long lines. */
+/**
+ * Check the shell's reading of its input: complete lines, a last line with no
+ * newline, a line after 250 empty ones, a line of 255 bytes, the limit, and a
+ * longer one, which is discarded whole, the last two also at end of file.
+ * Returns 0, or 1 after reporting every case that failed.
+ */
 static int check_input(void)
 {
     char boundary[280];
@@ -185,7 +211,12 @@ static int check_input(void)
     return result;
 }
 
-/** Redirection must work when open returns either standard descriptor. */
+/**
+ * Check that an output redirection works when its open returns a standard
+ * descriptor: the shell runs with stdin, stdout, both or neither closed, and
+ * the output must reach the file and nothing reach the captured stdout.
+ * Returns 0, or 1 after printing the failure.
+ */
 static int check_descriptors(void)
 {
     char *environment[] = {"PATH=/bin", NULL};
@@ -210,7 +241,11 @@ static int check_descriptors(void)
     return 0;
 }
 
-/** HOME and PATH require an exact, case-sensitive name followed by '='. */
+/**
+ * Check that the shell takes HOME and PATH only from variables of exactly
+ * those names: a longer name with the same prefix, or the name in lower case,
+ * must not supply them. Returns 0, or 1 after printing the failure.
+ */
 static int check_environment(void)
 {
     char *prefix[] = {"HOMELESS=/no/such/home", "HOME=/", "PATHETIC=/no/such/bin", "PATH=/bin",
@@ -237,7 +272,7 @@ static int check_environment(void)
 }
 
 /**
- * Run the cases and report.
+ * Run the cases and print the result; 0 when every case passes, 1 otherwise.
  */
 int main(void)
 {
@@ -267,10 +302,7 @@ int main(void)
         return fail("a command a signal killed did not report 128 + the signal");
     }
 
-    /* The builtins answer the same way. They are the shell's own work, so a
-     * caller learns nothing about them from a child's status, and a `cd` that
-     * went nowhere leaves the next command in the caller's line running
-     * somewhere the caller did not choose. */
+    /* The builtins. */
     rc = ish_status("cd /");
     if (rc != 0) {
         return fail("a cd that worked did not report 0");
@@ -283,13 +315,7 @@ int main(void)
     if (rc != 126) {
         return fail("a builtin ran with a redirection that could not be opened");
     }
-    /* A redirection that DOES open must not eat the builtin's operand: pulling
-     * it out of the argument array clears the slots it occupied, so a builtin
-     * reading the operand from where it was before the pull would find a
-     * redirection's leftovers. A `cd` with somewhere to go must still go there,
-     * and a bare `cd` must do the same thing with a redirection as without one,
-     * whatever that is: this probe runs with no `HOME` in its environment, so
-     * here it is a refusal. */
+    /* A builtin with a redirection that opens. */
     rc = ish_status("cd / > /ishmusl.redirect");
     if (rc != 0) {
         return fail("a redirection took the cd operand with it");

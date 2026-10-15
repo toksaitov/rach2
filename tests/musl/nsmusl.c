@@ -1,29 +1,32 @@
 /**
- * Namespaces, through musl's unshare(), setns() and the clone call.
+ * nsmusl: check namespaces through musl's unshare(), setns() and the clone
+ * call.
  *
  * A UTS namespace has its own host name, its /proc/self/ns link names the first
  * one before, and setns returns to it. A PID namespace numbers its first
- * process 1, whose parent it sees as 0, and that process's child 2; its status
- * file shows it the one number, and its parent outside both; and a name
- * relative to its descriptor of /proc/self/fd reaches its own descriptor.
- * The caller of unshare keeps its own pid. In a new network namespace a
- * connection to the loopback address fails with ENETUNREACH. A mount made
- * in a new mount namespace is not seen outside it, and a new IPC namespace
- * has none of the first's System V objects.
+ * process 1, whose parent it sees as 0, and that process's child 2; the first
+ * process's status file shows it one number, and shows its parent, outside
+ * the namespace, both; and a name relative to its descriptor of /proc/self/fd
+ * reaches its own descriptor. The caller of unshare keeps its own pid. In a
+ * new network namespace a connection to the loopback address fails with
+ * ENETUNREACH. A mount made in a new mount namespace is not seen outside it,
+ * and a new IPC namespace has none of the first's System V objects.
  *
  * As uid 1000, one clone makes a user, a PID and a network namespace, as
- * the browser's sandbox does; in them the child is pid 1, with uid 65534
- * until a map covers it. After unshare of a user namespace the process
- * writes its maps, is uid 0, reads its map back with its uid in the
- * parent's terms, cannot write the map twice, may chroot, and may make the
- * other kinds. With its own uid mapped to itself, it runs a set-uid program
- * of root's as itself, since its namespace does not map root. A helper that
- * shares its directories chroots to /proc/self/fdinfo and ends, as the
- * browser's sandbox has one do, and the process is left with a root that
- * holds nothing, while a descriptor of /proc it opened before still reaches
- * /proc/self/fd. A file of /proc/self/fdinfo has a descriptor's offset and
- * flags. On x86-64 an unshare of a flag past 32 bits is EINVAL.
+ * Chromium's sandbox does; in them the child is pid 1, with uid 65534 until a
+ * map covers it. After unshare of a user namespace the process writes its
+ * maps, is uid 0, reads its map back with its uid in the parent's terms,
+ * cannot write the map twice, may chroot, and may make the other kinds. With
+ * its own uid mapped to itself, it runs a set-uid program of root's as itself,
+ * since its namespace does not map root. A helper that shares its directories
+ * chroots to /proc/self/fdinfo and ends, as Chromium's sandbox has one do, and
+ * the process is left with a root that has nothing in it, while a descriptor
+ * of /proc it opened before still reaches /proc/self/fd. A file of
+ * /proc/self/fdinfo has a descriptor's offset and flags. On x86-64 an unshare
+ * of a flag past 32 bits is EINVAL.
  *
+ * Each check that changes a namespace or an id runs in a child of its own (the
+ * mount check forks its own child), so what it changes ends with the child.
  * Prints "NSMUSL OK" on success and "NSMUSL FAIL (detail)" otherwise.
  */
 
@@ -48,6 +51,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+/* The key of the System V segment the first IPC namespace has ("NSMU"). */
 #define SHM_KEY 0x4e534d55
 
 /** Report one failed check and return 1, a child's failure status. */
@@ -86,7 +90,10 @@ static int put(const char *path, const char *text)
     return n == (ssize_t)strlen(text) ? 0 : -1;
 }
 
-/** Read the file `path` into `buf` of `cap` bytes, NUL-terminated. */
+/**
+ * Read the file `path` into `buf` of `cap` bytes, NUL-terminated; the byte
+ * count, or -1 when the file cannot be opened or read.
+ */
 static int get(const char *path, char *buf, int cap)
 {
     int fd = open(path, O_RDONLY);
@@ -101,8 +108,10 @@ static int get(const char *path, char *buf, int cap)
     return (int)n;
 }
 
-/** Whether a TCP connection to the loopback address fails with
- * ENETUNREACH, as it does outside the first network namespace. */
+/**
+ * Whether a TCP connection to the loopback address fails with ENETUNREACH, as
+ * it does outside the first network namespace.
+ */
 static int unreachable(void)
 {
     struct sockaddr_in sa;
@@ -115,6 +124,11 @@ static int unreachable(void)
     return fd >= 0 && connect(fd, (struct sockaddr *)&sa, sizeof(sa)) == -1 && errno == ENETUNREACH;
 }
 
+/**
+ * Check the UTS namespace: the first one's link, a host name of a new one's
+ * own, and setns back to the first. Returns 0, or 1 after printing the
+ * failure.
+ */
 static int uts(void)
 {
     struct utsname u;
@@ -154,11 +168,13 @@ static int nspid_is(const char *who, const char *want)
     return nl && (size_t)(nl - line - 7) == strlen(want) && !strncmp(line + 7, want, strlen(want));
 }
 
-/** The first process of the new PID namespace, and its child. */
-/* Whether a name relative to a descriptor of /proc/self/fd reaches the
-   caller's own descriptor, as the browser's sandbox checks its descriptors
-   from inside its PID namespace: a pipe's, which no other process has, where
-   descriptor 0 would be the console that most processes share. */
+/**
+ * Check that a name relative to a descriptor of /proc/self/fd reaches the
+ * caller's own descriptor, as Chromium's sandbox checks its descriptors from
+ * inside its PID namespace. The descriptor is a pipe's, which no other process
+ * has, where descriptor 0 would be the console that most processes share.
+ * Returns 0, or 1 after printing the failure.
+ */
 static int own_fd_dir(void)
 {
     struct stat entry, own;
@@ -180,6 +196,11 @@ static int own_fd_dir(void)
     return 0;
 }
 
+/**
+ * Check, as the first process of a new PID namespace, that it is pid 1 with
+ * parent 0, that its child is 2, that its NSpid line has the one number, and
+ * then `own_fd_dir`. Returns 0, or 1 after printing the failure.
+ */
 static int pid_first(void)
 {
     pid_t pid;
@@ -202,6 +223,12 @@ static int pid_first(void)
     return own_fd_dir();
 }
 
+/**
+ * Check that unshare of a PID namespace keeps the caller's pid, run
+ * `pid_first` in the namespace's first process, and check, while a pipe holds
+ * that process, that its status file seen from outside shows both of its
+ * numbers. Returns 0, or 1 after printing the failure.
+ */
 static int pid_ns(void)
 {
     pid_t self = getpid(), first;
@@ -230,6 +257,7 @@ static int pid_ns(void)
     return rc;
 }
 
+/** Check that a new network namespace reaches nothing; 0, or 1. */
 static int net(void)
 {
     if (unshare(CLONE_NEWNET) != 0 || !unreachable()) {
@@ -238,6 +266,7 @@ static int net(void)
     return 0;
 }
 
+/** Check that a new IPC namespace lacks the segment at `SHM_KEY`; 0, or 1. */
 static int ipc(void)
 {
     if (unshare(CLONE_NEWIPC) != 0 || shmget(SHM_KEY, 0, 0) != -1 || errno != ENOENT) {
@@ -246,7 +275,12 @@ static int ipc(void)
     return 0;
 }
 
-/** A mount in a new mount namespace, which the parent must not see. */
+/**
+ * Check that a tmpfs mounted in a child's new mount namespace, and a file
+ * made in it, are seen by the child and not by this process. Two pipes keep
+ * the child in place while this process looks. Returns 0, or 1 after printing
+ * the failure.
+ */
 static int mnt(void)
 {
     int up[2], down[2];
@@ -281,7 +315,11 @@ static int mnt(void)
     return rc;
 }
 
-/** The sandbox's clone: user, PID and network namespaces at once. */
+/**
+ * Check Chromium's sandbox clone as uid 1000: user, PID and network
+ * namespaces at once, the child pid 1 with uid 65534 and no network. Returns
+ * 0, or 1 after printing the failure.
+ */
 static int sandbox(void)
 {
     long pid;
@@ -302,6 +340,12 @@ static int sandbox(void)
     return 0;
 }
 
+/**
+ * Check a user namespace made by uid 1000: unmapped ids read as 65534, the
+ * maps can be written once and read back, and the mapped root may chroot and
+ * make namespaces of the other kinds. Returns 0, or 1 after printing the
+ * failure.
+ */
 static int user(void)
 {
     char buf[128];
@@ -335,8 +379,11 @@ static int user(void)
     return 0;
 }
 
-/** A set-uid program of root's, run in a user namespace that maps only the
- * caller's own ids; suidhelper's `plain` exits 0 when every id is 1000. */
+/**
+ * Check that a set-uid program of root's, run in a user namespace that maps
+ * only the caller's own ids, runs with those ids: suidhelper's `plain` exits
+ * 0 when every id is 1000. Returns 0, or 1 after printing the failure.
+ */
 static int setid(void)
 {
     pid_t pid;
@@ -366,8 +413,13 @@ static int fdinfo_helper(void)
     return chroot("/proc/self/fdinfo/") == 0 && chdir("/") == 0 ? 0 : 1;
 }
 
-/** /proc/self/fdinfo, and the browser's chroot into it, as uid 1000 in a
- * user namespace of its own. */
+/**
+ * Check a file of /proc/self/fdinfo, and then, as uid 1000 in a user
+ * namespace of its own, Chromium's chroot into that directory by a CLONE_FS
+ * helper: the root left has no entries and takes none, and a descriptor of
+ * /proc opened before still reaches self/fd. Returns 0, or 1 after printing
+ * the failure.
+ */
 static int empty_root(void)
 {
     char buf[128], path[64];
@@ -412,8 +464,10 @@ static int empty_root(void)
     return 0;
 }
 
-/* On x86-64, where unshare takes a long, a flag in its upper half is EINVAL
- * and unshares nothing. */
+/**
+ * Check that on x86-64, where unshare takes a long, a flag in its upper half
+ * is EINVAL and unshares nothing. Returns 0, or 1 after printing the failure.
+ */
 static int wide_flags(void)
 {
 #if defined __x86_64__
@@ -424,6 +478,10 @@ static int wide_flags(void)
     return 0;
 }
 
+/**
+ * Make the System V segment the IPC check looks for, run the checks, and
+ * remove the segment. Returns 0 when every check passes, and 1 otherwise.
+ */
 int main(void)
 {
     int id = shmget(SHM_KEY, 4096, IPC_CREAT | 0600);

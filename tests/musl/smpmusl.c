@@ -1,5 +1,5 @@
 /**
- * The processors, as a program sees and uses them through musl.
+ * smpmusl: check the processors as a program sees and uses them through musl.
  *
  * The argument is the number of processors the boot should have. That many
  * are listed by /proc/cpuinfo, are in the caller's affinity, are counted by
@@ -28,8 +28,8 @@
  * the slack of the clock's reading. A sleep ends at a tick, so each begins
  * after a spin of its own length, at a different place in the tick.
  *
- * Prints "SMPMUSL OK (N processors)" on success and "SMPMUSL FAIL (detail)"
- * otherwise.
+ * Prints "SMPMUSL OK (N processors)", or "(1 processor)", on success and
+ * "SMPMUSL FAIL (detail)" otherwise.
  */
 
 #define _GNU_SOURCE
@@ -68,9 +68,11 @@
 #define SLEEPS      60
 #define SLEEP_SLACK 100000LL
 
+/* The processors the boot should have, from the argument, 1 to 64. */
 static int cpus;
 /* What a thread returns when it could not be bound to its processor. */
 static char unbound;
+/* This program's path, which the exec row runs. */
 static const char *self;
 
 /** Report one failed check and return 1, the probe's failure status. */
@@ -98,7 +100,7 @@ static int running_on(void)
     return syscall(SYS_getcpu, &cpu, NULL, NULL) == 0 ? (int)cpu : -1;
 }
 
-/** The lines of `path` that begin with `prefix`, or -1. */
+/** Count the lines of `path` that begin with `prefix`, or -1. */
 static int count_lines(const char *path, const char *prefix)
 {
     char line[256];
@@ -126,7 +128,11 @@ static int stat_has(const char *name)
     return count_lines("/proc/stat", prefix) == 1;
 }
 
-/** The processors seen, each way a program asks. */
+/**
+ * Check the processors seen each way a program asks, as the file comment
+ * lists, and that a process bound to each runs there; the affinity is then
+ * set back to every processor. Returns 0, or 1 after printing the failure.
+ */
 static int counts(void)
 {
     char want[16], got[32], name[64];
@@ -186,8 +192,11 @@ static int counts(void)
     return 0;
 }
 
-/** On each processor, a child bound there that forks and execs this
- * program EXECS_PER_CPU times and counts the exits. */
+/**
+ * Fork, for each processor, a child bound there that forks and execs this
+ * program EXECS_PER_CPU times and counts the exits with CHILD_STATUS. Returns
+ * 0 when every child counted every exit, or 1 after printing the failure.
+ */
 static int execs(void)
 {
     int c, status;
@@ -227,8 +236,11 @@ static int execs(void)
     return 0;
 }
 
-/** A counter passed back and forth through two pipes by a process on the
- * first processor and one on the last, each checking every value. */
+/**
+ * Pass a counter back and forth through two pipes between this process, bound
+ * to the first processor, and a child bound to the last, each checking every
+ * value it reads. Returns 0, or 1 after printing the failure.
+ */
 static int pipes(void)
 {
     int there[2], back[2], status, i, v;
@@ -276,12 +288,19 @@ static int pipes(void)
     return 0;
 }
 
+/* The futex the turns pass through: even for the first thread's turn, odd
+ * for the last's. */
 static int futex_word;
 
 /* The waits that slept until a wake, and the calls that failed otherwise than
  * a wait does when the word has changed or a signal came. */
 static int futex_slept, futex_errors;
 
+/**
+ * Take FUTEX_TURNS turns on `futex_word`: wait until its low bit is `parity`,
+ * add one, and wake the other thread. Counts a wait that slept until a wake
+ * in `futex_slept` and a failed call in `futex_errors`.
+ */
 static void futex_turns(int parity)
 {
     int i;
@@ -303,6 +322,7 @@ static void futex_turns(int parity)
     }
 }
 
+/** Take the odd turns on the last processor; `&unbound` if it cannot bind. */
 static void *futex_last(void *arg)
 {
     (void)arg;
@@ -313,10 +333,13 @@ static void *futex_last(void *arg)
     return NULL;
 }
 
-/** Two threads on the first and the last processor taking turns through a
- * futex word, which ends at twice the turns, with no call failed and some of
- * the waits asleep until the other's wake: threads that only polled the word
- * would end it there too. */
+/**
+ * Check two threads on the first and the last processor taking turns through
+ * a futex word, which must end at twice the turns, with no call failed and
+ * some of the waits asleep until the other's wake: threads that only polled
+ * the word would end it at twice the turns too. Returns 0, or 1 after printing
+ * the failure.
+ */
 static int futexes(void)
 {
     pthread_t t;
@@ -342,11 +365,16 @@ static int futexes(void)
     return 0;
 }
 
+/* The unmap row: the page, the flags the reader and the unmapper set
+ * (`reading` once the reader has read it, `unmapped` once the munmap has
+ * returned, `faulted` once the reader took SIGSEGV), the address of the
+ * fault, and where the handler returns the reader to. */
 static volatile int *page;
 static volatile int reading, unmapped, faulted;
 static volatile void *fault_at;
 static sigjmp_buf reader_env;
 
+/** The SIGSEGV handler: record the address, and jump back into `reader`. */
 static void segv(int signo, siginfo_t *info, void *context)
 {
     (void)signo;
@@ -356,6 +384,12 @@ static void segv(int signo, siginfo_t *info, void *context)
     siglongjmp(reader_env, 1);
 }
 
+/**
+ * Read `page` in a loop on the first processor until the read faults, and
+ * return NULL then. A reader still reading READS_AFTER_UNMAP reads after the
+ * unmap stops and returns a value that is neither NULL nor `&unbound`; one
+ * that cannot bind returns `&unbound`.
+ */
 static void *reader(void *arg)
 {
     long after = 0;
@@ -378,8 +412,11 @@ static void *reader(void *arg)
     }
 }
 
-/** A page read on the first processor and unmapped on the last: the reader
- * takes SIGSEGV at it. */
+/**
+ * Check that a page read on the first processor and unmapped on the last
+ * makes the reader take SIGSEGV at that page. Returns 0, or 1 after printing
+ * the failure.
+ */
 static int unmaps(void)
 {
     struct sigaction sa;
@@ -445,11 +482,12 @@ static void await(volatile int *flag)
     }
 }
 
-/*
- * On the last processor, sleeps of 1 to 16 ms, each begun after a spin of
- * 0 to 10 ms on the clock there. The thread on the first processor reads
- * the clock before `sleep_go` and after `sleep_done`, so the handshake only
- * lengthens what it measures.
+/**
+ * Sleep SLEEPS times on the last processor, for 1 to 16 ms, each sleep begun
+ * after a spin of 0 to 10 ms on the clock there. The thread on the first
+ * processor reads the clock before `sleep_go` and after `sleep_done`, so the
+ * handshake only lengthens what it measures. Returns NULL, or `&unbound` when
+ * it cannot bind.
  */
 static void *sleeper(void *arg)
 {
@@ -478,7 +516,11 @@ static void *sleeper(void *arg)
     return NULL;
 }
 
-/** Time each of the sleeper's sleeps by the clock on the first processor. */
+/**
+ * Time each of the sleeper's sleeps by the clock on the first processor, and
+ * check that none is shorter than its request less SLEEP_SLACK. Returns 0, or
+ * 1 after printing the failure.
+ */
 static int sleeps(void)
 {
     pthread_t t;
@@ -517,6 +559,11 @@ static int sleeps(void)
     return 0;
 }
 
+/**
+ * Run the rows for the number of processors the argument gives, 1 to 64, or,
+ * with the argument `child`, exit with CHILD_STATUS for the exec row. A bad
+ * argument exits with 2.
+ */
 int main(int argc, char **argv)
 {
     if (argc == 2 && strcmp(argv[1], "child") == 0) {

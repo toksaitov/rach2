@@ -1,27 +1,44 @@
 /**
- * Every operation that changes the file system stamps what it changed.
+ * stampmusl: check that every operation that changes the file system stamps
+ * what it changed.
  *
- * One assertion per site, because a probe that only writes a file leaves every
+ * One check per site, because a probe that only writes a file leaves every
  * other site free to be wrong: create, write, truncate, rename within a
  * directory and across two, rename onto an existing name, unlink, unlink of a
- * file somebody still holds open (which takes a different path in the kernel
- * and never reaches krffs_unlink), mkdir, rmdir, chmod and chown.
+ * file somebody still holds open (which the kernel serves through
+ * `krffs_unlink_held` and not `krffs_unlink`), mkdir, rmdir, chmod and chown.
  *
- * Two rules are asserted throughout. Changing a file's CONTENTS moves its
+ * Two rules are checked throughout. Changing a file's contents moves its
  * modification time and its attribute-change time together; changing only its
  * attributes moves the attribute-change time and leaves the modification time
  * where it was. And a directory is a file whose contents are its entries, so
- * adding or removing a name in it moves ITS modification time.
+ * adding or removing a name in it moves the directory's modification time.
  *
- * The root is proved here too, which is the one place it can be: `utimensat`
- * reports success for `/` without modifying it, so the stat probe cannot set a
- * time there to read back. Creating a file in the root stamps it, and all three
- * paths that report the root (stat, fstatat, and the old ABI by number) must
- * then agree about when.
+ * Some rows check that nothing moves. A zero-byte write past the end stamps
+ * nothing and does not grow the file, since the bytes a growth would publish
+ * are whatever the allocator last left there. A chown of the group alone, the
+ * uid -1, must still be stamped, which a stamp made only where the uid changes
+ * would miss. A chown that changes nothing moves no time: any caller may make
+ * that call, so a stamp on it would let a process touch a file it has no
+ * right to change. A rename to the name a file already has moves no time
+ * either. A rename onto an existing name removes an entry as well as adding
+ * one, and its stamp must not depend on which comes last.
  *
- * Every comparison waits out a tick first. The clock advances every 10 ms and
- * two operations in the same tick share a timestamp by design, so a test that
- * did not wait would fail for a reason that is not a defect.
+ * A write that starts past the end leaves a hole, and the hole must read as
+ * zeros. Zeros read from a hole show nothing when the space underneath was
+ * zero already, so the free space is dirtied first: a scratch file of 8 KiB
+ * of 0xA5 is written and removed before the hole is made, and without the
+ * kernel's zero-fill those are the bytes the hole would read.
+ *
+ * The root is checked here too, the one place it can be: `utimensat` reports
+ * success for `/` without changing it, so the stat probe cannot set a time
+ * there to read back. Creating a file in the root stamps it, and every path
+ * that reports the root (stat, fstat of a descriptor, fstatat, and on i686
+ * the old stat(2) by number) must then give the same time.
+ *
+ * Every comparison sleeps 60 ms first. The checks compare times to the
+ * millisecond, and two operations within one millisecond can share a stamp,
+ * so a check that did not wait could fail for a reason that is not a defect.
  *
  * Prints "STAMPMUSL OK" on success and "STAMPMUSL FAIL (detail)" otherwise.
  */
@@ -38,10 +55,11 @@
 #if !defined __x86_64__
 /*
  * The old stat(2) struct, as the kernel writes it (struct linux_stat in
- * rach2/sys/syscall.c). Declared here because musl never issues that call on
- * i386: stat() goes to statx, which this kernel does not have, and falls back
- * to fstatat64. The root has a branch of its own in that fill, so it is asked
- * for by number. x86-64 has no narrower stat, and the row is i686's alone.
+ * rach2/sys/arch/i686/uabi.h). Declared here because musl never issues that
+ * call on i386: its stat() goes to statx, and to the 64-bit stat calls where
+ * statx is missing. The root has a branch of its own in that call, so it is
+ * asked for by number. x86-64 has no narrower stat, and the row is i686's
+ * alone.
  */
 struct old_stat {
     unsigned long st_dev;
@@ -81,7 +99,7 @@ static int fail(const char *what)
     return 1;
 }
 
-/** Sleep past a clock tick, so two stamps cannot share an instant. */
+/** Sleep 60 ms, so that two stamps cannot fall in one millisecond. */
 static void tick(void)
 {
     struct timespec how_long;
@@ -92,10 +110,11 @@ static void tick(void)
 }
 
 /**
- * A path's modification time in milliseconds since the epoch.
+ * Return the modification time of `path` in milliseconds since the epoch, or
+ * -1 when it cannot be read.
  *
- * `long long`, not `long`: this is a 32-bit machine, and the epoch in
- * milliseconds passed what a 32-bit long can hold in 1970 plus 25 days.
+ * The type is `long long` because a long is 32 bits on i686, and the epoch in
+ * milliseconds passed what a 32-bit long can hold 25 days into 1970.
  */
 static long long mtime_of(const char *path)
 {
@@ -108,7 +127,7 @@ static long long mtime_of(const char *path)
     return (long long)st.st_mtim.tv_sec * 1000 + (long long)st.st_mtim.tv_nsec / 1000000;
 }
 
-/** A path's attribute-change time, in the same milliseconds. */
+/** As `mtime_of`, for the attribute-change time. */
 static long long ctime_of(const char *path)
 {
     struct stat st;
@@ -129,8 +148,7 @@ int main(void)
     int fd;
     int i;
 
-    /* Create: the file is born now, and the directory it appeared in
-     * changed. */
+    /* Create: the file is stamped, and so is its directory. */
     if (mkdir(DIR, 0755) != 0 || mkdir(OTHER, 0755) != 0) {
         return fail("could not create the directories");
     }
@@ -148,7 +166,7 @@ int main(void)
         return fail("creating a file did not stamp its directory");
     }
 
-    /* Write: the contents changed, so both times move. */
+    /* Write: both times move. */
     before = mtime_of(FILE_IN_DIR);
     ctime_before = ctime_of(FILE_IN_DIR);
     tick();
@@ -163,9 +181,7 @@ int main(void)
     }
     close(fd);
 
-    /* A write of NOTHING changes nothing, times included, and it must not grow
-     * the file: the bytes it would publish are whatever the allocator last left
-     * there. */
+    /* A zero-byte write past the end. */
     fd = open(FILE_IN_DIR, O_WRONLY);
     if (fd < 0) {
         return fail("could not reopen the file");
@@ -189,14 +205,7 @@ int main(void)
         return fail("a zero-byte write past the end grew the file");
     }
 
-    /* A write that DOES start past the end leaves a hole, and the hole must
-     * read as zeros, not as whatever was in the free space.
-     *
-     * The space is dirtied first, on purpose. Reading zeros out of a hole
-     * proves nothing when the bytes underneath were zeros anyway: this fills a
-     * scratch file with a pattern, frees it, and only then makes the hole, so
-     * the allocator has something recognisable to hand back. Without the
-     * zero-fill in the kernel, those are the bytes that come out. */
+    /* A hole over dirtied free space. */
     close(fd);
     {
         char pattern[512];
@@ -258,7 +267,7 @@ int main(void)
         }
     }
 
-    /* Truncate, through the open that does it: same rule. */
+    /* Truncate, through the open that does it. */
     before = mtime_of(FILE_IN_DIR);
     tick();
     fd = open(FILE_IN_DIR, O_WRONLY | O_TRUNC);
@@ -270,8 +279,7 @@ int main(void)
         return fail("a truncate did not stamp the file");
     }
 
-    /* chmod and chown change attributes and nothing else, so the modification
-     * time must hold still while the attribute-change time moves. */
+    /* chmod and chown move the attribute-change time alone. */
     before = mtime_of(FILE_IN_DIR);
     ctime_before = ctime_of(FILE_IN_DIR);
     tick();
@@ -286,8 +294,7 @@ int main(void)
     }
     ctime_before = ctime_of(FILE_IN_DIR);
     tick();
-    /* A GROUP-only chown, which is the case a stamp written inside the uid
-     * branch never reaches: the uid here is -1, so that branch does not run. */
+    /* A chown of the group alone. */
     if (chown(FILE_IN_DIR, (uid_t)-1, 1) != 0) {
         return fail("a group-only chown failed");
     }
@@ -298,9 +305,7 @@ int main(void)
         return fail("chown moved the modification time, which it must not");
     }
 
-    /* And a chown that changes nothing changes no time. Any caller may make
-     * that call, so a stamp on it would be a way to touch a file one has no
-     * right to touch. */
+    /* A chown that changes nothing. */
     ctime_before = ctime_of(FILE_IN_DIR);
     tick();
     if (chown(FILE_IN_DIR, (uid_t)-1, (gid_t)-1) != 0) {
@@ -310,8 +315,7 @@ int main(void)
         return fail("a chown that changed nothing still moved a time");
     }
 
-    /* Rename inside one directory: that directory changed twice over, and the
-     * file's attributes changed while its contents did not. */
+    /* Rename within one directory: the directory and the file are stamped. */
     before = mtime_of(DIR);
     ctime_before = ctime_of(FILE_IN_DIR);
     tick();
@@ -325,8 +329,7 @@ int main(void)
         return fail("a rename did not move the file's attribute-change time");
     }
 
-    /* Renaming a file to the name it already has does nothing, and doing
-     * nothing includes not moving a time. */
+    /* Rename to the name the file already has. */
     before = mtime_of(DIR);
     ctime_before = ctime_of(MOVED);
     tick();
@@ -340,7 +343,7 @@ int main(void)
         return fail("a rename to the same name stamped the file");
     }
 
-    /* Rename ACROSS two directories: both ends changed. */
+    /* Rename across two directories: both are stamped. */
     before = mtime_of(DIR);
     after = mtime_of(OTHER);
     tick();
@@ -354,8 +357,7 @@ int main(void)
         return fail("a rename did not stamp the directory the name arrived in");
     }
 
-    /* Rename ONTO an existing name, which removes an entry as well as adding
-     * one, and is the case a stamp placed after the removal would miss. */
+    /* Rename onto an existing name. */
     fd = open(MOVED, O_CREAT | O_RDWR, 0644);
     if (fd < 0) {
         return fail("could not create the file to be replaced");
@@ -370,7 +372,7 @@ int main(void)
         return fail("a rename onto an existing name did not stamp the directory");
     }
 
-    /* Unlink: the directory changed. */
+    /* Unlink. */
     before = mtime_of(DIR);
     tick();
     if (unlink(MOVED) != 0) {
@@ -380,9 +382,7 @@ int main(void)
         return fail("an unlink did not stamp the directory");
     }
 
-    /* Unlink of a file this program still holds open. The kernel orphans the
-     * node and returns before it reaches the ordinary removal, so a stamp
-     * placed only there would never run on this path. */
+    /* Unlink of a file this program holds open. */
     fd = open(FILE_IN_DIR, O_CREAT | O_RDWR, 0644);
     if (fd < 0) {
         return fail("could not create the file to unlink while open");
@@ -399,7 +399,7 @@ int main(void)
     }
     close(fd);
 
-    /* mkdir and rmdir, on the parent. */
+    /* mkdir and rmdir stamp the parent. */
     before = mtime_of(DIR);
     tick();
     if (mkdir("/stampdir/sub", 0755) != 0) {
@@ -420,9 +420,7 @@ int main(void)
         return fail("rmdir did not stamp its parent");
     }
 
-    /* The ROOT, which is the one directory the stat probe cannot set a time on:
-     * utimensat reports success for it and changes nothing. Creating a file in
-     * it stamps it, and every path that reports the root must agree. */
+    /* The root, by every path that reports it. */
     before = mtime_of("/");
     tick();
     fd = open(IN_ROOT, O_CREAT | O_RDWR, 0644);
@@ -453,8 +451,6 @@ int main(void)
     }
 #if !defined __x86_64__
     {
-        /* The old stat(2) has a root branch of its own, and musl never issues
-         * that call on i386, so it is asked for by number or not at all. */
         struct old_stat os;
 
         if (syscall(SYS_stat, "/", &os) != 0) {
