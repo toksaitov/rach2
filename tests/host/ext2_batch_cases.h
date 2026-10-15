@@ -1,16 +1,31 @@
+/*
+ * ext2_batch_cases.h: rows of ext2_hosttest.c, which includes this file, for
+ * the file-write batch of rach2/sys/fs/ext2.c: its limits of 1 MiB, 256 data
+ * blocks, 32 metadata images and 16 inodes; the close of a shared
+ * description; a failed admission and a device removed; a hand-off of the
+ * namespace lock; an abandoned unmount; partial blocks and holes; reused
+ * blocks; and writers queued at each stage of a drain. The rows use the
+ * device, the mount and the helpers of ext2_hosttest.c.
+ */
 #ifndef EXT2_BATCH_CASES_H_
 #define EXT2_BATCH_CASES_H_
 
+/* fd.c compares a mount's type with the KRFFS root's; no row mounts one. */
 const struct vfs_type vfs_krffs_type = {0};
 
-/** Supply the descriptor path's final-release callback. */
+/** The last close of a description: release the handle and put the node. */
 void vfs_desc_close(struct vfs_mount *mount, void *node, void *handle)
 {
     mount->type->ops->release(mount, handle);
     mount->type->ops->put(mount, node);
 }
 
-/** Check byte, distinct-block and inode limits on both sides of a drain. */
+/**
+ * Check the batch's limits on both sides of a drain: 1 MiB of bytes, 256
+ * distinct data blocks and 16 inodes. The write that reaches a limit
+ * drains the batch, and the next write starts a new one with nothing
+ * written.
+ */
 static void batch_limit_rows(void)
 {
     unsigned char *data = malloc(1024 * 1024);
@@ -85,7 +100,13 @@ static void batch_limit_rows(void)
     free(data);
 }
 
-/** Exercise real description references, fork's table copy and final close. */
+/**
+ * Share one description with pending bytes among a parent's descriptor
+ * table, a child's copy of it, which takes its reference as fork does, and
+ * one more reference: no close but the last drains the batch, and the last
+ * does, while a second description of the same inode is open and then
+ * reads the bytes.
+ */
 static void batch_description_row(void)
 {
     fd_table_t parent, *child;
@@ -141,7 +162,12 @@ static void batch_description_row(void)
     check(unmount_rw() == 0 && e2fsck_clean(wimg), "description release leaves a clean volume");
 }
 
-/** Failed admission and device removal preserve the pending generation. */
+/**
+ * A write past the format's limit fails with `EFBIG` without draining the
+ * pending write; a setattr whose drain fails is `EIO` and changes nothing;
+ * and once the device is gone, an fsync is `EIO`, and neither it nor the
+ * unmount writes anything.
+ */
 static void batch_loss_row(void)
 {
     void *node, *handle = 0;
@@ -185,7 +211,12 @@ static void batch_loss_row(void)
     dev.flags = BLOCK_FAULT_SAFE;
 }
 
-/** Reserve many unchanged indirect images without reaching the data limit. */
+/**
+ * Write one byte into each of up to 31 indirect leaves allocated before,
+ * so that the batch reaches its limit of 32 metadata images and not its
+ * data limit: the write that reaches 32 drains the batch, and the next
+ * starts a new one with nothing written.
+ */
 static void batch_metadata_row(void)
 {
     void *node, *handle = 0;
@@ -223,9 +254,13 @@ static void batch_metadata_row(void)
     check(unmount_rw() == 0 && e2fsck_clean(wimg), "metadata limits leave a clean volume");
 }
 
+/* The description `batch_queued_writer` writes through. */
 static void *handoff_handle;
 
-/** Run a queued writer only after the preceding owner releases the mount. */
+/**
+ * Write a byte at 4096 as another process, called when the namespace lock
+ * is released; the write must be admitted.
+ */
 static void batch_queued_writer(void)
 {
     unsigned char byte = 0x63;
@@ -237,7 +272,11 @@ static void batch_queued_writer(void)
     current_proc->pid = pid;
 }
 
-/** A queued writer cannot enter between an attribute drain and its store. */
+/**
+ * A setattr keeps the mount's lock from the drain of a pending append
+ * through the store of the inode, so a writer queued on the lock runs only
+ * after it: the file ends with the new mode and the writer's byte.
+ */
 static void batch_handoff_row(void)
 {
     void *node;
@@ -272,7 +311,10 @@ static void batch_handoff_row(void)
     check(unmount_rw() == 0 && e2fsck_clean(wimg), "namespace handoff leaves a clean volume");
 }
 
-/** Abandoning a prepared unmount clears the durable valid bit. */
+/**
+ * An unmount prepared and then abandoned clears the valid bit on disk
+ * again, and the unmount can finish later.
+ */
 static void batch_abort_row(void)
 {
     unsigned char state[2];
@@ -291,7 +333,14 @@ static void batch_abort_row(void)
     check(unmount_rw() == 0 && e2fsck_clean(wimg), "an abandoned unmount can finish later");
 }
 
-/** Replay partial-block zeroing and a hole below an already durable EOF. */
+/**
+ * Replay the durable states of a partial block over a volatile medium. With
+ * `hole` 0, two one-byte appends at 0 and 1 share their block, whose rest
+ * must be zeros; with `hole` set, a byte fills a hole at block 12, below a
+ * size and an indirect block already on the disk. The free blocks hold
+ * stale bytes, and in no state may the size or the hole's pointer be
+ * published before the bytes and the zeros.
+ */
 static void batch_partial_row(int hole)
 {
     unsigned char expected[4096];
@@ -359,7 +408,14 @@ static void batch_partial_row(int hole)
 
 static int fill_volume(void);
 
-/** Force freed data and indirect blocks to be reused, then evict and sync. */
+/**
+ * Fill the volume while a file of sixteen blocks and an indirect block
+ * holds space, so that a second file's write fails with `ENOSPC` and keeps
+ * the first file's pending write. Truncating the first file drains it and
+ * frees its blocks; the second file then takes at least fifteen of them,
+ * and after the cache is emptied and synced, they hold the new owner's
+ * bytes.
+ */
 static void batch_reuse_row(void)
 {
     unsigned char old[16 * 4096], replacement[16 * 4096];
@@ -413,10 +469,17 @@ static void batch_reuse_row(void)
     check(unmount_rw() == 0 && e2fsck_clean(wimg), "block reuse leaves a clean volume");
 }
 
+/* The stage rows' queued writer's description and the node whose mode the
+   queued setattr changes; the flush at which to queue them, the count of
+   flushes seen, and the count of times the queued work ran. */
 static void *stage_writer, *stage_attribute;
 static int stage_target, stage_seen, stage_ran;
 
-/** Run queued mutations after the draining owner releases the lock. */
+/**
+ * Run the queued work as another process, called when the draining owner
+ * releases the namespace lock: a write and a setattr, both of which must
+ * succeed.
+ */
 static void batch_stage_waiters(void)
 {
     unsigned char byte = 0x51;
@@ -436,7 +499,11 @@ static void batch_stage_waiters(void)
     current_proc->pid = pid;
 }
 
-/** Queue competing work at a selected flush and observe its exclusion. */
+/**
+ * At the flush numbered `stage_target`, check that the draining process
+ * still holds the namespace lock, queue `batch_stage_waiters` for its
+ * release, and check that the queued work has not changed the file.
+ */
 static void batch_stage_pause(void)
 {
     struct vfs_stat st;
@@ -455,7 +522,11 @@ static void batch_stage_pause(void)
           "a queued writer cannot change the frozen generation");
 }
 
-/** Queue a writer and attribute change at each nonempty drain stage. */
+/**
+ * For each of the first five flushes of a drain that crosses an indirect
+ * level, queue a writer and a setattr at that flush: both must run once,
+ * after the drain finishes, and the volume must end clean.
+ */
 static void batch_stage_rows(void)
 {
     unsigned char bytes[8192];

@@ -1,7 +1,20 @@
+/*
+ * ext2_batch_lifecycle.h: rows of ext2_hosttest.c, which includes this file
+ * after ext2_batch_cases.h, for the life of the file-write batch of
+ * rach2/sys/fs/ext2.c: inodes that share a table block, a last close that
+ * fails, an unlinked inode released in either order, and a drain stopped
+ * at each of its writes. The rows read the image file directly, through
+ * the open image of ext2_hosttest.c, to see what is on the disk apart from
+ * the driver's pending state.
+ */
 #ifndef EXT2_BATCH_LIFECYCLE_H_
 #define EXT2_BATCH_LIFECYCLE_H_
 
-/** Locate a 128-byte inode from on-disk group descriptors. */
+/**
+ * The byte offset in the image of inode `ino`, found through the
+ * superblock and the group descriptors on the disk, or 0. The volume has
+ * 4 KiB blocks, 128-byte inodes and its descriptors at block 1.
+ */
 static uint64_t lifecycle_inode_at(uint64_t ino)
 {
     unsigned char word[4];
@@ -23,7 +36,7 @@ static uint64_t lifecycle_inode_at(uint64_t ino)
     return (uint64_t)table * 4096 + (index % per_group) * 128;
 }
 
-/** Read the on-disk inode without consulting pending file-system state. */
+/** Read inode `ino` from the disk into `raw`, apart from pending state. */
 static int lifecycle_inode(uint64_t ino, unsigned char *raw)
 {
     uint64_t at = lifecycle_inode_at(ino);
@@ -31,7 +44,13 @@ static int lifecycle_inode(uint64_t ino, unsigned char *raw)
     return at && fseek(image, (long)at, SEEK_SET_) == 0 && fread(raw, 1, 128, image) == 128;
 }
 
-/** Drain shared-table inodes before another inode changes mode or atime. */
+/**
+ * Two inodes in one table block have pending writes and set-id modes; a
+ * setattr of a third inode, which clears its set-id bits and sets its
+ * atime, must drain the whole batch first. Both sizes then reach the disk,
+ * each inode after its data, both files keep their bytes, and the third
+ * inode has its new mode and atime on the disk.
+ */
 static void lifecycle_setattr_row(void)
 {
     void *nodes[3], *handles[3] = {0, 0, 0};
@@ -96,7 +115,12 @@ static void lifecycle_setattr_row(void)
     check(unmount_rw() == 0 && e2fsck_clean(wimg), "shared-table lifecycle leaves a clean volume");
 }
 
-/** A failed final description close retains bytes and errors across reopen. */
+/**
+ * A last close of a description whose drain fails records `EIO` on the
+ * mount and writes nothing. After a reopen, an fsync retries the bytes and
+ * reports the error, a second fsync reports it again with nothing to
+ * write, and every byte the write took reads back.
+ */
 static void lifecycle_failed_close_row(void)
 {
     fd_table_t table;
@@ -156,7 +180,13 @@ static void lifecycle_failed_close_row(void)
     dev.flags = BLOCK_FAULT_SAFE;
 }
 
-/** Release an unlinked inode in both description and reference orders. */
+/**
+ * An unlinked inode with pending appends is released by its description
+ * and by its other reference, in the order `put_first` selects, and the
+ * one left after the first release still works. The last release frees
+ * every data block, and a new file that takes the inode has none of its
+ * old size or bytes, even after the cache is emptied.
+ */
 static void lifecycle_unlinked_row(int put_first)
 {
     void *node, *handle = 0;
@@ -209,7 +239,12 @@ static void lifecycle_unlinked_row(int put_first)
     check(unmount_rw() == 0 && e2fsck_clean(wimg), "unlinked references leave no allocated orphan");
 }
 
-/** Prepare sparse prefixes in two distinct inode-table blocks. */
+/**
+ * Make 33 files and open the first and the last, whose inodes lie in two
+ * table blocks of 32 inodes each, truncated to `first` blocks. Their nodes
+ * and descriptions go to `nodes` and `handles`. Returns 1, or 0 when a
+ * step fails.
+ */
 static int lifecycle_pair(void **nodes, void **handles, uint32_t first)
 {
     struct vfs_stat st[2];
@@ -241,7 +276,11 @@ static int lifecycle_pair(void **nodes, void **handles, uint32_t first)
     return 1;
 }
 
-/** Replay both inode sizes against each volatile write interval. */
+/**
+ * Replay the captured drain over a volatile medium from `before`, once for
+ * each of the two inodes of `st`, whose two blocks from `first` hold
+ * `data`: no state may publish a size or a pointer before what it covers.
+ */
 static void lifecycle_replay(const unsigned char *before, const struct vfs_stat *st, uint32_t first,
                              const unsigned char *data)
 {
@@ -268,7 +307,14 @@ static void lifecycle_replay(const unsigned char *before, const struct vfs_stat 
     batch_publication_blocks = 32;
 }
 
-/** Fail one submitted write, then retry the complete accepted generation. */
+/**
+ * Append two blocks from block `first` to each of the two files of
+ * `lifecycle_pair` and fsync. With `stop` of 0 or more, the write numbered
+ * `stop` of the drain fails: the fsync is `EIO`, a retry keeps the error,
+ * every byte reads back, and the volume ends consistent. With `stop` -1,
+ * the drain is captured and replayed by `lifecycle_replay`. Returns the
+ * count of writes the fsync made.
+ */
 static int lifecycle_interrupt_one(uint32_t first, int stop)
 {
     void *nodes[2] = {0, 0}, *handles[2] = {0, 0};
@@ -340,7 +386,10 @@ static int lifecycle_interrupt_one(uint32_t first, int stop)
     return count;
 }
 
-/** Check shared tables, final references and interrupted batches. */
+/**
+ * Run the lifecycle rows, and for appends from blocks 11 and 1035, run the
+ * drain once whole and then once stopped at each of its writes.
+ */
 static void batch_lifecycle_rows(void)
 {
     static const uint32_t first[] = {11, 1035};
