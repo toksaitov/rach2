@@ -11,4 +11,5 @@ description: Start, watch and read Codex units through the Codex companion scrip
 * A unit that changes files runs with `--cwd` in a git worktree of its own, because units that share a checkout overwrite each other's objects in the middle of a build. `status`, `result` and `cancel` for that unit need the same `--cwd`.
 * A unit, like any delegated review, covers at most six files and runs at most ten minutes. These limits are fixed. One reviewer is assigned to a diff.
 * One unit runs at a time: start the next only after the last has answered. Every prompt tells Codex to do the work itself and to start no subagents or parallel workers.
+* A unit ends with the Claude Code session that started it: the plugin's SessionEnd hook stops every unit of the ending session and drops it from `status`. A session that ends on its own, such as a manager's check, waits for its unit's result before it ends.
 * Ask a reviewer to state the most serious findings first. Do not ask it to write or tee a file; its sandbox refuses. Do not launch it where a tool timeout can kill its process group.
