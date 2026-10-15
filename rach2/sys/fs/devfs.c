@@ -1,12 +1,8 @@
 /*
- * devfs.c: a synthetic /dev built on the file_ops dispatch.
- *
- * Each device is a tiny file_ops vtable; a registry binds a leaf name to its
- * ops and a {major,minor}. open("/dev/<name>") allocates a descriptor and
- * points its ops and dev at the registry entry (FD_TYPE_DEVICE), after which
- * the generic read/write/close paths dispatch through the vtable, so the
- * device code lives nowhere in the syscall layer. The namespace is virtual:
- * /dev is not stored in KRFFS; stat and getdents synthesize from this table.
+ * devfs.c: the devices of /dev, as devfs.h describes them: their file
+ * operations, the table that names them, the raw windows onto the disks,
+ * and the claims and the writer reservation that keep two users off one
+ * range of sectors.
  */
 
 #include "../klog.h"
@@ -38,8 +34,7 @@
 #include "../proc/suspend.h"
 #include "../proc/wait_queue.h"
 
-/* Linux O_* bits devfs_open honours (the rest are irrelevant to a char
- * device). */
+/* The open flags `devfs_open` acts on, at Linux's values. */
 #define DEVFS_O_CLOEXEC   02000000
 #define DEVFS_O_NONBLOCK  04000
 #define DEVFS_O_CREAT     0100
@@ -47,26 +42,32 @@
 #define DEVFS_O_DIRECTORY 0200000
 
 /*
- * The backings. /dev/null and /dev/zero sink writes; /dev/full fails them with
- * -ENOSPC. Reads come from a small kernel buffer copied out in chunks so an
- * arbitrarily large count never needs an arbitrarily large stack.
+ * The memory devices. /dev/null, /dev/zero and the random devices take a
+ * write whole and discard it, and /dev/full fails one with -ENOSPC. A read
+ * of zeros or random bytes is copied out of a buffer of 256 bytes on the
+ * stack, a piece at a time, so a large count takes no more stack.
  */
 
+/** read of /dev/null and of the devices with nothing to read: the end of
+ * the file. */
 static int32_t dev_eof_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
     (void)e;
     (void)buf;
     (void)count;
-    return 0; /* /dev/null: always at end of file */
+    return 0;
 }
 
+/** write that takes the whole buffer and discards it. */
 static int32_t dev_sink_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
     (void)e;
     (void)buf;
-    return (int32_t)count; /* accept and discard */
+    return (int32_t)count;
 }
 
+/** Copy `count` zero bytes, or random ones when `random`, to `buf`; the
+ * bytes copied, or -EFAULT when none were. */
 static int32_t dev_fill_read(fd_entry_t *e, char __user *buf, uint32_t count, int random)
 {
     char tmp[256];
@@ -92,9 +93,10 @@ static int32_t dev_fill_read(fd_entry_t *e, char __user *buf, uint32_t count, in
     return (int32_t)count;
 }
 
+/** read of /dev/zero and /dev/full: zero bytes. */
 static int32_t dev_zero_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
-    return dev_fill_read(e, buf, count, 0); /* /dev/zero and /dev/full */
+    return dev_fill_read(e, buf, count, 0);
 }
 
 /**
@@ -110,18 +112,18 @@ static int32_t dev_rand_read(fd_entry_t *e, char __user *buf, uint32_t count)
     return dev_fill_read(e, buf, count, 1);
 }
 
+/** write of /dev/full: -ENOSPC, as on Linux. */
 static int32_t dev_full_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
     (void)e;
     (void)buf;
     (void)count;
-    return -ENOSPC; /* /dev/full: the disk is always full */
+    return -ENOSPC;
 }
 
-/**
- * Report the requested read and write readiness bits without registering a
- * wait queue. Raw disk transfers may still sleep while completing I/O.
- */
+/** poll of a device that is never waited for: readable and writable at
+ * once, with no wait queue, though a transfer of a raw window may still
+ * sleep in its disk request. */
 static short dev_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {
     (void)e;
@@ -136,20 +138,22 @@ static int32_t dev_getgeo(fd_entry_t *e, uintptr_t arg);
 static int32_t dev_sector_size(fd_entry_t *e, uintptr_t arg);
 static int32_t dev_block_info(fd_entry_t *e, uint32_t request, uintptr_t arg);
 
-/*
- * The size of a raw window, which is what a checker asks a block device
- * before it reads it: `BLKGETSIZE64` is `_IOR(0x12, 114, size_t)`, which is
- * 0x80041272 with musl's 32-bit `size_t` and 0x80081272 from a 64-bit
- * header, and both take eight bytes; `BLKGETSIZE` (0x1260) is the sector
- * count in an unsigned long. `BLKSSZGET` (0x1268) and `BLKPBSZGET` (0x127B)
- * give the logical and the physical sector size, an int each, which BusyBox's
- * `mkfs.vfat` reads before it lays out a volume. `BLKRRPART` (0x125F)
- * rereads a whole disk's partition table, and `HDIO_GETGEO` (0x0301) gives a
- * geometry and the node's first sector (`dev_getgeo`). `BLKROGET` (0x125E),
- * `BLKRAGET` (0x1263) and `BLKBSZGET` (`_IOR(0x12, 112, size_t)`) give
- * whether the device is read-only, its read-ahead in sectors and its block
- * size, which util-linux's blockdev reads for every device it reports.
- * Everything else is not a terminal.
+/**
+ * The ioctls of a device: the block device requests, which a device with no
+ * size (`devfs_fd_raw_size`) answers with -ENOTTY; every other request is
+ * -ENOTTY. A checker asks a block device its size before it reads it:
+ * `BLKGETSIZE64` is `_IOR(0x12, 114, size_t)`, which is 0x80041272 with
+ * musl's 32-bit `size_t` and 0x80081272 from a 64-bit header, and both take
+ * eight bytes; `BLKGETSIZE` (0x1260) is the sector count in an unsigned
+ * long, -EFBIG when it does not fit. `BLKSSZGET` (0x1268) and `BLKPBSZGET`
+ * (0x127B) give the logical and the physical sector size, an int each,
+ * which BusyBox's `mkfs.vfat` reads before it lays out a volume.
+ * `BLKRRPART` (0x125F) rereads a whole disk's partition table, and
+ * `HDIO_GETGEO` (0x0301) gives a geometry and the node's first sector
+ * (`dev_getgeo`). `BLKROGET` (0x125E), `BLKRAGET` (0x1263) and `BLKBSZGET`
+ * (`_IOR(0x12, 112, size_t)`) give whether the device is read-only, its
+ * read-ahead in sectors and its block size, which util-linux's blockdev
+ * reads for every device it reports.
  */
 static int32_t dev_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 {
@@ -191,43 +195,33 @@ static int32_t dev_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 }
 
 /*
- * One entry of the registry: a leaf name under /dev, the {major,minor} stat
- * reports for it, and the vtable an open binds to a descriptor. The table
- * itself and what each field means are below, beside it.
+ * A device of the table: its name under /dev, the major and minor numbers
+ * stat reports for it, and the operations an open binds to a descriptor;
+ * the table is below.
  */
 struct devfs_entry {
     const char *name;
     uint16_t major;
     uint16_t minor;
-    uint8_t lseek_zero; /* mem devices seek-to-zero; the rest are not seekable */
-    uint16_t mode;
+    uint8_t lseek_zero; /* 1: an lseek returns 0 (`devfs_lseek_zero`) */
+    uint16_t mode;      /* the nine permission bits; the owner is root */
     const struct file_ops *ops;
 };
 
 /*
- * /dev/bootpart: the GRUB disk's FAT boot partition as a bounded raw window,
- * published by the disk mount when the MBR qualifies (devfs_bootpart_publish)
- * and absent otherwise. I/O is whole 512-byte sectors at sector-aligned
- * offsets, staged through a kernel bounce buffer because the AHCI driver
- * programs the buffer's physical address into its PRDT and must never see a
- * user pointer. Writes are write-through: both disk drivers flush the drive
- * cache after every write, so a returned write is on the platter.
- */
-
-/*
  * The static staging buffer, and the number of sectors one driver call has.
  *
- * A user pointer can never go to a driver: AHCI programs the buffer's physical
- * address into its PRDT, so the bytes must be somewhere the kernel knows the
- * physical address of. This array is in `.bss`, which the linker places below
- * the 32 MiB identity-mapped limit, so its virtual address is its physical one
- * and it is contiguous.
+ * A user pointer never goes to a driver: a controller is given the physical
+ * address of a transfer's buffer, so the bytes must be where the kernel
+ * knows that address. This array is in the kernel image's .bss, below
+ * HARD_MEMORY_LIMIT, where its pages are contiguous and `virt_to_phys` gives
+ * the address.
  *
- * One driver call moves up to RAW_BATCH_SECTORS, a mebibyte, and a driver
- * that takes less splits it. The size is what makes a whole-disk reflash
- * finishable at all: one sector per call would make a 500 MiB write about a
- * million driver calls, and as many cache flushes, since both drivers flush
- * the drive's cache after every write command.
+ * One driver call moves up to RAW_BATCH_SECTORS, a mebibyte, and fewer on a
+ * device whose requests are smaller (`block_max_sectors`). A batch that
+ * large keeps a whole-disk reflash short: one sector per call would make a
+ * 500 MiB write about a million driver calls, and as many cache flushes on
+ * a SATA disk, whose drivers flush the drive's cache after every write.
  *
  * A transfer stages through pages of its own from the heap, so two of them
  * on two disks each sleep on their own device; this buffer, of
@@ -239,24 +233,21 @@ struct devfs_entry {
 static uint8_t raw_batch[DEVFS_RAW_BATCH_STATIC_SECTORS * BLOCK_SECTOR_SIZE]
     __attribute__((aligned(4096)));
 
-/* How many driver calls the raw windows have made. Batching is otherwise
- * invisible from outside: a transfer of any size returns the same answer
- * whether it took one command or two hundred, and only the time differs. This
- * is reported by /proc/disk so a test can require the batching, not the
- * result, which is the difference between a 500 MiB reflash taking hundreds
- * of driver calls and a million. */
+/* The driver calls the raw windows have made (`devfs_raw_calls`). */
 static uint64_t raw_calls;
 
 /*
- * Who has the static staging buffer. A window over a device that sleeps
- * holds its buffer across the sleep, and a second process filling the same
- * buffer under the sleeper would hand it the wrong sectors; so the static
- * buffer is taken first and given back after the copy, and a second process
- * that also found the heap empty sleeps until then.
+ * The pid of the process that has the static staging buffer, or -1 while it
+ * is free. A window over a device that sleeps holds its buffer across the
+ * sleep, and a second process filling the same buffer under the sleeper
+ * would hand it the wrong sectors; so the static buffer is taken first and
+ * given back after the copy, and a second process that also found the heap
+ * empty sleeps until then.
  */
 static int raw_batch_holder = -1;
 static wait_queue_t raw_batch_wq;
 
+/** The wait condition of `raw_batch_take`: the static buffer is free. */
 static int raw_batch_free(void *arg)
 {
     (void)arg;
@@ -274,7 +265,8 @@ static uint32_t raw_batches_out;
  * least of the call, the device's largest request and the batch's limit,
  * from the heap while fewer than RAW_BATCH_POOL are out; else the static
  * buffer, taken in turn. `*sectors` receives the buffer's size, which
- * `raw_batch_put` is given back.
+ * `raw_batch_put` is given back. Waits for the static buffer while another
+ * process has it, and a signal does not end the wait.
  */
 static uint8_t *raw_batch_take(uint32_t *sectors, uint32_t want, block_device_t *device)
 {
@@ -304,6 +296,8 @@ static uint8_t *raw_batch_take(uint32_t *sectors, uint32_t want, block_device_t 
     return raw_batch;
 }
 
+/** Give back the staging buffer `batch` of `sectors` sectors that
+ * `raw_batch_take` gave, and wake the waiters for the static one. */
 static void raw_batch_put(uint8_t *batch, uint32_t sectors)
 {
     if (batch != raw_batch) {
@@ -320,10 +314,20 @@ uint64_t devfs_raw_calls(void)
     return raw_calls;
 }
 
+/*
+ * /dev/bootpart: the GRUB disk's FAT boot partition as a bounded raw window,
+ * published at boot when the boot disk's partition table qualifies its
+ * first entry (`devfs_bootpart_publish`), and absent otherwise. Its
+ * transfers are whole 512-byte sectors at offsets of whole sectors, staged
+ * through a kernel buffer. A write is on the medium when it returns from an
+ * ATA, AHCI or NVMe disk: the first two flush the drive's cache after each
+ * write, and the NVMe driver writes with FUA. A USB stick may keep it in its
+ * cache until a flush.
+ */
 static struct disk_window bootpart;
 
 /*
- * /dev/grubcore: where GRUB's BIOS core lives, as a bounded raw window, so
+ * /dev/grubcore: the sectors of GRUB's BIOS core, as a bounded raw window, so
  * that updating the boot loader has a device; /dev/bootpart cannot be it,
  * since that one is relative to partition 1 and the core is not in it. On an
  * MBR disk the window is the post-MBR gap, LBA 1 through 2047, a constant of
@@ -335,14 +339,16 @@ static struct disk_window bootpart;
 static struct disk_window grubcore;
 
 /**
- * Read whole sectors from a bounded raw window.
+ * Read whole sectors from a bounded raw window at the description's
+ * `raw_offset`, and move it past them. Returns the bytes read, 0 at or past
+ * the end, -ENXIO while the window is not published, -EINVAL for a part of
+ * a sector, or -EFAULT or the request's error when nothing was read.
  *
  * Offsets and counts must be whole sectors: a partial sector has no meaning to
  * a disk, and rounding one would either read a neighbour's bytes or write
  * them. The end is handled the way a regular file's is, with a short read,
- * not an error, because a reader walking a window to its end is
- * ordinary. Sectors are staged through a kernel buffer because the AHCI driver
- * programs the buffer's physical address into its PRDT and must never be given
+ * not an error, because a reader walking a window to its end is ordinary.
+ * Sectors are staged through a kernel buffer, since a driver is never given
  * a user pointer.
  */
 static int32_t raw_window_read(struct disk_window *w, fd_entry_t *e, char __user *buf,
@@ -396,14 +402,18 @@ static int32_t raw_window_read(struct disk_window *w, fd_entry_t *e, char __user
     }
     raw_batch_put(batch, batch_sectors);
     if (done == 0) {
-        return rc; /* the request's own errno: EIO, or what the device said */
+        return rc;
     }
     e->ofd->raw_offset = off + (uint64_t)done * BLOCK_SECTOR_SIZE;
     return (int32_t)(done * BLOCK_SECTOR_SIZE);
 }
 
 /**
- * Write whole sectors to a bounded raw window.
+ * Write whole sectors to a bounded raw window at the description's
+ * `raw_offset`, and move it past them. Returns the bytes written, -ENXIO
+ * while the window is not published, -EPERM for a caller that is not
+ * privileged, -EINVAL for a part of a sector, -ENOSPC for a write that
+ * starts at or crosses the end, or -EFAULT or -EIO when nothing was written.
  *
  * The whole request is judged before the first sector goes down: a write that
  * starts at or crosses the end writes nothing, because these windows are fixed
@@ -489,11 +499,15 @@ static int32_t raw_window_write(struct disk_window *w, fd_entry_t *e, const char
     return (int32_t)(done * BLOCK_SECTOR_SIZE);
 }
 
+/** read of /dev/bootpart (`raw_window_read`). */
 static int32_t dev_bootpart_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
     return raw_window_read(&bootpart, e, buf, count);
 }
 
+/* A disk's nodes, the whole disk and each partition slot, and the minor
+ * from which the nodes past disk 0's first five are numbered
+ * (`disk_node_name`). */
 #define DISK_NODE_WINDOWS (DISK_PARTS + 1)
 #define DISK_MINOR_BASE   64
 
@@ -513,6 +527,7 @@ static int disk_node_count;
 
 static const struct file_ops diskwin_ops;
 
+/** The disk node `dev` is, or NULL for a device of the table. */
 static const struct disk_node *disk_node_of(const struct devfs_entry *dev)
 {
     if (dev->ops != &diskwin_ops) {
@@ -521,11 +536,10 @@ static const struct disk_node *disk_node_of(const struct devfs_entry *dev)
     return (const struct disk_node *)dev;
 }
 
-/* The node behind a descriptor open on a disk window, or NULL for a
-   descriptor open on anything else. `dev_ioctl` is reached by every device,
-   not only the windows, so the entry's operations are what says whether its
-   record is a node: a plain `devfs_entry` read as one reads past the table
-   it is in. */
+/** The node behind a descriptor open on a disk window, or NULL for a
+ * descriptor open on anything else. `dev_ioctl` is reached by every device,
+ * not only the windows, so the entry's operations say whether its record is
+ * a node: a plain `devfs_entry` read as one reads past the table it is in. */
 static const struct disk_node *disk_node_of_fd(const fd_entry_t *e)
 {
     return e->dev ? disk_node_of(e->dev) : 0;
@@ -537,7 +551,6 @@ static const struct disk_node *disk_node_of_fd(const fd_entry_t *e)
  * `node` is the caller's to check; every caller of this that took it from a
  * descriptor answers `ENOTTY` or `EIO` for a descriptor that names no node.
  */
-
 static struct disk_window *disk_node_window(const struct disk_node *node)
 {
     if (node->part == 0) {
@@ -550,7 +563,8 @@ static int32_t raw_window_read_bytes(struct disk_window *w, fd_entry_t *e, char 
                                      uint32_t count);
 
 /**
- * Read a disk window at its descriptor's byte offset.
+ * Read a disk window at its descriptor's byte offset (`raw_window_read_bytes`),
+ * or -EIO for a descriptor of no node or a window not published.
  *
  * Reads accept arbitrary byte ranges. Writes require whole sectors and are
  * available only in recovery builds.
@@ -573,7 +587,8 @@ static int32_t dev_disk_read(fd_entry_t *e, char __user *buf, uint32_t count)
 /**
  * `BLKRRPART` on a whole-disk node: read the table again, for a table
  * rewritten through the node or on another machine, refused while a
- * partition is mounted or another descriptor is open on the disk.
+ * partition is mounted or another descriptor is open on the disk
+ * (`disk_rescan`). -ENOTTY for a descriptor that is not of a whole disk.
  */
 static int32_t dev_disk_rescan(fd_entry_t *e)
 {
@@ -586,14 +601,16 @@ static int32_t dev_disk_rescan(fd_entry_t *e)
 }
 
 /**
- * Write whole sectors anywhere on a disk, in a recovery build only.
+ * Write whole sectors anywhere on a disk (`raw_window_write`), in a recovery
+ * build only; -EIO for a descriptor of no node.
  *
- * This is the one place in the kernel that can destroy the machine outright,
- * so which kernel it is compiled into is decided when the kernel is built and
- * not when it boots. An everyday build compiles the refusal below and has no
- * path around it; a `-DRACH2_RECOVERY` build compiles the body. Both have a
- * banner naming which they are, and `check_recovery.sh` reads it off the
- * artifact in both directions.
+ * Such a write can overwrite any sector of the disk, the boot loader and
+ * every file system among them, so which kernel has it is decided when the
+ * kernel is built and not when it boots. An ordinary build compiles the
+ * refusal, -EPERM, and has no path around it; a `-DRACH2_RECOVERY` build
+ * compiles the body. Each has a banner naming which it is
+ * (block/recovery.c), and `check_recovery.sh` reads it off the artifact in
+ * both directions.
  */
 #ifdef RACH2_RECOVERY
 static int32_t dev_disk_write(fd_entry_t *e, const char __user *buf, uint32_t count)
@@ -621,10 +638,12 @@ static int32_t dev_disk_write(fd_entry_t *e, const char __user *buf, uint32_t co
  * The boot windows take whole sectors only, because their readers are the
  * reflash tools and a partial sector there is a mistake. A disk's nodes are
  * read by `blkid`, whose probers ask for the size of a superblock structure
- * at whatever offset it lives, and a block device node on Linux answers
+ * at whatever offset it is, and a block device node on Linux answers
  * that. So the covering sectors are read into the staging buffer and the
  * bytes asked for are copied out of it, one batch at a time; the end is a
- * short read, as a regular file's is.
+ * short read, as a regular file's is. Returns the bytes read, 0 at or past
+ * the end, or -EFAULT or the request's error when nothing was read, and
+ * moves `raw_offset` past what was read.
  */
 static int32_t raw_window_read_bytes(struct disk_window *w, fd_entry_t *e, char __user *buf,
                                      uint32_t count)
@@ -681,16 +700,19 @@ static int32_t raw_window_read_bytes(struct disk_window *w, fd_entry_t *e, char 
     return (int32_t)done;
 }
 
+/** write of /dev/bootpart (`raw_window_write`). */
 static int32_t dev_bootpart_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
     return raw_window_write(&bootpart, e, buf, count);
 }
 
+/** read of /dev/grubcore (`raw_window_read`). */
 static int32_t dev_grubcore_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
     return raw_window_read(&grubcore, e, buf, count);
 }
 
+/** write of /dev/grubcore (`raw_window_write`). */
 static int32_t dev_grubcore_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
     return raw_window_write(&grubcore, e, buf, count);
@@ -715,6 +737,8 @@ static int32_t dev_grubcore_write(fd_entry_t *e, const char __user *buf, uint32_
  */
 static struct disk *window_disk(const struct devfs_entry *dev);
 
+/** The last close of a raw window's description: one open for writing gives
+ * back its disk's writer reservation. */
 static void raw_close(fd_entry_t *e)
 {
     if (e->flags & FD_FLAG_WRITE) {
@@ -740,17 +764,21 @@ static void raw_close(fd_entry_t *e)
  */
 static int grubcore_held;
 
+/** The last close of /dev/grubcore: the device may be opened again. */
 static void dev_grubcore_close(fd_entry_t *e)
 {
     grubcore_held = 0;
     raw_close(e);
 }
 
+/** The last close of /dev/bootpart (`raw_close`). */
 static void dev_bootpart_close(fd_entry_t *e)
 {
     raw_close(e);
 }
 
+/** The last close of a disk node: `raw_close`, and one open fewer on its
+ * disk, which `disk_rescan` counts. */
 static void dev_disk_close(fd_entry_t *e)
 {
     const struct disk_node *node = disk_node_of_fd(e);
@@ -768,14 +796,22 @@ static void dev_disk_close(fd_entry_t *e)
  * so that util-linux's losetup and mount find a free one and attach a file
  * to it with Linux's ioctls (`loop_node_ioctl`). A node reads and writes its
  * device in whole sectors, as a disk node does: blkid reads it to learn the
- * file system an image has, and mkfs writes one. A write waits for no file
- * system to be mounted on it, whose blocks the cache may hold. The control
- * node takes one line per write: `attach N /path`, `attach - /path` for the
- * first free device, `detach N`; `ro` after `attach` attaches read-only.
+ * file system an image has, and mkfs writes one. A write is refused while a
+ * file system is mounted on the device, since the cache may hold its blocks.
+ * The control node takes one line per write: `attach N /path`, `attach -
+ * /path` for the first free device, `detach N`; `ro` after `attach`
+ * attaches read-only.
  */
 static int devfs_loop_index(const struct devfs_entry *dev);
 
-/* A read into `in`, or with `in` NULL a write from `out`, of `count` bytes. */
+/**
+ * A read of a loop device's node into `in`, or with `in` NULL a write from
+ * `out`, of `count` bytes at the description's `raw_offset`, which moves
+ * past them. Returns the bytes moved, `loop_node_device`'s error, -EPERM for
+ * a write through a descriptor not open for writing or by a caller that is
+ * not privileged, -EINVAL for a part of a sector, -ENOSPC for a write at or
+ * past the end, or -EFAULT or the request's error when nothing moved.
+ */
 static int32_t loop_node_transfer(fd_entry_t *e, char __user *in, const char __user *out,
                                   uint32_t count)
 {
@@ -830,11 +866,13 @@ static int32_t loop_node_transfer(fd_entry_t *e, char __user *in, const char __u
     return (int32_t)(done * BLOCK_SECTOR_SIZE);
 }
 
+/** read of a loop device's node (`loop_node_transfer`). */
 static int32_t loop_node_read(fd_entry_t *entry, char __user *buffer, uint32_t count)
 {
     return loop_node_transfer(entry, buffer, 0, count);
 }
 
+/** write of a loop device's node (`loop_node_transfer`). */
 static int32_t loop_node_write(fd_entry_t *entry, const char __user *buffer, uint32_t count)
 {
     return loop_node_transfer(entry, 0, buffer, count);
@@ -845,7 +883,11 @@ static int32_t loop_node_write(fd_entry_t *entry, const char __user *buffer, uin
  * attach the file a descriptor of the caller has open, named by the path
  * `/proc/self/fd` gives it, writable when both descriptors are open for
  * writing; the rest are `loop_ioctl`'s, and a request that is not a loop
- * one is the disk ioctls' of every device node.
+ * one is the disk ioctls' of every device node. The two are -EPERM for a
+ * caller that is not privileged, -EFAULT, -EINVAL for a block size or a
+ * flag they do not take, -EBADF for a descriptor not open on a file,
+ * -ENAMETOOLONG for a path too long to attach, or `loop_attach_file`'s
+ * error.
  */
 static int32_t loop_node_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 {
@@ -895,6 +937,9 @@ static void loop_node_close(fd_entry_t *e)
     loop_node_closed(devfs_loop_index(e->dev));
 }
 
+/** write of /dev/loop-control: one line of the commands above
+ * (`loop_control_write`). Returns the whole count, -EINVAL for an empty
+ * write or one too long for a line, -EFAULT, or the command's error. */
 static int32_t loopctl_write(fd_entry_t *entry, const char __user *buffer, uint32_t count)
 {
     char line[LOOP_PATH_MAX + 16];
@@ -914,8 +959,10 @@ static int32_t loopctl_write(fd_entry_t *entry, const char __user *buffer, uint3
 static const struct file_ops loop_ops = {loop_node_read, loop_node_write, dev_poll, loop_node_ioctl,
                                          loop_node_close};
 
-/* `/dev/framefail`: a count written to it arms the test switch in the
- * frame allocator; EPERM unless `rach2.framefail` is on the boot line. */
+/** write of /dev/framefail: the count its first 16 bytes begin with arms
+ * the test switch of the frame allocator (`paging_framefail_arm`). Returns
+ * the count, cut to 16, -EFAULT, -EINVAL for a write that does not begin
+ * with a digit, or -EPERM unless `rach2.framefail` is on the boot line. */
 static int32_t framefail_write(fd_entry_t *entry, const char __user *buffer, uint32_t count)
 {
     char digits[16];
@@ -942,8 +989,10 @@ static int32_t framefail_write(fd_entry_t *entry, const char __user *buffer, uin
 
 static const struct file_ops framefail_ops = {dev_eof_read, framefail_write, dev_poll, dev_ioctl,
                                               NULL};
-/* LOOP_CTL_GET_FREE, LOOP_CTL_ADD and LOOP_CTL_REMOVE, which losetup and
- * mount make before they attach a file. */
+
+/** LOOP_CTL_GET_FREE, LOOP_CTL_ADD and LOOP_CTL_REMOVE, which losetup and
+ * mount make before they attach a file (`loop_control_ioctl`); another
+ * request is the disk ioctls' (`dev_ioctl`). */
 static int32_t loopctl_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 {
     int32_t rc = loop_control_ioctl(request, arg);
@@ -959,15 +1008,20 @@ static const struct file_ops loopctl_ops = {dev_eof_read, loopctl_write, dev_pol
 #define DEVMEM_SIZE 0x100000000ull
 #define DEVMEM_LOW  0x100000u
 
-/*
- * /dev/mem: the physical address space as a raw device of 4 GiB, which a
- * privileged caller reads and writes at the description's offset, as
- * Linux's does with STRICT_DEVMEM: firmware's frames, a device's and those
- * past the top of memory are the caller's (`paging_frame_is_device`), and
- * so is the first megabyte, which the kernel loaded above it leaves to
- * firmware; another frame of RAM, which the allocator owns, is EPERM. The
- * bytes pass through a buffer on the stack, so the temporary mapping is not
- * held across a copy from or to the caller, which may fault.
+/**
+ * Read /dev/mem into `to`, or with `from` not NULL write it from `from`, at
+ * the description's `raw_offset`, which moves past what was moved. /dev/mem
+ * is the physical address space as a raw device of 4 GiB, which a
+ * privileged caller reads and writes as Linux's with STRICT_DEVMEM:
+ * firmware's frames, a device's and those past the top of memory are the
+ * caller's (`paging_frame_is_device`), and so is the first megabyte, which
+ * the kernel loaded above it leaves to firmware. A transfer stops at 4 GiB
+ * and at another frame of RAM, which the allocator owns. Returns the bytes
+ * moved, -EPERM for a caller that is not privileged or a first frame of the
+ * allocator's, or -EFAULT or -ENOMEM when nothing was moved.
+ *
+ * The bytes pass through a buffer on the stack, so the temporary mapping is
+ * not held across a copy from or to the caller, which may fault.
  */
 static int32_t dev_mem_rw(fd_entry_t *e, char __user *to, const char __user *from, uint32_t count)
 {
@@ -1015,11 +1069,13 @@ static int32_t dev_mem_rw(fd_entry_t *e, char __user *to, const char __user *fro
     return (int32_t)done;
 }
 
+/** read of /dev/mem (`dev_mem_rw`). */
 static int32_t dev_mem_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
     return dev_mem_rw(e, buf, NULL, count);
 }
 
+/** write of /dev/mem (`dev_mem_rw`). */
 static int32_t dev_mem_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
     return dev_mem_rw(e, NULL, buf, count);
@@ -1030,26 +1086,22 @@ static const struct file_ops null_ops = {dev_eof_read, dev_sink_write, dev_poll,
 static const struct file_ops zero_ops = {dev_zero_read, dev_sink_write, dev_poll, dev_ioctl, NULL};
 static const struct file_ops full_ops = {dev_zero_read, dev_full_write, dev_poll, dev_ioctl, NULL};
 static const struct file_ops rand_ops = {dev_rand_read, dev_sink_write, dev_poll, dev_ioctl, NULL};
-/*
- * /dev/bootlog: what this machine printed while it was starting.
- *
- * It exists so a question about a boot can be asked after that boot, over the
- * network, by somebody who arranged nothing in advance. The alternatives all
- * demand foresight: the screen scrolls the log past in under a second, the
- * netconsole reaches only a capture that was already running when the power
- * came on, and holding the screen helps only a person standing at the machine.
- *
- * What it holds is the kernel's records, from the boot and from whatever the
- * machine has said since, and not the debug shell's own output.
- */
+
 /**
- * Copy from the log's ring into a reader's buffer.
+ * read of /dev/bootlog: the kernel's records in its ring, from the boot and
+ * from whatever the machine has said since, and not the debug shell's own
+ * output. It lets a question about a boot be asked after that boot, over
+ * the network, by somebody who arranged nothing in advance: the screen
+ * scrolls the log past in under a second, netconsole reaches only a capture
+ * that was already running when the power came on, and holding the screen
+ * helps only a person at the machine.
  *
- * The descriptor's offset counts from the oldest record the ring still holds,
- * which is what `klog_read` takes. Records may be evicted between chunk
- * copies, including within one read. The returned bytes are not a snapshot.
- * A fault after some bytes were copied is a short read: those bytes are
- * reported and the offset moves past them.
+ * The description's offset counts from the oldest record the ring still
+ * holds, which is what `klog_read` takes, and an offset past 4 GiB is the
+ * end. Records may be evicted between chunk copies, even within one read, so
+ * the bytes returned are not a snapshot. A fault after some bytes were
+ * copied is a short read: those bytes are returned and the offset moves past
+ * them; a fault before any is -EFAULT.
  */
 static int32_t dev_bootlog_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
@@ -1057,7 +1109,7 @@ static int32_t dev_bootlog_read(fd_entry_t *e, char __user *buf, uint32_t count)
     uint32_t done = 0;
 
     if (e->ofd->offset > 0xFFFFFFFFu) {
-        return 0; /* past any log's end */
+        return 0;
     }
     while (done < count) {
         uint32_t want = count - done;
@@ -1068,7 +1120,7 @@ static int32_t dev_bootlog_read(fd_entry_t *e, char __user *buf, uint32_t count)
         }
         n = klog_read(chunk, want, (uint32_t)e->ofd->offset + done);
         if (n == 0) {
-            break; /* the end of the log, the regular-file convention */
+            break;
         }
         if (copy_to_user((void __user *)(buf + done), chunk, n) != 0) {
             e->ofd->offset += done;
@@ -1080,15 +1132,15 @@ static int32_t dev_bootlog_read(fd_entry_t *e, char __user *buf, uint32_t count)
     return (int32_t)done;
 }
 
-/*
- * /dev/screenlog: how much of the machine's own record the screen shows.
- *
- * Reading gives the level as one digit and a newline; writing one digit sets
- * it. The ring, the serial port and netconsole are not affected, so nothing a
- * later reader wants is lost by turning the screen down. It exists because the
- * screen is shared: a program that is talking to a person, `rach2-install`
- * above all, has no other way to stop the kernel's routine notes arriving in
- * the middle of its questions.
+/**
+ * read of /dev/screenlog, which says how much of the kernel's record the
+ * screen shows: the level as one digit and a newline, from the description's
+ * offset. A write of one digit sets it. The ring, the serial port and
+ * netconsole are not affected, so nothing a later reader wants is lost by
+ * turning the screen down. It exists because the screen is shared: a
+ * program that is talking to a person, `rach2-install` above all, has no
+ * other way to stop the kernel's routine notes arriving in the middle of its
+ * questions.
  */
 static int32_t dev_screenlog_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
@@ -1109,6 +1161,10 @@ static int32_t dev_screenlog_read(fd_entry_t *e, char __user *buf, uint32_t coun
     return (int32_t)count;
 }
 
+/** write of /dev/screenlog: its first byte, a digit, sets the level, and the
+ * whole write is taken, so that a caller that wrote "4\n" is not asked to
+ * write the newline again. -EINVAL for a byte that is not a digit, or
+ * -EFAULT. */
 static int32_t dev_screenlog_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
     char digit;
@@ -1124,8 +1180,6 @@ static int32_t dev_screenlog_write(fd_entry_t *e, const char __user *buf, uint32
         return -EINVAL;
     }
     klog_set_screen_level(digit - '0');
-    /* The whole write is taken, so a caller that wrote "4\n" is not asked to
-       write the newline again. */
     return (int32_t)count;
 }
 
@@ -1150,7 +1204,7 @@ static const struct file_ops screenlog_ops = {dev_screenlog_read, dev_screenlog_
  * for an alarm and gives an unsigned long, as Linux's: the alarms since the
  * last read in the bits above the low eight, with RTC_AF and RTC_IRQF. An
  * alarm is a wake event of a suspend to idle (`suspend_wake`). The clock's
- * update and periodic interrupts are not given: RTC_UIE_ON is -EINVAL.
+ * update and periodic interrupts are not given: RTC_UIE_ON is -ENOTTY.
  */
 #define RTC_AIE_ON    0x7001u
 #define RTC_AIE_OFF   0x7002u
@@ -1169,8 +1223,10 @@ static const struct file_ops screenlog_ops = {dev_screenlog_read, dev_screenlog_
 static wait_queue_t rtc_wq;
 static volatile uint32_t rtc_alarms;
 static int64_t rtc_wake_at = -1;
-static int rtc_irq_ready;
+static int rtc_irq_ready; /* the alarm interrupt is attached (`rtc_irq_setup`) */
 
+/** The clock's alarm interrupt: an alarm counted, its readers woken, and a
+ * suspend to idle ended. */
 static void rtc_alarm_irq(isr_params_t *params)
 {
     (void)params;
@@ -1191,6 +1247,7 @@ static void rtc_irq_setup(void)
     }
 }
 
+/** The wait condition of a read: an alarm has come since the last read. */
 static int rtc_alarm_came(void *arg)
 {
     (void)arg;
@@ -1202,6 +1259,8 @@ static int rtc_alarm_came(void *arg)
  * last read above the low eight bits, with RTC_AF and RTC_IRQF, as Linux's
  * `rtc_dev_read` gives them: four bytes to a read of exactly four, and an
  * unsigned long, eight bytes on x86-64, to one of that size or more.
+ * Returns the bytes given, -EINVAL for another size, -EAGAIN, -EINTR or
+ * -EFAULT.
  */
 static int32_t dev_rtc_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
@@ -1231,6 +1290,8 @@ static int32_t dev_rtc_read(fd_entry_t *e, char __user *buf, uint32_t count)
     return copy_to_user(buf, &data, sizeof(data)) != 0 ? -EFAULT : (int32_t)sizeof(data);
 }
 
+/** poll of /dev/rtc0: POLLIN among `events` while an alarm has come since
+ * the last read, and the alarm's wait queue. */
 static short dev_rtc_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {
     (void)e;
@@ -1299,7 +1360,9 @@ static void rtc_to_tm(const rtc_time_t *t, int32_t *tm)
 }
 
 /** RTC_WKALM_SET and RTC_WKALM_RD's `struct rtc_wkalrm` at `arg`: whether
- * the alarm is enabled, whether it has come, and its date and time. */
+ * the alarm is enabled, whether it has come, and its date and time. A set
+ * is -EACCES for a caller that is not privileged; 0, -EFAULT, or the error
+ * of `devfs_rtc_set_wakealarm`. */
 static int32_t dev_rtc_wkalarm(uint32_t request, uintptr_t arg)
 {
     uint8_t w[40];
@@ -1333,6 +1396,7 @@ static int32_t dev_rtc_wkalarm(uint32_t request, uintptr_t arg)
     return devfs_rtc_set_wakealarm(rtc_seconds_of(&t));
 }
 
+/** write of /dev/rtc0: -EINVAL, as Linux's has no write. */
 static int32_t dev_rtc_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
     (void)e;
@@ -1343,7 +1407,8 @@ static int32_t dev_rtc_write(fd_entry_t *e, const char __user *buf, uint32_t cou
 
 /** RTC_ALM_READ, RTC_ALM_SET, RTC_AIE_ON and RTC_AIE_OFF: the alarm's time
  * of day, read with today's date, or set, and its interrupt on or off, the
- * last three for a privileged caller. */
+ * last three for a privileged caller. 0, -EIO when the clock cannot be read,
+ * -EACCES, -EFAULT, or -EINVAL for a time of day out of range. */
 static int32_t dev_rtc_alarm(uint32_t request, uintptr_t arg)
 {
     int32_t tm[9];
@@ -1378,6 +1443,11 @@ static int32_t dev_rtc_alarm(uint32_t request, uintptr_t arg)
     return 0;
 }
 
+/** The ioctls of /dev/rtc0 named before its request numbers; -ENOTTY for
+ * another. RTC_RD_TIME is -EIO when the clock cannot be read, and
+ * RTC_SET_TIME -EACCES for a caller that is not privileged and -EINVAL for a
+ * month out of range, a year outside 2000 to 2099 or a time the clock
+ * refuses. */
 static int32_t dev_rtc_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 {
     int32_t tm[9];
@@ -1431,8 +1501,9 @@ static const struct file_ops bootlog_ops = {dev_bootlog_read, dev_sink_write, de
 static const struct file_ops diskwin_ops = {dev_disk_read, dev_disk_write, dev_poll, dev_ioctl,
                                             dev_disk_close};
 
-/* Whether `dev` is a raw window a write may reach: the whole disks and the
- * two boot windows in every build, the partitions in the recovery build. */
+/** Whether `dev` is a raw window a write may reach, for the writer
+ * reservation: the whole disks and the two boot windows in every build, the
+ * partitions in the recovery build. */
 static int raw_write_window(const struct devfs_entry *dev)
 {
     const struct disk_node *node = disk_node_of(dev);
@@ -1443,7 +1514,8 @@ static int raw_write_window(const struct devfs_entry *dev)
     return dev->ops == &bootpart_ops || dev->ops == &grubcore_ops;
 }
 
-/* The raw window of `dev`, a disk's or one of the two boot windows, or null. */
+/** The raw window of `dev`, a disk's or one of the two boot windows, or
+ * NULL. */
 static struct disk_window *raw_window_of(const struct devfs_entry *dev)
 {
     const struct disk_node *node = disk_node_of(dev);
@@ -1460,7 +1532,7 @@ static struct disk_window *raw_window_of(const struct devfs_entry *dev)
     return 0;
 }
 
-/* The disk a raw window is on, for its writer reservation, or null. */
+/** The disk a raw window is on, for its writer reservation, or NULL. */
 static struct disk *window_disk(const struct devfs_entry *dev)
 {
     const struct disk_node *node = disk_node_of(dev);
@@ -1477,23 +1549,25 @@ static struct disk *window_disk(const struct devfs_entry *dev)
 }
 
 /*
- * The registry. The mem devices have the real Linux numbers (major 1) and the
- * terminals theirs (major 5), so stat reports a faithful rdev; the rest are in
- * the local block, major 240. A device with nothing to release has a NULL
- * close, and the descriptor's `dev` points at the registry entry itself,
- * which fstat reads for the rdev. `mode` is the nine-bit permission stat
- * reports and open enforces (the entries' owner is root:root): the mem
- * devices and the terminals are 0666, the Linux modes, and every other entry
- * is root's. `bootpart`, `grubcore`, the loop devices and the disk nodes are
- * present only at times, which is why enumeration goes through
- * `devfs_dirent` and skips absent entries instead of stopping at the first
- * one: a machine that has a later one and not an earlier one would otherwise
- * have a device it could open and could not list.
+ * The table of devices. The memory devices have Linux's numbers (major 1),
+ * the terminals theirs (major 5) and the loop devices theirs (major 7), so
+ * stat reports a faithful rdev; the rest are in the block Linux leaves for
+ * local use, majors 240 and 254. A device with nothing to release has a
+ * NULL close, and a descriptor's `dev` points at its entry, which fstat
+ * reads. `mode` is the nine permission bits stat reports and open enforces,
+ * the owner of every device being root:root: /dev/null, /dev/zero,
+ * /dev/full, the random devices and the terminals are 0666, as on Linux, and
+ * every other device is root's, with group access to /dev/mem and the loop
+ * devices. `bootpart` and `grubcore` are present only while published, as
+ * the disk nodes after the table are, which is why the listing goes through
+ * `devfs_dirent` and skips an absent device instead of stopping at it: a
+ * machine that has a later one and not an earlier one would otherwise have
+ * a device it could open and could not list.
+ *
+ * An entry with NULL operations is a terminal, which `devfs_open` opens
+ * itself: console and tty give an FD_TYPE_CONSOLE descriptor, tty a pty's
+ * when the caller's session is on one, and ptmx a new pty pair.
  */
-/* ops == NULL marks a terminal entry, which devfs_open handles itself:
- * console and tty yield an FD_TYPE_CONSOLE descriptor (tty a pty when the
- * caller's session is on one), ptmx a new pty pair. bootpart's major is 240,
- * the local/experimental block, minor 0. */
 static const struct devfs_entry dev_table[] = {{"mem", 1, 1, 0, 0640, &mem_ops},
                                                {"null", 1, 3, 1, 0666, &null_ops},
                                                {"zero", 1, 5, 1, 0666, &zero_ops},
@@ -1526,8 +1600,8 @@ static int devfs_loop_index(const struct devfs_entry *dev)
     return (int)dev->minor;
 }
 
-/** Whether table entry `i` exists right now: bootpart, grubcore and the loop
- * devices come and go. */
+/** Whether table entry `i` is present now: bootpart and grubcore only while
+ * published, and every other entry always. */
 static int devfs_entry_present(int i)
 {
     if (dev_table[i].ops == &bootpart_ops) {
@@ -1542,8 +1616,8 @@ static int devfs_entry_present(int i)
 /**
  * The type bits `stat` reports for an entry.
  *
- * The disks' nodes are block devices and everything else here is a
- * character device. The difference is not decoration: `blkid`, `findfs`
+ * The disk nodes and the loop devices are block devices and everything
+ * else here is a character device. The difference matters: `blkid`, `findfs`
  * and `mount LABEL=` walk `/dev` and look at nothing that is not a block
  * device, so a volume reported as a character device cannot be found by
  * its label.
@@ -1560,7 +1634,7 @@ static uint32_t devfs_type_bits(const struct devfs_entry *dev)
 #define DEVFS_INO_BASE 16u
 #define DEVFS_INO(idx) (DEVFS_INO_BASE + (uint32_t)(idx))
 
-/* Equal NUL-terminated strings? (The kernel has no strcmp.) */
+/** Whether the strings `a` and `b` are equal. */
 static int name_eq(const char *a, const char *b)
 {
     while (*a && *a == *b) {
@@ -1640,7 +1714,6 @@ int devfs_disk_row(int i, struct devfs_disk_row *row)
         return got;
     }
     if (i >= disk_node_count) {
-        /* An attached loop device: a disk of its own, with no partitions. */
         row->whole = i;
         row->partno = 0;
         row->start = 0;
@@ -1678,7 +1751,7 @@ void devfs_window_alias(const struct block_device *view, const struct block_devi
     }
 }
 
-/* The index `stat` and the listing agree on: the table's entries first,
+/** The index `stat` and the listing agree on: the table's entries first,
  * then the disk nodes in the order the disks were registered. */
 static int entry_index(const struct devfs_entry *dev)
 {
@@ -1690,6 +1763,8 @@ static int entry_index(const struct devfs_entry *dev)
     return (int)(dev - dev_table);
 }
 
+/** The device named `name` present now, a table entry or a disk node, or
+ * NULL. */
 static const struct devfs_entry *devfs_find(const char *name)
 {
     int i;
@@ -1745,18 +1820,6 @@ static void disk_node_name(struct disk_node *node, int number, int m)
     }
 }
 
-/**
- * Create registry nodes for a disk and its partition slots.
- *
- * `/dev/diskN` names the whole disk; `/dev/diskNpM` names partition M.
- * Partition nodes are published after a table scan. USB discovery also
- * publishes the whole-disk node; disk diagnostics publish whole-disk
- * windows for registered disks. A table scan updates the partition names.
- *
- * Disk 0 uses minor 1 for the whole disk and minors 4 through 7 for its
- * first four partitions. Other nodes use minor 64 + 16N + M, with M zero
- * for the whole disk.
- */
 void devfs_disk_nodes(struct disk *d)
 {
     int k;
@@ -1817,6 +1880,7 @@ struct claim {
 
 static struct claim claims[DEVFS_CLAIMS];
 
+/** Whether the sectors `af` to `al` of `a` and `bf` to `bl` of `b` meet. */
 static int ranges_cross(block_device_t *a, uint64_t af, uint64_t al, block_device_t *b, uint64_t bf,
                         uint64_t bl)
 {
@@ -1869,6 +1933,7 @@ int devfs_disk_claimed(const struct disk *d)
     return 0;
 }
 
+/** Whether a claim meets the sectors `first` to `last` of `backing`. */
 static int claimed(block_device_t *backing, uint64_t first, uint64_t last)
 {
     int i;
@@ -1882,7 +1947,9 @@ static int claimed(block_device_t *backing, uint64_t first, uint64_t last)
     return 0;
 }
 
-/* The range of a raw window on its backing disk, for the claim rules. */
+/** The range of the raw window `dev` on the physical device under it, for
+ * the claim rules: 0, or -ENXIO for a device that is no raw window or one
+ * not published. */
 static int window_range(const struct devfs_entry *dev, block_device_t **backing, uint64_t *first,
                         uint64_t *last)
 {
@@ -1897,6 +1964,13 @@ static int window_range(const struct devfs_entry *dev, block_device_t **backing,
     return 0;
 }
 
+/**
+ * A file has no sectors on a disk to claim, so a loop device is its own
+ * identity, and only one mount can be placed on it. The whole disk is a
+ * mount's source when it holds one volume and no table, as a stick
+ * formatted without one does; the claim rules keep a whole-disk mount and a
+ * partition's from overlapping.
+ */
 int devfs_window_of(const char *path, block_device_t **view, block_device_t **backing,
                     uint64_t *first, uint64_t *count)
 {
@@ -1915,10 +1989,8 @@ int devfs_window_of(const char *path, block_device_t **view, block_device_t **ba
         block_device_t *loop = loop_device_at(devfs_loop_index(dev));
 
         if (!loop) {
-            return -ENXIO; /* the node is there, with nothing attached to it */
+            return -ENXIO;
         }
-        /* A file has no sectors on a disk to claim: the device itself is the
-         * identity, and only one mount can be placed on it. */
         *view = loop;
         *backing = 0;
         *first = 0;
@@ -1929,16 +2001,13 @@ int devfs_window_of(const char *path, block_device_t **view, block_device_t **ba
     if (dev->ops == &bootpart_ops) {
         w = &bootpart;
     } else if (node) {
-        /* The whole disk is a mount's source when it holds one volume and
-         * no table, as a stick formatted without one does; the claim rules
-         * keep a whole-disk mount and a partition's from overlapping. */
         w = disk_node_window(node);
     }
     if (!w) {
-        return -EINVAL; /* not a partition window */
+        return -EINVAL;
     }
     if (!w->present) {
-        return -ENOENT; /* devfs_find lists only published nodes */
+        return -ENOENT;
     }
     *view = &w->part.device;
     *backing = block_physical(w->part.backing);
@@ -1948,32 +2017,13 @@ int devfs_window_of(const char *path, block_device_t **view, block_device_t **ba
 }
 
 /**
- * Open a /dev leaf by name and return its descriptor.
- *
- * `name` is the leaf under /dev, `flags` the Linux O_* set. Most entries bind
- * an fd to the registry vtable (FD_TYPE_DEVICE); three are special. /dev/ptmx
- * allocates a fresh pty pair per open. /dev/console and /dev/tty map to the
- * kernel console (FD_TYPE_CONSOLE), except that /dev/tty
- * resolves to the caller's controlling terminal, which may be a pty rather than
- * the console.
- *
  * /dev/tty follows POSIX: the console when the caller is in the console's
- * session, else the pty slave that owns the caller's session, else ENXIO,
+ * session, else the pty slave that has the caller's session, else ENXIO,
  * which is also what dropbear's probe after setsid expects. A job-control
  * shell over a pty opens /dev/tty to set its foreground process group, and
  * given the console instead it would never see itself in the foreground and
- * would stop on SIGTTIN.
- *
- * A write-capable open of a raw window, the whole disk, the two boot windows
- * or, in the recovery build, a partition, takes the disk's one writer
- * reservation, and is refused with EBUSY while another writer has it or a
- * mounted volume claims the window's range. A second open of /dev/grubcore is
- * refused with EBUSY too.
- *
- * Reject `O_CREAT|O_EXCL` for an existing leaf before allocating a descriptor
- * or a pty pair.
- *
- * @return the new descriptor, or a negative errno.
+ * would stop on SIGTTIN. O_CREAT|O_EXCL is refused before a descriptor or a
+ * pty pair is made.
  */
 int devfs_open(const char *name, int flags)
 {
@@ -2004,8 +2054,6 @@ int devfs_open(const char *name, int flags)
             }
             return -ENXIO; /* the caller has no controlling terminal */
         }
-        /* ctty is the console -> fall through to the FD_TYPE_CONSOLE path
-         * below. */
     }
 
     if (dev->ops == &grubcore_ops && grubcore_held) {
@@ -2019,7 +2067,6 @@ int devfs_open(const char *name, int flags)
         if (d && d->writer_held) {
             return -EBUSY;
         }
-        /* A mounted volume's sectors are nobody else's to write. */
         if (window_range(dev, &backing, &first, &last) == 0 && claimed(backing, first, last)) {
             return -EBUSY;
         }
@@ -2039,8 +2086,6 @@ int devfs_open(const char *name, int flags)
         e->ops = dev->ops;
         e->dev = dev;
     } else {
-        /* /dev/console and /dev/tty reuse the kernel console (enum
-         * dispatch). */
         e->type = FD_TYPE_CONSOLE;
         e->ops = NULL;
         e->priv = NULL;
@@ -2080,22 +2125,11 @@ int devfs_open(const char *name, int flags)
     return fd;
 }
 
-/**
- * Synthesize stat fields for /dev or a device leaf.
- *
- * An empty `name` identifies `/dev`; otherwise it identifies a device leaf.
- * Disk nodes report block-device mode; other leaves report character-device
- * mode. Each out pointer is optional. rdev packs the entry's {major,minor}
- * the way the Linux mem devices number themselves.
- *
- * @return 0 on success, -1 if the named leaf does not exist.
- */
 int devfs_stat(const char *name, uint32_t *mode, uint32_t *rdev, uint32_t *ino)
 {
     const struct devfs_entry *dev;
 
     if (name[0] == '\0') {
-        /* /dev itself: a directory. */
         if (mode) {
             *mode = 0040000u | 0755u; /* S_IFDIR */
         }
@@ -2235,12 +2269,6 @@ uint32_t devfs_fd_mode(struct fd_entry *e)
     return devfs_type_bits(dev) | (uint32_t)dev->mode;
 }
 
-/**
- * Withdraw every registered disk's whole-disk window.
- *
- * A controller reset invalidates the device state these windows reference.
- * Unpublished windows remain unpublished. Partition windows are unchanged.
- */
 void devfs_disk_withdraw(void)
 {
     int i;
@@ -2256,14 +2284,11 @@ void devfs_disk_withdraw(void)
 }
 
 /**
- * Publish disk `d`'s whole-disk window as `/dev/diskN`.
- *
- * `disk_set_table` publishes partition windows separately.
- *
  * The whole node is published whatever the table said, because a medium with
  * no table at all is a volume in its own right and is mounted through that
  * node; one with a table is read through it as well, which is how a partition
- * table is inspected without mounting anything.
+ * table is inspected without mounting anything. The partition windows are
+ * published apart from it (`disk_set_table`).
  */
 void devfs_disk_publish(struct disk *d)
 {
@@ -2276,11 +2301,9 @@ void devfs_disk_publish(struct disk *d)
 }
 
 /**
- * The size a seek on `/dev/bootlog` measures against.
- *
- * The log seeks like a file whose size is what it currently holds, so SEEK_END
- * and a plain `cat` both behave. It is not a raw window: it reads through the
- * ordinary 32-bit offset, and a ring of kilobytes has no use for a wider one.
+ * The log seeks like a file whose size is what it holds now, so SEEK_END and
+ * a plain `cat` both behave. Its size is 32 bits, which a ring of kilobytes
+ * does not outgrow.
  */
 int devfs_fd_log_size(struct fd_entry *e, uint32_t *size)
 {
@@ -2299,14 +2322,6 @@ int devfs_fd_log_size(struct fd_entry *e, uint32_t *size)
     return 0;
 }
 
-/**
- * Whether a read or write of `e` sets the description's offset past what it
- * moved: a raw disk window's `raw_offset`, the boot log's offset in its ring,
- * or the screen log's in its two bytes of text. Each transfer may sleep
- * first, in a disk request or in a fault on the caller's buffer, so its
- * caller holds the description for the transfer (`ops_offset_held` in
- * `syscall_fs.c`).
- */
 int devfs_fd_moves_offset(struct fd_entry *e)
 {
     if (devfs_fd_is_raw(e) || devfs_fd_log_size(e, NULL)) {
@@ -2316,12 +2331,10 @@ int devfs_fd_moves_offset(struct fd_entry *e)
 }
 
 /**
- * Publish /dev/bootpart over the boot partition.
- *
- * The window is bounded below 2 GiB so the legacy 32-bit lseek can name every
- * byte of it; the wider windows are what _llseek exists for. The partition is
- * 16 MiB on a test image and 64 MiB on the sealed disk, so anything past the
- * bound is a misbuilt disk and the device stays absent.
+ * The window is bounded below 2 GiB so the 32-bit lseek can name every byte
+ * of it; the wider windows are what _llseek is for. The image tools make the
+ * partition tens of mebibytes, so one past the bound is a misbuilt disk, and
+ * the device stays absent with a warning.
  */
 void devfs_bootpart_publish(struct block_device *backing, uint32_t start_lba, uint32_t sector_count)
 {
@@ -2334,13 +2347,11 @@ void devfs_bootpart_publish(struct block_device *backing, uint32_t start_lba, ui
 }
 
 /**
- * Withdraw /dev/bootpart.
- *
  * Discovery publishes the device before any root is chosen, judging entry 0
- * against the whole partition table. One fact is only knowable after the mount:
- * which entry has the root. Entry 0 can be FAT-typed and still be the entry
- * the root was found in, and a boot partition sitting over the root is not one
- * this machine should offer. A no-op when the device was never published.
+ * against the whole partition table. One fact is only knowable after the
+ * mount: which entry has the root. Entry 0 can be FAT-typed and still be the
+ * entry the root was found in, and a boot partition over the root is not one
+ * this machine should offer.
  */
 void devfs_bootpart_withdraw(void)
 {
@@ -2351,12 +2362,9 @@ void devfs_bootpart_withdraw(void)
 }
 
 /**
- * Withdraw /dev/grubcore.
- *
- * The window names a backing device, and a driver that is re-initialised
+ * The window names a backing device, and a driver that is initialised again
  * clears the state that device reads through. Anything that resets a
- * controller takes the window down first and republishes afterwards.
- * A no-op when the device was never published.
+ * controller takes the window down first and publishes it again afterwards.
  */
 void devfs_grubcore_withdraw(void)
 {
@@ -2364,13 +2372,11 @@ void devfs_grubcore_withdraw(void)
 }
 
 /**
- * Publish /dev/grubcore over the post-MBR gap.
- *
- * The range is the layout's, not the partition table's: LBA 1 through 2047,
- * fixed, so nothing a damaged table says can widen it. Sector 0 is outside it
- * because that sector has the partition table and a disk writes whole
- * sectors, so there is no way to touch the eight bytes of boot code that point
- * at the core image without rewriting the table beside them.
+ * Sector 0 is outside the window because that sector has the partition
+ * table and a disk writes whole sectors, so there is no way to touch the
+ * eight bytes of boot code that point at the core image without rewriting
+ * the table beside them. A device too small for the gap has no window, and
+ * a warning says so.
  */
 void devfs_grubcore_publish(struct block_device *backing)
 {
@@ -2384,15 +2390,11 @@ void devfs_grubcore_publish(struct block_device *backing)
 }
 
 /**
- * Publish /dev/grubcore over the BIOS boot partition of a GUID table.
- *
- * `t` is the table the partition service read from `backing`, from the
- * primary header or, when that one failed its checks, the backup. The window
- * is exactly the partition's sectors, and only when `part_bios_boot` finds one
- * such partition clear of sector 0, the headers and the entry array; a table
- * with none, or with two, has no window. Sector 0 is outside the window, so
- * the protective MBR's pointer to the core's first sector stays as the disk
- * was built.
+ * `t` is from the primary header or, when that one failed its checks, the
+ * backup. The partition is found by `part_bios_boot`, and one that runs past
+ * the end of `backing` has no window. Sector 0 is outside the window, so the
+ * protective MBR's pointer to the core's first sector stays as the disk was
+ * built.
  */
 void devfs_grubcore_publish_gpt(struct block_device *backing, const struct part_table *t)
 {
@@ -2419,7 +2421,9 @@ void devfs_grubcore_publish_gpt(struct block_device *backing, const struct part_
  * sectors a track, as Linux makes up for a disk without one, the cylinders
  * those give, cut to 16 bits as Linux cuts them, and the window's first
  * sector, 0 for a whole disk. BusyBox's `fdisk -l` reads the start to tell a
- * whole disk, whose name here ends in a digit, from a partition.
+ * whole disk, whose name here ends in a digit, from a partition. 0,
+ * -ENOTTY for a device that is no raw window or one not published, or
+ * -EFAULT.
  */
 static int32_t dev_getgeo(fd_entry_t *e, uintptr_t arg)
 {
@@ -2436,8 +2440,7 @@ static int32_t dev_getgeo(fd_entry_t *e, uintptr_t arg)
         return -ENOTTY;
     }
     sectors = w->part.device.sector_count;
-    /* The padding after `cylinders`, four bytes on x86-64, is copied out
-     * with the fields. */
+    /* The padding after `cylinders`, 4 bytes on x86-64, is copied out too. */
     k_memset(&geo, 0, sizeof(geo));
     geo.heads = 255;
     geo.sectors = 63;
@@ -2447,9 +2450,10 @@ static int32_t dev_getgeo(fd_entry_t *e, uintptr_t arg)
     return copy_to_user((void __user *)arg, &geo, sizeof(geo)) != 0 ? -EFAULT : 0;
 }
 
-/* BLKROGET, BLKRAGET and BLKBSZGET of a disk or loop node: read-only only for
- * a loop device attached so, 256 sectors of read-ahead and 4096-byte blocks;
- * an int each, but the read-ahead, which Linux gives as a long. */
+/** BLKROGET, BLKRAGET and BLKBSZGET of a disk or loop node: read-only only
+ * for a loop device attached so, 256 sectors of read-ahead and 4096-byte
+ * blocks; an int each, but the read-ahead, which Linux gives as a long. 0,
+ * -ENOTTY for a device with no size or /dev/mem, or -EFAULT. */
 static int32_t dev_block_info(fd_entry_t *e, uint32_t request, uintptr_t arg)
 {
     uint64_t size;
@@ -2467,7 +2471,8 @@ static int32_t dev_block_info(fd_entry_t *e, uint32_t request, uintptr_t arg)
     return copy_to_user((void __user *)arg, &v, sizeof(v)) != 0 ? -EFAULT : 0;
 }
 
-/** The sector size of a raw window, 512 bytes, as an int at `arg`. */
+/** The sector size of a raw window or an attached loop device, 512 bytes,
+ * as an int at `arg`: 0, -ENOTTY for another device, or -EFAULT. */
 static int32_t dev_sector_size(fd_entry_t *e, uintptr_t arg)
 {
     int32_t sector = 512;
@@ -2480,10 +2485,6 @@ static int32_t dev_sector_size(fd_entry_t *e, uintptr_t arg)
     return copy_to_user((void __user *)arg, &sector, sizeof(sector)) != 0 ? -EFAULT : 0;
 }
 
-/**
- * Return whether `e` identifies a boot window, whole-disk window or partition
- * window, regardless of whether it is currently published.
- */
 int devfs_fd_is_raw(struct fd_entry *e)
 {
     const struct devfs_entry *dev;

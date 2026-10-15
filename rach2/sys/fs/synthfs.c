@@ -1,11 +1,7 @@
 /*
- * synthfs.c: the pure path classifier for the synthetic /dev and /proc mounts.
- *
- * No kernel dependencies: it turns a path string into a vnode kind plus the
- * coordinates the glue needs. The component splitting and the
- * /proc/<pid>/fd/<n> parsing are the fence-post-prone parts, so this
- * compiles freestanding AND hosted and is unit-tested under ASan/UBSan
- * (tests/host/synthfs_hosttest.c).
+ * synthfs.c: the classifier of the paths of /dev, /proc and /sys, the
+ * /proc/sys table, and the paths of the synthetic directories, as synthfs.h
+ * describes them.
  */
 
 #include "synthfs.h"
@@ -23,11 +19,12 @@ struct comp {
  * shorter path. */
 #define SYNTH_MAXC 7
 
-/*
- * Split a slash path into up to max components, skipping empty ones (so
- * leading, trailing and doubled slashes do not produce empties). Returns the
- * count; if the path has MORE than max components the surplus is left unread
- * and the count is max (the caller treats "too many" as a miss).
+/**
+ * Split `path` at its slashes into at most `max` components in `c`,
+ * skipping empty ones, so that leading, trailing and doubled slashes make
+ * none. Returns the count; a path of more components has the rest left
+ * unread and counts `max`. The caller passes one more than the deepest path
+ * a rule accepts, so a longer path is refused and not cut short.
  */
 static int synth_split(const char *path, struct comp *c, int max)
 {
@@ -53,7 +50,7 @@ static int synth_split(const char *path, struct comp *c, int max)
     return n;
 }
 
-/* Does component c equal the NUL-terminated literal? */
+/** Whether the component `c` equals the string `lit`. */
 static int comp_eq(struct comp c, const char *lit)
 {
     int i;
@@ -65,8 +62,9 @@ static int comp_eq(struct comp c, const char *lit)
     return lit[c.len] == '\0';
 }
 
-/* Parse a non-negative decimal from a component; -1 if empty or non-digit, or
- * if it overflows a sane bound (so a giant /proc/<n> cannot wrap). */
+/** The decimal number the component `c` spells, or -1 when it is empty, has
+ * a character that is not a digit, or is past 2147483639, so that a long
+ * /proc/<n> cannot wrap. */
 static int comp_uint(struct comp c)
 {
     int v = 0;
@@ -80,14 +78,15 @@ static int comp_uint(struct comp c)
             return -1;
         }
         if (v > 214748363) {
-            return -1; /* the next *10 would overflow int; no pid is this large */
+            return -1;
         }
         v = v * 10 + (c.s[i] - '0');
     }
     return v;
 }
 
-/* Copy a component into vp->name (NUL-terminated, bounded). */
+/** Copy the component `c` into `vp->name`, NUL-terminated and cut to 63
+ * bytes. */
 static void synth_copy_name(struct vpath *vp, struct comp c)
 {
     int i;
@@ -102,7 +101,8 @@ static void synth_copy_name(struct vpath *vp, struct comp c)
     vp->name[n] = '\0';
 }
 
-/* Append a NUL-terminated string to out at *pos, bounded by cap. */
+/** Append the string `s` to `out` at `*pos`, as far as `cap` bytes leave
+ * room for a NUL, which the caller writes. */
 static void synth_put(char *out, int cap, int *pos, const char *s)
 {
     while (*s && *pos < cap - 1) {
@@ -111,7 +111,7 @@ static void synth_put(char *out, int cap, int *pos, const char *s)
     }
 }
 
-/* Append an unsigned decimal to out at *pos, bounded by cap. */
+/** Append the decimal `v` to `out` at `*pos`, as `synth_put` appends. */
 static void synth_put_uint(char *out, int cap, int *pos, unsigned int v)
 {
     char tmp[12];
@@ -133,7 +133,7 @@ static void synth_put_uint(char *out, int cap, int *pos, unsigned int v)
 }
 
 /** Append /proc/<pid>, or /proc/<pid>/task/<tid> for a thread's directory,
- * to out at *pos, bounded by cap. */
+ * as `synth_put` appends. */
 static void synth_put_proc(char *out, int cap, int *pos, int pid, int tid)
 {
     synth_put(out, cap, pos, "/proc/");
@@ -144,17 +144,6 @@ static void synth_put_proc(char *out, int cap, int *pos, int pid, int tid)
     }
 }
 
-/* The /proc/sys table (synthfs.h): the limits of io/inotify.c, and the
- * kernel's name, its release, the bound of its process IDs, the name it
- * gives a core file (proc/coredump.h), and the host and domain names of the
- * reader's UTS namespace, whose texts procfs reads when the file is opened;
- * the limits of System V IPC (ipc/sysv.c), which util-linux's ipcs reads;
- * IPv4 forwarding, which this stack does not do; the limits of POSIX message
- * queues (ipc/mqueue.c); and the swap's weight and the overcommit policy at
- * Linux's defaults, 60 and 0, which scripts read and nothing here acts on,
- * there being no swap. Entries go at the end, where an index entry
- * SYNTH_SYS_ names stays the same. */
-
 /* The largest System V segment and the most pages of them, as Linux's
  * defaults give both on each width, ULONG_MAX less 16 MiB, and as
  * ipc/sysv.c takes them. */
@@ -164,6 +153,16 @@ static void synth_put_proc(char *out, int cap, int *pos, int pid, int tid)
 #define SYSCTL_SHMMAX "4278190079\n"
 #endif
 
+/* The /proc/sys table (synthfs.h): the limits of io/inotify.c, and the
+ * kernel's name, its release, the bound of its process IDs, the name it
+ * gives a core file (proc/coredump.h), and the host and domain names of the
+ * reader's UTS namespace, whose texts procfs reads when the file is opened;
+ * the limits of System V IPC (ipc/sysv.c), which util-linux's ipcs reads;
+ * IPv4 forwarding, which this stack does not do; the limits of POSIX message
+ * queues (ipc/mqueue.c); and the swap's weight and the overcommit policy at
+ * Linux's defaults, 60 and 0, which scripts read and nothing here acts on,
+ * there being no swap. A new entry goes at the end, so that the indices
+ * SYNTH_SYS_ names stay the same. */
 static const struct {
     int parent;
     const char *name;
@@ -238,7 +237,8 @@ const char *synth_sys_text(int entry)
     return entry >= 0 && entry < synth_sys_count() ? sysents[entry].text : 0;
 }
 
-/** Append /proc and the path of the /proc/sys entry `entry`. */
+/** Append the path of the /proc/sys entry `entry`, or /proc/sys for an
+ * index past the table, as `synth_put` appends. */
 static void synth_put_sys(char *out, int cap, int *pos, int entry)
 {
     if (entry < 0 || entry >= synth_sys_count()) {
@@ -254,17 +254,6 @@ static void synth_put_sys(char *out, int cap, int *pos, int entry)
     synth_put(out, cap, pos, sysents[entry].name);
 }
 
-/**
- * Render the canonical directory path for a synthetic vnode kind into `out`.
- *
- * The inverse of `synth_classify` for the directory kinds: it writes the
- * path a directory or symlink target should report (for example
- * `/proc/<pid>/fd`). `pid` is used only for the per-process kinds, and
- * `tid`, when it is not 0, makes one a thread's, `/proc/<pid>/task/<tid>`
- * and its `fd`. When `cap` is positive the result is NUL-terminated and
- * never exceeds `cap` bytes; otherwise nothing is written. An unrecognized
- * kind yields "/".
- */
 void synth_dir_path(int kind, int pid, int tid, char *out, int cap)
 {
     int pos = 0;
@@ -351,8 +340,8 @@ const char *synth_ns_name(int kind)
     return kind >= 0 && kind < (int)(sizeof(ns_names) / sizeof(ns_names[0])) ? ns_names[kind] : 0;
 }
 
-/** /proc/<pid>/ns, `c[1]`, and with a third component its link of that
- * kind. */
+/** Classify /proc/<pid>/ns, `c[1]` of the `n` components from the pid, and
+ * with a third component its link of that kind. */
 static int synth_classify_ns(const struct comp *c, int n, struct vpath *vp)
 {
     int k;
@@ -458,7 +447,7 @@ static int synth_classify_pid(const struct comp *c, int n, struct vpath *vp, int
         vp->tid = tid;
         return synth_classify_pid(c + 2, n - 2, vp, 0);
     }
-    vp->kind = VNODE_ENOENT; /* unrecognised /proc entry */
+    vp->kind = VNODE_ENOENT;
     return vp->kind;
 }
 
@@ -521,7 +510,8 @@ static int synth_classify_dev_fd(const struct comp *c, int n, struct vpath *vp)
     return 0;
 }
 
-/** Classify system-wide proc files by their literal leaf names. */
+/** The kind of the file of /proc named `name` that belongs to no process,
+ * or VNODE_ENOENT. */
 static int synth_global_file(struct comp name)
 {
     static const struct {
@@ -903,8 +893,8 @@ static int synth_classify_sys_net(const struct comp *c, int n, struct vpath *vp)
 }
 
 /** The processor number a component `cpuN` names, N written without a
- * leading zero, or -1; whether that processor is started is the glue's to
- * ask, as of every keyed directory. */
+ * leading zero, or -1; whether that processor is started is for the caller
+ * to ask, as for every keyed directory. */
 static int sys_cpu_of(struct comp c)
 {
     struct comp digits;
@@ -919,9 +909,10 @@ static int sys_cpu_of(struct comp c)
 }
 
 /**
- * The node at `c` of `n` components below the fixed directory `node` of
- * the clock and the sleep states: the directories under it by their names,
- * as `chain` gives them, and at the end an attribute file of the last.
+ * The node at `c` of `n` components below the fixed directory `node`, the
+ * clock's class, the sleep states' directory or /sys/devices/system: the
+ * directories under it by their names, as `chain` gives them, a processor's
+ * by its number, and at the end an attribute file of the last.
  */
 static int synth_classify_sys_fixed(const struct comp *c, int n, int node, struct vpath *vp)
 {
@@ -1059,9 +1050,10 @@ static int synth_classify_sys_class(const struct comp *c, int n, struct vpath *v
 
 /**
  * Classify the components `c` of `n` below /sys: the fixed directories by
- * their names, below a bus's `devices` or a device directory's parent a
- * device by its name, below /sys/class/net an interface by its name, and
- * the clock's class and the sleep states by their names.
+ * their names, a device by its name below a bus's `devices` or below the
+ * directory of its bus under /sys/devices, and the rest through the
+ * classifiers of /sys/block and /sys/dev, /sys/class, /sys/power and
+ * /sys/devices/system.
  */
 static int synth_classify_sysfs(const struct comp *c, int n, struct vpath *vp)
 {
@@ -1152,16 +1144,9 @@ static int synth_classify_sysvipc(const struct comp *c, int n, struct vpath *vp)
 }
 
 /**
- * Classify a normalized path under `/dev` or `/proc` and fill `vp`.
- *
- * Leading and repeated slashes are accepted. The caller must resolve `.` and
- * `..` before classification.
- *
- * `VNODE_KRFFS` identifies a path outside these namespaces. A two-component
- * device path other than `/dev/pts` returns `VNODE_DEV`; devfs checks
- * device existence.
- * Process and descriptor existence are checked by the caller. `/proc/self`
- * uses `SYNTH_PID_SELF`. Return the kind stored in `vp->kind`.
+ * The fixed names of /proc are tried before its pid component, since
+ * `cmdline`, `self` and the rest are not numbers; a pid of 0, the kernel's
+ * idle context, is no process's.
  */
 int synth_classify(const char *path, struct vpath *vp)
 {
@@ -1189,20 +1174,19 @@ int synth_classify(const char *path, struct vpath *vp)
             vp->kind = VNODE_DEV_DIR;
             return vp->kind;
         }
-        /* /dev/pts (the pty slave directory) and /dev/pts/N (a slave). */
         if (comp_eq(c[1], "pts")) {
             if (n == 2) {
                 vp->kind = VNODE_PTS_DIR;
             } else if (n == 3) {
                 int idx = comp_uint(c[2]);
                 if (idx < 0) {
-                    vp->kind = VNODE_ENOENT; /* /dev/pts/<not-a-number> */
+                    vp->kind = VNODE_ENOENT;
                 } else {
                     vp->kind = VNODE_PTS;
                     vp->pts_index = idx;
                 }
             } else {
-                vp->kind = VNODE_ENOENT; /* /dev/pts/N/<more> */
+                vp->kind = VNODE_ENOENT;
             }
             return vp->kind;
         }
@@ -1217,7 +1201,7 @@ int synth_classify(const char *path, struct vpath *vp)
             vp->kind = VNODE_DEV;
             synth_copy_name(vp, c[1]);
         } else {
-            vp->kind = VNODE_ENOENT; /* /dev/<name>/<more>: no such thing */
+            vp->kind = VNODE_ENOENT;
         }
         return vp->kind;
     }
@@ -1233,13 +1217,10 @@ int synth_classify(const char *path, struct vpath *vp)
             vp->kind = VNODE_PROC_DIR;
             return vp->kind;
         }
-        /* /proc/cmdline: the boot command line, a global file beside the pid
-           tree (checked before pid parsing, since "cmdline" is not a pid). */
         if (comp_eq(c[1], "cmdline")) {
             vp->kind = (n == 2) ? VNODE_PROC_CMDLINE : VNODE_ENOTDIR;
             return vp->kind;
         }
-        /* /proc/disk: the same shape, a global file beside the pid tree. */
         if (comp_eq(c[1], "disk")) {
             vp->kind = (n == 2) ? VNODE_PROC_DISK : VNODE_ENOTDIR;
             return vp->kind;
@@ -1253,8 +1234,6 @@ int synth_classify(const char *path, struct vpath *vp)
         if (comp_eq(c[1], "sys")) {
             return synth_classify_sys(c + 2, n - 2, vp);
         }
-        /* /proc/net: dev, route, arp and tcp, and the files by their
-         * origin after them. */
         if (comp_eq(c[1], "net")) {
             int f = SYNTH_PROC_NETUDP;
 
@@ -1289,7 +1268,7 @@ int synth_classify(const char *path, struct vpath *vp)
         } else {
             pid = comp_uint(c[1]);
             if (pid <= 0) {
-                vp->kind = VNODE_ENOENT; /* /proc/<not-a-pid>, and the idle process's 0 */
+                vp->kind = VNODE_ENOENT;
                 return vp->kind;
             }
         }

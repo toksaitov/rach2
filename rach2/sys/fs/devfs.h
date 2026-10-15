@@ -4,32 +4,53 @@
 #include "../lib/kint.h"
 
 /*
- * devfs: a synthetic /dev. The device namespace is virtual (not KRFFS
- * nodes): a small registry maps a leaf name ("null", "zero", ...) to a
- * character device backed by a file_ops vtable and a {major,minor}. open()
- * of a /dev path binds the device's ops onto the descriptor (the ops
- * dispatch then drives read/write/close), exactly as pipes do; stat/getdents
- * synthesize from the registry. Two names ("console" and "tty") resolve to
- * the kernel console and so open as FD_TYPE_CONSOLE, reusing the existing
- * terminal path.
+ * devfs: the devices of /dev. A table maps a name ("null", "zero", ...) to a
+ * device with file operations and a major and minor number, and the nodes
+ * of the disks join it as the disks are registered. An open of a device
+ * binds its operations to the descriptor, as a pipe's are, and stat and the
+ * listing of /dev are made from the table. "console" and "tty" open the
+ * kernel console as FD_TYPE_CONSOLE, "tty" a pty instead when the caller's
+ * session is on one, and "ptmx" opens a new pty pair.
  */
 
 struct fd_entry;
 struct block_device;
 
 /*
- * The synthetic device the namespace lives on. KRFFS files report st_dev 0,
- * so a distinct nonzero id keeps a device's identity from ever colliding
- * with a real file's; this matters because ttyname compares (st_dev,
- * st_ino).
+ * The st_dev of /dev and its devices. The KRFFS root's files report 0 and
+ * every other mount a number of its own (`procfs_mount_dev`), so a device's
+ * (st_dev, st_ino), which ttyname compares, is no other file's.
  */
 #define DEVFS_FSID 5u
 
-/** Open a /dev leaf by name; the new fd, or a negative errno. */
+/**
+ * Open the device `name` of /dev with the Linux open flags `flags` and
+ * return the new descriptor; the caller has checked the device's mode. Most
+ * devices bind their operations to the descriptor (FD_TYPE_DEVICE);
+ * "ptmx" makes a new pty pair; "console" is the kernel console
+ * (FD_TYPE_CONSOLE), and so is "tty" when the caller is in the console's
+ * session, else the slave of the pty that has the caller's session.
+ *
+ * A write-capable open of a raw window that a write may reach, a whole
+ * disk, one of the two boot windows or in the recovery build a partition,
+ * takes the disk's writer reservation, which the last close gives back.
+ * Returns -ENOENT for no such device present, -EEXIST under O_CREAT|O_EXCL,
+ * -ENOTDIR under O_DIRECTORY, -ENXIO for "tty" with no controlling
+ * terminal, -EBUSY for a second open of "grubcore" and for a write-capable
+ * open of a raw window while another writer has the reservation or a
+ * mounted volume claims its range, or the error of the descriptor's
+ * allocation or the pty's open.
+ */
 int devfs_open(const char *name, int flags);
 
-/** Synthesize stat fields for /dev or a device leaf; 0 ok, -1 if no such
- * leaf. */
+/**
+ * The mode, device number and inode of /dev, for an empty `name`, or of the
+ * device `name` present now: its type, a block device for a disk node or a
+ * loop device and a character device for the rest, with its permission
+ * bits; its major and minor as major << 8 | minor; and the inode its place
+ * in the table gives. Each pointer may be NULL. Returns 0, or -1 for no such
+ * device.
+ */
 int devfs_stat(const char *name, uint32_t *mode, uint32_t *rdev, uint32_t *ino);
 
 /**
@@ -40,46 +61,50 @@ int devfs_stat(const char *name, uint32_t *mode, uint32_t *rdev, uint32_t *ino);
  */
 const char *devfs_name_of(int block, uint32_t rdev);
 
-/*
- * The encoded rdev (major<<8 | minor) and the stable inode of an open
- * FD_TYPE_DEVICE descriptor, for fstat64. Both return 0 if e is not a device.
- */
+/** The device number, major << 8 | minor, of the device the descriptor `e`
+ * is open on, for fstat; 0 for a descriptor that is not of a device. */
 uint32_t devfs_rdev(struct fd_entry *e);
+
+/** The inode of the device the descriptor `e` is open on, as `devfs_stat`
+ * gives it; 0 for a descriptor that is not of a device. */
 uint32_t devfs_fd_ino(struct fd_entry *e);
 
-/** The block- or character-device mode of an open fd; 0 if not a device. */
+/** The mode of the device the descriptor `e` is open on, as `devfs_stat`
+ * gives it; 0 for a descriptor that is not of a device. */
 uint32_t devfs_fd_mode(struct fd_entry *e);
 
-/**
- * Publish /dev/bootpart over the `sector_count`-sector slice of `backing` at
- * `start_lba`: the GRUB disk's FAT boot partition, judged by `mbr_bootpart_ok`
- * before this is called. Until it is published the device is absent from
- * lookup, stat, open, and /dev enumeration alike.
- *
- * The partition must stay under 2 GiB, which is not a limit of the offset any
- * more: the raw windows seek and transfer through a 64-bit one. It is kept so
- * the legacy 32-bit `lseek` can still name every byte of this particular
- * window, which the boot partition is small enough for on any disk this
- * project builds. A larger one is not published.
- */
 struct disk;
 struct part_table;
+
 /**
- * Make the nodes of a newly registered disk: `/dev/diskN` and one node per
- * partition slot. Each is listed while its window in the disk's record is
- * present.
+ * Make the nodes of a newly registered disk `d`: /dev/diskN for the whole
+ * disk and one for each partition slot, which `devfs_disk_part_nodes`
+ * names. Each is listed while its window in the disk's record is present.
+ * The nodes have major 240; disk 0 has minor 1 for the whole disk and 4 to
+ * 7 for partitions 1 to 4, and every other node 64 + 16N + M, M being 0 for
+ * the whole disk. A disk past the room of the table has no nodes, and a
+ * warning says so.
  */
 void devfs_disk_nodes(struct disk *d);
 
 /**
  * Name the partition nodes of `d` from its table: slot `i` is
- * `/dev/diskNpM` with `M` the number of the table's entry `i`. Called after
+ * `/dev/diskNpM` with `M` the number of the table's entry `i`, or `i` + 1
+ * past the table's entries, and has the minor that gives. Called after
  * every scan of the table.
  */
 void devfs_disk_part_nodes(struct disk *d);
 
 /** Whether a mount holds a claim on any range of `d`. */
 int devfs_disk_claimed(const struct disk *d);
+
+/**
+ * Publish /dev/bootpart over the `sector_count` sectors of `backing` from
+ * `start_lba`: the GRUB disk's FAT boot partition, which `mbr_bootpart_ok`
+ * has judged. Until it is published the device is absent from lookup,
+ * stat, open and the listing of /dev alike. A partition of 2 GiB or more is
+ * not published, so that the 32-bit `lseek` names every byte of the window.
+ */
 void devfs_bootpart_publish(struct block_device *backing, uint32_t start_lba,
                             uint32_t sector_count);
 
@@ -103,33 +128,42 @@ void devfs_grubcore_publish(struct block_device *backing);
 void devfs_grubcore_publish_gpt(struct block_device *backing, const struct part_table *t);
 
 /**
- * The partition window `path` names (`/dev/bootpart` or `/dev/disk0pN`):
- * the view a mount reads through, the backing disk, and the sector range
- * on it. EINVAL for a device that is not a partition window, ENOENT for no
- * such device, which a window not published is as well.
+ * The window the /dev path `path` names, for a mount: the view a mount
+ * reads through, the physical device under it (`block_physical`), and the
+ * sector range on that device. /dev/bootpart and the disk nodes, whole or a
+ * partition, are windows. A loop device's node gives its device as the
+ * view, no physical device, and its whole size, or -ENXIO while no file is
+ * attached. Returns 0, -EINVAL for a path outside /dev or a device that is
+ * no window, or -ENOENT for no such device, which a window not published is
+ * as well.
  */
 int devfs_window_of(const char *path, struct block_device **view, struct block_device **backing,
                     uint64_t *first, uint64_t *count);
 
 /**
- * Claim `[first, last]` on `backing` for a mount; the claim's index, or
- * -EBUSY while an overlapping claim or a write-capable raw descriptor over
- * the range exists. A claim is released by index.
+ * Claim the sectors `first` to `last` of `backing` for a mount. Returns the
+ * claim's index, -EBUSY while an overlapping claim or the writer
+ * reservation of a raw descriptor over the range exists, or -ENOMEM when
+ * every claim is taken.
  */
 int devfs_claim(struct block_device *backing, uint64_t first, uint64_t last);
+
+/** Release the claim of index `claim`; an index out of range is ignored. */
 void devfs_release_claim(int claim);
 
-/** Withdraw /dev/bootpart; a no-op when it was never published. */
+/** Withdraw /dev/bootpart, with the warning that entry 0 has the root,
+ * whatever the caller's reason; nothing when it is not published. */
 void devfs_bootpart_withdraw(void);
 
-/** Withdraw /dev/grubcore; a no-op when it was never published. */
+/** Withdraw /dev/grubcore, before a controller is reset; nothing when it is
+ * not published. */
 void devfs_grubcore_withdraw(void);
 
-/* Sectors carried by one driver call from a raw window, a mebibyte, the
- * block layer's whole request; a driver that takes less splits it. Reported
- * by /proc/disk beside the call count so the two can be compared. */
+/* The most sectors one driver call of a raw window moves, a mebibyte, the
+ * block layer's largest request; a device whose requests are smaller has
+ * smaller batches. /proc/disk reports it beside the count of calls. */
 #define DEVFS_RAW_BATCH_SECTORS        2048
-/* The static buffer's sectors, the fallback when the heap has no batch. */
+/* The sectors of the static buffer, taken when the heap has no batch. */
 #define DEVFS_RAW_BATCH_STATIC_SECTORS 64
 
 /**
@@ -137,23 +171,24 @@ void devfs_grubcore_withdraw(void);
  *
  * Reported by `/proc/disk`, because batching is otherwise invisible from
  * outside: a transfer of any size returns the same answer whether it took one
- * driver command or two hundred. A test that wants to require the batching,
- * not the result reads this before and after.
+ * driver command or two hundred. A test that requires the batching, and not
+ * only the result, reads this before and after.
  */
 uint64_t devfs_raw_calls(void);
 
-/** Withdraw every registered disk's whole-disk window. */
+/** Withdraw the whole-disk window of every registered disk, before a
+ * controller is reset; the partition windows stay as they are. */
 void devfs_disk_withdraw(void);
 
 /**
  * Whether `e` is one of the raw disk windows (`/dev/bootpart`, `/dev/grubcore`
  * or a whole-disk or partition node), `/dev/mem` or a loop device's node.
  *
- * This asks what the descriptor IS, from the operations bound to it at open,
- * and not whether its window is currently published. The two differ while a
- * controller is being re-probed, and a descriptor that changed from a seekable
- * disk window into an unseekable generic device for the duration would be a
- * worse answer than one that reports its backing is gone.
+ * This asks what the descriptor is, by the operations its open bound, and
+ * not whether its window is published now. The two differ while a
+ * controller is probed again, and a disk window's descriptor that turned
+ * into an unseekable device's for that time would be a worse answer than one
+ * whose backing is gone.
  */
 int devfs_fd_is_raw(struct fd_entry *e);
 
@@ -162,68 +197,53 @@ int devfs_fd_is_raw(struct fd_entry *e);
  * a loop device's node with a file attached; if so, `*size` gets its byte
  * size.
  *
- * The size needs 64 bits because a whole drive can exceed 4 GiB. These are the
- * only descriptors that seek and transfer through the open-file description's
- * `raw_offset`.
+ * The size needs 64 bits because a whole drive can exceed 4 GiB. The
+ * descriptors `devfs_fd_is_raw` names are the only ones that seek and
+ * transfer through the open-file description's `raw_offset`.
  */
 int devfs_fd_raw_size(struct fd_entry *e, uint64_t *size);
 
-/** Publish `/dev/diskN`, a read-only window over the whole of disk `d`. */
+/** Publish /dev/diskN, the window over the whole of disk `d`, which only a
+ * recovery build writes; nothing, logged, for a disk of no sectors. */
 void devfs_disk_publish(struct disk *d);
 
 /**
- * Whether `e` is the open boot log; if so, `*size` gets its current byte
- * length. It seeks through the ordinary 32-bit offset like any other file.
+ * Whether `e` is the open boot log; if so, `*size`, unless NULL, gets the
+ * bytes the log holds now. The log seeks through the description's
+ * `offset`, as a file does, and not through `raw_offset`.
  */
 int devfs_fd_log_size(struct fd_entry *e, uint32_t *size);
 
 /**
  * Whether a read or write of `e` sets the description's offset past what it
- * moved, as a raw disk window's, the boot log's and the screen log's do; the
- * caller holds the description for such a transfer.
+ * moved, as a raw window's (`devfs_fd_is_raw`), the boot log's and the
+ * screen log's do. Such a transfer may sleep, in a disk request or in a
+ * fault on the caller's buffer, so its caller holds the description for it
+ * (`ops_offset_held`, syscall_fs.c).
  */
 int devfs_fd_moves_offset(struct fd_entry *e);
 
-/* The leaf name ("null", ...) of an open device fd, for /proc/<pid>/fd
- * readlink. Returns "?" if e is not a devfs device. */
+/** The name of the device the descriptor `e` is open on, for the link
+ * /proc/<pid>/fd shows, or "?" for a descriptor that is not of a device. */
 const char *devfs_fd_name(struct fd_entry *e);
 
-/*
- * Whether lseek on this device returns offset 0 (the mem devices
- * null/zero/full), not -ESPIPE. Returns 1 for a seek-to-zero device,
- * 0 otherwise.
- */
+/** Whether an lseek of the device the descriptor `e` is open on returns 0,
+ * as one of /dev/null, /dev/zero and /dev/full does on Linux, and not
+ * -ESPIPE: 1 or 0. */
 int devfs_lseek_zero(struct fd_entry *e);
 
-/*
- * Number of devfs entries, and the leaf name of entry i (for getdents on /dev).
- * Returns NULL past the end.
- */
 /**
- * The `n`-th device that exists right now: its name and its stable inode.
- *
- * Absent entries are skipped instead of ending the walk, because two of them
- * are dynamic and a machine can have the later one without the earlier: the
- * metal profile never mounts, so it has `disk0` and no `bootpart`. The inode
- * is the registry index and not the listing position, so a device's identity
- * is the same number `stat` reports whatever else is present.
- *
- * @return 1 when `n` named a device, 0 past the end.
+ * The `n`th device present now, from 0: its name and its inode. A device
+ * that is not present is skipped and does not end the walk, since
+ * bootpart, grubcore and the disk nodes come and go, and a machine can have
+ * a later one without an earlier. The inode is the device's place in the
+ * table and not in the listing, so it is the number `stat` reports whatever
+ * else is present. Returns 1 when `n` names a device, 0 past the last.
  */
 int devfs_dirent(int n, const char **name, uint32_t *ino);
 
 struct block_device;
 
-/**
- * Disk node `i` of the table, for /proc/diskstats: 1 with its name, its
- * device numbers, the device whose counts are its own, the disk's for a
- * whole disk and the partition view's for a partition, and the alias whose
- * counts are added to them, or NULL; 0 for a partition not published now,
- * or a disk that is gone; -1 past the table. A whole disk has its line
- * whether or not its node is published. After the disk nodes come the four
- * loop devices, each a whole disk with no partitions while a file is
- * attached to it, as Linux lists them.
- */
 /* A disk node as /sys/block shows it: its name and numbers, the index of its
  * disk's whole node, its partition's number, 0 for a whole disk, its first
  * sector and its size in sectors, whether its disk is a removable stick,
@@ -242,9 +262,20 @@ struct devfs_disk_row {
  * 1, or 0 for a path that names no node of /dev. */
 int devfs_numbers(const char *path, uint32_t *major, uint32_t *minor);
 
-/** Disk node `i` as `devfs_disk_node_at` finds it, into `row`. */
+/** Disk node `i` as `devfs_disk_node_at` finds it, into `row`: 1, or 0 or
+ * -1 as `devfs_disk_node_at` answers. */
 int devfs_disk_row(int i, struct devfs_disk_row *row);
 
+/**
+ * Disk node `i` of the table, for /proc/diskstats: 1 with its name, its
+ * device numbers, the device whose counts are its own, the disk's for a
+ * whole disk and the partition view's for a partition, and the alias whose
+ * counts are added to them, or NULL; 0 for a partition not published now,
+ * or a disk that is gone; -1 past the table. A whole disk has its line
+ * whether or not its node is published. After the disk nodes come the four
+ * loop devices, each a whole disk with no partitions while a file is
+ * attached to it, as Linux lists them.
+ */
 int devfs_disk_node_at(int i, const char **name, uint32_t *major, uint32_t *minor,
                        const struct block_device **dev, const struct block_device **alias);
 
@@ -259,9 +290,9 @@ void devfs_window_alias(const struct block_device *view, const struct block_devi
  * The wake alarm of /dev/rtc0, as /sys/class/rtc/rtc0/wakealarm reads and
  * writes it: `devfs_rtc_wakealarm` gives the seconds since 1970 it is set
  * for, -1 for none; `devfs_rtc_set_wakealarm` sets it to `at`, which must be
- * within a day ahead, -ETIME for a time past and -EINVAL for one further, or
- * clears it for a negative `at`, and enables the clock's alarm interrupt
- * while it is set.
+ * within a day ahead, -ETIME for a time past, -EINVAL for one further and
+ * -EIO when the clock cannot be read, or clears it for a negative `at`, and
+ * enables the clock's alarm interrupt while it is set.
  */
 int64_t devfs_rtc_wakealarm(void);
 int32_t devfs_rtc_set_wakealarm(int64_t at);

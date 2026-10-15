@@ -4,22 +4,20 @@
 #include "../lib/kint.h"
 
 /*
- * synthfs: the one place that knows /dev and /proc are synthetic. Every
- * path-taking syscall classifies its (already absolute,
- * leading-'/'-stripped) path through synth_classify(); a VNODE_KRFFS result
- * means "ordinary file, resolve through KRFFS", anything else routes to the
- * devfs/procfs glue. Keeping the classification here (instead of scattering
- * "does the path start with dev/?" checks before each krffs_resolve) is what
- * stops the two namespaces from rotting into special cases. The classifier
- * is pure string logic with no kernel state, so the fence-post-prone
- * component parsing is exercised natively under ASan in
- * tests/host/synthfs_hosttest.c.
+ * synthfs: the classifier of the paths of the three synthetic namespaces,
+ * /dev, /proc and /sys, and the tables their names come from. The VFS's
+ * synthetic mount types (vfs.c) classify the spelling of a path inside the
+ * mount, the namespace's name first, and devfs, procfs and the system calls
+ * act on the kind and the coordinates it gives. The classifier is string
+ * logic; what it asks of the machine, whether an interface or a disk node
+ * of a name exists, it asks of procfs.c, for which
+ * tests/host/synthfs_hosttest.c has stand-ins, so that the test runs it on
+ * the host under ASan and UBSan.
  */
 
-/* What a path resolves to. KRFFS is the ordinary case; the rest are
- * synthetic. */
+/* What a path is: one outside the three namespaces, or a node of one. */
 enum vnode_kind {
-    VNODE_KRFFS = 0,     /* not synthetic: resolve through KRFFS */
+    VNODE_KRFFS = 0,     /* not under /dev, /proc or /sys */
     VNODE_DEV_DIR,       /* /dev */
     VNODE_DEV,           /* /dev/<name>: a character device */
     VNODE_PTS_DIR,       /* /dev/pts: the pty slave directory */
@@ -27,7 +25,7 @@ enum vnode_kind {
     VNODE_PROC_DIR,      /* /proc */
     VNODE_PROC_PID,      /* /proc/<pid> (or /proc/self) */
     VNODE_PROC_FD_DIR,   /* /proc/<pid>/fd */
-    VNODE_PROC_FILE,     /* /proc/<pid>/{stat,cmdline} */
+    VNODE_PROC_FILE,     /* /proc/<pid>/<file>, by `procfile` */
     VNODE_PROC_FD_LINK,  /* /proc/<pid>/fd/<n>: a magic symlink */
     VNODE_PROC_CMDLINE,  /* /proc/cmdline: the boot command line */
     VNODE_PROC_DISK,     /* /proc/disk: what the disk says about itself */
@@ -81,7 +79,8 @@ enum vnode_kind {
  * past the last. */
 const char *synth_ns_name(int kind);
 
-/* /proc/<pid>/<file> kinds, and the global boot line (a procfs_file origin). */
+/* The files of /proc by their origin: the `procfile` of a classified path,
+ * and the origin of the text procfs takes of it at an open. */
 #define SYNTH_PROC_STAT        1
 #define SYNTH_PROC_CMDLINE     2
 #define SYNTH_PROC_BOOTLINE    3
@@ -142,47 +141,63 @@ const char *synth_ns_name(int kind);
 #define SYNTH_PROC_SWAPS       53
 #define SYNTH_PROC_LOCKS       54
 
-/* PID sentinel meaning "the calling process" (/proc/self), resolved by the
- * glue. */
+/* The pid of /proc/self and /dev/fd, which procfs takes as the caller's
+ * (`procfs_resolve_pid`). */
 #define SYNTH_PID_SELF (-1)
 
 /*
- * The classified path. `name` is a NUL-terminated copy of the device leaf (for
- * VNODE_DEV); pid/procfd/procfile/tid carry the /proc coordinates.
+ * A classified path: its kind, and the coordinates of its node, each
+ * meaningful for the kinds its comment names.
  */
 struct vpath {
     int kind;
     char name[64]; /* VNODE_DEV: device leaf name */
     int pid;       /* VNODE_PROC_*: SYNTH_PID_SELF for /proc/self */
     int procfd;    /* PROC_FD_LINK, PROC_FDINFO: the descriptor number; NS_LINK: the kind */
-    int procfile;  /* VNODE_PROC_FILE: SYNTH_PROC_* */
+    int procfile;  /* PROC_FILE, NET_FILE, SYSVIPC: SYNTH_PROC_*; SYS_FILE: the attribute */
     int pts_index; /* VNODE_PTS: the pty slave number N in /dev/pts/N */
     int tid;       /* VNODE_PROC_*: TID in /proc/<pid>/task/TID, or 0 */
     int sysent;    /* VNODE_PROC_SYS_*: the entry of the /proc/sys table; VNODE_SYS_*: the node */
     int syskey;    /* VNODE_SYS_*: the device of a device's node (`synth_sys_device_name`) */
 };
 
-/** Classify a leading-'/'-stripped path; fills *vp and returns its kind. */
+/**
+ * Classify `path`, with or without its leading slash and with `.` and `..`
+ * resolved, into `vp`, and return its kind. Empty components are skipped. A
+ * path outside /dev, /proc and /sys is VNODE_KRFFS. A name of /dev that is
+ * not a special one is VNODE_DEV whether or not the device exists, which
+ * devfs decides; whether a process, a descriptor, a processor or a PCI or
+ * USB device exists is for the caller to ask, while an interface and a disk
+ * node are looked up (`sysfs_net_index`, `sysfs_block_find`). A path that
+ * names nothing is VNODE_ENOENT or, for many paths that go on past a file,
+ * VNODE_ENOTDIR.
+ */
 int synth_classify(const char *path, struct vpath *vp);
 
 /*
- * A synthetic directory fd's identity: its kind, the process's pid, and
- * for a thread's directory under /proc/<pid>/task the thread's id, 0 for
- * any other. A directory of /proc/sys has its entry of the table
- * (`synth_sys_name`) in `pid`, since it has no process. It does not fit
- * packed in the fd's priv pointer, so it is a record from the heap that
- * priv points at; defined here so /proc/<pid>/fd readlink can render it.
+ * The record from the heap that the `priv` of a descriptor open on a
+ * synthetic directory points at, since its coordinates do not fit in the
+ * pointer: the directory's kind, its process's pid and, for a thread's
+ * directory under /proc/<pid>/task, the thread's id, 0 for any other. A
+ * directory of /proc/sys has its entry of the table (`synth_sys_name`) in
+ * `pid`, and a directory of /sys its node in `pid` and its key in `tid`. It
+ * is defined here so that procfs can give the path /proc/<pid>/fd shows.
  */
 struct synth_dir {
     int kind;
     int pid;
-    int used;
+    int used; /* 1 from its allocation; nothing reads it */
     int tid;
 };
 
-/** Render a synthetic directory's absolute path from its kind, pid and, for
- * a thread's directory, tid (0 for none) into out; for a directory of
- * /proc/sys, `pid` is its entry. */
+/**
+ * Write into `out`, of `cap` bytes, the path of the synthetic directory of
+ * `kind` with the coordinates struct synth_dir has: `pid`, and `tid` when it
+ * is not 0, for a process's or a thread's directory; the entry in `pid` for
+ * a directory of /proc/sys; the node and the key in `pid` and `tid` for one
+ * of /sys. An unknown kind gives "/". The path is NUL-terminated and cut to
+ * fit; nothing is written when `cap` is not positive.
+ */
 void synth_dir_path(int kind, int pid, int tid, char *out, int cap);
 
 /*
@@ -192,6 +207,8 @@ void synth_dir_path(int kind, int pid, int tid, char *out, int cap);
  * `parent` entry, and a file has its text. Each accessor answers NULL or -1
  * for an index past the table.
  */
+
+/** The number of entries of the table. */
 int synth_sys_count(void);
 /* The entries of kernel/hostname and domainname, whose texts are the names
  * of the moment, which procfs reads, and not the table's. */
@@ -201,27 +218,35 @@ int synth_sys_count(void);
 #define SYNTH_SYS_IP_FORWARD 22
 /** Whether a privileged caller may write the file entry `entry`. */
 int synth_sys_writable(int entry);
+
+/** The name of the entry `entry`, the last component of its path. */
 const char *synth_sys_name(int entry);
+
+/** The entry of the directory `entry` is in, -1 for /proc/sys itself. */
 int synth_sys_parent(int entry);
+
 /** The text of a file entry, NULL for a directory. */
 const char *synth_sys_text(int entry);
 
-/** The name in /proc/net of the file `origin`, SYNTH_PROC_NETUDP to
- * SYNTH_PROC_NETSNMP, or NULL for another. */
+/** The path in /proc/net of the file of origin `origin`: SYNTH_PROC_NETUDP
+ * to SYNTH_PROC_NETSNMP, SYNTH_PROC_NETSTAT_RT or SYNTH_PROC_NETSTAT_ARP,
+ * whose two are under stat; NULL for another. */
 const char *synth_net_name(int origin);
 /** The name of the /proc/sysvipc file of origin `origin`, or NULL. */
 const char *synth_sysvipc_name(int origin);
 
 /*
- * /sys: the PCI functions and USB devices, as Linux's sysfs has them for
- * the readers of `uevent`. The nodes of the tree are numbered: /sys, its
- * `bus` and `devices`, the two buses and their `devices` of links, the two
- * directories the links lead to, and a device's own directory, whose
- * `syskey` says which device it is. A PCI function's key is its bus,
- * device and function as the configuration address has them, below 2^16; a
- * USB device's is its controller's number less 1 in bits 28 and 29, its
- * root port in the eight below, and the ports of up to five hubs below it
- * in four bits each, as its name gives them, at least 2^20.
+ * /sys: the parts of Linux's sysfs that programs here read: the PCI
+ * functions and USB devices with their uevent files, the network interfaces
+ * and their statistics, the clock and its wake alarm, the sleep states, the
+ * disk nodes, the processors and the memory block. Each directory is a
+ * numbered node, below; a node of which there is one for each device,
+ * interface, processor or disk node has a `syskey` that says which. A PCI
+ * function's key is its bus, device and function as the configuration
+ * address has them, below 2^16; a USB device's is its controller's number
+ * less 1 in bits 28 and 29, its root port in the eight below, and the ports
+ * of up to five hubs below it in four bits each, as its name gives them, at
+ * least 2^20.
  */
 #define SYSFS_ROOT        0  /* /sys */
 #define SYSFS_BUS         1  /* /sys/bus */
@@ -257,8 +282,9 @@ const char *synth_sysvipc_name(int origin);
 #define SYSFS_MEMORY0     31 /* /sys/devices/system/memory/memory0 */
 #define SYSFS_BLOCK_LOOP  32 /* /sys/block/loopN/loop, while a file backs it */
 
-/** Whether the /sys directory `node` is one of a device, an interface or a
- * processor, which `syskey` says, and which exists only while that does. */
+/** Whether the /sys directory `node` is one of a device, an interface, a
+ * processor or a disk node, which `syskey` says, and which exists only while
+ * that does. */
 #define SYSFS_KEYED(node)                                                                  \
     ((node) == SYSFS_PCI_DEVICE || (node) == SYSFS_USB_DEVICE || (node) == SYSFS_NET_IF || \
      (node) == SYSFS_NET_STATS || (node) == SYSFS_CPUN || SYSFS_IS_BLOCK(node))
@@ -277,22 +303,32 @@ const char *sysfs_attr(int node, int n);
  * rtc0's wakealarm and /sys/power's state. */
 int sysfs_attr_writable(int node, int attr);
 
-/* The interfaces' part, in procfs.c: the index of the interface named by
- * the `len` bytes at `name`, or -1; its name, NUL-terminated, into `out` of
- * `cap` bytes; and its card's PCI key, or -1. */
+/** The interfaces' part, in procfs.c: the index of the interface named by
+ * the `len` bytes at `name`, or -1. */
 int sysfs_net_index(const char *name, int len);
+
+/** The name of the interface `index`, NUL-terminated, into `out` of `cap`
+ * bytes. */
 void sysfs_net_name(int index, char *out, int cap);
+
+/** The PCI key of the card of the interface `index`, or -1. */
 int sysfs_net_pci_key(int index);
 
-/* The disk nodes' part, in procfs.c, each known by its index in devfs's
- * table: the node named by the `len` bytes at `name`, a whole disk's when
- * `disk` is -1 and else a partition of the disk whose node is `disk`, or
- * -1; the node of the numbers MAJOR:MINOR the `len` bytes at `name` give,
- * or -1; a node's name into `out` of `cap` bytes; and the index of the
- * whole disk a node is on, itself for a whole disk, or -1 for none. */
+/** The disk nodes' part, in procfs.c, each node known by its index in
+ * devfs's table: the node named by the `len` bytes at `name`, a whole
+ * disk's when `disk` is -1 and else a partition of the disk whose node is
+ * `disk`, or -1. */
 int sysfs_block_find(const char *name, int len, int disk);
+
+/** The node of the numbers MAJOR:MINOR the `len` bytes at `name` give, or
+ * -1. */
 int sysfs_block_devno(const char *name, int len);
+
+/** The name of the node `key`, NUL-terminated, into `out` of `cap` bytes. */
 void sysfs_block_name(int key, char *out, int cap);
+
+/** The index of the whole disk the node `key` is on, itself for a whole
+ * disk, or -1 for none. */
 int sysfs_block_whole(int key);
 
 /** The loop device the disk node `key` is while a file backs it, or -1:
@@ -314,7 +350,7 @@ void synth_sys_path(int node, int key, char *out, int cap);
  * client's connect and send follow it to the socket. */
 #define SYNTH_DEV_LOG_TARGET "/var/run/log"
 
-/* True if a classified kind is one of the synthetic (non-KRFFS) namespaces. */
+/* Whether a classified kind is a node of /dev, /proc or /sys. */
 #define VNODE_IS_SYNTH(kind) ((kind) != VNODE_KRFFS)
 
 #endif /* _SYNTHFS_H_ */
